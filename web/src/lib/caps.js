@@ -31,7 +31,7 @@ export function claudeEffortFallback(capsData, model) {
 // goes under "more". 2026-09-01 对齐官方 claude.ai/code 实测：主列表 Fable 5.1 / Opus 5 /
 // Sonnet 5 / Haiku 4.5，Fable 5 退进 More models。2026-09-22 Opus 5.5 接棒 Opus 位（CLI 2.1.280
 // 的 opus 别名与 /model 主项同日切换，Opus 5 标为 previous），Opus 5 退进 More models。
-const PRIMARY_IDS = ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'];
+const PRIMARY_IDS = ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5-20251001'];
 
 export function splitClaudeModels(capsData) {
   const all = capsData?.claude?.models || [];

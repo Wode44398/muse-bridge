@@ -48,6 +48,10 @@ export const CAPABILITIES = {
       { id: 'claude-opus-5', name: 'Opus 5' },
       { id: 'claude-opus-4-8', name: 'Opus 4.8' },
       { id: 'claude-opus-4-7', name: 'Opus 4.7' },
+      // Sonnet 5.5（2026-09-28，SDK 0.3.280 / 内核 2.1.280 已认，无需升 SDK）。发布当天 probe（bridge
+      // 激活账号真打）：**裸 id 200k、[1m] 兄弟档 1M**（同 Sonnet 5，进 oneM 表）；effort 五档，max 实测通过；
+      // **不传 effort 时默认 high**（Stop hook 实测，不进 effortDefaults）；fast 注 settings 后仍 off → 不进 fast 表。
+      { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5' },
       // Sonnet 5 (2026-06-30). Anthropic's new flagship Sonnet — most agentic
       // Sonnet yet, and the new default for Claude Free/Pro. 128k out, adaptive
       // thinking (no extended), all five efforts; effort defaults high on the
@@ -63,7 +67,7 @@ export const CAPABILITIES = {
     // 支持 [1m] 兄弟档的裸 id（probe 验证过 contextWindow=1M 的那几个）。Sonnet 4.6 /
     // Haiku 4.5 / Opus 4.6 没有 [1m] 档，保持 200k。Fable 5.1 / Opus 5.5 裸 id 本身就是 1M（见上），
     // 不必进这张表——to1M 原样放行即可。
-    oneM: ['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5'],
+    oneM: ['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5-5', 'claude-sonnet-5'],
     // fast mode 支持的模型（官方口径 Opus 5.5/5/4.8/4.7；SDK 0.3.220 起 settings.fastMode
     // 可点亮，2026-07-30 probe 实测 fast_mode_state=on，Opus 5.5 于 09-22 实测 on）。前端模型菜单
     // 据此显隐 ⚡ 开关，后端 runClaudeChat 据此决定是否注入 settings。

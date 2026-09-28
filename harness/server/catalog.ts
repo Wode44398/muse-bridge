@@ -99,6 +99,9 @@ export const CATALOG: ProviderSpec[] = [
       // Opus 5（2026-07-24）：Claude 5 家族日常主力——接近 Fable 5 智力、半价（$5/$25），
       // adaptive thinking + effort（API 默认 high），知识截止 2026-05。
       { id: "claude-opus-5", label: "Opus 5", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "上一代主力 · 复杂 agent 编码" },
+      // Sonnet 5.5（2026-09-28）：Sonnet 档新版；effort 五档、默认 high；ctx / maxOut 沿用同档 Sonnet 4.6 取值，
+      // 配上 Anthropic key 后用 Models API 核一遍。
+      { id: "claude-sonnet-5-5", label: "Sonnet 5.5", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "均衡 · 新一代 Sonnet" },
       { id: "claude-opus-4-8", label: "Opus 4.8", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "旗舰 · 自适应思考" },
       { id: "claude-opus-4-7", label: "Opus 4.7", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "长程 agent · 高清视觉" },
       { id: "claude-sonnet-4-6", label: "Sonnet 4.6", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "均衡" },
