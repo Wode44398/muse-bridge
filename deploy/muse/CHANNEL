@@ -1,0 +1,2 @@
+# 发布频道：latest.json 的公开地址（一行）。仓库里留空，发版流程（.github/workflows/release.yml）打包时写入。
+# 装过的 VM 以 bridge-ops/muse.env 里的 CHANNEL 为准。

@@ -1,0 +1,19 @@
+{
+  // Q14 / F7：只给 svelte-check 用（scripts/svelte-baseline.mjs 显式传 --tsconfig）。刻意不叫 tsconfig.json——vite 与
+  // vitePreprocess 会读 tsconfig.json 里的 target / useDefineForClassFields 之类，改了会改变产物（类字段语义），这份不参与构建。
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": []
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte"]
+}

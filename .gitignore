@@ -1,0 +1,52 @@
+# deps
+node_modules/
+
+# web frontend build output (regenerate with: npm --prefix web run build)
+public/app/
+web/dist/
+
+# secrets & local config (access token / oauth token live here)
+config.json
+.env
+
+# runtime data when BRIDGE_DATA_ROOT is left at the program dir (local development)
+uploads/
+media/
+.outbox/
+/extensions/
+/workspace/
+/users/
+office-cache/
+zip-cache/
+thumb-cache/
+chat-snapshots/
+chat-snapshots.json
+claude-chat-prefs.json
+claude-projects.json
+claude-quick.json
+quickchat/
+bridge-sessions.json
+routine-sessions.json
+routines.json
+share-links.json
+share-spaces.json
+share-spaces/
+status.json
+ctx-usage.json
+escalated-sessions.json
+inflight-runs.json
+interrupted-runs.json
+rewind-pending.json
+harness/projects.json
+knowledge/
+memory/.workspace-isolation-migrated
+
+# logs
+*.log
+*.log.[0-9]
+
+# release build output
+/dist/
+
+# 本机私有的工作区说明
+CLAUDE.local.md

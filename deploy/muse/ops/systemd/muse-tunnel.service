@@ -1,0 +1,13 @@
+[Unit]
+Description=Muse Bridge public tunnel (cloudflared via cf-wrap.sh: quick tunnel, or your own domain)
+After=network.target cf-relay-api.service cf-relay-edge.service
+StartLimitIntervalSec=0
+Requires=cf-relay-api.service cf-relay-edge.service
+
+[Service]
+ExecStart=@OPS@/cf-wrap.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

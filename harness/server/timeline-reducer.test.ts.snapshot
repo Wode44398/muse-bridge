@@ -1,0 +1,38 @@
+exports[`Q11 时间线：上游断流重放（同一个 turn 下标再来一次）——半截正文被替换，不重复 1`] = `
+user: "讲讲"
+text: "完整的答复"
+— activity: ""
+`;
+
+exports[`Q11 时间线：全量压缩时落一行「上下文已压缩」，位置在压缩发生的那一刻 1`] = `
+user: "干个长活"
+text: "第 1 轮 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+tool(ok): Echo#c1 "echoed"
+text: "第 2 轮 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+tool(ok): Echo#c2 "echoed"
+text: "第 3 轮 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+tool(ok): Echo#c3 "echoed"
+text: "第 4 轮 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+tool(ok): Echo#c4 "echoed"
+notice: "上下文已压缩"
+text: "做完了"
+— activity: ""
+`;
+
+exports[`Q11 时间线：思考、正文、工具轮、最终答复按事件顺序落位，收尾后没有在流的条目 1`] = `
+user: "看一下"
+thinking: "先想想"
+text: "先看文件"
+tool(ok): Echo#r1 "echoed"
+text: "看完了，一切正常"
+— activity: ""
+`;
+
+exports[`Q11 时间线：验证门禁撤回那一版答复时，这一轮里插进来的话留着；撤回的只有模型那段 1`] = `
+user: "把 a.ts 改一下"
+tool(ok): Edit#e1 "edited"
+user(steer): "改成蓝色"
+tool(ok): Bash#v1 "test passed"
+text: "验证通过，改成蓝色了"
+— activity: ""
+`;

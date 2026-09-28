@@ -1,0 +1,167 @@
+/* ═══ 服务端控制台 · 设计系统（.sa-*，全局类） ═══════════════════════════════
+   审美语言与设置页 v3 同源：iOS 26 液态玻璃——
+   · 整页唯一一层 backdrop（罩在 ServerAdmin 根上），下层设置页的 backdrop 被 .covered 关闭；
+   · chrome（侧栏/圆钮/胶囊）亮玻璃 = 半透白 + 上亮下暗发丝边；内容卡片刻意更素；
+   · 行首 29×29 彩色图标方块、iOS 系统色板、绿色开关、蓝色主按钮。
+   页面组件只放布局性的 scoped 样式，材质与控件一律用这里的令牌类。 */
+
+.sa-root {
+  --sa-blue: #0a84ff; --sa-green: #34c759; --sa-red: #ff453a; --sa-amber: #ff9f0a;
+  --sa-purple: #bf5af2; --sa-teal: #64d2ff; --sa-gray: #8e8e93;
+  --sa-tx: #fff; --sa-tx2: rgba(255,255,255,.58); --sa-tx3: rgba(255,255,255,.36);
+  --sa-card: rgba(255,255,255,.085);
+  --sa-hair: inset 0 0 0 .5px rgba(255,255,255,.08);
+  --sa-chrome: rgba(255,255,255,.11);
+  --sa-chrome-hair: inset 0 0 0 .5px rgba(255,255,255,.26), inset 0 1px 1px rgba(255,255,255,.3), 0 6px 20px rgba(0,0,0,.22);
+  --sa-mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  color: var(--sa-tx);
+  font-size: 14px;
+}
+
+/* —— 卡片 / 分组（对齐设置页 .group）—— */
+.sa-card { background: var(--sa-card); box-shadow: var(--sa-hair); border-radius: 22px; }
+.sa-card-h { display: flex; align-items: center; gap: 8px; padding: 14px 18px 0; font-size: 13px; font-weight: 600; color: var(--sa-tx2); }
+.sa-card-h .sa-sp { flex: 1; }
+.sa-foot { font-size: 12px; line-height: 1.55; color: var(--sa-tx3); padding: 7px 18px 0; }
+
+/* —— 列表行（发丝分隔，对齐设置页 .row）—— */
+.sa-rows { padding: 0 18px; }
+.sa-row { position: relative; display: flex; align-items: center; gap: 12px; padding: 11px 0; min-height: 48px; width: 100%;
+  background: none; border: 0; font: inherit; color: inherit; text-align: left; }
+.sa-row + .sa-row::before { content: ''; position: absolute; top: 0; left: 0; right: -18px; height: .5px; background: rgba(255,255,255,.09); }
+/* text-align 必须显式左对齐：这块常常是 <button>（浏览器默认 text-align:center），
+   窄屏上每行文字都占满宽度看不出来，桌面宽窗一拉开标题就飘到行中间去了。 */
+.sa-row-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 14.5px; color: var(--sa-tx); text-align: left; }
+.sa-row-tx small { font-size: 12px; line-height: 1.45; color: var(--sa-tx2); overflow: hidden; text-overflow: ellipsis; }
+
+/* —— 29×29 彩色图标方块（iOS 设置招牌）—— */
+.sa-chip { width: 29px; height: 29px; border-radius: 7.5px; flex: none; display: flex; align-items: center; justify-content: center;
+  background: var(--c, #8e8e93); box-shadow: inset 0 .5px .5px rgba(255,255,255,.28), inset 0 -.5px .5px rgba(0,0,0,.12); }
+.sa-chip svg { width: 17px; height: 17px; }
+
+/* —— 徽章 —— */
+.sa-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2.5px 9px; border-radius: 20px;
+  font-size: 11.5px; font-weight: 650; font-family: var(--sa-mono); white-space: nowrap; }
+.sa-badge.green { background: rgba(52,199,89,.17); color: #4cd964; }
+.sa-badge.red { background: rgba(255,69,58,.17); color: #ff6961; }
+.sa-badge.amber { background: rgba(255,159,10,.17); color: #ffb340; }
+.sa-badge.blue { background: rgba(10,132,255,.2); color: #6cb2ff; }
+.sa-badge.purple { background: rgba(191,90,242,.18); color: #d59bf5; }
+.sa-badge.gray { background: rgba(142,142,147,.2); color: rgba(255,255,255,.55); }
+
+/* 呼吸圆点（运行中） */
+.sa-live { width: 7px; height: 7px; border-radius: 50%; background: var(--sa-green); display: inline-block; flex: none;
+  animation: sa-pulse 1.6s infinite; }
+@keyframes sa-pulse { 0% { box-shadow: 0 0 0 0 rgba(52,199,89,.5); } 70% { box-shadow: 0 0 0 7px rgba(52,199,89,0); } 100% { box-shadow: 0 0 0 0 rgba(52,199,89,0); } }
+.sa-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; background: var(--sa-gray); }
+.sa-dot.ok { background: var(--sa-green); box-shadow: 0 0 0 3px rgba(52,199,89,.18); }
+.sa-dot.bad { background: var(--sa-red); box-shadow: 0 0 0 3px rgba(255,69,58,.18); }
+
+/* —— 按钮 —— */
+.sa-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 15px; border-radius: 999px;
+  background: rgba(255,255,255,.1); color: var(--sa-tx); font: inherit; font-size: 13px; font-weight: 600; border: 0; cursor: pointer;
+  box-shadow: inset 0 0 0 .5px rgba(255,255,255,.16); transition: background .15s ease, transform .12s ease, opacity .15s ease; white-space: nowrap; }
+.sa-btn:hover { background: rgba(255,255,255,.16); }
+.sa-btn:active { transform: scale(.96); }
+.sa-btn:disabled { opacity: .4; cursor: default; }
+.sa-btn.pri { background: var(--sa-blue); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.3), 0 4px 14px rgba(10,132,255,.3); }
+.sa-btn.pri:hover { background: #2492ff; }
+.sa-btn.dgr { background: rgba(255,69,58,.15); color: #ff8078; box-shadow: inset 0 0 0 .5px rgba(255,69,58,.4); }
+.sa-btn.dgr:hover { background: rgba(255,69,58,.9); color: #fff; }
+.sa-btn.sm { padding: 5.5px 11px; font-size: 12px; }
+.sa-btn.ghost { background: transparent; box-shadow: none; color: var(--sa-tx2); }
+.sa-btn.ghost:hover { background: rgba(255,255,255,.1); color: var(--sa-tx); }
+
+/* 圆形玻璃钮（关闭/刷新，对齐设置页 .back） */
+.sa-cbtn { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none;
+  color: #fff; border: 0; cursor: pointer; background: var(--sa-chrome); box-shadow: var(--sa-chrome-hair); transition: background .15s ease, transform .12s ease; }
+.sa-cbtn:hover { background: rgba(255,255,255,.18); }
+.sa-cbtn:active { transform: scale(.93); }
+.sa-cbtn svg { width: 19px; height: 19px; }
+
+/* —— iOS 开关（对齐设置页 .sw）—— */
+.sa-sw { position: relative; width: 46px; height: 28px; border-radius: 15px; background: rgba(120,120,128,.36); transition: background .22s ease; flex: none;
+  box-shadow: inset 0 0 0 .5px rgba(255,255,255,.14); border: 0; cursor: pointer; }
+.sa-sw.on { background: var(--sa-green); }
+.sa-sw-knob { position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; border-radius: 50%; background: #fff;
+  box-shadow: 0 2px 6px rgba(0,0,0,.3); transition: transform .22s cubic-bezier(.32,.72,0,1); }
+.sa-sw.on .sa-sw-knob { transform: translateX(18px); }
+
+/* —— 玻璃分段胶囊（对齐设置页 .seg）—— */
+.sa-seg { position: relative; display: grid; grid-template-columns: repeat(var(--n), 1fr); border-radius: 999px; padding: 4px;
+  background: var(--sa-chrome); box-shadow: var(--sa-chrome-hair); width: max-content; }
+.sa-seg-knob { position: absolute; top: 4px; left: 4px; width: calc((100% - 8px) / var(--n)); height: calc(100% - 8px);
+  background: rgba(255,255,255,.88); border-radius: 999px; box-shadow: inset 0 .5px 1px rgba(255,255,255,.9), 0 3px 10px rgba(0,0,0,.28);
+  transition: transform .32s cubic-bezier(.32,.72,0,1); }
+.sa-seg-btn { position: relative; z-index: 1; padding: 6px 16px; color: rgba(255,255,255,.66); border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 12.5px; font-weight: 650; transition: color .25s ease; white-space: nowrap; }
+.sa-seg-btn.on { color: #101114; }
+
+/* 小分段（行内、非胶囊主导航用，对齐 .effseg） */
+.sa-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.sa-chip-btn { padding: 6px 13px; border-radius: 999px; background: rgba(255,255,255,.08); color: rgba(255,255,255,.7);
+  font: inherit; font-size: 12.5px; font-weight: 600; border: 0; cursor: pointer; box-shadow: inset 0 0 0 .5px rgba(255,255,255,.1);
+  transition: background .18s ease, color .18s ease; white-space: nowrap; }
+.sa-chip-btn:hover { background: rgba(255,255,255,.14); color: #fff; }
+.sa-chip-btn.on { background: rgba(255,255,255,.9); color: #16171a; }
+
+/* —— 统计瓦片 —— */
+.sa-stat { padding: 15px 18px; }
+.sa-stat .k { font-size: 12px; color: var(--sa-tx2); margin-bottom: 7px; }
+.sa-stat .v { font-size: 27px; font-weight: 700; font-family: var(--sa-mono); line-height: 1.05; font-variant-numeric: tabular-nums; }
+.sa-stat .x { font-size: 11.5px; color: var(--sa-tx3); margin-top: 6px; }
+
+/* —— 表格化网格行（用户/定时等多列数据）—— */
+.sa-thead { display: grid; gap: 10px; padding: 12px 18px 8px; font-size: 11.5px; font-weight: 650; color: var(--sa-tx3); letter-spacing: .3px; }
+.sa-tr { display: grid; gap: 10px; align-items: center; padding: 11px 18px; position: relative; font-size: 13.5px; }
+.sa-tr::before { content: ''; position: absolute; top: 0; left: 18px; right: 0; height: .5px; background: rgba(255,255,255,.08); }
+.sa-tr:hover { background: rgba(255,255,255,.04); }
+
+.sa-mono { font-family: var(--sa-mono); font-variant-numeric: tabular-nums; }
+.sa-mut { color: var(--sa-tx2); }
+.sa-dim { color: var(--sa-tx3); }
+.sa-trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sa-empty { padding: 34px 18px; text-align: center; color: var(--sa-tx3); font-size: 13px; }
+.sa-sp { flex: 1; }
+.sa-hrow { display: flex; align-items: center; gap: 10px; }
+
+/* —— 额度圆环 —— */
+.sa-ring { --p: 0; width: 74px; height: 74px; border-radius: 50%; flex: none;
+  background: conic-gradient(var(--rc, var(--sa-blue)) calc(var(--p) * 1%), rgba(255,255,255,.12) 0); position: relative; }
+.sa-ring::after { content: attr(data-l); position: absolute; inset: 7px; border-radius: 50%; background: rgba(24,27,34,.92);
+  display: flex; align-items: center; justify-content: center; font-family: var(--sa-mono); font-size: 14.5px; font-weight: 700; }
+
+/* —— 弹窗（对齐设置页 .addr-card）—— */
+.sa-mask { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.5); border: 0; cursor: default; padding: 0; }
+.sa-modal { position: fixed; z-index: 81; left: 50%; top: 50%; transform: translate(-50%,-50%); width: calc(100% - 48px); max-width: 400px;
+  background: rgba(30,30,34,.97); border-radius: 24px; padding: 22px; display: flex; flex-direction: column; gap: 12px;
+  box-shadow: inset 0 0 0 .5px rgba(255,255,255,.12), 0 18px 50px rgba(0,0,0,.55); animation: sa-pop .16s ease; }
+@keyframes sa-pop { from { opacity: 0; transform: translate(-50%,-46%); } to { opacity: 1; transform: translate(-50%,-50%); } }
+.sa-modal h3 { font-size: 18px; font-weight: 700; color: #f2f2f2; }
+.sa-modal p { font-size: 13px; line-height: 1.55; color: #9a9a9a; }
+.sa-modal .acts { display: flex; gap: 10px; margin-top: 4px; }
+.sa-modal .acts .sa-btn { flex: 1; height: 44px; border-radius: 22px; font-size: 14.5px; }
+.sa-in { width: 100%; height: 44px; border: none; outline: none; border-radius: 13px; background: rgba(255,255,255,.08);
+  box-shadow: inset 0 0 0 .5px rgba(255,255,255,.14); padding: 0 14px; font: inherit; font-size: 14.5px; color: #f2f2f2; }
+.sa-in::placeholder { color: #6c6c6c; }
+.sa-in:focus { box-shadow: inset 0 0 0 1px rgba(10,132,255,.7); }
+.sa-lab { font-size: 12px; font-weight: 600; color: var(--sa-tx2); margin: 2px 2px -6px; }
+.sa-err { background: rgba(255,69,58,.16); color: #ff8078; font-size: 12.5px; padding: 9px 12px; border-radius: 10px; }
+
+/* —— 媒体宫格 —— */
+.sa-media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; }
+.sa-media-grid img, .sa-media-grid video { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 14px;
+  background: rgba(0,0,0,.4); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.1); display: block; }
+
+/* —— toast —— */
+.sa-toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%) translateY(16px); z-index: 90;
+  background: rgba(38,38,44,.96); border-radius: 999px; padding: 11px 20px; font-size: 13px; color: #fff; opacity: 0; pointer-events: none;
+  transition: all .25s ease; box-shadow: inset 0 0 0 .5px rgba(255,255,255,.16), 0 10px 34px rgba(0,0,0,.5); white-space: nowrap; }
+.sa-toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+.sa-toast.err { color: #ffb3ad; box-shadow: inset 0 0 0 .5px rgba(255,90,80,.5), 0 10px 34px rgba(0,0,0,.5); }
+
+/* —— 滚动条（细、玻璃）—— */
+.sa-root ::-webkit-scrollbar { width: 6px; height: 6px; }
+.sa-root ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 3px; }
+.sa-root ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.28); }
+.sa-root ::-webkit-scrollbar-track { background: transparent; }

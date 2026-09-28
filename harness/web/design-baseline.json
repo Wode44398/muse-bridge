@@ -1,0 +1,12 @@
+{
+  "$说明": "U10（E6 + K39）设计守卫的燃尽基线（server/design-guard.test.ts 读它）。rules：各规则在 web/src 各文件的存量违规数，只准减不准加——减了就顺手把数下调；别为了过守卫一次性清历史（视觉细节要逐个在真机上看）。规则说明见 harness/DESIGN.md「机器守着的」一节。2026-09-25 前端整体重写（设计语言「量」）后清零，只剩 state.svelte.ts 里没有宿主时的兜底 window.open。",
+  "rules": {
+    "bare-root": {},
+    "bare-color": {},
+    "unguarded-hover": {},
+    "request-header": {},
+    "window-open": {
+      "lib/state.svelte.ts": 1
+    }
+  }
+}

@@ -1,0 +1,8 @@
+# 仓库里一律存 LF（Windows 上检出按各自设置）
+* text=auto
+
+# 在 Linux 上执行的脚本与单元文件必须是 LF：Windows 上 autocrlf 检出成 CRLF 会让 bash 报「No such file」。
+*.sh text eol=lf
+deploy/muse/ops/** text eol=lf
+deploy/muse/VERSION text eol=lf export-subst
+deploy/muse/CHANNEL text eol=lf

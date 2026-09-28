@@ -1,0 +1,273 @@
+/* Muse Bridge — global styles & design tokens.
+   Ported from the claude.ai reference.
+   Dark is the default theme; light is a complete second theme (design spec §2.1).
+   Brand coral: #d97757. */
+
+/* Claude 侧栏拖放的拖拽图（ClaudePage dragGhost 现造、挂在 body 屏幕外，setDragImage 采样后即摘）：
+   一颗干净的卡片代替浏览器默认的整行截图。项目带 Anthropicons 项目字形。 */
+.bridge-side-ghost {
+  position: fixed; left: -1000px; top: -1000px; z-index: -1; pointer-events: none;
+  display: flex; align-items: center; gap: 8px; max-width: 260px; height: 34px; padding: 0 14px;
+  border-radius: 10px; background: var(--q-card, #2a2a28); color: var(--text); font-size: 14px;
+  border: 1px solid color-mix(in srgb, var(--muted) 22%, transparent);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .22);
+}
+.bridge-side-ghost .t { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.bridge-side-ghost .ic { font-family: var(--icons); font-size: 17px; color: var(--serif); flex: none; }
+
+@font-face{font-family:"Anthropic Sans";src:url('./assets/font/cc27851ad-CFxw3nG7.woff2') format("woff2");font-weight:300 800;font-style:normal;font-display:swap}
+@font-face{font-family:"Anthropic Serif";src:url('./assets/font/c66fc489e-C-BHYa_K.woff2') format("woff2");font-weight:300 800;font-style:normal;font-display:swap}
+@font-face{font-family:"Anthropicons-Variable";src:url('./assets/font/c0f671921-DICoRAgs.woff2') format("woff2");font-weight:400 700;font-display:block}
+
+:root{
+  /* 系统栏安全边距（浏览器/iOS 走 env()）。全前端统一引用 var(--sat)/var(--sab)。 */
+  --sat:env(safe-area-inset-top, 0px);
+  --sab:env(safe-area-inset-bottom, 0px);
+  --bg:#1f1f1e; --card:#2c2c2a; --text:#f8f8f6; --serif:#c3c2b7; --muted:#97958c;
+  --coral:#d97757; --userbubble:#121212; --avatar-bg:#4a4a46;
+  --hover:rgba(255,255,255,.07); --hover-strong:rgba(255,255,255,.10); --divider:rgba(255,255,255,.08);
+  --card-shadow:0 2px 16px rgba(0,0,0,.2),0 0 0 .5px rgba(226,225,218,.28);
+  --q-card:rgba(40,40,38,.97); --q-rowsel:rgba(255,255,255,.06); --q-skipborder:rgba(255,255,255,.22);
+  --q-shadow:0 2px 16px rgba(0,0,0,.3),0 0 0 .5px rgba(226,225,218,.2);
+  --sans:"Anthropic Sans",system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --serif-stack:"Anthropic Serif",Georgia,"Times New Roman",Times,serif;
+  --icons:"Anthropicons-Variable";
+  --ok:#5aa468; --warn:#d9a441; --crit:#d96a5a;
+  --taskchip:#2f6fd6; --taskchip-fg:#ffffff;   /* 后台任务芯片（官方 /code 页「N running task」同款蓝） */
+  --radius:16px;
+  color-scheme:dark;   /* 原生滚动条/表单控件跟随暗色（否则默认亮色滚动条在黑夜里发白突兀） */
+
+  /* —— 运动令牌（唯一真相源，JS 侧镜像见 lib/motion.js 的 DUR/EASE）——
+     此前全站 15+ 种互不相干的 cubic-bezier、时长从 .14s 到 2.9s 随手拍；审美一致性
+     来自同一套时间与曲线反复出现，故一律引用下列令牌，不再就地手写数值。
+     档位按「移动距离 / 元素体量」分，不按「这动画重不重要」分。 */
+  --mo-tap:90ms;      /* 按下反馈，必须 <100ms */
+  --mo-micro:140ms;   /* 悬停 / 开关 / 小图标状态 */
+  --mo-quick:200ms;   /* 菜单 / 气泡 / 芯片 */
+  --mo-base:280ms;    /* 面板 / 弹层 / 罩层——全站弹层标准节拍 */
+  --mo-page:420ms;    /* 整页容器变形 */
+  --mo-hero:560ms;    /* 启动揭幕 / 主题切换 */
+  /* 入场用 decel、出场用 accel、双向用 std；opacity 走 fade 不跟位移曲线 */
+  --ea-std:cubic-bezier(.2,0,0,1);
+  --ea-decel:cubic-bezier(.05,.7,.1,1);
+  --ea-accel:cubic-bezier(.3,0,.8,.15);
+  --ea-out:cubic-bezier(0,0,0,1);
+  --ea-settle:cubic-bezier(.34,1.26,.5,1);   /* 仅「松手回弹」，绝不用于按下 */
+  --ea-fade:cubic-bezier(.4,0,.6,1);
+
+  /* —— 设置 / 账户菜单 / 登录框（claude.ai 设置对话框同款）——
+     components/settings/*、UserMenu、LoginDialog 共用。 */
+  --st-surface:#262624; --st-side:#222220; --st-text2:#c3c2b7; --st-muted:#97958c;
+  --st-line:rgba(255,255,255,.12); --st-hair:rgba(255,255,255,.07); --st-sel:rgba(255,255,255,.09);
+  --st-hover:rgba(255,255,255,.05); --st-field:rgba(0,0,0,.2); --st-seg:rgba(255,255,255,.06);
+  --st-thumb:#3a3a37; --st-accent:#2a78d6; --st-menu:#2c2c2a; --st-backdrop:rgba(0,0,0,.55);
+  --st-primary:#f0efea; --st-primary-ink:#1f1f1e;
+  --st-menu-shadow:0 0 0 1px rgba(255,255,255,.09),0 8px 24px rgba(0,0,0,.45),0 2px 6px rgba(0,0,0,.3);
+}
+
+/* --press-s：按下缩放的可过渡自定义属性（use:pressable 驱动）。
+   注册成 <number> 才能被 transition 插值——不注册时自定义属性是"离散"的，按下会瞬跳。 */
+@property --press-s { syntax: "<number>"; inherits: false; initial-value: 1; }
+
+/* —— 分页 keep-alive 的休眠态（App.svelte 的 .keep 包裹层）——
+   content-visibility:hidden 保留整页的样式与布局（重新显示 ≈1ms，display:none 要整页重算），
+   visibility:hidden 让分页根盒自己的底色也不画；交互与聚焦由包裹层的 inert 挡住。 */
+.keep { display: contents; }
+.keep.dormant > * { visibility: hidden !important; content-visibility: hidden; }
+
+/* —— 页面级转场（lib/pageMorph.js，View Transitions）的伪元素静态样式 ——
+   几何与时间全在 JS 里用 WAAPI 驱动；这里只关掉 UA 默认的交叉淡化，定好裁切、铺放与原点。
+   html[data-vt] 只在转场进行中存在（open / close / switch）。 */
+html[data-vt]::view-transition { background: #000; }
+html[data-vt]::view-transition-old(root),
+html[data-vt]::view-transition-new(root) {
+  animation: none; mix-blend-mode: normal;
+  transform-origin: var(--vt-ox, 50%) var(--vt-oy, 50%);
+}
+/* 关闭：旧画面里主页早已 display:none，只剩分页底下那层底色——整屏交给主页快照 */
+html[data-vt="close"]::view-transition-old(root) { opacity: 0; }
+/* 分页卡片：圆角裁切 + 快照居中铺满（卡片比例 ≠ 页面比例时裁掉上下，不拉伸） */
+html[data-vt]::view-transition-group(bridge-page) {
+  animation: none; overflow: clip;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, .34), 0 2px 10px rgba(0, 0, 0, .18);
+}
+html[data-vt]::view-transition-old(bridge-page),
+html[data-vt]::view-transition-new(bridge-page) {
+  animation: none; mix-blend-mode: normal;
+  height: 100%; object-fit: cover;
+}
+html[data-theme="light"]{
+  color-scheme:light;
+  --bg:#f8f8f6; --card:#ffffff; --text:#121212; --serif:#373734; --muted:#7b7974;
+  --coral:#d97757; --userbubble:#efeeeb; --avatar-bg:#d9d8d3;
+  --hover:rgba(0,0,0,.05); --hover-strong:rgba(0,0,0,.07); --divider:rgba(0,0,0,.10);
+  --card-shadow:0 2px 16px rgba(0,0,0,.1),0 0 0 .5px rgba(31,31,30,.2);
+  --taskchip:#1f6feb; --taskchip-fg:#ffffff;
+  --q-card:rgba(255,255,255,.98); --q-rowsel:#f4f4f1; --q-skipborder:rgba(31,31,30,.3);
+  --q-shadow:0 2px 16px rgba(0,0,0,.08),0 0 0 .5px rgba(31,31,30,.3);
+  --st-surface:#ffffff; --st-side:#fcfcfb; --st-text2:#52514e; --st-muted:#898781;
+  --st-line:rgba(11,11,11,.10); --st-hair:rgba(11,11,11,.05); --st-sel:rgba(11,11,11,.08);
+  --st-hover:rgba(11,11,11,.04); --st-field:rgba(255,255,255,.5); --st-seg:rgba(11,11,11,.05);
+  --st-thumb:#ffffff; --st-accent:#2a78d6; --st-menu:#ffffff; --st-backdrop:rgba(0,0,0,.35);
+  --st-primary:#0b0b0b; --st-primary-ink:#ffffff;
+  --st-menu-shadow:0 0 0 1px rgba(11,11,11,.1),0 8px 24px rgba(0,0,0,.12),0 2px 6px rgba(0,0,0,.08);
+}
+
+/* Anthropicons 动态图标（claude.ai 同款）：字体自带 ANIM/ANM2 变体轴（0–100 字形形变，
+   如项目盒盖展开）。注册成可过渡的数值属性后，悬停改 --ca-anim 即得官网那套弹性微动效。 */
+@property --ca-anim { syntax: "<number>"; inherits: true; initial-value: 0; }
+
+/* markdown 宽表格的滚动壳（由 lib/md.js 在渲染时套上，所有 md 渲染面共用：
+   Claude / 扩展中心 / 文档预览）。表格按内容排自然列宽，超出的部分在壳里
+   横滚——绝不把正文列顶宽、更不能让整条会话变成可左右拖的画布。 */
+.md-tablewrap{max-width:100%;overflow-x:auto;margin:0 0 12px}
+.md-tablewrap>table{width:max-content;max-width:none;margin:0}
+/* 代码块右上角复制按钮（lib/md.js 套的 .md-codewrap 壳，所有 md 渲染面共用）。壳不是 BFC，
+   <pre> 的外边距照常穿出去，壳的边框盒与 <pre> 重合，按钮贴的就是代码卡右上角。
+   底色默认同 Claude 页代码卡（--userbubble），其它面可设 --md-codecopy-bg 对齐自家卡底——
+   有底色是为了长首行代码从按钮下面穿过时不糊成一团。常显（手机没有悬停），平时淡一点。 */
+.md-codewrap{position:relative}
+/* 贴到 <pre> 右内缘（right:1px 让过边框）：横滚的代码会溢进 <pre> 的右内边距，按钮右边若留缝，
+   字会从缝里露出来；左侧再用同色阴影把穿过来的字渐隐掉。 */
+.md-codecopy{position:absolute;top:6px;right:1px;display:grid;place-items:center;width:36px;height:32px;
+  border:0;border-radius:8px;cursor:pointer;color:inherit;
+  --cc-bg:var(--md-codecopy-bg,var(--userbubble));background:var(--cc-bg);box-shadow:-8px 0 8px -2px var(--cc-bg);transition:transform .1s;
+  -webkit-user-select:none;user-select:none}
+/* 半透明只给图标，底色必须实心，否则底下的代码会透上来 */
+.md-codecopy>svg{opacity:.55;transition:opacity .15s}
+.md-codecopy:hover>svg,.md-codecopy:focus-visible>svg,.md-codecopy.done>svg{opacity:1}
+.md-codecopy:active{transform:scale(.92)}
+/* KaTeX 块级公式同理：katex 自带样式只有 display:block，长公式（大矩阵、连加）会直接
+   溢出正文列。给它自己的横滚，overflow-y 保持 hidden 免得高分式旁边冒出竖滚条。 */
+.katex-display{overflow-x:auto;overflow-y:hidden;padding-bottom:2px}
+
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+/* 原生手感基建：
+   · overscroll-behavior:none —— 滚动到边不把滚动链传给浏览器（无 glow/下拉刷新误触）
+   · text-size-adjust —— 禁移动浏览器的字体膨胀算法（旋转/宽变时正文突然放大）
+   · touch-action:manipulation —— 消除残存的双击缩放判定延迟，点按即时响应 */
+html{overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{
+  background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;
+  -webkit-font-smoothing:antialiased;overflow:hidden;overscroll-behavior:none;
+  touch-action:manipulation;
+  transition:background-color .25s ease,color .25s ease;
+}
+/* UI 骨架禁选中/禁长按呼出（原生 app 标配：长按按钮不出现文本选择柄/放大镜）；
+   正文内容（回答、气泡、思考、输入框）在下面明确放开，复制体验不受影响。 */
+body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+input,textarea,[contenteditable],[contenteditable] *{-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
+img,svg{-webkit-user-drag:none;user-drag:none}
+/* 触屏隐藏滚动条（原生 app 无常驻滚动条；桌面鼠标环境保留），并让滚动容器不外溢滚动链 */
+@media (pointer: coarse){
+  ::-webkit-scrollbar{width:0;height:0;display:none}
+  *{scrollbar-width:none}
+}
+#app{height:100%;display:flex;flex-direction:column}
+button{font-family:inherit;color:inherit;background:none;border:none;cursor:pointer;touch-action:manipulation}
+.ic{font-family:var(--icons);font-style:normal;line-height:1;display:inline-block}
+/* 可选中的正文区（组件里用 class 挂上）：Claude 回答/用户气泡/思考体/工具参数等 */
+.sel-text,.sel-text *{-webkit-user-select:text;user-select:text}
+
+/* 触摸/点击不显示焦点轮廓：可聚焦元素被点后、或转场组件卸载后焦点回退到 body 时，移动浏览器
+   会沿整屏画一圈，直到点背景失焦才消失。仅键盘导航(:focus-visible)保留轮廓做无障碍。 */
+:focus{outline:none}
+:focus-visible{outline:2px solid var(--coral);outline-offset:2px}
+
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+}
+
+/* —— 全站弹层语言（唯一一套）——
+   此前每个弹层各写各的（.18/.2/.3/.38/.42s、有的只淡入、有的只滑入），层与层之间
+   节奏对不上＝"粗糙"。统一为：罩层先于内容起、内容带位移落定；关闭时内容先走、罩层殿后。
+   .ov-scrim 给罩，.ov-panel 给内容板，.ov-sheet 给底部/侧边抽屉。挂 .closing 即出场。 */
+.ov-scrim{
+  animation:ov-scrim-in var(--mo-base) var(--ea-fade) both;
+  transition:opacity var(--mo-quick) var(--ea-fade);
+}
+.ov-scrim.closing{opacity:0}
+@keyframes ov-scrim-in{from{opacity:0}}
+
+.ov-panel{
+  animation:ov-panel-in var(--mo-base) var(--ea-decel) both;
+  transition:transform var(--mo-quick) var(--ea-accel),opacity var(--mo-quick) var(--ea-fade);
+}
+.ov-panel.closing{opacity:0;transform:translateY(8px) scale(.985)}
+@keyframes ov-panel-in{from{opacity:0;transform:translateY(14px) scale(.97)}}
+
+/* 弹出菜单/气泡：从触发点长出来，故带 transform-origin，且更快 */
+.ov-pop{animation:ov-pop-in var(--mo-quick) var(--ea-decel) both}
+@keyframes ov-pop-in{from{opacity:0;transform:scale(.94)}}
+
+/* —— 按下反馈（use:pressable 的 CSS 侧）——
+   纪律：按下干脆(90ms 无过冲)、松手才弹（弹簧在 JS 侧）。CSS 只负责消费 --press-s。
+   元素若另有 transform，自己写成 translate(..) scale(var(--press-s,1)) 组合。 */
+.pressable{transform:scale(var(--press-s,1))}
+/* 纯 CSS 兜底（未挂 action 的既有按钮）：仍比原先的弹性按下干脆 */
+.press-css{transition:transform var(--mo-tap) var(--ea-accel)}
+.press-css:active{transform:scale(.96)}
+
+/* 全域拖拽进行中（lib/dragdrop.svelte.js 挂在 <html> 上）：
+   ① 禁掉整页文字选择——鼠标拖到一半会把沿途文字刷成蓝的；
+   ② 光标改成「攥着」，桌面上一眼看出手里有东西。
+   触屏上这两条都无副作用（没有光标、也没有拖选）。 */
+html.dnd-live, html.dnd-live * { user-select: none !important; -webkit-user-select: none !important; -webkit-touch-callout: none !important; }
+html.dnd-live { cursor: grabbing; }
+/* ④ 拖拽期间浏览器不许再做任何触摸手势：触摸滚动在 Chrome 里是整场序列级别的手势，第二根手指
+   一滚，它会给【所有】指针补 pointercancel、拎着的那份当场掉地。touch-action 是逐级求交集的，
+   挂在 html 上等于全站生效，之后落下的每根手指都不再有原生滚动——第二根手指的滚动/点按由
+   lib/dragdrop.svelte.js 自己认（JS 滚动 + 惯性 + 合成 click）。 */
+html.dnd-live { touch-action: none !important; }
+/* ③ 拖拽期间让 iframe 对命中测试透明：指针一旦飘到 iframe 上，事件就被路由进它自己的
+   document，父页当场失去这根手指（Claude 分屏的另一格就是个 iframe，不让开就永远投不进去）。 */
+html.dnd-live iframe { pointer-events: none !important; }
+/* dimensio 正文列的落点高亮：规则必须落在【全局】——harness 那侧是另一个组件的 scoped CSS，
+   宿主注入的 action 加的类在那里会被编译器当未使用剪掉。用 outline 而不是 ::after，
+   免得依赖目标节点的定位上下文。 */
+.hx-dnd-on { outline: 2px solid var(--hx-accent, #6d7cff); outline-offset: -6px; border-radius: 14px; }
+
+/* ===== claude.ai /code 转录滚动区同款渐隐（CDS .scroll-fade-strip-*，2026-09-11 自官方桌面端
+   1.52386 的 c6a992d55 css 原样取回）=====
+   两条 sticky 渐变带贴在滚动容器首尾（负 margin 不占位），颜色 = 容器底色（--scroll-fade-color，
+   缺省 --bg），由 scroll() 时间线驱动两个注册属性：raw = 顶带在头 size 像素内 0→1、底带在尾 size
+   像素内 1→0；active = 容器可滚才为 1（不可滚时 scroll() 时间线不活跃、动画不生效、保持初值 0，
+   两带恒隐——官方靠这一手让短内容不出现渐隐）。不支持 scroll() 的引擎 opacity 恒 0，等于没这层。
+   官方转录：顶 32px（--epitaxy-top-fade-height）、底 48px（scroll-fade-size-[48px]）；本项目按页面覆写。
+   渐变梯度是官方原值：0%实色 → 13% .85 → 40% .5 → 70% .15 → 透明。 */
+@property --scroll-fade-size { syntax: "<length>"; inherits: false; initial-value: 28px; }
+@property --scroll-fade-raw { syntax: "<number>"; inherits: false; initial-value: 0; }
+@property --scroll-fade-active { syntax: "<number>"; inherits: false; initial-value: 0; }
+.scroll-fade-strip-top, .scroll-fade-strip-bottom {
+  position: sticky; inset-inline-start: 0; height: var(--scroll-fade-size);
+  pointer-events: none; z-index: 1; opacity: 0;
+}
+.scroll-fade-strip-top { top: 0; margin-bottom: calc(var(--scroll-fade-size) * -1);
+  background: linear-gradient(to bottom,
+    var(--scroll-fade-color, var(--bg)),
+    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 85%, transparent) 13%,
+    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 50%, transparent) 40%,
+    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 15%, transparent) 70%,
+    transparent); }
+.scroll-fade-strip-bottom { bottom: 0; margin-top: calc(var(--scroll-fade-size) * -1);
+  background: linear-gradient(to top,
+    var(--scroll-fade-color, var(--bg)),
+    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 85%, transparent) 13%,
+    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 50%, transparent) 40%,
+    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 15%, transparent) 70%,
+    transparent); }
+@supports (animation-timeline: scroll()) {
+  .scroll-fade-strip-top, .scroll-fade-strip-bottom {
+    opacity: calc(var(--scroll-fade-raw) * var(--scroll-fade-active));
+    animation-timing-function: linear; animation-fill-mode: both, none; animation-duration: auto;
+    animation-timeline: scroll(), scroll();
+  }
+  .scroll-fade-strip-top { animation-name: scroll-fade-strip-in, scroll-fade-strip-active;
+    animation-range: 0px var(--scroll-fade-size), 0px 101%; }
+  .scroll-fade-strip-bottom { animation-name: scroll-fade-strip-out, scroll-fade-strip-active;
+    animation-range: calc(100% - var(--scroll-fade-size)) 100%, 0px 101%; }
+}
+@keyframes scroll-fade-strip-in { 0% { --scroll-fade-raw: 0; } to { --scroll-fade-raw: 1; } }
+@keyframes scroll-fade-strip-out { 0% { --scroll-fade-raw: 1; } to { --scroll-fade-raw: 0; } }
+@keyframes scroll-fade-strip-active { 0%, to { --scroll-fade-active: 1; } }

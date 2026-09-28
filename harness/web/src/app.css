@@ -1,0 +1,433 @@
+/* dimensio 基础层：字体 / 作用域重置 / 首帧兜底令牌 / 全局动画 / markdown。
+   视觉令牌全部来自 lib/theme.ts 写入的 CSS 变量，组件样式只引用变量。
+   身兼两种宿主：独立跑（main.ts 设 html[data-hx-standalone]，body 级样式生效）
+   / 嵌入 bridge 分页（body 级一律不碰，.hxroot 自持背景字体）。
+   【铁律】不写裸 :root —— 本文件随 @hx 打进 bridge 全局 bundle，裸 :root 与宿主 :root 同特异性、
+   按源顺序后者覆盖前者（apk218 把 bridge 暗色令牌全局改浅的事故）。新增全局规则一律带 .hxroot 前缀。 */
+
+/* ── 字体：Inter / JetBrains Mono 的拉丁子集 + 思源宋体 600 的展示子集（均 OFL，许可证在 assets/fonts/）。
+   起自有族名，免得和宿主的同名字体互相顶替。中文与全角标点落系统中文字体；宋体只给固定的展示文字
+   （问候、连接页标题——子集由 brand/serif-font.py 按这些字生成）。 */
+@font-face {
+  font-family: "Dimensio Sans";
+  src: url("./assets/fonts/dimensio-sans-var.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Dimensio Mono";
+  src: url("./assets/fonts/dimensio-mono-var.woff2") format("woff2");
+  font-weight: 100 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Dimensio Serif";
+  src: url("./assets/fonts/dimensio-serif-600.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+
+.hxroot *,
+.hxroot *::before,
+.hxroot *::after {
+  box-sizing: border-box;
+}
+
+html[data-hx-standalone],
+html[data-hx-standalone] body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+/* 安全边距：仅独立运行声明（浏览器走 env()，安卓壳注入 --sat/--sab 真值内联覆盖）。
+   嵌入 bridge 时【绝不能】在 .hxroot 上重声明——会遮蔽宿主注入到 <html> 的真值。 */
+html[data-hx-standalone] {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+}
+
+/* 首帧兜底令牌（theme.ts 启动即以内联值覆盖）：按系统深浅给，「跟随系统」的人不会白闪 / 黑闪。 */
+html[data-hx-standalone],
+.hxroot {
+  --bg: #F4F1EA;
+  --rail: #EEEAE2;
+  --surface: #FBFAF6;
+  --surface2: #ECE8DF;
+  --surface3: #E2DDD1;
+  --text: #171614;
+  --text2: #48453F;
+  --text3: #6F6B63;
+  --border: rgba(23, 22, 20, 0.09);
+  --border2: rgba(23, 22, 20, 0.16);
+  --accent: #171614;
+  --on-accent: #F4F1EA;
+  --accent-soft: rgba(23, 22, 20, 0.07);
+  --primary: #171614;
+  --on-primary: #F4F1EA;
+  --live: #C8412B;
+  --font-ui: "Dimensio Sans", system-ui, "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  --font-mono: "Dimensio Mono", ui-monospace, Consolas, monospace;
+  --font-serif: "Dimensio Serif", "Noto Serif SC", "Songti SC", serif;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-hx-standalone],
+  .hxroot {
+    --bg: #131210;
+    --rail: #0F0E0C;
+    --surface: #1C1A17;
+    --surface2: #25231F;
+    --surface3: #2F2C28;
+    --text: #EEEAE2;
+    --text2: #B9B3A8;
+    --text3: #8A857C;
+    --border: rgba(238, 234, 226, 0.08);
+    --border2: rgba(238, 234, 226, 0.14);
+    --accent: #EEEAE2;
+    --on-accent: #131210;
+    --accent-soft: rgba(238, 234, 226, 0.09);
+    --primary: #EEEAE2;
+    --on-primary: #131210;
+    --live: #E4553A;
+  }
+}
+
+html[data-hx-standalone] body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  text-rendering: optimizeLegibility;
+  overscroll-behavior: none;
+}
+
+html[data-hx-standalone] #app {
+  height: 100%;
+}
+
+/* ── 作用域重置 ─────────────────────────────────────────────────────────────────── */
+.hxroot button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.hxroot button:disabled {
+  cursor: default;
+}
+.hxroot input,
+.hxroot textarea,
+.hxroot select {
+  font: inherit;
+  color: inherit;
+}
+.hxroot a {
+  color: inherit;
+}
+.hxroot ::selection {
+  background: var(--selection, color-mix(in srgb, var(--accent) 22%, transparent));
+}
+/* 焦点：只给键盘（鼠标 / 触屏点按不画框）。朱色——与 bridge 官网同一条规矩：键盘此刻停在哪，就是「正在发生」。
+   组件自己有焦点表现的可以覆盖。 */
+.hxroot :focus {
+  outline: none;
+}
+.hxroot :focus-visible {
+  outline: 2px solid var(--live, currentColor);
+  outline-offset: 2px;
+}
+
+/* 细滚动条（桌面） */
+@media (pointer: fine) {
+  .hxroot * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--text3) 38%, transparent) transparent;
+  }
+}
+
+/* 只给读屏器 */
+.hxroot .hx-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ── 全局动画（名字全局，带 hx- 前缀免得和宿主撞）───────────────────────────────── */
+
+/* 流式吐字渐入（lib/fade.ts 包裹的 span，类名是它的契约） */
+.hxroot span.f-in {
+  animation: f-in 0.42s linear both;
+}
+@keyframes f-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 「在做」的文字微光：一道亮带从右往左扫过（只挂在纯文字节点上）。
+   用 -webkit-text-fill-color 透明而不是 color:transparent——组件自己在同一元素上写 color 也不会把微光盖掉。 */
+.hxroot .hx-shimmer {
+  background: linear-gradient(
+      100deg,
+      var(--text3) 0%,
+      var(--text3) 38%,
+      var(--text) 50%,
+      var(--text3) 62%,
+      var(--text3) 100%
+    )
+    0 0 / 280% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: hx-shimmer 2.4s linear infinite;
+}
+@keyframes hx-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -180% 0;
+  }
+}
+@keyframes hx-breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes hx-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 拿起 — 放下（lib/dnd.svelte.ts）：拖拽期间整页不选字、不出长按菜单、不让浏览器做触摸手势（滚动由拖拽自己管） */
+html.hx-dnd-live,
+html.hx-dnd-live * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  cursor: grabbing !important;
+}
+html.hx-dnd-live {
+  touch-action: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hxroot span.f-in {
+    animation: none;
+  }
+  .hxroot .hx-shimmer {
+    animation: none;
+    -webkit-text-fill-color: currentColor;
+    background: none;
+  }
+}
+
+/* ── markdown 输出（Feed 里 {@html}，必须全局作用域；类名由 lib/markdown.ts 产出，
+   server/md-stream.test.ts 钉着它的结构）──────────────────────────────────────────── */
+.hxroot .md {
+  overflow-wrap: break-word;
+  line-height: var(--lh-body, 1.72);
+}
+.hxroot .md p {
+  margin: 0 0 0.78em;
+}
+.hxroot .md p:last-child {
+  margin-bottom: 0;
+}
+/* U7：流式两段式渲染的块包裹层不占版面；块里最后一段不是整段回答的最后一段，边距照旧 */
+.hxroot .md .mdblk,
+.hxroot .md .mdtail {
+  display: contents;
+}
+.hxroot .md .mdblk > p:last-child {
+  margin-bottom: 0.78em;
+}
+/* U7：表格只到了表头、分隔行还没来——先按原文等宽显示 */
+.hxroot .md .md-hold {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  color: var(--text2);
+}
+.hxroot .md .md-h {
+  font-weight: 600;
+  margin: 1.35em 0 0.5em;
+  line-height: 1.35;
+  letter-spacing: -0.005em;
+}
+.hxroot .md > .md-h:first-child,
+.hxroot .md .mdblk:first-child > .md-h:first-child {
+  margin-top: 0.2em;
+}
+.hxroot .md h3.md-h {
+  font-size: 1.2em;
+}
+.hxroot .md h4.md-h {
+  font-size: 1.06em;
+}
+.hxroot .md h5.md-h,
+.hxroot .md h6.md-h {
+  font-size: 1em;
+  color: var(--text2);
+}
+.hxroot .md ul,
+.hxroot .md ol {
+  margin: 0.2em 0 0.85em;
+  padding-left: 1.45em;
+}
+.hxroot .md li {
+  margin: 0.28em 0;
+  padding-left: 0.15em;
+}
+.hxroot .md li::marker {
+  color: var(--text3);
+}
+.hxroot .md ul > li::marker {
+  font-size: 0.9em;
+}
+.hxroot .md strong {
+  font-weight: 600;
+}
+/* 行内代码：纸色小片 + 一圈细线（与官网 code 同一种做法） */
+.hxroot .md code.ic {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--surface2);
+  box-shadow: inset 0 0 0 1px var(--border);
+  border-radius: 5px;
+  padding: 0.12em 0.4em;
+  overflow-wrap: anywhere;
+}
+.hxroot .md blockquote {
+  margin: 0.7em 0;
+  padding: 0.05em 0 0.05em 1em;
+  border-left: 2px solid var(--border2);
+  color: var(--text2);
+}
+/* 分隔线 = 地平线：一根两端渐隐的细线（与官网首屏那条贯穿的水平线同一个母题） */
+.hxroot .md hr {
+  border: 0;
+  height: 1px;
+  margin: 1.6em 0;
+  background: linear-gradient(90deg, transparent, var(--border2) 14%, var(--border2) 86%, transparent);
+}
+.hxroot .md a {
+  color: var(--text);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in srgb, var(--text) 32%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--t-fast) var(--ease);
+}
+@media (hover: hover) {
+  .hxroot .md a:hover {
+    text-decoration-color: var(--text);
+  }
+}
+.hxroot .md .tbl-wrap {
+  overflow-x: auto;
+  margin: 0.8em 0 1em;
+  border-radius: var(--r-sm);
+}
+.hxroot .md table {
+  border-collapse: collapse;
+  font-size: 0.93em;
+  min-width: 100%;
+  line-height: 1.55;
+}
+.hxroot .md th,
+.hxroot .md td {
+  text-align: left;
+  padding: 8px 14px 8px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.hxroot .md th:last-child,
+.hxroot .md td:last-child {
+  padding-right: 0;
+}
+.hxroot .md thead th {
+  color: var(--text2);
+  font-weight: 500;
+  white-space: nowrap;
+  border-bottom-color: var(--border2);
+}
+.hxroot .md tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* 代码块：一块安静的凹面 + 语言标 + 复制（点击由 Feed 委托给 lib/copy-click.ts） */
+.hxroot .md .cb {
+  margin: 0.8em 0 1em;
+  border-radius: var(--r-md);
+  background: var(--code-bg);
+  box-shadow: inset 0 0 0 1px var(--border);
+  overflow: hidden;
+}
+.hxroot .md .cb-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 8px 0 14px;
+  font-size: var(--fs-xs, 11px);
+  color: var(--text3);
+}
+.hxroot .md .cb-lang {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+.hxroot .md .cb-copy {
+  color: var(--text3);
+  font-size: var(--fs-sm, 12px);
+  padding: 3px 8px;
+  border-radius: var(--r-xs);
+  transition:
+    color var(--t-fast) var(--ease),
+    background-color var(--t-fast) var(--ease);
+}
+@media (hover: hover) {
+  .hxroot .md .cb-copy:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 7%, transparent);
+  }
+}
+.hxroot .md .cb pre {
+  margin: 0;
+  padding: 2px 16px 14px;
+  overflow-x: auto;
+}
+.hxroot .md .cb code {
+  font-family: var(--font-mono);
+  font-size: 12.8px;
+  line-height: 1.65;
+  white-space: pre;
+  font-variant-ligatures: none;
+}
+/* U7：代码上色（只在稳定块与最终渲染上做）——克制，取国画的矿物色：关键字石青、字符串石绿、数字赭、注释淡墨 */
+.hxroot .md .hl-k {
+  color: var(--code-k, var(--text));
+}
+.hxroot .md .hl-s {
+  color: color-mix(in srgb, var(--ok) 78%, var(--text));
+}
+.hxroot .md .hl-n {
+  color: color-mix(in srgb, var(--warn) 85%, var(--text));
+}
+.hxroot .md .hl-c {
+  color: var(--text3);
+  font-style: italic;
+}

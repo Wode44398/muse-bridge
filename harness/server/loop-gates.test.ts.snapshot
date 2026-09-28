@@ -1,0 +1,136 @@
+exports[`F9-1 验证门禁：编辑后想直接收尾 → 撤回并追问 → 验证通过 → 记忆审计（对用户隐藏）→ 以审计前那句收工 1`] = `
+← turn_start 0
+→ model #1
+  tools: Edit,Bash,MemoryAudit
+  + user: text "把 a.ts 改一下"
+← tool_start Edit#e1
+← tool_end Edit#e1 ok "edited"
+← turn_start 1
+→ model #2
+  + assistant: call Edit#e1 {"path":"a.ts"}
+  + user: result #e1 ok "edited"
+← text "改好了"
+← turn_discard 1 (答复先撤回：改了代码，但还没有通过的验证，正在让它补跑检查)
+← turn_start 2
+→ model #3
+  + assistant(internal): text "改好了"
+  + user(internal): text "[Automated check] You have edited files without sufficient passing verification evidence. Do not declare the task done y…"
+← tool_start Bash#v1
+← tool_end Bash#v1 ok "test passed"
+← turn_start 3
+→ model #4
+  + assistant: call Bash#v1 {"command":"npm test","verify":true,"pass":true}
+  + user: result #v1 ok "exit 0"
+← text "验证通过，改好了"
+→ model #5
+  + assistant: text "验证通过，改好了"
+  + user(internal): text "[Memory audit required] Before finishing, inspect the memory index and decide whether this run produced durable knowledg…"
+← done end
+`;
+
+exports[`F9-2 验证门禁追问用尽（V2）：三次追问都不验证 → 第四版放行并附「未验证」尾注 1`] = `
+← turn_start 0
+→ model #1
+  tools: Edit,Bash
+  + user: text "把 a.ts 改一下"
+← tool_start Edit#e1
+← tool_end Edit#e1 ok "edited"
+← turn_start 1
+→ model #2
+  + assistant: call Edit#e1 {"path":"a.ts"}
+  + user: result #e1 ok "edited"
+← text "好了 1"
+← turn_discard 1 (答复先撤回：改了代码，但还没有通过的验证，正在让它补跑检查)
+← turn_start 2
+→ model #3
+  + assistant(internal): text "好了 1"
+  + user(internal): text "[Automated check] You have edited files without sufficient passing verification evidence. Do not declare the task done y…"
+← text "好了 2"
+← turn_discard 2 (答复先撤回：改了代码，但还没有通过的验证，正在让它补跑检查)
+← turn_start 3
+→ model #4
+  + assistant(internal): text "好了 2"
+  + user(internal): text "[Automated check] You have edited files without sufficient passing verification evidence. Do not declare the task done y…"
+← text "好了 3"
+← turn_discard 3 (答复先撤回：改了代码，但还没有通过的验证，正在让它补跑检查)
+← turn_start 4
+→ model #5
+  + assistant(internal): text "好了 3"
+  + user(internal): text "[Automated check] You have edited files without sufficient passing verification evidence. Do not declare the task done y…"
+← text "好了 4⏎⏎> ⚠️ 未验证：这一轮改了 1 个文件，但没有通过的验证证据（门禁追问 3 次后放行），以上结论请自行核对。"
+← done end
+`;
+
+exports[`F9-3 输出被截断：stop=length → 续写提示 → 完整答复 1`] = `
+← turn_start 0
+→ model #1
+  tools: 
+  + user: text "写一段长的"
+← text "前半段"
+← turn_start 1
+→ model #2
+  + assistant: text "前半段"
+  + user: text "[Automated check] Your previous reply was cut off by the output-token limit mid-response. Continue exactly where you sto…"
+← text "后半段"
+← done end
+`;
+
+exports[`F9-4 记忆审计门禁：无工具收尾 → 追问审计（对用户隐藏）→ 交审计 → 以审计前那句收工 1`] = `
+← turn_start 0
+→ model #1
+  tools: MemoryAudit
+  + user: text "问个问题"
+← text "答复"
+→ model #2
+  + assistant: text "答复"
+  + user(internal): text "[Memory audit required] Before finishing, inspect the memory index and decide whether this run produced durable knowledg…"
+← done end
+`;
+
+exports[`F9-5 插话赶上审计前的收尾（#78）：插话注入后模型只交审计 → 不拿旧答复收工 → 回应插话后才收尾 1`] = `
+← turn_start 0
+→ model #1
+  tools: MemoryAudit
+  + user: text "做个按钮"
+← text "working"
+← steer_applied "改成蓝色"
+→ model #2
+  + assistant: text "working"
+  + user(internal): text "[Memory audit required] Before finishing, inspect the memory index and decide whether this run produced durable knowledg…"
+  + user: text "[用户在运行中插话] 以下是用户刚刚发来的消息。它优先于此前的指示：如果与你正在做的事冲突，按这条来（必要时放弃/回滚正在进行的做法），然后继续。⏎⏎改成蓝色"
+← turn_start 2
+→ model #3
+  + assistant(internal): call MemoryAudit#audit {"decision":"none","reason":"This synthetic gate scenario produces no durable pr…
+  + user(internal): result #audit ok "Memory audit recorded as none: This synthetic gate scenario produces no durable project knowledge."
+← text "改成蓝色了"
+← done end
+`;
+
+exports[`F9-6 连接中断与限流：抛错 → 429（按 Retry-After）→ 重试成功 1`] = `
+← turn_start 0
+→ model #1
+  tools: 
+  + user: text "hi"
+← context retry 1
+← turn_start 0
+→ model #2
+← context retry 2
+← turn_start 0
+→ model #3
+← text "ok"
+← done end
+`;
+
+exports[`F9-7 plan 模式没交计划就想收尾：提醒一次 → 仍用散文作答 → 接受收工（不无限缠斗） 1`] = `
+← turn_start 0
+→ model #1
+  tools: ExitPlanMode
+  + user: text "帮我加个功能"
+← text "我的计划是先改 a.ts"
+← turn_start 1
+→ model #2
+  + assistant: text "我的计划是先改 a.ts"
+  + user(internal): text "[Plan mode] You are in plan mode and have not called ExitPlanMode. If the user asked you to CHANGE anything, do not answ…"
+← text "我的计划是先改 a.ts，再跑测试"
+← done end
+`;

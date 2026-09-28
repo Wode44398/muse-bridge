@@ -1,0 +1,43 @@
+// 「编辑提示词并用原模型重试」——官方 /code 输入框上方回退横条（RefusalBand）的
+// Edit prompt and retry with {original}。
+//
+// 安全栅门把一条消息标记后，SDK 宿主默认自动切到回退模型重试（Fable 5.1 → Opus），会话模型
+// 随之换成回退模型（服务端发 session{swapped} → settings.model 已是回退模型）。这条动作把三件事
+// 一次做完：
+//   ② 检查点回滚到被拒的那条用户消息——只回对话锚点、不回滚文件（rewindToMessage 的 'chat'
+//      模式：被拒的那一轮什么文件也没改，回滚文件只会误伤别的轮）；
+//   ① 会话模型切回被拒时的原模型并记忆（等于用户手动切回，下一轮 bridge 显式传它）；
+//   ③ 把原文填回输入栏聚焦，让人改一改再发。
+// 顺序上先回滚再切模型：回滚失败时不留「模型已切、对话没回」的半截状态；成功路径上两者互不
+// 依赖，先后无差。失败只 toast，指去用消息气泡上的回滚按钮（官方同款语义
+// "Couldn't go back to that message. Use Rewind on the message instead."）。
+// 返回 true = 已回滚并预填（横条据此收起），false = 什么也没动。
+import { session, settings, refusalBand } from './state.svelte.js';
+import { chat, rewindToMessage, rememberCurrentPrefs } from './chat.svelte.js';
+import { prefillComposer, composerHasDraft } from './composerBridge.svelte.js';
+import { dropToast } from './dragdrop.svelte.js';
+
+const FAIL = '回不到那条消息，请用消息上的回滚按钮';
+
+export async function retryRefused(notice) {
+  if (!notice) return false;
+  if (session.busy) { dropToast('这一轮还在生成，等它结束再重试'); return false; }
+  // 官方：composer 有草稿 ⇒ 拒绝并提示先发送 / 清空（"Send or clear your draft first…"）
+  if (composerHasDraft()) { dropToast('先发送或清空输入框里的草稿，再点「编辑并重试」'); return false; }
+  // 被拒请求对应的用户消息 uuid = transcript 里的 uuid（气泡在 user uuid 事件 / 历史重建时挂上）
+  const uuid = notice.refusedUserUuid || null;
+  const m = uuid ? chat.messages.find((x) => x && x.role === 'user' && x.uuid === uuid) : null;
+  if (!m) { dropToast(FAIL); return false; }
+  const text = m.text || '';   // 回滚会把这条气泡连同其后全部移除，原文先留住
+  try { await rewindToMessage(m, 'chat'); }
+  catch { dropToast(FAIL); return false; }
+  // 切回原模型（自动回退把 settings.model 换成了回退模型；notice.from 缺失时不动）。SDK 的 original_model
+  // 带 [1m] 后缀（oneM 表里的模型 bridge 跑 query 时一律 to1M），picker / sidecar 只认裸 id——不剥的话芯片会
+  // 印出 'claude-opus-5[1m]' 原串且恒判 mismatch（与 claude.mjs 的 bare 同口径）。
+  const back = String(notice.from || '').replace(/\[1m\]$/, '');
+  if (back && settings.model !== back) { settings.model = back; rememberCurrentPrefs(); }
+  prefillComposer(text);
+  // 已处理：横条即刻收起（官方 resolveRefusalFallback），不等下一条消息发出才清
+  refusalBand.notice = null;
+  return true;
+}

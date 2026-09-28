@@ -1,0 +1,35 @@
+node_modules/
+web/node_modules/
+web/dist/
+.env
+.env.bak-*
+*.log
+
+# Agent sandbox contents (keep the folder, ignore what the agent writes)
+workspace/*
+!workspace/.gitkeep
+
+# Agent run state: transcripts, checkpoints, and the shadow git used for rollback.
+sessions/
+# Throwaway sessions/workspace of a side-by-side verification instance (e.g. PORT=8801).
+.ui-test-sessions/
+.ui-test-workspace/
+
+# Model memory is per-installation data and never committed.
+memory/*.md
+memory/workspaces/
+memory/.workspace-isolation-migrated
+memory/backups/
+
+# Rebuildable project profile/module/test/contracts/health/vector cache (workspace-scoped).
+knowledge/
+
+# Last-chosen provider/model persisted at runtime (server/config.ts)
+runtime-config.json
+runtime-config.json.tmp
+projects.json
+projects.json.tmp
+
+# Quick chat: pointer to the current throwaway bucket (the bucket itself lives under ~/.dimensio/quick)
+quick.json
+quick.json.tmp

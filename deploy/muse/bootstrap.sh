@@ -1,0 +1,581 @@
+#!/usr/bin/env bash
+# Muse Bridge · Muse VM 一键部署与运维。给 Muse 的 agent 用，说明书见同目录 MUSE.md。
+#
+# 安装 / 修复（可以重复跑；不给的选项沿用上次的选择）：
+#   bash deploy/muse/bootstrap.sh install [--agents claude|dimensio|claude,dimensio] [--solo|--multi]
+#                                         [--domain 主机名 --tunnel-token 令牌] [--claude-token 令牌]
+# 日常：
+#   status                          公网地址、版本、各服务与健康状态
+#   set-claude-token T              写入 Claude 订阅令牌（claude setup-token 生成）并重启 bridge
+#   set-api-key 变量名 值            给 dimensio 填一家模型厂商的 key（如 ANTHROPIC_API_KEY sk-…）
+#   set-agents LIST                 改启用的 agent（claude / dimensio / claude,dimensio）
+#   set-users solo|multi            只自己用（关注册）/ 多人用（开注册与邀请码）
+#   set-domain 主机名 隧道令牌       换成自己域名的固定地址（Cloudflare 命名隧道）
+#   use-quick-tunnel                换回 trycloudflare 临时地址
+#   reset-token                     重新生成管理员访问令牌（旧令牌作废）
+# 更新：
+#   check-update                    看发布频道上有没有新版本
+#   update [--now] [地址 sha256]     下载新版本、构建好，等没人在聊时再切换（--now 立即切）
+#   switch-now                      新版本已装好但在等空闲：不等了，立即切换
+#   rollback                        退回上一个版本（立即重启）
+#   auto-update on|off              发现新版本时自动更新（默认 off：先问用户）
+#
+# 这个脚本包住的全是 Muse VM 独有的坑（通用的部分交给 scripts/server/install.sh）：
+#   · 出站只能走 hatch-egress-proxy：代理变量自动带上，并带进服务环境
+#   · apt 源里有经代理不可达的镜像（会卡住 apt 半小时，且每次开机被平台还原）：先探测，删掉不通的
+#   · cloudflared 不认代理、/etc/hosts 只读：两条 socat 中继 + mount namespace 盖 hosts，再起隧道
+#   · 重启后平台只保留它自己管的 /etc 文件：单元、env 都在持久目录留规范副本，由看门狗 hook 每分钟自愈
+#   · 浏览器沙箱在这里起不来（apparmor 禁了非特权 userns）：不装浏览器，绝不加 --no-sandbox
+#
+# 版本布局：每个版本解压在 bridge-releases/<时间戳>/bridge，服务单元的 WorkingDirectory 指向 bridge-releases/current
+# 这个符号链接。换版本 = 新目录里装好依赖、构建好 → 改链接 → 让 bridge「空闲时重启」（SIGUSR2，等在跑的对话结束）。
+# 旧目录留着当回滚点；新版本起不来，看门狗会自动把链接改回去。数据目录（bridge-srv）各版本共用。
+set -euo pipefail
+
+PERSIST="${MUSE_PERSIST:-/home/hatch}"
+OPS="$PERSIST/bridge-ops"
+RELS="$PERSIST/bridge-releases"
+DATA="${MUSE_DATA:-$PERSIST/bridge-srv}"
+PORT=8787
+SVC_USER=bridge
+PROXY="${MUSE_PROXY:-http://hatch-egress-proxy:3128}"
+EDGE=region1.v2.argotunnel.com
+SERVICES="bridge cf-relay-api cf-relay-edge muse-tunnel"
+HOOK_DIR="$PERSIST/hooks/scripts"
+
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+
+say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
+warn() { printf '\033[33m[!] %s\033[0m\n' "$*" >&2; }
+die()  { printf '\033[31m[x] %s\033[0m\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" = 0 ] || die "请用 root 跑（Muse 的 shell 一般就是 root；不是的话前面加 sudo -E）"
+
+# 代理：socat 单元要拆成主机 + 端口；本脚本里的 curl / apt / npm 也都走它
+PROXY_HOSTPORT="${PROXY#*://}"; PROXY_HOSTPORT="${PROXY_HOSTPORT%%/*}"
+PROXY_HOST="${PROXY_HOSTPORT%:*}"; PROXY_PORT="${PROXY_HOSTPORT##*:}"
+export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" https_proxy="$PROXY" http_proxy="$PROXY"
+export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
+
+# 上次的选择存在 muse.env 里；没装过就是空
+prev() { ( [ -f "$OPS/muse.env" ] && . "$OPS/muse.env" 2>/dev/null; eval "echo \"\${$1:-}\"" ) || true; }
+# 发布频道：一个 latest.json 的地址。包里的 CHANNEL 文件（发版时写入）给默认值，已装过的以 muse.env 为准。
+pkg_channel() { grep -vE '^\s*(#|$)' "$HERE/CHANNEL" 2>/dev/null | head -1 | tr -d ' \r' || true; }
+CHANNEL="${MUSE_CHANNEL:-$(prev CHANNEL)}"; [ -n "$CHANNEL" ] || CHANNEL="$(pkg_channel)"
+AUTO_UPDATE="$(prev AUTO_UPDATE)"; AUTO_UPDATE="${AUTO_UPDATE:-0}"
+AGENTS="$(prev AGENTS)"
+USERS_MODE="$(prev USERS_MODE)"
+TUNNEL_MODE="$(prev TUNNEL_MODE)"; TUNNEL_MODE="${TUNNEL_MODE:-quick}"
+PUBLIC_HOSTNAME="$(prev PUBLIC_HOSTNAME)"
+HOOK_NOTE=""
+
+http_code() { local c; c="$(curl -s -o /dev/null -w '%{http_code}' "$@" || true)"; echo "${c:-000}"; }
+public_url() {
+  if [ "$TUNNEL_MODE" = named ] && [ -n "$PUBLIC_HOSTNAME" ]; then echo "https://$PUBLIC_HOSTNAME"; return; fi
+  journalctl -u muse-tunnel.service --no-pager 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true
+}
+local_code() { http_code --noproxy '*' --max-time 5 "http://127.0.0.1:$PORT/healthz"; }
+public_code() { local u; u="$(public_url)"; if [ -n "$u" ]; then http_code --max-time 20 "$u/healthz"; else echo 000; fi; }
+version_of() { head -1 "$1/deploy/muse/VERSION" 2>/dev/null || echo unknown; }
+svc_states() { local s o=""; for s in $SERVICES; do o+="$s=$(systemctl is-active "$s.service" 2>/dev/null || true) "; done; echo "${o% }"; }
+# bridge 进程此刻实际跑在哪个目录（链接改了但还没重启时，跟 current 不一样）
+running_dir() { local pid; pid="$(systemctl show -p MainPID --value bridge.service 2>/dev/null || echo 0)"; [ "${pid:-0}" -gt 0 ] && readlink -f "/proc/$pid/cwd" 2>/dev/null || true; }
+agents_label() { case "$1" in claude) echo '只有 Claude Code' ;; dimensio) echo '只有 dimensio' ;; *) echo 'Claude Code + dimensio' ;; esac; }
+
+# 统一的结果块：Muse 原样转给用户；令牌只有新生成时才有
+result_block() {
+  local token="${1:-}" url lc pc st run cur
+  url="$(public_url)"; lc="$(local_code)"; pc="$(public_code)"
+  run="$(running_dir)"; cur="$(readlink -f "$RELS/current" 2>/dev/null || true)"
+  st="正常"; { [ "$lc" = 200 ] && [ "$pc" = 200 ]; } || st="有问题（看下面各项，对照 MUSE.md「故障排查」）"
+  cat <<EOF
+
+==================== MUSE-BRIDGE 结果 ====================
+状态        $st
+公网地址    ${url:-（还没拿到）}$( [ "$TUNNEL_MODE" = named ] && echo '（自己的域名，固定不变）' || echo '（临时地址，VM 重启会变）')
+管理员令牌  ${token:-（沿用之前的；忘了就跑 reset-token）}
+agent       $(agents_label "${AGENTS:-claude,dimensio}")
+使用方式    $( [ "$USERS_MODE" = solo ] && echo '只自己用（注册关闭）' || echo '多人用（可发邀请码）')
+运行版本    $( [ -n "$run" ] && version_of "$run" || echo 未运行)$( [ -n "$run" ] && [ -n "$cur" ] && [ "$run" != "$cur" ] && echo "（已装好 $(version_of "$cur")，等没人在聊时切换）")
+服务        $(svc_states)
+本地健康    $lc
+公网健康    $pc
+Claude 令牌 $(grep -qE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)=.' /etc/bridge/bridge.env 2>/dev/null && echo 已配置 || echo '未配置（也可能已在控制台「Claude 账号」里加过）')
+更新频道    ${CHANNEL:-未设置（只能手动给地址更新）}；自动更新 $( [ "$AUTO_UPDATE" = 1 ] && echo 开 || echo 关)
+看门狗 hook ${HOOK_NOTE:-脚本 $( [ -f "$HOOK_DIR/bridge-watchdog.sh" ] && echo 已就位 || echo 缺失)}
+==========================================================
+EOF
+}
+
+# apt：探测每个源地址，删掉经代理不通的（平台每次开机会还原 ubuntu.sources，所以每次装都要做）
+fix_apt_sources() {
+  install -d /etc/apt/apt.conf.d
+  printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "2";\n' > /etc/apt/apt.conf.d/80bridge-muse
+  local f line u alive dead
+  for f in /etc/apt/sources.list.d/*.sources; do
+    [ -f "$f" ] || continue
+    while IFS= read -r line; do
+      alive=""; dead=""
+      for u in ${line#URIs:}; do
+        # 000 = 连不上；5xx 多半是代理替不通的上游回的错
+        case "$(http_code --max-time 10 "$u")" in [234]??) alive+=" $u" ;; *) dead+=" $u" ;; esac
+      done
+      if [ -n "$dead" ] && [ -n "$alive" ]; then
+        install -d "$OPS/apt-backup"; cp -n "$f" "$OPS/apt-backup/" || true
+        sed -i "s|^$line\$|URIs:$alive|" "$f"
+        warn "apt 源 $(basename "$f") 删掉了不通的镜像：$dead"
+      elif [ -n "$dead" ]; then
+        warn "apt 源 $(basename "$f") 的镜像全都不通：$dead（先不动它，apt 可能会慢）"
+      fi
+    done < <(grep -E '^URIs:' "$f" || true)
+  done
+}
+
+render() { # 模板里的 @XXX@ 换成真实值
+  sed -e "s|@OPS@|$OPS|g" -e "s|@PORT@|$PORT|g" -e "s|@EDGE@|$EDGE|g" \
+      -e "s|@PROXY_HOST@|$PROXY_HOST|g" -e "s|@PROXY_PORT@|$PROXY_PORT|g" "$1"
+}
+
+write_muse_env() {
+  install -d -m 0770 "$OPS"
+  cat > "$OPS/muse.env" <<EOF
+# bootstrap.sh 生成，heal.sh / cf-wrap.sh / 看门狗都读它（下次 install 会按这里的选择重写）
+PERSIST=$PERSIST
+OPS=$OPS
+RELS=$RELS
+DATA=$DATA
+PORT=$PORT
+SVC_USER=$SVC_USER
+EDGE=$EDGE
+PROXY=$PROXY
+CLOUDFLARED=$(command -v cloudflared || echo /usr/bin/cloudflared)
+SERVICES="$SERVICES"
+AGENTS=$AGENTS
+USERS_MODE=$USERS_MODE
+TUNNEL_MODE=$TUNNEL_MODE
+PUBLIC_HOSTNAME=$PUBLIC_HOSTNAME
+CHANNEL=$CHANNEL
+AUTO_UPDATE=$AUTO_UPDATE
+EOF
+}
+
+# /etc/bridge/bridge.env 里改一个键（值为空 = 删掉这个键），同步持久副本
+set_bridge_env() {
+  local key="$1" val="$2"
+  install -d -m 0750 /etc/bridge; touch /etc/bridge/bridge.env
+  { grep -vE "^(# *)?$key=" /etc/bridge/bridge.env || true; if [ -n "$val" ]; then echo "$key=$val"; fi; } > /etc/bridge/bridge.env.new
+  install -m 0600 /etc/bridge/bridge.env.new /etc/bridge/bridge.env; rm -f /etc/bridge/bridge.env.new
+  install -d -m 0770 "$OPS"; install -m 0600 /etc/bridge/bridge.env "$OPS/bridge.env"
+}
+
+# config.json 改一个键（jq 表达式），以服务用户身份写回
+edit_config() {
+  local expr="$1" f="$DATA/config.json"
+  [ -f "$f" ] || die "还没装过（找不到 $f）"
+  jq "$expr" "$f" > "$f.new" && chown "$SVC_USER:$SVC_USER" "$f.new" && chmod 600 "$f.new" && mv "$f.new" "$f"
+}
+
+# 只保留 current 与上一个版本，更早的解压目录删掉（只动 bridge-releases/<时间戳> 这种目录）
+prune_releases() {
+  local keep1 keep2 d
+  keep1="$(readlink -f "$RELS/current" 2>/dev/null || true)"; keep2="$(cat "$OPS/previous" 2>/dev/null || true)"
+  for d in "$RELS"/*/; do
+    d="${d%/}"
+    [[ "$(basename "$d")" =~ ^[0-9]{8}-[0-9]{6}$ ]] || continue
+    case "$keep1/" in "$d"/*) continue ;; esac
+    case "$keep2/" in "$d"/*) continue ;; esac
+    rm -rf "$d" && echo "清理旧版本目录 $d"
+  done
+}
+
+wait_healthy() { # $1 = 期望运行的目录，$2 = 最多等几秒
+  local i
+  for i in $(seq 1 "$2"); do
+    if [ "$(running_dir)" = "$1" ] && [ "$(local_code)" = 200 ]; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+# 让 bridge 用上新配置：now = 立即重启；idle = 等在跑的对话都结束再重启（SIGUSR2）
+restart_bridge() {
+  if [ "${1:-idle}" = now ] || ! systemctl is-active --quiet bridge.service; then
+    systemctl reset-failed bridge.service 2>/dev/null || true
+    systemctl restart bridge.service
+    printf '等 bridge 起来'; local i; for i in $(seq 1 60); do [ "$(local_code)" = 200 ] && { echo ' ✓'; return 0; }; printf '.'; sleep 1; done
+    echo; warn "60 秒内没起来，看日志：journalctl -u bridge -n 100 --no-pager"
+  else
+    systemctl kill -s SIGUSR2 --kill-whom=main bridge.service
+    echo "已通知 bridge：等正在进行的对话结束后自动重启生效（没人在聊的话几秒内就好）。"
+  fi
+}
+
+# 把 current 链接指向 $1，然后按 $2 切换：now = 立即重启；idle = 通知 bridge 等在跑的对话结束再重启
+switch_to() {
+  local new="$1" mode="$2" run
+  run="$(running_dir)"
+  ln -sfn "$new" "$RELS/.current.tmp" && mv -Tf "$RELS/.current.tmp" "$RELS/current"
+  if [ -n "$run" ] && [ "$run" != "$new" ]; then echo "$run" > "$OPS/previous"; fi
+  systemctl daemon-reload
+  if [ "$mode" = now ] || [ -z "$run" ] || ! systemctl is-active --quiet bridge.service; then
+    rm -f "$OPS/pending-switch.json"
+    systemctl reset-failed bridge.service 2>/dev/null || true
+    systemctl restart bridge.service
+    printf '等 bridge 起来'
+    if wait_healthy "$new" 60; then echo ' ✓'; prune_releases; return 0; fi
+    echo
+    # 换版本时起不来，而旧版本还在：当场退回（首次安装没有旧版本可退，只能看日志）
+    if [ -n "$run" ] && [ "$run" != "$new" ] && [ -f "$run/src/server.mjs" ]; then
+      warn "新版本 60 秒内没起来，退回原来的版本。日志：journalctl -u bridge -n 100 --no-pager"
+      journalctl -u bridge.service --no-pager -n 20 2>/dev/null | tail -20 || true
+      ln -sfn "$run" "$RELS/.current.tmp" && mv -Tf "$RELS/.current.tmp" "$RELS/current"
+      systemctl reset-failed bridge.service 2>/dev/null || true
+      systemctl restart bridge.service
+      wait_healthy "$run" 60 || true
+      die "更新失败，已退回 $(version_of "$run")。把上面的日志给发布者看"
+    fi
+    warn "60 秒内没起来，看日志：journalctl -u bridge -n 100 --no-pager"
+    return 0
+  fi
+  if [ "$run" = "$new" ]; then restart_bridge idle; return 0; fi   # 同一版本重装：配置/依赖变了，空闲时重启
+  jq -n --arg from "$run" --arg to "$new" --arg v "$(version_of "$new")" --arg notes "${UPDATE_NOTES:-}" \
+    --argjson at "$(date +%s)" '{from:$from, to:$to, version:$v, notes:$notes, at:$at, fails:0}' > "$OPS/pending-switch.json"
+  systemctl kill -s SIGUSR2 --kill-whom=main bridge.service
+  printf '新版本已就位，等没人在聊时切换'
+  if wait_healthy "$new" 90; then
+    echo ' ✓ 已切换'; rm -f "$OPS/pending-switch.json"; prune_releases
+  elif [ "$(running_dir)" = "$run" ] && [ "$(local_code)" = 200 ]; then
+    echo; echo "还有对话在跑，暂时没切。bridge 会在对话都结束后自己重启到新版本，看门狗会盯着：切换成功、失败自动回滚、或等太久，都会告诉你。"
+  else
+    # 旧进程已经退了、新版本却起不来：别等看门狗，当场退回
+    echo; warn "新版本起不来，退回原来的版本。日志："
+    journalctl -u bridge.service --no-pager -n 20 2>/dev/null | tail -20 || true
+    rm -f "$OPS/pending-switch.json"
+    ln -sfn "$run" "$RELS/.current.tmp" && mv -Tf "$RELS/.current.tmp" "$RELS/current"
+    systemctl reset-failed bridge.service 2>/dev/null || true
+    systemctl restart bridge.service
+    wait_healthy "$run" 60 || true
+    die "更新失败，已退回 $(version_of "$run")。把上面的日志给发布者看"
+  fi
+}
+
+# 隧道单元：隧道通着就不重启——快速隧道一重启就换地址，单元内容的改动等它下次自然重启（VM 重启 / 掉线）再生效；
+# force = 一定重启（换了隧道模式、换了令牌）。两条中继可以随时重启：cloudflared 会重连，地址不变。
+apply_tunnel() {
+  local force="${1:-}" tunnel_ok=0 s changed=""
+  [ "$(public_code)" = 200 ] && tunnel_ok=1
+  install -d -m 0770 "$OPS/systemd"
+  for s in cf-relay-api cf-relay-edge muse-tunnel; do
+    render "$HERE/ops/systemd/$s.service" > "$OPS/systemd/$s.service"
+    cmp -s "$OPS/systemd/$s.service" "/etc/systemd/system/$s.service" || { cp "$OPS/systemd/$s.service" "/etc/systemd/system/$s.service"; changed+=" $s"; }
+  done
+  chmod 0660 "$OPS"/systemd/*.service
+  # 旧布局（trycloudflare.service）留下的隧道：停掉删掉，免得两条隧道同时跑
+  if [ -f /etc/systemd/system/trycloudflare.service ] || [ -f "$OPS/systemd/trycloudflare.service" ]; then
+    systemctl disable --now trycloudflare.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/trycloudflare.service "$OPS/systemd/trycloudflare.service"
+    force=force
+  fi
+  systemctl daemon-reload
+  for s in cf-relay-api cf-relay-edge muse-tunnel; do systemctl enable "$s.service" >/dev/null 2>&1; done
+  for s in cf-relay-api cf-relay-edge; do
+    case "$changed " in *" $s "*) systemctl restart "$s.service" ;; *) systemctl start "$s.service" ;; esac
+  done
+  if [ -n "$force" ] || [ "$tunnel_ok" = 0 ]; then systemctl reset-failed muse-tunnel.service 2>/dev/null || true; systemctl restart muse-tunnel.service
+  else systemctl start muse-tunnel.service
+  fi
+}
+
+wait_public() {
+  printf '等公网地址'
+  local i url=""
+  for i in $(seq 1 90); do
+    url="$(public_url)"
+    if [ -n "$url" ] && [ "$(http_code --max-time 10 "$url/healthz")" = 200 ]; then echo ' ✓'; break; fi
+    printf '.'; sleep 2
+  done
+  echo
+  if [ -n "$url" ]; then echo "$url" > "$OPS/public-url"; fi
+  return 0
+}
+
+cmd_install() {
+  local claude_token="" mode=now tunnel_token="" domain=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --agents) AGENTS="$2"; shift 2 ;;
+      --solo) USERS_MODE=solo; shift ;;
+      --multi) USERS_MODE=multi; shift ;;
+      --domain) domain="$2"; shift 2 ;;
+      --tunnel-token) tunnel_token="$2"; shift 2 ;;
+      --claude-token) claude_token="$2"; shift 2 ;;
+      --port) PORT="$2"; shift 2 ;;
+      --switch) mode="$2"; shift 2 ;;
+      *) die "install 不认识的选项：$1" ;;
+    esac
+  done
+  AGENTS="${AGENTS:-claude,dimensio}"
+  USERS_MODE="${USERS_MODE:-multi}"
+  if [ -n "$domain" ] || [ -n "$tunnel_token" ]; then
+    [ -n "$domain" ] && [ -n "$tunnel_token" ] || die "--domain 和 --tunnel-token 要一起给"
+    TUNNEL_MODE=named; PUBLIC_HOSTNAME="${domain#https://}"; PUBLIC_HOSTNAME="${PUBLIC_HOSTNAME%%/*}"
+  fi
+
+  say "检查环境"
+  grep -q hatch-egress-proxy /etc/hosts || die "这台机器不像 Muse VM（/etc/hosts 里没有 hatch-egress-proxy）。普通 Linux 请直接用 scripts/server/install.sh"
+  command -v systemctl >/dev/null || die "没有 systemd"
+  [ -d "$PERSIST" ] || die "持久目录 $PERSIST 不存在（可用环境变量 MUSE_PERSIST 指定）"
+  case "$REPO/" in "$PERSIST"/*) ;; *) die "代码目录 $REPO 不在持久目录 $PERSIST 下，重启就没了。请解压到 $RELS/ 底下再跑" ;; esac
+  curl -s -o /dev/null --max-time 15 https://registry.npmjs.org/ || die "经代理 $PROXY 连不上外网（npm registry），先确认出站代理"
+  echo "代码 $REPO（版本 $(version_of "$REPO")）· 数据 $DATA · agent：$(agents_label "$AGENTS") · $( [ "$USERS_MODE" = solo ] && echo 只自己用 || echo 多人用) · 隧道：$( [ "$TUNNEL_MODE" = named ] && echo "自己的域名 $PUBLIC_HOSTNAME" || echo 临时地址)"
+
+  install -d -m 0770 "$OPS" "$OPS/systemd" "$OPS/hooks"
+  install -d -m 0755 "$RELS"
+  chmod o+x "$PERSIST"
+  # 代码目录的上级要能让服务用户穿过去
+  local d="$REPO"; while [ "$d" != "$PERSIST" ] && [ "$d" != / ]; do d="$(dirname "$d")"; [ "$d" = "$PERSIST" ] || chmod o+x "$d"; done
+  if [ -n "$tunnel_token" ]; then (umask 077; printf 'TUNNEL_TOKEN=%s\n' "$tunnel_token" > "$OPS/tunnel.env"); fi
+  if [ "$TUNNEL_MODE" = named ] && [ ! -s "$OPS/tunnel.env" ]; then die "固定域名模式缺隧道令牌：请用 --domain 和 --tunnel-token 一起重跑"; fi
+
+  say "修 apt 源（删掉经代理不通的镜像）"
+  fix_apt_sources
+
+  say "装 socat / cloudflared / jq（镜像里一般已经有了）"
+  local need=()
+  command -v socat >/dev/null || need+=(socat)
+  command -v jq >/dev/null || need+=(jq)
+  { command -v unshare >/dev/null && command -v setpriv >/dev/null; } || need+=(util-linux)
+  if [ ${#need[@]} -gt 0 ]; then apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${need[@]}"; fi
+  if ! command -v cloudflared >/dev/null; then
+    local tmp; tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/cloudflared.deb" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture).deb"
+    dpkg -i "$tmp/cloudflared.deb"; rm -rf "$tmp"
+  fi
+
+  say "跑通用安装脚本 scripts/server/install.sh（装依赖、构建前端，第一次要几分钟；正在跑的服务不动）"
+  local raw; raw="$(mktemp /run/bridge-install.XXXXXX)"
+  local args=(--port "$PORT" --data "$DATA" --user "$SVC_USER" --agents "$AGENTS" "--$USERS_MODE" --no-restart)
+  [ -n "$claude_token" ] && args+=(--claude-token "$claude_token")
+  set +e
+  bash "$REPO/scripts/server/install.sh" "${args[@]}" 2>&1 | tee "$raw"
+  local rc=${PIPESTATUS[0]}
+  set -e
+  local token; token="$(grep -oP '访问令牌\s+\K\S+' "$raw" || true)"
+  # 留一份日志，但访问令牌打码
+  sed -E 's/(访问令牌 +)[A-Za-z0-9_-]{16,}/\1<已打码>/' "$raw" > "$OPS/install-last.log"; rm -f "$raw"
+  [ "$rc" = 0 ] || die "install.sh 失败（退出码 $rc），日志 $OPS/install-last.log。正在跑的服务没受影响"
+
+  say "服务单元改成指向 $RELS/current"
+  local hint="这台是 Muse 部署：在 Muse 里说「更新 bridge」，或运行 bash $OPS/bootstrap.sh update"
+  sed -i -e "s|^WorkingDirectory=.*|WorkingDirectory=$RELS/current|" \
+         -e '/^Environment=BRIDGE_UPDATE_HINT=/d' \
+         -e "/^Environment=BRIDGE_SUPERVISED=/a Environment=BRIDGE_UPDATE_HINT=$hint" /etc/systemd/system/bridge.service
+  cp /etc/systemd/system/bridge.service "$OPS/systemd/bridge.service"
+  # 固定域名：分享链接用完整地址；临时地址：不写（前端按当前地址拼）
+  if [ "$TUNNEL_MODE" = named ]; then set_bridge_env BRIDGE_PUBLIC_ORIGIN "https://$PUBLIC_HOSTNAME"; else set_bridge_env BRIDGE_PUBLIC_ORIGIN ""; fi
+
+  say "装隧道与运维件到 $OPS"
+  write_muse_env
+  install -m 0770 "$HERE/ops/cf-wrap.sh" "$OPS/cf-wrap.sh"
+  install -m 0770 "$HERE/ops/heal.sh" "$OPS/heal.sh"
+  ln -sfn "$RELS/current/deploy/muse/bootstrap.sh" "$OPS/bootstrap.sh"   # 永远跟着当前版本
+  cp "$HERE/MUSE.md" "$OPS/MUSE.md"
+  # hosts：以平台当前的 /etc/hosts 为底，把 cloudflare 的域名指到本机中继
+  { grep -vE 'trycloudflare\.com|argotunnel\.com|bridge-muse' /etc/hosts
+    echo "# --- bridge-muse：cloudflared 经本机 socat 中继出站 ---"
+    echo "127.0.0.1 api.trycloudflare.com"
+    echo "127.0.0.1 region1.v2.argotunnel.com region2.v2.argotunnel.com"; } > "$OPS/hosts"
+  chmod 0644 "$OPS/hosts"
+  apply_tunnel "$( [ -n "$tunnel_token" ] && echo force )"
+
+  say "装看门狗 hook 脚本（注册在 Muse 里做，见 MUSE.md）"
+  install -d "$HOOK_DIR"
+  render "$HERE/ops/hooks/bridge-watchdog.sh" > "$HOOK_DIR/bridge-watchdog.sh"; chmod 0770 "$HOOK_DIR/bridge-watchdog.sh"
+  cp "$HOOK_DIR/bridge-watchdog.sh" "$OPS/hooks/"
+  local hj="$OPS/hooks/bridge-watchdog.json" new_hj; new_hj="$(render "$HERE/ops/hooks/bridge-watchdog.json")"
+  if [ ! -f "$hj" ]; then HOOK_NOTE="新装：请用 hooks 工具按 $hj 注册并启用"
+  elif [ "$new_hj" != "$(cat "$hj")" ]; then HOOK_NOTE="定义变了：请用 hooks 工具按 $hj 更新 bridge-watchdog（脚本已自动换新）"
+  else HOOK_NOTE="定义没变，脚本已换新，不用动"; fi
+  printf '%s\n' "$new_hj" > "$hj"
+
+  bash "$OPS/heal.sh" >/dev/null || true
+
+  say "切换到这个版本（$( [ "$mode" = idle ] && echo 等没人在聊时 || echo 立即)）"
+  switch_to "$REPO" "$mode"
+  wait_public
+  result_block "$token"
+}
+
+cmd_status() { result_block ""; }
+
+# 以当前版本重跑 install（换 agent / 装 dimensio 依赖用），完了空闲时重启
+reinstall_current() {
+  local cur; cur="$(readlink -f "$RELS/current" 2>/dev/null || true)"
+  [ -n "$cur" ] && [ -f "$cur/deploy/muse/bootstrap.sh" ] || die "还没装过，先跑 install"
+  bash "$cur/deploy/muse/bootstrap.sh" install --switch idle "$@"
+}
+
+cmd_set_agents() {
+  case "${1:-}" in claude|dimensio|claude,dimensio|dimensio,claude) ;; *) die "用法：set-agents claude | dimensio | claude,dimensio" ;; esac
+  reinstall_current --agents "$1"
+}
+
+cmd_set_users() {
+  case "${1:-}" in solo|multi) ;; *) die "用法：set-users solo | multi" ;; esac
+  USERS_MODE="$1"; write_muse_env
+  edit_config ".features = ((.features // {}) + {multiUser: $( [ "$1" = multi ] && echo true || echo false )})"
+  echo "已改成：$( [ "$1" = solo ] && echo '只自己用（注册与邀请码关闭）' || echo '多人用（可以发邀请码、开放注册）')"
+  restart_bridge idle
+}
+
+cmd_set_api_key() {
+  local key="${1:-}" val="${2:-}" f="$DATA/dimensio/.env"
+  [[ "$key" =~ ^(ANTHROPIC|OPENAI|GEMINI|ZHIPU|KIMI|QWEN|MIMO|DEEPSEEK)_API_KEY$ ]] || die "用法：set-api-key <ANTHROPIC|OPENAI|GEMINI|ZHIPU|KIMI|QWEN|MIMO|DEEPSEEK>_API_KEY <值>（值为空 = 删掉）"
+  install -d -o "$SVC_USER" -g "$SVC_USER" "$DATA/dimensio"; touch "$f"
+  { grep -vE "^$key=" "$f" || true; if [ -n "$val" ]; then echo "$key=$val"; fi; } > "$f.new"
+  install -m 0600 -o "$SVC_USER" -g "$SVC_USER" "$f.new" "$f"; rm -f "$f.new"
+  if [ -n "$val" ]; then echo "已写入 $key（末 4 位 …${val: -4}）"; else echo "已删除 $key"; fi
+  restart_bridge idle
+}
+
+cmd_set_domain() {
+  local host="${1:-}" tok="${2:-}"
+  [ -n "$host" ] && [ -n "$tok" ] || die "用法：set-domain <主机名，如 bridge.example.com> <Cloudflare 隧道令牌>"
+  [ -f "$OPS/muse.env" ] || die "还没装过，先跑 install"
+  TUNNEL_MODE=named; PUBLIC_HOSTNAME="${host#https://}"; PUBLIC_HOSTNAME="${PUBLIC_HOSTNAME%%/*}"
+  (umask 077; printf 'TUNNEL_TOKEN=%s\n' "$tok" > "$OPS/tunnel.env")
+  write_muse_env
+  set_bridge_env BRIDGE_PUBLIC_ORIGIN "https://$PUBLIC_HOSTNAME"
+  apply_tunnel force
+  restart_bridge idle
+  wait_public
+  result_block ""
+}
+
+cmd_use_quick_tunnel() {
+  [ -f "$OPS/muse.env" ] || die "还没装过，先跑 install"
+  TUNNEL_MODE=quick; PUBLIC_HOSTNAME=""
+  rm -f "$OPS/tunnel.env"
+  write_muse_env
+  set_bridge_env BRIDGE_PUBLIC_ORIGIN ""
+  apply_tunnel force
+  restart_bridge idle
+  wait_public
+  result_block ""
+}
+
+# 读发布频道：latest.json 放进全局 MJ，字段用 mf '.commit' 这样取
+MJ=""
+fetch_channel() {
+  [ -n "$CHANNEL" ] || die "没有设置更新频道：请让用户提供新版本的下载地址和 sha256，用 update <地址> <sha256>"
+  MJ="$(curl -fsSL --max-time 30 "$CHANNEL")" || die "读不到更新频道 $CHANNEL"
+  jq -e '.commit and .url and .sha256' >/dev/null <<<"$MJ" || die "更新频道的内容不对（缺 commit / url / sha256）"
+}
+mf() { jq -r "$1 // \"\"" <<<"$MJ"; }
+
+cmd_check_update() {
+  local cur; cur="$(version_of "$(readlink -f "$RELS/current" 2>/dev/null || running_dir)")"
+  fetch_channel
+  echo "当前版本  $cur"
+  echo "最新版本  $(mf .version)"
+  if [ "${cur%% *}" = "$(mf .commit)" ]; then echo "已经是最新"; else printf '更新内容\n%s\n' "$(mf .notes)"; fi
+}
+
+cmd_update() {
+  local mode=idle url="" sum=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --now) mode=now; shift ;;
+      *) if [ -z "$url" ]; then url="$1"; else sum="$1"; fi; shift ;;
+    esac
+  done
+  if [ -z "$url" ]; then
+    fetch_channel
+    local cur; cur="$(version_of "$(readlink -f "$RELS/current" 2>/dev/null || true)")"
+    if [ "${cur%% *}" = "$(mf .commit)" ]; then
+      echo "已经是最新（$(mf .version)）"
+      if [ "$mode" = now ] && [ "$(running_dir)" != "$(readlink -f "$RELS/current")" ]; then cmd_switch_now; return; fi
+      result_block ""; return
+    fi
+    url="$(mf .url)"; sum="$(mf .sha256)"; UPDATE_NOTES="$(mf .notes)"; export UPDATE_NOTES
+    echo "更新 $cur → $(mf .version)"
+  fi
+  [ -n "$sum" ] || die "用法：update [--now] [<下载地址> <sha256>]"
+  local name tmp new
+  name="$(date +%Y%m%d-%H%M%S)"
+  install -d -m 0755 "$RELS"; tmp="$RELS/.$name.tgz"
+  say "下载 $url"
+  curl -fL --retry 3 -o "$tmp" "$url"
+  echo "$sum  $tmp" | sha256sum -c - || { rm -f "$tmp"; die "sha256 对不上，已删除下载的文件"; }
+  install -d -m 0755 "$RELS/$name"
+  tar -xzf "$tmp" -C "$RELS/$name"; rm -f "$tmp"
+  new="$(find "$RELS/$name" -maxdepth 4 -path '*/deploy/muse/bootstrap.sh' | head -1)"
+  [ -n "$new" ] || { rm -rf "${RELS:?}/$name"; die "包里找不到 deploy/muse/bootstrap.sh"; }
+  new="$(cd "$(dirname "$new")/../.." && pwd)"
+  say "用新版本自己的 bootstrap 安装：$new（沿用现在的 agent、使用方式与隧道设置）"
+  bash "$new/deploy/muse/bootstrap.sh" install --switch "$mode"
+}
+
+# 新版本已装好、还在等空闲：不等了，立即切（会打断在跑的对话）
+cmd_switch_now() {
+  local cur; cur="$(readlink -f "$RELS/current" 2>/dev/null || true)"
+  [ -n "$cur" ] || die "还没装过"
+  if [ "$(running_dir)" = "$cur" ]; then echo "已经在跑 $(version_of "$cur")，不用切"; result_block ""; return; fi
+  echo "立即切换到 $(version_of "$cur")"
+  switch_to "$cur" now
+  result_block ""
+}
+
+cmd_rollback() {
+  local prev run; prev="$(cat "$OPS/previous" 2>/dev/null || true)"; run="$(running_dir)"
+  [ -n "$prev" ] && [ -f "$prev/src/server.mjs" ] || die "没有可回退的上一个版本（$OPS/previous 为空或目录已删）"
+  echo "回退 $(version_of "${run:-$(readlink -f "$RELS/current")}") → $(version_of "$prev")"
+  switch_to "$prev" now
+  result_block ""
+}
+
+cmd_auto_update() {
+  case "${1:-}" in on) AUTO_UPDATE=1 ;; off) AUTO_UPDATE=0 ;; *) die "用法：auto-update on|off" ;; esac
+  [ -f "$OPS/muse.env" ] || die "还没装过，先跑 install"
+  write_muse_env
+  if [ "$AUTO_UPDATE" = 1 ]; then echo "自动更新已打开：看门狗发现新版本会自己下载构建，等没人在聊时切换，完成后告诉用户"
+  else echo "自动更新已关闭：发现新版本时先问用户"; fi
+}
+
+cmd_set_claude_token() {
+  local t="${1:-}"; [ -n "$t" ] || die "用法：bootstrap.sh set-claude-token <claude setup-token 生成的令牌>"
+  set_bridge_env CLAUDE_CODE_OAUTH_TOKEN "$t"
+  echo "已写入（令牌末 4 位 …${t: -4}）"
+  restart_bridge now
+  result_block ""
+}
+
+cmd_reset_token() {
+  local out code
+  code="$(running_dir)"; [ -n "$code" ] || code="$(readlink -f "$RELS/current")"
+  out="$(runuser -u "$SVC_USER" -- env HOME="$DATA/home" BRIDGE_DATA_ROOT="$DATA" "$(command -v node)" "$code/src/gen-token.mjs" --hash)"
+  restart_bridge now
+  echo "已生成新的管理员访问令牌，旧令牌和所有已登录的管理员会话都作废了。"
+  result_block "$(echo "$out" | sed -n 2p)"
+}
+
+sub="${1:-install}"; [ $# -gt 0 ] && shift
+case "$sub" in
+  install) cmd_install "$@" ;;
+  status) cmd_status ;;
+  set-claude-token) cmd_set_claude_token "$@" ;;
+  set-api-key) cmd_set_api_key "$@" ;;
+  set-agents) cmd_set_agents "$@" ;;
+  set-users) cmd_set_users "$@" ;;
+  set-domain) cmd_set_domain "$@" ;;
+  use-quick-tunnel) cmd_use_quick_tunnel ;;
+  reset-token) cmd_reset_token ;;
+  check-update) cmd_check_update ;;
+  update) cmd_update "$@" ;;
+  switch-now) cmd_switch_now ;;
+  rollback) cmd_rollback ;;
+  auto-update) cmd_auto_update "$@" ;;
+  -h|--help|help) sed -n '2,21p' "$0" ;;
+  *) die "不认识的子命令：$sub（help 看用法）" ;;
+esac

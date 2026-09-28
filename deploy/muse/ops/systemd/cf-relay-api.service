@@ -1,0 +1,12 @@
+[Unit]
+Description=socat relay 127.0.0.1:443 -> egress proxy -> api.trycloudflare.com:443 (cloudflared tunnel registration)
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/socat TCP-LISTEN:443,bind=127.0.0.1,fork,reuseaddr PROXY:@PROXY_HOST@:api.trycloudflare.com:443,proxyport=@PROXY_PORT@
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

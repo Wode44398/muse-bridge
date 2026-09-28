@@ -1,0 +1,28 @@
+{
+  "name": "harness-platform-preview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A model-pluggable agent harness: neutral turn model + real coding tools + agent loop, driven from a web UI.",
+  "scripts": {
+    "server": "node --watch server/index.ts",
+    "web": "npm --prefix web run dev",
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm run server\" \"npm run web\"",
+    "build": "npm --prefix web install && npm --prefix web run build",
+    "start": "node server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "check:web": "node web/scripts/svelte-baseline.ts",
+    "size": "node scripts/size-report.ts",
+    "test": "tsc --noEmit && node web/scripts/svelte-baseline.ts && node --import ./server/test-setup.ts --test-global-setup=./server/test-global.ts --test-timeout=120000 --test --test-concurrency=8 server/*.test.ts"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.2"
+  }
+}

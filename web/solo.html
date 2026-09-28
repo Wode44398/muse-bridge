@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+<meta name="theme-color" content="#1f1f1e" />
+<title>Muse Bridge</title>
+<link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="%BASE_URL%icons/favicon-32.png" sizes="32x32" type="image/png" />
+<!-- 单开一个对话（分屏的另一格 / 拖出的独立窗口，见 src/lib/solo.js）：与主页面同一个主题键，首帧不闪白 -->
+<script>(function(){try{var t=localStorage.getItem('bridge-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
+</head>
+<body>
+<div id="app"></div>
+<script type="module" src="/src/solo.js"></script>
+</body>
+</html>
