@@ -351,6 +351,12 @@ run_detached() {   # 参数 = 要在后台跑的子命令及其参数
   echo "已在后台开始（完整日志 $INSTALL_LOG）。下面最多等 4 分半，只打印进度："
   WAIT_FRESH=1 cmd_wait
 }
+# 提示用户「接着等」时给哪条命令：运维入口指的就是这份脚本时用短路径；否则（比如从旧版本直接跑新版本的 install，
+# 入口还指着不认识 wait 的旧版本）给这份脚本自己的完整路径
+self_cmd() {
+  if [ "$(readlink -f "$OPS/bootstrap.sh" 2>/dev/null)" = "$HERE/bootstrap.sh" ]; then echo "bash $OPS/bootstrap.sh"
+  else echo "bash $HERE/bootstrap.sh"; fi
+}
 # 后台子进程开头调：登记自己的 PID，退出时留下退出码给 wait
 detached_start() { echo "$$" > "$INSTALL_PID"; trap 'echo $? > "$INSTALL_RC"' EXIT; }
 
@@ -492,7 +498,7 @@ cmd_wait() {
   while install_running; do
     steps
     if [ $((SECONDS - start)) -ge "$max" ]; then
-      echo "还在后台跑，没出错（已经等了 $((SECONDS - start)) 秒）。接着等就运行：bash $OPS/bootstrap.sh wait"
+      echo "还在后台跑，没出错（已经等了 $((SECONDS - start)) 秒）。接着等就运行：$(self_cmd) wait"
       return 0
     fi
     sleep 5
