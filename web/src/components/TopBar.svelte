@@ -5,7 +5,10 @@
   //     工作台收着时挂在【这一格】的右上角；
   //     工作台一展开就交给 ClaudeDock 挂进它顶上那条带里（卡片正上方），这里不再摆。
   //   · 否则（手机底部 sheet 形态）＝ 原来的「主题 + 两点键」胶囊，两点键开 sheet。
-  // 材质：无边框、无高光、纯毛玻璃（backdrop blur）；内容滚到底下时透出模糊。
+  // 材质：Figma iOS 27 kit 的液态玻璃（Liquid Glass - Regular - Small，明暗两个变体）。图形层是构建期
+  // 用 Figma 原版着色器烘焙的「与底色无关」图层（assets/figma-glass）：页面底色从下面透上来，在 --bg 上与
+  // Figma 逐像素一致；正文滚到底下时靠 backdrop 模糊透出（磨砂半径 6 → σ≈2.45，不做折射）。
+  // `?oldglass` 退回原来的纯毛玻璃，方便对比。
   import { toggleTheme } from '../lib/state.svelte.js';
   import { dock } from '../lib/dock.svelte.js';
   import DockToolBar from './dock/DockToolBar.svelte';
@@ -16,13 +19,14 @@
   //   要把同一个 onClose 交给 ClaudeDock（toolsClose），那边的工具组照样有 ✕
   let { onMenu, onDock, hideMenu = false, menuOn = false, sat = true, split = false, onClose = null, tools = false } = $props();
   const top = $derived(sat ? 'calc(var(--sat) + 10px)' : '10px');
+  const fg = typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass');
 </script>
 
-{#if !hideMenu}<button class="fab round" class:sm={tools} class:on={menuOn} aria-label={menuOn ? '收起侧栏' : '菜单'} aria-pressed={menuOn} style:top onclick={onMenu}>&#xe0dd;</button>{/if}
+{#if !hideMenu}<button class="fab round" class:fg class:sm={tools} class:on={menuOn} aria-label={menuOn ? '收起侧栏' : '菜单'} aria-pressed={menuOn} style:top onclick={onMenu}>&#xe0dd;</button>{/if}
 {#if tools}
   {#if !dock.open}<DockToolBar {top} {split} {onClose} />{/if}
 {:else}
-<div class="fab pill" style:top>
+<div class="fab pill" class:fg style:top>
   <button class="pbtn" aria-label="切换明暗主题" onclick={toggleTheme}>
     <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
     <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
@@ -80,4 +84,37 @@
 
   /* 触屏（平板 / 折叠屏展开）：和工具开关组（DockToolBar，触屏 40px）同高同中线 */
   @media (pointer: coarse) { .fab.round.sm { width: 40px; height: 40px; } }
+
+  /* —— Figma 液态玻璃（默认；?oldglass 退回上面的毛玻璃）——
+     ::before 盖住控件外扩 24px（投影在里面），画烘焙好的图层；控件自身只留 backdrop 模糊，底色从下面透上来。
+     每张图对应一个尺寸：44 手机、36 工具组形态、40 触屏工具组；胶囊按三段切片横向拉伸
+     （两端各 64px 原样、中段拉伸——中段逐列不变，核对误差 ≤3/255）。
+     图标色 = Figma 的标签色按其混合模式落在玻璃上的结果：亮 #1a1a1a LINEAR_BURN → #0d0d0d；
+     暗 #f5f5f5 LINEAR_DODGE（CSS 没有 linear-burn，这里统一用普通混合的等效色）。
+     烘焙时的锚点是页面底色 --bg：改了底色要重新烘焙，否则在新底色上不再精确。 */
+  :global(html) .fab.fg {
+    background: transparent; color: #f5f5f5;
+    -webkit-backdrop-filter: blur(2.45px); backdrop-filter: blur(2.45px);
+  }
+  :global(html[data-theme="light"]) .fab.fg { background: transparent; color: #0d0d0d; }
+  /* 按下 / 选中：在玻璃背后垫一层淡色（相当于底色变了），玻璃图层本身不动 */
+  :global(html) .fab.round.fg:active, :global(html) .fab.round.fg.on { background: var(--hover-strong); }
+  .fab.fg .pbtn { color: inherit; }
+  .fab.fg::before {
+    content: ''; position: absolute; inset: -24px; z-index: -1; pointer-events: none;
+    background: center / 100% 100% no-repeat;
+  }
+  .fab.round.fg::before { background-image: url(../assets/figma-glass/tb-orb44-dark.png); }
+  .fab.round.fg.sm::before { background-image: url(../assets/figma-glass/tb-orb36-dark.png); }
+  :global(html[data-theme="light"]) .fab.round.fg::before { background-image: url(../assets/figma-glass/tb-orb44-light.png); }
+  :global(html[data-theme="light"]) .fab.round.fg.sm::before { background-image: url(../assets/figma-glass/tb-orb36-light.png); }
+  @media (pointer: coarse) {
+    .fab.round.fg.sm::before { background-image: url(../assets/figma-glass/tb-orb40-dark.png); }
+    :global(html[data-theme="light"]) .fab.round.fg.sm::before { background-image: url(../assets/figma-glass/tb-orb40-light.png); }
+  }
+  .fab.pill.fg::before {
+    background: none; border-style: solid; border-width: 0 64px;
+    border-image: url(../assets/figma-glass/tb-cap44-dark.png) 0 192 fill / 0 64px / 0 stretch;
+  }
+  :global(html[data-theme="light"]) .fab.pill.fg::before { border-image-source: url(../assets/figma-glass/tb-cap44-light.png); }
 </style>

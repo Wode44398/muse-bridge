@@ -4,7 +4,7 @@
   //   · 工作台收着：TopBar 把它挂在这一格右上角；
   //   · 工作台展开：ClaudeDock 把它挂进自己顶上那条带里（docked），就坐在卡片正上方——
   //     位置跟着工作台这一列走，不靠这一格右上角的坐标去「碰巧」对上。
-  // 材质：无边框、无高光、纯毛玻璃（backdrop blur）；内容滚到底下时透出模糊。
+  // 材质：Figma 液态玻璃（Clear Glass，见样式区 .fg）；`?oldglass` 退回原来的纯毛玻璃。
   import { toggleTheme, ui } from '../../lib/state.svelte.js';
   import { dock, toggleDockView, closeDock, ensureDockMeta, dockToolOk, DOCK_TOOLS } from '../../lib/dock.svelte.js';
   import { bgHoldNow } from '../../lib/chat.svelte.js';
@@ -12,6 +12,7 @@
   // top：宿主算好的 top（TopBar 按 sat 属性给；docked 时由工作台带内的规则定，不用它）
   // split：分屏里的一格；onClose 给了就在末尾多一颗 ✕（关掉这一格）
   let { top = '10px', split = false, onClose = null, docked = false } = $props();
+  const fg = typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass');
 
   const BAR = ['term', 'review', 'files'];            // 标题栏常驻三颗，其余收进 ⋮
   const MORE = ['tasks'];
@@ -51,7 +52,7 @@
   function pick(k) { moreOpen = false; toggleDockView(k); }
 </script>
 
-<div class="tbar" class:split class:docked style:top={docked ? null : top} bind:this={barEl}>
+<div class="tbar" class:fg class:split class:docked style:top={docked ? null : top} bind:this={barEl}>
   {#each barTools as k (k)}
     <button class="tb" class:on={isOn(k)} aria-pressed={isOn(k)} aria-label={LABEL[k].label} title={tip(k)} onclick={() => toggleDockView(k)}>
       {@html dockIcon(k)}
@@ -149,4 +150,26 @@
   .mi-ck { width: 15px; height: 15px; flex: none; display: flex; color: var(--text); }
   .mi-ck :global(svg) { width: 100%; height: 100%; }
   .mi-sep { height: 1px; margin: 4px 6px; background: var(--divider); }
+
+  /* —— Figma 液态玻璃（默认；?oldglass 退回上面的毛玻璃）——
+     材质＝Figma「Notification」的 Clear Glass，去掉原稿三道 LINEAR_BURN 描边（叠起来是一圈纯黑细边）。
+     ::before 外扩 24px 画构建期用 Figma 原版着色器烘焙的图层（锚点＝--bg + 正文那一端），
+     三段切片横向拉伸（两端各 56px 原样）；圆角与这里的 border-radius 同值、不平滑，backdrop 裁切与玻璃形状严丝合缝。
+     材质里均匀的 #101010 LINEAR_DODGE 是纯加法，over 合成做不出，交给 backdrop 滤镜：
+     contrast(1/(1+2d)) brightness(1+2d) = min(1, B + d)，d = 16/255（Edge 实测逐级相等）；blur 2.45 = 磨砂 6。 */
+  :global(html) .tbar.fg {
+    background: transparent;
+    -webkit-backdrop-filter: blur(2.45px) contrast(0.8885) brightness(1.1255);
+    backdrop-filter: blur(2.45px) contrast(0.8885) brightness(1.1255);
+  }
+  .tbar.fg::before {
+    content: ''; position: absolute; inset: -24px; z-index: -1; pointer-events: none;
+    border-style: solid; border-width: 0 56px;
+    border-image: url(../../assets/figma-glass/tb-bar36-dark.png) 0 168 fill / 0 56px / 0 stretch;
+  }
+  :global(html[data-theme="light"]) .tbar.fg::before { border-image-source: url(../../assets/figma-glass/tb-bar36-light.png); }
+  @media (pointer: coarse) {
+    .tbar.fg::before { border-image-source: url(../../assets/figma-glass/tb-bar40-dark.png); }
+    :global(html[data-theme="light"]) .tbar.fg::before { border-image-source: url(../../assets/figma-glass/tb-bar40-light.png); }
+  }
 </style>

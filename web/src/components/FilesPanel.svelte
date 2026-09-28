@@ -55,6 +55,8 @@
   // 内嵌在工作台（Claude/dimensio 的侧列或底部 sheet）：跟随全站明暗；独立工作空间页维持固定浅色。
   // theme='light'|'dark'：宿主有自己的明暗档（dimensio）时强制跟宿主，左右两栏不许一明一暗。
   const embeddedUi = $derived(Boolean(onExit) || previewHost === 'dock');
+  // 搜索行（关闭钮 + 搜索框）用 Figma iOS 27 kit 的液态玻璃（见样式区 .fg）；`?oldglass` 退回原毛玻璃配方
+  const fg = typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass');
   const scoped = (url) => workspaceRoot ? url + (url.includes('?') ? '&' : '?') + 'ws=' + encodeURIComponent(workspaceRoot) : url;
 
   let path = $state('');           // 当前相对路径（'' = 根）
@@ -1194,10 +1196,10 @@
     </div>
 
     <div class="searchrow">
-      <button class="closebtn glass" aria-label="关闭搜索" onclick={closeSearch}>
+      <button class="closebtn" class:glass={!fg} class:fg aria-label="关闭搜索" onclick={closeSearch}>
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M2.5 2.5l11 11M13.5 2.5l-11 11" /></svg>
       </button>
-      <div class="searchfield glass">
+      <div class="searchfield" class:glass={!fg} class:fg>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.8" /><path d="m20 20-4.4-4.4" /></svg>
         <input bind:this={searchEl} bind:value={query} placeholder="搜索文件" autocomplete="off" />
       </div>
@@ -1669,6 +1671,26 @@
   .searchfield svg { flex: 0 0 18px; width: 18px; height: 18px; color: var(--sub); }
   .searchfield input { flex: 1; border: none; background: none; outline: none; height: 100%; font: inherit; font-size: 17px; letter-spacing: -.02em; color: var(--label); }
   .searchfield input::placeholder { color: var(--sub); }
+
+  /* 搜索行的 Figma 液态玻璃（iOS 27 kit「Accessory Bar - iPhone/Search」同款：Liquid Glass - Regular - Small）。
+     ::before 外扩 24px 画构建期烘焙的「与底色无关」图层（Figma 原版着色器；锚点＝本页底色 #f2f2f7 / 暗色 #1f1f1e），
+     控件自身只留磨砂半径 6 换算的 backdrop 模糊，底色与滚过的内容从下面透上来（不做折射）。
+     搜索框宽度随屏幕变：三段切片，两端各 64px 原样、中段逐列不变可拉伸（核对误差 ≤3/255）。
+     字色 = kit 标签色按其混合模式落在玻璃上的等效色：主色 #1a1a1a LINEAR_BURN → #0d0d0d，
+     三级色 #bfbfbf LINEAR_BURN → #b1b1b3；暗色 #f5f5f5 / #404040 LINEAR_DODGE → #f5f5f5 / #747473。 */
+  .fg { position: relative; isolation: isolate; background: none; -webkit-backdrop-filter: blur(2.45px); backdrop-filter: blur(2.45px); }
+  .fg::before { content: ''; position: absolute; inset: -24px; z-index: -1; pointer-events: none; }
+  .closebtn.fg { color: #0d0d0d; }
+  .closebtn.fg::before { background: url(../assets/figma-glass/fp-orb48-light.png) center / 100% 100% no-repeat; }
+  .searchfield.fg::before { border-style: solid; border-width: 0 64px; border-image: url(../assets/figma-glass/fp-cap48-light.png) 0 192 fill / 0 64px / 0 stretch; }
+  .searchfield.fg svg, .searchfield.fg input { color: #0d0d0d; }
+  .searchfield.fg input { caret-color: #0088ff; }
+  .searchfield.fg input::placeholder { color: #b1b1b3; }
+  :global(html:not([data-theme='light'])) .ws-root.embedded:not(.th-light) .closebtn.fg, .ws-root.embedded.th-dark .closebtn.fg { color: #f5f5f5; }
+  :global(html:not([data-theme='light'])) .ws-root.embedded:not(.th-light) .closebtn.fg::before, .ws-root.embedded.th-dark .closebtn.fg::before { background-image: url(../assets/figma-glass/fp-orb48-dark.png); }
+  :global(html:not([data-theme='light'])) .ws-root.embedded:not(.th-light) .searchfield.fg::before, .ws-root.embedded.th-dark .searchfield.fg::before { border-image-source: url(../assets/figma-glass/fp-cap48-dark.png); }
+  :global(html:not([data-theme='light'])) .ws-root.embedded:not(.th-light) .searchfield.fg :is(svg, input), .ws-root.embedded.th-dark .searchfield.fg :is(svg, input) { color: #f5f5f5; }
+  :global(html:not([data-theme='light'])) .ws-root.embedded:not(.th-light) .searchfield.fg input::placeholder, .ws-root.embedded.th-dark .searchfield.fg input::placeholder { color: #747473; }
 
   .selbar { position: absolute; left: 21px; right: 21px; top: 0; height: 62px; border-radius: 31px; display: flex; align-items: center; justify-content: space-around; padding: 0 10px; opacity: 0; pointer-events: none; transform: translateY(10px) scale(.96); transition: opacity .26s, transform .3s cubic-bezier(.32,.72,0,1); }
   .bottomwrap.selecting .selbar { opacity: 1; pointer-events: auto; transform: none; }
