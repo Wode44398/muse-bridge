@@ -353,6 +353,7 @@
     rowMenu = null;
     haptic("light");
     app.memoryFor = { path: project.path, name: project.name };
+    app.memoryFromSettings = false;
     app.sheet = "memory";
     leave();
   }

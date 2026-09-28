@@ -3,15 +3,30 @@
   // 编辑后确认 · 驳回（可附一句理由，模型以后看得到）· 撤销驳回 · 删除（按钮上两步确认）。
   // 校验不过就说清差在哪、自动进编辑；同一主题已有生效的给「替换它」；全局层满了说清楚。
   // 每打开一条就是一个新实例：动作状态（编辑中、驳回中、待确认删除……）不串到别的条目上。
+  // K11：有总览数据时多两样——「经历」（每一份旧版是一次改写 / 驳回……，就是行右边时间线上的刻痕，这里是它的表格版）
+  // 与「召回」（全文被拉进对话几次、最近一次）。
   import { toast } from "../../lib/state.svelte.ts";
-  import { deleteMemoryNote, promoteMemoryNote, rejectMemoryNote, restoreMemoryNote, type MemoryNote } from "../../lib/api.ts";
+  import { deleteMemoryNote, promoteMemoryNote, rejectMemoryNote, restoreMemoryNote, type MemoryHistoryWhy, type MemoryNote } from "../../lib/api.ts";
   import { haptic } from "../../lib/touch.ts";
   import { rise } from "../../lib/motion.ts";
   import Button from "../ui/Button.svelte";
   import Switch from "../ui/Switch.svelte";
   import { explain, fmtDate, issuesOf, STATUS_LABEL } from "./memory-text.ts";
+  import { fmtAgo, HISTORY_TEXT } from "./memory-viz.ts";
 
-  let { note, ws, onchanged }: { note: MemoryNote; ws: string; onchanged: () => void | Promise<void> } = $props();
+  let {
+    note,
+    ws,
+    events = [],
+    usage,
+    onchanged,
+  }: {
+    note: MemoryNote;
+    ws: string;
+    events?: Array<{ at: string; why: MemoryHistoryWhy }>;
+    usage?: { uses: number; first?: string; last?: string };
+    onchanged: () => void | Promise<void>;
+  } = $props();
 
   // 触屏上行内的小按钮放大一档（点按目标别太小）
   const btn: "sm" | "md" = matchMedia("(pointer: coarse)").matches ? "md" : "sm";
@@ -119,6 +134,7 @@
     <span class="kv">主题 <code>{note.topic}</code></span>
     {#if note.updated}<span class="kv">更新 <span class="num">{fmtDate(note.updated)}</span></span>{/if}
     {#if note.expiresAt}<span class="kv">到期 <span class="num">{fmtDate(note.expiresAt)}</span></span>{/if}
+    {#if usage?.uses}<span class="kv">召回 <span class="num">{usage.uses}</span> 次{#if usage.last}，最近 {fmtAgo(usage.last)}{/if}</span>{/if}
   </div>
 
   {#if note.declaredStatus === "rejected"}
@@ -156,7 +172,7 @@
     </div>
   {:else}
     <pre class="content">{note.content}</pre>
-    {#if evidence.length || anchors.length || scope.length}
+    {#if evidence.length || anchors.length || scope.length || events.length}
       <dl class="facts">
         {#if evidence.length}
           <dt>证据</dt>
@@ -169,6 +185,13 @@
         {#if scope.length}
           <dt>适用范围</dt>
           <dd>{scope.join("、")}</dd>
+        {/if}
+        {#if events.length}
+          <dt>经历</dt>
+          <dd class="hist">
+            {#each events as e, i (i)}<div><span class="num">{fmtDate(e.at)}</span> {HISTORY_TEXT[e.why]}</div>{/each}
+            {#if note.updated}<div><span class="num">{fmtDate(note.updated)}</span> 当前版本</div>{/if}
+          </dd>
         {/if}
       </dl>
     {/if}

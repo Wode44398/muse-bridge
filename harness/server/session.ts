@@ -50,6 +50,7 @@ import { processTable } from "./proc-tree.ts";
 import { createAdapter } from "./providers/registry.ts";
 import { effectiveBaseUrl, getConfig, resolveKey, type RuntimeConfig } from "./config.ts";
 import { renderAllMemoryForPrompt } from "./memory.ts";
+import { noteRecalledDocs } from "./memory-usage.ts";
 import { withExternalSummary } from "./external-memory.ts";
 import { managedSkillsSection } from "./extensions.ts";
 import { inheritedInstructions, readProjectDocs } from "./project-docs.ts";
@@ -2370,6 +2371,8 @@ async function executeRun(
         const seen = new Set(recallIds(state.messages));
         const fresh = recalled.results.filter((item) => !seen.has(item.document.id));
         const recall = renderAutomaticRecall({ ...recalled, results: fresh });
+        // K11：记下哪些记忆的全文被拉进了这一轮（记忆面板的「召回 N 次」）
+        noteRecalledDocs(ws, fresh.map((item) => item.document.id));
         if (recall) {
           state.appendUserBlocks([{ t: "text", text: recall }], true, { origin: "harness", kind: "recall" });
           // N45：召回对人可见——标题与理由挂在本轮的用户消息上（下面紧接着落盘，翻历史也在），并告诉在看的设备

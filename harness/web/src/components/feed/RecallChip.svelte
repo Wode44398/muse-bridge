@@ -46,6 +46,7 @@
     open = false;
     const ws = memoryWs;
     app.memoryFor = { path: ws, name: ws.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || ws };
+    app.memoryFromSettings = false;
     app.sheet = "memory";
   }
 </script>

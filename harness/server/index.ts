@@ -123,6 +123,8 @@ import {
   type MemoryEdits,
   type SaveMemoryOptions,
 } from "./memory.ts";
+import { buildMemoryOverview } from "./memory-overview.ts";
+import { quickRoot } from "./paths.ts";
 import { renderProjectKnowledgeForPrompt, renderProjectKnowledgeVolatile } from "./knowledge.ts";
 import { refreshProjectKnowledge, stopKnowledgeWorker } from "./knowledge-service.ts";
 import { getSearchMetrics, searchUnifiedKnowledge, type KnowledgeKind } from "./knowledge-search.ts";
@@ -360,6 +362,29 @@ app.get("/api/memory", memoryRoute((_req, res, ws) => {
   // 这个项目还没有记忆：直接回空，不为一次查看建目录（也不触发旧版记忆的一次性迁移）
   res.json(existsSync(memoryDir(ws)) ? listMemories(ws) : []);
 }));
+
+// K11：记忆总览（设置里的「记忆」面板）——全局层 + 每个有记忆的项目 + 旧快照桶，一次拿齐。只读，不为查看建目录。
+// 必须注册在 /api/memory/:id 之前（否则 "overview" 会被当成记忆 id）。
+app.get("/api/memory/overview", async (_req, res) => {
+  try {
+    const sessions = await listSessions();
+    const projects = await listProjects([
+      workspaceRoot(),
+      ...sessions.map((s) => s.workspace ?? "").filter(Boolean),
+    ].filter((p) => !isQuickPath(p)));
+    const quick = quickProject();
+    const overview = buildMemoryOverview({
+      projects: projects.filter((p) => insideTenant(p.path)).map((p) => ({ path: p.path, name: p.name, hidden: p.hidden })),
+      currentWs: workspaceRoot(),
+      quickRoot: quickRoot(),
+      currentQuick: quick?.path,
+    });
+    overview.buckets = overview.buckets.filter((b) => b.kind === "global" || insideTenant(b.ws));
+    res.json(overview);
+  } catch (error) {
+    if (!res.headersSent) res.status(500).json({ error: (error as Error).message });
+  }
+});
 
 app.get("/api/memory/:id", memoryRoute((req, res, ws) => {
   // K9：面板是给用户审的——命中注入特征的条目也要看得到全文，才能决定晋升还是驳回

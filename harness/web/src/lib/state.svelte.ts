@@ -235,6 +235,8 @@ export const app = $state({
   sheet: null as null | "settings" | "attach" | "checkpoints" | "setup" | "memory",
   // K4：记忆面板看的是哪个项目（项目菜单里点「项目记忆」时定）
   memoryFor: null as null | { path: string; name: string },
+  // K11：记忆面板是从设置里点进来的——返回键 / 左上角「‹」回到设置，而不是整个关掉
+  memoryFromSettings: false,
   // 独立 8799 的兜底目录对话框开关（bridge 嵌入态用不到——选择器由宿主接管）
   projectModal: false,
   lightbox: null as null | { src: string; caption?: string },
@@ -2310,6 +2312,16 @@ export async function goalControl(action: "pause" | "resume" | "clear"): Promise
 // ── K7（N54）：全局层记忆（记忆面板里「这个项目 | 全局」）────────────────────────────────────────
 export function globalMemoryAvailable(): boolean {
   return Boolean(app.compat?.caps?.includes("memory-global"));
+}
+// K11：记忆总览（全局层 + 各项目 + 旧快照桶一次拿齐）；旧服务端没有这一位，面板退回「一个项目」的视图
+export function memoryOverviewAvailable(): boolean {
+  return Boolean(app.compat?.caps?.includes("memory-overview"));
+}
+// 打开记忆面板：for = 直接看某个项目（侧栏项目菜单、召回芯片）；不给 = 从设置进总览
+export function openMemory(opts: { for?: { path: string; name: string }; fromSettings?: boolean } = {}): void {
+  app.memoryFor = opts.for ?? null;
+  app.memoryFromSettings = Boolean(opts.fromSettings);
+  app.sheet = "memory";
 }
 
 // ── U10（K38）：审阅面板的「本会话」视图 + 逐文件撤销 ────────────────────────────────────────

@@ -3,6 +3,8 @@
   //       桌面 = 居中对话框，轻微浮起 + 放大进场。
   // 共同：遮罩点一下关、Esc / 返回键关（浮层栈）、挂载期间让桌面壳原生浏览器视图退下、正文单独滚动、
   //       footer 钉在底部（手机上吃底部安全区）。dismissible=false 的是「门」（连接页），关不掉。
+  // onback = 面板里有层级（记忆：总览 → 某个项目；或从设置点进来）：标题左边一枚「‹」，Esc / 返回键先退一级，
+  //       遮罩、右上角 ×、下拉照旧整个关掉。
   import type { Snippet } from "svelte";
   import { onMount } from "svelte";
   import { pushLayer } from "../../lib/layers.ts";
@@ -14,6 +16,8 @@
     title,
     subtitle,
     onclose = () => {},
+    onback,
+    backLabel = "返回",
     size = "md",
     dismissible = true,
     tall = false,
@@ -24,6 +28,8 @@
     title: string;
     subtitle?: string;
     onclose?: () => void;
+    onback?: () => void;
+    backLabel?: string;
     size?: "sm" | "md" | "lg" | "xl";
     dismissible?: boolean;
     tall?: boolean;
@@ -41,7 +47,7 @@
   onMount(() => {
     const onMq = (e: MediaQueryListEvent) => (wide = e.matches);
     mq.addEventListener("change", onMq);
-    const release = dismissible ? pushLayer(() => onclose()) : pushLayer(() => {}, { escape: false });
+    const release = dismissible ? pushLayer(() => (onback ? onback() : onclose())) : pushLayer(() => {}, { escape: false });
     if (wide) panel?.focus({ preventScroll: true });
     return () => {
       mq.removeEventListener("change", onMq);
@@ -96,8 +102,9 @@
     in:enter|global
     out:enter|global
   >
-    <div class="head" bind:this={head}>
+    <div class="head" class:back={Boolean(onback)} bind:this={head}>
       {#if !wide}<div class="grip" aria-hidden="true"></div>{/if}
+      {#if onback}<IconButton icon="chevronL" label={backLabel} size={32} onclick={onback} />{/if}
       <div class="titles">
         <h2>{title}</h2>
         {#if subtitle}<p>{subtitle}</p>{/if}
@@ -188,6 +195,13 @@
     padding: 16px 12px 8px 24px;
     touch-action: auto;
   }
+  /* 左边有「‹」时，它的圆角方光学上对齐正文左缘（图标本身有留白） */
+  .head.back {
+    padding-left: 12px;
+  }
+  .wide .head.back {
+    padding-left: 14px;
+  }
   .grip {
     position: absolute;
     top: 7px;
@@ -229,6 +243,10 @@
   }
   .wide .content {
     padding: 6px 24px 24px;
+  }
+  /* 定高的面板内容忽长忽短（筛选、切视图）：滚动条的位置常驻，出现 / 消失时正文不左右跳 */
+  .wide .tall .content {
+    scrollbar-gutter: stable;
   }
   .foot {
     flex: none;

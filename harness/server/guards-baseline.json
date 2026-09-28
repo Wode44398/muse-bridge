@@ -138,6 +138,7 @@
     "design-guard.test.ts": 2,
     "audit-giveup.test.ts": 3,
     "memory-global.test.ts": 4,
+    "memory-overview.test.ts": 6,
     "external-memory.test.ts": 4,
     "bash-wait.test.ts": 4,
     "goal.test.ts": 5,

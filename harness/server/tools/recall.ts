@@ -3,6 +3,7 @@ import { ok } from "./types.ts";
 import { existsSync } from "node:fs";
 import { GLOBAL_MEMORY, listMemories, memoryDir, modelFacing, readMemory, type MemoryMeta, type MemoryStatus } from "../memory.ts";
 import { externalLine, listExternalNotes } from "../external-memory.ts";
+import { noteMemoryUse } from "../memory-usage.ts";
 import {
   renderSearchResults,
   searchUnifiedKnowledge,
@@ -96,6 +97,7 @@ export const recallTool: Tool = {
         const avail = (global && !hasGlobal ? [] : listMemories(root)).map((m) => m.id).join(", ") || "(none)";
         return ok(`recall ${id} (not found)`, `No memory "${id}". Available ids: ${avail}`);
       }
+      noteMemoryUse(fromGlobal ? GLOBAL_MEMORY : root, [mem.id]); // K11：全文被拉进对话
       return ok(
         `recalled [${fromGlobal ? "global:" : ""}${mem.id}]`,
         `# ${mem.title}\n` +

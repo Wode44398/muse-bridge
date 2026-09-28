@@ -73,6 +73,11 @@ not run this retrieval at all.
 - `ProjectKnowledge`: summary, modules, tests, contracts, health, search,
   metrics, status, and forced refresh.
 - Guarded HTTP endpoints:
+  - `GET /api/memory/overview` (capability `memory-overview`): the global layer,
+    every project that has notes, and old quick-chat buckets in one read-only
+    response — per bucket the note metadata, usage, prompt-index characters, and
+    history events parsed from `.history/` file names. It never creates a memory
+    directory; projects without notes are only counted.
   - `GET /api/memory`, `GET /api/memory/:id`
   - `POST /api/memory/search`, `POST /api/memory/save`,
     `POST /api/memory/:id/delete`
@@ -81,6 +86,15 @@ not run this retrieval at all.
 
 All endpoints inherit the harness API guard; no unguarded memory endpoint is
 exposed.
+
+## Usage
+
+`usage.json` in each memory layer's directory counts how often a note's full
+text was pulled into a conversation: automatic per-task recall (`memory:<id>` /
+`memory:global:<id>` results) and `Recall(id)`. It stores only ids, a count, and
+first/last timestamps — never queries. Writes are best-effort and never block a
+turn; a directory that does not exist is never created for it. The memory panel
+(Settings → 记忆) shows it as 召回 N 次.
 
 ## Optional embedding configuration
 

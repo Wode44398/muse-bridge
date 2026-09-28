@@ -82,7 +82,7 @@ dimensio 的标志**就是月桥**：小尺寸（< 40px）与 bridge 逐数相�
 | `IconButton` | 图标按钮，`label` 必填；`ghost/soft/solid`；`active` 开关态；`badge` 小点或数字 |
 | `Chip` | 输入框底行、状态条上的胶囊：`plain/soft/accent/warn`，`chevron` 下拉 |
 | `Popover` + `MenuItem` / `MenuLabel` / `MenuSep` | 一切菜单与弹出面板。fixed 定位 + 视口钳制 + 内容变高重新定位；挂到 `.hxroot`（#94）；登记浮层栈（返回键 / Esc 先关它）；从锚点方向弹出 |
-| `Sheet` | 面板：手机底部抽屉（把手可拖关），桌面居中对话框；`size` sm/md/lg/xl，`footer` / `actions` 片段 |
+| `Sheet` | 面板：手机底部抽屉（把手可拖关），桌面居中对话框；`size` sm/md/lg/xl，`footer` / `actions` 片段；`onback` = 面板里有层级（标题左边「‹」，Esc / 返回键先退一级，× 与遮罩照旧整个关） |
 | `Segmented` | 二三选一的视图切换（滑动的选中块） |
 | `Switch` · `TextField` | 开关 · 单行输入 |
 | `Group` + `Row` | 设置 / 记忆 / 检查点这类列表：分组面 + 行（图标、标题、副标题、右侧内容） |

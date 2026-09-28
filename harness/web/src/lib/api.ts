@@ -670,6 +670,31 @@ export const readMemoryNote = (ws: string, id: string) => j<MemoryNote>(`${memor
 export const rejectMemoryNote = (ws: string, id: string, reason?: string) => j(memoryPath(id, "reject"), POST({ ...wsBody(ws), reason }));
 export const restoreMemoryNote = (ws: string, id: string) => j(memoryPath(id, "restore"), POST(wsBody(ws)));
 export const deleteMemoryNote = (ws: string, id: string) => j<{ deleted: boolean }>(memoryPath(id, "delete"), POST(wsBody(ws)));
+// K11：记忆总览（设置里的「记忆」面板）——全局层 + 各项目 + 旧快照桶一次拿齐；服务端能力位有 "memory-overview" 才有
+export type MemoryHistoryWhy = "overwrite" | "delete" | "retire" | "superseded" | "reject" | "restore";
+export interface MemoryOverviewItem extends MemoryMeta {
+  uses?: number; // 全文被拉进对话的次数（开跑自动召回 + Recall 按 id 读）
+  firstUsed?: string;
+  lastUsed?: string;
+}
+export interface MemoryBucket {
+  kind: "global" | "project" | "quick";
+  ws: string; // 调 /api/memory* 用的工作区（全局层 = GLOBAL_MEMORY_WS）
+  name: string;
+  current?: boolean;
+  hidden?: boolean;
+  createdAt?: number;
+  items: MemoryOverviewItem[];
+  promptChars: number;
+  history: Array<{ id: string; at: string; why: MemoryHistoryWhy }>;
+}
+export interface MemoryOverview {
+  at: string;
+  budget: number;
+  buckets: MemoryBucket[];
+  emptyProjects: number;
+}
+export const memoryOverview = () => j<MemoryOverview>("/api/memory/overview");
 // 晋升不抛：校验不过带回问题清单；同一个 topic 已有生效条目时带回冲突（界面给「替换它」，再带 supersedes 发一次）；
 // code "global_budget" = 全局层生效的条目合计超了上限（K7）
 export type PromoteResult = { ok: true } | { ok: false; error: string; code?: string; conflicts?: Array<{ id: string; title: string }> };

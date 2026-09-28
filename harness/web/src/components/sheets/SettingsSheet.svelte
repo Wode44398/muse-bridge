@@ -7,10 +7,22 @@
   // permissionMode 不回写：它归输入框的档位胶囊管，设置页开着时用户随时可能切档，拿打开那一刻的快照写回去
   // 就是把人家的选择吃掉。allow 规则界面上不编辑，保存时照原样带回（保存那一刻现读）。
   // 外观切了就生效、只存本机（不进服务端，与「保存」无关）。
-  import { onDestroy, untrack } from "svelte";
-  import { app, diagnosticsAvailable, exportDiagnostics, reloadMeta, saveConfig, setAppearance, toast } from "../../lib/state.svelte.ts";
+  // 记忆（K11）是一行入口：点进去是记忆面板的总览（‹ 回到这里）；行上一句话概括现状（打开设置时取一次总览）。
+  import { onDestroy, onMount, untrack } from "svelte";
+  import {
+    app,
+    diagnosticsAvailable,
+    exportDiagnostics,
+    memoryOverviewAvailable,
+    openMemory,
+    reloadMeta,
+    saveConfig,
+    setAppearance,
+    toast,
+  } from "../../lib/state.svelte.ts";
   import { VENDORS, type Appearance } from "../../lib/theme.ts";
-  import { activeRoute, fsMkdir, getConn, initRoute, isEmbedded, isShell, learnLan, setConn } from "../../lib/api.ts";
+  import { activeRoute, fsMkdir, getConn, initRoute, isEmbedded, isShell, learnLan, memoryOverview, setConn } from "../../lib/api.ts";
+  import { countLanes } from "./memory-viz.ts";
   import type { IconName } from "../../lib/icons.ts";
   import { haptic } from "../../lib/touch.ts";
   import { fade, rise, smoothHeight } from "../../lib/motion.ts";
@@ -229,6 +241,45 @@
     }
   }
 
+  // ── 记忆（K11）：一行入口 + 一句话现状 ─────────────────────────────────────────────────
+  const hasMemory = $derived(Boolean(app.compat?.caps?.includes("memory")));
+  let memLine = $state<{ active: number; waiting: number; places: number } | null>(null);
+  onMount(() => {
+    if (!memoryOverviewAvailable()) return;
+    memoryOverview()
+      .then((ov) => {
+        const c = countLanes(ov.buckets.flatMap((b) => b.items));
+        memLine = { active: c.active, waiting: c.proposed + c.held, places: ov.buckets.length };
+      })
+      .catch(() => {}); // 取不到就不写现状，入口照样能点
+  });
+  const memSubtitle = $derived(
+    !memLine
+      ? "模型跨对话记住的事：看、确认、驳回、清理"
+      : memLine.active || memLine.waiting
+        ? `${memLine.active} 条生效${memLine.places > 1 ? `，分布在 ${memLine.places} 处` : ""}`
+        : "还没有记忆",
+  );
+  // 草稿没存就走开会丢：先说一声（记忆面板是另一张面板，回来时设置按服务端现值重新填）
+  const rulesOf = (items: RuleItem[]) => JSON.stringify(texts(items));
+  const dirty = $derived(
+    seeded &&
+      (apiKey.trim() !== "" ||
+        askPending.trim() !== "" ||
+        denyPending.trim() !== "" ||
+        rulesOf(askRules) !== JSON.stringify(app.config?.permissionRules?.ask ?? []) ||
+        rulesOf(denyRules) !== JSON.stringify(app.config?.permissionRules?.deny ?? []) ||
+        (hasWs && (wsDraft !== (app.config?.workspace ?? "") || access !== (app.config?.access ?? "full")))),
+  );
+  function goMemory() {
+    if (dirty || connChanged) {
+      toast("有改动还没保存：先点「保存」，再去看记忆");
+      return;
+    }
+    haptic("light");
+    openMemory({ fromSettings: true });
+  }
+
   // ── 关于（安静的一行）──────────────────────────────────────────────────────────────
   const build = $derived((app.info?.build ?? null) as { codeSha?: string | null; dirty?: boolean | null } | null);
   const sha = $derived(build?.codeSha ? `${String(build.codeSha).slice(0, 7)}${build.dirty ? "*" : ""}` : "");
@@ -268,6 +319,16 @@
           placeholder={app.config.hasKey ? "••••••••（留空保持不变）" : `粘贴 ${vendor.name} API Key`}
         />
       </Section>
+
+      {#if hasMemory}
+        <Group title="记忆">
+          <Row icon="memory" title="记忆管理" subtitle={memSubtitle} chevron onclick={goMemory}>
+            {#snippet trailing()}
+              {#if memLine?.waiting}<span class="tag warn">{memLine.waiting} 条待处理</span>{/if}
+            {/snippet}
+          </Row>
+        </Group>
+      {/if}
 
       <RuleList
         title="每次问我（逐行，如 Bash(git push:*)）"
