@@ -15,6 +15,11 @@ set -a
 . "$DIR/muse.env"
 if [ "${TUNNEL_MODE:-quick}" = named ]; then . "$DIR/tunnel.env"; fi
 set +a
+# 快速隧道申请地址只给 15 秒，而出站代理冷启动的第一个请求要 16 秒以上——先经代理把 api.trycloudflare.com
+# 碰一下，让代理热起来，申请就不会超时。失败无所谓，cloudflared 自己还会重试。
+if [ "${TUNNEL_MODE:-quick}" != named ] && [ -n "${PROXY:-}" ]; then
+  curl -s -o /dev/null --max-time 40 -x "$PROXY" https://api.trycloudflare.com/ || true
+fi
 exec unshare --mount --propagation private bash -c '
 mount --bind "$OPS/hosts" /etc/hosts
 common=(--no-autoupdate --protocol http2 --edge "$EDGE:7844")

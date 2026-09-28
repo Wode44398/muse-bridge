@@ -42,7 +42,7 @@ function dpapi(op, b64) {
   }
 }
 
-const keyCache = new Map();   // 扩展根 → { mtimeMs, key }
+const keyCache = new Map();   // 扩展根 → { raw（密钥文件原文）, key }
 
 function readKey(extRoot) {
   const file = path.join(extRoot, KEY_FILE);
@@ -65,21 +65,23 @@ function createKey(extRoot) {
   return key;
 }
 
-// 缓存按密钥文件的 mtime 认：文件被换掉（从备份恢复、别的账户重建）或删掉，缓存跟着作废
+// 缓存按密钥文件的内容认：文件被换掉（从备份恢复、别的账户重建）或删掉，缓存跟着作废。
+// 不按 mtime 认——Linux 的 overlay / tmpfs 时间戳粒度有几毫秒，同尺寸的新密钥会被当成旧的。
+// 文件只有几十字节，每次读一下很便宜；贵的是 DPAPI 解包，那一步照样缓存。
 function dataKey(extRoot, create) {
   const file = path.join(extRoot, KEY_FILE);
   if (!existsSync(file)) {
     keyCache.delete(extRoot);
     if (!create) return null;
     const key = createKey(extRoot);
-    keyCache.set(extRoot, { mtimeMs: statSync(file).mtimeMs, key });
+    keyCache.set(extRoot, { raw: readFileSync(file, 'utf8'), key });
     return key;
   }
-  const mtimeMs = statSync(file).mtimeMs;
+  const raw = readFileSync(file, 'utf8');
   const hit = keyCache.get(extRoot);
-  if (hit && hit.mtimeMs === mtimeMs) return hit.key;
+  if (hit && hit.raw === raw) return hit.key;
   const key = readKey(extRoot);
-  keyCache.set(extRoot, { mtimeMs, key });
+  keyCache.set(extRoot, { raw, key });
   return key;
 }
 

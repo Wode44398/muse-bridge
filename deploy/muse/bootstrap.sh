@@ -4,6 +4,9 @@
 # 安装 / 修复（可以重复跑；不给的选项沿用上次的选择）：
 #   bash deploy/muse/bootstrap.sh install [--agents claude|dimensio|claude,dimensio] [--solo|--multi]
 #                                         [--domain 主机名 --tunnel-token 令牌] [--claude-token 令牌]
+#   install / update / set-agents 要跑几分钟：它们自己转到后台（命令工具超时也打断不了），前台最多等 4 分半、
+#   只打印进度，完了打印结果块；没等完就运行：
+#   wait                            接着等正在跑的安装 / 更新，结束时打印结果块
 # 日常：
 #   status                          公网地址、版本、各服务与健康状态
 #   set-claude-token T              写入 Claude 订阅令牌（claude setup-token 生成）并重启 bridge
@@ -73,7 +76,11 @@ HOOK_NOTE=""
 http_code() { local c; c="$(curl -s -o /dev/null -w '%{http_code}' "$@" || true)"; echo "${c:-000}"; }
 public_url() {
   if [ "$TUNNEL_MODE" = named ] && [ -n "$PUBLIC_HOSTNAME" ]; then echo "https://$PUBLIC_HOSTNAME"; return; fi
-  journalctl -u muse-tunnel.service --no-pager 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true
+  # 排除 api.trycloudflare.com：注册失败时它会出现在报错里，不是隧道地址
+  # 只看隧道这一次运行的日志：这次注册失败时，别拿上一次运行留下的旧地址冒充
+  local inv; inv="$(systemctl show -p InvocationID --value muse-tunnel.service 2>/dev/null || true)"
+  journalctl -u muse-tunnel.service ${inv:+_SYSTEMD_INVOCATION_ID=$inv} --no-pager 2>/dev/null \
+    | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | grep -v '^https://api\.' | tail -1 || true
 }
 local_code() { http_code --noproxy '*' --max-time 5 "http://127.0.0.1:$PORT/healthz"; }
 public_code() { local u; u="$(public_url)"; if [ -n "$u" ]; then http_code --max-time 20 "$u/healthz"; else echo 000; fi; }
@@ -82,11 +89,17 @@ svc_states() { local s o=""; for s in $SERVICES; do o+="$s=$(systemctl is-active
 # bridge 进程此刻实际跑在哪个目录（链接改了但还没重启时，跟 current 不一样）
 running_dir() { local pid; pid="$(systemctl show -p MainPID --value bridge.service 2>/dev/null || echo 0)"; [ "${pid:-0}" -gt 0 ] && readlink -f "/proc/$pid/cwd" 2>/dev/null || true; }
 agents_label() { case "$1" in claude) echo '只有 Claude Code' ;; dimensio) echo '只有 dimensio' ;; *) echo 'Claude Code + dimensio' ;; esac; }
+# 服务端自己报告的 agent 名单（验收用：跟用户选的对得上才算装对）
+served_agents() { curl -s --noproxy '*' --max-time 5 "http://127.0.0.1:$PORT/api/auth" 2>/dev/null | jq -r '(.agents // []) | join(",")' 2>/dev/null || true; }
+# 管理员令牌只在第一次安装 / reset-token 时生成一次。明文暂存在这里（root 0600），直到用户用它登录成功
+# （heal.sh 看到管理员会话就删）——免得 Muse 的命令工具超时、没看见结果块，令牌就永远丢了。
+TOKEN_PENDING="$OPS/admin-token.pending"
 
-# 统一的结果块：Muse 原样转给用户；令牌只有新生成时才有
+# 统一的结果块：Muse 原样转给用户；管理员令牌在用户用它登录成功之前一直显示
 result_block() {
-  local token="${1:-}" url lc pc st run cur
-  url="$(public_url)"; lc="$(local_code)"; pc="$(public_code)"
+  local token="${1:-}" url lc pc st run cur served
+  [ -n "$token" ] || token="$(cat "$TOKEN_PENDING" 2>/dev/null || true)"
+  url="$(public_url)"; lc="$(local_code)"; pc="$(public_code)"; served="$(served_agents)"
   run="$(running_dir)"; cur="$(readlink -f "$RELS/current" 2>/dev/null || true)"
   st="正常"; { [ "$lc" = 200 ] && [ "$pc" = 200 ]; } || st="有问题（看下面各项，对照 MUSE.md「故障排查」）"
   cat <<EOF
@@ -94,8 +107,8 @@ result_block() {
 ==================== MUSE-BRIDGE 结果 ====================
 状态        $st
 公网地址    ${url:-（还没拿到）}$( [ "$TUNNEL_MODE" = named ] && echo '（自己的域名，固定不变）' || echo '（临时地址，VM 重启会变）')
-管理员令牌  ${token:-（沿用之前的；忘了就跑 reset-token）}
-agent       $(agents_label "${AGENTS:-claude,dimensio}")
+管理员令牌  ${token:-（用户已经用它登录过了，这里不再显示；忘了就跑 reset-token）}$( [ -n "$token" ] && echo '（交给用户存好；他用它登录成功后，这里就不再显示）')
+agent       $(agents_label "${AGENTS:-claude,dimensio}")（服务端报告：${served:-还没起来}）
 使用方式    $( [ "$USERS_MODE" = solo ] && echo '只自己用（注册关闭）' || echo '多人用（可发邀请码）')
 运行版本    $( [ -n "$run" ] && version_of "$run" || echo 未运行)$( [ -n "$run" ] && [ -n "$cur" ] && [ "$run" != "$cur" ] && echo "（已装好 $(version_of "$cur")，等没人在聊时切换）")
 服务        $(svc_states)
@@ -196,6 +209,24 @@ wait_healthy() { # $1 = 期望运行的目录，$2 = 最多等几秒
     sleep 1
   done
   return 1
+}
+
+# VM 开机后，平台要过几分钟（实测 3–7 分钟）才把 bridge 账号写回 /etc/passwd。这期间别自己 useradd——
+# 新建的账号 UID 可能跟数据目录的属主对不上。先等；等 15 分钟还没回来，就按数据目录的 UID/GID 补建。
+wait_for_account() {
+  getent passwd "$SVC_USER" >/dev/null && return 0
+  [ -d "$DATA" ] || return 0          # 第一次安装：还没有数据目录，交给 install.sh 新建账号
+  local uid gid i
+  uid="$(stat -c %u "$DATA")"; gid="$(stat -c %g "$DATA")"
+  say "开机后平台还没把 $SVC_USER 账号写回来（通常要 3–7 分钟），先等它"
+  for i in $(seq 1 90); do
+    getent passwd "$SVC_USER" >/dev/null && { say "账号回来了（等了 $((i * 10 - 10)) 秒）"; return 0; }
+    sleep 10
+  done
+  [ "$uid" != 0 ] && [ "$gid" != 0 ] || die "等了 15 分钟 $SVC_USER 账号还没回来，而且 $DATA 属主是 root、推不出原来的 UID。过几分钟再跑一次 install"
+  warn "等了 15 分钟账号还没回来，按数据目录的属主（uid $uid / gid $gid）补建"
+  getent group "$SVC_USER" >/dev/null || groupadd --system -g "$gid" "$SVC_USER"
+  useradd --system -u "$uid" -g "$gid" --home-dir "$DATA/home" --shell /bin/bash "$SVC_USER"
 }
 
 # 让 bridge 用上新配置：now = 立即重启；idle = 等在跑的对话都结束再重启（SIGUSR2）
@@ -300,7 +331,35 @@ wait_public() {
   return 0
 }
 
+# 长活转到后台跑：Muse 的命令工具一超时，前台命令会被整个杀掉，装到一半就烂在那里；让它每半分钟看一次日志，
+# 又会给用户弹一串权限申请。所以 install / update / set-agents 把真正的活交给一个脱离终端的子进程（MB_DETACHED=1），
+# 前台只等着、只打印进度，超时了再 wait 就能接上。
+INSTALL_LOG="$OPS/install-progress.log"
+INSTALL_PID="$OPS/install.pid"
+INSTALL_RC="$OPS/install.rc"
+install_running() { local p; p="$(cat "$INSTALL_PID" 2>/dev/null || true)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+run_detached() {   # 参数 = 要在后台跑的子命令及其参数
+  install -d -m 0770 "$OPS"
+  if install_running; then echo "已经有一次安装 / 更新在跑了，接着等它："; cmd_wait; return; fi
+  rm -f "$INSTALL_RC" "$INSTALL_PID"
+  : > "$INSTALL_LOG"; chmod 0600 "$INSTALL_LOG"
+  # 第一次安装时运维入口还不存在，先指到这份脚本，提示里的 wait 命令才跑得通（装完会改指 current）
+  [ -e "$OPS/bootstrap.sh" ] || ln -sfn "$HERE/bootstrap.sh" "$OPS/bootstrap.sh"
+  MB_DETACHED=1 setsid nohup bash "$HERE/bootstrap.sh" "$@" >> "$INSTALL_LOG" 2>&1 < /dev/null &
+  local i; for i in $(seq 1 40); do [ -s "$INSTALL_PID" ] && break; sleep 0.25; done
+  if [ ! -s "$INSTALL_PID" ]; then echo "后台没能起来。日志："; sed -E 's/\x1b\[[0-9;]*m//g' "$INSTALL_LOG" | tail -30; return 1; fi
+  echo "已在后台开始（完整日志 $INSTALL_LOG）。下面最多等 4 分半，只打印进度："
+  WAIT_FRESH=1 cmd_wait
+}
+# 后台子进程开头调：登记自己的 PID，退出时留下退出码给 wait
+detached_start() { echo "$$" > "$INSTALL_PID"; trap 'echo $? > "$INSTALL_RC"' EXIT; }
+
 cmd_install() {
+  # 带 --switch 的是 update / set-agents 在调新版本的 install（它们自己已经在后台了），直接跑
+  case " $* " in
+    *" --switch "*) ;;
+    *) if [ "${MB_DETACHED:-}" = 1 ]; then detached_start; else run_detached install "$@"; return; fi ;;
+  esac
   local claude_token="" mode=now tunnel_token="" domain=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -353,16 +412,20 @@ cmd_install() {
     dpkg -i "$tmp/cloudflared.deb"; rm -rf "$tmp"
   fi
 
+  wait_for_account
+
   say "跑通用安装脚本 scripts/server/install.sh（装依赖、构建前端，第一次要几分钟；正在跑的服务不动）"
   local raw; raw="$(mktemp /run/bridge-install.XXXXXX)"
   local args=(--port "$PORT" --data "$DATA" --user "$SVC_USER" --agents "$AGENTS" "--$USERS_MODE" --no-restart)
   [ -n "$claude_token" ] && args+=(--claude-token "$claude_token")
   set +e
-  bash "$REPO/scripts/server/install.sh" "${args[@]}" 2>&1 | tee "$raw"
+  # 屏幕 / 进度日志上的访问令牌当场打码（令牌只经结果块交付）。别事后 sed -i 进度日志：那会换掉文件，
+  # 后台进程之后的输出就全写进已删除的旧文件里了
+  bash "$REPO/scripts/server/install.sh" "${args[@]}" 2>&1 | tee "$raw" | sed -u -E 's/(访问令牌 +)[A-Za-z0-9_-]{16,}/\1<已打码>/'
   local rc=${PIPESTATUS[0]}
   set -e
   local token; token="$(grep -oP '访问令牌\s+\K\S+' "$raw" || true)"
-  # 留一份日志，但访问令牌打码
+  if [ -n "$token" ]; then (umask 077; printf '%s\n' "$token" > "$TOKEN_PENDING"); fi
   sed -E 's/(访问令牌 +)[A-Za-z0-9_-]{16,}/\1<已打码>/' "$raw" > "$OPS/install-last.log"; rm -f "$raw"
   [ "$rc" = 0 ] || die "install.sh 失败（退出码 $rc），日志 $OPS/install-last.log。正在跑的服务没受影响"
 
@@ -398,16 +461,54 @@ cmd_install() {
   elif [ "$new_hj" != "$(cat "$hj")" ]; then HOOK_NOTE="定义变了：请用 hooks 工具按 $hj 更新 bridge-watchdog（脚本已自动换新）"
   else HOOK_NOTE="定义没变，脚本已换新，不用动"; fi
   printf '%s\n' "$new_hj" > "$hj"
-
+  printf '%s\n' "$HOOK_NOTE" > "$OPS/last-hook-note"
   bash "$OPS/heal.sh" >/dev/null || true
 
   say "切换到这个版本（$( [ "$mode" = idle ] && echo 等没人在聊时 || echo 立即)）"
   switch_to "$REPO" "$mode"
   wait_public
-  result_block "$token"
+  say "完成"
 }
 
 cmd_status() { result_block ""; }
+
+# 等后台的安装 / 更新结束：只打印进度（每一步一行），最多等 $1 秒（默认 270），结束时打印结果块
+cmd_wait() {
+  local max="${1:-270}" start=$SECONDS shown=0
+  steps() {   # 把还没打印过的步骤打出来
+    local all n; all="$(grep -a '==> ' "$INSTALL_LOG" 2>/dev/null | sed -E 's/\x1b\[[0-9;]*m//g; s/^==> //' || true)"
+    n="$(printf '%s' "$all" | grep -c '' || true)"
+    if [ "${n:-0}" -gt "$shown" ]; then
+      printf '%s\n' "$all" | tail -n +"$((shown + 1))" | sed "s/^/[$((SECONDS - start)) 秒] /"
+      shown="$n"
+    fi
+  }
+  if ! install_running && [ ! -f "$INSTALL_RC" ]; then echo "现在没有在跑的安装 / 更新。"; result_block ""; return 0; fi
+  # 接着等上一次没等完的：之前打印过的步骤不再重复，只说现在做到哪一步
+  if [ -z "${WAIT_FRESH:-}" ]; then shown="$(grep -ac '==> ' "$INSTALL_LOG" 2>/dev/null || true)"; shown="${shown:-0}"; fi
+  if [ -z "${WAIT_FRESH:-}" ] && [ "$shown" -gt 0 ] && install_running; then
+    echo "（接着上次等）现在在：$(grep -a '==> ' "$INSTALL_LOG" | tail -1 | sed -E 's/\x1b\[[0-9;]*m//g; s/^==> //')"
+  fi
+  while install_running; do
+    steps
+    if [ $((SECONDS - start)) -ge "$max" ]; then
+      echo "还在后台跑，没出错（已经等了 $((SECONDS - start)) 秒）。接着等就运行：bash $OPS/bootstrap.sh wait"
+      return 0
+    fi
+    sleep 5
+  done
+  steps
+  local rc; rc="$(cat "$INSTALL_RC" 2>/dev/null || echo 1)"
+  rm -f "$INSTALL_PID"
+  if [ "$rc" = 0 ]; then
+    HOOK_NOTE="$(cat "$OPS/last-hook-note" 2>/dev/null || true)"
+    result_block ""
+  else
+    echo "安装失败（退出码 $rc）。日志最后 40 行："
+    tail -40 "$INSTALL_LOG" | sed -E 's/\x1b\[[0-9;]*m//g'
+    return "$rc"
+  fi
+}
 
 # 以当前版本重跑 install（换 agent / 装 dimensio 依赖用），完了空闲时重启
 reinstall_current() {
@@ -418,6 +519,9 @@ reinstall_current() {
 
 cmd_set_agents() {
   case "${1:-}" in claude|dimensio|claude,dimensio|dimensio,claude) ;; *) die "用法：set-agents claude | dimensio | claude,dimensio" ;; esac
+  if [ "${MB_DETACHED:-}" != 1 ]; then run_detached set-agents "$@"; return; fi
+  detached_start
+  say "改装 agent：$(agents_label "$1")"
   reinstall_current --agents "$1"
 }
 
@@ -483,6 +587,8 @@ cmd_check_update() {
 }
 
 cmd_update() {
+  if [ "${MB_DETACHED:-}" != 1 ]; then run_detached update "$@"; return; fi
+  detached_start
   local mode=idle url="" sum=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -494,12 +600,12 @@ cmd_update() {
     fetch_channel
     local cur; cur="$(version_of "$(readlink -f "$RELS/current" 2>/dev/null || true)")"
     if [ "${cur%% *}" = "$(mf .commit)" ]; then
-      echo "已经是最新（$(mf .version)）"
-      if [ "$mode" = now ] && [ "$(running_dir)" != "$(readlink -f "$RELS/current")" ]; then cmd_switch_now; return; fi
-      result_block ""; return
+      say "已经是最新（$(mf .version)）"
+      if [ "$mode" = now ] && [ "$(running_dir)" != "$(readlink -f "$RELS/current")" ]; then switch_to "$(readlink -f "$RELS/current")" now; fi
+      return
     fi
     url="$(mf .url)"; sum="$(mf .sha256)"; UPDATE_NOTES="$(mf .notes)"; export UPDATE_NOTES
-    echo "更新 $cur → $(mf .version)"
+    say "更新 $cur → $(mf .version)"
   fi
   [ -n "$sum" ] || die "用法：update [--now] [<下载地址> <sha256>]"
   local name tmp new
@@ -556,13 +662,15 @@ cmd_reset_token() {
   code="$(running_dir)"; [ -n "$code" ] || code="$(readlink -f "$RELS/current")"
   out="$(runuser -u "$SVC_USER" -- env HOME="$DATA/home" BRIDGE_DATA_ROOT="$DATA" "$(command -v node)" "$code/src/gen-token.mjs" --hash)"
   restart_bridge now
+  (umask 077; echo "$out" | sed -n 2p > "$TOKEN_PENDING")
   echo "已生成新的管理员访问令牌，旧令牌和所有已登录的管理员会话都作废了。"
-  result_block "$(echo "$out" | sed -n 2p)"
+  result_block ""
 }
 
 sub="${1:-install}"; [ $# -gt 0 ] && shift
 case "$sub" in
   install) cmd_install "$@" ;;
+  wait) cmd_wait "$@" ;;
   status) cmd_status ;;
   set-claude-token) cmd_set_claude_token "$@" ;;
   set-api-key) cmd_set_api_key "$@" ;;
@@ -576,6 +684,6 @@ case "$sub" in
   switch-now) cmd_switch_now ;;
   rollback) cmd_rollback ;;
   auto-update) cmd_auto_update "$@" ;;
-  -h|--help|help) sed -n '2,21p' "$0" ;;
+  -h|--help|help) sed -n '2,24p' "$0" ;;
   *) die "不认识的子命令：$sub（help 看用法）" ;;
 esac

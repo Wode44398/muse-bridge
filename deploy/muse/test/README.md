@@ -39,3 +39,10 @@ HATCH_HOOK_RUNTIME=/tmp/hook-runtime.sh HOME=/home/hatch bash /home/hatch/hooks/
 
 模拟 VM 重启：停掉四个服务，删掉 `/etc/systemd/system/{bridge,muse-tunnel,cf-relay-api,cf-relay-edge}.service` 和 `/etc/bridge/`，
 再每隔一分钟跑一次看门狗，应该依次看到「还在恢复中」→「公网地址变了」→「全部正常」，隧道只启动一次。
+
+模拟平台晚写回账号（真机上实测 3–7 分钟）：先把 `/etc/{passwd,group,shadow,gshadow}` 里 `bridge:` 那一行存起来再删掉。
+这时看门狗应该只报 `[silent] 还在恢复中`（不 wake）；`bootstrap.sh install` 应该打印「先等它」并一直等，把那几行写回去之后接着装完，
+账号的 UID 跟数据目录的属主一致（不能自己 `useradd` 出一个新 UID）。
+
+`install` / `update` / `set-agents` 会自己转后台：前台最多等 4 分半，只打印 `==>` 步骤；没装完就 `bootstrap.sh wait` 接着等，
+第二次 wait 不重复打印已经打过的步骤。结果块里的管理员令牌在用它登录一次（`POST /api/login`）后，下一分钟看门狗跑完就不再显示。

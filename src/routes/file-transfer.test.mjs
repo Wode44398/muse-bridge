@@ -48,8 +48,8 @@ test('copy/move：大小写不同的「目标在源之内」被拒，不再放�
     assert.equal(same.code, 400);
     assert.match(same.err, /自身/);
 
-    const moved = moveWorkspaceFile(root, 'Foo', 'foo/inner/Foo');
-    if (process.platform === 'win32') assert.match(moved.error || '', /自身/);
+    // 只在 Windows 上试：大小写敏感的系统里 foo 是另一个目录，这一步会真把 Foo 移走，下一条就没有源了
+    if (process.platform === 'win32') assert.match(moveWorkspaceFile(root, 'Foo', 'foo/inner/Foo').error || '', /自身/);
     assert.match(moveWorkspaceFile(root, 'Foo', 'Foo/inner/Foo').error || '', /自身/);
   } finally { clean(root); }
 });

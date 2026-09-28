@@ -17,8 +17,13 @@
 3. **不要给浏览器加 `--no-sandbox`，不要改 sysctl、防火墙等宿主安全设置。** 这台 VM 起不了浏览器沙箱是已知限制，Muse Bridge 本来就不装浏览器。
 4. **不要试 Docker。** 这里 runc 起不了容器（`unable to join session keyring`），已经确认无解。
 5. **不要改代码目录里的文件。** 要调整行为，一律用 `bootstrap.sh` 的子命令。
-6. **管理员访问令牌、Claude 令牌、各家 API key、Cloudflare 隧道令牌，都不要写进你的长期记忆或任何笔记。** 管理员令牌只在装完那一刻出现一次，原样交给用户并提醒他当场存好；丢了就用 `reset-token` 重新生成。
+6. **管理员访问令牌、Claude 令牌、各家 API key、Cloudflare 隧道令牌，都不要写进你的长期记忆或任何笔记。** 管理员令牌装完会出现在结果块里，原样交给用户并提醒他当场存好；他用它登录成功一次之后，结果块就不再显示它。丢了就用 `reset-token` 重新生成。
 7. **用用户平时跟你说话的语言交流。** 对用户讲人话，命令和输出放在代码块里给他看。
+8. **能少跑一条命令就少跑一条。** 你每跑一条命令，用户都要点一次「允许」；一口气发一串，他根本点不过来。所以：
+   - 不要轮询。`install`、`update`、`set-agents` 自己会转到后台，前台等着、只打印进度，完了打印结果块；没等完就跑一次 `bash /home/hatch/bridge-ops/bootstrap.sh wait`（还是没完就再跑一次）。**别用 `tail`、`ps`、`sleep`、`curl` 去看进度。**
+   - 结果块已经包含验收要看的全部信息（服务状态、本地 / 公网健康、实际生效的 agent）。不要再为了确认去单独跑命令。
+   - 能合并的步骤写进一条命令（用 `&&` 串起来）。
+   - 平台弹的权限申请里如果有「长期允许 / Always allow」这类选项，第一次就建议用户对 `bootstrap.sh` 选它，后面就不用一条条点了。
 
 ## 1. 开工前：一次问清三件事
 
@@ -72,10 +77,11 @@ cd /tmp && curl -fLO --retry 3 https://github.com/Wode44398/muse-bridge/releases
 bash "$REL/bridge/deploy/muse/bootstrap.sh" install --agents claude --solo
 ```
 
-- 要跑几分钟（装 npm 依赖、构建前端）。如果你的命令工具有超时，就放到后台跑，每隔半分钟看一次日志：
-  `nohup bash "$REL/bridge/deploy/muse/bootstrap.sh" install --agents claude --solo > /home/hatch/bridge-install.out 2>&1 &`，然后 `tail -n 30 /home/hatch/bridge-install.out`。
+- 整个安装要 5–10 分钟（装 npm 依赖、构建前端）。**直接在前台跑这一条就行，不要自己加 `nohup` / `&`**：脚本会把活转到后台（你的命令工具超时也打断不了它），前台最多等 4 分半，每完成一步打印一行进度。
+- 前台等到头还没装完，会提示「还在后台跑」。这时跑一次 `bash /home/hatch/bridge-ops/bootstrap.sh wait`，它接着等、接着打印进度；还没完就再跑一次。中间不要用别的命令看进度。
+- 如果 VM 刚重启过，平台要 3–7 分钟才把服务账号写回来，脚本会打印「先等它」并自己等，不用管。
 - 脚本可以重复跑。中途失败（网络抖动、VM 重启）就原样再跑一次，已有的数据和令牌都不会动。
-- 最后会打印「MUSE-BRIDGE 结果」块。**状态**是「正常」，并且**公网健康**是 200，才算装好。**管理员令牌**那一行只有第一次安装时才有值。
+- 最后打印「MUSE-BRIDGE 结果」块。**状态**是「正常」，并且**公网健康**是 200，才算装好。**管理员令牌**那一行会一直显示，直到用户用它登录成功一次。
 
 ### 2.3 注册看门狗 hook（必做）
 
@@ -87,14 +93,9 @@ bash "$REL/bridge/deploy/muse/bootstrap.sh" install --agents claude --solo
 - 它每分钟：补回丢失的服务和配置 → 检查健康 → 挂了先重启 → 还不行就唤醒一个 worker 排查 → 临时地址变了就唤醒你告诉用户 → 发现新版本 / 更新完成 / 更新失败自动回退时通知你。
 - 以后每次安装或更新，结果块里「看门狗 hook」那一行会告诉你定义有没有变；变了就按同一个 json 更新这个 hook。
 
-### 2.4 验收（全部贴输出）
+### 2.4 验收（看结果块，不用另跑命令）
 
-```bash
-bash /home/hatch/bridge-ops/bootstrap.sh status
-curl -s "$(cat /home/hatch/bridge-ops/public-url)/api/auth"; echo
-```
-
-必须满足：4 个服务（bridge、cf-relay-api、cf-relay-edge、muse-tunnel）都是 `active`；本地健康、公网健康都是 200；`/api/auth` 返回里的 `agents` 跟用户选的一致；hook 已注册并启用。
+对照安装打出来的结果块（没有就跑一次 `status`），必须满足：4 个服务（bridge、cf-relay-api、cf-relay-edge、muse-tunnel）都是 `active`；本地健康、公网健康都是 200；「agent」那一行括号里「服务端报告」的名单跟用户选的一致；hook 已注册并启用。
 
 ### 2.5 写进你的长期记忆
 
@@ -112,7 +113,7 @@ curl -s "$(cat /home/hatch/bridge-ops/public-url)/api/auth"; echo
 
 把结果块里的**公网地址**和**管理员令牌**给他，并提醒：
 
-- 令牌就是管理员密码，只显示这一次，请马上存进密码管理器或备忘录。丢了可以找你重置，重置后旧令牌作废。
+- 令牌就是管理员密码，请马上存进密码管理器或备忘录。他用它登录成功一次之后，你这边就再也看不到它了；丢了可以找你重置，重置后旧令牌作废。
 - 用临时地址时：地址大约每几个小时变一次（VM 重启导致），变了你会主动告诉他，他也可以随时问你「地址是多少」。**令牌不会变，但换了地址要重新用令牌登录一次**（浏览器的登录状态是跟着网址存的）。嫌麻烦可以换成自己的域名（第 5 节）。
 - 这个地址谁拿到都能打开登录页，但没有令牌或账号进不去。
 
@@ -185,11 +186,12 @@ bash /home/hatch/bridge-ops/bootstrap.sh set-api-key ANTHROPIC_API_KEY <key>
 | 「令牌忘了」 | 先说明旧令牌和所有已登录的管理员设备都会失效，他同意后执行 `reset-token`，把新令牌交给他 |
 | 「换 Claude 令牌」 | 首选让他自己在控制台「Claude 账号」里改；否则 `set-claude-token <令牌>` |
 | 「给 dimensio 加 / 换 / 删一家模型的 key」 | `set-api-key <名字> <key>`（key 留空 = 删掉） |
-| 「我也想用 dimensio」「不要 dimensio 了」等 | `set-agents claude` / `set-agents dimensio` / `set-agents claude,dimensio`（会重新装依赖、构建，要几分钟，放后台跑；完了等没人在聊时自动切换） |
+| 「我也想用 dimensio」「不要 dimensio 了」等 | `set-agents claude` / `set-agents dimensio` / `set-agents claude,dimensio`（要重新装依赖、构建，几分钟；跟 `install` 一样自己转后台，没等完就 `wait`；完了等没人在聊时自动切换） |
 | 「让朋友也能用」「只给我自己用」 | `set-users multi` / `set-users solo` |
 | 「想要固定地址」 | 按第 5 节带他做 |
 | 「有新版本吗」 | `check-update`，把当前版本、最新版本、更新内容告诉他 |
-| 「更新」 | 后台跑 `nohup bash /home/hatch/bridge-ops/bootstrap.sh update > /home/hatch/bridge-update.out 2>&1 &`，盯着日志，完成后贴结果块 |
+| 「更新」 | `update`（自己转后台、前台打印进度，完了贴结果块；没等完就 `wait`） |
+| 「装到哪一步了」「好了没」 | `wait` |
 | 「现在就切到新版本」（新版本已装好，在等空闲） | 先说明会打断正在进行的对话（记录不会丢），他同意后执行 `switch-now` |
 | 「退回旧版本」「更新后有问题」 | `rollback`（立即重启到上一个版本） |
 | 「开 / 关自动更新」 | `auto-update on` / `auto-update off` |
@@ -212,19 +214,20 @@ bash /home/hatch/bridge-ops/bootstrap.sh set-api-key ANTHROPIC_API_KEY <key>
 | apt 卡在某个镜像上重试（如 `mirror.cogentco.com … Connection failed`） | 镜像源里有经代理不通的镜像，而且平台每次开机都会把它还原 | `install` 会自动探测并删掉不通的镜像；还卡就看 `/etc/apt/sources.list.d/ubuntu.sources` 的 `URIs:` 那一行 |
 | npm `socket hang up`、`ETIMEDOUT` | 经代理的网络偶尔不稳 | 原样重跑 `install` |
 | 本地 200，公网不是 200，或者地址打开是 530 | 隧道断了，或者 VM 重启后临时地址换了 | 跑 `status` 拿到新地址；还不通就 `systemctl restart muse-tunnel`，等 30 秒再看（临时地址**会换**，记得告诉用户） |
+| muse-tunnel 日志里有 `failed to request quick Tunnel` / `Client.Timeout exceeded` | 出站代理冷启动慢，申请临时地址超时 | 隧道会自己重试，启动前也会先把代理热起来，一般一两分钟内就好；5 分钟还不行再 `systemctl restart muse-tunnel` |
 | muse-tunnel 日志里有 `tls: first record does not look like a TLS handshake` | cloudflared 在直连，没走本机中继 | 查 `cf-relay-api`、`cf-relay-edge` 是否 active，`/home/hatch/bridge-ops/hosts` 是否存在；然后重跑 `install` |
 | 日志里有 `server misbehaving`（在查 `_v2-origintunneld` 的 SRV 记录） | VM 上的 DNS 查不了 SRV 记录 | 我们用 `--edge` 直接指定了节点，正常不会走到这一步；出现了就重跑 `install` |
 | 用自己的域名，muse-tunnel 日志报令牌无效（`Unauthorized` / `invalid token`） | 隧道令牌复制错了，或那条隧道在 Cloudflare 后台被删了 | 让用户重新复制令牌（第 5 节第 2 步），再 `set-domain` |
 | 用自己的域名，隧道连上了但打开是 Cloudflare 错误页（502 / 1033） | Public hostname 的服务地址没填对 | 让用户在 Cloudflare 后台把服务改成 `HTTP` + `localhost:8787` |
 | cloudflared 一直报 `Failed to refresh DNS local resolver … unable to parse IP` | 已知的无害噪音 | 不用管 |
 | 重启后服务单元没了（`Unit … not found`） | 平台重启时会清掉 `/etc` 里它不认识的文件 | `bash /home/hatch/bridge-ops/heal.sh`；看门狗每分钟也会自动做 |
-| bridge 报 `status=217/USER`，或者找不到 bridge 用户 | 开机后平台大约 3 分钟才把 `/etc/passwd` 写好 | 等几分钟，看门狗会自动重试 |
+| bridge 报 `status=217/USER`，或者找不到 bridge 用户 | 开机后平台要 3–7 分钟（偶尔更久）才把 `/etc/passwd` 写好 | 什么都不用做：看门狗这段时间只报「还在恢复中」，账号回来后自己拉起服务；`install` 也会自己等它 |
 | bridge 报 `status=200/CHDIR` | `/home/hatch` 丢了 o+x 权限 | `heal.sh` 会自动补上 |
 | Claude 页提示「还没配置 Claude 认证」 | 还没配令牌 | 见 4.4 |
 | dimensio 发消息报没有可用的模型 / key | 还没填 key | 见 4.5 |
 | token 接口返回 429 `rate_limit_error` | 在 VM 上做了 OAuth 登录 | 别在 VM 上登录，改用 4.4 的方法；出口 IP 大约一小时后恢复 |
 | `update` 报 sha256 对不上 | 包没下载完整，或者发布者还在上传 | 过一会儿再跑；一直对不上就告诉用户 |
-| `update` 在装依赖或构建时失败 | 网络问题，或新版本本身有问题 | 旧版本照常在跑。原样重跑一次；还失败就把 `/home/hatch/bridge-update.out` 的末尾几行给用户 |
+| `update` 在装依赖或构建时失败 | 网络问题，或新版本本身有问题 | 旧版本照常在跑。原样重跑一次；还失败就把 `wait` 打出来的日志末尾给用户（完整日志在 `/home/hatch/bridge-ops/install-progress.log`） |
 | 更新后用户说哪里不对 | 新版本的问题 | 先 `rollback`，再把现象告诉用户，请他到 GitHub 仓库提 Issue |
 
 处理不了的，把 `status` 的输出和相关日志贴给用户，说清楚卡在哪、需要他做什么决定。

@@ -26,11 +26,13 @@ mkdir -p "$HOME/hooks/state"
 
 running_dir() { local pid; pid="$(systemctl show -p MainPID --value bridge.service 2>/dev/null || echo 0)"; [ "${pid:-0}" -gt 0 ] && readlink -f "/proc/$pid/cwd" 2>/dev/null || true; }
 local_ok() { curl --noproxy '*' --fail --silent --max-time 10 -o /dev/null "http://127.0.0.1:$PORT/healthz"; }
+# bootstrap.sh 的安装 / 更新正在后台跑（它登记在 install.pid）
+busy() { local p; p="$(cat "$OPS/install.pid" 2>/dev/null || true)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
 
 # --- 后台自动更新在下载 / 构建阶段就失败了（还没切换，旧版本照常在跑）---
 if [ -f "$OPS/update-error" ] && [ "$DRY" != 1 ]; then
   rm -f "$OPS/update-error"
-  wake "bridge 自动更新失败" "$(jq -n --arg old "$(head -1 "$RELS/current/deploy/muse/VERSION" 2>/dev/null)"     --arg logs "$(tail -40 "$OPS/update-last.log" 2>/dev/null)" '{kind:"update_failed", version:"", rolled_back_to:$old, recent_logs:$logs}')"
+  wake "bridge 自动更新失败" "$(jq -n --arg old "$(head -1 "$RELS/current/deploy/muse/VERSION" 2>/dev/null)"     --arg logs "$(tail -40 "$OPS/install-progress.log" 2>/dev/null | sed -E 's/\x1b\[[0-9;]*m//g')" '{kind:"update_failed", version:"", rolled_back_to:$old, recent_logs:$logs}')"
   exit 0
 fi
 
@@ -72,7 +74,7 @@ fi
 
 # --- 新版本检查：每 6 小时读一次发布频道 ---
 STAMP="$OPS/update-check.stamp"
-if [ -n "${CHANNEL:-}" ] && [ ! -f "$PS" ] && [ "$DRY" != 1 ] && \
+if [ -n "${CHANNEL:-}" ] && [ ! -f "$PS" ] && [ "$DRY" != 1 ] && ! busy && \
    { [ ! -f "$STAMP" ] || [ $(( $(date +%s) - $(stat -c %Y "$STAMP") )) -gt 21600 ]; }; then
   touch "$STAMP"
   if m="$(curl -fsS --max-time 20 "$CHANNEL" 2>/dev/null)" && latest="$(jq -r '.commit // empty' <<<"$m")" && [ -n "$latest" ]; then
@@ -81,7 +83,10 @@ if [ -n "${CHANNEL:-}" ] && [ ! -f "$PS" ] && [ "$DRY" != 1 ] && \
       echo "$latest" > "$OPS/update-notified"
       if [ "${AUTO_UPDATE:-0}" = 1 ]; then
         rm -f "$OPS/update-error"
-        setsid nohup bash -c 'bash "$0" update > "$1" 2>&1 || echo "$?" > "$2"'           "$OPS/bootstrap.sh" "$OPS/update-last.log" "$OPS/update-error" < /dev/null > /dev/null 2>&1 &
+        : > "$OPS/install-progress.log"; chmod 0600 "$OPS/install-progress.log"
+        # MB_DETACHED=1：直接在这个后台进程里跑，并登记到 install.pid，Muse 用 bootstrap.sh wait 也能跟上进度
+        MB_DETACHED=1 setsid nohup bash -c 'bash "$0" update >> "$1" 2>&1 || echo "$?" > "$2"' \
+          "$OPS/bootstrap.sh" "$OPS/install-progress.log" "$OPS/update-error" < /dev/null > /dev/null 2>&1 &
         log "自动更新已开始" "{\"latest\":\"$latest\"}"
       else
         wake "bridge 有新版本" "$(jq -n --arg cur "$(head -1 "$RELS/current/deploy/muse/VERSION" 2>/dev/null)" \
@@ -91,6 +96,12 @@ if [ -n "${CHANNEL:-}" ] && [ ! -f "$PS" ] && [ "$DRY" != 1 ] && \
       fi
     fi
   fi
+fi
+
+# --- 开机后平台还没把 bridge 账号写回来（实测 3–7 分钟）：这段时间服务必然起不来，不算故障 ---
+if ! getent passwd "$SVC_USER" >/dev/null 2>&1; then
+  silent "还在恢复中" '{"waiting":"平台还没写回服务账号"}'
+  exit 0
 fi
 
 # --- 当前状态 ---
@@ -114,7 +125,10 @@ else
 fi
 pub_url() {
   if [ "${TUNNEL_MODE:-quick}" = named ] && [ -n "${PUBLIC_HOSTNAME:-}" ]; then echo "https://$PUBLIC_HOSTNAME"; return; fi
-  journalctl -u muse-tunnel.service --no-pager 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true
+  # 只看隧道这一次运行的日志：这次注册失败时，别拿上一次运行留下的旧地址冒充
+  local inv; inv="$(systemctl show -p InvocationID --value muse-tunnel.service 2>/dev/null || true)"
+  journalctl -u muse-tunnel.service ${inv:+_SYSTEMD_INVOCATION_ID=$inv} --no-pager 2>/dev/null \
+    | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | grep -v '^https://api\.' | tail -1 || true
 }
 PUB_URL="$(pub_url)"
 if [ -n "$PUB_URL" ] && curl --fail --silent --max-time 20 -o /dev/null "$PUB_URL/healthz"; then

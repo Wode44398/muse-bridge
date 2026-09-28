@@ -2,7 +2,7 @@
 # 开机 / /etc 被平台还原之后的自愈，可以随时重复跑（看门狗每分钟调一次，bootstrap 收尾也调一次）。
 # Muse VM 重启时，平台只重写它自己管的 /etc 文件；它不认识的东西（我们的 systemd 单元、/etc/bridge/）会丢。
 # 这里把它们从持久目录 bridge-ops/ 补回来，再把没在跑的服务拉起。
-# 注意：bridge 账号由平台重写 /etc/passwd 时保留，但开机后约 3 分钟才写好——那之前 start 会失败，下一轮再试。
+# 注意：bridge 账号由平台重写 /etc/passwd 时保留，但开机后要 3–7 分钟才写好——那之前 start 会失败，下一轮再试。
 set -u
 . "$(dirname "$(readlink -f "$0")")/muse.env"
 
@@ -25,6 +25,15 @@ elif [ -f "$OPS/bridge.env" ]; then
   install -d -m 0750 /etc/bridge
   install -m 0600 "$OPS/bridge.env" /etc/bridge/bridge.env
   echo "已从 $OPS/bridge.env 恢复 /etc/bridge/bridge.env"
+fi
+
+# 管理员令牌的明文暂存（bootstrap.sh 结果块用）：用户用它登录成功（出现了比它新的管理员会话）就删掉
+P="$OPS/admin-token.pending"; S="$DATA/users/_system/sessions.json"
+if [ -f "$P" ] && [ -f "$S" ] && command -v jq >/dev/null; then
+  since=$(( $(stat -c %Y "$P") * 1000 ))
+  if jq -e --argjson t "$since" '[.[] | select(.admin == true and (.created // 0) >= $t)] | length > 0' "$S" >/dev/null 2>&1; then
+    rm -f "$P"
+  fi
 fi
 
 # 服务用户要能穿过持久目录，否则 bridge.service 报 status=200/CHDIR
