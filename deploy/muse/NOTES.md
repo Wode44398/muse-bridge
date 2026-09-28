@@ -9,7 +9,7 @@
 | 系统 | Ubuntu 24.04，2 核，约 8G 内存 |
 | 入站 | 没有公网 IP，只能反向建隧道 |
 | 出站 | 只能走 `hatch-egress-proxy:3128`（HTTP CONNECT，不需要认证，端口不限，7844 也能过）；直连会被透明代理截住 |
-| 权限 | 命令以 root 跑，但没有 NET_ADMIN；`/etc/hosts` 是 squashfs 只读挂载 |
+| 权限 | 命令以 root 跑，但没有 NET_ADMIN，也没有 SYS_PTRACE（看得见别的用户的进程，却读不了它的 `/proc/<pid>/cwd`）；`/etc/hosts` 是 squashfs 只读挂载 |
 | 容器 | Docker 起不来：runc 报 `unable to join session keyring: operation not permitted`，无解 |
 | 浏览器 | Ubuntu 的 chromium 是 snap 空壳；平台自带的 Chrome 报 `No usable sandbox!`（`kernel.apparmor_restrict_unprivileged_userns=1`，容器里改不了） |
 | DNS | 查不了 SRV 记录（`server misbehaving`） |
@@ -37,6 +37,7 @@
 | 在 VM 上跑 `claude setup-token`：喂 code 后卡死；token 端点对出口 IP 限流（429，近一小时），拿假 code 试探也算次数 | Claude 令牌只在用户自己的电脑上生成；说明书里写成硬规矩 |
 | npm audit 阶段经代理容易 `socket hang up` | `npm ci --no-audit --no-fund` |
 | cloudflared 一直报 `Failed to refresh DNS local resolver … unable to parse IP` | 无害噪音，不用管 |
+| root 没有 SYS_PTRACE，读不出 bridge 进程跑在哪个版本目录；只靠 `/proc/<pid>/cwd` 的话「运行版本」永远是「未运行」，空闲切换、失败回退、`rollback` 全部失灵 | 单元加一行 `ExecStartPre=+…`，每次启动记下「InvocationID + 当时 current 指向的目录」到 `bridge-ops/running-dir`；读的时候 ID 对得上才采信（`bootstrap.sh` / 看门狗的 `running_dir`） |
 
 ## 本地模拟
 

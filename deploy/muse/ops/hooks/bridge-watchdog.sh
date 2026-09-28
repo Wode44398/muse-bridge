@@ -24,7 +24,22 @@ mkdir -p "$HOME/hooks/state"
 
 [ "$DRY" = 1 ] || bash "$OPS/heal.sh" >/dev/null 2>&1 || true
 
-running_dir() { local pid; pid="$(systemctl show -p MainPID --value bridge.service 2>/dev/null || echo 0)"; [ "${pid:-0}" -gt 0 ] && readlink -f "/proc/$pid/cwd" 2>/dev/null || true; }
+# bridge 进程此刻实际跑在哪个目录（链接改了但还没重启时，跟 current 不一样）。
+# 先读 /proc/<pid>/cwd；读不到就用单元启动时 ExecStartPre 记下的「InvocationID + 当时 current 指向的目录」，
+# ID 跟 bridge 这一次启动对得上才算数。Muse 的命令环境是没有 CAP_SYS_PTRACE 的 root，读不了别的用户进程的
+# /proc/<pid>/cwd（进程本身看得见）——只靠 /proc 的话这里永远是空的，空闲切换、失败回退、rollback 全都失灵。
+running_dir() {
+  local pid d="" inv line
+  pid="$(systemctl show -p MainPID --value bridge.service 2>/dev/null || echo 0)"
+  [ "${pid:-0}" -gt 0 ] || return 0
+  d="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+  if [ -z "$d" ]; then
+    inv="$(systemctl show -p InvocationID --value bridge.service 2>/dev/null || true)"
+    line="$(cat "$OPS/running-dir" 2>/dev/null || true)"
+    if [ -n "$inv" ] && [ "${line%% *}" = "$inv" ]; then d="${line#* }"; fi
+  fi
+  [ -z "$d" ] || echo "$d"
+}
 local_ok() { curl --noproxy '*' --fail --silent --max-time 10 -o /dev/null "http://127.0.0.1:$PORT/healthz"; }
 # bootstrap.sh 的安装 / 更新正在后台跑（它登记在 install.pid）
 busy() { local p; p="$(cat "$OPS/install.pid" 2>/dev/null || true)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }

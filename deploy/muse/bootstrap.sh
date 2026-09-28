@@ -86,8 +86,22 @@ local_code() { http_code --noproxy '*' --max-time 5 "http://127.0.0.1:$PORT/heal
 public_code() { local u; u="$(public_url)"; if [ -n "$u" ]; then http_code --max-time 20 "$u/healthz"; else echo 000; fi; }
 version_of() { head -1 "$1/deploy/muse/VERSION" 2>/dev/null || echo unknown; }
 svc_states() { local s o=""; for s in $SERVICES; do o+="$s=$(systemctl is-active "$s.service" 2>/dev/null || true) "; done; echo "${o% }"; }
-# bridge 进程此刻实际跑在哪个目录（链接改了但还没重启时，跟 current 不一样）
-running_dir() { local pid; pid="$(systemctl show -p MainPID --value bridge.service 2>/dev/null || echo 0)"; [ "${pid:-0}" -gt 0 ] && readlink -f "/proc/$pid/cwd" 2>/dev/null || true; }
+# bridge 进程此刻实际跑在哪个目录（链接改了但还没重启时，跟 current 不一样）。
+# 先读 /proc/<pid>/cwd；读不到就用单元启动时 ExecStartPre 记下的「InvocationID + 当时 current 指向的目录」，
+# ID 跟 bridge 这一次启动对得上才算数。Muse 的命令环境是没有 CAP_SYS_PTRACE 的 root，读不了别的用户进程的
+# /proc/<pid>/cwd（进程本身看得见）——只靠 /proc 的话这里永远是空的，空闲切换、失败回退、rollback 全都失灵。
+running_dir() {
+  local pid d="" inv line
+  pid="$(systemctl show -p MainPID --value bridge.service 2>/dev/null || echo 0)"
+  [ "${pid:-0}" -gt 0 ] || return 0
+  d="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+  if [ -z "$d" ]; then
+    inv="$(systemctl show -p InvocationID --value bridge.service 2>/dev/null || true)"
+    line="$(cat "$OPS/running-dir" 2>/dev/null || true)"
+    if [ -n "$inv" ] && [ "${line%% *}" = "$inv" ]; then d="${line#* }"; fi
+  fi
+  [ -z "$d" ] || echo "$d"
+}
 agents_label() { case "$1" in claude) echo '只有 Claude Code' ;; dimensio) echo '只有 dimensio' ;; *) echo 'Claude Code + dimensio' ;; esac; }
 # 服务端自己报告的 agent 名单（验收用：跟用户选的对得上才算装对）
 served_agents() { curl -s --noproxy '*' --max-time 5 "http://127.0.0.1:$PORT/api/auth" 2>/dev/null | jq -r '(.agents // []) | join(",")' 2>/dev/null || true; }
@@ -244,10 +258,14 @@ restart_bridge() {
 
 # 把 current 链接指向 $1，然后按 $2 切换：now = 立即重启；idle = 通知 bridge 等在跑的对话结束再重启
 switch_to() {
-  local new="$1" mode="$2" run
+  local new="$1" mode="$2" run was
   run="$(running_dir)"
+  was="$(readlink -f "$RELS/current" 2>/dev/null || true)"
   ln -sfn "$new" "$RELS/.current.tmp" && mv -Tf "$RELS/.current.tmp" "$RELS/current"
-  if [ -n "$run" ] && [ "$run" != "$new" ]; then echo "$run" > "$OPS/previous"; fi
+  if [ -n "$run" ] && [ "$run" != "$new" ]; then echo "$run" > "$OPS/previous"
+  # 读不到在跑的目录（从还没有 running-dir 记录的旧版本升上来）：按切换前 current 的指向记回退点
+  elif [ -z "$run" ] && [ -n "$was" ] && [ "$was" != "$new" ] && [ -f "$was/src/server.mjs" ] \
+       && systemctl is-active --quiet bridge.service; then echo "$was" > "$OPS/previous"; fi
   systemctl daemon-reload
   if [ "$mode" = now ] || [ -z "$run" ] || ! systemctl is-active --quiet bridge.service; then
     rm -f "$OPS/pending-switch.json"
@@ -440,6 +458,12 @@ cmd_install() {
   sed -i -e "s|^WorkingDirectory=.*|WorkingDirectory=$RELS/current|" \
          -e '/^Environment=BRIDGE_UPDATE_HINT=/d' \
          -e "/^Environment=BRIDGE_SUPERVISED=/a Environment=BRIDGE_UPDATE_HINT=$hint" /etc/systemd/system/bridge.service
+  # 每次启动（含 bridge 空闲自重启后 systemd 拉起）都记一笔「这次启动的 InvocationID + 当时 current 指向的目录」，
+  # 给 running_dir 在读不了 /proc/<pid>/cwd 的环境里用。「+」= 以 root 跑（写 bridge-ops）；「$$」= 交给 sh 的字面 $
+  local pre="ExecStartPre=+/bin/sh -c 'echo \"\$\$INVOCATION_ID \$\$(readlink -f $RELS/current)\" > $OPS/running-dir'"
+  sed -i '/^ExecStartPre=.*running-dir/d' /etc/systemd/system/bridge.service
+  PRE="$pre" awk '{ print } /^WorkingDirectory=/ { print ENVIRON["PRE"] }' /etc/systemd/system/bridge.service > /etc/systemd/system/bridge.service.new
+  mv -f /etc/systemd/system/bridge.service.new /etc/systemd/system/bridge.service
   cp /etc/systemd/system/bridge.service "$OPS/systemd/bridge.service"
   # 固定域名：分享链接用完整地址；临时地址：不写（前端按当前地址拼）
   if [ "$TUNNEL_MODE" = named ]; then set_bridge_env BRIDGE_PUBLIC_ORIGIN "https://$PUBLIC_HOSTNAME"; else set_bridge_env BRIDGE_PUBLIC_ORIGIN ""; fi

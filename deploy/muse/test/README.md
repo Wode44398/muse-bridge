@@ -30,7 +30,10 @@ UNIT
 ```
 
 然后把 `git archive --prefix=bridge/ HEAD` 打的包解到容器的 `/home/hatch/bridge-releases/<时间戳>/`，
-按 `MUSE.md` 第 2 节执行 `bootstrap.sh install`。看门狗 hook 可以用一个假的运行时手动跑：
+按 `MUSE.md` 第 2 节执行 `bootstrap.sh install`。
+**Muse 的 root 没有 SYS_PTRACE**，容器里的 root 有：要照真机测，命令前面加 `setpriv --bounding-set=-sys_ptrace`（看门狗同理），否则「运行版本」这类读 `/proc/<pid>/cwd` 的逻辑在本地永远是好的、到了真机才坏。
+
+看门狗 hook 可以用一个假的运行时手动跑：
 
 ```bash
 printf 'log(){ echo "[log] $*"; }\nsilent(){ echo "[silent] $*"; }\nwake(){ echo "[WAKE] $*"; }\n' > /tmp/hook-runtime.sh
