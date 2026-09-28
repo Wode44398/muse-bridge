@@ -79,3 +79,7 @@ git push origin v0.2.0
 ```
 
 GitHub Actions（`.github/workflows/release.yml`）会打包 `muse-bridge.tgz`、生成 `.sha256` 和更新频道 `latest.json`，并创建 Release。已经装好的 Muse 每 6 小时读一次 `latest.json`，发现新版本就问用户要不要更新。标签里带 `-`（如 `v0.2.0-beta.1`）会发成预发布版，不会推送给已装的用户。
+
+## 协议
+
+[MIT](LICENSE)。Claude Code 与 Claude Agent SDK 的使用受 Anthropic 自己的条款约束；在 Muse 上部署请同时遵守 Muse 的平台条款。
