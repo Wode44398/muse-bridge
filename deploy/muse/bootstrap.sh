@@ -225,20 +225,15 @@ wait_healthy() { # $1 = 期望运行的目录，$2 = 最多等几秒
   return 1
 }
 
-# VM 开机后，平台要过几分钟（实测 3–7 分钟）才把 bridge 账号写回 /etc/passwd。这期间别自己 useradd——
-# 新建的账号 UID 可能跟数据目录的属主对不上。先等；等 15 分钟还没回来，就按数据目录的 UID/GID 补建。
+# VM 开机后，平台不会马上把 bridge 账号写回 /etc/passwd（实测往往要等 Muse 下一次干活）。不等它：按数据目录的
+# 属主 UID/GID 当场补建——UID 跟数据目录对得上，平台之后写回的也是同一个账号。别用新的 UID 建（数据目录会读不了）。
 wait_for_account() {
   getent passwd "$SVC_USER" >/dev/null && return 0
   [ -d "$DATA" ] || return 0          # 第一次安装：还没有数据目录，交给 install.sh 新建账号
-  local uid gid i
+  local uid gid
   uid="$(stat -c %u "$DATA")"; gid="$(stat -c %g "$DATA")"
-  say "开机后平台还没把 $SVC_USER 账号写回来（通常要 3–7 分钟），先等它"
-  for i in $(seq 1 90); do
-    getent passwd "$SVC_USER" >/dev/null && { say "账号回来了（等了 $((i * 10 - 10)) 秒）"; return 0; }
-    sleep 10
-  done
-  [ "$uid" != 0 ] && [ "$gid" != 0 ] || die "等了 15 分钟 $SVC_USER 账号还没回来，而且 $DATA 属主是 root、推不出原来的 UID。过几分钟再跑一次 install"
-  warn "等了 15 分钟账号还没回来，按数据目录的属主（uid $uid / gid $gid）补建"
+  [ "$uid" != 0 ] && [ "$gid" != 0 ] || die "$SVC_USER 账号不在，而且 $DATA 属主是 root、推不出原来的 UID。过几分钟再跑一次 install"
+  say "$SVC_USER 账号还没被平台写回来，按数据目录的属主（uid $uid / gid $gid）补建"
   getent group "$SVC_USER" >/dev/null || groupadd --system -g "$gid" "$SVC_USER"
   useradd --system -u "$uid" -g "$gid" --home-dir "$DATA/home" --shell /bin/bash "$SVC_USER"
 }

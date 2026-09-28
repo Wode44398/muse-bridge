@@ -18,7 +18,7 @@
 
 - 只有 `/home/hatch`（btrfs）持久。`/` 是 overlay。
 - 平台大约每 6–15 小时整机重启一次（关机后全新启动，不是挂起）；闲置本身不会让 VM 停机。
-- 重启时平台重写它自己管的 `/etc` 文件：`/etc/passwd`、`/etc/group`（保留我们建的 `bridge` 账号，但开机后要 3–7 分钟才写好，实测最久 7 分钟；这期间别 `useradd`，UID 可能跟数据目录对不上）、`/etc/apt/sources.list.d/ubuntu.sources`（被还原）。
+- 重启时平台重写它自己管的 `/etc` 文件：`/etc/passwd`、`/etc/group`（保留我们建的 `bridge` 账号，但开机后不会马上写好：观察到的几次都要等好几分钟，而且都是在有人找 Muse 之后一分钟内才出现。服务全靠这个账号，所以 `heal.sh` 不等它，按数据目录的属主当场补建同一个 UID；千万别用新 UID 建，数据目录会读不了）、`/etc/apt/sources.list.d/ubuntu.sources`（被还原）。
 - 平台不认识的 `/etc` 文件会丢：我们的 systemd 单元、整个 `/etc/bridge/`。
 - `/usr` 下装的包（node、cloudflared、socat）实测重启后还在，但机制不明，脚本按「可能丢」处理，所有安装步骤都要幂等。
 - `/var/log/journal` 与 wtmp 也在 overlay 上，重启即清空。

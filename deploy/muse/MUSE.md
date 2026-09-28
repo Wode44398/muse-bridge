@@ -79,7 +79,7 @@ bash "$REL/bridge/deploy/muse/bootstrap.sh" install --agents claude --solo
 
 - 整个安装要 5–10 分钟（装 npm 依赖、构建前端）。**直接在前台跑这一条就行，不要自己加 `nohup` / `&`**：脚本会把活转到后台（你的命令工具超时也打断不了它），前台最多等 4 分半，每完成一步打印一行进度。
 - 前台等到头还没装完，会提示「还在后台跑」。这时跑一次 `bash /home/hatch/bridge-ops/bootstrap.sh wait`，它接着等、接着打印进度；还没完就再跑一次。中间不要用别的命令看进度。
-- 如果 VM 刚重启过，平台要 3–7 分钟才把服务账号写回来，脚本会打印「先等它」并自己等，不用管。
+- 如果 VM 刚重启过、服务账号还没被平台写回来，脚本会按数据目录的属主自己补回来，不用管。
 - 脚本可以重复跑。中途失败（网络抖动、VM 重启）就原样再跑一次，已有的数据和令牌都不会动。
 - 最后打印「MUSE-BRIDGE 结果」块。**状态**是「正常」，并且**公网健康**是 200，才算装好。**管理员令牌**那一行会一直显示，直到用户用它登录成功一次。
 
@@ -221,7 +221,7 @@ bash /home/hatch/bridge-ops/bootstrap.sh set-api-key ANTHROPIC_API_KEY <key>
 | 用自己的域名，隧道连上了但打开是 Cloudflare 错误页（502 / 1033） | Public hostname 的服务地址没填对 | 让用户在 Cloudflare 后台把服务改成 `HTTP` + `localhost:8787` |
 | cloudflared 一直报 `Failed to refresh DNS local resolver … unable to parse IP` | 已知的无害噪音 | 不用管 |
 | 重启后服务单元没了（`Unit … not found`） | 平台重启时会清掉 `/etc` 里它不认识的文件 | `bash /home/hatch/bridge-ops/heal.sh`；看门狗每分钟也会自动做 |
-| bridge 报 `status=217/USER`，或者找不到 bridge 用户 | 开机后平台要 3–7 分钟（偶尔更久）才把 `/etc/passwd` 写好 | 什么都不用做：看门狗这段时间只报「还在恢复中」，账号回来后自己拉起服务；`install` 也会自己等它 |
+| bridge 报 `status=217/USER`，或者找不到 bridge 用户 | VM 重启后，平台不会马上把 `/etc/passwd` 里的 bridge 账号写回来 | 什么都不用做：看门狗下一轮（1 分钟内）会按数据目录的属主把同一个账号补回来、拉起服务；`install` 也会自己补 |
 | bridge 报 `status=200/CHDIR` | `/home/hatch` 丢了 o+x 权限 | `heal.sh` 会自动补上 |
 | Claude 页提示「还没配置 Claude 认证」 | 还没配令牌 | 见 4.4 |
 | dimensio 发消息报没有可用的模型 / key | 还没填 key | 见 4.5 |

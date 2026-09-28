@@ -2,7 +2,8 @@
 # 开机 / /etc 被平台还原之后的自愈，可以随时重复跑（看门狗每分钟调一次，bootstrap 收尾也调一次）。
 # Muse VM 重启时，平台只重写它自己管的 /etc 文件；它不认识的东西（我们的 systemd 单元、/etc/bridge/）会丢。
 # 这里把它们从持久目录 bridge-ops/ 补回来，再把没在跑的服务拉起。
-# 注意：bridge 账号由平台重写 /etc/passwd 时保留，但开机后要 3–7 分钟才写好——那之前 start 会失败，下一轮再试。
+# 注意：bridge 账号由平台重写 /etc/passwd 时保留，但开机后不会马上写好（实测往往要等 Muse 下一次干活）。
+# 服务全靠这个账号运行（没有它 systemd 报 217/USER，连数字 UID 都不认），所以不等平台：按数据目录属主当场补建。
 set -u
 . "$(dirname "$(readlink -f "$0")")/muse.env"
 
@@ -33,6 +34,17 @@ if [ -f "$P" ] && [ -f "$S" ] && command -v jq >/dev/null; then
   since=$(( $(stat -c %Y "$P") * 1000 ))
   if jq -e --argjson t "$since" '[.[] | select(.admin == true and (.created // 0) >= $t)] | length > 0' "$S" >/dev/null 2>&1; then
     rm -f "$P"
+  fi
+fi
+
+# bridge 账号不在：按数据目录的属主 UID/GID 当场补建。跟平台之后写回的是同一个 UID，不冲突；
+# 数据目录属主是 root（推不出原来的 UID）或还没有数据目录（第一次安装前）就不动，交给平台 / install.sh
+if ! getent passwd "$SVC_USER" >/dev/null 2>&1 && [ -d "$DATA" ]; then
+  uid="$(stat -c %u "$DATA")"; gid="$(stat -c %g "$DATA")"
+  if [ "$uid" != 0 ] && [ "$gid" != 0 ]; then
+    getent group "$SVC_USER" >/dev/null 2>&1 || groupadd --system -g "$gid" "$SVC_USER" 2>/dev/null || true
+    useradd --system -u "$uid" -g "$gid" --home-dir "$DATA/home" --shell /bin/bash "$SVC_USER" 2>/dev/null \
+      && echo "已按数据目录属主补回 $SVC_USER 账号（uid $uid / gid $gid）"
   fi
 fi
 

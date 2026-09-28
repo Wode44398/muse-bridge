@@ -113,7 +113,7 @@ if [ -n "${CHANNEL:-}" ] && [ ! -f "$PS" ] && [ "$DRY" != 1 ] && ! busy && \
   fi
 fi
 
-# --- 开机后平台还没把 bridge 账号写回来（实测 3–7 分钟）：这段时间服务必然起不来，不算故障 ---
+# --- bridge 账号不在（heal.sh 按数据目录属主补建也没成）：服务必然起不来，不算故障，等下一轮 ---
 if ! getent passwd "$SVC_USER" >/dev/null 2>&1; then
   silent "还在恢复中" '{"waiting":"平台还没写回服务账号"}'
   exit 0
