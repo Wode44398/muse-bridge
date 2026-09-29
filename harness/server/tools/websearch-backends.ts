@@ -537,17 +537,33 @@ export const kimiBackend: SearchBackend = {
 const MIMO_OFF_MS = 30 * 60_000;
 let mimoOffUntil = 0;
 const MIMO_HINT = "小米原生搜索没用上：MiMo 控制台「插件管理」里还没开通联网搜索插件（开通后就会优先用它）";
+// 09-29 实测：Token Plan 的 tp- key 只认 token-plan-cn 那个地址，那边一律 webSearchEnabled=false（控制台开了插件也一样）；
+// 拿它打按量地址直接 401。插件只在按量付费接口上开放，所以搜索可以单独配一把按量的 key（MIMO_SEARCH_API_KEY）。
+const MIMO_TP_HINT =
+  "小米原生搜索没用上：Token Plan（tp- 开头）的 key 用不了联网搜索插件，小米只在按量付费接口上开放它。" +
+  "想用的话，在 MiMo 控制台建一把按量付费的 API key 填到 MIMO_SEARCH_API_KEY（聊天照旧用 Token Plan；搜索按次计费，从账户余额扣）";
+/** 搜索用的 key 与地址：单独配了按量 key 就用它（固定走按量地址），否则跟聊天同一把。 */
+function mimoSearchAuth(): { key?: string; base: string; hint: string } {
+  const own = process.env.MIMO_SEARCH_API_KEY?.trim();
+  if (own) {
+    const base = process.env.MIMO_SEARCH_BASE_URL?.trim() || "https://api.xiaomimimo.com/v1";
+    return { key: own, base, hint: MIMO_HINT };
+  }
+  const key = resolveKey("mimo");
+  const base = defaultBaseUrl("mimo") ?? "https://api.xiaomimimo.com/v1";
+  return { key, base, hint: key?.startsWith("tp-") ? MIMO_TP_HINT : MIMO_HINT };
+}
 export const mimoBackend: SearchBackend = {
   id: "mimo",
   label: "小米 MiMo 联网搜索",
   needsOutbound: false,
   timeoutMs: MODEL_SEARCH_MS,
-  available: () => Boolean(resolveKey("mimo")),
+  available: () => Boolean(mimoSearchAuth().key),
   async search(query, signal, budgetMs) {
-    const key = resolveKey("mimo");
+    const { key, base: rawBase, hint } = mimoSearchAuth();
     if (!key) return { ok: false, retryable: false, error: "no mimo key" };
-    if (Date.now() < mimoOffUntil) return { ok: false, retryable: false, error: "web search plugin disabled", hint: MIMO_HINT };
-    const base = (defaultBaseUrl("mimo") ?? "https://api.xiaomimimo.com/v1").replace(/\/$/, "");
+    if (Date.now() < mimoOffUntil) return { ok: false, retryable: false, error: "web search plugin disabled", hint };
+    const base = rawBase.replace(/\/$/, "");
     const model = process.env.WEBSEARCH_MIMO_MODEL?.trim() || "mimo-v2.6-flash";
     const r = await postJson(
       `${base}/chat/completions`,
@@ -566,7 +582,7 @@ export const mimoBackend: SearchBackend = {
     if (!r.ok) {
       if (/webSearchEnabled is false/i.test(r.error)) {
         mimoOffUntil = Date.now() + MIMO_OFF_MS;
-        return { ok: false, retryable: false, error: "web search plugin disabled", hint: MIMO_HINT };
+        return { ok: false, retryable: false, error: "web search plugin disabled", hint };
       }
       return r;
     }

@@ -55,6 +55,8 @@ const ddgOk = () =>
 function stubFetch(handler: (backend: string, n: number) => Response | Promise<Response>) {
   const calls: string[] = [];
   const bodies: string[] = [];
+  const urls: string[] = [];
+  const auths: string[] = [];
   const real = globalThis.fetch;
   let n = 0;
   globalThis.fetch = (async (url: any, init: any) => {
@@ -70,9 +72,11 @@ function stubFetch(handler: (backend: string, n: number) => Response | Promise<R
     else if (u.includes("duckduckgo")) backend = "ddg";
     calls.push(backend);
     bodies.push(String(init?.body ?? ""));
+    urls.push(u);
+    auths.push(String(new Headers(init?.headers).get("authorization") ?? ""));
     return handler(backend, n++);
   }) as typeof fetch;
-  return { calls, bodies, restore: () => { globalThis.fetch = real; } };
+  return { calls, bodies, urls, auths, restore: () => { globalThis.fetch = real; } };
 }
 
 test.before(() => {
@@ -421,7 +425,9 @@ test("小米：插件没开时秒失败、换下一家，结果里提醒去开�
       assert.equal(r.ok, true);
       const text = (r.content[0] as any).text as string;
       assert.match(text, /智谱顶上/);
-      assert.match(text, /插件管理/);
+      // tp- 是 Token Plan：它那个接口一律不开插件，提示要说真原因（去配按量 key），别叫用户去开早就开着的插件
+      assert.match(text, /Token Plan/);
+      assert.match(text, /MIMO_SEARCH_API_KEY/);
       assert.deepEqual(stub.calls, ["mimo", "zhipu"]);
       // 第二次：不再打小米
       const r2 = await webSearchTool.run({ query: uniq("mimo-off2") }, ctx());
@@ -452,6 +458,50 @@ test("小米：插件开了，annotations 转成来源", async () => {
       assert.match(stub.calls[0], /mimo/);
     } finally {
       stub.restore();
+    }
+  });
+});
+
+test("小米：单独配了按量付费的搜索 key，搜索走它和按量地址，聊天的 Token Plan key 不动", async () => {
+  resetNativeSearchState();
+  process.env.MIMO_SEARCH_API_KEY = "sk-search-test";
+  try {
+    await withProvider("mimo", "tp-test-key", async () => {
+      const stub = stubFetch(() =>
+        json(200, { choices: [{ message: { role: "assistant", content: "按量搜到了", annotations: [{ url: "https://mi.example/p", title: "P" }] } }] }),
+      );
+      try {
+        const r = await webSearchTool.run({ query: uniq("mimo-sk") }, ctx());
+        assert.equal(r.ok, true);
+        assert.match((r.content[0] as any).text as string, /按量搜到了/);
+        assert.match(stub.urls[0], /^https:\/\/api\.xiaomimimo\.com\/v1\/chat\/completions$/);
+        assert.equal(stub.auths[0], "Bearer sk-search-test");
+      } finally {
+        stub.restore();
+      }
+    });
+  } finally {
+    delete process.env.MIMO_SEARCH_API_KEY;
+    resetNativeSearchState();
+  }
+});
+
+test("小米：按量 key 本身没开插件时，提示去开插件（不是 Token Plan 那句）", async () => {
+  resetNativeSearchState();
+  await withProvider("mimo", "sk-plain-key", async () => {
+    const stub = stubFetch((backend) =>
+      backend === "mimo"
+        ? json(400, { error: { code: "400", message: "Param Incorrect", param: "web search tool found in the request body, but webSearchEnabled is false" } })
+        : zhipuOk("智谱顶上"),
+    );
+    try {
+      const r = await webSearchTool.run({ query: uniq("mimo-sk-off") }, ctx());
+      const text = (r.content[0] as any).text as string;
+      assert.match(text, /插件管理/);
+      assert.doesNotMatch(text, /Token Plan/);
+    } finally {
+      stub.restore();
+      resetNativeSearchState();
     }
   });
 });

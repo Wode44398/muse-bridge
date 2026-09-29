@@ -94,6 +94,8 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "WEBSEARCH_DEEPSEEK_MODEL", area: "联网搜索", description: "DeepSeek 原生搜索（Anthropic 兼容接口）用的型号", default: "deepseek-chat" },
   { name: "WEBSEARCH_QWEN_MODEL", area: "联网搜索", description: "通义原生搜索（DashScope enable_search）用的型号", default: "qwen-plus" },
   { name: "WEBSEARCH_MIMO_MODEL", area: "联网搜索", description: "小米原生搜索（web_search 工具，需在控制台开插件）用的型号", default: "mimo-v2.6-flash" },
+  { name: "MIMO_SEARCH_API_KEY", area: "联网搜索", description: "小米搜索专用的按量付费 key（Token Plan 的 tp- key 用不了联网插件；聊天仍用 MIMO_API_KEY）", secret: true },
+  { name: "MIMO_SEARCH_BASE_URL", area: "联网搜索", description: "小米搜索专用 key 的接口地址", default: "https://api.xiaomimimo.com/v1" },
   { name: "WEBSEARCH_ANTHROPIC_MODEL", area: "联网搜索", description: "Claude 原生搜索（web_search 服务端工具）用的型号", default: "claude-haiku-4-5-20251001" },
   { name: "ANTHROPIC_BASE_URL", area: "联网搜索", description: "Claude 原生搜索走的接口地址（中转站时改它）", default: "https://api.anthropic.com" },
 

@@ -605,6 +605,7 @@ key_site() {
       if [ -n "$base" ]; then site_of "$base"
       elif [ "${val#tp-}" != "$val" ]; then echo token-plan-cn.xiaomimimo.com
       else echo api.xiaomimimo.com; fi ;;
+    MIMO_SEARCH_API_KEY) base="$(env_get MIMO_SEARCH_BASE_URL)"; site_of "${base:-https://api.xiaomimimo.com}" ;;
   esac
 }
 # 按现在的配置算出要放行的站点：启用的 agent、已填的 key、自定义模型服务
@@ -643,7 +644,8 @@ cmd_allow_sites() { allow_sites "$@"; }
 
 cmd_set_api_key() {
   local key="${1:-}" val="${2:-}" f="$DATA/dimensio/.env"
-  [[ "$key" =~ ^(ANTHROPIC|OPENAI|GEMINI|ZHIPU|KIMI|QWEN|MIMO|DEEPSEEK)_API_KEY$ ]] || die "用法：set-api-key <ANTHROPIC|OPENAI|GEMINI|ZHIPU|KIMI|QWEN|MIMO|DEEPSEEK>_API_KEY <值>（值为空 = 删掉）"
+  # MIMO_SEARCH_API_KEY：小米搜索专用的按量付费 key（Token Plan 的 tp- key 用不了联网插件）
+  [[ "$key" =~ ^(ANTHROPIC|OPENAI|GEMINI|ZHIPU|KIMI|QWEN|MIMO|MIMO_SEARCH|DEEPSEEK)_API_KEY$ ]] || die "用法：set-api-key <ANTHROPIC|OPENAI|GEMINI|ZHIPU|KIMI|QWEN|MIMO|MIMO_SEARCH|DEEPSEEK>_API_KEY <值>（值为空 = 删掉）"
   # dimensio 里 DeepSeek 这一家读的是 OPENAI_API_KEY（目录里 id=openai、地址 api.deepseek.com），DEEPSEEK_API_KEY 它不认
   [ "$key" = DEEPSEEK_API_KEY ] && key=OPENAI_API_KEY
   install -d -o "$SVC_USER" -g "$SVC_USER" "$DATA/dimensio"; touch "$f"
