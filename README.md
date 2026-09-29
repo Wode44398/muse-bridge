@@ -1,85 +1,129 @@
 # Muse Bridge
 
-**在 [Muse](https://muse.ai) 的 agent VM 上一键部署 Claude Code**：装好之后，你用手机或电脑的浏览器打开一个网址，就能用 Claude Code 写代码、处理文件、跑命令；也可以选装 **dimensio**——一个能接各家模型 API（Anthropic、OpenAI、Gemini、DeepSeek、Kimi、智谱、Qwen、MiMo…）的 agent 工作台。
+**English** · [简体中文](README.zh-CN.md)
 
-部署这件事交给 Muse 自己做：把下面这段话发给你的 Muse，它会下载安装包、问你三个问题、装好、注册自愈看门狗，再一步步带你上手。
+**One-message deployment of Claude Code on your [Muse](https://muse.ai) agent VM.** Once it's installed, open a URL in any browser, on your phone or your computer, and use Claude Code to write code, work with files and run commands. You can also install **dimensio**, an agent workspace that works with models from many providers: Anthropic, OpenAI, Gemini, DeepSeek, Kimi, Zhipu GLM, Qwen, Xiaomi MiMo and more.
 
-## 开始使用
+Muse does the whole deployment for you. Send it one message and it downloads the release, asks you three questions, installs everything, registers a self-healing watchdog, then walks you through first use. You never touch a terminal.
 
-把这段话**整段**发给你的 Muse：
+![dimensio answering a live question with Xiaomi MiMo's own web search, sources included](docs/images/dimensio-web-search.png)
+
+## Highlights
+
+- **Deploy with one message.** Paste the prompt below into Muse and it handles the rest, in about 5–10 minutes.
+- **Works on phone and desktop.** The URL opens the full workspace. The interface is available in English and Simplified Chinese.
+- **Full Claude Code.** Powered by the official Claude Agent SDK: tool use, subagents, workflows, context compaction and session resume. A side dock gives you a terminal, files, tasks and a diff review.
+- **dimensio, a multi-model workspace.** One API key per provider, switch models at any time, or add any OpenAI-compatible endpoint. It has its own workspaces, memory and subagents.
+- **Each provider's own web search.** Search uses the built-in search of whichever model the conversation is using, falls back to the next configured provider, and uses DuckDuckGo only as a last resort.
+- **Survives VM restarts.** Muse restarts its VMs from time to time. A watchdog brings the service back within 60 seconds, and Muse tells you if the temporary URL changed.
+- **Update prompts.** When a new version ships, Muse tells you what changed in a sentence or two and asks whether to update. It switches over only when nobody is chatting, and rolls back automatically if the new version fails to start.
+- **Multi-user if you want it.** Invite codes let friends sign up. Every account gets its own directory, and you can decide per person which agents they can use and how much.
+
+## Get started
+
+Send this whole message to your Muse:
 
 ````text
-请帮我在你这台 VM 上部署 Muse Bridge（一个能用浏览器打开的 Claude Code / AI agent 工作台），装好后带我学会使用。
+Please deploy Muse Bridge (a browser-based Claude Code / AI agent workspace) on this VM, then teach me how to use it. Talk to me in English.
 
-第一步，下载安装包并核对校验和（出站要走 hatch-egress-proxy 代理），把输出原样贴给我：
+One rule first: I have to approve every command you run, so please run as few as possible. The install script runs in the background and prints its own progress, so don't poll it with tail / ps / sleep. If the approval dialog offers something like "always allow", remind me to choose it for the install script.
+
+Step 1: download the release and verify its checksum (outbound traffic must go through the hatch-egress-proxy proxy). Paste the output back to me exactly as printed:
 
 ```bash
 export HTTPS_PROXY=http://hatch-egress-proxy:3128 HTTP_PROXY=http://hatch-egress-proxy:3128
 REL=/home/hatch/bridge-releases/$(date +%Y%m%d-%H%M%S) && mkdir -p "$REL" && chmod 755 /home/hatch/bridge-releases "$REL"
 cd /tmp && curl -fLO --retry 3 https://github.com/Wode44398/muse-bridge/releases/latest/download/muse-bridge.tgz && curl -fLO --retry 3 https://github.com/Wode44398/muse-bridge/releases/latest/download/muse-bridge.tgz.sha256 \
-  && sha256sum -c muse-bridge.tgz.sha256 && tar -xzf muse-bridge.tgz -C "$REL" && echo "解压到 $REL/bridge"
+  && sha256sum -c muse-bridge.tgz.sha256 && tar -xzf muse-bridge.tgz -C "$REL" && echo "extracted to $REL/bridge"
 ```
 
-第二步，把 `$REL/bridge/deploy/muse/MUSE.md` 从头到尾完整读一遍，然后严格照着做：先按第 1 节问我三个问题，再部署、注册看门狗 hook、验收、写进你的长期记忆，最后一步一步带我上手。每一步都把命令输出原样贴给我看，别只说「成功了」。
+Step 2: read `$REL/bridge/deploy/muse/MUSE.md` from start to finish (especially the hard rules in section 0; it's written in Chinese, but keep talking to me in English), and follow it exactly: ask me the three questions in section 1 in a single message, then deploy, register the watchdog hook, verify, save it to your long-term memory, and finally walk me through using it step by step. Show me the real output of each command instead of just saying "it worked".
 ````
 
-Muse 会问你：
+Muse will ask you three questions at once:
 
-1. **装什么**：只要 Claude Code / 只要 dimensio / 两个都要。只选一个时，打开网址直接就是那个 agent。
-2. **有没有自己的域名**（托管在 Cloudflare）：没有就用免费的临时地址（VM 重启会变，变了 Muse 会告诉你）；有的话可以换成固定地址。
-3. **自己用还是多人用**：多人用可以给朋友发邀请码。
+1. **What to install:** Claude Code only, dimensio only, or both. If you pick one, the URL opens straight into that agent.
+2. **Do you have your own domain** (on Cloudflare)? If not, you get a free temporary URL. It changes when the VM restarts, and Muse will tell you the new one. If you do, you can switch to a permanent address.
+3. **Just you, or other people too?** Choose multi-user to hand out invite codes to friends.
 
-## 你需要准备
+Not sure? Pick Claude Code only, a temporary URL, and just you. You can change all of these later.
 
-- 一个 Muse 账号。
-- 用 Claude Code：一个 Claude Pro 或 Max 订阅。令牌要在**你自己的电脑上**运行 `claude setup-token` 生成（Muse 会带你做），不要在 Muse 的 VM 上登录 Claude。
-- 用 dimensio：至少一家模型厂商的 API key。
+## What you need
 
-## 能做什么
+- A Muse account.
+- For Claude Code: a Claude Pro or Max subscription. Generate the token **on your own computer** with `claude setup-token` (Muse will guide you). Don't sign in to Claude on the Muse VM.
+- For dimensio: an API key from at least one model provider.
 
-- **Claude Code**：官方 Claude Agent SDK 驱动，支持工具调用、子 agent、工作流、上下文压缩、会话续接；右侧工作台有终端、文件、任务和改动审阅。
-- **dimensio**：多家模型可选的 agent 工作台，带工作区、记忆、子 agent。
-- **工作空间**：文件浏览、预览（图片 / 视频 / PDF / Markdown / Office）、上传、分享链接。
-- **多用户**：邀请码注册，每个账号独立目录，可以按人分配 agent 和额度。
-- **自愈与更新**：Muse 的 VM 会不定期重启，看门狗 60 秒内把服务拉回来；发布新版本时 Muse 会问你要不要更新，更新会等没人在聊时才切换，新版本起不来会自动退回。
+## Models in dimensio
 
-## 限制
+![The dimensio model picker](docs/images/dimensio-models.png)
 
-- Muse 的 VM 起不了浏览器沙箱，所以 agent 没有「打开网页、截图」这类浏览器工具（联网搜索、抓网页内容照常可用）。
-- 这是 Muse 平台的 VM，不是正式服务器：平台随时可能调整网络，长期对外提供服务也可能违反平台条款。别放重要数据，也别当生产环境用。
+| Provider | Key name | Web search |
+|---|---|---|
+| Anthropic (Claude) | `ANTHROPIC_API_KEY` | ✓ built-in |
+| DeepSeek | `DEEPSEEK_API_KEY` | ✓ built-in |
+| Google Gemini | `GEMINI_API_KEY` | ✓ Google Search |
+| Kimi (Kimi for Coding subscription, starts with `sk-kimi-`) | `KIMI_API_KEY` | ✓ built-in |
+| Zhipu GLM | `ZHIPU_API_KEY` | ✓ built-in |
+| Qwen | `QWEN_API_KEY` | ✓ built-in |
+| Xiaomi MiMo (pay-as-you-go or Token Plan) | `MIMO_API_KEY` | see below |
+| Any OpenAI-compatible endpoint | add it with "＋" in the UI | — |
 
-## 在普通 Linux 服务器上装
+Ask Muse to store a key for you (`set-api-key`), or paste it into dimensio's model panel yourself.
 
-不在 Muse 上也能用：Debian / Ubuntu + systemd 的机器上，
+**Xiaomi MiMo web search** is a console plugin billed per call (about ¥16 per 1,000) and charged to your account balance, so it only works with a **pay-as-you-go** key. If you chat on a Token Plan subscription key (starts with `tp-`), create a pay-as-you-go key just for search with `set-api-key MIMO_SEARCH_API_KEY <sk-…>`; chat keeps using your Token Plan quota. Without it, MiMo conversations fall back to another provider's search.
+
+## FAQ
+
+**Muse keeps asking whether it may share information with some website.**
+The Muse VM needs your approval for every new website it contacts. During install, and whenever a key is added, Muse Bridge visits the sites it will need while you're there, so the approval cards show up at a moment you can answer them. When one appears, pick the option that **always allows that site** (it's in the drop-down next to the one-time allow button) so it never asks again. If a conversation sits on "waiting for the model", there's usually an approval card nobody has answered.
+
+**My URL changed after a few hours.**
+Temporary URLs (`*.trycloudflare.com`) change when the VM restarts. Muse will tell you the new one. Your login token stays the same; you just sign in again at the new address. For an address that never changes, ask Muse to set up your own domain.
+
+**How do I update?**
+You don't have to do anything. Muse asks you when a new version is out; just say "update". You can also ask "is there a new version?" at any time, or have Muse turn on automatic updates.
+
+**What does it cost?**
+Muse Bridge itself is free and open source. Claude Code runs on your own Claude subscription, and dimensio runs on your own API keys, billed by each provider.
+
+## Limitations
+
+- The Muse VM can't run a browser sandbox, so agents have no browser tools such as opening pages or taking screenshots. Web search and fetching page content still work.
+- This runs on Muse's VM, not a production server. The platform can change its network at any time, and serving the public long-term may break its terms. Don't keep important data here or treat it as production.
+
+## Installing on a regular Linux server
+
+Muse isn't required. On Debian / Ubuntu with systemd:
 
 ```bash
 git clone https://github.com/Wode44398/muse-bridge.git /opt/muse-bridge && cd /opt/muse-bridge
 sudo bash scripts/server/install.sh --agents claude,dimensio
 ```
 
-`install.sh --help` 查看全部选项。服务只听本机 127.0.0.1，对外请自己配隧道或反向代理（`--tunnel-token` 可以顺带起一条 Cloudflare 命名隧道）。更新：`sudo bash scripts/server/update.sh`。
+Run `install.sh --help` to see all options. The service listens on 127.0.0.1 only; for outside access, set up your own tunnel or reverse proxy (`--tunnel-token` can start a Cloudflare named tunnel for you). To update: `sudo bash scripts/server/update.sh`.
 
-## 目录
+## Repository layout
 
-| 路径 | 内容 |
+| Path | Contents |
 |---|---|
-| `src/` | 服务端（Node 24，零构建） |
-| `web/` | 前端（Vite + Svelte 5） |
-| `harness/` | dimensio（TypeScript，Node 原生运行） |
-| `scripts/server/` | 通用 Linux 安装 / 更新脚本 |
-| `deploy/muse/` | Muse 专用：一键部署脚本 `bootstrap.sh`、给 Muse 看的说明书 `MUSE.md`、运维件模板 |
+| `src/` | Server (Node 24, no build step) |
+| `web/` | Frontend (Vite + Svelte 5) |
+| `harness/` | dimensio (TypeScript, run natively by Node) |
+| `scripts/server/` | Generic Linux install / update scripts |
+| `deploy/muse/` | Muse-specific: the `bootstrap.sh` installer, `MUSE.md` (the instructions Muse follows) and ops templates |
 
-## 发布新版本（维护者）
+## Releasing (maintainers)
 
-推一个 `v*` 标签（建议用带说明的标签，说明会作为更新内容展示给用户）：
+Push a `v*` tag. An annotated tag is best, because its message is shown to users as the release notes:
 
 ```bash
-git tag -a v0.2.0 -m "这次更新了什么（给用户看的一两句）"
+git tag -a v0.2.0 -m "What changed, in a sentence or two for users"
 git push origin v0.2.0
 ```
 
-GitHub Actions（`.github/workflows/release.yml`）会打包 `muse-bridge.tgz`、生成 `.sha256` 和更新频道 `latest.json`，并创建 Release。已经装好的 Muse 每 6 小时读一次 `latest.json`，发现新版本就问用户要不要更新。beta（如 `v0.2.0-beta.1`）同样会推送；只有标签里带 `-test`（如 `v0.2.0-test.1`）的会发成预发布版，不进更新频道，给维护者在新 Muse 上试装用。
+GitHub Actions (`.github/workflows/release.yml`) builds `muse-bridge.tgz`, generates the `.sha256` and the `latest.json` update channel, and creates the Release. Installed Muse VMs read `latest.json` every 6 hours and ask their user about new versions. Betas (e.g. `v0.2.0-beta.1`) are pushed to users too; only tags containing `-test` (e.g. `v0.2.0-test.1`) become pre-releases, which stay out of the update channel and are meant for maintainers to trial on a fresh Muse.
 
-## 协议
+## License
 
-[MIT](LICENSE)。Claude Code 与 Claude Agent SDK 的使用受 Anthropic 自己的条款约束；在 Muse 上部署请同时遵守 Muse 的平台条款。
+[MIT](LICENSE). Use of Claude Code and the Claude Agent SDK is subject to Anthropic's terms; when deploying on Muse, follow Muse's platform terms as well.
