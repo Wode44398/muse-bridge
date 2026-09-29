@@ -150,7 +150,7 @@ Claude 需要用户自己的 Claude 订阅（Pro 或 Max）。令牌**只能在�
 bash /home/hatch/bridge-ops/bootstrap.sh set-api-key ANTHROPIC_API_KEY <key>
 ```
 
-可用的名字：`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`DEEPSEEK_API_KEY`、`KIMI_API_KEY`（Kimi for Coding 订阅 key，`sk-kimi-` 开头）、`ZHIPU_API_KEY`、`QWEN_API_KEY`、`MIMO_API_KEY`。写完提醒他删掉聊天里含 key 的那条消息。然后让他在 dimensio 页选对应的模型发一句话试试。
+可用的名字：`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`DEEPSEEK_API_KEY`、`KIMI_API_KEY`（Kimi for Coding 订阅 key，`sk-kimi-` 开头）、`ZHIPU_API_KEY`、`QWEN_API_KEY`、`MIMO_API_KEY`。写完提醒他删掉聊天里含 key 的那条消息。然后让他在 dimensio 页选对应的模型发一句话试试。**第一次调用某家模型时，Muse 会弹一条「允许 Muse 与 <这家的 API 域名> 分享信息？」的审核**（dimensio 经 VM 的出站代理访问模型接口，代理按域名要用户批准）。没人批，对话就一直停在「等待模型回复」。提前告诉用户：看到这条就点下拉里的「总是允许此站点」，以后就不会再卡；用自定义模型服务时同理。
 
 ### 4.6 给朋友开账号（选了「多人用」才需要）
 「设置 → 连接 → 服务端控制台 → 用户」里点「＋ 普通邀请码」（只自己用模式下这一页叫「服务账号」，没有邀请码）。朋友打开同一个地址，点「注册新账号」，填上邀请码即可。新账号默认只能用 Claude；要让他用 dimensio，在「用户」页给他勾上。提醒用户：「Pro 邀请码」给的账号带命令行，只发给完全信任的人。
