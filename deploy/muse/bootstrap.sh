@@ -10,7 +10,8 @@
 # 日常：
 #   status [--local]                公网地址、版本、各服务与健康状态（--local 不访问公网地址）
 #   set-claude-token T              写入 Claude 订阅令牌（claude setup-token 生成）并重启 bridge
-#   set-api-key 变量名 值            给 dimensio 填一家模型厂商的 key（如 ANTHROPIC_API_KEY sk-…）
+#   set-api-key 变量名 值            给 dimensio 填一家模型厂商的 key（如 ANTHROPIC_API_KEY sk-…），顺带放行这家的接口网站
+#   allow-sites [网站或地址…]         预先放行要用到的网站（不给参数 = 按现在的配置算）：Muse 弹审核时选「总是允许此站点」
 #   set-agents LIST                 改启用的 agent（claude / dimensio / claude,dimensio）
 #   set-users solo|multi            只自己用（关注册）/ 多人用（开注册与邀请码）
 #   set-domain 主机名 隧道令牌       换成自己域名的固定地址（Cloudflare 命名隧道）
@@ -378,8 +379,9 @@ detached_start() { echo "$$" > "$INSTALL_PID"; trap 'echo $? > "$INSTALL_RC"' EX
 
 cmd_install() {
   # 带 --switch 的是 update / set-agents 在调新版本的 install（它们自己已经在后台了），直接跑
+  FROM_SWITCH=0
   case " $* " in
-    *" --switch "*) ;;
+    *" --switch "*) FROM_SWITCH=1 ;;
     *) if [ "${MB_DETACHED:-}" = 1 ]; then detached_start; else run_detached install "$@"; return; fi ;;
   esac
   local claude_token="" mode=now tunnel_token="" domain=""
@@ -495,6 +497,8 @@ cmd_install() {
   say "切换到这个版本（$( [ "$mode" = idle ] && echo 等没人在聊时 || echo 立即)）"
   switch_to "$REPO" "$mode"
   wait_public
+  # 用户自己跑的安装（不是 update / set-agents 调进来的）才放行：自动更新多在夜里，没人批，白等
+  [ "$FROM_SWITCH" = 1 ] || ALLOW_WAIT=120 allow_sites || true
   say "完成"
 }
 
@@ -561,14 +565,74 @@ cmd_set_users() {
   restart_bridge idle
 }
 
+# —— 预先放行要用到的网站 ——
+# Muse 的出站代理按网站要用户批准（卡片「允许 Muse 与 X 分享信息？」）。服务在后台第一次访问某家模型接口时弹卡、
+# 没人批就一直卡着（对话停在「等待模型回复」）。平台不许预先声明白名单，Muse 自己也没有权限替用户批；
+# 唯一办法是用户在卡片上选「总是允许此站点」（覆盖该域名及全部子域，之后服务的请求也不再问——实测过）。
+# 所以在用户在场的时候（配置 key、装完、换域名）由这里挨个访问一遍，把卡片一张一张弹出来让他批掉。
+site_of() { local u="${1#*://}"; u="${u%%/*}"; u="${u%%:*}"; echo "$u"; }
+# 某个 key 对应的接口站点（跟 harness/server/config.ts 的默认地址一致；.env 里写了 *_BASE_URL 就用它）
+key_site() {
+  local name="$1" val="${2:-}" env="$DATA/dimensio/.env" base=""
+  env_get() { { grep -E "^$1=" "$env" 2>/dev/null || true; } | tail -1 | cut -d= -f2-; }   # 没写这项不算错（pipefail）
+  case "$name" in
+    ANTHROPIC_API_KEY) echo api.anthropic.com ;;
+    OPENAI_API_KEY|DEEPSEEK_API_KEY) base="$(env_get OPENAI_BASE_URL)"; site_of "${base:-https://api.deepseek.com}" ;;
+    QWEN_API_KEY) base="$(env_get QWEN_BASE_URL)"; site_of "${base:-https://dashscope.aliyuncs.com}" ;;
+    ZHIPU_API_KEY) base="$(env_get ZHIPU_BASE_URL)"; site_of "${base:-https://open.bigmodel.cn}" ;;
+    KIMI_API_KEY) base="$(env_get KIMI_BASE_URL)"; site_of "${base:-https://api.kimi.com}" ;;
+    GEMINI_API_KEY) base="$(env_get GEMINI_BASE_URL)"; site_of "${base:-https://generativelanguage.googleapis.com}" ;;
+    MIMO_API_KEY) base="$(env_get MIMO_BASE_URL)"
+      if [ -n "$base" ]; then site_of "$base"
+      elif [ "${val#tp-}" != "$val" ]; then echo token-plan-cn.xiaomimimo.com
+      else echo api.xiaomimimo.com; fi ;;
+  esac
+}
+# 按现在的配置算出要放行的站点：启用的 agent、已填的 key、自定义模型服务
+configured_sites() {
+  local env="$DATA/dimensio/.env" line name val cp="$DATA/dimensio/custom-providers/providers.json"
+  case ",${AGENTS:-claude,dimensio}," in *,claude,*) echo api.anthropic.com ;; esac
+  case ",${AGENTS:-claude,dimensio}," in *,dimensio,*) echo html.duckduckgo.com ;; esac   # dimensio 的联网搜索兜底
+  if [ -f "$env" ]; then
+    while IFS= read -r line; do
+      name="${line%%=*}"; val="${line#*=}"
+      [ -n "$val" ] && [[ "$name" =~ _API_KEY$ ]] && key_site "$name" "$val"
+    done < "$env"
+  fi
+  [ -f "$cp" ] && jq -r '.providers[]?.baseUrl // empty' "$cp" 2>/dev/null | while IFS= read -r u; do site_of "$u"; done
+  return 0
+}
+# $@ = 站点或网址；不给就按配置算。每个站点经代理访问一次：已放行的立刻过，没放行的会停住等用户在 Muse 里批
+allow_sites() {
+  local wait="${ALLOW_WAIT:-180}" s r conn code sites=()
+  if [ $# -gt 0 ]; then for s in "$@"; do sites+=("$(site_of "$s")"); done
+  else mapfile -t sites < <(configured_sites); fi
+  mapfile -t sites < <(printf '%s\n' "${sites[@]}" | grep -v '^$' | awk '!seen[$0]++')
+  [ ${#sites[@]} -gt 0 ] || { echo "没有要放行的网站。"; return 0; }
+  say "放行要用到的网站（${#sites[@]} 个）：Muse 弹出「允许 Muse 与 … 分享信息？」时，请选下拉里的「总是允许此站点」"
+  for s in "${sites[@]}"; do
+    r="$(curl -s -o /dev/null -x "$PROXY" --max-time "$wait" -w '%{http_connect} %{http_code}' "https://$s/" 2>/dev/null || true)"
+    conn="${r%% *}"; code="${r##* }"
+    # 以代理对 CONNECT 的答复为准：200 = 放行了（之后网站本身回不回、证书对不对是另一回事），403 = 拒绝，没答复 = 在等审核
+    if [ "$conn" = 200 ] && [ -n "$code" ] && [ "$code" != 000 ]; then echo "  ✓ $s 已放行"
+    elif [ "$conn" = 200 ]; then echo "  ✓ $s 已放行（但网站本身没正常响应，检查一下地址对不对）"
+    elif [ "$conn" = 403 ]; then echo "  ✗ $s 被拒绝（之后用到它的功能会失败；想放行就在 Muse 设置 → 权限 → 网站里改，或重跑这条命令再批）"
+    else echo "  … $s 没等到批准（${wait} 秒）。之后第一次用到时还会弹审核；也可以稍后重跑：bash $OPS/bootstrap.sh allow-sites $s"; fi
+  done
+}
+cmd_allow_sites() { allow_sites "$@"; }
+
 cmd_set_api_key() {
   local key="${1:-}" val="${2:-}" f="$DATA/dimensio/.env"
   [[ "$key" =~ ^(ANTHROPIC|OPENAI|GEMINI|ZHIPU|KIMI|QWEN|MIMO|DEEPSEEK)_API_KEY$ ]] || die "用法：set-api-key <ANTHROPIC|OPENAI|GEMINI|ZHIPU|KIMI|QWEN|MIMO|DEEPSEEK>_API_KEY <值>（值为空 = 删掉）"
+  # dimensio 里 DeepSeek 这一家读的是 OPENAI_API_KEY（目录里 id=openai、地址 api.deepseek.com），DEEPSEEK_API_KEY 它不认
+  [ "$key" = DEEPSEEK_API_KEY ] && key=OPENAI_API_KEY
   install -d -o "$SVC_USER" -g "$SVC_USER" "$DATA/dimensio"; touch "$f"
   { grep -vE "^$key=" "$f" || true; if [ -n "$val" ]; then echo "$key=$val"; fi; } > "$f.new"
   install -m 0600 -o "$SVC_USER" -g "$SVC_USER" "$f.new" "$f"; rm -f "$f.new"
   if [ -n "$val" ]; then echo "已写入 $key（末 4 位 …${val: -4}）"; else echo "已删除 $key"; fi
   restart_bridge idle
+  [ -z "$val" ] || allow_sites "$(key_site "$key" "$val")"
 }
 
 cmd_set_domain() {
@@ -702,6 +766,7 @@ case "$sub" in
   status) cmd_status "$@" ;;
   set-claude-token) cmd_set_claude_token "$@" ;;
   set-api-key) cmd_set_api_key "$@" ;;
+  allow-sites) cmd_allow_sites "$@" ;;
   set-agents) cmd_set_agents "$@" ;;
   set-users) cmd_set_users "$@" ;;
   set-domain) cmd_set_domain "$@" ;;
@@ -712,6 +777,6 @@ case "$sub" in
   switch-now) cmd_switch_now ;;
   rollback) cmd_rollback ;;
   auto-update) cmd_auto_update "$@" ;;
-  -h|--help|help) sed -n '2,24p' "$0" ;;
+  -h|--help|help) sed -n '2,25p' "$0" ;;
   *) die "不认识的子命令：$sub（help 看用法）" ;;
 esac

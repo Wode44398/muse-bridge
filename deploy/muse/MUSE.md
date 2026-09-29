@@ -80,6 +80,7 @@ bash "$REL/bridge/deploy/muse/bootstrap.sh" install --agents claude --solo
 - 整个安装要 5–10 分钟（装 npm 依赖、构建前端）。**直接在前台跑这一条就行，不要自己加 `nohup` / `&`**：脚本会把活转到后台（你的命令工具超时也打断不了它），前台最多等 4 分半，每完成一步打印一行进度。
 - 前台等到头还没装完，会提示「还在后台跑」。这时跑一次 `bash /home/hatch/bridge-ops/bootstrap.sh wait`，它接着等、接着打印进度；还没完就再跑一次。中间不要用别的命令看进度。
 - 如果 VM 刚重启过、服务账号还没被平台写回来，脚本会按数据目录的属主自己补回来，不用管。
+- 装到最后会把要用到的网站挨个访问一遍（「放行要用到的网站」那一步），Muse 可能弹出一两张「允许 Muse 与 … 分享信息？」的审核卡片。**开始安装前就告诉用户**：看到这种卡片，点「允许一次」旁边的下拉，选「总是允许此站点」。批过的网站以后服务在后台访问也不会再问；没批的，之后第一次用到时对话会卡在「等待模型回复」。
 - 脚本可以重复跑。中途失败（网络抖动、VM 重启）就原样再跑一次，已有的数据和令牌都不会动。
 - 最后打印「MUSE-BRIDGE 结果」块。**状态**是「正常」，并且**公网健康**是 200，才算装好。**管理员令牌**那一行会一直显示，直到用户用它登录成功一次。
 
@@ -150,7 +151,9 @@ Claude 需要用户自己的 Claude 订阅（Pro 或 Max）。令牌**只能在�
 bash /home/hatch/bridge-ops/bootstrap.sh set-api-key ANTHROPIC_API_KEY <key>
 ```
 
-可用的名字：`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`DEEPSEEK_API_KEY`、`KIMI_API_KEY`（Kimi for Coding 订阅 key，`sk-kimi-` 开头）、`ZHIPU_API_KEY`、`QWEN_API_KEY`、`MIMO_API_KEY`。写完提醒他删掉聊天里含 key 的那条消息。然后让他在 dimensio 页选对应的模型发一句话试试。**第一次调用某家模型时，Muse 会弹一条「允许 Muse 与 <这家的 API 域名> 分享信息？」的审核**（dimensio 经 VM 的出站代理访问模型接口，代理按域名要用户批准）。没人批，对话就一直停在「等待模型回复」。提前告诉用户：看到这条就点下拉里的「总是允许此站点」，以后就不会再卡；用自定义模型服务时同理。
+可用的名字：`ANTHROPIC_API_KEY`（Claude）、`DEEPSEEK_API_KEY`（DeepSeek）、`GEMINI_API_KEY`、`KIMI_API_KEY`（Kimi for Coding 订阅 key，`sk-kimi-` 开头）、`ZHIPU_API_KEY`、`QWEN_API_KEY`、`MIMO_API_KEY`（`tp-` 开头的 Token Plan key 也行）。写完提醒他删掉聊天里含 key 的那条消息。
+
+**网络审核（重要）**：这台 VM 访问外部网站要用户在 Muse 里批准，卡片是「允许 Muse 与 <网站> 分享信息？」。dimensio 在后台第一次调某家模型时如果弹这张卡、而用户不在场，对话会一直停在「等待模型回复」。所以 `set-api-key` 写完 key 会马上访问一次这家的接口网站，**把卡片提前弹出来**。跑这条命令之前先告诉用户：「马上会弹一张审核卡片，请点『允许一次』旁边的下拉，选『总是允许此站点』」——这样以后这家就不会再卡。你看不到卡片，命令会停在那里等他批（最多 3 分钟）；输出里 ✓ 表示放行了。然后让他在 dimensio 页选对应的模型发一句话试试。
 
 ### 4.6 给朋友开账号（选了「多人用」才需要）
 「设置 → 连接 → 服务端控制台 → 用户」里点「＋ 普通邀请码」（只自己用模式下这一页叫「服务账号」，没有邀请码）。朋友打开同一个地址，点「注册新账号」，填上邀请码即可。新账号默认只能用 Claude；要让他用 dimensio，在「用户」页给他勾上。提醒用户：「Pro 邀请码」给的账号带命令行，只发给完全信任的人。
@@ -186,7 +189,9 @@ bash /home/hatch/bridge-ops/bootstrap.sh set-api-key ANTHROPIC_API_KEY <key>
 | 「地址是多少」「打不开了」 | `status`，把**公网地址**和**状态**告诉他 |
 | 「令牌忘了」 | 先说明旧令牌和所有已登录的管理员设备都会失效，他同意后执行 `reset-token`，把新令牌交给他 |
 | 「换 Claude 令牌」 | 首选让他自己在控制台「Claude 账号」里改；否则 `set-claude-token <令牌>` |
-| 「给 dimensio 加 / 换 / 删一家模型的 key」 | `set-api-key <名字> <key>`（key 留空 = 删掉） |
+| 「给 dimensio 加 / 换 / 删一家模型的 key」 | `set-api-key <名字> <key>`（key 留空 = 删掉；写入时会弹审核，先提醒用户选「总是允许此站点」） |
+| 「我要在 dimensio 里加一个自定义模型服务」（OpenAI 兼容地址） | 先问他接口地址，跑 `allow-sites <地址>` 并提醒他把弹出的审核选「总是允许此站点」，**然后**再让他去 dimensio 的模型服务面板点「＋」添加——否则添加时会卡在「连接中」 |
+| 「对话一直在等待模型回复」「模型没反应」 | 多半是网络审核没人批：让他看 Muse 里有没有待审核的卡片，选「总是允许此站点」；或者跑 `allow-sites`（按现在的配置把要用的网站挨个放行一遍） |
 | 「我也想用 dimensio」「不要 dimensio 了」等 | `set-agents claude` / `set-agents dimensio` / `set-agents claude,dimensio`（要重新装依赖、构建，几分钟；跟 `install` 一样自己转后台，没等完就 `wait`；完了等没人在聊时自动切换） |
 | 「让朋友也能用」「只给我自己用」 | `set-users multi` / `set-users solo` |
 | 「想要固定地址」 | 按第 5 节带他做 |
