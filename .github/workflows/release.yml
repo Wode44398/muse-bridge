@@ -1,6 +1,8 @@
 # 推 v* 标签 → 打包 muse-bridge.tgz、生成校验和与更新频道 latest.json、创建 GitHub Release。
-#   正式版（v0.2.0）：latest.json 走 releases/latest/download/，已装的 Muse 每 6 小时读一次，发现新版本就问用户。
-#   预发布（标签里带 -，如 v0.2.0-beta.1）：不进 latest，用 Release 里附的 muse-prompt.txt（开场提示词）在新 Muse 上试装。
+#   正式版和 beta（v0.2.0、v0.2.0-beta.1）：标成 latest，latest.json 走 releases/latest/download/，
+#     已装的 Muse 每 6 小时读一次，发现新版本就问用户。（GitHub 的 latest 不认预发布——beta 要是标成预发布，
+#     更新频道和 README 里的安装地址就全是 404。）
+#   试装版（标签里带 -test，如 v0.2.0-test.1）：发成预发布，不进 latest，用 Release 里附的 muse-prompt.txt 在新 Muse 上试装。
 # 更新内容取带说明的标签（git tag -a v0.2.0 -m "…"）的说明；轻量标签就用最后一次提交的标题。
 name: release
 
@@ -56,6 +58,6 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          pre=""; case "$TAG" in *-*) pre="--prerelease" ;; esac
+          pre="--latest"; case "$TAG" in *-test*) pre="--prerelease --latest=false" ;; esac
           gh release create "$TAG" dist/muse-bridge.tgz dist/muse-bridge.tgz.sha256 dist/latest.json dist/muse-prompt.txt \
             --title "$TAG" --notes-file dist/notes.md $pre

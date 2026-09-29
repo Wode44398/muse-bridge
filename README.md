@@ -78,7 +78,7 @@ git tag -a v0.2.0 -m "这次更新了什么（给用户看的一两句）"
 git push origin v0.2.0
 ```
 
-GitHub Actions（`.github/workflows/release.yml`）会打包 `muse-bridge.tgz`、生成 `.sha256` 和更新频道 `latest.json`，并创建 Release。已经装好的 Muse 每 6 小时读一次 `latest.json`，发现新版本就问用户要不要更新。标签里带 `-`（如 `v0.2.0-beta.1`）会发成预发布版，不会推送给已装的用户。
+GitHub Actions（`.github/workflows/release.yml`）会打包 `muse-bridge.tgz`、生成 `.sha256` 和更新频道 `latest.json`，并创建 Release。已经装好的 Muse 每 6 小时读一次 `latest.json`，发现新版本就问用户要不要更新。beta（如 `v0.2.0-beta.1`）同样会推送；只有标签里带 `-test`（如 `v0.2.0-test.1`）的会发成预发布版，不进更新频道，给维护者在新 Muse 上试装用。
 
 ## 协议
 
