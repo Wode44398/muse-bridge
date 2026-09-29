@@ -140,9 +140,25 @@ EOF
 }
 
 # apt：探测每个源地址，删掉经代理不通的（平台每次开机会还原 ubuntu.sources，所以每次装都要做）
+# apt 锁被占（开机时平台自己在跑 apt-get update）就排队等：隔 10 秒重试，最多 10 分钟。
+# 光靠 DPkg::Lock::Timeout 不行——它管不到 update 用的 lists/lock（实测照样秒失败）
+apt_wait() {
+  local out rc i
+  for i in $(seq 1 60); do
+    rc=0; out="$(apt-get "$@" 2>&1)" || rc=$?
+    printf '%s\n' "$out"
+    [ $rc -eq 0 ] && return 0
+    printf '%s' "$out" | grep -q 'Could not get lock\|Unable to lock\|Unable to acquire the dpkg frontend lock' || return $rc
+    [ "$i" = 1 ] && say "apt 正被别的进程占着（多半是开机时平台自己在更新），排队等它"
+    sleep 10
+  done
+  return $rc
+}
+
 fix_apt_sources() {
   install -d /etc/apt/apt.conf.d
-  printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "2";\n' > /etc/apt/apt.conf.d/80bridge-muse
+  # DPkg::Lock::Timeout：install 阶段 dpkg 锁被占时排队等（最多 10 分钟）；update 的 lists/lock 它管不到，交给 apt_wait
+  printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "2";\nDPkg::Lock::Timeout "600";\n' > /etc/apt/apt.conf.d/80bridge-muse
   local f line u alive dead
   for f in /etc/apt/sources.list.d/*.sources; do
     [ -f "$f" ] || continue
@@ -429,7 +445,7 @@ cmd_install() {
   command -v socat >/dev/null || need+=(socat)
   command -v jq >/dev/null || need+=(jq)
   { command -v unshare >/dev/null && command -v setpriv >/dev/null; } || need+=(util-linux)
-  if [ ${#need[@]} -gt 0 ]; then apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${need[@]}"; fi
+  if [ ${#need[@]} -gt 0 ]; then apt_wait update -y && DEBIAN_FRONTEND=noninteractive apt_wait install -y --no-install-recommends "${need[@]}"; fi
   if ! command -v cloudflared >/dev/null; then
     local tmp; tmp="$(mktemp -d)"
     curl -fsSL -o "$tmp/cloudflared.deb" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture).deb"

@@ -90,10 +90,24 @@ done
 # ── 1. 系统依赖 ────────────────────────────────────────────────────────────────
 say "装系统依赖"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
+# 开机时系统自己的 apt（unattended-upgrades / 平台的 apt-get update）可能正占着锁：排队等，别直接失败。
+# （apt 自带的 DPkg::Lock::Timeout 管不到 update 用的 lists/lock，实测照样秒失败）——锁错就自己隔 10 秒重试，最多 10 分钟
+apt_wait() {
+  local out rc i
+  for i in $(seq 1 60); do
+    rc=0; out="$(apt-get "$@" 2>&1)" || rc=$?
+    printf '%s\n' "$out"
+    [ $rc -eq 0 ] && return 0
+    printf '%s' "$out" | grep -q 'Could not get lock\|Unable to lock\|Unable to acquire the dpkg frontend lock' || return $rc
+    [ "$i" = 1 ] && echo "apt 正被别的进程占着（开机时系统自己的更新），排队等它……"
+    sleep 10
+  done
+  return $rc
+}
+apt_wait update -y
 # git / ripgrep：Claude Code 自己要用；python3 make g++：node-pty 现场编译；ffmpeg：视频缩略图与转码；
 # 7z / bsdtar / unzip：解压；fonts-noto-cjk：中文文档预览不出豆腐块；jq：部署脚本改配置
-apt-get install -y --no-install-recommends \
+apt_wait install -y --no-install-recommends \
   ca-certificates curl gnupg git ripgrep python3 make g++ jq \
   ffmpeg p7zip-full libarchive-tools unzip fonts-noto-cjk fonts-noto-color-emoji
 
@@ -101,7 +115,7 @@ node_major() { command -v node >/dev/null && node -p 'process.versions.node.spli
 if [ "$(node_major)" -lt 24 ]; then
   say "装 Node 24（NodeSource）"
   curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
-  apt-get install -y nodejs
+  apt_wait install -y nodejs
 fi
 [ "$(node_major)" -ge 24 ] || die "Node 24 没装上（现在是 $(node -v 2>/dev/null || echo 无)）"
 NODE_BIN="$(command -v node)"
