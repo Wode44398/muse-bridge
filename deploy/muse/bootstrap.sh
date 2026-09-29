@@ -534,6 +534,9 @@ cmd_wait() {
   rm -f "$INSTALL_PID"
   if [ "$rc" = 0 ]; then
     HOOK_NOTE="$(cat "$OPS/last-hook-note" 2>/dev/null || true)"
+    # 第一次安装时本进程启动那会儿 muse.env 还不存在：后台装完后重读一遍用户的选择，结果块才不会按默认值乱报
+    AGENTS="$(prev AGENTS)"; USERS_MODE="$(prev USERS_MODE)"
+    TUNNEL_MODE="$(prev TUNNEL_MODE)"; TUNNEL_MODE="${TUNNEL_MODE:-quick}"; PUBLIC_HOSTNAME="$(prev PUBLIC_HOSTNAME)"
     result_block ""
   else
     echo "安装失败（退出码 $rc）。日志最后 40 行："
