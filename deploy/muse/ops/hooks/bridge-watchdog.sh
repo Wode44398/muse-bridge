@@ -92,7 +92,8 @@ STAMP="$OPS/update-check.stamp"
 if [ -n "${CHANNEL:-}" ] && [ ! -f "$PS" ] && [ "$DRY" != 1 ] && ! busy && \
    { [ ! -f "$STAMP" ] || [ $(( $(date +%s) - $(stat -c %Y "$STAMP") )) -gt 21600 ]; }; then
   touch "$STAMP"
-  if m="$(curl -fsS --max-time 20 "$CHANNEL" 2>/dev/null)" && latest="$(jq -r '.commit // empty' <<<"$m")" && [ -n "$latest" ]; then
+  # -L 必须有：GitHub 的 releases/latest/download/… 先 302 到具体标签，不跟跳就只拿到空 body，永远「没有新版本」
+  if m="$(curl -fsSL --max-time 20 "$CHANNEL" 2>/dev/null)" && latest="$(jq -r '.commit // empty' <<<"$m")" && [ -n "$latest" ]; then
     installed="$(head -1 "$RELS/current/deploy/muse/VERSION" 2>/dev/null | cut -d' ' -f1)"
     if [ "$latest" != "$installed" ] && [ "$latest" != "$(cat "$OPS/update-notified" 2>/dev/null)" ]; then
       echo "$latest" > "$OPS/update-notified"
@@ -110,6 +111,9 @@ if [ -n "${CHANNEL:-}" ] && [ ! -f "$PS" ] && [ "$DRY" != 1 ] && ! busy && \
         exit 0
       fi
     fi
+  else
+    # 没读到（代理刚起来、GitHub 抽风）：半小时后再试，别白等 6 小时
+    touch -d "@$(( $(date +%s) - 21600 + 1800 ))" "$STAMP"
   fi
 fi
 
