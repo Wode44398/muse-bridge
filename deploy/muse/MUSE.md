@@ -131,6 +131,7 @@ bash "$REL/bridge/deploy/muse/bootstrap.sh" install --agents claude --solo
 - **Claude Code 页**：中间是对话；左侧栏是项目和历史对话；右侧可以唤出「工作台」：终端、文件、任务、改动审阅。
 - **dimensio 页**：同样是对话 + 侧栏；右上角能选用哪家模型。
 - 两个都装了时，页面里的「主页」回到入口页。
+- 界面默认中文；「设置 → 通用 → 语言」可以切成 English。
 - 「设置」（点左下角的账户卡）里有：通用、账户、Agent（各 agent 的开关与状态）、连接（服务器地址、**服务端控制台**入口：管用户、看运行状态、配 Claude 账号）、关于；下面的「自定义」是给 agent 装技能 / 连接器 / 插件的地方。
 
 ### 4.4 配 Claude（装了 Claude Code 才需要）
@@ -195,7 +196,7 @@ bash /home/hatch/bridge-ops/bootstrap.sh set-api-key ANTHROPIC_API_KEY <key>
 | 「现在就切到新版本」（新版本已装好，在等空闲） | 先说明会打断正在进行的对话（记录不会丢），他同意后执行 `switch-now` |
 | 「退回旧版本」「更新后有问题」 | `rollback`（立即重启到上一个版本） |
 | 「开 / 关自动更新」 | `auto-update on` / `auto-update off` |
-| 看门狗唤醒你 | 照 hook 提示里对应 kind 的说明办 |
+| 看门狗唤醒你 | 照 hook 提示里对应 kind 的说明办。排查故障时只用本机命令（`status --local`、`journalctl`），别去访问公网地址：那要用户批准网络权限，没人在场会超时 |
 | 「卸载」 | 先确认。然后 `systemctl disable --now bridge cf-relay-api cf-relay-edge muse-tunnel`，删掉 `bridge-watchdog` hook，再删 `/home/hatch/bridge-ops`、`/home/hatch/bridge-releases`；`/home/hatch/bridge-srv` 是用户的数据，问过他再删 |
 
 ### 更新是怎么进行的（给你自己看的）

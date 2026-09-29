@@ -8,7 +8,7 @@
 #   只打印进度，完了打印结果块；没等完就运行：
 #   wait                            接着等正在跑的安装 / 更新，结束时打印结果块
 # 日常：
-#   status                          公网地址、版本、各服务与健康状态
+#   status [--local]                公网地址、版本、各服务与健康状态（--local 不访问公网地址）
 #   set-claude-token T              写入 Claude 订阅令牌（claude setup-token 生成）并重启 bridge
 #   set-api-key 变量名 值            给 dimensio 填一家模型厂商的 key（如 ANTHROPIC_API_KEY sk-…）
 #   set-agents LIST                 改启用的 agent（claude / dimensio / claude,dimensio）
@@ -83,7 +83,10 @@ public_url() {
     | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | grep -v '^https://api\.' | tail -1 || true
 }
 local_code() { http_code --noproxy '*' --max-time 5 "http://127.0.0.1:$PORT/healthz"; }
-public_code() { local u; u="$(public_url)"; if [ -n "$u" ]; then http_code --max-time 20 "$u/healthz"; else echo 000; fi; }
+# LOCAL_ONLY=1（status --local）：不经代理访问公网地址。Muse 的 worker 经代理访问网站要用户批准网络权限，
+# 夜里没人批就超时——看门狗唤醒来排查时只用本机检查，公网结果看门狗事件里已经带了
+LOCAL_ONLY=0
+public_code() { local u; [ "$LOCAL_ONLY" = 1 ] && { echo "未查（--local）"; return; }; u="$(public_url)"; if [ -n "$u" ]; then http_code --max-time 20 "$u/healthz"; else echo 000; fi; }
 version_of() { head -1 "$1/deploy/muse/VERSION" 2>/dev/null || echo unknown; }
 svc_states() { local s o=""; for s in $SERVICES; do o+="$s=$(systemctl is-active "$s.service" 2>/dev/null || true) "; done; echo "${o% }"; }
 # bridge 进程此刻实际跑在哪个目录（链接改了但还没重启时，跟 current 不一样）。
@@ -115,7 +118,7 @@ result_block() {
   [ -n "$token" ] || token="$(cat "$TOKEN_PENDING" 2>/dev/null || true)"
   url="$(public_url)"; lc="$(local_code)"; pc="$(public_code)"; served="$(served_agents)"
   run="$(running_dir)"; cur="$(readlink -f "$RELS/current" 2>/dev/null || true)"
-  st="正常"; { [ "$lc" = 200 ] && [ "$pc" = 200 ]; } || st="有问题（看下面各项，对照 MUSE.md「故障排查」）"
+  st="正常"; { [ "$lc" = 200 ] && { [ "$pc" = 200 ] || [ "$LOCAL_ONLY" = 1 ]; }; } || st="有问题（看下面各项，对照 MUSE.md「故障排查」）"
   cat <<EOF
 
 ==================== MUSE-BRIDGE 结果 ====================
@@ -495,7 +498,7 @@ cmd_install() {
   say "完成"
 }
 
-cmd_status() { result_block ""; }
+cmd_status() { [ "${1:-}" = --local ] && LOCAL_ONLY=1; result_block ""; }
 
 # 等后台的安装 / 更新结束：只打印进度（每一步一行），最多等 $1 秒（默认 270），结束时打印结果块
 cmd_wait() {
@@ -696,7 +699,7 @@ sub="${1:-install}"; [ $# -gt 0 ] && shift
 case "$sub" in
   install) cmd_install "$@" ;;
   wait) cmd_wait "$@" ;;
-  status) cmd_status ;;
+  status) cmd_status "$@" ;;
   set-claude-token) cmd_set_claude_token "$@" ;;
   set-api-key) cmd_set_api_key "$@" ;;
   set-agents) cmd_set_agents "$@" ;;
