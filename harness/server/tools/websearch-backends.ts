@@ -128,10 +128,13 @@ export const zhipuBackend: SearchBackend = {
     }
     if (!res.ok) {
       const raw = await res.text().catch(() => "");
+      // 1113 = 余额不足 / 没有资源包：HTTP 也是 429，但重试不会好，直接换下一家并提醒一句
+      const broke = /"code"\s*:\s*"?1113/.test(raw);
       return {
         ok: false,
-        retryable: res.status === 429 || res.status >= 500,
+        retryable: !broke && (res.status === 429 || res.status >= 500),
         error: `HTTP ${res.status}: ${raw.slice(0, 200).replace(/\s+/g, " ")}`,
+        hint: broke ? "智谱搜索没用上：这把智谱 key 余额不足或没有资源包（充值后就会恢复）" : undefined,
       };
     }
     let data: any;

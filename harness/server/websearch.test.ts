@@ -324,6 +324,20 @@ test("按会话在用的那家排第一，不看全局配置：全局是智谱�
   }
 });
 
+test("智谱余额不足（HTTP 429 + code 1113）不原地重试，直接换下一家并提醒", async () => {
+  const stub = stubFetch((backend) =>
+    backend === "zhipu" ? json(429, { error: { code: "1113", message: "余额不足或无可用资源包,请充值。" } }) : geminiOk("G 答"),
+  );
+  try {
+    const r = await webSearchTool.run({ query: uniq("1113") }, ctx());
+    assert.equal(r.ok, true);
+    assert.deepEqual(stub.calls.filter((c) => c === "zhipu").length, 1, "余额不足只打一次");
+    assert.match((r.content[0] as any).text as string, /余额不足/);
+  } finally {
+    stub.restore();
+  }
+});
+
 test("DeepSeek：走 Anthropic 兼容接口的 web_search，来源与最后一段正文都取到", async () => {
   await withProvider("openai", "ds-test-key", async () => {
     const stub = stubFetch(() =>
