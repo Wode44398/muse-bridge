@@ -17,6 +17,7 @@
   import { pushBackLayer } from '../lib/nav.js';
   import { clampX } from '../lib/clampx.js';
   import { IS_CSNAP } from '../lib/csnap.js';
+  import { t as tt } from '../lib/i18n.js';   // 本文件动画代码里 t 是插值进度变量，翻译函数取别名
   let { onClose, dir = 'up' } = $props();
 
   $effect(() => pushBackLayer(() => { onClose?.(); }));
@@ -451,7 +452,7 @@ void main() {
     : 'Higher effort means more thorough responses, but takes longer and uses your limits faster.');
 </script>
 
-<button class="ef-backdrop" aria-label="关闭" onclick={() => onClose?.()}></button>
+<button class="ef-backdrop" aria-label={tt('关闭')} onclick={() => onClose?.()}></button>
 <!-- svelte-ignore a11y_interactive_supports_focus -->
 <div class="ef" class:down={dir === 'down'} role="dialog" aria-label="Effort" onkeydown={onKeyEsc} use:clampX>
   <div class="ef-head">

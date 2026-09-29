@@ -10,6 +10,7 @@
   import TextField from "../ui/TextField.svelte";
   import Button from "../ui/Button.svelte";
   import Mark from "../brand/Mark.svelte";
+  import { t, tr } from "../../lib/i18n.ts";
 
   let url = $state("");
   let token = $state("");
@@ -28,7 +29,7 @@
     if (testing) return;
     const u = url.trim().replace(/\/+$/, "");
     if (!/^https?:\/\/.+/.test(u)) {
-      error = "填完整地址，如 http://192.168.1.10:8799 或 bridge 隧道 https://…";
+      error = t("填完整地址，如 http://192.168.1.10:8799 或 bridge 隧道 https://…");
       return;
     }
     testing = true;
@@ -40,7 +41,7 @@
         // bridge 通道
         const r = await probe(`${u}/api/harness/api/info`, { Authorization: `Bearer ${tok}` });
         if (!r.ok) {
-          error = r.status === 401 ? "令牌不对（bridge 401）" : r.status === 403 ? "该账号无 harness 权限" : `bridge 连不通（${r.status}）`;
+          error = r.status === 401 ? t("令牌不对（bridge 401）") : r.status === 403 ? t("该账号无 harness 权限") : t("bridge 连不通（{status}）", { status: r.status });
           testing = false;
           return;
         }
@@ -51,8 +52,8 @@
         const r = await probe(`${u}/api/info`);
         if (!r.ok) {
           // 也许填的是 bridge 地址但没给令牌
-          if (r.status === 401) error = "这像是 bridge 地址——请在下面填访问令牌";
-          else error = `连不上（${r.status === 0 ? "网络不通" : "HTTP " + r.status}）`;
+          if (r.status === 401) error = t("这像是 bridge 地址——请在下面填访问令牌");
+          else error = r.status === 0 ? t("连不上（网络不通）") : t("连不上（HTTP {status}）", { status: r.status });
           testing = false;
           return;
         }
@@ -63,7 +64,7 @@
       haptic("medium");
       await boot();
     } catch (e: any) {
-      error = `连不上：${e?.name === "TimeoutError" ? "超时" : (e?.message ?? e)}`;
+      error = e?.name === "TimeoutError" ? t("连不上：超时") : t("连不上：{reason}", { reason: tr(String(e?.message ?? e)) });
     }
     testing = false;
   }
@@ -71,10 +72,10 @@
   const enterKey = (e: KeyboardEvent) => e.key === "Enter" && !e.isComposing && e.keyCode !== 229;
 </script>
 
-<div class="gate" role="dialog" aria-modal="true" aria-label="连接 dimensio" out:fade|global={{ duration: 220 }}>
+<div class="gate" role="dialog" aria-modal="true" aria-label={t("连接 dimensio")} out:fade|global={{ duration: 220 }}>
   <div class="col">
     <div class="mark"><Mark size={76} intro /></div>
-    <h1 in:rise|global={{ y: 10, delay: 380 }}>连接 dimensio</h1>
+    <h1 in:rise|global={{ y: 10, delay: 380 }}>{t("连接 dimensio")}</h1>
 
     <div class="fields" in:rise|global={{ y: 10, delay: 480 }}>
       <TextField
@@ -82,8 +83,8 @@
         type="url"
         mono
         bind:value={url}
-        label="服务器地址"
-        placeholder="http://192.168.1.10:8799 或 bridge 地址"
+        label={t("服务器地址")}
+        placeholder={t("http://192.168.1.10:8799 或 bridge 地址")}
         enterkeyhint="next"
         onkeydown={(e) => {
           if (!enterKey(e)) return;
@@ -97,8 +98,8 @@
         mono
         bind:value={token}
         bind:el={tokenEl}
-        label="访问令牌"
-        placeholder="访问令牌（走 bridge 时填）"
+        label={t("访问令牌")}
+        placeholder={t("访问令牌（走 bridge 时填）")}
         enterkeyhint="go"
         onkeydown={(e) => {
           if (!enterKey(e)) return;
@@ -113,9 +114,9 @@
     {/if}
 
     <div class="go" in:rise|global={{ y: 10, delay: 560 }}>
-      <Button variant="primary" size="lg" full loading={testing} onclick={connect}>{testing ? "连接中…" : "连接"}</Button>
+      <Button variant="primary" size="lg" full loading={testing} onclick={connect}>{testing ? t("连接中…") : t("连接")}</Button>
     </div>
-    <p class="tip" in:rise|global={{ y: 10, delay: 620 }}>直连填电脑地址；走 bridge（出门可用）填隧道地址 + 令牌，在家会自动切局域网。</p>
+    <p class="tip" in:rise|global={{ y: 10, delay: 620 }}>{t("直连填电脑地址；走 bridge（出门可用）填隧道地址 + 令牌，在家会自动切局域网。")}</p>
   </div>
 </div>
 

@@ -19,6 +19,7 @@
     type PhaseView,
   } from "../../lib/tasks.ts";
   import { collapse } from "../../lib/motion.ts";
+  import { t, tc, tr } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
   import AgentDots from "../feed/AgentDots.svelte";
   import TaskLine from "./TaskLine.svelte";
@@ -82,7 +83,7 @@
 
 <TaskLine
   {glyph}
-  glyphLabel={stalled ? "久无动静" : STATUS_LABEL[status]}
+  glyphLabel={stalled ? t("久无动静") : STATUS_LABEL[status]}
   {title}
   {running}
   time={timeText}
@@ -91,11 +92,11 @@
   onclick={toggle}
 >
   {#snippet meta()}
-    <span>工作流</span>
+    <span>{t("工作流")}</span>
     {#if !running}<span class:bad={status === "failed"}>{STATUS_LABEL[status]}</span>{/if}
-    {#if agentCount}<span><b>{agentCount}</b> 个 agent</span>{/if}
+    {#if agentCount}<span><b>{agentCount}</b> {t("个 agent", { n: agentCount })}</span>{/if}
     {#if tokens}<span><b>{fmtTokens(tokens)}</b> tok</span>{/if}
-    {#if wf?.cached}<span>{wf.cached} 个来自日志</span>{/if}
+    {#if wf?.cached}<span>{t("{n} 个来自日志", { n: wf.cached })}</span>{/if}
   {/snippet}
   {#snippet below()}
     {#if view && view.phases.length > 1}
@@ -106,7 +107,7 @@
             class:done={p.status === "done"}
             class:run={p.status === "running"}
             class:bad={p.status === "error"}
-            title="{p.title || '未分组'} {p.counts.done}/{p.counts.total}"
+            title="{p.title || t('未分组')} {p.counts.done}/{p.counts.total}"
           ></span>
         {/each}
       </span>
@@ -117,14 +118,14 @@
       {#if wf?.description && wf.description !== title}<p class="desc">{wf.description}</p>{/if}
       {#if reason}
         <div class="reason" class:bad={status === "failed"}>
-          <span class="rh">{status === "failed" ? "错误" : "已停止"}</span>
-          <span class="rb">{reason}</span>
+          <span class="rh">{status === "failed" ? t("错误") : t("已停止")}</span>
+          <span class="rb">{tr(reason)}</span>
         </div>
       {/if}
 
       {#if view && view.phases.length}
         <div class="phases">
-          <span class="cap">阶段</span>
+          <span class="cap">{tc("dimensio", "阶段")}</span>
           <ul>
             {#each view.phases as p (p.index)}
               {@const po = isOpen(p)}
@@ -138,7 +139,7 @@
                       class:hx-shimmer={running && p.status === "running" && !p.counts.stalled}
                       class:warn={running && p.counts.stalled > 0}
                       class:bad={p.status === "error"}
-                      class:dim={!running || p.status === "pending"}>{p.title || "未分组"}</span
+                      class:dim={!running || p.status === "pending"}>{p.title || t("未分组")}</span
                     >
                     {#if p.counts.total}<span class="ph-n">{p.counts.done}/{p.counts.total}</span>{/if}
                     <span class="chev" class:down={po}><Icon name="chevronR" size={12} stroke={1.9} /></span>
@@ -158,21 +159,21 @@
                 {#if po}
                   <div class="ph-more" in:collapse out:collapse>
                     {#if !p.agents.length}
-                      <p class="ag-empty">{running ? "这个阶段还没有 agent 启动" : "这个阶段没有运行 agent"}</p>
+                      <p class="ag-empty">{running ? t("这个阶段还没有 agent 启动") : t("这个阶段没有运行 agent")}</p>
                     {:else}
-                      <div class="grid" role="table" aria-label={p.title || "未分组"}>
+                      <div class="grid" role="table" aria-label={p.title || t("未分组")}>
                         <div class="gr head" role="row">
                           <span role="columnheader">Agent</span>
-                          <span role="columnheader">模型</span>
+                          <span role="columnheader">{t("模型")}</span>
                           <span role="columnheader" class="r">Tokens</span>
-                          <span role="columnheader" class="r">时长</span>
+                          <span role="columnheader" class="r">{t("时长")}</span>
                         </div>
                         {#each p.agents as a (a.id)}
                           {@const st = agentDotState(a, dotOpts)}
                           {@const dim = st === "done" || !running}
                           <div class="gr" role="row">
                             <span role="cell" class="c-name">
-                              <button class="ag" class:dim onclick={() => onAgent?.(a as AgentRun)} title="查看转录：{a.label}">
+                              <button class="ag" class:dim onclick={() => onAgent?.(a as AgentRun)} title={t("查看转录：{name}", { name: a.label })}>
                                 <span
                                   class="sq"
                                   class:done={st === "done"}
@@ -185,10 +186,10 @@
                               </button>
                             </span>
                             {#if st === "error"}
-                              <span role="cell" class="c-err" title={a.error ?? ""}>{a.error ? "失败" : "未完成"}</span>
+                              <span role="cell" class="c-err" title={tr(a.error ?? "")}>{a.error ? t("失败") : t("未完成")}</span>
                             {:else}
                               <span role="cell" class="c" class:dim title={(a as AgentRun).model}
-                                >{modelShort((a as AgentRun).model) || ((a as AgentRun).cached ? "日志" : "—")}</span
+                                >{modelShort((a as AgentRun).model) || ((a as AgentRun).cached ? tc("dimensio", "日志") : "—")}</span
                               >
                               <span role="cell" class="c r num" class:dim>{fmtTokens(a.tokens)}</span>
                               <span role="cell" class="c r num" class:dim>{agentTime(a as AgentRun)}</span>
@@ -204,14 +205,14 @@
           </ul>
         </div>
       {:else if running}
-        <p class="ag-empty">{wf ? "等待 agent 启动" : "等待确认，工作流尚未启动"}</p>
+        <p class="ag-empty">{wf ? t("等待 agent 启动") : t("等待确认，工作流尚未启动")}</p>
       {/if}
 
       {#if wf && wf.logs.length}
         <div class="logs">
           <button class="tog" aria-expanded={showLogs} onclick={() => (showLogs = !showLogs)}>
             <span class="chev" class:down={showLogs}><Icon name="chevronR" size={12} stroke={1.9} /></span>
-            <span>日志 · {wf.logs.length}</span>
+            <span>{t("日志 · {n}", { n: wf.logs.length })}</span>
           </button>
           {#if showLogs}
             <div in:collapse out:collapse>
@@ -229,7 +230,7 @@
         <div class="result">
           <button class="tog" aria-expanded={showResult} onclick={() => (showResult = !showResult)}>
             <span class="chev" class:down={showResult}><Icon name="chevronR" size={12} stroke={1.9} /></span>
-            <span>结果</span>
+            <span>{t("结果")}</span>
           </button>
           {#if showResult}
             <div in:collapse out:collapse><div class="rpad"><pre>{resultText}</pre></div></div>

@@ -11,6 +11,7 @@
   import MenuSep from "../ui/MenuSep.svelte";
   import Popover from "../ui/Popover.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tc, tr } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -20,20 +21,20 @@
   let open = $state(false);
 
   const KIND: Record<string, string> = {
-    memory: "记忆",
-    profile: "项目概况",
-    command: "命令",
-    module: "模块",
-    test: "测试",
-    route: "路由",
-    config: "配置",
-    data: "数据",
+    memory: t("记忆"),
+    profile: t("项目概况"),
+    command: t("命令"),
+    module: t("模块"),
+    test: t("测试"),
+    route: tc("dimensio", "路由"),
+    config: t("配置"),
+    data: t("数据"),
     ci: "CI",
-    deploy: "部署",
-    guide: "指南",
-    verification: "验证记录",
+    deploy: t("部署"),
+    guide: t("指南"),
+    verification: t("验证记录"),
   };
-  const kindLabel = (k: string) => KIND[k] ?? "项目知识";
+  const kindLabel = (k: string) => KIND[k] ?? t("项目知识");
   const memoryWs = $derived(pane.chat.cfg?.workspace ?? app.config?.workspace ?? "");
   // 只有真有记忆条目时才给「打开项目记忆」（项目概况、模块、路由这些是项目知识，不在记忆面板里）
   const canOpenMemory = $derived(Boolean(app.compat?.caps?.includes("memory")) && Boolean(memoryWs) && items.some((r) => r.kind === "memory"));
@@ -56,27 +57,27 @@
   class="recall"
   class:open
   aria-expanded={open}
-  aria-label="这一轮自动召回了 {items.length} 条记忆与项目知识"
+  aria-label={t("这一轮自动召回了 {n} 条记忆与项目知识", { n: items.length })}
   onclick={toggle}
 >
   <Icon name="memory" size={12} />
-  <span>召回 {items.length} 条</span>
+  <span>{t("召回 {n} 条", { n: items.length })}</span>
 </button>
 
 {#if open}
-  <Popover anchor={btn} onclose={() => (open = false)} prefer="down" align="end" role="dialog" label="这一轮的自动召回" minWidth={240} maxWidth={340}>
-    <MenuLabel text="开跑时自动找来给模型参考的" aside="只露标题" />
+  <Popover anchor={btn} onclose={() => (open = false)} prefer="down" align="end" role="dialog" label={t("这一轮的自动召回")} minWidth={240} maxWidth={340}>
+    <MenuLabel text={t("开跑时自动找来给模型参考的")} aside={t("只露标题")} />
     <ul class="rl">
       {#each items as r (r.id)}
         <li class="ri">
           <span class="rt">{r.title}</span>
-          <span class="rm">{kindLabel(r.kind)}{r.why ? ` · ${r.why}` : ""}</span>
+          <span class="rm">{kindLabel(r.kind)}{r.why ? ` · ${tr(r.why)}` : ""}</span>
         </li>
       {/each}
     </ul>
     {#if canOpenMemory}
       <MenuSep />
-      <MenuItem icon="memory" label="打开项目记忆" onclick={openMemory} />
+      <MenuItem icon="memory" label={t("打开项目记忆")} onclick={openMemory} />
     {/if}
   </Popover>
 {/if}

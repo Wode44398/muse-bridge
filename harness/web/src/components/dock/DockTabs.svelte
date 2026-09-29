@@ -11,6 +11,7 @@
   import { press } from "../../lib/motion.ts";
   import { IND_HIDDEN, slideTarget, slideTo, type Ind } from "../../lib/slide.ts";
   import { pressHold } from "../../lib/press-hold.ts";
+  import { t } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
 
   interface Tool {
@@ -31,7 +32,7 @@
     value: DockTool;
     live: Partial<Record<DockTool, boolean>>;
     idBase: string;
-    onpick: (t: DockTool) => void;
+    onpick: (k: DockTool) => void;
   } = $props();
 
   let list: HTMLDivElement | undefined = $state();
@@ -97,27 +98,27 @@
   }
 </script>
 
-<div class="tabs" bind:this={list} role="tablist" aria-label="工作区工具" tabindex="-1" onkeydown={onKey}>
+<div class="tabs" bind:this={list} role="tablist" aria-label={t("工作区工具")} tabindex="-1" onkeydown={onKey}>
   <span class="ind" class:shown={ind.shown} class:animate={ind.animate} style="transform:translateX({ind.x}px);width:{ind.w}px" aria-hidden="true"></span>
-  {#each tools as t (t.key)}
+  {#each tools as tool (tool.key)}
     <button
       class="tab"
-      class:on={t.key === target}
+      class:on={tool.key === target}
       role="tab"
-      id="{idBase}-tab-{t.key}"
-      aria-selected={t.key === value}
+      id="{idBase}-tab-{tool.key}"
+      aria-selected={tool.key === value}
       aria-controls="{idBase}-panel"
-      tabindex={t.key === value ? 0 : -1}
-      data-k={t.key}
-      title={t.kbd ? `${t.label}（${t.kbd}）` : t.label}
+      tabindex={tool.key === value ? 0 : -1}
+      data-k={tool.key}
+      title={tool.kbd ? t("{label}（{kbd}）", { label: tool.label, kbd: tool.kbd }) : tool.label}
       use:press={{ scale: 0.95 }}
-      onpointerdown={() => hold.down(t.key)}
+      onpointerdown={() => hold.down(tool.key)}
       onpointerleave={hold.leave}
-      onclick={() => pick(t.key)}
+      onclick={() => pick(tool.key)}
     >
-      <span class="ic"><Icon name={t.icon} size={15} stroke={1.7} /></span>
-      <span class="lbl">{t.label}</span>
-      {#if live[t.key]}<span class="dot" aria-hidden="true"></span>{/if}
+      <span class="ic"><Icon name={tool.icon} size={15} stroke={1.7} /></span>
+      <span class="lbl">{tool.label}</span>
+      {#if live[tool.key]}<span class="dot" aria-hidden="true"></span>{/if}
     </button>
   {/each}
 </div>
@@ -216,6 +217,19 @@
       padding: 0 11px;
     }
     .dot {
+      top: 4px;
+      right: 3px;
+    }
+  }
+  /* 英文标签（Terminal / Browser…）长一截：放不下图标的门槛相应抬高 */
+  @container (max-width: 470px) {
+    .ic:lang(en) {
+      display: none;
+    }
+    .tab:lang(en) {
+      padding: 0 11px;
+    }
+    .dot:lang(en) {
       top: 4px;
       right: 3px;
     }

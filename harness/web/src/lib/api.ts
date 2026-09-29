@@ -290,12 +290,14 @@ async function j<T = any>(path: string, init?: HFetchInit): Promise<T> {
   const res = await hfetch(path, init);
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
+    let body: any;
     try {
-      const body = await res.json();
+      body = await res.json();
       if (body?.error) msg = body.error;
     } catch { /* keep status */ }
-    const err = new Error(msg) as Error & { status?: number };
+    const err = new Error(msg) as Error & { status?: number; body?: any };
     err.status = res.status;
+    err.body = body; // 结构化的错误细节（例如自定义服务的 needsModel）
     throw err;
   }
   return res.json();
@@ -311,6 +313,19 @@ const POST = (body?: unknown): RequestInit => ({
 export const getInfo = () => j("/api/info");
 export const getConfig = () => j("/api/config");
 export const patchConfig = (patch: Record<string, unknown>) => j("/api/config", POST(patch));
+
+// ── 自定义模型服务（「模型服务」面板的「＋」卡；能力位 custom-providers）─────────────
+export interface CustomProviderForm {
+  name: string;
+  baseUrl: string;
+  apiKey?: string; // 编辑时留空 = 保持不变
+  model?: string; // 接口列不出模型时手填
+}
+export type CustomProviderSaved = { ok: true; id: string; models: number; warning?: string };
+export const addCustomProvider = (form: CustomProviderForm) => j<CustomProviderSaved>("/api/custom-providers", POST(form));
+export const updateCustomProvider = (id: string, form: CustomProviderForm) =>
+  j<CustomProviderSaved>(`/api/custom-providers/${encodeURIComponent(id)}`, POST(form));
+export const deleteCustomProvider = (id: string) => j<{ ok: true; config: any }>(`/api/custom-providers/${encodeURIComponent(id)}/delete`, POST());
 
 // ── 会话 ──────────────────────────────────────────────────────────────────────
 export const listSessions = () => j<any[]>("/api/sessions");

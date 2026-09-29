@@ -6,6 +6,7 @@
   import { cacheColdMinutes, compactNow, handoffWithSummary, hygieneAvailable, usageLedgerAvailable } from "../../lib/state.svelte.ts";
   import { sessionUsage, type UsageRow } from "../../lib/api.ts";
   import { haptic } from "../../lib/touch.ts";
+  import { t, tc } from "../../lib/i18n.ts";
   import Popover from "../ui/Popover.svelte";
   import Measure from "../ui/Measure.svelte";
   import Button from "../ui/Button.svelte";
@@ -27,8 +28,8 @@
   // 缓存冷没冷：30 秒对一次钟
   let now = $state(Date.now());
   $effect(() => {
-    const t = setInterval(() => (now = Date.now()), 30_000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => (now = Date.now()), 30_000);
+    return () => clearInterval(timer);
   });
   const cold = $derived(cacheColdMinutes(now, pane.chat));
 
@@ -50,7 +51,8 @@
       live = false;
     };
   });
-  const TASK: Record<UsageRow["task"], string> = { main: "主对话", subagent: "子 agent", workflow: "工作流", compaction: "压缩" };
+  // 用量表「任务」列：压缩在这里是名词（一次压缩花的量），英文走名词语境（Compaction），别和按钮上的动词 Compact 撞
+  const TASK: Record<UsageRow["task"], string> = { main: t("主对话"), subagent: t("子 agent"), workflow: t("工作流"), compaction: tc("名词", "压缩") };
   const total = $derived((rows ?? []).reduce((a, r) => ({ input: a.input + r.input, output: a.output + r.output }), { input: 0, output: 0 }));
 
   let busy = $state<"" | "compact" | "handoff">("");
@@ -67,46 +69,46 @@
   }
 </script>
 
-<Popover {anchor} {onclose} prefer="down" align="end" minWidth={minW} maxWidth={maxW} role="dialog" label="上下文">
+<Popover {anchor} {onclose} prefer="down" align="end" minWidth={minW} maxWidth={maxW} role="dialog" label={t("上下文")}>
   <div class="cx">
     <section>
-      <h4>上下文</h4>
+      <h4>{t("上下文")}</h4>
       <p class="used">
-        <span class="k">已用</span>
-        <span class="v">{k(used)} / {k(limit)}（{pct}%）</span>
+        <span class="k">{t("已用")}</span>
+        <span class="v">{t("{used} / {limit}（{pct}%）", { used: k(used), limit: k(limit), pct })}</span>
       </p>
-      <Measure value={pct / 100} tone={pct > 82 ? "warn" : cold !== null ? "ink" : "accent"} label="上下文用量" thick />
+      <Measure value={pct / 100} tone={pct > 82 ? "warn" : cold !== null ? "ink" : "accent"} label={t("上下文用量")} thick />
       {#if cold !== null}
-        <p class="cold">距上次请求 {cold} 分钟，前缀缓存大概已经冷了：下一条会按全价重读这 {k(used)} token。</p>
+        <p class="cold">{t("距上次请求 {n} 分钟，前缀缓存大概已经冷了：下一条会按全价重读这 {tokens} token。", { n: cold, tokens: k(used) })}</p>
       {/if}
       {#if hygieneAvailable()}
         <div class="acts">
           <Button size="sm" variant="secondary" full loading={busy === "compact"} disabled={!!busy || pane.chat.running} onclick={() => act("compact")}>
-            {#if busy === "compact"}<span class="hx-shimmer">正在压缩…</span>{:else}立即压缩{/if}
+            {#if busy === "compact"}<span class="hx-shimmer">{t("正在压缩…")}</span>{:else}{t("立即压缩")}{/if}
           </Button>
           <Button size="sm" variant="ghost" full loading={busy === "handoff"} disabled={!!busy || pane.chat.running} onclick={() => act("handoff")}>
-            {#if busy === "handoff"}<span class="hx-shimmer">正在写摘要…</span>{:else}带摘要开新会话{/if}
+            {#if busy === "handoff"}<span class="hx-shimmer">{t("正在写摘要…")}</span>{:else}{t("带摘要开新会话")}{/if}
           </Button>
         </div>
         <p class="hint">
           {pane.chat.running
-            ? "这一轮跑完再操作。"
-            : "压缩：较早的对话换成摘要，接着在这里聊。新会话：整段对话写成摘要带过去，原会话留着。都要调一次模型，慢的模型可能要一两分钟。"}
+            ? t("这一轮跑完再操作。")
+            : t("压缩：较早的对话换成摘要，接着在这里聊。新会话：整段对话写成摘要带过去，原会话留着。都要调一次模型，慢的模型可能要一两分钟。")}
         </p>
       {/if}
     </section>
 
     {#if rows && rows.length}
       <section class="usage">
-        <h4>用量（这个对话）</h4>
-        <div class="tbl" role="table" aria-label="用量（这个对话）">
+        <h4>{t("用量（这个对话）")}</h4>
+        <div class="tbl" role="table" aria-label={t("用量（这个对话）")}>
           <div class="tr th" role="row">
-            <span role="columnheader">任务</span>
-            <span role="columnheader">型号</span>
-            <span class="n" role="columnheader">入</span>
-            <span class="n" role="columnheader">出</span>
-            <span class="n" role="columnheader">缓存</span>
-            <span class="n" role="columnheader">次数</span>
+            <span role="columnheader">{t("任务")}</span>
+            <span role="columnheader">{t("型号")}</span>
+            <span class="n" role="columnheader">{t("入")}</span>
+            <span class="n" role="columnheader">{t("出")}</span>
+            <span class="n" role="columnheader">{tc("dimensio", "缓存")}</span>
+            <span class="n" role="columnheader">{t("次数")}</span>
           </div>
           {#each rows as r (`${r.provider}|${r.model}|${r.task}`)}
             <div class="tr" role="row">
@@ -120,7 +122,7 @@
           {/each}
           {#if rows.length > 1}
             <div class="tr total" role="row">
-              <span class="task" role="cell">合计</span>
+              <span class="task" role="cell">{t("合计")}</span>
               <span role="cell"></span>
               <span class="n" role="cell">{k(total.input)}</span>
               <span class="n" role="cell">{k(total.output)}</span>
@@ -185,6 +187,10 @@
     grid-template-columns: 1fr 1fr;
     gap: 8px;
     margin-top: 4px;
+  }
+  /* 英文「New session with summary」在半宽的按钮里放不下：英文时两个动作上下排（中文照旧左右两格） */
+  :global(html:lang(en)) .acts {
+    grid-template-columns: 1fr;
   }
   .hint {
     margin: 0;

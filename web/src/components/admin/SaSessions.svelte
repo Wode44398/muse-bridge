@@ -5,6 +5,7 @@
   import { authHeaders } from '../../lib/api.js';
   import { apiUrl } from '../../lib/server.js';
   import { sa, fmtAgo, saToast, pumpSSE } from '../../lib/serverAdmin.svelte.js';
+  import { t, tc, tr } from '../../lib/i18n.js';
 
   let user = $state('admin');
   let sessions = $state([]);
@@ -44,10 +45,12 @@
         ? await api.get('/api/session?id=' + encodeURIComponent(id))
         : await api.get('/api/admin/user/session?name=' + encodeURIComponent(user) + '&id=' + encodeURIComponent(id));
       msgs = (d?.messages || []).map((m) => ({ role: m.role === 'user' ? 'user' : 'asst', text: m.text || '' }));
-    } catch (e) { msgs = []; saToast('读取会话失败：' + (e?.message || e), true); }
+    } catch (e) { msgs = []; saToast(t('读取会话失败：{reason}', { reason: tr(e?.message || e) }), true); }
     loadingThread = false;
     scrollBottom();
   }
+  // /api/admin/user/sessions 给没标题的会话填了占位「(无标题)」：认出占位再按界面语言显示（用户自己的标题原样）
+  const titleOf = (s) => (!s.title || s.title === '(无标题)' ? t('(无标题)') : s.title); // i18n-ignore 与服务端占位比对
   function scrollBottom() { requestAnimationFrame(() => { if (threadEl) threadEl.scrollTop = threadEl.scrollHeight; }); }
 
   function send() {
@@ -72,10 +75,10 @@
         if (ev.type === 'session' && ev.sessionId) cur = ev.sessionId;
         else if (ev.type === 'text') { asst.text += ev.text || ''; scrollBottom(); }
         else if (ev.type === 'question') { question = { qid: ev.qid, questions: ev.questions || [], picks: (ev.questions || []).map(() => null) }; }
-        else if (ev.type === 'error') { asst.text += '\n[错误] ' + (ev.message || ''); scrollBottom(); }
+        else if (ev.type === 'error') { asst.text += '\n' + t('[错误] {message}', { message: tr(ev.message || '') }); scrollBottom(); }
         else if (ev.type === 'done') { if (!asst.text && ev.result) { asst.text = ev.result; scrollBottom(); } }
       }))
-      .catch((e) => { if (!ctrl.signal.aborted) { asst.text += '\n[连接中断] ' + (e?.message || e); } })
+      .catch((e) => { if (!ctrl.signal.aborted) { asst.text += '\n' + t('[连接中断] {reason}', { reason: tr(e?.message || e) }); } })
       .finally(() => { busy = false; loadSessions(); });
   }
   function stop() { try { ctrl?.abort(); } catch {} busy = false; }
@@ -87,18 +90,18 @@
     const url = user === 'admin' ? '/api/answer' : '/api/admin/user/answer';
     const body = { qid: q.qid, cancelled, answers };
     if (user !== 'admin') body.name = user;
-    try { await api.post(url, body); } catch (e) { saToast('回传失败：' + (e?.message || e), true); }
+    try { await api.post(url, body); } catch (e) { saToast(t('回传失败：{reason}', { reason: tr(e?.message || e) }), true); }
   }
 </script>
 
 <div class="wrap">
   <!-- 用户列 -->
   <div class="sa-card col ucol">
-    <div class="colh">用户</div>
+    <div class="colh">{tc('admin', '用户')}</div>
     <div class="list">
       {#each userList as u (u.name)}
         <button class="li" class:on={u.name === user} onclick={() => pickUser(u.name)}>
-          <span class="sa-trunc">{u.name === 'admin' ? 'admin（我）' : u.name}</span>
+          <span class="sa-trunc">{u.name === 'admin' ? t('admin（我）') : u.name}</span>
           {#if u.name === 'admin'}<span class="sa-badge blue">admin</span>{/if}
         </button>
       {/each}
@@ -107,16 +110,16 @@
 
   <!-- 会话列 -->
   <div class="sa-card col scol">
-    <div class="colh">会话 <span class="sa-dim">{loadingList ? '…' : sessions.length}</span></div>
+    <div class="colh">{tc('admin', '会话')} <span class="sa-dim">{loadingList ? '…' : sessions.length}</span></div>
     <div class="list">
       {#if loadingList}
-        <div class="sa-empty">加载中…</div>
+        <div class="sa-empty">{t('加载中…')}</div>
       {:else if !sessions.length}
-        <div class="sa-empty">无会话</div>
+        <div class="sa-empty">{t('无会话')}</div>
       {:else}
         {#each sessions as s (s.id)}
           <button class="li" class:on={s.id === cur} onclick={() => openSession(s.id)}>
-            <span class="lt sa-trunc">{s.title || '(无标题)'}</span>
+            <span class="lt sa-trunc">{titleOf(s)}</span>
             <span class="lm sa-mono">{(s.id || '').slice(0, 8)} · {fmtAgo(s.mtime)}</span>
           </button>
         {/each}
@@ -127,29 +130,29 @@
   <!-- 消息 + 续聊 -->
   <div class="sa-card col tcol">
     <div class="colh">
-      {#if cur}{user === 'admin' ? 'admin' : user} · <span class="sa-mono sa-dim">{cur.slice(0, 8)}</span>{:else}选择会话后可预览、续聊{/if}
+      {#if cur}{user === 'admin' ? 'admin' : user} · <span class="sa-mono sa-dim">{cur.slice(0, 8)}</span>{:else}{t('选择会话后可预览、续聊')}{/if}
     </div>
     <div class="thread" bind:this={threadEl}>
       {#if loadingThread}
-        <div class="sa-empty">加载中…</div>
+        <div class="sa-empty">{t('加载中…')}</div>
       {:else if !msgs.length}
-        <div class="sa-empty">左侧选一个会话开始（也可不选，直接发消息开新会话）</div>
+        <div class="sa-empty">{t('左侧选一个会话开始（也可不选，直接发消息开新会话）')}</div>
       {:else}
         {#each msgs as m, i (i)}
           <div class="msg" class:mine={m.role === 'user'}>
-            <div class="who">{m.role === 'user' ? '用户' : 'Claude'}</div>
-            <div class="bubble">{m.text}{#if busy && i === msgs.length - 1 && m.role === 'asst' && !m.text}<span class="typing">思考中…</span>{/if}</div>
+            <div class="who">{m.role === 'user' ? t('用户') : 'Claude'}</div>
+            <div class="bubble">{m.text}{#if busy && i === msgs.length - 1 && m.role === 'asst' && !m.text}<span class="typing">{t('思考中…')}</span>{/if}</div>
           </div>
         {/each}
       {/if}
     </div>
     <div class="foot">
-      <textarea rows="1" placeholder="代 {user === 'admin' ? '自己' : user} 发消息续聊…（Enter 发送）" bind:value={input}
+      <textarea rows="1" placeholder={user === 'admin' ? t('代 自己 发消息续聊…（Enter 发送）') : t('代 {user} 发消息续聊…（Enter 发送）', { user })} bind:value={input}
         onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}></textarea>
       {#if busy}
-        <button class="sa-btn dgr" onclick={stop}>停止</button>
+        <button class="sa-btn dgr" onclick={stop}>{t('停止')}</button>
       {:else}
-        <button class="sa-btn pri" onclick={send} disabled={!input.trim()}>发送</button>
+        <button class="sa-btn pri" onclick={send} disabled={!input.trim()}>{t('发送')}</button>
       {/if}
     </div>
   </div>
@@ -157,24 +160,24 @@
 
 <!-- AskUserQuestion：代答弹窗 -->
 {#if question}
-  <button class="sa-mask" aria-label="跳过" onclick={() => answer(true)}></button>
+  <button class="sa-mask" aria-label={t('跳过')} onclick={() => answer(true)}></button>
   <div class="sa-modal">
-    <h3>Claude 提了个问题</h3>
+    <h3>{t('Claude 提了个问题')}</h3>
     {#each question.questions as q, qi (qi)}
       {#if qi > 0}<div class="qsep"></div>{/if}
-      <p style="color:#fff;font-weight:600">{q.question || ''}</p>
+      <p style="color:#fff;font-weight:600">{tr(q.question) || ''}</p>
       {#each q.options || [] as o (o.label)}
         <label class="qopt">
           <input type="radio" name="saq{qi}" value={o.label}
             checked={question.picks[qi] === o.label}
             onchange={() => { question.picks[qi] = o.label; }} />
-          <span>{o.label}{#if o.description}<small> — {o.description}</small>{/if}</span>
+          <span>{tr(o.label)}{#if o.description}<small> — {tr(o.description)}</small>{/if}</span>
         </label>
       {/each}
     {/each}
     <div class="acts">
-      <button class="sa-btn" onclick={() => answer(true)}>跳过</button>
-      <button class="sa-btn pri" onclick={() => answer(false)}>提交</button>
+      <button class="sa-btn" onclick={() => answer(true)}>{t('跳过')}</button>
+      <button class="sa-btn pri" onclick={() => answer(false)}>{t('提交')}</button>
     </div>
   </div>
 {/if}

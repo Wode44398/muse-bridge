@@ -4,6 +4,7 @@
   // 主题令牌只在 .hxroot 上。不用 backdrop-filter（同屏多层时上层会静默失效）。
   import { fade, pop } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
+  import { t } from "../../lib/i18n.ts";
 
   function portal(node: HTMLElement) {
     const root = node.closest(".hxroot") ?? document.querySelector(".hxroot");
@@ -19,8 +20,8 @@
 <div class="drop" use:portal aria-hidden="true" transition:fade|global={{ duration: 160 }}>
   <div class="card" in:pop|global={{ from: 0.95 }}>
     <span class="ic"><Icon name="upload" size={26} stroke={1.6} /></span>
-    <span class="t">松开，添加为附件</span>
-    <span class="s">存进这个对话的附件目录（不进项目仓库）· 图片原生发给多模态模型</span>
+    <span class="t">{t("松开，添加为附件")}</span>
+    <span class="s">{t("存进这个对话的附件目录（不进项目仓库）· 图片原生发给多模态模型")}</span>
   </div>
 </div>
 

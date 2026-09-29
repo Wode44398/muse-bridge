@@ -15,6 +15,7 @@ import { getToken } from './api.js';
 import { apiUrl } from './server.js';
 import { prefs } from './state.svelte.js';
 import { reportUi } from './uiReport.js';
+import { t } from './i18n.js';
 
 // —— 扩展名 → 预览分类（决定路由到哪个子查看器）——
 const EXT_KIND = {
@@ -39,7 +40,7 @@ export function kindOf(name = '') {
 }
 
 // —— 媒体 URL（附 ?token：<img>/<video> 带不了 Authorization 头，只能查询参数携带）——
-function tokenSuffix(sep) { const t = getToken && getToken(); return t ? sep + 'token=' + encodeURIComponent(t) : ''; }
+function tokenSuffix(sep) { const tok = getToken && getToken(); return tok ? sep + 'token=' + encodeURIComponent(tok) : ''; }
 
 export function claudeArtifactUrl(id, filePath, { dl = false, name = '' } = {}) {
   return apiUrl('/api/claude/artifact?path=' + encodeURIComponent(filePath)
@@ -71,7 +72,7 @@ export function cloudStreamUrl(rel, { probe = false, ws = '' } = {}) {
 
 // —— 归一化：把来源描述符变成查看器统一结构 ——
 function normalize(raw) {
-  const name = raw.name || (raw.rel ? String(raw.rel).split('/').pop() : '') || (raw.path ? String(raw.path).split(/[\\/]/).pop() : '') || (raw.id ? '生成结果' : '文件');
+  const name = raw.name || (raw.rel ? String(raw.rel).split('/').pop() : '') || (raw.path ? String(raw.path).split(/[\\/]/).pop() : '') || (raw.id ? t('生成结果') : t('文件'));
   const kind = raw.kind || kindOf(name);
   const out = {
     key: raw.key || (raw.origin + ':' + (raw.ws || '') + ':' + (raw.path || raw.id || raw.rel || name)),

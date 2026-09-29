@@ -1,13 +1,14 @@
 // 上下文用量面板的纯函数（官方 claude.ai/code 同款逻辑，2026-09-01 逆向桌面包
 // shared-10-3 / ce96f5751 / c094b416e 所得）：紧凑数字、状态档、图例/计量条组装。
+import { t, tc, isEn, locale } from './i18n.js';
 
 // 官方 Vx：≥1e6 → "1M" / "1.5M"（去掉 .0），≥1e3 → "38.4k"，否则原样。
 export function fmtCompact(n) {
   n = Number(n) || 0;
   const strip = (s) => (s.endsWith('.0') ? s.slice(0, -2) : s);
   if (n >= 1e9) return strip((n / 1e9).toFixed(1)) + 'B';
-  if (n >= 1e6) { const t = Number((n / 1e6).toFixed(1)); return t >= 1e3 ? strip((n / 1e9).toFixed(1)) + 'B' : strip(t.toFixed(1)) + 'M'; }
-  if (n >= 1e3) { const t = Number((n / 1e3).toFixed(1)); return t >= 1e3 ? strip((n / 1e6).toFixed(1)) + 'M' : strip(t.toFixed(1)) + 'k'; }
+  if (n >= 1e6) { const v = Number((n / 1e6).toFixed(1)); return v >= 1e3 ? strip((n / 1e9).toFixed(1)) + 'B' : strip(v.toFixed(1)) + 'M'; }
+  if (n >= 1e3) { const v = Number((n / 1e3).toFixed(1)); return v >= 1e3 ? strip((n / 1e6).toFixed(1)) + 'M' : strip(v.toFixed(1)) + 'k'; }
   return String(n);
 }
 
@@ -28,15 +29,19 @@ export function fmtResetAt(ms) {
   ms = Number(ms) || 0;
   if (!ms) return '';
   const d = ms - Date.now();
-  if (d <= 0) return '已重置';
+  if (d <= 0) return tc('claude', '已重置');   // 英文单写 Reset 像按钮，额度行用 Has reset
   if (d < 86_400_000) {
     const h = Math.floor(d / 3_600_000), m = Math.floor((d % 3_600_000) / 60_000);
-    return (h ? `${h} 小时 ` : '') + (m || !h ? `${Math.max(1, m)} 分` : '').trim() + '后重置';
+    if (!h) return t('{m} 分后重置', { m: Math.max(1, m) });
+    return m ? t('{h} 小时 {m} 分后重置', { h, m }) : t('{h} 小时 后重置', { h });
   }
-  const t = new Date(ms);
-  const wd = '日一二三四五六'[t.getDay()];
-  const hh = String(t.getHours()).padStart(2, '0'), mm = String(t.getMinutes()).padStart(2, '0');
-  return `周${wd} ${hh}:${mm} 重置`;
+  const dt = new Date(ms);
+  // 英文走 Intl（Resets Wed 2:00 AM）；中文维持「周三 02:00」原样
+  const day = isEn() ? new Intl.DateTimeFormat(locale(), { weekday: 'short' }).format(dt) : '日一二三四五六'[dt.getDay()];   // i18n-ignore 中文星期字表
+  const time = isEn()
+    ? new Intl.DateTimeFormat(locale(), { hour: 'numeric', minute: '2-digit' }).format(dt)
+    : String(dt.getHours()).padStart(2, '0') + ':' + String(dt.getMinutes()).padStart(2, '0');
+  return t('周{day} {time} 重置', { day, time });
 }
 
 const isFree = (c) => c.kind === 'free';
@@ -62,7 +67,7 @@ export function prepareBreakdown(usage) {
   const overflow = used.length + m > 6;
   const cut = overflow ? 5 - m : used.length;
   const colorOf = (i) => (i < cut ? (i < 8 ? `var(--cx-${i + 1})` : 'var(--cx-muted)') : 'var(--cx-ref)');
-  const pctOf = (t) => (max > 0 ? t / max * 100 : 0);
+  const pctOf = (tk) => (max > 0 ? tk / max * 100 : 0);
   const legend = [
     ...used.map((c, i) => ({ id: 'used-' + i, name: c.name, tokens: c.tokens, pct: pctOf(c.tokens), color: colorOf(i), deferred: false })),
     ...(buffer ? [{ id: 'buffer', name: buffer.name, tokens: buffer.tokens, pct: pctOf(buffer.tokens), color: 'var(--cx-muted)', deferred: false }] : []),

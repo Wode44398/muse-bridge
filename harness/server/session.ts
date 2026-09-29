@@ -120,6 +120,7 @@ import { currentTrace, runInTrace, startTrace, type TraceContext } from "./trace
 import { deleteTraceLog, flushTraceLog, traceEvent } from "./trace-log.ts";
 import { deleteSessionDiagnostics } from "./diagnostics.ts";
 import { CodedError, ERROR_CODES } from "./errors.ts";
+import { getCustomProvider, isCustomProviderId } from "./custom-providers.ts";
 
 // M12：一轮开跑时给知识 worker 的新鲜度预算（小工作区通常几十毫秒就对完；大笔记库超时先用旧快照）
 const RUN_START_KNOWLEDGE_BUDGET_MS = 250;
@@ -801,6 +802,9 @@ function buildState(
   mcp?: McpBaseline | null,
 ): AgentState {
   const apiKey = resolveKey(cfg.provider);
+  if (!apiKey && isCustomProviderId(cfg.provider) && !getCustomProvider(cfg.provider)) {
+    throw new CodedError(ERROR_CODES.providerKeyMissing, "这个对话用的自定义模型服务已经删掉了——在「模型服务」里换一家，开新对话接着做。", 400);
+  }
   if (!apiKey) {
     throw new CodedError(
       ERROR_CODES.providerKeyMissing,

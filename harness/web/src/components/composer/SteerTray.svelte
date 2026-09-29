@@ -9,6 +9,7 @@
   import Icon from "../ui/Icon.svelte";
   import Button from "../ui/Button.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -27,7 +28,7 @@
   }
 </script>
 
-<div class="tray" role="status" aria-label="待送达的插话">
+<div class="tray" role="status" aria-label={t("待送达的插话")}>
   <p class="hint"><Icon name="clock" size={13} /><span>{hint}</span></p>
   {#each pane.chat.pendingSteers as s (s.id)}
     <div class="row" transition:collapse>
@@ -35,13 +36,13 @@
         <p class="bubble">{s.text}</p>
         {#if actions}
           <div class="acts">
-            <Button size="sm" variant="ghost" disabled={Boolean(busy)} title="撤回，放回输入框改" onclick={() => act(s, "withdraw")}>撤回</Button>
+            <Button size="sm" variant="ghost" disabled={Boolean(busy)} title={t("撤回，放回输入框改")} onclick={() => act(s, "withdraw")}>{t("撤回")}</Button>
             <Button
               size="sm"
               variant="outline"
               disabled={Boolean(busy)}
-              title="停下这一轮，按这句重新开始（后台的 dev server 与命令留着）"
-              onclick={() => act(s, "interrupt")}>立即中断并发送</Button
+              title={t("停下这一轮，按这句重新开始（后台的 dev server 与命令留着）")}
+              onclick={() => act(s, "interrupt")}>{t("立即中断并发送")}</Button
             >
           </div>
         {/if}

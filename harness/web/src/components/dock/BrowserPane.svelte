@@ -6,6 +6,7 @@
   import { app, toast } from "../../lib/state.svelte.ts";
   import * as api from "../../lib/api.ts";
   import { haptic } from "../../lib/touch.ts";
+  import { t } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
   import IconButton from "../ui/IconButton.svelte";
   import BrowserView from "./BrowserView.svelte";
@@ -20,11 +21,11 @@
       return u;
     }
   };
-  const tabLabel = (t: { url: string; title: string }) => t.title || host(t.url) || "新标签页";
+  const tabLabel = (tb: { url: string; title: string }) => tb.title || host(tb.url) || t("新标签页");
 
   async function pickTab(id: string) {
-    const t = app.browserTabs.find((x) => x.id === id);
-    if (tabBusy || !t || t.active) return;
+    const tb = app.browserTabs.find((x) => x.id === id);
+    if (tabBusy || !tb || tb.active) return;
     tabBusy = true;
     try {
       const r = await api.browserTabActivate(id);
@@ -43,7 +44,7 @@
       const r = await api.browserTabNew();
       app.browserTabs = r.tabs;
     } catch {
-      toast("新建标签页失败"); // 走 toast()：以前直接写 app.toast，没有定时收起、还可能带着上一条的动作钮（§17-4）
+      toast(t("新建标签页失败")); // 走 toast()：以前直接写 app.toast，没有定时收起、还可能带着上一条的动作钮（§17-4）
     }
     tabBusy = false;
   }
@@ -56,7 +57,7 @@
       const r = await api.browserTabClose(id);
       app.browserTabs = r.tabs;
     } catch {
-      toast("关闭标签页失败");
+      toast(t("关闭标签页失败"));
     }
     tabBusy = false;
   }
@@ -76,7 +77,7 @@
 <div class="bp">
   <div class="strip">
     {#if app.browserTabs.length}
-      <div class="tabs" bind:this={strip} role="tablist" aria-label="Agent 浏览器" tabindex="-1" onkeydown={onKey}>
+      <div class="tabs" bind:this={strip} role="tablist" aria-label={t("Agent 浏览器")} tabindex="-1" onkeydown={onKey}>
         {#each app.browserTabs as tab (tab.id)}
           <div class="tab" class:active={tab.active}>
             <!-- 标签本体与关闭钮是兄弟，不套按钮（以前 div[role=tab] 里嵌 button，空格也按不动，§17-15） -->
@@ -85,13 +86,13 @@
               role="tab"
               aria-selected={tab.active}
               tabindex={tab.active ? 0 : -1}
-              title={tab.url || "新标签页"}
+              title={tab.url || t("新标签页")}
               onclick={() => pickTab(tab.id)}
             >
               <span class="fav"><Icon name="globe" size={13} /></span>
               <span class="t">{tabLabel(tab)}</span>
             </button>
-            <button class="tab-x" aria-label="关闭标签页" title="关闭标签页" onclick={() => closeTab(tab.id)}>
+            <button class="tab-x" aria-label={t("关闭标签页")} title={t("关闭标签页")} onclick={() => closeTab(tab.id)}>
               <Icon name="close" size={12} stroke={2} />
             </button>
           </div>
@@ -103,12 +104,12 @@
         <div class="tab active static">
           <span class="tab-main">
             <span class="fav"><Icon name="globe" size={13} /></span>
-            <span class="t">Agent 浏览器</span>
+            <span class="t">{t("Agent 浏览器")}</span>
           </span>
         </div>
       </div>
     {/if}
-    <IconButton icon="plus" label="新标签页" size={coarse ? 40 : 30} iconSize={16} onclick={newTab} />
+    <IconButton icon="plus" label={t("新标签页")} size={coarse ? 40 : 30} iconSize={16} onclick={newTab} />
   </div>
   <BrowserView />
 </div>

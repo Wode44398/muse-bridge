@@ -36,6 +36,7 @@
   import DragLayer from "./components/shell/DragLayer.svelte";
   import { dnd, dropTarget, type DragPayload, type DropPoint } from "./lib/dnd.svelte.ts";
   import { splitDropLabel, splitDropPlan, type Side } from "./lib/split.ts";
+  import { t, tr } from "./lib/i18n.ts";
 
   // ── 宿主契约（bridge 的 HarnessPage 传进来；独立运行时全是默认值）──────────────────────────
   // embedded：作为 bridge 分页运行（主题作用域在本组件根、连接 / 系统栏归宿主、侧栏里有「主页」）
@@ -471,7 +472,7 @@
             class="seam"
             role="separator"
             aria-orientation="vertical"
-            title="拖拽调整两格的宽度（双击复位）"
+            title={t("拖拽调整两格的宽度（双击复位）")}
             onpointerdown={seamDown}
             ondblclick={seamReset}
           ></div>
@@ -501,7 +502,7 @@
         class="splitter"
         role="separator"
         aria-orientation="vertical"
-        title="拖拽调整左右占比（双击复位）"
+        title={t("拖拽调整左右占比（双击复位）")}
         onpointerdown={splitDown}
         ondblclick={splitReset}
       ></div>
@@ -514,7 +515,7 @@
   <!-- 抽屉（手机侧栏 / 宽屏临时拉出）：位置由 drawerX 驱动，见上面的状态机 -->
   {#if drawerMounted}
     <div class="drawer-layer" class:peek={wide}>
-      <button class="scrim {drawerMode}" aria-label="关闭侧栏" tabindex="-1" style="opacity:{drawerScrim}" onclick={closeDrawer}></button>
+      <button class="scrim {drawerMode}" aria-label={t("关闭侧栏")} tabindex="-1" style="opacity:{drawerScrim}" onclick={closeDrawer}></button>
       <div
         class="drawer {drawerMode}"
         bind:this={drawerEl}
@@ -553,11 +554,11 @@
 
   <!-- 灯箱：点图或关闭钮关；Esc / 返回键经浮层栈 -->
   {#if app.lightbox}
-    <div class="lightbox" role="dialog" aria-modal="true" aria-label="查看大图" transition:fade={{ duration: 200 }}>
-      <button class="lb-body" aria-label="关闭大图" onclick={() => (app.lightbox = null)}>
-        <img src={app.lightbox.src} alt={app.lightbox.caption ?? "大图"} in:pop={{ from: 0.96 }} />
+    <div class="lightbox" role="dialog" aria-modal="true" aria-label={t("查看大图")} transition:fade={{ duration: 200 }}>
+      <button class="lb-body" aria-label={t("关闭大图")} onclick={() => (app.lightbox = null)}>
+        <img src={app.lightbox.src} alt={app.lightbox.caption ?? t("大图")} in:pop={{ from: 0.96 }} />
       </button>
-      <button class="lb-close" aria-label="关闭" onclick={() => (app.lightbox = null)}>
+      <button class="lb-close" aria-label={t("关闭")} onclick={() => (app.lightbox = null)}>
         <Icon name="close" size={20} />
       </button>
       {#if app.lightbox.caption}
@@ -573,7 +574,7 @@
   {#if app.toast}
     {#key app.toast}
       <div class="toast" class:has-act={app.toastAction} role="status" in:pop={{ from: 0.9 }} out:fade={{ duration: 160 }}>
-        <span class="toast-msg">{app.toast}</span>
+        <span class="toast-msg">{tr(app.toast)}</span>
         {#if app.toastAction}
           <button
             class="toast-act"
@@ -582,7 +583,7 @@
               app.toast = "";
               app.toastAction = null;
               act?.run();
-            }}>{app.toastAction.label}</button
+            }}>{tr(app.toastAction.label)}</button
           >
         {/if}
       </div>
@@ -896,6 +897,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* 英文比中文长 1.5～2.5 倍：一行放不下就折行（最多三行），不截成省略号；中文外观不变 */
+  .toast-msg:lang(en) {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    white-space: normal;
   }
   .toast.has-act {
     padding: 6px 6px 6px 16px;

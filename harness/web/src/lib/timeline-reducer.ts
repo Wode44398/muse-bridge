@@ -4,6 +4,7 @@
 // 用脚本化 provider 驱动真 loop，对时间线的文本形态做快照。
 // Svelte 5 深代理的坑：往 $state 数组 push 字面量之后，要改就改数组里那个代理元素，别改字面量——pushItem 返回的就是它。
 import { toolMeta } from "./icons.ts";
+import { t, tr } from "./i18n.ts";
 import { discardStreamTurn, findSteerItem, resetStreamTurn, startStreamTurn } from "./stream-turn.ts";
 import type { AgentRun, AskItem, DecidedBy, GoalView, Item, PermissionItem, PlanItem, RecallRef, ToolItem, WorkflowRun } from "./timeline-types.ts";
 
@@ -25,14 +26,14 @@ export function steerDeliveryHint(timeline: readonly Item[]): string {
   for (let i = timeline.length - 1; i >= 0; i--) {
     const it = timeline[i] as { kind?: string; status?: string; name?: string; steer?: boolean };
     if (it.kind === "user" && !it.steer) break; // 到这一轮的用户消息为止
-    if (it.kind === "tool" && it.status === "running" && it.name) return `等「${toolMeta(it.name).verb}」跑完后送达`;
+    if (it.kind === "tool" && it.status === "running" && it.name) return t("等「{tool}」跑完后送达", { tool: tr(toolMeta(it.name).verb) });
   }
-  return "下一步送达";
+  return t("下一步送达");
 }
 
 // E3：用户 /技能名 点了技能的那一行提示（直播的 skill_loaded 与重开会话时的 slash-skill 消息共用这一句）
 export function skillLoadedText(name: string, pkg = false): string {
-  return pkg ? `已指定技能包 ${name}` : `已载入技能 ${name}`;
+  return pkg ? t("已指定技能包 {name}", { name }) : t("已载入技能 {name}", { name });
 }
 
 // N45：自动召回清单（直播的 recall 事件、历史里用户消息的 recall 字段共用）——形状不对的条目不要，最多 12 条
@@ -66,16 +67,16 @@ export function failureItem(ev: any): Extract<Item, { kind: "error" }> {
 }
 
 const RETRY_WHY: Record<string, string> = {
-  rate_limit: "被限流",
-  upstream_busy: "上游繁忙",
-  timeout: "上游超时",
-  server: "服务端出错",
-  network: "连接断了",
+  rate_limit: t("被限流"),
+  upstream_busy: t("上游繁忙"),
+  timeout: t("上游超时"),
+  server: t("服务端出错"),
+  network: t("连接断了"),
 };
 // U6：「被限流，12 秒后第 2 次重试」
 export function retryActivity(cls: unknown, inMs: number, attempt: number): string {
-  const why = (typeof cls === "string" && RETRY_WHY[cls]) || "出错了";
-  return `${why}，${Math.max(1, Math.round(inMs / 1000))} 秒后第 ${attempt} 次重试`;
+  const why = (typeof cls === "string" && RETRY_WHY[cls]) || t("出错了");
+  return t("{why}，{sec} 秒后第 {attempt} 次重试", { why, sec: Math.max(1, Math.round(inMs / 1000)), attempt });
 }
 
 // P10（D9）：落定事件里的「在哪台设备上定的」——形状不对就当没带
@@ -146,11 +147,13 @@ export function elapsedLabel(ms: number): string {
 }
 
 // U3：活动行的几种说法（服务端事件 → 此刻在干什么）
-export const ACTIVITY_WAITING_MODEL = "等待模型回复";
-export const ACTIVITY_COMPACTING = "整理上下文";
-const charsLabel = (n: number) => (n >= 10_000 ? `${(n / 1000).toFixed(0)}k 字` : n >= 1_000 ? `${(n / 1000).toFixed(1)}k 字` : `${n} 字`);
+export const ACTIVITY_WAITING_MODEL = t("等待模型回复");
+export const ACTIVITY_COMPACTING = t("整理上下文");
+const charsLabel = (n: number) =>
+  n >= 10_000 ? t("{n}k 字", { n: (n / 1000).toFixed(0) }) : n >= 1_000 ? t("{n}k 字", { n: (n / 1000).toFixed(1) }) : t("{n} 字", { n });
 export function toolDraftActivity(name: string, chars: number): string {
-  return `${toolMeta(name).verb} · 生成参数${chars > 0 ? `（${charsLabel(chars)}）` : ""}`;
+  const tool = tr(toolMeta(name).verb);
+  return chars > 0 ? t("{tool} · 生成参数（{chars}）", { tool, chars: charsLabel(chars) }) : t("{tool} · 生成参数", { tool });
 }
 
 export interface FlushControl {
@@ -179,8 +182,8 @@ export function pushItem(m: TimelineModel, item: Item): any {
 // 「已等 1 分 20 秒」/「刚开始」
 export function waitedLabel(ms: number): string {
   const s = Math.round(ms / 1000);
-  if (s < 1) return "刚开始";
-  return s < 60 ? `已等 ${s} 秒` : `已等 ${Math.floor(s / 60)} 分 ${s % 60} 秒`;
+  if (s < 1) return t("刚开始");
+  return s < 60 ? t("已等 {s} 秒", { s }) : t("已等 {m} 分 {s} 秒", { m: Math.floor(s / 60), s: s % 60 });
 }
 
 // 从时间线上删掉的条目，其 id→条目 索引也要一并松手。否则重试/门禁撤回后
@@ -193,11 +196,11 @@ export function forgetRefs(m: TimelineModel, dropped: Item[]) {
     const kind = (item as any).kind;
     if (kind === "tool") {
       m.toolRefs.delete(id);
-      const t = item as ToolItem;
-      if (t.agent) m.agentRefs.delete(t.agent.id);
-      if (t.workflow) {
-        m.workflowRefs.delete(t.workflow.id);
-        for (const a of t.workflow.agents) m.agentRefs.delete(a.id);
+      const tool = item as ToolItem;
+      if (tool.agent) m.agentRefs.delete(tool.agent.id);
+      if (tool.workflow) {
+        m.workflowRefs.delete(tool.workflow.id);
+        for (const a of tool.workflow.agents) m.agentRefs.delete(a.id);
       }
     }
     else if (kind === "ask") m.askRefs.delete(id);
@@ -307,15 +310,15 @@ function hostToolItem(m: TimelineModel, name: "Agent" | "Workflow", toolId: stri
   const byId = toolId ? m.toolRefs.get(toolId) : undefined;
   if (byId) return byId;
   const running = [...m.toolRefs.values()].reverse().find(
-    (t) => t.name === name && t.status === "running" && !(name === "Agent" ? t.agent : t.workflow),
+    (x) => x.name === name && x.status === "running" && !(name === "Agent" ? x.agent : x.workflow),
   );
   if (running) return running;
-  const t = pushItem(m, {
+  const tool = pushItem(m, {
     kind: "tool", id: `${name.toLowerCase()}:${Math.random().toString(36).slice(2, 8)}`, name, args: fallbackArgs,
     status: "running", summary: "", output: "", open: false,
   }) as ToolItem;
-  m.toolRefs.set(t.id, t);
-  return t;
+  m.toolRefs.set(tool.id, tool);
+  return tool;
 }
 
 function applySubagentInner(run: AgentRun, inner: any) {
@@ -396,7 +399,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       settleCursors(m, fx);
       forgetRefs(m, discardStreamTurn(m, ev.index).dropped);
       // V2：服务端说明为什么撤回（验证门禁追问），不再让答复凭空消失。
-      m.activity = m.running ? (typeof ev.reason === "string" && ev.reason ? ev.reason : "思考中") : "";
+      m.activity = m.running ? (typeof ev.reason === "string" && ev.reason ? tr(ev.reason) : t("思考中")) : "";
       break;
     case "thinking_delta":
       if (!m.curThinking) {
@@ -408,7 +411,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
           m.curText = null;
         }
         m.curThinking = pushItem(m, { kind: "thinking", text: "", open: false, live: true });
-        m.activity = "思考中";
+        m.activity = t("思考中");
       }
       m.pendingThinking += ev.text;
       fx.scheduleFlush();
@@ -422,14 +425,14 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
           m.curThinking = null;
         }
         m.curText = pushItem(m, { kind: "text", text: "", live: true });
-        m.activity = "回复中";
+        m.activity = t("回复中");
       }
       m.pendingText += ev.text;
       fx.scheduleFlush();
       break;
     case "tool_start": {
       settleCursors(m, fx);
-      const t = pushItem(m, {
+      const tool = pushItem(m, {
         kind: "tool",
         id: ev.id,
         name: ev.name,
@@ -439,8 +442,8 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
         output: "",
         open: false,
       }) as ToolItem;
-      m.toolRefs.set(ev.id, t);
-      m.activity = toolMeta(ev.name).verb;
+      m.toolRefs.set(ev.id, tool);
+      m.activity = tr(toolMeta(ev.name).verb);
       break;
     }
     case "tool_end": {
@@ -454,8 +457,8 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       }
       // U3：这一批工具都跑完了就不再说「读取文件」——接下来是模型在想（还有别的工具在跑就说那一个）
       if (m.running) {
-        const still = [...m.toolRefs.values()].reverse().find((t) => t.status === "running");
-        m.activity = still ? toolMeta(still.name).verb : "思考中";
+        const still = [...m.toolRefs.values()].reverse().find((x) => x.status === "running");
+        m.activity = still ? tr(toolMeta(still.name).verb) : t("思考中");
       }
       break;
     }
@@ -534,7 +537,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       const host = hostToolItem(m, "Workflow", ev.toolId, { name: ev.name });
       host.workflow = wf;
       m.workflowRefs.set(wf.id, host.workflow!);
-      m.activity = `工作流 · ${wf.name}`;
+      m.activity = t("工作流 · {name}", { name: wf.name });
       break;
     }
     case "workflow_phase": {
@@ -542,7 +545,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       if (wf) {
         wf.currentPhase = String(ev.title ?? "");
         if (!wf.phases.some((p) => p.title === wf.currentPhase)) wf.phases.push({ title: wf.currentPhase });
-        m.activity = `工作流 · ${wf.currentPhase}`;
+        m.activity = t("工作流 · {name}", { name: wf.currentPhase });
       }
       break;
     }
@@ -565,7 +568,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       wf.durationMs = numOr(ev.durationMs) ?? (wf.startedAt ? Date.now() - wf.startedAt : undefined);
       if (ev.result !== undefined) wf.result = ev.result;
       for (const a of wf.agents) if (a.status === "running") a.status = ev.ok ? "ok" : "fail";
-      if (m.running) m.activity = "思考中";
+      if (m.running) m.activity = t("思考中");
       break;
     }
     case "ask": {
@@ -581,7 +584,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       m.askRefs.set(ev.id, item);
       m.activity = ""; // 等用户回答，不显示“思考中”转圈
       // 后台会话在等人 —— 提醒一声，免得它无声卡在提问上
-      if (!(fx.visible ?? fx.foreground)) fx.toast(`「${m.title || "后台对话"}」在等你回答`);
+      if (!(fx.visible ?? fx.foreground)) fx.toast(m.title ? t("「{title}」在等你回答", { title: m.title }) : t("「后台对话」在等你回答"));
       break;
     }
     case "ask_answer": {
@@ -592,7 +595,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
         for (const a of ev.answers ?? []) ref.selected[a.questionId] = a.selected ?? [];
         if (decidedBy(ev.by)) ref.by = decidedBy(ev.by); // P10（D9）
       }
-      if (m.running) m.activity = "思考中"; // 拿到答案，agent 继续
+      if (m.running) m.activity = t("思考中"); // 拿到答案，agent 继续
       break;
     }
     // M1：卡片没等到人就作废了（停止 / 这一轮结束），收起交互态。
@@ -603,7 +606,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
         ref.answered = true; // 所选为空 = 「未回答」
         if (ev.reason === "timeout") ref.expired = true;
       }
-      if (ev.reason === "timeout" && m.running) m.activity = "思考中"; // agent 按假设接着干
+      if (ev.reason === "timeout" && m.running) m.activity = t("思考中"); // agent 按假设接着干
       break;
     }
     case "permission_cancelled": {
@@ -612,7 +615,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
         ref.cancelled = true;
         if (ev.reason === "timeout") ref.cancelReason = "timeout";
       }
-      if (ev.reason === "timeout" && m.running) m.activity = "思考中";
+      if (ev.reason === "timeout" && m.running) m.activity = t("思考中");
       break;
     }
     case "plan_cancelled": {
@@ -621,7 +624,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
         ref.cancelled = true;
         if (ev.reason === "timeout") ref.cancelReason = "timeout";
       }
-      if (ev.reason === "timeout" && m.running) m.activity = "思考中";
+      if (ev.reason === "timeout" && m.running) m.activity = t("思考中");
       break;
     }
     case "permission_ask": {
@@ -643,7 +646,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       }) as PermissionItem;
       m.permRefs.set(ev.id, item);
       m.activity = ""; // 在等人点，不转圈
-      if (!(fx.visible ?? fx.foreground)) fx.toast(`「${m.title || "后台对话"}」在等你批准一次操作`);
+      if (!(fx.visible ?? fx.foreground)) fx.toast(m.title ? t("「{title}」在等你批准一次操作", { title: m.title }) : t("「后台对话」在等你批准一次操作"));
       break;
     }
     case "permission_resolved": {
@@ -655,7 +658,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
         if (decidedBy(ev.by)) ref.by = decidedBy(ev.by);
         if (typeof ev.note === "string" && ev.note) ref.note = ev.note;
       }
-      if (m.running) m.activity = "思考中";
+      if (m.running) m.activity = t("思考中");
       break;
     }
     case "plan_ask": {
@@ -669,7 +672,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       }) as PlanItem;
       m.planRefs.set(ev.id, item);
       m.activity = "";
-      if (!(fx.visible ?? fx.foreground)) fx.toast(`「${m.title || "后台对话"}」提交了一份计划等你批准`);
+      if (!(fx.visible ?? fx.foreground)) fx.toast(m.title ? t("「{title}」提交了一份计划等你批准", { title: m.title }) : t("「后台对话」提交了一份计划等你批准"));
       break;
     }
     case "plan_resolved": {
@@ -679,7 +682,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
         if (decidedBy(ev.by)) ref.by = decidedBy(ev.by); // P10
         if (!ev.approved && typeof ev.note === "string" && ev.note) ref.note = ev.note;
       }
-      if (m.running) m.activity = "思考中";
+      if (m.running) m.activity = t("思考中");
       break;
     }
     // 服务端把本会话的模式改了（批准计划 → 自主执行），同步全局指示器
@@ -744,17 +747,17 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
     }
     // M3（#27、#45）：run 结束了，这些插话没来得及送进模型——撤掉对应的气泡，文字放回输入框。
     case "steer_returned": {
-      const texts: string[] = (ev.texts ?? []).filter((t: unknown) => typeof t === "string" && t);
+      const texts: string[] = (ev.texts ?? []).filter((x: unknown) => typeof x === "string" && x);
       const ids: unknown[] = Array.isArray(ev.ids) ? ev.ids : [];
-      texts.forEach((t, k) => {
-        takePendingSteer(m, typeof ids[k] === "string" ? (ids[k] as string) : null, t);
+      texts.forEach((text, k) => {
+        takePendingSteer(m, typeof ids[k] === "string" ? (ids[k] as string) : null, text);
         // 旧前端时代乐观上屏的气泡（与旧服务端配合）照旧撤掉
-        const i = findSteerItem(m.timeline, { id: ids[k], text: t });
+        const i = findSteerItem(m.timeline, { id: ids[k], text });
         if (i >= 0) m.timeline.splice(i, 1);
       });
       if (texts.length && fx.foreground) {
         fx.refill(texts.join("\n"));
-        fx.toast("这一轮已结束，刚才的插话没送出，已放回输入框");
+        fx.toast(t("这一轮已结束，刚才的插话没送出，已放回输入框"));
       }
       break;
     }
@@ -783,12 +786,12 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       break;
     case "context":
       m.ctx = { used: ev.usedTokens, limit: ev.limitTokens };
-      if (ev.compacted) pushItem(m, { kind: "notice", text: "上下文已压缩" });
-      if (m.running && m.activity === ACTIVITY_COMPACTING) m.activity = "思考中"; // U3：整理完了
+      if (ev.compacted) pushItem(m, { kind: "notice", text: t("上下文已压缩") });
+      if (m.running && m.activity === ACTIVITY_COMPACTING) m.activity = t("思考中"); // U3：整理完了
       // R3：连接失败时服务端在等网络恢复，不是卡死；停止键照常有效。
       if (ev.waiting && m.running) {
         const waited = waitedLabel(Number(ev.waitedMs) || 0);
-        m.activity = `等待网络恢复（${waited}）`;
+        m.activity = t("等待网络恢复（{waited}）", { waited });
       } else if (ev.retry && typeof ev.retryInMs === "number" && m.running) {
         // U6：退避重试——活动行写清楚为什么、多久之后第几次（不进时间线）
         m.activity = retryActivity(ev.retryClass, ev.retryInMs, ev.retry);
@@ -803,7 +806,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       settleCursors(m, fx);
       resetStreamTurn(m);
       // U6（hermes N41）：中断不是失败——灰色的一行「已停止」；失败 = 一句人话 + 原始报错折起来 + 已经执行过几次工具
-      if (ev.message === "aborted") pushItem(m, { kind: "notice", text: ev.stopped === "restart" ? "服务重启打断了这一轮" : "已停止" });
+      if (ev.message === "aborted") pushItem(m, { kind: "notice", text: ev.stopped === "restart" ? t("服务重启打断了这一轮") : t("已停止") });
       else pushItem(m, failureItem(ev));
       break;
     case "done": {

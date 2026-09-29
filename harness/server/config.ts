@@ -10,7 +10,7 @@ import type { PermissionMode, PermissionRules } from "./agent/permissions.ts";
 import type { ThinkingLevel } from "./agent/turn.ts";
 import type { SandboxAccess } from "./sandbox.ts";
 import {
-  CATALOG,
+  allProviders,
   EFFORT_ORDER,
   clampEffort,
   defaultEffort,
@@ -18,6 +18,7 @@ import {
   modelSpec,
   providerBaseUrl,
 } from "./catalog.ts";
+import { customProviderKey, getCustomProvider, isCustomProviderId, setCustomProviderKey } from "./custom-providers.ts";
 
 export interface RuntimeConfig {
   provider: ProviderId;
@@ -43,7 +44,7 @@ export { defaultWorkspace };
 
 // Keys are kept in memory only (env-provided or set via the UI), never written
 // back to disk. Values are never returned to the client — only a hasKey flag.
-const envKeys: Record<ProviderId, string | undefined> = {
+const envKeys: Partial<Record<ProviderId, string>> = {
   anthropic: process.env.ANTHROPIC_API_KEY || undefined,
   openai: process.env.OPENAI_API_KEY || undefined,
   // Qwen reuses the DashScope key already set for the vision-verify channel
@@ -67,6 +68,10 @@ const overrideKeys: Partial<Record<ProviderId, string>> = {};
 // default). Used both at boot and when the user switches provider without
 // naming a model.
 function providerDefaults(p: ProviderId): { model: string; baseUrl?: string } {
+  if (isCustomProviderId(p)) {
+    const c = getCustomProvider(p);
+    if (c) return { model: c.defaultModel, baseUrl: c.baseUrl };
+  }
   switch (p) {
     case "anthropic":
       return { model: process.env.ANTHROPIC_MODEL || catalogDefaultModel("anthropic") };
@@ -177,7 +182,7 @@ function loadSavedChoice(): SavedConfig | null {
   if (file.state !== "ok") return null;
   const raw = file.raw as any;
   const out: SavedConfig = {};
-  const provider = CATALOG.find((p) => p.id === raw?.provider && !disabledProviders().has(p.id))?.id;
+  const provider = allProviders().find((p) => p.id === raw?.provider && !disabledProviders().has(p.id))?.id;
   if (provider) {
     // 模型必须仍在该厂商的目录里（目录会汰换退役型号）；退位则回厂商默认。
     const model = typeof raw.model === "string" && modelSpec(provider, raw.model)
@@ -254,7 +259,7 @@ export function getConfig(): RuntimeConfig {
 }
 
 export function hasKey(provider: ProviderId): boolean {
-  return Boolean(overrideKeys[provider] || envKeys[provider]);
+  return Boolean(resolveKey(provider));
 }
 
 // 这家 provider 在服务端配置下的默认地址（环境变量覆盖优先，其次目录）。
@@ -292,7 +297,7 @@ const cleanRuleList = (v: unknown): string[] =>
 // opts.ownKey：同一个补丁里带了这家 provider 的 key（setConfig 用；租户改 baseUrl 要靠它，见 effectiveBaseUrl）。
 export function resolveConfig(base: RuntimeConfig, patch: Omit<ConfigPatch, "apiKey">, opts: { ownKey?: boolean } = {}): RuntimeConfig {
   const { workspace, access, permissionMode, permissionRules, ...rest } = patch;
-  if (rest.provider !== undefined && !CATALOG.some((p) => p.id === rest.provider)) {
+  if (rest.provider !== undefined && !allProviders().some((p) => p.id === rest.provider)) {
     throw new Error(`unknown provider: ${String(rest.provider)}`);
   }
   if (rest.provider !== undefined && disabledProviders().has(String(rest.provider))) {
@@ -386,7 +391,9 @@ export function setConfig(patch: ConfigPatch): RuntimeConfig {
   const { apiKey, ...rest } = patch;
   config = resolveConfig(config, rest, { ownKey: typeof apiKey === "string" && Boolean(apiKey.trim()) });
   if (typeof apiKey === "string" && apiKey.trim()) {
-    overrideKeys[config.provider] = apiKey.trim();
+    // 自定义服务的 key 落加密存储（重启还在）；内置几家照旧只在内存
+    if (isCustomProviderId(config.provider)) setCustomProviderKey(config.provider, apiKey.trim());
+    else overrideKeys[config.provider] = apiKey.trim();
   }
   if (config.provider === "mimo" && typeof apiKey === "string" && apiKey.trim() && patch.baseUrl === undefined) {
     config.baseUrl = providerDefaults("mimo").baseUrl;
@@ -396,5 +403,12 @@ export function setConfig(patch: ConfigPatch): RuntimeConfig {
 }
 
 export function resolveKey(provider: ProviderId): string | undefined {
+  if (isCustomProviderId(provider)) return customProviderKey(provider);
   return overrideKeys[provider] || envKeys[provider];
+}
+
+// 自定义服务被删了而全局正选着它：退回启动时的默认厂商（上次的选择文件也跟着改写）。
+export function forgetProvider(provider: ProviderId): void {
+  if (config.provider !== provider) return;
+  setConfig({ provider: initialProvider() });
 }

@@ -1,5 +1,6 @@
 <script>
   import { uiConfirm } from '../lib/dialogs.js';
+  import { t, tc, tr, locale } from '../lib/i18n.js';
   // 工作空间（文件管理）。视觉＝iOS 27（token/配方实测自官方 UI Kit，见设计稿
   // 《工作空间页面demo.html》）；数据＝真实接 /api/files*（admin=vault，user=沙箱）。
   // 固定浅色 grouped 风（像 iOS 文件 app），不跟 bridge 暗主题。
@@ -47,7 +48,7 @@
     locations = null, locationId = 'ws', onLocation = null,
     initialPath = null, initialOpen = '', previewHost = '',
     picker: wsPick = false, pickerLocations = [], pickerLocationId = '', onPickLocation = null,
-    onPick: onPickWs = null, pickLabel = '拖入选为工作空间',
+    onPick: onPickWs = null, pickLabel = t('拖入选为工作空间'),
   } = $props();
   // 内嵌态的文件预览/编辑也留在侧栏（host:'dock' → 侧栏内嵌 MediaViewer 实例接管，
   // 不再全屏）；独立分页维持全屏。影子包装：本文件所有 openPreview 调用点零改动。
@@ -106,7 +107,7 @@
 
   // —— 面包屑 / 分组 / 派生 ——
   const segs = $derived(path ? path.split('/').filter(Boolean) : []);
-  const rootLabel = $derived(readonly ? '分享空间' : (rootName || '工作空间'));
+  const rootLabel = $derived(readonly ? t('分享空间') : (tr(rootName) || t('工作空间')));   // rootName 出自服务端：显示点兜 tr()
   const title = $derived(segs.length ? segs[segs.length - 1] : rootLabel);
   const folders = $derived(items.filter((i) => i.isDir));
   const files = $derived(items.filter((i) => !i.isDir));
@@ -121,14 +122,14 @@
   const showFiles = $derived(q ? filterFilesByName(files, q) : files);
   const isEmpty = $derived(!loading && !showFolders.length && !showFiles.length);
 
-  const activeTasks = $derived(tasks.filter((t) => t.status === 'up'));
+  const activeTasks = $derived(tasks.filter((tk) => tk.status === 'up'));
   const ringPct = $derived.by(() => {
-    const a = tasks.filter((t) => t.status === 'up');
-    if (!a.length) return tasks.length && tasks.every((t) => t.status === 'done') ? 1 : 0;
-    const tot = a.reduce((s, t) => s + t.total, 0) || 1;
-    return a.reduce((s, t) => s + t.sent, 0) / tot;
+    const a = tasks.filter((tk) => tk.status === 'up');
+    if (!a.length) return tasks.length && tasks.every((tk) => tk.status === 'done') ? 1 : 0;
+    const tot = a.reduce((s, tk) => s + tk.total, 0) || 1;
+    return a.reduce((s, tk) => s + tk.sent, 0) / tot;
   });
-  const allDone = $derived(tasks.length > 0 && tasks.every((t) => t.status !== 'up'));
+  const allDone = $derived(tasks.length > 0 && tasks.every((tk) => tk.status !== 'up'));
 
   // —— 加载 / 导航（/api/files）——
   // 乐观导航：进目录/返回/面包屑点下去**当帧就切 path**——列表缓存命中立即出上次内容、
@@ -160,7 +161,7 @@
     }
     catch (e) {
       if (my !== loadSeq) return;
-      toast(e?.name === 'AbortError' ? '加载超时' : '加载失败：' + (e.body?.error || e.message || ''));
+      toast(e?.name === 'AbortError' ? t('加载超时') : t('加载失败：{reason}', { reason: tr(e.body?.error || e.message || '') }));
     }
     finally { clearTimeout(timer); if (my === loadSeq) loading = false; }
   }
@@ -206,10 +207,10 @@
   $effect(() => { if (!readonly) reportUi({ files: { path, ws: workspaceRoot || '', query: q || '' } }); });
   $effect(() => {
     if (readonly) return;
-    let t = 0;
-    const offFs = onAgentFs(() => { clearTimeout(t); t = setTimeout(() => load(path), 350); });
+    let timer = 0;
+    const offFs = onAgentFs(() => { clearTimeout(timer); timer = setTimeout(() => load(path), 350); });
     const offGoto = onAgentGoto((rootRel) => load(rootRel));
-    return () => { clearTimeout(t); offFs(); offGoto(); };
+    return () => { clearTimeout(timer); offFs(); offGoto(); };
   });
 
   // ui.filesPath：一次性初始路径（内嵌宿主开工作台「文件」时预置成工作空间目录；
@@ -479,9 +480,9 @@
   async function doExtract(item) {
     if (extracting) return;
     extracting = true;
-    toast('解压中…');
-    try { const r = await api.extractFile(itemRel(item), workspaceRoot); toast('已解压到「' + r.name + '」'); await load(path); }
-    catch (e) { toast('解压失败：' + (e.body?.error || e.message || '')); }
+    toast(t('解压中…'));
+    try { const r = await api.extractFile(itemRel(item), workspaceRoot); toast(t('已解压到「{name}」', { name: r.name })); await load(path); }
+    catch (e) { toast(t('解压失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); }
     finally { extracting = false; }
   }
   function showInfo(item) {
@@ -496,28 +497,28 @@
     const d = shareDlg;
     if (!d || d.busy) return;
     const request = shareRequest(d);
-    if (request.error) { toast(request.error); return; }
+    if (request.error) { toast(tr(request.error)); return; }
     d.busy = true;
     const r0 = itemRel(d.item);
     try {
       const r = await api.shareSpaceMint([r0], request.options, workspaceRoot);
       // 未配公网域名时后端 url 为空 → 用当前源拼（同源可用；隧道/局域网访客按访问源）。
       d.result = shareResult(r, request.password);
-    } catch (e) { toast('创建分享失败：' + (e.body?.error || e.body || e.message || '')); }
+    } catch (e) { toast(t('创建分享失败：{reason}', { reason: tr(e.body?.error || e.body || e.message || '') })); }
     d.busy = false;
   }
   async function copyShare() {
     const d = shareDlg; if (!d?.result) return;
     // 带密码时连密码一起拷，方便直接转发给对方。
     const text = shareClipboardText(d.result);
-    try { await navigator.clipboard.writeText(text); toast('已复制链接'); }
+    try { await navigator.clipboard.writeText(text); toast(t('已复制链接')); }
     catch {
       try {
         const ta = document.createElement('textarea');
         ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
         document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
-        toast('已复制链接');
-      } catch { toast('复制失败，请长按链接手动复制'); }
+        toast(t('已复制链接'));
+      } catch { toast(t('复制失败，请长按链接手动复制')); }
     }
   }
   const fmtExpire = formatShareExpiry;
@@ -531,7 +532,7 @@
     try {
       const up = await api.fileToUpload(r, !direct, workspaceRoot);
       return { path: up.path, name: up.name, kind, url: kind === 'image' ? cloudFileUrl(r, { ws: workspaceRoot }) : null };
-    } catch (e) { toast('准备失败：' + (e.body?.error || e.message || '')); return null; }
+    } catch (e) { toast(t('准备失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); return null; }
   }
   // —— 「选择对话」层（微信「选择聊天」式）：新对话 / 历史会话列表 + 搜索 ——
   // 列表本地缓存先出（IndexedDB 快照秒开），网络刷新殿后。
@@ -553,7 +554,7 @@
     closeAi();
     if (it) sendToAI(it, sel);
   }
-  const chatTitle = (s) => titleFor(s.id, s.title) || '（无标题）';
+  const chatTitle = (s) => tr(titleFor(s.id, s.title)) || t('（无标题）');   // 服务端占位标题走 tr
   const aiChatFiltered = $derived.by(() => {
     if (!aiChat) return [];
     return filterAiSessions(aiChat.sessions, aiChat.q, chatTitle);
@@ -581,18 +582,18 @@
     const prev = items;
     items = items.map((x) => (x.name === item.name ? { ...x, name } : x));   // 乐观改名（即时），失败回滚
     try { await api.renameFile(rel(item.name), name, workspaceRoot); }
-    catch (e) { items = prev; toast('重命名失败：' + (e.body?.error || '')); }
+    catch (e) { items = prev; toast(t('重命名失败：{reason}', { reason: tr(e.body?.error || '') })); }
   }
   async function doDelete(item) {
-    if (!(await uiConfirm(`删除「${item.name}」？${item.isDir ? '（含其中全部内容）' : ''}`))) return;
+    if (!(await uiConfirm(item.isDir ? t('删除「{name}」？（含其中全部内容）', { name: item.name }) : t('删除「{name}」？', { name: item.name })))) return;
     const prev = items;
     items = items.filter((x) => x.name !== item.name);   // 乐观移除（即时），失败回滚
     try { await api.deleteFile(rel(item.name), workspaceRoot); }
-    catch (e) { items = prev; toast('删除失败：' + (e.body?.error || '')); }
+    catch (e) { items = prev; toast(t('删除失败：{reason}', { reason: tr(e.body?.error || '') })); }
   }
   async function multiDelete() {
     const names = [...selected];
-    if (!names.length || !(await uiConfirm(`删除选中的 ${names.length} 项？`))) return;
+    if (!names.length || !(await uiConfirm(t('删除选中的 {n} 项？', { n: names.length })))) return;
     const sel = new Set(names);
     items = items.filter((x) => !sel.has(x.name));   // 乐观移除（即时）
     exitSelect();
@@ -600,7 +601,7 @@
     for (const n of names) {
       try { await api.deleteFile(rel(n), workspaceRoot); } catch { fail++; }
     }
-    if (fail) { await load(path); toast(fail + ' 项删除失败'); }   // 有失败才重拉准确状态
+    if (fail) { await load(path); toast(t('{n} 项删除失败', { n: fail })); }   // 有失败才重拉准确状态
   }
   async function doMkdir() {
     const name = (mkOpen.value || '').trim();
@@ -608,9 +609,9 @@
     if (!name) return;
     try {
       await api.mkdir(path, name, workspaceRoot);
-      toast('已新建文件夹'); await load(path);
+      toast(t('已新建文件夹')); await load(path);
     }
-    catch (e) { toast('新建失败：' + (e.body?.error || '')); }
+    catch (e) { toast(t('新建失败：{reason}', { reason: tr(e.body?.error || '') })); }
   }
   const rel = (name) => (path ? path + '/' + name : name);
 
@@ -647,13 +648,13 @@
       catch (e) { err = e.body?.error || err; }
     }
     if (selecting) exitSelect();
-    toast(okN ? `已${mode === 'move' ? '移动' : '复制'} ${okN} 项` : (err || '操作失败'));
+    toast(okN ? (mode === 'move' ? t('已移动 {n} 项', { n: okN }) : t('已复制 {n} 项', { n: okN })) : (tr(err) || t('操作失败')));
     await load(path);
   }
   const pickerDestName = $derived.by(() => {
     if (!picker) return '';
     const ps = picker.path.split('/').filter(Boolean);
-    return ps.length ? ps[ps.length - 1] : '工作空间';
+    return ps.length ? ps[ps.length - 1] : t('工作空间');
   });
 
   // —— 上传（分块，进度入传输面板）——
@@ -691,16 +692,16 @@
       }
       task.status = 'done'; tasks = [...tasks];
       if (dir === path) await load(path);
-      toast('已上传 ' + file.name);
-      setTimeout(() => { tasks = tasks.filter((t) => t.id !== id); }, 4000);
+      toast(t('已上传 {name}', { name: file.name }));
+      setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 4000);
     } catch (e) {
       if (task.status === 'cancelled' || e?.name === 'AbortError') {   // 用户取消：不算错误，短暂显示后自动清行
         tasks = [...tasks];
-        setTimeout(() => { tasks = tasks.filter((t) => t.id !== id); }, 2500);
+        setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 2500);
         return;
       }
       task.status = 'error'; tasks = [...tasks];
-      toast('上传失败：' + (e.body?.error || file.name));
+      toast(t('上传失败：{reason}', { reason: tr(e.body?.error) || file.name }));
     }
   }
   // —— 桌面拖拽上传（网盘式：拖在某个文件夹上就传进那个文件夹，拖在空白处传进当前目录）——
@@ -739,7 +740,7 @@
     const { items, stat } = await walkEntries(entries, { maxFiles: 5000, maxBytes: 8e9, maxFileBytes: 2e9 });
     if (!items.length) return;
     const note = skipNote(stat);
-    if (note) toast(note);
+    if (note) toast(tr(note));   // 文案出自 dirDrop.js（别的模块）：显示点兜一层 tr()
     for (const g of groupByRoot(items)) {
       if (g.isDir) await uploadTree(g.name, g.items, baseDir);
       else for (const it of g.items) await uploadOne(it.file, baseDir);
@@ -768,27 +769,27 @@
       });
       task.status = 'done'; task.sent = total; tasks = [...tasks];
       await load(path);
-      toast(`已上传 ${rootName}（${items.length} 个文件）`);
-      setTimeout(() => { tasks = tasks.filter((t) => t.id !== id); }, 4000);
+      toast(t('已上传 {name}（{n} 个文件）', { name: rootName, n: items.length }));
+      setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 4000);
     } catch (e) {
       if (task.status === 'cancelled' || e?.name === 'AbortError') {
         tasks = [...tasks];
-        setTimeout(() => { tasks = tasks.filter((t) => t.id !== id); }, 2500);
+        setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 2500);
         return;
       }
       task.status = 'error'; tasks = [...tasks];
-      toast('上传失败：' + (e.body?.error || rootName));
+      toast(t('上传失败：{reason}', { reason: tr(e.body?.error) || rootName }));
     }
   }
 
   // 取消在途上传：标记 + abort（在途分块立断，片间空隙则下一片立断）。服务端残留的隐藏
   // .part-* 由下次上传首片的 sweepStaleParts 清理，不用专门收拾。
-  function cancelUpload(t) {
-    if (t.status !== 'up') return;
-    t.status = 'cancelled';
-    try { t.ctrl.abort(); } catch {}
+  function cancelUpload(task) {
+    if (task.status !== 'up') return;
+    task.status = 'cancelled';
+    try { task.ctrl.abort(); } catch {}
     tasks = [...tasks];
-    toast((t.dl ? '已取消下载 ' : '已取消上传 ') + t.name);
+    toast(task.dl ? t('已取消下载 {name}', { name: task.name }) : t('已取消上传 {name}', { name: task.name }));
   }
 
   // —— 预览 ——
@@ -854,9 +855,9 @@
       tk.total = Number(res.headers.get('content-length')) || 0;
       if (tk.total > TRACK_MAX) {
         try { tk.ctrl.abort(); } catch {}
-        tasks = tasks.filter((t) => t.id !== id);
+        tasks = tasks.filter((x) => x.id !== id);
         plainDownload(r);
-        toast('文件较大，已交给浏览器下载');
+        toast(t('文件较大，已交给浏览器下载'));
         return;
       }
       const reader = res.body.getReader();
@@ -884,14 +885,14 @@
       a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(u), 60000);
       tk.sent = tk.total; tk.status = 'done';
-      toast('已下载 ' + name);
-      setTimeout(() => { tasks = tasks.filter((t) => t.id !== id); }, 4000);
+      toast(t('已下载 {name}', { name }));
+      setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 4000);
     } catch (e) {
       if (tk.status === 'cancelled' || e?.name === 'AbortError') {   // 用户取消：短暂显示后清行
-        setTimeout(() => { tasks = tasks.filter((t) => t.id !== id); }, 2500);
+        setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 2500);
         return;
       }
-      tasks = tasks.filter((t) => t.id !== id);
+      tasks = tasks.filter((x) => x.id !== id);
       plainDownload(r);   // 流式失败退回浏览器直接下载，至少能下到
     }
   }
@@ -930,33 +931,36 @@
     if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
     return (n / 1073741824).toFixed(2) + ' GB';
   }
+  // 格式器按需建一次复用（fmtTime 每行文件都调；切语言会整页重载，locale 运行期不变）
+  const DTF = {};
+  const dtf = (k, o) => (DTF[k] ??= new Intl.DateTimeFormat(locale(), o));
   function fmtTime(ms) {
     if (!ms) return '';
     const d = new Date(ms), now = new Date();
     const sameDay = d.toDateString() === now.toDateString();
-    if (sameDay) return d.toTimeString().slice(0, 5);
+    // 中文输出与原先一致：「09:05」「9月28日」；英文「9:05 AM」「Sep 28」
+    if (sameDay) return dtf('hm', { timeStyle: 'short' }).format(d);
     const yd = new Date(now); yd.setDate(now.getDate() - 1);
-    if (d.toDateString() === yd.toDateString()) return '昨天';
-    return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+    if (d.toDateString() === yd.toDateString()) return t('昨天');
+    return dtf('md', { month: 'short', day: 'numeric' }).format(d);
   }
-  // 简介用：完整日期时间
+  // 简介用：完整日期时间（中文「2026年9月28日 09:05」，英文「Sep 28, 2026, 9:05 AM」）
   function fmtFull(ms) {
     if (!ms) return '—';
-    const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())}`;
+    return dtf('full', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(ms));
   }
   // 简介用：文件种类描述（按扩展名/类型）
-  const KIND_LABEL = { img: '图片', mov: '视频', audio: '音频', pdf: 'PDF 文稿', zip: '压缩归档', md: 'Markdown 文稿', text: '文本文稿', doc: '文稿' };
+  const KIND_LABEL = { img: t('图片'), mov: t('视频'), audio: t('音频'), pdf: t('PDF 文稿'), zip: t('压缩归档'), md: t('Markdown 文稿'), text: t('文本文稿'), doc: t('文稿') };
   function typeLabel(item) {
-    if (item.isDir) return '文件夹';
+    if (item.isDir) return t('文件夹');
     const ext = (item.name.split('.').pop() || '').toUpperCase();
-    const base = KIND_LABEL[kindOf(item.name)] || '文件';
-    return item.name.includes('.') ? `${base}（.${ext.toLowerCase()}）` : base;
+    const base = KIND_LABEL[kindOf(item.name)] || t('文件');
+    return item.name.includes('.') ? t('{kind}（.{ext}）', { kind: base, ext: ext.toLowerCase() }) : base;
   }
   const infoLocation = $derived(infoItem ? (rootLabel + (infoItem.dir ? ' / ' + infoItem.dir.split('/').join(' / ') : '')) : '');
   // 传输行右侧文案：真速率（EMA）+ 进度百分比；首片完成前还没有速率样本，先只给百分比。
   // 总大小未知（下载响应缺 content-length）时退化显示已传字节，别出 NaN%。
-  const fmtSpeed = (t) => (t.bps > 0 ? fmtSize(t.bps) + '/s · ' : '') + (t.total > 0 ? Math.min(100, Math.round((t.sent / t.total) * 100)) + '%' : fmtSize(t.sent));
+  const fmtSpeed = (tk) => (tk.bps > 0 ? fmtSize(tk.bps) + '/s · ' : '') + (tk.total > 0 ? Math.min(100, Math.round((tk.sent / tk.total) * 100)) + '%' : fmtSize(tk.sent));
 
   const GLYPH = {
     img: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.4"/><circle cx="9" cy="9.6" r="1.7"/><path d="m6 17 4.2-4.4 3 3 2.4-2.5 2.9 3.1"/>',
@@ -1000,30 +1004,30 @@
     <div class="dropveil">
       <div class="dropveil-in">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M8 8l4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-        <span>{dropOn ? `上传到「${dropOn}」` : '上传到当前文件夹'}</span>
+        <span>{dropOn ? t('上传到「{name}」', { name: dropOn }) : t('上传到当前文件夹')}</span>
       </div>
     </div>
   {/if}
   <!-- 顶部玻璃钮：返回 + 添加 + 传输环（分享只读=只留传输环当下载指示；根目录连返回键也不出——没有主页可回） -->
   <div class="topbtns">
     {#if !readonly || segs.length}
-      <button class="gbtn" aria-label="返回" onclick={back}>
+      <button class="gbtn" aria-label={t('返回')} onclick={back}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7" /></svg>
       </button>
     {/if}
     <div style="flex:1"></div>
     {#if wsPick}
       <!-- 选择器只留「新建文件夹」：要一个全新的空项目就在这儿建，建完拖进底栏即可 -->
-      <button class="gbtn" aria-label="新建文件夹" onclick={() => (mkOpen = { value: '' })}>
+      <button class="gbtn" aria-label={t('新建文件夹')} onclick={() => (mkOpen = { value: '' })}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /><path d="M12 11v5M9.5 13.5h5" /></svg>
       </button>
     {:else}
       {#if !readonly}
-        <button class="gbtn" aria-label="添加" onclick={() => (addOpen = !addOpen)}>
+        <button class="gbtn" aria-label={t('添加')} onclick={() => (addOpen = !addOpen)}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
         </button>
       {/if}
-      <button class="gbtn ring" class:alldone={allDone} aria-label="传输" onclick={() => (transferOpen = !transferOpen)}>
+      <button class="gbtn ring" class:alldone={allDone} aria-label={t('传输')} onclick={() => (transferOpen = !transferOpen)}>
         <svg class="ringsvg" viewBox="0 0 44 44">
           <circle class="track" cx="22" cy="22" r="18" />
           <circle class="prog" cx="22" cy="22" r="18" stroke-dasharray="113.1" stroke-dashoffset={113.1 * (1 - ringPct)} />
@@ -1037,10 +1041,10 @@
   </div>
 
   {#if addOpen}
-    <button class="add-scrim" aria-label="关闭" onclick={() => (addOpen = false)}></button>
+    <button class="add-scrim" aria-label={t('关闭')} onclick={() => (addOpen = false)}></button>
     <div class="addmenu">
-      <button class="mi" onclick={pickUpload}><span class="micon" style="color:#0088ff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M12 4 7 9M12 4l5 5" /><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" /></svg></span><span class="mlb">上传文件</span></button>
-      <button class="mi" onclick={() => { addOpen = false; mkOpen = { value: '' }; }}><span class="micon" style="color:#0088ff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /><path d="M12 11v5M9.5 13.5h5" /></svg></span><span class="mlb">新建文件夹</span></button>
+      <button class="mi" onclick={pickUpload}><span class="micon" style="color:#0088ff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M12 4 7 9M12 4l5 5" /><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" /></svg></span><span class="mlb">{t('上传文件')}</span></button>
+      <button class="mi" onclick={() => { addOpen = false; mkOpen = { value: '' }; }}><span class="micon" style="color:#0088ff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /><path d="M12 11v5M9.5 13.5h5" /></svg></span><span class="mlb">{t('新建文件夹')}</span></button>
     </div>
   {/if}
 
@@ -1058,7 +1062,7 @@
         <span class="wp-grip" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span>
       {/if}
       {#if selecting}
-        <span class="sel-count">已选择 {selected.size} 项</span>
+        <span class="sel-count">{t('已选择 {n} 项', { n: selected.size })}</span>
       {:else}
         <button class="pb-seg" class:cur={!segs.length} class:dnd-on={drag.overKey === 'ws-crumb:-1'} use:dropZone={crumbZone(-1)} onclick={goRoot}>{#if readonly}<svg class="pb-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 13.7a4.2 4.2 0 0 0 6.1.3l2.4-2.4a4.2 4.2 0 0 0-5.9-5.9l-1.3 1.3" /><path d="M13.7 10.3a4.2 4.2 0 0 0-6.1-.3l-2.4 2.4a4.2 4.2 0 0 0 5.9 5.9l1.3-1.3" /></svg>{/if}{rootLabel}</button>
         {#each segs as s, i}<span class="pb-sep">›</span>{#if i < segs.length - 1}<button class="pb-seg" class:dnd-on={drag.overKey === 'ws-crumb:' + i} use:dropZone={crumbZone(i)} onclick={() => goSeg(i)}>{s}</button>{:else}<span class="pb-seg cur">{s}</span>{/if}{/each}
@@ -1066,9 +1070,9 @@
     </div>
     <!-- 管理员的位置切换（工作空间 / 主目录 / 各盘符或「/」）：与新建项目选择器同一份 /api/project/locations -->
     {#if locations && locations.length > 1 && onLocation && !wsPick && !selecting}
-      <div class="locbar" role="tablist" aria-label="位置">
+      <div class="locbar" role="tablist" aria-label={tc('files', '位置')}>
         {#each locations as l (l.id)}
-          <button class="loc" class:on={l.id === locationId} role="tab" aria-selected={l.id === locationId} title={l.path} onclick={() => onLocation(l)}>{l.name}</button>
+          <button class="loc" class:on={l.id === locationId} role="tab" aria-selected={l.id === locationId} title={l.path} onclick={() => onLocation(l)}>{tr(l.name)}</button>
         {/each}
       </div>
     {/if}
@@ -1077,18 +1081,18 @@
       <!-- 位置栏：文件管理器本身锁在身份工作空间根（admin=vault），可真实项目往往在库外。
            这一条把可达范围补回整机，授权边界仍由服务端 authorizeProjectPath 判——Pro 只会
            拿到自己那一条，这行不出现。 -->
-      <div class="sechead"><h2>位置</h2></div>
+      <div class="sechead"><h2>{tc('files', '位置')}</h2></div>
       <div class="desktop-locations">
         {#each pickerLocations as loc (loc.id)}
           <button class="desktop-location" class:on={loc.id === pickerLocationId} onclick={() => onPickLocation?.(loc)}>
-            <span class="dl-icon">📁</span><span>{loc.name}</span>
+            <span class="dl-icon">📁</span><span>{tr(loc.name)}</span>
           </button>
         {/each}
       </div>
     {/if}
 
     {#if recents.length}
-      <div class="sechead"><h2>最近</h2></div>
+      <div class="sechead"><h2>{t('最近')}</h2></div>
       <div class="recents">
         {#each recents as it (it.name)}
           <button class="rcard" class:dnd-lift={liftRels.has(itemRel(it))} class:dnd-arm={armRel === itemRel(it)}
@@ -1111,7 +1115,7 @@
     {/if}
 
     {#if showFolders.length}
-      <div class="sechead"><h2>文件夹</h2></div>
+      <div class="sechead"><h2>{tc('files', '文件夹')}</h2></div>
       <div class="foldergrid">
         {#each showFolders as f (f.rel || f.name)}
           <button class="folder" class:sel={selected.has(f.name)} class:dropin={dropOn === f.name || drag.overKey === 'ws-dir:' + itemRel(f)}
@@ -1130,7 +1134,7 @@
     {/if}
 
     {#if showFiles.length}
-      <div class="sechead"><h2>文件</h2></div>
+      <div class="sechead"><h2>{tc('files', '文件')}</h2></div>
       <div class="filecard">
         {#each showFiles as f (f.rel || f.name)}
           <div class="frow" class:sel={selected.has(f.name)} class:wp-flat={wsPick} class:dnd-lift={liftRels.has(itemRel(f))} class:dnd-arm={armRel === itemRel(f)} role="button" tabindex="0"
@@ -1145,9 +1149,9 @@
                 {#if kindOf(f.name) === 'mov'}<span class="fplay"><svg viewBox="0 0 24 24"><path d="M8.4 5.8v12.4L19 12z" /></svg></span>{/if}
               {/if}
             </span>
-            <span class="meta"><span class="nm">{f.name}</span><span class="fsub">{f.parent ? `${f.parent} · ` : ''}{fmtTime(f.mtime)} · {fmtSize(f.size)}{f.linkType ? ` · ${f.linkType === 'external-link' ? '外部链接（只读）' : '链接'}` : ''}</span></span>
+            <span class="meta"><span class="nm">{f.name}</span><span class="fsub">{f.parent ? `${f.parent} · ` : ''}{fmtTime(f.mtime)} · {fmtSize(f.size)}{f.linkType ? ` · ${f.linkType === 'external-link' ? t('外部链接（只读）') : t('链接')}` : ''}</span></span>
             {#if !wsPick}
-              <button class="dots" aria-label="更多" onclick={(e) => { e.stopPropagation(); openMenu(e, f); }}>
+              <button class="dots" aria-label={t('更多')} onclick={(e) => { e.stopPropagation(); openMenu(e, f); }}>
                 <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.9" /><circle cx="12" cy="12" r="1.9" /><circle cx="19" cy="12" r="1.9" /></svg>
               </button>
             {/if}
@@ -1157,7 +1161,7 @@
     {/if}
 
     {#if isEmpty}
-      <div class="empty"><div class="big">{query ? '🔍' : '📂'}</div>{query ? '未找到相关文件' : '这个文件夹是空的'}</div>
+      <div class="empty"><div class="big">{query ? '🔍' : '📂'}</div>{query ? t('未找到相关文件') : t('这个文件夹是空的')}</div>
     {/if}
   </div>
 
@@ -1170,9 +1174,9 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /><path d="M12 16.5v-5M9.6 13.6 12 11.2l2.4 2.4" /></svg>
         </span>
         <span class="wpd-lb">
-          {#if pkDrag?.over}松手即可创建{:else if pkDrag}拖到这里松手{:else}{pickLabel}{/if}
+          {#if pkDrag?.over}{t('松手即可创建')}{:else if pkDrag}{t('拖到这里松手')}{:else}{pickLabel}{/if}
         </span>
-        {#if !pkDrag}<span class="wpd-sub">长按文件夹拖进来</span>{/if}
+        {#if !pkDrag}<span class="wpd-sub">{t('长按文件夹拖进来')}</span>{/if}
       </div>
     </div>
   {/if}
@@ -1182,7 +1186,7 @@
   {#if pkDrag}
     <div class="wpghost" class:over={pkDrag.over} style="left:{pkDrag.x}px; top:{pkDrag.y}px">
       <img class="wpg-ic" src="{BASE}assets/icons/workspace.png" alt="" draggable="false" />
-      <span class="wpg-nm">{pkDrag.name || '工作空间'}</span>
+      <span class="wpg-nm">{pkDrag.name || t('工作空间')}</span>
     </div>
   {/if}
 
@@ -1190,78 +1194,78 @@
   {#if !readonly && !wsPick}
   <div class="bottomwrap" class:searching class:selecting>
     <div class="bottombar">
-      <button class="searchbtn glass" aria-label="搜索" onclick={openSearch}>
+      <button class="searchbtn glass" aria-label={t('搜索')} onclick={openSearch}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.8" /><path d="m20 20-4.4-4.4" /></svg>
       </button>
     </div>
 
     <div class="searchrow">
-      <button class="closebtn" class:glass={!fg} class:fg aria-label="关闭搜索" onclick={closeSearch}>
+      <button class="closebtn" class:glass={!fg} class:fg aria-label={t('关闭搜索')} onclick={closeSearch}>
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M2.5 2.5l11 11M13.5 2.5l-11 11" /></svg>
       </button>
       <div class="searchfield" class:glass={!fg} class:fg>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.8" /><path d="m20 20-4.4-4.4" /></svg>
-        <input bind:this={searchEl} bind:value={query} placeholder="搜索文件" autocomplete="off" />
+        <input bind:this={searchEl} bind:value={query} placeholder={t('搜索文件')} autocomplete="off" />
       </div>
     </div>
 
     <div class="selbar glass">
-      <button class="selact" onclick={() => toast('分享开发中')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M12 3 8 7M12 3l4 4" /><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" /></svg><span>分享</span></button>
-      <button class="selact" disabled={!selected.size} onclick={() => openMovePicker([...selected], 'move')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /></svg><span>移动到</span></button>
-      <button class="selact danger" disabled={!selected.size} onclick={multiDelete}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7M6.5 7l.8 11.3A2 2 0 0 0 9.3 20h5.4a2 2 0 0 0 2-1.7L17.5 7" /></svg><span>删除</span></button>
-      <button class="selact done" onclick={exitSelect}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 10 17.5 19 7" /></svg><span>完成</span></button>
+      <button class="selact" onclick={() => toast(t('分享开发中'))}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M12 3 8 7M12 3l4 4" /><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" /></svg><span>{t('分享')}</span></button>
+      <button class="selact" disabled={!selected.size} onclick={() => openMovePicker([...selected], 'move')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /></svg><span>{t('移动到')}</span></button>
+      <button class="selact danger" disabled={!selected.size} onclick={multiDelete}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7M6.5 7l.8 11.3A2 2 0 0 0 9.3 20h5.4a2 2 0 0 0 2-1.7L17.5 7" /></svg><span>{t('删除')}</span></button>
+      <button class="selact done" onclick={exitSelect}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 10 17.5 19 7" /></svg><span>{t('完成')}</span></button>
     </div>
   </div>
   {/if}
 
   <!-- 长按菜单 -->
   {#if menu}
-    <button class="menu-back" aria-label="关闭" onclick={() => { if (menuArmed) menu = null; }} oncontextmenu={(e) => { e.preventDefault(); if (menuArmed) menu = null; }}></button>
+    <button class="menu-back" aria-label={t('关闭')} onclick={() => { if (menuArmed) menu = null; }} oncontextmenu={(e) => { e.preventDefault(); if (menuArmed) menu = null; }}></button>
     <div class="ctxmenu" style="left:{menu.x}px; top:{menu.y}px; --ox:{menu.ox}%; --oy:{menu.oy}%">
       {#if !readonly && !guest}
         {#if agentOn('claude')}
-          <button class="mi ai" onclick={() => menuAct('ai')}><span class="micon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.6 4.6L18 8l-4.4 1.4L12 14l-1.6-4.6L6 8l4.4-1.4L12 2Z" /><path d="M18 13l.9 2.5L21.5 16l-2.6.8L18 19.5l-.9-2.7L14.5 16l2.6-.5L18 13Z" /></svg></span><span class="mlb">发送给 AI</span></button>
+          <button class="mi ai" onclick={() => menuAct('ai')}><span class="micon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.6 4.6L18 8l-4.4 1.4L12 14l-1.6-4.6L6 8l4.4-1.4L12 2Z" /><path d="M18 13l.9 2.5L21.5 16l-2.6.8L18 19.5l-.9-2.7L14.5 16l2.6-.5L18 13Z" /></svg></span><span class="mlb">{t('发送给 AI')}</span></button>
           <div class="msep"></div>
         {/if}
-        <button class="mi" onclick={() => menuAct('sharelink')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 13.7a4.2 4.2 0 0 0 6.1.3l2.4-2.4a4.2 4.2 0 0 0-5.9-5.9l-1.3 1.3" /><path d="M13.7 10.3a4.2 4.2 0 0 0-6.1-.3l-2.4 2.4a4.2 4.2 0 0 0 5.9 5.9l1.3-1.3" /></svg></span><span class="mlb">分享链接</span></button>
+        <button class="mi" onclick={() => menuAct('sharelink')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 13.7a4.2 4.2 0 0 0 6.1.3l2.4-2.4a4.2 4.2 0 0 0-5.9-5.9l-1.3 1.3" /><path d="M13.7 10.3a4.2 4.2 0 0 0-6.1-.3l-2.4 2.4a4.2 4.2 0 0 0 5.9 5.9l1.3-1.3" /></svg></span><span class="mlb">{tc('files', '分享链接')}</span></button>
       {/if}
       {#if !menu.item.isDir}
-        <button class="mi" onclick={() => menuAct('download')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5" /><path d="M5 20h14" /></svg></span><span class="mlb">下载到本地</span></button>
+        <button class="mi" onclick={() => menuAct('download')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5" /><path d="M5 20h14" /></svg></span><span class="mlb">{t('下载到本地')}</span></button>
       {/if}
       {#if !menu.item.isDir && kindOf(menu.item.name) === 'zip' && !readonly}
-        <button class="mi" onclick={() => menuAct('extract')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5" /><path d="M7 7V5.5A1.5 1.5 0 0 1 8.5 4h7A1.5 1.5 0 0 1 17 5.5V7" /><path d="M12 11v5M12 16l-2.2-2.2M12 16l2.2-2.2" /></svg></span><span class="mlb">解压</span></button>
+        <button class="mi" onclick={() => menuAct('extract')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5" /><path d="M7 7V5.5A1.5 1.5 0 0 1 8.5 4h7A1.5 1.5 0 0 1 17 5.5V7" /><path d="M12 11v5M12 16l-2.2-2.2M12 16l2.2-2.2" /></svg></span><span class="mlb">{t('解压')}</span></button>
       {/if}
       {#if !readonly}
-        <button class="mi" onclick={() => menuAct('move')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /></svg></span><span class="mlb">移动到</span></button>
-        <button class="mi" onclick={() => menuAct('copy')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5" /><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8" /></svg></span><span class="mlb">复制</span></button>
-        <button class="mi" onclick={() => menuAct('rename')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16v4Z" /><path d="M13.5 6.5l4 4" /></svg></span><span class="mlb">重命名</span></button>
+        <button class="mi" onclick={() => menuAct('move')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /></svg></span><span class="mlb">{t('移动到')}</span></button>
+        <button class="mi" onclick={() => menuAct('copy')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5" /><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8" /></svg></span><span class="mlb">{tc('files', '复制')}</span></button>
+        <button class="mi" onclick={() => menuAct('rename')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16v4Z" /><path d="M13.5 6.5l4 4" /></svg></span><span class="mlb">{tc('files', '重命名')}</span></button>
       {/if}
-      <button class="mi" onclick={() => menuAct('info')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 7.6h.01" /></svg></span><span class="mlb">显示简介</span></button>
+      <button class="mi" onclick={() => menuAct('info')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 7.6h.01" /></svg></span><span class="mlb">{t('显示简介')}</span></button>
       {#if !readonly}
-        <button class="mi" onclick={() => menuAct('select')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M8 12.5 11 15.5 16.5 9.5" /></svg></span><span class="mlb">多选</span></button>
+        <button class="mi" onclick={() => menuAct('select')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M8 12.5 11 15.5 16.5 9.5" /></svg></span><span class="mlb">{t('多选')}</span></button>
         <div class="msep"></div>
-        <button class="mi destructive" onclick={() => menuAct('delete')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7M6.5 7l.8 11.3A2 2 0 0 0 9.3 20h5.4a2 2 0 0 0 2-1.7L17.5 7" /></svg></span><span class="mlb">删除</span></button>
+        <button class="mi destructive" onclick={() => menuAct('delete')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7M6.5 7l.8 11.3A2 2 0 0 0 9.3 20h5.4a2 2 0 0 0 2-1.7L17.5 7" /></svg></span><span class="mlb">{t('删除')}</span></button>
       {/if}
     </div>
   {/if}
 
   <!-- 传输面板 -->
   {#if transferOpen}
-    <button class="tp-scrim" aria-label="关闭" onclick={() => (transferOpen = false)}></button>
+    <button class="tp-scrim" aria-label={t('关闭')} onclick={() => (transferOpen = false)}></button>
     <div class="transferpanel glass-strong">
-      <div class="tp-head"><h3>传输</h3>{#if tasks.length}<button onclick={() => (tasks = tasks.filter((t) => t.status === 'up'))}>清除已完成</button>{/if}</div>
+      <div class="tp-head"><h3>{t('传输')}</h3>{#if tasks.length}<button onclick={() => (tasks = tasks.filter((x) => x.status === 'up'))}>{t('清除已完成')}</button>{/if}</div>
       {#if !tasks.length}
-        <div class="tp-empty">暂无传输任务</div>
+        <div class="tp-empty">{t('暂无传输任务')}</div>
       {:else}
-        {#each tasks as t (t.id)}
+        {#each tasks as task (task.id)}
           <div class="task">
-            <span class="ticon" style="background:{t.status === 'error' ? '#ff383c' : t.status === 'done' ? '#34c759' : t.status === 'cancelled' ? '#aeaeb2' : iconColor(t.name)}">{@html fileGlyph(t.kind)}</span>
+            <span class="ticon" style="background:{task.status === 'error' ? '#ff383c' : task.status === 'done' ? '#34c759' : task.status === 'cancelled' ? '#aeaeb2' : iconColor(task.name)}">{@html fileGlyph(task.kind)}</span>
             <span class="tmeta">
-              <span class="r1"><span class="nm">{t.name}</span><span class="spd">{t.status === 'done' ? '完成' : t.status === 'error' ? '失败' : t.status === 'cancelled' ? '已取消' : fmtSpeed(t)}</span></span>
-              <span class="track"><span class="fillb" class:up={t.status !== 'error' && t.status !== 'cancelled'} class:off={t.status === 'cancelled'} style="width:{t.total > 0 ? Math.round((t.sent / t.total) * 100) : 0}%"></span></span>
+              <span class="r1"><span class="nm">{task.name}</span><span class="spd">{task.status === 'done' ? t('完成') : task.status === 'error' ? t('失败') : task.status === 'cancelled' ? t('已取消') : fmtSpeed(task)}</span></span>
+              <span class="track"><span class="fillb" class:up={task.status !== 'error' && task.status !== 'cancelled'} class:off={task.status === 'cancelled'} style="width:{task.total > 0 ? Math.round((task.sent / task.total) * 100) : 0}%"></span></span>
             </span>
-            {#if t.status === 'up'}
-              <button class="tp-x" aria-label="取消上传" onclick={() => cancelUpload(t)}>
+            {#if task.status === 'up'}
+              <button class="tp-x" aria-label={t('取消上传')} onclick={() => cancelUpload(task)}>
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
               </button>
             {/if}
@@ -1276,14 +1280,14 @@
     <div class="pv-mask" onclick={() => (preview = null)} role="presentation">
       <div class="pv-card glass-strong" onclick={(e) => e.stopPropagation()} role="presentation">
         <div class="pv-head"><span class="pv-name">{preview.name}</span>
-          <button class="pv-dl" onclick={() => download(preview.rel)} aria-label="下载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5" /><path d="M5 20h14" /></svg></button>
-          <button class="pv-x" onclick={() => (preview = null)} aria-label="关闭"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2.5 2.5l11 11M13.5 2.5l-11 11" /></svg></button>
+          <button class="pv-dl" onclick={() => download(preview.rel)} aria-label={t('下载')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5" /><path d="M5 20h14" /></svg></button>
+          <button class="pv-x" onclick={() => (preview = null)} aria-label={t('关闭')}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2.5 2.5l11 11M13.5 2.5l-11 11" /></svg></button>
         </div>
         <div class="pv-body">
-          {#if preview.loading}<div class="pv-loading">加载中…</div>
+          {#if preview.loading}<div class="pv-loading">{t('加载中…')}</div>
           {:else if preview.kind === 'img'}<img src={preview.url} alt={preview.name} />
           {:else if preview.kind === 'text'}<pre>{preview.text}</pre>
-          {:else}<div class="pv-other"><div class="big">{@html fileIcon(preview.name)}</div><p>该类型暂不支持内嵌预览</p>{#if kindOf(preview.name) === 'zip' && !readonly}<button class="pv-dlbtn" disabled={extracting} onclick={() => { const n = preview.name; preview = null; doExtract({ name: n }); }}>{extracting ? '解压中…' : '解压到当前文件夹'}</button>{/if}<button class="pv-dlbtn" onclick={() => download(preview.rel)}>下载文件</button></div>{/if}
+          {:else}<div class="pv-other"><div class="big">{@html fileIcon(preview.name)}</div><p>{t('该类型暂不支持内嵌预览')}</p>{#if kindOf(preview.name) === 'zip' && !readonly}<button class="pv-dlbtn" disabled={extracting} onclick={() => { const n = preview.name; preview = null; doExtract({ name: n }); }}>{extracting ? t('解压中…') : t('解压到当前文件夹')}</button>{/if}<button class="pv-dlbtn" onclick={() => download(preview.rel)}>{t('下载文件')}</button></div>{/if}
         </div>
       </div>
     </div>
@@ -1293,9 +1297,9 @@
   {#if renameTarget}
     <div class="dlg-mask" onclick={() => (renameTarget = null)} role="presentation">
       <div class="dlg" onclick={(e) => e.stopPropagation()} role="presentation">
-        <h3>重命名</h3>
+        <h3>{t('重命名')}</h3>
         <input bind:value={renameTarget.value} onkeydown={(e) => e.key === 'Enter' && doRename()} />
-        <div class="dlg-btns"><button class="cancel" onclick={() => (renameTarget = null)}>取消</button><button class="go" onclick={doRename}>确定</button></div>
+        <div class="dlg-btns"><button class="cancel" onclick={() => (renameTarget = null)}>{t('取消')}</button><button class="go" onclick={doRename}>{t('确定')}</button></div>
       </div>
     </div>
   {/if}
@@ -1305,38 +1309,38 @@
     <div class="dlg-mask" onclick={() => { if (!shareDlg.busy) shareDlg = null; }} role="presentation">
       <div class="dlg sharedlg" onclick={(e) => e.stopPropagation()} role="presentation">
         {#if !shareDlg.result}
-          <h3>分享链接</h3>
+          <h3>{t('分享链接')}</h3>
           <p class="sh-file">{shareDlg.item.isDir ? '📁 ' : ''}{shareDlg.item.name}</p>
           <div class="sh-row">
-            <span class="sh-lb">启用分享密码</span>
-            <button class="sw" class:on={shareDlg.pwOn} role="switch" aria-checked={shareDlg.pwOn} aria-label="启用分享密码" onclick={() => (shareDlg.pwOn = !shareDlg.pwOn)}><span class="knob"></span></button>
+            <span class="sh-lb">{t('启用分享密码')}</span>
+            <button class="sw" class:on={shareDlg.pwOn} role="switch" aria-checked={shareDlg.pwOn} aria-label={t('启用分享密码')} onclick={() => (shareDlg.pwOn = !shareDlg.pwOn)}><span class="knob"></span></button>
           </div>
           {#if shareDlg.pwOn}
-            <input class="sh-pw" bind:value={shareDlg.password} placeholder="设置分享密码" maxlength="64" onkeydown={(e) => e.key === 'Enter' && doShareLink()} />
+            <input class="sh-pw" bind:value={shareDlg.password} placeholder={t('设置分享密码')} maxlength="64" onkeydown={(e) => e.key === 'Enter' && doShareLink()} />
           {/if}
           <div class="sh-row col">
-            <span class="sh-lb">过期时间</span>
+            <span class="sh-lb">{t('过期时间')}</span>
             <div class="sh-ttl">
-              {#each SHARE_TTLS as t (t.h)}
-                <button class:on={shareDlg.ttl === t.h} onclick={() => (shareDlg.ttl = t.h)}>{t.lb}</button>
+              {#each SHARE_TTLS as ttl (ttl.h)}
+                <button class:on={shareDlg.ttl === ttl.h} onclick={() => (shareDlg.ttl = ttl.h)}>{tr(ttl.lb)}</button>
               {/each}
             </div>
           </div>
           <div class="dlg-btns">
-            <button class="cancel" onclick={() => (shareDlg = null)}>取消</button>
-            <button class="go" disabled={shareDlg.busy} onclick={doShareLink}>{shareDlg.busy ? '创建中…' : '创建链接'}</button>
+            <button class="cancel" onclick={() => (shareDlg = null)}>{t('取消')}</button>
+            <button class="go" disabled={shareDlg.busy} onclick={doShareLink}>{shareDlg.busy ? t('创建中…') : t('创建链接')}</button>
           </div>
         {:else}
-          <h3>链接已创建</h3>
+          <h3>{t('链接已创建')}</h3>
           <p class="sh-file">{shareDlg.item.isDir ? '📁 ' : ''}{shareDlg.item.name}</p>
           <button class="sh-url" onclick={copyShare}>{shareDlg.result.url}</button>
           <p class="sh-meta">
-            {fmtExpire(shareDlg.result.expiresAt)} 过期
-            {#if shareDlg.result.pw}<br />访问密码 <b>{shareDlg.result.pw}</b>（复制时一并带上）{/if}
+            {t('{time} 过期', { time: fmtExpire(shareDlg.result.expiresAt) })}
+            {#if shareDlg.result.pw}<br />{t('访问密码')} <b>{shareDlg.result.pw}</b>{t('（复制时一并带上）')}{/if}
           </p>
           <div class="dlg-btns">
-            <button class="cancel" onclick={() => (shareDlg = null)}>完成</button>
-            <button class="go" onclick={copyShare}>复制链接</button>
+            <button class="cancel" onclick={() => (shareDlg = null)}>{t('完成')}</button>
+            <button class="go" onclick={copyShare}>{t('复制链接')}</button>
           </div>
         {/if}
       </div>
@@ -1347,9 +1351,9 @@
   {#if mkOpen}
     <div class="dlg-mask" onclick={() => (mkOpen = null)} role="presentation">
       <div class="dlg" onclick={(e) => e.stopPropagation()} role="presentation">
-        <h3>新建文件夹</h3>
-        <input bind:value={mkOpen.value} placeholder="文件夹名称" onkeydown={(e) => e.key === 'Enter' && doMkdir()} />
-        <div class="dlg-btns"><button class="cancel" onclick={() => (mkOpen = null)}>取消</button><button class="go" onclick={doMkdir}>创建</button></div>
+        <h3>{t('新建文件夹')}</h3>
+        <input bind:value={mkOpen.value} placeholder={t('文件夹名称')} onkeydown={(e) => e.key === 'Enter' && doMkdir()} />
+        <div class="dlg-btns"><button class="cancel" onclick={() => (mkOpen = null)}>{t('取消')}</button><button class="go" onclick={doMkdir}>{t('创建')}</button></div>
       </div>
     </div>
   {/if}
@@ -1358,28 +1362,28 @@
   {#if aiPick && aiChat}
     <div class="ai-mask" onclick={closeAi} role="presentation">
       <div class="ai-sheet" onclick={(e) => e.stopPropagation()} role="presentation">
-        <div class="ai-title">发送「{aiPick.name}」到 {AI_NAMES.claude} · 选择对话</div>
+        <div class="ai-title">{t('发送「{name}」到 {agent} · 选择对话', { name: aiPick.name, agent: AI_NAMES.claude })}</div>
         <div class="ai-chat-search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-          <input type="search" placeholder="搜索对话" bind:value={aiChat.q} />
+          <input type="search" placeholder={t('搜索对话')} bind:value={aiChat.q} />
         </div>
         <button class="ai-opt" onclick={() => pickChat('new')}>
           <span class="ai-ic" style="background:#34c759"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M12 5.5v13M5.5 12h13"/></svg></span>
-          <span class="ai-lb">新对话<small>开一个新对话，附件挂进输入栏</small></span>
+          <span class="ai-lb">{t('新对话')}<small>{t('开一个新对话，附件挂进输入栏')}</small></span>
         </button>
         <div class="ai-chat-list">
           {#each aiChatFiltered as s (s.id)}
             <button class="ai-chat-row" onclick={() => pickChat(s.id)}>
               <span class="ai-chat-dot {s.thinking ? 'work' : s.pending ? 'ask' : ''}"></span>
               <span class="ai-chat-title">{chatTitle(s)}</span>
-              {#if s.id === session.id}<span class="ai-chat-cur">当前</span>{/if}
+              {#if s.id === session.id}<span class="ai-chat-cur">{t('当前')}</span>{/if}
               {#if s.mtime}<span class="ai-chat-time">{relTime(s.mtime)}</span>{/if}
             </button>
           {:else}
-            <div class="ai-chat-empty">{aiChat.loading ? '加载中…' : aiChat.q ? '没有匹配的对话' : '还没有历史对话'}</div>
+            <div class="ai-chat-empty">{aiChat.loading ? t('加载中…') : aiChat.q ? t('没有匹配的对话') : t('还没有历史对话')}</div>
           {/each}
         </div>
-        <button class="ai-cancel" onclick={closeAi}>取消</button>
+        <button class="ai-cancel" onclick={closeAi}>{t('取消')}</button>
       </div>
     </div>
   {/if}
@@ -1389,17 +1393,17 @@
     <div class="pk-mask" onclick={() => (picker = null)} role="presentation">
       <div class="pk glass-strong" onclick={(e) => e.stopPropagation()} role="presentation">
         <div class="pk-head">
-          <button class="pk-cancel" onclick={() => (picker = null)}>取消</button>
-          <span class="pk-title">{picker.mode === 'move' ? '移动' : '复制'} {picker.names.length} 项到…</span>
+          <button class="pk-cancel" onclick={() => (picker = null)}>{t('取消')}</button>
+          <span class="pk-title">{picker.mode === 'move' ? t('移动 {n} 项到…', { n: picker.names.length }) : t('复制 {n} 项到…', { n: picker.names.length })}</span>
           <span style="width:40px"></span>
         </div>
         <div class="pk-crumb">
-          <button class:cur={!picker.path} onclick={() => pickerLoad('')}>工作空间</button>
+          <button class:cur={!picker.path} onclick={() => pickerLoad('')}>{t('工作空间')}</button>
           {#each picker.path.split('/').filter(Boolean) as s, i}<span class="pb-sep">›</span><button class:cur={i === picker.path.split('/').filter(Boolean).length - 1} onclick={() => pickerCrumb(i)}>{s}</button>{/each}
         </div>
         <div class="pk-list">
-          {#if picker.loading}<div class="pk-empty">加载中…</div>
-          {:else if !picker.items.length}<div class="pk-empty">这里没有子文件夹<br /><small>可直接放到当前位置</small></div>
+          {#if picker.loading}<div class="pk-empty">{t('加载中…')}</div>
+          {:else if !picker.items.length}<div class="pk-empty">{t('这里没有子文件夹')}<br /><small>{t('可直接放到当前位置')}</small></div>
           {:else}
             {#each picker.items as f (f.name)}
               <button class="pk-row" onclick={() => pickerEnter(f.name)}>
@@ -1410,7 +1414,7 @@
             {/each}
           {/if}
         </div>
-        <button class="pk-confirm" onclick={pickerConfirm}>{picker.mode === 'move' ? '移动' : '复制'}到「{pickerDestName}」</button>
+        <button class="pk-confirm" onclick={pickerConfirm}>{picker.mode === 'move' ? t('移动到「{name}」', { name: pickerDestName }) : t('复制到「{name}」', { name: pickerDestName })}</button>
       </div>
     </div>
   {/if}
@@ -1424,12 +1428,12 @@
           <div class="info-name">{infoItem.name}</div>
         </div>
         <div class="info-rows">
-          <div class="ir"><span>种类</span><b>{typeLabel(infoItem)}</b></div>
-          <div class="ir"><span>大小</span><b>{infoItem.isDir ? '文件夹' : fmtSize(infoItem.size)}</b></div>
-          <div class="ir"><span>修改时间</span><b>{fmtFull(infoItem.mtime)}</b></div>
-          <div class="ir"><span>位置</span><b class="loc">{infoLocation}</b></div>
+          <div class="ir"><span>{t('种类')}</span><b>{typeLabel(infoItem)}</b></div>
+          <div class="ir"><span>{t('大小')}</span><b>{infoItem.isDir ? t('文件夹') : fmtSize(infoItem.size)}</b></div>
+          <div class="ir"><span>{t('修改时间')}</span><b>{fmtFull(infoItem.mtime)}</b></div>
+          <div class="ir"><span>{t('位置')}</span><b class="loc">{infoLocation}</b></div>
         </div>
-        <button class="info-done" onclick={() => (infoItem = null)}>完成</button>
+        <button class="info-done" onclick={() => (infoItem = null)}>{t('完成')}</button>
       </div>
     </div>
   {/if}
@@ -1798,6 +1802,7 @@
   @keyframes pkup { from { transform: translateY(100%); } to { transform: none; } }
   .pk-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 8px; }
   .pk-cancel { width: 40px; border: none; background: none; color: var(--blue); font: inherit; font-size: 16px; text-align: left; padding: 0; }
+  .pk-cancel:lang(en) { width: auto; min-width: 40px; }   /* 「Cancel」比两个汉字宽，英文下按内容撑开 */
   .pk-title { font-size: 16px; font-weight: 600; }
   .pk-crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 0 18px 8px; }
   .pk-crumb button { background: none; border: none; padding: 0; font: inherit; font-size: 14px; color: var(--blue); }
@@ -1825,6 +1830,8 @@
   .ir { display: flex; align-items: baseline; gap: 12px; padding: 9px 0; border-bottom: .5px solid var(--sep); }
   .ir:last-child { border-bottom: none; }
   .ir span { flex: 0 0 64px; font-size: 14px; color: var(--label2); }
+  /* 英文标签（Date modified / Windows properties）比 64px 宽：只在英文下按内容撑开，中文不变 */
+  .ir span:lang(en) { flex: 0 0 auto; min-width: 64px; max-width: 50%; }
   .ir b { flex: 1; font-size: 14px; font-weight: 500; text-align: right; }
   .ir b.loc { font-weight: 400; color: var(--label2); word-break: break-all; }
   .info-done { width: 100%; height: 46px; border: none; border-radius: 23px; background: var(--blue); color: #fff; font: inherit; font-size: 16px; font-weight: 600; }

@@ -5,6 +5,7 @@
   //   · 明/暗双配色（dark：查看器深底；浅：浅色宿主）；解码失败/超大文件回落纯进度条仍可用
   import { onMount, onDestroy } from 'svelte';
   import { getBlob, putBlob } from '../../lib/mediaCache.js';
+  import { t } from '../../lib/i18n.js';
 
   let { item, dark = false } = $props();
 
@@ -121,7 +122,7 @@
   <audio bind:this={audioEl} src={src || undefined} preload="metadata"
     onloadedmetadata={onMeta} ondurationchange={onDur} ontimeupdate={onTime} onplay={onPlay} onpause={onPause} onended={onEnd} onerror={onErr}></audio>
 
-  <button class="ap-play" aria-label={errored ? '重试' : playing ? '暂停' : '播放'} disabled={loadingSrc} onclick={toggle}>
+  <button class="ap-play" aria-label={errored ? t('重试') : playing ? t('暂停') : t('播放')} disabled={loadingSrc} onclick={toggle}>
     {#if loadingSrc}
       <span class="ap-spin"></span>
     {:else if errored}
@@ -134,7 +135,7 @@
   </button>
 
   <div class="ap-mid">
-    <canvas class="ap-wave" bind:this={canvas} onpointerdown={wDown} onpointermove={wMove} onpointerup={wUp} onpointercancel={wUp} role="slider" tabindex="0" aria-label="进度" aria-valuenow={Math.round(cur)} aria-valuemax={Math.round(dur)}></canvas>
+    <canvas class="ap-wave" bind:this={canvas} onpointerdown={wDown} onpointermove={wMove} onpointerup={wUp} onpointercancel={wUp} role="slider" tabindex="0" aria-label={t('进度')} aria-valuenow={Math.round(cur)} aria-valuemax={Math.round(dur)}></canvas>
   </div>
   <span class="ap-time">{fmt(cur)} / {fmt(dur)}</span>
 </div>

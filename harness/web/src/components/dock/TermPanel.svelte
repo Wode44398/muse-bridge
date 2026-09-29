@@ -11,6 +11,7 @@
   import "@xterm/xterm/css/xterm.css";
   import * as api from "../../lib/api.ts";
   import { handleDockShortcut } from "../../lib/state.svelte.ts";
+  import { t } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
   import IconButton from "../ui/IconButton.svelte";
   import Button from "../ui/Button.svelte";
@@ -51,8 +52,8 @@
     return getComputedStyle(themeRoot()).getPropertyValue(name).trim();
   }
   function applyTheme() {
-    const t = termTheme(readVar);
-    if (term && t) term.options.theme = t;
+    const theme = termTheme(readVar);
+    if (term && theme) term.options.theme = theme;
   }
 
   // 输入 16ms 微批：连击合成一次 POST
@@ -116,7 +117,7 @@
         // HTTP 明确拒绝：报原因落死态，不无脑重连（「重试」兜底）
         if (e?.status) {
           connecting = false;
-          failMsg = e.status === 403 ? "终端不可用（403）" : `终端连接失败（HTTP ${e.status}）`;
+          failMsg = e.status === 403 ? t("终端不可用（403）") : t("终端连接失败（HTTP {status}）", { status: e.status });
           return;
         }
         if (!exitedFlag) scheduleReconnect(); // 断流 ≠ 结束
@@ -252,39 +253,39 @@
 <div class="tm">
   <div class="bar">
     <span class="ic"><Icon name="terminal" size={15} /></span>
-    <span class="name" title={ws}>{wsName || "终端"}</span>
+    <span class="name" title={ws}>{wsName || t("终端")}</span>
     <span
       class="dot"
       class:on={live}
       class:wait={connecting && !failMsg}
       class:warn={exited}
       class:bad={!!failMsg}
-      title={failMsg || (exited ? "终端已退出" : connecting ? "连接终端…" : undefined)}
+      title={failMsg || (exited ? t("终端已退出") : connecting ? t("连接终端…") : undefined)}
     ></span>
     <span class="sp"></span>
-    <IconButton icon="reload" label="重启终端" size={coarse ? 40 : 30} iconSize={16} onclick={restart} />
+    <IconButton icon="reload" label={t("重启终端")} size={coarse ? 40 : 30} iconSize={16} onclick={restart} />
   </div>
   <div class="stage">
     <div class="holder" bind:this={holder}></div>
     {#if failMsg}
       <div class="veil">
         <p>{failMsg}</p>
-        <Button size="sm" variant="secondary" icon="reload" onclick={retry}>重试</Button>
+        <Button size="sm" variant="secondary" icon="reload" onclick={retry}>{t("重试")}</Button>
       </div>
     {:else if exited}
       <div class="veil">
         <span class="veil-ic"><Icon name="terminal" size={22} stroke={1.5} /></span>
-        <p>终端已退出</p>
-        <Button size="sm" variant="primary" onclick={restart}>重启终端</Button>
+        <p>{t("终端已退出")}</p>
+        <Button size="sm" variant="primary" onclick={restart}>{t("重启终端")}</Button>
       </div>
     {:else if connecting && !greeted}
       <div class="veil">
         <Mark size={18} live />
-        <p>连接终端…</p>
+        <p>{t("连接终端…")}</p>
       </div>
     {/if}
   </div>
-  <div class="keys" role="toolbar" aria-label="终端快捷键">
+  <div class="keys" role="toolbar" aria-label={t("终端快捷键")}>
     {#each QUICK as k (k.label)}
       <!-- 按下不抢焦点：软键盘不收起，按键直接进终端 -->
       <button class="key" onpointerdown={(e) => e.preventDefault()} onclick={() => quick(k.d)}>{k.label}</button>

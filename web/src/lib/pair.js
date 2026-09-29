@@ -7,6 +7,7 @@
 
 import { api, setToken } from './api.js';
 import { applyMe } from './state.svelte.js';
+import { t } from './i18n.js';
 
 export function pairPayload(id, key) {
   let origin = '';
@@ -53,29 +54,29 @@ export function startPairLogin(onUpdate) {
     const dead = () => stopped || my !== gen;
     emit({ status: 'loading' });
     try {
-      const t = await api.post('/api/pair/new', { label: selfLabel() });
+      const tk = await api.post('/api/pair/new', { label: selfLabel() });
       if (dead()) return;
-      const svg = await qrSvg(pairPayload(t.id, t.key));
+      const svg = await qrSvg(pairPayload(tk.id, tk.key));
       if (dead()) return;
-      emit({ status: 'pending', svg, expiresAt: t.expiresAt });
+      emit({ status: 'pending', svg, expiresAt: tk.expiresAt });
       let status = 'pending', fails = 0;
       while (!dead()) {
         let r;
-        try { r = await api.post('/api/pair/wait', { id: t.id, claim: t.claim, status }); fails = 0; }
+        try { r = await api.post('/api/pair/wait', { id: tk.id, claim: tk.claim, status }); fails = 0; }
         catch (e) {
           if (dead()) return;
           if (e?.status === 404 || e?.status === 410) { emit({ status: 'expired' }); return; }
-          if (++fails > 6) { emit({ status: 'error', error: '连不上服务器，点击重试' }); return; }
+          if (++fails > 6) { emit({ status: 'error', error: t('连不上服务器，点击重试') }); return; }
           await sleep(1500 * fails);
           continue;
         }
         if (dead()) return;
         if (!r || r.status === status) continue;   // 长轮询到点、状态没变：接着等
         status = r.status;
-        if (status === 'scanned') { emit({ status: 'scanned', svg, expiresAt: t.expiresAt }); continue; }
+        if (status === 'scanned') { emit({ status: 'scanned', svg, expiresAt: tk.expiresAt }); continue; }
         if (status === 'approved') {
           emit({ status: 'approved' });
-          const c = await api.post('/api/pair/claim', { id: t.id, claim: t.claim });
+          const c = await api.post('/api/pair/claim', { id: tk.id, claim: tk.claim });
           if (dead()) return;
           // 拿到凭据即存为 Bearer（与账号密码登录同一课）
           if (c.token) setToken(c.token);
@@ -91,7 +92,7 @@ export function startPairLogin(onUpdate) {
       }
     } catch (e) {
       if (dead()) return;
-      emit({ status: 'error', error: e?.body?.error || (e?.status === 429 ? '请求过多，请稍后再试' : '二维码生成失败，点击重试') });
+      emit({ status: 'error', error: e?.body?.error || (e?.status === 429 ? t('请求过多，请稍后再试') : t('二维码生成失败，点击重试')) });
     }
   }
   // 首次 run 推到微任务：调用方多半在 $effect 里起我们，同步回调会让 effect 把回调里碰到的

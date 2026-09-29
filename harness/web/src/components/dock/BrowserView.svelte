@@ -15,6 +15,7 @@
   import * as api from "../../lib/api.ts";
   import { nativeShellBrowser, mountShellBrowser, unmountShellBrowser, onNativeOverlayChange, nativeOverlayActive } from "../../lib/nativeShell.ts";
   import { press } from "../../lib/motion.ts";
+  import { t } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
   import IconButton from "../ui/IconButton.svelte";
   import Empty from "../ui/Empty.svelte";
@@ -46,7 +47,7 @@
   function releaseNative() {
     if (!nativeBrowser) return;
     cancelAnimationFrame(nativeRaf);
-    const id = nativeMounted || nativeWant || app.browserTabs.find((t) => t.active)?.id || "";
+    const id = nativeMounted || nativeWant || app.browserTabs.find((x) => x.active)?.id || "";
     nativeMounted = "";
     nativeWant = "";
     // 手里没有 id = 从没挂过：不去 unmount("")——那会把别的面板的视图也藏掉
@@ -56,7 +57,7 @@
   function syncNative() {
     if (!nativeBrowser) return;
     cancelAnimationFrame(nativeRaf);
-    const active = app.browserTabs.find((t) => t.active);
+    const active = app.browserTabs.find((x) => x.active);
     // 浮层压着一律让位（原生视图恒在 DOM 之上）；浮层关掉时 onNativeOverlayChange 会把这里再叫一遍
     if (!active?.id || !stage || dead || !live || nativeOverlayActive()) {
       releaseNative();
@@ -77,9 +78,9 @@
 
   // ── 视口档位（与后端 VIEWPORT_PRESETS 同步）：当前档由画面尺寸反推，agent 那边 resize 也会点亮 ─────────
   const DEVICES = [
-    { key: "desktop", icon: "monitor", w: 1280, h: 900, label: "桌面" },
-    { key: "tablet", icon: "tabletDev", w: 768, h: 1024, label: "平板" },
-    { key: "mobile", icon: "phoneDev", w: 375, h: 812, label: "手机" },
+    { key: "desktop", icon: "monitor", w: 1280, h: 900, label: t("桌面") },
+    { key: "tablet", icon: "tabletDev", w: 768, h: 1024, label: t("平板") },
+    { key: "mobile", icon: "phoneDev", w: 375, h: 812, label: t("手机") },
   ] as const;
   let devBusy = $state(false);
   const curPreset = $derived(DEVICES.find((d) => d.w === frameW && d.h === frameH)?.key ?? "");
@@ -168,7 +169,7 @@
     } else if (ev.e === "tabs") {
       // 标签条对账：＋ / × / 切换 / 标题与地址变化都经这里广播（多端同步）
       app.browserTabs = ev.tabs ?? [];
-      const act = app.browserTabs.find((t) => t.active);
+      const act = app.browserTabs.find((x) => x.active);
       if (act && !editing) urlInput = act.url;
       if (act) setBrowserUrl(act.url);
       // 原生模式没有帧——流通着且有标签就是活的；标签变化同时驱动重挂（切标签 = 换 target）
@@ -338,9 +339,9 @@
   let moveTimer = 0;
   let movePending: { x: number; y: number } | null = null;
   function hover(c: { x: number; y: number }) {
-    const t = Date.now();
-    if (t - moveLast >= 45) {
-      moveLast = t;
+    const ms = Date.now();
+    if (ms - moveLast >= 45) {
+      moveLast = ms;
       fire({ type: "move", ...c });
       return;
     }
@@ -481,8 +482,8 @@
 
 <div class="bv">
   <div class="nav">
-    <IconButton icon="arrowL" label="后退" size={coarse ? 36 : 30} iconSize={16} onclick={() => go("back")} />
-    <IconButton icon="arrowR" label="前进" size={coarse ? 36 : 30} iconSize={16} onclick={() => go("forward")} />
+    <IconButton icon="arrowL" label={t("后退")} size={coarse ? 36 : 30} iconSize={16} onclick={() => go("back")} />
+    <IconButton icon="arrowR" label={t("前进")} size={coarse ? 36 : 30} iconSize={16} onclick={() => go("forward")} />
     <label class="url">
       <span class="ldot" class:on={live}></span>
       <input
@@ -491,8 +492,8 @@
         autocomplete="off"
         autocapitalize="off"
         enterkeyhint="go"
-        placeholder="输入地址，回车访问"
-        aria-label="输入地址，回车访问"
+        placeholder={t("输入地址，回车访问")}
+        aria-label={t("输入地址，回车访问")}
         bind:value={urlInput}
         onfocus={() => (editing = true)}
         onblur={() => (editing = false)}
@@ -509,8 +510,8 @@
         <button
           class="dev"
           class:on={curPreset === d.key}
-          title="{d.label}视口 {d.w}×{d.h}"
-          aria-label="{d.label}视口 {d.w}×{d.h}"
+          title={t("{label}视口 {w}×{h}", { label: d.label, w: d.w, h: d.h })}
+          aria-label={t("{label}视口 {w}×{h}", { label: d.label, w: d.w, h: d.h })}
           aria-pressed={curPreset === d.key}
           disabled={!live || devBusy}
           onclick={() => setDevice(d.key)}
@@ -523,13 +524,13 @@
       <button
         class="pv"
         class:on={onPreview}
-        title="在浏览器中打开应用预览（{app.chat.preview.url}）"
-        aria-label="预览"
+        title={t("在浏览器中打开应用预览（{url}）", { url: app.chat.preview.url })}
+        aria-label={t("预览")}
         use:press={{ scale: 0.95 }}
         onclick={openPreview}
       >
         <Icon name="layout" size={14} />
-        <span class="pv-t">预览</span>
+        <span class="pv-t">{t("预览")}</span>
       </button>
       {#if publicHref}
         <a
@@ -537,8 +538,8 @@
           href={publicHref}
           target="_blank"
           rel="noopener noreferrer"
-          title="公网地址打开（手机/外部浏览器可访问）"
-          aria-label="公网地址打开（手机/外部浏览器可访问）"
+          title={t("公网地址打开（手机/外部浏览器可访问）")}
+          aria-label={t("公网地址打开（手机/外部浏览器可访问）")}
         >
           <Icon name="external" size={15} />
         </a>
@@ -554,7 +555,7 @@
     bind:this={stage}
     tabindex="0"
     role="application"
-    aria-label="Agent 浏览器画面（可点击、滚动、输入）"
+    aria-label={t("Agent 浏览器画面（可点击、滚动、输入）")}
     onclick={onClick}
     oncontextmenu={onContext}
     onwheel={onWheel}
@@ -569,14 +570,14 @@
       <div class="over">
         <Empty
           icon="globe"
-          title="浏览器还没有启动"
-          text={app.chat.preview ? "应用正在运行 —— 点右上「预览」直接打开，或在上方输入地址浏览" : "在上方输入地址开始浏览，或等 agent 使用浏览器时自动出现"}
+          title={t("浏览器还没有启动")}
+          text={app.chat.preview ? t("应用正在运行 —— 点右上「预览」直接打开，或在上方输入地址浏览") : t("在上方输入地址开始浏览，或等 agent 使用浏览器时自动出现")}
         />
       </div>
     {:else if !live && !frameW}
       <div class="over">
         <Mark size={20} live />
-        <p>连接直播中…</p>
+        <p>{t("连接直播中…")}</p>
       </div>
     {/if}
     <div

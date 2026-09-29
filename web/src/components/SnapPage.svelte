@@ -20,6 +20,7 @@
   import { chat, loadSession, mirrorActiveTurn, onSnapClosed } from '../lib/chat.svelte.js';
   import { dock, openDock, closeDock, useSnapDock } from '../lib/dock.svelte.js';
   import { layout } from '../lib/layout.svelte.js';
+  import { t, tc, tr } from '../lib/i18n.js';
 
   // 'boot' 加载中 | 'active' 可聊 | 'closed' 被 Claude 关停 | 'expired' 过期 | 'gone' 不存在
   let state = $state('boot');
@@ -111,9 +112,9 @@
   });
 
   const DEAD = {
-    closed: { icon: '⛔', title: '快照已被关停', sub: 'Claude 判定该快照被恶意使用，已将其关停。' },
-    expired: { icon: '⏳', title: '快照已过期', sub: '超过 1 小时没有新消息，这个对话快照已自动销毁。' },
-    gone: { icon: '👋', title: '快照不存在', sub: '这个对话快照不存在或已销毁。' },
+    closed: { icon: '⛔', title: t('快照已被关停'), sub: t('Claude 判定该快照被恶意使用，已将其关停。') },
+    expired: { icon: '⏳', title: t('快照已过期'), sub: t('超过 1 小时没有新消息，这个对话快照已自动销毁。') },
+    gone: { icon: '👋', title: t('快照不存在'), sub: t('这个对话快照不存在或已销毁。') },
   };
 </script>
 
@@ -131,17 +132,17 @@
             <span class="snap-hero-logo"><ClaudeLogo anim="static" size={30} interactive /></span>
             <h1>Hey there</h1>
           </div>
-          <div class="hero-composer"><Composer placeholder="想问什么都可以…" /></div>
-          <p class="hero-note">这是一个临时对话空间 · 超过 1 小时没有新消息会自动销毁 · 链接对群内公开，勿发隐私内容</p>
+          <div class="hero-composer"><Composer placeholder={tc('claude', '想问什么都可以…')} /></div>
+          <p class="hero-note">{t('这是一个临时对话空间 · 超过 1 小时没有新消息会自动销毁 · 链接对群内公开，勿发隐私内容')}</p>
         </main>
       {:else}
         <div class="scroll" bind:this={scrollEl} onscroll={onScroll}><Thread /></div>
         <div class="composer-wrap" bind:this={composerWrapEl}>
           <div class="composer-inner">
             {#if softDead}
-              <div class="dead-banner">{softDead === 'closed' ? ('⛔ 此快照已被 Claude 关停' + (closedReason ? '：' + closedReason : '')) : '⏳ 快照已过期，超过 1 小时没有新消息'}</div>
+              <div class="dead-banner">{softDead === 'closed' ? (closedReason ? t('⛔ 此快照已被 Claude 关停：{reason}', { reason: tr(closedReason) }) : t('⛔ 此快照已被 Claude 关停')) : t('⏳ 快照已过期，超过 1 小时没有新消息')}</div>
             {:else}
-              <Composer placeholder="发消息…" />
+              <Composer placeholder={tc('claude', '发消息…')} />
             {/if}
           </div>
         </div>
@@ -150,15 +151,15 @@
     </div>
     <ClaudeDock {wide} />
   {:else if state === 'boot'}
-    <div class="dead"><div class="dead-card"><p class="dead-sub">加载中…</p></div></div>
+    <div class="dead"><div class="dead-card"><p class="dead-sub">{t('加载中…')}</p></div></div>
   {:else}
     <div class="dead">
       <div class="dead-card">
         <div class="dead-icon">{DEAD[state].icon}</div>
         <h2>{DEAD[state].title}</h2>
         <p class="dead-sub">{DEAD[state].sub}</p>
-        {#if state === 'closed' && closedReason}<p class="dead-reason">原因：{closedReason}</p>{/if}
-        <p class="dead-hint">在群里 @机器人 发送 /chat 可以新开一个对话。</p>
+        {#if state === 'closed' && closedReason}<p class="dead-reason">{t('原因：{reason}', { reason: tr(closedReason) })}</p>{/if}
+        <p class="dead-hint">{t('在群里 @机器人 发送 /chat 可以新开一个对话。')}</p>
       </div>
     </div>
   {/if}

@@ -8,6 +8,7 @@
   import { focusPane, type ArtifactItem, type Chat } from "../../lib/state.svelte.ts";
   import { providePane } from "../../lib/pane.ts";
   import { reducedMotion, SPRING_SOFT, springEasing } from "../../lib/motion.ts";
+  import { t, tr } from "../../lib/i18n.ts";
   import TopBar from "./TopBar.svelte";
   import Hero from "./Hero.svelte";
   import Feed from "../feed/Feed.svelte";
@@ -87,7 +88,11 @@
   class:focused
   class:centered
   data-pane={index}
-  aria-label={split ? `第 ${index + 1} 格：${chat.title?.trim() || "新对话"}${focused ? "（当前）" : ""}` : undefined}
+  aria-label={split
+    ? focused
+      ? t("第 {n} 格：{title}（当前）", { n: index + 1, title: tr(chat.title?.trim() ?? "") || t("新对话") })
+      : t("第 {n} 格：{title}", { n: index + 1, title: tr(chat.title?.trim() ?? "") || t("新对话") })
+    : undefined}
   onpointerdowncapture={claim}
   onfocusincapture={claim}
 >

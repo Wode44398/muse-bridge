@@ -6,6 +6,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { setPreviewDetail } from '../../lib/preview.svelte.js';
   import { registerCapture } from '../../lib/uiReport.js';
+  import { t, tc } from '../../lib/i18n.js';
 
   // PDF.js 按需加载（~350KB）：此前是静态 import，被打进主 chunk，于是每次启动都要
   // 解析一遍——而 PDF 只有真的去预览一个 pdf 时才用得上。worker 仍走 ?url 本地资源
@@ -29,7 +30,7 @@
   $effect(() => registerCapture(() => {
     const c = rendered.get(curPage);
     if (!c || !c.toDataURL) return null;
-    try { return { image: c.toDataURL('image/jpeg', 0.85), note: `PDF 第 ${curPage}/${numPages} 页` }; } catch { return null; }
+    try { return { image: c.toDataURL('image/jpeg', 0.85), note: `PDF 第 ${curPage}/${numPages} 页` }; } catch { return null; }   // i18n-ignore 截图附注是给 agent 看的上下文，不上屏
   }));
 
   let scroller = $state(), pagesWrap = $state();
@@ -160,21 +161,21 @@
 
 <div class="pdf-root">
   <header class="pdf-head">
-    <button class="pdf-btn" aria-label="返回" onclick={() => onClose?.()}>
+    <button class="pdf-btn" aria-label={t('返回')} onclick={() => onClose?.()}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
     </button>
     <span class="pdf-title">{item.name}</span>
     {#if numPages}<span class="pdf-pageno">{curPage} / {numPages}</span>{/if}
-    <button class="pdf-btn" aria-label="缩小" onclick={zoomOut}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
-    <button class="pdf-btn" aria-label="放大" onclick={zoomIn}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
-    {#if item.downloadHref}<a class="pdf-btn" href={item.downloadHref} download={item.name} aria-label="下载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg></a>{/if}
+    <button class="pdf-btn" aria-label={tc('files', '缩小')} onclick={zoomOut}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
+    <button class="pdf-btn" aria-label={tc('files', '放大')} onclick={zoomIn}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+    {#if item.downloadHref}<a class="pdf-btn" href={item.downloadHref} download={item.name} aria-label={t('下载')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg></a>{/if}
   </header>
 
   <div class="pdf-scroll" bind:this={scroller} role="presentation" onpointerdown={pd} onpointermove={pm} onpointerup={pu} onpointercancel={pu}>
     {#if loading}
       <div class="pdf-center"><span class="pdf-spin"></span></div>
     {:else if error}
-      <div class="pdf-center pdf-err"><p>PDF 加载失败</p><button onclick={load}>重试</button>{#if item.downloadHref}<a class="pdf-dl" href={item.downloadHref} download={item.name}>下载</a>{/if}</div>
+      <div class="pdf-center pdf-err"><p>{t('PDF 加载失败')}</p><button onclick={load}>{t('重试')}</button>{#if item.downloadHref}<a class="pdf-dl" href={item.downloadHref} download={item.name}>{t('下载')}</a>{/if}</div>
     {:else}
       <div class="pdf-pages" bind:this={pagesWrap}>
         {#each pages as p (p.num)}

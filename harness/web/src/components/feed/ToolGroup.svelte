@@ -12,6 +12,7 @@
   import ToolRow from "./ToolRow.svelte";
   import ThinkRow from "./ThinkRow.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -25,11 +26,11 @@
   }: { items: Item[]; live: boolean; open: boolean; ontoggle: () => void; up?: boolean; down?: boolean } = $props();
 
   const tools = $derived(items.filter((x) => x.kind === "tool") as ToolItem[]);
-  const fails = $derived(tools.filter((t) => t.status === "fail" || t.status === "denied").length);
+  const fails = $derived(tools.filter((x) => x.status === "fail" || x.status === "denied").length);
   const icons = $derived.by(() => {
     const seen: IconName[] = [];
-    for (const t of tools) {
-      const ic = toolMeta(t.name).icon;
+    for (const tool of tools) {
+      const ic = toolMeta(tool.name).icon;
       if (!seen.includes(ic)) seen.push(ic);
       if (seen.length >= 4) break;
     }
@@ -40,7 +41,7 @@
   const tone = $derived.by((): NodeTone => {
     if (live) return "running";
     if (fails > 0) return "fail";
-    if (tools.some((t) => t.status === "running") && !pane.chat.running) return "stopped";
+    if (tools.some((x) => x.status === "running") && !pane.chat.running) return "stopped";
     return "ok";
   });
   const showTail = $derived(!open && live && Boolean(tail));
@@ -56,11 +57,11 @@
     {#snippet node()}<ToolNode {tone} />{/snippet}
     {#snippet head()}
       <!-- U8（X43）：组只收只读探索（看文件、搜代码、查网页），动作单独成行 -->
-      <span class="label" class:hx-shimmer={live}>{live ? `查看中 · 第 ${tools.length} 处` : `查看了 ${tools.length} 处`}</span>
+      <span class="label" class:hx-shimmer={live}>{live ? t("查看中 · 第 {n} 处", { n: tools.length }) : t("查看了 {n} 处", { n: tools.length })}</span>
       <span class="icons" aria-hidden="true">
         {#each icons as ic (ic)}<span class="gi"><Icon name={ic} size={13} /></span>{/each}
       </span>
-      {#if fails > 0}<span class="fails">{fails} 失败</span>{/if}
+      {#if fails > 0}<span class="fails">{t("{n} 失败", { n: fails })}</span>{/if}
     {/snippet}
   </RailRow>
 

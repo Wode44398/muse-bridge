@@ -11,13 +11,14 @@
   import { fade, reducedMotion, SPRING_SOFT } from "../../lib/motion.ts";
   import { dragClose } from "../../lib/touch.ts";
   import IconButton from "./IconButton.svelte";
+  import { t } from "../../lib/i18n.ts";
 
   let {
     title,
     subtitle,
     onclose = () => {},
     onback,
-    backLabel = "返回",
+    backLabel = t("返回"),
     size = "md",
     dismissible = true,
     tall = false,
@@ -58,19 +59,19 @@
   // 进场 / 退场：手机从底边滑入（柔弹簧），桌面浮起 + 放大；退场一律短促
   function enter(node: Element, _p: unknown, opts: { direction?: string } = {}) {
     const leaving = opts.direction === "out";
-    if (reducedMotion()) return { duration: leaving ? 100 : 160, css: (t: number) => `opacity:${t}` };
+    if (reducedMotion()) return { duration: leaving ? 100 : 160, css: (k: number) => `opacity:${k}` };
     if (leaving && dragged) return { duration: 0 };
     if (wide) {
       return {
         duration: leaving ? 150 : SPRING_SOFT.ms,
-        easing: leaving ? (t: number) => t * t : SPRING_SOFT.ease,
-        css: (t: number, u: number) => `opacity:${Math.min(1, t * 1.6)};transform:translateY(${(u * 10).toFixed(2)}px) scale(${(1 - u * 0.03).toFixed(4)})`,
+        easing: leaving ? (k: number) => k * k : SPRING_SOFT.ease,
+        css: (k: number, u: number) => `opacity:${Math.min(1, k * 1.6)};transform:translateY(${(u * 10).toFixed(2)}px) scale(${(1 - u * 0.03).toFixed(4)})`,
       };
     }
     const h = (node as HTMLElement).getBoundingClientRect().height + 24;
     return {
       duration: leaving ? 220 : SPRING_SOFT.ms + 80,
-      easing: leaving ? (t: number) => t * t : SPRING_SOFT.ease,
+      easing: leaving ? (k: number) => k * k : SPRING_SOFT.ease,
       css: (_t: number, u: number) => `transform:translateY(${(u * h).toFixed(1)}px)`,
     };
   }
@@ -88,7 +89,7 @@
 </script>
 
 <div class="overlay" class:wide role="presentation">
-  <button class="scrim" aria-label="关闭" tabindex="-1" onclick={() => dismissible && onclose()} in:fade|global={{ duration: 220 }} out:fade|global={{ duration: 220 }}></button>
+  <button class="scrim" aria-label={t("关闭")} tabindex="-1" onclick={() => dismissible && onclose()} in:fade|global={{ duration: 220 }} out:fade|global={{ duration: 220 }}></button>
   <!-- in: / out: 分开写：transition: 指令传给过渡函数的 direction 是 "both"，分不出进退场 -->
   <div
     bind:this={panel}
@@ -111,7 +112,7 @@
       </div>
       {#if actions}<div class="actions">{@render actions()}</div>{/if}
       {#if dismissible}
-        <IconButton icon="close" label="关闭" size={32} onclick={onclose} />
+        <IconButton icon="close" label={t("关闭")} size={32} onclick={onclose} />
       {/if}
     </div>
     <div class="content">{@render children()}</div>

@@ -10,6 +10,7 @@
   import { ui, me } from '../lib/state.svelte.js';
   import { pushBackLayer } from '../lib/nav.js';
   import { parsePairPayload } from '../lib/pair.js';
+  import { t, tr, locale, isEn } from '../lib/i18n.js';
 
   let phase = $state('camera');   // 'camera' | 'checking' | 'confirm' | 'approving' | 'done' | 'error'
   let err = $state(''), hint = $state('');
@@ -18,7 +19,7 @@
   let videoEl = $state(), fileEl = $state();
   let stream = null, timer = 0, canvas = null, detector = null, jsqr = null, running = false;
   let lastBadAt = 0;
-  const ident = $derived(me.kind === 'admin' ? '管理员' : (me.user || '我'));
+  const ident = $derived(me.kind === 'admin' ? t('管理员') : (me.user || t('我')));
   const secure = typeof window !== 'undefined' && window.isSecureContext !== false;
 
   function haptic(kind) { try { navigator.vibrate?.(kind === 'heavy' ? 18 : kind === 'tick' ? 6 : 10); } catch {} }
@@ -34,16 +35,16 @@
 
   function camErr(e) {
     const n = e?.name || '';
-    if (n === 'NotAllowedError' || n === 'SecurityError') return '相机权限被拒绝。请在浏览器 / 系统设置里允许本站使用相机，或从相册选择二维码截图。';
-    if (n === 'NotFoundError' || n === 'OverconstrainedError') return '没有找到可用的相机。';
-    if (n === 'NotReadableError') return '相机被其它应用占用，请关闭后重试。';
-    return '打不开相机：' + (e?.message || n || '未知错误');
+    if (n === 'NotAllowedError' || n === 'SecurityError') return t('相机权限被拒绝。请在浏览器 / 系统设置里允许本站使用相机，或从相册选择二维码截图。');
+    if (n === 'NotFoundError' || n === 'OverconstrainedError') return t('没有找到可用的相机。');
+    if (n === 'NotReadableError') return t('相机被其它应用占用，请关闭后重试。');
+    return t('打不开相机：{reason}', { reason: e?.message || n || t('未知错误') });
   }
 
   async function startCam() {
     phase = 'camera'; err = ''; hint = '';
-    if (!secure) { phase = 'error'; err = '当前页面不是安全上下文（https），浏览器不允许打开相机。可从相册选择二维码截图。'; return; }
-    if (!navigator.mediaDevices?.getUserMedia) { phase = 'error'; err = '此设备不支持网页相机。可从相册选择二维码截图。'; return; }
+    if (!secure) { phase = 'error'; err = t('当前页面不是安全上下文（https），浏览器不允许打开相机。可从相册选择二维码截图。'); return; }
+    if (!navigator.mediaDevices?.getUserMedia) { phase = 'error'; err = t('此设备不支持网页相机。可从相册选择二维码截图。'); return; }
     try {
       stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
     } catch (e) { phase = 'error'; err = camErr(e); return; }
@@ -68,13 +69,13 @@
   async function loadJsqr() {
     if (jsqr) return;
     try { jsqr = (await import('jsqr')).default; }
-    catch { phase = 'error'; err = '解码模块加载失败，请检查网络后重试。'; }
+    catch { phase = 'error'; err = t('解码模块加载失败，请检查网络后重试。'); }
   }
 
   function stopCam() {
     running = false;
     clearTimeout(timer); timer = 0;
-    try { stream?.getTracks().forEach((t) => t.stop()); } catch {}
+    try { stream?.getTracks().forEach((trk) => trk.stop()); } catch {}
     stream = null;
     try { if (videoEl) videoEl.srcObject = null; } catch {}
   }
@@ -114,7 +115,7 @@
       if (text) {
         const p = parsePairPayload(text);
         if (p) { onPayload(p); return; }
-        if (Date.now() - lastBadAt > 2500) { lastBadAt = Date.now(); hint = '这不是 Muse Bridge 的登录二维码'; haptic('error'); setTimeout(() => { if (hint) hint = ''; }, 1800); }
+        if (Date.now() - lastBadAt > 2500) { lastBadAt = Date.now(); hint = t('这不是 Muse Bridge 的登录二维码'); haptic('error'); setTimeout(() => { if (hint) hint = ''; }, 1800); }
       }
     }
     timer = setTimeout(tick, detector ? 160 : 110);
@@ -126,14 +127,14 @@
     e.currentTarget.value = '';
     if (!f) return;
     let bmp = null;
-    try { bmp = await createImageBitmap(f); } catch { hint = '读不出这张图片'; return; }
+    try { bmp = await createImageBitmap(f); } catch { hint = t('读不出这张图片'); return; }
     await ensureDecoder();
     let text = '';
     try { text = await decodeFrom(bmp, bmp.width, bmp.height); } catch {}
     try { bmp.close?.(); } catch {}
     const p = parsePairPayload(text);
     if (p) onPayload(p);
-    else { hint = text ? '这不是 Muse Bridge 的登录二维码' : '图片里没有识别到二维码'; haptic('error'); setTimeout(() => { hint = ''; }, 2200); }
+    else { hint = text ? t('这不是 Muse Bridge 的登录二维码') : t('图片里没有识别到二维码'); haptic('error'); setTimeout(() => { hint = ''; }, 2200); }
   }
 
   async function onPayload(p) {
@@ -145,22 +146,22 @@
       haptic('tick');
     } catch (e) {
       phase = 'error';
-      err = e?.body?.error || (e?.status === 401 ? '请先在手机上登录，再扫码' : '二维码无效或已过期，请在网页上刷新后重扫');
+      err = tr(e?.body?.error) || (e?.status === 401 ? t('请先在手机上登录，再扫码') : t('二维码无效或已过期，请在网页上刷新后重扫'));
     }
   }
   async function approve() {
     if (!ticket || phase !== 'confirm') return;
     phase = 'approving';
     try { await api.post('/api/pair/approve', ticket); phase = 'done'; haptic('done'); setTimeout(close, 1500); }
-    catch (e) { phase = 'error'; err = e?.body?.error || '确认失败，请重扫'; }
+    catch (e) { phase = 'error'; err = tr(e?.body?.error) || t('确认失败，请重扫'); }
   }
   async function reject() {
-    const t = ticket; ticket = null;
-    if (t) { try { await api.post('/api/pair/reject', t); } catch {} }
+    const tk = ticket; ticket = null;
+    if (tk) { try { await api.post('/api/pair/reject', tk); } catch {} }
     close();
   }
   function rescan() { info = null; ticket = null; startCam(); }
-  const fmtTime = (ts) => { try { return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
+  const fmtTime = (ts) => { try { return new Date(ts).toLocaleTimeString(isEn() ? locale() : [], { hour: isEn() ? 'numeric' : '2-digit', minute: '2-digit' }); } catch { return ''; } };
 </script>
 
 <div class="ps" transition:fade={{ duration: 180 }}>
@@ -174,14 +175,14 @@
       </div>
     </div>
     <div class="top">
-      <button class="x" onclick={close} aria-label="关闭">
+      <button class="x" onclick={close} aria-label={t('关闭')}>
         <svg viewBox="0 0 20 20" width="20" height="20"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
-      <span class="title">扫一扫</span>
+      <span class="title">{t('扫一扫')}</span>
     </div>
     <div class="bot">
-      <p class="hint" class:warn={!!hint}>{phase === 'checking' ? '正在校验…' : (hint || '对准网页登录页上的二维码')}</p>
-      <button class="alt" onclick={() => fileEl?.click()}>从相册选择</button>
+      <p class="hint" class:warn={!!hint}>{phase === 'checking' ? t('正在校验…') : (hint || t('对准网页登录页上的二维码'))}</p>
+      <button class="alt" onclick={() => fileEl?.click()}>{t('从相册选择')}</button>
     </div>
   {:else}
     <button class="bd" onclick={phase === 'done' ? close : undefined} aria-hidden="true" tabindex="-1"></button>
@@ -190,35 +191,35 @@
         <div class="glyph">
           <svg viewBox="0 0 48 48" width="44" height="44"><rect x="6" y="9" width="36" height="24" rx="4" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M18 40h12M24 33v7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
         </div>
-        <h3>登录网页版</h3>
-        <p class="sub">确认后，那台设备将以「{ident}」的身份登录 Muse Bridge。</p>
+        <h3>{t('登录网页版')}</h3>
+        <p class="sub">{t('确认后，那台设备将以「{ident}」的身份登录 Muse Bridge。', { ident })}</p>
         <div class="rows">
-          <div class="row"><span>设备</span><b>{info?.device || '未知设备'}</b></div>
-          {#if info?.ip}<div class="row"><span>来源</span><b>{info.ip}</b></div>{/if}
-          {#if info?.created}<div class="row"><span>时间</span><b>{fmtTime(info.created)}</b></div>{/if}
+          <div class="row"><span>{t('设备')}</span><b>{tr(info?.device) || t('未知设备')}</b></div>
+          {#if info?.ip}<div class="row"><span>{t('来源')}</span><b>{info.ip}</b></div>{/if}
+          {#if info?.created}<div class="row"><span>{t('时间')}</span><b>{fmtTime(info.created)}</b></div>{/if}
         </div>
-        <p class="foot">若这不是你正在操作的设备，请点「取消」。</p>
+        <p class="foot">{t('若这不是你正在操作的设备，请点「取消」。')}</p>
         <div class="acts">
-          <button class="act primary" onclick={approve} disabled={phase === 'approving'}>{phase === 'approving' ? '确认中…' : '确认登录'}</button>
-          <button class="act ghost" onclick={reject} disabled={phase === 'approving'}>取消</button>
+          <button class="act primary" onclick={approve} disabled={phase === 'approving'}>{phase === 'approving' ? t('确认中…') : t('确认登录')}</button>
+          <button class="act ghost" onclick={reject} disabled={phase === 'approving'}>{t('取消')}</button>
         </div>
       {:else if phase === 'done'}
         <div class="glyph ok">
           <svg viewBox="0 0 48 48" width="44" height="44"><circle cx="24" cy="24" r="20" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M15 24l6 6 12-12" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>
-        <h3>已登录</h3>
-        <p class="sub">网页端已经登录成功，可以去电脑上继续了。</p>
-        <div class="acts"><button class="act ghost" onclick={close}>完成</button></div>
+        <h3>{t('已登录')}</h3>
+        <p class="sub">{t('网页端已经登录成功，可以去电脑上继续了。')}</p>
+        <div class="acts"><button class="act ghost" onclick={close}>{t('完成')}</button></div>
       {:else}
         <div class="glyph bad">
           <svg viewBox="0 0 48 48" width="44" height="44"><circle cx="24" cy="24" r="20" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M24 14v13M24 33v1.5" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg>
         </div>
-        <h3>无法完成</h3>
+        <h3>{t('无法完成')}</h3>
         <p class="sub">{err}</p>
         <div class="acts">
-          <button class="act primary" onclick={rescan}>重新扫描</button>
-          <button class="act ghost" onclick={() => fileEl?.click()}>从相册选择</button>
-          <button class="act link" onclick={close}>关闭</button>
+          <button class="act primary" onclick={rescan}>{t('重新扫描')}</button>
+          <button class="act ghost" onclick={() => fileEl?.click()}>{t('从相册选择')}</button>
+          <button class="act link" onclick={close}>{t('关闭')}</button>
         </div>
       {/if}
     </div>

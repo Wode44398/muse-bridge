@@ -1,6 +1,7 @@
 <script>
   // 输入栏「/」命令菜单（纯渲染：过滤/键盘/选中都在 Composer 里）。行 = /名字 + 参数提示 +
   // 一行省略的描述；mousedown 拦掉默认行为，点选不会把焦点从输入框抢走。
+  import { t, tr } from '../lib/i18n.js';
   let { items = [], active = 0, onPick, onHover } = $props();
   let listEl = $state();
   $effect(() => {
@@ -9,12 +10,12 @@
   });
 </script>
 
-<div class="sm" role="listbox" aria-label="斜杠命令" bind:this={listEl}>
+<div class="sm" role="listbox" aria-label={t('斜杠命令')} bind:this={listEl}>
   {#each items as c, i (c.name)}
     <button class="sm-row" class:on={i === active} role="option" aria-selected={i === active}
       onmousedown={(e) => e.preventDefault()} onclick={() => onPick && onPick(c)} onpointerenter={() => onHover && onHover(i)}>
       <span class="sm-name">/{c.name}{#if c.argumentHint}<span class="sm-arg"> {c.argumentHint}</span>{/if}</span>
-      {#if c.description}<span class="sm-desc">{c.description}</span>{/if}
+      {#if c.description}<span class="sm-desc">{tr(c.description)}</span>{/if}
     </button>
   {/each}
 </div>

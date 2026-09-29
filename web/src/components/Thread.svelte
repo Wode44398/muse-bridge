@@ -18,6 +18,7 @@
   import { onMdClick } from '../lib/linkNav.js';
   import { openDockFiles, openDock } from '../lib/dock.svelte.js';
   import { taskNoun } from '../lib/taskModel.js';
+  import { t, tc, tr } from '../lib/i18n.js';
 
   const hasText = (m) => m.segments.some((s) => s.kind === 'text' && s.md.trim());
   // 菊花运行态 → claude.ai 同款动画映射（相位由 chat 内核按事件流维护，见 PHASE）：
@@ -34,12 +35,19 @@
 
   // 挂起提示文案（菊花右侧那一段）：种类一致就点名种类（「等待后台命令…」比「等待后台任务…」
   // 更能说明它在等什么），混合种类回落通称。count=0 = 任务刚跑完、正在等模型续轮。
-  const HOLD_NOUN = { shell: '后台命令', agent: '子 agent', workflow: '工作流', monitor: '监视任务', task: '后台任务' };
+  // 整句带数量（英文要单复数、语序也不同）：种类 → 「{n} 个X运行中」整句模板。
+  const HOLD_TEXT = {
+    shell: (n) => t('{n} 个后台命令运行中', { n }),
+    agent: (n) => t('{n} 个子 agent运行中', { n }),
+    workflow: (n) => t('{n} 个工作流运行中', { n }),
+    monitor: (n) => t('{n} 个监视任务运行中', { n }),
+    task: (n) => t('{n} 个后台任务运行中', { n }),
+  };
   function bgHoldText(h) {
-    if (!h || !h.count) return '后台任务收尾中';
-    const kinds = new Set((h.tasks || []).map((t) => taskNoun(t.taskType)));
-    const noun = kinds.size === 1 ? (HOLD_NOUN[[...kinds][0]] || '后台任务') : '后台任务';
-    return `${h.count} 个${noun}运行中`;
+    if (!h || !h.count) return t('后台任务收尾中');
+    const kinds = new Set((h.tasks || []).map((tk) => taskNoun(tk.taskType)));
+    const fmt = kinds.size === 1 ? (HOLD_TEXT[[...kinds][0]] || HOLD_TEXT.task) : HOLD_TEXT.task;
+    return fmt(h.count);
   }
 
   // —— 尾部窗口：切进会话先只渲染最后 ~20 条，其余点「查看更早」展开 ——
@@ -97,12 +105,12 @@
   // —— 消息操作排（复制 / 重试）。图标与规格来自设计稿 claude.ai 克隆（chat.html ACT_BTNS）。
   const msgText = (m) => m.segments.filter((s) => s.kind === 'text' && s.md.trim()).map((s) => s.md).join('\n\n');
   async function copyMsg(m) {
-    const t = msgText(m);
-    if (!t) return;
-    try { await navigator.clipboard.writeText(t); }
+    const txt = msgText(m);
+    if (!txt) return;
+    try { await navigator.clipboard.writeText(txt); }
     catch {  // WebView/旧浏览器兜底
       const ta = document.createElement('textarea');
-      ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
       document.body.appendChild(ta); ta.select();
       try { document.execCommand('copy'); } catch {}
       ta.remove();
@@ -175,16 +183,16 @@
   //    整页跳走。委托拦截：能对上附件卡的 → 应用内预览（文件夹=zip
   //    另存）；对不上但形如路径的 → 借会话 id 尝试 artifact 预览（服务端会再授权校验）。
   function resolveAnswerLink(m, raw) {
-    let t = raw;
-    try { t = decodeURIComponent(raw); } catch {}
-    if (/^https?:\/\//i.test(t)) {
-      try { t = new URL(t).searchParams.get('path') || t; } catch {}
+    let lk = raw;
+    try { lk = decodeURIComponent(raw); } catch {}
+    if (/^https?:\/\//i.test(lk)) {
+      try { lk = new URL(lk).searchParams.get('path') || lk; } catch {}
     }
     // 兜底两种模型常写、却不是路径本身的包装：CommonMark 尖括号定界 <…>、file:/// 协议头。
-    t = t.trim().replace(/^<([^<>]*)>$/, '$1').trim();
-    if (/^file:/i.test(t)) t = t.replace(/^file:\/*(?:localhost\/)?/i, '').replace(/^(?![a-z]:)/i, '/');
+    lk = lk.trim().replace(/^<([^<>]*)>$/, '$1').trim();
+    if (/^file:/i.test(lk)) lk = lk.replace(/^file:\/*(?:localhost\/)?/i, '').replace(/^(?![a-z]:)/i, '/');
     const norm = (s) => String(s).replace(/[\\/]+/g, '/').replace(/^\.\//, '').toLowerCase();
-    const nt = norm(t);
+    const nt = norm(lk);
     const atts = m.attachments || [];
     const hit = atts.find((x) => x.path && norm(x.path) === nt)
       || atts.find((x) => x.path && (norm(x.path).endsWith('/' + nt) || nt.endsWith('/' + norm(x.path))))
@@ -196,7 +204,7 @@
       return true;
     }
     const sid = atts[0]?.sessionId || session.id || '';
-    if (sid && nt && nt !== '#') { openPreview({ origin: 'claude', id: sid, path: t }); return true; }
+    if (sid && nt && nt !== '#') { openPreview({ origin: 'claude', id: sid, path: lk }); return true; }
     return false;
   }
 
@@ -209,11 +217,11 @@
     try {
       const r = await rewindToMessage(m, mode);
       m.__rw = 'done';
-      m.__rwMsg = (r && r.note) || (r && r.files && r.files.ok ? `已回滚 ${r.files.changed} 个文件` : '已回滚');
+      m.__rwMsg = (r && r.note) ? tr(r.note) : (r && r.files && r.files.ok ? t('已回滚 {n} 个文件', { n: r.files.changed }) : t('已回滚'));
       setTimeout(() => { if (m.__rw === 'done') m.__rw = null; }, 4000);
     } catch (e) {
       m.__rw = 'err';
-      m.__rwMsg = (e?.body && typeof e.body === 'object' && (e.body.error || e.body.message)) || e?.message || '回滚失败';
+      m.__rwMsg = tr((e?.body && typeof e.body === 'object' && (e.body.error || e.body.message)) || e?.message || '') || t('回滚失败');
       setTimeout(() => { if (m.__rw === 'err') m.__rw = null; }, 6000);
     }
   }
@@ -231,7 +239,7 @@
 
 <div class="thread">
   {#if winStart > 0}
-    <button class="earlier" onclick={expandEarlier}>查看更早的 {winStart} 条消息</button>
+    <button class="earlier" onclick={expandEarlier}>{t('查看更早的 {n} 条消息', { n: winStart })}</button>
   {/if}
   {#each chat.messages.slice(winStart) as m, wi (winStart + wi)}
     {@const i = winStart + wi}
@@ -246,7 +254,7 @@
                 {#if a.kind === 'image' && a.url}
                   <!-- 气泡里挂缩略图（a.thumb），原图只在点开灯箱时才拉；直播刚发出的那条
                        没有 thumb（用的是本地 blob:），回落 a.url 不受影响。 -->
-                  <button class="u-att u-img" class:single={imgCount === 1} aria-label="预览图片" onclick={() => openImage(m.attachments, ai)}>
+                  <button class="u-att u-img" class:single={imgCount === 1} aria-label={t('预览图片')} onclick={() => openImage(m.attachments, ai)}>
                     <img src={a.thumb || a.url} alt={a.name} loading="lazy" decoding="async" onerror={(e) => attImgFallback(e.currentTarget, a)} />
                   </button>
                 {:else}
@@ -262,16 +270,16 @@
           {#if m.uuid && !IS_CSNAP}
             <div class="u-acts">
               {#if m.__rw === 'confirm'}
-                <span class="rw-ask">回滚到这条消息之前：</span>
-                <button class="rw-btn primary" onclick={() => doRewind(m, 'both')}>文件+对话</button>
-                <button class="rw-btn" onclick={() => doRewind(m, 'files')}>仅文件</button>
-                <button class="rw-btn" onclick={() => (m.__rw = null)}>取消</button>
+                <span class="rw-ask">{t('回滚到这条消息之前：')}</span>
+                <button class="rw-btn primary" onclick={() => doRewind(m, 'both')}>{tc('claude', '文件+对话')}</button>
+                <button class="rw-btn" onclick={() => doRewind(m, 'files')}>{tc('claude', '仅文件')}</button>
+                <button class="rw-btn" onclick={() => (m.__rw = null)}>{t('取消')}</button>
               {:else if m.__rw === 'busy'}
-                <span class="rw-note">回滚中…</span>
+                <span class="rw-note">{t('回滚中…')}</span>
               {:else if m.__rw === 'done' || m.__rw === 'err'}
                 <span class="rw-note" class:err={m.__rw === 'err'}>{m.__rwMsg}</span>
               {:else}
-                <button class="act rw-ico" aria-label="回滚到这条消息之前" disabled={session.busy} onclick={() => (m.__rw = 'confirm')}>
+                <button class="act rw-ico" aria-label={t('回滚到这条消息之前')} disabled={session.busy} onclick={() => (m.__rw = 'confirm')}>
                   <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
                 </button>
               {/if}
@@ -283,7 +291,7 @@
       <div class="turn-assistant" use:skipWhen={skippable}>
         {#if m.thinking.trim()}
           <button class="think {m.thinkingOpen ? 'open' : ''}" onclick={() => (m.thinkingOpen = !m.thinkingOpen)}>
-            <span class="lbl">{m.status === 'streaming' ? 'Thinking' : '想法'}</span><span class="chev ic">&#xe0e2;</span>
+            <span class="lbl">{m.status === 'streaming' ? 'Thinking' : tc('claude', '想法')}</span><span class="chev ic">&#xe0e2;</span>
           </button>
           {#if m.thinkingOpen}<div class="think-body sel-text">{m.thinking}</div>{/if}
         {/if}
@@ -303,11 +311,11 @@
             <!-- AskUserQuestion：未答=可交互选择；已答=只读块（高亮所选），常驻历史，重开也在 -->
             <div class="qcard ask-seg" class:answered={seg.answered}>
               {#each seg.items as it, qi}
-                {#if it.question}<div class="qhead"><div class="qtext">{it.question}</div></div>{/if}
+                {#if it.question}<div class="qhead"><div class="qtext">{tr(it.question)}</div></div>{/if}
                 {#each it.options as opt, oi}
                   <button class="qopt {it.selected.includes(opt.label) ? 'sel' : ''}" disabled={seg.answered} onclick={() => toggleOpt(it, opt.label)}>
                     <span class="qnum">{oi + 1}</span>
-                    <span class="qlabel">{opt.label}{#if opt.description}<small class="qdesc">{opt.description}</small>{/if}</span>
+                    <span class="qlabel">{tr(opt.label)}{#if opt.description}<small class="qdesc">{tr(opt.description)}</small>{/if}</span>
                     {#if it.selected.includes(opt.label)}<span class="qcheck">✓</span>{/if}
                   </button>
                 {/each}
@@ -322,10 +330,10 @@
                 {#if seg.submitError}<div class="qerror" role="status">{seg.submitError}</div>{/if}
                 <div class="qactions">
                   <button class="qskip" onclick={() => answerQuestion(seg, { cancelled: true })}>Skip</button>
-                  <button class="qsubmit" disabled={!answered(seg) || seg.submitting} onclick={() => answerQuestion(seg)}>提交回答</button>
+                  <button class="qsubmit" disabled={!answered(seg) || seg.submitting} onclick={() => answerQuestion(seg)}>{t('提交回答')}</button>
                 </div>
               {:else if seg.cancelled}
-                <div class="qskipped">已跳过</div>
+                <div class="qskipped">{t('已跳过')}</div>
               {/if}
             </div>
           {/if}
@@ -337,7 +345,7 @@
               {@const sub = attSub(a)}
               <div class="att-card">
                 {#if canOpenFolder(a)}
-                  <button class="att-hit" aria-label="在工作空间中打开 {a.name}" onclick={() => openAttFolder(a)}></button>
+                  <button class="att-hit" aria-label={t('在工作空间中打开 {name}', { name: a.name })} onclick={() => openAttFolder(a)}></button>
                 {:else if a.kind === 'folder'}
                   <a class="att-hit" href={a.downloadUrl} download={a.name + '.zip'} aria-label={a.name}></a>
                 {:else}
@@ -364,13 +372,13 @@
         {/if}
 
         {#if m.status === 'error'}
-          <div class="err-box">{m.error}</div>
+          <div class="err-box">{tr(m.error)}</div>
         {/if}
 
         {#if m.status !== 'streaming'}
           <div class="actions" in:fade={{ duration: 220 }}>
             {#if hasText(m)}
-              <button class="act" aria-label="复制" onclick={() => copyMsg(m)}>
+              <button class="act" aria-label={t('复制')} onclick={() => copyMsg(m)}>
                 {#if m.copied}
                   <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
                 {:else}
@@ -378,7 +386,7 @@
                 {/if}
               </button>
             {/if}
-            <button class="act" aria-label="重试" disabled={session.busy} onclick={() => retryFrom(i)}>
+            <button class="act" aria-label={tc('claude', '重试')} disabled={session.busy} onclick={() => retryFrom(i)}>
               <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
             </button>
           </div>
@@ -391,10 +399,10 @@
               <!-- 官方 desktop 同款状态语法：时长 · tokens · 状态文字。悬停（等后台任务）拼第三段
                    作挂起提示——与真结束（无状态行）一眼可分；这一段可点，直开右侧工作台「任务」
                    面板看逐条详情（命令行/耗时/输出）。 -->
-              <span class="meta">{chat.reconnecting ? '重连中…' : fmtElapsed(m.elapsed) + ' · ' + fmtTokens(m.tokens) + ' tokens'}</span>
+              <span class="meta">{chat.reconnecting ? t('重连中…') : fmtElapsed(m.elapsed) + ' · ' + fmtTokens(m.tokens) + ' tokens'}</span>
               {#if m.bgHold && !chat.reconnecting}
                 <!-- 官方 /code 页同款：菊花右侧一颗蓝色任务芯片（「1 running task」），点开任务面板 -->
-                <button class="bgchip" title="查看后台任务详情" onclick={() => openDock('tasks')}>{bgHoldText(m.bgHold)}</button>
+                <button class="bgchip" title={t('查看后台任务详情')} onclick={() => openDock('tasks')}>{bgHoldText(m.bgHold)}</button>
               {/if}
             {/if}
           </div>

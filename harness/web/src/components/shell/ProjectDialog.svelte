@@ -5,6 +5,7 @@
   // 目录挂载时只加载一次，失败给「重试」（以前接口一直失败时会无限重试）。
   import { app, importProject, toast } from "../../lib/state.svelte.ts";
   import { haptic } from "../../lib/touch.ts";
+  import { t, tr } from "../../lib/i18n.ts";
   import Sheet from "../ui/Sheet.svelte";
   import Group from "../ui/Group.svelte";
   import Button from "../ui/Button.svelte";
@@ -24,21 +25,21 @@
       await importProject(path); // 成功会收起对话框，并在新项目里开一个新对话
       haptic("light");
     } catch (e: any) {
-      toast(`导入失败：${e?.message ?? e}`);
+      toast(t("导入失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     }
     saving = false;
   }
 </script>
 
-<Sheet title="新建项目" subtitle="选择一个文件夹作为项目工作空间" {onclose} size="md">
+<Sheet title={t("新建项目")} subtitle={t("选择一个文件夹作为项目工作空间")} {onclose} size="md">
   <Group>
-    <DirBrowser {start} bind:path bind:loading emptyText="此文件夹内没有子文件夹" listHeight="min(330px, 42vh)" fixed />
+    <DirBrowser {start} bind:path bind:loading emptyText={t("此文件夹内没有子文件夹")} listHeight="min(330px, 42vh)" fixed />
   </Group>
 
   {#snippet footer()}
-    <Button variant="ghost" onclick={onclose}>取消</Button>
+    <Button variant="ghost" onclick={onclose}>{t("取消")}</Button>
     <Button variant="primary" loading={saving} disabled={!path || loading} onclick={useFolder}>
-      {saving ? "创建中…" : "使用此文件夹"}
+      {saving ? t("创建中…") : t("使用此文件夹")}
     </Button>
   {/snippet}
 </Sheet>

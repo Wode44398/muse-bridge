@@ -3,6 +3,7 @@
   // 脚本跑在不透明源、碰不到 bridge cookie/接口）。既能真渲染（自包含页/PPT 翻页、键盘、全屏都在），
   // 又安全隔离。文本已读（本地）就直接用，否则 fetch 原始字节（云端 /api/file，分享模式带 ?st）。
   import { onMount } from 'svelte';
+  import { t, tr } from '../../lib/i18n.js';
   const { item, onClose } = $props();
   let html = $state(item.text ?? null);
   let err = $state('');
@@ -20,21 +21,21 @@
 
 <div class="hv">
   <div class="hv-bar">
-    <button class="hv-btn" aria-label="返回" onclick={onClose}>
+    <button class="hv-btn" aria-label={t('返回')} onclick={onClose}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7" /></svg>
     </button>
     <span class="hv-name">{item.name}</span>
     {#if item.downloadHref}
-      <a class="hv-btn" href={item.downloadHref} aria-label="下载" download>
+      <a class="hv-btn" href={item.downloadHref} aria-label={t('下载')} download>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5" /><path d="M5 20h14" /></svg>
       </a>
     {/if}
   </div>
   <div class="hv-body">
     {#if loading}
-      <div class="hv-msg">加载中…</div>
+      <div class="hv-msg">{t('加载中…')}</div>
     {:else if err}
-      <div class="hv-msg">打开失败：{err}</div>
+      <div class="hv-msg">{t('打开失败：{reason}', { reason: tr(err) })}</div>
     {:else}
       <iframe class="hv-frame" title={item.name} sandbox="allow-scripts allow-popups allow-modals allow-forms" allowfullscreen srcdoc={html}></iframe>
     {/if}

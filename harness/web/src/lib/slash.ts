@@ -3,6 +3,8 @@
 // 内置命令是界面动作（压缩、开新对话……），不发给模型；没命中的 /xxx 照普通消息发出（服务端也认不出，就是普通消息——
 // 手机上输入 /api/... 这类路径不会被吞）。解析顺序：内置 → 技能（与 kimi 一致）。
 
+import { t } from "./i18n.ts";
+
 export type BuiltinId = "new" | "compact" | "handoff" | "goal";
 
 export interface Builtin {
@@ -15,10 +17,10 @@ export interface Builtin {
 }
 
 export const BUILTINS: readonly Builtin[] = [
-  { id: "new", name: "new", description: "开一个新对话（同一个项目）", idleOnly: false },
-  { id: "compact", name: "compact", description: "立即压缩：较早的对话换成摘要，接着在这里聊", idleOnly: true },
-  { id: "handoff", name: "handoff", description: "带摘要开新会话：整段写成摘要带过去，原会话留着", idleOnly: true },
-  { id: "goal", name: "goal", description: "把这条作为目标：没达成会自动一轮轮接着做", argHint: "<目标>", idleOnly: true },
+  { id: "new", name: "new", description: t("开一个新对话（同一个项目）"), idleOnly: false },
+  { id: "compact", name: "compact", description: t("立即压缩：较早的对话换成摘要，接着在这里聊"), idleOnly: true },
+  { id: "handoff", name: "handoff", description: t("带摘要开新会话：整段写成摘要带过去，原会话留着"), idleOnly: true },
+  { id: "goal", name: "goal", description: t("把这条作为目标：没达成会自动一轮轮接着做"), argHint: t("<目标>"), idleOnly: true },
 ];
 
 // 与 api.ts 的 CommandList 同形（这里不引 api.ts，保持纯函数、服务端测试能直接加载）
@@ -84,7 +86,7 @@ export function paletteItems(
   }
   for (const p of packages) {
     const score = matchScore(q, p.name, []);
-    if (score) scored.push({ item: { kind: "pkg", name: p.name, description: `技能包 · ${p.count} 个技能，点包名让它挑`, count: p.count }, score, at: at++ });
+    if (score) scored.push({ item: { kind: "pkg", name: p.name, description: t("技能包 · {n} 个技能，点包名让它挑", { n: p.count }), count: p.count }, score, at: at++ });
   }
   for (const s of skills) {
     const score = matchScore(q, s.name, [s.pkg ? `${s.pkg}/${s.name}` : "", s.pkg ?? "", s.description]);

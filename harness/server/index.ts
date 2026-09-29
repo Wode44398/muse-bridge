@@ -98,8 +98,9 @@ import {
   quickSessionFilter,
 } from "./quick.ts";
 import { Sandbox } from "./sandbox.ts";
-import { getConfig, setConfig, hasKey, sessionConfigSnapshot, type ConfigPatch } from "./config.ts";
-import { CATALOG } from "./catalog.ts";
+import { getConfig, setConfig, hasKey, sessionConfigSnapshot, forgetProvider, type ConfigPatch } from "./config.ts";
+import { allProviders } from "./catalog.ts";
+import { addCustomProvider, isCustomProviderId, removeCustomProvider, updateCustomProvider } from "./custom-providers.ts";
 import { shell, killAllJobs, listJobs, moveForegroundToBackground, stopJob } from "./tools/bash.ts";
 import { ALL_TOOLS, toolDefs } from "./tools/registry.ts";
 import { ruleProblems } from "./agent/permissions.ts";
@@ -267,7 +268,7 @@ app.get("/api/info", (_req, res) => {
   // 租户实例（多用户服务端上每个用户一个 harness，见 tenant.ts）关掉的 provider 不出现在目录里——选择器照目录渲染，
   // 不用另改前端；tenant 字段告诉前端藏掉访问范围开关、终端、连 Edge 这些入口。
   const offProviders = disabledProviders();
-  const catalog = CATALOG.filter((p) => !offProviders.has(p.id));
+  const catalog = allProviders().filter((p) => !offProviders.has(p.id));
   res.json({
     workspace: workspaceRoot(),
     projectsRoot: projectsRoot(),
@@ -292,6 +293,54 @@ app.get("/api/config", (_req, res) => {
   const cfg = getConfig();
   // accessLocked：访问范围被锁定（租户恒 workspace）——前端据此不摆「仅工作空间 / 整机」开关。
   res.json({ ...cfg, hasKey: hasKey(cfg.provider), accessLocked: accessLock() });
+});
+
+// ── 自定义模型服务（「模型服务」面板里的「＋」卡；OpenAI 兼容端点，key 加密存） ─────────────
+// 新目录随 /api/info 的 catalog 下发（custom 字段）；这里只管增删改。保存前先打一次 GET {base}/models：
+// 既拿到型号清单，也当场验地址与 key。租户实例不开放（服务端替用户去连任意地址 = SSRF）。
+function customProvidersAllowed(res: express.Response): boolean {
+  if (!tenantInfo().tenant) return true;
+  res.status(403).json({ error: "这台服务器不允许添加自定义模型服务" });
+  return false;
+}
+const customErr = (res: express.Response, e: unknown) => {
+  const err = e as Error & { needsModel?: boolean };
+  res.status(400).json({ error: err.message, needsModel: err.needsModel || undefined });
+};
+
+app.post("/api/custom-providers", async (req, res) => {
+  if (!customProvidersAllowed(res)) return;
+  try {
+    const { provider, warning } = await addCustomProvider(req.body ?? {});
+    res.json({ ok: true, id: provider.id, models: provider.models.length, warning });
+  } catch (e) {
+    customErr(res, e);
+  }
+});
+
+// 改 / 删都走 POST：离线 apk 跨源访问 bridge，反代的 CORS 只放行 GET / POST
+app.post("/api/custom-providers/:id", async (req, res) => {
+  if (!customProvidersAllowed(res)) return;
+  if (!isCustomProviderId(req.params.id)) return void res.status(404).json({ error: "not found" });
+  try {
+    const { provider, warning } = await updateCustomProvider(req.params.id, req.body ?? {});
+    res.json({ ok: true, id: provider.id, models: provider.models.length, warning });
+  } catch (e) {
+    customErr(res, e);
+  }
+});
+
+app.post("/api/custom-providers/:id/delete", async (req, res) => {
+  if (!customProvidersAllowed(res)) return;
+  const id = req.params.id;
+  if (!isCustomProviderId(id)) return void res.status(404).json({ error: "not found" });
+  try {
+    await removeCustomProvider(id);
+    forgetProvider(id); // 正选着它就退回默认厂商；历史会话照旧留着（接着聊会提示这家已删掉、换一家开新对话）
+    res.json({ ok: true, config: { ...getConfig(), hasKey: hasKey(getConfig().provider) } });
+  } catch (e) {
+    customErr(res, e);
+  }
 });
 
 // E3（G7）：输入框 / 面板的技能清单（扩展中心勾给 dimensio 的；按名现读，新装的马上出现）。内置命令在前端

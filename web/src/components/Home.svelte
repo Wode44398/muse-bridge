@@ -8,13 +8,14 @@
   import { drag, dropZone } from '../lib/dragdrop.svelte.js';
   import { WS_FILE, attachToAgent } from '../lib/fileDrag.js';
   import LoginCard from './LoginCard.svelte';
+  import { t } from '../lib/i18n.js';
 
   const BASE = import.meta.env.BASE_URL;
 
   // claude 入口小人是状态指示器：正面站立 = 默认；举旗 = 有任务完成还没看（ui.taskDone，回 claude 页清除）。
-  const claudeMascot = $derived(ui.taskDone ? '举旗' : '正面站立');
+  const claudeMascot = $derived(ui.taskDone ? '举旗' : '正面站立');   // i18n-ignore 素材文件名
   const ENTRIES = $derived([
-    { key: 'claude', label: 'Claude', img: `assets/mascot/claude-小人-${claudeMascot}.svg` },
+    { key: 'claude', label: 'Claude', img: `assets/mascot/claude-小人-${claudeMascot}.svg` },   // i18n-ignore 素材路径
     { key: 'harness', label: 'dimensio', img: `assets/icons/dimensio-${ui.theme === 'light' ? 'dark' : 'light'}.svg` },
   // 只摆这个身份开着的 agent（服务端下发的 me.agents：全局开关 ∩ 按人授权）；服务端各路由另有真闸。
   ].filter((e) => screenOn(e.key)));
@@ -35,7 +36,7 @@
       const target = DROP_TARGET[en.key];
       return {
         key: 'home:' + en.key, effect: 'send', disabled: !target,
-        label: (p) => (p?.count > 1 ? `把 ${p.count} 项发给 ${en.label}` : `发给 ${en.label}`),
+        label: (p) => (p?.count > 1 ? t('把 {n} 项发给 {name}', { n: p.count, name: en.label }) : t('发给 {name}', { name: en.label })),
         accept: (p) => !!target && p?.type === WS_FILE && !!p.materials && me.kind !== 'none',
         drop: async (p) => {
           if (!(await attachToAgent(p, target))) return;

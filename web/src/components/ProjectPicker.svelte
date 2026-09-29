@@ -16,11 +16,12 @@
   import { api } from '../lib/api.js';
   import { pushBackLayer } from '../lib/nav.js';
   import FilesPanel from './FilesPanel.svelte';
+  import { t, tr } from '../lib/i18n.js';
 
   // title/hint 由调用方给（三家措辞略有不同）；busy 期间盖一层遮罩免得连拖两次。
   const {
-    title = '新建项目',
-    hint = '把文件夹拖进底栏，它就是新项目的工作空间',
+    title = t('新建项目'),
+    hint = t('把文件夹拖进底栏，它就是新项目的工作空间'),
     preferPath = '',          // 优先落到哪个位置（一般传当前项目路径，开箱即在熟悉的地方）
     onPick,                   // (absPath) => Promise|void
     onClose,
@@ -35,8 +36,8 @@
   const current = $derived(locations.find((l) => l.id === locId) || null);
   const fold = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase();
   const under = (base, target) => {
-    const b = fold(base), t = fold(target);
-    return !!b && (t === b || t.startsWith(b + '/') || t.startsWith(b + '\\'));
+    const b = fold(base), tg = fold(target);
+    return !!b && (tg === b || tg.startsWith(b + '/') || tg.startsWith(b + '\\'));
   };
 
   $effect(() => pushBackLayer(() => onClose?.()));
@@ -46,10 +47,10 @@
       const r = await api.projectLocations();
       locations = r.locations || [];
     } catch (e) {
-      loadErr = e?.body?.error || '无法读取可选位置';
+      loadErr = tr(e?.body?.error) || t('无法读取可选位置');
       return;
     }
-    if (!locations.length) { loadErr = '没有可用的位置'; return; }
+    if (!locations.length) { loadErr = t('没有可用的位置'); return; }
     // 落点：能包住 preferPath 的最深那个位置（盘符与工作空间可能互相嵌套，取最长匹配），
     // 都不匹配就用第一条（恒为「工作空间」）。
     let best = null;
@@ -63,19 +64,19 @@
     if (busy || !abs) return;
     busy = true; err = '';
     try { await onPick?.(abs); }
-    catch (e) { err = e?.body?.error || e?.message || '创建失败'; busy = false; return; }
+    catch (e) { err = tr(e?.body?.error || e?.message) || t('创建失败'); busy = false; return; }
     busy = false;
   }
 </script>
 
 <div class="pp-root">
-  <button class="pp-scrim" aria-label="关闭" onclick={() => onClose?.()}></button>
+  <button class="pp-scrim" aria-label={t('关闭')} onclick={() => onClose?.()}></button>
   <!-- .pp-card 带 transform：FilesPanel 的 fixed 根/浮层/长按弹层全被圈进这张卡里
        （与 Claude 工作台的 .dk-embed 同一手法），否则它会铺满整个视口。 -->
   <div class="pp-card" role="dialog" aria-modal="true" aria-label={title}>
     <div class="pp-head">
       <div class="pp-tt"><h2>{title}</h2><p>{hint}</p></div>
-      <button class="pp-x" aria-label="关闭" onclick={() => onClose?.()}>
+      <button class="pp-x" aria-label={t('关闭')} onclick={() => onClose?.()}>
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M2.5 2.5l11 11M13.5 2.5l-11 11" /></svg>
       </button>
     </div>
@@ -96,9 +97,9 @@
           />
         {/key}
       {:else}
-        <div class="pp-msg">正在读取位置…</div>
+        <div class="pp-msg">{t('正在读取位置…')}</div>
       {/if}
-      {#if busy}<div class="pp-busy">创建中…</div>{/if}
+      {#if busy}<div class="pp-busy">{t('创建中…')}</div>{/if}
     </div>
     {#if err}<div class="pp-err">{err}</div>{/if}
   </div>

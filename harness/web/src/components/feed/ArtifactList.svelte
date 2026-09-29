@@ -11,6 +11,7 @@
   import { press } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -48,24 +49,24 @@
   }
 
   function formatBytes(value: number): string {
-    if (!value) return "文件";
+    if (!value) return t("文件");
     if (value < 1024) return `${value} B`;
     if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
     return `${(value / 1024 / 1024).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
   }
   function artifactLabel(a: ArtifactItem): string {
-    return a.kind === "image" ? "图片" : a.kind === "video" ? "视频" : a.kind === "audio" ? "音频" : a.kind === "pdf" ? "PDF" : a.kind === "office" ? "文档" : "文件";
+    return a.kind === "image" ? t("图片") : a.kind === "video" ? t("视频") : a.kind === "audio" ? t("音频") : a.kind === "pdf" ? "PDF" : a.kind === "office" ? t("文档") : t("文件");
   }
 </script>
 
-<div class="arts" role="group" aria-label="生成的文件">
+<div class="arts" role="group" aria-label={t("生成的文件")}>
   {#each items as a (a.path)}
     <button
       class="art"
       draggable={dragOutOn ? "true" : undefined}
       ondragstart={(e) => dragOut(e, a)}
       onclick={() => openArtifact(a)}
-      title="打开 {a.path}"
+      title={t("打开 {path}", { path: a.path })}
       use:press={{ scale: 0.985 }}
     >
       <span class="tile"><Icon name={a.kind === "image" ? "image" : "file"} size={18} /></span>

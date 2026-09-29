@@ -18,7 +18,7 @@ import { requireCtx } from '../runtime/identity.mjs';
 import { readBody } from '../runtime/body.mjs';
 import { mimeType, safeJoin, streamFile } from '../runtime/http-file.mjs';
 import { ROOT, PUBLIC_ORIGIN } from '../config/index.mjs';
-import { makePwRec, checkPw, allowAttempt, clearAttempts, gateHtml, goneHtml } from './share-gate.mjs';
+import { makePwRec, checkPw, allowAttempt, clearAttempts, gateHtml, goneHtml, pageLang } from './share-gate.mjs';
 import { hasLockedShareSpace, unlockShareSpace } from './share-space.mjs';
 import { authorizeProjectPath } from '../project-paths.mjs';
 
@@ -117,7 +117,8 @@ async function handleUnlock(req, res) {
 }
 
 const GONE_PAGE = goneHtml('file');
-const gone = (res) => { res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(GONE_PAGE); };
+const GONE_PAGE_EN = goneHtml('file', 'en');   // 浏览器语言不是中文的访客（见 pageLang）
+const gone = (res) => { res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(pageLang(res.req) === 'en' ? GONE_PAGE_EN : GONE_PAGE); };
 
 // GET /s/<token> —— 公开下载。只认存下的 {root, rel}，绝不吃客户端路径。
 function handleServe(req, res, url) {
@@ -128,7 +129,7 @@ function handleServe(req, res, url) {
   // 带密码的分享：没有正确的 ?k=<unlock> 凭证就先出密码页（验对后由页面带 k 重进）。
   if (rec.pwHash && (url.searchParams.get('k') || '') !== rec.unlock) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(gateHtml('/s/', token));
+    res.end(gateHtml('/s/', token, pageLang(req)));
     return;
   }
   const abs = safeJoin(rec.root, rec.rel);   // 纵深复核：即便存储被篡改也走不出 root

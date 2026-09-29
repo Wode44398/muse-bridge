@@ -9,10 +9,10 @@
   import { deleteMemoryNote, promoteMemoryNote, rejectMemoryNote, restoreMemoryNote, type MemoryHistoryWhy, type MemoryNote } from "../../lib/api.ts";
   import { haptic } from "../../lib/touch.ts";
   import { rise } from "../../lib/motion.ts";
+  import { t, tc, tr } from "../../lib/i18n.ts";
   import Button from "../ui/Button.svelte";
   import Switch from "../ui/Switch.svelte";
-  import { explain, fmtDate, issuesOf, STATUS_LABEL } from "./memory-text.ts";
-  import { fmtAgo, HISTORY_TEXT } from "./memory-viz.ts";
+  import { agoOf, explain, fmtDate, HISTORY_TEXT, issuesOf, STATUS_LABEL } from "./memory-text.ts";
 
   let {
     note,
@@ -42,8 +42,22 @@
 
   const canPromote = $derived(note.declaredStatus !== "rejected" && note.declaredStatus !== "superseded");
   const promoteLabel = $derived(
-    note.declaredStatus === "proposed" ? "确认，让它生效" : note.status === "active" ? "保存并确认" : "重新确认，让它生效",
+    note.declaredStatus === "proposed" ? t("确认，让它生效") : note.status === "active" ? t("保存并确认") : t("重新确认，让它生效"),
   );
+  // 「召回 n 次，最近 …」：英文里「多久以前」嵌在句中（most recently today），按档位各取一整句；
+  // 次数那一截套 .num，所以走 {@html}——插进去的只有数字与本地格式化的日期
+  const recallHtml = $derived.by(() => {
+    if (!usage?.uses) return "";
+    const n = usage.uses;
+    const a = usage.last ? agoOf(usage.last) : null;
+    if (!a) return t('召回 <span class="num">{n}</span> 次', { n });
+    if (a.k === "today") return t('召回 <span class="num">{n}</span> 次，最近 今天', { n });
+    if (a.k === "yesterday") return t('召回 <span class="num">{n}</span> 次，最近 昨天', { n });
+    if (a.k === "days") return t('召回 <span class="num">{n}</span> 次，最近 {d} 天前', { n, d: a.n });
+    if (a.k === "weeks") return t('召回 <span class="num">{n}</span> 次，最近 {d} 周前', { n, d: a.n });
+    if (a.k === "months") return t('召回 <span class="num">{n}</span> 次，最近 {d} 个月前', { n, d: a.n });
+    return t('召回 <span class="num">{n}</span> 次，最近 {date}', { n, date: a.date });
+  });
   const issues = $derived(issuesOf(note));
   const evidence = $derived(note.evidence ?? []);
   const anchors = $derived(note.anchors ?? []);
@@ -66,18 +80,18 @@
     try {
       const r = await promoteMemoryNote(ws, note.id, { edits, supersedes });
       if (r.ok) {
-        toast(supersedes ? "已生效，替换了原来那条" : "已生效，之后的对话会用上它");
+        toast(supersedes ? t("已生效，替换了原来那条") : t("已生效，之后的对话会用上它"));
         await onchanged();
       } else if (r.conflicts?.length) {
         conflicts = r.conflicts; // 同一主题已经有生效的
       } else if (r.code === "global_budget") {
-        problems = ["全局记忆满了（生效的条目合计有长度上限，每个对话的提示里都有它们）：先驳回或删掉一条旧的，再确认这一条"];
+        problems = [t("全局记忆满了（生效的条目合计有长度上限，每个对话的提示里都有它们）：先驳回或删掉一条旧的，再确认这一条")];
       } else {
         problems = explain(r.error); // 校验不过：说清差在哪，直接进编辑
         if (!editing) startEdit();
       }
     } catch (e: any) {
-      toast(`操作失败：${e?.message ?? e}`);
+      toast(t("操作失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     }
     busy = "";
   }
@@ -87,10 +101,10 @@
     haptic("medium");
     try {
       await rejectMemoryNote(ws, note.id, reason.trim() || undefined);
-      toast("已驳回，模型不会再用它、也不能再存同一条");
+      toast(t("已驳回，模型不会再用它、也不能再存同一条"));
       await onchanged();
     } catch (e: any) {
-      toast(`驳回失败：${e?.message ?? e}`);
+      toast(t("驳回失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     }
     busy = "";
   }
@@ -99,10 +113,10 @@
     busy = "restore";
     try {
       await restoreMemoryNote(ws, note.id);
-      toast("已撤销驳回，回到待确认");
+      toast(t("已撤销驳回，回到待确认"));
       await onchanged();
     } catch (e: any) {
-      toast(`撤销失败：${e?.message ?? e}`);
+      toast(t("撤销失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     }
     busy = "";
   }
@@ -119,10 +133,10 @@
     haptic("medium");
     try {
       await deleteMemoryNote(ws, note.id);
-      toast("已删除（旧版仍留在记忆目录的 .history 里）");
+      toast(t("已删除（旧版仍留在记忆目录的 .history 里）"));
       await onchanged();
     } catch (e: any) {
-      toast(`删除失败：${e?.message ?? e}`);
+      toast(t("删除失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     }
     busy = "";
   }
@@ -131,16 +145,20 @@
 <div class="md">
   <div class="meta">
     <span class="st" class:rej={note.status === "rejected"}>{STATUS_LABEL[note.status] ?? note.status}</span>
-    <span class="kv">主题 <code>{note.topic}</code></span>
-    {#if note.updated}<span class="kv">更新 <span class="num">{fmtDate(note.updated)}</span></span>{/if}
-    {#if note.expiresAt}<span class="kv">到期 <span class="num">{fmtDate(note.expiresAt)}</span></span>{/if}
-    {#if usage?.uses}<span class="kv">召回 <span class="num">{usage.uses}</span> 次{#if usage.last}，最近 {fmtAgo(usage.last)}{/if}</span>{/if}
+    <span class="kv">{tc("dimensio", "主题")} <code>{note.topic}</code></span>
+    {#if note.updated}<span class="kv">{tc("名词", "更新")} <span class="num">{fmtDate(note.updated)}</span></span>{/if}
+    {#if note.expiresAt}<span class="kv">{t("到期")} <span class="num">{fmtDate(note.expiresAt)}</span></span>{/if}
+    {#if usage?.uses}<span class="kv">{@html recallHtml}</span>{/if}
   </div>
 
   {#if note.declaredStatus === "rejected"}
-    <p class="banner err">你在 {fmtDate(note.rejectedAt)} 驳回了它{note.rejectReason ? `：${note.rejectReason}` : "。"}</p>
+    <p class="banner err">
+      {note.rejectReason
+        ? t("你在 {date} 驳回了它：{reason}", { date: fmtDate(note.rejectedAt), reason: note.rejectReason })
+        : t("你在 {date} 驳回了它。", { date: fmtDate(note.rejectedAt) })}
+    </p>
   {:else if note.supersededBy}
-    <p class="banner">已被「{note.supersededBy}」替代。</p>
+    <p class="banner">{t("已被「{id}」替代。", { id: note.supersededBy })}</p>
   {/if}
 
   {#if issues.length}
@@ -152,21 +170,21 @@
   {#if editing}
     <div class="form" in:rise={{ y: 4 }}>
       <label class="fld">
-        <span>标题</span>
+        <span>{t("标题")}</span>
         <input class="in" bind:value={draft.title} maxlength="120" autocomplete="off" />
       </label>
       <label class="fld">
-        <span>一句话说明</span>
+        <span>{t("一句话说明")}</span>
         <input class="in" bind:value={draft.description} maxlength="240" autocomplete="off" />
       </label>
       <label class="fld">
-        <span>正文</span>
+        <span>{t("正文")}</span>
         <textarea class="in ta" bind:value={draft.content} rows="10" spellcheck="false"></textarea>
       </label>
       {#if note.expiresAt}
         <div class="swrow">
-          <span>去掉到期时间</span>
-          <Switch checked={draft.dropExpiry} label="去掉到期时间" onchange={(v) => (draft.dropExpiry = v)} />
+          <span>{t("去掉到期时间")}</span>
+          <Switch checked={draft.dropExpiry} label={t("去掉到期时间")} onchange={(v) => (draft.dropExpiry = v)} />
         </div>
       {/if}
     </div>
@@ -175,22 +193,22 @@
     {#if evidence.length || anchors.length || scope.length || events.length}
       <dl class="facts">
         {#if evidence.length}
-          <dt>证据</dt>
+          <dt>{t("证据")}</dt>
           <dd>{#each evidence as e}<div>{e}</div>{/each}</dd>
         {/if}
         {#if anchors.length}
-          <dt>挂靠文件</dt>
+          <dt>{t("挂靠文件")}</dt>
           <dd>{#each anchors as a}<div><code>{a}</code></div>{/each}</dd>
         {/if}
         {#if scope.length}
-          <dt>适用范围</dt>
-          <dd>{scope.join("、")}</dd>
+          <dt>{t("适用范围")}</dt>
+          <dd>{scope.join(t("、"))}</dd>
         {/if}
         {#if events.length}
-          <dt>经历</dt>
+          <dt>{t("经历")}</dt>
           <dd class="hist">
             {#each events as e, i (i)}<div><span class="num">{fmtDate(e.at)}</span> {HISTORY_TEXT[e.why]}</div>{/each}
-            {#if note.updated}<div><span class="num">{fmtDate(note.updated)}</span> 当前版本</div>{/if}
+            {#if note.updated}<div><span class="num">{fmtDate(note.updated)}</span> {t("当前版本")}</div>{/if}
           </dd>
         {/if}
       </dl>
@@ -199,7 +217,7 @@
 
   {#if problems.length}
     <div class="banner err" role="alert" in:rise={{ y: 4 }}>
-      <p>还不能生效，差这些：</p>
+      <p>{t("还不能生效，差这些：")}</p>
       <ul>
         {#each problems as p}<li>{p}</li>{/each}
       </ul>
@@ -208,14 +226,14 @@
 
   {#if conflicts}
     <div class="banner warn" role="alert" in:rise={{ y: 4 }}>
-      <p>同一主题已经有生效的「{conflicts.map((c) => c.title).join("」「")}」。</p>
+      <p>{t("同一主题已经有生效的「{titles}」。", { n: conflicts.length, titles: conflicts.map((c) => c.title).join(t("」「")) })}</p>
       {#if conflicts.length === 1}
         <div class="acts end">
-          <Button size={btn} variant="ghost" disabled={!!busy} onclick={() => (conflicts = null)}>先不动</Button>
-          <Button size={btn} variant="accent" loading={busy === "promote"} disabled={!!busy} onclick={() => promote(conflicts?.[0]?.id)}>替换它</Button>
+          <Button size={btn} variant="ghost" disabled={!!busy} onclick={() => (conflicts = null)}>{t("先不动")}</Button>
+          <Button size={btn} variant="accent" loading={busy === "promote"} disabled={!!busy} onclick={() => promote(conflicts?.[0]?.id)}>{t("替换它")}</Button>
         </div>
       {:else}
-        <p>先把多余的那几条驳回或删掉，再来确认这一条。</p>
+        <p>{t("先把多余的那几条驳回或删掉，再来确认这一条。")}</p>
       {/if}
     </div>
   {/if}
@@ -223,19 +241,19 @@
   {#if rejecting}
     <div class="reject" in:rise={{ y: 4 }}>
       <label class="fld">
-        <span>为什么驳回（可选，模型以后会看到这句）</span>
-        <input class="in" bind:value={reason} maxlength="240" placeholder="比如：这是猜的，实际不是这样" autocomplete="off" />
+        <span>{t("为什么驳回（可选，模型以后会看到这句）")}</span>
+        <input class="in" bind:value={reason} maxlength="240" placeholder={t("比如：这是猜的，实际不是这样")} autocomplete="off" />
       </label>
       <div class="acts end">
-        <Button size={btn} variant="ghost" disabled={!!busy} onclick={() => (rejecting = false)}>取消</Button>
-        <Button size={btn} variant="danger" loading={busy === "reject"} disabled={!!busy} onclick={reject}>确认驳回</Button>
+        <Button size={btn} variant="ghost" disabled={!!busy} onclick={() => (rejecting = false)}>{t("取消")}</Button>
+        <Button size={btn} variant="danger" loading={busy === "reject"} disabled={!!busy} onclick={reject}>{t("确认驳回")}</Button>
       </div>
     </div>
   {:else if !conflicts}
     <div class="acts">
       <div class="minor">
         {#if canPromote && !editing}
-          <Button size={btn} variant="ghost" icon="edit" disabled={!!busy} onclick={startEdit}>编辑</Button>
+          <Button size={btn} variant="ghost" icon="edit" disabled={!!busy} onclick={startEdit}>{t("编辑")}</Button>
         {:else if editing}
           <Button
             size={btn}
@@ -244,7 +262,7 @@
             onclick={() => {
               editing = false;
               problems = [];
-            }}>取消编辑</Button
+            }}>{t("取消编辑")}</Button
           >
         {/if}
         {#if note.declaredStatus !== "rejected"}
@@ -256,21 +274,21 @@
             onclick={() => {
               rejecting = true;
               confirmDelete = false;
-            }}>驳回</Button
+            }}>{t("驳回")}</Button
           >
         {/if}
         <Button size={btn} variant={confirmDelete ? "danger" : "ghost"} icon="trash" loading={busy === "delete"} disabled={!!busy} onclick={remove}>
-          {confirmDelete ? "再点一次删除" : "删除"}
+          {confirmDelete ? t("再点一次删除") : t("删除")}
         </Button>
       </div>
       <div class="major">
         {#if canPromote}
           <Button variant="accent" icon="check" loading={busy === "promote"} disabled={!!busy} onclick={() => promote()}>
-            {busy === "promote" ? "处理中…" : editing ? "保存并确认" : promoteLabel}
+            {busy === "promote" ? t("处理中…") : editing ? t("保存并确认") : promoteLabel}
           </Button>
         {/if}
         {#if note.declaredStatus === "rejected"}
-          <Button variant="secondary" icon="undo" loading={busy === "restore"} disabled={!!busy} onclick={restore}>撤销驳回</Button>
+          <Button variant="secondary" icon="undo" loading={busy === "restore"} disabled={!!busy} onclick={restore}>{t("撤销驳回")}</Button>
         {/if}
       </div>
     </div>
@@ -307,12 +325,15 @@
     color: var(--err);
     background: color-mix(in srgb, var(--err) 11%, transparent);
   }
+  /* 「召回 n 次」那一句是 {@html} 进来的（见 recallHtml）：里面的 .num 要写 :global */
   code,
-  .num {
+  .num,
+  .kv :global(.num) {
     font-family: var(--font-mono);
     font-size: var(--fs-sm);
   }
-  .num {
+  .num,
+  .kv :global(.num) {
     font-variant-numeric: tabular-nums;
   }
 

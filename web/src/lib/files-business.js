@@ -1,8 +1,10 @@
+import { t, locale, isEn } from './i18n.js';
+
 export const SHARE_TTLS = Object.freeze([
-  { h: 1, lb: '1小时' },
-  { h: 24, lb: '1天' },
-  { h: 24 * 7, lb: '7天' },
-  { h: 24 * 30, lb: '30天' },
+  { h: 1, lb: t('1小时') },
+  { h: 24, lb: t('1天') },
+  { h: 24 * 7, lb: t('7天') },
+  { h: 24 * 30, lb: t('30天') },
 ]);
 
 export const AI_NAMES = Object.freeze({
@@ -20,7 +22,7 @@ export function filterFilesByName(items, query) {
 
 export function shareRequest(dialog) {
   const password = dialog?.pwOn ? String(dialog.password || '').trim() : '';
-  if (dialog?.pwOn && !password) return { error: '请填写分享密码' };
+  if (dialog?.pwOn && !password) return { error: t('请填写分享密码') };
   return {
     password,
     options: {
@@ -40,12 +42,13 @@ export function shareResult(result, password, origin = location.origin) {
 
 export function shareClipboardText(result) {
   if (!result) return '';
-  return result.pw ? `${result.url}\n分享密码：${result.pw}` : result.url;
+  return result.pw ? t('{url}\n分享密码：{pw}', { url: result.url, pw: result.pw }) : result.url;
 }
 
+// zh-CN 输出与原先手拼的「9月28日 09:05」逐字一致；英文 en-US 12 小时制（Sep 28, 9:05 PM）。
 export function formatShareExpiry(value) {
-  const date = new Date(value);
-  return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  const hm = isEn() ? { hour: 'numeric', minute: '2-digit' } : { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
+  return new Intl.DateTimeFormat(locale(), { month: 'short', day: 'numeric', ...hm }).format(new Date(value));
 }
 
 export function filterAiSessions(sessions, query, titleForSession) {
@@ -78,12 +81,12 @@ export async function loadAiSessions(target, {
 //   selectedSession：'new' = 开新对话；会话 id = 先切过去；空 = 就挂在当前对话上。
 //   material(item, direct) → 附件对象（direct=true：零拷贝直给源绝对路径，Claude 在服务器本机直读）。
 export async function sendFileToAi(item, selectedSession, { material, toast, chat, navigate }) {
-  toast('正在准备…');
+  toast(t('正在准备…'));
   const attachment = await material(item, true);
   if (!attachment) return;
   if (selectedSession === 'new') chat.newChat();
   else if (selectedSession && selectedSession !== chat.current()) await chat.load(selectedSession);
   chat.attach(attachment);
   navigate('claude');
-  toast('已加到对话输入，去问它吧');
+  toast(t('已加到对话输入，去问它吧'));
 }

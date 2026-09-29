@@ -1,5 +1,6 @@
 // 引用会话（把会话块拖进输入框）：前端的纯函数部分。不依赖 Svelte 与浏览器——Node 测试里直接跑，state.svelte.ts 用它们。
 import type { SessionRefView } from "./timeline-types.ts";
+import { t } from "./i18n.ts";
 
 export const MAX_SESSION_REFS = 3; // 与服务端 session-refs.ts 的 MAX_REFS 同值
 
@@ -20,8 +21,8 @@ export function withSessionRef(
   selfId: string | null | undefined,
 ): { list: SessionRefView[]; note?: string } {
   if (!ref.id) return { list };
-  if (selfId && ref.id === selfId) return { list, note: "不能引用对话自己" };
+  if (selfId && ref.id === selfId) return { list, note: t("不能引用对话自己") };
   if (list.some((r) => r.id === ref.id)) return { list };
-  if (list.length >= MAX_SESSION_REFS) return { list, note: `一条消息最多引用 ${MAX_SESSION_REFS} 个对话` };
+  if (list.length >= MAX_SESSION_REFS) return { list, note: t("一条消息最多引用 {n} 个对话", { n: MAX_SESSION_REFS }) };
   return { list: [...list, ref] };
 }

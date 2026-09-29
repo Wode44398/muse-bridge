@@ -9,6 +9,7 @@
   import Icon from "../ui/Icon.svelte";
   import ArtifactList from "./ArtifactList.svelte";
   import MdStream from "./MdStream.svelte";
+  import { t } from "../../lib/i18n.ts";
 
   type TextItem = Extract<Item, { kind: "text" }>;
 
@@ -28,7 +29,7 @@
   const took = $derived(item.run ? elapsedLabel(Math.max(0, item.run.durationMs - item.run.waitedMs)) : "");
 
   function copy() {
-    navigator.clipboard?.writeText(item.text).then(() => toast("已复制"));
+    navigator.clipboard?.writeText(item.text).then(() => toast(t("已复制")));
   }
 </script>
 
@@ -41,7 +42,7 @@
   {/if}
   {#if final}
     <div class="acts">
-      <button class="act" aria-label="复制" title="复制" onclick={copy} use:press={{ scale: 0.9 }}>
+      <button class="act" aria-label={t("复制")} title={t("复制")} onclick={copy} use:press={{ scale: 0.9 }}>
         <Icon name="copy" size={15} />
       </button>
       {#if took}<span class="took" title={foldTiming(item.run)}>{took}</span>{/if}

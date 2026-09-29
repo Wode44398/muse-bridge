@@ -9,6 +9,7 @@
   import { ui, me, applyMe } from '../lib/state.svelte.js';
   import { startPairLogin } from '../lib/pair.js';
   import { pushBackLayer } from '../lib/nav.js';
+  import { t, tc, tr } from '../lib/i18n.js';
 
   let mode = $state('login');   // 'login' | 'register' | 'token' | 'qr'（扫码登录：网页出码、手机扫）
   let username = $state(''), password = $state(''), password2 = $state(''), invite = $state(''), tok = $state('');
@@ -33,19 +34,19 @@
     // 拿到 session token 即存为 Bearer（cookie 之外的兜底）：否则一旦 cookie 不可用，
     // refreshMe 的 /api/auth 会 401、回落 fallback 假登录。
     try { const r = await api.login({ username, password }); if (r.token) setToken(r.token); await refreshMe({ kind: r.kind, user: r.user || username }); reset(); close(); }
-    catch (e) { err = e.body?.error || '登录失败'; }
+    catch (e) { err = tr(e.body?.error) || t('登录失败'); }
     busy = false;
   }
   async function doRegister() {
     if (busy) return; busy = true; err = '';
     try { const r = await api.register({ username, password, password2, invite }); if (r.token) setToken(r.token); await refreshMe({ kind: r.kind, user: r.user || username }); reset(); close(); }
-    catch (e) { err = e.body?.error || '注册失败'; }
+    catch (e) { err = tr(e.body?.error) || t('注册失败'); }
     busy = false;
   }
   async function doToken() {
     if (busy) return; busy = true; err = '';
     try { setToken(tok.trim()); const r = await api.login({}); if (r.token) setToken(r.token); await refreshMe({ kind: r.kind, user: r.user || null }); reset(); close(); }
-    catch (e) { setToken(null); err = e.body?.error || '令牌无效'; }
+    catch (e) { setToken(null); err = tr(e.body?.error) || t('令牌无效'); }
     busy = false;
   }
   function submit(e) {
@@ -70,26 +71,26 @@
     pairCtl = ctl;
     return () => { ctl.stop(); if (pairCtl === ctl) pairCtl = null; pair = { status: 'idle', svg: '', error: '' }; };
   });
-  const pairMsg = $derived(pair.status === 'rejected' ? '已在手机上取消'
-    : pair.status === 'error' ? (pair.error || '出错了')
-    : pair.status === 'expired' ? '二维码已过期' : '');
+  const pairMsg = $derived(pair.status === 'rejected' ? t('已在手机上取消')
+    : pair.status === 'error' ? (tr(pair.error) || t('出错了'))
+    : pair.status === 'expired' ? t('二维码已过期') : '');
 
-  const TITLE = { login: '欢迎回来', register: '注册新账号', token: '用访问令牌登录', qr: '扫码登录' };
+  const TITLE = { login: t('欢迎回来'), register: t('注册新账号'), token: t('用访问令牌登录'), qr: t('扫码登录') };
   const SCAN = '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 7V5.2A2.2 2.2 0 0 1 5.2 3H7M13 3h1.8A2.2 2.2 0 0 1 17 5.2V7M17 13v1.8a2.2 2.2 0 0 1-2.2 2.2H13M7 17H5.2A2.2 2.2 0 0 1 3 14.8V13M4 10h12"/></svg>';
   const focusFirst = (el) => { setTimeout(() => { try { if (!matchMedia('(pointer: coarse)').matches) el.focus(); } catch {} }, 60); };
 </script>
 
 {#if open}
-  <button class="lg-bd" aria-label="关闭" tabindex="-1" onclick={close} transition:fade={{ duration: 160 }}></button>
+  <button class="lg-bd" aria-label={t('关闭')} tabindex="-1" onclick={close} transition:fade={{ duration: 160 }}></button>
   <div class="lg-wrap">
     <div class="lg" role="dialog" aria-modal="true" aria-label={TITLE[mode]} transition:scale={{ duration: 180, start: .97, opacity: 0 }}>
       <div class="lg-logo">Muse Bridge</div>
       <h2 class="lg-t">{TITLE[mode]}</h2>
       <p class="lg-s">
-        {#if mode === 'qr'}在已登录的手机浏览器里打开本站，在账户菜单里点「扫一扫」
-        {:else if mode === 'token'}{me.edition === 'server' ? '粘贴安装时显示的访问令牌（服务器上只存它的哈希），以管理员身份登录' : '粘贴服务器数据目录 config.json 里的 token，以管理员身份登录'}
-        {:else if mode === 'register'}需要邀请码；注册后直接登录
-        {:else}登录 Muse Bridge，继续你的工作{/if}
+        {#if mode === 'qr'}{t('在已登录的手机浏览器里打开本站，在账户菜单里点「扫一扫」')}
+        {:else if mode === 'token'}{me.edition === 'server' ? t('粘贴安装时显示的访问令牌（服务器上只存它的哈希），以管理员身份登录') : t('粘贴服务器数据目录 config.json 里的 token，以管理员身份登录')}
+        {:else if mode === 'register'}{t('需要邀请码；注册后直接登录')}
+        {:else}{t('登录 Muse Bridge，继续你的工作')}{/if}
       </p>
 
       {#if err}<div class="lg-err" role="alert">{err}</div>{/if}
@@ -98,44 +99,44 @@
         <div class="qr">
           <div class="qr-box" class:dim={pair.status !== 'pending'}>{#if pair.svg}{@html pair.svg}{/if}</div>
           {#if pair.status === 'scanned'}
-            <div class="qr-ov" in:fade={{ duration: 160 }}><span class="qi ok">&#xe03b;</span><b>已扫描</b><small>请在手机上确认</small></div>
+            <div class="qr-ov" in:fade={{ duration: 160 }}><span class="qi ok">&#xe03b;</span><b>{t('已扫描')}</b><small>{t('请在手机上确认')}</small></div>
           {:else if pair.status === 'approved'}
-            <div class="qr-ov"><span class="spin"></span><b>登录中…</b></div>
+            <div class="qr-ov"><span class="spin"></span><b>{t('登录中…')}</b></div>
           {:else if pair.status === 'loading' || pair.status === 'idle'}
             <div class="qr-ov"><span class="spin"></span></div>
           {:else if pair.status !== 'pending'}
-            <button class="qr-ov tap" onclick={() => pairCtl?.refresh()}><span class="qi">&#xe0ce;</span><b>{pairMsg}</b><small>点击刷新</small></button>
+            <button class="qr-ov tap" onclick={() => pairCtl?.refresh()}><span class="qi">&#xe0ce;</span><b>{pairMsg}</b><small>{t('点击刷新')}</small></button>
           {/if}
         </div>
-        <button class="lg-link" onclick={() => setMode('login')}>用账号密码登录</button>
+        <button class="lg-link" onclick={() => setMode('login')}>{t('用账号密码登录')}</button>
       {:else}
         <form class="lg-f" onsubmit={submit}>
           {#if mode === 'token'}
-            <input class="lf" type="password" placeholder="访问令牌" bind:value={tok} autocomplete="off" use:focusFirst />
+            <input class="lf" type="password" placeholder={t('访问令牌')} bind:value={tok} autocomplete="off" use:focusFirst />
           {:else}
-            <input class="lf" placeholder={mode === 'register' ? '账号（2–32 位字母 / 数字 / _ / -）' : '账号'} bind:value={username} autocomplete="username" autocapitalize="off" spellcheck="false" use:focusFirst />
-            <input class="lf" type="password" placeholder={mode === 'register' ? '密码（至少 8 位）' : '密码'} bind:value={password} autocomplete={mode === 'register' ? 'new-password' : 'current-password'} />
+            <input class="lf" placeholder={mode === 'register' ? t('账号（2–32 位字母 / 数字 / _ / -）') : tc('settings', '账号')} bind:value={username} autocomplete="username" autocapitalize="off" spellcheck="false" use:focusFirst />
+            <input class="lf" type="password" placeholder={mode === 'register' ? t('密码（至少 8 位）') : t('密码')} bind:value={password} autocomplete={mode === 'register' ? 'new-password' : 'current-password'} />
             {#if mode === 'register'}
-              <input class="lf" type="password" placeholder="确认密码" bind:value={password2} autocomplete="new-password" />
-              <input class="lf" placeholder="邀请码" bind:value={invite} autocomplete="off" autocapitalize="off" spellcheck="false" />
+              <input class="lf" type="password" placeholder={t('确认密码')} bind:value={password2} autocomplete="new-password" />
+              <input class="lf" placeholder={t('邀请码')} bind:value={invite} autocomplete="off" autocapitalize="off" spellcheck="false" />
             {/if}
           {/if}
-          <button class="lg-go" type="submit" disabled={busy}>{busy ? '请稍候…' : mode === 'register' ? '注册并登录' : '登录'}</button>
+          <button class="lg-go" type="submit" disabled={busy}>{busy ? t('请稍候…') : mode === 'register' ? t('注册并登录') : t('登录')}</button>
         </form>
         {#if mode === 'login'}
           <div class="lg-alt">
-            <button class="lg-alt-b" onclick={() => setMode('qr')}><span class="ic" aria-hidden="true">{@html SCAN}</span>扫码登录</button>
+            <button class="lg-alt-b" onclick={() => setMode('qr')}><span class="ic" aria-hidden="true">{@html SCAN}</span>{t('扫码登录')}</button>
           </div>
           <div class="lg-links">
             <!-- 服务器没开注册（主机形态 / 管理员关了）：不给一个点了必然 403 的入口 -->
             {#if me.features?.register !== false}
-              <button class="lg-link" onclick={() => setMode('register')}>注册新账号</button>
+              <button class="lg-link" onclick={() => setMode('register')}>{t('注册新账号')}</button>
               <span class="lg-dot">·</span>
             {/if}
-            <button class="lg-link" onclick={() => setMode('token')}>用访问令牌登录</button>
+            <button class="lg-link" onclick={() => setMode('token')}>{t('用访问令牌登录')}</button>
           </div>
         {:else}
-          <button class="lg-link" onclick={() => setMode('login')}>返回登录</button>
+          <button class="lg-link" onclick={() => setMode('login')}>{t('返回登录')}</button>
         {/if}
       {/if}
     </div>

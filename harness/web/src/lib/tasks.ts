@@ -6,6 +6,8 @@
 // workflow_* 事件驱动，历史从 tool_result.meta 重建。这里只按结构取字段，不 import
 // state.svelte.ts（那边带 rune 与浏览器全局，Node 里载不动）。
 
+import { t } from "./i18n.ts";
+
 export type TaskKind = "agent" | "workflow";
 export type TaskStatus = "running" | "completed" | "failed" | "stopped";
 export type DotState = "done" | "running" | "stalled" | "error" | "pending";
@@ -16,10 +18,10 @@ export type PhaseStatus = "pending" | "running" | "done" | "error";
 export const STALL_MS = 240_000;
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {
-  running: "运行中",
-  completed: "已完成",
-  failed: "失败",
-  stopped: "已停止",
+  running: t("运行中"),
+  completed: t("已完成"),
+  failed: t("失败"),
+  stopped: t("已停止"),
 };
 
 interface RunLike {
@@ -56,9 +58,9 @@ export interface Counts {
 export const EMPTY_COUNTS: Readonly<Counts> = Object.freeze({ done: 0, running: 0, stalled: 0, error: 0, pending: 0, total: 0 });
 
 // ── 工具行 → 任务 ────────────────────────────────────────────────────────────
-export function toolTaskKind(t: any): TaskKind | "" {
-  if (t?.name === "Workflow") return "workflow";
-  if (t?.name === "Agent") return "agent";
+export function toolTaskKind(tool: any): TaskKind | "" {
+  if (tool?.name === "Workflow") return "workflow";
+  if (tool?.name === "Agent") return "agent";
   return "";
 }
 
@@ -67,17 +69,17 @@ const STOP_RE = /abort|中断|cancel/i;
 
 // 终态：有 run 记录看 run；run 还挂着 running 而工具行已经结束 = 被中断没收到 end 事件。
 // 没有 run（工作流还在等确认卡 / 历史里没拿到结果）按工具行推：重建出来的无结果行摘要是「已中断…」。
-export function toolTaskStatus(t: any): TaskStatus {
-  const run: RunLike | WorkflowLike | undefined = t?.workflow ?? t?.agent;
-  const toolRunning = t?.status === "running";
+export function toolTaskStatus(tool: any): TaskStatus {
+  const run: RunLike | WorkflowLike | undefined = tool?.workflow ?? tool?.agent;
+  const toolRunning = tool?.status === "running";
   if (run) {
     if (run.status === "running") return toolRunning ? "running" : "stopped";
     if (run.status === "ok") return "completed";
     return STOP_RE.test(run.error ?? "") ? "stopped" : "failed";
   }
   if (toolRunning) return "running";
-  if (t?.status === "ok") return "completed";
-  if (/^已中断/.test(String(t?.summary ?? ""))) return "stopped";
+  if (tool?.status === "ok") return "completed";
+  if (/^已中断/.test(String(tool?.summary ?? ""))) return "stopped"; // i18n-ignore（认服务端摘要的固定开头）
   return "failed";
 }
 
@@ -93,14 +95,14 @@ export function workflowNameFromScript(script: unknown): string {
   return m ? m[2].trim() : "";
 }
 
-export function toolTaskTitle(t: any): string {
-  const kind = toolTaskKind(t);
-  if (kind === "workflow") return t.workflow?.name || workflowNameFromScript(t.args?.script) || "工作流";
+export function toolTaskTitle(tool: any): string {
+  const kind = toolTaskKind(tool);
+  if (kind === "workflow") return tool.workflow?.name || workflowNameFromScript(tool.args?.script) || t("工作流");
   if (kind === "agent") {
-    const label = typeof t.args?.label === "string" ? t.args.label.trim() : "";
-    return t.agent?.label || label || firstLine(t.args?.prompt) || "子 agent";
+    const label = typeof tool.args?.label === "string" ? tool.args.label.trim() : "";
+    return tool.agent?.label || label || firstLine(tool.args?.prompt) || t("子 agent");
   }
-  return String(t?.name ?? "");
+  return String(tool?.name ?? "");
 }
 
 export interface TaskEntry {

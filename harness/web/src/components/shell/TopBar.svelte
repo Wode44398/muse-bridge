@@ -12,6 +12,7 @@
   import Mark from "../brand/Mark.svelte";
   import ContextPanel from "../sheets/ContextPanel.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tr } from "../../lib/i18n.ts";
 
   let {
     onMenu,
@@ -34,9 +35,10 @@
   const wsPath = $derived(pane.chat.cfg?.workspace ?? app.config?.workspace ?? "");
   const quickProj = $derived(app.projects.find((p) => p.quick) ?? null);
   const wsQuick = $derived(!!quickProj && !!wsPath && pathKey(wsPath) === pathKey(quickProj.path));
-  // 快照桶目录名是 UUID，只有项目名读得懂
-  const wsName = $derived(wsQuick ? quickProj!.name : (wsPath.split(/[\\/]/).filter(Boolean).pop() ?? ""));
-  const title = $derived(empty ? "" : pane.chat.title?.trim() || "新对话");
+  // 快照桶目录名是 UUID，只有项目名读得懂（快照桶的名字是服务端给的「快照对话」，显示时过一道 tr）
+  const wsName = $derived(wsQuick ? tr(quickProj!.name) : (wsPath.split(/[\\/]/).filter(Boolean).pop() ?? ""));
+  // 标题可能是服务端写的中文（「[已从检查点恢复] …」等）：显示时过一道 tr
+  const title = $derived(empty ? "" : tr(pane.chat.title?.trim() ?? "") || t("新对话"));
 
   // 后台在跑的对话数：分屏时只在左格报一次
   const bgCount = $derived(pane.index === 0 ? backgroundRunning().length : 0);
@@ -45,8 +47,8 @@
   const ctxPct = $derived(pane.chat.ctx.limit ? Math.min(100, (pane.chat.ctx.used / pane.chat.ctx.limit) * 100) : 0);
   let nowTick = $state(Date.now());
   $effect(() => {
-    const t = setInterval(() => (nowTick = Date.now()), 30_000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => (nowTick = Date.now()), 30_000);
+    return () => clearInterval(timer);
   });
   const ctxCold = $derived(cacheColdMinutes(nowTick, pane.chat) !== null);
   const k = (n: number) => `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k`;
@@ -67,10 +69,10 @@
   <div class="left">
     {#if wide && menuVisible}
       <span in:fade={{ duration: 160 }}>
-        <IconButton icon="panel" label="展开侧栏" size={32} onclick={onMenu} />
+        <IconButton icon="panel" label={t("展开侧栏")} size={32} onclick={onMenu} />
       </span>
     {/if}
-    <button class="where" class:static={wide && !menuVisible} onclick={titleClick} title={wsPath || undefined} aria-label={wide && !menuVisible ? undefined : "打开项目与会话"}>
+    <button class="where" class:static={wide && !menuVisible} onclick={titleClick} title={wsPath || undefined} aria-label={wide && !menuVisible ? undefined : t("打开项目与会话")}>
       {#if wsName}
         <span class="ws">
           <Icon name={wsQuick ? "bolt" : "folder"} size={15} />
@@ -82,14 +84,14 @@
         <span class="title">{title}</span>
       {/if}
       {#if pane.chat.running}
-        <span class="live" title="正在进行" in:pop={{ from: 0.6 }}><Mark size={15} live /></span>
+        <span class="live" title={t("正在进行")} in:pop={{ from: 0.6 }}><Mark size={15} live /></span>
       {/if}
     </button>
   </div>
 
   <div class="right">
     {#if bgCount > 0}
-      <button class="bg" onclick={onMenu} title="{bgCount} 个对话在后台运行" aria-label="{bgCount} 个对话在后台运行" in:pop>
+      <button class="bg" onclick={onMenu} title={t("{n} 个对话在后台运行", { n: bgCount })} aria-label={t("{n} 个对话在后台运行", { n: bgCount })} in:pop>
         <Mark size={14} live />
         <span>{bgCount}</span>
       </button>
@@ -105,8 +107,10 @@
           haptic("light");
           ctxOpen = !ctxOpen;
         }}
-        title="上下文 {k(pane.chat.ctx.used)} / {k(pane.chat.ctx.limit)}（{Math.round(ctxPct)}%）{ctxCold ? '，缓存大概已经冷了' : ''}"
-        aria-label="上下文用量 {Math.round(ctxPct)}%"
+        title={ctxCold
+          ? t("上下文 {used} / {limit}（{pct}%），缓存大概已经冷了", { used: k(pane.chat.ctx.used), limit: k(pane.chat.ctx.limit), pct: Math.round(ctxPct) })
+          : t("上下文 {used} / {limit}（{pct}%）", { used: k(pane.chat.ctx.used), limit: k(pane.chat.ctx.limit), pct: Math.round(ctxPct) })}
+        aria-label={t("上下文用量 {pct}%", { pct: Math.round(ctxPct) })}
         aria-expanded={ctxOpen}
         in:pop
       >
@@ -117,13 +121,13 @@
       </button>
     {/if}
     {#if canRollback}
-      <IconButton icon="history" label="回滚到检查点" size={32} onclick={() => (app.sheet = "checkpoints")} />
+      <IconButton icon="history" label={t("回滚到检查点")} size={32} onclick={() => (app.sheet = "checkpoints")} />
     {/if}
     {#if showDock}
     <IconButton
       icon="panelR"
-      label="工作区"
-      title="工作区（任务 / 审阅 / 终端 / 浏览器 / 文件）"
+      label={t("工作区")}
+      title={t("工作区（任务 / 审阅 / 终端 / 浏览器 / 文件）")}
       size={32}
       active={app.dockOpen}
       onclick={() => {
@@ -133,7 +137,7 @@
     />
     {/if}
     {#if onclose}
-      <IconButton icon="close" label="关闭这一格" title="关闭这一格（对话照常保留，在跑的照跑）" size={32} onclick={onclose} />
+      <IconButton icon="close" label={t("关闭这一格")} title={t("关闭这一格（对话照常保留，在跑的照跑）")} size={32} onclick={onclose} />
     {/if}
   </div>
 </header>

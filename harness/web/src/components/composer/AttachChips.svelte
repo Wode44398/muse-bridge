@@ -10,6 +10,7 @@
   import Icon from "../ui/Icon.svelte";
   import Mark from "../brand/Mark.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tr } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -34,7 +35,7 @@
     pane.chat.attachments = pane.chat.attachments.filter((x) => x !== p);
   }
   // 引用会话的芯片（把会话块拖进输入框）：标题太长截尾，全称在悬停提示里
-  const shortTitle = (s: string) => (s.length > 18 ? `${s.slice(0, 17)}…` : s) || "（空会话）";
+  const shortTitle = (s: string) => (s.length > 18 ? `${s.slice(0, 17)}…` : s) || t("（空会话）");
   function removeRef(id: string) {
     haptic("light");
     pane.chat.refs = pane.chat.refs.filter((r) => r.id !== id);
@@ -53,7 +54,7 @@
     >
       <span class="ic"><Icon name={iconOf(p)} size={14} /></span>
       <span class="name">{shortName(p)}</span>
-      <button class="x" aria-label="移除附件" title="移除" onclick={() => remove(p)}>
+      <button class="x" aria-label={t("移除附件")} title={t("移除")} onclick={() => remove(p)}>
         <Icon name="close" size={12} stroke={2} />
       </button>
     </span>
@@ -61,22 +62,26 @@
   {#each pane.chat.refs as r (r.id)}
     <span
       class="chip ref"
-      title="引用对话：{r.title}"
+      title={t("引用对话：{title}", { title: tr(r.title) })}
       animate:flip={{ duration: moveMs, easing: SPRING_SOFT.ease }}
       in:rise={{ y: 4, scale: 0.96 }}
       out:fade={{ duration: 140 }}
     >
       <span class="ic"><Icon name="message" size={14} /></span>
-      <span class="name">{shortTitle(r.title)}</span>
-      <button class="x" aria-label="移除引用" title="移除" onclick={() => removeRef(r.id)}>
+      <span class="name">{shortTitle(tr(r.title))}</span>
+      <button class="x" aria-label={t("移除引用")} title={t("移除")} onclick={() => removeRef(r.id)}>
         <Icon name="close" size={12} stroke={2} />
       </button>
     </span>
   {/each}
   {#if attachUp.active && pane.focused}
+    <!-- 整句一个键；数字仍放进 .num（在译文里找到它的位置再拆开） -->
+    {@const upN = String(attachUp.active)}
+    {@const upText = t("上传中 {n} 个…", { n: attachUp.active })}
+    {@const upAt = upText.indexOf(upN)}
     <span class="chip up" role="status" in:rise={{ y: 4 }} out:fade={{ duration: 140 }}>
       <Mark size={14} live />
-      <span class="name">上传中 <span class="num">{attachUp.active}</span> 个…</span>
+      <span class="name">{upText.slice(0, upAt)}<span class="num">{upN}</span>{upText.slice(upAt + upN.length)}</span>
     </span>
   {/if}
 </div>

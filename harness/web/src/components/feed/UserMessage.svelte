@@ -11,6 +11,7 @@
   import Icon from "../ui/Icon.svelte";
   import RecallChip from "./RecallChip.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tr } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -34,7 +35,7 @@
     ontoggle();
   }
   function copy() {
-    navigator.clipboard?.writeText(item.text).then(() => toast("已复制"));
+    navigator.clipboard?.writeText(item.text).then(() => toast(t("已复制")));
   }
   const attIcon = (k: string): IconName => (k === "audio" ? "audio" : k === "image" ? "camera" : k === "folder" ? "folder" : "file");
   const attName = (p: string) => p.replace(/\/$/, "").split("/").pop() ?? p;
@@ -47,7 +48,7 @@
 
 <div class="user" class:on={actsOn}>
   {#if item.steer}
-    <div class="steer"><span class="sdot" aria-hidden="true"></span>运行中插话</div>
+    <div class="steer"><span class="sdot" aria-hidden="true"></span>{t("运行中插话")}</div>
   {/if}
   <div class="bwrap">
     <!-- 气泡本身只是触屏的「点一下亮动作」手势；动作按钮本身键盘可达 -->
@@ -63,8 +64,8 @@
       {#if item.refs?.length}
         <div class="atts">
           {#each item.refs as r (r.id)}
-            <button class="att ref" title="引用的对话：{r.title}（点开）" onclick={(e) => openRef(e, r.id)}>
-              <Icon name="message" size={13} /><span class="an">{r.title || "（空会话）"}</span>
+            <button class="att ref" title={t("引用的对话：{title}（点开）", { title: tr(r.title) })} onclick={(e) => openRef(e, r.id)}>
+              <Icon name="message" size={13} /><span class="an">{tr(r.title) || t("（空会话）")}</span>
             </button>
           {/each}
         </div>
@@ -74,15 +75,15 @@
     {#if text || canRewind}
       <div class="acts">
         {#if text}
-          <button class="act" aria-label="复制" title="复制" onclick={copy} use:press={{ scale: 0.9 }}>
+          <button class="act" aria-label={t("复制")} title={t("复制")} onclick={copy} use:press={{ scale: 0.9 }}>
             <Icon name="copy" size={15} />
           </button>
         {/if}
         {#if canRewind}
           <button
             class="act"
-            aria-label="从这里改写"
-            title="从这里改写：对话退回到这条消息之前，原话放回输入框，文件不动"
+            aria-label={t("从这里改写")}
+            title={t("从这里改写：对话退回到这条消息之前，原话放回输入框，文件不动")}
             onclick={onrewind}
             use:press={{ scale: 0.9 }}
           >

@@ -4,6 +4,7 @@
   // 失败 = err · 排队 / 幽灵格只描边。工作流紧凑卡（maxRows 8 + 幽灵格）与任务面板的工作流详情（按阶段、cols 16）共用。
   // 状态修饰类是模板插值拼的，scoped 规则一律 :global() 写法（否则被编译器当 unused 剪掉）。
   import { dotCells, type Counts, type DotState } from "../../lib/tasks.ts";
+  import { t } from "../../lib/i18n.ts";
 
   let {
     counts,
@@ -27,15 +28,15 @@
   const oneToOne = $derived(!!labels && labels.length === counts.total && counts.total <= cap);
   const cells = $derived<DotState[]>(oneToOne && labels ? labels.map((a) => a.state) : dotCells(counts, cap));
 
-  const WORD: Record<DotState, string> = { done: "完成", running: "运行中", stalled: "久无动静", error: "失败", pending: "排队" };
+  const WORD: Record<DotState, string> = { done: t("完成"), running: t("运行中"), stalled: t("久无动静"), error: t("失败"), pending: t("排队") };
   const summary = $derived(
     counts.total === 0
-      ? "等待 agent 启动"
+      ? t("等待 agent 启动")
       : [
-          `${counts.done}/${counts.total} 完成`,
-          counts.running - counts.stalled ? `${counts.running - counts.stalled} 运行中` : "",
-          counts.stalled ? `${counts.stalled} 久无动静` : "",
-          counts.error ? `${counts.error} 失败` : "",
+          t("{done}/{total} 完成", { done: counts.done, total: counts.total }),
+          counts.running - counts.stalled ? t("{n} 运行中", { n: counts.running - counts.stalled }) : "",
+          counts.stalled ? t("{n} 久无动静", { n: counts.stalled }) : "",
+          counts.error ? t("{n} 失败", { n: counts.error }) : "",
         ]
           .filter(Boolean)
           .join(" · "),
@@ -46,9 +47,9 @@
   };
   // 每个在跑格的呼吸时长 / 相位按黄金比例散开（官方 eD）：一片格子不会齐刷刷一起闪
   const pulse = (i: number) => {
-    const t = (0.61803398875 * i) % 1;
+    const ph = (0.61803398875 * i) % 1;
     const n = 2.4 + ((0.7548776662 * i) % 1) * 1.4;
-    return `--dur:${n.toFixed(2)}s;--delay:${(-t * n).toFixed(2)}s`;
+    return `--dur:${n.toFixed(2)}s;--delay:${(-ph * n).toFixed(2)}s`;
   };
   const gridStyle = $derived(
     cols ? `grid-template-columns:repeat(${cols},6px)` : `grid-template-columns:repeat(auto-fill,6px);max-height:${8 * maxRows - 2}px`,
@@ -59,7 +60,7 @@
   {#each cells as st, i (i)}
     <span class="cell {st}" title={cellTitle(st, i)} style={st === "running" ? pulse(i) : undefined}></span>
   {/each}
-  {#if anticipate}<span class="cell ghost" title="可能还会有更多 agent"></span>{/if}
+  {#if anticipate}<span class="cell ghost" title={t("可能还会有更多 agent")}></span>{/if}
 </span>
 
 <style>

@@ -19,8 +19,9 @@
     saveConfig,
     setAppearance,
     toast,
+    vendorInfo,
   } from "../../lib/state.svelte.ts";
-  import { VENDORS, type Appearance } from "../../lib/theme.ts";
+  import type { Appearance } from "../../lib/theme.ts";
   import { activeRoute, fsMkdir, getConn, initRoute, isEmbedded, isShell, learnLan, memoryOverview, setConn } from "../../lib/api.ts";
   import { countLanes } from "./memory-viz.ts";
   import type { IconName } from "../../lib/icons.ts";
@@ -40,29 +41,34 @@
   import Section from "./Section.svelte";
   import RuleList, { splitRules, toItems, type RuleItem } from "./RuleList.svelte";
   import DirBrowser, { joinPath } from "./DirBrowser.svelte";
+  import { t, tc, tr, lang, setLang } from "../../lib/i18n.ts";
+
+  const LANGS: { value: "zh" | "en"; label: string }[] = [
+    { value: "zh", label: "简体中文" }, // i18n-ignore 语言名永远用本族语写
+    { value: "en", label: "English" },
+  ];
 
   let { onclose }: { onclose: () => void } = $props();
 
-  const RULES_NOTE =
-    "规则匹配命令/路径前缀，是减少误操作的软闸，不是对抗性安全沙箱。保存后对所有会话（包括正开着的）下一次调用就生效，重启也不丢。" +
-    "权限卡上的「本会话都允许」只管当前会话，切了运行档位、访问范围或改了这里的规则就失效，会再问一次。" +
-    "运行档位（自主执行 / 只读 / 先出计划）在输入框旁的档位胶囊，随时可切、对当前会话立刻生效。";
-  const ACCESS_NOTE =
-    "“仅工作空间”会拦截明显越界的路径与命令，用于防误操作，不提供对抗恶意命令的强隔离。" +
-    "整机（默认）下 agent 可用绝对路径读写工作空间以外的文件（密钥文件始终封锁）。此设定是新会话的默认，重启也记得；" +
-    "单个对话随时可在输入框的档位胶囊里切。";
+  // 两段脚注各是一整句（英文语序不同，不能分段翻）
+  const RULES_NOTE = t(
+    "规则匹配命令/路径前缀，是减少误操作的软闸，不是对抗性安全沙箱。保存后对所有会话（包括正开着的）下一次调用就生效，重启也不丢。权限卡上的「本会话都允许」只管当前会话，切了运行档位、访问范围或改了这里的规则就失效，会再问一次。运行档位（自主执行 / 只读 / 先出计划）在输入框旁的档位胶囊，随时可切、对当前会话立刻生效。",
+  );
+  const ACCESS_NOTE = t(
+    "“仅工作空间”会拦截明显越界的路径与命令，用于防误操作，不提供对抗恶意命令的强隔离。整机（默认）下 agent 可用绝对路径读写工作空间以外的文件（密钥文件始终封锁）。此设定是新会话的默认，重启也记得；单个对话随时可在输入框的档位胶囊里切。",
+  );
   const ACCESS = [
-    { value: "full", label: "整机可访问" },
-    { value: "workspace", label: "仅工作空间" },
+    { value: "full", label: t("整机可访问") },
+    { value: "workspace", label: t("仅工作空间") },
   ];
   const APPEARANCE: { value: Appearance; label: string; icon: IconName }[] = [
-    { value: "auto", label: "跟随系统", icon: "laptop" },
-    { value: "light", label: "浅色", icon: "sun" },
-    { value: "dark", label: "深色", icon: "moon" },
+    { value: "auto", label: t("跟随系统"), icon: "laptop" },
+    { value: "light", label: t("浅色"), icon: "sun" },
+    { value: "dark", label: t("深色"), icon: "moon" },
   ];
-  const ROUTE_NAME: Record<string, string> = { "same-origin": "同源", direct: "直连", tunnel: "隧道", lan: "局域网" };
+  const ROUTE_NAME: Record<string, string> = { "same-origin": t("同源"), direct: t("直连"), tunnel: t("隧道"), lan: t("局域网") };
 
-  const vendor = $derived(VENDORS[app.config?.provider ?? "anthropic"] ?? VENDORS.anthropic);
+  const vendor = $derived(vendorInfo(app.config?.provider));
 
   // ── 草稿：配置到位时填一次 ─────────────────────────────────────────────────────────
   let apiKey = $state("");
@@ -117,7 +123,7 @@
       await go(target); // 建好直接进去
       haptic("light");
     } catch (e: any) {
-      toast(`新建失败：${e?.message ?? e}`);
+      toast(t("新建失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     }
   }
   const focusNow = (node: HTMLInputElement) => {
@@ -155,7 +161,7 @@
     } finally {
       probingLan = false;
     }
-    toast(routeNow === "lan" ? "已切局域网直连" : "局域网不可达，走隧道");
+    toast(routeNow === "lan" ? t("已切局域网直连") : t("局域网不可达，走隧道"));
   }
 
   // ── 诊断（Q13）─────────────────────────────────────────────────────────────────────
@@ -200,10 +206,10 @@
       // 先换连接（换了服务端或令牌）：之后的配置写到新的服务端上
       const c = getConn();
       const u = cleanUrl();
-      const t = token.trim();
-      if (u !== (c?.url ?? "") || t !== (c?.token ?? "")) {
+      const tok = token.trim();
+      if (u !== (c?.url ?? "") || tok !== (c?.token ?? "")) {
         if (!u) setConn(null);
-        else if (t) setConn({ mode: "bridge", url: u, token: t });
+        else if (tok) setConn({ mode: "bridge", url: u, token: tok });
         else setConn({ mode: "direct", url: u });
         connMode = getConn()?.mode ?? null;
         connTick++;
@@ -235,7 +241,7 @@
       apiKey = "";
       saved();
     } catch (e: any) {
-      toast(`保存失败：${e?.message ?? e}`);
+      toast(t("保存失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     } finally {
       saving = false;
     }
@@ -255,10 +261,12 @@
   });
   const memSubtitle = $derived(
     !memLine
-      ? "模型跨对话记住的事：看、确认、驳回、清理"
+      ? t("模型跨对话记住的事：看、确认、驳回、清理")
       : memLine.active || memLine.waiting
-        ? `${memLine.active} 条生效${memLine.places > 1 ? `，分布在 ${memLine.places} 处` : ""}`
-        : "还没有记忆",
+        ? memLine.places > 1
+          ? t("{n} 条生效，分布在 {places} 处", { n: memLine.active, places: memLine.places })
+          : t("{n} 条生效", { n: memLine.active })
+        : t("还没有记忆"),
   );
   // 草稿没存就走开会丢：先说一声（记忆面板是另一张面板，回来时设置按服务端现值重新填）
   const rulesOf = (items: RuleItem[]) => JSON.stringify(texts(items));
@@ -273,7 +281,7 @@
   );
   function goMemory() {
     if (dirty || connChanged) {
-      toast("有改动还没保存：先点「保存」，再去看记忆");
+      toast(t("有改动还没保存：先点「保存」，再去看记忆"));
       return;
     }
     haptic("light");
@@ -294,7 +302,7 @@
   });
 </script>
 
-<Sheet title="设置" {onclose} size="md">
+<Sheet title={t("设置")} {onclose} size="md">
   {#if seeded && app.config}
     <div in:rise={{ y: 8 }}>
       <Group>
@@ -302,72 +310,72 @@
           {#snippet leading()}<VendorLogo skin={app.config?.provider ?? "anthropic"} size={30} />{/snippet}
           {#snippet trailing()}
             {#if app.config?.hasKey}
-              <span class="tag">已配 Key</span>
+              <span class="tag">{t("已配 Key")}</span>
             {:else}
-              <span class="tag warn">缺 Key</span>
+              <span class="tag warn">{t("缺 Key")}</span>
             {/if}
           {/snippet}
         </Row>
       </Group>
 
-      <Section title="API Key" footnote="Key 只存于服务端内存，不落盘、不回传浏览器。">
+      <Section title={t("API Key")} footnote={vendor.custom ? t("自定义服务的 Key 加密存在服务端，不回传浏览器。") : t("Key 只存于服务端内存，不落盘、不回传浏览器。")}>
         <TextField
           type="password"
           mono
           bind:value={apiKey}
-          label="API Key"
-          placeholder={app.config.hasKey ? "••••••••（留空保持不变）" : `粘贴 ${vendor.name} API Key`}
+          label={t("API Key")}
+          placeholder={app.config.hasKey ? t("••••••••（留空保持不变）") : t("粘贴 {name} API Key", { name: vendor.name })}
         />
       </Section>
 
       {#if hasMemory}
-        <Group title="记忆">
-          <Row icon="memory" title="记忆管理" subtitle={memSubtitle} chevron onclick={goMemory}>
+        <Group title={t("记忆")}>
+          <Row icon="memory" title={t("记忆管理")} subtitle={memSubtitle} chevron onclick={goMemory}>
             {#snippet trailing()}
-              {#if memLine?.waiting}<span class="tag warn">{memLine.waiting} 条待处理</span>{/if}
+              {#if memLine?.waiting}<span class="tag warn">{t("{n} 条待处理", { n: memLine.waiting })}</span>{/if}
             {/snippet}
           </Row>
         </Group>
       {/if}
 
       <RuleList
-        title="每次问我（逐行，如 Bash(git push:*)）"
-        label="添加「每次问我」规则"
-        placeholder="添加规则，如 Bash(git push:*)"
+        title={t("每次问我（逐行，如 Bash(git push:*)）")}
+        label={t("添加「每次问我」规则")}
+        placeholder={t("添加规则，如 Bash(git push:*)")}
         bind:items={askRules}
         bind:pending={askPending}
       />
       <RuleList
-        title="从不允许"
-        label="添加「从不允许」规则"
-        placeholder="添加规则，如 Bash(rm -rf:*)"
+        title={t("从不允许")}
+        label={t("添加「从不允许」规则")}
+        placeholder={t("添加规则，如 Bash(rm -rf:*)")}
         footnote={RULES_NOTE}
         bind:items={denyRules}
         bind:pending={denyPending}
       />
 
       {#if hasWs}
-        <Group title="工作空间">
+        <Group title={t("工作空间")}>
           <div>
             <div class="ws">
               <span class="ws-ic"><Icon name="folder" size={18} /></span>
               <span class="ws-path" title={wsDraft}><bdi>{wsDraft}</bdi></span>
-              <Chip tone="soft" chevron open={browsing} onclick={toggleBrowse}>{browsing ? "收起" : "更改"}</Chip>
+              <Chip tone="soft" chevron open={browsing} onclick={toggleBrowse}>{browsing ? t("收起") : t("更改")}</Chip>
             </div>
             <!-- 目录是展开之后才取的：高度跟着内容平滑生长（取到之前、换目录时都不跳） -->
             <div use:smoothHeight>
               <div>
                 {#if browsing}
                   <div class="browse" in:fade={{ duration: 180 }} out:fade={{ duration: 120 }}>
-                    <DirBrowser start={wsDraft} emptyText="无子文件夹" listHeight="240px">
+                    <DirBrowser start={wsDraft} emptyText={t("无子文件夹")} listHeight="240px">
                       {#snippet footer({ path, go })}
                         <div class="ops">
                           {#if creating}
                             <input
                               class="newname"
                               bind:value={newName}
-                              placeholder="新文件夹名"
-                              aria-label="新文件夹名"
+                              placeholder={t("新文件夹名")}
+                              aria-label={t("新文件夹名")}
                               autocomplete="off"
                               autocapitalize="off"
                               spellcheck="false"
@@ -379,11 +387,11 @@
                                 void doMkdir(path, go);
                               }}
                             />
-                            <Button size={btn} variant="secondary" disabled={!newName.trim()} onclick={() => doMkdir(path, go)}>建</Button>
-                            <Button size={btn} variant="ghost" onclick={() => (creating = false)}>取消</Button>
+                            <Button size={btn} variant="secondary" disabled={!newName.trim()} onclick={() => doMkdir(path, go)}>{t("建")}</Button>
+                            <Button size={btn} variant="ghost" onclick={() => (creating = false)}>{t("取消")}</Button>
                           {:else}
-                            <Button size={btn} variant="ghost" icon="folderPlus" disabled={!path} onclick={() => (creating = true)}>新建文件夹</Button>
-                            <Button size={btn} variant="accent" disabled={!path} onclick={() => pickHere(path)}>选定此文件夹</Button>
+                            <Button size={btn} variant="ghost" icon="folderPlus" disabled={!path} onclick={() => (creating = true)}>{t("新建文件夹")}</Button>
+                            <Button size={btn} variant="accent" disabled={!path} onclick={() => pickHere(path)}>{t("选定此文件夹")}</Button>
                           {/if}
                         </div>
                       {/snippet}
@@ -397,15 +405,15 @@
 
         <!-- 被锁定（多用户服务端的租户实例，恒仅工作空间）就不给开关 -->
         {#if !app.config?.accessLocked}
-          <Section title="访问范围" footnote={ACCESS_NOTE}>
-            <Segmented full label="访问范围" options={ACCESS} value={access} onchange={(v) => (access = v)} />
+          <Section title={t("访问范围")} footnote={ACCESS_NOTE}>
+            <Segmented full label={t("访问范围")} options={ACCESS} value={access} onchange={(v) => (access = v)} />
           </Section>
         {/if}
       {/if}
     </div>
   {:else}
     <Group>
-      <Row danger={Boolean(app.connError)} title={app.connError ? "连不上服务器" : "正在连接…"} subtitle={app.connError || undefined}>
+      <Row danger={Boolean(app.connError)} title={app.connError ? t("连不上服务器") : t("正在连接…")} subtitle={app.connError || undefined}>
         {#snippet leading()}
           {#if app.connError}<Icon name="wifiOff" size={20} />{:else}<Mark size={20} live />{/if}
         {/snippet}
@@ -413,10 +421,10 @@
     </Group>
   {/if}
 
-  <Section title="外观">
+  <Section title={t("外观")}>
     <Segmented
       full
-      label="外观"
+      label={t("外观")}
       options={APPEARANCE}
       value={app.appearance}
       onchange={(a) => {
@@ -426,16 +434,30 @@
     />
   </Section>
 
+  <!-- 界面语言：与 bridge 共用 localStorage['bridge-lang']；语言名用本族语写；选中即整页重载 -->
+  <Section title={t("语言")} footnote={t("切换后界面会重新加载")}>
+    <Segmented
+      full
+      label={t("界面语言")}
+      options={LANGS}
+      value={lang()}
+      onchange={(v) => {
+        haptic("light");
+        setLang(v);
+      }}
+    />
+  </Section>
+
   {#if showConn}
-    <Section title="连接" footnote="直连填电脑地址；走 bridge 填隧道地址 + 令牌，在家自动切局域网。">
+    <Section title={tc("名词", "连接")} footnote={t("直连填电脑地址；走 bridge 填隧道地址 + 令牌，在家自动切局域网。")}>
       {#snippet aside()}<span class="route">{ROUTE_NAME[routeNow] ?? routeNow}</span>{/snippet}
       <div class="stack">
-        <TextField type="url" mono bind:value={server} label="服务器地址" placeholder="http://192.168.1.10:8799 或 bridge 地址" />
-        <TextField type="password" mono bind:value={token} label="访问令牌" placeholder="访问令牌（走 bridge 时填）" />
+        <TextField type="url" mono bind:value={server} label={t("服务器地址")} placeholder={t("http://192.168.1.10:8799 或 bridge 地址")} />
+        <TextField type="password" mono bind:value={token} label={t("访问令牌")} placeholder={t("访问令牌（走 bridge 时填）")} />
         {#if connMode === "bridge"}
           <div>
             <Button size={btn} variant="secondary" icon="network" loading={probingLan} onclick={reprobe}>
-              {probingLan ? "探测中…" : "重新探测局域网"}
+              {probingLan ? t("探测中…") : t("重新探测局域网")}
             </Button>
           </div>
         {/if}
@@ -445,11 +467,11 @@
 
   {#if diagnosticsAvailable() && app.chat.id}
     <Section
-      title="诊断"
-      footnote="卡住了、变慢了、报错了，导出这个包发给维护的人：里面是这一轮的事件记录、服务输出、体检结果与版本信息，不含对话正文和任何 key。"
+      title={t("诊断")}
+      footnote={t("卡住了、变慢了、报错了，导出这个包发给维护的人：里面是这一轮的事件记录、服务输出、体检结果与版本信息，不含对话正文和任何 key。")}
     >
       <Button variant="secondary" icon="download" loading={exporting} onclick={runExport}>
-        {exporting ? "生成中…" : "导出当前对话的诊断包"}
+        {exporting ? t("生成中…") : t("导出当前对话的诊断包")}
       </Button>
     </Section>
   {/if}
@@ -460,7 +482,7 @@
       <p class="meta" title="{app.info.shell} · {app.info.workspace}">{app.info.shell} · <bdi>{app.info.workspace}</bdi></p>
       {#if sha || proto}
         <p class="meta">
-          {#if sha}服务端 {sha}{/if}{#if sha && proto}&nbsp;·&nbsp;{/if}{#if proto}协议 {proto}{/if}
+          {#if sha}{t("服务端 {sha}", { sha })}{/if}{#if sha && proto}&nbsp;·&nbsp;{/if}{#if proto}{t("协议 {n}", { n: proto })}{/if}
         </p>
       {/if}
     {/if}
@@ -468,7 +490,7 @@
 
   {#snippet footer()}
     <Button variant="primary" size={wide ? "md" : "lg"} full={!wide} disabled={!canSave} loading={saving} onclick={save}>
-      {saving ? "保存中…" : savedTick ? "已保存 ✓" : "保存"}
+      {saving ? t("保存中…") : savedTick ? t("已保存 ✓") : t("保存")}
     </Button>
   {/snippet}
 </Sheet>

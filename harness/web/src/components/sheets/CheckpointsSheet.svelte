@@ -9,6 +9,7 @@
   import { checkpointDiff, listCheckpoints, rollback } from "../../lib/api.ts";
   import { haptic } from "../../lib/touch.ts";
   import { collapse, fade, rise, smoothHeight } from "../../lib/motion.ts";
+  import { isEn, locale, t, tr } from "../../lib/i18n.ts";
   import Sheet from "../ui/Sheet.svelte";
   import Button from "../ui/Button.svelte";
   import Icon from "../ui/Icon.svelte";
@@ -100,7 +101,7 @@
     try {
       d = await checkpointDiff(id, cp.n);
     } catch (e: any) {
-      err = `diff 加载失败：${e?.message ?? e}`;
+      err = t("diff 加载失败：{reason}", { reason: tr(String(e?.message ?? e)) });
     }
     if (my !== diffSeq) return;
     previewing = null;
@@ -122,41 +123,48 @@
         onclose();
         evictChat(sid); // 服务端已经重置了这个会话：丢掉本地缓存的实例，强制重拉
         await openSession(sid);
-        toast("已回滚");
+        toast(t("已回滚"));
       } else if (r.code === "external" && r.external?.length) {
         external = r.external;
         haptic("light");
       } else {
-        toast(r.code === "running" ? "有会话正在运行，无法回滚" : `回滚失败：${r.error}`);
+        toast(r.code === "running" ? t("有会话正在运行，无法回滚") : t("回滚失败：{reason}", { reason: tr(String(r.error)) }));
       }
     } catch (e: any) {
-      toast(`回滚失败：${e?.message ?? e}`);
+      toast(t("回滚失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     }
     rolling = false;
   }
 
   const pad = (n: number) => String(n).padStart(2, "0");
+  // 中文「9/28 15:04」；英文按界面语言（Sep 28, 3:04 PM）
   const fmtTime = (ts: number) => {
     const d = new Date(ts);
+    if (isEn()) return new Intl.DateTimeFormat(locale(), { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(d);
     return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
-  // 服务端自己拍的现场（回滚前 / 改写前 / 撤销文件前）：拆成一枚小标签 + 括号里那句说明
+  // 服务端自己拍的现场（回滚前 / 改写前 / 撤销文件前）：拆成一枚小标签 + 括号里那句说明（两段都是服务端的中文，显示时走 tr）
   const special = (label: string): { tag: string; rest: string } | null => {
     const m = /^(.{1,8}前现场)（(.+)）$/.exec(label ?? "");
     return m ? { tag: m[1], rest: m[2] } : null;
   };
+  // 一行的说明：服务端现场的括号说明 / 轮内快照的标签（服务端写的「执行 … 之前」）/ 服务端自动起的轮（整句套全角括号：
+  // 「（服务重启后自动续跑）」「（目标第 N 轮）」）走 tr；普通检查点的标签是用户消息，原样
+  const serverMade = (label: string) => /^（[^（）]+）$/.test(label);
+  const labelOf = (cp: Checkpoint, sp: { rest: string } | null) =>
+    sp ? tr(sp.rest) : cp.label && (cp.kind === "files" || serverMade(cp.label)) ? tr(cp.label) : cp.label || t("（会话开始）");
 </script>
 
-<Sheet title="回滚到检查点" {onclose} size="lg">
+<Sheet title={t("回滚到检查点")} {onclose} size="lg">
   {#if loading && !cps.length}
-    <p class="state"><Mark size={16} live /><span>加载中…</span></p>
+    <p class="state"><Mark size={16} live /><span>{t("加载中…")}</span></p>
   {:else if loadError && !cps.length}
     <div class="state err" role="alert">
-      <span>加载失败：{loadError}</span>
-      <Button size={btn} variant="ghost" icon="reload" onclick={loadList}>重试</Button>
+      <span>{t("加载失败：{reason}", { reason: tr(loadError) })}</span>
+      <Button size={btn} variant="ghost" icon="reload" onclick={loadList}>{t("重试")}</Button>
     </div>
   {:else if !cps.length}
-    <Empty icon="history" title="这个会话还没有检查点" compact />
+    <Empty icon="history" title={t("这个会话还没有检查点")} compact />
   {:else}
     <ol class="tl">
       {#each cps as cp, i (cp.n)}
@@ -167,13 +175,13 @@
             <span class="node" aria-hidden="true"></span>
             <span class="main">
               <span class="label">
-                {#if sp}<span class="tag">{sp.tag}</span>{/if}
-                {#if cp.kind === "files"}<span class="tag">轮内快照 · 只回文件</span>{/if}
-                <span class="lt">{sp ? sp.rest : cp.label || "（会话开始）"}</span>
+                {#if sp}<span class="tag">{tr(sp.tag)}</span>{/if}
+                {#if cp.kind === "files"}<span class="tag">{t("轮内快照 · 只回文件")}</span>{/if}
+                <span class="lt">{labelOf(cp, sp)}</span>
               </span>
               <span class="when">
                 <span>{fmtTime(cp.at)}</span><span class="n">#{cp.n}</span>
-                {#if previewing === cp.n}<span class="hx-shimmer">加载改动预览…</span>{/if}
+                {#if previewing === cp.n}<span class="hx-shimmer">{t("加载改动预览…")}</span>{/if}
               </span>
             </span>
             <span class="chev" aria-hidden="true">
@@ -189,10 +197,10 @@
                   {#if diffError}
                     <p class="line err">{diffError}</p>
                   {:else if summary?.empty}
-                    <p class="line">这之后没有改过文件</p>
+                    <p class="line">{t("这之后没有改过文件")}</p>
                   {:else if summary && summary.files.length}
                     <div class="sum">
-                      <span>{summary.files.length} 个文件</span>
+                      <span>{t("{n} 个文件", { n: summary.files.length })}</span>
                       <span class="num"><span class="add">+{summary.add}</span> <span class="del">−{summary.del}</span></span>
                     </div>
                     <ul class="files">
@@ -200,7 +208,7 @@
                         <li>
                           <span class="fp" title={f.path}><bdi>{f.path}</bdi></span>
                           <span class="num">
-                            {#if f.bin}<span class="bin">二进制</span>
+                            {#if f.bin}<span class="bin">{t("二进制")}</span>
                             {:else if f.changed !== undefined}±{f.changed}
                             {:else}<span class="add">+{f.add}</span> <span class="del">−{f.del}</span>{/if}
                           </span>
@@ -209,7 +217,7 @@
                     </ul>
                     <button class="more" aria-expanded={showPatch} onclick={() => (showPatch = !showPatch)}>
                       <Icon name="fileDiff" size={15} />
-                      <span>逐行改动</span>
+                      <span>{t("逐行改动")}</span>
                       <span class="chev-s" class:up={showPatch}><Icon name="chevronD" size={14} /></span>
                     </button>
                     {#if showPatch}
@@ -226,27 +234,27 @@
 
                   {#if external}
                     <div class="ext" role="alert" in:rise={{ y: 4 }}>
-                      <p class="ext-head"><Icon name="shield" size={16} /><span>有 {external.length} 个文件不是这个对话改的</span></p>
-                      <p class="ext-why">手改的、别的对话改的都算。回滚会把它们一起还原，这些改动会被覆盖；回滚前的现场仍会先存成检查点，覆盖了也能再回滚回来。</p>
+                      <p class="ext-head"><Icon name="shield" size={16} /><span>{t("有 {n} 个文件不是这个对话改的", { n: external.length })}</span></p>
+                      <p class="ext-why">{t("手改的、别的对话改的都算。回滚会把它们一起还原，这些改动会被覆盖；回滚前的现场仍会先存成检查点，覆盖了也能再回滚回来。")}</p>
                       <ul class="ext-list">
                         {#each external.slice(0, EXTERNAL_SHOWN) as p}
                           <li><bdi>{p}</bdi></li>
                         {/each}
                       </ul>
                       {#if external.length > EXTERNAL_SHOWN}
-                        <p class="ext-more">…还有 {external.length - EXTERNAL_SHOWN} 个</p>
+                        <p class="ext-more">{t("…还有 {n} 个", { n: external.length - EXTERNAL_SHOWN })}</p>
                       {/if}
                       <div class="ext-acts">
-                        <Button variant="ghost" disabled={rolling} onclick={() => (external = null)}>先不回滚</Button>
+                        <Button variant="ghost" disabled={rolling} onclick={() => (external = null)}>{t("先不回滚")}</Button>
                         <Button variant="danger" icon="undo" loading={rolling} onclick={() => doRollback(true)}>
-                          {rolling ? "回滚中…" : "仍然回滚（覆盖这些外部改动）"}
+                          {rolling ? t("回滚中…") : t("仍然回滚（覆盖这些外部改动）")}
                         </Button>
                       </div>
                     </div>
                   {:else}
                     <div class="go">
                       <Button variant="primary" icon="undo" full loading={rolling} onclick={() => doRollback()}>
-                        {rolling ? "回滚中…" : cp.kind === "files" ? "把文件回滚到这里（对话不动）" : "回滚到这里"}
+                        {rolling ? t("回滚中…") : cp.kind === "files" ? t("把文件回滚到这里（对话不动）") : t("回滚到这里")}
                       </Button>
                     </div>
                   {/if}
@@ -258,7 +266,7 @@
       {/each}
     </ol>
     <p class="foot">
-      回到发出这条消息之前的状态——工作空间文件与对话一起还原，之后仍可再「前滚」回来。「轮内快照」是 agent 删文件、丢弃 git 改动之前自动拍的，回到那里只还原文件、对话不动。对话之外改过的文件会先列出来，确认了才覆盖。
+      {t("回到发出这条消息之前的状态——工作空间文件与对话一起还原，之后仍可再「前滚」回来。「轮内快照」是 agent 删文件、丢弃 git 改动之前自动拍的，回到那里只还原文件、对话不动。对话之外改过的文件会先列出来，确认了才覆盖。")}
     </p>
   {/if}
 </Sheet>

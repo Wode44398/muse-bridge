@@ -1,16 +1,17 @@
 <script>
   // 设置 · 关于：界面由服务器直接提供，刷新页面即是服务器上的版本，这里没有「下载 / 安装」这一步。
+  import { t } from '../../lib/i18n.js';
 </script>
 
 <div class="hero" data-sid="about">
   <img class="logo" src="{import.meta.env.BASE_URL}icons/icon-192.png" alt="" />
   <div class="hero-tx">
     <div class="hero-name">Muse Bridge</div>
-    <div class="hero-ver">网页版 · 界面由服务器直接提供，刷新页面即是最新</div>
+    <div class="hero-ver">{t('网页版 · 界面由服务器直接提供，刷新页面即是最新')}</div>
   </div>
 </div>
 
-<p class="about">在浏览器里使用 Claude Code 与 dimensio：多用户登录、按人授权、工作空间文件管理与服务端控制台。</p>
+<p class="about">{t('在浏览器里使用 Claude Code 与 dimensio：多用户登录、按人授权、工作空间文件管理与服务端控制台。')}</p>
 
 <style>
   .hero { display: flex; align-items: center; gap: 14px; margin: 0 0 20px; }

@@ -12,6 +12,7 @@
   import { toggleTheme } from '../lib/state.svelte.js';
   import { dock } from '../lib/dock.svelte.js';
   import DockToolBar from './dock/DockToolBar.svelte';
+  import { t, tc } from '../lib/i18n.js';
   // hideMenu：侧栏【恒】常驻的最宽档隐藏汉堡（medium 档仍要它当常驻开关）
   // menuOn：汉堡的选中态（侧栏已常驻时点亮）
   // sat=false：宿主自己已经吃掉安全区（快照页在根容器加了 padding-top），别再叠一次
@@ -22,16 +23,16 @@
   const fg = typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass');
 </script>
 
-{#if !hideMenu}<button class="fab round" class:fg class:sm={tools} class:on={menuOn} aria-label={menuOn ? '收起侧栏' : '菜单'} aria-pressed={menuOn} style:top onclick={onMenu}>&#xe0dd;</button>{/if}
+{#if !hideMenu}<button class="fab round" class:fg class:sm={tools} class:on={menuOn} aria-label={menuOn ? tc('claude', '收起侧栏') : t('菜单')} aria-pressed={menuOn} style:top onclick={onMenu}>&#xe0dd;</button>{/if}
 {#if tools}
   {#if !dock.open}<DockToolBar {top} {split} {onClose} />{/if}
 {:else}
 <div class="fab pill" class:fg style:top>
-  <button class="pbtn" aria-label="切换明暗主题" onclick={toggleTheme}>
+  <button class="pbtn" aria-label={t('切换明暗主题')} onclick={toggleTheme}>
     <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
     <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
   </button>
-  <button class="pbtn eyes" class:on={dock.open} aria-label="工作台" onclick={onDock}>
+  <button class="pbtn eyes" class:on={dock.open} aria-label={t('工作台')} onclick={onDock}>
     <svg viewBox="0 0 20 20" fill="none"><circle cx="7" cy="9" r="1.6" fill="currentColor"/><circle cx="13" cy="9" r="1.6" fill="currentColor"/></svg>
     {#if dock.termLive && !dock.open}<span class="live-dot"></span>{/if}
   </button>

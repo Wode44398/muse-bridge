@@ -6,6 +6,7 @@
   import { toolTaskStatus, toolTaskTitle, toolTaskKind, taskNoun } from '../../lib/taskModel.js';
   import { modelLabel, fmtCompact, fmtDurPanel } from '../../lib/toolVerbs.js';
   import { glyph } from '../../lib/claudeIcons.js';
+  import { t, tr } from '../../lib/i18n.js';
 
   let { tool, focused = false, onTranscript = undefined, onStop = undefined } = $props();
 
@@ -49,7 +50,7 @@
   });
   const output = $derived.by(() => {
     if (!task) return '';
-    if (status === 'failed' && task.error) return task.error;
+    if (status === 'failed' && task.error) return tr(task.error);
     return String(task.result || task.summary || '');
   });
   const expandable = $derived(!!(prompt || output || command));
@@ -66,7 +67,7 @@
     <!-- 单条停止（官方 Background tasks 卡右上角的 ⏹）：只有还在跑、且这一轮的控制通道还活着
          （父组件给了 onStop）才摆。停不成功由父组件出提示，不在这里吞。 -->
     {#if running && onStop}
-      <button type="button" class="tk-stop" aria-label={`停止：${title}`} title="停止这个任务" onclick={onStop}>
+      <button type="button" class="tk-stop" aria-label={t('停止：{title}', { title })} title={t('停止这个任务')} onclick={onStop}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7.5" y="7.5" width="9" height="9" rx="1.6"/></svg>
       </button>
     {/if}

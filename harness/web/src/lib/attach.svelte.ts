@@ -5,6 +5,7 @@
 import { app, toast, type Chat } from "./state.svelte.ts";
 import { uploadFile } from "./api.ts";
 import { haptic } from "./touch.ts";
+import { t } from "./i18n.ts";
 
 export function uploadBase(chat: Chat): string {
   return `.dimensio/uploads/${chat.id ?? chat.draftId}`;
@@ -90,7 +91,7 @@ export async function dropEntries(dt: DataTransfer): Promise<AttachEntry[]> {
     if (r.entry) await walk(r.entry, "");
     else if (r.file) push(r.file, r.file.name);
   }
-  if (truncated) toast(`文件过多，只取前 ${MAX_DROP} 个`);
+  if (truncated) toast(t("文件过多，只取前 {n} 个", { n: MAX_DROP }));
   return out;
 }
 
@@ -118,5 +119,5 @@ export async function uploadEntries(entries: AttachEntry[]): Promise<void> {
     chat.attachments = [...new Set([...chat.attachments, ...paths])];
     haptic("light");
   }
-  if (failed) toast(`${failed} 个文件上传失败`);
+  if (failed) toast(t("{n} 个文件上传失败", { n: failed }));
 }

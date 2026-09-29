@@ -7,6 +7,7 @@
   import Button from "../ui/Button.svelte";
   import Icon from "../ui/Icon.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tr } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -22,13 +23,13 @@
 <div class="err">
   <span class="ic"><Icon name="alert" size={16} stroke={1.8} /></span>
   <div class="body">
-    <p class="msg" role="alert">{item.text}</p>
-    {#if item.ran}<p class="ran">这一轮已经执行过 {item.ran} 次工具——接着做之前，先核对它们的结果</p>{/if}
+    <p class="msg" role="alert">{tr(item.text)}</p>
+    {#if item.ran}<p class="ran">{t("这一轮已经执行过 {n} 次工具——接着做之前，先核对它们的结果", { n: item.ran })}</p>{/if}
     {#if item.detail}
       <div class="rawsec">
         <button class="rawbtn" aria-expanded={rawOpen} onclick={() => (rawOpen = !rawOpen)}>
           <span class="rchev" class:open={rawOpen}><Icon name="chevronR" size={12} stroke={2} /></span>
-          原始报错
+          {t("原始报错")}
         </button>
         {#if rawOpen}
           <div class="rawwrap" transition:collapse>
@@ -39,8 +40,8 @@
     {/if}
     {#if canGo || canDiag}
       <div class="acts">
-        {#if canGo}<Button variant="secondary" size="sm" onclick={() => void send("继续")}>接着做</Button>{/if}
-        {#if canDiag}<Button variant="ghost" size="sm" icon="download" onclick={() => void exportDiagnostics()}>导出诊断包</Button>{/if}
+        {#if canGo}<Button variant="secondary" size="sm" onclick={() => void send(t("继续"))}>{t("接着做")}</Button>{/if}
+        {#if canDiag}<Button variant="ghost" size="sm" icon="download" onclick={() => void exportDiagnostics()}>{t("导出诊断包")}</Button>{/if}
       </div>
     {/if}
   </div>

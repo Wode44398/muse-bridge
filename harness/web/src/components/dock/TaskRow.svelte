@@ -5,6 +5,7 @@
   import { toolMeta } from "../../lib/icons.ts";
   import type { ToolItem } from "../../lib/state.svelte.ts";
   import { STATUS_LABEL, agentDotState, fmtTokens, modelShort, runElapsed, toolTaskStatus, toolTaskTitle } from "../../lib/tasks.ts";
+  import { t, tr } from "../../lib/i18n.ts";
   import TaskLine from "./TaskLine.svelte";
   import type { Glyph } from "./StatusGlyph.svelte";
 
@@ -37,8 +38,8 @@
   // 没有 run 记录时的就地展开
   const prompt = $derived(run?.prompt || (typeof item.args?.prompt === "string" ? item.args.prompt : ""));
   const output = $derived.by(() => {
-    if (!run) return status === "failed" ? item.summary : "";
-    if (run.error && status !== "completed") return run.error;
+    if (!run) return status === "failed" ? tr(item.summary ?? "") : "";
+    if (run.error && status !== "completed") return tr(run.error);
     if (run.result !== undefined) return JSON.stringify(run.result, null, 2);
     return run.text;
   });
@@ -55,23 +56,23 @@
 
 <TaskLine
   {glyph}
-  glyphLabel={stalled ? "久无动静" : STATUS_LABEL[status]}
+  glyphLabel={stalled ? t("久无动静") : STATUS_LABEL[status]}
   {title}
   {running}
   time={timeText}
   {focused}
   {drill}
   open={expandable ? open : undefined}
-  hint={drill ? "查看转录" : undefined}
+  hint={drill ? t("查看转录") : undefined}
   onclick={activate}
 >
   {#snippet meta()}
-    <span>子 agent</span>
+    <span>{t("子 agent")}</span>
     {#if run?.tier}<span class="tier" class:coder={run.tier === "coder"}>{run.tier}</span>{/if}
     {#if !running}<span class:bad={status === "failed"}>{STATUS_LABEL[status]}</span>{/if}
     {#if model}<span class="t2" title={run?.model}>{model}</span>{/if}
     {#if run?.tokens}<span><b>{fmtTokens(run.tokens)}</b> tok</span>{/if}
-    {#if calls}<span><b>{calls}</b> 次工具调用</span>{/if}
+    {#if calls}<span><b>{calls}</b> {t("次工具调用", { n: calls })}</span>{/if}
     {#if cur}
       <span class="cur">{toolMeta(cur.name).verb}{#if cur.arg}<span class="mono">{" "}{cur.arg}</span>{/if}</span>
     {/if}
@@ -82,7 +83,7 @@
       {#if output}
         <div class="out" class:bad={outputIsError}>{output}</div>
       {:else if running}
-        <div class="note">还没有输出</div>
+        <div class="note">{t("还没有输出")}</div>
       {/if}
     </div>
   {/snippet}

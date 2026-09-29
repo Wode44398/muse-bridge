@@ -10,6 +10,7 @@
   import { compactLabel, fmtCompact, morphText } from '../../lib/toolVerbs.js';
   import { renderMarkdown } from '../../lib/md.js';
   import { glyph } from '../../lib/claudeIcons.js';
+  import { tr } from '../../lib/i18n.js';
 
   let { tool, inGroup = false, live = false } = $props();
 
@@ -45,7 +46,7 @@
         <div class="meta">{meta}</div>
         <div class="sum sel-text">{@html renderMarkdown(summary)}</div>
       {:else if error}
-        <div class="err sel-text">{error}</div>
+        <div class="err sel-text">{tr(error)}</div>
       {/if}
     </div>
   {/if}

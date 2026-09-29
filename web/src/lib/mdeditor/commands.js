@@ -4,6 +4,7 @@ import { EditorSelection } from '@codemirror/state';
 import { undo as cmUndo, redo as cmRedo } from '@codemirror/commands';
 import { emptyTableSrc } from './table.js';
 import { requestAutoAdd } from './props.js';
+import { t, tc } from '../i18n.js';
 
 function wrapInline(view, left, right = left) {
   if (view.state.readOnly) return;
@@ -147,12 +148,13 @@ function insertCallout(view) {
   if (!r.empty) {
     const from = state.doc.lineAt(r.from).from, to = state.doc.lineAt(r.to).to;
     const body = state.sliceDoc(from, to).split('\n').map((l) => '> ' + l).join('\n');
-    const src = '> [!note] 标注\n' + body;
+    const src = '> [!note] ' + t('标注') + '\n' + body;
     view.dispatch({ changes: { from, to, insert: src }, selection: { anchor: from + src.length }, scrollIntoView: true });
     view.focus();
     return;
   }
-  insertBlockAfter(view, '> [!note] 标注\n> ', '> [!note] '.length + '标注'.length);
+  const title = t('标注');   // 插进文档的 callout 标题占位（光标停在它后面）
+  insertBlockAfter(view, '> [!note] ' + title + '\n> ', '> [!note] '.length + title.length);
 }
 
 // 代码块：有选区 → 选中行围栏包裹；无选区 → 空围栏（光标进栏内）
@@ -252,7 +254,7 @@ export const commands = {
   comment: (v) => wrapInline(v, '%%'),
   clearFormat,
   wikilink: (v) => wrapInline(v, '[[', ']]'),
-  link: (v) => wrapInline(v, '[', '](链接)'),
+  link: (v) => wrapInline(v, '[', '](' + tc('md', '链接') + ')'),
   bullet: (v) => toggleLinePrefix(v, '- ', /^[-*+] (?!\[)/),
   ordered: (v) => { olCounter = 0; toggleLinePrefix(v, () => `${++olCounter}. `, /^\d+[.)] /); },
   task: (v) => toggleLinePrefix(v, '- [ ] ', /^[-*+] \[[ xX]\] /),

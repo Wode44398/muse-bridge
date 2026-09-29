@@ -14,12 +14,8 @@ export type MemoryHistoryWhy = "overwrite" | "delete" | "retire" | "superseded" 
 
 export type Lane = "proposed" | "held" | "active" | "retired";
 export const LANES: readonly Lane[] = ["proposed", "held", "active", "retired"];
-export const LANE_TEXT: Record<Lane, { label: string; hint: string; empty: string }> = {
-  proposed: { label: "待确认", hint: "等你确认才生效", empty: "没有等你确认的记忆" },
-  held: { label: "被隔离", hint: "写着生效，却没进提示", empty: "没有被隔离的记忆" },
-  active: { label: "生效", hint: "进每个新对话的提示", empty: "还没有生效的记忆" },
-  retired: { label: "已退场", hint: "失效、被替代、驳回", empty: "没有退场的记忆" },
-};
+// 四类 / 字形 / 经历的界面文案（LANE_TEXT、GLYPH_TEXT、HISTORY_TEXT）与短日期、「多久以前」在 memory-text.ts：
+// 它们要走翻译层 lib/i18n.ts，而本文件不许 import 带 DOM 的模块（见上）。
 
 type Statusy = { status: Status; declaredStatus: Status };
 
@@ -43,14 +39,6 @@ export function glyphOf(m: Statusy): Glyph {
   return "stale";
 }
 export const LANE_GLYPH: Record<Lane, Glyph> = { proposed: "proposed", held: "held", active: "active", retired: "stale" };
-export const GLYPH_TEXT: Record<Glyph, string> = {
-  proposed: "待确认",
-  held: "被隔离",
-  active: "生效中",
-  stale: "已失效",
-  superseded: "已被替代",
-  rejected: "已驳回",
-};
 
 export function countLanes(items: Statusy[]): Record<Lane, number> {
   const out: Record<Lane, number> = { proposed: 0, held: 0, active: 0, retired: 0 };
@@ -63,15 +51,6 @@ export function byLane<T extends Statusy & { updated?: string }>(items: T[]): T[
   const rank = (m: T) => LANES.indexOf(laneOf(m));
   return [...items].sort((a, b) => rank(a) - rank(b) || (b.updated ?? "").localeCompare(a.updated ?? ""));
 }
-
-export const HISTORY_TEXT: Record<MemoryHistoryWhy, string> = {
-  overwrite: "改写",
-  delete: "删除",
-  retire: "退场",
-  superseded: "被替代",
-  reject: "驳回",
-  restore: "撤销驳回",
-};
 
 // ── 时间轴 ─────────────────────────────────────────────────────────────────────────
 const DAY = 86_400_000;
@@ -112,8 +91,10 @@ export function spanOf(lives: Life[], now: number): Span {
 }
 export const xOf = (t: number, s: Span): number => (s.t1 > s.t0 ? Math.max(0, Math.min(1, (t - s.t0) / (s.t1 - s.t0))) : 1);
 
-// 刻度：按跨度挑步长（日 / 周 / 月），对齐到本地的零点或月初；最多 max 个
-export function ticksOf(s: Span, max = 5): Array<{ t: number; label: string }> {
+// 刻度：按跨度挑步长（日 / 周 / 月），对齐到本地的零点或月初；最多 max 个。
+// loc = 界面语言的 BCP 47 标签（界面传 lib/i18n.ts 的 locale()）：月刻度用 Intl 的短月名——中文「9月」、英文「Sep」。
+// 默认按中文出，只给服务端测试用（它不加载翻译层）。
+export function ticksOf(s: Span, max = 5, loc = "zh-CN"): Array<{ t: number; label: string }> {
   const span = s.t1 - s.t0;
   const dayStep = [1, 2, 3, 7, 14].find((d) => span / (d * DAY) <= max);
   const out: Array<{ t: number; label: string }> = [];
@@ -132,34 +113,16 @@ export function ticksOf(s: Span, max = 5): Array<{ t: number; label: string }> {
   d.setDate(1);
   while (d.getTime() < s.t0 || d.getMonth() % step) d.setMonth(d.getMonth() + 1);
   const multiYear = new Date(s.t0).getFullYear() !== new Date(s.t1).getFullYear();
+  const month = new Intl.DateTimeFormat(loc, { month: "short" });
   for (; d.getTime() <= s.t1; d.setMonth(d.getMonth() + step)) {
-    out.push({ t: d.getTime(), label: multiYear && d.getMonth() === 0 ? String(d.getFullYear()) : `${d.getMonth() + 1}月` });
+    out.push({ t: d.getTime(), label: multiYear && d.getMonth() === 0 ? String(d.getFullYear()) : month.format(d) });
   }
   return out;
 }
 
-// ── 文案里的数与时间 ──────────────────────────────────────────────────────────────
+// ── 文案里的数 ────────────────────────────────────────────────────────────────────
+// 千分位逗号：中英文界面写法相同
 export const fmtCount = (n: number): string => n.toLocaleString("en-US");
-
-export function fmtShortDate(iso?: string, now = Date.now()): string {
-  const t = ms(iso);
-  if (!Number.isFinite(t)) return "";
-  const d = new Date(t);
-  const md = `${d.getMonth() + 1}/${d.getDate()}`;
-  return d.getFullYear() === new Date(now).getFullYear() ? md : `${d.getFullYear()}/${md}`;
-}
-
-export function fmtAgo(iso?: string, now = Date.now()): string {
-  const t = ms(iso);
-  if (!Number.isFinite(t)) return "";
-  const days = Math.floor((now - t) / DAY);
-  if (days <= 0) return "今天";
-  if (days === 1) return "昨天";
-  if (days < 14) return `${days} 天前`;
-  if (days < 60) return `${Math.round(days / 7)} 周前`;
-  if (days < 365) return `${Math.round(days / 30.44)} 个月前`;
-  return fmtShortDate(iso, now);
-}
 
 // 最近一次动过（条目本身或它的旧版）的时间：点阵行的「最近」
 export function latestOf(items: Array<{ updated?: string }>, history: Array<{ at: string }> = []): string | undefined {

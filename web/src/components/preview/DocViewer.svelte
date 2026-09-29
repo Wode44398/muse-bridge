@@ -18,6 +18,7 @@
   import { registerDraft } from '../../lib/uiReport.js';
   import { fsChange, fsMatches } from '../../lib/fsSync.svelte.js';
   import { IS_SHARE } from '../../lib/share.js';
+  import { t, tr, locale } from '../../lib/i18n.js';
 
   let { item, onClose } = $props();
 
@@ -195,7 +196,7 @@
       pendingScroll = true;
       original = text;
       content = text;
-      showToast('已同步 Claude 的修改');
+      showToast(t('已同步 Claude 的修改'));
     } catch { /* 跟盘失败无害，下次事件再试 */ }
   }
   let fsSeen = 0;   // 只认新事件：效应因 mode/dirty 等其它依赖重跑时不重复拉取
@@ -225,8 +226,8 @@
         LINKS_CACHE.delete(linksKeyOf(cur));
         loadLinks(cur);
       }
-      if (!quiet) showToast('已保存');
-    } catch (e) { saveFails++; showToast('保存失败：' + (e?.body?.error || e?.message || '')); }
+      if (!quiet) showToast(t('已保存'));
+    } catch (e) { saveFails++; showToast(t('保存失败：{reason}', { reason: tr(e?.body?.error || e?.message || '') })); }
     finally {
       saving = false;
       // 失败重试（限 3 次）；草稿始终兜底，不丢内容
@@ -247,7 +248,7 @@
   function guardDirty() {
     if (!dirty) return true;
     if (isMd && editable) { save(true); return true; }
-    return confirm('有未保存的修改，确定离开？（草稿会临时保留）');
+    return confirm(t('有未保存的修改，确定离开？（草稿会临时保留）'));
   }
   function back() {
     if (!guardDirty()) return;
@@ -281,19 +282,19 @@
   let propsOpen = $state(true);
 
   const dirOf = (rel) => String(rel || '').split('/').slice(0, -1).join('/');
-  function joinRel(dir, t) {
-    const segs = (dir ? dir.split('/') : []).concat(String(t).split('/'));
+  function joinRel(dir, p) {
+    const segs = (dir ? dir.split('/') : []).concat(String(p).split('/'));
     const out = [];
     for (const s of segs) { if (!s || s === '.') continue; s === '..' ? out.pop() : out.push(s); }
     return out.join('/');
   }
   // ![[嵌入]] / 相对资源 → 可加载 URL：mdlinks 已解析的路径优先，回落同目录拼接
   function embedUrl(name) {
-    const t = cur.saveTarget;
-    if (!t) return null;
+    const st = cur.saveTarget;
+    if (!st) return null;
     const hit = links?.outgoing?.find((o) => o.path && o.name.toLowerCase() === String(name).toLowerCase());
-    const rel = hit ? hit.path : joinRel(dirOf(t.rel), name);
-    return cloudFileUrl(rel, { ws: t.ws });
+    const rel = hit ? hit.path : joinRel(dirOf(st.rel), name);
+    return cloudFileUrl(rel, { ws: st.ws });
   }
   // —— 阅读态分块渐进渲染 ——
   // 整篇同步 renderObsMarkdown 在大文档（长研报/大量公式表格）上会把主线程冻住十几秒起：
@@ -359,11 +360,11 @@
     stack = [...stack, normalizeItem({ origin: 'cloud', ...base, ws: cur.saveTarget?.ws || '' })];
   }
   function scrollToHeading(txt) {
-    const t = String(txt).trim().toLowerCase();
+    const want = String(txt).trim().toLowerCase();
     for (const h of mdEl?.querySelectorAll('h1,h2,h3,h4,h5,h6') || []) {
-      if (h.textContent.trim().toLowerCase() === t) { h.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+      if (h.textContent.trim().toLowerCase() === want) { h.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
     }
-    showToast('找不到标题「' + txt + '」');
+    showToast(t('找不到标题「{name}」', { name: txt }));
   }
   function resolveWiki(name) {
     const k = String(name).toLowerCase();
@@ -373,7 +374,7 @@
       openAttachment(hit.path);   // 附件类：应用内统一查看器
       return;
     }
-    showToast(links ? '未找到笔记「' + name + '」' : '链接索引加载中…');
+    showToast(links ? t('未找到笔记「{name}」', { name }) : t('链接索引加载中…'));
   }
   // 阅读态给代码块补围栏头（语言 + 复制）——编辑态的 fence head 有这一条，两边得长一样
   $effect(() => {
@@ -384,7 +385,7 @@
       const lang = (String(pre.querySelector('code')?.className || '').match(/language-([\w+#-]+)/) || [])[1] || '';
       const head = document.createElement('div');
       head.className = 'doc-fence';
-      head.innerHTML = '<span class="doc-fence-lang"></span><button type="button" class="doc-fence-copy">复制</button>';
+      head.innerHTML = '<span class="doc-fence-lang"></span><button type="button" class="doc-fence-copy">' + t('复制') + '</button>';
       head.firstChild.textContent = lang;
       pre.insertBefore(head, pre.firstChild);
     }
@@ -408,8 +409,8 @@
     if (cp) {
       e.stopPropagation();
       copyText(cp.closest('pre')?.querySelector('code')?.textContent || '');
-      cp.textContent = '已复制';
-      setTimeout(() => (cp.textContent = '复制'), 1200);
+      cp.textContent = t('已复制');
+      setTimeout(() => (cp.textContent = t('复制')), 1200);
       return;
     }
     const a = e.target.closest('a');
@@ -423,12 +424,12 @@
     }
     const href = a.getAttribute('href') || '';
     if (!href || /^(https?:|mailto:|data:|blob:|tel:)/i.test(href) || href.startsWith('/')) return;   // 外链/已改写的站内 URL 放行
-    if (href.startsWith('#')) { e.preventDefault(); let t = href.slice(1); try { t = decodeURIComponent(t); } catch {} scrollToHeading(t); return; }
+    if (href.startsWith('#')) { e.preventDefault(); let h = href.slice(1); try { h = decodeURIComponent(h); } catch {} scrollToHeading(h); return; }
     const clean = href.split('#')[0];
     if (MD_EXT_RE.test(clean)) {
       e.preventDefault();
-      let t = clean; try { t = decodeURIComponent(clean); } catch {}
-      openNote(joinRel(dirOf(cur.saveTarget?.rel || ''), t));
+      let p = clean; try { p = decodeURIComponent(clean); } catch {}
+      openNote(joinRel(dirOf(cur.saveTarget?.rel || ''), p));
     }
   }
 
@@ -445,18 +446,18 @@
   }
   // 笔记里的附件（图/PDF/音视频…）：进应用内统一查看器（沿用当前宿主：全屏或 dock 内嵌）。
   function openAttachment(rel) {
-    const t = cur.saveTarget || {};
-    openPreview({ origin: 'cloud', rel, name: rel.split('/').pop(), ws: t.ws || '' }, 0, { host: preview.host });
+    const st = cur.saveTarget || {};
+    openPreview({ origin: 'cloud', rel, name: rel.split('/').pop(), ws: st.ws || '' }, 0, { host: preview.host });
   }
 
   function openRelHref(href) {
     const clean = String(href).split('#')[0];
-    let t = clean; try { t = decodeURIComponent(clean); } catch {}
-    if (!t) return;
-    if (MD_EXT_RE.test(t)) { openNote(joinRel(dirOf(cur.saveTarget?.rel || ''), t)); return; }
-    if (/^(https?:|mailto:|tel:)/i.test(t)) { openExt(t); return; }
-    const hit = links?.outgoing?.find((o) => o.path && o.name.toLowerCase() === t.toLowerCase());
-    openAttachment(hit ? hit.path : joinRel(dirOf(cur.saveTarget?.rel || ''), t));
+    let p = clean; try { p = decodeURIComponent(clean); } catch {}
+    if (!p) return;
+    if (MD_EXT_RE.test(p)) { openNote(joinRel(dirOf(cur.saveTarget?.rel || ''), p)); return; }
+    if (/^(https?:|mailto:|tel:)/i.test(p)) { openExt(p); return; }
+    const hit = links?.outgoing?.find((o) => o.path && o.name.toLowerCase() === p.toLowerCase());
+    openAttachment(hit ? hit.path : joinRel(dirOf(cur.saveTarget?.rel || ''), p));
   }
 
   $effect(() => {
@@ -477,11 +478,11 @@
         doc: untrack(() => content),
         mode: m === 'live' ? 'live' : 'source',
         readOnly: ro,
-        onChange: (t) => { content = t; },
+        onChange: (text) => { content = text; },
         onSave: () => save(),
         onNavigate: (name, head) => {
           if (name) resolveWiki(name);
-          else if (head && !editor?.scrollToHeading(head)) showToast('找不到标题「' + head + '」');
+          else if (head && !editor?.scrollToHeading(head)) showToast(t('找不到标题「{name}」', { name: head }));
         },
         openLink: (url) => openExt(url),
         openRel: openRelHref,
@@ -509,23 +510,23 @@
 
 <div class="doc-root">
   <header class="doc-head">
-    <button class="doc-btn" aria-label="返回" onclick={back}>
+    <button class="doc-btn" aria-label={t('返回')} onclick={back}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
     </button>
     <div class="doc-title-wrap">
       <span class="doc-title">{cur.name}</span>
-      {#if dirty}<span class="doc-dirty" title="未保存">●</span>{/if}
+      {#if dirty}<span class="doc-dirty" title={t('未保存')}>●</span>{/if}
     </div>
     {#if isMd}
       <div class="doc-seg">
         <span class="doc-seg-cap" style:transform="translateX({mode === 'live' ? '100%' : mode === 'source' ? '200%' : '0'})"></span>
-        <button class:on={mode === 'preview'} onclick={() => setMdMode('preview')}>阅读</button>
-        <button class:on={mode === 'live'} onclick={() => setMdMode('live')}>编辑</button>
-        <button class:on={mode === 'source'} onclick={() => setMdMode('source')}>源码</button>
+        <button class:on={mode === 'preview'} onclick={() => setMdMode('preview')}>{t('阅读')}</button>
+        <button class:on={mode === 'live'} onclick={() => setMdMode('live')}>{t('编辑')}</button>
+        <button class:on={mode === 'source'} onclick={() => setMdMode('source')}>{t('源码')}</button>
       </div>
     {/if}
     {#if editable}
-      <button class="doc-save" class:saved={!dirty && !saving} disabled={!dirty || saving} onclick={() => save()}>{saving ? '保存中' : dirty ? '保存' : '已保存'}</button>
+      <button class="doc-save" class:saved={!dirty && !saving} disabled={!dirty || saving} onclick={() => save()}>{saving ? t('保存中') : dirty ? t('保存') : t('已保存')}</button>
     {/if}
   </header>
 
@@ -533,9 +534,9 @@
     {#if loading}
       <div class="doc-center"><span class="doc-spin"></span></div>
     {:else if loadError}
-      <div class="doc-center doc-err"><p>加载失败</p><button onclick={load}>重试</button></div>
+      <div class="doc-center doc-err"><p>{t('加载失败')}</p><button onclick={load}>{t('重试')}</button></div>
     {:else if !isText}
-      <div class="doc-center"><p class="doc-ph-name">{cur.name}</p><p>该类型预览即将到来</p>{#if cur.downloadHref}<a class="doc-dl" href={cur.downloadHref} download={cur.name}>下载查看</a>{/if}</div>
+      <div class="doc-center"><p class="doc-ph-name">{cur.name}</p><p>{t('该类型预览即将到来')}</p>{#if cur.downloadHref}<a class="doc-dl" href={cur.downloadHref} download={cur.name}>{t('下载查看')}</a>{/if}</div>
     {:else if isMd && mode === 'preview'}
       <div class="doc-scroll" bind:this={docScrollEl}>
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -544,7 +545,7 @@
             <section class="doc-props">
               <button class="doc-props-h" onclick={(e) => { e.stopPropagation(); propsOpen = !propsOpen; }}>
                 <svg class="doc-chev" class:closed={!propsOpen} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
-                笔记属性<span class="doc-props-n">{note.props.length}</span>
+                {t('笔记属性')}<span class="doc-props-n">{note.props.length}</span>
               </button>
               {#if propsOpen}
                 <div class="doc-props-tbl sel-text">
@@ -561,7 +562,7 @@
                         {:else if propKind(p) === 'bool'}
                           <input type="checkbox" checked={p.value} disabled>
                         {:else if String(p.value) === ''}
-                          <span class="doc-prop-empty">空</span>
+                          <span class="doc-prop-empty">{t('空')}</span>
                         {:else}
                           <span class="doc-prop-txt">{@html renderPropWikilinks(String(p.value))}</span>
                         {/if}
@@ -586,7 +587,7 @@
       <div class="doc-cm" bind:this={edEl}></div>
     {:else}
       <textarea class="doc-edit" bind:value={content} spellcheck="false" autocapitalize="off" autocomplete="off"
-        placeholder={editable ? '' : '（只读）'} readonly={!editable}></textarea>
+        placeholder={editable ? '' : t('（只读）')} readonly={!editable}></textarea>
     {/if}
   </div>
 
@@ -601,7 +602,7 @@
           {#if links?.backlinks?.length}
             <div class="doc-lk-h">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1.5 1.5"/><path d="M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1.5-1.5"/></svg>
-              反向链接<span class="doc-lk-n">{blCount}</span>
+              {t('反向链接')}<span class="doc-lk-n">{blCount}</span>
             </div>
             <div class="doc-bls">
               {#each links.backlinks as b (b.path)}
@@ -615,7 +616,7 @@
           {#if outLinks.length}
             <div class="doc-lk-h">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M9 7h8v8"/></svg>
-              出链<span class="doc-lk-n">{outLinks.length}</span>
+              {t('出链')}<span class="doc-lk-n">{outLinks.length}</span>
             </div>
             <div class="doc-outs">
               {#each outLinks as o (o.name)}
@@ -626,12 +627,12 @@
         </section>
       {/if}
       {#if stats}
-        <div class="doc-stats">{stats.words.toLocaleString()} 个词 · {stats.chars.toLocaleString()} 个字符{#if links?.backlinks?.length}{' · '}{links.backlinks.length} 条反向链接{/if}</div>
+        <div class="doc-stats">{t('{n} 个词', { n: stats.words.toLocaleString(locale()) })} · {t('{n} 个字符', { n: stats.chars.toLocaleString(locale()) })}{#if links?.backlinks?.length}{' · '}{t('{n} 条反向链接', { n: links.backlinks.length })}{/if}</div>
       {/if}
     {/if}
   </div>
 
-  {#if restored}<div class="doc-restored">已恢复未保存草稿</div>{/if}
+  {#if restored}<div class="doc-restored">{t('已恢复未保存草稿')}</div>{/if}
   {#if toast}<div class="doc-toast">{toast}</div>{/if}
 </div>
 
@@ -664,12 +665,15 @@
   .doc-dirty { color: var(--md-accent); font-size: 10px; flex: none; }
 
   /* 阅读/编辑/源码 三段切换：暖灰轨道 + 白色滑帽 */
-  .doc-seg { position: relative; display: flex; background: var(--md-bg-2); border: 1px solid rgba(20, 20, 19, .05); border-radius: 10px; padding: 2px; flex: none; }
+  /* 三段等宽（grid 1fr）：滑帽固定 1/3 宽，英文三段字长不一（Read/Edit/Source）时也对得齐 */
+  .doc-seg { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--md-bg-2); border: 1px solid rgba(20, 20, 19, .05); border-radius: 10px; padding: 2px; flex: none; }
   .doc-seg-cap { position: absolute; top: 2px; left: 2px; width: calc(33.333% - 1.4px); height: calc(100% - 4px); background: #fff; border-radius: 8px;
     box-shadow: 0 1px 3px rgba(70, 56, 34, .14), 0 0 0 .5px rgba(20, 20, 19, .06); transition: transform var(--mo-quick, 200ms) var(--md-ease); }
   .doc-seg button { position: relative; z-index: 1; padding: 5px 11px; font-size: 12.5px; color: var(--md-fg-2); font-weight: 500; flex: 1 0 auto;
     border-radius: 8px; transition: color var(--mo-micro, 140ms); }
   .doc-seg button.on { color: var(--md-fg); font-weight: 600; }
+  /* 英文（html[lang=en]，lib/i18n.js 设置）：等宽三段按最长的 Source 撑宽，收窄左右内边距给文件名腾位（窄屏/工作台侧栏）；中文不动 */
+  :global(html[lang='en']) .doc-seg button { padding-left: 8px; padding-right: 8px; }
 
   /* CM6 编辑器容器（内部样式在 mdeditor/editor.css，全局注入防 Svelte 剪枝） */
   .doc-cm { position: absolute; inset: 0; }

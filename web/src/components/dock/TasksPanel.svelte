@@ -20,6 +20,7 @@
   import WorkflowDetail from '../claude/WorkflowDetail.svelte';
   import TaskRow from '../claude/TaskRow.svelte';
   import AgentTranscript from '../claude/AgentTranscript.svelte';
+  import { t } from '../../lib/i18n.js';
 
   let { wide = false } = $props();
 
@@ -29,17 +30,17 @@
     let i = 0;
     // 挂起清单里点名的任务就是还在跑：挂起接力后它们挂在前几轮的工具行上，刷新后历史重建会把
     //「上一轮留下的 running」收成 stopped（normSeg），以服务端这份电平为准纠回来。
-    const holdIds = new Set((bgHoldNow()?.tasks || []).map((t) => t.taskId).filter(Boolean));
+    const holdIds = new Set((bgHoldNow()?.tasks || []).map((x) => x.taskId).filter(Boolean));
     for (const m of chat.messages) {
       if (!m || m.role !== 'assistant') continue;
       for (const s of (m.segments || [])) {
         if (s.kind !== 'tools') continue;
-        for (const t of s.tools) {
-          const kind = toolTaskKind(t);
+        for (const tl of s.tools) {
+          const kind = toolTaskKind(tl);
           if (!kind) continue;
-          const task = t.task;
-          const status = task && task.taskId && holdIds.has(task.taskId) ? 'running' : toolTaskStatus(t);
-          out.push({ tool: t, kind, status, running: status === 'running', startedAt: (task && task.startedAt) || 0, endedAt: (task && task.endedAt) || 0, key: t.id || ('i' + i), index: i });
+          const task = tl.task;
+          const status = task && task.taskId && holdIds.has(task.taskId) ? 'running' : toolTaskStatus(tl);
+          out.push({ tool: tl, kind, status, running: status === 'running', startedAt: (task && task.startedAt) || 0, endedAt: (task && task.endedAt) || 0, key: tl.id || ('i' + i), index: i });
           i++;
         }
       }
@@ -50,10 +51,17 @@
   // 主模型已停笔，但后台任务还在跑，bridge 把输入流挂着不收轮（收轮=CLI 收尾=后台任务被杀）。
   // 横幅是这件事在 UI 上的唯一解释处：等几个、等多久、到点会怎样、怎么提前收。
   const hold = $derived(bgHoldNow());
-  const holdNoun = $derived.by(() => {
-    const kinds = new Set((hold?.tasks || []).map((t) => taskNoun(t.taskType)));
-    const CN = { shell: '后台命令', agent: '子 agent', workflow: '工作流', monitor: '监视任务', task: '后台任务' };
-    return kinds.size === 1 ? (CN[[...kinds][0]] || '后台任务') : '后台任务';
+  // 横幅标题按种类整句一键（英文要跟着数量变单复数，名词不能单拎出来拼）
+  const HOLD_TITLE = {
+    shell: (n) => t('本轮挂起中 · 等待 {n} 个后台命令', { n }),
+    agent: (n) => t('本轮挂起中 · 等待 {n} 个子 agent', { n }),
+    workflow: (n) => t('本轮挂起中 · 等待 {n} 个工作流', { n }),
+    monitor: (n) => t('本轮挂起中 · 等待 {n} 个监视任务', { n }),
+    task: (n) => t('本轮挂起中 · 等待 {n} 个后台任务', { n }),
+  };
+  const holdKind = $derived.by(() => {
+    const kinds = new Set((hold?.tasks || []).map((x) => taskNoun(x.taskType)));
+    return kinds.size === 1 && HOLD_TITLE[[...kinds][0]] ? [...kinds][0] : 'task';
   });
   let nowTick = $state(Date.now());
   $effect(() => {
@@ -77,7 +85,7 @@
     try { await api.stopTask(session.id, taskId); }
     catch (e) {
       stopping = stopping.filter((k) => k !== taskId);
-      showToast(e?.status === 409 ? '这一轮已经结束，后台任务也跟着结束了' : '停止失败，请重试', 'err');
+      showToast(e?.status === 409 ? t('这一轮已经结束，后台任务也跟着结束了') : t('停止失败，请重试'), 'err');
     }
   }
   // 挂起清单里【没有对应工具行】的任务（上一条命遗留、resume 回来的孤儿后台任务）：
@@ -85,13 +93,13 @@
   const holdOrphans = $derived.by(() => {
     if (!hold || !hold.tasks) return [];
     const known = new Set(items.map((x) => x.tool?.task?.taskId).filter(Boolean));
-    return hold.tasks.filter((t) => t.taskId && !known.has(t.taskId)).map((t) => ({
-      key: 'hold:' + t.taskId,
+    return hold.tasks.filter((x) => x.taskId && !known.has(x.taskId)).map((x) => ({
+      key: 'hold:' + x.taskId,
       tool: {
-        name: t.taskType === 'local_bash' ? 'Bash' : 'Task',
+        name: x.taskType === 'local_bash' ? 'Bash' : 'Task',
         status: 'running',
         input: null,
-        task: { taskId: t.taskId, taskType: t.taskType, description: t.description || t.command || '', command: t.command || '', status: 'running', startedAt: 0, progress: [] },
+        task: { taskId: x.taskId, taskType: x.taskType, description: x.description || x.command || '', command: x.command || '', status: 'running', startedAt: 0, progress: [] },
       },
     }));
   });
@@ -121,8 +129,8 @@
       const el = listEl.querySelector(`[data-task-key="${CSS.escape(key)}"]`);
       if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
-    const t = setTimeout(() => { flashKey = ''; }, 1700);
-    return () => clearTimeout(t);
+    const tid = setTimeout(() => { flashKey = ''; }, 1700);
+    return () => clearTimeout(tid);
   });
 
   // —— 压上的子 agent 转录视图 ——
@@ -134,7 +142,7 @@
 <div class="tp">
   {#if av}
     <div class="tp-subhead">
-      <button type="button" class="tp-back" aria-label="返回任务列表" onclick={backToTaskList}>
+      <button type="button" class="tp-back" aria-label={t('返回任务列表')} onclick={backToTaskList}>
         <span class="ic" aria-hidden="true">{glyph('CaretRight')}</span>
       </button>
       <span class="tp-subtitle trunc" title={avTitle}>{avTitle}</span>
@@ -152,18 +160,18 @@
         <div class="tp-hold">
           <div class="tp-hold-top">
             <span class="tp-pulse" aria-hidden="true"></span>
-            <span class="tp-hold-title">{hold.count ? `本轮挂起中 · 等待 ${hold.count} 个${holdNoun}` : '后台任务已完成，收尾中'}</span>
+            <span class="tp-hold-title">{hold.count ? HOLD_TITLE[holdKind](hold.count) : t('后台任务已完成，收尾中')}</span>
           </div>
           <p class="tp-hold-p">
             {hold.count
-              ? '主回答已经写完，但后台任务还在跑。bridge 把这一轮挂着不收尾——收尾会连同后台任务一起结束；任务完成时 Claude 会自动接着这一轮汇报结果。'
-              : '后台任务刚刚结束，正在等 Claude 接着汇报。'}
+              ? t('主回答已经写完，但后台任务还在跑。bridge 把这一轮挂着不收尾——收尾会连同后台任务一起结束；任务完成时 Claude 会自动接着这一轮汇报结果。')
+              : t('后台任务刚刚结束，正在等 Claude 接着汇报。')}
           </p>
           {#if hold.count && holdLeft > 0}
-            <p class="tp-hold-sub">最长再等 {holdLeft} 分钟，到点自动收尾（常驻服务不会把这一轮永远钉住）。</p>
+            <p class="tp-hold-sub">{t('最长再等 {n} 分钟，到点自动收尾（常驻服务不会把这一轮永远钉住）。', { n: holdLeft })}</p>
           {/if}
           {#if hold.count}
-            <button type="button" class="tp-hold-btn" disabled={releasing} onclick={doRelease}>{releasing ? '收尾中…' : '结束等待'}</button>
+            <button type="button" class="tp-hold-btn" disabled={releasing} onclick={doRelease}>{releasing ? t('收尾中…') : t('结束等待')}</button>
           {/if}
         </div>
       {/if}

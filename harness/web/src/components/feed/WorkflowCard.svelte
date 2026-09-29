@@ -9,6 +9,7 @@
   import { press } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
   import AgentDots from "./AgentDots.svelte";
+  import { t } from "../../lib/i18n.ts";
 
   let { item }: { item: ToolItem } = $props();
 
@@ -35,14 +36,14 @@
   const elapsed = $derived(wf?.startedAt ? fmtDur(Math.max(0, now - wf.startedAt)) : "");
 </script>
 
-<button class="card" onclick={() => openTaskDetail(item.id)} aria-label="查看工作流：{title}" use:press={{ scale: 0.985 }}>
+<button class="card" onclick={() => openTaskDetail(item.id)} aria-label={t("查看工作流：{title}", { title })} use:press={{ scale: 0.985 }}>
   <span class="ic"><Icon name={toolMeta("Workflow").icon} size={15} /></span>
   <span class="col">
     <span class="title hx-shimmer">{title}</span>
     <span class="meta">
       <!-- 工作流对象还没到 = 等确认卡 / worker 起步中（官方 Starting workflow） -->
-      <span>{wf ? "工作流" : "正在启动工作流"}</span>
-      {#if counts.total}<span><b>{counts.total}</b> 个 agent</span>{/if}
+      <span>{wf ? t("工作流") : t("正在启动工作流")}</span>
+      {#if counts.total}<span><b>{counts.total}</b> {t("个 agent", { n: counts.total })}</span>{/if}
       {#if wf?.currentPhase}<span class="ph">{wf.currentPhase}</span>{/if}
       {#if elapsed}<span class="num">{elapsed}</span>{/if}
     </span>

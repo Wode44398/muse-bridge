@@ -9,6 +9,7 @@
 // 跑着的、刚做完的都留着看）只要跑过工具，过程——工具、思考、中间的叙述——收成一行「处理过程 · N 次工具 · 用时」，点开
 // 照原样展开；卡片回执、报错、提示、截图与这一轮最后一段回答照常显示。
 import type { Item, RunTiming, ToolItem } from "./timeline-types.ts";
+import { t, tc } from "./i18n.ts";
 
 // 只读探索：只看不改的工具
 export const EXPLORE_TOOLS = new Set([
@@ -130,15 +131,15 @@ export function feedUnits(tl: Item[], running: boolean, openFolds: Record<string
 export function foldTiming(run: RunTiming | undefined): string {
   if (!run) return "";
   const work = Math.max(0, run.durationMs - run.waitedMs);
-  const waited = run.waitedMs >= 1000 ? `（等你的 ${dur(run.waitedMs)}不算）` : "";
-  return `用时 ${dur(work)}${waited}`;
+  if (run.waitedMs >= 1000) return t("用时 {d}（等你的 {w}不算）", { d: dur(work), w: dur(run.waitedMs) });
+  return t("用时 {d}", { d: dur(work) });
 }
 
 function dur(ms: number): string {
   const s = Math.round(ms / 1000);
-  if (s < 60) return `${s} 秒`;
+  if (s < 60) return tc("dimensio", "{n} 秒", { n: s });
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} 分${s % 60 ? ` ${s % 60} 秒` : ""}`;
+  if (m < 60) return s % 60 ? t("{m} 分 {s} 秒", { m, s: s % 60 }) : t("{n} 分", { n: m });
   const h = Math.floor(m / 60);
-  return `${h} 小时${m % 60 ? ` ${m % 60} 分` : ""}`;
+  return m % 60 ? t("{h} 小时 {m} 分", { h, m: m % 60 }) : tc("dimensio", "{n} 小时", { n: h });
 }

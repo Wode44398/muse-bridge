@@ -10,6 +10,7 @@
   import { apiUrl } from '../lib/server.js';
   import { renderMarkdown } from '../lib/md.js';
   import { fileDrop } from '../lib/dropPaste.js';
+  import { t, tc, tr, locale, isEn } from '../lib/i18n.js';
 
   let closing = $state(false);
   function close() {
@@ -36,7 +37,8 @@
   }
   $effect(() => { load(); });
 
-  const errMsg = (e) => (e?.body && typeof e.body === 'object' ? e.body.error : typeof e?.body === 'string' ? e.body : '') || e?.message || String(e);
+  // 服务端报错原文 → 显示用（英文界面经 tr() 翻译；本页所有 errMsg 结果都只用于显示）
+  const errMsg = (e) => tr((e?.body && typeof e.body === 'object' ? e.body.error : typeof e?.body === 'string' ? e.body : '') || e?.message || String(e));
 
   // —— toast / confirm（页内自足，样式走 .sa-toast / .sa-modal）——
   let toast = $state({ on: false, msg: '', err: false });
@@ -58,9 +60,13 @@
     box: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7z"/><path d="m4 7 8 4 8-4M12 11v10"/></svg>',
   };
   const TYPES = [
-    { key: 'skill', label: '技能', c: '#bf5af2', g: G.sparkles },
-    { key: 'connector', label: '连接器', c: '#0a84ff', g: G.plug },
-    { key: 'plugin', label: '插件', c: '#ff9500', g: G.puzzle },
+    // count / pkgCount / empty：「{n} 个{类型}」「还没有{类型}」按类型整句翻（英文要单复数、语序不同）
+    { key: 'skill', label: t('技能'), c: '#bf5af2', g: G.sparkles,
+      count: (n) => t('{n} 个技能', { n }), pkgCount: (n) => t('包 · {n} 个技能', { n }), empty: t('还没有技能') },
+    { key: 'connector', label: t('连接器'), c: '#0a84ff', g: G.plug,
+      count: (n) => t('{n} 个连接器', { n }), pkgCount: (n) => t('包 · {n} 个连接器', { n }), empty: t('还没有连接器') },
+    { key: 'plugin', label: t('插件'), c: '#ff9500', g: G.puzzle,
+      count: (n) => t('{n} 个插件', { n }), pkgCount: (n) => t('包 · {n} 个插件', { n }), empty: t('还没有插件') },
   ];
   // 当前类型分页（叫 curType 不叫 type：模板表达式以 type 开头会被 Svelte 当 TS 声明标签）。
   // 初值可被外部直达句柄预置（设置→扩展分区点「连接器/插件」行直落对应类目），消费一次即清。
@@ -68,7 +74,7 @@
   extensionsNav.type = null;
   const list = $derived(items.filter((x) => x.type === curType));
   const countOf = (k) => items.filter((x) => x.type === k).length;
-  const typeDef = $derived(TYPES.find((t) => t.key === curType));
+  const typeDef = $derived(TYPES.find((ty) => ty.key === curType));
 
   // —— 包分组：有 pkg 的归包管理（卡片+整包操作），无 pkg 的散装项维持单行列表 ——
   const groups = $derived.by(() => {
@@ -105,26 +111,26 @@
   }
   async function togglePkgAgent(g, key) {
     const st = pkgAgentState(g, key);
-    if (st === 'na') { showToast('包内没有支持 ' + key + ' 的扩展', true); return; }
+    if (st === 'na') { showToast(t('包内没有支持 {agent} 的扩展', { agent: key }), true); return; }
     const v = st === 'off';   // off/mixed → 全勾；on → 全摘
     try { await api.post('/api/extensions/bulk', { pkg: g.pkg, action: 'agents', agents: { [key]: v } }); await load(); }
     catch (e) { showToast(errMsg(e), true); }
   }
   async function pkgUninstall(g) {
-    const ok = await askConfirm({ title: `整包卸载「${g.pkg}」？`, desc: `将删除包内 ${g.members.length} 个扩展的全部文件，并从所有 agent 移除。此操作不可撤销。`, yes: '整包卸载', danger: true });
+    const ok = await askConfirm({ title: t('整包卸载「{name}」？', { name: g.pkg }), desc: t('将删除包内 {n} 个扩展的全部文件，并从所有 agent 移除。此操作不可撤销。', { n: g.members.length }), yes: t('整包卸载'), danger: true });
     if (!ok) return;
     try {
       await api.post('/api/extensions/bulk', { pkg: g.pkg, action: 'delete' });
       if (selPkg === g.pkg) selPkg = null;
-      showToast('已整包卸载');
+      showToast(t('已整包卸载'));
       load();
     } catch (e) { showToast(errMsg(e), true); }
   }
 
   const FOOT = {
-    skill: '技能是带 YAML frontmatter 的 SKILL.md 指引包（可含脚本等附属文件）。对 Claude Code 下一条消息即生效；对 dimensio 在新会话生效。',
-    connector: '连接器是外部 MCP 服务，支持 stdio / http / sse 全部传输。对 Claude Code 下一条消息生效，对 dimensio 在新会话生效。',
-    plugin: '插件是 Claude Code 专属格式（.claude-plugin/plugin.json，含命令 / 子代理 / 技能 / 钩子），仅对 Claude Code 生效，下一条消息即生效。',
+    skill: t('技能是带 YAML frontmatter 的 SKILL.md 指引包（可含脚本等附属文件）。对 Claude Code 下一条消息即生效；对 dimensio 在新会话生效。'),
+    connector: t('连接器是外部 MCP 服务，支持 stdio / http / sse 全部传输。对 Claude Code 下一条消息生效，对 dimensio 在新会话生效。'),
+    plugin: t('插件是 Claude Code 专属格式（.claude-plugin/plugin.json，含命令 / 子代理 / 技能 / 钩子），仅对 Claude Code 生效，下一条消息即生效。'),
   };
 
   // —— 详情 ——
@@ -155,7 +161,7 @@
     try {
       const r = await api.get('/api/extensions/file?id=' + encodeURIComponent(selId) + '&path=' + encodeURIComponent(p));
       fileText = r.text || '';
-    } catch (e) { fileText = '（无法预览：' + errMsg(e) + '）'; }
+    } catch (e) { fileText = t('（无法预览：{reason}）', { reason: errMsg(e) }); }
     finally { fileBusy = false; }
   }
 
@@ -170,8 +176,8 @@
 
   // —— 生效 Agent 矩阵 ——
   const AGENTS = [
-    { key: 'claude', label: 'Claude Code', hint: '下一条消息生效' },
-    { key: 'dimensio', label: 'dimensio', hint: '新会话生效' },
+    { key: 'claude', label: 'Claude Code', hint: t('下一条消息生效') },
+    { key: 'dimensio', label: 'dimensio', hint: t('新会话生效') },
   ];
   function agentAllowed(item, key) {
     const s = support[item.type]?.[key];
@@ -180,8 +186,8 @@
     return true;
   }
   function agentDeniedWhy(item, key) {
-    if (item.type === 'plugin') return '仅 Claude Code 支持插件';
-    return '该类型不支持';
+    if (item.type === 'plugin') return t('仅 Claude Code 支持插件');
+    return t('该类型不支持');
   }
   async function toggleAgent(item, key) {
     if (!agentAllowed(item, key)) { showToast(agentDeniedWhy(item, key), true); return; }
@@ -202,15 +208,15 @@
   async function doUpload(fs) {
     const f = fs && fs[0];
     if (!f || upBusy) return;
-    const t = upReplace ? upReplace.type : curType;
-    const ok = t === 'plugin' ? /\.zip$/i.test(f.name) : /\.(md|zip|skill)$/i.test(f.name);
-    if (!ok) { upErr = t === 'plugin' ? '插件请上传 .zip 包' : '技能支持 .md / .zip / .skill 文件'; return; }
+    const ty = upReplace ? upReplace.type : curType;
+    const ok = ty === 'plugin' ? /\.zip$/i.test(f.name) : /\.(md|zip|skill)$/i.test(f.name);
+    if (!ok) { upErr = ty === 'plugin' ? t('插件请上传 .zip 包') : t('技能支持 .md / .zip / .skill 文件'); return; }
     upBusy = true; upErr = '';
     try {
-      const q = `/api/extensions/upload?type=${t}&name=${encodeURIComponent(f.name)}` + (upReplace ? `&replace=${encodeURIComponent(upReplace.id)}` : '') + (!upReplace && upPkg.trim() ? `&pkg=${encodeURIComponent(upPkg.trim())}` : '');
+      const q = `/api/extensions/upload?type=${ty}&name=${encodeURIComponent(f.name)}` + (upReplace ? `&replace=${encodeURIComponent(upReplace.id)}` : '') + (!upReplace && upPkg.trim() ? `&pkg=${encodeURIComponent(upPkg.trim())}` : '');
       const r = await api.post(q, f);
       upOpen = false;
-      showToast((upReplace ? '已替换' : '已添加') + '「' + r.item.name + '」');
+      showToast(upReplace ? t('已替换「{name}」', { name: r.item.name }) : t('已添加「{name}」', { name: r.item.name }));
       await load();
       if (upReplace || selId) { const cur = items.find((x) => x.id === r.item.id); if (cur && selId) openDetail(cur); }
     } catch (e) { upErr = errMsg(e); }
@@ -260,7 +266,7 @@
       };
       const r = await api.post('/api/extensions/connector', body);
       connOpen = false;
-      showToast(conn.id ? '已保存' : '已添加「' + r.item.name + '」');
+      showToast(conn.id ? t('已保存') : t('已添加「{name}」', { name: r.item.name }));
       await load();
     } catch (e) { connErr = errMsg(e); }
     finally { connBusy = false; }
@@ -277,15 +283,15 @@
       a.download = item.name + '.zip';
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    } catch (e) { showToast('下载失败：' + errMsg(e), true); }
+    } catch (e) { showToast(t('下载失败：{reason}', { reason: errMsg(e) }), true); }
   }
   async function uninstall(item) {
-    const ok = await askConfirm({ title: `卸载「${item.name}」？`, desc: '将删除它的全部文件，并从所有 agent 移除。此操作不可撤销。', yes: '卸载', danger: true });
+    const ok = await askConfirm({ title: t('卸载「{name}」？', { name: item.name }), desc: t('将删除它的全部文件，并从所有 agent 移除。此操作不可撤销。'), yes: t('卸载'), danger: true });
     if (!ok) return;
     try {
       await api.post('/api/extensions/delete', { id: item.id });
       if (selId === item.id) selId = null;
-      showToast('已卸载');
+      showToast(t('已卸载'));
       load();
     } catch (e) { showToast(errMsg(e), true); }
   }
@@ -310,8 +316,15 @@
   }
 
   const fmtSize = (n) => !n ? '' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
-  const fmtTime = (t) => { if (!t) return ''; const d = new Date(t); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`; };
-  const transLabel = { stdio: '本地命令 (stdio)', http: '远程 HTTP', sse: '远程 SSE' };
+  // 中文照旧手拼 2026/9/28；英文走 Intl：Sep 28（今年）/ Sep 28, 2025（往年）。无效日期 Intl 会抛错，先挡掉
+  const fmtTime = (ts) => {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (!isEn()) return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+    if (isNaN(d)) return '';
+    return new Intl.DateTimeFormat(locale(), { year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric', month: 'short', day: 'numeric' }).format(d);
+  };
+  const transLabel = { stdio: t('本地命令 (stdio)'), http: t('远程 HTTP'), sse: t('远程 SSE') };
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -320,45 +333,45 @@
   <div class="frame">
     <!-- 左侧类型导航（宽屏 rail / 窄屏顶部横滑条，与服务端控制台同骨架） -->
     <aside class="rail">
-      <div class="brand"><span class="brand-tx">扩展</span></div>
-      <div class="brand-sub">技能 · 连接器 · 插件</div>
+      <div class="brand"><span class="brand-tx">{t('扩展')}</span></div>
+      <div class="brand-sub">{t('技能 · 连接器 · 插件')}</div>
       <nav class="nav">
-        {#each TYPES as t (t.key)}
-          <button class="nitem" class:on={curType === t.key} onclick={() => { curType = t.key; selId = null; selPkg = null; }}>
-            <span class="sa-chip" style="--c:{t.c}">{@html t.g}</span>
-            <span class="nlab">{t.label}</span>
-            {#if countOf(t.key)}<span class="npill">{countOf(t.key)}</span>{/if}
+        {#each TYPES as ty (ty.key)}
+          <button class="nitem" class:on={curType === ty.key} onclick={() => { curType = ty.key; selId = null; selPkg = null; }}>
+            <span class="sa-chip" style="--c:{ty.c}">{@html ty.g}</span>
+            <span class="nlab">{ty.label}</span>
+            {#if countOf(ty.key)}<span class="npill">{countOf(ty.key)}</span>{/if}
           </button>
         {/each}
       </nav>
-      <div class="rail-foot">对 Claude Code · dimensio 按扩展勾选生效</div>
+      <div class="rail-foot">{t('对 Claude Code · dimensio 按扩展勾选生效')}</div>
     </aside>
 
     <main class="main">
       <header class="top">
         {#if sel}
-          <button class="sa-cbtn" onclick={() => { selId = null; }} aria-label="返回列表" title="返回">
+          <button class="sa-cbtn" onclick={() => { selId = null; }} aria-label={t('返回列表')} title={t('返回')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5.5 8.5 12l6.5 6.5"/></svg>
           </button>
           <h1 class="big sa-trunc">{sel.name}</h1>
         {:else if pkgGroup}
-          <button class="sa-cbtn" onclick={() => { selPkg = null; }} aria-label="返回列表" title="返回">
+          <button class="sa-cbtn" onclick={() => { selPkg = null; }} aria-label={t('返回列表')} title={t('返回')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5.5 8.5 12l6.5 6.5"/></svg>
           </button>
           <h1 class="big sa-trunc">{pkgGroup.pkg}</h1>
-          <span class="sub">包 · {pkgGroup.members.length} 个{typeDef.label}</span>
+          <span class="sub">{typeDef.pkgCount(pkgGroup.members.length)}</span>
         {:else}
           <h1 class="big">{typeDef.label}</h1>
-          <span class="sub">{list.length ? list.length + ' 个已安装' : ''}</span>
+          <span class="sub">{list.length ? t('{n} 个已安装', { n: list.length }) : ''}</span>
         {/if}
         <div class="sa-sp"></div>
         {#if !sel && !pkgGroup}
           <button class="sa-btn pri" onclick={() => (curType === 'connector' ? openConnForm() : openUpload())}>
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-            {curType === 'connector' ? '添加连接器' : curType === 'plugin' ? '上传插件' : '上传技能'}
+            {curType === 'connector' ? t('添加连接器') : curType === 'plugin' ? t('上传插件') : t('上传技能')}
           </button>
         {/if}
-        <button class="sa-cbtn" onclick={close} aria-label="关闭" title="关闭">
+        <button class="sa-cbtn" onclick={close} aria-label={t('关闭')} title={t('关闭')}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
         </button>
       </header>
@@ -373,15 +386,15 @@
                 <div class="det-head-tx">
                   <div class="det-name">{pkgGroup.pkg}</div>
                   <div class="det-meta">
-                    包 · {pkgGroup.members.length} 个{typeDef.label}
+                    {typeDef.pkgCount(pkgGroup.members.length)}
                     {#if pkgGroup.size}· {fmtSize(pkgGroup.size)}{/if}
                     {#if pkgGroup.updated}· {fmtTime(pkgGroup.updated)}{/if}
                   </div>
                 </div>
-                <button class="sa-sw" class:on={pkgGroup.allOn} onclick={() => togglePkg(pkgGroup)} aria-label="启用整包"><span class="sa-sw-knob"></span></button>
+                <button class="sa-sw" class:on={pkgGroup.allOn} onclick={() => togglePkg(pkgGroup)} aria-label={t('启用整包')}><span class="sa-sw-knob"></span></button>
               </div>
 
-              <div class="sa-card-h det-sec">生效 Agent（整包批量勾选）</div>
+              <div class="sa-card-h det-sec">{t('生效 Agent（整包批量勾选）')}</div>
               <div class="sa-card">
                 <div class="sa-rows">
                   {#each AGENTS as a (a.key)}
@@ -393,15 +406,15 @@
                       </span>
                       <span class="sa-row-tx">
                         <span>{a.label}</span>
-                        <small>{pst === 'na' ? '包内没有支持它的扩展' : pst === 'mixed' ? '部分成员已勾' : a.hint}</small>
+                        <small>{pst === 'na' ? t('包内没有支持它的扩展') : pst === 'mixed' ? t('部分成员已勾') : a.hint}</small>
                       </span>
                     </button>
                   {/each}
                 </div>
               </div>
-              <div class="sa-foot">批量勾选会跳过包内不支持该 agent 的扩展。</div>
+              <div class="sa-foot">{t('批量勾选会跳过包内不支持该 agent 的扩展。')}</div>
 
-              <div class="sa-card-h det-sec">包内扩展<span class="det-fcount">{pkgGroup.members.length}</span></div>
+              <div class="sa-card-h det-sec">{t('包内扩展')}<span class="det-fcount">{pkgGroup.members.length}</span></div>
               <div class="sa-card">
                 <div class="sa-rows">
                   {#each pkgGroup.members as item (item.id)}
@@ -409,10 +422,10 @@
                       <span class="sa-chip" style="--c:{typeDef.c}; opacity:{item.enabled ? 1 : .45}">{@html typeDef.g}</span>
                       <button class="sa-row-tx rowbtn" onclick={() => openDetail(item)}>
                         <span class="rowname sa-trunc" style:opacity={item.enabled ? 1 : 0.55}>{item.name}</span>
-                        <small class="sa-trunc">{item.description || '（无描述）'}</small>
+                        <small class="sa-trunc">{item.description || t('（无描述）')}</small>
                       </button>
-                      <button class="sa-sw" class:on={item.enabled} onclick={() => toggleEnabled(item)} aria-label="启用 {item.name}"><span class="sa-sw-knob"></span></button>
-                      <button class="rowchev" onclick={() => openDetail(item)} aria-label="查看详情">
+                      <button class="sa-sw" class:on={item.enabled} onclick={() => toggleEnabled(item)} aria-label={t('启用 {name}', { name: item.name })}><span class="sa-sw-knob"></span></button>
+                      <button class="rowchev" onclick={() => openDetail(item)} aria-label={t('查看详情')}>
                         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
                       </button>
                     </div>
@@ -420,11 +433,11 @@
                 </div>
               </div>
 
-              <div class="sa-card-h det-sec">管理</div>
+              <div class="sa-card-h det-sec">{t('管理')}</div>
               <div class="sa-card">
                 <div class="sa-rows">
                   <button class="sa-row actrow dgr" onclick={() => pkgUninstall(pkgGroup)}>
-                    <span class="sa-row-tx"><span>整包卸载</span><small>删除包内 {pkgGroup.members.length} 个扩展并从所有 agent 移除</small></span>
+                    <span class="sa-row-tx"><span>{t('整包卸载')}</span><small>{t('删除包内 {n} 个扩展并从所有 agent 移除', { n: pkgGroup.members.length })}</small></span>
                   </button>
                 </div>
               </div>
@@ -432,18 +445,18 @@
           {:else}
           <!-- ═══ 列表 ═══ -->
           {#each diagnostics.filter((d) => !d.id || items.find((x) => x.id === d.id)?.type === curType) as d, i (i)}
-            <div class="diag" class:err={d.level === 'error'}>{d.msg}</div>
+            <div class="diag" class:err={d.level === 'error'}>{tr(d.msg)}</div>
           {/each}
           {#if !loaded}
-            <div class="sa-empty">载入中…</div>
+            <div class="sa-empty">{t('载入中…')}</div>
           {:else if loadErr}
             <div class="sa-empty">{loadErr}</div>
           {:else if !list.length}
             <div class="sa-card empty-card">
               <div class="empty-ico" style="--c:{typeDef.c}">{@html typeDef.g}</div>
-              <div class="empty-t">还没有{typeDef.label}</div>
-              <div class="empty-d">{curType === 'skill' ? '上传 SKILL.md 或技能包，让 agent 学会新本事' : curType === 'connector' ? '接入外部 MCP 服务，扩展 agent 的工具面' : '上传 Claude Code 插件包（命令 / 子代理 / 技能 / 钩子）'}</div>
-              <button class="sa-btn pri" onclick={() => (curType === 'connector' ? openConnForm() : openUpload())}>{curType === 'connector' ? '添加连接器' : '上传' + typeDef.label}</button>
+              <div class="empty-t">{typeDef.empty}</div>
+              <div class="empty-d">{curType === 'skill' ? t('上传 SKILL.md 或技能包，让 agent 学会新本事') : curType === 'connector' ? t('接入外部 MCP 服务，扩展 agent 的工具面') : t('上传 Claude Code 插件包（命令 / 子代理 / 技能 / 钩子）')}</div>
+              <button class="sa-btn pri" onclick={() => (curType === 'connector' ? openConnForm() : openUpload())}>{curType === 'connector' ? t('添加连接器') : curType === 'plugin' ? t('上传插件') : t('上传技能')}</button>
             </div>
           {:else}
             {#if groups.length}
@@ -453,7 +466,7 @@
                     <span class="sa-chip pkg-chip" style="--c:{typeDef.c}; opacity:{g.allOn ? 1 : .45}">{@html G.box}</span>
                     <button class="sa-row-tx rowbtn" onclick={() => { selPkg = g.pkg; }}>
                       <span class="rowname sa-trunc" style:opacity={g.allOn ? 1 : 0.55}>{g.pkg}</span>
-                      <small class="sa-trunc">{g.members.length} 个{typeDef.label}{g.size ? ' · ' + fmtSize(g.size) : ''}</small>
+                      <small class="sa-trunc">{typeDef.count(g.members.length)}{g.size ? ' · ' + fmtSize(g.size) : ''}</small>
                       <span class="agrow">
                         {#each AGENTS as a (a.key)}
                           {@const gst = pkgAgentState(g, a.key)}
@@ -462,15 +475,15 @@
                         {/each}
                       </span>
                     </button>
-                    <button class="sa-sw" class:on={g.allOn} onclick={() => togglePkg(g)} aria-label="启用整包 {g.pkg}"><span class="sa-sw-knob"></span></button>
-                    <button class="rowchev" onclick={() => { selPkg = g.pkg; }} aria-label="管理包 {g.pkg}">
+                    <button class="sa-sw" class:on={g.allOn} onclick={() => togglePkg(g)} aria-label={t('启用整包 {name}', { name: g.pkg })}><span class="sa-sw-knob"></span></button>
+                    <button class="rowchev" onclick={() => { selPkg = g.pkg; }} aria-label={t('管理包 {name}', { name: g.pkg })}>
                       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
                     </button>
                   </div>
                 {/each}
               </div>
             {/if}
-            {#if groups.length && loose.length}<div class="sa-card-h">未分组</div>{/if}
+            {#if groups.length && loose.length}<div class="sa-card-h">{t('未分组')}</div>{/if}
             {#if loose.length}
             <div class="sa-card">
               <div class="sa-rows">
@@ -479,15 +492,15 @@
                     <span class="sa-chip" style="--c:{typeDef.c}; opacity:{item.enabled ? 1 : .45}">{@html typeDef.g}</span>
                     <button class="sa-row-tx rowbtn" onclick={() => openDetail(item)}>
                       <span class="rowname sa-trunc" style:opacity={item.enabled ? 1 : 0.55}>{item.name}</span>
-                      <small class="sa-trunc">{item.description || '（无描述）'}</small>
+                      <small class="sa-trunc">{item.description || t('（无描述）')}</small>
                       <span class="agrow">
                         {#each AGENTS as a (a.key)}
                           {#if item.agents?.[a.key] && agentAllowed(item, a.key)}<span class="agtag">{a.label}</span>{/if}
                         {/each}
                       </span>
                     </button>
-                    <button class="sa-sw" class:on={item.enabled} onclick={() => toggleEnabled(item)} aria-label="启用 {item.name}"><span class="sa-sw-knob"></span></button>
-                    <button class="rowchev" onclick={() => openDetail(item)} aria-label="查看详情">
+                    <button class="sa-sw" class:on={item.enabled} onclick={() => toggleEnabled(item)} aria-label={t('启用 {name}', { name: item.name })}><span class="sa-sw-knob"></span></button>
+                    <button class="rowchev" onclick={() => openDetail(item)} aria-label={t('查看详情')}>
                       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
                     </button>
                   </div>
@@ -503,24 +516,24 @@
           <div class="det">
             <!-- 头卡：图标 + 名称 + 元信息 + 总开关 -->
             <div class="sa-card det-head">
-              <span class="sa-chip det-chip" style="--c:{TYPES.find((t) => t.key === sel.type)?.c}">{@html TYPES.find((t) => t.key === sel.type)?.g}</span>
+              <span class="sa-chip det-chip" style="--c:{TYPES.find((ty) => ty.key === sel.type)?.c}">{@html TYPES.find((ty) => ty.key === sel.type)?.g}</span>
               <div class="det-head-tx">
                 <div class="det-name">{sel.name}</div>
                 <div class="det-meta">
-                  {TYPES.find((t) => t.key === sel.type)?.label}
+                  {TYPES.find((ty) => ty.key === sel.type)?.label}
                   {#if sel.version}· v{sel.version}{/if}
-                  {#if sel.files}· {sel.files} 个文件{/if}
+                  {#if sel.files}· {t('{n} 个文件', { n: sel.files })}{/if}
                   {#if sel.size}· {fmtSize(sel.size)}{/if}
                   {#if sel.updated}· {fmtTime(sel.updated)}{/if}
-                  {#if sel.pkg}· 包 <button class="pkglink" onclick={() => { const p = sel.pkg; selId = null; selPkg = p; }}>{sel.pkg}</button>{/if}
+                  {#if sel.pkg}· {t('包')} <button class="pkglink" onclick={() => { const p = sel.pkg; selId = null; selPkg = p; }}>{sel.pkg}</button>{/if}
                 </div>
               </div>
-              <button class="sa-sw" class:on={sel.enabled} onclick={() => toggleEnabled(sel)} aria-label="启用"><span class="sa-sw-knob"></span></button>
+              <button class="sa-sw" class:on={sel.enabled} onclick={() => toggleEnabled(sel)} aria-label={t('启用')}><span class="sa-sw-knob"></span></button>
             </div>
             {#if sel.description}<div class="det-desc">{sel.description}</div>{/if}
 
             <!-- 生效 Agent 矩阵 -->
-            <div class="sa-card-h det-sec">生效 Agent</div>
+            <div class="sa-card-h det-sec">{t('生效 Agent')}</div>
             <div class="sa-card">
               <div class="sa-rows">
                 {#each AGENTS as a (a.key)}
@@ -538,23 +551,23 @@
                 {/each}
               </div>
             </div>
-            <div class="sa-foot">{sel.enabled ? '勾选的 agent 会在其会话里获得此扩展。' : '此扩展当前已停用，对所有 agent 均不生效。'}</div>
+            <div class="sa-foot">{sel.enabled ? t('勾选的 agent 会在其会话里获得此扩展。') : t('此扩展当前已停用，对所有 agent 均不生效。')}</div>
 
             {#if sel.type === 'connector'}
               <!-- 连接详情 -->
-              <div class="sa-card-h det-sec">连接配置<span class="sa-sp"></span><button class="sa-btn sm" onclick={() => openConnForm(sel)}>编辑</button></div>
+              <div class="sa-card-h det-sec">{t('连接配置')}<span class="sa-sp"></span><button class="sa-btn sm" onclick={() => openConnForm(sel)}>{t('编辑')}</button></div>
               <div class="sa-card">
                 <div class="sa-rows">
-                  <div class="sa-row"><span class="sa-row-tx"><small>传输</small><span>{transLabel[sel.connector?.transport] || sel.connector?.transport}</span></span></div>
+                  <div class="sa-row"><span class="sa-row-tx"><small>{tc('admin', '传输')}</small><span>{transLabel[sel.connector?.transport] || sel.connector?.transport}</span></span></div>
                   {#if sel.connector?.transport === 'stdio'}
-                    <div class="sa-row"><span class="sa-row-tx"><small>命令</small><span class="sa-mono det-cmd">{sel.connector?.command} {(sel.connector?.args || []).join(' ')}</span></span></div>
+                    <div class="sa-row"><span class="sa-row-tx"><small>{t('命令')}</small><span class="sa-mono det-cmd">{sel.connector?.command} {(sel.connector?.args || []).join(' ')}</span></span></div>
                     {#if Object.keys(sel.connector?.env || {}).length}
-                      <div class="sa-row"><span class="sa-row-tx"><small>环境变量</small><span class="sa-mono">{Object.keys(sel.connector.env).join('、')}</span></span></div>
+                      <div class="sa-row"><span class="sa-row-tx"><small>{t('环境变量')}</small><span class="sa-mono">{Object.keys(sel.connector.env).join(t('、'))}</span></span></div>
                     {/if}
                   {:else}
-                    <div class="sa-row"><span class="sa-row-tx"><small>地址</small><span class="sa-mono det-cmd">{sel.connector?.url}</span></span></div>
+                    <div class="sa-row"><span class="sa-row-tx"><small>{t('地址')}</small><span class="sa-mono det-cmd">{sel.connector?.url}</span></span></div>
                     {#if Object.keys(sel.connector?.headers || {}).length}
-                      <div class="sa-row"><span class="sa-row-tx"><small>请求头</small><span class="sa-mono">{Object.keys(sel.connector.headers).join('、')}</span></span></div>
+                      <div class="sa-row"><span class="sa-row-tx"><small>{t('请求头')}</small><span class="sa-mono">{Object.keys(sel.connector.headers).join(t('、'))}</span></span></div>
                     {/if}
                   {/if}
                 </div>
@@ -562,20 +575,20 @@
             {:else}
               <!-- 文件预览（SKILL.md 优先，chips 切换） -->
               {#if files.length}
-                <div class="sa-card-h det-sec">文件<span class="det-fcount">{files.length}</span></div>
+                <div class="sa-card-h det-sec">{tc('admin', '文件')}<span class="det-fcount">{files.length}</span></div>
                 <div class="fchips">
                   {#each files.slice(0, 40) as f (f.path)}
                     <button class="sa-chip-btn" class:on={fileSel === f.path} onclick={() => pickFile(f.path)}>{f.path}</button>
                   {/each}
-                  {#if files.length > 40}<span class="fmore">… 共 {files.length} 个</span>{/if}
+                  {#if files.length > 40}<span class="fmore">{t('… 共 {n} 个', { n: files.length })}</span>{/if}
                 </div>
                 <div class="sa-card fprev">
                   {#if fileBusy}
-                    <div class="sa-empty">读取中…</div>
+                    <div class="sa-empty">{t('读取中…')}</div>
                   {:else if !fileSel}
-                    <div class="sa-empty">选择一个文件预览</div>
+                    <div class="sa-empty">{t('选择一个文件预览')}</div>
                   {:else if !TEXT_RE.test(fileSel)}
-                    <div class="sa-empty">二进制文件 · {fmtSize(files.find((f) => f.path === fileSel)?.size || 0)}</div>
+                    <div class="sa-empty">{t('二进制文件 · {size}', { size: fmtSize(files.find((f) => f.path === fileSel)?.size || 0) })}</div>
                   {:else if isMd(fileSel)}
                     <div class="extp-md">{@html renderMarkdown(fileText)}</div>
                   {:else}
@@ -586,19 +599,19 @@
             {/if}
 
             <!-- 操作 -->
-            <div class="sa-card-h det-sec">管理</div>
+            <div class="sa-card-h det-sec">{t('管理')}</div>
             <div class="sa-card">
               <div class="sa-rows">
                 {#if sel.type !== 'connector'}
                   <button class="sa-row actrow" onclick={() => openUpload(sel)}>
-                    <span class="sa-row-tx"><span>替换</span><small>上传新版本覆盖，保留开关与 agent 勾选</small></span>
+                    <span class="sa-row-tx"><span>{t('替换')}</span><small>{t('上传新版本覆盖，保留开关与 agent 勾选')}</small></span>
                   </button>
                   <button class="sa-row actrow" onclick={() => download(sel)}>
-                    <span class="sa-row-tx"><span>下载</span><small>打包为 zip 存到本地</small></span>
+                    <span class="sa-row-tx"><span>{t('下载')}</span><small>{t('打包为 zip 存到本地')}</small></span>
                   </button>
                 {/if}
                 <button class="sa-row actrow dgr" onclick={() => uninstall(sel)}>
-                  <span class="sa-row-tx"><span>卸载</span><small>删除文件并从所有 agent 移除</small></span>
+                  <span class="sa-row-tx"><span>{t('卸载')}</span><small>{t('删除文件并从所有 agent 移除')}</small></span>
                 </button>
               </div>
             </div>
@@ -610,81 +623,81 @@
 
   <!-- 上传弹窗 -->
   {#if upOpen}
-    <button class="sa-mask" aria-label="取消" onclick={() => { if (!upBusy) { upOpen = false; upReplace = null; } }}></button>
+    <button class="sa-mask" aria-label={t('取消')} onclick={() => { if (!upBusy) { upOpen = false; upReplace = null; } }}></button>
     <div class="sa-modal">
-      <h3>{upReplace ? `替换「${upReplace.name}」` : curType === 'plugin' ? '上传插件' : '上传技能'}</h3>
+      <h3>{upReplace ? t('替换「{name}」', { name: upReplace.name }) : curType === 'plugin' ? t('上传插件') : t('上传技能')}</h3>
       <button class="drop" class:drag={upDrag} class:busy={upBusy}
         use:fileDrop={{ onEnter: () => { upDrag = true; }, onLeave: () => { upDrag = false; }, onDrop: doUpload }}
         onclick={() => upInput && upInput.click()}>
         {#if upBusy}
           <span class="drop-busy"></span>
-          <span class="drop-t">正在上传解析…</span>
+          <span class="drop-t">{t('正在上传解析…')}</span>
         {:else}
           <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16.5V18a2.5 2.5 0 0 0 2.5 2.5h11A2.5 2.5 0 0 0 20 18v-1.5"/><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/></svg>
-          <span class="drop-t">拖拽到这里，或点击选择文件</span>
+          <span class="drop-t">{t('拖拽到这里，或点击选择文件')}</span>
         {/if}
       </button>
       <input bind:this={upInput} type="file" accept={(upReplace ? upReplace.type : curType) === 'plugin' ? '.zip' : '.md,.zip,.skill'} style="display:none" onchange={(e) => { const fs = [...(e.target.files || [])]; e.target.value = ''; doUpload(fs); }} />
       {#if !upReplace}
-        <div class="sa-lab">所属包（可选）</div>
-        <input class="sa-in" placeholder="同包名的扩展归为一组统一管理；留空为散装" bind:value={upPkg} />
+        <div class="sa-lab">{t('所属包（可选）')}</div>
+        <input class="sa-in" placeholder={t('同包名的扩展归为一组统一管理；留空为散装')} bind:value={upPkg} />
       {/if}
       <p class="req">
-        文件要求：{(upReplace ? upReplace.type : curType) === 'plugin'
-          ? '.zip 包内需含 .claude-plugin/plugin.json'
-          : '.md 文件需含 YAML frontmatter 的 name 与 description；.zip / .skill 包内需含 SKILL.md'}
+        {(upReplace ? upReplace.type : curType) === 'plugin'
+          ? t('文件要求：.zip 包内需含 .claude-plugin/plugin.json')
+          : t('文件要求：.md 文件需含 YAML frontmatter 的 name 与 description；.zip / .skill 包内需含 SKILL.md')}
       </p>
       {#if upErr}<div class="sa-err">{upErr}</div>{/if}
-      <div class="acts"><button class="sa-btn" disabled={upBusy} onclick={() => { upOpen = false; upReplace = null; }}>取消</button></div>
+      <div class="acts"><button class="sa-btn" disabled={upBusy} onclick={() => { upOpen = false; upReplace = null; }}>{t('取消')}</button></div>
     </div>
   {/if}
 
   <!-- 连接器表单弹窗 -->
   {#if connOpen}
-    <button class="sa-mask" aria-label="取消" onclick={() => { if (!connBusy) connOpen = false; }}></button>
+    <button class="sa-mask" aria-label={t('取消')} onclick={() => { if (!connBusy) connOpen = false; }}></button>
     <div class="sa-modal conn-modal">
-      <h3>{conn.id ? '编辑连接器' : '添加连接器'}</h3>
-      <div class="sa-lab">名称</div>
-      <input class="sa-in" placeholder="如 github-mcp" bind:value={conn.name} />
-      <div class="sa-lab">描述（可选）</div>
-      <input class="sa-in" placeholder="一句话说明它提供什么工具" bind:value={conn.description} />
-      <div class="sa-lab">传输</div>
+      <h3>{conn.id ? t('编辑连接器') : t('添加连接器')}</h3>
+      <div class="sa-lab">{t('名称')}</div>
+      <input class="sa-in" placeholder={t('如 github-mcp')} bind:value={conn.name} />
+      <div class="sa-lab">{t('描述（可选）')}</div>
+      <input class="sa-in" placeholder={t('一句话说明它提供什么工具')} bind:value={conn.description} />
+      <div class="sa-lab">{tc('admin', '传输')}</div>
       <div class="sa-chips">
-        {#each ['stdio', 'http', 'sse'] as tr (tr)}
-          <button class="sa-chip-btn" class:on={conn.transport === tr} onclick={() => { conn.transport = tr; }}>{transLabel[tr]}</button>
+        {#each ['stdio', 'http', 'sse'] as tp (tp)}
+          <button class="sa-chip-btn" class:on={conn.transport === tp} onclick={() => { conn.transport = tp; }}>{transLabel[tp]}</button>
         {/each}
       </div>
       {#if conn.transport === 'stdio'}
-        <div class="sa-lab">启动命令</div>
-        <input class="sa-in sa-mono" placeholder="如 npx 或 node 或绝对路径" bind:value={conn.command} />
-        <div class="sa-lab">参数（每行一个，可选）</div>
+        <div class="sa-lab">{t('启动命令')}</div>
+        <input class="sa-in sa-mono" placeholder={t('如 npx 或 node 或绝对路径')} bind:value={conn.command} />
+        <div class="sa-lab">{t('参数（每行一个，可选）')}</div>
         <textarea class="sa-in ta sa-mono" rows="3" placeholder={'-y\n@modelcontextprotocol/server-github'} bind:value={conn.argsText}></textarea>
-        <div class="sa-lab">环境变量（每行 KEY=VALUE，可选）</div>
+        <div class="sa-lab">{t('环境变量（每行 KEY=VALUE，可选）')}</div>
         <textarea class="sa-in ta sa-mono" rows="2" placeholder="GITHUB_TOKEN=ghp_xxx" bind:value={conn.envText}></textarea>
-        {#if conn.id && conn.envText}<div class="conn-hint">值加密存在服务端，这里只显示 ••••••••：不改就原样保留，要换就把那一行改成新值，删掉那一行就是删掉它。</div>{/if}
+        {#if conn.id && conn.envText}<div class="conn-hint">{t('值加密存在服务端，这里只显示 ••••••••：不改就原样保留，要换就把那一行改成新值，删掉那一行就是删掉它。')}</div>{/if}
       {:else}
-        <div class="sa-lab">服务地址</div>
+        <div class="sa-lab">{t('服务地址')}</div>
         <input class="sa-in sa-mono" placeholder="https://mcp.example.com/v1" bind:value={conn.url} />
-        <div class="sa-lab">请求头（每行 KEY=VALUE，可选）</div>
+        <div class="sa-lab">{t('请求头（每行 KEY=VALUE，可选）')}</div>
         <textarea class="sa-in ta sa-mono" rows="2" placeholder="Authorization=Bearer xxx" bind:value={conn.headersText}></textarea>
-        {#if conn.id && conn.headersText}<div class="conn-hint">值加密存在服务端，这里只显示 ••••••••：不改就原样保留，要换就把那一行改成新值，删掉那一行就是删掉它。</div>{/if}
+        {#if conn.id && conn.headersText}<div class="conn-hint">{t('值加密存在服务端，这里只显示 ••••••••：不改就原样保留，要换就把那一行改成新值，删掉那一行就是删掉它。')}</div>{/if}
       {/if}
       {#if connErr}<div class="sa-err">{connErr}</div>{/if}
       <div class="acts">
-        <button class="sa-btn" disabled={connBusy} onclick={() => { connOpen = false; }}>取消</button>
-        <button class="sa-btn pri" disabled={connBusy} onclick={saveConn}>{connBusy ? '保存中…' : '保存'}</button>
+        <button class="sa-btn" disabled={connBusy} onclick={() => { connOpen = false; }}>{t('取消')}</button>
+        <button class="sa-btn pri" disabled={connBusy} onclick={saveConn}>{connBusy ? t('保存中…') : t('保存')}</button>
       </div>
     </div>
   {/if}
 
   <!-- 确认弹窗 -->
   {#if confirmState}
-    <button class="sa-mask" aria-label="取消" onclick={() => settleConfirm(false)}></button>
+    <button class="sa-mask" aria-label={t('取消')} onclick={() => settleConfirm(false)}></button>
     <div class="sa-modal">
       <h3>{confirmState.title}</h3>
       {#if confirmState.desc}<p>{confirmState.desc}</p>{/if}
       <div class="acts">
-        <button class="sa-btn" onclick={() => settleConfirm(false)}>取消</button>
+        <button class="sa-btn" onclick={() => settleConfirm(false)}>{t('取消')}</button>
         <button class="sa-btn {confirmState.danger ? 'dgr' : 'pri'}" onclick={() => settleConfirm(true)}>{confirmState.yes}</button>
       </div>
     </div>

@@ -27,8 +27,8 @@ import { editTool } from "../tools/edit.ts";
 import { bashTool, shell } from "../tools/bash.ts";
 import { disabledTools } from "../tenant.ts";
 import { verificationAuditTool } from "../tools/verificationaudit.ts";
-import { CATALOG, clampEffort, defaultModel } from "../catalog.ts";
-import { defaultBaseUrl, resolveKey } from "../config.ts";
+import { allProviders, clampEffort, defaultModel, providerBaseUrl } from "../catalog.ts";
+import { resolveKey } from "../config.ts";
 import { coerceToSchema, formatSchemaErrors, validateSchema } from "./schema.ts";
 import type { UsageDelta } from "../usage-ledger.ts";
 
@@ -268,7 +268,7 @@ ${deliverable}${inherited}${extra}`;
 }
 
 function providerForModel(model: string): ProviderId | undefined {
-  return CATALOG.find((p) => p.models.some((m) => m.id === model))?.id;
+  return allProviders().find((p) => p.models.some((m) => m.id === model))?.id;
 }
 
 interface Target {
@@ -303,8 +303,7 @@ function resolveTarget(env: SubAgentEnv, req: SubAgentRequest): Target | { error
     const key = resolveKey(provider);
     if (!key) return { error: `model "${model}" needs provider "${provider}", which has no API key configured` };
     apiKey = key;
-    // 服务端给这家配置的地址（环境变量覆盖优先）——和主会话切到这家时一致
-    baseUrl = defaultBaseUrl(provider);
+    baseUrl = providerBaseUrl(provider);
   }
   return { provider, model, apiKey, baseUrl, thinking: clampEffort(provider, model, req.thinking ?? env.thinking) };
 }

@@ -32,6 +32,7 @@
   import { dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent } from '../lib/fileDrag.js';
   import { IS_PANE, SOLO_ID, PANE_MSG, isPaneMsg } from '../lib/solo.js';
   import { dockOverlayFor } from '../lib/claudeSplit.js';
+  import { t, tc } from '../lib/i18n.js';
 
   // 'boot' 加载中 | 'login' 没登录（本页不带登录卡：主窗口登录后再拖一次即可）| 'ready'
   let state = $state('boot');
@@ -56,7 +57,7 @@
 
   // —— 窗口标题 = 对话标题（独立窗口在任务栏里认得出是哪一个）：自定义名优先，否则取首条提问 ——
   const firstAsk = $derived((chat.messages.find((m) => m.role === 'user')?.text || '').replace(/\s+/g, ' ').trim().slice(0, 60));
-  const title = $derived(session.id ? (titleFor(session.id, firstAsk) || '对话') : '新对话');
+  const title = $derived(session.id ? (titleFor(session.id, firstAsk) || tc('claude', '对话')) : tc('claude', '新对话'));
   $effect(() => { document.title = title + ' · Claude'; });
 
   // 这一格的宽度（决定工作台盖着还是挤开）。同 ClaudePage：自己挂 ResizeObserver，不靠 bind:clientWidth。
@@ -194,16 +195,16 @@
           <div class="composer-wrap" bind:this={composerWrapEl}>
             {#if showChips}<div class="chips-slot" class:foot={atBottom}><WorkspaceChips name={proj.name} /></div>{/if}
             <div class="band-slot"><RefusalBand sessionId={session.id} /></div>
-            <div class="composer-inner" bind:this={composerInnerEl}><Composer placeholder="发消息…" /></div>
+            <div class="composer-inner" bind:this={composerInnerEl}><Composer placeholder={tc('claude', '发消息…')} /></div>
           </div>
         {/if}
       </div>
     </div>
     <ClaudeDock wide={sideDock} {overlay} toolsClose={IS_PANE ? () => toHost({ t: 'close' }) : null} />
   {:else if state === 'login'}
-    <div class="mid"><p>先在主窗口登录 bridge，再把对话拖出来。</p></div>
+    <div class="mid"><p>{tc('claude', '先在主窗口登录 bridge，再把对话拖出来。')}</p></div>
   {:else}
-    <div class="mid"><p>加载中…</p></div>
+    <div class="mid"><p>{t('加载中…')}</p></div>
   {/if}
 </div>
 <MediaViewer />

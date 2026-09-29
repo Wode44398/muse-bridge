@@ -22,6 +22,7 @@
   import { preview, closePreview } from '../../lib/preview.svelte.js';
   import { reportUi } from '../../lib/uiReport.js';
   import { untrack } from 'svelte';
+  import { t, tc } from '../../lib/i18n.js';
 
   // wide = 以【侧列】形态摆（宿主按 layout.side 传入：expanded 与 medium 都是侧列）；
   // false = 手机底部 sheet。medium 档另给一套更窄的宽度区间（见 .dock.wide.mid）。
@@ -33,7 +34,9 @@
   const mid = $derived(layout.medium);
   $effect(() => { const on = wide && multi; untrack(() => setDockMulti(on)); });
 
-  const TITLES = { tasks: '任务', review: '审阅', term: '终端', files: '文件' };
+  const TITLES = { tasks: tc('claude', '任务'), review: t('审阅'), term: t('终端'), files: tc('claude', '文件') };
+  // 卡片标题行的 ✕：整句一键（英文 “Close terminal” 要小写名词，不能拿标题拼）
+  const CLOSE_LABEL = { tasks: tc('claude', '关闭任务'), review: t('关闭审阅'), term: t('关闭终端'), files: tc('claude', '关闭文件') };
   const snapMode = $derived(dockSnapMode());
 
   // 手机 sheet 的 chip 条：四件套按这个顺序（门禁藏掉的不出）
@@ -184,8 +187,8 @@
   const filesShown = $derived(shown.includes('files'));
   $effect(() => {
     if (!(filesShown && dock.meta)) { filesMount = null; return; }
-    const t = dock.filesTarget;
-    if (t) { filesMount = { key: 't' + t.seq, ws: t.ws || '', rel: t.rel || '', open: t.open || '' }; return; }
+    const ft = dock.filesTarget;
+    if (ft) { filesMount = { key: 't' + ft.seq, ws: ft.ws || '', rel: ft.rel || '', open: ft.open || '' }; return; }
     // 工作空间在身份文件根之外（admin 常见：项目不在 vault 里）：以工作空间本身为根挂载，
     // 别再摆一句「打不开」——附件卡走的就是这条 ws 作用域，两边得一致。
     // 无 shell 的身份拿不到 ws 作用域（/api/files?ws= 一律 403），维持原来的说明文案。
@@ -217,7 +220,7 @@
     <!-- 任务视图读的是本会话的对话状态，不按工作空间作用域、也不用等 meta -->
     <TasksPanel {wide} />
   {:else if !dock.ws}
-    <div class="dk-wait">工作空间加载中…</div>
+    <div class="dk-wait">{t('工作空间加载中…')}</div>
   {:else}
     {#key dock.ws}
       {#if view === 'review'}<ReviewPanel />
@@ -232,9 +235,9 @@
             </div>
           {/key}
         {:else if dock.meta && dock.meta.rel == null}
-          <div class="dk-wait">该工作空间在云端文件区之外，无法在侧栏打开工作空间页</div>
+          <div class="dk-wait">{t('该工作空间在云端文件区之外，无法在侧栏打开工作空间页')}</div>
         {:else}
-          <div class="dk-wait">工作空间加载中…</div>
+          <div class="dk-wait">{t('工作空间加载中…')}</div>
         {/if}
       {/if}
     {/key}
@@ -244,18 +247,18 @@
 {#if dock.open}
 {#if wide}
 <aside class="dock wide" class:mid class:overlay class:gripping class:two class:full={!!maxed} bind:this={dockEl}
-  style={curW ? `width:${curW}px` : ''} aria-label="工作台">
+  style={curW ? `width:${curW}px` : ''} aria-label={t('工作台')}>
   <!-- 工具开关组：工作台展开时就坐在卡片正上方这条带里（收起时由 TopBar 挂在这一格右上角） -->
   <DockToolBar docked onClose={toolsClose} />
-  {#if !maxed}<div class="dk-grip" role="separator" aria-label="拖拽调整宽度" onpointerdown={gripDown} ondblclick={gripReset}></div>{/if}
+  {#if !maxed}<div class="dk-grip" role="separator" aria-label={t('拖拽调整宽度')} onpointerdown={gripDown} ondblclick={gripReset}></div>{/if}
   <div class="dk-cards">
     {#each cards as c (c.v)}
       <section class="dk-card" class:hid={!c.box} style={c.box} aria-label={TITLES[c.v]}>
         {#if !(c.v === 'files' && filesFull)}
           <header class="dk-card-head">
             <span class="dk-card-t">{TITLES[c.v]}</span>
-            <button class="dk-cbtn" aria-label={maxed === c.v ? '还原' : '放大'} title={maxed === c.v ? '还原' : '放大铺满'} onclick={() => toggleDockMax(c.v)}>{@html dockIcon(maxed === c.v ? 'shrink' : 'expand')}</button>
-            <button class="dk-cbtn" aria-label={'关闭' + TITLES[c.v]} title="关闭" onclick={() => closeDockView(c.v)}>{@html dockIcon('close')}</button>
+            <button class="dk-cbtn" aria-label={maxed === c.v ? t('还原') : t('放大')} title={maxed === c.v ? t('还原') : t('放大铺满')} onclick={() => toggleDockMax(c.v)}>{@html dockIcon(maxed === c.v ? 'shrink' : 'expand')}</button>
+            <button class="dk-cbtn" aria-label={CLOSE_LABEL[c.v]} title={t('关闭')} onclick={() => closeDockView(c.v)}>{@html dockIcon('close')}</button>
           </header>
         {/if}
         {@render panelBody(c.v)}
@@ -266,7 +269,7 @@
 {:else}
 <!-- 移动端：底部 sheet（dimensio 手机端同款交互）——scrim 点击关、把手下拉关、chip 直切工具 -->
 <div class="sheetwrap">
-  <button class="sheet-scrim" aria-label="关闭工作台" onclick={closeDock}></button>
+  <button class="sheet-scrim" aria-label={t('关闭工作台')} onclick={closeDock}></button>
   <div class="dock sheet" use:dragSheet={{ onClose: closeDock, handle: () => sheetHandle ?? null }}>
     <div class="grip-zone" bind:this={sheetHandle}>
       <span class="grip"></span>
@@ -278,7 +281,7 @@
             {#if (m.key === 'term' && dock.termLive && mView !== 'term') || (m.key === 'tasks' && bgLive && mView !== 'tasks')}<span class="dk-live"></span>{/if}
           </button>
         {/each}
-        <button class="chip-fold" aria-label="收起工作台" onclick={closeDock}>
+        <button class="chip-fold" aria-label={t('收起工作台')} onclick={closeDock}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 10l6 6 6-6"/></svg>
         </button>
       </div>

@@ -18,6 +18,7 @@
   import { dragClose, haptic } from "../../lib/touch.ts";
   import { pushLayer } from "../../lib/layers.ts";
   import { fade, slide } from "../../lib/motion.ts";
+  import { t, tc } from "../../lib/i18n.ts";
   import { nativeShellBrowser } from "../../lib/nativeShell.ts";
   import { collectTasks } from "../../lib/tasks.ts";
   import { currentJobs, jobMentions, refreshJobs } from "../../lib/jobs.svelte.ts";
@@ -44,25 +45,25 @@
   const uid = $props.id();
 
   const ALL_TOOLS: readonly { key: DockTool; label: string; icon: IconName; kbd: string }[] = [
-    { key: "tasks", label: "任务", icon: "tasks", kbd: "" },
-    { key: "review", label: "审阅", icon: "branch", kbd: "Ctrl+Shift+G" },
-    { key: "term", label: "终端", icon: "terminal", kbd: "Ctrl+`" },
-    { key: "browser", label: "浏览器", icon: "globe", kbd: "Ctrl+Shift+B" },
-    { key: "files", label: "文件", icon: "folder", kbd: "Ctrl+Shift+E" },
+    { key: "tasks", label: tc("dimensio", "任务"), icon: "tasks", kbd: "" },
+    { key: "review", label: t("审阅"), icon: "branch", kbd: "Ctrl+Shift+G" },
+    { key: "term", label: t("终端"), icon: "terminal", kbd: "Ctrl+`" },
+    { key: "browser", label: t("浏览器"), icon: "globe", kbd: "Ctrl+Shift+B" },
+    { key: "files", label: tc("dimensio", "文件"), icon: "folder", kbd: "Ctrl+Shift+E" },
   ];
   // 多用户服务端上没有命令行的账号（harness 租户实例报 tenant.shell=false）：不摆终端。
   // 服务端没有浏览器工具（这台机器没装 Chromium 系浏览器，app.info.tools 里没有 Browser）：不摆浏览器。
   const termOn = $derived(app.info?.tenant?.shell !== false);
   const browserOn = $derived(browserToolAvailable());
-  const TOOLS = $derived(ALL_TOOLS.filter((t) => (t.key !== "term" || termOn) && (t.key !== "browser" || browserOn)));
+  const TOOLS = $derived(ALL_TOOLS.filter((x) => (x.key !== "term" || termOn) && (x.key !== "browser" || browserOn)));
 
   // 面板作用域 = 当前工作空间（顶栏同一个字段）；chatId 给 API 层兜底
   const ws = $derived(app.config?.workspace ?? "");
   const chatId = $derived(app.chat.id ?? "");
 
-  function pick(t: DockTool) {
+  function pick(tool: DockTool) {
     haptic("light");
-    setDockTool(t);
+    setDockTool(tool);
   }
 
   // ── U11：后台命令按需拉（lib/jobs.svelte.ts）——换了会话 / 时间线上提到新的 job id / 某行跑完，就拉一次；
@@ -75,14 +76,14 @@
   const jobsLive = $derived(currentJobs().some((j) => j.state === "running"));
   $effect(() => {
     if (!jobsLive) return;
-    const t = setInterval(() => {
+    const timer = setInterval(() => {
       if (!document.hidden) void refreshJobs();
     }, 3000);
-    return () => clearInterval(t);
+    return () => clearInterval(timer);
   });
 
   // 标签上的在跑小点：只在没看着它的时候挂
-  const tasksLive = $derived(jobsLive || collectTasks(app.chat.timeline).some((t) => t.status === "running"));
+  const tasksLive = $derived(jobsLive || collectTasks(app.chat.timeline).some((x) => x.status === "running"));
   const live = $derived<Partial<Record<DockTool, boolean>>>({
     tasks: tasksLive && app.dockTool !== "tasks",
     browser: Boolean(app.browser) && app.dockTool !== "browser",
@@ -155,7 +156,7 @@
   {:else if !ws}
     <div class="wait">
       <Mark size={20} live />
-      <p>工作空间加载中…</p>
+      <p>{t("工作空间加载中…")}</p>
     </div>
   {:else}
     {#key ws}
@@ -171,7 +172,7 @@
       {:else}
         <div class="wait">
           <span class="wait-ic"><Icon name="folder" size={24} stroke={1.4} /></span>
-          <p>文件视图由 bridge 宿主提供；独立运行模式请直接用系统文件管理器打开工作空间</p>
+          <p>{t("文件视图由 bridge 宿主提供；独立运行模式请直接用系统文件管理器打开工作空间")}</p>
         </div>
       {/if}
     {/key}
@@ -187,23 +188,23 @@
 {/snippet}
 
 {#if docked}
-  <aside class="dock" aria-label="工作区">
+  <aside class="dock" aria-label={t("工作区")}>
     <div class="band">
       <DockTabs tools={TOOLS} value={app.dockTool} {live} idBase={uid} onpick={pick} />
-      <IconButton icon="close" label="收起工作区" size={32} onclick={closeDock} />
+      <IconButton icon="close" label={t("收起工作区")} size={32} onclick={closeDock} />
     </div>
     {@render body()}
   </aside>
 {:else}
   <div class="layer">
-    <button class="scrim" aria-label="收起工作区" tabindex="-1" onclick={closeDock} in:fade|global={{ duration: 220 }} out:fade|global={{ duration: 200 }}
+    <button class="scrim" aria-label={t("收起工作区")} tabindex="-1" onclick={closeDock} in:fade|global={{ duration: 220 }} out:fade|global={{ duration: 200 }}
     ></button>
-    <div class="sheet" role="dialog" aria-modal="true" aria-label="工作区" use:grab in:sheetIn|global out:sheetOut|global>
+    <div class="sheet" role="dialog" aria-modal="true" aria-label={t("工作区")} use:grab in:sheetIn|global out:sheetOut|global>
       <div class="grip-zone" bind:this={handle}>
         <span class="grip" aria-hidden="true"></span>
         <div class="band">
           <DockTabs tools={TOOLS} value={app.dockTool} {live} idBase={uid} onpick={pick} />
-          <IconButton icon="chevronD" label="收起工作区" size={40} iconSize={20} onclick={closeDock} />
+          <IconButton icon="chevronD" label={t("收起工作区")} size={40} iconSize={20} onclick={closeDock} />
         </div>
       </div>
       {@render body()}

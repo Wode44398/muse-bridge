@@ -6,6 +6,7 @@
 // 分屏是【不对称】的两格：一格是本页自己（chat.svelte.js 那个单例内核，session.id），另一格是
 // 同源 iframe 里的一份独立聊天页（?solo=<id>&pane=1，自带一套内核）。所以「两格对调」不用挪
 // 任何会话，只是把 iframe 那一格换到另一边（paneSide 翻面）。
+import { t, tc } from './i18n.js';
 
 // —— 项目显示顺序 ——
 // projects：服务端返回顺序（[0] 恒为默认项目，其余按最近更新）；order：用户排过的 id 序列。
@@ -60,10 +61,10 @@ export function splitDropPlan({ split, paneSide, blank, mainId, paneId, draggedI
 
 export function splitDropLabel(plan, side) {
   switch (plan.kind) {
-    case 'open': return '打开这个对话';
-    case 'split': return plan.side === 'left' ? '在左边分屏打开' : '在右边分屏打开';
-    case 'replace': return (side || plan.side) === 'left' ? '在左格打开' : '在右格打开';
-    case 'swap': return '左右对调';
-    default: return '已经开着';
+    case 'open': return tc('claude', '打开这个对话');
+    case 'split': return plan.side === 'left' ? t('在左边分屏打开') : t('在右边分屏打开');
+    case 'replace': return (side || plan.side) === 'left' ? t('在左格打开') : t('在右格打开');
+    case 'swap': return t('左右对调');
+    default: return t('已经开着');
   }
 }

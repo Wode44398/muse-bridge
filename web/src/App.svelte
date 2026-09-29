@@ -27,6 +27,7 @@
   import Settings from './components/settings/Settings.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import Toast from './components/Toast.svelte';
+  import { t } from './lib/i18n.js';
 
   // —— 单 agent 模式 ——
   const root = $derived(rootScreen());
@@ -75,8 +76,8 @@
   $effect(() => {
     if (!ui.booted) return;
     // 预挂载只挂这个身份开着的分页（没开的 agent 连挂载成本都不付）。
-    const t = setTimeout(() => { if (screenOn('claude')) mountClaude = true; }, 1600);
-    return () => clearTimeout(t);
+    const tm = setTimeout(() => { if (screenOn('claude')) mountClaude = true; }, 1600);
+    return () => clearTimeout(tm);
   });
 
   // agent 名单变了（管理员在设置「Agent」页开关、或在控制台改了这个人的授权）：服务端经总线推
@@ -96,7 +97,7 @@
     if (!ui.booted || s === 'home' || s === 'files') return;
     if (screenOn(s)) return;
     untrack(() => {
-      showToast('这个分页已被管理员关闭', 'err');
+      showToast(t('这个分页已被管理员关闭'), 'err');
       ui.screen = rootScreen();
     });
   });
@@ -191,7 +192,7 @@
 
 <!-- 离线模式提示条：连不上服务器、正浏览本地缓存时显示（pointer-events:none 不挡交互）。 -->
 {#if ui.offline}
-  <div class="offline-banner">离线 · 连不上服务器；可浏览本地缓存，恢复网络后自动重连</div>
+  <div class="offline-banner">{t('离线 · 连不上服务器；可浏览本地缓存，恢复网络后自动重连')}</div>
 {/if}
 
 <!-- 设置（宽屏对话框 / 手机整页），入口在侧栏账户卡或主页右上账户胶囊 -->

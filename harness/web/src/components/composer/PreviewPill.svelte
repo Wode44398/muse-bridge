@@ -8,6 +8,7 @@
   import { fade, pop, press } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -20,7 +21,7 @@
 
 <button
   class="pill"
-  title={pane.chat.preview ? `在工作区浏览器里打开 ${pane.chat.preview.url}` : "打开工作区浏览器"}
+  title={pane.chat.preview ? t("在工作区浏览器里打开 {url}", { url: pane.chat.preview.url }) : t("打开工作区浏览器")}
   use:press={{ scale: 0.96 }}
   onclick={open}
   in:pop|global={{ from: 0.9 }}
@@ -28,10 +29,10 @@
 >
   {#if pane.chat.preview}
     <span class="live" aria-hidden="true"></span>
-    <span>实时预览</span>
+    <span>{t("实时预览")}</span>
   {:else}
     <span class="ic"><Icon name="globe" size={15} /></span>
-    <span>Agent 浏览器</span>
+    <span>{t("Agent 浏览器")}</span>
   {/if}
   <span class="chev"><Icon name="chevronR" size={14} /></span>
 </button>

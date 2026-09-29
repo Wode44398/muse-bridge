@@ -3,6 +3,7 @@
   // 多图左右切换。点图片周围留白 / Esc 关闭；下标由父组件受控（Thread 持有 lb.index）。
   import { pushBackLayer } from '../lib/nav.js';
   import { swipeDismiss } from '../lib/motion.js';
+  import { t } from '../lib/i18n.js';
   let { items = [], index = 0, onClose, onIndex } = $props();
 
   // 下滑关闭（相册类查看器的通用手势，此前只能点关闭钮）：位移 1:1 跟手，罩层随
@@ -48,17 +49,17 @@
 {#if cur}
   <div class="lb" use:dragClose style:--lb-p={dragP}>
     <!-- 背景：点击关闭（在对话框之下，点到图片周围留白即触发） -->
-    <button class="lb-scrim" aria-label="关闭" onclick={close}></button>
+    <button class="lb-scrim" aria-label={t('关闭')} onclick={close}></button>
 
-    <button class="lb-close" aria-label="关闭" onclick={close}>
+    <button class="lb-close" aria-label={t('关闭')} onclick={close}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
     </button>
 
     {#if many && index > 0}
-      <button class="lb-nav left" aria-label="上一张" onclick={prev}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <button class="lb-nav left" aria-label={t('上一张')} onclick={prev}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     {/if}
     {#if many && index < items.length - 1}
-      <button class="lb-nav right" aria-label="下一张" onclick={next}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
+      <button class="lb-nav right" aria-label={t('下一张')} onclick={next}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
     {/if}
 
     <div class="lb-dialog" style:transform={dragY > 0 ? `translateY(${dragY}px) scale(${1 - dragP * 0.08})` : ''}>
@@ -68,7 +69,7 @@
       <div class="lb-cap">
         <span class="lb-name">{cur.name}{#if many}<span class="lb-count"> · {index + 1}/{items.length}</span>{/if}</span>
         {#if cur.url}
-          <a class="lb-dl" href={cur.url} download={cur.name} aria-label="下载">
+          <a class="lb-dl" href={cur.url} download={cur.name} aria-label={t('下载')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>
           </a>
         {/if}

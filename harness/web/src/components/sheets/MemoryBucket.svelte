@@ -8,6 +8,7 @@
   import { readMemoryNote, type MemoryBucket, type MemoryNote, type MemoryOverviewItem } from "../../lib/api.ts";
   import { haptic } from "../../lib/touch.ts";
   import { collapse, rise, smoothHeight } from "../../lib/motion.ts";
+  import { t, tr } from "../../lib/i18n.ts";
   import Group from "../ui/Group.svelte";
   import Icon from "../ui/Icon.svelte";
   import Measure from "../ui/Measure.svelte";
@@ -17,8 +18,8 @@
   import MemoryStats from "./MemoryStats.svelte";
   import MemoryAxis from "./MemoryAxis.svelte";
   import MemoryLifeline from "./MemoryLifeline.svelte";
-  import { CONF_LABEL, fmtDate, issuesOf, originText, STATUS_LABEL, TYPE_LABEL } from "./memory-text.ts";
-  import { byLane, countLanes, fmtCount, glyphOf, laneOf, LANE_TEXT, LANES, lifeOf, spanOf, type Lane } from "./memory-viz.ts";
+  import { CONF_LABEL, fmtDate, issuesOf, LANE_TEXT, originText, STATUS_LABEL, TYPE_LABEL } from "./memory-text.ts";
+  import { byLane, countLanes, fmtCount, glyphOf, laneOf, LANES, lifeOf, spanOf, type Lane } from "./memory-viz.ts";
 
   let {
     bucket,
@@ -74,7 +75,7 @@
       picked = note;
       openId = m.id;
     } catch (e: any) {
-      if (my === readSeq) toast(`读取失败：${e?.message ?? e}`);
+      if (my === readSeq) toast(t("读取失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     } finally {
       if (my === readSeq) reading = null;
     }
@@ -100,10 +101,10 @@
 <div class="bucket" bind:this={root}>
   {#if !bucket.items.length}
     <Empty
-      title={isGlobal ? "还没有全局记忆" : "还没有记忆"}
+      title={isGlobal ? t("还没有全局记忆") : t("还没有记忆")}
       text={isGlobal
-        ? "模型在任何项目里记下的「你是谁、这台机器怎么用」会先放在这里等你确认，确认了才进每个项目的对话。"
-        : "对话里模型觉得以后用得上、又没法从代码里看出来的事（决定、原因、偏好、踩过的坑），会记在这里。"}
+        ? t("模型在任何项目里记下的「你是谁、这台机器怎么用」会先放在这里等你确认，确认了才进每个项目的对话。")
+        : t("对话里模型觉得以后用得上、又没法从代码里看出来的事（决定、原因、偏好、踩过的坑），会记在这里。")}
     />
   {:else}
     <MemoryStats {counts} picked={lane} onpick={(l) => { lane = l; closeRow(); }} />
@@ -113,14 +114,19 @@
     <div class="print">
       {#if isGlobal}
         <div class="meter">
-          <span class="lbl">生效的全局记忆进每个对话的提示</span>
-          <span class="val"><b>{fmtCount(used)}</b> / {fmtCount(budget)} 字</span>
+          <span class="lbl">{t("生效的全局记忆进每个对话的提示")}</span>
+          <span class="val"><b>{fmtCount(used)}</b> / {t("{n} 字", { n: fmtCount(budget) })}</span>
         </div>
-        <Measure value={fill} tone={fill >= 0.85 ? "warn" : "accent"} label="全局记忆占用的提示字数" />
+        <Measure value={fill} tone={fill >= 0.85 ? "warn" : "accent"} label={t("全局记忆占用的提示字数")} />
       {:else if counts.active}
-        <p>生效的 <b>{counts.active}</b> 条以索引行进{bucket.kind === "quick" ? "这只快照桶" : "这个项目"}每个新对话的提示，共 <b>{fmtCount(bucket.promptChars)}</b> 字；全文要用时再召回。</p>
+        <!-- 两个数加粗：整句一键（英文语序不同），{@html} 插进去的只有数字 -->
+        <p>
+          {@html bucket.kind === "quick"
+            ? t("生效的 <b>{n}</b> 条以索引行进这只快照桶每个新对话的提示，共 <b>{chars}</b> 字；全文要用时再召回。", { n: counts.active, chars: fmtCount(bucket.promptChars) })
+            : t("生效的 <b>{n}</b> 条以索引行进这个项目每个新对话的提示，共 <b>{chars}</b> 字；全文要用时再召回。", { n: counts.active, chars: fmtCount(bucket.promptChars) })}
+        </p>
       {:else}
-        <p>还没有生效的记忆：{bucket.kind === "quick" ? "这只快照桶" : "这个项目"}的新对话提示里没有它们。</p>
+        <p>{bucket.kind === "quick" ? t("还没有生效的记忆：这只快照桶的新对话提示里没有它们。") : t("还没有生效的记忆：这个项目的新对话提示里没有它们。")}</p>
       {/if}
     </div>
     {/if}
@@ -154,7 +160,7 @@
                   {/if}
                   {#if m.uses}
                     <span class="sep" aria-hidden="true">·</span>
-                    <span title="最近一次 {fmtDate(m.lastUsed)}">召回 {m.uses} 次</span>
+                    <span title={t("最近一次 {date}", { date: fmtDate(m.lastUsed) })}>{t("召回 {n} 次", { n: m.uses })}</span>
                   {/if}
                   {#if warns}<span class="warns">⚠ {warns}</span>{/if}
                   {#if m.updated}<span class="date">{fmtDate(m.updated)}</span>{/if}
@@ -190,12 +196,12 @@
 
   <p class="foot">
     {#if isGlobal}
-      全局记忆只收「你是谁、这台机器怎么用」这类每个项目都适用的事实，生效的进所有项目的对话提示，所以合计有长度上限。模型存的一律先放在「待确认」，你确认了才生效。
+      {t("全局记忆只收「你是谁、这台机器怎么用」这类每个项目都适用的事实，生效的进所有项目的对话提示，所以合计有长度上限。模型存的一律先放在「待确认」，你确认了才生效。")}
     {:else}
-      只有「生效」的记忆会进新对话的提示；模型自己存的先放在「待确认」，你确认了才生效。「被隔离」的写着生效，但过期了、挂靠的文件不在了或和同主题的冲突，修好或重新确认才回来。驳回的条目模型不会再用，也存不回来；删除和改写前的旧版留在记忆目录的 .history 里。
+      {t("只有「生效」的记忆会进新对话的提示；模型自己存的先放在「待确认」，你确认了才生效。「被隔离」的写着生效，但过期了、挂靠的文件不在了或和同主题的冲突，修好或重新确认才回来。驳回的条目模型不会再用，也存不回来；删除和改写前的旧版留在记忆目录的 .history 里。")}
     {/if}
     {#if bucket.items.some((m) => m.uses)}
-      「召回」是这条记忆的全文被拉进对话的次数（开跑时自动找来的，或模型点名读的）。
+      {t("「召回」是这条记忆的全文被拉进对话的次数（开跑时自动找来的，或模型点名读的）。")}
     {/if}
   </p>
 </div>
@@ -215,7 +221,8 @@
   .print p {
     margin: 0;
   }
-  .print b {
+  /* 生效条数那一句是 {@html} 进来的：里面的 <b> 要写 :global */
+  .print :global(b) {
     font-weight: 600;
     color: var(--text);
   }

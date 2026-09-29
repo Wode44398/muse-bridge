@@ -2,11 +2,12 @@
   // lib/toast.svelte.js 的渲染层：底部居中一条胶囊，不拦点击。
   import { fade, fly } from 'svelte/transition';
   import { toast } from '../lib/toast.svelte.js';
+  import { tr } from '../lib/i18n.js';
 </script>
 
 {#if toast.text}
   <div class="toast" class:err={toast.kind === 'err'} role="status" aria-live="polite"
-    in:fly={{ y: 12, duration: 180 }} out:fade={{ duration: 160 }}>{toast.text}</div>
+    in:fly={{ y: 12, duration: 180 }} out:fade={{ duration: 160 }}>{tr(toast.text)}</div>
 {/if}
 
 <style>

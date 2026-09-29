@@ -27,6 +27,7 @@
   import { handleCopyClick } from "../../lib/copy-click.ts";
   import { app, type AgentRun, type AgentStep, type ToolItem } from "../../lib/state.svelte.ts";
   import { STATUS_LABEL, fmtTokens, modelShort, runElapsed, type TaskStatus } from "../../lib/tasks.ts";
+  import { t, tc, tr } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
   import Mark from "../brand/Mark.svelte";
 
@@ -88,13 +89,13 @@
     return () => clearInterval(id);
   });
   const statusLine = $derived.by(() => {
-    const parts = ["子 agent", STATUS_LABEL[status]];
+    const parts = [t("子 agent"), STATUS_LABEL[status]];
     const tk = fmtTokens(run.tokens || (d ? Number(d.inputTokens ?? 0) + Number(d.outputTokens ?? 0) : 0));
     if (tk) parts.push(`${tk} tok`);
     const calls = run.toolCalls ?? d?.toolCalls ?? steps.length;
-    if (calls) parts.push(`${calls} 次工具调用`);
-    const t = runElapsed(run, running, now);
-    if (t) parts.push(t);
+    if (calls) parts.push(t("{n} 次工具调用", { n: calls }));
+    const el = runElapsed(run, running, now);
+    if (el) parts.push(el);
     return parts.join(" · ");
   });
   const liveStep = $derived(running && steps.length ? steps[steps.length - 1] : null);
@@ -110,7 +111,7 @@
   {#if model}
     <p class="model">
       <!-- 分隔符写成表达式：{#if} 块里的前导空格会被 Svelte 吞掉 -->
-      模型 <span class="mono t2" title={model}>{modelShort(model)}</span>{run.tier ? ` · ${run.tier}` : ""}{run.cached ? " · 来自日志" : ""}
+      {t("模型")} <span class="mono t2" title={model}>{modelShort(model)}</span>{run.tier ? ` · ${run.tier}` : ""}{run.cached ? ` · ${t("来自日志")}` : ""}
     </p>
   {/if}
   {#if prompt}
@@ -126,36 +127,36 @@
           <span class="sic"><Icon name={m.icon} size={13} /></span>
           <span class="verb">{m.verb}</span>
           <span class="arg">{s.arg}</span>
-          {#if s.summary}<span class="sum" title={s.summary}>{s.summary}</span>{/if}
+          {#if s.summary}<span class="sum" title={tr(s.summary)}>{tr(s.summary)}</span>{/if}
         </div>
       {/each}
     </div>
   {/if}
 
   {#if resultText}
-    <div class="sec">结构化结果</div>
+    <div class="sec">{t("结构化结果")}</div>
     <pre class="code">{resultText}</pre>
   {/if}
   {#if text}
-    <div class="sec">{running ? "进行中" : resultText ? "说明" : "答复"}</div>
+    <div class="sec">{running ? t("进行中") : resultText ? tc("dimensio", "说明") : t("答复")}</div>
     <div class="md answer" use:copyDelegate>{@html renderMarkdown(text)}</div>
   {/if}
-  {#if error}<p class="err">{error}</p>{/if}
+  {#if error}<p class="err">{tr(error)}</p>{/if}
 
   {#if running}
     <div class="live">
       <Mark size={14} live />
-      <span class="hx-shimmer">{liveStep ? `第 ${steps.length} 步 · ${toolMeta(liveStep.name).verb}` : "启动中…"}</span>
+      <span class="hx-shimmer">{liveStep ? t("第 {n} 步 · {x}", { n: steps.length, x: toolMeta(liveStep.name).verb }) : t("启动中…")}</span>
     </div>
   {:else if needFetch && (detail.state === "loading" || detail.state === "idle")}
-    <div class="note"><Mark size={14} live /><span>正在读取转录…</span></div>
+    <div class="note"><Mark size={14} live /><span>{t("正在读取转录…")}</span></div>
   {:else if !steps.length && !text && !resultText && !error}
     <div class="note">
       {needFetch && detail.state === "none"
-        ? "这次运行没有留下明细（旧版本的运行，或日志已清理）"
+        ? t("这次运行没有留下明细（旧版本的运行，或日志已清理）")
         : needFetch && detail.state === "error"
-          ? "读取转录失败"
-          : "还没有活动"}
+          ? t("读取转录失败")
+          : t("还没有活动")}
     </div>
   {/if}
 

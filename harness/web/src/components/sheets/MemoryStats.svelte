@@ -2,8 +2,10 @@
   // 四个数（K11）：待确认 · 被隔离 · 生效 · 已退场。它们同时是整块面板的图例——字形与点阵、时间线、列表行上的一致。
   // 点一个 = 只看这一类（点阵里别的类淡下去 / 列表只留这一组），再点一次还原。0 的那一格照样占位（不跳版），数字退成辅助色。
   import { haptic } from "../../lib/touch.ts";
+  import { t } from "../../lib/i18n.ts";
   import MemoryGlyph from "./MemoryGlyph.svelte";
-  import { fmtCount, LANE_GLYPH, LANE_TEXT, LANES, type Lane } from "./memory-viz.ts";
+  import { fmtCount, LANE_GLYPH, LANES, type Lane } from "./memory-viz.ts";
+  import { LANE_TEXT } from "./memory-text.ts";
 
   let {
     counts,
@@ -18,7 +20,7 @@
   }
 </script>
 
-<div class="stats" class:picking={picked !== null} role="group" aria-label="记忆按状态计数">
+<div class="stats" class:picking={picked !== null} role="group" aria-label={t("记忆按状态计数")}>
   {#each LANES as lane (lane)}
     {@const n = counts[lane]}
     <button

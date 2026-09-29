@@ -9,6 +9,7 @@
   import { dock, toggleDockView, closeDock, ensureDockMeta, dockToolOk, DOCK_TOOLS } from '../../lib/dock.svelte.js';
   import { bgHoldNow } from '../../lib/chat.svelte.js';
   import { dockIcon } from '../../lib/dockIcons.js';
+  import { t } from '../../lib/i18n.js';
   // top：宿主算好的 top（TopBar 按 sat 属性给；docked 时由工作台带内的规则定，不用它）
   // split：分屏里的一格；onClose 给了就在末尾多一颗 ✕（关掉这一格）
   let { top = '10px', split = false, onClose = null, docked = false } = $props();
@@ -16,7 +17,7 @@
 
   const BAR = ['term', 'review', 'files'];            // 标题栏常驻三颗，其余收进 ⋮
   const MORE = ['tasks'];
-  const LABEL = Object.fromEntries(DOCK_TOOLS.map((t) => [t.key, t]));
+  const LABEL = Object.fromEntries(DOCK_TOOLS.map((x) => [x.key, x]));
   const barTools = $derived(BAR.filter(dockToolOk));
   const moreTools = $derived(MORE.filter(dockToolOk));
   const isOn = (k) => dock.open && dock.views.includes(k);
@@ -24,7 +25,7 @@
   const bgLive = $derived(!!bgHoldNow());
   const live = (k) => !isOn(k) && ((k === 'term' && dock.termLive) || (k === 'tasks' && bgLive));
   const moreLive = $derived(moreTools.some(live));
-  const tip = (k) => LABEL[k].label + (LABEL[k].kbd ? `（${LABEL[k].kbd}）` : '');
+  const tip = (k) => (LABEL[k].kbd ? t('{label}（{kbd}）', { label: LABEL[k].label, kbd: LABEL[k].kbd }) : LABEL[k].label);
 
   // 开关组要知道这个身份有没有 shell（终端给不给）——meta 在工作台没开时也得有
   $effect(() => { if (dock.ws && !dock.meta) ensureDockMeta(); });
@@ -59,13 +60,13 @@
       {#if live(k)}<span class="live-dot"></span>{/if}
     </button>
   {/each}
-  <button class="tb" class:on={moreOpen} aria-label="更多" aria-haspopup="menu" aria-expanded={moreOpen} title="更多" onclick={() => { moreOpen = !moreOpen; }}>
+  <button class="tb" class:on={moreOpen} aria-label={t('更多')} aria-haspopup="menu" aria-expanded={moreOpen} title={t('更多')} onclick={() => { moreOpen = !moreOpen; }}>
     {@html dockIcon('more')}
     {#if moreLive && !moreOpen}<span class="live-dot"></span>{/if}
   </button>
   {#if onClose}
     <span class="tb-sep" aria-hidden="true"></span>
-    <button class="tb x" aria-label="关闭这一格" title="关闭这一格" onclick={onClose}>{@html dockIcon('close')}</button>
+    <button class="tb x" aria-label={t('关闭这一格')} title={t('关闭这一格')} onclick={onClose}>{@html dockIcon('close')}</button>
   {/if}
   {#if moreOpen}
     <div class="tb-menu" role="menu">
@@ -81,12 +82,12 @@
       <div class="mi-sep" role="separator"></div>
       <button class="mi" role="menuitem" onclick={() => { moreOpen = false; toggleTheme(); }}>
         <span class="mi-ic">{@html dockIcon(ui.theme === 'light' ? 'moon' : 'sun')}</span>
-        <span class="mi-lab">{ui.theme === 'light' ? '深色模式' : '浅色模式'}</span>
+        <span class="mi-lab">{ui.theme === 'light' ? t('深色模式') : t('浅色模式')}</span>
       </button>
       {#if dock.open && dock.views.length > 1}
         <button class="mi" role="menuitem" onclick={() => { moreOpen = false; closeDock(); }}>
           <span class="mi-ic">{@html dockIcon('close')}</span>
-          <span class="mi-lab">收起全部面板</span>
+          <span class="mi-lab">{t('收起全部面板')}</span>
         </button>
       {/if}
     </div>

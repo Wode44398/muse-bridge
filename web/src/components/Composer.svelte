@@ -16,6 +16,7 @@
   import { fileToBase64, filesFromInput, removeAttachment, uploadAttachment } from '../lib/attachments.js';
   import { untrack } from 'svelte';
   import { draft, registerComposerReader } from '../lib/composerBridge.svelte.js';
+  import { t } from '../lib/i18n.js';
 
   let { placeholder = 'Type / for skills' } = $props();
   let field = $state();
@@ -32,10 +33,10 @@
   $effect(() => {
     const n = draft.nonce;
     if (!n || !field) return;
-    const t = untrack(() => draft.text);
-    if (!t) return;
+    const txt = untrack(() => draft.text);
+    if (!txt) return;
     untrack(() => { draft.text = ''; });
-    field.innerText = t;
+    field.innerText = txt;
     onInput();   // 「/」菜单状态跟着重算（预填的是 /xxx 也要弹菜单）
     field.focus();
     placeCaretEnd(field);
@@ -68,7 +69,9 @@
   const modelMismatch = $derived(!!(sessionModel && sessionModel.id) && sessionModel.id !== curModel);
   // from 非空 = 安全栅门换来的；为空 = 服务端夹紧后的实况（快照禁 Fable 之类），别把「安全栅门」扣上去
   const modelTitle = $derived(modelMismatch
-    ? '本会话' + (sessionModel.from ? '已切换到 ' + nameOf(modelList, sessionModel.id) + '（安全栅门自动回退）' : '实际使用 ' + nameOf(modelList, sessionModel.id)) + '；已选 ' + modelName + '，下一轮起生效'
+    ? (sessionModel.from
+      ? t('本会话已切换到 {model}（安全栅门自动回退）；已选 {selected}，下一轮起生效', { model: nameOf(modelList, sessionModel.id), selected: modelName })
+      : t('本会话实际使用 {model}；已选 {selected}，下一轮起生效', { model: nameOf(modelList, sessionModel.id), selected: modelName }))
     : '');
   // effort 芯片显示【实际生效】档位（SDK 0.3.257：Stop hook 回报本轮真正发给 API 的档，经组织
   // 上限 / 模型不支持降档之后）——但用户刚改过选择（effortAt 更新）就先显示选择，等下一轮
@@ -82,7 +85,7 @@
   const effortChosen = $derived(settings.effort || claudeEffortFallback(caps.data, curModel));
   const effortName = $derived(nameOf(effortList, effortApplied || effortChosen));
   const effortMismatch = $derived(!!effortApplied && effortApplied !== effortChosen);
-  const effortTitle = $derived(effortMismatch ? '已选 ' + nameOf(effortList, effortChosen) + '，本会话实际生效 ' + effortName : '');
+  const effortTitle = $derived(effortMismatch ? t('已选 {selected}，本会话实际生效 {active}', { selected: nameOf(effortList, effortChosen), active: effortName }) : '');
   // fast mode 生效中（开关开 + 当前模型支持）→ 芯片显示「Opus 5 · Fast」（官方同款）
   const fastOn = $derived(settings.fast && (caps.data?.claude?.fast || []).includes(settings.model || claudeDefaultModel(caps.data)));
 
@@ -121,9 +124,9 @@
     empty = !raw.trim();   // trim 连 contenteditable 的 &nbsp; 填充一起去掉
     // 删空后 contenteditable 常留一个 <br>：:empty 不再命中，占位文字（含输入建议）就出不来——没字了就清干净。
     if (empty && field && field.firstChild && field.textContent === '') field.replaceChildren();
-    const t = raw.replace(/ /g, ' ');
-    const m = /^\s*\/([^\s/]*)\s*$/.exec(t);
-    const q = m && !/\n/.test(t.trim()) ? m[1] : null;
+    const txt = raw.replace(/ /g, ' ');
+    const m = /^\s*\/([^\s/]*)\s*$/.exec(txt);
+    const q = m && !/\n/.test(txt.trim()) ? m[1] : null;
     if (q !== slashQ) slashIdx = 0;
     slashQ = q;
     if (q != null) loadCommands();
@@ -146,14 +149,14 @@
   async function addFiles(fileList) {
     for (const f of [...(fileList || [])]) {
       if (!f) continue;
-      if (f.size > 20_000_000) { uiAlert((f.name || '文件') + '：超过 20MB，暂不支持'); continue; }
+      if (f.size > 20_000_000) { uiAlert(f.name ? t('{name}：超过 20MB，暂不支持', { name: f.name }) : t('文件：超过 20MB，暂不支持')); continue; }
       // 先放占位（pending）再上传——上传期间附件先可见，用户点发送会被 uploading 拦住。
       const isImg = (f.type || '').startsWith('image/');
       const name = f.name || (isImg ? 'image.png' : 'file');   // 粘贴的截图常无文件名，兜底
       await uploadAttachment(compose.attachments, f, {
         draft: { path: null, name, kind: isImg ? 'image' : 'file', url: isImg ? URL.createObjectURL(f) : null, pending: true },
         upload: async (file) => api.upload(name, await fileToBase64(file)),
-        onError: () => uiAlert('上传失败：' + name),
+        onError: () => uiAlert(t('上传失败：{name}', { name })),
       });
     }
   }
@@ -194,7 +197,7 @@
       // 它会把主线程整个挡住（自动化里更是直接挂死），而这只是条附带说明。
       live.note = stat ? skipNote(stat) : '';
     } catch {
-      uiAlert('文件夹上传失败：' + name);
+      uiAlert(t('文件夹上传失败：{name}', { name }));
       compose.attachments = compose.attachments.filter((x) => x !== live);
     }
   }
@@ -232,11 +235,11 @@
     if (uploading) return;   // 附件还在上传——发送按钮已是禁用态，等传完再发
     // innerText（非 textContent）：保留 contenteditable 里 <br>/<div> 代表的换行，
     // 多行 prompt / 粘贴的代码不再被压成一行。  是 contenteditable 的填充空格。
-    const t = (field?.innerText || '').replace(/ /g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-    if ((!t && !compose.attachments.length) || busyNow) return;
+    const txt = (field?.innerText || '').replace(/ /g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+    if ((!txt && !compose.attachments.length) || busyNow) return;
     field.textContent = '';
     empty = true;
-    send(t);
+    send(txt);
   }
   // 触屏（手机软键盘没有 Shift）：Enter = 换行，发送靠按钮——与 claude.ai 移动端一致。
   // 桌面保持 Enter 发送 / Shift+Enter 换行。
@@ -264,10 +267,10 @@
     if (dt.files && dt.files.length) files.push(...dt.files);
     else if (dt.items) { for (const it of dt.items) if (it.kind === 'file') { const f = it.getAsFile(); if (f) files.push(f); } }
     if (files.length) { e.preventDefault(); addFiles(files); return; }
-    const t = dt.getData('text/plain');
-    if (t == null) return;
+    const txt = dt.getData('text/plain');
+    if (txt == null) return;
     e.preventDefault();
-    try { document.execCommand('insertText', false, t); } catch {}
+    try { document.execCommand('insertText', false, txt); } catch {}
   }
 </script>
 
@@ -275,7 +278,7 @@
   {#if dragOver}
     <div class="drop-veil">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M8 8l4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-      <span>拖到此处添加附件 · 文件夹会整个挂载</span>
+      <span>{t('拖到此处添加附件 · 文件夹会整个挂载')}</span>
     </div>
   {/if}
   {#if compose.attachments.length}
@@ -288,13 +291,13 @@
             <span class="att-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.2c0-1.5 1.2-2.7 2.7-2.7h3.4l2 2.3h6.2c1.5 0 2.7 1.2 2.7 2.7v8.3c0 1.5-1.2 2.7-2.7 2.7H6.2c-1.5 0-2.7-1.2-2.7-2.7z"/></svg></span>
             <span class="att-col">
               <span class="att-name">{a.name}</span>
-              <span class="att-sub">{a.pending ? `上传中 ${Math.round((a.prog || 0) * 100)}%` : a.count == null ? '本机引用 · 按需读取' : `${a.count} 个文件 · 按需读取${a.note ? ' · ' + a.note : ''}`}</span>
+              <span class="att-sub">{a.pending ? t('上传中 {pct}%', { pct: Math.round((a.prog || 0) * 100) }) : a.count == null ? t('本机引用 · 按需读取') : t('{n} 个文件 · 按需读取{note}', { n: a.count, note: a.note ? ' · ' + a.note : '' })}</span>
             </span>
           {:else}
             <span class="att-name">{a.name}</span>
           {/if}
           {#if a.pending && a.kind !== 'folder'}<span class="att-spin"></span>{/if}
-          <button class="att-x" aria-label="移除" onclick={() => removeAtt(a)}>×</button>
+          <button class="att-x" aria-label={t('移除')} onclick={() => removeAtt(a)}>×</button>
         </div>
       {/each}
     </div>
@@ -305,25 +308,25 @@
     <div class="field" class:sugg={showSugg} bind:this={field} contenteditable="true" data-ph={showSugg ? suggestion : placeholder} role="textbox" tabindex="0" aria-multiline="true" onkeydown={onKey} oninput={onInput} onpaste={onPaste} onblur={() => setTimeout(() => (slashQ = null), 120)}></div>
     {#if showSugg}
       <!-- mousedown 不抢焦点：桌面上点键帽等同按 Tab；手机没有 Tab 键，这是唯一入口 -->
-      <button class="sg-key" type="button" tabindex="-1" title="填入建议（Tab）· Esc 收起" aria-label={'填入建议：' + suggestion} onmousedown={(e) => e.preventDefault()} onclick={acceptSuggestion}>{touchUI ? '填入' : 'Tab'}</button>
+      <button class="sg-key" type="button" tabindex="-1" title={t('填入建议（Tab）· Esc 收起')} aria-label={t('填入建议：{text}', { text: suggestion })} onmousedown={(e) => e.preventDefault()} onclick={acceptSuggestion}>{touchUI ? t('填入') : 'Tab'}</button>
     {/if}
   </div>
 
   <div class="toolbar">
     <div class="left">
       <div class="plus-wrap">
-        <button class="tbtn plus" bind:this={plusBtn} aria-label="附件与功能" onclick={toggleMenu}>
+        <button class="tbtn plus" bind:this={plusBtn} aria-label={t('附件与功能')} onclick={toggleMenu}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
         {#if menuOpen}<AddMenu dir={menuDir} onClose={() => (menuOpen = false)} onPickFiles={pickFiles} onPickFolder={pickFolder} />{/if}
       </div>
       {#if settings.research}
-        <button class="chip" aria-label="Research 已开启" onclick={toggleMenu}>
+        <button class="chip" aria-label={t('Research 已开启')} onclick={toggleMenu}>
           <svg viewBox="0 0 20 20" fill="currentColor"><path d={ICON_RESEARCH} /></svg>
         </button>
       {/if}
       {#if settings.style !== 'normal'}
-        <button class="chip" aria-label="回复风格已开启" onclick={toggleMenu}>
+        <button class="chip" aria-label={t('回复风格已开启')} onclick={toggleMenu}>
           <svg viewBox="0 0 20 20" fill="currentColor"><path d={ICON_FEATHER} /></svg>
         </button>
       {/if}
@@ -341,9 +344,9 @@
         {#if effortOpen}<EffortPanel onClose={() => (effortOpen = false)} dir={effortDir} />{/if}
       </div>
       {#if busyNow}
-        <button class="submit stop" aria-label="停止生成" onclick={stop}><svg viewBox="0 0 20 20" width="13" height="13"><rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor"/></svg></button>
+        <button class="submit stop" aria-label={t('停止生成')} onclick={stop}><svg viewBox="0 0 20 20" width="13" height="13"><rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor"/></svg></button>
       {:else}
-        <button class="submit" aria-label={uploading ? '附件上传中' : '发送'} disabled={uploading} onclick={submit}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10 4 15l5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg></button>
+        <button class="submit" aria-label={uploading ? t('附件上传中') : t('发送')} disabled={uploading} onclick={submit}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10 4 15l5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg></button>
       {/if}
     </div>
   </div>
@@ -360,6 +363,7 @@
   .drop-veil { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
     border-radius: 24px; border: 2px dashed var(--serif); background: var(--card); color: var(--serif); font-size: 14px; pointer-events: none; }
   .drop-veil svg { width: 26px; height: 26px; }
+  .drop-veil span { text-align: center; padding: 0 16px; }   /* 英文较长会折行：折行时居中 */
   .attachments { display: flex; flex-wrap: wrap; gap: 7px; padding: 2px 6px 10px; }
   .att { position: relative; display: flex; align-items: center; height: 52px; border-radius: 12px; overflow: hidden; background: var(--hover); }
   .att.img { width: 52px; }
@@ -370,13 +374,13 @@
   .att-x::before { content: ''; position: absolute; inset: -8px; }
   .att.pending { opacity: .55; }
   /* 挂载的文件夹：图标 + 两行（名字 / 文件数·上传进度）——与图片、单文件卡区分开 */
-  .att.dir { gap: 9px; padding: 0 14px 0 11px; }
+  .att.dir { gap: 9px; padding: 0 14px 0 11px; max-width: 100%; }   /* 副行（英文更长）过长时收进卡片、省略号 */
   .att.dir.pending { opacity: 1; }              /* 进度写在副行里，不靠整块变淡表达 */
   .att-ic { flex: none; width: 22px; height: 22px; color: var(--serif); }
   .att-ic svg { width: 100%; height: 100%; display: block; }
   .att-col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .att.dir .att-name { padding: 0; }
-  .att-sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  .att-sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .att-spin { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; animation: attspin .8s linear infinite; }
   @keyframes attspin { to { transform: rotate(360deg); } }
   .submit:disabled { opacity: .45; }

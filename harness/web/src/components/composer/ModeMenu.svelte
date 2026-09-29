@@ -24,6 +24,7 @@
   import MenuSep from "../ui/MenuSep.svelte";
   import IconButton from "../ui/IconButton.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -35,14 +36,14 @@
 
   type Mode = "auto" | "read-only" | "plan";
   const MODES: { id: Mode; icon: IconName; label: string; note: string }[] = [
-    { id: "auto", icon: "shield", label: "自主执行", note: "直接执行。规则可把个别高危调用改成每次问我。" },
-    { id: "read-only", icon: "eye", label: "只读", note: "只放行读取类工具，写文件与执行命令一律拒绝。" },
-    { id: "plan", icon: "todo", label: "先出计划", note: "只读研究 → 提交计划 → 你批准后当场转自主并开工。" },
+    { id: "auto", icon: "shield", label: t("自主执行"), note: t("直接执行。规则可把个别高危调用改成每次问我。") },
+    { id: "read-only", icon: "eye", label: t("只读"), note: t("只放行读取类工具，写文件与执行命令一律拒绝。") },
+    { id: "plan", icon: "todo", label: t("先出计划"), note: t("只读研究 → 提交计划 → 你批准后当场转自主并开工。") },
   ];
   // 整机是默认（09-26 的产品决定）；仅工作空间是给这个对话拉闸
   const SCOPES: { id: AccessMode; icon: IconName; label: string; note: string }[] = [
-    { id: "full", icon: "monitor", label: "整机可访问", note: "可用绝对路径读写工作空间以外的文件（密钥文件始终封锁）。" },
-    { id: "workspace", icon: "folder", label: "仅工作空间", note: "路径一越界就拦下，防误操作。" },
+    { id: "full", icon: "monitor", label: t("整机可访问"), note: t("可用绝对路径读写工作空间以外的文件（密钥文件始终封锁）。") },
+    { id: "workspace", icon: "folder", label: t("仅工作空间"), note: t("路径一越界就拦下，防误操作。") },
   ];
 
   const current = $derived(permissionMode(pane.chat));
@@ -80,8 +81,8 @@
   }
 </script>
 
-<Popover {anchor} {onclose} minWidth={284} maxWidth={340} label="运行档位、访问范围与目标">
-  <MenuLabel text="运行档位" />
+<Popover {anchor} {onclose} minWidth={284} maxWidth={340} label={t("运行档位、访问范围与目标")}>
+  <MenuLabel text={t("运行档位")} />
   {#each MODES as m (m.id)}
     <MenuItem icon={m.icon} label={m.label} description={m.note} checked={m.id === current} onclick={() => pick(m.id)} />
   {/each}
@@ -90,10 +91,10 @@
     <MenuSep />
     <MenuItem
       icon="target"
-      label="目标模式"
+      label={t("目标模式")}
       description={goal.on
-        ? "开着：这条消息就是目标，没达成会自动一轮轮接着做；输入框上方可以给验证命令、定轮数。"
-        : "这条消息当作目标：没达成就自动一轮轮接着做（可以给一条验证命令，过了才算达成）。"}
+        ? t("开着：这条消息就是目标，没达成会自动一轮轮接着做；输入框上方可以给验证命令、定轮数。")
+        : t("这条消息当作目标：没达成就自动一轮轮接着做（可以给一条验证命令，过了才算达成）。")}
       checked={goal.on}
       onclick={toggleGoal}
     />
@@ -101,18 +102,18 @@
 
   {#if hasScope}
     <MenuSep />
-    <MenuLabel text="访问范围" />
+    <MenuLabel text={t("访问范围")} />
     {#each SCOPES as s (s.id)}
       <MenuItem icon={s.icon} label={s.label} description={s.note} checked={s.id === scope} onclick={() => pickScope(s.id)} />
     {/each}
     {#if scope === "workspace" && roots.length}
       <!-- P13（X18）：越界读时在权限卡上点「本会话都允许」记下的目录；× 收回（菜单不关） -->
       <div class="roots" transition:collapse>
-        <p class="roots-t">本会话还能读这些工作区外的目录（只读）</p>
+        <p class="roots-t">{t("本会话还能读这些工作区外的目录（只读）")}</p>
         {#each roots as d (d)}
           <div class="root" transition:collapse>
             <span class="path" title={d}>{d}</span>
-            <IconButton icon="close" size={28} iconSize={13} label="不再允许读这个目录" title="不再允许读" onclick={() => dropRoot(d)} />
+            <IconButton icon="close" size={28} iconSize={13} label={t("不再允许读这个目录")} title={t("不再允许读")} onclick={() => dropRoot(d)} />
           </div>
         {/each}
       </div>
@@ -123,10 +124,10 @@
     <MenuSep />
     <MenuItem
       icon="eyeOff"
-      label="离开模式"
+      label={t("离开模式")}
       description={away
-        ? "开着：提问按合理默认继续并写明假设，要批准的调用直接拒，计划留着等你。发新消息自动关。"
-        : "出门前打开：这一轮不会卡在没人点的卡片上。"}
+        ? t("开着：提问按合理默认继续并写明假设，要批准的调用直接拒，计划留着等你。发新消息自动关。")
+        : t("出门前打开：这一轮不会卡在没人点的卡片上。")}
       checked={away}
       onclick={toggleAway}
     />
@@ -134,7 +135,7 @@
 
   {#if pane.chat.running}
     <MenuSep />
-    <p class="live">运行中也算数：下一步工具调用就按新档位 / 范围判定。</p>
+    <p class="live">{t("运行中也算数：下一步工具调用就按新档位 / 范围判定。")}</p>
   {/if}
 </Popover>
 

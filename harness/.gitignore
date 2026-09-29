@@ -29,6 +29,8 @@ runtime-config.json
 runtime-config.json.tmp
 projects.json
 projects.json.tmp
+# 自定义模型服务（含加密的 API key）
+custom-providers/
 
 # Quick chat: pointer to the current throwaway bucket (the bucket itself lives under ~/.dimensio/quick)
 quick.json

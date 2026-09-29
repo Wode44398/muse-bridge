@@ -5,14 +5,15 @@
   // 提示按优先级只出一条：连不上 > App 太旧 > 服务端太旧 > 没填 Key。
   // 换了厂商（dimensio-pulse）标志重演一遍入场——空间本身在应答。
   import { onMount } from "svelte";
-  import { app, vendorId } from "../../lib/state.svelte.ts";
-  import { greeting, VENDORS } from "../../lib/theme.ts";
+  import { app, vendorId, vendorInfo } from "../../lib/state.svelte.ts";
+  import { greeting } from "../../lib/theme.ts";
   import { rise } from "../../lib/motion.ts";
+  import { t } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
   import Mark from "../brand/Mark.svelte";
 
   const vid = $derived(vendorId());
-  const vendor = $derived(VENDORS[vid]);
+  const vendor = $derived(vendorInfo(vid));
   const hasKey = $derived(Boolean(app.config?.hasKey));
 
   let replay = $state(0);
@@ -30,23 +31,23 @@
     {/key}
     <h1 in:rise={{ y: 10, delay: 120 }}>{greeting()}</h1>
     {#if !app.config && !app.connError}
-      <p class="connecting" in:rise={{ y: 8, delay: 200 }}>正在连接…</p>
+      <p class="connecting" in:rise={{ y: 8, delay: 200 }}>{t("正在连接…")}</p>
     {/if}
 
     {#if app.connError}
       <button class="note err" in:rise={{ y: 6, delay: 260 }} onclick={() => (app.sheet = "settings")}>
         <Icon name="wifiOff" size={15} />
-        <span>连不上服务器，检查连接设置</span>
+        <span>{t("连不上服务器，检查连接设置")}</span>
         <Icon name="chevronR" size={14} />
       </button>
     {:else if app.compat?.clientTooOld}
-      <p class="note err" role="alert" in:rise={{ y: 6, delay: 260 }}><Icon name="alert" size={15} /><span>App 版本过旧，服务端已不再支持，请更新到最新版</span></p>
+      <p class="note err" role="alert" in:rise={{ y: 6, delay: 260 }}><Icon name="alert" size={15} /><span>{t("App 版本过旧，服务端已不再支持，请更新到最新版")}</span></p>
     {:else if app.compat?.serverTooOld}
-      <p class="note" role="status" in:rise={{ y: 6, delay: 260 }}><Icon name="info" size={15} /><span>服务端版本较旧，部分功能可能用不了，请更新服务端</span></p>
+      <p class="note" role="status" in:rise={{ y: 6, delay: 260 }}><Icon name="info" size={15} /><span>{t("服务端版本较旧，部分功能可能用不了，请更新服务端")}</span></p>
     {:else if app.config && !hasKey}
       <button class="note" in:rise={{ y: 6, delay: 260 }} onclick={() => (app.sheet = "settings")}>
         <Icon name="key" size={15} />
-        <span>先在设置里填 {vendor?.name ?? ""} 的 API Key</span>
+        <span>{t("先在设置里填 {name} 的 API Key", { name: vendor?.name ?? "" })}</span>
         <Icon name="chevronR" size={14} />
       </button>
     {/if}
@@ -85,6 +86,10 @@
     letter-spacing: 0.06em;
     line-height: 1.2;
     color: var(--text);
+  }
+  /* 英文问候：宋体字距是给汉字留的，拉丁字母不加字距 */
+  h1:lang(en) {
+    letter-spacing: normal;
   }
   .connecting {
     margin: 12px 0 0;

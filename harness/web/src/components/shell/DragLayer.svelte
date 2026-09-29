@@ -4,6 +4,7 @@
   import { dnd } from "../../lib/dnd.svelte.ts";
   import Icon from "../ui/Icon.svelte";
   import VendorLogo from "../brand/VendorLogo.svelte";
+  import { t } from "../../lib/i18n.ts";
 </script>
 
 {#if dnd.on}
@@ -19,7 +20,7 @@
       {:else}
         <span class="ic"><Icon name="folder" size={15} /></span>
       {/if}
-      <span class="t">{dnd.title || "（空会话）"}</span>
+      <span class="t">{dnd.title || t("（空会话）")}</span>
     </div>
     {#if dnd.overLabel}
       <div class="hint">{dnd.overLabel}</div>

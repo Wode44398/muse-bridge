@@ -8,8 +8,14 @@
   import { api } from '../lib/api.js';
   import { registerCloser } from '../lib/nav.js';
   import { claudeDefaultModel, claudeEffortFallback } from '../lib/caps.js';
+  import { t, tr, locale, isEn } from '../lib/i18n.js';
 
-  const WEEKDAYS = [[1, '一'], [2, '二'], [3, '三'], [4, '四'], [5, '五'], [6, '六'], [0, '日']];
+  // 星期名走 Intl（d = 0 周日 … 6 周六；2023-01-01 是周日）：zh-CN short = 周一…周日、narrow = 一…日，
+  // 与改前手写的「周{一}」「每周{一}」逐字一致；en-US short = Mon…Sun、long = Monday…Sunday。
+  const wdName = (d, style) => new Intl.DateTimeFormat(locale(), { weekday: style, timeZone: 'UTC' }).format(new Date(Date.UTC(2023, 0, 1 + d)));
+  const WEEKDAYS = [1, 2, 3, 4, 5, 6, 0].map((d) => [d, wdName(d, 'short')]);
+  // 「每小时的第 [输入框] 分钟」：整句一个键，按 {input} 切成输入框前后两段（英文语序不同）
+  const hourlyParts = t('每小时的第{input}分钟').split('{input}').map((s) => s.trim());
 
   let mode = $state('list');         // 'list' | 'form'
   let items = $state([]);
@@ -36,21 +42,30 @@
   const engineLabel = $derived(`Claude · ${nameOf(modelList, fModel || defModel)} · ${nameOf(effortList, fEffort || defEffort)}`);
 
   const pad = (n) => String(n).padStart(2, '0');
-  const WD = ['日', '一', '二', '三', '四', '五', '六'];
+  // 钟点：中文保持 09:00；英文 12 小时制 9:00 AM（按 UTC 取值只为拿到 h:m 本身，时区是服务器 GMT+8）
+  const hm = (h, m) => (isEn() && Number.isFinite(+h) && Number.isFinite(+m)   // 非数字时 Intl 会抛错，退回原样拼
+    ? new Intl.DateTimeFormat(locale(), { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(new Date(Date.UTC(2000, 0, 1, h, m)))
+    : `${pad(h)}:${pad(m)}`);
   const schedText = (s) => {
     if (!s) return '';
-    if (s.type === 'hourly') return `每小时 · 第 ${s.minute} 分`;
-    const t = `${pad(s.hour)}:${pad(s.minute)}`;
-    if (s.type === 'weekly') return `每周${WD[s.weekday] || ''} ${t}`;
-    return (s.type === 'weekdays' ? '每工作日 ' : '每天 ') + t;
+    // 英文 Hourly at :05 要补零；中文保持「第 5 分」
+    if (s.type === 'hourly') return t('每小时 · 第 {m} 分', { m: isEn() ? pad(s.minute) : s.minute });
+    const at = hm(s.hour, s.minute);
+    const w = Number(s.weekday);
+    if (s.type === 'weekly') return t('每周{day} {time}', { day: s.weekday != null && Number.isInteger(w) && w >= 0 && w <= 6 ? wdName(w, isEn() ? 'long' : 'narrow') : '', time: at });
+    return s.type === 'weekdays' ? t('每工作日 {time}', { time: at }) : t('每天 {time}', { time: at });
   };
   const engineText = (r) => `Claude · ${nameOf(caps.data?.claude?.models, r.model || claudeDefaultModel(caps.data))}`;
+  // 上次运行结果是服务端状态 id（ok / error / running）：中文界面一直原样拼（「上次ok」），英文换成整句
+  const lastText = (s) => (isEn() && s === 'ok' ? t('上次运行成功')
+    : isEn() && s === 'error' ? t('上次运行失败')
+    : t('上次{status}', { status: s }));
 
   let listErr = $state('');
   async function load() {
     loading = true;
     try { const d = await api.routines(); items = d.routines || []; running = d.running || []; listErr = ''; }
-    catch { listErr = '加载失败：连不上服务器（列表可能不是最新）'; }
+    catch { listErr = t('加载失败：连不上服务器（列表可能不是最新）'); }
     loading = false;
   }
   $effect(() => { if (ui.routinesOpen) { mode = 'list'; load(); } });
@@ -77,39 +92,40 @@
     mode = 'form';
   }
 
-  function setType(t) { fSched = { ...fSched, type: t }; }
+  function setType(ty) { fSched = { ...fSched, type: ty }; }
   function timeStr() { return `${pad(fSched.hour)}:${pad(fSched.minute)}`; }
   function onTime(e) { const [h, m] = (e.target.value || '09:00').split(':').map(Number); fSched = { ...fSched, hour: h || 0, minute: m || 0 }; }
   function onMinute(e) { fSched = { ...fSched, minute: Math.max(0, Math.min(59, +e.target.value || 0)) }; }
 
   async function save() {
     if (busy) return;
-    if (!fPrompt.trim()) { err = '请填写指令（Instructions）'; return; }
+    if (!fPrompt.trim()) { err = t('请填写指令（Instructions）'); return; }
     busy = true; err = '';
     const body = { name: fName.trim(), prompt: fPrompt.trim(), agent: fAgent, model: fModel || undefined, effort: fEffort || undefined, schedule: fSched, enabled: fEnabled };
     try {
       if (editing) await api.updateRoutine({ id: editing, ...body });
       else await api.createRoutine(body);
       await load(); mode = 'list';
-    } catch (e) { err = '保存失败：' + (e?.body?.error || e?.message || e); }
+    } catch (e) { err = t('保存失败：{reason}', { reason: tr(String(e?.body?.error || e?.message || e)) }); }
     busy = false;
   }
   // 操作失败不再静默吞掉——listErr 顶部提示，下一次成功 load 自动清除。
-  const opFail = (what) => { listErr = what + '失败：连不上服务器，请重试'; };
+  const opFail = (msg) => { listErr = msg; };
   async function toggleEnabled(r) {
     const next = !(r.enabled !== false);
     const prev = items;
     items = items.map((x) => (x.id === r.id ? { ...x, enabled: next } : x));   // 乐观切换（即时），失败回滚
     try { const res = await api.updateRoutine({ id: r.id, enabled: next }); if (res && res.ok === false) throw 0; }
-    catch { items = prev; opFail('切换'); }
+    catch { items = prev; opFail(t('切换失败：连不上服务器，请重试')); }
   }
-  async function runNow(r) { try { await api.runRoutine(r.id); await load(); } catch { opFail('运行'); } }
+  async function runNow(r) { try { await api.runRoutine(r.id); await load(); } catch { opFail(t('运行失败：连不上服务器，请重试')); } }
   async function del(r) {
-    if (!(await uiConfirm('删除这条路由？'))) return;
+    // 英文确认钮重复动词（Delete）；中文仍走默认「确定」，与改前一致
+    if (!(await uiConfirm(t('删除这条路由？'), isEn() ? { okLabel: t('删除') } : undefined))) return;
     const prev = items;
     items = items.filter((x) => x.id !== r.id);   // 乐观移除（即时），失败回滚
     try { const res = await api.deleteRoutine(r.id); if (res && res.ok === false) throw 0; }
-    catch { items = prev; opFail('删除'); }
+    catch { items = prev; opFail(t('删除失败：连不上服务器，请重试')); }
   }
   function close() { ui.routinesOpen = false; }
 </script>
@@ -124,30 +140,30 @@
 <section class="rt-page">
   {#if mode === 'list'}
     <header class="rt-top">
-      <button class="rt-back" aria-label="返回" onclick={close}>‹</button>
+      <button class="rt-back" aria-label={t('返回')} onclick={close}>‹</button>
       <span class="rt-h">{@render clock()} Routines</span>
       <span class="sp"></span>
-      <button class="rt-new" onclick={openNew}>＋ 新建</button>
+      <button class="rt-new" onclick={openNew}>{t('＋ 新建')}</button>
     </header>
     <div class="rt-body">
-      <p class="rt-desc">定时让 Claude 在 vault 里自动跑任务，无人值守。结果会进「历史对话」（标“路由”），事后可回看。</p>
+      <p class="rt-desc">{t('定时让 Claude 在 vault 里自动跑任务，无人值守。结果会进「历史对话」（标“路由”），事后可回看。')}</p>
       {#if listErr}<div class="rt-err">{listErr}</div>{/if}
       {#if loading}
-        <div class="rt-empty">加载中…</div>
+        <div class="rt-empty">{t('加载中…')}</div>
       {:else if !items.length}
-        <div class="rt-empty">还没有定时路由。点右上角「＋ 新建」。</div>
+        <div class="rt-empty">{t('还没有定时路由。点右上角「＋ 新建」。')}</div>
       {:else}
         {#each items as r (r.id)}
           <div class="rt-card">
             <button class="rt-card-main" onclick={() => openEdit(r)}>
-              <div class="rt-name">{r.name || '未命名路由'}</div>
-              <div class="rt-meta">{schedText(r.schedule)} · {engineText(r)}{running.includes(r.id) ? ' · 运行中…' : (r.lastStatus ? ' · 上次' + r.lastStatus : '')}</div>
+              <div class="rt-name">{r.name || t('未命名路由')}</div>
+              <div class="rt-meta">{schedText(r.schedule)} · {engineText(r)}{running.includes(r.id) ? ' · ' + t('运行中…') : (r.lastStatus ? ' · ' + lastText(r.lastStatus) : '')}</div>
             </button>
-            <button class="rt-icon" aria-label="立即运行" disabled={running.includes(r.id)} onclick={() => runNow(r)}>
+            <button class="rt-icon" aria-label={t('立即运行')} disabled={running.includes(r.id)} onclick={() => runNow(r)}>
               <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
             </button>
-            <button class="rt-sw {r.enabled !== false ? 'on' : ''}" aria-label="启用" onclick={() => toggleEnabled(r)}><span class="knob"></span></button>
-            <button class="rt-icon" aria-label="删除" onclick={() => del(r)}>
+            <button class="rt-sw {r.enabled !== false ? 'on' : ''}" aria-label={t('启用')} onclick={() => toggleEnabled(r)}><span class="knob"></span></button>
+            <button class="rt-icon" aria-label={t('删除')} onclick={() => del(r)}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/></svg>
             </button>
           </div>
@@ -156,29 +172,30 @@
     </div>
   {:else}
     <header class="rt-top">
-      <button class="rt-back" aria-label="返回" onclick={() => (mode = 'list')}>‹</button>
-      <span class="rt-h">{@render clock()} Routines <span class="slash">/</span> {editing ? '编辑路由' : '新建路由'}</span>
+      <button class="rt-back" aria-label={t('返回')} onclick={() => (mode = 'list')}>‹</button>
+      <span class="rt-h">{@render clock()} Routines <span class="slash">/</span> {editing ? t('编辑路由') : t('新建路由')}</span>
     </header>
     <div class="rt-body form">
-      <label class="rt-label" for="rtName">名称 <b>*</b></label>
-      <input id="rtName" class="rt-input" bind:value={fName} maxlength="120" placeholder="例如：每早汇总今日笔记" />
+      <label class="rt-label" for="rtName">{t('名称')} <b>*</b></label>
+      <input id="rtName" class="rt-input" bind:value={fName} maxlength="120" placeholder={t('例如：每早汇总今日笔记')} />
 
-      <label class="rt-label">指令 <span class="dim">Instructions</span></label>
+      <!-- 英文界面标签本身就是 Instructions，不再重复副标 -->
+      <label class="rt-label">{t('指令')} {#if !isEn()}<span class="dim">Instructions</span>{/if}</label>
       <div class="rt-instr">
-        <textarea class="rt-ta" bind:value={fPrompt} placeholder="描述每次运行让 Claude 做什么…"></textarea>
+        <textarea class="rt-ta" bind:value={fPrompt} placeholder={t('描述每次运行让 Claude 做什么…')}></textarea>
         <div class="rt-instr-bar">
           <div class="eng-wrap">
             <button class="eng-btn" onclick={() => (enginePop = !enginePop)}>{engineLabel} <span class="cv">▾</span></button>
             {#if enginePop}
-              <button class="eng-bd" aria-label="关闭" onclick={() => (enginePop = false)}></button>
+              <button class="eng-bd" aria-label={t('关闭')} onclick={() => (enginePop = false)}></button>
               <div class="eng-pop">
-                <div class="eng-sec">模型</div>
+                <div class="eng-sec">{t('模型')}</div>
                 <div class="pills">
-                  {#each modelList as m}<button class="pill {(fModel || defModel) === m.id ? 'on' : ''}" onclick={() => (fModel = m.id)}>{m.name}</button>{/each}
+                  {#each modelList as m}<button class="pill {(fModel || defModel) === m.id ? 'on' : ''}" onclick={() => (fModel = m.id)}>{tr(m.name)}</button>{/each}
                 </div>
-                <div class="eng-sec">思考强度</div>
+                <div class="eng-sec">{t('思考强度')}</div>
                 <div class="pills">
-                  {#each effortList as e}<button class="pill {(fEffort || defEffort) === e.id ? 'on' : ''}" onclick={() => (fEffort = e.id)}>{e.name}</button>{/each}
+                  {#each effortList as e}<button class="pill {(fEffort || defEffort) === e.id ? 'on' : ''}" onclick={() => (fEffort = e.id)}>{tr(e.name)}</button>{/each}
                 </div>
               </div>
             {/if}
@@ -186,33 +203,33 @@
         </div>
       </div>
 
-      <label class="rt-label">频率</label>
+      <label class="rt-label">{t('频率')}</label>
       <div class="pills">
-        <button class="pill {fSched.type === 'daily' ? 'on' : ''}" onclick={() => setType('daily')}>每天</button>
-        <button class="pill {fSched.type === 'weekdays' ? 'on' : ''}" onclick={() => setType('weekdays')}>每工作日</button>
-        <button class="pill {fSched.type === 'weekly' ? 'on' : ''}" onclick={() => setType('weekly')}>每周</button>
-        <button class="pill {fSched.type === 'hourly' ? 'on' : ''}" onclick={() => setType('hourly')}>每小时</button>
+        <button class="pill {fSched.type === 'daily' ? 'on' : ''}" onclick={() => setType('daily')}>{t('每天')}</button>
+        <button class="pill {fSched.type === 'weekdays' ? 'on' : ''}" onclick={() => setType('weekdays')}>{t('每工作日')}</button>
+        <button class="pill {fSched.type === 'weekly' ? 'on' : ''}" onclick={() => setType('weekly')}>{t('每周')}</button>
+        <button class="pill {fSched.type === 'hourly' ? 'on' : ''}" onclick={() => setType('hourly')}>{t('每小时')}</button>
       </div>
 
       {#if fSched.type === 'hourly'}
-        <div class="rt-when"><span>每小时的第</span><input class="rt-num" type="number" min="0" max="59" value={fSched.minute} onchange={onMinute} /><span>分钟</span></div>
+        <div class="rt-when"><span>{hourlyParts[0]}</span><input class="rt-num" type="number" min="0" max="59" value={fSched.minute} onchange={onMinute} /><span>{hourlyParts[1]}</span></div>
       {:else}
         {#if fSched.type === 'weekly'}
           <div class="pills wk">
-            {#each WEEKDAYS as [d, lbl]}<button class="pill {fSched.weekday === d ? 'on' : ''}" onclick={() => (fSched = { ...fSched, weekday: d })}>周{lbl}</button>{/each}
+            {#each WEEKDAYS as [d, lbl]}<button class="pill {fSched.weekday === d ? 'on' : ''}" onclick={() => (fSched = { ...fSched, weekday: d })}>{lbl}</button>{/each}
           </div>
         {/if}
-        <div class="rt-when"><span>时间</span><input class="rt-time" type="time" value={timeStr()} onchange={onTime} /><span class="dim">服务器时区 GMT+8</span></div>
+        <div class="rt-when"><span>{t('时间')}</span><input class="rt-time" type="time" value={timeStr()} onchange={onTime} /><span class="dim">{t('服务器时区 GMT+8')}</span></div>
       {/if}
 
-      <label class="rt-label">启用</label>
-      <button class="rt-sw big {fEnabled ? 'on' : ''}" aria-label="启用" onclick={() => (fEnabled = !fEnabled)}><span class="knob"></span></button>
+      <label class="rt-label">{t('启用')}</label>
+      <button class="rt-sw big {fEnabled ? 'on' : ''}" aria-label={t('启用')} onclick={() => (fEnabled = !fEnabled)}><span class="knob"></span></button>
 
       {#if err}<div class="rt-err">{err}</div>{/if}
     </div>
     <footer class="rt-foot">
-      <button class="rt-cancel" onclick={() => (mode = 'list')}>取消</button>
-      <button class="rt-save" disabled={busy || !fPrompt.trim()} onclick={save}>{busy ? '保存中…' : (editing ? '保存' : '创建')}</button>
+      <button class="rt-cancel" onclick={() => (mode = 'list')}>{t('取消')}</button>
+      <button class="rt-save" disabled={busy || !fPrompt.trim()} onclick={save}>{busy ? t('保存中…') : (editing ? t('保存') : t('创建'))}</button>
     </footer>
   {/if}
 </section>
@@ -283,7 +300,7 @@
   .pill:active { background: var(--hover); }
   .pill.on { background: var(--text); border-color: var(--text); color: var(--bg); }
 
-  .rt-when { display: flex; align-items: center; gap: 10px; margin-top: 12px; color: var(--text); font-size: 14px; }
+  .rt-when { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; color: var(--text); font-size: 14px; }
   .rt-time, .rt-num { background: var(--card); border: 1px solid var(--divider); border-radius: 10px; padding: 9px 12px; font: inherit; font-size: 15px; color: var(--text); outline: none; }
   .rt-num { width: 80px; }
   .rt-time:focus, .rt-num:focus { border-color: var(--serif); }

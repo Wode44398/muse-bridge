@@ -42,6 +42,7 @@ export const CAPABILITIES = [
   "project-order", // 侧栏项目块拖动排序：POST /api/projects/order {paths}（一个区拖完之后的完整次序）
   "session-refs", // 引用会话：/api/run 认 refs（会话 id，最多 3 个；被引用对话的摘要跟在消息后面给模型，消息上记 refs 给界面）
   "memory-overview", // K11 记忆总览：GET /api/memory/overview（全局层 + 各项目 + 旧快照桶的条目、用量、进提示字数、历史事件）
+  "custom-providers", // 自定义模型服务：POST /api/custom-providers {name, baseUrl, apiKey, model?}、POST …/:id（改）、POST …/:id/delete；/api/info 的 catalog 里带 custom 字段（租户实例回 403）
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];

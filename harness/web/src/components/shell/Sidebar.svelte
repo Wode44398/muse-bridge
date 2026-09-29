@@ -38,6 +38,7 @@
   import Mark from "../brand/Mark.svelte";
   import Wordmark from "../brand/Wordmark.svelte";
   import VendorLogo from "../brand/VendorLogo.svelte";
+  import { isEn, locale, t, tc, tr } from "../../lib/i18n.ts";
 
   let {
     docked = false,
@@ -82,8 +83,14 @@
     const now = new Date();
     const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
     const diff = Math.round((day(now) - day(d)) / 86_400_000);
+    // 英文：3:04 PM · Yesterday · Sep 28 · Sep 28, 2025（中文照旧手拼数字）
+    if (isEn() && diff !== 1) {
+      if (diff <= 0) return d.toLocaleTimeString(locale(), { hour: "numeric", minute: "2-digit" });
+      const sameYear = d.getFullYear() === now.getFullYear();
+      return d.toLocaleDateString(locale(), sameYear ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
+    }
     if (diff <= 0) return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-    if (diff === 1) return "昨天";
+    if (diff === 1) return t("昨天");
     if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}/${d.getDate()}`;
     return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
   }
@@ -95,10 +102,16 @@
   const q = $derived(query.trim().toLowerCase());
 
   // 快照对话（服务端 quick.ts）：一次性桶伪装成的项目——不属于任何项目、不共用记忆、只列最新一条
+  // 它的名字是服务端给的「快照对话」：显示（和按显示名搜）都过一道 tr
   const quickProj = $derived(app.projects.find((p) => p.quick) ?? null);
+  const quickName = $derived(quickProj ? tr(quickProj.name) : "");
   const quickSession = $derived(quickProj ? (app.sessions.find((s) => samePath(s.workspace, quickProj.path)) ?? null) : null);
   const quickVisible = $derived(
-    Boolean(quickProj) && (!q || quickProj!.name.toLowerCase().includes(q) || (quickSession?.title ?? "").toLowerCase().includes(q)),
+    Boolean(quickProj) &&
+      (!q ||
+        quickProj!.name.toLowerCase().includes(q) ||
+        quickName.toLowerCase().includes(q) ||
+        (quickSession?.title ?? "").toLowerCase().includes(q)),
   );
 
   // 全部项目：注册表 + 从会话与当前配置里补出来的隐式项目（旧后端 / 刚升级时历史不消失）；
@@ -139,7 +152,7 @@
   const currentWs = $derived(app.config?.workspace ?? "");
   const currentName = $derived.by(() => {
     if (!currentWs) return "";
-    if (quickProj && samePath(currentWs, quickProj.path)) return quickProj.name;
+    if (quickProj && samePath(currentWs, quickProj.path)) return quickName;
     return baseName(currentWs);
   });
   // 只有第一次、手里什么都没有时才显示「加载中」（以前每轮收尾刷新列表，整个侧栏都闪一下）
@@ -208,7 +221,7 @@
   const projectDrop = $derived({
     key: "project-order",
     accept: (p: DragPayload) => p.kind === "project" && canReorder,
-    label: "移到这里",
+    label: t("移到这里"),
     over: (p: DragPayload, pt: { y: number }) => {
       const at = insertionIndex(headRects(), pt.y, zoneItems(), p.id);
       dropAt = reorderZone(zoneItems(), p.id, at) ? at : null;
@@ -235,10 +248,13 @@
     return () => wideMq.removeEventListener("change", on);
   });
   const canDragSessions = $derived(canRefSessions() || wideNow);
+  // 显示用的会话标题：服务端会给坏档 / 回滚恢复 / 新版本只读的会话写中文标题（「[已从检查点恢复] …」等），过一道 tr；
+  // 搜索照旧按原标题匹配
+  const titleOf = (s: { title?: string }) => tr(s.title?.trim() ?? "") || t("（空会话）");
   const sessionPayload = (s: { id: string; title?: string; provider?: string; workspace?: string }): DragPayload => ({
     kind: "session",
     id: s.id,
-    title: s.title?.trim() || "（空会话）",
+    title: titleOf(s),
     ...(s.provider ? { provider: s.provider } : {}),
     ...(s.workspace ? { workspace: s.workspace } : {}),
   });
@@ -258,7 +274,7 @@
   // 命中所在的项目名（快照桶显示它自己的名字）
   function hitProject(ws?: string): string {
     if (!ws) return "";
-    if (quickProj && samePath(ws, quickProj.path)) return quickProj.name;
+    if (quickProj && samePath(ws, quickProj.path)) return quickName;
     return allProjects.find((p) => samePath(p.path, ws))?.name ?? baseName(ws);
   }
 
@@ -347,7 +363,7 @@
   async function hideProject(project: ProjectMeta) {
     rowMenu = null;
     haptic("medium");
-    if (await setProjectFlags(project, { hidden: true })) toast(`已隐藏「${project.name}」，可在列表底部恢复`);
+    if (await setProjectFlags(project, { hidden: true })) toast(t("已隐藏「{name}」，可在列表底部恢复", { name: project.name }));
   }
   function openMemory(project: ProjectMeta) {
     rowMenu = null;
@@ -380,7 +396,7 @@
       await importProject(dir);
       leave();
     } catch (e: any) {
-      toast(`创建失败：${e?.message ?? e}`);
+      toast(t("创建失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     }
   }
 
@@ -461,8 +477,8 @@
   onMount(() => {
     const onDown = (e: PointerEvent) => {
       if (!swiped) return;
-      const t = e.target as HTMLElement | null;
-      if (t?.closest(`[data-row="${CSS.escape(swiped)}"]`)) return;
+      const el = e.target as HTMLElement | null;
+      if (el?.closest(`[data-row="${CSS.escape(swiped)}"]`)) return;
       swiped = null;
     };
     window.addEventListener("pointerdown", onDown, true);
@@ -476,7 +492,7 @@
 {#snippet sessionRow(s: SessionMeta)}
   {@const running = chatRunning(s.id) || (s.running && !app.chats.some((c) => c.id === s.id))}
   <div class="srow-wrap" class:revealing={swiped === s.id} class:lifting={dnd.on && dnd.sourceKey === `s:${s.id}`} data-row={s.id}>
-    <button class="srow-del" tabindex="-1" aria-label="删除会话" onclick={(e) => del(s.id, e)}>删除</button>
+    <button class="srow-del" tabindex="-1" aria-label={t("删除会话")} onclick={(e) => del(s.id, e)}>{t("删除")}</button>
     <div
       class="srow"
       class:active={s.id === app.chat.id}
@@ -485,33 +501,33 @@
       use:swipe={s.id}
       use:dragSource={sessionDrag(s)}
     >
-      <button class="srow-main" onclick={() => pick(s.id)} title={s.title?.trim() || "（空会话）"}>
+      <button class="srow-main" onclick={() => pick(s.id)} title={titleOf(s)}>
         <span class="srow-v"><VendorLogo skin={s.provider} size={12} mono /></span>
-        <span class="srow-title">{s.title?.trim() || "（空会话）"}</span>
+        <span class="srow-title">{titleOf(s)}</span>
         <span class="srow-meta">
           {#if s.waiting}
-            <span class="waiting"><span class="wdot"></span>等你</span>
+            <span class="waiting"><span class="wdot"></span>{tc("dimensio", "等你")}</span>
           {:else if running}
-            <span class="running" title="运行中"><Mark size={14} live /></span>
+            <span class="running" title={t("运行中")}><Mark size={14} live /></span>
           {:else}
             <span class="time">{fmtTime(s.updatedAt)}</span>
           {/if}
         </span>
       </button>
-      <button class="srow-x" class:armed={armed === s.id} tabindex="-1" data-no-drag aria-label={armed === s.id ? "确认删除会话" : "删除会话"} onclick={(e) => arm(s.id, e)}>
-        {#if armed === s.id}<span>删除</span>{:else}<Icon name="trash" size={14} />{/if}
+      <button class="srow-x" class:armed={armed === s.id} tabindex="-1" data-no-drag aria-label={armed === s.id ? t("确认删除会话") : t("删除会话")} onclick={(e) => arm(s.id, e)}>
+        {#if armed === s.id}<span>{t("删除")}</span>{:else}<Icon name="trash" size={14} />{/if}
       </button>
     </div>
   </div>
 {/snippet}
 
-<nav class="sb" class:docked class:drawer={!docked} aria-label="项目与会话">
+<nav class="sb" class:docked class:drawer={!docked} aria-label={t("项目与会话")}>
   <header class="band">
     <span class="brand"><Mark size={19} /><Wordmark height={17} /></span>
     {#if docked}
-      <IconButton icon="panel" label="收起侧栏" size={32} onclick={() => onToggle?.()} />
+      <IconButton icon="panel" label={t("收起侧栏")} size={32} onclick={() => onToggle?.()} />
     {:else}
-      <IconButton icon="close" label="关闭侧栏" size={32} onclick={() => onClose?.()} />
+      <IconButton icon="close" label={t("关闭侧栏")} size={32} onclick={() => onClose?.()} />
     {/if}
   </header>
 
@@ -519,20 +535,20 @@
     {#if onHome}
       <button class="nav" onclick={onHome}>
         <Icon name="arrowL" size={17} />
-        <span class="nav-t">主页</span>
+        <span class="nav-t">{t("主页")}</span>
       </button>
     {/if}
     <button class="nav new" onclick={fresh}>
       <Icon name="edit" size={17} />
-      <span class="nav-t">新对话</span>
+      <span class="nav-t">{t("新对话")}</span>
       {#if currentName}<span class="nav-h">{currentName}</span>{/if}
     </button>
     {#if app.features.sessions}
       <label class="search">
         <Icon name="search" size={15} />
-        <input bind:this={searchEl} bind:value={query} placeholder="搜索项目或对话" aria-label="搜索项目或对话" enterkeyhint="search" />
+        <input bind:this={searchEl} bind:value={query} placeholder={t("搜索项目或对话")} aria-label={t("搜索项目或对话")} enterkeyhint="search" />
         {#if query}
-          <button class="clr" aria-label="清空" onclick={() => (query = "")}><Icon name="close" size={13} stroke={2} /></button>
+          <button class="clr" aria-label={t("清空")} onclick={() => (query = "")}><Icon name="close" size={13} stroke={2} /></button>
         {/if}
       </label>
     {/if}
@@ -540,18 +556,18 @@
 
   <div class="scroll" bind:this={listEl} use:dragScrollGuard use:dropTarget={projectDrop}>
     {#if !app.features.sessions}
-      <p class="hint">{app.connError ? "连不上服务器，历史会话暂时看不到" : "历史会话需要重启 harness 服务后可用"}</p>
+      <p class="hint">{app.connError ? t("连不上服务器，历史会话暂时看不到") : t("历史会话需要重启 harness 服务后可用")}</p>
     {:else if firstLoad}
-      <p class="hint loading"><Mark size={14} live /> 加载中</p>
+      <p class="hint loading"><Mark size={14} live /> {t("加载中")}</p>
     {:else}
       {#if quickProj && quickVisible}
         <section class="proj quick" class:current={samePath(currentWs, quickProj.path)}>
           <div class="prow">
-            <button class="prow-main" onclick={openQuick} title="快照对话：一次性空间，不属于任何项目，只保留最新一条">
+            <button class="prow-main" onclick={openQuick} title={t("快照对话：一次性空间，不属于任何项目，只保留最新一条")}>
               <span class="picon"><Icon name="bolt" size={16} /></span>
-              <span class="pname">{quickProj.name}</span>
+              <span class="pname">{quickName}</span>
             </button>
-            <button class="pact" disabled={quickBusy} title="新建快照（换一个全新的一次性空间）" aria-label="新建快照" onclick={(e) => newQuickSnap(e)}>
+            <button class="pact" disabled={quickBusy} title={t("新建快照（换一个全新的一次性空间）")} aria-label={t("新建快照")} onclick={(e) => newQuickSnap(e)}>
               <Icon name="plus" size={16} />
             </button>
           </div>
@@ -559,15 +575,15 @@
             {#if quickSession}
               {@render sessionRow(quickSession)}
             {:else}
-              <p class="pempty">独立小任务的落点，点击开始</p>
+              <p class="pempty">{t("独立小任务的落点，点击开始")}</p>
             {/if}
           </div>
         </section>
       {/if}
 
       <div class="sec">
-        <span>项目</span>
-        <button class="sec-add" title="新建项目" aria-label="新建项目" disabled={!app.features.projects} onclick={addProject}>
+        <span>{tc("dimensio", "项目")}</span>
+        <button class="sec-add" title={t("新建项目")} aria-label={t("新建项目")} disabled={!app.features.projects} onclick={addProject}>
           <Icon name="plus" size={15} />
         </button>
       </div>
@@ -575,12 +591,12 @@
       {#if projects.length === 0}
         <p class="hint">
           {hiddenProjects.length
-            ? "项目都被隐藏了，在下面的「已隐藏的项目」里恢复"
+            ? t("项目都被隐藏了，在下面的「已隐藏的项目」里恢复")
             : q
               ? canSearchBody && q.length >= 2
-                ? "项目名和对话标题里都没有"
-                : "没有匹配的项目或对话"
-              : "还没有项目，点“＋”选一个文件夹开始"}
+                ? t("项目名和对话标题里都没有")
+                : t("没有匹配的项目或对话")
+              : t("还没有项目，点“＋”选一个文件夹开始")}
         </p>
       {/if}
 
@@ -603,18 +619,18 @@
             <button class="prow-main" onclick={() => toggleProject(project.id)} title={project.path} aria-expanded={open}>
               <span class="picon"><Icon name={open ? "folderOpen" : "folder"} size={16} /></span>
               <span class="pname">{project.name}</span>
-              {#if project.pinned}<span class="ppin" title="已置顶"><Icon name="pin" size={12} /></span>{/if}
+              {#if project.pinned}<span class="ppin" title={t("已置顶")}><Icon name="pin" size={12} /></span>{/if}
             </button>
             {#if all.length}<span class="pcount" aria-hidden="true">{all.length}</span>{/if}
             <div class="pacts" class:on={rowMenu?.project.id === project.id} data-no-drag>
-              <button class="pact" disabled={!project.exists} title="在「{project.name}」中新建对话" aria-label="在 {project.name} 中新建对话" onclick={(e) => freshFor(project, e)}>
+              <button class="pact" disabled={!project.exists} title={t("在「{name}」中新建对话", { name: project.name })} aria-label={t("在 {name} 中新建对话", { name: project.name })} onclick={(e) => freshFor(project, e)}>
                 <Icon name="edit" size={15} />
               </button>
               <button
                 class="pact"
                 class:on={rowMenu?.project.id === project.id}
-                title="项目操作"
-                aria-label="{project.name} 的项目操作"
+                title={t("项目操作")}
+                aria-label={t("{name} 的项目操作", { name: project.name })}
                 aria-expanded={rowMenu?.project.id === project.id}
                 onclick={(e) => openRowMenu(project, e)}
               >
@@ -627,7 +643,7 @@
               {#each sessionsFor(project) as s (s.id)}
                 <div in:rise={{ y: 4 }}>{@render sessionRow(s)}</div>
               {:else}
-                <p class="pempty">{q ? "没有匹配的对话" : project.exists ? "暂无对话" : "文件夹已不存在"}</p>
+                <p class="pempty">{q ? t("没有匹配的对话") : project.exists ? t("暂无对话") : t("文件夹已不存在")}</p>
               {/each}
             </div>
           {/if}
@@ -637,15 +653,15 @@
       <!-- K10（D5）：正文命中（标题里没有、正文里提到过的对话），带一段前后文 -->
       {#if canSearchBody && q.length >= 2}
         <div class="sec">
-          <span>正文里提到</span>
+          <span>{t("正文里提到")}</span>
           {#if bodyBusy && !bodyHits.length}<span class="sec-live"><Mark size={12} live /></span>{/if}
         </div>
         {#each bodyOnly as h (h.id)}
           <div in:rise={{ y: 4 }} class:lifting={dnd.on && dnd.sourceKey === `s:${h.id}`} use:dragSource={sessionDrag(h)}>
-            <button class="hit" class:active={h.id === app.chat.id} onclick={() => pick(h.id)} title={h.title?.trim() || "（空会话）"}>
+            <button class="hit" class:active={h.id === app.chat.id} onclick={() => pick(h.id)} title={titleOf(h)}>
               <span class="hit-head">
                 <span class="srow-v"><VendorLogo skin={h.provider} size={12} mono /></span>
-                <span class="hit-title">{h.title?.trim() || "（空会话）"}</span>
+                <span class="hit-title">{titleOf(h)}</span>
                 <span class="hit-time">{fmtTime(h.updatedAt)}</span>
               </span>
               <span class="hit-snip">{h.snippet.before}<mark>{h.snippet.match}</mark>{h.snippet.after}</span>
@@ -656,14 +672,18 @@
           </div>
         {:else}
           {#if !bodyBusy}
-            <p class="pempty">{bodyHits.length ? "正文命中的对话都已经在上面了" : "正文里也没有"}</p>
+            <p class="pempty">{bodyHits.length ? t("正文命中的对话都已经在上面了") : t("正文里也没有")}</p>
           {/if}
         {/each}
       {/if}
 
       {#if app.sessionsMore}
         <button class="more" disabled={app.sessionsLoading} onclick={() => loadMoreSessions()}>
-          {app.sessionsLoading ? "加载中…" : app.sessionsTotal >= 0 ? `加载更早的会话（还有 ${app.sessionsTotal - app.sessions.length} 个）` : "加载更早的会话"}
+          {app.sessionsLoading
+            ? t("加载中…")
+            : app.sessionsTotal >= 0
+              ? t("加载更早的会话（还有 {n} 个）", { n: app.sessionsTotal - app.sessions.length })
+              : t("加载更早的会话")}
         </button>
       {/if}
 
@@ -671,7 +691,7 @@
         <div class="hidden">
           <button class="hidden-head" onclick={() => (showHidden = !showHidden)} aria-expanded={showHidden}>
             <Icon name="eyeOff" size={15} />
-            <span>已隐藏的项目</span>
+            <span>{t("已隐藏的项目")}</span>
             <span class="pcount">{hiddenProjects.length}</span>
             <span class="chev" class:open={showHidden}><Icon name="chevronD" size={13} /></span>
           </button>
@@ -680,7 +700,7 @@
               {#each hiddenProjects as project (project.id)}
                 <div class="hidden-row">
                   <span class="hidden-name" title={project.path}>{project.name}</span>
-                  <button class="restore" onclick={() => restoreProject(project)}>恢复</button>
+                  <button class="restore" onclick={() => restoreProject(project)}>{tc("dimensio", "恢复")}</button>
                 </div>
               {/each}
             </div>
@@ -696,8 +716,8 @@
     {/if}
     <button class="nav" onclick={() => (app.sheet = "settings")}>
       <Icon name="gear" size={17} />
-      <span class="nav-t">设置</span>
-      {#if app.config && !app.config.hasKey}<span class="warn-dot" title="还没填 API Key"></span>{/if}
+      <span class="nav-t">{t("设置")}</span>
+      {#if app.config && !app.config.hasKey}<span class="warn-dot" title={t("还没填 API Key")}></span>{/if}
     </button>
   </footer>
 </nav>
@@ -705,13 +725,13 @@
 {#if rowMenu}
   {@const target = rowMenu.project}
   <Popover anchor={rowMenu.anchor} onclose={() => (rowMenu = null)} prefer="down" align="end" minWidth={216}>
-    <MenuItem icon="edit" label="在这个项目里新建对话" disabled={!target.exists} onclick={() => { rowMenu = null; void freshFor(target); }} />
-    <MenuItem icon={target.pinned ? "pinOff" : "pin"} label={target.pinned ? "取消置顶" : "置顶项目"} onclick={() => togglePin(target)} />
+    <MenuItem icon="edit" label={t("在这个项目里新建对话")} disabled={!target.exists} onclick={() => { rowMenu = null; void freshFor(target); }} />
+    <MenuItem icon={target.pinned ? "pinOff" : "pin"} label={target.pinned ? t("取消置顶") : t("置顶项目")} onclick={() => togglePin(target)} />
     {#if app.compat?.caps?.includes("memory")}
-      <MenuItem icon="memory" label="项目记忆" onclick={() => openMemory(target)} />
+      <MenuItem icon="memory" label={t("项目记忆")} onclick={() => openMemory(target)} />
     {/if}
     <MenuSep />
-    <MenuItem icon="eyeOff" label="隐藏项目" description="只是不在侧栏显示，文件夹和历史对话都不会删除" onclick={() => hideProject(target)} />
+    <MenuItem icon="eyeOff" label={t("隐藏项目")} description={t("只是不在侧栏显示，文件夹和历史对话都不会删除")} onclick={() => hideProject(target)} />
   </Popover>
 {/if}
 

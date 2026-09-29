@@ -7,6 +7,7 @@
   import { ICON_PAPERCLIP, ICON_RESEARCH, ICON_FEATHER } from '../lib/icons.js';
   import { pushBackLayer } from '../lib/nav.js';
   import { IS_CSNAP } from '../lib/csnap.js';
+  import { t, tc } from '../lib/i18n.js';
   let { onClose, onPickFiles, onPickFolder, dir = 'up' } = $props();
 
   let view = $state('main'); // 'main' | 'style' | 'edit'
@@ -49,7 +50,7 @@
     view = 'edit';
   }
   function saveEdit() {
-    const name = editName.trim() || '未命名风格';
+    const name = editName.trim() || t('未命名风格');
     const text = editText.trim();
     if (!text) return;
     if (editingId) updateStyle(editingId, name, text);
@@ -64,7 +65,7 @@
   }
 </script>
 
-<button class="am-backdrop" aria-label="关闭" onclick={close}></button>
+<button class="am-backdrop" aria-label={t('关闭')} onclick={close}></button>
 <div class="am" class:down={dir === 'down'} role="menu">
   {#if view === 'main'}
     <button class="am-row" onclick={files}>
@@ -74,7 +75,7 @@
     <!-- 挂载文件夹：整树传上去，Claude 用 Read/Glob/Grep 按需读（不塞进上下文） -->
     <button class="am-row" onclick={folder}>
       <svg class="am-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.2c0-1.5 1.2-2.7 2.7-2.7h3.4l2 2.3h6.2c1.5 0 2.7 1.2 2.7 2.7v8.3c0 1.5-1.2 2.7-2.7 2.7H6.2c-1.5 0-2.7-1.2-2.7-2.7z"/></svg>
-      <span class="am-name">挂载文件夹</span>
+      <span class="am-name">{t('挂载文件夹')}</span>
     </button>
     <div class="am-div"></div>
     <!-- 快照模式后端强制 research=false（子 agent 成本），开关一并隐藏免得看着能开实际无效 -->
@@ -90,7 +91,7 @@
       <span class="am-name">Use style</span><span class="am-right">{curName} ›</span>
     </button>
   {:else if view === 'style'}
-    <button class="am-back" onclick={() => (view = 'main')}>‹ 返回</button>
+    <button class="am-back" onclick={() => (view = 'main')}>{t('‹ 返回')}</button>
     {#each STYLES as s}
       <button class="am-row" onclick={() => pickStyle(s.id)}>
         <svg class="am-ic" viewBox="0 0 20 20" fill="currentColor"><path d={ICON_FEATHER} /></svg>
@@ -107,7 +108,7 @@
             <span class="am-name">{s.name}</span>
             {#if s.id === curStyle}<span class="am-check">✓</span>{/if}
           </button>
-          <button class="am-editbtn" aria-label="编辑 {s.name}" onclick={() => openEdit(s)}>
+          <button class="am-editbtn" aria-label={t('编辑 {name}', { name: s.name })} onclick={() => openEdit(s)}>
             <svg viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>
           </button>
         </div>
@@ -119,15 +120,15 @@
       <span class="am-name">Create &amp; edit styles</span>
     </button>
   {:else}
-    <button class="am-back" onclick={() => (view = 'style')}>‹ 返回</button>
+    <button class="am-back" onclick={() => (view = 'style')}>{t('‹ 返回')}</button>
     <div class="am-form">
-      <input class="am-input" type="text" placeholder="风格名称（如：翻译腔）" bind:value={editName} maxlength="20" />
-      <textarea class="am-ta" placeholder="风格指令，例如：所有回复都用文言文，并在结尾附一句白话总结。" bind:value={editText} maxlength="4000" rows="5"></textarea>
+      <input class="am-input" type="text" placeholder={t('风格名称（如：翻译腔）')} bind:value={editName} maxlength="20" />
+      <textarea class="am-ta" placeholder={t('风格指令，例如：所有回复都用文言文，并在结尾附一句白话总结。')} bind:value={editText} maxlength="4000" rows="5"></textarea>
       <div class="am-form-btns">
         {#if editingId}
-          <button class="am-del" class:arm={confirmDel} onclick={delEdit}>{confirmDel ? '确认删除' : '删除'}</button>
+          <button class="am-del" class:arm={confirmDel} onclick={delEdit}>{confirmDel ? tc('claude', '确认删除') : t('删除')}</button>
         {/if}
-        <button class="am-save" disabled={!editText.trim()} onclick={saveEdit}>{editingId ? '保存' : '创建并使用'}</button>
+        <button class="am-save" disabled={!editText.trim()} onclick={saveEdit}>{editingId ? t('保存') : t('创建并使用')}</button>
       </div>
     </div>
   {/if}

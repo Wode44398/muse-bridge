@@ -3,6 +3,7 @@
   // 行点开懒加载单文件 unified diff（+绿 −红），Claude 分页配色。
   import { api } from '../../lib/api.js';
   import { dock } from '../../lib/dock.svelte.js';
+  import { t, tc, tr } from '../../lib/i18n.js';
   let { dockState = dock } = $props();
 
   let loading = $state(true);
@@ -17,7 +18,7 @@
     try {
       data = await api.get(`/api/claude/review?ws=${enc(dockState.ws)}`);
       open = {};
-    } catch (e) { err = e?.body?.error || e?.body || '加载失败'; data = null; }
+    } catch (e) { err = tr(e?.body?.error || e?.body) || t('加载失败'); data = null; }
     loading = false;
   }
   $effect(() => { if (dockState.ws) refresh(); });
@@ -31,7 +32,7 @@
       const d = await api.get(`/api/claude/review/diff?${q}`);
       open = { ...open, [f.path]: { loading: false, text: d.text || '', bin: !!d.bin, truncated: !!d.truncated } };
     } catch (e) {
-      open = { ...open, [f.path]: { loading: false, err: e?.body?.error || '加载失败' } };
+      open = { ...open, [f.path]: { loading: false, err: tr(e?.body?.error) || t('加载失败') } };
     }
   }
 
@@ -51,27 +52,27 @@
     return out;
   }
 
-  const stLabel = { A: '新增', D: '删除', R: '改名', U: '未跟踪', C: '复制' };
+  const stLabel = { A: tc('diff', '新增'), D: tc('diff', '删除'), R: tc('diff', '改名'), U: tc('diff', '未跟踪'), C: tc('diff', '复制') };
 </script>
 
 <div class="rv">
   {#if loading}
-    <div class="rv-empty"><span class="spin"></span>正在读取变更…</div>
+    <div class="rv-empty"><span class="spin"></span>{t('正在读取变更…')}</div>
   {:else if err}
-    <div class="rv-empty">{err}<button class="rv-retry" onclick={refresh}>重试</button></div>
+    <div class="rv-empty">{err}<button class="rv-retry" onclick={refresh}>{t('重试')}</button></div>
   {:else if !data || !data.git}
-    <div class="rv-empty">该工作空间不是 git 仓库</div>
+    <div class="rv-empty">{t('该工作空间不是 git 仓库')}</div>
   {:else}
     <div class="rv-head">
       <span class="rv-branch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.6"/><circle cx="6" cy="18" r="2.6"/><circle cx="18" cy="8" r="2.6"/><path d="M6 8.6v6.8M18 10.6c0 4-5 3.4-8 5"/></svg>{data.base}</span>
       <span class="rv-arrow">→</span>
       <span class="rv-wt">working tree</span>
-      <button class="rv-refresh" aria-label="刷新" onclick={refresh}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v5h-5"/></svg></button>
+      <button class="rv-refresh" aria-label={t('刷新')} onclick={refresh}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v5h-5"/></svg></button>
     </div>
     {#if !data.files.length}
-      <div class="rv-empty">工作树很干净，没有改动</div>
+      <div class="rv-empty">{t('工作树很干净，没有改动')}</div>
     {:else}
-      <div class="rv-hint">大文件默认折叠，点击文件展开 diff。共 {data.files.length} 个文件 <em class="add">+{data.total.add}</em> <em class="del">−{data.total.del}</em>{#if data.truncated}（已截断）{/if}</div>
+      <div class="rv-hint">{t('大文件默认折叠，点击文件展开 diff。共 {n} 个文件', { n: data.files.length })} <em class="add">+{data.total.add}</em> <em class="del">−{data.total.del}</em>{#if data.truncated}{t('（已截断）')}{/if}</div>
       <div class="rv-list">
         {#each data.files as f (f.path)}
           <div class="rv-file">
@@ -79,7 +80,7 @@
               <svg class="chev" class:open={!!open[f.path]} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
               <span class="rv-name" title={f.from ? `${f.from} → ${f.path}` : f.path}>{f.path}</span>
               {#if f.st && f.st !== 'M'}<span class="rv-st st-{f.st}">{stLabel[f.st] || f.st}</span>{/if}
-              {#if f.bin}<span class="rv-bin">二进制</span>{:else}<span class="rv-count add">+{f.add}</span><span class="rv-count del">−{f.del}</span>{/if}
+              {#if f.bin}<span class="rv-bin">{t('二进制')}</span>{:else}<span class="rv-count add">+{f.add}</span><span class="rv-count del">−{f.del}</span>{/if}
             </button>
             {#if open[f.path]}
               <div class="rv-diff">
@@ -88,15 +89,15 @@
                 {:else if open[f.path].err}
                   <div class="rv-dload">{open[f.path].err}</div>
                 {:else if open[f.path].bin}
-                  <div class="rv-dload">二进制文件，无法展示 diff</div>
+                  <div class="rv-dload">{t('二进制文件，无法展示 diff')}</div>
                 {:else if !open[f.path].text}
-                  <div class="rv-dload">（无差异内容）</div>
+                  <div class="rv-dload">{t('（无差异内容）')}</div>
                 {:else}
                   <div class="rv-code">
                     {#each diffLines(open[f.path].text) as ln}
                       <div class="dl {ln.cls}">{ln.l || ' '}</div>
                     {/each}
-                    {#if open[f.path].truncated}<div class="dl meta">…（diff 过长，已截断）</div>{/if}
+                    {#if open[f.path].truncated}<div class="dl meta">{t('…（diff 过长，已截断）')}</div>{/if}
                   </div>
                 {/if}
               </div>

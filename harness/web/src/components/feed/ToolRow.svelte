@@ -21,6 +21,7 @@
   import WorkflowCard from "./WorkflowCard.svelte";
   import AgentTaskCard from "./AgentTaskCard.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tr } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -38,7 +39,10 @@
   const outcomeText = $derived.by(() => {
     const s = item.outcome || item.summary || "";
     const m = /^todos: (\d+)\/(\d+) done$/.exec(s);
-    return m ? `完成 ${m[1]}/${m[2]}` : s;
+    if (m) return t("完成 {done}/{total}", { done: m[1], total: m[2] });
+    // WebFetch 不截断时的「HTTP 200 · 523 字」字面只有一个汉字，tr() 的模式匹配认不了，这里按原样拆开给整句
+    const f = /^HTTP (\d+) · (\S+) 字$/.exec(s);
+    return f ? t("HTTP {status} · {size} 字", { status: f[1], size: f[2] }) : tr(s);
   });
   // Bash 的结果开头会把命令再回显一遍（「$ 命令」）；上面已经摆了命令，这一行就不重复了
   const shownOutput = $derived.by(() => {
@@ -66,7 +70,7 @@
     return item.status === "ok" ? "ok" : item.status === "fail" ? "fail" : "denied";
   });
   // 节点只靠颜色说状态：给读屏补一个词（完成是默认，不说）
-  const SR: Record<NodeTone, string> = { running: "运行中", ok: "", fail: "失败", denied: "被拒绝", stopped: "已停止" };
+  const SR: Record<NodeTone, string> = { running: t("运行中"), ok: "", fail: t("失败"), denied: t("被拒绝"), stopped: t("已停止") };
 
   const taskSummary = $derived.by(() => {
     if (!kind || !tstatus) return "";
@@ -77,24 +81,24 @@
       parts.push(modelShort(a.model));
       if (tstatus === "running") {
         const cur = a.steps[a.steps.length - 1];
-        parts.push(cur ? `${toolMeta(cur.name).verb} · ${a.steps.length}` : "启动中");
+        parts.push(cur ? `${toolMeta(cur.name).verb} · ${a.steps.length}` : t("启动中"));
       } else {
-        if (a.toolCalls) parts.push(`${a.toolCalls} 次调用`);
+        if (a.toolCalls) parts.push(t("{n} 次调用", { n: a.toolCalls }));
         parts.push(fmtDur(a.durationMs));
       }
     } else if (item.workflow) {
       const w = item.workflow;
       if (tstatus === "running") {
         if (w.currentPhase) parts.push(w.currentPhase);
-        parts.push(`${w.agents.filter((x) => x.status !== "running").length}/${w.agents.length} agent`);
+        parts.push(t("{done}/{total} agent", { done: w.agents.filter((x) => x.status !== "running").length, total: w.agents.length, n: w.agents.length }));
       } else {
-        parts.push(`${w.agentCount || w.agents.length} 个 agent`);
+        parts.push(t("{n} 个 agent", { n: w.agentCount || w.agents.length }));
         const tk = fmtTokens(w.tokens);
         if (tk) parts.push(`${tk} tok`);
         parts.push(fmtDur(w.durationMs));
       }
     } else if (tstatus === "running") {
-      parts.push(kind === "workflow" ? "等待启动" : "启动中");
+      parts.push(kind === "workflow" ? t("等待启动") : t("启动中"));
     }
     return parts.filter(Boolean).join(" · ");
   });
@@ -109,7 +113,7 @@
     const moved = await api.moveToolToBackground(pane.chat.id, item.id);
     bgBusy = false;
     // spec-A ⚠9：没转成（已经结束 / 已经转过 / 后台池满了）要说一声，别让人以为点了没反应
-    if (!moved) toast("没转成后台——这条命令可能刚好结束了，或者后台任务已经满了");
+    if (!moved) toast(t("没转成后台——这条命令可能刚好结束了，或者后台任务已经满了"));
   }
 
   function onHead() {
@@ -126,7 +130,7 @@
     if (a.url) return String(a.url);
     if (a.query) return String(a.query);
     if (a.prompt) return String(a.prompt);
-    if (a.todos) return `${a.todos.length} 项`;
+    if (a.todos) return t("{n} 项", { n: a.todos.length });
     // 计划：摆第一条不是标题的正文（整份计划在卡片里）；提问：摆第一个问题
     if (typeof a.plan === "string") {
       const line = a.plan.split("\n").map((s: string) => s.trim()).find((s: string) => s && !s.startsWith("#")) ?? "";
@@ -134,7 +138,7 @@
     }
     if (Array.isArray(a.questions)) {
       const q = String(a.questions[0]?.question ?? "");
-      return a.questions.length > 1 ? `${q} 等 ${a.questions.length} 个问题` : q;
+      return a.questions.length > 1 ? t("{q} 等 {n} 个问题", { q, n: a.questions.length }) : q;
     }
     if (a.action) return [a.action, a.serviceId ?? a.name ?? ""].filter(Boolean).join(" ");
     // E2：MCP 网关（McpDescribe / McpCall）——连接器.工具 + 参数
@@ -160,7 +164,7 @@
     {down}
     onclick={onHead}
     expanded={kind ? undefined : item.open}
-    title={kind ? "在任务面板中查看" : undefined}
+    title={kind ? t("在任务面板中查看") : undefined}
     chev={kind ? "right" : "down"}
     open={!kind && item.open}
   >
@@ -177,7 +181,7 @@
       {#if kind && taskSummary}
         <span class="sum" class:live={tstatus === "running"} class:bad={tstatus === "failed"}>{taskSummary}</span>
       {/if}
-      {#if SR[tone]}<span class="hx-sr">（{SR[tone]}）</span>{/if}
+      {#if SR[tone]}<span class="hx-sr">{t("（{code}）", { code: SR[tone] })}</span>{/if}
     {/snippet}
 
     <!-- U8（kimi K36）：第二行只说结果（「退出码 0 · 12 行输出」「改了 1 处（+3 −1 行）」）——以前挤在第一行最右边，手机上被参数挤没 -->
@@ -190,7 +194,7 @@
         <div class="live">
           {#if item.progress.tail}<div class="tailbox"><pre class="tail">{item.progress.tail}</pre></div>{/if}
           {#if canBackground}
-            <Button variant="ghost" size="sm" loading={bgBusy} onclick={toBackground}>转后台</Button>
+            <Button variant="ghost" size="sm" loading={bgBusy} onclick={toBackground}>{t("转后台")}</Button>
           {/if}
         </div>
       </div>
@@ -203,14 +207,14 @@
           {#if preview}
             <ApprovalPreview {preview} open />
           {:else}
-            <div class="sec">参数</div>
+            <div class="sec">{t("参数")}</div>
             <pre class="code">{JSON.stringify(item.args, null, 2)}</pre>
           {/if}
           {#if item.output}
-            <div class="sec after">结果</div>
+            <div class="sec after">{t("结果")}</div>
             <pre class="code out">{shownOutput}</pre>
           {:else if item.status === "running"}
-            <div class="sec after dim">运行中…</div>
+            <div class="sec after dim">{t("运行中…")}</div>
           {/if}
         </div>
       </div>

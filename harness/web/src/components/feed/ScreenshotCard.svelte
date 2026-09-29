@@ -6,6 +6,7 @@
   import { press } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tr } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -18,11 +19,11 @@
 
 <div class="shot">
   <button class="img" onclick={() => (app.lightbox = { src, caption: item.url })} use:press={{ scale: 0.995 }}>
-    <img {src} alt="页面截图 {item.url}" loading="lazy" />
+    <img {src} alt={t("页面截图 {url}", { url: item.url })} loading="lazy" />
   </button>
   <div class="meta">
     <span class="url"><Icon name="camera" size={13} /><span class="u">{item.url}</span></span>
-    {#if item.verdict}<p class="verdict">{item.verdict}</p>{/if}
+    {#if item.verdict}<p class="verdict">{tr(item.verdict)}</p>{/if}
   </div>
 </div>
 

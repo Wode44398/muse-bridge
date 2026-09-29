@@ -14,6 +14,7 @@
   import MediaViewer from './preview/MediaViewer.svelte';
   import { apiUrl } from '../lib/server.js';
   import { openPreview, closePreview, preview, cloudFileUrl } from '../lib/preview.svelte.js';
+  import { t, tc, locale, isEn } from '../lib/i18n.js';
 
   // —— 文件分类（本页自用：决定图标、缩略图、点开方式）——
   const EXT = {
@@ -39,7 +40,7 @@
   }
   // 预览查看器认的 kind（preview.svelte.js 词表）；null = 没有内嵌预览，点开直接下载。
   const VIEW = { image: 'image', video: 'video', audio: 'audio', pdf: 'pdf', doc: 'office', sheet: 'office', slide: 'office', md: 'markdown', html: 'html', code: 'text', text: 'text' };
-  const KIND_LABEL = { dir: '文件夹', image: '图片', video: '视频', audio: '音频', pdf: 'PDF', doc: '文档', sheet: '表格', slide: '演示文稿', md: 'Markdown', html: '网页', zip: '压缩包', code: '代码', text: '文本', file: '文件' };
+  const KIND_LABEL = { dir: t('文件夹'), image: t('图片'), video: t('视频'), audio: t('音频'), pdf: 'PDF', doc: t('文档'), sheet: tc('files', '表格'), slide: t('演示文稿'), md: 'Markdown', html: t('网页'), zip: tc('files', '压缩包'), code: t('代码'), text: t('文本'), file: t('文件') };
 
   // 类型图标：浅色底 + 同色描边字形（24 视框）。颜色走 --k 变量，暗色下同样可读。
   const GLYPH = {
@@ -69,25 +70,27 @@
     if (n < 1073741824) return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB';
     return (n / 1073741824).toFixed(2) + ' GB';
   }
-  const pad = (n) => String(n).padStart(2, '0');
+  // 日期交给 Intl：zh-CN 下输出与原先手拼的「9月28日」「2025年9月28日 09:05」逐字一致；英文按 en-US（12 小时制）。
+  const HM = isEn() ? { hour: 'numeric', minute: '2-digit' } : { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
+  const dtf = (d, o) => new Intl.DateTimeFormat(locale(), o).format(d);
   function fmtDate(ms) {
     if (!ms) return '';
     const d = new Date(ms), now = new Date();
-    if (d.toDateString() === now.toDateString()) return '今天 ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    if (d.toDateString() === now.toDateString()) return t('今天 {time}', { time: dtf(d, HM) });
     const y = new Date(now); y.setDate(now.getDate() - 1);
-    if (d.toDateString() === y.toDateString()) return '昨天 ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-    return (d.getFullYear() !== now.getFullYear() ? d.getFullYear() + '年' : '') + (d.getMonth() + 1) + '月' + d.getDate() + '日';
+    if (d.toDateString() === y.toDateString()) return t('昨天 {time}', { time: dtf(d, HM) });
+    return dtf(d, { ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}), month: 'short', day: 'numeric' });
   }
-  const fmtFull = (ms) => { const d = new Date(ms); return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const fmtFull = (ms) => dtf(new Date(ms), { year: 'numeric', month: 'short', day: 'numeric', ...HM });
   function fmtLeft(ms) {
     const left = ms - Date.now();
-    if (left <= 0) return '已过期';
+    if (left <= 0) return t('已过期');
     const h = left / 3600e3;
-    if (h < 1) return '1 小时内失效';
-    if (h < 24) return Math.floor(h) + ' 小时后失效';
-    return Math.floor(h / 24) + ' 天后失效';
+    if (h < 1) return t('1 小时内失效');
+    if (h < 24) return t('{n} 小时后失效', { n: Math.floor(h) });
+    return t('{n} 天后失效', { n: Math.floor(h / 24) });
   }
-  const metaOf = (it, k) => (it.isDir ? '文件夹' : [KIND_LABEL[k], fmtSize(it.size), fmtDate(it.mtime)].filter(Boolean).join(' · '));
+  const metaOf = (it, k) => (it.isDir ? t('文件夹') : [KIND_LABEL[k], fmtSize(it.size), fmtDate(it.mtime)].filter(Boolean).join(' · '));
   // 长文件名中段省略：主干可截，扩展名永远露出来（「一个名字特别长…最终版.txt」）。
   function splitName(n) {
     const i = n.lastIndexOf('.');
@@ -122,14 +125,15 @@
   const view = $derived(viewPref || (files.length >= 2 && mediaShare >= 0.6 ? 'grid' : 'list'));
 
   const single = $derived(!base && rootItems.length === 1 && !rootItems[0].isDir ? rootItems[0] : null);
-  const title = $derived(base || (single ? single.name : rootItems.length ? `${rootItems[0].name} 等 ${rootItems.length} 项` : '分享'));
+  const title = $derived(base || (single ? single.name : rootItems.length ? t('{name} 等 {n} 项', { name: rootItems[0].name, n: rootItems.length }) : t('分享')));
   const heroKind = $derived(single ? kindOf(single) : 'dir');
   const summary = $derived.by(() => {
     const nd = topItems.filter((x) => x.isDir).length, nf = topItems.length - nd;
-    return [nd ? nd + ' 个文件夹' : '', nf ? nf + ' 个文件' : ''].filter(Boolean).join('、');
+    const a = nd ? t('{n} 个文件夹', { n: nd }) : '', b = nf ? t('{n} 个文件', { n: nf }) : '';
+    return a && b ? t('{folders}、{files}', { folders: a, files: b }) : a || b;
   });
 
-  $effect(() => { if (phase === 'ready') document.title = title + ' · 分享'; });
+  $effect(() => { if (phase === 'ready') document.title = t('{title} · 分享', { title }); });
 
   // —— 数据 ——
   class HttpError extends Error { constructor(status) { super('HTTP ' + status); this.status = status; } }
@@ -168,7 +172,7 @@
         catch (e) {
           // 子目录没了（深链过期、手改了 hash）：回根；其余错误（断网）原地提示不跳。
           if (e?.status === 401 || (!initial && e?.status !== 404)) throw e;
-          if (!initial) toast('这个文件夹已不存在');
+          if (!initial) toast(t('这个文件夹已不存在'));
           history.replaceState(history.state, '', location.pathname + location.search);
           next = ''; got = topItems;
         }
@@ -179,7 +183,7 @@
       if (seq !== reqSeq) return;
       if (initial) throw e;
       if (e?.status === 401) { phase = 'gone'; return; }
-      toast('加载失败，请重试');
+      toast(t('加载失败，请重试'));
     } finally { if (seq === reqSeq) listing = false; }
   }
   function setHash(p) {
@@ -216,7 +220,7 @@
     document.body.appendChild(a); a.click(); a.remove();
   }
   async function download(it) {
-    if (it.size > TRACK_MAX) { nativeDownload(it); toast('已交给浏览器下载'); return; }
+    if (it.size > TRACK_MAX) { nativeDownload(it); toast(t('已交给浏览器下载')); return; }
     const id = 'd' + Date.now() + (uid++);
     tasks = [...tasks, { id, name: it.name, total: it.size || 0, sent: 0, status: 'run', ctrl: new AbortController() }];
     // Svelte5 深代理：必须改数组里的代理元素，改裸字面量 UI 不动（同 FilesPanel.downloadTracked）。
@@ -241,15 +245,15 @@
       a.href = u; a.download = it.name; document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(u), 60000);
       tk.status = 'done';
-      setTimeout(() => { tasks = tasks.filter((t) => t.id !== id); }, 2600);
+      setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 2600);
     } catch (e) {
-      if (tk.status === 'cancel' || e?.name === 'AbortError') { setTimeout(() => { tasks = tasks.filter((t) => t.id !== id); }, 1200); return; }
-      tasks = tasks.filter((t) => t.id !== id);
+      if (tk.status === 'cancel' || e?.name === 'AbortError') { setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 1200); return; }
+      tasks = tasks.filter((x) => x.id !== id);
       nativeDownload(it);   // 流式失败退回原生下载，至少能下到
     }
   }
-  function cancel(t) { if (t.status !== 'run') return; t.status = 'cancel'; try { t.ctrl.abort(); } catch {} }
-  const pct = (t) => (t.total > 0 ? Math.min(100, Math.round((t.sent / t.total) * 100)) : 0);
+  function cancel(task) { if (task.status !== 'run') return; task.status = 'cancel'; try { task.ctrl.abort(); } catch {} }
+  const pct = (task) => (task.total > 0 ? Math.min(100, Math.round((task.sent / task.total) * 100)) : 0);
 
   let toastTimer = null;
   function toast(m) { toastMsg = m; clearTimeout(toastTimer); toastTimer = setTimeout(() => (toastMsg = ''), 2200); }
@@ -316,8 +320,8 @@
     html.classList.add('share-mode');
     // 浏览器顶栏颜色跟页面底色（index.html 写死的是 App 的暗色）
     const mq = matchMedia('(prefers-color-scheme: dark)');
-    const tc = document.querySelector('meta[name="theme-color"]');
-    const syncTheme = () => tc?.setAttribute('content', mq.matches ? '#1a1a19' : '#f6f5f1');
+    const themeMeta = document.querySelector('meta[name="theme-color"]');
+    const syncTheme = () => themeMeta?.setAttribute('content', mq.matches ? '#1a1a19' : '#f6f5f1');
     syncTheme(); mq.addEventListener?.('change', syncTheme);
     const onHash = () => { closeMenu(); const p = subFromHash(); if (phase === 'ready' && p !== sub) go(p); };
     const onKey = (e) => { if (e.key === 'Escape' && menu) { e.stopPropagation(); closeMenu(); } };
@@ -342,21 +346,21 @@
   <div class="col">
     <header class="brand">
       <span class="mark">Muse Bridge</span>
-      <span class="ro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg>只读分享</span>
+      <span class="ro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg>{t('只读分享')}</span>
     </header>
 
     {#if phase === 'gone'}
       <section class="state card">
         <div class="badge muted">{@html '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7"/><path d="M15 7h2a5 5 0 0 1 4 8"/><path d="M8 12h4"/><path d="m3 3 18 18"/></svg>'}</div>
-        <h1>链接已失效</h1>
-        <p>这个分享不存在或已经过期。<br />如需继续访问，请联系分享者重新分享。</p>
+        <h1>{t('链接已失效')}</h1>
+        <p>{t('这个分享不存在或已经过期。')}<br />{t('如需继续访问，请联系分享者重新分享。')}</p>
       </section>
     {:else if phase === 'error'}
       <section class="state card">
         <div class="badge muted">{@html glyph('file')}</div>
-        <h1>加载失败</h1>
-        <p>网络好像不太顺畅，稍后再试一次。</p>
-        <button class="btn" onclick={boot}>重新加载</button>
+        <h1>{t('加载失败')}</h1>
+        <p>{t('网络好像不太顺畅，稍后再试一次。')}</p>
+        <button class="btn" onclick={boot}>{t('重新加载')}</button>
       </section>
     {:else}
       <!-- 头部：分享了什么 / 多少 / 多大 / 何时失效 -->
@@ -371,9 +375,9 @@
             <div class="chips">
               {#if summary && !single}<span class="chip">{summary}</span>{/if}
               {#if single}<span class="chip">{fmtSize(single.size)}</span>
-              {:else if meta?.bytes}<span class="chip">共 {fmtSize(meta.bytes)}</span>{/if}
+              {:else if meta?.bytes}<span class="chip">{t('共 {size}', { size: fmtSize(meta.bytes) })}</span>{/if}
               {#if meta?.expiresAt}
-                <span class="chip exp" class:soon={meta.expiresAt - Date.now() < 86400e3} title={'有效期至 ' + fmtFull(meta.expiresAt)}>
+                <span class="chip exp" class:soon={meta.expiresAt - Date.now() < 86400e3} title={t('有效期至 {time}', { time: fmtFull(meta.expiresAt) })}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>{fmtLeft(meta.expiresAt)}
                 </span>
               {/if}
@@ -384,21 +388,21 @@
 
       {#if phase === 'ready'}
       <!-- 路径条（吸顶）+ 视图切换 -->
-      <nav class="bar" class:stuck={scrolled} aria-label="位置" bind:this={barEl}>
+      <nav class="bar" class:stuck={scrolled} aria-label={t('位置')} bind:this={barEl}>
         {#if segs.length}
-          <button class="up" onclick={goUp} aria-label="返回上一级"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m14.5 6-6 6 6 6"/></svg></button>
+          <button class="up" onclick={goUp} aria-label={t('返回上一级')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m14.5 6-6 6 6 6"/></svg></button>
         {/if}
         <div class="crumbs">
-          <button class="crumb" class:cur={!segs.length} onclick={() => setHash('')}>全部文件</button>
+          <button class="crumb" class:cur={!segs.length} onclick={() => setHash('')}>{t('全部文件')}</button>
           {#each segs as s, i (i)}
             <span class="sep" aria-hidden="true">/</span>
             <button class="crumb" class:cur={i === segs.length - 1} onclick={() => goSeg(i)}>{s}</button>
           {/each}
         </div>
         {#if items.length}
-          <div class="seg" role="group" aria-label="视图">
-            <button class:on={view === 'list'} onclick={() => setView('list')} aria-label="列表视图" aria-pressed={view === 'list'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6.5h11M9 12h11M9 17.5h11M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01"/></svg></button>
-            <button class:on={view === 'grid'} onclick={() => setView('grid')} aria-label="网格视图" aria-pressed={view === 'grid'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/></svg></button>
+          <div class="seg" role="group" aria-label={t('视图')}>
+            <button class:on={view === 'list'} onclick={() => setView('list')} aria-label={t('列表视图')} aria-pressed={view === 'list'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6.5h11M9 12h11M9 17.5h11M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01"/></svg></button>
+            <button class:on={view === 'grid'} onclick={() => setView('grid')} aria-label={t('网格视图')} aria-pressed={view === 'grid'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/></svg></button>
           </div>
         {/if}
       </nav>
@@ -413,7 +417,7 @@
       {:else if !items.length}
         <div class="empty card" class:dim={listing}>
           <div class="badge muted">{@html glyph('dir')}</div>
-          <p>这个文件夹是空的</p>
+          <p>{t('这个文件夹是空的')}</p>
         </div>
       {:else if view === 'grid'}
         <div class="grid" class:dim={listing}>
@@ -426,7 +430,7 @@
                 {#if k === 'video'}<span class="play"><svg viewBox="0 0 24 24"><path d="M8.5 5.8v12.4L19 12z" /></svg></span>{/if}
               </span>
               <span class="cname">{it.name}</span>
-              <span class="cmeta">{it.isDir ? '文件夹' : fmtSize(it.size)}</span>
+              <span class="cmeta">{it.isDir ? t('文件夹') : fmtSize(it.size)}</span>
             </button>
           {/each}
         </div>
@@ -450,7 +454,7 @@
               {#if it.isDir}
                 <span class="chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 6 6 6-6 6"/></svg></span>
               {:else}
-                <button class="dl" onclick={() => download(it)} aria-label={'下载 ' + it.name} title="下载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19.5h14"/></svg></button>
+                <button class="dl" onclick={() => download(it)} aria-label={t('下载 {name}', { name: it.name })} title={t('下载')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19.5h14"/></svg></button>
               {/if}
             </div>
           {/each}
@@ -458,7 +462,7 @@
       {/if}
 
       <footer class="foot">
-        {#if meta?.expiresAt}链接有效期至 {fmtFull(meta.expiresAt)}，到期后内容自动删除{:else}只读分享，到期后内容自动删除{/if}
+        {#if meta?.expiresAt}{t('链接有效期至 {time}，到期后内容自动删除', { time: fmtFull(meta.expiresAt) })}{:else}{t('只读分享，到期后内容自动删除')}{/if}
       </footer>
     {/if}
   </div>
@@ -470,12 +474,12 @@
   <div class="ctx" style={menuPos} role="menu">
     <div class="ctx-name" title={menu.it.name}>{menu.it.name}</div>
     {#if menu.it.isDir}
-      <button role="menuitem" onclick={() => menuAct('open')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h3.4l2 2.2H18a2.5 2.5 0 0 1 2.5 2.5v7.3A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17z"/></svg>打开</button>
+      <button role="menuitem" onclick={() => menuAct('open')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h3.4l2 2.2H18a2.5 2.5 0 0 1 2.5 2.5v7.3A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17z"/></svg>{t('打开')}</button>
     {:else}
       {#if VIEW[kindOf(menu.it)]}
-        <button role="menuitem" onclick={() => menuAct('open')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg>预览</button>
+        <button role="menuitem" onclick={() => menuAct('open')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg>{t('预览')}</button>
       {/if}
-      <button role="menuitem" onclick={() => menuAct('dl')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19.5h14"/></svg>下载<span class="ctx-sz">{fmtSize(menu.it.size)}</span></button>
+      <button role="menuitem" onclick={() => menuAct('dl')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19.5h14"/></svg>{t('下载')}<span class="ctx-sz">{fmtSize(menu.it.size)}</span></button>
     {/if}
   </div>
 {/if}
@@ -483,16 +487,16 @@
 <!-- 下载条 + 提示 -->
 <div class="dock" aria-live="polite">
   {#if toastMsg}<div class="toast">{toastMsg}</div>{/if}
-  {#each tasks as t (t.id)}
-    <div class="task" class:done={t.status === 'done'} class:cancel={t.status === 'cancel'}>
-      <span class="tname">{t.name}</span>
-      <span class="tstat">{t.status === 'done' ? '已下载' : t.status === 'cancel' ? '已取消' : t.total ? pct(t) + '%' : fmtSize(t.sent)}</span>
-      {#if t.status === 'run'}
-        <button class="tx" onclick={() => cancel(t)} aria-label="取消下载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
-      {:else if t.status === 'done'}
+  {#each tasks as task (task.id)}
+    <div class="task" class:done={task.status === 'done'} class:cancel={task.status === 'cancel'}>
+      <span class="tname">{task.name}</span>
+      <span class="tstat">{task.status === 'done' ? t('已下载') : task.status === 'cancel' ? t('已取消') : task.total ? pct(task) + '%' : fmtSize(task.sent)}</span>
+      {#if task.status === 'run'}
+        <button class="tx" onclick={() => cancel(task)} aria-label={t('取消下载')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
+      {:else if task.status === 'done'}
         <span class="tok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5.5 12.5 4 4 9-9"/></svg></span>
       {/if}
-      <span class="tbar" style="width:{t.status === 'done' ? 100 : pct(t)}%"></span>
+      <span class="tbar" style="width:{task.status === 'done' ? 100 : pct(task)}%"></span>
     </div>
   {/each}
 </div>

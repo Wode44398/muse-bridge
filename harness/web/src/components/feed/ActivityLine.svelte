@@ -13,6 +13,7 @@
   import Mark from "../brand/Mark.svelte";
   import RailRow from "./RailRow.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tr } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -57,18 +58,18 @@
     <span class="mk"><Mark size={16} live={Boolean(pane.chat.activity)} /></span>
   {/snippet}
   {#snippet head()}
-    {#if pane.chat.activity}<span class="what hx-shimmer">{pane.chat.activity}</span>{/if}
-    {#if elapsed}<span class="time" title="本轮已运行（等你处理卡片的时间不算）">{elapsed}</span>{/if}
+    {#if pane.chat.activity}<span class="what hx-shimmer">{tr(pane.chat.activity)}</span>{/if}
+    {#if elapsed}<span class="time" title={t("本轮已运行（等你处理卡片的时间不算）")}>{elapsed}</span>{/if}
     <button
       class="stop"
       class:armed
       onclick={onStop}
-      aria-label="停止这一轮"
-      title={armed ? "有工作流或子 agent 在跑，再点一次才停" : "停止这一轮"}
+      aria-label={t("停止这一轮")}
+      title={armed ? t("有工作流或子 agent 在跑，再点一次才停") : t("停止这一轮")}
       use:press={{ scale: 0.95 }}
     >
       <Icon name="stop" size={14} fill />
-      <span>{armed ? "再点一次停止" : "停止"}</span>
+      <span>{armed ? t("再点一次停止") : t("停止")}</span>
     </button>
   {/snippet}
 </RailRow>

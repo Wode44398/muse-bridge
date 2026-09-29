@@ -8,6 +8,7 @@
 //   · 这段草稿开始写的时候卡已经停着，发送就回应这张卡（N43）：权限卡 = 拒绝并附上这段话（文字永远不能批准）、提问 = 作为
 //     「其他」答案、计划 = 退回并附上修改意见；卡在别处先定了，这段话改作插话发出（不丢）。
 import type { AskItem, Item, PermissionItem, PlanItem } from "./timeline-types.ts";
+import { t } from "./i18n.ts";
 
 export type CardItem = PermissionItem | AskItem | PlanItem;
 
@@ -57,11 +58,11 @@ export function replyTarget(draftTarget: string | null | undefined, docked: stri
 export function replyHint(card: CardItem): string {
   switch (card.kind) {
     case "permission":
-      return "发送 = 拒绝这一步，并把这段话告诉它";
+      return t("发送 = 拒绝这一步，并把这段话告诉它");
     case "ask":
-      return "发送 = 用这段话回答上面的问题";
+      return t("发送 = 用这段话回答上面的问题");
     case "plan":
-      return "发送 = 退回计划，附上这段修改意见";
+      return t("发送 = 退回计划，附上这段修改意见");
   }
 }
 
@@ -69,18 +70,18 @@ export function replyHint(card: CardItem): string {
 export function replyPlaceholder(card: CardItem): string {
   switch (card.kind) {
     case "permission":
-      return "要拒绝就写一句为什么（文字只会拒绝、不会批准）";
+      return t("要拒绝就写一句为什么（文字只会拒绝、不会批准）");
     case "ask":
-      return "直接写你的回答，或点上面的选项";
+      return t("直接写你的回答，或点上面的选项");
     case "plan":
-      return "写修改意见就是退回；批准请点卡片上的按钮";
+      return t("写修改意见就是退回；批准请点卡片上的按钮");
   }
 }
 
 // 时间线里交互态卡片的占位行
 export function slotText(card: CardItem, docked: boolean, typing: boolean): string {
-  const what = card.kind === "permission" ? "一次操作等你批准" : card.kind === "ask" ? "一个问题等你回答" : "一份计划等你审";
-  if (docked) return `${what}——在输入框上方`;
-  if (typing) return `${what}——停下输入后出现在输入框上方`;
-  return `${what}——排在上一张之后`;
+  const what = card.kind === "permission" ? t("一次操作等你批准") : card.kind === "ask" ? t("一个问题等你回答") : t("一份计划等你审");
+  if (docked) return t("{what}——在输入框上方", { what });
+  if (typing) return t("{what}——停下输入后出现在输入框上方", { what });
+  return t("{what}——排在上一张之后", { what });
 }

@@ -1,12 +1,14 @@
 <script lang="ts">
   // 提示条：居中一行小字，两侧是带端点的细线——尺寸线母题（一根线 + 靠字那端一个小圆点），CSS 画，不用字符。
   // 「已停止」「上下文已压缩」「对话退回到这里 · 工作区文件没有回退」这类时间线上的刻度。
+  import { tr } from "../../lib/i18n.ts";
+
   let { text }: { text: string } = $props();
 </script>
 
 <div class="notice" role="note">
   <span class="rule l" aria-hidden="true"></span>
-  <span class="t">{text}</span>
+  <span class="t">{tr(text)}</span>
   <span class="rule r" aria-hidden="true"></span>
 </div>
 

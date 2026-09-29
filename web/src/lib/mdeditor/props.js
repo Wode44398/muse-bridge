@@ -11,6 +11,7 @@
 // __kinds 记住「这一条现在是什么类型」，只活在面板生命周期内，不落文件。
 import { WidgetType } from '@codemirror/view';
 import { parseYamlProps, propKind, PROP_ICONS } from '../obsmd.js';
+import { t as tt } from '../i18n.js';   // 本文件局部变量大量叫 t（事件目标/胶囊节点），翻译函数用别名
 
 // ============================== 模型：frontmatter 块 ↔ 属性项 ==============================
 const KEY_RE = /^(?![-#\s])([^:]+):(?=\s|$)/;
@@ -91,12 +92,12 @@ export function convert(value, kind) {
 }
 
 const KINDS = [
-  { k: 'bool', label: '复选框' },
-  { k: 'date', label: '日期' },
-  { k: 'datetime', label: '日期 & 时间' },
-  { k: 'list', label: '列表' },
-  { k: 'num', label: '数字' },
-  { k: 'text', label: '文本' },
+  { k: 'bool', label: tt('复选框') },
+  { k: 'date', label: tt('日期') },
+  { k: 'datetime', label: tt('日期 & 时间') },
+  { k: 'list', label: tt('列表') },
+  { k: 'num', label: tt('数字') },
+  { k: 'text', label: tt('文本') },
 ];
 
 // ============================== 键名补全 ==============================
@@ -196,13 +197,13 @@ function build(root, view) {
   const head = document.createElement('button');
   head.type = 'button';
   head.className = 'mde-props-h';
-  head.innerHTML = CHEV + '笔记属性<span class="mde-props-n"></span>';
+  head.innerHTML = CHEV + tt('笔记属性') + '<span class="mde-props-n"></span>';
   const tbl = document.createElement('div');
   tbl.className = 'mde-props-tbl';
   const add = document.createElement('button');
   add.type = 'button';
   add.className = 'mde-props-add';
-  add.innerHTML = PLUS + '<span>添加笔记属性</span>';
+  add.innerHTML = PLUS + '<span>' + tt('添加笔记属性') + '</span>';
   root.append(head, tbl, add);
   if (!editable(root, view)) add.style.display = 'none';
   fillRows(root, view);
@@ -257,14 +258,14 @@ function rowEl(root, view, it) {
   const ic = document.createElement('button');
   ic.type = 'button';
   ic.className = 'mde-pk-ic';
-  ic.title = '属性类型';
+  ic.title = tt('属性类型');
   ic.innerHTML = iconOf(kind);
   const ki = document.createElement('input');
   ki.className = 'mde-pk';
   ki.type = 'text';
   ki.spellcheck = false;
   ki.value = it.key;
-  ki.placeholder = '属性名';
+  ki.placeholder = tt('属性名');
   if (!editable(root, view)) ki.readOnly = true;
   kc.append(ic, ki);
   const vc = document.createElement('div');
@@ -302,7 +303,7 @@ function fillValue(root, view, cell, it, kind) {
       add.className = 'mde-padd';
       add.type = 'text';
       add.spellcheck = false;
-      add.placeholder = arr.length ? '' : '空';
+      add.placeholder = arr.length ? '' : tt('空');
       cell.appendChild(add);
     } else if (!arr.length) cell.appendChild(emptyMark());
     return;
@@ -314,7 +315,7 @@ function fillValue(root, view, cell, it, kind) {
   else if (kind === 'datetime') inp.type = 'datetime-local';
   else {
     inp.type = 'text';
-    inp.placeholder = '空';
+    inp.placeholder = tt('空');
     if (kind === 'num') inp.inputMode = 'decimal';
   }
   inp.value = kind === 'datetime' ? txt(it.value).replace(' ', 'T').slice(0, 16) : txt(it.value);
@@ -325,7 +326,7 @@ function fillValue(root, view, cell, it, kind) {
 function emptyMark() {
   const s = document.createElement('span');
   s.className = 'mde-prop-empty';
-  s.textContent = '空';
+  s.textContent = tt('空');
   return s;
 }
 
@@ -346,7 +347,7 @@ function chipEl(text, i, kind, ro) {
     x.type = 'button';
     x.className = 'mde-chip-x';
     x.tabIndex = -1;
-    x.title = '删除';
+    x.title = tt('删除');
     x.textContent = '×';
     s.appendChild(x);
   }
@@ -564,8 +565,8 @@ function dropChip(root, view, row, i) {
 
 // —— 右键/图标菜单 ——
 async function clip(root, text) {
-  try { await navigator.clipboard.writeText(text); root.__opts?.flash?.('已复制'); return true; }
-  catch { root.__opts?.flash?.('无法写入剪贴板'); return false; }
+  try { await navigator.clipboard.writeText(text); root.__opts?.flash?.(tt('已复制')); return true; }
+  catch { root.__opts?.flash?.(tt('无法写入剪贴板')); return false; }
 }
 function menuItems(root, view, row) {
   const key = row.dataset.key;
@@ -574,17 +575,17 @@ function menuItems(root, view, row) {
   const items = [];
   if (!ro) {
     items.push({
-      icon: 'info', label: '属性类型',
+      icon: 'info', label: tt('属性类型'),
       sub: KINDS.map((t) => ({ svg: iconOf(t.k), label: t.label, on: cur === t.k, run: () => setKind(root, view, key, t.k) })),
     });
     items.push('-');
-    items.push({ icon: 'cut', label: '剪切', run: async () => { const it = itemOf(root, key); if (it && await clip(root, root.__src.slice(it.from, it.to))) removeProp(root, view, key); } });
+    items.push({ icon: 'cut', label: tt('剪切'), run: async () => { const it = itemOf(root, key); if (it && await clip(root, root.__src.slice(it.from, it.to))) removeProp(root, view, key); } });
   }
-  items.push({ icon: 'copy', label: '复制', run: () => { const it = itemOf(root, key); if (it) clip(root, root.__src.slice(it.from, it.to)); } });
+  items.push({ icon: 'copy', label: tt('复制'), run: () => { const it = itemOf(root, key); if (it) clip(root, root.__src.slice(it.from, it.to)); } });
   if (!ro) {
-    items.push({ icon: 'paste', label: '粘贴', run: () => pasteInto(root, view, key) });
+    items.push({ icon: 'paste', label: tt('粘贴'), run: () => pasteInto(root, view, key) });
     items.push('-');
-    items.push({ icon: 'trash', label: '移除', danger: true, run: () => removeProp(root, view, key) });
+    items.push({ icon: 'trash', label: tt('移除'), danger: true, run: () => removeProp(root, view, key) });
   }
   return items;
 }
@@ -592,7 +593,7 @@ function menuItems(root, view, row) {
 async function pasteInto(root, view, key) {
   let t = '';
   try { t = await navigator.clipboard.readText(); } catch {}
-  if (!t) { root.__opts?.flash?.('无法读取剪贴板，请用键盘粘贴'); return; }
+  if (!t) { root.__opts?.flash?.(tt('无法读取剪贴板，请用键盘粘贴')); return; }
   const row = root.querySelector(`.mde-prop[data-key="${cssEsc(key)}"]`);
   if (!row) return;
   let value = t;

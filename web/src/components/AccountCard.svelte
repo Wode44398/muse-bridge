@@ -8,14 +8,15 @@
   // 包含块吃掉。中屏时同一页的侧栏会渲染两份（常驻列 + 隐藏抽屉），每份各管自己的菜单。
   import { me } from '../lib/state.svelte.js';
   import UserMenu from './UserMenu.svelte';
+  import { t } from '../lib/i18n.js';
 
   // onpick：选了菜单里某一项（侧栏抽屉跟着收起）；onhome：回主页（单 agent 模式传 null——没有主页）
   let { onpick = null, onhome = null } = $props();
 
   let anchor = $state(null);
   function toggle(e) { anchor = anchor ? null : e.currentTarget.getBoundingClientRect(); }
-  const name = $derived(me.kind === 'none' ? '未登录' : (me.user || (me.kind === 'admin' ? 'admin' : '')));
-  const role = $derived(me.kind === 'admin' ? '管理员' : me.kind === 'user' ? (me.tier === 'pro' ? 'Pro' : '用户') : '');
+  const name = $derived(me.kind === 'none' ? t('未登录') : (me.user || (me.kind === 'admin' ? 'admin' : '')));
+  const role = $derived(me.kind === 'admin' ? t('管理员') : me.kind === 'user' ? (me.tier === 'pro' ? 'Pro' : t('用户')) : '');
   const initial = $derived(me.kind === 'none' ? '?' : (name || '?').trim().charAt(0).toUpperCase());
 
   function portal(node) {
@@ -24,7 +25,7 @@
   }
 </script>
 
-<button class="acct" class:open={!!anchor} onclick={toggle} aria-haspopup="menu" aria-expanded={!!anchor} title="设置与账户">
+<button class="acct" class:open={!!anchor} onclick={toggle} aria-haspopup="menu" aria-expanded={!!anchor} title={t('设置与账户')}>
   <span class="av">{initial}</span>
   <span class="n">{name}{#if role}<span class="r">{` · ${role}`}</span>{/if}</span>
   <span class="chev" aria-hidden="true">&#xe027;</span>

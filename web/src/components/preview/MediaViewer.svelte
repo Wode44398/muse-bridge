@@ -11,6 +11,7 @@
   import PdfView from './PdfView.svelte';
   import OfficeView from './OfficeView.svelte';
   import HtmlView from './HtmlView.svelte';
+  import { t } from '../../lib/i18n.js';
 
   // host：本实例服务的宿主——'app'（App 末尾的全屏实例）| 'dock'（Claude 工作台侧栏内嵌
   // 实例，fixed 根被宿主的 transform 圈定在侧栏内）。只认 preview.host 相符的打开请求；
@@ -136,13 +137,13 @@
     <!-- 顶栏（渐变保证亮图上可读）：返回 + 文件名 + 计数 + 下载。文档类用 DocViewer 自带头部，这里不出 -->
     {#if !isDoc}
     <div class="mv-top" style:opacity={1 - dragP}>
-      <button class="mv-btn" aria-label="关闭" onclick={close}>
+      <button class="mv-btn" aria-label={t('关闭')} onclick={close}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
       </button>
       <span class="mv-title">{cur.name}</span>
       {#if many}<span class="mv-count">{preview.index + 1} / {preview.items.length}</span>{/if}
       {#if cur.kind === 'video' || cur.downloadHref}
-        <button class="mv-btn" aria-label="更多" onclick={onMore}>
+        <button class="mv-btn" aria-label={t('更多')} onclick={onMore}>
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5.4" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="12" cy="18.6" r="1.9"/></svg>
         </button>
       {/if}
@@ -155,7 +156,7 @@
         <div class="mv-menu" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()}>
           <a class="mv-mrow" href={cur.downloadHref} download={cur.name} onclick={() => { mvMenu = false; }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg>
-            <span>下载</span>
+            <span>{t('下载')}</span>
           </a>
         </div>
       </div>
@@ -163,8 +164,8 @@
 
     <!-- 桌面/平板：左右箭头（手机靠滑动） -->
     {#if many && !isDoc}
-      {#if canPrev}<button class="mv-arrow left" aria-label="上一个" onclick={() => go(-1)} style:opacity={1 - dragP}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>{/if}
-      {#if canNext}<button class="mv-arrow right" aria-label="下一个" onclick={() => go(1)} style:opacity={1 - dragP}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>{/if}
+      {#if canPrev}<button class="mv-arrow left" aria-label={t('上一个')} onclick={() => go(-1)} style:opacity={1 - dragP}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>{/if}
+      {#if canNext}<button class="mv-arrow right" aria-label={t('下一个')} onclick={() => go(1)} style:opacity={1 - dragP}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>{/if}
     {/if}
   </div>
 {/if}

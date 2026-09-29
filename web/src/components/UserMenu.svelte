@@ -9,13 +9,14 @@
   import { api, setToken } from '../lib/api.js';
   import { openSettings } from '../lib/settingsNav.svelte.js';
   import { pushBackLayer } from '../lib/nav.js';
+  import { t } from '../lib/i18n.js';
 
   // anchor：账户卡按钮的 DOMRect；onclose：点空白 / Esc / 返回键；onpick：选了某一项（侧栏抽屉跟着收起）；
   // onhome：常规模式回主页（单 agent 模式不传——没有主页）
   let { anchor, onclose, onpick, onhome = null } = $props();
 
   const canScan = (() => { try { return matchMedia('(pointer: coarse)').matches; } catch { return false; } })();
-  const roleLabel = $derived(me.kind === 'admin' ? '管理员' : me.kind === 'user' ? (me.tier === 'pro' ? 'Pro 用户' : '普通用户') : '未登录');
+  const roleLabel = $derived(me.kind === 'admin' ? t('管理员') : me.kind === 'user' ? (me.tier === 'pro' ? t('Pro 用户') : t('普通用户')) : t('未登录'));
   const shownName = $derived(me.user || (me.kind === 'admin' ? 'admin' : ''));
 
   const W = Math.min(272, window.innerWidth - 16);
@@ -47,27 +48,27 @@
   const SCAN = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 7V5.2A2.2 2.2 0 0 1 5.2 3H7M13 3h1.8A2.2 2.2 0 0 1 17 5.2V7M17 13v1.8a2.2 2.2 0 0 1-2.2 2.2H13M7 17H5.2A2.2 2.2 0 0 1 3 14.8V13M4 10h12"/></svg>';
 </script>
 
-<button class="um-bd" aria-label="关闭菜单" tabindex="-1" onclick={onclose}></button>
-<div class="um" role="menu" tabindex="-1" aria-label="账户菜单" bind:this={el} onkeydown={onKey}
+<button class="um-bd" aria-label={t('关闭菜单')} tabindex="-1" onclick={onclose}></button>
+<div class="um" role="menu" tabindex="-1" aria-label={t('账户菜单')} bind:this={el} onkeydown={onKey}
   style:left="{left}px" style:bottom="{bottom}px" style:width="{W}px">
-  <div class="um-h">{me.kind === 'none' ? '未登录' : `${shownName} · ${roleLabel}`}</div>
+  <div class="um-h">{me.kind === 'none' ? t('未登录') : `${shownName} · ${roleLabel}`}</div>
   {#if onhome}
-    <button class="um-i" role="menuitem" onclick={() => pick(onhome)}><span class="ic" aria-hidden="true">&#xe08a;</span><span class="um-l">主页</span></button>
+    <button class="um-i" role="menuitem" onclick={() => pick(onhome)}><span class="ic" aria-hidden="true">&#xe08a;</span><span class="um-l">{t('主页')}</span></button>
   {/if}
   <!-- 不指定分区：宽屏落在「通用」，手机落在设置首页的列表 -->
-  <button class="um-i" role="menuitem" onclick={() => pick(() => openSettings())}><span class="ic" aria-hidden="true">&#xe0d6;</span><span class="um-l">设置</span></button>
-  <button class="um-i" role="menuitem" onclick={() => pick(() => openSettings('account'))}><span class="ic" aria-hidden="true">&#xe105;</span><span class="um-l">账户</span></button>
-  <button class="um-i" role="menuitem" onclick={() => pick(() => openSettings('about'))}><span class="ic" aria-hidden="true">&#xe08f;</span><span class="um-l">关于</span></button>
+  <button class="um-i" role="menuitem" onclick={() => pick(() => openSettings())}><span class="ic" aria-hidden="true">&#xe0d6;</span><span class="um-l">{t('设置')}</span></button>
+  <button class="um-i" role="menuitem" onclick={() => pick(() => openSettings('account'))}><span class="ic" aria-hidden="true">&#xe105;</span><span class="um-l">{t('账户')}</span></button>
+  <button class="um-i" role="menuitem" onclick={() => pick(() => openSettings('about'))}><span class="ic" aria-hidden="true">&#xe08f;</span><span class="um-l">{t('关于')}</span></button>
   <div class="um-sep" role="separator"></div>
-  <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.screen = 'files'; })}><span class="ic" aria-hidden="true">&#xe072;</span><span class="um-l">工作空间</span></button>
+  <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.screen = 'files'; })}><span class="ic" aria-hidden="true">&#xe072;</span><span class="um-l">{t('工作空间')}</span></button>
   {#if canScan && me.kind !== 'none'}
-    <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.pairScan = { mode: 'scan' }; })}><span class="ic svg" aria-hidden="true">{@html SCAN}</span><span class="um-l">扫一扫登录网页版</span></button>
+    <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.pairScan = { mode: 'scan' }; })}><span class="ic svg" aria-hidden="true">{@html SCAN}</span><span class="um-l">{t('扫一扫登录网页版')}</span></button>
   {/if}
   <div class="um-sep" role="separator"></div>
   {#if me.kind === 'none'}
-    <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.loginOpen = true; onhome?.(); })}><span class="ic" aria-hidden="true">&#xe105;</span><span class="um-l">登录</span></button>
+    <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.loginOpen = true; onhome?.(); })}><span class="ic" aria-hidden="true">&#xe105;</span><span class="um-l">{t('登录')}</span></button>
   {:else}
-    <button class="um-i" role="menuitem" onclick={() => pick(logout)}><span class="ic" aria-hidden="true">&#xe0a4;</span><span class="um-l">退出登录</span></button>
+    <button class="um-i" role="menuitem" onclick={() => pick(logout)}><span class="ic" aria-hidden="true">&#xe0a4;</span><span class="um-l">{t('退出登录')}</span></button>
   {/if}
 </div>
 

@@ -1,6 +1,7 @@
 // 零依赖安全 markdown 渲染：先转义再上格式，模型输出的任何原始 HTML 都到不了 DOM。
 // 覆盖 agent 回复的常用面：标题 / 粗斜体 / 行内码 / 围栏代码(带语言标签+复制钮) /
 // 无序有序列表 / 链接(仅 http(s)) / 表格 / 引用 / 分隔线。
+import { t } from "./i18n.ts";
 
 function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -127,7 +128,7 @@ export function renderMarkdown(src: string, opts: { highlight?: boolean } = {}):
       code = code.replace(/\n$/, "");
       html +=
         `<div class="cb"><div class="cb-bar"><span class="cb-lang">${esc(lang) || "code"}</span>` +
-        `<button class="cb-copy" data-copy>复制</button></div>` +
+        `<button class="cb-copy" data-copy>${t("复制")}</button></div>` +
         `<pre><code>${highlight ? highlightCode(code, lang) : esc(code)}</code></pre></div>`;
     } else if (parts[i]) {
       html += blocks(esc(parts[i]));

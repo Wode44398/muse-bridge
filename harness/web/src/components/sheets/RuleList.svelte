@@ -23,6 +23,7 @@
   import Icon from "../ui/Icon.svelte";
   import IconButton from "../ui/IconButton.svelte";
   import Button from "../ui/Button.svelte";
+  import { t } from "../../lib/i18n.ts";
 
   let {
     title,
@@ -48,7 +49,7 @@
     const lines = splitRules(pending);
     if (!lines.length) return;
     const have = new Set(items.map((r) => r.text));
-    const fresh = lines.filter((t) => (have.has(t) ? false : (have.add(t), true)));
+    const fresh = lines.filter((x) => (have.has(x) ? false : (have.add(x), true)));
     if (fresh.length) items = [...items, ...toItems(fresh)];
     pending = "";
     haptic("light");
@@ -77,7 +78,7 @@
     <div class="rule" transition:collapse>
       <div class="rin">
         <code class="rt">{r.text}</code>
-        <span class="del"><IconButton icon="close" size={coarse ? 36 : 30} iconSize={15} label="删除规则 {r.text}" title="删除" onclick={() => remove(r.id)} /></span>
+        <span class="del"><IconButton icon="close" size={coarse ? 36 : 30} iconSize={15} label={t("删除规则 {rule}", { rule: r.text })} title={t("删除")} onclick={() => remove(r.id)} /></span>
       </div>
     </div>
   {/each}
@@ -94,7 +95,7 @@
       onkeydown={onKey}
       onpaste={onPaste}
     />
-    <Button size={btn} variant="secondary" disabled={!pending.trim()} onclick={add}>添加</Button>
+    <Button size={btn} variant="secondary" disabled={!pending.trim()} onclick={add}>{t("添加")}</Button>
   </div>
 </Group>
 

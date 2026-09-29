@@ -1,0 +1,207 @@
+// dimensio 英文界面文案 · 交互卡（权限 / 提问 / 计划 / 执行事实 / 停靠区）与对话流各行（键 = 中文原文，见 lib/i18n.ts）
+export default {
+  // —— 执行事实（ApprovalPreview）——
+  "要执行的命令": "Command to run",
+  "改 {path}": "Edit {path}",
+  "写 {path}（{n} 行 · {size}）": { one: "Write {path} ({n} line · {size})", other: "Write {path} ({n} lines · {size})" },
+  "工作流「{name}」": "Workflow “{name}”",
+  "要执行的内容": "Content to run",
+  "后台运行": "Run in background",
+  "全部替换": "Replace all",
+  "改前": "Before",
+  "改后": "After",
+  "{n} 行": { one: "{n} line", other: "{n} lines" },
+  "脚本正文（{n} 行）": { one: "Script ({n} line)", other: "Script ({n} lines)" },
+  "太长，只摆了开头": "Too long. Showing only the beginning.",
+
+  // —— 提问卡（AskUserQuestion）——
+  "需要你确认": "Needs your input",
+  "已回答": "Answered",
+  "超时未答": "Timed out",
+  "未回答": "Unanswered",
+  "题目": "Questions",
+  "第 {i} 题（已答）": "Question {i} (answered)",
+  "第 {i} 题": "Question {i}",
+  "下一题": "Next",
+  "提交": "Submit",
+  "{time} 前没人答，agent 就按合理假设继续": "If no one answers by {time}, the agent will continue with reasonable assumptions",
+  "可多选": "Select all that apply",
+  "选项": "Options",
+  "其他（点一下收起）": "Deselect “Other”",
+  "输入你的回答，回车提交": "Type your answer · Enter to submit",
+  "其他…": "Other…",
+  "超时没人答，agent 已按合理假设继续，并会在答复里写明假设。":
+    "Timed out. The agent continued with reasonable assumptions and will state them in its response.",
+  "此问题未作答，agent 已按自身判断继续。": "This question wasn’t answered. The agent continued using its own judgment.",
+
+  // —— 卡片倒计时（读屏）/ 停靠区 ——
+  "还剩 {m} 分 {s} 秒": "{m} min {s} sec left",
+  "还剩 {s} 秒": "{s} sec left",
+  "等你处理的卡片": "Waiting for you",
+  "还有 {n} 张在排队，处理完这张就轮到下一张": {
+    one: "{n} more card in line. It appears when you’re done with this one.",
+    other: "{n} more cards in line. The next appears when you’re done with this one.",
+  },
+
+  // —— 权限卡 ——
+  "已拒绝": "Denied",
+  "已拒绝并停止": "Denied and stopped",
+  "dimensio::本会话按前缀允许": "Allowed for this session (by prefix)",
+  "dimensio::本会话都允许": "Allowed for this session",
+  "已允许一次": "Allowed once",
+  "超时没人批，已按拒绝处理": "Timed out. Denied",
+  "没等到裁决，这一轮已结束": "The turn ended before a decision",
+  "需要你批准": "Needs your approval",
+  "未裁决": "Undecided",
+  "命中的规则": "Matched rule",
+  "每次都要你点头，不能「本会话都允许」": "Needs your approval every time. “Allow for this session” isn’t available.",
+  "这是控制面文件（指令 / 运行配置 / 会话记录），每次改都要你点头，不能「本会话都允许」":
+    "This is a control file (instructions, run config, or session log). Every change needs your approval. “Allow for this session” isn’t available.",
+  "「本会话都允许」会记下": "“Allow for this session” will remember",
+  "记下的规则": "Saved rules",
+  "这一条": "Exact",
+  "按前缀": "By prefix",
+  "拒绝": "Deny",
+  "再点一次：拒绝这一步，并停下这一轮": "Tap again to deny this step and stop the turn",
+  "拒绝这一步，并停下这一轮": "Deny this step and stop the turn",
+  "再点一次停止": "Tap again to stop",
+  "拒绝并停止": "Deny and stop",
+  "本会话都允许": "Allow for this session",
+  "允许一次": "Allow once",
+  "{time} 前没人批，就按拒绝处理": "If no one approves by {time}, it will be denied",
+  "附言：{note}": "Note: {note}",
+
+  // —— 计划卡 ——
+  "计划已转到新会话实施": "Plan handed off to a new session",
+  "计划已批准": "Plan approved",
+  "计划已退回": "Plan sent back",
+  "超时没人审，计划保持未批准": "Timed out. Plan not approved",
+  "没等到决定，这一轮已结束": "The turn ended before a decision",
+  "计划待批准": "Plan awaiting approval",
+  "计划未批准": "Plan not approved",
+  "要改什么？（可留空直接退回）": "What should change? (optional)",
+  "确认退回": "Send back",
+  "退回修改": "Request changes",
+  "在一个干净上下文的新会话里实施这份计划（自主档）；这边就此收尾":
+    "Implement this plan in a new session with a clean context (Auto mode). This chat ends here.",
+  "正在转…": "Handing off…",
+  "在新会话中实施（上下文 {pct}%）": "Implement in new session (context {pct}%)",
+  "在新会话中实施": "Implement in new session",
+  "批准并执行": "Approve and run",
+  "{time} 前没人审，就保持计划模式、以这份计划收尾": "If no one reviews by {time}, it stays in plan mode and ends with this plan",
+  "修改意见：{note}": "Feedback: {note}",
+
+  // —— 活动行 ——
+  "本轮已运行（等你处理卡片的时间不算）": "Time this turn has been running, not counting time spent waiting for you",
+  "停止这一轮": "Stop this turn",
+  "有工作流或子 agent 在跑，再点一次才停": "A workflow or subagent is running. Tap again to stop.",
+  "停止": "Stop",
+
+  // —— 工作流 agent 点阵 / 任务卡 ——
+  "完成": "Done",
+  "运行中": "Running",
+  "久无动静": "Stalled",
+  "失败": "Failed",
+  "排队": "Queued",
+  "等待 agent 启动": "Waiting for agents to start",
+  "{done}/{total} 完成": "{done}/{total} done",
+  "{n} 运行中": "{n} running",
+  "{n} 久无动静": "{n} stalled",
+  "{n} 失败": "{n} failed",
+  "可能还会有更多 agent": "More agents may start",
+  "查看子 agent：{title}": "View subagent: {title}",
+  "查看工作流：{title}": "View workflow: {title}",
+  "工作流": "Workflow",
+  "正在启动工作流": "Starting workflow…",
+  // 「<b>3</b> 个 agent」里粗体数字后面的量词 + 名词（数字单独加粗，所以只译这一截）
+  "个 agent": { one: "agent", other: "agents" },
+
+  // —— 产物卡 ——
+  "文件": "File",
+  "图片": "Image",
+  "视频": "Video",
+  "音频": "Audio",
+  "文档": "Document",
+  "生成的文件": "Generated files",
+  "打开 {path}": "Open {path}",
+
+  // —— 消息气泡 / 助手正文 ——
+  "已复制": "Copied",
+  "复制": "Copy",
+  "运行中插话": "Mid-turn steer",
+  "引用的对话：{title}（点开）": "Open referenced chat: {title}",
+  "（空会话）": "(Empty session)",
+  "从这里改写": "Edit from here",
+  "从这里改写：对话退回到这条消息之前，原话放回输入框，文件不动":
+    "Edit from here: the chat rewinds to before this message and your message goes back in the composer. Files stay as they are.",
+
+  // —— 报错卡 ——
+  "这一轮已经执行过 {n} 次工具——接着做之前，先核对它们的结果": {
+    one: "This turn already made {n} tool call. Check its result before continuing.",
+    other: "This turn already made {n} tool calls. Check their results before continuing.",
+  },
+  "原始报错": "Error details",
+  "继续": "Continue",
+  "接着做": "Continue",
+  "导出诊断包": "Export diagnostic report",
+
+  // —— 时间线 ——
+  "回到底部": "Scroll to bottom",
+  "页面截图 {url}": "Page screenshot: {url}",
+  "思考中": "Thinking…",
+  "思考过程": "Thought process",
+  "查看中 · 第 {n} 处": "Exploring · step {n}",
+  "查看了 {n} 处": { one: "Explored · {n} step", other: "Explored · {n} steps" },
+  "收起处理过程": "Hide steps",
+  "处理过程 · {n} 次工具": { one: "Steps · {n} tool call", other: "Steps · {n} tool calls" },
+
+  // —— 召回（RecallChip）——
+  "记忆": "Memory",
+  "项目概况": "Project overview",
+  "命令": "Command",
+  "模块": "Module",
+  "测试": "Test",
+  "dimensio::路由": "Route",
+  "配置": "Configuration",
+  "数据": "Data",
+  "部署": "Deployment",
+  "指南": "Guide",
+  "验证记录": "Verification log",
+  "项目知识": "Project knowledge",
+  "这一轮自动召回了 {n} 条记忆与项目知识": {
+    one: "Recalled {n} item from memory and project knowledge this turn",
+    other: "Recalled {n} items from memory and project knowledge this turn",
+  },
+  "召回 {n} 条": "Recalled {n}",
+  "这一轮的自动召回": "Auto-recall this turn",
+  "开跑时自动找来给模型参考的": "Retrieved for the model when the turn started",
+  "只露标题": "Titles only",
+  "打开项目记忆": "Open project memory",
+
+  // —— 工具行 ——
+  "完成 {done}/{total}": "{done}/{total} done",
+  // WebFetch 结果行（不截断的那种；截断的见 server.ts）
+  "HTTP {status} · {size} 字": "HTTP {status} · {size} chars",
+  "被拒绝": "Denied",
+  "已停止": "Stopped",
+  "启动中": "Starting…",
+  "{n} 次调用": { one: "{n} call", other: "{n} calls" },
+  "{n} 个 agent": { one: "{n} agent", other: "{n} agents" },
+  // 在跑的工作流摘要「已结束数/总数 agent」（中文本来就是这串，英文按总数变复数）
+  "{done}/{total} agent": { one: "{done}/{total} agent", other: "{done}/{total} agents" },
+  // 读屏给工具行补的状态词（与 bridge settings-claudeai-a 的同名键同值）
+  "（{code}）": " ({code})",
+  "等待启动": "Waiting to start",
+  "没转成后台——这条命令可能刚好结束了，或者后台任务已经满了":
+    "Couldn’t move to background. The command may have just finished, or the background task limit was reached.",
+  "{n} 项": { one: "{n} item", other: "{n} items" },
+  "{q} 等 {n} 个问题": { one: "{q} · {n} question", other: "{q} · {n} questions" },
+  "在任务面板中查看": "View in Tasks",
+  "转后台": "Move to background",
+  "参数": "Arguments",
+  "结果": "Result",
+  "运行中…": "Running…",
+
+  // —— 品牌标：自定义服务被删掉后的占位（比较用，也可能被显示）——
+  "已删除": "Deleted",
+};

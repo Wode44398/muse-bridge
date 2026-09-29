@@ -183,6 +183,10 @@
   .main.has-aside .l2 {
     padding-right: 84px;
   }
+  /* 英文的上膛态「Tap again to stop」更长 */
+  .main.has-aside .l2:lang(en) {
+    padding-right: 128px;
+  }
   .aside {
     grid-area: 1 / 2 / 2 / 3;
     align-self: end;

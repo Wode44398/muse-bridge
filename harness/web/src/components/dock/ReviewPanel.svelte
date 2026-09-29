@@ -1,6 +1,7 @@
 <script module lang="ts">
   import * as api from "../../lib/api.ts";
   import { reloadChat, toast } from "../../lib/state.svelte.ts";
+  import { t, tc, tr, isEn, locale } from "../../lib/i18n.ts";
 
   // 找回 = 回滚到「撤销前现场」检查点（文件与对话一起回到撤销前那一刻）。挂在 8 秒的提示上，面板卸了也要能用，
   // 所以放在模块层；面板还开着、看的还是这个会话，才顺手刷新列表（§17-16）。
@@ -10,18 +11,18 @@
       if (!r.ok) {
         toast(
           r.code === "running"
-            ? "有对话正在跑，停下后再找回"
+            ? t("有对话正在跑，停下后再找回")
             : r.code === "external"
-              ? "撤销之后这些文件又被改过，没有找回——要覆盖就到「回滚到检查点」里确认"
-              : `找回失败：${r.error}`,
+              ? t("撤销之后这些文件又被改过，没有找回——要覆盖就到「回滚到检查点」里确认")
+              : t("找回失败：{error}", { error: tr(String(r.error)) }),
         );
         return;
       }
       await reloadChat(sid);
-      toast("已找回");
+      toast(t("已找回"));
       refreshIfShowing();
     } catch (e: any) {
-      toast(`找回失败：${e?.message ?? e}`);
+      toast(t("找回失败：{error}", { error: tr(String(e?.message ?? e)) }));
     }
   }
 </script>
@@ -109,7 +110,7 @@
       openTok++;
     } catch (e: any) {
       if (my !== seq) return;
-      err = e?.message || "加载失败";
+      err = e?.message || t("加载失败");
       if (s === "session") sdata = null;
       else data = null;
     }
@@ -160,7 +161,7 @@
       open = { ...open, [f.path]: { loading: false, text: d.diff || "", bin: !!d.bin, truncated: !!d.truncated } };
     } catch (e: any) {
       if (tok !== openTok || !open[f.path]?.loading) return;
-      open = { ...open, [f.path]: { loading: false, err: e?.message || "加载失败" } };
+      open = { ...open, [f.path]: { loading: false, err: e?.message || t("加载失败") } };
     }
   }
 
@@ -174,18 +175,20 @@
     try {
       const r = await api.restoreFiles(sid, [f.path], Boolean(f.external));
       if (!r.ok) {
-        if (r.code === "external") toast("这个文件刚在对话之外被改过——列表已刷新，看过再决定");
-        else if (r.code === "stale") toast("列表过期了，已刷新");
-        else toast(r.code === "running" ? "有对话正在跑，停下后才能撤销" : `撤销失败：${r.error}`);
+        if (r.code === "external") toast(t("这个文件刚在对话之外被改过——列表已刷新，看过再决定"));
+        else if (r.code === "stale") toast(t("列表过期了，已刷新"));
+        else toast(r.code === "running" ? t("有对话正在跑，停下后才能撤销") : t("撤销失败：{error}", { error: tr(String(r.error)) }));
         if (r.code === "external" || r.code === "stale") await refresh();
         return;
       }
       const n = r.undo?.n;
       toast(
-        f.st === "A" ? `已删掉这个对话新建的 ${baseName(f.path)}` : `已把 ${baseName(f.path)} 退回会话开始之前`,
+        f.st === "A"
+          ? t("已删掉这个对话新建的 {name}", { name: baseName(f.path) })
+          : t("已把 {name} 退回会话开始之前", { name: baseName(f.path) }),
         n
           ? {
-              label: "找回",
+              label: t("找回"),
               run: () =>
                 void recoverUndo(sid, n, () => {
                   if (alive && chatId === sid) void refresh();
@@ -196,7 +199,7 @@
       await reloadChat(sid);
       if (alive) await refresh();
     } catch (e: any) {
-      toast(`撤销失败：${e?.message ?? e}`);
+      toast(t("撤销失败：{error}", { error: tr(String(e?.message ?? e)) }));
     } finally {
       undoing = null;
       confirming = null;
@@ -210,21 +213,30 @@
 
   const fmtSince = (ts: number) => {
     const d = new Date(ts);
+    // 英文界面按本地化格式（Sep 28, 3:04 PM）；中文照旧手拼 9/28 15:04
+    if (isEn()) return new Intl.DateTimeFormat(locale(), { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(d);
     return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   };
 
-  const ST_LABEL: Record<string, string> = { A: "新增", D: "删除", M: "修改", R: "改名", C: "复制", U: "未跟踪" };
+  const ST_LABEL: Record<string, string> = {
+    A: tc("diff", "新增"),
+    D: tc("diff", "删除"),
+    M: tc("diff", "修改"),
+    R: tc("diff", "改名"),
+    C: tc("diff", "复制"),
+    U: tc("diff", "未跟踪"),
+  };
 </script>
 
 {#snippet diffBody(o: OpenState)}
   {#if o.loading}
     <div class="dstate"><Mark size={16} live /></div>
   {:else if o.err}
-    <div class="dstate">{o.err}</div>
+    <div class="dstate">{tr(o.err)}</div>
   {:else if o.bin}
-    <div class="dstate">二进制文件，略</div>
+    <div class="dstate">{t("二进制文件，略")}</div>
   {:else if !o.text}
-    <div class="dstate">（无差异内容）</div>
+    <div class="dstate">{t("（无差异内容）")}</div>
   {:else}
     <DiffView text={o.text} truncated={!!o.truncated} />
   {/if}
@@ -247,9 +259,9 @@
       <span class="path" title={f.from ? `${f.from} → ${f.path}` : f.path}
         >{#if f.from}<span class="from">{f.from}{" → "}</span>{/if}{f.path}</span
       >
-      {#if f.external}<span class="ext" title="这个对话改完之后，又在对话之外被改过">外部也改过</span>{/if}
+      {#if f.external}<span class="ext" title={t("这个对话改完之后，又在对话之外被改过")}>{t("外部也改过")}</span>{/if}
       {#if f.bin}
-        <span class="bin">二进制</span>
+        <span class="bin">{t("二进制")}</span>
       {:else}
         <span class="cnt add">+{f.add}</span>
         <span class="cnt del">−{f.del}</span>
@@ -262,17 +274,24 @@
             <div class="acts">
               {#if confirming === f.path}
                 <span class="ask">
-                  {f.external ? "它在对话之外也被改过，那些改动会一起丢掉。" : ""}{f.st === "A" ? "删掉这个对话新建的文件？" : "退回这个会话开始之前的样子？"}
+                  <!-- 中文 =「外部改过的提醒」+「问句」连写；英文语序不同（问句在前），所以四种组合各是一整句 -->
+                  {f.st === "A"
+                    ? f.external
+                      ? t("它在对话之外也被改过，那些改动会一起丢掉。删掉这个对话新建的文件？")
+                      : t("删掉这个对话新建的文件？")
+                    : f.external
+                      ? t("它在对话之外也被改过，那些改动会一起丢掉。退回这个会话开始之前的样子？")
+                      : t("退回这个会话开始之前的样子？")}
                 </span>
-                <Button size="sm" variant="ghost" disabled={undoing !== null} onclick={() => (confirming = null)}>取消</Button>
+                <Button size="sm" variant="ghost" disabled={undoing !== null} onclick={() => (confirming = null)}>{t("取消")}</Button>
                 <Button size="sm" variant="danger" loading={undoing === f.path} disabled={undoing !== null} onclick={() => undo(f)}>
-                  {undoing === f.path ? "撤销中…" : "确认撤销"}
+                  {undoing === f.path ? tc("diff", "撤销中…") : tc("diff", "确认撤销")}
                 </Button>
               {:else}
                 <Button size="sm" variant="secondary" icon="undo" disabled={busy || undoing !== null} onclick={() => ask(f.path)}>
-                  {f.st === "A" ? "撤销（删掉新建的）" : "撤销这个文件的改动"}
+                  {f.st === "A" ? t("撤销（删掉新建的）") : t("撤销这个文件的改动")}
                 </Button>
-                {#if busy}<span class="hint">有对话在跑，停下后才能撤销</span>{/if}
+                {#if busy}<span class="hint">{t("有对话在跑，停下后才能撤销")}</span>{/if}
               {/if}
             </div>
           {/if}
@@ -289,11 +308,11 @@
     {#if sessionOk}
       <Segmented
         size="sm"
-        label="对比基线"
+        label={t("对比基线")}
         value={scope}
         options={[
-          { value: "session", label: "本会话" },
-          { value: "git", label: "项目 git" },
+          { value: "session", label: t("本会话") },
+          { value: "git", label: t("项目 git") },
         ]}
         onchange={pick}
       />
@@ -301,48 +320,51 @@
     <div class="sum">
       {#if scope === "session"}
         {#if have && sdata?.available}
-          <span class="base" title="这个会话第一条消息之前（{fmtSince(sdata.since)}）">会话开始前</span>
+          <span class="base" title={t("这个会话第一条消息之前（{time}）", { time: fmtSince(sdata.since) })}>{t("会话开始前")}</span>
           <span class="to">→</span>
-          <span class="to">工作区</span>
+          <span class="to">{tc("diff", "工作区")}</span>
           <span class="tot"><em class="add">+{sdata.total.add}</em><em class="del">−{sdata.total.del}</em></span>
         {/if}
       {:else if data?.git}
         <span class="bic"><Icon name="branch" size={14} /></span>
         <span class="base" title={data.branch ?? ""}>{data.base}</span>
         <span class="to">→</span>
-        <span class="to">工作区</span>
+        <span class="to">{tc("diff", "工作区")}</span>
         <span class="tot"><em class="add">+{data.total?.add ?? 0}</em><em class="del">−{data.total?.del ?? 0}</em></span>
       {/if}
     </div>
-    {#if loading && have}<span class="busy" title="正在读取变更…"><Mark size={14} live /></span>{/if}
-    <IconButton icon="reload" label="刷新" size={coarse ? 40 : 30} iconSize={16} onclick={() => refresh()} />
+    {#if loading && have}<span class="busy" title={t("正在读取变更…")}><Mark size={14} live /></span>{/if}
+    <IconButton icon="reload" label={t("刷新")} size={coarse ? 40 : 30} iconSize={16} onclick={() => refresh()} />
   </div>
 
   <div class="scroll">
     {#if loading && !have}
       <div class="state">
         <Mark size={20} live />
-        <p>正在读取变更…</p>
+        <p>{t("正在读取变更…")}</p>
       </div>
     {:else if err}
       <div class="state">
-        <p>{err}</p>
-        <Button size="sm" variant="secondary" icon="reload" onclick={() => refresh()}>重试</Button>
+        <p>{tr(err)}</p>
+        <Button size="sm" variant="secondary" icon="reload" onclick={() => refresh()}>{t("重试")}</Button>
       </div>
     {:else if scope === "session"}
       {#if !sdata?.available}
         <div class="empty">
-          <Empty icon="undo" title="这个对话没有检查点（没开，或已被清理——只保留最近 30 个对话的），看不了它改了什么">
-            <Button size="sm" variant="secondary" onclick={() => pick("git")}>看项目 git</Button>
+          <Empty icon="undo" title={t("这个对话没有检查点（没开，或已被清理——只保留最近 30 个对话的），看不了它改了什么")}>
+            <Button size="sm" variant="secondary" onclick={() => pick("git")}>{t("看项目 git")}</Button>
           </Empty>
         </div>
       {:else if !sdata.files.length}
         <div class="empty">
-          <Empty title="这个对话没有留下改动" text={sdata.others ? `另有 ${sdata.others} 个文件是对话之外改的，切到「项目 git」看` : undefined} />
+          <Empty
+            title={t("这个对话没有留下改动")}
+            text={sdata.others ? t("另有 {n} 个文件是对话之外改的，切到「项目 git」看", { n: sdata.others }) : undefined}
+          />
         </div>
       {:else}
-        {#if sdata.truncated}<p class="note warn">变更过多，列表已截断</p>{/if}
-        {#if sdata.others}<p class="note">另有 {sdata.others} 个文件是对话之外改的，不在这里列</p>{/if}
+        {#if sdata.truncated}<p class="note warn">{t("变更过多，列表已截断")}</p>{/if}
+        {#if sdata.others}<p class="note">{t("另有 {n} 个文件是对话之外改的，不在这里列", { n: sdata.others })}</p>{/if}
         <div class="list">
           {#each sdata.files as f (f.path)}{@render fileRow(f, true)}{/each}
         </div>
@@ -350,17 +372,17 @@
     {:else if !data || !data.git}
       <div class="empty">
         {#if sessionOk}
-          <Empty icon="branch" title="当前工作空间不是 Git 仓库">
-            <Button size="sm" variant="secondary" onclick={() => pick("session")}>看这个对话改了什么</Button>
+          <Empty icon="branch" title={t("当前工作空间不是 Git 仓库")}>
+            <Button size="sm" variant="secondary" onclick={() => pick("session")}>{t("看这个对话改了什么")}</Button>
           </Empty>
         {:else}
-          <Empty icon="branch" title="当前工作空间不是 Git 仓库" />
+          <Empty icon="branch" title={t("当前工作空间不是 Git 仓库")} />
         {/if}
       </div>
     {:else if !data.files?.length}
-      <div class="empty"><Empty title="工作树很干净，没有改动" /></div>
+      <div class="empty"><Empty title={t("工作树很干净，没有改动")} /></div>
     {:else}
-      {#if data.truncated}<p class="note warn">变更过多，列表已截断</p>{/if}
+      {#if data.truncated}<p class="note warn">{t("变更过多，列表已截断")}</p>{/if}
       <div class="list">
         {#each data.files as f (f.path)}{@render fileRow(f, false)}{/each}
       </div>
@@ -439,6 +461,12 @@
   }
   @container (max-width: 400px) {
     .to {
+      display: none;
+    }
+  }
+  /* 英文的基线切换（This session / Project Git）与「→ Working tree」都长一截：门槛相应抬高，免得把基线名挤没 */
+  @container (max-width: 480px) {
+    .to:lang(en) {
       display: none;
     }
   }

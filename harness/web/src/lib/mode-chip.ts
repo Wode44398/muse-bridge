@@ -3,6 +3,7 @@
 // 默认（自主执行 · 整机 · 没离开 · 这条不是目标）只写「自主」、不亮；有人拉了闸（只读 / 计划、仅工作空间、本会话放行了
 // 工作区外的目录、离开、这条是目标）才写出来并亮墨色。手机上胶囊只剩图标：这条是目标时图标换成靶心。
 import type { IconName } from "./icons.ts";
+import { t } from "./i18n.ts";
 
 export type RunMode = "auto" | "read-only" | "plan";
 
@@ -14,7 +15,7 @@ export interface ModeChipInput {
   goal: boolean; // 输入框里这条要作为目标发出
 }
 
-export const MODE_LABEL: Record<RunMode, string> = { auto: "自主", "read-only": "只读", plan: "计划" };
+export const MODE_LABEL: Record<RunMode, string> = { auto: t("自主"), "read-only": t("只读"), plan: t("计划") };
 const MODE_ICON: Record<RunMode, IconName> = { auto: "shield", "read-only": "eye", plan: "todo" };
 
 export function modeChip(i: ModeChipInput): { text: string; alt: boolean; icon: IconName } {
@@ -22,10 +23,10 @@ export function modeChip(i: ModeChipInput): { text: string; alt: boolean; icon: 
   const roots = fenced ? i.roots : 0;
   const parts = [
     MODE_LABEL[i.mode],
-    fenced ? "仅工作空间" : "",
-    roots ? `+${roots} 目录` : "",
-    i.away ? "离开" : "",
-    i.goal ? "目标" : "",
+    fenced ? t("仅工作空间") : "",
+    roots ? t("+{n} 目录", { n: roots }) : "",
+    i.away ? t("离开") : "",
+    i.goal ? t("目标") : "",
   ].filter(Boolean);
   return {
     text: parts.join(" · "),

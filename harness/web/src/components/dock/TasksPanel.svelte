@@ -12,6 +12,7 @@
   import { collectTasks, splitTasks, toolTaskStatus, toolTaskTitle, type TaskEntry } from "../../lib/tasks.ts";
   import { currentJobs, refreshJobs } from "../../lib/jobs.svelte.ts";
   import { haptic } from "../../lib/touch.ts";
+  import { t } from "../../lib/i18n.ts";
   import { collapse, fade, rise } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
   import IconButton from "../ui/IconButton.svelte";
@@ -34,7 +35,7 @@
   const chatKey = $derived(app.chat.id ?? "");
   const hidden = $derived(view.cleared[chatKey] ?? []);
   const running = $derived(split.running);
-  const finished = $derived(split.finished.filter((t) => !hidden.includes(t.key)));
+  const finished = $derived(split.finished.filter((x) => !hidden.includes(x.key)));
   const runningJobs = $derived(jobList.filter((j) => j.state === "running"));
   // 已完成的按结束时刻倒序（同子 agent / 工作流：刚结束的在上）
   const finishedJobs = $derived(
@@ -47,7 +48,7 @@
 
   function clearFinished() {
     haptic("light");
-    view.cleared[chatKey] = [...hidden, ...finished.map((t) => t.key), ...finishedJobs.map((j) => `job:${j.id}`)];
+    view.cleared[chatKey] = [...hidden, ...finished.map((x) => x.key), ...finishedJobs.map((j) => `job:${j.id}`)];
   }
   function toggleFinished() {
     view.finishedOpen = !view.finishedOpen;
@@ -77,28 +78,28 @@
     if (!f || app.tasksAgent) return;
     void f.seq;
     const key = f.toolId;
-    const known = untrack(() => tasks.some((t) => t.key === key));
+    const known = untrack(() => tasks.some((x) => x.key === key));
     if (!known) return;
     untrack(() => {
       if (hidden.includes(key)) view.cleared[chatKey] = hidden.filter((k) => k !== key);
-      if (split.finished.some((t) => t.key === key)) view.finishedOpen = true;
+      if (split.finished.some((x) => x.key === key)) view.finishedOpen = true;
     });
     flashKey = key;
     tick().then(() => {
       const el = listEl?.querySelector(`[data-task-key="${CSS.escape(key)}"]`);
       el?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
-    const t = setTimeout(() => (flashKey = ""), 1700);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => (flashKey = ""), 1700);
+    return () => clearTimeout(timer);
   });
 </script>
 
-{#snippet task(t: TaskEntry)}
-  <div class="item" data-task-key={t.key} in:rise={{ y: 6 }}>
-    {#if t.kind === "workflow"}
-      <WorkflowDetail item={t.tool} focused={flashKey === t.key} onAgent={(r: AgentRun) => openTaskAgent(t.key, r.id)} />
+{#snippet task(te: TaskEntry)}
+  <div class="item" data-task-key={te.key} in:rise={{ y: 6 }}>
+    {#if te.kind === "workflow"}
+      <WorkflowDetail item={te.tool} focused={flashKey === te.key} onAgent={(r: AgentRun) => openTaskAgent(te.key, r.id)} />
     {:else}
-      <TaskRow item={t.tool} focused={flashKey === t.key} onTranscript={t.tool.agent ? () => openTaskAgent(t.key, t.tool.agent.id) : undefined} />
+      <TaskRow item={te.tool} focused={flashKey === te.key} onTranscript={te.tool.agent ? () => openTaskAgent(te.key, te.tool.agent.id) : undefined} />
     {/if}
   </div>
 {/snippet}
@@ -106,9 +107,9 @@
 <div class="tp">
   {#if av}
     <div class="bar back">
-      <IconButton icon="arrowL" label="返回任务列表" size={coarse ? 40 : 32} onclick={backToTaskList} />
+      <IconButton icon="arrowL" label={t("返回任务列表")} size={coarse ? 40 : 32} onclick={backToTaskList} />
       <span class="title" title={av.run.label}>{av.run.label || toolTaskTitle(av.tool)}</span>
-      <span class="tag">{av.inWorkflow ? "工作流 agent" : "子 agent"}</span>
+      <span class="tag">{av.inWorkflow ? t("工作流 agent") : t("子 agent")}</span>
     </div>
     {#key av.run.id}
       <div class="scroll tr" in:fade|global={{ duration: 180 }}>
@@ -117,7 +118,7 @@
     {/key}
   {:else if tasks.length || jobList.length}
     <div class="bar">
-      <span class="count">{nRunning} 进行中 · {nFinished} 已完成</span>
+      <span class="count">{t("{running} 进行中 · {done} 已完成", { running: nRunning, done: nFinished })}</span>
     </div>
   {/if}
 
@@ -125,17 +126,17 @@
   <div class="scroll list" class:away={!!av} bind:this={listEl}>
     {#if !nRunning && !nFinished}
       <div class="empty">
-        <Empty icon="tasks" title={tasks.length || jobList.length ? "已完成的任务都清除了" : "子 agent、工作流与后台命令的进度会显示在这里"} />
+        <Empty icon="tasks" title={tasks.length || jobList.length ? t("已完成的任务都清除了") : t("子 agent、工作流与后台命令的进度会显示在这里")} />
       </div>
     {:else}
       {#if nRunning}
         <section class="sec">
           <div class="sech">
-            <span class="sec-t">进行中</span>
+            <span class="sec-t">{t("进行中")}</span>
             <span class="n">{nRunning}</span>
           </div>
           <div class="rows">
-            {#each running as t (t.key)}{@render task(t)}{/each}
+            {#each running as te (te.key)}{@render task(te)}{/each}
             {#each runningJobs as j (j.id)}<div class="item" in:rise={{ y: 6 }}><JobRow job={j} /></div>{/each}
           </div>
         </section>
@@ -144,16 +145,16 @@
         <section class="sec">
           <div class="sech">
             <button class="fold" aria-expanded={view.finishedOpen} onclick={toggleFinished}>
-              <span class="sec-t">已完成</span>
+              <span class="sec-t">{t("已完成")}</span>
               <span class="n">{nFinished}</span>
               <span class="chev" class:shut={!view.finishedOpen}><Icon name="chevronD" size={13} stroke={1.8} /></span>
             </button>
-            <Button variant="ghost" size="sm" onclick={clearFinished}>清除</Button>
+            <Button variant="ghost" size="sm" onclick={clearFinished}>{t("清除")}</Button>
           </div>
           {#if view.finishedOpen}
             <div class="fold-body" in:collapse out:collapse>
               <div class="rows">
-                {#each finished as t (t.key)}{@render task(t)}{/each}
+                {#each finished as te (te.key)}{@render task(te)}{/each}
                 {#each finishedJobs as j (j.id)}<div class="item" in:rise={{ y: 6 }}><JobRow job={j} /></div>{/each}
               </div>
             </div>

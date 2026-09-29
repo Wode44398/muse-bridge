@@ -8,6 +8,7 @@
   // 落进落点＝缩进它的中心；取消＝飞回原位。后两段靠 phase 切类 + left/top/transform 过渡，
   // 拖着的时候不挂 left/top 过渡（否则跟手有拖影）。
   import { drag, dndToast } from '../lib/dragdrop.svelte.js';
+  import { tr } from '../lib/i18n.js';
 
   const BASE = import.meta.env.BASE_URL;
 </script>
@@ -55,7 +56,7 @@
 
 <!-- 落地反馈：结局常常发生在拖源已经卸载的页面上，只能由本层端出来 -->
 {#if dndToast.msg}
-  <div class="dnd-toast" aria-live="polite">{dndToast.msg}</div>
+  <div class="dnd-toast" aria-live="polite">{tr(dndToast.msg)}</div>
 {/if}
 
 <style>

@@ -5,6 +5,7 @@
   //（MCP tools / Memory files / Custom agents：标题行带合计 tokens 与条数，>12 行内滚）。
   // 配色用官方 chart categorical 1–8（亮/暗两套实测值），free = reference tint、buffer/deferred = muted。
   import { prepareBreakdown, fmtCompact } from '../lib/ctxUsage.js';
+  import { tr } from '../lib/i18n.js';
   // legend=false：只画计量条（官方收起态——弹层里计量条常显，展开只是多出图例与小节）。
   let { usage, compact = true, legend = true } = $props();
 
@@ -38,7 +39,7 @@
     {#each prep.legend as r (r.id)}
       <div class="row">
         <span class="sw" style="background:{r.color}"></span>
-        <span class="nm">{r.name}</span>
+        <span class="nm">{tr(r.name)}</span>
         <span class="tk">{fmtCompact(r.tokens)}</span>
         <span class="pc">{r.deferred ? '—' : r.pct.toFixed(1) + '%'}</span>
       </div>

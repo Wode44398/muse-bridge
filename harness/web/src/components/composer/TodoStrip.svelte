@@ -5,12 +5,13 @@
   import Icon from "../ui/Icon.svelte";
   import Measure from "../ui/Measure.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
   const todos = $derived(pane.chat.todos);
-  const done = $derived(todos.filter((t) => t.status === "completed").length);
-  const cur = $derived(todos.find((t) => t.status === "in_progress"));
+  const done = $derived(todos.filter((td) => td.status === "completed").length);
+  const cur = $derived(todos.find((td) => td.status === "in_progress"));
   const open = $derived(pane.chat.todosOpen);
   const live = $derived(pane.chat.running);
 </script>
@@ -18,25 +19,25 @@
 <div class="strip" in:rise|global={{ y: 6 }} out:fade|global={{ duration: 140 }}>
   <button class="head" aria-expanded={open} onclick={() => (pane.chat.todosOpen = !pane.chat.todosOpen)}>
     <span class="ic"><Icon name="todo" size={15} /></span>
-    <span class="lbl">计划 <span class="num">{done}/{todos.length}</span></span>
+    <span class="lbl">{t("计划")} <span class="num">{done}/{todos.length}</span></span>
     {#if !open && cur}
       <span class="sep" aria-hidden="true">·</span>
-      <span class="cur" class:hx-shimmer={live}>正在做：{cur.content}</span>
+      <span class="cur" class:hx-shimmer={live}>{t("正在做：{task}", { task: cur.content })}</span>
     {:else}
       <span class="sp"></span>
     {/if}
-    <span class="meas"><Measure value={todos.length ? done / todos.length : 0} label="计划进度" /></span>
+    <span class="meas"><Measure value={todos.length ? done / todos.length : 0} label={t("计划进度")} /></span>
     <span class="chev" class:up={open}><Icon name="chevronD" size={14} /></span>
   </button>
   {#if open}
     <div class="listwrap" transition:collapse>
       <ul class="list">
-        {#each todos as t, i (i)}
-          <li class="it" class:done={t.status === "completed"} class:now={t.status === "in_progress"}>
+        {#each todos as td, i (i)}
+          <li class="it" class:done={td.status === "completed"} class:now={td.status === "in_progress"}>
             <span class="tick" aria-hidden="true">
-              {#if t.status === "completed"}<Icon name="check" size={12} stroke={2.4} />{/if}
+              {#if td.status === "completed"}<Icon name="check" size={12} stroke={2.4} />{/if}
             </span>
-            <span class="txt" class:hx-shimmer={live && t.status === "in_progress"}>{t.content}</span>
+            <span class="txt" class:hx-shimmer={live && td.status === "in_progress"}>{td.content}</span>
           </li>
         {/each}
       </ul>

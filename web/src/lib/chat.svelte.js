@@ -53,6 +53,7 @@ import { IS_CSNAP } from './csnap.js';
 import { IS_SOLO } from './solo.js';
 import { prefsFor, lastPrefs, notePrefs, absorbServerPrefs } from './chatPrefs.js';
 import { mergeProgress, settleProgress, workflowNameFromInput, usageOf, normTaskStatus, taskRunning } from './taskModel.js';
+import { t as tt, tr } from './i18n.js';   // 本文件的 t 是工具行/任务局部变量，翻译函数取别名 tt
 
 // 最近一次打开的会话 id（强持久：关掉页面冷启动也能找回）。session.id 的每个赋值点
 // 都同步写入；boot 时 restoreOnBoot 用它把上次的对话自动加载回来。
@@ -464,7 +465,7 @@ function queueText(m, t) {
 function toDeliverAtts(list, sessionId) {
   if (!Array.isArray(list) || !list.length) return [];
   return list.filter((a) => a && a.path).map((a) => {
-    const name = a.name || String(a.path).split(/[\\/]/).pop() || '文件';
+    const name = a.name || String(a.path).split(/[\\/]/).pop() || tt('文件');
     if (a.kind === 'folder') {
       return { name, path: a.path, kind: 'folder', count: a.count || 0, sessionId,
         nav: a.nav && typeof a.nav === 'object' ? { ws: a.nav.ws || '', rel: a.nav.rel || '' } : null,
@@ -629,7 +630,7 @@ function onEvent(m, ev) {
     case 'snap_closed': if (_onSnapClosed) { try { _onSnapClosed(ev.reason || ''); } catch {} } break;
     case 'error':
       m.status = 'error';
-      m.error = ev.message || ev.title || '出错了';
+      m.error = ev.message || ev.title || tt('出错了');
       settleTurn(m, 'error');
       break;
     case 'interrupted': settleTurn(m, 'stopped'); break;
@@ -814,7 +815,7 @@ export async function answerQuestion(seg, { cancelled } = {}) {
   catch (e) {
     seg.submitting = false;
     const detail = (e?.body && typeof e.body === 'object' ? (e.body.error || e.body.message) : e?.body) || e?.message || '';
-    seg.submitError = '提交失败' + (detail && !/^HTTP \d+$/.test(detail) ? '：' + detail : '，请重试');
+    seg.submitError = detail && !/^HTTP \d+$/.test(detail) ? tt('提交失败：{detail}', { detail: tr(detail) }) : tt('提交失败，请重试');
     return;
   }   // POST 失败：保留选择、解锁并就地提示（后端仍在等这个答案）
   seg.answered = true;
@@ -849,7 +850,7 @@ function finishTurn(m) {
     m.__notified = true;
     const errored = m.status === 'error';
     const ft = m.segments && m.segments.find((s) => s.kind === 'text' && s.md.trim());
-    agentEnd('Claude', errored ? ('出错：' + (m.error || '')) : (ft ? ft.md : ''), { error: errored, watching: ui.screen === 'claude' && !document.hidden });
+    agentEnd('Claude', errored ? tt('出错：{error}', { error: tr(m.error || '') }) : (ft ? ft.md : ''), { error: errored, watching: ui.screen === 'claude' && !document.hidden });
   }
   rememberSession(session.id);
   session.busy = false;
@@ -867,7 +868,7 @@ function settleView(sid) {
   if (m && m.role === 'assistant' && m.status === 'streaming' && !hasContent(m) && !m.thinking) {
     if (m.__sendLost) {
       m.status = 'error';
-      m.error = '发送失败，请重试';
+      m.error = tt('发送失败，请重试');
     } else {
       chat.messages.pop();
       revokeMessageBlobUrls([m]);
@@ -879,10 +880,10 @@ function settleView(sid) {
 }
 
 function errText(e) {
-  if (e && e.status === 401) return '需要登录';
+  if (e && e.status === 401) return tt('需要登录');
   const msg = (e && e.message) || String(e || '');
-  if (/reconnect|network|fetch/i.test(msg)) return '连接中断，请重试';
-  return msg || '出错了';
+  if (/reconnect|network|fetch/i.test(msg)) return tt('连接中断，请重试');
+  return msg || tt('出错了');
 }
 
 // ---- 直播流（唯一一条）---------------------------------------------------------
@@ -986,7 +987,7 @@ async function openRun(run) {
   else if (r === 'unreachable') { if (unsettled()) chat.reconnecting = true; noteFailing(); }
   else if (r === 'auth') {
     const m = cur();
-    if (m && m.role === 'assistant' && m.status === 'streaming') { m.status = 'error'; m.error = '需要登录'; }
+    if (m && m.role === 'assistant' && m.status === 'streaming') { m.status = 'error'; m.error = tt('需要登录'); }
     settleView(sid);
   }
 }
@@ -1083,7 +1084,7 @@ function noteFailing() {
     const m = cur();
     if (m && m.role === 'assistant' && m.status === 'streaming') {
       m.status = 'error';
-      m.error = '连接超时；任务可能仍在后台运行，网络恢复后会自动补全';
+      m.error = tt('连接超时；任务可能仍在后台运行，网络恢复后会自动补全');
     }
     settleView(session.id);
     return;
@@ -1161,7 +1162,7 @@ async function doSync() {
     if (r === 'attached' || r === 'stale') return;
     if (r === 'auth') {
       const m = cur();
-      if (m && m.role === 'assistant' && m.status === 'streaming') { m.status = 'error'; m.error = '需要登录'; }
+      if (m && m.role === 'assistant' && m.status === 'streaming') { m.status = 'error'; m.error = tt('需要登录'); }
       settleView(sid);
       return;
     }
@@ -1283,7 +1284,7 @@ export function send(text, attachments) {
     chat.messages.push({ role: 'user', text: t, attachments: sentAttachments(atts) });
     const me = newAssistant();
     me.status = 'error';
-    me.error = '离线：连不上服务器，无法发送（恢复网络后会自动重连，届时重试即可）';
+    me.error = tt('离线：连不上服务器，无法发送（恢复网络后会自动重连，届时重试即可）');
     if (attachments === undefined) compose.attachments = [];   // 与正常发送一致：消费掉 composer 暂存
     return;
   }
@@ -1372,7 +1373,7 @@ async function openChatStream(params, m) {
   if (!res.ok || !res.body) {
     // 明确鉴权失败：重连永远不会成功，直接报错让用户重新登录，绝不进收敛循环。
     if (res.status === 401 || res.status === 403) {
-      m.status = 'error'; m.error = '需要登录';
+      m.status = 'error'; m.error = tt('需要登录');
       finishTurn(m);
       return;
     }
@@ -1394,7 +1395,7 @@ async function openChatStream(params, m) {
 // 决定），服务端 pending 锚点保证重开/别设备看到同样的截断，下一轮发送时才真正在
 // transcript 里分叉。
 export async function rewindToMessage(msg, mode) {
-  if (session.busy || !session.id || !msg || !msg.uuid) throw new Error('当前无法回滚');
+  if (session.busy || !session.id || !msg || !msg.uuid) throw new Error(tt('当前无法回滚'));
   const r = await api.claudeRewind(session.id, msg.uuid, mode === 'files' || mode === 'chat' ? mode : 'both');
   if (r && r.conv) {
     // 原地 splice（不整组替换）：保留消息与被删消息共享附件对象，整组替换会误吊销
@@ -1475,7 +1476,7 @@ function wsFileUrl(rel, thumb) {
 function toUiAttachments(list) {
   if (!Array.isArray(list) || !list.length) return [];
   return list.map((a) => {
-    const name = a.name || a.file || '文件';
+    const name = a.name || a.file || tt('文件');
     const isImg = IMG_EXT.includes((name.split('.').pop() || '').toLowerCase());
     if (!isImg) return { name, kind: 'file', url: null };
     const src = a.rel ? wsFileUrl : (a.file ? uploadRawUrl : null);
@@ -1500,7 +1501,7 @@ function normSeg(s) {
     // 「任务」面板会永远挂着一条假的 Running（真在跑的那一轮由 /api/attach 重放重建，不走这里）。
     if (tool.task && taskRunning(tool.task.status)) {
       tool.task.status = 'stopped';
-      if (!tool.task.summary) tool.task.summary = '进程结束时中止';
+      if (!tool.task.summary) tool.task.summary = tt('进程结束时中止');
     }
     return tool;
   }) };
@@ -1517,7 +1518,7 @@ function toUiMessages(raw, sid) {
     const segments = (Array.isArray(msg.segments) && msg.segments.length ? msg.segments : [{ kind: 'text', md: msg.text || '' }]).map(normSeg);
     // 服务端重建时能标出「这一轮是错误」（如 CLI 认证失败的合成回答）→ 与直播 error 事件落成同一张错误卡
     const failed = msg.status === 'error';
-    const out = { role: 'assistant', segments, thinking: '', thinkingOpen: false, status: failed ? 'error' : 'done', error: failed ? (msg.error || '出错了') : null, tokens: 0, thinkingTokens: 0, startedAt: msg.ts || 0, elapsed: 0, question: null };
+    const out = { role: 'assistant', segments, thinking: '', thinkingOpen: false, status: failed ? 'error' : 'done', error: failed ? (msg.error || tt('出错了')) : null, tokens: 0, thinkingTokens: 0, startedAt: msg.ts || 0, elapsed: 0, question: null };
     // 助手产物附件（服务端从 transcript 重提取）→ 与直播 done 同款卡片
     const atts = toDeliverAtts(msg.attachments, sid);
     if (atts.length) out.attachments = atts;

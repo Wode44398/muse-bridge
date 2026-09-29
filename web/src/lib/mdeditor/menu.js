@@ -10,10 +10,11 @@
 //   每 370ms 闪一次。现在子菜单内的项永不排缓关、锚点行不被盖，两处根都断了。
 import { EditorView } from '@codemirror/view';
 import { commands, setHeading } from './commands.js';
+import { t, tc } from '../i18n.js';
 
 const SVG = (paths, extra = '') =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${extra}${paths.map((d) => `<path d="${d}"/>`).join('')}</svg>`;
-const TXT = (t) => `<span class="mi-txt">${t}</span>`;
+const TXT = (s) => `<span class="mi-txt">${s}</span>`;
 
 const ICONS = {
   wik: SVG(['M7 4H4v16h3', 'M11 4H9v16h2', 'M13 4h2v16h-2', 'M17 4h3v16h-3']),
@@ -64,14 +65,14 @@ const finePointer = () => { try { return matchMedia('(hover: hover) and (pointer
 
 // 当前行状态（段落设置子菜单的 ✓）
 function lineState(state) {
-  const t = state.doc.lineAt(state.selection.main.head).text.replace(/^\s*/, '');
-  const h = /^(#{1,6})\s/.exec(t);
+  const ln = state.doc.lineAt(state.selection.main.head).text.replace(/^\s*/, '');
+  const h = /^(#{1,6})\s/.exec(ln);
   return {
     heading: h ? h[1].length : 0,
-    task: /^[-*+] \[[ xX]\]/.test(t),
-    bullet: /^[-*+] (?!\[)/.test(t),
-    ordered: /^\d+[.)] /.test(t),
-    quote: /^>/.test(t),
+    task: /^[-*+] \[[ xX]\]/.test(ln),
+    bullet: /^[-*+] (?!\[)/.test(ln),
+    ordered: /^\d+[.)] /.test(ln),
+    quote: /^>/.test(ln),
   };
 }
 
@@ -107,24 +108,24 @@ export function createMenuCtl() {
   async function doCopy(v) {
     const r = v.state.selection.main;
     if (r.empty) return;
-    const t = v.state.sliceDoc(r.from, r.to);
-    try { await navigator.clipboard.writeText(t); } catch { legacyCopy(t); }
-    flash('已复制');
+    const txt = v.state.sliceDoc(r.from, r.to);
+    try { await navigator.clipboard.writeText(txt); } catch { legacyCopy(txt); }
+    flash(t('已复制'));
   }
   async function doCut(v) {
     const r = v.state.selection.main;
     if (r.empty || v.state.readOnly) return;
-    const t = v.state.sliceDoc(r.from, r.to);
-    try { await navigator.clipboard.writeText(t); } catch { legacyCopy(t); }
+    const txt = v.state.sliceDoc(r.from, r.to);
+    try { await navigator.clipboard.writeText(txt); } catch { legacyCopy(txt); }
     v.dispatch({ changes: { from: r.from, to: r.to }, selection: { anchor: r.from } });
     v.focus();
   }
   async function doPaste(v) {
     if (v.state.readOnly) return;
-    let t = '';
-    try { t = await navigator.clipboard.readText(); } catch {}
-    if (!t) { flash('无法读取剪贴板，请用键盘粘贴'); return; }
-    v.dispatch(v.state.replaceSelection(t));
+    let txt = '';
+    try { txt = await navigator.clipboard.readText(); } catch {}
+    if (!txt) { flash(t('无法读取剪贴板，请用键盘粘贴')); return; }
+    v.dispatch(v.state.replaceSelection(txt));
     v.focus();
   }
 
@@ -136,14 +137,14 @@ export function createMenuCtl() {
     const hay = v.state.doc.toString().toLowerCase(), q = findQ.toLowerCase();
     let total = 0;
     for (let i = hay.indexOf(q); i !== -1; i = hay.indexOf(q, i + q.length)) total++;
-    if (!total) { flash('未找到'); return; }
+    if (!total) { flash(t('未找到')); return; }
     let idx = hay.indexOf(q, r.to);
     if (idx === -1) idx = hay.indexOf(q);
     let ord = 0;
     for (let i = hay.indexOf(q); i !== -1 && i <= idx; i = hay.indexOf(q, i + q.length)) ord++;
     v.dispatch({ selection: { anchor: idx, head: idx + q.length }, scrollIntoView: true });
     v.focus();
-    flash(`第 ${ord} / ${total} 处`);
+    flash(t('第 {i} / {n} 处', { i: ord, n: total }));
   }
 
   // ———— 菜单数据（按当前选区/只读态现算） ————
@@ -156,60 +157,60 @@ export function createMenuCtl() {
     const ls = lineState(v.state);
     const items = [];
     if (!ro) {
-      items.push({ icon: 'wik', label: '新增链接', cmd: 'wikilink' });
-      items.push({ icon: 'ext', label: '新增外部链接', cmd: 'link' });
+      items.push({ icon: 'wik', label: t('新增链接'), cmd: 'wikilink' });
+      items.push({ icon: 'ext', label: t('新增外部链接'), cmd: 'link' });
     }
-    if (hasSel && selText) items.push({ icon: 'find', label: `查找 “${shortSel}”`, run: findNext });
+    if (hasSel && selText) items.push({ icon: 'find', label: t('查找 “{q}”', { q: shortSel }), run: findNext });
     if (items.length) items.push('-');
     if (!ro) {
       items.push({
-        icon: 'fmt', label: '文本格式', sub: [
-          { icon: 'bold', label: '加粗', cmd: 'bold', key: `${MOD}+B` },
-          { icon: 'italic', label: '倾斜', cmd: 'italic', key: `${MOD}+I` },
-          { icon: 'strike', label: '删除线', cmd: 'strike' },
-          { icon: 'hl', label: '高亮', cmd: 'highlight' },
+        icon: 'fmt', label: t('文本格式'), sub: [
+          { icon: 'bold', label: t('加粗'), cmd: 'bold', key: `${MOD}+B` },
+          { icon: 'italic', label: t('倾斜'), cmd: 'italic', key: `${MOD}+I` },
+          { icon: 'strike', label: t('删除线'), cmd: 'strike' },
+          { icon: 'hl', label: t('高亮'), cmd: 'highlight' },
           '-',
-          { icon: 'code', label: '代码', cmd: 'code' },
-          { icon: 'math', label: '数学', cmd: 'math' },
-          { icon: 'cmt', label: '注释', cmd: 'comment' },
+          { icon: 'code', label: t('代码'), cmd: 'code' },
+          { icon: 'math', label: t('数学'), cmd: 'math' },
+          { icon: 'cmt', label: t('注释'), cmd: 'comment' },
           '-',
-          { icon: 'clear', label: '清除格式', cmd: 'clearFormat' },
+          { icon: 'clear', label: t('清除格式'), cmd: 'clearFormat' },
         ],
       });
       items.push({
-        icon: 'para', label: '段落设置', sub: [
-          { icon: 'ul', label: '无序列表', cmd: 'bullet', on: ls.bullet },
-          { icon: 'ol', label: '有序列表', cmd: 'ordered', on: ls.ordered },
-          { icon: 'task', label: '任务列表', cmd: 'task', on: ls.task },
+        icon: 'para', label: t('段落设置'), sub: [
+          { icon: 'ul', label: t('无序列表'), cmd: 'bullet', on: ls.bullet },
+          { icon: 'ol', label: t('有序列表'), cmd: 'ordered', on: ls.ordered },
+          { icon: 'task', label: t('任务列表'), cmd: 'task', on: ls.task },
           '-',
-          ...[1, 2, 3, 4, 5, 6].map((n) => ({ icon: 'h' + n, label: `${n} 级标题`, run: (vw) => setHeading(vw, n), on: ls.heading === n })),
-          { icon: 'body', label: '正文', run: (vw) => setHeading(vw, 0), on: !ls.heading && !ls.bullet && !ls.ordered && !ls.task && !ls.quote },
+          ...[1, 2, 3, 4, 5, 6].map((n) => ({ icon: 'h' + n, label: t('{n} 级标题', { n }), run: (vw) => setHeading(vw, n), on: ls.heading === n })),
+          { icon: 'body', label: tc('md', '正文'), run: (vw) => setHeading(vw, 0), on: !ls.heading && !ls.bullet && !ls.ordered && !ls.task && !ls.quote },
           '-',
-          { icon: 'quote', label: '引用', cmd: 'quote', on: ls.quote },
+          { icon: 'quote', label: t('引用'), cmd: 'quote', on: ls.quote },
         ],
       });
       items.push({
-        icon: 'ins', label: '插入', sub: [
-          { icon: 'props', label: '笔记属性', cmd: 'props' },
-          { icon: 'foot', label: '脚注', cmd: 'footnote' },
-          { icon: 'table', label: '表格', cmd: 'table' },
-          { icon: 'callout', label: '标注', cmd: 'callout' },
-          { icon: 'hr', label: '分隔线', cmd: 'hr' },
+        icon: 'ins', label: t('插入'), sub: [
+          { icon: 'props', label: t('笔记属性'), cmd: 'props' },
+          { icon: 'foot', label: t('脚注'), cmd: 'footnote' },
+          { icon: 'table', label: t('表格'), cmd: 'table' },
+          { icon: 'callout', label: t('标注'), cmd: 'callout' },
+          { icon: 'hr', label: t('分隔线'), cmd: 'hr' },
           '-',
-          { icon: 'codeblk', label: '代码块', cmd: 'codeblock' },
-          { icon: 'mathblk', label: '数学块', cmd: 'mathblock' },
+          { icon: 'codeblk', label: t('代码块'), cmd: 'codeblock' },
+          { icon: 'mathblk', label: t('数学块'), cmd: 'mathblock' },
         ],
       });
       items.push('-');
     }
-    if (!ro && hasSel) items.push({ icon: 'cut', label: '剪切', run: doCut, key: `${MOD}+X` });
-    if (hasSel) items.push({ icon: 'copy', label: '复制', run: doCopy, key: `${MOD}+C` });
-    if (!ro) items.push({ icon: 'paste', label: '粘贴', run: doPaste, key: `${MOD}+V` });
-    items.push({ icon: 'all', label: '全选', cmd: 'selectAll', key: `${MOD}+A` });
+    if (!ro && hasSel) items.push({ icon: 'cut', label: t('剪切'), run: doCut, key: `${MOD}+X` });
+    if (hasSel) items.push({ icon: 'copy', label: t('复制'), run: doCopy, key: `${MOD}+C` });
+    if (!ro) items.push({ icon: 'paste', label: t('粘贴'), run: doPaste, key: `${MOD}+V` });
+    items.push({ icon: 'all', label: t('全选'), cmd: 'selectAll', key: `${MOD}+A` });
     if (!ro) {
       items.push('-');
-      items.push({ icon: 'undo', label: '撤销', cmd: 'undo', key: `${MOD}+Z` });
-      items.push({ icon: 'redo', label: '重做', cmd: 'redo', key: isMac ? '⇧⌘Z' : 'Ctrl+Y' });
+      items.push({ icon: 'undo', label: t('撤销'), cmd: 'undo', key: `${MOD}+Z` });
+      items.push({ icon: 'redo', label: t('重做'), cmd: 'redo', key: isMac ? '⇧⌘Z' : 'Ctrl+Y' });
     }
     return items;
   }
@@ -395,19 +396,19 @@ export function createMenuCtl() {
     };
     const sep = () => bar.insertAdjacentHTML('beforeend', '<span class="sb-sep"></span>');
     if (!ro) {
-      mk(ICONS.bold, '加粗', () => commands.bold(view));
-      mk(ICONS.italic, '斜体', () => commands.italic(view));
-      mk(ICONS.strike, '删除线', () => commands.strike(view));
-      mk(ICONS.hl, '高亮', () => commands.highlight(view));
+      mk(ICONS.bold, t('加粗'), () => commands.bold(view));
+      mk(ICONS.italic, t('斜体'), () => commands.italic(view));
+      mk(ICONS.strike, t('删除线'), () => commands.strike(view));
+      mk(ICONS.hl, t('高亮'), () => commands.highlight(view));
       sep();
-      mk(ICONS.code, '行内代码', () => commands.code(view));
-      mk(ICONS.wik, '双链', () => commands.wikilink(view));
+      mk(ICONS.code, t('行内代码'), () => commands.code(view));
+      mk(ICONS.wik, t('双链'), () => commands.wikilink(view));
     } else {
-      mk(ICONS.copy, '复制', () => doCopy(view));
-      mk(ICONS.find, '查找下一处', () => findNext(view));
+      mk(ICONS.copy, t('复制'), () => doCopy(view));
+      mk(ICONS.find, t('查找下一处'), () => findNext(view));
     }
     sep();
-    mk(ICONS.more, '更多', () => {
+    mk(ICONS.more, t('更多'), () => {
       const r = bar.getBoundingClientRect();
       openMenu(r.left, r.bottom + 8);
     }, 'sb-more');

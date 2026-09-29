@@ -20,6 +20,14 @@
 - 在 Linux 上执行的脚本和单元文件必须是 LF（见 `.gitattributes`）。
 - 界面文案与注释用中文；不要在代码、注释或测试里写任何个人信息（真实姓名、邮箱、个人路径、私有域名、账号）。
 
+## 界面多语言（简体中文 / English）
+
+前端（`web/src`、`harness/web/src`）的界面文字**一律包 `t('中文原文')`**，英文写进对应的分区字典
+（`web/src/i18n/en/` 下的 `.js`，dimensio 用 `harness/web/src/i18n/en/` 下的 `.ts`）；服务端发来的文案在显示处包 `tr()`。
+写法见 `web/src/i18n/GUIDE.md`，术语与文风见同目录 `GLOSSARY.md`。
+改完跑 `node web/scripts/i18n-check.mjs <改过的文件>`，LEFTOVER / MISSING / SHADOW 必须为 0。
+局部变量别叫 `t`（会遮住翻译函数）。默认中文；设置 → 通用 → 语言 切英文，地址加 `?lang=en` 可临时预览。
+
 ## 测试
 
 ```bash

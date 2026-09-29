@@ -1,5 +1,7 @@
 // 分屏（宽屏多会话）的纯逻辑：两格里放谁、会话块拖进正文区落在哪一格会发生什么。不依赖 Svelte——Node 测试里直接跑；
 // state.svelte.ts（放格、换格、关格）与 App.svelte（正文区的落点）用它。
+import { t } from "./i18n.ts";
+
 export type Side = 0 | 1;
 
 // 有焦点的那一格换成 next；next 已经在另一格里 = 格子不动（只是焦点挪过去）。没分屏 = 原样
@@ -58,13 +60,13 @@ export function splitDropPlan(o: {
 export function splitDropLabel(plan: SplitDrop): string {
   switch (plan.kind) {
     case "open":
-      return "打开这个对话";
+      return t("打开这个对话");
     case "split":
-      return plan.side === 0 ? "在左边分屏打开" : "在右边分屏打开";
+      return plan.side === 0 ? t("在左边分屏打开") : t("在右边分屏打开");
     case "replace":
-      return plan.side === 0 ? "在左格打开" : "在右格打开";
+      return plan.side === 0 ? t("在左格打开") : t("在右格打开");
     case "swap":
-      return plan.side === 0 ? "换到左格" : "换到右格";
+      return plan.side === 0 ? t("换到左格") : t("换到右格");
     default:
       return "";
   }

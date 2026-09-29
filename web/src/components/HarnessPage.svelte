@@ -23,6 +23,7 @@
   import ProjectPicker from './ProjectPicker.svelte';
   import AccountCard from './AccountCard.svelte';
   import '@hx/app.css';
+  import { t } from '../lib/i18n.js';
 
   configureApi({
     base: () => apiUrl('/api/harness'),
@@ -56,8 +57,8 @@
   $effect(() => {
     if (armed) return;
     if (!ui.morphing) { armed = true; return; }
-    const t = setTimeout(() => { armed = true; }, 300);
-    return () => clearTimeout(t);
+    const tid = setTimeout(() => { armed = true; }, 300);
+    return () => clearTimeout(tid);
   });
   const placeholderBg = $derived(themeBg(resolveMode(hxApp.appearance)));
 
@@ -91,10 +92,10 @@
     const target = hxApp.config?.workspace || '';
     if (ws && normPath(ws) === normPath(target)) {
       hxAttach(rels);
-      dropToast('已挂进 dimensio 的输入栏');
+      dropToast(t('已挂进 dimensio 的输入栏'));
       return;
     }
-    dropToast('正在准备…');
+    dropToast(t('正在准备…'));
     let ok = 0, skipDir = 0;
     for (let i = 0; i < rels.length; i++) {
       const rel = rels[i];
@@ -110,7 +111,7 @@
         ok++;
       } catch {}
     }
-    dropToast(ok ? '已挂进 dimensio 的输入栏' : (skipDir ? '跨工作空间只能投文件，文件夹请先放进这个项目' : '准备失败'));
+    dropToast(ok ? t('已挂进 dimensio 的输入栏') : (skipDir ? t('跨工作空间只能投文件，文件夹请先放进这个项目') : t('准备失败')));
   }
 
   // 单 agent 模式（只剩 dimensio）：这一页就是根——没有主页可回，账户卡挂到侧栏底部。
@@ -119,7 +120,7 @@
   const ready = $derived(!single || me.kind !== 'none');
 
   const dimensioDrop = {
-    key: 'chat:dimensio', effect: 'send', label: (p) => (p?.count > 1 ? `把 ${p.count} 项挂进这个对话` : '挂进这个对话'),
+    key: 'chat:dimensio', effect: 'send', label: (p) => (p?.count > 1 ? t('把 {n} 项挂进这个对话', { n: p.count }) : t('挂进这个对话')),
     accept: (p) => p?.type === WS_FILE && !!p.rels?.length,
     drop: (p) => dropIntoDimensio(p.rels, p.ctx?.ws || '', p.dirs),
   };

@@ -6,20 +6,21 @@
   import type { ApprovalPreview as Preview } from "../../lib/timeline-types.ts";
   import { collapse } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
+  import { t } from "../../lib/i18n.ts";
 
   let { preview, open = true }: { preview: Preview; open?: boolean } = $props();
 
   const kb = (n: number) => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`);
   const summary = $derived(
     preview.kind === "command"
-      ? "要执行的命令"
+      ? t("要执行的命令")
       : preview.kind === "diff"
-        ? `改 ${preview.path}`
+        ? t("改 {path}", { path: preview.path })
         : preview.kind === "write"
-          ? `写 ${preview.path}（${preview.lines} 行 · ${kb(preview.bytes)}）`
+          ? t("写 {path}（{n} 行 · {size}）", { path: preview.path, n: preview.lines, size: kb(preview.bytes) })
           : preview.kind === "script"
-            ? `工作流「${preview.name}」`
-            : "要执行的内容",
+            ? t("工作流「{name}」", { name: preview.name })
+            : t("要执行的内容"),
   );
   // 收起时，命令本身在摘要后面露一截（不点开也知道是哪条）
   const peek = $derived(preview.kind === "command" ? (preview.command.trim().split("\n")[0] ?? "") : "");
@@ -33,15 +34,15 @@
 {#snippet body()}
   {#if preview.kind === "command"}
     <pre class="code">{preview.command}</pre>
-    {#if preview.background}<div class="meta">后台运行</div>{/if}
+    {#if preview.background}<div class="meta">{t("后台运行")}</div>{/if}
   {:else if preview.kind === "diff"}
-    <div class="meta"><span class="mono">{preview.path}</span>{#if preview.replaceAll}<span> · 全部替换</span>{/if}</div>
-    <div class="lbl">改前</div>
+    <div class="meta"><span class="mono">{preview.path}</span>{#if preview.replaceAll}<span> · {t("全部替换")}</span>{/if}</div>
+    <div class="lbl">{t("改前")}</div>
     <pre class="code diff del">{#each lines(preview.old) as l, i (i)}<span class="ln">{l || " "}</span>{/each}</pre>
-    <div class="lbl">改后</div>
+    <div class="lbl">{t("改后")}</div>
     <pre class="code diff add">{#each lines(preview.new) as l, i (i)}<span class="ln">{l || " "}</span>{/each}</pre>
   {:else if preview.kind === "write"}
-    <div class="meta"><span class="mono">{preview.path}</span> · {preview.lines} 行 · {kb(preview.bytes)}</div>
+    <div class="meta"><span class="mono">{preview.path}</span> · {t("{n} 行", { n: preview.lines })} · {kb(preview.bytes)}</div>
     <pre class="code">{preview.head}</pre>
   {:else if preview.kind === "script"}
     <div class="meta"><b>{preview.name}</b>{preview.description ? ` — ${preview.description}` : ""}</div>
@@ -49,7 +50,7 @@
     <div>
       <button class="fold" aria-expanded={scriptOpen} onclick={() => (scriptOpen = !scriptOpen)}>
         <span class="chev"><Icon name="chevronR" size={13} stroke={1.8} /></span>
-        <span class="sum">脚本正文（{preview.lines} 行）</span>
+        <span class="sum">{t("脚本正文（{n} 行）", { n: preview.lines })}</span>
       </button>
       {#if scriptOpen}
         <div class="reveal" transition:collapse><div class="pad"><pre class="code">{preview.script}</pre></div></div>
@@ -58,7 +59,7 @@
   {:else}
     <pre class="code">{(preview as { text?: string }).text ?? ""}</pre>
   {/if}
-  {#if preview.truncated}<div class="cut">太长，只摆了开头</div>{/if}
+  {#if preview.truncated}<div class="cut">{t("太长，只摆了开头")}</div>{/if}
 {/snippet}
 
 {#if open}

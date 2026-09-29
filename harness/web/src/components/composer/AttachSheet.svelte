@@ -15,19 +15,20 @@
   import Measure from "../ui/Measure.svelte";
   import Empty from "../ui/Empty.svelte";
   import Mark from "../brand/Mark.svelte";
+  import { isEn, t, tr } from "../../lib/i18n.ts";
 
   let { onclose }: { onclose: () => void } = $props();
 
   type Tab = "upload" | "browse";
   const TABS: { value: Tab; label: string }[] = [
-    { value: "upload", label: "从设备上传" },
-    { value: "browse", label: "工作空间" },
+    { value: "upload", label: t("从设备上传") },
+    { value: "browse", label: t("工作空间") },
   ];
   let tab = $state<Tab>("upload");
-  function switchTab(t: Tab) {
+  function switchTab(next: Tab) {
     haptic("light");
-    if (t === "browse") openBrowse();
-    else tab = t;
+    if (next === "browse") openBrowse();
+    else tab = next;
   }
 
   // ── 从设备上传 ─────────────────────────────────────────────────────────────────────────
@@ -71,7 +72,7 @@
       chat.attachments = [...new Set([...chat.attachments, ...paths])];
       haptic("light");
       if (!failed.length) onclose();
-      else toast(`${failed.length} 个文件上传失败`);
+      else toast(t("{n} 个文件上传失败", { n: failed.length }));
     }
   }
 
@@ -115,7 +116,7 @@
     haptic("light");
   }
   const crumbs = $derived.by(() => {
-    const out = [{ label: "工作空间", path: "" }];
+    const out = [{ label: t("工作空间"), path: "" }];
     let acc = "";
     for (const part of cwd ? cwd.split("/") : []) {
       acc = acc ? `${acc}/${part}` : part;
@@ -130,27 +131,30 @@
     onclose();
   }
 
+  // 整句一个键，里面的路径 {path} 仍渲染成等宽的 .path（按占位拆开）
+  const noteParts = t("存进这个对话自己的附件目录（{path}，不进你的项目仓库、随对话删除回收，保留目录结构）；PNG/JPEG/WebP 会原生发送给多模态主模型，其他资源由 agent 按需 Read。").split("{path}");
+
   const fmtSize = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${(n / 1024).toFixed(0)} KB` : `${n} B`);
 </script>
 
 {#snippet addFooter()}
-  <Button variant="primary" disabled={!selected.length} onclick={addSelected}>添加 {selected.length ? `(${selected.length})` : ""}</Button>
+  <Button variant="primary" disabled={!selected.length} onclick={addSelected}>{selected.length ? t("添加 ({n})", { n: selected.length }) : t("添加")}</Button>
 {/snippet}
 
-<Sheet title="添加文件" {onclose} footer={tab === "browse" ? addFooter : undefined}>
+<Sheet title={t("添加文件")} {onclose} footer={tab === "browse" ? addFooter : undefined}>
   <div class="tabs">
-    <Segmented full label="添加方式" options={TABS} value={tab} onchange={switchTab} />
+    <Segmented full label={t("添加方式")} options={TABS} value={tab} onchange={switchTab} />
   </div>
 
   {#if tab === "upload"}
     <div class="pickers">
       <button class="pick" disabled={uploading} onclick={() => fileInput?.click()}>
         <span class="pic"><Icon name="file" size={22} stroke={1.5} /></span>
-        <span>选文件</span>
+        <span>{t("选文件")}</span>
       </button>
       <button class="pick" disabled={uploading} onclick={() => folderInput?.click()}>
         <span class="pic"><Icon name="folder" size={22} stroke={1.5} /></span>
-        <span>选文件夹</span>
+        <span>{t("选文件夹")}</span>
       </button>
     </div>
 
@@ -158,26 +162,25 @@
       <div class="progwrap" transition:collapse>
         <div class="prog" role="status">
           <span class="ptext">
-            {uploading ? "上传中" : "完成"}
+            {uploading ? t("上传中") : t("完成")}
             <span class="num">{uploading ? progress.done : progress.done - failed.length}/{progress.total}</span>
           </span>
           <span class="pbar">
-            <Measure value={progress.total ? progress.done / progress.total : 0} tone={!uploading && failed.length ? "err" : "accent"} thick label="上传进度" />
+            <Measure value={progress.total ? progress.done / progress.total : 0} tone={!uploading && failed.length ? "err" : "accent"} thick label={t("上传进度")} />
           </span>
         </div>
       </div>
     {/if}
     {#if failed.length}
-      <p class="fails">失败：{failed.join("、")}</p>
+      <p class="fails">{t("失败：{names}", { names: failed.join(isEn() ? ", " : "、") })}</p>
     {/if}
     <p class="note">
-      存进这个对话自己的附件目录（<span class="path">.dimensio/uploads/</span>，不进你的项目仓库、随对话删除回收，保留目录结构）；PNG/JPEG/WebP
-      会原生发送给多模态主模型，其他资源由 agent 按需 Read。
+      {noteParts[0]}<span class="path">.dimensio/uploads/</span>{noteParts[1]}
     </p>
     <input bind:this={fileInput} type="file" multiple hidden onchange={(e) => picked(e, false)} />
     <input bind:this={folderInput} type="file" webkitdirectory multiple hidden onchange={(e) => picked(e, true)} />
   {:else}
-    <nav class="crumbs" aria-label="位置">
+    <nav class="crumbs" aria-label={t("位置")}>
       {#each crumbs as c, i (c.path)}
         {#if i > 0}<span class="csep" aria-hidden="true"><Icon name="chevronR" size={12} /></span>{/if}
         <button class="crumb" class:cur={c.path === cwd} aria-current={c.path === cwd ? "location" : undefined} onclick={() => load(c.path)}>
@@ -187,7 +190,7 @@
     </nav>
 
     {#if browseError}
-      <p class="fails">{browseError}</p>
+      <p class="fails">{tr(browseError)}</p>
     {:else if loading && !entries.length}
       <div class="loading" aria-busy="true"><Mark size={24} live /></div>
     {:else}
@@ -195,7 +198,7 @@
         {#each entries as en (en.name)}
           {@const sel = isSel(en)}
           <div class="fr" class:sel>
-            <button class="ck" role="checkbox" aria-checked={sel} aria-label="选择 {en.name}" onclick={() => toggle(en)}>
+            <button class="ck" role="checkbox" aria-checked={sel} aria-label={t("选择 {name}", { name: en.name })} onclick={() => toggle(en)}>
               <span class="cbx">{#if sel}<Icon name="check" size={12} stroke={2.4} />{/if}</span>
             </button>
             <button class="main" onclick={() => (en.dir ? load(full(en.name)) : toggle(en))}>
@@ -209,9 +212,9 @@
             </button>
           </div>
         {:else}
-          <Empty compact icon="folder" title="空目录" />
+          <Empty compact icon="folder" title={t("空目录")} />
         {/each}
-        {#if truncated}<p class="note trunc">（列表过长已截断）</p>{/if}
+        {#if truncated}<p class="note trunc">{t("（列表过长已截断）")}</p>{/if}
       </div>
     {/if}
   {/if}

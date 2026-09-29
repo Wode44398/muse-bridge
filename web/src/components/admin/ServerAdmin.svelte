@@ -6,6 +6,7 @@
   import './admin.css';
   import { ui } from '../../lib/state.svelte.js';
   import { pushBackLayer } from '../../lib/nav.js';
+  import { t, tc, tr } from '../../lib/i18n.js';
   import { sa, loadOverview, loadLimits, loadActive, loadUsers, loadAccounts, liveGens, saToastState, saConfirmState, saConfirmSettle } from '../../lib/serverAdmin.svelte.js';
   import SaOverview from './SaOverview.svelte';
   import SaActive from './SaActive.svelte';
@@ -64,15 +65,15 @@
     wrench: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6.5a4.9 4.9 0 0 0-6.4 6L3 17.6 6.4 21l5.1-5.1a4.9 4.9 0 0 0 6-6.4l-3 3-2.5-.5-.5-2.5 3-3z"/></svg>',
   };
   const PAGES = $derived([
-    { key: 'overview', label: '总览', c: '#0a84ff', g: G.gauge },
-    { key: 'active', label: '活跃进程', c: '#34c759', g: G.bolt },
-    { key: 'users', label: sa.multiUser ? '用户' : '服务账号', c: '#ff9f0a', g: G.people },
-    ...(sa.multiUser ? [{ key: 'policy', label: '额度与注册', c: '#30b0c7', g: G.gift }] : []),
-    { key: 'sessions', label: '会话 / 续聊', c: '#64d2ff', g: G.chat },
-    { key: 'routines', label: '定时任务', c: '#ff453a', g: G.clock },
-    { key: 'accounts', label: 'Claude 账号', c: '#bf5af2', g: G.key },
+    { key: 'overview', label: t('总览'), c: '#0a84ff', g: G.gauge },
+    { key: 'active', label: t('活跃进程'), c: '#34c759', g: G.bolt },
+    { key: 'users', label: sa.multiUser ? tc('admin', '用户') : tc('admin', '服务账号'), c: '#ff9f0a', g: G.people },
+    ...(sa.multiUser ? [{ key: 'policy', label: t('额度与注册'), c: '#30b0c7', g: G.gift }] : []),
+    { key: 'sessions', label: t('会话 / 续聊'), c: '#64d2ff', g: G.chat },
+    { key: 'routines', label: t('定时任务'), c: '#ff453a', g: G.clock },
+    { key: 'accounts', label: tc('admin', 'Claude 账号'), c: '#bf5af2', g: G.key },
     // 服务控制：有主机管理脚本时多一套进程 / 自启操作；否则靠守护进程（systemd / docker / pm2）重启
-    { key: 'control', label: '服务控制', c: '#8e8e93', g: G.wrench },
+    { key: 'control', label: t('服务控制'), c: '#8e8e93', g: G.wrench },
   ]);
   $effect(() => { if (!PAGES.some((p) => p.key === sa.page)) sa.page = 'overview'; });
   const title = $derived(PAGES.find((p) => p.key === sa.page)?.label || '');
@@ -80,13 +81,13 @@
   const activeAcct = $derived(sa.accounts.find((a) => a.active));
   const sub = $derived({
     overview: sa.overview?.host?.name || '',
-    active: `${liveGens(sa.gens).length} 个运行中`,
-    users: `${sa.users.length} 个账号`,
-    policy: '注册开关 · 默认额度 · 全服并发',
-    sessions: '预览任意用户的对话，可代发续聊',
-    routines: '各用户的定时触发一览',
-    accounts: activeAcct ? `当前：${activeAcct.label}` : '',
-    control: sa.scriptAvailable ? '进程 · 开机自启' : sa.supervisor ? `由 ${sa.supervisor} 托管 · 资源 · 日志` : '资源 · 日志',
+    active: t('{n} 个运行中', { n: liveGens(sa.gens).length }),
+    users: t('{n} 个账号', { n: sa.users.length }),
+    policy: t('注册开关 · 默认额度 · 全服并发'),
+    sessions: t('预览任意用户的对话，可代发续聊'),
+    routines: t('各用户的定时触发一览'),
+    accounts: activeAcct ? t('当前：{label}', { label: activeAcct.label }) : '',
+    control: sa.scriptAvailable ? t('进程 · 开机自启') : sa.supervisor ? t('由 {name} 托管 · 资源 · 日志', { name: sa.supervisor }) : t('资源 · 日志'),
   }[sa.page] || '');
 </script>
 
@@ -98,7 +99,7 @@
     <aside class="rail">
       <div class="brand">
         <span class="sa-dot" class:ok={sa.ok} class:bad={!sa.ok}></span>
-        <span class="brand-tx">服务端控制台</span>
+        <span class="brand-tx">{t('服务端控制台')}</span>
       </div>
       <div class="brand-sub sa-mono">{sa.overview?.host?.name || '…'} · :{sa.overview?.phonePort || ''}</div>
       <nav class="nav">
@@ -108,7 +109,7 @@
             <span class="nlab">{p.label}</span>
             {#if p.key === 'active' && liveN}<span class="npill green">{liveN}</span>{/if}
             {#if p.key === 'users' && sa.users.length}<span class="npill">{sa.users.length}</span>{/if}
-            {#if p.key === 'accounts' && activeAcct}<span class="ntag sa-trunc">{activeAcct.label}</span>{/if}
+            {#if p.key === 'accounts' && activeAcct}<span class="ntag sa-trunc">{tr(activeAcct.label)}</span>{/if}
           </button>
         {/each}
       </nav>
@@ -123,10 +124,10 @@
         <h1 class="big">{title}</h1>
         {#if sub}<span class="sub">{sub}</span>{/if}
         <div class="sa-sp"></div>
-        <button class="sa-cbtn" onclick={refresh} aria-label="刷新" title="刷新">
+        <button class="sa-cbtn" onclick={refresh} aria-label={t('刷新')} title={t('刷新')}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11A8.5 8.5 0 1 0 19 16.2"/><path d="M20.8 5.5V11h-5.5"/></svg>
         </button>
-        <button class="sa-cbtn" onclick={close} aria-label="关闭控制台" title="关闭">
+        <button class="sa-cbtn" onclick={close} aria-label={t('关闭控制台')} title={t('关闭')}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
         </button>
       </header>
@@ -146,19 +147,19 @@
 
   <!-- 全局确认弹窗 -->
   {#if saConfirmState.open}
-    <button class="sa-mask" aria-label="取消" onclick={() => saConfirmSettle(false)}></button>
+    <button class="sa-mask" aria-label={t('取消')} onclick={() => saConfirmSettle(false)}></button>
     <div class="sa-modal">
       <h3>{saConfirmState.title}</h3>
       {#if saConfirmState.desc}<p>{saConfirmState.desc}</p>{/if}
       <div class="acts">
-        <button class="sa-btn" onclick={() => saConfirmSettle(false)}>取消</button>
+        <button class="sa-btn" onclick={() => saConfirmSettle(false)}>{t('取消')}</button>
         <button class="sa-btn {saConfirmState.danger ? 'dgr' : 'pri'}" onclick={() => saConfirmSettle(true)}>{saConfirmState.yes}</button>
       </div>
     </div>
   {/if}
 
-  <!-- toast -->
-  <div class="sa-toast" class:on={saToastState.on} class:err={saToastState.err}>{saToastState.msg}</div>
+  <!-- toast（调用方可能直接塞服务端报错原文，显示处再过一道 tr()） -->
+  <div class="sa-toast" class:on={saToastState.on} class:err={saToastState.err}>{tr(saToastState.msg)}</div>
 </div>
 
 <style>
@@ -207,6 +208,8 @@
   .big { font-size: 28px; font-weight: 700; letter-spacing: .2px; color: #fff; }
   .sub { font-size: 12.5px; color: var(--sa-tx3); padding-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .body { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 4px 10px; overscroll-behavior: contain; }
+  /* 英文 toast 常比中文长一倍多：允许折行、限宽在视口内（中文仍单行不变） */
+  .sa-toast:lang(en) { white-space: normal; width: max-content; max-width: calc(100vw - 32px); text-align: center; }
 
   /* —— 窄屏（竖窗/半屏）：侧栏变顶部横滑条 —— */
   @media (max-width: 880px) {

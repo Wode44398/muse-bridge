@@ -7,6 +7,7 @@
   //   · 双击 → 在 1 ↔ 2.5 间切换，以点按点为中心
   import { onMount } from 'svelte';
   import { registerCapture } from '../../lib/uiReport.js';
+  import { t } from '../../lib/i18n.js';
 
   let { item, canPrev = false, canNext = false, onClose, onPrev, onNext, onDragProgress } = $props();
 
@@ -19,7 +20,7 @@
       const cv = document.createElement('canvas');
       cv.width = Math.round(img.naturalWidth * k); cv.height = Math.round(img.naturalHeight * k);
       cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-      return { image: cv.toDataURL('image/jpeg', 0.85), note: '图片预览（' + (item?.name || '') + '）' };
+      return { image: cv.toDataURL('image/jpeg', 0.85), note: '图片预览（' + (item?.name || '') + '）' };   // i18n-ignore 截图附注是给 agent 看的上下文，不上屏
     } catch { return null; }
   }));
 
@@ -179,14 +180,14 @@
   {/if}
 
   {#if !loaded && !errored}
-    <div class="iv-spin" aria-label="加载中"><span></span></div>
+    <div class="iv-spin" aria-label={t('加载中')}><span></span></div>
   {/if}
 
   {#if errored}
     <div class="iv-err">
       <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.4"/><path d="m6 17 4.2-4.4 3 3 2.4-2.5 2.9 3.1"/><circle cx="9" cy="9.6" r="1.3"/></svg>
-      <p>图片加载失败</p>
-      <button onclick={retry}>重试</button>
+      <p>{t('图片加载失败')}</p>
+      <button onclick={retry}>{t('重试')}</button>
     </div>
   {/if}
 </div>

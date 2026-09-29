@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { insideGrantedSkillDir, isExtensionRegistryPath } from "./extensions.ts";
 import { sessionsDir } from "./store.ts";
+import { customProvidersDir } from "./paths.ts";
 import { accessLock, insideDeniedRoot, tenantMode } from "./tenant.ts";
 
 // Credential stores recognised by NAME: never readable or writable wherever they
@@ -92,6 +93,11 @@ function isInside(root: string, abs: string): boolean {
 // 外加 config.json.bak-* 备份。名字太常见，只能按位置认。
 const BRIDGE_ROOT = path.resolve(import.meta.dirname, "..", "..");
 const fold = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
+
+// 自定义模型服务的存储（custom-providers.ts）：同账户进程能调 DPAPI 解开 connector-secrets.*，所以整个目录按位置挡。
+export function isCustomProviderStorePath(abs: string): boolean {
+  return isInside(fold(customProvidersDir()), fold(path.resolve(abs)));
+}
 
 export function isBridgeConfigPath(abs: string): boolean {
   const p = path.resolve(abs);
@@ -208,6 +214,7 @@ export function readVerdict(abs: string, root?: string): string | null {
   if (secretByName(p)) return "Blocked by secret guard";
   if (isExtensionRegistryPath(p)) return "Blocked by secret guard (the extension registry holds connector credentials)";
   if (isBridgeConfigPath(p)) return "Blocked by secret guard (the bridge config holds its tokens and keys)";
+  if (isCustomProviderStorePath(p)) return "Blocked by secret guard (dimensio's custom model services hold encrypted API keys)";
   if (isDesktopHostFile(p)) return "Blocked by secret guard (the desktop host descriptor carries the browser broker's secret)";
   // 租户模式的额外禁区（bridge 数据根、程序目录、别人的用户目录……；自己的根除外），见 tenant.ts。
   if (insideDeniedRoot(p)) return "Blocked: this location belongs to the host or to another user";

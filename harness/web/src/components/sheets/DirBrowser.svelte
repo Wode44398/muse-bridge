@@ -17,6 +17,7 @@
   import Chip from "../ui/Chip.svelte";
   import Row from "../ui/Row.svelte";
   import Mark from "../brand/Mark.svelte";
+  import { t, tr } from "../../lib/i18n.ts";
 
   let {
     start = "",
@@ -72,7 +73,7 @@
 
 <div class="db">
   {#if drives.length > 1}
-    <div class="drives" role="group" aria-label="盘符">
+    <div class="drives" role="group" aria-label={t("盘符")}>
       {#each drives as d (d)}
         <Chip tone={path.toLowerCase().startsWith(d.toLowerCase()) ? "accent" : "soft"} mono title={d} onclick={() => go(d)}>
           {d.replace(/[\\/]+$/, "")}
@@ -82,7 +83,7 @@
   {/if}
 
   <div class="bar">
-    <Button size={btn} variant="ghost" icon="arrowU" disabled={!parent || loading} onclick={() => parent && go(parent)}>上一级</Button>
+    <Button size={btn} variant="ghost" icon="arrowU" disabled={!parent || loading} onclick={() => parent && go(parent)}>{t("上一级")}</Button>
     <span class="path" title={path}><bdi>{path}</bdi></span>
     {#if loading && loaded}
       <span class="busy" in:fade={{ duration: 120 }}><Mark size={14} live /></span>
@@ -94,11 +95,11 @@
       {#if !loaded}
         {#if error}
           <div class="state err" role="alert">
-            <span>{error}</span>
-            <Button size={btn} variant="ghost" icon="reload" onclick={() => go(lastTarget)}>重试</Button>
+            <span>{tr(error)}</span>
+            <Button size={btn} variant="ghost" icon="reload" onclick={() => go(lastTarget)}>{t("重试")}</Button>
           </div>
         {:else}
-          <p class="state"><Mark size={16} live /><span>加载中…</span></p>
+          <p class="state"><Mark size={16} live /><span>{t("加载中…")}</span></p>
         {/if}
       {:else}
         {#each dirs as d (d)}
@@ -112,8 +113,8 @@
 
   {#if loaded && error}
     <div class="errline" role="alert">
-      <span>{error}</span>
-      <Button size={btn} variant="ghost" icon="reload" onclick={() => go(lastTarget)}>重试</Button>
+      <span>{tr(error)}</span>
+      <Button size={btn} variant="ghost" icon="reload" onclick={() => go(lastTarget)}>{t("重试")}</Button>
     </div>
   {/if}
 

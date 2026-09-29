@@ -8,6 +8,7 @@
   import { jobs, stopJob, type JobInfo } from "../../lib/jobs.svelte.ts";
   import { haptic } from "../../lib/touch.ts";
   import { press } from "../../lib/motion.ts";
+  import { t, tc } from "../../lib/i18n.ts";
   import TaskLine from "./TaskLine.svelte";
   import type { Glyph } from "./StatusGlyph.svelte";
 
@@ -26,14 +27,14 @@
   const elapsed = $derived(running ? job.elapsedMs + Math.max(0, now - jobs.fetchedAt) : job.elapsedMs);
   const status = $derived(
     running
-      ? "运行中"
+      ? t("运行中")
       : job.state === "timeout"
-        ? "超时被停"
+        ? t("超时被停")
         : job.state === "killed"
-          ? "已停止"
+          ? t("已停止")
           : job.exitCode === 0
-            ? "完成"
-            : `退出码 ${job.exitCode ?? "?"}`,
+            ? t("完成")
+            : t("退出码 {code}", { code: job.exitCode ?? "?" }),
   );
   const bad = $derived(job.state === "timeout" || (job.state === "exited" && job.exitCode !== 0));
   const glyph = $derived<Glyph>(running ? "running" : bad ? "failed" : job.state === "killed" ? "stopped" : "done");
@@ -79,7 +80,7 @@
   aside={running ? stopBtn : undefined}
 >
   {#snippet meta()}
-    <span>后台命令</span>
+    <span>{t("后台命令")}</span>
     <span class:bad>{status}</span>
     <span class="num">{job.id}</span>
   {/snippet}
@@ -90,7 +91,7 @@
 
 {#snippet stopBtn()}
   <button class="stop" class:armed disabled={stopping} use:press={{ scale: 0.95 }} onclick={stop}>
-    {stopping ? "停止中…" : armed ? "确认停止" : "停止"}
+    {stopping ? t("停止中…") : armed ? tc("dimensio", "确认停止") : t("停止")}
   </button>
 {/snippet}
 

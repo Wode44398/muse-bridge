@@ -10,6 +10,7 @@
   import { settingsNav } from '../../lib/settingsNav.svelte.js';
   import { extensionsNav } from '../../lib/extensionsNav.svelte.js';
   import { api } from '../../lib/api.js';
+  import { t, tc } from '../../lib/i18n.js';
   import SecGeneral from './SecGeneral.svelte';
   import SecAccount from './SecAccount.svelte';
   import SecConnection from './SecConnection.svelte';
@@ -26,18 +27,18 @@
   // icon = Anthropicons 字形码位；svg = 字体里没挑到合适字形时的线稿（20px 格、1.5 描边，与字形同粗细）
   const SV = (d) => `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const SECTIONS = $derived([
-    { key: 'general', label: '通用', icon: '' },
-    { key: 'account', label: '账户', icon: '' },
-    ...(agentsOk ? [{ key: 'agents', label: 'Agent', svg: SV('<rect x="3" y="3" width="5.5" height="5.5" rx="1.4"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.4"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.4"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.4"/>') }] : []),
-    { key: 'connection', label: '连接', icon: '' },
-    { key: 'about', label: '关于', icon: '' },
+    { key: 'general', label: t('通用'), icon: '' },
+    { key: 'account', label: t('账户'), icon: '' },
+    ...(agentsOk ? [{ key: 'agents', label: tc('settings', 'Agent'), svg: SV('<rect x="3" y="3" width="5.5" height="5.5" rx="1.4"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.4"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.4"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.4"/>') }] : []),
+    { key: 'connection', label: tc('名词', '连接'), icon: '' },
+    { key: 'about', label: t('关于'), icon: '' },
   ]);
   const CUSTOM = [
-    { type: 'skill', label: '技能', icon: '' },
-    { type: 'connector', label: '连接器', icon: '' },
-    { type: 'plugin', label: '插件', icon: '' },
+    { type: 'skill', label: t('技能'), icon: '' },
+    { type: 'connector', label: t('连接器'), icon: '' },
+    { type: 'plugin', label: t('插件'), icon: '' },
   ];
-  const titleOf = (k) => SECTIONS.find((s) => s.key === k)?.label || '设置';
+  const titleOf = (k) => SECTIONS.find((s) => s.key === k)?.label || t('设置');
 
   const compact = $derived(layout.compact);
   function takeNav() { const s = settingsNav.sec; settingsNav.sec = null; return s; }
@@ -77,20 +78,21 @@
   // —— 搜索（宽屏左栏顶部，claude.ai 同款）：扁平索引 → 跳分区 + 命中行闪一下 ——
   let query = $state('');
   const INDEX = [
-    { sec: 'general', sid: 'theme', label: '主题', keys: '外观 深色 浅色 暗色 跟随系统 明暗 theme' },
-    { sec: 'general', sid: 'notify', label: '任务通知', keys: '通知 提醒 notification' },
-    { sec: 'general', sid: 'suggest', label: '输入建议', keys: '提示词 预测 下一句 Tab 补全 填入' },
-    { sec: 'general', sid: 'fullres', label: '原图加载', keys: '图片 画质 流量' },
-    { sec: 'account', sid: 'username', label: '用户名与身份', keys: '账户 账号 管理员 头像 account' },
-    { sec: 'account', sid: 'usage', label: '用量', keys: '额度 5小时 本周 订阅 quota usage' },
-    { sec: 'account', sid: 'workspace', label: '工作空间', keys: '文件 分享 上传' },
-    { sec: 'account', sid: 'scan', label: '扫码登录网页版', keys: '扫一扫 二维码', only: 'touch' },
-    { sec: 'account', sid: 'logout', label: '退出登录', keys: '登出 logout' },
-    { sec: 'connection', sid: 'addr', label: '服务器地址', keys: '连接 服务器 域名 地址' },
-    { sec: 'connection', sid: 'status', label: '连接状态', keys: '在线 离线 网络' },
-    { sec: 'connection', sid: 'srvadmin', label: '服务端控制台', keys: 'admin 管理 用户 日志' },
-    { sec: 'about', sid: 'about', label: '关于', keys: '版本 about' },
-    { sec: 'agents', sid: 'agent-claude', label: 'Agent 开关', keys: 'agent claude dimensio 启用 关闭 认证' },
+    { sec: 'general', sid: 'theme', label: t('主题'), keys: t('外观 深色 浅色 暗色 跟随系统 明暗 theme') },
+    { sec: 'general', sid: 'lang', label: t('语言'), keys: t('界面语言 中文 英文 English language i18n') },
+    { sec: 'general', sid: 'notify', label: t('任务通知'), keys: t('通知 提醒 notification') },
+    { sec: 'general', sid: 'suggest', label: t('输入建议'), keys: t('提示词 预测 下一句 Tab 补全 填入') },
+    { sec: 'general', sid: 'fullres', label: t('原图加载'), keys: t('图片 画质 流量') },
+    { sec: 'account', sid: 'username', label: t('用户名与身份'), keys: t('账户 账号 管理员 头像 account') },
+    { sec: 'account', sid: 'usage', label: t('用量'), keys: t('额度 5小时 本周 订阅 quota usage') },
+    { sec: 'account', sid: 'workspace', label: t('工作空间'), keys: t('文件 分享 上传') },
+    { sec: 'account', sid: 'scan', label: t('扫码登录网页版'), keys: t('扫一扫 二维码'), only: 'touch' },
+    { sec: 'account', sid: 'logout', label: t('退出登录'), keys: t('登出 logout') },
+    { sec: 'connection', sid: 'addr', label: t('服务器地址'), keys: t('连接 服务器 域名 地址') },
+    { sec: 'connection', sid: 'status', label: t('连接状态'), keys: t('在线 离线 网络') },
+    { sec: 'connection', sid: 'srvadmin', label: t('服务端控制台'), keys: t('admin 管理 用户 日志') },
+    { sec: 'about', sid: 'about', label: t('关于'), keys: t('版本 about') },
+    { sec: 'agents', sid: 'agent-claude', label: t('Agent 开关'), keys: t('agent claude dimensio 启用 关闭 认证') },
   ];
   const touch = (() => { try { return matchMedia('(pointer: coarse)').matches; } catch { return false; } })();
   const hits = $derived.by(() => {
@@ -115,7 +117,7 @@
   }
   function onSearchKey(e) { if (e.key === 'Enter' && hits[0]) { e.preventDefault(); jump(hits[0]); } }
 
-  const roleLabel = $derived(me.kind === 'admin' ? '管理员' : me.kind === 'user' ? (me.tier === 'pro' ? 'Pro 用户' : '普通用户') : '');
+  const roleLabel = $derived(me.kind === 'admin' ? t('管理员') : me.kind === 'user' ? (me.tier === 'pro' ? t('Pro 用户') : t('普通用户')) : '');
   const shownName = $derived(me.user || (me.kind === 'admin' ? 'admin' : ''));
   const initial = $derived((shownName || '?').trim().charAt(0).toUpperCase());
 </script>
@@ -133,16 +135,16 @@
 
 {#if !compact}
   <div class="stg wide" class:closing>
-    <button class="bd" aria-label="关闭设置" tabindex="-1" onclick={close}></button>
-    <div class="dlg" role="dialog" aria-modal="true" aria-label="设置">
+    <button class="bd" aria-label={t('关闭设置')} tabindex="-1" onclick={close}></button>
+    <div class="dlg" role="dialog" aria-modal="true" aria-label={t('设置')}>
       <nav class="side">
         <label class="srch">
           <span class="srch-ic" aria-hidden="true">&#xe0d3;</span>
-          <input placeholder="搜索" bind:value={query} onkeydown={onSearchKey} spellcheck="false" autocomplete="off" />
+          <input placeholder={t('搜索')} bind:value={query} onkeydown={onSearchKey} spellcheck="false" autocomplete="off" />
         </label>
         <div class="side-scroll">
           {#if query.trim()}
-            <div class="grp-l">搜索结果</div>
+            <div class="grp-l">{t('搜索结果')}</div>
             {#if hits.length}
               <ul class="nav">
                 {#each hits as h (h.sec + h.sid)}
@@ -150,10 +152,10 @@
                 {/each}
               </ul>
             {:else}
-              <p class="none">没有匹配的设置</p>
+              <p class="none">{t('没有匹配的设置')}</p>
             {/if}
           {:else}
-            <div class="grp-l">设置</div>
+            <div class="grp-l">{t('设置')}</div>
             <ul class="nav">
               {#each SECTIONS as s (s.key)}
                 <li><button class="ni" class:on={sec === s.key} aria-current={sec === s.key ? 'page' : undefined} onclick={() => go(s.key)}>
@@ -162,7 +164,7 @@
               {/each}
             </ul>
             {#if extOk}
-              <div class="grp-l">自定义</div>
+              <div class="grp-l">{tc('settings', '自定义')}</div>
               <ul class="nav">
                 {#each CUSTOM as c (c.type)}
                   <li><button class="ni" onclick={() => openExt(c.type)}><span class="ni-ic" aria-hidden="true">{c.icon}</span><span class="ni-l">{c.label}</span></button></li>
@@ -173,7 +175,7 @@
         </div>
       </nav>
       <div class="main">
-        <div class="main-bar"><button class="x" onclick={close} aria-label="关闭" title="关闭 (Esc)">&#xe10f;</button></div>
+        <div class="main-bar"><button class="x" onclick={close} aria-label={t('关闭')} title={t('关闭 (Esc)')}>&#xe10f;</button></div>
         <div class="main-scroll" bind:this={scrollEl}>
           <div class="main-in">{#key sec}{@render section(sec)}{/key}</div>
         </div>
@@ -185,8 +187,8 @@
     {#key sec}
       <div class="pg" style:--dx="{dir * 28}px">
         <header class="bar">
-          <button class="bar-b" onclick={sec ? toRoot : close} aria-label="返回">&#xe029;</button>
-          <h1 class="bar-t">{sec ? titleOf(sec) : '设置'}</h1>
+          <button class="bar-b" onclick={sec ? toRoot : close} aria-label={t('返回')}>&#xe029;</button>
+          <h1 class="bar-t">{sec ? titleOf(sec) : t('设置')}</h1>
           <span class="bar-sp"></span>
         </header>
         <div class="pg-scroll" bind:this={scrollEl}>
@@ -194,8 +196,8 @@
             <button class="acct" onclick={() => go('account')}>
               <span class="av" aria-hidden="true">{me.kind === 'none' ? '?' : initial}</span>
               <span class="acct-tx">
-                <b>{me.kind === 'none' ? '未登录' : shownName}</b>
-                <i>{me.kind === 'none' ? '登录后才能使用对话与工作空间' : roleLabel}</i>
+                <b>{me.kind === 'none' ? t('未登录') : shownName}</b>
+                <i>{me.kind === 'none' ? t('登录后才能使用对话与工作空间') : roleLabel}</i>
               </span>
               <span class="chev" aria-hidden="true">&#xe02a;</span>
             </button>
@@ -208,7 +210,7 @@
               {/each}
             </div>
             {#if extOk}
-              <div class="list-h">自定义</div>
+              <div class="list-h">{tc('settings', '自定义')}</div>
               <div class="list">
                 {#each CUSTOM as c (c.type)}
                   <button class="li" onclick={() => openExt(c.type)}>

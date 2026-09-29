@@ -16,6 +16,7 @@
   import { ctxSummary, ctxLevel, fmtResetAt } from '../lib/ctxUsage.js';
   import { clampX } from '../lib/clampx.js';
   import ContextBreakdown from './ContextBreakdown.svelte';
+  import { t, tr } from '../lib/i18n.js';
 
   let open = $state(false);
   let expanded = $state(false);
@@ -32,13 +33,13 @@
   // 桶名语义按 CLI 自己的文案表（claude.exe eF）：seven_day_overage_included = "Fable limit"——就是官方
   // 「Weekly · Fable」那一桶，之前误标成「含超额」；overage = 用量信用（usage credit）额度，官方弹层不摆。
   const LABELS = {
-    five_hour: '5 小时上限', seven_day: '每周 · 所有模型',
-    seven_day_overage_included: '每周 · Fable', seven_day_opus: '每周 · Opus', seven_day_sonnet: '每周 · Sonnet',
-    seven_day_fable: '每周 · Fable', seven_day_oauth_apps: '每周 · 连接的应用',
-    weekly: '每周', opus_weekly: '每周 · Opus', sonnet_weekly: '每周 · Sonnet',
+    five_hour: t('5 小时上限'), seven_day: t('每周 · 所有模型'),
+    seven_day_overage_included: t('每周 · Fable'), seven_day_opus: t('每周 · Opus'), seven_day_sonnet: t('每周 · Sonnet'),
+    seven_day_fable: t('每周 · Fable'), seven_day_oauth_apps: t('每周 · 连接的应用'),
+    weekly: t('每周'), opus_weekly: t('每周 · Opus'), sonnet_weekly: t('每周 · Sonnet'),
   };
   const HIDDEN = new Set(['overage']);
-  const label = (r) => r.label ? ('每周 · ' + r.label) : (LABELS[r.key] || ('额度 · ' + String(r.key).replace(/_/g, ' ')));
+  const label = (r) => r.label ? t('每周 · {label}', { label: tr(r.label) }) : (LABELS[r.key] || t('额度 · {key}', { key: String(r.key).replace(/_/g, ' ') }));
   // 桶排序照官方：5 小时 → 每周全模型 → 各模型周桶 → 其余。
   const ORDER = ['five_hour', 'seven_day'];
   const rank = (r) => { const i = ORDER.indexOf(r.key); return i < 0 ? 10 : i; };
@@ -70,10 +71,10 @@
   // 后台标签页不空转轮询（省电省流量），回前台立即刷一次补上。
   onMount(() => {
     refresh();
-    const t = setInterval(() => { if (!document.hidden) refresh(); }, 30000);
+    const iv = setInterval(() => { if (!document.hidden) refresh(); }, 30000);
     const onVis = () => { if (!document.hidden) refresh(); };
     document.addEventListener('visibilitychange', onVis);
-    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVis); };
+    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVis); };
   });
 
   const rows = $derived(dedupe(Object.entries(status.limits || {}).map(([key, v]) => ({ key, ...v }))).sort((a, b) => rank(a) - rank(b)));
@@ -102,7 +103,7 @@
 </script>
 
 <div class="qr-wrap">
-  <button class="qr-btn" bind:this={ringBtn} aria-label={['用量', hasCtx ? 'Context ' + ctx.summary : '', planPeak != null ? 'Plan ' + planPeak + '%' : ''].filter(Boolean).join(' · ')} title="查看用量" onclick={toggle}>
+  <button class="qr-btn" bind:this={ringBtn} aria-label={[t('用量'), hasCtx ? 'Context ' + ctx.summary : '', planPeak != null ? 'Plan ' + planPeak + '%' : ''].filter(Boolean).join(' · ')} title={t('查看用量')} onclick={toggle}>
     <svg viewBox="0 0 16 16" class="qr {level}" aria-hidden="true">
       <circle cx="8" cy="8" r={R} class="track" />
       <circle cx="8" cy="8" r={R} class="arc" stroke-dasharray={C} stroke-dashoffset={C * (1 - Math.max(0, Math.min(100, pct)) / 100)} />
@@ -110,7 +111,7 @@
   </button>
 
   {#if open}
-    <button class="qb-backdrop" aria-label="关闭" onclick={() => (open = false)}></button>
+    <button class="qb-backdrop" aria-label={t('关闭')} onclick={() => (open = false)}></button>
     <!-- 左锚弹层：clampX 必须显式 anchor:'left'（见 clampx.js 顶部的坑） -->
     <div class="qb-panel" class:down={dir === 'down'} use:clampX={{ anchor: 'left' }}>
       <!-- Context window：只认「正看的这个会话」自己的数据；greeting 空态不摆底噪。
@@ -123,14 +124,14 @@
         </button>
         <div class="qb-body">
           {#if !hasCtx}
-            <div class="qb-note">发一条消息后显示上下文用量</div>
+            <div class="qb-note">{t('发一条消息后显示上下文用量')}</div>
           {:else if usage}
             <ContextBreakdown {usage} compact={true} legend={expanded} />
           {:else}
             <div class="qb-bar" role="progressbar" aria-valuenow={ctx.pct ?? 0} aria-valuemin="0" aria-valuemax="100"><span class="qb-fill {level}" style="width:{Math.min(100, ctx.pct ?? 100)}%"></span></div>
           {/if}
         </div>
-        {#if stale}<div class="qb-note">更新于 {relTime(stale)} · 发消息后刷新</div>{/if}
+        {#if stale}<div class="qb-note">{t('更新于 {time} · 发消息后刷新', { time: relTime(stale) })}</div>{/if}
       </div>
       <div class="qb-div"></div>
       <!-- 官方「Plan usage limits · Max (20x)」+ 每桶：名字 / 重置时刻 + 百分比 / 4px 条 -->
@@ -140,13 +141,13 @@
           {#if rows.length}
             {#each rows as r (r.key)}
               <div class="qb-row">
-                <span class="qb-lbl">{label(r)}{#if rowStale(r)}<span class="qb-old"> · 更新于 {relTime(rowStale(r))}</span>{/if}</span>
+                <span class="qb-lbl">{label(r)}{#if rowStale(r)}<span class="qb-old"> · {t('更新于 {time}', { time: relTime(rowStale(r)) })}</span>{/if}</span>
                 <span class="qb-v"><span class="qb-rs">{r.resetsAt ? fmtResetAt(r.resetsAt) : ''}</span><span class="qb-pct">{Math.round(r.pct || 0)}%</span></span>
                 <span class="qb-bar"><span class="qb-fill {ctxLevel(r.pct || 0)}" style="width:{Math.min(100, r.pct || 0)}%"></span></span>
               </div>
             {/each}
           {:else}
-            <div class="qb-note">暂无额度数据</div>
+            <div class="qb-note">{t('暂无额度数据')}</div>
           {/if}
         </div>
       </div>

@@ -1,7 +1,9 @@
 import type { Turn } from "../agent/turn.ts";
 import type { StreamEvent } from "../agent/events.ts";
 
-export type ProviderId = "anthropic" | "openai" | "qwen" | "zhipu" | "kimi" | "mimo" | "gemini";
+export type BuiltinProviderId = "anthropic" | "openai" | "qwen" | "zhipu" | "kimi" | "mimo" | "gemini";
+// custom-<hex>：用户在「模型服务」里自己加的 OpenAI 兼容端点（server/custom-providers.ts）
+export type ProviderId = BuiltinProviderId | `custom-${string}`;
 
 export interface Capabilities {
   contextWindow: number;

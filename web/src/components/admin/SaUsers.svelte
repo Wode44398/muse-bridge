@@ -4,6 +4,7 @@
   // 主机形态（多用户关着）没有注册与邀请：这页只管「服务账号」——QQ 机器人这类程序用的账号。
   import { api } from '../../lib/api.js';
   import { sa, loadUsers, saToast, saConfirm, fmtNum, fmtAgo } from '../../lib/serverAdmin.svelte.js';
+  import { t, tc, tr } from '../../lib/i18n.js';
   import SaAdminSessions from './SaAdminSessions.svelte';
 
   $effect(() => { sa.tick; loadUsers(); });
@@ -24,17 +25,17 @@
   async function genInvite(tier) {
     if (busy) return; busy = true;
     try { const r = await api.post('/api/admin/invite', { tier }); inviteModal = { code: r.code, tier: r.tier }; loadUsers(); }
-    catch (e) { saToast('生成失败：' + (e?.body?.error || e?.message || e), true); }
+    catch (e) { saToast(tc('admin', '生成失败：{reason}', { reason: tr(String(e?.body?.error || e?.message || e)) }), true); }
     busy = false;
   }
-  function copyText(t, msg = '已复制') { navigator.clipboard?.writeText(t).then(() => saToast(msg)).catch(() => {}); }
+  function copyText(text, msg = t('已复制')) { navigator.clipboard?.writeText(text).then(() => saToast(msg)).catch(() => {}); }
 
   async function post(path, body, okMsg) {
     try { const r = await api.post(path, body); if (r?.error) throw new Error(r.error); if (okMsg) saToast(okMsg); loadUsers(); return true; }
-    catch (e) { saToast(e?.body?.error || e?.message || '失败', true); return false; }
+    catch (e) { saToast(tr(e?.body?.error || e?.message) || t('失败'), true); return false; }
   }
   const setTier = (u) => post('/api/admin/user/tier', { name: u.name, tier: u.tier === 'user' ? 'pro' : 'user' }, `${u.name} → ${u.tier === 'user' ? 'pro' : 'user'}`);
-  const setDisabled = (u) => post('/api/admin/user/disable', { name: u.name, disabled: !u.disabled }, u.disabled ? '已启用' : '已禁用');
+  const setDisabled = (u) => post('/api/admin/user/disable', { name: u.name, disabled: !u.disabled }, u.disabled ? t('已启用') : t('已禁用'));
   function toggleAgent(u, id) {
     const a = agentState(id);
     if (a && !a.multiUser) return;
@@ -48,8 +49,8 @@
   $effect(() => { sa.tick; api.get('/api/admin/policy').then((r) => { defaults = r?.policy?.quota || {}; }).catch(() => {}); });
   let qEdit = $state(null);           // { name, dayTurns, weekTurns, dayCostUsd, weekCostUsd }
   const Q_FIELDS = [
-    { k: 'dayTurns', label: '每天轮数' }, { k: 'weekTurns', label: '7 天轮数' },
-    { k: 'dayCostUsd', label: '每天美元' }, { k: 'weekCostUsd', label: '7 天美元' },
+    { k: 'dayTurns', label: t('每天轮数') }, { k: 'weekTurns', label: t('7 天轮数') },
+    { k: 'dayCostUsd', label: t('每天美元') }, { k: 'weekCostUsd', label: t('7 天美元') },
   ];
   function editQuota(u) {
     const q = u.quota || {};
@@ -57,42 +58,42 @@
   }
   async function saveQuota(reset = false) {
     const q = reset ? null : Object.fromEntries(Q_FIELDS.map((f) => [f.k, qEdit[f.k]]));
-    if (await post('/api/admin/user/quota', { name: qEdit.name, quota: q }, reset ? '已恢复默认额度' : '已保存额度')) qEdit = null;
+    if (await post('/api/admin/user/quota', { name: qEdit.name, quota: q }, reset ? t('已恢复默认额度') : t('已保存额度'))) qEdit = null;
   }
-  const phDefault = (k) => (defaults[k] ? '默认 ' + defaults[k] : '默认不限');
+  const phDefault = (k) => (defaults[k] ? t('默认 {value}', { value: defaults[k] }) : t('默认不限'));
   // 表格里「今天 3/20 · 7 天 9/100」：有上限才显示分母
   function quotaLine(u) {
     const n = u.quotaNow; if (!n) return '';
     const l = n.limits || {};
-    return `今天 ${n.today.turns}${l.dayTurns ? '/' + l.dayTurns : ''} 轮 · 7 天 ${n.week.turns}${l.weekTurns ? '/' + l.weekTurns : ''}`;
+    return t('今天 {day} 轮 · 7 天 {week}', { day: n.today.turns + (l.dayTurns ? '/' + l.dayTurns : ''), week: n.week.turns + (l.weekTurns ? '/' + l.weekTurns : '') });
   }
   const quotaHot = (u) => { const n = u.quotaNow; const l = n?.limits || {}; return !!n && ((l.dayTurns && n.today.turns >= l.dayTurns) || (l.weekTurns && n.week.turns >= l.weekTurns) || (l.dayCostUsd && n.today.costUsd >= l.dayCostUsd) || (l.weekCostUsd && n.week.costUsd >= l.weekCostUsd)); };
-  const toggleSnapshot = (u) => post('/api/admin/user/snapshot', { name: u.name, snapshot: !u.snapshot }, u.snapshot ? '已收回铸快照权限' : '已允许铸快照');
+  const toggleSnapshot = (u) => post('/api/admin/user/snapshot', { name: u.name, snapshot: !u.snapshot }, u.snapshot ? t('已收回铸快照权限') : t('已允许铸快照'));
   async function toggleService(u) {
     // 主机形态下取消服务账号 = 这个账号立刻登不上了，问一句。
-    if (u.service && !sa.multiUser && !(await saConfirm(`取消 ${u.name} 的服务账号身份？`, '这台主机没开多用户，取消后它会被立即登出且无法再登录。', { yes: '取消服务账号', danger: true }))) return;
-    post('/api/admin/user/service', { name: u.name, service: !u.service }, u.service ? '已取消服务账号' : '已设为服务账号');
+    if (u.service && !sa.multiUser && !(await saConfirm(t('取消 {name} 的服务账号身份？', { name: u.name }), t('这台主机没开多用户，取消后它会被立即登出且无法再登录。'), { yes: t('取消服务账号'), danger: true }))) return;
+    post('/api/admin/user/service', { name: u.name, service: !u.service }, u.service ? t('已取消服务账号') : t('已设为服务账号'));
   }
   async function doReset() {
     const { name, pw } = resetModal || {};
-    if (!pw) { saToast('密码不能为空', true); return; }
-    if (await post('/api/admin/user/reset', { name, password: pw }, '已重置密码')) resetModal = null;
+    if (!pw) { saToast(t('密码不能为空'), true); return; }
+    if (await post('/api/admin/user/reset', { name, password: pw }, t('已重置密码'))) resetModal = null;
   }
   async function doDelete() {
     const { name, purge } = delModal || {};
     delModal = null;
-    post('/api/admin/user/delete', { name, purge: !!purge }, '已删除 ' + name);
+    post('/api/admin/user/delete', { name, purge: !!purge }, t('已删除 {name}', { name }));
   }
   async function doCreate() {
     const c = createModal || {};
-    if (!c.name || !c.pw) { saToast('用户名和密码都要填', true); return; }
-    if (await post('/api/admin/user/create', { name: c.name, password: c.pw, tier: c.tier, service: c.service || !sa.multiUser }, '已建账号 ' + c.name)) createModal = null;
+    if (!c.name || !c.pw) { saToast(t('用户名和密码都要填'), true); return; }
+    if (await post('/api/admin/user/create', { name: c.name, password: c.pw, tier: c.tier, service: c.service || !sa.multiUser }, t('已建账号 {name}', { name: c.name }))) createModal = null;
   }
 </script>
 
-{#snippet tierBadge(t)}
-  {#if t === 'user'}<span class="sa-badge amber">user</span>
-  {:else if t === 'admin'}<span class="sa-badge blue">admin</span>
+{#snippet tierBadge(tier)}
+  {#if tier === 'user'}<span class="sa-badge amber">user</span>
+  {:else if tier === 'admin'}<span class="sa-badge blue">admin</span>
   {:else}<span class="sa-badge green">pro</span>{/if}
 {/snippet}
 
@@ -104,48 +105,48 @@
 
 <div class="sa-card">
   <div class="sa-card-h uhead">
-    <span class="uhead-t">{sa.multiUser ? '账号' : '服务账号'}</span>
+    <span class="uhead-t">{sa.multiUser ? tc('admin', '账号') : tc('admin', '服务账号')}</span>
     <span class="sa-sp"></span>
     <span class="uhead-acts">
-      <button class="sa-btn sm" onclick={() => { createModal = { name: '', pw: '', tier: 'user', service: !sa.multiUser }; }}>＋ 新建{sa.multiUser ? '账号' : '服务账号'}</button>
+      <button class="sa-btn sm" onclick={() => { createModal = { name: '', pw: '', tier: 'user', service: !sa.multiUser }; }}>{sa.multiUser ? t('＋ 新建账号') : t('＋ 新建服务账号')}</button>
       {#if sa.multiUser}
-        <button class="sa-btn sm" onclick={() => genInvite('user')} disabled={busy}>＋ 普通邀请码</button>
-        <button class="sa-btn sm pri" onclick={() => genInvite('pro')} disabled={busy}>＋ Pro 邀请码</button>
+        <button class="sa-btn sm" onclick={() => genInvite('user')} disabled={busy}>{t('＋ 普通邀请码')}</button>
+        <button class="sa-btn sm pri" onclick={() => genInvite('pro')} disabled={busy}>{t('＋ Pro 邀请码')}</button>
       {/if}
     </span>
   </div>
   {#if !sa.users.length}
-    <div class="sa-empty">{sa.multiUser ? '还没有账号——生成邀请码给对方注册，或直接新建' : '没有服务账号'}</div>
+    <div class="sa-empty">{sa.multiUser ? t('还没有账号——生成邀请码给对方注册，或直接新建') : t('没有服务账号')}</div>
   {:else}
-    <div class="sa-thead ucols"><span>用户名</span><span>档位</span><span>状态</span><span>能用的 agent</span><span>用量</span><span></span></div>
+    <div class="sa-thead ucols"><span>{t('用户名')}</span><span>{tc('admin', '档位')}</span><span>{t('状态')}</span><span>{t('能用的 agent')}</span><span>{t('用量')}</span><span></span></div>
     {#each sa.users as u (u.name)}
       {@const offBySwitch = !sa.multiUser && !u.service}
       <div class="sa-tr ucols">
-        <b class="sa-trunc">{u.name}{#if u.service}<span class="svc">服务</span>{/if}</b>
+        <b class="sa-trunc">{u.name}{#if u.service}<span class="svc">{t('服务')}</span>{/if}</b>
         <span>{@render tierBadge(u.tier)}</span>
         <span>
-          {#if u.disabled}<span class="sa-badge red">已禁用</span>
-          {:else if offBySwitch}<span class="sa-badge gray">登不上</span>
-          {:else}<span class="sa-badge green">正常</span>{/if}
+          {#if u.disabled}<span class="sa-badge red">{t('已禁用')}</span>
+          {:else if offBySwitch}<span class="sa-badge gray">{t('登不上')}</span>
+          {:else}<span class="sa-badge green">{tc('admin', '正常')}</span>{/if}
         </span>
         <span class="agents sa-trunc">{effective(u).map((id) => AGENT_LABEL[id] || id).join(' · ') || '—'}</span>
-        <span class="usecell" title={`累计 ${fmtNum(u.usage?.tokens)} tokens · $${(u.usage?.costUsd || 0).toFixed(2)}`}>
+        <span class="usecell" title={t('累计 {tokens} tokens · ${cost}', { tokens: fmtNum(u.usage?.tokens), cost: (u.usage?.costUsd || 0).toFixed(2) })}>
           <span class:hot={quotaHot(u)}>{quotaLine(u)}</span>
-          <small class="sa-mono sa-dim">累计 ${(u.usage?.costUsd || 0).toFixed(2)}</small>
+          <small class="sa-mono sa-dim">{t('累计 ${cost}', { cost: (u.usage?.costUsd || 0).toFixed(2) })}</small>
         </span>
         <span class="acts">
-          <button class="sa-btn sm" class:pri={open === u.name} onclick={() => { open = open === u.name ? '' : u.name; }}>{open === u.name ? '收起' : '管理'}</button>
+          <button class="sa-btn sm" class:pri={open === u.name} onclick={() => { open = open === u.name ? '' : u.name; }}>{open === u.name ? t('收起') : t('管理')}</button>
         </span>
       </div>
       {#if open === u.name}
         <div class="perm">
           <div class="perm-acts">
-            <button class="sa-btn sm" onclick={() => setTier(u)}>{u.tier === 'user' ? '升为 Pro（给命令行）' : '降为普通（收回命令行）'}</button>
-            <button class="sa-btn sm" onclick={() => { resetModal = { name: u.name, pw: '' }; }}>改密码</button>
-            <button class="sa-btn sm" onclick={() => setDisabled(u)}>{u.disabled ? '启用账号' : '停用账号'}</button>
-            <button class="sa-btn sm dgr" onclick={() => { delModal = { name: u.name, purge: false }; }}>删除</button>
+            <button class="sa-btn sm" onclick={() => setTier(u)}>{u.tier === 'user' ? t('升为 Pro（给命令行）') : t('降为普通（收回命令行）')}</button>
+            <button class="sa-btn sm" onclick={() => { resetModal = { name: u.name, pw: '' }; }}>{t('改密码')}</button>
+            <button class="sa-btn sm" onclick={() => setDisabled(u)}>{u.disabled ? t('启用账号') : t('停用账号')}</button>
+            <button class="sa-btn sm dgr" onclick={() => { delModal = { name: u.name, purge: false }; }}>{t('删除')}</button>
           </div>
-          <div class="perm-h">能用的 agent</div>
+          <div class="perm-h">{t('能用的 agent')}</div>
           <div class="perm-grid">
             {#each sa.agentStatus as a (a.id)}
               {@const dis = !a.multiUser || !a.enabled}
@@ -154,23 +155,23 @@
                 {@render check(on, dis)}
                 <span class="perm-tx">
                   <span>{a.label}</span>
-                  <small>{!a.multiUser ? '仅管理员（尚不支持多用户）' : !a.enabled ? '全局已关（勾了也暂不生效）' : on ? '可用' : '未授权'}</small>
+                  <small>{!a.multiUser ? t('仅管理员（尚不支持多用户）') : !a.enabled ? t('全局已关（勾了也暂不生效）') : on ? t('可用') : t('未授权')}</small>
                 </span>
               </button>
             {/each}
           </div>
-          <div class="perm-h">其它</div>
+          <div class="perm-h">{t('其它')}</div>
           <div class="perm-grid">
             <button class="perm-it" onclick={() => toggleSnapshot(u)}>
               {@render check(u.snapshot, false)}
-              <span class="perm-tx"><span>铸聊天快照</span><small>开公开的 /c/ 对话链接（QQ 机器人的 /chat 用），用主机额度跑 Claude</small></span>
+              <span class="perm-tx"><span>{t('铸聊天快照')}</span><small>{t('开公开的 /c/ 对话链接（QQ 机器人的 /chat 用），用主机额度跑 Claude')}</small></span>
             </button>
             <button class="perm-it" onclick={() => toggleService(u)}>
               {@render check(u.service, false)}
-              <span class="perm-tx"><span>服务账号</span><small>给程序用的账号（QQ 机器人这类）；主机关掉多用户后仍能登录</small></span>
+              <span class="perm-tx"><span>{t('服务账号')}</span><small>{t('给程序用的账号（QQ 机器人这类）；主机关掉多用户后仍能登录')}</small></span>
             </button>
           </div>
-          <div class="perm-h">额度（只算 Claude）{#if u.quota}<span class="own">单独设过</span>{/if}</div>
+          <div class="perm-h">{t('额度（只算 Claude）')}{#if u.quota}<span class="own">{t('单独设过')}</span>{/if}</div>
           {#if qEdit?.name === u.name}
             <div class="qgrid">
               {#each Q_FIELDS as f (f.k)}
@@ -178,15 +179,15 @@
               {/each}
             </div>
             <div class="perm-acts">
-              <button class="sa-btn sm pri" onclick={() => saveQuota(false)}>保存</button>
-              {#if u.quota}<button class="sa-btn sm" onclick={() => saveQuota(true)}>恢复默认</button>{/if}
-              <button class="sa-btn sm ghost" onclick={() => { qEdit = null; }}>取消</button>
+              <button class="sa-btn sm pri" onclick={() => saveQuota(false)}>{t('保存')}</button>
+              {#if u.quota}<button class="sa-btn sm" onclick={() => saveQuota(true)}>{t('恢复默认')}</button>{/if}
+              <button class="sa-btn sm ghost" onclick={() => { qEdit = null; }}>{t('取消')}</button>
             </div>
-            <div class="qhint">空着 = 跟默认（「额度与注册」页）；填 0 = 对他不限。</div>
+            <div class="qhint">{t('空着 = 跟默认（「额度与注册」页）；填 0 = 对他不限。')}</div>
           {:else}
             <div class="perm-acts">
-              <span class="qnow">{quotaLine(u)}{u.quotaNow?.today?.costUsd ? ` · 今天 $${u.quotaNow.today.costUsd.toFixed(2)}` : ''}</span>
-              <button class="sa-btn sm" onclick={() => editQuota(u)}>调整额度</button>
+              <span class="qnow">{quotaLine(u)}{u.quotaNow?.today?.costUsd ? ' · ' + t('今天 ${cost}', { cost: u.quotaNow.today.costUsd.toFixed(2) }) : ''}</span>
+              <button class="sa-btn sm" onclick={() => editQuota(u)}>{t('调整额度')}</button>
             </div>
           {/if}
         </div>
@@ -198,98 +199,102 @@
 
 {#if sa.multiUser}
   <div class="sa-card" style="margin-top:12px">
-    <div class="sa-card-h">邀请码</div>
+    <div class="sa-card-h">{tc('admin', '邀请码')}</div>
     {#if !sa.invites.length}
-      <div class="sa-empty">无</div>
+      <div class="sa-empty">{t('无')}</div>
     {:else}
-      <div class="sa-thead icols"><span>邀请码</span><span>档位</span><span>状态</span><span>创建</span></div>
+      <div class="sa-thead icols"><span>{t('邀请码')}</span><span>{tc('admin', '档位')}</span><span>{t('状态')}</span><span>{tc('名词', '创建')}</span></div>
       {#each sa.invites as i (i.code)}
         <div class="sa-tr icols">
-          <span class="sa-hrow"><span class="sa-mono">{i.code}</span><button class="sa-btn sm ghost" onclick={() => copyText(i.code)}>复制</button></span>
+          <span class="sa-hrow"><span class="sa-mono">{i.code}</span><button class="sa-btn sm ghost" onclick={() => copyText(i.code)}>{t('复制')}</button></span>
           <span>{@render tierBadge(i.tier)}</span>
-          <span>{#if i.used}<span class="sa-badge gray">已用{i.usedBy ? ' · ' + i.usedBy : ''}</span>{:else}<span class="sa-badge green">未使用</span>{/if}</span>
+          <span>{#if i.used}<span class="sa-badge gray">{t('已用')}{i.usedBy ? ' · ' + i.usedBy : ''}</span>{:else}<span class="sa-badge green">{t('未使用')}</span>{/if}</span>
           <span class="sa-dim">{fmtAgo(i.created)}</span>
         </div>
       {/each}
       <div style="height:8px"></div>
     {/if}
   </div>
-  <div class="sa-foot">普通（user）档没有命令行；能用哪些 agent 在「权限」里按人勾选（新账号默认只有 Claude，dimensio 按人放行）。邀请码一次性。<br />Pro 档有命令行：隔离是「软」的（路径与命令守卫防误操作，不防存心使坏），有命令行的人仍可能读到服务器上共享的订阅凭据、绕过字符串守卫——只给完全信任的人，邀请默认发普通档。</div>
+  <div class="sa-foot">{t('普通（user）档没有命令行；能用哪些 agent 在「权限」里按人勾选（新账号默认只有 Claude，dimensio 按人放行）。邀请码一次性。')}<br />{t('Pro 档有命令行：隔离是「软」的（路径与命令守卫防误操作，不防存心使坏），有命令行的人仍可能读到服务器上共享的订阅凭据、绕过字符串守卫——只给完全信任的人，邀请默认发普通档。')}</div>
 {:else}
-  <div class="sa-foot">这台主机没开多用户：注册与邀请码关闭，只有管理员（访问令牌 / 扫码）和服务账号能登录。</div>
+  <div class="sa-foot">{t('这台主机没开多用户：注册与邀请码关闭，只有管理员（访问令牌 / 扫码）和服务账号能登录。')}</div>
 {/if}
 
 <SaAdminSessions />
 
 <!-- 新建账号 -->
 {#if createModal}
-  <button class="sa-mask" aria-label="关闭" onclick={() => (createModal = null)}></button>
+  <button class="sa-mask" aria-label={t('关闭')} onclick={() => (createModal = null)}></button>
   <div class="sa-modal">
-    <h3>新建{sa.multiUser ? '账号' : '服务账号'}</h3>
-    <input class="sa-in" type="text" placeholder="用户名（字母 / 数字 / _ -）" bind:value={createModal.name} />
-    <input class="sa-in" type="text" placeholder="密码（至少 8 位）" bind:value={createModal.pw} onkeydown={(e) => { if (e.key === 'Enter') doCreate(); }} />
+    <h3>{sa.multiUser ? t('新建账号') : t('新建服务账号')}</h3>
+    <input class="sa-in" type="text" placeholder={t('用户名（字母 / 数字 / _ -）')} bind:value={createModal.name} />
+    <input class="sa-in" type="text" placeholder={t('密码（至少 8 位）')} bind:value={createModal.pw} onkeydown={(e) => { if (e.key === 'Enter') doCreate(); }} />
     <div class="sa-hrow">
-      <button class="sa-chip-btn" class:on={createModal.tier === 'user'} onclick={() => { createModal.tier = 'user'; }}>普通（无命令行）</button>
-      <button class="sa-chip-btn" class:on={createModal.tier === 'pro'} onclick={() => { createModal.tier = 'pro'; }}>Pro（有命令行）</button>
+      <button class="sa-chip-btn" class:on={createModal.tier === 'user'} onclick={() => { createModal.tier = 'user'; }}>{t('普通（无命令行）')}</button>
+      <button class="sa-chip-btn" class:on={createModal.tier === 'pro'} onclick={() => { createModal.tier = 'pro'; }}>{t('Pro（有命令行）')}</button>
     </div>
     {#if sa.multiUser}
-      <label class="purge"><input type="checkbox" bind:checked={createModal.service} />服务账号（给程序用，例如 QQ 机器人）</label>
+      <label class="purge"><input type="checkbox" bind:checked={createModal.service} />{t('服务账号（给程序用，例如 QQ 机器人）')}</label>
     {/if}
     <div class="acts">
-      <button class="sa-btn" onclick={() => (createModal = null)}>取消</button>
-      <button class="sa-btn pri" onclick={doCreate}>建账号</button>
+      <button class="sa-btn" onclick={() => (createModal = null)}>{t('取消')}</button>
+      <button class="sa-btn pri" onclick={doCreate}>{t('建账号')}</button>
     </div>
   </div>
 {/if}
 
 <!-- 邀请码结果 -->
 {#if inviteModal}
-  <button class="sa-mask" aria-label="关闭" onclick={() => (inviteModal = null)}></button>
+  <button class="sa-mask" aria-label={t('关闭')} onclick={() => (inviteModal = null)}></button>
   <div class="sa-modal">
-    <h3>邀请码已生成</h3>
-    <p>{inviteModal.tier === 'pro' ? 'Pro（有命令行）' : '普通（无命令行）'}单次邀请码，注册时填入：</p>
+    <h3>{t('邀请码已生成')}</h3>
+    <p>{inviteModal.tier === 'pro' ? t('Pro（有命令行）单次邀请码，注册时填入：') : t('普通（无命令行）单次邀请码，注册时填入：')}</p>
     <div class="sa-hrow">
       <code class="sa-mono invite-code">{inviteModal.code}</code>
-      <button class="sa-btn pri" onclick={() => copyText(inviteModal.code)}>复制</button>
+      <button class="sa-btn pri" onclick={() => copyText(inviteModal.code)}>{t('复制')}</button>
     </div>
-    <div class="acts"><button class="sa-btn" onclick={() => (inviteModal = null)}>关闭</button></div>
+    <div class="acts"><button class="sa-btn" onclick={() => (inviteModal = null)}>{t('关闭')}</button></div>
   </div>
 {/if}
 
 <!-- 改密 -->
 {#if resetModal}
-  <button class="sa-mask" aria-label="关闭" onclick={() => (resetModal = null)}></button>
+  <button class="sa-mask" aria-label={t('关闭')} onclick={() => (resetModal = null)}></button>
   <div class="sa-modal">
-    <h3>给 {resetModal.name} 设新密码</h3>
-    <input class="sa-in" type="text" placeholder="新密码" bind:value={resetModal.pw}
+    <h3>{t('给 {name} 设新密码', { name: resetModal.name })}</h3>
+    <input class="sa-in" type="text" placeholder={t('新密码')} bind:value={resetModal.pw}
       onkeydown={(e) => { if (e.key === 'Enter') doReset(); }} />
     <div class="acts">
-      <button class="sa-btn" onclick={() => (resetModal = null)}>取消</button>
-      <button class="sa-btn pri" onclick={doReset}>重置</button>
+      <button class="sa-btn" onclick={() => (resetModal = null)}>{t('取消')}</button>
+      <button class="sa-btn pri" onclick={doReset}>{tc('admin', '重置')}</button>
     </div>
   </div>
 {/if}
 
 <!-- 删除（可选连磁盘清） -->
 {#if delModal}
-  <button class="sa-mask" aria-label="关闭" onclick={() => (delModal = null)}></button>
+  <button class="sa-mask" aria-label={t('关闭')} onclick={() => (delModal = null)}></button>
   <div class="sa-modal">
-    <h3>删除账号 {delModal.name}？</h3>
-    <p>勾选「连磁盘一起删」会清空该用户全部对话/媒体/文件，不可恢复；不勾则只删账号记录。</p>
+    <h3>{t('删除账号 {name}？', { name: delModal.name })}</h3>
+    <p>{t('勾选「连磁盘一起删」会清空该用户全部对话/媒体/文件，不可恢复；不勾则只删账号记录。')}</p>
     <label class="purge">
       <input type="checkbox" bind:checked={delModal.purge} />
-      连磁盘文件夹一起删（彻底）
+      {t('连磁盘文件夹一起删（彻底）')}
     </label>
     <div class="acts">
-      <button class="sa-btn" onclick={() => (delModal = null)}>取消</button>
-      <button class="sa-btn dgr" onclick={doDelete}>删除</button>
+      <button class="sa-btn" onclick={() => (delModal = null)}>{t('取消')}</button>
+      <button class="sa-btn dgr" onclick={doDelete}>{t('删除')}</button>
     </div>
   </div>
 {/if}
 
 <style>
   :global(.sa-root) .ucols { grid-template-columns: minmax(90px, 1fr) 64px 76px minmax(120px, 1.2fr) minmax(110px, .9fr) auto; }
+  /* 英文「状态」徽章（Can’t sign in / Disabled，等宽字）比 76px 宽：只在英文界面放宽这一列，中文不变 */
+  :global(.sa-root) .ucols:lang(en) { grid-template-columns: minmax(90px, 1fr) 64px 112px minmax(120px, 1.2fr) minmax(110px, .9fr) auto; }
   :global(.sa-root) .icols { grid-template-columns: minmax(180px, 1.4fr) 64px minmax(100px, 1fr) 90px; }
+  /* 弹窗里的两颗档位芯片英文更长：英文界面窄屏允许折行（只在 :lang(en) 下，中文外观不变） */
+  .sa-modal .sa-hrow:lang(en) { flex-wrap: wrap; }
   .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   /* 标题栏：标题不许被按钮挤成竖排；按钮组窄屏时整组换到下一行 */
   .uhead { flex-wrap: wrap; row-gap: 8px; padding-bottom: 6px; }
@@ -320,6 +325,7 @@
   .ack :global(svg) { width: 12px; height: 12px; }
   @media (max-width: 1080px) {
     :global(.sa-root) .ucols { grid-template-columns: minmax(80px, 1fr) 60px 70px auto; }
+    :global(.sa-root) .ucols:lang(en) { grid-template-columns: minmax(80px, 1fr) 60px 108px auto; }
     :global(.sa-root) .ucols > :nth-child(4), :global(.sa-root) .ucols > :nth-child(5) { display: none; }
   }
   .usecell { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 12px; color: var(--sa-tx2); }

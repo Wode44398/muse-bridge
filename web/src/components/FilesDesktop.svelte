@@ -23,6 +23,7 @@
   } from '../lib/files-business.js';
   import { reportUi, onAgentFs, onAgentGoto } from '../lib/uiReport.js';
   import { WS_DT } from '../lib/fileDrag.js';
+  import { t, tc, tr, locale, isEn } from '../lib/i18n.js';
 
   const BASE = import.meta.env.BASE_URL;
 
@@ -93,7 +94,7 @@
   } catch {}
   function savePrefs() { try { localStorage.setItem('bridge.fd.prefs', JSON.stringify({ view, sortKey, sortDir })); } catch {} }
 
-  const rootLabel = $derived(rootName || '工作空间');
+  const rootLabel = $derived(tr(rootName) || t('工作空间'));
   const segs = $derived(path ? path.split('/').filter(Boolean) : []);
   const searching = $derived(query.trim().length > 0);
   const q = $derived(normalizeFileQuery(query));
@@ -118,7 +119,7 @@
   // 不再靠 CSS transition——两套动画叠在一起会互相拆台（transition 起步时布局还是旧宽，FLIP 量到的是假新位）。
   let searchFocus = $state(false);
 
-  const SORTS = [['name', '名称'], ['mtime', '修改时间'], ['size', '大小'], ['type', '类型']];
+  const SORTS = [['name', t('名称')], ['mtime', t('修改时间')], ['size', t('大小')], ['type', t('类型')]];
 
   // 面包屑头部折叠：放不下就从根开始一段段收进「…」（点开是被收起的层级），尾巴＝当前目录永远露着。
   // 首版靠 overflow:hidden 从右边裁，窄列里每一段都缩成两个字、当前目录反而看不见。
@@ -195,8 +196,8 @@
     const cmp = (a, b) => {
       if (key === 'mtime') return ((a.mtime || 0) - (b.mtime || 0)) * dir;
       if (key === 'size') return (sizeKey(a) - sizeKey(b)) * dir;
-      if (key === 'type') return String(extOf(a.name)).localeCompare(String(extOf(b.name))) * dir || a.name.localeCompare(b.name, 'zh-CN');
-      return a.name.localeCompare(b.name, 'zh-CN') * dir;
+      if (key === 'type') return String(extOf(a.name)).localeCompare(String(extOf(b.name))) * dir || a.name.localeCompare(b.name, locale());
+      return a.name.localeCompare(b.name, locale()) * dir;
     };
     arr.sort((a, b) => dirCmp(a, b) || cmp(a, b));
     return arr;
@@ -250,7 +251,7 @@
         const rels = new Set(items.map((x) => x.rel));
         selected = new Set([...selected].filter((x) => rels.has(x)));
       }
-    } catch (e) { items = []; truncated = false; toast('加载失败：' + (e.message || '')); }
+    } catch (e) { items = []; truncated = false; toast(t('加载失败：{reason}', { reason: tr(e.message || '') })); }
     loading = false;
   }
   const refresh = () => load(path, { keepSel: true });
@@ -275,10 +276,10 @@
     reportUi({ files: { path, ws: workspaceRoot || '', query: q || '' } });
   });
   $effect(() => {
-    let t = 0;
-    const offFs = onAgentFs(() => { clearTimeout(t); t = setTimeout(() => load(path, { keepSel: true }), 350); });
+    let tm = 0;
+    const offFs = onAgentFs(() => { clearTimeout(tm); tm = setTimeout(() => load(path, { keepSel: true }), 350); });
     const offGoto = onAgentGoto((rootRel) => navTo({ path: rootRel }));
-    return () => { clearTimeout(t); offFs(); offGoto(); };
+    return () => { clearTimeout(tm); offFs(); offGoto(); };
   });
 
   // —— 缩略图：只有图片有服务端衍生缩略图（sharp）；其余类型用矢量占位图标，
@@ -364,13 +365,13 @@
     const list = [...selected];
     if (!list.length) return;
     // 服务端删除是真删、不可撤销，先确认。
-    if (!(await uiConfirm(`删除选中的 ${list.length} 项？`, { detail: '删除后不可恢复。' }))) return;
-    busyLabel = '删除中…';
+    if (!(await uiConfirm(t('删除选中的 {n} 项？', { n: list.length }), { detail: t('删除后不可恢复。'), okLabel: isEn() ? t('删除') : undefined }))) return;
+    busyLabel = t('删除中…');
     let fail = 0;
     for (const rel of list) { try { await fsRemove(rel); } catch { fail++; } }
     busyLabel = '';
     selected = new Set(); anchorRel = '';
-    toast(fail ? `${fail} 项删除失败` : `已删除 ${list.length} 项`);
+    toast(fail ? t('{n} 项删除失败', { n: fail }) : t('已删除 {n} 项', { n: list.length }));
     await refresh();
   }
   function startRename(it) {
@@ -389,7 +390,7 @@
       const newRel = (parent ? parent + '/' : '') + name;
       selected = new Set([newRel]); anchorRel = newRel;
       await refresh();
-    } catch (e) { toast('重命名失败：' + (e.message || '')); }
+    } catch (e) { toast(t('重命名失败：{reason}', { reason: tr(e.message || '') })); }
   }
   // 重命名输入框：自动聚焦并选中主文件名（不含扩展名），键盘事件不外泄给全局快捷键。
   function renameInput(node) {
@@ -400,51 +401,56 @@
   async function newFolder() {
     if (!inBrowse) return;
     const names = new Set(items.map((x) => x.name));
-    let name = '新建文件夹', i = 2;
-    while (names.has(name)) name = `新建文件夹 ${i++}`;
+    // 新文件夹的默认名跟界面语言走（英文 Windows 同款「New folder (2)」）
+    let name = t('新建文件夹'), i = 2;
+    while (names.has(name)) name = t('新建文件夹 {n}', { n: i++ });
     try {
       await fsMkdir(path, name);
       await load(path);
       const rel = (path ? path + '/' : '') + name;
       focusRel(rel);
       renaming = { rel, value: name };
-    } catch (e) { toast('新建失败：' + (e.message || '')); }
+    } catch (e) { toast(t('新建失败：{reason}', { reason: tr(e.message || '') })); }
   }
   // 剪贴板：面板内部记一份 rel 清单，粘贴时按 rel 在同一作用域内复制/移动（保留剪切语义）。
   function setClipboard(mode2) {
     if (!selected.size) return;
     const rels = [...selected];
     clipboard = { mode: mode2, rels };
-    toast(`已${mode2 === 'cut' ? '剪切' : '复制'} ${rels.length} 项`);
+    toast(mode2 === 'cut' ? t('已剪切 {n} 项', { n: rels.length }) : t('已复制 {n} 项', { n: rels.length }));
   }
+  // 「已移动 / 已复制 n 项（，f 项失败）」——粘贴与拖放共用；英文语序不同，整句一个键
+  const doneMsg = (moved, n, f = 0) => (f
+    ? (moved ? t('已移动 {n} 项，{f} 项失败', { n, f }) : t('已复制 {n} 项，{f} 项失败', { n, f }))
+    : (moved ? t('已移动 {n} 项', { n }) : t('已复制 {n} 项', { n })));
   async function doPaste() {
     if (!canPaste) return;
     const { mode: m, rels } = clipboard;
-    busyLabel = m === 'cut' ? '移动中…' : '复制中…';
+    busyLabel = m === 'cut' ? t('移动中…') : t('复制中…');
     let ok = 0, err = '';
     for (const rel of rels) {
       if (m === 'cut' && parentOf(rel) === path) { ok++; continue; }   // 原地剪切=无操作
-      if (path === rel || path.startsWith(rel + '/')) { err = '不能把文件夹放进它自身'; continue; }
+      if (path === rel || path.startsWith(rel + '/')) { err = t('不能把文件夹放进它自身'); continue; }
       try { await (m === 'cut' ? fsMove : fsCopy)(rel, path); ok++; }
       catch (e) { err = e.body?.error || e.message || err; }
     }
     busyLabel = '';
     if (m === 'cut') clipboard = null;
-    toast(ok ? `已${m === 'cut' ? '移动' : '复制'} ${ok} 项` : (err || '操作失败'));
+    toast(ok ? doneMsg(m === 'cut', ok) : (err ? tr(err) : t('操作失败')));
     await refresh();
   }
   async function doTransferInto(destRel, rels, copy) {
     const list = rels.filter((rel) => copy || parentOf(rel) !== destRel);
     if (!list.length) return;
-    busyLabel = copy ? '复制中…' : '移动中…';
+    busyLabel = copy ? t('复制中…') : t('移动中…');
     let ok = 0, err = '';
     for (const rel of list) {
-      if (destRel === rel || destRel.startsWith(rel + '/')) { err = '不能把文件夹放进它自身'; continue; }
+      if (destRel === rel || destRel.startsWith(rel + '/')) { err = t('不能把文件夹放进它自身'); continue; }
       try { await (copy ? fsCopy : fsMove)(rel, destRel); ok++; }
       catch (e) { err = e.body?.error || e.message || err; }
     }
     busyLabel = '';
-    toast(ok ? `已${copy ? '复制' : '移动'} ${ok} 项` : (err || '操作失败'));
+    toast(ok ? doneMsg(!copy, ok) : (err ? tr(err) : t('操作失败')));
     await refresh();
   }
 
@@ -452,9 +458,9 @@
   async function doExtract(it) {
     if (extracting) return;
     extracting = true;
-    toast('解压中…');
-    try { const r = await api.extractFile(it.rel, workspaceRoot); toast('已解压到「' + r.name + '」'); await refresh(); }
-    catch (e) { toast('解压失败：' + (e.body?.error || e.message || '')); }
+    toast(t('解压中…'));
+    try { const r = await api.extractFile(it.rel, workspaceRoot); toast(t('已解压到「{name}」', { name: r.name })); await refresh(); }
+    catch (e) { toast(t('解压失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); }
     finally { extracting = false; }
   }
 
@@ -478,7 +484,7 @@
     for (const f of list) {
       const rel = (f.webkitRelativePath || '').split('/').slice(0, -1).join('/');
       const dir = [destDir, rel].filter(Boolean).join('/');
-      busyLabel = `上传 ${f.name}…`;
+      busyLabel = t('上传 {name}…', { name: f.name });
       const id = 'up' + Math.random().toString(36).slice(2, 12);
       const CHUNK = 1024 * 1024;
       try {
@@ -488,10 +494,10 @@
           if (last) break;
         }
         ok++;
-      } catch (err) { toast('上传失败：' + (err.body?.error || f.name)); }
+      } catch (err) { toast(t('上传失败：{reason}', { reason: err.body?.error ? tr(err.body.error) : f.name })); }
     }
     busyLabel = '';
-    if (ok) toast(`已上传 ${ok} 项`);
+    if (ok) toast(t('已上传 {n} 项', { n: ok }));
     await refresh();
   }
 
@@ -499,8 +505,8 @@
   function showInfo(it) {
     infoDlg = { name: it.name, isDir: it.isDir, size: it.size, mtime: it.mtime, rel: it.rel, dir: it.parent ?? parentOf(it.rel) };
   }
-  async function copyText(text, note = '已复制') {
-    try { await navigator.clipboard.writeText(text); toast(note); } catch { toast('复制失败'); }
+  async function copyText(text, note = t('已复制')) {
+    try { await navigator.clipboard.writeText(text); toast(note); } catch { toast(t('复制失败')); }
   }
 
   // —— 分享链接（由 bridge 服务端铸造）。文件也铸成只含它的分享空间（/w/），同 FilesPanel ——
@@ -509,12 +515,12 @@
     const d = shareDlg;
     if (!d || d.busy) return;
     const request = shareRequest(d);
-    if (request.error) { toast(request.error); return; }
+    if (request.error) { toast(tr(request.error)); return; }
     d.busy = true;
     try {
       const r = await api.shareSpaceMint([d.item.rel], request.options, workspaceRoot);
       d.result = shareResult(r, request.password);
-    } catch (e) { toast('创建分享失败：' + (e.body?.error || e.body || e.message || '')); }
+    } catch (e) { toast(t('创建分享失败：{reason}', { reason: tr(e.body?.error || e.body || e.message || '') })); }
     d.busy = false;
   }
   const fmtExpire = formatShareExpiry;
@@ -536,14 +542,14 @@
     try {
       const up = await api.fileToUpload(it.rel, !direct, workspaceRoot);
       return { path: up.path, name: up.name, kind, url: kind === 'image' ? cloudFileUrl(it.rel, { ws: workspaceRoot }) : null };
-    } catch (e) { toast('准备失败：' + (e.body?.error || e.message || '')); return null; }
+    } catch (e) { toast(t('准备失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); return null; }
   }
   function pickChat(sel) {
     const it = aiDlg?.item;
     aiDlg = null;
     if (it) sendToAI(it, sel);
   }
-  const chatTitle = (s) => titleFor(s.id, s.title) || '（无标题）';
+  const chatTitle = (s) => tr(titleFor(s.id, s.title)) || t('（无标题）');   // 服务端占位标题走 tr
   const aiChatFiltered = $derived.by(() => {
     const c = aiDlg?.chat;
     if (!c) return [];
@@ -574,7 +580,8 @@
     const ox = box?.left || 0, oy = box?.top || 0;
     const vw = box?.width || window.innerWidth, vh = box?.height || window.innerHeight;
     const cx = e.clientX - ox, cy = e.clientY - oy;
-    const W = 236, H = entries.filter((x) => !x.sep).length * 30 + entries.filter((x) => x.sep).length * 9 + 12;
+    // 英文菜单项更长（“Move 3 items to Recycle Bin  Del”），贴右缘夹取按更宽的估值算，免得菜单右侧被裁
+    const W = isEn() ? 264 : 236, H = entries.filter((x) => !x.sep).length * 30 + entries.filter((x) => x.sep).length * 9 + 12;
     const x = Math.min(Math.max(8, cx), Math.max(8, vw - W - 8));
     const y = cy + H > vh - 10 ? Math.max(8, cy - H) : cy;
     menu = { x, y, entries };
@@ -593,37 +600,37 @@
     if (!multi) {
       // 不可预览类型（zip/exe/未知）不出「预览」——它们的打开动作就是下面的「下载到本地」。
       if (previewable) {
-        entries.push({ label: it.isDir ? '打开' : '预览', act: () => openItem(it), bold: true });
+        entries.push({ label: it.isDir ? t('打开') : t('预览'), act: () => openItem(it), bold: true });
         entries.push({ sep: true });
       }
-      if (agentOn('claude')) entries.push({ label: '发送给 AI…', act: () => openAi(it), accent: true });
-      entries.push({ label: '分享链接…', act: () => openShare(it) });
-      if (!it.isDir && k === 'zip') entries.push({ label: '解压到当前文件夹', act: () => doExtract(it) });
+      if (agentOn('claude')) entries.push({ label: t('发送给 AI…'), act: () => openAi(it), accent: true });
+      entries.push({ label: t('分享链接…'), act: () => openShare(it) });
+      if (!it.isDir && k === 'zip') entries.push({ label: t('解压到当前文件夹'), act: () => doExtract(it) });
       entries.push({ sep: true });
-      if (!it.isDir) entries.push({ label: '下载到本地', act: () => doDownload(it) });
+      if (!it.isDir) entries.push({ label: t('下载到本地'), act: () => doDownload(it) });
     }
-    entries.push({ label: '剪切', hint: 'Ctrl+X', act: () => setClipboard('cut') });
-    entries.push({ label: '复制', hint: 'Ctrl+C', act: () => setClipboard('copy') });
+    entries.push({ label: t('剪切'), hint: 'Ctrl+X', act: () => setClipboard('cut') });
+    entries.push({ label: t('复制'), hint: 'Ctrl+C', act: () => setClipboard('copy') });
     if (!multi) {
-      entries.push({ label: '重命名', hint: 'F2', act: () => startRename(it) });
-      entries.push({ label: '简介', act: () => showInfo(it) });
+      entries.push({ label: t('重命名'), hint: 'F2', act: () => startRename(it) });
+      entries.push({ label: tc('explorer', '简介'), act: () => showInfo(it) });
     }
     entries.push({ sep: true });
-    entries.push({ label: multi ? `删除（${selected.size} 项）` : '删除', hint: 'Del', act: () => doDelete(), danger: true });
+    entries.push({ label: multi ? t('删除（{n} 项）', { n: selected.size }) : t('删除'), hint: 'Del', act: () => doDelete(), danger: true });
     popupMenu(e, entries);
   }
   function openBlankMenu(e) {
     if (e.target.closest('[data-rel]')) return;
     const entries = [];
     if (inBrowse) {
-      entries.push({ label: '新建文件夹', act: newFolder });
-      entries.push({ label: '上传文件…', act: () => pickUpload(false) });
-      entries.push({ label: '上传文件夹…', act: () => pickUpload(true) });
-      entries.push({ label: '粘贴', hint: 'Ctrl+V', act: doPaste, disabled: !canPaste });
+      entries.push({ label: t('新建文件夹'), act: newFolder });
+      entries.push({ label: t('上传文件…'), act: () => pickUpload(false) });
+      entries.push({ label: t('上传文件夹…'), act: () => pickUpload(true) });
+      entries.push({ label: t('粘贴'), hint: 'Ctrl+V', act: doPaste, disabled: !canPaste });
       entries.push({ sep: true });
     }
-    entries.push({ label: '全选', hint: 'Ctrl+A', act: selectAll });
-    entries.push({ label: '刷新', hint: 'F5', act: refresh });
+    entries.push({ label: t('全选'), hint: 'Ctrl+A', act: selectAll });
+    entries.push({ label: t('刷新'), hint: 'F5', act: refresh });
     popupMenu(e, entries);
   }
 
@@ -707,14 +714,14 @@
     const move = (ev) => {
       if (!active && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
       active = true;
-      const l = Math.min(x0, ev.clientX), t = Math.min(y0, ev.clientY);
+      const l = Math.min(x0, ev.clientX), tp = Math.min(y0, ev.clientY);
       const r = Math.max(x0, ev.clientX), b = Math.max(y0, ev.clientY);
       const box = rootEl?.getBoundingClientRect();
-      marquee = { l: l - (box?.left || 0), t: t - (box?.top || 0), w: r - l, h: b - t };
+      marquee = { l: l - (box?.left || 0), t: tp - (box?.top || 0), w: r - l, h: b - tp };
       const next = new Set(keep);
       for (const el of rowsEl?.querySelectorAll('[data-rel]') || []) {
         const bb = el.getBoundingClientRect();
-        if (bb.left < r && bb.right > l && bb.top < b && bb.bottom > t) next.add(el.dataset.rel);
+        if (bb.left < r && bb.right > l && bb.top < b && bb.bottom > tp) next.add(el.dataset.rel);
       }
       selected = next;
     };
@@ -809,27 +816,45 @@
     if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
     return (n / 1073741824).toFixed(2) + ' GB';
   }
+  // 日期交给 Intl（按界面语言）：中文仍是「9月28日 15:04 / 2025/09/28 15:04 / 2025年9月28日 15:04」，
+  // 英文按 GLOSSARY §1.9 出 12 小时制「Sep 28, 3:04 PM / Sep 28, 2025, 3:04 PM」。
+  const dtf = (d, o) => new Intl.DateTimeFormat(locale(), o).format(d);
   function fmtTime(ms) {
     if (!ms) return '';
-    const d = new Date(ms), now = new Date();
+    const d = new Date(ms), now = new Date(), en = isEn();
     const p = (n) => String(n).padStart(2, '0');
-    const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
-    if (d.toDateString() === now.toDateString()) return '今天 ' + hm;
+    const hm = en ? dtf(d, { hour: 'numeric', minute: '2-digit' }) : `${p(d.getHours())}:${p(d.getMinutes())}`;
+    if (d.toDateString() === now.toDateString()) return t('今天 {time}', { time: hm });
     const yd = new Date(now); yd.setDate(now.getDate() - 1);
-    if (d.toDateString() === yd.toDateString()) return '昨天 ' + hm;
-    if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
-    return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${hm}`;
+    if (d.toDateString() === yd.toDateString()) return t('昨天 {time}', { time: hm });
+    const sameYear = d.getFullYear() === now.getFullYear();
+    if (en) return dtf(d, { ...(sameYear ? {} : { year: 'numeric' }), month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    return dtf(d, sameYear ? { month: 'long', day: 'numeric' } : { year: 'numeric', month: '2-digit', day: '2-digit' }) + ' ' + hm;
   }
   function fmtFull(ms) {
     if (!ms) return '—';
     const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())}`;
+    if (isEn()) return dtf(d, { dateStyle: 'medium', timeStyle: 'short' });
+    return dtf(d, { year: 'numeric', month: 'long', day: 'numeric' }) + ` ${p(d.getHours())}:${p(d.getMinutes())}`;
   }
-  const KIND_LABEL = { img: '图片', mov: '视频', audio: '音频', pdf: 'PDF 文稿', zip: '压缩归档', md: 'Markdown', text: '文本', html: '网页', doc: '文件' };
+  // 「类型」列：扩展名 + 类别（PNG 图片 / PNG image）；英文语序与中文一致但要小写名词，故每类一个带 {ext} 的键。
+  // doc 不在表里 → 走 typeLabel 的「{ext} 文件」兜底。
+  const KIND_LABEL = {
+    img: (ext) => t('{ext} 图片', { ext }),
+    mov: (ext) => t('{ext} 视频', { ext }),
+    audio: (ext) => t('{ext} 音频', { ext }),
+    pdf: (ext) => t('{ext} PDF 文稿', { ext }),
+    zip: (ext) => t('{ext} 压缩归档', { ext }),
+    md: (ext) => (isEn() ? t('Markdown 文件') : `${ext} Markdown`),
+    text: (ext) => t('{ext} 文本', { ext }),
+    html: (ext) => t('{ext} 网页', { ext }),
+  };
   function typeLabel(it) {
-    if (it.isDir) return '文件夹';
+    if (it.isDir) return t('文件夹');
     const ext = extOf(it.name);
-    return ext ? `${ext.toUpperCase()}${KIND_LABEL[kindOf(it.name)] && kindOf(it.name) !== 'doc' ? ' ' + KIND_LABEL[kindOf(it.name)] : ' 文件'}` : '文件';
+    if (!ext) return t('文件');
+    const lb = KIND_LABEL[kindOf(it.name)];
+    return lb ? lb(ext.toUpperCase()) : t('{ext} 文件', { ext: ext.toUpperCase() });
   }
   // iOS 文件 app 风类型图标（没有缩略图时的占位）
   const TYPE_COLOR = { pdf: '#ff3b30', img: '#32ade6', mov: '#5856d6', audio: '#ff2d55', zip: '#ff9500', md: '#8e8e93', text: '#8e8e93', html: '#ff8d28', doc: '#007aff' };
@@ -845,9 +870,9 @@
     </svg>`;
   }
   const statusText = $derived.by(() => {
-    const parts = [`${rows.length} 项`];
-    if (selected.size) parts.push(`已选 ${selected.size} 项`);
-    if (!searching && truncated) parts.push('目录超过 2000 项，仅显示前 2000');
+    const parts = [t('{n} 项', { n: rows.length })];
+    if (selected.size) parts.push(t('已选 {n} 项', { n: selected.size }));
+    if (!searching && truncated) parts.push(t('目录超过 2000 项，仅显示前 2000'));
     return parts.join(' · ');
   });
 
@@ -863,11 +888,11 @@
   {#snippet crumbs()}
     {#if crumbHide > 0}
       <div class="tb-drop crumb-more" data-flip="cmore">
-        <button class="tb-btn ell" title="被收起的上级目录" aria-label="展开上级目录" onclick={() => { crumbPop = !crumbPop; sortOpen = false; addOpen = false; }}>
+        <button class="tb-btn ell" title={t('被收起的上级目录')} aria-label={t('展开上级目录')} onclick={() => { crumbPop = !crumbPop; sortOpen = false; addOpen = false; }}>
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.5" cy="12" r="1.9"/></svg>
         </button>
         {#if crumbPop}
-          <button class="pop-scrim" aria-label="关闭" onclick={() => (crumbPop = false)}></button>
+          <button class="pop-scrim" aria-label={t('关闭')} onclick={() => (crumbPop = false)}></button>
           <div class="pop left">
             {#each crumbItems.slice(0, crumbHide) as it, i (i)}
               <button class="pop-mi" style:padding-left="{9 + i * 10}px" onclick={() => gotoCrumb(i)}>
@@ -891,7 +916,7 @@
             {/if}
           {/if}
         {/each}
-        {#if searching}<span class="crumb-note" data-flip="cnote" data-flip-anchor="left">搜索「{query.trim()}」</span>{/if}
+        {#if searching}<span class="crumb-note" data-flip="cnote" data-flip-anchor="left">{t('搜索「{query}」', { query: query.trim() })}</span>{/if}
       </div>
     </div>
   {/snippet}
@@ -900,14 +925,14 @@
     {#each SORTS as [k2, lb] (k2)}
       <button class="pop-mi" onclick={() => setSort(k2)}>
         <span class="pm-check">{#if effSort.key === k2}✓{/if}</span>{lb}
-        {#if effSort.key === k2}<span class="pm-dir">{effSort.dir === 1 ? '升序' : '降序'}</span>{/if}
+        {#if effSort.key === k2}<span class="pm-dir">{effSort.dir === 1 ? t('升序') : t('降序')}</span>{/if}
       </button>
     {/each}
   {/snippet}
 
   <div class="fd-toolbar" bind:this={toolbarEl}>
     <div class="fd-tb" class:t1={tbTier >= 1} class:t2={tbTier >= 2} class:t3={tbTier >= 3} class:t4={tbTier >= 4} bind:this={tbEl}>
-      <button class="tb-btn" data-flip="home" title={embedded ? '返回工作台' : '返回主页'} onclick={goHome} aria-label={embedded ? '返回工作台' : '返回主页'}>
+      <button class="tb-btn" data-flip="home" title={embedded ? t('返回工作台') : t('返回主页')} onclick={goHome} aria-label={embedded ? t('返回工作台') : t('返回主页')}>
         {#if embedded}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
         {:else}
@@ -916,16 +941,16 @@
       </button>
       {#if tbTier < 2}
         <span class="tb-gap"></span>
-        <button class="tb-btn" data-flip="back" title="后退（Alt+←）" aria-label="后退" disabled={!histN.back} onclick={goBack}>
+        <button class="tb-btn" data-flip="back" title={t('后退（Alt+←）')} aria-label={t('后退')} disabled={!histN.back} onclick={goBack}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
         </button>
       {/if}
       {#if tbTier < 1}
-        <button class="tb-btn" data-flip="fwd" title="前进（Alt+→）" aria-label="前进" disabled={!histN.fwd} onclick={goFwd}>
+        <button class="tb-btn" data-flip="fwd" title={t('前进（Alt+→）')} aria-label={t('前进')} disabled={!histN.fwd} onclick={goFwd}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg>
         </button>
       {/if}
-      <button class="tb-btn" data-flip="up" title="上一级（Backspace）" aria-label="上一级" disabled={!canUp} onclick={goUp}>
+      <button class="tb-btn" data-flip="up" title={t('上一级（Backspace）')} aria-label={t('上一级')} disabled={!canUp} onclick={goUp}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 18V7"/><path d="m7 11 5-5 5 5"/></svg>
       </button>
 
@@ -935,22 +960,22 @@
         onfocusin={() => (searchFocus = true)} onfocusout={() => (searchFocus = false)}>
         <div class="fd-search-in" data-flip-inner>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
-          <input bind:this={searchEl} bind:value={query} placeholder="搜索 {rootLabel}" autocomplete="off" spellcheck="false" />
-          {#if query}<button class="sx" aria-label="清除搜索" onclick={() => { query = ''; searchEl?.focus(); }}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button>{/if}
+          <input bind:this={searchEl} bind:value={query} placeholder={t('搜索 {name}', { name: rootLabel })} autocomplete="off" spellcheck="false" />
+          {#if query}<button class="sx" aria-label={t('清除搜索')} onclick={() => { query = ''; searchEl?.focus(); }}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button>{/if}
         </div>
       </div>
 
       {#if tbTier < 2}
-        <div class="tb-seg" data-flip="seg" role="group" aria-label="视图">
-          <button class="seg" data-flip="view-list" class:on={view === 'list'} title="列表视图" aria-label="列表视图" onclick={() => setView('list')}>
+        <div class="tb-seg" data-flip="seg" role="group" aria-label={t('视图')}>
+          <button class="seg" data-flip="view-list" class:on={view === 'list'} title={tc('explorer', '列表视图')} aria-label={tc('explorer', '列表视图')} onclick={() => setView('list')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M8.5 6.5H20M8.5 12H20M8.5 17.5H20"/><path d="M4.2 6.5h.01M4.2 12h.01M4.2 17.5h.01" stroke-width="2.6"/></svg>
           </button>
-          <button class="seg" data-flip="view-grid" class:on={view === 'grid'} title="图标视图" aria-label="图标视图" onclick={() => setView('grid')}>
+          <button class="seg" data-flip="view-grid" class:on={view === 'grid'} title={tc('explorer', '图标视图')} aria-label={tc('explorer', '图标视图')} onclick={() => setView('grid')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.6"/></svg>
           </button>
         </div>
       {:else}
-        <button class="tb-btn" data-flip={view === 'list' ? 'view-list' : 'view-grid'} title={view === 'list' ? '切换为图标视图' : '切换为列表视图'} aria-label="切换视图" onclick={toggleView}>
+        <button class="tb-btn" data-flip={view === 'list' ? 'view-list' : 'view-grid'} title={view === 'list' ? tc('explorer', '切换为图标视图') : tc('explorer', '切换为列表视图')} aria-label={t('切换视图')} onclick={toggleView}>
           {#if view === 'list'}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M8.5 6.5H20M8.5 12H20M8.5 17.5H20"/><path d="M4.2 6.5h.01M4.2 12h.01M4.2 17.5h.01" stroke-width="2.6"/></svg>
           {:else}
@@ -961,29 +986,29 @@
 
       {#if tbTier < 3}
         <div class="tb-drop sort" data-flip="sort">
-          <button class="tb-btn" title="排序" aria-label="排序" onclick={() => { sortOpen = !sortOpen; addOpen = false; crumbPop = false; }}>
+          <button class="tb-btn" title={t('排序')} aria-label={t('排序')} onclick={() => { sortOpen = !sortOpen; addOpen = false; crumbPop = false; }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5v14M7 19l-3-3M7 19l3-3"/><path d="M17 19V5M17 5l-3 3M17 5l3 3"/></svg>
           </button>
           {#if sortOpen}
-            <button class="pop-scrim" aria-label="关闭" onclick={() => (sortOpen = false)}></button>
+            <button class="pop-scrim" aria-label={t('关闭')} onclick={() => (sortOpen = false)}></button>
             <div class="pop">{@render sortItems()}</div>
           {/if}
         </div>
       {/if}
 
       <div class="tb-drop add" data-flip="add">
-        <button class="tb-btn" title="新建 / 上传" aria-label="新建或上传" onclick={() => { addOpen = !addOpen; sortOpen = false; crumbPop = false; }}>
+        <button class="tb-btn" title={t('新建 / 上传')} aria-label={t('新建或上传')} onclick={() => { addOpen = !addOpen; sortOpen = false; crumbPop = false; }}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
         {#if addOpen}
-          <button class="pop-scrim" aria-label="关闭" onclick={() => (addOpen = false)}></button>
+          <button class="pop-scrim" aria-label={t('关闭')} onclick={() => (addOpen = false)}></button>
           <div class="pop">
-            <button class="pop-mi" disabled={!inBrowse} onclick={() => { addOpen = false; newFolder(); }}>新建文件夹</button>
-            <button class="pop-mi" disabled={!inBrowse} onclick={() => pickUpload(false)}>上传文件…</button>
-            <button class="pop-mi" disabled={!inBrowse} onclick={() => pickUpload(true)}>上传文件夹…</button>
+            <button class="pop-mi" disabled={!inBrowse} onclick={() => { addOpen = false; newFolder(); }}>{t('新建文件夹')}</button>
+            <button class="pop-mi" disabled={!inBrowse} onclick={() => pickUpload(false)}>{t('上传文件…')}</button>
+            <button class="pop-mi" disabled={!inBrowse} onclick={() => pickUpload(true)}>{t('上传文件夹…')}</button>
             {#if tbTier >= 3}
               <div class="pop-sep"></div>
-              <div class="pop-cap">排序</div>
+              <div class="pop-cap">{t('排序')}</div>
               {@render sortItems()}
             {/if}
           </div>
@@ -1000,15 +1025,15 @@
     <div class="fd-main">
       {#if view === 'list'}
         <div class="fd-colhead">
-          <button class="ch name" onclick={() => setSort('name')}>名称{#if effSort.key === 'name'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
+          <button class="ch name" onclick={() => setSort('name')}>{t('名称')}{#if effSort.key === 'name'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
           {#if showParentCol}
-            <span class="ch parent">位置</span>
+            <span class="ch parent">{t('位置')}</span>
           {/if}
-          <button class="ch mtime" onclick={() => setSort('mtime')}>修改时间{#if effSort.key === 'mtime'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
+          <button class="ch mtime" onclick={() => setSort('mtime')}>{t('修改时间')}{#if effSort.key === 'mtime'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
           {#if !showParentCol}
-            <button class="ch type" onclick={() => setSort('type')}>类型{#if effSort.key === 'type'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
+            <button class="ch type" onclick={() => setSort('type')}>{t('类型')}{#if effSort.key === 'type'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
           {/if}
-          <button class="ch size" onclick={() => setSort('size')}>大小{#if effSort.key === 'size'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
+          <button class="ch size" onclick={() => setSort('size')}>{t('大小')}{#if effSort.key === 'size'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
         </div>
       {/if}
 
@@ -1018,12 +1043,12 @@
         onpointerdown={paneDown} oncontextmenu={openBlankMenu}
         ondragover={dragOverPane} ondragleave={dragLeavePane} ondrop={onDrop}>
         {#if listBusy && !rows.length}
-          <div class="fd-empty"><span class="spin"></span>{searching ? '正在搜索…' : '正在读取…'}</div>
+          <div class="fd-empty"><span class="spin"></span>{searching ? t('正在搜索…') : t('正在读取…')}</div>
         {:else if !rows.length}
           <div class="fd-empty">
             <div class="big">{searching ? '🔍' : '📂'}</div>
-            {searching ? '未找到相关文件' : '这个文件夹是空的'}
-            {#if inBrowse}<small>把文件拖进窗口即可上传</small>{/if}
+            {searching ? t('未找到相关文件') : t('这个文件夹是空的')}
+            {#if inBrowse}<small>{t('把文件拖进窗口即可上传')}</small>{/if}
           </div>
         {:else if view === 'list'}
           {#each rows as it (it.rel)}
@@ -1052,7 +1077,7 @@
                     onblur={commitRename} onclick={(e) => e.stopPropagation()} ondblclick={(e) => e.stopPropagation()} />
                 {:else}
                   <span class="nm" title={it.name}>{it.name}</span>
-                  {#if it.linkType}<span class="lk">{it.linkType === 'external-link' ? '外部链接' : '链接'}</span>{/if}
+                  {#if it.linkType}<span class="lk">{it.linkType === 'external-link' ? t('外部链接') : t('链接')}</span>{/if}
                 {/if}
               </span>
               {#if showParentCol}
@@ -1108,7 +1133,7 @@
 
   <!-- 右键菜单 -->
   {#if menu}
-    <button class="menu-scrim" aria-label="关闭" onclick={() => (menu = null)} oncontextmenu={(e) => { e.preventDefault(); menu = null; }}></button>
+    <button class="menu-scrim" aria-label={t('关闭')} onclick={() => (menu = null)} oncontextmenu={(e) => { e.preventDefault(); menu = null; }}></button>
     <div class="ctx" style="left:{menu.x}px; top:{menu.y}px">
       {#each menu.entries as en, i (i)}
         {#if en.sep}
@@ -1137,13 +1162,13 @@
           <div class="info-name">{infoDlg.name}</div>
         </div>
         <div class="info-rows">
-          <div class="ir"><span>种类</span><b>{typeLabel(infoDlg)}</b></div>
-          <div class="ir"><span>大小</span><b>{infoDlg.isDir ? '文件夹' : fmtSize(infoDlg.size)}</b></div>
-          <div class="ir"><span>修改时间</span><b>{fmtFull(infoDlg.mtime)}</b></div>
-          <div class="ir"><span>位置</span><b class="loc">{rootLabel}{infoDlg.dir ? ' / ' + infoDlg.dir.split('/').join(' / ') : ''}</b></div>
+          <div class="ir"><span>{t('种类')}</span><b>{typeLabel(infoDlg)}</b></div>
+          <div class="ir"><span>{t('大小')}</span><b>{infoDlg.isDir ? t('文件夹') : fmtSize(infoDlg.size)}</b></div>
+          <div class="ir"><span>{t('修改时间')}</span><b>{fmtFull(infoDlg.mtime)}</b></div>
+          <div class="ir"><span>{t('位置')}</span><b class="loc">{rootLabel}{infoDlg.dir ? ' / ' + infoDlg.dir.split('/').join(' / ') : ''}</b></div>
         </div>
         <div class="dlg-btns">
-          <button class="btn go" onclick={() => (infoDlg = null)}>完成</button>
+          <button class="btn go" onclick={() => (infoDlg = null)}>{t('完成')}</button>
         </div>
       </div>
     </div>
@@ -1154,32 +1179,32 @@
     <div class="dlg-mask" onclick={() => { if (!shareDlg.busy) shareDlg = null; }} role="presentation">
       <div class="dlg" onclick={(e) => e.stopPropagation()} role="presentation">
         {#if !shareDlg.result}
-          <h3>分享链接</h3>
+          <h3>{t('分享链接')}</h3>
           <p class="dlg-sub">{shareDlg.item.isDir ? '📁 ' : ''}{shareDlg.item.name}</p>
           <div class="sh-row">
-            <span>启用分享密码</span>
-            <button class="sw" class:on={shareDlg.pwOn} role="switch" aria-checked={shareDlg.pwOn} aria-label="启用分享密码" onclick={() => (shareDlg.pwOn = !shareDlg.pwOn)}><span class="knob"></span></button>
+            <span>{t('启用分享密码')}</span>
+            <button class="sw" class:on={shareDlg.pwOn} role="switch" aria-checked={shareDlg.pwOn} aria-label={t('启用分享密码')} onclick={() => (shareDlg.pwOn = !shareDlg.pwOn)}><span class="knob"></span></button>
           </div>
           {#if shareDlg.pwOn}
-            <input class="dlg-input" bind:value={shareDlg.password} placeholder="设置分享密码" maxlength="64" onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') doShareLink(); }} />
+            <input class="dlg-input" bind:value={shareDlg.password} placeholder={t('设置分享密码')} maxlength="64" onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') doShareLink(); }} />
           {/if}
           <div class="sh-ttl">
-            {#each SHARE_TTLS as t (t.h)}
-              <button class:on={shareDlg.ttl === t.h} onclick={() => (shareDlg.ttl = t.h)}>{t.lb}</button>
+            {#each SHARE_TTLS as ttl (ttl.h)}
+              <button class:on={shareDlg.ttl === ttl.h} onclick={() => (shareDlg.ttl = ttl.h)}>{ttl.lb}</button>
             {/each}
           </div>
           <div class="dlg-btns">
-            <button class="btn" onclick={() => (shareDlg = null)}>取消</button>
-            <button class="btn go" disabled={shareDlg.busy} onclick={doShareLink}>{shareDlg.busy ? '创建中…' : '创建链接'}</button>
+            <button class="btn" onclick={() => (shareDlg = null)}>{t('取消')}</button>
+            <button class="btn go" disabled={shareDlg.busy} onclick={doShareLink}>{shareDlg.busy ? t('创建中…') : t('创建链接')}</button>
           </div>
         {:else}
-          <h3>链接已创建</h3>
+          <h3>{t('链接已创建')}</h3>
           <p class="dlg-sub">{shareDlg.item.isDir ? '📁 ' : ''}{shareDlg.item.name}</p>
-          <button class="sh-url" onclick={() => copyText(shareClipboardText(shareDlg.result), '已复制链接')}>{shareDlg.result.url}</button>
-          <p class="sh-meta">{fmtExpire(shareDlg.result.expiresAt)} 过期{#if shareDlg.result.pw} · 密码 <b>{shareDlg.result.pw}</b>{/if}</p>
+          <button class="sh-url" onclick={() => copyText(shareClipboardText(shareDlg.result), t('已复制链接'))}>{shareDlg.result.url}</button>
+          <p class="sh-meta">{t('{time} 过期', { time: fmtExpire(shareDlg.result.expiresAt) })}{#if shareDlg.result.pw} · {t('密码')} <b>{shareDlg.result.pw}</b>{/if}</p>
           <div class="dlg-btns">
-            <button class="btn" onclick={() => (shareDlg = null)}>完成</button>
-            <button class="btn go" onclick={() => copyText(shareClipboardText(shareDlg.result), '已复制链接')}>复制链接</button>
+            <button class="btn" onclick={() => (shareDlg = null)}>{t('完成')}</button>
+            <button class="btn go" onclick={() => copyText(shareClipboardText(shareDlg.result), t('已复制链接'))}>{t('复制链接')}</button>
           </div>
         {/if}
       </div>
@@ -1191,30 +1216,30 @@
     <div class="dlg-mask" onclick={() => (aiDlg = null)} role="presentation">
       <div class="dlg ai" onclick={(e) => e.stopPropagation()} role="presentation">
         {#if aiDlg.chat}
-          <h3>发送到 Claude · 选择对话</h3>
+          <h3>{t('发送到 {name} · 选择对话', { name: 'Claude' })}</h3>
           <p class="dlg-sub">{aiDlg.item.isDir ? '📁 ' : ''}{aiDlg.item.name}</p>
           <div class="ai-search">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-            <input type="search" placeholder="搜索对话" bind:value={aiDlg.chat.q} onkeydown={(e) => e.stopPropagation()} />
+            <input type="search" placeholder={t('搜索对话')} bind:value={aiDlg.chat.q} onkeydown={(e) => e.stopPropagation()} />
           </div>
           <button class="ai-opt" onclick={() => pickChat('new')}>
             <span class="ai-ic" style="background:#34c759"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M12 5.5v13M5.5 12h13"/></svg></span>
-            <span class="ai-lb">新对话<small>开一个新对话，附件挂进输入栏</small></span>
+            <span class="ai-lb">{t('新对话')}<small>{t('开一个新对话，附件挂进输入栏')}</small></span>
           </button>
           <div class="ai-list">
             {#each aiChatFiltered as s (s.id)}
               <button class="ai-row" onclick={() => pickChat(s.id)}>
                 <span class="ai-dot" class:work={s.thinking} class:ask={!s.thinking && s.pending}></span>
                 <span class="ai-title">{chatTitle(s)}</span>
-                {#if s.id === session.id}<span class="ai-cur">当前</span>{/if}
+                {#if s.id === session.id}<span class="ai-cur">{t('当前')}</span>{/if}
                 {#if s.mtime}<span class="ai-time">{relTime(s.mtime)}</span>{/if}
               </button>
             {:else}
-              <div class="ai-empty">{aiDlg.chat.loading ? '加载中…' : aiDlg.chat.q ? '没有匹配的对话' : '还没有历史对话'}</div>
+              <div class="ai-empty">{aiDlg.chat.loading ? t('加载中…') : aiDlg.chat.q ? t('没有匹配的对话') : t('还没有历史对话')}</div>
             {/each}
           </div>
         {/if}
-        <div class="dlg-btns"><button class="btn" onclick={() => (aiDlg = null)}>取消</button></div>
+        <div class="dlg-btns"><button class="btn" onclick={() => (aiDlg = null)}>{t('取消')}</button></div>
       </div>
     </div>
   {/if}

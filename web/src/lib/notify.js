@@ -2,6 +2,7 @@
 // 另外置 ui.taskDone（主页 Claude 入口小人「举旗」），回到对应页即清。
 // 均受设置页「通知」开关（bridge-notify）控制。
 import { ui } from './state.svelte.js';
+import { t } from './i18n.js';
 
 let active = 0;       // 在跑的轮数
 
@@ -25,8 +26,8 @@ export function agentEnd(label, body, opts = {}) {
   if (watching) return;                                       // 正在看：举旗足够
   if (!document.hidden) return;                               // 前台但在别的页：举旗足够
   if (!notifOn()) return;
-  const title = (label || 'Claude') + (opts.error ? ' · 出错' : ' · 完成');
-  const text = clip(body) || (opts.error ? '出错了' : '回复已生成');
+  const title = opts.error ? t('{label} · 出错', { label: label || 'Claude' }) : t('{label} · 完成', { label: label || 'Claude' });
+  const text = clip(body) || (opts.error ? t('出错了') : t('回复已生成'));
   try { if (typeof Notification !== 'undefined' && Notification.permission === 'granted') new Notification(title, { body: text }); } catch {}
 }
 

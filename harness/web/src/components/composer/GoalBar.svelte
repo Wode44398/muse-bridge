@@ -6,12 +6,15 @@
   import Icon from "../ui/Icon.svelte";
   import Button from "../ui/Button.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tc, tr } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
   const g = $derived(pane.chat.goal);
   const used = $derived(g ? Math.max(1, g.round - g.roundBase) : 0);
   let busy = $state(false);
+  // 「目标 · 第 x/y 轮」整句一个键，x/y 仍渲染成等宽的 .num（按占位拆开）
+  const roundParts = t("目标 · 第 {round} 轮").split("{round}");
 
   async function act(action: "pause" | "resume" | "clear") {
     if (busy) return;
@@ -33,20 +36,20 @@
     <div class="txt">
       <div class="line">
         <span class="state">
-          {#if g.status === "done"}目标已达成{:else if g.status === "paused"}目标已暂停{:else}目标 · 第 <span class="num">{used}/{g.maxRounds}</span> 轮{/if}
+          {#if g.status === "done"}{t("目标已达成")}{:else if g.status === "paused"}{t("目标已暂停")}{:else}{roundParts[0]}<span class="num">{used}/{g.maxRounds}</span>{roundParts[1]}{/if}
         </span>
-        {#if g.verify}<span class="ver">验证 <code>{g.verify}</code></span>{/if}
+        {#if g.verify}<span class="ver">{t("验证")} <code>{g.verify}</code></span>{/if}
       </div>
-      <div class="sub" title={g.objective}>{g.reason ?? g.objective}</div>
+      <div class="sub" title={g.objective}>{g.reason != null ? tr(g.reason) : g.objective}</div>
     </div>
     <div class="acts">
       {#if g.status === "active"}
-        <Button size="sm" variant="secondary" disabled={busy} onclick={() => act("pause")}>暂停</Button>
+        <Button size="sm" variant="secondary" disabled={busy} onclick={() => act("pause")}>{t("暂停")}</Button>
       {:else if g.status === "paused"}
-        <Button size="sm" variant="ghost" disabled={busy} onclick={() => act("clear")}>结束</Button>
-        <Button size="sm" variant="accent" disabled={busy} onclick={() => act("resume")}>继续</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onclick={() => act("clear")}>{t("结束")}</Button>
+        <Button size="sm" variant="accent" disabled={busy} onclick={() => act("resume")}>{t("继续")}</Button>
       {:else}
-        <Button size="sm" variant="ghost" disabled={busy} onclick={() => act("clear")}>收起</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onclick={() => act("clear")}>{tc("dimensio", "收起")}</Button>
       {/if}
     </div>
   </div>

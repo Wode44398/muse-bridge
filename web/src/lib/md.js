@@ -3,6 +3,7 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { mdState } from './mdState.svelte.js';
+import { t as tt } from './i18n.js';   // 本文件循环变量多叫 t（表格/列表节点），翻译函数用别名
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -299,7 +300,7 @@ function wrapCode(root) {
     wrap.className = 'md-codewrap';
     pre.replaceWith(wrap);
     wrap.appendChild(pre);
-    wrap.insertAdjacentHTML('beforeend', '<button type="button" class="md-codecopy" aria-label="复制代码" title="复制">' + ICON_COPY + '</button>');
+    wrap.insertAdjacentHTML('beforeend', '<button type="button" class="md-codecopy" aria-label="' + tt('复制代码') + '" title="' + tt('复制') + '">' + ICON_COPY + '</button>');
   }
 }
 

@@ -10,13 +10,14 @@
   import { GLOBAL_MEMORY_WS, listMemory, memoryOverview, type MemoryBucket as Bucket, type MemoryOverview } from "../../lib/api.ts";
   import { haptic } from "../../lib/touch.ts";
   import { rise } from "../../lib/motion.ts";
+  import { t, tr } from "../../lib/i18n.ts";
   import Sheet from "../ui/Sheet.svelte";
   import Segmented from "../ui/Segmented.svelte";
   import Button from "../ui/Button.svelte";
   import Mark from "../brand/Mark.svelte";
   import MemoryOverviewView from "./MemoryOverview.svelte";
   import MemoryBucketView from "./MemoryBucket.svelte";
-  import { fmtShortDate } from "./memory-viz.ts";
+  import { fmtShortDate } from "./memory-text.ts";
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -28,7 +29,7 @@
   function currentTarget() {
     const path = app.config?.workspace ?? "";
     const listed = path ? app.projects.find((p) => pathKey(p.path) === pathKey(path)) : undefined;
-    return { path, name: listed?.name || path.split(/[\\/]/).filter(Boolean).pop() || "当前项目" };
+    return { path, name: listed?.name || path.split(/[\\/]/).filter(Boolean).pop() || t("当前项目") };
   }
   const target = app.memoryFor ?? (canOverview ? null : currentTarget());
 
@@ -50,7 +51,7 @@
     if (!overview) return [];
     const list = overview.buckets;
     if (!globalMemoryAvailable() || list.some((b) => b.kind === "global")) return list;
-    return [emptyBucket({ ws: GLOBAL_MEMORY_WS, name: "全局", kind: "global" }), ...list];
+    return [emptyBucket({ ws: GLOBAL_MEMORY_WS, name: t("全局"), kind: "global" }), ...list];
   });
   const bucket = $derived.by<Bucket | null>(() => {
     if (!where) return null;
@@ -96,24 +97,24 @@
   function switchLegacy(next: "project" | "global") {
     if (!target) return;
     haptic("light");
-    where = next === "global" ? { ws: GLOBAL_MEMORY_WS, name: "全局", kind: "global" } : { ws: target.path, name: target.name, kind: "project" };
+    where = next === "global" ? { ws: GLOBAL_MEMORY_WS, name: t("全局"), kind: "global" } : { ws: target.path, name: target.name, kind: "project" };
     legacy = null;
     loading = true;
     void load();
   }
 
   const title = $derived.by(() => {
-    if (!where) return "记忆";
-    if (where.kind === "global") return "全局记忆";
+    if (!where) return t("记忆");
+    if (where.kind === "global") return t("全局记忆");
     if (where.kind === "quick") {
       const b = bucket;
-      return b?.createdAt ? `快照对话 · ${fmtShortDate(new Date(b.createdAt).toISOString())}` : "快照对话的记忆";
+      return b?.createdAt ? t("快照对话 · {date}", { date: fmtShortDate(new Date(b.createdAt).toISOString()) }) : t("快照对话的记忆");
     }
-    return `「${where.name}」的记忆`;
+    return t("「{name}」的记忆", { name: where.name });
   });
   const subtitle = $derived.by(() => {
-    if (!where) return "模型跨对话记住的事；只有生效的会进提示";
-    if (where.kind === "global") return "关于你和这台机器，每个项目都用";
+    if (!where) return t("模型跨对话记住的事；只有生效的会进提示");
+    if (where.kind === "global") return t("关于你和这台机器，每个项目都用");
     return where.ws;
   });
 
@@ -129,7 +130,7 @@
     if (fromSettings) return () => (app.sheet = "settings");
     return undefined;
   });
-  const backLabel = $derived(where && canOverview ? "所有记忆" : "设置");
+  const backLabel = $derived(where && canOverview ? t("所有记忆") : t("设置"));
 </script>
 
 <Sheet {title} {subtitle} {onclose} onback={back} {backLabel} size="xl" tall>
@@ -138,26 +139,26 @@
       <div class="layer">
         <Segmented
           size="sm"
-          label="记忆范围"
+          label={t("记忆范围")}
           value={where?.kind === "global" ? "global" : "project"}
           onchange={switchLegacy}
           options={[
-            { value: "project", label: "这个项目" },
-            { value: "global", label: "全局" },
+            { value: "project", label: t("这个项目") },
+            { value: "global", label: t("全局") },
           ]}
         />
       </div>
     {/if}
 
     {#if loading && !overview && !legacy}
-      <p class="state"><Mark size={16} live /><span>加载中…</span></p>
+      <p class="state"><Mark size={16} live /><span>{t("加载中…")}</span></p>
     {:else if loadError && !overview && !legacy}
       <div class="state err" role="alert">
-        <span>加载失败：{loadError}</span>
-        <Button size={btn} variant="ghost" icon="reload" onclick={() => load()}>重试</Button>
+        <span>{t("加载失败：{reason}", { reason: tr(loadError) })}</span>
+        <Button size={btn} variant="ghost" icon="reload" onclick={() => load()}>{t("重试")}</Button>
       </div>
     {:else}
-      {#if loadError}<p class="stale" role="alert">刷新失败：{loadError}</p>{/if}
+      {#if loadError}<p class="stale" role="alert">{t("刷新失败：{reason}", { reason: tr(loadError) })}</p>{/if}
       {#key where?.ws ?? ""}
         <div in:rise={{ y: 6 }}>
           {#if where && bucket}

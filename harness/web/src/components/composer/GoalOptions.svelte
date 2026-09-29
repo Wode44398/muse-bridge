@@ -4,6 +4,7 @@
   import Icon from "../ui/Icon.svelte";
   import TextField from "../ui/TextField.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -19,16 +20,18 @@
 
 {#if pane.chat.goalDraft}
   {@const d = pane.chat.goalDraft}
+  <!-- 「最多 N 轮」整句一个键（按轮数取单复数），输入框插在 {n} 处 -->
+  {@const roundsParts = t("最多 {n} 轮", { count: d.maxRounds }).split("{n}")}
   <div class="goal">
-    <p class="hint"><Icon name="target" size={14} /><span>目标模式：没达成会自动一轮轮接着做</span></p>
+    <p class="hint"><Icon name="target" size={14} /><span>{t("目标模式：没达成会自动一轮轮接着做")}</span></p>
     <div class="fields">
       <div class="verify">
-        <TextField size="sm" mono label="验证命令" placeholder="验证命令（可选，如 npm test）" bind:value={d.verify} />
+        <TextField size="sm" mono label={t("验证命令")} placeholder={t("验证命令（可选，如 npm test）")} bind:value={d.verify} />
       </div>
       <label class="rounds">
-        <span>最多</span>
+        <span>{roundsParts[0].trim()}</span>
         <input type="number" min="1" max="50" inputmode="numeric" bind:value={d.maxRounds} onchange={clampRounds} />
-        <span>轮</span>
+        {#if roundsParts[1]?.trim()}<span>{roundsParts[1].trim()}</span>{/if}
       </label>
     </div>
   </div>

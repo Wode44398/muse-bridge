@@ -5,6 +5,7 @@
 // 转义：格内 | ↔ \|；换行序列化成空格（GFM 单行约束），<br> 原样保留由渲染态显示。
 import { WidgetType } from '@codemirror/view';
 import { renderObsInline } from '../obsmd.js';
+import { t } from '../i18n.js';
 
 // ============ 模型：markdown ↔ {header, aligns, body} ============
 function splitRow(line) {
@@ -47,7 +48,7 @@ export function serializeTable(m) {
 }
 
 export function emptyTableSrc(cols = 2, rows = 1) {
-  return serializeTable({ header: Array.from({ length: cols }, (_, i) => '列' + (i + 1)), aligns: [], body: Array.from({ length: rows }, () => Array(cols).fill('')), cols });
+  return serializeTable({ header: Array.from({ length: cols }, (_, i) => t('列{n}', { n: i + 1 })), aligns: [], body: Array.from({ length: rows }, () => Array(cols).fill('')), cols });
 }
 
 // ============ widget ============
@@ -102,12 +103,12 @@ function removeTable(view, wrap) {
 const BTN = (cls, title, svg) => `<button type="button" class="mde-tb ${cls}" title="${title}">${svg}</button>`;
 const I = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const BAR_HTML =
-  BTN('t-rowa', '在下方插入行', I('<path d="M3 5h18M3 10h18M12 14v7M8.5 17.5 12 21l3.5-3.5"/>')) +
-  BTN('t-cola', '在右侧插入列', I('<path d="M5 3v18M10 3v18M14 12h7M17.5 8.5 21 12l-3.5 3.5"/>')) +
-  BTN('t-rowd', '删除本行', I('<path d="M3 6h18M3 12h18M3 18h18M15 9l6 6M21 9l-6 6"/>')) +
-  BTN('t-cold', '删除本列', I('<path d="M6 3v18M12 3v18M18 8l4 8M22 8l-4 8"/>')) +
-  BTN('t-align', '对齐方式', I('<path d="M3 6h18M6 12h12M4 18h16"/>')) +
-  BTN('t-del', '删除表格', I('<path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13M10 11v5M14 11v5"/>'));
+  BTN('t-rowa', t('在下方插入行'), I('<path d="M3 5h18M3 10h18M12 14v7M8.5 17.5 12 21l3.5-3.5"/>')) +
+  BTN('t-cola', t('在右侧插入列'), I('<path d="M5 3v18M10 3v18M14 12h7M17.5 8.5 21 12l-3.5 3.5"/>')) +
+  BTN('t-rowd', t('删除本行'), I('<path d="M3 6h18M3 12h18M3 18h18M15 9l6 6M21 9l-6 6"/>')) +
+  BTN('t-cold', t('删除本列'), I('<path d="M6 3v18M12 3v18M18 8l4 8M22 8l-4 8"/>')) +
+  BTN('t-align', t('对齐方式'), I('<path d="M3 6h18M6 12h12M4 18h16"/>')) +
+  BTN('t-del', t('删除表格'), I('<path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13M10 11v5M14 11v5"/>'));
 
 function buildTable(wrap, view) {
   wrap.innerHTML = '';

@@ -131,10 +131,10 @@ export const status = $state({ limits: null, context: null, contexts: {}, usages
 // 新用户消息发出 / 切会话 / 回滚到被拒消息 → 置 null；横条的 X 只把 dismissed 标 true。
 export const refusalBand = $state({ notice: null });
 
-export function setTheme(t) {
-  ui.theme = t;
-  try { document.documentElement.setAttribute('data-theme', t); } catch {}
-  try { localStorage.setItem('bridge-theme', t); } catch {}
+export function setTheme(theme) {
+  ui.theme = theme;
+  try { document.documentElement.setAttribute('data-theme', theme); } catch {}
+  try { localStorage.setItem('bridge-theme', theme); } catch {}
 }
 export function toggleTheme() { setTheme(ui.theme === 'dark' ? 'light' : 'dark'); }
 

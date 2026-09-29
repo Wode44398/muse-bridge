@@ -1,6 +1,7 @@
 // 图标：24×24 线稿，currentColor 描边、圆帽圆角（stroke 粗细由 Icon.svelte 给，默认 1.6）。
 // 绝大多数取自 Lucide（ISC License, Copyright (c) Lucide Contributors — https://lucide.dev），多元素 SVG 已并成单条 path；
 // menu / stop / dot / measure 为本项目自绘。键名是契约（组件、工具映射都按名取），只增不改。
+import { t } from "./i18n.ts";
 
 export const I = {
   agent: "M12 8V4H8M6 8h12a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-8a2 2 0 0 1 2 -2ZM2 14h2M20 14h2M15 13v2M9 13v2",
@@ -138,31 +139,31 @@ export type IconName = keyof typeof I;
 
 // ── 工具名 → 图标 / 中文动词（动词是界面文案，活动行、工具行都用它）────────────────────────
 export const TOOL_META: Record<string, { icon: IconName; verb: string }> = {
-  Bash: { icon: "terminal", verb: "执行命令" },
-  Read: { icon: "fileText", verb: "读取文件" },
-  Write: { icon: "filePlus", verb: "写入文件" },
-  Edit: { icon: "edit", verb: "编辑文件" },
-  Glob: { icon: "folderSearch", verb: "匹配文件" },
-  Grep: { icon: "textSearch", verb: "搜索内容" },
-  TodoWrite: { icon: "todo", verb: "更新计划" },
-  Preview: { icon: "eye", verb: "预览验证" },
-  Browser: { icon: "appWindow", verb: "操作浏览器" },
-  ReadPage: { icon: "read", verb: "读取页面" },
-  Eval: { icon: "flask", verb: "页内执行" },
-  Network: { icon: "network", verb: "审计请求" },
-  WebFetch: { icon: "globe", verb: "抓取网页" },
-  WebSearch: { icon: "search", verb: "联网搜索" },
-  Agent: { icon: "agent", verb: "委托子任务" },
-  Workflow: { icon: "workflow", verb: "编排工作流" },
-  AskUserQuestion: { icon: "question", verb: "询问确认" },
-  Remember: { icon: "memory", verb: "写入记忆" },
-  Recall: { icon: "memory", verb: "检索记忆" },
-  Skill: { icon: "spark", verb: "载入技能" },
-  ExitPlanMode: { icon: "todo", verb: "提交计划" },
-  MemoryAudit: { icon: "checkCircle", verb: "记忆审计" },
-  UpdateGoal: { icon: "goal", verb: "汇报目标" },
-  McpDescribe: { icon: "plug", verb: "查看连接器" },
-  McpCall: { icon: "plug", verb: "调用连接器" },
+  Bash: { icon: "terminal", verb: t("执行命令") },
+  Read: { icon: "fileText", verb: t("读取文件") },
+  Write: { icon: "filePlus", verb: t("写入文件") },
+  Edit: { icon: "edit", verb: t("编辑文件") },
+  Glob: { icon: "folderSearch", verb: t("匹配文件") },
+  Grep: { icon: "textSearch", verb: t("搜索内容") },
+  TodoWrite: { icon: "todo", verb: t("更新计划") },
+  Preview: { icon: "eye", verb: t("预览验证") },
+  Browser: { icon: "appWindow", verb: t("操作浏览器") },
+  ReadPage: { icon: "read", verb: t("读取页面") },
+  Eval: { icon: "flask", verb: t("页内执行") },
+  Network: { icon: "network", verb: t("审计请求") },
+  WebFetch: { icon: "globe", verb: t("抓取网页") },
+  WebSearch: { icon: "search", verb: t("联网搜索") },
+  Agent: { icon: "agent", verb: t("委托子任务") },
+  Workflow: { icon: "workflow", verb: t("编排工作流") },
+  AskUserQuestion: { icon: "question", verb: t("询问确认") },
+  Remember: { icon: "memory", verb: t("写入记忆") },
+  Recall: { icon: "memory", verb: t("检索记忆") },
+  Skill: { icon: "spark", verb: t("载入技能") },
+  ExitPlanMode: { icon: "todo", verb: t("提交计划") },
+  MemoryAudit: { icon: "checkCircle", verb: t("记忆审计") },
+  UpdateGoal: { icon: "goal", verb: t("汇报目标") },
+  McpDescribe: { icon: "plug", verb: t("查看连接器") },
+  McpCall: { icon: "plug", verb: t("调用连接器") },
 };
 export const toolMeta = (name: string): { icon: IconName; verb: string } => {
   const hit = TOOL_META[name];
@@ -190,9 +191,10 @@ export const LOGO_QWEN =
 export const LOGO_GEMINI =
   "M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z";
 
-// GLM —— z.ai 风格自绘几何 Z（斜切双杠，锐利极简，viewBox 0 0 24 24）
+// GLM —— Z.ai 官方 Z（原矢量取自 z-cdn.chatglm.cn/z-ai/static/logo.svg，2026-09-28；viewBox 0 0 30 30，
+// 官方形象 = #2D2D2D 圆角底 + 白 Z，底块 x/y 1.49–28.51、rx 4）
 export const LOGO_GLM =
-  "M4 4.5h14.2L9.4 17.2h9.1a1.25 1.25 0 0 1 0 2.5H4.6a1.3 1.3 0 0 1-1.05-2.06L12.6 7H5.25A1.25 1.25 0 0 1 4 5.75V4.5Z";
+  "M15.47 7.1l-1.3 1.85c-.2.29-.54.47-.9.47h-7.1V7.09C6.16 7.1 15.47 7.1 15.47 7.1zM24.3 7.1 13.14 22.91H5.7L16.86 7.1H24.3zM14.53 22.91l1.31-1.86c.2-.29.54-.47.9-.47h7.09v2.33h-9.3z";
 
 // Kimi 几何 K（官方标，lobe-icons MIT，viewBox 0 0 24 24；官方形象 = 黑底白 K + 右上蓝点）
 export const LOGO_KIMI =

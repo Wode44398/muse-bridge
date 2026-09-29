@@ -21,6 +21,7 @@
   import CardShell from "./CardShell.svelte";
   import { askDrafts, cardWindowMs } from "./card-kit.ts";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tr } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -137,8 +138,8 @@
   function onKey(e: KeyboardEvent) {
     if (!interactive || e.defaultPrevented || e.repeat || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
     if (!/^[1-9]$/.test(e.key)) return;
-    const t = e.target as HTMLElement | null;
-    if (t?.closest?.("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
+    const tgt = e.target as HTMLElement | null;
+    if (tgt?.closest?.("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
     if (layerCount() > 0 || !box?.isConnected || !box.getClientRects().length) return;
     const qq = q;
     if (!qq) return;
@@ -162,7 +163,7 @@
   const unanswered = $derived(item.answered && item.questions.every((qq) => (item.selected[qq.id] ?? []).length === 0));
   const resolved = $derived(item.answered && !unanswered);
   const where = $derived(resolved ? decidedElsewhere(item.by) : "");
-  const title = $derived(interactive ? "需要你确认" : resolved ? "已回答" : item.expired ? "超时未答" : "未回答");
+  const title = $derived(interactive ? t("需要你确认") : resolved ? t("已回答") : item.expired ? t("超时未答") : t("未回答"));
 
   const coarse = matchMedia("(pointer: coarse)").matches;
   const big: "md" | "lg" = coarse ? "lg" : "md";
@@ -171,14 +172,14 @@
 {#snippet actions()}
   <div class="nav">
     {#if n > 1}
-      <div class="dots" role="group" aria-label="题目">
+      <div class="dots" role="group" aria-label={t("题目")}>
         {#each item.questions as qq, i (qq.id)}
           <button
             type="button"
             class="dot"
             class:on={i === cur}
             class:done={done(qq)}
-            aria-label="第 {i + 1} 题{done(qq) ? '（已答）' : ''}"
+            aria-label={done(qq) ? t("第 {i} 题（已答）", { i: i + 1 }) : t("第 {i} 题", { i: i + 1 })}
             aria-current={i === cur ? "step" : undefined}
             onclick={() => go(i)}><span></span></button
           >
@@ -188,9 +189,9 @@
     <span class="sp"></span>
     <!-- 最后一题时变灰而不消失：底栏不重排，卡片不变高 -->
     {#if n > 1}
-      <Button variant="ghost" size={big} iconRight="chevronR" disabled={cur >= n - 1} onclick={() => go(cur + 1)}>下一题</Button>
+      <Button variant="ghost" size={big} iconRight="chevronR" disabled={cur >= n - 1} onclick={() => go(cur + 1)}>{t("下一题")}</Button>
     {/if}
-    <Button variant="primary" size={big} iconRight="send" disabled={!canSubmit} onclick={submit}>提交</Button>
+    <Button variant="primary" size={big} iconRight="send" disabled={!canSubmit} onclick={submit}>{t("提交")}</Button>
   </div>
 {/snippet}
 
@@ -199,7 +200,7 @@
   icon="question"
   {title}
   {where}
-  sub={interactive && item.deadlineAt ? `${clockOf(item.deadlineAt)} 前没人答，agent 就按合理假设继续` : ""}
+  sub={interactive && item.deadlineAt ? t("{time} 前没人答，agent 就按合理假设继续", { time: clockOf(item.deadlineAt) }) : ""}
   live={interactive}
   deadlineAt={interactive ? item.deadlineAt : undefined}
   windowMs={cardWindowMs("ask", permissionMode(pane.chat) === "plan")}
@@ -213,12 +214,12 @@
         <div class="q" class:cur={qi === cur} class:before={qi < cur} inert={qi !== cur}>
           {#if qq.header || qq.multiSelect}
             <div class="q-top">
-              {#if qq.header}<span class="q-hdr">{qq.header}</span>{/if}
-              {#if qq.multiSelect}<span class="q-multi">可多选</span>{/if}
+              {#if qq.header}<span class="q-hdr">{tr(qq.header)}</span>{/if}
+              {#if qq.multiSelect}<span class="q-multi">{t("可多选")}</span>{/if}
             </div>
           {/if}
           {#if qq.question}<p class="q-text">{qq.question}</p>{/if}
-          <div class="opts" role={qq.multiSelect ? "group" : "radiogroup"} aria-label={qq.question || qq.header || "选项"}>
+          <div class="opts" role={qq.multiSelect ? "group" : "radiogroup"} aria-label={qq.question || tr(qq.header) || t("选项")}>
             {#each qq.options as o, i (i)}
               {@const on = isSel(qq, o.label)}
               <button
@@ -247,7 +248,7 @@
                   class="markbtn"
                   role={qq.multiSelect ? "checkbox" : "radio"}
                   aria-checked="true"
-                  aria-label="其他（点一下收起）"
+                  aria-label={t("其他（点一下收起）")}
                   onclick={() => toggleOther(qq)}
                 >
                   <span class="mark" class:multi={qq.multiSelect}>
@@ -258,7 +259,7 @@
                   <TextField
                     size="sm"
                     bind:value={customText[qq.id]}
-                    placeholder="输入你的回答，回车提交"
+                    placeholder={t("输入你的回答，回车提交")}
                     autofocus={focusFor === qq.id}
                     enterkeyhint="send"
                     onkeydown={(e) => onOtherKey(e, qq)}
@@ -274,7 +275,7 @@
                 onclick={() => toggleOther(qq)}
               >
                 <span class="mark" class:multi={qq.multiSelect}><span class="fill"></span></span>
-                <span class="ob"><span class="ol">其他…</span></span>
+                <span class="ob"><span class="ol">{t("其他…")}</span></span>
                 {#if qq.options.length < 9}<span class="kbd" aria-hidden="true">{qq.options.length + 1}</span>{/if}
               </button>
             {/if}
@@ -285,7 +286,7 @@
   {:else}
     {#each item.questions as qq (qq.id)}
       <div class="rq">
-        <p class="rq-q">{#if qq.header}<span class="rq-h">{qq.header}</span>{/if}{qq.question}</p>
+        <p class="rq-q">{#if qq.header}<span class="rq-h">{tr(qq.header)}</span>{/if}{qq.question}</p>
         {#if qq.options.length}
           <div class="picks">
             {#each qq.options as o, i (i)}
@@ -301,7 +302,7 @@
     {/each}
     {#if unanswered}
       <p class="skipped">
-        {item.expired ? "超时没人答，agent 已按合理假设继续，并会在答复里写明假设。" : "此问题未作答，agent 已按自身判断继续。"}
+        {item.expired ? t("超时没人答，agent 已按合理假设继续，并会在答复里写明假设。") : t("此问题未作答，agent 已按自身判断继续。")}
       </p>
     {/if}
   {/if}

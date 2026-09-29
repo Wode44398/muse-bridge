@@ -16,6 +16,7 @@
   // worktree 半区是【只读指示】不是开关：bridge 不会替会话现开 worktree，只如实告诉你
   // 「这个工作空间是 linked worktree、不是主检出」——正是删 worktree 前最该看见的一眼。
   import { dock, openDock, ensureDockMeta } from '../lib/dock.svelte.js';
+  import { t } from '../lib/i18n.js';
 
   // name = 当前项目名（真实项目里就等于文件夹名；快照对话的桶目录名是 UUID，只有项目名可读）
   let { name = '' } = $props();
@@ -41,14 +42,14 @@
 
     {#if branch}
       <div class="split">
-        <button class="half" title="分支 · 点开审阅变更" onclick={() => openDock('review')}>
+        <button class="half" title={t('分支 · 点开审阅变更')} onclick={() => openDock('review')}>
           <span class="ic" aria-hidden="true">&#xe078;</span>
           <span class="lbl">{branch}</span>
         </button>
 
         {#if isWorktree}
           <span class="divi" aria-hidden="true"></span>
-          <span class="half wt" title="此工作空间是 git worktree，不是主检出">
+          <span class="half wt" title={t('此工作空间是 git worktree，不是主检出')}>
             <span class="cb">
               <span class="box">
                 <svg width="6" height="5" viewBox="0 0 5.875 5.375" fill="none" aria-hidden="true">

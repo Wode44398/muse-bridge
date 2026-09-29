@@ -5,6 +5,8 @@
   // 行类用 class: 指令逐个写（模板插值拼的类配 scoped 规则会被剪掉）。
   // 文件头（diff --git / index / --- / +++ / new file mode）在有段的时候不显示——文件名和增删状态上面那一行已经写了；
   // 只有元信息（二进制、纯改名 / 改权限）时照旧显示，免得展开是空的。段内 +/- 号单独一列、不进选区，复制出来是干净的代码。
+  import { t } from "../../lib/i18n.ts";
+
   let { text, truncated = false }: { text: string; truncated?: boolean } = $props();
 
   type Kind = "" | "h" | "a" | "d" | "m";
@@ -72,7 +74,7 @@
     <div class="dl m">
       <span class="gut" aria-hidden="true"><span class="n"></span><span class="n"></span></span>
       <span class="sg" aria-hidden="true"></span>
-      <span class="tx">…（diff 过长，已截断）</span>
+      <span class="tx">{t("…（diff 过长，已截断）")}</span>
     </div>
   {/if}
 </div>

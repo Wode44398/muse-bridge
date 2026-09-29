@@ -37,6 +37,7 @@
   import { dnd, dropTarget, type DragPayload } from "../../lib/dnd.svelte.ts";
   import { modeChip } from "../../lib/mode-chip.ts";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tr } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
   import Chip from "../ui/Chip.svelte";
   import IconButton from "../ui/IconButton.svelte";
@@ -141,12 +142,12 @@
     dockedCard && !hasText
       ? replyPlaceholder(dockedCard)
       : goalOn
-        ? "写下要达成的目标——没达成会自动一轮轮接着做"
+        ? t("写下要达成的目标——没达成会自动一轮轮接着做")
         : pane.chat.running
-          ? "运行中——可以插话纠偏，它会在下一步读到"
+          ? t("运行中——可以插话纠偏，它会在下一步读到")
           : app.config
-            ? "描述要做的事"
-            : "连接中…",
+            ? t("描述要做的事")
+            : t("连接中…"),
   );
 
   // ── 底行胶囊的内容 ───────────────────────────────────────────────────────────────────────
@@ -154,10 +155,13 @@
   const shownCfg = $derived(pane.focused || !pane.chat.cfg ? app.config : { ...app.config, ...pane.chat.cfg });
   const models = $derived(app.info ? modelsOf(shownCfg?.provider) : []);
   const curModel = $derived(models.find((m: any) => m.id === shownCfg?.model));
-  const modelLabel = $derived<string>(curModel?.label ?? shownCfg?.model ?? "…");
+  const modelLabel = $derived<string>(tr(curModel?.label ?? shownCfg?.model ?? "…")); // 型号名来自服务端 catalog（个别带中文注）
   const thinking = $derived<string>(shownCfg?.thinking ?? "off");
-  const thinkingLabel = $derived(curModel?.effortLabels?.[thinking] === "开启" ? "思考" : thinking);
-  const modelAria = $derived(`模型：${modelLabel}${thinking !== "off" ? `，思考：${thinkingLabel}` : ""}`);
+  // effortLabels 是服务端 catalog 的数据（开关式档位写「开启」），这里只拿来比对
+  const thinkingLabel = $derived(curModel?.effortLabels?.[thinking] === "开启" /* i18n-ignore */ ? t("思考") : thinking);
+  const modelAria = $derived(
+    thinking !== "off" ? t("模型：{model}，思考：{effort}", { model: modelLabel, effort: thinkingLabel }) : t("模型：{model}", { model: modelLabel }),
+  );
   const vid = $derived(shownCfg?.provider ?? "anthropic");
 
   // 档位胶囊：非默认（只读 / 计划、仅工作空间、离开、本会话放行了工作区外的目录、这条是目标）才写出来、亮墨色（lib/mode-chip.ts）
@@ -299,10 +303,10 @@
   function visible(): boolean {
     return Boolean(ta && ta.isConnected && ta.getBoundingClientRect().width > 0);
   }
-  function inScope(t: EventTarget | null): boolean {
-    if (!t || t === document.body || t === document.documentElement) return true;
+  function inScope(el: EventTarget | null): boolean {
+    if (!el || el === document.body || el === document.documentElement) return true;
     const root = ta?.closest(".hxroot");
-    return Boolean(root && t instanceof Node && root.contains(t));
+    return Boolean(root && el instanceof Node && root.contains(el));
   }
   function onPaste(e: ClipboardEvent) {
     if (!pane.focused || !app.features.files || !visible()) return; // 分屏：只有有焦点的那一格接（附件进 app.chat）
@@ -382,8 +386,8 @@
   // 点在卡片的空白处（底行中间、边距）= 点输入框
   function padFocus(node: HTMLElement) {
     const down = (e: PointerEvent) => {
-      const t = e.target as Element | null;
-      if (!t || t.closest("button, a, input, textarea, select, label, [role='option']")) return;
+      const hit = e.target as Element | null;
+      if (!hit || hit.closest("button, a, input, textarea, select, label, [role='option']")) return;
       e.preventDefault();
       ta?.focus();
     };
@@ -420,7 +424,7 @@
       class:refover={refOver}
       bind:this={card}
       use:smoothHeight
-      use:dropTarget={{ key: refDropKey, accept: refDropOk, label: "引用这个对话", drop: onRefDrop }}
+      use:dropTarget={{ key: refDropKey, accept: refDropOk, label: t("引用这个对话"), drop: onRefDrop }}
     >
       <div class="inner" use:padFocus>
         {#if target}
@@ -428,7 +432,7 @@
           <div class="reply" in:fade={{ duration: 160 }} out:fade={{ duration: 120 }}>
             <span class="ric"><Icon name={targetIcon} size={15} /></span>
             <span class="rtext">{replyHint(target)}</span>
-            <Button size="sm" variant="ghost" onclick={asSteer}>改为插话</Button>
+            <Button size="sm" variant="ghost" onclick={asSteer}>{t("改为插话")}</Button>
           </div>
         {:else if goalOn && pane.chat.goalDraft}
           <div in:fade={{ duration: 160 }} out:fade={{ duration: 120 }}><GoalOptions /></div>
@@ -444,7 +448,7 @@
           use:autosize={pane.chat.draft}
           rows="1"
           {placeholder}
-          aria-label="输入消息"
+          aria-label={t("输入消息")}
           aria-autocomplete="list"
           aria-controls={slashOpen ? paletteId : undefined}
           aria-activedescendant={slashOpen && slashItems.length ? `${paletteId}-${slashSel}` : undefined}
@@ -458,7 +462,7 @@
         <div class="bar">
           <div class="lead">
             {#if app.features.files}
-              <span class="ctl"><IconButton icon="plus" label="添加文件" size={32} iconSize={18} onclick={openAttach} /></span>
+              <span class="ctl"><IconButton icon="plus" label={t("添加文件")} size={32} iconSize={18} onclick={openAttach} /></span>
             {/if}
             <span class="ctl">
               <Chip
@@ -466,8 +470,8 @@
                 tone={modeAlt ? "accent" : "plain"}
                 chevron
                 open={Boolean(modeAnchor)}
-                label="档位：{modeText}"
-                title="运行档位（自主执行 / 只读 / 先出计划）、访问范围（整机 / 仅工作空间）、离开模式与目标模式"
+                label={t("档位：{mode}", { mode: modeText })}
+                title={t("运行档位（自主执行 / 只读 / 先出计划）、访问范围（整机 / 仅工作空间）、离开模式与目标模式")}
                 children={compact ? undefined : modeLabel}
                 onclick={toggleMode}
               />
@@ -483,7 +487,7 @@
                   chevron
                   open={Boolean(modelAnchor)}
                   label={modelAria}
-                  title="模型与思考深度"
+                  title={t("模型与思考深度")}
                   onclick={toggleModel}
                 />
               </span>
@@ -491,8 +495,8 @@
             <SendButton
               kind={sendKind}
               disabled={!canSend || cooling}
-              label={target ? "回应卡片" : pane.chat.running ? "插话" : "发送"}
-              title={target ? replyHint(target) : pane.chat.running ? "插话：它会在下一步读到这条" : undefined}
+              label={target ? t("回应卡片") : pane.chat.running ? t("插话") : t("发送")}
+              title={target ? replyHint(target) : pane.chat.running ? t("插话：它会在下一步读到这条") : undefined}
               onclick={submit}
             />
           </div>

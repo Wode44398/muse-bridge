@@ -17,6 +17,7 @@
   import CardShell from "./CardShell.svelte";
   import { cardWindowMs } from "./card-kit.ts";
   import { usePane } from "../../lib/pane.ts";
+  import { t } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -26,18 +27,18 @@
   const where = $derived(item.decided ? decidedElsewhere(item.by) : "");
   const title = $derived(
     item.decided === "handoff"
-      ? "计划已转到新会话实施"
+      ? t("计划已转到新会话实施")
       : item.decided === "approved"
-        ? "计划已批准"
+        ? t("计划已批准")
         : item.decided === "returned"
-          ? "计划已退回"
+          ? t("计划已退回")
           : item.cancelled
             ? item.cancelReason === "timeout"
-              ? "超时没人审，计划保持未批准"
-              : "没等到决定，这一轮已结束"
+              ? t("超时没人审，计划保持未批准")
+              : t("没等到决定，这一轮已结束")
             : interactive
-              ? "计划待批准"
-              : "计划未批准",
+              ? t("计划待批准")
+              : t("计划未批准"),
   );
   const html = $derived(renderMarkdown(item.plan));
 
@@ -89,14 +90,14 @@
           <TextField
             size={coarse ? "md" : "sm"}
             bind:value={note}
-            placeholder="要改什么？（可留空直接退回）"
+            placeholder={t("要改什么？（可留空直接退回）")}
             enterkeyhint="send"
             onkeydown={onNoteKey}
           />
         </span>
       {/if}
       <Button variant={noteOpen ? "secondary" : "ghost"} size={big} disabled={handing} onclick={returnBack}>
-        {noteOpen ? "确认退回" : "退回修改"}
+        {noteOpen ? t("确认退回") : t("退回修改")}
       </Button>
     </span>
     <span class="grp">
@@ -105,13 +106,13 @@
           variant="secondary"
           size={big}
           loading={handing}
-          title="在一个干净上下文的新会话里实施这份计划（自主档）；这边就此收尾"
+          title={t("在一个干净上下文的新会话里实施这份计划（自主档）；这边就此收尾")}
           onclick={toNewSession}
         >
-          {handing ? "正在转…" : `在新会话中实施${ctxPct ? `（上下文 ${ctxPct}%）` : ""}`}
+          {handing ? t("正在转…") : ctxPct ? t("在新会话中实施（上下文 {pct}%）", { pct: ctxPct }) : t("在新会话中实施")}
         </Button>
       {/if}
-      <Button variant="accent" size={big} disabled={handing} onclick={approve}>批准并执行</Button>
+      <Button variant="accent" size={big} disabled={handing} onclick={approve}>{t("批准并执行")}</Button>
     </span>
   </div>
 {/snippet}
@@ -121,7 +122,7 @@
   icon="todo"
   {title}
   {where}
-  sub={interactive && item.deadlineAt ? `${clockOf(item.deadlineAt)} 前没人审，就保持计划模式、以这份计划收尾` : ""}
+  sub={interactive && item.deadlineAt ? t("{time} 前没人审，就保持计划模式、以这份计划收尾", { time: clockOf(item.deadlineAt) }) : ""}
   live={interactive}
   deadlineAt={interactive ? item.deadlineAt : undefined}
   windowMs={cardWindowMs("plan", true)}
@@ -129,7 +130,7 @@
 >
   <div class="md plan" class:quiet={!interactive}>{@html html}</div>
   {#if !interactive && item.decided === "returned" && item.note}
-    <p class="retnote">修改意见：{item.note}</p>
+    <p class="retnote">{t("修改意见：{note}", { note: item.note })}</p>
   {/if}
 </CardShell>
 
@@ -176,5 +177,14 @@
     justify-content: flex-end;
     gap: 8px;
     margin-inline-start: auto;
+  }
+  /* 英文按钮更长（「在新会话中实施（上下文 n%）」）：一个按钮也不超出卡片宽，放不下时文字省略。
+     组本身要能缩到行宽以下（min-width: 0），按钮的 max-width: 100% 才有参照 */
+  .grp {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .grp > :global(*) {
+    max-width: 100%;
   }
 </style>

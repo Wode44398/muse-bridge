@@ -11,13 +11,14 @@
   import { openPage } from '../lib/pageMorph.js';
   import { startPairLogin } from '../lib/pair.js';
   import { fetchMyUsage, changeMyPassword, quotaRows, hasLimits } from '../lib/me.js';
+  import { t, tc, tr, isEn } from '../lib/i18n.js';
 
   let mode = $state('login'); // 'login' | 'register' | 'token' | 'qr'(扫码登录：网页出码、手机扫)
   let username = $state(''), password = $state(''), password2 = $state(''), invite = $state(''), tok = $state('');
   let busy = $state(false), err = $state('');
 
   const open = $derived(ui.loginOpen);
-  const pillLabel = $derived(me.kind === 'none' ? '登录' : (me.user || (me.kind === 'admin' ? 'Admin' : '我')));
+  const pillLabel = $derived(me.kind === 'none' ? t('登录') : (me.user || (me.kind === 'admin' ? 'Admin' : t('我'))));
 
   // —— 几何：pill（右上小胶囊）↔ card（居中大卡，高度按 mode 取）——
   const PILL_H = 40, M = 16, CARD_W = 340;
@@ -28,9 +29,14 @@
   let userMode = $state('main');   // 'main' | 'pw'（已登录时卡片里的两个视图）
   let mine = $state(null);         // /api/me/usage
   const userExtra = $derived(me.kind === 'user' ? 56 + (hasLimits(mine) ? 58 : 0) : 0);
-  const cardH = $derived(me.kind !== 'none'
+  // 英文比中文多折行（中文恒为 0）：登录页底部两条链接排不下一行、各占一行（+44）；
+  // 注册用户卡的「我的 · …」额度行与底部说明各多一行。
+  const enExtra = $derived(!isEn() ? 0
+    : me.kind !== 'none' ? (userMode !== 'pw' && me.kind === 'user' ? (hasLimits(mine) ? 52 : 16) : 0)
+    : (mode === 'login' && me.features?.register !== false ? 44 : 0));
+  const cardH = $derived((me.kind !== 'none'
     ? (userMode === 'pw' ? MODE_H.pw : (canScan ? MODE_H.userScan : MODE_H.user) + userExtra)
-    : (MODE_H[mode] || 392));
+    : (MODE_H[mode] || 392)) + enExtra);
 
   let vw = $state(390), vh = $state(800), pillW = $state(88), pillEl = $state();
   // pill 顶距要让出系统状态栏：--sat 由 app.css env() 给出，getComputedStyle 拿解析后的 px。
@@ -90,19 +96,19 @@
     // 拿到 session token 即存为 Bearer（cookie 之外的兜底）：否则一旦 cookie 不可用，refreshMe 的
     // /api/auth 会 401、回落 fallback 假登录，之后每个请求都 401 → 聊天卡在"重连中"。
     try { const r = await api.login({ username, password }); if (r.token) setToken(r.token); await refreshMe({ kind: r.kind, user: r.user || username }); reset(); close(); }
-    catch (e) { err = e.body?.error || '登录失败'; }
+    catch (e) { err = tr(e.body?.error) || t('登录失败'); }
     busy = false;
   }
   async function doRegister() {
     if (busy) return; busy = true; err = '';
     try { const r = await api.register({ username, password, password2, invite }); if (r.token) setToken(r.token); await refreshMe({ kind: r.kind, user: r.user || username }); reset(); close(); }
-    catch (e) { err = e.body?.error || '注册失败'; }
+    catch (e) { err = tr(e.body?.error) || t('注册失败'); }
     busy = false;
   }
   async function doToken() {
     if (busy) return; busy = true; err = '';
     try { setToken(tok.trim()); const r = await api.login({}); if (r.token) setToken(r.token); await refreshMe({ kind: r.kind, user: r.user || null }); reset(); close(); }
-    catch (e) { setToken(null); err = e.body?.error || '令牌无效'; }
+    catch (e) { setToken(null); err = tr(e.body?.error) || t('令牌无效'); }
     busy = false;
   }
   async function doLogout() {
@@ -114,11 +120,11 @@
   function openPw() { userMode = 'pw'; err = ''; pwOld = ''; pwNew = ''; pwAgain = ''; }
   async function doChangePw() {
     if (busy) return;
-    if (pwNew.length < 8) { err = '新密码至少 8 位'; return; }
-    if (pwNew !== pwAgain) { err = '两次输入的新密码不一致'; return; }
+    if (pwNew.length < 8) { err = t('新密码至少 8 位'); return; }
+    if (pwNew !== pwAgain) { err = t('两次输入的新密码不一致'); return; }
     busy = true; err = '';
     try { await changeMyPassword(pwOld, pwNew); pwDone = true; userMode = 'main'; pwOld = pwNew = pwAgain = ''; }
-    catch (e) { err = e?.body?.error || '修改失败'; }
+    catch (e) { err = tr(e?.body?.error) || t('修改失败'); }
     busy = false;
   }
   // 工作空间从卡片里这一行长出来（与主页入口同一套转场）；卡片在旧快照里随主页一起退后
@@ -144,9 +150,9 @@
     pairCtl = ctl;
     return () => { ctl.stop(); if (pairCtl === ctl) pairCtl = null; pair = { status: 'idle', svg: '', error: '' }; };
   });
-  const pairMsg = $derived(pair.status === 'rejected' ? '已在手机上取消'
-    : pair.status === 'error' ? (pair.error || '出错了')
-    : pair.status === 'expired' ? '二维码已过期' : '');
+  const pairMsg = $derived(pair.status === 'rejected' ? t('已在手机上取消')
+    : pair.status === 'error' ? (tr(pair.error) || t('出错了'))
+    : pair.status === 'expired' ? t('二维码已过期') : '');
 
   $effect(() => {
     if (open && me.kind !== 'none') {
@@ -166,106 +172,106 @@
 <!-- pill 层（可点；展开时移中心淡出） -->
 <button class="plabel" bind:this={pillEl} style="{baseGeom} {plabelStyle}" onclick={toggle}>{pillLabel}</button>
 
-{#if open}<button class="card-bd" transition:fade={{ duration: 220 }} onclick={close} aria-label="关闭"></button>{/if}
+{#if open}<button class="card-bd" transition:fade={{ duration: 220 }} onclick={close} aria-label={t('关闭')}></button>{/if}
 
 <!-- morph 卡片本体 -->
 <div class="card {open ? 'expanded' : 'pill'}" style={cardStyle}>
   {#if open}
     <div class="content" in:fade={{ duration: 240, delay: 170 }}>
       {#if me.kind !== 'none' && userMode === 'pw'}
-        <h3>修改密码</h3>
+        <h3>{t('修改密码')}</h3>
         {#if err}<div class="err">{err}</div>{/if}
-        <input class="lf" type="password" placeholder="原密码" bind:value={pwOld} autocomplete="current-password" />
-        <input class="lf" type="password" placeholder="新密码（至少 8 位）" bind:value={pwNew} autocomplete="new-password" />
-        <input class="lf" type="password" placeholder="再输一次新密码" bind:value={pwAgain} autocomplete="new-password" onkeydown={(e) => onKey(e, doChangePw)} />
+        <input class="lf" type="password" placeholder={t('原密码')} bind:value={pwOld} autocomplete="current-password" />
+        <input class="lf" type="password" placeholder={t('新密码（至少 8 位）')} bind:value={pwNew} autocomplete="new-password" />
+        <input class="lf" type="password" placeholder={t('再输一次新密码')} bind:value={pwAgain} autocomplete="new-password" onkeydown={(e) => onKey(e, doChangePw)} />
         <div class="acts">
-          <button class="act primary" onclick={doChangePw} disabled={busy}>{busy ? '保存中…' : '保存'}</button>
-          <button class="act ghost" onclick={() => { userMode = 'main'; err = ''; }}>返回</button>
+          <button class="act primary" onclick={doChangePw} disabled={busy}>{busy ? t('保存中…') : t('保存')}</button>
+          <button class="act ghost" onclick={() => { userMode = 'main'; err = ''; }}>{t('返回')}</button>
         </div>
       {:else if me.kind !== 'none'}
         <h3>{me.user || 'Admin'}</h3>
         <div class="usage">
-          <div class="urow"><span>5 小时额度</span><span>{fiveH == null ? '—' : fiveH + '%'}</span></div>
-          <div class="urow"><span>本周额度</span><span>{weekly == null ? '—' : weekly + '%'}</span></div>
+          <div class="urow"><span>{t('5 小时额度')}</span><span>{fiveH == null ? '—' : fiveH + '%'}</span></div>
+          <div class="urow"><span>{t('本周额度')}</span><span>{weekly == null ? '—' : weekly + '%'}</span></div>
           {#if hasLimits(mine)}
             {#each quotaRows(mine) as r (r.label)}
-              <div class="urow"><span>我的 · {r.label}</span><span class:hot={r.hot}>{r.value}</span></div>
+              <div class="urow"><span>{t('我的 · {label}', { label: r.label })}</span><span class:hot={r.hot}>{r.value}</span></div>
             {/each}
           {/if}
-          <p class="uhint">{pwDone ? '密码已改好，别的设备要用新密码重新登录' : hasLimits(mine) ? '上两行为共享订阅用量，「我的」只算 Claude' : '额度为共享订阅用量'}</p>
+          <p class="uhint">{pwDone ? t('密码已改好，别的设备要用新密码重新登录') : hasLimits(mine) ? t('上两行为共享订阅用量，「我的」只算 Claude') : t('额度为共享订阅用量')}</p>
         </div>
         <div class="acts">
           <button class="act workspace" onclick={openWorkspace}>
             <img src="{import.meta.env.BASE_URL}assets/icons/workspace.png" alt="" />
-            <span>工作空间</span><span class="chev">›</span>
+            <span>{t('工作空间')}</span><span class="chev">›</span>
           </button>
           {#if canScan}
             <button class="act workspace" onclick={openScan}>
               <span class="scanico" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
               </span>
-              <span>扫一扫 · 登录网页版</span><span class="chev">›</span>
+              <span>{t('扫一扫 · 登录网页版')}</span><span class="chev">›</span>
             </button>
           {/if}
-          <button class="act primary" onclick={doLogout}>退出登录</button>
-          <button class="act ghost" onclick={openSettings}>设置</button>
-          {#if me.kind === 'user'}<button class="act ghost" onclick={openPw}>修改密码</button>{/if}
+          <button class="act primary" onclick={doLogout}>{t('退出登录')}</button>
+          <button class="act ghost" onclick={openSettings}>{t('设置')}</button>
+          {#if me.kind === 'user'}<button class="act ghost" onclick={openPw}>{t('修改密码')}</button>{/if}
         </div>
       {:else if mode === 'register'}
-        <h3>注册</h3>
+        <h3>{t('注册')}</h3>
         {#if err}<div class="err">{err}</div>{/if}
-        <input class="lf" placeholder="账号（2–32 位字母/数字/_/-）" bind:value={username} autocomplete="off" />
-        <input class="lf" type="password" placeholder="密码（至少 8 位）" bind:value={password} />
-        <input class="lf" type="password" placeholder="确认密码" bind:value={password2} onkeydown={(e) => onKey(e, doRegister)} />
-        <input class="lf" placeholder="邀请码" bind:value={invite} onkeydown={(e) => onKey(e, doRegister)} />
+        <input class="lf" placeholder={t('账号（2–32 位字母/数字/_/-）')} bind:value={username} autocomplete="off" />
+        <input class="lf" type="password" placeholder={t('密码（至少 8 位）')} bind:value={password} />
+        <input class="lf" type="password" placeholder={t('确认密码')} bind:value={password2} onkeydown={(e) => onKey(e, doRegister)} />
+        <input class="lf" placeholder={t('邀请码')} bind:value={invite} onkeydown={(e) => onKey(e, doRegister)} />
         <div class="acts">
-          <button class="act primary" onclick={doRegister} disabled={busy}>{busy ? '注册中…' : '注册'}</button>
-          <button class="act ghost" onclick={() => { mode = 'login'; err = ''; }}>返回登录</button>
+          <button class="act primary" onclick={doRegister} disabled={busy}>{busy ? t('注册中…') : t('注册')}</button>
+          <button class="act ghost" onclick={() => { mode = 'login'; err = ''; }}>{t('返回登录')}</button>
         </div>
       {:else if mode === 'qr'}
-        <h3>扫码登录</h3>
+        <h3>{t('扫码登录')}</h3>
         <div class="qrwrap">
           <div class="qrbox" class:dim={pair.status !== 'pending'}>
             {#if pair.svg}{@html pair.svg}{/if}
           </div>
           {#if pair.status === 'scanned'}
-            <div class="qrov" in:fade={{ duration: 160 }}><span class="qi ok">✓</span><b>已扫描</b><small>请在手机上确认</small></div>
+            <div class="qrov" in:fade={{ duration: 160 }}><span class="qi ok">✓</span><b>{t('已扫描')}</b><small>{t('请在手机上确认')}</small></div>
           {:else if pair.status === 'approved'}
-            <div class="qrov"><span class="spin"></span><b>登录中…</b></div>
+            <div class="qrov"><span class="spin"></span><b>{t('登录中…')}</b></div>
           {:else if pair.status === 'loading' || pair.status === 'idle'}
             <div class="qrov"><span class="spin"></span></div>
           {:else if pair.status !== 'pending'}
             <button class="qrov tap" onclick={() => pairCtl?.refresh()}>
-              <span class="qi">↻</span><b>{pairMsg}</b><small>点击刷新</small>
+              <span class="qi">↻</span><b>{pairMsg}</b><small>{t('点击刷新')}</small>
             </button>
           {/if}
         </div>
-        <p class="qrhint">在已登录的手机浏览器里打开本站，在账户菜单点「扫一扫」</p>
+        <p class="qrhint">{t('在已登录的手机浏览器里打开本站，在账户菜单点「扫一扫」')}</p>
         <div class="acts">
-          <button class="act ghost" onclick={() => { mode = 'login'; err = ''; }}>账号密码登录</button>
+          <button class="act ghost" onclick={() => { mode = 'login'; err = ''; }}>{t('账号密码登录')}</button>
         </div>
       {:else if mode === 'token'}
-        <h3>管理员令牌</h3>
+        <h3>{t('管理员令牌')}</h3>
         {#if err}<div class="err">{err}</div>{/if}
-        <input class="lf" placeholder="访问令牌" bind:value={tok} onkeydown={(e) => onKey(e, doToken)} />
+        <input class="lf" placeholder={t('访问令牌')} bind:value={tok} onkeydown={(e) => onKey(e, doToken)} />
         <div class="acts">
-          <button class="act primary" onclick={doToken} disabled={busy}>{busy ? '登录中…' : '登录'}</button>
-          <button class="act ghost" onclick={() => { mode = 'login'; err = ''; }}>返回</button>
+          <button class="act primary" onclick={doToken} disabled={busy}>{busy ? t('登录中…') : t('登录')}</button>
+          <button class="act ghost" onclick={() => { mode = 'login'; err = ''; }}>{t('返回')}</button>
         </div>
       {:else}
-        <h3>欢迎回来</h3>
+        <h3>{t('欢迎回来')}</h3>
         {#if err}<div class="err">{err}</div>{/if}
-        <input class="lf" placeholder="账号" bind:value={username} autocomplete="off" />
-        <input class="lf" type="password" placeholder="密码" bind:value={password} onkeydown={(e) => onKey(e, doLogin)} />
+        <input class="lf" placeholder={tc('settings', '账号')} bind:value={username} autocomplete="off" />
+        <input class="lf" type="password" placeholder={t('密码')} bind:value={password} onkeydown={(e) => onKey(e, doLogin)} />
         <div class="acts">
-          <button class="act primary" onclick={doLogin} disabled={busy}>{busy ? '登录中…' : '登录'}</button>
-          <button class="act ghost" onclick={() => { mode = 'qr'; err = ''; }}>扫码登录</button>
+          <button class="act primary" onclick={doLogin} disabled={busy}>{busy ? t('登录中…') : t('登录')}</button>
+          <button class="act ghost" onclick={() => { mode = 'qr'; err = ''; }}>{t('扫码登录')}</button>
           <div class="links">
             <!-- 服务器没开注册（主机形态）就不摆：点进去也只会被拒 -->
             {#if me.features?.register !== false}
-              <button class="act link" onclick={() => { mode = 'register'; err = ''; }}>注册新账号</button>
+              <button class="act link" onclick={() => { mode = 'register'; err = ''; }}>{t('注册新账号')}</button>
             {/if}
-            <button class="act link" onclick={() => { mode = 'token'; err = ''; }}>用访问令牌登录</button>
+            <button class="act link" onclick={() => { mode = 'token'; err = ''; }}>{t('用访问令牌登录')}</button>
           </div>
         </div>
       {/if}
@@ -326,6 +332,8 @@
   /* 登录模式底部两条次级链接并排（注册 / 令牌），把主位让给「扫码登录」 */
   .links { display: flex; gap: 6px; }
   .links .act.link { width: auto; flex: 1; padding: 0 4px; }
+  :global(html[lang='en']) .links { flex-wrap: wrap; }
+  :global(html[lang='en']) .links .act.link { flex: 1 1 auto; }
   .act.workspace .scanico { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: #2f6fed; }
   /* —— 扫码登录：白底码块 + 状态盖层 —— */
   .qrwrap { position: relative; width: 200px; height: 200px; margin: 2px auto 0; flex: none; }
@@ -345,6 +353,9 @@
   .usage { display: flex; flex-direction: column; gap: 9px; margin: 4px 0 2px; }
   .urow { display: flex; justify-content: space-between; font-size: 15px; color: #2a2d34; }
   .urow span:last-child { font-weight: 700; }
+  /* 英文「Your usage · Last 7 days」与「3 / 20 turns · $0.52 / $2.00」一行放不下：留缝、数值折行右对齐 */
+  :global(html[lang='en']) .urow { gap: 10px; }
+  :global(html[lang='en']) .urow span:last-child { text-align: right; }
   .uhint { font-size: 12px; color: #82858d; margin-top: 2px; }
   .urow span.hot { color: #d9453a; }
 </style>

@@ -17,6 +17,7 @@
   import { api } from '../../lib/api.js';
   import { ui } from '../../lib/state.svelte.js';
   import { dock, readDockSse } from '../../lib/dock.svelte.js';
+  import { t } from '../../lib/i18n.js';
   let { dockState = dock } = $props();
 
   let holder = $state();
@@ -80,7 +81,7 @@
       else if (ev.type === 'data') term.write(ev.d || '');
       else if (ev.type === 'exit') exited = true;
     }, {
-      onDead: (status) => { connecting = false; failMsg = status === 403 ? '终端仅对完整权限用户开放' : '连接失败'; },
+      onDead: (status) => { connecting = false; failMsg = status === 403 ? t('终端仅对完整权限用户开放') : t('连接失败'); },
       onClose: () => { if (!exited) { connecting = true; setTimeout(() => { if (term) connect(); }, 1500); } },
     });
   }
@@ -105,7 +106,7 @@
     let dead = false;
     const el = holder;
     (async () => {
-      try { await ensureXterm(); } catch { failMsg = '终端组件加载失败'; connecting = false; return; }
+      try { await ensureXterm(); } catch { failMsg = t('终端组件加载失败'); connecting = false; return; }
       if (dead) return;
       term = new Terminal({
         fontSize: 12.5,
@@ -141,20 +142,20 @@
 <div class="tm">
   <div class="tm-body" bind:this={holder}></div>
   {#if connecting && !failMsg}
-    <div class="tm-veil"><span class="spin"></span>连接终端…</div>
+    <div class="tm-veil"><span class="spin"></span>{t('连接终端…')}</div>
   {:else if failMsg}
     <div class="tm-veil">{failMsg}</div>
   {:else if exited}
     <div class="tm-veil">
-      <div>终端会话已结束</div>
-      <button class="tm-restart" onclick={restart}>重启终端</button>
+      <div>{t('终端会话已结束')}</div>
+      <button class="tm-restart" onclick={restart}>{t('重启终端')}</button>
     </div>
   {/if}
   <div class="tm-quick">
     {#each QUICK as k (k.label)}
       <button onclick={() => quick(k.d)}>{k.label}</button>
     {/each}
-    <button class="tm-kill" onclick={restart} title="重启终端"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v5h-5"/></svg></button>
+    <button class="tm-kill" onclick={restart} title={t('重启终端')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v5h-5"/></svg></button>
   </div>
 </div>
 

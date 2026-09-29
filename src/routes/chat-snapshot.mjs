@@ -24,6 +24,7 @@ import { getLiveGens } from '../runtime/gen.mjs';
 import { sessionsDir } from '../runtime/paths.mjs';
 import { ROOT, PUBLIC_ORIGIN, PUBLIC_DIR } from '../config/index.mjs';
 import { CAPABILITIES } from '../config/capabilities.mjs';
+import { pageLang } from './share-gate.mjs';
 
 const SNAPS_DIR = path.join(ROOT, 'chat-snapshots');      // 各桶：chat-snapshots/<token>/
 const STORE_FILE = path.join(ROOT, 'chat-snapshots.json'); // token -> 元数据
@@ -117,6 +118,13 @@ function serveSnapApp(req, res, url) {
   const token = decodeURIComponent(url.pathname.slice(3));
   const rec = store[token];
   const page = (t, s) => { res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(goneHtml(t, s)); };
+  // 访客页语言见 share-gate.mjs pageLang（默认中文；浏览器语言里没有中文才出英文）。中文页原样不动。
+  if (pageLang(req) === 'en') {
+    const again = '<br>To start a new one, @mention the bot in the group and send /chat.';
+    if (!rec) return page('Snapshot not found', 'This chat snapshot doesn’t exist or has been deleted.' + again);
+    if (rec.closed) return page('Snapshot shut down', 'Claude determined this snapshot was being misused and shut it down.<br>' + (rec.closedReason ? 'Reason: ' + (rec.closedReason === '恶意使用' ? 'Malicious use' : rec.closedReason) : ''));
+    if (isIdleExpired(rec)) return page('Snapshot expired', 'No new messages for over 1 hour, so this chat snapshot was deleted automatically.' + again);
+  }
   if (!rec) return page('快照不存在', '这个对话快照不存在或已销毁。<br>在群里 @机器人 发送 /chat 可以新开一个。');
   if (rec.closed) return page('快照已被关停', 'Claude 判定该快照被恶意使用，已将其关停。<br>' + (rec.closedReason ? '原因：' + rec.closedReason : ''));
   if (isIdleExpired(rec)) return page('快照已过期', '超过 1 小时没有新消息，这个对话快照已自动销毁。<br>在群里 @机器人 发送 /chat 可以新开一个。');

@@ -12,7 +12,8 @@
 // 连接与恢复循环继续自转 —— 模型思考时可以自由切走、再开一个并行任务。
 
 import * as api from "./api.ts";
-import { applyTheme, type Appearance } from "./theme.ts";
+import { t, tr } from "./i18n.ts";
+import { applyTheme, VENDORS, type Appearance } from "./theme.ts";
 import { withViewTransition } from "./motion.ts";
 import { haptic } from "./touch.ts";
 import { findSteerItem, resetStreamTurn } from "./stream-turn.ts";
@@ -266,10 +267,10 @@ export function toggleDock() {
   if (app.dockOpen) closeDock();
   else app.dockOpen = true;
 }
-export function setDockTool(t: DockTool) {
-  app.dockTool = t;
+export function setDockTool(tool: DockTool) {
+  app.dockTool = tool;
   try {
-    localStorage.setItem(DOCK_TOOL_KEY, t);
+    localStorage.setItem(DOCK_TOOL_KEY, tool);
   } catch { /* ignore */ }
 }
 
@@ -569,12 +570,12 @@ export async function reloadMeta() {
     app.compat = c;
     app.connError = "";
     // 不兼容就明说一次（Hero 上常驻一条；在会话里的人靠这条提示）
-    const note = c.clientTooOld ? "App 版本过旧，服务端已不再支持，请更新到最新版" : c.serverTooOld ? "服务端版本较旧，部分功能可能用不了，请更新服务端" : "";
+    const note = c.clientTooOld ? t("App 版本过旧，服务端已不再支持，请更新到最新版") : c.serverTooOld ? t("服务端版本较旧，部分功能可能用不了，请更新服务端") : "";
     if (note && note !== compatNoted) toast(note);
     compatNoted = note;
   } catch (e: any) {
     // 连不上：Hero 给入口提示（壳里点开连接设置，网页端提示检查服务）
-    app.connError = String(e?.message ?? e ?? "连接失败");
+    app.connError = tr(String(e?.message ?? e ?? t("连接失败")));
   }
 }
 
@@ -637,7 +638,7 @@ export async function decidePermission(
       ref.scope = undefined;
       ref.note = undefined;
       ref.cancelled = true;
-      if (!quiet) toast("这张卡已经失效了（超时或这一轮已结束），没送达");
+      if (!quiet) toast(t("这张卡已经失效了（超时或这一轮已结束），没送达"));
       if (stopping) forceResync(chat);
       return "gone";
     }
@@ -645,7 +646,7 @@ export async function decidePermission(
     ref.decided = null; // 没送达 → 退回可点，用户可重试
     ref.scope = undefined;
     ref.note = undefined;
-    if (!quiet) toast("没送达，请再点一次");
+    if (!quiet) toast(t("没送达，请再点一次"));
     if (stopping) forceResync(chat);
     return "failed";
   }
@@ -674,13 +675,13 @@ export async function decidePlan(id: string, approved: boolean, note?: string, q
       ref.decided = null;
       ref.note = undefined;
       ref.cancelled = true;
-      if (!quiet) toast("这份计划的审批已经失效了（超时或这一轮已结束），没送达");
+      if (!quiet) toast(t("这份计划的审批已经失效了（超时或这一轮已结束），没送达"));
       return "gone";
     }
   } catch {
     ref.decided = null;
     ref.note = undefined;
-    if (!quiet) toast("没送达，请再点一次");
+    if (!quiet) toast(t("没送达，请再点一次"));
     return "failed";
   }
   return "ok";
@@ -704,7 +705,7 @@ async function replyToCard(chat: Chat, id: string, text: string): Promise<CardRe
 // 服务端 409 = 那一轮刚好结束 → 回退成正常发送，消息不丢。
 async function steerRunning(chat: Chat, msg: string) {
   if (!chat.id) {
-    toast("这一轮还没建立会话，稍等一下再插话");
+    toast(t("这一轮还没建立会话，稍等一下再插话"));
     return;
   }
   // U2（#46）：插话的身份——乐观放进待送达托盘，服务端回来的 steer_queued / applied / returned 按它对号
@@ -724,7 +725,7 @@ async function steerRunning(chat: Chat, msg: string) {
       // 带着「优先于此前的指示」注进别人的那一轮。撤掉气泡、放回输入框，接上正在跑的那一轮让人看清再说。
       dropBubble();
       if (chat === app.chat) app.refill = msg;
-      toast("你插话的那一轮已经结束，现在在跑的是另一台设备发起的；话已放回输入框");
+      toast(t("你插话的那一轮已经结束，现在在跑的是另一台设备发起的；话已放回输入框"));
       forceResync(chat);
       return;
     }
@@ -735,7 +736,7 @@ async function steerRunning(chat: Chat, msg: string) {
       await send(msg);
       return;
     }
-    pushItem(chat, { kind: "error", text: `插话没送达：${String(e?.message ?? e)}` });
+    pushItem(chat, { kind: "error", text: t("插话没送达：{reason}", { reason: tr(String(e?.message ?? e)) }) });
   }
 }
 // M11（N33）：新会话用界面此刻显示的配置（顶栏的项目、输入框旁的型号 / 思考 / 档位 / 访问范围都读 app.config）。
@@ -769,17 +770,17 @@ export async function send(raw: string, cardTarget?: string | null) {
       if (reply === "failed") {
         // 没送达：话放回输入框，卡还停着，可以再发一次或直接点卡片
         if (chat === app.chat) app.refill = msg;
-        toast("没送达，话已放回输入框");
+        toast(t("没送达，话已放回输入框"));
         return;
       }
       // 卡已经不在等了（别的设备先定了 / 失效了）：这段话改作插话，不丢
-      toast("那张卡已经处理过了，这段话作为插话发出");
+      toast(t("那张卡已经处理过了，这段话作为插话发出"));
     }
     await steerRunning(chat, msg);
     return;
   }
   if (runningCount() >= MAX_PARALLEL) {
-    toast(`最多同时运行 ${MAX_PARALLEL} 个对话，先等一个跑完`);
+    toast(t("最多同时运行 {n} 个对话，先等一个跑完", { n: MAX_PARALLEL }));
     return;
   }
   const paths = [...chat.attachments];
@@ -809,8 +810,8 @@ export async function send(raw: string, cardTarget?: string | null) {
   pushItem(chat, { kind: "user", text: msg, attachments, ...(refs.length ? { refs: refs.map(({ id, title }) => ({ id, title })) } : {}) });
   settleCursors(chat); // 上一轮若异常收尾，残留 live 旗子在此掐灭
   chat.running = true;
-  chat.activity = "思考中";
-  if (!chat.title) chat.title = msg.replace(/\s+/g, " ").slice(0, 60) || "新任务";
+  chat.activity = t("思考中");
+  if (!chat.title) chat.title = msg.replace(/\s+/g, " ").slice(0, 60) || t("新任务");
   haptic("light");
   startNativeWatch();
   const gen = ++chat.liveGen;
@@ -905,7 +906,7 @@ async function confirmDelivery(
 ) {
   if (gen !== chat.liveGen) return;
   chat.reconnecting = true;
-  chat.activity = "确认是否送达";
+  chat.activity = t("确认是否送达");
   const hit = await api.lookupRun(draft.clientRunId, RESYNC_TIMEOUT_MS);
   if (gen !== chat.liveGen) return;
   if (hit?.known && hit.sessionId) {
@@ -915,7 +916,7 @@ async function confirmDelivery(
     return;
   }
   if (hit && !hit.known) {
-    undelivered(chat, gen, draft, failMsg || "网络中断");
+    undelivered(chat, gen, draft, failMsg || t("网络中断"));
     return;
   }
   if (!chat.id) {
@@ -939,7 +940,14 @@ function undelivered(
   if (draft.refs?.length) chat.refs = [...draft.refs];
   if (chat === app.chat) app.refill = draft.text;
   else chat.pendingRefill = draft.text;
-  toast(`${chat === app.chat ? "" : `「${chat.title || "后台对话"}」`}消息没送达（${reason}），已放回输入框，确认后再发`);
+  const why = tr(reason);
+  toast(
+    chat === app.chat
+      ? t("消息没送达（{reason}），已放回输入框，确认后再发", { reason: why })
+      : chat.title
+        ? t("「{title}」消息没送达（{reason}），已放回输入框，确认后再发", { title: tr(chat.title), reason: why })
+        : t("「后台对话」消息没送达（{reason}），已放回输入框，确认后再发", { reason: why }),
+  );
   chat.reconnecting = false;
   finishRun(chat, gen);
 }
@@ -952,7 +960,7 @@ function undelivered(
 async function adoptOrphanRun(chat: Chat, gen: number, failMsg: string) {
   if (gen !== chat.liveGen) return;
   chat.reconnecting = true;
-  chat.activity = "重连中";
+  chat.activity = t("重连中");
   let found: SessionMeta | undefined;
   try {
     const page = await api.listSessionsPage(0, 10, RESYNC_TIMEOUT_MS);
@@ -993,7 +1001,7 @@ function finishRun(chat: Chat, gen: number) {
   }
   // 后台会话跑完了 → 提醒（前台、分屏里的另一格自己看得见，不吵）
   if (wasRunning && !paneVisible(chat) && chat.id) {
-    toast(`「${chat.title || "后台对话"}」已完成`);
+    toast(chat.title ? t("「{title}」已完成", { title: tr(chat.title) }) : t("「后台对话」已完成"));
     haptic("light");
   }
   if (app.features.sessions) refreshSessions();
@@ -1013,7 +1021,7 @@ export async function answerAsk(
   ref.questions.forEach((q, i) => {
     ref.selected[q.id] = answers[i]?.selected ?? [];
   });
-  chat.activity = "思考中";
+  chat.activity = t("思考中");
   haptic("light");
   try {
     const res = await api.answerAsk(chat.id, id, answers);
@@ -1023,11 +1031,11 @@ export async function answerAsk(
       // 这次不一样）留着。按内容比，不按引用比：Svelte 5 的深代理读回来的不是原数组。
       const mine = ref.questions.every((q, i) => JSON.stringify(ref.selected[q.id] ?? []) === JSON.stringify(answers[i]?.selected ?? []));
       if (mine) ref.questions.forEach((q) => (ref.selected[q.id] = []));
-      if (!quiet) toast("这个问题已经失效了（超时或这一轮已结束），这次的答案没送到");
+      if (!quiet) toast(t("这个问题已经失效了（超时或这一轮已结束），这次的答案没送到"));
       return "gone";
     }
   } catch (e: any) {
-    if (!quiet) toast(`回答失败：${e?.message ?? e}`);
+    if (!quiet) toast(t("回答失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     ref.answered = false; // 回滚，让用户重试
     ref.questions.forEach((q) => (ref.selected[q.id] = []));
     return "failed";
@@ -1064,7 +1072,7 @@ export async function stop() {
   if (mismatch) {
     // M2（#44）：本端以为在跑的那一轮已经结束，此刻在跑的是另一台设备新起的一轮——没去停它。接上它，
     // 看清了还想停就再点一次（那时带的就是这一轮的 runId），不会停不下来。
-    toast("你要停的那一轮已经结束；现在在跑的是另一台设备发起的，没有停它。要停请再点一次");
+    toast(t("你要停的那一轮已经结束；现在在跑的是另一台设备发起的，没有停它。要停请再点一次"));
     forceResync(chat);
   }
   if (app.features.sessions) refreshSessions();
@@ -1118,7 +1126,7 @@ export function newChat() {
 // 自己快照里的 workspace；这里只决定接下来创建的新会话落在哪个项目。
 export async function newChatInProject(project: ProjectMeta) {
   if (!project.exists) {
-    toast("项目文件夹已不存在");
+    toast(t("项目文件夹已不存在"));
     return;
   }
   const before = app.chat;
@@ -1130,7 +1138,7 @@ export async function newChatInProject(project: ProjectMeta) {
     if (!startedMeanwhile) newChat();
     app.drawer = false;
   } catch (e: any) {
-    toast(`切换项目失败：${e?.message ??  e}`);
+    toast(t("切换项目失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
   }
 }
 
@@ -1139,12 +1147,12 @@ export async function newChatInProject(project: ProjectMeta) {
 export async function newQuickChat() {
   try {
     const p = (await api.newQuickChat()) as ProjectMeta;
-    if (!p?.path) throw new Error("服务器未返回新的快照");
+    if (!p?.path) throw new Error(t("服务器未返回新的快照"));
     app.projects = [...app.projects.filter((x) => !x.quick), p];
     await newChatInProject(p);
   } catch (e: any) {
     // 老后端没有 /api/quick/new → 说人话
-    toast(e?.status === 404 ? "快照对话需要重启 harness 服务后可用" : `新建快照失败：${e?.message ?? e}`);
+    toast(e?.status === 404 ? t("快照对话需要重启 harness 服务后可用") : t("新建快照失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
   }
 }
 
@@ -1156,7 +1164,7 @@ export function diagnosticsAvailable(): boolean {
 export async function exportDiagnostics(): Promise<void> {
   const id = app.chat.id;
   if (!id) {
-    toast("先打开一个对话，再导出它的诊断包");
+    toast(t("先打开一个对话，再导出它的诊断包"));
     return;
   }
   try {
@@ -1164,9 +1172,9 @@ export async function exportDiagnostics(): Promise<void> {
     const host = artifactHost();
     if (host) host({ path: made.path, name: made.name, kind: made.kind, size: made.size }, id);
     else window.open(api.artifactUrl(id, made.path, true), "_blank", "noopener,noreferrer");
-    toast(`诊断包已生成：${made.name}`);
+    toast(t("诊断包已生成：{name}", { name: made.name }));
   } catch (e: any) {
-    toast(`导出诊断包失败：${e?.message ?? e}`);
+    toast(t("导出诊断包失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
   }
 }
 
@@ -1195,19 +1203,19 @@ export async function switchVendor(provider: string) {
     app.vendorMenu = false;
     pulseGrid();
   } catch (e: any) {
-    toast(`切换失败：${e?.message ?? e}`);
+    toast(t("切换失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
   }
 }
 
 // 型号 / 思考深度：先在本机上屏（菜单里的勾、思考深度的选中块当场挪过去），再写全局配置——以前要等服务端往返，
 // 隧道上半秒多块才动（不跟手）。服务端会按型号的支持面收档，回来的配置为准；写失败退回并说一声。
 export async function setModel(model: string) {
-  await patchConfigOptimistic({ model }, "换型号");
+  await patchConfigOptimistic({ model }, (reason) => t("换型号没成功：{reason}", { reason }));
 }
 export async function setEffort(thinking: string) {
-  await patchConfigOptimistic({ thinking }, "换思考深度");
+  await patchConfigOptimistic({ thinking }, (reason) => t("换思考深度没成功：{reason}", { reason }));
 }
-async function patchConfigOptimistic(patch: Record<string, string>, what: string) {
+async function patchConfigOptimistic(patch: Record<string, string>, failed: (reason: string) => string) {
   const prev = app.config;
   if (prev) app.config = { ...prev, ...patch };
   try {
@@ -1218,7 +1226,7 @@ async function patchConfigOptimistic(patch: Record<string, string>, what: string
     if (prev && cur && Object.entries(patch).every(([k, v]) => cur[k] === v)) {
       app.config = { ...cur, ...Object.fromEntries(Object.keys(patch).map((k) => [k, prev[k]])) };
     }
-    toast(`${what}没成功：${e?.message ?? e}`);
+    toast(failed(tr(String(e?.message ?? e))));
   }
 }
 // ── 运行档位（自主执行 / 只读 / 先出计划）──────────────────────────────────
@@ -1244,7 +1252,7 @@ export async function setPermissionMode(mode: "auto" | "read-only" | "plan") {
     } catch (e: any) {
       if (chat.cfg) chat.cfg = { ...chat.cfg, permissionMode: prevChat };
       if (app.config) app.config = { ...app.config, permissionMode: prevGlobal };
-      toast(`切换档位失败：${e?.message ?? e}`);
+      toast(t("切换档位失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
       return;
     }
   }
@@ -1275,11 +1283,11 @@ export async function withdrawPendingSteer(s: tl.PendingSteer): Promise<void> {
   try {
     const r = await api.withdrawSteer(chat.id, s.id);
     if (!r.ok) {
-      toast(r.reason === "delivered" ? "这句已经送到了，撤不回来" : "这一轮已经结束");
+      toast(r.reason === "delivered" ? t("这句已经送到了，撤不回来") : t("这一轮已经结束"));
       return;
     }
   } catch (e: any) {
-    toast(`没撤成：${e?.message ?? e}`);
+    toast(t("没撤成：{reason}", { reason: tr(String(e?.message ?? e)) }));
     return;
   }
   tl.takePendingSteer(chat, s.id, s.text);
@@ -1293,16 +1301,16 @@ export async function interruptWithPendingSteer(s: tl.PendingSteer): Promise<voi
   try {
     r = await api.interruptSteer(chat.id, s.id);
   } catch (e: any) {
-    toast(`没中断成：${e?.message ?? e}`);
+    toast(t("没中断成：{reason}", { reason: tr(String(e?.message ?? e)) }));
     return;
   }
   if (!r.ok) {
     toast(
       r.reason === "delivered"
-        ? "这句已经送到了，不用再中断"
+        ? t("这句已经送到了，不用再中断")
         : r.reason === "busy"
-          ? "这一轮还没停下来，话已放回输入框"
-          : "这一轮已经结束",
+          ? t("这一轮还没停下来，话已放回输入框")
+          : t("这一轮已经结束"),
     );
     return;
   }
@@ -1322,7 +1330,7 @@ export async function dropReadRoot(dir: string): Promise<void> {
     chat.readRoots = r.roots;
     if (chat.cfg) chat.cfg = { ...chat.cfg, readRoots: r.roots };
   } catch (e: any) {
-    toast(`没删成：${e?.message ?? e}`);
+    toast(t("没删成：{reason}", { reason: tr(String(e?.message ?? e)) }));
   }
 }
 
@@ -1339,7 +1347,7 @@ export async function setAccessMode(access: AccessMode) {
     } catch (e: any) {
       if (chat.cfg) chat.cfg = { ...chat.cfg, access: prevChat };
       if (app.config) app.config = { ...app.config, access: prevGlobal };
-      toast(e?.status === 404 ? "切换访问范围需要重启 harness 服务后可用" : `切换访问范围失败：${e?.message ?? e}`);
+      toast(e?.status === 404 ? t("切换访问范围需要重启 harness 服务后可用") : t("切换访问范围失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
       return;
     }
   }
@@ -1364,7 +1372,7 @@ export async function setAwayMode(on: boolean) {
     await api.setSessionAway(chat.id, on);
   } catch (e: any) {
     chat.away = prev;
-    toast(e?.status === 404 ? "离开模式需要重启 harness 服务后可用" : `切换离开模式失败：${e?.message ?? e}`);
+    toast(e?.status === 404 ? t("离开模式需要重启 harness 服务后可用") : t("切换离开模式失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
   }
 }
 
@@ -1386,6 +1394,34 @@ export function modelEfforts(): string[] {
 export function modelsOf(providerId: string): any[] {
   const cat = app.info?.catalog as any[] | undefined;
   return cat?.find((p) => p.id === providerId)?.models ?? [];
+}
+
+// 厂商的名字与副标题：内置八家查 theme.ts 的 VENDORS；自定义服务（custom-<hex>）查服务端目录——名字是用户填的备注，
+// 副标题是接口主机名。删掉了的自定义服务（历史会话还指着它）给个中性的占位。
+export interface VendorView {
+  id: string;
+  name: string;
+  company: string;
+  custom: boolean;
+}
+export const isCustomVendor = (id: string | null | undefined) => typeof id === "string" && id.startsWith("custom-");
+export function vendorInfo(id: string | null | undefined): VendorView {
+  const key = id ?? "anthropic";
+  if (isCustomVendor(key)) {
+    const spec = (app.info?.catalog as any[] | undefined)?.find((p) => p.id === key);
+    return { id: key, name: spec?.name ?? t("自定义服务"), company: spec?.custom?.host ?? t("已删除"), custom: true };
+  }
+  const v = VENDORS[key] ?? VENDORS.anthropic;
+  return { id: v.id, name: v.name, company: v.company, custom: false };
+}
+// 用户加的自定义服务，按添加顺序
+export function customVendors(): VendorView[] {
+  const cat = (app.info?.catalog as any[] | undefined) ?? [];
+  return cat.filter((p) => isCustomVendor(p.id)).map((p) => vendorInfo(p.id));
+}
+// 「＋」卡只在服务端支持、且不是租户实例（多用户服务端上不许替用户连任意地址）时出现
+export function canAddCustomVendor(): boolean {
+  return Boolean(app.compat?.caps?.includes("custom-providers")) && !app.info?.tenant?.tenant;
 }
 
 // ── 历史会话 ─────────────────────────────────────────────────────────────────
@@ -1462,7 +1498,7 @@ export async function reorderProjects(zonePaths: string[]): Promise<void> {
     // 本区里有只在侧栏里补出来的隐式项目（列表里还没有它）：服务端这次顺手登记了，拉一次权威次序
     if (moved.length < zonePaths.length) void refreshProjects();
   } catch (e: any) {
-    toast(`排序没存上：${e?.message ?? e}`);
+    toast(t("排序没存上：{reason}", { reason: tr(String(e?.message ?? e)) }));
     void refreshProjects();
   }
 }
@@ -1506,8 +1542,8 @@ export async function setProjectFlags(
     // 老后端没有 /api/projects/flags → 报「重启服务」而不是光秃秃的 HTTP 404
     toast(
       e?.status === 404
-        ? "置顶/隐藏需要重启 harness 服务后可用"
-        : `操作失败：${e?.message ?? e}`,
+        ? t("置顶/隐藏需要重启 harness 服务后可用")
+        : t("操作失败：{reason}", { reason: tr(String(e?.message ?? e)) }),
     );
     return null;
   }
@@ -1529,30 +1565,30 @@ function harnessNotice(kind: string | undefined, text: string): string | null {
   // E3：用户 /技能名（/包名）点的技能——正文不显示，界面上一行提示（与直播时 skill_loaded 那一行同一句话）
   if (kind === "slash-skill") {
     const m = /^\[Skill( package| again)?: ([^\]\n]+)\]/.exec(text);
-    return m ? tl.skillLoadedText(m[2], m[1] === " package") : "已载入技能";
+    return m ? tl.skillLoadedText(m[2], m[1] === " package") : t("已载入技能");
   }
-  if (kind === "compaction-summary") return "更早的对话已压缩成摘要";
+  if (kind === "compaction-summary") return t("更早的对话已压缩成摘要");
   // U9：从这里改写之后给模型的说明——界面上只说一句
-  if (kind === "rewind") return "对话退回到这里 · 工作区文件没有回退";
+  if (kind === "rewind") return t("对话退回到这里 · 工作区文件没有回退");
   // O7：目标续跑——第一轮的说明、之后每一轮的首条
   if (kind === "goal-start") {
     const m = /at most (\d+) rounds/.exec(text);
-    return `开始目标${m ? ` · 最多 ${m[1]} 轮` : ""}：没达成就一轮轮接着做`;
+    return m ? t("开始目标 · 最多 {n} 轮：没达成就一轮轮接着做", { n: m[1] }) : t("开始目标：没达成就一轮轮接着做");
   }
   if (kind === "goal-continue") {
     const m = /^\[Goal\] Round (\d+)\/(\d+)/.exec(text);
-    return m ? `目标 · 第 ${m[1]}/${m[2]} 轮` : "目标 · 接着做";
+    return m ? t("目标 · 第 {x}/{y} 轮", { x: m[1], y: m[2] }) : t("目标 · 接着做");
   }
   // U10：审阅面板里撤销了这个对话对几个文件的改动
   if (kind === "restore") {
     const m = /changes to (\d+) file/.exec(text);
-    return m ? `在审阅面板撤销了 ${m[1]} 个文件的改动` : "在审阅面板撤销了文件改动";
+    return m ? t("在审阅面板撤销了 {n} 个文件的改动", { n: m[1] }) : t("在审阅面板撤销了文件改动");
   }
   // C8：带摘要开新会话——新会话开头那条接续摘要
-  if (kind === "handoff-summary") return "接续自上一个会话（开头是它的摘要）";
+  if (kind === "handoff-summary") return t("接续自上一个会话（开头是它的摘要）");
   // M13：服务重启 / 进程死掉之后自动续跑
-  if (kind === "resume") return "服务重启后自动接着做";
-  if (kind === "resume-stopped") return "连着几次被重启切断，没有再自动续跑——说「继续」接着做";
+  if (kind === "resume") return t("服务重启后自动接着做");
+  if (kind === "resume-stopped") return t("连着几次被重启切断，没有再自动续跑——说「继续」接着做");
   return text.split("\n")[0] || null;
 }
 function steerText(msg: any, text: string): string {
@@ -1572,7 +1608,7 @@ function askQuestionsFromArgs(callId: string, raw: any): AskQuestion[] {
       .slice(0, 5);
     return {
       id: `${callId}:${i}`,
-      header: String(q?.header ?? "").trim().slice(0, 20) || `问题 ${i + 1}`,
+      header: String(q?.header ?? "").trim().slice(0, 20) || t("问题 {n}", { n: i + 1 }),
       question: String(q?.question ?? ""),
       multiSelect: Boolean(q?.multiSelect),
       options,
@@ -1660,12 +1696,12 @@ function rebuildTimeline(messages: any[]): Item[] {
         } else if (b.t === "tool_call") {
           // 默认按中断态建卡：完成的调用随后一定有 tool_result 回填成 ok/fail；
           // 没有结果的（运行被掐断的快照）不能假装绿色完成。
-          const t: ToolItem = {
+          const tool: ToolItem = {
             kind: "tool", id: b.id, name: b.name, args: b.args ?? {},
-            status: "fail", summary: "已中断：未拿到结果", output: "", open: false,
+            status: "fail", summary: "已中断：未拿到结果", output: "", open: false, // i18n-ignore：tasks.ts 按「已中断」前缀认「已停止」，显示处 tr()
           };
-          items.push(t);
-          tools.set(b.id, t);
+          items.push(tool);
+          tools.set(b.id, tool);
         }
       }
     }
@@ -1685,12 +1721,12 @@ function reindexRefs(chat: Chat) {
   chat.workflowRefs.clear();
   for (const it of chat.timeline) {
     if (it.kind === "tool") {
-      const t = it as ToolItem;
-      chat.toolRefs.set(t.id, t);
-      if (t.agent) chat.agentRefs.set(t.agent.id, t.agent);
-      if (t.workflow) {
-        chat.workflowRefs.set(t.workflow.id, t.workflow);
-        for (const a of t.workflow.agents) chat.agentRefs.set(a.id, a);
+      const tool = it as ToolItem;
+      chat.toolRefs.set(tool.id, tool);
+      if (tool.agent) chat.agentRefs.set(tool.agent.id, tool.agent);
+      if (tool.workflow) {
+        chat.workflowRefs.set(tool.workflow.id, tool.workflow);
+        for (const a of tool.workflow.agents) chat.agentRefs.set(a.id, a);
       }
     }
     else if (it.kind === "ask") chat.askRefs.set(it.id, it as AskItem);
@@ -1795,7 +1831,7 @@ export async function openSession(id: string) {
     // 缓存命中的终态会话：后台静默对账一次 —— 离开期间别的设备可能又跑了
     if (hadLocal && !chat.running && !chat.reconnecting) void reconcileIdle(chat);
   } catch (e: any) {
-    toast(`打开失败：${e?.message ?? e}`);
+    toast(t("打开失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
   }
 }
 
@@ -1815,7 +1851,7 @@ export async function openInSplit(id: string, side: Side): Promise<void> {
   try {
     chat = await loadChat(id);
   } catch (e: any) {
-    toast(`打开失败：${e?.message ?? e}`);
+    toast(t("打开失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
     return;
   }
   if (app.panes.includes(chat)) {
@@ -1892,7 +1928,7 @@ async function rebuildMirrorBase(chat: Chat, gen: number) {
     if (gen !== chat.liveGen || chat.id !== id) return;
     applyRecord(chat, rec);
     chat.running = true; // applyRecord 只重建视图，本轮仍在跑
-    if (!chat.activity) chat.activity = "思考中";
+    if (!chat.activity) chat.activity = t("思考中");
     restorePending(chat, rec.pending);
   } catch { /* 拉不到就维持现状，直播事件照常追加 */ }
 }
@@ -1905,7 +1941,7 @@ async function attachStream(chat: Chat, gen: number) {
   chat.curText = null;
   chat.curThinking = null;
   chat.running = true;
-  if (!chat.activity) chat.activity = "思考中";
+  if (!chat.activity) chat.activity = t("思考中");
   chat.abortCtl = new AbortController();
   let sawEnd = false;
   try {
@@ -1953,7 +1989,7 @@ function scheduleResync(chat: Chat, gen: number, delay: number) {
   chat.reconnecting = true;
   // 连试几次都没成 → 说人话，别让用户对着一个永远的「重连中」猜是不是死了。
   // 任务在服务端照跑，网络一通就自动补回来。
-  if (chat.running) chat.activity = chat.resyncAttempt >= 3 ? "重连中（网络不畅）" : "重连中";
+  if (chat.running) chat.activity = chat.resyncAttempt >= 3 ? t("重连中（网络不畅）") : t("重连中");
   clearTimeout(chat.resyncTimer);
   chat.resyncTimer = window.setTimeout(() => {
     chat.resyncTimer = 0; // 归零，否则「有没有排着下一次」永远读成有（排障时会被骗）
@@ -2179,17 +2215,17 @@ export async function compactNow(): Promise<boolean> {
   const sid = app.chat.id;
   if (!sid) return false;
   if (app.chat.running) {
-    toast("这一轮跑完再压缩");
+    toast(t("这一轮跑完再压缩"));
     return false;
   }
   const r = await api.compactSessionNow(sid);
   if (!r.ok) {
-    toast(r.code === "empty" ? "对话还短，没什么可压的" : r.code === "running" ? "这一轮跑完再压缩" : `压缩没成：${r.error ?? ""}`);
+    toast(r.code === "empty" ? t("对话还短，没什么可压的") : r.code === "running" ? t("这一轮跑完再压缩") : t("压缩没成：{reason}", { reason: tr(r.error ?? "") }));
     return false;
   }
   evictChat(sid);
   await openSession(sid);
-  toast(`压缩好了：上下文约 ${kTok(r.before)} → ${kTok(r.after)} token`);
+  toast(t("压缩好了：上下文约 {a} → {b} token", { a: kTok(r.before), b: kTok(r.after) }));
   return true;
 }
 
@@ -2197,17 +2233,17 @@ export async function handoffWithSummary(): Promise<boolean> {
   const sid = app.chat.id;
   if (!sid) return false;
   if (app.chat.running) {
-    toast("这一轮跑完再开新会话");
+    toast(t("这一轮跑完再开新会话"));
     return false;
   }
   const r = await api.handoffWithSummary(sid);
   if (!r.ok || !r.sessionId) {
-    toast(r.code === "empty" ? "对话里还没有内容" : `没开成：${r.error ?? ""}`);
+    toast(r.code === "empty" ? t("对话里还没有内容") : t("没开成：{reason}", { reason: tr(r.error ?? "") }));
     return false;
   }
   await openSession(r.sessionId);
   if (app.features.sessions) void refreshSessions();
-  toast("已带着摘要开了新会话，原会话还在列表里");
+  toast(t("已带着摘要开了新会话，原会话还在列表里"));
   return true;
 }
 
@@ -2219,7 +2255,7 @@ export async function handoffPlan(item: PlanItem): Promise<void> {
   haptic("medium");
   const r = await api.handoffPlan(sid, item.id);
   if (!r.ok || !r.sessionId) {
-    toast(r.code === "not_found" ? "这份计划已经不等审批了（超时或这一轮已结束）" : `没转成：${r.error ?? ""}`);
+    toast(r.code === "not_found" ? t("这份计划已经不等审批了（超时或这一轮已结束）") : t("没转成：{reason}", { reason: tr(r.error ?? "") }));
     return;
   }
   item.decided = "handoff";
@@ -2255,16 +2291,16 @@ export async function loadCommands(): Promise<void> {
 // 内置命令此刻为什么用不了（面板上灰掉、发送时提示）；能用返回 undefined
 export function builtinBlocked(b: Builtin): string | undefined {
   const chat = app.chat;
-  if (b.idleOnly && chat.running) return "这一轮跑完再用";
-  if ((b.id === "compact" || b.id === "handoff") && (!hygieneAvailable() || !chat.id)) return chat.id ? "服务端还不支持" : "还没有对话";
-  if (b.id === "goal" && !goalAvailable()) return "服务端还不支持";
+  if (b.idleOnly && chat.running) return t("这一轮跑完再用");
+  if ((b.id === "compact" || b.id === "handoff") && (!hygieneAvailable() || !chat.id)) return chat.id ? t("服务端还不支持") : t("还没有对话");
+  if (b.id === "goal" && !goalAvailable()) return t("服务端还不支持");
   return undefined;
 }
 // 执行内置命令。返回 true = 处理掉了（输入框清空）；false = 没执行（话留在输入框里）
 export async function runBuiltin(b: Builtin, args: string): Promise<boolean> {
   const why = builtinBlocked(b);
   if (why) {
-    toast(`/${b.name}：${why}`);
+    toast(t("/{name}：{why}", { name: b.name, why }));
     return false;
   }
   switch (b.id) {
@@ -2303,9 +2339,9 @@ export async function goalControl(action: "pause" | "resume" | "clear"): Promise
   try {
     const r = await api.goalAction(chat.id, action);
     if (app.chat === chat) chat.goal = r.goal ?? null;
-    if (action === "resume" && r.goal?.status === "active") toast("接着做了");
+    if (action === "resume" && r.goal?.status === "active") toast(t("接着做了"));
   } catch (e: any) {
-    toast(`操作失败：${e?.message ?? e}`);
+    toast(t("操作失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
   }
 }
 
@@ -2343,7 +2379,7 @@ export async function rewindFrom(item: UserBubble): Promise<void> {
   const sid = chat.id;
   if (!sid) return;
   if (chat.running) {
-    toast("这一轮还在跑，先停下再改写");
+    toast(t("这一轮还在跑，先停下再改写"));
     return;
   }
   const ordinal = chat.timeline.filter((it) => it.kind === "user").indexOf(item);
@@ -2353,10 +2389,10 @@ export async function rewindFrom(item: UserBubble): Promise<void> {
   if (!r.ok) {
     toast(
       r.code === "running"
-        ? "这一轮还在跑，先停下再改写"
+        ? t("这一轮还在跑，先停下再改写")
         : r.code === "not_found"
-          ? "这条消息已经压缩进摘要了，改写不了（可以用检查点回滚）"
-          : `改写失败：${r.error ?? ""}`,
+          ? t("这条消息已经压缩进摘要了，改写不了（可以用检查点回滚）")
+          : t("改写失败：{reason}", { reason: tr(r.error ?? "") }),
     );
     return;
   }
@@ -2370,15 +2406,15 @@ export async function rewindFrom(item: UserBubble): Promise<void> {
   const changed = r.changedFiles?.length ?? 0;
   const undo = r.undo;
   toast(
-    changed ? `已退回到这条消息之前（${changed} 个文件没有回退）` : "已退回到这条消息之前，原话放回输入框了",
-    undo ? { label: "撤销", run: () => void undoRewindFor(sid, undo, item.text) } : undefined,
+    changed ? t("已退回到这条消息之前（{n} 个文件没有回退）", { n: changed }) : t("已退回到这条消息之前，原话放回输入框了"),
+    undo ? { label: t("撤销"), run: () => void undoRewindFor(sid, undo, item.text) } : undefined,
   );
 }
 
 async function undoRewindFor(sid: string, undo: { n: number; length: number }, text: string): Promise<void> {
   const r = await api.undoRewind(sid, undo.n, undo.length);
   if (!r.ok) {
-    toast(r.code === "moved_on" ? "改写之后又发过消息了，撤销不了（可以用检查点回滚）" : `撤销失败：${r.error ?? ""}`);
+    toast(r.code === "moved_on" ? t("改写之后又发过消息了，撤销不了（可以用检查点回滚）") : t("撤销失败：{reason}", { reason: tr(r.error ?? "") }));
     return;
   }
   evictChat(sid);
@@ -2389,7 +2425,7 @@ async function undoRewindFor(sid: string, undo: { n: number; length: number }, t
     app.chat.attachments = [];
     app.chat.refs = [];
   }
-  toast("已撤销改写");
+  toast(t("已撤销改写"));
 }
 
 export async function removeSession(id: string) {
@@ -2417,7 +2453,7 @@ export async function removeSession(id: string) {
       if (localStorage.getItem(LAST_SESSION_KEY) === id) rememberSession(null);
     } catch { /* ignore */ }
   } catch (e: any) {
-    toast(`删除失败：${e?.message ?? e}`);
+    toast(t("删除失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
   }
 }
 

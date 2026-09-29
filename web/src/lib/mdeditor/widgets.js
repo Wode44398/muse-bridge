@@ -6,6 +6,7 @@
 import { WidgetType } from '@codemirror/view';
 import katex from 'katex';
 import { escapeHtml } from '../obsmd.js';
+import { t } from '../i18n.js';
 
 // —— KaTeX（渲染结果按公式缓存，上限 300 条）——
 const mathCache = new Map();
@@ -40,13 +41,13 @@ export class ImageWidget extends WidgetType {
   toDOM(view) {
     const el = document.createElement('span');
     el.className = 'mde-imgwrap';
-    if (!this.src) { el.className += ' mde-img-broken'; el.textContent = '🖼 ' + (this.alt || '图片'); return el; }
+    if (!this.src) { el.className += ' mde-img-broken'; el.textContent = '🖼 ' + (this.alt || t('图片')); return el; }
     const img = document.createElement('img');
     img.className = 'mde-img';
     img.alt = this.alt;
     img.loading = 'lazy';
     img.onload = () => view.requestMeasure();
-    img.onerror = () => { el.className += ' mde-img-broken'; img.remove(); el.textContent = '🖼 ' + (this.alt || '加载失败'); view.requestMeasure(); };
+    img.onerror = () => { el.className += ' mde-img-broken'; img.remove(); el.textContent = '🖼 ' + (this.alt || t('加载失败')); view.requestMeasure(); };
     img.src = this.src;
     el.appendChild(img);
     return el;
@@ -100,7 +101,7 @@ export class FenceHeadWidget extends WidgetType {
     const copy = document.createElement('button');
     copy.className = 'mde-fencecopy';
     copy.type = 'button';
-    copy.textContent = '复制';
+    copy.textContent = t('复制');
     copy.addEventListener('click', async (e) => {
       e.preventDefault(); e.stopPropagation();
       const text = this.getCode();
@@ -110,8 +111,8 @@ export class FenceHeadWidget extends WidgetType {
         try { document.execCommand('copy'); } catch {}
         ta.remove();
       }
-      copy.textContent = '已复制';
-      setTimeout(() => (copy.textContent = '复制'), 1200);
+      copy.textContent = t('已复制');
+      setTimeout(() => (copy.textContent = t('复制')), 1200);
     });
     // 点标签区（非复制键）→ 光标到围栏行首，揭示源码
     lang.addEventListener('click', () => {

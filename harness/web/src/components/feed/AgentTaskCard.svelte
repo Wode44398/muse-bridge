@@ -6,12 +6,13 @@
   import { toolTaskTitle } from "../../lib/tasks.ts";
   import { press } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
+  import { t } from "../../lib/i18n.ts";
 
   let { item }: { item: ToolItem } = $props();
   const title = $derived(toolTaskTitle(item));
 </script>
 
-<button class="card" onclick={() => openTaskDetail(item.id, item.agent?.id)} aria-label="查看子 agent：{title}" use:press={{ scale: 0.985 }}>
+<button class="card" onclick={() => openTaskDetail(item.id, item.agent?.id)} aria-label={t("查看子 agent：{title}", { title })} use:press={{ scale: 0.985 }}>
   <span class="ic"><Icon name="agent" size={15} /></span>
   <span class="title hx-shimmer">{title}</span>
   {#if item.agent?.tier === "coder"}<span class="tier">coder</span>{/if}

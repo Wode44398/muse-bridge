@@ -21,7 +21,7 @@ import { readBody } from '../runtime/body.mjs';
 import { safeJoin } from '../runtime/http-file.mjs';
 import { ROOT, PUBLIC_ORIGIN, PUBLIC_DIR } from '../config/index.mjs';
 import { CAPABILITIES } from '../config/capabilities.mjs';
-import { makePwRec, checkPw, gateHtml, goneHtml } from './share-gate.mjs';
+import { makePwRec, checkPw, gateHtml, goneHtml, pageLang } from './share-gate.mjs';
 import { authorizeProjectPath } from '../project-paths.mjs';
 
 const SPACES_DIR = path.join(ROOT, 'share-spaces');     // 各桶存这里：share-spaces/<token>/
@@ -197,15 +197,16 @@ async function handleMint(req, res, identify) {
 
 // GET /w/<token> —— 吐现有 SPA（注入 caps 快照，同 static.mjs）。前端据 /w/ 前缀进只读分享模式。
 const EXPIRED_PAGE = goneHtml('space');
+const EXPIRED_PAGE_EN = goneHtml('space', 'en');   // 浏览器语言不是中文的访客（见 pageLang）
 function serveShareApp(req, res, url) {
   const token = decodeURIComponent(url.pathname.slice(3));
   const rec = store[token];
-  if (!rec || (rec.expiresAt && Date.now() > rec.expiresAt)) { res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(EXPIRED_PAGE); return; }
+  if (!rec || (rec.expiresAt && Date.now() > rec.expiresAt)) { res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(pageLang(req) === 'en' ? EXPIRED_PAGE_EN : EXPIRED_PAGE); return; }
   // 带密码的桶：没有正确的 ?k=<unlock> 先出密码页（验对后带 k 重进；前端 share.js 会把
   // k 併进 ?st=token.k，数据读取那头 resolveShareToken 同样验 k——两道门同一把钥匙）。
   if (rec.pwHash && (url.searchParams.get('k') || '') !== rec.unlock) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(gateHtml('/w/', token));
+    res.end(gateHtml('/w/', token, pageLang(req)));
     return;
   }
   try {

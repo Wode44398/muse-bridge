@@ -9,6 +9,7 @@
 // 裸 :root 会按源顺序覆盖宿主令牌——apk218 的暗色错乱事故）。
 
 import { motionVars } from "./motion.ts";
+import { t, tc } from "./i18n.ts";
 
 export type Mode = "light" | "dark";
 export type Appearance = Mode | "auto";
@@ -25,10 +26,10 @@ export const VENDORS: Record<string, Vendor> = {
   anthropic: { id: "anthropic", name: "Claude", company: "Anthropic", color: "#d97757" },
   openai: { id: "openai", name: "DeepSeek", company: "DeepSeek", color: "#4d6bfe" },
   gemini: { id: "gemini", name: "Gemini", company: "Google", color: "#3186ff" },
-  qwen: { id: "qwen", name: "Qwen", company: "阿里云 · 通义", color: "#7b5bff" },
-  zhipu: { id: "zhipu", name: "GLM", company: "智谱 · Z.ai", color: "#2b62ff" },
-  kimi: { id: "kimi", name: "Kimi", company: "月之暗面", color: "#1783FF" },
-  mimo: { id: "mimo", name: "MiMo", company: "小米 · Xiaomi", color: "#ff6900" },
+  qwen: { id: "qwen", name: "Qwen", company: t("阿里云 · 通义"), color: "#7b5bff" },
+  zhipu: { id: "zhipu", name: "GLM", company: t("智谱 · Z.ai"), color: "#2b62ff" },
+  kimi: { id: "kimi", name: "Kimi", company: t("月之暗面"), color: "#1783FF" },
+  mimo: { id: "mimo", name: "MiMo", company: t("小米 · Xiaomi"), color: "#ff6900" },
 };
 export const VENDOR_ORDER = ["anthropic", "openai", "gemini", "qwen", "zhipu", "kimi", "mimo"];
 
@@ -39,7 +40,7 @@ export function vendorOf(id: string | undefined | null): Vendor {
 // 厂商标志的官方配色（VendorLogo 用；只有标志本身带色，界面其余部分不沾）
 export const LOGO_COLORS = {
   qwen: ["#8b5cf6", "#4f46e5"],
-  zhipu: ["#2b62ff", "#31a8ff"],
+  zhipuTile: "#2d2d2d",
   kimiTile: "#0d0d10",
   kimiDot: "#1783FF",
   geminiStops: ["#08B962", "#F94543", "#FABC12"],
@@ -49,11 +50,11 @@ export const LOGO_COLORS = {
 // 时段问候（语气克制）
 export function greeting(): string {
   const h = new Date().getHours();
-  if (h < 5) return "夜深了";
-  if (h < 11) return "早上好";
-  if (h < 14) return "中午好";
-  if (h < 18) return "下午好";
-  return "晚上好";
+  if (h < 5) return t("夜深了");
+  if (h < 11) return t("早上好");
+  if (h < 14) return t("中午好");
+  if (h < 18) return t("下午好");
+  return t("晚上好");
 }
 
 // ── 令牌 ─────────────────────────────────────────────────────────────────────────────
@@ -222,41 +223,41 @@ export function resolveMode(appearance: Appearance): Mode {
 }
 
 export function tokenVars(mode: Mode): Record<string, string> {
-  const t = mode === "dark" ? DARK : LIGHT;
+  const tk = mode === "dark" ? DARK : LIGHT;
   return {
-    "--bg": t.bg,
-    "--rail": t.rail,
-    "--surface": t.surface,
-    "--surface2": t.surface2,
-    "--surface3": t.surface3,
-    "--text": t.text,
-    "--text2": t.text2,
-    "--text3": t.text3,
-    "--border": t.border,
-    "--border2": t.border2,
-    "--accent": t.accent,
-    "--accent-hover": t.accentHover,
-    "--on-accent": t.onAccent,
-    "--accent-soft": t.accentSoft,
-    "--hx-accent": t.accent, // 宿主（bridge）拖放高亮读它
-    "--primary": t.primary,
-    "--on-primary": t.onPrimary,
-    "--live": t.live,
-    "--live-soft": t.liveSoft,
-    "--on-live": t.onLive,
-    "--ok": t.ok,
-    "--warn": t.warn,
-    "--err": t.err,
-    "--user-bubble": t.surface2,
-    "--on-user-bubble": t.text,
-    "--code-bg": t.codeBg,
-    "--code-k": t.codeK,
-    "--scrim": t.scrim,
-    "--shadow-1": t.shadow1,
-    "--shadow-2": t.shadow2,
-    "--shadow-3": t.shadow3,
-    "--sheen": t.sheen,
-    "--selection": t.selection,
+    "--bg": tk.bg,
+    "--rail": tk.rail,
+    "--surface": tk.surface,
+    "--surface2": tk.surface2,
+    "--surface3": tk.surface3,
+    "--text": tk.text,
+    "--text2": tk.text2,
+    "--text3": tk.text3,
+    "--border": tk.border,
+    "--border2": tk.border2,
+    "--accent": tk.accent,
+    "--accent-hover": tk.accentHover,
+    "--on-accent": tk.onAccent,
+    "--accent-soft": tk.accentSoft,
+    "--hx-accent": tk.accent, // 宿主（bridge）拖放高亮读它
+    "--primary": tk.primary,
+    "--on-primary": tk.onPrimary,
+    "--live": tk.live,
+    "--live-soft": tk.liveSoft,
+    "--on-live": tk.onLive,
+    "--ok": tk.ok,
+    "--warn": tk.warn,
+    "--err": tk.err,
+    "--user-bubble": tk.surface2,
+    "--on-user-bubble": tk.text,
+    "--code-bg": tk.codeBg,
+    "--code-k": tk.codeK,
+    "--scrim": tk.scrim,
+    "--shadow-1": tk.shadow1,
+    "--shadow-2": tk.shadow2,
+    "--shadow-3": tk.shadow3,
+    "--sheen": tk.sheen,
+    "--selection": tk.selection,
     ...SHARED,
     ...motionVars(),
   };
@@ -264,7 +265,7 @@ export function tokenVars(mode: Mode): Record<string, string> {
 
 export function applyTheme(appearance: Appearance) {
   const mode = resolveMode(appearance);
-  const t = mode === "dark" ? DARK : LIGHT;
+  const tk = mode === "dark" ? DARK : LIGHT;
   const standalone = document.documentElement.dataset.hxStandalone === "1";
   const targets = [themeRoot, standalone ? document.documentElement : null].filter((el): el is HTMLElement => Boolean(el));
   const vars = tokenVars(mode);
@@ -282,9 +283,9 @@ export function applyTheme(appearance: Appearance) {
       meta.name = "theme-color";
       document.head.appendChild(meta);
     }
-    meta.content = t.bg;
+    meta.content = tk.bg;
     try {
-      (window as any).HarnessShell?.setBars?.(mode === "light", t.bg);
+      (window as any).HarnessShell?.setBars?.(mode === "light", tk.bg);
     } catch {
       /* 非安卓壳 */
     }

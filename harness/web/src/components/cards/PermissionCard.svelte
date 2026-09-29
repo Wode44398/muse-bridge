@@ -19,6 +19,7 @@
   import CardShell from "./CardShell.svelte";
   import { cardWindowMs, scopeDrafts } from "./card-kit.ts";
   import { usePane } from "../../lib/pane.ts";
+  import { t, tc, tr } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -38,22 +39,22 @@
 
   const label = $derived(
     item.decided === "deny"
-      ? "已拒绝"
+      ? t("已拒绝")
       : item.decided === "deny_stop"
-        ? "已拒绝并停止"
+        ? t("已拒绝并停止")
         : item.decided === "session"
           ? item.scope === "prefix"
-            ? "本会话按前缀允许"
-            : "本会话都允许"
+            ? tc("dimensio", "本会话按前缀允许")
+            : tc("dimensio", "本会话都允许")
           : item.decided === "once"
-            ? "已允许一次"
+            ? t("已允许一次")
             : item.cancelled
               ? item.cancelReason === "timeout"
-                ? "超时没人批，已按拒绝处理"
-                : "没等到裁决，这一轮已结束"
+                ? t("超时没人批，已按拒绝处理")
+                : t("没等到裁决，这一轮已结束")
               : interactive
-                ? "需要你批准"
-                : "未裁决",
+                ? t("需要你批准")
+                : t("未裁决"),
   );
 
   // 触屏上按钮用大一号（触控目标 ≥ 40）；桌面紧凑
@@ -87,24 +88,24 @@
 </script>
 
 {#snippet ruleChip()}
-  {#if item.rule}<span class="rule" title="命中的规则">{item.rule}</span>{/if}
+  {#if item.rule}<span class="rule" title={t("命中的规则")}>{tr(item.rule)}</span>{/if}
 {/snippet}
 
 {#snippet actions()}
   {#if item.noSession}
-    <p class="hint">{item.why ? "每次都要你点头，不能「本会话都允许」" : "这是控制面文件（指令 / 运行配置 / 会话记录），每次改都要你点头，不能「本会话都允许」"}</p>
+    <p class="hint">{item.why ? t("每次都要你点头，不能「本会话都允许」") : t("这是控制面文件（指令 / 运行配置 / 会话记录），每次改都要你点头，不能「本会话都允许」")}</p>
   {/if}
   {#if showRemember}
     <div class="remember">
       <div class="rm-head">
-        <span>「本会话都允许」会记下</span>
+        <span>{t("「本会话都允许」会记下")}</span>
         {#if hasPrefix}
           <Segmented
             size="sm"
-            label="记下的规则"
+            label={t("记下的规则")}
             options={[
-              { value: "exact", label: "这一条" },
-              { value: "prefix", label: "按前缀" },
+              { value: "exact", label: t("这一条") },
+              { value: "prefix", label: t("按前缀") },
             ]}
             value={scope}
             onchange={(v) => {
@@ -124,19 +125,19 @@
   <!-- 拒绝一组在左、允许一组在右；窄屏放不下一行时，允许那组整组折到下一行、靠右（最顺手的位置） -->
   <div class="acts">
     <span class="grp">
-      <Button variant="ghost" size={big} onclick={() => decide("deny")}>拒绝</Button>
+      <Button variant="ghost" size={big} onclick={() => decide("deny")}>{t("拒绝")}</Button>
       <Button
         variant={stopArmed ? "danger-solid" : "danger"}
         size={small}
-        title={stopArmed ? "再点一次：拒绝这一步，并停下这一轮" : "拒绝这一步，并停下这一轮"}
-        onclick={denyStop}>{stopArmed ? "再点一次停止" : "拒绝并停止"}</Button
+        title={stopArmed ? t("再点一次：拒绝这一步，并停下这一轮") : t("拒绝这一步，并停下这一轮")}
+        onclick={denyStop}>{stopArmed ? t("再点一次停止") : t("拒绝并停止")}</Button
       >
     </span>
     <span class="grp yes">
       {#if !item.noSession}
-        <Button variant="secondary" size={big} onclick={() => decide("session")}>本会话都允许</Button>
+        <Button variant="secondary" size={big} onclick={() => decide("session")}>{t("本会话都允许")}</Button>
       {/if}
-      <Button variant="accent" size={big} onclick={() => decide("once")}>允许一次</Button>
+      <Button variant="accent" size={big} onclick={() => decide("once")}>{t("允许一次")}</Button>
     </span>
   </div>
 {/snippet}
@@ -146,7 +147,7 @@
   icon="shield"
   title={label}
   {where}
-  sub={interactive && item.deadlineAt ? `${clockOf(item.deadlineAt)} 前没人批，就按拒绝处理` : ""}
+  sub={interactive && item.deadlineAt ? t("{time} 前没人批，就按拒绝处理", { time: clockOf(item.deadlineAt) }) : ""}
   live={interactive}
   deadlineAt={interactive ? item.deadlineAt : undefined}
   windowMs={cardWindowMs("permission", false)}
@@ -154,7 +155,7 @@
   footer={interactive ? actions : undefined}
 >
   <!-- P11（ZCode C1）：为什么问你——说人话 -->
-  {#if item.why}<p class="why" class:quiet={!interactive}>{item.why}</p>{/if}
+  {#if item.why}<p class="why" class:quiet={!interactive}>{tr(item.why)}</p>{/if}
 
   {#if interactive}
     <div class="facts">
@@ -169,7 +170,7 @@
   {#if item.preview}<ApprovalPreview preview={item.preview} open={interactive} />{/if}
 
   {#if !interactive}
-    {#if item.note}<p class="note">附言：{item.note}</p>{/if}
+    {#if item.note}<p class="note">{t("附言：{note}", { note: item.note })}</p>{/if}
     {#if item.decided === "session" && recorded.length}
       <div class="rules done">
         {#each recorded as r, i (i)}<code title={r}>{r}</code>{/each}
@@ -296,9 +297,11 @@
   .grp {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
   }
   .grp.yes {
+    justify-content: flex-end;
     margin-inline-start: auto;
   }
 </style>

@@ -15,6 +15,7 @@ import { compose } from './state.svelte.js';
 import { api } from './api.js';
 import { cloudFileUrl } from './preview.svelte.js';
 import { dropToast } from './dragdrop.svelte.js';
+import { t, tr } from './i18n.js';
 
 export const WS_FILE = 'ws-file';
 
@@ -53,15 +54,20 @@ export function folderDropZone({ key, name, ctx, rel, onDone, disabled = false, 
     effect: 'move',
     disabled,
     spring,
-    label: (p) => (p?.count > 1 ? `移 ${p.count} 项到「${name || '这里'}」` : '移到「' + (name || '这里') + '」'),
+    // 没给 name 时中文仍是「移到「这里」」，英文说 Move here——所以有无 name 各一个键
+    label: (p) => (p?.count > 1
+      ? (name ? t('移 {n} 项到「{name}」', { n: p.count, name }) : t('移 {n} 项到「这里」', { n: p.count }))
+      : (name ? t('移到「{name}」', { name }) : t('移到「这里」'))),
     accept: (p) => canMoveInto(p, ctx, rel),
     async drop(p) {
-      dropToast('移动中…');
+      dropToast(t('移动中…'));
       const r = await p.moveInto(rel, ctx);
-      const where = '「' + (name || '目标文件夹') + '」';
-      if (r?.ok) dropToast(r.moved > 1 ? `已移 ${r.moved} 项到${where}` : `已移到${where}`);
-      else if (r?.moved) dropToast(`${r.moved} 项已移到${where}，${r.failed} 项失败` + (r.error ? '：' + r.error : ''));
-      else dropToast('移动失败' + (r?.error ? '：' + r.error : ''));
+      const where = name || t('目标文件夹');
+      if (r?.ok) dropToast(r.moved > 1 ? t('已移 {n} 项到「{name}」', { n: r.moved, name: where }) : t('已移到「{name}」', { name: where }));
+      else if (r?.moved) {
+        const o = { n: r.moved, f: r.failed, name: where };
+        dropToast(r.error ? t('{n} 项已移到「{name}」，{f} 项失败：{reason}', { ...o, reason: tr(r.error) }) : t('{n} 项已移到「{name}」，{f} 项失败', o));
+      } else dropToast(r?.error ? t('移动失败：{reason}', { reason: tr(r.error) }) : t('移动失败'));
       if (r?.moved) onDone?.();
     },
   };
@@ -79,23 +85,24 @@ function pushAttachment(target, att) {
 
 export async function attachToAgent(payload, target) {
   if (!payload?.materials) return false;
-  dropToast('正在准备…');
+  dropToast(t('正在准备…'));
   const atts = await payload.materials(true);
   const want = payload.count || 1;
-  if (!atts?.length) { dropToast('准备失败'); return false; }
+  if (!atts?.length) { dropToast(t('准备失败')); return false; }
   let ok = 0;
   for (const att of atts) if (pushAttachment(target, att)) ok++;
   if (!ok) return false;
-  const who = AGENT_LABEL[target] || '对话';
-  dropToast(ok < want ? `${ok}/${want} 项已挂进 ${who} 的输入栏` : (ok > 1 ? `已挂 ${ok} 项进 ${who} 的输入栏` : `已挂进 ${who} 的输入栏`));
+  const who = AGENT_LABEL[target] || t('对话');
+  dropToast(ok < want ? t('{ok}/{n} 项已挂进 {agent} 的输入栏', { ok, n: want, agent: who }) : (ok > 1 ? t('已挂 {n} 项进 {agent} 的输入栏', { n: ok, agent: who }) : t('已挂进 {agent} 的输入栏', { agent: who })));
   return true;
 }
 
-export function agentDropZone(target, { key = 'chat:' + target, label = '挂进这个对话', disabled = false } = {}) {
+export function agentDropZone(target, { key = 'chat:' + target, label = t('挂进这个对话'), disabled = false } = {}) {
   return {
     key,
     effect: 'send',
-    label: (p) => (p?.count > 1 ? `把 ${p.count} 项${label}` : label),
+    // label 是调用方给的一整句动作（已按界面语言翻好）；英文把件数放括号里，避免拆动作短语
+    label: (p) => (p?.count > 1 ? t('把 {n} 项{action}', { n: p.count, action: label }) : label),
     disabled,
     accept: (p) => p?.type === WS_FILE && !!p.materials,
     drop: (p) => attachToAgent(p, target),
@@ -120,7 +127,7 @@ export function wsDescriptorFrom(dt) {
 
 export async function attachDescriptorToAgent(desc, target) {
   if (!desc) return false;
-  dropToast('正在准备…');
+  dropToast(t('正在准备…'));
   let ok = 0;
   for (const rel of desc.rels) {
     const name = String(rel).split('/').pop() || 'file';
@@ -131,7 +138,7 @@ export async function attachDescriptorToAgent(desc, target) {
       if (pushAttachment(target, att)) ok++;
     } catch {}
   }
-  dropToast(ok ? `已挂进 ${AGENT_LABEL[target] || '对话'} 的输入栏` : '准备失败');
+  dropToast(ok ? t('已挂进 {agent} 的输入栏', { agent: AGENT_LABEL[target] || t('对话') }) : t('准备失败'));
   return ok > 0;
 }
 

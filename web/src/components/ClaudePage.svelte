@@ -13,7 +13,7 @@
   import RoutinesPage from './RoutinesPage.svelte';
   import { api } from '../lib/api.js';
   import { uiAlert } from '../lib/dialogs.js';
-  import { me, ui, session, setTheme, singleMode } from '../lib/state.svelte.js';
+  import { me, ui, session, settings, setTheme, singleMode } from '../lib/state.svelte.js';
   import AccountCard from './AccountCard.svelte';
   import { swipeDismiss } from '../lib/motion.js';
   import { closePage, backPeek } from '../lib/pageMorph.js';
@@ -35,10 +35,11 @@
   import { soloUrl, PANE_MSG, isPaneMsg } from '../lib/solo.js';
   import { agentDropZone, attachToAgent, dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent } from '../lib/fileDrag.js';
   import { IS_CSNAP } from '../lib/csnap.js';
+  import { t, tc, tr } from '../lib/i18n.js';
 
   // 从工作空间拎一份文件过来松手 = 挂进【当前这个会话】的输入栏（不移动文件本身）。
   // 公开快照页不给：那儿的输入栏本来就不属于访客。
-  const claudeDrop = agentDropZone('claude', { label: '挂进这个对话', disabled: IS_CSNAP });
+  const claudeDrop = agentDropZone('claude', { label: tc('claude', '挂进这个对话'), disabled: IS_CSNAP });
   // 电脑上（鼠标）从工作空间拖过来走的是浏览器原生 HTML5 拖拽，不是上面那套手指拖拽——
   // 语义一致：落在正文列＝挂进当前会话的输入栏。
   let wsDragOver = $state(false);
@@ -59,7 +60,7 @@
   // 侧栏里的每一条会话本身也是落点：拎着文件直接摁到那条上松手 = 切过去并挂进它的输入栏。
   // （场景「把文件发给某一个特定会话」用另一根手指点开会话再松手也成立；这条是更短的一步。）
   const sessionDrop = (s) => ({
-    ...agentDropZone('claude', { key: 'chat:claude:' + s.id, label: '发给「' + (titleFor(s.id, s.title) || '这个对话') + '」', disabled: IS_CSNAP }),
+    ...agentDropZone('claude', { key: 'chat:claude:' + s.id, label: titleFor(s.id, s.title) ? t('发给「{title}」', { title: tr(titleFor(s.id, s.title)) }) : tc('claude', '发给「这个对话」'), disabled: IS_CSNAP }),
     drop: async (p) => {
       if (s.id !== session.id) { ui.drawerOpen = false; await openSession(s.id); }
       await attachToAgent(p, 'claude');
@@ -433,14 +434,14 @@
     try {
       const r = await api.newQuickChat();
       const p = r && r.project;
-      if (!p || !p.id) throw new Error('服务器未返回新的快照');
+      if (!p || !p.id) throw new Error(t('服务器未返回新的快照'));
       projects = [...projects.filter((x) => !x.quick), p];   // [0] 仍是默认工作空间
       cacheProjects(projects);
       newConversation(p.id);
       refreshSessions();
     } catch (e) {
       const detail = typeof e?.body === 'string' ? e.body : (e?.body?.error || e?.message || '');
-      uiAlert('新建快照失败，请重试', { type: 'error', detail });
+      uiAlert(t('新建快照失败，请重试'), { type: 'error', detail: tr(detail) });
     } finally { quickBusy = false; }
   }
   // 「没进任何目录」时的默认目录 = 快照工作空间。只在【冷启动没有可恢复会话】那一次落点，
@@ -519,7 +520,7 @@
     sessions = sessions.filter((x) => x.id !== id);
     try {
       const r = await api.deleteSession(id);
-      if (r && r.ok === false) throw new Error('服务器未删除该会话');
+      if (r && r.ok === false) throw new Error(t('服务器未删除该会话'));
       await Promise.all([cacheSessions(sessions), removeCachedMessages(id)]);
       if (wasStarred && isStarred(id)) toggleStar(id);
       // 删掉的就是那条快照 → 落回同一只快照桶开空对话（置顶行永远在，不会被删没）
@@ -528,7 +529,7 @@
     } catch (e) {
       sessions = prev;
       const detail = typeof e?.body === 'string' ? e.body : (e?.body?.error || e?.body?.message || e?.message || '');
-      uiAlert('删除失败，请重试', { type: 'error', detail });
+      uiAlert(t('删除失败，请重试'), { type: 'error', detail: tr(detail) });
     }
   }
 
@@ -571,7 +572,7 @@
     : (session.id ? null : (projects[0] || null)));
   // 芯片标签取【项目名】而不是路径末段：真实项目里两者本就相同（项目名固定=文件夹名），
   // 但快照对话的桶目录名是个 UUID，只有项目名读得懂。
-  const dockName = $derived(chipProject?.name || '');
+  const dockName = $derived(tr(chipProject?.name || ''));
   // 快照对话整条状态栏都不摆：它的工作空间是个一次性空桶（仓库外、无 git、名字是 UUID），
   // 「归属」对它没有意义。解析不出项目时同样不摆。
   const showChips = $derived(!!chipProject && !chipProject.quick);
@@ -614,10 +615,10 @@
         ic.textContent = '\ue0c9';
         g.append(ic);
       }
-      const t = document.createElement('span');
-      t.className = 't';
-      t.textContent = text;
-      g.append(t);
+      const tx = document.createElement('span');
+      tx.className = 't';
+      tx.textContent = text;
+      g.append(tx);
       document.body.appendChild(g);
       e.dataTransfer.setDragImage(g, 16, Math.round(g.offsetHeight / 2) || 16);
       setTimeout(() => g.remove(), 0);
@@ -639,11 +640,11 @@
   }
   function onSessDragStart(e, s) {
     if (!mouseDnd) { e.preventDefault(); return; }
-    startSide(e, { kind: 'session', id: s.id, title: titleFor(s.id, s.title) || '（无标题）', projectId: s.projectId || null });
+    startSide(e, { kind: 'session', id: s.id, title: tr(titleFor(s.id, s.title)) || t('（无标题）'), projectId: s.projectId || null });
   }
   function onProjDragStart(e, p) {
     if (!mouseDnd) { e.preventDefault(); return; }
-    startSide(e, { kind: 'project', id: p.id, title: p.name });
+    startSide(e, { kind: 'project', id: p.id, title: tr(p.name) });
   }
   function onSideDragEnd(e) {
     const rec = dragRec;
@@ -695,7 +696,7 @@
     const y = Math.round((pt ? pt.y : window.screenY + 80) - 18);
     let w = null;
     try { w = window.open(url, 'bridge-chat-' + rec.id, `popup=yes,width=${width},height=${height},left=${x},top=${y}`); } catch {}
-    if (!w) dropToast('浏览器拦下了新窗口——允许本站弹出窗口后再拖一次');
+    if (!w) dropToast(t('浏览器拦下了新窗口——允许本站弹出窗口后再拖一次'));
     else { try { w.focus(); } catch {} }
   }
 
@@ -723,7 +724,7 @@
       if (Array.isArray(r?.order)) { projOrder = r.order; cacheOrder(r.order); }
     } catch (e) {
       projOrder = prev; cacheOrder(prev);
-      uiAlert('项目顺序没保存上，请重试', { type: 'error', detail: e?.body?.error || e?.message || '' });
+      uiAlert(t('项目顺序没保存上，请重试'), { type: 'error', detail: tr(e?.body?.error || e?.message || '') });
     } finally { orderPending--; }
   }
   function onProjDragOver(e) {
@@ -750,7 +751,7 @@
     hold.arm(e, (f) => {
       const ok = beginDrag({ type: 'claude-project', id: p.id, name: p.name }, {
         x: f.x, y: f.y, pointerId: f.pointerId, pointerType: f.pointerType, sourceEl: f.el,
-        ghost: { name: p.name, isDir: true },
+        ghost: { name: tr(p.name), isDir: true },
       });
       if (ok) touchProj = p.id;
     });
@@ -761,7 +762,7 @@
   const listAt = (x, y) => { try { return document.elementFromPoint(x, y)?.closest('.d-projs') || null; } catch { return null; } };
   const projListZone = {
     key: 'claude-proj-order',
-    label: '放在这里',
+    label: t('放在这里'),
     effect: 'move',
     accept: (pl) => pl?.type === 'claude-project',
     // 用松手点（第二个参数）而不是 drag.x/y：落地动画开播时 drag.x/y 已被改成落点中心
@@ -947,7 +948,7 @@
   <aside class="drawer pinned" style:width={sbW + 'px'} use:dragScrollGuard>{@render drawerBody()}</aside>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
   <div class="sb-handle" class:drag={sbDrag} style:left={(sbW - 6) + 'px'} role="separator"
-    aria-orientation="vertical" aria-label="调整侧栏宽度" aria-valuenow={sbW} aria-valuemin={SB_MIN} aria-valuemax={SB_MAX}
+    aria-orientation="vertical" aria-label={t('调整侧栏宽度')} aria-valuenow={sbW} aria-valuemin={SB_MIN} aria-valuemax={SB_MAX}
     tabindex="0" onpointerdown={sbDown} onkeydown={sbKey}><span class="sb-pill"></span></div>
 {/if}
 
@@ -1008,7 +1009,7 @@
          输入栏底下穿过）；但它不受「滚到底才显形」约束：这是一条要人处理的通知，不是装饰。
          高度随内容进 .composer-wrap 的 ResizeObserver 量进 --composer-h，滚动区底衬自动加高。 -->
     <div class="band-slot"><RefusalBand sessionId={session.id} /></div>
-    <div class="composer-inner" bind:this={composerInnerEl} in:receiveComposer={{ key: 'composer' }} out:sendComposer={{ key: 'composer' }}><Composer placeholder="发消息…" /></div>
+    <div class="composer-inner" bind:this={composerInnerEl} in:receiveComposer={{ key: 'composer' }} out:sendComposer={{ key: 'composer' }}><Composer placeholder={tc('claude', '发消息…')} /></div>
   </div>
 {/if}
 </div>
@@ -1021,10 +1022,10 @@
 
 {#if splitOn}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="split-grip" role="separator" aria-orientation="vertical" aria-label="拖动调整两格宽度（双击恢复一半一半）"
+  <div class="split-grip" role="separator" aria-orientation="vertical" aria-label={t('拖动调整两格宽度（双击恢复一半一半）')}
     onpointerdown={splitGripDown} ondblclick={splitGripReset}><span></span></div>
   <div class="pane frame" class:focused={paneFocus} style={paneStyle(split.side)}>
-    <iframe class="bridge-pane" bind:this={paneFrame} src={paneSrc} title="分屏：另一个对话"
+    <iframe class="bridge-pane" bind:this={paneFrame} src={paneSrc} title={tc('claude', '分屏：另一个对话')}
       allow="clipboard-read; clipboard-write; fullscreen"></iframe>
   </div>
 {/if}
@@ -1049,9 +1050,9 @@
       <!-- 落点挂在按钮上而不是外层 div：它本来就是可交互元素，省掉一条 a11y 例外 -->
       <button class="d-recent" use:dropZone={sessionDrop(s)} onclick={() => pickSession(s)}>
         {#if s.thinking || s.pending}<span class="d-dot {s.thinking ? 'work' : 'ask'}"></span>{/if}
-        <span class="d-title" use:marquee><span class="d-scroll">{titleFor(s.id, s.title) || '（无标题）'}</span></span>
+        <span class="d-title" use:marquee><span class="d-scroll">{tr(titleFor(s.id, s.title)) || t('（无标题）')}</span></span>
       </button>
-      <button class="d-more" aria-label="更多" onclick={(e) => openMenu(e, 'session', s.id)}><span class="ic">&#xe062;</span></button>
+      <button class="d-more" aria-label={t('更多')} onclick={(e) => openMenu(e, 'session', s.id)}><span class="ic">&#xe062;</span></button>
     </div>
   {/snippet}
 
@@ -1063,14 +1064,14 @@
       onpointerdown={(e) => projHoldDown(e, p)} onpointermove={projHoldMove} onpointerup={projHoldUp} onpointercancel={projHoldUp}>
       <button class="d-recent" onclick={() => newInProject(p)}>
         <span class="d-bub"><span class="ic pj">&#xe0c9;</span></span>
-        <span class="d-title">{p.name}</span>
+        <span class="d-title">{tr(p.name)}</span>
       </button>
       {#if (grouped.get(p.id) || []).length}
-        <button class="d-more d-fold" class:closed={!!collapsed[p.id]} aria-label={collapsed[p.id] ? '展开会话' : '收起会话'} onclick={(e) => toggleFold(e, p.id)}>
+        <button class="d-more d-fold" class:closed={!!collapsed[p.id]} aria-label={collapsed[p.id] ? t('展开会话') : t('收起会话')} onclick={(e) => toggleFold(e, p.id)}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
         </button>
       {/if}
-      {#if !p.def}<button class="d-more" aria-label="项目选项" onclick={(e) => openMenu(e, 'project', p.id)}><span class="ic">&#xe062;</span></button>{/if}
+      {#if !p.def}<button class="d-more" aria-label={t('项目选项')} onclick={(e) => openMenu(e, 'project', p.id)}><span class="ic">&#xe062;</span></button>{/if}
     </div>
     {#if !collapsed[p.id] && !projDragging}
       {#each grouped.get(p.id) || [] as s (s.id)}{@render convRow(s, true)}{/each}
@@ -1081,38 +1082,38 @@
 {#snippet drawerBody()}
   <!-- 左上角标题 = claude.ai /code 原件「Claude Code」SVG 字标（14px 高、text-primary），不是文字 -->
   <div class="brand"><ClaudeCodeWordmark /></div>
-  {#if !single}<button class="d-item" onclick={slideOut}><span class="ic d-lead w7">&#xe08a;</span>主页</button>{/if}
-  <button class="d-item" onclick={openProjectModal}><span class="ic d-lead w7">&#xe001;</span>新建项目</button>
+  {#if !single}<button class="d-item" onclick={slideOut}><span class="ic d-lead w7">&#xe08a;</span>{t('主页')}</button>{/if}
+  <button class="d-item" onclick={openProjectModal}><span class="ic d-lead w7">&#xe001;</span>{t('新建项目')}</button>
   <!-- 闪电 = claude.ai /code 侧栏 Routines 的原版字形（Anthropicons U+E098，20px/430，官网无悬停动效） -->
-  <button class="d-item" disabled={!quickProj || quickBusy} onclick={newQuick}><span class="ic d-lead">&#xe098;</span>新建快照</button>
+  <button class="d-item" disabled={!quickProj || quickBusy} onclick={newQuick}><span class="ic d-lead">&#xe098;</span>{t('新建快照')}</button>
   <button class="d-item" onclick={openRoutines}>
     <span class="d-lead ck" aria-hidden="true">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="8" cy="8" r="5.5"/><line class="hh" x1="8" y1="8" x2="10" y2="9"/><line class="mh" x1="8" y1="8" x2="8" y2="5.5"/>
       </svg>
-    </span>定时触发</button>
+    </span>{t('定时触发')}</button>
   {#if quickProj}
-    <div class="d-sec">快照</div>
+    <div class="d-sec">{t('快照')}</div>
     <div class="d-list">
       {#if quickSession}
         {@render convRow(quickSession, false)}
       {:else}
         <div class="d-row" class:cur={quickCur}>
-          <button class="d-recent" onclick={openQuick}><span class="d-title">快照对话</span></button>
+          <button class="d-recent" onclick={openQuick}><span class="d-title">{t('快照对话')}</span></button>
         </div>
       {/if}
     </div>
   {/if}
   {#if starred.length}
-    <div class="d-sec">收藏</div>
+    <div class="d-sec">{tc('名词', '收藏')}</div>
     <div class="d-list">{#each starred as s (s.id)}{@render convRow(s, false)}{/each}</div>
   {/if}
-  <div class="d-sec">项目</div>
+  <div class="d-sec">{tc('claude', '项目')}</div>
   <!-- 项目列表整张是排序落点：鼠标走 HTML5 dragover/drop，手指走长按拿起（use:dropZone） -->
   <div class="d-list d-projs" class:reordering={projDragging} class:ins-end={insShown >= 0 && insShown === realProjects.length}
     role="list" use:dropZone={projListZone} ondragover={onProjDragOver} ondragleave={onProjDragLeave} ondrop={onProjDrop}>
     {#each realProjects as p, i (p.id)}{@render projRow(p, i)}{/each}
-    {#if !realProjects.length}<div class="d-empty">{who ? '加载中…' : '登录后显示'}</div>{/if}
+    {#if !realProjects.length}<div class="d-empty">{who ? t('加载中…') : t('登录后显示')}</div>{/if}
   </div>
   <div class="d-spacer"></div>
   <!-- 账户卡：贴底不随列表滚走（sticky）。设置 / 账户 / 关于都从这里进；常规模式菜单里多一项「主页」 -->
@@ -1121,14 +1122,14 @@
   </div>
 
   {#if menuFor}
-    <button class="rowmenu-bd" aria-label="关闭" onclick={closeMenu}></button>
+    <button class="rowmenu-bd" aria-label={t('关闭')} onclick={closeMenu}></button>
     <div class="rowmenu" style={menuStyle}>
       {#if menuFor.kind === 'session'}
-        <button onclick={() => doStar(menuFor.id)}><span class="ic mi">&#xe0bd;</span>{isStarred(menuFor.id) ? '取消收藏' : '收藏'}</button>
-        <button onclick={() => doRename(menuSession())}><span class="ic mi">&#xe064;</span>重命名</button>
-        <button class="danger" onclick={() => (delConfirm ? doDelete(menuFor.id) : (delConfirm = true))}><span class="ic mi">&#xe101;</span>{delConfirm ? '确认删除' : '删除'}</button>
+        <button onclick={() => doStar(menuFor.id)}><span class="ic mi">&#xe0bd;</span>{isStarred(menuFor.id) ? t('取消收藏') : t('收藏')}</button>
+        <button onclick={() => doRename(menuSession())}><span class="ic mi">&#xe064;</span>{t('重命名')}</button>
+        <button class="danger" onclick={() => (delConfirm ? doDelete(menuFor.id) : (delConfirm = true))}><span class="ic mi">&#xe101;</span>{delConfirm ? tc('claude', '确认删除') : t('删除')}</button>
       {:else}
-        <button class="danger" onclick={() => (delConfirm ? doDeleteProject(menuFor.id) : (delConfirm = true))}><span class="ic mi">&#xe101;</span>{delConfirm ? '确认删除' : '删除项目'}</button>
+        <button class="danger" onclick={() => (delConfirm ? doDeleteProject(menuFor.id) : (delConfirm = true))}><span class="ic mi">&#xe101;</span>{delConfirm ? tc('claude', '确认删除') : t('删除项目')}</button>
       {/if}
     </div>
   {/if}
@@ -1136,7 +1137,7 @@
 
 <!-- 窄屏：侧拉抽屉 + scrim（宽屏时常驻列已渲染在上方，这里不再出现） -->
 {#if !wide}
-  <button class="scrim {ui.drawerOpen ? 'open' : ''}" aria-label="关闭侧栏" onclick={closeDrawer}></button>
+  <button class="scrim {ui.drawerOpen ? 'open' : ''}" aria-label={t('关闭侧栏')} onclick={closeDrawer}></button>
   <aside class="drawer {ui.drawerOpen ? 'open' : ''}" use:dragScrollGuard>{@render drawerBody()}</aside>
 {/if}
 
@@ -1147,13 +1148,13 @@
 
 <!-- 重命名对话（替代浏览器原生 window.prompt） -->
 {#if renameFor}
-  <button class="pm-bd" aria-label="关闭" onclick={() => (renameFor = null)}></button>
+  <button class="pm-bd" aria-label={t('关闭')} onclick={() => (renameFor = null)}></button>
   <div class="pmodal rnmodal" role="dialog" aria-modal="true">
-    <div class="pm-head"><span class="ic pm-ic">&#xe064;</span>重命名对话</div>
-    <input class="rn-input" bind:value={renameFor.name} onkeydown={renameKey} use:renameFocus placeholder="对话名称" maxlength="120" />
+    <div class="pm-head"><span class="ic pm-ic">&#xe064;</span>{tc('claude', '重命名对话')}</div>
+    <input class="rn-input" bind:value={renameFor.name} onkeydown={renameKey} use:renameFocus placeholder={tc('claude', '对话名称')} maxlength="120" />
     <div class="pm-actions">
-      <button class="pm-cancel" onclick={() => (renameFor = null)}>取消</button>
-      <button class="pm-create" onclick={commitRename}>保存</button>
+      <button class="pm-cancel" onclick={() => (renameFor = null)}>{t('取消')}</button>
+      <button class="pm-create" onclick={commitRename}>{t('保存')}</button>
     </div>
   </div>
 {/if}

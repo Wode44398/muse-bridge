@@ -10,6 +10,7 @@
   import Mark from "../brand/Mark.svelte";
   import RailRow from "./RailRow.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -23,8 +24,8 @@
   // 折叠时的预览：去掉首尾空白后最后一行的末 120 字；截断处挪到下一个标点之后、前面补省略号，不从半句话或标点起头
   const peek = $derived.by(() => {
     if (item.open || !item.text) return "";
-    const t = item.text.trim();
-    let s = t.slice(t.lastIndexOf("\n") + 1);
+    const body = item.text.trim();
+    let s = body.slice(body.lastIndexOf("\n") + 1);
     if (s.length > 120) {
       s = s.slice(-120);
       const cut = s.search(/[。！？；，、.!?;,]/);
@@ -40,7 +41,7 @@
     {#if thinking}<Mark size={15} live />{:else}<span class="ring"></span>{/if}
   {/snippet}
   {#snippet head()}
-    <span class="label" class:quiet={!thinking} class:hx-shimmer={thinking}>{thinking ? "思考中" : "思考过程"}</span>
+    <span class="label" class:quiet={!thinking} class:hx-shimmer={thinking}>{thinking ? t("思考中") : t("思考过程")}</span>
     {#if peek}<span class="peek">{peek}</span>{/if}
   {/snippet}
   {#if item.open}

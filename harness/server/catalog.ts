@@ -40,6 +40,7 @@
 // so the two stay in lockstep with the adapters.
 
 import type { ProviderId } from "./providers/types.ts";
+import { getCustomProvider, hostOf, isCustomProviderId, listCustomProviders, type CustomProvider } from "./custom-providers.ts";
 import { DEFAULT_MEDIA_BUDGET } from "./agent/media-budget.ts";
 import type { ThinkingLevel } from "./agent/turn.ts";
 
@@ -78,6 +79,8 @@ export interface ProviderSpec {
   // R12：一次请求里历史图片的额度（张数、base64 字节）。超了才按批退役最老的工具图（agent/media-budget.ts）；
   // 不配走默认 20 张 / 24 MB。
   media?: { maxImages?: number; maxBytes?: number };
+  // 只有自定义服务有：卡片副标题显示的主机名
+  custom?: { host: string };
 }
 
 // Global effort ordering — used to clamp a chosen level to a model's supported set.
@@ -210,7 +213,30 @@ export const CATALOG: ProviderSpec[] = [
   },
 ];
 
+// 自定义服务（custom-providers.ts）按同一形状并进目录：型号只知道名字，思考档只有 off（不发任何厂商专属参数），
+// 视觉按名字启发式猜，上下文 / 输出走适配器的扁平默认。
+function customSpec(c: CustomProvider): ProviderSpec {
+  return {
+    id: c.id as ProviderId,
+    name: c.name,
+    baseUrl: c.baseUrl,
+    defaultModel: c.defaultModel,
+    custom: { host: hostOf(c.baseUrl) },
+    models: c.models.map((id) => ({ id, label: id, efforts: ["off"], image: guessImages(id) })),
+  };
+}
+
+// 内置七家 + 用户加的自定义服务（按添加顺序）。凡是「这个 provider 存不存在 / 有哪些型号」都从这里查。
+export function allProviders(): ProviderSpec[] {
+  const custom = listCustomProviders();
+  return [...CATALOG, ...custom.map(customSpec)];
+}
+
 export function providerSpec(p: ProviderId): ProviderSpec {
+  if (isCustomProviderId(p)) {
+    const c = getCustomProvider(p);
+    if (c) return customSpec(c);
+  }
   return CATALOG.find((s) => s.id === p) ?? CATALOG[0];
 }
 
@@ -243,6 +269,10 @@ export function modelSupportsImages(p: ProviderId, modelId: string): boolean {
   const known = modelSpec(p, modelId);
   if (known) return known.image;
   if (p === "anthropic" || p === "gemini" || p === "kimi") return true;
+  return guessImages(modelId);
+}
+
+function guessImages(modelId: string): boolean {
   return /(?:^|[-_.])(vl|vision|omni)(?:$|[-_.])|gpt-[45]|^o[0-9]|glm-[\d.]+v/i.test(modelId);
 }
 

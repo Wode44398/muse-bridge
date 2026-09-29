@@ -19,6 +19,7 @@
   import { resolveSrc, hasBlob } from '../../lib/mediaCache.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { createMsePump, isMseSupported } from '../../lib/msePump.js';
+  import { t, tc } from '../../lib/i18n.js';
 
   let { item, onClose, onDragProgress, api = $bindable(null) } = $props();
 
@@ -120,7 +121,7 @@
       cur = at;
       pump = createMsePump(videoEl, {
         mime: mimeFor(s), duration: probeDur, startAt: at,
-        urlFor: (t) => rawStream() + (remux ? '&remux=1' : '') + '&t=' + Math.max(0, Math.round(t * 10) / 10),
+        urlFor: (sec) => rawStream() + (remux ? '&remux=1' : '') + '&t=' + Math.max(0, Math.round(sec * 10) / 10),
         onFatal: () => failStep(s),
       });
       src = pump.objectUrl;
@@ -209,17 +210,17 @@
   function togglePlay() { const v = videoEl; if (!v) return; if (v.paused) v.play().catch(() => {}); else v.pause(); showControls(); }
   function toggleMute() { muted = !muted; if (videoEl) videoEl.muted = muted; showControls(); }
 
-  function seekTo(t) {
-    t = Math.max(0, Math.min(effDur || 0, t));
+  function seekTo(sec) {
+    sec = Math.max(0, Math.min(effDur || 0, sec));
     if (!videoEl) return;
-    if (isMse && pump) { pump.seek(t); cur = t; return; }
-    if (step === 'orig-src') { try { videoEl.currentTime = t; } catch {} cur = videoEl.currentTime || t; return; }
+    if (isMse && pump) { pump.seek(sec); cur = sec; return; }
+    if (step === 'orig-src') { try { videoEl.currentTime = sec; } catch {} cur = videoEl.currentTime || sec; return; }
     // 流畅直连：缓冲窗内原生 seek（含回看），窗外重开流带 &t=
-    const rel = t - tOff;
+    const rel = sec - tOff;
     let bufEnd = 0;
     try { const b = videoEl.buffered; if (b && b.length) bufEnd = b.end(b.length - 1); } catch {}
     if (rel >= 0 && rel <= bufEnd) { try { videoEl.currentTime = rel; } catch {} cur = rel; }
-    else { tOff = t; cur = 0; buffered = 0; loading = true; src = rawStream() + '&t=' + Math.max(0, Math.round(t * 10) / 10); }
+    else { tOff = sec; cur = 0; buffered = 0; loading = true; src = rawStream() + '&t=' + Math.max(0, Math.round(sec * 10) / 10); }
   }
 
   // —— 进度条拖动（拖动中出时间气泡，松手才真 seek）——
@@ -347,8 +348,8 @@
     {#if errored}
       <div class="vp-err">
         <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8l6 4-6 4V8Z"/><circle cx="12" cy="12" r="9.2"/></svg>
-        <p>视频加载失败</p>
-        <button onclick={() => { cacheDowngraded = false; load(); }}>重试</button>
+        <p>{t('视频加载失败')}</p>
+        <button onclick={() => { cacheDowngraded = false; load(); }}>{t('重试')}</button>
       </div>
     {/if}
 
@@ -358,7 +359,7 @@
         {#key skipUi.amt}
           <div class="vp-skip-in">
             <div class="vp-skip-arrows" class:rev={skipUi.side === 'l'}><i></i><i></i><i></i></div>
-            <span>{skipUi.amt} 秒</span>
+            <span>{t('{n} 秒', { n: skipUi.amt })}</span>
           </div>
         {/key}
       </div>
@@ -372,13 +373,13 @@
     <!-- 卡顿提示：切流畅 -->
     {#if smoothHint && qualityNow === 'orig' && !errored}
       <button class="vp-hint" onclick={(e) => { e.stopPropagation(); setQuality('smooth'); }} onpointerdown={(e) => e.stopPropagation()}>
-        网络吃紧 · 切换流畅播放
+        {t('网络吃紧 · 切换流畅播放')}
       </button>
     {/if}
 
     <!-- 中央播放/暂停（暂停时或控件可见时显示；长按 2x 时藏） -->
     {#if !errored && (!playing || controls) && !lp2x}
-      <button class="vp-center" aria-label={playing ? '暂停' : '播放'} onpointerdown={(e) => e.stopPropagation()} onclick={(e) => { e.stopPropagation(); togglePlay(); }}>
+      <button class="vp-center" aria-label={playing ? t('暂停') : t('播放')} onpointerdown={(e) => e.stopPropagation()} onclick={(e) => { e.stopPropagation(); togglePlay(); }}>
         {#if playing}
           <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="5" width="3.6" height="14" rx="1.2"/><rect x="13.9" y="5" width="3.6" height="14" rx="1.2"/></svg>
         {:else}
@@ -394,14 +395,14 @@
       <div class="vp-row">
         <span class="vp-t">{fmt(shownT)}<em>/{fmt(effDur)}</em></span>
         <span class="vp-sp"></span>
-        <button class="vp-ic" aria-label={muted ? '取消静音' : '静音'} onclick={toggleMute}>
+        <button class="vp-ic" aria-label={muted ? t('取消静音') : t('静音')} onclick={toggleMute}>
           {#if muted}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="m22 9-6 6M16 9l6 6"/></svg>
           {:else}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"/></svg>
           {/if}
         </button>
-        <button class="vp-ic" aria-label="横屏全屏" onclick={toggleFs}>
+        <button class="vp-ic" aria-label={t('横屏全屏')} onclick={toggleFs}>
           {#if fsOn}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>
           {:else}
@@ -409,7 +410,7 @@
           {/if}
         </button>
       </div>
-      <div class="vp-track" class:live={scrubbing} bind:this={track} onpointerdown={trackDown} onpointermove={trackMove} onpointerup={trackUp} onpointercancel={trackUp} role="slider" tabindex="0" aria-label="进度" aria-valuenow={Math.round(shownT)} aria-valuemax={Math.round(effDur)}>
+      <div class="vp-track" class:live={scrubbing} bind:this={track} onpointerdown={trackDown} onpointermove={trackMove} onpointerup={trackUp} onpointercancel={trackUp} role="slider" tabindex="0" aria-label={t('进度')} aria-valuenow={Math.round(shownT)} aria-valuemax={Math.round(effDur)}>
         {#if scrubbing}
           <div class="vp-bubble" style:left="{pct}%">{fmt(shownT)}</div>
         {/if}
@@ -428,44 +429,44 @@
         {#if menu === 'main'}
           <button class="vp-mrow" onclick={() => (menu = 'rate')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
-            <span>播放速度</span><em>{baseRate === 1 ? '正常' : baseRate + '×'}</em>
+            <span>{t('播放速度')}</span><em>{baseRate === 1 ? tc('files', '正常') : baseRate + '×'}</em>
             <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
           </button>
           {#if item.streamUrl}
             <button class="vp-mrow" onclick={() => (menu = 'quality')}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3.2"/></svg>
-              <span>画质</span><em>{qualityNow === 'smooth' ? '流畅' : '原画'}</em>
+              <span>{t('画质')}</span><em>{qualityNow === 'smooth' ? t('流畅') : t('原画')}</em>
               <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
             </button>
           {/if}
           {#if item.downloadHref}
             <a class="vp-mrow" href={item.downloadHref} download={item.name} onclick={() => closeMenu()}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg>
-              <span>下载</span>
+              <span>{t('下载')}</span>
             </a>
           {/if}
         {:else if menu === 'rate'}
           <button class="vp-mrow head" onclick={() => (menu = 'main')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
-            <span>播放速度</span>
+            <span>{t('播放速度')}</span>
           </button>
           {#each RATES as r}
             <button class="vp-mrow opt" onclick={() => { setRate(r); closeMenu(); }}>
-              <span>{r === 1 ? '正常' : r + '×'}</span>
+              <span>{r === 1 ? tc('files', '正常') : r + '×'}</span>
               {#if r === baseRate}<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>{/if}
             </button>
           {/each}
         {:else if menu === 'quality'}
           <button class="vp-mrow head" onclick={() => (menu = 'main')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
-            <span>画质</span>
+            <span>{t('画质')}</span>
           </button>
           <button class="vp-mrow opt" onclick={() => setQuality('orig')}>
-            <span>原画<small>完整分辨率与码率</small></span>
+            <span>{t('原画')}<small>{t('完整分辨率与码率')}</small></span>
             {#if qualityNow === 'orig'}<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>{/if}
           </button>
           <button class="vp-mrow opt" onclick={() => setQuality('smooth')}>
-            <span>流畅<small>转码 ≤1080p · 更抗弱网省流量</small></span>
+            <span>{t('流畅')}<small>{t('转码 ≤1080p · 更抗弱网省流量')}</small></span>
             {#if qualityNow === 'smooth'}<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>{/if}
           </button>
         {/if}

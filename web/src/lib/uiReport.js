@@ -80,7 +80,7 @@ export async function handleWsx(ev) {
       }
       case 'draft': {
         const d = draftProvider ? draftProvider() : null;
-        api.uiAnswer(ev.id, d || { error: '用户端当前没有打开的编辑器' }).catch(() => {});
+        api.uiAnswer(ev.id, d || { error: '用户端当前没有打开的编辑器' }).catch(() => {});   // i18n-ignore 回传给 agent 的工具结果（AI 读，服务端拼进中文工具文案）
         break;
       }
     }
@@ -106,5 +106,5 @@ async function captureNow() {
   for (const fn of capProviders) {
     try { const r = await fn(); if (r && r.image) return r; } catch {}
   }
-  throw new Error('网页端只能截 PDF 与图片预览；请先在预览里打开要看的文件');
+  throw new Error('网页端只能截 PDF 与图片预览；请先在预览里打开要看的文件');   // i18n-ignore 回传给 agent 的工具结果（AI 读，服务端拼进中文工具文案）
 }

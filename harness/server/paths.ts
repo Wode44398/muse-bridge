@@ -77,6 +77,11 @@ export function configFile(): string {
   return guard("运行配置文件", fromEnv("DIMENSIO_CONFIG_FILE") ?? path.resolve(harnessCwd(), "runtime-config.json"));
 }
 
+// 自定义模型服务（custom-providers.ts）：providers.json 是地址与备注，同目录的 connector-secrets.* 是加密的 API key。
+export function customProvidersDir(): string {
+  return guard("自定义模型服务目录", fromEnv("DIMENSIO_CUSTOM_PROVIDERS_DIR") ?? path.resolve(harnessCwd(), "custom-providers"));
+}
+
 // 快照对话：当前那只桶的指针，与桶根（quick.ts）。
 export function quickFile(): string {
   return guard("快照对话指针", fromEnv("DIMENSIO_QUICK_FILE") ?? path.resolve(harnessCwd(), "quick.json"));

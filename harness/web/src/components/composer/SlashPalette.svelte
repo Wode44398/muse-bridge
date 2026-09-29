@@ -9,6 +9,7 @@
   import type { PaletteItem } from "../../lib/slash.ts";
   import { pushLayer } from "../../lib/layers.ts";
   import { fade, pop } from "../../lib/motion.ts";
+  import { t } from "../../lib/i18n.ts";
 
   let {
     items,
@@ -42,9 +43,9 @@
   });
 
   function tagOf(item: PaletteItem): string {
-    if (item.kind === "builtin") return item.disabled ?? "内置";
-    if (item.kind === "pkg") return `${item.count} 个技能`;
-    if (item.userOnly) return "命令";
+    if (item.kind === "builtin") return item.disabled ?? t("内置");
+    if (item.kind === "pkg") return t("{n} 个技能", { n: item.count });
+    if (item.userOnly) return t("命令");
     return item.pkg ?? "";
   }
   const isOff = (item: PaletteItem) => item.kind === "builtin" && Boolean(item.disabled);
@@ -52,9 +53,9 @@
   const keyOf = (item: PaletteItem) => `${item.kind}:${item.kind === "skill" ? `${item.pkg ?? ""}/` : ""}${item.name}`;
 </script>
 
-<div class="pal" {id} role="listbox" aria-label="斜杠命令" bind:this={list} in:pop|global={{ from: 0.97 }} out:fade|global={{ duration: 120 }}>
+<div class="pal" {id} role="listbox" aria-label={t("斜杠命令")} bind:this={list} in:pop|global={{ from: 0.97 }} out:fade|global={{ duration: 120 }}>
   {#if !items.length}
-    <p class="empty">没有对得上的命令或技能——照普通消息发出</p>
+    <p class="empty">{t("没有对得上的命令或技能——照普通消息发出")}</p>
   {/if}
   {#each items as item, i (keyOf(item))}
     <button

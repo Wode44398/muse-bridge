@@ -7,6 +7,7 @@
   import { rememberCurrentPrefs } from '../lib/chat.svelte.js';
   import { pushBackLayer } from '../lib/nav.js';
   import { clampX } from '../lib/clampx.js';
+  import { t } from '../lib/i18n.js';
   let { onClose, dir = 'up' } = $props();
 
   let view = $state('main');
@@ -28,7 +29,7 @@
   function toggleFast() { settings.fast = !settings.fast; rememberCurrentPrefs(); }
 </script>
 
-<button class="mp-backdrop" aria-label="关闭" onclick={() => onClose && onClose()}></button>
+<button class="mp-backdrop" aria-label={t('关闭')} onclick={() => onClose && onClose()}></button>
 <div class="mp" class:down={dir === 'down'} role="menu" use:clampX>
   {#if view === 'main'}
     <div class="mp-label">Models</div>

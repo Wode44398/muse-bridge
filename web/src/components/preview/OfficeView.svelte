@@ -7,6 +7,7 @@
   import { onMount } from 'svelte';
   import PdfView from './PdfView.svelte';
   import { recoverStaleChunk } from '../../lib/staleGuard.js';
+  import { t, tr } from '../../lib/i18n.js';
 
   let { item, onClose } = $props();
 
@@ -55,7 +56,7 @@
     const DOMPurify = (await import('dompurify')).default;
     const buf = await fetchBuf();
     const { value } = await mammoth.convertToHtml({ arrayBuffer: buf });
-    wordHtml = DOMPurify.sanitize(value || '<p>（空文档）</p>');
+    wordHtml = DOMPurify.sanitize(value || '<p>' + t('（空文档）') + '</p>');
     phase = 'word';
   }
 
@@ -82,7 +83,7 @@
     // 且快照页把这条渲染管线暴露给公开访客：攻击者上传恶意 xlsx→别人打开即中招）。
     // 与 renderWord 一致过一遍 DOMPurify：table/样式保留，javascript: 协议与 on* 事件被清。
     sheets = wb.SheetNames.map((name) => ({ name, html: DOMPurify.sanitize(XLSX.utils.sheet_to_html(wb.Sheets[name], { id: '', editable: false })) }));
-    if (!sheets.length) throw new Error('空表格');
+    if (!sheets.length) throw new Error(t('空表格'));
     phase = 'sheet';
   }
 
@@ -105,21 +106,21 @@
     const out = [];
     for (const sf of slideFiles) {
       const xml = strFromU8(zip[sf]);
-      const texts = [...xml.matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((m) => decodeXml(m[1])).filter((t) => t.trim());
+      const texts = [...xml.matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((m) => decodeXml(m[1])).filter((s) => s.trim());
       // 该 slide 的图：查它的 rels 找 media 引用
       const relPath = sf.replace(/slides\/(slide\d+)\.xml/i, 'slides/_rels/$1.xml.rels');
       const imgs = [];
       if (zip[relPath]) {
         const rels = strFromU8(zip[relPath]);
         for (const m of rels.matchAll(/Target="([^"]+)"/g)) {
-          const t = ('ppt/' + m[1].replace(/^\.\.\//, '')).toLowerCase();
-          if (media[t]) imgs.push(media[t]);
+          const mp = ('ppt/' + m[1].replace(/^\.\.\//, '')).toLowerCase();
+          if (media[mp]) imgs.push(media[mp]);
         }
       }
       out.push({ texts, imgs });
     }
     slides = out;
-    if (!slides.length) throw new Error('无幻灯片');
+    if (!slides.length) throw new Error(t('无幻灯片'));
     phase = 'slides';
   }
   function decodeXml(s) { return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'"); }
@@ -133,11 +134,11 @@
 {:else}
   <div class="of-root">
     <header class="of-head">
-      <button class="of-btn" aria-label="返回" onclick={() => onClose?.()}>
+      <button class="of-btn" aria-label={t('返回')} onclick={() => onClose?.()}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
       </button>
       <span class="of-title">{item.name}</span>
-      {#if item.downloadHref}<a class="of-btn" href={item.downloadHref} download={item.name} aria-label="下载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg></a>{/if}
+      {#if item.downloadHref}<a class="of-btn" href={item.downloadHref} download={item.name} aria-label={t('下载')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg></a>{/if}
     </header>
 
     {#if phase === 'sheet' && sheets.length > 1}
@@ -150,9 +151,9 @@
 
     <div class="of-body">
       {#if phase === 'loading'}
-        <div class="of-center"><span class="of-spin"></span><p class="of-tip">{cat === 'sheet' ? '解析表格…' : '转换中…（首次稍候）'}</p></div>
+        <div class="of-center"><span class="of-spin"></span><p class="of-tip">{cat === 'sheet' ? t('解析表格…') : t('转换中…（首次稍候）')}</p></div>
       {:else if phase === 'error'}
-        <div class="of-center of-err"><p>无法预览此文档</p><p class="of-sub">{errMsg}</p><button onclick={start}>重试</button>{#if item.downloadHref}<a class="of-dl" href={item.downloadHref} download={item.name}>下载原文件</a>{/if}</div>
+        <div class="of-center of-err"><p>{t('无法预览此文档')}</p><p class="of-sub">{tr(errMsg)}</p><button onclick={start}>{t('重试')}</button>{#if item.downloadHref}<a class="of-dl" href={item.downloadHref} download={item.name}>{t('下载原文件')}</a>{/if}</div>
       {:else if phase === 'word'}
         <div class="of-scroll"><div class="of-doc">{@html wordHtml}</div></div>
       {:else if phase === 'sheet'}
@@ -163,11 +164,11 @@
             <div class="of-slide">
               <div class="of-slide-no">{i + 1}</div>
               {#each sl.imgs as src (src)}<img class="of-slide-img" {src} alt="" />{/each}
-              {#each sl.texts as t (t)}<p class="of-slide-txt">{t}</p>{/each}
-              {#if !sl.imgs.length && !sl.texts.length}<p class="of-slide-empty">（此页无文本）</p>{/if}
+              {#each sl.texts as tx (tx)}<p class="of-slide-txt">{tx}</p>{/each}
+              {#if !sl.imgs.length && !sl.texts.length}<p class="of-slide-empty">{t('（此页无文本）')}</p>{/if}
             </div>
           {/each}
-          <div class="of-approx">PPT 客户端近似渲染（文字+图片）。装好 LibreOffice 后将自动用像素级 PDF。</div>
+          <div class="of-approx">{t('PPT 客户端近似渲染（文字+图片）。装好 LibreOffice 后将自动用像素级 PDF。')}</div>
         </div>
       {/if}
     </div>

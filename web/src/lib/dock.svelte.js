@@ -5,6 +5,7 @@
 
 import { apiUrl } from './server.js';
 import { api, authHeaders } from './api.js';
+import { t, tc } from './i18n.js';
 
 // snap=聊天快照页（/c/<token>）：工作台只摆 审阅/文件/任务，终端没有。
 // 快照的 ws 是服务端锁死的桶目录，前端并不知道（也不该知道）真实路径——这里放一个占位串
@@ -87,10 +88,10 @@ export function setDockMulti(on) {
 // 任务 = 官方 Tasks 侧栏（只读数据，快照访客也给）；终端只给有 shell 的身份、快照没有。
 // meta 没到之前按「有 shell」乐观摆，别让开关闪一下再消失。
 export const DOCK_TOOLS = [
-  { key: 'term', label: '终端', kbd: 'Ctrl+`' },
-  { key: 'review', label: '审阅', kbd: 'Ctrl+Shift+G' },
-  { key: 'files', label: '文件', kbd: 'Ctrl+Shift+E' },
-  { key: 'tasks', label: '任务', kbd: '' },
+  { key: 'term', label: t('终端'), kbd: 'Ctrl+`' },
+  { key: 'review', label: t('审阅'), kbd: 'Ctrl+Shift+G' },
+  { key: 'files', label: tc('claude', '文件'), kbd: 'Ctrl+Shift+E' },
+  { key: 'tasks', label: tc('claude', '任务'), kbd: '' },
 ];
 export function dockSnapMode() { return claudeState.snap || claudeState.meta?.snap === true; }
 export function dockToolOk(key) {

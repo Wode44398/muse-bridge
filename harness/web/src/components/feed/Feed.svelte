@@ -29,6 +29,7 @@
   import ScreenshotCard from "./ScreenshotCard.svelte";
   import ActivityLine from "./ActivityLine.svelte";
   import { usePane } from "../../lib/pane.ts";
+  import { t } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -311,7 +312,7 @@
   </main>
 
   {#if showJump}
-    <button class="jump" onclick={jumpToEnd} aria-label="回到底部" title="回到底部" transition:pop={{ from: 0.7 }}>
+    <button class="jump" onclick={jumpToEnd} aria-label={t("回到底部")} title={t("回到底部")} transition:pop={{ from: 0.7 }}>
       <Icon name="chevronD" size={18} stroke={2} />
     </button>
   {/if}

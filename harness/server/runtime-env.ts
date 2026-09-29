@@ -45,6 +45,7 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "PROJECTS_ROOT", area: "路径", description: "新建项目的默认父目录", default: "~/Dimensio Projects" },
   { name: "DIMENSIO_QUICK_FILE", area: "路径", description: "快照对话的当前桶指针", default: "<harness>/quick.json" },
   { name: "DIMENSIO_QUICK_ROOT", area: "路径", description: "快照对话一次性桶的根目录", default: "~/.dimensio/quick" },
+  { name: "DIMENSIO_CUSTOM_PROVIDERS_DIR", area: "路径", description: "自定义模型服务（地址、备注与加密的 API key）", default: "<harness>/custom-providers" },
   { name: "MEMORY_DIR", area: "路径", description: "记忆库目录（按工作区分）", default: "<harness>/memory" },
   { name: "KNOWLEDGE_DIR", area: "路径", description: "项目知识索引目录", default: "<harness>/knowledge" },
   { name: "DIMENSIO_GLOBAL_GUIDE", area: "路径", description: "全局 GUIDE.md（每个新会话都带的个人指南）", default: "~/.dimensio/GUIDE.md" },

@@ -9,6 +9,8 @@
 // ③ 手机/触屏没有文件夹拖拽；`<input webkitdirectory>` 走的是 webkitRelativePath 那条路，
 //    所以这里两条入口都给。
 
+import { t, isEn } from './i18n.js';
+
 const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '.hg', '__pycache__', '.DS_Store']);
 const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
 
@@ -119,10 +121,11 @@ export function groupByRoot(items) {
 // 「跳过了什么」的人话（没跳过就返回空串）。
 export function skipNote(stat) {
   const bits = [];
-  if (stat.skippedDirs.length) bits.push('跳过 ' + [...new Set(stat.skippedDirs)].join('/'));
-  if (stat.skippedBig.length) bits.push(`${stat.skippedBig.length} 个超大文件未传`);
-  if (stat.truncated) bits.push(`超出 ${DIR_LIMITS.maxFiles} 个文件/${Math.round(DIR_LIMITS.maxBytes / 1024 / 1024)}MB 上限，已截断`);
-  return bits.join('，');
+  if (stat.skippedDirs.length) bits.push(t('跳过 {names}', { names: [...new Set(stat.skippedDirs)].join('/') }));
+  if (stat.skippedBig.length) bits.push(t('{n} 个超大文件未传', { n: stat.skippedBig.length }));
+  if (stat.truncated) bits.push(t('超出 {n} 个文件/{mb}MB 上限，已截断', { n: DIR_LIMITS.maxFiles, mb: Math.round(DIR_LIMITS.maxBytes / 1024 / 1024) }));
+  // 英文每段都是首字母大写的独立短语，用逗号连着读像半截句子，改用 · 分隔（Composer 那行本来就是 · 串）
+  return bits.join(isEn() ? ' · ' : '，');
 }
 
 // 有限并发跑任务（整树上传几百个小文件时，串行慢得离谱、全并发又会打爆连接数）。

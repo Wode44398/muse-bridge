@@ -1,6 +1,7 @@
 // 交互卡共用的小工具（只给 components/cards/ 用）：等待窗口、剩余时间文案、卡片草稿。
 // 纯 TS，不碰 DOM。
 import type { CardItem } from "../../lib/card-dock.ts";
+import { t } from "../../lib/i18n.ts";
 
 // P7：卡片从出现到作废的窗口（分钟）。卡片事件只带 deadlineAt、不带出现的时刻，尺寸线要知道「满」是多长，
 // 就照服务端的定值估（server/session.ts 的 INTERACTION_TIMEOUT_MIN：提问 10 分钟、plan 档提问 60 分钟、
@@ -26,7 +27,7 @@ export function fmtLeft(ms: number): string {
 export function leftLabel(ms: number): string {
   const s = Math.max(0, Math.ceil(ms / 1000));
   const m = Math.floor(s / 60);
-  return m ? `还剩 ${m} 分 ${s % 60} 秒` : `还剩 ${s} 秒`;
+  return m ? t("还剩 {m} 分 {s} 秒", { m, s: s % 60 }) : t("还剩 {s} 秒", { s });
 }
 
 // Q12：卡片乐观落定就离开停靠区；POST 没送达会退回可点、重新停进来（组件重新挂载）。以前问答卡选了一半的

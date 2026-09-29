@@ -16,21 +16,22 @@ import { session, settings, refusalBand } from './state.svelte.js';
 import { chat, rewindToMessage, rememberCurrentPrefs } from './chat.svelte.js';
 import { prefillComposer, composerHasDraft } from './composerBridge.svelte.js';
 import { dropToast } from './dragdrop.svelte.js';
+import { t } from './i18n.js';
 
-const FAIL = '回不到那条消息，请用消息上的回滚按钮';
+const FAIL = () => t('回不到那条消息，请用消息上的回滚按钮');
 
 export async function retryRefused(notice) {
   if (!notice) return false;
-  if (session.busy) { dropToast('这一轮还在生成，等它结束再重试'); return false; }
+  if (session.busy) { dropToast(t('这一轮还在生成，等它结束再重试')); return false; }
   // 官方：composer 有草稿 ⇒ 拒绝并提示先发送 / 清空（"Send or clear your draft first…"）
-  if (composerHasDraft()) { dropToast('先发送或清空输入框里的草稿，再点「编辑并重试」'); return false; }
+  if (composerHasDraft()) { dropToast(t('先发送或清空输入框里的草稿，再点「编辑并重试」')); return false; }
   // 被拒请求对应的用户消息 uuid = transcript 里的 uuid（气泡在 user uuid 事件 / 历史重建时挂上）
   const uuid = notice.refusedUserUuid || null;
   const m = uuid ? chat.messages.find((x) => x && x.role === 'user' && x.uuid === uuid) : null;
-  if (!m) { dropToast(FAIL); return false; }
+  if (!m) { dropToast(FAIL()); return false; }
   const text = m.text || '';   // 回滚会把这条气泡连同其后全部移除，原文先留住
   try { await rewindToMessage(m, 'chat'); }
-  catch { dropToast(FAIL); return false; }
+  catch { dropToast(FAIL()); return false; }
   // 切回原模型（自动回退把 settings.model 换成了回退模型；notice.from 缺失时不动）。SDK 的 original_model
   // 带 [1m] 后缀（oneM 表里的模型 bridge 跑 query 时一律 to1M），picker / sidecar 只认裸 id——不剥的话芯片会
   // 印出 'claude-opus-5[1m]' 原串且恒判 mismatch（与 claude.mjs 的 bare 同口径）。

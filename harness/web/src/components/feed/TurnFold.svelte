@@ -6,6 +6,7 @@
   import { haptic } from "../../lib/touch.ts";
   import Icon from "../ui/Icon.svelte";
   import RailRow from "./RailRow.svelte";
+  import { t } from "../../lib/i18n.ts";
 
   let {
     tools,
@@ -27,7 +28,7 @@
     <span class="nchev" class:open><Icon name="chevronR" size={13} stroke={2} /></span>
   {/snippet}
   {#snippet head()}
-    <span class="t">{open ? "收起处理过程" : `处理过程 · ${tools} 次工具`}</span>
+    <span class="t">{open ? t("收起处理过程") : t("处理过程 · {n} 次工具", { n: tools })}</span>
     {#if run}<span class="time">{foldTiming(run)}</span>{/if}
   {/snippet}
 </RailRow>

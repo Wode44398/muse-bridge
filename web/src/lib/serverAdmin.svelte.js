@@ -3,6 +3,7 @@
 // 数据面 = bridge 的 /api/admin/*（admin 凭据可达，见 src/routes/admin.mjs）。
 // fetch 全部同源直发。轮询只在控制台打开时跑（组件 $effect 管生命周期）。
 import { api } from './api.js';
+import { t, locale } from './i18n.js';
 
 export const sa = $state({
   page: 'overview',      // overview|active|users|policy|sessions|routines|accounts|control
@@ -32,8 +33,8 @@ export async function saPing() {
 }
 
 // —— 格式化 ——（与旧控制台口径一致）
-export const fmtNum = (n) => (n || 0).toLocaleString();
-export const fmtAgo = (ms) => { if (!ms) return '—'; const s = Math.round((Date.now() - ms) / 1000); if (s < 60) return s + ' 秒前'; if (s < 3600) return Math.round(s / 60) + ' 分前'; if (s < 86400) return Math.round(s / 3600) + ' 时前'; return Math.round(s / 86400) + ' 天前'; };
+export const fmtNum = (n) => (n || 0).toLocaleString(locale());
+export const fmtAgo = (ms) => { if (!ms) return '—'; const s = Math.round((Date.now() - ms) / 1000); if (s < 60) return t('{n} 秒前', { n: s }); if (s < 3600) return t('{n} 分前', { n: Math.round(s / 60) }); if (s < 86400) return t('{n} 时前', { n: Math.round(s / 3600) }); return t('{n} 天前', { n: Math.round(s / 86400) }); };
 export const fmtDur = (ms) => { const s = Math.round((ms || 0) / 1000); if (s < 60) return s + 's'; const m = Math.floor(s / 60); return m + 'm' + (s % 60) + 's'; };
 export const fmtUptime = (s) => { if (!s) return '—'; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h${m}m` : `${m}m`; };
 
@@ -73,8 +74,8 @@ export function saToast(msg, err = false) {
 }
 
 // —— 通用确认弹窗（Promise 化；宿主在 ServerAdmin.svelte 渲染）——
-export const saConfirmState = $state({ open: false, title: '', desc: '', yes: '确认', danger: false, _resolve: null });
-export function saConfirm(title, desc, { yes = '确认', danger = false } = {}) {
+export const saConfirmState = $state({ open: false, title: '', desc: '', yes: t('确认'), danger: false, _resolve: null });
+export function saConfirm(title, desc, { yes = t('确认'), danger = false } = {}) {
   return new Promise((resolve) => {
     saConfirmState.title = title; saConfirmState.desc = desc; saConfirmState.yes = yes; saConfirmState.danger = danger;
     saConfirmState.open = true; saConfirmState._resolve = resolve;

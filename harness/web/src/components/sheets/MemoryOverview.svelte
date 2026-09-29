@@ -6,13 +6,14 @@
   //   悬停 / 聚焦看标题，点一粒直接打开那一条；点行头进这一处。
   import { haptic } from "../../lib/touch.ts";
   import { rise } from "../../lib/motion.ts";
+  import { t } from "../../lib/i18n.ts";
   import type { MemoryBucket, MemoryOverview, MemoryOverviewItem } from "../../lib/api.ts";
   import Group from "../ui/Group.svelte";
   import Icon from "../ui/Icon.svelte";
   import MemoryGlyph from "./MemoryGlyph.svelte";
   import MemoryStats from "./MemoryStats.svelte";
-  import { byLane, countLanes, fmtAgo, fmtCount, fmtShortDate, glyphOf, GLYPH_TEXT, laneOf, latestOf, type Lane } from "./memory-viz.ts";
-  import { issuesOf, originText } from "./memory-text.ts";
+  import { byLane, countLanes, fmtCount, glyphOf, laneOf, latestOf, type Lane } from "./memory-viz.ts";
+  import { agoOf, fmtShortDate, GLYPH_TEXT, issuesOf, originText } from "./memory-text.ts";
 
   let {
     overview,
@@ -39,21 +40,40 @@
   );
   const todoShown = $derived(showAllTodo ? todo : todo.slice(0, TODO_CAP));
 
-  const nameOf = (b: MemoryBucket) => (b.kind === "quick" && b.createdAt ? `快照对话 · ${fmtShortDate(new Date(b.createdAt).toISOString())}` : b.name);
+  // 全局层、快照桶的名字是服务端给的中文（「全局」「快照对话」），按类别取本地文案；项目名是文件夹名，原样
+  const nameOf = (b: MemoryBucket) =>
+    b.kind === "global"
+      ? t("全局")
+      : b.kind === "quick"
+        ? b.createdAt
+          ? t("快照对话 · {date}", { date: fmtShortDate(new Date(b.createdAt).toISOString()) })
+          : t("快照对话")
+        : b.name;
+  // 「最近 …」：英文里「多久以前」嵌在句中（Updated today），按档位各取一整句
+  function lastText(iso: string): string {
+    const a = agoOf(iso);
+    if (!a) return "";
+    if (a.k === "today") return t("最近 今天");
+    if (a.k === "yesterday") return t("最近 昨天");
+    if (a.k === "days") return t("最近 {n} 天前", { n: a.n });
+    if (a.k === "weeks") return t("最近 {n} 周前", { n: a.n });
+    if (a.k === "months") return t("最近 {n} 个月前", { n: a.n });
+    return t("最近 {date}", { date: a.date });
+  }
   function metaOf(b: MemoryBucket): string {
-    const parts = [`${b.items.length} 条`];
-    if (b.kind === "global") parts.push(`进提示 ${fmtCount(b.promptChars)} / ${fmtCount(overview.budget)} 字`);
-    else if (b.promptChars) parts.push(`进提示 ${fmtCount(b.promptChars)} 字`);
+    const parts = [t("{n} 条", { n: b.items.length })];
+    if (b.kind === "global") parts.push(t("进提示 {used} / {budget} 字", { used: fmtCount(b.promptChars), budget: fmtCount(overview.budget) }));
+    else if (b.promptChars) parts.push(t("进提示 {n} 字", { n: fmtCount(b.promptChars) }));
     const uses = b.items.reduce((n, m) => n + (m.uses ?? 0), 0);
-    if (uses) parts.push(`召回 ${uses} 次`);
+    if (uses) parts.push(t("召回 {n} 次", { n: uses }));
     const last = latestOf(b.items, b.history);
-    if (last) parts.push(`最近 ${fmtAgo(last)}`);
-    return parts.join(" · ");
+    if (last) parts.push(lastText(last));
+    return parts.filter(Boolean).join(" · ");
   }
 
   // 待处理一行的出处：哪一处 · 为什么在这（被隔离说清楚、待确认说谁写的）· 日期
   function todoSub(b: MemoryBucket, m: MemoryOverviewItem): string {
-    const why = laneOf(m) === "held" ? issuesOf(m)[0] || "写着生效却没进提示" : originText(m);
+    const why = laneOf(m) === "held" ? issuesOf(m)[0] || t("写着生效却没进提示") : originText(m);
     return [nameOf(b), why, m.updated ? fmtShortDate(m.updated) : ""].filter(Boolean).join(" · ");
   }
 
@@ -65,7 +85,7 @@
     if (!root) return;
     const r = el.getBoundingClientRect();
     const o = root.getBoundingClientRect();
-    const sub = [GLYPH_TEXT[glyphOf(m)], nameOf(b), m.updated ? fmtShortDate(m.updated) : "", m.uses ? `召回 ${m.uses} 次` : ""].filter(Boolean).join(" · ");
+    const sub = [GLYPH_TEXT[glyphOf(m)], nameOf(b), m.updated ? fmtShortDate(m.updated) : "", m.uses ? t("召回 {n} 次", { n: m.uses }) : ""].filter(Boolean).join(" · ");
     tip = { title: m.title, sub, x: r.left + r.width / 2 - o.left, y: r.top - o.top };
   }
   const hideTip = () => (tip = null);
@@ -81,45 +101,45 @@
   <MemoryStats {counts} picked={lane} onpick={(l) => (lane = l)} />
 
   {#if todo.length}
-    <Group title="等你处理">
+    <Group title={t("等你处理")}>
       {#snippet aside()}<span class="count">{todo.length}</span>{/snippet}
-      {#each todoShown as t, i (t.b.ws + t.m.id)}
-        <button class="todo" in:rise|global={{ y: 6, delay: Math.min(i, 8) * 25 }} onclick={() => onopen(t.b, t.m.id)}>
-          <span class="tg"><MemoryGlyph kind={glyphOf(t.m)} size={12} /></span>
+      {#each todoShown as row, i (row.b.ws + row.m.id)}
+        <button class="todo" in:rise|global={{ y: 6, delay: Math.min(i, 8) * 25 }} onclick={() => onopen(row.b, row.m.id)}>
+          <span class="tg"><MemoryGlyph kind={glyphOf(row.m)} size={12} /></span>
           <span class="tx">
-            <span class="tt">{t.m.title}</span>
-            <span class="ts">{todoSub(t.b, t.m)}</span>
+            <span class="tt">{row.m.title}</span>
+            <span class="ts">{todoSub(row.b, row.m)}</span>
           </span>
           <span class="chev" aria-hidden="true"><Icon name="chevronR" size={16} /></span>
         </button>
       {/each}
       {#if todo.length > TODO_CAP}
         <button class="more" onclick={() => (showAllTodo = !showAllTodo)}>
-          {showAllTodo ? "收起" : `再看 ${todo.length - TODO_CAP} 条`}
+          {showAllTodo ? t("收起") : t("再看 {n} 条", { n: todo.length - TODO_CAP })}
         </button>
       {/if}
     </Group>
   {/if}
 
-  <Group title="各处的记忆">
+  <Group title={t("各处的记忆")}>
     {#each overview.buckets as b, i (b.ws)}
       <div class="bk" in:rise|global={{ y: 6, delay: Math.min(i, 10) * 30 }}>
         <button class="bh" onclick={() => onopen(b)}>
           <span class="bn">
             <span class="nm">{nameOf(b)}</span>
-            {#if b.current}<span class="tag">当前</span>{/if}
-            {#if b.hidden}<span class="tag">已隐藏</span>{/if}
+            {#if b.current}<span class="tag">{t("当前")}</span>{/if}
+            {#if b.hidden}<span class="tag">{t("已隐藏")}</span>{/if}
           </span>
-          <span class="bm">{#if b.kind === "global" && !b.items.length}还没有：模型记下的关于你的事会先放在这里{:else}{metaOf(b)}{/if}</span>
+          <span class="bm">{#if b.kind === "global" && !b.items.length}{t("还没有：模型记下的关于你的事会先放在这里")}{:else}{metaOf(b)}{/if}</span>
           <span class="chev" aria-hidden="true"><Icon name="chevronR" size={16} /></span>
         </button>
         {#if b.items.length}
-          <div class="dots" role="group" aria-label="{nameOf(b)}的记忆">
+          <div class="dots" role="group" aria-label={t("{name}的记忆", { name: nameOf(b) })}>
             {#each byLane(b.items) as m (m.id)}
               <button
                 class="dot"
                 class:dim={lane !== null && laneOf(m) !== lane}
-                aria-label="{m.title}（{GLYPH_TEXT[glyphOf(m)]}）"
+                aria-label={t("{title}（{status}）", { title: m.title, status: GLYPH_TEXT[glyphOf(m)] })}
                 onpointerenter={(e) => showTip(e, b, m)}
                 onpointerleave={hideTip}
                 onfocus={(e) => showTip(e, b, m)}
@@ -136,7 +156,11 @@
   </Group>
 
   <p class="foot">
-    {#if overview.emptyProjects}另有 {overview.emptyProjects} 个项目还没有记忆。{/if}每个项目的记忆各自隔离、只进自己的对话；全局层每个项目都用。一粒就是一条记忆：点它直接打开，点行头看这一处的全部。
+    {#if overview.emptyProjects}
+      {t("另有 {n} 个项目还没有记忆。每个项目的记忆各自隔离、只进自己的对话；全局层每个项目都用。一粒就是一条记忆：点它直接打开，点行头看这一处的全部。", { n: overview.emptyProjects })}
+    {:else}
+      {t("每个项目的记忆各自隔离、只进自己的对话；全局层每个项目都用。一粒就是一条记忆：点它直接打开，点行头看这一处的全部。")}
+    {/if}
   </p>
 
   {#if tip}

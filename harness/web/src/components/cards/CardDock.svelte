@@ -17,6 +17,7 @@
   import PlanCard from "./PlanCard.svelte";
   import { markSettling } from "./card-actions.ts";
   import { usePane } from "../../lib/pane.ts";
+  import { t } from "../../lib/i18n.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -78,7 +79,7 @@
   }
 </script>
 
-<div class="dock" role={docked ? "region" : undefined} aria-label={docked ? "等你处理的卡片" : undefined}>
+<div class="dock" role={docked ? "region" : undefined} aria-label={docked ? t("等你处理的卡片") : undefined}>
   {#each shown as card (card.id)}
     <div class="slot" in:rise|global={{ y: 12 }} out:sink|global={{ y: 10, out: 200 }} onoutrostart={leave} onintrostart={stay}>
       <CardGuard>
@@ -90,7 +91,7 @@
           <PlanCard item={card} />
         {/if}
       </CardGuard>
-      {#if more > 0}<p class="more">还有 {more} 张在排队，处理完这张就轮到下一张</p>{/if}
+      {#if more > 0}<p class="more">{t("还有 {n} 张在排队，处理完这张就轮到下一张", { n: more })}</p>{/if}
     </div>
   {/each}
 </div>
