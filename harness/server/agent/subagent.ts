@@ -394,6 +394,7 @@ export function makeSubAgentRunner(
       agentSeesImages: adapter.capabilities.image,
       agentSeesVideo: adapter.capabilities.video,
       agentHearsAudio: adapter.capabilities.audio === true,
+      provider: target.provider,
       signal: ctrl.signal,
       ownerId: env.ownerId,
       snapshotFiles: env.snapshotFiles,

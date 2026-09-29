@@ -304,6 +304,26 @@ test("会话在哪家，就先用哪家的原生搜索", async () => {
   assert.equal(pickChain()[0]?.id, "zhipu");
 });
 
+test("按会话在用的那家排第一，不看全局配置：全局是智谱，小米会话照样先用小米", async () => {
+  setConfig({ provider: "mimo", apiKey: "tp-test-key" });
+  setConfig({ provider: "zhipu" });
+  resetNativeSearchState();
+  assert.equal(pickChain()[0]?.id, "zhipu", "没有会话信息时回落全局");
+  const stub = stubFetch((backend) =>
+    backend === "mimo"
+      ? json(200, { choices: [{ message: { role: "assistant", content: "小米答", annotations: [{ url: "https://mi.example/s", title: "MI" }] } }] })
+      : zhipuOk(),
+  );
+  try {
+    const r = await webSearchTool.run({ query: uniq("会话优先") }, { ...ctx(), provider: "mimo" } as ToolContext);
+    assert.equal(r.ok, true);
+    assert.match((r.content[0] as any).text as string, /小米答/);
+    assert.deepEqual(stub.calls, ["mimo"], "小米会话不该先去打智谱");
+  } finally {
+    stub.restore();
+  }
+});
+
 test("DeepSeek：走 Anthropic 兼容接口的 web_search，来源与最后一段正文都取到", async () => {
   await withProvider("openai", "ds-test-key", async () => {
     const stub = stubFetch(() =>

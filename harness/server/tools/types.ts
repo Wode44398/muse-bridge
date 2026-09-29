@@ -76,6 +76,9 @@ export interface ToolContext {
   // into frames instead of being handed over whole.
   agentSeesVideo?: boolean;
   agentHearsAudio?: boolean;
+  // 这个会话（或子 agent）实际在用的 provider。WebSearch 先用它自带的原生搜索——全局配置可能是另一家
+  // （会话按创建时的配置快照跑），只看全局的话「小米对话」会先去打智谱。没给就回落全局配置。
+  provider?: ProviderId;
   // Spawn a sub-agent (wired by the session from agent/subagent.ts; absent in
   // bare/test contexts). Backs the Agent tool and every agent() call a Workflow
   // script makes.

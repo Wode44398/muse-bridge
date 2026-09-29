@@ -87,7 +87,8 @@ export function webSearchStats(): typeof stats & { chain: string[] } {
 }
 
 // ── 后端选择 ────────────────────────────────────────────────────────────────
-export function pickChain(): SearchBackend[] {
+// provider = 当前会话在用的那家（ToolContext.provider）；不给就看全局配置（/api/net 这类没有会话的场合）。
+export function pickChain(provider: ProviderId = getConfig().provider): SearchBackend[] {
   const pinned = process.env.WEBSEARCH_BACKENDS?.trim();
   if (pinned) {
     const chain = pinned
@@ -100,7 +101,7 @@ export function pickChain(): SearchBackend[] {
   }
 
   const order: BackendId[] = [];
-  const native = NATIVE_BY_PROVIDER[getConfig().provider];
+  const native = NATIVE_BY_PROVIDER[provider];
   if (native) order.push(native);
   for (const id of DEFAULT_ORDER) if (!order.includes(id)) order.push(id);
 
@@ -156,7 +157,7 @@ export const webSearchTool: Tool = {
     const query = String(args.query ?? "").trim();
     if (!query) return fail("empty query", "Provide a query to search for.");
 
-    const chain = pickChain();
+    const chain = pickChain(ctx.provider);
     if (!chain.length) {
       return fail(
         "unavailable",

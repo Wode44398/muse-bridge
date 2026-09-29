@@ -848,6 +848,7 @@ function buildState(
     agentSeesImages: adapter.capabilities.image,
     agentSeesVideo: adapter.capabilities.video,
     agentHearsAudio: adapter.capabilities.audio === true,
+    provider: cfg.provider,
   };
   // The Agent tool's backing runner: sub-agents default to this session's
   // provider/model/effort (overridable per call). Mode and rules are read live
