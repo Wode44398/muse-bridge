@@ -153,6 +153,8 @@ bash /home/hatch/bridge-ops/bootstrap.sh set-api-key ANTHROPIC_API_KEY <key>
 
 可用的名字：`ANTHROPIC_API_KEY`（Claude）、`DEEPSEEK_API_KEY`（DeepSeek）、`GEMINI_API_KEY`、`KIMI_API_KEY`（Kimi for Coding 订阅 key，`sk-kimi-` 开头）、`ZHIPU_API_KEY`、`QWEN_API_KEY`、`MIMO_API_KEY`（`tp-` 开头的 Token Plan key 也行）。写完提醒他删掉聊天里含 key 的那条消息。
 
+**联网搜索**：dimensio 的联网搜索用的是所配厂商自带的搜索（同一把 key，不用另外申请）：当前对话用哪家，就先用哪家的；其余配了 key 的厂商依次备用，都没有时退回免费但不太稳的 DuckDuckGo。智谱、Kimi（`sk-kimi-` 订阅 key）、DeepSeek、通义、Gemini、Claude 配上 key 就能搜；**小米要多一步**：让用户到小米 MiMo 开放平台控制台的「插件管理」里开通「联网搜索」插件（按次计费，约 ¥16 / 千次），不开的话小米搜不了，会退回别家，搜索结果里也会提醒这一句。
+
 **网络审核（重要）**：这台 VM 访问外部网站要用户在 Muse 里批准，卡片是「允许 Muse 与 <网站> 分享信息？」。dimensio 在后台第一次调某家模型时如果弹这张卡、而用户不在场，对话会一直停在「等待模型回复」。所以 `set-api-key` 写完 key 会马上访问一次这家的接口网站，**把卡片提前弹出来**。跑这条命令之前先告诉用户：「马上会弹一张审核卡片，请点『允许一次』旁边的下拉，选『总是允许此站点』」——这样以后这家就不会再卡。你看不到卡片，命令会停在那里等他批（最多 3 分钟）；输出里 ✓ 表示放行了。然后让他在 dimensio 页选对应的模型发一句话试试。
 
 ### 4.6 给朋友开账号（选了「多人用」才需要）

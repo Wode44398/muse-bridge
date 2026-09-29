@@ -3,6 +3,7 @@ import test from "node:test";
 import { setConfig } from "./config.ts";
 import { Sandbox } from "./sandbox.ts";
 import { webSearchTool, pickChain, webSearchAvailable } from "./tools/websearch.ts";
+import { resetNativeSearchState } from "./tools/websearch-backends.ts";
 import type { ToolContext } from "./tools/types.ts";
 
 // WebSearch 的可用性靠「多后端 + 按 key 探测 + 逐档降级」兜住任一家的抖动。这里用
@@ -60,6 +61,11 @@ function stubFetch(handler: (backend: string, n: number) => Response | Promise<R
     const u = String(url);
     let backend = "?";
     if (u.includes("open.bigmodel.cn")) backend = "zhipu";
+    else if (u.includes("api.kimi.com")) backend = "kimi";
+    else if (u.includes("api.deepseek.com")) backend = "deepseek";
+    else if (u.includes("dashscope")) backend = "qwen";
+    else if (u.includes("xiaomimimo")) backend = "mimo";
+    else if (u.includes("api.anthropic.com")) backend = "anthropic";
     else if (u.includes("generativelanguage")) backend = `gemini/${decodeURIComponent(u.split("/models/")[1]?.split(":")[0] ?? "?")}`;
     else if (u.includes("duckduckgo")) backend = "ddg";
     calls.push(backend);
@@ -70,9 +76,10 @@ function stubFetch(handler: (backend: string, n: number) => Response | Promise<R
 }
 
 test.before(() => {
-  // key 不落盘的设计下用 overrideKeys 注入：两家都给 key，链才有得降级。
-  setConfig({ provider: "zhipu", apiKey: "zhipu-test-key" });
+  // key 不落盘的设计下用 overrideKeys 注入：两家都给 key，链才有得降级。当前会话落在 zhipu
+  // （原生搜索优先：会话用哪家就先用哪家的搜索，所以最后一次 setConfig 决定排第一的是谁）。
   setConfig({ provider: "gemini", apiKey: "gemini-test-key" });
+  setConfig({ provider: "zhipu", apiKey: "zhipu-test-key" });
   // 默认关掉免 key 兜底，让用例只面对 zhipu → gemini 两档；需要时逐个打开。
   process.env.WEBSEARCH_DISABLE_DDG = "1";
   delete process.env.WEBSEARCH_BACKENDS;
@@ -275,4 +282,142 @@ test("用户中止不重试也不降级", async () => {
   } finally {
     stub.restore();
   }
+});
+
+// ── 各家原生搜索（2026-09-29）──────────────────────────────────────────────────
+// 会话用哪家就先用哪家自己的搜索（同 key、同接口域名）；这些用例临时给那家一把 key、切过去，结束时切回 zhipu。
+async function withProvider<T>(provider: any, key: string, fn: () => Promise<T>): Promise<T> {
+  setConfig({ provider, apiKey: key });
+  try {
+    return await fn();
+  } finally {
+    setConfig({ provider: "zhipu" });
+  }
+}
+
+test("会话在哪家，就先用哪家的原生搜索", async () => {
+  for (const [provider, id] of [["kimi", "kimi"], ["openai", "deepseek"], ["qwen", "qwen"], ["mimo", "mimo"], ["anthropic", "anthropic"]] as const) {
+    await withProvider(provider, `${provider}-test-key`, async () => {
+      assert.equal(pickChain()[0]?.id, id, `${provider} 会话的第一顺位`);
+    });
+  }
+  assert.equal(pickChain()[0]?.id, "zhipu");
+});
+
+test("DeepSeek：走 Anthropic 兼容接口的 web_search，来源与最后一段正文都取到", async () => {
+  await withProvider("openai", "ds-test-key", async () => {
+    const stub = stubFetch(() =>
+      json(200, {
+        content: [
+          { type: "text", text: "我去搜一下。" },
+          { type: "server_tool_use", id: "s1", name: "web_search", input: { query: "q" } },
+          { type: "web_search_tool_result", tool_use_id: "s1", content: [{ type: "web_search_result", url: "https://ds.example/a", title: "DS 标题", page_age: "2 days ago" }] },
+          { type: "text", text: "答案：9 月 22 日发布。" },
+        ],
+      }),
+    );
+    try {
+      const r = await webSearchTool.run({ query: uniq("ds") }, ctx());
+      assert.equal(r.ok, true);
+      const text = (r.content[0] as any).text as string;
+      assert.match(text, /\[via DeepSeek 联网搜索/);
+      assert.match(text, /答案：9 月 22 日发布/);
+      assert.doesNotMatch(text, /我去搜一下/);
+      assert.match(text, /https:\/\/ds\.example\/a/);
+      assert.deepEqual(stub.calls, ["deepseek"]);
+      const body = JSON.parse(stub.bodies[0]);
+      assert.equal(body.tools[0].type, "web_search_20250305");
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test("通义：DashScope 原生接口带 enable_search + enable_source，search_info 转成来源", async () => {
+  await withProvider("qwen", "qw-test-key", async () => {
+    const stub = stubFetch(() =>
+      json(200, {
+        output: {
+          choices: [{ message: { role: "assistant", content: "通义的答案" } }],
+          search_info: { search_results: [{ url: "https://qw.example/a", title: "QW 标题", site_name: "某站" }] },
+        },
+      }),
+    );
+    try {
+      const r = await webSearchTool.run({ query: uniq("qw") }, ctx());
+      assert.equal(r.ok, true);
+      const text = (r.content[0] as any).text as string;
+      assert.match(text, /通义的答案/);
+      assert.match(text, /https:\/\/qw\.example\/a/);
+      const body = JSON.parse(stub.bodies[0]);
+      assert.equal(body.parameters.enable_search, true);
+      assert.equal(body.parameters.search_options.enable_source, true);
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test("Kimi：订阅的 /search 接口，结构化结果", async () => {
+  await withProvider("kimi", "sk-kimi-test", async () => {
+    const stub = stubFetch(() => json(200, { search_results: [{ title: "K 标题", url: "https://k.example/a", snippet: "K 摘要", date: "2026-09-22" }] }));
+    try {
+      const r = await webSearchTool.run({ query: uniq("kimi") }, ctx());
+      assert.equal(r.ok, true);
+      const text = (r.content[0] as any).text as string;
+      assert.match(text, /\[via Kimi 搜索\]/);
+      assert.match(text, /2026-09-22 · K 摘要/);
+      assert.deepEqual(stub.calls, ["kimi"]);
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test("小米：插件没开时秒失败、换下一家，结果里提醒去开插件；之后半小时不再白撞", async () => {
+  resetNativeSearchState();
+  await withProvider("mimo", "tp-test-key", async () => {
+    const stub = stubFetch((backend) =>
+      backend === "mimo"
+        ? json(400, { error: { code: "400", message: "Param Incorrect", param: "web search tool found in the request body, but webSearchEnabled is false" } })
+        : zhipuOk("智谱顶上"),
+    );
+    try {
+      const r = await webSearchTool.run({ query: uniq("mimo-off") }, ctx());
+      assert.equal(r.ok, true);
+      const text = (r.content[0] as any).text as string;
+      assert.match(text, /智谱顶上/);
+      assert.match(text, /插件管理/);
+      assert.deepEqual(stub.calls, ["mimo", "zhipu"]);
+      // 第二次：不再打小米
+      const r2 = await webSearchTool.run({ query: uniq("mimo-off2") }, ctx());
+      assert.equal(r2.ok, true);
+      assert.deepEqual(stub.calls, ["mimo", "zhipu", "zhipu"]);
+    } finally {
+      stub.restore();
+      resetNativeSearchState();
+    }
+  });
+});
+
+test("小米：插件开了，annotations 转成来源", async () => {
+  resetNativeSearchState();
+  await withProvider("mimo", "tp-test-key", async () => {
+    const stub = stubFetch(() =>
+      json(200, {
+        choices: [{ message: { role: "assistant", content: "小米的答案", annotations: [{ type: "url_citation", url: "https://mi.example/a", title: "MI 标题", summary: "MI 摘要" }] } }],
+      }),
+    );
+    try {
+      const r = await webSearchTool.run({ query: uniq("mimo-on") }, ctx());
+      assert.equal(r.ok, true);
+      const text = (r.content[0] as any).text as string;
+      assert.match(text, /小米的答案/);
+      assert.match(text, /https:\/\/mi\.example\/a/);
+      assert.match(stub.bodies[0], /"type":"web_search"/);
+      assert.match(stub.calls[0], /mimo/);
+    } finally {
+      stub.restore();
+    }
+  });
 });

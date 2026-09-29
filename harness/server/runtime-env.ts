@@ -87,10 +87,15 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "DIMENSIO_EXTERNAL_MEMORY", area: "知识与记忆", description: "K8 外部记忆库只读挂载：`<库目录>` 或 `<库目录>=><工作区>|<工作区>`，分号分隔；默认不挂" },
 
   // ── 联网搜索 ──
-  { name: "WEBSEARCH_BACKENDS", area: "联网搜索", description: "钉死后端顺序（逗号分隔：zhipu / gemini / ddg）；不给按可用的自动排" },
+  { name: "WEBSEARCH_BACKENDS", area: "联网搜索", description: "钉死后端顺序（逗号分隔：zhipu / kimi / deepseek / qwen / gemini / anthropic / mimo / ddg）；不给就当前会话那家的原生搜索排第一，其余按可用的自动排" },
   { name: "WEBSEARCH_DISABLE_DDG", area: "联网搜索", description: "1 = 不用 DuckDuckGo 后端" },
   { name: "WEBSEARCH_MODEL", area: "联网搜索", description: "Gemini 搜索用的型号（逗号分隔的候选）" },
   { name: "WEBSEARCH_ZHIPU_ENGINE", area: "联网搜索", description: "智谱搜索引擎档位", default: "search_std" },
+  { name: "WEBSEARCH_DEEPSEEK_MODEL", area: "联网搜索", description: "DeepSeek 原生搜索（Anthropic 兼容接口）用的型号", default: "deepseek-chat" },
+  { name: "WEBSEARCH_QWEN_MODEL", area: "联网搜索", description: "通义原生搜索（DashScope enable_search）用的型号", default: "qwen-plus" },
+  { name: "WEBSEARCH_MIMO_MODEL", area: "联网搜索", description: "小米原生搜索（web_search 工具，需在控制台开插件）用的型号", default: "mimo-v2.6-flash" },
+  { name: "WEBSEARCH_ANTHROPIC_MODEL", area: "联网搜索", description: "Claude 原生搜索（web_search 服务端工具）用的型号", default: "claude-haiku-4-5-20251001" },
+  { name: "ANTHROPIC_BASE_URL", area: "联网搜索", description: "Claude 原生搜索走的接口地址（中转站时改它）", default: "https://api.anthropic.com" },
 
   // ── 网络 ──
   { name: "DIMENSIO_OUTBOUND_PROXY", area: "网络", description: "出站代理：auto（探测本机代理）/ off（直连）/ 代理地址", default: "auto" },

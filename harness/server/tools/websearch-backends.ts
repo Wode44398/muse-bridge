@@ -18,15 +18,22 @@
 //   gemini 需出海 2.9~5.9s，但会给一段合成答案，英文官方站命中更准。→ 次选
 //   ddg    免 key，需出海 1.3s，但会被限流且摘要质量差。→ 无 key 时的兜底
 //
-// 没接 Kimi 原生 $web_search（尽管 pi-websearch 把它列进 native 名单）：实测
-// api.kimi.com/coding/v1 确实认 builtin_function（finish_reason=tool_calls），但
-// Moonshot 那套协议要求把 tool_call 的 arguments 原样回传当作 tool result 再跑第
-// 二轮服务端才真执行，光第一轮就 6.8s，且产出是散文不是结构化 hits。相对 zhipu
-// 直连 0.6s 出结构化结果，是负收益。接口位置留着，将来要接照 SearchBackend 实现。
+// 2026-09-29 补「各家自带的原生搜索」（用同一把 key、同一个接口域名——Muse 这类按网站审批出站的环境里，
+// 批过模型接口就等于批过了搜索，不再为搜索另弹审核）。逐家实测（同日，本机经代理）：
+//   deepseek  Anthropic 兼容接口 /anthropic/v1/messages + web_search_20250305 服务端工具：2.8s，带来源 → 可用
+//             （OpenAI 兼容的 chat 接口与 Responses 接口都不支持搜索，文档写明 Ignored）
+//   qwen      DashScope 原生接口 enable_search + search_options.enable_source：6.3s，search_info 带来源 → 可用
+//             （OpenAI 兼容模式能搜但不回来源，所以走原生接口）
+//   kimi      Kimi for Coding 订阅的独立搜索接口 /coding/v1/search（kimi-cli 用的就是它）：6.4s，结构化结果 → 可用
+//             $web_search builtin_function 第一轮能搜，第二轮回传 arguments 恒报 "tokenization failed"（6 种写法都试过）
+//   mimo      chat/completions 的 tools 里放 {type:"web_search"}：服务端一轮搜完，annotations 带来源；
+//             前提是控制台「插件管理」开了联网搜索插件（没开回 400 "webSearchEnabled is false"），¥16/千次
+//   anthropic Claude 的 web_search_20250305 服务端工具（官方正式功能；同协议已在 deepseek 上跑通）
+//   智谱 / Gemini 保持原样（纯搜索 API / Google grounding）。
 
-import { resolveKey } from "../config.ts";
+import { defaultBaseUrl, resolveKey } from "../config.ts";
 
-export type BackendId = "zhipu" | "gemini" | "ddg";
+export type BackendId = "zhipu" | "kimi" | "deepseek" | "qwen" | "gemini" | "anthropic" | "mimo" | "ddg";
 
 /** 统一信封（照 Hermes 的 {title,url,description} 收敛成三字段）。 */
 export interface SearchHit {
@@ -51,6 +58,8 @@ export interface SearchFail {
   /** 换个时间重试有意义吗（429/5xx/超时/网络抖动 = 有）。 */
   retryable: boolean;
   error: string;
+  /** 要用户动手才能好的配置问题（例如「控制台没开联网搜索插件」）：别的后端顶上时也会附在结果里提醒一句。 */
+  hint?: string;
   /** 用户/上层中止 ≠ 上游故障：既不重试也不降级。 */
   aborted?: boolean;
 }
@@ -307,6 +316,276 @@ export const geminiBackend: SearchBackend = {
   },
 };
 
+// ── 通用：HTTP 调用 + 错误分类 ───────────────────────────────────────────────
+async function postJson(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  ms: number,
+  signal: AbortSignal | undefined,
+  budgetMs: number,
+): Promise<{ ok: true; data: any } | SearchFail> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+      signal: timeoutSignal(ms, signal, budgetMs),
+    });
+  } catch (e) {
+    return netFail(e, Boolean(signal?.aborted));
+  }
+  if (!res.ok) {
+    const raw = await res.text().catch(() => "");
+    return {
+      ok: false,
+      retryable: res.status === 429 || res.status >= 500,
+      error: `HTTP ${res.status}: ${raw.slice(0, 200).replace(/\s+/g, " ")}`,
+    };
+  }
+  try {
+    return { ok: true, data: await res.json() };
+  } catch {
+    return { ok: false, retryable: true, error: "unparseable JSON" };
+  }
+}
+
+function pushHit(hits: SearchHit[], seen: Set<string>, url: unknown, title: unknown, snippet: unknown): void {
+  const u = String(url ?? "").trim();
+  if (!u || seen.has(u) || hits.length >= MAX_HITS) return;
+  seen.add(u);
+  hits.push({ title: String(title ?? "").trim() || u, url: u, snippet: clip(String(snippet ?? "")) });
+}
+
+const SEARCH_SYSTEM = GEMINI_SYSTEM;
+const MODEL_SEARCH_MS = 25_000; // 经 LLM 的后端（先搜再写答案）比纯搜索 API 慢
+
+// ── Anthropic Messages 协议的 web_search 服务端工具（Claude 本家 + DeepSeek 的兼容接口）──
+function anthropicSearch(
+  id: "anthropic" | "deepseek",
+  label: string,
+  endpoint: () => string | undefined,
+  model: () => string,
+): SearchBackend {
+  return {
+    id,
+    label,
+    needsOutbound: id === "anthropic",
+    timeoutMs: MODEL_SEARCH_MS,
+    available: () => Boolean(resolveKey(id === "anthropic" ? "anthropic" : "openai") && endpoint()),
+    async search(query, signal, budgetMs) {
+      const key = resolveKey(id === "anthropic" ? "anthropic" : "openai");
+      const url = endpoint();
+      if (!key || !url) return { ok: false, retryable: false, error: `no ${id} key` };
+      const r = await postJson(
+        url,
+        { "x-api-key": key, "anthropic-version": "2023-06-01" },
+        {
+          model: model(),
+          max_tokens: 1024,
+          system: SEARCH_SYSTEM,
+          messages: [{ role: "user", content: query }],
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
+        },
+        this.timeoutMs,
+        signal,
+        budgetMs,
+      );
+      if (!r.ok) return r;
+      const blocks = (r.data?.content ?? []) as any[];
+      const hits: SearchHit[] = [];
+      const seen = new Set<string>();
+      for (const b of blocks) {
+        if (b?.type !== "web_search_tool_result" || !Array.isArray(b.content)) continue;
+        for (const x of b.content) pushHit(hits, seen, x?.url, x?.title, x?.page_age ? `（${x.page_age}）` : "");
+      }
+      // 答案取最后一个 search 之后的正文（前面那句往往是「我去搜一下」）
+      let lastSearch = -1;
+      blocks.forEach((b, i) => { if (b?.type === "web_search_tool_result") lastSearch = i; });
+      const answer = blocks
+        .slice(lastSearch + 1)
+        .filter((b) => b?.type === "text")
+        .map((b) => b.text)
+        .join("")
+        .trim();
+      if (!hits.length && !answer) return { ok: false, retryable: true, error: "empty result" };
+      return {
+        ok: true,
+        hits,
+        answer: answer || undefined,
+        detail: model(),
+        note: hits.length ? undefined : "本次没有执行真实搜索，以上可能来自模型自身知识；时效性事实请用 WebFetch 到官方页面复核。",
+      };
+    },
+  };
+}
+
+// DeepSeek：dimensio 里它是 provider "openai"（地址 api.deepseek.com）。只在地址确实是 DeepSeek 官方时启用。
+function deepseekEndpoint(): string | undefined {
+  const base = defaultBaseUrl("openai") ?? "";
+  try {
+    const u = new URL(base);
+    return u.hostname === "api.deepseek.com" ? `${u.origin}/anthropic/v1/messages` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+export const deepseekBackend = anthropicSearch(
+  "deepseek",
+  "DeepSeek 联网搜索",
+  deepseekEndpoint,
+  () => process.env.WEBSEARCH_DEEPSEEK_MODEL?.trim() || "deepseek-chat",
+);
+export const anthropicBackend = anthropicSearch(
+  "anthropic",
+  "Claude web_search",
+  () => `${(process.env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com").replace(/\/$/, "")}/v1/messages`,
+  () => process.env.WEBSEARCH_ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001",
+);
+
+// ── 通义：DashScope 原生接口的 enable_search ─────────────────────────────────
+// 兼容模式（/compatible-mode/v1）也能 enable_search，但不回来源；原生接口加 enable_source 才有 search_info。
+function dashscopeOrigin(): string | undefined {
+  const base = defaultBaseUrl("qwen") ?? "";
+  try {
+    const u = new URL(base);
+    return /dashscope/.test(u.hostname) ? u.origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+export const qwenBackend: SearchBackend = {
+  id: "qwen",
+  label: "通义联网搜索",
+  needsOutbound: false,
+  timeoutMs: MODEL_SEARCH_MS,
+  available: () => Boolean(resolveKey("qwen") && dashscopeOrigin()),
+  async search(query, signal, budgetMs) {
+    const key = resolveKey("qwen");
+    const origin = dashscopeOrigin();
+    if (!key || !origin) return { ok: false, retryable: false, error: "no qwen key" };
+    const model = process.env.WEBSEARCH_QWEN_MODEL?.trim() || "qwen-plus";
+    const r = await postJson(
+      `${origin}/api/v1/services/aigc/text-generation/generation`,
+      { authorization: `Bearer ${key}` },
+      {
+        model,
+        input: { messages: [{ role: "system", content: SEARCH_SYSTEM }, { role: "user", content: query }] },
+        parameters: {
+          result_format: "message",
+          enable_search: true,
+          search_options: { forced_search: true, enable_source: true, search_strategy: "turbo" },
+        },
+      },
+      this.timeoutMs,
+      signal,
+      budgetMs,
+    );
+    if (!r.ok) return r;
+    const out = r.data?.output ?? {};
+    const answer = String(out?.choices?.[0]?.message?.content ?? "").trim();
+    const hits: SearchHit[] = [];
+    const seen = new Set<string>();
+    for (const x of (out?.search_info?.search_results ?? []) as any[]) pushHit(hits, seen, x?.url, x?.title, x?.site_name);
+    if (!hits.length && !answer) return { ok: false, retryable: true, error: "empty result" };
+    return { ok: true, hits, answer: answer || undefined, detail: model };
+  },
+};
+
+// ── Kimi for Coding：订阅自带的搜索接口 ──────────────────────────────────────
+// 只有订阅端点（api.kimi.com/coding）有；开放平台（api.moonshot.cn）的 key 没有这个接口。
+function kimiSearchUrl(): string | undefined {
+  const base = (defaultBaseUrl("kimi") ?? "").replace(/\/$/, "");
+  return /api\.kimi\.com\/coding/.test(base) ? `${base}/search` : undefined;
+}
+export const kimiBackend: SearchBackend = {
+  id: "kimi",
+  label: "Kimi 搜索",
+  needsOutbound: false,
+  timeoutMs: 15_000,
+  available: () => Boolean(resolveKey("kimi") && kimiSearchUrl()),
+  async search(query, signal, budgetMs) {
+    const key = resolveKey("kimi");
+    const url = kimiSearchUrl();
+    if (!key || !url) return { ok: false, retryable: false, error: "no kimi key" };
+    const r = await postJson(
+      url,
+      { authorization: `Bearer ${key}` },
+      { text_query: query, limit: MAX_HITS, enable_page_crawling: false, timeout_seconds: 12 },
+      this.timeoutMs,
+      signal,
+      budgetMs,
+    );
+    if (!r.ok) return r;
+    const hits: SearchHit[] = [];
+    const seen = new Set<string>();
+    for (const x of (r.data?.search_results ?? []) as any[]) {
+      const when = x?.date ? `${x.date} · ` : "";
+      pushHit(hits, seen, x?.url, x?.title, `${when}${x?.snippet ?? ""}`);
+    }
+    if (!hits.length) return { ok: false, retryable: true, error: "no results" };
+    return { ok: true, hits };
+  },
+};
+
+// ── 小米 MiMo：chat 接口的 web_search 工具（服务端一轮搜完）──────────────────
+// 插件没开时每次都是秒回 400：记下来一段时间内不再打，免得每次搜索都白白先撞一下。
+const MIMO_OFF_MS = 30 * 60_000;
+let mimoOffUntil = 0;
+const MIMO_HINT = "小米原生搜索没用上：MiMo 控制台「插件管理」里还没开通联网搜索插件（开通后就会优先用它）";
+export const mimoBackend: SearchBackend = {
+  id: "mimo",
+  label: "小米 MiMo 联网搜索",
+  needsOutbound: false,
+  timeoutMs: MODEL_SEARCH_MS,
+  available: () => Boolean(resolveKey("mimo")),
+  async search(query, signal, budgetMs) {
+    const key = resolveKey("mimo");
+    if (!key) return { ok: false, retryable: false, error: "no mimo key" };
+    if (Date.now() < mimoOffUntil) return { ok: false, retryable: false, error: "web search plugin disabled", hint: MIMO_HINT };
+    const base = (defaultBaseUrl("mimo") ?? "https://api.xiaomimimo.com/v1").replace(/\/$/, "");
+    const model = process.env.WEBSEARCH_MIMO_MODEL?.trim() || "mimo-v2.6-flash";
+    const r = await postJson(
+      `${base}/chat/completions`,
+      { authorization: `Bearer ${key}` },
+      {
+        model,
+        messages: [{ role: "system", content: SEARCH_SYSTEM }, { role: "user", content: query }],
+        max_completion_tokens: 1024,
+        tools: [{ type: "web_search", force_search: true, max_keyword: 3, limit: MAX_HITS }],
+        tool_choice: "auto",
+      },
+      this.timeoutMs,
+      signal,
+      budgetMs,
+    );
+    if (!r.ok) {
+      if (/webSearchEnabled is false/i.test(r.error)) {
+        mimoOffUntil = Date.now() + MIMO_OFF_MS;
+        return { ok: false, retryable: false, error: "web search plugin disabled", hint: MIMO_HINT };
+      }
+      return r;
+    }
+    mimoOffUntil = 0;
+    const msg = r.data?.choices?.[0]?.message ?? {};
+    const answer = String(msg?.content ?? "").trim();
+    const hits: SearchHit[] = [];
+    const seen = new Set<string>();
+    for (const a of (msg?.annotations ?? []) as any[]) {
+      const c = a?.url_citation ?? a;
+      pushHit(hits, seen, c?.url, c?.title, c?.summary ?? c?.site_name);
+    }
+    if (!hits.length && !answer) return { ok: false, retryable: true, error: "empty result" };
+    return { ok: true, hits, answer: answer || undefined, detail: model };
+  },
+};
+
+/** 测试用：清掉「小米插件没开」的记忆。 */
+export function resetNativeSearchState(): void {
+  mimoOffUntil = 0;
+}
+
 // ── DuckDuckGo HTML（免 key 兜底）───────────────────────────────────────────
 // pi-websearch 的零配置兜底档，抄过来。没有 key 也能搜，但：会被限流、摘要质量
 // 一般，而且实测本机直连必死（10.7s fetch failed）、经代理才 1.3s 命中 10 条——
@@ -377,7 +656,16 @@ export const ddgBackend: SearchBackend = {
   },
 };
 
-export const ALL_BACKENDS: SearchBackend[] = [zhipuBackend, geminiBackend, ddgBackend];
+export const ALL_BACKENDS: SearchBackend[] = [
+  zhipuBackend,
+  kimiBackend,
+  deepseekBackend,
+  qwenBackend,
+  geminiBackend,
+  anthropicBackend,
+  mimoBackend,
+  ddgBackend,
+];
 
 export function backendById(id: string): SearchBackend | undefined {
   return ALL_BACKENDS.find((b) => b.id === id);

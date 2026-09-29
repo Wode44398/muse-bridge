@@ -15,13 +15,21 @@ import { WEB_CONTENT_NOTE } from "./untrusted.ts";
 // 每次结果都标明「这次是谁搜的」（同样抄 pi 的 TUI 提示）：agent 和人都能一眼分清
 // 「后端挂了」还是「确实没搜到」，而不是笼统地觉得这工具不可靠。
 
-/** provider 自带原生搜索的映射。Kimi 未接，原因见 websearch-backends.ts 顶部。 */
+/** provider 自带原生搜索的映射：当前会话用哪家，就先用哪家自己的搜索（同 key、同域名）。
+ *  "openai" 在目录里就是 DeepSeek（地址 api.deepseek.com；地址换成别家时 deepseek 后端自己不可用）。 */
 const NATIVE_BY_PROVIDER: Partial<Record<ProviderId, BackendId>> = {
   zhipu: "zhipu",
+  kimi: "kimi",
+  openai: "deepseek",
+  qwen: "qwen",
+  gemini: "gemini",
+  anthropic: "anthropic",
+  mimo: "mimo",
 };
 
-/** 默认优先级：先国内直连的纯搜索 API，再需要出海的，最后免 key 兜底。 */
-const DEFAULT_ORDER: BackendId[] = ["zhipu", "gemini", "ddg"];
+/** 默认优先级（原生那家之后的备胎）：先纯搜索 API（快、结构化），再经 LLM 的国内几家，再出海的，
+ *  小米排在按次计费的几家后面（要开插件、¥16/千次），最后免 key 兜底。 */
+const DEFAULT_ORDER: BackendId[] = ["zhipu", "kimi", "deepseek", "qwen", "gemini", "anthropic", "mimo", "ddg"];
 
 const TOTAL_BUDGET_MS = 45_000; // 整体预算：宁可少试一档也不拖死 agent loop
 const RETRY_BACKOFF_MS = 800;
@@ -106,7 +114,7 @@ export function webSearchAvailable(): boolean {
 }
 
 // ── 结果成型 ────────────────────────────────────────────────────────────────
-function render(label: string, hits: SearchHit[], answer?: string, note?: string): string {
+function render(label: string, hits: SearchHit[], answer?: string, note?: string, hints: string[] = []): string {
   const parts: string[] = [`[via ${label}]`];
   if (answer) parts.push(answer);
   if (hits.length) {
@@ -122,6 +130,7 @@ function render(label: string, hits: SearchHit[], answer?: string, note?: string
     parts.push("（该后端没有返回任何结果）");
   }
   if (note) parts.push(`（${note}）`);
+  for (const h of hints) parts.push(`（${h}）`);
   return parts.join("\n\n");
 }
 
@@ -151,7 +160,7 @@ export const webSearchTool: Tool = {
     if (!chain.length) {
       return fail(
         "unavailable",
-        "WebSearch has no usable backend (no ZHIPU_API_KEY / GEMINI_API_KEY, and DuckDuckGo is disabled). " +
+        "WebSearch has no usable backend (no model-provider key with built-in search, and DuckDuckGo is disabled). " +
           "Use WebFetch with a known URL instead.",
       );
     }
@@ -171,6 +180,7 @@ export const webSearchTool: Tool = {
 
     const deadline = Date.now() + TOTAL_BUDGET_MS;
     const tried: string[] = [];
+    const hints: string[] = [];
     let lastError = "unknown";
 
     for (const backend of chain) {
@@ -189,7 +199,7 @@ export const webSearchTool: Tool = {
         if (r.ok) {
           s.ok++;
           const label = r.detail ? `${backend.label} · ${r.detail}` : backend.label;
-          const text = render(label, r.hits, r.answer, r.note);
+          const text = render(label, r.hits, r.answer, r.note, hints);
           cacheSet(ckey, { at: Date.now(), text, label: backend.label, count: r.hits.length });
           if (tried.length) console.log(`[websearch] ${backend.id} 成功（已越过：${tried.join(", ")}），${ms}ms`);
           return {
@@ -202,6 +212,7 @@ export const webSearchTool: Tool = {
 
         s.fail++;
         s.lastError = r.error;
+        if (r.hint && !hints.includes(r.hint)) hints.push(r.hint);
         lastError = `${backend.id}: ${r.error}`;
         if (r.aborted) return fail("aborted", "WebSearch aborted.");
         console.warn(`[websearch] ${backend.id} 失败（${ms}ms）：${r.error}`);
@@ -220,8 +231,9 @@ export const webSearchTool: Tool = {
       "search failed",
       `WebSearch failed on all backends (tried: ${tried.join(", ") || chain[0].id}). Last error — ${lastError}. ` +
         (allNeedOutbound
-          ? "所有可用后端都需要出海，出口代理不通时会整批失败：检查代理，或配 ZHIPU_API_KEY 启用国内直连后端。"
-          : "This is usually a temporary upstream issue; retry once, or use WebFetch on a known URL."),
+          ? "所有可用后端都需要出海，出口代理不通时会整批失败：检查代理，或配一家国内厂商的 key（智谱 / Kimi / DeepSeek / 通义 / 小米都自带搜索）。"
+          : "This is usually a temporary upstream issue; retry once, or use WebFetch on a known URL.") +
+        (hints.length ? ` ${hints.join("；")}` : ""),
     );
   },
 };
