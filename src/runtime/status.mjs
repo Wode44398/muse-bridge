@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { outboundHint } from './net-proxy.mjs';
+import { activeToken } from './claude-account.mjs';
 
 let _statusPath = '';
 // Rate limits are account-wide (everyone shares one upstream Claude subscription),
@@ -243,8 +244,9 @@ export function classifyError(raw, kind) {
     return { kind: 'network', title: '出海请求被网关拒绝（不是账号问题）', hint: '这是出口 IP 被拒，不是 token 失效。' + outboundHint('403 Request not allowed') };
   }
   if (k === 'authentication_failed' || /not logged in|unauthorized|\b401\b|oauth|invalid api key|authentication failed/.test(s)) {
-    // 服务端从没配过认证（新装的服务器最常见）和配过但失效，是两种处理办法
-    const configured = Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY);
+    // 服务端从没配过认证（新装的服务器最常见）和配过但失效，是两种处理办法。
+    // 控制台「Claude 账号」里加的令牌不进环境变量（每次 query 现注），也要算「配过」——否则令牌被撤销时会误报「还没配置」
+    const configured = Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || activeToken());
     return configured
       ? { kind: 'auth', title: '登录已失效', hint: '令牌过期或被撤销：在你自己的电脑上重新运行 claude setup-token，把新令牌更新到「设置 → 连接 → 服务端控制台 → Claude 账号」（在 Muse 上部署的，也可以让 Muse 运行 set-claude-token）。' }
       : { kind: 'auth', title: '服务端还没配置 Claude 认证', hint: '在你自己的电脑上运行 claude setup-token 生成订阅令牌，然后在「设置 → 连接 → 服务端控制台 → Claude 账号」里添加；在 Muse 上部署的，也可以把令牌发给 Muse，让它运行 set-claude-token。' };

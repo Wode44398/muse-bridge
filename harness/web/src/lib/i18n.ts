@@ -1,4 +1,4 @@
-// 界面语言：简体中文（默认）/ English。与 bridge 的 web/src/lib/i18n.js 同一套约定、同一份全局字典：
+// 界面语言：简体中文 / English（没存过偏好时跟浏览器语言）。与 bridge 的 web/src/lib/i18n.js 同一套约定、同一份全局字典：
 //   t('新建对话')、t('已选 {n} 项', { n })、tc('语境', '中文')、tr(运行时文案)
 // 中文原文就是键；英文在 src/i18n/en/*.ts。嵌进 bridge 时由 bridge 的入口统一加载两份字典，
 // 独立运行（8799 / dimensio 壳）时由本目录 main.ts 调 initI18n() 只加载本项目的字典。
@@ -19,7 +19,11 @@ export function langPref(): "zh" | "en" {
   try {
     const q = new URLSearchParams(location.search).get("lang");
     if (q === "zh" || q === "en") return q;
-    return localStorage.getItem(KEY) === "en" ? "en" : "zh";
+    const v = localStorage.getItem(KEY);
+    if (v === "en" || v === "zh") return v;
+    // 没存过偏好时跟浏览器走：语言列表里有中文就用中文，否则英文（与 bridge 的 web/src/lib/i18n.js 同一规则）
+    const langs = navigator.languages?.length ? navigator.languages : [navigator.language || ""];
+    return langs.some((l) => /^zh/i.test(l)) ? "zh" : "en";
   } catch {
     return "zh";
   }

@@ -2,7 +2,7 @@
   // Claude 账号切换（failover / 额度池）：整个 bridge 的 Claude Agent SDK 用哪个订阅。
   // 切换即时全局生效；两号共享会话（都落 ~/.claude），切号可无缝续同一条对话。
   import { api } from '../../lib/api.js';
-  import { sa, loadAccounts, saToast, saConfirm } from '../../lib/serverAdmin.svelte.js';
+  import { sa, loadAccounts, saToast, saConfirm, accLabel } from '../../lib/serverAdmin.svelte.js';
   import { t, tr } from '../../lib/i18n.js';
 
   $effect(() => { sa.tick; loadAccounts(); });
@@ -12,19 +12,13 @@
 
   // 脚注整句一个键：键里用 **加粗**、`代码` 标出行内的 <b> / <code>，渲染时切段（中文 DOM 与原来一致）
   const rich = (s) => s.split(/(\*\*[^*]+\*\*|`[^`]+`)/).filter(Boolean);
-  // 服务端自动起的账号名（claude-account.mjs 的「默认账号」「账号 N」）跟着界面语言显示；管理员自己起的名字原样
-  const AUTO_LABEL = /^(?:默认账号|账号 (\d+))$/;   // i18n-ignore 匹配服务端数据
-  const accLabel = (l) => {
-    const m = AUTO_LABEL.exec(l || '');
-    return !m ? l : m[1] ? t('账号 {n}', { n: m[1] }) : t('默认账号');
-  };
 
   async function activate(a) {
     try { const r = await api.post('/api/admin/claude-account/active', { id: a.id }); if (r?.error) throw new Error(r.error); saToast(t('已切换到 {name}', { name: accLabel(a.label) })); loadAccounts(); }
     catch (e) { saToast(tr(e?.message) || t('切换失败'), true); }
   }
   function openAdd() { editModal = { label: '', token: '', isNew: true }; }
-  function openEdit(a) { editModal = { id: a.id, label: a.label, token: '', isNew: false, hasToken: a.hasToken, tokenTail: a.tokenTail }; }
+  function openEdit(a) { editModal = { id: a.id, label: accLabel(a.label), token: '', isNew: false, hasToken: a.hasToken, tokenTail: a.tokenTail }; }
   async function saveModal() {
     if (busy) return;
     const m = editModal;

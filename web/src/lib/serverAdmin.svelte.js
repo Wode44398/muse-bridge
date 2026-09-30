@@ -5,6 +5,13 @@
 import { api } from './api.js';
 import { t, locale } from './i18n.js';
 
+// 服务端自动起的 Claude 账号名（claude-account.mjs 的「默认账号」「账号 N」）跟着界面语言显示；管理员自己起的名字原样
+const AUTO_LABEL = /^(?:默认账号|账号 (\d+))$/;   // i18n-ignore 匹配服务端数据
+export function accLabel(l) {
+  const m = AUTO_LABEL.exec(l || '');
+  return !m ? l : m[1] ? t('账号 {n}', { n: m[1] }) : t('默认账号');
+}
+
 export const sa = $state({
   page: 'overview',      // overview|active|users|policy|sessions|routines|accounts|control
   tick: 0,               // 手动刷新脉冲：页面本地数据在 $effect 里依赖它重拉

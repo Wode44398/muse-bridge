@@ -3,7 +3,8 @@
 #
 # 安装 / 修复（可以重复跑；不给的选项沿用上次的选择）：
 #   bash deploy/muse/bootstrap.sh install [--agents claude|dimensio|claude,dimensio] [--solo|--multi]
-#                                         [--domain 主机名 --tunnel-token 令牌] [--claude-token 令牌]
+#                                         [--domain 主机名 --tunnel-token 令牌] [--claude-token 令牌] [--lang en|zh]
+#   --lang：结果块用哪种语言打印（用户不说中文就给 en）；不给沿用上次，默认 zh
 #   install / update / set-agents 要跑几分钟：它们自己转到后台（命令工具超时也打断不了），前台最多等 4 分半、
 #   只打印进度，完了打印结果块；没等完就运行：
 #   wait                            接着等正在跑的安装 / 更新，结束时打印结果块
@@ -17,6 +18,7 @@
 #   set-domain 主机名 隧道令牌       换成自己域名的固定地址（Cloudflare 命名隧道）
 #   use-quick-tunnel                换回 trycloudflare 临时地址
 #   reset-token                     重新生成管理员访问令牌（旧令牌作废）
+#   set-lang en|zh                  结果块改用英文 / 中文打印
 # 更新：
 #   check-update                    看发布频道上有没有新版本
 #   update [--now] [地址 sha256]     下载新版本、构建好，等没人在聊时再切换（--now 立即切）
@@ -72,6 +74,7 @@ AGENTS="$(prev AGENTS)"
 USERS_MODE="$(prev USERS_MODE)"
 TUNNEL_MODE="$(prev TUNNEL_MODE)"; TUNNEL_MODE="${TUNNEL_MODE:-quick}"
 PUBLIC_HOSTNAME="$(prev PUBLIC_HOSTNAME)"
+UI_LANG="$(prev UI_LANG)"; UI_LANG="${UI_LANG:-zh}"
 HOOK_NOTE=""
 
 http_code() { local c; c="$(curl -s -o /dev/null -w '%{http_code}' "$@" || true)"; echo "${c:-000}"; }
@@ -106,20 +109,55 @@ running_dir() {
   fi
   [ -z "$d" ] || echo "$d"
 }
-agents_label() { case "$1" in claude) echo '只有 Claude Code' ;; dimensio) echo '只有 dimensio' ;; *) echo 'Claude Code + dimensio' ;; esac; }
+agents_label() {
+  if [ "$UI_LANG" = en ]; then case "$1" in claude) echo 'Claude Code only' ;; dimensio) echo 'dimensio only' ;; *) echo 'Claude Code + dimensio' ;; esac; return; fi
+  case "$1" in claude) echo '只有 Claude Code' ;; dimensio) echo '只有 dimensio' ;; *) echo 'Claude Code + dimensio' ;; esac
+}
 # 服务端自己报告的 agent 名单（验收用：跟用户选的对得上才算装对）
 served_agents() { curl -s --noproxy '*' --max-time 5 "http://127.0.0.1:$PORT/api/auth" 2>/dev/null | jq -r '(.agents // []) | join(",")' 2>/dev/null || true; }
 # 管理员令牌只在第一次安装 / reset-token 时生成一次。明文暂存在这里（root 0600），直到用户用它登录成功
 # （heal.sh 看到管理员会话就删）——免得 Muse 的命令工具超时、没看见结果块，令牌就永远丢了。
 TOKEN_PENDING="$OPS/admin-token.pending"
 
-# 统一的结果块：Muse 原样转给用户；管理员令牌在用户用它登录成功之前一直显示
+# 放行网站的结果（allow_sites 记下，结果块报没放行的；一行一个「站点 ok|denied|pending」）
+SITES_STATUS="$OPS/sites-status"
+sites_summary() {   # 没放行 / 被拒的站点，空格分隔；文件不存在（旧版本装的）就什么都不输出
+  [ -f "$SITES_STATUS" ] || return 0
+  awk '$2 != "ok" { printf "%s%s(%s)", (n++ ? " " : ""), $1, $2 }' "$SITES_STATUS"
+}
+
+# 统一的结果块：Muse 原样转给用户；管理员令牌在用户用它登录成功之前一直显示。UI_LANG=en 时整块英文
 result_block() {
-  local token="${1:-}" url lc pc st run cur served
+  local token="${1:-}" url lc pc st run cur served sites claude_ok=0 ok=1
   [ -n "$token" ] || token="$(cat "$TOKEN_PENDING" 2>/dev/null || true)"
   url="$(public_url)"; lc="$(local_code)"; pc="$(public_code)"; served="$(served_agents)"
   run="$(running_dir)"; cur="$(readlink -f "$RELS/current" 2>/dev/null || true)"
-  st="正常"; { [ "$lc" = 200 ] && { [ "$pc" = 200 ] || [ "$LOCAL_ONLY" = 1 ]; }; } || st="有问题（看下面各项，对照 MUSE.md「故障排查」）"
+  sites="$(sites_summary)"
+  { [ "$lc" = 200 ] && { [ "$pc" = 200 ] || [ "$LOCAL_ONLY" = 1 ]; }; } || ok=0
+  grep -qE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)=.' /etc/bridge/bridge.env 2>/dev/null && claude_ok=1
+  if [ "$UI_LANG" = en ]; then
+    st="OK"; [ "$ok" = 1 ] || st="PROBLEM (check the lines below against Troubleshooting in MUSE.md)"
+    cat <<EOF
+
+==================== MUSE-BRIDGE RESULT ====================
+Status          $st
+Public URL      ${url:-(not available yet)}$( [ "$TUNNEL_MODE" = named ] && echo ' (your own domain, permanent)' || echo ' (temporary; changes when the VM restarts)')
+Admin token     ${token:-(already used to sign in, so it is no longer shown; run reset-token if it is lost)}$( [ -n "$token" ] && echo ' (give it to the user to keep safe; hidden after the first sign-in)')
+Agents          $(agents_label "${AGENTS:-claude,dimensio}") (server reports: ${served:-not up yet})
+Users           $( [ "$USERS_MODE" = solo ] && echo 'just me (sign-up off)' || echo 'multi-user (invite codes on)')
+Version         $( [ -n "$run" ] && version_of "$run" || echo 'not running')$( [ -n "$run" ] && [ -n "$cur" ] && [ "$run" != "$cur" ] && echo " ($(version_of "$cur") is installed; switches when nobody is chatting)")
+Services        $(svc_states)
+Local health    $lc
+Public health   $pc
+Claude token    $( [ "$claude_ok" = 1 ] && echo set || echo 'not set (or added in the admin console under Claude accounts)')
+Sites           ${sites:-all approved}$( [ -n "$sites" ] && echo ' -> not approved yet: with the user present, run allow-sites and have them choose "Always allow this site"')
+Update channel  ${CHANNEL:-not set (manual updates only)}; auto-update $( [ "$AUTO_UPDATE" = 1 ] && echo on || echo off)
+Watchdog hook   ${HOOK_NOTE:-script $( [ -f "$HOOK_DIR/bridge-watchdog.sh" ] && echo 'in place' || echo missing)}
+============================================================
+EOF
+    return
+  fi
+  st="正常"; [ "$ok" = 1 ] || st="有问题（看下面各项，对照 MUSE.md「故障排查」）"
   cat <<EOF
 
 ==================== MUSE-BRIDGE 结果 ====================
@@ -132,7 +170,8 @@ agent       $(agents_label "${AGENTS:-claude,dimensio}")（服务端报告：${s
 服务        $(svc_states)
 本地健康    $lc
 公网健康    $pc
-Claude 令牌 $(grep -qE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)=.' /etc/bridge/bridge.env 2>/dev/null && echo 已配置 || echo '未配置（也可能已在控制台「Claude 账号」里加过）')
+Claude 令牌 $( [ "$claude_ok" = 1 ] && echo 已配置 || echo '未配置（也可能已在控制台「Claude 账号」里加过）')
+网站放行    ${sites:-全部已放行}$( [ -n "$sites" ] && echo '（还没放行：用户在场时跑 allow-sites，让他选「总是允许此站点」）')
 更新频道    ${CHANNEL:-未设置（只能手动给地址更新）}；自动更新 $( [ "$AUTO_UPDATE" = 1 ] && echo 开 || echo 关)
 看门狗 hook ${HOOK_NOTE:-脚本 $( [ -f "$HOOK_DIR/bridge-watchdog.sh" ] && echo 已就位 || echo 缺失)}
 ==========================================================
@@ -204,6 +243,7 @@ TUNNEL_MODE=$TUNNEL_MODE
 PUBLIC_HOSTNAME=$PUBLIC_HOSTNAME
 CHANNEL=$CHANNEL
 AUTO_UPDATE=$AUTO_UPDATE
+UI_LANG=$UI_LANG
 EOF
 }
 
@@ -410,6 +450,7 @@ cmd_install() {
       --tunnel-token) tunnel_token="$2"; shift 2 ;;
       --claude-token) claude_token="$2"; shift 2 ;;
       --port) PORT="$2"; shift 2 ;;
+      --lang) case "$2" in en|zh) UI_LANG="$2" ;; *) die "--lang 只认 en 或 zh" ;; esac; shift 2 ;;
       --switch) mode="$2"; shift 2 ;;
       *) die "install 不认识的选项：$1" ;;
     esac
@@ -483,6 +524,9 @@ cmd_install() {
   cp /etc/systemd/system/bridge.service "$OPS/systemd/bridge.service"
   # 固定域名：分享链接用完整地址；临时地址：不写（前端按当前地址拼）
   if [ "$TUNNEL_MODE" = named ]; then set_bridge_env BRIDGE_PUBLIC_ORIGIN "https://$PUBLIC_HOSTNAME"; else set_bridge_env BRIDGE_PUBLIC_ORIGIN ""; fi
+  # Claude Code 的遥测 / 错误上报（datadoghq.com、sentry 等）在这台 VM 上每个站点都要用户批一次审核卡，
+  # 用户看到「允许 Muse 与 http-intake.logs…datadoghq.com 分享信息？」只会困惑。关掉这些非必要流量
+  set_bridge_env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC 1
 
   say "装隧道与运维件到 $OPS"
   write_muse_env
@@ -551,7 +595,7 @@ cmd_wait() {
   if [ "$rc" = 0 ]; then
     HOOK_NOTE="$(cat "$OPS/last-hook-note" 2>/dev/null || true)"
     # 第一次安装时本进程启动那会儿 muse.env 还不存在：后台装完后重读一遍用户的选择，结果块才不会按默认值乱报
-    AGENTS="$(prev AGENTS)"; USERS_MODE="$(prev USERS_MODE)"
+    AGENTS="$(prev AGENTS)"; USERS_MODE="$(prev USERS_MODE)"; UI_LANG="$(prev UI_LANG)"; UI_LANG="${UI_LANG:-zh}"
     TUNNEL_MODE="$(prev TUNNEL_MODE)"; TUNNEL_MODE="${TUNNEL_MODE:-quick}"; PUBLIC_HOSTNAME="$(prev PUBLIC_HOSTNAME)"
     result_block ""
   else
@@ -629,18 +673,30 @@ allow_sites() {
   else mapfile -t sites < <(configured_sites); fi
   mapfile -t sites < <(printf '%s\n' "${sites[@]}" | grep -v '^$' | awk '!seen[$0]++')
   [ ${#sites[@]} -gt 0 ] || { echo "没有要放行的网站。"; return 0; }
-  say "放行要用到的网站（${#sites[@]} 个）：Muse 弹出「允许 Muse 与 … 分享信息？」时，请选下拉里的「总是允许此站点」"
+  # 卡片可能出现在输入框上方，也可能在右侧「待审核 / Needs review」面板里（后台跑的安装触发的多半在那里）
+  say "放行要用到的网站（${#sites[@]} 个）：Muse 弹出「允许 Muse 与 … 分享信息？」时（输入框上方或右侧「待审核」面板），请选下拉里的「总是允许此站点」"
   for s in "${sites[@]}"; do
     r="$(curl -s -o /dev/null -x "$PROXY" --max-time "$wait" -w '%{http_connect} %{http_code}' "https://$s/" 2>/dev/null || true)"
     conn="${r%% *}"; code="${r##* }"
     # 以代理对 CONNECT 的答复为准：200 = 放行了（之后网站本身回不回、证书对不对是另一回事），403 = 拒绝，没答复 = 在等审核
-    if [ "$conn" = 200 ] && [ -n "$code" ] && [ "$code" != 000 ]; then echo "  ✓ $s 已放行"
-    elif [ "$conn" = 200 ]; then echo "  ✓ $s 已放行（但网站本身没正常响应，检查一下地址对不对）"
-    elif [ "$conn" = 403 ]; then echo "  ✗ $s 被拒绝（之后用到它的功能会失败；想放行就在 Muse 设置 → 权限 → 网站里改，或重跑这条命令再批）"
-    else echo "  … $s 没等到批准（${wait} 秒）。之后第一次用到时还会弹审核；也可以稍后重跑：bash $OPS/bootstrap.sh allow-sites $s"; fi
+    if [ "$conn" = 200 ] && [ -n "$code" ] && [ "$code" != 000 ]; then echo "  ✓ $s 已放行"; site_mark "$s" ok
+    elif [ "$conn" = 200 ]; then echo "  ✓ $s 已放行（但网站本身没正常响应，检查一下地址对不对）"; site_mark "$s" ok
+    elif [ "$conn" = 403 ]; then echo "  ✗ $s 被拒绝（之后用到它的功能会失败；想放行就在 Muse 设置 → 权限 → 网站里改，或重跑这条命令再批）"; site_mark "$s" denied
+    else echo "  … $s 没等到批准（${wait} 秒）。之后第一次用到时还会弹审核、对话会停在「等待模型回复」；用户在场时重跑：bash $OPS/bootstrap.sh allow-sites $s"; site_mark "$s" pending; fi
   done
 }
+# 记下某站点的放行结果（同一站点只留最新一条），给结果块的「网站放行」一行用
+site_mark() {
+  install -d -m 0770 "$OPS"
+  { grep -v "^$1 " "$SITES_STATUS" 2>/dev/null || true; echo "$1 $2"; } > "$SITES_STATUS.new"
+  mv -f "$SITES_STATUS.new" "$SITES_STATUS"
+}
 cmd_allow_sites() { allow_sites "$@"; }
+cmd_set_lang() {
+  case "${1:-}" in en|zh) UI_LANG="$1" ;; *) die "用法：set-lang en|zh" ;; esac
+  [ -f "$OPS/muse.env" ] || die "还没装过，先跑 install"
+  write_muse_env; result_block ""
+}
 
 cmd_set_api_key() {
   local key="${1:-}" val="${2:-}" f="$DATA/dimensio/.env"
@@ -788,6 +844,7 @@ case "$sub" in
   set-claude-token) cmd_set_claude_token "$@" ;;
   set-api-key) cmd_set_api_key "$@" ;;
   allow-sites) cmd_allow_sites "$@" ;;
+  set-lang) cmd_set_lang "$@" ;;
   set-agents) cmd_set_agents "$@" ;;
   set-users) cmd_set_users "$@" ;;
   set-domain) cmd_set_domain "$@" ;;
@@ -798,6 +855,6 @@ case "$sub" in
   switch-now) cmd_switch_now ;;
   rollback) cmd_rollback ;;
   auto-update) cmd_auto_update "$@" ;;
-  -h|--help|help) sed -n '2,25p' "$0" ;;
+  -h|--help|help) sed -n '2,28p' "$0" ;;
   *) die "不认识的子命令：$sub（help 看用法）" ;;
 esac

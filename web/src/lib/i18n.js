@@ -26,14 +26,14 @@ function storedPref() {
   try { const v = localStorage.getItem(KEY); return v === 'en' || v === 'zh' ? v : null; } catch { return null; }
 }
 
-// 公开页（/w/ 只读分享、/c/ 聊天快照）的访客多半是外人：没存过偏好时跟浏览器走——
-// 浏览器语言列表里一个中文都没有才用英文（与服务端分享密码页 share-gate 的 pageLang 同一规则）。
-function publicPageDefault() {
+// 没存过偏好时跟浏览器走：浏览器语言列表里有中文就用中文，一个都没有就用英文
+// （与服务端分享密码页 share-gate 的 pageLang 同一规则）。Muse Bridge 是给所有 Muse 用户的公开产品，
+// 不能像自用的 bridge 那样默认中文——英文用户装完打开第一眼就是一屏中文。
+function browserDefault() {
   try {
-    if (!/^\/(w|c)\/[^/?#]+/.test(location.pathname)) return null;
     const langs = navigator.languages?.length ? navigator.languages : [navigator.language || ''];
     return langs.some((l) => /^zh/i.test(l)) ? 'zh' : 'en';
-  } catch { return null; }
+  } catch { return 'zh'; }
 }
 
 export function langPref() {
@@ -41,7 +41,7 @@ export function langPref() {
     const q = new URLSearchParams(location.search).get('lang');   // 调试/截图：?lang=en 临时覆盖
     if (q === 'zh' || q === 'en') return q;
   } catch {}
-  return storedPref() || publicPageDefault() || 'zh';
+  return storedPref() || browserDefault();
 }
 
 /** 当前界面语言：'zh' | 'en'（启动后不变） */
@@ -63,7 +63,7 @@ export async function initI18n() {
     G.pats = null;
   }
   // 原生壳（安卓通知/悬浮胶囊、桌面壳托盘/系统通知）跟着网页存下的偏好走；?lang= 临时覆盖不外溢到原生侧
-  const saved = storedPref() || 'zh';
+  const saved = storedPref() || browserDefault();
   try { window.AndroidStore?.setLang?.(saved); } catch {}
   try { window.BridgeDesktop?.setLang?.(saved); } catch {}
 }

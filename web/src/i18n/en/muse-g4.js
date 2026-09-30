@@ -29,4 +29,7 @@ export default {
   '切换失败：连不上服务器，请重试': 'Couldn’t update: can’t reach the server. Try again.',
   '运行失败：连不上服务器，请重试': 'Couldn’t run: can’t reach the server. Try again.',
   '删除失败：连不上服务器，请重试': 'Couldn’t delete: can’t reach the server. Try again.',
+  // —— Claude 认证报错提示（runtime/status.mjs 里 Muse 版的 hint，跟 server.js 里上游那两句不同）——
+  '令牌过期或被撤销：在你自己的电脑上重新运行 claude setup-token，把新令牌更新到「设置 → 连接 → 服务端控制台 → Claude 账号」（在 Muse 上部署的，也可以让 Muse 运行 set-claude-token）。': 'The token expired or was revoked. On your own computer, run claude setup-token again and update the token in Settings → Connection → Admin console → Claude accounts. (On Muse, you can also ask Muse to run set-claude-token.)',
+  '在你自己的电脑上运行 claude setup-token 生成订阅令牌，然后在「设置 → 连接 → 服务端控制台 → Claude 账号」里添加；在 Muse 上部署的，也可以把令牌发给 Muse，让它运行 set-claude-token。': 'On your own computer, run claude setup-token to get a subscription token, then add it in Settings → Connection → Admin console → Claude accounts. (On Muse, you can also send the token to Muse and ask it to run set-claude-token.)',
 };

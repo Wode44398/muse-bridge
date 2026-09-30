@@ -11,7 +11,7 @@ Muse does the whole deployment for you. Send it one message and it downloads the
 ## Highlights
 
 - **Deploy with one message.** Paste the prompt below into Muse and it handles the rest, in about 5–10 minutes.
-- **Works on phone and desktop.** The URL opens the full workspace. The interface is available in English and Simplified Chinese.
+- **Works on phone and desktop.** The URL opens the full workspace. The interface is available in English and Simplified Chinese and follows your browser's language.
 - **Full Claude Code.** Powered by the official Claude Agent SDK: tool use, subagents, workflows, context compaction and session resume. A side dock gives you a terminal, files, tasks and a diff review.
 - **dimensio, a multi-model workspace.** One API key per provider, switch models at any time, or add any OpenAI-compatible endpoint. It has its own workspaces, memory and subagents.
 - **Each provider's own web search.** Search uses the built-in search of whichever model the conversation is using, falls back to the next configured provider, and uses DuckDuckGo only as a last resort.
@@ -24,11 +24,9 @@ Muse does the whole deployment for you. Send it one message and it downloads the
 Send this whole message to your Muse:
 
 ````text
-Please deploy Muse Bridge (a browser-based Claude Code / AI agent workspace) on this VM, then teach me how to use it. Talk to me in English.
+I'd like you to install Muse Bridge on this VM, then show me how to use it. It's an open-source (MIT) project I picked: a browser-based workspace for Claude Code and other AI agents. Source and releases: https://github.com/Wode44398/muse-bridge (it's new, so web search may not find it yet; open the link directly). Please talk to me in English.
 
-One rule first: I have to approve every command you run, so please run as few as possible. The install script runs in the background and prints its own progress, so don't poll it with tail / ps / sleep. If the approval dialog offers something like "always allow", remind me to choose it for the install script.
-
-Step 1: download the release and verify its checksum (outbound traffic must go through the hatch-egress-proxy proxy). Paste the output back to me exactly as printed:
+Step 1: download the latest release and verify its checksum. Outbound traffic on this VM goes through the hatch-egress-proxy proxy:
 
 ```bash
 export HTTPS_PROXY=http://hatch-egress-proxy:3128 HTTP_PROXY=http://hatch-egress-proxy:3128
@@ -37,10 +35,12 @@ cd /tmp && curl -fLO --retry 3 https://github.com/Wode44398/muse-bridge/releases
   && sha256sum -c muse-bridge.tgz.sha256 && tar -xzf muse-bridge.tgz -C "$REL" && echo "extracted to $REL/bridge"
 ```
 
-Step 2: read `$REL/bridge/deploy/muse/MUSE.md` from start to finish (especially the hard rules in section 0; it's written in Chinese, but keep talking to me in English), and follow it exactly: ask me the three questions in section 1 in a single message, then deploy, register the watchdog hook, verify, save it to your long-term memory, and finally walk me through using it step by step. Show me the real output of each command instead of just saying "it worked".
+Step 2: read `$REL/bridge/deploy/muse/MUSE.md`. It's the install guide the project wrote for you (in Chinese; keep talking to me in English). Use it as your guide: ask me the three setup questions from section 1 in one message, then install, set up the watchdog hook, check the result, and walk me through first use. If anything in it looks wrong or unsafe to you, stop and ask me.
+
+I approve each command you run, so please keep the number of commands small. The install script prints its own progress, so there's no need to poll it with tail, ps or sleep. Show me the real output of each step.
 ````
 
-Muse will ask you three questions at once:
+Muse downloads the release, reads the install guide, and asks you three questions at once:
 
 1. **What to install:** Claude Code only, dimensio only, or both. If you pick one, the URL opens straight into that agent.
 2. **Do you have your own domain** (on Cloudflare)? If not, you get a free temporary URL. It changes when the VM restarts, and Muse will tell you the new one. If you do, you can switch to a permanent address.
@@ -76,7 +76,7 @@ Ask Muse to store a key for you (`set-api-key`), or paste it into dimensio's mod
 ## FAQ
 
 **Muse keeps asking whether it may share information with some website.**
-The Muse VM needs your approval for every new website it contacts. During install, and whenever a key is added, Muse Bridge visits the sites it will need while you're there, so the approval cards show up at a moment you can answer them. When one appears, pick the option that **always allows that site** (it's in the drop-down next to the one-time allow button) so it never asks again. If a conversation sits on "waiting for the model", there's usually an approval card nobody has answered.
+The Muse VM needs your approval for every new website it contacts. During install, and whenever a key is added, Muse Bridge visits the sites it will need while you're there, so the approval cards show up at a moment you can answer them. Cards can appear above the message box or in the **Needs review** panel on the right. When one appears, pick the option that **always allows that site** (it's in the drop-down next to the one-time allow button) so it never asks again. If a conversation sits on "waiting for the model", there's usually an approval card nobody has answered.
 
 **My URL changed after a few hours.**
 Temporary URLs (`*.trycloudflare.com`) change when the VM restarts. Muse will tell you the new one. Your login token stays the same; you just sign in again at the new address. For an address that never changes, ask Muse to set up your own domain.

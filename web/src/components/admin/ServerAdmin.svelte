@@ -7,7 +7,7 @@
   import { ui } from '../../lib/state.svelte.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { t, tc, tr } from '../../lib/i18n.js';
-  import { sa, loadOverview, loadLimits, loadActive, loadUsers, loadAccounts, liveGens, saToastState, saConfirmState, saConfirmSettle } from '../../lib/serverAdmin.svelte.js';
+  import { sa, loadOverview, loadLimits, loadActive, loadUsers, loadAccounts, accLabel, liveGens, saToastState, saConfirmState, saConfirmSettle } from '../../lib/serverAdmin.svelte.js';
   import SaOverview from './SaOverview.svelte';
   import SaActive from './SaActive.svelte';
   import SaUsers from './SaUsers.svelte';
@@ -86,7 +86,7 @@
     policy: t('注册开关 · 默认额度 · 全服并发'),
     sessions: t('预览任意用户的对话，可代发续聊'),
     routines: t('各用户的定时触发一览'),
-    accounts: activeAcct ? t('当前：{label}', { label: activeAcct.label }) : '',
+    accounts: activeAcct ? t('当前：{label}', { label: accLabel(activeAcct.label) }) : '',
     control: sa.scriptAvailable ? t('进程 · 开机自启') : sa.supervisor ? t('由 {name} 托管 · 资源 · 日志', { name: sa.supervisor }) : t('资源 · 日志'),
   }[sa.page] || '');
 </script>
@@ -109,7 +109,7 @@
             <span class="nlab">{p.label}</span>
             {#if p.key === 'active' && liveN}<span class="npill green">{liveN}</span>{/if}
             {#if p.key === 'users' && sa.users.length}<span class="npill">{sa.users.length}</span>{/if}
-            {#if p.key === 'accounts' && activeAcct}<span class="ntag sa-trunc">{tr(activeAcct.label)}</span>{/if}
+            {#if p.key === 'accounts' && activeAcct}<span class="ntag sa-trunc">{accLabel(activeAcct.label)}</span>{/if}
           </button>
         {/each}
       </nav>
