@@ -150,7 +150,7 @@ Services        $(svc_states)
 Local health    $lc
 Public health   $pc
 Claude token    $( [ "$claude_ok" = 1 ] && echo set || echo 'not set (or added in the admin console under Claude accounts)')
-Sites           ${sites:-all approved}$( [ -n "$sites" ] && echo ' -> not approved yet: with the user present, run allow-sites and have them choose "Always allow this site"')
+Sites           $( [ -f "$SITES_STATUS" ] || echo 'not checked yet (with the user present, run allow-sites once)')$( [ -f "$SITES_STATUS" ] && echo "${sites:-all approved}")$( [ -n "$sites" ] && echo ' -> not approved yet: with the user present, run allow-sites and have them choose "Always allow this site"')
 Update channel  ${CHANNEL:-not set (manual updates only)}; auto-update $( [ "$AUTO_UPDATE" = 1 ] && echo on || echo off)
 Watchdog hook   ${HOOK_NOTE:-script $( [ -f "$HOOK_DIR/bridge-watchdog.sh" ] && echo 'in place' || echo missing)}
 ============================================================
@@ -171,7 +171,7 @@ agent       $(agents_label "${AGENTS:-claude,dimensio}")（服务端报告：${s
 本地健康    $lc
 公网健康    $pc
 Claude 令牌 $( [ "$claude_ok" = 1 ] && echo 已配置 || echo '未配置（也可能已在控制台「Claude 账号」里加过）')
-网站放行    ${sites:-全部已放行}$( [ -n "$sites" ] && echo '（还没放行：用户在场时跑 allow-sites，让他选「总是允许此站点」）')
+网站放行    $( [ -f "$SITES_STATUS" ] || echo '还没检查过（用户在场时跑一次 allow-sites）')$( [ -f "$SITES_STATUS" ] && echo "${sites:-全部已放行}")$( [ -n "$sites" ] && echo '（还没放行：用户在场时跑 allow-sites，让他选「总是允许此站点」）')
 更新频道    ${CHANNEL:-未设置（只能手动给地址更新）}；自动更新 $( [ "$AUTO_UPDATE" = 1 ] && echo 开 || echo 关)
 看门狗 hook ${HOOK_NOTE:-脚本 $( [ -f "$HOOK_DIR/bridge-watchdog.sh" ] && echo 已就位 || echo 缺失)}
 ==========================================================
@@ -547,7 +547,11 @@ cmd_install() {
   render "$HERE/ops/hooks/bridge-watchdog.sh" > "$HOOK_DIR/bridge-watchdog.sh"; chmod 0770 "$HOOK_DIR/bridge-watchdog.sh"
   cp "$HOOK_DIR/bridge-watchdog.sh" "$OPS/hooks/"
   local hj="$OPS/hooks/bridge-watchdog.json" new_hj; new_hj="$(render "$HERE/ops/hooks/bridge-watchdog.json")"
-  if [ ! -f "$hj" ]; then HOOK_NOTE="新装：请用 hooks 工具按 $hj 注册并启用"
+  if [ "$UI_LANG" = en ]; then
+    if [ ! -f "$hj" ]; then HOOK_NOTE="new install: register and enable it with the hooks tool, using $hj"
+    elif [ "$new_hj" != "$(cat "$hj")" ]; then HOOK_NOTE="definition changed: update bridge-watchdog with the hooks tool, using $hj (the script is already replaced)"
+    else HOOK_NOTE="definition unchanged, script replaced, nothing to do"; fi
+  elif [ ! -f "$hj" ]; then HOOK_NOTE="新装：请用 hooks 工具按 $hj 注册并启用"
   elif [ "$new_hj" != "$(cat "$hj")" ]; then HOOK_NOTE="定义变了：请用 hooks 工具按 $hj 更新 bridge-watchdog（脚本已自动换新）"
   else HOOK_NOTE="定义没变，脚本已换新，不用动"; fi
   printf '%s\n' "$new_hj" > "$hj"
