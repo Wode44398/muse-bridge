@@ -1,0 +1,4 @@
+// 根构建脚本：只钉 Android Gradle 插件版本。app 没有任何第三方依赖（只用系统自带的 WebView）。
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

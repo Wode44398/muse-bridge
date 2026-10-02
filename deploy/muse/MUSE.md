@@ -120,6 +120,7 @@ bash "$REL/bridge/deploy/muse/bootstrap.sh" install --agents claude --solo
 - 令牌就是管理员密码，请马上存进密码管理器或备忘录。他用它登录成功一次之后，你这边就再也看不到它了；丢了可以找你重置，重置后旧令牌作废。
 - 用临时地址时：地址大约每几个小时变一次（VM 重启导致），变了你会主动告诉他，他也可以随时问你「地址是多少」。**令牌不会变，但换了地址要重新用令牌登录一次**（浏览器的登录状态是跟着网址存的）。嫌麻烦可以换成自己的域名（第 5 节）。
 - 这个地址谁拿到都能打开登录页，但没有令牌或账号进不去。
+- **顺带告诉他有安卓 app**（结果块里「安卓 app」那一行）：用安卓手机的浏览器打开地址，进「设置 → 安卓 app」就能下载安装；也可以直接从 GitHub 下载 `https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk`。app 跟网页版界面一样、随服务器自动更新，好处是桌面上有图标、记得住地址，临时地址变了能在 app 里直接换。iPhone 目前没有 app，用 Safari 的「添加到主屏幕」。
 
 ## 4. 带用户上手
 
@@ -127,6 +128,8 @@ bash "$REL/bridge/deploy/muse/bootstrap.sh" install --agents claude --solo
 
 ### 4.1 登录
 让他用浏览器（手机、电脑都行）打开地址，点「用访问令牌登录」，粘贴令牌。进到界面就成功了。手机上可以把页面加进书签或添加到主屏幕。
+
+**安卓手机建议装 app**：登录后进「设置 → 安卓 app」点「下载」，装好后回到这一页点「在 app 里打开」，app 会自动填好地址；再用令牌登录一次就行。手机提示「禁止安装未知来源应用」时，按提示允许浏览器安装应用。app 里换地址：「设置 → 安卓 app → 服务器地址 → 更换」，或者连不上时 app 自己弹出的「更换地址」。
 
 ### 4.2 （可选）扫码登录另一台设备
 已经登录的手机，可以在另一台电脑的登录页选「扫码登录」，用手机扫一下就登上了。
@@ -136,7 +139,7 @@ bash "$REL/bridge/deploy/muse/bootstrap.sh" install --agents claude --solo
 - **dimensio 页**：同样是对话 + 侧栏；右上角能选用哪家模型。
 - 两个都装了时，页面里的「主页」回到入口页。
 - 界面语言跟着浏览器走（浏览器语言里有中文就是中文，否则英文）；「设置 → 通用 → 语言」可以手动改。
-- 「设置」（点左下角的账户卡）里有：通用、账户、Agent（各 agent 的开关与状态）、连接（服务器地址、**服务端控制台**入口：管用户、看运行状态、配 Claude 账号）、关于；下面的「自定义」是给 agent 装技能 / 连接器 / 插件的地方。
+- 「设置」（点左下角的账户卡）里有：通用、账户、Agent（各 agent 的开关与状态）、连接（服务器地址、**服务端控制台**入口：管用户、看运行状态、配 Claude 账号）、安卓 app（下载、在 app 里打开）、关于；下面的「自定义」是给 agent 装技能 / 连接器 / 插件的地方。
 
 ### 4.4 配 Claude（装了 Claude Code 才需要）
 Claude 需要用户自己的 Claude 订阅（Pro 或 Max）。令牌**只能在他自己的电脑上生成**，不能在这台 VM 上生成（原因见硬规矩 2）：
@@ -201,6 +204,8 @@ bash /home/hatch/bridge-ops/bootstrap.sh set-api-key ANTHROPIC_API_KEY <key>
 | 「让朋友也能用」「只给我自己用」 | `set-users multi` / `set-users solo` |
 | 结果块要换语言 | `set-lang en` / `set-lang zh` |
 | 「想要固定地址」 | 按第 5 节带他做 |
+| 「有手机 app 吗」「怎么装到手机上」 | 安卓：手机浏览器打开地址 →「设置 → 安卓 app」下载安装，或者给他 GitHub 链接 `https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk`；iPhone：Safari「分享 → 添加到主屏幕」 |
+| 「app 打不开了」「app 连不上」 | 多半是临时地址换了：`status` 拿到新地址告诉他，让他在 app 弹出的面板里点「更换地址」粘进去 |
 | 「有新版本吗」 | `check-update`，把当前版本、最新版本、更新内容告诉他 |
 | 「更新」 | `update`（自己转后台、前台打印进度，完了贴结果块；没等完就 `wait`） |
 | 「装到哪一步了」「好了没」 | `wait` |

@@ -35,6 +35,7 @@ import { registerSessionRoutes } from './routes/sessions.mjs';
 import { registerOverviewRoutes } from './routes/overview.mjs';
 import { registerRoutineRoutes } from './routes/routines.mjs';
 import { registerStaticRoutes } from './routes/static.mjs';
+import { registerAndroidAppRoutes } from './routes/android-app.mjs';
 import { registerFileRoutes } from './routes/files.mjs';
 import { registerShareRoutes } from './routes/share.mjs';
 import { registerShareSpaceRoutes, resolveShareToken } from './routes/share-space.mjs';
@@ -122,6 +123,7 @@ if (NO_AUTH) {
 // Route registration order doesn't affect dispatch (paths are exact, not
 // prefix), but logical grouping helps grep.
 registerStaticRoutes(router);                                 // /, /index.html, /app/*, /healthz
+registerAndroidAppRoutes(router);                             // /api/app/android, /download/MuseBridge.apk（安卓 app 下载，不用登录）
 registerAuthRoutes(router, { adminCredential, adminGen, identify, getCookie, bearerToken, authCookie, clearAuthCookie, userCookie, clearUserCookie }); // /api/auth, /api/login, /api/register, /api/logout
 registerPairRoutes(router, { identify, adminGen, authCookie, userCookie }); // /api/pair/{new,wait,scan,approve,reject,claim} 扫码登录（扫码的一侧只认 admin/user 登录态）
 registerChatRoutes(router, { authOk, identify: identifySnap }); // /api/chat, /api/answer（快照身份可用）

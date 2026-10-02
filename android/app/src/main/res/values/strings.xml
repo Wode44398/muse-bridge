@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Muse Bridge</string>
+    <string name="setup_title">Connect to your Muse Bridge</string>
+    <string name="setup_body">Paste the address Muse gave you, such as https://xxxx.trycloudflare.com or your own domain. You can also open the address in your phone\'s browser and tap \"Open in app\" under Settings → Android app.</string>
+    <string name="setup_hint">https://…</string>
+    <string name="paste">Paste</string>
+    <string name="connect">Connect</string>
+    <string name="cancel">Cancel</string>
+    <string name="connecting">Connecting…</string>
+    <string name="use_anyway">Use it anyway</string>
+    <string name="bad_url">That doesn\'t look like a web address.</string>
+    <string name="no_url_in_clipboard">No web address in the clipboard.</string>
+    <string name="probe_failed">Couldn\'t reach %1$s (%2$s).</string>
+    <string name="temp_hint">Temporary trycloudflare.com addresses change when the Muse VM restarts. Ask Muse for the current address.</string>
+    <string name="offline_title">Can\'t reach the server</string>
+    <string name="retry">Retry</string>
+    <string name="change_server">Change address</string>
+    <string name="switch_title">Switch server?</string>
+    <string name="switch_body">Connect this app to %1$s?</string>
+    <string name="switch_ok">Connect</string>
+    <string name="download_started">Downloading %1$s…</string>
+    <string name="download_failed">Download failed.</string>
+    <string name="download_blob">This file can only be saved from a browser.</string>
+    <string name="no_app">No app on this phone can open this link.</string>
+    <string name="err_dns">address not found</string>
+    <string name="err_timeout">timed out</string>
+</resources>

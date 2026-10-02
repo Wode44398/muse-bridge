@@ -16,6 +16,7 @@
   import SecConnection from './SecConnection.svelte';
   import SecAbout from './SecAbout.svelte';
   import SecAgents from './SecAgents.svelte';
+  import SecAndroid from './SecAndroid.svelte';
 
   // 扩展中心只对管理员开放：探针过了才出「自定义」那一组
   let extOk = $state(false);
@@ -31,6 +32,7 @@
     { key: 'account', label: t('账户'), icon: '' },
     ...(agentsOk ? [{ key: 'agents', label: tc('settings', 'Agent'), svg: SV('<rect x="3" y="3" width="5.5" height="5.5" rx="1.4"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.4"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.4"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.4"/>') }] : []),
     { key: 'connection', label: tc('名词', '连接'), icon: '' },
+    { key: 'android', label: t('安卓 app'), svg: SV('<rect x="5.5" y="2.5" width="9" height="15" rx="2"/><path d="M8.75 15h2.5"/>') },
     { key: 'about', label: t('关于'), icon: '' },
   ]);
   const CUSTOM = [
@@ -91,6 +93,8 @@
     { sec: 'connection', sid: 'addr', label: t('服务器地址'), keys: t('连接 服务器 域名 地址') },
     { sec: 'connection', sid: 'status', label: t('连接状态'), keys: t('在线 离线 网络') },
     { sec: 'connection', sid: 'srvadmin', label: t('服务端控制台'), keys: t('admin 管理 用户 日志') },
+    { sec: 'android', sid: 'android-download', label: t('下载安卓 app'), keys: t('安卓 手机 apk 应用 安装 android app 下载') },
+    { sec: 'android', sid: 'android-server', label: t('app 的服务器地址'), keys: t('安卓 手机 app 更换 地址 android') },
     { sec: 'about', sid: 'about', label: t('关于'), keys: t('版本 about') },
     { sec: 'agents', sid: 'agent-claude', label: t('Agent 开关'), keys: t('agent claude dimensio 启用 关闭 认证') },
   ];
@@ -129,7 +133,8 @@
   {:else if k === 'account'}<SecAccount onclose={close} />
   {:else if k === 'connection'}<SecConnection />
   {:else if k === 'about'}<SecAbout />
-  {:else if k === 'agents'}<SecAgents />{/if}
+  {:else if k === 'agents'}<SecAgents />
+  {:else if k === 'android'}<SecAndroid />{/if}
 {/snippet}
 {#snippet icon(s)}{#if s.svg}{@html s.svg}{:else}{s.icon}{/if}{/snippet}
 

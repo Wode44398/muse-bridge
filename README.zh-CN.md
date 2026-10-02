@@ -12,6 +12,7 @@
 
 - **一句话部署**：把开场提示词发给 Muse，剩下的它来做，大约 5–10 分钟。
 - **手机、电脑都能用**：打开网址就是完整的工作台，界面支持简体中文和 English，默认跟着浏览器语言。
+- **安卓 app**：在「设置 → 安卓 app」里下载，或者[直接下载 apk](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk)。记得住服务器地址，临时地址变了能在 app 里直接换；界面和网页版一样，随服务器自动更新。
 - **Claude Code 完整体验**：由官方 Claude Agent SDK 驱动，支持工具调用、子 agent、工作流、上下文压缩和会话续接。右侧工作台有终端、文件、任务和改动审阅。
 - **dimensio 多模型工作台**：一家一把 key，随时切换模型；也能接任意 OpenAI 兼容的自定义服务。自带工作区、记忆和子 agent。
 - **各家原生联网搜索**：当前对话用哪家模型，就先用哪家自己的搜索，失败了自动换下一家，最后才退回 DuckDuckGo。
@@ -73,6 +74,12 @@ key 可以让 Muse 帮你写进去（`set-api-key`），也可以直接在 dimen
 
 **小米的联网搜索**是控制台「插件管理」里的一个插件，按次计费（约 ¥16 / 千次），钱从账户余额里扣，所以只有**按量付费**的 key 能用。如果你聊天用的是 Token Plan 订阅的 key（`tp-` 开头），可以再建一把按量付费的 key，单独配给搜索：`set-api-key MIMO_SEARCH_API_KEY <sk-…>`，聊天照旧用 Token Plan 的额度。不配也行，小米搜不了会自动换别家。
 
+## 安卓 app
+
+用手机浏览器打开你的 Muse Bridge 地址并登录，进「**设置 → 安卓 app → 下载**」。装好后回到这一页点「**在 app 里打开**」，app 会自动填好地址。也可以从 GitHub [直接下载 apk](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk)，第一次打开时把地址粘进去。
+
+app 只是把同一个网页界面装进独立窗口，新功能不用更新 app。连不上服务器时（比如 VM 重启后临时地址变了），app 会给出「更换地址」按钮，问 Muse 要现在的地址粘进去就行。手机拦着不让装时，按提示允许浏览器安装应用。iPhone 目前没有 app，可以用 Safari 的「分享 → 添加到主屏幕」。
+
 ## 常见问题
 
 **Muse 老让我批「允许 Muse 与 … 分享信息？」，是怎么回事？**
@@ -110,6 +117,7 @@ sudo bash scripts/server/install.sh --agents claude,dimensio
 | `src/` | 服务端（Node 24，零构建） |
 | `web/` | 前端（Vite + Svelte 5） |
 | `harness/` | dimensio（TypeScript，Node 原生运行） |
+| `android/` | 安卓 app（WebView 壳，零依赖；发版流程负责构建） |
 | `scripts/server/` | 通用 Linux 安装 / 更新脚本 |
 | `deploy/muse/` | Muse 专用：一键部署脚本 `bootstrap.sh`、给 Muse 看的说明书 `MUSE.md`、运维件模板 |
 
@@ -122,7 +130,9 @@ git tag -a v0.2.0 -m "这次更新了什么（给用户看的一两句）"
 git push origin v0.2.0
 ```
 
-GitHub Actions（`.github/workflows/release.yml`）会打包 `muse-bridge.tgz`，生成 `.sha256` 和更新频道 `latest.json`，并创建 Release。已经装好的 Muse 每 6 小时读一次 `latest.json`，发现新版本就问用户要不要更新。beta（如 `v0.2.0-beta.1`）也会推送。只有标签里带 `-test` 的（如 `v0.2.0-test.1`）会发成预发布版，不进更新频道，是给维护者在新 Muse 上试装用的。
+GitHub Actions（`.github/workflows/release.yml`）会构建安卓 app（`MuseBridge.apk`，挂在 Release 上，也放进安装包的 `downloads/`），打包 `muse-bridge.tgz`，生成 `.sha256` 和更新频道 `latest.json`，并创建 Release。已经装好的 Muse 每 6 小时读一次 `latest.json`，发现新版本就问用户要不要更新。beta（如 `v0.2.0-beta.1`）也会推送。只有标签里带 `-test` 的（如 `v0.2.0-test.1`）会发成预发布版，不进更新频道，是给维护者在新 Muse 上试装用的。
+
+apk 用仓库 Actions secrets 里的密钥签名（`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`）。没配（比如 fork）就退回 debug 签名：照样能装，但不能覆盖安装官方发布的包。
 
 ## 协议
 

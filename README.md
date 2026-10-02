@@ -12,6 +12,7 @@ Muse does the whole deployment for you. Send it one message and it downloads the
 
 - **Deploy with one message.** Paste the prompt below into Muse and it handles the rest, in about 5–10 minutes.
 - **Works on phone and desktop.** The URL opens the full workspace. The interface is available in English and Simplified Chinese and follows your browser's language.
+- **Android app.** Install it from **Settings → Android app**, or [download the APK](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk). It keeps your server address, and when a temporary URL changes you can switch to the new one right in the app. The interface is the same as the web version and updates with your server.
 - **Full Claude Code.** Powered by the official Claude Agent SDK: tool use, subagents, workflows, context compaction and session resume. A side dock gives you a terminal, files, tasks and a diff review.
 - **dimensio, a multi-model workspace.** One API key per provider, switch models at any time, or add any OpenAI-compatible endpoint. It has its own workspaces, memory and subagents.
 - **Each provider's own web search.** Search uses the built-in search of whichever model the conversation is using, falls back to the next configured provider, and uses DuckDuckGo only as a last resort.
@@ -73,6 +74,12 @@ Ask Muse to store a key for you (`set-api-key`), or paste it into dimensio's mod
 
 **Xiaomi MiMo web search** is a console plugin billed per call (about ¥16 per 1,000) and charged to your account balance, so it only works with a **pay-as-you-go** key. If you chat on a Token Plan subscription key (starts with `tp-`), create a pay-as-you-go key just for search with `set-api-key MIMO_SEARCH_API_KEY <sk-…>`; chat keeps using your Token Plan quota. Without it, MiMo conversations fall back to another provider's search.
 
+## Android app
+
+Open your Muse Bridge URL in your phone's browser, sign in, and go to **Settings → Android app → Download**. Once it's installed, come back to that page and tap **Open in app**: the app fills in the address for you. You can also [download the APK from GitHub](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk) and paste the address the first time you open it.
+
+The app is a thin shell around the same web interface, so it never needs updating for new features. If the server is unreachable (for example, the temporary URL changed after a VM restart), the app shows a **Change address** button; ask Muse for the current URL and paste it in. If your phone blocks the install, allow your browser to install apps when it asks. There's no iPhone app; use Safari's **Share → Add to Home Screen** instead.
+
 ## FAQ
 
 **Muse keeps asking whether it may share information with some website.**
@@ -110,6 +117,7 @@ Run `install.sh --help` to see all options. The service listens on 127.0.0.1 onl
 | `src/` | Server (Node 24, no build step) |
 | `web/` | Frontend (Vite + Svelte 5) |
 | `harness/` | dimensio (TypeScript, run natively by Node) |
+| `android/` | Android app (a WebView shell, no dependencies; built by the release workflow) |
 | `scripts/server/` | Generic Linux install / update scripts |
 | `deploy/muse/` | Muse-specific: the `bootstrap.sh` installer, `MUSE.md` (the instructions Muse follows) and ops templates |
 
@@ -122,7 +130,9 @@ git tag -a v0.2.0 -m "What changed, in a sentence or two for users"
 git push origin v0.2.0
 ```
 
-GitHub Actions (`.github/workflows/release.yml`) builds `muse-bridge.tgz`, generates the `.sha256` and the `latest.json` update channel, and creates the Release. Installed Muse VMs read `latest.json` every 6 hours and ask their user about new versions. Betas (e.g. `v0.2.0-beta.1`) are pushed to users too; only tags containing `-test` (e.g. `v0.2.0-test.1`) become pre-releases, which stay out of the update channel and are meant for maintainers to trial on a fresh Muse.
+GitHub Actions (`.github/workflows/release.yml`) builds the Android app (`MuseBridge.apk`, attached to the Release and bundled in the package under `downloads/`), builds `muse-bridge.tgz`, generates the `.sha256` and the `latest.json` update channel, and creates the Release. Installed Muse VMs read `latest.json` every 6 hours and ask their user about new versions. Betas (e.g. `v0.2.0-beta.1`) are pushed to users too; only tags containing `-test` (e.g. `v0.2.0-test.1`) become pre-releases, which stay out of the update channel and are meant for maintainers to trial on a fresh Muse.
+
+The APK is signed with the key in the repository's Actions secrets (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`). Without them (in a fork, say) the workflow falls back to a debug signature: the APK still installs, but it can't update over an officially released one.
 
 ## License
 

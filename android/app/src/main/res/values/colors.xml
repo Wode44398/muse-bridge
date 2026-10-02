@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 与网页 app.css 的背景 / 文字色一致：冷启动不闪白屏、黑屏 -->
+<resources>
+    <color name="bg">#f8f8f6</color>
+    <color name="text">#121212</color>
+    <color name="muted">#7b7974</color>
+    <color name="field">#ffffff</color>
+    <color name="line">#1f121212</color>
+    <color name="primary">#121212</color>
+    <color name="primary_ink">#f8f8f6</color>
+    <color name="err">#c2412d</color>
+</resources>

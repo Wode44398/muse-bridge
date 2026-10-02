@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Muse Bridge</string>
+    <string name="setup_title">连接到你的 Muse Bridge</string>
+    <string name="setup_body">粘贴 Muse 给你的网址，比如 https://xxxx.trycloudflare.com 或你自己的域名。也可以先用手机浏览器打开这个网址，在「设置 → 安卓 app」里点「在 app 里打开」。</string>
+    <string name="setup_hint">https://…</string>
+    <string name="paste">粘贴</string>
+    <string name="connect">连接</string>
+    <string name="cancel">取消</string>
+    <string name="connecting">正在连接…</string>
+    <string name="use_anyway">仍然使用</string>
+    <string name="bad_url">这看起来不像一个网址。</string>
+    <string name="no_url_in_clipboard">剪贴板里没有网址。</string>
+    <string name="probe_failed">连不上 %1$s（%2$s）。</string>
+    <string name="temp_hint">trycloudflare.com 的临时地址在 Muse 的 VM 重启后会变，可以问 Muse 要现在的地址。</string>
+    <string name="offline_title">连不上服务器</string>
+    <string name="retry">重试</string>
+    <string name="change_server">更换地址</string>
+    <string name="switch_title">切换服务器？</string>
+    <string name="switch_body">让这个 app 连接到 %1$s？</string>
+    <string name="switch_ok">连接</string>
+    <string name="download_started">正在下载 %1$s…</string>
+    <string name="download_failed">下载失败。</string>
+    <string name="download_blob">这个文件只能在浏览器里保存。</string>
+    <string name="no_app">手机上没有能打开这个链接的应用。</string>
+    <string name="err_dns">找不到这个地址</string>
+    <string name="err_timeout">超时</string>
+</resources>

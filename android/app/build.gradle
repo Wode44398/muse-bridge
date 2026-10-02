@@ -1,0 +1,54 @@
+plugins {
+    id 'com.android.application'
+}
+
+// 版本号由发版流程传进来（.github/workflows/release.yml）：
+//   versionCode = main 上的提交数（只增不减，覆盖安装才不会被系统拒）
+//   versionName = 发版标签去掉开头的 v
+// 本地随手构建不传，就是 1 / dev。
+def mbVersionCode = (project.findProperty('mbVersionCode') ?: '1') as Integer
+def mbVersionName = (project.findProperty('mbVersionName') ?: 'dev') as String
+
+// 签名：环境变量给了密钥库就用它签 release（发版用，密钥在仓库的 Actions secrets 里，不进代码库）；
+// 没给（fork、本地构建）就退回 debug 签名，照样能装，只是跟官方发布的包签名不同、不能互相覆盖安装。
+def ksFile = System.getenv('MB_KEYSTORE')
+def hasReleaseKey = ksFile && new File(ksFile).exists()
+
+android {
+    namespace 'com.musebridge.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.musebridge.app'
+        minSdk 24            // Android 7.0+
+        targetSdk 34
+        versionCode mbVersionCode
+        versionName mbVersionName
+    }
+
+    signingConfigs {
+        if (hasReleaseKey) {
+            release {
+                storeFile file(ksFile)
+                storePassword System.getenv('MB_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('MB_KEY_ALIAS') ?: 'musebridge'
+                keyPassword System.getenv('MB_KEY_PASSWORD') ?: System.getenv('MB_KEYSTORE_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig hasReleaseKey ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+}

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 两层同一张满版图：前景缩进 18dp（= 自适应图标的可见区），背景铺满，视差时边缘不露缝 -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_art" />
+    <foreground>
+        <inset android:drawable="@drawable/ic_launcher_art" android:inset="18dp" />
+    </foreground>
+</adaptive-icon>

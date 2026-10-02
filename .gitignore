@@ -50,3 +50,6 @@ memory/.workspace-isolation-migrated
 
 # 本机私有的工作区说明
 CLAUDE.local.md
+
+# 安卓 app（发版时由 GitHub Actions 放进安装包；本地预览可以手动放一份）
+/downloads/
