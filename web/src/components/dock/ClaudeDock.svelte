@@ -213,6 +213,9 @@
   const exitFiles = () => (wide ? closeDockView('files') : closeDock());
 
   let sheetHandle = $state();
+  // 手机 sheet 里正开着文件预览：进「阅读形态」——sheet 升到顶（只让出状态栏）、chip 条收起、
+  // 预览头收成 44px。这时要的是看文件，工具切换点返回退出预览就回来了。
+  const sheetPv = $derived(!wide && preview.open && preview.host === 'dock');
 </script>
 
 {#snippet panelBody(view)}
@@ -270,7 +273,7 @@
 <!-- 移动端：底部 sheet（dimensio 手机端同款交互）——scrim 点击关、把手下拉关、chip 直切工具 -->
 <div class="sheetwrap">
   <button class="sheet-scrim" aria-label={t('关闭工作台')} onclick={closeDock}></button>
-  <div class="dock sheet" use:dragSheet={{ onClose: closeDock, handle: () => sheetHandle ?? null }}>
+  <div class="dock sheet" class:pv={sheetPv} use:dragSheet={{ onClose: closeDock, handle: () => sheetHandle ?? null }}>
     <div class="grip-zone" bind:this={sheetHandle}>
       <span class="grip"></span>
       <div class="dk-chips">
@@ -366,10 +369,18 @@
   .dock.sheet { position: relative; width: 100%; height: calc(100dvh - 52px - var(--sat)); border-radius: 20px 20px 0 0;
     padding-bottom: max(var(--sab), var(--kb, 0px));
     box-shadow: 0 -10px 44px rgba(0, 0, 0, .35); overflow: hidden;
-    animation: sheetUp .36s cubic-bezier(.32, .9, .35, 1) both; transition: transform .3s cubic-bezier(.32, .9, .35, 1); }
+    animation: sheetUp .36s cubic-bezier(.32, .9, .35, 1) both;
+    transition: transform .3s cubic-bezier(.32, .9, .35, 1), height .3s cubic-bezier(.32, .9, .35, 1); }
   @keyframes sheetUp { from { transform: translateY(52%); opacity: .7; } }
+  /* sheet 顶边本就在状态栏之下、底边已吃掉 sab/键盘：子树里安全区归零。否则内嵌工作空间页与
+     预览头会在 sheet 里再让一遍状态栏，chip 条下凭空多出一条 ~40px 的空带。（同 .dock.wide > *） */
+  .dock.sheet > * { --sat: 0px; --sab: 0px; }
+  /* 阅读形态（sheet 内开着预览）：升到顶、chip 条收起、预览头压扁（变量由各查看器头读） */
+  .dock.sheet.pv { height: calc(100dvh - var(--sat) - 6px); --pv-pad-y: 4px; --pv-bar-h: 44px; }
+  .dock.sheet.pv .dk-chips { display: none; }
   .grip-zone { flex: none; touch-action: none; }
   .grip { display: block; width: 38px; height: 4.5px; border-radius: 3px; background: var(--divider); margin: 8px auto 2px; }
+  .dock.sheet.pv .grip { margin: 6px auto 5px; }
 
   /* 工具切换条：chip 直切（移动端没有菜单层级） */
   .dk-chips { display: flex; align-items: center; gap: 5px; padding: 6px 10px 8px; overflow-x: auto; scrollbar-width: none; }

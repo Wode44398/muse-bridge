@@ -4,7 +4,7 @@
 // NOT abort — only explicit POST /api/stop or a same-session resend does.
 // Different sessions run in PARALLEL (multi-conversation concurrency, capped).
 
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -273,7 +273,7 @@ export function sandboxViolation(name, input, cwd, platform = process.platform) 
 export const SHELL_DENY = ['Bash', 'BashOutput', 'KillShell', 'KillBash', 'PowerShell'];
 
 // 每个 caller 同时最多几个对话并行（多对话并发上限）：所有轮共享同一个订阅账号的
-// 额度和这台 PC 的算力，放开不设限只会把 5 小时窗一口气烧穿。同一会话永远串行。
+// 额度和这台 VM 的算力，放开不设限只会把 5 小时窗一口气烧穿。同一会话永远串行。
 export const MAX_PARALLEL_CHATS = 3;
 
 // PreToolUse 主闸：SDK 对【每一次】工具调用都先过它——包括只读 Read/Glob/Grep（canUseTool 对只读
@@ -391,11 +391,16 @@ function composeTurnPrompt(message, attachments) {
     // 整树已经在磁盘上了，要的是【按需读】——先 Glob/LS 摸结构，再挑着 Read，
     // 别一上来把每个文件都读一遍（大目录会直接烧穿上下文）。
     const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
-    const lines = attachments.map((p) => (isDir(p) ? `- ${p}  ← 文件夹` : '- ' + p));
+    // 引用对话（侧栏把另一条会话拖进来，/api/session/quote 落的 <ts>-chatref-<id>-<标题>.md）同理标注：
+    // 那是另一段对话的完整记录，是这条消息的背景，不是要处理的「文件」。
+    const isQuote = (p) => /[\\/]\d+-chatref-[0-9a-fA-F-]{36}-[^\\/]*\.md$/.test(p);
+    const lines = attachments.map((p) => (isDir(p) ? `- ${p}  ← 文件夹` : isQuote(p) ? `- ${p}  ← 引用的对话` : '- ' + p));
     const anyDir = attachments.some(isDir);
+    const anyQuote = attachments.some(isQuote);
     prompt += (message ? '\n\n' : '') +
       '[用户上传了以下附件，绝对路径如下。图片已经直接附在本条消息里、你现在就看得见，不必再 Read 它（只有需要看更多细节时才 Read）；其余文件请按需用 Read 工具读取'
       + (anyDir ? '；标注「文件夹」的是整个目录已挂载在这里：先用 Glob/Grep 摸清结构再挑需要的文件 Read，不要把里面所有文件都读一遍' : '')
+      + (anyQuote ? '；标注「引用的对话」的是用户从另一段对话拖过来的完整记录（Markdown），先 Read 它了解那段对话的来龙去脉，再结合用户这条消息作答' : '')
       + ']\n' + lines.join('\n');
   }
   // 图片附件额外【原生】挂到用户消息上：这一轮就看得见，不必先花一个来回去 Read，
@@ -440,18 +445,43 @@ function lastRealUserUuid(file) {
   return null;
 }
 
-// ---- 输入建议挂等（SDK promptSuggestions，2026-09-28）-------------------------------
-// CLI 在 result 之后才吐 {type:'prompt_suggestion'}，探针实测 +7~14s（新进程 + resume 同样出，
-// 不受「首轮不出」影响）；而输入流一关 CLI 立刻退出、建议跟着丢。所以定局之后进程还得再挂着等它。
-// 这段挂等【不算轮次在跑】：done、run.end、inflight 台账、并发槽都在挂等前结清（closeTurn），
-// 界面早已空闲；但同会话的下一轮开跑前必须先掐掉它——一份 transcript 不许两个 CLI 同时开着。
+// ---- 会话 CLI 常驻（2026-10-01，对齐官方桌面端的 WarmLifecycle）-----------------------
+// 以前一轮 = 一次 query = 一个 CLI 进程：每条消息都现起 claude.exe + resume，光 spawn→init 就 2.6–5s
+//（实测），桌面端则一个会话一个长命进程、空闲 30 分钟才关，续聊只等模型本身。现在一轮定局后
+// CLI 不退：台账照常结清（closeTurn——对界面、别的设备、并发上限这轮都已结束），进程【停放】在这里，
+// 同会话下一条消息若启动参数完全一致（warmSig：模型/effort/fast/提示词 append/扩展/MCP 开关/账号 token/cwd）
+// 就直接推进同一个输入流开新一轮（warmTake，与挂起接力 handoff 同一套换 gen 手法）；不一致、
+// 有待生效的回滚锚点、transcript 被别的写入者动过，一律关掉它冷起，与以前完全一样。
+// 停放期顺带收输入建议（SDK promptSuggestions 在 result 后 7–14s 才来，输入流一关就丢——原先的
+// 40s「挂等」就是这段的前身）。一份 transcript 不许两个 CLI：冷起前必须先关掉停放的那个（releaseWarm）。
 const SUGGEST_WAIT_MS = 40_000;
-const lingers = new Map();   // key|sid -> { close, done }
-async function killLinger(key, sid) {
-  const l = lingers.get(key + '|' + sid);
-  if (!l) return;
-  l.close();
-  await Promise.race([l.done, new Promise((r) => setTimeout(r, 5000))]);
+const WARM_IDLE_MS = Math.max(0, Number(process.env.BRIDGE_CLAUDE_WARM_MS ?? 15 * 60_000) || 0);
+const WARM_MAX = Math.max(1, Number(process.env.BRIDGE_CLAUDE_WARM_MAX ?? 2) || 2);   // 全服停放上限（每个常驻 ~320MB 工作集；Muse VM 约 8G，取 2）
+const warmRuns = new Map();   // key|sid -> { sig, parkedAt, stat(), take(), close(), done }
+const sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); if (t.unref) t.unref(); });
+// transcript 指纹：停放期间若有别的写入者（官方桌面端接力同一会话、手工编辑）动过它，活进程的内存历史就旧了。
+function warmStat(file) { try { const s = statSync(file); return s.size + ':' + s.mtimeMs; } catch { return ''; } }
+async function closeWarm(entry) {
+  entry.close();
+  await Promise.race([entry.done, sleep(5000)]);
+}
+// 关掉某会话停放的 CLI 并等它退干净（删会话、文件回滚这类要碰 transcript 的操作先调它）。
+export async function releaseWarmClaude(key, sid) {
+  if (!sid) return;
+  // 刚回完 done、还在定局收尾的那一轮马上就要停放——等它停好再关，别让它关完之后又停进来。
+  const fin = findGenBySession(key, sid);
+  if (fin && !fin.done && fin.finalizing) await Promise.race([fin.settled, sleep(10_000)]);
+  const e = warmRuns.get(key + '|' + sid);
+  if (e) await closeWarm(e);
+}
+// 超过全服上限：关掉停放最久的（不含刚登记的这个）。
+function evictWarm(keep) {
+  const parked = [...warmRuns.values()].filter((e) => e !== keep).sort((a, b) => a.parkedAt - b.parkedAt);
+  while (parked.length && warmRuns.size > WARM_MAX) {
+    const e = parked.shift();
+    console.log(`[claude] warm CLI ${e.lk.split('|').pop().slice(0, 8)} evicted (over ${WARM_MAX} parked)`);
+    e.close();
+  }
 }
 
 export async function runClaudeChat(req, res, { message, sessionId, model, effort, fast, chatPrefs, attachments, style, styleText, research, suggest, source, globalMax, ctx }) {
@@ -481,6 +511,38 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 计费，超了正好要大窗口，没有理由再走「近顶才升档」的旧 latch。picker 只见裸 id。
   const effModel = to1M(model);
 
+  // ---- 启动参数（一律在这里算好：既喂给 query，也拼成 warmSig 判断停放的 CLI 能不能接着用）----
+  // styleText（用户可控文本）拼在沙箱 nudge 之前——让沙箱铁律保持"最后说话"，
+  // 降低自定义风格对软约束的对抗力（硬边界在 canUseTool，不受提示词影响）。
+  const appendText = identityNudge(model) + (STYLE_NUDGE[style] || (styleText ? '\n\n[回复风格 · 自定义] ' + styleText : '')) + (snap ? SNAP_NUDGE : ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE)) : (hostNudge() + HOST_TOOLS_NUDGE)) + (termOn ? TERMINAL_NUDGE : '') + (wsToolsOn ? WORKSPACE_NUDGE : '') + DELIVER_NUDGE + (research ? RESEARCH_NUDGE : '');
+  // 当前激活的 Claude 账号 token（+ 沙箱 configDir）现取现注——切账号即时生效。
+  const engineEnv = claudeEngineEnv(ctx);
+  // effort：ultracode 不是 SDK 的 effort 取值（TS 类型只列五档）——翻译成 effort:'xhigh' +
+  // settings {ultracode:true, enableWorkflows:true}（Pro 计划 enableWorkflows 默认关，必须显式开）。
+  // settings 与 fast mode 合成【同一份】JSON 字面量（不是文件路径），不落盘、仅本轮生效。
+  const effortOpts = claudeEffortOptions(effort);
+  // 安全栅门「会话暂停」（claude.ai 的 Paused 卡 / 官方 /code 的 refusal_fallback_prompt 对话框）：
+  // switchModelsOnFlag=false + 声明 supportedDialogKinds 后，消息被拒时 CLI 不再自动切回退模型，而是
+  // 发 request_user_dialog 停在原地等宿主回话（没声明 kind 则 fail-closed = 经典拒答直接收尾）。
+  // 快照访客没有回滚 UI，维持 CLI 默认的自动切换。
+  const pauseOnFlag = !snap;
+  const sdkSettings = {
+    ...(fast && claudeSupportsFast(model) ? { fastMode: true } : {}),   // SDK 0.3.220 起 settings.fastMode 可点亮；仅支持的模型注入
+    ...(effortOpts.settings || {}),
+    ...(pauseOnFlag ? { switchModelsOnFlag: false } : {}),
+  };
+  // 停放 CLI 的复用判据：凡是只在 spawn 时定下、进程里改不了的东西都进来（快照访客不停放）。
+  // ext 里有连接器凭据，只进哈希。
+  // 路径按「同一个目录」比：新会话没选项目时 homeRoot 缺省（= cwd），续聊按 transcript 反查到默认项目后
+  // homeRoot 显式等于 cwd——同一个地方，别因为写法不同把每段新对话的第二条消息都判成冷起。
+  const normDir = (d) => { const r = path.resolve(String(d || '')); return process.platform === 'win32' ? r.toLowerCase() : r; };
+  const warmSig = snap ? '' : createHash('sha256').update(JSON.stringify([
+    ctx.key, normDir(ctx.cwd), ctx.configDir || '', ctx.media || '', normDir(ctx.homeRoot || ctx.cwd),
+    effModel || '', effortOpts, sdkSettings, appendText, ext,
+    engineEnv ? [engineEnv.CLAUDE_CODE_OAUTH_TOKEN || '', engineEnv.CLAUDE_CONFIG_DIR || ''] : null,
+    [!!ctx.sandbox, !!ctx.shell, termOn, wsToolsOn, wantSuggest],
+  ])).digest('hex');
+
   writeSseHeaders(res);
 
   // 额度（三端拆分 P4）：注册用户超了每天 / 最近 7 天的上限就不开跑——放在「顶掉同会话上一轮」
@@ -494,10 +556,23 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     }
   }
 
-  // 上一轮定局后还挂着等输入建议的 CLI（见 SUGGEST_WAIT_MS）：新一轮开跑前先掐掉；那条建议也就过时了。
+  // 上一轮定局后停放着的 CLI（见 WARM_IDLE_MS）：参数一致就直接接着用；否则关掉它再冷起
+  //（一份 transcript 不许两个 CLI）。新一轮开跑，上一条输入建议也就过时了。
   if (sessionId) {
-    await killLinger(ctx.key, sessionId);
     clearSuggestion(ctx.key, sessionId);
+    // 上一轮已经回了 done、正在做定局后的收尾（见 emitDone 里的 finalizing）：等它收完停放好，最多 10s。
+    const fin = findGenBySession(ctx.key, sessionId);
+    if (fin && !fin.done && fin.finalizing) await Promise.race([fin.settled, sleep(10_000)]);
+    const w = warmRuns.get(ctx.key + '|' + sessionId);
+    if (w) {
+      const sp = sessionPaths(sessionId, ctx.cwd, ctx.configDir);
+      const why = w.sig !== warmSig ? 'options changed'
+        : pendingRewindAnchor(sessionId) ? 'rewind pending'
+          : (sp && warmStat(sp.file) !== w.stat()) ? 'transcript changed by someone else' : '';
+      if (!why && await w.take({ res, message, attachments, source, chatPrefs })) return;
+      console.log(`[claude] warm CLI ${sessionId.slice(0, 8)} not reused (${why || 'gone'}) — cold start`);
+      await closeWarm(w);
+    }
   }
   // Supersede ONLY this conversation's own in-flight turn — an explicit resend of
   // the SAME session（一份 transcript 不能有两个写入者）。别的会话的轮不再被顶掉，
@@ -510,10 +585,12 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     const took = await prev.handoff({ res, message, attachments, source, model, chatPrefs });
     if (took) return;
   }
-  if (prev && !prev.done) {
-    try { prev.abort.abort(); } catch {}
+  // prev.stopping：用户按了停止，那一轮对界面已收尾（done），但 CLI 还在退出中——同样要等它退干净，
+  // 否则新旧两个进程同写一份 transcript。
+  if (prev && (!prev.done || prev.stopping)) {
+    if (!prev.done) { try { prev.abort.abort(); } catch {} }
     const stopped = await Promise.race([
-      prev.settled.then(() => true, () => true),
+      (prev.done ? prev.stopping : prev.settled).then(() => true, () => true),
       new Promise((resolve) => setTimeout(() => resolve(false), 10_000)),
     ]);
     if (!stopped) {
@@ -526,6 +603,10 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   }
 
   const abort = new AbortController();
+  // CLI 进程真正退干净（主循环 finally 走完）。硬停止先让界面收尾，进程在后台退，同会话重发据此等它。
+  let markExited;
+  const procExited = new Promise((r) => { markExited = r; });
+  let userStopped = false;    // 用户按了停止（硬停）：这一轮已发 interrupted 收尾，之后的一切输出都不再进缓冲
   let settleGen;
   // 一个 gen = 界面上的【一轮】（一条用户消息 + 它的回答）；一次 query（一个 CLI 进程）通常只有一轮，
   // 挂起接力时一个进程会先后承载好几轮——gen 随之换新（见 gen.handoff），abort 仍是整个进程的。
@@ -600,7 +681,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   recordPrefs();
   // Deliberately NOT aborting on client disconnect: the generation keeps running
   // and buffering so a refreshed page can reattach via /api/attach.
-  const send = (obj) => genEmit(gen, obj);
+  const send = (obj) => { if (!userStopped) genEmit(gen, obj); };
   // 多对话并发下 MCP 工具（终端/工作区）不能再按 caller key 找「唯一活跃 gen」——
   // 会串到并行的另一轮。per-run 闭包把事件精确路由回发起调用的这一轮。
   const getGen = () => gen;
@@ -609,7 +690,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // so it lands even while the SDK holds the file open) and surface an actionable hint
   // instead of dumping the raw API error.
   const emitThinkingError = () => {
-    if (sessionId) { const sp = sessionPaths(sessionId, ctx.cwd, ctx.configDir); if (sp) { try { sanitizeSessionThinking(sp.file); } catch {} } }
+    const sid = sessionId || gen.sessionId;   // 停放后接着用的新会话：开跑时还没有 sessionId
+    if (sid) { const sp = sessionPaths(sid, ctx.cwd, ctx.configDir); if (sp) { try { sanitizeSessionThinking(sp.file); } catch {} } }
     send({ type: 'error', kind: 'thinking', title: '思考块遇到 SDK 已知问题，已自动清理', hint: '再发一次；若仍旧，调低思考强度或换 4.7/Sonnet', resetsAt: 0, message: '这一轮的思考块遇到 SDK 已知问题（高思考强度 + 多工具并行时偶发，思考块被写坏）——已自动清理本会话。请再发一次刚才的消息；若仍报错，把思考强度调低一档（如 Max→High）或换 Opus 4.7 / Sonnet。' });
   };
   // 文件面板自动刷新：agent 的写类工具落盘后把变更广播进本轮 SSE（{type:'wsx',op:'fs'}），
@@ -730,7 +812,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     emitDone(heldResult);
     try { abort.abort(); } catch {}
   }
-  const bgWatch = setInterval(() => {
+  const bgTick = () => {
     if (!heldResult || doneEmitted) return;
     const now = Date.now();
     const live = liveBgTasks();
@@ -752,8 +834,10 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       const rest = liveBgTasks();   // 停不掉也照样从挂起清单里摘掉
       send({ type: 'bg_hold', count: rest.length, tasks: bgPayload(rest), deadline: bgDeadline(rest) });
     }
-  }, 15_000);
-  if (bgWatch.unref) bgWatch.unref();
+  };
+  // 每轮一个看门狗（closeTurn 停掉；停放的 CLI 被下一条消息接着用时 warmTake 重挂）。
+  const armBgWatch = () => { const t = setInterval(bgTick, 15_000); if (t.unref) t.unref(); return t; };
+  let bgWatch = armBgWatch();
   // 用户主动「结束等待」（POST /api/stop {release:true}）：按正常定局收尾，而不是留一条「已中断」。
   const releaseHold = () => {
     if (!heldResult || doneEmitted) return false;
@@ -768,10 +852,10 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   let interruptTimer = null;  // 软停止（interruptTurn）的兜底：CLI 迟迟不回 result 就整个停
   let softStopping = false;   // 软停止已发出、等被打断那一轮的 result
 
-  // 轮次收尾台账（只做一次）：SSE 收口、inflight 销账、run.end、并发槽让位。正常在 finally 里做；
-  // 挂等输入建议时提前做——那段时间 CLI 还活着，但这一轮对人、对别的设备、对并发上限都已结束。
+  // 轮次收尾台账（每轮一次）：SSE 收口、inflight 销账、run.end、并发槽让位。正常在 finally 里做；
+  // 停放 CLI 前提前做——那段时间 CLI 还活着，但这一轮对人、对别的设备、对并发上限都已结束。
   let turnClosed = false;
-  let lingerEntry = null;   // 本轮挂等输入建议的登记（finally 里等 SDK 收完子进程再销）
+  let warmEntry = null;     // 本进程眼下的停放登记（finally 里等 SDK 收完子进程再放行等它的人）
   function closeTurn() {
     if (turnClosed) return;
     turnClosed = true;
@@ -802,6 +886,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   function emitDone(rmsg) {
     if (doneEmitted) return;
     doneEmitted = true;
+    // done 发出 → 收尾还要 1–3s（effort 定局、上下文用量），之后才 closeTurn + 停放。这期间同会话来的
+    // 下一条消息认这个标记：等它收完再接着用停放的 CLI，而不是把它当「还在跑」顶掉（顶掉 = 杀进程冷起）。
+    gen.finalizing = true;
     // 产物附件：最终回答里 markdown 链接指向的真实文件/文件夹（根守卫内）→ 附件卡。
     let attachments = [];
     // nav = 文件夹卡「在工作空间里打开」的定位。项目制下 ctx.cwd 已被覆写成项目目录，
@@ -826,6 +913,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     });
   }
 
+  let qHandle = null;   // finally 里收尾用（q 本身声明在 try 块里）
+  let iterDone = false;   // 读循环读到流尾（CLI 自己退了）；见 readNext
   try {
     // The SDK persists extended-thinking blocks to the session log with their text
     // emptied but the signature kept; on resume the API can 400 on those dead blocks.
@@ -835,17 +924,46 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       const sp = sessionPaths(sessionId, ctx.cwd, ctx.configDir);
       if (sp) { try { const r = sanitizeSessionThinking(sp.file); if (r && r.dropped) console.log(`[sanitize] ${sessionId.slice(0, 8)} dropped ${r.dropped} dead thinking block(s)`); } catch {} }
     }
-    // 当前激活的 Claude 账号 token（+ 沙箱 configDir）现取现注——切账号即时生效。
-    const engineEnv = claudeEngineEnv(ctx);
-    // effort：ultracode 不是 SDK 的 effort 取值（TS 类型只列五档）——翻译成 effort:'xhigh' +
-    // settings {ultracode:true, enableWorkflows:true}（Pro 计划 enableWorkflows 默认关，必须显式开）。
-    // settings 与 fast mode 合成【同一份】JSON 字面量（不是文件路径），不落盘、仅本轮生效。
-    const effortOpts = claudeEffortOptions(effort);
-    const sdkSettings = {
-      ...(fast && claudeSupportsFast(model) ? { fastMode: true } : {}),   // SDK 0.3.220 起 settings.fastMode 可点亮；仅支持的模型注入
-      ...(effortOpts.settings || {}),
+    // engineEnv / effortOpts / pauseOnFlag / sdkSettings 已在开头算好（同时进 warmSig）。
+    // 暂停对话框走 AskUserQuestion 同一条等待通道：发 refusal_prompt 给前端（输入框上方的 Paused 卡）、
+    // 会话列表亮「待回答」、POST /api/answer 带 choice 回来（10 分钟没人答按 cancelled）。三种结局：
+    //   retry_fallback → CLI 换会话模型重试（会话模型切换这里就记上，之后的 model_refusal_fallback 再记一次无害）；
+    //   edit_prompt    → CLI 撤掉半截并自行中断本轮（按软停止收，不报错）；前端等收轮后回滚到被拒消息、原文填回输入框；
+    //   cancelled（X / 超时 / 停止）→ CLI 按经典拒答收尾（model_refusal_no_fallback + 错误帧）。
+    // payload.retractedMessageUuids 官方规定「落定时才撤、收到时不撤」——回话前按名单撤（ledger 幂等）。
+    const onRefusalDialog = async (req, opts) => {
+      if (!req || req.dialogKind !== 'refusal_fallback_prompt') return { behavior: 'cancelled' };
+      const p = req.payload || {};
+      const qid = 'rf-' + randomBytes(6).toString('hex');
+      const sid = gen.sessionId;
+      const from = String(p.originalModel || ''), to = String(p.fallbackModel || '');
+      // 被拒的用户消息此刻已落盘：先把它的 uuid 作为回滚锚点发下去（「编辑并重试」回滚到它）
+      if (sid) {
+        try { const sp = sessionPaths(sid, ctx.cwd, ctx.configDir); const a = sp ? lastRealUserUuid(sp.file) : null; if (a) send({ type: 'anchor', uuid: a, sessionId: sid }); } catch {}
+      }
+      send({ type: 'refusal_prompt', qid, sessionId: sid || null, from, to, category: p.apiRefusalCategory ?? null, at: Date.now() });
+      const announce = (pending) => { if (sid) busPublish(ctx.key, { type: 'question', sessionId: sid, pending }); };
+      if (sid) sessionQuestions.set(sid, { qid, questions: [{ header: 'Session paused', question: `Safeguards flagged this message. Edit and retry, or switch to ${to || 'the fallback model'}.` }], ts: Date.now() });
+      announce(true);
+      let choice = 'cancelled';
+      try {
+        const ans = await waitForAnswer(qid, opts && opts.signal, undefined, ctx.key);
+        if (ans && !ans.cancelled && (ans.choice === 'retry_fallback' || ans.choice === 'edit_prompt')) choice = ans.choice;
+      } catch {}
+      if (sid) sessionQuestions.delete(sid);
+      announce(false);
+      const retracted = Array.isArray(p.retractedMessageUuids) ? p.retractedMessageUuids.filter((u) => typeof u === 'string') : [];
+      if (retracted.length) applyRetraction(retracted);
+      if (choice === 'edit_prompt') softStopping = true;
+      if (choice === 'retry_fallback' && to && sid) {
+        const bare = to.replace(/\[1m\]$/, ''), fromBare = from.replace(/\[1m\]$/, '');
+        if (chatPrefs) { try { swapChatPrefsModel(ctx, sid, bare, fromBare); } catch {} }
+        send({ type: 'session', sessionId: sid, model: bare, swapped: true, from: fromBare, at: Date.now(), requestId: null });
+      }
+      send({ type: 'refusal_answer', qid, choice, sessionId: sid || null });
+      return choice === 'cancelled' ? { behavior: 'cancelled' } : { behavior: 'completed', result: choice };
     };
-    const q = query({
+    const q = qHandle = query({
       prompt: turnInput.stream,
       options: {
         cwd: ctx.cwd,
@@ -862,12 +980,11 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         },
         // 扩展中心：聚合技能 plugin + 用户装的 Claude Code 插件。
         ...(ext.plugins.length ? { plugins: ext.plugins } : {}),
-        // styleText（用户可控文本）拼在沙箱 nudge 之前——让沙箱铁律保持"最后说话"，
-        // 降低自定义风格对软约束的对抗力（硬边界在 canUseTool，不受提示词影响）。
+        // append 的拼法见开头 appendText。
         // snapshot:false —— SDK 0.3.267 起 system prompt 默认「首轮录制、之后原样复用」，同一会话里后续
         // 轮次换 append 一律无视（09-22 探针：第二轮仍答第一轮的口令）。bridge 的 append 是逐轮拼的
         //（切模型后的身份、按身份注入的工具说明），必须每轮现渲染。
-        systemPrompt: { type: 'preset', preset: 'claude_code', snapshot: false, append: identityNudge(model) + (STYLE_NUDGE[style] || (styleText ? '\n\n[回复风格 · 自定义] ' + styleText : '')) + (snap ? SNAP_NUDGE : ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE)) : (hostNudge() + HOST_TOOLS_NUDGE)) + (termOn ? TERMINAL_NUDGE : '') + (wsToolsOn ? WORKSPACE_NUDGE : '') + DELIVER_NUDGE + (research ? RESEARCH_NUDGE : '') },
+        systemPrompt: { type: 'preset', preset: 'claude_code', snapshot: false, append: appendText },
         // MCP 长调用（共享终端等）必须同步等结果——SDK 2.1.212 起
         // 默认超 2 分钟自动转后台，会破坏「模型等产物再回看质检」的语义，显式关掉（设 24h）。
         env: { ...(engineEnv || process.env), CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '86400000' },
@@ -882,7 +999,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         // jsonl 里按 parentUuid 分叉，之后普通 resume 自动走新分支（claude-rewind.mjs）。
         enableFileCheckpointing: true,
         // 输入建议：每轮 result 之后 CLI 预测一条「下一句」（蹭主对话的 prompt cache，几乎不花钱）。
-        // 收法见 lingerForSuggestion；前端开关关着 / 老客户端 / 快照访客不开。
+        // 收法见 parkWarm（停放期顺带收）；前端开关关着 / 老客户端 / 快照访客不开。
         ...(wantSuggest ? { promptSuggestions: true } : {}),
         ...(sessionId && pendingRewindAnchor(sessionId) ? { resumeSessionAt: pendingRewindAnchor(sessionId) } : {}),
         // 沙箱用户硬边界：PreToolUse hook 对【每次】工具调用（含只读）做路径围栏 + shell 拦截；
@@ -926,6 +1043,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         // 如实声明。声明后 CLI 的 interrupt 只中断当前轮、放过后台 agent/工作流（未声明则 fail-closed
         // 一并杀掉）；我们本来就要能单条停，声明与实现一致。
         perTaskStopAffordance: true,
+        ...(pauseOnFlag ? { supportedDialogKinds: ['refusal_fallback_prompt'], onUserDialog: onRefusalDialog } : {}),
         abortController: abort,
         canUseTool: async (name, input, opts) => {
           // Intercept the interactive question tool: ask the user, wait, feed
@@ -998,6 +1116,31 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       return true;
     };
 
+    // 硬停止（没有后台任务、或已在挂起）。以前直接 abort：Windows 上 SDK 关 CLI 是「关 stdin → 等 2s →
+    // 再等 5s → SIGKILL」，主循环要等进程退出才抛出，于是停止键按下后这一轮还「活」7 秒以上——
+    // /api/active 照样列着它，前端同步内核把刚停掉的轮重新挂回来接着转圈，最后收到一张
+    //「出错了 — Operation aborted」错误卡（实测发现）。
+    // 现在：界面侧当场收尾（interrupted 事件 + 台账结清，重放缓冲以它结尾），CLI 在后台退——
+    // 先 interrupt 让它停笔、写下中断标记（transcript 干净，续聊不受影响），出 result 即 break
+    // 走正常收尾；3s 没回音再 abort。挂起中则直接 abort（用户要连后台任务一起停）。
+    const hardStop = () => {
+      if (userStopped) return true;
+      userStopped = true;
+      doneEmitted = true;
+      clearTimeout(interruptTimer);
+      console.log('[claude] user stop — turn settled now, CLI shutting down in background');
+      if (!turnClosed) {
+        genEmit(gen, { type: 'interrupted', sessionId: gen.sessionId || null });
+        gen.stopping = procExited;
+        closeTurn();
+      }
+      if (heldResult || bgFinalized) { try { abort.abort(); } catch {} return true; }
+      q.interrupt().catch(() => {});
+      const t = setTimeout(() => { try { abort.abort(); } catch {} }, 3000);
+      if (t.unref) t.unref();
+      return true;
+    };
+
     // 挂起接力：挂起中（模型已停笔、后台任务在跑）同会话又来一条消息 → 上一轮按正常定局收尾
     //（done + 附件卡、台账结清），新消息推进同一个 CLI 的输入流开新一轮；gen 换新，后台任务、
     // 权限通道、封顶计时都原样延续。返回 false = 不接（这一轮并没在挂起），调用方照旧顶掉重开。
@@ -1051,6 +1194,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       g.stopTask = stopTask;
       g.releaseHold = releaseHold;
       g.interruptTurn = interruptTurn;
+      g.hardStop = hardStop;
       g.handoff = handoff;
     }
     armGen(gen);
@@ -1089,45 +1233,143 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       }
     };
 
-    // 输入建议挂等（见 SUGGEST_WAIT_MS）：for-await 此刻停在 result 分支里，直接拉同一个迭代器的
-    // next()。超时 / 被下一轮 killLinger 掐掉都走 q.close()——SDK 的消息迭代器是 async generator，
-    // 挂着一个 next() 时外面 break 调的 return() 会排在它后面卡死；cleanup 杀掉子进程让流走完才收得回来。
-    const lingerForSuggestion = async (sid) => {
-      if (!sid) return;
-      let closed = false;
-      const close = () => { if (closed) return; closed = true; try { q.close(); } catch {} };
+    // ---- 停放与接着用（见 WARM_IDLE_MS）-------------------------------------------------
+    // 读循环不用 for-await：停放期要自己拉 q.next()（收输入建议），被新一轮接走时那个还悬着的 next()
+    // 会落到新一轮的第一帧上——塞回 pendingNext，主循环先读它，一帧不丢。
+    let pendingNext = null;
+    const readNext = () => { const p = pendingNext || q.next(); pendingNext = null; return p; };
+
+    // 接着用：同会话新消息、启动参数一致 → 新 gen 订阅这条 POST，消息推进同一个输入流开新一轮。
+    // 与挂起接力（handoff）同一套换 gen 手法，差别是上一轮早已定局收尾（turnClosed），要把看门狗/计时重挂。
+    // 返回 'taken' = 接走了；'busy' = 并发上限把它挡下（错误帧已回给这条 POST，CLI 原样留着停放）；false = 接不了。
+    const warmTake = ({ res: nres, message: nmsg, attachments: natts, source: nsrc, chatPrefs: nprefs }) => {
+      if (!turnClosed || userStopped || abort.signal.aborted || iterDone) return false;
+      const g = newGen(nmsg, nsrc, gen.sessionId);
+      const userCap = ctx.kind === 'user' ? getPolicy().maxUserTurns : 0;
+      const slot = tryStartGen(ctx.key, g, {
+        maxPerKey: MAX_PARALLEL_CHATS,
+        singleSession: true,
+        ...(userCap ? { globalPrefix: 'u:', maxGlobal: userCap } : {}),
+      });
+      if (!slot.ok) {
+        genWrite(nres, slot.reason === 'global'
+          ? { type: 'error', kind: 'busy', title: '服务器正忙', message: '现在大家同时在跑的对话已经到上限（' + userCap + ' 个），稍等片刻再发送这条消息。' }
+          : { type: 'error', kind: 'busy', title: '会话正在启动', message: '这个会话已有一轮刚刚开始，请稍后再试。' });
+        nres.end();
+        return 'busy';
+      }
+      const uuid = randomUUID();
+      const next = composeTurnPrompt(nmsg, natts || []);
+      gen = g;
+      if (ctx.kind === 'user' && ctx.user) { try { noteTurnStart(ctx.user); } catch {} }
+      genSubscribe(gen, nres);
+      armGen(gen);
+      heartbeat = startMultiHeartbeat(gen.subscribers);
+      bgWatch = armBgWatch();
+      // 每轮的计数与记账归零（上一轮定局时后台任务已清零，整进程的任务表/门禁原样留着无妨）
+      turnClosed = false;
+      doneEmitted = false;
+      bgFinalized = false;
+      heldResult = null; interimResult = null; holdStartedAt = 0;
+      shellSeenAt.clear(); cutShells.clear();
+      softStopping = false;
+      turnOut = 0; turnThink = 0;
+      authFailed = false;
+      compactAwait = ''; compactSeen = false;
+      compactCmd = /^\s*\/compact(?:\s|$)/.test(String(nmsg || ''));
+      hookLevel = null;
+      ledger = makeRetractLedger();
+      for (const k of Object.keys(streamBlocks)) delete streamBlocks[k];
+      lastMsgAt = Date.now();
+      awaitingUser.add(uuid);
+      announceStart();
+      if (nprefs && gen.sessionId) { try { recordChatPrefs(ctx, gen.sessionId, nprefs); } catch {} }
+      turnInput.push(next.prompt, next.imageBlocks, uuid);
+      return 'taken';
+    };
+
+    // 停放：本轮已定局并结清台账（closeTurn），CLI 留着等同会话的下一条消息。期间顺带收输入建议。
+    // 返回 true = 被新一轮接走（主循环 continue 接着读）；false = 到点 / 被关 / CLI 自己动了 → 照旧收尾退出。
+    const parkWarm = async (sid) => {
+      if (!sid) return false;
+      const idleMs = Math.max(WARM_IDLE_MS, wantSuggest ? SUGGEST_WAIT_MS : 0);
+      if (!idleMs) return false;
+      const lk = ctx.key + '|' + sid;
+      const sp = sessionPaths(sid, ctx.cwd, ctx.configDir);
+      let baseline = sp ? warmStat(sp.file) : '';
+      let closed = false, taken = false, wake = null;
+      const wakeP = new Promise((r) => { wake = r; });
       let finish;
       const done = new Promise((r) => { finish = r; });
-      lingerEntry = { lk: ctx.key + '|' + sid, close, done, finish };
-      lingers.set(lingerEntry.lk, lingerEntry);
-      const deadline = Date.now() + SUGGEST_WAIT_MS;
+      const entry = {
+        lk, sig: warmSig, parkedAt: Date.now(), done, finish,
+        stat: () => baseline,
+        // 关：杀掉停放的 CLI（被接走之后再关是空操作——绝不能误杀正在跑的新一轮）。
+        close: () => {
+          if (closed || taken) return;
+          closed = true;
+          if (warmRuns.get(lk) === entry) warmRuns.delete(lk);
+          try { q.close(); } catch {}
+          wake();
+        },
+        take: async (p) => {
+          if (closed || taken || !WARM_IDLE_MS) return false;
+          const r = warmTake(p);
+          if (r !== 'taken') return r;
+          taken = true;
+          if (warmRuns.get(lk) === entry) warmRuns.delete(lk);
+          finish();
+          wake();
+          console.log(`[claude] warm CLI ${sid.slice(0, 8)} reused — parked ${Math.round((Date.now() - entry.parkedAt) / 1000)}s, no spawn`);
+          return true;
+        },
+      };
+      const prev = warmRuns.get(lk);
+      if (prev && prev !== entry) prev.close();
+      warmEntry = entry;
+      if (WARM_IDLE_MS) { warmRuns.set(lk, entry); evictWarm(entry); }
+      // CLI 定局后自己还会补写几笔 transcript：3s 后重取指纹当基线，之后再变就是别的写入者。
+      const settle = setTimeout(() => { if (!closed && !taken && sp) baseline = warmStat(sp.file); }, 3000);
+      if (settle.unref) settle.unref();
+      const deadline = Date.now() + idleMs;
       try {
-        while (!closed) {
+        while (!closed && !taken) {
           const left = deadline - Date.now();
           if (left <= 0) break;
-          const nextP = q.next();
-          nextP.catch(() => {});   // 超时后被 close 收掉的那个 next 可能以异常落地，别漏成 unhandled
+          const nextP = readNext();
+          nextP.catch(() => {});   // 被 close 收掉的那个 next 可能以异常落地，别漏成 unhandled
           let timer;
-          const r = await Promise.race([nextP, new Promise((resolve) => { timer = setTimeout(() => resolve(null), left); })]);
+          const r = await Promise.race([
+            nextP.then((v) => ({ v })),
+            wakeP.then(() => null),
+            new Promise((resolve) => { timer = setTimeout(() => resolve(null), left); }),
+          ]);
           clearTimeout(timer);
-          if (!r || r.done) break;
-          const m = r.value;
+          if (taken) { pendingNext = r ? Promise.resolve(r.v) : nextP; return true; }
+          if (!r) break;
+          if (r.v.done) { iterDone = true; break; }
+          const m = r.v.value;
           if (m && m.type === 'prompt_suggestion') {
-            const text = normalizeSuggestion(m.suggestion);
+            const text = wantSuggest ? normalizeSuggestion(m.suggestion) : '';
             if (text) {
               const v = setSuggestion(ctx.key, sid, text);
               busPublish(ctx.key, { type: 'suggestion', sessionId: sid, text, at: v.at });
             }
+            continue;
+          }
+          // CLI 自己开了一轮（定时唤醒之类，没有人在看）——不替它挂着，照旧收掉。
+          if (m && (m.type === 'assistant' || m.type === 'stream_event' || m.type === 'result' || (m.type === 'system' && m.subtype === 'init'))) {
+            console.log(`[claude] parked CLI ${sid.slice(0, 8)} started a turn on its own (${m.type}) — closing it`);
             break;
           }
-          // CLI 自己又开了一轮（定局时后台任务已清零，不该发生）——不替它挂着。
-          if (m && (m.type === 'assistant' || (m.type === 'system' && m.subtype === 'init'))) break;
         }
       } catch (e) {
-        if (!closed) console.log('[claude] prompt suggestion wait failed:', e && e.message);
+        if (!closed) console.log('[claude] parked CLI wait failed:', e && e.message);
       } finally {
-        close();
+        clearTimeout(settle);
+        entry.close();
       }
+      return false;
     };
 
     // ---- 子 agent 转录 / 模型切换 / 撤回 / effort 定局 -----------------------------
@@ -1209,8 +1451,13 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       send({ type: 'effort', sessionId: sid, level });
     };
 
-    for await (const msg of q) {
+    while (true) {
+      const step = await readNext();
+      if (step.done) { iterDone = true; break; }
+      const msg = step.value;
       lastMsgAt = Date.now();
+      // 硬停止后：这一轮对界面已收尾，只等被打断那轮的 result 就走正常收尾（见 hardStop）。
+      if (userStopped) { if (msg.type === 'result') break; continue; }
       // 幻影 result 之后只要还有任何消息（正常是紧接着的第二个 init），兜底计时器就作废。
       if (phantomTimer && msg.type !== 'result') { clearTimeout(phantomTimer); phantomTimer = null; }
       if (msg.type === 'system' && msg.subtype === 'background_tasks_changed') {
@@ -1231,7 +1478,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         // 对话回滚锚点已随本轮 resumeSessionAt 消费（分支从此落进 transcript）——清账。
         if (sessionId) clearPendingRewind(sessionId);
         // fast：本轮加速是否真点亮（开了开关也可能因冷却/额度不可用——前端据此显示实况）。
-        send({ type: 'session', sessionId: msg.session_id, model: msg.model, ...(fast ? { fast: msg.fast_mode_state === 'on' } : {}) });
+        send({ type: 'session', sessionId: msg.session_id, model: msg.model, ...(fast ? { fast: msg.fast_mode_state === 'on' } : {}), ...(ctx.worktree ? { wt: ctx.worktree } : {}) });
         // 斜杠命令表（输入栏「/」菜单用）：控制接口 supportedCommands() 给全表（内置 + 技能，
         // 带 description/argumentHint），init 帧的 terminal_slash_commands（SDK 0.3.257）标出
         // 绑定本地终端 UX 的命令（doctor/color），手机/远程 UI 该藏。表跟账号/技能走不跟会话，
@@ -1249,7 +1496,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         // 上下文压缩进度（SDK 实测帧序：status:compacting → status:null+compact_result → compact_boundary →
         // 摘要 user 帧；手动 /compact 时 init 夹在中间）。前端据此在循环组里摆「Compacting…」流光行，
         // 失败给「Compaction failed」；成功的定局以 boundary 为准（它才带 uuid 与 token 数）。
-        if (msg.status === 'compacting') send({ type: 'compact', phase: 'start' });
+        // requesting = 发起一次 API 请求 → 前端状态行「等待 Claude…」（官方 /code 同款信号）。
+        if (msg.status === 'requesting') send({ type: 'mode', mode: 'requesting' });
+        else if (msg.status === 'compacting') send({ type: 'compact', phase: 'start' });
         else if (msg.compact_result) send({ type: 'compact', phase: 'end', ok: msg.compact_result !== 'failed', error: msg.compact_error ? clip(String(msg.compact_error), 300) : '' });
       } else if (msg.type === 'system' && msg.subtype === 'compact_boundary' && !msg.parent_tool_use_id) {
         // 压缩边界（只认主线程；子 agent 自己的压缩不上主时间线，同官方）。id = 边界 uuid，与 jsonl 那条
@@ -1259,7 +1508,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         compactAwait = msg.uuid || '';
         send({ type: 'compact', phase: 'boundary', id: msg.uuid || '', trigger: cm.trigger, preTokens: cm.preTokens, postTokens: cm.postTokens, ms: cm.ms });
       } else if (msg.type === 'system' && typeof msg.subtype === 'string' && msg.subtype.startsWith('model_')) {
-        // 模型安全栅门 / 模型切换（SDK 宿主默认自动切换：refusal → 回退模型重试 → 提示卡 + 撤回半截正文）。
+        // 模型安全栅门 / 模型切换（refusal → 回退模型重试 → 提示卡 + 撤回半截正文）。聊天轮不再自动切：
+        // 先经 onRefusalDialog 暂停问人，选了「Switch to X」才走到这里；快照轮仍是 CLI 默认的自动切换。
         onModelNotice(msg);
       } else if (msg.type === 'system' && typeof msg.subtype === 'string' && msg.subtype.startsWith('task_')) {
         // Subagent / dynamic-workflow fan-out lifecycle -> Agent 卡 / 工作流卡（挂在对应工具行上）。
@@ -1271,8 +1521,13 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         if (ev?.type === 'message_start') {
           // 撤回记账：API 消息边界——被拒的半截若没凑成完整 block（没有 uuid 可对），按整条消息的区间撤。
           ledger.messageStart();
+          send({ type: 'mode', mode: 'requesting' });   // 新一条 API 消息开跑：状态行「等待 Claude…」
         } else if (ev?.type === 'message_stop') {
           ledger.messageStop();
+        } else if (ev?.type === 'content_block_start' && (ev.content_block?.type === 'thinking' || ev.content_block?.type === 'redacted_thinking')) {
+          // 思考块开头：思考内容被隐去（display omitted / redacted）时一条 thinking_delta 都没有，
+          // 状态行的「思考中…」只能靠这一帧点亮。
+          send({ type: 'mode', mode: 'thinking' });
         } else if (ev?.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
           // AskUserQuestion 有专属 UI（问答卡），不露成工具行；
           // Agent/Task/Workflow 现在【露】——它们的工具行就是子 agent 卡 / 工作流卡的宿主（task_* 按 id 挂上去）。
@@ -1478,13 +1733,14 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           // 但是本地估算、没有 Messages 行、System tools 高估 50%）。前端收到 done 已清忙态，这
           // 1.5s 只延后进程收尾；事件进 gen 缓冲，attach 重放 / /api/status 都拿得到。
           await captureContextUsage(msg);
-          // 输入建议：台账先结清（界面、别的设备、并发槽都当这轮已结束），再挂着等 CLI 吐建议。
-          if (wantSuggest) {
+          // 停放：台账先结清（界面、别的设备、并发槽都当这轮已结束），CLI 留着等同会话下一条消息
+          //（顺带收输入建议）。被接走就 continue 接着读新一轮；否则照旧收尾退出。快照访客不停放。
+          if (!snap && !userStopped && !abort.signal.aborted) {
             closeTurn();
-            await lingerForSuggestion(msg.session_id || gen.sessionId);
+            if (await parkWarm(msg.session_id || gen.sessionId)) continue;
           }
         }
-        // 本轮已定局（正常 done 或错误）——由我们跳出，break 触发迭代器 return() →
+        // 本轮已定局（正常 done 或错误）——由我们跳出，finally 里 q.return() →
         // SDK cleanup 关掉子进程（悬停路径在上面 continue，不走到这）。
         break;
       }
@@ -1496,8 +1752,12 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       emitDone(heldResult || interimResult);
     }
   } catch (err) {
-    if (bgFinalized) {
-      // 静默看门狗已主动定局并 abort——这个异常是我们自己制造的收尾，不再当错误上报。
+    if (bgFinalized || userStopped) {
+      // 静默看门狗已主动定局并 abort / 用户硬停已收尾——这个异常是我们自己制造的收尾，不再当错误上报。
+    } else if (abort.signal.aborted) {
+      // 别的路径的 abort（同会话重发顶掉、控制口还没挂上时的停止）：是「停下」，不是故障——
+      // 不发「出错了 — Operation aborted」。
+      send({ type: 'interrupted', sessionId: gen.sessionId || null });
     } else {
       const em = String((err && err.message) || err || '');
       if (isThinkingBlockError(em)) emitThinkingError();
@@ -1509,11 +1769,17 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   } finally {
     turnInput.release(); // 松开输入流 gate——挂着的生成器结束，SDK 得以完全收尾
     closeTurn();
-    // 挂等输入建议的登记：走到这里 for-await 的 break 已等 SDK cleanup 收完子进程，
-    // 等着它的下一轮（killLinger）这才放行。
-    if (lingerEntry) {
-      if (lingers.get(lingerEntry.lk) === lingerEntry) lingers.delete(lingerEntry.lk);
-      lingerEntry.finish();
+    // 以前 for-await 的 break 会自动调迭代器 return()（SDK cleanup：关 stdin、等 CLI 退、必要时杀）；
+    // 手动读循环要自己调。没有悬着的 next() 时它很快；兜底 10s 后硬关。
+    if (qHandle && !iterDone) {
+      try { await Promise.race([qHandle.return(undefined), sleep(10_000)]); } catch {}
+      try { qHandle.close(); } catch {}
     }
+    // 停放登记：走到这里子进程已收完，等着它退干净的人（同会话冷起 / releaseWarm）这才放行。
+    if (warmEntry) {
+      if (warmRuns.get(warmEntry.lk) === warmEntry) warmRuns.delete(warmEntry.lk);
+      warmEntry.finish();
+    }
+    markExited();
   }
 }

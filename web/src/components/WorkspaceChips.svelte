@@ -13,13 +13,19 @@
   //   · worktree 勾选框不用官方那抹蓝（#2a78d6）——本页配色铁律「彩色只留星芒」，
   //     故走 .submit 同款黑白反相（底 --text / 勾 --bg）。
   //
-  // worktree 半区是【只读指示】不是开关：bridge 不会替会话现开 worktree，只如实告诉你
-  // 「这个工作空间是 linked worktree、不是主检出」——正是删 worktree 前最该看见的一眼。
+  // worktree 半区两种身份（官方同款：新对话前是开关，会话开跑后只读）：
+  //   · armable（空态、还没有会话）且工作空间是 git 主检出 → 【开关】：勾上再发第一条消息，
+  //     服务端先从当前分支切一个 worktree（<仓库>/.claude/worktrees/<名>，分支 claude/<名>），
+  //     整个会话在里面跑、主检出不动（src/claude-worktrees.mjs）。勾选状态记在 prefs，跨对话保留。
+  //   · 当前工作空间本身就是 linked worktree（worktree 会话、或项目目录就是个 worktree）→
+  //     【只读指示】已勾，告诉你「不是主检出」——正是删 worktree 前最该看见的一眼。
   import { dock, openDock, ensureDockMeta } from '../lib/dock.svelte.js';
+  import { prefs, savePrefs } from '../lib/state.svelte.js';
   import { t } from '../lib/i18n.js';
 
   // name = 当前项目名（真实项目里就等于文件夹名；快照对话的桶目录名是 UUID，只有项目名可读）
-  let { name = '' } = $props();
+  // armable = 还没有会话的新对话空态——只有这时 worktree 勾选框能点
+  let { name = '', armable = false } = $props();
 
   const ws = $derived(dock.ws || '');
   const meta = $derived(dock.meta);
@@ -27,6 +33,8 @@
   const folder = $derived(name || (ws ? ws.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || ws : ''));
   const branch = $derived(meta?.git ? meta.branch || null : null);
   const isWorktree = $derived(!!meta?.git && !!meta.worktree);
+  const canToggle = $derived(armable && !!meta?.wtNew);   // 服务端认可（git 主检出、支持 worktree 会话）才给开关
+  function toggleWorktree() { prefs.worktree = !prefs.worktree; savePrefs(); }
   // 快照访客（/c/ 公开链接）不给看归属：服务端本就不下发真实路径，前端也别露目录名
   const show = $derived(!!ws && ws !== 'snap' && !dock.snap);
 
@@ -47,9 +55,23 @@
           <span class="lbl">{branch}</span>
         </button>
 
-        {#if isWorktree}
+        {#if canToggle}
           <span class="divi" aria-hidden="true"></span>
-          <span class="half wt" title={t('此工作空间是 git worktree，不是主检出')}>
+          <button class="half wt" role="checkbox" aria-checked={prefs.worktree} title={t('在仓库的隔离副本里工作')} onclick={toggleWorktree}>
+            <span class="cb">
+              <span class="box" class:off={!prefs.worktree}>
+                {#if prefs.worktree}
+                  <svg width="6" height="5" viewBox="0 0 5.875 5.375" fill="none" aria-hidden="true">
+                    <path d="M0.5 2.75L2.25 4.88L5.38 0.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                {/if}
+              </span>
+            </span>
+            <span class="lbl">worktree</span>
+          </button>
+        {:else if isWorktree}
+          <span class="divi" aria-hidden="true"></span>
+          <span class="half wt ro" title={t('此工作空间是 git worktree，不是主检出')}>
             <span class="cb">
               <span class="box">
                 <svg width="6" height="5" viewBox="0 0 5.875 5.375" fill="none" aria-hidden="true">
@@ -96,9 +118,9 @@
      半透明芯片会让标题字直接叠进芯片文字里。这里把半透明的 --hover 铺在 --bg 上合成出
      同一个视觉色，但整块挡光——与输入卡片 var(--card) 的不透明取向一致。 */
   .chip { background-color: var(--bg); background-image: linear-gradient(var(--hover), var(--hover)); box-shadow: var(--wc-ring); }
-  .chip:active, .half:not(.wt):active { background: var(--hover-strong); color: var(--text); }
+  .chip:active, .half:not(.ro):active { background: var(--hover-strong); color: var(--text); }
   @media (hover: hover) {
-    .chip:hover, .half:not(.wt):hover { background: var(--hover-strong); color: var(--text); }
+    .chip:hover, .half:not(.ro):hover { background: var(--hover-strong); color: var(--text); }
   }
 
   /* 分体胶囊：底色与描边在外层，两半透明 + 圆角继承（官方 group/split 的搬运） */
@@ -110,7 +132,8 @@
     min-width: 0; max-width: 100%;
   }
   .split .half { background: transparent; border-radius: inherit; }
-  /* worktree 半区：只读指示，左右 padding 不对称（官方 pl-p4 5 / pr-p5 6）、间距 g2 3 */
+  /* worktree 半区：左右 padding 不对称（官方 pl-p4 5 / pr-p5 6）、间距 g2 3；
+     官方 Checkbox.Root 自身就是 cursor-default（开关态也是），只读态另外不给 hover */
   .half.wt { gap: 3px; padding: 0 6px 0 5px; cursor: default; }
   .divi {
     width: 1px; height: 10px; flex: none; background: var(--divider);
@@ -135,5 +158,8 @@
     display: flex; align-items: center; justify-content: center;
     width: 100%; height: 100%; border-radius: 2.4px;
     background: var(--text); color: var(--bg);
+    transition: background-color var(--mo-micro) var(--ea-std), box-shadow var(--mo-micro) var(--ea-std);
   }
+  /* 未勾：透明底 + 1px 内环（官方 inset 0 0 0 1px var(--t5)，t5 = 正文色 25%）；勾上去环填实 */
+  .box.off { background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 25%, transparent); }
 </style>

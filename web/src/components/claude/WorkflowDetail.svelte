@@ -4,8 +4,8 @@
   // tokens」/ 描述 / 失败·停止原因框 / Phases 进度树（OD 行 → LD 四列 agent 表）。
   // 09-02 这些先住在底部抽屉 TaskSheet 里，09-05 起搬进右侧工作台的「任务」视图（TasksPanel）。
   //
-  // bridge 偏离：agent 表的行可点（onAgent(a)）→ 压上那个 agent 的转录视图（磁盘 jsonl 轮询）——
-  // 官方 FD 行不可点、只看得到 label/model/tokens/time。
+  // bridge 偏离：agent 表的行可点（onAgent(a)）→ 压上那个 agent 的转录视图——官方 FD 行不可点、只看得到
+  // label/model/tokens/time。运行中、排队中的也能点（先看提示词，转录只在视图开着时懒同步），见 AgentTranscript。
   // 数据只读：tool 是 chat.messages 里的 proxy（单写者规则——只有 chat 内核改它）。
   // 秒级时钟只在「卡片挂着且工作流还在跑」时 tick——官方 cD(running) 同款，页面隐藏时冻结。
   import { deriveWorkflow, agentState, agentDotStates, reasonFromSummary, toolTaskStatus, toolTaskTitle } from '../../lib/taskModel.js';
@@ -59,7 +59,7 @@
   const agentTime = (a) => (running && a.state === 'progress' && a.startedAt !== undefined
     ? fmtDurPanel(Math.max(0, now - a.startedAt))
     : a.durationMs !== undefined ? fmtDurPanel(a.durationMs) : '');
-  const canOpen = (a) => !!(onAgent && a && a.agentId);
+  const canOpen = (a) => !!(onAgent && a);
   function pick(a) { if (canOpen(a)) onAgent(a); }
   function onKey(e, a) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(a); } }
 </script>
@@ -132,10 +132,10 @@
                     {@const st = agentState(a, dotOpts())}
                     {@const dim = st === 'done' || !running}
                     {@const link = canOpen(a)}
-                    <!-- bridge 偏离：有 agentId 的行可点 → 该 agent 的转录视图（role/tabindex 只在可点时给） -->
+                    <!-- bridge 偏离：行可点 → 该 agent 的提示词 + 转录视图（role/tabindex 只在可点时给） -->
                     <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_tabindex -->
                     <span class="ag-c ag-name" class:dim class:link role={link ? 'button' : undefined} tabindex={link ? 0 : undefined}
-                      title={link ? `View transcript: ${a.label}` : a.label}
+                      title={link ? (st === 'done' || st === 'error' || !running ? `View transcript: ${a.label}` : `View prompt & live transcript: ${a.label}`) : a.label}
                       onclick={() => pick(a)} onkeydown={(e) => onKey(e, a)}>
                       <span class="ag-st">{#if st === 'done'}<span class="gi xs" role="img" aria-label="Done">{glyph('Check')}</span>{/if}</span>
                       <span class="ag-lbl">{a.label}</span>

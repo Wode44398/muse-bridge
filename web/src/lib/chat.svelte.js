@@ -37,8 +37,8 @@ import { pump, watch, linkAbort } from './sse.js';
 import { api, getToken, authHeaders } from './api.js';
 import { apiUrl } from './server.js';
 import { claudeArtifactUrl, kindOf as previewKindOf } from './preview.svelte.js';
-import { session, settings, ui, status, compose, refusalBand, caps, prefs } from './state.svelte.js';
-import { closeTaskDetail, forgetTaskTool } from './dock.svelte.js';
+import { session, settings, ui, status, compose, refusalBand, caps, prefs, sessionWt } from './state.svelte.js';
+import { closeTaskDetail, forgetTaskTool, dock } from './dock.svelte.js';
 import { toolStandalone, COMPACT_TOOL, isCompactTool } from './toolVerbs.js';
 import { claudeDefaultModel } from './caps.js';
 import { retractSegments } from './retract.js';
@@ -120,6 +120,7 @@ const sentAttachments = (list) => (list || []).map((a) => {
     kind: a.kind,
     url: a.url || null,
     ...(file ? { file } : {}),
+    ...(a.quoteId ? { quoteId: a.quoteId } : {}),
     ...(a.local ? { local: true } : {}),
   };
 });
@@ -206,7 +207,11 @@ function newAssistant() {
     idle: false,          // 长静默（排队/限流等）→ Thread 星标降成 waiting 慢呼吸
     bgHold: null,         // 悬停收轮（服务端 bg_hold）：{count,tasks,deadline}——本轮挂起等后台任务
     textBreak: false,     // 下一段正文另起一段（悬停续轮时置位，见 textSeg）
+    // 状态行运行态（见 trackRun / computeHint）：wait=在等什么，think*=思考起止，hint=当前显示的那条。
+    wait: 'sending', thinkStart: 0, thinkEnd: null, retry: null, compacting: false,
+    hint: null, hintAt: 0, replayAt: 0,
   });
+  pendingTools.clear();
   return chat.messages[chat.messages.length - 1];
 }
 const cur = () => chat.messages[chat.messages.length - 1];
@@ -249,10 +254,24 @@ const toolById = new Map();
 const taskById = new Map();
 // 进行中的压缩条目（status:compacting 起的行，还没等到带 uuid 的 boundary）——边界到了就把 id 补上。
 let compactPending = null;
-function resetToolIndex(keepRunningTasks = false) {
+// 只留【仍在视图里】且任务在跑的条目（前几轮挂起的后台任务）。replaying = attach 重放的那条消息，
+// 它自己的工具行随后整段清掉重建，也不能留。留下不在视图里的旧 proxy 会让重放的 tool 事件当成
+//「已有行」跳过入段（卡片从对话里消失），之后的 task_* 帧全写进孤儿对象（任务面板只剩挂起清单
+// 兜底出的空卡）。两条路径都踩过：本条仍在流式时 attach 就地重放；本条已被判成超时/切走收成
+// 非流式时，attach 剪掉历史尾部再新建一条——旧那条已不在 chat.messages 里。
+function toolsInView(except) {
+  const set = new Set();
+  for (const msg of chat.messages) {
+    if (!msg || msg === except || msg.role !== 'assistant') continue;
+    for (const s of (msg.segments || [])) if (s && s.kind === 'tools') for (const t of (s.tools || [])) set.add(t);
+  }
+  return set;
+}
+function resetToolIndex(keepRunningTasks = false, replaying = null) {
   compactPending = null;
   if (!keepRunningTasks) { toolById.clear(); taskById.clear(); return; }
-  const alive = (v) => !!(v && v.task && taskRunning(v.task.status));
+  const inView = toolsInView(replaying);
+  const alive = (v) => !!(v && inView.has(v) && v.task && taskRunning(v.task.status));
   for (const [k, v] of toolById) if (!alive(v)) toolById.delete(k);
   for (const [k, v] of taskById) if (!alive(v)) taskById.delete(k);
 }
@@ -489,6 +508,7 @@ const PHASE = {
   task_start: 'tool', task_progress: 'tool', task_update: 'tool', task_done: 'tool',
   agent_msg: 'tool',                 // 子 agent 在干活 → 环绕
   question: 'waiting', answer: 'thinking',
+  refusal_prompt: 'waiting', refusal_answer: 'thinking',   // 安全栅门暂停：等人二选一
   model_notice: 'thinking', retract: 'thinking',   // 安全栅门切模型重试：换个模型重新想
   bg_hold: 'waiting',   // 悬停等后台子任务：主模型已停笔，星标降成慢呼吸
   compact: 'tool',      // 上下文压缩（动辄一两分钟不出字）：算在干活，别被判成长静默
@@ -516,10 +536,87 @@ function applyStatusEvent(ev) {
   }
 }
 
+// —— 状态行「正在干啥」（官方 /code 页 working line 同款：时长 · tokens · 思考中…/运行工具中…）——
+// 移植自桌面包的会话运行态 reducer：waiting ∈ sending → starting（SSE 接通）→ preparing（init）→
+// model（发起 API 请求 / 新消息开跑）⇄ tools（主链工具在跑，全部回完回到 model）；正文/思考一开写就清空。
+// 思考另记起止：进行中 =「思考中…」（按本轮时长升级措辞），结束后至少凑满 2s 再换成「已思考 N 秒」留 2s。
+// 待回结果的工具 id 不进响应式（只有当前这一轮在用，attach 重放按事件顺序重建）。
+const pendingTools = new Set();
+const THINK_MIN_MS = 2000, THOUGHT_SHOW_MS = 2000, HINT_HOLD_MS = 650, REPLAY_MS = 400;
+function thinkBegin(m) {
+  if (m.thinkStart) return;
+  m.thinkStart = Date.now();
+  m.thinkEnd = null;
+}
+function thinkFinish(m) {
+  if (!m.thinkStart) return;
+  const now = Date.now();
+  // attach 整轮重放会在几毫秒内灌完历史帧：那时算出来的「思考了 0 秒」是假的，不留。
+  m.thinkEnd = now - (m.replayAt || 0) < REPLAY_MS ? null : { start: m.thinkStart, end: now };
+  m.thinkStart = 0;
+}
+function trackRun(m, ev) {
+  switch (ev.type) {
+    case 'attach':
+      pendingTools.clear();
+      m.wait = 'model'; m.thinkStart = 0; m.thinkEnd = null; m.retry = null; m.compacting = false;
+      m.hint = null; m.hintAt = 0; m.replayAt = Date.now();
+      return;
+    case 'session': if (m.wait === 'sending' || m.wait === 'starting') m.wait = 'preparing'; return;
+    case 'mode':
+      m.retry = null;
+      if (ev.mode === 'thinking') { thinkBegin(m); m.wait = null; if (m.phase !== 'thinking') m.phase = 'thinking'; }
+      else if (ev.mode === 'requesting') { thinkFinish(m); m.wait = 'model'; pendingTools.clear(); }
+      return;
+    case 'thinking': m.retry = null; thinkBegin(m); m.wait = null; return;
+    case 'text': m.retry = null; thinkFinish(m); m.wait = null; return;
+    case 'tool':
+      m.retry = null; thinkFinish(m); m.wait = 'tools';
+      pendingTools.add(ev.id || '#' + ev.index);
+      return;
+    case 'tool_done':
+      pendingTools.delete(ev.id);
+      if (!pendingTools.size && m.wait === 'tools') m.wait = 'model';
+      return;
+    case 'compact': m.compacting = ev.phase === 'start'; return;
+    case 'retry':
+      m.retry = { attempt: Number(ev.attempt) || 0, max: Number(ev.max) || 0, kind: ev.errorKind || '', status: ev.status || 0 };
+      return;
+    case 'question': case 'bg_hold': case 'refusal_prompt': thinkFinish(m); m.wait = null; return;
+  }
+}
+// 当前该显示哪条状态（纯函数，计时器每 200ms 调一次）。返回 {k,…} 或 null；文案在 Thread 里按 k 取。
+function computeHint(m, now) {
+  if (m.compacting) return { k: 'compact' };
+  if (m.retry) return { k: 'retry', ...m.retry };
+  if (m.paused || m.segments.some((s) => s.kind === 'ask' && !s.answered)) return { k: 'ask' };
+  if (m.bgHold) return null;   // 挂起等后台任务：右侧任务芯片已经说明在等什么
+  const sec = Math.floor((now - m.startedAt) / 1000);
+  const thinking = () => ({ k: 'think', n: sec >= 60 ? 4 : sec >= 45 ? 3 : sec >= 30 ? 2 : sec >= 15 ? 1 : 0 });
+  if (m.thinkStart) return thinking();
+  if (m.thinkEnd) {
+    const dur = m.thinkEnd.end - m.thinkEnd.start;
+    const until = m.thinkEnd.end + Math.max(0, THINK_MIN_MS - dur);
+    if (now < until) return thinking();
+    if (now < until + THOUGHT_SHOW_MS) return { k: 'thought', n: Math.max(1, Math.round(dur / 1000)) };
+  }
+  return m.wait ? { k: m.wait } : null;
+}
+const hintKey = (h) => (h ? h.k + ':' + (h.n ?? '') + ':' + (h.attempt ?? '') : '');
+// 换文案至少停留 650ms（官方同款防抖）：Read 这类 20ms 的工具不至于把「运行工具中…」闪成一帧。
+function tickHint(m, now) {
+  const h = computeHint(m, now);
+  if (hintKey(h) === hintKey(m.hint)) return;
+  if (m.hint && now - m.hintAt < HINT_HOLD_MS) return;
+  m.hint = h;
+  m.hintAt = now;
+}
+
 function onEvent(m, ev) {
   lastLiveAt = Date.now();   // 这条流还活着
   const ph = PHASE[ev.type];
   if (ph && m.phase !== ph) m.phase = ph;
+  trackRun(m, ev);
   // 悬停态解除：主模型恢复动笔（续轮 init 的 session / 正文 / 主链工具）即回到普通
   // 运行显示。task_* 进度事件【不】解除——后台子任务推进正是挂起期的常态。
   if (m.bgHold && (ev.type === 'session' || ev.type === 'text' || ev.type === 'thinking' || ev.type === 'tool')) {
@@ -533,13 +630,14 @@ function onEvent(m, ev) {
     // 断线重连成功：/api/attach 会从头重放整个缓冲，先清掉本条已渲染内容，
     // 否则 text/tools 会追加第二遍（内容翻倍）。重放随后完整重建。
     case 'attach':
-      resetToolIndex(true);  // 重放会按事件顺序重建工具行/任务，索引跟着重建（前几轮仍在跑的后台任务留着，同上）
+      resetToolIndex(true, m);  // 重放会按事件顺序重建工具行/任务，索引跟着重建（【前几轮】仍在跑的后台任务留着，同上；本条自己的不留）
       m.segments = [];
       m.thinking = '';
       m.question = null;
       m.phase = 'shimmer';   // 相位归零，重放事件流会按顺序重建到最新相位
       m.idle = false;
       m.bgHold = null;       // 重放会按事件顺序重建悬停态（bg_hold → session/text 解除）
+      m.paused = false;      // 同理：安全栅门暂停由重放里的 refusal_prompt / refusal_answer 重建
       // elapsedMs：把"思考 Ns"计时器重锚到服务端真实起点——杀后台/刷新回来不再从 0 数。
       if (typeof ev.elapsedMs === 'number' && ev.elapsedMs >= 0) {
         m.startedAt = Date.now() - ev.elapsedMs;
@@ -551,6 +649,7 @@ function onEvent(m, ev) {
         // 新会话首轮：id 此刻才定下来——把发送时的选择器记忆补绑到这个会话上。
         if (!session.id) notePrefsNow(ev.sessionId);
         session.id = ev.sessionId; rememberSession(ev.sessionId);
+        if (ev.wt && ev.wt.cwd) sessionWt[ev.sessionId] = ev.wt;   // worktree 会话：工作台当场切过去
       }
       // fast 实况回执：开了开关也可能因冷却/额度没点亮（status.fast: null=未知/未开）。
       if ('fast' in ev) status.fast = !!ev.fast;
@@ -581,8 +680,11 @@ function onEvent(m, ev) {
     case 'text': queueText(m, ev.text || ''); agentStream('Claude', lastText(m)); break;
     case 'thinking': m.thinking += ev.text || ''; break;
     case 'tool': {
-      const known = ev.id ? toolById.get(ev.id) : null;
-      if (known) { if (ev.name) known.name = ev.name; if (typeof ev.index === 'number') known.index = ev.index; }   // task_start 抢先合成过的行
+      // 索引命中但那一行不在本条消息里（上面 resetToolIndex 注释里的孤儿）= 不算已有，照常入段——
+      // 宁可重建一行，也不能让卡片凭空消失。pushTool 随即把索引改指向新行。
+      let known = ev.id ? toolById.get(ev.id) : null;
+      if (known && !(m.segments || []).some((s) => s && s.kind === 'tools' && (s.tools || []).includes(known))) known = null;
+      if (known) { if (ev.name) known.name = ev.name; if (typeof ev.index === 'number') known.index = ev.index; }
       else pushTool(m, { id: ev.id, name: ev.name, index: ev.index });
       break;
     }
@@ -627,6 +729,16 @@ function onEvent(m, ev) {
     case 'fs': noteFsChange(ev.path); break;
     case 'question': showQuestion(m, ev); break;
     case 'answer': markAnswered(m, ev); break;
+    // 安全栅门暂停（服务端 onRefusalDialog）：输入框上方摆 Paused 卡，等人选「编辑重试 / 换模型」。
+    // attach 重放按顺序先 prompt 后 answer，已答的自然不再弹。
+    case 'refusal_prompt':
+      m.paused = true;
+      refusalBand.prompt = { qid: ev.qid, sessionId: ev.sessionId || session.id || '', from: ev.from || '', to: ev.to || '', category: ev.category || null, busy: false };
+      break;
+    case 'refusal_answer':
+      m.paused = false;
+      if (refusalBand.prompt && refusalBand.prompt.qid === ev.qid) refusalBand.prompt = null;
+      break;
     case 'snap_closed': if (_onSnapClosed) { try { _onSnapClosed(ev.reason || ''); } catch {} } break;
     case 'error':
       m.status = 'error';
@@ -835,6 +947,7 @@ function startTimer() {
       // 长静默判定：工具执行期的静默是常态（那是 orbiting 的正常形态），不算 idle。
       const idle = m.phase !== 'tool' && Date.now() - lastLiveAt > IDLE_MS;
       if (m.idle !== idle) m.idle = idle;
+      tickHint(m, Date.now());
     }
   }, 200);
 }
@@ -844,7 +957,8 @@ function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
 function finishTurn(m) {
   flushText();
   stopTimer();
-  if (m && m.role === 'assistant') m.bgHold = null;
+  if (m && m.role === 'assistant') { m.bgHold = null; m.paused = false; }
+  refusalBand.prompt = null;   // 收轮了还挂着的 Paused 卡（停止 / 超时）已无人在等
   if (m && m.role === 'assistant' && m.status === 'streaming') m.status = 'done';
   if (m && m.role === 'assistant' && !m.__notified) {
     m.__notified = true;
@@ -922,6 +1036,8 @@ function startPump(sid, res, ctrl) {
   live = my;
   lastLiveAt = Date.now();
   chat.reconnecting = false;
+  const m0 = cur();   // 发送后 SSE 接通 = 服务端已接单、在拉起 CLI（官方「Sending…」→「Starting session…」）
+  if (m0 && m0.role === 'assistant' && m0.status === 'streaming' && m0.wait === 'sending') m0.wait = 'starting';
   failingSince = 0;
   behindRuns = 0;
   const w = watch(() => { my.wdKilled = true; if (res.__attemptAbort) res.__attemptAbort(); else { try { ctrl.abort(); } catch {} } });
@@ -1315,6 +1431,7 @@ function reallySend(t, atts, handoff = false) {
   killLive();
   chat.messages.push({ role: 'user', text: t, attachments: sentAttachments(atts) });
   refusalBand.notice = null;   // 新回合开始：上一轮的「已切换到 X」横条收起（官方同款）
+  if (!handoff) refusalBand.prompt = null;   // 接力进同一 CLI 时那张 Paused 卡仍在等人
   session.busy = true;
   lastLiveAt = Date.now();   // 刚发出去、还一个事件都没回：这段时间不许被判成陈旧流
   const m = newAssistant();
@@ -1326,6 +1443,9 @@ function reallySend(t, atts, handoff = false) {
   if (session.id) params.sessionId = session.id;
   // 项目制：新会话带上项目（=cwd）；续聊服务端按 transcript 所在目录反查，此值被忽略。
   if (!session.id && session.projectId) params.claudeProjectId = session.projectId;
+  // worktree 勾选框：只对新会话、且服务端说这里能开 worktree 会话（wtNew：git 主检出）时生效——芯片上
+  // 勾选框也只在这时出现；dock.meta 此刻就是新对话落点的那份。项目本身已是 linked worktree 就不再套一层。
+  if (!session.id && prefs.worktree && !IS_CSNAP && dock.meta?.wtNew) params.worktree = true;
   if (settings.model) params.model = settings.model;
   // 快照访客没有 Ultracode（服务端静默降到 xhigh 且不发 effort 实况）：请求就按 xhigh 发，芯片不说谎
   if (settings.effort) params.effort = (IS_CSNAP && settings.effort === 'ultracode') ? 'xhigh' : settings.effort;
@@ -1477,6 +1597,7 @@ function toUiAttachments(list) {
   if (!Array.isArray(list) || !list.length) return [];
   return list.map((a) => {
     const name = a.name || a.file || tt('文件');
+    if (a.kind === 'chat') return { name, kind: 'chat', url: null, quoteId: a.quoteId || null };   // 引用对话（sessions.mjs 按存盘名认出）
     const isImg = IMG_EXT.includes((name.split('.').pop() || '').toLowerCase());
     if (!isImg) return { name, kind: 'file', url: null };
     const src = a.rel ? wsFileUrl : (a.file ? uploadRawUrl : null);
@@ -1560,6 +1681,7 @@ export async function loadSession(id, opts) {
   try {
     const data = await api.session(id);
     projId = data.projectId || null;   // 会话归属（=工作空间/项目）：服务端按 transcript 所在目录判的真值
+    if (data.wt && data.wt.cwd) sessionWt[id] = data.wt;
     let raw = data.messages || [];
     if (before) raw = raw.filter((x) => !x.ts || x.ts < before);
     else noteFp(id, data);   // 只在未过滤时记：裁过的视图 ≠ 服务端那份，不能拿来短路

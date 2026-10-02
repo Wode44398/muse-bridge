@@ -30,6 +30,9 @@
   --md-shadow-sm: 0 8px 24px rgba(70, 56, 34, .14), 0 1px 4px rgba(70, 56, 34, .06), 0 0 0 .5px rgba(20, 20, 19, .07);
   --md-ease: cubic-bezier(.2, .8, .2, 1);
   --md-ease-pop: cubic-bezier(.2, .9, .3, 1.12);
+  /* 纸面恒为象牙白：原生控件（属性面板的日期框/日历图标、滚动条）按浅色方案画。app.css 默认深色
+     主题在 :root 上声明了 color-scheme:dark，不在这里截住，日历图标画成白色、勾选框画成黑块 */
+  color-scheme: light;
   position: absolute; inset: 0;
 }
 .mde .cm-editor { height: 100%; background: var(--md-bg); color: var(--md-fg); }
@@ -43,13 +46,22 @@
 .mde .cm-content {
   max-width: 760px; margin: 0 auto; padding: 14px 20px 72px;
   caret-color: var(--md-accent); word-break: break-word;
+  /* content 是 flex 子项，默认 min-width:auto 会被宽 widget（表格/KaTeX/长图）的最小内容宽度一路
+     撑上来，窄栏里整篇正文跟着变宽、右边被裁掉。归零后宽东西交给各自的 overflow-x 横滚 */
+  min-width: 0;
 }
-.mde .cm-line { padding: 1px 0; }
+.mde .cm-placeholder { color: var(--md-fg-4); }   /* 空文档占位提示：同定界符的淡色 */
+/* 行不留纵向内边距（同 Obsidian LP 的 .cm-line）：软换行连成的一段、引用里的连续行，行距 = 行高
+   27.52，与阅读态 <br> 连成的段落逐行同位（以前每行上下各 1px，行数一多两态越差越远）。
+   阅读态依赖这个数的地方（DocViewer .doc-md 文首对齐、属性面板 .gap、mdrender.css 标题上外边距）同口径。
+   callout / 数学 / frontmatter 源码态的行保留原来的 1px：它们的外框高度按「揭示前后下文不动」调过，
+   首末行的 10px/6px 写在后面照样盖掉这里。 */
+.mde .cm-line { padding: 0; }
+.mde :is(.mde-line-callout, .mde-line-mathsrc, .mde-line-fm) { padding-top: 1px; padding-bottom: 1px; }
 .mde .cm-cursor { border-left-color: var(--md-accent); border-left-width: 2px; }
 .mde .cm-selectionBackground, .mde ::selection { background: var(--md-accent-soft); }
 
 /* ———— 源码 token（高亮 tag class，两种模式共用） ———— */
-.mde .mde-t-fmt { color: var(--md-fg-4); }
 .mde .mde-t-h { font-weight: 700; }
 .mde .mde-t-h1 { font-size: 1.7em; line-height: 1.35; }
 .mde .mde-t-h2 { font-size: 1.4em; }
@@ -61,6 +73,9 @@
 .mde .mde-t-em { font-style: italic; }
 .mde .mde-t-strike { text-decoration: line-through; text-decoration-color: rgba(20, 20, 19, .45); }
 .mde .mde-t-code { font-family: var(--md-mono); font-size: .88em; }
+/* 外层已经缩过字号的地方不再叠乘：行内代码的 .mde-icode 已是 .88em，代码块行已是 13.5px
+  （无语言围栏/缩进式代码块的正文也带 monospace tag）——否则实际成了 .88×.88，比阅读态小一号 */
+.mde .mde-icode .mde-t-code, .mde .mde-line-code .mde-t-code { font-size: inherit; }
 .mde .mde-t-url { color: var(--md-link); }
 .mde .mde-t-quote { color: var(--md-fg-2); }
 .mde .mde-t-hr { color: var(--md-fg-4); }
@@ -69,18 +84,13 @@
 .mde .mde-t-wk { color: var(--md-accent-deep); }
 .mde .mde-t-tag { color: var(--md-accent-deep); }
 .mde .mde-t-math { color: var(--md-math); }
+.mde .mde-t-fn { color: var(--md-accent-deep); }   /* 脚注 [^id] / [^id]:（mdext.js 的 omTags.footnote） */
+/* 定界符写在本区最后：同特异度后写者胜，揭示出来的 > [ ] ( ) 等不论还挂着引用/链接/脚注哪个类，
+   一律弱化成 fg-4（写在前面时会被 .mde-t-quote 等盖回正文色） */
+.mde .mde-t-fmt { color: var(--md-fg-4); }
 
-/* 嵌套代码语言配色（纸面暖调，Flexoki light 那组：在象牙白上不发冷） */
-.mde .mde-c-kw { color: #5e409d; }
-.mde .mde-c-str { color: #66800b; }
-.mde .mde-c-num { color: #bc5215; }
-.mde .mde-c-fn { color: #205ea6; }
-.mde .mde-c-type { color: #24837b; }
-.mde .mde-c-prop { color: #ad8301; }
-.mde .mde-c-op { color: #6f6e69; }
-.mde .mde-c-re { color: #af3029; }
-.mde .mde-c-def { color: #205ea6; }
-.mde .mde-t-cmt.mde-c-cm, .mde .mde-line-code .mde-t-cmt { color: #9a9891; }
+/* 嵌套代码语言配色（mde-c-*）在 lib/mdrender.css：阅读态代码块也按同一张 mdHighlight 上色（mdeditor/hl.js），
+   配色两态共用那一份 */
 
 /* ———— 行级：标题 ———— */
 .mde .mde-line-h1, .mde .mde-line-h2, .mde .mde-line-h3,
@@ -91,34 +101,51 @@
 .mde .mde-line-h3 { font-size: 1.2em; padding: .25em 0 .1em; }
 .mde .mde-line-h4 { font-size: 1.05em; padding: .2em 0 .08em; }
 .mde .mde-line-h5 { padding: .2em 0 .08em; }
-.mde .mde-line-h6 { color: var(--md-fg-2); padding: .2em 0 .08em; }
+.mde .mde-line-h6 { color: var(--md-fg-2); font-size: .95em; padding: .2em 0 .08em; }   /* token 的 .95em 被下面归一掉了，字号得挂在行上（= 阅读态 h6） */
 /* 行内已按行级放大时，token 的 em 缩放归一，防复利 */
 .mde .mde-line-h1 .mde-t-h, .mde .mde-line-h2 .mde-t-h, .mde .mde-line-h3 .mde-t-h,
 .mde .mde-line-h4 .mde-t-h, .mde .mde-line-h5 .mde-t-h, .mde .mde-line-h6 .mde-t-h { font-size: inherit; }
 
 /* ———— 行级：引用 / callout 源码态 / 数学源码态 / frontmatter 源码态 ———— */
-.mde .mde-line-bq { border-left: 3px solid var(--md-line-2); padding-left: 16px; color: var(--md-fg-2); }
-.mde .mde-line-li { padding-left: 24px; }   /* = 阅读模式 ul/ol 的 1.5em 缩进 */
-.mde .mde-line-callout { border-left: 3px solid var(--md-accent); padding-left: 14px; background: var(--md-accent-tint); }
+/* 引用：「>」前缀恒隐藏，正文起点 = 3px 边线 + 16px = 阅读态 blockquote 的 19px。嵌套层级的竖线
+   用背景渐变画在固定 x（16 / 35 / 54 = 边线+内边距逐层累加，同阅读态嵌套 blockquote 的几何），
+   逐行拼接不会断。--mde-qpad 给引用里的列表叠加缩进用（见下方列表区）。 */
+.mde .mde-line-bq { --mde-qpad: 16px; border-left: 3px solid var(--md-line-2); padding-left: 16px; color: var(--md-fg-2); }
+.mde .mde-bq-d2 { --mde-qpad: 35px; padding-left: 35px; background: linear-gradient(var(--md-line-2), var(--md-line-2)) 16px 0 / 3px 100% no-repeat; }
+.mde .mde-bq-d3 { --mde-qpad: 54px; padding-left: 54px; background: linear-gradient(var(--md-line-2), var(--md-line-2)) 16px 0 / 3px 100% no-repeat, linear-gradient(var(--md-line-2), var(--md-line-2)) 35px 0 / 3px 100% no-repeat; }
+.mde .mde-bq-d4 { --mde-qpad: 73px; padding-left: 73px; background: linear-gradient(var(--md-line-2), var(--md-line-2)) 16px 0 / 3px 100% no-repeat, linear-gradient(var(--md-line-2), var(--md-line-2)) 35px 0 / 3px 100% no-repeat, linear-gradient(var(--md-line-2), var(--md-line-2)) 54px 0 / 3px 100% no-repeat; }
+/* callout 源码态：外框颜色 = 卡片类型色（--co 由 livePreview 按 [!type] 注入），首末行圆角——
+   光标一进一出外框重合，只有内容在变 */
+.mde .mde-line-callout { --mde-qpad: 14px; border-left: 3px solid rgb(var(--co, 217, 119, 87)); background: rgba(var(--co, 217, 119, 87), .07); padding-left: 14px; padding-right: 14px; }
+.mde .mde-line-callout-first { padding-top: 10px; border-radius: 10px 10px 0 0; }
+.mde .mde-line-callout-last { padding-bottom: 10px; border-radius: 0 0 10px 10px; }
+.mde .mde-line-callout .mde-t-quote { color: var(--md-fg); }
+.mde .mde-co-type, .mde .mde-co-type * { color: rgb(var(--co, 217, 119, 87)); font-weight: 600; }
+/* 上面「callout 源码态正文用 fg」那条特异度 (0,3,0)，会把类型色与淡色定界符一起盖掉——同级、写在后面补回来 */
+.mde .mde-line-callout .mde-co-type, .mde .mde-line-callout .mde-co-type * { color: rgb(var(--co, 217, 119, 87)); }
+.mde .mde-line-callout .mde-t-fmt { color: var(--md-fg-4); }
 .mde .mde-line-mathsrc { background: rgba(63, 122, 90, .07); font-family: var(--md-mono); font-size: .92em; }
 .mde .mde-line-fm { background: var(--md-bg-2); font-family: var(--md-mono); font-size: .86em; color: var(--md-fg-2); padding-left: 12px; padding-right: 12px; }
 .mde .mde-line-fm-first { border-radius: 10px 10px 0 0; }
 .mde .mde-line-fm-last { border-radius: 0 0 10px 10px; }
 
 /* ———— 行级：代码块 ————
-   阅读模式是一整个 <pre>（带 1px 边框），这里是一叠行；用 inset 阴影在行两侧补出边框，
-   首/末行再补上下两边 → 视觉上还是一整块，和阅读模式对得上。 */
+   阅读模式是一整个 <pre>（1px 边框 + 8px/14px 内边距），这里是一叠行：每行画左右边框，首/末行
+   再补上下边与圆角 → 视觉上还是一整块。用真 border 而不是逐行 inset 阴影：阴影在 125%/150%
+   缩放的小数像素位置上会漏出一条发丝横线（每行交界一条，像横格纸）；border 还让文字正好落在
+   1px 边 + 14px = 15px，和阅读态 pre 同位。行上下内边距归零，行距 = 13.5×1.6 = 21.6px，同阅读态。 */
 .mde .mde-line-code {
   background: var(--md-bg-2); font-family: var(--md-mono);
-  font-size: 13.5px; line-height: 1.6; padding-left: 14px; padding-right: 14px;
-  box-shadow: inset 1px 0 var(--md-line), inset -1px 0 var(--md-line);
+  font-size: 13.5px; line-height: 1.6; padding: 0 14px;
+  border-left: 1px solid var(--md-line); border-right: 1px solid var(--md-line);
 }
-.mde .mde-line-code-first { border-radius: 10px 10px 0 0; padding-top: 8px; box-shadow: inset 1px 0 var(--md-line), inset -1px 0 var(--md-line), inset 0 1px var(--md-line); }
-.mde .mde-line-code-last { border-radius: 0 0 10px 10px; padding-bottom: 8px; box-shadow: inset 1px 0 var(--md-line), inset -1px 0 var(--md-line), inset 0 -1px var(--md-line); }
-.mde .mde-line-code-first.mde-line-code-last { box-shadow: inset 1px 0 var(--md-line), inset -1px 0 var(--md-line), inset 0 1px var(--md-line), inset 0 -1px var(--md-line); }
+.mde .mde-line-code-first { border-top: 1px solid var(--md-line); border-radius: 10px 10px 0 0; padding-top: 8px; }
+.mde .mde-line-code-last { border-bottom: 1px solid var(--md-line); border-radius: 0 0 10px 10px; padding-bottom: 8px; }
+.mde .mde-line-code-first.mde-line-code-last { border-radius: 10px; }
 
-/* 围栏头 widget（语言 + 复制） */
-.mde .mde-fencehead { display: inline-flex; align-items: center; gap: 10px; width: 100%; min-height: 20px; }
+/* 围栏头 widget（语言 + 复制）：定高 22px（= 阅读态 .doc-fence），顶端对齐——无语言时空的语言
+   span 会让 inline-flex 的基线落到按钮上、行被撑高 4px */
+.mde .mde-fencehead { display: inline-flex; align-items: center; gap: 10px; width: 100%; height: 22px; vertical-align: top; line-height: 1.2; }
 .mde .mde-fencelang { color: var(--md-fg-3); font-size: 11.5px; text-transform: lowercase; letter-spacing: .3px; }
 .mde .mde-fencecopy {
   margin-left: auto; border: 1px solid var(--md-line); background: var(--md-panel); color: var(--md-fg-2); font-size: 11.5px;
@@ -141,60 +168,102 @@
 }
 .mde .mde-wk:active { background: var(--md-accent-tint); }
 .mde .mde-t-tag { background: var(--md-accent-tint); border-radius: 999px; padding: 1px 8px; font-size: .88em; }
-.mde .mde-sup { vertical-align: super; font-size: .78em; }
-.mde .mde-sub { vertical-align: sub; font-size: .78em; }
-.mde .mde-listmark { color: var(--md-accent); font-weight: 600; }
-/* 无序标记显示成圆点：原字符 visibility 藏起来（不改布局→不动光标/选区），圆点画在原位 */
-.mde .mde-listbullet { visibility: hidden; position: relative; }
-.mde .mde-listbullet::before {
-  content: '•'; visibility: visible; position: absolute; left: 0; right: 0; top: 0;
-  text-align: center; color: var(--md-accent); font-weight: 700;
-}
+.mde .mde-hmark { font-weight: 400; }   /* 揭示态标题的 #：常规字重，不和标题抢 */
 .mde .mde-done { color: var(--md-fg-3); text-decoration: line-through; text-decoration-color: rgba(20, 20, 19, .3); }
 
-/* 任务勾选框 */
+/* ———— 列表（Live Preview）————
+   「缩进 + 标记 + 其后空白」换成 .mde-lm 标记 widget，占一个 24px 槽；层级只看语法树，每级 24px
+   （= 阅读态 ul/ol 的 1.5em）。行装饰只写 CSS 变量（--mde-li-pad 层级缩进、--mde-li-ind = −标记数×24），
+   真正的 padding 在这里 calc——多个行装饰的 style 会被 CM 用「;」拼接，内联 padding 会盖掉引用/callout
+   的 class 内边距，所以只传变量。换行后的文字靠负 text-indent 悬挂对齐正文。本区要写在引用/callout 规则之后。 */
+.mde .mde-li {
+  padding-left: calc(var(--mde-qpad, 0px) + var(--mde-li-pad, 24px));
+  text-indent: var(--mde-li-ind, 0px);
+  padding-top: 2.4px; padding-bottom: 2.4px;   /* 上下相加 4.8 = 阅读态 li 的 .3em 项距 */
+}
+.mde .mde-li-cont { padding-top: 0; }
+.mde .cm-line * { text-indent: 0; }   /* text-indent 会继承：不清掉，行内的 inline-block（图片/公式/胶囊/标记槽）整体左移 */
+.mde .mde-in-li { margin-left: var(--mde-li-out, 0px); }   /* 列表项里的代码块/引用：整块右移到正文列（水平 margin 对 CM 安全） */
+/* 标记槽。几何照 Chromium 画 ::marker 复刻：圆点 5px、左缘距正文 17px、底边在基线上 2px；
+   序号是同字体同字号的「1. 」右对齐（长序号像 ::marker 一样往左溢出）——与阅读态逐像素一致 */
+.mde .mde-lm {
+  display: inline-block; width: 24px; white-space: pre; text-align: left;
+  color: var(--md-accent); font-weight: 400; font-style: normal; font-variant-numeric: tabular-nums;
+}
+.mde .mde-lm-ol { display: inline-flex; justify-content: flex-end; }
+.mde .mde-lm-dot {
+  display: inline-block; box-sizing: border-box; width: 5px; height: 5px; margin-left: 7px;
+  vertical-align: 2px; border-radius: 50%; background: currentColor;
+}
+.mde .mde-lm-circle { background: transparent; border: 1px solid currentColor; }
+.mde .mde-lm-square { border-radius: 0; }
+.mde .mde-lm-task { text-align: right; }
+.mde .mde-lm-task .mde-task, .mde .mde-lm-box .mde-task { margin-right: 6px; }   /* 勾选框落在正文左侧 [−23, −6]，同阅读态 */
+.mde .mde-lm-box { width: auto; }
+
+/* 任务勾选框：inline-block、没有流内内容 → 基线就是盒底，与阅读态的 <input> 同一套 vertical-align */
 .mde .mde-task {
-  display: inline-flex; align-items: center; justify-content: center;
+  display: inline-block; position: relative; box-sizing: border-box;
   width: 17px; height: 17px; border-radius: 5px; border: 1.6px solid var(--md-line-2);
-  vertical-align: -3px; margin-right: 2px; cursor: pointer; background: #fff;
+  vertical-align: -3px; cursor: pointer; background: #fff;
   transition: background var(--mo-micro, 140ms), border-color var(--mo-micro, 140ms);
 }
-.mde .mde-task svg { width: 11px; height: 11px; opacity: 0; color: #fff; }
 .mde .mde-task.on { background: var(--md-accent); border-color: var(--md-accent); }
-.mde .mde-task.on svg { opacity: 1; }
+/* 对勾与阅读态 input.task-cb:checked::after 同一套几何（两态切换时对勾粗细/位置不变） */
+.mde .mde-task.on::after {
+  content: ''; position: absolute; left: 4.6px; top: 1.4px; width: 4px; height: 8px;
+  border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(43deg);
+}
 
-/* 分割线 */
-.mde .mde-hr { display: inline-block; width: 100%; height: 1.2em; position: relative; cursor: text; }
+/* 分割线：widget 与行同高、顶端对齐（线落在行正中，行不被撑高）——光标进来揭示成「---」时
+   行高不变（以前 1.2em 按基线对齐会把行顶高 0.18px）；阅读态 hr 的上下外边距按这个几何配（mdrender.css） */
+.mde .mde-hr { display: inline-block; width: 100%; height: 1.72em; vertical-align: top; position: relative; cursor: text; }
 .mde .mde-hr::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid var(--md-line); }
 
 /* 图片 */
 .mde .mde-imgwrap { display: inline-block; max-width: 100%; }
-.mde .mde-img { max-width: 100%; max-height: 60vh; border-radius: 8px; vertical-align: bottom; }
+.mde .mde-imgwrap-block { display: block; padding: 4px 0; }   /* 揭示态：挂在源码行下方的预览 */
+.mde .mde-img { max-width: 100%; border-radius: 8px; vertical-align: bottom; }   /* 不限高：与阅读态同尺寸 */
+.mde .mde-imgbox { position: relative; display: inline-block; max-width: 100%; vertical-align: bottom; line-height: 0; }
+/* 缩放把手（widgets.js resizer）：右下角圆点，悬停或揭示态出现；拖动中整图描边 */
+.mde .mde-img-rs {
+  position: absolute; right: -5px; bottom: -5px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--md-panel); border: 2px solid var(--md-accent); box-shadow: 0 1px 3px rgba(20, 20, 19, .25);
+  cursor: nwse-resize; touch-action: none; opacity: 0; transition: opacity .15s;
+}
+.mde .mde-img-rs::before { content: ''; position: absolute; inset: -10px; }   /* 手指命中区放大 */
+.mde .mde-imgwrap:hover .mde-img-rs, .mde .mde-img-active .mde-img-rs, .mde .mde-img-resizing .mde-img-rs { opacity: 1; }
+.mde .mde-img-resizing .mde-img { outline: 2px solid var(--md-accent); outline-offset: 1px; }
 .mde .mde-img-broken { color: var(--md-fg-3); background: var(--md-bg-2); border: 1px dashed var(--md-line-2); border-radius: 8px; padding: 3px 10px; font-size: .85em; }
 
-/* 数学 */
+/* 数学：块公式不再「widget 内边距 .5em + KaTeX 自带 1em 外边距 + 空行」三层叠，四周留白与阅读态
+   同一量级，揭示前后高度也接近；源码态左右 14px、首末行圆角 + 6px（类由 livePreview 挂）——和代码块同一副框 */
 .mde .mde-math { cursor: text; }
-.mde .mde-math .katex { font-size: 1.06em; }
-.mde .mde-math-block { display: block; text-align: center; padding: .5em 0; overflow-x: auto; }
+.mde .mde-math-block { display: block; text-align: center; padding: 0; overflow-x: auto; }
+.mde .mde-math-block .katex-display { margin: .4em 0; }
 .mde .mde-math-err { color: var(--md-danger); font-family: var(--md-mono); font-size: .88em; }
+.mde .mde-line-mathsrc { padding-left: 14px; padding-right: 14px; }
+.mde .mde-line-mathsrc-first { border-radius: 10px 10px 0 0; padding-top: 6px; }
+.mde .mde-line-mathsrc-last { border-radius: 0 0 10px 10px; padding-bottom: 6px; }
+.mde .mde-line-mathsrc-first.mde-line-mathsrc-last { border-radius: 10px; }
 
-/* ———— callout widget（与阅读模式同观感；DOM 在编辑器内，样式独立一份） ———— */
-.mde .mde-callout-w { padding: 2px 0; cursor: text; }
-.mde .mde-callout-w .callout { margin: .35em 0; border-radius: 10px; background: rgba(var(--co), .07); border-left: 3px solid rgb(var(--co)); padding: 10px 14px; }
-.mde .mde-callout-w .co-title { display: flex; align-items: center; gap: 7px; font-weight: 650; color: rgb(var(--co)); font-size: .98em; }
-.mde .mde-callout-w .co-title svg { width: 17px; height: 17px; flex: none; }
-.mde .mde-callout-w .co-body { margin-top: 4px; }
-.mde .mde-callout-w .co-body > :last-child { margin-bottom: 0; }
-.mde .mde-callout-w p { margin: .45em 0; }
-.mde .mde-callout-w ul, .mde .mde-callout-w ol { margin: .4em 0; padding-left: 1.5em; }
-.mde .mde-callout-w code { background: var(--md-bg-2); border-radius: 5px; padding: .1em .3em; font-family: var(--md-mono); font-size: .88em; }
-.mde .mde-callout-w pre { background: var(--md-bg-2); border: 1px solid var(--md-line); border-radius: 10px; padding: 12px 14px; overflow-x: auto; }
-.mde .mde-callout-w a.wk { color: var(--md-accent-deep); text-decoration: none; border-bottom: 1px solid rgba(181, 83, 47, .35); cursor: pointer; }
-.mde .mde-callout-w .ob-tag { color: var(--md-accent-deep); background: var(--md-accent-tint); border-radius: 999px; padding: 1px 8px; font-size: .88em; }
-.mde .mde-callout-w mark { background: var(--md-mark); border-radius: 3px; padding: 0 2px; color: inherit; }
-.mde .mde-callout-w img { max-width: 100%; border-radius: 8px; }
-.mde .mde-callout-w table { border-collapse: collapse; margin: .4em 0; }
-.mde .mde-callout-w th, .mde .mde-callout-w td { border: 1px solid var(--md-line); padding: 5px 9px; font-size: .92em; }
+/* ———— 脚注 / 键帽 ————
+   脚注的隐藏与上标装饰在 livePreview（FootnoteRef / FootnoteDef 节点，见 mdext.js）；这里只给类：
+   .mde-fnref 渲染态上标（line-height 归零，不把所在行撑高，同阅读态 sup.fn-ref）、
+   .mde-line-fn 定义行（同阅读态脚注区 .88em / fg-2）、.mde-fnlabel 定义行里的 [^id]: 标签弱化。 */
+.mde .mde-fnref { vertical-align: super; font-size: .75em; line-height: 0; color: var(--md-accent-deep); }
+.mde .mde-line-fn { font-size: .88em; color: var(--md-fg-2); }
+/* 标签里真正装字的是内层高亮 span（.mde-t-fn 珊瑚色，直接命中的规则压过继承）：一起点名、压一级特异度。
+   只在 LP 有 .mde-fnlabel，源码模式的 [^id]: 仍是 token 色 */
+.mde .mde-fnlabel, .mde .mde-fnlabel .mde-t-fn { color: var(--md-fg-3); }
+/* <kbd> 出现在 callout 卡 / 表格单元格的渲染 HTML 里：样式在 lib/mdrender.css（与阅读态同一份） */
+
+/* ———— callout widget ————
+   卡内排版（列表/任务框/引用/代码/表格…）与阅读态共用 lib/mdrender.css，这里只管 widget 外壳。
+   white-space 必须归 normal：卡片从 .cm-content 继承 break-spaces，obsmd 输出里标签之间的换行会
+   被当成真空行渲染（卡片凭空多出几行空底，列表每项之间隔一行）。上下不留内边距——卡片之间的
+   距离交给 CM 的空行，和段落同比例（卡片本身的外边距在 mdrender.css 里对编辑态归零）。 */
+.mde .mde-callout-w { padding: 0; cursor: text; white-space: normal; overflow-wrap: anywhere; word-break: normal; }
 
 /* ———— frontmatter「笔记属性」面板 widget（原地编辑：键名/值/类型都在面板上改） ———— */
 .mde .mde-props { border-bottom: 1px solid var(--md-line); padding: 2px 0 8px; margin-bottom: 6px; }
@@ -237,12 +306,33 @@
   border-radius: 7px; outline: none; min-width: 0;
   transition: background var(--mo-micro, 140ms), box-shadow var(--mo-micro, 140ms);
 }
-.mde .mde-pv { flex: 1; min-width: 90px; font-size: 14px; }
-.mde .mde-padd { flex: 1; min-width: 60px; font-size: 13.5px; }
+/* 行高与键名输入框同高（13.5px × 1.72 = 23.22px）：font:inherit 带进来的 1.72 乘 14px 字号会把
+   整行撑到 36px，比阅读态（和其余各行）的 35.2px 高一截，逐行往下累积 */
+.mde .mde-pv { flex: 1; min-width: 90px; font-size: 14px; line-height: calc(13.5px * 1.72); }
+/* 列表追加框：没聚焦时只占行尾剩下的空（可以缩到 0），不会在窄栏里被单独挤到第二行、平白多出一行
+   空白；聚焦打字时才要 60px 的地方（点值格空白处也能聚焦它，见 props.js） */
+.mde .mde-padd { flex: 1 1 0; min-width: 0; font-size: 13.5px; }
+.mde .mde-padd:focus { min-width: 60px; }
 .mde .mde-pv:focus, .mde .mde-padd:focus { background: #fff; box-shadow: 0 0 0 1.5px var(--md-accent); }
 .mde .mde-pv::placeholder, .mde .mde-padd::placeholder { color: var(--md-fg-4); }
-.mde .mde-pv[type="date"], .mde .mde-pv[type="datetime-local"] { flex: none; min-width: 0; }
-.mde .mde-pv-bool { accent-color: var(--md-accent); width: 16px; height: 16px; margin: 4px 6px; }
+/* 日期框的内部字段 + 日历按钮比文字行高，定高到与文本框同一个 31.22px（23.22 + 上下 4px） */
+.mde .mde-pv[type="date"], .mde .mde-pv[type="datetime-local"] { flex: none; min-width: 0; height: calc(13.5px * 1.72 + 8px); }
+/* 布尔值：自绘，与阅读态（DocViewer .doc-prop-v 的只读勾选框）同一副长相——原生框是直角、
+   对勾颜色跟着 color-scheme 走；值格在布尔行上撑满整行高，框靠格内 align-items:center 垂直居中，
+   与键名同一条中线（键格比这一格高，flex-start 时框偏上 3.6px） */
+.mde .mde-prop-v[data-kind="bool"] { align-self: stretch; }
+.mde .mde-pv-bool {
+  appearance: none; -webkit-appearance: none; flex: none; width: 16px; height: 16px; margin: 4px 6px; border-radius: 5px;
+  border: 1.6px solid var(--md-line-2); background: #fff; position: relative; opacity: 1; cursor: pointer;
+  transition: background var(--mo-micro, 140ms), border-color var(--mo-micro, 140ms);
+}
+.mde .mde-pv-bool:checked { background: var(--md-accent); border-color: var(--md-accent); }
+.mde .mde-pv-bool:checked::after {
+  content: ''; position: absolute; left: 4.2px; top: 1px; width: 3.8px; height: 7.6px;
+  border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(43deg);
+}
+.mde .mde-pv-bool:focus-visible { outline: none; box-shadow: 0 0 0 1.5px var(--md-accent); }   /* appearance:none 连原生焦点环一起去掉了，键盘可聚焦要补回 */
+.mde .mde-pv-bool:disabled { cursor: default; }
 .mde .mde-prop-empty { color: var(--md-fg-4); padding: 4px 6px; }
 .mde .mde-prop-json { font-family: var(--md-mono); font-size: 12.5px; color: #bc5215; background: rgba(188, 82, 21, .08); border-radius: 5px; padding: 3px 7px; word-break: break-all; }
 
@@ -288,10 +378,12 @@
 .mde .mde-sug-i.on { background: var(--md-bg-2); }
 @media (hover: hover) { .mde .mde-sug-i:hover { background: var(--md-bg-2); } }
 
-/* ———— 表格 widget（Excel 式常驻编辑） ———— */
-.mde .mde-table { margin: 6px 0; }
-.mde .mde-tscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; }
-.mde .mde-table table { border-collapse: collapse; min-width: 60%; }
+/* ———— 表格 widget（Excel 式常驻编辑） ————
+   按内容宽度排版（不再 min-width:60% 把小表撑宽，切到阅读态宽度一跳），宽表在 .mde-tscroll 里横滚；
+   滚动壳不带圆角（会削掉表格外框的四个角，阅读态是直角） */
+.mde .mde-table { margin: 6px 0; max-width: 100%; }
+.mde .mde-tscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.mde .mde-table table { border-collapse: collapse; }
 .mde .mde-table th, .mde .mde-table td {
   border: 1px solid var(--md-line); padding: 7px 11px; text-align: left; font-size: .95em;
   min-width: 64px; max-width: 380px; outline: none; vertical-align: top;
@@ -396,3 +488,33 @@
   white-space: nowrap; box-shadow: 0 6px 20px rgba(20, 20, 19, .18);
 }
 .mde .mde-flash.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ———— 列表项首行就是围栏（「- ```js」）：代码框整体右移到正文列，标记悬挂到框外的槽里 ———— */
+.mde .mde-li-fence { text-indent: calc(-1 * var(--mde-lm-hang, 0px)); }
+.mde .mde-li-fence .mde-lm { margin-right: 15px; }
+
+/* ———— 行内 HTML（<kbd>/<sup>/<u>/<mark>…，渲染态）———— */
+.mde .mde-html { white-space: normal; }
+/* 与 lib/mdrender.css 里阅读态的 kbd/mark/del 同值（那份的作用域不含编辑器正文行） */
+.mde .mde-html kbd {
+  font-family: var(--md-mono); font-size: .82em; padding: .05em .4em; border: 1px solid var(--md-line-2);
+  border-bottom-width: 2px; border-radius: 5px; background: #fff; color: var(--md-fg); white-space: nowrap;
+}
+.mde .mde-html mark { background: var(--md-mark); border-radius: 3px; padding: 0; color: inherit; }
+.mde .mde-html del { text-decoration-color: rgba(20, 20, 19, .45); }
+
+/* ———— callout 卡里的代码块头（语言 + 复制），与阅读态 .doc-fence 同尺寸 ———— */
+.mde .mde-callout-w pre > .mde-co-fence { display: flex; width: auto; height: 22px; min-height: 0; white-space: normal; font-family: var(--sans, inherit); line-height: 1.2; }
+
+/* ———— 插图上传中的落点标记（attach.js；不进文档，存好即换成 ![[ ]]）———— */
+.mde .mde-upl {
+  display: inline-flex; align-items: center; gap: 6px; vertical-align: baseline;
+  margin: 0 2px; padding: 1px 9px; border-radius: 999px; font-size: .82em; line-height: 1.6;
+  color: var(--md-fg-2); background: var(--md-bg-2); border: 1px solid var(--md-line);
+}
+.mde .mde-upl-spin {
+  width: 10px; height: 10px; border-radius: 50%; flex: none;
+  border: 1.5px solid var(--md-line-2); border-top-color: var(--md-accent);
+  animation: mde-upl-spin .8s linear infinite;
+}
+@keyframes mde-upl-spin { to { transform: rotate(360deg); } }

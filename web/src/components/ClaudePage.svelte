@@ -13,7 +13,7 @@
   import RoutinesPage from './RoutinesPage.svelte';
   import { api } from '../lib/api.js';
   import { uiAlert } from '../lib/dialogs.js';
-  import { me, ui, session, settings, setTheme, singleMode } from '../lib/state.svelte.js';
+  import { me, ui, session, settings, setTheme, singleMode, sessionWt } from '../lib/state.svelte.js';
   import AccountCard from './AccountCard.svelte';
   import { swipeDismiss } from '../lib/motion.js';
   import { closePage, backPeek } from '../lib/pageMorph.js';
@@ -33,13 +33,23 @@
   import { drag, dropZone, dragScrollGuard, beginDrag, makeHold, dropToast } from '../lib/dragdrop.svelte.js';
   import { applyProjectOrder, moveId, splitDropPlan, splitDropLabel, canSplitWidth, dockOverlayFor, MIN_PANE } from '../lib/claudeSplit.js';
   import { soloUrl, PANE_MSG, isPaneMsg } from '../lib/solo.js';
-  import { agentDropZone, attachToAgent, dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent } from '../lib/fileDrag.js';
+  import { agentDropZone, attachToAgent, dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent, WS_FILE } from '../lib/fileDrag.js';
+  import { CHAT_REF, isChatRef, canQuote, quoteSession } from '../lib/chatQuote.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { t, tc, tr } from '../lib/i18n.js';
 
   // 从工作空间拎一份文件过来松手 = 挂进【当前这个会话】的输入栏（不移动文件本身）。
   // 公开快照页不给：那儿的输入栏本来就不属于访客。
-  const claudeDrop = agentDropZone('claude', { label: tc('claude', '挂进这个对话'), disabled: IS_CSNAP });
+  // 同一块正文列也接【侧栏拖过来的会话】（手指长按拿起，见 sessHoldDown）＝引用那段对话（lib/chatQuote.js）。
+  // 一个节点只挂得下一个落点，所以两种载荷在这里合成一个：按载荷类型分派 label/accept/drop。
+  const fileDrop = agentDropZone('claude', { label: tc('claude', '挂进这个对话'), disabled: IS_CSNAP });
+  const quoteLabel = () => (session.id ? tc('claude', '引用到这个对话') : tc('claude', '引用到新对话'));
+  const claudeDrop = {
+    ...fileDrop,
+    label: (p) => (isChatRef(p) ? quoteLabel() : fileDrop.label(p)),
+    accept: (p) => (isChatRef(p) ? canQuote(p.id, session.id) : fileDrop.accept(p)),
+    drop: (p) => (isChatRef(p) ? quoteSession({ id: p.id, title: p.name }) : fileDrop.drop(p)),
+  };
   // 电脑上（鼠标）从工作空间拖过来走的是浏览器原生 HTML5 拖拽，不是上面那套手指拖拽——
   // 语义一致：落在正文列＝挂进当前会话的输入栏。
   let wsDragOver = $state(false);
@@ -59,13 +69,22 @@
   }
   // 侧栏里的每一条会话本身也是落点：拎着文件直接摁到那条上松手 = 切过去并挂进它的输入栏。
   // （场景「把文件发给某一个特定会话」用另一根手指点开会话再松手也成立；这条是更短的一步。）
-  const sessionDrop = (s) => ({
-    ...agentDropZone('claude', { key: 'chat:claude:' + s.id, label: titleFor(s.id, s.title) ? t('发给「{title}」', { title: tr(titleFor(s.id, s.title)) }) : tc('claude', '发给「这个对话」'), disabled: IS_CSNAP }),
-    drop: async (p) => {
-      if (s.id !== session.id) { ui.drawerOpen = false; await openSession(s.id); }
-      await attachToAgent(p, 'claude');
-    },
-  });
+  // 拎着的是另一条会话＝切过去并把它引用进这条的输入栏（自己拖到自己身上不接）。
+  const sessionDrop = (s) => {
+    const tt = titleFor(s.id, s.title);
+    return {
+      ...agentDropZone('claude', { key: 'chat:claude:' + s.id, disabled: IS_CSNAP }),
+      label: (p) => (isChatRef(p)
+        ? (tt ? t('引用到「{title}」', { title: tr(tt) }) : tc('claude', '引用到这个对话'))
+        : (tt ? t('发给「{title}」', { title: tr(tt) }) : tc('claude', '发给「这个对话」'))),
+      accept: (p) => (isChatRef(p) ? canQuote(p.id, s.id) : p?.type === WS_FILE && !!p.materials),
+      drop: async (p) => {
+        if (s.id !== session.id) { closeDrawer(); session.projectId = s.projectId || null; await openSession(s.id); }
+        if (isChatRef(p)) await quoteSession({ id: p.id, title: p.name });
+        else await attachToAgent(p, 'claude');
+      },
+    };
+  };
 
   let scrollEl = $state();
   let composerWrapEl = $state();
@@ -558,7 +577,12 @@
   // —— 右侧工作台（审阅/终端/浏览器/文件）：作用域=当前会话的工作空间路径 ——
   // 会话切换/项目变化自动跟随（setDockWs 内部有等值跳过；面板经 {#key} 随 ws 重建）。
   const dockProject = $derived(projects.find((x) => x.id === sessionProjId) || projects[0] || null);
-  const dockWs = $derived(dockProject ? dockProject.path : '');
+  // worktree 会话（输入栏 worktree 勾选框开出来的）跑在 <仓库>/.claude/worktrees/<名> 里：
+  // 工作台与芯片要看它，不看项目主检出。列表条目自带 wt 优先，首轮/重开时 sessionWt 兜底。
+  const sessionWtCwd = $derived(session.id
+    ? (sessions.find((s) => s.id === session.id)?.wt?.cwd || sessionWt[session.id]?.cwd || '')
+    : '');
+  const dockWs = $derived(sessionWtCwd || (dockProject ? dockProject.path : ''));
   // 归属芯片的标签取【项目名】而不是路径末段：真实项目里两者本就相同（项目名固定=文件夹名），
   // 但快照对话的桶目录名是个 UUID，只有项目名（「快照对话」）读得懂。
   // —— 归属芯片认的项目：和 dockProject 有一处关键不同 ——
@@ -646,9 +670,29 @@
     if (!mouseDnd) { e.preventDefault(); return; }
     startSide(e, { kind: 'project', id: p.id, title: tr(p.name) });
   }
+  // 会话拖到侧栏【另一条会话】上松手＝切到那条并引用拖着的这段（手指那套见 sessionDrop）。
+  // 那一条正开在分屏另一格里就引用进那一格，不把它抢到本页来。
+  let rowHover = $state(null);
+  function onRowDragOver(e, s) {
+    if (dragRec?.kind !== 'session' || !canQuote(dragRec.id, s.id)) return;
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = 'copy'; } catch {}
+    rowHover = s.id;
+  }
+  function onRowDragLeave(e, s) { if (rowHover === s.id && !e.currentTarget.contains(e.relatedTarget)) rowHover = null; }
+  async function onRowDrop(e, s) {
+    const rec = dragRec;
+    if (!rec || rec.kind !== 'session' || !canQuote(rec.id, s.id)) return;
+    e.preventDefault();
+    rowHover = null;
+    dropDone = true;
+    if (splitOn && s.id === paneId) { quoteInto('pane', rec); return; }
+    if (s.id !== session.id) { paneFocus = false; session.projectId = s.projectId || null; await openSession(s.id); }
+    quoteSession({ id: rec.id, title: rec.title });
+  }
   function onSideDragEnd(e) {
     const rec = dragRec;
-    dragRec = null; sideDrag = null; insAt = -1; splitHover = null;
+    dragRec = null; sideDrag = null; insAt = -1; splitHover = null; quoteHover = null; rowHover = null;
     const out = dragOut, done = dropDone;
     dragOut = false; dropDone = false;
     if (!rec || rec.kind !== 'session' || done) return;
@@ -759,6 +803,36 @@
   const projHoldMove = (e) => hold.track(e);
   const projHoldUp = () => hold.disarm();
   $effect(() => { if (!drag.on && touchProj) touchProj = null; });
+
+  // 手指：长按会话行拿起＝准备「引用这段对话」——松在正文列（claudeDrop）或侧栏另一条会话上
+  // （sessionDrop）就引用进那个对话的输入栏；原地按住再松手＝那一行的 ⋮ 菜单（iOS 长按菜单的位置）。
+  // 窄屏抽屉盖着正文：拎着往右拖出抽屉边缘，抽屉自己收起，正文露出来接着放（见下方 $effect）。
+  let touchSess = $state(null);    // 手指拎着的会话 id
+  const sessHold = makeHold();
+  const CHAT_GHOST_IC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12.2c0 3.9-3.6 7-8 7-1.1 0-2.2-.2-3.1-.6L4.5 20l1.2-3.5C4.6 15.3 4 13.8 4 12.2c0-3.9 3.6-7 8-7s8 3.1 8 7z"/><path d="M8.6 11h6.8M8.6 14h4.2"/></svg>';
+  function sessHoldDown(e, s) {
+    if (e.pointerType === 'mouse' || IS_CSNAP) return;
+    const row = e.currentTarget;
+    sessHold.arm(e, (f) => {
+      const title = tr(titleFor(s.id, s.title)) || t('（无标题）');
+      const ok = beginDrag({ type: CHAT_REF, id: s.id, name: title }, {
+        x: f.x, y: f.y, pointerId: f.pointerId, pointerType: f.pointerType, sourceEl: f.el,
+        ghost: { name: title, iconHtml: CHAT_GHOST_IC },
+        onStay: () => { const b = row.querySelector('.d-more'); if (b) openMenu({ currentTarget: b, stopPropagation() {} }, 'session', s.id); },
+      });
+      if (ok) touchSess = s.id;
+    });
+  }
+  const sessHoldMove = (e) => sessHold.track(e);
+  const sessHoldUp = () => sessHold.disarm();
+  $effect(() => { if (!drag.on && touchSess) touchSess = null; });
+  let drawerEl = $state();
+  $effect(() => {
+    if (!touchSess || wide || !ui.drawerOpen || !drawerEl) return;
+    const x = drag.x;
+    const r = untrack(() => drawerEl.getBoundingClientRect());
+    if (x > r.right + 6) untrack(closeDrawer);
+  });
   const listAt = (x, y) => { try { return document.elementFromPoint(x, y)?.closest('.d-projs') || null; } catch { return null; } };
   const projListZone = {
     key: 'claude-proj-order',
@@ -772,7 +846,7 @@
   const touchIns = $derived(touchProj && drag.overKey === 'claude-proj-order' ? insIndexAt(listAt(drag.x, drag.y), drag.y) : -1);
   const projDragging = $derived(sideDrag?.kind === 'project' || !!touchProj);
   const insShown = $derived(touchProj ? touchIns : insAt);
-  const liftedId = $derived(sideDrag?.id || touchProj || null);
+  const liftedId = $derived(sideDrag?.id || touchProj || touchSess || null);
 
   // ═══════════════════════ 分屏（宽屏两个对话并排）═══════════════════════
   // 两格不对称：一格是本页（单例聊天内核），另一格是同源 iframe 里的一份 SoloPage（自带内核）。
@@ -895,19 +969,81 @@
   const dropZones = $derived((splitOn || splitAllowed) && !(blankMain && !splitOn)
     ? [{ side: 'left', l: 0, w: splitBoundary }, { side: 'right', l: splitBoundary, w: Math.max(0, panesW - splitBoundary) }]
     : [{ side: 'left', l: 0, w: panesW }]);
+  // —— ④ 会话拖到某一格的【输入栏】上＝引用那段对话（不分屏、不切换）——
+  // 落点层盖在两格之上，输入卡片在它底下收不到 dragover，所以起拖时量出每一格输入卡片的位置，
+  // 在落点层里单独画一块「引用」区（虚线框，悬停才写明动作）。iframe 那一格同源，直接量它文档里的卡片。
+  let splitDropEl = $state();
+  let mainColEl = $state();
+  let quoteRects = $state([]);     // [{ target:'main'|'pane', l, t, w, h }]，坐标相对落点层
+  let quoteHover = $state(null);   // 'main' | 'pane'
+  function measureQuoteRects() {
+    if (!splitDropEl) return;
+    const host = splitDropEl.getBoundingClientRect();
+    const out = [];
+    const add = (target, r, dx = 0, dy = 0) => {
+      if (!r || r.width < 60 || r.height < 24) return;
+      const pad = 6;
+      out.push({ target, l: r.left + dx - host.left - pad, t: r.top + dy - host.top - pad, w: r.width + pad * 2, h: r.height + pad * 2 });
+    };
+    try { add('main', mainColEl?.querySelector('.composer')?.getBoundingClientRect()); } catch {}
+    if (splitOn && paneFrame) {
+      try {
+        const fr = paneFrame.getBoundingClientRect();
+        add('pane', paneFrame.contentDocument?.querySelector('.composer')?.getBoundingClientRect(), fr.left, fr.top);
+      } catch {}
+    }
+    quoteRects = out;
+  }
+  // 落点层随 sideDrag 显形（下一拍才挂上 DOM），挂上之后量一次；拖拽中窗口一般不变，不追踪
+  $effect(() => {
+    if (sideDrag?.kind === 'session' && splitDropEl) untrack(measureQuoteRects);
+    else { quoteRects = []; quoteHover = null; }
+  });
+  const quoteTargetId = (target) => (target === 'pane' ? paneId : session.id);
+  // 本页那一格还要查「已经引用过」（compose 就是它的）；那一格的去重在它自己的 quoteSession 里
+  const quoteOk = (target) => {
+    const id = sideDrag?.id || dragRec?.id;
+    return target === 'pane' ? !!id && id !== paneId : canQuote(id, session.id);
+  };
+  function quoteLabelFor(target) {
+    const id = sideDrag?.id || dragRec?.id;
+    if (id && id === quoteTargetId(target)) return tc('claude', '不能引用对话自己');
+    if (!quoteOk(target)) return t('这个对话已经引用过了');
+    return target === 'main' ? quoteLabel() : tc('claude', '引用到这个对话');
+  }
+  function quoteInto(target, rec) {
+    if (target === 'pane') { postPane({ t: 'quote', id: rec.id, title: rec.title }); focusPane(); }
+    else { paneFocus = false; quoteSession({ id: rec.id, title: rec.title }); }
+  }
+
   function onSplitOver(e) {
     if (dragRec?.kind !== 'session') return;
     e.preventDefault();
     const r = e.currentTarget.getBoundingClientRect();
+    const qx = e.clientX - r.left, qy = e.clientY - r.top;
+    const q = quoteRects.find((z) => qx >= z.l && qx <= z.l + z.w && qy >= z.t && qy <= z.t + z.h);
+    if (q) {
+      quoteHover = q.target; splitHover = null;
+      try { e.dataTransfer.dropEffect = quoteOk(q.target) ? 'copy' : 'none'; } catch {}
+      return;
+    }
+    quoteHover = null;
     const side = dropZones.length > 1 ? (e.clientX - r.left < splitBoundary ? 'left' : 'right') : 'left';
     splitHover = side;
     try { e.dataTransfer.dropEffect = planFor(side).kind === 'none' ? 'none' : 'move'; } catch {}
   }
-  function onSplitLeave(e) { if (!e.currentTarget.contains(e.relatedTarget)) splitHover = null; }
+  function onSplitLeave(e) { if (!e.currentTarget.contains(e.relatedTarget)) { splitHover = null; quoteHover = null; } }
   function onSplitDrop(e) {
     const rec = dragRec;
     if (!rec || rec.kind !== 'session') return;
     e.preventDefault();
+    if (quoteHover) {
+      const target = quoteHover;
+      quoteHover = null; splitHover = null;
+      dropDone = true;
+      if (quoteOk(target)) quoteInto(target, rec);
+      return;
+    }
     const side = splitHover || 'left';
     const plan = planFor(side);
     splitHover = null;
@@ -970,7 +1106,7 @@
      汉堡在 expanded 档才彻底隐藏；medium 档留着当「侧栏常驻」开关（on=已常驻）。
      分屏时每一格各有一组（工具开关 · ⋮ · 关掉这一格）。 -->
 <TopBar onMenu={onMenuKey} onDock={toggleDock} hideMenu={wide} menuOn={pinned} tools={sideMode} split={splitOn} onClose={splitOn ? closeMain : null} />
-<div class="main-col" class:dnd-on={drag.overKey === 'chat:claude' || wsDragOver} role="presentation" use:dropZone={claudeDrop}
+<div class="main-col" bind:this={mainColEl} class:dnd-on={drag.overKey === 'chat:claude' || wsDragOver} role="presentation" use:dropZone={claudeDrop}
   ondragover={onWsDragOver} ondragleave={onWsDragLeave} ondrop={onWsDrop}>
 
 <div class="stage">
@@ -984,7 +1120,7 @@
          .hero-composer 与 .composer-inner 是同一 key 的形变两端，塞进去会让两端盒子
          内容不等、形变歪掉。故两处都做成输入框的前置兄弟。 -->
     {#if showChips}
-      <div class="hero-chips" in:fly={{ y: 30, duration: 540, delay: 190 }} out:fade={{ duration: 120 }}><WorkspaceChips name={dockName} /></div>
+      <div class="hero-chips" in:fly={{ y: 30, duration: 540, delay: 190 }} out:fade={{ duration: 120 }}><WorkspaceChips name={dockName} armable={!session.id} /></div>
     {/if}
     <div class="hero-composer" in:fly={{ y: 30, duration: 540, delay: 210 }} out:sendComposer={{ key: 'composer' }}><Composer /></div>
   </main>
@@ -1032,11 +1168,18 @@
 
 {#if sideDrag?.kind === 'session' && (pinned || !ui.drawerOpen)}
   <!-- 会话拖进正文区的落点层：高亮手在的那一半、写明松手会怎样（窄屏抽屉盖着正文时不出，免得盖到抽屉上） -->
-  <div class="split-drop" role="presentation" ondragover={onSplitOver} ondragleave={onSplitLeave} ondrop={onSplitDrop}>
+  <div class="split-drop" role="presentation" bind:this={splitDropEl} ondragover={onSplitOver} ondragleave={onSplitLeave} ondrop={onSplitDrop}>
     {#each dropZones as z (z.side + dropZones.length)}
       <div class="sd-zone" class:on={splitHover === z.side} class:nope={splitHover === z.side && hoverPlan?.kind === 'none'}
         style="left:{z.l}px;width:{z.w}px">
         {#if splitHover === z.side}<span class="sd-label">{hoverLabel}</span>{/if}
+      </div>
+    {/each}
+    <!-- 输入栏上的「引用」区：拖进来的这段对话当背景材料挂进那一格的输入栏 -->
+    {#each quoteRects as q (q.target)}
+      <div class="sd-quote" class:on={quoteHover === q.target} class:nope={quoteHover === q.target && !quoteOk(q.target)}
+        style="left:{q.l}px;top:{q.t}px;width:{q.w}px;height:{q.h}px">
+        <span class="sd-label">{quoteHover === q.target ? quoteLabelFor(q.target) : tc('claude', '放到输入框＝引用这段对话')}</span>
       </div>
     {/each}
   </div>
@@ -1045,8 +1188,10 @@
 
 {#snippet convRow(s, indent)}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="d-row" class:cur={s.id === curId} class:alt={!!altId && s.id === altId} class:indent class:dnd-on={drag.overKey === 'chat:claude:' + s.id}
-      class:lifted={liftedId === s.id} draggable={mouseDnd ? 'true' : 'false'} ondragstart={(e) => onSessDragStart(e, s)} ondragend={onSideDragEnd}>
+    <div class="d-row" class:cur={s.id === curId} class:alt={!!altId && s.id === altId} class:indent class:dnd-on={drag.overKey === 'chat:claude:' + s.id || rowHover === s.id}
+      class:lifted={liftedId === s.id} draggable={mouseDnd ? 'true' : 'false'} ondragstart={(e) => onSessDragStart(e, s)} ondragend={onSideDragEnd}
+      ondragover={(e) => onRowDragOver(e, s)} ondragleave={(e) => onRowDragLeave(e, s)} ondrop={(e) => onRowDrop(e, s)}
+      onpointerdown={(e) => sessHoldDown(e, s)} onpointermove={sessHoldMove} onpointerup={sessHoldUp} onpointercancel={sessHoldUp}>
       <!-- 落点挂在按钮上而不是外层 div：它本来就是可交互元素，省掉一条 a11y 例外 -->
       <button class="d-recent" use:dropZone={sessionDrop(s)} onclick={() => pickSession(s)}>
         {#if s.thinking || s.pending}<span class="d-dot {s.thinking ? 'work' : 'ask'}"></span>{/if}
@@ -1138,7 +1283,7 @@
 <!-- 窄屏：侧拉抽屉 + scrim（宽屏时常驻列已渲染在上方，这里不再出现） -->
 {#if !wide}
   <button class="scrim {ui.drawerOpen ? 'open' : ''}" aria-label={t('关闭侧栏')} onclick={closeDrawer}></button>
-  <aside class="drawer {ui.drawerOpen ? 'open' : ''}" use:dragScrollGuard>{@render drawerBody()}</aside>
+  <aside class="drawer {ui.drawerOpen ? 'open' : ''}" bind:this={drawerEl} use:dragScrollGuard>{@render drawerBody()}</aside>
 {/if}
 
 <!-- 新建项目：工作空间文件管理器当选择器，长按文件夹拖进底栏＝选它当项目工作空间 -->
@@ -1202,6 +1347,15 @@
   .sd-label { padding: 7px 14px; border-radius: 999px; background: var(--q-card); color: var(--text); font-size: 13.5px;
     box-shadow: var(--q-shadow); pointer-events: none; animation: sdIn .16s cubic-bezier(.2, .9, .3, 1.1); }
   .sd-zone.nope .sd-label { color: var(--muted); }
+  /* 输入栏上的「引用」区：平时一圈淡虚线 + 淡提示（告诉人这里能放），悬停才实线高亮、写明动作 */
+  .sd-quote { position: absolute; display: flex; align-items: center; justify-content: center; border-radius: 24px;
+    border: 1.5px dashed color-mix(in srgb, var(--coral) 45%, transparent); background: color-mix(in srgb, var(--bg) 55%, transparent);
+    transition: background-color .15s, border-color .15s; }
+  .sd-quote .sd-label { opacity: .8; }
+  .sd-quote.on { border-style: solid; border-color: color-mix(in srgb, var(--coral) 80%, transparent); background: color-mix(in srgb, var(--coral) 12%, var(--bg)); }
+  .sd-quote.on .sd-label { opacity: 1; }
+  .sd-quote.nope { border-color: color-mix(in srgb, var(--muted) 45%, transparent); background: color-mix(in srgb, var(--muted) 8%, var(--bg)); }
+  .sd-quote.nope .sd-label { color: var(--muted); }
   @keyframes sdIn { from { opacity: 0; transform: translateY(4px) scale(.97); } }
   /* 拖着文件悬在正文上：整列亮一圈，明确「松手就挂进这个会话」 */
   .main-col.dnd-on::after { content: ''; position: absolute; inset: 6px; border-radius: 16px; pointer-events: none;

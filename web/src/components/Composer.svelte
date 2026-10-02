@@ -24,6 +24,7 @@
   let effortOpen = $state(false), effortBtn = $state(), effortDir = $state('up');
   let menuOpen = $state(false), plusBtn = $state(), menuDir = $state('up');
   let fileInput = $state();
+  let photoInput = $state();
   let dirInput = $state();
 
   // —— 外部预填（lib/composerBridge：refusalRetry 的「编辑并重试」等）——
@@ -145,6 +146,7 @@
 
   // —— Add files：选文件 / 粘贴(Ctrl+V) / 拖拽 → /api/upload（base64）→ 暂存附件 ——
   function pickFiles() { fileInput && fileInput.click(); }
+  function pickPhotos() { photoInput && photoInput.click(); }
   // 统一附件入口：选文件 / 粘贴图片 / 拖拽文件三条路都汇到这里。逐个上传，pending 期间显示占位。
   async function addFiles(fileList) {
     for (const f of [...(fileList || [])]) {
@@ -259,6 +261,16 @@
     }
     if (e.key === 'Enter' && !e.shiftKey && !touchUI) { e.preventDefault(); submit(); }
   }
+  // 官方整卡 cursor-text：点卡片空白处（内边距、工具条空档）等于点输入框——聚焦并把光标放到末尾。
+  // 只认「空白容器」本身被点中；按钮、弹层、附件卡各管各的。从输入框里拖选到空白处松手时
+  // click 落在公共祖先上，这时有选区，不去收拢它。
+  function onCardClick(e) {
+    if (!field || !(e.target === e.currentTarget || e.target.matches?.('.toolbar, .left, .right, .field-wrap, .attachments'))) return;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && field.contains(sel.anchorNode)) return;
+    field.focus();
+    placeCaretEnd(field);
+  }
   // 粘贴：剪贴板里有文件（截图 / 复制的图片）→ 当附件上传；否则纯文本插入（富文本不带样式）。
   function onPaste(e) {
     const dt = e.clipboardData;
@@ -274,7 +286,10 @@
   }
 </script>
 
-<div class="composer" class:drag-over={dragOver} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} role="group">
+<!-- 点空白聚焦只是指针便利，键盘本就能 Tab 进输入框 -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<div class="composer" class:drag-over={dragOver} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} onclick={onCardClick} role="group">
   {#if dragOver}
     <div class="drop-veil">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M8 8l4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
@@ -284,9 +299,16 @@
   {#if compose.attachments.length}
     <div class="attachments">
       {#each compose.attachments as a, ai (a.path || 'pending-' + ai)}
-        <div class="att" class:img={a.kind === 'image'} class:pending={a.pending} class:dir={a.kind === 'folder'}>
+        <div class="att" class:img={a.kind === 'image'} class:pending={a.pending} class:dir={a.kind === 'folder' || a.kind === 'chat'}>
           {#if a.kind === 'image' && a.url}
             <img src={a.url} alt={a.name} />
+          {:else if a.kind === 'chat'}
+            <!-- 引用对话（侧栏拖一条会话进来，lib/chatQuote.js）：对话气泡图标 + 标题 + 条数 -->
+            <span class="att-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12.2c0 3.9-3.6 7-8 7-1.1 0-2.2-.2-3.1-.6L4.5 20l1.2-3.5C4.6 15.3 4 13.8 4 12.2c0-3.9 3.6-7 8-7s8 3.1 8 7z"/><path d="M8.6 11h6.8M8.6 14h4.2"/></svg></span>
+            <span class="att-col">
+              <span class="att-name">{a.name}</span>
+              <span class="att-sub">{a.pending ? t('正在整理对话…') : t('引用对话 · {n} 条消息', { n: a.count || 0 })}</span>
+            </span>
           {:else if a.kind === 'folder'}
             <span class="att-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.2c0-1.5 1.2-2.7 2.7-2.7h3.4l2 2.3h6.2c1.5 0 2.7 1.2 2.7 2.7v8.3c0 1.5-1.2 2.7-2.7 2.7H6.2c-1.5 0-2.7-1.2-2.7-2.7z"/></svg></span>
             <span class="att-col">
@@ -296,7 +318,7 @@
           {:else}
             <span class="att-name">{a.name}</span>
           {/if}
-          {#if a.pending && a.kind !== 'folder'}<span class="att-spin"></span>{/if}
+          {#if a.pending && a.kind !== 'folder' && a.kind !== 'chat'}<span class="att-spin"></span>{/if}
           <button class="att-x" aria-label={t('移除')} onclick={() => removeAtt(a)}>×</button>
         </div>
       {/each}
@@ -318,7 +340,7 @@
         <button class="tbtn plus" bind:this={plusBtn} aria-label={t('附件与功能')} onclick={toggleMenu}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
-        {#if menuOpen}<AddMenu dir={menuDir} onClose={() => (menuOpen = false)} onPickFiles={pickFiles} onPickFolder={pickFolder} />{/if}
+        {#if menuOpen}<AddMenu dir={menuDir} onClose={() => (menuOpen = false)} onPickFiles={pickFiles} onPickPhotos={pickPhotos} onPickFolder={pickFolder} />{/if}
       </div>
       {#if settings.research}
         <button class="chip" aria-label={t('Research 已开启')} onclick={toggleMenu}>
@@ -352,16 +374,41 @@
   </div>
 
   <input type="file" multiple hidden bind:this={fileInput} onchange={onFiles} />
+  <!-- 只收图片：安卓壳据此改开系统照片选择器（MainActivity.onShowFileChooser） -->
+  <input type="file" multiple hidden accept="image/*" bind:this={photoInput} onchange={onFiles} />
   <!-- webkitdirectory：选文件夹（触屏没有文件夹拖拽，这是手机端唯一入口） -->
   <input type="file" hidden bind:this={dirInput} onchange={onDirInput} webkitdirectory="" directory="" />
 </div>
 
 <style>
-  .composer { position: relative; width: 100%; background: var(--card); border-radius: 24px; box-shadow: var(--card-shadow); padding: 14px 12px 10px; }
+  /* claude.ai 输入栏原件（ion-dist shared-14 容器 + CSS 的 shadow-composer / -hover / -focus 三态）：
+     常态 = 淡描边 + 3.5% 软投影；悬停（且没悬在里面的按钮上）= 描边加深；聚焦（focus-within）=
+     描边加深 + 投影加深到 7.5%。描边暗色走 1px 内圈、亮色走 1px 外圈（官方 --cds-ring-inner/outer），
+     颜色 = 正文色 10% → 20%（--cds-border → --cds-border-strong）。圆角 20px、200ms 过渡、整卡 cursor:text。 */
+  .composer {
+    --cmp-ring: rgba(255,255,255,.10); --cmp-ring-strong: rgba(255,255,255,.20);
+    --cmp-ring-in: 1px; --cmp-ring-out: 0px;
+    --cmp-shadow: 0 4px 20px rgba(0,0,0,.035), inset 0 0 0 var(--cmp-ring-in) var(--cmp-ring), 0 0 0 var(--cmp-ring-out) var(--cmp-ring);
+    --cmp-shadow-hover: 0 4px 20px rgba(0,0,0,.035), inset 0 0 0 var(--cmp-ring-in) var(--cmp-ring-strong), 0 0 0 var(--cmp-ring-out) var(--cmp-ring-strong);
+    --cmp-shadow-focus: 0 4px 20px rgba(0,0,0,.075), inset 0 0 0 var(--cmp-ring-in) var(--cmp-ring-strong), 0 0 0 var(--cmp-ring-out) var(--cmp-ring-strong);
+    position: relative; width: 100%; background: var(--card); border-radius: 20px; box-shadow: var(--cmp-shadow); padding: 14px 12px 10px;
+    cursor: text; transition: background-color .2s, box-shadow .2s, opacity .2s;
+  }
+  :global(html[data-theme="light"]) .composer {
+    --cmp-ring: rgba(11,11,11,.10); --cmp-ring-strong: rgba(11,11,11,.20);
+    --cmp-ring-in: 0px; --cmp-ring-out: 1px;
+  }
+  /* 官方 hover 变体只在能悬停的设备上生效（Tailwind v4 的 @media (hover:hover)），触屏不会粘住悬停态 */
+  @media (hover: hover) {
+    .composer:hover:not(:has(button:hover, a:hover, [role=button]:hover, label:hover)) { box-shadow: var(--cmp-shadow-hover); }
+  }
+  .composer:focus-within { box-shadow: var(--cmp-shadow-focus); }
+  /* 整卡 cursor:text 会被子孙继承：卡内弹层（模型 / Effort / + 菜单 / 「/」菜单 / 额度面板）与附件卡回普通光标（按钮全局已是 pointer） */
+  .composer :global(:is([role=menu], [role=listbox], [role=dialog], .qr-wrap)), .att { cursor: default; }
   /* 拖拽文件悬停：卡片描边高亮 + 覆盖一层「拖到此处」提示（pointer-events:none 让拖放事件穿透到卡片） */
-  .composer.drag-over { box-shadow: var(--card-shadow), inset 0 0 0 2px var(--serif); }
+  .composer.drag-over { box-shadow: var(--cmp-shadow-focus), inset 0 0 0 2px var(--serif); }
   .drop-veil { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
-    border-radius: 24px; border: 2px dashed var(--serif); background: var(--card); color: var(--serif); font-size: 14px; pointer-events: none; }
+    border-radius: 20px; border: 2px dashed var(--serif); background: var(--card); color: var(--serif); font-size: 14px; pointer-events: none; }
   .drop-veil svg { width: 26px; height: 26px; }
   .drop-veil span { text-align: center; padding: 0 16px; }   /* 英文较长会折行：折行时居中 */
   .attachments { display: flex; flex-wrap: wrap; gap: 7px; padding: 2px 6px 10px; }

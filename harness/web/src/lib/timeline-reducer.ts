@@ -254,6 +254,10 @@ function stepArgPreview(args: any): string {
 }
 
 const numOr = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+const strList = (v: unknown): string[] | undefined => {
+  const list = Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x !== "") : [];
+  return list.length ? list : undefined;
+};
 
 function newAgentRun(ev: any): AgentRun {
   return {
@@ -279,6 +283,8 @@ export function agentRunFromMeta(m: any): AgentRun {
     // 老会话的 meta 没有 prompt / 计时：面板回落工具参数里的 prompt，时长留空
     prompt: typeof m?.prompt === "string" ? m.prompt : undefined, provider: m?.provider ? String(m.provider) : undefined,
     toolCalls: numOr(m?.toolCalls) ?? trail.length, startedAt: numOr(m?.startedAt), durationMs: numOr(m?.durationMs),
+    editedFiles: strList(m?.editedFiles),
+    stopReason: typeof m?.stopReason === "string" && m.stopReason !== "completed" ? m.stopReason : undefined,
   };
 }
 
@@ -325,6 +331,7 @@ function applySubagentInner(run: AgentRun, inner: any) {
   switch (inner?.e) {
     case "turn_start":
       run.text = "";
+      run.turns += 1; // 面板上的「回合」读数：直播时数 turn_start，结束时以服务端的为准
       break;
     case "text_delta":
       run.text += inner.text ?? "";
@@ -524,6 +531,9 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       if (ev.result !== undefined) run.result = ev.result;
       if (ev.cached) run.cached = true;
       if (typeof ev.toolCalls === "number") run.toolCalls = ev.toolCalls;
+      run.editedFiles = strList(ev.editedFiles);
+      if (typeof ev.stopReason === "string") run.stopReason = ev.stopReason;
+      run.suspendedUntil = undefined;
       run.durationMs = numOr(ev.durationMs) ?? (run.startedAt ? Date.now() - run.startedAt : undefined);
       for (const s of run.steps) if (s.status === "running") s.status = ev.ok ? "ok" : "fail";
       break;

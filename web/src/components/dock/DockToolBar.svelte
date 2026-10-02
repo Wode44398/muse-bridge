@@ -4,7 +4,8 @@
   //   · 工作台收着：TopBar 把它挂在这一格右上角；
   //   · 工作台展开：ClaudeDock 把它挂进自己顶上那条带里（docked），就坐在卡片正上方——
   //     位置跟着工作台这一列走，不靠这一格右上角的坐标去「碰巧」对上。
-  // 材质：Figma 液态玻璃（Clear Glass，见样式区 .fg）；`?oldglass` 退回原来的纯毛玻璃。
+  // 材质：触屏（手机 / 折叠屏 / 平板）用桌面主页 Dock 同款的 Figma 液态玻璃（见样式区 .fg），
+  // `?oldglass` 退回原来的纯毛玻璃；鼠标设备（电脑浏览器）一律扁平实底（.flat）。
   import { toggleTheme, ui } from '../../lib/state.svelte.js';
   import { dock, toggleDockView, closeDock, ensureDockMeta, dockToolOk, DOCK_TOOLS } from '../../lib/dock.svelte.js';
   import { bgHoldNow } from '../../lib/chat.svelte.js';
@@ -13,7 +14,8 @@
   // top：宿主算好的 top（TopBar 按 sat 属性给；docked 时由工作台带内的规则定，不用它）
   // split：分屏里的一格；onClose 给了就在末尾多一颗 ✕（关掉这一格）
   let { top = '10px', split = false, onClose = null, docked = false } = $props();
-  const fg = typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass');
+  const flat = typeof matchMedia !== 'undefined' && !matchMedia('(pointer: coarse)').matches;
+  const fg = !flat && (typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass'));
 
   const BAR = ['term', 'review', 'files'];            // 标题栏常驻三颗，其余收进 ⋮
   const MORE = ['tasks'];
@@ -53,7 +55,7 @@
   function pick(k) { moreOpen = false; toggleDockView(k); }
 </script>
 
-<div class="tbar" class:fg class:split class:docked style:top={docked ? null : top} bind:this={barEl}>
+<div class="tbar" class:fg class:flat class:split class:docked style:top={docked ? null : top} bind:this={barEl}>
   {#each barTools as k (k)}
     <button class="tb" class:on={isOn(k)} aria-pressed={isOn(k)} aria-label={LABEL[k].label} title={tip(k)} onclick={() => toggleDockView(k)}>
       {@html dockIcon(k)}
@@ -172,5 +174,12 @@
   @media (pointer: coarse) {
     .tbar.fg::before { border-image-source: url(../../assets/figma-glass/tb-bar40-dark.png); }
     :global(html[data-theme="light"]) .tbar.fg::before { border-image-source: url(../../assets/figma-glass/tb-bar40-light.png); }
+  }
+
+  /* —— 鼠标设备：扁平实底 —— 电脑上不需要玻璃，和页面同色的一块实底 + 一道细描边，
+     不模糊、不透色；正文滚到底下时照样挡住，不会透出字来。 */
+  :global(html) .tbar.flat {
+    background: var(--bg); box-shadow: inset 0 0 0 1px var(--divider);
+    -webkit-backdrop-filter: none; backdrop-filter: none;
   }
 </style>

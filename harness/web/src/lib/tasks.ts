@@ -143,6 +143,91 @@ export function splitTasks(list: readonly TaskEntry[]): { running: TaskEntry[]; 
   return { running, finished };
 }
 
+// ── 子 agent 卡（对话流里的卡片 / 叠卡、任务面板的行与详情共用的一份读数）──────────────
+// 并行批：时间线上紧挨着的 Agent 工具行（模型一轮里同时派出去的几个）。对话流把一批画成一张叠卡，
+// 子 agent 面板的「上一个 / 下一个」也在这一批里走。
+export function agentBatchOf(timeline: readonly any[], toolId: string): any[] {
+  const at = timeline.findIndex((x) => x?.kind === "tool" && x.id === toolId);
+  if (at < 0 || toolTaskKind(timeline[at]) !== "agent") return [];
+  const isAgent = (x: any) => x?.kind === "tool" && toolTaskKind(x) === "agent";
+  let from = at;
+  let to = at;
+  while (from > 0 && isAgent(timeline[from - 1])) from--;
+  while (to + 1 < timeline.length && isAgent(timeline[to + 1])) to++;
+  return timeline.slice(from, to + 1);
+}
+
+export interface AgentView {
+  title: string;
+  status: TaskStatus;
+  // 在跑但久无动静 / 限流挂起中（只是提示，不是终态）
+  stalled: boolean;
+  suspended: boolean;
+  tier: string;
+  model: string;
+  calls: number;
+  tokens: number;
+  time: string;
+  // 在跑时最近动手的那一步（没有 = 还没动手）；这一步做完、模型在想下一步时仍是它，卡片上那一行不来回跳
+  step: { id: string; name: string; arg: string } | null;
+  error: string;
+}
+
+// chatRunning = 这一轮还在跑：停了而它还挂着 running = 被打断（没等到 end 事件），按「已停止」画。
+// run 还没到（subagent_start 之前）时档位回落工具参数。
+export function agentView(tool: any, opts: { now: number; chatRunning: boolean }): AgentView {
+  const run = tool?.agent as
+    | (RunLike & { tier?: string; model?: string; steps?: { id: string; name: string; arg: string; status: string }[]; toolCalls?: number })
+    | undefined;
+  const raw = toolTaskStatus(tool);
+  const status: TaskStatus = raw === "running" && !opts.chatRunning ? "stopped" : raw;
+  const running = status === "running";
+  const steps = run?.steps ?? [];
+  const last = steps[steps.length - 1];
+  const dot = running && run ? agentDotState(run, { now: opts.now }) : "";
+  const suspended = running && !!run?.suspendedUntil && opts.now < run.suspendedUntil;
+  return {
+    title: toolTaskTitle(tool),
+    status,
+    stalled: dot === "stalled" && !suspended,
+    suspended,
+    tier: run?.tier || (tool?.args?.tools === "coder" ? "coder" : "research"),
+    model: modelShort(run?.model),
+    calls: run ? (run.toolCalls ?? steps.length) : 0,
+    tokens: run?.tokens ?? 0,
+    time: runElapsed(run, running, opts.now),
+    step: running && last ? { id: last.id, name: last.name, arg: last.arg } : null,
+    error: status === "failed" ? firstLine(run?.error || (!run ? tool?.summary : ""), 160) : "",
+  };
+}
+
+// 一批子 agent 的合计：叠卡头行、量线节点用。
+export function batchCounts(views: readonly AgentView[]): { total: number; running: number; failed: number; stopped: number; done: number } {
+  const c = { total: views.length, running: 0, failed: 0, stopped: 0, done: 0 };
+  for (const v of views) {
+    if (v.status === "running") c.running++;
+    else if (v.status === "failed") c.failed++;
+    else if (v.status === "stopped") c.stopped++;
+    else c.done++;
+  }
+  return c;
+}
+
+// 一批的墙钟：最早开始到最晚结束（还有在跑的 = 到现在）；拿不到时间戳就空串。
+export function batchElapsed(tools: readonly any[], running: boolean, now: number): string {
+  let start = 0;
+  let end = 0;
+  for (const tl of tools) {
+    const r = tl?.agent;
+    if (!r?.startedAt) continue;
+    start = start ? Math.min(start, r.startedAt) : r.startedAt;
+    if (typeof r.durationMs === "number") end = Math.max(end, r.startedAt + r.durationMs);
+  }
+  if (!start) return "";
+  if (running) return fmtDur(Math.max(0, now - start));
+  return end ? fmtDur(end - start) : "";
+}
+
 // ── 单 agent 显示态 / 计数 ───────────────────────────────────────────────────
 // settled：所属工作流已经结束，仍挂着 running 的 agent 视为没做完（红格）。
 export function agentDotState(run: RunLike, opts: { now?: number; settled?: boolean } = {}): DotState {

@@ -14,7 +14,7 @@ import {
 } from './file-core.mjs';
 import { handleFile, handleOfficePdf } from './file-preview.mjs';
 import { handleStream } from './file-video.mjs';
-import { handleExtract, handleMdLinks } from './file-derived.mjs';
+import { handleExtract, handleMdLinks, handleMdNames, handleRelPaths } from './file-derived.mjs';
 
 export {
   moveWorkspaceFile,
@@ -35,8 +35,10 @@ export function registerFileRoutes(router, { identify }) {
   router.on('POST', '/api/files/copy', (req, res) => handleCopy(req, res, identify));
   router.on('POST', '/api/file/save', (req, res) => handleSaveFile(req, res, identify));
   router.on('GET', '/api/file/mdlinks', (req, res, url) => handleMdLinks(req, res, url, identify));
+  router.on('GET', '/api/file/mdnames', (req, res, url) => handleMdNames(req, res, url, identify));
   router.on('GET', '/api/file/office-pdf', (req, res, url) => handleOfficePdf(req, res, url, identify));
   router.on('GET', '/api/file/stream', (req, res, url) => handleStream(req, res, url, identify));
   router.on('POST', '/api/files/to-upload', (req, res) => handleToUpload(req, res, identify));
   router.on('POST', '/api/files/extract', (req, res) => handleExtract(req, res, identify));
+  router.on('POST', '/api/files/relpaths', (req, res) => handleRelPaths(req, res, identify));
 }

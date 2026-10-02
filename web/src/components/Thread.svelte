@@ -1,6 +1,6 @@
 <script>
   import { tick } from 'svelte';
-  import { chat, answerQuestion, send, rewindToMessage, attImgFallback } from '../lib/chat.svelte.js';
+  import { chat, answerQuestion, send, rewindToMessage, attImgFallback, openSession } from '../lib/chat.svelte.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { session } from '../lib/state.svelte.js';
   import { renderMarkdown, streamBlocks } from '../lib/md.js';
@@ -43,6 +43,28 @@
     monitor: (n) => t('{n} 个监视任务运行中', { n }),
     task: (n) => t('{n} 个后台任务运行中', { n }),
   };
+  // 状态行第三段「正在干啥」（chat 内核 computeHint 给出 {k,…}）——措辞照官方 /code 页 working line。
+  const THINK_TEXT = [() => t('思考中…'), () => t('仍在思考…'), () => t('深入思考中…'), () => t('还在深入思考…'), () => t('快想好了…')];
+  const RETRY_KIND = { rate_limit: () => t('触发限流'), overloaded: () => t('服务过载'), server_error: () => t('服务端出错') };
+  function hintText(h) {
+    switch (h.k) {
+      case 'think': return (THINK_TEXT[h.n] || THINK_TEXT[0])();
+      case 'thought': return t('已思考 {n} 秒', { n: h.n });
+      case 'sending': return t('发送中…');
+      case 'starting': return t('启动会话中…');
+      case 'preparing': return t('准备中…');
+      case 'model': return t('等待 Claude…');
+      case 'tools': return t('运行工具中…');
+      case 'compact': return t('压缩会话中…');
+      case 'ask': return t('等待你的回答…');
+      case 'retry': {
+        const why = RETRY_KIND[h.kind] ? RETRY_KIND[h.kind]() : t('接口出错');
+        return why + ' · ' + t('重试中（{a}/{m}）', { a: h.attempt, m: h.max });
+      }
+    }
+    return '';
+  }
+
   function bgHoldText(h) {
     if (!h || !h.count) return t('后台任务收尾中');
     const kinds = new Set((h.tasks || []).map((tk) => taskNoun(tk.taskType)));
@@ -257,6 +279,15 @@
                   <button class="u-att u-img" class:single={imgCount === 1} aria-label={t('预览图片')} onclick={() => openImage(m.attachments, ai)}>
                     <img src={a.thumb || a.url} alt={a.name} loading="lazy" decoding="async" onerror={(e) => attImgFallback(e.currentTarget, a)} />
                   </button>
+                {:else if a.kind === 'chat'}
+                  <!-- 引用对话（侧栏拖进来的另一条会话）：点卡＝打开被引的那段对话；快照访客只看 -->
+                  <button class="u-att u-file u-chat" disabled={IS_CSNAP || !a.quoteId} title={t('打开被引用的对话')} onclick={() => openSession(a.quoteId)}>
+                    <span class="u-file-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12.2c0 3.9-3.6 7-8 7-1.1 0-2.2-.2-3.1-.6L4.5 20l1.2-3.5C4.6 15.3 4 13.8 4 12.2c0-3.9 3.6-7 8-7s8 3.1 8 7z"/><path d="M8.6 11h6.8M8.6 14h4.2"/></svg></span>
+                    <span class="u-chat-col">
+                      <span class="u-file-name">{a.name}</span>
+                      <span class="u-chat-sub">{t('引用的对话')}</span>
+                    </span>
+                  </button>
                 {:else}
                   <div class="u-att u-file">
                     <span class="u-file-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/></svg></span>
@@ -399,7 +430,7 @@
               <!-- 官方 desktop 同款状态语法：时长 · tokens · 状态文字。悬停（等后台任务）拼第三段
                    作挂起提示——与真结束（无状态行）一眼可分；这一段可点，直开右侧工作台「任务」
                    面板看逐条详情（命令行/耗时/输出）。 -->
-              <span class="meta">{chat.reconnecting ? t('重连中…') : fmtElapsed(m.elapsed) + ' · ' + fmtTokens(m.tokens) + ' tokens'}</span>
+              <span class="meta">{chat.reconnecting ? t('重连中…') : fmtElapsed(m.elapsed) + ' · ' + fmtTokens(m.tokens) + ' tokens'}{#if m.hint && !chat.reconnecting}{' · '}<span class="hint" class:shimmer={m.hint.k !== 'thought'}>{hintText(m.hint)}</span>{/if}</span>
               {#if m.bgHold && !chat.reconnecting}
                 <!-- 官方 /code 页同款：菊花右侧一颗蓝色任务芯片（「1 running task」），点开任务面板 -->
                 <button class="bgchip" title={t('查看后台任务详情')} onclick={() => openDock('tasks')}>{bgHoldText(m.bgHold)}</button>
@@ -463,6 +494,11 @@
   .u-file-ic { width: 22px; height: 22px; flex: none; color: var(--serif); }
   .u-file-ic svg { width: 100%; height: 100%; }
   .u-file-name { font-size: 13.5px; color: var(--text); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .u-chat { text-align: left; font: inherit; cursor: pointer; }
+  .u-chat:disabled { cursor: default; }
+  @media (hover: hover) { .u-chat:not(:disabled):hover { background: var(--hover); } }
+  .u-chat-col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .u-chat-sub { font-size: 11.5px; color: var(--muted); }
   .bubble { background: var(--userbubble); color: var(--text); border-radius: 14px; padding: 10px 15px; font-size: 15px; line-height: 1.5; max-width: 100%; word-break: break-word; white-space: pre-wrap; animation: popIn .28s cubic-bezier(.22,1,.36,1); }
   @keyframes popIn { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
   .turn-assistant { margin: 6px 0 22px; }
@@ -610,6 +646,10 @@
   .turn-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
   .logo-fly { display: inline-flex; flex: none; }
   .meta { color: var(--muted); font-size: 13px; }
+  /* 状态文字的呼吸（官方 epitaxy-thinking-shimmer 原值：opacity 1→.75，2s ease-in-out，先静 3s 再起） */
+  .hint.shimmer { animation: hint-breathe 2s ease-in-out 3s infinite; will-change: opacity; }
+  @keyframes hint-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .75; } }
+  @media (prefers-reduced-motion: reduce) { .hint.shimmer { animation: none; will-change: auto; } }
   /* 后台任务芯片：官方 /code 页菊花右侧那颗蓝色「N running task」——实心蓝底 + 白字小圆角，
      点开右侧工作台的「任务」页。它是状态行里唯一的彩色元素，正是要一眼看见。 */
   .bgchip { background: var(--taskchip); color: var(--taskchip-fg); font-size: 12.5px; line-height: 16px;

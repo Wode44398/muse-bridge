@@ -8,6 +8,7 @@ import { filterAttachmentPaths } from '../runtime/attachment-guard.mjs';
 import { handleAnswer } from '../runtime/questions.mjs';
 import { runClaudeChat } from '../agents/claude.mjs';
 import * as claudeProjects from '../claude-projects.mjs';
+import { createSessionWorktree } from '../claude-worktrees.mjs';
 import { CLAUDE_MODELS, CLAUDE_EFFORTS, ULTRACODE } from '../config/capabilities.mjs';
 import { MODEL } from '../config/index.mjs';
 import { contextFor } from '../runtime/identity.mjs';
@@ -95,6 +96,26 @@ export function registerChatRoutes(router, { authOk, identify }) {
         return;
       }
     }
+    // worktree 勾选框（输入栏分支胶囊右半）：新会话先从项目当前 HEAD 切一个 git worktree，
+    // 整轮以它为 cwd（claude-worktrees.mjs）。只认新会话——续聊的 cwd 由 transcript 定死；
+    // 快照访客、快照桶不给（一次性空桶不是仓库）。没选项目 = 默认工作空间。
+    if (!sessionId && parsed.worktree === true && !isSnap) {
+      let base = claudeProject;
+      if (!base) {
+        const def = claudeProjects.listProjects(ctx.claudeProjects, ctx)[0];
+        try { base = def ? { ...def, path: claudeProjects.authorizeProjectPath(ctx, def.path) } : null; } catch { base = null; }
+      }
+      if (base && !base.quick) {
+        try {
+          const wt = await createSessionWorktree(ctx.claudeProjects, base);
+          claudeProject = { ...base, path: claudeProjects.authorizeProjectPath(ctx, wt.cwd), worktree: { name: wt.name, branch: wt.branch, root: wt.root } };
+        } catch (e) {
+          res.writeHead(e?.status || 400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e?.message || '创建 worktree 失败' }));
+          return;
+        }
+      }
+    }
     // 附件守卫（attachment-guard.mjs）：沙箱身份只收本人 uploads / 工作空间（cwd）/
     // 已授权项目内的路径；admin 放行任意存在的绝对路径。
     const attachments = filterAttachmentPaths(parsed.attachments, {
@@ -116,7 +137,10 @@ export function registerChatRoutes(router, { authOk, identify }) {
     // 项目 cwd 生效方式：覆写 ctx.cwd 传入——runClaudeChat 的 query cwd / resume 清理 /
     // 沙箱围栏全部吃 ctx.cwd，一处覆写全链路一致。默认项目 path === ctx.cwd，等价原行为。
     // homeRoot 保留身份原本的文件根（覆写前的 cwd）：产物文件夹卡要靠它算「在文件页里的位置」。
-    const claudeCtx = claudeProject ? { ...ctx, cwd: claudeProject.path, homeRoot: ctx.cwd } : ctx;
+    // worktree 会话另带 worktree:{cwd,branch}——session 帧透给前端，工作台当场切到 worktree。
+    const claudeCtx = claudeProject
+      ? { ...ctx, cwd: claudeProject.path, homeRoot: ctx.cwd, ...(claudeProject.worktree ? { worktree: { cwd: claudeProject.path, branch: claudeProject.worktree.branch } } : {}) }
+      : ctx;
     return runClaudeChat(req, res, {
       message, sessionId, model, effort, fast, chatPrefs, attachments, style, styleText, research, suggest,
       globalMax: isSnap ? SNAP_MAX_TURNS : undefined,

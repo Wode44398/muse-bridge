@@ -85,6 +85,11 @@ export default {
   '{n} 个字符': { one: '{n} character', other: '{n} characters' },
   '{n} 条反向链接': { one: '{n} backlink', other: '{n} backlinks' },
   '已恢复未保存草稿': 'Restored unsaved draft',
+  '已把未保存的草稿与别处的新修改合并': 'Merged your unsaved draft with newer changes made elsewhere',
+  '这篇在别处被修改过，未保存的草稿没有自动恢复': 'This note changed elsewhere, so your unsaved draft wasn’t restored automatically',
+  '恢复草稿': 'Restore draft',
+  '丢弃': 'Discard',
+  '返回引用处': 'Back to reference',
 
   // —— Markdown 编辑器：右键菜单 / 选中浮条 ——
   '新增链接': 'Add link',
@@ -120,8 +125,11 @@ export default {
   '分隔线': 'Horizontal rule',
   '代码块': 'Code block',
   '数学块': 'Math block',
-  'md::链接': 'url',
+  '开始书写…': 'Start writing…',
   '复制代码': 'Copy code',
+
+  // —— Markdown 编辑器：[[ 笔记名补全 ——
+  '目录太大，只列出了一部分笔记': 'Folder too large — showing only some notes',
 
   // —— 笔记属性（frontmatter）面板 ——
   '笔记属性': 'Properties',
@@ -145,4 +153,27 @@ export default {
   '删除本列': 'Delete column',
   '对齐方式': 'Alignment',
   '删除表格': 'Delete table',
+
+  // —— 查看器顶栏状态 / 与磁盘冲突 ——
+  '正在保存…': 'Saving…',
+  '与别处的修改冲突': 'Conflicts with changes made elsewhere',
+  '已合并别处对这篇的修改': 'Merged changes made elsewhere',
+  '这篇在别处被修改了，和你没保存的改动冲突': 'This note was changed elsewhere, and it conflicts with your unsaved edits',
+  '保留我的': 'Keep mine',
+  '用最新版': 'Use latest',
+
+  // —— 列表缩进（右键菜单 · 段落设置；触屏列表条）——
+  '增加缩进': 'Indent',
+  '减少缩进': 'Outdent',
+  '切换待办': 'Toggle task',
+  // —— 插图 / 附件（粘贴、拖入、插入 ▸ 图片或附件…）——
+  '图片或附件…': 'Image or attachment…',
+  '插入图片或附件': 'Insert image or attachment',
+  '拖动调整大小': 'Drag to resize',
+  '正在保存 {name}…': 'Saving {name}…',
+  '插入失败：{reason}': 'Couldn’t insert: {reason}',
+  '此文档不可写': 'This note is read-only',
+  '手机本地附件不能超过 20MB': 'Attachments on phone storage can’t exceed 20 MB',
+  '读取文件失败': 'Couldn’t read the file',
+  '这个位置暂不支持插入附件': 'Attachments aren’t supported in this location yet',
 };

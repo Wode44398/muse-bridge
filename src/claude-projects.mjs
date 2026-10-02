@@ -13,6 +13,7 @@ import { readJson, writeJson } from './jsonfile.mjs';
 import { authorizeProjectPath, projectLocations } from './project-paths.mjs';
 import { quickProject } from './claude-quick.mjs';
 import { sessionsDir } from './runtime/paths.mjs';
+import { listWorktrees } from './claude-worktrees.mjs';
 
 export { authorizeProjectPath, projectLocations };
 
@@ -134,13 +135,29 @@ export function setProjectOrder(file, ctx, ids) {
   return order;
 }
 
+// 会话目录的全集：每个项目自己的 cwd，外加挂在它名下的 worktree 会话 cwd（claude-worktrees.mjs）。
+// worktree 那几项的 project 是「所属项目换上 worktree cwd」的副本：id 不变（侧栏照旧归原项目），
+// path = worktree cwd（续聊 query cwd / 回滚 / 交付根 / 工作台都吃 project.path，一处换掉全链路一致），
+// 另带 worktree:{name,branch,root} 供前端标注。所属项目已删的 worktree 记录不列（与删项目同语义）。
+export function sessionScopes(file, ctx, projects = listProjects(file, ctx)) {
+  const scopes = projects.map((p) => ({ project: p, path: p.path }));
+  const byId = new Map(projects.map((p) => [p.id, p]));
+  for (const w of listWorktrees(file)) {
+    const p = byId.get(w.projectId);
+    if (!p || p.quick) continue;
+    scopes.push({ project: { ...p, path: w.cwd, worktree: { name: w.name, branch: w.branch, root: w.root } }, path: w.cwd });
+  }
+  return scopes;
+}
+
 // 会话 id → 所属项目（按 transcript 所在目录推导）。找不到就归默认项目。
+// worktree 会话返回的是带 worktree cwd 的项目副本（见 sessionScopes）。
 export function locateSessionProject(file, ctx, sessionId) {
   const id = String(sessionId || '');
   if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return null;
   const projects = listProjects(file, ctx);
-  for (const p of projects) {
-    if (existsSync(path.join(sessionsDir(p.path, ctx.configDir), id + '.jsonl'))) return p;
+  for (const s of sessionScopes(file, ctx, projects)) {
+    if (existsSync(path.join(sessionsDir(s.path, ctx.configDir), id + '.jsonl'))) return s.project;
   }
   return projects[0] || null;   // [0] 恒为默认项目
 }
@@ -149,11 +166,11 @@ export function locateSessionProject(file, ctx, sessionId) {
 export function locateSessionPaths(file, ctx, sessionId) {
   const id = String(sessionId || '');
   if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return null;
-  for (const p of listProjects(file, ctx)) {
-    const dir = sessionsDir(p.path, ctx.configDir);
+  for (const s of sessionScopes(file, ctx)) {
+    const dir = sessionsDir(s.path, ctx.configDir);
     const f = path.join(dir, id + '.jsonl');
     if (!path.resolve(f).startsWith(path.resolve(dir) + path.sep)) continue;
-    if (existsSync(f)) return { dir, file: f, subdir: path.join(dir, id), project: p };
+    if (existsSync(f)) return { dir, file: f, subdir: path.join(dir, id), project: s.project };
   }
   return null;
 }

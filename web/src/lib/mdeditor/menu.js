@@ -9,8 +9,11 @@
 //   子菜单里的项又按「主菜单普通项」逻辑排了 250ms 缓关 → 关掉后指针又落回锚点 → 再开……
 //   每 370ms 闪一次。现在子菜单内的项永不排缓关、锚点行不被盖，两处根都断了。
 import { EditorView } from '@codemirror/view';
+import { syntaxTree } from '@codemirror/language';
 import { commands, setHeading } from './commands.js';
+import { canAttach, pickAttachments, pasteFiles } from './attach.js';
 import { t, tc } from '../i18n.js';
+import { lastPointerTouch } from '../touchSelection.js';
 
 const SVG = (paths, extra = '') =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${extra}${paths.map((d) => `<path d="${d}"/>`).join('')}</svg>`;
@@ -39,6 +42,7 @@ const ICONS = {
   quote: SVG(['M10 11H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6a4 4 0 0 1-4 4', 'M20 11h-4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6a4 4 0 0 1-4 4']),
   foot: SVG(['M4 8h9', 'M4 13h16', 'M4 18h16', 'M18 3v5', 'm16.5 4.5 1.5-1.5']),
   table: SVG(['M3 12h18', 'M12 3v18'], '<rect x="3" y="3" width="18" height="18" rx="2.5"/>'),
+  image: SVG(['m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21'], '<rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="9" cy="9" r="2"/>'),
   callout: SVG(['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z']),
   hr: SVG(['M4 12h16', 'M6 6h4', 'M14 6h4', 'M6 18h4', 'M14 18h4']),
   codeblk: SVG(['m10 9-2.5 3L10 15', 'm14 9 2.5 3L14 15'], '<rect x="3" y="3" width="18" height="18" rx="2.5"/>'),
@@ -47,6 +51,8 @@ const ICONS = {
   copy: SVG(['M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1'], '<rect x="9" y="9" width="13" height="13" rx="2.5"/>'),
   paste: SVG(['M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2'], '<rect x="8" y="2" width="8" height="4" rx="1.2"/>'),
   all: SVG(['M5 3a2 2 0 0 0-2 2', 'M19 3a2 2 0 0 1 2 2', 'M21 19a2 2 0 0 1-2 2', 'M5 21a2 2 0 0 1-2-2', 'M9 3h2', 'M13 3h2', 'M9 21h2', 'M13 21h2', 'M3 9v2', 'M3 13v2', 'M21 9v2', 'M21 13v2']),
+  indent: SVG(['M3 5h18', 'M11 10h10', 'M11 14h10', 'M3 19h18', 'm3 9 3 3-3 3']),
+  outdent: SVG(['M3 5h18', 'M11 10h10', 'M11 14h10', 'M3 19h18', 'm7 9-3 3 3 3']),
   undo: SVG(['M3 7v6h6', 'M21 17a9 9 0 0 0-15-6.7L3 13']),
   redo: SVG(['M21 7v6h-6', 'M3 17a9 9 0 0 1 15-6.7L21 13']),
   chev: SVG(['m9 6 6 6-6 6']),
@@ -62,6 +68,16 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigat
 const MOD = isMac ? '⌘' : 'Ctrl';
 // 快捷键提示只给有鼠标的桌面端看；触屏没键盘，字是白占宽度
 const finePointer = () => { try { return matchMedia('(hover: hover) and (pointer: fine)').matches; } catch { return false; } };
+
+// 光标在不在列表项里（含续行；代码块里的「- x」不算）
+function inListItem(state) {
+  const pos = state.selection.main.head;
+  for (let n = syntaxTree(state).resolveInner(pos, -1); n; n = n.parent) {
+    if (n.name === 'ListItem') return true;
+    if (n.name === 'FencedCode' || n.name === 'CodeBlock') return false;
+  }
+  return false;
+}
 
 // 当前行状态（段落设置子菜单的 ✓）
 function lineState(state) {
@@ -89,6 +105,7 @@ function legacyCopy(text) {
 export function createMenuCtl() {
   let view = null, host = null, root = null;
   let bar = null, barRo = null, menu = null, sub = null;
+  let barKind = 'sel';
   let menuOpen = false, pointerDown = false;
   let barT = null, scrollT = null, subHoverT = null, subCloseT = null, flashT = null;
   let findQ = '';
@@ -124,6 +141,16 @@ export function createMenuCtl() {
     if (v.state.readOnly) return;
     let txt = '';
     try { txt = await navigator.clipboard.readText(); } catch {}
+    if (!txt && canAttach(v.state)) {   // 剪贴板里是截图/图片：存成附件插进来（同 Ctrl+V）
+      const files = [];
+      try {
+        for (const item of await navigator.clipboard.read()) {
+          const type = item.types.find((x) => x.startsWith('image/'));
+          if (type) files.push(new File([await item.getType(type)], 'image.' + (type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg'), { type }));
+        }
+      } catch {}
+      if (pasteFiles(v, files)) { v.focus(); return; }
+    }
     if (!txt) { flash(t('无法读取剪贴板，请用键盘粘贴')); return; }
     v.dispatch(v.state.replaceSelection(txt));
     v.focus();
@@ -187,10 +214,16 @@ export function createMenuCtl() {
           { icon: 'body', label: tc('md', '正文'), run: (vw) => setHeading(vw, 0), on: !ls.heading && !ls.bullet && !ls.ordered && !ls.task && !ls.quote },
           '-',
           { icon: 'quote', label: t('引用'), cmd: 'quote', on: ls.quote },
+          ...(inListItem(v.state) ? [
+            '-',
+            { icon: 'indent', label: t('增加缩进'), cmd: 'indentList', key: 'Tab' },
+            { icon: 'outdent', label: t('减少缩进'), cmd: 'outdentList', key: 'Shift+Tab' },
+          ] : []),
         ],
       });
       items.push({
         icon: 'ins', label: t('插入'), sub: [
+          ...(canAttach(v.state) ? [{ icon: 'image', label: t('图片或附件…'), run: pickAttachments }, '-'] : []),
           { icon: 'props', label: t('笔记属性'), cmd: 'props' },
           { icon: 'foot', label: t('脚注'), cmd: 'footnote' },
           { icon: 'table', label: t('表格'), cmd: 'table' },
@@ -375,13 +408,17 @@ export function createMenuCtl() {
     closeMenu();
   }
 
-  // ———— 选中浮条 ————
-  function buildBar(ro) {
+  // ———— 选中浮条 / 触屏光标条 ————
+  // kind='sel'：有选区时的格式条；kind='list' / 'caret'：触屏上光标停着（没选区）时贴底出现的工具条——
+  // 手机软键盘没有 Tab，缩进/减缩进只能从这里点；长按交给系统选词后右键菜单也打不开，插图和 ⋯
+  // （插入 / 段落设置）同样从这里进（Obsidian 移动版工具条同款入口）。'list' 多出缩进与待办三键。
+  function buildBar(ro, kind = 'sel') {
     bar?.remove();
     bar = document.createElement('div');
-    bar.className = 'mde-selbar';
+    bar.className = 'mde-selbar' + (kind !== 'sel' ? ' mde-listbar' : '');
     bar.setAttribute('role', 'toolbar');
     barRo = ro;
+    barKind = kind;
     const mk = (html, title, fn, cls = '') => {
       const b = document.createElement('button');
       b.type = 'button';
@@ -395,7 +432,18 @@ export function createMenuCtl() {
       return b;
     };
     const sep = () => bar.insertAdjacentHTML('beforeend', '<span class="sb-sep"></span>');
-    if (!ro) {
+    if (kind === 'list') {
+      mk(ICONS.outdent, t('减少缩进'), () => commands.outdentList(view));
+      mk(ICONS.indent, t('增加缩进'), () => commands.indentList(view));
+      sep();
+      mk(ICONS.task, t('切换待办'), () => commands.toggleTask(view));
+    }
+    if (kind !== 'sel') {
+      if (canAttach(view.state)) {
+        if (kind === 'list') sep();
+        mk(ICONS.image, t('插入图片或附件'), () => pickAttachments(view));
+      }
+    } else if (!ro) {
       mk(ICONS.bold, t('加粗'), () => commands.bold(view));
       mk(ICONS.italic, t('斜体'), () => commands.italic(view));
       mk(ICONS.strike, t('删除线'), () => commands.strike(view));
@@ -418,20 +466,34 @@ export function createMenuCtl() {
   function showBar() {
     if (!view || !root || menuOpen || pointerDown) return;
     const r = view.state.selection.main;
-    if (r.empty) return hideBar();
+    const ro = view.state.readOnly;
+    // 没选区：只有触屏、可写、聚焦时出光标条（在列表项里多出缩进键），否则收起
+    const kind = !r.empty ? 'sel'
+      : !(lastPointerTouch() && !ro && view.hasFocus) ? null
+      : inListItem(view.state) ? 'list' : canAttach(view.state) ? 'caret' : null;
+    if (!kind) return hideBar();
     let c1 = null, c2 = null;
     try { c1 = view.coordsAtPos(r.from, 1); c2 = view.coordsAtPos(r.to, -1); } catch {}
     if (!c1) return hideBar();
-    const ro = view.state.readOnly;
-    if (!bar || barRo !== ro) buildBar(ro);
+    if (!bar || barRo !== ro || barKind !== kind) buildBar(ro, kind);
     const hr = host.getBoundingClientRect();
     // 浮条常驻布局（visibility 藏着），不必先 display 再量：offsetWidth 直接可读
     const w = bar.offsetWidth, h = bar.offsetHeight;
-    const midX = ((c1.left + (c2 ? c2.right : c1.left)) / 2) - hr.left;
-    const x = clamp(midX - w / 2, 6, Math.max(6, hr.width - w - 6));
-    let y = c1.top - hr.top - h - 10;
-    let below = false;
-    if (y < 6) { y = (c2 ? c2.bottom : c1.bottom) - hr.top + 10; below = true; }
+    // 触屏：系统的「复制/全选」浮条就摆在选区上方，两条会叠在一起、还挡住选择柄——
+    // 格式条改成贴编辑区可见底边居中（键盘弹起时贴键盘上沿），不跟着选区跑。
+    const docked = lastPointerTouch();
+    let x, y, below = false;
+    if (docked) {
+      const vv = window.visualViewport;
+      const visBottom = Math.min(hr.bottom, vv ? vv.offsetTop + vv.height : innerHeight);
+      x = clamp((hr.width - w) / 2, 6, Math.max(6, hr.width - w - 6));
+      y = visBottom - hr.top - h - 12;
+    } else {
+      const midX = ((c1.left + (c2 ? c2.right : c1.left)) / 2) - hr.left;
+      x = clamp(midX - w / 2, 6, Math.max(6, hr.width - w - 6));
+      y = c1.top - hr.top - h - 10;
+      if (y < 6) { y = (c2 ? c2.bottom : c1.bottom) - hr.top + 10; below = true; }
+    }
     y = clamp(y, 6, Math.max(6, hr.height - h - 6));
     bar.style.left = x + 'px';
     bar.style.top = y + 'px';
@@ -450,7 +512,8 @@ export function createMenuCtl() {
 
   function onSelChange(v) {
     view = v;
-    if (v.state.selection.main.empty) { clearTimeout(barT); hideBar(); return; }
+    if (v.state.selection.main.empty && !lastPointerTouch()) { clearTimeout(barT); hideBar(); return; }
+    if (v.state.selection.main.empty && barKind === 'sel') hideBar();   // 选区塌了先收格式条，列表条由 showBar 决定出不出
     scheduleBar();
   }
 
@@ -458,6 +521,12 @@ export function createMenuCtl() {
   function onContextMenu(e, v) {
     view = v;
     if (e.target.closest?.('.mde-table')) return false;   // 表格格子交还原生（格内粘贴等）
+    // 触屏长按也会派发 contextmenu，而 Chrome 是先派发它、没被拦才去「长按选词」——
+    // 这里一拦，手机上长按就只剩自家菜单+弹键盘、永远选不中字。拖完选择柄松手时它还会再补
+    // 一发（pointerType 报 mouse、button=-1，真鼠标右键是 2），那是系统用来弹「复制/全选」浮条的。
+    // 这两种都交还系统；格式命令在选中后贴底出现的格式条里，⋯ 仍能打开这份菜单。
+    const pt = e.pointerType;
+    if (pt === 'touch' || pt === 'pen' || e.button === -1 || (!pt && lastPointerTouch())) return false;
     e.preventDefault();
     const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
     if (pos != null) {
@@ -527,6 +596,8 @@ export function createMenuCtl() {
     host.appendChild(root);
     document.addEventListener('pointerdown', onDocPointerDown, true);
     window.addEventListener('pointerup', onWinPointerUp, true);
+    // 触屏长按选词结束时浏览器发的是 pointercancel 而不是 pointerup——不收就一直当「还按着」，格式条永远不出
+    window.addEventListener('pointercancel', onWinPointerUp, true);
     document.addEventListener('keydown', onKeyDown, true);
     v.scrollDOM.addEventListener('scroll', onScroll, { passive: true });
     v.dom.addEventListener('focusout', onFocusOut);
@@ -536,6 +607,7 @@ export function createMenuCtl() {
     clearTimeout(barT); clearTimeout(scrollT); clearTimeout(subHoverT); clearTimeout(subCloseT); clearTimeout(flashT);
     document.removeEventListener('pointerdown', onDocPointerDown, true);
     window.removeEventListener('pointerup', onWinPointerUp, true);
+    window.removeEventListener('pointercancel', onWinPointerUp, true);
     document.removeEventListener('keydown', onKeyDown, true);
     try { view?.scrollDOM.removeEventListener('scroll', onScroll); view?.dom.removeEventListener('focusout', onFocusOut); } catch {}
     root?.remove();

@@ -175,7 +175,8 @@ export class PropsWidget extends WidgetType {
 }
 
 const SVG = (d, w = 2.1) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
-const CHEV = SVG('<path d="m9 6 6 6-6 6"/>', 2.2);
+// 折叠箭头要带 mde-chev：尺寸/旋转规则挂在这个类上（editor.css），没它 svg 渲染成 0×0，用户看不出面板能折叠
+const CHEV = SVG('<path d="m9 6 6 6-6 6"/>', 2.2).replace('<svg ', '<svg class="mde-chev" ');
 const PLUS = SVG('<path d="M12 5v14M5 12h14"/>');
 const iconOf = (kind) => PROP_ICONS[kind] || PROP_ICONS.text;
 const rowOf = (el) => el.closest('.mde-prop');

@@ -1,17 +1,17 @@
 <script>
   // 官方 /code 页 Workflow 工具卡（c360a9e1c zD / ID / TD，规格 workflow-panel.md §3.1–§3.2、
   // §3.7–§3.8）：
-  //   · running（含「未起飞」：工具在跑、task_start 还没到）且不在分组 → 318px 紧凑卡：标题
-  //     （工作流名，流光）/ 副行「Starting workflow | Workflow · {n} agents · 计时」/ 6px agent
-  //     点阵（≤8 行 + 幽灵格）；秒级计时只在卡活着时走；点击 onOpen(tool)（TaskSheet 里是带
-  //     Phases 的详细卡）。
-  //   · 其余（结束后 / 分组内）→ 一行「Running workflow」(流光)/「Ran workflow」+ 名称 + 尾巴
+  //   · 不在分组 → 318px 紧凑卡：标题（工作流名，跑时流光）/ 副行「Starting workflow | Workflow
+  //     · [Completed|Failed|Stopped] · {n} agents · 时长」/ 6px agent 点阵（≤8 行，跑时带幽灵格）；
+  //     秒级计时只在跑时走；点击 onOpen(tool)（右侧「任务」里带 Phases 的详细卡）。
+  //     官方只在 running 时出卡、结束收成一行——bridge 偏离，跑完也留卡（见 compact 注释）。
+  //   · 分组内 → 一行「Running workflow」(流光)/「Ran workflow」+ 名称 + 尾巴
   //     Stopped / Failed（title = 失败原因；触屏没有 hover，原因直接内联）。官方这一行不可点，
   //     bridge 让它也 onOpen（结束后的 Phases / agent 表在 TaskSheet 里才看得到），并补右侧
   //     CaretRight 作可点提示——与 Agent 行完成态一致。
   // 配色铁律：点阵 running 格用 var(--text)（AgentDots 内已改），不用官方 accent 蓝。
   import { openTaskDetail } from '../../lib/dock.svelte.js';
-  import { deriveWorkflow, agentDotStates, workflowNameFromInput, reasonFromSummary, taskRunning, EMPTY_COUNTS } from '../../lib/taskModel.js';
+  import { deriveWorkflow, agentDotStates, workflowNameFromInput, reasonFromSummary, taskRunning, settleProgress, EMPTY_COUNTS } from '../../lib/taskModel.js';
   import { fmtDurPanel, morphText } from '../../lib/toolVerbs.js';
   import { glyph } from '../../lib/claudeIcons.js';
   import AgentDots from './AgentDots.svelte';
@@ -35,37 +35,52 @@
   const stopped = $derived(status === 'stopped');
   const failed = $derived(status === 'failed');
   const reason = $derived((failed || stopped) ? (reasonFromSummary(task ? task.summary : '', task ? task.description : '') || '') : '');
-  const compact = $derived(!inGroup && running);
+  // bridge 偏离（实测后定）：官方跑完即收成一行「Ran workflow X」，和「Ran 5 commands」混在一起
+  // 认不出来；这里不在分组里就一律是卡片——跑完后停在终态（状态字 + 最终点阵 + 时长），
+  // 只有被并进工具分组时才退回单行。
+  const compact = $derived(!inGroup);
 
-  // 秒级时钟：只在紧凑卡显示期间走（官方 cD(true)：页面可见时按秒 tick，隐藏时冻结）
+  // 秒级时钟：只在卡片还在跑时走（官方 cD(true)：页面可见时按秒 tick，隐藏时冻结）
   let now = $state(Date.now());
   $effect(() => {
-    if (!compact) return;
+    if (!compact || !running) return;
     now = Date.now();
     const id = setInterval(() => { if (typeof document === 'undefined' || !document.hidden) now = Date.now(); }, 1000);
     return () => clearInterval(id);
   });
-  // 进度树（官方 hD，settled:false）→ 计数 / 点阵；agents 按 phase 顺序一格一个
-  const wf = $derived(compact ? deriveWorkflow(task ? task.progress : [], { now, settled: false }) : undefined);
+  // 进度树（官方 hD）→ 计数 / 点阵；agents 按 phase 顺序一格一个。跑完后先按任务终态收尾
+  //（还标着 progress 的 agent 记成失败，官方 _t），点阵停在最终状态。
+  const progress = $derived(task ? (running ? task.progress : settleProgress(task.progress, status)) : []);
+  const wf = $derived(compact ? deriveWorkflow(progress, running ? { now, settled: false } : { settled: true }) : undefined);
   const counts = $derived(wf ? wf.counts : EMPTY_COUNTS);
-  const agents = $derived(wf ? agentDotStates(wf.phases.flatMap((p) => p.agents), { now }) : undefined);
+  const agents = $derived(wf ? agentDotStates(wf.phases.flatMap((p) => p.agents), running ? { now } : {}) : undefined);
   const hasAgents = $derived(!!wf && wf.counts.total > 0);
   const startedAt = $derived(task && task.startedAt ? task.startedAt : 0);
-  const elapsed = $derived(startedAt ? fmtDurPanel(Math.max(0, now - startedAt)) : '');
+  const elapsed = $derived.by(() => {
+    if (running) return startedAt ? fmtDurPanel(Math.max(0, now - startedAt)) : '';
+    const ms = (task && task.usage && task.usage.ms) || (task && task.endedAt && startedAt ? task.endedAt - startedAt : 0) || tool.ms || 0;
+    return ms > 0 ? fmtDurPanel(ms) : '';
+  });
+  const STATUS_WORD = { completed: 'Completed', failed: 'Failed', stopped: 'Stopped' };
+  const statusWord = $derived(running ? '' : (STATUS_WORD[status] || ''));
 </script>
 
 {#if compact}
   <div class="wrap cardwrap">
-    <button type="button" class="card" aria-label={name ? `View workflow: ${name}` : 'View workflow'} onclick={open}>
+    <button type="button" class="card" class:settled={!running} aria-label={name ? `View workflow: ${name}` : 'View workflow'} onclick={open}>
       <span class="surface" aria-hidden="true"></span>
       <span class="col">
-        {#if name}<span class="ttl trunc cl-shine">{name}</span>{/if}
+        {#if name}<span class="ttl trunc" class:cl-shine={running}>{name}</span>{/if}
         <span class="meta" class:pb={!name}>
-          <span class="kind" class:t7={!!name} class:cl-shine={!name}>{pre ? 'Starting workflow' : 'Workflow'}</span>
+          <span class="kind" class:t7={!!name} class:cl-shine={running && !name}>{pre ? 'Starting workflow' : 'Workflow'}</span>
+          {#if statusWord}<span class="st" class:danger={failed}>{statusWord}</span>{/if}
           {#if hasAgents}<span class="cnt"><span class="t7">{counts.total}</span>{counts.total === 1 ? ' agent' : ' agents'}</span>{/if}
           {#if elapsed}<span class="tm">{elapsed}</span>{/if}
         </span>
-        <span class="dots"><AgentDots {counts} {agents} wrap={true} maxRows={8} anticipate={true} /></span>
+        {#if running || hasAgents}
+          <span class="dots"><AgentDots {counts} {agents} wrap={true} maxRows={8} anticipate={running} /></span>
+        {/if}
+        {#if reason}<span class="why">{reason}</span>{/if}
       </span>
       <span class="ic caret" aria-hidden="true">{glyph('CaretRight')}</span>
     </button>
@@ -114,7 +129,9 @@
   /* 副行（官方 text-footnote text-muted tabular-nums，minHeight=leading-body）：gap 12px */
   .meta { display: flex; min-width: 0; align-items: center; gap: 12px; min-height: 20px; font-size: 12.5px; line-height: 16px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .meta.pb { padding-bottom: 3px; }
-  .kind, .cnt, .tm { flex: none; white-space: nowrap; }
+  .kind, .st, .cnt, .tm { flex: none; white-space: nowrap; }
+  /* 跑完的卡：失败原因一行（截断，全文在右侧详情）*/
+  .why { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; line-height: 16px; color: var(--crit); }
   .t7 { color: var(--cl-t7); }
   .dots { display: block; padding: 6px 0 2px; }
   /* 右侧 CaretRight（官方 Sy：muted，高度对齐标题行 20px） */

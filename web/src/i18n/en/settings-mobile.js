@@ -183,6 +183,20 @@ export default {
   '写点什么、或加个图片/视频吧': 'Write something or add an image or video.',
   '提交失败：{reason}': 'Couldn’t submit: {reason}',
 
+  // —— v4（iOS 27 设置 App 结构）新增：根页 / 子页标题、脚注 ——
+  '关于': 'About',
+  '软件更新': 'Software Update',
+  '开关::打开': 'On',
+  '权限': 'Permissions',
+  '颜色': 'Color',
+  '画面': 'Visuals',
+  '点预览进入实景：设置页退开，主页就是预览。': 'Tap a preview to try it live. Settings steps aside and Home becomes the preview.',
+  '长按自己上传的壁纸可以删除。': 'Touch and hold a wallpaper you uploaded to delete it.',
+  '性能档只保留光感，折射与色散关闭。': 'Performance keeps only Glow. Refraction and Dispersion are turned off.',
+  '拖动滑块时设置页会暂时退开，直接在主页上看实时效果。': 'While you drag a slider, Settings steps aside so you can see the effect live on Home.',
+  '切换预设会把三个滑块重置为该档的默认值。': 'Choosing a preset resets the three sliders to its defaults.',
+  '仅暗主题的流体壁纸使用这些参数。': 'These settings apply only to the fluid wallpaper in Dark appearance.',
+
   // —— 键位录制器（settings/ShortcutRecorder.svelte） ——
   '未设置': 'Not set',
   '直接按下组合键；Esc 取消，Backspace 关掉': 'Press a key combination · Esc to cancel · Backspace to turn off',

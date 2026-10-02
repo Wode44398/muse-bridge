@@ -4,6 +4,13 @@
 // U8（Codex X43）：组卡只收「只读探索」——看文件、搜代码、查网页这些只看不改的调用；改文件、跑命令、派子 agent、
 // 开工作流这些动作单独成行，一眼看得见这一轮真正做了什么（以前一律收进「执行了 N 步」，改了哪些文件得点开才知道）。
 // Workflow 永远自成一行（官方 /code 页分桶同款；并进组卡的话运行中的紧凑卡被收起只露一行）。
+// 子 agent（Agent 工具）也不进组：紧挨着的几个 Agent（模型一轮里并行派出去的一批）合成一个单元，画成一张子 agent 卡
+//（一个 = 单卡，多个 = 叠卡），两种模式都一样——派出去的活是这一轮的主干，不该埋在「执行了 N 步」里。
+//
+// 精简模式（compact，默认——设置里「显示全部工作过程」关着）：对齐 bridge Claude 分页（= 官方 /code 页）的工具分组——
+// 不分只读还是动作，连续 ≥2 次工具（含穿插的思考，Workflow 除外）一律收成一行：跑着时头行说此刻在做什么，做完说
+//「读取了 3 个文件，执行了 2 条命令」，点开再看每一步。只有 1 次工具的段不套组头，各行照常（单行工具行本身也只留头行）。
+// 上面那套只读探索分组是「显示全部工作过程」打开时的样子，原样保留。
 //
 // U8（ZCode E3）：轮次折叠。一轮 = 用户自己发的一条消息到下一条之间（运行中插话不算分界）。做完的轮（最近这一轮除外——
 // 跑着的、刚做完的都留着看）只要跑过工具，过程——工具、思考、中间的叙述——收成一行「处理过程 · N 次工具 · 用时」，点开
@@ -17,18 +24,32 @@ export const EXPLORE_TOOLS = new Set([
 ]);
 
 export type FeedUnit =
-  | { g: true; f?: false; key: string; items: Item[]; live: boolean }
-  | { g: false; f?: false; key: string; item: Item }
+  | { g: true; f?: false; a?: false; key: string; items: Item[]; live: boolean }
+  | { g: false; f?: false; a?: false; key: string; item: Item }
+  // 一批并行的子 agent（紧挨着的 Agent 工具行）：一张子 agent 卡
+  | { g: false; f?: false; a: true; key: string; items: ToolItem[] }
   // 一轮的过程折成的一行（open = 点开了：过程照原样跟在它后面）
-  | { g: false; f: true; key: string; items: Item[]; tools: number; run?: RunTiming; open: boolean };
+  | { g: false; f: true; a?: false; key: string; items: Item[]; tools: number; run?: RunTiming; open: boolean };
 
 const isExplore = (it: Item) => it.kind === "thinking" || (it.kind === "tool" && EXPLORE_TOOLS.has((it as ToolItem).name));
+const isAgent = (it: Item | undefined): it is ToolItem => it?.kind === "tool" && (it as ToolItem).name === "Agent";
+const isStep = (it: Item) => it.kind === "thinking" || (it.kind === "tool" && (it as ToolItem).name !== "Workflow" && !isAgent(it));
 
-// 工具组：tl[from, to) 里连续的只读探索（含穿插的思考）≥2 次工具且段长 ≥3 才收成组卡
-function pushGrouped(out: FeedUnit[], tl: Item[], from: number, to: number, running: boolean): void {
+// 工具组：tl[from, to) 里连续的只读探索（含穿插的思考）≥2 次工具且段长 ≥3 才收成组卡；
+// 精简模式：连续的工具 / 思考（Workflow、Agent 除外）≥2 次工具就收
+function pushGrouped(out: FeedUnit[], tl: Item[], from: number, to: number, running: boolean, compact = false): void {
+  const inGroup = compact ? isStep : isExplore;
+  const minLen = compact ? 2 : 3;
   let i = from;
   while (i < to) {
-    if (!isExplore(tl[i])) {
+    if (isAgent(tl[i])) {
+      let j = i;
+      while (j < to && isAgent(tl[j])) j++;
+      out.push({ g: false, a: true, key: `a:${(tl[i] as ToolItem).id}`, items: tl.slice(i, j) as ToolItem[] });
+      i = j;
+      continue;
+    }
+    if (!inGroup(tl[i])) {
       out.push({ g: false, key: `i:${i}`, item: tl[i] });
       i++;
       continue;
@@ -36,14 +57,14 @@ function pushGrouped(out: FeedUnit[], tl: Item[], from: number, to: number, runn
     let j = i;
     let toolCount = 0;
     let firstToolId = "";
-    while (j < to && isExplore(tl[j])) {
+    while (j < to && inGroup(tl[j])) {
       if (tl[j].kind === "tool") {
         toolCount++;
         if (!firstToolId) firstToolId = (tl[j] as ToolItem).id;
       }
       j++;
     }
-    if (toolCount >= 2 && j - i >= 3) {
+    if (toolCount >= 2 && j - i >= minLen) {
       out.push({ g: true, key: `g:${firstToolId}`, items: tl.slice(i, j), live: running && j === tl.length });
     } else {
       for (let m = i; m < j; m++) out.push({ g: false, key: `i:${m}`, item: tl[m] });
@@ -94,7 +115,7 @@ export function planFold(tl: Item[], from: number, to: number): FoldPlan | null 
   };
 }
 
-export function feedUnits(tl: Item[], running: boolean, openFolds: Record<string, boolean> = {}): FeedUnit[] {
+export function feedUnits(tl: Item[], running: boolean, openFolds: Record<string, boolean> = {}, compact = false): FeedUnit[] {
   const out: FeedUnit[] = [];
   // 轮次边界：用户自己发的消息（运行中插话不算）
   const cuts = [0];
@@ -108,15 +129,15 @@ export function feedUnits(tl: Item[], running: boolean, openFolds: Record<string
     // 最近这一轮不折（跑着的、刚做完的都留着看）
     const plan = to === tl.length ? null : planFold(tl, from, to);
     if (!plan) {
-      pushGrouped(out, tl, from, to, running);
+      pushGrouped(out, tl, from, to, running, compact);
       continue;
     }
     const open = openFolds[plan.key] === true;
     const fold: FeedUnit = { g: false, f: true, key: plan.key, items: [...plan.folded].map((i) => tl[i]), tools: plan.tools, open, ...(plan.run ? { run: plan.run } : {}) };
     if (open) {
-      pushGrouped(out, tl, from, plan.first, running);
+      pushGrouped(out, tl, from, plan.first, running, compact);
       out.push(fold);
-      pushGrouped(out, tl, plan.first, to, running);
+      pushGrouped(out, tl, plan.first, to, running, compact);
       continue;
     }
     for (let i = from; i < to; i++) {

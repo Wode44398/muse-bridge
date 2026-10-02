@@ -38,7 +38,9 @@
   let pages = $state([]);     // [{num, w, h}]（scale=1 尺寸）
   let loading = $state(true), error = $state(false);
   let zoom = $state(1);       // 用户缩放（在 fit-width 基础上）
-  let baseScale = 1;          // fit-width 比例（容器宽 / 页宽）
+  // fit-width 比例（容器宽 / 页宽）。必须是 $state：以前是普通变量，scale 这个 $derived
+  // 追踪不到它，页框一直按 1:1（A4≈595px）排，窄面板里再被 max-width 横向压扁。
+  let baseScale = $state(1);
   let curPage = $state(1), numPages = $state(0);
   const slotEls = new Map();  // num -> slot div
   const rendered = new Map(); // num -> canvas（已渲染）
@@ -62,15 +64,20 @@
       }
       pages = arr;
       loading = false;
-      requestAnimationFrame(fitWidth);
+      requestAnimationFrame(() => { fitWidth(); setupIO(); });
     } catch (e) { error = true; loading = false; }
   }
 
+  // 按容器宽算 fit-width；比例真变了才返回 true（调用方据此重渲）
   function fitWidth() {
-    if (!scroller || !pages.length) return;
-    const cw = scroller.clientWidth - 24;   // 留边距
-    baseScale = Math.max(0.1, cw / pages[0].w);
-    setupIO();
+    if (!scroller || !pages.length) return false;
+    // 24 = .pdf-pages 左右 padding；再留 2px：DPR 1.5 等非整数倍下设备像素取整会溢出零点几 px，顶出横向滚动条
+    const cw = scroller.clientWidth - 26;
+    if (cw <= 0) return false;
+    const next = Math.max(0.1, cw / pages[0].w);
+    if (Math.abs(next - baseScale) < 1e-3) return false;
+    baseScale = next;
+    return true;
   }
 
   function setupIO() {
@@ -150,10 +157,14 @@
   }
   const pinchPts = new Map();
 
-  function onResize() { const old = baseScale; fitWidth(); if (old !== baseScale) applyZoom(zoom); }
-
-  onMount(() => { load(); window.addEventListener('resize', onResize); });
-  onDestroy(() => { io?.disconnect(); window.removeEventListener('resize', onResize); try { pdf?.destroy?.(); } catch {} });
+  // 看容器而不是 window：Dock 拖宽窄、分屏、侧栏开合都不触发 window resize
+  let ro = null;
+  onMount(() => {
+    load();
+    ro = new ResizeObserver(() => { if (fitWidth()) applyZoom(zoom); });
+    ro.observe(scroller);
+  });
+  onDestroy(() => { io?.disconnect(); ro?.disconnect(); clearTimeout(rerenderT); try { pdf?.destroy?.(); } catch {} });
 
   // slot 注册 action
   function slot(node, num) { slotEls.set(num, node); node.dataset.num = num; if (io) io.observe(node); return { destroy() { slotEls.delete(num); } }; }
@@ -179,7 +190,7 @@
     {:else}
       <div class="pdf-pages" bind:this={pagesWrap}>
         {#each pages as p (p.num)}
-          <div class="pdf-slot" use:slot={p.num} style:width="{p.w * scale}px" style:height="{p.h * scale}px">
+          <div class="pdf-slot" use:slot={p.num} style:width="{Math.floor(p.w * scale)}px" style:height="{Math.floor(p.h * scale)}px">
             <div class="pdf-ph"></div>
           </div>
         {/each}
@@ -190,7 +201,7 @@
 
 <style>
   .pdf-root { position: absolute; inset: 0; background: #f3f3f5; color: #1d1d1f; display: flex; flex-direction: column; }
-  .pdf-head { flex: none; display: flex; align-items: center; gap: 4px; padding: max(8px, var(--sat)) 8px 8px; background: #fff; border-bottom: 1px solid #ececec; }
+  .pdf-head { flex: none; display: flex; align-items: center; gap: 4px; padding: max(var(--pv-pad-y, 8px), var(--sat)) 8px var(--pv-pad-y, 8px); background: #fff; border-bottom: 1px solid #ececec; }
   .pdf-btn { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #1d1d1f; flex: none; }
   .pdf-btn svg { width: 21px; height: 21px; }
   .pdf-btn:active { background: rgba(0,0,0,.06); }
@@ -198,8 +209,9 @@
   .pdf-pageno { flex: none; font-size: 12.5px; color: #6b6b70; font-variant-numeric: tabular-nums; padding: 0 6px; }
 
   .pdf-scroll { flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y pinch-zoom; }
-  .pdf-pages { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 12px; will-change: transform; }
-  .pdf-slot { position: relative; background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.14); border-radius: 2px; overflow: hidden; max-width: 100%; }
+  /* 放大后页比容器宽：外包随最宽页撑开、滚动区横滚；不能给页框 max-width——宽被夹、高不变 = 压扁 */
+  .pdf-pages { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 12px; box-sizing: border-box; width: max-content; min-width: 100%; will-change: transform; }
+  .pdf-slot { position: relative; flex: none; background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.14); border-radius: 2px; overflow: hidden; }
   .pdf-ph { position: absolute; inset: 0; background: linear-gradient(100deg, #fafafa 30%, #f0f0f2 50%, #fafafa 70%); background-size: 200% 100%; animation: pdfShimmer 1.3s infinite; }
   @keyframes pdfShimmer { to { background-position: -200% 0; } }
   .pdf-slot :global(canvas) { display: block; }

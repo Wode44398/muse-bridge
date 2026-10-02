@@ -1,0 +1,87 @@
+/* complete.js 的补全浮层（[[笔记 / ![[附件 / [[#标题 / #标签）。
+   跟右键菜单 .mde-menu 同一套视觉语言：象牙白浮层 --md-panel、暖色阴影 --md-shadow、14px 圆角、
+   9px 圆角行（桌面 34px / 触屏 42px）、选中与悬停沉底 --md-bg-2、按下再深一级 --md-bg-3。
+   CM 自带主题（.ͼ 前缀类 + adoptedStyleSheets，同特异度时它排在后面先赢）有蓝底白字选中、等宽字、
+   匹配下划线、250px 最小宽，所以选择器一律 .mde .cm-tooltip.mde-ac 起头把特异度抬上去。
+   浮层 position:absolute 挂在 .cm-editor（position:relative）里，下面的百分比宽度相对编辑器本身。 */
+
+.mde .cm-tooltip.mde-ac {
+  box-sizing: border-box; display: flex; flex-direction: column;
+  min-width: 232px; max-width: min(420px, calc(100% - 12px));
+  background: var(--md-panel); color: var(--md-fg);
+  border: 1px solid var(--md-line); border-radius: 14px;
+  box-shadow: var(--md-shadow);
+  overflow: hidden;
+  font-family: var(--sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif);
+  animation: mde-ac-in var(--mo-quick, 200ms) var(--md-ease-pop, ease-out);
+}
+.mde .cm-tooltip.mde-ac.cm-tooltip-above { animation-name: mde-ac-in-up; }
+/* 只动位移不动缩放：CM 定位时要量浮层尺寸，缩放中的尺寸会让左右夹紧差几像素 */
+@keyframes mde-ac-in { from { opacity: 0; transform: translateY(-3px); } }
+@keyframes mde-ac-in-up { from { opacity: 0; transform: translateY(3px); } }
+@media (prefers-reduced-motion: reduce) { .mde .cm-tooltip.mde-ac { animation: none; } }
+
+.mde .cm-tooltip.mde-ac > ul {
+  box-sizing: border-box; flex: 1 1 auto; min-height: 0;
+  width: 100%; min-width: 0; max-width: none;
+  /* 8 行半露出来：最后半行提示「下面还有」 */
+  max-height: calc(34px * 8.5 + 12px); height: auto;
+  padding: 6px; margin: 0;
+  font-family: inherit; white-space: nowrap;
+  overflow: hidden auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--md-line-2) transparent;
+}
+.mde .cm-tooltip.mde-ac > ul > li {
+  display: flex; align-items: center; gap: 10px;
+  height: 34px; padding: 0 9px; border-radius: 9px;
+  font-size: 13.5px; line-height: 1.3; color: var(--md-fg);
+  cursor: pointer; overflow: hidden; -webkit-tap-highlight-color: transparent;
+  transition: background var(--mo-tap, 90ms);
+}
+.mde .cm-tooltip.mde-ac > ul > li[aria-selected] { background: var(--md-bg-2); color: var(--md-fg); }
+@media (hover: hover) { .mde .cm-tooltip.mde-ac > ul > li:hover { background: var(--md-bg-2); } }
+.mde .cm-tooltip.mde-ac > ul > li:active { background: var(--md-bg-3); }
+
+.mde .cm-tooltip.mde-ac .mde-ac-ic {
+  flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--md-fg-3); transition: color var(--mo-micro, 140ms);
+}
+.mde .cm-tooltip.mde-ac .mde-ac-ic svg { width: 16.5px; height: 16.5px; }
+.mde .cm-tooltip.mde-ac > ul > li[aria-selected] .mde-ac-ic { color: var(--md-fg); }
+
+.mde .cm-tooltip.mde-ac .cm-completionLabel { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mde .cm-tooltip.mde-ac .cm-completionMatchedText { text-decoration: none; font-weight: 650; color: var(--md-fg); }
+/* 所在目录：右侧弱化、单独省略，窄栏里先让名字 */
+.mde .cm-tooltip.mde-ac .cm-completionDetail {
+  flex: 0 1 auto; min-width: 0; max-width: 46%; margin-left: auto;
+  font-style: normal; font-size: 12px; color: var(--md-fg-4);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.mde .cm-tooltip.mde-ac > ul > li[aria-selected] .cm-completionDetail { color: var(--md-fg-3); }
+/* 标题：级别做成小号等宽胶囊（H1…H6） */
+.mde .cm-tooltip.mde-ac .mde-ac-head .cm-completionDetail {
+  flex: none; max-width: none; font-family: var(--md-mono); font-size: 10.5px; font-weight: 600; letter-spacing: -.2px;
+  color: var(--md-fg-3); background: var(--md-bg-2); border-radius: 5px; padding: 1px 5px;
+}
+.mde .cm-tooltip.mde-ac > ul > li.mde-ac-head[aria-selected] .cm-completionDetail { background: var(--md-bg-3); }
+/* 标签：与正文里的标签同色 */
+.mde .cm-tooltip.mde-ac .mde-ac-tag .cm-completionLabel { color: var(--md-accent-deep); }
+.mde .cm-tooltip.mde-ac .mde-ac-tag .cm-completionMatchedText { color: var(--md-accent-deep); }
+
+/* 候选超过渲染上限时 CM 在列表首/尾加的「···」 */
+.mde .cm-tooltip.mde-ac .cm-completionListIncompleteTop::before,
+.mde .cm-tooltip.mde-ac .cm-completionListIncompleteBottom::after { color: var(--md-fg-4); opacity: 1; font-size: 12px; }
+
+/* 服务端遍历截断（目录太大）：列表底部一行说明，文案由 complete.js 写进 --mde-ac-trunc */
+.mde .cm-tooltip.mde-ac.mde-ac-trunc::after {
+  content: var(--mde-ac-trunc, ''); flex: none; display: block;
+  padding: 7px 15px 8px; border-top: 1px solid var(--md-line);
+  font-size: 11.5px; color: var(--md-fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 触屏：行高 ≥ 40px 好点，字号跟正文一档；露 6 行半 */
+@media (pointer: coarse) {
+  .mde .cm-tooltip.mde-ac > ul { max-height: calc(42px * 6.5 + 12px); }
+  .mde .cm-tooltip.mde-ac > ul > li { height: 42px; font-size: 15px; gap: 11px; }
+  .mde .cm-tooltip.mde-ac .cm-completionDetail { font-size: 12.5px; }
+}

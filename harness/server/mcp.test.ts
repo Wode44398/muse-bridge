@@ -172,8 +172,10 @@ test("E1 基线随会话落盘、读回照旧；连接器后来被删了：工�
   const r = await session.state!.toolMap.get("mcp__fixture__echo")!.run({ text: "x" }, session.state!.ctx);
   assert.equal(r.ok, false);
   assert.match(textOf(r.content), /removed from the Bridge extension center.*new conversation picks up the current connectors/s);
-  await new Promise((res) => setTimeout(res, 1_500));
-  assert.throws(() => process.kill(pid!, 0), "stdio 子进程收掉了");
+  // 收尸是 syncConnectors 里不等的后台动作，Windows 上要先起 PowerShell 取一次进程表（8 并发下常常不止一两秒）：轮询到它没了为止
+  const alive = () => { try { process.kill(pid!, 0); return true; } catch { return false; } };
+  for (const deadline = Date.now() + 30_000; alive() && Date.now() < deadline; ) await new Promise((res) => setTimeout(res, 100));
+  assert.ok(!alive(), "stdio 子进程收掉了");
 });
 
 test("E2 网关：工具多的连接器不逐个进清单，走 McpDescribe + McpCall；按被调工具定只读与否，「本会话都允许」记到连接器/工具", async () => {

@@ -1,8 +1,9 @@
 // 界面语言：简体中文 / English（没存过偏好时跟浏览器语言）。与 bridge 的 web/src/lib/i18n.js 同一套约定、同一份全局字典：
 //   t('新建对话')、t('已选 {n} 项', { n })、tc('语境', '中文')、tr(运行时文案)
 // 中文原文就是键；英文在 src/i18n/en/*.ts。嵌进 bridge 时由 bridge 的入口统一加载两份字典，
-// 独立运行（8799 / dimensio 壳）时由本目录 main.ts 调 initI18n() 只加载本项目的字典。
-// 语言启动时定死，切换 = 写 localStorage['bridge-lang'] + 整页重载（与 bridge 共用同一个键）。
+// 独立运行（8799 / dimensio 壳）时由本目录 main.ts 调 i18n-boot.ts 的 initI18n() 只加载本项目的字典。
+// 本文件是纯函数层（服务端测试经 tasks.ts / feed-units.ts 等直接导入它）：不碰 DOM、不 import 字典；
+// 读偏好、定语言、装字典、切换语言这些要浏览器的事都在 i18n-boot.ts。
 // （本文件自身 i18n-ignore-file：它就是翻译层，不参与漏译检查）
 
 type Plural = { one?: string; other?: string };
@@ -11,61 +12,21 @@ type Params = Record<string, unknown> | null | undefined;
 type Pat = { re: RegExp; names: string[]; key: string };
 type Store = { lang: "zh" | "en"; dict: Record<string, Val>; pats: Pat[] | null };
 
-const KEY = "bridge-lang";
 const g = globalThis as unknown as { __bridgeI18n?: Store };
 const G: Store = (g.__bridgeI18n ??= { lang: "zh", dict: Object.create(null), pats: null });
-
-export function langPref(): "zh" | "en" {
-  try {
-    const q = new URLSearchParams(location.search).get("lang");
-    if (q === "zh" || q === "en") return q;
-    const v = localStorage.getItem(KEY);
-    if (v === "en" || v === "zh") return v;
-    // 没存过偏好时跟浏览器走：语言列表里有中文就用中文，否则英文（与 bridge 的 web/src/lib/i18n.js 同一规则）
-    const langs = navigator.languages?.length ? navigator.languages : [navigator.language || ""];
-    return langs.some((l) => /^zh/i.test(l)) ? "zh" : "en";
-  } catch {
-    return "zh";
-  }
-}
 
 export const lang = () => G.lang;
 export const isEn = () => G.lang === "en";
 export const locale = () => (G.lang === "en" ? "en-US" : "zh-CN");
 
-/** 独立运行时的入口调用；嵌进 bridge 时不调（bridge 入口已加载好全局字典）。 */
-export async function initI18n(): Promise<void> {
-  G.lang = langPref();
-  try {
-    document.documentElement.lang = G.lang === "en" ? "en" : "zh-CN";
-  } catch {
-    /* 无 DOM */
-  }
-  if (G.lang === "en") {
-    try {
-      const m = await import("../i18n/en/index.ts");
-      Object.assign(G.dict, m.default);
-      G.pats = null;
-    } catch (e) {
-      console.warn("[i18n] 字典加载失败", e);
-    }
-  }
+// 写入口：只给 i18n-boot.ts 在启动时调（语言启动时定死，业务代码不改它）
+export function applyLang(v: "zh" | "en"): void {
+  G.lang = v;
 }
 
-export function setLang(v: "zh" | "en"): void {
-  try {
-    localStorage.setItem(KEY, v);
-  } catch {
-    /* 存不了就只对本次生效 */
-  }
-  if (v === G.lang) return;
-  const u = new URL(location.href);
-  if (u.searchParams.has("lang")) {
-    u.searchParams.delete("lang");
-    location.replace(u.href);
-    return;
-  }
-  location.reload();
+export function addDict(d: Record<string, Val>): void {
+  Object.assign(G.dict, d);
+  G.pats = null;
 }
 
 function fill(s: string, p: Params): string {

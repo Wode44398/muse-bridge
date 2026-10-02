@@ -44,9 +44,10 @@
 
 <style>
   .hv { position: fixed; inset: 0; display: flex; flex-direction: column; background: #fff; z-index: 1; }
-  /* 顶栏让开系统状态栏（--sat）：与 DocViewer/PdfView/OfficeView 的头同一规矩。
-     此前写死 height:52px、padding 0——手机全屏与折叠屏工作台侧列里，返回/下载键都压在状态栏下点不到。 */
-  .hv-bar { flex: none; box-sizing: border-box; height: calc(52px + var(--sat, 0px)); display: flex; align-items: center; gap: 8px; padding: var(--sat, 0px) 10px 0; background: #f6f6f8; border-bottom: 1px solid #e5e5ea; color: #1c1c1e; }
+  /* 顶栏让开系统状态栏（--sat，apk 原生注入）：与 DocViewer/PdfView/OfficeView 的头同一规矩。
+     此前写死 height:52px、padding 0——手机全屏与折叠屏工作台侧列里，返回/下载键都压在状态栏下点不到。
+     --pv-bar-h：宿主可调（手机工作台 sheet 里收成 44px 省地方）。 */
+  .hv-bar { flex: none; box-sizing: border-box; height: calc(var(--pv-bar-h, 52px) + var(--sat, 0px)); display: flex; align-items: center; gap: 8px; padding: var(--sat, 0px) 10px 0; background: #f6f6f8; border-bottom: 1px solid #e5e5ea; color: #1c1c1e; }
   .hv-name { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .hv-btn { width: 38px; height: 38px; flex: none; display: grid; place-items: center; border: 0; background: none; color: #1c1c1e; border-radius: 50%; cursor: pointer; text-decoration: none; }
   .hv-btn:hover { background: rgba(0, 0, 0, .06); }

@@ -148,7 +148,10 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
     if (g && !g.done) {
       if (release && typeof g.releaseHold === 'function') { try { released = g.releaseHold() === true; } catch {} }
       else if (!release && typeof g.interruptTurn === 'function') { try { held = g.interruptTurn() === true; } catch {} }
-      if (!released && !held) { try { g.abort.abort(); } catch {} }
+      // 硬停：这一轮当场收尾（interrupted），CLI 在后台退；控制口还没挂上（query 尚未建起）才直接 abort。
+      if (!released && !held) {
+        try { if (typeof g.hardStop === 'function') g.hardStop(); else g.abort.abort(); } catch {}
+      }
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, released, held }));

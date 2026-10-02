@@ -1,6 +1,6 @@
 // Obsidian 语法的 lezer-markdown 解析扩展 —— Live Preview 编辑器（mdeditor）专用。
 // 与 obsmd.js（阅读模式的 Marked 渲染）语义对齐：==高亮== / [[双链]] / ![[嵌入]] /
-// #标签 / $行内数学$ / $$块数学$$ / %%注释%%。frontmatter 不在这里解析（无法回溯，
+// #标签 / $行内数学$ / $$块数学$$ / %%注释%% / [^脚注]。frontmatter 不在这里解析（无法回溯，
 // 见 livePreview.js 的 frontmatterEnd 正则方案）。
 import { Tag, tags as t } from '@lezer/highlight';
 
@@ -10,6 +10,7 @@ export const omTags = {
   wikilink: Tag.define(),
   tag: Tag.define(),
   math: Tag.define(),
+  footnote: Tag.define(),
 };
 
 // 与 @lezer/markdown 内部一致的标点判定（strikethrough flanking 规则同款）
@@ -157,4 +158,73 @@ const ObsComment = {
   }],
 };
 
-export const omExtensions = [OmHighlight, Wikilink, ObsTag, InlineMath, BlockMath, ObsComment];
+// —— 脚注：行内引用 [^id]、块级定义 [^id]: …（与 obsmd 的脚注扩展同一口径）——
+// 节点树（livePreview 按这些名字做隐藏/上标装饰）：
+//   FootnoteRef      [^id] 整体（行内）
+//     FootnoteMark     "[^" 与 "]" 两段定界符
+//     FootnoteLabel    id
+//   FootnoteDef      定义块（块级）：行首缩进 ≤3 的 "[^id]:" 行 + 紧随其后、缩进 ≥2 格的非空续行；
+//                    能打断段落（「正文\n[^1]: 定义」不必空行），空行/不缩进的行即结束
+//     FootnoteDefMark  "[^id]:"
+//       FootnoteLabel    id
+//     …其后是定义正文的行内节点（粗斜体、链接、[^嵌套引用] 照常解析）
+// id 不含空白与方括号；[^x](url) / [^x][ref] 让给普通链接。解析不看有没有对应定义
+//（编辑器里定义常常还没写），阅读态没定义的引用保持字面。
+// 有了 FootnoteRef（排在 Link 之前），「脚注[^1]，另一个[^note]」里的两个 ^ 不会再被
+// Superscript 扩展配成一对上标、把中间的正文吞掉。
+export const FN_NODES = { ref: 'FootnoteRef', mark: 'FootnoteMark', label: 'FootnoteLabel', def: 'FootnoteDef', defMark: 'FootnoteDefMark' };
+const FN_DEF_HEAD = /^\[\^([^\]\s[]+)\]:/;
+const Footnote = {
+  defineNodes: [
+    { name: 'FootnoteRef', style: { 'FootnoteRef/...': omTags.footnote } },
+    { name: 'FootnoteMark', style: t.processingInstruction },
+    { name: 'FootnoteLabel' },
+    { name: 'FootnoteDef', block: true },
+    { name: 'FootnoteDefMark', style: { 'FootnoteDefMark/...': omTags.footnote } },
+  ],
+  parseInline: [{
+    name: 'FootnoteRef',
+    before: 'Link',
+    parse(cx, next, pos) {
+      if (next != 91 /* '[' */ || cx.char(pos + 1) != 94 /* '^' */) return -1;
+      let i = pos + 2;
+      for (; i < cx.end; i++) {
+        const ch = cx.char(i);
+        if (ch == 93 /* ']' */) break;
+        if (ch == 91 || ch == 32 || ch == 9 || ch == 10) return -1;
+      }
+      if (i >= cx.end || i == pos + 2) return -1;
+      const nx = cx.char(i + 1);
+      if (nx == 40 /* '(' */ || nx == 91 /* '[' */) return -1;
+      return cx.addElement(cx.elt('FootnoteRef', pos, i + 1, [
+        cx.elt('FootnoteMark', pos, pos + 2), cx.elt('FootnoteLabel', pos + 2, i), cx.elt('FootnoteMark', i, i + 1),
+      ]));
+    },
+  }],
+  parseBlock: [{
+    name: 'FootnoteDef',
+    before: 'LinkReference',   // 抢在「[…]: 」被当成链接引用定义之前
+    parse(cx, line) {
+      if (line.next != 91 /* '[' */ || line.indent - line.baseIndent > 3) return false;
+      const m = FN_DEF_HEAD.exec(line.text.slice(line.pos));
+      if (!m) return false;
+      const from = cx.lineStart + line.pos, markTo = from + m[0].length;
+      const kids = [cx.elt('FootnoteDefMark', from, markTo, [cx.elt('FootnoteLabel', from + 2, markTo - 2)])];
+      const inline = (text, at) => { for (const e of cx.parser.parseInline(text, at)) kids.push(e); };
+      const rest = line.text.slice(line.pos + m[0].length);
+      const lead = rest.length - rest.replace(/^[ \t]+/, '').length;
+      if (rest.trim()) inline(rest.slice(lead), markTo + lead);
+      let to = cx.lineStart + line.text.length;
+      while (cx.nextLine()) {
+        if (line.depth < cx.stack.length || line.pos == line.text.length || line.indent - line.baseIndent < 2) break;
+        inline(line.text.slice(line.pos), cx.lineStart + line.pos);
+        to = cx.lineStart + line.text.length;
+      }
+      cx.addElement(cx.elt('FootnoteDef', from, to, kids));
+      return true;
+    },
+    endLeaf(cx, line) { return line.next == 91 && FN_DEF_HEAD.test(line.text.slice(line.pos)); },
+  }],
+};
+
+export const omExtensions = [OmHighlight, Wikilink, ObsTag, InlineMath, BlockMath, ObsComment, Footnote];

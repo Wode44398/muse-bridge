@@ -190,7 +190,9 @@ export function registerClaudeDockRoutes(router, { identify }) {
       worktree = !!gitDir && !!commonRaw && path.resolve(gitDir) !== path.resolve(ws, commonRaw);
     }
     // snap = 快照访客：前端据此只摆 审阅/文件两件，并藏掉工作空间路径。
-    json(res, 200, { rel, git: isGit, branch, worktree, shell: !!ctx.shell, snap: ctx.kind === 'snap' });
+    // wtNew = 本服务端能在这里开 worktree 会话（git 主检出、非快照）——输入栏 worktree 勾选框只认它：
+    // 前端先于服务端上线时勾选框不出现，不会勾了却悄悄跑在主检出里。
+    json(res, 200, { rel, git: isGit, branch, worktree, wtNew: isGit && !worktree && ctx.kind !== 'snap', shell: !!ctx.shell, snap: ctx.kind === 'snap' });
   });
 
   // ── 审阅：变更概览 ──────────────────────────────────────────────────────────

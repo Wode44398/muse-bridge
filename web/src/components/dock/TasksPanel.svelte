@@ -135,7 +135,14 @@
 
   // —— 压上的子 agent 转录视图 ——
   const av = $derived(dock.tasksAgent);
-  const avTitle = $derived(av ? (av.wf ? String(av.wf.label || 'Agent') : toolTaskTitle(av.tool)) : '');
+  // 工作流 agent：点开时存下的是那一刻的 workflow_agent 记录，而 workflow_progress 每帧都整份换新对象——
+  // 按 index 从工具行的最新快照里现取，转录视图的状态 / tokens / 当前工具 / 结果才会跟着走
+  const avWf = $derived.by(() => {
+    if (!av || !av.wf) return null;
+    const list = (av.tool && av.tool.task && av.tool.task.progress) || [];
+    return list.find((e) => e && e.type === 'workflow_agent' && e.index === av.wf.index) || av.wf;
+  });
+  const avTitle = $derived(av ? (avWf ? String(avWf.label || 'Agent') : toolTaskTitle(av.tool)) : '');
   function openAgent(tool, wf) { dock.tasksAgent = { tool, wf }; }
 </script>
 
@@ -148,8 +155,8 @@
       <span class="tp-subtitle trunc" title={avTitle}>{avTitle}</span>
       <span class="tp-subkind">Agent</span>
     </div>
-    {#key (av.wf ? av.wf.agentId : av.tool)}
-      <div class="tp-scroll tp-tr"><AgentTranscript tool={av.tool} agent={av.wf} /></div>
+    {#key (av.wf ? av.tool.id + ':' + av.wf.index : av.tool)}
+      <div class="tp-scroll tp-tr"><AgentTranscript tool={av.tool} agent={avWf} /></div>
     {/key}
   {:else}
     <div class="tp-scroll" bind:this={listEl}>

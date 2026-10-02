@@ -187,4 +187,10 @@ export default {
   "工作区（任务 / 审阅 / 终端 / 浏览器 / 文件）": "Side panel (Tasks / Review / Terminal / Browser / Files)",
   "关闭这一格": "Close pane",
   "关闭这一格（对话照常保留，在跑的照跑）": "Close pane (the chat is kept, and anything running keeps running)",
+
+  // —— 设置 · 对话（工作过程显示密度）——
+  "对话": "Chat",
+  "显示全部工作过程": "Show all work steps",
+  "关着时，连续的工具调用收成一行：在跑说正在做什么，做完说做了哪些，点开再看每一步。打开后每一步都平铺参数、结果和实时输出。":
+    "When off, consecutive tool calls collapse into one line that shows what’s running now, then what was done. Click it to see each step. When on, every step shows its arguments, result, and live output.",
 };

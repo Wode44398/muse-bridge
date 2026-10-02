@@ -51,6 +51,13 @@ export default {
   '收尾中…': 'Finishing up…',
   '结束等待': 'Stop waiting',
   '返回任务列表': 'Back to tasks',
+  // 子 agent 转录视图的提示词查看块 / 懒同步
+  '复制提示词': 'Copy prompt',
+  '展开完整提示词': 'Show full prompt',
+  '{n} 字': { one: '{n} char', other: '{n} chars' },
+  '排队中，等待启动…': 'Queued, waiting to start…',
+  '排队中的 agent 只有前 400 字预览，启动后自动载入全文': 'Queued agents only have a 400-character preview. The full prompt loads once the agent starts.',
+  '实时同步中（只在这个视图开着时）': 'Syncing live (only while this view is open)',
   '这一轮已经结束，后台任务也跟着结束了': 'This turn has ended. Its background tasks ended with it.',
   '停止失败，请重试': 'Couldn’t stop. Try again.',
 

@@ -7,8 +7,10 @@
 //   3. 只同时存在一个对话记录：store 只记当前这只桶，/api/sessions 对该桶只列最新一条；
 //   4. 服务端状态：桶与 transcript 都在盘上，前端清缓存 / 杀后台 / 换设备都不会让它消失。
 //
-// 换新快照 = 换一只桶（新 id），旧桶【不删】留在盘上（与"删项目不删 transcript"同规矩），
-// 只是不再被列出——万一上一单快照真产出了东西（比如一份研报），不至于一键蒸发。
+// 换新快照 = 换一只桶（新 id），旧桶先留在盘上、只是不再被列出——万一上一单快照真产出了
+// 东西（比如一份研报），不至于一键蒸发。但快照是一次性的，不能无限攒：pruneQuick 只保留
+// 最近 QUICK_KEEP 条快照对话记录（跨所有桶按 transcript 修改时间排），更老的连同它的桶
+//（桶里 Claude 写的产物）一起删掉。
 //
 // ⚠ 桶必须落在【任何 git 仓库之外】（实测踩过）：Claude Code 的自动记忆按【git 根】
 // 推导目录，不是按 cwd。桶原先放在 <dataDir>/quickchat/ 下，而 admin 的 dataDir 就是
@@ -26,7 +28,9 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { readdir, stat, rm } from 'node:fs/promises';
 import { readJson, writeJson } from './jsonfile.mjs';
+import { sessionsDir } from './runtime/paths.mjs';
 
 export const QUICK_NAME = '快照对话';
 
@@ -84,3 +88,85 @@ export function newQuickProject(ctx) {
 }
 
 export const isQuickProject = (p) => !!p && p.quick === true;
+
+// ---- 旧快照回收：只留最近 QUICK_KEEP 条 ----
+//
+// 一条「快照对话记录」= 快照桶 transcript 目录里的一个 .jsonl（换新快照＝新桶；快照里点
+// 「新对话」＝同桶再多一条）。全部桶的记录按修改时间排，最新 QUICK_KEEP 条留下，其余删掉
+// transcript（连子 agent 子目录）；删完不剩记录的旧桶整只删（含 Claude 在里面写的产物）。
+// 永不删的：当前桶本身与它最新那条（侧栏常驻置顶的就是它）、正在跑的会话、GRACE 窗口内
+// 刚动过的记录或桶（刚铸还没落 transcript 的桶、别的设备上正开着的旧快照都靠它兜住）。
+// Windows 文件锁删不动就吞掉，下轮再试。
+export const QUICK_KEEP = 10;
+const QUICK_GRACE_MS = 10 * 60 * 1000;
+const BUCKET_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function pruneQuick(ctx, { keep = QUICK_KEEP, busy = new Set(), onDrop, now = Date.now() } = {}) {
+  const out = { records: 0, buckets: 0 };
+  if (!quickAllowed(ctx)) return out;
+  const root = bucketRoot(ctx);
+  const rec = readJson(storeFile(ctx), null);
+  const curDir = rec && typeof rec.path === 'string' ? fold(path.resolve(rec.path)) : null;
+  let names = [];
+  try { names = await readdir(root, { withFileTypes: true }); } catch { return out; }
+  const buckets = [];
+  const records = [];
+  for (const d of names) {
+    if (!d.isDirectory() || !BUCKET_ID.test(d.name)) continue;
+    const dir = path.join(root, d.name);
+    const b = { dir, tdir: sessionsDir(dir, ctx.configDir), current: fold(dir) === curDir, mtime: 0, left: 0 };
+    try { b.mtime = (await stat(dir)).mtimeMs; } catch { continue; }
+    buckets.push(b);
+    let ents = [];
+    try { ents = await readdir(b.tdir, { withFileTypes: true }); } catch {}
+    for (const e of ents) {
+      if (!e.isFile() || !e.name.endsWith('.jsonl')) continue;
+      const file = path.join(b.tdir, e.name);
+      let mtime = 0;
+      try { mtime = (await stat(file)).mtimeMs; } catch { continue; }
+      records.push({ b, id: e.name.slice(0, -6), file, mtime });
+      b.mtime = Math.max(b.mtime, mtime);
+    }
+  }
+  records.sort((x, y) => y.mtime - x.mtime);
+  let curNewest = true;
+  records.forEach((r, i) => {
+    const pinned = r.b.current && curNewest;
+    if (r.b.current) curNewest = false;
+    r.keep = i < keep || pinned || busy.has(r.id) || now - r.mtime < QUICK_GRACE_MS;
+    if (r.keep) r.b.left++;
+  });
+  for (const r of records) {
+    if (r.keep) continue;
+    try {
+      await rm(r.file, { force: true });
+      await rm(path.join(r.b.tdir, r.id), { recursive: true, force: true });
+      out.records++;
+      try { onDrop?.(r.id); } catch {}
+    } catch { r.b.left++; }
+  }
+  for (const b of buckets) {
+    if (b.current || b.left > 0 || now - b.mtime < QUICK_GRACE_MS) continue;
+    try {
+      await rm(b.dir, { recursive: true, force: true });
+      await rm(b.tdir, { recursive: true, force: true });
+      out.buckets++;
+    } catch {}
+  }
+  return out;
+}
+
+// 节流版：/api/sessions 每次列表都会叫，按身份 5 分钟最多扫一遍；换新快照时 force。
+// 不 await——回收在后台跑，不拖慢列表。
+const pruneState = new Map();   // ctx.key -> { at, running }
+export function schedulePruneQuick(ctx, opts = {}, { force = false } = {}) {
+  if (!quickAllowed(ctx)) return;
+  const key = ctx.key || ctx.kind;
+  const st = pruneState.get(key) || { at: 0, running: false };
+  if (st.running || (!force && Date.now() - st.at < 5 * 60 * 1000)) return;
+  st.running = true; st.at = Date.now(); pruneState.set(key, st);
+  pruneQuick(ctx, opts)
+    .then((r) => { if (r.records || r.buckets) console.log(`[quick] 回收旧快照：${r.records} 条记录、${r.buckets} 只桶`); })
+    .catch((e) => console.warn('[quick] prune failed:', e?.message || e))
+    .finally(() => { st.running = false; });
+}

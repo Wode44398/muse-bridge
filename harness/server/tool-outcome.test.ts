@@ -104,7 +104,7 @@ test("U8 工具组只收只读探索：看文件、搜代码收成组卡，改�
   const tl: Item[] = [think(), tool("r1", "Read"), tool("g1", "Grep"), tool("b1", "Bash"), tool("r2", "Read"), tool("f1", "Glob"), think(), tool("e1", "Edit"), tool("w1", "Workflow")];
   const units = feedUnits(tl, false);
   const shape = units.map((u) =>
-    u.f ? "折" : u.g ? `组[${u.items.map((x) => (x.kind === "tool" ? x.name : "思")).join(",")}]` : u.item.kind === "tool" ? u.item.name : "思",
+    u.f ? "折" : u.g ? `组[${u.items.map((x) => (x.kind === "tool" ? x.name : "思")).join(",")}]` : u.a ? "卡" : u.item.kind === "tool" ? u.item.name : "思",
   );
   assert.deepEqual(shape, ["组[思,Read,Grep]", "Bash", "组[Read,Glob,思]", "Edit", "Workflow"]);
   // 只有一次探索、段太短：不收

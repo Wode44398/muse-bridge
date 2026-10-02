@@ -31,6 +31,7 @@ export function soloUrl(id, { pane = false } = {}) {
 
 // —— 分屏格 ⇄ 宿主页的消息（同源 postMessage，信封带 bp:1 以免与别的消息混）——
 //   格 → 宿主：ready / focus（点进来了）/ session {id,title}（这一格换了会话）/ close / dock {open}
-//   宿主 → 格：open {id}（侧栏点会话、拖进这一格）/ new {projectId} / away（宿主那边被按下，收起弹层）
+//   宿主 → 格：open {id}（侧栏点会话、拖进这一格）/ quote {id,title}（会话拖到这一格的输入栏＝引用）/
+//             away（宿主那边被按下，收起弹层）
 export const PANE_MSG = 'bp';
 export function isPaneMsg(e) { return !!(e && e.data && e.data[PANE_MSG] === 1 && e.origin === location.origin); }

@@ -22,13 +22,16 @@ export interface MediaItem {
   retirable: boolean; // 工具图 = true；用户上传的 = false
 }
 
-// 超额才退：按时间顺序从最老的工具图起，一次退一批，直到回到额度以内或没有可退的（最近 RETIRE_FLOOR 张不退）。
-export function planRetirement(items: readonly MediaItem[], budget: { maxImages: number; maxBytes: number }): Image[] {
+// 超额才退：按时间顺序从最老的工具图起，一次退一批，直到回到额度以内或没有可退的（最近 keepRecent 张不退，默认 RETIRE_FLOOR）。
+export function planRetirement(
+  items: readonly MediaItem[],
+  budget: { maxImages: number; maxBytes: number; keepRecent?: number },
+): Image[] {
   let count = items.length;
   let bytes = items.reduce((n, i) => n + i.bytes, 0);
   if (count <= budget.maxImages && bytes <= budget.maxBytes) return [];
   const tools = items.filter((i) => i.retirable);
-  const pool = tools.slice(0, Math.max(0, tools.length - RETIRE_FLOOR));
+  const pool = tools.slice(0, Math.max(0, tools.length - (budget.keepRecent ?? RETIRE_FLOOR)));
   const out: Image[] = [];
   while ((count > budget.maxImages || bytes > budget.maxBytes) && pool.length) {
     for (const i of pool.splice(0, RETIRE_BATCH)) {

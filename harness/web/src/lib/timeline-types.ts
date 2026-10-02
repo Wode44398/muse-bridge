@@ -55,6 +55,9 @@ export interface AgentRun {
   // O2：因为限流 / 上游过载挂起，到这个时刻（本机时钟）之前在等；恢复后清掉。任务面板显示为「卡住」那一档。
   suspendedUntil?: number;
   suspendReason?: string;
+  // 子 agent 面板：coder 档改过的文件（绝对路径）；没做完的原因（预算用尽 / 被限流到截止 / provider 出错……，做完了不带）
+  editedFiles?: string[];
+  stopReason?: string;
 }
 export interface WorkflowRun {
   id: string;

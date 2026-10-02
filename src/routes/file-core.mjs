@@ -452,8 +452,33 @@ export async function handleSaveFile(req, res, identify) {
   if (Buffer.byteLength(content, 'utf8') > 5_000_000) return bad(res, 413, 'too large');
   try { if (!statSync(target).isFile()) return bad(res, 400, 'not a file'); }
   catch { return bad(res, 404, 'not found'); }
+  // 写前校验（防覆盖别处的修改）：客户端带上这次保存基于的那份磁盘原文的指纹 baseHash。编辑器里有没存的
+  // 字时，Claude 的 Edit / 其他端可能已经改过盘，不校验的话下一次自动保存会把那些修改整篇盖掉。
+  // 对不上 → 409 附上当前内容，由客户端三方合并；没带 baseHash 的老客户端照旧直接写。
+  if (typeof body.baseHash === 'string' && body.baseHash) {
+    let cur;
+    try { cur = readFileSync(target, 'utf8').replace(/^﻿/, ''); } catch { return bad(res, 500, 'read error'); }
+    if (textHash(cur) !== body.baseHash) {
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'conflict', current: cur }));
+    }
+  }
   try { writeFileSync(target, content, 'utf8'); } catch { return bad(res, 500, 'write error'); }
   okJson(res, { ok: true });
+}
+
+// 文本指纹（cyrb53 + 长度），与前端 web/src/lib/textmerge.js 的 textHash 同一算法、同一输入口径
+// （JS 字符串按 UTF-16 码元，已去掉 BOM）——只用来判断「磁盘是不是还是那份」，不做安全用途。
+export function textHash(s) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36) + ':' + s.length;
 }
 
 export async function handleToUpload(req, res, identify) {

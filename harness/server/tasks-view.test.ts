@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   STALL_MS,
+  agentBatchOf,
+  agentView,
+  batchCounts,
+  batchElapsed,
   collectTasks,
   deriveWorkflow,
   dotCells,
@@ -111,4 +115,74 @@ test("duration / token formatting", () => {
   assert.equal(fmtTokens(1_500), "1.5k");
   assert.equal(fmtTokens(12_345), "12k");
   assert.equal(fmtTokens(2_000_000), "2M");
+});
+
+test("agentBatchOf: the run of adjacent Agent rows around a tool id (one parallel batch)", () => {
+  const tl = [
+    { kind: "tool", id: "r", name: "Read", status: "ok", args: {} },
+    { kind: "tool", id: "a1", name: "Agent", status: "ok", args: {} },
+    { kind: "tool", id: "a2", name: "Agent", status: "ok", args: {} },
+    { kind: "text", text: "…" },
+    { kind: "tool", id: "a3", name: "Agent", status: "ok", args: {} },
+  ];
+  assert.deepEqual(agentBatchOf(tl, "a2").map((x) => x.id), ["a1", "a2"]);
+  assert.deepEqual(agentBatchOf(tl, "a3").map((x) => x.id), ["a3"]);
+  assert.deepEqual(agentBatchOf(tl, "r"), []);
+  assert.deepEqual(agentBatchOf(tl, "nope"), []);
+});
+
+test("agentView: one reading for the card / stack row / task row; a stopped turn reads its running agents as stopped", () => {
+  const steps = [
+    { id: "s1", name: "Read", arg: "a.ts", status: "ok" },
+    { id: "s2", name: "Grep", arg: "foo", status: "running" },
+  ];
+  const live = {
+    name: "Agent", status: "running", args: { prompt: "调研鉴权\n细节", tools: "coder" },
+    agent: run("a", "running", { tier: "coder", model: "accounts/x/models/kimi-k2", steps, toolCalls: 2, tokens: 1200, startedAt: 1000, lastAt: 5000 }),
+  };
+  const v = agentView(live, { now: 6000, chatRunning: true });
+  assert.equal(v.status, "running");
+  assert.equal(v.tier, "coder");
+  assert.equal(v.model, "kimi-k2");
+  assert.equal(v.calls, 2);
+  assert.equal(v.time, "5s");
+  assert.deepEqual(v.step, { id: "s2", name: "Grep", arg: "foo" });
+  assert.equal(v.stalled, false);
+  // The last step stays up after it ends (the model is thinking about the next one) — the line must not blank out.
+  steps[1].status = "ok";
+  assert.equal(agentView(live, { now: 6000, chatRunning: true }).step?.id, "s2");
+  // No events for a long while → stalled; rate-limit suspension is its own flag and wins over stalled.
+  assert.equal(agentView(live, { now: 5000 + STALL_MS + 1, chatRunning: true }).stalled, true);
+  const waiting = { ...live, agent: { ...live.agent, suspendedUntil: 9000 } };
+  const w = agentView(waiting, { now: 6000, chatRunning: true });
+  assert.equal(w.suspended, true);
+  assert.equal(w.stalled, false);
+  // The turn was stopped while the agent was still marked running → stopped, no live step, no ticking clock.
+  const cut = agentView(live, { now: 6000, chatRunning: false });
+  assert.equal(cut.status, "stopped");
+  assert.equal(cut.step, null);
+  assert.equal(cut.time, "");
+  // Before subagent_start there is no run: tier falls back to the tool args, the title to the prompt's first line.
+  const pre = agentView({ name: "Agent", status: "running", args: { prompt: "调研鉴权\n细节", tools: "coder" } }, { now: 0, chatRunning: true });
+  assert.equal(pre.title, "调研鉴权");
+  assert.equal(pre.tier, "coder");
+  assert.equal(pre.step, null);
+  // Failure carries the first line of the error.
+  const bad = agentView({ name: "Agent", status: "fail", args: {}, agent: run("b", "fail", { error: "provider died\nstack…", durationMs: 3000, startedAt: 1 }) }, { now: 0, chatRunning: false });
+  assert.equal(bad.status, "failed");
+  assert.equal(bad.error, "provider died");
+  assert.equal(bad.time, "3s");
+});
+
+test("batch counts / wall clock across a parallel batch", () => {
+  const tools = [
+    { name: "Agent", status: "ok", args: {}, agent: run("a", "ok", { startedAt: 1000, durationMs: 4000 }) },
+    { name: "Agent", status: "fail", args: {}, agent: run("b", "fail", { error: "boom", startedAt: 2000, durationMs: 9000 }) },
+    { name: "Agent", status: "running", args: {}, agent: run("c", "running", { startedAt: 3000 }) },
+  ];
+  const views = tools.map((x) => agentView(x, { now: 20_000, chatRunning: true }));
+  assert.deepEqual(batchCounts(views), { total: 3, running: 1, failed: 1, stopped: 0, done: 1 });
+  assert.equal(batchElapsed(tools, true, 20_000), "19s"); // earliest start → now
+  assert.equal(batchElapsed(tools.slice(0, 2), false, 20_000), "10s"); // earliest start → latest end
+  assert.equal(batchElapsed([{ name: "Agent", status: "ok", args: {} }], false, 0), ""); // old sessions: no timestamps
 });

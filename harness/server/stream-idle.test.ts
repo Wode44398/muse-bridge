@@ -135,9 +135,11 @@ test("整轮：第一次请求卡死，自动重试第二次成功", async () =>
   });
   session.cfg = { provider: "openai", model: "fake-model", thinking: "off", permissionMode: "auto", workspace: ws, access: "workspace" };
   const run = startRun(session, "打个招呼");
+  // 这个上限只是把「永远挂住」变成可断言的失败，不是在量速度，所以放得很宽：卡死窗口 600ms + 退避至多 500ms 之外，还有开跑前的
+  // 检查点与收尾落盘——单跑约 1.5s，8 并发全量时整轮要 4s 多，机器再忙还会更长。
   let timer: ReturnType<typeof setTimeout> | undefined;
   const hung = new Promise<"hung">((resolve) => {
-    timer = setTimeout(() => resolve("hung"), 8000);
+    timer = setTimeout(() => resolve("hung"), 60_000);
   });
   const outcome = await Promise.race([run.done.then(() => "done" as const), hung]);
   clearTimeout(timer);

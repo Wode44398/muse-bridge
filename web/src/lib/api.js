@@ -152,6 +152,9 @@ export const api = {
   copyFile: (path, dest, ws) => req('POST', '/api/files/copy', wsBody({ path, dest }, ws)),
   saveFile: (path, content, ws) => req('POST', '/api/file/save', wsBody({ path, content }, ws)),   // 覆盖写文本（编辑器保存）
   mdLinks: (path, ws) => req('GET', '/api/file/mdlinks?path=' + encodeURIComponent(path) + wsQuery(ws)),   // md 双链：出链解析+同目录树反向链接
+  mdNames: (path, ws) => req('GET', '/api/file/mdnames?path=' + encodeURIComponent(path) + wsQuery(ws)),   // [[ 补全名单：笔记所在目录树里的 md + 附件 {names:[{name,path,md}],truncated}
+  // 带写前校验的保存：baseHash=这次基于的磁盘原文指纹（lib/textmerge.js textHash），磁盘已被别处改过 → 409 + { current }
+  saveFileGuarded: (path, content, ws, baseHash) => req('POST', '/api/file/save', wsBody({ path, content, baseHash }, ws)),
 
   fileToUpload: (path, copy = true, ws) => req('POST', '/api/files/to-upload', wsBody(copy ? { path } : { path, copy: false }, ws)),   // 工作空间文件 →「发送给 AI」素材（copy=false 零拷贝直给源路径；默认拷进 uploads）
   extractFile: (path, ws) => req('POST', '/api/files/extract', wsBody({ path }, ws)),   // 服务端解压压缩包（bsdtar）→ 同目录同名文件夹，返回 {ok,name,path}

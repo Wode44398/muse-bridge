@@ -153,4 +153,6 @@ export default {
   '{name} 写完了，对我说「继续」就处理结果': '{name} is done. Say “continue” to process the result.',
   '助手已完成': 'Assistant is done',
   '已处理结果': 'Result processed',
+  // —— 主页明暗（iOS 没有流光动态壁纸）——
+  '暗色主页需要先在设置 · 壁纸里选一张图片': 'To use the dark home screen, pick an image in Settings · Wallpaper first',
 };

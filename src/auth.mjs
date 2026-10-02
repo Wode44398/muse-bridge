@@ -58,7 +58,8 @@ export function createAuth(token, noAuth, { tokenHash = '', isAdminSession = nul
   function queryToken(req) {
     try {
       const u = new URL(req.url, 'http://x');
-      const isHarnessArtifact = /^\/api\/harness\/api\/sessions\/[^/]+\/artifact$/.test(u.pathname);
+      // dimensio 的两类 <img>/下载直链：产物文件（artifact）与会话资产（assets/<哈希名>，截图卡用）。
+      const isHarnessArtifact = /^\/api\/harness\/api\/sessions\/[^/]+\/(?:artifact|assets\/[^/]+)$/.test(u.pathname);
       if (req.method === 'GET' && (isHarnessArtifact || QTOKEN_PATHS.some((p) => u.pathname === p || u.pathname.startsWith(p + '/')))) {
         return u.searchParams.get('token') || '';
       }

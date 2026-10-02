@@ -1,10 +1,11 @@
 <script lang="ts">
-  // 任务列表里的子 agent 一行：状态 + 标题（在跑 = 微光）+ 用时；第二行「子 agent · 档位 · 状态 · 模型 · tok · 工具调用 · 当前步骤」。
-  // 点开 = 压上它的转录视图（prompt、步骤、答复都在那里）；时间线上没有 run 记录的老条目开不了转录，
+  // 任务列表里的子 agent 一行：状态 + 标题（在跑 = 微光）+ 用时；第二行「子 agent · 档位 · 状态 · 模型 · tok · 工具调用」；
+  // 在跑时第三行是此刻那一步（与对话流里子 agent 卡上的同一行：AgentAct）。
+  // 点开 = 压上它的面板（概览、提示词、过程、结果都在那里）；时间线上没有 run 记录的老条目开不了面板，
   // 就地展开 prompt / 输出（老会话 meta 里没存 prompt，回落工具参数）。工作流走 WorkflowDetail。
-  import { toolMeta } from "../../lib/icons.ts";
-  import type { ToolItem } from "../../lib/state.svelte.ts";
-  import { STATUS_LABEL, agentDotState, fmtTokens, modelShort, runElapsed, toolTaskStatus, toolTaskTitle } from "../../lib/tasks.ts";
+  import { app, type ToolItem } from "../../lib/state.svelte.ts";
+  import { STATUS_LABEL, agentDotState, agentView, fmtTokens, modelShort, runElapsed, toolTaskStatus, toolTaskTitle } from "../../lib/tasks.ts";
+  import AgentAct from "../feed/AgentAct.svelte";
   import { t, tr } from "../../lib/i18n.ts";
   import TaskLine from "./TaskLine.svelte";
   import type { Glyph } from "./StatusGlyph.svelte";
@@ -29,7 +30,7 @@
   const timeText = $derived(runElapsed(run ?? undefined, running, now));
   const model = $derived(modelShort(run?.model));
   const calls = $derived(run ? (run.toolCalls ?? run.steps.length) : 0);
-  const cur = $derived(running && run?.steps.length ? run.steps[run.steps.length - 1] : null);
+  const view = $derived(agentView(item, { now, chatRunning: app.chat.running }));
   const stalled = $derived(running && run ? agentDotState(run, { now }) === "stalled" : false);
   const glyph = $derived<Glyph>(
     stalled ? "stalled" : running ? "running" : status === "completed" ? "done" : status === "failed" ? "failed" : "stopped",
@@ -63,7 +64,7 @@
   {focused}
   {drill}
   open={expandable ? open : undefined}
-  hint={drill ? t("查看转录") : undefined}
+  hint={drill ? t("查看子 agent：{title}", { title }) : undefined}
   onclick={activate}
 >
   {#snippet meta()}
@@ -73,9 +74,9 @@
     {#if model}<span class="t2" title={run?.model}>{model}</span>{/if}
     {#if run?.tokens}<span><b>{fmtTokens(run.tokens)}</b> tok</span>{/if}
     {#if calls}<span><b>{calls}</b> {t("次工具调用", { n: calls })}</span>{/if}
-    {#if cur}
-      <span class="cur">{toolMeta(cur.name).verb}{#if cur.arg}<span class="mono">{" "}{cur.arg}</span>{/if}</span>
-    {/if}
+  {/snippet}
+  {#snippet below()}
+    {#if running && run}<span class="now"><AgentAct {view} /></span>{/if}
   {/snippet}
   {#snippet children()}
     <div class="body">
@@ -113,18 +114,11 @@
   .bad {
     color: var(--err);
   }
-  .cur {
+  /* 此刻那一步：对齐到标题（状态记号 14 + 间距 10） */
+  .now {
+    display: block;
     min-width: 0;
-    max-width: 100%;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    color: var(--text2);
-  }
-  .mono {
-    font-family: var(--font-mono);
-    font-size: var(--fs-xs);
-    color: var(--text3);
+    padding-left: 24px;
   }
   .body {
     display: flex;

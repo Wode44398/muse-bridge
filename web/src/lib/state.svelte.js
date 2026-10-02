@@ -129,7 +129,10 @@ export const status = $state({ limits: null, context: null, contexts: {}, usages
 //   { subtype, from, to, scope, trigger, category, explanation, text, requestId, refusedUserUuid,
 //     sessionId, at, dismissed }
 // 新用户消息发出 / 切会话 / 回滚到被拒消息 → 置 null；横条的 X 只把 dismissed 标 true。
-export const refusalBand = $state({ notice: null });
+// prompt：安全栅门把本轮暂停、等人二选一时的 Paused 卡（服务端 refusal_prompt 事件）：
+//   { qid, sessionId, from, to, category, busy }
+// 收到 refusal_answer / 本轮收尾 / 切会话 → 置 null。同一槽位里 prompt 优先于 notice 横条。
+export const refusalBand = $state({ notice: null, prompt: null });
 
 export function setTheme(theme) {
   ui.theme = theme;
@@ -142,15 +145,21 @@ export function toggleTheme() { setTheme(ui.theme === 'dark' ? 'light' : 'dark')
 // followSys: 跟随系统明暗（prefers-color-scheme 驱动界面明暗）
 // noEnterAnim: 禁用页面转场动画（直切页面）
 // fullResMedia: 原图加载（相册/漫画查看器直接拉原图、预载也按原图跑；默认关=1280 轻量档+缩放时升级）
+// worktree: 输入栏分支胶囊右半的 worktree 勾选框——勾着开新对话＝先切一个 git worktree 再跑（官方同款，默认关）
 // promptSuggest: 输入建议（Claude 每轮回复完预测下一句，输入框空着时显示，Tab 填入；默认开，与官方同）
 const PREFS_KEY = 'bridge-prefs';
 function loadPrefs() {
-  try { const p = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); if (p) return { followSys: !!p.followSys, noEnterAnim: !!p.noEnterAnim, fullResMedia: !!p.fullResMedia, promptSuggest: p.promptSuggest !== false }; } catch {}
-  return { followSys: false, noEnterAnim: false, fullResMedia: false, promptSuggest: true };
+  try { const p = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); if (p) return { followSys: !!p.followSys, noEnterAnim: !!p.noEnterAnim, fullResMedia: !!p.fullResMedia, promptSuggest: p.promptSuggest !== false, worktree: !!p.worktree }; } catch {}
+  return { followSys: false, noEnterAnim: false, fullResMedia: false, promptSuggest: true, worktree: false };
 }
 export const prefs = $state(loadPrefs());
+
+// worktree 会话的真实工作目录：会话 id → { cwd, branch }。来源两处——首轮 session 帧（worktree
+// 刚切出来，列表还没它）与 /api/session（重开 / 冷启动）；会话列表条目自带的 wt 优先。
+// 工作台与归属芯片据此指向 worktree，而不是项目的主检出。
+export const sessionWt = $state({});
 export function savePrefs() {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ followSys: prefs.followSys, noEnterAnim: prefs.noEnterAnim, fullResMedia: prefs.fullResMedia, promptSuggest: prefs.promptSuggest })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ followSys: prefs.followSys, noEnterAnim: prefs.noEnterAnim, fullResMedia: prefs.fullResMedia, promptSuggest: prefs.promptSuggest, worktree: prefs.worktree })); } catch {}
 }
 
 // 跟随系统明暗：监听 prefers-color-scheme；开关打开瞬间也调一次（applyFollowSys）。

@@ -191,6 +191,9 @@ export const app = $state({
   compat: null as Compat | null,
 
   appearance: (localStorage.getItem("harness.appearance") ?? "auto") as Appearance,
+  // 对话流里的工作过程：false（默认）= 精简——连续的工具调用收成一行（在做什么 / 做了哪些），点开再看；
+  // true = 显示全部（每一步平铺参数摘要、结果行与实时尾行）。设置里切，只存本机。
+  feedDetail: localStorage.getItem("harness.feedDetail") === "1",
 
   chat: new Chat(), // 前台正在看的会话（分屏时 = 有焦点的那一格）
   chats: [] as Chat[], // 活跃池：前台 + 后台运行中 + 终态 LRU 缓存
@@ -576,6 +579,16 @@ export async function reloadMeta() {
   } catch (e: any) {
     // 连不上：Hero 给入口提示（壳里点开连接设置，网页端提示检查服务）
     app.connError = tr(String(e?.message ?? e ?? t("连接失败")));
+  }
+}
+
+export function setFeedDetail(on: boolean) {
+  app.feedDetail = on;
+  try {
+    if (on) localStorage.setItem("harness.feedDetail", "1");
+    else localStorage.removeItem("harness.feedDetail");
+  } catch {
+    /* 隐私模式等写不进去：本次会话照样生效 */
   }
 }
 

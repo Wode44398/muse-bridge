@@ -18,6 +18,7 @@
     reloadMeta,
     saveConfig,
     setAppearance,
+    setFeedDetail,
     toast,
     vendorInfo,
   } from "../../lib/state.svelte.ts";
@@ -31,6 +32,7 @@
   import Group from "../ui/Group.svelte";
   import Row from "../ui/Row.svelte";
   import Segmented from "../ui/Segmented.svelte";
+  import Switch from "../ui/Switch.svelte";
   import TextField from "../ui/TextField.svelte";
   import Button from "../ui/Button.svelte";
   import Chip from "../ui/Chip.svelte";
@@ -41,7 +43,8 @@
   import Section from "./Section.svelte";
   import RuleList, { splitRules, toItems, type RuleItem } from "./RuleList.svelte";
   import DirBrowser, { joinPath } from "./DirBrowser.svelte";
-  import { t, tc, tr, lang, setLang } from "../../lib/i18n.ts";
+  import { t, tc, tr, lang } from "../../lib/i18n.ts";
+  import { setLang } from "../../lib/i18n-boot.ts";
 
   const LANGS: { value: "zh" | "en"; label: string }[] = [
     { value: "zh", label: "简体中文" }, // i18n-ignore 语言名永远用本族语写
@@ -433,6 +436,18 @@
       }}
     />
   </Section>
+
+  <!-- 对话流里的工作过程：默认精简（连续工具调用收成一行，点开再看）；打开 = 每一步平铺。即点即生效、只存本机 -->
+  <Group
+    title={t("对话")}
+    footnote={t("关着时，连续的工具调用收成一行：在跑说正在做什么，做完说做了哪些，点开再看每一步。打开后每一步都平铺参数、结果和实时输出。")}
+  >
+    <Row title={t("显示全部工作过程")}>
+      {#snippet trailing()}
+        <Switch label={t("显示全部工作过程")} checked={app.feedDetail} onchange={setFeedDetail} />
+      {/snippet}
+    </Row>
+  </Group>
 
   <!-- 界面语言：与 bridge 共用 localStorage['bridge-lang']；语言名用本族语写；选中即整页重载 -->
   <Section title={t("语言")} footnote={t("切换后界面会重新加载")}>

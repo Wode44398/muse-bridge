@@ -8,7 +8,7 @@
   import { pushBackLayer } from '../lib/nav.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { t, tc } from '../lib/i18n.js';
-  let { onClose, onPickFiles, onPickFolder, dir = 'up' } = $props();
+  let { onClose, onPickFiles, onPickPhotos, onPickFolder, dir = 'up' } = $props();
 
   let view = $state('main'); // 'main' | 'style' | 'edit'
 
@@ -39,6 +39,7 @@
   const close = () => onClose && onClose();
   function pickStyle(id) { settings.style = id; close(); }
   function files() { close(); onPickFiles && onPickFiles(); }
+  function photos() { close(); onPickPhotos && onPickPhotos(); }
   function folder() { close(); onPickFolder && onPickFolder(); }
   function toggleResearch() { settings.research = !settings.research; close(); }
 
@@ -68,9 +69,17 @@
 <button class="am-backdrop" aria-label={t('关闭')} onclick={close}></button>
 <div class="am" class:down={dir === 'down'} role="menu">
   {#if view === 'main'}
+    <!-- 照片专用入口：安卓壳见 accept 全是 image/* 就开系统照片选择器（相册网格、按时间倒序），
+         不再进文件管理器翻目录；电脑上是只列图片的文件对话框。 -->
+    {#if onPickPhotos}
+      <button class="am-row" onclick={photos}>
+        <svg class="am-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.7"/><circle cx="9" cy="9.7" r="1.6"/><path d="m4 17.2 4.6-4.6a1.6 1.6 0 0 1 2.2 0l5.7 5.7"/><path d="m14.3 15.4 1.6-1.6a1.6 1.6 0 0 1 2.2 0l2.4 2.4"/></svg>
+        <span class="am-name">Add photos</span>
+      </button>
+    {/if}
     <button class="am-row" onclick={files}>
       <svg class="am-ic" viewBox="0 0 20 20" fill="currentColor"><path d={ICON_PAPERCLIP} /></svg>
-      <span class="am-name">Add files or photos</span>
+      <span class="am-name">{onPickPhotos ? 'Add files' : 'Add files or photos'}</span>
     </button>
     <!-- 挂载文件夹：整树传上去，Claude 用 Read/Glob/Grep 按需读（不塞进上下文） -->
     <button class="am-row" onclick={folder}>

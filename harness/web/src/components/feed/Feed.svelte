@@ -1,13 +1,13 @@
 <script lang="ts">
   // 时间线（对话流）：这一格会话（pane.chat；没分屏 = 前台会话 app.chat）的唯一视图。用户 = 靠右的气泡；助手 = 素文直排在画布上；
-  // 思考 / 工具 / 工具组 / 轮次折叠串在一条「量线」上（节点 + 节点之间的细线）；截图 / 报错 / 提示 / 卡片占位与回执各自成行。
+  // 思考 / 工具 / 工具组 / 子 agent 卡 / 轮次折叠串在一条「量线」上（节点 + 节点之间的细线）；截图 / 报错 / 提示 / 卡片占位与回执各自成行。
   // 显示分组全在纯函数 lib/feed-units.ts（工具组只收只读探索、做完的轮收成一行、最近这一轮不折），这里只负责渲染。
   //
   // 滚动：贴底（离底 < 72px）时内容长高就继续贴底——跟的是内容列本身的尺寸（ResizeObserver），所以工具行状态 / 结果行、
   // Bash 尾行增长、行展开、非末条长出产物卡都跟得上（spec-A ⚠4）；翻上去时自己发了一条消息也回到底（⚠4）。
   // 离底 > 320px 浮出「回到底部」。换会话无条件回到底部。键盘弹出 / 收起（视口变化）与时间线容器尺寸变化保持贴底。
   import { tick } from "svelte";
-  import { rewindFrom, type ArtifactItem, type Item } from "../../lib/state.svelte.ts";
+  import { app, rewindFrom, type ArtifactItem, type Item } from "../../lib/state.svelte.ts";
   import { feedUnits, type FeedUnit } from "../../lib/feed-units.ts";
   import { isPendingCard } from "../../lib/card-dock.ts";
   import { handleCopyClick } from "../../lib/copy-click.ts";
@@ -22,6 +22,7 @@
   import ThinkRow from "./ThinkRow.svelte";
   import ToolRow from "./ToolRow.svelte";
   import ToolGroup from "./ToolGroup.svelte";
+  import AgentCard from "./AgentCard.svelte";
   import TurnFold from "./TurnFold.svelte";
   import CardSlot from "./CardSlot.svelte";
   import ErrorCard from "./ErrorCard.svelte";
@@ -175,7 +176,9 @@
   // 工具组 / 轮次折叠的开合按 key 记（换会话时 key 不重复，不必清）
   let groupOpen = $state<Record<string, boolean>>({});
   let foldOpen = $state<Record<string, boolean>>({});
-  const units = $derived(feedUnits(pane.chat.timeline, pane.chat.running, foldOpen));
+  // 精简（默认）：连续的工具调用收成一行、单独的工具行只留头行；设置里打开「显示全部工作过程」= 原来逐条平铺的样子
+  const compact = $derived(!app.feedDetail);
+  const units = $derived(feedUnits(pane.chat.timeline, pane.chat.running, foldOpen, compact));
 
   // 新条目浮起只给「直播时一条条追加」：一次冒出一大批（附着直播时服务端整批重放这一轮、对账合并补进一截尾巴）就直接出现，
   // 不让几十条一起动；用户自己点开一轮的处理过程除外（那是展开，浮起正合适）。
@@ -195,7 +198,7 @@
   }
 
   // 量线：思考 / 工具 / 工具组 / 折叠行是线上的节点，相邻的两行接起来（活动行接在最后）
-  const onRail = (u: FeedUnit) => u.f || u.g || u.item.kind === "tool" || u.item.kind === "thinking";
+  const onRail = (u: FeedUnit) => u.f || u.g || u.a || u.item.kind === "tool" || u.item.kind === "thinking";
   const rails = $derived(units.map(onRail));
 
   // U6：「接着做」只挂在时间线最后一条的失败上
@@ -257,11 +260,13 @@
           {@const up = rail && k > 0 && rails[k - 1]}
           {@const down = rail && (k < units.length - 1 ? rails[k + 1] : pane.chat.running)}
           <!-- 新一轮 = 用户自己发的消息（运行中插话不算，不另起一段呼吸） -->
-          <div class="u" class:rail class:user={!u.f && !u.g && u.item.kind === "user" && !u.item.steer} in:rise={riseIn()}>
+          <div class="u" class:rail class:user={!u.f && !u.g && !u.a && u.item.kind === "user" && !u.item.steer} in:rise={riseIn()}>
             {#if u.f}
               <TurnFold tools={u.tools} run={u.run} open={u.open} {up} {down} ontoggle={() => toggleFold(u.key)} />
             {:else if u.g}
-              <ToolGroup items={u.items} live={u.live} open={groupOpen[u.key] ?? false} {up} {down} ontoggle={() => (groupOpen[u.key] = !groupOpen[u.key])} />
+              <ToolGroup items={u.items} live={u.live} {compact} open={groupOpen[u.key] ?? false} {up} {down} ontoggle={() => (groupOpen[u.key] = !groupOpen[u.key])} />
+            {:else if u.a}
+              <AgentCard items={u.items} {up} {down} />
             {:else}
               {@const item = u.item}
               {#if item.kind === "user"}
@@ -279,9 +284,9 @@
                   {onOpenArtifact}
                 />
               {:else if item.kind === "thinking"}
-                <ThinkRow {item} {up} {down} />
+                <ThinkRow {item} {compact} {up} {down} />
               {:else if item.kind === "tool"}
-                <ToolRow {item} {up} {down} />
+                <ToolRow {item} {compact} {up} {down} />
               {:else if (item.kind === "ask" || item.kind === "permission" || item.kind === "plan") && isPendingCard(item, pane.chat.running)}
                 <!-- P10（E1）：交互态的卡停在输入框上方（只渲染那一份），这里原位留一行；落定后照旧显示只读回执 -->
                 <CardSlot {item} />

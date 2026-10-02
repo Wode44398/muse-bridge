@@ -26,6 +26,7 @@ export const mdHighlight = HighlightStyle.define([
   { tag: omTags.wikilink, class: 'mde-t-wk' },
   { tag: omTags.tag, class: 'mde-t-tag' },
   { tag: omTags.math, class: 'mde-t-math' },
+  { tag: omTags.footnote, class: 'mde-t-fn' },
   // 代码块内嵌语言的基础配色
   { tag: t.keyword, class: 'mde-c-kw' },
   { tag: t.string, class: 'mde-c-str' },

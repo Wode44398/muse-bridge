@@ -2,9 +2,13 @@
   // 工具行：量线上一个节点 + 动词 + 参数摘要（mono，单行省略）；第二行只说结果；运行中的前台 Bash 在下面摆实时尾行；
   // 点开 = 用 collapse 长出详情面板（参数 / 执行事实 / 输出）。
   //
+  // compact = 精简模式（默认，设置里「显示全部工作过程」关着）下单独成行的工具：只留头行，第二行结果与运行中的实时尾行
+  // 点开再看（组里展开的各步不传，照旧带结果行——点开组就是要看细节）。
+  //
   // Agent / Workflow 行对齐 bridge Claude 分页（= 官方 /code 页）：不做行内展开，点开进右侧工作区的「任务」视图
-  //（工作流 → 详细卡；Agent → 直接压上子 agent 转录）。运行中且不在工具组里时整行换成卡片：工作流 = 紧凑卡（agent 点阵），
-  // 子 agent 还没开始动 = 任务卡；其余时刻是带实况摘要（模型 · 当前步骤 · 步数 / 阶段 · 完成数 / agent 数 · tok · 时长）的工具行。
+  //（工作流 → 详细卡；Agent → 直接压上那个子 agent 的面板）。工作流不在工具组里时整行换成紧凑卡（agent 点阵），跑完也留着
+  //（停在终态；官方跑完收成一行，认不出来）。子 agent 在对话流里不走这里——一批并行的 Agent 由 Feed 画成子 agent 卡
+  //（AgentCard）；这里的 Agent 分支只是兜底的一行（模型 · 当前步骤 · 步数 / 次数 · 时长）。
   //
   // 「在跑」只在这一轮真的还在跑时成立：停止之后（或断流收尾）还挂着 running 的行没等到结果，按「被打断」画成灰叉，
   // 不再转 / 不再亮卡片、不再摆尾行（spec-A ⚠10 同源）。
@@ -12,6 +16,7 @@
   import * as api from "../../lib/api.ts";
   import { toolMeta } from "../../lib/icons.ts";
   import { toolPreview } from "../../lib/tool-preview.ts";
+  import { argPreview } from "../../lib/tool-summary.ts";
   import { STATUS_LABEL, fmtDur, fmtTokens, modelShort, toolTaskKind, toolTaskStatus, toolTaskTitle, type TaskStatus } from "../../lib/tasks.ts";
   import { collapse } from "../../lib/motion.ts";
   import Button from "../ui/Button.svelte";
@@ -19,7 +24,6 @@
   import RailRow from "./RailRow.svelte";
   import ToolNode, { type NodeTone } from "./ToolNode.svelte";
   import WorkflowCard from "./WorkflowCard.svelte";
-  import AgentTaskCard from "./AgentTaskCard.svelte";
   import { usePane } from "../../lib/pane.ts";
   import { t, tr } from "../../lib/i18n.ts";
 
@@ -28,9 +32,10 @@
   let {
     item,
     inGroup = false,
+    compact = false,
     up = false,
     down = false,
-  }: { item: ToolItem; inGroup?: boolean; up?: boolean; down?: boolean } = $props();
+  }: { item: ToolItem; inGroup?: boolean; compact?: boolean; up?: boolean; down?: boolean } = $props();
 
   const meta = $derived(toolMeta(item.name));
   // U8（E4）：展开后摆的执行事实（只在展开时算）
@@ -59,11 +64,7 @@
     return s === "running" && !pane.chat.running ? "stopped" : s;
   });
   const live = $derived(item.status === "running" && pane.chat.running);
-  const card = $derived.by(() => {
-    if (!kind || inGroup || tstatus !== "running") return "";
-    if (kind === "workflow") return "workflow";
-    return item.agent?.steps.length ? "" : "agent";
-  });
+  const card = $derived(kind === "workflow" && !inGroup && tstatus !== null);
   const tone = $derived.by((): NodeTone => {
     if (tstatus) return tstatus === "running" ? "running" : tstatus === "completed" ? "ok" : tstatus === "failed" ? "fail" : "stopped";
     if (item.status === "running") return live ? "running" : "stopped";
@@ -120,42 +121,13 @@
     if (kind) openTaskDetail(item.id, kind === "agent" ? item.agent?.id : undefined);
     else item.open = !item.open;
   }
-
-  function argPreview(a: any): string {
-    if (!a || typeof a !== "object") return "";
-    if (a.command) return String(a.command);
-    if (a.path) return String(a.path);
-    if (a.file_path) return String(a.file_path);
-    if (a.pattern) return String(a.pattern);
-    if (a.url) return String(a.url);
-    if (a.query) return String(a.query);
-    if (a.prompt) return String(a.prompt);
-    if (a.todos) return t("{n} 项", { n: a.todos.length });
-    // 计划：摆第一条不是标题的正文（整份计划在卡片里）；提问：摆第一个问题
-    if (typeof a.plan === "string") {
-      const line = a.plan.split("\n").map((s: string) => s.trim()).find((s: string) => s && !s.startsWith("#")) ?? "";
-      return line.replace(/[`*_]/g, "");
-    }
-    if (Array.isArray(a.questions)) {
-      const q = String(a.questions[0]?.question ?? "");
-      return a.questions.length > 1 ? t("{q} 等 {n} 个问题", { q, n: a.questions.length }) : q;
-    }
-    if (a.action) return [a.action, a.serviceId ?? a.name ?? ""].filter(Boolean).join(" ");
-    // E2：MCP 网关（McpDescribe / McpCall）——连接器.工具 + 参数
-    if (typeof a.server === "string") {
-      const args = a.arguments && typeof a.arguments === "object" ? JSON.stringify(a.arguments) : "";
-      return `${[a.server, a.tool].filter(Boolean).join(".")}${args && args !== "{}" ? ` ${args.slice(0, 80)}` : ""}`;
-    }
-    const s = JSON.stringify(a);
-    return s === "{}" ? "" : s.slice(0, 100);
-  }
 </script>
 
 {#if card}
   <RailRow {up} {down} nodeY="22px">
-    {#snippet node()}<ToolNode tone="running" />{/snippet}
+    {#snippet node()}<ToolNode {tone} />{/snippet}
     <div class="cardwrap">
-      {#if card === "workflow"}<WorkflowCard {item} />{:else}<AgentTaskCard {item} />{/if}
+      {#if tstatus}<WorkflowCard {item} status={tstatus} />{/if}
     </div>
   </RailRow>
 {:else}
@@ -185,11 +157,12 @@
     {/snippet}
 
     <!-- U8（kimi K36）：第二行只说结果（「退出码 0 · 12 行输出」「改了 1 处（+3 −1 行）」）——以前挤在第一行最右边，手机上被参数挤没 -->
-    {#if !kind && !item.open && item.status !== "running" && outcomeText}
+    <!-- 精简模式（默认）：单独成行的工具只留头行一行，结果与实时尾行点开再看 -->
+    {#if !kind && !compact && !item.open && item.status !== "running" && outcomeText}
       <div class="outcome" class:bad={item.status === "fail"} class:warn={item.status === "denied"}>{outcomeText}</div>
     {/if}
 
-    {#if !kind && live && item.progress}
+    {#if !kind && live && item.progress && (!compact || item.open)}
       <div class="livewrap" transition:collapse>
         <div class="live">
           {#if item.progress.tail}<div class="tailbox"><pre class="tail">{item.progress.tail}</pre></div>{/if}

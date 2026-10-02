@@ -20,7 +20,7 @@ export interface Capabilities {
   // R11：按成本压缩的触发线（token）。目录按型号配；不配时窗口 ≥ 512K 的模型默认 256K（见 agent/context.ts）。
   compactAt?: number;
   // R12：一次请求里历史图片的额度（目录按 provider 配）；不给就用默认 20 张 / 24 MB。
-  mediaBudget?: { maxImages: number; maxBytes: number };
+  mediaBudget?: { maxImages: number; maxBytes: number; keepRecent?: number };
 }
 
 export interface AdapterConfig {

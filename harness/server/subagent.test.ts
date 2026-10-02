@@ -108,8 +108,16 @@ test("research tier blocks writes even if the model asks; coder tier can write a
     if (i === 2) return call("c2", "VerificationAudit", { decision: "not_applicable", reason: "plain text file, nothing to execute here" });
     return say("wrote x.txt (verified n/a)");
   });
-  const r2 = await makeSubAgentRunner(env(root, { parentMode: () => "auto" }), () => coder)({ prompt: "write a file", tier: "coder" });
+  const coderEvents: AgentEvent[] = [];
+  const r2 = await makeSubAgentRunner(env(root, { parentMode: () => "auto" }), () => coder)({
+    prompt: "write a file", tier: "coder", onEvent: (ev) => coderEvents.push(ev),
+  });
   assert.equal(r2.ok, true, r2.error);
+  // The end event carries the edited files for the live sub-agent panel; a completed run has no stopReason.
+  const coderEnd = coderEvents.at(-1) as Extract<AgentEvent, { e: "subagent_end" }>;
+  assert.equal(coderEnd.e, "subagent_end");
+  assert.deepEqual((coderEnd.editedFiles ?? []).map((p) => path.basename(p)), ["x.txt"]);
+  assert.equal(coderEnd.stopReason, undefined);
   assert.equal(fs.readFileSync(path.join(root, "x.txt"), "utf8"), "hi");
   assert.equal(r2.tier, "coder");
   assert.deepEqual(r2.editedFiles.map((p) => path.basename(p)), ["x.txt"]);

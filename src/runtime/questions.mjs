@@ -96,7 +96,9 @@ export async function handleAnswer(req, res, { identify }) {
     res.end('forbidden');
     return;
   }
-  entry.settle(parsed.cancelled ? { cancelled: true } : { answers: Array.isArray(parsed.answers) ? parsed.answers : [] });
+  // choice：安全栅门 Paused 卡的二选一（retry_fallback / edit_prompt），由等待方自己校验取值。
+  const choice = typeof parsed.choice === 'string' ? parsed.choice.slice(0, 40) : undefined;
+  entry.settle(parsed.cancelled ? { cancelled: true } : { answers: Array.isArray(parsed.answers) ? parsed.answers : [], ...(choice ? { choice } : {}) });
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true }));
 }

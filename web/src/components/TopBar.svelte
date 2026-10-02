@@ -8,7 +8,7 @@
   // 材质：Figma iOS 27 kit 的液态玻璃（Liquid Glass - Regular - Small，明暗两个变体）。图形层是构建期
   // 用 Figma 原版着色器烘焙的「与底色无关」图层（assets/figma-glass）：页面底色从下面透上来，在 --bg 上与
   // Figma 逐像素一致；正文滚到底下时靠 backdrop 模糊透出（磨砂半径 6 → σ≈2.45，不做折射）。
-  // `?oldglass` 退回原来的纯毛玻璃，方便对比。
+  // `?oldglass` 退回原来的纯毛玻璃，方便对比。玻璃只给触屏；鼠标设备（电脑浏览器）走扁平实底（.flat）。
   import { toggleTheme } from '../lib/state.svelte.js';
   import { dock } from '../lib/dock.svelte.js';
   import DockToolBar from './dock/DockToolBar.svelte';
@@ -20,14 +20,15 @@
   //   要把同一个 onClose 交给 ClaudeDock（toolsClose），那边的工具组照样有 ✕
   let { onMenu, onDock, hideMenu = false, menuOn = false, sat = true, split = false, onClose = null, tools = false } = $props();
   const top = $derived(sat ? 'calc(var(--sat) + 10px)' : '10px');
-  const fg = typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass');
+  const flat = typeof matchMedia !== 'undefined' && !matchMedia('(pointer: coarse)').matches;
+  const fg = !flat && (typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass'));
 </script>
 
-{#if !hideMenu}<button class="fab round" class:fg class:sm={tools} class:on={menuOn} aria-label={menuOn ? tc('claude', '收起侧栏') : t('菜单')} aria-pressed={menuOn} style:top onclick={onMenu}>&#xe0dd;</button>{/if}
+{#if !hideMenu}<button class="fab round" class:fg class:flat class:sm={tools} class:on={menuOn} aria-label={menuOn ? tc('claude', '收起侧栏') : t('菜单')} aria-pressed={menuOn} style:top onclick={onMenu}>&#xe0dd;</button>{/if}
 {#if tools}
   {#if !dock.open}<DockToolBar {top} {split} {onClose} />{/if}
 {:else}
-<div class="fab pill" class:fg style:top>
+<div class="fab pill" class:fg class:flat style:top>
   <button class="pbtn" aria-label={t('切换明暗主题')} onclick={toggleTheme}>
     <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
     <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
@@ -118,4 +119,13 @@
     border-image: url(../assets/figma-glass/tb-cap44-dark.png) 0 192 fill / 0 64px / 0 stretch;
   }
   :global(html[data-theme="light"]) .fab.pill.fg::before { border-image-source: url(../assets/figma-glass/tb-cap44-light.png); }
+
+  /* —— 鼠标设备：扁平实底（同 DockToolBar .flat）——页面同色实底 + 细描边，不模糊不透色 */
+  :global(html) .fab.flat {
+    background: var(--bg); box-shadow: inset 0 0 0 1px var(--divider);
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  :global(html) .fab.round.flat:active { background: color-mix(in srgb, var(--text) 10%, var(--bg)); }
+  :global(html) .fab.round.flat.on { background: color-mix(in srgb, var(--text) 15%, var(--bg)); color: var(--text); }
+  @media (hover: hover) { :global(html) .fab.round.flat:hover { background: color-mix(in srgb, var(--text) 7%, var(--bg)); color: var(--text); } }
 </style>

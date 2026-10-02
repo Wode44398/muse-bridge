@@ -432,7 +432,13 @@ export function shellTouches(parsed: ShellParse): ShellTouches {
   for (const c of parsed.commands) {
     const w = writeTargetsOf(c);
     writes.push(...w);
-    edits.push(...editTargetsOf(c, w));
+    // 门禁只记落点确定的：`cp a "$OUT/x.html"` 这类要到运行时才知道写去哪，按字面解析会记成工作区里的
+    // `$OUT/x.html`，让已经验过的一轮被判成「验证后又改了」（2026-09-30 MiMo 会话）。真写进工作区的由影子 git 兜住。
+    const unknown = new Set([
+      ...c.words.filter((x) => x.dynamic).map((x) => x.text),
+      ...c.redirects.filter((r) => r.dynamic).map((r) => r.target),
+    ]);
+    edits.push(...editTargetsOf(c, w).filter((t) => !unknown.has(t)));
     if (!readOnlyOne(c, moves)) mentions.push(...c.argv.slice(1), ...c.redirects.map((r) => r.target));
   }
   return { writes: [...new Set(writes)], edits: [...new Set(edits)], mentions: [...new Set(mentions)] };

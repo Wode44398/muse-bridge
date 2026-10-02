@@ -30,7 +30,7 @@ const tool = (id: string, name = "Bash"): Item => ({ kind: "tool", id, name, arg
 const think = (): Item => ({ kind: "thinking", text: "想", open: false, live: false });
 const text = (t: string, run?: { durationMs: number; waitedMs: number }): Item => ({ kind: "text", text: t, live: false, ...(run ? { run } : {}) });
 const shape = (units: FeedUnit[]) =>
-  units.map((u) => (u.f ? `折${u.tools}${u.open ? "开" : ""}` : u.g ? `组${u.items.length}` : u.item.kind === "text" ? `文:${u.item.text}` : u.item.kind === "tool" ? `工:${u.item.id}` : u.item.kind));
+  units.map((u) => (u.f ? `折${u.tools}${u.open ? "开" : ""}` : u.g ? `组${u.items.length}` : u.a ? `卡${u.items.length}` : u.item.kind === "text" ? `文:${u.item.text}` : u.item.kind === "tool" ? `工:${u.item.id}` : u.item.kind));
 
 const TIMELINE: Item[] = [
   user("第一轮"),

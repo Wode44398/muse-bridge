@@ -263,6 +263,11 @@ export type AgentEvent =
       result?: unknown;
       cached?: boolean;
       durationMs?: number;
+      // Sub-agent panel: files a coder touched (absolute paths; omitted when none) and why it
+      // stopped short (omitted when it completed). History reads the same fields off
+      // tool_result.meta.subagent.
+      editedFiles?: string[];
+      stopReason?: string;
     }
   // A Workflow script run: meta (statically extracted before execution) →
   // phases as the script enters them → narrator lines from log() → summary.

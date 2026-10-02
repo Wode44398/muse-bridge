@@ -87,9 +87,11 @@
     im.src = u;
   }
 
-  // 键盘（桌面/外接键盘）
+  // 键盘（桌面/外接键盘）。挂在 window 冒泡阶段，是最后一站：里面的组件先处理过的键会带着
+  // defaultPrevented 冒上来（md 编辑器收补全浮层/收选区、表格格子退出、编辑器里的方向键移光标……），
+  // 不再二次解释成关闭/翻页；组字中的 Esc 是取消输入法候选，也不算
   function onKey(e) {
-    if (!active) return;
+    if (!active || e.defaultPrevented || e.isComposing) return;
     if (e.key === 'Escape') { e.preventDefault(); close(); }
     else if (e.key === 'ArrowLeft' && canPrev) { e.preventDefault(); go(-1); }
     else if (e.key === 'ArrowRight' && canNext) { e.preventDefault(); go(1); }

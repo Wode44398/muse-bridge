@@ -1,0 +1,189 @@
+/* 渲染后 Markdown 的排版（obsmd 产出的 HTML）——阅读态 DocViewer 的 .doc-md 与编辑态 callout 卡
+   （mdeditor 的 .mde-callout-w，卡里同样是 obsmd 渲染的 HTML）共用这一份：两边以前各写一份，
+   callout 卡里的列表/任务框/代码早已和阅读态走样（标记黑色、原生小勾选框、行距不同）。
+   随 obsmd.js 注入（只有它产出这些 HTML），类名只在下面两个作用域里生效，不碰聊天渲染。
+
+   作用域写成 :is(.doc-md, .mde .mde-callout-w)：:is() 取参数里最高的特异度 (0,2,0)，与 DocViewer
+   原先 Svelte 作用域规则（.doc-md.svelte-xxx p）同级，从组件里挪出来阅读态观感不变；
+   配色令牌 --md-* 由两边各自定义（DocViewer 的 .doc-root / editor.css 的 .mde），同名同值。
+   编辑态特有的差异（卡片外边距交给 CM 空行）就近写在对应规则后面，同文件后写者胜，不靠注入顺序。
+
+   数值口径：阅读态段落/块的外边距 1.4em 模拟编辑态的一整行空行（只在源码真有空行处；没有空行的
+   相邻块见下文「.nb」一节）；标题上方 = 空行 27.52px（编辑态行不留纵向内边距）+ 该级编辑态行
+   padding-top，换算成该级字号的 em（见 editor.css 的 .mde-line-hN）。 */
+
+/* ———— 标题 ———— */
+:is(.doc-md, .mde .mde-callout-w) h1 { font-size: 1.7em; font-weight: 700; margin: 1.36em 0 .45em; line-height: 1.35; }
+:is(.doc-md, .mde .mde-callout-w) h2 { font-size: 1.4em; font-weight: 700; margin: 1.53em 0 .4em; padding-bottom: .2em; border-bottom: 1px solid var(--md-line); }
+:is(.doc-md, .mde .mde-callout-w) h3 { font-size: 1.2em; font-weight: 700; margin: 1.68em 0 .35em; }
+:is(.doc-md, .mde .mde-callout-w) h4 { font-size: 1.05em; font-weight: 700; margin: 1.84em 0 .3em; }
+:is(.doc-md, .mde .mde-callout-w) h5 { font-size: 1em; font-weight: 700; margin: 1.92em 0 .3em; }
+:is(.doc-md, .mde .mde-callout-w) h6 { font-size: .95em; font-weight: 700; color: var(--md-fg-2); margin: 2.01em 0 .3em; }
+
+/* 编辑态两段之间隔着一整行空行（27.52px），阅读态 1.4em（22.4px），比例与 Obsidian 两态一致；
+   真要一模一样得把编辑态空行压扁，那样光标在空行上会忽高忽低，不划算 */
+:is(.doc-md, .mde .mde-callout-w) p { margin: 1.4em 0; }
+
+/* ———— 列表 ————
+   li 的 .3em 在兄弟间折叠成 4.8px 项距，对应编辑态列表行（editor.css .mde-line-li）上下各 2.4px 的 padding。
+   嵌套列表不再额外吃 ul 的 .5em；松散列表（项间有空行，每项包一层 p）首末段落外边距清零，
+   项距与紧凑列表相同；同一项里的多段之间留 .8em——比项距大、比正文段落小，一眼分得清是项内换段。 */
+:is(.doc-md, .mde .mde-callout-w) ul, :is(.doc-md, .mde .mde-callout-w) ol { margin: .5em 0; padding-left: 1.5em; }
+:is(.doc-md, .mde .mde-callout-w) li { margin: .3em 0; }
+:is(.doc-md, .mde .mde-callout-w) li::marker { color: var(--md-accent); }
+:is(.doc-md, .mde .mde-callout-w) li > ul, :is(.doc-md, .mde .mde-callout-w) li > ol { margin: 0; }
+:is(.doc-md, .mde .mde-callout-w) li > p, :is(.doc-md, .mde .mde-callout-w) .task-body > p { margin: .8em 0; }
+:is(.doc-md, .mde .mde-callout-w) li > p:first-child, :is(.doc-md, .mde .mde-callout-w) .task-body > p:first-child { margin-top: 0; }
+:is(.doc-md, .mde .mde-callout-w) li > p:last-child, :is(.doc-md, .mde .mde-callout-w) .task-body > p:last-child { margin-bottom: 0; }
+
+/* 任务项（obsmd 的 listitem 渲染器：li.task-list-item > .task-body + 嵌套子列表）。
+   无序任务不画圆点，勾选框进标记槽：-23px 让框落在正文左侧 [-23,-6]、右边 6px 间距后正文仍从
+   内容列起——编辑态的勾选框 widget 也落在同一位置。有序任务保留序号，框就排在正文前（不进槽）。
+   自绘框：原生 checkbox 太小、disabled 态一坨灰，和编辑态自绘的那只对不上。 */
+:is(.doc-md, .mde .mde-callout-w) ul > li.task-list-item { list-style: none; }
+:is(.doc-md, .mde .mde-callout-w) input.task-cb {
+  appearance: none; -webkit-appearance: none; width: 17px; height: 17px; border-radius: 5px;
+  border: 1.6px solid var(--md-line-2); background: #fff; vertical-align: -3px; margin: 0 6px 0 0; position: relative;
+}
+:is(.doc-md, .mde .mde-callout-w) ul > li.task-list-item > .task-body > input.task-cb,
+:is(.doc-md, .mde .mde-callout-w) ul > li.task-list-item > .task-body > p:first-child > input.task-cb:first-child { margin-left: -23px; }
+:is(.doc-md, .mde .mde-callout-w) input.task-cb:checked { background: var(--md-accent); border-color: var(--md-accent); }
+:is(.doc-md, .mde .mde-callout-w) input.task-cb:checked::after {
+  content: ''; position: absolute; left: 4.6px; top: 1.4px; width: 4px; height: 8px;
+  border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(43deg);
+}
+/* 已完成：只划本项正文（子项在 .task-body 外）；勾选框是 inline-block，不吃划线 */
+:is(.doc-md, .mde .mde-callout-w) li.is-checked > .task-body { color: var(--md-fg-3); text-decoration: line-through; text-decoration-color: rgba(20, 20, 19, .3); }
+
+/* ———— 行内 ———— */
+:is(.doc-md, .mde .mde-callout-w) a { color: var(--md-link); text-decoration: none; }
+:is(.doc-md, .mde .mde-callout-w) a.wk { color: var(--md-accent-deep); text-decoration: none; border-bottom: 1px solid rgba(181, 83, 47, .35); cursor: pointer; word-break: break-all; }
+:is(.doc-md, .mde .mde-callout-w) a.wk:active { background: var(--md-accent-tint); }
+:is(.doc-md, .mde .mde-callout-w) .ob-tag { color: var(--md-accent-deep); background: var(--md-accent-tint); border-radius: 999px; padding: 1px 8px; font-size: .88em; }
+/* 高亮不加左右内边距：编辑态的 ==高亮== 会被行内格式切成好几段 span，逐段加内边距会在词中间
+   撑出缝，两态统一不加（Obsidian 两态也不加） */
+:is(.doc-md, .mde .mde-callout-w) mark { background: var(--md-mark); border-radius: 3px; padding: 0; color: inherit; }
+/* 删除线用半透明灰线：纯黑 currentColor 压在中文横笔画上几乎看不出（编辑态 .mde-t-strike 同值） */
+:is(.doc-md, .mde .mde-callout-w, .mde .mde-table) del { text-decoration-color: rgba(20, 20, 19, .45); }
+:is(.doc-md, .mde .mde-callout-w, .mde .mde-table) kbd {
+  font-family: var(--md-mono); font-size: .82em; padding: .05em .4em; border: 1px solid var(--md-line-2);
+  border-bottom-width: 2px; border-radius: 5px; background: #fff; color: var(--md-fg); white-space: nowrap;
+}
+:is(.doc-md, .mde .mde-callout-w) img { max-width: 100%; border-radius: 8px; }
+
+/* ———— 引用 ————
+   没有上下内边距、首末子元素外边距清零（Obsidian 同款）：引用里的第一个字和左边线顶端齐平；
+   只留左内边距 16px，正文起点 = 3px 边线 + 16px = 19px，编辑态引用行同值。不留右内边距——
+   否则可用宽度比编辑态窄 16px，同一行字两态折行位置不同。 */
+:is(.doc-md, .mde .mde-callout-w) blockquote { margin: 1.4em 0; padding: 0 0 0 16px; border-left: 3px solid var(--md-line-2); color: var(--md-fg-2); }
+:is(.doc-md, .mde .mde-callout-w) blockquote > :first-child { margin-top: 0; }
+:is(.doc-md, .mde .mde-callout-w) blockquote > :last-child { margin-bottom: 0; }
+:is(.doc-md, .mde .mde-callout-w) blockquote blockquote { margin: .3em 0; }
+:is(.doc-md, .mde .mde-callout-w) blockquote > p:has(+ blockquote) { margin-bottom: .3em; }
+
+/* ———— callout 卡 ———— 卡内段落 .45em、首个子元素贴着标题（标题与正文之间只有 co-body 的 4px） */
+:is(.doc-md, .mde .mde-callout-w) .callout { margin: 1.4em 0; border-radius: 10px; background: rgba(var(--co), .07); border-left: 3px solid rgb(var(--co)); padding: 10px 14px; }
+/* 编辑态卡片上下的间距交给 CM 的空行（和段落一样），卡片自己不再加外边距 */
+.mde .mde-callout-w > .callout { margin: 0; }
+:is(.doc-md, .mde .mde-callout-w) .co-title { display: flex; align-items: center; gap: 7px; font-weight: 650; color: rgb(var(--co)); font-size: .98em; }
+:is(.doc-md, .mde .mde-callout-w) .co-title svg { width: 17px; height: 17px; flex: none; }
+:is(.doc-md, .mde .mde-callout-w) .co-body { margin-top: 4px; }
+:is(.doc-md, .mde .mde-callout-w) .co-body p { margin: .45em 0; }
+:is(.doc-md, .mde .mde-callout-w) .co-body > :first-child { margin-top: 0; }
+:is(.doc-md, .mde .mde-callout-w) .co-body > :last-child { margin-bottom: 0; }
+
+/* ———— 代码 ————
+   行内 code 缩一次 .88em；代码块 13.5px / 1.6（行距 21.6px，编辑态代码行同值），块内 code 继承、
+   不再二次缩放；长行折行（pre-wrap），和编辑态的 lineWrapping 一样，不再横向溢出滚动。
+   pre 的外边距 1.66em × 13.5px = 22.4px，与正文段落的 1.4em × 16px 相同（都模拟一行空行）。 */
+:is(.doc-md, .mde .mde-callout-w) code { background: var(--md-bg-2); border-radius: 5px; padding: .1em .28em; font-family: var(--md-mono); font-size: .88em; }
+:is(.doc-md, .mde .mde-callout-w) pre { background: var(--md-bg-2); border: 1px solid var(--md-line); border-radius: 10px; padding: 8px 14px; overflow-x: auto; margin: 1.66em 0; font-size: 13.5px; line-height: 1.6; }
+:is(.doc-md, .mde .mde-callout-w) pre code { background: none; padding: 0; border-radius: 0; font-size: inherit; line-height: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 代码语法配色（纸面暖调，Flexoki light 那组：在象牙白上不发冷）——类来自 mdeditor/theme.js 的
+   mdHighlight：编辑态代码行由 CM 高亮挂上，阅读态代码块由 mdeditor/hl.js 按同一张表挂上。
+   作用域 :is(.doc-md, .mde) 与原先 editor.css 的 .mde .mde-c-* 同特异度。 */
+:is(.doc-md, .mde) .mde-c-kw { color: #5e409d; }
+:is(.doc-md, .mde) .mde-c-str { color: #66800b; }
+:is(.doc-md, .mde) .mde-c-num { color: #bc5215; }
+:is(.doc-md, .mde) .mde-c-fn { color: #205ea6; }
+:is(.doc-md, .mde) .mde-c-type { color: #24837b; }
+:is(.doc-md, .mde) .mde-c-prop { color: #ad8301; }
+:is(.doc-md, .mde) .mde-c-op { color: #6f6e69; }
+:is(.doc-md, .mde) .mde-c-re { color: #af3029; }
+:is(.doc-md, .mde) .mde-c-def { color: #205ea6; }
+:is(.doc-md pre, .mde .mde-line-code) .mde-t-cmt { color: #9a9891; }
+/* 阅读态代码块里还会出现的几个 markdown 高亮类（如 ```md 块、C 的 #include 是 meta）：
+   编辑态由 editor.css 的 .mde .mde-t-* 定义，这里给阅读态补同色（标题只加粗，不在代码里放大字号） */
+.doc-md pre .mde-t-fmt { color: var(--md-fg-4); }
+.doc-md pre .mde-t-url { color: var(--md-link); }
+.doc-md pre .mde-t-quote { color: var(--md-fg-2); }
+.doc-md pre .mde-t-strong, .doc-md pre .mde-t-h { font-weight: 700; }
+.doc-md pre .mde-t-em { font-style: italic; }
+.doc-md pre .mde-t-strike { text-decoration: line-through; text-decoration-color: rgba(20, 20, 19, .45); }
+
+/* ———— 表格 ————
+   按内容宽度排版（小表不再被撑满、宽表在自己框里横滚），尊重列对齐，单元格顶端对齐、
+   每格至少 64px（窄栏里中文不会被挤成一字一行）——与编辑态表格 widget 同一套数值。 */
+:is(.doc-md, .mde .mde-callout-w) table { border-collapse: collapse; margin: 1.4em 0; display: block; overflow-x: auto; width: max-content; max-width: 100%; }
+:is(.doc-md, .mde .mde-callout-w) th, :is(.doc-md, .mde .mde-callout-w) td {
+  border: 1px solid var(--md-line); padding: 7px 11px; text-align: left; vertical-align: top; font-size: .95em;
+  min-width: 64px; max-width: 380px;
+}
+:is(.doc-md, .mde .mde-callout-w) th[align="center"], :is(.doc-md, .mde .mde-callout-w) td[align="center"] { text-align: center; }
+:is(.doc-md, .mde .mde-callout-w) th[align="right"], :is(.doc-md, .mde .mde-callout-w) td[align="right"] { text-align: right; }
+:is(.doc-md, .mde .mde-callout-w) th { background: var(--md-bg-2); font-weight: 650; }
+
+/* 分割线：编辑态 --- 是一整行（27.52px，线在行正中），前后各一行空行；阅读态上下外边距照这个量
+   配（2.26em / 2.2em ≈ 半行 + 一行空行，再减去段落间两态本来就差的那 5px），比段落外边距大，
+   与相邻段落折叠后以它为准。以前 1.2em 被段落的 1.4em 吞掉，编辑态每条分割线多出约 36px */
+:is(.doc-md, .mde .mde-callout-w) hr { border: 0; border-top: 1px solid var(--md-line); margin: 2.26em 0 2.2em; }
+
+/* ———— 源码里紧挨着的块（.nb，obsmd 按「前面没有空行」挂）————
+   编辑态这种相邻块之间没有空行，只隔各自行的纵向内边距：正文行 0、标题行 padding-top/bottom
+   （.mde-line-hN）、列表行上下 2.4px、代码块首末行的 8px 在边框里（= pre 的内边距）、表格 widget
+   上下 6px。这里把阅读态的块外边距换成同样的数：上外边距清零、前一块下外边距清零，标题/列表的
+   那几像素用 padding 给——padding 不和相邻外边距折叠，两块各出一份相加，同编辑态行内边距的叠法。
+   源码里有空行的块不受影响（「编辑态空行占一整行」是有意的差异）。 */
+:is(.doc-md, .mde .mde-callout-w) .nb { margin-top: 0; }
+:is(.doc-md, .mde .mde-callout-w) .co-body > p.nb { margin-top: 0; }   /* 压过卡内段落的 .45em */
+:is(.doc-md, .mde .mde-callout-w) :is(p, pre, blockquote, .callout):has(+ .nb) { margin-bottom: 0; }
+:is(.doc-md, .mde .mde-callout-w) h1:has(+ .nb) { margin-bottom: .15em; }
+/* h2：编辑态下划线离字底只有 .12em，紧贴下一块时照编辑态收，下划线与下一块都同位 */
+:is(.doc-md, .mde .mde-callout-w) h2:has(+ .nb) { margin-bottom: 0; padding-bottom: .12em; }
+:is(.doc-md, .mde .mde-callout-w) h3:has(+ .nb) { margin-bottom: .1em; }
+:is(.doc-md, .mde .mde-callout-w) :is(h4, h5, h6):has(+ .nb) { margin-bottom: .08em; }
+:is(.doc-md, .mde .mde-callout-w) h1.nb { padding-top: .35em; }
+:is(.doc-md, .mde .mde-callout-w) h2.nb { padding-top: .3em; }
+:is(.doc-md, .mde .mde-callout-w) h3.nb { padding-top: .25em; }
+:is(.doc-md, .mde .mde-callout-w) :is(h4, h5, h6).nb { padding-top: .2em; }
+/* 列表项里：项内的正文行（首行、续行、引用行）下内边距 2.4px，代码行没有 */
+:is(.doc-md, .mde .mde-callout-w) :is(li, .task-body) > .nb { margin-top: 2.4px; }
+:is(.doc-md, .mde .mde-callout-w) :is(li, .task-body) > pre + .nb { margin-top: 0; }
+/* 列表项以代码块/引用等块收尾：块自己的下外边距不再漏出项外（同 li > p:last-child 清零）；
+   代码块收尾时编辑态只剩下一项行首的 2.4px，项距跟着收一半 */
+:is(.doc-md, .mde .mde-callout-w) :is(li, .task-body) > :is(pre, blockquote, table, .callout):last-child { margin-bottom: 0; }
+:is(.doc-md, .mde .mde-callout-w) li:has(> pre:last-child, > .task-body:last-child > pre:last-child) { margin-bottom: 2.4px; }
+:is(.doc-md, .mde .mde-callout-w) li:has(> pre:last-child, > .task-body:last-child > pre:last-child) + li { margin-top: 2.4px; }
+:is(.doc-md, .mde .mde-callout-w) :is(ul, ol).nb { padding-top: 2.4px; }
+:is(.doc-md, .mde .mde-callout-w) :is(ul, ol).nb > li:first-child { margin-top: 0; }
+:is(.doc-md, .mde .mde-callout-w) :is(ul, ol):has(+ .nb) { margin-bottom: 0; padding-bottom: 2.4px; }
+:is(.doc-md, .mde .mde-callout-w) :is(ul, ol):has(+ .nb) li:last-child { margin-bottom: 0; }
+:is(.doc-md, .mde .mde-callout-w) table.nb { margin-top: 6px; }
+:is(.doc-md, .mde .mde-callout-w) table:has(+ .nb) { margin-bottom: 6px; }
+/* 分割线紧贴上下文：只剩编辑态 --- 那一行的上下半行（线在行正中） */
+:is(.doc-md, .mde .mde-callout-w) hr.nb { margin-top: .86em; }
+:is(.doc-md, .mde .mde-callout-w) hr:has(+ .nb) { margin-bottom: .8em; }
+
+/* ———— 脚注 ————
+   上标 line-height 归零：不把所在行撑高（编辑态 .mde-fnref 同理）。 */
+:is(.doc-md, .mde .mde-callout-w) sup.fn-ref { font-size: .75em; line-height: 0; vertical-align: super; }
+:is(.doc-md, .mde .mde-callout-w) sup.fn-ref a { color: var(--md-accent-deep); cursor: pointer; padding: 0 1px; }
+:is(.doc-md, .mde .mde-callout-w) section.footnotes { margin-top: 2.4em; padding-top: .7em; border-top: 1px solid var(--md-line); font-size: .88em; color: var(--md-fg-2); }
+:is(.doc-md, .mde .mde-callout-w) section.footnotes ol { margin: 0; padding-left: 1.7em; }
+:is(.doc-md, .mde .mde-callout-w) section.footnotes li { margin: .35em 0; }
+:is(.doc-md, .mde .mde-callout-w) section.footnotes li::marker { color: var(--md-fg-3); }
+:is(.doc-md, .mde .mde-callout-w) a.fn-back { color: var(--md-fg-3); cursor: pointer; margin-left: 2px; }
+/* 点上标 / 返回箭头跳转后，落点闪一下（找得到自己跳到了哪儿） */
+:is(.doc-md, .mde .mde-callout-w) .fn-flash { animation: mdr-fn-flash 1.2s var(--md-ease, ease); border-radius: 4px; }
+@keyframes mdr-fn-flash { 0%, 35% { background: var(--md-accent-soft); } 100% { background: transparent; } }

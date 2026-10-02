@@ -16,6 +16,7 @@ import { collectDeliverables, deliverRoots, isInside, resolveDeliverPath, stream
 import { sessionsDir, sanitizeName } from '../runtime/paths.mjs';
 import { getLiveGens, findGenBySession, bridgeSessions, routineSessions } from '../runtime/gen.mjs';
 import { findRewindAnchors, rewindClaudeFiles, pendingRewindAnchor, setPendingRewind } from '../agents/claude-rewind.mjs';
+import { releaseWarmClaude } from '../agents/claude.mjs';
 import { chatPrefsFor, lastChatPrefs, dropChatPrefs } from '../runtime/chat-prefs.mjs';
 import { sessionQuestions } from '../runtime/questions.mjs';
 import { VAULT } from '../config/index.mjs';
@@ -129,18 +130,28 @@ function splitAttachments(text) {
   const re = /^-\s+(.+)$/gm;
   let m;
   while ((m = re.exec(text.slice(mi)))) {
-    const raw = m[1].trim();
+    // 行尾可能带 claude.mjs 加的标注（「  ← 文件夹」「  ← 引用的对话」），不属于路径
+    const raw = m[1].replace(/\s+←.*$/, '').trim();
     const file = raw.split(/[\\/]/).pop() || '';
-    if (file) attachments.push({ file, name: file.replace(/^\d+-/, ''), raw });
+    if (!file) continue;
+    const q = parseQuoteFile(file);
+    attachments.push(q ? { file, name: q.title, raw, kind: 'chat', quoteId: q.id } : { file, name: file.replace(/^\d+-/, ''), raw });
   }
   return { text: clean, attachments };
+}
+// 「引用对话」附件（侧栏把一条会话拖进另一个对话，见 POST /api/session/quote）：存盘名
+// <时间戳>-chatref-<会话 id>-<标题>.md。靠名字认出来，重开历史时气泡里画成对话卡而不是一份 .md。
+const QUOTE_FILE_RE = /^\d+-chatref-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})-(.*)\.md$/;
+export function parseQuoteFile(file) {
+  const m = QUOTE_FILE_RE.exec(String(file || ''));
+  return m ? { id: m[1], title: m[2] || '' } : null;
 }
 // 历史附件出口（绝对路径不出服务器）：uploads 里的 → {file}（前端走 /api/upload/raw）；
 // 工作空间直发的（「发送给 AI」零拷贝路径）→ {rel}（前端走 /api/file）；都不是 → 只留名字。
 function toClientAtt(a, ctx) {
   const raw = a.raw || '';
   const under = (dir) => dir && raw && path.resolve(raw).startsWith(path.resolve(dir) + path.sep);
-  if (under(ctx.uploads)) return { file: a.file, name: a.name };
+  if (under(ctx.uploads)) return a.kind === 'chat' ? { file: a.file, name: a.name, kind: 'chat', quoteId: a.quoteId } : { file: a.file, name: a.name };
   if (under(ctx.cwd)) return { rel: path.relative(ctx.cwd, raw).split(path.sep).join('/'), name: a.file };
   return { name: a.name };
 }
@@ -329,6 +340,25 @@ function scanChain(file) {
     rl.on('close', finish);
     rl.on('error', finish);
   });
+}
+
+// 会话 → Markdown（导出 / 引用对话共用）：front matter + 标题 + 一句说明 + 逐条「你 / Claude」正文。
+// 用户消息带过的附件只列名字（路径不出服务器，读的人也用不上）；引用过的对话标成「引用了对话《…》」。
+export function sessionMarkdown(msgs, { id, title, at = new Date(), source = '', note = '' }) {
+  const lines = ['---'];
+  if (source) lines.push('source: ' + source);
+  lines.push('session_id: ' + id);
+  lines.push('exported: ' + at.toISOString());
+  lines.push('title: ' + String(title).replace(/\n/g, ' '));
+  lines.push('---', '', '# ' + title, '');
+  if (note) lines.push('> ' + note, '');
+  for (const m of msgs) {
+    lines.push(m.role === 'user' ? '**你：**' : '**Claude：**', '');
+    if (m.text) lines.push(m.text, '');
+    const atts = m.role === 'user' && Array.isArray(m.attachments) ? m.attachments : [];
+    if (atts.length) lines.push(atts.map((a) => (a.kind === 'chat' ? `（引用了对话《${a.name}》）` : `（附件：${a.name}）`)).join(' '), '');
+  }
+  return lines;
 }
 
 // Rebuild a session log into displayable bubbles. User → {role,text,uuid[,attachments]};
@@ -572,10 +602,12 @@ export function registerSessionRoutes(router, { authOk, identify }) {
     const ctx = contextFor(who);
     // 项目制：会话分散在各项目的 transcript 目录里（cwd slug），逐项目目录聚合。
     // 会话→项目的归属由所在目录推导（见 claude-projects.mjs 头注）。
-    const projects = claudeProjects.listProjects(ctx.claudeProjects, ctx);
+    // worktree 会话（输入栏 worktree 勾选框开出来的）的 transcript 在 worktree cwd 的目录里，
+    // sessionScopes 把它们并进所属项目：projectId 仍是原项目，另带 wt（cwd/分支）给前端工作台定位。
+    const scopes = claudeProjects.sessionScopes(ctx.claudeProjects, ctx);
     const files = [];
     const quickFiles = [];   // 快照桶那一条单独收着——不参与 60 条截断（见下）
-    for (const p of projects) {
+    for (const { project: p } of scopes) {
       const dir = sessionsDir(p.path, ctx.configDir);
       let entries = [];
       try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
@@ -585,7 +617,7 @@ export function registerSessionRoutes(router, { authOk, identify }) {
         const file = path.join(dir, d.name);
         let mtime = 0, size = 0;
         try { const st = statSync(file); mtime = st.mtimeMs; size = st.size; } catch {}
-        found.push({ id: d.name.slice(0, -6), file, mtime, size, projectId: p.id });
+        found.push({ id: d.name.slice(0, -6), file, mtime, size, projectId: p.id, wt: p.worktree ? { cwd: p.path, branch: p.worktree.branch } : undefined });
       }
       // 快照桶：只列【最新】那一条——「同时只存在一个快照对话」。在快照里点了「新对话」
       // 就等于把这只桶的快照换成新的一条，旧 transcript 留在盘上但不再出现在列表里。
@@ -599,6 +631,8 @@ export function registerSessionRoutes(router, { authOk, identify }) {
     // Which sessions have a generation in flight on THIS server（多对话并发：可能多个）。
     const liveGens = getLiveGens(ctx.key);
     const liveIds = new Set(liveGens.map((g) => g.sessionId).filter(Boolean));
+    // 顺手回收旧快照（只留最近 10 条；节流、后台跑，不拖慢本次列表）。
+    if (quickFiles.length) claudeQuick.schedulePruneQuick(ctx, { busy: liveIds, onDrop: (id) => dropChatPrefs(ctx, id) });
     const newest = liveGens[liveGens.length - 1] || null;
     const active = newest ? (newest.sessionId || null) : null;
     const built = await Promise.all(capped.map(async (f) => ({
@@ -606,6 +640,7 @@ export function registerSessionRoutes(router, { authOk, identify }) {
       mtime: f.mtime,
       size: f.size,
       projectId: f.projectId,
+      ...(f.wt ? { wt: f.wt } : {}),
       title: trimTitle(await readSessionTitle(f.file)),
     })));
     // Drop sessions whose title we can't read — those are .jsonl files currently
@@ -678,11 +713,16 @@ export function registerSessionRoutes(router, { authOk, identify }) {
     let body; try { body = JSON.parse(await readBody(req)); } catch { res.writeHead(400); res.end('bad json'); return; }
     projJson(res, () => ({ ok: claudeProjects.deleteProject(ctx.claudeProjects, ctx, body.id) }));
   });
-  // 「新建快照」：换一只全新的一次性桶（旧桶留盘不删，只是不再被列出）。前端拿到新
+  // 「新建快照」：换一只全新的一次性桶（旧桶先留盘不再列出，只保留最近 10 条快照记录，更老的回收）。前端拿到新
   // project 后直接以它为上下文开一条空对话——新桶=新 cwd=新自动记忆目录，前尘不带。
   router.on('POST', '/api/claude/quick/new', (req, res) => {
     const ctx = projCtx(req, res); if (!ctx) return;
-    projJson(res, () => ({ ok: true, project: claudeQuick.newQuickProject(ctx) }));
+    projJson(res, () => {
+      const project = claudeQuick.newQuickProject(ctx);
+      const busy = new Set(getLiveGens(ctx.key).map((g) => g.sessionId).filter(Boolean));
+      claudeQuick.schedulePruneQuick(ctx, { busy, onDrop: (id) => dropChatPrefs(ctx, id) }, { force: true });
+      return { ok: true, project };
+    });
   });
 
   router.on('GET', '/api/session', async (req, res, url) => {
@@ -733,7 +773,8 @@ export function registerSessionRoutes(router, { authOk, identify }) {
     });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     // prefs：这个会话上次用的 model/effort/fast（sidecar）——前端恢复选择器。
-    res.end(JSON.stringify({ id, projectId: p.project.id, messages, truncated: all.length > messages.length, prefs: chatPrefsFor(ctx, id), fp }));
+    // wt：worktree 会话的 cwd 与分支（工作台/归属芯片据此指向 worktree 而不是主检出）。
+    res.end(JSON.stringify({ id, projectId: p.project.id, ...(p.project.worktree ? { wt: { cwd: p.project.path, branch: p.project.worktree.branch } } : {}), messages, truncated: all.length > messages.length, prefs: chatPrefsFor(ctx, id), fp }));
   });
 
   // —— 检查点回滚：文件恢复到某条用户消息发出前的状态（可选把对话也截回同一处）——
@@ -760,6 +801,9 @@ export function registerSessionRoutes(router, { authOk, identify }) {
     if (live && !live.done) return json(409, { error: '这个会话正在生成中，先「停止」再回滚。' });
     const anchors = findRewindAnchors(p.file, uuid);
     if (!anchors) return json(400, { error: '找不到这条消息的回滚锚点（会话记录可能已变化，重新打开会话再试）' });
+    // 上一轮停放着的 CLI（agents/claude.mjs 的会话常驻）内存里还是回滚前的历史，文件回滚还要另起一个
+    // resume 进程——先关掉它（一份 transcript 一个写入者），下一轮按锚点冷起分叉。
+    await releaseWarmClaude(ctx.key, id);
     if (mode === 'chat') {
       // 纯对话回滚：只记 pending 锚点（与 both 分支的对话部分同一条路），跳过 rewindFiles。
       // 目标是会话首条消息时锚点为 null——对话没有更早处可回，直说。
@@ -836,12 +880,53 @@ export function registerSessionRoutes(router, { authOk, identify }) {
     const p = claudeProjects.locateSessionPaths(ctx.claudeProjects, ctx, String(parsed.id || ''));
     if (!p) { res.writeHead(400, { 'Content-Type': 'text/plain' }); res.end('bad id'); return; }
     try {
+      await releaseWarmClaude(ctx.key, String(parsed.id));   // 停放着的 CLI 先关（它还开着这份 transcript）
       // Thorough local removal: main transcript + subagent-transcript subdir.
       rmSync(p.file, { force: true });
       rmSync(p.subdir, { recursive: true, force: true });
       dropChatPrefs(ctx, String(parsed.id));   // 选择器记忆 sidecar 同步清
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+  });
+
+  // 引用对话：侧栏把一条会话拖进另一个对话（输入栏 / 侧栏另一条会话）松手——把被引的那条整理成
+  // 一份 Markdown 落进调用者自己的 uploads，当附件挂进输入栏，发送时走既有附件链路（路径进提示词、
+  // 模型按需 Read，历史里照样回显成一张卡）。不把全文直接塞进提示词：长对话动辄几十万字，按需读才不烧上下文。
+  // 只收自己看得到的会话（locateSessionPaths 按身份的项目目录找）；标题优先用前端给的（侧栏可能改过名）。
+  router.on('POST', '/api/session/quote', async (req, res) => {
+    const who = identify(req);
+    if (who.kind === 'none') { res.writeHead(401, { 'Content-Type': 'text/plain' }); res.end('unauthorized'); return; }
+    if (who.kind === 'share') { res.writeHead(403, { 'Content-Type': 'text/plain' }); res.end('share identity is read-only'); return; }
+    const ctx = contextFor(who);
+    let parsed;
+    try { parsed = JSON.parse(await readBody(req)); } catch { res.writeHead(400); res.end('bad json'); return; }
+    const id = String(parsed.id || '');
+    const p = /^[0-9a-fA-F-]{36}$/.test(id) ? claudeProjects.locateSessionPaths(ctx.claudeProjects, ctx, id) : null;
+    if (!p) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: '找不到这个对话' })); return; }
+    try {
+      const msgs = await readSessionMessages(p.file, { cutAfterUuid: pendingRewindAnchor(id) });
+      if (!msgs.length) { res.writeHead(422, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: '这个对话还没有内容' })); return; }
+      const given = trimTitle(String(parsed.title || '').replace(/\s+/g, ' ').trim());
+      const title = given || trimTitle(await readSessionTitle(p.file)) || ('会话 ' + id.slice(0, 8));
+      const lines = sessionMarkdown(msgs, {
+        id, title, at: new Date(), source: 'claude-bridge 引用对话',
+        note: '这是用户从另一段对话里拖过来的【引用】，下面是那段对话的完整记录（只含双方正文，工具调用过程已略去）。'
+          + '把它当作这次对话的背景材料，结合用户这条消息作答；用户没问到的部分不必复述。',
+      });
+      mkdirSync(ctx.uploads, { recursive: true });
+      // 斜杠先换掉：sanitizeName 按路径取末段，「A/B 方案对比」会只剩「B 方案对比」
+      const safeTitle = sanitizeName(title.replace(/[\\/]+/g, ' ')).replace(/[.\s]+$/, '').slice(0, 60) || 'conversation';
+      const file = Date.now() + '-chatref-' + id + '-' + safeTitle + '.md';
+      const dest = path.join(ctx.uploads, file);
+      await writeFile(dest, lines.join('\n'), 'utf8');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      // name 回存盘名里的那份标题（清洗/截断过）：重开历史时 parseQuoteFile 解出来的就是它，
+      // 直播气泡与历史的附件名一致，前端合并时不会把这条用户消息当成变了而整条重建。
+      res.end(JSON.stringify({ ok: true, path: dest, name: safeTitle, file, count: msgs.length }));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: String(err?.message ?? err) }));
@@ -863,24 +948,7 @@ export function registerSessionRoutes(router, { authOk, identify }) {
       const title = trimTitle(await readSessionTitle(p.file)) || ('会话 ' + id.slice(0, 8));
       const now = new Date();
       const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
-      const lines = [];
-      lines.push('---');
-      lines.push('source: claude-bridge（手机端远程会话）');
-      lines.push('session_id: ' + id);
-      lines.push('exported: ' + now.toISOString());
-      lines.push('title: ' + title.replace(/\n/g, ' '));
-      lines.push('---');
-      lines.push('');
-      lines.push('# ' + title);
-      lines.push('');
-      lines.push('> 从手机端 bridge 导出的完整对话。读完即可无缝接续这个话题。');
-      lines.push('');
-      for (const m of msgs) {
-        lines.push(m.role === 'user' ? '**你：**' : '**Claude：**');
-        lines.push('');
-        lines.push(m.text);
-        lines.push('');
-      }
+      const lines = sessionMarkdown(msgs, { id, title, at: now, source: 'claude-bridge（手机端远程会话）', note: '从手机端 bridge 导出的完整对话。读完即可无缝接续这个话题。' });
       const exportDir = ctx.sandbox ? path.join(ctx.cwd, 'exports') : path.join(VAULT, 'Remote Space', 'conversations');
       mkdirSync(exportDir, { recursive: true });
       const safeTitle = sanitizeName(title).replace(/\.+$/, '').slice(0, 60) || 'conversation';

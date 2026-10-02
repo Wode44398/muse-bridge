@@ -177,7 +177,7 @@
 
 <style>
   .of-root { position: absolute; inset: 0; background: #fbfbfa; color: #1d1d1f; display: flex; flex-direction: column; }
-  .of-head { flex: none; display: flex; align-items: center; gap: 8px; padding: max(8px, var(--sat)) 10px 8px; background: #fff; border-bottom: 1px solid #ececec; }
+  .of-head { flex: none; display: flex; align-items: center; gap: 8px; padding: max(var(--pv-pad-y, 8px), var(--sat)) 10px var(--pv-pad-y, 8px); background: #fff; border-bottom: 1px solid #ececec; }
   .of-btn { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #1d1d1f; flex: none; }
   .of-btn svg { width: 21px; height: 21px; }
   .of-btn:active { background: rgba(0,0,0,.06); }

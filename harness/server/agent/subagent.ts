@@ -617,6 +617,9 @@ export function makeSubAgentRunner(
       e: "subagent_end", id, ok: result.ok, error: result.error, turns: result.turns, toolCalls,
       inputTokens: result.inputTokens, outputTokens: result.outputTokens,
       text: text.slice(0, EVENT_TEXT_CAP), result: holder.value, durationMs: result.durationMs,
+      // 子 agent 面板：改过哪些文件、没做完的原因（历史走 tool_result.meta.subagent 的同名字段）
+      ...(result.editedFiles.length ? { editedFiles: result.editedFiles } : {}),
+      ...(stopReason !== "completed" ? { stopReason } : {}),
     });
     return result;
   };

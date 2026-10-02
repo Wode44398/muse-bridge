@@ -31,6 +31,7 @@
   import { titleFor } from '../lib/library.svelte.js';
   import { dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent } from '../lib/fileDrag.js';
   import { IS_PANE, SOLO_ID, PANE_MSG, isPaneMsg } from '../lib/solo.js';
+  import { quoteSession } from '../lib/chatQuote.js';
   import { dockOverlayFor } from '../lib/claudeSplit.js';
   import { t, tc } from '../lib/i18n.js';
 
@@ -78,6 +79,8 @@
     const d = e.data;
     if (d.t === 'open' && d.id) {
       if (d.id !== session.id) openSession(d.id).catch(() => {});
+    } else if (d.t === 'quote' && d.id) {
+      quoteSession({ id: d.id, title: d.title || '' });   // 宿主侧栏把一条会话拖到了这一格的输入栏上
     } else if (d.t === 'away') {
       window.dispatchEvent(new Event('bridge-pane-away'));   // 宿主那边被按下了：收起本格的弹层
     } else if (d.t === 'new') {

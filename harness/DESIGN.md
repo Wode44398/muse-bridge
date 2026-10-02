@@ -134,8 +134,10 @@ dimensio 的标志**就是月桥**：小尺寸（< 40px）与 bridge 逐数相�
 ## 7. 稳定：运行中与完成态同高
 
 - 卡片跑着和跑完一样高，结束时不收缩——结束一收，上方高度一变，读到一半的位置就跳（K39）。活动行常驻占位，不要时有时无。
+  子 agent 卡（`web/src/components/feed/AgentCard.svelte`）与工作流卡（`web/src/components/feed/WorkflowCard.svelte`）从派出去起就在、
+  跑完不收成一行：停在终态，只是微光停下、「此刻一行」换成结果。
 - 流式正文只让尾块变：稳定块渲一次、按起点缓存（`web/src/lib/markdown.ts`，U7）。
-- 时间线的显示分组（工具组只收只读探索、做完的轮收成一行）都在纯函数 `web/src/lib/feed-units.ts`；最近这一轮不折（U8）。
+- 时间线的显示分组（工具组只收只读探索、做完的轮收成一行、一批并行的子 agent 合成一张卡）都在纯函数 `web/src/lib/feed-units.ts`；最近这一轮不折（U8）。
 
 ## 8. 文案
 
@@ -153,7 +155,7 @@ dimensio 的标志**就是月桥**：小尺寸（< 40px）与 bridge 逐数相�
 - 界面要读的配置字段必须是 `$state`（`Chat.cfg`，09-05）。
 - **别给属性或变量起名 `state`**：组件里一旦有叫 `state` 的变量，`$state(…)` 会被当成对这个变量的 store 订阅，运行时报 `store_invalid_shape`。
 - 组件根元素上的过渡要 `|global`，否则父级 `{#if}` 卸载它时退场动画不播。
-- 服务端测试会直接 import 的 `web/src/lib` 模块必须是纯 TS、不碰 DOM 类型——要 DOM 的拆到别的文件（`web/src/lib/copy-click.ts`，U7）。
+- 服务端测试会直接 import 的 `web/src/lib` 模块必须是纯 TS、不碰 DOM 类型——要 DOM 的拆到别的文件（`web/src/lib/copy-click.ts`，U7；`web/src/lib/i18n-boot.ts`：`i18n.ts` 只留纯的 `t / tc / tr`）。`npm test` 的 `tsc --noEmit` 不带 DOM lib，碰了就红。
 - 宿主往 `.main` 上加 `hx-dnd-on` 类：挂 `chatDrop` 的节点只许静态 class + `class:` 指令，动态 `class={…}` 会把它冲掉。
 
 ## 10. 提交前自查

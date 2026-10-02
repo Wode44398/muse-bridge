@@ -5,16 +5,59 @@
   // notice 为空 / 已 dismiss / 不是当前会话的 → 什么都不渲染（ClaudePage 的 .band-slot 靠 :has() 判空收起）。
   // 动作：Why?（弹层：Switched to X + 解释 + Details）、Edit prompt and retry with {原模型}
   // （refusalRetry.retryRefused：回滚到被拒消息 + 切回原模型 + 原文填回输入框，成功时内核已清 notice）、X。
-  // 不做官方的「Don't switch models automatically」（bridge 无该设置项）。
-  import { refusalBand } from '../../lib/state.svelte.js';
+  // 不做官方的「Don't switch models automatically」（bridge 聊天轮一律先暂停问人，见下）。
+  //
+  // 同一槽位的另一种形态：Paused 卡（claude.ai 的 Paused 卡 / 官方 /code 的 refusal_fallback_prompt 对话框 aR）。
+  // 聊天轮不再自动切模型：被拒时本轮停在原地（state.refusalBand.prompt），卡上二选一——
+  // 「Edit prompt and retry with {原模型}」「Switch to {回退模型}」，X = 不选（按经典拒答收尾）。
+  // 文案是 CLI 同款（O2e：flagged 句 + Opus 5.5 专属的暂停引导句 + Learn more + Details），官方桌面端的
+  // 对应文案是服务端下发的 secret id、bundle 里没有原文。有 prompt 时横条让位。
+  import { refusalBand, session } from '../../lib/state.svelte.js';
   import { pushBackLayer } from '../../lib/nav.js';
-  import { modelLabel } from '../../lib/toolVerbs.js';
+  import { modelLabel, learnMoreUrl } from '../../lib/toolVerbs.js';
   import { glyph } from '../../lib/claudeIcons.js';
+  import { onMdClick } from '../../lib/linkNav.js';
 
   let { sessionId = null } = $props();
 
+  // —— Paused 卡 ——（只在这一轮还活着时显示：切到别的会话再回来，attach 重放会把仍在等的卡重建）
+  const p = $derived(refusalBand.prompt);
+  const paused = $derived(!!p && session.busy && (p.sessionId || '') === (sessionId || ''));
+  // 按钮上只要模型名：剥掉 [1m]（否则读成「Fable 5.1 1M」）
+  const bareId = (id) => String(id || '').replace(/\[1m\]$/i, '');
+  const pFrom = $derived(p ? (modelLabel(bareId(p.from)) || bareId(p.from) || 'This model') : '');
+  const pTo = $derived(p ? (modelLabel(bareId(p.to)) || bareId(p.to) || 'the fallback model') : '');
+  // CLI Hxe/Bv/jj：Opus 5.5 在 cyber/bio/frontier_llm 类别下有专属说明 + 「Edit and retry, or continue with X.」；
+  // 其余模型 cyber/bio 用「intentionally broad safeguards」句，别的类别用「safe, normal conversations」句。
+  const OPUS55_TAIL = { cyber: ', which can sometimes flag non-cybersecurity work', bio: ', which can sometimes flag biology-research-adjacent work', frontier_llm: '' };
+  const pCopy = $derived.by(() => {
+    if (!p) return { body: '', recovery: '' };
+    const cat = String(p.category || '').toLowerCase();
+    const bare = String(p.from || '').toLowerCase().replace(/\[[^\]]+\]$/, '');
+    if (/^claude-opus-5-5(-\d{8})?$/.test(bare) && Object.hasOwn(OPUS55_TAIL, cat)) {
+      return {
+        body: `${pFrom}'s safeguards flagged this session. You may be seeing this for the first time on an Opus model: ${pFrom} is more capable and has stronger safeguards as a result${OPUS55_TAIL[cat]}. We're improving these safeguards to reduce the amount of incorrectly flagged messages.`,
+        recovery: `Edit and retry, or continue with ${pTo}.`,
+      };
+    }
+    if (cat === 'cyber' || cat === 'bio') {
+      return { body: `${pFrom}'s safeguards flagged this message. Our intentionally broad safeguards allow us to deliver more capabilities faster, but can sometimes flag legitimate ${cat === 'cyber' ? 'coding and cybersecurity' : 'biology'} tasks.`, recovery: '' };
+    }
+    return { body: `${pFrom}'s safeguards flagged this message. This sometimes happens with safe, normal conversations.`, recovery: '' };
+  });
+  const pLearn = $derived(p ? learnMoreUrl(p.from, p.category) : '');
+  const pBusy = $derived(!!p && !!p.busy);
+
+  async function choose(choice) {
+    if (!p || p.busy) return;
+    try {
+      const m = await import('../../lib/refusalRetry.js').catch(() => null);
+      if (m) await m.answerRefusalPrompt(p, choice);
+    } catch {}
+  }
+
   const n = $derived(refusalBand.notice);
-  const show = $derived(!!n && !n.dismissed && (n.sessionId || '') === (sessionId || ''));
+  const show = $derived(!paused && !!n && !n.dismissed && (n.sessionId || '') === (sessionId || ''));
   const to = $derived(n ? (modelLabel(n.to) || n.to || 'the fallback model') : '');
   const from = $derived(n ? (modelLabel(n.from) || n.from || 'This model') : '');
   // 弹层正文：CLI 给的解释文优先；否则复用通知文本里「Switched to」之前的部分——CLI 已按类别选好句子
@@ -71,7 +114,27 @@
   function dismiss() { why = false; if (n) n.dismissed = true; }
 </script>
 
-{#if show}
+{#if paused}
+  <!-- 点击只做链接分流（linkNav：桌面壳外链交系统浏览器） -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="pz" role="alertdialog" aria-labelledby="pz-title" aria-describedby="pz-body" tabindex="-1" onclick={onMdClick}>
+    <div class="pz-head">
+      <span class="pz-title" id="pz-title">Session paused</span>
+      <button type="button" class="band-x" aria-label="Dismiss" title="Dismiss" disabled={pBusy} onmousedown={(e) => e.preventDefault()} onclick={() => choose('cancelled')}>
+        <span class="gi" aria-hidden="true">{glyph('X')}</span>
+      </button>
+    </div>
+    <div class="pz-body sel-text" id="pz-body">
+      {pCopy.body}{#if pCopy.recovery}{' '}{pCopy.recovery}{/if}
+      {#if pLearn}{' '}<a href={pLearn} target="_blank" rel="noopener noreferrer">Learn more</a>{/if}
+      {#if p.category}<span class="why-d">Details: <code>[{p.category}]</code></span>{/if}
+    </div>
+    <div class="pz-actions">
+      <button type="button" class="pz-btn" disabled={pBusy} onclick={() => choose('edit_prompt')}>Edit prompt and retry with {pFrom}</button>
+      <button type="button" class="pz-btn" disabled={pBusy} onclick={() => choose('retry_fallback')}>Switch to {pTo}</button>
+    </div>
+  </div>
+{:else if show}
   <div class="band" role="status" aria-live="polite" bind:this={root}>
     <div class="band-main">
       <span class="band-msg">Switched to {to}</span>
@@ -123,4 +186,28 @@
   .why-d { display: block; padding-top: 4px; font-size: 14px; line-height: 20px; color: var(--muted); }
   .why-d code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; word-break: break-all; }
   @media (prefers-reduced-motion: reduce) { .why-pop { animation: none; } }
+
+  /* Paused 卡（官方 epitaxy-approval-card：r10 / p12 / 行距 12 / 升起动效；底与阴影借问答卡的 --q-card / --q-shadow） */
+  .pz { display: flex; flex-direction: column; gap: 12px; width: 100%; box-sizing: border-box; padding: 12px;
+    border-radius: 10px; background: var(--q-card, var(--card)); box-shadow: var(--q-shadow, 0 0 0 1px var(--divider), 0 4px 24px rgba(0,0,0,.08));
+    font-size: 14px; line-height: 20px; color: var(--text); container-type: inline-size; outline: none;
+    transform-origin: top; animation: pzIn .22s cubic-bezier(.215,.61,.355,1); }
+  @keyframes pzIn { from { opacity: .75; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: none; } }
+  .pz-head { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+  .pz-title { flex: 1; min-width: 0; font-weight: 580; color: var(--text); }
+  .pz-body { color: var(--serif); overflow-wrap: anywhere; text-wrap: pretty; }
+  .pz-body a { color: inherit; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }
+  @media (hover: hover) { .pz-body a:hover { color: var(--text); } }
+  .pz-body .why-d { color: var(--serif); }
+  /* 两颗 secondary 按钮靠右；窄到 420 以下竖排撑满（官方 @container width<=420） */
+  .pz-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px 6px; }
+  .pz-btn { min-width: 0; min-height: 32px; padding: 6px 12px; border-radius: 9px; font-size: 14px; line-height: 20px; font-weight: 500;
+    color: var(--text); border: 1px solid var(--q-skipborder, var(--divider)); text-align: center; overflow-wrap: anywhere;
+    transition: background-color 60ms ease-out, transform 60ms ease-out; }
+  @media (hover: hover) { .pz-btn:hover:not(:disabled) { background: var(--hover); } }
+  .pz-btn:active:not(:disabled) { background: var(--hover-strong); transform: scale(.985); }
+  .pz-btn:disabled { opacity: .5; cursor: default; }
+  .band-x:disabled { opacity: .5; }
+  @container (width <= 420px) { .pz-actions { flex-direction: column; align-items: stretch; } }
+  @media (prefers-reduced-motion: reduce) { .pz { animation: none; } }
 </style>

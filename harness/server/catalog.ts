@@ -77,8 +77,8 @@ export interface ProviderSpec {
   defaultModel: string;
   models: ModelSpec[];
   // R12：一次请求里历史图片的额度（张数、base64 字节）。超了才按批退役最老的工具图（agent/media-budget.ts）；
-  // 不配走默认 20 张 / 24 MB。
-  media?: { maxImages?: number; maxBytes?: number };
+  // 不配走默认 20 张 / 24 MB。keepRecent = 最近几张工具图永不退（默认 3）。
+  media?: { maxImages?: number; maxBytes?: number; keepRecent?: number };
   // 只有自定义服务有：卡片副标题显示的主机名
   custom?: { host: string };
 }
@@ -187,6 +187,10 @@ export const CATALOG: ProviderSpec[] = [
     // and Chat Completions rejects reasoning_effort=max. Pro/Flash verified live
     // with native image/video/audio and streaming tool continuations. UltraSpeed
     // uses the same documented schema; the Token Plan CN endpoint rejects it.
+    // 多图认不准最新那张（2026-09-30 实测）：会话里攒到 5 张以上工具图时，MiMo 会把新截图认成历史里某张旧图
+    // （连续 5 次把正常页面报成早先那张 ERR_FILE_NOT_FOUND），与服务端缓存无关（打破缓存照错）。按原会话回放：
+    // 只留最近 2 张全对，3 张在后段仍错。所以只让最近 2 张工具图入模，更早的退成一句文字（要看就重读）。
+    media: { maxImages: 2, keepRecent: 2 },
     models: [
       { id: "mimo-v2.6-pro", label: "MiMo V2.6 Pro", efforts: ["off", "high"], effortLabels: { off: "关闭", high: "开启" }, image: true, video: true, ctx: 1_000_000, maxOut: 131_072, audio: true, note: "旗舰 · 图/视频/音频 · 1M ctx" },
       { id: "mimo-v2.6-pro-ultraspeed", label: "MiMo V2.6 Pro UltraSpeed", efforts: ["off", "high"], effortLabels: { off: "关闭", high: "开启" }, image: true, video: true, audio: true, ctx: 1_000_000, maxOut: 131_072, note: "极速 · 需单独 API 权限 · 10× 单价" },
@@ -241,9 +245,13 @@ export function providerSpec(p: ProviderId): ProviderSpec {
 }
 
 // R12：这家 provider 一次请求里历史图片的额度（目录没配的项取默认）。
-export function providerMediaBudget(p: ProviderId): { maxImages: number; maxBytes: number } {
+export function providerMediaBudget(p: ProviderId): { maxImages: number; maxBytes: number; keepRecent?: number } {
   const media = CATALOG.find((s) => s.id === p)?.media;
-  return { maxImages: media?.maxImages ?? DEFAULT_MEDIA_BUDGET.maxImages, maxBytes: media?.maxBytes ?? DEFAULT_MEDIA_BUDGET.maxBytes };
+  return {
+    maxImages: media?.maxImages ?? DEFAULT_MEDIA_BUDGET.maxImages,
+    maxBytes: media?.maxBytes ?? DEFAULT_MEDIA_BUDGET.maxBytes,
+    ...(media?.keepRecent !== undefined ? { keepRecent: media.keepRecent } : {}),
+  };
 }
 
 export function modelSpec(p: ProviderId, modelId: string): ModelSpec | undefined {

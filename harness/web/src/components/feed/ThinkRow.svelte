@@ -16,14 +16,16 @@
 
   let {
     item,
+    compact = false,
     up = false,
     down = false,
-  }: { item: { text: string; open: boolean; live: boolean }; up?: boolean; down?: boolean } = $props();
+  }: { item: { text: string; open: boolean; live: boolean }; compact?: boolean; up?: boolean; down?: boolean } = $props();
 
   const thinking = $derived(item.live && pane.chat.running);
-  // 折叠时的预览：去掉首尾空白后最后一行的末 120 字；截断处挪到下一个标点之后、前面补省略号，不从半句话或标点起头
+  // 折叠时的预览：去掉首尾空白后最后一行的末 120 字；截断处挪到下一个标点之后、前面补省略号，不从半句话或标点起头。
+  // 精简模式（compact）下想完了就只留「思考过程」四个字，正在想时照旧露最后一行（那就是「此刻在想什么」）
   const peek = $derived.by(() => {
-    if (item.open || !item.text) return "";
+    if (item.open || !item.text || (compact && !thinking)) return "";
     const body = item.text.trim();
     let s = body.slice(body.lastIndexOf("\n") + 1);
     if (s.length > 120) {

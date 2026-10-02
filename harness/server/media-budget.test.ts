@@ -33,6 +33,17 @@ async function dims(data: string): Promise<[number, number]> {
   return [m.width ?? 0, m.height ?? 0];
 }
 
+test("MiMo 只让最近 2 张工具图入模（多了会把新截图认成旧图），用户上传的照旧不退", () => {
+  const budget = providerMediaBudget("mimo");
+  assert.deepEqual(budget, { maxImages: 2, maxBytes: 24_000_000, keepRecent: 2 });
+  assert.deepEqual(planRetirement(items(2, true), budget), [], "两张以内不动");
+  const eight = items(8, true);
+  assert.deepEqual(names(planRetirement(eight, budget)), eight.slice(0, 6).map((i) => i.block.name), "8 张退到只剩最近 2 张");
+  const mixed = [...items(2, false), ...items(3, true)];
+  assert.deepEqual(names(planRetirement(mixed, budget)), ["tool0"], "用户上传的只占额度、不退；工具图保底最近 2 张");
+  assert.equal(providerMediaBudget("kimi").keepRecent, undefined, "别家不受影响，仍按默认保底 3 张");
+});
+
 test("R12 退役阶梯：超额才退，一批 8 张、从最老的工具图起，最近 3 张不退；用户上传的只占额度、永不退", () => {
   const budget = { maxImages: 20, maxBytes: 1e9 };
   assert.deepEqual(planRetirement(items(20, true), budget), [], "没超额就一张不动");

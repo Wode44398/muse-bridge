@@ -199,7 +199,7 @@
     "subagent-handoff.test.ts": 3,
     "subagent-mode.test.ts": 3,
     "subagent.test.ts": 10,
-    "tasks-view.test.ts": 6,
+    "tasks-view.test.ts": 9,
     "tenant.test.ts": 8,
     "test-global.test.ts": 4,
     "test-harness.test.ts": 6,

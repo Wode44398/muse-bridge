@@ -1,6 +1,7 @@
 <script lang="ts">
   // 工作区「任务」：前台会话的子 agent / 工作流 / 后台命令，分「进行中 / 已完成」两节，列表式——一条一行：
-  // 状态记号 + 名称 + 用时，第二行是元信息。点开进详情：子 agent → 压上转录视图；工作流 → 就地展开阶段与 agent 表；
+  // 状态记号 + 名称 + 用时，第二行是元信息。点开进详情：子 agent → 压上它的面板（AgentPanel：概览 / 提示词 / 过程 / 结果；
+  // 顶条右端可以在同一批并行的子 agent、或同一个工作流的 agent 之间上一个 / 下一个）；工作流 → 就地展开阶段与 agent 表；
   // 后台命令 → 就地展开尾行输出。从对话里的卡片点进来会定位到那一条（滚到中间 + 闪一下，1.7 秒）。
   //
   // 数据源就是前台会话时间线上的 Agent / Workflow 工具行（+ 服务端的 job 表），没有第二份任务表。
@@ -9,7 +10,7 @@
   import { tick, untrack } from "svelte";
   import { taskView as view } from "./tasks-view.svelte.ts";
   import { app, backToTaskList, openTaskAgent, type AgentRun, type ToolItem } from "../../lib/state.svelte.ts";
-  import { collectTasks, splitTasks, toolTaskStatus, toolTaskTitle, type TaskEntry } from "../../lib/tasks.ts";
+  import { agentBatchOf, collectTasks, deriveWorkflow, splitTasks, toolTaskStatus, toolTaskTitle, type TaskEntry } from "../../lib/tasks.ts";
   import { currentJobs, refreshJobs } from "../../lib/jobs.svelte.ts";
   import { haptic } from "../../lib/touch.ts";
   import { t } from "../../lib/i18n.ts";
@@ -21,7 +22,7 @@
   import TaskRow from "./TaskRow.svelte";
   import WorkflowDetail from "./WorkflowDetail.svelte";
   import JobRow from "./JobRow.svelte";
-  import AgentTranscript from "./AgentTranscript.svelte";
+  import AgentPanel from "./AgentPanel.svelte";
 
   const coarse = matchMedia("(pointer: coarse)").matches; // 触屏：顶条按钮放大到 40
   const tasks = $derived(collectTasks(app.chat.timeline));
@@ -68,6 +69,29 @@
   $effect(() => {
     if (app.tasksAgent && !av) backToTaskList();
   });
+  // 同伴：工作流里的 agent（阶段顺序，同点阵）/ 同一批并行派出去的子 agent（时间线顺序）。多于一个才有「上一个 / 下一个」。
+  const sib = $derived.by(() => {
+    if (!av) return null;
+    const toolId = av.tool.id;
+    const list = av.tool.workflow
+      ? deriveWorkflow(av.tool.workflow).phases.flatMap((p) => p.agents).map((r) => ({ toolId, agentId: r.id }))
+      : (agentBatchOf(app.chat.timeline, toolId) as ToolItem[]).filter((x) => x.agent).map((x) => ({ toolId: x.id, agentId: x.agent!.id }));
+    const at = list.findIndex((x) => x.agentId === av.run.id);
+    return list.length > 1 && at >= 0 ? { list, at } : null;
+  });
+  function step(by: number) {
+    const next = sib?.list[sib.at + by];
+    if (!next) return;
+    haptic("light");
+    openTaskAgent(next.toolId, next.agentId);
+  }
+  // 换了一个 agent：面板回到顶上（只认 id——av 每来一个事件都重算，对象会变）
+  let panelEl: HTMLElement | undefined = $state();
+  const avId = $derived(av?.run.id ?? "");
+  $effect(() => {
+    void avId;
+    if (panelEl) panelEl.scrollTop = 0;
+  });
 
   // —— 定位（官方 openTasksPaneAtTask）：滚到中间 + 闪一下 ——
   // 只依赖 focus 本身与「是否压着转录」：任务表每个 agent 事件都会重算，读它要 untrack，否则每来一帧都重滚重闪。
@@ -109,13 +133,21 @@
     <div class="bar back">
       <IconButton icon="arrowL" label={t("返回任务列表")} size={coarse ? 40 : 32} onclick={backToTaskList} />
       <span class="title" title={av.run.label}>{av.run.label || toolTaskTitle(av.tool)}</span>
-      <span class="tag">{av.inWorkflow ? t("工作流 agent") : t("子 agent")}</span>
+      {#if sib}
+        <span class="nav">
+          <IconButton icon="chevronL" label={t("上一个 agent")} size={coarse ? 36 : 28} disabled={sib.at === 0} onclick={() => step(-1)} />
+          <span class="pos">{sib.at + 1}/{sib.list.length}</span>
+          <IconButton icon="chevronR" label={t("下一个 agent")} size={coarse ? 36 : 28} disabled={sib.at === sib.list.length - 1} onclick={() => step(1)} />
+        </span>
+      {/if}
     </div>
-    {#key av.run.id}
-      <div class="scroll tr" in:fade|global={{ duration: 180 }}>
-        <AgentTranscript run={av.run} tool={av.tool} running={av.running} />
-      </div>
-    {/key}
+    <div class="scroll tr" bind:this={panelEl}>
+      {#key av.run.id}
+        <div in:fade|global={{ duration: 180 }}>
+          <AgentPanel run={av.run} tool={av.tool} running={av.running} scroller={panelEl} />
+        </div>
+      {/key}
+    </div>
   {:else if tasks.length || jobList.length}
     <div class="bar">
       <span class="count">{t("{running} 进行中 · {done} 已完成", { running: nRunning, done: nFinished })}</span>
@@ -195,13 +227,19 @@
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  .tag {
+  .nav {
     flex: none;
-    padding: 2px 9px;
-    border-radius: var(--r-pill);
-    background: var(--surface2);
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .pos {
+    min-width: 30px;
+    text-align: center;
+    font-family: var(--font-mono);
     font-size: var(--fs-xs);
-    color: var(--text2);
+    color: var(--text3);
+    font-variant-numeric: tabular-nums;
   }
   .count {
     font-family: var(--font-mono);
@@ -228,7 +266,7 @@
     display: none;
   }
   .tr {
-    padding: 8px 16px 28px;
+    padding: 6px 16px 28px;
   }
   .empty {
     flex: 1;

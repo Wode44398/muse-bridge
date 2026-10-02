@@ -37,10 +37,10 @@ function makeGroup(key, ctx) {
 
 function dirsFor(ctx) {
   const out = [];
-  let projects = [];
-  try { projects = claudeProjects.listProjects(ctx.claudeProjects, ctx); } catch { return out; }
-  for (const p of projects) {
-    try { out.push(sessionsDir(p.path, ctx.configDir)); } catch {}
+  let scopes = [];
+  try { scopes = claudeProjects.sessionScopes(ctx.claudeProjects, ctx); } catch { return out; }   // 含 worktree 会话目录
+  for (const s of scopes) {
+    try { out.push(sessionsDir(s.path, ctx.configDir)); } catch {}
   }
   return out;
 }
