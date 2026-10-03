@@ -2,18 +2,23 @@
   // HTML 直接渲染查看器：把文件内容塞进一个 sandbox iframe 的 srcdoc（无 allow-same-origin ⇒
   // 脚本跑在不透明源、碰不到 bridge cookie/接口）。既能真渲染（自包含页/PPT 翻页、键盘、全屏都在），
   // 又安全隔离。文本已读（本地）就直接用，否则 fetch 原始字节（云端 /api/file，分享模式带 ?st）。
+  // 塞进去之前经 prepareHtml：补存储垫片 + 内联同目录的 js/css/图片，否则不透明源里脚本跑不起来。
   import { onMount } from 'svelte';
   import { t, tr } from '../../lib/i18n.js';
+  import { prepareHtml } from '../../lib/htmlInline.js';
   const { item, onClose } = $props();
-  let html = $state(item.text ?? null);
+  let html = $state(null);
   let err = $state('');
-  let loading = $state(item.text == null);
+  let loading = $state(true);
   onMount(async () => {
-    if (html != null) return;
     try {
-      const r = await fetch(item.url, { credentials: 'same-origin' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      html = await r.text();
+      let src = item.text;
+      if (src == null) {
+        const r = await fetch(item.url, { credentials: 'same-origin' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        src = await r.text();
+      }
+      try { html = await prepareHtml(src, item.url); } catch { html = src; }
     } catch (e) { err = String(e?.message || e); }
     finally { loading = false; }
   });
