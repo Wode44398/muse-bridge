@@ -17,7 +17,8 @@
   import { getCachedSessions } from '../lib/cache.js';
   import { titleFor } from '../lib/library.svelte.js';
   import { relTime } from '../lib/format.js';
-  import { entriesFromDrop, walkEntries, groupByRoot, skipNote, pool } from '../lib/dirDrop.js';
+  import { entriesFromDrop, walkEntries, groupByRoot, skipNote } from '../lib/dirDrop.js';
+  import { uploads, startUpload, startTreeUpload, cancelUpload as cancelUp, retryUpload, clearFinishedUploads, onUploaded } from '../lib/uploads.svelte.js';
   import { reportUi, onAgentFs, onAgentGoto } from '../lib/uiReport.js';
   import { drag, dropZone, beginDrag, addToDrag, isDragging, dragScrollGuard, HOLD_MS, MOVE_TOL } from '../lib/dragdrop.svelte.js';
   import { folderDropZone, wsFilePayload } from '../lib/fileDrag.js';
@@ -100,7 +101,7 @@
 
   let aiPick = $state(null);         // 「发送给 AI」要发的那个 item
   let aiChat = $state(null);         // 「选择对话」层：{ sessions, loading, q }
-  let tasks = $state([]);          // 上传任务（传输面板）
+  let tasks = $state([]);          // 分享页的跟踪下载（传输面板；上传行在 lib/uploads.svelte.js 引擎里）
   let transferOpen = $state(false);
   let toastMsg = $state('');
   let fileInput = $state();
@@ -122,14 +123,16 @@
   const showFiles = $derived(q ? filterFilesByName(files, q) : files);
   const isEmpty = $derived(!loading && !showFolders.length && !showFiles.length);
 
-  const activeTasks = $derived(tasks.filter((tk) => tk.status === 'up'));
+  // 传输面板 = 上传（共享引擎 uploads）+ 分享页的跟踪下载，新的在上。
+  const xfers = $derived([...uploads.list, ...uploads.native, ...tasks].sort((a, b) => (b.at || 0) - (a.at || 0)));
+  const activeTasks = $derived(xfers.filter((tk) => tk.status === 'up'));
   const ringPct = $derived.by(() => {
-    const a = tasks.filter((tk) => tk.status === 'up');
-    if (!a.length) return tasks.length && tasks.every((tk) => tk.status === 'done') ? 1 : 0;
+    const a = xfers.filter((tk) => tk.status === 'up');
+    if (!a.length) return xfers.length && xfers.every((tk) => tk.status === 'done') ? 1 : 0;
     const tot = a.reduce((s, tk) => s + tk.total, 0) || 1;
     return a.reduce((s, tk) => s + tk.sent, 0) / tot;
   });
-  const allDone = $derived(tasks.length > 0 && tasks.every((tk) => tk.status !== 'up'));
+  const allDone = $derived(xfers.length > 0 && xfers.every((tk) => tk.status !== 'up'));
 
   // —— 加载 / 导航（/api/files）——
   // 乐观导航：进目录/返回/面包屑点下去**当帧就切 path**——列表缓存命中立即出上次内容、
@@ -668,42 +671,13 @@
     for (const f of list) uploadOne(f);
   }
   let uid = 0;
-  async function uploadOne(file, intoDir) {
-    const id = 'u' + Date.now() + (uid++);
-    const dir = intoDir ?? path;   // 拖到某个文件夹上时传进那个文件夹，否则当前目录
-    // bps=传输速率（每片完成用 片字节/耗时 做 EMA 平滑）；ctrl=取消通道（abort 掐断在途分块请求）。
-    const task = { id, name: file.name, total: file.size || 1, sent: 0, status: 'up', kind: kindOf(file.name), bps: 0, lastT: 0, ctrl: new AbortController() };
-    tasks = [task, ...tasks];
-    const CHUNK = 1024 * 1024;
-    const idr = 'up' + Math.random().toString(36).slice(2, 12);
-    try {
-      task.lastT = performance.now();
-      for (let off = 0; off < file.size || off === 0; off += CHUNK) {
-        const chunk = file.slice(off, off + CHUNK);
-        const last = off + CHUNK >= file.size ? 1 : 0;
-        const url = scoped(`/api/files/upload?path=${encodeURIComponent(dir)}&id=${idr}&last=${last}&name=${encodeURIComponent(file.name)}`);
-        await api.post(url, chunk, { signal: task.ctrl.signal });
-        const now = performance.now(), dt = (now - task.lastT) / 1000;
-        const sent = Math.min(file.size, off + CHUNK);
-        if (dt > 0) { const inst = (sent - task.sent) / dt; task.bps = task.bps ? task.bps * 0.6 + inst * 0.4 : inst; }
-        task.lastT = now; task.sent = sent;
-        tasks = [...tasks];   // 触发响应
-        if (last) break;
-      }
-      task.status = 'done'; tasks = [...tasks];
-      if (dir === path) await load(path);
-      toast(t('已上传 {name}', { name: file.name }));
-      setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 4000);
-    } catch (e) {
-      if (task.status === 'cancelled' || e?.name === 'AbortError') {   // 用户取消：不算错误，短暂显示后自动清行
-        tasks = [...tasks];
-        setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 2500);
-        return;
-      }
-      task.status = 'error'; tasks = [...tasks];
-      toast(t('上传失败：{reason}', { reason: tr(e.body?.error) || file.name }));
-    }
+  function uploadOne(file, intoDir) {
+    startUpload(file, { dir: intoDir ?? path, ws: workspaceRoot });   // 拖到某个文件夹上时传进那个文件夹，否则当前目录
   }
+  // 有文件传进了当前看着的目录 → 刷新列表（上传可能是在别的目录时发起、现在才完成）
+  $effect(() => onUploaded(({ ws: w, dirs }) => {
+    if ((w || '') === (workspaceRoot || '') && dirs.includes(path)) load(path);
+  }));
   // —— 桌面拖拽上传（网盘式：拖在某个文件夹上就传进那个文件夹，拖在空白处传进当前目录）——
   // 只读分享空间不能写，不接。
   // dropOn：null=没在拖 / ''=当前目录 / '<文件夹名>'=某个文件夹（用来点亮目标）。
@@ -748,48 +722,19 @@
   }
 
   // 整个文件夹作为【一条】传输任务（几百个文件铺成几百行没法看）：进度按累计字节算。
-  async function uploadTree(rootName, items, baseDir) {
-    const id = 'u' + Date.now() + (uid++);
-    const total = items.reduce((a, x) => a + (x.file.size || 0), 0) || 1;
-    const task = { id, name: rootName, total, sent: 0, status: 'up', kind: 'dir', bps: 0, lastT: performance.now(), ctrl: new AbortController() };
-    tasks = [task, ...tasks];
-    try {
-      await pool(items, 4, async (it) => {
-        const sub = it.rel.split('/').slice(0, -1).join('/');       // rel 含顶层文件夹名
-        const dir = joinPath(baseDir, sub);
-        const idr = 'up' + Math.random().toString(36).slice(2, 12);
-        // mk=1 让服务端按需建子目录；整文件一次发（upload-chunk 侧是流式落盘，不吃内存）。
-        const url = scoped(`/api/files/upload?path=${encodeURIComponent(dir)}&id=${idr}&last=1&mk=1&name=${encodeURIComponent(it.file.name)}`);
-        await api.post(url, it.file, { signal: task.ctrl.signal });
-        const now = performance.now(), dt = (now - task.lastT) / 1000;
-        if (dt > 0) { const inst = (it.file.size || 0) / dt; task.bps = task.bps ? task.bps * 0.6 + inst * 0.4 : inst; }
-        task.lastT = now;
-        task.sent = Math.min(total, task.sent + (it.file.size || 0));
-        tasks = [...tasks];
-      });
-      task.status = 'done'; task.sent = total; tasks = [...tasks];
-      await load(path);
-      toast(t('已上传 {name}（{n} 个文件）', { name: rootName, n: items.length }));
-      setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 4000);
-    } catch (e) {
-      if (task.status === 'cancelled' || e?.name === 'AbortError') {
-        tasks = [...tasks];
-        setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 2500);
-        return;
-      }
-      task.status = 'error'; tasks = [...tasks];
-      toast(t('上传失败：{reason}', { reason: tr(e.body?.error) || rootName }));
-    }
+  function uploadTree(rootName, items, baseDir) {
+    const list = items.map((it) => ({ file: it.file, dir: joinPath(baseDir, it.rel.split('/').slice(0, -1).join('/')) }));   // rel 含顶层文件夹名
+    startTreeUpload(rootName, list, { ws: workspaceRoot, baseDir });
   }
 
-  // 取消在途上传：标记 + abort（在途分块立断，片间空隙则下一片立断）。服务端残留的隐藏
-  // .part-* 由下次上传首片的 sweepStaleParts 清理，不用专门收拾。
-  function cancelUpload(task) {
+  // 取消在途任务：上传交给引擎（掐断在途请求 + 让服务端删半截文件）；分享页的跟踪下载在这里掐。
+  function cancelTask(task) {
     if (task.status !== 'up') return;
+    if (task.up) { cancelUp(task.id); toast(t('已取消上传 {name}', { name: task.name })); return; }
     task.status = 'cancelled';
     try { task.ctrl.abort(); } catch {}
     tasks = [...tasks];
-    toast(task.dl ? t('已取消下载 {name}', { name: task.name }) : t('已取消上传 {name}', { name: task.name }));
+    toast(t('已取消下载 {name}', { name: task.name }));
   }
 
   // —— 预览 ——
@@ -845,7 +790,7 @@
   async function downloadTracked(r) {
     const name = r.split('/').pop() || 'download';
     const id = 'd' + Date.now() + (uid++);
-    tasks = [{ id, name, total: 0, sent: 0, status: 'up', kind: kindOf(name), bps: 0, lastT: 0, ctrl: new AbortController(), dl: true }, ...tasks];
+    tasks = [{ id, name, total: 0, sent: 0, status: 'up', kind: kindOf(name), bps: 0, lastT: 0, ctrl: new AbortController(), dl: true, at: Date.now() }, ...tasks];
     // 【Svelte5 深代理坑】必须拿数组元素的代理来改——push 进 $state 后改裸字面量，
     // 代理 signal 不更新，UI 永远 0%（同上传 0% 卡死的老病，先例判法照抄）。
     const tk = tasks[0];
@@ -960,7 +905,19 @@
   const infoLocation = $derived(infoItem ? (rootLabel + (infoItem.dir ? ' / ' + infoItem.dir.split('/').join(' / ') : '')) : '');
   // 传输行右侧文案：真速率（EMA）+ 进度百分比；首片完成前还没有速率样本，先只给百分比。
   // 总大小未知（下载响应缺 content-length）时退化显示已传字节，别出 NaN%。
-  const fmtSpeed = (tk) => (tk.bps > 0 ? fmtSize(tk.bps) + '/s · ' : '') + (tk.total > 0 ? Math.min(100, Math.round((tk.sent / tk.total) * 100)) + '%' : fmtSize(tk.sent));
+  // 传输行：第一行右侧＝百分比或终态；第二行＝「已传 / 总大小 · 实时速度」（排队/重连时换成说明，失败给原因）。
+  // 总大小未知（下载响应缺 content-length）时只显示已传字节，别出 NaN%。
+  const pctOf = (tk) => (tk.total > 0 ? Math.min(100, Math.floor((tk.sent / tk.total) * 100)) : 0);
+  const xferState = (tk) => tk.status === 'done' ? t('完成') : tk.status === 'error' ? t('失败') : tk.status === 'cancelled' ? t('已取消')
+    : tk.total > 0 ? pctOf(tk) + '%' : '';
+  function xferDetail(tk) {
+    if (tk.status === 'error') return tk.error || '';
+    if (tk.status === 'done' || tk.status === 'cancelled') return tk.total > 0 ? fmtSize(tk.total) : '';
+    if (tk.note === 'queued') return t('排队中…');
+    const amount = tk.total > 0 ? fmtSize(tk.sent) + ' / ' + fmtSize(tk.total) : fmtSize(tk.sent);
+    if (tk.note === 'retry') return amount + ' · ' + t('网络不稳，重连中…');
+    return amount + (tk.bps > 0 ? ' · ' + fmtSize(tk.bps) + '/s' : '');
+  }
 
   const GLYPH = {
     img: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.4"/><circle cx="9" cy="9.6" r="1.7"/><path d="m6 17 4.2-4.4 3 3 2.4-2.5 2.9 3.1"/>',
@@ -1253,21 +1210,24 @@
   {#if transferOpen}
     <button class="tp-scrim" aria-label={t('关闭')} onclick={() => (transferOpen = false)}></button>
     <div class="transferpanel glass-strong">
-      <div class="tp-head"><h3>{t('传输')}</h3>{#if tasks.length}<button onclick={() => (tasks = tasks.filter((x) => x.status === 'up'))}>{t('清除已完成')}</button>{/if}</div>
-      {#if !tasks.length}
+      <div class="tp-head"><h3>{t('传输')}</h3>{#if xfers.some((x) => x.status !== 'up')}<button onclick={() => { tasks = tasks.filter((x) => x.status === 'up'); clearFinishedUploads(); }}>{t('清除已完成')}</button>{/if}</div>
+      {#if !xfers.length}
         <div class="tp-empty">{t('暂无传输任务')}</div>
       {:else}
-        {#each tasks as task (task.id)}
+        {#each xfers as task (task.id)}
           <div class="task">
-            <span class="ticon" style="background:{task.status === 'error' ? '#ff383c' : task.status === 'done' ? '#34c759' : task.status === 'cancelled' ? '#aeaeb2' : iconColor(task.name)}">{@html fileGlyph(task.kind)}</span>
+            <span class="ticon" style="background:{task.status === 'error' ? '#ff383c' : task.status === 'done' ? '#34c759' : task.status === 'cancelled' ? '#aeaeb2' : iconColor(task.name)}">{@html fileGlyph(task.kind || kindOf(task.name))}</span>
             <span class="tmeta">
-              <span class="r1"><span class="nm">{task.name}</span><span class="spd">{task.status === 'done' ? t('完成') : task.status === 'error' ? t('失败') : task.status === 'cancelled' ? t('已取消') : fmtSpeed(task)}</span></span>
-              <span class="track"><span class="fillb" class:up={task.status !== 'error' && task.status !== 'cancelled'} class:off={task.status === 'cancelled'} style="width:{task.total > 0 ? Math.round((task.sent / task.total) * 100) : 0}%"></span></span>
+              <span class="r1"><span class="nm">{task.name}</span><span class="spd" class:err={task.status === 'error'}>{xferState(task)}</span></span>
+              <span class="track"><span class="fillb" class:up={task.status !== 'error' && task.status !== 'cancelled'} class:off={task.status === 'cancelled'} style="width:{task.status === 'done' ? 100 : pctOf(task)}%"></span></span>
+              <span class="r2" class:err={task.status === 'error'}>{xferDetail(task) || ' '}</span>
             </span>
             {#if task.status === 'up'}
-              <button class="tp-x" aria-label={t('取消上传')} onclick={() => cancelUpload(task)}>
+              <button class="tp-x" aria-label={task.up ? t('取消上传') : t('取消下载')} onclick={() => cancelTask(task)}>
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
               </button>
+            {:else if task.up && task.status === 'error' && task.retry}
+              <button class="tp-open" onclick={() => retryUpload(task.id)}>{t('重试')}</button>
             {/if}
           </div>
         {/each}
@@ -1671,9 +1631,10 @@
   .bottomwrap.searching .searchrow { opacity: 1; pointer-events: auto; transform: none; }
   .closebtn { flex: 0 0 48px; width: 48px; height: 48px; border-radius: 50%; border: none; display: flex; align-items: center; justify-content: center; color: var(--label); }
   .closebtn svg { width: 17px; height: 17px; }
-  .searchfield { flex: 1; height: 48px; border-radius: 24px; display: flex; align-items: center; gap: 8px; padding: 0 16px; }
+  /* min-width:0 + 输入框 width:0：否则输入框按固有宽度撑出最小宽度（安卓系统字体下更宽），窄屏手机一聚焦搜索框就顶出屏幕右缘 */
+  .searchfield { flex: 1; min-width: 0; height: 48px; border-radius: 24px; display: flex; align-items: center; gap: 8px; padding: 0 16px; }
   .searchfield svg { flex: 0 0 18px; width: 18px; height: 18px; color: var(--sub); }
-  .searchfield input { flex: 1; border: none; background: none; outline: none; height: 100%; font: inherit; font-size: 17px; letter-spacing: -.02em; color: var(--label); }
+  .searchfield input { flex: 1; min-width: 0; width: 0; border: none; background: none; outline: none; height: 100%; font: inherit; font-size: 17px; letter-spacing: -.02em; color: var(--label); }
   .searchfield input::placeholder { color: var(--sub); }
 
   /* 搜索行的 Figma 液态玻璃（iOS 27 kit「Accessory Bar - iPhone/Search」同款：Liquid Glass - Regular - Small）。
@@ -1743,6 +1704,9 @@
   .task .r1 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   .task .nm { font-size: 14px; font-weight: 500; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .task .spd { font-size: 12px; color: var(--label2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .task .spd.err, .task .r2.err { color: #ff383c; }
+  .task .r2 { display: block; margin-top: 5px; font-size: 12px; line-height: 16px; color: var(--label2); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .task .tp-open { flex: none; height: 28px; padding: 0 12px; border: none; border-radius: 14px; background: var(--fill); color: var(--label); font-size: 13px; font-weight: 500; }
   .task .track { margin-top: 6px; height: 4px; border-radius: 2px; background: var(--fill); overflow: hidden; }
   .task .fillb { height: 100%; border-radius: 2px; background: var(--blue); transition: width .3s linear; }
   .task .fillb.up { background: var(--green); }

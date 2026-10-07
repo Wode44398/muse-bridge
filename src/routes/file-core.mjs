@@ -1,9 +1,10 @@
 import path from 'node:path';
 import {
   createWriteStream, statSync, readdirSync, existsSync, renameSync, rmSync,
-  mkdirSync, cpSync, readFileSync, writeFileSync,
+  mkdirSync, cpSync, readFileSync, writeFileSync, openSync, closeSync,
 } from 'node:fs';
-import { readdir as readdirAsync, cp as cpAsync, rm as rmAsync } from 'node:fs/promises';
+import { pipeline } from 'node:stream';
+import { readdir as readdirAsync, stat as statAsync, cp as cpAsync, rm as rmAsync } from 'node:fs/promises';
 import { requireCtx, requireReadCtx } from '../runtime/identity.mjs';
 import { readBody } from '../runtime/body.mjs';
 import { sanitizeName, sweepStaleParts } from '../runtime/paths.mjs';
@@ -14,8 +15,8 @@ export const bad = (res, code, msg) => {
   res.writeHead(code, { 'Content-Type': 'text/plain' });
   res.end(msg);
 };
-export const okJson = (res, obj) => {
-  res.writeHead(200, { 'Content-Type': 'application/json' });
+export const okJson = (res, obj, code = 200) => {
+  res.writeHead(code, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(obj));
 };
 
@@ -212,7 +213,11 @@ export function moveWorkspaceFile(root, srcRel, destRel) {
   };
 }
 
-export function handleList(req, res, url, identify) {
+// 列目录全程异步：admin 的手机工作空间能进整机任意目录（System32 几千项、Google Drive 这类
+// 虚拟盘第一次列目录要现拉元数据），同步 readdir/stat 会把单线程的服务整个钉住——所有对话的
+// SSE 一起停摆。stat 走 libuv 线程池并行；stat 不动的项（pagefile.sys 之类被系统锁着的）照旧略过。
+const DENIED = new Set(['EPERM', 'EACCES']);
+export async function handleList(req, res, url, identify) {
   let ctx = requireReadCtx(identify, req, res);
   if (!ctx) return;
   ctx = scopeCtx(ctx, url.searchParams.get('ws'), res);
@@ -220,36 +225,49 @@ export function handleList(req, res, url, identify) {
   const rel = url.searchParams.get('path') || '';
   const dir = safeJoin(ctx.cwd, rel);
   if (!dir) return bad(res, 403, 'forbidden');
-  let stat;
-  try { stat = statSync(dir); } catch {
-    if (!rel) return okJson(res, { path: '', items: [], truncated: false });
-    return bad(res, 404, 'not found');
+  try {
+    let stat;
+    try { stat = await statAsync(dir); } catch (error) {
+      if (!rel) return okJson(res, { path: '', items: [], truncated: false });
+      if (DENIED.has(error?.code)) return okJson(res, { error: '没有权限打开这个文件夹' }, 403);
+      return bad(res, 404, 'not found');
+    }
+    if (!stat.isDirectory()) return bad(res, 400, 'not a directory');
+    let entries;
+    try { entries = await readdirAsync(dir, { withFileTypes: true }); } catch (error) {
+      // 整机浏览时这很常见（系统保护目录、别的账户的主目录）：给一句人话，前端空态直接显示它
+      if (DENIED.has(error?.code)) return okJson(res, { error: '没有权限打开这个文件夹' }, 403);
+      return bad(res, 500, 'read error');
+    }
+    const here = path.relative(path.resolve(ctx.cwd), dir).split(path.sep).join('/');
+    // q＝按名字筛（不分大小写的子串，与前端搜索同一规则），先筛后截：上千项的目录（Temp、
+    // System32、下载）只回前 1500 项，排在后面的只能靠这条找到。total＝截之前一共多少项。
+    const needle = String(url.searchParams.get('q') || '').trim().toLowerCase();
+    const visible = entries.filter((entry) => !hiddenInList(ctx, entry.name, here)
+      && (!needle || entry.name.toLowerCase().includes(needle)));
+    const truncated = visible.length > MAX_ENTRIES;
+    // 要截断时先保文件夹（稳定排序，组内仍是磁盘顺序）：一万个文件里夹着的几十个子文件夹不能被截掉，那样连往下走的路都没了
+    if (truncated) visible.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()));
+    const picked = truncated ? visible.slice(0, MAX_ENTRIES) : visible;
+    const stats = await Promise.all(picked.map((entry) => statAsync(path.join(dir, entry.name)).catch(() => null)));
+    const items = [];
+    picked.forEach((entry, index) => {
+      const child = stats[index];
+      if (child) items.push({ name: entry.name, isDir: child.isDirectory(), size: child.size, mtime: child.mtimeMs });
+    });
+    items.sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name, 'zh'));
+    okJson(res, { path: here, items, truncated, total: visible.length });
+  } catch {
+    if (!res.headersSent) bad(res, 500, 'read error');
   }
-  if (!stat.isDirectory()) return bad(res, 400, 'not a directory');
-  let entries;
-  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return bad(res, 500, 'read error'); }
-  const items = [];
-  let truncated = false;
-  const here = path.relative(path.resolve(ctx.cwd), dir).split(path.sep).join('/');
-  for (const entry of entries) {
-    if (hiddenInList(ctx, entry.name, here)) continue;
-    if (items.length >= MAX_ENTRIES) { truncated = true; break; }
-    try {
-      const child = statSync(path.join(dir, entry.name));
-      items.push({ name: entry.name, isDir: child.isDirectory(), size: child.size, mtime: child.mtimeMs });
-    } catch {}
-  }
-  items.sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name, 'zh'));
-  okJson(res, {
-    path: path.relative(path.resolve(ctx.cwd), dir).split(path.sep).join('/'),
-    items,
-    truncated,
-  });
 }
 
 const validUploadId = (value) => /^[a-zA-Z0-9]{6,40}$/.test(value);
 
 export function handleUpload(req, res, url, identify) {
+  // 提前回绝（401/403/404/400…）时把没读的请求体排掉：否则连接被重置，客户端只看到「网络错误」
+  // 而拿不到状态码——上传引擎会把一个注定失败的请求当断网反复重试。
+  res.once('finish', () => { if (!req.complete && !req.destroyed) req.resume(); });
   let ctx = requireCtx(identify, req, res);
   if (!ctx) return;
   ctx = scopeCtx(ctx, url.searchParams.get('ws'), res);
@@ -262,6 +280,17 @@ export function handleUpload(req, res, url, identify) {
   const last = url.searchParams.get('last') === '1';
   if (!validUploadId(id)) return bad(res, 400, 'bad id');
   const part = path.join(dir, '.part-' + id);
+  // 探针：只过一遍鉴权/目录/参数校验、不碰文件。客户端在「连接被重置」后用它分辨是真断网，
+  // 还是服务端早就回了 4xx（大请求体没发完连接就被中间层掐了，状态码没送到）。
+  if (url.searchParams.get('probe') === '1') { req.resume(); return okJson(res, { ok: true }); }
+  if (url.searchParams.get('abort') === '1') {   // 用户取消：顺手删掉半截文件（不等 6 小时后的清扫）
+    req.resume();
+    try { rmSync(part, { force: true }); } catch {}
+    return okJson(res, { ok: true });
+  }
+  if (url.searchParams.get('commit') === '1') { req.resume(); return commitPart(res, url, dir, part); }
+  if (url.searchParams.has('off')) return writePartAt(req, res, url, dir, part);
+  // 旧协议（按到达顺序追加、last=1 收尾）：老版本客户端与笔记插图还在用，原样保留。
   let existing = 0;
   try { existing = statSync(part).size; } catch {}
   if (!existing) sweepStaleParts(dir);
@@ -314,6 +343,70 @@ export function handleUpload(req, res, url, identify) {
     okJson(res, { ok: true, name: path.basename(dest) });
   });
   req.pipe(writer);
+}
+
+// —— 按偏移写的分块上传（工作空间上传引擎：网页 lib/uploads.svelte.js、手机 App UploadService）——
+//   POST ?id&off=<字节偏移>&len=<本块字节数>     把本块写到 .part-<id> 的 off 处；
+//   POST ?id&commit=1&size=<总字节>&name=<文件名>  长度对得上才转正成正式文件；
+//   块请求再带 fin=1&size&name：单块文件写完当场转正，省一次往返。
+// 与旧协议的区别：块与块互不依赖到达顺序 → 可以几块并行发（隧道上单连接吞吐有限，并行明显更快）；
+// 同一块重发只是把同样的字节写回同一位置 → 超时/断线后整块重试是幂等的，不会像追加那样写重。
+// 客户端只在所有块都拿到 200 之后才 commit，所以 commit 时长度对上即内容完整。
+const committedParts = new Map();   // part 绝对路径 → { name, at }：commit 的回执丢了、客户端重发时拿回同一个结果
+
+function rememberCommit(part, name) {
+  const now = Date.now();
+  committedParts.set(part, { name, at: now });
+  if (committedParts.size > 200) {
+    for (const [k, v] of committedParts) if (now - v.at > 3600_000 || committedParts.size > 200) committedParts.delete(k);
+  }
+}
+
+function commitPart(res, url, dir, part) {
+  const done = committedParts.get(part);
+  if (done) return okJson(res, { ok: true, name: done.name });
+  let size;
+  try { size = statSync(part).size; } catch { return okJson(res, { error: 'upload expired', have: 0 }, 409); }
+  const want = Number(url.searchParams.get('size'));
+  if (url.searchParams.has('size') && Number.isSafeInteger(want) && size !== want) return okJson(res, { error: 'incomplete', have: size }, 409);
+  const name = sanitizeName(decodeURIComponent(url.searchParams.get('name') || 'file'));
+  let dest;
+  try {
+    dest = uniquePath(path.join(dir, name));
+    renameSync(part, dest);
+  } catch {
+    // 半截文件不删：多半是还有在途的旧块请求占着句柄，客户端稍后重发 commit 即可
+    return bad(res, 503, 'finalize busy');
+  }
+  rememberCommit(part, path.basename(dest));
+  okJson(res, { ok: true, name: path.basename(dest) });
+}
+
+function writePartAt(req, res, url, dir, part) {
+  const off = Number(url.searchParams.get('off'));
+  const len = Number(url.searchParams.get('len'));
+  if (!Number.isSafeInteger(off) || off < 0 || !Number.isSafeInteger(len) || len < 0) { req.resume(); return bad(res, 400, 'bad range'); }
+  if (off + len > MAX_UPLOAD) { req.resume(); return bad(res, 413, 'too large'); }
+  const done = committedParts.get(part);
+  if (done) { req.resume(); return okJson(res, { ok: true, name: done.name }); }   // 已转正（单块 fin 的回执丢了又重发）
+  let existed = true;
+  try { statSync(part); } catch { existed = false; }
+  if (!existed) sweepStaleParts(dir);
+  // 'a' 打开＝不存在就建、存在不截断（几块并行到达时谁先建都不会抹掉别人写的）；随后按位置写。
+  try { closeSync(openSync(part, 'a')); } catch { req.resume(); return bad(res, 500, 'write error'); }
+  const writer = createWriteStream(part, { flags: 'r+', start: off });
+  let received = 0;
+  req.on('data', (chunk) => {
+    received += chunk.length;
+    if (received > len) req.destroy();   // 多于声明的长度：不收（pipeline 收尾时回 400）
+  });
+  // pipeline：请求中途断开时两端都会被销毁、句柄不泄漏（裸 pipe 遇到 aborted 不会结束写流）
+  pipeline(req, writer, (err) => {
+    if (res.writableEnded || res.destroyed) return;
+    if (err || received !== len) return bad(res, 400, 'short body');
+    if (url.searchParams.get('fin') === '1') return commitPart(res, url, dir, part);
+    okJson(res, { ok: true });
+  });
 }
 
 export async function handleMkdir(req, res, identify) {

@@ -11,6 +11,7 @@
   import { ui, compose, session, agentOn } from '../lib/state.svelte.js';
   import { closePage } from '../lib/pageMorph.js';
   import { api } from '../lib/api.js';
+  import { sendFile } from '../lib/uploads.svelte.js';
   import { openPreview as openPreviewRaw, cloudFileUrl, preview } from '../lib/preview.svelte.js';
   import { openSession, newConversation } from '../lib/chat.svelte.js';
   import { getCachedSessions } from '../lib/cache.js';
@@ -470,8 +471,8 @@
     if (!inBrowse) return;
     (directory ? dirUploadInput : fileUploadInput)?.click();
   }
-  // —— 上传（与手机版工作空间同一个 /api/files/upload：1MB 一片，服务端流式落盘）——
-  // webkitRelativePath 存在＝选的是整个文件夹，按相对路径原样铺进目标目录。
+  // —— 上传（与手机版工作空间同一个上传引擎 lib/uploads.svelte.js：分块并行、卡住/断线自动重发）——
+  // webkitRelativePath 存在＝选的是整个文件夹，按相对路径原样铺进目标目录（mk=1 让服务端建子目录）。
   let fileUploadInput = $state(), dirUploadInput = $state();
   async function onUploadPick(e) {
     const list = [...(e.target.files || [])];
@@ -485,16 +486,16 @@
       const rel = (f.webkitRelativePath || '').split('/').slice(0, -1).join('/');
       const dir = [destDir, rel].filter(Boolean).join('/');
       busyLabel = t('上传 {name}…', { name: f.name });
-      const id = 'up' + Math.random().toString(36).slice(2, 12);
-      const CHUNK = 1024 * 1024;
       try {
-        for (let off = 0; off < f.size || off === 0; off += CHUNK) {
-          const last = off + CHUNK >= f.size ? 1 : 0;
-          await api.post(scoped(`/api/files/upload?path=${encodeURIComponent(dir)}&id=${id}&last=${last}&name=${encodeURIComponent(f.name)}`), f.slice(off, off + CHUNK));
-          if (last) break;
-        }
+        await sendFile(f, {
+          dir, ws: workspaceRoot, mk: !!rel,
+          onProgress: (sent, total) => { busyLabel = t('上传 {name}…', { name: f.name }) + (total > 0 ? ' ' + Math.floor((sent / total) * 100) + '%' : ''); },
+        });
         ok++;
-      } catch (err) { toast(t('上传失败：{reason}', { reason: err.body?.error ? tr(err.body.error) : f.name })); }
+      } catch (err) {
+        const m = typeof err.body === 'string' ? err.body : err.body?.error;
+        toast(t('上传失败：{reason}', { reason: m ? tr(m) : f.name }));
+      }
     }
     busyLabel = '';
     if (ok) toast(t('已上传 {n} 项', { n: ok }));

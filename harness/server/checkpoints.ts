@@ -781,13 +781,29 @@ export async function restoreFromBaseline(sessionId: string, work: string, paths
 
 // V5（#20）：从某个快照树到现在的工作区，改了哪些文件（工作区相对路径，正斜杠）。验证门禁用它认出 Bash、coder 子 agent、
 // Workflow、脚本生成的改动；两边都按同一套规矩消毒（凭据、超大文件不进索引），比得上。拿不到返回空数组。
-export async function changedPathsSince(tree: string, work: string): Promise<string[]> {
+//
+// skipNestedRepos：工作区里 git clone 下来的仓库，`add -A` 只记成一个 gitlink 条目（模式 160000，路径就是那个目录名、
+// 没有后缀），门禁会把它当成「改了代码」，把只读分析的答复撤回去逼它验证（实例：分析一个刚 clone 下来的仓库，
+// 六千字分析被撤回、用户什么都没看到）。gitlink 只记嵌套仓库的 HEAD，里面的文件改没改它看不见，对门禁没有信息量——
+// 门禁跳过它；回退提示照旧列出（「这个目录是这一轮新出现的」对用户有用）。
+export async function changedPathsSince(tree: string, work: string, opts: { skipNestedRepos?: boolean } = {}): Promise<string[]> {
   try {
     if (!(await ensureRepo(work))) return [];
     return await enqueue(async () => {
       await stageSafeWorkspace(work);
-      const out = await gitOrThrow(["diff-index", "--cached", "--name-only", "-z", "--no-renames", tree], work);
-      return out.split("\0").map((p) => p.trim()).filter(Boolean);
+      if (!opts.skipNestedRepos) {
+        const out = await gitOrThrow(["diff-index", "--cached", "--name-only", "-z", "--no-renames", tree], work);
+        return out.split("\0").map((p) => p.trim()).filter(Boolean);
+      }
+      // --raw -z：每条是 ":旧模式 新模式 旧sha 新sha 状态\0路径\0"
+      const parts = (await gitOrThrow(["diff-index", "--cached", "--raw", "-z", "--no-renames", tree], work)).split("\0");
+      const out: string[] = [];
+      for (let k = 0; k + 1 < parts.length; k += 2) {
+        const [oldMode, newMode] = parts[k].replace(/^:/, "").split(" ");
+        const p = parts[k + 1].trim();
+        if (p && oldMode !== "160000" && newMode !== "160000") out.push(p);
+      }
+      return out;
     });
   } catch (e) {
     // Q14：验证门禁据此判「改过没有」——git 出错时照旧当没看到改动，但必须留一句（否则门禁悄悄变弱没人知道）

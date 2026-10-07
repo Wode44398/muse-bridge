@@ -367,6 +367,11 @@ function destructiveLabel(args: Record<string, unknown>): string {
 }
 
 const RETRACT_REASON = "答复先撤回：改了代码，但还没有通过的验证，正在让它补跑检查";
+// 撤回的那版答复模型自己的上下文里还在，它会以为用户看过了，收尾只写一句「验证通过」——用户那边正文就没了
+// （实例：六千字分析被撤回，最后只剩「分析已完成。补充验证结果：……」）。追问里明说。
+const RETRACTED_NOTICE =
+  " Note: the reply you just wrote has been withdrawn from the user's view — they will NOT see it. When you finish, " +
+  "your final reply must be complete and self-contained: restate the full answer, then add the verification results.";
 
 export function verificationFootnote(state: AgentState): string | null {
   if (!state.finalFootnotes) return null;
@@ -868,7 +873,8 @@ export async function* runAgent(
           // from exactly what it said. V2：撤回时说明原因（客户端显示在活动行）。
           if (appendedAssistant) appendedAssistant.internal = true;
           yield { e: "turn_discard", index: turnIndex - 1, reason: RETRACT_REASON };
-          state.appendUserBlocks([{ t: "text", text: nudge }], true, { origin: "harness", kind: "verify-nudge" });
+          const notice = appendedAssistant && text.trim() ? RETRACTED_NOTICE : "";
+          state.appendUserBlocks([{ t: "text", text: nudge + notice }], true, { origin: "harness", kind: "verify-nudge" });
           continue;
         }
       }

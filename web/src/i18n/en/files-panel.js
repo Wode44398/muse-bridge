@@ -252,4 +252,12 @@ export default {
   '{n} 项没能移到回收站': { one: 'Couldn’t move {n} item to Recycle Bin', other: 'Couldn’t move {n} items to Recycle Bin' },
   '这里一共 {total} 项，只列出了前 {shown} 项（文件夹排在前面），其余的可以': 'This folder has {total} items. Showing the first {shown} (folders first). Find the rest with ',
   '按名字搜索': 'search by name',
+  // —— 上传引擎（lib/uploads.svelte.js）与传输面板 ——
+  '排队中…': 'Waiting…',
+  '网络不稳，重连中…': 'Connection unstable, reconnecting…',
+  '没有权限': 'You don’t have permission',
+  '目标文件夹不存在': 'Destination folder not found',
+  '文件太大': 'File too large',
+  '网络卡住了': 'Connection stalled',
+  '网络中断': 'Connection lost',
 };

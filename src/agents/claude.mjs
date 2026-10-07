@@ -29,7 +29,7 @@ import { toolShown, toolSummary, toolInputSubset, taskUsage, readWorkflowOutput,
 import { makeRetractLedger } from '../runtime/retract-ledger.mjs';
 import { sessionPaths, PROGRAM_ROOT } from '../runtime/paths.mjs';
 import os from 'node:os';
-import { collectDeliverables, deliverRoots, transcriptTailCwd } from '../runtime/deliverables.mjs';
+import { collectDeliverables, deliverAnywhere, deliverRoots, transcriptTailCwd } from '../runtime/deliverables.mjs';
 import { claudeEngineEnv } from '../runtime/claude-account.mjs';
 import { sanitizeSessionThinking } from '../runtime/session-sanitize.mjs';
 import { addUsage, noteTurnStart } from '../users.mjs';
@@ -901,6 +901,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         cwd: turnCwd && turnCwd !== ctx.cwd ? [turnCwd, ctx.cwd] : ctx.cwd,
         roots: deliverRoots(ctx, ctx.cwd, VAULT),
         nav: { fileRoot: ctx.homeRoot || ctx.cwd, ws: ctx.cwd, shell: !!ctx.shell },
+        anywhere: deliverAnywhere(ctx),
       });
     } catch {}
     send({

@@ -2348,7 +2348,7 @@ async function executeRun(
       const ws = session.cfg?.workspace ?? workspaceRoot();
       const cp = await takeCheckpoint(preRec, ws, checkpointLabel);
       // V5（#20）：验证门禁的「改过没有」补上这一轮开跑以来的影子 git 差异
-      if (cp) state.changedSinceRunStart = () => changedPathsSince(cp.tree, ws);
+      if (cp) state.changedSinceRunStart = () => changedPathsSince(cp.tree, ws, { skipNestedRepos: true });
       if (cp) {
         runCheckpoint = { n: cp.n, ws };
         // N26（HT3）：破坏性命令前的轮内快照（只有文件，回滚到它只还原文件）；这张开跑检查点就是「上一张」

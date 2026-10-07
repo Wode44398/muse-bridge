@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { readBody } from '../runtime/body.mjs';
 import * as claudeProjects from '../claude-projects.mjs';
 import * as claudeQuick from '../claude-quick.mjs';
-import { collectDeliverables, deliverRoots, isInside, resolveDeliverPath, streamArtifactFile, streamFolderZip, transcriptCwds } from '../runtime/deliverables.mjs';
+import { collectDeliverables, deliverAnywhere, deliverRoots, isInside, resolveDeliverPath, streamArtifactFile, streamFolderZip, transcriptCwds } from '../runtime/deliverables.mjs';
 import { sessionsDir, sanitizeName } from '../runtime/paths.mjs';
 import { getLiveGens, findGenBySession, bridgeSessions, routineSessions } from '../runtime/gen.mjs';
 import { findRewindAnchors, rewindClaudeFiles, pendingRewindAnchor, setPendingRewind } from '../agents/claude-rewind.mjs';
@@ -768,7 +768,7 @@ export function registerSessionRoutes(router, { authOk, identify }) {
       // 基准：该轮落盘的 cwd（最近的优先）→ 项目根；roots 不变，根守卫不放宽。
       const bases = [...(cwds || []).slice().reverse(), p.project.path];
       let atts = [];
-      try { atts = collectDeliverables(m.text, { cwd: bases, roots, nav }); } catch {}
+      try { atts = collectDeliverables(m.text, { cwd: bases, roots, nav, anywhere: deliverAnywhere(ctx) }); } catch {}
       return atts.length ? { ...rest, attachments: atts } : rest;
     });
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -857,7 +857,7 @@ export function registerSessionRoutes(router, { authOk, identify }) {
       // 里出现过的工作目录（最近的优先）再试一遍。只在兜底时扫，卡片点开（绝对路径）不走这里。
       if (!file && !path.isAbsolute(requested)) file = resolveDeliverPath(requested, [...await transcriptCwds(p.file), projRoot], roots);
       if (!file) throw Object.assign(new Error('not found'), { status: 404 });
-      if (!roots.some((root) => isInside(file, root))) throw Object.assign(new Error('forbidden'), { status: 403 });
+      if (!deliverAnywhere(ctx) && !roots.some((root) => isInside(file, root))) throw Object.assign(new Error('forbidden'), { status: 403 });
       if (statSync(file).isDirectory()) {
         await streamFolderZip(req, res, file, { name: url.searchParams.get('name') || '' });
         return;

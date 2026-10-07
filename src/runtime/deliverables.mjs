@@ -76,6 +76,13 @@ export function deliverRoots(ctx, cwd, vault) {
     : [cwd, vault, ctx && ctx.uploads, ctx && ctx.media];
 }
 
+// 根守卫只管沙箱身份。admin 的 Claude 本来就有整机 shell（authorizeProjectPath 同理放行任意目录），
+// 交付提示词也教它「产物在工作目录外就写绝对路径」——以前这类链接一律被根守卫拒掉：附件卡不出、
+// 点正文链接 403「加载失败」。roots 对 admin 仍有用：相对路径的回退基准。
+export function deliverAnywhere(ctx) {
+  return ctx?.kind === 'admin';
+}
+
 // 链接里的路径 → 盘上真实路径（realpath）。绝对路径原样；相对路径先按 cwd 解析，
 // 解析不到再依次按各交付根（vault / 身份文件根 / uploads / media）当基准试一遍。
 // 为什么要回退：项目制下会话 cwd 是项目目录（<工作空间>/projects/demo），但 Claude 常把
@@ -145,7 +152,8 @@ export async function transcriptCwds(file) {
 // （resolveDeliverPath）；路径必须真实存在且落在 roots 之内。文件须匹配交付扩展表；
 // 目录一律可交付（kind:'folder'，count=直接子项数）。
 // nav = { fileRoot, ws, shell }：给文件夹交付物附上工作空间定位（见 deliverNav）。不传＝不算。
-export function collectDeliverables(text, { cwd, roots = [], limit = 12, nav = null } = {}) {
+// anywhere = deliverAnywhere(ctx)：admin 不受 roots 限制。
+export function collectDeliverables(text, { cwd, roots = [], limit = 12, nav = null, anywhere = false } = {}) {
   const out = [];
   const seen = new Set();
   const src = String(text || '');
@@ -165,7 +173,7 @@ export function collectDeliverables(text, { cwd, roots = [], limit = 12, nav = n
     let st;
     try { st = statSync(real); } catch { continue; }
     if (seen.has(fold(real))) continue;
-    if (!roots.some((root) => isInside(real, root))) continue;
+    if (!anywhere && !roots.some((root) => isInside(real, root))) continue;
     if (st.isDirectory()) {
       let count = 0;
       try { count = readdirSync(real).length; } catch {}
