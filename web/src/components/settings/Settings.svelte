@@ -18,6 +18,7 @@
   import SecAbout from './SecAbout.svelte';
   import SecAgents from './SecAgents.svelte';
   import SecAndroid from './SecAndroid.svelte';
+  import SecDimensio from './SecDimensio.svelte';
 
   // 扩展中心只对管理员开放：探针过了才出「自定义」那一组
   let extOk = $state(false);
@@ -33,6 +34,8 @@
     { key: 'account', label: t('账户'), icon: '' },
     ...(agentsOk ? [{ key: 'agents', label: tc('settings', 'Agent'), svg: SV('<rect x="3" y="3" width="5.5" height="5.5" rx="1.4"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.4"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.4"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.4"/>') }] : []),
     { key: 'connection', label: tc('名词', '连接'), icon: '' },
+    // dimensio 的设置就是这一节（它分页里的「设置」也直达这里）；dimensio 对这个身份没开就不出
+    ...(screenOn('harness') ? [{ key: 'dimensio', label: 'dimensio', svg: SV('<path d="M3.5 10.5h13"/><path d="M5.5 10.5a4.5 4.5 0 0 1 9 0"/><path d="M6.6 13.4a4.5 4.5 0 0 0 6.8 0" stroke-dasharray="1.6 1.7"/>') }] : []),
     { key: 'android', label: t('安卓 app'), svg: SV('<rect x="5.5" y="2.5" width="9" height="15" rx="2"/><path d="M8.75 15h2.5"/>') },
     { key: 'about', label: t('关于'), icon: '' },
   ]);
@@ -106,6 +109,12 @@
     { sec: 'android', sid: 'android-download', label: t('下载安卓 app'), keys: t('安卓 手机 apk 应用 安装 android app 下载') },
     { sec: 'android', sid: 'android-server', label: t('app 的服务器地址'), keys: t('安卓 手机 app 更换 地址 android') },
     { sec: 'about', sid: 'about', label: t('关于'), keys: t('版本 about') },
+    { sec: 'dimensio', sid: 'dim-key', label: t('dimensio 的 API Key'), keys: t('dimensio 模型 服务 key 密钥') },
+    { sec: 'dimensio', sid: 'dim-memory', label: t('记忆管理'), keys: t('dimensio 记忆 memory') },
+    { sec: 'dimensio', sid: 'dim-ask', label: t('权限规则'), keys: t('dimensio 权限 规则 每次问我 从不允许 permission') },
+    { sec: 'dimensio', sid: 'dim-ws', label: t('默认工作空间'), keys: t('dimensio 工作空间 访问范围 整机 workspace') },
+    { sec: 'dimensio', sid: 'dim-appearance', label: t('dimensio 外观'), keys: t('dimensio 外观 深色 浅色 主题') },
+    { sec: 'dimensio', sid: 'dim-feed', label: t('显示全部工作过程'), keys: t('dimensio 工作过程 工具调用 展开') },
     { sec: 'agents', sid: 'agent-claude', label: t('Agent 开关'), keys: t('agent claude dimensio 启用 关闭 认证') },
   ];
   const touch = (() => { try { return matchMedia('(pointer: coarse)').matches; } catch { return false; } })();
@@ -144,7 +153,8 @@
   {:else if k === 'connection'}<SecConnection />
   {:else if k === 'about'}<SecAbout />
   {:else if k === 'agents'}<SecAgents />
-  {:else if k === 'android'}<SecAndroid />{/if}
+  {:else if k === 'android'}<SecAndroid />
+  {:else if k === 'dimensio'}<SecDimensio />{/if}
 {/snippet}
 {#snippet icon(s)}{#if s.svg}{@html s.svg}{:else}{s.icon}{/if}{/snippet}
 

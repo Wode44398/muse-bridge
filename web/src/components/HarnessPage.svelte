@@ -10,10 +10,11 @@
   //      没有主页：onExit 传 null（harness 据此不摆「主页」行），侧栏底部改挂账户卡（sidebarFoot）。
   import { ui, me, singleMode } from '../lib/state.svelte.js';
   import { closePage } from '../lib/pageMorph.js';
+  import { openSettings } from '../lib/settingsNav.svelte.js';
   import { apiUrl } from '../lib/server.js';
   import { authHeaders } from '../lib/api.js';
   import { openPreview } from '../lib/preview.svelte.js';
-  import { configureApi, uploadFile as hxUploadFile } from '@hx/lib/api.ts';
+  import { uploadFile as hxUploadFile } from '@hx/lib/api.ts';
   import { app as hxApp } from '@hx/lib/state.svelte.ts';
   import { resolveMode, themeBg } from '@hx/lib/theme.ts';
   import HarnessApp from '@hx/App.svelte';
@@ -25,10 +26,7 @@
   import '@hx/app.css';
   import { t } from '../lib/i18n.js';
 
-  configureApi({
-    base: () => apiUrl('/api/harness'),
-    headers: () => authHeaders(),
-  });
+  import '../lib/hxApi.js';   // configureApi：接口基址与鉴权（模块级，设置里的 dimensio 一节也靠它）
 
   // 页面配色跟 dimensio 自己的明暗档（跟系统 / 浅 / 深）走，而不是 bridge 主题：theme-color meta
   // （App.svelte）与内嵌的工作空间视图（HxFilesEmbed）读 ui.pageChrome。「跟随系统」档还要盯系统
@@ -187,6 +185,7 @@
   filesView={hxFiles}
   {pickWorkspace}
   {chatDrop}
+  openSettings={() => openSettings('dimensio')}
   onExit={single ? null : () => closePage(ui.screen)}
   sidebarFoot={single ? accountFoot : null}
   onOpenArtifact={(artifact, sessionId) => openPreview({

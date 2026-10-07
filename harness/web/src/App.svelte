@@ -53,6 +53,7 @@
     filesView = null,
     pickWorkspace = null,
     chatDrop = null,
+    openSettings = null,
   }: {
     embedded?: boolean;
     onExit?: (() => void) | null;
@@ -63,7 +64,17 @@
     > | null;
     pickWorkspace?: null | (() => Promise<string>);
     chatDrop?: null | ((node: HTMLElement) => { destroy?: () => void } | void);
+    // 宿主接管「设置」：嵌进 Muse Bridge 时只有一个设置页（宿主的），dimensio 的设置是其中一节。
+    // 给了它，任何地方把 app.sheet 置成 "settings"（侧栏、Hero 提示、记忆面板的「‹ 设置」）都转给宿主，自己的设置面板不出。
+    openSettings?: null | (() => void);
   } = $props();
+  $effect(() => {
+    if (app.sheet !== "settings" || !openSettings) return;
+    untrack(() => {
+      app.sheet = null;
+      openSettings?.();
+    });
+  });
   const chatDropAction = (node: HTMLElement) => chatDrop?.(node) ?? undefined;
 
   // Q13：宿主的「打开产物」回调登记成全局的（诊断包导出这类 Feed 之外的地方也要交给宿主查看器）
@@ -540,7 +551,7 @@
     <ProjectDialog onclose={() => (app.projectModal = false)} />
   {/if}
 
-  {#if app.sheet === "settings"}
+  {#if app.sheet === "settings" && !openSettings}
     <SettingsSheet onclose={() => (app.sheet = null)} />
   {:else if app.sheet === "attach"}
     <AttachSheet onclose={() => (app.sheet = null)} />
