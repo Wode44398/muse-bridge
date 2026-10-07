@@ -47,6 +47,7 @@ function closeTopLayer() {
   if (ui.loginOpen) { ui.loginOpen = false; return true; }
   if (ui.routinesOpen) { closers.routines ? closers.routines() : (ui.routinesOpen = false); return true; }
   if (ui.drawerOpen) { ui.drawerOpen = false; return true; }
+  if (ui.customizeOpen && ui.screen === 'claude') { ui.customizeOpen = false; return true; }
   // dimensio 分页自带完整层级返回（整页/灯箱/sheet/预览/抽屉）：先让它关自己的层——
   // 单 agent 模式下它就是根页，也得先关掉它的抽屉与弹层，才轮到「到底了」。
   if (ui.screen === 'harness') {

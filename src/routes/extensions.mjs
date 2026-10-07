@@ -8,8 +8,9 @@
 import {
   listExtensions, getExtension, installSkill, installPlugin, saveConnector,
   updateExtension, deleteExtension, bulkByPkg, listExtensionFiles, readExtensionFile,
-  packExtensionZip, extensionDiagnostics, EXT_SUPPORT,
+  packExtensionZip, extensionDiagnostics, configureExtension, EXT_SUPPORT,
 } from '../extensions.mjs';
+import { listCatalog, installFromCatalog, fetchOfficialCatalog } from '../extensions-catalog.mjs';
 import { readBody } from '../runtime/body.mjs';
 
 const MAX_UPLOAD = 64 * 1024 * 1024;   // 技能/插件包上限 64MB（一般几百 KB）
@@ -120,6 +121,38 @@ export function registerExtensionRoutes(router, { identify }) {
       const text = readExtensionFile(url.searchParams.get('id'), url.searchParams.get('path'));
       json(res, 200, { ok: true, text });
     } catch (e) { fail(res, e); }
+  });
+
+  // 「自定义」页的「发现」：本机 Anthropic 官方插件目录里可装的插件 / 技能 / 连接器（extensions-catalog.mjs）。
+  router.on('GET', '/api/extensions/catalog', (req, res) => {
+    if (!gate(req, res)) return;
+    try { json(res, 200, { ok: true, ...listCatalog() }); } catch (e) { fail(res, e); }
+  });
+
+  // 从目录装一项：{ id, values? }（id 只在现扫的目录里查，前端传不进任意路径；values = 连接器模板要填的字段）。
+  // 远程源的插件在这里 git 拉取，可能要几十秒。
+  router.on('POST', '/api/extensions/catalog/install', async (req, res) => {
+    if (!gate(req, res)) return;
+    try {
+      let input; try { input = JSON.parse(await readBody(req)); } catch { input = {}; }
+      const values = input.values && typeof input.values === 'object' ? input.values : {};
+      json(res, 200, { ok: true, item: await installFromCatalog(input.id, { values }) });
+    } catch (e) { fail(res, e); }
+  });
+
+  // 插件配置（userConfig + MCP 里的 ${VAR}）：{ id, values }。敏感值进加密存储，回传打码占位符 = 沿用旧值。
+  router.on('POST', '/api/extensions/configure', async (req, res) => {
+    if (!gate(req, res)) return;
+    try {
+      let input; try { input = JSON.parse(await readBody(req)); } catch { input = {}; }
+      json(res, 200, { ok: true, item: configureExtension(input.id, input.values && typeof input.values === 'object' ? input.values : {}) });
+    } catch (e) { fail(res, e); }
+  });
+
+  // 下载 / 更新官方目录副本（新装的服务器上 Claude Code 可能还没拉过）。
+  router.on('POST', '/api/extensions/catalog/fetch', async (req, res) => {
+    if (!gate(req, res)) return;
+    try { json(res, 200, { ok: true, ...(await fetchOfficialCatalog()) }); } catch (e) { fail(res, e); }
   });
 
   // 下载为 zip（前端 fetch+blob 取，带 Authorization/cookie，不走 ?token=）。

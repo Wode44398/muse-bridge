@@ -11,6 +11,7 @@
   import ClaudeCodeWordmark from './claude/ClaudeCodeWordmark.svelte';
   import RefusalBand from './claude/RefusalBand.svelte';
   import RoutinesPage from './RoutinesPage.svelte';
+  import CustomizePage from './CustomizePage.svelte';
   import { api } from '../lib/api.js';
   import { uiAlert } from '../lib/dialogs.js';
   import { me, ui, session, settings, setTheme, singleMode, sessionWt } from '../lib/state.svelte.js';
@@ -428,6 +429,8 @@
     newConversation(p.id);
   }
   function openRoutines() { closeDrawer(); ui.routinesOpen = true; }
+  function openCustomize() { closeDrawer(); ui.customizeOpen = true; }
+  const czOn = $derived(ui.customizeOpen && me.kind === 'admin');
 
   // —— 快照对话（服务端 claude-quick.mjs）——
   // 一只一次性桶伪装成的项目（quick 标记）：不属于任何工作空间、不共用记忆、同时只有
@@ -1109,7 +1112,10 @@
 <div class="main-col" bind:this={mainColEl} class:dnd-on={drag.overKey === 'chat:claude' || wsDragOver} role="presentation" use:dropZone={claudeDrop}
   ondragover={onWsDragOver} ondragleave={onWsDragLeave} ondrop={onWsDrop}>
 
-<div class="stage">
+<!-- 「自定义」页单独一层盖在对话上（不进下面的 if 链：问候页带着输入框的交叉转场，入场动画没播完就被切走会收不了尾、
+     新分支挂不上）；开着时对话内容整个藏起来（display:none，输入框草稿等状态都留着）。 -->
+<div class="stage" class:cz-on={czOn}>
+{#if czOn}<CustomizePage />{/if}
 {#if ui.view === 'greeting'}
   <main class="hero">
     <div class="greeting">
@@ -1237,6 +1243,12 @@
         <circle cx="8" cy="8" r="5.5"/><line class="hh" x1="8" y1="8" x2="10" y2="9"/><line class="mh" x1="8" y1="8" x2="8" y2="5.5"/>
       </svg>
     </span>{t('定时触发')}</button>
+  <!-- 自定义 = claude.ai /code 侧栏 Customize：公文包是 Anthropicons U+E100，自带 ANIM 轴（0→100 包身横向撑开、
+       提手上抬），悬停 / 按下走与项目盒盖同一条 --ca-anim 弹性过渡。扩展接口是 admin 门，非管理员不出这一行。 -->
+  {#if me.kind === 'admin'}
+    <button class="d-item" class:cur={ui.customizeOpen} onclick={openCustomize} aria-current={ui.customizeOpen ? 'page' : undefined}>
+      <span class="ic d-lead bag" aria-hidden="true">&#xe100;</span>{t('自定义')}</button>
+  {/if}
   {#if quickProj}
     <div class="d-sec">{t('快照')}</div>
     <div class="d-list">
@@ -1373,6 +1385,7 @@
   .sb-handle:hover .sb-pill, .sb-handle.drag .sb-pill { opacity: 1; }
   .sb-handle:focus-visible .sb-pill { opacity: 1; background: var(--coral); transition-delay: 0s; }
   .stage { flex: 1; position: relative; min-height: 0; display: flex; flex-direction: column; }
+  .stage.cz-on > :global(:not(.cz):not(.dlg):not(.dlg-bd)) { display: none; }   /* .dlg / .dlg-bd = 自定义页自己的弹窗 */
   /* edge-to-edge 后页面顶到物理屏顶，15vh 要再加状态栏高度才回到原设计位置（不然 greeting 偏上）。 */
   .hero { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: calc(15vh + var(--sat)) 16px 24px; gap: 0; }
   .greeting { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
@@ -1493,6 +1506,12 @@
     transition: rotate .6s cubic-bezier(.3, .9, .4, 1); }
   .d-item:active .ck .hh { rotate: 30deg; }
   .d-item:active .ck .mh { rotate: 390deg; }
+  /* 自定义 = 公文包 U+E100 的 ANIM 轴（包身撑开 + 提手上抬），曲线同项目盒盖（官网回弹）；
+     当前页 = 行底常亮（claude.ai 侧栏当前项同款）。 */
+  .d-lead.bag { font-variation-settings: "ANIM" var(--ca-anim, 0), "ANM2" 0, "opsz" 20, "wght" 430;
+    transition: --ca-anim .3s cubic-bezier(.34, 1.3, .64, 1); }
+  .d-item:active .bag { --ca-anim: 100; }
+  .d-item.cur { background: var(--hover-strong); color: var(--text); }
   .d-sec { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; padding: 14px 4px 4px 10px; }
   .d-list { display: flex; flex-direction: column; }
   .d-row { position: relative; display: flex; align-items: center; border-radius: 8px; margin-bottom: .5px; transition: background-color .12s ease; }
@@ -1550,6 +1569,8 @@
     .d-item:hover { background: var(--hover); color: var(--text); }
     .d-item:hover .ck .hh { rotate: 30deg; }
     .d-item:hover .ck .mh { rotate: 390deg; }
+    .d-item:hover .bag { --ca-anim: 100; }
+    .d-item.cur:hover { background: var(--hover-strong); }
     .d-row:hover, .d-row:focus-within { background: var(--hover); }
     .d-row:hover .d-title, .d-row:focus-within .d-title { color: var(--text); }
     .d-row.proj:hover .pj { --ca-anim: 100; }

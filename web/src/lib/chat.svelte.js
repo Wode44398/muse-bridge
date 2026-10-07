@@ -1373,6 +1373,7 @@ export function detachLive() {
 // 抽屉点会话的统一入口：直播中也能切换。看的就是直播会话 → 不动；否则先 detach 再加载；
 // 点回一个正在跑的会话（被静音的直播 / 并行后台轮）→ requestSync 重新挂直播续看。
 export async function openSession(id) {
+  ui.customizeOpen = false;   // 「自定义」页占着正文列：打开任何会话都先让回对话
   if (session.busy || live || pendingSend) {
     const liveId = (live && live.sessionId) || session.id;
     if (id === liveId) { ui.view = 'chat'; return; }
@@ -1561,6 +1562,7 @@ export function stop() {
 }
 
 export function newConversation(projectId) {
+  ui.customizeOpen = false;
   if (session.busy || live || pendingSend || unsettled()) detachLive();   // 直播中也能开新聊天：后台轮继续跑，完成照常提醒
   bumpLoadGen();                    // 作废在途的历史刷新——慢返回不把空白新聊天顶回旧会话
   replaceMessages([]);

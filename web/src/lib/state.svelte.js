@@ -41,6 +41,7 @@ export const ui = $state({
   view: 'greeting',       // claude 页内部视图: 'greeting' | 'chat'
   drawerOpen: false,
   routinesOpen: false,    // the Routines (定时触发) full-screen page
+  customizeOpen: false,   // 「自定义」页（claude.ai Customize 同款：技能/连接器/插件的「你的 / 发现」）——占住 Claude 正文列，开会话 / 新对话即收起
   loginOpen: false,       // 登录/注册/用户信息卡（主页右上 pill 展开 / 单页模式的登录框）
   pairScan: null,         // 手机端「扫一扫」登录网页版：null | { mode:'scan' } | { mode:'confirm', id, key }（系统相机扫到 ?pair= 直达确认卡）
   claudeSliding: false,   // claude 左缘右滑跟手中（预测式返回，页面缩小露出身后主页）——唤醒被 display:none 的 Home

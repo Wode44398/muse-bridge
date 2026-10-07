@@ -4,11 +4,12 @@
   //   手机（<700）：Claude app 同款整页——根页 = 账户卡 + 分组列表，点进分区从右侧推入，左上返回。
   // 分区内容是独立组件（Sec*.svelte），两种外壳共用；样式令牌 --st-* 在 app.css。
   // 入口：侧栏账户卡菜单（设置 / 账户 / 关于）、主页账户胶囊；直达分区走 lib/settingsNav。
-  import { ui, me } from '../../lib/state.svelte.js';
+  import { ui, me, screenOn } from '../../lib/state.svelte.js';
   import { layout } from '../../lib/layout.svelte.js';
   import { registerCloser } from '../../lib/nav.js';
   import { settingsNav } from '../../lib/settingsNav.svelte.js';
-  import { extensionsNav } from '../../lib/extensionsNav.svelte.js';
+  import { extensionsNav, customizeNav } from '../../lib/extensionsNav.svelte.js';
+  import { goto } from '../../lib/pageMorph.js';
   import { api } from '../../lib/api.js';
   import { t, tc } from '../../lib/i18n.js';
   import SecGeneral from './SecGeneral.svelte';
@@ -59,7 +60,15 @@
     if (k !== sec) { sec = k; if (scrollEl) scrollEl.scrollTop = 0; }
   }
   function toRoot() { dir = -1; sec = null; }
-  function openExt(type) { extensionsNav.type = type; ui.extensionsOpen = true; }
+  // 技能 / 连接器 / 插件 = Claude 分页里的「自定义」页（claude.ai Customize 同款）：收起设置、切到 Claude、直落该类目。
+  // Claude 分页没开放给这个账号时退回扩展中心整页。
+  function openExt(type) {
+    if (!screenOn('claude')) { extensionsNav.type = type; ui.extensionsOpen = true; return; }
+    customizeNav.tab = type;
+    ui.customizeOpen = true;
+    ui.settingsOpen = false;
+    goto('claude');
+  }
 
   let closing = $state(false);
   function close() {

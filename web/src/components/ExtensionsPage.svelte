@@ -35,7 +35,14 @@
       loaded = true; loadErr = '';
     } catch (e) { loadErr = errMsg(e); loaded = true; }
   }
-  $effect(() => { load(); });
+  // 首载完成后消费一次直达句柄（「自定义」页点「管理文件」→ 详情；「添加 → 连接器」→ 表单）
+  $effect(() => {
+    load().then(() => {
+      const hit = navId && items.find((x) => x.id === navId);
+      if (hit) openDetail(hit);
+      else if (navAction === 'connector') openConnForm();
+    });
+  });
 
   // 服务端报错原文 → 显示用（英文界面经 tr() 翻译；本页所有 errMsg 结果都只用于显示）
   const errMsg = (e) => tr((e?.body && typeof e.body === 'object' ? e.body.error : typeof e?.body === 'string' ? e.body : '') || e?.message || String(e));
@@ -71,7 +78,9 @@
   // 当前类型分页（叫 curType 不叫 type：模板表达式以 type 开头会被 Svelte 当 TS 声明标签）。
   // 初值可被外部直达句柄预置（设置→扩展分区点「连接器/插件」行直落对应类目），消费一次即清。
   let curType = $state(extensionsNav.type || 'skill');
-  extensionsNav.type = null;
+  const navId = extensionsNav.id;
+  const navAction = extensionsNav.action;
+  extensionsNav.type = null; extensionsNav.id = null; extensionsNav.action = null;
   const list = $derived(items.filter((x) => x.type === curType));
   const countOf = (k) => items.filter((x) => x.type === k).length;
   const typeDef = $derived(TYPES.find((ty) => ty.key === curType));

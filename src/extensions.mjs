@@ -134,7 +134,8 @@ function connectorCreds(item, secrets) {
   return { env: { ...(c.env || {}), ...(s.env || {}) }, headers: { ...(c.headers || {}), ...(s.headers || {}) } };
 }
 
-const needsSecrets = (items) => items.some((x) => x.type === 'connector' && ((x.connector?.envKeys || []).length || (x.connector?.headerKeys || []).length));
+const needsSecrets = (items) => items.some((x) => (x.type === 'connector' && ((x.connector?.envKeys || []).length || (x.connector?.headerKeys || []).length))
+  || (x.type === 'plugin' && (x.configKeys || []).length));
 
 // 注入 agent 用：解不开就只能不带凭据注入（诊断里会标出来），不许拖垮整轮 query
 function secretsForInjection(items) {
@@ -147,8 +148,17 @@ function secretsForInjection(items) {
   }
 }
 
-// 对外的样子：凭据只给键名，值一律打码
+// 对外的样子：凭据只给键名，值一律打码。插件现读目录带上配置表单与内容清单（目录即真相，替换后自然更新）。
 function publicItem(item) {
+  if (item?.type === 'plugin') {
+    const dir = extensionDir(item);
+    if (!dir || !existsSync(dir)) return item;
+    const meta = pluginManifest(dir);
+    const fields = pluginConfigFields(dir, meta);
+    const { configValues, configKeys, ...rest } = item;
+    const values = { ...(configValues || {}), ...Object.fromEntries((configKeys || []).map((k) => [k, SECRET_MASK])) };
+    return { ...rest, contents: pluginContents(dir, meta), config: { fields, values, missing: missingConfig(item, fields) } };
+  }
   if (item?.type !== 'connector' || !item.connector) return item;
   const { env, headers, envKeys, headerKeys, ...rest } = item.connector;
   const mask = (keys) => Object.fromEntries([...new Set(keys)].map((k) => [k, SECRET_MASK]));
@@ -247,7 +257,12 @@ async function extractArchive(buf, destDir) {
 export async function packExtensionZip(item) {
   const dir = extensionDir(item);
   if (!dir) throw httpErr(400, '该扩展没有文件目录');
-  const out = path.join(EXT_ROOT, 'runtime', `.dl-${crypto.randomBytes(4).toString('hex')}.zip`);
+  return zipDir(dir);
+}
+
+// 把一个目录整棵打成 zip（Buffer）。下载与「从目录安装」（extensions-catalog.mjs）共用。
+export async function zipDir(dir) {
+  const out =path.join(EXT_ROOT, 'runtime', `.dl-${crypto.randomBytes(4).toString('hex')}.zip`);
   mkdirSync(path.dirname(out), { recursive: true });
   try {
     // hdrcharset=UTF-8：bsdtar 造 zip 默认按系统 ANSI 码页写文件名，中文名下载后乱码（deliverables 同款）。
@@ -286,18 +301,25 @@ export function extensionDir(item) {
   return abs;
 }
 
-// —— 安装：技能（.md 单文件 / .zip / .skill）——
-export async function installSkill(filename, buf, { replaceId, pkg } = {}) {
+// 「从目录安装」（extensions-catalog.mjs：插件目录里的条目）不走压缩包：整棵复制进暂存区（.git 不带）再走同一套校验。
+function stageFromDir(src, staging) {
+  mkdirSync(path.dirname(staging), { recursive: true });
+  cpSync(src, staging, { recursive: true, filter: (p) => path.basename(p) !== '.git' });
+}
+
+// —— 安装：技能（.md 单文件 / .zip / .skill；fromDir = 直接从一个目录装）——
+export async function installSkill(filename, buf, { replaceId, pkg, fromDir, catalogId } = {}) {
   const store = readStoreForWrite();
   if (store.items.length >= MAX_ITEMS) throw httpErr(400, '扩展数量已达上限');
-  const isMd = /\.md$/i.test(filename || '');
+  const isMd = !fromDir && /\.md$/i.test(filename || '');
   const staging = path.join(EXT_ROOT, 'runtime', `.stage-${crypto.randomBytes(4).toString('hex')}`);
   try {
     if (isMd) {
       mkdirSync(staging, { recursive: true });
       writeFileSync(path.join(staging, 'SKILL.md'), buf);
     } else {
-      await extractArchive(buf, staging);
+      if (fromDir) stageFromDir(fromDir, staging);
+      else await extractArchive(buf, staging);
       sanitizeTree(staging);
     }
     // SKILL.md 可以在根，也可以在唯一一层子目录里（zip 常见「文件夹套一层」）。
@@ -336,6 +358,7 @@ export async function installSkill(filename, buf, { replaceId, pkg } = {}) {
       ...(pkgName ? { pkg: pkgName } : {}),
       enabled: old ? old.enabled : true,
       agents: old ? old.agents : { claude: true, dimensio: true },
+      ...(catalogId || old?.catalogId ? { catalogId: catalogId || old.catalogId } : {}),   // 从「发现」装的：目录里的 id（名字可能和目录不一样）
       dir: 'skills/' + slug,
       entry: 'SKILL.md',
       files: stats.files, size: stats.size,
@@ -350,14 +373,33 @@ export async function installSkill(filename, buf, { replaceId, pkg } = {}) {
   }
 }
 
-// —— 安装：Claude Code 插件（.zip，需 .claude-plugin/plugin.json）——
-export async function installPlugin(filename, buf, { replaceId, pkg } = {}) {
+// —— 安装：Claude Code 插件（.zip，需 .claude-plugin/plugin.json；fromDir = 直接从一个目录装）——
+// manifest：目录条目里 strict:false 的插件没有自己的 plugin.json，定义写在条目里——由调用方传进来补一份。
+export async function installPlugin(filename, buf, { replaceId, pkg, fromDir, manifest, source, catalogId } = {}) {
   const store = readStoreForWrite();
   if (store.items.length >= MAX_ITEMS) throw httpErr(400, '扩展数量已达上限');
   const staging = path.join(EXT_ROOT, 'runtime', `.stage-${crypto.randomBytes(4).toString('hex')}`);
   try {
-    await extractArchive(buf, staging);
+    if (fromDir) stageFromDir(fromDir, staging);
+    else await extractArchive(buf, staging);
     sanitizeTree(staging);
+    if (manifest) {
+      const pj = path.join(staging, '.claude-plugin', 'plugin.json');
+      if (!existsSync(pj)) {
+        mkdirSync(path.dirname(pj), { recursive: true });
+        writeFileSync(pj, JSON.stringify(manifest, null, 2));
+      } else {
+        // 有自己 plugin.json 的：目录条目里写的组件路径作补充（官方同款），plugin.json 自己有的不动
+        const own = readJsonFile(pj);
+        if (own && typeof own === 'object') {
+          let changed = false;
+          for (const k of ['skills', 'commands', 'agents', 'hooks', 'mcpServers', 'lspServers', 'userConfig']) {
+            if (!(k in own) && k in manifest) { own[k] = manifest[k]; changed = true; }
+          }
+          if (changed) writeFileSync(pj, JSON.stringify(own, null, 2));
+        }
+      }
+    }
     let base = staging;
     if (!existsSync(path.join(base, '.claude-plugin', 'plugin.json'))) {
       const subs = readdirSync(base, { withFileTypes: true }).filter((e) => e.isDirectory());
@@ -394,6 +436,10 @@ export async function installPlugin(filename, buf, { replaceId, pkg } = {}) {
       ...(pkgName ? { pkg: pkgName } : {}),
       enabled: old ? old.enabled : true,
       agents: old ? old.agents : { claude: true, dimensio: false },
+      ...(source || old?.source ? { source: source || old.source } : {}),
+      ...(catalogId || old?.catalogId ? { catalogId: catalogId || old.catalogId } : {}),   // 从哪个目录装的（「自定义」页显示来源）
+      ...(old?.configValues ? { configValues: old.configValues } : {}),      // 替换版本不丢配置
+      ...(old?.configKeys ? { configKeys: old.configKeys } : {}),
       dir: 'plugins/' + slug,
       entry: '.claude-plugin/plugin.json',
       files: stats.files, size: stats.size,
@@ -462,6 +508,7 @@ export function saveConnector(input = {}) {
     ...(input.pkg ? { pkg: stripCc(input.pkg).trim().slice(0, 80) } : old?.pkg ? { pkg: old.pkg } : {}),
     enabled: old ? old.enabled : true,
     agents: old ? old.agents : { claude: true, dimensio: false },
+    ...(input.catalogId || old?.catalogId ? { catalogId: String(input.catalogId || old.catalogId).slice(0, 300) } : {}),
     connector: conn,
     created: old ? old.created : now(), updated: now(),
   };
@@ -492,6 +539,185 @@ function sanitizeKV(obj) {
       out[key] = stripCc(v).slice(0, 4000);
       if (Object.keys(out).length >= 40) break;
     }
+  }
+  return out;
+}
+
+// —— 插件配置（Claude Desktop「安装 → 配置」同款）——
+// 配置项两个来源：plugin.json 的 userConfig（官方格式：title / description / type / sensitive / required / default / options，
+// 在 MCP 配置里写成 ${user_config.KEY}），以及插件 MCP 配置里引用的 ${VAR} 环境变量（多半是令牌）。
+// 值的去处：非敏感的记在注册表 configValues；敏感的进加密存储（与连接器凭据同一份，键 <id>.config），注册表只记键名 configKeys。
+// 插件自带的 MCP 一律由宿主解析后注入（SDK skipMcpDiscovery）——CLI 读不到这里存的配置值。
+const PLUGIN_VARS = new Set(['CLAUDE_PLUGIN_ROOT', 'CLAUDE_PLUGIN_DATA', 'CLAUDE_PROJECT_DIR']);
+const VAR_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)?)(:-([^}]*))?\}/g;
+const SENSITIVE_RE = /token|secret|key|password|passwd|auth|credential|cookie|pat$/i;
+
+function readJsonFile(f) {
+  try { return JSON.parse(readFileSync(f, 'utf8').replace(/^﻿/, '')); } catch { return null; }
+}
+export function pluginManifest(dir) { return readJsonFile(path.join(dir, '.claude-plugin', 'plugin.json')) || {}; }
+
+// 插件的 MCP 定义：.mcp.json（两种写法：顶层即 server 表 / 包在 mcpServers 里）+ plugin.json 的 mcpServers（对象或指向 json 的相对路径）
+export function pluginMcpMap(dir, meta = pluginManifest(dir)) {
+  const unwrap = (j) => (j && typeof j === 'object' ? (j.mcpServers && typeof j.mcpServers === 'object' ? j.mcpServers : j) : {});
+  let fromMeta = {};
+  if (typeof meta.mcpServers === 'string') {
+    const f = path.resolve(dir, meta.mcpServers);
+    if (f.startsWith(dir + path.sep)) fromMeta = unwrap(readJsonFile(f));
+  } else if (meta.mcpServers && typeof meta.mcpServers === 'object') fromMeta = meta.mcpServers;
+  const map = { ...unwrap(readJsonFile(path.join(dir, '.mcp.json'))), ...fromMeta };
+  return Object.fromEntries(Object.entries(map).filter(([, c]) => c && typeof c === 'object' && !Array.isArray(c)));
+}
+
+// 配置表单字段（前端照着画表单）
+export function pluginConfigFields(dir, meta = pluginManifest(dir)) {
+  const fields = [];
+  const seen = new Set();
+  const uc = meta.userConfig && typeof meta.userConfig === 'object' ? meta.userConfig : {};
+  for (const [key, f] of Object.entries(uc)) {
+    if (!f || typeof f !== 'object' || seen.has(key)) continue;
+    seen.add(key);
+    fields.push({
+      key, title: stripCc(f.title || key).slice(0, 80), description: stripCc(f.description || '').slice(0, 400),
+      type: ['string', 'number', 'boolean', 'directory', 'file'].includes(f.type) ? f.type : 'string',
+      sensitive: !!f.sensitive, required: !!f.required,
+      ...(f.default !== undefined ? { default: f.default } : {}),
+      ...(Array.isArray(f.options) ? { options: f.options.map(String).slice(0, 40) } : {}),
+    });
+  }
+  const walk = (v) => {
+    if (typeof v === 'string') {
+      for (const m of v.matchAll(VAR_RE)) {
+        const name = m[1];
+        if (PLUGIN_VARS.has(name) || name.startsWith('user_config.') || seen.has(name)) continue;
+        seen.add(name);
+        const hasDef = m[2] !== undefined;
+        fields.push({
+          key: name, title: name, description: '', type: 'string', env: true,
+          sensitive: SENSITIVE_RE.test(name), required: !hasDef, ...(hasDef ? { default: m[3] } : {}),
+        });
+      }
+    } else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+  };
+  walk(pluginMcpMap(dir, meta));
+  return fields;
+}
+
+// 插件里装了什么（详情页「包含」一栏，与官方插件详情一致）：技能 / 命令 / 子 agent / MCP / hooks
+export function pluginContents(dir, meta = pluginManifest(dir)) {
+  const list = (sub, re) => { try { return readdirSync(path.join(dir, sub), { withFileTypes: true }).filter(re).map((e) => e.name); } catch { return []; } };
+  const skills = new Set(list('skills', (e) => e.isDirectory() && existsSync(path.join(dir, 'skills', e.name, 'SKILL.md'))));
+  for (const rel of Array.isArray(meta.skills) ? meta.skills : []) {
+    const d = typeof rel === 'string' ? path.resolve(dir, rel) : '';
+    if (d.startsWith(dir + path.sep) && existsSync(path.join(d, 'SKILL.md'))) skills.add(path.basename(d));
+  }
+  return {
+    skills: [...skills].sort(),
+    commands: list('commands', (e) => e.isFile() && /\.md$/i.test(e.name)).map((n) => n.replace(/\.md$/i, '')).sort(),
+    agents: list('agents', (e) => e.isFile() && /\.md$/i.test(e.name)).map((n) => n.replace(/\.md$/i, '')).sort(),
+    mcp: Object.keys(pluginMcpMap(dir, meta)).sort(),
+    hooks: existsSync(path.join(dir, 'hooks', 'hooks.json')) || !!meta.hooks,
+  };
+}
+
+// 此刻缺哪些必填项（没值、没默认、后端环境里也没有同名变量）
+function missingConfig(item, fields) {
+  const vals = item.configValues || {};
+  const keys = new Set(item.configKeys || []);
+  return fields.filter((f) => f.required && f.default === undefined && !(f.key in vals) && !keys.has(f.key)
+    && !(f.env && process.env[f.key])).map((f) => f.key);
+}
+
+// 保存插件配置：values 里的打码占位符 = 沿用旧值；空串 = 清掉这一项
+export function configureExtension(id, values = {}) {
+  const store = readStoreForWrite();
+  const item = store.items.find((x) => x.id === String(id || '') && x.type === 'plugin');
+  if (!item) throw httpErr(404, '插件不存在');
+  const dir = extensionDir(item);
+  if (!dir || !existsSync(dir)) throw httpErr(404, '插件目录不在了');
+  const fields = pluginConfigFields(dir);
+  const plain = { ...(item.configValues || {}) };
+  let secrets;
+  try { secrets = { ...readSecrets(EXT_ROOT) }; }
+  catch (e) { throw httpErr(500, `加密存储打不开（${String(e?.message || e)}），这次没保存`); }
+  const sec = { ...(secrets[item.id]?.config || {}) };
+  for (const f of fields) {
+    if (!(f.key in values)) continue;
+    let v = values[f.key];
+    if (v === SECRET_MASK) continue;
+    if (f.type === 'boolean') v = v === true || v === 'true';
+    else if (f.type === 'number') v = v === '' || v == null ? '' : Number(v);
+    else v = stripCc(Array.isArray(v) ? v.join(',') : v).slice(0, 4000);
+    const empty = v === '' || (typeof v === 'number' && Number.isNaN(v));
+    if (f.sensitive) { if (empty) delete sec[f.key]; else sec[f.key] = String(v); delete plain[f.key]; }
+    else { if (empty) delete plain[f.key]; else plain[f.key] = v; }
+  }
+  const rest = { ...(secrets[item.id] || {}) };
+  if (Object.keys(sec).length) rest.config = sec; else delete rest.config;
+  if (Object.keys(rest).length) secrets[item.id] = rest; else delete secrets[item.id];
+  try { writeSecrets(EXT_ROOT, secrets); }
+  catch (e) { throw httpErr(500, `配置加密保存失败（${String(e?.message || e)}），这次没保存`); }
+  item.configValues = plain;
+  item.configKeys = Object.keys(sec);
+  if (!item.configKeys.length) delete item.configKeys;
+  item.updated = now();
+  saveStore(store);
+  return publicItem(item);
+}
+
+// 插件 MCP → SDK mcpServers：${CLAUDE_PLUGIN_ROOT} 换成插件目录，${user_config.K} / ${VAR} 依次取配置值、后端环境、
+// ${VAR:-默认}、userConfig 的 default；还解不开（必填项没填）的那条 server 不带，免得带着字面量 ${…} 去连。
+function pluginMcpServers(item, dir, secrets, taken) {
+  const meta = pluginManifest(dir);
+  const fields = pluginConfigFields(dir, meta);
+  const defs = Object.fromEntries(fields.filter((f) => f.default !== undefined).map((f) => [f.key, f.default]));
+  const vals = { ...(item.configValues || {}), ...(secrets?.[item.id]?.config || {}) };
+  const dataDir = path.join(EXT_ROOT, 'runtime', 'plugin-data', path.basename(dir));
+  const lookup = (name, def) => {
+    if (name === 'CLAUDE_PLUGIN_ROOT') return dir;
+    if (name === 'CLAUDE_PLUGIN_DATA') { mkdirSync(dataDir, { recursive: true }); return dataDir; }
+    const key = name.startsWith('user_config.') ? name.slice(12) : name;
+    if (key in vals) return String(vals[key]);
+    if (!name.startsWith('user_config.') && process.env[name] != null) return process.env[name];
+    if (def !== undefined) return def;
+    if (key in defs) return String(defs[key]);
+    return undefined;
+  };
+  const expand = (v) => {
+    if (typeof v === 'string') {
+      return v.replace(VAR_RE, (m, name, d, def) => {
+        const r = lookup(name, d !== undefined ? def : undefined);
+        if (r === undefined) throw new Error('unresolved');
+        return r;
+      });
+    }
+    if (Array.isArray(v)) return v.map(expand);
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, expand(x)]));
+    return v;
+  };
+  // userConfig 也以 CLAUDE_PLUGIN_OPTION_<KEY> 环境变量交给插件的 stdio server（官方约定）
+  const optEnv = {};
+  for (const f of fields) if (!f.env) { const r = lookup('user_config.' + f.key); if (r !== undefined) optEnv['CLAUDE_PLUGIN_OPTION_' + f.key.toUpperCase()] = r; }
+  const out = {};
+  for (const [key, raw] of Object.entries(pluginMcpMap(dir, meta))) {
+    let c;
+    try { c = expand(raw); } catch { continue; }
+    const t = c.type === 'http' || c.type === 'sse' ? c.type : (c.url && !c.command ? 'http' : 'stdio');
+    let cfg;
+    if (t === 'stdio') {
+      if (typeof c.command !== 'string' || !c.command) continue;
+      const env = { ...optEnv, ...(c.env && typeof c.env === 'object' ? c.env : {}) };
+      cfg = { type: 'stdio', command: c.command, args: Array.isArray(c.args) ? c.args.map(String) : [], ...(hasValues(env) ? { env } : {}), ...(c.cwd ? { cwd: String(c.cwd) } : {}) };
+    } else {
+      if (typeof c.url !== 'string' || !/^https?:\/\//i.test(c.url)) continue;
+      const headers = Object.fromEntries(Object.entries(c.headers || {}).filter(([, v]) => String(v).trim()));
+      cfg = { type: t, url: c.url, ...(hasValues(headers) ? { headers } : {}) };
+    }
+    let k = key;
+    if (RESERVED_MCP_KEYS.has(k.toLowerCase()) || taken[k] || out[k]) k = slugify(`${item.name}-${key}`, item.id);
+    while (RESERVED_MCP_KEYS.has(k.toLowerCase()) || taken[k] || out[k]) k += '-x';
+    out[k] = cfg;
   }
   return out;
 }
@@ -642,16 +868,12 @@ export function claudeExtensionOptions() {
   const plugins = [];
   const hasSkills = items.some((x) => x.type === 'skill' && x.agents?.claude);
   if (hasSkills && existsSync(path.join(AGGREGATE_DIR, '.claude-plugin', 'plugin.json'))) {
-    plugins.push({ type: 'local', path: AGGREGATE_DIR });
-  }
-  for (const item of items) {
-    if (item.type !== 'plugin' || !item.agents?.claude) continue;
-    const dir = extensionDir(item);
-    if (dir && existsSync(dir)) plugins.push({ type: 'local', path: dir });
+    plugins.push({ type: 'local', path: AGGREGATE_DIR, skipMcpDiscovery: true });
   }
   const mcpServers = {};
   const conns = items.filter((x) => x.type === 'connector' && x.agents?.claude && x.connector);
-  const secrets = secretsForInjection(conns);
+  const plugs = items.filter((x) => x.type === 'plugin' && x.agents?.claude);
+  const secrets = secretsForInjection([...conns, ...plugs]);
   for (const item of conns) {
     const c = item.connector;
     const { env, headers } = connectorCreds(item, secrets);
@@ -659,6 +881,14 @@ export function claudeExtensionOptions() {
       c.transport === 'stdio'
         ? { type: 'stdio', command: c.command, args: c.args || [], ...(hasValues(env) ? { env } : {}) }
         : { type: c.transport, url: c.url, ...(hasValues(headers) ? { headers } : {}) };
+  }
+  // 插件：技能 / 命令 / agent / hooks 由 CLI 从目录加载；MCP 由这里按存好的配置解析后显式传（skipMcpDiscovery）
+  for (const item of plugs) {
+    const dir = extensionDir(item);
+    if (!dir || !existsSync(dir)) continue;
+    plugins.push({ type: 'local', path: dir, skipMcpDiscovery: true });
+    try { Object.assign(mcpServers, pluginMcpServers(item, dir, secrets, mcpServers)); }
+    catch (e) { console.error(`[extensions] 插件「${item.name}」的 MCP 解析失败：`, String(e?.message || e)); }
   }
   return { plugins, mcpServers };
 }
@@ -672,7 +902,14 @@ export function extensionDiagnostics() {
     out.push({ level: 'error', msg: `${registryError}：列表暂时显示为空，扩展中心暂停写入（不会覆盖它）；修好或挪走 extensions/registry.json 后恢复` });
   }
   if (migrateError) out.push({ level: 'warn', msg: `有连接器的凭据还是明文存的，挪进加密存储没成功：${migrateError}` });
-  const withKeys = store.items.filter((x) => needsSecrets([x]));
+  for (const x of store.items) {
+    if (x.type !== 'plugin' || !x.enabled) continue;
+    const dir = extensionDir(x);
+    if (!dir || !existsSync(dir)) continue;
+    const miss = missingConfig(x, pluginConfigFields(dir));
+    if (miss.length) out.push({ level: 'warn', id: x.id, msg: `插件「${x.name}」还有必填配置没填（${miss.join('、')}），用到它们的 MCP 暂不加载` });
+  }
+  const withKeys = store.items.filter((x) => x.type === 'connector' && needsSecrets([x]));
   if (withKeys.length) {
     let secrets = null;
     try {
