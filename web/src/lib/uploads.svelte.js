@@ -29,6 +29,9 @@ const PAR = 3;            // 一个文件同时在途的块数
 const FILE_SLOTS = 2;     // 同时传几个文件/文件夹任务，其余排队
 const TREE_PAR = 3;       // 文件夹任务里同时传几个文件
 const STALL_MS = 40000;
+// 请求体已经全部交出去之后，等回执的耐心按块大小给：慢线路上（Muse 的隧道约 0.7 MB/s，3 块并行各分到更少）浏览器早把字节
+// 交给了本机网络栈 / 代理，进度事件就停了，服务端却还在一点点收——按 40 秒判卡死会把每一块都掐掉重发、永远传不完。
+const RESP_MIN_BPS = 32 * 1024;
 const MAX_TRIES = 10;     // 每块/每次 commit 最多连续失败几次（断网等待不计）
 
 /** list：JS 引擎的行；native：手机原生任务的行（每次轮询整体替换）。
@@ -88,19 +91,25 @@ async function send(job, fsx, pathq, body, onProg) {
     if (job.halt) { netRelease(); return reject(abortedErr()); }
     const xhr = new XMLHttpRequest();
     let lastAct = Date.now(), settled = false;
+    const size = body && typeof body.size === 'number' ? body.size : 0;
+    let bodyDone = !size;   // 没有请求体（commit / probe）就直接是「等回执」
+    const patience = () => (bodyDone ? Math.max(STALL_MS, (size / RESP_MIN_BPS) * 1000) : STALL_MS);
     const finish = (fn, v) => {
       if (settled) return;
       settled = true; clearInterval(dog); job.xhrs.delete(xhr); fsx?.xhrs.delete(xhr); netRelease(); fn(v);
     };
     const dog = setInterval(() => {
-      if (Date.now() - lastAct < STALL_MS) return;
+      if (Date.now() - lastAct < patience()) return;
       finish(reject, retryable('stalled'));
       try { xhr.abort(); } catch {}
     }, 5000);
     job.xhrs.add(xhr); fsx?.xhrs.add(xhr);
     xhr.open('POST', apiUrl(pathq));
     const h = authHeaders(); for (const k in h) xhr.setRequestHeader(k, h[k]);
-    if (xhr.upload) xhr.upload.onprogress = (e) => { lastAct = Date.now(); if (onProg) onProg(e.loaded); };
+    if (xhr.upload) {
+      xhr.upload.onprogress = (e) => { lastAct = Date.now(); if (size && e.loaded >= size) bodyDone = true; if (onProg) onProg(e.loaded); };
+      xhr.upload.onload = () => { lastAct = Date.now(); bodyDone = true; };
+    }
     xhr.onprogress = () => { lastAct = Date.now(); };
     xhr.onload = () => {
       let data = null;
