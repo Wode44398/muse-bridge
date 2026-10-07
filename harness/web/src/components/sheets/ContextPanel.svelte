@@ -52,7 +52,7 @@
     };
   });
   // 用量表「任务」列：压缩在这里是名词（一次压缩花的量），英文走名词语境（Compaction），别和按钮上的动词 Compact 撞
-  const TASK: Record<UsageRow["task"], string> = { main: t("主对话"), subagent: t("子 agent"), workflow: t("工作流"), compaction: tc("名词", "压缩") };
+  const TASK: Record<UsageRow["task"], string> = { main: t("主对话"), subagent: t("子 agent"), workflow: t("工作流"), compaction: tc("名词", "压缩"), memory: t("记忆沉淀") };
   const total = $derived((rows ?? []).reduce((a, r) => ({ input: a.input + r.input, output: a.output + r.output }), { input: 0, output: 0 }));
 
   let busy = $state<"" | "compact" | "handoff">("");

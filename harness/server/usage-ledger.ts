@@ -5,7 +5,8 @@
 // 落盘（记录里的可选字段 usage），上下文弹层里分项显示。主循环的 totals 照旧（它的含义是「主对话的上下文与用量」）。
 // 暂不含：识图辅助、嵌入（走各自的通道，拿不到逐次用量时不硬凑）。
 
-export type UsageTask = "main" | "subagent" | "workflow" | "compaction";
+// memory（瘦身 P0-1）：run 之后的记忆沉淀那次旁路请求
+export type UsageTask = "main" | "subagent" | "workflow" | "compaction" | "memory";
 
 export interface UsageDelta {
   provider: string;
@@ -24,7 +25,7 @@ export interface UsageRow extends UsageDelta {
 // 键 = 厂商|型号|任务
 export type UsageLedger = Record<string, UsageRow>;
 
-const TASK_ORDER: Record<UsageTask, number> = { main: 0, subagent: 1, workflow: 2, compaction: 3 };
+const TASK_ORDER: Record<UsageTask, number> = { main: 0, subagent: 1, workflow: 2, compaction: 3, memory: 4 };
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
 
 export function addUsage(ledger: UsageLedger, d: UsageDelta): void {

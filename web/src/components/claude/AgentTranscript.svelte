@@ -17,7 +17,7 @@
   // 一启动拿到 agentId 就自动换成磁盘上的全文。
   // 拉到的结果留在组件本地 fetched 里，不回写 task（单写者规则）。
   import { untrack, tick } from 'svelte';
-  import { session } from '../../lib/state.svelte.js';
+  import { session, prefs } from '../../lib/state.svelte.js';
   import { api } from '../../lib/api.js';
   import { renderMarkdown } from '../../lib/md.js';
   import { onMdClick } from '../../lib/linkNav.js';
@@ -27,6 +27,9 @@
   import { glyph } from '../../lib/claudeIcons.js';
   import { t } from '../../lib/i18n.js';
   import ClaudeLogo from '../ClaudeLogo.svelte';
+  import ClaudeWorkingMark from '../ClaudeWorkingMark.svelte';
+  import ClaudeSpriteMark from '../ClaudeSpriteMark.svelte';
+  import { toolActivity } from '../../lib/workingMark.js';
 
   let { tool, agent = null } = $props();
 
@@ -246,7 +249,7 @@
   {/each}
   {#if errorText}<p class="tr-err sel-text">{errorText}</p>{/if}
   {#if running}
-    <div class="tr-star" role="status"><ClaudeLogo anim="thinking" size={18} /><span class="tr-live">{liveLine}</span></div>
+    <div class="tr-star" role="status">{#if prefs.claudeMark === 'classic'}<ClaudeLogo anim="thinking" size={18} />{:else if prefs.claudeMark === 'sprite'}<ClaudeSpriteMark phase={status === 'pending' ? 'pending' : 'working'} box={18} />{:else}<ClaudeWorkingMark standalone size={18} activity={status === 'pending' ? 'default' : isWf && agent.lastToolName ? toolActivity(agent.lastToolName, null, true) : 'think'} />{/if}<span class="tr-live">{liveLine}</span></div>
   {:else if fx && fx.state === 'loading'}
     <div class="tr-note">Loading transcript…</div>
   {:else if !shown.length}

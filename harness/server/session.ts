@@ -14,7 +14,7 @@ import {
 import { isPermissionMode, sessionAllowRule, type PermissionMode, type SessionAllow } from "./agent/permissions.ts";
 import { recallIds, skillLoadedIn } from "./agent/injections.ts";
 import { runAgent, transcriptReadExternal } from "./agent/loop.ts";
-import { describeWorldChange, refreshDynamicContext, refreshPlanSection, systemPrompt } from "./agent/prompt.ts";
+import { describeWorldChange, LEGACY_AUDIT_CONTRACT, refreshDynamicContext, refreshPlanSection, systemPrompt } from "./agent/prompt.ts";
 import { worldTokens, type WorldTokens, type WorldValues } from "./agent/world-state.ts";
 import { Sandbox } from "./sandbox.ts";
 import { accessLock } from "./tenant.ts";
@@ -52,6 +52,7 @@ import { effectiveBaseUrl, getConfig, resolveKey, type RuntimeConfig } from "./c
 import { renderAllMemoryForPrompt } from "./memory.ts";
 import { noteRecalledDocs } from "./memory-usage.ts";
 import { withExternalSummary } from "./external-memory.ts";
+import { fileRunMemory, memoryExtractEnabled, runDigest, type RunDigest } from "./memory-extract.ts";
 import { managedSkillsSection } from "./extensions.ts";
 import { inheritedInstructions, readProjectDocs } from "./project-docs.ts";
 import { appendRunLog } from "./run-log.ts";
@@ -180,6 +181,8 @@ export interface Session {
   pendingPermissions: Map<string, PendingPermission>;
   // Plan mode：ExitPlanMode 提交的计划在等用户批准。
   pendingPlans: Map<string, { resolve: (r: PlanVerdict) => void; plan: string; deadlineAt?: number; since?: number }>;
+  // 瘦身 P0-1：上一轮收尾后在后台做的记忆沉淀（没有就是 null）。不占 running——用户可以接着发消息
+  memoryJob?: Promise<void> | null;
 }
 
 export interface PermissionVerdict {
@@ -896,6 +899,12 @@ function buildState(
     defs = defs.filter((t) => t.name !== "WebSearch");
     tmap.delete("WebSearch");
   }
+  // 瘦身 P0-1：收工不再有记忆审计，MemoryAudit 不再下发。只有瘦身前建的会话例外——它恢复出来的 system 里还写着「收工前必须
+  // 交 MemoryAudit」，工具留着让它交得出去（交了回一句「不用了」，见 AgentState.completeMemoryAudit）
+  if (!systemOverride?.includes(LEGACY_AUDIT_CONTRACT)) {
+    defs = defs.filter((t) => t.name !== "MemoryAudit");
+    tmap.delete("MemoryAudit");
+  }
   // E1（G6）：基线里的 MCP 工具（直连的逐个；工具多的连接器走 McpDescribe / McpCall 网关）
   for (const t of mcpTools(mcp)) {
     if (tmap.has(t.def.name)) continue;
@@ -970,6 +979,8 @@ function buildState(
     sessionAllow: cfg.sessionAllow,
     // V1：主会话的最终答复下附服务端验证回执。
     finalFootnotes: true,
+    // 瘦身 P0-1：收工不设记忆关口（沉淀挪到 run 之后，见 memory-extract.ts）
+    memoryAuditRequired: false,
     // R10（二）：整段压缩前把被压掉的原文归档成纯文本，摘要末尾写明在哪、怎么读（Context Recovery）
     // R13：微压缩清掉的旧工具输出也先存进 outputs 目录，占位里给路径
     compactionArchive: sessionId
@@ -2432,6 +2443,8 @@ async function executeRun(
     // P9（K22）：这一轮的结束快照。在「不在跑了」之前同步排进检查点的串行队列——之后的回滚 / 预览一定排在它后面，
     // 拿到的是补过的记录；收尾最后等它拍完 run 才算完（不留一个 git 子进程在 run 结束之后还攥着工作区）。
     const ended = runCheckpoint ? recordRunEnd(session.id, runCheckpoint.ws, runCheckpoint.n) : null;
+    // 瘦身 P0-1：这一轮正常收尾、又值得看——在任何 await 之前定格摘要（session.running 一放开，用户可能马上发下一条）
+    const memoryDigest = outcome.kind === "done" ? digestForMemory(session, state, userMessage) : null;
     // M13：被「服务重启」切断的轮 marker 留着、标上；其余出口（做完、用户停、报错）删掉
     if (abort.signal.aborted && abort.signal.reason === RESTART_REASON) {
       const marker = readRunMarker(session.id);
@@ -2510,11 +2523,58 @@ async function executeRun(
     });
     void flushTraceLog();
     await persistNow(session);
+    if (memoryDigest) scheduleMemoryFiling(session, state, memoryDigest);
     if (ended) await ended;
     evictIdleSessions();
     // O7：目标还没达成、预算还有——续下一轮
     if (goalNext === "continue") scheduleGoalRound(session);
   }
+}
+
+// ── 瘦身 P0-1：run 之后的记忆沉淀 ─────────────────────────────────────────────
+// 收工不再有记忆审计（MemoryAudit 关口）。一轮正常收尾后，按确定性信号判断值不值得看（runDigest），值得就在后台另起一次
+// 旁路请求挑出该长期记住的东西、经 Remember 同一套治理落盘（memory-extract.ts）。不占 running：答复早已交付，用户可以
+// 接着发消息；失败只记一行日志。用量记进这个会话的账本（任务 memory）。
+function digestForMemory(session: Session, state: AgentState, userMessage: string): RunDigest | null {
+  if (!memoryExtractEnabled() || state.memoryAuditRequired || session.discarded) return null;
+  // 这一轮从本轮的用户消息起；中途整段压缩把它摘掉了，就从最后那条压缩摘要起（压缩前干过什么在 compactedTrace 里）
+  let from = session.runUserMsg ? state.messages.indexOf(session.runUserMsg) : -1;
+  if (from < 0) from = state.messages.findLastIndex((m) => m.kind === "compaction-summary");
+  if (from < 0) return null;
+  const root = state.ctx.sandbox.root;
+  const edited = [...state.editedFiles].map((f) => {
+    const rel = path.relative(root, f);
+    return rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel.replace(/\\/g, "/") : f;
+  });
+  return runDigest(state.messages, from, { workspace: root, edited, compacted: state.compactedTrace, request: userMessage || undefined });
+}
+
+function scheduleMemoryFiling(session: Session, state: AgentState, digest: RunDigest): void {
+  const started = Date.now();
+  const job = fileRunMemory({
+    adapter: state.adapter,
+    digest,
+    ctx: {
+      sandbox: state.ctx.sandbox,
+      humanAttended: () => !isAway(session),
+      lookupToolCall: state.ctx.lookupToolCall,
+      externalContent: () => state.externalContentSeen,
+    },
+    onUsage: (u) => state.recordSideUsage("memory", u),
+  }).then(
+    (r) => {
+      traceEvent(session.id, { e: "memory_filed", why: digest.why, saved: r.saved.length, refused: r.rejected.length, ms: Date.now() - started });
+      if (r.saved.length || r.rejected.length) {
+        console.log(`[memory] ${session.id}: after-run filing (${digest.why}) saved ${r.saved.length}${r.saved.length ? ` — ${r.saved.join("; ")}` : ""}${r.rejected.length ? `; refused ${r.rejected.length}: ${r.rejected.join(" | ")}` : ""}`);
+      }
+    },
+    (e) => console.warn(`[memory] ${session.id}: after-run filing failed (${digest.why}): ${(e as Error).message}`),
+  );
+  const tracked: Promise<void> = job.finally(() => {
+    if (session.memoryJob === tracked) session.memoryJob = null;
+    schedulePersist(session); // 用量账本多了一笔
+  });
+  session.memoryJob = tracked;
 }
 
 // ── AskUserQuestion (human-in-the-loop) ──────────────────────────────────────

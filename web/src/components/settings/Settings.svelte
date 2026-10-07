@@ -93,6 +93,7 @@
     { sec: 'general', sid: 'lang', label: t('语言'), keys: t('界面语言 中文 英文 English language i18n') },
     { sec: 'general', sid: 'notify', label: t('任务通知'), keys: t('通知 提醒 notification') },
     { sec: 'general', sid: 'suggest', label: t('输入建议'), keys: t('提示词 预测 下一句 Tab 补全 填入') },
+    { sec: 'general', sid: 'thinkmark', label: t('思考动画'), keys: t('菊花 星标 动画 Claude Code 经典 加载') },
     { sec: 'general', sid: 'fullres', label: t('原图加载'), keys: t('图片 画质 流量') },
     { sec: 'account', sid: 'username', label: t('用户名与身份'), keys: t('账户 账号 管理员 头像 account') },
     { sec: 'account', sid: 'usage', label: t('用量'), keys: t('额度 5小时 本周 订阅 quota usage') },

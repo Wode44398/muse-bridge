@@ -148,10 +148,11 @@ export function toggleTheme() { setTheme(ui.theme === 'dark' ? 'light' : 'dark')
 // fullResMedia: 原图加载（相册/漫画查看器直接拉原图、预载也按原图跑；默认关=1280 轻量档+缩放时升级）
 // worktree: 输入栏分支胶囊右半的 worktree 勾选框——勾着开新对话＝先切一个 git worktree 再跑（官方同款，默认关）
 // promptSuggest: 输入建议（Claude 每轮回复完预测下一句，输入框空着时显示，Tab 填入；默认开，与官方同）
+// claudeMark: Claude 运行标记——'clay'=新版 Claude Code 的活动标记（默认）/ 'sprite'=新版 claude.ai 聊天页（星形→节点）/ 'classic'=原来的 claude.ai 星标五态
 const PREFS_KEY = 'bridge-prefs';
 function loadPrefs() {
-  try { const p = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); if (p) return { followSys: !!p.followSys, noEnterAnim: !!p.noEnterAnim, fullResMedia: !!p.fullResMedia, promptSuggest: p.promptSuggest !== false, worktree: !!p.worktree }; } catch {}
-  return { followSys: false, noEnterAnim: false, fullResMedia: false, promptSuggest: true, worktree: false };
+  try { const p = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); if (p) return { followSys: !!p.followSys, noEnterAnim: !!p.noEnterAnim, fullResMedia: !!p.fullResMedia, promptSuggest: p.promptSuggest !== false, worktree: !!p.worktree, claudeMark: p.claudeMark === 'classic' || p.claudeMark === 'sprite' ? p.claudeMark : 'clay' }; } catch {}
+  return { followSys: false, noEnterAnim: false, fullResMedia: false, promptSuggest: true, worktree: false, claudeMark: 'clay' };
 }
 export const prefs = $state(loadPrefs());
 
@@ -160,7 +161,7 @@ export const prefs = $state(loadPrefs());
 // 工作台与归属芯片据此指向 worktree，而不是项目的主检出。
 export const sessionWt = $state({});
 export function savePrefs() {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ followSys: prefs.followSys, noEnterAnim: prefs.noEnterAnim, fullResMedia: prefs.fullResMedia, promptSuggest: prefs.promptSuggest, worktree: prefs.worktree })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ followSys: prefs.followSys, noEnterAnim: prefs.noEnterAnim, fullResMedia: prefs.fullResMedia, promptSuggest: prefs.promptSuggest, worktree: prefs.worktree, claudeMark: prefs.claudeMark })); } catch {}
 }
 
 // 跟随系统明暗：监听 prefers-color-scheme；开关打开瞬间也调一次（applyFollowSys）。

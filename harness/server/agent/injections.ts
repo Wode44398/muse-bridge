@@ -22,6 +22,7 @@ const KINDS: readonly [RegExp, string][] = [
   [/^\[Skill: /, "skill"], // C5：Skill 工具加载的技能正文（E3 用户 /技能名 点的也是这个开头，但落盘时带着 kind slash-skill）
   [/^\[Skill package: /, "slash-skill"], // E3：用户 /包名 点了一个技能包——列出成员让模型挑
   [/^\[Skill again: /, "slash-skill"], // E3：用户又点了一次已经载入过的技能——只提醒，不再整段注入
+  [/^\[Playbook: /, "playbook"], // 瘦身 P0-3：按需注入的专章（网页 / 桌面 / 安卓验证、本地服务安全）
   [/^\[Rewound by the user\]/, "rewind"], // U9：从这里改写之后的说明（文件没有回退、改过哪些）
   [/^\[Files restored by the user\]/, "restore"], // U10：审阅面板里撤销了这个对话对哪些文件的改动
   [/^\[Goal\] The user's message above is a goal/, "goal-start"], // O7：目标续跑的第一轮说明

@@ -279,4 +279,5 @@ export default {
   "子 agent": "Subagent",
   "工作流": "Workflow",
   "名词::压缩": "Compaction",
+  "记忆沉淀": "Memory filing",
 };

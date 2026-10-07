@@ -113,7 +113,7 @@
     "trace.test.ts": 2,
     "diagnostics.test.ts": 3,
     "error-paths.test.ts": 3,
-    "skill-catalog.test.ts": 3,
+    "skill-catalog.test.ts": 4,
     "rollback-message.test.ts": 1,
     "loop-robustness.test.ts": 4,
     "workflow-precompile.test.ts": 4,
@@ -217,6 +217,9 @@
     "workflow-recovery.test.ts": 2,
     "workflow-replay.test.ts": 3,
     "world-state.test.ts": 6,
-    "workflow.test.ts": 9
+    "workflow.test.ts": 9,
+    "ephemeral-tail.test.ts": 2,
+    "playbooks.test.ts": 5,
+    "memory-extract.test.ts": 7
   }
 }

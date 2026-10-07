@@ -3,6 +3,10 @@ import type { AgentState } from "./state.ts";
 import type { ProviderAdapter } from "../providers/types.ts";
 import { archiveChunks, deterministicNotes, prepareSummary, renderSummary, sampleTranscript } from "./compaction-shape.ts";
 import { runningJobsSummary } from "../tools/bash.ts";
+import { traceLines } from "./run-trace.ts";
+
+// 瘦身 P0-1：整段压缩前给 run 之后的记忆沉淀留的轨迹，最多这么多行（多的从最早的丢）
+const COMPACTED_TRACE_MAX = 200;
 
 export const BUFFER_TOKENS = 13_000; // CC's AUTOCOMPACT_BUFFER_TOKENS
 const MAX_FAILURES = 3; // CC's MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
@@ -393,6 +397,8 @@ async function compact(state: AgentState, limit: number, signal?: AbortSignal): 
       next = withSummary(prepared.archives);
     }
   }
+  // 瘦身 P0-1：被压掉那段干过什么，先记一份工具轨迹（收工不再有记忆审计，压缩前也不再停下来审一次——由 run 之后的沉淀看）
+  state.compactedTrace = [...state.compactedTrace, ...traceLines(middle)].slice(-COMPACTED_TRACE_MAX);
   state.messages = next;
   state.noteRewrite("compaction"); // Q4：压缩边界是唯一合法的全量重建点
   // C4（N09 第 3 步）：借这次全量重建把 system 也按当前的模式、GUIDE、项目知识……重建一遍（会话挂了 rebuildSystem 才做）

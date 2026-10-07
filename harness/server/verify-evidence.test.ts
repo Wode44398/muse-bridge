@@ -109,12 +109,13 @@ test("revdeps：只有测试运行器算跑过；带参数的 npm test 是定向
   }
 });
 
-test("最终答复下附服务端验证回执；子 agent（没开尾注）不附", async () => {
-  const script = (i: number): StreamEvent[] =>
-    i === 0
-      ? [{ e: "tool_call", id: "b1", name: "Bash", args: { command: "node pass.test.js", verify: true } }, { e: "turn_done", stopReason: "tool_use" }]
-      : [{ e: "text_delta", text: "All tests pass." }, { e: "turn_done", stopReason: "end" }];
-  const make = (finalFootnotes: boolean) => {
+test("验收全绿不附尾注；最后一次检查没过才附（连同通过的对照）；子 agent（没开尾注）不附", async () => {
+  const run = (command: string) => ({ e: "tool_call" as const, id: command, name: "Bash", args: { command, verify: true } });
+  const make = (finalFootnotes: boolean, commands: string[] = ["node pass.test.js"]) => {
+    const script = (i: number): StreamEvent[] =>
+      i < commands.length
+        ? [run(commands[i]), { e: "turn_done", stopReason: "tool_use" }]
+        : [{ e: "text_delta", text: "All tests pass." }, { e: "turn_done", stopReason: "end" }];
     let n = 0;
     const adapter: ProviderAdapter = {
       id: "openai",
@@ -140,15 +141,23 @@ test("最终答复下附服务端验证回执；子 agent（没开尾注）不�
   main.addUserMessage("run the tests");
   const events: AgentEvent[] = [];
   for await (const ev of runAgent(main, new AbortController().signal)) events.push(ev);
-  const final = main.messages.at(-1)!;
-  const text = final.content.map((b) => (b.t === "text" ? b.text : "")).join("");
-  assert.match(text, /^All tests pass\./);
-  assert.match(text, /验证回执：✅ `node pass\.test\.js \(exit 0\)`/);
-  const streamed = events.filter((e) => e.e === "text_delta").map((e) => (e as { text: string }).text).join("");
-  assert.match(streamed, /验证回执/, "在线的客户端当场看到");
+  const textOf = (s: AgentState) => s.messages.at(-1)!.content.map((b) => (b.t === "text" ? b.text : "")).join("");
+  assert.equal(textOf(main), "All tests pass.", "全部通过：不打扰");
+  assert.doesNotMatch(events.filter((e) => e.e === "text_delta").map((e) => (e as { text: string }).text).join(""), /✅/);
 
-  const child = make(false);
+  const broken = make(true, ["node pass.test.js", "node fail.test.js"]);
+  broken.addUserMessage("run the tests");
+  const brokenEvents: AgentEvent[] = [];
+  for await (const ev of runAgent(broken, new AbortController().signal)) brokenEvents.push(ev);
+  const text = textOf(broken);
+  assert.match(text, /^All tests pass\./);
+  assert.match(text, /最后一次检查没通过：❌ `node fail\.test\.js/);
+  assert.match(text, /通过的检查：✅ `node pass\.test\.js \(exit 0\)`/);
+  const streamed = brokenEvents.filter((e) => e.e === "text_delta").map((e) => (e as { text: string }).text).join("");
+  assert.match(streamed, /最后一次检查没通过/, "在线的客户端当场看到");
+
+  const child = make(false, ["node pass.test.js", "node fail.test.js"]);
   child.addUserMessage("run the tests");
   for await (const _ of runAgent(child, new AbortController().signal)) { /* drain */ }
-  assert.doesNotMatch(JSON.stringify(child.messages.at(-1)), /验证回执/);
+  assert.doesNotMatch(JSON.stringify(child.messages.at(-1)), /最后一次检查没通过/);
 });

@@ -85,6 +85,8 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "KNOWLEDGE_EMBEDDING_MODEL", area: "知识与记忆", description: "embedding 型号", default: "text-embedding-v4" },
   { name: "KNOWLEDGE_EMBEDDING_DIMENSIONS", area: "知识与记忆", description: "embedding 维度", default: "256" },
   { name: "DIMENSIO_EXTERNAL_MEMORY", area: "知识与记忆", description: "K8 外部记忆库只读挂载：`<库目录>` 或 `<库目录>=><工作区>|<工作区>`，分号分隔；默认不挂" },
+  { name: "DIMENSIO_MEMORY_EXTRACT", area: "知识与记忆", description: "瘦身 P0-1：run 之后的记忆沉淀；0 = 关（测试默认关，要测时设 1）", default: "开" },
+  { name: "DIMENSIO_MEMORY_EXTRACT_TIMEOUT_MS", area: "超时与重试", description: "记忆沉淀那次旁路请求的时限（每次尝试）", default: "120000" },
 
   // ── 联网搜索 ──
   { name: "WEBSEARCH_BACKENDS", area: "联网搜索", description: "钉死后端顺序（逗号分隔：zhipu / kimi / deepseek / qwen / gemini / anthropic / mimo / ddg）；不给就当前会话那家的原生搜索排第一，其余按可用的自动排" },

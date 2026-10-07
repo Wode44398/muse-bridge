@@ -890,7 +890,7 @@ export interface RunBody {
 export interface UsageRow {
   provider: string;
   model: string;
-  task: "main" | "subagent" | "workflow" | "compaction";
+  task: "main" | "subagent" | "workflow" | "compaction" | "memory";
   input: number;
   output: number;
   cacheRead: number;

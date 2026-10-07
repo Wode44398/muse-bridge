@@ -33,6 +33,8 @@
 
   function onFullRes(v) { prefs.fullResMedia = v; savePrefs(); }
   function onSuggest(v) { prefs.promptSuggest = v; savePrefs(); }
+  const MARK_OPTS = [{ value: 'clay', label: t('新版 Claude Code') }, { value: 'sprite', label: t('新版聊天页') }, { value: 'classic', label: t('经典星标') }];
+  function onMark(v) { prefs.claudeMark = v; savePrefs(); }
 </script>
 
 <SSection title={t('外观')}>
@@ -54,6 +56,9 @@
 <SSection title={t('对话')}>
   <SRow label={t('输入建议')} desc={t('每次回复完猜你接下来想说的话，输入框空着时以灰字显示；点「填入」（电脑上按 Tab）放进输入框')} sid="suggest">
     {#snippet trailing()}<SToggle checked={prefs.promptSuggest} onchange={onSuggest} label={t('输入建议')} />{/snippet}
+  </SRow>
+  <SRow label={t('思考动画')} desc={t('回复进行中的 Claude 标记：Claude Code 版按正在做的事换动画，聊天页版是星形散成节点，经典是原来的星标')} sid="thinkmark">
+    {#snippet trailing()}<SSegmented options={MARK_OPTS} value={prefs.claudeMark} onchange={onMark} label={t('思考动画')} />{/snippet}
   </SRow>
 </SSection>
 

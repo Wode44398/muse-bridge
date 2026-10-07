@@ -5,6 +5,8 @@ import { mayHaveSideEffects, type AgentState } from "./state.ts";
 import { RunInvariants } from "./turn-invariants.ts";
 import { compactNow, contextNeedsTrim, contextTokens, effectiveWindow, ensureContextFits } from "./context.ts";
 import { downsampleForModel } from "./media-budget.ts";
+import { messageKind } from "./injections.ts";
+import { PLAYBOOK_KIND, playbookLoadedIn, playbookMessage, playbooksForCalls, playbooksForRequest, type Playbook } from "./playbooks.ts";
 import { loopStopText } from "./loop-guard.ts";
 import { cutAtLoop, isRunawayRepetition, LOOP_CUT_NOTICE } from "./repetition.ts";
 import { connectErrorLabel, isConnectFailure, planWait, type NetWait, type WaitPlan } from "./netwait.ts";
@@ -291,7 +293,7 @@ function withLoopCut(text: string): string {
 
 // ── V1（#19）：最终答复下的服务端验证回执 ─────────────────────────────────────
 // 模型写的「测试全绿」旁边，摆着这一轮真正交出的证据：通过的检查、最后一次没通过的检查、
-// VerificationAudit 的豁免理由。只在这一轮用过 verify 或做过 VerificationAudit 时出现；写进最终
+// VerificationAudit 的豁免理由。只在这一轮出了问题时出现（全部通过不附，10-07）；写进最终
 // 那条 assistant 消息（刷新后还在），并在 done 之前补一个 text_delta（在线的客户端当场看到）。
 const clipDetail = (d: string): string => {
   const one = d.replace(/`/g, "'").replace(/\s+/g, " ").trim();
@@ -390,14 +392,16 @@ export function verificationFootnote(state: AgentState): string | null {
         "，以上结论请自行核对。",
     );
   }
-  const passed = [...new Set(state.runEvidence.filter((e) => e.passed).map((e) => clipDetail(e.detail)))].slice(-3);
-  if (passed.length) lines.push(`验证回执：${passed.map((d) => `✅ \`${d}\``).join(" · ")}`);
   const last = state.runEvidence.at(-1);
   if (last && !last.passed) lines.push(`最后一次检查没通过：❌ \`${clipDetail(last.detail)}\``);
   if (state.runAudit) lines.push(`没有可跑的验证（${state.runAudit.decision}）：${state.runAudit.reason}`);
   // K6（G4）：记忆审计门禁追问用尽放行——服务端写明，模型去不掉
   if (state.memoryAuditGaveUp) lines.push(`⚠️ 记忆审计：追问 ${MAX_MEMORY_AUDIT_NUDGES} 次仍没交，已放行——这一轮值得记住的事可能没记下来`);
-  return lines.length ? `\n\n> ${lines.join("\n>\n> ")}` : null;
+  // 10-07：验收顺利就不打扰——通过的回执只在上面有问题时作为对照一起给，全绿不附尾注
+  if (!lines.length) return null;
+  const passed = [...new Set(state.runEvidence.filter((e) => e.passed).map((e) => clipDetail(e.detail)))].slice(-3);
+  if (passed.length) lines.push(`通过的检查：${passed.map((d) => `✅ \`${d}\``).join(" · ")}`);
+  return `\n\n> ${lines.join("\n>\n> ")}`;
 }
 
 // Q3：请求不变量在生产上只计数、首次告警一次，绝不抛（检查本身出错也只记一笔）。测试里违反即失败：
@@ -420,6 +424,27 @@ function noteInvariants(state: AgentState, invariants: RunInvariants, turn: Turn
     if (state.invariantSamples.length >= INVARIANT_SAMPLES) break;
     if (!state.invariantSamples.includes(p)) state.invariantSamples.push(p);
   }
+}
+
+// 瘦身 P0-3：专章（playbook）按需注入——用户点名或工作碰到那块时追加一条 harness 消息，同一章在转录里还在就不重复。
+// Muse：这台机器没有浏览器（Browser 工具没注册）时，网页章给 curl 版、桌面 / 安卓两章不给（与 prompt.ts 的 browser 开关一致）。
+function attachPlaybooks(state: AgentState, picks: Playbook[], why: "request" | "work"): void {
+  const browser = state.toolMap.has("Browser");
+  for (const p of picks) {
+    if (p.needsBrowser && !browser) continue;
+    if (playbookLoadedIn(state.messages, p)) continue;
+    state.appendUserBlocks([{ t: "text", text: playbookMessage(p, why, browser) }], false, { origin: "harness", kind: PLAYBOOK_KIND });
+  }
+}
+
+// 这一轮用户本人说的话（最后一条不带来源的用户文本消息；续跑 / 目标续跑的轮里是更早那条，重复注入由去重挡住）
+function ownRequestText(messages: readonly Msg[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "user" || messageKind(m) !== null || m.content.some((b) => b.t === "tool_result")) continue;
+    return m.content.flatMap((b) => (b.t === "text" ? [b.text] : [])).join("\n");
+  }
+  return "";
 }
 
 // 尾注接在最终答复最后一段正文后面；这一轮没有正文时单独成一条 assistant 消息。
@@ -464,6 +489,8 @@ export async function* runAgent(
   const invariants = new RunInvariants();
   // C4：这一轮的第一次请求前连日期、项目知识、记忆一起对一遍
   let worldRunStart = true;
+  // 瘦身 P0-3：用户原话点名了某块（安卓、桌面应用……）——开工前就把那一章给它
+  attachPlaybooks(state, playbooksForRequest(ownRequestText(state.messages)), "request");
 
   while (true) {
     if (signal.aborted) {
@@ -486,6 +513,7 @@ export async function* runAgent(
         state.appendUserBlocks([{ t: "text", text: steer.attach.text }], false, { origin: "harness", kind: steer.attach.kind });
         yield { e: "skill_loaded", name: steer.attach.name, via: "slash", ...(steer.attach.pkg ? { pkg: true } : {}) };
       }
+      attachPlaybooks(state, playbooksForRequest(steer.text), "request");
     }
     // #78：审计前那句收尾答复是对插话之前的对话说的，插话一进来它就不再是最终答复。以前模型下一轮只交了
     // MemoryAudit，loop 就拿那句旧话收工——插话被注入了，却没人回应（Q1 的严格脚本化测试照出来的）。
@@ -780,6 +808,9 @@ export async function* runAgent(
         };
       }
     }
+
+    // 瘦身 P0-2：挂在这次请求末尾的提醒已经送到（重试也都带着它），不留到下一次
+    state.dropEphemeralTail();
 
     if (streamThrew) {
       const message = `stream failed: ${(streamThrew as Error).message}`;
@@ -1427,14 +1458,17 @@ export async function* runAgent(
     for (const skill of skills) {
       state.appendUserBlocks([{ t: "text", text: skill.text }], false, { origin: "harness", kind: "skill" });
     }
+    // 瘦身 P0-3：这一轮的调用碰到了某块（写了网页文件、起了 Preview、跑了 adb……）——那一章紧跟在结果后面
+    attachPlaybooks(state, playbooksForCalls(calls), "work");
 
     // The plan drifts out of the model's attention over a long run (and dies in
-    // a compaction). Periodically re-inject the current todo list.
+    // a compaction). Periodically re-show the current todo list — on the next
+    // request only (瘦身 P0-2: not persisted, so stale copies never pile up).
     state.turnsSinceTodoSeen++;
     const openTodos = state.todos.some((t) => t.status !== "completed");
     if (openTodos && state.turnsSinceTodoSeen >= TODO_REMIND_TURNS) {
       state.turnsSinceTodoSeen = 0;
-      state.appendUserBlocks([{ t: "text", text: renderTodoReminder(state.todos) }], false, { origin: "harness", kind: "todo" });
+      state.ephemeralTail = renderTodoReminder(state.todos);
     }
   }
 }

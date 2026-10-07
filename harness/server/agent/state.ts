@@ -274,6 +274,19 @@ export class AgentState {
   // reminder injection) — drives periodic re-injection so the plan survives
   // long runs and compactions.
   turnsSinceTodoSeen = 0;
+  // 瘦身 P0-2：只挂在下一次请求末尾、不进转录的提醒（现在只有待办清单）。以前每 5 轮持久写进转录一份、从不回收，
+  // 长会话攒下上百份几乎一样的旧清单（09-16 日历会话约 100 份）。挂在最后一条之后：前缀只在它的位置断开，后面本来就是新内容。
+  // loop 在这一轮的回答落定后清掉，并向前缀判定器报备（下一次请求在这里断开是预期的）。
+  ephemeralTail: string | null = null;
+  // 瘦身 P0-1：这一轮里被整段压缩掉的那部分的工具轨迹（压缩前留一份），run 之后的记忆沉淀看得到压缩前干过什么。
+  // 每条新的用户消息清空；有上限。
+  compactedTrace: string[] = [];
+
+  dropEphemeralTail(): void {
+    if (this.ephemeralTail === null) return;
+    this.ephemeralTail = null;
+    this.prefix.noteRewrite("ephemeral-tail");
+  }
   // Done-gate: set by a successful Edit/Write, cleared only by explicit passed
   // verification evidence. Inspection, Preview, and failed commands do not count.
   dirtySinceVerify = false;
@@ -413,6 +426,9 @@ export class AgentState {
       this.noteRewrite("media-retire");
       messages = this.materializeMessages(paired.messages);
     }
+    if (this.ephemeralTail) {
+      messages = [...messages, { role: "user", origin: "harness", kind: "todo", content: [{ t: "text", text: this.ephemeralTail }] }];
+    }
     return {
       system: this.system,
       messages,
@@ -494,6 +510,8 @@ export class AgentState {
     };
     this.messages.push(message);
     // Fresh run, fresh behavioral gates.
+    this.dropEphemeralTail(); // 上一轮被打断时可能还挂着一条没送出的提醒
+    this.compactedTrace = [];
     this.dirtySinceVerify = false;
     this.runEvidence = [];
     this.runAudit = null;
@@ -614,7 +632,12 @@ export class AgentState {
     reason: string,
   ): { ok: boolean; message: string } {
     if (!this.memoryAuditRequired) {
-      return { ok: false, message: "Memory audit is disabled for this agent." };
+      // 瘦身 P0-1：主会话不再设记忆关口。瘦身前建的会话 system 里还写着「收工前必须交 MemoryAudit」——它照做时别报错
+      // （报错它会重试），明说不用了、别再交
+      return {
+        ok: true,
+        message: "No memory audit is needed any more: finish normally. Durable facts from this run are filed automatically after it ends. Do not call MemoryAudit again.",
+      };
     }
     const concrete = reason.replace(/\s+/g, " ").trim();
     if (concrete.length < 12) {

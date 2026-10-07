@@ -1132,6 +1132,8 @@ app.get("/api/sessions/:id/status", async (req, res) => {
       runStartMsgCount: live.running ? mirrorBaseCount(live) : undefined,
       runId: live.running ? live.runId ?? undefined : undefined,
       fp: rec ? recordFp(rec) : undefined,
+      // 瘦身 P0-1：上一轮收尾后的记忆沉淀还在后台跑（评测台等它落定再读记忆）
+      ...(live.memoryJob ? { memoryPending: true } : {}),
     });
     return;
   }

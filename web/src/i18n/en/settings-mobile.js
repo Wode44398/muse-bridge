@@ -21,6 +21,13 @@ export default {
   '原图加载': 'Load full-resolution images',
   '开启后相册/图集查看直接加载原图（连滑预载也按原图进行，清晰度最高但流量大、慢网明显变慢）；关闭时先看 1280px 轻量图，双指放大会自动换成原图。下次打开图片时生效。': 'When on, the photo viewer loads original images directly, including preloading as you swipe. Images are sharpest, but this uses more data and is noticeably slower on slow networks. When off, you see a lightweight 1280px image first, and pinching to zoom switches to the original automatically. Takes effect the next time you open an image.',
   '输入建议': 'Prompt suggestions',
+  '思考动画': 'Thinking animation',
+  '菊花 星标 动画 Claude Code 经典 加载': 'spinner spark animation Claude Code chat classic loading',
+  '新版 Claude Code': 'Claude Code (new)',
+  '经典星标': 'Classic spark',
+  '新版聊天页': 'Chat (new)',
+  'Claude 回复进行中，对话底部那颗标记的动画。新版 Claude Code 与桌面端 Code 页一致，会按正在做的事换动画（思考、搜索、读文件、跑命令、写文件、等你回答）；新版聊天页与 claude.ai 聊天一致，等首字时是会变形的星形，开始干活后散成几颗连线的节点；经典是原来的星标动画。': 'The mark at the bottom of the chat while Claude is replying. Claude Code (new) matches the Code page in the desktop app and changes with what Claude is doing (thinking, searching, reading files, running commands, writing files, waiting for you); Chat (new) matches claude.ai chat: a shape-shifting spark until the first words arrive, then a few connected nodes while it works; Classic is the original spark animation.',
+  '回复进行中的 Claude 标记：Claude Code 版按正在做的事换动画，聊天页版是星形散成节点，经典是原来的星标': 'The Claude mark while a reply is running: the Claude Code one animates what Claude is doing, the chat one turns the spark into nodes, Classic is the original spark',
   'Claude 每次回复完会猜你接下来想说的话，输入框空着时以灰字显示；点右上角「填入」（电脑上按 Tab）放进输入框，改不改都由你再发送。回复结束后几秒才出现，不是每轮都有。': 'After each response, Claude predicts what you might say next and shows it in gray while the composer is empty. Tap “Insert” in the top-right corner (or press Tab on a computer) to put it in the composer, then edit it or send it as is. Suggestions appear a few seconds after a response ends and don’t show up after every turn.',
 
   // —— 通用：全局助手 ——

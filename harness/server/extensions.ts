@@ -313,16 +313,25 @@ export function catalogEntries(skills: ManagedSkill[], pkgDescriptions = new Map
 
 const clip = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`);
 
-// 退化档：0 = 描述截 250 字、包带成员名单；1 = 描述截 100 字、包只报个数；2 = 只剩名字。
+// 瘦身 P0-3：目录里的描述只留第一句（到句末标点为止），再封顶——完整说明在 SKILL.md 里，Skill 载入时才要。以前每条截到 250 字，
+// 实际使用中 20 条目录约 6.9k 字符常驻，大半是第二句往后的用法细节与触发词清单。
+const ONE_LINE_MAX = 120;
+export function firstSentence(s: string, max = ONE_LINE_MAX): string {
+  const flat = s.replace(/\s+/g, " ").trim();
+  const end = flat.search(/[。！？；]|[.!?;](?=\s|#|$)/);
+  return clip(end > 0 ? flat.slice(0, end + 1) : flat, max);
+}
+
+// 退化档：0 = 描述一句（≤120 字）、包带成员名单；1 = 描述截 60 字、包只报个数；2 = 只剩名字。
 function renderEntry(e: CatalogEntry, level: number): string {
   if (e.kind === "skill") {
     const desc = e.skill.short || e.skill.description;
     if (level >= 2 || !desc) return `- ${e.skill.name}`;
-    return `- ${e.skill.name} — ${clip(desc, level === 0 ? 250 : 100)}`;
+    return `- ${e.skill.name} — ${level === 0 ? firstSentence(desc) : clip(desc, 60)}`;
   }
   const { pkg, description, members } = e.pkg;
   if (level >= 2) return `- ${pkg} (package, ${members.length} skills)`;
-  const desc = clip(description, level === 0 ? 250 : 100);
+  const desc = level === 0 ? firstSentence(description) : clip(description, 60);
   if (level === 1) return `- ${pkg} (package, ${members.length} skills) — ${desc}`;
   return `- ${pkg} (package, ${members.length} skills) — ${desc}\n  skills: ${members.map((m) => m.name).join(", ")}`;
 }

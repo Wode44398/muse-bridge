@@ -14,6 +14,7 @@ import { findToolCall } from "./agent/state.ts";
 import { systemPrompt } from "./agent/prompt.ts";
 import type { Msg } from "./agent/turn.ts";
 import { readMemory, saveMemory } from "./memory.ts";
+import { MEMORY_EXTRACT_SYSTEM } from "./memory-extract.ts";
 import { Sandbox } from "./sandbox.ts";
 import { rememberTool } from "./tools/remember.ts";
 import type { ToolContext } from "./tools/types.ts";
@@ -149,14 +150,19 @@ test("K5 连续失败 3 次就明说别再试；成功一次清零", async () =>
   assert.doesNotMatch(text(r4), /do not retry/, "成功过一次就清零");
 });
 
-test("K5 写入契约写进了系统提示与 Remember 的说明：不存什么、写成陈述句、环境观察带到期、同一教训改原条目", () => {
+// 瘦身 P0-1：完整契约写在 Remember 的说明里（模型调用它时就在眼前）与 run 之后的沉淀请求里；系统提示只留要点并指过去，
+// 不再把同一份清单在每次请求里念两遍。
+test("K5 写入契约：Remember 的说明与沉淀请求写全（不存什么、写成陈述句、环境观察带到期、同一教训改原条目）；系统提示留要点", () => {
   const { ws } = setup();
   const prompt = systemPrompt({ root: ws, shell: "bash", platform: "linux", provider: "openai", model: "m" });
-  for (const rule of [/Do NOT save: environment-dependent failures/, /statements of fact/, /must carry expiresAt/, /update the existing note \(same id\)/, /pass why \/ howToApply/]) {
+  for (const rule of [/statements of fact/i, /update the existing note \(same id\)/, /The Remember tool spells out what not to save/]) {
     assert.match(prompt, rule);
   }
   const desc = rememberTool.def.description;
   for (const rule of [/Do NOT store: environment-dependent failures/, /statement of fact/, /need expiresAt/, /pass why and howToApply/]) {
     assert.match(desc, rule);
+  }
+  for (const rule of [/Do NOT save: anything visible in the files/, /environment-dependent failures/, /statements of fact/, /reuse its id and topic to update it/, /needs why and howToApply/]) {
+    assert.match(MEMORY_EXTRACT_SYSTEM, rule);
   }
 });

@@ -36,6 +36,8 @@ if (process.env.DIMENSIO_TEST_ISOLATION !== "1") {
     DIMENSIO_GLOBAL_GUIDE: at("GUIDE.md"), // 不存在：测试不注入本机真实的全局 GUIDE
     HARNESS_ENV_FILE: at("no.env"), // 不存在：测试里拉起的 harness 不加载任何 .env
     LOCAL_AI_SETTINGS: at("local-ai.json"), // 不存在：本机型号的上下文 / 识图按目录默认值，不跟着面板里的真实设置变
+    // 瘦身 P0-1：run 之后的记忆沉淀会多调一次模型——脚本化 provider 的测试默认不要它（要测的测试自己设 1 再还原）
+    DIMENSIO_MEMORY_EXTRACT: "0",
   });
   process.on("exit", () => {
     try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* windows 句柄占用就留给 test-global 的清扫 */ }

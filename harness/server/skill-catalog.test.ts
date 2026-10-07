@@ -13,7 +13,7 @@ import path from "node:path";
 import test, { afterEach, beforeEach } from "node:test";
 import { injectionKind, messageKind } from "./agent/injections.ts";
 import type { Block, Msg } from "./agent/turn.ts";
-import { catalogBudget, catalogEntries, managedSkills, managedSkillsSection, renderCatalog } from "./extensions.ts";
+import { catalogBudget, catalogEntries, firstSentence, managedSkills, managedSkillsSection, renderCatalog } from "./extensions.ts";
 import { startRun } from "./session.ts";
 import { call, calls, say, scripted } from "./test-harness/scripted-adapter.ts";
 import { attachSession } from "./test-harness/session-fixture.ts";
@@ -121,6 +121,21 @@ test("C5 目录：成员 ≥3 的包折成一行、不列路径；真实形状�
   const folded = renderCatalog(catalogEntries(managedSkills()), catalogBudget(131_072));
   assert.equal(folded.level, 0, `本机 128K 窗口放得下完整一档（预算 2621 token）`);
   assert.ok(folded.text.length < flat.length * 0.3, `折叠后 ${folded.text.length} 字符，修前 ${flat.length}`);
+});
+
+// 瘦身 P0-3：完整一档也只留每条描述的第一句（封顶 120 字）——第二句往后是用法细节与触发词清单，Skill 载入时才要
+test("P0-3 目录：每条描述只留第一句", () => {
+  assert.equal(firstSentence("Generate audio in two ways: text-to-speech, or custom sound effects.### Speech (text-to-speech):- High-quality"), "Generate audio in two ways: text-to-speech, or custom sound effects.");
+  assert.equal(firstSentence("把一个公开网页完整复刻为本地离线运行的副本，连动效一并复刻。**三条路径**：①静态站"), "把一个公开网页完整复刻为本地离线运行的副本，连动效一并复刻。");
+  assert.equal(firstSentence("Version 2.1 of the tool"), "Version 2.1 of the tool", "小数点不是句末");
+  assert.ok(firstSentence("x".repeat(400)).length <= 120);
+  install([
+    { name: "long-one", description: `Does the thing. ${"Extra usage detail and trigger phrases. ".repeat(10)}` },
+    { name: "zh-one", description: `财新宏观数据：全国人口与生产总值。${"存储各省市的历史变动情况，".repeat(10)}` },
+  ]);
+  const section = managedSkillsSection({ contextWindow: 131_072 }) ?? "";
+  assert.match(section, /^- long-one — Does the thing\.$/m);
+  assert.match(section, /^- zh-one — 财新宏观数据：全国人口与生产总值。$/m);
 });
 
 test("C5 Skill 工具：包列成员、技能正文紧随工具结果作为 harness 消息（不在 tool_result 里）、同名不重复注入、名字不对列全部名字", async (t) => {

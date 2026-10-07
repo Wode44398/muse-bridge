@@ -14,10 +14,24 @@ Source of truth: human-readable Markdown under
 - Only currently valid `active` notes enter a fresh prompt.
 - Expired notes, missing anchors, conflicting active topics, proposed notes,
   stale notes, and superseded notes remain inspectable but are quarantined.
-- `MemoryAudit` is mandatory before task completion and lossy compaction.
+- There is no memory checkpoint on the agent's critical path (瘦身 P0-1,
+  2026-10-07; `MemoryAudit` used to be mandatory before every finish and before
+  lossy compaction, costing one extra model turn per user message). The model
+  may still `Remember` at any time. After a run finishes normally,
+  `server/memory-extract.ts` decides from deterministic signals whether the run
+  is worth reviewing — a stated lasting preference, real work (edits with a
+  non-trivial number of calls, a failure that was then fixed, a long run, a
+  mid-run compaction) — and skips runs where the model already remembered
+  something. Worthy runs get one background side request (same provider, no
+  tools, thinking off, bounded digest of request / tool trace / changed files /
+  final answer / existing catalogue) that returns JSON notes; each note is filed
+  through the `Remember` tool so the same governance applies. Quick-chat buckets
+  only accept global-layer notes. Full compaction keeps a tool trace of the
+  compacted part (`AgentState.compactedTrace`) for this review.
+  `DIMENSIO_MEMORY_EXTRACT=0` turns it off.
 - A whole message that is only a greeting or thanks takes a narrow fast-path:
-  no semantic recall and no audit turn. Any attached request, preference,
-  correction, or project context disables the exemption.
+  no semantic recall. Any attached request, preference, correction, or project
+  context disables the exemption.
 - Memory is workspace-isolated and written atomically.
 
 Use this layer only for information that cannot be reconstructed from files:

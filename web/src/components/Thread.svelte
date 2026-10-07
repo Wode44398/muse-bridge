@@ -2,12 +2,15 @@
   import { tick } from 'svelte';
   import { chat, answerQuestion, send, rewindToMessage, attImgFallback, openSession } from '../lib/chat.svelte.js';
   import { IS_CSNAP } from '../lib/csnap.js';
-  import { session } from '../lib/state.svelte.js';
+  import { session, prefs } from '../lib/state.svelte.js';
   import { renderMarkdown, streamBlocks } from '../lib/md.js';
   import { claudeFade } from '../lib/claudeFade.js';
   import { fmtElapsed, fmtTokens } from '../lib/format.js';
   import { fade } from 'svelte/transition';
   import ClaudeLogo from './ClaudeLogo.svelte';
+  import ClaudeWorkingMark from './ClaudeWorkingMark.svelte';
+  import ClaudeSpriteMark from './ClaudeSpriteMark.svelte';
+  import { markActivity, spritePhase } from '../lib/workingMark.js';
   import ImgLightbox from './ImgLightbox.svelte';
   // 工具调用分组（含 Agent 行 / Workflow 卡，点开 TaskSheet）与模型切换/安全栅门卡——
   // 官方 /code 页同款，见 impl-contract §5（组件目录 claude/）。
@@ -21,6 +24,9 @@
   import { t, tc, tr } from '../lib/i18n.js';
 
   const hasText = (m) => m.segments.some((s) => s.kind === 'text' && s.md.trim());
+  // 运行标记三套（设置 → 思考动画）：默认新版 Claude Code 活动标记（ClaudeWorkingMark，按 markActivity
+  // 演思考/搜索/读/跑命令/写/写文档/等人）；「新版聊天页」= ClaudeSpriteMark（spritePhase：星形→节点→等人方块）；
+  // 选「经典」则沿用下面这套 claude.ai 星标五态。收轮后都回静态星标。
   // 菊花运行态 → claude.ai 同款动画映射（相位由 chat 内核按事件流维护，见 PHASE）：
   // thinking 推理脉动 / writing 吐字 / orbiting 工具·长后台任务 / shimmer 起步过渡 /
   // waiting 等用户回答·长静默（idle 由计时器判，AskUserQuestion 待答期恒 waiting）。
@@ -425,7 +431,7 @@
 
         {#if i === chat.messages.length - 1}
           <div class="turn-foot">
-            <span class="logo-fly" in:fade|global={{ duration: 260 }}><ClaudeLogo anim={starState(m)} size={26} interactive /></span>
+            <span class="logo-fly" in:fade|global={{ duration: 260 }}>{#if m.status === 'streaming' && prefs.claudeMark === 'sprite'}<ClaudeSpriteMark phase={spritePhase(m)} box={26} />{:else if m.status === 'streaming' && prefs.claudeMark !== 'classic'}{@const ma = markActivity(m)}<ClaudeWorkingMark activity={ma.activity} state={ma.state} size={24} box={26} />{:else}<ClaudeLogo anim={starState(m)} size={26} interactive />{/if}</span>
             {#if m.status === 'streaming'}
               <!-- 官方 desktop 同款状态语法：时长 · tokens · 状态文字。悬停（等后台任务）拼第三段
                    作挂起提示——与真结束（无状态行）一眼可分；这一段可点，直开右侧工作台「任务」
