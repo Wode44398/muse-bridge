@@ -15,7 +15,7 @@ import { recentErrors } from './errors.mjs';
 import * as store from './store.mjs';
 
 export const REPO = 'Wode44398/muse-bridge';
-export const FEEDBACK_URL = (process.env.MUSE_FEEDBACK_URL || 'https://muse-bridge-feedback.musebridge.workers.dev').replace(/\/+$/, '');
+export const FEEDBACK_URL = (process.env.MUSE_FEEDBACK_URL || 'https://muse-bridge-feedback.huole8610.workers.dev').replace(/\/+$/, '');
 export const feedbackHost = () => { try { return new URL(FEEDBACK_URL).hostname; } catch { return ''; } };
 
 export function programVersion() {

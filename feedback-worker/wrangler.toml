@@ -15,6 +15,6 @@ PAUSED = "0"
 # 限流计数、指纹 → Issue 编号、停收开关（cfg:paused）
 [[kv_namespaces]]
 binding = "FEEDBACK_KV"
-id = "REPLACE_WITH_KV_ID"
+id = "a216ea47f1504dfdb6a8af034c24b717"
 
 # 私钥不在这里：npx wrangler secret put GITHUB_APP_PRIVATE_KEY < 私钥.pem
