@@ -1,0 +1,70 @@
+{
+  "_说明": "已知问题清单（维护者改这里）。推到 main 后，.github/workflows/known-issues.yml 把它算成「影响哪些版本」写进最新 Release 的 latest.json（known_issues 字段）；各台 Muse 的看门狗每 6 小时读一次，bootstrap.sh known-issues 能列出影响当前版本的条目，Muse 回答问题、判断是不是 bug 之前先查它。since / fixed_in 填版本标签（v0.1.0-beta.12 这种），不填 since = 从最早的版本起，不填 fixed_in = 还没修好；fixed_in 写了但那个版本还没发 = 当作还没修好。notify=true 的条目，看门狗会主动告诉受影响的用户一次。",
+  "issues": [
+    {
+      "id": "quick-tunnel-get-stream",
+      "title": "临时地址下：Claude 页的终端一直显示「连接终端…」，dimensio 的回复要等整轮做完才一次出来",
+      "title_en": "On a temporary address: the terminal on the Claude page stays on \"Connecting to terminal…\", and dimensio replies only appear when the whole turn is done",
+      "symptom": "用临时地址（https://…trycloudflare.com）打开时：Claude 页右侧工作台的终端一直转圈；dimensio 回复时看不到逐字出来的过程，等它做完整段才一起显示。Claude 的对话本身不受影响。",
+      "workaround": "换成自己的域名（固定地址）就都正常：让 Muse 按说明书「用自己的域名」一节配。临时地址下 dimensio 只是看不到过程，结果照常；终端可以先在 Claude 对话里让 Claude 帮你跑命令。",
+      "workaround_en": "Everything works on your own domain (permanent address): ask Muse to set one up. On a temporary address dimensio still finishes normally, you just don't see it type; for terminal commands, ask Claude to run them in the chat.",
+      "cause": "Cloudflare 的临时地址（Quick Tunnel）会把 GET 方式的流式响应攒着不发；这两条流恰好是 GET。",
+      "since": null,
+      "fixed_in": null,
+      "notify": false,
+      "issue": null
+    },
+    {
+      "id": "routines-timezone-label",
+      "title": "定时任务页写着「服务器时区 GMT+8」，实际按服务器自己的时区跑（Muse 的 VM 一般是 UTC）",
+      "title_en": "The Routines page says \"Server time zone: GMT+8\", but routines run on the server's own time zone (usually UTC on a Muse VM)",
+      "symptom": "在「定时触发」里设了每天 09:00，结果在北京时间 17:00 左右才跑（差 8 小时）。",
+      "workaround": "按服务器时区填时间：想北京时间 9 点跑，就填 01:00。不确定服务器是什么时区，让 Muse 在 VM 上跑一次 date 看看。",
+      "workaround_en": "Enter times in the server's time zone (for 9:00 Beijing time on a UTC server, enter 01:00). Ask Muse to run `date` on the VM if you're not sure which time zone it uses.",
+      "cause": "页面上的「GMT+8」是写死的文字；调度按服务器本地时间算，部署脚本没设时区。",
+      "since": null,
+      "fixed_in": null,
+      "notify": false,
+      "issue": null
+    },
+    {
+      "id": "dimensio-web-key-not-saved",
+      "title": "在网页「设置 → dimensio」里填的模型 API key，服务一重启就没了",
+      "title_en": "A model API key entered in Settings → dimensio is lost whenever the service restarts",
+      "symptom": "前一天在设置里填了 DeepSeek / 通义等内置厂商的 key 能用，过几个小时（VM 重启、更新之后）dimensio 又说没有 key、发消息被退回。自定义模型服务（＋ 添加的）的 key 不受影响。",
+      "workaround": "内置厂商的 key 让 Muse 用 set-api-key 写进服务器（存在磁盘上，重启也在）。网页里填只适合临时试一下。",
+      "workaround_en": "Ask Muse to save built-in provider keys with set-api-key (stored on disk, survives restarts). Entering them in the web settings only lasts until the next restart.",
+      "cause": "设计上网页里填的内置厂商 key 只放在 dimensio 进程内存里，不落盘；Muse 的 VM 每隔几小时就会重启。",
+      "since": null,
+      "fixed_in": null,
+      "notify": false,
+      "issue": null
+    },
+    {
+      "id": "notify-permission-not-asked",
+      "title": "「任务通知」默认是开的，但浏览器不会自动问要不要允许通知，所以一直收不到",
+      "title_en": "\"Task notifications\" is on by default, but the browser is never asked for permission, so no notifications arrive",
+      "symptom": "Claude 跑完了也没有系统通知，设置里「任务通知」明明是开着的。",
+      "workaround": "在「设置 → 通用 → 任务通知」里把开关关掉再打开一次，浏览器会弹出是否允许通知，选允许。浏览器以前选过「禁止」的话，要到浏览器的网站设置里改回允许。",
+      "workaround_en": "In Settings → General → Task notifications, switch it off and on again; the browser then asks for permission. If you blocked notifications earlier, allow them again in the browser's site settings.",
+      "cause": "只有在设置里把开关拨到「开」的那一下才会请求浏览器权限。",
+      "since": null,
+      "fixed_in": null,
+      "notify": false,
+      "issue": null
+    },
+    {
+      "id": "set-claude-token-overridden",
+      "title": "让 Muse 跑 set-claude-token 换了 Claude 令牌，Claude 却还在用旧令牌（或者照样报登录失效）",
+      "title_en": "After Muse runs set-claude-token, Claude keeps using the old token (or still reports that sign-in expired)",
+      "symptom": "服务端控制台「Claude 账号」里的当前账号存着一个令牌（比如装的时候带过 --claude-token，或者在控制台加过账号）时，set-claude-token 写的新令牌不起作用。",
+      "workaround": "在「设置 → 连接 → 服务端控制台 → Claude 账号」里点当前账号的「编辑」，把新令牌贴进去保存；或者更新到修好的版本后再让 Muse 跑一次 set-claude-token。",
+      "workaround_en": "In Settings → Connection → Admin console → Claude accounts, edit the active account and paste the new token there; or update to the fixed version and have Muse run set-claude-token again.",
+      "cause": "控制台当前账号的令牌每次对话都会盖过环境变量里的令牌；旧版 set-claude-token 只改了环境变量。",
+      "since": null,
+      "fixed_in": "v0.1.0-beta.13",
+      "notify": false,
+      "issue": null
+    }
+  ]
+}

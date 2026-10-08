@@ -6,3 +6,6 @@
 deploy/muse/ops/** text eol=lf
 deploy/muse/VERSION text eol=lf export-subst
 deploy/muse/CHANNEL text eol=lf
+
+# 维护者自用的说明书问答测试题（带「禁区」答案），不进安装包
+deploy/muse/test/guide-qa export-ignore

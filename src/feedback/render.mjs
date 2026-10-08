@@ -1,7 +1,7 @@
 // 把一份干净的报告（schema.mjs 的 cleanReport 产物）排成 GitHub Issue 的标题与正文。
 // 服务端拿它给用户预览，Worker 拿它真正提交——同一份代码，用户看到的就是会发出去的。
 
-const KIND_LABEL = { bug: 'Bug', crash: 'Crash', update_failed: 'Update failed', idea: 'Idea', security: 'Security' };
+const KIND_LABEL = { bug: 'Bug', crash: 'Crash', update_failed: 'Update failed', idea: 'Idea', security: 'Security', docs: 'Docs' };
 const SOURCE_LABEL = { web: 'reported from the web UI', muse: 'reported through Muse', auto: 'sent automatically (the user opted in)' };
 
 // 用户写的文字原样放进引用块；先把会被 GitHub 当成 @提及 / #引用 / HTML 的写法打断
@@ -82,5 +82,6 @@ export function plusOneBody(r) {
 }
 
 export function issueLabels(r) {
-  return ['from-muse', r.kind === 'idea' ? 'enhancement' : 'bug'].concat(r.kind === 'update_failed' ? ['update'] : []);
+  const main = r.kind === 'idea' ? 'enhancement' : r.kind === 'docs' ? 'documentation' : 'bug';
+  return ['from-muse', main].concat(r.kind === 'update_failed' ? ['update'] : []);
 }

@@ -24,6 +24,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 说明书跟界面对不上（编了按钮、漏了子命令、设置分区没写）就不发版：Muse 回答用户靠它
+      - name: Check the Muse guide
+        run: node --test deploy/muse/test/guide.test.mjs
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -87,10 +91,14 @@ jobs:
             | { grep -oiE '(fix(e[sd])?|close[sd]?|resolve[sd]?|修复|修好|关闭) *#[0-9]+' || true; } | { grep -oE '[0-9]+' || true; } | sort -un \
             | jq -R 'tonumber' | jq -sc . )"
           echo "fixed issues: $FIXED"
+          # 已知问题（deploy/muse/known-issues.json 换算成受影响版本的提交哈希）：看门狗存下来，Muse 判断是不是 bug 前先查。
+          # 发版之后只改清单不发版：known-issues.yml 会单独改写最新 Release 的 latest.json
+          KNOWN="$(node "$GITHUB_WORKSPACE/.github/scripts/known-issues.mjs")"
           jq -n --arg version "$TAG ($VERSION)" --arg commit "$COMMIT" \
             --arg url "https://github.com/$REPO/releases/download/$TAG/muse-bridge.tgz" \
             --arg sha256 "$SHA" --arg notes "$NOTES" --arg released "$(date -u +%FT%TZ)" --argjson fixed "${FIXED:-[]}" \
-            '{version:$version, commit:$commit, url:$url, sha256:$sha256, notes:$notes, released:$released, fixed:$fixed}' > latest.json
+            --argjson known "$KNOWN" \
+            '{version:$version, commit:$commit, url:$url, sha256:$sha256, notes:$notes, released:$released, fixed:$fixed, known_issues:$known}' > latest.json
           # 这个版本专用的开场提示词（下载地址钉在本标签上，预发布试装用）
           sed "s|{{BASE}}|https://github.com/$REPO/releases/download/$TAG|g" \
             stage/bridge/deploy/muse/开场提示词.md > muse-prompt.txt

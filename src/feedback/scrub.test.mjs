@@ -117,6 +117,13 @@ test('render: 标题、指纹标记、@提及被打断、+1', () => {
   assert.match(plusOneBody(r), /^\+1/);
 });
 
+test('docs：说明书缺口单独一类，打 documentation 标签', async () => {
+  const { issueLabels } = await import('./render.mjs');
+  const r = cleanReport({ install: 'abcdef12-0000', kind: 'docs', description: '用户问怎么导出对话，说明书里没写' });
+  assert.equal(issueTitle(r), '[Docs] 用户问怎么导出对话，说明书里没写');
+  assert.deepEqual(issueLabels(r), ['from-muse', 'documentation']);
+});
+
 test('cleanReport: 系统版本只认「名字 + 数字版本」', () => {
   const mk = (osv) => cleanReport({ install: 'abcdef12-0000', kind: 'bug', description: 'x', env: { os: osv } }).env.os;
   assert.equal(mk('Linux 6.10.14'), 'Linux 6.10.14');

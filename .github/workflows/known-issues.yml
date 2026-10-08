@@ -1,0 +1,36 @@
+# 已知问题清单（deploy/muse/known-issues.json）改了、但不想为它发版：推到 main 后，把清单换算好写进
+# 最新 Release 的 latest.json（known_issues 字段），用 --clobber 覆盖上传。各台 Muse 的看门狗每 6 小时读一次频道，
+# 老版本也能马上知道「这是已知问题、怎么绕过、哪个版本修好了」。只动 known_issues，版本号、下载地址都不变，不会触发更新。
+name: known-issues
+
+on:
+  push:
+    branches: [main]
+    paths: ['deploy/muse/known-issues.json']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rewrite latest.json of the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags
+          TAG="$(gh release view --json tagName -q .tagName)"
+          mkdir -p "$RUNNER_TEMP/ki"
+          gh release download "$TAG" --pattern latest.json --dir "$RUNNER_TEMP/ki" --clobber
+          KNOWN="$(node .github/scripts/known-issues.mjs)"
+          jq --argjson known "$KNOWN" '. + {known_issues: $known}' "$RUNNER_TEMP/ki/latest.json" > "$RUNNER_TEMP/ki/latest.new.json"
+          mv "$RUNNER_TEMP/ki/latest.new.json" "$RUNNER_TEMP/ki/latest.json"
+          echo "$TAG: $(jq '.known_issues | length' "$RUNNER_TEMP/ki/latest.json") known issue(s)"
+          gh release upload "$TAG" "$RUNNER_TEMP/ki/latest.json" --clobber

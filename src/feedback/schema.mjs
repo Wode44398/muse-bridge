@@ -2,7 +2,8 @@
 // 白名单的意思是：这里没列的东西，不管客户端塞了什么，一律到不了 GitHub。
 import { scrub, clip, isPublicHost } from './scrub.mjs';
 
-export const KINDS = ['bug', 'crash', 'update_failed', 'idea', 'security'];
+// docs = 说明书（deploy/muse/guide）没写到或写错了：Muse 答不上用户的问题时，经用户同意报上来，好补说明书
+export const KINDS = ['bug', 'crash', 'update_failed', 'idea', 'security', 'docs'];
 export const SOURCES = ['web', 'muse', 'auto'];
 export const SERVICE_NAMES = ['bridge', 'cf-relay-api', 'cf-relay-edge', 'muse-tunnel', 'local_health', 'public_health'];
 const AGENTS = ['claude', 'dimensio'];

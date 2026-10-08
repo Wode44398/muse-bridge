@@ -27,9 +27,11 @@
 #   rollback                        退回上一个版本（立即重启）
 #   auto-update on|off              发现新版本时自动更新（默认 off：先问用户）
 # 问题反馈（经项目方的反馈服务提交到 GitHub Issues；不含对话、文件、key、地址）：
-#   report [描述] [--kind bug|idea|security]   出草稿给用户看（不发）；描述也可以从标准输入给
+#   report [描述] [--kind bug|idea|security|docs]   出草稿给用户看（不发）；描述也可以从标准输入给（docs = 说明书没写 / 写错了）
 #   report --send 草稿编号            用户同意后发送         report --list   发过的报告
 #   feedback-auto on|off|status       出错时自动上报（用户同意过才开）
+# 已知问题（更新频道下发，看门狗每 6 小时更新一次）：
+#   known-issues [--all]              影响当前版本的已知问题：现象、绕过办法、哪个版本修好了
 #
 # 这个脚本包住的全是 Muse VM 独有的坑（通用的部分交给 scripts/server/install.sh）：
 #   · 出站只能走 hatch-egress-proxy：代理变量自动带上，并带进服务环境
@@ -131,12 +133,24 @@ sites_summary() {   # 没放行 / 被拒的站点，空格分隔；文件不存�
   awk '$2 != "ok" { printf "%s%s(%s)", (n++ ? " " : ""), $1, $2 }' "$SITES_STATUS"
 }
 
+# 已知问题：发布频道 latest.json 的 known_issues（看门狗读频道时存一份在这里）。每条带受影响版本的提交短哈希（commits），
+# 跟装好的版本（VERSION 第一段）按前缀比对。清单的来源和格式见 deploy/muse/known-issues.json
+KNOWN="$OPS/known-issues.json"
+installed_commit() { version_of "$(readlink -f "$RELS/current" 2>/dev/null || echo /nonexistent)" | cut -d' ' -f1; }
+known_affecting() {   # 影响 $1（默认：装好的版本）的已知问题，JSON 数组
+  local h="${1:-$(installed_commit)}"
+  if [ ! -f "$KNOWN" ] || [ -z "$h" ] || [ "$h" = unknown ]; then echo '[]'; return 0; fi
+  jq -c --arg h "$h" '[.[]? | select(any(.commits[]?; . as $c | ($h | startswith($c)) or ($c | startswith($h))))]' "$KNOWN" 2>/dev/null || echo '[]'
+}
+known_count() { jq 'length' <<<"$(known_affecting)" 2>/dev/null || echo 0; }
+
 # 安卓 app：每个版本的安装包里都带一份（downloads/，服务器自己提供下载），GitHub Release 上也有
 APK_GITHUB="https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk"
 
 # 统一的结果块：Muse 原样转给用户；管理员令牌在用户用它登录成功之前一直显示。UI_LANG=en 时整块英文
 result_block() {
-  local token="${1:-}" url lc pc st run cur served sites claude_ok=0 ok=1
+  local token="${1:-}" url lc pc st run cur served sites claude_ok=0 ok=1 kc=-1
+  [ -f "$KNOWN" ] && kc="$(known_count)"
   [ -n "$token" ] || token="$(cat "$TOKEN_PENDING" 2>/dev/null || true)"
   url="$(public_url)"; lc="$(local_code)"; pc="$(public_code)"; served="$(served_agents)"
   run="$(running_dir)"; cur="$(readlink -f "$RELS/current" 2>/dev/null || true)"
@@ -162,6 +176,7 @@ Claude token    $( [ "$claude_ok" = 1 ] && echo set || echo 'not set (or added i
 Sites           $( [ -f "$SITES_STATUS" ] || echo 'not checked yet (with the user present, run allow-sites once)')$( [ -f "$SITES_STATUS" ] && echo "${sites:-all approved}")$( [ -n "$sites" ] && echo ' -> not approved yet: with the user present, run allow-sites and have them choose "Always allow this site"')
 Update channel  ${CHANNEL:-not set (manual updates only)}; auto-update $( [ "$AUTO_UPDATE" = 1 ] && echo on || echo off)
 Feedback        $(feedback_auto_label)
+Known issues    $(case "$kc" in -1) echo 'not checked yet (the watchdog reads the update channel every 6 hours)' ;; 0) echo 'none affect this version' ;; *) echo "$kc affect this version (run known-issues for symptoms and workarounds)" ;; esac)
 Watchdog hook   ${HOOK_NOTE:-script $( [ -f "$HOOK_DIR/bridge-watchdog.sh" ] && echo 'in place' || echo missing)}
 ============================================================
 EOF
@@ -185,6 +200,7 @@ Claude 令牌 $( [ "$claude_ok" = 1 ] && echo 已配置 || echo '未配置（也
 网站放行    $( [ -f "$SITES_STATUS" ] || echo '还没检查过（用户在场时跑一次 allow-sites）')$( [ -f "$SITES_STATUS" ] && echo "${sites:-全部已放行}")$( [ -n "$sites" ] && echo '（还没放行：用户在场时跑 allow-sites，让他选「总是允许此站点」）')
 更新频道    ${CHANNEL:-未设置（只能手动给地址更新）}；自动更新 $( [ "$AUTO_UPDATE" = 1 ] && echo 开 || echo 关)
 问题反馈    $(feedback_auto_label)
+已知问题    $(case "$kc" in -1) echo '还没读到（看门狗每 6 小时读一次更新频道）' ;; 0) echo '没有影响这个版本的' ;; *) echo "$kc 条影响这个版本（跑 known-issues 看现象和绕过办法）" ;; esac)
 看门狗 hook ${HOOK_NOTE:-脚本 $( [ -f "$HOOK_DIR/bridge-watchdog.sh" ] && echo 已就位 || echo 缺失)}
 ==========================================================
 EOF
@@ -547,6 +563,10 @@ cmd_install() {
   install -m 0770 "$HERE/ops/heal.sh" "$OPS/heal.sh"
   ln -sfn "$RELS/current/deploy/muse/bootstrap.sh" "$OPS/bootstrap.sh"   # 永远跟着当前版本
   cp "$HERE/MUSE.md" "$OPS/MUSE.md"
+  # 使用说明书（Muse 回答「怎么用」的依据）：整份换新，旧版本的章节不留
+  if [ -d "$HERE/guide" ]; then
+    rm -rf "$OPS/guide.new" && cp -r "$HERE/guide" "$OPS/guide.new" && rm -rf "$OPS/guide" && mv "$OPS/guide.new" "$OPS/guide"
+  fi
   # hosts：以平台当前的 /etc/hosts 为底，把 cloudflare 的域名指到本机中继
   { grep -vE 'trycloudflare\.com|argotunnel\.com|bridge-muse' /etc/hosts
     echo "# --- bridge-muse：cloudflared 经本机 socat 中继出站 ---"
@@ -842,6 +862,15 @@ cmd_auto_update() {
 cmd_set_claude_token() {
   local t="${1:-}"; [ -n "$t" ] || die "用法：bootstrap.sh set-claude-token <claude setup-token 生成的令牌>"
   set_bridge_env CLAUDE_CODE_OAUTH_TOKEN "$t"
+  # 控制台「Claude 账号」里的当前账号要是存了令牌，它会盖过上面这个环境变量（每次对话都按当前账号注入）——
+  # 比如装的时候带过 --claude-token，那个令牌就被存进了默认账号。一并换成新令牌，免得这条命令白跑
+  local f="$DATA/config.json"
+  if [ -f "$f" ] && jq -e '[(.claudeAccounts // [])[] | select((.token // "") != "")] | length > 0' "$f" >/dev/null 2>&1; then
+    jq --arg t "$t" '(.claudeActiveAccount // .claudeAccounts[0].id) as $a
+      | .claudeAccounts |= map(if .id == $a and (.token // "") != "" then .token = $t else . end)' "$f" > "$f.new" \
+      && chown "$SVC_USER:$SVC_USER" "$f.new" && chmod 600 "$f.new" && mv "$f.new" "$f" \
+      && echo "控制台「Claude 账号」里的当前账号也换成了这个令牌"
+  fi
   echo "已写入（令牌末 4 位 …${t: -4}）"
   restart_bridge now
   result_block ""
@@ -898,7 +927,7 @@ cmd_report() {
   done
   [ -f "$OPS/muse.env" ] || die "还没装过，先跑 install"
   if [ -n "$send" ]; then feedback_cli send "$send"; return; fi
-  case "$kind" in bug|idea|security|update_failed|crash) ;; *) die "--kind 只认 bug / idea / security / update_failed" ;; esac
+  case "$kind" in bug|idea|security|docs|update_failed|crash) ;; *) die "--kind 只认 bug / idea / security / docs / update_failed" ;; esac
   if [ -z "$desc" ] && [ ! -t 0 ] && [ "$auto" = 0 ]; then desc="$(cat)"; fi
   # 服务状态：本机能查的都查（公网健康不经代理访问——那要用户批网络权限；用看门狗上一轮记下的结果）
   local svc="{}" s st pub
@@ -924,6 +953,36 @@ cmd_report() {
   a=0; feedback_cli draft "$input" || a=$?
   rm -f "$input"
   return $a
+}
+
+# known-issues [--all]：影响当前版本的已知问题（--all 列出全部）。缓存超过 6 小时就顺手读一次更新频道
+cmd_known_issues() {
+  local all=0 list n m
+  [ "${1:-}" = --all ] && all=1
+  [ -f "$OPS/muse.env" ] || die "还没装过，先跑 install"
+  if [ -n "$CHANNEL" ] && { [ ! -f "$KNOWN" ] || [ $(( $(date +%s) - $(stat -c %Y "$KNOWN") )) -gt 21600 ]; }; then
+    if m="$(curl -fsSL --max-time 20 "$CHANNEL" 2>/dev/null)" && jq -e '.known_issues' >/dev/null 2>&1 <<<"$m"; then
+      jq -c '.known_issues' <<<"$m" > "$KNOWN.new" && mv -f "$KNOWN.new" "$KNOWN"
+    fi
+  fi
+  if [ ! -f "$KNOWN" ]; then
+    if [ "$UI_LANG" = en ]; then echo "No known-issues list yet (the update channel has none, or it could not be read)."
+    else echo "还没有已知问题清单（更新频道里还没有这一项，或者读不到）。"; fi
+    return 0
+  fi
+  if [ "$all" = 1 ]; then list="$(jq -c '.' "$KNOWN")"; else list="$(known_affecting)"; fi
+  n="$(jq 'length' <<<"$list")"
+  if [ "$n" = 0 ]; then
+    if [ "$UI_LANG" = en ]; then echo "No known issues affect the installed version ($(installed_commit))."
+    else echo "当前版本（$(installed_commit)）没有已知问题。"; fi
+    return 0
+  fi
+  jq -r --arg en "$UI_LANG" '.[] |
+    if $en == "en" then
+      "• \(if .title_en != "" then .title_en else .title end)\n  Workaround: \(if .workaround_en != "" then .workaround_en else .workaround end)\n  \(if .fixed then "Fixed in \(.fixed_in): updating fixes it (bootstrap.sh update)." elif .fixed_in then "Will be fixed in \(.fixed_in) (not released yet)." else "Not fixed yet." end)\(if .issue then "\n  https://github.com/Wode44398/muse-bridge/issues/\(.issue)" else "" end)"
+    else
+      "• \(.title)\n  现象：\(.symptom)\n  绕过：\(.workaround)\n  \(if .fixed then "已在 \(.fixed_in) 修好：更新就好（bootstrap.sh update）。" elif .fixed_in then "会在 \(.fixed_in) 修好（还没发布）。" else "还没修好。" end)\(if .issue then "\n  https://github.com/Wode44398/muse-bridge/issues/\(.issue)" else "" end)"
+    end' <<<"$list"
 }
 
 cmd_feedback_auto() {
@@ -953,6 +1012,7 @@ case "$sub" in
   auto-update) cmd_auto_update "$@" ;;
   report) cmd_report "$@" ;;
   feedback-auto) cmd_feedback_auto "$@" ;;
-  -h|--help|help) sed -n '2,32p' "$0" ;;
+  known-issues) cmd_known_issues "$@" ;;
+  -h|--help|help) sed -n '2,35p' "$0" ;;
   *) die "不认识的子命令：$sub（help 看用法）" ;;
 esac

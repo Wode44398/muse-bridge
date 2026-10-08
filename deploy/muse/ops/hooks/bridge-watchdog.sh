@@ -103,6 +103,12 @@ if [ -n "${CHANNEL:-}" ] && [ ! -f "$PS" ] && [ "$DRY" != 1 ] && ! busy && \
   # -L 必须有：GitHub 的 releases/latest/download/… 先 302 到具体标签，不跟跳就只拿到空 body，永远「没有新版本」
   if m="$(curl -fsSL --max-time 20 "$CHANNEL" 2>/dev/null)" && latest="$(jq -r '.commit // empty' <<<"$m")" && [ -n "$latest" ]; then
     installed="$(head -1 "$RELS/current/deploy/muse/VERSION" 2>/dev/null | cut -d' ' -f1)"
+    # 已知问题：存一份给 bootstrap.sh known-issues、结果块用（老频道没有这个字段就不动旧缓存）
+    if jq -e '.known_issues' >/dev/null 2>&1 <<<"$m"; then
+      jq -c '.known_issues' <<<"$m" > "$OPS/known-issues.json.new" && mv -f "$OPS/known-issues.json.new" "$OPS/known-issues.json"
+    fi
+    # 某个版本（提交短哈希，按前缀比）受不受某条已知问题影响
+    KI_HIT='def hit($h): ($h != "") and any(.commits[]?; . as $c | ($h | startswith($c)) or ($c | startswith($h)));'
     if [ "$latest" != "$installed" ] && [ "$latest" != "$(cat "$OPS/update-notified" 2>/dev/null)" ]; then
       echo "$latest" > "$OPS/update-notified"
       if [ "${AUTO_UPDATE:-0}" = 1 ]; then
@@ -117,9 +123,24 @@ if [ -n "${CHANNEL:-}" ] && [ ! -f "$PS" ] && [ "$DRY" != 1 ] && ! busy && \
         fixed="$(jq -r --argjson f "$(jq -c '.fixed // []' <<<"$m" 2>/dev/null || echo '[]')" \
           '[.[] | select(.issue != null and ((.issue.number) as $n | $f | index($n)))] | unique_by(.issue.number) | map("#\(.issue.number) \(.title)") | join("; ")' \
           "$DATA/feedback/sent.json" 2>/dev/null || true)"
+        # 影响当前版本、新版本里已经没有了的已知问题：更新的理由之一
+        kfix="$(jq -r --arg a "$installed" --arg b "$latest" "$KI_HIT"' [.[]? | select(hit($a) and (hit($b) | not)) | .title] | join("; ")' \
+          "$OPS/known-issues.json" 2>/dev/null || true)"
         wake "bridge 有新版本" "$(jq -n --arg cur "$(head -1 "$RELS/current/deploy/muse/VERSION" 2>/dev/null)" \
-          --arg v "$(jq -r '.version // ""' <<<"$m")" --arg notes "$(jq -r '.notes // ""' <<<"$m")" --arg fixed "$fixed" \
-          '{kind:"update_available", installed:$cur, latest:$v, notes:$notes, your_reports_fixed:$fixed}')"
+          --arg v "$(jq -r '.version // ""' <<<"$m")" --arg notes "$(jq -r '.notes // ""' <<<"$m")" --arg fixed "$fixed" --arg kfix "$kfix" \
+          '{kind:"update_available", installed:$cur, latest:$v, notes:$notes, your_reports_fixed:$fixed, fixes_known_issues:$kfix}')"
+        exit 0
+      fi
+    fi
+    # 影响当前版本、而且维护者标了「要主动告诉用户」（notify）的已知问题：每条只说一次
+    if [ -f "$OPS/known-issues.json" ] && [ -n "$installed" ]; then
+      told="$(cat "$OPS/known-issues-notified" 2>/dev/null || true)"
+      new_ki="$(jq -c --arg h "$installed" --arg told "$told" "$KI_HIT"' [.[]? | select(.notify == true and hit($h) and ((.id) as $i | ($told | split("\n") | index($i)) | not))]' \
+        "$OPS/known-issues.json" 2>/dev/null || echo '[]')"
+      if [ "$(jq 'length' <<<"$new_ki" 2>/dev/null || echo 0)" -gt 0 ]; then
+        jq -r '.[].id' <<<"$new_ki" >> "$OPS/known-issues-notified"
+        wake "bridge 已知问题" "$(jq -n --argjson issues "$(jq -c '[.[] | {title, symptom, workaround, fixed, fixed_in, issue}]' <<<"$new_ki")" \
+          '{kind:"known_issue", issues:$issues}')"
         exit 0
       fi
     fi

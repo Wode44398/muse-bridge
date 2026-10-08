@@ -92,6 +92,9 @@ Muse 的 VM 每访问一个新网站，都要你在 Muse 里批一次。安装�
 **怎么更新？**
 什么都不用做。有新版本时 Muse 会来问你，你说「更新」就行。也可以随时问它「有新版本吗」，或者让它开自动更新。
 
+**某个功能怎么用？**
+直接问 Muse（「怎么分享文件」「以前的对话在哪」「带我熟悉一下 dimensio」）。安装包里带着一份写给 Muse 的使用说明书（`deploy/muse/guide/`），它照着你这个版本的说明书回答，不靠猜；也可以让它带你上手：5 分钟快速版、Claude Code / dimensio 深入、管理员与多人使用、手机上用。已知问题也会随更新频道下发，Muse 能告诉你某个现象是不是已知问题、怎么绕过。
+
 **遇到 bug 怎么告诉开发者？**
 直接跟 Muse 说，或者在网页里点「设置 → 反馈 → 报告」（出错提示条上也有「报告问题」按钮）。一句话就行，不用 GitHub 账号：会作为 Issue 提交到本仓库，自动附上版本、服务状态和程序自己的报错，不含对话、文件、key 和地址，发送前可以先看内容。别人报过同一个问题的话，你的报告会变成对原报告的 +1；修好的版本发布时 Muse 会告诉你。安全问题私下发给维护者，不公开。
 
@@ -123,7 +126,7 @@ sudo bash scripts/server/install.sh --agents claude,dimensio
 | `harness/` | dimensio（TypeScript，Node 原生运行） |
 | `android/` | 安卓 app（WebView 壳，零依赖；发版流程负责构建） |
 | `scripts/server/` | 通用 Linux 安装 / 更新脚本 |
-| `deploy/muse/` | Muse 专用：一键部署脚本 `bootstrap.sh`、给 Muse 看的说明书 `MUSE.md`、运维件模板 |
+| `deploy/muse/` | Muse 专用：一键部署脚本 `bootstrap.sh`、给 Muse 看的说明书 `MUSE.md`、使用说明书 `guide/`（Muse 回答使用问题的依据）、已知问题清单 `known-issues.json`、运维件模板 |
 | `feedback-worker/` | 问题反馈的中继（Cloudflare Worker）：把用户同意过的报告提交成 GitHub Issue；GitHub App 的私钥只在它那里，各台装机上没有 |
 
 ## 发布新版本（维护者）
@@ -138,6 +141,8 @@ git push origin v0.2.0
 GitHub Actions（`.github/workflows/release.yml`）会构建安卓 app（`MuseBridge.apk`，挂在 Release 上，也放进安装包的 `downloads/`），打包 `muse-bridge.tgz`，生成 `.sha256` 和更新频道 `latest.json`，并创建 Release。已经装好的 Muse 每 6 小时读一次 `latest.json`，发现新版本就问用户要不要更新。beta（如 `v0.2.0-beta.1`）也会推送。只有标签里带 `-test` 的（如 `v0.2.0-test.1`）会发成预发布版，不进更新频道，是给维护者在新 Muse 上试装用的。
 
 apk 用仓库 Actions secrets 里的密钥签名（`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`）。没配（比如 fork）就退回 debug 签名：照样能装，但不能覆盖安装官方发布的包。
+
+使用说明书（`deploy/muse/guide/`）跟界面对不上时发版流程会直接失败（`deploy/muse/test/guide.test.mjs`）。打标签前再跑一次说明书问答测试（`node deploy/muse/test/guide-qa/run.mjs`，用本机的 `claude` 命令行）。已知问题写在 `deploy/muse/known-issues.json`：每次发版写进 `latest.json`；只改这个文件推到 `main`，`.github/workflows/known-issues.yml` 会直接改写最新 Release 的 `latest.json`，不用发版，已经装好的 Muse 6 小时内就能知道这个问题和绕过办法。
 
 ## 协议
 

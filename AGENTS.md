@@ -9,7 +9,9 @@
 - `web/`：前端（Vite + Svelte 5）。构建产物输出到 `public/app/`，由服务端直接托管。
 - `harness/`：dimensio（TypeScript，Node 原生运行 `.ts`）。服务端按用户各起一个 dimensio 进程并反代到 `/api/harness/*`；前端经 `@hx` 别名直接编译 `harness/web/src`。
 - `scripts/server/`：通用 Linux 安装 / 更新脚本（systemd）。
-- `deploy/muse/`：Muse 专用的一键部署（`bootstrap.sh`）、运维件模板（`ops/`）和给 Muse 看的说明书（`MUSE.md`）。
+- `deploy/muse/`：Muse 专用的一键部署（`bootstrap.sh`）、运维件模板（`ops/`）、给 Muse 看的部署运维说明书（`MUSE.md`）、
+  使用说明书（`guide/`：Muse 回答「怎么用」、带用户上手的依据）和已知问题清单（`known-issues.json`，随更新频道下发）。
+  **改了界面（按钮名、菜单路径、设置项），同一个提交里改 `guide/` 对应的章节**；界面名字用 **「中文」**（English）写，静态检查会核对。
 - `src/feedback/`：问题反馈（白名单收集、脱敏、出草稿、发送、补发、自动上报）；网页、`bootstrap.sh report`、看门狗三个入口共用。
 - `feedback-worker/`：反馈中继（Cloudflare Worker，以 GitHub App 身份开 Issue）。跟服务端共用 `src/feedback/` 的格式与脱敏代码，改那边要两边都测。
 
@@ -38,4 +40,6 @@ npm install && node --test "src/**/*.test.mjs"      # 服务端
 npm --prefix harness install && npm --prefix harness test   # dimensio
 npm --prefix web install && npm --prefix web run build      # 前端构建
 npm --prefix feedback-worker test                           # 反馈中继（不联网）
+node --test deploy/muse/test/guide.test.mjs                 # 使用说明书的静态检查（界面名字、子命令、链接；发版前必过）
+node deploy/muse/test/guide-qa/run.mjs                      # 说明书问答测试（用本机 claude -p，发版前跑一次）
 ```
