@@ -816,6 +816,8 @@ cmd_update() {
     fi
     url="$(mf .url)"; sum="$(mf .sha256)"; UPDATE_NOTES="$(mf .notes)"; export UPDATE_NOTES
     say "更新 $cur → $(mf .version)"
+    # 更新说明打出来：Muse 切换完成后据此告诉用户变了什么、问要不要带他试新功能
+    [ -z "$UPDATE_NOTES" ] || printf '更新内容：\n%s\n' "$UPDATE_NOTES"
   fi
   [ -n "$sum" ] || die "用法：update [--now] [<下载地址> <sha256>]"
   local name tmp new
