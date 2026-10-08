@@ -62,7 +62,7 @@
       "workaround_en": "In Settings → Connection → Admin console → Claude accounts, edit the active account and paste the new token there; or update to the fixed version and have Muse run set-claude-token again.",
       "cause": "控制台当前账号的令牌每次对话都会盖过环境变量里的令牌；旧版 set-claude-token 只改了环境变量。",
       "since": null,
-      "fixed_in": "v0.1.0-beta.13",
+      "fixed_in": "v0.1.0",
       "notify": false,
       "issue": null
     }

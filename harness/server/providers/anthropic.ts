@@ -22,10 +22,11 @@ export const TOOL_PROGRESS_EVERY_MS = 1_500;
 const THINKING_BUDGET: Record<string, number> = { low: 4_000, medium: 8_000, high: 12_000 };
 
 // Adaptive-thinking models: thinking:{type:"adaptive"} + output_config.effort.
-// Everything else (haiku-*) uses the legacy budget_tokens path.
+// Haiku 4.5 and earlier use the legacy budget_tokens path; Haiku 5.5+ is adaptive
+// (CLI 2.1.293 catalog: adaptive_thinking + rejects_disabled_thinking, effort default medium).
 function isAdaptive(model: string): boolean {
-  return /claude-(opus-4-[78]|sonnet-4-6|sonnet-5|opus-4-6)/i.test(model) ||
-    // future-proof: any opus/sonnet at 4.7+ is adaptive; haiku stays legacy.
+  return /claude-(opus-4-[78]|sonnet-4-6|sonnet-5|opus-4-6|haiku-([5-9]|\d{2}))/i.test(model) ||
+    // future-proof: any opus/sonnet at 4.7+ is adaptive.
     (/claude-(opus|sonnet)/i.test(model) && !/haiku/i.test(model));
 }
 

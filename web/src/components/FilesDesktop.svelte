@@ -8,7 +8,7 @@
   // 数据全走 bridge 服务端的 /api/files*（与手机版工作空间同一条链路、同一套权限）。
   // 视觉沿用工作空间的 iOS grouped 语言，密度按鼠标操作的标准。
   import { onMount, tick, untrack } from 'svelte';
-  import { ui, compose, session, agentOn } from '../lib/state.svelte.js';
+  import { ui, compose, session, agentOn, me } from '../lib/state.svelte.js';
   import { closePage } from '../lib/pageMorph.js';
   import { api } from '../lib/api.js';
   import { sendFile } from '../lib/uploads.svelte.js';
@@ -31,12 +31,28 @@
   // —— 形态 ——
   //   embedded：挂进工作台侧列的紧凑形态——返回交还宿主、全局键盘只在面板真正持有焦点时生效
   //   （否则在旁边的 Claude 会话里按个 Delete 就把文件删了）。
-  //   workspaceRoot：作用域根（会话的项目目录），所有 /api/files* 请求都带上它。
+  //   全盘：workspaceRoot（会话工作目录的绝对路径）只是【起点】，不是围栏。左侧位置栏恒在——
+  //   服务端 /api/project/locations（工作空间 / 主目录 / 各盘符或「/」）；起点按绝对路径落进【最深】
+  //   的那个位置。哪个位置都不含它时，补一个以它为根的临时位置（走 /api/files?ws=，与从前一样）。
+  //   数据通道按【当前位置】的 ws 作用域走（wsRoot）。
+  //   地址栏显示完整绝对路径（D: › Projects › app › …），点空白处可直接输入路径跳转。
   const {
     embedded = false, theme = '', workspaceRoot = '', rootName = '', initialPath = null, initialOpen = '',
     previewHost = '', onExit = null,
+    // home：宿主会话的工作目录（绝对路径），侧栏「通用」里给一行直达；缺省＝workspaceRoot。
+    home = '',
   } = $props();
-  const scoped = (url) => (workspaceRoot ? url + (url.includes('?') ? '&' : '?') + 'ws=' + encodeURIComponent(workspaceRoot) : url);
+
+  // —— 位置与数据通道 ——
+  // [{ id, name, root（ws 作用域，''=身份根）, abs（根的绝对路径）, hidden }]
+  // 上次拿到的列表缓存在 window 上：每次换会话侧栏都会重挂，进来即出、不晚一拍冒出侧栏。
+  const LOC_LIST = (window.__bridgeFdLocList ||= { cloud: null });
+  let locations = $state(LOC_LIST.cloud || []);
+  // 有起点时先不认任何位置：位置列表（含各根绝对路径）到齐、按路径落好位再说，免得先闪一下身份根
+  let locationId = $state(untrack(() => workspaceRoot) ? '' : 'ws');
+  const curLoc = $derived(locations.find((l) => l.id === locationId) || null);
+  // 当前位置的 ws 作用域根（/api/files?ws=）：'' = 身份文件根
+  const wsRoot = $derived(curLoc?.root || '');
   // 内嵌时预览留在侧栏（host='dock'），独立分页仍是全屏——影子包装，调用点零改动。
   const openPreview = (items, idx) => openPreviewRaw(items, idx, { host: previewHost || (embedded ? 'dock' : 'app') });
 
@@ -51,12 +67,12 @@
   });
 
   // 统一数据入口：其余代码只认 fs*。
-  const fsList = (p) => api.files(p, workspaceRoot);
-  const fsMkdir = (p, name) => api.mkdir(p, name, workspaceRoot);
-  const fsRename = (rel, name) => api.renameFile(rel, name, workspaceRoot);
-  const fsRemove = (rel) => api.deleteFile(rel, workspaceRoot);
-  const fsMove = (rel, dest) => api.moveFile(rel, dest, workspaceRoot);
-  const fsCopy = (rel, dest) => api.copyFile(rel, dest, workspaceRoot);
+  const fsList = (p) => api.files(p, wsRoot);
+  const fsMkdir = (p, name) => api.mkdir(p, name, wsRoot);
+  const fsRename = (rel, name) => api.renameFile(rel, name, wsRoot);
+  const fsRemove = (rel) => api.deleteFile(rel, wsRoot);
+  const fsMove = (rel, dest) => api.moveFile(rel, dest, wsRoot);
+  const fsCopy = (rel, dest) => api.copyFile(rel, dest, wsRoot);
 
   // —— 核心状态 ——
   let path = $state('');
@@ -95,11 +111,69 @@
   } catch {}
   function savePrefs() { try { localStorage.setItem('bridge.fd.prefs', JSON.stringify({ view, sortKey, sortDir })); } catch {} }
 
-  const rootLabel = $derived(tr(rootName) || t('工作空间'));
+  const locName = (l) => (/^drive-/.test(l?.id || '') ? t('{d} 盘', { d: String(l.name || '').replace(/:$/, '') }) : tr(l?.name || ''));
+  const rootLabel = $derived((curLoc && locName(curLoc)) || tr(rootName) || t('工作空间'));
   const segs = $derived(path ? path.split('/').filter(Boolean) : []);
   const searching = $derived(query.trim().length > 0);
   const q = $derived(normalizeFileQuery(query));
   const inBrowse = $derived(!searching);
+
+  // —— 绝对路径（Windows 盘符 / UNC / POSIX 三种形态）——
+  const isWinAbs = (p) => /^[A-Za-z]:|^\\\\/.test(String(p || ''));
+  const sepOf = (p) => (isWinAbs(p) ? '\\' : '/');
+  // 统一分隔符、去掉尾分隔符（'E:\' → 'E:'，'/' → ''）；比较用 foldAbs（Windows 不分大小写）
+  const normAbs = (p) => { const s = String(p || ''); return (isWinAbs(s) ? s.replace(/\//g, '\\') : s).replace(/[\\/]+$/, ''); };
+  const foldAbs = (p) => { const s = normAbs(p); return isWinAbs(s) ? s.toLowerCase() : s; };
+  // 盘根 'E:\' 直接去掉尾分隔符会变成 'E:'（Windows 上那是「E 盘当前目录」），所以只在没有尾分隔符时才补
+  function joinPath(base, rel) {
+    const b = String(base || ''), sep = sepOf(b);
+    const r = String(rel || '').split(/[\\/]+/).filter(Boolean).join(sep);
+    if (!r) return b;
+    return /[\\/]$/.test(b) ? b + r : b + sep + r;
+  }
+  // target 在 root 之内 → root 相对路径（'/' 分隔，''=就是根）；不在 → null
+  function relUnder(root, target) {
+    const r = foldAbs(root), tg = foldAbs(target), sep = sepOf(target);
+    if (tg === r) return '';
+    if (!tg.startsWith(r + sep)) return null;
+    return normAbs(target).slice(normAbs(root).length + 1).split(/[\\/]+/).filter(Boolean).join('/');
+  }
+  // 绝对路径拆成地址栏各段：[{ label, abs }]，首段是盘符 / UNC 共享 / '/'
+  function splitAbs(abs) {
+    const a = String(abs || '');
+    if (!isWinAbs(a)) {
+      const parts = a.split('/').filter(Boolean);
+      return [{ label: '/', abs: '/' }, ...parts.map((p, i) => ({ label: p, abs: '/' + parts.slice(0, i + 1).join('/') }))];
+    }
+    const norm = normAbs(a);
+    const unc = norm.match(/^\\\\[^\\]+\\[^\\]+/);
+    const head = unc ? unc[0] : norm.slice(0, 2).toUpperCase();
+    const parts = norm.slice(head.length).split('\\').filter(Boolean);
+    return [{ label: head, abs: unc ? head : head + '\\' }, ...parts.map((p, i) => ({ label: p, abs: head + '\\' + parts.slice(0, i + 1).join('\\') }))];
+  }
+  const baseName = (p) => normAbs(p).split(/[\\/]/).filter(Boolean).pop() || String(p || '');
+  // 绝对路径落进哪个位置：取【最深】的那个（C:\Users\me\x 落「主目录」，不落 C:\）
+  function resolveAbs(abs) {
+    let best = null;
+    for (const loc of locations) {
+      if (!loc.abs) continue;
+      const rel = relUnder(loc.abs, abs);
+      if (rel == null) continue;
+      if (!best || normAbs(loc.abs).length > normAbs(best.loc.abs).length) best = { loc, rel };
+    }
+    return best;
+  }
+  // 地址栏给不给看完整路径：只给 admin；沙箱身份仍是「根名 › 子目录」，绝对路径不出服务器
+  const absOk = $derived(Boolean(curLoc?.abs) && me.kind === 'admin');
+  const curAbs = $derived(curLoc?.abs ? joinPath(curLoc.abs, path) : '');
+  const homeAbs = $derived(home || workspaceRoot);
+  const homeLabel = $derived(home ? baseName(home) : (tr(rootName) || baseName(workspaceRoot)));
+  const atHome = $derived(Boolean(homeAbs && curAbs && inBrowse && foldAbs(curAbs) === foldAbs(homeAbs)));
+  // 侧栏：只有一个可去处（非 admin 只拿到自己那条）就不摆
+  const sideLocs = $derived(locations.filter((l) => !l.hidden));
+  const showSide = $derived(locations.length > 1);
+  // 位置行的选中态：正停在会话目录时让给「会话目录」那一行，侧栏只亮一处
+  const locOn = (loc) => locationId === loc.id && !atHome;
 
   // —— 工具栏分档（.fd-tb 实测宽度，不用 @container：容器查询量的是整列宽，扣不掉右上
   // 避让区——Claude 顶栏胶囊在内嵌态能吃掉 240px，首版就是因此把钮挤到胶囊底下）——
@@ -128,9 +202,62 @@
   let crumbHide = $state(0);
   let crumbPop = $state(false);
   let crumbSqueeze = $state(false);   // 头部已全部折叠仍溢出 → 允许当前段省略号
-  const crumbItems = $derived([rootLabel, ...segs]);
-  const crumbRel = (i) => (i === 0 ? '' : segs.slice(0, i).join('/'));
-  const gotoCrumb = (i) => { crumbPop = false; if (i === 0) goRoot(); else goSeg(i - 1); };
+  let locPop = $state(false);         // 窄列里的「位置」下拉（位置栏收起时的入口）
+  let addrEdit = $state(null);        // 地址栏编辑态：输入框里的路径文本（null＝显示面包屑）
+  const addrOn = $derived(addrEdit !== null);
+  // 地址栏各段：{ label, rel }＝当前位置内（rel 相对位置根，''=根）；{ label, abs }＝位置根之上的
+  // 上级目录（D: › Projects 在会话目录那个临时位置之上），点它按绝对路径换到含它的位置（D:\ 那个），
+  // 没有位置含它就只显示不可点（ok=false）。
+  const crumbList = $derived.by(() => {
+    const inner = segs.map((s, i) => ({ label: s, rel: segs.slice(0, i + 1).join('/') }));
+    if (!absOk) return [{ label: rootLabel, rel: '' }, ...inner];
+    const parts = splitAbs(curLoc.abs);
+    const head = parts.map((p, i) => (i === parts.length - 1 ? { label: p.label, rel: '' } : { label: p.label, abs: p.abs, ok: Boolean(resolveAbs(p.abs)) }));
+    return [...head, ...inner];
+  });
+  const crumbItems = $derived(crumbList.map((c) => c.label));
+  const crumbRel = (i) => crumbList[i]?.rel ?? null;   // null＝位置根之上（不收拖放：跨位置移动不在这条路上）
+  const crumbOk = (i) => crumbList[i]?.rel != null || Boolean(crumbList[i]?.ok);
+  function gotoCrumb(i) {
+    crumbPop = false;
+    const c = crumbList[i];
+    if (!c) return;
+    if (c.rel == null) { if (c.ok) goAbs(c.abs); return; }
+    if (c.rel === '') goRoot(); else navTo({ path: c.rel });
+  }
+
+  // —— 地址栏编辑（Explorer 式：点空白处 / Ctrl+L / Alt+D 换成完整路径文本，可复制、可输入跳转）——
+  const canAddr = $derived(absOk && inBrowse);
+  function startAddr() { if (!canAddr) return; crumbPop = false; locPop = false; addrEdit = curAbs; }
+  function addrClick(e) { if (addrEdit === null && !e.target.closest?.('button, input')) startAddr(); }
+  function addrFocus(node) { node.focus(); node.select(); }
+  function addrKey(e) {
+    e.stopPropagation();   // Esc/Backspace 这些是全局快捷键（清选择 / 上一级），输入框里的键别漏出去
+    if (e.key === 'Escape') { e.preventDefault(); addrEdit = null; rowsEl?.focus({ preventScroll: true }); }
+    else if (e.key === 'Enter') { e.preventDefault(); commitAddr(); }
+  }
+  // 输入的路径：绝对路径照用；相对路径按当前目录拼；. 与 .. 就地化简
+  function typedAbs(v) {
+    const parts = splitAbs(isWinAbs(v) || v.startsWith('/') ? v : joinPath(curAbs, v));
+    const out = [];
+    for (const p of parts.slice(1)) { if (p.label === '..') out.pop(); else if (p.label !== '.') out.push(p.label); }
+    return joinPath(parts[0].abs, out.join('/'));
+  }
+  async function commitAddr() {
+    const v = String(addrEdit ?? '').trim().replace(/^"(.*)"$/, '$1');
+    addrEdit = null;
+    rowsEl?.focus({ preventScroll: true });
+    if (!v) return;
+    const abs = typedAbs(v);
+    if (foldAbs(abs) !== foldAbs(curAbs)) await goAbs(abs);
+  }
+  function addrMenu(e) {
+    if (!absOk) return;
+    popupMenu(e, [
+      { label: t('复制地址'), act: () => copyText(curAbs, t('已复制路径')) },
+      { label: t('编辑地址'), hint: 'Ctrl+L', act: startAddr, disabled: !canAddr },
+    ]);
+  }
   // 折叠档位按【缓存的自然宽度】算，不在 DOM 上反复试：
   //   · 路径 / 搜索 / 模式变了（离散事件）：先全展开一帧，量出每段左缘到末尾的距离存起来；
   //   · 列宽变了（拖侧栏，每帧都来）：只拿缓存和当前可用宽度算出 crumbHide，一步到位。
@@ -181,8 +308,8 @@
   // 消失的淡出、新出的淡入（lib/flipLayout.js）。pre 在 DOM 变之前拍旧位，post 在 DOM 变之后量新位。 ——
   let toolbarEl = $state();
   const tbFlip = createFlip(() => toolbarEl);
-  $effect.pre(() => { tbTier; crumbHide; crumbSqueeze; view; searchFocus; searching; untrack(() => tbFlip.snapshot()); });
-  $effect(() => { tbTier; crumbHide; crumbSqueeze; view; searchFocus; searching; untrack(() => tbFlip.play()); });
+  $effect.pre(() => { tbTier; crumbHide; crumbSqueeze; view; searchFocus; searching; addrOn; untrack(() => tbFlip.snapshot()); });
+  $effect(() => { tbTier; crumbHide; crumbSqueeze; view; searchFocus; searching; addrOn; untrack(() => tbFlip.play()); });
   $effect(() => () => tbFlip.destroy());
 
   // —— 行数据（排序：文件夹恒在前，组内按列排）——
@@ -204,15 +331,17 @@
     return arr;
   });
   const showParentCol = $derived(searching);
-  const cutSet = $derived(clipboard?.mode === 'cut' ? new Set(clipboard.rels) : new Set());
-  const canPaste = $derived(Boolean(clipboard && inBrowse));
+  // 面板内剪贴板按位置记账：rel 只在它自己的位置根下有意义，换了位置就不认（不显示剪切态、不让粘贴）
+  const cutSet = $derived(clipboard?.mode === 'cut' && clipboard.locationId === locationId ? new Set(clipboard.rels) : new Set());
+  const canPaste = $derived(Boolean(clipboard && clipboard.locationId === locationId && inBrowse));
   const listBusy = $derived(loading);
-  const anyDialog = $derived(Boolean(menu || infoDlg || shareDlg || aiDlg || sortOpen || addOpen || crumbPop || renaming));
+  const anyDialog = $derived(Boolean(menu || infoDlg || shareDlg || aiDlg || sortOpen || addOpen || crumbPop || locPop || renaming));
 
   // —— 导航（含历史）——
-  const snapshot = () => ({ path });
+  const snapshot = () => ({ locationId, path });
   async function applyNav(next) {
-    path = next.path;
+    if (next.locationId !== locationId) items = [];   // 旧位置的列表别顶着新位置的作用域显示（缩略图 / 操作都会串）
+    locationId = next.locationId; path = next.path;
     query = ''; selected = new Set(); anchorRel = ''; renaming = null;
     await load(next.path);
   }
@@ -237,33 +366,90 @@
     if (segs.length) await navTo({ path: segs.slice(0, -1).join('/') });
   }
   const enterDir = (rel) => navTo({ path: rel });
-  const goSeg = (i) => navTo({ path: segs.slice(0, i + 1).join('/') });
   const goRoot = () => navTo({ path: '' });
+  const selectLocation = (id) => { if (id !== locationId || path || searching) navTo({ locationId: id, path: '' }); };
   // 独立分页＝回主页；内嵌态＝把返回交还宿主（工作台菜单 / 收起侧栏）。
   function goHome() { if (onExit) { onExit(); return; } closePage('files'); }
 
+  // 起点不在任何位置里时补的临时位置：以它为根、走服务端 ws 作用域（与从前侧栏挂会话目录同一条链路）。
+  // 不进侧栏「位置」列表——侧栏「通用」那一行（会话目录）就是它的入口。
+  function sessionLocFor(abs) {
+    let loc = locations.find((l) => l.id === 'session');
+    if (loc && foldAbs(loc.abs) === foldAbs(abs)) return loc;
+    loc = { id: 'session', name: (foldAbs(abs) === foldAbs(workspaceRoot) && rootName) || baseName(abs), root: abs, abs, hidden: true };
+    locations = [...locations.filter((l) => l.id !== 'session'), loc];
+    return locations.find((l) => l.id === 'session');
+  }
+  // 按绝对路径跳转（地址栏输入 / 位置根之上的上级段 / 侧栏「会话目录」）
+  async function goAbs(abs) {
+    let hit = resolveAbs(abs);
+    if (!hit && homeAbs && foldAbs(abs) === foldAbs(homeAbs)) hit = { loc: sessionLocFor(homeAbs), rel: '' };
+    if (!hit) { toast(t('「{path}」不在可访问的位置里', { path: abs })); return false; }
+    await navTo({ locationId: hit.loc.id, path: hit.rel });
+    return true;
+  }
+  const goHomeDir = () => { if (!atHome) goAbs(homeAbs); };
+
+  let loadSeq = 0;
   async function load(p = path, { keepSel = false } = {}) {
+    const my = ++loadSeq;
     loading = true;
     try {
       const r = await fsList(p);
+      if (my !== loadSeq) return;   // 已被更新的导航替代（跨位置连点时旧结果别落进新位置）
       path = r.path ?? p;
       items = withRel(r.items, path); truncated = Boolean(r.truncated);
       if (keepSel) {
         const rels = new Set(items.map((x) => x.rel));
         selected = new Set([...selected].filter((x) => rels.has(x)));
       }
-    } catch (e) { items = []; truncated = false; toast(t('加载失败：{reason}', { reason: tr(e.message || '') })); }
+    } catch (e) {
+      if (my !== loadSeq) return;
+      items = []; truncated = false; toast(t('加载失败：{reason}', { reason: tr(e.body?.error || e.message || '') }));
+    }
     loading = false;
   }
   const refresh = () => load(path, { keepSel: true });
 
+  // 位置列表：与整页工作空间的位置切换同一份 /api/project/locations——admin＝工作空间 + 主目录 + 各盘符
+  // （Linux 上是「/」），其余身份只有自己那一条。Dimensio Projects 是「新建项目」的捷径，
+  // 在文件管理器里它只是主目录下的一个文件夹。
+  async function refreshLocations() {
+    let list = null;
+    try {
+      const r = await api.projectLocations();
+      list = (r?.locations || []).filter((l) => l && l.id && l.path && l.id !== 'dimensio')
+        .map((l) => ({ id: l.id, name: l.name, root: l.id === 'ws' ? '' : l.path, abs: l.path }));
+    } catch {}
+    if (!list?.length) list = [{ id: 'ws', name: t('工作空间'), root: '', abs: '' }];
+    LOC_LIST.cloud = list;
+    const session = locations.find((l) => l.id === 'session');
+    locations = session ? [...list, session] : list;
+    // 当前位置没了（换了身份 / 那个盘拔掉了）：回身份根。locationId 为空＝起点还在落位，不动它
+    if (locationId && !locations.some((l) => l.id === locationId)) { locationId = 'ws'; await load(''); }
+  }
+  // 起点落位：没有绝对路径起点（工作空间就在身份根里）＝身份根 + 相对路径，位置列表后台到；
+  // 有起点＝等位置（含各根绝对路径）到齐，落进最深的那个位置；哪个都不含它就补一个临时位置。
+  async function startAt(p0) {
+    if (!workspaceRoot) {
+      refreshLocations();
+      path = p0;
+      return load(p0);
+    }
+    await refreshLocations();
+    const hit = resolveAbs(joinPath(workspaceRoot, p0));
+    const loc = hit ? hit.loc : sessionLocFor(workspaceRoot);
+    const rel = hit ? hit.rel : p0;
+    locationId = loc.id; path = rel;
+    return load(rel);
+  }
+
   onMount(() => {
-    // initialPath：内嵌宿主指定的起始目录（工作台侧栏按会话工作空间挂载时用）；
+    // initialPath：内嵌宿主指定的起始目录（工作台侧栏按会话工作空间挂载时用，相对 workspaceRoot）；
     // 没传才吃 ui.filesPath 那份一次性预置（独立分页老路）。
     const p0 = initialPath ?? ui.filesPath ?? '';
     if (initialPath == null) ui.filesPath = null;
-    path = p0;
-    const first = load(p0);
+    const first = startAt(p0);
     // initialOpen：列表就位后自动打开指定文件的预览（产物卡「在工作区里打开」走它）。
     if (initialOpen) Promise.resolve(first).then(() => {
       const it = rows.find((f) => !f.isDir && f.name === initialOpen);
@@ -274,18 +460,19 @@
   // 刷新由 agent 的 fs 事件驱动（服务端没有推给本面板的文件 watcher），
   // 顺带上报当前目录，让 agent 的 workspace.view 知道用户在看哪儿——与手机版同一套。
   $effect(() => {
-    reportUi({ files: { path, ws: workspaceRoot || '', query: q || '' } });
+    reportUi({ files: { path, ws: wsRoot, query: q || '' } });
   });
   $effect(() => {
     let tm = 0;
     const offFs = onAgentFs(() => { clearTimeout(tm); tm = setTimeout(() => load(path, { keepSel: true }), 350); });
-    const offGoto = onAgentGoto((rootRel) => navTo({ path: rootRel }));
+    // goto 的路径相对【身份文件根】：人在别的位置里时先换回身份根所在的位置
+    const offGoto = onAgentGoto((rootRel) => navTo({ locationId: 'ws', path: rootRel }));
     return () => { clearTimeout(tm); offFs(); offGoto(); };
   });
 
   // —— 缩略图：只有图片有服务端衍生缩略图（sharp）；其余类型用矢量占位图标，
   // 别去请求一个必然 404 的地址。<img loading="lazy"> 负责滚动懒取。——
-  const thumbOf = (it) => (!it.isDir && kindOf(it.name) === 'img' ? cloudFileUrl(it.rel, { thumb: true, mt: it.mtime, ws: workspaceRoot }) : '');
+  const thumbOf = (it) => (!it.isDir && kindOf(it.name) === 'img' ? cloudFileUrl(it.rel, { thumb: true, mt: it.mtime, ws: wsRoot }) : '');
 
   // —— 选择 ——
   function clickRow(e, it) {
@@ -337,7 +524,7 @@
     if (['txt', 'js', 'ts', 'json', 'css', 'mjs', 'svelte', 'py', 'sh', 'yml', 'yaml', 'log'].includes(e)) return 'text';
     return 'doc';
   }
-  const srcItem = (it, kind) => ({ origin: 'cloud', rel: it.rel, name: it.name, kind, mt: it.mtime, ws: workspaceRoot });
+  const srcItem = (it, kind) => ({ origin: 'cloud', rel: it.rel, name: it.name, kind, mt: it.mtime, ws: wsRoot });
   function openItem(it) {
     if (it.isDir) { enterDir(it.rel); return; }
     const k = kindOf(it.name), ext = extOf(it.name);
@@ -356,7 +543,7 @@
   }
   // 下载＝浏览器下载（&dl=1 让服务端带上 Content-Disposition）。
   function doDownload(it) {
-    const href = cloudFileUrl(it.rel, { dl: true, ws: workspaceRoot });
+    const href = cloudFileUrl(it.rel, { dl: true, ws: wsRoot });
     const a = document.createElement('a');
     a.href = href; a.download = it.name; document.body.appendChild(a); a.click(); a.remove();
   }
@@ -417,7 +604,7 @@
   function setClipboard(mode2) {
     if (!selected.size) return;
     const rels = [...selected];
-    clipboard = { mode: mode2, rels };
+    clipboard = { mode: mode2, rels, locationId };
     toast(mode2 === 'cut' ? t('已剪切 {n} 项', { n: rels.length }) : t('已复制 {n} 项', { n: rels.length }));
   }
   // 「已移动 / 已复制 n 项（，f 项失败）」——粘贴与拖放共用；英文语序不同，整句一个键
@@ -460,7 +647,7 @@
     if (extracting) return;
     extracting = true;
     toast(t('解压中…'));
-    try { const r = await api.extractFile(it.rel, workspaceRoot); toast(t('已解压到「{name}」', { name: r.name })); await refresh(); }
+    try { const r = await api.extractFile(it.rel, wsRoot); toast(t('已解压到「{name}」', { name: r.name })); await refresh(); }
     catch (e) { toast(t('解压失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); }
     finally { extracting = false; }
   }
@@ -488,7 +675,7 @@
       busyLabel = t('上传 {name}…', { name: f.name });
       try {
         await sendFile(f, {
-          dir, ws: workspaceRoot, mk: !!rel,
+          dir, ws: wsRoot, mk: !!rel,
           onProgress: (sent, total) => { busyLabel = t('上传 {name}…', { name: f.name }) + (total > 0 ? ' ' + Math.floor((sent / total) * 100) + '%' : ''); },
         });
         ok++;
@@ -519,7 +706,7 @@
     if (request.error) { toast(tr(request.error)); return; }
     d.busy = true;
     try {
-      const r = await api.shareSpaceMint([d.item.rel], request.options, workspaceRoot);
+      const r = await api.shareSpaceMint([d.item.rel], request.options, wsRoot);
       d.result = shareResult(r, request.password);
     } catch (e) { toast(t('创建分享失败：{reason}', { reason: tr(e.body?.error || e.body || e.message || '') })); }
     d.busy = false;
@@ -541,8 +728,8 @@
   async function aiMaterial(it, direct = false) {
     const kind = it.isDir ? 'folder' : (kindOf(it.name) === 'img' ? 'image' : 'file');
     try {
-      const up = await api.fileToUpload(it.rel, !direct, workspaceRoot);
-      return { path: up.path, name: up.name, kind, url: kind === 'image' ? cloudFileUrl(it.rel, { ws: workspaceRoot }) : null };
+      const up = await api.fileToUpload(it.rel, !direct, wsRoot);
+      return { path: up.path, name: up.name, kind, url: kind === 'image' ? cloudFileUrl(it.rel, { ws: wsRoot }) : null };
     } catch (e) { toast(t('准备失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); return null; }
   }
   function pickChat(sel) {
@@ -634,6 +821,11 @@
     entries.push({ label: t('刷新'), hint: 'F5', act: refresh });
     popupMenu(e, entries);
   }
+  // 位置行右键：admin 可复制根的完整路径；没有可做的就不弹菜单
+  function openLocMenu(e, loc) {
+    if (!(loc.abs && me.kind === 'admin')) { e.preventDefault(); return; }
+    popupMenu(e, [{ label: t('复制地址'), act: () => copyText(loc.abs, t('已复制路径')) }]);
+  }
 
   // —— 内部拖拽（同作用域移动 / Ctrl=复制）+ 拖入文件上传 ——
   let dragRels = null;
@@ -647,7 +839,7 @@
       e.dataTransfer.effectAllowed = 'copyMove';
       // dirs 与 rels 一一对应：落点（如 dimensio 跨工作空间那条）要据此把文件夹挑出来说清楚
       const dirs = dragRels.map((rel) => Boolean(rows.find((x) => x.rel === rel)?.isDir));
-      e.dataTransfer.setData(WS_DT, JSON.stringify({ rels: dragRels, dirs, ws: workspaceRoot }));
+      e.dataTransfer.setData(WS_DT, JSON.stringify({ rels: dragRels, dirs, ws: wsRoot }));
     } catch {}
   }
   function rowDragEnd() { dragRels = null; dropOn = null; }
@@ -684,7 +876,7 @@
   }
   function dragLeavePane(e) { if (!e.currentTarget.contains(e.relatedTarget)) dropOn = null; }
   function dragOverCrumb(e, destRel) {
-    if (!dragRels) return;
+    if (!dragRels || destRel == null) return;   // 位置根之上的段属于别的位置，不收拖放
     if (destRel === path || !dirDropOk(destRel)) return;
     e.preventDefault();
     try { e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'; } catch {}
@@ -747,7 +939,7 @@
     const inField = e.target.closest?.('input, textarea, [contenteditable]');
     if (e.key === 'Escape') {
       if (menu) { menu = null; return; }
-      if (sortOpen || addOpen) { sortOpen = false; addOpen = false; return; }
+      if (sortOpen || addOpen || crumbPop || locPop) { sortOpen = false; addOpen = false; crumbPop = false; locPop = false; return; }
       if (aiDlg) { aiDlg = null; return; }
       if (shareDlg) { if (!shareDlg.busy) shareDlg = null; return; }
       if (infoDlg) { infoDlg = null; return; }
@@ -764,6 +956,7 @@
     if (ctrl && e.key.toLowerCase() === 'x') { e.preventDefault(); setClipboard('cut'); return; }
     if (ctrl && e.key.toLowerCase() === 'v') { e.preventDefault(); doPaste(); return; }
     if (ctrl && e.key.toLowerCase() === 'f') { e.preventDefault(); searchEl?.focus(); return; }
+    if ((ctrl && e.key.toLowerCase() === 'l') || (e.altKey && e.key.toLowerCase() === 'd')) { e.preventDefault(); startAddr(); return; }
     if (e.key === 'F5') { e.preventDefault(); refresh(); return; }
     if (e.key === 'F2') { e.preventDefault(); const it = selectedRows()[0]; if (it && selected.size === 1) startRename(it); return; }
     if (e.key === 'Delete') { e.preventDefault(); doDelete(); return; }
@@ -886,17 +1079,52 @@
 <div class="fd-root" class:embedded class:th-light={theme === 'light'} class:th-dark={theme === 'dark'} bind:this={rootEl} role="presentation" oncontextmenu={(e) => e.preventDefault()}>
   <!-- 工具栏：外层 .fd-toolbar 吃右上避让（--fd-avoid-r，内嵌时由宿主给），
        内层 .fd-tb 才是排版容器，宽度用 ResizeObserver 量出来分档（见 tbTier）。 -->
+  {#snippet locIcon(loc)}
+    {#if loc.id === 'ws'}
+      <svg class="side-ic accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.2 12 4l8 7.2"/><path d="M6 10v9h12v-9"/></svg>
+    {:else if loc.id === 'home'}
+      <svg class="side-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.4" r="3.4"/><path d="M5.2 19.5c.9-3.4 3.5-5.2 6.8-5.2s5.9 1.8 6.8 5.2"/></svg>
+    {:else if /^drive-/.test(loc.id) || loc.id === 'root'}
+      <svg class="side-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="6.5" width="17" height="11" rx="2.6"/><path d="M7.2 13.6h.01M10.6 13.6h6.2"/></svg>
+    {:else}
+      <svg class="side-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z"/></svg>
+    {/if}
+  {/snippet}
+  {#snippet homeIcon()}
+    <svg class="side-ic accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 5h13A2.5 2.5 0 0 1 21 7.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4.6 3.4V17h-.9A2.5 2.5 0 0 1 3 14.5v-7A2.5 2.5 0 0 1 5.5 5Z"/><path d="M8 10.2h8M8 13h5"/></svg>
+  {/snippet}
+
   {#snippet crumbs()}
-    {#if crumbHide > 0}
+    <!-- 位置下拉：只在位置栏因窄列收起时露出（见样式表 .tb-drop.locs），窄侧栏里一样能换盘 -->
+    {#if showSide && addrEdit === null}
+      <div class="tb-drop locs">
+        <button class="tb-btn" title={tc('explorer', '位置')} aria-label={tc('explorer', '位置')} onclick={() => { locPop = !locPop; crumbPop = false; sortOpen = false; addOpen = false; }}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="6.5" width="17" height="11" rx="2.6"/><path d="M7.2 13.6h.01M10.6 13.6h6.2"/></svg>
+        </button>
+        {#if locPop}
+          <button class="pop-scrim" aria-label={t('关闭')} onclick={() => (locPop = false)}></button>
+          <div class="pop left locs-pop">
+            {#if homeAbs}
+              <button class="pop-mi" class:on={atHome} title={homeAbs} onclick={() => { locPop = false; goHomeDir(); }}>{@render homeIcon()}<span class="pm-nm">{homeLabel}</span></button>
+              <div class="pop-sep"></div>
+            {/if}
+            {#each sideLocs as loc (loc.id)}
+              <button class="pop-mi" class:on={locOn(loc)} title={me.kind === 'admin' ? loc.abs || undefined : undefined} onclick={() => { locPop = false; selectLocation(loc.id); }}>{@render locIcon(loc)}<span class="pm-nm">{locName(loc)}</span></button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+    {#if crumbHide > 0 && addrEdit === null}
       <div class="tb-drop crumb-more" data-flip="cmore">
-        <button class="tb-btn ell" title={t('被收起的上级目录')} aria-label={t('展开上级目录')} onclick={() => { crumbPop = !crumbPop; sortOpen = false; addOpen = false; }}>
+        <button class="tb-btn ell" title={t('被收起的上级目录')} aria-label={t('展开上级目录')} onclick={() => { crumbPop = !crumbPop; locPop = false; sortOpen = false; addOpen = false; }}>
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.5" cy="12" r="1.9"/></svg>
         </button>
         {#if crumbPop}
           <button class="pop-scrim" aria-label={t('关闭')} onclick={() => (crumbPop = false)}></button>
           <div class="pop left">
             {#each crumbItems.slice(0, crumbHide) as it, i (i)}
-              <button class="pop-mi" style:padding-left="{9 + i * 10}px" onclick={() => gotoCrumb(i)}>
+              <button class="pop-mi" style:padding-left="{9 + i * 10}px" disabled={!crumbOk(i)} onclick={() => gotoCrumb(i)}>
                 <svg class="pm-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.2c0-1.5 1.2-2.7 2.7-2.7h3.4l2 2.3h6.2c1.5 0 2.7 1.2 2.7 2.7v8.3c0 1.5-1.2 2.7-2.7 2.7H6.2c-1.5 0-2.7-1.2-2.7-2.7z"/></svg>{it}
               </button>
             {/each}
@@ -904,20 +1132,30 @@
         {/if}
       </div>
     {/if}
-    <div class="fd-crumbs" class:squeeze={crumbSqueeze} role="presentation" bind:this={crumbsEl} data-flip="crumbs" data-flip-morph="x">
+    <!-- 地址栏：点段跳转；点空白处 / Ctrl+L 换成可编辑的完整路径（Enter 跳转、Esc 放弃），右键复制路径 -->
+    <div class="fd-crumbs" class:squeeze={crumbSqueeze} class:editing={addrEdit !== null} class:addr={canAddr}
+      role="presentation" bind:this={crumbsEl} data-flip="crumbs" data-flip-morph="x"
+      title={canAddr && addrEdit === null ? curAbs : undefined} onclick={addrClick} oncontextmenu={addrMenu}>
       <div class="fd-crumbs-in" data-flip-inner>
-        {#each crumbItems as it, i (i)}
-          {#if i >= crumbHide}
-            {#if i > crumbHide}<svg class="crumb-sep" data-flip="csep-{i}" data-flip-anchor="left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 6 6 6-6 6"/></svg>{/if}
-            {#if i < crumbItems.length - 1}
-              <button class="crumb" data-flip="crumb-{i}" data-flip-anchor="left" class:dropin={dropOn === 'crumb:' + crumbRel(i)}
-                onclick={() => gotoCrumb(i)} ondragover={(e) => dragOverCrumb(e, crumbRel(i))} ondrop={onDrop}>{it}</button>
-            {:else}
-              <span class="crumb cur" data-flip="crumb-{i}" data-flip-anchor="left">{it}</span>
+        {#if addrEdit !== null}
+          <input class="addr-in" bind:value={addrEdit} use:addrFocus onkeydown={addrKey} onblur={() => (addrEdit = null)}
+            spellcheck="false" autocomplete="off" aria-label={t('地址')} />
+        {:else}
+          {#each crumbItems as it, i (i)}
+            {#if i >= crumbHide}
+              {#if i > crumbHide}<svg class="crumb-sep" data-flip="csep-{i}" data-flip-anchor="left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 6 6 6-6 6"/></svg>{/if}
+              {#if i === crumbItems.length - 1}
+                <span class="crumb cur" data-flip="crumb-{i}" data-flip-anchor="left">{it}</span>
+              {:else if !crumbOk(i)}
+                <span class="crumb off" data-flip="crumb-{i}" data-flip-anchor="left">{it}</span>
+              {:else}
+                <button class="crumb" data-flip="crumb-{i}" data-flip-anchor="left" class:dropin={dropOn === 'crumb:' + crumbRel(i)}
+                  onclick={() => gotoCrumb(i)} ondragover={(e) => dragOverCrumb(e, crumbRel(i))} ondrop={onDrop}>{it}</button>
+              {/if}
             {/if}
-          {/if}
-        {/each}
-        {#if searching}<span class="crumb-note" data-flip="cnote" data-flip-anchor="left">{t('搜索「{query}」', { query: query.trim() })}</span>{/if}
+          {/each}
+          {#if searching}<span class="crumb-note" data-flip="cnote" data-flip-anchor="left">{t('搜索「{query}」', { query: query.trim() })}</span>{/if}
+        {/if}
       </div>
     </div>
   {/snippet}
@@ -987,7 +1225,7 @@
 
       {#if tbTier < 3}
         <div class="tb-drop sort" data-flip="sort">
-          <button class="tb-btn" title={t('排序')} aria-label={t('排序')} onclick={() => { sortOpen = !sortOpen; addOpen = false; crumbPop = false; }}>
+          <button class="tb-btn" title={t('排序')} aria-label={t('排序')} onclick={() => { sortOpen = !sortOpen; addOpen = false; crumbPop = false; locPop = false; }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5v14M7 19l-3-3M7 19l3-3"/><path d="M17 19V5M17 5l-3 3M17 5l3 3"/></svg>
           </button>
           {#if sortOpen}
@@ -998,7 +1236,7 @@
       {/if}
 
       <div class="tb-drop add" data-flip="add">
-        <button class="tb-btn" title={t('新建 / 上传')} aria-label={t('新建或上传')} onclick={() => { addOpen = !addOpen; sortOpen = false; crumbPop = false; }}>
+        <button class="tb-btn" title={t('新建 / 上传')} aria-label={t('新建或上传')} onclick={() => { addOpen = !addOpen; sortOpen = false; crumbPop = false; locPop = false; }}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
         {#if addOpen}
@@ -1022,6 +1260,32 @@
   </div>
 
   <div class="fd-body">
+    <!-- 侧栏：通用（会话目录）+ 位置。无论挂在哪个会话、起点在哪个盘，都是同一份全盘位置
+         （服务端给的工作空间 / 主目录 / 各盘）。内嵌变窄时由 @container 自动收起，
+         收起后入口挪到地址栏左侧的位置下拉。 -->
+    {#if showSide}
+    <div class="fd-side">
+      <div class="fd-side-in">
+        {#if homeAbs}
+          <div class="side-sec">{tc('explorer', '通用')}</div>
+          <button class="side-row" class:on={atHome} title={t('本会话的工作目录：{path}', { path: homeAbs })}
+            onclick={goHomeDir} oncontextmenu={(e) => e.preventDefault()}>
+            {@render homeIcon()}
+            <span class="side-nm">{homeLabel}</span>
+          </button>
+        {/if}
+        <div class="side-sec">{tc('explorer', '位置')}</div>
+        {#each sideLocs as loc (loc.id)}
+          <button class="side-row" class:on={locOn(loc)} title={me.kind === 'admin' ? loc.abs || undefined : undefined}
+            onclick={() => selectLocation(loc.id)} oncontextmenu={(e) => openLocMenu(e, loc)}>
+            {@render locIcon(loc)}
+            <span class="side-nm">{locName(loc)}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+    {/if}
+
     <!-- 主区 -->
     <div class="fd-main">
       {#if view === 'list'}
@@ -1166,7 +1430,7 @@
           <div class="ir"><span>{t('种类')}</span><b>{typeLabel(infoDlg)}</b></div>
           <div class="ir"><span>{t('大小')}</span><b>{infoDlg.isDir ? t('文件夹') : fmtSize(infoDlg.size)}</b></div>
           <div class="ir"><span>{t('修改时间')}</span><b>{fmtFull(infoDlg.mtime)}</b></div>
-          <div class="ir"><span>{t('位置')}</span><b class="loc">{rootLabel}{infoDlg.dir ? ' / ' + infoDlg.dir.split('/').join(' / ') : ''}</b></div>
+          <div class="ir"><span>{t('位置')}</span><b class="loc">{absOk ? joinPath(curLoc.abs, infoDlg.dir || '') : rootLabel + (infoDlg.dir ? ' / ' + infoDlg.dir.split('/').join(' / ') : '')}</b></div>
         </div>
         <div class="dlg-btns">
           <button class="btn go" onclick={() => (infoDlg = null)}>{t('完成')}</button>
@@ -1258,7 +1522,7 @@
      浅色沿用工作空间家族的 iOS 浅色语言（蓝 #0071e3、#f2f2f7）。所有颜色只走下列令牌，别再就地写死。 */
   .fd-root {
     --blue: #4f9dff; --blue-soft: rgba(79, 157, 255, .16); --red: #ff6961;
-    --bg: #1f1f1e; --panel: #262625; --bar: rgba(31, 31, 30, .94);
+    --bg: #1f1f1e; --panel: #262625; --bar: rgba(31, 31, 30, .94); --side-bg: rgba(35, 35, 34, .7);
     --ink: #ececea; --ink2: rgba(235, 235, 240, .62); --ink3: rgba(235, 235, 240, .4);
     --sep: rgba(255, 255, 255, .09); --hover: rgba(255, 255, 255, .07); --row-alt: rgba(255, 255, 255, .03);
     --seg-bg: rgba(255, 255, 255, .08); --field-bg: #1b1b1a; --pop-bg: rgba(44, 44, 42, .98); --dlg-bg: #2a2a29;
@@ -1276,7 +1540,7 @@
   }
   :global(html[data-theme='light']) .fd-root:not(.th-dark), .fd-root.th-light {
     --blue: #0071e3; --blue-soft: rgba(0, 113, 227, .1); --red: #ff383c;
-    --bg: #f2f2f7; --panel: #fff; --bar: rgba(248, 248, 250, .92);
+    --bg: #f2f2f7; --panel: #fff; --bar: rgba(248, 248, 250, .92); --side-bg: rgba(242, 242, 246, .8);
     --ink: #1d1d1f; --ink2: rgba(60, 60, 67, .62); --ink3: rgba(60, 60, 67, .4);
     --sep: rgba(60, 60, 67, .1); --hover: rgba(120, 120, 128, .09); --row-alt: rgba(120, 120, 128, .045);
     --seg-bg: rgba(120, 120, 128, .1); --field-bg: #fff; --pop-bg: rgba(252, 252, 253, .97); --dlg-bg: #fbfbfd;
@@ -1318,6 +1582,21 @@
   .crumb.dropin { background: var(--blue-soft); color: var(--blue); outline: 1.5px solid var(--blue); }
   .crumb-sep { width: 13px; height: 13px; color: var(--ink3); flex: 0 0 auto; }
   .crumb-more { display: flex; align-items: center; margin-left: 4px; }
+  /* 位置根之上的上级段（没有位置含它）：只显示、不可点 */
+  .crumb.off { color: var(--ink3); cursor: default; }
+  .crumb.off:hover { background: none; color: var(--ink3); }
+  /* 地址栏：段与段之间的空白可点（进入编辑），编辑态整框换成输入框 */
+  .fd-crumbs.addr { cursor: text; }
+  .fd-crumbs.editing { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-soft); }
+  .fd-crumbs.editing .fd-crumbs-in { flex: 1 1 auto; min-width: 0; }
+  .addr-in { flex: 1 1 auto; width: 0; min-width: 0; height: 26px; padding: 0 4px; border: 0; outline: 0; background: none; font: inherit; font-size: 13px; color: var(--ink); user-select: text; }
+  /* 位置下拉：位置栏收起（窄列 / 窄窗）时才露出，与文件末尾 @container / @media 收侧栏同一档 */
+  .tb-drop.locs { display: none; align-items: center; }
+  .locs-pop { min-width: 200px; max-width: 280px; max-height: min(60vh, 420px); overflow: auto; }
+  .locs-pop .pop-mi { gap: 8px; }
+  .locs-pop .pop-mi.on { color: var(--blue); font-weight: 600; }
+  .pm-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pop-mi:hover:not(:disabled) .side-ic { color: #fff; }
   .tb-btn.ell { width: 26px; height: 26px; border-radius: 7px; color: var(--ink2); }
   .tb-btn.ell svg { width: 15px; height: 15px; }
   .pop.left { left: 0; right: auto; }
@@ -1356,6 +1635,20 @@
 
   /* —— 主体 —— */
   .fd-body { flex: 1; display: flex; min-height: 0; }
+  /* 位置栏＝抽屉：外层 flex-basis 208↔0 走过渡，内层固定 208px 贴住右缘——收起时内容随左缘一起退出画面，
+     拉宽时从左边缘抽出来（不是原地压扁、也不是一帧出现）。 */
+  .fd-side { flex: 0 0 208px; display: flex; flex-direction: column; align-items: flex-end; min-width: 0; background: var(--side-bg); border-right: 1px solid var(--sep); overflow: hidden auto;
+    transition: flex-basis var(--mo-base) var(--ea-std), border-right-width var(--mo-base) var(--ea-std); }
+  .fd-side-in { flex: 1 0 auto; width: 208px; box-sizing: border-box; display: flex; flex-direction: column; padding: 8px 8px 10px; }
+  .side-sec { padding: 10px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ink3); }
+  .side-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 13px; color: var(--ink); cursor: pointer; }
+  .side-row:hover { background: var(--hover); }
+  .side-row.on { background: rgba(0, 113, 227, .13); color: var(--blue); font-weight: 600; }
+  .side-ic { width: 16px; height: 16px; flex: 0 0 auto; color: var(--ink2); }
+  .side-row.on .side-ic { color: var(--blue); }
+  .side-ic.accent { color: var(--blue); }
+  .side-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
   .fd-main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--panel); }
 
   /* 列表表头 */
@@ -1519,6 +1812,15 @@
      量的是整列宽、扣不掉右上避让区（Claude 顶栏胶囊等）。这里只保证子项不收缩。 */
   .tb-btn, .tb-seg, .tb-drop, .fd-search { flex: 0 0 auto; }
   .fd-crumbs { min-width: 64px; }
+  /* 窄窗 / 窄列：位置栏退场（走抽屉过渡），入口挪到地址栏左侧的位置下拉 */
+  @media (max-width: 680px) {
+    .fd-side { flex-basis: 0; border-right-width: 0; }
+    .tb-drop.locs { display: flex; }
+  }
+  @container (max-width: 700px) {
+    .fd-side { flex-basis: 0; border-right-width: 0; }
+    .tb-drop.locs { display: flex; }
+  }
   @container (max-width: 640px) {
     .ch.type, .cell.type { flex-basis: 0; padding-left: 0; padding-right: 0; opacity: 0; min-width: 0; pointer-events: none; }
     .ch.mtime, .cell.mtime { flex-basis: 118px; }

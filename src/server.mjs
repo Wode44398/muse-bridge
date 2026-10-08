@@ -12,6 +12,7 @@
 //   harness/            — dimensio, spawned per user and reverse-proxied by routes/harness.mjs
 
 import http from 'node:http';
+import path from 'node:path';
 import { PORT, TOKEN, TOKEN_HASH, VAULT, MODEL, OAUTH, NO_AUTH, ROOT, EDITION, FEATURES } from './config/index.mjs';
 import { createAuth } from './auth.mjs';
 import { isAdminSession } from './users.mjs';
@@ -55,7 +56,7 @@ import { programVersion } from './feedback/report.mjs';
 
 // 最先装：在此之后发生的任何未捕获异常/未处理拒绝都不再直接掐死这台常驻服务
 // （PTY、正在跑的轮全都挂在这个进程上）。见 fatal-guard.mjs。
-installFatalGuard('bridge');
+installFatalGuard('bridge', path.join(ROOT, 'crashdumps'));
 // 最近日志留一份在内存里：远程管理的控制台「服务控制」页看（journald / docker logs 手机上够不着）。
 installLogRing();
 // 紧随其后：进程的生（pid/时间）、活（5min 心跳带 rss）、死（退出原因）各留一行。

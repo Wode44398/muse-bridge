@@ -108,3 +108,17 @@ test("K8 永远不写：Remember 不会写进外部库", async () => {
   assert.deepEqual(fs.readdirSync(lib).sort(), before, "外部库一个文件都没多");
   assert.equal(listMemories(ws).length, 1, "写进的是这个工作区自己的记忆");
 });
+
+test("K8 三层索引：MEMORY-<区>.md 分区索引不当条目收，标题也从分区索引取", () => {
+  const lib = tmp("dimensio-k8-tier-");
+  fs.writeFileSync(path.join(lib, "MEMORY.md"), "# Memory Index\n\n- [Claude 分页](MEMORY-claude.md) — 分区索引\n- [交流用中文](feedback_language.md) — 跨分区纪律\n");
+  fs.writeFileSync(path.join(lib, "MEMORY-claude.md"), "# Claude 分区索引\n\n- [Claude 延迟](project_latency.md) — 常驻 CLI\n");
+  fs.writeFileSync(path.join(lib, "feedback_language.md"), note("feedback_language", "用中文", "feedback", "跟用户对话用中文。"));
+  fs.writeFileSync(path.join(lib, "project_latency.md"), note("project_latency", "续聊首字延迟", "project", "常驻 CLI 让续聊首字 1.7s。"));
+  const ws = tmp("dimensio-k8-tier-ws-");
+  process.env.DIMENSIO_EXTERNAL_MEMORY = `${lib}=>${ws}`;
+  const notes = listExternalNotes(ws);
+  assert.deepEqual(notes.map((n) => n.id), ["feedback_language", "project_latency"], "两份索引都不算条目");
+  assert.equal(notes.find((n) => n.id === "project_latency")!.title, "Claude 延迟", "标题取自分区索引");
+  assert.equal(notes.find((n) => n.id === "feedback_language")!.title, "交流用中文", "总索引的条目照旧");
+});

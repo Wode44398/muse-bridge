@@ -4,7 +4,8 @@
   // 从前侧栏恒挂手机版 FilesPanel：在 PC 上是一列 56px 高的大行、没有列、没有右键、
   // 没有键盘，和同一台机器上整页工作空间（FilesDesktop 那套 Explorer 级密度）完全两个东西。
   // 这里把「挂哪一套」收成【唯一一个判断点】，Claude 工作台 / dimensio 工作台共用：
-  //   · 侧列形态 + 精确指针（鼠标/触控板）→ FilesDesktop（内嵌形态）
+  //   · 侧列形态 + 精确指针（鼠标/触控板）→ FilesDesktop（内嵌形态；全盘位置栏 + 完整路径地址栏，
+  //     ws 只是起点：落进含它的那个位置，不再把整页圈死在会话目录里）
   //   · 手机 / 触屏 / 底部 sheet        → FilesPanel（iOS 文件 app 那套）
   // 折叠屏展开态宽度够但仍是手指，所以判据必须是「宽 + 指针精度」两条，缺一不可。
   //
@@ -16,6 +17,8 @@
   let {
     wide = false, guest = false, ws = '', rootName = '', initialPath = null, initialOpen = '',
     previewHost = '', onExit = null,
+    // home：会话的工作目录（绝对路径）。电脑形态侧栏「通用」里那一行直达它；缺省＝ws
+    home = '',
     // theme：''＝跟全站 data-theme；'light'/'dark'＝宿主自有明暗档（dimensio），强制跟宿主
     theme = '',
   } = $props();
@@ -24,7 +27,7 @@
 </script>
 
 {#if desktopUi}
-  <FilesDesktop embedded workspaceRoot={ws} {rootName} {initialPath} {initialOpen} {previewHost} {onExit} {theme} />
+  <FilesDesktop embedded workspaceRoot={ws} home={home || ws} {rootName} {initialPath} {initialOpen} {previewHost} {onExit} {theme} />
 {:else}
   <FilesPanel {guest} workspaceRoot={ws} {rootName} {initialPath} {initialOpen} {previewHost} {onExit} {theme} />
 {/if}

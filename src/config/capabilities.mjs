@@ -61,11 +61,17 @@ export const CAPABILITIES = {
       // [1m] suffix gets the full 1M — same as Fable 5 / Opus 4.8.
       { id: 'claude-sonnet-5', name: 'Sonnet 5' },
       { id: 'claude-sonnet-4-6', name: 'Sonnet 4.6' },
+      // Haiku 5.5（2026-10-07，SDK 0.3.293 / 内核 2.1.293 首次收录，CLI haiku 别名同日切到它）。官方目录：$0.10/$0.50
+      //（prompt 超 10 万 token 起 $0.50/$2.50）、知识截止 2026-06、adaptive thinking 不可关。发布当天 probe（admin 本机登录真打）：
+      // **裸 id 直接 1M**、maxOutputTokens 128k（不进 oneM）；effort 五档（max/xhigh 实测通过）；**不传 effort 默认 medium**
+      //（Stop hook 实测，进 effortDefaults）；fast 注 settings 后仍 off（同刻 Opus 5.5 为 on）→ 不进 fast 表。
+      // 新 CLI 的后台小模型（标题/摘要等）也换成了它，modelUsage 里会多出这一行。
+      { id: 'claude-haiku-5-5', name: 'Haiku 5.5' },
       { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5' },
       { id: 'claude-opus-4-6', name: 'Opus 4.6 Legacy' },
     ],
     // 支持 [1m] 兄弟档的裸 id（probe 验证过 contextWindow=1M 的那几个）。Sonnet 4.6 /
-    // Haiku 4.5 / Opus 4.6 没有 [1m] 档，保持 200k。Fable 5.1 / Opus 5.5 裸 id 本身就是 1M（见上），
+    // Haiku 4.5 / Opus 4.6 没有 [1m] 档，保持 200k。Fable 5.1 / Opus 5.5 / Haiku 5.5 裸 id 本身就是 1M（见上），
     // 不必进这张表——to1M 原样放行即可。
     oneM: ['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5-5', 'claude-sonnet-5'],
     // fast mode 支持的模型（官方口径 Opus 5.5/5/4.8/4.7；SDK 0.3.220 起 settings.fastMode
@@ -73,10 +79,10 @@ export const CAPABILITIES = {
     // 据此显隐 ⚡ 开关，后端 runClaudeChat 据此决定是否注入 settings。
     fast: ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7'],
     // 「没选 effort」时实际跑的档位（bridge 不传 effort，由 CLI 按内置模型目录 default_effort 取；
-    // 09-22 探针 Stop hook 实测 Opus 5.5=medium、Opus 4.7=xhigh）。表外一律 high。前端芯片/拉条的
+    // 09-22 探针 Stop hook 实测 Opus 5.5=medium、Opus 4.7=xhigh；10-07 Haiku 5.5=medium）。表外一律 high。前端芯片/拉条的
     // 默认高亮读它，否则选 Opus 5.5 不动 effort 会恒显「已选 High，实际 Medium」。注意 admin 会话
     // 读 ~/.claude/settings.json，其 modelSettings.<id>.effortLevel（桌面端 /effort 按模型存）会盖过它。
-    effortDefaults: { 'claude-opus-5-5': 'medium', 'claude-opus-4-7': 'xhigh' },
+    effortDefaults: { 'claude-opus-5-5': 'medium', 'claude-haiku-5-5': 'medium', 'claude-opus-4-7': 'xhigh' },
     efforts: [
       { id: 'low', name: 'Low' },
       { id: 'medium', name: 'Medium' },

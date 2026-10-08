@@ -191,6 +191,7 @@
     if (ft) { filesMount = { key: 't' + ft.seq, ws: ft.ws || '', rel: ft.rel || '', open: ft.open || '' }; return; }
     // 工作空间在身份文件根之外（admin 常见：项目不在 vault 里）：以工作空间本身为根挂载，
     // 别再摆一句「打不开」——附件卡走的就是这条 ws 作用域，两边得一致。
+    // （电脑形态 FilesDesktop 把 ws 当起点：落进含它的位置，左侧照样是全盘位置栏。）
     // 无 shell 的身份拿不到 ws 作用域（/api/files?ws= 一律 403），维持原来的说明文案。
     if (dock.meta.rel == null) {
       filesMount = dock.ws && !snapMode && dock.meta.shell !== false ? { key: 'wsroot', ws: dock.ws, rel: '' } : null;
@@ -232,7 +233,7 @@
         {#if filesMount}
           {#key filesMount.key}
             <div class="dk-embed">
-              <WorkspaceEmbed {wide} guest={snapMode} ws={filesMount.ws} rootName={filesRootName} initialPath={filesMount.rel}
+              <WorkspaceEmbed {wide} guest={snapMode} ws={filesMount.ws} home={dock.ws} rootName={filesRootName} initialPath={filesMount.rel}
                 initialOpen={filesMount.open || ''} onExit={exitFiles} />
               <MediaViewer host="dock" />
             </div>

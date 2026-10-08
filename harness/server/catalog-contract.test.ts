@@ -73,6 +73,26 @@ test("Haiku 4.5 的传统思考预算放得下：max_tokens 永远大于 budget_
   assert.ok(body.max_tokens <= 64_000, "不超过 Haiku 4.5 的官方上限");
 });
 
+test("Haiku 5.5 走 adaptive + effort，不发 budget_tokens（思考不可关，发了会 400）", async () => {
+  const adapter = createAdapter({ provider: "anthropic", model: "claude-haiku-5-5", apiKey: "FAKE-DUMMY-KEY" });
+  const bodies: any[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")));
+    return new Response("stub", { status: 599 });
+  }) as typeof fetch;
+  try {
+    for (const thinking of ["high", "off"] as const) {
+      const turn: Turn = { system: "s", messages: [{ role: "user", content: [{ t: "text", text: "hi" }] }], tools: [], budget: { maxOutputTokens: 65_536, thinking } };
+      for await (const _ of adapter.stream(turn)) { /* drain */ }
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.deepEqual(bodies.map((b) => b.thinking), [{ type: "adaptive" }, { type: "adaptive" }]);
+  assert.deepEqual(bodies.map((b) => b.output_config?.effort), ["high", "low"]);
+});
+
 test("目录外的自定义 id 仍落到各家的扁平默认值", () => {
   assert.equal(createAdapter({ provider: "anthropic", model: "claude-custom-x", apiKey: "FAKE" }).capabilities.maxOutputTokens, 8_192);
   assert.equal(createAdapter({ provider: "gemini", model: "gemini-custom-x", apiKey: "FAKE" }).capabilities.contextWindow, 1_000_000);

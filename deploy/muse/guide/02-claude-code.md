@@ -88,10 +88,10 @@ Claude Code 是 Anthropic 的编程 / 通用 agent，在这台 VM 上替用户�
 
 ## 模型、思考深度
 
-- 输入框里右下角、发送按钮左边有两个芯片。第一个是模型（显示型号名，比如 Opus 5.5），点开选（菜单是英文的）。主列表：Fable 5.1、Opus 5.5、Sonnet 5.5、Haiku 4.5；**「More models」** 里还有更早的型号。**默认是 Opus 5.5。**
+- 输入框里右下角、发送按钮左边有两个芯片。第一个是模型（显示型号名，比如 Opus 5.5），点开选（菜单是英文的）。主列表：Fable 5.1、Opus 5.5、Sonnet 5.5、Haiku 5.5；**「More models」** 里还有更早的型号（Haiku 4.5、Opus 5 等）。**默认是 Opus 5.5。**
 - Fable 5.1、Opus 5.5 等新型号自动用 1M 上下文。
 - **Fast mode**（只有部分 Opus 型号有）：更快、更费额度，开了芯片上显示 · Fast。
-- 第二个芯片（显示 Medium、High 这类字样）是思考深度（Effort）：Low · Medium · High · Extra · Max · Ultracode。没选时 Opus 5.5 默认 Medium，大多数型号默认 High。**Ultracode** 会动用大量子 agent，最慢、最费额度；普通账号用不了（会自动降成 Extra）。选过的深度会带到新对话里。
+- 第二个芯片（显示 Medium、High 这类字样）是思考深度（Effort）：Low · Medium · High · Extra · Max · Ultracode。没选时 Opus 5.5 和 Haiku 5.5 默认 Medium，大多数型号默认 High。**Ultracode** 会动用大量子 agent，最慢、最费额度；普通账号用不了（会自动降成 Extra）。选过的深度会带到新对话里。
 - 模型和深度按对话记住，也会作为新对话的默认值（多设备同步）。芯片带虚线下划线 = 这个对话实际用的和你选的不一样（比如安全回退换过模型），鼠标悬停看说明。
 
 ## Claude 在干活的时候
@@ -159,6 +159,7 @@ Claude Code 是 Anthropic 的编程 / 通用 agent，在这台 VM 上替用户�
 ## 用量
 
 - 输入框左下角 ＋ 旁边的小圆环（悬停显示 **「查看用量」**，View usage）：显示这个对话的上下文用了多少；点开看详细占比，以及订阅的用量上限（5 小时上限、每周所有模型 / 各型号）和多久后重置。75% 变黄、90% 变红。
+- 弹层里还有一行「距自动压缩还有 …」和 **「压缩会话」**（Compact session）按钮：对话太长、回答变慢或快到上限时点它，等于发一次 `/compact`。Claude 正在回复或离线时按钮是灰的。
 - 订阅上限是**整台服务器共用的**（大家用的是同一份 Claude 订阅）。
 - 用到上限时，对话里会显示「5 小时使用额度已达上限」之类的提示和恢复时间，等恢复就能继续。
 

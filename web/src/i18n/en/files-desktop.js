@@ -245,4 +245,10 @@ export default {
   '跳过 {names}': 'Skipped {names}',
   '{n} 个超大文件未传': { one: '{n} oversized file skipped', other: '{n} oversized files skipped' },
   '超出 {n} 个文件/{mb}MB 上限，已截断': 'Truncated at the {n}-file / {mb} MB limit',
+
+  // —— 全盘位置栏 / 完整路径地址栏（工作台侧栏挂在任意会话目录时） ——
+  '本会话的工作目录：{path}': 'This session’s working folder: {path}',
+  '复制地址': 'Copy address',
+  '编辑地址': 'Edit address',
+  '「{path}」不在可访问的位置里': '“{path}” isn’t in a location you can access',
 };

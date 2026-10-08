@@ -9,11 +9,16 @@
   //   没会话或没数据：「发一条消息后显示」；分布超过 5 分钟且没在跑：「更新于 …」。
   // 数据源：SSE ctx_usage（每轮 done 后 SDK getContextUsage 精确档）+ /api/status?session=
   //（刷新/换设备恢复）；30s 轮询 + 回前台立刷（后台标签页不空转）。
+  // - 一键压缩行（官方 c2d611398 Me / ca80fca8d EW，2026-10-08 逆向）：计量条下方一行，左边
+  //   「距自动压缩还有 420k」/「即将自动压缩」，右边 xs secondary 按钮「Compact session」；
+  //   本轮在跑或离线时置灰并给原因，压缩进行中不摆。点了 = 关弹层 + 往本会话发 /compact。
+  //   官方只在上下文 ≥50% 时出现，这里有数据就摆（随时能一键压）。
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { status, session, me } from '../lib/state.svelte.js';
+  import { status, session, me, ui } from '../lib/state.svelte.js';
+  import { chat, send } from '../lib/chat.svelte.js';
   import { relTime } from '../lib/format.js';
-  import { ctxSummary, ctxLevel, fmtResetAt } from '../lib/ctxUsage.js';
+  import { ctxSummary, ctxLevel, fmtResetAt, fmtCompact } from '../lib/ctxUsage.js';
   import { clampX } from '../lib/clampx.js';
   import ContextBreakdown from './ContextBreakdown.svelte';
   import { t, tr } from '../lib/i18n.js';
@@ -98,6 +103,28 @@
   const level = $derived(ctxLevel(pct));
   const stale = $derived(usage && !session.busy && Date.now() - (usage.at || 0) > 300_000 ? usage.at : null);
 
+  // 一键压缩。剩余量照官方 bW：阈值 = autoCompactThreshold（0 < 阈值 < 窗口）否则 窗口 − buffer 类别；
+  // 剩余 < 30k →「即将自动压缩」，否则向下取到两位有效数字（官方 yW：421,735 → 420k）。
+  const compacting = $derived(!!chat.messages.at(-1)?.compacting);
+  const showCompact = $derived(!!session.id && hasCtx && !compacting);
+  const compactBlock = $derived(ui.offline ? t('重新连上后可用') : session.busy ? t('本轮结束后可用') : '');
+  const compactHint = $derived.by(() => {
+    if (!usage || !usage.max || usage.autocompact?.enabled === false) return '';
+    const th = Number(usage.autocompact?.threshold) || 0;
+    const buf = (usage.categories || []).find((c) => c.kind === 'buffer')?.tokens || 0;
+    const at = th > 0 && th < usage.max ? th : buf > 0 && buf < usage.max ? usage.max - buf : 0;
+    if (!at) return '';
+    const left = at - (Number(usage.total) || 0);
+    if (left < 30_000) return t('即将自动压缩');
+    const n = Math.floor(left), step = 10 ** Math.max(0, String(n).length - 2);
+    return t('距自动压缩还有 {tokens}', { tokens: fmtCompact(Math.floor(n / step) * step) });
+  });
+  function compactNow() {
+    if (compactBlock) return;
+    open = false;
+    send('/compact', []);   // 显式空附件：不吞输入框里暂存的附件
+  }
+
   // 官方 eI：size 16 → r 7、周长 2πr、描边 2。
   const R = 7, C = 2 * Math.PI * R;
 </script>
@@ -131,6 +158,18 @@
             <div class="qb-bar" role="progressbar" aria-valuenow={ctx.pct ?? 0} aria-valuemin="0" aria-valuemax="100"><span class="qb-fill {level}" style="width:{Math.min(100, ctx.pct ?? 100)}%"></span></div>
           {/if}
         </div>
+        {#if showCompact}
+          <div class="qb-compact">
+            <span class="qb-chint" id="qb-chint">{compactHint}</span>
+            <!-- 禁用的按钮不吃悬停，原因挂在外层（官方 DisabledReason 包一层同理） -->
+            <span class="qb-cwrap" title={compactBlock || undefined}>
+              <button class="qb-cbtn" disabled={!!compactBlock} aria-describedby={compactHint ? 'qb-chint' : undefined} onclick={compactNow}>
+                <span class="qb-cpaint" aria-hidden="true"></span>
+                <span class="qb-clbl">{t('压缩会话')}</span>
+              </button>
+            </span>
+          </div>
+        {/if}
         {#if stale}<div class="qb-note">{t('更新于 {time} · 发消息后刷新', { time: relTime(stale) })}</div>{/if}
       </div>
       <div class="qb-div"></div>
@@ -199,4 +238,23 @@
   .qb-rs { color: var(--muted); }
   .qb-pct { color: var(--text); margin-left: 6px; }
   .qb-div { height: 1px; background: var(--divider); margin: 4px 16px; }
+
+  /* 一键压缩行：官方 Me——px-lg py-xs、gap-sm(12)、min-h 20；提示 text-secondary 截断 */
+  .qb-compact { display: flex; align-items: center; gap: 12px; min-height: 20px; padding: 4px 16px; font-size: 12px; }
+  .qb-chint { flex: 1; min-width: 0; color: var(--serif); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .qb-cwrap { display: inline-flex; flex: none; min-width: 0; border-radius: 6px; }
+  /* 官方 Button secondary · size xs（实测桌面包 CSS）：高 24、左右 8、圆角 6、常规字重、正文色；
+     底漆是独立一层（按下时整层 scale .975 回弹）。暗色 白10% → 悬停 白14%、无描边；
+     亮色 白10%（白卡上近乎透明）+ 1px 内描边 #0b0b0b 10% → 悬停底 #0b0b0b 5%；都带 0 1px 2px 5% 投影。 */
+  .qb-cbtn { position: relative; isolation: isolate; display: inline-flex; align-items: center; justify-content: center; min-width: 0; height: 24px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 400; line-height: 1; color: var(--text); white-space: nowrap; }
+  .qb-cpaint { position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: rgb(255 255 255 / .10); box-shadow: 0 1px 2px 0 rgb(0 0 0 / .05); transition: background-color var(--mo-micro, .12s) ease-out, transform .3s cubic-bezier(.3, 1.5, .5, 1); transform-origin: 50% center; }
+  :global(html[data-theme="light"]) .qb-cpaint { box-shadow: inset 0 0 0 1px rgb(11 11 11 / .10), 0 1px 2px 0 rgb(0 0 0 / .05); }
+  @media (hover: hover) {
+    .qb-cbtn:enabled:hover .qb-cpaint { background: rgb(255 255 255 / .14); }
+    :global(html[data-theme="light"]) .qb-cbtn:enabled:hover .qb-cpaint { background: rgb(11 11 11 / .05); }
+  }
+  .qb-cbtn:enabled:active .qb-cpaint { transform: scale(.975); transition-duration: var(--mo-micro, .12s); transition-timing-function: ease-out; }
+  .qb-cbtn:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--text) 35%, transparent); }
+  .qb-cbtn:disabled { opacity: .4; pointer-events: none; }
+  .qb-clbl { overflow: hidden; text-overflow: ellipsis; }
 </style>

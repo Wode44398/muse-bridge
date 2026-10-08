@@ -108,6 +108,9 @@ export const CATALOG: ProviderSpec[] = [
       { id: "claude-opus-4-8", label: "Opus 4.8", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "旗舰 · 自适应思考" },
       { id: "claude-opus-4-7", label: "Opus 4.7", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "长程 agent · 高清视觉" },
       { id: "claude-sonnet-4-6", label: "Sonnet 4.6", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "均衡" },
+      // Haiku 5.5（2026-10-07）：$0.10/$0.50（prompt 超 10 万 token 起 $0.50/$2.50），1M 上下文（裸 id）、128k 输出，
+      // adaptive thinking 不可关（适配器走 adaptive 分支，「关」档落成 effort low）；effort 五档、API 默认 medium。
+      { id: "claude-haiku-5-5", label: "Haiku 5.5", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "极速 · 新一代 Haiku" },
       { id: "claude-haiku-4-5", label: "Haiku 4.5", efforts: ["off", "low", "medium", "high"], image: true, ctx: 200_000, maxOut: 64_000, note: "极速 · 传统思考预算" },
     ],
   },

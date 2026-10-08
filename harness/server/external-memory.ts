@@ -51,15 +51,26 @@ export function externalMemoryDirs(workspaceRoot: string): string[] {
   return out;
 }
 
-// MEMORY.md 的索引行 `- [标题](文件.md) — 说明` → 文件名 → 标题
+// 索引文件：MEMORY.md 总索引 + MEMORY-<区>.md 分区索引（三层索引），都不是记忆正文
+const isIndexFile = (f: string): boolean => /^MEMORY(-.+)?\.md$/i.test(f);
+
+// 索引行 `- [标题](文件.md) — 说明` → 文件名 → 标题（总索引与各分区索引合起来）
 function indexTitles(dir: string): Map<string, string> {
   const titles = new Map<string, string>();
+  let indexes: string[];
   try {
-    for (const m of readFileSync(path.join(dir, "MEMORY.md"), "utf8").matchAll(/^\s*-\s*\[([^\]]+)\]\(([^)]+\.md)\)/gm)) {
-      titles.set(path.basename(m[2]), m[1].trim());
-    }
+    indexes = readdirSync(dir).filter(isIndexFile);
   } catch {
-    /* 没有索引就用 name */
+    return titles;
+  }
+  for (const file of indexes) {
+    try {
+      for (const m of readFileSync(path.join(dir, file), "utf8").matchAll(/^\s*-\s*\[([^\]]+)\]\(([^)]+\.md)\)/gm)) {
+        if (!isIndexFile(path.basename(m[2]))) titles.set(path.basename(m[2]), m[1].trim());
+      }
+    } catch {
+      /* 读不到的索引跳过，标题退回 name */
+    }
   }
   return titles;
 }
@@ -105,7 +116,7 @@ export function listExternalNotes(workspaceRoot: string): ExternalNote[] {
     const titles = indexTitles(dir);
     let files: string[];
     try {
-      files = readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".md") && f !== "MEMORY.md").sort();
+      files = readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".md") && !isIndexFile(f)).sort();
     } catch {
       continue;
     }

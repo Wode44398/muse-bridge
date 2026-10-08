@@ -522,6 +522,7 @@ Columns: **中文** | **English** (canonical, plain `t()`) | **Context variants*
 | 立即压缩 | Compact now | — | — |
 | 压缩好了 | Compacted conversation · {a} → {b} tokens | — | Claude |
 | 自动压缩 | Auto-compact | 即将自动压缩: Auto-compacts soon | Claude |
+| 压缩会话 | Compact session | 距自动压缩还有 {tokens}: {tokens} until auto-compact | Claude（用量弹层按钮） |
 | 整理上下文 | Compacting context… | — | OpenAI (ellipsis because it is an in-progress activity label, §1.3) |
 | 带摘要开新会话 | New session with summary | — | coined |
 | 缓存 / 前缀缓存 | Prompt cache | label: Cached | Claude, OpenAI |
