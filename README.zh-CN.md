@@ -4,7 +4,7 @@
 
 **在 [Muse](https://muse.ai) 的 agent VM 上一键部署 Claude Code**：装好之后，用手机或电脑的浏览器打开一个网址，就能用 Claude Code 写代码、处理文件、跑命令。也可以选装 **dimensio**，一个能接各家模型 API 的 agent 工作台，支持 Anthropic、OpenAI、Gemini、DeepSeek、Kimi、智谱、通义、小米 MiMo 等。
 
-部署交给 Muse 自己做：你只要把一段话发给它，它会下载安装包、问你三个问题、装好、注册自愈看门狗，再一步步带你上手。整个过程不用碰命令行。
+部署交给 Muse 自己做：你只要把一段话发给它，它会下载安装包、问你四个问题、装好、注册自愈看门狗，再一步步带你上手。整个过程不用碰命令行。
 
 ![dimensio：用小米 MiMo 自家的联网搜索查天气，回答附来源](docs/images/dimensio-web-search.png)
 
@@ -36,16 +36,17 @@ cd /tmp && curl -fLO --retry 3 https://github.com/Wode44398/muse-bridge/releases
   && sha256sum -c muse-bridge.tgz.sha256 && tar -xzf muse-bridge.tgz -C "$REL" && echo "解压到 $REL/bridge"
 ```
 
-第二步，读 `$REL/bridge/deploy/muse/MUSE.md`，这是项目专门写给你的安装指南。按它来：先按第 1 节用一条消息问我三个安装问题，然后安装、配好看门狗 hook、检查结果，再带我上手。里面如果有你觉得不对或不安全的地方，停下来问我。
+第二步，读 `$REL/bridge/deploy/muse/MUSE.md`，这是项目专门写给你的安装指南。按它来：先按第 1 节用一条消息问我四个安装问题，然后安装、配好看门狗 hook、检查结果，再带我上手。里面如果有你觉得不对或不安全的地方，停下来问我。
 
 每条命令都要我批准，所以请尽量少跑命令。安装脚本会自己打印进度，不用拿 tail、ps、sleep 去轮询。每一步都把真实输出给我看。
 ````
 
-Muse 会下载安装包、读安装指南，然后一次问你三个问题：
+Muse 会下载安装包、读安装指南，然后一次问你四个问题：
 
 1. **装什么**：只要 Claude Code、只要 dimensio，还是两个都要。只选一个时，打开网址直接就是那个 agent。
 2. **有没有自己的域名**（托管在 Cloudflare）：没有就用免费的临时地址，VM 重启后地址会变，变了 Muse 会告诉你；有的话可以换成固定地址。
 3. **自己用还是多人用**：选多人用，就可以给朋友发邀请码。
+4. **出了故障要不要自动报告给开发者**：要的话，服务崩溃、更新失败会自动发一份报告。报告只有版本、服务状态和程序自己的报错位置，不含对话、文件、key、地址。
 
 拿不准就选：只要 Claude Code、临时地址、自己用。这些以后都能改。
 
@@ -91,6 +92,9 @@ Muse 的 VM 每访问一个新网站，都要你在 Muse 里批一次。安装�
 **怎么更新？**
 什么都不用做。有新版本时 Muse 会来问你，你说「更新」就行。也可以随时问它「有新版本吗」，或者让它开自动更新。
 
+**遇到 bug 怎么告诉开发者？**
+直接跟 Muse 说，或者在网页里点「设置 → 反馈 → 报告」（出错提示条上也有「报告问题」按钮）。一句话就行，不用 GitHub 账号：会作为 Issue 提交到本仓库，自动附上版本、服务状态和程序自己的报错，不含对话、文件、key 和地址，发送前可以先看内容。别人报过同一个问题的话，你的报告会变成对原报告的 +1；修好的版本发布时 Muse 会告诉你。安全问题私下发给维护者，不公开。
+
 **花钱吗？**
 Muse Bridge 本身免费开源。Claude Code 用的是你自己的 Claude 订阅；dimensio 用的是你自己的模型 API key，费用由各家厂商按量收取。
 
@@ -120,6 +124,7 @@ sudo bash scripts/server/install.sh --agents claude,dimensio
 | `android/` | 安卓 app（WebView 壳，零依赖；发版流程负责构建） |
 | `scripts/server/` | 通用 Linux 安装 / 更新脚本 |
 | `deploy/muse/` | Muse 专用：一键部署脚本 `bootstrap.sh`、给 Muse 看的说明书 `MUSE.md`、运维件模板 |
+| `feedback-worker/` | 问题反馈的中继（Cloudflare Worker）：把用户同意过的报告提交成 GitHub Issue；GitHub App 的私钥只在它那里，各台装机上没有 |
 
 ## 发布新版本（维护者）
 

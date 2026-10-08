@@ -11,6 +11,7 @@ import { apiUrl, noteServerReachable, noteServerUnreachable, confirmReachability
 // bridge 自己也会用 502/503 表达子服务不可用，故不据此下结论，只触发 /healthz 二次确认。
 const GATEWAY_DOWN = (s) => s === 502 || s === 503 || s === 504 || (s >= 520 && s <= 530);
 import { storeGet, storeSet } from './store.js';
+import { noteApiFailure } from './feedback.svelte.js';
 
 let token = storeGet('bridge-token');
 const wsQuery = (ws) => ws ? '&ws=' + encodeURIComponent(ws) : '';
@@ -40,13 +41,14 @@ async function req(method, path, body, opts) {
   try { res = await fetch(apiUrl(path), { method, headers, body: payload, credentials: 'same-origin', signal: opts && opts.signal }); }
   catch (e) {
     // 连 HTTP 响应都没拿到 = 服务器不可达 → 亮离线态（自愈重探见 server.js）；用户主动取消不算网络故障。
-    if (e?.name !== 'AbortError') noteServerUnreachable();
+    if (e?.name !== 'AbortError') { noteServerUnreachable(); noteApiFailure(method, path, 0); }
     throw e;
   }
   // 拿到响应通常说明服务还在 → 离线态立刻熄灭；但网关类 5xx 可能是反代在替一个
   // 已经停掉的服务答话，那种不能算在线，交给 /healthz 裁决。
   if (GATEWAY_DOWN(res.status)) confirmReachability(); else noteServerReachable();
   if (!res.ok) {
+    noteApiFailure(method, path, res.status);   // 问题反馈的操作轨迹（只记路径与状态码）
     const err = new Error('HTTP ' + res.status);
     err.status = res.status;
     // body 只能读一次：先当文本收下，再试 JSON——后端不少错误是 text/plain 的中文说明

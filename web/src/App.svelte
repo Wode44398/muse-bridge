@@ -27,7 +27,12 @@
   import Settings from './components/settings/Settings.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import Toast from './components/Toast.svelte';
+  import ReportDialog from './components/ReportDialog.svelte';
+  import { reportDialog, installFeedbackCapture } from './lib/feedback.svelte.js';
   import { t } from './lib/i18n.js';
+
+  // 问题反馈：记下页面上没接住的报错（只收我们自己打包的代码，见 lib/feedback）
+  installFeedbackCapture();
 
   // —— 单 agent 模式 ——
   const root = $derived(rootScreen());
@@ -206,6 +211,9 @@
 
 <!-- 扩展中心（设置入口；同样盖在设置页之上、磨砂借下层罩） -->
 {#if ui.extensionsOpen}<ExtensionsPage />{/if}
+
+<!-- 报告问题（设置 → 反馈、出错提示上的「报告问题」）：盖在设置之上 -->
+{#if reportDialog.open}<ReportDialog />{/if}
 
 <Toast />
 

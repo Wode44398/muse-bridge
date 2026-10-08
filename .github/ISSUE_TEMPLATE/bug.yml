@@ -1,0 +1,26 @@
+name: Bug report
+description: Something in Muse Bridge doesn't work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Easier: report from inside Muse Bridge (**Settings → Feedback → Report**) or ask Muse to do it. That attaches the version and error details for you.
+        Please don't paste tokens, API keys, your Muse Bridge address or private files here. Security problems: use **Security → Report a vulnerability** instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What were you doing, and what did you see?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The "Version" line of the MUSE-BRIDGE result block, or Settings → About.
+  - type: dropdown
+    id: agents
+    attributes:
+      label: Installed agents
+      options: [Claude Code only, dimensio only, Both]

@@ -13,6 +13,9 @@
 // 注意：这是【兜底】，不是许可证。该挂的 'error' 监听、该 catch 的 await 一个都不能省。
 
 const WINDOW_MS = 60_000;
+const faultHooks = [];
+/** 每次兜住一个未捕获异常 / 未处理拒绝时通知（反馈模块记进报错记录） */
+export function onFault(fn) { faultHooks.push(fn); }
 const MAX_IN_WINDOW = 5;
 
 export function installFatalGuard(name = 'bridge') {
@@ -24,6 +27,7 @@ export function installFatalGuard(name = 'bridge') {
     hits.push(now);
     // 完整堆栈——这条日志就是事后查「到底谁炸的」的唯一线索，别省。
     console.error(`[fatal-guard/${name}] ${kind}:`, err instanceof Error ? (err.stack || err.message) : err);
+    for (const h of faultHooks) { try { h(kind, err); } catch {} }
     if (hits.length >= MAX_IN_WINDOW) {
       console.error(`[fatal-guard/${name}] ${WINDOW_MS / 1000}s 内已 ${hits.length} 次——判定进程已进入坏状态，主动退出交给守护重启`);
       process.exit(1);

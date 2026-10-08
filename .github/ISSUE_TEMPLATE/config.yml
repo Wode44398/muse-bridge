@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report from inside Muse Bridge (easiest)
+    url: https://github.com/Wode44398/muse-bridge#faq
+    about: Settings → Feedback → Report, or just tell Muse. No GitHub account needed; version and error details are attached for you.

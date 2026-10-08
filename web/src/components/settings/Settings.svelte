@@ -19,6 +19,7 @@
   import SecAgents from './SecAgents.svelte';
   import SecAndroid from './SecAndroid.svelte';
   import SecDimensio from './SecDimensio.svelte';
+  import SecFeedback from './SecFeedback.svelte';
 
   // 扩展中心只对管理员开放：探针过了才出「自定义」那一组
   let extOk = $state(false);
@@ -37,6 +38,7 @@
     // dimensio 的设置就是这一节（它分页里的「设置」也直达这里）；dimensio 对这个身份没开就不出
     ...(screenOn('harness') ? [{ key: 'dimensio', label: 'dimensio', svg: SV('<path d="M3.5 10.5h13"/><path d="M5.5 10.5a4.5 4.5 0 0 1 9 0"/><path d="M6.6 13.4a4.5 4.5 0 0 0 6.8 0" stroke-dasharray="1.6 1.7"/>') }] : []),
     { key: 'android', label: t('安卓 app'), svg: SV('<rect x="5.5" y="2.5" width="9" height="15" rx="2"/><path d="M8.75 15h2.5"/>') },
+    ...(me.kind !== 'none' ? [{ key: 'feedback', label: t('反馈'), svg: SV('<path d="M4 4.5h12a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H9l-3.5 3v-3H4a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1z"/><path d="M10 7.2v3.3"/><path d="M10 12.4v.1"/>') }] : []),
     { key: 'about', label: t('关于'), icon: '' },
   ]);
   const CUSTOM = [
@@ -109,6 +111,8 @@
     { sec: 'android', sid: 'android-download', label: t('下载安卓 app'), keys: t('安卓 手机 apk 应用 安装 android app 下载') },
     { sec: 'android', sid: 'android-server', label: t('app 的服务器地址'), keys: t('安卓 手机 app 更换 地址 android') },
     { sec: 'about', sid: 'about', label: t('关于'), keys: t('版本 about') },
+    { sec: 'feedback', sid: 'feedback-report', label: t('报告问题或提建议'), keys: t('反馈 bug 问题 报错 建议 issue github 报告') },
+    { sec: 'feedback', sid: 'feedback-auto', label: t('出错时自动发送错误报告'), keys: t('反馈 自动上报 错误报告 崩溃 隐私') },
     { sec: 'dimensio', sid: 'dim-key', label: t('dimensio 的 API Key'), keys: t('dimensio 模型 服务 key 密钥') },
     { sec: 'dimensio', sid: 'dim-memory', label: t('记忆管理'), keys: t('dimensio 记忆 memory') },
     { sec: 'dimensio', sid: 'dim-ask', label: t('权限规则'), keys: t('dimensio 权限 规则 每次问我 从不允许 permission') },
@@ -154,7 +158,8 @@
   {:else if k === 'about'}<SecAbout />
   {:else if k === 'agents'}<SecAgents />
   {:else if k === 'android'}<SecAndroid />
-  {:else if k === 'dimensio'}<SecDimensio />{/if}
+  {:else if k === 'dimensio'}<SecDimensio />
+  {:else if k === 'feedback'}<SecFeedback />{/if}
 {/snippet}
 {#snippet icon(s)}{#if s.svg}{@html s.svg}{:else}{s.icon}{/if}{/snippet}
 

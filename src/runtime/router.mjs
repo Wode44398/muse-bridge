@@ -10,9 +10,11 @@
 export function createRouter() {
   const routes = []; // { methods: Set<string>, path: string, handler: fn }
   const middleware = []; // (req, res, url) => false | void
+  const errorHooks = []; // (err, req, url) => void —— 路由抛错（500）时通知，比如记进反馈的报错记录
 
   return {
     use: (fn) => { middleware.push(fn); },
+    onError: (fn) => { errorHooks.push(fn); },
     on: (method, path, handler) => {
       const methods = new Set(Array.isArray(method) ? method : [method]);
       routes.push({ methods, path, handler });
@@ -32,6 +34,7 @@ export function createRouter() {
         await r.handler(req, res, url);
       } catch (e) {
         console.error('route error:', e);
+        for (const h of errorHooks) { try { h(e, req, url); } catch {} }
         if (!res.writableEnded) { res.writeHead(500, { 'Content-Type': 'text/plain' }); res.end('internal error'); }
       }
     },

@@ -10,6 +10,8 @@
 - `harness/`：dimensio（TypeScript，Node 原生运行 `.ts`）。服务端按用户各起一个 dimensio 进程并反代到 `/api/harness/*`；前端经 `@hx` 别名直接编译 `harness/web/src`。
 - `scripts/server/`：通用 Linux 安装 / 更新脚本（systemd）。
 - `deploy/muse/`：Muse 专用的一键部署（`bootstrap.sh`）、运维件模板（`ops/`）和给 Muse 看的说明书（`MUSE.md`）。
+- `src/feedback/`：问题反馈（白名单收集、脱敏、出草稿、发送、补发、自动上报）；网页、`bootstrap.sh report`、看门狗三个入口共用。
+- `feedback-worker/`：反馈中继（Cloudflare Worker，以 GitHub App 身份开 Issue）。跟服务端共用 `src/feedback/` 的格式与脱敏代码，改那边要两边都测。
 
 ## 约定
 
@@ -19,6 +21,7 @@
 - Muse VM 的限制（只能经 HTTP CONNECT 代理出站、`/etc` 重启不保留、没有浏览器沙箱、不能跑 Docker）都包在 `deploy/muse/bootstrap.sh` 里；通用修复放进 `src/` 或 `scripts/server/`，不要写进 Muse 专用脚本。
 - 在 Linux 上执行的脚本和单元文件必须是 LF（见 `.gitattributes`）。
 - 界面文案与注释用中文；不要在代码、注释或测试里写任何个人信息（真实姓名、邮箱、个人路径、私有域名、账号）。
+- 问题报告只收 `src/feedback/schema.mjs` 白名单里的字段；要往报告里加东西，先加进白名单并想清楚它会不会带出隐私（报告是公开的 GitHub Issue）。
 
 ## 界面多语言（简体中文 / English）
 
@@ -34,4 +37,5 @@
 npm install && node --test "src/**/*.test.mjs"      # 服务端
 npm --prefix harness install && npm --prefix harness test   # dimensio
 npm --prefix web install && npm --prefix web run build      # 前端构建
+npm --prefix feedback-worker test                           # 反馈中继（不联网）
 ```

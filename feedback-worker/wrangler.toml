@@ -1,0 +1,20 @@
+# Muse Bridge 反馈中继。部署：cd feedback-worker && npx wrangler deploy（说明见 README.md）
+name = "muse-bridge-feedback"
+main = "src/worker.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[vars]
+GITHUB_REPO = "Wode44398/muse-bridge"
+GITHUB_APP_ID = "5233123"
+GITHUB_INSTALLATION_ID = "169122168"
+DAILY_CAP = "300"
+PER_INSTALL_DAILY = "10"
+PAUSED = "0"
+
+# 限流计数、指纹 → Issue 编号、停收开关（cfg:paused）
+[[kv_namespaces]]
+binding = "FEEDBACK_KV"
+id = "REPLACE_WITH_KV_ID"
+
+# 私钥不在这里：npx wrangler secret put GITHUB_APP_PRIVATE_KEY < 私钥.pem

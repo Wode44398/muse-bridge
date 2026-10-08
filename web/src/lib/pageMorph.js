@@ -13,6 +13,7 @@
 // 兜底：内核不支持 / 系统减弱动效 / 用户关了转场 / 页面在后台——直接切，绝不卡住；
 // 任何一次转场 1.8s 内没落幕就强制跳到终态。
 import { tick } from 'svelte';
+import { noteTrail } from './feedback.svelte.js';
 import { ui, prefs, rootScreen } from './state.svelte.js';
 import { springCurve, NAV_SPRING, EASE, reduced } from './motion.js';
 
@@ -341,6 +342,7 @@ export function backPeek(dragX, W = innerWidth) {
 // —— 统一入口：去某个分页 / 回主页，自动选打开、关闭还是直达 ——
 export function goto(key, opts = {}) {
   if (!key || key === ui.screen) return Promise.resolve();
+  noteTrail('page ' + key);
   if (key === 'home') return closePage(ui.screen, opts);
   if (ui.screen === 'home') return openPage(key, opts);
   return switchPage(key, opts);

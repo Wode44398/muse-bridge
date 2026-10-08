@@ -80,10 +80,17 @@ jobs:
           NOTES="$(git for-each-ref "refs/tags/$TAG" --format='%(contents)' | sed '/^-----BEGIN PGP/,$d')"
           [ -n "${NOTES// /}" ] || NOTES="$(git log -1 --format=%s)"
           printf '%s\n' "$NOTES" > notes.md
+          # 这个版本修掉的 Issue：上个标签以来的提交说明 + 标签说明里写的「fixes #12 / 修复 #12」。
+          # 写进 latest.json 的 fixed，看门狗发现新版本时据此告诉用户「你报告过的 #12 在新版本里修好了」
+          PREV="$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)"
+          FIXED="$( { git log --format=%B ${PREV:+$PREV..}"$TAG"; printf '%s\n' "$NOTES"; } \
+            | { grep -oiE '(fix(e[sd])?|close[sd]?|resolve[sd]?|修复|修好|关闭) *#[0-9]+' || true; } | { grep -oE '[0-9]+' || true; } | sort -un \
+            | jq -R 'tonumber' | jq -sc . )"
+          echo "fixed issues: $FIXED"
           jq -n --arg version "$TAG ($VERSION)" --arg commit "$COMMIT" \
             --arg url "https://github.com/$REPO/releases/download/$TAG/muse-bridge.tgz" \
-            --arg sha256 "$SHA" --arg notes "$NOTES" --arg released "$(date -u +%FT%TZ)" \
-            '{version:$version, commit:$commit, url:$url, sha256:$sha256, notes:$notes, released:$released}' > latest.json
+            --arg sha256 "$SHA" --arg notes "$NOTES" --arg released "$(date -u +%FT%TZ)" --argjson fixed "${FIXED:-[]}" \
+            '{version:$version, commit:$commit, url:$url, sha256:$sha256, notes:$notes, released:$released, fixed:$fixed}' > latest.json
           # 这个版本专用的开场提示词（下载地址钉在本标签上，预发布试装用）
           sed "s|{{BASE}}|https://github.com/$REPO/releases/download/$TAG|g" \
             stage/bridge/deploy/muse/开场提示词.md > muse-prompt.txt

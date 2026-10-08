@@ -17,7 +17,7 @@ import { createAuth } from './auth.mjs';
 import { isAdminSession } from './users.mjs';
 import { makeIdentify } from './runtime/identity.mjs';
 import { createRouter } from './runtime/router.mjs';
-import { installFatalGuard } from './runtime/fatal-guard.mjs';
+import { installFatalGuard, onFault } from './runtime/fatal-guard.mjs';
 import { installLifeLog } from './runtime/lifelog.mjs';
 import { installLogRing } from './runtime/log-ring.mjs';
 import { initInflight } from './runtime/inflight.mjs';
@@ -48,6 +48,10 @@ import { registerHarnessRoutes } from './routes/harness.mjs';
 import { registerClaudeDockRoutes } from './routes/claude-dock.mjs';
 import { registerClaudeTaskRoutes } from './routes/claude-tasks.mjs';
 import { registerUiStateRoutes } from './routes/ui-state.mjs';
+import { registerFeedbackRoutes, envInfo as feedbackEnv } from './routes/feedback.mjs';
+import { recordError, flushErrors } from './feedback/errors.mjs';
+import { startFeedback } from './feedback/auto.mjs';
+import { programVersion } from './feedback/report.mjs';
 
 // 最先装：在此之后发生的任何未捕获异常/未处理拒绝都不再直接掐死这台常驻服务
 // （PTY、正在跑的轮全都挂在这个进程上）。见 fatal-guard.mjs。
@@ -78,6 +82,16 @@ const identify = makeIdentify({ authOk, getCookie, bearerToken, queryToken, reso
 const identifySnap = makeIdentify({ authOk, getCookie, bearerToken, queryToken, resolveShare: resolveShareToken, resolveSnap: resolveSnapToken });
 
 const router = createRouter();
+
+// 问题反馈：没接住的异常、路由 500 记进 feedback/errors.json（归一、脱敏，只留我们自己代码的帧）。
+// 用户报告问题时附上最近的几条；开了自动上报的，新错误会自动发一份。见 src/feedback/。
+const FEEDBACK_VERSION = programVersion();
+onFault((kind, err) => {
+  // 进程可能马上就要被判坏状态退出了：记完立刻落盘，不等防抖
+  recordError('server', err instanceof Error ? err : { name: kind, message: String(err) }, { version: FEEDBACK_VERSION }).then(flushErrors);
+});
+router.onError((err) => { recordError('server', err, { version: FEEDBACK_VERSION }); });
+startFeedback({ envInfo: feedbackEnv });
 
 // 所有 /api/* 响应：不外泄 Referer；非 GET 写操作带了外站 Origin 一律拒（CSRF 纵深防御——
 // cookie 会话仅靠 SameSite=Lax 在部分 WebView 下不稳）。不带 Origin（顶级导航）放行，交给
@@ -141,6 +155,7 @@ registerHarnessRoutes(router, { identify });                  // /api/harness/* 
 registerClaudeDockRoutes(router, { identify: identifySnap }); // /api/claude/{review,term,dock}/* — Claude 分页右侧工作台（快照身份=审阅/文件，终端仍要 shell）
 registerClaudeTaskRoutes(router, { identify: identifySnap }); // GET /api/claude/agent-transcript（子 agent 转录）+ POST /api/claude/task/stop（任务面板单条停止，鉴权同 /api/session）
 registerUiStateRoutes(router, { identify: identifySnap });    // /api/ui/{state,answer} — 工作区人机协同上行（视图上报 + 截图/草稿应答）
+registerFeedbackRoutes(router, { identify });                 // /api/feedback* — 报告问题（草稿 → 用户同意 → 经 Worker 提到 GitHub）、自动上报开关
 
 registerRoutineRoutes(router, { authOk, identify });          // /api/routines*
 registerAdminRoutes(router, { authOk, adminCredential, adminGen }); // /api/admin/*, /api/capabilities

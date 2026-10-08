@@ -4,7 +4,7 @@ import { ui } from './state.svelte.js';
 
 export const settingsNav = $state({ sec: null });
 
-/** 打开设置，可直达分区：general | agents | account | connection | about */
+/** 打开设置，可直达分区：general | agents | account | connection | android | feedback | about */
 export function openSettings(sec = null) {
   settingsNav.sec = sec;
   ui.settingsOpen = true;
