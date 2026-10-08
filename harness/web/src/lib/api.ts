@@ -519,6 +519,10 @@ export const setSessionMode = (sessionId: string, mode: string) =>
 // 会话内切访问范围（仅工作空间 / 整机）——与切档同构：点名当前会话当场生效。
 export const setSessionAccess = (sessionId: string, access: string) =>
   j<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/access`, POST({ access }));
+
+// 会话内换型号 / 思考深度（服务端能力位 "session-model"）：回落定的型号与（按型号收过档的）深度；运行中 pending = 下一条消息起生效
+export const setSessionModel = (sessionId: string, patch: { model?: string; thinking?: string }) =>
+  j<{ ok: boolean; model: string; thinking: string; pending?: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/model`, POST(patch));
 // U2（X36 第二步）：撤回一条还没送达的插话；立即中断并发送（服务端撤回、停这一轮、以这句开新一轮）
 export const withdrawSteer = (sessionId: string, id: string) =>
   j<{ ok: boolean; reason?: "delivered" | "not_running" }>(`/api/sessions/${encodeURIComponent(sessionId)}/steer/withdraw`, POST({ id }));

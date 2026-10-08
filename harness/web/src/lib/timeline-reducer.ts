@@ -169,7 +169,7 @@ export interface TimelineEffects extends FlushControl {
   toast(msg: string): void;
   rememberSession(id: string): void;
   openBrowserPane(): void; // 前台时展开浏览器面板（要不要真展开——比如竖屏——由实现决定）
-  setGlobal(patch: { permissionMode?: string; access?: string }): void;
+  setGlobal(patch: { permissionMode?: string; access?: string; model?: string; thinking?: string }): void;
   refill(text: string): void; // 没送出的插话放回输入框
   setBrowser(url: string): void;
 }
@@ -714,6 +714,11 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
     case "access":
       if (m.cfg) m.cfg = { ...m.cfg, access: ev.access };
       if (fx.foreground) fx.setGlobal({ access: ev.access });
+      break;
+    // 型号 / 思考深度在任一设备被换（会话级）：同步本会话快照与全局指示器（型号菜单的勾读全局）
+    case "model":
+      if (m.cfg) m.cfg = { ...m.cfg, model: ev.model, thinking: ev.thinking };
+      if (fx.foreground) fx.setGlobal({ model: ev.model, thinking: ev.thinking });
       break;
     // 插话在任一设备落地：先进输入框上方的待送达托盘（本机发起的已乐观放进去，按 id 去重）；别的设备插的话在这里补上
     // （镜像端也看得见有人在中途说话）。U2（X36 第二步）：以前一落地就进时间线——模型还在跑一个十分钟的工作流时，

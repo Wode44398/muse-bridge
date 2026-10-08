@@ -1222,23 +1222,52 @@ export async function switchVendor(provider: string) {
 
 // 型号 / 思考深度：先在本机上屏（菜单里的勾、思考深度的选中块当场挪过去），再写全局配置——以前要等服务端往返，
 // 隧道上半秒多块才动（不跟手）。服务端会按型号的支持面收档，回来的配置为准；写失败退回并说一声。
+// 与运行档位同一套语义：已经开跑的会话跑的是它自己的快照配置，只写全局等于没换（菜单勾着新型号、回答的还是旧的）——
+// 所以先点名当前会话（服务端能力位 "session-model"），再写全局作新对话的默认。
 export async function setModel(model: string) {
   await patchConfigOptimistic({ model }, (reason) => t("换型号没成功：{reason}", { reason }));
 }
 export async function setEffort(thinking: string) {
   await patchConfigOptimistic({ thinking }, (reason) => t("换思考深度没成功：{reason}", { reason }));
 }
+function sessionModelAvailable(): boolean {
+  return Boolean(app.compat?.caps?.includes("session-model"));
+}
 async function patchConfigOptimistic(patch: Record<string, string>, failed: (reason: string) => string) {
   const prev = app.config;
   if (prev) app.config = { ...prev, ...patch };
-  try {
-    await patchGlobalConfig(patch);
-  } catch (e: any) {
-    // 这期间没有别的写入盖上来（还是我这一版）才退回
+  // 退回全局的乐观值：这期间没有别的写入盖上来（还是我这一版）才退
+  const revertGlobal = () => {
     const cur = app.config;
     if (prev && cur && Object.entries(patch).every(([k, v]) => cur[k] === v)) {
       app.config = { ...cur, ...Object.fromEntries(Object.keys(patch).map((k) => [k, prev[k]])) };
     }
+  };
+  const chat = app.chat;
+  // 菜单列的是全局那家的型号；会话是别家的（不该出现：切前台时全局已对齐会话）就不点名，只改新对话的默认
+  if (chat.id && chat.cfg && sessionModelAvailable() && (!prev || chat.cfg.provider === prev.provider)) {
+    const prevChat = chat.cfg;
+    chat.cfg = { ...chat.cfg, ...patch };
+    try {
+      const r = await api.setSessionModel(chat.id, patch);
+      if (chat.cfg) chat.cfg = { ...chat.cfg, model: r.model, thinking: r.thinking };
+      if (r.pending) toast(t("这一轮跑完后生效，下一条消息起用新的设置"));
+    } catch (e: any) {
+      if (chat.cfg) chat.cfg = { ...chat.cfg, model: prevChat.model, thinking: prevChat.thinking };
+      revertGlobal();
+      toast(failed(tr(String(e?.message ?? e))));
+      return;
+    }
+    // 全局默认写失败不回滚会话：这条会话已经换成功了，全局只影响下一条新对话
+    try {
+      await patchGlobalConfig(patch);
+    } catch { /* 静默 */ }
+    return;
+  }
+  try {
+    await patchGlobalConfig(patch);
+  } catch (e: any) {
+    revertGlobal();
     toast(failed(tr(String(e?.message ?? e))));
   }
 }
@@ -1815,6 +1844,8 @@ async function syncConfigTo(chat: Chat) {
     await patchGlobalConfig({
       provider: chat.cfg.provider,
       model: chat.cfg.model,
+      // 思考深度也是会话级的（会话内能换）：菜单里的选中块要显示这条会话的
+      ...(chat.cfg.thinking ? { thinking: chat.cfg.thinking } : {}),
       workspace: chat.cfg.workspace,
       access: chat.cfg.access,
       permissionMode: chat.cfg.permissionMode,

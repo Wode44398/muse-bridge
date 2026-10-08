@@ -1,4 +1,4 @@
-import type { Block, RecallRef } from "./turn.ts";
+import type { Block, RecallRef, ThinkingLevel } from "./turn.ts";
 import type { ApprovalPreview } from "../tools/types.ts";
 import type { GoalState } from "../goal.ts";
 
@@ -203,6 +203,8 @@ export type AgentEvent =
   | { e: "away"; away: boolean }
   // P13（X18）：本会话放行的工作区外只读目录变了（卡片上「本会话都允许」、档位菜单里删掉一个）
   | { e: "read_roots"; roots: string[] }
+  // 本会话换了型号 / 思考深度（任一设备在型号菜单里换的；运行中的这一轮不受影响，下一条消息起生效）
+  | { e: "model"; model: string; thinking: ThinkingLevel }
   // P7：reason "timeout" = 倒计时到了没人处理（这一轮还在继续）；没有 reason = 停止 / run 结束
   | { e: "ask_cancelled"; id: string; reason?: "timeout" }
   | { e: "permission_cancelled"; id: string; reason?: "timeout" }

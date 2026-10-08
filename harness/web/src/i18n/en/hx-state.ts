@@ -108,6 +108,7 @@ export default {
   "切换失败：{reason}": "Couldn’t switch: {reason}",
   "换型号没成功：{reason}": "Couldn’t switch model: {reason}",
   "换思考深度没成功：{reason}": "Couldn’t change effort: {reason}",
+  "这一轮跑完后生效，下一条消息起用新的设置": "Takes effect after this turn — your next message uses the new setting",
   "切换档位失败：{reason}": "Couldn’t switch mode: {reason}",
   "切换访问范围需要重启 harness 服务后可用": "Restart the dimensio service to change access",
   "切换访问范围失败：{reason}": "Couldn’t change access: {reason}",

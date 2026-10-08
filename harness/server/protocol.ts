@@ -43,6 +43,7 @@ export const CAPABILITIES = [
   "session-refs", // 引用会话：/api/run 认 refs（会话 id，最多 3 个；被引用对话的摘要跟在消息后面给模型，消息上记 refs 给界面）
   "memory-overview", // K11 记忆总览：GET /api/memory/overview（全局层 + 各项目 + 旧快照桶的条目、用量、进提示字数、历史事件）
   "custom-providers", // 自定义模型服务：POST /api/custom-providers {name, baseUrl, apiKey, model?}、POST …/:id（改）、POST …/:id/delete；/api/info 的 catalog 里带 custom 字段（租户实例回 403）
+  "session-model", // 会话内换型号 / 思考深度：POST /api/sessions/:id/model {model?, thinking?}（运行中回 pending，下一条消息起生效）；事件 model
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];

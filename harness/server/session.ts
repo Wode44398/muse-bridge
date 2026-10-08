@@ -89,7 +89,7 @@ import {
 } from "./checkpoints.ts";
 import { disposeOwner, resourceOwners, type ResourceCounts } from "./resources.ts";
 import { deleteUploadDirs, uploadKeyOf } from "./files.ts";
-import type { AttachmentRef, Block, Msg, RecallRef } from "./agent/turn.ts";
+import type { AttachmentRef, Block, Msg, RecallRef, ThinkingLevel } from "./agent/turn.ts";
 import type { RefDigest } from "./session-refs.ts";
 import {
   loadSessionImageBase64,
@@ -122,6 +122,7 @@ import { deleteTraceLog, flushTraceLog, traceEvent } from "./trace-log.ts";
 import { deleteSessionDiagnostics } from "./diagnostics.ts";
 import { CodedError, ERROR_CODES } from "./errors.ts";
 import { getCustomProvider, isCustomProviderId } from "./custom-providers.ts";
+import { clampEffort, EFFORT_ORDER, modelSpec } from "./catalog.ts";
 
 // M12：一轮开跑时给知识 worker 的新鲜度预算（小工作区通常几十毫秒就对完；大笔记库超时先用旧快照）
 const RUN_START_KNOWLEDGE_BUDGET_MS = 250;
@@ -145,6 +146,8 @@ export interface Session {
   cfg: PersistedConfig | null;
   // M11（N33）：还没开跑的新会话由发起端带来的配置快照；第一次开跑时（initState）变成 cfg，之后不再用
   initialConfig?: RuntimeConfig;
+  // 运行中换了型号 / 思考深度：cfg 已是新的，会话状态等下一轮开跑前再按它重建（setSessionModel）
+  modelRebindPending?: boolean;
   // U3（X38）：这一轮的运行计时——开跑时刻、卡片挂着（在等人）累计的暂停、此刻是否在暂停。服务端记账，所有设备一致
   runClock?: { startedAt: number; pausedMs: number; pausedSince: number | null } | null;
   // Q12：这一轮的 trace（上下文之外的 fanout——比如接口里落定卡片——也能归到这一轮）
@@ -1047,9 +1050,7 @@ function initState(session: Session): AgentState {
   // E1：此刻连上的 MCP 连接器拍成这个会话的基线（没有就是 null）
   session.mcp = planMcpBaseline();
   const state = buildState(session.cfg, undefined, session.id, undefined, session.mcp);
-  state.onModeChange = (mode) => applyModeChange(session, mode);
-  state.onSessionAllow = (list) => applySessionAllow(session, list);
-  state.onReadRoots = (list) => applyReadRoots(session, list);
+  wireSessionState(session, state);
   return state;
 }
 
@@ -1117,6 +1118,93 @@ export function setSessionAccess(session: Session, access: unknown): { ok: boole
   fanout(session, { e: "access", access });
   schedulePersist(session);
   return { ok: true };
+}
+
+// 会话内换型号 / 思考深度（POST /api/sessions/:id/model）。以前输入框的型号菜单只写全局配置，已经开跑的会话照旧用
+// 建会话时拍下的型号——菜单上勾着新型号、实际回答的还是旧的。只在这个会话自己那家服务里换（换家 = 开新对话）。
+// 空闲时当场按新配置重建会话状态；运行中先记进快照配置，下一轮开跑前（startRun）再重建，这一轮不受影响。
+export function setSessionModel(
+  session: Session,
+  raw: { model?: unknown; thinking?: unknown },
+): { ok: boolean; error?: string; model?: string; thinking?: ThinkingLevel; pending?: boolean } {
+  const cfg = session.cfg;
+  if (!cfg || !session.state) return { ok: false, error: "session has not started" };
+  if (rollingBack === session.id || rewinding.has(session.id)) return { ok: false, error: "a rollback is in progress — try again in a moment" };
+  const model = raw.model === undefined ? cfg.model : typeof raw.model === "string" ? raw.model.trim() : "";
+  if (!model || !modelSpec(cfg.provider, model)) return { ok: false, error: `model "${model}" is not offered by this conversation's provider` };
+  if (raw.thinking !== undefined && !EFFORT_ORDER.includes(raw.thinking as ThinkingLevel)) return { ok: false, error: "invalid thinking level" };
+  // 只换型号：沿用当前深度，按新型号的支持面收档（与设置页同一规则）
+  const thinking = clampEffort(cfg.provider, model, (raw.thinking ?? cfg.thinking) as ThinkingLevel);
+  if (model !== cfg.model || thinking !== cfg.thinking) {
+    session.cfg = { ...cfg, model, thinking };
+    if (session.running) {
+      session.modelRebindPending = true;
+    } else {
+      try {
+        rebindModel(session);
+      } catch (e) {
+        session.cfg = cfg;
+        return { ok: false, error: (e as Error).message };
+      }
+    }
+    fanout(session, { e: "model", model, thinking });
+    schedulePersist(session);
+  }
+  return { ok: true, model, thinking, ...(session.running ? { pending: true } : {}) };
+}
+
+// system 里那句「You are running as …」跟着型号改——问它是什么模型时要答对。只改这一句，其余原样。
+const MODEL_IDENTITY_RE = /You are running as the "[^"\n]*" model, served via the \S+ provider,/;
+function withModelIdentity(system: string, cfg: PersistedConfig): string {
+  return system.replace(MODEL_IDENTITY_RE, () => `You are running as the "${cfg.model}" model, served via the ${cfg.provider} provider,`);
+}
+
+// 会话状态按快照配置里的型号 / 深度重建。走的是重启后恢复会话的同一条路（buildState + 记录回填）——适配器、子 agent 的
+// 默认型号、输出上限、能不能看图……都在 buildState 里按型号定，逐个就地改容易漏。只在两轮之间做。
+function rebindModel(session: Session): void {
+  const old = session.state;
+  const cfg = session.cfg;
+  if (!old || !cfg || session.running) return;
+  const rec = sessionRecord(session);
+  if (!rec) return;
+  const state = buildState(cfg, withModelIdentity(rec.system, cfg), session.id, rec.world, session.mcp ?? null);
+  restoreFromRecord(state, rec);
+  // 读过的文件照旧算读过（同一个工作区、文件没动，换型号不该逼它把刚读的文件再读一遍）
+  for (const [file, seen] of old.ctx.readFileState) state.ctx.readFileState.set(file, seen);
+  state.noteRewrite("model");
+  wireSessionState(session, state);
+  session.state = state;
+  session.modelRebindPending = false;
+}
+
+// 会话状态挂回会话的三个回调（新建 / 从盘上恢复 / 换型号重建都要挂）
+function wireSessionState(session: Session, state: AgentState): void {
+  state.onModeChange = (mode) => applyModeChange(session, mode);
+  state.onSessionAllow = (list) => applySessionAllow(session, list);
+  state.onReadRoots = (list) => applyReadRoots(session, list);
+}
+
+// 记录里落盘的那部分会话状态回填进一份新建的 AgentState（从盘上恢复与换型号重建共用）
+function restoreFromRecord(state: AgentState, rec: PersistedSession): void {
+  state.messages = rec.messages;
+  state.todos = rec.todos ?? [];
+  state.totalInputTokens = rec.totals?.inputTokens ?? 0;
+  state.totalOutputTokens = rec.totals?.outputTokens ?? 0;
+  state.lastContextTokens = rec.totals?.lastContextTokens ?? 0;
+  state.totalCacheReadTokens = rec.totals?.cacheReadTokens ?? 0;
+  state.totalCacheWriteTokens = rec.totals?.cacheWriteTokens ?? 0;
+  // Q4：接着上次的前缀基线比
+  state.prefix.restore(rec.prefixBaseline, rec.totals?.prefix);
+  state.dirtySinceVerify = rec.gates?.dirtySinceVerify ?? false;
+  state.mutationEpoch = rec.gates?.mutationEpoch ?? (state.dirtySinceVerify ? 1 : 0);
+  state.verifiedEpoch = rec.gates?.verifiedEpoch ?? (state.dirtySinceVerify ? 0 : state.mutationEpoch);
+  state.lastVerification = rec.gates?.lastVerification ?? "";
+  state.editedFiles = new Set(rec.gates?.editedFiles ?? []);
+  state.ranCommands = rec.gates?.ranCommands ?? [];
+  // K9：K9 之前写的记录没有这项——从转录里推（压缩掉的那部分推不出来，尽力而为）
+  state.externalContentSeen = rec.gates?.externalContent ?? transcriptReadExternal(state.messages);
+  state.compactionFailures = rec.counters?.compactionFailures ?? 0;
+  state.turnsSinceTodoSeen = rec.counters?.turnsSinceTodoSeen ?? 0;
 }
 
 // ── Persistence ──────────────────────────────────────────────────────────────
@@ -1267,8 +1355,11 @@ async function hydrateSession(id: string): Promise<Session | undefined> {
   if (!usageLedgers.has(rec.id) && rec.usage) usageLedgers.set(rec.id, sanitizeLedger(rec.usage));
   // E1：MCP 工具按记录里的基线还原（E1 之前的会话没有这一项：不加 MCP 工具，工具清单与当初一致）
   const mcp = sanitizeBaseline(rec.mcp);
-  const state = buildState(rec.config, rec.system || undefined, rec.id, rec.world, mcp);
-  state.messages = rec.messages;
+  // 运行中换过型号、还没等到下一轮重建就重启了：记录里的配置是新型号，system 里的身份句还是旧的——这里对齐
+  const system = rec.system ? withModelIdentity(rec.system, rec.config) : "";
+  const state = buildState(rec.config, system || undefined, rec.id, rec.world, mcp);
+  restoreFromRecord(state, rec);
+  if (system !== (rec.system ?? "")) state.noteRewrite("model");
   // A mid-run snapshot can end on an unanswered tool_call batch — heal it so
   // the next request is valid. R6（#32）：按工具 effect 如实说（只读的「没完成、无副作用」，
   // 有副作用的「结果未知、先查状态」），后者附上这一轮开始以来工作区的改动。
@@ -1283,26 +1374,9 @@ async function hydrateSession(id: string): Promise<Session | undefined> {
     // O1（#9）：跑了一半的 Workflow 按工具调用 id 找回 journal，如实说完成了几个、怎么续跑。
     workflowRun: (toolCallId) => findWorkflowRunByToolId(path.join(sessionsDir(), "workflows"), toolCallId),
   });
-  state.todos = rec.todos ?? [];
-  state.totalInputTokens = rec.totals?.inputTokens ?? 0;
-  state.totalOutputTokens = rec.totals?.outputTokens ?? 0;
-  state.lastContextTokens = rec.totals?.lastContextTokens ?? 0;
-  state.totalCacheReadTokens = rec.totals?.cacheReadTokens ?? 0;
-  state.totalCacheWriteTokens = rec.totals?.cacheWriteTokens ?? 0;
-  // Q4：接着上次的前缀基线比。C4 起恢复时 system 原样沿用，前缀不该断；只有 C4 之前写的会话（没有 world 令牌）
-  // 照旧刷新了一次 system，下一次请求若断开就归因为恢复
-  state.prefix.restore(rec.prefixBaseline, rec.totals?.prefix);
+  // Q4：C4 起恢复时 system 原样沿用，前缀不该断；只有 C4 之前写的会话（没有 world 令牌）照旧刷新了一次 system，
+  // 下一次请求若断开就归因为恢复
   if (!rec.world) state.noteRewrite("resume");
-  state.dirtySinceVerify = rec.gates?.dirtySinceVerify ?? false;
-  state.mutationEpoch = rec.gates?.mutationEpoch ?? (state.dirtySinceVerify ? 1 : 0);
-  state.verifiedEpoch = rec.gates?.verifiedEpoch ?? (state.dirtySinceVerify ? 0 : state.mutationEpoch);
-  state.lastVerification = rec.gates?.lastVerification ?? "";
-  state.editedFiles = new Set(rec.gates?.editedFiles ?? []);
-  state.ranCommands = rec.gates?.ranCommands ?? [];
-  // K9：K9 之前写的记录没有这项——从转录里推（压缩掉的那部分推不出来，尽力而为）
-  state.externalContentSeen = rec.gates?.externalContent ?? transcriptReadExternal(state.messages);
-  state.compactionFailures = rec.counters?.compactionFailures ?? 0;
-  state.turnsSinceTodoSeen = rec.counters?.turnsSinceTodoSeen ?? 0;
   // readFileState intentionally starts empty: files may have changed while the
   // server was down, so the Edit gate must force fresh Reads.
 
@@ -1330,9 +1404,7 @@ async function hydrateSession(id: string): Promise<Session | undefined> {
     ...(mcp ? { mcp } : {}),
   };
   // 恢复出来的会话同样要能切档（历史会话打开后直接改模式）。
-  state.onModeChange = (mode) => applyModeChange(session, mode);
-  state.onSessionAllow = (list) => applySessionAllow(session, list);
-  state.onReadRoots = (list) => applyReadRoots(session, list);
+  wireSessionState(session, state);
   // Deleted out from under us mid-hydration — hand the record back without
   // registering it, so nothing persists it again.
   if (droppedWhileLoading.has(id)) return undefined;
@@ -2191,6 +2263,9 @@ export function startRun(
 
   if (!session.state) {
     session.state = initState(session);
+  } else if (session.modelRebindPending) {
+    // 上一轮跑着的时候换了型号 / 深度：这一轮开跑前按新配置重建（同步，仍在第一个 await 之前）
+    rebindModel(session);
   }
   // O7：UpdateGoal 只在有进行中的目标时出现（工具清单只在两轮之间变）
   syncGoalTool(session);

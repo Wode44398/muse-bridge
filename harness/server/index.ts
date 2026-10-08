@@ -54,6 +54,7 @@ import {
   setSessionAccess,
   setSessionAway,
   setSessionMode,
+  setSessionModel,
   steerSession,
   stopSession,
   watchSession,
@@ -897,6 +898,18 @@ app.post("/api/sessions/:id/access", async (req, res) => {
     return;
   }
   res.json({ ok: true });
+});
+
+// 型号 / 思考深度同样是会话级——见 session.ts setSessionModel（空闲当场生效；运行中下一条消息起生效，回 pending）。
+app.post("/api/sessions/:id/model", async (req, res) => {
+  const session = await sessionForRequest(String(req.params.id), res);
+  if (!session) return;
+  const result = setSessionModel(session, { model: req.body?.model, thinking: req.body?.thinking });
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json(result);
 });
 
 // P13（X18）：撤掉本会话放行的工作区外只读目录（放行在卡片上做；这里只删）

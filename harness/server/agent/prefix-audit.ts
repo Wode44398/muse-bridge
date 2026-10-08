@@ -9,7 +9,7 @@ import { injectionsIn, recallIds } from "./injections.ts";
 import type { Turn, WireShape } from "./turn.ts";
 
 // ephemeral-tail（瘦身 P0-2）：上一次请求末尾挂过一条不落盘的提醒，这一次在它的位置断开是预期的
-export type RewriteKind = "mode" | "access" | "micro-compaction" | "compaction" | "audit-closure" | "resume" | "heal" | "media-retire" | "ephemeral-tail";
+export type RewriteKind = "mode" | "access" | "micro-compaction" | "compaction" | "audit-closure" | "resume" | "heal" | "media-retire" | "ephemeral-tail" | "model";
 
 export interface RequestUsage {
   input: number;
