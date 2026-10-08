@@ -109,4 +109,7 @@ async function main() {
   }
 }
 
-main().then((c) => process.exit(c || 0), (e) => { console.error(e?.stack || e); process.exit(1); });
+// 不直接 process.exit：代理连接池还在收尾时硬退，Windows 上的 libuv 会断言崩溃（Linux 上没事）。
+// 设好退出码让进程自然结束；连接池迟迟不放就 5 秒后强退。
+const done = (c) => { process.exitCode = c || 0; setTimeout(() => process.exit(process.exitCode), 5000).unref(); };
+main().then(done, (e) => { console.error(e?.stack || e); done(1); });
