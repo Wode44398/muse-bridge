@@ -76,13 +76,25 @@ public class MainActivity extends Activity {
     private static final Pattern URL_IN_TEXT = Pattern.compile("(?i)https?://[^\\s<>\"'()（）\\[\\]【】「」，。；、,;]+");
     private static final Pattern BARE_HOST = Pattern.compile("(?i)^[a-z0-9-]+(\\.[a-z0-9-]+)+(:\\d+)?(/\\S*)?$");
 
-    // 系统栏颜色跟着页面走：取页面最上沿 / 最下沿那一点的背景色（往父元素找到第一个不透明的）
+    // 系统栏颜色跟着页面走：取页面最上沿 / 最下沿那一点「眼睛看到的」颜色——把该点从上到下叠着的各层背景
+    // 按透明度混合（弹层的半透明遮罩不能当成不透明色，否则 rgba(0,0,0,.4) 丢了透明度就成了一条黑边）。
+    // 每秒轮询兜底，动画 / 过渡结束时立刻再取一次，弹层开关时不用等。
     private static final String BARS_JS = "(function(){if(window.__mbBars)return;window.__mbBars=1;var lt='',lb='';"
-        + "function bg(y){var el=document.elementFromPoint(innerWidth/2,y);while(el&&el.nodeType===1){"
-        + "var c=getComputedStyle(el).backgroundColor;if(c&&c!=='transparent'&&!/,\\s*0\\)$/.test(c))return c;el=el.parentElement;}"
-        + "var m=document.querySelector('meta[name=theme-color]');return m?m.content:'';}"
+        + "function rgba(c){var m=/rgba?\\(\\s*([\\d.]+)[,\\s]+([\\d.]+)[,\\s]+([\\d.]+)(?:[,\\s/]+([\\d.]+)(%?))?/.exec(c||'');"
+        + "if(!m)return null;var a=m[4]==null?1:+m[4]/(m[5]?100:1);return[+m[1],+m[2],+m[3],a];}"
+        + "function op(el){var o=1;for(;el&&el.nodeType===1;el=el.parentElement)o*=+getComputedStyle(el).opacity;return o;}"
+        + "function bg(y){var r=0,g=0,b=0,a=0,els=document.elementsFromPoint(innerWidth/2,y);"
+        + "for(var i=0;i<els.length&&a<0.995;i++){var c=rgba(getComputedStyle(els[i]).backgroundColor);if(!c||c[3]<=0)continue;"
+        + "var k=c[3]*op(els[i])*(1-a);r+=c[0]*k;g+=c[1]*k;b+=c[2]*k;a+=k;}"
+        + "if(a<0.995){var m=document.querySelector('meta[name=theme-color]'),d=rgba(getComputedStyle(document.body).backgroundColor);"
+        + "var u=d&&d[3]>0?d:[248,248,246,1];if(m&&!(d&&d[3]>0)){var s=m.content.replace('#','');if(s.length===3)s=s.replace(/./g,'$&$&');"
+        + "if(s.length>=6)u=[parseInt(s.substr(0,2),16),parseInt(s.substr(2,2),16),parseInt(s.substr(4,2),16),1];}"
+        + "var k=1-a;r+=u[0]*k;g+=u[1]*k;b+=u[2]*k;a=1;}"
+        + "return 'rgb('+Math.round(r)+','+Math.round(g)+','+Math.round(b)+')';}"
         + "function f(){try{var t=bg(1),b=bg(innerHeight-2);if(t!==lt||b!==lb){lt=t;lb=b;MuseBridgeApp.setBarColors(t,b);}}catch(e){}}"
-        + "window.__mbBarsKick=function(){lt=lb=null;f();};f();setInterval(f,1000);})();";
+        + "window.__mbBarsKick=function(){lt=lb=null;f();};"
+        + "document.addEventListener('transitionend',f,true);document.addEventListener('animationend',f,true);"
+        + "f();setInterval(f,1000);})();";
 
     private enum Panel { NONE, SETUP, OFFLINE }
 
