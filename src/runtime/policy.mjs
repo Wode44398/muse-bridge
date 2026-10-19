@@ -42,6 +42,9 @@ function norm(raw) {
   const maxUserTurns = Number(r.maxUserTurns);
   return {
     register: r.register !== false,   // true = 凭邀请码注册；false = 关闭注册（只剩管理员直接建账号）
+    // true = 注册用户必须在「设置 → 账户 → Claude 凭据」填自己的令牌 / API Key 才能跑 Claude，
+    // 不再借用服务器共用的「Claude 账号」；false（默认）= 没填的人照旧用共用账号。
+    userOwnKey: r.userOwnKey === true,
     quota: normLimits(r.quota),
     maxUserTurns: Number.isFinite(maxUserTurns) && maxUserTurns > 0 ? Math.floor(maxUserTurns) : 0,
     timezone: validTz(r.timezone) ? r.timezone : 'Asia/Shanghai',
@@ -55,6 +58,7 @@ export function getPolicy() { return { ...policy, quota: { ...policy.quota } }; 
 export function setPolicy(patch = {}) {
   const next = { ...policy };
   if (typeof patch.register === 'boolean') next.register = patch.register;
+  if (typeof patch.userOwnKey === 'boolean') next.userOwnKey = patch.userOwnKey;
   if (patch.quota && typeof patch.quota === 'object') next.quota = patch.quota;
   if (patch.maxUserTurns != null) next.maxUserTurns = patch.maxUserTurns;
   if (patch.timezone != null) {

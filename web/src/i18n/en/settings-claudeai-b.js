@@ -205,4 +205,20 @@ export default {
   '允许远程桌面控制': 'Allow remote desktop control',
   '更高权限：主机能看到你整个屏幕，用真实鼠标键盘操作任何应用': 'Higher access. The host can see your entire screen and use your real mouse and keyboard in any app.',
   '主机正在操作本机': 'The host is controlling this computer',
+  // —— 账户 · Claude 凭据（注册用户自带订阅令牌 / API Key）——
+  'Claude 凭据': 'Claude credentials',
+  '我的 Claude 凭据': 'Your Claude credentials',
+  '订阅令牌': 'Subscription token',
+  '凭据类型': 'Credential type',
+  '订阅令牌，结尾 {tail}': 'Subscription token ending in {tail}',
+  'API Key，结尾 {tail}': 'API key ending in {tail}',
+  '还没填：这台服务器要求用你自己的额度，填好之前不能和 Claude 对话': 'Not set. This server requires your own Claude credentials, so you can’t chat with Claude until you add them.',
+  '还没填：现在用的是服务器共用的账号': 'Not set. You’re using the server’s shared account.',
+  '请粘贴令牌或 API Key': 'Paste a token or API key.',
+  '粘贴订阅令牌（sk-ant-oat…）': 'Paste your subscription token (sk-ant-oat…)',
+  '粘贴 API Key（sk-ant-api…）': 'Paste your API key (sk-ant-api…)',
+  '接口地址（可选，默认官方，例如 https://api.example.com）': 'API base URL (optional, defaults to Anthropic, e.g. https://api.example.com)',
+  '填写': 'Add',
+  '订阅令牌：在你自己的电脑上运行 claude setup-token 生成，以 sk-ant-oat 开头。API Key：在 Anthropic 控制台创建；用兼容接口的中转服务时再填接口地址。填了之后对话和定时任务都用你自己的额度，不受管理员设的轮数和花费上限约束。':
+    'Subscription token: run claude setup-token on your own computer. It starts with sk-ant-oat. API key: create one in the Anthropic Console, and add a base URL only if you use a compatible relay. Once set, your chats and routines use your own plan or credits and aren’t subject to the admin’s turn and spending limits.',
 };

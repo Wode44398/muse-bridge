@@ -1,4 +1,4 @@
-// 用户自助：自己的额度 / 用量、改自己的密码。
+// 用户自助：自己的额度 / 用量、改自己的密码、自己的 Claude 凭据。
 // 两处共用这份数据层：设置 → 账户（SecAccount）、主页右上的账户卡（LoginCard）。管理员没有额度，也没有密码可改。
 import { api } from './api.js';
 import { t } from './i18n.js';
@@ -8,6 +8,15 @@ export const fetchMyUsage = () => api.get('/api/me/usage');
 
 /** 原密码对了才改；成功后本机保留登录，别的设备全部下线。失败抛错（e.body.error 是给人看的原因）。 */
 export const changeMyPassword = (old, password) => api.post('/api/me/password', { old, password });
+
+/** 自己的 Claude 凭据概况：{ configured, kind?, tail?, baseUrl?, required }；管理员回 { admin:true }。 */
+export const fetchMyCredential = () => api.get('/api/me/claude-credential');
+
+/** 填 / 换自己的凭据：kind 'oauth'（订阅令牌）| 'apikey'；baseUrl 只对 API Key 有效。失败抛错（e.body.error）。 */
+export const saveMyCredential = (kind, token, baseUrl) => api.post('/api/me/claude-credential', { kind, token, baseUrl });
+
+/** 删掉自己的凭据。 */
+export const clearMyCredential = () => api.post('/api/me/claude-credential/clear', {});
 
 const money = (v) => '$' + (Math.round((v || 0) * 100) / 100).toFixed(2);
 
