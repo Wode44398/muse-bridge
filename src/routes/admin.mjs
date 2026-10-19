@@ -172,6 +172,7 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
   router.on('POST', '/api/admin/policy', userAction((b) => {
     const patch = {};
     if (typeof b.register === 'boolean') patch.register = b.register;
+    if (typeof b.userOwnKey === 'boolean') patch.userOwnKey = b.userOwnKey;
     if (b.quota && typeof b.quota === 'object') patch.quota = b.quota;
     if (b.maxUserTurns != null) patch.maxUserTurns = Number(b.maxUserTurns) || 0;
     if (typeof b.timezone === 'string' && b.timezone) patch.timezone = b.timezone.trim();

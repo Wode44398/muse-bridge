@@ -230,7 +230,9 @@ function resetHint(ms) {
 
 // Turn any failure (thrown error, error result, or SDK error kind) into a
 // structured, plain-Chinese notice the phone renders nicely.
-export function classifyError(raw, kind) {
+// who（可选）：{ user: true, ownCredential } —— 注册用户的认证失败不该叫他去配服务端：
+// 填了自己凭据的指向「设置 → 账户 → Claude 凭据」，没填的（借用共用账号）请他找管理员或自己填。
+export function classifyError(raw, kind, who) {
   const s = String(raw == null ? '' : (raw.message || raw)).toLowerCase();
   const k = kind || '';
   if (k === 'rate_limit' || /rate.?limit|usage limit|too many requests|\b429\b/.test(s)) {
@@ -246,6 +248,11 @@ export function classifyError(raw, kind) {
   if (k === 'authentication_failed' || /not logged in|unauthorized|\b401\b|oauth|invalid api key|authentication failed/.test(s)) {
     // 服务端从没配过认证（新装的服务器最常见）和配过但失效，是两种处理办法。
     // 控制台「Claude 账号」里加的令牌不进环境变量（每次 query 现注），也要算「配过」——否则令牌被撤销时会误报「还没配置」
+    if (who && who.user) {
+      return who.ownCredential
+        ? { kind: 'auth', title: '你的 Claude 凭据不能用', hint: '令牌过期 / 被撤销，或 API Key 填错了：到「设置 → 账户 → Claude 凭据」点「更换」重新填。' }
+        : { kind: 'auth', title: '服务器共用的 Claude 账号不能用', hint: '请联系管理员；也可以到「设置 → 账户 → Claude 凭据」填你自己的订阅令牌或 API Key。' };
+    }
     const configured = Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || activeToken());
     return configured
       ? { kind: 'auth', title: '登录已失效', hint: '令牌过期或被撤销：在你自己的电脑上重新运行 claude setup-token，把新令牌更新到「设置 → 连接 → 服务端控制台 → Claude 账号」（在 Muse 上部署的，也可以让 Muse 运行 set-claude-token）。' }

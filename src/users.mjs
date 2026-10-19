@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { SYSTEM_DIR, userRoot } from './config/index.mjs';
 import { USER_DEFAULT_AGENTS, normAgentList } from './config/agents.mjs';
 import { dayKey, normOverride } from './runtime/policy.mjs';
+import { clearCredential } from './runtime/user-credential.mjs';
 import { readJson as readJsonFile, writeJson as writeJsonAtomic } from './jsonfile.mjs';
 
 // 异步 scrypt：同步版每次登录阻塞事件循环 ~50-100ms，公网上被刷 /api/login 会拖垮
@@ -183,6 +184,7 @@ export function deleteUser(name) {
   const s = readJson(SESSIONS, {}); let changed = false;
   for (const [key, v] of Object.entries(s)) if (v.user === n) { delete s[key]; changed = true; }
   if (changed) writeJson(SESSIONS, s);
+  clearCredential(n);   // 他自带的 Claude 凭据跟账号一起删，不留在系统目录里
   return { ok: true }; // their folder on disk is left in place; admin removes it manually if desired
 }
 

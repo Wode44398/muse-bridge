@@ -17,6 +17,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { CONFIG_PATH, OAUTH } from '../config/index.mjs';
+import { applyUserCredential } from './user-credential.mjs';
+import { getPolicy } from './policy.mjs';
 
 let accounts = [];   // [{ id, label, token }]
 let activeId = '';
@@ -105,10 +107,20 @@ export function deleteAccount(id) {
 // 每次跑 Claude query() 时构造子进程 env：叠加当前激活账号 token + 沙箱 configDir。
 // 返回 null 表示无需覆盖（configDir 为空且激活账号无 token）——此时让子进程直接继承
 // process.env（含 boot 时设的默认 token），行为与切换功能上线前一致。
+//
+// 注册用户（ctx.kind === 'user'）另算：填了自己的凭据就只用他自己的；没填时，策略开了
+// 「必须用自己的凭据」就把认证变量全摘掉（开跑前 claude.mjs 已经拦下，这里是兜底），
+// 没开才回落到共用账号——跟这个功能上线前一样。
 export function claudeEngineEnv(ctx) {
   let touched = false;
   const env = { ...process.env };
   if (ctx && ctx.configDir) { env.CLAUDE_CONFIG_DIR = ctx.configDir; touched = true; }
+  if (ctx && ctx.kind === 'user' && ctx.user) {
+    if (applyUserCredential(env, ctx.user)) return env;
+    if (getPolicy().userOwnKey) return env;
+    // 回落共用账号：applyUserCredential 摘掉的变量从 process.env 补回来。
+    Object.assign(env, process.env, ctx.configDir ? { CLAUDE_CONFIG_DIR: ctx.configDir } : {});
+  }
   const tok = activeToken();
   if (tok) { env.CLAUDE_CODE_OAUTH_TOKEN = tok; touched = true; }
   return touched ? env : null;

@@ -14,8 +14,6 @@ export default {
   // —— 用户 / 额度与注册（SaUsers / SaPolicy）——
   '普通（user）档没有命令行；能用哪些 agent 在「权限」里按人勾选（新账号默认只有 Claude，dimensio 按人放行）。邀请码一次性。':
     'The Standard (user) tier has no shell. Choose which agents each person can use under “Manage” (new accounts get Claude only; turn on dimensio per person). Invite codes are single-use.',
-  '留空或填 0 = 不限。额度只算 Claude（大家共用的是服务器上的 Claude 订阅），dimensio 不计；管理员不受限。':
-    'Leave blank or enter 0 for no limit. Quotas count Claude only (everyone shares the Claude subscription on the server); dimensio isn’t counted. Admins have no limits.',
 
   // —— 扩展（ExtensionsPage）——
   '技能是带 YAML frontmatter 的 SKILL.md 指引包（可含脚本等附属文件）。对 Claude Code 下一条消息即生效；对 dimensio 在新会话生效。':

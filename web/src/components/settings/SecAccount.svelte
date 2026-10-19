@@ -1,9 +1,10 @@
 <script>
-  // 设置 · 账户：个人资料、订阅用量、工作空间 / 扫码登录网页版、退出登录。
+  // 设置 · 账户：个人资料、订阅用量、自己的 Claude 凭据、工作空间 / 扫码登录网页版、退出登录。
   // 没登录时只给一个「登录」入口（登录卡是单独的覆盖层，见 LoginCard.svelte）。
   import { ui, me, status, applyMe } from '../../lib/state.svelte.js';
   import { api, setToken } from '../../lib/api.js';
-  import { fetchMyUsage, changeMyPassword, quotaRows, hasLimits } from '../../lib/me.js';
+  import { fetchMyUsage, changeMyPassword, quotaRows, hasLimits, fetchMyCredential, saveMyCredential, clearMyCredential } from '../../lib/me.js';
+  import SSegmented from './SSegmented.svelte';
   import SSection from './SSection.svelte';
   import SRow from './SRow.svelte';
   import SButton from './SButton.svelte';
@@ -56,6 +57,25 @@
     catch (e) { pw.err = tr(e?.body?.error) || t('修改失败'); pw.busy = false; }
   }
 
+  // —— 自己的 Claude 凭据（注册用户）：填了就用自己的额度，不再占服务器共用的订阅 ——
+  let cred = $state(null);           // { configured, kind, tail, baseUrl, required }
+  let cf = $state(null);             // null | { kind, token, baseUrl, busy, err }
+  $effect(() => { if (me.kind === 'user') fetchMyCredential().then((r) => { cred = r; }).catch(() => {}); });
+  const KIND_OPTS = [{ value: 'oauth', label: t('订阅令牌') }, { value: 'apikey', label: 'API Key' }];
+  const credDesc = $derived(!cred ? '' : cred.configured
+    ? (cred.kind === 'oauth' ? t('订阅令牌，结尾 {tail}', { tail: cred.tail }) : t('API Key，结尾 {tail}', { tail: cred.tail })) + (cred.baseUrl ? ' · ' + cred.baseUrl : '')
+    : cred.required ? t('还没填：这台服务器要求用你自己的额度，填好之前不能和 Claude 对话') : t('还没填：现在用的是服务器共用的账号'));
+  async function saveCred() {
+    if (!cf || cf.busy) return;
+    if (!cf.token.trim()) { cf.err = t('请粘贴令牌或 API Key'); return; }
+    cf.busy = true; cf.err = '';
+    try { cred = await saveMyCredential(cf.kind, cf.token.trim(), cf.kind === 'apikey' ? cf.baseUrl.trim() : ''); cf = null; }
+    catch (e) { cf.err = tr(e?.body?.error) || t('保存失败'); cf.busy = false; }
+  }
+  async function removeCred() {
+    try { cred = await clearMyCredential(); } catch {}
+  }
+
   function openWorkspace() { onclose?.(); ui.screen = 'files'; }
   function openScan() { onclose?.(); ui.pairScan = { mode: 'scan' }; }
   function login() { onclose?.(); ui.loginOpen = true; }
@@ -85,6 +105,7 @@
     </SRow>
   </SSection>
 
+  {#if !(me.kind === 'user' && cred?.configured)}
   <SSection title={t('用量')} foot={t('共享订阅的滚动用量：5 小时窗口与 7 天窗口，用满后随窗口滑动释放。')}>
     <div class="usage" data-sid="usage">
       {#each [[t('当前会话（5 小时）'), fiveH, lim.five_hour], [t('本周'), weekly, lim.seven_day]] as [name, p, b] (name)}
@@ -99,6 +120,7 @@
       {/each}
     </div>
   </SSection>
+  {/if}
 
   {#if me.kind === 'user'}
     <SSection title={t('我的额度')} foot={hasLimits(mine) ? t('只算 Claude 的对话轮数与花费；「今天」按{tz} 0 点换日。', { tz: mine.timezone === 'Asia/Shanghai' ? t('北京时间') : mine.timezone }) : t('管理员没给你设上限。')}>
@@ -110,6 +132,31 @@
         {/each}
       {:else}
         <SRow label={t('读取中…')} />
+      {/if}
+    </SSection>
+
+    <SSection title={t('Claude 凭据')} foot={t('订阅令牌：在你自己的电脑上运行 claude setup-token 生成，以 sk-ant-oat 开头。API Key：在 Anthropic 控制台创建；用兼容接口的中转服务时再填接口地址。填了之后对话和定时任务都用你自己的额度，不受管理员设的轮数和花费上限约束。')}>
+      {#if cf}
+        <div class="pwf" data-sid="claude-credential">
+          <SSegmented options={KIND_OPTS} value={cf.kind} onchange={(v) => { cf.kind = v; }} label={t('凭据类型')} />
+          <SField password bind:value={cf.token} placeholder={cf.kind === 'oauth' ? t('粘贴订阅令牌（sk-ant-oat…）') : t('粘贴 API Key（sk-ant-api…）')} width="100%" />
+          {#if cf.kind === 'apikey'}
+            <SField bind:value={cf.baseUrl} placeholder={t('接口地址（可选，默认官方，例如 https://api.example.com）')} width="100%" />
+          {/if}
+          {#if cf.err}<p class="err">{cf.err}</p>{/if}
+          <div class="pw-b">
+            <SButton onclick={() => { cf = null; }}>{t('取消')}</SButton>
+            <SButton variant="primary" size="md" onclick={saveCred} disabled={cf.busy}>{cf.busy ? t('保存中…') : t('保存')}</SButton>
+          </div>
+        </div>
+      {:else}
+        <SRow label={t('我的 Claude 凭据')} desc={credDesc} sid="claude-credential">
+          {#snippet trailing()}<span class="cb">
+            {#if cred?.configured}<SButton onclick={removeCred}>{t('删除')}</SButton>{/if}
+            <SButton variant={cred?.configured ? undefined : 'primary'} size={cred?.configured ? undefined : 'md'}
+              onclick={() => { cf = { kind: cred?.kind || 'oauth', token: '', baseUrl: cred?.baseUrl || '', busy: false, err: '' }; }}>{cred?.configured ? t('更换') : t('填写')}</SButton>
+          </span>{/snippet}
+        </SRow>
       {/if}
     </SSection>
 
@@ -175,5 +222,6 @@
   .val.hot { color: var(--crit); }
   .pwf { display: flex; flex-direction: column; gap: 8px; padding: 12px 0 14px; }
   .pw-b { display: flex; justify-content: flex-end; gap: 8px; }
+  .cb { display: inline-flex; gap: 8px; }
   .err { margin: 0; font-size: 13px; color: var(--crit); }
 </style>

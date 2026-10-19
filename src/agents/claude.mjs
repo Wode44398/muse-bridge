@@ -34,6 +34,9 @@ import { claudeEngineEnv } from '../runtime/claude-account.mjs';
 import { sanitizeSessionThinking } from '../runtime/session-sanitize.mjs';
 import { addUsage, noteTurnStart } from '../users.mjs';
 import { quotaBlock } from '../runtime/quota.mjs';
+import { hasCredential } from '../runtime/user-credential.mjs';
+// 报错归类用：注册用户的认证失败按「自己的凭据 / 共用账号」给不同的指引（见 status.classifyError）。
+const errorWho = (ctx) => (ctx && ctx.kind === 'user' && ctx.user ? { user: true, ownCredential: hasCredential(ctx.user) } : undefined);
 import { getPolicy } from '../runtime/policy.mjs';
 import { makeSnapshotMcp } from '../mcp/snapshot.mjs';
 import { makeTerminalMcp, TERMINAL_NUDGE } from '../mcp/terminal-tools.mjs';
@@ -539,7 +542,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   const warmSig = snap ? '' : createHash('sha256').update(JSON.stringify([
     ctx.key, normDir(ctx.cwd), ctx.configDir || '', ctx.media || '', normDir(ctx.homeRoot || ctx.cwd),
     effModel || '', effortOpts, sdkSettings, appendText, ext,
-    engineEnv ? [engineEnv.CLAUDE_CODE_OAUTH_TOKEN || '', engineEnv.CLAUDE_CONFIG_DIR || ''] : null,
+    engineEnv ? [engineEnv.CLAUDE_CODE_OAUTH_TOKEN || '', engineEnv.ANTHROPIC_API_KEY || '', engineEnv.ANTHROPIC_BASE_URL || '', engineEnv.CLAUDE_CONFIG_DIR || ''] : null,
     [!!ctx.sandbox, !!ctx.shell, termOn, wsToolsOn, wantSuggest],
   ])).digest('hex');
 
@@ -547,8 +550,16 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
 
   // 额度（三端拆分 P4）：注册用户超了每天 / 最近 7 天的上限就不开跑——放在「顶掉同会话上一轮」
   // 之前，被拒的重发不该把还在跑的那一轮停掉。管理员与快照访客不走这里。
+  // 自带凭据：填了自己的令牌 / API Key 的人花的是他自己的额度，不受这里的轮数 / 花费上限约束
+  //（全服同时轮数上限照样管——那是服务器的资源）；策略要求自带凭据而他还没填，就不开跑。
   if (ctx.kind === 'user' && ctx.user) {
-    const block = quotaBlock(ctx.user);
+    const own = hasCredential(ctx.user);
+    if (!own && getPolicy().userOwnKey) {
+      genWrite(res, { type: 'error', kind: 'auth', title: '还没填你自己的 Claude 凭据', message: '这台服务器要求每个人用自己的 Claude 额度：到「设置 → 账户 → Claude 凭据」填入订阅令牌（在自己电脑上运行 claude setup-token 生成）或 API Key 后再发。' });
+      res.end();
+      return;
+    }
+    const block = own ? null : quotaBlock(ctx.user);
     if (block) {
       genWrite(res, { type: 'error', kind: 'quota', title: block.title, message: block.message });
       res.end();
@@ -1705,7 +1716,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           // bridge 用户没有地方跑 /login，要给的是服务端该怎么配。
           // No usable text came back — surface a classified notice instead of an
           // empty bubble. 429 → rate limit, otherwise infer from the result text.
-          const c = classifyError(msg.result || ('HTTP ' + (apiStatus || '')), apiStatus === 429 ? 'rate_limit' : authFailed ? 'authentication_failed' : '');
+          const c = classifyError(msg.result || ('HTTP ' + (apiStatus || '')), apiStatus === 429 ? 'rate_limit' : authFailed ? 'authentication_failed' : '', errorWho(ctx));
           send({ type: 'error', kind: c.kind, title: c.title, hint: c.hint, resetsAt: c.resetsAt || 0, message: c.hint ? (c.title + ' — ' + c.hint) : c.title });
         } else {
           // 后台任务（子 agent / 工作流 / 后台 shell）还活着 → 本轮悬停：不发 done、不 break。
@@ -1763,7 +1774,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       const em = String((err && err.message) || err || '');
       if (isThinkingBlockError(em)) emitThinkingError();
       else {
-        const c = classifyError(err);
+        const c = classifyError(err, undefined, errorWho(ctx));
         send({ type: 'error', kind: c.kind, title: c.title, hint: c.hint, resetsAt: c.resetsAt || 0, message: c.hint ? (c.title + ' — ' + c.hint) : c.title });
       }
     }

@@ -144,7 +144,7 @@ registerPairRoutes(router, { identify, adminGen, authCookie, userCookie }); // /
 registerChatRoutes(router, { authOk, identify: identifySnap }); // /api/chat, /api/answer（快照身份可用）
 registerExtensionRoutes(router, { identify });                // /api/extensions* — 扩展中心（技能/连接器/插件，admin）
 registerAgentRoutes(router, { identify });                    // /api/agents — 设置「Agent」页：各 agent 的勾选 / 能跑 / 认证（admin，可远程）
-registerMeRoutes(router, { identify, getCookie, bearerToken }); // /api/me/{usage,password} — 用户自助：看自己的额度、改自己的密码
+registerMeRoutes(router, { identify, getCookie, bearerToken }); // /api/me/{usage,password,claude-credential} — 用户自助：看自己的额度、改自己的密码、填自己的 Claude 凭据
 registerUploadRoutes(router, { authOk, identify: identifySnap });   // /api/upload, /api/upload-chunk（快照身份可用）
 registerOverviewRoutes(router, { authOk, identify: identifySnap }); // /api/overview, /api/active, /api/attach (GET+POST), /api/stop, /api/status（快照身份可用）
 registerFileRoutes(router, { identify: identifySnap });       // /api/files (list), /api/file (stream)（快照身份可用：ctx.cwd 已锁死在自己的桶，ws= 参数要 shell 权限故进不来）

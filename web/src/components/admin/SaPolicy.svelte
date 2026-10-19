@@ -6,7 +6,7 @@
   import { sa, saToast } from '../../lib/serverAdmin.svelte.js';
   import { t, tc, tr } from '../../lib/i18n.js';
 
-  let p = $state(null);               // { register, quota:{...}, maxUserTurns, timezone }
+  let p = $state(null);               // { register, userOwnKey, quota:{...}, maxUserTurns, timezone }
   let regOpen = $state(false);
   let form = $state({ dayTurns: '', weekTurns: '', dayCostUsd: '', weekCostUsd: '', maxUserTurns: '', timezone: '' });
   let busy = $state(false);
@@ -32,6 +32,7 @@
     } catch (e) { saToast(tr(e?.body?.error || e?.message) || t('保存失败'), true); }
     busy = false;
   }
+  const toggleOwnKey = () => save({ userOwnKey: !p.userOwnKey }, p.userOwnKey ? t('已允许没填凭据的人用共用账号') : t('已要求注册用户用自己的凭据'));
   const toggleRegister = () => save({ register: !p.register }, p.register ? t('已关闭注册') : t('已开放邀请码注册'));
   function saveQuota() {
     save({
@@ -64,6 +65,20 @@
   <div class="sa-foot">{t('关掉之后，已经发出去还没用的邀请码也用不了；已有账号照常登录。')}</div>
 
   <div class="sa-card" style="margin-top:14px">
+    <div class="sa-card-h">{t('Claude 凭据')}</div>
+    <div class="sa-rows">
+      <div class="sa-row">
+        <span class="sa-row-tx">
+          <span>{t('注册用户必须用自己的凭据')}</span>
+          <small>{p.userOwnKey ? t('每个人要在「设置 → 账户 → Claude 凭据」填自己的订阅令牌或 API Key 才能和 Claude 对话，不占你的账号') : t('没填凭据的人用服务器共用的「Claude 账号」，花的是你的额度')}</small>
+        </span>
+        <button class="sa-sw" class:on={p.userOwnKey} disabled={busy} onclick={toggleOwnKey} aria-label={t('注册用户必须用自己的凭据')}><span class="sa-sw-knob"></span></button>
+      </div>
+    </div>
+  </div>
+  <div class="sa-foot">{t('填了自己凭据的人花的是自己的额度，下面的轮数和花费上限不管他们；「全服同时最多几轮」照样管，那是服务器的资源。')}</div>
+
+  <div class="sa-card" style="margin-top:14px">
     <div class="sa-card-h">{t('注册用户的默认额度')}</div>
     <div class="grid">
       {#each FIELDS as f (f.k)}
@@ -84,7 +99,7 @@
     <div class="acts"><button class="sa-btn pri" onclick={saveQuota} disabled={busy}>{t('保存')}</button></div>
   </div>
   <div class="sa-foot">
-    {t('留空或填 0 = 不限。额度只算 Claude（大家共用的是服务器上的 Claude 订阅），dimensio 不计；管理员不受限。')}
+    {t('留空或填 0 = 不限。额度只算用共用账号跑的 Claude，dimensio 不计；管理员和填了自己凭据的人不受限。')}
     {t('轮数在开跑时记（同时发几轮也绕不过去），花费按每轮结束时 Claude 报的金额记。某个人要多给或少给，到「用户」页他的「管理」里单独设。')}
   </div>
 {/if}

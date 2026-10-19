@@ -25,3 +25,8 @@ test('控制台账号里有令牌（环境变量里没有）：报「登录已�
   assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
   assert.equal(classifyError('OAuth access token has been revoked', 'authentication_failed').title, '登录已失效');
 });
+
+test('注册用户：按「自己的凭据 / 共用账号」给不同指引，不叫他去配服务端', () => {
+  assert.equal(classifyError('Invalid API key', 'authentication_failed', { user: true, ownCredential: true }).title, '你的 Claude 凭据不能用');
+  assert.equal(classifyError('401 Unauthorized', 'authentication_failed', { user: true, ownCredential: false }).title, '服务器共用的 Claude 账号不能用');
+});

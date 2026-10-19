@@ -178,4 +178,15 @@ export default {
   '定时任务运行中': 'Routines running',
   '中止 = 调用该用户活跃生成的 abort（等价于该用户自己点「停止」）。长跑媒体（Veo/Lyria）按秒计费、故意跑完不中断，不在此列。':
     '“Stop” calls abort on that user’s active generation (the same as the user stopping it themselves). Long-running media jobs (Veo/Lyria) are billed per second and deliberately left to finish, so they aren’t listed here.',
+  // —— 额度与注册 · Claude 凭据开关 ——
+  '注册用户必须用自己的凭据': 'Require users’ own credentials',
+  '已要求注册用户用自己的凭据': 'Users now need their own credentials',
+  '已允许没填凭据的人用共用账号': 'Users without credentials can use the shared account',
+  '每个人要在「设置 → 账户 → Claude 凭据」填自己的订阅令牌或 API Key 才能和 Claude 对话，不占你的账号':
+    'Each user must add their own subscription token or API key in Settings → Account → Claude credentials before chatting with Claude, so your account isn’t used.',
+  '没填凭据的人用服务器共用的「Claude 账号」，花的是你的额度': 'Users without their own credentials use the server’s shared Claude account, which uses your plan.',
+  '填了自己凭据的人花的是自己的额度，下面的轮数和花费上限不管他们；「全服同时最多几轮」照样管，那是服务器的资源。':
+    'Users with their own credentials use their own plan, so the turn and spending limits below don’t apply to them. The server-wide concurrent turn cap still does, since it protects server resources.',
+  '留空或填 0 = 不限。额度只算用共用账号跑的 Claude，dimensio 不计；管理员和填了自己凭据的人不受限。':
+    'Leave blank or enter 0 for no limit. Quotas only count Claude turns on the shared account, not dimensio. Admins and users with their own credentials aren’t limited.',
 };
