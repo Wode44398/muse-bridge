@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test, { afterEach } from "node:test";
-import { changedPathsSince, takeCheckpoint } from "./checkpoints.ts";
+import { changedPathsSince, rollbackTo, takeCheckpoint } from "./checkpoints.ts";
 import type { PersistedSession } from "./store.ts";
 
 const roots: string[] = [];
@@ -67,4 +67,62 @@ test("门禁视角跳过新克隆的嵌套仓库，真改的文件照旧算；�
 
   const all = await changedPathsSince(cp.tree, work);
   assert.deepEqual(all.sort(), ["app.ts", "strata-repo"]);
+});
+
+// 多人模式的租户：工作区是用户主目录，dimensio 数据在它下面的 .bridge/dimensio。以前影子仓库连自己（shadow.git 对象、
+// 检查点记录）带 bridge 的 Claude 会话一起拍进快照，门禁每轮都当成「改了代码」、空工作区里永远消不掉。
+test("数据目录在工作区里：不进快照、不算改动，回滚也不碰它们", async () => {
+  const work = temp("dimensio-cpchg-home-");
+  const sessions = path.join(work, ".bridge", "dimensio", "sessions");
+  process.env.SESSIONS_DIR = sessions;
+  fs.mkdirSync(path.join(work, ".bridge", "claude"), { recursive: true });
+  fs.writeFileSync(path.join(work, ".bridge", "claude", "a.jsonl"), "v0", "utf8");
+  const cp = await takeCheckpoint(record("s2", work), work, "turn start");
+  assert.ok(cp);
+
+  // 这一轮只闲聊：dimensio 写自己的东西、bridge 写 Claude 会话
+  fs.writeFileSync(path.join(sessions, "s2.json"), "{}", "utf8");
+  fs.writeFileSync(path.join(work, ".bridge", "claude", "a.jsonl"), "v1", "utf8");
+  await takeCheckpoint(record("s2", work), work, "turn 2");
+  assert.deepEqual(await changedPathsSince(cp.tree, work, { skipNestedRepos: true }), []);
+
+  // 真改一个文件再回滚：文件退回，数据原样
+  fs.writeFileSync(path.join(work, "app.ts"), "export {}", "utf8");
+  assert.deepEqual(await changedPathsSince(cp.tree, work), ["app.ts"]);
+  await rollbackTo("s2", cp.n, work);
+  assert.equal(fs.existsSync(path.join(work, "app.ts")), false);
+  assert.equal(fs.readFileSync(path.join(work, ".bridge", "claude", "a.jsonl"), "utf8"), "v1");
+  assert.ok(fs.existsSync(path.join(sessions, "shadow.git", "HEAD")));
+});
+
+test("数据目录不叫 .bridge 也按它在工作区里的位置排除", async () => {
+  const work = temp("dimensio-cpchg-nested-");
+  process.env.SESSIONS_DIR = path.join(work, "data", "sessions");
+  fs.writeFileSync(path.join(work, "notes.txt"), "v0", "utf8");
+  const cp = await takeCheckpoint(record("s3", work), work, "turn start");
+  assert.ok(cp);
+  await takeCheckpoint(record("s3", work), work, "turn 2");
+  assert.deepEqual(await changedPathsSince(cp.tree, work, { skipNestedRepos: true }), []);
+});
+
+test("旧版本拍进快照的数据目录不算改动", async () => {
+  const work = temp("dimensio-cpchg-legacy-");
+  const sessions = path.join(work, ".bridge", "dimensio", "sessions");
+  process.env.SESSIONS_DIR = sessions;
+  fs.mkdirSync(path.join(work, ".bridge", "claude"), { recursive: true });
+  fs.writeFileSync(path.join(work, ".bridge", "claude", "a.jsonl"), "v0", "utf8");
+  fs.writeFileSync(path.join(work, "notes.txt"), "v0", "utf8");
+  assert.ok(await takeCheckpoint(record("s4", work), work, "init")); // 建好影子仓库
+  // 模拟旧版本：强行把数据目录拍进一棵树
+  const env = { ...process.env, GIT_DIR: path.join(sessions, "shadow.git"), GIT_WORK_TREE: work, GIT_INDEX_FILE: path.join(work, "..", path.basename(work) + ".idx") };
+  const run = (...args: string[]) => {
+    const r = spawnSync("git", args, { cwd: work, env, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  run("add", "-f", "notes.txt", ".bridge/claude/a.jsonl");
+  const legacy = run("write-tree");
+  fs.rmSync(env.GIT_INDEX_FILE, { force: true });
+  assert.deepEqual(await changedPathsSince(legacy, work, { skipNestedRepos: true }), []);
+  assert.deepEqual(await changedPathsSince(legacy, work), []);
 });

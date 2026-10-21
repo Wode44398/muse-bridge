@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseSessionRecord, sessionsDir, saveSession, unsupportedVersionMessage, type PersistedSession } from "./store.ts";
 import { IGNORE_DIRS } from "./tools/walk.ts";
+import { knowledgeRoot, memoryRoot } from "./paths.ts";
 import { isSecretPath } from "./sandbox.ts";
 import { GIT_DIFF_NO_EXTERNAL, helperEnv, helperGitArgs } from "./helper-proc.ts";
 import { atomicWriteFile } from "./atomic-write.ts";
@@ -158,11 +159,45 @@ function enabled(): boolean {
   return process.env.CHECKPOINTS !== "off" && !gitBroken;
 }
 
+// ── 数据目录不是用户的文件 ──────────────────────────────────────────────────────
+// 多人模式的租户实例：工作区就是用户的主目录，dimensio 的数据（会话 = 影子仓库本身 + 检查点记录、记忆、项目知识）
+// 落在它下面的 .bridge/dimensio。以前它们被 `add -A` 一并拍进快照：dimensio 每写一次自己的东西，验证门禁就当成
+// 「改了代码」，空工作区里没有可跑的验证、警告永远消不掉，每轮都重新排查（实例：一个只闲聊过几轮的会话记了 662 个
+// 「改过的文件」，全是 shadow.git 对象和会话记录）；回滚到旧快照还会把这些数据退回旧版本、或把之后新写的删掉。
+// 现在：.bridge/（bridge 给每个用户放数据的目录，Claude 会话、上传也在里面）任何层级都不进快照；数据目录落在
+// 工作区里的，按它在这个工作区里的相对位置另行排除——两样都写进 info/exclude，变成「被忽略」，回滚的
+// clean 也不会删它们。旧快照里已经拍进去的，读出来时和凭据一样摘掉（sanitizeIndex），不写回、不算改动。
+const BRIDGE_DATA_SEG = ".bridge";
+
+// 数据目录在这个工作区里的相对位置（正斜杠）；不在里面的不算
+function dataDirsIn(work: string): string[] {
+  const out = new Set<string>();
+  for (const dir of [sessionsDir(), memoryRoot(), knowledgeRoot()]) {
+    const rel = path.relative(path.resolve(work), path.resolve(dir));
+    if (!rel || rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) continue;
+    out.add(rel.split(path.sep).join("/"));
+  }
+  return [...out];
+}
+
+// 工作区相对路径落在 dimensio / bridge 自己的数据里
+function isDataPath(rel: string, work: string): boolean {
+  const p = rel.replace(/\\/g, "/");
+  if (p.split("/").includes(BRIDGE_DATA_SEG)) return true;
+  return dataDirsIn(work).some((d) => p === d || p.startsWith(d + "/"));
+}
+
+// info/exclude 当前是按哪个工作区写的（数据目录的相对位置随工作区变）
+let excludesFor: string | null = null;
+
 // info/exclude 的唯一写入口：固定部分（安全 + 可再生目录）+ 动态部分（体积超限的
-// 单个文件，见 excludeOversized）。每次都整份重写，所以两边任何一边变了都能生效。
-async function writeExcludes(): Promise<void> {
+// 单个文件，见 excludeOversized；数据目录在这个工作区里的位置）。每次都整份重写，所以任何一边变了都能生效。
+// 影子仓库各工作区共用，所以每次拍快照 / 回滚前按当时的工作区重写（syncExcludes）。
+async function writeExcludes(work: string): Promise<void> {
   const lines = [
     ".git/",
+    `${BRIDGE_DATA_SEG}/`,
+    ...dataDirsIn(work).map((d) => `/${d}/`),
     ...[...IGNORE_DIRS].map((n) => `${n}/`),
     "*.egg-info/",
     // 下载来的 SDK / 模拟器镜像：动辄几个 G 且完全可再生。生产上正是
@@ -195,6 +230,11 @@ async function writeExcludes(): Promise<void> {
   ];
   await fs.mkdir(path.join(shadowDir(), "info"), { recursive: true });
   await fs.writeFile(path.join(shadowDir(), "info", "exclude"), lines.join("\n") + "\n", "utf8");
+  excludesFor = path.resolve(work);
+}
+
+async function syncExcludes(work: string): Promise<void> {
+  if (excludesFor !== path.resolve(work)) await writeExcludes(work);
 }
 
 async function ensureRepo(work: string): Promise<boolean> {
@@ -222,7 +262,7 @@ async function ensureRepo(work: string): Promise<boolean> {
     // Apply on every startup, not only initial creation: security exclusions
     // must reach shadow repos created by older versions too. Project .gitignore
     // rules apply on top, but credentials never depend on a project's hygiene.
-    await writeExcludes();
+    await writeExcludes(work);
     // 旧仓库的 config 里烙着建库那天的 core.worktree 绝对路径（体检时见过写着一个
     // 早已不存在的 `<旧目录>/workspace`）。本模块每条命令都显式
     // 传 --work-tree，所以运行时不受影响；但任何不带 --work-tree 的命令——包括我们自己
@@ -237,10 +277,13 @@ async function ensureRepo(work: string): Promise<boolean> {
   }
 }
 
+// 索引消毒：凭据，以及旧版本拍进去的数据目录（见 isDataPath），都不写回、不显示、不算改动
 async function removeSecretsFromIndex(work: string): Promise<void> {
   const staged = (await gitOrThrow(["ls-files", "-z"], work)).split("\0").filter(Boolean);
-  for (const secret of staged.filter(isSecretPath)) {
-    await gitOrThrow(["rm", "--cached", "--ignore-unmatch", "--", secret], work);
+  const drop = staged.filter((p) => isSecretPath(p) || isDataPath(p, work));
+  // 字面路径（不是 pathspec）；分批，免得 Windows 命令行超长——旧快照里的数据目录动辄几百个文件
+  for (let i = 0; i < drop.length; i += 100) {
+    await gitOrThrow(["--literal-pathspecs", "rm", "--cached", "-q", "--ignore-unmatch", "--", ...drop.slice(i, i + 100)], work);
   }
 }
 
@@ -295,7 +338,7 @@ async function excludeOversized(work: string): Promise<void> {
   for (const rel of found) known.add(rel);
   if (known.size !== before) {
     await atomicWriteFile(oversizedFile(), JSON.stringify([...known], null, 2));
-    await writeExcludes();
+    await writeExcludes(work);
     console.log(
       `[checkpoints] 超过 ${Math.round(cap / 1024 / 1024)}MB，不再纳入快照（也不会被回滚删除）：${found.join(", ")}`,
     );
@@ -303,6 +346,7 @@ async function excludeOversized(work: string): Promise<void> {
 }
 
 async function stageSafeWorkspace(work: string): Promise<void> {
+  await syncExcludes(work);
   await gitOrThrow(["read-tree", "--empty"], work);
   await gitOrThrow(["add", "-A"], work);
   await removeSecretsFromIndex(work);
@@ -464,6 +508,8 @@ export async function rollbackTo(
   await enqueue(async () => {
     // index := target tree; materialize it; then everything on disk that the
     // target doesn't know is untracked → clean removes it (gitignored survives).
+    // 数据目录必须先按这个工作区排除：它们靠「被忽略」才不被 clean 删掉
+    await syncExcludes(work);
     await gitOrThrow(["read-tree", entry.hash], work);
     // Old harness versions may have captured credentials. Never materialize
     // those entries during rollback; an existing ignored credential file is
@@ -718,7 +764,7 @@ export async function sessionChangeList(sessionId: string, work: string): Promis
 // 工作区相对路径（正斜杠）：不许绝对路径、不许 .. 越界、不碰凭据文件
 export function reviewablePath(rel: string): boolean {
   if (!rel || rel.includes("\0") || path.isAbsolute(rel) || /^[A-Za-z]:/.test(rel)) return false;
-  if (rel.split(/[\\/]/).some((seg) => seg === "..")) return false;
+  if (rel.split(/[\\/]/).some((seg) => seg === ".." || seg === BRIDGE_DATA_SEG)) return false;
   return !isSecretPath(rel);
 }
 
@@ -793,7 +839,7 @@ export async function changedPathsSince(tree: string, work: string, opts: { skip
       await stageSafeWorkspace(work);
       if (!opts.skipNestedRepos) {
         const out = await gitOrThrow(["diff-index", "--cached", "--name-only", "-z", "--no-renames", tree], work);
-        return out.split("\0").map((p) => p.trim()).filter(Boolean);
+        return out.split("\0").map((p) => p.trim()).filter((p) => p && !isDataPath(p, work));
       }
       // --raw -z：每条是 ":旧模式 新模式 旧sha 新sha 状态\0路径\0"
       const parts = (await gitOrThrow(["diff-index", "--cached", "--raw", "-z", "--no-renames", tree], work)).split("\0");
@@ -801,7 +847,8 @@ export async function changedPathsSince(tree: string, work: string, opts: { skip
       for (let k = 0; k + 1 < parts.length; k += 2) {
         const [oldMode, newMode] = parts[k].replace(/^:/, "").split(" ");
         const p = parts[k + 1].trim();
-        if (p && oldMode !== "160000" && newMode !== "160000") out.push(p);
+        // 旧版本拍进 tree 的数据目录：现在被排除了，diff 里显示成「删掉」，不是用户的改动
+        if (p && oldMode !== "160000" && newMode !== "160000" && !isDataPath(p, work)) out.push(p);
       }
       return out;
     });
