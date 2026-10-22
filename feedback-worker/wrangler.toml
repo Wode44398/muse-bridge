@@ -11,10 +11,18 @@ GITHUB_INSTALLATION_ID = "169122168"
 DAILY_CAP = "300"
 PER_INSTALL_DAILY = "10"
 PAUSED = "0"
+# claude-bridge 反馈收件箱（/v1/cb/*）：全局每天、每台装机每天的份数上限，全局每天的体积上限（MB），收件箱里没取走的保留几天。
+# 按 KV 免费档压的（整个账号每天 1000 次写入、存储 1GB，跟 Muse 共用）：收一份写 3 次 → 50 份占 150 次；
+# 汇总端停机一个月没人取，最多存 30MB × 30 天 ≈ 900MB。账号是 Workers Paid 的话可以放宽。
+CB_DAILY_CAP = "50"
+CB_PER_INSTALL_DAILY = "20"
+CB_DAILY_MB = "30"
+CB_TTL_DAYS = "30"
 
-# 限流计数、指纹 → Issue 编号、停收开关（cfg:paused）
+# 限流计数、指纹 → Issue 编号、停收开关（cfg:paused）、claude-bridge 收件箱（cbi:<id>）
 [[kv_namespaces]]
 binding = "FEEDBACK_KV"
 id = "a216ea47f1504dfdb6a8af034c24b717"
 
 # 私钥不在这里：npx wrangler secret put GITHUB_APP_PRIVATE_KEY < 私钥.pem
+# claude-bridge 收件令牌同样是 secret：npx wrangler secret put INBOX_TOKEN（不配 = /v1/cb/inbox* 一律 404、/v1/cb/report 回 503）

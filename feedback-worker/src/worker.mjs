@@ -9,6 +9,8 @@
 // 防滥用：每台装机每天、全局每天各有上限；PAUSED=1 或 KV 里 cfg:paused=1 一键停收（客户端会存着之后补发）。
 import { cleanReport } from '../../src/feedback/schema.mjs';
 import { issueTitle, issueBody, plusOneBody, issueLabels } from '../../src/feedback/render.mjs';
+// claude-bridge 反馈收件箱（/v1/cb/*，不进 GitHub、进 KV 私有收件箱）：见 cb.mjs
+import { createCbHandler } from './cb.mjs';
 
 const MAX_BODY = 64 * 1024;
 
@@ -46,6 +48,7 @@ export async function appJwt(appId, pem, nowSec) {
 
 export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = () => Date.now() } = {}) {
   let tokenCache = null;   // { token, exp }（同一个 isolate 里复用）
+  const handleCb = createCbHandler({ now, paused });
 
   async function installationToken(env) {
     if (tokenCache && tokenCache.exp - now() > 5 * 60_000) return tokenCache.token;
@@ -132,6 +135,7 @@ export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = ()
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/v1/health')) {
       return json(200, { ok: true, service: 'muse-bridge-feedback', paused: await paused(env) });
     }
+    if (url.pathname.startsWith('/v1/cb/')) return handleCb(req, env, url);
     if (url.pathname !== '/v1/report') return json(404, { error: 'not found' });
     if (req.method !== 'POST') return json(405, { error: 'method not allowed' });
     if (await paused(env)) return json(503, { error: 'paused' });
