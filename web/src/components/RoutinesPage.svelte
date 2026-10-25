@@ -60,6 +60,14 @@
   const lastText = (s) => (isEn() && s === 'ok' ? t('上次运行成功')
     : isEn() && s === 'error' ? t('上次运行失败')
     : t('上次{status}', { status: s }));
+  // 服务端停着 / 睡着时错过的那次（routines-runner 的 reconcile 记下 missedAt）：晚于上次运行才显示
+  const missedText = (r) => {
+    if (!r.missedAt || r.missedAt <= (r.lastRun || 0)) return '';
+    const d = new Date(r.missedAt), today = new Date();
+    const time = hm(d.getHours(), d.getMinutes());
+    const day = d.toDateString() === today.toDateString() ? '' : (d.getMonth() + 1) + '/' + d.getDate() + ' ';
+    return t('已错过 {time} 那次（服务端当时没在运行）', { time: day + time });
+  };
 
   let listErr = $state('');
   async function load() {
@@ -158,6 +166,7 @@
             <button class="rt-card-main" onclick={() => openEdit(r)}>
               <div class="rt-name">{r.name || t('未命名路由')}</div>
               <div class="rt-meta">{schedText(r.schedule)} · {engineText(r)}{running.includes(r.id) ? ' · ' + t('运行中…') : (r.lastStatus ? ' · ' + lastText(r.lastStatus) : '')}</div>
+              {#if !running.includes(r.id) && missedText(r)}<div class="rt-meta rt-missed">{missedText(r)}</div>{/if}
             </button>
             <button class="rt-icon" aria-label={t('立即运行')} disabled={running.includes(r.id)} onclick={() => runNow(r)}>
               <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
@@ -267,6 +276,7 @@
   .rt-card-main:active { background: var(--hover); }
   .rt-name { font-size: 15px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rt-meta { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .rt-missed { color: #c2410c; }
   .rt-icon { width: 32px; height: 32px; border-radius: 9px; color: var(--muted); flex: none; display: flex; align-items: center; justify-content: center; }
   .rt-icon:active { background: var(--hover); color: var(--text); } .rt-icon:disabled { opacity: .35; }
   .rt-icon svg { width: 16px; height: 16px; }

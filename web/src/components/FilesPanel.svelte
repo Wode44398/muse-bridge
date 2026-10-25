@@ -26,6 +26,7 @@
     AI_NAMES, SHARE_TTLS, filterAiSessions, filterFilesByName,
     formatShareExpiry, loadAiSessions, normalizeFileQuery, sendFileToAi,
     shareClipboardText, shareRequest, shareResult,
+    untitledMdName, withMdExt, COMPRESS_FORMATS, COMPRESS_LEVELS, loadCompressFormats, compressDefaultName, runCompress,
   } from '../lib/files-business.js';
 
   const BASE = import.meta.env.BASE_URL;
@@ -47,6 +48,9 @@
     readonly = false, guest = false, onExit = null, theme = '', workspaceRoot = '', rootName = '',
     // 管理员的位置切换条（独立工作空间页用）：[{ id, name, path }]，第一条恒为「工作空间」；onLocation(loc) 由宿主换根
     locations = null, locationId = 'ws', onLocation = null,
+    // hostChrome：宿主自带标题行 / 收起钮（工作台卡片的放大·关闭、手机 sheet 的 ⌄）——顶栏 ‹ 只管
+    // 「上一级」，到了最上层就不出；不再兼任「收起工作台」。
+    hostChrome = false,
     initialPath = null, initialOpen = '', previewHost = '',
     picker: wsPick = false, pickerLocations = [], pickerLocationId = '', onPickLocation = null,
     onPick: onPickWs = null, pickLabel = t('拖入选为工作空间'),
@@ -83,6 +87,8 @@
   let shareDlg = $state(null);     // 分享链接设置弹窗 { item, pwOn, password, ttl, busy, result }
   let addOpen = $state(false);     // + 菜单（上传/新建文件夹）
   let mkOpen = $state(null);       // 新建文件夹输入 { value }
+  let mdOpen = $state(null);       // 新建 Markdown 输入 { value }
+  let zipDlg = $state(null);       // 压缩选项 { rels, sub, name, format, level, formats, busy, note, gone }
 
   // —— picker 形态：拖拽选定 ——
   // pkDrag = 正在拖的那一份 { name, abs, x, y, over }（x/y 是 .ws-root 局部坐标，和长按菜单
@@ -110,8 +116,17 @@
   const segs = $derived(path ? path.split('/').filter(Boolean) : []);
   const rootLabel = $derived(readonly ? t('分享空间') : (tr(rootName) || t('工作空间')));   // rootName 出自服务端：显示点兜 tr()
   const title = $derived(segs.length ? segs[segs.length - 1] : rootLabel);
-  const folders = $derived(items.filter((i) => i.isDir));
-  const files = $derived(items.filter((i) => !i.isDir));
+  // —— 隐藏项（. 开头）——主目录、仓库根里大半是 .cache/.git 这类，默认收起，分组标题右侧一个开关放出来；
+  // 搜索时不收（找的就是它）。整个目录全是隐藏项时照常列出，不摆一屏空白。
+  const HID_KEY = 'bridge.files.showHidden';
+  let showHidden = $state((() => { try { return localStorage.getItem(HID_KEY) === '1'; } catch { return false; } })());
+  function toggleHidden() { showHidden = !showHidden; try { localStorage.setItem(HID_KEY, showHidden ? '1' : '0'); } catch {} }
+  const isHid = (it) => String(it?.name || '').startsWith('.');
+  const hidTotal = $derived(query ? 0 : items.filter(isHid).length);
+  const hidSwitch = $derived(hidTotal > 0 && hidTotal < items.length);   // 有隐藏项、也有普通项：才有「收起」这回事
+  const shownItems = $derived(hidSwitch && !showHidden ? items.filter((i) => !isHid(i)) : items);
+  const folders = $derived(shownItems.filter((i) => i.isDir));
+  const files = $derived(shownItems.filter((i) => !i.isDir));
   // 分享只读模式不出「最近」区：桶顶层就那几项，跟正文重复只添乱。
   const recents = $derived(
     !segs.length && !query && !readonly && !wsPick    // 选择器只挑文件夹，「最近」全是文件，纯噪音
@@ -193,6 +208,8 @@
     if (menu) { menu = null; return; }
     if (addOpen) { addOpen = false; return; }
     if (mkOpen) { mkOpen = null; return; }
+    if (mdOpen) { mdOpen = null; return; }
+    if (zipDlg) { closeZipDlg(); return; }
     if (shareDlg) { shareDlg = null; return; }
     if (renameTarget) { renameTarget = null; return; }
     if (transferOpen) { transferOpen = false; return; }
@@ -475,6 +492,7 @@
     else if (act === 'copy') openMovePicker([it.name], 'copy', it.parent ?? path);
     else if (act === 'download') download(itemRel(it));
     else if (act === 'extract') doExtract(it);
+    else if (act === 'compress') doCompress(it);
   }
 
   // 「解压」：服务端用本机的解压工具（bsdtar 等）解到同目录同名文件夹。
@@ -617,6 +635,61 @@
     catch (e) { toast(t('新建失败：{reason}', { reason: tr(e.body?.error || '') })); }
   }
   const rel = (name) => (path ? path + '/' + name : name);
+
+  // 新建 Markdown：起名（默认「未命名.md」，没写扩展名自动补 .md）→ 建空文件 → 直接打开编辑器开写
+  async function doNewMd() {
+    const raw = (mdOpen?.value || '').trim();
+    mdOpen = null;
+    if (!raw) return;
+    const name = withMdExt(raw);
+    try { await api.newFile(path, name, workspaceRoot); }
+    catch (e) {
+      const why = e.body?.error || e.body || e.message || '';
+      toast(why === 'exists' || e.status === 409 ? t('已有同名文件「{name}」', { name }) : t('新建失败：{reason}', { reason: tr(why) }));
+      return;
+    }
+    await load(path);
+    openDocPreview({ name, rel: rel(name) }, 'md', { startMode: 'live' });
+  }
+
+  // —— 压缩：选项对话框 → 服务端压缩（/api/files/compress，后台任务 + 轮询）——
+  const canZip = $derived(!readonly && !guest && !wsPick);
+  function doCompress(item) {
+    const dirName = path.split('/').filter(Boolean).pop() || rootLabel;
+    zipDlg = {
+      rels: [itemRel(item)], sub: item.name,
+      name: compressDefaultName([item], dirName), format: 'zip', level: 'normal',
+      formats: ['zip', '7z', 'tar.gz'], busy: false, note: '', gone: null,
+    };
+    loadCompressFormats(api).then((formats) => { if (zipDlg) zipDlg.formats = formats; });
+  }
+  async function runZipDlg() {
+    const d = zipDlg;
+    if (!d || d.busy || !d.name.trim()) return;
+    d.busy = true; d.note = t('正在压缩…');
+    const gone = { aborted: false };
+    d.gone = gone;
+    const dir = path;
+    try {
+      const r = await runCompress(api, d.rels, { format: d.format, level: d.level, name: d.name.trim() }, workspaceRoot, {
+        signal: gone,
+        onTick: (st) => { if (zipDlg === d) d.note = st.bytes ? t('正在压缩… 已写入 {size}', { size: fmtSize(st.bytes) }) : t('正在压缩…'); },
+      });
+      if (r.state === 'detached') return;   // 中途关了对话框：服务端照常压完，存档稍后出现在原文件夹
+      if (zipDlg === d) zipDlg = null;
+      toast(t('已压缩为「{name}」', { name: r.name }));
+      if (path === dir) await load(path);
+    } catch (e) {
+      if (zipDlg === d) { d.busy = false; d.note = ''; }
+      toast(t('压缩失败：{reason}', { reason: tr(e.body?.error || e.message || '') }));
+    }
+  }
+  function closeZipDlg() {
+    const d = zipDlg;
+    if (!d) return;
+    if (d.busy && d.gone) { d.gone.aborted = true; toast(t('压缩在后台继续，完成后出现在原文件夹')); }
+    zipDlg = null;
+  }
 
   // —— 移动到 / 复制到：目录选择器 sheet（浏览文件夹树选目标，走 /api/files）——
   let picker = $state(null);   // { mode:'move'|'copy', names:[源名], srcDir, path, items, loading }
@@ -761,9 +834,10 @@
   }
 
   // md/文本 → 沉浸式文档查看/编辑器（服务端 fetch）
-  function openDocPreview(item, k) {
+  // startMode：md 打开时的模式（新建的空笔记直接进编辑 'live'）
+  function openDocPreview(item, k, { startMode = '' } = {}) {
     const kind = k === 'md' ? 'markdown' : 'text';
-    openPreview([{ origin: 'cloud', rel: itemRel(item), name: item.name, kind, ws: workspaceRoot }], 0);
+    openPreview([{ origin: 'cloud', rel: itemRel(item), name: item.name, kind, ws: workspaceRoot, startMode }], 0);
   }
 
   // 图片 → openPreview：当前目录全部图片做画廊（服务端 URL，轻量，可左右滑/缩放）。
@@ -955,6 +1029,10 @@
   const thumbErr = (e) => e.currentTarget.classList.remove('ok');
 </script>
 
+{#snippet hidToggle()}
+  <button class="hid-tg" onclick={toggleHidden}>{showHidden ? t('收起隐藏项') : t('显示隐藏项')}<small>{hidTotal}</small></button>
+{/snippet}
+
 <div class="ws-root" class:wpick={wsPick} class:embedded={embeddedUi} class:th-light={theme === 'light'} class:th-dark={theme === 'dark'} bind:this={rootEl} ondragover={dragOverRoot} ondragleave={dragLeaveRoot} ondrop={onDropUpload} role="presentation">
   <!-- 从桌面拖文件/文件夹进来：整块提示；拖在某个文件夹格子上时改说传进那个文件夹 -->
   {#if dropOn !== null}
@@ -967,7 +1045,7 @@
   {/if}
   <!-- 顶部玻璃钮：返回 + 添加 + 传输环（分享只读=只留传输环当下载指示；根目录连返回键也不出——没有主页可回） -->
   <div class="topbtns">
-    {#if !readonly || segs.length}
+    {#if hostChrome ? (query || selecting || segs.length > 0) : (!readonly || segs.length)}
       <button class="gbtn" aria-label={t('返回')} onclick={back}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7" /></svg>
       </button>
@@ -1002,6 +1080,7 @@
     <div class="addmenu">
       <button class="mi" onclick={pickUpload}><span class="micon" style="color:#0088ff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M12 4 7 9M12 4l5 5" /><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" /></svg></span><span class="mlb">{t('上传文件')}</span></button>
       <button class="mi" onclick={() => { addOpen = false; mkOpen = { value: '' }; }}><span class="micon" style="color:#0088ff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /><path d="M12 11v5M9.5 13.5h5" /></svg></span><span class="mlb">{t('新建文件夹')}</span></button>
+      <button class="mi" onclick={() => { addOpen = false; mdOpen = { value: untitledMdName(items.map((x) => x.name)) }; }}><span class="micon" style="color:#0088ff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3.5H7.5A2.5 2.5 0 0 0 5 6v12a2.5 2.5 0 0 0 2.5 2.5h9A2.5 2.5 0 0 0 19 18V8.5z" /><path d="M14 3.5v5h5" /><path d="M9 16.5v-4l1.75 2 1.75-2v4M15 12.5v4M13.6 15.1l1.4 1.4 1.4-1.4" /></svg></span><span class="mlb">{t('新建 Markdown 文件')}</span></button>
     </div>
   {/if}
 
@@ -1072,7 +1151,7 @@
     {/if}
 
     {#if showFolders.length}
-      <div class="sechead"><h2>{tc('files', '文件夹')}</h2></div>
+      <div class="sechead" class:has-act={hidSwitch}><h2>{tc('files', '文件夹')}</h2>{#if hidSwitch}{@render hidToggle()}{/if}</div>
       <div class="foldergrid">
         {#each showFolders as f (f.rel || f.name)}
           <button class="folder" class:sel={selected.has(f.name)} class:dropin={dropOn === f.name || drag.overKey === 'ws-dir:' + itemRel(f)}
@@ -1091,7 +1170,7 @@
     {/if}
 
     {#if showFiles.length}
-      <div class="sechead"><h2>{tc('files', '文件')}</h2></div>
+      <div class="sechead" class:has-act={hidSwitch && !folders.length}><h2>{tc('files', '文件')}</h2>{#if hidSwitch && !folders.length}{@render hidToggle()}{/if}</div>
       <div class="filecard">
         {#each showFiles as f (f.rel || f.name)}
           <div class="frow" class:sel={selected.has(f.name)} class:wp-flat={wsPick} class:dnd-lift={liftRels.has(itemRel(f))} class:dnd-arm={armRel === itemRel(f)} role="button" tabindex="0"
@@ -1191,6 +1270,9 @@
       {/if}
       {#if !menu.item.isDir && kindOf(menu.item.name) === 'zip' && !readonly}
         <button class="mi" onclick={() => menuAct('extract')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5" /><path d="M7 7V5.5A1.5 1.5 0 0 1 8.5 4h7A1.5 1.5 0 0 1 17 5.5V7" /><path d="M12 11v5M12 16l-2.2-2.2M12 16l2.2-2.2" /></svg></span><span class="mlb">{t('解压')}</span></button>
+      {/if}
+      {#if canZip}
+        <button class="mi" onclick={() => menuAct('compress')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5" /><path d="M7 7V5.5A1.5 1.5 0 0 1 8.5 4h7A1.5 1.5 0 0 1 17 5.5V7" /><path d="M12 16v-5M12 11l-2.2 2.2M12 11l2.2 2.2" /></svg></span><span class="mlb">{t('压缩…')}</span></button>
       {/if}
       {#if !readonly}
         <button class="mi" onclick={() => menuAct('move')}><span class="micon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /></svg></span><span class="mlb">{t('移动到')}</span></button>
@@ -1314,6 +1396,45 @@
         <h3>{t('新建文件夹')}</h3>
         <input bind:value={mkOpen.value} placeholder={t('文件夹名称')} onkeydown={(e) => e.key === 'Enter' && doMkdir()} />
         <div class="dlg-btns"><button class="cancel" onclick={() => (mkOpen = null)}>{t('取消')}</button><button class="go" onclick={doMkdir}>{t('创建')}</button></div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- 新建 Markdown -->
+  {#if mdOpen}
+    <div class="dlg-mask" onclick={() => (mdOpen = null)} role="presentation">
+      <div class="dlg" onclick={(e) => e.stopPropagation()} role="presentation">
+        <h3>{t('新建 Markdown 文件')}</h3>
+        <input bind:value={mdOpen.value} placeholder={t('文件名')} onkeydown={(e) => e.key === 'Enter' && doNewMd()} autocapitalize="off" autocorrect="off" spellcheck="false" />
+        <div class="dlg-btns"><button class="cancel" onclick={() => (mdOpen = null)}>{t('取消')}</button><button class="go" onclick={doNewMd}>{t('创建')}</button></div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- 压缩：存档名 + 格式 + 级别；压缩中关掉对话框＝后台继续 -->
+  {#if zipDlg}
+    <div class="dlg-mask" onclick={closeZipDlg} role="presentation">
+      <div class="dlg zp" onclick={(e) => e.stopPropagation()} role="presentation">
+        <h3>{t('压缩')}</h3>
+        <p class="zp-sub">{zipDlg.sub}</p>
+        <div class="zp-name">
+          <input bind:value={zipDlg.name} placeholder={t('存档名称')} disabled={zipDlg.busy} onkeydown={(e) => e.key === 'Enter' && runZipDlg()} autocapitalize="off" autocorrect="off" spellcheck="false" />
+          <span class="zp-ext">{COMPRESS_FORMATS.find((f) => f.value === zipDlg.format)?.ext}</span>
+        </div>
+        <div class="zp-lb">{t('格式')}</div>
+        <div class="zp-seg" role="radiogroup" aria-label={t('格式')}>
+          {#each COMPRESS_FORMATS.filter((f) => zipDlg.formats.includes(f.value)) as f (f.value)}
+            <button role="radio" aria-checked={zipDlg.format === f.value} class:on={zipDlg.format === f.value} disabled={zipDlg.busy} onclick={() => (zipDlg.format = f.value)}>{f.label}</button>
+          {/each}
+        </div>
+        <div class="zp-lb">{t('压缩级别')}</div>
+        <div class="zp-seg" role="radiogroup" aria-label={t('压缩级别')}>
+          {#each COMPRESS_LEVELS as lv (lv.value)}
+            <button role="radio" aria-checked={zipDlg.level === lv.value} class:on={zipDlg.level === lv.value} disabled={zipDlg.busy} onclick={() => (zipDlg.level = lv.value)}>{tr(lv.lb)}</button>
+          {/each}
+        </div>
+        <p class="zp-foot">{zipDlg.note || t('存档放在同一个文件夹里，重名自动编号')}</p>
+        <div class="dlg-btns"><button class="cancel" onclick={closeZipDlg}>{zipDlg.busy ? t('后台继续') : t('取消')}</button><button class="go" disabled={zipDlg.busy || !zipDlg.name.trim()} onclick={runZipDlg}>{zipDlg.busy ? t('正在压缩…') : t('压缩')}</button></div>
       </div>
     </div>
   {/if}
@@ -1741,6 +1862,23 @@
   .dlg-btns button { flex: 1; height: 46px; border-radius: 23px; border: none; font: inherit; font-size: 16px; }
   .dlg-btns .cancel { background: var(--field); color: var(--label); }
   .dlg-btns .go { font-weight: 600; }
+  .dlg-btns .go:disabled { opacity: .45; }
+  /* 压缩对话框 */
+  .dlg.zp { max-width: 360px; }
+  .zp-sub { margin: 6px 0 0; font-size: 13px; color: var(--label2); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .zp-name { position: relative; }
+  .zp-name input { padding-right: 76px; }
+  .zp-ext { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font-size: 14px; color: var(--label2); pointer-events: none; }
+  .zp-lb { font-size: 13px; color: var(--label2); margin: 2px 2px 6px; }
+  .zp-seg { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .zp-seg button { flex: 1; min-width: 64px; height: 34px; border: none; border-radius: 17px; background: var(--field); color: var(--label); font: inherit; font-size: 14px; }
+  .zp-seg button.on { background: var(--label); color: var(--card); font-weight: 600; }
+  .zp-seg button:disabled { opacity: .5; }
+  .zp-foot { margin: 0 2px 14px; font-size: 12.5px; line-height: 1.45; color: var(--label2); }
+  /* 隐藏项开关（分组标题右侧） */
+  .sechead.has-act { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .hid-tg { border: none; background: none; padding: 0; font: inherit; font-size: 14px; color: var(--blue); display: inline-flex; align-items: baseline; gap: 5px; flex: none; }
+  .hid-tg small { font-size: 12px; color: var(--label2); font-variant-numeric: tabular-nums; }
   .dlg-btns .go:disabled { opacity: .55; }
 
   /* 分享链接弹窗 */

@@ -16,7 +16,16 @@
 //
 // 注意：这几行必须走 console.log（stdout），因为落盘靠的是启动器的 `>> server.out.log 2>&1`。
 
+import { loopSnapshot } from './loop-monitor.mjs';
+
 const BEAT_MS = 5 * 60_000;
+
+// 心跳顺带事件循环的状况（loop-monitor 装了才有）：「卡死后被看门狗重启」和「被瞬杀」也就此可分——
+// 前者最后几拍的 p99 / 卡顿次数会一路爬。p99 / 最大值是本个 5 分钟窗口的，卡顿次数与最久一次是这条命以来的。
+function loop() {
+  const s = loopSnapshot();
+  return s ? ` loop=p99 ${Math.round(s.p99)}ms/max ${Math.round(s.max)}ms 卡顿${s.stalls}次${s.stalls ? '(最久' + s.worst + 'ms)' : ''}` : '';
+}
 
 function localStamp(d = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
@@ -33,7 +42,7 @@ export function installLifeLog(name = 'bridge') {
   console.log(`[life/${name}] 起 pid=${process.pid} ${localStamp()} node=${process.version} ${mem()}`);
 
   const beat = setInterval(() => {
-    console.log(`[alive/${name}] ${localStamp()} pid=${process.pid} up=${Math.round(process.uptime())}s ${mem()}`);
+    console.log(`[alive/${name}] ${localStamp()} pid=${process.pid} up=${Math.round(process.uptime())}s ${mem()}${loop()}`);
   }, BEAT_MS);
   // unref：心跳不该成为进程退不出去的理由。
   if (beat.unref) beat.unref();

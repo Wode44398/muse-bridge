@@ -10,6 +10,7 @@
   import { caps, me, ui, applyMe, screenOn, rootScreen, applyFollowSys } from './lib/state.svelte.js';
   import { busStart, busStop, busOn } from './lib/bus.js';
   import { showToast } from './lib/toast.svelte.js';
+  import { handleUiCmd } from './lib/agentUi.js';
   import { reportUi } from './lib/uiReport.js';
   import { restoreOnBoot } from './lib/chat.svelte.js';
   import Home from './components/Home.svelte';
@@ -94,7 +95,11 @@
   $effect(() => {
     if (!ui.booted || me.kind === 'none') return;
     busStart();
-    const off = busOn((ev) => { if (ev.type === 'agents.changed' || ev.type === 'me.changed') refreshMe(); });
+    // ui.cmd：agent 经接口让用户的界面换页 / 打开会话 / 预览文件 / 弹提示（lib/agentUi.js）
+    const off = busOn((ev) => {
+      if (ev.type === 'agents.changed' || ev.type === 'me.changed') refreshMe();
+      else if (ev.type === 'ui.cmd') handleUiCmd(ev);
+    });
     return () => { off(); busStop(); };
   });
   $effect(() => {

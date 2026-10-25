@@ -17,6 +17,12 @@
   import ClaudeLogo from './ClaudeLogo.svelte';
   import WorkspaceChips from './WorkspaceChips.svelte';
   import RefusalBand from './claude/RefusalBand.svelte';
+  import PermissionCard from './claude/PermissionCard.svelte';   // 逐次工具审批卡（输入框上方停靠）
+  import QueueBar from './claude/QueueBar.svelte';
+  import PeerHoldBand from './claude/PeerHoldBand.svelte';
+  import LandingTexture from './claude/LandingTexture.svelte';
+  import SessionRail from './claude/SessionRail.svelte';
+  import CodeStatsCard from './claude/CodeStatsCard.svelte';
   import ClaudeDock from './dock/ClaudeDock.svelte';
   import MediaViewer from './preview/MediaViewer.svelte';
   import DragLayer from './DragLayer.svelte';
@@ -31,6 +37,7 @@
   import { titleFor } from '../lib/library.svelte.js';
   import { dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent } from '../lib/fileDrag.js';
   import { IS_PANE, SOLO_ID, PANE_MSG, isPaneMsg } from '../lib/solo.js';
+  import { isNewChatKey } from '../lib/quickChat.js';
   import { quoteSession } from '../lib/chatQuote.js';
   import { dockOverlayFor } from '../lib/claudeSplit.js';
   import { t, tc } from '../lib/i18n.js';
@@ -88,6 +95,20 @@
     }
   }
 
+  // 焦点在这一格里按 Ctrl+K（搜索会话）或新对话快捷键：侧栏、搜索面板和新对话的落点规则都在宿主那一页，转给它
+  // （编辑器先接住的不抢）
+  function onPaneKey(e) {
+    if (!IS_PANE || e.defaultPrevented) return;
+    if (isNewChatKey(e, { desktop: false })) {   // Muse 没有桌面壳：按网页版的新对话快捷键认
+      e.preventDefault();
+      toHost({ t: 'newchat' });
+      return;
+    }
+    if (e.altKey || !(e.ctrlKey || e.metaKey) || (e.key !== 'k' && e.key !== 'K')) return;
+    e.preventDefault();
+    toHost({ t: 'search' });
+  }
+
   // 主题跟着宿主 / 其它窗口走：别处一切换，localStorage 的 storage 事件就到这儿
   function onStorage(e) {
     if (e.key === 'bridge-theme' && e.newValue && e.newValue !== ui.theme) setTheme(e.newValue);
@@ -113,6 +134,7 @@
     const measure = () => {
       const wrapH = composerWrapEl.offsetHeight;
       scrollEl?.style.setProperty('--composer-h', wrapH + 'px');
+      scrollEl?.parentElement?.style.setProperty('--composer-h', wrapH + 'px');   // 会话信息面板（停靠形态）据此让出输入栏
       const cardTop = composerInnerEl ? wrapH - composerInnerEl.offsetTop : wrapH;
       scrollEl?.style.setProperty('--composer-card-top', cardTop + 'px');
       // 滚动条那一列让出来：wrap 的遮罩（芯片上缘渐隐罩、卡片下方垫底色）若横跨整宽，
@@ -155,6 +177,7 @@
   onMount(() => {
     window.addEventListener('message', onHostMsg);
     window.addEventListener('storage', onStorage);
+    window.addEventListener('keydown', onPaneKey);
     toHost({ t: 'ready' });
     (async () => {
       onReachabilityChange((down) => { ui.offline = down; });
@@ -166,7 +189,7 @@
       try { await openSession(SOLO_ID); } catch {}
       state = 'ready';
     })();
-    return () => { window.removeEventListener('message', onHostMsg); window.removeEventListener('storage', onStorage); };
+    return () => { window.removeEventListener('message', onHostMsg); window.removeEventListener('storage', onStorage); window.removeEventListener('keydown', onPaneKey); };
   });
 </script>
 
@@ -181,13 +204,23 @@
       ondragover={onWsDragOver} ondragleave={onWsDragLeave} ondrop={onWsDrop}>
       <div class="stage">
         {#if ui.view === 'greeting'}
+          <!-- 空态布局同 ClaudePage（官方 /code 落地页：问候 + 用量卡，输入框沉底、几何同聊天态） -->
           <main class="hero">
-            <div class="greeting">
-              <span class="logo"><ClaudeLogo anim="static" size={30} interactive /></span>
-              <h1>{me.user ? `Hey there, ${me.user}` : 'Hey there'}</h1>
+            <!-- 官方 Code 空态的字符风背景（LandingTextureLayer 移植），同 ClaudePage -->
+            <LandingTexture />
+            <div class="hero-scroll">
+              <div class="hero-col">
+                <div class="greeting">
+                  <span class="logo"><ClaudeLogo anim="static" size={24} interactive /></span>
+                  <h1>{me.user ? t('{name}，接下来做什么？', { name: me.user }) : t('接下来做什么？')}</h1>
+                </div>
+                <div class="hero-stats"><CodeStatsCard /></div>
+              </div>
             </div>
-            {#if showChips}<div class="hero-chips"><WorkspaceChips name={proj.name} /></div>{/if}
-            <div class="hero-composer"><Composer /></div>
+            <div class="hero-foot">
+              {#if showChips}<div class="hero-chips"><WorkspaceChips name={proj.name} /></div>{/if}
+              <div class="hero-composer"><Composer /></div>
+            </div>
           </main>
         {:else}
           <div class="scroll" bind:this={scrollEl} onscroll={onScroll}>
@@ -198,8 +231,12 @@
           <div class="composer-wrap" bind:this={composerWrapEl}>
             {#if showChips}<div class="chips-slot" class:foot={atBottom}><WorkspaceChips name={proj.name} /></div>{/if}
             <div class="band-slot"><RefusalBand sessionId={session.id} /></div>
+            <div class="band-slot"><PermissionCard sessionId={session.id} /></div>
+            <div class="band-slot"><QueueBar /></div>
+            <div class="band-slot"><PeerHoldBand /></div>
             <div class="composer-inner" bind:this={composerInnerEl}><Composer placeholder={tc('claude', '发消息…')} /></div>
           </div>
+          <SessionRail name={proj?.name || ''} path={dock.ws} />
         {/if}
       </div>
     </div>
@@ -221,11 +258,17 @@
   .main-col.dnd-on::after { content: ''; position: absolute; inset: 6px; border-radius: 16px; pointer-events: none;
     box-shadow: inset 0 0 0 2px var(--coral); background: color-mix(in srgb, var(--coral) 7%, transparent); z-index: 3; }
   .stage { flex: 1; position: relative; min-height: 0; display: flex; flex-direction: column; }
-  .hero { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; padding: calc(13vh + var(--sat, 0px)) 16px 24px; }
-  .greeting { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+  .hero { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  .hero > .hero-scroll, .hero > .hero-foot { position: relative; z-index: 1; }
+  .hero-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch;
+    padding: calc(clamp(60px, 11vh, 112px) + var(--sat, 0px)) 16px 24px; }
+  .hero-col { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; align-items: flex-start; gap: 24px; }
+  .greeting { display: flex; align-items: center; gap: 8px; }
   .logo { display: inline-flex; flex: none; }
-  .greeting h1 { font-family: var(--serif-stack); font-weight: 290; font-size: 27px; line-height: 1.12; color: var(--serif); text-align: center; }
-  .hero-composer, .hero-chips { width: 100%; max-width: 760px; }
+  .greeting h1 { font-family: var(--sans); font-weight: 400; font-size: 22px; line-height: 28px; color: var(--text); margin: 0; }
+  .hero-stats { width: 100%; max-width: 480px; background: var(--bg); border-radius: 8px; }   /* 卡片自身是 5% 半透明底：垫一层页面底色，背后的字符风不透上来（观感与原来一样） */
+  .hero-foot { flex: none; padding: 6px 8px max(10px, var(--sab, 0px)); }
+  .hero-composer, .hero-chips { max-width: 760px; margin: 0 auto; }
 
   /* 滚动区 + 首尾渐隐带 + 悬浮输入卡：规格同 ClaudePage（注释见那边） */
   .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: calc(var(--composer-h, 84px) + 8px);
@@ -238,10 +281,7 @@
       color-mix(in srgb, var(--scroll-fade-color) 15%, transparent) calc(var(--sf-lead) + (100% - var(--sf-lead)) * .70),
       transparent); }
   .scroll > .scroll-fade-strip-bottom { --scroll-fade-size: var(--sf-bottom); bottom: calc(var(--composer-card-top, var(--composer-h, 84px)) - var(--composer-h, 84px) - 10px); }
-  .scroll::-webkit-scrollbar { width: 6px; }
-  .scroll::-webkit-scrollbar-track { background: transparent; }
-  .scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 38%, transparent); border-radius: 999px; }
-  @media (hover: hover) { .scroll::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--muted) 62%, transparent); } }
+  :global(html[data-wco="1"]) .scroll::-webkit-scrollbar-thumb { border-style: solid; border-color: transparent; border-width: 0 7px 0 1px; background-clip: padding-box; }
   .composer-wrap { position: absolute; left: 0; right: var(--sb-w, 0px); bottom: 0; z-index: 5;
     padding: 6px 8px max(10px, var(--sab, 0px)); background: transparent; pointer-events: none; }
   .composer-wrap::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0;

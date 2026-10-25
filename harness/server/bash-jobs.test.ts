@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { bashTool, killJobsFor, listJobs, stopJob } from "./tools/bash.ts";
+import { bashTool, finishedJobsSummary, killJobsFor, listJobs, stopJob } from "./tools/bash.ts";
 import { Sandbox } from "./sandbox.ts";
 import type { ToolContext, ToolRunResult } from "./tools/types.ts";
 
@@ -109,6 +109,38 @@ test("U11 列表里的命令与尾行先脱敏", async () => {
     assert.ok(!text(await bashTool.run({ jobs: true }, a)).includes(FAKE_TOKEN));
   } finally {
     killJobsFor("u11-redact-A");
+    cleanup(root);
+  }
+});
+
+// 修前：World State 的「已结束 job」把会话里结束过的 job 全列一遍，模型已经 poll 到结果、自己 kill 掉的也每次跟着新结束的一起重报。
+test("World State 只报模型还没见到结局的 job：poll / wait 到结束、自己 kill 的不再列", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "dimensio-jobs-news-"));
+  const owner = "jobs-news-A";
+  const a = ctxFor(owner, root);
+  try {
+    const instant = await bashTool.run({ command: "exit 0", background: true }, a);
+    assert.match(text(instant), /exited immediately/);
+    assert.equal(finishedJobsSummary(owner), "", "宽限期里就结束、起 job 的结果已经报了：不再报");
+
+    const DELAYED = process.platform === "win32" ? "ping -n 3 127.0.0.1 > NUL" : "sleep 2";
+    const first = /job\d+(?:-[a-z0-9]+)?/.exec(text(await bashTool.run({ command: DELAYED, background: true }, a)))![0];
+    const deadline = Date.now() + 8_000;
+    while (!finishedJobsSummary(owner).includes(first) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    assert.match(finishedJobsSummary(owner), new RegExp(`${first} \\(exit 0\\)`), "结束了还没看过：报");
+    await bashTool.run({ poll: first }, a);
+    assert.equal(finishedJobsSummary(owner), "", "poll 到了结局：不再报");
+
+    const long = /job\d+(?:-[a-z0-9]+)?/.exec(text(await bashTool.run({ command: SLEEP, background: true }, a)))![0];
+    await bashTool.run({ poll: long }, a);
+    await bashTool.run({ kill: long }, a);
+    assert.equal(finishedJobsSummary(owner), "", "自己 kill 的：不报");
+
+    const second = /job\d+(?:-[a-z0-9]+)?/.exec(text(await bashTool.run({ command: DELAYED, background: true }, a)))![0];
+    await bashTool.run({ wait: second, timeout: 5_000 }, a);
+    assert.equal(finishedJobsSummary(owner), "", "wait 到结束：不报");
+  } finally {
+    killJobsFor(owner);
     cleanup(root);
   }
 });

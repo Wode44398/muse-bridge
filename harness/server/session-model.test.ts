@@ -42,12 +42,16 @@ test("空闲时换型号：当场按新型号重建（对话保留、身份句�
   watchSession(session, (ev) => events.push(ev));
 
   const r = setSessionModel(session, { model: "deepseek-v4-pro" });
-  assert.deepEqual(r, { ok: true, model: "deepseek-v4-pro", thinking: "off" }, "V4 Pro 没有 low 档，收到不高于它的 off");
+  assert.deepEqual(r, { ok: true, provider: "openai", model: "deepseek-v4-pro", thinking: "off" }, "V4 Pro 没有 low 档，收到不高于它的 off");
   const state = session.state!;
   assert.notEqual(state, before, "状态按新型号重建");
   assert.equal(state.adapter.model, "deepseek-v4-pro", "下一次请求就发给新型号");
   assert.equal(state.budget.thinking, "off");
-  assert.equal(state.messages.length, messages, "对话一条不少");
+  assert.equal(state.messages.length, messages + 1, "对话一条不少，末尾多一条换模型说明");
+  const note = state.messages.at(-1)!;
+  assert.equal(note.kind, "model-switch");
+  assert.equal(note.internal, true, "界面不显示");
+  assert.match((note.content[0] as any).text, /from the "deepseek-flash" model \(openai provider\).*you are the "deepseek-v4-pro" model/s);
   assert.ok(state.ctx.readFileState.has("/tmp/x.txt"), "读过的文件照旧算读过");
   assert.match(state.system, /You are running as the "deepseek-v4-pro" model/, "问它是什么模型要答对");
   assert.doesNotMatch(state.system, /"deepseek-flash" model/);
@@ -70,14 +74,16 @@ test("同值 = 幂等（不重建、不广播）；只换深度也生效；别�
   watchSession(session, (ev) => events.push(ev));
   const before = session.state!;
 
-  assert.deepEqual(setSessionModel(session, { model: "deepseek-flash" }), { ok: true, model: "deepseek-flash", thinking: "low" });
+  assert.deepEqual(setSessionModel(session, { model: "deepseek-flash" }), { ok: true, provider: "openai", model: "deepseek-flash", thinking: "low" });
   assert.equal(session.state, before);
   assert.equal(events.filter((e) => e.e === "model").length, 0);
 
-  assert.deepEqual(setSessionModel(session, { thinking: "max" }), { ok: true, model: "deepseek-flash", thinking: "max" });
+  assert.deepEqual(setSessionModel(session, { thinking: "max" }), { ok: true, provider: "openai", model: "deepseek-flash", thinking: "max" });
   assert.equal(session.state!.budget.thinking, "max");
 
-  assert.equal(setSessionModel(session, { model: "glm-5.2" }).ok, false, "换家 = 开新对话，不在会话里换");
+  assert.equal(setSessionModel(session, { model: "glm-5.2" }).ok, false, "不点名 provider 时型号必须是本家的");
+  assert.equal(setSessionModel(session, { provider: "no-such-vendor" }).ok, false);
+  assert.equal(setSessionModel(session, { provider: 7 }).ok, false);
   assert.equal(setSessionModel(session, { model: 42 }).ok, false);
   assert.deepEqual(setSessionModel(session, { thinking: "ultra" }), { ok: false, error: "invalid thinking level" });
   assert.equal(session.cfg?.model, "deepseek-flash");
@@ -103,7 +109,7 @@ test("用户自己加的服务（custom-…）：会话里在它的型号之间�
   session.state!.adapter = scripted(t).next(say("你好！"));
   await run.done;
 
-  assert.deepEqual(setSessionModel(session, { model: "my-chat-70b" }), { ok: true, model: "my-chat-70b", thinking: "off" });
+  assert.deepEqual(setSessionModel(session, { model: "my-chat-70b" }), { ok: true, provider: provider.id, model: "my-chat-70b", thinking: "off" });
   assert.equal(session.state!.adapter.model, "my-chat-70b");
   assert.equal(session.state!.adapter.id, provider.id);
   assert.match(session.state!.system, new RegExp(`"my-chat-70b" model, served via the ${provider.id} provider`));
@@ -111,12 +117,58 @@ test("用户自己加的服务（custom-…）：会话里在它的型号之间�
   await removeCustomProvider(provider.id);
 });
 
+test("会话里换厂商：不开新对话，当场换到那家的默认型号，对话、读过的文件照旧，身份句跟着换", async (t) => {
+  // 目标那家要有 key（设置页同一条路填；加密存储换成内存）
+  let store: Record<string, unknown> = {};
+  setCustomSecretsForTests({ readSecrets: () => store as any, writeSecrets: (_root, map) => { store = JSON.parse(JSON.stringify(map)); } });
+  t.after(() => setCustomSecretsForTests(null));
+  setConfig({ provider: "zhipu", apiKey: "DUMMY-session-provider-key" });
+  const session = await startedSession(t);
+  const before = session.state!;
+  const messages = before.messages.length;
+  before.ctx.readFileState.set("/tmp/y.txt", { mtimeMs: 1, size: 1 } as any);
+  const events: any[] = [];
+  watchSession(session, (ev) => events.push(ev));
+
+  const r = setSessionModel(session, { provider: "zhipu" });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.provider, "zhipu");
+  const state = session.state!;
+  assert.notEqual(state, before);
+  assert.equal(state.adapter.id, "zhipu");
+  assert.equal(state.adapter.model, r.model);
+  assert.equal(session.cfg?.provider, "zhipu");
+  assert.equal(session.cfg?.model, r.model);
+  assert.match(session.cfg?.baseUrl ?? "", /bigmodel|z\.ai/, "地址跟着换到那一家");
+  assert.equal(state.messages.length, messages + 1, "对话一条不少，末尾多一条换模型说明");
+  assert.ok(state.ctx.readFileState.has("/tmp/y.txt"));
+  assert.match(state.system, new RegExp(`"${r.model}" model, served via the zhipu provider`));
+  assert.ok(events.some((e) => e.e === "model" && e.provider === "zhipu" && e.model === r.model));
+  assert.equal(getConfig().provider, "openai", "会话级：不改全局");
+
+  // 点名型号换家；再换回来接着跑
+  const back = setSessionModel(session, { provider: "openai", model: "deepseek-flash", thinking: "high" });
+  assert.deepEqual(back, { ok: true, provider: "openai", model: "deepseek-flash", thinking: "high" });
+  assert.equal(session.state!.adapter.model, "deepseek-flash");
+  assert.equal(session.state!.messages.length, messages, "换走又换回、中间没发消息 = 没换：说明撤掉，不堆");
+  assert.equal(setSessionModel(session, { provider: "zhipu" }).ok, true);
+  assert.equal(setSessionModel(session, { provider: "zhipu", model: "glm-5" }).ok, true);
+  assert.equal(session.state!.messages.filter((m) => m.kind === "model-switch").length, 1, "连换几次只留一条");
+  assert.match((session.state!.messages.at(-1)!.content[0] as any).text, /from the "deepseek-flash" model.*you are the "glm-5" model/s);
+  assert.equal(setSessionModel(session, { provider: "openai", model: "deepseek-flash", thinking: "high" }).ok, true);
+  const run = startRun(session, "接着来");
+  session.state!.adapter = scripted(t).next(say("好"));
+  await run.done;
+  assert.ok(session.state!.messages.length > messages);
+  dropSession(session.id);
+});
+
 test("运行中换型号：这一轮不受影响，回 pending；下一轮开跑前按新型号重建", async (t) => {
   const session = await startedSession(t);
   const before = session.state!;
   session.running = true; // 正在跑的那一轮（只看分支，不真跑）
   const r = setSessionModel(session, { model: "deepseek-v4-pro" });
-  assert.deepEqual(r, { ok: true, model: "deepseek-v4-pro", thinking: "off", pending: true });
+  assert.deepEqual(r, { ok: true, provider: "openai", model: "deepseek-v4-pro", thinking: "off", pending: true });
   assert.equal(session.state, before, "跑着的这一轮不换状态");
   assert.equal(before.adapter.model, "fake");
   session.running = false;

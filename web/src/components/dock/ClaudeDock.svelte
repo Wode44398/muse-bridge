@@ -191,10 +191,11 @@
     if (ft) { filesMount = { key: 't' + ft.seq, ws: ft.ws || '', rel: ft.rel || '', open: ft.open || '' }; return; }
     // 工作空间在身份文件根之外（admin 常见：项目不在 vault 里）：以工作空间本身为根挂载，
     // 别再摆一句「打不开」——附件卡走的就是这条 ws 作用域，两边得一致。
-    // （电脑形态 FilesDesktop 把 ws 当起点：落进含它的位置，左侧照样是全盘位置栏。）
+    // （两种形态都把 ws 当起点：落进含它的位置——FilesDesktop 左侧全盘位置栏、FilesPanel 根部「位置」行。
+    // key 带上 ws：换到另一个库外会话要重挂，起点只在挂载时落一次。）
     // 无 shell 的身份拿不到 ws 作用域（/api/files?ws= 一律 403），维持原来的说明文案。
     if (dock.meta.rel == null) {
-      filesMount = dock.ws && !snapMode && dock.meta.shell !== false ? { key: 'wsroot', ws: dock.ws, rel: '' } : null;
+      filesMount = dock.ws && !snapMode && dock.meta.shell !== false ? { key: 'wsroot:' + dock.ws, ws: dock.ws, rel: '' } : null;
       return;
     }
     ui.filesPath = dock.meta.rel;
@@ -208,12 +209,30 @@
     if (!filesMount) return;
     return () => { if (preview.open && preview.host === 'dock') closePreview(); };
   });
-  // 文件卡的工作空间页【真的挂上了】——它自带工具栏（‹ 就是收起这张卡），卡片标题行让位，
-  // 两条头叠在一起纯属重复。加载中 / 根外提示那两种占位态没有自己的头，仍要标题行兜住关闭。
-  const filesFull = $derived(!!filesMount);
+  // 文件卡和其它卡一样恒带标题行（放大 / 关闭）：从前工作空间页挂上后标题行让位、收起靠页面自己的 ‹，
+  // 只有这一张卡长得不一样、不好上手。现在页面的 ‹ / ↑ 只管上一级（WorkspaceEmbed 传 hostChrome）。
   const exitFiles = () => (wide ? closeDockView('files') : closeDock());
 
   let sheetHandle = $state();
+  let sheetScrim = $state();
+  // 选中的 chip 恒在可视区里（窄屏「文件」排在最末，会落进右缘渐隐带）：横向滚到刚好露全
+  // （转屏 / 折叠屏开合改了条宽也重算一次）
+  let chipsEl = $state();
+  function chipIntoView() {
+    const box = chipsEl, on = box?.querySelector('.chip.on');
+    if (!box || !on) return;
+    const pad = 22, l = on.offsetLeft - box.offsetLeft, r = l + on.offsetWidth;
+    if (r > box.scrollLeft + box.clientWidth - pad) box.scrollLeft = r - box.clientWidth + pad;
+    else if (l < box.scrollLeft + 6) box.scrollLeft = Math.max(0, l - 10);
+  }
+  $effect(() => { mView; untrack(chipIntoView); });
+  $effect(() => {
+    const box = chipsEl;
+    if (!box) return;
+    const ro = new ResizeObserver(() => chipIntoView());
+    ro.observe(box);
+    return () => ro.disconnect();
+  });
   // 手机 sheet 里正开着文件预览：进「阅读形态」——sheet 升到顶（只让出状态栏）、chip 条收起、
   // 预览头收成 44px。这时要的是看文件，工具切换点返回退出预览就回来了。
   const sheetPv = $derived(!wide && preview.open && preview.host === 'dock');
@@ -238,6 +257,8 @@
               <MediaViewer host="dock" />
             </div>
           {/key}
+        {:else if dock.meta?.gone}
+          <div class="dk-wait">{t('该工作空间的文件夹已不存在（可能被移动或删除）')}</div>
         {:else if dock.meta && dock.meta.rel == null}
           <div class="dk-wait">{t('该工作空间在云端文件区之外，无法在侧栏打开工作空间页')}</div>
         {:else}
@@ -258,13 +279,11 @@
   <div class="dk-cards">
     {#each cards as c (c.v)}
       <section class="dk-card" class:hid={!c.box} style={c.box} aria-label={TITLES[c.v]}>
-        {#if !(c.v === 'files' && filesFull)}
-          <header class="dk-card-head">
-            <span class="dk-card-t">{TITLES[c.v]}</span>
-            <button class="dk-cbtn" aria-label={maxed === c.v ? t('还原') : t('放大')} title={maxed === c.v ? t('还原') : t('放大铺满')} onclick={() => toggleDockMax(c.v)}>{@html dockIcon(maxed === c.v ? 'shrink' : 'expand')}</button>
-            <button class="dk-cbtn" aria-label={CLOSE_LABEL[c.v]} title={t('关闭')} onclick={() => closeDockView(c.v)}>{@html dockIcon('close')}</button>
-          </header>
-        {/if}
+        <header class="dk-card-head">
+          <span class="dk-card-t">{TITLES[c.v]}</span>
+          <button class="dk-cbtn" aria-label={maxed === c.v ? t('还原') : t('放大')} title={maxed === c.v ? t('还原') : t('放大铺满')} onclick={() => toggleDockMax(c.v)}>{@html dockIcon(maxed === c.v ? 'shrink' : 'expand')}</button>
+          <button class="dk-cbtn" aria-label={CLOSE_LABEL[c.v]} title={t('关闭')} onclick={() => closeDockView(c.v)}>{@html dockIcon('close')}</button>
+        </header>
         {@render panelBody(c.v)}
       </section>
     {/each}
@@ -273,18 +292,22 @@
 {:else}
 <!-- 移动端：底部 sheet（dimensio 手机端同款交互）——scrim 点击关、把手下拉关、chip 直切工具 -->
 <div class="sheetwrap">
-  <button class="sheet-scrim" aria-label={t('关闭工作台')} onclick={closeDock}></button>
-  <div class="dock sheet" class:pv={sheetPv} use:dragSheet={{ onClose: closeDock, handle: () => sheetHandle ?? null }}>
+  <button class="sheet-scrim" bind:this={sheetScrim} aria-label={t('关闭工作台')} onclick={closeDock}></button>
+  <div class="dock sheet" class:pv={sheetPv} use:dragSheet={{ onClose: closeDock, handle: () => sheetHandle ?? null, scrim: () => sheetScrim ?? null }}>
     <div class="grip-zone" bind:this={sheetHandle}>
       <span class="grip"></span>
-      <div class="dk-chips">
-        {#each MENU as m (m.key)}
-          <button class="chip" class:on={mView === m.key} onclick={() => pickTool(m.key)}>
-            <span class="chip-ic">{@html dockIcon(m.key)}</span>
-            {m.label}
-            {#if (m.key === 'term' && dock.termLive && mView !== 'term') || (m.key === 'tasks' && bgLive && mView !== 'tasks')}<span class="dk-live"></span>{/if}
-          </button>
-        {/each}
+      <!-- 收起钮钉在右上角、不随 chip 横滑：窄屏五个 chip 放不下时它曾被挤出屏外，
+           哪个工具（包括文件）的收起都在同一个固定位置 -->
+      <div class="dk-chiprow">
+        <div class="dk-chips" bind:this={chipsEl}>
+          {#each MENU as m (m.key)}
+            <button class="chip" class:on={mView === m.key} onclick={() => pickTool(m.key)}>
+              <span class="chip-ic">{@html dockIcon(m.key)}</span>
+              {m.label}
+              {#if (m.key === 'term' && dock.termLive && mView !== 'term') || (m.key === 'tasks' && bgLive && mView !== 'tasks')}<span class="dk-live"></span>{/if}
+            </button>
+          {/each}
+        </div>
         <button class="chip-fold" aria-label={t('收起工作台')} onclick={closeDock}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 10l6 6 6-6"/></svg>
         </button>
@@ -378,13 +401,16 @@
   .dock.sheet > * { --sat: 0px; --sab: 0px; }
   /* 阅读形态（sheet 内开着预览）：升到顶、chip 条收起、预览头压扁（变量由各查看器头读） */
   .dock.sheet.pv { height: calc(100dvh - var(--sat) - 6px); --pv-pad-y: 4px; --pv-bar-h: 44px; }
-  .dock.sheet.pv .dk-chips { display: none; }
+  .dock.sheet.pv .dk-chiprow { display: none; }
   .grip-zone { flex: none; touch-action: none; }
   .grip { display: block; width: 38px; height: 4.5px; border-radius: 3px; background: var(--divider); margin: 8px auto 2px; }
   .dock.sheet.pv .grip { margin: 6px auto 5px; }
 
   /* 工具切换条：chip 直切（移动端没有菜单层级） */
-  .dk-chips { display: flex; align-items: center; gap: 5px; padding: 6px 10px 8px; overflow-x: auto; scrollbar-width: none; }
+  .dk-chiprow { display: flex; align-items: center; padding: 6px 8px 8px 0; }
+  /* 右缘渐隐：被截住的 chip 一看就知道还能横滑 */
+  .dk-chips { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; padding: 0 14px 0 10px; overflow-x: auto; scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent); }
   .dk-chips::-webkit-scrollbar { display: none; }
   .chip { flex: none; display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 13px; border-radius: 11px;
     color: var(--muted); font-size: 13px; transition: background-color .14s ease, color .14s ease; }
@@ -392,7 +418,7 @@
   .chip.on { background: var(--card); color: var(--text); box-shadow: var(--card-shadow); }
   .chip-ic { width: 16px; height: 16px; display: flex; flex: none; }
   .chip-ic :global(svg) { width: 100%; height: 100%; }
-  .chip-fold { margin-left: auto; width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; color: var(--muted); flex: none; }
+  .chip-fold { margin-left: 2px; width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; color: var(--muted); flex: none; }
   .chip-fold svg { width: 17px; height: 17px; }
   .chip-fold:active { background: var(--hover); }
 </style>

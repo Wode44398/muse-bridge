@@ -8,14 +8,29 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { outboundHint } from './net-proxy.mjs';
-import { activeToken } from './claude-account.mjs';
+import { activeToken, activeAccountId } from './claude-account.mjs';
 
 let _statusPath = '';
-// Rate limits are account-wide (everyone shares one upstream Claude subscription),
-// so they live on this shared snapshot. Context fill is PER-CONVERSATION, so it is
-// kept per caller key (admin / u:<name>) in `contexts` and never served to others.
+// Rate limits are per SUBSCRIPTION ACCOUNT (everyone shares the bridge's account pool),
+// kept per account id in `byAccount`; `statusState` is a live view of the ACTIVE
+// account's slot. 号池下各号的桶必须分开记：以前混在一份快照里，A 号周限 100% 被拒后
+// 切到 B 号，弹层仍显示 A 号的 100%（usage-probe 还一直拿 A 号 token 刷）。
+// Context fill is PER-CONVERSATION, so it is kept per caller key (admin / u:<name>)
+// in `contexts` and never served to others.
 // plan：套餐名（SDK usage 的 subscription_type → "Max"/"Pro"…；OAuth token 路径下服务端常不给，留 null）。
-export let statusState = { limits: {}, updatedAt: 0, plan: null };
+const byAccount = {}; // accountId -> { limits, updatedAt, plan }
+function slot(acct) {
+  const id = acct || activeAccountId() || '_';
+  return byAccount[id] || (byAccount[id] = { limits: {}, updatedAt: 0, plan: null });
+}
+export const statusState = {
+  get limits() { return slot().limits; },
+  get updatedAt() { return slot().updatedAt; },
+  get plan() { return slot().plan; },
+};
+// 指定账号的额度桶快照（智能路由判断「这个号还能不能用」）；没记录过 = 空对象。
+export function accountLimits(acct) { return (byAccount[acct] && byAccount[acct].limits) || {}; }
+export function accountPlan(acct) { return (byAccount[acct] && byAccount[acct].plan) || null; }
 const contexts = new Map(); // caller key -> { used, total, pct, sessionId }
 let lastRejection = null; // { type, resetsAt } — most recent hard rejection
 let statusSaveTimer = null;
@@ -26,7 +41,10 @@ export function initStatus(root) {
   try {
     const s = JSON.parse(readFileSync(_statusPath, 'utf8'));
     if (s && typeof s === 'object') {
-      statusState = { limits: s.limits || {}, updatedAt: s.updatedAt || 0, plan: s.plan || null };
+      // 旧版顶层 limits 是各号混记的，分不清归属——直接丢，下一轮额度事件按号重新填。
+      for (const [id, v] of Object.entries(s.accounts && typeof s.accounts === 'object' ? s.accounts : {})) {
+        if (v && typeof v === 'object') byAccount[id] = { limits: v.limits || {}, updatedAt: v.updatedAt || 0, plan: v.plan || null };
+      }
       // contexts persisted as a key->ctx map; tolerate the legacy single `context` (admin's).
       const saved = (s.contexts && typeof s.contexts === 'object') ? s.contexts : (s.context ? { admin: s.context } : {});
       // Drop any persisted fill where used exceeds the window — an impossible value left by
@@ -40,7 +58,7 @@ export function initStatus(root) {
 function persistStatus() {
   clearTimeout(statusSaveTimer);
   statusSaveTimer = setTimeout(() => {
-    try { writeFileSync(_statusPath, JSON.stringify({ limits: statusState.limits, updatedAt: statusState.updatedAt, plan: statusState.plan || null, contexts: Object.fromEntries(contexts) })); } catch {}
+    try { writeFileSync(_statusPath, JSON.stringify({ accounts: byAccount, contexts: Object.fromEntries(contexts) })); } catch {}
   }, 400);
 }
 
@@ -49,28 +67,35 @@ function normResetMs(v) {
   return v < 1e12 ? Math.round(v * 1000) : Math.round(v); // accept seconds or ms epoch
 }
 
+// utilization 一律是 0–1 分数（事件 unifiedWindows / 响应头 *-utilization 都是），超限时会略大于 1。
+// 以前按「≤1 当分数、>1 当百分数」自适应：超限的 1.01 被当成 1%，弹层把爆掉的 5 小时桶显示成 1%。
+// 整数百分比（SDK usage）走 applyProbedLimits 的 pct 字段，不经这里。
 function normPct(u) {
   if (typeof u !== 'number' || !isFinite(u)) return null;
-  const p = u <= 1 ? u * 100 : u; // accept fraction or percent
-  return Math.max(0, Math.min(100, Math.round(p)));
+  return Math.max(0, Math.min(100, Math.round(u * 100)));
 }
 
 // 桶名语义（CLI 2.1.257 二进制 eF 表原文）：five_hour="session limit"、seven_day="weekly limit"、
 // seven_day_opus="Opus limit"、seven_day_sonnet="Sonnet limit"、seven_day_overage_included="Fable limit"、
 // overage="usage credit limit"——**seven_day_overage_included 就是 Fable 周限额**，前端标签照此显示。
-export function applyRateLimit(info) {
+// acct：这一轮 query 启动时注入的账号 id（claude-account.activeAccountId()）——轮跑到一半切号，
+// 事件仍记回发起它的那个号。
+export function applyRateLimit(info, acct) {
   if (!info || !info.rateLimitType) return;
   const now = Date.now();
+  const st = slot(acct);
   // 2026-09-05 实测：事件顶层早就不带 utilization，真实利用率在 unifiedWindows{five_hour,seven_day,
-  // seven_day_overage_included}[{utilization:0–1 分数, resetsAt:秒}] 里——以前没读它，pct 一直是旧探针值、
+  // seven_day_overage_included}[{utilization:0–1 分数, resetsAt:秒}] 里——以前没读它，pct 一直是旧值、
   // 只有 updatedAt 在动（手机显示「刚刚 · 5 小时 1%」而官方同刻已 100%）。每帧整桶刷新。
   const uw = info.unifiedWindows && typeof info.unifiedWindows === 'object' ? info.unifiedWindows : null;
   if (uw) {
     for (const [k, w] of Object.entries(uw)) {
       if (!w || typeof w.utilization !== 'number' || !isFinite(w.utilization)) continue;
-      const prev = statusState.limits[k] || {};
-      statusState.limits[k] = {
-        status: k === info.rateLimitType ? (info.status || 'allowed') : (prev.status || 'allowed'),
+      const prev = st.limits[k] || {};
+      // 非主导桶不沿用旧的 rejected：利用率回落到 100% 以下就是放行（曾见 status 卡在 rejected、pct 12）。
+      const carried = prev.status === 'rejected' && w.utilization < 1 ? 'allowed' : (prev.status || 'allowed');
+      st.limits[k] = {
+        status: k === info.rateLimitType ? (info.status || 'allowed') : carried,
         pct: normPct(w.utilization),
         resetsAt: normResetMs(w.resetsAt) || prev.resetsAt || 0,
         at: now,
@@ -79,33 +104,35 @@ export function applyRateLimit(info) {
     }
   }
   // 主导桶：事件顶层 status/resetsAt/utilization（老版本才有 utilization）；被拒 = 这桶已 100%。
-  const prev = statusState.limits[info.rateLimitType] || {};
+  const prev = st.limits[info.rateLimitType] || {};
   const pct = info.status === 'rejected' ? 100
     : typeof info.utilization === 'number' ? normPct(info.utilization) : (prev.pct ?? null);
-  statusState.limits[info.rateLimitType] = {
+  st.limits[info.rateLimitType] = {
     ...prev,
     status: info.status || 'allowed',
     pct,
     resetsAt: normResetMs(info.resetsAt) || prev.resetsAt || 0,
     at: (uw && uw[info.rateLimitType]) || info.status === 'rejected' || typeof info.utilization === 'number' ? now : (prev.at || 0),
   };
-  statusState.updatedAt = now;
+  st.updatedAt = now;
   if (info.status === 'rejected') lastRejection = { type: info.rateLimitType, resetsAt: normResetMs(info.resetsAt) };
   else if (lastRejection && lastRejection.type === info.rateLimitType) lastRejection = null;
   persistStatus();
 }
 
-// usage-probe 从 /v1/messages 响应头直读的双桶真实利用率（权威来源，整桶覆盖）。
-// 桶字段：utilization（0–1 分数或百分数，normPct 自适应）或 pct（已是百分数，SDK usage 给的
+// 从 /v1/messages 响应头直读的真实利用率（权威来源，整桶覆盖）：无缝换号上游代理逐请求记（claude-upstream.mjs）；
+// 可选的 overlay 用量来源也写这里（account-usage.mjs 交给它的 core）。
+// 桶字段：utilization（0–1 分数，超限可略大于 1）或 pct（已是百分数，SDK usage 给的
 // 是 4/1 这种整数百分比，走 utilization 会被 ≤1 当分数放大 100 倍）；label=按模型分桶的显示名。
-export function applyProbedLimits(buckets) {
+export function applyProbedLimits(buckets, acct) {
+  const st = slot(acct);
   let changed = false;
   for (const [type, b] of Object.entries(buckets || {})) {
     if (!b) continue;
     const pct = typeof b.pct === 'number' && isFinite(b.pct) ? Math.max(0, Math.min(100, Math.round(b.pct)))
       : (typeof b.utilization === 'number' && isFinite(b.utilization) ? normPct(b.utilization) : null);
     if (pct == null) continue;
-    statusState.limits[type] = {
+    st.limits[type] = {
       status: b.status || 'allowed',
       pct,
       resetsAt: normResetMs(b.resetsAt),
@@ -116,17 +143,18 @@ export function applyProbedLimits(buckets) {
   }
   if (changed) {
     pruneStaleLimits();
-    statusState.updatedAt = Date.now();
+    st.updatedAt = Date.now();
     persistStatus();
   }
 }
 
 // SDK 控制接口 usage_EXPERIMENTAL 的响应（= Claude Code /usage 的数据）：五小时/每周 + 按模型的
 // 每周桶（model_scoped，服务端给了才有——Fable/Opus/Sonnet 单桶就从这里来）+ 套餐类型。
-// 与 usage-probe 的响应头来源互补：同键覆盖、缺的保留。
+// 与响应头来源（applyProbedLimits）互补：同键覆盖、缺的保留。
 const PLAN_NAMES = { pro: 'Pro', max: 'Max', team: 'Team', enterprise: 'Enterprise' };
-export function applySdkUsage(u) {
+export function applySdkUsage(u, acct) {
   if (!u || typeof u !== 'object') return false;
+  const st = slot(acct);
   const rl = u.rate_limits || {};
   const buckets = {};
   const win = (w) => (w && typeof w.utilization === 'number' && isFinite(w.utilization))
@@ -140,19 +168,21 @@ export function applySdkUsage(u) {
     if (name && b) buckets['model_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_')] = { ...b, label: name };
   }
   let changed = false;
-  if (Object.keys(buckets).length) { applyProbedLimits(buckets); changed = true; }
+  if (Object.keys(buckets).length) { applyProbedLimits(buckets, acct); changed = true; }
   const sub = typeof u.subscription_type === 'string' ? u.subscription_type.toLowerCase() : '';
   const plan = sub ? (PLAN_NAMES[sub] || (sub[0].toUpperCase() + sub.slice(1))) : null;
-  if (plan !== statusState.plan) { statusState.plan = plan; changed = true; persistStatus(); }
+  if (plan !== st.plan) { st.plan = plan; changed = true; persistStatus(); }
   return changed;
 }
 
 // 化石清理：重置时刻已过去 1 小时以上的桶直接删——老版本 SDK 留下的过期 pct
-// （如 5 月底的 seven_day 78%）曾被前端当成"唯一有数据的行"永久展示。
+// （如 5 月底的 seven_day 78%）曾被前端当成"唯一有数据的行"永久展示。各号的槽都清。
 export function pruneStaleLimits() {
   let changed = false;
-  for (const [k, v] of Object.entries(statusState.limits)) {
-    if (v && v.resetsAt && v.resetsAt < Date.now() - 3600_000) { delete statusState.limits[k]; changed = true; }
+  for (const st of Object.values(byAccount)) {
+    for (const [k, v] of Object.entries(st.limits)) {
+      if (v && v.resetsAt && v.resetsAt < Date.now() - 3600_000) { delete st.limits[k]; changed = true; }
+    }
   }
   if (changed) persistStatus();
 }
@@ -187,7 +217,7 @@ export function applyContext(modelUsage, sessionId, turnUsage, key = 'admin') {
     sessionContexts.set(key + '|' + sessionId, ctx);
     while (sessionContexts.size > 200) sessionContexts.delete(sessionContexts.keys().next().value);
   }
-  statusState.updatedAt = Date.now();
+  slot().updatedAt = Date.now();
   persistStatus();
   return ctx;
 }
@@ -228,11 +258,34 @@ function resetHint(ms) {
   return '约 ' + hhmm + ' 恢复（' + rel + '）';
 }
 
+// 撞限额的那一轮：直播（claude.mjs）与历史重建（sessions.mjs）共用的同一份描述。
+// info = rate_limit_info（{rateLimitType, resetsAt 秒或毫秒}）；text = CLI 的合成回答（「You've hit your session
+// limit · resets 3pm (Asia/Shanghai)」），info 缺类型时按它认桶。返回 { type, resetsAt(ms), title, hint }。
+// title/hint 是给老 apk 错误框看的整句；新前端的限额卡按 type/resetsAt 自己排版（官方 Session limit reached 卡）。
+// live = 直播轮：帧里没带 info 时退回最近一次硬拒绝（历史重建不能用它——那是现在的状态，不是当时的）。
+export function limitNotice(info, text, { live = false } = {}) {
+  const i = info || (live && lastRejection ? { rateLimitType: lastRejection.type, resetsAt: lastRejection.resetsAt } : {});
+  let type = i.rateLimitType || i.type || '';
+  if (!type) {
+    const s = String(text || '').toLowerCase();
+    type = /session limit|5-hour/.test(s) ? 'five_hour' : /opus limit/.test(s) ? 'seven_day_opus' : /sonnet limit/.test(s) ? 'seven_day_sonnet'
+      : /fable limit/.test(s) ? 'seven_day_overage_included' : /weekly limit/.test(s) ? 'seven_day' : '';
+  }
+  const resetsAt = normResetMs(i.resetsAt) || 0;
+  return { type, resetsAt, title: limitLabel(type), hint: resetHint(resetsAt) || '额度恢复后即可继续。' };
+}
+
 // Turn any failure (thrown error, error result, or SDK error kind) into a
 // structured, plain-Chinese notice the phone renders nicely.
 export function classifyError(raw, kind) {
+  // Claude Code 运行组件还没就绪（安装包不再内嵌，首次启动在下载 / 下载失败，见 runtime/claude-cli.mjs）：标题与提示是现成的人话
+  if (raw && raw.code === 'CLAUDE_CLI_NOT_READY') return { kind: 'engine', title: raw.title, hint: raw.hint };
   const s = String(raw == null ? '' : (raw.message || raw)).toLowerCase();
   const k = kind || '';
+  // SDK 自己找不到二进制（绕过了 claude-cli.mjs 的路径）：同一类问题，指到设置页看进度 / 重试
+  if (/native cli binary .*not found/.test(s)) {
+    return { kind: 'engine', title: 'Claude Code 运行组件还没就绪', hint: '服务端会自动下载它；管理员可以在「设置 › Claude」里看进度或重试。' };
+  }
   if (k === 'rate_limit' || /rate.?limit|usage limit|too many requests|\b429\b/.test(s)) {
     const rej = lastRejection || {};
     return { kind: 'rate_limit', title: limitLabel(rej.type), hint: resetHint(rej.resetsAt) || '额度恢复后即可继续。', resetsAt: rej.resetsAt || 0 };

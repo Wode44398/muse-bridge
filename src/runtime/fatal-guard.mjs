@@ -12,7 +12,10 @@
 //
 // 注意：这是【兜底】，不是许可证。该挂的 'error' 监听、该 catch 的 await 一个都不能省。
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import path from 'node:path';
+import v8 from 'node:v8';
+import { spawn } from 'node:child_process';
 
 const WINDOW_MS = 60_000;
 const faultHooks = [];
@@ -35,8 +38,55 @@ function enableFatalReport(name, reportDir) {
   }
 }
 
-export function installFatalGuard(name = 'bridge', reportDir = null) {
+// 2026-10-19：报告只给了「堆满 4GB」，没有 JS 栈、看不出是什么在堆（old_space 4015MB 全是小对象）。
+// 堆快到上限时先落一份堆快照（V8 临时抬高上限写完再死），用 Chrome DevTools Memory 面板打开就能看
+// 是哪种对象占满了。快照只能写进 cwd（--diagnostic-dir 运行时改不了）——正式服 cwd 是程序根，
+// *.heapsnapshot 已进 .gitignore。写 4GB 堆的快照要几分钟，期间服务不响应；看门狗只认 ECONNREFUSED，不会误救。
+function enableHeapSnapshotNearLimit(name) {
+  try {
+    v8.setHeapSnapshotNearHeapLimit(1);
+    console.log(`[fatal-guard/${name}] 堆快照已开：堆接近上限时写入 ${process.cwd()}`);
+  } catch (e) {
+    console.error(`[fatal-guard/${name}] 堆快照开启失败（继续运行）：`, e?.message || e);
+  }
+}
+
+// 只留最新 keep 份同类转储（dump / 堆快照动辄几个 GB）。
+function pruneDumps(dir, re, keep) {
+  try {
+    const files = readdirSync(dir).filter((f) => re.test(f))
+      .map((f) => { const p = path.join(dir, f); return { p, t: statSync(p).mtimeMs }; })
+      .sort((a, b) => b.t - a.t);
+    for (const f of files.slice(keep)) { try { unlinkSync(f.p); } catch {} }
+  } catch {}
+}
+
+// 2026-10-19：fail-fast（4689 退出码 0xC0000409）两次都没留下 WER LocalDumps 的 dump、Application 日志
+// 也没有 1000 事件——系统侧的崩溃转储接不住它。改由 procdump 以调试器身份挂在本进程上（-e：只抓未处理
+// 异常 / fail-fast，-ma 全量），崩的那一刻落 dump 到 dumpDir。正常退出（重启、Stop-Process）procdump 跟着退。
+// 实测代价：procdump 被强杀时，被调试的进程会被系统一并结束（调试器退出默认带走目标）——所以别按名字杀
+// procdump64.exe；BRIDGE_CRASH_DEBUGGER=0 可关。只在调用方明确要（正式服）时挂，dev/测试实例不挂。
+export function attachCrashDebugger(name, dumpDir, exe) {
+  if (process.platform !== 'win32' || process.env.BRIDGE_CRASH_DEBUGGER === '0') return;
+  if (!exe || !existsSync(exe)) { console.log(`[fatal-guard/${name}] 未找到 procdump（${exe}），崩溃转储未挂`); return; }
+  try {
+    mkdirSync(dumpDir, { recursive: true });
+    pruneDumps(dumpDir, /\.dmp$/i, 4);
+    const c = spawn(exe, ['-accepteula', '-ma', '-e', String(process.pid), dumpDir], { detached: true, stdio: 'ignore', windowsHide: true });
+    c.on('error', (e) => console.error(`[fatal-guard/${name}] procdump 启动失败：`, e?.message || e));
+    c.unref();
+    console.log(`[fatal-guard/${name}] 崩溃转储已挂：procdump pid=${c.pid} → ${dumpDir}`);
+  } catch (e) {
+    console.error(`[fatal-guard/${name}] 崩溃转储挂载失败（继续运行）：`, e?.message || e);
+  }
+}
+
+export function installFatalGuard(name = 'bridge', reportDir = null, { heapSnapshot = false } = {}) {
   enableFatalReport(name, reportDir);
+  if (heapSnapshot) {
+    pruneDumps(process.cwd(), /\.heapsnapshot$/i, 2);
+    enableHeapSnapshotNearLimit(name);
+  }
   const hits = [];
 
   const note = (kind, err) => {

@@ -9,6 +9,8 @@
 //
 // multiUser：这个 agent 能不能开给注册用户。dimensio 是每人一个进程、锁在自己文件夹里的
 //   租户实例，所以可以。
+
+// 前后端各处按这张表认 agent：表里没有的 id（含名单 / 配置里残留的旧 id）处处不存在。
 export const AGENTS = Object.freeze([
   { id: 'claude', label: 'Claude', screen: 'claude', chat: 'claude', multiUser: true },
   { id: 'dimensio', label: 'dimensio', screen: 'harness', chat: null, multiUser: true },

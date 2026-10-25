@@ -21,6 +21,16 @@ import { sseWrite } from './sse.mjs';
 // codex keeps single-flight semantics on top of the same helpers (its route 409s
 // while one is live).
 const _gens = new Map(); // key -> gen[]
+// 在跑轮数的观察者（保持唤醒 keep-awake.mjs 用）：占位成功 / 收尾 / 移除时各通知一次，回调自己数。
+const _liveWatchers = new Set();
+export function onLiveGensChange(fn) { _liveWatchers.add(fn); return () => _liveWatchers.delete(fn); }
+function notifyLive() { for (const fn of _liveWatchers) { try { fn(); } catch {} } }
+/** 所有身份在跑（未收尾，含后台任务挂起中）的轮数；filter(key) 可只数一部分（如排除 codex:）。 */
+export function countLiveGens(filter) {
+  let n = 0;
+  for (const [key, arr] of _gens) { if (filter && !filter(key)) continue; for (const g of arr) if (!g.done) n++; }
+  return n;
+}
 /* gen = {
      sessionId, userText, events: [<sse objs>], subscribers: Set<res>,
      abort: AbortController, done: bool, settled: Promise, startedAt
@@ -49,6 +59,7 @@ export function setCurrentGen(key, g) {
   const a = _gens.get(key) || [];
   a.push(g);
   _gens.set(key, a);
+  notifyLive();
 }
 // Atomically validate and occupy a generation slot. JavaScript runs this whole
 // function without an await/interleave, so the limit check and append are one
@@ -88,6 +99,7 @@ export function tryStartGen(key, g, {
   }
   local.push(g);
   _gens.set(key, local);
+  notifyLive();
   return { ok: true };
 }
 export function clearCurrentGenIfMatches(key, g) {
@@ -96,6 +108,7 @@ export function clearCurrentGenIfMatches(key, g) {
   const i = a.indexOf(g);
   if (i >= 0) a.splice(i, 1);
   if (!a.length) _gens.delete(key);
+  notifyLive();
 }
 
 // ---- 已完成轮的保留（重连的「无悬崖」保证）----
@@ -192,7 +205,7 @@ export function genEmit(gen, obj) {
   for (const r of gen.subscribers) genWrite(r, obj);
 }
 export function genSubscribe(gen, res) { gen.subscribers.add(res); res.on('close', () => gen.subscribers.delete(res)); }
-export function genFinish(gen) { gen.done = true; for (const r of gen.subscribers) { if (!r.writableEnded) r.end(); } gen.subscribers.clear(); }
+export function genFinish(gen) { gen.done = true; for (const r of gen.subscribers) { if (!r.writableEnded) r.end(); } gen.subscribers.clear(); notifyLive(); }
 
 // ---- bridge / routine session tagging ----
 // Sessions the bridge (phone) started, so the conversation list can mark them

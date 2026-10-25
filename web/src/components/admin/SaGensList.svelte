@@ -1,11 +1,13 @@
 <script>
   // 活跃生成列表（总览/活跃进程共用）。withStop 时带「中止」按钮。
   import { api } from '../../lib/api.js';
-  import { liveGens, fmtDur, saToast, loadActive } from '../../lib/serverAdmin.svelte.js';
+  import { sa, liveGens, fmtDur, saToast, loadActive } from '../../lib/serverAdmin.svelte.js';
   import { t, tr } from '../../lib/i18n.js';
 
   let { gens = [], withStop = false } = $props();
   const live = $derived(liveGens(gens));
+  // 'u:<账号 id>' → 登录名（新账号 id = 名字-随机串）；用户列表没拉过就显示 id
+  const ownerName = (key) => { const id = String(key || '').replace(/^u:/, ''); return sa.users.find((u) => (u.id || u.name) === id)?.name || id; };
 
   async function stopGen(g) {
     try {
@@ -23,9 +25,10 @@
     {#each live as g (g.key + (g.sessionId || ''))}
       <div class="grow">
         {#if g.key === 'admin'}<span class="sa-badge blue">admin</span>
-        {:else}<span class="sa-badge purple">{(g.key || '').replace(/^u:/, '')}</span>{/if}
+        {:else}<span class="sa-badge purple">{ownerName(g.key)}</span>{/if}
         <span class="sa-mono sa-dim sid">{(g.sessionId || '').slice(0, 8) || '—'}</span>
-        <span class="sa-trunc req" title={g.userText || ''}>{g.userText || '—'}</span>
+        <!-- hidden：成员没允许管理员看内容，提问原文不给 -->
+        <span class="sa-trunc req" title={g.userText || ''}>{g.hidden ? t('（内容未授权查看）') : (g.userText || '—')}</span>
         <span class="sa-mono elapsed"><span class="sa-live"></span>{fmtDur(g.elapsedMs)}</span>
         <span class="sa-mono sa-dim subs" title={t('订阅连接数')}>{g.subscribers}</span>
         {#if withStop}

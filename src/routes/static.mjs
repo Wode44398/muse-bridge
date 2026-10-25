@@ -14,6 +14,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { CAPABILITIES } from '../config/capabilities.mjs';
 import { PUBLIC_DIR } from '../config/index.mjs';
 import { mimeType } from '../runtime/http-file.mjs';
+import { compressedStatic } from './static-compress.mjs';
 
 // 本表只放【共享表 MIME_TYPES 里没有的】前端产物类型（字体 / wasm / manifest / sourcemap）。
 // 其余一律回落共享表，省得每加一种构建产物就要在两处各补一遍——`.mjs` 就是这么漏掉的：
@@ -34,6 +35,7 @@ const STATIC_TYPES = {
 //   · 其余静态文件（public/ 的图标/壁纸等，无 hash）→ no-cache + ETag：每次仍发请求，
 //     但未变化时 304 零字节返回。
 //   · HTML（含注入的 caps）→ 维持 no-store（serveHtml 路径，不走这里）。
+// 文本类产物（js/css/svg/json…）按 Accept-Encoding 发 br / gzip（static-compress.mjs，压一次记在内存里）。
 async function serveStatic(req, res, file, { immutable = false } = {}) {
   try {
     const st = await stat(file);
@@ -41,13 +43,17 @@ async function serveStatic(req, res, file, { immutable = false } = {}) {
     if (req && req.headers['if-none-match'] === etag) { res.writeHead(304, { ETag: etag }); res.end(); return; }
     const buf = await readFile(file);
     const ext = path.extname(file);
+    const z = await compressedStatic(req, file, st, buf);
+    if (res.headersSent || res.destroyed) return;
     res.writeHead(200, {
       'Content-Type': STATIC_TYPES[ext] || mimeType(file),
       'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
       ETag: etag,
+      ...(z ? { 'Content-Encoding': z.enc, Vary: 'Accept-Encoding' } : {}),
     });
-    res.end(buf);
+    res.end(z ? z.body : buf);
   } catch {
+    if (res.headersSent) { try { res.destroy(); } catch {} return; }
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('not found');
   }

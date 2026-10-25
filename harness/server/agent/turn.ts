@@ -87,9 +87,11 @@ export interface RecallRef {
 
 // Unified effort ladder across all providers. Each concrete model supports only
 // a subset (see server/catalog.ts) — the adapter maps the chosen level to that
-// provider's native wire params (Anthropic effort / DeepSeek+Zhipu reasoning_effort
-// / Qwen thinking_budget / Haiku budget_tokens).
-export type ThinkingLevel = "off" | "low" | "medium" | "high" | "max";
+// provider's native wire params (Anthropic effort / DeepSeek+Zhipu+Kimi+Qwen3.8 reasoning_effort
+// / Qwen3.7 thinking_budget / Gemini thinkingLevel / Haiku budget_tokens).
+// 档名就是厂商的官方档名：minimal 只有 Gemini 3.5 Flash 有，xhigh 是 Claude 的 extra 档、Qwen3.8 与本机模板的顶档。
+// 菜单叫什么，发出去就是什么——effort-contract.test.ts 对照官方表逐档核对。
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Budget {
   maxOutputTokens: number;

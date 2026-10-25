@@ -10,6 +10,10 @@
 //   skill     插件自带的每个 skills/<dir>/SKILL.md（可单独装成技能）
 //   connector 插件 .mcp.json 里的 MCP server（${VAR} 占位 = 添加时要填的字段；用到 ${CLAUDE_PLUGIN_ROOT} 的要随插件装，不单列）
 // 安装一律复用 extensions.mjs 的 installPlugin / installSkill / saveConnector（同一套校验与凭据文件清扫）。
+// scope（admin 管理员自用 / shared 全服统一）：「已添加」按范围标，添加时落进那个范围。
+//
+// 默认的目录：Anthropic 官方的三个市场仓库（Claude Code 默认插件目录、Cowork 的知识工作插件、Agent Skills），
+// 「下载 / 更新目录」一次拉齐；Claude Code 自己装过的同名目录副本直接沿用。
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -22,10 +26,14 @@ import {
 // 管理员的 Claude 会话用进程环境里的 CLAUDE_CONFIG_DIR（没设就是 ~/.claude），目录副本也在那下面。
 export const MARKETPLACES_DIR = process.env.CLAUDE_MARKETPLACES_DIR
   || path.join(String(process.env.CLAUDE_CONFIG_DIR || '').trim() || path.join(os.homedir(), '.claude'), 'plugins', 'marketplaces');
-// 只列 Anthropic 官方目录（Claude Desktop 的 Anthropic Directory）。同级的其它目录（如桌面版上传的
-// local-desktop-app-uploads）是账号级共享库，不掺进来。
-export const OFFICIAL_MARKETS = ['claude-plugins-official'];
-const OFFICIAL_REPO = 'https://github.com/anthropics/claude-plugins-official.git';
+// 只列 Anthropic 官方目录。同级的其它目录（如桌面版上传的 local-desktop-app-uploads）是账号级共享库，不掺进来。
+// 目录名 = 副本所在的子目录（Claude Code 按 marketplace.json 的 name 起名，这里跟它一致）。
+export const OFFICIAL_SOURCES = Object.freeze([
+  { name: 'claude-plugins-official', repo: 'https://github.com/anthropics/claude-plugins-official.git', label: 'Anthropic' },
+  { name: 'knowledge-work-plugins', repo: 'https://github.com/anthropics/knowledge-work-plugins.git', label: 'Anthropic 知识工作' },
+  { name: 'anthropic-agent-skills', repo: 'https://github.com/anthropics/skills.git', label: 'Anthropic Agent Skills' },
+]);
+export const OFFICIAL_MARKETS = OFFICIAL_SOURCES.map((s) => s.name);
 
 const httpErr = (status, msg) => Object.assign(new Error(msg), { status });
 const clip = (s, n) => String(s ?? '').replace(/\p{Cc}/gu, ' ').trim().slice(0, n);
@@ -34,7 +42,7 @@ const within = (root, p) => p === root || p.startsWith(root + path.sep);
 const readJsonSafe = (f) => { try { return JSON.parse(readFileSync(f, 'utf8').replace(/^﻿/, '')); } catch { return null; } };
 const subdirs = (d) => { try { return readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort(); } catch { return []; } };
 
-const MARKET_LABELS = { 'claude-plugins-official': 'Anthropic' };
+const MARKET_LABELS = Object.fromEntries(OFFICIAL_SOURCES.map((s) => [s.name, s.label]));
 const marketLabel = (name, meta) => MARKET_LABELS[name] || clip(meta?.owner?.name, 60) || name;
 
 // —— 连接器模板：${VAR} 是添加时要填的字段；${VAR:-默认} 可不填 ——
@@ -130,8 +138,8 @@ function manifestFromEntry(entry) {
 }
 
 // 扫目录。条目带内部字段（_dir / _tpl / _entry / _remote）供安装用，对外经 listCatalog 剥掉。
-function scan(root, only) {
-  const installed = listExtensions();
+function scan(root, only, scope) {
+  const installed = listExtensions({ scope: scope === 'shared' ? 'shared' : 'admin' });
   // 已添加：记过目录 id 的按 id 认（插件自己的 name 可能和目录条目不一样），老的按同类同名认
   const has = (type, name, id) => installed.some((x) => x.catalogId === id || (!x.catalogId && x.type === type && x.name === name));
   const items = [];
@@ -204,8 +212,8 @@ function scan(root, only) {
 
 const strip = ({ _dir, _tpl, _entry, _remote, ...pub }) => pub;
 
-export function listCatalog({ root = MARKETPLACES_DIR, only = OFFICIAL_MARKETS } = {}) {
-  const { items, markets } = scan(root, only);
+export function listCatalog({ root = MARKETPLACES_DIR, only = OFFICIAL_MARKETS, scope } = {}) {
+  const { items, markets } = scan(root, only, scope);
   return { items: items.map(strip), markets };
 }
 
@@ -239,53 +247,62 @@ async function fetchRemote(remote, stage) {
 
 // 从目录装一项。id 必须能在【现扫的】目录里找到——路径全由目录解析，前端传不进任意路径。
 // values：连接器模板要填的字段（插件的配置装好后另走 /api/extensions/configure）。
-export async function installFromCatalog(id, { root = MARKETPLACES_DIR, only = OFFICIAL_MARKETS, values = {} } = {}) {
-  const hit = scan(root, only).items.find((x) => x.id === String(id || ''));
+export async function installFromCatalog(id, { root = MARKETPLACES_DIR, only = OFFICIAL_MARKETS, values = {}, scope } = {}) {
+  const hit = scan(root, only, scope).items.find((x) => x.id === String(id || ''));
   if (!hit) throw httpErr(404, '目录里没有这一项（目录可能刚更新过，刷新再试）');
   if (hit.installed) throw httpErr(409, `「${hit.name}」已经装过了`);
   const source = `${hit.source} · ${hit.plugin}`;
   if (hit.type === 'connector') {
-    return saveConnector({ name: hit.name, description: hit.description, pkg: hit.plugin, catalogId: hit.id, ...connectorInput(hit._tpl, values || {}) });
+    return saveConnector({ name: hit.name, description: hit.description, pkg: hit.plugin, catalogId: hit.id, scope, ...connectorInput(hit._tpl, values || {}) });
   }
   if (hit.type === 'skill') {
-    return installSkill(`${hit.name}.zip`, null, { fromDir: hit._dir, catalogId: hit.id });
+    return installSkill(`${hit.name}.zip`, null, { fromDir: hit._dir, catalogId: hit.id, scope });
   }
   const manifest = manifestFromEntry(hit._entry);
-  if (!hit.remote) return installPlugin(`${hit.name}.zip`, null, { fromDir: hit._dir, manifest, source, catalogId: hit.id });
+  if (!hit.remote) return installPlugin(`${hit.name}.zip`, null, { fromDir: hit._dir, manifest, source, catalogId: hit.id, scope });
   const stage = path.join(EXT_ROOT, 'runtime', `.git-${crypto.randomBytes(4).toString('hex')}`);
   try {
     mkdirSync(path.dirname(stage), { recursive: true });
     await fetchRemote(hit._remote, stage);
     const dir = hit._remote.path ? path.resolve(stage, hit._remote.path) : stage;
     if (!within(stage, dir) || !isDir(dir)) throw httpErr(502, `仓库里没有 ${hit._remote.path}`);
-    return await installPlugin(`${hit.name}.zip`, null, { fromDir: dir, manifest, source: `${hit.source} · ${hit.repo}`, catalogId: hit.id });
+    return await installPlugin(`${hit.name}.zip`, null, { fromDir: dir, manifest, source: `${hit.source} · ${hit.repo}`, catalogId: hit.id, scope });
   } finally {
     rmSync(stage, { recursive: true, force: true });
   }
 }
 
-// 下载 / 更新 Anthropic 官方目录副本：浅克隆进同级暂存目录，成功了再换掉旧副本（失败不碰旧的）。
+// 下载 / 更新一份目录副本：浅克隆进同级暂存目录，成功了再换掉旧副本（失败不碰旧的）。
+async function fetchOne(root, { name, repo }) {
+  const dest = path.join(root, name);
+  const stage = path.join(root, `.fetch-${crypto.randomBytes(4).toString('hex')}`);
+  try {
+    await git(['clone', '-q', '--depth', '1', repo, stage]);
+    if (!readJsonSafe(path.join(stage, '.claude-plugin', 'marketplace.json'))) throw httpErr(502, `下载到的「${name}」目录缺少 marketplace.json`);
+    rmSync(path.join(stage, '.git'), { recursive: true, force: true });
+    const old = existsSync(dest) ? `${stage}-old` : null;
+    if (old) renameSync(dest, old);
+    renameSync(stage, dest);
+    if (old) rmSync(old, { recursive: true, force: true });
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+}
+
+// 下载 / 更新全部官方目录（sources 可只给一部分）。逐个拉，一个失败不影响别的；全失败才报错。
 // 出站走进程环境里的 HTTPS_PROXY（git 认）；同一时刻只跑一份。
 let fetching = null;
-export function fetchOfficialCatalog({ root = MARKETPLACES_DIR, repo = OFFICIAL_REPO } = {}) {
+export function fetchOfficialCatalog({ root = MARKETPLACES_DIR, sources = OFFICIAL_SOURCES, scope } = {}) {
   if (fetching) return fetching;
   fetching = (async () => {
-    const dest = path.join(root, OFFICIAL_MARKETS[0]);
-    const stage = path.join(root, `.fetch-${crypto.randomBytes(4).toString('hex')}`);
     mkdirSync(root, { recursive: true });
-    try {
-      await git(['clone', '-q', '--depth', '1', repo, stage]);
-      if (!readJsonSafe(path.join(stage, '.claude-plugin', 'marketplace.json'))) throw httpErr(502, '下载到的官方目录缺少 marketplace.json');
-      rmSync(path.join(stage, '.git'), { recursive: true, force: true });
-      const old = existsSync(dest) ? `${stage}-old` : null;
-      if (old) renameSync(dest, old);
-      renameSync(stage, dest);
-      if (old) rmSync(old, { recursive: true, force: true });
-      return listCatalog({ root });
-    } finally {
-      rmSync(stage, { recursive: true, force: true });
-      fetching = null;
+    const errors = [];
+    for (const s of sources) {
+      try { await fetchOne(root, s); } catch (e) { errors.push(e); }
     }
-  })();
+    if (errors.length && errors.length === sources.length) throw errors[0];
+    const out = listCatalog({ root, scope });
+    return errors.length ? { ...out, warnings: errors.map((e) => String(e?.message || e)) } : out;
+  })().finally(() => { fetching = null; });
   return fetching;
 }

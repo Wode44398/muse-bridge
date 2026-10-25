@@ -17,7 +17,20 @@ const ZIP_CACHE = path.join(ROOT, 'zip-cache');   // 文件夹下载的临时 zi
 
 // 可当交付物的文件扩展（与 codex 分页同表）。
 const ARTIFACT_EXT = 'png|jpe?g|gif|webp|bmp|heic|heif|avif|svg|pdf|md|txt|json|csv|tsv|html?|mp4|webm|mov|m4v|avi|mkv|mp3|wav|m4a|aac|ogg|flac|opus|docx?|xlsx?|pptx?|zip|tar|gz';
-const FILE_EXT_RE = new RegExp('\\.(?:' + ARTIFACT_EXT + ')$', 'i');
+export const FILE_EXT_RE = new RegExp('\\.(?:' + ARTIFACT_EXT + ')$', 'i');
+
+// 正文里的 markdown 链接 [x](目标)。目标里允许一层平衡括号：文件名带 (EN) 这类后缀时，agent 常直接写裸路径
+// 而不是 %28 编码——按 CommonMark 这是坏链接，但交付物识别宁可宽容。带 g：每次现建一个，别共用 lastIndex。
+export const deliverLinkRe = () => /\]\(((?:[^()\r\n]|\([^()\r\n]*\))+?)\)/g;
+
+// 链接目标的规整：去 title（[x](p "t")）与尖括号；带 scheme 的（http/data/mailto…，≥2 字符才算，放过 C:\）回空串；百分号解码。
+export function deliverLinkTarget(inner) {
+  let raw = String(inner || '').trim().replace(/\s+"[^"]*"$/, '');
+  if (raw.startsWith('<') && raw.endsWith('>')) raw = raw.slice(1, -1).trim();
+  if (!raw || /^[a-z][a-z0-9+.-]+:/i.test(raw)) return '';
+  if (raw.includes('%')) { try { raw = decodeURIComponent(raw); } catch {} }
+  return raw;
+}
 
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif', 'avif']);
 const VIDEO_EXT = new Set(['mp4', 'webm', 'mov', 'm4v', 'avi', 'mkv']);
@@ -157,17 +170,12 @@ export function collectDeliverables(text, { cwd, roots = [], limit = 12, nav = n
   const out = [];
   const seen = new Set();
   const src = String(text || '');
-  // 目标里允许一层平衡括号：文件名带 (EN) 这类后缀时，agent 常直接写裸路径
-  // 而不是 %28 编码——按 CommonMark 这是坏链接，但交付物识别宁可宽容。
-  const re = /\]\(((?:[^()\r\n]|\([^()\r\n]*\))+?)\)/g;
+  const re = deliverLinkRe();
   let m;
   while ((m = re.exec(src))) {
     if (out.length >= limit) break;
-    let raw = m[1].trim();
-    raw = raw.replace(/\s+"[^"]*"$/, '');                     // 链接 title：[x](p "t")
-    if (raw.startsWith('<') && raw.endsWith('>')) raw = raw.slice(1, -1).trim();
-    if (!raw || /^[a-z][a-z0-9+.-]+:/i.test(raw)) continue;   // http/data/mailto…（≥2 字符才算 scheme，放过 C:\）
-    if (raw.includes('%')) { try { raw = decodeURIComponent(raw); } catch {} }
+    const raw = deliverLinkTarget(m[1]);
+    if (!raw) continue;
     const real = resolveDeliverPath(raw, cwd, roots);
     if (!real) continue;
     let st;

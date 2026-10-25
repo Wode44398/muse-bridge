@@ -68,6 +68,27 @@ test("S5: ordinary process management stays allowed", () => {
   }
 });
 
+// 2026-10-09：重启本机桌面壳那条命令里带了一句 `curl …:8787` 探活，整句被当成「按端口杀宿主」拒了
+test("S5: a literal-PID kill is judged on its own; a host port elsewhere in the command does not taint it", () => {
+  for (const cmd of [
+    `taskkill //PID 93052 //T //F; sleep 2; curl -s -o /dev/null -w "8787 %{http_code}\\n" http://127.0.0.1:8787/`,
+    "kill -9 4242 && curl http://127.0.0.1:8799/health",
+    "Stop-Process -Id 4242 -Force; Invoke-WebRequest http://127.0.0.1:8787/",
+  ]) {
+    assert.equal(hostKillViolation(cmd), null, cmd);
+  }
+  // 目标是算出来的、或者字面 PID 就是宿主：照旧拒
+  for (const cmd of [
+    "P=$(netstat -ano | findstr :8787 | awk '{print $5}'); taskkill /PID $P /F",
+    "lsof -t -i:8799 | xargs kill -9",
+    `for /f "tokens=5" %a in ('netstat -ano ^| findstr :8787') do taskkill /PID %a /F`,
+    `Get-NetTCPConnection -LocalPort 8787 | Stop-Process -Force`,
+    `curl http://127.0.0.1:8787/; taskkill /PID ${process.pid} /F`,
+  ]) {
+    assert.ok(hostKillViolation(cmd), `must refuse: ${cmd}`);
+  }
+});
+
 test("#67: Preview(start) goes through the same command gate as Bash", async () => {
   const ctx: ToolContext = {
     sandbox: new Sandbox(ws, "workspace"),

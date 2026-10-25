@@ -133,3 +133,38 @@ test("UltraSpeed permission errors are actionable and never silently substitute 
     assert.match(String(error?.raw), /权限/);
   } finally { globalThis.fetch = saved; }
 });
+
+test("跨厂商子 agent 用 Token Plan key 时打 token-plan 地址，不是目录里的按量地址（10-09 工作流 401）", async () => {
+  const saved = getConfig();
+  const savedUrl = process.env.MIMO_BASE_URL;
+  delete process.env.MIMO_BASE_URL;
+  const savedFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (url: any) => {
+    urls.push(String(url));
+    // 401 不重试：一次请求就收工
+    return new Response(JSON.stringify({ error: { message: "Invalid API Key" } }), { status: 401 });
+  }) as typeof fetch;
+  try {
+    setConfig({ provider: "mimo", apiKey: "tp-test" });
+    setConfig({ provider: "openai" });
+    const { makeSubAgentRunner } = await import("./agent/subagent.ts");
+    const { Sandbox } = await import("./sandbox.ts");
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "dimensio-mimo-sub-"));
+    const run = makeSubAgentRunner({
+      provider: "openai", apiKey: "FAKE-DUMMY", model: "deepseek-flash", thinking: "off",
+      sandbox: new Sandbox(root), limits: { bashTimeoutMs: 1000, bashMaxTimeoutMs: 1000 },
+    });
+    await run({ prompt: "x", model: "mimo-v2.6-pro", maxTurns: 1 });
+    assert.ok(urls.length > 0);
+    assert.ok(urls.every((u) => u.startsWith("https://token-plan-cn.xiaomimimo.com/v1/")), urls.join(", "));
+  } finally {
+    globalThis.fetch = savedFetch;
+    if (savedUrl === undefined) delete process.env.MIMO_BASE_URL;
+    else process.env.MIMO_BASE_URL = savedUrl;
+    setConfig(saved);
+  }
+});

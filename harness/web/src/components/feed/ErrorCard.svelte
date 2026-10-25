@@ -23,7 +23,7 @@
 <div class="err">
   <span class="ic"><Icon name="alert" size={16} stroke={1.8} /></span>
   <div class="body">
-    <p class="msg" role="alert">{tr(item.text)}</p>
+    <p class="msg sel-text" role="alert">{tr(item.text)}</p>
     {#if item.ran}<p class="ran">{t("这一轮已经执行过 {n} 次工具——接着做之前，先核对它们的结果", { n: item.ran })}</p>{/if}
     {#if item.detail}
       <div class="rawsec">
@@ -33,7 +33,7 @@
         </button>
         {#if rawOpen}
           <div class="rawwrap" transition:collapse>
-            <pre class="raw">{item.detail}</pre>
+            <pre class="raw sel-text">{item.detail}</pre>
           </div>
         {/if}
       </div>

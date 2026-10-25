@@ -48,7 +48,7 @@
   {/snippet}
   {#if item.open}
     <div class="bodywrap" transition:collapse>
-      <div class="body" use:streamFade={{ live: item.live }}>{item.text}</div>
+      <div class="body sel-text" use:streamFade={{ live: item.live }}>{item.text}</div>
     </div>
   {/if}
 </RailRow>

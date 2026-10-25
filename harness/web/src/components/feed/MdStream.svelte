@@ -23,7 +23,7 @@
   const parts = $derived(live ? streamParts(text) : null);
 </script>
 
-<div class="md" use:streamFade={{ live }}>
+<div class="md sel-text" use:streamFade={{ live }}>
   {#if parts}
     {#each parts.chunks as ch (ch.start)}<div class="mdblk">{@html stableHtml(ch.start, ch.src)}</div>{/each}
     <div class="mdtail">{@html renderTail(parts.tail)}</div>

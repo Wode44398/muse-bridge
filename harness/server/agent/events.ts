@@ -34,6 +34,8 @@ export type StreamEvent =
   // 写入缓存的量——provider 回报了才有（llama.cpp 兼容服务回报的是复用的 KV 量，记作读取）。
   | { e: "usage"; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
   | { e: "turn_done"; stopReason: StopReason }
+  // 适配器自己处理掉的事，要在对话里说一声（fast_fallback：fast mode 撞了自己的限流，这次及之后 cooldownMs 内改走普通速度）
+  | { e: "notice"; code: "fast_fallback"; cooldownMs: number }
   // retryAfterMs: parsed from a Retry-After header on an HTTP-level error, so
   // the loop's retry can honor the provider's own pacing instead of a blind backoff.
   // R7：class / compress / summary / upstream 来自 providers/classify.ts——错误类别、要不要先压缩上下文再试、
@@ -203,8 +205,8 @@ export type AgentEvent =
   | { e: "away"; away: boolean }
   // P13（X18）：本会话放行的工作区外只读目录变了（卡片上「本会话都允许」、档位菜单里删掉一个）
   | { e: "read_roots"; roots: string[] }
-  // 本会话换了型号 / 思考深度（任一设备在型号菜单里换的；运行中的这一轮不受影响，下一条消息起生效）
-  | { e: "model"; model: string; thinking: ThinkingLevel }
+  // 本会话换了厂商 / 型号 / 思考深度（任一设备在菜单里换的；运行中的这一轮不受影响，下一条消息起生效）
+  | { e: "model"; provider: string; model: string; thinking: ThinkingLevel }
   // P7：reason "timeout" = 倒计时到了没人处理（这一轮还在继续）；没有 reason = 停止 / run 结束
   | { e: "ask_cancelled"; id: string; reason?: "timeout" }
   | { e: "permission_cancelled"; id: string; reason?: "timeout" }
@@ -222,6 +224,8 @@ export type AgentEvent =
   | { e: "steer_withdrawn"; id: string }
   // E3：用户用 /技能名（或 /包名）点了技能，正文已经跟在这条消息 / 插话后面进了对话（界面上是一行提示）
   | { e: "skill_loaded"; name: string; via: "slash"; pkg?: boolean }
+  // 适配器层的提示，原样转给前端在时间线上写一行（见 StreamEvent 同名事件）
+  | { e: "notice"; code: "fast_fallback"; cooldownMs: number }
   // N45：这一轮开跑时自动召回了哪些（标题、类别、理由，不含正文）——挂在本轮用户消息下（界面上「召回 N 条」）
   | { e: "recall"; items: RecallRef[] }
   // ── Sub-agents / workflows (visibility into delegated work) ──────────────

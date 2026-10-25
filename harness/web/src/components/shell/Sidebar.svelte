@@ -9,7 +9,9 @@
   import {
     app,
     canRefSessions,
+    canRenameProject,
     canReorderProjects,
+    canSaveQuick,
     chatRunning,
     hostPickWorkspace,
     importProject,
@@ -19,7 +21,9 @@
     newQuickChat,
     openSession,
     removeSession,
+    renameProject,
     reorderProjects,
+    saveQuickAsProject,
     setProjectFlags,
     toast,
     type ProjectMeta,
@@ -62,6 +66,11 @@
   let rowMenu = $state<{ project: ProjectMeta; anchor: HTMLElement } | null>(null);
   let showHidden = $state(false);
   let quickBusy = $state(false);
+  // 快照的操作菜单（右键快照那一块 / 行尾 ⋯）：存为工作空间、新建快照
+  let quickMenu = $state<HTMLElement | null>(null);
+  // 项目就地改名：正在改的那个项目（路径键）与输入框里的草稿
+  let renaming = $state<string | null>(null);
+  let renameDraft = $state("");
   // 两步删除：armed = 已经点过一次、等第二次的那条（3 秒后自动撤销）；swiped = 手机上左滑开着的那条
   let armed = $state<string | null>(null);
   let swiped = $state<string | null>(null);
@@ -105,21 +114,25 @@
   // 它的名字是服务端给的「快照对话」：显示（和按显示名搜）都过一道 tr
   const quickProj = $derived(app.projects.find((p) => p.quick) ?? null);
   const quickName = $derived(quickProj ? tr(quickProj.name) : "");
-  const quickSession = $derived(quickProj ? (app.sessions.find((s) => samePath(s.workspace, quickProj.path)) ?? null) : null);
-  const quickVisible = $derived(
-    Boolean(quickProj) &&
-      (!q ||
-        quickProj!.name.toLowerCase().includes(q) ||
-        quickName.toLowerCase().includes(q) ||
-        (quickSession?.title ?? "").toLowerCase().includes(q)),
+  // 快照区的会话：服务端标了 quick 的（哪只桶都算——别的设备换了快照桶，这边还在跑 / 刚聊完的那条不能丢），
+  // 加上落在当前桶里的（旧后端没有 quick 标记、刚发出去还没进服务端列表的那一行）
+  const isQuickSession = (s: SessionMeta) => Boolean(s.quick) || (!!quickProj && samePath(s.workspace, quickProj.path));
+  const quickSessions = $derived(app.sessions.filter(isQuickSession));
+  // 当前桶里那条（「存为工作空间」存的就是它）
+  const quickSession = $derived(quickProj ? (quickSessions.find((s) => samePath(s.workspace, quickProj.path)) ?? null) : null);
+  const quickShown = $derived(
+    !q || !quickProj || quickProj.name.toLowerCase().includes(q) || quickName.toLowerCase().includes(q)
+      ? quickSessions
+      : quickSessions.filter((s) => (s.title ?? "").toLowerCase().includes(q)),
   );
+  const quickVisible = $derived(Boolean(quickProj) && (!q || quickShown.length > 0 || quickName.toLowerCase().includes(q)));
 
   // 全部项目：注册表 + 从会话与当前配置里补出来的隐式项目（旧后端 / 刚升级时历史不消失）；
   // 快照桶不算项目（否则会拼出一个 UUID 名的项目）；已隐藏的在注册表里带着标记，不会被补回来。
   const allProjects = $derived.by(() => {
     const rows = app.projects.filter((p) => !p.quick);
     const known = new Set(rows.map((p) => pathKey(p.path)));
-    const paths = [app.config?.workspace, ...app.sessions.map((s) => s.workspace)].filter(Boolean) as string[];
+    const paths = [app.config?.workspace, ...app.sessions.filter((s) => !s.quick).map((s) => s.workspace)].filter(Boolean) as string[];
     for (const path of paths) {
       if (known.has(pathKey(path))) continue;
       if (quickProj && samePath(path, quickProj.path)) continue;
@@ -150,10 +163,11 @@
   }
 
   const currentWs = $derived(app.config?.workspace ?? "");
+  // 显示名认注册表（改过名的、快照存成的工作空间——后者目录名是 UUID），没登记过才退回文件夹名
   const currentName = $derived.by(() => {
     if (!currentWs) return "";
     if (quickProj && samePath(currentWs, quickProj.path)) return quickName;
-    return baseName(currentWs);
+    return app.projects.find((p) => samePath(p.path, currentWs))?.name ?? baseName(currentWs);
   });
   // 只有第一次、手里什么都没有时才显示「加载中」（以前每轮收尾刷新列表，整个侧栏都闪一下）
   const firstLoad = $derived((app.sessionsLoading || app.projectsLoading) && !app.sessions.length && !app.projects.length);
@@ -193,7 +207,7 @@
   });
   const shownIds = $derived.by(() => {
     const ids = new Set<string>();
-    if (quickVisible && quickSession) ids.add(quickSession.id);
+    if (quickVisible) for (const s of quickShown) ids.add(s.id);
     for (const p of projects) for (const s of sessionsFor(p)) ids.add(s.id);
     return ids;
   });
@@ -274,7 +288,7 @@
   // 命中所在的项目名（快照桶显示它自己的名字）
   function hitProject(ws?: string): string {
     if (!ws) return "";
-    if (quickProj && samePath(ws, quickProj.path)) return quickName;
+    if (quickProj && (samePath(ws, quickProj.path) || quickSessions.some((s) => samePath(s.workspace, ws)))) return quickName;
     return allProjects.find((p) => samePath(p.path, ws))?.name ?? baseName(ws);
   }
 
@@ -330,6 +344,67 @@
       quickBusy = false;
     }
   }
+  // 右键只认鼠标：触屏长按在安卓上也会发 contextmenu，那是「拎起拖动」的手势，不抢（触屏走行尾 ⋯）
+  const mouseCtx = (e: MouseEvent) => {
+    const pt = (e as PointerEvent).pointerType;
+    return pt ? pt === "mouse" || pt === "pen" : matchMedia("(pointer: fine)").matches;
+  };
+  function quickCtx(e: MouseEvent) {
+    if (!mouseCtx(e) || !canSaveQuick()) return;
+    e.preventDefault();
+    haptic("light");
+    quickMenu = e.currentTarget as HTMLElement;
+  }
+  function openQuickMenu(e: MouseEvent) {
+    e.stopPropagation();
+    haptic("light");
+    const anchor = e.currentTarget as HTMLElement;
+    quickMenu = quickMenu === anchor ? null : anchor;
+  }
+  async function saveQuick() {
+    quickMenu = null;
+    if (quickBusy) return;
+    quickBusy = true;
+    haptic("medium");
+    try {
+      const p = await saveQuickAsProject();
+      // 存好的项目展开着，那条对话就在眼前
+      if (p && collapsed.has(p.id)) toggleProject(p.id);
+    } finally {
+      quickBusy = false;
+    }
+  }
+  function projectCtx(project: ProjectMeta, e: MouseEvent) {
+    if (!mouseCtx(e) || renaming) return;
+    e.preventDefault();
+    haptic("light");
+    rowMenu = { project, anchor: e.currentTarget as HTMLElement };
+  }
+  // 就地改名：项目名变成输入框，回车 / 失焦保存，Esc 放弃；留空 = 恢复成文件夹名
+  function startRename(project: ProjectMeta) {
+    rowMenu = null;
+    haptic("light");
+    renaming = pathKey(project.path);
+    renameDraft = project.name;
+  }
+  async function commitRename(project: ProjectMeta) {
+    if (renaming !== pathKey(project.path)) return;
+    renaming = null;
+    await renameProject(project, renameDraft);
+  }
+  function renameKey(project: ProjectMeta, e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void commitRename(project);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      renaming = null;
+    }
+  }
+  const focusSelect = (el: HTMLInputElement) => {
+    el.focus();
+    el.select();
+  };
   function arm(id: string, e: Event) {
     e.stopPropagation();
     if (armed === id) {
@@ -561,19 +636,29 @@
       <p class="hint loading"><Mark size={14} live /> {t("加载中")}</p>
     {:else}
       {#if quickProj && quickVisible}
-        <section class="proj quick" class:current={samePath(currentWs, quickProj.path)}>
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <section class="proj quick" class:current={samePath(currentWs, quickProj.path)} oncontextmenu={quickCtx}>
           <div class="prow">
             <button class="prow-main" onclick={openQuick} title={t("快照对话：一次性空间，不属于任何项目，只保留最新一条")}>
               <span class="picon"><Icon name="bolt" size={16} /></span>
               <span class="pname">{quickName}</span>
             </button>
+            {#if canSaveQuick()}
+              <div class="pacts" class:on={!!quickMenu} data-no-drag>
+                <button class="pact" class:on={!!quickMenu} title={t("快照操作")} aria-label={t("快照操作")} aria-expanded={!!quickMenu} onclick={openQuickMenu}>
+                  <Icon name="more" size={16} />
+                </button>
+              </div>
+            {/if}
             <button class="pact" disabled={quickBusy} title={t("新建快照（换一个全新的一次性空间）")} aria-label={t("新建快照")} onclick={(e) => newQuickSnap(e)}>
               <Icon name="plus" size={16} />
             </button>
           </div>
           <div class="sessions">
-            {#if quickSession}
-              {@render sessionRow(quickSession)}
+            {#if quickShown.length}
+              {#each quickShown as s (s.id)}
+                {@render sessionRow(s)}
+              {/each}
             {:else}
               <p class="pempty">{t("独立小任务的落点，点击开始")}</p>
             {/if}
@@ -612,17 +697,35 @@
           class:drop-before={dropAt === i}
           class:drop-after={dropAt === projects.length && i === projects.length - 1}
         >
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="prow"
-            use:dragSource={{ key: `p:${project.id}`, payload: () => projectPayload(project), disabled: !canReorder }}
+            oncontextmenu={(e) => projectCtx(project, e)}
+            use:dragSource={{ key: `p:${project.id}`, payload: () => projectPayload(project), disabled: !canReorder || renaming === pathKey(project.path) }}
           >
-            <button class="prow-main" onclick={() => toggleProject(project.id)} title={project.path} aria-expanded={open}>
-              <span class="picon"><Icon name={open ? "folderOpen" : "folder"} size={16} /></span>
-              <span class="pname">{project.name}</span>
-              {#if project.pinned}<span class="ppin" title={t("已置顶")}><Icon name="pin" size={12} /></span>{/if}
-            </button>
-            {#if all.length}<span class="pcount" aria-hidden="true">{all.length}</span>{/if}
-            <div class="pacts" class:on={rowMenu?.project.id === project.id} data-no-drag>
+            {#if renaming === pathKey(project.path)}
+              <div class="prow-main renaming" data-no-drag>
+                <span class="picon"><Icon name={open ? "folderOpen" : "folder"} size={16} /></span>
+                <input
+                  class="pname-edit"
+                  bind:value={renameDraft}
+                  use:focusSelect
+                  maxlength="80"
+                  placeholder={baseName(project.path)}
+                  aria-label={t("项目名称")}
+                  onkeydown={(e) => renameKey(project, e)}
+                  onblur={() => commitRename(project)}
+                />
+              </div>
+            {:else}
+              <button class="prow-main" onclick={() => toggleProject(project.id)} title={project.path} aria-expanded={open}>
+                <span class="picon"><Icon name={open ? "folderOpen" : "folder"} size={16} /></span>
+                <span class="pname">{project.name}</span>
+                {#if project.pinned}<span class="ppin" title={t("已置顶")}><Icon name="pin" size={12} /></span>{/if}
+              </button>
+            {/if}
+            {#if all.length && renaming !== pathKey(project.path)}<span class="pcount" aria-hidden="true">{all.length}</span>{/if}
+            <div class="pacts" class:on={rowMenu?.project.id === project.id} class:off={renaming === pathKey(project.path)} data-no-drag>
               <button class="pact" disabled={!project.exists} title={t("在「{name}」中新建对话", { name: project.name })} aria-label={t("在 {name} 中新建对话", { name: project.name })} onclick={(e) => freshFor(project, e)}>
                 <Icon name="edit" size={15} />
               </button>
@@ -726,12 +829,29 @@
   {@const target = rowMenu.project}
   <Popover anchor={rowMenu.anchor} onclose={() => (rowMenu = null)} prefer="down" align="end" minWidth={216}>
     <MenuItem icon="edit" label={t("在这个项目里新建对话")} disabled={!target.exists} onclick={() => { rowMenu = null; void freshFor(target); }} />
+    {#if canRenameProject()}
+      <MenuItem icon="rename" label={t("重命名")} onclick={() => startRename(target)} />
+    {/if}
     <MenuItem icon={target.pinned ? "pinOff" : "pin"} label={target.pinned ? t("取消置顶") : t("置顶项目")} onclick={() => togglePin(target)} />
     {#if app.compat?.caps?.includes("memory")}
       <MenuItem icon="memory" label={t("项目记忆")} onclick={() => openMemory(target)} />
     {/if}
     <MenuSep />
     <MenuItem icon="eyeOff" label={t("隐藏项目")} description={t("只是不在侧栏显示，文件夹和历史对话都不会删除")} onclick={() => hideProject(target)} />
+  </Popover>
+{/if}
+
+{#if quickMenu}
+  <Popover anchor={quickMenu} onclose={() => (quickMenu = null)} prefer="down" align="end" minWidth={232}>
+    <MenuItem
+      icon="folderPlus"
+      label={t("存为工作空间")}
+      description={quickSession ? t("变成普通项目，不再被新快照替换") : t("先在快照里聊几句再存")}
+      disabled={!quickSession || quickBusy}
+      onclick={saveQuick}
+    />
+    <MenuSep />
+    <MenuItem icon="plus" label={t("新建快照")} disabled={quickBusy} onclick={() => { quickMenu = null; void newQuickSnap(); }} />
   </Popover>
 {/if}
 
@@ -965,6 +1085,36 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-weight: 500;
+  }
+  /* 就地改名：输入框顶替项目名，同字号同字重，一道墨色下划线标出正在编辑 */
+  .prow-main.renaming {
+    padding-right: 10px;
+  }
+  .pname-edit {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    padding: 0 2px;
+    border: 0;
+    border-bottom: 1px solid var(--accent);
+    border-radius: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-weight: 500;
+    outline: none;
+    user-select: text;
+  }
+  /* 下划线就是焦点指示，不再叠全局那圈朱色焦点框 */
+  .pname-edit:focus-visible {
+    outline: none;
+  }
+  .pname-edit::placeholder {
+    color: var(--text3);
+    font-weight: 400;
+  }
+  .pacts.off {
+    display: none;
   }
   .ppin {
     display: inline-flex;

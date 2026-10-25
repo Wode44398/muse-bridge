@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  QUICK_LINGER_MS,
   QUICK_NAME,
   isCurrentQuickPath,
   isQuickPath,
@@ -131,4 +132,87 @@ test("会话列表：旧桶全隐藏、当前桶只露最新一条、且置顶�
   } finally {
     process.env.SESSIONS_DIR = prevSessions;
   }
+});
+
+test("别处换了快照桶：在跑的、刚动过的、最新的那条旧快照照样列出（2026-10-13 截图里那条消失的快照）", () => {
+  isolate();
+  const old = quickProject()!;
+  const older = newQuickProject();
+  newQuickProject(); // 当前桶，里面还没有会话
+  const now = 10_000_000;
+  const m = (id: string, workspace: string, updatedAt: number) => ({ id, workspace, updatedAt }) as any;
+  // 已按 updatedAt 倒序
+  const rows = [
+    m("latest-quick", old.path, now - 60 * 60_000), // 所有快照里最新的一条（新桶还空着）
+    m("running", older.path, now - 50 * 60 * 60_000), // 很久没动，但还在跑
+    m("stale", older.path, now - 51 * 60 * 60_000),
+  ];
+  const f = quickSessionFilter({ busy: (id) => id === "running", now });
+  assert.deepEqual(rows.filter(f).map((r) => r.id), ["latest-quick", "running"]);
+
+  // 刚动过的（宽限内）也留着，即使不是最新那条
+  const f2 = quickSessionFilter({ now });
+  const recent = [m("a", old.path, now - 1000), m("b", older.path, now - 2000), m("c", older.path, now - QUICK_LINGER_MS - 1)];
+  assert.deepEqual(recent.filter(f2).map((r) => r.id), ["a", "b"]);
+});
+
+test("指针文件读不了（被占用）不当成没有：不换桶、不冲掉 adopted 名单", () => {
+  const root = isolate();
+  const a = quickProject()!;
+  const file = path.join(root, "quick.json");
+  const before = fs.readFileSync(file, "utf8");
+  // 把指针换成一个目录 → readFileSync 报 EISDIR（≠ ENOENT），模拟 Windows 上的 EBUSY / EPERM
+  fs.rmSync(file);
+  fs.mkdirSync(file);
+  try {
+    assert.equal(quickProject()!.path, a.path, "沿用上一次读到的桶");
+    assert.equal(isCurrentQuickPath(a.path), true);
+  } finally {
+    fs.rmdirSync(file);
+    fs.writeFileSync(file, before, "utf8");
+  }
+  assert.equal(quickProject()!.path, a.path);
+});
+
+test("存为工作空间：桶原地登记成项目、不再算快照，快照位换新桶，编号只增", async () => {
+  const root = isolate();
+  process.env.PROJECTS_FILE = path.join(root, "projects.json");
+  process.env.PROJECTS_ROOT = path.join(root, "projects");
+  const { registerSavedQuick, listProjects, renameProject } = await import("./projects.ts");
+  const { currentQuickForSave, adoptCurrentQuick, isAdoptedQuickPath } = await import("./quick.ts");
+
+  const a = quickProject()!;
+  // 前端手里的快照已经过期（别的设备换过）→ 拒绝，不把另一只桶存走
+  assert.throws(() => currentQuickForSave(path.join(root, "buckets", "stale")), /换过/);
+
+  const cur = currentQuickForSave(a.path);
+  assert.equal(cur.seq, 1);
+  const saved = await registerSavedQuick(cur.path, `快照会话 ${cur.seq}`);
+  const next = adoptCurrentQuick(cur);
+  assert.equal(saved.path, a.path);
+  assert.equal(saved.name, "快照会话 1");
+  assert.notEqual(next.path, a.path);
+  assert.equal(quickProject()!.path, next.path);
+  // 存走的桶：不再是快照（会话列表 / 项目发现照普通工作空间处理），也不会被当成当前快照重新铸回去
+  assert.equal(isQuickPath(a.path), false);
+  assert.equal(isAdoptedQuickPath(a.path), true);
+  assert.equal(isQuickPath(next.path), true);
+  assert.ok((await listProjects()).some((p) => p.path === a.path && p.name === "快照会话 1"));
+
+  // 它的会话照常列出（以前旧桶的会话一律隐藏）
+  const keep = quickSessionFilter();
+  assert.equal(keep({ workspace: a.path } as any), true);
+
+  // 第二次：编号接着往上走
+  const cur2 = currentQuickForSave();
+  assert.equal(cur2.seq, 2);
+  await registerSavedQuick(cur2.path, `快照会话 ${cur2.seq}`);
+  adoptCurrentQuick(cur2);
+  assert.equal(isQuickPath(next.path), false);
+  assert.equal(currentQuickForSave().seq, 3);
+
+  // 改名只改显示名；留空恢复文件夹名
+  const renamed = await renameProject(a.path, "  研报草稿  ");
+  assert.equal(renamed.name, "研报草稿");
+  assert.equal((await renameProject(a.path, "")).name, path.basename(a.path));
 });

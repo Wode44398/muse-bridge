@@ -155,10 +155,12 @@ export function exportUsers({ usersRoot, systemDir, out, only = null, log = cons
   mkdirSync(path.join(out, 'files'), { recursive: true });
   const list = [];
   for (const n of names) {
-    const src = path.join(usersRoot, n);
-    if (existsSync(src)) { log(`导出 ${n} …`); copyTree(src, path.join(out, 'files', n)); }
+    // 目录与用量账本按账号 id（S2-4：老账号没有 id 字段 = id 就是用户名）
+    const id = String(users[n]?.id || n);
+    const src = path.join(usersRoot, id);
+    if (existsSync(src)) { log(`导出 ${n} …`); copyTree(src, path.join(out, 'files', id)); }
     else log(`导出 ${n}（没有目录，只带账号记录）`);
-    list.push({ name: n, record: users[n], usage: usage[n] || null, hasFiles: existsSync(src) });
+    list.push({ name: n, id, record: users[n], usage: usage[id] || null, hasFiles: existsSync(src) });
   }
   const manifest = { version: 1, exportedAt: Date.now(), from: { platform: process.platform, usersRoot }, users: list };
   writeFileSync(path.join(out, MANIFEST), JSON.stringify(manifest, null, 2));
@@ -166,6 +168,14 @@ export function exportUsers({ usersRoot, systemDir, out, only = null, log = cons
 }
 
 // ── 导入（服务端）───────────────────────────────────────────────────────────
+// 登录名与账号 id 都会变成目录名 / 账本键：只收 users.mjs 能生成的形状（小写字母数字 _ -，不以 _ / - 开头）。
+const SAFE_ID = /^[a-z0-9][a-z0-9_-]{1,40}$/;
+// 本机账号的「id → users.json 里的键」（老账号没有 id 字段 = id 就是用户名，同 users.mjs accountId）。
+function idOwners(users) {
+  const m = new Map();
+  for (const [k, r] of Object.entries(users)) if (r && typeof r === 'object') m.set(String(r.id || r.name || k), k);
+  return m;
+}
 export function importUsers({ usersRoot, systemDir, from, only = null, overwrite = false, log = console.log }) {
   const manifest = readJson(path.join(from, MANIFEST), null);
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.users)) throw new Error('不是导出目录（找不到 ' + MANIFEST + '）');
@@ -174,25 +184,50 @@ export function importUsers({ usersRoot, systemDir, from, only = null, overwrite
   const usageFile = path.join(systemDir, 'usage.json');
   const users = readJson(usersFile, {});
   const usage = readJson(usageFile, {});
+  // 本机删过的账号 id（S2-4：永不复用——导进来的账号拿到它，就接上了那个人留下的墓碑、退役记录）
+  const retiredRaw = readJson(path.join(systemDir, 'retired-accounts.json'), []);
+  const retired = new Set((Array.isArray(retiredRaw) ? retiredRaw : []).map((x) => x && x.id).filter(Boolean));
   const done = [];
   mkdirSync(systemDir, { recursive: true });
   for (const u of manifest.users) {
-    if (only && !only.includes(u.name)) continue;
-    if (users[u.name] && !overwrite) { log(`跳过 ${u.name}：服务端已有同名账号（要覆盖加 --overwrite）`); continue; }
-    const dst = path.join(usersRoot, u.name);
+    const name = String(u?.name || '');
+    if (only && !only.includes(name)) continue;
+    if (!SAFE_ID.test(name)) { log(`跳过 ${name || '（没有名字）'}：登录名不合法`); continue; }
+    const self = Object.hasOwn(users, name) ? name : null;   // --overwrite 时要覆盖的那条本机账号
+    if (self && !overwrite) { log(`跳过 ${name}：服务端已有同名账号（要覆盖加 --overwrite）`); continue; }
+    const id = String(u.id || u.record?.id || name);   // 老导出包没有 id = 用户名
+    if (!SAFE_ID.test(id)) { log(`跳过 ${name}：账号 id「${id}」不合法`); continue; }
+    // 不变 id 的前提：一个 id 只属于一个账号，登录名也不能撞上别人的 id（users.mjs 建号 / 改名时同样挡着）。
+    // 只看「登录名没撞」不够：本机老账号 bob 改名成 robert 之后 id 仍是 bob，再导入一个老账号 bob（id = bob），
+    // 两条记录就共用一个目录、一个 owner 键，robert 的登录会话会被认成导入的那个人。--overwrite 也不放行。
+    const owners = idOwners(users);
+    const idHolder = owners.get(id);
+    if (idHolder && idHolder !== self) { log(`跳过 ${name}：账号 id ${id} 已属于本机账号 ${idHolder}`); continue; }
+    if (id !== name && Object.hasOwn(users, id) && id !== self) { log(`跳过 ${name}：账号 id ${id} 与本机账号的登录名相同`); continue; }
+    const nameHolder = owners.get(name);
+    if (nameHolder && nameHolder !== self) { log(`跳过 ${name}：这个登录名是本机账号 ${nameHolder} 的 id`); continue; }
+    if (retired.has(id)) { log(`跳过 ${name}：账号 id ${id} 在这台服务端删过，不再复用`); continue; }
+    const dst = path.join(usersRoot, id);
+    // 目录已存在：有文件要导就会混进去；没文件要导就会直接接手那个目录（多半是以前删号留下的）——都先跳过
+    if (existsSync(dst) && !overwrite) { log(`跳过 ${name}：目录 ${dst} 已存在`); continue; }
+    if (self && overwrite) {
+      const prevId = String(users[self].id || self);
+      if (prevId !== id) log(`  注意：覆盖的本机账号 ${self} 原来的 id 是 ${prevId}，它的目录 ${path.join(usersRoot, prevId)} 留在原处`);
+    }
     if (u.hasFiles) {
-      if (existsSync(dst) && !overwrite) { log(`跳过 ${u.name}：目录 ${dst} 已存在`); continue; }
-      log(`导入 ${u.name} …`);
-      copyTree(path.join(from, 'files', u.name), dst, overwrite);
-      const oldRoot = String(manifest.from.usersRoot).replace(/[\\/]+$/, '') + (manifest.from.platform === 'win32' ? '\\' : '/') + u.name;
+      log(`导入 ${name} …`);
+      copyTree(path.join(from, 'files', id), dst, overwrite);
+      const oldRoot = String(manifest.from.usersRoot).replace(/[\\/]+$/, '') + (manifest.from.platform === 'win32' ? '\\' : '/') + id;
       const quick = readJson(path.join(dst, '.bridge', 'claude-quick.json'), {});
       const projs = readJson(path.join(dst, '.bridge', 'claude-projects.json'), {}).projects || [];
       const st = rewriteUserData(dst, rw, { candidates: [oldRoot, quick.path, ...projs.map((p) => p.path)] });
       log(`  会话目录改名 ${st.renamed} 个，改写路径的文件 ${st.files} 个`);
     }
-    users[u.name] = { ...u.record, name: u.name };
-    if (u.usage) usage[u.name] = u.usage;
-    done.push(u.name);
+    const rec = { ...u.record, name };
+    if (id !== name || rec.id) rec.id = id;   // 老账号（id = 用户名、没写 id 字段）保持原样
+    users[name] = rec;
+    if (u.usage) usage[id] = u.usage;
+    done.push(name);
   }
   writeFileSync(usersFile, JSON.stringify(users, null, 2));
   writeFileSync(usageFile, JSON.stringify(usage, null, 2));

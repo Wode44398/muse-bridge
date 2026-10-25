@@ -206,6 +206,7 @@ export default {
   "{q} 等 {n} 个问题": { one: "{q} · {n} question", other: "{q} · {n} questions" },
   "在任务面板中查看": "View in Tasks",
   "转后台": "Move to background",
+  "已运行 {dur}": "Running {dur}",
   "参数": "Arguments",
   "结果": "Result",
   "运行中…": "Running…",

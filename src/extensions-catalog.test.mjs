@@ -148,11 +148,11 @@ test('下载官方目录：浅克隆进 claude-plugins-official、换掉旧副�
   const froot = path.join(tmp, 'fetched');
   mkdirSync(path.join(froot, 'claude-plugins-official'), { recursive: true });
   writeFileSync(path.join(froot, 'claude-plugins-official', 'stale.txt'), 'old');
-  const r = await fetchOfficialCatalog({ root: froot, repo });
+  const r = await fetchOfficialCatalog({ root: froot, sources: [{ name: 'claude-plugins-official', repo }] });
   assert.deepEqual(r.items.map((x) => x.id), ['claude-plugins-official/beta']);
   assert.ok(!existsSync(path.join(froot, 'claude-plugins-official', 'stale.txt')), '旧副本被换掉');
   assert.ok(!existsSync(path.join(froot, 'claude-plugins-official', '.git')));
 
-  await assert.rejects(fetchOfficialCatalog({ root: froot, repo: path.join(tmp, 'nope') }), (e) => e.status === 502);
+  await assert.rejects(fetchOfficialCatalog({ root: froot, sources: [{ name: 'claude-plugins-official', repo: path.join(tmp, 'nope') }] }), (e) => e.status === 502);
   assert.equal(listCatalog({ root: froot }).items.length, 1, '失败时旧副本还在');
 });

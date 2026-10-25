@@ -19,6 +19,8 @@ import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { ROOT } from '../config/index.mjs';
 import { claudeEngineEnv } from '../runtime/claude-account.mjs';
+import { claudeCliOptions } from '../runtime/claude-cli.mjs';   // Claude Code 可执行文件在哪（SDK 自带的不传）
+import { PEER_OFF_ENV, PEER_OFF_SETTINGS } from '../runtime/session-peers.mjs';   // 这个临时 CLI 不进跨会话通道
 
 // —— 待生效的对话回滚锚点（sessionId → resumeSessionAt uuid）——
 // 下一轮 runClaudeChat 消费；落盘防服务重启丢账。历史接口也按它截断视图，
@@ -49,6 +51,29 @@ export function findRewindAnchors(file, userUuid) {
   return found ? { convAnchor } : null;
 }
 
+// 号池换号重发用的分叉锚点：沿【目标用户消息的 parentUuid 链】往回找第一条真回答（跳过附件 /
+// system 帧 / 合成的 API 错误消息）。不能按文件顺序取「前一条 assistant」——会话里有过分叉时，
+// 文件里排在前面的可能是废弃分支上的合成错误消息（实测锚到它，重发那轮直接起不来）。
+// 链上先碰到别的用户消息（上一轮也没答出来）就返回 null：不分叉，原样重发。
+export function findRetryAnchor(file, userUuid) {
+  let text = '';
+  try { text = readFileSync(file, 'utf8'); } catch { return null; }
+  const byId = new Map();
+  for (const line of text.split('\n')) {
+    let o; try { o = JSON.parse(line); } catch { continue; }
+    if (o && o.uuid && !o.isSidechain) byId.set(o.uuid, o);
+  }
+  const target = byId.get(userUuid);
+  if (!target || target.type !== 'user') return null;
+  let cur = target.parentUuid ? byId.get(target.parentUuid) : null;
+  for (let guard = 0; cur && guard < 10_000; guard++) {
+    if (cur.type === 'assistant' && !cur.isApiErrorMessage && !(cur.message && cur.message.model === '<synthetic>')) return cur.uuid;
+    if (cur.type === 'user' && !cur.isMeta && cur.message && !(Array.isArray(cur.message.content) && cur.message.content.every((b) => b && b.type === 'tool_result'))) return null;
+    cur = cur.parentUuid ? byId.get(cur.parentUuid) : null;
+  }
+  return null;
+}
+
 // 文件回滚执行器。resolve 为 SDK 的 RewindFilesResult；检查点缺失等业务失败会 throw，
 // 由路由层归类（旧会话没开过检查点 / 该消息后没改过文件 → 软失败）。
 export async function rewindClaudeFiles({ sessionId, cwd, ctx, userUuid }) {
@@ -60,13 +85,16 @@ export async function rewindClaudeFiles({ sessionId, cwd, ctx, userUuid }) {
   const q = query({
     prompt: silent(),
     options: {
+      ...claudeCliOptions(),
       cwd,
       resume: sessionId,
       enableFileCheckpointing: true,
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       maxTurns: 1,
       abortController: abort,
-      ...(engineEnv ? { env: engineEnv } : {}),
+      // resume 同一个会话 id：通道开着的话它会以这个会话的身份登记、开收件箱（session-peers.mjs PEER_OFF_*）
+      env: { ...(engineEnv || process.env), ...PEER_OFF_ENV },
+      settings: JSON.stringify(PEER_OFF_SETTINGS),
     },
   });
   // 注意：不发消息的 resume query 不一定会发 init 事件（实测等 init 会白等超时）。

@@ -16,6 +16,10 @@
   import { toolVerb, morphText } from '../../lib/toolVerbs.js';
   import { taskRunning } from '../../lib/taskModel.js';
   import { glyph } from '../../lib/claudeIcons.js';
+  import { childByTitle, resolveSessionRef, sessionTitle } from '../../lib/sessionFamily.svelte.js';
+  import { openSession } from '../../lib/chat.svelte.js';
+  import { session } from '../../lib/state.svelte.js';
+  import { IS_CSNAP } from '../../lib/csnap.js';
 
   let { tool, run = undefined, inGroup = false, live = false } = $props();
 
@@ -28,6 +32,8 @@
   const allError = $derived(tools.length > 0 && tools.every((t) => t.status === 'error'));
   const interrupted = $derived(tools.some((t) => !!t.interrupted));
   const rejected = $derived(tools.some((t) => !!(t.rejected || t.denied)));
+  // 自动模式分类器拦下的（perm_denied 帧 / 历史里 CLI 的分类器拒绝句）：官方尾巴「Blocked by auto mode」
+  const autoBlocked = $derived(tools.some((t) => t.denied === 'classifier' || t.denied === 'auto'));
   // 工具结果已回但后台任务（后台 Bash）仍在跑 → 用任务状态（官方 U）
   const U = $derived(!anyRunning && task ? task.status : undefined);
   const H = $derived(!!live && (anyRunning || taskRunning(U)));
@@ -49,10 +55,17 @@
   const ue = $derived(B && !stopped && le ? d.failedVerb : undefined);
   const verbText = $derived(ce ?? (V ? d.runningVerb : (ue ?? d.verb)));
   const showMeta = $derived(!!d.meta && !ce);
+  // 会话协作工具：meta 指向的会话（派生出的子会话按标题找；发消息 / 读会话按 to 找），找得到就能点过去
+  const refId = $derived.by(() => {
+    const r = d.sessionRef;
+    if (!r || IS_CSNAP) return '';
+    return r.title ? childByTitle('', r.title) : resolveSessionRef(session.id, r.to);
+  });
+  const refLabel = $derived(d.sessionRef && d.sessionRef.to ? (sessionTitle(refId, '') || d.meta) : d.meta);
   const metaPrimary = $derived(!!(d.metaIsPath || d.metaIsCode));
   const danger = $derived(!V && B && !stopped && !interrupted && !rejected);
   const tail = $derived(V || (!stopped && !interrupted)
-    ? (!V && rejected ? 'Denied' : (!V && B && !ce && !ue ? 'Failed' : ''))
+    ? (!V && rejected ? (autoBlocked ? 'Blocked by auto mode' : 'Denied') : (!V && B && !ce && !ue ? 'Failed' : ''))
     : 'Stopped');
 
   // 合并 Read 的行号范围（官方 Z）：每条 offset/limit → "a–b"，全部有值才显示
@@ -105,7 +118,9 @@
   <div class="row" class:expandable={expandable} role="button" tabindex="0" aria-expanded={expandable ? open : undefined} onclick={toggle} onkeydown={onKey}>
     <span class="verb" class:cl-shine={V} class:danger={danger} class:trunc={!!ce} class:nowrap={!ce} use:morphText={verbText}>{verbText}</span>
     {#if showMeta}
-      {#if d.metaHref}
+      {#if refId}
+        <button class="meta pri trunc sref" title={refLabel} onclick={(e) => { e.stopPropagation(); openSession(refId); }}>{refLabel}</button>
+      {:else if d.metaHref}
         <a class="meta pri trunc" href={d.metaHref} target="_blank" rel="noreferrer" onclick={(e) => e.stopPropagation()}>{d.meta}</a>
       {:else}
         <span class="meta trunc" class:pri={metaPrimary} class:code={d.metaIsCode}>{d.meta}</span>
@@ -117,7 +132,7 @@
     {#if expandable}<span class="ic caret" aria-hidden="true">{glyph(open ? 'CaretDown' : 'CaretRight')}</span>{/if}
   </div>
   {#if mounted}
-    <div class="body" class:card={!inGroup} hidden={!open}>
+    <div class="body sel-text" class:card={!inGroup} hidden={!open}>
       {#each bodies as b, i (b.tool.id || i)}
         <div class="params" class:sep={i > 0}>
           {#each b.params as p (p.key)}
@@ -156,6 +171,9 @@
   .meta.code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
   a.meta { text-decoration: none; }
   a.meta:hover { text-decoration: underline; text-underline-offset: 3px; }
+  /* 会话引用：按钮去掉默认外观，和链接同一种悬停下划线 */
+  .sref { font: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; text-align: left; min-width: 0; }
+  @media (hover: hover) { .sref:hover { text-decoration: underline; text-underline-offset: 3px; } }
   .tail { flex: none; }
   .rng { color: inherit; }
   /* 展开箭头（官方 My customSize 14）：字体图标，可变字重 570 ≈ 14px 下的描边粗细 */

@@ -186,12 +186,6 @@
   .hero-note { margin-top: 16px; max-width: 560px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.7; padding: 0 10px; }
 
   .scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(var(--composer-h, 84px) + 8px); }
-  /* 正文滚条=Claude 分页同款 6px 细滚条（只用 webkit 伪元素——别设标准 scrollbar-width/
-     scrollbar-color，Chromium 里标准属性一出现伪元素即整体失效） */
-  .scroll::-webkit-scrollbar { width: 6px; }
-  .scroll::-webkit-scrollbar-track { background: transparent; }
-  .scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 38%, transparent); border-radius: 999px; }
-  @media (hover: hover) { .scroll::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--muted) 62%, transparent); } }
   .composer-wrap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
     padding: 6px 8px max(10px, var(--sab, 0px)); background: transparent; pointer-events: none; }
   .composer-inner { max-width: 760px; margin: 0 auto; pointer-events: auto; }

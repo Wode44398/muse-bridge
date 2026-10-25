@@ -153,18 +153,18 @@
       {#if phase === 'loading'}
         <div class="of-center"><span class="of-spin"></span><p class="of-tip">{cat === 'sheet' ? t('解析表格…') : t('转换中…（首次稍候）')}</p></div>
       {:else if phase === 'error'}
-        <div class="of-center of-err"><p>{t('无法预览此文档')}</p><p class="of-sub">{tr(errMsg)}</p><button onclick={start}>{t('重试')}</button>{#if item.downloadHref}<a class="of-dl" href={item.downloadHref} download={item.name}>{t('下载原文件')}</a>{/if}</div>
+        <div class="of-center of-err"><p>{t('无法预览此文档')}</p><p class="of-sub sel-text">{tr(errMsg)}</p><button onclick={start}>{t('重试')}</button>{#if item.downloadHref}<a class="of-dl" href={item.downloadHref} download={item.name}>{t('下载原文件')}</a>{/if}</div>
       {:else if phase === 'word'}
-        <div class="of-scroll"><div class="of-doc">{@html wordHtml}</div></div>
+        <div class="of-scroll"><div class="of-doc sel-text">{@html wordHtml}</div></div>
       {:else if phase === 'sheet'}
-        <div class="of-scroll of-sheetscroll">{@html sheets[activeSheet]?.html || ''}</div>
+        <div class="of-scroll of-sheetscroll sel-text">{@html sheets[activeSheet]?.html || ''}</div>
       {:else if phase === 'slides'}
         <div class="of-scroll of-slides">
           {#each slides as sl, i (i)}
             <div class="of-slide">
               <div class="of-slide-no">{i + 1}</div>
               {#each sl.imgs as src (src)}<img class="of-slide-img" {src} alt="" />{/each}
-              {#each sl.texts as tx (tx)}<p class="of-slide-txt">{tx}</p>{/each}
+              {#each sl.texts as tx (tx)}<p class="of-slide-txt sel-text">{tx}</p>{/each}
               {#if !sl.imgs.length && !sl.texts.length}<p class="of-slide-empty">{t('（此页无文本）')}</p>{/if}
             </div>
           {/each}

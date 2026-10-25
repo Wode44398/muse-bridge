@@ -39,12 +39,15 @@ import { apiUrl } from './server.js';
 import { claudeArtifactUrl, kindOf as previewKindOf } from './preview.svelte.js';
 import { session, settings, ui, status, compose, refusalBand, caps, prefs, sessionWt } from './state.svelte.js';
 import { closeTaskDetail, forgetTaskTool, dock } from './dock.svelte.js';
-import { toolStandalone, COMPACT_TOOL, isCompactTool } from './toolVerbs.js';
+import { toolJoins, COMPACT_TOOL, isCompactTool } from './toolVerbs.js';
 import { claudeDefaultModel } from './caps.js';
 import { retractSegments } from './retract.js';
 import { cacheMessages, getCachedMessages, getCachedMessagesMeta } from './cache.js';
 import { getStyle } from './styles.svelte.js';
-import { agentStart, agentStream, agentEnd } from './notify.js';
+import { agentStart, agentStream, agentEnd, notifyKind } from './notify.js';
+// 设置 › Claude（服务端按身份存、多设备同步）：输入建议 / 自动压缩点；本文件 chatParams 里有局部变量 cs，取别名
+import { cs as claudeCs } from './claudeSettings.svelte.js';
+import { pendingOutputStyle, markOutputStyleSent, adoptOutputStyleSent, absorbSessionOutputStyle } from './outputStyle.svelte.js';
 import { noteAgentTerm } from './dock.svelte.js';
 import { handleWsx } from './uiReport.js';
 import { noteFsChange } from './fsSync.svelte.js';
@@ -52,8 +55,17 @@ import { storeGet, storeSet } from './store.js';
 import { IS_CSNAP } from './csnap.js';
 import { IS_SOLO } from './solo.js';
 import { prefsFor, lastPrefs, notePrefs, absorbServerPrefs } from './chatPrefs.js';
+import { prefillComposer, composerHasDraft } from './composerBridge.svelte.js';
+import { promoteComposerDraft, syncComposerDraftKey } from './composerDrafts.svelte.js';
 import { mergeProgress, settleProgress, workflowNameFromInput, usageOf, normTaskStatus, taskRunning } from './taskModel.js';
+// 权限模式 / 逐次审批卡 / 计划审批卡（2026-10-20）：帧处理与状态都在 permissions.svelte.js，这里只转发
+import { onPermEvent, permOnAttach, permOnFinish, hasPendingApproval, draftPermissionMode, resetPermDraft, steerWhileWaiting } from './permissions.svelte.js';
 import { t as tt, tr } from './i18n.js';   // 本文件的 t 是工具行/任务局部变量，翻译函数取别名 tt
+import { noteFamilyLink, noteCollabEvent } from './sessionFamily.svelte.js';
+import { noteSessionArchived } from './sessionArchive.svelte.js';   // 单条加载带回的归档态（「此会话已归档」横条）
+import { applyWidgetEvent, narrowViewport } from './widgetSeg.js';   // 对话内嵌交互图表（widget_* 帧 → widget 段；窄屏按手机宽度出图）
+import { effectiveEffort } from './claudeProviders.svelte.js';   // 自定义模型只带它档位表里的推理强度（换模型带过来的不发）
+import { showToast } from './toast.svelte.js';
 
 // 最近一次打开的会话 id（强持久：关掉页面冷启动也能找回）。session.id 的每个赋值点
 // 都同步写入；boot 时 restoreOnBoot 用它把上次的对话自动加载回来。
@@ -292,6 +304,7 @@ function makeTool(x) {
     ms: x.ms || 0,
     ...(x.synthetic ? { synthetic: true } : {}),     // task_start 抢在工具事件前合成的行
     ...(x.interrupted ? { interrupted: true } : {}), // 轮出错/中断时还没回结果的工具
+    ...(x.denied ? { denied: x.denied } : {}),       // 审批被拒 / 自动模式拦下（ToolRow 尾巴 Denied）
     ...(x.compact ? { compact: makeCompact(x.compact) } : {}),   // 上下文压缩条目（name=COMPACT_TOOL）
     task: x.task ? makeTask(x.task) : null,
   };
@@ -363,7 +376,7 @@ function makeTask(x) {
 function pushTool(m, x) {
   const last = m.segments[m.segments.length - 1];
   const prev = last && last.kind === 'tools' && last.tools.length ? last.tools[last.tools.length - 1] : null;
-  const join = last && last.kind === 'tools' && !toolStandalone(x.name) && !(prev && toolStandalone(prev.name));
+  const join = last && last.kind === 'tools' && toolJoins(prev ? prev.name : '', x.name);
   if (!join) m.segments.push({ kind: 'tools', tools: [], open: false });
   const seg = m.segments[m.segments.length - 1];
   seg.tools.push(makeTool(x));
@@ -449,7 +462,7 @@ function retractTurn(m, ev) { retractSegments(m, ev, forgetEntry); }
 // 有「正文类」内容（文本/工具行）——done.result 兜底只看它；hasContent 另认 notice 段
 //（只剩一张切换卡的轮也不是空幽灵轮，settleView 不许 pop）。
 function hasBody(m) {
-  return m.segments.some((s) => (s.kind === 'text' && s.md.trim()) || (s.kind === 'tools' && s.tools.length));
+  return m.segments.some((s) => (s.kind === 'text' && s.md.trim()) || (s.kind === 'tools' && s.tools.length) || s.kind === 'widget');
 }
 function hasContent(m) {
   return hasBody(m) || m.segments.some((s) => s.kind === 'notice');
@@ -507,8 +520,10 @@ const PHASE = {
   tool: 'tool', tool_args: 'tool',   // tool_done 不改相位：结果回来不等于活干完
   task_start: 'tool', task_progress: 'tool', task_update: 'tool', task_done: 'tool',
   agent_msg: 'tool',                 // 子 agent 在干活 → 环绕
+  widget_start: 'writing', widget_delta: 'writing',   // 内嵌图表：模型正在写图表代码
   question: 'waiting', answer: 'thinking',
   refusal_prompt: 'waiting', refusal_answer: 'thinking',   // 安全栅门暂停：等人二选一
+  perm_request: 'waiting', perm_answer: 'thinking', plan_request: 'waiting', plan_answer: 'thinking',   // 审批卡：等人批
   model_notice: 'thinking', retract: 'thinking',   // 安全栅门切模型重试：换个模型重新想
   bg_hold: 'waiting',   // 悬停等后台子任务：主模型已停笔，星标降成慢呼吸
   compact: 'tool',      // 上下文压缩（动辄一两分钟不出字）：算在干活，别被判成长静默
@@ -521,7 +536,7 @@ const PHASE = {
 // 若像对待正文一样为它们「补开一条 assistant 气泡」，就会造出一个空的、永远转圈的幽灵轮，还把
 // session.busy 立起来堵住下一次发送——下一次 sync 的 attach 重放又会把整轮内容灌进这只幽灵，看起来
 // 像回答重复了一遍（2026-09-02 集成验收工作流轮实证：done → ctx_usage → 空气泡 → 重放复制）。
-const STATUS_ONLY = new Set(['context', 'ctx_usage', 'effort', 'limits']);
+const STATUS_ONLY = new Set(['context', 'ctx_usage', 'effort', 'limits', 'perm_mode']);   // perm_mode：权限模式实况，可能在轮外到达
 function applyStatusEvent(ev) {
   switch (ev.type) {
     case 'context': {
@@ -533,6 +548,7 @@ function applyStatusEvent(ev) {
     case 'ctx_usage': if (ev.sessionId && ev.usage && ev.usage.max) status.usages[ev.sessionId] = ev.usage; return;
     case 'effort': if (ev.sessionId) status.efforts[ev.sessionId] = { level: ev.level || null, at: Date.now() }; return;
     case 'limits': if (ev.limits) { status.limits = ev.limits; status.updatedAt = ev.updatedAt || Date.now(); } return;
+    case 'perm_mode': onPermEvent(null, ev); return;
   }
 }
 
@@ -570,6 +586,7 @@ function trackRun(m, ev) {
       return;
     case 'thinking': m.retry = null; thinkBegin(m); m.wait = null; return;
     case 'text': m.retry = null; thinkFinish(m); m.wait = null; return;
+    case 'widget_start': case 'widget_delta': m.retry = null; thinkFinish(m); m.wait = null; return;   // 图表代码在出 = 在写
     case 'tool':
       m.retry = null; thinkFinish(m); m.wait = 'tools';
       pendingTools.add(ev.id || '#' + ev.index);
@@ -582,14 +599,14 @@ function trackRun(m, ev) {
     case 'retry':
       m.retry = { attempt: Number(ev.attempt) || 0, max: Number(ev.max) || 0, kind: ev.errorKind || '', status: ev.status || 0 };
       return;
-    case 'question': case 'bg_hold': case 'refusal_prompt': thinkFinish(m); m.wait = null; return;
+    case 'question': case 'bg_hold': case 'refusal_prompt': case 'perm_request': case 'plan_request': case 'offer': thinkFinish(m); m.wait = null; return;
   }
 }
 // 当前该显示哪条状态（纯函数，计时器每 200ms 调一次）。返回 {k,…} 或 null；文案在 Thread 里按 k 取。
 function computeHint(m, now) {
   if (m.compacting) return { k: 'compact' };
   if (m.retry) return { k: 'retry', ...m.retry };
-  if (m.paused || m.segments.some((s) => s.kind === 'ask' && !s.answered)) return { k: 'ask' };
+  if (m.paused || m.offerQid || m.segments.some((s) => s.kind === 'ask' && !s.answered) || hasPendingApproval(m, session.id)) return { k: 'ask' };   // offerQid：「新会话 / 在这里做」卡在等
   if (m.bgHold) return null;   // 挂起等后台任务：右侧任务芯片已经说明在等什么
   const sec = Math.floor((now - m.startedAt) / 1000);
   const thinking = () => ({ k: 'think', n: sec >= 60 ? 4 : sec >= 45 ? 3 : sec >= 30 ? 2 : sec >= 15 ? 1 : 0 });
@@ -638,6 +655,8 @@ function onEvent(m, ev) {
       m.idle = false;
       m.bgHold = null;       // 重放会按事件顺序重建悬停态（bg_hold → session/text 解除）
       m.paused = false;      // 同理：安全栅门暂停由重放里的 refusal_prompt / refusal_answer 重建
+      permOnAttach(ev.sessionId || session.id);   // 审批卡同理：重放按顺序重建，仍在等的恢复可点
+      m.offerQid = null;     // 同理：offer 卡由重放里的 offer / offer_answer 重建
       // elapsedMs：把"思考 Ns"计时器重锚到服务端真实起点——杀后台/刷新回来不再从 0 数。
       if (typeof ev.elapsedMs === 'number' && ev.elapsedMs >= 0) {
         m.startedAt = Date.now() - ev.elapsedMs;
@@ -647,7 +666,7 @@ function onEvent(m, ev) {
     case 'session':
       if (ev.sessionId) {
         // 新会话首轮：id 此刻才定下来——把发送时的选择器记忆补绑到这个会话上。
-        if (!session.id) notePrefsNow(ev.sessionId);
+        if (!session.id) { notePrefsNow(ev.sessionId); promoteComposerDraft(ev.sessionId); adoptOutputStyleSent(ev.sessionId); }   // 输入栏草稿跟着改名，不当成切会话；随第一条带的输出风格转记成会话覆盖
         session.id = ev.sessionId; rememberSession(ev.sessionId);
         if (ev.wt && ev.wt.cwd) sessionWt[ev.sessionId] = ev.wt;   // worktree 会话：工作台当场切过去
       }
@@ -678,6 +697,34 @@ function onEvent(m, ev) {
       }
       break;
     case 'text': queueText(m, ev.text || ''); agentStream('Claude', lastText(m)); break;
+    // 插话（Claude 工作中按回车）：这一轮回答流里的一个插话气泡；CLI 读到它之前标「等待读取」。
+    // 只认流里的事件落段（单写者）——发起插话的 POST 只回 JSON，不碰消息列表。
+    case 'steer':
+      if (!m.segments.some((s) => s.kind === 'steer' && s.uuid && s.uuid === ev.uuid)) {
+        m.segments.push({ kind: 'steer', text: ev.text || '', files: Array.isArray(ev.files) ? ev.files : [], uuid: ev.uuid || '', read: false });
+      }
+      break;
+    case 'steer_state': {
+      const sg = m.segments.find((s) => s.kind === 'steer' && s.uuid === ev.uuid);
+      if (sg) { if (ev.state === 'cancelled') sg.cancelled = true; else sg.read = true; }
+      break;
+    }
+    case 'mcp':
+      if (ev.sessionId) mcpState.bySession[ev.sessionId] = { servers: Array.isArray(ev.servers) ? ev.servers : [], at: Date.now() };
+      break;
+    case 'family_link':
+      // 这一轮里 Claude 派生了一个子会话：工具行据此直接链过去（侧栏列表要等它的记录落盘才有）
+      noteFamilyLink(ev);
+      break;
+    // 「Claude 发起新会话」的卡（session-tools.mjs）：offer = 「新会话 / 在这里做」在等用户，offer_answer = 答了；
+    // proposal = 提议卡落下。卡片状态住在 sessionFamily.svelte.js（总线 {type:'proposal'} 同步多设备），这里只记「在等」。
+    case 'offer':
+      m.offerQid = ev.qid || null; noteCollabEvent(ev);
+      // 设置 › Claude › 通知 › 提问：「新会话 / 在这里做」也是在等你选——没在看时弹系统通知，按 qid 去重（重连重放不重复弹）
+      notifyKind('question', { body: tt('为“{title}”新建会话，还是就在这里处理？', { title: ev.title || tt('这项任务') }), watching: ui.screen === 'claude' && !document.hidden, tag: ev.qid });
+      break;
+    case 'offer_answer': if (m.offerQid === ev.qid) m.offerQid = null; noteCollabEvent(ev); break;
+    case 'proposal': noteCollabEvent(ev); break;
     case 'thinking': m.thinking += ev.text || ''; break;
     case 'tool': {
       // 索引命中但那一行不在本条消息里（上面 resetToolIndex 注释里的孤儿）= 不算已有，照常入段——
@@ -710,7 +757,7 @@ function onEvent(m, ev) {
       break;
     // 只改 status 的事件（上下文填充 / 分布 / 实际 effort / 额度）——统一走 applyStatusEvent，
     // 收轮之后还会到的那几条（ctx_usage 在 done 之后 ~1.5s）在 applyLiveEvent 里也走它，不再开气泡。
-    case 'context': case 'ctx_usage': case 'effort': case 'limits': applyStatusEvent(ev); break;
+    case 'context': case 'ctx_usage': case 'effort': case 'limits': case 'perm_mode': applyStatusEvent(ev); break;
     // 检查点回滚锚点：本轮用户消息在 transcript 里的 uuid → 挂到最近的用户气泡上
     //（「回滚到此」入口据此可用；历史重开的气泡由 /api/session 直接带 uuid）。
     case 'anchor': {
@@ -727,8 +774,20 @@ function onEvent(m, ev) {
     case 'wsx': handleWsx(ev); break;
     // agent 的 Edit/Write 落盘成功：打开中的文档查看器自动跟盘刷新（fsSync）。
     case 'fs': noteFsChange(ev.path); break;
-    case 'question': showQuestion(m, ev); break;
+    case 'question':
+      showQuestion(m, ev);
+      // 设置 › Claude › 通知 › 提问（本机开关）：没在看这个会话时弹系统通知，按 qid 去重（重连重放不重复弹）
+      notifyKind('question', { body: (Array.isArray(ev.questions) && ev.questions[0] && ev.questions[0].question) || '', watching: ui.screen === 'claude' && !document.hidden, tag: ev.qid });
+      break;
     case 'answer': markAnswered(m, ev); break;
+    // 逐次审批卡（输入框上方停靠）/ 计划审批卡（流里的 plan 段）/ 权限模式实况——lib/permissions.svelte.js
+    case 'perm_request': case 'perm_answer': case 'plan_request': case 'plan_answer':
+      onPermEvent(m, ev);
+      // 人拒掉的那条工具行标 Denied（ToolRow 的 rejected/denied 尾巴；历史重建按 tool_result 措辞标同一个字段）
+      if (ev.type === 'perm_answer' && ev.decision === 'deny' && ev.toolUseId) { const t = toolById.get(ev.toolUseId); if (t) t.denied = 'user'; }
+      break;
+    // 不经审批卡就被拒（auto 模式分类器 / 规则）：同样标在工具行上
+    case 'perm_denied': { const t = ev.toolUseId ? toolById.get(ev.toolUseId) : null; if (t) t.denied = ev.kind || 'auto'; break; }
     // 安全栅门暂停（服务端 onRefusalDialog）：输入框上方摆 Paused 卡，等人选「编辑重试 / 换模型」。
     // attach 重放按顺序先 prompt 后 answer，已答的自然不再弹。
     case 'refusal_prompt':
@@ -743,6 +802,9 @@ function onEvent(m, ev) {
     case 'error':
       m.status = 'error';
       m.error = ev.message || ev.title || tt('出错了');
+      // 撞限额：官方同款限额卡（LimitCard）按 limit 排版；5 小时限额另带自动续跑状态
+      if (ev.limit) m.limit = ev.limit;
+      if ('resume' in ev) noteLimitResume(ev.sessionId || session.id, ev.resume || null);
       settleTurn(m, 'error');
       break;
     case 'interrupted': settleTurn(m, 'stopped'); break;
@@ -857,6 +919,7 @@ function onEvent(m, ev) {
     }
     // 悬停被兜底收尾（封顶/静默/用户点「结束等待」）：挂起提示退场，紧随其后的 done 定局。
     case 'bg_release': m.bgHold = null; break;
+    case 'widget_start': case 'widget_delta': case 'widget': case 'widget_done': applyWidgetEvent(m, ev); break;
     case 'done': {
       if (!hasBody(m) && ev.result) textSeg(m).md += ev.result;
       if (Array.isArray(ev.attachments) && ev.attachments.length) m.attachments = toDeliverAtts(ev.attachments, ev.sessionId || session.id || '');
@@ -959,6 +1022,7 @@ function finishTurn(m) {
   stopTimer();
   if (m && m.role === 'assistant') { m.bgHold = null; m.paused = false; }
   refusalBand.prompt = null;   // 收轮了还挂着的 Paused 卡（停止 / 超时）已无人在等
+  permOnFinish(m, session.id);   // 审批卡同理（硬停止时服务端不再补发作答帧）
   if (m && m.role === 'assistant' && m.status === 'streaming') m.status = 'done';
   if (m && m.role === 'assistant' && !m.__notified) {
     m.__notified = true;
@@ -1023,7 +1087,7 @@ function applyLiveEvent(my, ev) {
   onEvent(m, ev);
   if (isTerminal(ev)) {
     my.terminal = true;
-    if (my.sessionId && !session.id) { session.id = my.sessionId; }
+    if (my.sessionId && !session.id) { promoteComposerDraft(my.sessionId); adoptOutputStyleSent(my.sessionId); session.id = my.sessionId; }
     finishTurn(m);
   }
 }
@@ -1096,7 +1160,7 @@ async function openRun(run) {
   if (session.id !== sid || !chat.messages.length) {
     try { await loadSession(sid, { before: run.startedAt || 0 }); } catch {}
     if (ep !== kernelEpoch) return;
-    if (session.id !== sid) { session.id = sid; rememberSession(sid); ui.view = 'chat'; }   // 历史加载失败也要把视图归属定下来
+    if (session.id !== sid) { session.id = sid; syncComposerDraftKey(); rememberSession(sid); ui.view = 'chat'; }   // 历史加载失败也要把视图归属定下来
   }
   const r = await tryAttach(sid);
   if (r === 'empty') requestSync('attach-race', 900);           // 探活与 attach 之间刚好收尾 → 再收敛一次
@@ -1133,7 +1197,7 @@ async function reconcileFromTranscript(sid) {
     const msgs = toUiMessages(data.messages || [], sid);
     if (msgs.length < minLen) return 'behind';   // 落盘慢半拍：这份还不完整，别记指纹
     mergeMessages(msgs);
-    if (!IS_CSNAP) cacheMessages(sid, msgs);
+    if (!IS_CSNAP) cacheMessages(sid, msgs, data.fp);
     noteFp(sid, data);
     return 'ok';
   } catch { return 'behind'; }
@@ -1154,7 +1218,7 @@ async function freshen(sid) {
     if (data.unchanged) return;   // 服务端定论：这一份跟你手里的一模一样
     const msgs = toUiMessages(data.messages || [], sid);
     if (!mergeMessages(msgs)) return;
-    if (!IS_CSNAP) cacheMessages(sid, msgs);
+    if (!IS_CSNAP) cacheMessages(sid, msgs, data.fp);
   } catch { /* 网络抖动：下个触发源会再来 */ }
   finally { _freshening = false; }
 }
@@ -1246,9 +1310,10 @@ async function doSync() {
   const runs = runsOf(a).filter((r) => r.sessionId);
   for (const id of [...mutedLive]) if (!runs.some((r) => r.sessionId === id)) mutedLive.delete(id);   // 已结束 → 解除静音
   // 空态（greeting）：自动挂上最新的一轮（别处发起的直播镜像）。
+  // 其它 Claude 会话（Desktop / 终端）发来消息、停放的 CLI 接住开的轮（source 'peer'）也不挂：那不是谁在别处发起的对话，别把视图拽走。
   if (!sid) {
     if (session.busy || live) return;   // 新会话首轮正在发
-    const cand = runs.filter((r) => !mutedLive.has(r.sessionId));
+    const cand = runs.filter((r) => r.source !== 'peer' && !mutedLive.has(r.sessionId));
     if (cand.length) await openRun(cand[cand.length - 1]);
     return;
   }
@@ -1348,7 +1413,8 @@ if (typeof window !== 'undefined') {
   document.addEventListener('visibilitychange', wake);
   window.addEventListener('pageshow', wake);    // 安卓 WebView 从冻结态回来只发这个
   window.addEventListener('online', wake);
-  window.addEventListener('focus', wake);
+  // 不挂 window 'focus'（10-21 回归 FR4）：桌面上点一下窗口就是一次 focus，每次都打一遍 /api/active 收敛，
+  // 实测 18 次 focus 打了约 20 次；从后台回来本来就会先发 visibilitychange / pageshow。
 }
 
 // ---- 运行时切换会话 / 多对话并发 ------------------------------------------------
@@ -1380,6 +1446,7 @@ export async function openSession(id) {
     detachLive();
   }
   mutedLive.delete(id);                // 显式点开 = 解除静音
+  refreshQueue(id);                    // 这个会话的排队消息（服务端持有）
   await loadSession(id);
   requestSync('open');                 // 正好有轮在跑 → 内核补挂直播续看
 }
@@ -1440,6 +1507,14 @@ function reallySend(t, atts, handoff = false) {
   agentStart('Claude');
 
   notePrefsNow(session.id);   // 发送即记忆：本会话（新会话先记 last，id 回来再补绑）+ 新对话默认
+  const params = chatParams(t, atts);
+  markOutputStyleSent(params.outputStyle);   // 新会话随第一条带的输出风格：id 回来后转记成这个会话的覆盖（lib/outputStyle）
+  if (session.id) delete status.suggestions[session.id];   // 这一轮开跑，上一条输入建议随之作废
+  openChatStream(params, m);
+}
+
+// 发送与新会话预热共用的请求选项——预热进程的启动参数要和随后那条真消息逐项一致，服务端才会接管它。
+function chatParams(t, atts) {
   const params = { message: t, agent: 'claude' };
   if (session.id) params.sessionId = session.id;
   // 项目制：新会话带上项目（=cwd）；续聊服务端按 transcript 所在目录反查，此值被忽略。
@@ -1449,7 +1524,9 @@ function reallySend(t, atts, handoff = false) {
   if (!session.id && prefs.worktree && !IS_CSNAP && dock.meta?.wtNew) params.worktree = true;
   if (settings.model) params.model = settings.model;
   // 快照访客没有 Ultracode（服务端静默降到 xhigh 且不发 effort 实况）：请求就按 xhigh 发，芯片不说谎
-  if (settings.effort) params.effort = (IS_CSNAP && settings.effort === 'ultracode') ? 'xhigh' : settings.effort;
+  // 自定义模型：芯片藏着（没有档位）或选的不在它的档位表里就不带——以前残留的 Ultracode 会在后台悄悄开动态工作流
+  const eff = effectiveEffort(settings.model, settings.effort);
+  if (eff) params.effort = (IS_CSNAP && eff === 'ultracode') ? 'xhigh' : eff;
   if (settings.fast) params.fast = true;
   if (settings.style && settings.style !== 'normal') {
     params.style = settings.style;
@@ -1457,12 +1534,37 @@ function reallySend(t, atts, handoff = false) {
     if (cs && cs.text) params.styleText = cs.text;
   }
   if (settings.research) params.research = true;
-  // 输入建议：开关开着才让服务端生成（定局后 CLI 预测下一句）。这一轮开跑，上一条建议随之作废。
-  if (prefs.promptSuggest && !IS_CSNAP) params.suggest = true;
-  if (session.id) delete status.suggestions[session.id];
+  if (narrowViewport()) params.narrow = true;   // 内嵌图表：窄屏（手机浏览器）按约 380px 宽出图
+  // 输入建议：开关开着才让服务端生成（定局后 CLI 预测下一句）。自 2026-10-20 起两项都以服务端设置为准
+  //（claudeCs），这里照带只为与老服务端兼容；新服务端改过的值盖过请求体。
+  if (claudeCs.values.promptSuggestions !== false && !IS_CSNAP) params.suggest = true;
+  if (claudeCs.values.compactFrac && !IS_CSNAP) params.compactFrac = claudeCs.values.compactFrac;   // 自动压缩点（用量弹层滑块）
+  // 新会话在加号菜单里单独选了输出风格：随第一条带上，服务端记进这个会话的 chat-prefs（lib/outputStyle）
+  if (!session.id && !IS_CSNAP && pendingOutputStyle()) params.outputStyle = pendingOutputStyle();
+  // 权限模式：只有新会话带草稿里选的（续聊用会话自己的记忆，见 src/runtime/permissions.mjs）
+  if (!session.id && !IS_CSNAP && draftPermissionMode()) params.permissionMode = draftPermissionMode();
   if (atts.length) params.attachments = atts.map((a) => a.path).filter(Boolean);
+  return params;
+}
 
-  openChatStream(params, m);
+// 新会话预热：「新对话」输入框获得焦点 / 开始打字时调。服务端按同一套选项提前起好 CLI（约 300MB，
+// 10 分钟没人用就收），第一条消息不再等 spawn 与 MCP 握手（实测会话帧 1.6s → 0.06s）。
+// 只对主机 admin 生效，其余身份服务端回 204；同一组选项 60 秒内只打一次（服务端同参数也只续期）。
+let lastPrewarm = { key: '', at: 0 };
+export function prewarmNewChat() {
+  if (session.id || session.busy || IS_CSNAP || ui.offline) return;
+  const params = chatParams('', []);
+  delete params.message;
+  if (params.worktree) return;   // worktree 新会话要先切目录，cwd 事先不知道
+  const key = JSON.stringify(params);
+  if (key === lastPrewarm.key && Date.now() - lastPrewarm.at < 60_000) return;
+  lastPrewarm = { key, at: Date.now() };
+  fetch(apiUrl('/api/chat/prewarm'), {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: key,
+    credentials: 'same-origin',
+  }).catch(() => {});
 }
 
 // POST /api/chat 并起搏响应流。没有内置重连循环：流散场没见终止事件 → requestSync，
@@ -1495,6 +1597,14 @@ async function openChatStream(params, m) {
     // 明确鉴权失败：重连永远不会成功，直接报错让用户重新登录，绝不进收敛循环。
     if (res.status === 401 || res.status === 403) {
       m.status = 'error'; m.error = tt('需要登录');
+      finishTurn(m);
+      return;
+    }
+    // 会话正被 Desktop / 终端 CLI 持有（服务端单写者判活）：重试也不会过，直接把原因摆出来。
+    if (res.status === 409) {
+      let msg = '';
+      try { msg = (await res.json())?.error || ''; } catch {}
+      m.status = 'error'; m.error = msg || tt('这个会话正在别处打开，请先关掉再续聊');
       finishTurn(m);
       return;
     }
@@ -1567,8 +1677,10 @@ export function newConversation(projectId) {
   bumpLoadGen();                    // 作废在途的历史刷新——慢返回不把空白新聊天顶回旧会话
   replaceMessages([]);
   session.id = null;
+  syncComposerDraftKey();           // 输入栏换成新对话那份草稿（同步：调用方可能紧接着往里塞附件）
   session.pendingQid = null;
   session.projectId = projectId || null;  // 项目上下文：首轮拿到会话 id 时上报归属
+  resetPermDraft();                 // 权限模式草稿回到「跟文件夹默认」
   rememberSession(null);
   applyPrefs(lastPrefs());          // 新对话选择器 = 最近一次的选择（而不是沿用刚看的会话的）
   ui.view = 'greeting';
@@ -1645,6 +1757,8 @@ function toUiMessages(raw, sid) {
     // 助手产物附件（服务端从 transcript 重提取）→ 与直播 done 同款卡片
     const atts = toDeliverAtts(msg.attachments, sid);
     if (atts.length) out.attachments = atts;
+    // 撞限额的那一轮 → 限额卡（与直播 error 事件的 limit 同形）
+    if (failed && msg.limit && typeof msg.limit === 'object') out.limit = { type: String(msg.limit.type || ''), resetsAt: Number(msg.limit.resetsAt) || 0, text: String(msg.limit.text || '') };
     return out;
   });
 }
@@ -1673,6 +1787,7 @@ export async function loadSession(id, opts) {
     if (cached && cached.length && gen === loadGen && !session.busy) {
       replaceMessages(cached);
       session.id = id;
+      syncComposerDraftKey();
       rememberSession(id);
       ui.view = 'chat';
       shown = true;
@@ -1683,14 +1798,16 @@ export async function loadSession(id, opts) {
   try {
     const data = await api.session(id);
     projId = data.projectId || null;   // 会话归属（=工作空间/项目）：服务端按 transcript 所在目录判的真值
+    if (!IS_CSNAP) noteSessionArchived(id, data);   // 冷启动恢复 / 助手 open_session 打开的已归档会话也认得出
     if (data.wt && data.wt.cwd) sessionWt[id] = data.wt;
     let raw = data.messages || [];
     if (before) raw = raw.filter((x) => !x.ts || x.ts < before);
     else noteFp(id, data);   // 只在未过滤时记：裁过的视图 ≠ 服务端那份，不能拿来短路
     msgs = toUiMessages(raw, id);
-    if (!before && !IS_CSNAP) cacheMessages(id, msgs);    // 在线成功 → 写本地缓存（离线可读；截断态不缓存；快照模式不落）
+    if (!before && !IS_CSNAP) cacheMessages(id, msgs, data.fp);    // 在线成功 → 写本地缓存（离线可读；截断态不缓存；快照模式不落）
     if (!before && !IS_CSNAP && data.prefs) {
       absorbServerPrefs(id, data.prefs);                  // 服务端 sidecar（可能来自别的设备）并入本地
+      absorbSessionOutputStyle(id, data.prefs);           // 会话级输出风格覆盖（加号菜单 › 输出风格 主行首屏就对）
       if (gen === loadGen && !session.busy) applyPrefs(prefsFor(id));
     }
   } catch {
@@ -1707,6 +1824,7 @@ export async function loadSession(id, opts) {
   if (shown && sameSnapshot(chat.messages, msgs)) return;   // 内容没变 → 不动 DOM/视口
   replaceMessages(msgs);
   session.id = id;
+  syncComposerDraftKey();
   rememberSession(id);
   ui.view = 'chat';
 }
@@ -1724,9 +1842,13 @@ export async function prefetchSessions(list) {
       if (s.thinking || s.pending) continue;
       const meta = await getCachedMessagesMeta(s.id);
       if (meta && s.mtime && meta.ts >= s.mtime) continue;
+      // 超大的会话（Desktop / CLI 常年在跑的，transcript 几十上百 MB）不是正开着的就不预取（10-21）
+      if (s.size > 20 * 1024 * 1024 && s.id !== session.id) continue;
       try {
-        const d = await api.session(s.id);
-        cacheMessages(s.id, toUiMessages(d.messages || [], s.id));
+        // 带上缓存那份的指纹：Desktop / CLI 在跑时 mtime 一直变，内容没变服务端只回 unchanged
+        const d = await api.session(s.id, meta && meta.fp);
+        if (d.unchanged) continue;
+        cacheMessages(s.id, toUiMessages(d.messages || [], s.id), d.fp);
       } catch { break; }                            // 网络不行 → 别继续白试
     }
   } finally { _prefetching = false; }
@@ -1764,14 +1886,18 @@ function segFp(s) {
     case 'text': return ['t', (s.md || '').trim()];
     case 'tools': return ['k', (s.tools || []).map((t) => (t.id || ((t.name || '') + '|' + (t.summary || ''))) + (t.compact && t.compact.summary ? '#s' : ''))];
     case 'notice': return ['n', s.subtype || '', s.from || '', s.to || ''];
+    case 'steer': return ['s', (s.text || '').trim()];
     case 'ask': return ['q', s.qid || '', !!s.answered, !!s.cancelled, (s.items || []).map((it) => (it.selected || []).join(',') + '|' + (it.custom || ''))];
+    case 'plan': return ['p', s.qid || '', !!s.answered, s.decision || ''];   // 计划审批卡（qid = tool_use id，直播与历史同源）
+    // 内嵌图表：id + 代码长度 + 是否报错（直播定稿的代码与 transcript 里的 widget_code 同一份；断流的半截会被历史版替换）
+    case 'widget': return ['w', s.id || '', (s.code || '').length, s.status === 'error'];
     default: return null;
   }
 }
 function msgFp(m) {
   if (!m) return '';
   if (m.role === 'user') return JSON.stringify(['u', m.text || '', (m.attachments || []).map((a) => a.name || '')]);
-  return JSON.stringify(['a', (m.segments || []).map(segFp).filter(Boolean), (m.attachments || []).map((a) => a.path || a.name || ''), m.status === 'error' ? (m.error || 'err') : '']);
+  return JSON.stringify(['a', (m.segments || []).map(segFp).filter(Boolean), (m.attachments || []).map((a) => a.path || a.name || ''), m.status === 'error' ? (m.error || 'err') + (m.limit ? '#' + m.limit.type : '') : '']);
 }
 
 // 指纹对用户消息只看文字 + 附件名（故意不看 URL：URL 带 token/局域网地址，每次都可能不同，
@@ -1842,7 +1968,7 @@ export function onBusEvent(ev) {
     case 'run.start':
       if (ev.sessionId) delete status.suggestions[ev.sessionId];   // 新一轮开跑：上一条建议过时
       if (!ev.sessionId || mutedLive.has(ev.sessionId)) return;
-      if (session.id === ev.sessionId || !session.id) requestSync('run.start');
+      if (session.id === ev.sessionId || (!session.id && ev.source !== 'peer')) requestSync('run.start');
       return;
     case 'run.end':
       // 稍等：健康直播流的 done 事件通常几百 ms 内就到，先让它自己收尾（doSync 里还有
@@ -1852,7 +1978,183 @@ export function onBusEvent(ev) {
     case 'session.touch':
       if (ev.sessionId && ev.sessionId === session.id) requestSync('touch', ev.live ? 0 : 400);
       return;
+    case 'queue':
+      // 排队消息（服务端持有，见 src/runtime/claude-queue.mjs）：纯显示态，照事件直接记
+      if (ev.sessionId) {
+        queueState.bySession[ev.sessionId] = Array.isArray(ev.items) ? ev.items : [];
+        if (ev.error && ev.sessionId === session.id) queueState.error = ev.error;
+      }
+      return;
+    case 'limit_resume':
+      // 自动续跑状态变了（勾选框在别的设备上改了 / 到点发出 / 作废）：纯显示态，照事件直接记
+      if (!ev.sessionId) return;
+      noteLimitResume(ev.sessionId, ev.state || null);
+      if (ev.sessionId === session.id) {
+        if (ev.fired) showToast(tt('限额已重置，正在继续会话'));
+        else if (ev.error) showToast(tr(ev.error));
+      }
+      return;
   }
+}
+
+// —— 插话 / 稍后发送（官方 Code 页：Claude 工作中 回车 = 插话，Ctrl+Enter = 稍后发送）——
+// 排队消息由服务端持有（手机电脑看同一份、页面关了也照发），这里只是镜像 + 操作口。
+export const queueState = $state({ bySession: {}, error: '' });
+// 连接器（MCP）状态：每轮 init 帧带来（会话信息面板「连接器」卡）
+export const mcpState = $state({ bySession: {} });
+
+export function queuedItems(sid = session.id) {
+  return (sid && queueState.bySession[sid]) || [];
+}
+
+// —— 5 小时限额「重置后自动继续」（官方 /code 限额卡的勾选框；服务端 src/runtime/limit-resume.mjs 持有）——
+// 状态按会话镜像：{ type, resetsAt, optedIn, armed, attempt, fireAt, firing }；null = 没有在等的续跑。
+// 来源三处：撞墙那一轮的 error 事件（resume 字段）、总线 limit_resume 事件、限额卡挂上时主动拉一次。
+export const limitResume = $state({ bySession: {} });
+function noteLimitResume(sid, st) {
+  if (!sid) return;
+  if (st) limitResume.bySession[sid] = st;
+  else limitResume.bySession[sid] = null;
+}
+export async function fetchLimitResume(sid) {
+  if (!sid || IS_CSNAP) return;
+  try {
+    const r = await api.get(`/api/claude/limit-resume?session=${encodeURIComponent(sid)}`);
+    noteLimitResume(sid, r ? r.state : null);
+  } catch {}
+}
+export async function setLimitAutoContinue(sid, on) {
+  if (!sid || IS_CSNAP) return;
+  const prev = limitResume.bySession[sid];
+  if (prev) limitResume.bySession[sid] = { ...prev, optedIn: on, armed: on && prev.attempt < 3 };   // 先跟手，回包再校正
+  try {
+    const r = await api.post('/api/claude/limit-resume', { session: sid, on: !!on });
+    if (r && r.state && r.state.type) noteLimitResume(sid, r.state);
+  } catch {
+    if (prev) limitResume.bySession[sid] = prev;
+    showToast(tt('操作失败，请重试'));
+  }
+}
+
+export async function refreshQueue(sid = session.id) {
+  if (!sid || IS_CSNAP) return;
+  try {
+    const r = await api.get(`/api/claude/queue?session=${encodeURIComponent(sid)}`);
+    queueState.bySession[sid] = Array.isArray(r?.items) ? r.items : [];
+  } catch {}
+}
+
+async function postChatJSON(params) {
+  const res = await fetch(apiUrl('/api/chat'), {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(params),
+    credentials: 'same-origin',
+  });
+  let body = null;
+  try { body = await res.json(); } catch {}
+  return { status: res.status, body };
+}
+
+function steerParams(t, atts, priority) {
+  const params = { message: t, agent: 'claude', sessionId: session.id, priority };
+  if (narrowViewport()) params.narrow = true;   // 内嵌图表：窄屏（手机浏览器）按约 380px 宽出图
+  if (settings.model) params.model = settings.model;
+  const eff = effectiveEffort(settings.model, settings.effort);
+  if (eff) params.effort = eff;
+  if (settings.fast) params.fast = true;
+  if (settings.style && settings.style !== 'normal') {
+    params.style = settings.style;
+    const cs = getStyle(settings.style);
+    if (cs && cs.text) params.styleText = cs.text;
+  }
+  if (settings.research) params.research = true;
+  if (claudeCs.values.promptSuggestions !== false && !IS_CSNAP) params.suggest = true;
+  if (claudeCs.values.compactFrac && !IS_CSNAP) params.compactFrac = claudeCs.values.compactFrac;
+  if (atts.length) params.attachments = atts.map((a) => a.path).filter(Boolean);
+  return params;
+}
+
+// 409 not_running = 服务端那一轮恰好刚收尾：等本地也收尾后按普通发送（最多等 6 秒）
+function sendWhenIdle(t, atts) {
+  let tries = 0;
+  const tick = () => {
+    if (!session.busy || bgHoldNow()) { send(t, atts); return; }
+    if (++tries > 20) { send(t, atts); return; }
+    setTimeout(tick, 300);
+  };
+  tick();
+}
+
+// 插话：消息推进正在跑的这一轮（priority next），Claude 做完手头这一步就读到，不打断。
+// 气泡由流里的 steer 事件落段（单写者）。返回 false = 没发出去（调用方保留输入框内容）。
+export async function steer(text, attachments) {
+  const t = (text || '').trim();
+  const atts = attachments !== undefined ? attachments.slice() : compose.attachments.slice();
+  if ((!t && !atts.length) || !session.id || IS_CSNAP) return false;
+  if (attachments === undefined) compose.attachments = [];
+  let r;
+  try { r = await postChatJSON(steerParams(t, atts, 'next')); } catch { r = { status: 0 }; }
+  if (r.status === 200 && r.body?.steered) { steerWhileWaiting(session.id); return true; }   // 卡在审批上：提示批完才读到
+  if (r.status === 409 && r.body?.code === 'not_running') { sendWhenIdle(t, atts); return true; }
+  if (attachments === undefined) compose.attachments = atts;   // 没发出去：附件放回输入框
+  queueState.error = r.body?.error || tt('插话没发出去，请重试');
+  return false;
+}
+
+// 稍后发送：排进服务端队列，这一轮结束后合并成一条自动发出。
+export async function queueSend(text, attachments) {
+  const t = (text || '').trim();
+  const atts = attachments !== undefined ? attachments.slice() : compose.attachments.slice();
+  if ((!t && !atts.length) || !session.id || IS_CSNAP) return false;
+  if (attachments === undefined) compose.attachments = [];
+  const sid = session.id;
+  let r;
+  try { r = await postChatJSON(steerParams(t, atts, 'later')); } catch { r = { status: 0 }; }
+  if (r.status === 200 && r.body?.queued) { queueState.bySession[sid] = r.body.items || []; return true; }
+  if (r.status === 409 && r.body?.code === 'not_running') { sendWhenIdle(t, atts); return true; }
+  if (attachments === undefined) compose.attachments = atts;
+  queueState.error = r.body?.error || tt('排队失败，请重试');
+  return false;
+}
+
+async function queueOp(op, extra = {}) {
+  const sid = session.id;
+  if (!sid) return null;
+  try {
+    const r = await api.post('/api/claude/queue', { session: sid, op, ...extra });
+    if (r && Array.isArray(r.items)) queueState.bySession[sid] = r.items;
+    return r;
+  } catch (e) {
+    queueState.error = (e && e.body && e.body.error) || tt('操作失败，请重试');
+    return null;
+  }
+}
+export const removeQueued = (id) => queueOp('remove', { id });
+export const moveQueued = (id, to) => queueOp('move', { id, to });
+export const clearQueued = () => queueOp('clear');
+export async function promoteQueued(id) {
+  const r = await queueOp('promote', { id });
+  if (r && r.sent === false) queueState.error = tt('现在没法立即发送，它会在 Claude 处理完后发出');
+  return r;
+}
+// 放回输入框编辑（排队栏 ✎ / 菜单 / 输入框空着按 ↑ / 工作中按 Esc）：从队列取出，文字经外部预填桥
+// 灌进当前输入栏，附件回暂存区。输入框里已有草稿就不动（官方同款：先发送或清空）。
+export async function editQueued(id) {
+  if (composerHasDraft()) { queueState.error = tt('输入框里已有草稿，先发送或清空再编辑排队消息'); return false; }
+  const r = await queueOp('take', { id });
+  const it = r && r.item;
+  if (!it) return false;
+  prefillComposer(it.text || '');
+  (it.attachments || []).forEach((p, i) => {
+    if (compose.attachments.some((x) => x.path === p)) return;
+    compose.attachments.push({ path: p, name: (it.files && it.files[i]) || String(p).split(/[\\/]/).pop(), kind: 'file', url: null, pending: false, local: true });
+  });
+  return true;
+}
+export function editLastQueued() {
+  const list = queuedItems();
+  return list.length ? editQueued(list[list.length - 1].id) : Promise.resolve(false);
 }
 
 // 兼容旧接线名（ClaudePage 兜底轮询 / SnapPage 镜像轮询 / 回前台对账）——全部等价于 requestSync。
@@ -1867,7 +2169,8 @@ export async function restoreOnBoot() {
   // 上次看的会话正在跑（属于"回到原处"）→ 挂直播。
   const savedRun = saved ? runs.find((r) => r.sessionId === saved) : null;
   if (savedRun) { await openRun(savedRun); return; }
-  // 否则挂最新的一轮（别处发起的直播镜像）。
-  if (runs.length) { await openRun(runs[runs.length - 1]); return; }
+  // 否则挂最新的一轮（别处发起的直播镜像）；跨会话消息接住的轮（peer）不劫持启动恢复。
+  const cand = runs.filter((r) => r.source !== 'peer');
+  if (cand.length) { await openRun(cand[cand.length - 1]); return; }
   if (saved) await loadSession(saved);
 }

@@ -31,7 +31,7 @@ const pathsUrl = pathToFileURL(path.join(serverDir, "paths.ts")).href;
 
 const DATA_VARS = [
   "SESSIONS_DIR", "MEMORY_DIR", "KNOWLEDGE_DIR", "DIMENSIO_CONFIG_FILE", "DIMENSIO_QUICK_FILE", "DIMENSIO_QUICK_ROOT",
-  "PROJECTS_FILE", "PROJECTS_ROOT", "WORKSPACE_DIR", "DIMENSIO_GLOBAL_GUIDE", "HARNESS_ENV_FILE",
+  "PROJECTS_FILE", "PROJECTS_ROOT", "WORKSPACE_DIR", "DIMENSIO_GLOBAL_GUIDE", "HARNESS_ENV_FILE", "DIMENSIO_CUSTOM_PROVIDERS_DIR",
 ] as const;
 
 const RESOLVERS: Record<string, () => string> = {
@@ -68,7 +68,7 @@ function cleanEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
   delete env.DIMENSIO_TEST_ISOLATION;
-  for (const name of [...DATA_VARS, "BRIDGE_DATA_ROOT", "BRIDGE_ROOT"]) delete env[name];
+  for (const name of [...DATA_VARS, "DIMENSIO_DATA_DIR", "BRIDGE_DATA_ROOT", "BRIDGE_ROOT"]) delete env[name];
   return { ...env, ...extra };
 }
 
@@ -93,12 +93,19 @@ test("Q8 测试进程里：数据位置不在临时目录下就抛错——没�
     DIMENSIO_GLOBAL_GUIDE: path.join(os.homedir(), ".dimensio", "GUIDE.md"),
   };
   for (const [name, resolve] of Object.entries(RESOLVERS)) {
-    withEnv({ [name]: undefined }, () => {
+    // 数据目录（DIMENSIO_DATA_DIR）test-setup 已拿掉；这里再显式拿一次，才是「默认即生产位置」
+    withEnv({ [name]: undefined, DIMENSIO_DATA_DIR: undefined }, () => {
       assert.throws(resolve, /测试进程解析到了临时目录之外/, `${name} 没设时应当拒绝（默认值就是生产位置）`);
     });
     withEnv({ [name]: prodLike[name] }, () => {
       assert.throws(resolve, /测试进程解析到了临时目录之外/, `${name} 显式指向生产位置也应当拒绝`);
     });
+    // 数据目录指向生产位置（harness 目录）也不认——只对原本落在 harness 目录里的那几项起作用
+    if (prodLike[name]!.startsWith(harnessRoot)) {
+      withEnv({ [name]: undefined, DIMENSIO_DATA_DIR: harnessRoot }, () => {
+        assert.throws(resolve, /测试进程解析到了临时目录之外/, `${name} 经数据目录落到生产位置也应当拒绝`);
+      });
+    }
     const tmp = path.join(os.tmpdir(), `dimensio-q8-${name.toLowerCase()}`);
     withEnv({ [name]: tmp }, () => {
       assert.equal(resolve(), path.resolve(tmp), `${name} 指到临时目录下应当照常解析`);
@@ -172,6 +179,61 @@ test("Q8 生产进程（无测试标记）里解析结果与收口前一致：�
   }
 });
 
+// S2：DIMENSIO_DATA_DIR 把原本落在 harness 目录里的可写状态整体挪到别处（bridge 给每个用户实例设成他自己的数据目录），
+// 设置页存的 key、自定义服务、运行配置、项目表都跟着它走。
+test("S2 DIMENSIO_DATA_DIR：原本落在 harness 目录里的默认位置改落到它下面；单项变量照旧优先，家目录那几项与 bridge 根候选不变", () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dimensio-s2-cwd-"));
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "dimensio-s2-data-"));
+  try {
+    const script = `
+      const p = await import(process.argv[1]);
+      console.log(JSON.stringify({
+        sessions: p.sessionsDir(), memory: p.memoryRoot(), knowledge: p.knowledgeRoot(), config: p.configFile(),
+        custom: p.customProvidersDir(), quickFile: p.quickFile(), quickRoot: p.quickRoot(), projectsFile: p.projectsFile(),
+        projectsRoot: p.projectsRoot(), workspace: p.defaultWorkspace(), guide: p.globalGuideFile(), env: p.envFile(),
+        bridge: p.bridgeRootCandidates(),
+      }));`;
+    const explicitMemory = path.join(os.tmpdir(), "dimensio-s2-explicit-memory");
+    const got = runNode(["--input-type=module", "-e", script, pathsUrl], {
+      cwd,
+      env: cleanEnv({ DIMENSIO_DATA_DIR: data, MEMORY_DIR: explicitMemory }),
+    }) as Record<string, unknown>;
+    const at = (name: string) => path.join(path.resolve(data), name);
+    assert.deepEqual(got, {
+      sessions: at("sessions"),
+      memory: path.resolve(explicitMemory), // 单项变量（含 .env 里写的）压过数据目录
+      knowledge: at("knowledge"),
+      config: at("runtime-config.json"),
+      custom: at("custom-providers"),
+      quickFile: at("quick.json"),
+      quickRoot: path.join(os.homedir(), ".dimensio", "quick"),
+      projectsFile: at("projects.json"),
+      projectsRoot: path.join(os.homedir(), "Dimensio Projects"),
+      workspace: at("workspace"),
+      guide: path.join(os.homedir(), ".dimensio", "GUIDE.md"),
+      env: at(".env"),
+      bridge: got.bridge, // bridge 根候选仍按 harness 工作目录的上级推（不随数据目录走）
+    });
+    const bridge = got.bridge as string[];
+    assert.equal(bridge.length, 1);
+    assert.equal(fs.realpathSync(bridge[0]!), fs.realpathSync(path.dirname(cwd)), "bridge 根候选 = harness 工作目录的上级");
+    assert.equal(fs.readdirSync(data).length, 0, "只解析，不创建");
+
+    // .env 也从数据目录加载（env.ts）：harness 工作目录里那份不再是默认。
+    fs.writeFileSync(path.join(data, ".env"), "S2_FAKE_ENV_VALUE=FAKE-from-data\n");
+    fs.writeFileSync(path.join(cwd, ".env"), "S2_FAKE_ENV_VALUE=FAKE-from-cwd\n");
+    const envUrl = pathToFileURL(path.join(serverDir, "env.ts")).href;
+    const loaded = runNode(
+      ["--input-type=module", "-e", "await import(process.argv[1]); console.log(JSON.stringify(process.env.S2_FAKE_ENV_VALUE ?? null));", envUrl],
+      { cwd, env: cleanEnv({ DIMENSIO_DATA_DIR: data }) },
+    );
+    assert.equal(loaded, "FAKE-from-data");
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});
+
 test("Q8 env.ts：生产进程照常加载 .env；测试进程只加载显式指到临时目录下的那份", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dimensio-q8-envload-"));
   try {
@@ -198,17 +260,20 @@ test("Q8 test-setup：无条件改道（shell 里继承来的生产路径也不�
     fakeKey: process.env.Q8_FAKE_API_KEY ?? null,
     fakeToken: process.env.DIMENSIO_INTERNAL_TOKEN ?? null,
     keep: process.env.Q8_PLAIN_SETTING ?? null,
+    dataDir: process.env.DIMENSIO_DATA_DIR ?? null,
   }));`;
   const got = runNode(["--import", "./server/test-setup.ts", "--input-type=module", "-e", script], {
     cwd: harnessRoot,
     env: cleanEnv({
       SESSIONS_DIR: path.join(harnessRoot, "sessions"), // 有人在 shell 里 export 了生产路径
       MEMORY_DIR: path.join(harnessRoot, "memory"),
+      DIMENSIO_DATA_DIR: harnessRoot, // bridge 拉起的 harness 里开的 shell 带着数据目录
       Q8_FAKE_API_KEY: "FAKE-q8-key",
       DIMENSIO_INTERNAL_TOKEN: "DUMMY-q8-token",
       Q8_PLAIN_SETTING: "kept",
     }),
-  }) as { vars: Record<string, string | null>; marker: string | null; fakeKey: string | null; fakeToken: string | null; keep: string | null };
+  }) as { vars: Record<string, string | null>; marker: string | null; fakeKey: string | null; fakeToken: string | null; keep: string | null; dataDir: string | null };
+  assert.equal(got.dataDir, null, "继承来的数据目录应当被拿掉（漏设的那项回落 harness 目录、当场抛错）");
   assert.equal(got.marker, "1");
   for (const name of DATA_VARS) {
     const v = got.vars[name];

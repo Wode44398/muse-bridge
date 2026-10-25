@@ -34,9 +34,19 @@
   // 这一格的会话自己的工作空间（快照）；新对话还没有快照 = 全局配置（下一条新对话落在哪）
   const wsPath = $derived(pane.chat.cfg?.workspace ?? app.config?.workspace ?? "");
   const quickProj = $derived(app.projects.find((p) => p.quick) ?? null);
-  const wsQuick = $derived(!!quickProj && !!wsPath && pathKey(wsPath) === pathKey(quickProj.path));
+  // 旧快照桶里的会话（别处已换了新快照）也是快照：服务端在会话列表里标了 quick
+  const wsQuick = $derived(
+    !!quickProj &&
+      !!wsPath &&
+      (pathKey(wsPath) === pathKey(quickProj.path) || app.sessions.some((s) => s.quick && s.id === pane.chat.id)),
+  );
   // 快照桶目录名是 UUID，只有项目名读得懂（快照桶的名字是服务端给的「快照对话」，显示时过一道 tr）
-  const wsName = $derived(wsQuick ? tr(quickProj!.name) : (wsPath.split(/[\\/]/).filter(Boolean).pop() ?? ""));
+  // 其余认注册表里的显示名（改过名的、快照存成的工作空间——后者目录名也是 UUID），没登记过才退回文件夹名
+  const wsName = $derived(
+    wsQuick
+      ? tr(quickProj!.name)
+      : (app.projects.find((p) => !!wsPath && pathKey(p.path) === pathKey(wsPath))?.name ?? (wsPath.split(/[\\/]/).filter(Boolean).pop() ?? "")),
+  );
   // 标题可能是服务端写的中文（「[已从检查点恢复] …」等）：显示时过一道 tr
   const title = $derived(empty ? "" : tr(pane.chat.title?.trim() ?? "") || t("新对话"));
 

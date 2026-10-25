@@ -6,6 +6,7 @@ import { readBody } from '../runtime/body.mjs';
 import * as routines from '../routines.mjs';
 import { runRoutine, routineRunning } from '../runtime/routines-runner.mjs';
 import { requireCtx } from '../runtime/identity.mjs';
+import { routineCapFor, billingUser, quotaBlock } from '../runtime/quota.mjs';
 import { CLAUDE_MODELS, CLAUDE_EFFORTS, ULTRACODE } from '../config/capabilities.mjs';
 
 // Validate the model / effort against the Claude whitelists; unknown values fall
@@ -33,6 +34,17 @@ function rejectAgent(ctx, body, res) {
   return true;
 }
 
+// 成员启用中的定时任务有上限（runtime/quota.mjs routineCapFor）；exceptId = 正在改的那条（它本来就算在里面）。
+function rejectRoutineCap(ctx, res, exceptId = '') {
+  const cap = routineCapFor(ctx);
+  if (!Number.isFinite(cap)) return false;
+  const on = routines.list(ctx.dataDir).filter((r) => r.enabled && r.id !== exceptId).length;
+  if (on < cap) return false;
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: false, error: `每人最多 ${cap} 条启用中的定时任务。先停用或删掉一条再加。` }));
+  return true;
+}
+
 export function registerRoutineRoutes(router, { authOk, identify }) {
   // Auth + per-identity context resolution is shared in requireCtx (runtime/identity.mjs).
 
@@ -49,6 +61,7 @@ export function registerRoutineRoutes(router, { authOk, identify }) {
     if (!prompt) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'prompt 不能为空' })); return; }
     if (rejectUltracode(body, res)) return;
     if (rejectAgent(ctx, body, res)) return;
+    if (body.enabled !== false && rejectRoutineCap(ctx, res)) return;
     const r = routines.create(ctx.dataDir, { name: String(body.name || '').trim(), prompt, schedule: body.schedule, enabled: body.enabled, ...engineFields(body) });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, routine: r }));
@@ -59,6 +72,7 @@ export function registerRoutineRoutes(router, { authOk, identify }) {
     let body; try { body = JSON.parse(await readBody(req)); } catch { res.writeHead(400, { 'Content-Type': 'text/plain' }); res.end('bad json'); return; }
     if (rejectUltracode(body, res)) return;
     if ('agent' in body && rejectAgent(ctx, body, res)) return;
+    if (body.enabled === true && rejectRoutineCap(ctx, res, String(body.id || ''))) return;
     const patch = {};
     for (const k of ['name', 'prompt', 'schedule', 'enabled']) if (k in body) patch[k] = body[k];
     if ('agent' in body || 'model' in body || 'effort' in body || 'search' in body) Object.assign(patch, engineFields(body));
@@ -81,6 +95,10 @@ export function registerRoutineRoutes(router, { authOk, identify }) {
     const id = String(body.id || '');
     if (!routines.get(ctx.dataDir, id)) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'not found' })); return; }
     if (routineRunning.has(id)) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, already: true })); return; }
+    // 「立即运行」同样走额度闸（runRoutine 里还会再查一次并记账），超了当场说清楚
+    const owner = billingUser(ctx);
+    const block = owner ? quotaBlock(owner) : null;
+    if (block) { res.writeHead(429, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: block.message, title: block.title })); return; }
     runRoutine(ctx, id); // fire-and-forget; progress/status visible via GET /api/routines
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true }));

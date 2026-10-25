@@ -2,7 +2,7 @@
   // 服务控制 · 运行状态与日志：进程与机器资源、在跑的轮、最近日志；在这里重启——本进程排空后退出，
   // 交给守护进程（systemd / Docker / pm2）拉起。可以「等空闲再重启」，不打断正在跑的对话。
   import { api } from '../../lib/api.js';
-  import { sa, saToast, saConfirm, fmtUptime } from '../../lib/serverAdmin.svelte.js';
+  import { sa, saToast, saConfirm, fmtUptime, supervisedBy } from '../../lib/serverAdmin.svelte.js';
   import { t, tr } from '../../lib/i18n.js';
 
   let info = $state(null);
@@ -39,7 +39,7 @@
   async function restart(mode) {
     if (mode === 'now') {
       const n = info?.liveTurns || 0;
-      if (!(await saConfirm(t('立即重启服务？'), n ? t('现在有 {n} 轮对话在跑，会被打断（记录会保留，可以接着问）。所有人会断开几秒，页面自动重连。', { n }) : t('现在没有在跑的对话。所有人会断开几秒，页面自动重连。'), { yes: t('立即重启'), danger: !!n }))) return;
+      if (!(await saConfirm(t('立即重启服务？'), (n ? t('现在有 {n} 轮对话在跑，会被打断（记录会保留，可以接着问）。所有人会断开几秒，页面自动重连。', { n }) : t('现在没有在跑的对话。所有人会断开几秒，页面自动重连。')), { yes: t('立即重启'), danger: !!n }))) return;
     }
     try {
       const r = await api.post('/api/admin/service/restart', { mode });
@@ -53,7 +53,11 @@
 
   // 更新：拉代码 → 装依赖 → 重建前端（以服务用户跑 scripts/server/update.sh），有新代码就等空闲重启
   async function doUpdate() {
-    if (!(await saConfirm(t('更新到最新代码？'), t('在服务器上拉最新代码、装依赖、重建前端（几分钟）；有新代码的话，等所有人的对话都跑完再自动重启。进度在下面的「最近日志」里。'), { yes: t('开始更新') }))) return;
+    // 说清此刻有几轮在跑——它们不会被打断，跑完才重启（总线会给每台设备推「服务器有 N 个对话在跑，跑完后自动更新」）
+    const n = info?.liveTurns || 0;
+    const body = t('在服务器上拉最新代码、装依赖、重建前端（几分钟）；有新代码的话，等所有人的对话都跑完再自动重启。进度在下面的「最近日志」里。')
+      + (n ? ' ' + t('现在有 {n} 轮对话在跑，不会被打断。', { n }) : '');
+    if (!(await saConfirm(t('更新到最新代码？'), body, { yes: t('开始更新') }))) return;
     try {
       const r = await api.post('/api/admin/service/update', {});
       if (r?.error) throw new Error(r.error);
@@ -82,14 +86,21 @@
       <div class="st"><b>{info.loadavg?.[0]?.toFixed(2) ?? '—'}</b><small>{t('负载（1 分钟）· {n} 核', { n: info.cpus })}</small></div>
       {#if info.disk}<div class="st"><b>{gb(info.disk.free)}</b><small>{t('数据盘剩余 / {total}', { total: gb(info.disk.total) })}</small></div>{/if}
       <div class="st"><b>{info.harnessInstances}</b><small>{t('dimensio 实例')}</small></div>
+      {#if info.deploy}
+        <!-- 部署形态（src/config/deploy-profile.mjs）：给谁用、监听地址等默认值按它定 -->
+        <div class="st" title={t('给谁用、监听地址等默认值按部署形态定；显式设置优先')}>
+          <b>{tr(info.deploy.label)}</b><small>{t('部署形态 · 监听 {host}', { host: info.deploy.listenHost })}</small>
+        </div>
+      {/if}
     </div>
     <div class="sa-rows">
         <div class="sa-row">
           <span class="sa-row-tx">
             <span>{t('重启服务')}</span>
             <small>{restarting ? t('正在重启，等它回来…')
+              : info.restart?.pending && info.restart?.reason === 'update' ? t('等空闲中：还有 {n} 轮在跑，跑完就更新并重启（最多等 30 分钟）', { n: info.liveTurns })
               : info.restart?.pending ? t('等空闲中：还有 {n} 轮在跑，跑完就重启（最多等 30 分钟）', { n: info.liveTurns })
-              : info.supervisor ? t('由 {name} 托管：进程退出后自动拉起，所有人断开几秒', { name: info.supervisor })
+              : info.supervisor ? t('{by}：进程退出后自动拉起，所有人断开几秒', { by: supervisedBy(info.supervisor) })
               : t('没检测到守护进程（systemd / Docker / pm2），重启后不会自己起来——请在服务器上操作')}</small>
           </span>
           {#if info.supervisor && !restarting}
@@ -119,7 +130,7 @@
       <button class="sa-btn sm" onclick={() => { logsOpen = !logsOpen; if (logsOpen) loadLogs(); }}>{logsOpen ? t('收起') : t('展开')}</button>
     </div>
     {#if logsOpen}
-      <div class="logs">
+      <div class="logs sel-text">
         {#if !logs}<div class="sa-dim">{t('读取中…')}</div>
         {:else if !logs.length}<div class="sa-dim">{t('这次启动以来还没有日志')}</div>
         {:else}

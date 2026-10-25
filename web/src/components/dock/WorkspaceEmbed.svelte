@@ -26,8 +26,9 @@
   const desktopUi = $derived(wide && pointer.fine && !guest);
 </script>
 
+<!-- hostChrome：三家宿主都给文件视图配了和别的工具同款的标题行 / 收起钮，页面自己的返回只管上一级 -->
 {#if desktopUi}
-  <FilesDesktop embedded workspaceRoot={ws} home={home || ws} {rootName} {initialPath} {initialOpen} {previewHost} {onExit} {theme} />
+  <FilesDesktop embedded hostChrome workspaceRoot={ws} home={home || ws} {rootName} {initialPath} {initialOpen} {previewHost} {onExit} {theme} />
 {:else}
-  <FilesPanel {guest} workspaceRoot={ws} {rootName} {initialPath} {initialOpen} {previewHost} {onExit} {theme} />
+  <FilesPanel hostChrome {guest} workspaceRoot={ws} {rootName} {initialPath} {initialOpen} {previewHost} {onExit} {theme} />
 {/if}

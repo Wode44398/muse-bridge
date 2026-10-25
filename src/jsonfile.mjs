@@ -1,5 +1,5 @@
 // Shared JSON-file primitives for the small fs-backed stores (accounts, invites,
-// sessions, usage, agy/vertex histories, media metadata, routines). One ATOMIC
+// sessions, usage, vertex histories, media metadata, routines). One ATOMIC
 // writer (tmp + rename, so a crash mid-write never leaves a half-written file) and
 // one tolerant reader (missing / corrupt file -> fallback). Plus the shared
 // session/conversation id shape used to guard traversal before an id hits a path.

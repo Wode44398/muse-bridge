@@ -16,6 +16,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { textTokens } from "./agent/context.ts";
+import { coreUrl } from "./core-link.ts";
 import { managedConnectors, managedExtensionRoots, type ManagedConnector } from "./extensions.ts";
 import { killOwnChildTree } from "./proc-tree.ts";
 
@@ -60,7 +61,7 @@ type SecretsReader = (extRoot: string) => Record<string, { env?: Record<string, 
 let secretsReader: SecretsReader | null = null;
 async function readSecretsFn(): Promise<SecretsReader> {
   if (secretsReader) return secretsReader;
-  const mod = (await import(new URL("../../src/extension-secrets.mjs", import.meta.url).href)) as { readSecrets: SecretsReader };
+  const mod = (await import(coreUrl("extension-secrets.mjs"))) as { readSecrets: SecretsReader };
   secretsReader = mod.readSecrets;
   return secretsReader;
 }

@@ -48,7 +48,7 @@ import { compactManually, handoffSummary } from "./agent/context.ts";
 import { clearRunMarker, listRunMarkers, ownerAlive, ownMarker, PROCESS_CREATED, readRunMarker, writeRunMarker } from "./run-markers.ts";
 import { processTable } from "./proc-tree.ts";
 import { createAdapter } from "./providers/registry.ts";
-import { effectiveBaseUrl, getConfig, resolveKey, type RuntimeConfig } from "./config.ts";
+import { effectiveBaseUrl, getConfig, resolveConfig, resolveKey, type RuntimeConfig } from "./config.ts";
 import { renderAllMemoryForPrompt } from "./memory.ts";
 import { noteRecalledDocs } from "./memory-usage.ts";
 import { withExternalSummary } from "./external-memory.ts";
@@ -58,7 +58,7 @@ import { inheritedInstructions, readProjectDocs } from "./project-docs.ts";
 import { appendRunLog } from "./run-log.ts";
 import { renderProjectKnowledgeForPrompt } from "./knowledge.ts";
 import { knowledgeSnapshot, knowledgeWithin, refreshProjectKnowledge } from "./knowledge-service.ts";
-import { searchUnifiedKnowledge, type KnowledgeSearchResponse } from "./knowledge-search.ts";
+import { searchUnifiedKnowledge, worthAutoRecall, type KnowledgeSearchResponse } from "./knowledge-search.ts";
 import {
   deleteSessionFile,
   loadSession,
@@ -70,6 +70,7 @@ import {
   unsupportedVersionMessage,
   type PersistedConfig,
   type PersistedSession,
+  type SessionMeta,
 } from "./store.ts";
 import {
   takeCheckpoint,
@@ -148,6 +149,7 @@ export interface Session {
   initialConfig?: RuntimeConfig;
   // 运行中换了型号 / 思考深度：cfg 已是新的，会话状态等下一轮开跑前再按它重建（setSessionModel）
   modelRebindPending?: boolean;
+  modelRebindFrom?: { provider: string; model: string };
   // U3（X38）：这一轮的运行计时——开跑时刻、卡片挂着（在等人）累计的暂停、此刻是否在暂停。服务端记账，所有设备一致
   runClock?: { startedAt: number; pausedMs: number; pausedSince: number | null } | null;
   // Q12：这一轮的 trace（上下文之外的 fanout——比如接口里落定卡片——也能归到这一轮）
@@ -223,6 +225,9 @@ export interface PendingPermission {
   why?: string;
   preview?: ApprovalPreview;
 }
+
+// fast mode 是全局粘性开关，适配器每次请求现读：菜单里一关，跑着的会话下一次请求就按标准速度计费
+const fastMode = (): boolean => getConfig().fast;
 
 function permissionAskEvent(id: string, p: Omit<PendingPermission, "resolve">): Record<string, unknown> {
   return {
@@ -432,6 +437,26 @@ export function getSession(id: string): Session | undefined {
   return sessions.get(id);
 }
 
+// 已经开跑、盘上可能还没有的会话（列表接口并进去）：新会话第一次落盘要等检查点 + 知识召回，大工作区十几秒，
+// 这期间侧栏刷新拿不到它（以前发了个「你好」之后列表里压根没这个对话）。
+export function liveSessionMetas(): SessionMeta[] {
+  const out: SessionMeta[] = [];
+  for (const s of sessions.values()) {
+    if (s.discarded || !s.cfg || !s.state) continue;
+    out.push({
+      id: s.id,
+      title: s.title,
+      createdAt: s.createdAt,
+      updatedAt: s.touchedAt,
+      messageCount: s.state.messages.length,
+      provider: s.cfg.provider,
+      model: s.cfg.model,
+      workspace: s.cfg.workspace,
+    });
+  }
+  return out;
+}
+
 // M1（#26）：此刻挂着、等人处理的交互，形状与当初 fanout 的事件相同（客户端按原事件渲染即可）。
 // 随 mirror_desync 与 GET /api/sessions/:id 下发，重连的设备不必依赖 runLog 也能把卡片找回来。
 export function pendingInteractions(session: Session): Record<string, unknown>[] {
@@ -514,6 +539,12 @@ function emitGlobal(ev: Record<string, unknown>): void {
       /* 一个坏掉的连接不影响别的 */
     }
   }
+}
+
+// 侧栏结构变了（新建 / 删除会话、换快照、存为工作空间、项目增改）：通知所有设备重拉列表。
+// what：sessions = 会话列表，projects = 项目列表（含快照位）。只带种类，不带内容。
+export function noteListChanged(what: "sessions" | "projects" | "both"): void {
+  emitGlobal({ e: "list_changed", what, at: Date.now() });
 }
 
 // U3（X38）：运行计时的快照事件。serverNow 让客户端校正时钟差（手机与电脑的钟未必一致）。
@@ -836,6 +867,7 @@ function buildState(
     apiKey,
     model: cfg.model,
     baseUrl,
+    fast: fastMode,
   });
 
   // setTodos needs the state; wire it after construction via a holder.
@@ -867,6 +899,7 @@ function buildState(
     model: cfg.model,
     baseUrl,
     thinking: cfg.thinking,
+    fast: fastMode,
     sandbox,
     limits,
     parentMode: () => stateRef?.permissionMode ?? cfg.permissionMode,
@@ -1120,37 +1153,64 @@ export function setSessionAccess(session: Session, access: unknown): { ok: boole
   return { ok: true };
 }
 
-// 会话内换型号 / 思考深度（POST /api/sessions/:id/model）。以前输入框的型号菜单只写全局配置，已经开跑的会话照旧用
-// 建会话时拍下的型号——菜单上勾着新型号、实际回答的还是旧的。只在这个会话自己那家服务里换（换家 = 开新对话）。
+// 会话内换厂商 / 型号 / 思考深度（POST /api/sessions/:id/model）。以前输入框的型号菜单只写全局配置，已经开跑的会话照旧用
+// 建会话时拍下的型号——菜单上勾着新型号、实际回答的还是旧的；换厂商更是直接开新对话。现在都在这条会话里换：转录是厂商中立的
+// turn/block，各家适配器编码时把别家留下的东西（签名、思考、图片、工具调用 id……）收拾成自己认的样子。
 // 空闲时当场按新配置重建会话状态；运行中先记进快照配置，下一轮开跑前（startRun）再重建，这一轮不受影响。
 export function setSessionModel(
   session: Session,
-  raw: { model?: unknown; thinking?: unknown },
-): { ok: boolean; error?: string; model?: string; thinking?: ThinkingLevel; pending?: boolean } {
+  raw: { provider?: unknown; model?: unknown; thinking?: unknown },
+): { ok: boolean; error?: string; provider?: string; model?: string; thinking?: ThinkingLevel; pending?: boolean } {
   const cfg = session.cfg;
   if (!cfg || !session.state) return { ok: false, error: "session has not started" };
   if (rollingBack === session.id || rewinding.has(session.id)) return { ok: false, error: "a rollback is in progress — try again in a moment" };
-  const model = raw.model === undefined ? cfg.model : typeof raw.model === "string" ? raw.model.trim() : "";
-  if (!model || !modelSpec(cfg.provider, model)) return { ok: false, error: `model "${model}" is not offered by this conversation's provider` };
+  if (raw.provider !== undefined && typeof raw.provider !== "string") return { ok: false, error: "invalid provider" };
+  if (raw.model !== undefined && typeof raw.model !== "string") return { ok: false, error: "invalid model" };
   if (raw.thinking !== undefined && !EFFORT_ORDER.includes(raw.thinking as ThinkingLevel)) return { ok: false, error: "invalid thinking level" };
-  // 只换型号：沿用当前深度，按新型号的支持面收档（与设置页同一规则）
-  const thinking = clampEffort(cfg.provider, model, (raw.thinking ?? cfg.thinking) as ThinkingLevel);
-  if (model !== cfg.model || thinking !== cfg.thinking) {
-    session.cfg = { ...cfg, model, thinking };
+  const provider = (raw.provider as string | undefined)?.trim() || cfg.provider;
+  const crossing = provider !== cfg.provider;
+  let next: PersistedConfig;
+  if (crossing) {
+    // 换家：与设置页切厂商同一套校验与联动（厂商存在且没被禁用、地址跟着换、没点名型号就用那家的默认型号与默认深度）
+    let resolved: RuntimeConfig;
+    try {
+      resolved = resolveConfig({ ...getConfig(), provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl, thinking: cfg.thinking }, {
+        provider: provider as RuntimeConfig["provider"],
+        ...(raw.model !== undefined ? { model: (raw.model as string).trim() } : {}),
+        ...(raw.thinking !== undefined ? { thinking: raw.thinking as ThinkingLevel } : {}),
+      });
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+    if (!modelSpec(resolved.provider, resolved.model)) return { ok: false, error: `model "${resolved.model}" is not offered by provider "${provider}"` };
+    if (!resolveKey(resolved.provider)) return { ok: false, error: `No API key for provider "${provider}". Set it in the Settings panel first.` };
+    next = { ...cfg, provider: resolved.provider, model: resolved.model, baseUrl: resolved.baseUrl, thinking: resolved.thinking };
+  } else {
+    const model = raw.model === undefined ? cfg.model : (raw.model as string).trim();
+    if (!model || !modelSpec(cfg.provider, model)) return { ok: false, error: `model "${model}" is not offered by this conversation's provider` };
+    // 只换型号：沿用当前深度，按新型号的支持面收档（与设置页同一规则）
+    next = { ...cfg, model, thinking: clampEffort(cfg.provider, model, (raw.thinking ?? cfg.thinking) as ThinkingLevel) };
+  }
+  const model = next.model;
+  const thinking = next.thinking as ThinkingLevel;
+  if (crossing || model !== cfg.model || thinking !== cfg.thinking) {
+    session.cfg = next;
     if (session.running) {
       session.modelRebindPending = true;
+      // 跑着的时候连换几次：「从谁换过来」记第一次换之前的那个
+      session.modelRebindFrom ??= { provider: cfg.provider, model: cfg.model };
     } else {
       try {
-        rebindModel(session);
+        rebindModel(session, { provider: cfg.provider, model: cfg.model });
       } catch (e) {
         session.cfg = cfg;
         return { ok: false, error: (e as Error).message };
       }
     }
-    fanout(session, { e: "model", model, thinking });
+    fanout(session, { e: "model", provider: next.provider, model, thinking });
     schedulePersist(session);
   }
-  return { ok: true, model, thinking, ...(session.running ? { pending: true } : {}) };
+  return { ok: true, provider: next.provider, model, thinking, ...(session.running ? { pending: true } : {}) };
 }
 
 // system 里那句「You are running as …」跟着型号改——问它是什么模型时要答对。只改这一句，其余原样。
@@ -1161,7 +1221,7 @@ function withModelIdentity(system: string, cfg: PersistedConfig): string {
 
 // 会话状态按快照配置里的型号 / 深度重建。走的是重启后恢复会话的同一条路（buildState + 记录回填）——适配器、子 agent 的
 // 默认型号、输出上限、能不能看图……都在 buildState 里按型号定，逐个就地改容易漏。只在两轮之间做。
-function rebindModel(session: Session): void {
+function rebindModel(session: Session, from?: { provider: string; model: string }): void {
   const old = session.state;
   const cfg = session.cfg;
   if (!old || !cfg || session.running) return;
@@ -1171,10 +1231,38 @@ function rebindModel(session: Session): void {
   restoreFromRecord(state, rec);
   // 读过的文件照旧算读过（同一个工作区、文件没动，换型号不该逼它把刚读的文件再读一遍）
   for (const [file, seen] of old.ctx.readFileState) state.ctx.readFileState.set(file, seen);
+  if (from) noteModelSwitch(state, from, cfg);
   state.noteRewrite("model");
   wireSessionState(session, state);
   session.state = state;
   session.modelRebindPending = false;
+  session.modelRebindFrom = undefined;
+}
+
+// 换了谁在答，在转录末尾留一条内部说明（界面不显示）。只改 system 的身份句不够：实测（10-10）MiMo 接手时照抄了前面
+// Qwen 那句「我是 qwen3.7-plus」——前面的回答是别的模型写的，得明说。换了又换、中间没发消息：只留最后一条。
+function noteModelSwitch(state: AgentState, from: { provider: string; model: string }, to: PersistedConfig): void {
+  const tail = state.messages[state.messages.length - 1];
+  if (tail?.kind === "model-switch") {
+    state.messages.pop();
+    // 上一条说明里的「从谁换过来」才是最后真正答过话的那个（A→B→A 中间没发消息 = 没换）
+    const first = tail.content[0];
+    const m = first?.t === "text" ? /from the "([^"]*)" model \((\S+) provider\)/.exec(first.text) : null;
+    if (m) from = { model: m[1], provider: m[2] };
+  }
+  if (from.provider === to.provider && from.model === to.model) return;
+  state.messages.push({
+    role: "user",
+    origin: "harness",
+    kind: "model-switch",
+    internal: true,
+    content: [{
+      t: "text",
+      text: `[Model switched] The user switched this conversation from the "${from.model}" model (${from.provider} provider) to you: ` +
+        `from here on you are the "${to.model}" model served via the ${to.provider} provider. Earlier assistant replies in this ` +
+        "conversation were written by other models — they are not you, so never repeat their self-descriptions. Carry on with the work as usual.",
+    }],
+  });
 }
 
 // 会话状态挂回会话的三个回调（新建 / 从盘上恢复 / 换型号重建都要挂）
@@ -2265,7 +2353,7 @@ export function startRun(
     session.state = initState(session);
   } else if (session.modelRebindPending) {
     // 上一轮跑着的时候换了型号 / 深度：这一轮开跑前按新配置重建（同步，仍在第一个 await 之前）
-    rebindModel(session);
+    rebindModel(session, session.modelRebindFrom);
   }
   // O7：UpdateGoal 只在有进行中的目标时出现（工具清单只在两轮之间变）
   syncGoalTool(session);
@@ -2460,7 +2548,7 @@ async function executeRun(
         // 请求里、不落盘，下一条消息一来就从请求里消失——前缀在它的位置断开，上一轮的全部工具往返都得重算。
         // 本会话已经注入过的文档不再追加（去重键是文档 id；被压缩掉之后模型看不到了，会再注入）。
         const seen = new Set(recallIds(state.messages));
-        const fresh = recalled.results.filter((item) => !seen.has(item.document.id));
+        const fresh = recalled.results.filter((item) => !seen.has(item.document.id) && worthAutoRecall(item, userMessage, recalled.semantic));
         const recall = renderAutomaticRecall({ ...recalled, results: fresh });
         // K11：记下哪些记忆的全文被拉进了这一轮（记忆面板的「召回 N 次」）
         noteRecalledDocs(ws, fresh.map((item) => item.document.id));

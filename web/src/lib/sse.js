@@ -50,12 +50,20 @@ export async function pump(res, onEvent, signal, onByte) {
 // 好好地跑——回来「杀后台再进」就能看到新吐的字，正是这个成因（重进走的是
 // resume/attach 新连接）。
 //
-// 判据用「多久没收到任何字节」而不是「有没有新 token」：服务端每 15s 发一个
-// ': ping' 心跳，所以静默本身就是可靠的死亡信号，与模型思考多久无关。
+// 判据用「多久没收到任何字节」而不是「有没有新 token」：服务端每 10s 发一个
+// ': ping' 心跳（src/runtime/sse.mjs HEARTBEAT_MS；2026-10-21 前是 15s），所以静默本身就是
+// 可靠的死亡信号，与模型思考多久无关。
 // 处置=掐掉这条【本次连接】（不是整个 handle），让既有的 recover/reconnect 链路
 // 去探 /api/active 并重新 attach——缓冲还在服务端，续得上。
-const STALL_HARD_MS = 40_000; // 连丢两个多心跳 → 判死（前台巡检用）
-const STALL_WAKE_MS = 12_000; // 刚回前台更急：超过就直接当半开处理
+//
+// 回前台的阈值必须盖过一个完整心跳周期再留余量：原先 12s 小于当时的 15s 心跳，
+// 最近一次 ping 之后 12–15s 内回前台就把健康的流当半开掐掉——直播流被掐会整轮重放（气泡清空重建），
+// 总线被掐会重连；桌面窗口一获得焦点就算一次「回前台」，于是到处闪、到处重连。
+// 现在 20s：新服务端是两个心跳，老服务端（15s）也还留 5s 余量。
+// 回前台后的 WAKE_WINDOW_MS 内，5s 巡检改用这个阈值，所以真半开的流仍在 ~20–25s 内被发现，而不是等 40s。
+const STALL_HARD_MS = 40_000; // 连丢几个心跳 → 判死（前台巡检用）
+const STALL_WAKE_MS = 20_000; // 刚回前台更急：超过就直接当半开处理
+const WAKE_WINDOW_MS = 30_000; // 回前台后这么久内，巡检都按 STALL_WAKE_MS 判
 const FREEZE_GAP_MS = 20_000; // 巡检自己迟到这么久 = 进程刚被冻结过（见下）
 const live = new Set();       // { touch(), kill(), idle() }
 
@@ -89,8 +97,11 @@ function sweep(thresholdMs) {
 
 if (typeof window !== 'undefined') {
   let wakeT = 0;
+  let wakeAt = 0;
   const onWake = () => {
+    if (document.hidden) return;   // 切到后台那一下的 visibilitychange 不算「醒来」
     clearTimeout(wakeT);
+    wakeAt = Date.now();
     // 稍等一下：回前台瞬间网络栈往往还没恢复，立刻判死会白撕一次连接。
     wakeT = setTimeout(() => { if (!document.hidden) sweep(STALL_WAKE_MS); }, 250);
   };
@@ -104,10 +115,11 @@ if (typeof window !== 'undefined') {
     const gap = Date.now() - lastTick;
     lastTick = Date.now();
     if (gap > FREEZE_GAP_MS) { onWake(); return; }
-    if (!document.hidden) sweep(STALL_HARD_MS);
+    if (!document.hidden) sweep(Date.now() - wakeAt < WAKE_WINDOW_MS ? STALL_WAKE_MS : STALL_HARD_MS);
   }, 5_000);
+  // 不挂 window 'focus'：窗口获得焦点不代表进程被冻结过（桌面上点一下窗口就是一次 focus），
+  // 真正的「从后台回来」都会先发 visibilitychange / pageshow；断网恢复发 online；被冻结的醒来靠上面的时间跳变自查。
   document.addEventListener('visibilitychange', onWake);
   window.addEventListener('online', onWake);
-  window.addEventListener('focus', onWake);
   window.addEventListener('pageshow', onWake);   // 安卓 WebView 从冻结态回来只发这个
 }

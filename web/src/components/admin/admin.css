@@ -117,7 +117,8 @@
 .sa-tr::before { content: ''; position: absolute; top: 0; left: 18px; right: 0; height: .5px; background: rgba(255,255,255,.08); }
 .sa-tr:hover { background: rgba(255,255,255,.04); }
 
-.sa-mono { font-family: var(--sa-mono); font-variant-numeric: tabular-nums; }
+/* 等宽值一律是地址/邀请码/设备号/路径这类要复制的东西 */
+.sa-mono { font-family: var(--sa-mono); font-variant-numeric: tabular-nums; -webkit-user-select: text; user-select: text; }
 .sa-mut { color: var(--sa-tx2); }
 .sa-dim { color: var(--sa-tx3); }
 .sa-trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -160,8 +161,3 @@
 .sa-toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 .sa-toast.err { color: #ffb3ad; box-shadow: inset 0 0 0 .5px rgba(255,90,80,.5), 0 10px 34px rgba(0,0,0,.5); }
 
-/* —— 滚动条（细、玻璃）—— */
-.sa-root ::-webkit-scrollbar { width: 6px; height: 6px; }
-.sa-root ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 3px; }
-.sa-root ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.28); }
-.sa-root ::-webkit-scrollbar-track { background: transparent; }

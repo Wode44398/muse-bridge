@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -220,6 +221,62 @@ test("a multi-project workspace names its sub-projects instead of describing onl
   assert.match(rendered, /podstream \(build\.gradle\)/);
   // The root line is still there, now explicitly scoped to the root.
   assert.match(rendered, /describe the workspace ROOT only/);
+});
+
+// 2026-10-09：一份下载来的 codex-main（几十个 crate）占满 12 个名额，排在它后面的真子项目被截掉
+test("sub-projects nested inside another sub-project are folded into it before the 12-entry cap", () => {
+  const root = fixture();
+  for (let i = 0; i < 20; i++) {
+    fs.mkdirSync(path.join(root, "big", "crates", `c${String(i).padStart(2, "0")}`), { recursive: true });
+    fs.writeFileSync(path.join(root, "big", "crates", `c${String(i).padStart(2, "0")}`, "Cargo.toml"), "[package]\n");
+  }
+  fs.writeFileSync(path.join(root, "big", "package.json"), "{}\n");
+  fs.mkdirSync(path.join(root, "zz-app"), { recursive: true });
+  fs.writeFileSync(path.join(root, "zz-app", "package.json"), "{}\n");
+
+  const knowledge = ensureProjectKnowledge(root, { force: true });
+  assert.deepEqual(knowledge.profile.subProjects.map((s) => s.dir), ["big", "zz-app"]);
+  assert.equal(knowledge.profile.subProjects[0].nested, 20);
+  assert.match(renderProjectKnowledgeForPrompt(root, knowledge), /big \(package\.json; \+20 nested\), zz-app \(package\.json\)/);
+});
+
+// 2026-10-09：工作区里 .claude/worktrees/<分支> 的整份副本被当成工作区内容索引——子项目一栏全是它、自动召回天天捞它的旧文件
+test("nested git worktrees / repositories under the workspace are not indexed", () => {
+  const root = fixture();
+  const wt = path.join(root, ".claude", "worktrees", "feature-x");
+  fs.mkdirSync(path.join(wt, "src"), { recursive: true });
+  fs.writeFileSync(path.join(wt, ".git"), "gitdir: ../../../.git/worktrees/feature-x\n");
+  fs.writeFileSync(path.join(wt, "package.json"), "{\"name\":\"copy\"}\n");
+  fs.writeFileSync(path.join(wt, "AGENTS.md"), "# stale copy\n");
+  fs.writeFileSync(path.join(wt, "src", "copied.ts"), "export const copied = 1;\n");
+  const clone = path.join(root, "vendor-clone");
+  fs.mkdirSync(path.join(clone, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(clone, "Cargo.toml"), "[package]\nname = \"clone\"\n");
+
+  const knowledge = ensureProjectKnowledge(root, { force: true });
+  assert.deepEqual(knowledge.profile.subProjects, [], "嵌套仓库不算子项目");
+  const rendered = renderProjectKnowledgeForPrompt(root, knowledge);
+  assert.doesNotMatch(rendered, /worktrees|vendor-clone/);
+  assert.ok(!JSON.stringify(knowledge.modules).includes("copied.ts"), "worktree 里的模块不进模块表");
+});
+
+// 2026-10-09：.scratch/md2pdf、.scratch/web-build-* 这类被 .gitignore 忽略的临时目录被当成子项目
+test("files and directories ignored by git are not indexed; tracked ones are", () => {
+  const root = fixture();
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  fs.writeFileSync(path.join(root, ".gitignore"), ".scratch/\n*.log\n");
+  fs.mkdirSync(path.join(root, ".scratch", "md2pdf"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".scratch", "md2pdf", "package.json"), "{\"name\":\"tmp\"}\n");
+  fs.writeFileSync(path.join(root, ".scratch", "md2pdf", "conv.ts"), "export const x = 1;\n");
+  fs.writeFileSync(path.join(root, "src", "debug.log"), "noise\n");
+  fs.mkdirSync(path.join(root, "vendor-src"), { recursive: true });
+  fs.writeFileSync(path.join(root, "vendor-src", "Cargo.toml"), "[package]\nname = \"v\"\n");
+
+  const knowledge = ensureProjectKnowledge(root, { force: true });
+  assert.deepEqual(knowledge.profile.subProjects.map((s) => s.dir), ["vendor-src"], "被忽略的不算子项目，没忽略的照算");
+  const modules = JSON.stringify(knowledge.modules);
+  assert.ok(!modules.includes("conv.ts") && !modules.includes("debug.log"));
+  assert.ok(modules.includes("src/index.ts"));
 });
 
 test("a single-project workspace says nothing about sub-projects", () => {

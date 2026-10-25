@@ -21,12 +21,15 @@
     SHARE_TTLS, filterAiSessions, filterFilesByName, formatShareExpiry,
     loadAiSessions, normalizeFileQuery, sendFileToAi, shareClipboardText,
     shareRequest, shareResult,
+    untitledMdName, COMPRESS_FORMATS, COMPRESS_LEVELS, loadCompressFormats, compressDefaultName, runCompress,
   } from '../lib/files-business.js';
   import { reportUi, onAgentFs, onAgentGoto } from '../lib/uiReport.js';
   import { WS_DT } from '../lib/fileDrag.js';
   import { t, tc, tr, locale, isEn } from '../lib/i18n.js';
 
   const BASE = import.meta.env.BASE_URL;
+  // 文件夹图标
+  const wsIcon = `${BASE}assets/icons/workspace.png`;
 
   // —— 形态 ——
   //   embedded：挂进工作台侧列的紧凑形态——返回交还宿主、全局键盘只在面板真正持有焦点时生效
@@ -41,6 +44,9 @@
     previewHost = '', onExit = null,
     // home：宿主会话的工作目录（绝对路径），侧栏「通用」里给一行直达；缺省＝workspaceRoot。
     home = '',
+    // hostChrome：宿主自带卡片标题行（放大 / 关闭）——工具栏不再摆「返回工作台」，收起只认宿主那颗 ✕，
+    // 与工作台里其它卡片同一套手势；↑ 只管上一级。
+    hostChrome = false,
   } = $props();
 
   // —— 位置与数据通道 ——
@@ -69,6 +75,7 @@
   // 统一数据入口：其余代码只认 fs*。
   const fsList = (p) => api.files(p, wsRoot);
   const fsMkdir = (p, name) => api.mkdir(p, name, wsRoot);
+  const fsNewFile = (p, name) => api.newFile(p, name, wsRoot);
   const fsRename = (rel, name) => api.renameFile(rel, name, wsRoot);
   const fsRemove = (rel) => api.deleteFile(rel, wsRoot);
   const fsMove = (rel, dest) => api.moveFile(rel, dest, wsRoot);
@@ -88,6 +95,7 @@
   let menu = $state(null);              // { x, y, entries }
   let infoDlg = $state(null);
   let shareDlg = $state(null);
+  let zipDlg = $state(null);            // 压缩选项 { rels, sub, name, format, level, formats, busy, note }
   let aiDlg = $state(null);             // { item, chat: { sessions, loading, q } }
   let busyLabel = $state('');
   let toastMsg = $state('');
@@ -165,6 +173,9 @@
   }
   // 地址栏给不给看完整路径：只给 admin；沙箱身份仍是「根名 › 子目录」，绝对路径不出服务器
   const absOk = $derived(Boolean(curLoc?.abs) && me.kind === 'admin');
+  // 人在「哪个位置都不含」的临时位置里（会话目录等）：admin 的服务端 ws 作用域对任意已存在目录放行，
+  // ↑ / 地址栏上级段就让临时位置跟着往上漂，而不是在会话目录根上卡死。
+  const canFloat = $derived((curLoc?.id === 'session' || /^abs:/.test(curLoc?.id || '')) && me.kind === 'admin');
   const curAbs = $derived(curLoc?.abs ? joinPath(curLoc.abs, path) : '');
   const homeAbs = $derived(home || workspaceRoot);
   const homeLabel = $derived(home ? baseName(home) : (tr(rootName) || baseName(workspaceRoot)));
@@ -212,7 +223,7 @@
     const inner = segs.map((s, i) => ({ label: s, rel: segs.slice(0, i + 1).join('/') }));
     if (!absOk) return [{ label: rootLabel, rel: '' }, ...inner];
     const parts = splitAbs(curLoc.abs);
-    const head = parts.map((p, i) => (i === parts.length - 1 ? { label: p.label, rel: '' } : { label: p.label, abs: p.abs, ok: Boolean(resolveAbs(p.abs)) }));
+    const head = parts.map((p, i) => (i === parts.length - 1 ? { label: p.label, rel: '' } : { label: p.label, abs: p.abs, ok: canFloat || Boolean(resolveAbs(p.abs)) }));
     return [...head, ...inner];
   });
   const crumbItems = $derived(crumbList.map((c) => c.label));
@@ -222,7 +233,7 @@
     crumbPop = false;
     const c = crumbList[i];
     if (!c) return;
-    if (c.rel == null) { if (c.ok) goAbs(c.abs); return; }
+    if (c.rel == null) { if (c.ok) goAbs(c.abs, { float: canFloat }); return; }
     if (c.rel === '') goRoot(); else navTo({ path: c.rel });
   }
 
@@ -335,7 +346,7 @@
   const cutSet = $derived(clipboard?.mode === 'cut' && clipboard.locationId === locationId ? new Set(clipboard.rels) : new Set());
   const canPaste = $derived(Boolean(clipboard && clipboard.locationId === locationId && inBrowse));
   const listBusy = $derived(loading);
-  const anyDialog = $derived(Boolean(menu || infoDlg || shareDlg || aiDlg || sortOpen || addOpen || crumbPop || locPop || renaming));
+  const anyDialog = $derived(Boolean(menu || infoDlg || shareDlg || zipDlg || aiDlg || sortOpen || addOpen || crumbPop || locPop || renaming));
 
   // —— 导航（含历史）——
   const snapshot = () => ({ locationId, path });
@@ -360,10 +371,20 @@
     hist.back.push(snapshot()); histN = { back: hist.back.length, fwd: hist.fwd.length };
     await applyNav(next);
   }
-  const canUp = $derived(inBrowse ? segs.length > 0 : true);
+  // 位置根之上的上级：E:\Vault\Claude（工作空间位置的根）→ E:\Vault 落进 E 盘位置。从前 ↑ 只认位置内的
+  // 相对路径，一回到工作空间 / 会话目录的根就灰掉，明明地址栏上还有父目录。
+  const upAbs = $derived.by(() => {
+    if (segs.length || !absOk) return '';
+    const parts = splitAbs(curLoc.abs);
+    if (parts.length < 2) return '';
+    const p = parts[parts.length - 2].abs;
+    return canFloat || resolveAbs(p) ? p : '';
+  });
+  const canUp = $derived(inBrowse ? segs.length > 0 || Boolean(upAbs) : true);
   async function goUp() {
     if (!inBrowse) { await navTo({ path }); return; }   // 搜索中＝退出搜索回到当前目录
     if (segs.length) await navTo({ path: segs.slice(0, -1).join('/') });
+    else if (upAbs) await goAbs(upAbs, { float: canFloat });
   }
   const enterDir = (rel) => navTo({ path: rel });
   const goRoot = () => navTo({ path: '' });
@@ -380,10 +401,21 @@
     locations = [...locations.filter((l) => l.id !== 'session'), loc];
     return locations.find((l) => l.id === 'session');
   }
+  // 临时位置往上漂出来的上级：每个目录一个独立 id（不复用 'session'——导航历史里记的是 位置 id + 相对路径，
+  // 换掉同一个 id 的根，后退就会落到错的目录）。同样不进侧栏。
+  function floatLocFor(abs) {
+    const id = 'abs:' + foldAbs(abs);
+    if (!locations.some((l) => l.id === id)) {
+      locations = [...locations, { id, name: baseName(abs), kind: 'cloud', root: abs, abs, removable: false, hidden: true }];
+    }
+    return locations.find((l) => l.id === id);
+  }
   // 按绝对路径跳转（地址栏输入 / 位置根之上的上级段 / 侧栏「会话目录」）
-  async function goAbs(abs) {
+  // float：没有位置含它时，让临时位置换成以它为根（见 canFloat）
+  async function goAbs(abs, { float = false } = {}) {
     let hit = resolveAbs(abs);
     if (!hit && homeAbs && foldAbs(abs) === foldAbs(homeAbs)) hit = { loc: sessionLocFor(homeAbs), rel: '' };
+    if (!hit && float && me.kind === 'admin') hit = { loc: floatLocFor(abs), rel: '' };
     if (!hit) { toast(t('「{path}」不在可访问的位置里', { path: abs })); return false; }
     await navTo({ locationId: hit.loc.id, path: hit.rel });
     return true;
@@ -391,11 +423,11 @@
   const goHomeDir = () => { if (!atHome) goAbs(homeAbs); };
 
   let loadSeq = 0;
-  async function load(p = path, { keepSel = false } = {}) {
+  async function load(p = path, { keepSel = false, fresh = false } = {}) {
     const my = ++loadSeq;
     loading = true;
     try {
-      const r = await fsList(p);
+      const r = await fsList(p, fresh);
       if (my !== loadSeq) return;   // 已被更新的导航替代（跨位置连点时旧结果别落进新位置）
       path = r.path ?? p;
       items = withRel(r.items, path); truncated = Boolean(r.truncated);
@@ -423,8 +455,8 @@
     } catch {}
     if (!list?.length) list = [{ id: 'ws', name: t('工作空间'), root: '', abs: '' }];
     LOC_LIST.cloud = list;
-    const session = locations.find((l) => l.id === 'session');
-    locations = session ? [...list, session] : list;
+    // 临时位置（会话目录 + 往上漂出来的上级）不在服务端列表里，刷新时原样留着
+    locations = [...list, ...locations.filter((l) => l.id === 'session' || /^abs:/.test(l.id))];
     // 当前位置没了（换了身份 / 那个盘拔掉了）：回身份根。locationId 为空＝起点还在落位，不动它
     if (locationId && !locations.some((l) => l.id === locationId)) { locationId = 'ws'; await load(''); }
   }
@@ -581,10 +613,15 @@
     } catch (e) { toast(t('重命名失败：{reason}', { reason: tr(e.message || '') })); }
   }
   // 重命名输入框：自动聚焦并选中主文件名（不含扩展名），键盘事件不外泄给全局快捷键。
+  // 选区要等一拍：use: 先于 bind:value 执行，此刻 value 还是空串，当场 setSelectionRange 等于什么都没选，
+  // 随后填值光标落到末尾——F2 改名 / 新建后键入就成了在旧名后面追加（「未命名.md周报」）。
   function renameInput(node) {
     node.focus();
-    const dot = node.value.lastIndexOf('.');
-    node.setSelectionRange(0, dot > 0 ? dot : node.value.length);
+    queueMicrotask(() => {
+      if (document.activeElement !== node) return;
+      const dot = node.value.lastIndexOf('.');
+      node.setSelectionRange(0, dot > 0 ? dot : node.value.length);
+    });
   }
   async function newFolder() {
     if (!inBrowse) return;
@@ -650,6 +687,53 @@
     try { const r = await api.extractFile(it.rel, wsRoot); toast(t('已解压到「{name}」', { name: r.name })); await refresh(); }
     catch (e) { toast(t('解压失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); }
     finally { extracting = false; }
+  }
+
+  // 新建 Markdown：同资源管理器「新建文本文档」——先按默认名（未命名.md）建好，再原地进入重命名
+  //（只选中主文件名，回车即定；不改名直接回车也行）。
+  async function newMarkdown() {
+    if (!inBrowse) return;
+    const name = untitledMdName(items.map((x) => x.name));
+    try {
+      await fsNewFile(path, name);
+      await load(path);
+      const rel = (path ? path + '/' : '') + name;
+      focusRel(rel);
+      renaming = { rel, value: name };
+    } catch (e) { toast(t('新建失败：{reason}', { reason: tr(e.body?.error || e.body || e.message || '') })); }
+  }
+
+  // —— 压缩：选项对话框 → 服务端压缩（/api/files/compress），完成后选中存档 ——
+  const canCompress = true;
+  async function doCompress() {
+    const rels = [...selected];
+    if (!rels.length) return;
+    const picked = rels.map((rel) => items.find((x) => x.rel === rel) || { name: rel.split('/').pop(), isDir: false });
+    const dirName = segs.length ? segs[segs.length - 1] : rootLabel;
+    zipDlg = {
+      rels, sub: rels.length === 1 ? picked[0].name : t('{n} 项', { n: rels.length }),
+      name: compressDefaultName(picked, dirName), format: 'zip', level: 'normal',
+      formats: ['zip', '7z', 'tar.gz'], busy: false, note: '',
+    };
+    loadCompressFormats(api).then((formats) => { if (zipDlg) zipDlg.formats = formats; });
+  }
+  async function runZipDlg() {
+    const d = zipDlg;
+    if (!d || d.busy || !d.name.trim()) return;
+    d.busy = true; d.note = t('正在压缩…');
+    const dir = path;
+    try {
+      const r = await runCompress(api, d.rels, { format: d.format, level: d.level, name: d.name.trim() }, wsRoot, {
+        onTick: (st) => { if (zipDlg === d) d.note = st.bytes ? t('正在压缩… 已写入 {size}', { size: fmtSize(st.bytes) }) : t('正在压缩…'); },
+      });
+      if (zipDlg === d) zipDlg = null;
+      toast(t('已压缩为「{name}」', { name: r.name }));
+      await refresh();
+      if (path === dir && inBrowse) focusRel((dir ? dir + '/' : '') + r.name);
+    } catch (e) {
+      if (zipDlg === d) { d.busy = false; d.note = ''; }
+      toast(t('压缩失败：{reason}', { reason: tr(e.body?.error || e.message || '') }));
+    }
   }
 
   // 浏览器选文件 / 文件夹 → 分块上传。
@@ -797,6 +881,8 @@
       entries.push({ sep: true });
       if (!it.isDir) entries.push({ label: t('下载到本地'), act: () => doDownload(it) });
     }
+    // 多选同样能压（一起打进一个存档）；搜索结果跨目录，服务端只收同一文件夹里的项，搜索态不出
+    if (canCompress && inBrowse) entries.push({ label: multi ? t('压缩 {n} 项…', { n: selected.size }) : t('压缩…'), act: doCompress });
     entries.push({ label: t('剪切'), hint: 'Ctrl+X', act: () => setClipboard('cut') });
     entries.push({ label: t('复制'), hint: 'Ctrl+C', act: () => setClipboard('copy') });
     if (!multi) {
@@ -812,6 +898,7 @@
     const entries = [];
     if (inBrowse) {
       entries.push({ label: t('新建文件夹'), act: newFolder });
+      entries.push({ label: t('新建 Markdown 文件'), act: newMarkdown });
       entries.push({ label: t('上传文件…'), act: () => pickUpload(false) });
       entries.push({ label: t('上传文件夹…'), act: () => pickUpload(true) });
       entries.push({ label: t('粘贴'), hint: 'Ctrl+V', act: doPaste, disabled: !canPaste });
@@ -942,6 +1029,7 @@
       if (sortOpen || addOpen || crumbPop || locPop) { sortOpen = false; addOpen = false; crumbPop = false; locPop = false; return; }
       if (aiDlg) { aiDlg = null; return; }
       if (shareDlg) { if (!shareDlg.busy) shareDlg = null; return; }
+      if (zipDlg) { if (!zipDlg.busy) zipDlg = null; return; }
       if (infoDlg) { infoDlg = null; return; }
       if (renaming) { renaming = null; return; }
       if (inField && inField === searchEl) { query = ''; searchEl.blur(); return; }
@@ -1171,15 +1259,17 @@
 
   <div class="fd-toolbar" bind:this={toolbarEl}>
     <div class="fd-tb" class:t1={tbTier >= 1} class:t2={tbTier >= 2} class:t3={tbTier >= 3} class:t4={tbTier >= 4} bind:this={tbEl}>
-      <button class="tb-btn" data-flip="home" title={embedded ? t('返回工作台') : t('返回主页')} onclick={goHome} aria-label={embedded ? t('返回工作台') : t('返回主页')}>
-        {#if embedded}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
-        {:else}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.2 12 4l8 7.2"/><path d="M6 10v9h12v-9"/></svg>
-        {/if}
-      </button>
+      {#if !hostChrome}
+        <button class="tb-btn" data-flip="home" title={embedded ? t('返回工作台') : t('返回主页')} onclick={goHome} aria-label={embedded ? t('返回工作台') : t('返回主页')}>
+          {#if embedded}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+          {:else}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.2 12 4l8 7.2"/><path d="M6 10v9h12v-9"/></svg>
+          {/if}
+        </button>
+      {/if}
       {#if tbTier < 2}
-        <span class="tb-gap"></span>
+        {#if !hostChrome}<span class="tb-gap"></span>{/if}
         <button class="tb-btn" data-flip="back" title={t('后退（Alt+←）')} aria-label={t('后退')} disabled={!histN.back} onclick={goBack}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
         </button>
@@ -1243,6 +1333,7 @@
           <button class="pop-scrim" aria-label={t('关闭')} onclick={() => (addOpen = false)}></button>
           <div class="pop">
             <button class="pop-mi" disabled={!inBrowse} onclick={() => { addOpen = false; newFolder(); }}>{t('新建文件夹')}</button>
+            <button class="pop-mi" disabled={!inBrowse} onclick={() => { addOpen = false; newMarkdown(); }}>{t('新建 Markdown 文件')}</button>
             <button class="pop-mi" disabled={!inBrowse} onclick={() => pickUpload(false)}>{t('上传文件…')}</button>
             <button class="pop-mi" disabled={!inBrowse} onclick={() => pickUpload(true)}>{t('上传文件夹…')}</button>
             {#if tbTier >= 3}
@@ -1423,14 +1514,14 @@
     <div class="dlg-mask" onclick={() => (infoDlg = null)} role="presentation">
       <div class="dlg info" onclick={(e) => e.stopPropagation()} role="presentation">
         <div class="info-top">
-          {#if infoDlg.isDir}<img class="info-ico" src="{BASE}assets/icons/workspace.png" alt="" />{:else}<span class="info-ico file">{@html fileIcon(infoDlg.name)}</span>{/if}
+          {#if infoDlg.isDir}<img class="info-ico" src={wsIcon} alt="" />{:else}<span class="info-ico file">{@html fileIcon(infoDlg.name)}</span>{/if}
           <div class="info-name">{infoDlg.name}</div>
         </div>
         <div class="info-rows">
           <div class="ir"><span>{t('种类')}</span><b>{typeLabel(infoDlg)}</b></div>
           <div class="ir"><span>{t('大小')}</span><b>{infoDlg.isDir ? t('文件夹') : fmtSize(infoDlg.size)}</b></div>
           <div class="ir"><span>{t('修改时间')}</span><b>{fmtFull(infoDlg.mtime)}</b></div>
-          <div class="ir"><span>{t('位置')}</span><b class="loc">{absOk ? joinPath(curLoc.abs, infoDlg.dir || '') : rootLabel + (infoDlg.dir ? ' / ' + infoDlg.dir.split('/').join(' / ') : '')}</b></div>
+          <div class="ir"><span>{t('位置')}</span><b class="loc sel-text">{absOk ? joinPath(curLoc.abs, infoDlg.dir || '') : rootLabel + (infoDlg.dir ? ' / ' + infoDlg.dir.split('/').join(' / ') : '')}</b></div>
         </div>
         <div class="dlg-btns">
           <button class="btn go" onclick={() => (infoDlg = null)}>{t('完成')}</button>
@@ -1466,12 +1557,45 @@
           <h3>{t('链接已创建')}</h3>
           <p class="dlg-sub">{shareDlg.item.isDir ? '📁 ' : ''}{shareDlg.item.name}</p>
           <button class="sh-url" onclick={() => copyText(shareClipboardText(shareDlg.result), t('已复制链接'))}>{shareDlg.result.url}</button>
-          <p class="sh-meta">{t('{time} 过期', { time: fmtExpire(shareDlg.result.expiresAt) })}{#if shareDlg.result.pw} · {t('密码')} <b>{shareDlg.result.pw}</b>{/if}</p>
+          <p class="sh-meta">{t('{time} 过期', { time: fmtExpire(shareDlg.result.expiresAt) })}{#if shareDlg.result.pw} · {t('密码')} <b class="sel-text">{shareDlg.result.pw}</b>{/if}</p>
           <div class="dlg-btns">
             <button class="btn" onclick={() => (shareDlg = null)}>{t('完成')}</button>
             <button class="btn go" onclick={() => copyText(shareClipboardText(shareDlg.result), t('已复制链接'))}>{t('复制链接')}</button>
           </div>
         {/if}
+      </div>
+    </div>
+  {/if}
+
+  <!-- 压缩（内置选项：桌面壳以外；桌面壳弹的是系统「创建存档」窗口） -->
+  {#if zipDlg}
+    <div class="dlg-mask" onclick={() => { if (!zipDlg.busy) zipDlg = null; }} role="presentation">
+      <div class="dlg" onclick={(e) => e.stopPropagation()} role="presentation">
+        <h3>{t('压缩')}</h3>
+        <p class="dlg-sub">{zipDlg.sub}</p>
+        <div class="zp-lb">{t('存档名称')}</div>
+        <div class="zp-name">
+          <input class="dlg-input" bind:value={zipDlg.name} disabled={zipDlg.busy} spellcheck="false"
+            onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') runZipDlg(); }} />
+          <span class="zp-ext">{COMPRESS_FORMATS.find((f) => f.value === zipDlg.format)?.ext}</span>
+        </div>
+        <div class="zp-lb">{t('格式')}</div>
+        <div class="sh-ttl">
+          {#each COMPRESS_FORMATS.filter((f) => zipDlg.formats.includes(f.value)) as f (f.value)}
+            <button class:on={zipDlg.format === f.value} disabled={zipDlg.busy} onclick={() => (zipDlg.format = f.value)}>{f.label}</button>
+          {/each}
+        </div>
+        <div class="zp-lb">{t('压缩级别')}</div>
+        <div class="sh-ttl">
+          {#each COMPRESS_LEVELS as lv (lv.value)}
+            <button class:on={zipDlg.level === lv.value} disabled={zipDlg.busy} onclick={() => (zipDlg.level = lv.value)}>{tr(lv.lb)}</button>
+          {/each}
+        </div>
+        {#if zipDlg.note}<p class="sh-meta zp-note">{zipDlg.note}</p>{/if}
+        <div class="dlg-btns">
+          <button class="btn" disabled={zipDlg.busy} onclick={() => (zipDlg = null)}>{t('取消')}</button>
+          <button class="btn go" disabled={zipDlg.busy || !zipDlg.name.trim()} onclick={runZipDlg}>{zipDlg.busy ? t('正在压缩…') : t('压缩')}</button>
+        </div>
       </div>
     </div>
   {/if}
@@ -1777,6 +1901,12 @@
   .sh-ttl button.on { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); font-weight: 600; }
   .sh-url { display: block; width: 100%; margin: 6px 0 4px; padding: 10px; border: 1px dashed rgba(0, 113, 227, .5); border-radius: 9px; background: var(--blue-soft); font-size: 12.5px; color: var(--blue); word-break: break-all; text-align: left; cursor: pointer; user-select: text; }
   .sh-meta { margin: 2px 0 0; font-size: 12px; color: var(--ink2); }
+  .zp-lb { margin: 12px 0 0; font-size: 12px; font-weight: 600; color: var(--ink2); }
+  .zp-name { display: flex; align-items: center; gap: 6px; }
+  .zp-name .dlg-input { flex: 1; min-width: 0; margin-top: 6px; }
+  .zp-ext { margin-top: 4px; font-size: 13px; color: var(--ink2); white-space: nowrap; }
+  .sh-ttl button:disabled { opacity: .55; cursor: default; }
+  .zp-note { margin-top: 12px; }
 
   /* 发送给 AI */
   .dlg.ai { width: 420px; }

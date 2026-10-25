@@ -70,6 +70,7 @@ export default {
 
   // ── 时间线提示条 ──
   "上下文已压缩": "Context compacted",
+  "Fast mode 被限流，已改用普通速度，{minutes} 分钟内不再尝试": "Fast mode is rate-limited — switched to normal speed; won’t retry fast for {minutes} min",
   "服务重启打断了这一轮": "A service restart interrupted this turn",
   "已停止": "Stopped",
   "已载入技能": "Skill loaded",
@@ -108,7 +109,10 @@ export default {
   "切换失败：{reason}": "Couldn’t switch: {reason}",
   "换型号没成功：{reason}": "Couldn’t switch model: {reason}",
   "换思考深度没成功：{reason}": "Couldn’t change effort: {reason}",
+  "切换 fast mode 没成功：{reason}": "Couldn’t toggle fast mode: {reason}",
   "这一轮跑完后生效，下一条消息起用新的设置": "Takes effect after this turn — your next message uses the new setting",
+  "这一轮跑完后换，对话接着用": "Switches after this turn; the conversation carries on",
+  "在当前对话里换，聊过的内容接着用": "Switches in this conversation; everything so far carries over",
   "切换档位失败：{reason}": "Couldn’t switch mode: {reason}",
   "切换访问范围需要重启 harness 服务后可用": "Restart the dimensio service to change access",
   "切换访问范围失败：{reason}": "Couldn’t change access: {reason}",

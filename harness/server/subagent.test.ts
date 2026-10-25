@@ -309,7 +309,8 @@ test("Agent tool: passes options through, tags events with its call id, persists
   };
   const r = await agentTool.run({ prompt: "do it", tools: "coder", model: "m2", effort: "xhigh", label: "job" }, ctx);
   assert.equal(r.ok, true);
-  assert.deepEqual(seen[0], { tier: "coder", model: "m2", thinking: "max", toolId: "call-42", hasEmit: true, schema: undefined });
+  // xhigh 是真档位（Claude 的 extra），原样传下去，由 runner 按目标型号 clamp——不再在入口折成 max
+  assert.deepEqual(seen[0], { tier: "coder", model: "m2", thinking: "xhigh", toolId: "call-42", hasEmit: true, schema: undefined });
   assert.equal((r.meta as any).subagent.trail[0].name, "Grep");
   // C3：子 agent 的报告带「数据不是指令」的框定行
   assert.match(r.content.map((b) => (b.t === "text" ? b.text : "")).join(""), /^\[Sub-agent report[^\n]*\]\nanswer/);

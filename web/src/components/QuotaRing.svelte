@@ -13,15 +13,21 @@
   //   「距自动压缩还有 420k」/「即将自动压缩」，右边 xs secondary 按钮「Compact session」；
   //   本轮在跑或离线时置灰并给原因，压缩进行中不摆。点了 = 关弹层 + 往本会话发 /compact。
   //   官方只在上下文 ≥50% 时出现，这里有数据就摆（随时能一键压）。
+  // - 自动压缩点滑块（bridge 自加，2026-10-10）：计量条上一颗竖条手柄，位置 = 压缩点 / 模型窗口
+  //  （1M 窗口拖到正中 = 500k 压缩）；拖到默认点及以右 = 默认。全局偏好 prefs.compactFrac，随每条
+  //   消息带给服务端换成官方设置项 autoCompactWindow（ctx-usage.mjs compactWindowFor），下条消息起生效。
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { status, session, me, ui } from '../lib/state.svelte.js';
+  import { status, session, me, ui, prefs, savePrefs } from '../lib/state.svelte.js';
+  import { IS_CSNAP } from '../lib/csnap.js';
   import { chat, send } from '../lib/chat.svelte.js';
   import { relTime } from '../lib/format.js';
   import { ctxSummary, ctxLevel, fmtResetAt, fmtCompact } from '../lib/ctxUsage.js';
   import { clampX } from '../lib/clampx.js';
   import ContextBreakdown from './ContextBreakdown.svelte';
   import { t, tr } from '../lib/i18n.js';
+  // 自动压缩点 2026-10-20 起存服务端（设置 › Claude › 对话，按身份多设备同步）：读 cs.values.compactFrac，拖动写回设置
+  import { cs as claudeCs, setClaudeSetting } from '../lib/claudeSettings.svelte.js';
 
   let open = $state(false);
   let expanded = $state(false);
@@ -108,13 +114,40 @@
   const compacting = $derived(!!chat.messages.at(-1)?.compacting);
   const showCompact = $derived(!!session.id && hasCtx && !compacting);
   const compactBlock = $derived(ui.offline ? t('重新连上后可用') : session.busy ? t('本轮结束后可用') : '');
+  // 默认压缩点 = 原生窗口 − 预留（CLI 的 窗口 − 阈值，实测 33k）。上一轮若带了 autoCompactWindow，
+  // threshold 是按那个窗口算的，预留要用它（autocompact.window）去减，别把覆盖值当成默认。
+  const defaultAt = $derived.by(() => {
+    if (!usage || !usage.max) return 0;
+    const ac = usage.autocompact || {};
+    const th = Number(ac.threshold) || 0, win = Number(ac.window) || usage.max;
+    if (th > 0 && th < win) return usage.max - (win - th);
+    const buf = (usage.categories || []).find((c) => c.kind === 'buffer')?.tokens || 0;
+    return buf > 0 && buf < usage.max ? usage.max - buf : 0;
+  });
+  const defaultFrac = $derived(defaultAt ? defaultAt / usage.max : 1);
+  // 最低压到 100k（再低系统提示词+工具定义就占满，会反复压缩）；200k 窗口即 50%。
+  const minFrac = $derived(usage?.max ? Math.ceil(100_000 / usage.max * 100) / 100 : 1);
+  const canTune = $derived(!IS_CSNAP && !!defaultAt && usage.autocompact?.enabled !== false && minFrac < defaultFrac);
+  const isDefault = (f) => f >= defaultFrac - 0.005;
+  let dragFrac = $state(null);   // 拖动中的值，松手（change）才落进 prefs
+  const savedFrac = $derived(claudeCs.values.compactFrac);
+  const curFrac = $derived(dragFrac ?? (savedFrac && !isDefault(savedFrac) ? Math.max(minFrac, savedFrac) : defaultFrac));
+  // 与服务端同口径：压缩点 = round(比例 × 原生窗口)。
+  const compactAt = $derived(isDefault(curFrac) ? defaultAt : Math.round(curFrac * usage.max));
+  function tuneInput(e) { dragFrac = Number(e.currentTarget.value); }
+  function tuneCommit(e) {
+    const v = Number(e.currentTarget.value);
+    setClaudeSetting('compactFrac', isDefault(v) ? null : Math.min(1, Math.max(0.01, v))).catch(() => {});   // 写失败乐观值自动回滚
+    dragFrac = null;
+  }
+
   const compactHint = $derived.by(() => {
     if (!usage || !usage.max || usage.autocompact?.enabled === false) return '';
-    const th = Number(usage.autocompact?.threshold) || 0;
-    const buf = (usage.categories || []).find((c) => c.kind === 'buffer')?.tokens || 0;
-    const at = th > 0 && th < usage.max ? th : buf > 0 && buf < usage.max ? usage.max - buf : 0;
+    if (dragFrac != null) return isDefault(dragFrac) ? t('默认在 {tokens} 自动压缩', { tokens: fmtCompact(defaultAt) }) : t('到 {tokens} 自动压缩', { tokens: fmtCompact(compactAt) });
+    const at = canTune ? compactAt : defaultAt;
     if (!at) return '';
     const left = at - (Number(usage.total) || 0);
+    if (left <= 0) return t('下一条消息前自动压缩');
     if (left < 30_000) return t('即将自动压缩');
     const n = Math.floor(left), step = 10 ** Math.max(0, String(n).length - 2);
     return t('距自动压缩还有 {tokens}', { tokens: fmtCompact(Math.floor(n / step) * step) });
@@ -149,11 +182,21 @@
           {#if hasCtx}<span class="qb-v">{ctx.summary}</span>{/if}
           {#if usage}<span class="qb-car" class:on={expanded}><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 2l3 3-3 3"/></svg></span>{/if}
         </button>
-        <div class="qb-body">
+        <div class="qb-body" class:tune={canTune}>
           {#if !hasCtx}
             <div class="qb-note">{t('发一条消息后显示上下文用量')}</div>
           {:else if usage}
-            <ContextBreakdown {usage} compact={true} legend={expanded} />
+            <div class="qb-meter">
+              <ContextBreakdown {usage} compact={true} legend={expanded} />
+              {#if canTune}
+                <!-- 原生 range 管拖动/键盘/读屏；它只铺在计量条的 [最小值, 100%] 那段上，左右再各外扩半个滑块宽
+                    （7px），滑块中心才与计量条上的百分比位置对齐。看得见的手柄是下面那根竖条，range 本身全透明 -->
+                <input class="qb-range" type="range" style="left:calc({minFrac * 100}% - 7px)" min={minFrac} max="1" step="0.01" value={curFrac}
+                  aria-label={t('自动压缩点')} aria-valuetext={fmtCompact(compactAt)} title={t('拖动调整自动压缩点 · 下条消息起生效')}
+                  oninput={tuneInput} onchange={tuneCommit} />
+                <span class="qb-knob" class:moved={!isDefault(curFrac)} class:drag={dragFrac != null} style="left:{curFrac * 100}%" aria-hidden="true"></span>
+              {/if}
+            </div>
           {:else}
             <div class="qb-bar" role="progressbar" aria-valuenow={ctx.pct ?? 0} aria-valuemin="0" aria-valuemax="100"><span class="qb-fill {level}" style="width:{Math.min(100, ctx.pct ?? 100)}%"></span></div>
           {/if}
@@ -227,6 +270,19 @@
   .qb-car.on svg { transform: rotate(90deg); }
   .qb-body { padding: 4px 16px 4px; }
   .qb-body.plan { display: flex; flex-direction: column; gap: 8px; }
+  /* 自动压缩点滑块：手柄 4×14 竖条压在 4px 计量条上（卡片色描边与色段分开），命中区是透明 range 18px 高 */
+  .qb-body.tune { padding-top: 8px; padding-bottom: 6px; }
+  .qb-meter { position: relative; }
+  .qb-range { position: absolute; right: -7px; top: 2px; height: 18px; margin: 0; padding: 0; transform: translateY(-50%); z-index: 1; background: none; -webkit-appearance: none; appearance: none; cursor: ew-resize; -webkit-tap-highlight-color: transparent; }
+  .qb-range:focus { outline: none; }
+  .qb-range::-webkit-slider-runnable-track { height: 18px; background: transparent; border: 0; }
+  .qb-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 18px; background: transparent; border: 0; }
+  .qb-range::-moz-range-track { height: 18px; background: transparent; border: 0; }
+  .qb-range::-moz-range-thumb { width: 14px; height: 18px; background: transparent; border: 0; }
+  .qb-knob { position: absolute; top: 2px; width: 4px; height: 12px; border-radius: 2px; transform: translate(-50%, -50%); pointer-events: none; background: var(--muted); box-shadow: 0 0 0 2px var(--q-card); transition: height var(--mo-micro, .12s) ease-out, background-color var(--mo-micro, .12s) ease-out; }
+  .qb-knob.moved { background: var(--text); }
+  .qb-knob.drag, .qb-range:focus-visible + .qb-knob { height: 16px; background: var(--text); }
+  @media (hover: hover) { .qb-range:hover + .qb-knob { height: 16px; } }
   .qb-note { padding: 2px 16px 4px; font-size: 12px; color: var(--serif); }
   .qb-bar { display: block; height: 4px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 18%, transparent); overflow: hidden; }
   .qb-fill { display: block; height: 100%; background: var(--coral); border-radius: 999px; transition: width .3s ease; }

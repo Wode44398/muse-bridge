@@ -344,6 +344,8 @@ export class AgentState {
   planNudges = 0;
   // R19：「只写了思考、没给答复就要收尾」的追问次数（每条用户消息重置）
   answerNudges = 0;
+  // 正文断在半句却报正常结束的追问次数（每条用户消息重置）
+  cutoffNudges = 0;
   preCompactAuditPassed = false;
   preCompactAuditPrompted = false;
 
@@ -444,7 +446,12 @@ export class AgentState {
   materializeMessages(messages: Msg[], collect?: (item: MediaItem) => void): Msg[] {
     const canVideo = this.adapter.capabilities.video;
     const canAudio = this.adapter.capabilities.audio === true;
+    const canImage = this.adapter.capabilities.image;
     const materialize = (block: Block, fromTool: boolean): Block => {
+      // 会话中途从看得见图的模型换到纯文本模型：历史里的图原样发过去会 400，换成一句话说清缺了什么
+      if (block.t === "image" && !canImage) {
+        return { t: "text", text: `[Image ${block.name ?? "attachment"} is not visible to ${this.adapter.model}: it takes no image input. Switch to a vision-capable model to see it.]` };
+      }
       // Switching to a text/image-only model mid-session must not silently drop
       // the video the earlier turns were about — say what is missing instead.
       if (block.t === "audio" && !canAudio) {
@@ -544,6 +551,7 @@ export class AgentState {
     this.memoryAuditNudges = 0;
     this.planNudges = 0;
     this.answerNudges = 0;
+    this.cutoffNudges = 0;
     this.preCompactAuditPassed = !this.memoryAuditRequired || this.memoryAuditAutoSkipped;
     this.preCompactAuditPrompted = false;
   }

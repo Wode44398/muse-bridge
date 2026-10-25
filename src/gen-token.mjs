@@ -12,7 +12,7 @@ const HASH_ONLY = process.argv.includes('--hash');
 
 let cfg = {};
 if (existsSync(CONFIG_PATH)) {
-  try { cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); }
+  try { cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '')); }
   catch { console.error('config.json 解析失败（JSON 损坏）。请先修好它再运行——拒绝覆盖以免丢失其它配置。'); process.exit(1); }
 }
 cfg.port ??= 8787;

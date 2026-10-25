@@ -9,15 +9,114 @@ import { handleAnswer } from '../runtime/questions.mjs';
 import { runClaudeChat } from '../agents/claude.mjs';
 import * as claudeProjects from '../claude-projects.mjs';
 import { createSessionWorktree } from '../claude-worktrees.mjs';
+import { claudeSetting } from '../runtime/claude-settings.mjs';
 import { CLAUDE_MODELS, CLAUDE_EFFORTS, ULTRACODE } from '../config/capabilities.mjs';
+import { isCustomModelId, customEffortOk } from '../runtime/claude-providers.mjs';
+// 官方型号 + 自定义 API 的 custom:<服务>:<模型>（存在与否、谁能用由 runClaudeChat 判，给人话报错）
+const claudeModelOk = (m) => CLAUDE_MODELS.has(m) || isCustomModelId(m);
 import { MODEL } from '../config/index.mjs';
-import { contextFor } from '../runtime/identity.mjs';
+import { contextFor, replayHeadersOf } from '../runtime/identity.mjs';
+import { findExternalHolder } from '../runtime/external-holder.mjs';
+import { findGenBySession } from '../runtime/gen.mjs';
+import { setQueueReplayer, fakeRequest, fakeResponse, listQueue, enqueue, enqueueFront, removeItem, moveItem, clearQueue, drain as drainQueue } from '../runtime/claude-queue.mjs';
 import { touchSnap, SNAP_MAX_TURNS, snapAllowsFable } from './chat-snapshot.mjs';
+import { getLimitResume, setLimitAutoContinue } from '../runtime/limit-resume.mjs';
+import { FAMILY_REQ } from '../runtime/session-family.mjs';
+import { registerPermissionRoutes } from '../runtime/permissions.mjs';
+import { supersedeOffer } from '../runtime/session-proposals.mjs';
+import { startTurnTiming, markTurn, handedTurn } from '../runtime/turn-timing.mjs';
 
 export function registerChatRoutes(router, { authOk, identify }) {
-  router.on('POST', '/api/chat', async (req, res) => {
+  // 排队消息的内部重放（claude-queue.mjs）：一轮收尾后把合并好的排队消息当成一条新 POST 走本路由。
+  // 成功的状态码在 SSE 头写出那一刻就定了（200 = 已开跑），不必等这一轮跑完；失败的等响应写完，带回正文进日志。
+  // rq.family（会话派生 / 会话间消息，session-family.mjs）挂在假请求的对象属性上——客户端发来的 JSON 伪造不了它。
+  // 回传 res：发起方要盯着这条流看它到底开跑了没有（SSE 头 200 之后也可能紧跟一个错误帧就收了）。
+  setQueueReplayer((rq) => new Promise((resolve) => {
+    const fr = fakeRequest(rq);
+    if (rq.queuedAt) startTurnTiming(fr, rq.queuedAt);   // 排队重放：计时从入队算起，等上一轮的时间也记进去
+    if (rq.family) fr[FAMILY_REQ] = rq.family;
+    const fs = fakeResponse();
+    const wh = fs.writeHead;
+    fs.writeHead = (code, ...rest) => { wh(code, ...rest); if (code < 400) resolve({ status: code, res: fs }); return fs; };
+    fs.on('close', () => resolve({ status: fs.statusCode, detail: (fs.chunks || []).join('') }));
+    chatHandler(fr, fs).catch(() => resolve({ status: 500 }));
+  }));
+
+  // —— 排队消息管理：列出 / 删除 / 放回输入框（take）/ 排序 / 立即发送（promote）/ 全部清除 ——
+  router.on('GET', '/api/claude/queue', (req, res, url) => {
     const id = identify(req);
-    // share = 公开只读分享身份：不给跑 agent。
+    if (id.kind === 'none' || id.kind === 'share') { res.writeHead(401, { 'Content-Type': 'text/plain' }); res.end('unauthorized'); return; }
+    const ctx = contextFor(id);
+    const sid = String(url.searchParams.get('session') || '');
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ items: sid ? listQueue(ctx.key, sid) : [] }));
+  });
+  router.on('POST', '/api/claude/queue', async (req, res) => {
+    const id = identify(req);
+    if (id.kind === 'none' || id.kind === 'share') { res.writeHead(401, { 'Content-Type': 'text/plain' }); res.end('unauthorized'); return; }
+    const ctx = contextFor(id);
+    let b; try { b = JSON.parse(await readBody(req)); } catch { res.writeHead(400); res.end('bad json'); return; }
+    const sid = String(b.session || '');
+    const reply = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    if (!/^[0-9a-fA-F-]{8,}$/.test(sid)) return reply(400, { error: 'bad session' });
+    const op = String(b.op || '');
+    if (op === 'remove' || op === 'take') {
+      const r = removeItem(ctx.key, sid, String(b.id || ''));
+      return reply(200, { items: r.items, ...(op === 'take' ? { item: r.item } : {}) });
+    }
+    if (op === 'move') return reply(200, { items: moveItem(ctx.key, sid, String(b.id || ''), b.to) });
+    if (op === 'clear') return reply(200, { items: clearQueue(ctx.key, sid) });
+    if (op === 'promote') {
+      // 立即发送（官方 promoteQueuedMessage）：这一轮还在跑 → 从队列取出、改成插话推进去，不打断；
+      // 没在跑 → 直接把这一条发出去开新一轮。
+      const itemId = String(b.id || '');
+      const live = findGenBySession(ctx.key, sid);
+      if (live && !live.done && typeof live.steer === 'function') {
+        const r = removeItem(ctx.key, sid, itemId);
+        if (!r.raw) return reply(404, { error: '这条排队消息已经不在了', items: r.items });
+        const uuid = live.steer({ message: r.raw.text, attachments: r.raw.attachments });
+        if (uuid) return reply(200, { items: r.items, steered: true, uuid });
+        // 插不进（这一轮恰好在收尾 / 挂起等后台任务）：放回队首，收尾后第一个发
+        enqueueFront(ctx.key, sid, r.raw);
+        return reply(200, { items: listQueue(ctx.key, sid), deferred: true });
+      }
+      const ok = await drainQueue(ctx.key, sid, [itemId]);
+      return reply(ok ? 200 : 409, { items: listQueue(ctx.key, sid), sent: ok });
+    }
+    return reply(400, { error: 'unknown op' });
+  });
+
+  // —— 5 小时限额「重置后自动继续」（limit-resume.mjs）：卡片读状态 / 勾选框开关 ——
+  router.on('GET', '/api/claude/limit-resume', (req, res, url) => {
+    const id = identify(req);
+    if (id.kind === 'none' || id.kind === 'share') { res.writeHead(401, { 'Content-Type': 'text/plain' }); res.end('unauthorized'); return; }
+    const ctx = contextFor(id);
+    const sid = String(url.searchParams.get('session') || '');
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ state: sid ? getLimitResume(ctx.key, sid) : null }));
+  });
+  router.on('POST', '/api/claude/limit-resume', async (req, res) => {
+    const id = identify(req);
+    if (id.kind === 'none' || id.kind === 'share' || id.kind === 'snap') { res.writeHead(401, { 'Content-Type': 'text/plain' }); res.end('unauthorized'); return; }
+    const ctx = contextFor(id);
+    let b; try { b = JSON.parse(await readBody(req)); } catch { res.writeHead(400); res.end('bad json'); return; }
+    const sid = String(b.session || '');
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ state: setLimitAutoContinue(ctx.key, sid, b.on === true) }));
+  });
+
+  // 权限模式：GET/POST /api/claude/permission-mode（会话中切模式 / 新会话草稿记文件夹默认，见 runtime/permissions.mjs）
+  registerPermissionRoutes(router, { identify });
+
+  router.on('POST', '/api/chat', (req, res) => chatHandler(req, res));
+  // 新会话预热（claude.mjs 的 SPARE_MS）：「新对话」输入框获得焦点/开始打字时，前端带上与发送【完全相同】
+  // 的选项（模型/effort/项目/开关…，只是没有 message）打这里。选项解析与 /api/chat 同一段代码，
+  // 预热进程的启动参数才和随后那条真消息对得上。立即回 202，预热在后台进行；不适用的情形回 204。
+  router.on('POST', '/api/chat/prewarm', (req, res) => chatHandler(req, res, { prewarm: true }));
+  async function chatHandler(req, res, { prewarm = false } = {}) {
+    if (!prewarm) startTurnTiming(req);
+    const id = identify(req);
+    // share = 公开只读分享身份：任何 agent 都不给（以前只拦 none，/w/ 链接的访客能在分享的文件夹里跑 Claude、还能写）。
     if (id.kind === 'none' || id.kind === 'share') {
       res.writeHead(401, { 'Content-Type': 'text/plain' });
       res.end('unauthorized');
@@ -33,28 +132,41 @@ export function registerChatRoutes(router, { authOk, identify }) {
       res.end('bad json');
       return;
     }
+    markTurn(req, 'body');
 
+    const message = prewarm ? '' : String(parsed.message ?? '').trim();
+    const sessionId = parsed.sessionId ? String(parsed.sessionId) : undefined;
+    // 只有 Claude 走这里（dimensio 有自己的 /api/harness/*）。
     if (parsed.agent !== undefined && parsed.agent !== 'claude') {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: '不支持的 agent：' + String(parsed.agent) }));
       return;
     }
-
-    const message = String(parsed.message ?? '').trim();
-    const sessionId = parsed.sessionId ? String(parsed.sessionId) : undefined;
+    // 预热只给主机 admin 的新会话 Claude 对话：续聊已有停放的 CLI；快照/沙箱/注册用户不预热（每个约 300MB）；
+    // worktree 新会话要先切出新目录，cwd 事先不知道。
+    if (prewarm && (sessionId || ctx.kind !== 'admin' || ctx.sandbox || parsed.worktree === true)) {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
     // 快照身份（?ct=）：深度研究关掉；全部快照合计的并行轮有独立小上限（额度保护）。
     const isSnap = ctx.kind === 'snap';
     if (isSnap) {
       parsed.research = false;
       touchSnap(ctx.snap.token);   // 用户消息 → 续 1 小时销毁倒计时
     }
-    let model = CLAUDE_MODELS.has(parsed.model) ? parsed.model : (MODEL || undefined);
-    // 快照（公开链接）禁用 Fable 时（覆盖整个 Fable 5.x 档），把 Fable 请求降级到默认模型——
-    // 前端选择器已隐藏该项，这里再拦一道，防抓包直接指定 claude-fable-5 / -5-1 / 其 [1m] 兄弟档。
+    // 窄屏网页（手机浏览器）：内嵌图表按手机宽度出图（mcp/visualize.mjs vizPlatform）。
+    const narrow = parsed.narrow === true;
+    let model = claudeModelOk(parsed.model) ? parsed.model : (MODEL || undefined);
+    // 快照（公开链接）禁用 Fable 时（分群设置 fable5，覆盖整个 Fable 5.x 档），把 Fable 请求
+    // 降级到默认模型——前端选择器已隐藏该项，这里再拦一道，防抓包直接指定
+    // claude-fable-5 / claude-fable-5-1 / 其 [1m] 兄弟档。
     if (isSnap && !snapAllowsFable(ctx.snap.token) && /^claude-fable-5(-1)?(\[1m\])?$/.test(model || '')) {
       model = MODEL || undefined;
     }
-    let effort = CLAUDE_EFFORTS.has(parsed.effort) ? parsed.effort : undefined;
+    // 自定义 API 的模型：推理强度是它自己的档位表（设置 › Claude › 模型服务，档位 id 自由起名），按那张表收
+    const effortOk = (e) => CLAUDE_EFFORTS.has(e) || (isCustomModelId(model) && customEffortOk(model, e));
+    let effort = effortOk(parsed.effort) ? parsed.effort : undefined;
     // Ultracode = xhigh + 常驻动态工作流（Workflow 派一群子 agent，成本倍增器）：快照访客降到 xhigh
     //（claude.mjs 对无 shell 的沙箱用户再拦一道；Workflow 工具对快照已 disallow）。
     if (isSnap && effort === ULTRACODE) effort = 'xhigh';
@@ -62,9 +174,13 @@ export function registerChatRoutes(router, { authOk, identify }) {
     // 会话级选择器记忆：记「用户显式选了什么」而非 clamp 后的回落值——没选就存 null，
     // 恢复时选择器回到「默认」态，服务端默认将来变了也跟着走。快照访客不记。
     const chatPrefs = isSnap ? null : {
-      model: CLAUDE_MODELS.has(parsed.model) ? parsed.model : null,
-      effort: CLAUDE_EFFORTS.has(parsed.effort) ? parsed.effort : null,
+      model: claudeModelOk(parsed.model) ? parsed.model : null,
+      effort: effortOk(parsed.effort) ? parsed.effort : null,
       fast,
+      // 会话级输出风格（新会话在发第一条前从加号菜单选的；续聊的覆盖存在 chat-prefs 里，这里不带）。
+      // 只收像风格名的字符串，claude-turn-settings 再按可选清单下发。带 sessionId 的一律不收：请求随带的风格
+      // 优先级高于 chat-prefs 里的会话覆盖，限额续跑 / 排队重放的旧请求体会把用户后来改的覆盖悄悄撤回去。
+      ...(!sessionId && typeof parsed.outputStyle === 'string' && /^[\w .()-]{1,80}$/.test(parsed.outputStyle) ? { outputStyle: parsed.outputStyle } : {}),
     };
     const CHAT_STYLES = new Set(['learning', 'concise', 'explanatory', 'formal']);
     const style = CHAT_STYLES.has(parsed.style) ? parsed.style : undefined; // normal/未知 → 无额外风格
@@ -74,7 +190,12 @@ export function registerChatRoutes(router, { authOk, identify }) {
     const research = parsed.research === true; // 深度研究模式
     // 输入建议（官方 prompt suggestion）：前端开着开关才带 suggest:true。快照访客不给。
     const suggest = parsed.suggest === true && !isSnap;
-
+    // 自动压缩点（用量弹层滑块）：占模型窗口的比例，(0,1) 之外 = 默认。快照访客不给。
+    const compactFrac = !isSnap && typeof parsed.compactFrac === 'number' && parsed.compactFrac > 0 && parsed.compactFrac < 1 ? parsed.compactFrac : undefined;
+    // 权限模式：新会话草稿里选的（续聊用会话自己的记忆，前端不带）。取值与夹紧在 runtime/permissions.mjs，快照访客恒 default。
+    // 只认新会话：限额自动续跑 / 会话唤醒会把首条请求的 body 原样重放、只补上 sessionId，草稿里选的模式（比如计划）
+    // 不能跟着它压过会话自己的记忆。
+    const permissionMode = !isSnap && !sessionId && typeof parsed.permissionMode === 'string' ? parsed.permissionMode.slice(0, 40) : undefined;
     // 项目制（项目=工作空间路径=运行 cwd）：新会话按 claudeProjectId 选项目（缺省=「工作空间」
     // 默认项目）；续聊按 transcript 所在目录反查项目——会话的 cwd 一经建立不可改，忽略客户端传值。
     let claudeProject = null;
@@ -87,6 +208,14 @@ export function registerChatRoutes(router, { authOk, identify }) {
         res.end(JSON.stringify({ error: '项目不存在或无权访问' }));
         return;
       }
+    }
+    // 会话派生（服务端内部重放才有 family，见 session-family.mjs）：新开的子会话就在父会话的工作目录里跑
+    //（同一个检出、同一个项目；父会话在 worktree 里就同一个 worktree）。路径照样过一遍授权。
+    const family = req[FAMILY_REQ] && req[FAMILY_REQ].origin ? req[FAMILY_REQ] : null;
+    if (family && !sessionId && family.cwd) {
+      // 子会话开了自己的 worktree（start_session use_worktree）：带上 name / root / 所属项目，worktree 会话帧与工作台都完整
+      const fw = family.worktree && family.worktree.branch ? family.worktree : null;
+      claudeProject = { ...(fw && fw.projectId ? { id: fw.projectId } : {}), path: family.cwd, ...(fw ? { worktree: { branch: fw.branch, ...(fw.name ? { name: fw.name } : {}), ...(fw.root ? { root: fw.root } : {}) } } : {}) };
     }
     if (claudeProject) {
       try { claudeProject = { ...claudeProject, path: claudeProjects.authorizeProjectPath(ctx, claudeProject.path) }; }
@@ -107,7 +236,8 @@ export function registerChatRoutes(router, { authOk, identify }) {
       }
       if (base && !base.quick) {
         try {
-          const wt = await createSessionWorktree(ctx.claudeProjects, base);
+          // 分支前缀与起点跟设置走（Git 与拉取请求：branchPrefix / worktreeBaseRef）
+          const wt = await createSessionWorktree(ctx.claudeProjects, base, { prefix: claudeSetting(ctx, 'branchPrefix'), baseRef: claudeSetting(ctx, 'worktreeBaseRef') });
           claudeProject = { ...base, path: claudeProjects.authorizeProjectPath(ctx, wt.cwd), worktree: { name: wt.name, branch: wt.branch, root: wt.root } };
         } catch (e) {
           res.writeHead(e?.status || 400, { 'Content-Type': 'application/json' });
@@ -122,7 +252,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
       allowAnywhere: ctx.kind === 'admin',
       roots: [ctx.uploads, ctx.cwd, claudeProject?.path],
     });
-    if (!message && !attachments.length) {
+    if (!message && !attachments.length && !prewarm) {
       res.writeHead(400, { 'Content-Type': 'text/plain' });
       res.end('empty message');
       return;
@@ -134,19 +264,77 @@ export function registerChatRoutes(router, { authOk, identify }) {
       res.end(JSON.stringify({ error: 'Claude 未启用，或你的账号没有使用权限' }));
       return;
     }
+    // 插话 / 稍后发送（官方 Code 页：Claude 工作中按回车 = 插话，Ctrl+Enter = 排队）。
+    // 只在这个会话正有一轮在跑时生效。没在跑（恰好刚收尾）回 409 not_running，由前端改走普通发送——
+    // 官方是宿主内直接落成普通发送；这里请求方按 JSON 收，不能半路换成直播流。
+    if (sessionId && (parsed.priority === 'next' || parsed.priority === 'later')) {
+      const live = findGenBySession(ctx.key, sessionId);
+      const reply = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+      // 「新会话 / 在这里做」卡还在等、用户没点卡直接发了新消息：卡作废，工具调用照官方告诉 Claude 先处理这条新消息
+      if (live && !live.done) supersedeOffer(live);
+      if (parsed.priority === 'next' && live && !live.done && typeof live.steer === 'function') {
+        const uuid = live.steer({ message, attachments });
+        if (uuid) { handedTurn(req, sessionId, 'steer'); return reply(200, { ok: true, steered: true, uuid }); }
+      }
+      if (parsed.priority === 'later' && live && !live.done) {
+        const headers = replayHeadersOf(req);
+        try {
+          const r = enqueue(ctx.key, sessionId, { message, attachments, body: parsed, headers, url: req.url });
+          return reply(200, { ok: true, queued: true, item: r.item, items: r.items });
+        } catch (e) {
+          return reply(e?.status || 400, { error: e?.message || '排队失败' });
+        }
+      }
+      return reply(409, { code: 'not_running', error: '这一轮已经结束' });
+    }
+    // 单写者：这个会话正开在终端里的 Claude Code 里（进程活着）就不 resume，免得 jsonl 分叉、
+    // 这一轮在对方下一轮之后从历史里消失（external-holder.mjs）。
+    if (sessionId) {
+      const holder = findExternalHolder(sessionId);
+      if (holder) {
+        const doing = holder.status === 'busy' ? '正在生成' : '正开着';
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          code: 'held_elsewhere',
+          holder,
+          error: `这个会话在 ${holder.label} 里${doing}，两边同时续聊会让对话分叉。请先在 ${holder.label} 里关掉它（或退出），再回来继续。`,
+        }));
+        return;
+      }
+    }
     // 项目 cwd 生效方式：覆写 ctx.cwd 传入——runClaudeChat 的 query cwd / resume 清理 /
     // 沙箱围栏全部吃 ctx.cwd，一处覆写全链路一致。默认项目 path === ctx.cwd，等价原行为。
     // homeRoot 保留身份原本的文件根（覆写前的 cwd）：产物文件夹卡要靠它算「在文件页里的位置」。
     // worktree 会话另带 worktree:{cwd,branch}——session 帧透给前端，工作台当场切到 worktree。
     const claudeCtx = claudeProject
-      ? { ...ctx, cwd: claudeProject.path, homeRoot: ctx.cwd, ...(claudeProject.worktree ? { worktree: { cwd: claudeProject.path, branch: claudeProject.worktree.branch } } : {}) }
+      ? { ...ctx, cwd: claudeProject.path, homeRoot: ctx.cwd, ...(claudeProject.worktree ? { worktree: { cwd: claudeProject.path, branch: claudeProject.worktree.branch, ...(claudeProject.worktree.name ? { name: claudeProject.worktree.name, root: claudeProject.worktree.root } : {}) } } : {}) }
       : ctx;
+    if (prewarm) {
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end('{"ok":true}');
+      runClaudeChat(req, null, {
+        message: '', sessionId: undefined, model, effort, fast, chatPrefs, attachments: [], style, styleText, research, suggest, compactFrac, narrow,
+        ctx: claudeCtx, prewarm: true, permissionMode,
+      }).catch((e) => console.log('[claude] prewarm failed:', e && e.message));
+      return;
+    }
+    // 5 小时限额重置后自动继续（limit-resume.mjs）：撞墙时要把这条请求原样留着，到点在服务端重放
+    //（身份头同 claude-queue 的排队消息）。快照访客不给——一次性公开链接，没人等它续。
+    // limitResume = 这一轮本身就是自动续跑发的（重放时 body 带上），不当成「人接手了」。
+    const limitReplay = isSnap ? null : {
+      headers: replayHeadersOf(req),
+      url: req.url,
+      body: parsed,
+    };
     return runClaudeChat(req, res, {
-      message, sessionId, model, effort, fast, chatPrefs, attachments, style, styleText, research, suggest,
+      message, sessionId, model, effort, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, narrow,
+      limitReplay, limitResume: parsed.limitResume === true && !isSnap,
       globalMax: isSnap ? SNAP_MAX_TURNS : undefined,
       ctx: claudeCtx,
+      family: isSnap ? null : family,
+      permissionMode,
     });
-  });
+  }
 
   router.on('POST', '/api/answer', (req, res) => handleAnswer(req, res, { identify }));
 }

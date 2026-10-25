@@ -10,7 +10,7 @@
 //   聊天/SSE/历史/附件卡走【现有】接口（/api/chat、/api/attach、/api/session、/api/claude/
 //   artifact…），凭 ?ct=<token> 解析成 kind:'snap' 身份——可写、cwd 锁死桶内、无 shell
 //   （见 runtime/identity.mjs）。server.mjs 只把带 resolveSnap 的 identify 传给聊天相关的
-//   路由模块，vertex/媒体/助手等其余端点拿不到 snap 身份，天然 401。
+//   路由模块，vertex/媒体等其余端点拿不到 snap 身份，天然 401。
 //
 // 生命周期：最后一条【用户消息】起 1 小时无人发言 → 过期，扫描器删桶；Claude 判定恶意
 // 使用可调 close_snapshot 工具（src/mcp/snapshot.mjs）关停——立即拒绝一切新请求，桶随后删除。
@@ -25,6 +25,7 @@ import { sessionsDir } from '../runtime/paths.mjs';
 import { ROOT, PUBLIC_ORIGIN, PUBLIC_DIR } from '../config/index.mjs';
 import { CAPABILITIES } from '../config/capabilities.mjs';
 import { pageLang } from './share-gate.mjs';
+import { setSnapOwnerResolver } from '../runtime/quota.mjs';
 
 const SNAPS_DIR = path.join(ROOT, 'chat-snapshots');      // 各桶：chat-snapshots/<token>/
 const STORE_FILE = path.join(ROOT, 'chat-snapshots.json'); // token -> 元数据
@@ -33,6 +34,8 @@ const MAX_ACTIVE = 10;                        // 同时最多几个活跃快照�
 export const SNAP_MAX_TURNS = 4;              // 全部快照合计同时在跑的 Claude 轮上限（额度保护）
 
 let store = load();
+// 快照访客的轮记到铸造者的账上、受他的额度约束（开源路线 S2-6，runtime/quota.mjs billingUser）
+setSnapOwnerResolver((token) => (store[String(token || '')] ? store[String(token)].owner || '' : ''), () => Object.values(store).map((r) => r && r.owner).filter(Boolean));
 // S7 原型链防护：ct token 是公网可控输入，普通对象下标会命中 constructor 等原型属性。store 恒无原型。
 // 函数声明（非 const 箭头）——load() 在模块顶部 `let store = load()` 处就被调用，早于本行。
 function bare(o) { return Object.assign(Object.create(null), o); }
@@ -147,7 +150,8 @@ export function registerChatSnapshotRoutes(router, { identify }) {
     if (!ctx.canSnapshot) return bad(res, 403, '这个账号没有铸聊天快照的权限');
     if (!ctx.allowClaude) return bad(res, 403, 'Claude 未启用');
     let body = {}; try { body = JSON.parse(await readBody(req) || '{}'); } catch { return bad(res, 400, 'bad json'); }
-    const activeCount = Object.values(store).filter((r) => !r.closed && !isIdleExpired(r)).length;
+    // 按铸造者计（开源路线 S2-6）：一个人铸满了不影响别人。
+    const activeCount = Object.values(store).filter((r) => r.owner === ctx.key && !r.closed && !isIdleExpired(r)).length;
     if (activeCount >= MAX_ACTIVE) return bad(res, 429, `同时最多 ${MAX_ACTIVE} 个活跃快照，稍后再试`);
     const token = crypto.randomBytes(16).toString('base64url');   // ~128bit
     try { mkdirSync(bucketDir(token), { recursive: true }); } catch { return bad(res, 500, '建桶失败'); }

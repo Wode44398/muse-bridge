@@ -169,7 +169,7 @@ export interface TimelineEffects extends FlushControl {
   toast(msg: string): void;
   rememberSession(id: string): void;
   openBrowserPane(): void; // 前台时展开浏览器面板（要不要真展开——比如竖屏——由实现决定）
-  setGlobal(patch: { permissionMode?: string; access?: string; model?: string; thinking?: string }): void;
+  setGlobal(patch: { permissionMode?: string; access?: string; provider?: string; model?: string; thinking?: string }): void;
   refill(text: string): void; // 没送出的插话放回输入框
   setBrowser(url: string): void;
 }
@@ -715,11 +715,13 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       if (m.cfg) m.cfg = { ...m.cfg, access: ev.access };
       if (fx.foreground) fx.setGlobal({ access: ev.access });
       break;
-    // 型号 / 思考深度在任一设备被换（会话级）：同步本会话快照与全局指示器（型号菜单的勾读全局）
-    case "model":
-      if (m.cfg) m.cfg = { ...m.cfg, model: ev.model, thinking: ev.thinking };
-      if (fx.foreground) fx.setGlobal({ model: ev.model, thinking: ev.thinking });
+    // 厂商 / 型号 / 思考深度在任一设备被换（会话级）：同步本会话快照与全局指示器（型号菜单的勾读全局）
+    case "model": {
+      const provider = typeof ev.provider === "string" && ev.provider ? { provider: ev.provider } : {};
+      if (m.cfg) m.cfg = { ...m.cfg, ...provider, model: ev.model, thinking: ev.thinking };
+      if (fx.foreground) fx.setGlobal({ ...provider, model: ev.model, thinking: ev.thinking });
       break;
+    }
     // 插话在任一设备落地：先进输入框上方的待送达托盘（本机发起的已乐观放进去，按 id 去重）；别的设备插的话在这里补上
     // （镜像端也看得见有人在中途说话）。U2（X36 第二步）：以前一落地就进时间线——模型还在跑一个十分钟的工作流时，
     // 气泡早早排在上面，看着像已经被读到了。
@@ -746,6 +748,13 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
     // E3：用户 /技能名 点的技能已经跟在消息（或插话）后面进了对话——一行提示（重开会话时由 slash-skill 消息还原成同一句）
     case "skill_loaded":
       if (typeof ev.name === "string" && ev.name) pushItem(m, { kind: "notice", text: skillLoadedText(ev.name, ev.pkg === true) });
+      break;
+    // 适配器层的提示：fast mode 撞了自己的限流，这次已改按普通速度重发，之后一段时间不再试 fast
+    case "notice":
+      if (ev.code === "fast_fallback") {
+        const minutes = Math.max(1, Math.round((Number(ev.cooldownMs) || 0) / 60_000));
+        pushItem(m, { kind: "notice", text: t("Fast mode 被限流，已改用普通速度，{minutes} 分钟内不再尝试", { minutes }) });
+      }
       break;
     // N45：这一轮开跑时自动召回了哪些——挂到本轮那条用户消息下（从后往前第一条不是插话的用户气泡；镜像端的底座也含这一条）
     case "recall": {

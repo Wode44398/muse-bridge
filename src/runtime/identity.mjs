@@ -10,10 +10,13 @@
 // every handler derives its file locations from it instead of the old globals.
 
 import path from 'node:path';
-import { getSession, getUser, userGrants, normTier } from '../users.mjs';
+import { getSession, getUser, userGrants, normTier, accountId } from '../users.mjs';
 import { VAULT, ROOT, UPLOADS, MEDIA, FEATURES, userRoot } from '../config/index.mjs';
 import { AGENT_BY_ID, USER_DEFAULT_AGENTS, normAgentList } from '../config/agents.mjs';
 import { enabledAgents } from './agent-status.mjs';
+import { withPrincipal, ownerKey, parseOwnerKey, HOST_OWNER } from './principal.mjs';
+// owner 键只经这一对函数生成与解析（principal.mjs，开源路线 C2）；新代码不再手拼 'u:' + 名字、不再 key.slice(2)。
+export { ownerKey, parseOwnerKey } from './principal.mjs';
 
 // 这个身份能用哪些 agent：全局开关（agent-status 的 enabled）∩ 身份名单。
 //   admin：全部已启用的。
@@ -38,8 +41,35 @@ function agentFlags(identity) {
   };
 }
 
+// 进程内身份覆盖：给 agent 接口（src/agent-api/）在进程里调现有 /api/* 路由用——身份已经认好了，
+// 挂在假请求的这个 Symbol 属性上，路由照常走 identify。Symbol 属性来不了网络：HTTP 客户端伪造不了它。
+// 只认 identify 的路由生效；直接拿 authOk / adminCredential 判身份的（控制台 /api/admin/* 等）不认它。
+export const INTERNAL_IDENTITY = Symbol('bridge.internalIdentity');
+
+// 服务端重放（排队消息、额度重置后自动续跑、会话间消息、PR 叫醒，见 runtime/claude-queue.mjs）靠记下的身份头重发
+// /api/chat。进程内身份没有身份头，就在重放头里记一个标记：值是 owner 键（'admin' / 'u:<账号 id>'），重放时现查账号
+// （停用了就不给身份）。这个标记只由 replayHeadersOf 从 Symbol 写入、绝不从网络请求头抄——客户端带同名头不起作用。
+export const REPLAY_AS_HEADER = 'x-bridge-replay-as';
+export const REPLAY_HEADERS = ['authorization', 'cookie', 'user-agent', 'x-bridge-device', 'x-bridge-client'];
+export function replayHeadersOf(req) {
+  const h = req && req.headers ? req.headers : {};
+  const out = Object.fromEntries(REPLAY_HEADERS.filter((k) => h[k]).map((k) => [k, h[k]]));
+  const id = req && req[INTERNAL_IDENTITY];
+  if (id && id.kind === 'admin') out[REPLAY_AS_HEADER] = ownerKey('admin');
+  else if (id && id.kind === 'user' && id.user) out[REPLAY_AS_HEADER] = ownerKey('user', id.user);
+  return out;
+}
+export function identityFromReplayTag(tag) {
+  const p = parseOwnerKey(tag);
+  if (!p) return null;
+  if (p.kind === 'admin') return { kind: 'admin', user: null };
+  if (p.kind === 'user') return userIdentity(p.id);
+  return null;
+}
+
 export function makeIdentify({ authOk, getCookie, bearerToken, queryToken, resolveShare, resolveSnap }) {
   return function identify(req) {
+    if (req && req[INTERNAL_IDENTITY]) return req[INTERNAL_IDENTITY];
     // 【显式能力 token 优先于环境登录态】——/c/ 快照页与 /w/ 分享页的每个请求都自带
     // ?ct= / ?st=。若访客浏览器恰好登着 bridge（管理员自己点开分享出去的链接是典型场景），
     // cookie/Bearer 抢先解析会把请求接管成 admin/user：快照会话解析到错误 cwd
@@ -83,17 +113,19 @@ export function makeIdentify({ authOk, getCookie, bearerToken, queryToken, resol
     const tok = getCookie(req, 'bridge_user') || (bearerToken ? bearerToken(req) : '') || (queryToken ? queryToken(req) : '');
     const s = tok ? getSession(tok) : null;
     // 多用户关着：普通账号的会话一律不认，只剩服务账号（程序用的账号）。
-    if (s && (FEATURES.multiUser || s.service)) return { kind: 'user', user: s.user, tier: s.tier, agents: s.agents, snapshot: s.snapshot, service: s.service };
+    // user = 账号 id（目录 / owner 键 / 账本都认它，老账号 = 用户名），name = 登录名（显示用，可改），
+    // sid / loginAt = 这次登录。
+    if (s && (FEATURES.multiUser || s.service)) return { kind: 'user', user: s.id || s.user, name: s.user, sid: s.sid || '', loginAt: s.since || 0, tier: s.tier, agents: s.agents, snapshot: s.snapshot, service: s.service };
     return { kind: 'none', user: null };
   };
 }
 
 // 从账号库现拼一个 user 身份——给「没有请求」的入口用（定时任务、控制台代聊 / 查看某人数据）。
-// 账号不存在 → null；已停用 → null（allowDisabled 时照给，控制台查看停用账号的数据要用）。
-export function userIdentity(name, { allowDisabled = false } = {}) {
-  const u = getUser(name);
+// ref = 登录名或账号 id。账号不存在 → null；已停用 → null（allowDisabled 时照给，控制台查看停用账号的数据要用）。
+export function userIdentity(ref, { allowDisabled = false } = {}) {
+  const u = getUser(ref);
   if (!u || (u.disabled && !allowDisabled)) return null;
-  return { kind: 'user', user: u.name, tier: normTier(u.tier), ...userGrants(u) };
+  return { kind: 'user', user: accountId(u), name: u.name, tier: normTier(u.tier), ...userGrants(u) };
 }
 
 export const isAdmin = (id) => !!id && id.kind === 'admin';
@@ -118,14 +150,19 @@ export function requireReadCtx(identify, req, res) {
 
 // Per-identity execution + storage context. The ONLY place that maps an identity
 // to where its Claude runs and where its data lives.
+// 出口统一补 actor / scope / groups（principal.withPrincipal）：今天 scope = actor = key，组为空；
+// 管理员代聊时 identity 带 actor:'admin'，ctx.actor 记下是谁发起的（开源路线 C1）。
 export function contextFor(identity) {
+  return withPrincipal(contextBase(identity), identity);
+}
+function contextBase(identity) {
   // 公开只读分享身份：cwd 锁死在桶目录，readOnly。必须【先于】下面的 admin 兜底判断——
   // 否则 kind!=='user' 会把 share 误当 admin 放到 host，天大的洞。
   if (identity && identity.kind === 'share') {
     const dir = identity.dir;
     const sys = path.join(dir, '.bridge');   // 占位；写/媒体接口对 share 走 requireCtx 已 401，用不到
     return {
-      kind: 'share', user: null, sandbox: true, readOnly: true, ...agentFlags(identity), canSnapshot: false, key: 's:' + identity.token,
+      kind: 'share', user: null, sandbox: true, readOnly: true, ...agentFlags(identity), canSnapshot: false, key: ownerKey('share', identity.token),
       tier: 'user', shell: false,
       cwd: dir,
       configDir: path.join(sys, 'claude'),
@@ -142,7 +179,7 @@ export function contextFor(identity) {
     const dir = identity.dir;
     const sys = path.join(dir, '.bridge');
     return {
-      kind: 'snap', user: null, sandbox: true, ...agentFlags(identity), canSnapshot: false, key: 'c:' + identity.token,
+      kind: 'snap', user: null, sandbox: true, ...agentFlags(identity), canSnapshot: false, key: ownerKey('snap', identity.token),
       tier: 'user', shell: false, snap: { token: identity.token },
       cwd: dir,
       configDir: path.join(sys, 'claude'),
@@ -155,7 +192,7 @@ export function contextFor(identity) {
   if (!identity || identity.kind !== 'user') {
     // admin / fallback: the host, exactly as the single-tenant bridge always was.
     return {
-      kind: 'admin', user: null, sandbox: false, ...agentFlags({ kind: 'admin' }), canSnapshot: true, key: 'admin',
+      kind: 'admin', user: null, sandbox: false, ...agentFlags({ kind: 'admin' }), canSnapshot: true, key: HOST_OWNER,
       tier: 'admin', shell: true,
       cwd: VAULT,
       configDir: null,          // null -> SDK default (~/.claude)
@@ -172,10 +209,12 @@ export function contextFor(identity) {
     // 能用哪些 agent 由管理员按人勾（users.json 的 agents；没勾过 = 默认只有 Claude），
     // 再与全局开关、「该 agent 是否支持多用户」取交集（agentsFor）。
     kind: 'user', user: identity.user, sandbox: true, ...agentFlags(identity),
+    // user 是账号 id；name 是登录名（只用来显示，可改）。sid / loginAt：这次登录（定时任务等无请求入口为空）。
+    name: identity.name || identity.user, sid: identity.sid || '', loginAt: identity.loginAt || 0,
     // 能不能铸公开聊天快照；老账号没写 = 保留。
     canSnapshot: identity.snapshot !== false,
     service: identity.service === true,
-    key: 'u:' + identity.user,
+    key: ownerKey('user', identity.user),     // 'u:<账号 id>'——owner 键只经 principal.ownerKey 生成（C2）
     // tier 'pro' = full (shell allowed); 'user' = restricted (no command line).
     tier, shell: tier !== 'user',
     cwd: base,                                // Claude works *inside* the user's folder

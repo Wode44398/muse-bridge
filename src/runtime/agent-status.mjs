@@ -36,7 +36,7 @@ export function agentSwitches() { return { ...switches }; }
 
 function persist() {
   let raw = {};
-  try { raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); } catch {}
+  try { raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '')); } catch {}
   raw.agents = { ...switches };
   try { writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2)); } catch (e) { console.error('[agents] persist failed:', (e && e.message) || e); }
 }
@@ -62,7 +62,7 @@ const AUTHED = {
   claude: () => {
     if (process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY) return true;
     let accounts = [];
-    try { accounts = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).claudeAccounts || []; } catch {}
+    try { accounts = JSON.parse(readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '')).claudeAccounts || []; } catch {}
     if (accounts.some((a) => a && a.token)) return true;
     const cfgDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
     return existsSync(path.join(cfgDir, '.credentials.json'));
@@ -70,7 +70,12 @@ const AUTHED = {
   dimensio: () => {
     const KEY_RE = /^\s*(ANTHROPIC|DEEPSEEK|ZHIPU|KIMI|MOONSHOT|QWEN|DASHSCOPE|GEMINI|OPENAI|MIMO)_API_KEY\s*=\s*\S+/m;
     if (Object.keys(process.env).some((k) => /^(ANTHROPIC|DEEPSEEK|ZHIPU|KIMI|MOONSHOT|QWEN|DASHSCOPE|GEMINI|OPENAI|MIMO)_API_KEY$/.test(k) && process.env[k])) return true;
-    return fileHasKey(process.env.HARNESS_ENV_FILE || path.join(HARNESS_DIR, '.env'), KEY_RE);
+    if (fileHasKey(process.env.HARNESS_ENV_FILE || path.join(HARNESS_DIR, '.env'), KEY_RE)) return true;
+    // 设置页填的厂商 key 加密存在自定义模型服务目录的 connector-secrets.json 里（harness paths.ts customProvidersDir）：
+    // 它在也算配了。部署脚本把 DIMENSIO_CUSTOM_PROVIDERS_DIR 指到 <数据根>/dimensio/custom-providers。
+    const cpEnv = String(process.env.DIMENSIO_CUSTOM_PROVIDERS_DIR || '').trim();
+    const cpDir = cpEnv ? path.resolve(HARNESS_DIR, cpEnv) : path.join(HARNESS_DIR, 'custom-providers');
+    return existsSync(path.join(cpDir, 'connector-secrets.json'));
   },
 };
 

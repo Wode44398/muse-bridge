@@ -1,5 +1,5 @@
 <script>
-  // 设置 · 账户：个人资料、订阅用量、工作空间 / 扫码登录网页版、退出登录。
+  // 设置 · 账户：个人资料、订阅用量、工作空间 / 扫码登录网页版、管理员可见性（成员）、退出登录。
   // 没登录时只给一个「登录」入口（登录卡是单独的覆盖层，见 LoginCard.svelte）。
   import { ui, me, status, applyMe } from '../../lib/state.svelte.js';
   import { api, setToken } from '../../lib/api.js';
@@ -8,6 +8,7 @@
   import SRow from './SRow.svelte';
   import SButton from './SButton.svelte';
   import SField from './SField.svelte';
+  import SecAdminAccess from './SecAdminAccess.svelte';
   import { t, tr } from '../../lib/i18n.js';
 
   let { onclose } = $props();
@@ -143,6 +144,8 @@
       </SRow>
     {/if}
   </SSection>
+
+  {#if me.kind === 'user'}<SecAdminAccess />{/if}
 
   <SSection title={t('账户')}>
     <SRow label={t('退出登录')} desc={t('只退出这台设备，其它设备上的登录不受影响')} sid="logout">

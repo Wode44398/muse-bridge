@@ -18,7 +18,14 @@ import {
   modelSpec,
   providerBaseUrl,
 } from "./catalog.ts";
-import { customProviderKey, getCustomProvider, isCustomProviderId, setCustomProviderKey } from "./custom-providers.ts";
+import {
+  customProviderKey,
+  getCustomProvider,
+  isCustomProviderId,
+  savedBuiltinProviderKey,
+  setBuiltinProviderKey,
+  setCustomProviderKey,
+} from "./custom-providers.ts";
 
 export interface RuntimeConfig {
   provider: ProviderId;
@@ -36,14 +43,18 @@ export interface RuntimeConfig {
   // "full" allows absolute paths anywhere on the machine, Claude-Code-style
   // (secret guard + .git write-protection still apply everywhere).
   access: SandboxAccess;
+  // Anthropic fast mode（更快输出、按更高单价计费）。全局粘性开关：切到不支持的型号不清除，
+  // 只是适配器不发（catalog 的 fast 表门控），切回来照旧开着——与 bridge 本体 Claude 分页同一套行为。
+  fast: boolean;
 }
 
 // Boot-time default; `workspace: ""` in a config patch resets back to this.
 // Q8：数据位置统一在 paths.ts 解析；这里照旧导出。
 export { defaultWorkspace };
 
-// Keys are kept in memory only (env-provided or set via the UI), never written
-// back to disk. Values are never returned to the client — only a hasKey flag.
+// Env keys come from harness/.env. Keys set via the UI go to the encrypted store
+// (custom-providers.ts, AES-GCM + DPAPI) so they survive harness restarts, and
+// win over env. Values are never returned to the client — only a hasKey flag.
 const envKeys: Partial<Record<ProviderId, string>> = {
   anthropic: process.env.ANTHROPIC_API_KEY || undefined,
   openai: process.env.OPENAI_API_KEY || undefined,
@@ -117,6 +128,12 @@ function providerDefaults(p: ProviderId): { model: string; baseUrl?: string } {
   }
 }
 
+// 子 agent 跨厂商时用的地址：与主会话同一套规则（环境变量覆盖、MiMo 按 key 前缀切 Token Plan 地址），
+// 不能直接拿目录里的 baseUrl——tp- key 打按量地址一律 401。
+export function providerEndpoint(p: ProviderId): string | undefined {
+  return providerDefaults(p).baseUrl;
+}
+
 function initialProvider(): ProviderId {
   if (envKeys.anthropic) return "anthropic";
   if (envKeys.openai) return "openai";
@@ -129,7 +146,7 @@ function initialProvider(): ProviderId {
 }
 
 // ── 选择持久化 ───────────────────────────────────────────────────────────────
-// 上次选的厂商/模型/思考档落盘（API key 永不落盘——保持内存态设计），服务端
+// 上次选的厂商/模型/思考档落盘（API key 不进这个明文文件，走加密存储），服务端
 // 重启、手机删后台、换设备打开都还是上次的维度。文件缺失/损坏/字段过期一律
 // 静默回默认，绝不因此起不来。文件位置见 paths.ts 的 configFile()。
 const choiceFile = configFile;
@@ -143,7 +160,12 @@ interface SavedConfig {
   permissionMode?: PermissionMode;
   permissionRules?: PermissionRules;
   access?: SandboxAccess;
+  fast?: boolean;
+  // 每家上次用的型号 / 深度（切回这家时继承，以前一切换到 Claude 就回到 Sonnet 4.6）
+  models?: ModelPrefs;
 }
+
+type ModelPrefs = Record<string, { model: string; thinking: ThinkingLevel }>;
 
 // 新会话默认的访问范围：整机（09-26 的产品决定）；SANDBOX_ACCESS=workspace 才默认只给工作空间。
 // 用户在档位菜单 / 设置页选过的会记进 runtime-config.json，重启后照旧（以前不落盘，harness 一重启就回到仅工作空间）。
@@ -197,6 +219,21 @@ function loadSavedChoice(): SavedConfig | null {
   if (PERMISSION_MODES.includes(raw?.permissionMode)) out.permissionMode = raw.permissionMode;
   if (raw?.permissionRules && typeof raw.permissionRules === "object") out.permissionRules = cleanRules(raw.permissionRules);
   if (raw?.access === "workspace" || raw?.access === "full") out.access = raw.access;
+  if (typeof raw?.fast === "boolean") out.fast = raw.fast;
+  out.models = cleanPrefs(raw?.models);
+  if (out.provider && out.model) out.models[out.provider] = { model: out.model, thinking: out.thinking! };
+  return out;
+}
+
+// 只留仍在目录里的厂商 + 型号（退役的型号丢掉，回厂商默认），深度按型号收档
+function cleanPrefs(v: unknown): ModelPrefs {
+  const out: ModelPrefs = {};
+  if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+  for (const [p, pref] of Object.entries(v as Record<string, any>)) {
+    if (!allProviders().some((s) => s.id === p) || typeof pref?.model !== "string" || !modelSpec(p as ProviderId, pref.model)) continue;
+    const thinking = EFFORT_ORDER.includes(pref.thinking) ? pref.thinking : defaultEffort(p as ProviderId, pref.model);
+    out[p] = { model: pref.model, thinking: clampEffort(p as ProviderId, pref.model, thinking) };
+  }
   return out;
 }
 
@@ -214,7 +251,7 @@ export function configWritesSettled(): Promise<void> {
 //
 // K56：写回防丢失。写之前重读一遍盘上的文件，只改自己管的字段、其余原样保留（别的版本 / 手工加的字段
 // 不被抹掉）；盘上的文件坏了，先原样改名留证（.corrupt-<时间>）再写新的，绝不直接盖掉。API key 与
-// baseUrl 从不落盘（它们来自环境变量或只在内存）。
+// baseUrl 从不写进这里（key 在加密存储，baseUrl 来自环境变量 / 目录）。
 function persistChoice(): void {
   const mine = {
     v: 1,
@@ -224,6 +261,8 @@ function persistChoice(): void {
     permissionMode: config.permissionMode,
     permissionRules: config.permissionRules,
     access: config.access,
+    fast: config.fast,
+    models: modelPrefs,
   };
   const file = choiceFile();
   persistQueue = persistQueue
@@ -252,7 +291,15 @@ let config: RuntimeConfig = {
   thinking: saved?.thinking ?? clampEffort(initP, initDefaults.model, "off"),
   workspace: defaultWorkspace(),
   access: accessLock() ?? saved?.access ?? defaultAccess(),
+  fast: saved?.fast ?? false,
 };
+const modelPrefs: ModelPrefs = saved?.models ?? {};
+
+// 切到某家而没点名型号时用的型号：这家上次用的（仍在目录里）优先，没有才是厂商默认
+function preferredModel(p: ProviderId): { model: string; thinking: ThinkingLevel } | null {
+  const pref = modelPrefs[p];
+  return pref && modelSpec(p, pref.model) ? pref : null;
+}
 
 export function getConfig(): RuntimeConfig {
   return { ...config };
@@ -306,6 +353,7 @@ export function resolveConfig(base: RuntimeConfig, patch: Omit<ConfigPatch, "api
   // Validate workspace/access BEFORE touching config — a bad patch must not
   // leave a half-applied state. Throws surface to the client as HTTP 400.
   const extra: Partial<RuntimeConfig> = {};
+  if (rest.fast !== undefined && typeof rest.fast !== "boolean") throw new Error("fast must be true or false");
   if (workspace !== undefined) {
     const trimmed = String(workspace).trim();
     const abs = trimmed ? path.resolve(trimmed) : defaultWorkspace();
@@ -350,9 +398,11 @@ export function resolveConfig(base: RuntimeConfig, patch: Omit<ConfigPatch, "api
     const d = providerDefaults(next.provider);
     if (patch.baseUrl === undefined) next.baseUrl = d.baseUrl;
     if (patch.model === undefined) {
-      next.model = d.model;
+      // 这家上次用的型号 / 深度优先（常用 Opus 5.5 就该默认 Opus 5.5），没用过才是厂商默认
+      const pref = preferredModel(next.provider);
+      next.model = pref?.model ?? d.model;
       if (patch.thinking === undefined) {
-        next.thinking = defaultEffort(next.provider, next.model);
+        next.thinking = pref?.thinking ?? defaultEffort(next.provider, next.model);
       }
     }
   }
@@ -391,20 +441,24 @@ export function setConfig(patch: ConfigPatch): RuntimeConfig {
   const { apiKey, ...rest } = patch;
   config = resolveConfig(config, rest, { ownKey: typeof apiKey === "string" && Boolean(apiKey.trim()) });
   if (typeof apiKey === "string" && apiKey.trim()) {
-    // 自定义服务的 key 落加密存储（重启还在）；内置几家照旧只在内存
+    // 一律落加密存储（重启还在）。内置几家以前只在内存，harness 一重启就丢
     if (isCustomProviderId(config.provider)) setCustomProviderKey(config.provider, apiKey.trim());
-    else overrideKeys[config.provider] = apiKey.trim();
+    else {
+      overrideKeys[config.provider] = apiKey.trim();
+      setBuiltinProviderKey(config.provider, apiKey.trim());
+    }
   }
   if (config.provider === "mimo" && typeof apiKey === "string" && apiKey.trim() && patch.baseUrl === undefined) {
     config.baseUrl = providerDefaults("mimo").baseUrl;
   }
+  modelPrefs[config.provider] = { model: config.model, thinking: config.thinking };
   persistChoice();
   return getConfig();
 }
 
 export function resolveKey(provider: ProviderId): string | undefined {
   if (isCustomProviderId(provider)) return customProviderKey(provider);
-  return overrideKeys[provider] || envKeys[provider];
+  return overrideKeys[provider] || savedBuiltinProviderKey(provider) || envKeys[provider];
 }
 
 // 自定义服务被删了而全局正选着它：退回启动时的默认厂商（上次的选择文件也跟着改写）。

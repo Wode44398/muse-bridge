@@ -384,6 +384,7 @@ html.hx-dnd-live {
   padding: 0 8px 0 14px;
   font-size: var(--fs-xs, 11px);
   color: var(--text3);
+  user-select: none; /* 语言标 + 复制钮是控件，正文 .md 可选时别被一起拖进选区 */
 }
 .hxroot .md .cb-lang {
   font-family: var(--font-mono);

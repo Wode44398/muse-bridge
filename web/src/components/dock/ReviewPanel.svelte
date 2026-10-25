@@ -59,7 +59,7 @@
   {#if loading}
     <div class="rv-empty"><span class="spin"></span>{t('正在读取变更…')}</div>
   {:else if err}
-    <div class="rv-empty">{err}<button class="rv-retry" onclick={refresh}>{t('重试')}</button></div>
+    <div class="rv-empty sel-text">{err}<button class="rv-retry" onclick={refresh}>{t('重试')}</button></div>
   {:else if !data || !data.git}
     <div class="rv-empty">{t('该工作空间不是 git 仓库')}</div>
   {:else}
@@ -87,13 +87,13 @@
                 {#if open[f.path].loading}
                   <div class="rv-dload"><span class="spin"></span></div>
                 {:else if open[f.path].err}
-                  <div class="rv-dload">{open[f.path].err}</div>
+                  <div class="rv-dload sel-text">{open[f.path].err}</div>
                 {:else if open[f.path].bin}
                   <div class="rv-dload">{t('二进制文件，无法展示 diff')}</div>
                 {:else if !open[f.path].text}
                   <div class="rv-dload">{t('（无差异内容）')}</div>
                 {:else}
-                  <div class="rv-code">
+                  <div class="rv-code sel-text">
                     {#each diffLines(open[f.path].text) as ln}
                       <div class="dl {ln.cls}">{ln.l || ' '}</div>
                     {/each}
@@ -111,9 +111,6 @@
 
 <style>
   .rv { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 4px 10px 16px; }
-  .rv::-webkit-scrollbar { width: 6px; }
-  .rv::-webkit-scrollbar-track { background: transparent; }
-  .rv::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 38%, transparent); border-radius: 999px; }
 
   .rv-empty { flex: none; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 14px; padding: 48px 16px; text-align: center; }
   .rv-retry { color: var(--coral); padding: 4px 10px; border-radius: 8px; }

@@ -7,6 +7,13 @@
 //   runtime/claude-plugin 聚合插件（生成物）：把「对 claude 生效」的技能 junction 进一个
 //                         本地 plugin，经 Agent SDK options.plugins 注入（与 ~/.claude 的
 //                         settingSources 无关，卸载即消失）。
+//   shared/skills|plugins/ 全服统一扩展（scope:'shared'）的解包目录；聚合插件在 runtime/claude-plugin-shared（名 server）
+//
+// 两个范围（item.scope）：
+//   admin  管理员自用（缺省，老注册表没有这个字段的都是它）——只注入主机管理员自己的会话，沙箱身份够不到；
+//   shared 全服统一——管理员加装给服务器上【所有人】：注册用户（沙箱）的 Claude 会话与定时任务也注入，
+//          管理员自己的会话同样生效。沙箱用户对 SHARED_ROOT 只读（claude.mjs 的 PreToolUse 闸放行）。
+//   两个范围各管各的同名判定与包；连接器的 MCP 键全局唯一（管理员会话两边一起注入，撞名会互相顶掉）。
 //
 // 三类扩展对两个 agent 的支持矩阵是硬编码事实（EXT_SUPPORT），不是配置：
 //   skill     → claude（聚合插件）· dimensio（system prompt 渐进披露，见 harness/server/extensions.ts）
@@ -32,8 +39,16 @@ import { readSecrets, writeSecrets } from './extension-secrets.mjs';
 export const EXT_ROOT = path.join(ROOT, 'extensions');
 export const EXT_REGISTRY_FILE = path.join(EXT_ROOT, 'registry.json');
 const AGGREGATE_DIR = path.join(EXT_ROOT, 'runtime', 'claude-plugin');
+const SHARED_AGGREGATE_DIR = path.join(EXT_ROOT, 'runtime', 'claude-plugin-shared');
+// 全服扩展的文件根：沙箱用户只读放行的就是这一棵（管理员自用的 skills/ plugins/ 不在里面）
+export const SHARED_ROOT = path.join(EXT_ROOT, 'shared');
 
-const MAX_ITEMS = 200;
+export const EXT_SCOPES = ['admin', 'shared'];
+export const extScope = (item) => (item && item.scope === 'shared' ? 'shared' : 'admin');
+const normScope = (v) => (v === 'shared' ? 'shared' : 'admin');
+const dirPrefix = (scope) => (scope === 'shared' ? 'shared/' : '');
+
+const MAX_ITEMS = 400;   // 从目录整包装技能后会多不少，200 不够用
 const httpErr = (status, msg) => Object.assign(new Error(msg), { status });
 // 控制字符清洗（\p{Cc} 含 NUL~US 与 DEL），防名字/描述携带终端注入或破坏 JSON 展示。
 const stripCc = (s) => String(s ?? '').replace(/\p{Cc}/gu, '');
@@ -45,8 +60,8 @@ export const EXT_SUPPORT = {
   plugin: { claude: true, dimensio: false },
 };
 
-// 与 in-process MCP server 名撞车会静默顶掉内置能力，一律避让。
-const RESERVED_MCP_KEYS = new Set(['snapshot', 'terminal', 'workspace']);
+// bridge 自带的进程内 MCP 服务名（claude.mjs mcpServers）：扩展连接器撞上就改名避让，否则 ...ext.mcpServers 排在最后会把内置的顶掉
+const RESERVED_MCP_KEYS = new Set(['snapshot', 'terminal', 'workspace', 'visualize', 'pr', 'sessions', 'bridge']);
 
 // 与 dimensio 沙箱的 secret 守卫同源：技能/插件包里不许携带凭据形状的文件（解包时剔除），
 // 否则 harness 的 Bash 凭据闸会把整个技能目录的调用拦死，还容易把真凭据传播出去。
@@ -308,9 +323,10 @@ function stageFromDir(src, staging) {
 }
 
 // —— 安装：技能（.md 单文件 / .zip / .skill；fromDir = 直接从一个目录装）——
-export async function installSkill(filename, buf, { replaceId, pkg, fromDir, catalogId } = {}) {
+// scope：新装时决定落在哪个范围（admin 自用 / shared 全服）；替换一律沿用原来的范围。
+export async function installSkill(filename, buf, { replaceId, pkg, fromDir, catalogId, scope } = {}) {
   const store = readStoreForWrite();
-  if (store.items.length >= MAX_ITEMS) throw httpErr(400, '扩展数量已达上限');
+  if (!replaceId && store.items.length >= MAX_ITEMS) throw httpErr(400, '扩展数量已达上限');
   const isMd = !fromDir && /\.md$/i.test(filename || '');
   const staging = path.join(EXT_ROOT, 'runtime', `.stage-${crypto.randomBytes(4).toString('hex')}`);
   try {
@@ -335,13 +351,14 @@ export async function installSkill(filename, buf, { replaceId, pkg, fromDir, cat
     fm.name = stripCc(fm.name).trim().slice(0, 80);
     fm.description = stripCc(fm.description).trim().slice(0, 1600);
 
-    const dup = store.items.find((x) => x.type === 'skill' && x.name === fm.name && x.id !== replaceId);
-    if (dup) throw httpErr(409, `已存在同名技能「${fm.name}」，可在其详情页选择「替换」`);
     const old = replaceId ? store.items.find((x) => x.id === replaceId && x.type === 'skill') : null;
     if (replaceId && !old) throw httpErr(404, '要替换的技能不存在');
+    const sc = old ? extScope(old) : normScope(scope);
+    const dup = store.items.find((x) => x.type === 'skill' && x.name === fm.name && x.id !== replaceId && extScope(x) === sc);
+    if (dup) throw httpErr(409, `已存在同名技能「${fm.name}」，可在其详情页选择「替换」`);
 
     const slug = slugify(fm.name, newId());
-    const dest = path.join(EXT_ROOT, 'skills', slug);
+    const dest = path.join(EXT_ROOT, dirPrefix(sc) + 'skills', slug);
     if (old) { const od = extensionDir(old); if (od) rmSync(od, { recursive: true, force: true }); }
     if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
     mkdirSync(path.dirname(dest), { recursive: true });
@@ -352,6 +369,7 @@ export async function installSkill(filename, buf, { replaceId, pkg, fromDir, cat
     const item = {
       id: old ? old.id : newId(),
       type: 'skill',
+      ...(sc === 'shared' ? { scope: 'shared' } : {}),
       name: fm.name,
       description: fm.description,
       ...(fm.version ? { version: stripCc(fm.version).slice(0, 40) } : {}),
@@ -359,7 +377,7 @@ export async function installSkill(filename, buf, { replaceId, pkg, fromDir, cat
       enabled: old ? old.enabled : true,
       agents: old ? old.agents : { claude: true, dimensio: true },
       ...(catalogId || old?.catalogId ? { catalogId: catalogId || old.catalogId } : {}),   // 从「发现」装的：目录里的 id（名字可能和目录不一样）
-      dir: 'skills/' + slug,
+      dir: dirPrefix(sc) + 'skills/' + slug,
       entry: 'SKILL.md',
       files: stats.files, size: stats.size,
       created: old ? old.created : now(), updated: now(),
@@ -375,9 +393,9 @@ export async function installSkill(filename, buf, { replaceId, pkg, fromDir, cat
 
 // —— 安装：Claude Code 插件（.zip，需 .claude-plugin/plugin.json；fromDir = 直接从一个目录装）——
 // manifest：目录条目里 strict:false 的插件没有自己的 plugin.json，定义写在条目里——由调用方传进来补一份。
-export async function installPlugin(filename, buf, { replaceId, pkg, fromDir, manifest, source, catalogId } = {}) {
+export async function installPlugin(filename, buf, { replaceId, pkg, fromDir, manifest, source, catalogId, scope } = {}) {
   const store = readStoreForWrite();
-  if (store.items.length >= MAX_ITEMS) throw httpErr(400, '扩展数量已达上限');
+  if (!replaceId && store.items.length >= MAX_ITEMS) throw httpErr(400, '扩展数量已达上限');
   const staging = path.join(EXT_ROOT, 'runtime', `.stage-${crypto.randomBytes(4).toString('hex')}`);
   try {
     if (fromDir) stageFromDir(fromDir, staging);
@@ -413,13 +431,14 @@ export async function installPlugin(filename, buf, { replaceId, pkg, fromDir, ma
     const name = stripCc(meta.name).trim().slice(0, 80);
     if (!name) throw httpErr(400, 'plugin.json 缺少 name');
 
-    const dup = store.items.find((x) => x.type === 'plugin' && x.name === name && x.id !== replaceId);
-    if (dup) throw httpErr(409, `已存在同名插件「${name}」，可在其详情页选择「替换」`);
     const old = replaceId ? store.items.find((x) => x.id === replaceId && x.type === 'plugin') : null;
     if (replaceId && !old) throw httpErr(404, '要替换的插件不存在');
+    const sc = old ? extScope(old) : normScope(scope);
+    const dup = store.items.find((x) => x.type === 'plugin' && x.name === name && x.id !== replaceId && extScope(x) === sc);
+    if (dup) throw httpErr(409, `已存在同名插件「${name}」，可在其详情页选择「替换」`);
 
     const slug = slugify(name, newId());
-    const dest = path.join(EXT_ROOT, 'plugins', slug);
+    const dest = path.join(EXT_ROOT, dirPrefix(sc) + 'plugins', slug);
     if (old) { const od = extensionDir(old); if (od) rmSync(od, { recursive: true, force: true }); }
     if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
     mkdirSync(path.dirname(dest), { recursive: true });
@@ -430,6 +449,7 @@ export async function installPlugin(filename, buf, { replaceId, pkg, fromDir, ma
     const item = {
       id: old ? old.id : newId(),
       type: 'plugin',
+      ...(sc === 'shared' ? { scope: 'shared' } : {}),
       name,
       description: stripCc(meta.description).trim().slice(0, 500),
       ...(meta.version ? { version: stripCc(meta.version).slice(0, 40) } : {}),
@@ -440,7 +460,7 @@ export async function installPlugin(filename, buf, { replaceId, pkg, fromDir, ma
       ...(catalogId || old?.catalogId ? { catalogId: catalogId || old.catalogId } : {}),   // 从哪个目录装的（「自定义」页显示来源）
       ...(old?.configValues ? { configValues: old.configValues } : {}),      // 替换版本不丢配置
       ...(old?.configKeys ? { configKeys: old.configKeys } : {}),
-      dir: 'plugins/' + slug,
+      dir: dirPrefix(sc) + 'plugins/' + slug,
       entry: '.claude-plugin/plugin.json',
       files: stats.files, size: stats.size,
       created: old ? old.created : now(), updated: now(),
@@ -461,6 +481,7 @@ export function saveConnector(input = {}) {
   const old = id ? store.items.find((x) => x.id === id && x.type === 'connector') : null;
   if (id && !old) throw httpErr(404, '连接器不存在');
   if (!old && store.items.length >= MAX_ITEMS) throw httpErr(400, '扩展数量已达上限');
+  const sc = old ? extScope(old) : normScope(input.scope);
 
   const name = stripCc(input.name).trim().slice(0, 60);
   if (!name) throw httpErr(400, '请输入连接器名称');
@@ -497,12 +518,13 @@ export function saveConnector(input = {}) {
   if (dupKey) key = key + '-' + crypto.randomBytes(2).toString('hex');
   conn.key = key;
 
-  const dupName = store.items.find((x) => x.type === 'connector' && x.name === name && x.id !== (old ? old.id : null));
+  const dupName = store.items.find((x) => x.type === 'connector' && x.name === name && x.id !== (old ? old.id : null) && extScope(x) === sc);
   if (dupName) throw httpErr(409, `已存在同名连接器「${name}」`);
 
   const item = {
     id: old ? old.id : newId(),
     type: 'connector',
+    ...(sc === 'shared' ? { scope: 'shared' } : {}),
     name,
     description: stripCc(input.description).trim().slice(0, 500),
     ...(input.pkg ? { pkg: stripCc(input.pkg).trim().slice(0, 80) } : old?.pkg ? { pkg: old.pkg } : {}),
@@ -724,8 +746,10 @@ function pluginMcpServers(item, dir, secrets, taken) {
 
 // —— 通用 CRUD ——
 // 对外的列表：连接器凭据只给键名、值打码（S3：凭据不出服务端）
-export function listExtensions() {
-  return readStore().items.map(publicItem);
+// scope 不给 = 两个范围都要（内部用途）；给了只列那个范围
+export function listExtensions({ scope } = {}) {
+  const items = readStore().items;
+  return (scope ? items.filter((x) => extScope(x) === normScope(scope)) : items).map(publicItem);
 }
 
 export function getExtension(id) {
@@ -768,8 +792,10 @@ export function deleteExtension(id) {
 // —— 包级批量操作：以 pkg 为单位启停 / 勾选 agent / 整包卸载（散装项无 pkg，不受影响）——
 export function bulkByPkg(pkg, input = {}) {
   const name = String(pkg || '').trim();
+  const sc = normScope(input.scope);   // 包名只在自己的范围里算：自用和全服可以各有一个同名包
   const store = readStoreForWrite();
-  const members = store.items.filter((x) => x.pkg === name);
+  const inPkg = (x) => x.pkg === name && extScope(x) === sc;
+  const members = store.items.filter(inPkg);
   if (!name || !members.length) throw httpErr(404, '没有找到该包里的扩展');
   const action = input.action;
   if (action === 'enable' || action === 'disable') {
@@ -789,7 +815,7 @@ export function bulkByPkg(pkg, input = {}) {
     }
   } else if (action === 'delete') {
     for (const it of members) { const d = extensionDir(it); if (d && existsSync(d)) rmSync(d, { recursive: true, force: true }); }
-    store.items = store.items.filter((x) => x.pkg !== name);
+    store.items = store.items.filter((x) => !inPkg(x));
   } else {
     throw httpErr(400, '未知的包操作：' + action);
   }
@@ -833,8 +859,17 @@ export function readExtensionFile(id, rel) {
 
 // —— Claude 聚合插件：skills/<name> junction → 各技能目录 ——
 // 每次注册表变更后重建；query() 只拿现成目录，路径稳定所以 SDK 侧无需感知重建。
+// 两个范围各一个：自用 = bridge（skill 名 bridge:<name>），全服 = server（server:<name>）——分开才能只把全服那个给沙箱用户。
+const AGGREGATES = [
+  { scope: 'admin', dir: AGGREGATE_DIR, name: 'bridge', description: 'Bridge 扩展中心托管的技能（管理员自用）' },
+  { scope: 'shared', dir: SHARED_AGGREGATE_DIR, name: 'server', description: 'Bridge 服务端为所有成员统一加装的技能' },
+];
 function rebuildClaudeAggregate(store = readStore()) {
-  const skillsDir = path.join(AGGREGATE_DIR, 'skills');
+  for (const agg of AGGREGATES) rebuildAggregate(agg, store.items.filter((x) => extScope(x) === agg.scope));
+}
+
+function rebuildAggregate({ dir: aggDir, name, description }, items) {
+  const skillsDir = path.join(aggDir, 'skills');
   try {
     // 逐个拆链再删目录：junction 用 rmdir 删链接本身；rmSync recursive 兜底普通目录。
     if (existsSync(skillsDir)) {
@@ -844,9 +879,9 @@ function rebuildClaudeAggregate(store = readStore()) {
         rmSync(p, { recursive: true, force: true });
       }
     }
-    const active = store.items.filter((x) => x.type === 'skill' && x.enabled && x.agents?.claude);
-    mkdirSync(path.join(AGGREGATE_DIR, '.claude-plugin'), { recursive: true });
-    writeJson(path.join(AGGREGATE_DIR, '.claude-plugin', 'plugin.json'), { name: 'bridge', description: 'Bridge 扩展中心托管的技能', version: '1.0.0' }, 2);
+    const active = items.filter((x) => x.type === 'skill' && x.enabled && x.agents?.claude);
+    mkdirSync(path.join(aggDir, '.claude-plugin'), { recursive: true });
+    writeJson(path.join(aggDir, '.claude-plugin', 'plugin.json'), { name, description, version: '1.0.0' }, 2);
     mkdirSync(skillsDir, { recursive: true });
     for (const item of active) {
       const src = extensionDir(item);
@@ -862,13 +897,16 @@ function rebuildClaudeAggregate(store = readStore()) {
 
 // —— agent 驱动侧读取（现读现取，注册表即真相）——
 
-// Claude：options.plugins + options.mcpServers 增量。仅 admin 非沙箱会话注入。
-export function claudeExtensionOptions() {
-  const items = readStore().items.filter((x) => x.enabled);
+// Claude：options.plugins + options.mcpServers 增量。scopes = 这次注入哪几个范围：
+// 主机管理员 ['admin','shared']（缺省），注册用户（沙箱）只给 ['shared']，快照访客什么都不给（见 claudeExtensionsFor）。
+export function claudeExtensionOptions({ scopes = EXT_SCOPES } = {}) {
+  const want = new Set(scopes.map(normScope));
+  const items = readStore().items.filter((x) => x.enabled && want.has(extScope(x)));
   const plugins = [];
-  const hasSkills = items.some((x) => x.type === 'skill' && x.agents?.claude);
-  if (hasSkills && existsSync(path.join(AGGREGATE_DIR, '.claude-plugin', 'plugin.json'))) {
-    plugins.push({ type: 'local', path: AGGREGATE_DIR, skipMcpDiscovery: true });
+  for (const agg of AGGREGATES) {
+    if (!want.has(agg.scope)) continue;
+    const hasSkills = items.some((x) => x.type === 'skill' && x.agents?.claude && extScope(x) === agg.scope);
+    if (hasSkills && existsSync(path.join(agg.dir, '.claude-plugin', 'plugin.json'))) plugins.push({ type: 'local', path: agg.dir, skipMcpDiscovery: true });
   }
   const mcpServers = {};
   const conns = items.filter((x) => x.type === 'connector' && x.agents?.claude && x.connector);
@@ -891,6 +929,22 @@ export function claudeExtensionOptions() {
     catch (e) { console.error(`[extensions] 插件「${item.name}」的 MCP 解析失败：`, String(e?.message || e)); }
   }
   return { plugins, mcpServers };
+}
+
+// 沙箱用户的 additionalDirectories：全服扩展目录在就给（CLI 读工作区外的文件会先弹授权卡，给了就不弹）。
+// 只是让 CLI 认这块地方；写照旧被 PreToolUse 闸拦（只放行 Read/Glob/Grep）。
+export function sharedExtensionDirs() {
+  return existsSync(SHARED_ROOT) ? [SHARED_ROOT] : [];
+}
+
+// 按身份取：主机管理员（非沙箱）= 自用 + 全服；注册用户 = 只有全服；快照访客 / 分享 = 都没有。
+// 主聊天（claude.mjs）与定时任务（routines-runner.mjs）共用，两处口径不许漂。
+const NO_EXT = () => ({ plugins: [], mcpServers: {} });
+export function claudeExtensionsFor(ctx, { snap = false } = {}) {
+  if (!ctx || snap) return NO_EXT();
+  if (ctx.kind === 'admin' && !ctx.sandbox) return claudeExtensionOptions();
+  if (ctx.kind === 'user') return claudeExtensionOptions({ scopes: ['shared'] });
+  return NO_EXT();
 }
 
 // —— G10：注册表与连接器诊断（设置页扩展中心顶部显示）——

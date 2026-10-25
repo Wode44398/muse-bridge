@@ -3,9 +3,9 @@
 // of each vendor's API (verified against official docs), because the reasoning
 // controls differ not just per provider but per MODEL:
 //
-//   Anthropic (adaptive)  opus-5, opus-4-8/4-7, sonnet-4-6 → thinking:{type:"adaptive"} +
-//                         output_config.effort (low/medium/high/xhigh). budget_tokens
-//                         now 400s on these models.
+//   Anthropic (adaptive)  opus-5.x, opus-4-8/4-7, sonnet-5-5/4-6, haiku-5-5 → thinking:{type:"adaptive"} +
+//                         output_config.effort low/medium/high/xhigh/max（官方 effort 文档 2026-10-09：
+//                         Sonnet 4.6 只有 max、没有 xhigh）。budget_tokens now 400s on these models.
 //   Anthropic (legacy)    haiku-4-5 → thinking:{type:"enabled",budget_tokens} only;
 //                         no effort/adaptive.
 //   DeepSeek              thinking:{type} + reasoning_effort. 2026-09-10 上新
@@ -16,8 +16,8 @@
 //                         ——但只吃 image_url，video_url 直接 400（实测），所以 video:false。
 //                         v4-pro 自 2026-09-14 04:00 UTC 起全量转发到 V4.1-Flash 并按其
 //                         计价，留在单子里只为过渡。deepseek-chat/-reasoner 早已 EOL。
-//   Qwen                  qwen3.7/3.8 → enable_thinking + thinking_budget
-//                         (no reasoning_effort; no "max")。3.8 只有 max/flash 两个型号
+//   Qwen                  qwen3.8 → enable_thinking + reasoning_effort low/medium/xhigh（high/max 是 xhigh 的别名）；
+//                         qwen3.7 → enable_thinking + thinking_budget（没有 reasoning_effort）。3.8 只有 max/flash 两个型号
 //                         （qwen3.8-plus 不存在，实测 model_not_found），两个都是原生
 //                         多模态：红→绿→蓝探针片经 video_url 能按序答对（实测 09-10）。
 //   Zhipu                 glm-5.2 → thinking:{type} + reasoning_effort (high/max);
@@ -40,7 +40,9 @@
 // so the two stay in lockstep with the adapters.
 
 import type { ProviderId } from "./providers/types.ts";
-import { getCustomProvider, hostOf, isCustomProviderId, listCustomProviders, type CustomProvider } from "./custom-providers.ts";
+import { getCustomProvider, hostOf, isCustomProviderId, listCustomProviders, type CustomModel, type CustomProvider } from "./custom-providers.ts";
+import { autoThinkSlots, slotView } from "./custom-tiers.ts";
+import { MK } from "./model-knowledge.ts";
 import { DEFAULT_MEDIA_BUDGET } from "./agent/media-budget.ts";
 import type { ThinkingLevel } from "./agent/turn.ts";
 
@@ -67,7 +69,15 @@ export interface ModelSpec {
   maxOut?: number;
   // R11：按成本压缩的触发线（token）覆盖值。不配就走默认：窗口 ≥ 512K 的模型在 256K 压（agent/context.ts）。
   compactAt?: number;
+  // Anthropic fast mode（`speed:"fast"` + beta 头 fast-mode-2026-02-01）。2026-10-14 用真 key 逐个型号实测：
+  // Opus 5.5 / Opus 5 / Opus 4.8 回 usage.speed=fast；Sonnet 5.5、Sonnet 4.6、Opus 4.7、Haiku 5.5 直接 400。
+  fast?: boolean;
   note?: string;
+  // 只有自定义服务的型号有：不发参数也会思考；autoThinkAt = 选着也照样思考的档（什么都不发的槽，胶囊据此写「模型自带思考」，
+  // 不比对档名文字——custom-tiers.ts autoThinkSlots）；group = id 里的 vendor/ 前缀（菜单分组）
+  alwaysThinks?: boolean;
+  autoThinkAt?: ThinkingLevel[];
+  group?: string;
 }
 
 export interface ProviderSpec {
@@ -79,18 +89,20 @@ export interface ProviderSpec {
   // R12：一次请求里历史图片的额度（张数、base64 字节）。超了才按批退役最老的工具图（agent/media-budget.ts）；
   // 不配走默认 20 张 / 24 MB。keepRecent = 最近几张工具图永不退（默认 3）。
   media?: { maxImages?: number; maxBytes?: number; keepRecent?: number };
-  // 只有自定义服务有：卡片副标题显示的主机名
-  custom?: { host: string };
+  // 只有自定义服务有：卡片副标题显示的主机名、协议；all = 服务里一共多少个型号（菜单只列启用的对话型号）
+  custom?: { host: string; protocol: string; all: number };
 }
 
 // Global effort ordering — used to clamp a chosen level to a model's supported set.
-export const EFFORT_ORDER: ThinkingLevel[] = ["off", "low", "medium", "high", "max"];
+export const EFFORT_ORDER: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export const CATALOG: ProviderSpec[] = [
   {
     id: "anthropic",
     name: "Anthropic",
-    defaultModel: "claude-sonnet-4-6",
+    // 没用过 Claude 时的默认＝当前主力 Opus 5.5（以前一直停在 Sonnet 4.6，像个莫名其妙的老模型）；
+    // 用过的话切回这家继承上次的型号，见 config.ts preferredModel。
+    defaultModel: "claude-opus-5-5",
     models: [
       // R1（#1）：ctx / maxOut 取自官方模型页（platform.claude.com/docs/en/models/*，2026-09-23 核对）：
       // 5 个 Opus/Sonnet 都是 1M 上下文、同步 Messages API 最多 128K 输出；Haiku 4.5 是 200K / 64K。
@@ -98,19 +110,19 @@ export const CATALOG: ProviderSpec[] = [
       // 配上 key 后可用 Models API（GET /v1/models/{id} 回 max_input_tokens / max_tokens）核一遍。
       // Opus 5.5（2026-09-22）：Opus 5 的接班人，更便宜（$4/$20，cache read $0.20/M），1M 上下文
       // （裸 id 即 1M）、128k 输出、知识截止 2026-06；adaptive thinking + effort（API 默认 medium）。
-      { id: "claude-opus-5-5", label: "Opus 5.5", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "新主力 · 1M 上下文" },
+      { id: "claude-opus-5-5", label: "Opus 5.5", efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium", image: true, ctx: 1_000_000, maxOut: 128_000, fast: true, note: "新主力 · 1M 上下文" },
       // Opus 5（2026-07-24）：Claude 5 家族日常主力——接近 Fable 5 智力、半价（$5/$25），
       // adaptive thinking + effort（API 默认 high），知识截止 2026-05。
-      { id: "claude-opus-5", label: "Opus 5", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "上一代主力 · 复杂 agent 编码" },
+      { id: "claude-opus-5", label: "Opus 5", efforts: ["low", "medium", "high", "xhigh", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, fast: true, note: "上一代主力 · 复杂 agent 编码" },
       // Sonnet 5.5（2026-09-28）：Sonnet 档新版；effort 五档、默认 high；ctx / maxOut 沿用同档 Sonnet 4.6 取值，
       // 配上 Anthropic key 后用 Models API 核一遍。
-      { id: "claude-sonnet-5-5", label: "Sonnet 5.5", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "均衡 · 新一代 Sonnet" },
-      { id: "claude-opus-4-8", label: "Opus 4.8", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "旗舰 · 自适应思考" },
-      { id: "claude-opus-4-7", label: "Opus 4.7", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "长程 agent · 高清视觉" },
+      { id: "claude-sonnet-5-5", label: "Sonnet 5.5", efforts: ["low", "medium", "high", "xhigh", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "均衡 · 新一代 Sonnet" },
+      { id: "claude-opus-4-8", label: "Opus 4.8", efforts: ["low", "medium", "high", "xhigh", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, fast: true, note: "旗舰 · 自适应思考" },
+      { id: "claude-opus-4-7", label: "Opus 4.7", efforts: ["low", "medium", "high", "xhigh", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "长程 agent · 高清视觉" },
       { id: "claude-sonnet-4-6", label: "Sonnet 4.6", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "均衡" },
       // Haiku 5.5（2026-10-07）：$0.10/$0.50（prompt 超 10 万 token 起 $0.50/$2.50），1M 上下文（裸 id）、128k 输出，
       // adaptive thinking 不可关（适配器走 adaptive 分支，「关」档落成 effort low）；effort 五档、API 默认 medium。
-      { id: "claude-haiku-5-5", label: "Haiku 5.5", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "极速 · 新一代 Haiku" },
+      { id: "claude-haiku-5-5", label: "Haiku 5.5", efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium", image: true, ctx: 1_000_000, maxOut: 128_000, note: "极速 · 新一代 Haiku" },
       { id: "claude-haiku-4-5", label: "Haiku 4.5", efforts: ["off", "low", "medium", "high"], image: true, ctx: 200_000, maxOut: 64_000, note: "极速 · 传统思考预算" },
     ],
   },
@@ -134,8 +146,10 @@ export const CATALOG: ProviderSpec[] = [
     defaultModel: "qwen3.8-max",
     models: [
       // 3.8 全系原生多模态（图 + 视频，实测），1M ctx / 128K max out；没有 plus 档。
-      { id: "qwen3.8-max", label: "Qwen3.8 Max", efforts: ["off", "low", "medium", "high"], image: true, video: true, ctx: 1_000_000, maxOut: 131_072, note: "旗舰 2.4T · 图/视频 · 1M ctx" },
-      { id: "qwen3.8-flash", label: "Qwen3.8 Flash", efforts: ["off", "low", "medium", "high"], image: true, video: true, ctx: 1_000_000, maxOut: 131_072, note: "多模态快模 · 1M ctx" },
+      // 思考档用官方 reasoning_effort low / medium / xhigh（官方默认 xhigh，思维链最长 262144 token）。dimensio 默认 medium：
+      // 以前的默认 high 是 thinking_budget 32k 的成本闸，xhigh 不封顶，换档不能悄悄放大账单。
+      { id: "qwen3.8-max", label: "Qwen3.8 Max", efforts: ["off", "low", "medium", "xhigh"], defaultEffort: "medium", image: true, video: true, ctx: 1_000_000, maxOut: 131_072, note: "旗舰 2.4T · 图/视频 · 1M ctx" },
+      { id: "qwen3.8-flash", label: "Qwen3.8 Flash", efforts: ["off", "low", "medium", "xhigh"], defaultEffort: "medium", image: true, video: true, ctx: 1_000_000, maxOut: 131_072, note: "多模态快模 · 1M ctx" },
       // R1：3.7 三个型号取自百炼官方模型页（help.aliyun.com/zh/model-studio/qwen3-7-*，2026-09-23）：
       // 上下文 1000000，最大输出 131072（思考 / 非思考同）。以前没声明，按扁平默认 128k / 16k 算。
       // 真请求核对（09-23）：三个型号对 max_tokens=1e8 都回「Range of max_tokens should be [1, 131072]」。
@@ -208,28 +222,53 @@ export const CATALOG: ProviderSpec[] = [
     // 内联数据（图片 base64）连同文字整个请求不能超过 20 MB，给文字留出余量
     media: { maxBytes: 14_000_000 },
     models: [
-      // Gemini 3 family uses thinkingLevel (no true "off"); 2.5 uses thinkingBudget
+      // Gemini 3 family uses thinkingLevel (no true "off"; 3.5 Flash 多一档 minimal，官方注明 minimal 也不保证完全不想);
+      // 2.5 uses thinkingBudget
       // and can disable. All Gemini chat models are multimodal.
       // R1：ctx / maxOut 取自官方模型页（ai.google.dev/gemini-api/docs/models/*，2026-09-23）：
       // 三个型号都是输入 1,048,576 / 输出 65,536。真请求核对（09-23，models.get 的 inputTokenLimit /
       // outputTokenLimit）：三个型号一致。
-      { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash", efforts: ["low", "medium", "high"], image: true, ctx: 1_048_576, maxOut: 65_536, note: "最新 Flash · 1M ctx" },
+      // Gemini 4 Argon（2026-10-13 上架）：models.get 实测 inputTokenLimit 1,048,576 / outputTokenLimit 32,768；
+      // thinkingLevel 只收 LOW/MEDIUM/HIGH（MINIMAL 400）；函数调用 + google_search 同开要 includeServerSideToolInvocations（encode 已带）。
+      { id: "gemini-4-argon", label: "Gemini 4 Argon", efforts: ["low", "medium", "high"], image: true, ctx: 1_048_576, maxOut: 32_768, note: "旗舰 · 第四代" },
+      { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash", efforts: ["minimal", "low", "medium", "high"], defaultEffort: "medium", image: true, ctx: 1_048_576, maxOut: 65_536, note: "最新 Flash · 1M ctx" },
       { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", efforts: ["low", "medium", "high"], image: true, ctx: 1_048_576, maxOut: 65_536, note: "旗舰 Pro" },
       { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", efforts: ["off", "low", "medium", "high"], image: true, ctx: 1_048_576, maxOut: 65_536, note: "稳定 · 可关思考" },
     ],
   },
 ];
 
-// 自定义服务（custom-providers.ts）按同一形状并进目录：型号只知道名字，思考档只有 off（不发任何厂商专属参数），
-// 视觉按名字启发式猜，上下文 / 输出走适配器的扁平默认。
+// 自定义服务（custom-providers.ts）按同一形状并进目录：只列启用的对话型号（asr / tts 这类不进菜单）；上下文、输出、视觉 /
+// 视频 / 音频取型号记录（识别出来的或用户改过的）；档位表经 custom-tiers.ts 映射成七级思考档，档名不同的进 effortLabels。
+function customModelSpec(m: CustomModel, protocol: CustomProvider["protocol"]): ModelSpec {
+  const v = slotView(m);
+  const group = m.id.includes("/") ? m.id.split("/")[0].slice(0, 40) : "";
+  return {
+    id: m.id,
+    label: m.label || m.id,
+    efforts: v.efforts,
+    ...(v.defaultEffort ? { defaultEffort: v.defaultEffort } : {}),
+    ...(Object.keys(v.labels).length ? { effortLabels: v.labels } : {}),
+    image: m.vision,
+    ...(m.video ? { video: true } : {}),
+    ...(m.audio ? { audio: true } : {}),
+    ctx: m.contextWindow,
+    maxOut: m.maxOutput,
+    ...(m.alwaysThinks ? { alwaysThinks: true, autoThinkAt: autoThinkSlots(m, protocol) } : {}),
+    ...(group ? { group } : {}),
+  };
+}
 function customSpec(c: CustomProvider): ProviderSpec {
+  const chat = c.models.filter((m) => m.enabled && m.kind === "chat");
+  // 一个能对话的都没有（老配置全是语音模型）：至少把默认型号留在菜单里，别让这家变成空的
+  const shown = chat.length ? chat : c.models.filter((m) => m.id === c.defaultModel);
   return {
     id: c.id as ProviderId,
     name: c.name,
     baseUrl: c.baseUrl,
     defaultModel: c.defaultModel,
-    custom: { host: hostOf(c.baseUrl) },
-    models: c.models.map((id) => ({ id, label: id, efforts: ["off"], image: guessImages(id) })),
+    custom: { host: hostOf(c.baseUrl), protocol: c.protocol, all: c.models.length },
+    models: shown.map((m) => customModelSpec(m, c.protocol)),
   };
 }
 
@@ -247,9 +286,10 @@ export function providerSpec(p: ProviderId): ProviderSpec {
   return CATALOG.find((s) => s.id === p) ?? CATALOG[0];
 }
 
-// R12：这家 provider 一次请求里历史图片的额度（目录没配的项取默认）。
-export function providerMediaBudget(p: ProviderId): { maxImages: number; maxBytes: number; keepRecent?: number } {
-  const media = CATALOG.find((s) => s.id === p)?.media;
+// R12：这家 provider 一次请求里历史图片的额度（目录没配的项取默认）。自定义服务按型号家族取（共用型号表：经第三方接的
+// 小米同样只让最近 2 张工具图入模）。
+export function providerMediaBudget(p: ProviderId, model?: string): { maxImages: number; maxBytes: number; keepRecent?: number } {
+  const media = isCustomProviderId(p) ? (model ? MK.tableEntry(model)?.media : undefined) : CATALOG.find((s) => s.id === p)?.media;
   return {
     maxImages: media?.maxImages ?? DEFAULT_MEDIA_BUDGET.maxImages,
     maxBytes: media?.maxBytes ?? DEFAULT_MEDIA_BUDGET.maxBytes,
@@ -283,12 +323,19 @@ export function modelSupportsImages(p: ProviderId, modelId: string): boolean {
   return guessImages(modelId);
 }
 
+// 目录外的 id（自定义服务里没登记的型号）：按共用型号表 → 名字猜（和 Claude 外接同一条视觉正则）
 function guessImages(modelId: string): boolean {
-  return /(?:^|[-_.])(vl|vision|omni)(?:$|[-_.])|gpt-[45]|^o[0-9]|glm-[\d.]+v/i.test(modelId);
+  const e = MK.tableEntry(modelId);
+  return typeof e?.vision === "boolean" ? e.vision : MK.VISION_RE.test(MK.bareModelId(modelId));
 }
 
 // Per-model context/output limits for adapters whose provider-level defaults
 // are too coarse (see ModelSpec.ctx/maxOut). Unknown models return {}.
+// 这个型号能不能开 fast mode（目录外的 id 一律不能：发了必 400）
+export function modelSupportsFast(p: ProviderId, modelId: string): boolean {
+  return modelSpec(p, modelId)?.fast === true;
+}
+
 export function modelLimits(p: ProviderId, modelId: string): { ctx?: number; maxOut?: number; compactAt?: number } {
   const known = modelSpec(p, modelId);
   return known ? { ctx: known.ctx, maxOut: known.maxOut, compactAt: known.compactAt } : {};
@@ -315,6 +362,13 @@ export function clampEffort(
   // A non-off request must not become disabled when moving to MiMo's binary
   // switch (e.g. a low-effort subagent inherited from another model).
   if (p === "mimo" && spec && level !== "off") return "high";
+  // 自定义服务同理推广：开 / 关式（或任何带关闭档）的型号，非关闭的请求只在非关闭档里挑（向下取，没有就取最低的非关闭档）
+  if (isCustomProviderId(p) && spec && level !== "off" && efforts.some((e) => e !== "off")) {
+    const on = efforts.filter((e) => e !== "off");
+    const want = EFFORT_ORDER.indexOf(level);
+    const below = on.filter((e) => EFFORT_ORDER.indexOf(e) <= want);
+    return below.length ? below[below.length - 1] : on[0];
+  }
   const want = EFFORT_ORDER.indexOf(level);
   let best: ThinkingLevel | null = null;
   for (const e of efforts) {

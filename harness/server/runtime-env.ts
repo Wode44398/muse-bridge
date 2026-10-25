@@ -38,18 +38,25 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "DIMENSIO_CONTROL_PORTS", area: "服务", description: "额外的控制面端口（逗号分隔）：agent 不许占用、结束这些端口上的进程" },
 
   // ── 路径 ──
-  { name: "SESSIONS_DIR", area: "路径", description: "会话记录目录", default: "<harness>/sessions" },
-  { name: "WORKSPACE_DIR", area: "路径", description: "默认工作区", default: "<harness>/workspace" },
-  { name: "DIMENSIO_CONFIG_FILE", area: "路径", description: "运行配置文件（上次选的厂商、型号、档位、规则）", default: "<harness>/runtime-config.json" },
-  { name: "PROJECTS_FILE", area: "路径", description: "项目注册表（侧栏项目）", default: "<harness>/projects.json" },
+  {
+    name: "DIMENSIO_DATA_DIR",
+    area: "路径",
+    description:
+      "可写状态的默认目录（下面写作 <数据目录>）：会话、记忆、知识、运行配置、项目表、自定义模型服务、快照指针、默认工作区与 .env 没单独指定时都落在这里；bridge 给用户实例设成他自己的数据目录，部署脚本也可自设",
+    default: "<harness>",
+  },
+  { name: "SESSIONS_DIR", area: "路径", description: "会话记录目录", default: "<数据目录>/sessions" },
+  { name: "WORKSPACE_DIR", area: "路径", description: "默认工作区", default: "<数据目录>/workspace" },
+  { name: "DIMENSIO_CONFIG_FILE", area: "路径", description: "运行配置文件（上次选的厂商、型号、档位、规则）", default: "<数据目录>/runtime-config.json" },
+  { name: "PROJECTS_FILE", area: "路径", description: "项目注册表（侧栏项目）", default: "<数据目录>/projects.json" },
   { name: "PROJECTS_ROOT", area: "路径", description: "新建项目的默认父目录", default: "~/Dimensio Projects" },
-  { name: "DIMENSIO_QUICK_FILE", area: "路径", description: "快照对话的当前桶指针", default: "<harness>/quick.json" },
+  { name: "DIMENSIO_QUICK_FILE", area: "路径", description: "快照对话的当前桶指针", default: "<数据目录>/quick.json" },
   { name: "DIMENSIO_QUICK_ROOT", area: "路径", description: "快照对话一次性桶的根目录", default: "~/.dimensio/quick" },
-  { name: "DIMENSIO_CUSTOM_PROVIDERS_DIR", area: "路径", description: "自定义模型服务（地址、备注与加密的 API key）", default: "<harness>/custom-providers" },
-  { name: "MEMORY_DIR", area: "路径", description: "记忆库目录（按工作区分）", default: "<harness>/memory" },
-  { name: "KNOWLEDGE_DIR", area: "路径", description: "项目知识索引目录", default: "<harness>/knowledge" },
+  { name: "DIMENSIO_CUSTOM_PROVIDERS_DIR", area: "路径", description: "自定义模型服务（地址、备注与加密的 API key）", default: "<数据目录>/custom-providers" },
+  { name: "MEMORY_DIR", area: "路径", description: "记忆库目录（按工作区分）", default: "<数据目录>/memory" },
+  { name: "KNOWLEDGE_DIR", area: "路径", description: "项目知识索引目录", default: "<数据目录>/knowledge" },
   { name: "DIMENSIO_GLOBAL_GUIDE", area: "路径", description: "全局 GUIDE.md（每个新会话都带的个人指南）", default: "~/.dimensio/GUIDE.md" },
-  { name: "HARNESS_ENV_FILE", area: "路径", description: "启动时加载的 .env 文件", default: "<harness>/.env" },
+  { name: "HARNESS_ENV_FILE", area: "路径", description: "启动时加载的 .env 文件", default: "<数据目录>/.env" },
 
   // ── 厂商 ──
   { name: "ANTHROPIC_API_KEY", area: "厂商", description: "Anthropic key", secret: true },
@@ -121,6 +128,8 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "DIMENSIO_READONLY_PATHS", area: "沙箱与子进程", description: "工作区外对所有会话开放读取的目录（分号分隔；只放行读与纯读命令）" },
   { name: "DIMENSIO_CHILD_ENV_ALLOW", area: "沙箱与子进程", description: "额外传给子进程（Bash 等）的变量名（逗号分隔；凭据名照样剔除）" },
   { name: "DIMENSIO_CHILD_HOME", area: "沙箱与子进程", description: "子进程用的隔离 HOME", default: "%TEMP%/dimensio-child-home" },
+  { name: "LOCALAPPDATA", area: "沙箱与子进程", description: "系统变量（只读）：真实值作为 $REAL_LOCALAPPDATA 交给子进程（它们自己的被改到隔离 HOME 下）", default: "<家目录>/AppData/Local" },
+  { name: "APPDATA", area: "沙箱与子进程", description: "系统变量（只读）：真实值作为 $REAL_APPDATA 交给子进程", default: "<家目录>/AppData/Roaming" },
   { name: "DIMENSIO_SCRATCH_DIR", area: "沙箱与子进程", description: "$WORKSPACE_TMP 草稿目录（多用户时各用各的）", default: "%TEMP%/dimensio-scratch" },
   { name: "DIMENSIO_TENANT", area: "沙箱与子进程", description: "1 = 租户实例（bridge 多用户服务端给注册用户拉的）：锁访问范围、工作区限在自己文件夹、越界不弹审批、不连 bridge 集成件" },
   { name: "DIMENSIO_TENANT_SHELL", area: "沙箱与子进程", description: "租户有没有命令行：0 = 没有（关掉 Bash / Preview / 终端）", default: "1" },

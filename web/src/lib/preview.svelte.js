@@ -70,6 +70,17 @@ export function cloudStreamUrl(rel, { probe = false, ws = '' } = {}) {
   return apiUrl('/api/file/stream?path=' + encodeURIComponent(rel) + (probe ? '&probe=1' : '') + (ws ? '&ws=' + encodeURIComponent(ws) : '') + tokenSuffix('&'));
 }
 
+// HtmlView 的站点挂载请求：同一个鉴权接口带 site=1，服务端回 { url:'/api/hv/<id>/<入口>' }——
+// 路径式 URL，页面里相对引用的 js/css/图片才解析得到（见 src/runtime/html-site.mjs）。
+// 拿不到挂载地址（其它来源）时 HtmlView 回落 srcdoc（lib/htmlInline.js 内联同目录资源）。
+function htmlSiteUrl(raw) {
+  if (raw.origin === 'cloud') {
+    return apiUrl('/api/file?site=1&path=' + encodeURIComponent(raw.rel) + (raw.ws ? '&ws=' + encodeURIComponent(raw.ws) : '') + tokenSuffix('&'));
+  }
+  if (raw.origin === 'claude') return claudeArtifactUrl(raw.id, raw.path) + '&site=1';
+  return null;
+}
+
 // —— 归一化：把来源描述符变成查看器统一结构 ——
 function normalize(raw) {
   const name = raw.name || (raw.rel ? String(raw.rel).split('/').pop() : '') || (raw.path ? String(raw.path).split(/[\\/]/).pop() : '') || (raw.id ? t('生成结果') : t('文件'));
@@ -85,6 +96,7 @@ function normalize(raw) {
     dataUrl: raw.dataUrl ?? null,   // 调用方已读好的图片 base64 dataURL
     text: raw.text ?? null,         // 调用方已读好的文本内容
     editable: false,
+    startMode: raw.startMode || '',   // md 打开时的模式（'live' 等）；空＝沿用上次。新建的空笔记直接进编辑
     saveTarget: null,   // { origin:'cloud', rel, ws }（编辑保存用）
     cacheKey: raw.origin === 'cloud' ? 'c:' + (raw.ws || '') + ':' + raw.rel : null,  // 视频/音频本地缓存键
   };
@@ -121,6 +133,7 @@ function normalize(raw) {
     out.downloadHref = harnessArtifactUrl(raw.id, raw.path, { dl: true });
     out.absPath = raw.path || '';
   }
+  if (kind === 'html') out.siteUrl = htmlSiteUrl(raw);
   return out;
 }
 

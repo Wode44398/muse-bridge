@@ -234,3 +234,31 @@ export async function setProjectFlags(
   await writeStored(projects);
   return view(next, await isDirectory(next.path));
 }
+
+// 显示名（不是文件夹名，不受建目录的字符限制）：去控制字符、去首尾空白、≤80 字。
+function cleanLabel(raw: string): string {
+  return String(raw ?? "").replace(/[\u0000-\u001f]/g, "").trim().slice(0, 80);
+}
+
+// 改名只改注册表里的显示名，目录与会话都不动；留空 = 恢复成文件夹名。历史里发现的隐式项目
+// 顺手登记（createdAt 0，同置顶 / 隐藏的规矩）。
+export async function renameProject(rawPath: string, rawName: string): Promise<Project> {
+  if (!rawPath?.trim()) throw new Error("缺少项目路径");
+  const workspace = path.resolve(rawPath.trim());
+  const name = cleanLabel(rawName) || fallbackName(workspace);
+  const projects = await readStored();
+  const key = keyFor(workspace);
+  const idx = projects.findIndex((p) => keyFor(p.path) === key);
+  const next: StoredProject = idx >= 0 ? { ...projects[idx]!, name } : { name, path: workspace, createdAt: 0 };
+  if (idx >= 0) projects[idx] = next;
+  else projects.push(next);
+  await writeStored(projects);
+  return view(next, await isDirectory(next.path));
+}
+
+// 「快照存为工作空间」的项目这一半：把快照桶原地登记成普通项目（新建在前，与导入同一个规矩）。
+// 快照那一半见 quick.ts 的 currentQuickForSave / adoptCurrentQuick。
+export async function registerSavedQuick(workspace: string, rawName: string): Promise<Project> {
+  const name = cleanLabel(rawName) || fallbackName(workspace);
+  return register({ name, path: path.resolve(workspace), createdAt: Date.now() });
+}

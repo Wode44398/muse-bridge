@@ -79,6 +79,47 @@ test("K5: what cannot be analyzed, or may delete from the root at run time, is p
   assert.equal(bash('rm -rf "$DIR/"*', "auto", rules({ allow: ['Bash(rm -rf "$DIR/"*)'] })).effect, "allow");
 });
 
+// 2026-10-09：删自己在 C:/Users/<名>/bridge-client-build 下建的临时文件被硬拒、批准也没用。灾难级目标（根、盘符顶层、
+// 家目录及以上、系统目录）照旧硬拒；更深的绝对路径改成问人——检查点救不回来，所以「本会话都允许」之外每次都问。
+test("K5: recursive deletes of deep absolute paths are asked, catastrophic targets stay refused", () => {
+  for (const command of [
+    'rm -rf "C:/Users/someone/bridge-client-build/verify-home/config/client.json"',
+    "rm -rf /c/Users/someone/proj/build",
+    "rm -rf D:/Work/project/tmp-out",
+    "rm -rf /opt/app/cache",
+    "rm -rf /tmp/dimensio-scratch/x",
+    "powershell -NoProfile -Command 'Remove-Item -Recurse -Force C:\\Users\\someone\\proj\\dist'",
+    "rm -rf C:/Users/someone/proj/build/*",
+  ]) {
+    assert.equal(deniedCommand(command), null, `not hard-denied: ${command}`);
+    const d = bash(command);
+    assert.equal(d.effect, "ask", `asked: ${command}`);
+    assert.match(d.reason, /checkpoint cannot undo that/);
+    assert.equal(bash(command, "auto", rules({ allow: [`Bash(${command})`] })).effect, "allow", "用户的 allow 规则优先");
+  }
+  for (const command of [
+    "rm -rf C:/Users/someone",
+    "rm -rf C:/Users/someone/",
+    "rm -rf C:/Users",
+    "rm -rf C:/Users/someone/*",
+    "rm -rf D:/Work",
+    "rm -rf D:/",
+    "rm -rf C:/Windows/Temp/x",
+    "rm -rf 'C:/Program Files/foo'",
+    "rm -rf /c/Users/someone",
+    "rm -rf /c",
+    "rm -rf /home/someone",
+    "rm -rf /usr/local/lib/x",
+    "rm -rf /etc/nginx",
+    "rm -rf /tmp",
+    "rm -rf /srv/*",
+    "rm -rf C:/Users/someone/proj/../..",
+  ]) {
+    assert.ok(deniedCommand(command), `hard-denied: ${command}`);
+  }
+  assert.equal(bash("rm -rf build").effect, "allow", "工作区相对路径照旧放行");
+});
+
 test("A5: Bash rules are judged per sub-command — deny/ask on any, allow only when every one is covered", () => {
   // allow 前缀规则不再连带放行后面串上的命令
   const push = rules({ allow: ["Bash(git push:*)"], ask: ["Bash"] });

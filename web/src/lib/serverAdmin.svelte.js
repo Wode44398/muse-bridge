@@ -5,6 +5,16 @@
 import { api } from './api.js';
 import { t, locale } from './i18n.js';
 
+// 「由 X 托管」整句：服务端 supervisor() 回的是机器值（systemd / docker / pm2 / windows / desktop）。
+// desktop = 桌面客户端托管的本机服务端（壳设 BRIDGE_SUPERVISED=desktop），windows = Windows 启动器（bridge-service.mjs）；
+// 其余是通用工具名，原样显示。按托管方各出一句、不往同一个模板里塞名字：中文名前后不留空格（由桌面客户端托管），
+// 英文工具名两侧留空格（由 systemd 托管），一个模板两头顾不全。
+export function supervisedBy(s) {
+  if (s === 'desktop') return t('由桌面客户端托管');
+  if (s === 'windows') return t('由 Windows 启动器托管');
+  return t('由 {name} 托管', { name: s });
+}
+
 // 服务端自动起的 Claude 账号名（claude-account.mjs 的「默认账号」「账号 N」）跟着界面语言显示；管理员自己起的名字原样
 const AUTO_LABEL = /^(?:默认账号|账号 (\d+))$/;   // i18n-ignore 匹配服务端数据
 export function accLabel(l) {
@@ -23,10 +33,13 @@ export const sa = $state({
   gens: [],              // /api/admin/active 的活跃生成
   users: [], invites: [],
   agentStatus: [],       // /api/admin/users 附带的 agent 全局状态（按人勾选时把「全局已关 / 不支持多用户」置灰）
-  multiUser: true,       // 服务器开没开多用户（主机形态关着：没有注册 / 邀请，只剩服务账号）
+  multiUser: true,       // 服务器开没开多用户（features.multiUser 关着：没有注册 / 邀请，只剩服务账号）
   supervisor: null,      // 谁在托管这个进程（systemd / docker / pm2；null = 没有）：服务控制页的「重启」据此可用
   accounts: [],
 });
+
+// 页面在前台才轮询（控制台开着但切到别的标签 / 最小化时别白拉）
+export const pageVisible = () => typeof document === 'undefined' || !document.hidden;
 
 // —— 探针：设置页入口按钮据此显隐（旧后端 404 → 不显示）——
 export async function saPing() {

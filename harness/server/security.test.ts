@@ -123,6 +123,22 @@ test("child commands do not inherit provider credentials", () => {
   assert.notEqual(env.USERPROFILE, process.env.USERPROFILE);
 });
 
+// 2026-10-09：隔离 HOME 让「本机装了什么」的查找全扑空、打包 Electron 起不来，模型还不知道被重定向了
+test("childEnv tells the child where the real user home is (but not in tenant mode)", () => {
+  const env = childEnv();
+  assert.equal(env.REAL_USERPROFILE, os.homedir());
+  assert.ok(env.REAL_LOCALAPPDATA && env.REAL_APPDATA);
+  assert.notEqual(env.USERPROFILE, env.REAL_USERPROFILE);
+  const was = process.env.DIMENSIO_TENANT;
+  process.env.DIMENSIO_TENANT = "1";
+  try {
+    assert.equal(childEnv().REAL_USERPROFILE, undefined, "租户实例拿不到管理员的家目录");
+  } finally {
+    if (was === undefined) delete process.env.DIMENSIO_TENANT;
+    else process.env.DIMENSIO_TENANT = was;
+  }
+});
+
 test("partial Read cannot unlock a whole-file Write", async () => {
   const root = temp("dimensio-read-gate-");
   const file = path.join(root, "large.txt");
@@ -257,6 +273,9 @@ test("a literal ~ path is resolved and judged, not refused on sight", () => {
   assert.equal(commandScopeViolation("ls ~/.gradle 2>/dev/null | head", root, "workspace"), null);
   // The shell-expanded forms remain unresolvable, so they remain refused.
   assert.match(commandScopeViolation("ls $HOME/.gradle", root, "workspace")!, /home-directory variables/);
+  assert.match(commandScopeViolation('ls "$REAL_LOCALAPPDATA/Programs"', root, "workspace")!, /home-directory variables/);
+  assert.match(commandScopeViolation("dir %REAL_USERPROFILE%", root, "workspace")!, /home-directory variables/);
+  assert.equal(commandScopeViolation('ls "$REAL_LOCALAPPDATA/Programs"', root, "full"), null, "整机模式下就是给它用的");
 });
 
 test("the host deny-list does not govern the phone on the other end of adb shell", () => {

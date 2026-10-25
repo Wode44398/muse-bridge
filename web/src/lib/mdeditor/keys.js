@@ -11,7 +11,7 @@ import { syntaxTree, ensureSyntaxTree, indentUnit } from '@codemirror/language';
 import { deleteLine, insertNewlineAndIndent } from '@codemirror/commands';
 import { insertNewlineContinueMarkupCommand, deleteMarkupBackward } from '@codemirror/lang-markdown';
 import { closeBrackets, closeBracketsKeymap, startCompletion } from '@codemirror/autocomplete';
-import { toggleFormat, indentList, outdentList, insertLink, toggleTask, taskCharPos } from './commands.js';
+import { toggleFormat, indentList, outdentList, insertLink, toggleTask, taskCharPos, singleDash } from './commands.js';
 
 const ANDROID = typeof navigator === 'object' && /Android\b/.test(navigator.userAgent);
 // 与 closeBrackets 同口径：Android 上 CM 走 EditContext，看 composing；其余看 compositionStarted
@@ -122,9 +122,50 @@ function codeEnter(view) {
   });
 }
 
+// 段落下一行的「- 」行尾回车：lezer 把这根单「-」认成 setext 下划线（LP 按 Obsidian 画成空圆点，见
+// livePreview SetextHeading 分支），lang-markdown 也就不当列表处理。按 Obsidian 空列表项回车：去掉「- 」，
+// 光标留在本行（退出列表），不另起一行。行尾退格同样处理（它看上去就是个空圆点，同 emptyItemBackspace）。
+// 前缀照空项退格的口径：引用「> 」留着（还在引用里）；列表项里的缩进留着（回到外层那一项的正文列）；
+// 顶级的缩进空白一并删、回行首
+const setextDashDrop = (userEvent) => (view) => {
+  const { state } = view;
+  if (!singleCursor(state)) return false;
+  const head = state.selection.main.head, line = state.doc.lineAt(head);
+  if (head !== line.to) return false;
+  const one = singleDash(syntaxTree(state), line);
+  if (!one?.blank) return false;
+  const pre = line.text.slice(0, one.mark.from - line.from);
+  let keep = 0;
+  if (inside(one.heading, ['ListItem'])) keep = pre.length;
+  else if (pre.includes('>')) { const gt = pre.lastIndexOf('>'); keep = gt + 1 + (/[ \t]/.test(pre[gt + 1] || '') ? 1 : 0); }
+  view.dispatch({ changes: { from: line.from + keep, to: line.to }, selection: { anchor: line.from + keep }, scrollIntoView: true, userEvent });
+  return true;
+};
+const setextDashEnter = setextDashDrop('delete');
+const setextDashBackspace = setextDashDrop('delete.backward');
+
 function enter(view) {
   if (view.state.readOnly) return false;
-  return enterAtItemStart(view) || exitEmptyQuote(view) || codeEnter(view) || enterOnContinuation(view) || continueMarkup(view);
+  return setextDashEnter(view) || enterAtItemStart(view) || exitEmptyQuote(view) || codeEnter(view) || enterOnContinuation(view) || continueMarkup(view);
+}
+
+// 空列表项（「- 」「1. 」「- [ ] 」后面什么都没写）行尾退格：整段标记一次删掉、光标回行首，退出列表（Obsidian 同款）。
+// lang-markdown 对「不是列表第一项」的空项是把标记换成等宽空白——光标对齐上一项正文，接着写的字成了上一项
+// 的续行，看上去怎么也回不到左侧顶格。只管顶级项：嵌套空项退格仍交给 lang-markdown（按层级处理）
+function emptyItemBackspace(view) {
+  const { state } = view;
+  if (!singleCursor(state)) return false;
+  const head = state.selection.main.head, line = state.doc.lineAt(head);
+  const m = ITEM_HEAD.exec(line.text);
+  if (!m || head !== line.to || m[0].length !== line.length) return false;
+  const node = syntaxTree(state).resolveInner(line.from + m[1].length, 1);
+  if (node.name !== 'ListMark') return false;
+  for (let p = node.parent?.parent; p; p = p.parent) if (p.name === 'ListItem') return false;   // 嵌套项
+  // 引用前缀「> 」留着（列表在引用里），标记前的缩进空白一并删
+  const gt = m[1].lastIndexOf('>');
+  const from = line.from + (gt < 0 ? 0 : gt + 1 + (/[ \t]/.test(m[1][gt + 1] || '') ? 1 : 0));
+  view.dispatch({ changes: { from, to: line.to }, selection: { anchor: from }, scrollIntoView: true, userEvent: 'delete.backward' });
+  return true;
 }
 
 // Shift+Enter = 软换行（Obsidian newlineAndIndentOnly）：换行后补到正文列——引用保留「>」，
@@ -229,10 +270,11 @@ export function mdKeymap(opts = {}) {
     { key: 'Mod-s', preventDefault: true, run: () => { opts.onSave?.(); return true; } },
     { key: 'Enter', run: enter, shift: softBreak },
     ...closeBracketsKeymap,   // 光标在自动补出的一对括号中间：退格连删一对（先于列表标记退格）
-    { key: 'Backspace', run: (v) => !v.state.readOnly && deleteMarkupBackward(v) },
-    { key: 'Tab', run: indentList, shift: outdentList },
-    { key: 'Mod-]', run: indentList },
-    { key: 'Mod-[', run: outdentList },
+    { key: 'Backspace', run: (v) => !v.state.readOnly && (emptyItemBackspace(v) || setextDashBackspace(v) || deleteMarkupBackward(v)) },
+    // opts 带 flash：Tab 在首项上挂不上去时给一句提示（不再默默吞掉）
+    { key: 'Tab', run: (v) => indentList(v, opts), shift: (v) => outdentList(v, opts) },
+    { key: 'Mod-]', run: (v) => indentList(v, opts) },
+    { key: 'Mod-[', run: (v) => outdentList(v, opts) },
     { key: 'Mod-b', run: (v) => toggleFormat(v, 'bold') },
     { key: 'Mod-i', run: (v) => toggleFormat(v, 'italic') },
     { key: 'Mod-k', run: insertLink },

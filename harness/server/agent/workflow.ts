@@ -16,6 +16,7 @@ import type {
 } from "../tools/types.ts";
 import { normalizeObjectSchema } from "./schema.ts";
 import { atomicWriteFile } from "../atomic-write.ts";
+import { EFFORT_ORDER } from "../catalog.ts";
 
 // Workflow executor: a deterministic JavaScript script orchestrates many
 // sub-agents (fan-out, pipelines, loops) instead of the model driving each
@@ -356,7 +357,7 @@ interface AgentOpts {
   system?: string;
 }
 
-const EFFORTS: ThinkingLevel[] = ["off", "low", "medium", "high", "max"];
+const EFFORTS: ThinkingLevel[] = EFFORT_ORDER;
 
 function parseAgentOpts(raw: unknown): AgentOpts | { error: string } {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -371,9 +372,8 @@ function parseAgentOpts(raw: unknown): AgentOpts | { error: string } {
   if (o.model !== undefined) out.model = String(o.model);
   if (o.effort !== undefined) {
     const e = String(o.effort).toLowerCase();
-    const mapped = e === "xhigh" ? "max" : e;
-    if (!(EFFORTS as string[]).includes(mapped)) return { error: `opts.effort must be one of ${EFFORTS.join("/")}` };
-    out.effort = mapped as ThinkingLevel;
+    if (!(EFFORTS as string[]).includes(e)) return { error: `opts.effort must be one of ${EFFORTS.join("/")}` };
+    out.effort = e as ThinkingLevel;
   }
   if (o.maxTurns !== undefined) {
     const n = Number(o.maxTurns);

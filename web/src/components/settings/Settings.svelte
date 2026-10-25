@@ -3,7 +3,8 @@
   //   宽屏（≥700）：claude.ai 同款居中对话框——左栏 = 搜索 + 「设置」「自定义」两组导航，右栏 = 当前分区；
   //   手机（<700）：Claude app 同款整页——根页 = 账户卡 + 分组列表，点进分区从右侧推入，左上返回。
   // 分区内容是独立组件（Sec*.svelte），两种外壳共用；样式令牌 --st-* 在 app.css。
-  // 入口：侧栏账户卡菜单（设置 / 账户 / 关于）、主页账户胶囊；直达分区走 lib/settingsNav。
+  // 入口：侧栏账户卡菜单（设置 / 账户 / 关于）、主页账户胶囊、Claude 页里的「打开设置」；直达分区走 lib/settingsNav
+  //（openSettings 认的分区名：general / account / claude / providers / agents / connection / dimensio / agentapi / android / feedback / about）。
   import { ui, me, screenOn } from '../../lib/state.svelte.js';
   import { layout } from '../../lib/layout.svelte.js';
   import { registerCloser } from '../../lib/nav.js';
@@ -20,6 +21,9 @@
   import SecAndroid from './SecAndroid.svelte';
   import SecDimensio from './SecDimensio.svelte';
   import SecFeedback from './SecFeedback.svelte';
+  import SecClaude from './SecClaude.svelte';
+  import SecProviders from './SecProviders.svelte';
+  import SecAgentAccess from './SecAgentAccess.svelte';
 
   // 扩展中心只对管理员开放：探针过了才出「自定义」那一组
   let extOk = $state(false);
@@ -33,10 +37,16 @@
   const SECTIONS = $derived([
     { key: 'general', label: t('通用'), icon: '' },
     { key: 'account', label: t('账户'), icon: '' },
+    // Claude：Claude 页的行为设置（按身份存在服务端，lib/claudeSettingsView.js）；Claude 分页没开放给这个身份就不出
+    ...(me.kind !== 'none' && screenOn('claude') ? [{ key: 'claude', label: 'Claude', svg: SV('<path d="M10 2.8v4.4M10 12.8v4.4M2.8 10h4.4M12.8 10h4.4M4.9 4.9l3.1 3.1M12 12l3.1 3.1M15.1 4.9 12 8M8 12l-3.1 3.1"/>') }] : []),
+    // 模型服务：给 Claude 页接自定义 API（管理员）
+    ...(me.kind === 'admin' && screenOn('claude') ? [{ key: 'providers', label: t('模型服务'), svg: SV('<rect x="3" y="3.5" width="14" height="5" rx="1.4"/><rect x="3" y="11.5" width="14" height="5" rx="1.4"/><path d="M6 6h.01M6 14h.01"/>') }] : []),
     ...(agentsOk ? [{ key: 'agents', label: tc('settings', 'Agent'), svg: SV('<rect x="3" y="3" width="5.5" height="5.5" rx="1.4"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.4"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.4"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.4"/>') }] : []),
     { key: 'connection', label: tc('名词', '连接'), icon: '' },
     // dimensio 的设置就是这一节（它分页里的「设置」也直达这里）；dimensio 对这个身份没开就不出
     ...(screenOn('harness') ? [{ key: 'dimensio', label: 'dimensio', svg: SV('<path d="M3.5 10.5h13"/><path d="M5.5 10.5a4.5 4.5 0 0 1 9 0"/><path d="M6.6 13.4a4.5 4.5 0 0 0 6.8 0" stroke-dasharray="1.6 1.7"/>') }] : []),
+    // Agent 接入：给别的 agent（部署它的 Muse、Claude Code、脚本）用的地址与密钥，每个登录身份各管各的
+    ...(me.kind !== 'none' ? [{ key: 'agentapi', label: t('Agent 接入'), svg: SV('<path d="M7.5 6.5 4 10l3.5 3.5M12.5 6.5 16 10l-3.5 3.5"/><path d="M11 4.5 9 15.5"/>') }] : []),
     { key: 'android', label: t('安卓 app'), svg: SV('<rect x="5.5" y="2.5" width="9" height="15" rx="2"/><path d="M8.75 15h2.5"/>') },
     ...(me.kind !== 'none' ? [{ key: 'feedback', label: t('反馈'), svg: SV('<path d="M4 4.5h12a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H9l-3.5 3v-3H4a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1z"/><path d="M10 7.2v3.3"/><path d="M10 12.4v.1"/>') }] : []),
     { key: 'about', label: t('关于'), icon: '' },
@@ -120,6 +130,24 @@
     { sec: 'dimensio', sid: 'dim-appearance', label: t('dimensio 外观'), keys: t('dimensio 外观 深色 浅色 主题') },
     { sec: 'dimensio', sid: 'dim-feed', label: t('显示全部工作过程'), keys: t('dimensio 工作过程 工具调用 展开') },
     { sec: 'agents', sid: 'agent-claude', label: t('Agent 开关'), keys: t('agent claude dimensio 启用 关闭 认证') },
+    { sec: 'account', sid: 'admin-access', label: t('管理员可见性'), keys: t('管理员 隐私 访问记录 查看 代聊') },
+    { sec: 'claude', sid: 'cs-autoContinueOnLimit', label: t('限额重置后自动继续'), keys: t('限额 额度 5 小时 自动继续 续跑') },
+    { sec: 'claude', sid: 'cs-permissionMode', label: t('权限模式'), keys: t('权限 模式 默认 自动 计划 接受编辑 permission') },
+    { sec: 'claude', sid: 'cs-outputStyle', label: t('输出风格'), keys: t('输出 风格 简洁 解释 学习 output style') },
+    { sec: 'claude', sid: 'cs-enableWorkflows', label: t('动态工作流'), keys: t('工作流 子 agent 并行 workflow ultracode') },
+    { sec: 'claude', sid: 'cs-switchModelsOnFlag', label: t('消息被拦时自动换模型'), keys: t('拦截 拒绝 换模型 refusal') },
+    { sec: 'claude', sid: 'cs-questionTimeout', label: t('Claude 提问无人回答时'), keys: t('提问 超时 等待 question') },
+    { sec: 'claude', sid: 'cs-replyLanguage', label: t('回复语言'), keys: t('语言 中文 英文 回复 language') },
+    { sec: 'claude', sid: 'cs-newSessionPolicy', label: t('Claude 发起新会话'), keys: t('会话 协作 子会话 新会话 提议') },
+    { sec: 'claude', sid: 'cs-branchPrefix', label: t('分支前缀'), keys: t('git 分支 工作树 worktree branch') },
+    { sec: 'claude', sid: 'cs-autoFixPullRequests', label: t('自动修复拉取请求'), keys: t('PR 拉取请求 CI auto-fix github') },
+    { sec: 'claude', sid: 'cs-attribution', label: t('提交与拉取请求署名'), keys: t('署名 提交 commit co-authored') },
+    { sec: 'claude', sid: 'cs-autoArchiveDays', label: t('归档不活跃的会话'), keys: t('归档 会话 不活跃 archive') },
+    { sec: 'claude', sid: 'cs-notifyTaskComplete', label: t('任务完成'), keys: t('通知 提醒 权限请求 提问 任务完成') },
+    { sec: 'providers', sid: 'providers', label: t('自定义 API'), keys: t('模型服务 自定义 API DeepSeek Kimi OpenRouter 兼容 端点 provider') },
+    { sec: 'agentapi', sid: 'ak-url', label: t('Agent 入口'), keys: t('agent 接入 地址 入口 api') },
+    { sec: 'agentapi', sid: 'ak-new', label: t('生成密钥'), keys: t('agent 密钥 key 令牌 生成') },
+    { sec: 'agentapi', sid: 'ak-list', label: t('密钥'), keys: t('agent 密钥 吊销 过期') },
   ];
   const touch = (() => { try { return matchMedia('(pointer: coarse)').matches; } catch { return false; } })();
   const hits = $derived.by(() => {
@@ -159,7 +187,10 @@
   {:else if k === 'agents'}<SecAgents />
   {:else if k === 'android'}<SecAndroid />
   {:else if k === 'dimensio'}<SecDimensio />
-  {:else if k === 'feedback'}<SecFeedback />{/if}
+  {:else if k === 'feedback'}<SecFeedback />
+  {:else if k === 'claude'}<SecClaude />
+  {:else if k === 'providers'}<SecProviders />
+  {:else if k === 'agentapi'}<SecAgentAccess />{/if}
 {/snippet}
 {#snippet icon(s)}{#if s.svg}{@html s.svg}{:else}{s.icon}{/if}{/snippet}
 

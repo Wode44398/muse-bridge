@@ -13,7 +13,7 @@
   import { api } from '../../lib/api.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { normalizeItem, cloudFileUrl, openPreview, preview } from '../../lib/preview.svelte.js';
-  import { parseNote, renderObsMarkdown, renderPropWikilinks, noteStats, escapeHtml, escapeRegex, propKind, PROP_ICONS, MD_EXT_RE, scanFootnotes, renderFootnoteSection, lexObsBlocks } from '../../lib/obsmd.js';
+  import { parseNote, renderObsMarkdown, renderPropWikilinks, noteStats, escapeHtml, escapeRegex, propKind, PROP_ICONS, MD_EXT_RE, scanFootnotes, renderFootnoteSection, lexObsBlocks, EMBED_SRC_OK } from '../../lib/obsmd.js';
   import { findSafeCut } from '../../lib/md.js';
   import { srcBlocks, readMapper } from '../../lib/mdanchors.js';
   import { merge3, textHash } from '../../lib/textmerge.js';
@@ -186,7 +186,7 @@
   async function load() {
     const my = ++seq, c = cur, dk = draftKeyOf(c);
     loading = true; loadError = false; restored = false; stale = null; conflict = null;
-    mode = c.kind === 'markdown' ? lastMdMode() : 'edit';
+    mode = c.kind === 'markdown' ? (MD_MODES.includes(c.startMode) ? c.startMode : lastMdMode()) : 'edit';
     loadLinks(c);
     if (!(c.kind === 'text' || c.kind === 'markdown')) { loading = false; return; }
     try {
@@ -215,11 +215,14 @@
       }
       if (my !== seq) return;
       original = text;
+      linkSigs.set(linksKeyOf(c), linkSigOf(text));   // 这次拉的出链索引对应的就是这份磁盘原文
       content = restoreDraft(c, dk, text);
       loading = false;
     } catch { if (my === seq) { loadError = true; loading = false; } }
   }
-  $effect(() => { cur; load(); });   // 挂载/换文档（含双链跳转）即加载
+  // 挂载/换文档（含双链跳转）即加载。只跟 cur：load → loadLinks 同步读了 links、拉回来又写它，
+  // 不隔开的话云端 md 第一次打开会被出链索引的回包再触发一整遍加载（正文重拉、阅读/编辑态被复位）
+  $effect(() => { cur; untrack(() => load()); });
 
   // 草稿恢复（验收 e2e-3）：草稿记着它基于的磁盘原文（base），拿它和刚读到的磁盘现状比——
   //   · 草稿 = 磁盘：早已落盘（多半是跳走时的静默保存），丢掉草稿，不报「已恢复」、不强切编辑态；
@@ -285,6 +288,7 @@
         if (isMd && mode === 'preview') { grabScroll(); pendingScroll = true; }
         original = text;
         applyText(text, true);
+        syncLinks(c, text);
         showToast(t('已同步 Claude 的修改'));
         return;
       }
@@ -321,7 +325,7 @@
   // 只把真正写出去的那份记为已保存；草稿只在恰好等于那份时才删。同一篇同时只发一个请求：
   // 在途期间又要存的记一笔，回来后按那时的最新内容补发；已经跳走/关掉的，拿草稿（每次改动都记）补发。
   // 写入按篇串行（SAVEQ），旧稿不会后到盖新稿。
-  let saveT = null, saveFails = 0, lastLinksRefresh = 0, alive = true;
+  let saveT = null, saveFails = 0, alive = true;
   const inflight = new Map();          // 本实例在途的写：文件键 → { again }
   let saveTick = $state(0);            // inflight 变了 → saving 重算
   const saving = $derived((saveTick, inflight.has(draftKey)));
@@ -366,12 +370,7 @@
         original = text; restored = false; saveFails = 0;
         justSaved = true; clearTimeout(savedT); savedT = setTimeout(() => (justSaved = false), 2200);
       }
-      const now = Date.now();
-      if (now - lastLinksRefresh > 10_000) {   // 正文变了 → 出链/反链重算（限频，自动保存别刷爆）
-        lastLinksRefresh = now;
-        LINKS_CACHE.delete(linksKeyOf(c));
-        if (alive && topItem() === c) loadLinks(c);
-      }
+      if (alive) syncLinks(c, text);   // 出链集合变了才重算索引（见 syncLinks）
       if (!quiet && alive) showToast(t('已保存'));
     } catch (e) {
       if (e?.conflict) clash = e.current;
@@ -468,24 +467,59 @@
   // —— md 双链数据（/api/file/mdlinks；按 rel 缓存，返回导航秒出，后台刷新）——
   const LINKS_CACHE = (window.__bridgeMdLinks ||= new Map());
   let links = $state(null);
+  // 当前文档的出链索引在路上、手上又没有缓存可先用：![[图]] 先占位（embedUrl 给 ''），不按「笔记同目录/名字」
+  // 猜一个地址发请求——猜错就是每张图一次 404 加一闪裂图，索引到了再换真地址
+  let linksPending = $state(false);
+  let linksFor = '';   // links 属于哪篇（linksKeyOf）：同一篇刷新时旧索引留到新的到货，换篇才清空（不然阅读态整篇重渲两次、图先掉回兜底地址再换回）
   async function loadLinks(c) {
-    links = null;
+    const cacheKey = linksKeyOf(c);
+    if (linksFor !== cacheKey) { links = null; linksFor = cacheKey; }
+    linksPending = false;
     // 双链/反链由服务端算（/api/file/mdlinks）。
     if (c.kind !== 'markdown' || c.saveTarget?.origin !== 'cloud') return;
-    const rel = c.saveTarget.rel, cacheKey = linksKeyOf(c);
+    const rel = c.saveTarget.rel;
     if (LINKS_CACHE.has(cacheKey)) links = LINKS_CACHE.get(cacheKey);
+    else if (!links) linksPending = true;
     try {
       const r = await api.mdLinks(rel, c.saveTarget.ws);
       LINKS_CACHE.set(cacheKey, r);
       if (linksKeyOf(cur) === cacheKey) links = r;
     } catch {}
+    finally { if (linksKeyOf(cur) === cacheKey) linksPending = false; }   // 失败也收：退回按名单/同目录解析
+  }
+  // 保存/跟盘后要不要重算出链：只看正文里的出链集合（[[ ]] / ![[ ]] / 相对 md 链接）变没变——反链是别的
+  // 笔记链过来的，跟这篇怎么改无关。以前每次自动保存（≥10s 一次）都整篇重算，服务端每次读整棵树的 md。
+  // 变了也按 10s 限频合并（连着改几个链接只算最后一次）
+  const linkSigs = new Map();   // linksKeyOf → 上次拉索引时的出链集合
+  let linksT = null, lastLinksAt = 0;
+  const linkSigOf = (text) => [...new Set(Array.from(String(text).matchAll(/(!?)\[\[([^[\]\n]+?)\]\]|\]\(([^()\s]+?\.md)\)/gi),
+    (m) => (m[2] != null ? m[1] + m[2].split(/[|#]/)[0].trim().toLowerCase() : 'md:' + m[3].toLowerCase())))].sort().join('\n');
+  function syncLinks(c, text) {
+    const key = linksKeyOf(c), sig = linkSigOf(text);
+    if (linkSigs.get(key) === sig) return;
+    linkSigs.set(key, sig);
+    clearTimeout(linksT);
+    linksT = setTimeout(() => {
+      lastLinksAt = Date.now();
+      LINKS_CACHE.delete(key);
+      if (alive && linksKeyOf(topItem()) === key) loadLinks(topItem());
+    }, Math.max(0, lastLinksAt + 10_000 - Date.now()));
   }
   const outLinks = $derived(links?.outgoing?.filter((o) => !o.embed) || []);
   const blCount = $derived(links?.backlinks?.reduce((n, b) => n + b.count, 0) || 0);
 
   // —— 笔记结构：frontmatter 属性 + 正文渲染 + 统计 ——
   const note = $derived(isMd ? parseNote(content) : null);
-  const stats = $derived(note ? noteStats(note.body) : null);
+  // 词数/字符数只在尾栏显示，不必逐键重算（长文档每键整篇扫一遍）：打开/换篇/存盘后当场算，编辑中停笔 400ms 再算
+  let stats = $state(null), statsT = null, statsFor = '';
+  $effect(() => {
+    const body = note?.body, key = draftKey;
+    clearTimeout(statsT);
+    if (body == null) { stats = null; return; }
+    if (statsFor !== key || loading || !dirty) { statsFor = key; stats = noteStats(body); return; }
+    statsT = setTimeout(() => { stats = noteStats(body); }, 400);
+    return () => clearTimeout(statsT);
+  });
   let propsOpen = $state(true);
 
   const dirOf = (rel) => String(rel || '').split('/').slice(0, -1).join('/');
@@ -525,7 +559,10 @@
       NAMES_CACHE.set(key, { at: Date.now(), p: fresh });
       p = hit ? hit.p : fresh;
     }
-    return p.then((names) => { if (namesKeyOf(cur) === key) namesNow = names; return names; });
+    return p.then((names) => {
+      if (namesKeyOf(cur) === key && namesNow !== names) { namesNow = names; refreshEmbeds(); }   // 名单到货：编辑态的嵌入可能解析得出了
+      return names;
+    });
   }
   // 在名单里认一个 [[名字]]：带路径的按相对路径后缀认（同服务端 mdlinks），裸名先笔记后附件；
   // 名单已按离当前笔记的远近排好，取第一个就是最浅的那个（与 mdlinks「同名取最浅」一致）
@@ -557,14 +594,35 @@
     } catch { return null; }
   }
 
-  // ![[嵌入]] / 相对资源 → 可加载 URL：mdlinks 已解析的路径优先，回落同目录拼接
-  function embedUrl(name) {
+  // ![[嵌入]] / 相对资源 → 可加载 URL：mdlinks 已解析的路径优先，回落同目录拼接。
+  // wiki=true（![[名字]]，按全库名字解析）且出链索引还在路上、名单里也没有 → ''（占位，见 linksPending）
+  const fileUrlOf = (st, rel) => cloudFileUrl(rel, { ws: st.ws });
+  const resolvedEmbed = (name) => {
+    const k = String(name).toLowerCase();
+    return links?.outgoing?.find((o) => o.path && o.name.toLowerCase() === k)?.path
+      || findInNames(namesNow, name)?.path || null;   // 编辑时新插的 ![[附件]]：出链还没重算，先认补全名单
+  };
+  function embedUrl(name, wiki = false) {
     const st = cur.saveTarget;
     if (!st) return null;
-    const hit = links?.outgoing?.find((o) => o.path && o.name.toLowerCase() === String(name).toLowerCase());
-    const named = hit ? null : findInNames(namesNow, name);   // 编辑时新插的 ![[附件]]：出链还没重算，先认补全名单
-    const rel = hit ? hit.path : named ? named.path : joinRel(dirOf(st.rel), name);
-    return cloudFileUrl(rel, { ws: st.ws });
+    const rel = resolvedEmbed(name);
+    if (!rel && wiki && linksPending) return '';
+    return fileUrlOf(st, rel || joinRel(dirOf(st.rel), name));
+  }
+  // 主地址只是猜的（索引和名单里都没有：额外授权位置、手机本地、索引失败）时的备选：<笔记目录>/attachments/<名字>
+  //（bridge 插图的落盘处，同 saveAttachment）。阅读态/编辑态的图加载失败时按序换上
+  function embedAlts(name) {
+    const st = cur.saveTarget;
+    if (!st || String(name).includes('/') || resolvedEmbed(name)) return [];
+    return [fileUrlOf(st, joinRel(dirOf(st.rel), ATTACH_DIR + '/' + name))];
+  }
+  // 阅读态（与编辑态 callout 卡里的 HTML）：img 带 data-alt 的，加载失败换下一个备选（error 不冒泡，挂捕获）
+  function embedFallback(e) {
+    const img = e.target;
+    if (img?.tagName !== 'IMG' || !img.dataset?.alt) return;
+    const [next, ...rest] = img.dataset.alt.split('\n');
+    if (rest.length) img.dataset.alt = rest.join('\n'); else img.removeAttribute('data-alt');
+    if (EMBED_SRC_OK.test(next)) img.src = next;
   }
   // —— 插图 / 附件（编辑器粘贴、拖入、「插入 ▸ 图片或附件…」→ mdeditor/attach.js 调这里）——
   // 存放位置照 Obsidian「当前文件夹下的子文件夹」：<笔记目录>/attachments/（没有就建）。手机本地（SAF）
@@ -619,9 +677,9 @@
     return parts;
   }
   $effect(() => {
-    // 显式依赖：正文 + 双链索引（![[嵌入]]/相对资源 URL 靠 links 解析，索引到货要重渲染）
+    // 显式依赖：正文 + 双链索引（![[嵌入]]/相对资源 URL 靠 links 解析，索引到货要重渲染；在路上时嵌入先占位）
     const body = isMd && mode === 'preview' && !loading && !loadError ? (note?.body ?? '') : null;
-    links;
+    links; linksPending;
     const job = ++renderJob;
     if (body == null) { mdBlocks = []; mdRendering = false; return; }
     const parts = splitTopBlocks(body);
@@ -640,9 +698,9 @@
     const step = () => {
       if (job !== renderJob) return;
       const t0 = performance.now();
-      while (acc.length < parts.length && performance.now() - t0 < 12) acc.push(renderObsMarkdown(parts[acc.length], { embedUrl, footnotes }));
+      while (acc.length < parts.length && performance.now() - t0 < 12) acc.push(renderObsMarkdown(parts[acc.length], { embedUrl, embedAlts, footnotes }));
       if (acc.length < parts.length) { mdBlocks = [...acc]; mdRendering = true; schedule(); return; }
-      const notes = renderFootnoteSection(footnotes, { embedUrl });
+      const notes = renderFootnoteSection(footnotes, { embedUrl, embedAlts });
       mdBlocks = notes ? [...acc, notes] : [...acc];
       mdRendering = false;
     };
@@ -657,6 +715,12 @@
 
   // —— 点击接管：[[双链]] / 相对 md 链接 → 查看器内跳转；#锚 → 滚到标题 ——
   let mdEl = $state(null);
+  // ![[图]] 备选地址的换图（embedFallback）：阅读态正文 + 编辑器容器（callout 卡里的 HTML）各挂一个捕获监听
+  $effect(() => {
+    const els = [mdEl, edEl].filter(Boolean);
+    for (const el of els) el.addEventListener('error', embedFallback, true);
+    return () => { for (const el of els) el.removeEventListener('error', embedFallback, true); };
+  });
   // 触屏长选区护栏：拖选择柄时固定端滚出屏幕会被浏览器误命中到文首/左侧聊天（选区溢出全文），
   // 活动端拖出正文会跨进别的面板——见 lib/touchSelection.js；拖到上下边缘自动滚动见 touchAutoScroll.js
   let pageEl = $state(null);
@@ -866,7 +930,10 @@
       if (gone || !edEl) return;
       if (editor && edFor === key) {
         editor.setMode(m === 'live' ? 'live' : 'source');
+        embedSig = untrack(() => embedSigOf(content));   // LP 刚按当前解析整篇建过
+        if (m === 'live') noteTooBig(mod);
         if (pendingScroll) { pendingScroll = false; applyScroll(); }
+        flushEdWaiters();
         return;
       }
       destroyEditor();
@@ -884,25 +951,106 @@
         openLink: (url) => openExt(url),
         openRel: openRelHref,
         resolveUrl: embedUrl,
-        renderMd: (src) => renderObsMarkdown(src, { embedUrl }),
+        resolveAlts: embedAlts,         // ![[图]] 主地址是猜的时候的备选（ImageWidget 加载失败按序换）
+        renderMd: (src) => renderObsMarkdown(src, { embedUrl, embedAlts }),
         tailEl: () => tailEl,
         linkNames: () => linkNames(),   // [[ 补全名单（complete.js）
         readNote,                       // [[笔记#标题 补全取那篇笔记的原文
         saveAttachment,                 // 粘贴/拖入/选择的图片与文件存成附件（mdeditor/attach.js）
       });
+      embedSig = untrack(() => embedSigOf(content));
+      if (m === 'live') noteTooBig(mod);
       if (!ro) linkNames();             // 进编辑就预取：补全首弹不等网络，新写的链接/嵌入点开也认得
       edFor = key;
       if (!takeJumpHead() && pendingScroll) { pendingScroll = false; applyScroll(); }   // 双链跳标题优先于保进度
+      flushEdWaiters();
     })();
     return () => { gone = true; };
   });
+
+  // —— 编辑态的 ![[嵌入]] 跟上异步到货的解析数据 ——
+  // 编辑器建好时出链索引/名单常常还没到（mdlinks 几百毫秒，正文走本地协议几十毫秒就到），LP 只在建的那一刻
+  // 解析一次地址：到货不通知的话图一直停在占位/兜底地址上，要等聚焦或改字才重解析。只在嵌入地址真变了时
+  // 才让 LP 整篇重建一次（比对正文里所有 ![[图]] 的解析结果），大文档不白重建
+  let embedSig = '';
+  function embedSigOf(text) {
+    let s = '';
+    for (const m of String(text).matchAll(/!\[\[([^[\]\n]+?)\]\]/g)) s += (embedUrl(m[1].split(/[|#]/)[0].trim(), true) ?? '') + '\n';
+    return s;
+  }
+  function refreshEmbeds() {
+    if (!editor || edFor !== draftKey || mode !== 'live') return;
+    const sig = embedSigOf(content);
+    if (sig === embedSig) return;
+    embedSig = sig;
+    editor.refresh?.();
+  }
+  $effect(() => { links; linksPending; untrack(refreshEmbeds); });
+
+  // 文档超过 LP 的上限（mdeditor LP_MAX）时 LP 不做任何装饰、只剩源码——给一句提示，免得以为渲染坏了
+  let tooBigFor = '';
+  function noteTooBig(mod) {
+    if (!mod.LP_MAX || untrack(() => content).length <= mod.LP_MAX || tooBigFor === draftKey) return;
+    tooBigFor = draftKey;
+    showToast(t('文档过大，已关闭实时预览'));
+  }
+
+  // 等编辑器建好（阅读态里粘贴/拖进图片：先切到编辑态，编辑器是懒加载的）
+  const edWaiters = [];
+  function flushEdWaiters() { while (edWaiters.length) edWaiters.shift()(); }
+  function whenEditor() {
+    if (editor && edFor === draftKey) return Promise.resolve(editor);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), 8000);
+      edWaiters.push(() => { clearTimeout(timer); resolve(editor && edFor === draftKey ? editor : null); });
+    });
+  }
+
+  // —— 阅读态插图：粘贴 / 拖入文件 → 切到编辑态，落在对应位置（Obsidian 阅读视图不能插图，这里直接替用户切过去；
+  // 以前阅读态对粘贴/拖入毫无反应，拖放还冒泡给外层面板，看上去就是「插图失败」）——
+  const filesOf = (dt) => (dt?.files?.length ? [...dt.files] : [...(dt?.items || [])].filter((it) => it.kind === 'file').map((it) => it.getAsFile()).filter(Boolean));
+  const hasFiles = (dt) => [...(dt?.types || [])].includes('Files');
+  // 阅读态 y（相对 doc-scroll 内容顶）→ 源码位置；映射不了就文末
+  function readPos(clientY) {
+    const sc = docScrollEl, m = sc && readMap();
+    if (!m) return null;
+    const y = clientY == null ? sc.scrollTop + sc.clientHeight / 2 : sc.scrollTop + clientY - sc.getBoundingClientRect().top;
+    return m.toSrc(y)?.pos ?? null;
+  }
+  async function insertFromRead(files, pos, pasted) {
+    if (!editable) { showToast(t('此文档不可写')); return; }
+    setMdMode('live');
+    const ed = await whenEditor();
+    if (!alive) return;
+    if (!ed?.insertFiles?.(files, { pos, pasted })) showToast(t('插入失败：{reason}', { reason: files[0]?.name || '' }));
+  }
+  function readDragOver(e) {
+    if (!isMd || !editable || !hasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = 'copy'; } catch {}
+  }
+  function readDrop(e) {
+    if (!isMd || !hasFiles(e.dataTransfer)) return;
+    const files = filesOf(e.dataTransfer);
+    if (!files.length) return;
+    e.preventDefault();
+    e.stopPropagation();   // 别再冒泡到外层（工作空间/对话的拖放上传）
+    insertFromRead(files, readPos(e.clientY), false);
+  }
+  function readPaste(e) {
+    const cd = e.clipboardData;
+    const files = filesOf(cd);
+    if (!isMd || !files.length || (cd.getData('text/plain') || '').trim()) return;   // 同编辑态：剪贴板带文字时让文字优先
+    e.preventDefault();
+    insertFromRead(files, readPos(null), true);
+  }
   $effect(() => () => {
     // 关查看器（没有浮层可收时的 Esc、安卓返回都直接卸载组件，绕过 guardDirty）：停笔不到 1.2s、
     // 自动保存还没触发的内容当场补存，不能只留在内存草稿里
     // （卸载后别读派生量 editable：直接按当前文档的保存目标判断）
     const c = topItem(), st = c?.saveTarget;
     if (st && !IS_SHARE && content !== original && !conflict) saveDoc(c, content, true, original);
-    alive = false; destroyEditor(); loadCtrl?.abort();
+    alive = false; destroyEditor(); loadCtrl?.abort(); clearTimeout(linksT); clearTimeout(statsT); flushEdWaiters();
   });   // 组件卸载兜底：编辑器销毁 + 在途加载掐断（在途的写照常发完，见 saveDoc）
 
   // —— 属性面板（阅读态只读；编辑态的可写面板在 mdeditor/props.js，类型判定共用 obsmd.propKind）——
@@ -982,7 +1130,7 @@
     {:else if isMd && mode === 'preview'}
       <div class="doc-scroll" bind:this={docScrollEl}>
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-        <div class="doc-page" bind:this={pageEl} onclick={mdClick}>
+        <div class="doc-page" bind:this={pageEl} onclick={mdClick} ondragover={readDragOver} ondrop={readDrop} onpaste={readPaste}>
           {#if note?.props?.length}
             <section class="doc-props" class:gap={/^[ \t]*\r?\n/.test(note.body)}>
               <button class="doc-props-h" onclick={(e) => { e.stopPropagation(); propsOpen = !propsOpen; }}>
@@ -1242,6 +1390,9 @@
   .doc-md :global(.doc-fence-copy) { margin-left: auto; border: 1px solid var(--md-line); background: var(--md-panel); color: var(--md-fg-2); font-size: 11.5px; padding: 2px 10px; border-radius: 999px;
     transition: background var(--mo-micro, 140ms), color var(--mo-micro, 140ms); }
   .doc-md :global(.doc-fence-copy:active) { background: var(--md-bg-3); }
+  /* ![[图]] 地址还在解析（出链索引在路上）：淡色占位块，同编辑态 .mde-img-pending */
+  .doc-md :global(img.wk-pending) { display: inline-block; height: 96px; max-width: 100%; border-radius: 8px; background: var(--md-bg-2); vertical-align: bottom; }
+  .doc-md :global(img.wk-pending:not([width])) { width: 160px; }   /* 写了尺寸（![[x|305]]）就按它的宽占位 */
 
   /* —— 文末尾栏：反向链接 / 出链 / 词数（阅读态挂 .doc-tailhost，编辑态被 CM 收编进正文末尾）—— */
   .doc-tail[hidden] { display: none; }

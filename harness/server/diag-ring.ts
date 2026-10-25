@@ -81,7 +81,10 @@ export function dumpRingSync(reason: string, error?: unknown): string | null {
   try {
     const dir = diagnosticsDir();
     fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `crash-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}.json`);
+    // 同一毫秒里落两份（重置后连着落、测试里的循环）时间戳会撞名、后一份覆盖前一份：同名就加序号
+    const stem = `crash-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+    let file = path.join(dir, `${stem}.json`);
+    for (let n = 1; fs.existsSync(file); n++) file = path.join(dir, `${stem}-${n}.json`);
     const err = error instanceof Error
       ? { name: error.name, message: redactOutput(error.message), stack: redactOutput(String(error.stack ?? "")) }
       : error === undefined ? undefined : { message: redactOutput(String(error)) };

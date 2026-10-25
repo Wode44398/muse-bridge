@@ -55,7 +55,7 @@ and settings rows all use **sentence case**: capitalize the first word and prope
 | Admin console → Users | Admin Console → Users |
 
 Proper nouns and official feature names keep their capitals: Claude, Claude Code, ChatGPT, Codex,
-Gemini, Vertex AI, Veo, Imagen, Lyria, Antigravity, Obsidian, Windows, Android, File Explorer,
+Gemini, Vertex AI, Veo, Imagen, Lyria, Obsidian, Windows, Android, File Explorer,
 Recycle Bin, Task Scheduler, Cloudflare Tunnel, Liquid Glass, Live Preview (Obsidian),
 Quick Ask, Local Agent, Bridge Keyboard, UI Automation, Wi‑Fi, LAN, QR code, API key, URL, PDF, ZIP.
 **dimensio is always lowercase**, even at the start of a label (“dimensio · Done”).
@@ -249,7 +249,6 @@ parts of speech.
 | `claude` | Claude page (incl. single-agent mode and Quick Ask) |
 | `chatgpt` | ChatGPT mode of the ChatGPT/Codex page |
 | `codex` | Codex mode of the ChatGPT/Codex page |
-| `agy` | Antigravity page |
 | `vertex` | Vertex page (media + Gemini chat) |
 | `dimensio` | dimensio (only for dimensio-only wording; dimensio has its own dictionary) |
 | `files` | Workspace page, phone/web file manager (iOS Files style) |
@@ -280,7 +279,7 @@ Keep exactly as written (case included). Don’t add “the” except where show
 | Our products | dimensio (always lowercase); Quick Ask; Local Agent |
 | Anthropic | Claude, Claude Code, Claude in Chrome, claude.ai, Opus, Sonnet, Haiku, Fable, model ids (`claude-opus-5-5`) |
 | OpenAI | ChatGPT, Codex, GPT‑x model names, Plus, Pro, Free (plan names) |
-| Google | Gemini, Vertex AI (page label “Vertex”), Veo, Imagen, Lyria, Chirp, SynthID, Antigravity, Google Search |
+| Google | Gemini, Vertex AI (page label “Vertex”), Veo, Imagen, Lyria, Chirp, SynthID, Google Search |
 | Other AI | DeepSeek (“DeepThink” is its feature name), Kimi, Qwen, GLM / Z.ai, llama.cpp, OpenRouter, vLLM, Ollama, Depth Anything |
 | Platforms & apps | Windows, Android, iOS, macOS, Edge, Chrome, WebView, Electron, Obsidian, Cloudflare, Cloudflare Tunnel, cloudflared, OSS (Alibaba Cloud OSS), NapCat, QQ, WeChat (微信), MIUI, Git, GitHub, npm, Docker |
 | Windows names | File Explorer, Recycle Bin, Task Scheduler, Task Manager, This PC, UI Automation |
@@ -303,7 +302,6 @@ Tool **display labels** are translated (执行命令 → Run command); tool **id
 | Claude page | Anthropic — Claude desktop Code tab / claude.ai/code | “session”, “composer”, permission-mode names, “Rewind”, “Compact”, “Effort”, curly quotes |
 | ChatGPT mode | OpenAI — ChatGPT web/app | “chat”, “Ask anything”, “Log out”, “Temporary chat”, “Thinking effort” |
 | Codex mode | OpenAI — Codex app | “chat”, “Reasoning effort”, “Approval prompt”, “Scheduled tasks”, “Full access” |
-| Antigravity page | Google Antigravity | “Ask anything…”, “agent”, “conversation” in prose |
 | Vertex page | Google Vertex AI Studio / Gemini app | “Generate”, “Parameters”, “Aspect ratio”, “Negative prompt”, “Thinking level”, “Grounding with Google Search” |
 | dimensio | Claude Code wording where equivalent, otherwise §4 | “chat”, “Side panel”, “Checkpoint”, “Permission request” |
 | Workspace (phone/web) | Apple iOS Files | Locations, Recents, Shared, Get Info, On My Phone |
@@ -314,15 +312,15 @@ Tool **display labels** are translated (执行命令 → Run command); tool **id
 | Settings (single-agent mode) | claude.ai settings dialog | General, Appearance, Account, Usage |
 | Admin console | Google Admin console / Claude admin settings | Users, Devices, Audit log, Quotas |
 | Phone control, permissions | Android Settings | Accessibility, Display over other apps, Battery optimization, Install unknown apps |
-| Home screen, assistant | Apple (Dock, Wallpaper, Liquid Glass) | Assistant = the glass orb |
+| Home screen | Apple (Dock, Wallpaper, Liquid Glass) | — |
 
 ### 3.2 Terms that differ by surface
 
 Plain key = the Default column. Other columns are `tc('<id>', '中文')` variants.
 
-| 中文 | Default | claude | chatgpt / codex | vertex / agy | files / explorer |
+| 中文 | Default | claude | chatgpt / codex | vertex | files / explorer |
 |---|---|---|---|---|---|
-| 对话 | Chat | Session (lists, titles, menus); “conversation” when it means the transcript | Chat | Chat; agy prose: conversation | — |
+| 对话 | Chat | Session (lists, titles, menus); “conversation” when it means the transcript | Chat | Chat | — |
 | 新建对话 / 新对话 | New chat | New session | New chat | New chat | — |
 | 会话 | Session | Session | Chat (chatgpt only) | Session | — |
 | 思考强度 | Effort | Effort | chatgpt: Thinking effort; codex: Reasoning effort | vertex: Thinking level | — |
@@ -335,7 +333,7 @@ Plain key = the Default column. Other columns are `tc('<id>', '中文')` variant
 | 联网搜索 | Web search | Web search | Web search | vertex: Grounding with Google Search | — |
 | 文件+对话 / 仅文件 | Files and conversation / Files only | Code and conversation / Code only | — | — | — |
 | 插话 | Steer | Queue (verb) / Queued message | Steer | Steer | — |
-| 发消息… (placeholder) | Message… | Reply… (existing session) | Ask anything | agy: Ask anything… | — |
+| 发消息… (placeholder) | Message… | Reply… (existing session) | Ask anything | — | — |
 | 回收站 | Recycle Bin | — | — | — | Recycle Bin (both; it is the PC’s real Recycle Bin) |
 | 属性 | Properties | — | — | — | files: Get Info (menu) / Info (pane); explorer: Properties |
 | 类型 / 种类 | Type | — | — | — | Type (both) |
@@ -427,7 +425,7 @@ Columns: **中文** | **English** (canonical, plain `t()`) | **Context variants*
 | 已思考 {n} 秒 | Thought for {n}s | ≥1 min: Thought for {m}m {s}s | Claude |
 | 查看过程 | Show thinking | — | Gemini “Show thinking” |
 | 思考摘要 / 想法 | Thinking summary | vertex: Thoughts | Gemini API |
-| 深度思考 | Extended thinking | Assistant with DeepSeek: DeepThink | Claude |
+| 深度思考 | Extended thinking | — | Claude |
 | 思考一下 | Think | chatgpt tools menu: Think longer | OpenAI |
 | 回复中 | Responding… | 回复已生成: Response ready | — |
 | 等待模型回复 | Waiting for model… | claude: Waiting for Claude… | Claude |
@@ -632,7 +630,7 @@ Columns: **中文** | **English** (canonical, plain `t()`) | **Context variants*
 | 本机模型 | Local model | — | — |
 | 本地 AI | Local AI | 启动本地 AI: Start local AI | — |
 | 显存 / 权重 | VRAM / Weights | — | — |
-| 引擎 | Engine | 全局助手引擎: Assistant engine | — |
+| 引擎 | Engine | — | — |
 | 下线 | Retires | 将于 7月23日下线: Retires on Jul 23 | Claude “Retired” |
 | 输入建议 | Prompt suggestions | — | Claude |
 | 填入建议 | Accept suggestion | hint: Tab to accept · Esc to dismiss | — |
@@ -768,9 +766,10 @@ Columns: **中文** | **English** (canonical, plain `t()`) | **Context variants*
 | 过期 / 有效期 | Expires | field: Expiration; state: Expired | Claude |
 | 链接已失效 | Link expired | — | — |
 | 快照 | Snapshot | — | OpenAI “snapshot of this chat” |
-| 快照对话 | Snapshot chat | — | coined |
+| 快照对话（旧称） | ~~Snapshot chat~~ → Temporary chat | — | renamed 2026-10-22 (S1-6): “snapshot” stays for /chat links and mid-turn checkpoints |
+| 临时对话 | Temporary chat | section: Temporary chats; New temporary chat; Temporary chat recycle bin | ChatGPT “Temporary chat” |
 | 铸快照 | Create chat snapshots | Allowed to create snapshots | coined |
-| 新建快照 | New snapshot | — | — |
+| 新建快照（旧称） | ~~New snapshot~~ → New temporary chat | — | renamed 2026-10-22 (S1-6) |
 | 关停 | Shut down | — | — |
 | 销毁 | Delete | Deleted automatically after 1 hour with no new messages | user-facing “delete” |
 | 临时对话空间 | Temporary chat | — | ChatGPT |
@@ -823,9 +822,9 @@ Columns: **中文** | **English** (canonical, plain `t()`) | **Context variants*
 | 底栏 | Dock | — | Apple |
 | 壁纸 | Wallpaper | Choose wallpaper; My wallpapers | iOS |
 | 动态（壁纸） | Live | — | Android “Live wallpaper” |
-| 空间壁纸 / 空间化 | Spatial wallpaper | progress: Adding depth… | iOS “Spatial Scene” |
+| 空间壁纸 | Spatial wallpaper | — | iOS “Spatial Scene” |
 | 景深 | Depth effect | Depth intensity | iOS “Depth Effect” |
-| 深度模型 | Depth model | — | — |
+| 深度图 | Depth map | — | — |
 | 流体壁纸 | Fluid wallpaper | — | coined |
 | 液态玻璃 / 玻璃 | Liquid Glass | tight: Glass | Apple |
 | 光感 / 折射 / 色散 / 磨砂 | Lighting / Refraction / Dispersion / Frost | — | Figma glass |
@@ -838,7 +837,6 @@ Columns: **中文** | **English** (canonical, plain `t()`) | **Context variants*
 | 跟随系统 / 浅色 / 深色 | System / Light / Dark | settings (iOS shell): Automatic | Claude, iOS |
 | 明亮系统 / 深色系统 | Light set / Dark set | — | coined |
 | 切换明暗主题 | Toggle light/dark theme | — | Claude |
-| 助手 / 全局助手 | Assistant | 呼出助手: Open Assistant | Siri, Google Assistant |
 | 呼出 / 唤出 | Open | — | — |
 | 挖孔 | Camera cutout | Calibrate cutout position | Android DisplayCutout |
 | 校准 | Calibrate | — | Claude |
@@ -964,7 +962,7 @@ Columns: **中文** | **English** (canonical, plain `t()`) | **Context variants*
 | 管理员登录 | Admin sign-in | — | — |
 | 服务账号 | Service account | — | Google Cloud IAM |
 | 普通用户 / 普通档 | Standard user | chip: Standard | Windows account type |
-| Pro 用户 / Pro 档 | Pro user | chip: Pro | — |
+| 完全信任 / 完全信任用户 / 完全信任档（旧称 Pro 用户 / Pro 档） | Full trust / Full trust user | chip: Full trust; stored tier value is still `pro` | — |
 | 完整权限用户 | Full-access users | — | — |
 | 命令行 | Shell | Shell access | Claude Code docs |
 | 档位（用户） | Tier | use tc('admin', '档位') | — |
@@ -1179,7 +1177,7 @@ Names for the app’s own features. Use them exactly, in sentence case except wh
 | 工作区 | Side panel | Matches OpenAI “side panel”; keeps “Workspace” unambiguous |
 | 工作台 | Workbench | The Claude page’s browser/terminal/files/tasks set; a bench of tools |
 | 底栏 | Dock | The home-screen launcher; Apple’s word |
-| 快照对话 | Snapshot chat | A throwaway chat outside projects; pairs with “snapshot” for /chat links |
+| 临时对话 | Temporary chat | A throwaway chat outside projects, cleared after 30 days untouched; formerly 快照对话 / Snapshot chat (renamed 2026-10-22 so “snapshot” only means /chat links and checkpoints) |
 | 聊天快照 /chat | Chat snapshot | Public read-only copy link; OpenAI calls shared copies “snapshots” |
 | 离开模式 | Away mode | Short, says “nobody will answer cards”; chip: Away |
 | 插话 | Steer | OpenAI’s term for mid-turn guidance; Claude page uses queue wording |
@@ -1194,7 +1192,7 @@ Names for the app’s own features. Use them exactly, in sentence case except wh
 | 安全栅门 | Safety fallback | Automatic model switch when a safety gate trips |
 | 快速识图 | Fast image mode | Downscaled vision input; says what the user gains |
 | 快速提问 | Quick Ask | Global-shortcut mini window; proper name, title case |
-| 全局助手 | Assistant | The Siri-like glass orb; “global” is redundant in English |
+| Agent 接入 / 密钥 / 项目手册 | Agent access / Key / Project handbook | Settings page that lets other agents call bridge; “key” as in API key |
 | 悬浮外壳 | Floating capsule | Android overlay shaped like a capsule |
 | Bridge 输入法 | Bridge Keyboard | Android calls IMEs keyboards; proper name, title case |
 | 本机 Agent | Local Agent | Desktop-control agent on the PC; proper name, title case |
@@ -1206,7 +1204,7 @@ Names for the app’s own features. Use them exactly, in sentence case except wh
 | 主机派发密钥 | Host dispatch secret | Secret the host uses to dispatch jobs; “secret” per Claude wording |
 | 附着形态 | Attached mode | Desktop app attaching to a service run by Task Scheduler |
 | 主机端 / 服务端 / 用户端 | Host edition / Server edition / Client | The three editions; chips Host / Server / Client |
-| 普通 / Pro（用户档） | Standard / Pro | Windows account-type echo; Pro = shell access |
+| 普通 / 完全信任（用户档，旧称 Pro） | Standard / Full trust | Windows account-type echo; Full trust = shell access, same as an admin |
 | 额度与注册 | Quotas & sign-ups | Admin tab: per-user quotas and registration |
 | 线路 | Route | LAN vs tunnel path |
 | 局域网直连 | LAN direct | Same-Wi‑Fi direct connection |

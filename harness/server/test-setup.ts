@@ -21,6 +21,9 @@ if (process.env.DIMENSIO_TEST_ISOLATION !== "1") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dimensio-test-data-"));
   const at = (name: string) => path.join(root, name);
   fs.mkdirSync(at("workspace"));
+  // 继承来的数据目录（DIMENSIO_DATA_DIR，bridge 给 harness 设的）不认：下面逐项都改道了，漏设 / 被删的那项一律
+  // 回落到 harness 目录、在 paths.ts 当场抛错（#14 的守法），不随继承来的值落到别处、也不因它恰好在临时目录下就悄悄放行。
+  delete process.env.DIMENSIO_DATA_DIR;
   Object.assign(process.env, {
     DIMENSIO_TEST_ISOLATION: "1",
     SESSIONS_DIR: at("sessions"),

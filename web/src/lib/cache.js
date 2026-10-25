@@ -36,13 +36,14 @@ function open() {
   return dbp;
 }
 
-async function put(k, v) {
+// extra：随记录存的附加字段（目前只有 fp——单会话正文对应的服务端指纹，见 cacheMessages）
+async function put(k, v, extra) {
   try {
     const db = await open();
     await new Promise((res, rej) => {
       const t = db.transaction('kv', 'readwrite');
       const ts = Date.now();
-      t.objectStore('kv').put({ k, v, ts, order: ts * 1000 + (writeSeq++ % 1000), bytes: roughBytes(v) });
+      t.objectStore('kv').put({ k, v, ts, order: ts * 1000 + (writeSeq++ % 1000), bytes: roughBytes(v), ...(extra || {}) });
       t.oncomplete = res;
       t.onerror = () => rej(t.error);
     });
@@ -63,13 +64,14 @@ async function get(k) {
 }
 
 // 带写入时间的读法：预取器拿 ts 对比服务端 mtime——缓存不旧于服务端就不重拉，省隧道往返。
+// fp：写入时那份正文对应的服务端指纹（有才带）——mtime 变了也先拿它去问服务端「变了没」，没变只回几十字节。
 async function getMeta(k) {
   try {
     const db = await open();
     return await new Promise((res, rej) => {
       const t = db.transaction('kv', 'readonly');
       const rq = t.objectStore('kv').get(k);
-      rq.onsuccess = () => res(rq.result ? { v: rq.result.v, ts: rq.result.ts || 0 } : null);
+      rq.onsuccess = () => res(rq.result ? { v: rq.result.v, ts: rq.result.ts || 0, fp: rq.result.fp || '' } : null);
       rq.onerror = () => rej(rq.error);
     });
   } catch { return null; }
@@ -143,7 +145,8 @@ export const cacheSessions = (list) => put('sessions', snap(list));
 export const getCachedSessions = () => get('sessions');
 
 // —— 单会话消息（Claude，chat.messages 渲染态快照）——
-export const cacheMessages = (id, messages) => put('msg:' + id, snap(messages));
+// fp：这份快照就是服务端 /api/session 那一份完整记录时传它的指纹（裁过 / 本地直播攒出来的不传），预取器据此短路。
+export const cacheMessages = (id, messages, fp) => put('msg:' + id, snap(messages), fp ? { fp: String(fp) } : null);
 export const getCachedMessages = (id) => get('msg:' + id);
 export const getCachedMessagesMeta = (id) => getMeta('msg:' + id);
 export const removeCachedMessages = (id) => remove('msg:' + id);

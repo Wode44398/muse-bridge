@@ -22,7 +22,10 @@
 
   function close() { ui.loginOpen = false; err = ''; }
   function reset() { username = ''; password = ''; password2 = ''; invite = ''; tok = ''; err = ''; }
-  function setMode(m) { mode = m; err = ''; }
+  let picked = false;
+  function setMode(m) { mode = m; err = ''; picked = true; }
+  // 单人服务器（没开多用户）账号密码只有服务账号能登：默认摆令牌登录（用户点过别的就不再改）
+  $effect(() => { if (open && !picked && mode === 'login' && me.features?.multiUser === false) mode = 'token'; });
 
   // 登录成功后统一从 /api/auth 刷新身份（tier 等以它为准；login 响应不带这些）
   async function refreshMe(fallback) {
@@ -88,8 +91,8 @@
       <h2 class="lg-t">{TITLE[mode]}</h2>
       <p class="lg-s">
         {#if mode === 'qr'}{t('在已登录的手机浏览器里打开本站，在账户菜单里点「扫一扫」')}
-        {:else if mode === 'token'}{me.edition === 'server' ? t('粘贴安装时显示的访问令牌（服务器上只存它的哈希），以管理员身份登录') : t('粘贴服务器数据目录 config.json 里的 token，以管理员身份登录')}
-        {:else if mode === 'register'}{t('需要邀请码；注册后直接登录')}
+        {:else if mode === 'token'}{me.tokenHashed ? t('粘贴安装时显示的访问令牌（服务器上只存它的哈希），以管理员身份登录') : t('粘贴服务器数据目录 config.json 里的 token，以管理员身份登录')}
+        {:else if mode === 'register'}{t('需要邀请码；注册后直接登录')} {t('服主默认只看得到你的会话标题、时间和用量；看内容要你在设置里允许。')}
         {:else}{t('登录 Muse Bridge，继续你的工作')}{/if}
       </p>
 

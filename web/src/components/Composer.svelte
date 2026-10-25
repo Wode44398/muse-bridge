@@ -1,7 +1,7 @@
 <script>
   import { uiAlert } from '../lib/dialogs.js';
   import { session, settings, caps, compose, status, prefs } from '../lib/state.svelte.js';
-  import { send, stop, bgHoldNow } from '../lib/chat.svelte.js';
+  import { send, stop, bgHoldNow, steer, queueSend, queuedItems, editLastQueued, prewarmNewChat } from '../lib/chat.svelte.js';
   import SlashMenu from './SlashMenu.svelte';
   import { loadCommands, filterCommands } from '../lib/slashCommands.js';
   import { api } from '../lib/api.js';
@@ -9,14 +9,18 @@
   import EffortPanel from './EffortPanel.svelte';
   import QuotaRing from './QuotaRing.svelte';
   import AddMenu from './AddMenu.svelte';
-  import { ICON_FEATHER, ICON_RESEARCH } from '../lib/icons.js';
+  import PermissionModePicker from './claude/PermissionModePicker.svelte';   // 权限模式芯片（Ctrl+Shift+M）
+  import { menuIcon } from '../lib/menuIcons.svelte.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { claudeDefaultModel, claudeEffortFallback } from '../lib/caps.js';
+  import { cp, customModelInfo, isCustomModel, ensureCustomModels, effortsFor, effortChoices, defaultEffortFor, effectiveEffort, modelSupportsFast } from '../lib/claudeProviders.svelte.js';   // 自定义 API 的模型（设置 › Claude › 模型服务）
   import { dropHasDirs, entriesFromDrop, walkEntries, itemsFromDirInput, groupByRoot, skipNote, pool } from '../lib/dirDrop.js';
   import { fileToBase64, filesFromInput, removeAttachment, uploadAttachment } from '../lib/attachments.js';
   import { untrack } from 'svelte';
   import { draft, registerComposerReader } from '../lib/composerBridge.svelte.js';
+  import { draftText, noteComposerText, startComposerDrafts } from '../lib/composerDrafts.svelte.js';
   import { t } from '../lib/i18n.js';
+  import { cs as claudeCs } from '../lib/claudeSettings.svelte.js';   // 设置 › Claude › 对话 › 输入建议（服务端为准）
 
   let { placeholder = 'Type / for skills' } = $props();
   let field = $state();
@@ -42,6 +46,18 @@
     field.focus();
     placeCaretEnd(field);
   });
+  // —— 会话草稿缓存（lib/composerDrafts）：每个会话一份没发出去的文字 + 附件，切走 / 关窗口不丢 ——
+  // 本模块写进来的文字不算用户输入（不上报、不触发新会话预热），只重算占位与「/」菜单状态。
+  startComposerDrafts();
+  $effect(() => {
+    draftText.nonce;
+    if (!field) return;
+    const txt = untrack(() => draftText.text);
+    if ((field.innerText || '').replace(/ /g, ' ') === txt) return;
+    if (txt) field.innerText = txt; else field.replaceChildren();
+    syncFieldState();
+    if (document.activeElement !== field) slashQ = null;   // 恢复的草稿是 /xxx 也别凭空弹菜单
+  });
   // 登记「输入框里有没有草稿」读取器：官方 Edit prompt and retry 在非空时拒绝，不冲掉人正在写的东西。
   $effect(() => registerComposerReader(() => !!(field?.innerText || '').replace(/ /g, ' ').trim()));
 
@@ -59,9 +75,17 @@
   }
 
   const nameOf = (list, id) => (list.find((x) => x.id === id) || {}).name || id;
-  const modelList = $derived(caps.data?.claude?.models || []);
+  // 自定义 API 的模型并进来：芯片显示它的名字（custom:<服务>:<模型>）
+  const modelList = $derived([...(caps.data?.claude?.models || []), ...cp.models]);
   const curModel = $derived(settings.model || claudeDefaultModel(caps.data));
-  const modelName = $derived(nameOf(modelList, curModel));
+  const curCustom = $derived(isCustomModel(curModel));
+  // 自定义模型清单还没到（冷启动、总线 hello 之前）：芯片先灰着显示占位，推理强度芯片先不判；到了才分得清「已停用」
+  const customPending = $derived(curCustom && !cp.modelsReady && !customModelInfo(curModel));
+  $effect(() => { if (curCustom && !cp.modelsReady) ensureCustomModels(); });
+  // 选中的自定义模型已被删 / 停用：芯片别露出 custom:p-… 这串 id
+  const modelName = $derived(curCustom && !customModelInfo(curModel) ? (customPending ? t('自定义模型') : t('已停用的自定义模型')) : nameOf(modelList, curModel));
+  // 自定义模型的推理强度按它自己的档位表（设置 › Claude › 模型服务）；表是空的 = 不发思考参数，芯片不显示
+  const effortHidden = $derived(curCustom && (customPending || !effortsFor(curModel, caps.data).length));
   // 会话实际模型 ≠ 所选：安全栅门自动回退（system/model_refusal_fallback，scope session）后内核在
   // status.models[sid] 记下「本会话已切到 X」，settings.model 也随 session{swapped} 换成 X——两者
   // 一致时芯片就是 X，什么也不标；人再手动切回原模型才会不一致 → 点线下划 + title 说明
@@ -77,18 +101,21 @@
   // effort 芯片显示【实际生效】档位（SDK 0.3.257：Stop hook 回报本轮真正发给 API 的档，经组织
   // 上限 / 模型不支持降档之后）——但用户刚改过选择（effortAt 更新）就先显示选择，等下一轮
   // 跑完再以实况为准；实况 ≠ 选择时芯片加点线下划 + title 说明。
-  const effortList = $derived(caps.data?.claude?.efforts || []);
+  const effortList = $derived(curCustom ? effortChoices(curModel, caps.data) : (caps.data?.claude?.efforts || []));
+  // 自定义模型没有「实况」：CLI 回报的是它眼里的官方档位，真正发出去的是代理按档位表写的值——只显示所选
   const effortApplied = $derived.by(() => {
+    if (curCustom) return null;
     const a = session.id ? status.efforts[session.id] : null;
     return a && a.level && a.at > (settings.effortAt || 0) ? a.level : null;
   });
-  // 没选 effort = 该模型的 API 默认档（Opus 5.5 是 medium，其余 high；capabilities.effortDefaults）
-  const effortChosen = $derived(settings.effort || claudeEffortFallback(caps.data, curModel));
+  // 没选 effort = 该模型的 API 默认档（Opus 5.5 是 medium，其余 high；capabilities.effortDefaults）；
+  // 自定义模型 = 它的默认档，默认档为空就是「默认」（什么都不发）。选的不在它表里（换模型带过来的）按没选算。
+  const effortChosen = $derived(curCustom ? (effectiveEffort(curModel, settings.effort) || defaultEffortFor(curModel) || '') : (settings.effort || claudeEffortFallback(caps.data, curModel)));
   const effortName = $derived(nameOf(effortList, effortApplied || effortChosen));
   const effortMismatch = $derived(!!effortApplied && effortApplied !== effortChosen);
   const effortTitle = $derived(effortMismatch ? t('已选 {selected}，本会话实际生效 {active}', { selected: nameOf(effortList, effortChosen), active: effortName }) : '');
   // fast mode 生效中（开关开 + 当前模型支持）→ 芯片显示「Opus 5 · Fast」（官方同款）
-  const fastOn = $derived(settings.fast && (caps.data?.claude?.fast || []).includes(settings.model || claudeDefaultModel(caps.data)));
+  const fastOn = $derived(settings.fast && modelSupportsFast(settings.model || claudeDefaultModel(caps.data), caps.data));
 
   // —— 「/」命令菜单：输入框内容整体是 `/xxx`（单 token、无空白）时打开；空格/换行即关。
   // 数据来自 /api/commands（SDK supportedCommands + terminal_slash_commands 段已在数据层藏掉）。
@@ -101,7 +128,7 @@
   // Esc 收起这一条。在跑 / 快照 / 设置里关了都不显示。
   let empty = $state(true);
   const suggestion = $derived.by(() => {
-    if (!prefs.promptSuggest || IS_CSNAP || session.busy || !session.id) return '';
+    if (claudeCs.values.promptSuggestions === false || IS_CSNAP || session.busy || !session.id) return '';
     const s = status.suggestions[session.id];
     return s && !s.dismissed ? s.text : '';
   });
@@ -121,6 +148,13 @@
   }
 
   function onInput() {
+    syncFieldState();
+    noteComposerText(empty ? '' : field?.innerText || '');
+    // 新对话里开始打字：让服务端提前起好 CLI（只对新会话生效、自带节流，见 prewarmNewChat）
+    if (!empty) prewarmNewChat();
+  }
+  // 输入框内容 → 占位 / 「/」菜单状态（用户输入与草稿恢复共用）
+  function syncFieldState() {
     const raw = field?.innerText || '';
     empty = !raw.trim();   // trim 连 contenteditable 的 &nbsp; 填充一起去掉
     // 删空后 contenteditable 常留一个 <br>：:empty 不再命中，占位文字（含输入建议）就出不来——没字了就清干净。
@@ -140,6 +174,7 @@
     field.textContent = '/' + c.name + ' ';
     empty = false;
     slashQ = null;
+    noteComposerText(field.innerText);
     field.focus();
     placeCaretEnd(field);
   }
@@ -233,16 +268,37 @@
   const holding = $derived(!!bgHoldNow());
   const busyNow = $derived(session.busy && !holding);
 
-  function submit() {
+  // innerText（非 textContent）：保留 contenteditable 里 <br>/<div> 代表的换行，
+  // 多行 prompt / 粘贴的代码不再被压成一行。\u00a0 是 contenteditable 的填充空格。
+  const fieldText = () => (field?.innerText || '').replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  const clearField = () => { field.textContent = ''; empty = true; noteComposerText(''); };
+  const refill = (txt) => { if (field && !fieldText()) { field.innerText = txt; onInput(); } };
+
+  // 官方 Code 页：Claude 工作中 回车 = 插话（priority next，做完手头这一步就读，不打断），
+  // Ctrl/Cmd+Enter = 稍后发送（排进队列，这一轮结束后合并发出）；空闲时两者都是普通发送。
+  // 快照访客没有插话/排队（服务端也不给）：运行中照旧只有停止键。
+  const canSteer = $derived(!IS_CSNAP && !!session.id);
+  function submit(mode = 'send') {
     if (uploading) return;   // 附件还在上传——发送按钮已是禁用态，等传完再发
-    // innerText（非 textContent）：保留 contenteditable 里 <br>/<div> 代表的换行，
-    // 多行 prompt / 粘贴的代码不再被压成一行。  是 contenteditable 的填充空格。
-    const txt = (field?.innerText || '').replace(/ /g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-    if ((!txt && !compose.attachments.length) || busyNow) return;
-    field.textContent = '';
-    empty = true;
+    const txt = fieldText();
+    if (!txt && !compose.attachments.length) return;
+    if (busyNow) {
+      if (!canSteer) return;
+      clearField();
+      (mode === 'queue' ? queueSend(txt) : steer(txt)).then((ok) => { if (!ok) refill(txt); });
+      return;
+    }
+    // 挂起等后台任务时 Ctrl+Enter 也排队（官方：在跑就排）；回车照旧接力进同一个进程
+    if (mode === 'queue' && holding && canSteer) {
+      clearField();
+      queueSend(txt).then((ok) => { if (!ok) refill(txt); });
+      return;
+    }
+    clearField();
     send(txt);
   }
+  let splitOpen = $state(false);
+  $effect(() => { if (!busyNow || empty) splitOpen = false; });
   // 触屏（手机软键盘没有 Shift）：Enter = 换行，发送靠按钮——与 claude.ai 移动端一致。
   // 桌面保持 Enter 发送 / Shift+Enter 换行。
   const touchUI = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
@@ -259,7 +315,15 @@
       if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) { e.preventDefault(); acceptSuggestion(); return; }
       if (e.key === 'Escape') { e.preventDefault(); dismissSuggestion(); return; }
     }
-    if (e.key === 'Enter' && !e.shiftKey && !touchUI) { e.preventDefault(); submit(); }
+    // Ctrl/Cmd+Enter：工作中 = 稍后发送；空闲 = 普通发送（触屏也认外接键盘）
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit('queue'); return; }
+    if (e.key === 'Enter' && !e.shiftKey && !touchUI) { e.preventDefault(); submit(); return; }
+    // 输入框空着按 ↑：取回最后一条排队消息编辑（官方 handleDequeueLastQueued）
+    if (e.key === 'ArrowUp' && empty && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && queuedItems(session.id).length) {
+      e.preventDefault(); editLastQueued(); return;
+    }
+    // 工作中按 Esc：先把最后一条排队消息召回输入框（官方 onEscapeRecall）
+    if (e.key === 'Escape' && empty && session.busy && queuedItems(session.id).length) { e.preventDefault(); editLastQueued(); }
   }
   // 官方整卡 cursor-text：点卡片空白处（内边距、工具条空档）等于点输入框——聚焦并把光标放到末尾。
   // 只认「空白容器」本身被点中；按钮、弹层、附件卡各管各的。从输入框里拖选到空白处松手时
@@ -327,7 +391,7 @@
 
   {#if slashQ != null && slashItems.length}<SlashMenu items={slashItems} active={slashIdx} onPick={pickSlash} onHover={(i) => (slashIdx = i)} />{/if}
   <div class="field-wrap">
-    <div class="field" class:sugg={showSugg} bind:this={field} contenteditable="true" data-ph={showSugg ? suggestion : placeholder} role="textbox" tabindex="0" aria-multiline="true" onkeydown={onKey} oninput={onInput} onpaste={onPaste} onblur={() => setTimeout(() => (slashQ = null), 120)}></div>
+    <div class="field" class:sugg={showSugg} bind:this={field} contenteditable="true" data-ph={showSugg ? suggestion : placeholder} role="textbox" tabindex="0" aria-multiline="true" onkeydown={onKey} oninput={onInput} onpaste={onPaste} onfocus={prewarmNewChat} onblur={() => setTimeout(() => (slashQ = null), 120)}></div>
     {#if showSugg}
       <!-- mousedown 不抢焦点：桌面上点键帽等同按 Tab；手机没有 Tab 键，这是唯一入口 -->
       <button class="sg-key" type="button" tabindex="-1" title={t('填入建议（Tab）· Esc 收起')} aria-label={t('填入建议：{text}', { text: suggestion })} onmousedown={(e) => e.preventDefault()} onclick={acceptSuggestion}>{touchUI ? t('填入') : 'Tab'}</button>
@@ -344,28 +408,44 @@
       </div>
       {#if settings.research}
         <button class="chip" aria-label={t('Research 已开启')} onclick={toggleMenu}>
-          <svg viewBox="0 0 20 20" fill="currentColor"><path d={ICON_RESEARCH} /></svg>
+          <svg viewBox="0 0 20 20" fill="currentColor"><path d={menuIcon('research')} /></svg>
         </button>
       {/if}
       {#if settings.style !== 'normal'}
-        <button class="chip" aria-label={t('回复风格已开启')} onclick={toggleMenu}>
-          <svg viewBox="0 0 20 20" fill="currentColor"><path d={ICON_FEATHER} /></svg>
+        <button class="chip" aria-label={t('回复语气已开启')} onclick={toggleMenu}>
+          <svg viewBox="0 0 20 20" fill="currentColor"><path d={menuIcon('feather')} /></svg>
         </button>
       {/if}
+      <!-- 权限模式（手动 / 接受编辑 / 计划 / 自动 / 绕过权限）：快照访客固定手动，不给芯片 -->
+      {#if !IS_CSNAP}<PermissionModePicker />{/if}
       <!-- 额度环放左侧空位：右侧只留「模型 / Effort / 发送」，窄屏（折叠屏分屏、小窗）
            不会再被挤到把发送键顶出卡片 -->
       {#if !IS_CSNAP}<QuotaRing />{/if}
     </div>
     <div class="right">
       <div class="model-wrap">
-        <button class="model" class:mismatch={modelMismatch} title={modelTitle} bind:this={modelBtn} onclick={togglePicker}><span class="mtxt">{modelName}</span>{#if fastOn}<span class="model-fast">&nbsp;· Fast</span>{/if}</button>
+        <button class="model" class:mismatch={modelMismatch} class:pending={customPending} title={modelTitle || (curCustom && customModelInfo(curModel)?.hidden ? t('此服务已在模型菜单中隐藏') : '')} bind:this={modelBtn} onclick={togglePicker}><span class="mtxt">{modelName}</span>{#if fastOn}<span class="model-fast">&nbsp;· Fast</span>{/if}</button>
         {#if pickerOpen}<ModelPicker onClose={() => (pickerOpen = false)} dir={pickerDir} />{/if}
       </div>
+      {#if !effortHidden}
       <div class="model-wrap eff">
         <button class="model lvl" class:mismatch={effortMismatch} title={effortTitle} bind:this={effortBtn} onclick={toggleEffort}><span class="mtxt">{effortName}</span></button>
         {#if effortOpen}<EffortPanel onClose={() => (effortOpen = false)} dir={effortDir} />{/if}
       </div>
-      {#if busyNow}
+      {/if}
+      {#if busyNow && canSteer && (!empty || compose.attachments.length)}
+        <!-- 工作中且输入框有内容：分体按钮（官方触屏同款）——主键插话发送，右半下拉「稍后发送 / 停止」 -->
+        <div class="split-wrap">
+          <button class="submit split-main" aria-label={t('插话发送')} title={touchUI ? t('插话发送') : t('插话发送 ⏎ · 稍后发送 Ctrl+⏎')} disabled={uploading} onclick={() => submit()}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10 4 15l5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg></button>
+          <button class="submit split-caret" aria-label={t('更多发送方式')} aria-expanded={splitOpen} onclick={(e) => { e.stopPropagation(); splitOpen = !splitOpen; }}><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+          {#if splitOpen}
+            <div class="split-menu" role="menu">
+              <button role="menuitem" onclick={() => { splitOpen = false; submit('queue'); }}>{t('稍后发送')}{#if !touchUI}<span class="kbd">Ctrl+⏎</span>{/if}</button>
+              <button role="menuitem" onclick={() => { splitOpen = false; stop(); }}>{t('停止')}</button>
+            </div>
+          {/if}
+        </div>
+      {:else if busyNow}
         <button class="submit stop" aria-label={t('停止生成')} onclick={stop}><svg viewBox="0 0 20 20" width="13" height="13"><rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor"/></svg></button>
       {:else}
         <button class="submit" aria-label={uploading ? t('附件上传中') : t('发送')} disabled={uploading} onclick={submit}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10 4 15l5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg></button>
@@ -466,6 +546,7 @@
   .mtxt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   /* 实际生效 ≠ 所选（effort：Stop hook 回报的档；模型：安全栅门回退后的会话模型）：点线下划提示（title 有说明） */
   .model.mismatch .mtxt { text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--muted); }
+  .model.pending .mtxt { color: var(--muted); }   /* 自定义模型清单还没到：占位名先灰着 */
   /* 折叠屏分屏 / 手机小窗（实测可用宽 ~285px）：把官方间距压一点点，让工具条继续排一行，
      不必提前换行。宽屏一律维持官方 p7/8 与 gap8。 */
   @media (max-width: 360px) {
@@ -480,4 +561,13 @@
   .model-fast { color: var(--muted); }
   .submit { width: 38px; height: 38px; border-radius: 11px; background: var(--text); color: var(--bg); display: flex; align-items: center; justify-content: center; margin-left: 2px; }
   .submit.stop { border-radius: 11px; }
+  /* 工作中的分体发送键：左半插话发送、右半下拉（稍后发送 / 停止） */
+  .split-wrap { position: relative; display: flex; margin-left: 2px; }
+  .split-main { margin-left: 0; width: 34px; border-radius: 11px 3px 3px 11px; }
+  .split-caret { margin-left: 1.5px; width: 20px; border-radius: 3px 11px 11px 3px; }
+  .split-menu { position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 30; min-width: 168px; padding: 4px; border-radius: 10px;
+    background: var(--card); box-shadow: var(--card-shadow); display: flex; flex-direction: column; }
+  .split-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 10px; border-radius: 7px; text-align: left; font-size: 13.5px; color: var(--text); }
+  .split-menu button:hover { background: var(--hover); }
+  .split-menu .kbd { font-size: 11.5px; color: var(--muted); }
 </style>

@@ -8,6 +8,7 @@
 
 import type { StreamEvent } from "../agent/events.ts";
 import { retryAfterMs } from "./sse.ts";
+import { MK } from "../model-knowledge.ts";
 
 export type ErrorClass =
   | "auth" // key 无效、过期、没这个模型的权限——provider 自己说的
@@ -20,6 +21,8 @@ export type ErrorClass =
   | "timeout" // 上游 / 网关超时
   | "server" // 其余 5xx
   | "bad_request" // 其余 4xx：请求本身有问题，重试没用
+  | "endpoint" // 自定义服务：地址或协议不对（404 / 405 且不是「找不到模型」）
+  | "not_chat" // 自定义服务：选的型号不是对话模型（语音识别 / 合成、向量……）
   | "unknown";
 
 export interface Classified {
@@ -41,6 +44,8 @@ const SUMMARY: Record<ErrorClass, string> = {
   timeout: "上游或网关超时：会稍后自动重试",
   server: "provider 服务端出错：会稍后自动重试",
   bad_request: "请求被拒绝（参数或模型名不对）：重试没用",
+  endpoint: "接口地址或协议不对：去「模型服务」点「检测连接」",
+  not_chat: "这个型号不是对话模型（语音识别 / 合成、向量这类）：换一个型号",
   unknown: "未知错误",
 };
 
@@ -155,9 +160,40 @@ function bySemantics(p: Parsed): ErrorClass | null {
   return null;
 }
 
-export function classifyHttpError(status: number, body: string, headers?: Headers): Classified {
+// 自定义服务的请求现场：报错的人话带上地址、协议、服务名和型号（内置厂商的地址一定对，不传）
+export interface ErrorCtx {
+  url: string;
+  name: string;
+  protocol: "openai" | "anthropic" | "gemini";
+  model: string;
+}
+const PROTO_NAME: Record<ErrorCtx["protocol"], string> = { openai: "OpenAI Chat Completions", anthropic: "Anthropic Messages", gemini: "Gemini generateContent" };
+
+// D10：自定义服务的 404 / 405 / 非对话模型 / 鉴权，各说各的人话（以前五种配错全落成「参数或模型名不对」）
+function customClassified(status: number, p: Parsed, raw: string, ctx: ErrorCtx, upstream?: string): Classified | null {
+  const svc = `「模型服务 › ${ctx.name}」`;
+  // 「是不是在说型号」：英文 model、中文「模型 / 型号」、或原文里提到这个型号 ID（国内中转的 404「模型 xxx 不存在」）
+  const mentionsModel = p.schema && MK.mentionsModel(p.message, ctx.model);
+  if ((status === 404 && !mentionsModel) || status === 405) {
+    return { ...done("endpoint", upstream), summary: `接口地址或协议不对：POST ${ctx.url} 返回 ${status}，这里不是 ${PROTO_NAME[ctx.protocol]} 接口；去${svc}点「检测连接」` };
+  }
+  if (status === 404) return { ...done("bad_request", upstream), summary: `找不到型号「${ctx.model}」：去${svc}刷新型号或换一个` };
+  // 不收音频 ≠ 不是对话模型：中转不认 input_audio 时型号照样能对话，别引导用户把它关掉
+  if (MK.looksNoAudio(status, raw)) return { ...done("bad_request", upstream), summary: `「${ctx.model}」（或这个服务）不收音频：去掉音频附件再发，或在${svc}里关掉这个型号的「音频」能力` };
+  if (MK.looksNotChat(status, raw)) return { ...done("not_chat", upstream), summary: `「${ctx.model}」不是对话模型（语音识别 / 合成、向量这类）：换一个型号，或在${svc}里把它关掉` };
+  return null;
+}
+
+export function classifyHttpError(status: number, body: string, headers?: Headers, ctx?: ErrorCtx): Classified {
   const p = parseError(body);
   const upstream = upstreamOf(headers);
+  if (ctx) {
+    const c = customClassified(status, p, body, ctx, upstream);
+    if (c) return c;
+    const base = classifyHttpError(status, body, headers);
+    if (base.class === "auth") return { ...base, summary: `「${ctx.name}」的 API Key 被拒绝或没有这个型号的权限：去「模型服务 › ${ctx.name}」检查 Key 和鉴权方式` };
+    return base;
+  }
   const server = headers?.get("server")?.toLowerCase() ?? "";
   const viaCdn = Boolean(headers?.get("cf-ray")) || server.includes("cloudflare");
 
@@ -208,9 +244,9 @@ function eventOf(kind: string, c: Classified, raw: unknown, retryAfter?: number)
   };
 }
 
-// 适配器用：HTTP 层的错误（状态码不是 2xx）。kind 仍是 http_<状态码>，别处按它认具体状态。
-export function httpErrorEvent(res: Response, raw: string): ErrorEvent {
-  return eventOf(`http_${res.status}`, classifyHttpError(res.status, raw, res.headers), raw, retryAfterMs(res));
+// 适配器用：HTTP 层的错误（状态码不是 2xx）。kind 仍是 http_<状态码>，别处按它认具体状态。ctx：自定义服务的请求现场。
+export function httpErrorEvent(res: Response, raw: string, ctx?: ErrorCtx): ErrorEvent {
+  return eventOf(`http_${res.status}`, classifyHttpError(res.status, raw, res.headers, ctx), raw, retryAfterMs(res));
 }
 
 // 适配器用：流里来的错误。kind 沿用各家自己的类型名（没有就 stream_error）。

@@ -11,7 +11,6 @@ export default {
   'settings::Agent': 'Agents',   // 侧栏分区名：中文界面仍显示「Agent」（与 settings-mobile / claudeai 同一语境键）
   '扩展': 'Extensions',
   '快捷键': 'Keyboard shortcuts',
-  '全局助手': 'Assistant',
   '本机 Agent': 'Local Agent',
   '个性化': 'Personalization',
   '壁纸': 'Wallpaper',
@@ -41,7 +40,7 @@ export default {
   '输入建议': 'Prompt suggestions',
   '提示词 预测 下一句 Tab 补全': 'prompt predict next Tab autocomplete',
   'Agent 开关': 'Agents',
-  'claude gemini vertex codex chatgpt dimensio antigravity 分页 启用 关闭 认证': 'claude gemini vertex codex chatgpt dimensio antigravity page enable disable sign-in',
+  'claude gemini vertex codex chatgpt dimensio 分页 启用 关闭 认证': 'claude gemini vertex codex chatgpt dimensio page enable disable sign-in',
   '技能': 'Skills',
   '扩展 skill 指引包': 'extensions skill instructions bundle',
   '连接器': 'Connectors',
@@ -54,11 +53,6 @@ export default {
   '快捷键 热键 提问 待回答': 'shortcut hotkey question pending answer',
   '本机 Agent 急停': 'Local Agent emergency stop',
   '快捷键 热键 急停 停止': 'shortcut hotkey emergency stop',
-  '助手模型': 'Assistant model',
-  'deepseek 引擎 全局助手': 'deepseek engine assistant',
-  'settings::深度思考': 'DeepThink',
-  '推理 思考': 'reasoning thinking deepthink',
-  '推理强度': 'Reasoning effort',
   '桌面能力': 'Desktop access',
   '本机 观察 操作 agent 权限': 'local observe control agent permission',
   '允许主机远程操作': 'Allow host remote access',
@@ -224,16 +218,6 @@ export default {
   '点击改键': 'Click to change',
   '按下组合键…': 'Press keys…',
 
-  // —— 全局助手 ——
-  '引擎': 'Engine',
-  '全局助手=Siri 玻璃球。改动即刻生效，下一轮对话按新参数走。': 'The Assistant is the Siri-style glass orb. Changes take effect immediately, starting with the next turn.',
-  '模型': 'Model',
-  '更准但更慢；默认关保持秒答': 'More accurate but slower. Off by default for instant answers.',
-  'Flash · 快': 'Flash · Fast',
-  'Pro · 强': 'Pro · Powerful',
-  '高': 'High',
-  '最高': 'Max',
-
   // —— 本机 Agent / 远程控制 ——
   '已关闭，agent 碰不到这台电脑': 'Off. Agents can’t access this computer.',
   '只能读屏幕内容': 'Can only read what’s on the screen',
@@ -271,12 +255,12 @@ export default {
 
   // —— 壁纸 ——
   '壁纸上传失败，重试': 'Couldn’t upload wallpaper. Try again.',
-  '空间化失败——确认电脑端已装好深度模型，再重试': 'Couldn’t add depth. Make sure the depth model is installed on your computer, then try again.',
+  '要做空间壁纸，请只选原图和深度图两张，深度图文件名带 depth': 'For a spatial wallpaper, choose just two files: the photo and its depth map, with “depth” in the depth map’s file name.',
+  '上传时同时选中原图和它的深度图（文件名带 depth），就能开空间壁纸。': 'To get a spatial wallpaper, choose the photo and its depth map together when uploading (with “depth” in the depth map’s file name).',
   '明亮系统': 'Light set',
   '点选即应用并切到明亮系统预览；右上 × 删除上传的壁纸。': 'Click a wallpaper to apply it and preview the light set. Click × in the corner to delete an uploaded wallpaper.',
   '选择壁纸': 'Choose wallpaper',
   '删除': 'Delete',
-  '正在生成深度…约几秒': 'Adding depth… This takes a few seconds.',
   '随鼠标指针产生景深视差': 'Depth parallax follows your pointer',
   '景深幅度': 'Depth intensity',
   '深色系统': 'Dark set',
@@ -325,4 +309,12 @@ export default {
   '附件还在上传…': 'Wait for attachments to finish uploading.',
   '写点什么、或加个图片/视频吧': 'Write something or add an image or video.',
   '提交失败：{reason}': 'Couldn’t submit: {reason}',
+  // —— v5「墨与象牙」改版新增 ——
+  '反馈': 'Feedback',
+  '深色 浅色 自动 主题 跟随系统明暗': 'dark light auto theme appearance match system',
+  '账号 切号 token 用量 Max Pro': 'account switch token usage Max Pro pool',
+  '智能路由 换号': 'smart routing switch account',
+  '邀请码 注册 限额 时区': 'invite register quota limit time zone',
+  '只算 Claude，管理员不受限。留空或填 0 = 不限。': 'Counts Claude only. Admins have no limits. Leave empty or enter 0 for no limit.',
+  '点键位改键，按 Backspace 关掉这一条。': 'Click a shortcut to change it. Press Backspace to turn it off.',
 };

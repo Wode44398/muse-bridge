@@ -15,7 +15,7 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { existsSync, statSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
-import { cp } from 'node:fs/promises';
+import { cp, rm } from 'node:fs/promises';
 import { requireCtx } from '../runtime/identity.mjs';
 import { readBody } from '../runtime/body.mjs';
 import { safeJoin } from '../runtime/http-file.mjs';
@@ -101,6 +101,19 @@ export function resolveShareToken(st) {
   }
   if (rec.pwHash && key !== rec.unlock) return null;
   return { token, dir: path.join(SPACES_DIR, token) };
+}
+
+// 删号时作废这个属主铸过的全部分享空间（runtime/account-lifecycle.mjs 按名字探测并调用）：桶是拷贝，
+// 不随账号目录一起消失，不收的话删号后在有效期内照样能看。先摘登记（链接当场失效），桶目录随后异步删。返回作废了几个。
+export async function revokeShareSpacesOf(ownerKey) {
+  if (!ownerKey) return 0;
+  const toks = Object.entries(store).filter(([, rec]) => rec && rec.owner === ownerKey).map(([tok]) => tok);
+  if (!toks.length) return 0;
+  for (const tok of toks) delete store[tok];
+  save();
+  await Promise.all(toks.map((tok) => rm(path.join(SPACES_DIR, tok), { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }).catch(() => {})));
+  console.log(`[share-space] 属主 ${ownerKey} 已删除：作废 ${toks.length} 个分享空间`);
+  return toks.length;
 }
 
 // 供 /api/share-unlock（share.mjs）调：验对密码 → 返回本桶的 unlock 凭证，否则 null。

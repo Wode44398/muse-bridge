@@ -19,7 +19,8 @@
 // 列表几何（与阅读态逐像素对齐）：层级只看语法树（和源码用 2 空格、4 空格还是 tab 无关），
 // 每级 24px（= 阅读态 ul/ol 的 1.5em）；「缩进 + 标记 + 其后空白」换成标记 widget 占一个 24px 槽，
 // 行装饰 padding-left = 层级×24、text-indent = −本行标记数×24 → 换行后的文字悬挂对齐正文。
-// 续行（列表项里不带标记的行）按所在项的正文列对齐，行首缩进空白隐去。
+// 续行（列表项里不带标记的行）按所在项的正文列对齐，行首缩进空白隐去；缩进不到正文列的懒续行不算列表行
+// （Obsidian 编辑器口径），按普通段落顶格显示。
 //
 // 为什么是 StateField 而非 ViewPlugin：块级 widget（block replace）按 CM6 规则不允许
 // 由 ViewPlugin 提供（会影响纵向布局）。全文构建换正确性；只动光标时先比对「揭示集合」，
@@ -33,12 +34,13 @@ import {
 } from './widgets.js';
 import { TableWidget } from './table.js';
 import { PropsWidget } from './props.js';
+import { isSingleDash } from './commands.js';
 import * as obsmd from '../obsmd.js';
 import { lastPointerTouch } from '../touchSelection.js';
 
 const HIDE = Decoration.replace({});
 const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i;
-const LP_MAX = 240_000;     // 超此长度不做 LP 装饰（仍可编辑源码），防卡
+export const LP_MAX = 240_000;     // 超此长度不做 LP 装饰（仍可编辑源码），防卡；DocViewer 据此提示「已关闭实时预览」
 const PARSE_BUDGET = 30;    // 每次构建最多替解析器垫多少 ms；没解析完先用部分树，后台推进后再补
 const LI_UNIT = 24;         // 列表每级缩进 = 阅读态 ul/ol 的 padding-left 1.5em（16px 字号）
 const NO_SEL = { ranges: [] };
@@ -52,7 +54,9 @@ const QUOTE_PREFIX_RE = /^[ \t]*>[ \t]?(?:[ \t]{0,3}>[ \t]?)*/;
 // 行内 HTML：只把白名单里、同一行内配成对的标签渲染出来（阅读态 obsmd 同样放行这些）
 const INLINE_HTML = new Set(['kbd', 'sup', 'sub', 'u', 'ins', 'del', 's', 'mark', 'small', 'span', 'abbr', 'font', 'b', 'i', 'em', 'strong', 'code']);
 
-const lpRefresh = StateEffect.define();   // 冻结期（组字/按键）结束后补一次重建
+// 冻结期（组字/按键）结束后补一次重建；index.js 的 refresh() 也用它——![[嵌入]] 的地址要等出链索引/名单
+// 到货才解析得出（异步），到货时整篇重建一次，否则图一直停在第一次算出的占位/兜底地址上
+export const lpRefresh = StateEffect.define();
 const lpFocus = StateEffect.define();     // 编辑器聚焦/失焦
 
 // 装饰对象复用：同 class/style 的 line/mark 装饰全文共用一个实例，省掉每次构建上千次分配
@@ -185,24 +189,48 @@ class Builder {
     for (const [f, t] of this.rawCallouts) if (pos >= f && pos <= t) return true;
     return false;
   }
-  resolveSrc(src) {
+  // wiki=true：![[嵌入]] 的名字（按全库名字解析，可能还在等出链索引）；否则是 ![](相对路径)
+  resolveSrc(src, wiki = false) {
     let s = String(src || '');
     try { s = decodeURIComponent(s); } catch {}
     if (/^(https?:|data:|blob:|\/)/i.test(s)) return src;
-    return (this.opts.resolveUrl && this.opts.resolveUrl(s)) || null;
+    const u = this.opts.resolveUrl?.(s, wiki);
+    return u === '' ? '' : u || null;   // ''＝出链索引还在路上：ImageWidget 先占位，不按猜的地址发请求
   }
   // 图片：未揭示替换成图；揭示时源码照常显示，图挂在后面（独占一行的挂成块，在源码行下方）
   // alt 可带尺寸（「说明|300」「300x200」，obsmd.splitImgSize）；揭示态的图带缩放把手常显（触屏没有悬停）
-  image(from, to, src, alt) {
+  // alts：主地址只是猜的时候的备选（加载失败按序换，见 ImageWidget）
+  image(from, to, src, alt, alts = null) {
     const line = this.doc.lineAt(from);
     const alone = line.text.trim() === this.doc.sliceString(from, to);
     const sz = obsmd.splitImgSize(alt);
     if (!this.touches(from, to)) {
-      this.add(from, to, Decoration.replace({ widget: new ImageWidget(src, sz.alt, false, sz.w, sz.h) }));
+      this.add(from, to, Decoration.replace({ widget: new ImageWidget(src, sz.alt, false, sz.w, sz.h, false, alts) }));
     } else {
-      const w = Decoration.widget({ widget: new ImageWidget(src, sz.alt, alone, sz.w, sz.h, true), block: alone, side: 1 });
+      const w = Decoration.widget({ widget: new ImageWidget(src, sz.alt, alone, sz.w, sz.h, true, alts), block: alone, side: 1 });
       this.ranges.push(w.range(alone ? line.to : to));
     }
+  }
+  // 段落下一行的「- 」（lezer 里是 setext 下划线，见 SetextHeading 分支）：按空列表项出圆点，几何与真列表项
+  // 同一套（emitLists）。d＝外面包着的列表项层数 + 1（列表项里段落下的「- 」是它的子项，Obsidian 同样画在
+  // 下一级；写死 1 的话圆点挂在外层项的标记槽里，一打字变成真的嵌套列表又往右跳一级）。
+  // 外层项已按续行登记过这一行（层级更浅）就覆盖，登记得更深的不动。圆点形状同 ListMark 分支（外面每多一层列表换一种）
+  emptyBullet(line, from, heading) {
+    let d = 1, outer = 0;
+    for (let p = heading.parent; p; p = p.parent) {
+      if (p.name === 'ListItem') d++;
+      else if (p.name === 'BulletList' || p.name === 'OrderedList') outer++;
+    }
+    const cur = this.li.get(line.number);
+    if (cur && cur.d > d) return;
+    const ws = /^[ \t]*/.exec(this.doc.sliceString(from + 1, line.to))[0].length;
+    this.li.set(line.number, { d, col: colAt(line.text, from + 1 + Math.min(ws, 4) - line.from), done: false });
+    this.lm.set(line.number, [{ from, to: from + 1, ordered: false, shape: outer === 0 ? 'disc' : outer === 1 ? 'circle' : 'square', task: null }]);
+  }
+  // 懒续行：列表项里不带标记、正文起点（行首空白与引用「>」之后）缩进不到该项正文列的非空行
+  lazyLine(line, col) {
+    const lead = /^[ \t>]*/.exec(line.text)[0].length;
+    return lead < line.length && colAt(line.text, lead) < col;
   }
 
   run() {
@@ -263,10 +291,20 @@ class Builder {
       }
       case 'SetextHeading1': case 'SetextHeading2': {
         const m = n.node.getChild('HeaderMark');
-        // 在段落紧下一行敲「-」开列表的过渡态：lezer 会先把它认成 setext 下划线，上一段瞬间变
-        // H2。光标就在这根单「-」下划线上时按普通文本显示，等用户敲完空格和内容
-        if (m && n.name === 'SetextHeading2' && /^ {0,3}-[ \t]*$/.test(doc.lineAt(m.from).text) &&
-            this.touches(doc.lineAt(m.from).from, doc.lineAt(m.from).to)) return true;
+        // 段落下一行只有一个「-」（或「- 」）：lezer 按 CommonMark 认成 setext 下划线（空列表项不能打断段落），
+        // 上一行就成了 H2——以前只在光标停在「-」行时压住，光标一走上一行就变大（反馈「底部有个 - 上一行会变大」）。
+        // Obsidian 编辑器的 setext 下划线要至少两个「-」（setextHeaderRE `-{2,}`），这里同样一律按普通段落：
+        // 不出标题样式、下划线照常显示；「- 」（带空白）画成空圆点——在 Obsidian 里它就是一个空列表项。
+        // 两个及以上的「--」仍是 H2，「=」仍是 H1（同 Obsidian）。引用 / callout 源码态里的「> -」、列表项里
+        // 缩进过的「   -」同样认（判定见 commands.isSingleDash，Enter / Tab 用的是同一个）
+        if (m && n.name === 'SetextHeading2') {
+          const ul = doc.lineAt(m.from);
+          const one = isSingleDash(ul, m);
+          if (one) {
+            if (one.blank) this.emptyBullet(ul, m.from, n.node);
+            return true;
+          }
+        }
         this.line(doc.lineAt(n.from).from, 'mde-line-h' + (n.name.endsWith('1') ? '1' : '2'));
         if (!this.lineTouches(n.from, n.to)) {
           if (m && m.from > n.from) this.hide(m.from - 1, m.to);   // 连换行折掉下划线行
@@ -369,7 +407,8 @@ class Builder {
         const embed = !!m[1];
         if (embed && IMG_EXT_RE.test(target)) {
           const sz = obsmd.splitImgSize('x|' + alias);   // 别名＝尺寸 / 说明|尺寸 / 说明
-          this.image(n.from, n.to, this.resolveSrc(target), (sz.alt.slice(2) || target) + (sz.w ? '|' + sz.w + (sz.h ? 'x' + sz.h : '') : ''));
+          this.image(n.from, n.to, this.resolveSrc(target, true), (sz.alt.slice(2) || target) + (sz.w ? '|' + sz.w + (sz.h ? 'x' + sz.h : '') : ''),
+            this.opts.resolveAlts?.(target) || null);
         }
         else if (!this.touches(n.from, n.to)) {
           this.add(n.from, n.to, Decoration.replace({ widget: new WikilinkWidget(target, head, alias, embed, this.opts) }));
@@ -462,6 +501,11 @@ class Builder {
         const done = !!task && /x/i.test(doc.sliceString(task.from + 1, task.to - 1));
         const ll = doc.lineAt(Math.min(n.to, doc.length)).number;
         for (let l = line.number; l <= ll; l++) {
+          // 懒续行（列表项后面顶格接着写、缩进不到正文列的行）：CommonMark 仍算这一项的段落，但 Obsidian 编辑器
+          // 按缩进认——不到正文列就不再是列表行（markdown.js：less than the first list's indent → no longer a list）。
+          // 这里同样不收：按普通段落顶格显示，不再悬挂对齐到上一项正文（反馈「- 后换行回不到左侧顶格」）。
+          // 缩进够得着外层某一项正文列的，外层那一项照常收（ListItem 由外向内进，外层先登记）
+          if (l > line.number && this.lazyLine(doc.line(l), col)) continue;
           const cur = this.li.get(l);
           if (!cur || cur.d < d) this.li.set(l, { d, col, done });
         }
@@ -786,6 +830,37 @@ function allHidden(deco, doc, from, to) {
   for (const [f, t] of runs) if (f <= q && t > q) q = t;
   return q >= to;
 }
+
+// ———— 段落下单个「-」：两种模式都不按标题定型 ————
+// 语法高亮（theme.js）照 lezer 的 SetextHeading2 给上一行和「-」打 mde-t-h mde-t-h2：1.4em + 粗体照样生效——
+// enter() 的单减号分支只是不加行级 h2，上一行还是变大（反馈「底部有个 - 上一行会变大」）；源码态共用这套高亮也一样。
+// 这里给这几行挂 mde-line-sdash，editor.css 把行里的标题 token 归一成正文字号字重。语法树里仍是 SetextHeading2
+// （Enter / Tab 的 isSingleDash 靠它），只改显示。不进 LP 的 compartment（index.js 单独挂）：源码态也要。
+// 只往容器块（引用 / 列表）里走，段落、代码块等叶子块不进，整篇重算也只是块级的量。阅读态（marked 渲成 h2）另算。
+const SDASH_LINE = Decoration.line({ class: 'mde-line-sdash' });
+const SDASH_INTO = new Set(['Document', 'Blockquote', 'BulletList', 'OrderedList', 'ListItem']);
+function sdashDecos(state) {
+  const { doc } = state, out = [];
+  syntaxTree(state).iterate({
+    enter(n) {
+      if (n.name === 'SetextHeading2') {
+        const m = n.node.getChild('HeaderMark');
+        const ul = m && doc.lineAt(m.from);
+        if (ul && isSingleDash(ul, m)) {
+          for (let k = doc.lineAt(n.from).number; k <= ul.number; k++) out.push(SDASH_LINE.range(doc.line(k).from));
+        }
+        return false;
+      }
+      return SDASH_INTO.has(n.name);
+    },
+  });
+  return Decoration.set(out, true);
+}
+export const singleDashPlain = StateField.define({
+  create: sdashDecos,
+  update: (v, tr) => (tr.docChanged || syntaxTree(tr.startState) !== syntaxTree(tr.state) ? sdashDecos(tr.state) : v),
+  provide: (f) => EditorView.decorations.from(f),
+});
 
 export function livePreview(opts) {
   // 每个编辑器（每次 setMode('live')）一份：组字 / 鼠标按下状态

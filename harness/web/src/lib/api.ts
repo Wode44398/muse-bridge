@@ -314,14 +314,118 @@ export const getInfo = () => j("/api/info");
 export const getConfig = () => j("/api/config");
 export const patchConfig = (patch: Record<string, unknown>) => j("/api/config", POST(patch));
 
-// ── 自定义模型服务（「模型服务」面板的「＋」卡；能力位 custom-providers）─────────────
+// ── 自定义模型服务（「模型服务」面板的「＋」卡；能力位 custom-providers，识别接口另有能力位 custom-providers-v2）─────────────
+// 型号的能力形状和 bridge 的 Claude 外接一致（src/model-knowledge）：档位表 [{id, name, value}]、来源 api / table / probe / guess / default / user。
+export type CustomProtocol = "openai" | "anthropic" | "gemini";
+export type CustomAuthStyle = "bearer" | "x-api-key" | "goog" | "none";
+export interface CustomTier {
+  id: string;
+  name: string;
+  value: string | number | boolean | Record<string, unknown> | null;
+}
+export interface CustomModel {
+  id: string;
+  label: string;
+  enabled: boolean;
+  kind: "chat" | "other";
+  contextWindow: number;
+  maxOutput: number;
+  vision: boolean;
+  video: boolean;
+  audio: boolean;
+  thinking: "none" | "budget" | "adaptive" | "effort";
+  efforts: CustomTier[];
+  effortField: string;
+  effortDefault: string;
+  alwaysThinks: boolean;
+  source: Partial<Record<"contextWindow" | "maxOutput" | "vision" | "thinking", string>>;
+}
+// 自定义请求头的一行（单独起个类型名：设计守卫把「headers 后面直接跟对象字面量」认成给请求加自定义头）
+export type CustomHeaderRow = { name: string; value: string };
+export interface CustomConn {
+  id?: string;
+  name: string;
+  baseUrl: string;
+  protocol: CustomProtocol;
+  authStyle: CustomAuthStyle;
+  headers: CustomHeaderRow[];
+  maxTokensField: "max_tokens" | "max_completion_tokens";
+  promptCaching?: boolean; // 草稿不带 = 用户没动过开关，服务端按地址定（只有 api.anthropic.com 默认开）；存好的记录总有
+  replayReasoning: boolean;
+}
+export interface CustomProviderRecord extends CustomConn {
+  id: string;
+  models: CustomModel[];
+  defaultModel: string;
+  hasKey: boolean;
+  keyTail: string;
+}
+// 编辑器的草稿（还没保存；apiKey 不带 = 用已存的）
+export interface CustomDraft extends CustomConn {
+  apiKey?: string;
+  models?: CustomModel[];
+  defaultModel?: string;
+}
+export interface CustomDetectRow {
+  protocol: CustomProtocol;
+  baseUrl: string;
+  authStyle: CustomAuthStyle;
+  url: string;
+  status: number;
+  result: "ok" | "model" | "auth" | "missing" | "error" | "network";
+  message: string;
+  ms: number;
+}
+export interface CustomDetect {
+  model: string;
+  results: CustomDetectRow[];
+  current: CustomDetectRow | null;
+  suggest: { protocol: CustomProtocol; baseUrl: string; authStyle?: CustomAuthStyle; result: string } | null;
+  ok: boolean;
+}
+export interface CustomProbe {
+  model: string;
+  notes: string[];
+  error?: string;
+  kind?: "chat" | "other";
+  thinksByDefault?: boolean;
+  maxOutput?: number;
+  vision?: boolean;
+  effortIds?: string[];
+  tiers?: { id: string; ok: boolean; status: number; thinking: boolean | null; error: string }[];
+}
+export interface CustomTestResult {
+  ok: boolean;
+  status: number;
+  ms: number;
+  model: string;
+  reply?: string;
+  thinking?: boolean;
+  usage?: { input: number; output: number };
+  error?: string;
+}
 export interface CustomProviderForm {
   name: string;
   baseUrl: string;
   apiKey?: string; // 编辑时留空 = 保持不变
-  model?: string; // 接口列不出模型时手填
+  model?: string; // 老表单：接口列不出模型时手填
+  // v2 编辑器：完整记录
+  protocol?: CustomProtocol;
+  authStyle?: CustomAuthStyle;
+  headers?: CustomHeaderRow[];
+  maxTokensField?: "max_tokens" | "max_completion_tokens";
+  promptCaching?: boolean;
+  replayReasoning?: boolean;
+  models?: CustomModel[];
+  defaultModel?: string;
 }
-export type CustomProviderSaved = { ok: true; id: string; models: number; warning?: string };
+export type CustomProviderSaved = { ok: true; id: string; models: number; warning?: string; provider?: CustomProviderRecord };
+export const getCustomProvider = (id: string) => j<CustomProviderRecord>(`/api/custom-providers/${encodeURIComponent(id)}`);
+export const customModels = (draft: CustomDraft) => j<{ models: CustomModel[]; total: number; url: string }>("/api/custom-providers/models", POST({ draft }));
+export const customGuess = (ids: string[], protocol: CustomProtocol) => j<{ models: CustomModel[] }>("/api/custom-providers/guess", POST({ ids, protocol }));
+export const customDetect = (draft: CustomDraft) => j<CustomDetect>("/api/custom-providers/detect", POST({ draft }));
+export const customProbe = (draft: CustomDraft, model: CustomModel) => j<CustomProbe>("/api/custom-providers/probe", POST({ draft, model }));
+export const customTest = (draft: CustomDraft, model?: string) => j<CustomTestResult>("/api/custom-providers/test", POST({ draft, model }));
 export const addCustomProvider = (form: CustomProviderForm) => j<CustomProviderSaved>("/api/custom-providers", POST(form));
 export const updateCustomProvider = (id: string, form: CustomProviderForm) =>
   j<CustomProviderSaved>(`/api/custom-providers/${encodeURIComponent(id)}`, POST(form));
@@ -521,8 +625,9 @@ export const setSessionAccess = (sessionId: string, access: string) =>
   j<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/access`, POST({ access }));
 
 // 会话内换型号 / 思考深度（服务端能力位 "session-model"）：回落定的型号与（按型号收过档的）深度；运行中 pending = 下一条消息起生效
-export const setSessionModel = (sessionId: string, patch: { model?: string; thinking?: string }) =>
-  j<{ ok: boolean; model: string; thinking: string; pending?: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/model`, POST(patch));
+// 能力位 "session-provider" 起也能带 provider 换家（没点名型号用那家默认）
+export const setSessionModel = (sessionId: string, patch: { provider?: string; model?: string; thinking?: string }) =>
+  j<{ ok: boolean; provider?: string; model: string; thinking: string; pending?: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/model`, POST(patch));
 // U2（X36 第二步）：撤回一条还没送达的插话；立即中断并发送（服务端撤回、停这一轮、以这句开新一轮）
 export const withdrawSteer = (sessionId: string, id: string) =>
   j<{ ok: boolean; reason?: "delivered" | "not_running" }>(`/api/sessions/${encodeURIComponent(sessionId)}/steer/withdraw`, POST({ id }));
@@ -558,9 +663,13 @@ export const setProjectOrder = (paths: string[]) => j<{ ok: boolean }>("/api/pro
 // 「新建快照」：服务端换一只全新的一次性桶（旧桶留盘不删，只是不再列出），
 // 返回带 quick 标记的项目对象。
 export const newQuickChat = () => j<any>("/api/quick/new", POST({}));
+// 快照存为工作空间（能力位 "quick-save"）：桶原地登记成项目、快照位换新桶 → { project, quick }
+export const saveQuickChat = (path: string, base: string) => j<{ project: any; quick: any }>("/api/quick/save", POST({ path, base }));
+// 项目改名（能力位 "project-rename"）：只改显示名；name 留空 = 恢复成文件夹名
+export const renameProject = (path: string, name: string) => j<any>("/api/projects/rename", POST({ path, name }));
 
 // SSE-over-fetch 读循环（三条流共用）。onAlive 在每次收到字节时触发——包括
-// 服务端 15s 一发的 ": ping" 注释行（它不产生事件但证明连接活着），断线
+// 服务端 10s 一发的 ": ping" 注释行（它不产生事件但证明连接活着），断线
 // watchdog 全靠这个时间戳判断半开死连接。
 async function readSse(
   res: Response,

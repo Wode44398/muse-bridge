@@ -10,6 +10,7 @@ import { requireReadCtx } from '../runtime/identity.mjs';
 import { DATA_ROOT } from '../runtime/paths.mjs';
 import { mimeType, safeJoin, streamFile } from '../runtime/http-file.mjs';
 import { bad, scopeCtx } from './file-core.mjs';
+import { isHtmlFile, respondHtmlSite } from '../runtime/html-site.mjs';
 
 const NATIVE = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'mp4', 'webm', 'mov',
@@ -110,6 +111,8 @@ export async function handleFile(req, res, url, identify) {
   let stat;
   try { stat = statSync(file); } catch { return bad(res, 404, 'not found'); }
   if (stat.isDirectory()) return bad(res, 400, 'is a directory');
+  // HtmlView：挂成路径式站点，相对引用的 js/css/资源才解析得到（见 runtime/html-site.mjs）。
+  if (url.searchParams.get('site') === '1' && isHtmlFile(file)) return respondHtmlSite(res, file, [ctx.cwd]);
   const ext = path.extname(file).slice(1).toLowerCase();
   const contentType = mimeType(file, { safe: true });
   const tier = THUMB_TIERS[url.searchParams.get('thumb')];

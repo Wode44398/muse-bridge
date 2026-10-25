@@ -72,7 +72,7 @@ let lastGood = '';     // 上一个验证通过的代理；探测无结论时粘
 let directStreak = 0;  // 连续判定为「直连可用」的次数（迟滞用）
 
 function cfg() {
-  try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); } catch { return {}; }
+  try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '')); } catch { return {}; }
 }
 
 // 本机自己的 LAN 地址要绕过代理：手机直连、预览子域等都是内网流量。

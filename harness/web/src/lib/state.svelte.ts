@@ -43,6 +43,8 @@ export interface SessionMeta {
   running?: boolean;
   // P8（X34）：在等你回答 / 批准 / 审计划
   waiting?: "permission" | "ask" | "plan" | null;
+  // 快照会话（任意一代快照桶；服务端标记）：侧栏放进快照区
+  quick?: boolean;
 }
 
 export interface ProjectMeta {
@@ -253,11 +255,16 @@ export const app = $state({
 app.chats.push(app.chat);
 
 // ── Dock 动作 ────────────────────────────────────────────────────────────────
+// 用户在 agent 干活时亲手关掉了 Dock：这一轮里浏览器动了也别再自动展开（以前每次 Browser 调用都弹回来，
+// 关了马上又出来）。用户自己再打开 Dock、或发下一条消息，才恢复自动展开。
+let browserAutoMuted = false;
 export function openDock(tool?: DockTool) {
   if (tool) setDockTool(tool);
   app.dockOpen = true;
+  browserAutoMuted = false;
 }
 export function closeDock() {
+  if (app.chats.some((c) => c.running)) browserAutoMuted = true;
   app.dockOpen = false;
   app.tasksFocus = null;
   app.tasksAgent = null;
@@ -268,7 +275,7 @@ export function closeDock() {
 export function toggleDock() {
   // 关的那一支走 closeDock：清掉任务定位 / 文件定位，免得下次打开落回上次那个产物目录
   if (app.dockOpen) closeDock();
-  else app.dockOpen = true;
+  else openDock();
 }
 export function setDockTool(tool: DockTool) {
   app.dockTool = tool;
@@ -354,6 +361,7 @@ export function pulseGrid() {
 
 let toastTimer = 0;
 let lastProbeAt = 0; // 空闲态对账节流（前台）
+let lastWakeListAt = Date.now(); // 回前台重拉侧栏的节流（boot 刚拉过）
 const LAST_SESSION_KEY = "harness.lastSession";
 
 function rememberSession(id: string | null) {
@@ -389,8 +397,9 @@ function effectsFor(chat: Chat): tl.TimelineEffects {
     visible: paneVisible(chat), // 分屏里另一格也看得见：「后台对话在等你」这类提示不用弹
     toast,
     rememberSession,
-    // 分栏形态（≥700，与 App 的布局门槛同一条线）才自动展开浏览器面板；手机只亮胶囊
+    // 分栏形态（≥700，与 App 的布局门槛同一条线）才自动展开浏览器面板；手机只亮胶囊。用户这一轮亲手关过就不再弹
     openBrowserPane: () => {
+      if (browserAutoMuted) return;
       if (matchMedia("(min-width: 700px)").matches) openDock("browser");
     },
     setGlobal: (patch) => {
@@ -455,7 +464,7 @@ function startGlobalEvents() {
     for (;;) {
       const ctl = new AbortController();
       let aliveAt = Date.now();
-      // 半开的死连接：服务端 15 秒一个 ping，45 秒没有任何字节就撕掉重连
+      // 半开的死连接：服务端 10 秒一个 ping，45 秒没有任何字节就撕掉重连
       const watchdog = setInterval(() => {
         if (Date.now() - aliveAt > 45_000) ctl.abort();
       }, 10_000);
@@ -497,11 +506,35 @@ function applyStatus(id: string, running: boolean, waiting: SessionMeta["waiting
   }
 }
 
+// 侧栏结构变了（任何设备上新建 / 删除会话、换快照、存为工作空间、项目增改）：合并一下再重拉。
+let listChangeTimer: ReturnType<typeof setTimeout> | null = null;
+let listChangeWhat = new Set<"sessions" | "projects">();
+function scheduleListRefresh(what: "sessions" | "projects" | "both") {
+  if (what !== "projects") listChangeWhat.add("sessions");
+  if (what !== "sessions") listChangeWhat.add("projects");
+  if (listChangeTimer) return;
+  listChangeTimer = setTimeout(() => {
+    listChangeTimer = null;
+    const w = listChangeWhat;
+    listChangeWhat = new Set();
+    if (w.has("projects") && app.features.projects) void refreshProjects();
+    if (w.has("sessions") && app.features.sessions) void refreshSessions();
+  }, 300);
+}
+
+let globalSnapshots = 0;
+
 function onGlobalEvent(ev: any) {
   if (ev?.e === "snapshot") {
     const rows = (Array.isArray(ev.sessions) ? ev.sessions : []) as StatusEvent[];
     applySnapshot(notifyState, rows);
     for (const row of rows) applyStatus(row.id, row.running, row.waiting?.kind ?? null);
+    // 断线重连：断开期间的 list_changed 都错过了，整张重拉一次（第一次连上时 boot 刚拉过，不重复）
+    if (globalSnapshots++ > 0) scheduleListRefresh("both");
+    return;
+  }
+  if (ev?.e === "list_changed") {
+    scheduleListRefresh(ev.what === "sessions" || ev.what === "projects" ? ev.what : "both");
     return;
   }
   if (ev?.e !== "session_status") return;
@@ -823,6 +856,7 @@ export async function send(raw: string, cardTarget?: string | null) {
   pushItem(chat, { kind: "user", text: msg, attachments, ...(refs.length ? { refs: refs.map(({ id, title }) => ({ id, title })) } : {}) });
   settleCursors(chat); // 上一轮若异常收尾，残留 live 旗子在此掐灭
   chat.running = true;
+  browserAutoMuted = false; // 新的一条消息：浏览器面板的自动展开恢复
   chat.activity = t("思考中");
   if (!chat.title) chat.title = msg.replace(/\s+/g, " ").slice(0, 60) || t("新任务");
   haptic("light");
@@ -863,6 +897,7 @@ export async function send(raw: string, cardTarget?: string | null) {
           return;
         }
         handleEvent(chat, ev);
+        if (ev.e === "session") showNewSessionRow(chat);
       },
       chat.abortCtl.signal,
       () => {
@@ -899,6 +934,28 @@ export async function send(raw: string, cardTarget?: string | null) {
     return;
   }
   scheduleResync(chat, gen, 0);
+}
+
+// 新会话一拿到 id 就先在侧栏占一行（以前发了「你好」半天列表里没这个对话——以前只在这一轮收尾时刷新列表）。
+// 服务端的列表随后刷新时以它为准。
+function showNewSessionRow(chat: Chat) {
+  if (!chat.id || app.sessions.some((s) => s.id === chat.id)) return;
+  const cfg = chat.cfg ?? displayedConfig();
+  app.sessions = [
+    {
+      id: chat.id,
+      title: chat.title,
+      updatedAt: Date.now(),
+      messageCount: 1,
+      provider: cfg?.provider ?? "",
+      model: cfg?.model ?? "",
+      workspace: cfg?.workspace ?? app.config?.workspace ?? "",
+      running: true,
+      waiting: null,
+    },
+    ...app.sessions,
+  ];
+  if (app.sessionsTotal >= 0) app.sessionsTotal += 1;
 }
 
 // M2 / U2：发送 / 插话的身份。非安全上下文（局域网 http 直连）没有 crypto.randomUUID，用 getRandomValues 拼。
@@ -1169,6 +1226,58 @@ export async function newQuickChat() {
   }
 }
 
+// 「存为工作空间」（能力位 "quick-save"）：服务端把当前快照桶原地登记成普通项目（名字「快照会话 N」），
+// 快照位换上新桶。桶路径不变，会话按 workspace 归组——那条对话自然从快照区落进项目列表，正开着的不用重开；
+// 此后不再被「新建快照」顶掉。
+export function canSaveQuick(): boolean {
+  return Boolean(app.compat?.caps?.includes("quick-save"));
+}
+export async function saveQuickAsProject(): Promise<ProjectMeta | null> {
+  const cur = app.projects.find((p) => p.quick);
+  if (!cur) return null;
+  try {
+    const r = await api.saveQuickChat(cur.path, t("快照会话"));
+    const p = r?.project as ProjectMeta | undefined;
+    if (!p?.path) throw new Error(t("服务器未返回存好的工作空间"));
+    const key = pathKey(p.path);
+    const rest = app.projects.filter((x) => !x.quick && pathKey(x.path) !== key);
+    app.projects = [p, ...rest, ...(r.quick?.path ? [r.quick as ProjectMeta] : [])];
+    void refreshSessions();
+    if (canReorderProjects()) void refreshProjects();
+    toast(t("已存为工作空间「{name}」", { name: p.name }));
+    return p;
+  } catch (e: any) {
+    toast(t("存为工作空间失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
+    void refreshProjects();
+    return null;
+  }
+}
+
+// 项目改名（能力位 "project-rename"）：只改显示名，目录与会话都不动；留空 = 恢复成文件夹名。乐观上屏，失败退回。
+export function canRenameProject(): boolean {
+  return Boolean(app.compat?.caps?.includes("project-rename"));
+}
+export async function renameProject(project: ProjectMeta, name: string): Promise<boolean> {
+  const key = pathKey(project.path);
+  const prev = app.projects;
+  const clean = name.trim();
+  if (clean === project.name) return true;
+  if (clean) app.projects = prev.map((p) => (pathKey(p.path) === key ? { ...p, name: clean } : p));
+  try {
+    const next = (await api.renameProject(project.path, clean)) as ProjectMeta;
+    const rows = [...app.projects];
+    const i = rows.findIndex((p) => pathKey(p.path) === key);
+    if (i >= 0) rows[i] = next;
+    else rows.push(next);   // 隐式项目第一次落库
+    app.projects = rows;
+    return true;
+  } catch (e: any) {
+    app.projects = prev;
+    toast(t("改名失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
+    return false;
+  }
+}
+
 // Q13：导出当前对话的诊断包——服务端写进会话工作区，这里按「产物」打开：有宿主（bridge）交给它的查看器（手机上能分享 /
 // 另存），独立运行时直接下载。
 export function diagnosticsAvailable(): boolean {
@@ -1201,8 +1310,9 @@ async function patchGlobalConfig(patch: Record<string, unknown>) {
   return cfg;
 }
 
-// 页内切换：同家收起浮层即可；异家切 provider（会话绑定创建时的 provider，
-// 切家 = 开新对话，旧的在历史里；在跑的转入后台继续）。成功打一发网格脉冲。
+// 页内切换：同家收起浮层即可；异家切 provider。已经开跑的会话（服务端能力位 "session-provider"）就在这条会话里换家——
+// 聊过的内容接着用，在跑的这一轮照旧跑完、下一条消息起用新的（以前一切换模型就开新对话）；
+// 还没开跑的 / 老服务端，照旧切家 = 开新对话。成功打一发网格脉冲。
 export async function switchVendor(provider: string) {
   if (provider === app.config?.provider) {
     app.vendorMenu = false;
@@ -1210,6 +1320,25 @@ export async function switchVendor(provider: string) {
     return;
   }
   haptic("medium");
+  const chat = app.chat;
+  if (chat.id && chat.cfg && sessionProviderAvailable()) {
+    try {
+      const r = await api.setSessionModel(chat.id, { provider });
+      if (chat.cfg) chat.cfg = { ...chat.cfg, provider: r.provider ?? provider, model: r.model, thinking: r.thinking };
+      app.vendorMenu = false;
+      if (r.pending) toast(t("这一轮跑完后生效，下一条消息起用新的设置"));
+    } catch (e: any) {
+      toast(t("切换失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
+      return;
+    }
+    // 全局跟上作新对话的默认（型号菜单读全局）；写失败不回滚会话
+    try {
+      const cfg = chat.cfg;
+      await patchGlobalConfig(cfg ? { provider: cfg.provider, model: cfg.model, ...(cfg.thinking ? { thinking: cfg.thinking } : {}) } : { provider });
+    } catch { /* 静默 */ }
+    pulseGrid();
+    return;
+  }
   try {
     await patchGlobalConfig({ provider });
     newChat();
@@ -1218,6 +1347,16 @@ export async function switchVendor(provider: string) {
   } catch (e: any) {
     toast(t("切换失败：{reason}", { reason: tr(String(e?.message ?? e)) }));
   }
+}
+function sessionProviderAvailable(): boolean {
+  return Boolean(app.compat?.caps?.includes("session-provider"));
+}
+// 换厂商入口下面那行说明（型号菜单与模型服务浮层共用）
+export function vendorSwitchNote(chat: Chat): string {
+  if (chat.id && chat.cfg && sessionProviderAvailable()) {
+    return chat.running ? t("这一轮跑完后换，对话接着用") : t("在当前对话里换，聊过的内容接着用");
+  }
+  return chat.running ? t("当前任务转入后台继续跑；切换后开启新对话") : t("切换后开启新对话，历史会话保留各自的服务归属");
 }
 
 // 型号 / 思考深度：先在本机上屏（菜单里的勾、思考深度的选中块当场挪过去），再写全局配置——以前要等服务端往返，
@@ -1229,6 +1368,21 @@ export async function setModel(model: string) {
 }
 export async function setEffort(thinking: string) {
   await patchConfigOptimistic({ thinking }, (reason) => t("换思考深度没成功：{reason}", { reason }));
+}
+// fast mode：全局粘性开关（服务端每次请求现读，跑着的会话下一次请求就生效），不进会话快照，所以只写全局配置
+export async function setFast(fast: boolean) {
+  const prev = app.config;
+  if (prev) app.config = { ...prev, fast };
+  try {
+    await patchGlobalConfig({ fast });
+  } catch (e: any) {
+    if (app.config?.fast === fast && prev) app.config = { ...app.config, fast: prev.fast };
+    toast(t("切换 fast mode 没成功：{reason}", { reason: tr(String(e?.message ?? e)) }));
+  }
+}
+// 当前型号支不支持 fast（服务端 catalog 的 fast 标记；只有 Opus 5.5 / Opus 5 / Opus 4.8）
+export function modelSupportsFast(provider: string | undefined, model: string | undefined): boolean {
+  return modelsOf(provider ?? "").find((m) => m.id === model)?.fast === true;
 }
 function sessionModelAvailable(): boolean {
   return Boolean(app.compat?.caps?.includes("session-model"));
@@ -1464,6 +1618,10 @@ export function customVendors(): VendorView[] {
 // 「＋」卡只在服务端支持、且不是租户实例（多用户服务端上不许替用户连任意地址）时出现
 export function canAddCustomVendor(): boolean {
   return Boolean(app.compat?.caps?.includes("custom-providers")) && !app.info?.tenant?.tenant;
+}
+// 服务端有「智能识别」（协议、型号能力、检测连接 / 拉型号 / 探测 / 测试）：编辑器用新表单；老服务端照旧显示地址 + Key 的简表单
+export function customVendorV2(): boolean {
+  return Boolean(app.compat?.caps?.includes("custom-providers-v2"));
 }
 
 // ── 历史会话 ─────────────────────────────────────────────────────────────────
@@ -2137,8 +2295,10 @@ function resumeLiveStreams() {
 }
 
 // ── 挂后台自愈：watchdog + 回前台/网络恢复对账（遍历活跃池）────────────────
-const STALL_HARD_MS = 40_000; // 服务端 15s 一发 ping：连丢两个多判死
-const STALL_WAKE_MS = 12_000; // 回前台时更急：超过就直接撕掉重连
+const STALL_HARD_MS = 40_000; // 服务端 10s 一发 ping（2026-10-21 前是 15s）：连丢三个多判死
+// 回前台时更急：超过就直接撕掉重连。必须大于一个心跳间隔再加余量（harness 服务端 10s 一发 ping，以前 15s）——以前是 12s，
+// 15s 心跳下最近一次 ping 之后 12–15s 内回前台，健康的流也会被判半开撕掉重连（同 bridge 的 web/src/lib/sse.js FR4）
+const STALL_WAKE_MS = 22_000;
 
 setInterval(() => {
   if (document.hidden) return; // 后台定时器本就不可靠；回前台由 onWake 兜
@@ -2164,6 +2324,11 @@ function onWake() {
         if (chat.abortCtl && Date.now() - chat.lastByteAt > STALL_WAKE_MS) forceResync(chat);
       }
     }
+    // 回到前台：后台冻结期间（手机锁屏、WebView 挂起）全局事件可能整段错过、连接却没断，侧栏重拉一次（15 秒节流）
+    if (Date.now() - lastWakeListAt > 15_000) {
+      lastWakeListAt = Date.now();
+      scheduleListRefresh("both");
+    }
     // 空闲态对账（前台）：上次可能异常收尾（network error / 假完成），服务端也许还在跑
     const chat = app.chat;
     if (chat.id && !chat.running && !chat.reconnecting && Date.now() - lastProbeAt > 5_000) {
@@ -2184,8 +2349,8 @@ async function probeIdle() {
   } catch { /* 连不上就下次再说 */ }
 }
 
+// 不挂 window focus：桌面瘦客户端里点一下窗口就会触发，误把健康的流当半开（FR4）；回前台由 visibilitychange / pageshow 兜
 window.addEventListener("online", onWake);
-window.addEventListener("focus", onWake);
 window.addEventListener("pageshow", onWake);
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) onWake();

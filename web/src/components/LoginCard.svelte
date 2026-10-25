@@ -37,6 +37,9 @@
   const cardH = $derived((me.kind !== 'none'
     ? (userMode === 'pw' ? MODE_H.pw : (canScan ? MODE_H.userScan : MODE_H.user) + userExtra)
     : (MODE_H[mode] || 392)) + enExtra);
+  // 单人服务器（没开多用户）账号密码只有服务账号能登：默认摆令牌登录（用户点过别的就不再改）
+  let picked = false;
+  $effect(() => { if (open && me.kind === 'none' && !picked && mode === 'login' && me.features?.multiUser === false) mode = 'token'; });
 
   let vw = $state(390), vh = $state(800), pillW = $state(88), pillEl = $state();
   // pill 顶距要让出系统状态栏：--sat 由 app.css env() 给出，getComputedStyle 拿解析后的 px。
@@ -219,6 +222,7 @@
         </div>
       {:else if mode === 'register'}
         <h3>{t('注册')}</h3>
+        <p class="reg-note">{t('服主默认只看得到你的会话标题、时间和用量；看内容要你在设置里允许。')}</p>
         {#if err}<div class="err">{err}</div>{/if}
         <input class="lf" placeholder={t('账号（2–32 位字母/数字/_/-）')} bind:value={username} autocomplete="off" />
         <input class="lf" type="password" placeholder={t('密码（至少 8 位）')} bind:value={password} />
@@ -256,7 +260,7 @@
         <input class="lf" placeholder={t('访问令牌')} bind:value={tok} onkeydown={(e) => onKey(e, doToken)} />
         <div class="acts">
           <button class="act primary" onclick={doToken} disabled={busy}>{busy ? t('登录中…') : t('登录')}</button>
-          <button class="act ghost" onclick={() => { mode = 'login'; err = ''; }}>{t('返回')}</button>
+          <button class="act ghost" onclick={() => { picked = true; mode = 'login'; err = ''; }}>{t('返回')}</button>
         </div>
       {:else}
         <h3>{t('欢迎回来')}</h3>
@@ -265,7 +269,7 @@
         <input class="lf" type="password" placeholder={t('密码')} bind:value={password} onkeydown={(e) => onKey(e, doLogin)} />
         <div class="acts">
           <button class="act primary" onclick={doLogin} disabled={busy}>{busy ? t('登录中…') : t('登录')}</button>
-          <button class="act ghost" onclick={() => { mode = 'qr'; err = ''; }}>{t('扫码登录')}</button>
+          <button class="act ghost" onclick={() => { picked = true; mode = 'qr'; err = ''; }}>{t('扫码登录')}</button>
           <div class="links">
             <!-- 服务器没开注册（主机形态）就不摆：点进去也只会被拒 -->
             {#if me.features?.register !== false}
@@ -350,6 +354,7 @@
   @keyframes qrspin { to { transform: rotate(360deg); } }
   .qrhint { font-size: 13px; color: #6b6f78; text-align: center; line-height: 1.4; }
   .err { background: rgba(217,106,90,.14); color: #b13b2a; font-size: 13px; padding: 9px 13px; border-radius: 11px; }
+  .reg-note { margin: -2px 0 2px; font-size: 12.5px; line-height: 1.5; opacity: .7; }
   .usage { display: flex; flex-direction: column; gap: 9px; margin: 4px 0 2px; }
   .urow { display: flex; justify-content: space-between; font-size: 15px; color: #2a2d34; }
   .urow span:last-child { font-weight: 700; }

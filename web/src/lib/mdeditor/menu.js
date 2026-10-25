@@ -250,7 +250,7 @@ export function createMenuCtl() {
 
   function runItem(it) {
     if (it.run) it.run(view);
-    else if (it.cmd) commands[it.cmd]?.(view);
+    else if (it.cmd) commands[it.cmd]?.(view, { flash });   // flash：缩进在首项上挂不上去时的提示
   }
 
   // ———— 键盘高亮（↑↓ 走项、→/Enter 开子菜单、← 收子菜单）————
@@ -433,8 +433,8 @@ export function createMenuCtl() {
     };
     const sep = () => bar.insertAdjacentHTML('beforeend', '<span class="sb-sep"></span>');
     if (kind === 'list') {
-      mk(ICONS.outdent, t('减少缩进'), () => commands.outdentList(view));
-      mk(ICONS.indent, t('增加缩进'), () => commands.indentList(view));
+      mk(ICONS.outdent, t('减少缩进'), () => commands.outdentList(view, { flash }));
+      mk(ICONS.indent, t('增加缩进'), () => commands.indentList(view, { flash }));   // 手机没有 Tab 键：首项的提示靠这里
       sep();
       mk(ICONS.task, t('切换待办'), () => commands.toggleTask(view));
     }

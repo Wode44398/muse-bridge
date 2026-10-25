@@ -18,14 +18,15 @@
 //     已收尾、零帧、有内容的消息」，其次「当前开着、零帧、有内容的消息」（通知先于回退流到、message_stop
 //     还没来）。都不是 → 不撤：那是 server lane 缝合（uuid 是墓碑，正文该保留）或子 agent 的帧。
 //   · 幂等：处理过的 uuid 不再算（通知的 retracted_message_uuids 与重试首帧的 supersedes 是同一份）。
-const DIMS = ['text', 'think', 'tools'];
+// widgets = 内嵌图表段（show_widget 的 widget_start 条数，见 mcp/visualize.mjs）：被拒那截里画了一半的图也要撤。
+const DIMS = ['text', 'think', 'tools', 'widgets'];
 
 export function makeRetractLedger() {
-  const sent = { text: 0, think: 0, tools: 0 };   // 已发给前端的正文字符数 / 思考字符数 / tool 事件条数
+  const sent = { text: 0, think: 0, tools: 0, widgets: 0 };   // 已发给前端的正文字符数 / 思考字符数 / tool 事件条数 / 图表段数
   let frames = [];                                 // { uuid, text0,text1, think0,think1, tools0,tools1, msg }
   let cur = null;                                  // 当前 API 消息 { open, frames, retracted, k0, k1 }
   let closed = [];                                 // 已收尾的消息（空且零帧的不入表：无物可撤）
-  const end = { text: 0, think: 0, tools: 0 };     // 上一帧结束时的计数（下一帧的区间起点）
+  const end = { text: 0, think: 0, tools: 0, widgets: 0 };     // 上一帧结束时的计数（下一帧的区间起点）
   const seen = new Set();
 
   const hasContent = (o) => DIMS.some((k) => (o.open ? sent[k] : o[k + '1']) > o[k + '0']);
@@ -53,7 +54,7 @@ export function makeRetractLedger() {
     for (const u of uuids) seen.add(u);
     const hitSet = new Set(uuids);
     const hits = frames.filter((f) => hitSet.has(f.uuid));
-    const lo = { text: Infinity, think: Infinity, tools: Infinity }, hi = { text: -1, think: -1, tools: -1 };
+    const lo = { text: Infinity, think: Infinity, tools: Infinity, widgets: Infinity }, hi = { text: -1, think: -1, tools: -1, widgets: -1 };
     const take = (o) => {
       for (const k of DIMS) {
         const a = o[k + '0'], b = o.open ? sent[k] : o[k + '1'];
@@ -80,6 +81,7 @@ export function makeRetractLedger() {
     }
     if (!any) return null;
     const ev = { type: 'retract', textFrom: lo.text, textTo: hi.text, thinkFrom: lo.think, thinkTo: hi.think, toolsFrom: lo.tools, toolsTo: hi.tools };
+    if (cut.widgets > 0) { ev.widgetsFrom = lo.widgets; ev.widgetsTo = hi.widgets; }   // 有图表才带（旧帧形状不变）
     // 记账前移：区间内（被撤消息的）帧作废，区间之后的计数减去删掉的长度；区间之前的不动
     const shift = (v, k) => (v >= hi[k] ? v - cut[k] : (v > lo[k] ? lo[k] : v));
     for (const k of DIMS) { sent[k] = shift(sent[k], k); end[k] = shift(end[k], k); }
@@ -102,6 +104,7 @@ export function makeRetractLedger() {
     addText: (n) => { sent.text += n; },
     addThink: (n) => { sent.think += n; },
     addTool: () => { sent.tools += 1; },
+    addWidget: () => { sent.widgets += 1; },
     frame,
     retract,
     // 调试 / 单测用的只读快照

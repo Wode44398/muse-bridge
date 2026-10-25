@@ -24,7 +24,7 @@
   import SButton from './SButton.svelte';
   import SToggle from './SToggle.svelte';
   import SSegmented from './SSegmented.svelte';
-  import { t, tr } from '../../lib/i18n.js';
+  import { t, tc, tr } from '../../lib/i18n.js';
 
   let loadErr = $state('');
   onMount(() => {
@@ -176,7 +176,7 @@
   </div>
 {/if}
 
-<SSection title={t('显示')}>
+<SSection title={tc('settings', '显示')}>
   <SRow label={t('dimensio 外观')} desc={t('dimensio 分页自己的明暗，与 Claude 的主题分开')} sid="dim-appearance">
     {#snippet trailing()}<SSegmented options={APPEARANCE} value={hx.appearance} onchange={setAppearance} label={t('dimensio 外观')} />{/snippet}
   </SRow>

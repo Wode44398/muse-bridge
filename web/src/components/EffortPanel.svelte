@@ -12,7 +12,9 @@
   //   细胞网格 shader 原版；离开顶档 pressEnd 冷却。prefers-reduced-motion 全静。
   import { cubicOut } from 'svelte/easing';
   import { caps, settings } from '../lib/state.svelte.js';
-  import { claudeEffortFallback } from '../lib/caps.js';
+  import { claudeEffortFallback, claudeDefaultModel } from '../lib/caps.js';
+  import { isCustomModel, effortChoices, defaultEffortFor } from '../lib/claudeProviders.svelte.js';   // 自定义模型按它自己的档位表
+  import { cs } from '../lib/claudeSettings.svelte.js';
   import { rememberCurrentPrefs } from '../lib/chat.svelte.js';
   import { pushBackLayer } from '../lib/nav.js';
   import { clampX } from '../lib/clampx.js';
@@ -24,24 +26,33 @@
 
   // 快照访客没有 Ultracode：服务端把它静默降到 xhigh 又不发 effort 实况，列出来只会让芯片恒显 Ultracode 却
   // 没有任何降档提示——直接不列（chat 内核发请求时也把残留的 ultracode 归成 xhigh）。
-  const efforts = $derived((caps.data?.claude?.efforts || []).filter((e) => !IS_CSNAP || e.id !== 'ultracode'));
+  // 自定义 API 的模型（custom:<服务>:<模型>）：档位是它自己的表（设置 › Claude › 模型服务，含「默认」= 什么都不发）
+  const curModel = $derived(settings.model || claudeDefaultModel(caps.data));
+  const custom = $derived(isCustomModel(curModel));
+  const efforts = $derived(custom ? effortChoices(curModel, caps.data) : (caps.data?.claude?.efforts || []).filter((e) => !IS_CSNAP || e.id !== 'ultracode'));
   const N = $derived(efforts.length);
   const idx = $derived.by(() => {
-    const i = efforts.findIndex((e) => e.id === (settings.effort || claudeEffortFallback(caps.data, settings.model)));
+    // 自定义模型：没选 = 默认档；默认档为空时列表头上那一项「默认」（id ''）就是它
+    const want = custom ? (settings.effort && efforts.some((e) => e.id === settings.effort) ? settings.effort : defaultEffortFor(curModel)) : (settings.effort || claudeEffortFallback(caps.data, settings.model));
+    const i = efforts.findIndex((e) => e.id === want);
     return i < 0 ? Math.min(2, Math.max(0, N - 1)) : i;
   });
   // Ultracode 档（capabilities.efforts 末尾 {id:'ultracode'}）= 官方唯一带 accent 的档位：紫档名 /
-  // 紫点 / 能量场都跟着它走（官方 items.at(-1).accent）。表里还没有它（旧后端）时退回「最后一档」
-  // ——沿用此前把顶档当 Ultracode 位的做法，过渡期视觉不回退。
+  // 紫点 / 能量场都跟着它走（官方 items.at(-1).accent）。只认 id——按模型的档位表里没有它时，
+  // 最高档不能被渲染成 Ultracode（前端编译时自带同源 CAPABILITIES，旧后端兜底用不着「末档当 accent」的回落）。
   const ULTRA = 'ultracode';
-  const accentIdx = $derived.by(() => { const i = efforts.findIndex((e) => e.id === ULTRA); return i >= 0 ? i : N - 1; });
-  const accent = $derived(N > 1);
+  const accentIdx = $derived(efforts.findIndex((e) => e.id === ULTRA));
+  const accent = $derived(accentIdx >= 0 && N > 1);
+  // 设置 › Claude › 对话 › 动态工作流 关着：Ultracode（= xhigh + 工作流）这一档置灰——拖 / 点到它都落回上一档，
+  // 能量场不点亮。已经选着 Ultracode 的会话不动（服务端对 ultracode 档仍强制开工作流）。
+  const ultraOff = $derived(cs.values.enableWorkflows === false);
+  const allowed = (i) => (ultraOff && (efforts[i] || {}).id === ULTRA ? Math.max(0, i - 1) : i);
 
   // 拖动中的高亮档（官方 onValueChange 只改高亮、onValueCommitted 才落值）
   let hlIdx = $state(null);
   const disp = $derived(hlIdx == null ? idx : hlIdx);
   const restPct = $derived(N > 1 ? (disp / (N - 1)) * 100 : 0);
-  const topStop = $derived(accent && disp === accentIdx);
+  const topStop = $derived(accent && disp === accentIdx && !(ultraOff && (efforts[disp] || {}).id === ULTRA));
   const label = $derived((efforts[disp] || {}).name || '');
 
   let dragging = $state(false);
@@ -52,10 +63,13 @@
   const HSE = '400ms linear(0, 0.0497, 0.1647, 0.3069, 0.4517, 0.5848, 0.6991, 0.7923, 0.8647, 0.9186, 0.9571, 0.9831, 0.9996, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)';
 
   function commit(i) {
+    i = allowed(i);
     const e = efforts[i];
     // 改即记，杀后台不丢；effortAt 让输入栏芯片知道「用户刚改过」——上一轮 Stop hook 回报的
     // 实际生效档位比这个时刻旧就不再盖住用户的新选择（下一轮跑完再更新）。
-    if (e && settings.effort !== e.id) { settings.effort = e.id; settings.effortAt = Date.now(); rememberCurrentPrefs(); }
+    // 自定义模型的「默认」项 id 为空 = 不选（null）
+    const v = e ? (e.id || null) : undefined;
+    if (e && settings.effort !== v) { settings.effort = v; settings.effortAt = Date.now(); rememberCurrentPrefs(); }
     hlIdx = null;
   }
 
@@ -156,12 +170,13 @@
     e.stopPropagation();
     clearEndCb(); setTransitions();
     control.style.removeProperty('--slider-drag-pos');
+    i = allowed(i);
     setDisp(i); commit(i);
     const done = (ev) => { if (ev && ev.propertyName !== 'left') return; clearEndCb(); fillEl.style.transition = ''; thumbEl.style.transition = ''; };
     endCb = done; thumbEl.addEventListener('transitionend', done);
   }
   // 键盘（隐藏 input）：官方即时落值、无动画
-  function onInput() { const i = +inputEl.value; setDisp(i); commit(i); }
+  function onInput() { const i = allowed(+inputEl.value); setDisp(i); commit(i); }
   function onKeyEsc(e) { if (e.key === 'Escape') { e.preventDefault(); onClose?.(); } }
 
   // —— WebGL2 能量场（官方 pse 宿主逐行移植 + shader 原文）——
@@ -447,7 +462,9 @@ void main() {
   const isUltraDisp = $derived((efforts[disp] || {}).id === ULTRA);
   const xhighLabel = 'Extra high';
   const helpTitle = $derived(isUltraDisp ? 'Ultracode' : 'Effort');
-  const helpBody = $derived(isUltraDisp
+  const helpBody = $derived(isUltraDisp && ultraOff
+    ? tt('Ultracode 要用动态工作流，它在 设置 › Claude 里关着。')
+    : isUltraDisp
     ? `Ultracode is ${xhighLabel} effort plus workflows. Most thorough, slowest, and heaviest on your limits. Applies to this session only. New sessions start without it.`
     : 'Higher effort means more thorough responses, but takes longer and uses your limits faster.');
 </script>
@@ -459,7 +476,7 @@ void main() {
     <div class="ef-head-l">
       <h2 class="ef-title">Effort</h2>
       <span class="ef-valwrap">
-        {#key disp}<span class="ef-val" class:accent={topStop} in:lbIn={{ d: lbDir }} out:lbOut={{ d: lbDir }}>{label}</span>{/key}
+        {#key disp}<span class="ef-val" class:accent={topStop} class:off={ultraOff && isUltraDisp} in:lbIn={{ d: lbDir }} out:lbOut={{ d: lbDir }}>{label}</span>{/key}
       </span>
     </div>
     <button type="button" class="ef-help" aria-label="About effort"
@@ -473,6 +490,8 @@ void main() {
       </div>
     {/if}
   </div>
+  <!-- 只有一档（自定义模型的档位表可能就一项）：只显示档名，不画拉条 -->
+  {#if N > 1}
   <div class="ef-sec">
     <div class="ef-ends"><span>Faster</span><span>Smarter</span></div>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -491,7 +510,7 @@ void main() {
       <span class="ef-dots" aria-hidden="true">
         {#each efforts as e, i (e.id)}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <span class="ef-dot" class:last={accent && i === accentIdx} style:--ds={35 * (N - 1 - i) + 'ms'} title={e.name}
+          <span class="ef-dot" class:last={accent && i === accentIdx} class:off={ultraOff && e.id === ULTRA} style:--ds={35 * (N - 1 - i) + 'ms'} title={e.name}
             onpointerdown={(ev) => dotTap(ev, i)}><span class="ef-dot-hit"></span></span>
         {/each}
       </span>
@@ -503,6 +522,7 @@ void main() {
       </span>
     </div>
   </div>
+  {/if}
 </div>
 
 <style>
@@ -627,6 +647,8 @@ void main() {
   .ef-dot { pointer-events: auto; position: relative; display: flex; width: 3px; height: 3px;
     align-items: center; justify-content: center; border-radius: 999px; background: var(--ef-t5); }
   .ef-dot.last { background: var(--extended-purple); }
+  .ef-dot.off { background: var(--ef-t5); }
+  .ef-val.off { color: var(--ef-t5); }
   .ef-dot-hit { position: absolute; inset: -10px -8px; }
   @media (prefers-reduced-motion: no-preference) {
     .ef-dot { transition: opacity .3s ease var(--ds, 0ms); }

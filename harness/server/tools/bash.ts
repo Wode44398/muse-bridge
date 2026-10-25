@@ -227,6 +227,16 @@ const HOST_IMAGE_KILL_RES: RegExp[] = [
   /\b(?:node|cloudflared)\.exe\b[^\n]*\|\s*(?:Invoke-CimMethod|Remove-CimInstance|Remove-WmiObject|%\s*\{[^}]*Terminate)/i,
 ];
 const HOST_PPID_RE = /\bkill\b[^|;&\n]*\$\{?PPID\b/i;
+// 目标全是字面 PID 的一段 kill（`taskkill /PID 123 /T /F`、`kill -9 123 456`、`Stop-Process -Id 123 -Force`）：杀谁一眼可见
+const LITERAL_PID_KILL_RE = new RegExp(
+  "^(?:" +
+    String.raw`taskkill(?:\.exe)?(?=[^|]*[/-]pid\s+\d)(?:\s+[/-](?:pid\s+\d+|t|f))+` + "|" +
+    String.raw`kill(?:\s+-(?:\d+|[A-Z]+|s\s+[A-Z]+))?(?:\s+\d+)+` + "|" +
+    // 没写 -Id 的 Stop-Process 是从管道接目标的
+    String.raw`(?:Stop-Process|spps)(?=[^|]*-Id\s+\d)(?:\s+-(?:Id\s+\d+(?:\s*,\s*\d+)*|Force))+` +
+  ")\\s*$",
+  "i",
+);
 
 function hostPids(): Set<number> {
   return new Set([process.pid, process.ppid].filter((pid) => Number.isInteger(pid) && pid > 0));
@@ -251,12 +261,18 @@ export function hostKillViolation(command: string): string | null {
     return "this would kill every node process — including the bridge server and dimensio itself, which run you." + way;
   }
   if (HOST_PPID_RE.test(host)) return "$PPID of this shell is dimensio itself." + way;
+  // 只看 kill 段本身，还是看整句：kill 段的目标都是写死的 PID 字面量时，别的段里提到宿主端口 / 数字（`curl …:8787` 探活、
+  // `sleep 2`）跟杀谁无关——2026-10-09 `taskkill //PID 93052 //T //F; …; curl http://127.0.0.1:8787/` 被整句拒了。
+  // 目标是算出来的（$(lsof …)、$P、%a、xargs、管道喂进来的 Stop-Process）就仍按整句判：端口号可能就是在别的段里换成 PID 的。
+  const segments = host.split(" | ");
+  const killSegments = segments.filter((segment) => KILL_VERB_RE.test(segment));
+  const scope = killSegments.every((segment) => LITERAL_PID_KILL_RE.test(segment)) ? killSegments.join(" | ") : host;
   const pids = hostPids();
-  for (const m of host.matchAll(/(?<![\w.:-])(\d{2,7})(?![\w.:])/g)) {
+  for (const m of scope.matchAll(/(?<![\w.:-])(\d{2,7})(?![\w.:])/g)) {
     if (pids.has(Number(m[1]))) return `PID ${m[1]} is the bridge server or dimensio itself.` + way;
   }
   for (const port of hostPorts()) {
-    if (new RegExp(`(?<![\\w.])${port}(?![\\w.])`).test(host)) {
+    if (new RegExp(`(?<![\\w.])${port}(?![\\w.])`).test(scope)) {
       return `port ${port} belongs to the bridge server / dimensio / the desktop shell.` + way;
     }
   }
@@ -480,8 +496,18 @@ export function childEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
   const localAppData = path.join(isolatedHome, "AppData", "Local");
   mkdirSync(appData, { recursive: true });
   mkdirSync(localAppData, { recursive: true });
+  // 隔离 HOME 让「本机装了什么、用户配置在哪」的查找全落空（2026-10-09：查已装客户端扑空，打包的 Electron 取不到 desktop 目录崩启动），
+  // 模型又不知道被重定向了。真实位置单独给出来，要找用户目录下的东西、或要以真实身份起 GUI 程序时显式用它；租户实例不给（那是管理员的家目录）。
+  const realHome = tenantMode()
+    ? {}
+    : {
+        REAL_USERPROFILE: os.homedir(),
+        REAL_LOCALAPPDATA: process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"),
+        REAL_APPDATA: process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"),
+      };
   return {
     ...env,
+    ...realHome,
     HOME: isolatedHome,
     USERPROFILE: isolatedHome,
     APPDATA: appData,
@@ -770,6 +796,42 @@ function resolveAbsoluteOnly(token: string): string | null {
   return null;
 }
 
+// 存在性测试：`[ -e x ]` / `[[ -f x ]]` / `test -d x` / `Test-Path x`。命令能完整解析时才认；被认出的那几段从命令文本里
+// 换成 `true`，凭据判定只看剩下的部分。`ls`、`stat` 不算（ls 一个凭据目录会列出私钥文件名，stat 的 -c 能拼出别的东西）。
+const EXISTENCE_FLAGS = new Set(["-e", "-f", "-d", "-s", "-r", "-w", "-x", "-L", "-h", "-b", "-c", "-p", "-S"]);
+function existenceTest(argv: string[]): boolean {
+  const name = (argv[0] ?? "").toLowerCase();
+  // Test-Path 只认 -Path / -LiteralPath / -PathType <Leaf|Container|Any> 这几个参数
+  if (name === "test-path") {
+    return argv.length >= 2 && argv.slice(1).every((a, i, rest) => !a.startsWith("-") ? true : /^-(?:Path|LiteralPath|PathType)$/i.test(a) && (!/^-PathType$/i.test(a) || /^(?:Leaf|Container|Any)$/i.test(rest[i + 1] ?? "")));
+  }
+  let args = argv.slice(1);
+  if (name === "[") {
+    if (args.at(-1) !== "]") return false;
+    args = args.slice(0, -1);
+  } else if (name === "[[") {
+    if (args.at(-1) !== "]]") return false;
+    args = args.slice(0, -1);
+  } else if (name !== "test") return false;
+  if (args[0] === "!") args = args.slice(1);
+  return args.length === 2 && EXISTENCE_FLAGS.has(args[0]);
+}
+
+export function withoutExistenceTests(command: string): string {
+  const parsed = parseShell(command, shellDialect());
+  if (parsed.unanalyzable) return command;
+  let out = command;
+  for (const c of parsed.commands) {
+    if (c.wrappers.length || c.dynamic || c.redirects.length || c.pipedIn || !existenceTest(c.argv)) continue;
+    if (c.words.some((w) => w.dynamic && /[`]|\$\(/.test(w.text))) continue;
+    const raw = c.raw.trim();
+    // 同一段原文在命令里出现不止一次（比如还藏在别的命令的引号参数里）就不摘，免得摘错地方
+    if (!raw || out.split(raw).length !== 2) continue;
+    out = out.replace(raw, "true");
+  }
+  return out;
+}
+
 // This guard is an enforceable boundary for direct model-supplied paths and the
 // common accidental escapes (`cd ..`, absolute host paths, credential files).
 // It is paired with a credential-free child environment. It deliberately does
@@ -783,10 +845,13 @@ export function commandScopeViolation(
   // P13（X18）：用户在卡片上放行的工作区外只读目录（与 DIMENSIO_READONLY_PATHS 同样只放行纯读命令）
   readRoots: string[] = [],
 ): string | null {
+  // 只问「在不在」的存在性测试（`[ -e x ]`、`test -f x`、`Test-Path x`）只回一个真假、读不到内容：判凭据时把它们的操作数摘掉
+  // （2026-10-09：核对打包目录里**没有** .env / devices.json 的检查被整句拒了）。其余部分照旧全判。
+  const guarded = withoutExistenceTests(command);
   const normalized = command.replace(/\\/g, "/");
   // 凭据库的名字出现在命令行任何一个路径段上都拒。S4（#37③）：以前前导字符不含 `/`，
   // 只认词首——`cat ./.env`、`cat config/.env`、`cat ~/.ssh/id_rsa`、绝对路径全漏。
-  if (/(^|[\s'"=;|&(/])(?:\.env(?:\.[^\s'";|&)/]+)?|\.ssh|\.aws|\.gnupg|\.azure|\.cloudflared|\.git-credentials|\.netrc|_netrc|\.npmrc|\.pypirc|\.?credentials\.json|id_rsa|id_ed25519|id_ecdsa|id_dsa)(?=$|[\s/'";|&)])/i.test(normalized)) {
+  if (/(^|[\s'"=;|&(/])(?:\.env(?:\.[^\s'";|&)/]+)?|\.ssh|\.aws|\.gnupg|\.azure|\.cloudflared|\.git-credentials|\.netrc|_netrc|\.npmrc|\.pypirc|\.?credentials\.json|id_rsa|id_ed25519|id_ecdsa|id_dsa)(?=$|[\s/'";|&)])/i.test(guarded.replace(/\\/g, "/"))) {
     return "command references a credential store blocked by the secret guard";
   }
   // Every resolvable path (absolute, git-bash /c/…, ~/…) goes through the SAME
@@ -794,7 +859,7 @@ export function commandScopeViolation(
   // the bridge config, and — outside the workspace — key material (.pem/.key,
   // judged by LOCATION: inside the workspace those are the agent's own fixtures)
   // and per-user dot directories under the home folder. Both access modes.
-  for (const candidate of filesystemPathCandidates(command)) {
+  for (const candidate of filesystemPathCandidates(guarded)) {
     if (/^https?:\/\//i.test(candidate.path)) continue;
     const abs = resolveCandidate(candidate.path);
     const verdict = abs ? readVerdict(abs, root) : null;
@@ -830,7 +895,7 @@ export function commandScopeViolation(
   // $HOME/%USERPROFILE% expand later in the shell, so they can point anywhere and
   // stay refused outright. A literal `~/x` is resolvable, so it goes through the
   // candidate check below like any other path and can be read-allowlisted.
-  if (/(^|[\s'"=;|&(])(?:\$HOME\b|\$\{HOME\}|%USERPROFILE%|\$env:USERPROFILE\b)/i.test(normalized)) {
+  if (/(^|[\s'"=;|&(])(?:\$HOME\b|\$\{HOME\}|%USERPROFILE%|\$env:USERPROFILE\b|\$\{?REAL_(?:USERPROFILE|LOCALAPPDATA|APPDATA)\b|%REAL_(?:USERPROFILE|LOCALAPPDATA|APPDATA)%|\$env:REAL_)/i.test(normalized)) {
     return "home-directory variables are blocked in workspace mode" + ACCESS_HINT;
   }
 
@@ -919,6 +984,8 @@ interface BashJob {
   killed?: boolean;
   // O6（K63）：Bash(wait) 在等它的（结束时逐个唤醒）
   waiters: Set<() => void>;
+  // 模型已经亲眼看到它的结局（poll/wait 拿到了结束状态，或是它自己 kill 的）——World State 不再把它当新消息报
+  seenDone?: boolean;
 }
 
 function wakeWaiters(job: BashJob): void {
@@ -1076,6 +1143,7 @@ async function startJob(
   });
 
   if (job.done) {
+    job.seenDone = true;
     const status = job.timedOut ? "timeout" : `exit ${job.exitCode}`;
     const output = renderOut(job.out);
     return {
@@ -1118,6 +1186,7 @@ function pollJob(id: string, verify: boolean, owner: string, waited?: { ms: numb
       ? "killed by timeout"
       : `exit ${j.exitCode}`
     : `running for ${elapsed}s`;
+  if (j.done) j.seenDone = true;
   const output = renderOut(j.out);
   const body = output || "(no output yet)";
   // V1：poll 时拿 job 当证据，它得是以 verify:true 启动的（pipefail 已开），或本来就是一条单独的命令。
@@ -1157,6 +1226,7 @@ function killJob(id: string, owner: string): ToolRunResult {
     killTree(j.child);
     j.markKilled();
   }
+  j.seenDone = true;
   return {
     ok: true,
     summary: `bash job ${j.id} killed`,
@@ -1302,10 +1372,10 @@ export function liveJobCount(owner: string): number {
 }
 
 // C4：这个会话已经结束的后台 job（World State 的 jobs 节）。只列结束了的——开跑是模型自己做的，结束它才不知道；
-// 不带耗时之类每轮都变的东西，只在又有 job 结束时才变。
+// 不带耗时之类每轮都变的东西，只在又有 job 结束时才变。模型已经 poll / wait 到结局或自己 kill 的不算新消息，不列。
 export function finishedJobsSummary(owner: string): string {
   return ownedJobs(owner)
-    .filter((j) => j.done)
+    .filter((j) => j.done && !j.seenDone)
     .map((j) => `${j.id} (${j.timedOut ? "timed out" : j.exitCode === null ? "killed" : `exit ${j.exitCode}`})`)
     .join(", ");
 }
@@ -1367,6 +1437,11 @@ export const bashTool: Tool = {
           "Put anything both sides must see under $WORKSPACE_TMP (already set, already created) " +
           "or inside the workspace. "
         : "") +
+      (tenantMode()
+        ? ""
+        : "HOME/USERPROFILE/APPDATA/LOCALAPPDATA point to an isolated scratch home, NOT the user's — to look for installed " +
+          "programs or user config use $REAL_USERPROFILE / $REAL_LOCALAPPDATA / $REAL_APPDATA, and when launching a GUI app " +
+          "that must run as the real user, export those back as USERPROFILE/LOCALAPPDATA/APPDATA for that command. ") +
       "Use for builds, tests, git, package managers. Prefer Read/Edit/Grep/Glob over cat/sed/grep/find. " +
       "For commands longer than ~2 minutes (full test suites, long builds) pass background:true — " +
       "you get a job id immediately and can keep working; read output with poll, wait for it to finish with wait, stop with kill. " +

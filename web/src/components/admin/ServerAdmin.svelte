@@ -7,7 +7,7 @@
   import { ui } from '../../lib/state.svelte.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { t, tc, tr } from '../../lib/i18n.js';
-  import { sa, loadOverview, loadLimits, loadActive, loadUsers, loadAccounts, accLabel, liveGens, saToastState, saConfirmState, saConfirmSettle } from '../../lib/serverAdmin.svelte.js';
+  import { sa, loadOverview, loadLimits, loadActive, loadUsers, loadAccounts, accLabel, pageVisible, liveGens, saToastState, saConfirmState, saConfirmSettle } from '../../lib/serverAdmin.svelte.js';
   import SaOverview from './SaOverview.svelte';
   import SaActive from './SaActive.svelte';
   import SaUsers from './SaUsers.svelte';
@@ -29,13 +29,16 @@
     close();
   }));
 
-  // 打开即拉全量一轮；随后 overview 8s、活跃 3.5s（总览/活跃页时）、limits 20s。
+  // 打开即拉全量一轮；随后 overview 30s、活跃 3.5s（总览/活跃页时）、limits 20s——页面在后台（切走标签 / 最小化）
+  // 时一律不拉，回到前台补一轮。服务端那头另有单飞 + 30 秒缓存；活跃 agent 有 3.5 秒的 loadActive 盖着。
   $effect(() => {
     loadOverview(); loadLimits(); loadUsers(); loadAccounts(); loadActive();
-    const t1 = setInterval(loadOverview, 8000);
-    const t2 = setInterval(() => { if (sa.page === 'overview' || sa.page === 'active') loadActive(); }, 3500);
-    const t3 = setInterval(loadLimits, 20000);
-    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
+    const t1 = setInterval(() => { if (pageVisible()) loadOverview(); }, 30000);
+    const t2 = setInterval(() => { if (pageVisible() && (sa.page === 'overview' || sa.page === 'active')) loadActive(); }, 3500);
+    const t3 = setInterval(() => { if (pageVisible()) loadLimits(); }, 20000);
+    const onVis = () => { if (pageVisible()) { loadOverview(); loadLimits(); } };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); document.removeEventListener('visibilitychange', onVis); };
   });
 
   // 手动刷新：核心数据 + 页面本地数据（页面 $effect 监听 sa.tick）

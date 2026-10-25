@@ -7,16 +7,16 @@ import { EditorState, Compartment } from '@codemirror/state';
 import { history, historyKeymap, defaultKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { syntaxHighlighting, indentUnit } from '@codemirror/language';
+import { syntaxHighlighting, indentUnit, ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { omExtensions } from './mdext.js';
 import { mdHighlight } from './theme.js';
-import { livePreview } from './livePreview.js';
+import { livePreview, lpRefresh, LP_MAX, singleDashPlain } from './livePreview.js';
 import { docTail } from './tail.js';
 import { commands } from './commands.js';
 import { mdKeys, detectIndentUnit, indentConf } from './keys.js';
 import { wikiCompletion } from './complete.js';
 import { createMenuCtl } from './menu.js';
-import { attachments } from './attach.js';
+import { attachments, insertFilesAt } from './attach.js';
 import { touchSelectGuard, keepNativeTouchSelection } from './touchGuard.js';
 import { edgeAutoScroll } from '../touchAutoScroll.js';
 import { t } from '../i18n.js';
@@ -35,6 +35,8 @@ import './editor.css';
 //   resolveUrl(name)      相对资源/![[嵌入]] → 可加载 URL（DocViewer.embedUrl）
 //   renderMd(src)         callout 等整块渲染（obsmd，与阅读模式同观感）
 //   saveAttachment(file, name) → Promise<{ link }>  粘贴/拖入/选择的文件存成附件，link 写进 ![[ ]]（attach.js；不给=不接管）
+//   resolveAlts(name)     ![[图]] 的备选地址（主地址是猜的时候，加载失败按序换）
+export { LP_MAX };
 export function createMdEditor(opts = {}) {
   const { parent, doc = '', mode = 'live', readOnly = false } = opts;
   const lpComp = new Compartment();
@@ -62,6 +64,7 @@ export function createMdEditor(opts = {}) {
       // 缩进字符跟文档既有风格：Tab 列表缩进、lang-markdown 续行的 normalizeIndent、代码块缩进同源
       indentConf.of(indentUnit.of(detectIndentUnit(doc))),
       syntaxHighlighting(mdHighlight, { fallback: false }),
+      singleDashPlain,           // 段落下单个「-」：高亮按 H2 打的 token 归一成正文（两种模式都要，不进 lpComp）
       ...wikiCompletion(opts),   // [[ 笔记名 / [[# 标题 / #标签 补全（两种模式都要，不进 lpComp）；补全键位 Prec.highest，弹出时 Enter/Tab 先选候选
       mdKeys(lpOpts),            // Prec.high：先于下面的 historyKeymap / defaultKeymap
       keymap.of([...historyKeymap, ...defaultKeymap]),
@@ -113,7 +116,37 @@ export function createMdEditor(opts = {}) {
       while (b < n - a && cur.charCodeAt(cur.length - 1 - b) === next.charCodeAt(next.length - 1 - b)) b++;
       view.dispatch({ changes: { from: a, to: cur.length - b, insert: next.slice(a, next.length - b) }, userEvent: 'merge' });
     },
-    cmd(name) { const fn = commands[name]; if (fn) fn(view); },
+    cmd(name) { const fn = commands[name]; if (fn) fn(view, lpOpts); },   // lpOpts 带 flash（缩进在首项上的提示）
+    // Live Preview 整篇重建一次：![[嵌入]] 的地址靠出链索引/补全名单解析，它们是异步到货的——到货时
+    // DocViewer 调这里（只在解析结果真变了时），图才从占位/兜底地址换成真地址。组字中不动（会吞拼音）
+    refresh() {
+      if (view.composing || view.compositionStarted) return;
+      view.dispatch({ effects: lpRefresh.of(null) });
+    },
+    // 阅读态里粘贴/拖进来的文件：落在 pos 所在顶层块的后面另起一行（阅读态的落点只精确到块，插进段落
+    // 中间、表格行尾都会改坏结构）；pos 缺省＝文末。表格/列表/引用这类块后面空一行再写，免得成了它的续行。
+    // 换行（lead）不先写进文档：交给 attach 跟第一条链接同一笔写入——存附件失败（断网、413、额外授权位置）
+    // 时文档一个字不动，不会留下空行、变脏、被自动保存写盘
+    insertFiles(files, { pos = null, pasted = false } = {}) {
+      const { state } = view, doc = state.doc;
+      if (state.readOnly || !files?.length) return false;
+      let p = pos == null ? doc.length : Math.max(0, Math.min(Math.floor(pos), doc.length));
+      if (doc.lines > 1 && doc.line(1).text === '---') {   // 落在属性区（frontmatter）里：挪到正文第一行
+        for (let k = 2; k <= Math.min(doc.lines, 300); k++) {
+          if (/^---\s*$/.test(doc.line(k).text)) { if (p <= doc.line(k).to) p = Math.min(doc.length, doc.line(k).to + 1); break; }
+        }
+      }
+      const tree = ensureSyntaxTree(state, Math.min(doc.length, p + 5000), 100) || syntaxTree(state);
+      let top = tree.resolveInner(p, 1);
+      while (top.parent && top.parent.name !== 'Document') top = top.parent;
+      const end = top.name === 'Document' ? doc.lineAt(p).to : doc.lineAt(Math.min(top.to, doc.length)).to;
+      const line = doc.lineAt(end);
+      const loose = top.name !== 'Document' && !/^(Paragraph|ATXHeading\d|SetextHeading\d)$/.test(top.name);
+      const lead = !line.text.trim() ? '' : state.lineBreak + (loose ? state.lineBreak : '');
+      view.dispatch({ selection: { anchor: end }, scrollIntoView: true, userEvent: 'select' });
+      view.focus();
+      return insertFilesAt(view, files, end, pasted, lead);
+    },
     // [[#标题]] / [[笔记#标题]]：标题落到视口上部（与阅读态 block:'start' 一致；默认的 scrollIntoView:true
     // 是 nearest，目标在下方时只滚到刚露出，标题贴着底边）。认 ATX 与 Setext 标题；匹配口径同阅读态：
     // 原文（忽略大小写）→ slug（空白/下划线/连字符同算 -、去标点）；[[笔记#父#子]] 认最后一段。
@@ -134,7 +167,8 @@ export function createMdEditor(opts = {}) {
         if (f) { fence = f[1]; continue; }
         const m = /^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$/.exec(tx);
         if (m) { heads.push({ line, t: m[1] }); continue; }
-        if (n < doc.lines && tx.trim() && !/^\s*([-*+]|\d+[.)]|>|\|)/.test(tx) && /^ {0,3}(=+|-+)\s*$/.test(doc.line(n + 1).text)) heads.push({ line, t: tx.trim() });
+        // setext 下划线：「-」至少两个（单个「-」编辑态按普通段落显示，同 Obsidian，见 livePreview）
+        if (n < doc.lines && tx.trim() && !/^\s*([-*+]|\d+[.)]|>|\|)/.test(tx) && /^ {0,3}(=+|-{2,})\s*$/.test(doc.line(n + 1).text)) heads.push({ line, t: tx.trim() });
       }
       let hit = null;
       for (const w of raw === last ? [raw] : [raw, last]) {

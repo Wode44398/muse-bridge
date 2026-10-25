@@ -44,6 +44,13 @@ export const CAPABILITIES = [
   "memory-overview", // K11 记忆总览：GET /api/memory/overview（全局层 + 各项目 + 旧快照桶的条目、用量、进提示字数、历史事件）
   "custom-providers", // 自定义模型服务：POST /api/custom-providers {name, baseUrl, apiKey, model?}、POST …/:id（改）、POST …/:id/delete；/api/info 的 catalog 里带 custom 字段（租户实例回 403）
   "session-model", // 会话内换型号 / 思考深度：POST /api/sessions/:id/model {model?, thinking?}（运行中回 pending，下一条消息起生效）；事件 model
+  "session-provider", // 同一接口也能换厂商：{provider, model?, thinking?}（没点名型号用那家默认）；事件 model 带 provider
+  "quick-save", // 快照存为工作空间：POST /api/quick/save {path?, base?} → {project, quick}（桶原地登记成项目、快照位换新桶）
+  "project-rename", // 项目改名（只改显示名）：POST /api/projects/rename {path, name}（name 留空 = 恢复成文件夹名）
+  // 自定义服务 v2（智能识别，和 Claude 外接同一种样式）：协议 openai / anthropic / gemini、型号带能力与档位表；GET /api/custom-providers/:id
+  // （完整记录）、POST /api/custom-providers/{models,guess,detect,probe,test}（草稿，不落盘）；add / update 收 models[] / defaultModel /
+  // protocol / authStyle / headers；/api/info 的 catalog 只列启用的对话型号，custom 字段带 protocol 与 all（型号总数）
+  "custom-providers-v2",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];

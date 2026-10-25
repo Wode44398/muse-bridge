@@ -48,3 +48,9 @@ test('没有附件的普通标题一字不动，超长照旧截断', () => {
   assert.equal(t.length, 81);
   assert.ok(t.endsWith('…'));
 });
+
+test('拉取请求：Auto-fix 事件不当标题；「创建拉取请求」长提示词显示成 /create-pr', () => {
+  assert.equal(trimTitle('<create-pr-command>\n## 概要\n用 `gh pr create` 开 PR\n</create-pr-command>'), '/create-pr');
+  assert.equal(trimTitle('<create-pr-command>\n用 `gh pr create --draft` 开草稿 PR\n</create-pr-command>'), '/create-pr --draft');
+  assert.equal(trimTitle('<ci-monitor-event>「自动修复拉取请求」正在盯 o/r PR #1</ci-monitor-event>\n顺便看看'), '顺便看看');
+});

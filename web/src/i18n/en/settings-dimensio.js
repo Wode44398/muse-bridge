@@ -2,7 +2,7 @@
 // 与 dimensio 字典（harness/web/src/i18n/en/hx-settings-sidebar.ts 等）里的同键同译。
 export default {
   // —— 模型服务 · API Key ——
-  '模型服务': 'Provider',
+  '模型服务': 'Model providers',
   '已配 Key': 'Key set',
   '缺 Key': 'No key',
   'Key 只存于服务端内存，不落盘、不回传浏览器。': 'The key is kept only in server memory. It’s never written to disk or sent to the browser.',
@@ -46,7 +46,7 @@ export default {
   'API Key、规则、工作空间与访问范围点「保存」后生效': 'API key, rules, workspace, and access take effect when you save',
 
   // —— 显示 ——
-  '显示': 'Display',
+  'settings::显示': 'Display',
   'dimensio 外观': 'dimensio appearance',
   'dimensio 分页自己的明暗，与 Claude 的主题分开': 'Light or dark for the dimensio page, separate from the Claude theme',
   '显示全部工作过程': 'Show all work steps',

@@ -20,6 +20,7 @@ function server() {
     frame: (uuid, sup) => { if (sup && sup.length) { const ev = L.retract(sup); if (ev) send(ev); } L.frame(uuid); },
     notice: (retracted) => { const ev = L.retract(retracted); if (ev) send(ev); send({ type: 'model_notice' }); },
     taskStart: (id) => send({ type: 'task_start', toolUseId: id }),   // 前端会合成 synthetic 行
+    widget: (id) => { L.addWidget(); send({ type: 'widget_start', id }); },   // 内嵌图表段（show_widget）
   };
 }
 // 前端：只复刻 text/thinking/tool/task_start/notice/retract 的段落效果
@@ -34,6 +35,7 @@ function replay(events) {
     else if (ev.type === 'tool') toolsSeg().tools.push({ id: ev.id, name: ev.name });
     else if (ev.type === 'task_start') toolsSeg().tools.push({ id: ev.toolUseId, name: 'Agent', synthetic: true });
     else if (ev.type === 'model_notice') m.segments.push({ kind: 'notice' });
+    else if (ev.type === 'widget_start') m.segments.push({ kind: 'widget', id: ev.id });
     else if (ev.type === 'retract') retractSegments(m, ev, (t) => forgotten.push(t.id));
   }
   return { m, forgotten };
@@ -147,4 +149,28 @@ test('J 旧协议保留长度：synthetic 行同样不计', () => {
   assert.deepEqual(tools(m), ['syn', 'a']);
   assert.deepEqual(texts(m), ['abc']);
   assert.equal(m.thinking, 'x');
+});
+
+test('K 被拒那截里画了一半的图表段一并撤掉；回退模型重画的那张、之前的那张保留', () => {
+  const s = server();
+  s.start(); s.text('先看图：'); s.widget('w0'); s.frame('A0'); s.stop();
+  s.start(); s.text('REFUSED'); s.widget('w1'); s.frame('A1'); s.stop();
+  s.start(); s.widget('w2'); s.frame('B1', ['A1']); s.text('重画好了'); s.frame('B2'); s.stop();
+  s.notice(['A1']);   // 幂等
+  const { m } = replay(s.out);
+  assert.deepEqual(m.segments.filter((x) => x.kind === 'widget').map((x) => x.id), ['w0', 'w2']);
+  assert.deepEqual(texts(m), ['先看图：', '重画好了']);
+  const ev = retracts(s)[0];
+  assert.equal(ev.widgetsFrom, 1);
+  assert.equal(ev.widgetsTo, 2);
+});
+
+test('L 没有图表的撤回：事件不带 widgets 字段（旧形状不变）', () => {
+  const s = server();
+  s.start(); s.widget('w0'); s.frame('A0'); s.stop();
+  s.start(); s.text('X'); s.frame('A1'); s.stop();
+  s.notice(['A1']);
+  assert.equal('widgetsFrom' in retracts(s)[0], false);
+  const { m } = replay(s.out);
+  assert.deepEqual(m.segments.map((x) => x.kind), ['widget', 'notice']);
 });

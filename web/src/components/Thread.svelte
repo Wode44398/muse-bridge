@@ -16,6 +16,14 @@
   // 官方 /code 页同款，见 impl-contract §5（组件目录 claude/）。
   import ToolGroup from './claude/ToolGroup.svelte';
   import ModelNotice from './claude/ModelNotice.svelte';
+  import LimitCard from './claude/LimitCard.svelte';
+  import SessionMsgCard from './claude/SessionMsgCard.svelte';
+  import PlanCard from './claude/PlanCard.svelte';   // 计划审批卡（ExitPlanMode，lib/permissions.svelte.js）
+  import { hasSessionEnvelope, parseSessionText } from '../lib/sessionFamily.svelte.js';
+  // 拉取请求：/create-pr 提示词与 Auto-fix 的 CI 事件在转录里的样子（pr.svelte.js）
+  import PrMsgCard from './claude/PrMsgCard.svelte';
+  import { prEnvelope } from '../lib/pr.svelte.js';
+  import WidgetFrame from './claude/WidgetFrame.svelte';   // 对话内嵌交互图表（show_widget）
   import { openPreview } from '../lib/preview.svelte.js';
   import { saveToDisk } from '../lib/save.js';
   import { onMdClick } from '../lib/linkNav.js';
@@ -32,7 +40,7 @@
   // waiting 等用户回答·长静默（idle 由计时器判，AskUserQuestion 待答期恒 waiting）。
   const starState = (m) => {
     if (m.status !== 'streaming') return 'static';
-    if (m.idle || m.segments.some((s) => s.kind === 'ask' && !s.answered)) return 'waiting';
+    if (m.idle || m.offerQid || m.segments.some((s) => (s.kind === 'ask' || s.kind === 'plan') && !s.answered)) return 'waiting';   // offerQid：「新会话 / 在这里做」卡在等
     const p = m.phase;
     if (p === 'tool') return 'orbiting';
     if (p === 'thinking' || p === 'writing' || p === 'shimmer' || p === 'waiting') return p;
@@ -158,6 +166,15 @@
         return;
       }
     }
+  }
+  // 限额卡的「重试」（官方 error retry 的两种走法）：撞墙那一轮什么都没产出 = 原样重发那条消息；
+  // 已经干了一半 = 发一句「接着做」，别把做完的部分再做一遍。
+  function retryAfterLimit(i) {
+    if (session.busy) return;
+    const m = chat.messages[i];
+    const worked = m && m.segments.some((s) => (s.kind === 'text' && s.md.trim()) || (s.kind === 'tools' && s.tools.length) || s.kind === 'media' || s.kind === 'widget');
+    if (worked) send(t('请从中断的地方继续。'), []);
+    else retryFrom(i);
   }
 
   // —— 助手交付的产物附件卡：claude.ai 官网 100% 同款（2026-07-17 连 Edge 真站逐值逆向）——
@@ -303,7 +320,14 @@
               {/each}
             </div>
           {/if}
-          {#if m.text}<div class="bubble sel-text">{m.text}</div>{/if}
+          {#if prEnvelope(m.text)}
+            <PrMsgCard text={m.text} />
+          {:else if hasSessionEnvelope(m.text)}
+            <!-- 另一个会话发来的话 / 父会话派的任务 / 子会话汇报（session-family）：画成卡片；用户自己打的字仍是气泡 -->
+            {@const sp = parseSessionText(m.text)}
+            {#each sp.parts as part, pi (pi)}<SessionMsgCard {part} />{/each}
+            {#if sp.rest}<div class="bubble sel-text">{sp.rest}</div>{/if}
+          {:else if m.text}<div class="bubble sel-text">{m.text}</div>{/if}
           {#if m.uuid && !IS_CSNAP}
             <div class="u-acts">
               {#if m.__rw === 'confirm'}
@@ -314,7 +338,7 @@
               {:else if m.__rw === 'busy'}
                 <span class="rw-note">{t('回滚中…')}</span>
               {:else if m.__rw === 'done' || m.__rw === 'err'}
-                <span class="rw-note" class:err={m.__rw === 'err'}>{m.__rwMsg}</span>
+                <span class="rw-note sel-text" class:err={m.__rw === 'err'}>{m.__rwMsg}</span>
               {:else}
                 <button class="act rw-ico" aria-label={t('回滚到这条消息之前')} disabled={session.busy} onclick={() => (m.__rw = 'confirm')}>
                   <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
@@ -344,11 +368,30 @@
           {:else if seg.kind === 'notice'}
             <!-- 模型切换 / 安全栅门通知卡（system/model_*）：直播与历史同一段模型 -->
             <ModelNotice {seg} />
+          {:else if seg.kind === 'steer'}
+            <!-- 插话（Claude 工作中按回车）：夹在这一轮回答流里的用户气泡，靠右；CLI 读到之前标「等待读取」 -->
+            <div class="steer">
+              {#if hasSessionEnvelope(seg.text)}
+                <!-- 别的会话的消息插进了这一轮（session-family 投递时对方正在干活） -->
+                {#each parseSessionText(seg.text).parts as part, pi (pi)}<SessionMsgCard {part} />{/each}
+              {:else}
+                <div class="bubble steer-b sel-text">{seg.text}{#if seg.files && seg.files.length}<span class="steer-files">{seg.files.map((f) => '@' + f).join(' ')}</span>{/if}</div>
+              {/if}
+              {#if seg.cancelled}<span class="steer-tag">{t('已撤回')}</span>
+              {:else if !seg.read && m.status === 'streaming'}<span class="steer-tag">{t('插话 · 等 Claude 做完这一步就读')}</span>{/if}
+            </div>
+          {:else if seg.kind === 'plan'}
+            <!-- 计划审批卡：未批=批准 / 修改 / 拒绝；已处理=只读（结论 + 可展开的计划），常驻历史 -->
+            <PlanCard {seg} live={m.status === 'streaming'} />
+          {:else if seg.kind === 'widget'}
+            <!-- 内嵌交互图表（mcp__visualize__show_widget）：流式渲染、定稿后执行脚本；手机为静态预览。
+                 按 id 重建：段列表对账替换时别把上一张图的 iframe / 高度复用给另一张 -->
+            {#key seg.id}<WidgetFrame {seg} live={m.status === 'streaming'} />{/key}
           {:else if seg.kind === 'ask'}
             <!-- AskUserQuestion：未答=可交互选择；已答=只读块（高亮所选），常驻历史，重开也在 -->
             <div class="qcard ask-seg" class:answered={seg.answered}>
               {#each seg.items as it, qi}
-                {#if it.question}<div class="qhead"><div class="qtext">{tr(it.question)}</div></div>{/if}
+                {#if it.question}<div class="qhead"><div class="qtext sel-text">{tr(it.question)}</div></div>{/if}
                 {#each it.options as opt, oi}
                   <button class="qopt {it.selected.includes(opt.label) ? 'sel' : ''}" disabled={seg.answered} onclick={() => toggleOpt(it, opt.label)}>
                     <span class="qnum">{oi + 1}</span>
@@ -359,12 +402,12 @@
                 {#if !seg.answered}
                   <div class="qfoot"><input class="qelse" placeholder="Something else" bind:value={it.custom} /></div>
                 {:else if it.custom}
-                  <div class="qfoot"><span class="qcustom">✓ {it.custom}</span></div>
+                  <div class="qfoot"><span class="qcustom sel-text">✓ {it.custom}</span></div>
                 {/if}
                 {#if qi < seg.items.length - 1}<div class="qdiv"></div>{/if}
               {/each}
               {#if !seg.answered}
-                {#if seg.submitError}<div class="qerror" role="status">{seg.submitError}</div>{/if}
+                {#if seg.submitError}<div class="qerror sel-text" role="status">{seg.submitError}</div>{/if}
                 <div class="qactions">
                   <button class="qskip" onclick={() => answerQuestion(seg, { cancelled: true })}>Skip</button>
                   <button class="qsubmit" disabled={!answered(seg) || seg.submitting} onclick={() => answerQuestion(seg)}>{t('提交回答')}</button>
@@ -409,7 +452,11 @@
         {/if}
 
         {#if m.status === 'error'}
-          <div class="err-box">{tr(m.error)}</div>
+          {#if m.limit}
+            <LimitCard {m} last={i === chat.messages.length - 1} sid={session.id || ''} onRetry={() => retryAfterLimit(i)} />
+          {:else}
+            <div class="err-box sel-text">{tr(m.error)}</div>
+          {/if}
         {/if}
 
         {#if m.status !== 'streaming'}
@@ -505,6 +552,10 @@
   @media (hover: hover) { .u-chat:not(:disabled):hover { background: var(--hover); } }
   .u-chat-col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .u-chat-sub { font-size: 11.5px; color: var(--muted); }
+  .steer { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; margin: 10px 0 12px; }
+  .steer-b { max-width: min(85%, 560px); }
+  .steer-files { display: block; margin-top: 4px; font-size: 13px; color: var(--muted); }
+  .steer-tag { font-size: 12px; color: var(--muted); padding-right: 4px; }
   .bubble { background: var(--userbubble); color: var(--text); border-radius: 14px; padding: 10px 15px; font-size: 15px; line-height: 1.5; max-width: 100%; word-break: break-word; white-space: pre-wrap; animation: popIn .28s cubic-bezier(.22,1,.36,1); }
   @keyframes popIn { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
   .turn-assistant { margin: 6px 0 22px; }

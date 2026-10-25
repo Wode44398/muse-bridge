@@ -5,6 +5,8 @@ import { readSSE } from "./sse.ts";
 import { httpErrorEvent, streamErrorEvent } from "./classify.ts";
 import { observeWire } from "./wire-fingerprint.ts";
 import { modelLimits, modelSupportsImages, modelSupportsVideo, providerMediaBudget } from "../catalog.ts";
+import { applyCustomThinking } from "../custom-tiers.ts";
+import type { CustomWire } from "./types.ts";
 
 // Google Gemini via the AI-Studio REST endpoint (generativelanguage.googleapis.com,
 // v1beta) using a plain `x-goog-api-key` — no SDK, no ADC, matching this project's
@@ -27,6 +29,8 @@ const DEFAULTS = {
 // Gemini 3 (thinkingLevel) vs Gemini 2.5 (thinkingBudget). Map the unified effort
 // ladder to the family's actual knob. See catalog.ts for which tiers each model
 // exposes; this only translates whatever level survives the clamp.
+// 「3 代」= 3 及以后（含 gemini-4-argon）：thinkingLevel、thoughtSignature、可混 google_search。只有 1.x/2.x 例外。
+const GEN3_PLUS = /gemini-(?![12]\.)\d/i;
 function thinkingConfig(model: string, level: string): Record<string, unknown> | undefined {
   if (level === "off") {
     // Only Gemini 2.5 can truly disable thinking (budget 0). Gemini 3 has no off.
@@ -35,10 +39,10 @@ function thinkingConfig(model: string, level: string): Record<string, unknown> |
     }
     return undefined;
   }
-  if (/gemini-3/i.test(model)) {
-    // thinkingLevel: LOW | MEDIUM | HIGH (MINIMAL exists on flash but pro rejects
-    // it; we never emit MINIMAL). "max" maps to HIGH — Gemini 3 has no higher tier.
-    const lv = level === "max" ? "HIGH" : level.toUpperCase();
+  if (GEN3_PLUS.test(model)) {
+    // thinkingLevel: MINIMAL | LOW | MEDIUM | HIGH. MINIMAL 只有 3.5 Flash 有（3.1 Pro 拒收），catalog 只给 3.5 Flash 这一档。
+    // xhigh / max 只可能来自没走 clamp 的旧值——落到 HIGH，Gemini 3 没有更高的档。
+    const lv = level === "max" || level === "xhigh" ? "HIGH" : level.toUpperCase();
     return { thinkingLevel: lv, includeThoughts: true };
   }
   // Gemini 2.5: budget in tokens. -1 = automatic. 2.5-pro can't be 0.
@@ -58,7 +62,7 @@ export function createGeminiAdapter(cfg: AdapterConfig): ProviderAdapter {
     cache: false,
     parallelToolCalls: true,
     compactAt: limits.compactAt,
-    mediaBudget: providerMediaBudget(cfg.provider),
+    mediaBudget: providerMediaBudget(cfg.provider, cfg.model),
   };
   const baseUrl = (cfg.baseUrl ?? DEFAULTS.baseUrl).replace(/\/$/, "");
 
@@ -70,11 +74,11 @@ export function createGeminiAdapter(cfg: AdapterConfig): ProviderAdapter {
   let callSeq = 0;
 
   return {
-    id: "gemini",
+    id: cfg.custom ? cfg.provider : "gemini",
     model: cfg.model,
     capabilities,
     async *stream(turn: Turn, signal?: AbortSignal): AsyncIterable<StreamEvent> {
-      const body = encode(turn, cfg.model, capabilities);
+      const body = encode(turn, cfg.model, capabilities, cfg.custom);
 
       const url = `${baseUrl}/models/${encodeURIComponent(cfg.model)}:streamGenerateContent?alt=sse`;
       observeWire(turn, "gemini", body);
@@ -82,7 +86,8 @@ export function createGeminiAdapter(cfg: AdapterConfig): ProviderAdapter {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-goog-api-key": cfg.apiKey,
+          // 自定义服务：鉴权方式（x-goog-api-key / Bearer / 无）和自定义请求头按服务设置
+          ...(cfg.custom ? cfg.custom.headers : { "x-goog-api-key": cfg.apiKey }),
         },
         body: JSON.stringify(body),
         signal,
@@ -90,7 +95,8 @@ export function createGeminiAdapter(cfg: AdapterConfig): ProviderAdapter {
 
       if (!res.ok || !res.body) {
         const raw = await safeText(res);
-        yield httpErrorEvent(res, raw); // R7：按业务码 / 话术 / 状态码 / 响应头分类
+        // R7：按业务码 / 话术 / 状态码 / 响应头分类（自定义服务另认地址 / 协议不对、非对话模型）
+        yield httpErrorEvent(res, raw, cfg.custom ? { url, name: cfg.custom.name, protocol: "gemini", model: cfg.model } : undefined);
         return;
       }
 
@@ -169,7 +175,7 @@ function mapStop(reason: string): StopReason {
 
 // ── Encode neutral Turn -> Gemini generateContent request body ───────────────
 
-function encode(turn: Turn, model: string, caps: Capabilities) {
+function encode(turn: Turn, model: string, caps: Capabilities, custom?: CustomWire) {
   // Prescan the transcript for tool_call blocks: Gemini pairs a functionResponse
   // to its call by NAME, but the neutral tool_result block only carries the id.
   // Rebuilding the map from the messages themselves (instead of adapter state)
@@ -180,7 +186,8 @@ function encode(turn: Turn, model: string, caps: Capabilities) {
       if (b.t === "tool_call") nameById.set(b.id, b.name);
     }
   }
-  const contents = turn.messages.map((m) => encodeMsg(m, nameById)).filter((c) => c.parts.length);
+  const signed = GEN3_PLUS.test(model);
+  const contents = turn.messages.map((m) => encodeMsg(m, nameById, signed)).filter((c) => c.parts.length);
 
   const body: Record<string, unknown> = {
     contents,
@@ -213,7 +220,8 @@ function encode(turn: Turn, model: string, caps: Capabilities) {
     // {type:"google_search"} is a DIFFERENT endpoint); (2) mixing a built-in tool
     // with function calling additionally needs toolConfig.includeServerSideTool-
     // Invocations=true, or the request 400s ("Please enable ...").
-    if (/gemini-3/i.test(model)) {
+    // 自定义服务（第三方的 Gemini 兼容端点）不一定认内置的 google_search：不加
+    if (GEN3_PLUS.test(model) && !custom) {
       tools.push({ google_search: {} });
       body.toolConfig = { includeServerSideToolInvocations: true };
     }
@@ -221,6 +229,12 @@ function encode(turn: Turn, model: string, caps: Capabilities) {
   }
 
   const level = turn.budget.thinking ?? "off";
+  if (custom) {
+    // 自定义服务：按型号的档位表写 generationConfig.thinkingConfig（共用 applyTier），不按型号名猜
+    const out = applyCustomThinking(body, custom.model, level, { protocol: "gemini" });
+    if (turn.hints?.providerExtras) Object.assign(out, turn.hints.providerExtras);
+    return out;
+  }
   if (caps.thinking) {
     const tc = thinkingConfig(model, level);
     if (tc) (body.generationConfig as any).thinkingConfig = tc;
@@ -242,9 +256,15 @@ function systemString(system: Turn["system"]): string {
 // "model". tool_result blocks become functionResponse parts (Gemini pairs them by
 // name/order, not id). Thinking blocks are dropped — only the thoughtSignature
 // riding on the tool_call block's meta matters for replay.
-function encodeMsg(m: Msg, nameById: Map<string, string>): { role: string; parts: any[] } {
+// 别家留下的调用（会话中途换到 Gemini 3）一个签名都没有：Gemini 3 对缺签名的 functionCall 会 400，官方给的迁移写法是
+// 在这条消息的第一个调用上填这个占位值跳过校验（并行调用本来就只有第一个带签名）。2.5 不强制签名，不填。
+const FOREIGN_THOUGHT_SIGNATURE = "skip_thought_signature_validator";
+
+function encodeMsg(m: Msg, nameById: Map<string, string>, signed = false): { role: string; parts: any[] } {
   const role = m.role === "assistant" ? "model" : "user";
   const parts: any[] = [];
+  let needsSignature = signed && m.role === "assistant" &&
+    !m.content.some((b) => b.t === "tool_call" && typeof b.meta?.thoughtSignature === "string" && b.meta.thoughtSignature);
 
   for (const b of m.content) {
     if (b.t === "text") {
@@ -257,6 +277,10 @@ function encodeMsg(m: Msg, nameById: Map<string, string>): { role: string; parts
       const part: any = { functionCall: { name: b.name, args: b.args ?? {} } };
       const sig = b.meta?.thoughtSignature;
       if (typeof sig === "string" && sig) part.thoughtSignature = sig;
+      else if (needsSignature) {
+        part.thoughtSignature = FOREIGN_THOUGHT_SIGNATURE;
+        needsSignature = false;
+      }
       parts.push(part);
     } else if (b.t === "tool_result") {
       parts.push({

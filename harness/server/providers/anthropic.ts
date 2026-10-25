@@ -5,7 +5,21 @@ import type { AdapterConfig, Capabilities, ProviderAdapter } from "./types.ts";
 import { readSSE } from "./sse.ts";
 import { httpErrorEvent, streamErrorEvent } from "./classify.ts";
 import { observeWire } from "./wire-fingerprint.ts";
-import { modelLimits, modelSupportsImages, providerMediaBudget } from "../catalog.ts";
+import { modelLimits, modelSupportsFast, modelSupportsImages, providerMediaBudget } from "../catalog.ts";
+import { applyCustomThinking } from "../custom-tiers.ts";
+import { MK } from "../model-knowledge.ts";
+import type { CustomWire } from "./types.ts";
+
+export const FAST_MODE_BETA = "fast-mode-2026-02-01";
+// fast 自己的限流（429 正文：「…rate limit of N fast mode input tokens per minute…」）之后多久不再试 fast。
+// 全进程共享：额度是按 org 算的，一个会话撞上了，别的会话、子 agent 再试也是白撞。
+export const FAST_COOLDOWN_MS = 15 * 60_000;
+const FAST_LIMIT_RE = /fast mode/i;
+let fastCooldownUntil = 0;
+// 测试用：清掉退避
+export function resetFastCooldown(): void {
+  fastCooldownUntil = 0;
+}
 
 const DEFAULTS = {
   contextWindow: 200_000,
@@ -30,19 +44,22 @@ function isAdaptive(model: string): boolean {
     (/claude-(opus|sonnet)/i.test(model) && !/haiku/i.test(model));
 }
 
-// Map the unified effort ladder to Anthropic's effort values. "max" → "xhigh"
-// (what Claude Code calls the extra tier).
+// The unified ladder uses Anthropic's own effort names, so they pass through 1:1
+// (xhigh = Claude Code's "Extra"). 以前把 max 发成 xhigh：真 max 永远发不出去，Sonnet 4.6 没有 xhigh 必 400。
+// 每个型号有哪几档由 catalog 决定（Sonnet 4.6 没有 xhigh），effort-contract.test.ts 对照官方表。
 const EFFORT_MAP: Record<string, string> = {
   low: "low",
   medium: "medium",
   high: "high",
-  max: "xhigh",
+  xhigh: "xhigh",
+  max: "max",
 };
 
 export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
   // R1（#1）：按型号读目录里的上限（与 OpenAI 兼容适配器同一条路）。以前一律 200k / 8192，
   // Opus 5.5 一轮最多写 8192 token 就被截断；目录外的自定义 id 才落到下面的扁平默认值。
   const limits = modelLimits(cfg.provider, cfg.model);
+  const custom = cfg.custom;
   const capabilities: Capabilities = {
     contextWindow: cfg.contextWindow ?? limits.ctx ?? DEFAULTS.contextWindow,
     maxOutputTokens: cfg.maxOutputTokens ?? limits.maxOut ?? DEFAULTS.maxOutputTokens,
@@ -50,34 +67,60 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
     image: modelSupportsImages(cfg.provider, cfg.model),
     // No video input on the Messages API — video falls back to sampled frames.
     video: false,
-    cache: true,
+    // 自定义服务（第三方的 Anthropic 兼容端点）多半不认 cache_control：按服务的「提示缓存」开关（官方端点默认开）
+    cache: custom ? custom.promptCaching : true,
     parallelToolCalls: true,
     compactAt: limits.compactAt,
-    mediaBudget: providerMediaBudget(cfg.provider),
+    mediaBudget: providerMediaBudget(cfg.provider, cfg.model),
   };
   const baseUrl = (cfg.baseUrl ?? DEFAULTS.baseUrl).replace(/\/$/, "");
+  // 地址带不带 /v1 都行（以前写死 `${base}/v1/messages`，以 /v1 结尾的自定义地址会拼出 /v1/v1）
+  const url = MK.anthropicUrl(baseUrl, "/v1/messages");
 
   return {
-    id: "anthropic",
+    id: cfg.provider === "anthropic" || !custom ? "anthropic" : cfg.provider,
     model: cfg.model,
     capabilities,
     async *stream(turn: Turn, signal?: AbortSignal): AsyncIterable<StreamEvent> {
-      const body = encode(turn, cfg.model, capabilities);
-      observeWire(turn, "anthropic", body);
-      const res = await fetch(`${baseUrl}/v1/messages`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": cfg.apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
+      const body = encode(turn, cfg.model, capabilities, custom);
+      // fast mode：开关开着、型号支持、且不在退避期才发（不支持的型号带 speed 必 400）。speed 参数离了 beta 头也是 400。
+      const fast = cfg.fast?.() === true && modelSupportsFast(cfg.provider, cfg.model) && Date.now() >= fastCooldownUntil;
+      const send = (withFast: boolean) => {
+        const payload = withFast ? { ...body, speed: "fast" } : body;
+        observeWire(turn, "anthropic", payload);
+        return fetch(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01",
+            // 自定义服务：鉴权方式（x-api-key / Bearer / 无）和自定义请求头按服务设置
+            ...(custom ? custom.headers : { "x-api-key": cfg.apiKey }),
+            ...(withFast ? { "anthropic-beta": FAST_MODE_BETA } : {}),
+          },
+          body: JSON.stringify(payload),
+          signal,
+        });
+      };
+      const errCtx = custom ? { url, name: custom.name, protocol: "anthropic" as const, model: cfg.model } : undefined;
+      let res = await send(fast);
+      // fast mode 的额度与普通额度分开算（2026-10-14 实测：有的 org 的 fast 额度是每分钟 0 input token，
+      // 只有十来个 token 的小请求偶尔放过，真对话一律 429）。撞上 fast 自己的 429 就当场按普通速度重发，
+      // 之后一段时间不再试 fast，并在对话里说一声——不让它掉进通用的限流重试，一直「被限流，N 秒后重试」不出字。
+      if (fast && res.status === 429) {
+        const raw = await safeText(res);
+        if (FAST_LIMIT_RE.test(raw)) {
+          fastCooldownUntil = Date.now() + FAST_COOLDOWN_MS;
+          yield { e: "notice", code: "fast_fallback", cooldownMs: FAST_COOLDOWN_MS };
+          res = await send(false);
+        } else {
+          yield httpErrorEvent(res, raw, errCtx);
+          return;
+        }
+      }
 
       if (!res.ok || !res.body) {
         const raw = await safeText(res);
-        yield httpErrorEvent(res, raw); // R7：按业务码 / 话术 / 状态码 / 响应头分类
+        yield httpErrorEvent(res, raw, errCtx); // R7：按业务码 / 话术 / 状态码 / 响应头分类（自定义服务另认地址 / 协议不对、非对话模型）
         return;
       }
 
@@ -214,12 +257,13 @@ function mapStop(reason: string): StopReason {
 
 // ── Encode neutral Turn -> Anthropic Messages request body ───────────────────
 
-function encode(turn: Turn, model: string, caps: Capabilities) {
+function encode(turn: Turn, model: string, caps: Capabilities, custom?: CustomWire) {
   const level = turn.budget.thinking ?? "off";
   const thinkingOn = caps.thinking && level !== "off";
-  const adaptive = isAdaptive(model);
+  // 自定义服务不按型号名猜 adaptive / budget（小米 /anthropic 不发参数照样思考，只认 thinking.type=disabled）：按型号的档位表发
+  const adaptive = !custom && isAdaptive(model);
   // Legacy budget only matters for non-adaptive (Haiku) models.
-  const budgetTokens = thinkingOn && !adaptive ? (THINKING_BUDGET[level] ?? 12_000) : 0;
+  const budgetTokens = thinkingOn && !adaptive && !custom ? (THINKING_BUDGET[level] ?? 12_000) : 0;
   // With legacy thinking on, max_tokens must exceed the thinking budget.
   const maxTokens = Math.max(
     turn.budget.maxOutputTokens,
@@ -229,10 +273,11 @@ function encode(turn: Turn, model: string, caps: Capabilities) {
   const system = encodeSystem(turn, caps.cache);
   const tools = encodeTools(turn, caps.cache);
 
-  const messages = turn.messages.map(encodeMsg);
+  // 会话中途从别家换过来：别家的空消息（只剩思考）编码后是空 content，Anthropic 直接 400——跳过
+  const messages = normalizeToolIds(turn.messages).map(encodeMsg).filter((m) => m.content.length > 0);
   if (caps.cache) markMessageCache(messages);
 
-  const body: Record<string, unknown> = {
+  let body: Record<string, unknown> = {
     model,
     max_tokens: maxTokens,
     messages,
@@ -240,7 +285,9 @@ function encode(turn: Turn, model: string, caps: Capabilities) {
   };
   if (system) body.system = system;
   if (tools.length) body.tools = tools;
-  if (adaptive) {
+  if (custom) {
+    body = applyCustomThinking(body, custom.model, level, { protocol: "anthropic", cap: caps.maxOutputTokens });
+  } else if (adaptive) {
     // Opus 4.7+/Sonnet 4.6: adaptive thinking + effort. budget_tokens would 400.
     // Even at "off" we keep adaptive on (the model self-gates) but pin effort low.
     body.thinking = { type: "adaptive" };
@@ -299,12 +346,52 @@ function encodeMsg(m: Msg) {
   return { role: m.role, content: m.content.map(encodeBlock).filter(Boolean) };
 }
 
+// Anthropic 的 tool_use id 只认 [a-zA-Z0-9_-] 且整个请求里不能重复；会话中途从别家换过来时，转录里是别家的 id
+// （Kimi 是 "functions.Bash:0"，而且每轮都从 0 数，同一个 id 反复出现）。按出现顺序重新编号、结果跟着最近一次同名调用走。
+// 映射只取决于转录本身，所以每次请求一模一样，不破坏前缀缓存。全是合规 id（一直在 Claude 上跑的会话）时原样返回。
+const TOOL_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+export function normalizeToolIds(messages: Msg[]): Msg[] {
+  const seen = new Set<string>();
+  const current = new Map<string, string>();
+  let n = 0;
+  let changed = false;
+  const out = messages.map((m) => {
+    let touched = false;
+    const content = m.content.map((b) => {
+      if (b.t === "tool_call") {
+        let id = b.id;
+        if (!TOOL_ID_RE.test(id) || seen.has(id)) {
+          do id = `toolu_h${n++}_${b.id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)}`; while (seen.has(id));
+        }
+        seen.add(id);
+        current.set(b.id, id);
+        if (id === b.id) return b;
+        touched = true;
+        return { ...b, id };
+      }
+      if (b.t === "tool_result") {
+        const id = current.get(b.id);
+        if (!id || id === b.id) return b;
+        touched = true;
+        return { ...b, id };
+      }
+      return b;
+    });
+    if (!touched) return m;
+    changed = true;
+    return { ...m, content };
+  });
+  return changed ? out : messages;
+}
+
 function encodeBlock(b: Block): any {
   switch (b.t) {
     case "text":
-      return { type: "text", text: b.text };
+      // 空文本块 Anthropic 拒收（别家可能留下 content 为空串的回答）
+      return b.text ? { type: "text", text: b.text } : null;
     case "thinking":
-      return { type: "thinking", thinking: b.text, signature: b.signature ?? "" };
+      // 没有签名的思考来自别家（会话中途换过来的）：Anthropic 验签必拒，丢掉——别家的思考对 Claude 本来也不回放
+      return b.signature ? { type: "thinking", thinking: b.text, signature: b.signature } : null;
     case "image":
       return { type: "image", source: imageSource(b) };
     case "tool_call":

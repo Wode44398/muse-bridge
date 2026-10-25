@@ -15,13 +15,15 @@ import {
 } from '../runtime/gen.mjs';
 import { busPublish } from '../runtime/bus.mjs';
 import { beginInflight, endInflight } from '../runtime/inflight.mjs';
-import { applyRateLimit, applyContext, applySdkUsage, classifyError, statusState } from '../runtime/status.mjs';
-import { normalizeContextUsage, applyContextUsage, normalizeEffortLevel, applyEffort, applyCommands, getCommands } from '../runtime/ctx-usage.mjs';
+import { applyRateLimit, applyContext, applySdkUsage, classifyError, limitNotice, statusState } from '../runtime/status.mjs';
+import { normalizeContextUsage, applyContextUsage, compactWindowFor, customCompactWindow, noteNativeWindow, normalizeEffortLevel, applyEffort, applyCommands, getCommands } from '../runtime/ctx-usage.mjs';
 import { setSuggestion, clearSuggestion, normalizeSuggestion } from '../runtime/suggestions.mjs';
 // SDK usage 控制接口（额度窗口/套餐）的节流时钟：进程级，10 分钟一次——那接口背后是
 // api/oauth/usage，直连实测很容易 429。
 let lastSdkUsageAt = 0;
-import { sessionQuestions, pendingQuestions, waitForAnswer, formatAnswer } from '../runtime/questions.mjs';
+import { sessionQuestions, pendingQuestions, waitForAnswer, formatAnswer, questionTimeoutMs, pendingFor } from '../runtime/questions.mjs';
+// Claude 设置（设置页 › Claude）→ 每轮启动参数：输出风格 / 回复语言 / 署名 / 动态工作流 / 安全栅门 / 输入建议 / 压缩点
+import { turnSettings, refreshOutputStyles, autoContinueDefault, dispatchNudge } from '../runtime/claude-turn-settings.mjs';
 import { VAULT, UPLOADS, MEDIA, MODEL, ROOT, NATIVE_ROOT } from '../config/index.mjs';
 import { CAPABILITIES, to1M, claudeSupportsFast, claudeEffortOptions, ULTRACODE } from '../config/capabilities.mjs';
 // 工具行/任务卡规则与历史重建（routes/sessions.mjs）共用一份——直播与重开必须一致。
@@ -30,17 +32,59 @@ import { makeRetractLedger } from '../runtime/retract-ledger.mjs';
 import { sessionPaths, PROGRAM_ROOT } from '../runtime/paths.mjs';
 import os from 'node:os';
 import { collectDeliverables, deliverAnywhere, deliverRoots, transcriptTailCwd } from '../runtime/deliverables.mjs';
-import { claudeEngineEnv } from '../runtime/claude-account.mjs';
+import { claudeEngineEnv, activeAccountId } from '../runtime/claude-account.mjs';
+// Claude Code 可执行文件在哪（SDK 自带的优先、不传；否则显式指定 / 本机已装的 → 传路径；默认不联网下载），见 runtime/claude-cli.mjs
+import { claudeCliOptions } from '../runtime/claude-cli.mjs';
 import { sanitizeSessionThinking } from '../runtime/session-sanitize.mjs';
 import { addUsage, noteTurnStart } from '../users.mjs';
-import { quotaBlock } from '../runtime/quota.mjs';
+import { quotaBlock, billingUser, memberRules } from '../runtime/quota.mjs';
+import { makeCostMeter, sessionCostBaseline } from '../runtime/usage-ledger.mjs';
+import { noteTurnUsage } from '../runtime/audit-log.mjs';
+import { systemWriteViolation, gitInternalsViolation } from '../runtime/member-boundary.mjs';
 import { getPolicy } from '../runtime/policy.mjs';
+import { noteSessionMcp } from '../runtime/session-mcp.mjs';
+import { noteRunEnd } from '../runtime/claude-queue.mjs';
+import { noteLimitTurn, noteTurnStart as noteLimitTurnStart, noteTurnSettled as noteLimitTurnSettled } from '../runtime/limit-resume.mjs';
 import { makeSnapshotMcp } from '../mcp/snapshot.mjs';
 import { makeTerminalMcp, TERMINAL_NUDGE } from '../mcp/terminal-tools.mjs';
+import { allowedRoots, fenceViolation, poolRef } from '../runtime/principal.mjs';
 import { makeWorkspaceMcp, WORKSPACE_NUDGE } from '../mcp/workspace-tools.mjs';
-import { claudeExtensionOptions } from '../extensions.mjs';
+import { makeSessionsMcp, sessionsNudge, childNudge, sessionPolicy } from '../mcp/session-tools.mjs';
+import { makeBridgeMcp, BRIDGE_NUDGE } from '../mcp/bridge-tools.mjs';
+import { familyLink, familyTurnStart, familyTurnEnded, rememberReplay, familyPeerTurn } from '../runtime/session-family.mjs';
+// 与同机终端里的 Claude Code 会话互发（CLI 自带跨会话通道；只给主机管理员）：env 开关、入站闸、停放 CLI 接住对方消息开的轮
+import { peersOn, peerEngineEnv, peerInbound, waitPeerRecord, peerDisplay, notePeerHold, dropPeerGate, registerPeerGate, unregisterPeerGate } from '../runtime/session-peers.mjs';
+// 对话内嵌交互图表（官方 visualize：read_me + show_widget）：MCP、提示、直播增量帧都在这个模块里
+import { makeVisualizeMcp, vizOnFor, vizPlatform, vizNudge, makeWidgetStream, VIZ_ALLOWED_TOOLS } from '../mcp/visualize.mjs';
+import { claudeExtensionsFor, sharedExtensionDirs, SHARED_ROOT } from '../extensions.mjs';
 import { pendingRewindAnchor, clearPendingRewind } from './claude-rewind.mjs';
 import { recordChatPrefs, swapChatPrefsModel } from '../runtime/chat-prefs.mjs';
+// 自定义 API（设置 › Claude › 模型服务）：custom:<服务>:<模型> 的会话经本机代理转到第三方端点
+import { isCustomModelId, resolveCustomModel, providersRev, customSupportsFast, customTopTier, subagentModelCatalog } from '../runtime/claude-providers.mjs';
+import { providerEngineEnv, onFastFallback, fastCooling } from '../runtime/claude-providers-proxy.mjs';
+import { levelForTier } from '../runtime/claude-providers-transform.mjs';
+import { notePush } from '../runtime/push-notices.mjs';
+import { unarchiveOnTurn } from '../runtime/session-archive-auto.mjs';   // 真人在已归档会话里发消息 → 取消归档
+// 权限模式 / 逐次工具审批卡 / 计划审批卡（2026-10-20，见 runtime/permissions.mjs 头注）
+import { resolveTurnMode, allowSkipFor, makePermissionGate, bindModeControl, noteSessionMode, deferredModeFor, pendingModeFor, stricterMode } from '../runtime/permissions.mjs';
+// 拉取请求闭环（pr-monitor.mjs）：流里认 PR 自动绑定、真人发话清零 Auto-fix 连续唤醒、mcp__pr__* 工具
+import { prCapable, makePrSniffer, notePrTurnStart } from '../runtime/pr-monitor.mjs';
+import { makePrMcp, prNudge } from '../mcp/pr-tools.mjs';
+import { markTurn, handedTurn } from '../runtime/turn-timing.mjs';
+
+// SDK 每次 query() 都对 allowedTools 里的裸名打一条 CLAUDE_SDK_CAN_USE_TOOL_SHADOWED 警告（Node 不去重）——
+// 我们的裸名只有内嵌图表两件（VIZ_ALLOWED_TOOLS，有意免过 auto 模式分类器，见 mcp/visualize.mjs），
+// 每轮一条只会让日志看着像「满处报错」。每个进程只放行第一条，别的警告原样。
+{
+  const SHADOWED = 'CLAUDE_SDK_CAN_USE_TOOL_SHADOWED';
+  const orig = process.emitWarning;
+  let seen = false;
+  process.emitWarning = function emitWarningOnce(warning, opts, ...rest) {
+    const code = opts && typeof opts === 'object' ? opts.code : rest[0];
+    if (code === SHADOWED) { if (seen) return; seen = true; }
+    return orig.call(this, warning, opts, ...rest);
+  };
+}
 
 // System-prompt appendices Claude reads on every turn.
 //
@@ -92,6 +136,26 @@ export function identityNudge(model) {
   const name = m ? m.name : id;
   return '【你的真实身份】你是 Anthropic 的 Claude，当前模型：' + name +
     '（精确 model id: ' + id + '）。若用户问你是什么模型，以此为准，不要自报成别的版本号。\n\n';
+}
+
+// 自定义 API 的模型：身份句换成真实的服务与型号，别让它自称 Claude（preset 里那句 Claude Code 身份由这句压过）。
+function customIdentityNudge({ provider, model }) {
+  return '【你的真实身份】你当前由「' + provider.name + '」的模型 ' + model.label + '（精确 model id: ' + model.id + '）驱动，' +
+    '经 Muse Bridge 的自定义 API 接入、运行在 Claude Code 框架里。若用户问你是什么模型，以此为准，不要自称 Anthropic 的 Claude 或别的型号。\n\n';
+}
+
+// 自定义 API 这一轮出错 → 错误卡文案。CLI 的 result 形如「API Error: 400 {"type":"error","error":{"message":"…"}}」：
+// 抠出 error.message（代理改写过的人话），抠不出就用原文。
+function customErrorCard({ provider }, result, apiStatus) {
+  const raw = String(result || '').trim();
+  let msg = '';
+  const i = raw.indexOf('{');
+  if (i >= 0) {
+    try { const j = JSON.parse(raw.slice(i)); msg = (j.error && (j.error.message || (typeof j.error === 'string' ? j.error : ''))) || j.message || ''; } catch {}
+  }
+  msg = String(msg || raw.replace(/^API Error:\s*/i, '') || (apiStatus ? 'HTTP ' + apiStatus : '没有返回内容')).slice(0, 600);
+  const title = apiStatus === 429 ? `模型服务「${provider.name}」限流了` : `模型服务「${provider.name}」出错了`;
+  return { title, hint: msg + (/设置 › Claude/.test(msg) ? '' : '（设置 › Claude › 模型服务里可以测试连接）') };
 }
 
 // True if an error message is the SDK/API "thinking blocks cannot be modified" 400
@@ -276,6 +340,36 @@ export const SHELL_DENY = ['Bash', 'BashOutput', 'KillShell', 'KillBash', 'Power
 // 额度和这台 VM 的算力，放开不设限只会把 5 小时窗一口气烧穿。同一会话永远串行。
 export const MAX_PARALLEL_CHATS = 3;
 
+// 管理员「全服统一」加装的扩展（extensions/shared/）对沙箱用户只读开放：技能正文、参考资料要读得到，
+// 有命令行的成员要能照 SKILL.md 去那个目录跑脚本。写（Write/Edit）照旧拦；管理员自用的扩展目录不在这棵树里。
+// roots 参数只给单测用。
+const SHARED_READ_TOOLS = new Set(['Read', 'Glob', 'Grep']);
+export function sharedExtRead(name, input, { root = SHARED_ROOT, platform = process.platform } = {}) {
+  if (!SHARED_READ_TOOLS.has(name)) return false;
+  const p = input && input[PATH_TOOL_KEY[name]];
+  if (typeof p !== 'string' || !p) return false;
+  // 只认真实绝对路径：相对路径（含 Windows 上 SDK 虚拟根的 /foo 写法）SDK 按 cwd 解析，与这棵树无关
+  const abs = platform === 'win32' ? (/^[a-zA-Z]:[\\/]/.test(p) || /^[\\/]{2}/.test(p)) : p.startsWith('/');
+  return abs && withinDir(root, p, platform);
+}
+// 命令里出现的全服扩展目录换成占位符再过围栏（盘符 / 正斜杠 / Git Bash 的 /c/… 三种写法）。
+// 其余规则（.. 穿越、主目录、密钥名）照常作用在剩下的部分上：shared\skills\x\..\..\config.json 仍被 .. 规则拦下。
+export function maskSharedRoot(cmd, { root = SHARED_ROOT, platform = process.platform } = {}) {
+  let s = String(cmd || '');
+  const fwd = root.replace(/\\/g, '/');
+  const forms = new Set([root, fwd]);
+  if (platform === 'win32') { const m = /^([a-zA-Z]):\//.exec(fwd); if (m) forms.add('/' + m[1].toLowerCase() + fwd.slice(2)); }
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const f of [...forms].sort((a, b) => b.length - a.length)) s = s.replace(new RegExp(esc(f), platform === 'win32' ? 'gi' : 'g'), '__bridge_shared_ext__');
+  return s;
+}
+// 沙箱围栏（PreToolUse 主闸、canUseTool 复检、定时任务三处同一口径）：多根围栏 + 全服扩展只读豁免。
+export function sandboxFence(ctx, name, input) {
+  if (sharedExtRead(name, input)) return null;
+  const ti = (name === 'Bash' || name === 'PowerShell') && input && typeof input.command === 'string' ? { ...input, command: maskSharedRoot(input.command) } : input;
+  return fenceViolation(allowedRoots(ctx), (root) => sandboxViolation(name, ti, root));
+}
+
 // PreToolUse 主闸：SDK 对【每一次】工具调用都先过它——包括只读 Read/Glob/Grep（canUseTool 对只读
 // 工具不开火，路径围栏只有落在这里才真生效）。permissionDecision:'deny' 直接拦死且绕过 canUseTool。
 // 这是沙箱用户真正的硬边界（canUseTool 仅作"会弹确认工具"的兜底）。
@@ -285,7 +379,12 @@ export function makeSandboxPreToolUse(ctx) {
     if (!ctx.shell && SHELL_DENY.includes(name)) {
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: NO_SHELL_MSG } };
     }
-    const v = sandboxViolation(name, ti, ctx.cwd);
+    // 多根围栏（开源路线 C5）：落在 allowedRoots(ctx) 任意一个根内即放行；今天沙箱身份只有 [ctx.cwd]。另放行全服扩展目录的只读。
+    const v = sandboxFence(ctx, name, ti)
+      // 自己的系统数据（.bridge 顶层的 routines.json、偏好、CLI 配置、对话记录）只许 bridge 改（开源路线 S2-5，runtime/member-boundary.mjs）
+      || systemWriteViolation(name, ti, ctx.dataDir, ctx.cwd)
+      // 没有命令行的：不许改 .git 内部（仓库配置能让服务端替他跑的 git 执行任意命令）
+      || (!ctx.shell ? gitInternalsViolation(name, ti, ctx.cwd) : null);
     if (v) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: v } };
     return { continue: true };
   };
@@ -349,20 +448,24 @@ function nativeImageBlocks(paths) {
 // push()（09-28 挂起接力）：挂起等后台任务期间用户又发了一条——直接送进【同一个】活着的 CLI，
 // 它立刻开一轮作答（result 的 user_message_uuids 带回这条的 uuid），后台任务照跑、完成照常续轮。
 // 探针实测（SDK 0.3.280）：推第二条 5s 内出 result，后台 shell 存活到跑完并触发 task-notification 轮。
-export function makeTurnInput(text, blocks) {
+// deferFirst（新会话预热，见 parkSpare）：不先送第一条——CLI 照样起进程、做完初始化，停在等 stdin；
+// 第一条消息由接管时的 push() 送进来。
+export function makeTurnInput(text, blocks, deferFirst = false) {
   let release;
   let released = false;
   const gate = new Promise((r) => { release = r; });
   const queue = [];
   let wake = null;
-  const userMsg = (t, b, uuid) => {
+  // priority（SDK 用户消息字段）：'next' = 插话——CLI 不等这一轮结束，做完手头这一步就读到它
+  //（command_lifecycle 帧 queued → started → completed，result 的 user_message_uuids 带回 uuid）。
+  const userMsg = (t, b, uuid, priority) => {
     const content = [];
     if (t) content.push({ type: 'text', text: t });
     content.push(...(b || []));
-    return { type: 'user', parent_tool_use_id: null, message: { role: 'user', content }, ...(uuid ? { uuid } : {}) };
+    return { type: 'user', parent_tool_use_id: null, message: { role: 'user', content }, ...(uuid ? { uuid } : {}), ...(priority ? { priority } : {}) };
   };
   async function* stream() {
-    yield userMsg(text, blocks);
+    if (!deferFirst) yield userMsg(text, blocks);
     // 保持输入流开启（见上）。release 前 CLI 不会因 stdin EOF 进入收尾；期间 push 的消息逐条送出。
     while (!released) {
       while (queue.length && !released) yield queue.shift();
@@ -374,9 +477,9 @@ export function makeTurnInput(text, blocks) {
   return {
     stream: stream(),
     release: () => { released = true; release(); if (wake) wake(); },
-    push(t, b, uuid) {
+    push(t, b, uuid, priority) {
       if (released) return false;
-      queue.push(userMsg(t, b, uuid));
+      queue.push(userMsg(t, b, uuid, priority));
       if (wake) wake();
       return true;
     },
@@ -470,10 +573,36 @@ export async function releaseWarmClaude(key, sid) {
   if (!sid) return;
   // 刚回完 done、还在定局收尾的那一轮马上就要停放——等它停好再关，别让它关完之后又停进来。
   const fin = findGenBySession(key, sid);
-  if (fin && !fin.done && fin.finalizing) await Promise.race([fin.settled, sleep(10_000)]);
+  if (fin && !fin.done && fin.finalizing) { if (fin.hurry) fin.hurry(); await Promise.race([fin.settled, sleep(10_000)]); }
   const e = warmRuns.get(key + '|' + sid);
   if (e) await closeWarm(e);
 }
+// 关掉这个身份（ctx.key）停放的全部 CLI 与新会话预热进程，并等它们退干净（删号 / 停用 / 降档时
+// runtime/account-lifecycle.mjs 调；不受「最近写过的会话」窗口限制）。返回关了几个。
+export async function releaseWarmOf(key) {
+  if (!key) return 0;
+  const prefix = key + '|';
+  const list = [...warmRuns.entries()].filter(([lk]) => lk.startsWith(prefix)).map(([, e]) => e);
+  const sp = spareRuns.get(key);
+  if (sp) { try { sp.close(); } catch {} }
+  await Promise.all(list.map((e) => closeWarm(e).catch(() => {})));
+  return list.length + (sp ? 1 : 0);
+}
+// ---- 新会话预热（2026-10-18，对齐官方桌面端的 spare 进程）------------------------------------
+// 续聊有上面的停放，新会话第一条消息却仍要冷起：spawn + 工具/插件/MCP 握手 2.5–3s 全压在首字上。
+// 前端在「新对话」输入框获得焦点/开始打字时打 POST /api/chat/prewarm（带与发送相同的选项）：服务端
+// 提前跑一遍【没有消息】的 runClaudeChat——启动参数照常算、query 照常建、等初始化完成后停放在
+// 第一轮之前（parkSpare）。真消息来了 warmSig 一致就走与续聊完全相同的 warmTake 接管，否则关掉冷起。
+// 没有用 SDK 的 prewarm()/claim：它要求 MCP、钩子、canUseTool 在预热时定死，而 bridge 这些都是
+// 每轮现建、闭包挂在本次 runClaudeChat 上的；这里整次调用一起提前，闭包天然跟着走。
+// 只给主机 admin（非沙箱、非快照）：每个预热进程约 300MB，每个 caller key 至多一个。
+const SPARE_MS = Math.max(0, Number(process.env.BRIDGE_CLAUDE_SPARE_MS ?? 10 * 60_000) || 0);
+const spareRuns = new Map();  // ctx.key -> { sig, parkedAt, readyAt, touch(), take(), close() }
+export function spareStatus(key) {
+  const e = spareRuns.get(key);
+  return e ? { parkedAt: e.parkedAt, readyAt: e.readyAt || 0 } : null;
+}
+
 // 超过全服上限：关掉停放最久的（不含刚登记的这个）。
 function evictWarm(keep) {
   const parked = [...warmRuns.values()].filter((e) => e !== keep).sort((a, b) => a.parkedAt - b.parkedAt);
@@ -484,13 +613,78 @@ function evictWarm(keep) {
   }
 }
 
-export async function runClaudeChat(req, res, { message, sessionId, model, effort, fast, chatPrefs, attachments, style, styleText, research, suggest, source, globalMax, ctx }) {
+export async function runClaudeChat(req, res, { message, sessionId, model, effort, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, plain, limitReplay, limitResume, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy }) {
   ctx = ctx || { kind: 'admin', sandbox: false, cwd: VAULT, configDir: null, key: 'admin' };
   const snap = ctx.snap || null;   // 聊天快照轮：专属 MCP/提示词/更紧的工具面
-  const wantSuggest = !!suggest && !snap;
+  // 新会话预热（见 SPARE_MS）：没有消息、没有 SSE 接收方，建好 query 停在第一轮之前等人接管。
+  const isSpare = !!prewarm;
+  markTurn(req, 'pre');
+  if (isSpare && (snap || ctx.sandbox || ctx.kind !== 'admin' || sessionId || !SPARE_MS)) return;
+  // 自定义 API（runtime/claude-providers*.mjs）：只给主机管理员；服务 / 模型被删或停用就直说，不悄悄换成别的模型。
+  const custom = isCustomModelId(model) ? resolveCustomModel(model) : null;
+  if (isCustomModelId(model) && (!custom || ctx.kind !== 'admin' || snap)) {
+    if (isSpare || !res) return;
+    writeSseHeaders(res);
+    genWrite(res, { type: 'error', kind: 'model', title: '模型不可用', message: ctx.kind !== 'admin' || snap ? '自定义 API 只有主机管理员能用' : '这个自定义模型已被删除或停用，换一个模型再发' });
+    res.end();
+    return;
+  }
+  // 自定义模型的推理强度 = 它自己档位表里的一档（设置 › Claude › 模型服务），走代理地址，不传给 CLI；不在表里的
+  //（从官方模型带过来的 xhigh 之类）按没选算，代理用模型的默认档。Ultracode（动态工作流编排）第三方模型也有：
+  // 输入框档位表末尾统一追加这一档，主循环跑模型自己最高的那档，再加常驻工作流（见下面 effortOpts）。
+  const customEffort = !custom || !effort ? ''
+    : effort === ULTRACODE ? customTopTier(custom.model)
+    : (custom.model.efforts || []).some((t) => t.id === effort) ? effort : '';
+  if (custom) noteNativeWindow(custom.model.id, custom.model.contextWindow);   // 用量面板按配置的真实窗口画
+  // 5 小时限额「重置后自动继续」：这个会话又开跑了——人自己发的就作废等着的那次续跑（limit-resume.mjs）。
+  // Auto-fix 唤醒轮（family origin 'ci'，pr-monitor.mjs）同样不算「人接手」。
+  if (!isSpare && sessionId && !snap) noteLimitTurnStart(ctx.key, sessionId, { auto: !!limitResume || !!(family && family.origin && family.origin.kind === 'ci') });
+  // 会话派生与会话间消息（session-family.mjs）：family = 这一轮是服务端替别的会话发起的（派生 / 投递 / 唤醒）。
+  // 真人发起的轮：把「连续自动续」清零、记下身份（以后唤醒这个会话要用），攒着没送出去的会话消息附在这条后面。
+  // 新会话（派生的子会话）的 id 是预先定好的（SDK sessionId 选项），父子关系在它开跑前就已登记。
+  family = family && family.origin ? family : null;
+  const sessionsOn = !snap && (ctx.kind === 'admin' || !!ctx.shell);
+  // bridge 本身的项目手册 + 操作（mcp/bridge-tools.mjs，取代旧全局助手）：登录身份都给，快照访客不给。
+  const bridgeOn = !snap && (ctx.kind === 'admin' || ctx.kind === 'user');
+  // 内嵌图表：没有主机能力，登录身份都给；快照访客 / 悬浮胶囊 / 只认文本的管理台代聊（plain）不挂，
+  // 其余看设置「对话内交互图表」。出图平台：手机 App 或窄屏网页（narrow）按 mobile（mcp/visualize.mjs）
+  const vizOn = vizOnFor(ctx, { source, plain });
+  const vizPf = vizPlatform({ phone: fromPhone === true, narrow: narrow === true });
+  const ownSid = sessionId || (family && family.newSessionId) || null;
+  // 权限模式（runtime/permissions.mjs）：每轮显式传。permissionPolicy 'host' = 无人值守（管理台代聊），固定 default + 宿主放行。
+  // 模式本身不进停放复用签名（接管停放 / 预热的 CLI 时 setPermissionMode 对齐）；启动期才定的 allowSkip / 策略进签名。
+  const permPolicy = permissionPolicy === 'host' ? 'host' : 'interactive';
+  const turnPerm = resolveTurnMode(ctx, {
+    sessionId, requested: permissionMode, policy: permPolicy,
+    // 派生的子会话（新开 / 分叉）继承父会话的模式；会话自己记过的优先（resolveTurnMode 先看会话记忆）
+    inheritFrom: family && family.origin && family.origin.kind === 'spawn' && Array.isArray(family.origin.from) ? family.origin.from[0] : null,
+  });
+  const allowSkip = permPolicy !== 'host' && allowSkipFor(ctx);
+  if (!isSpare && !snap) {
+    if (!family) rememberReplay(ctx, limitReplay);
+    // 已归档的会话被真人接着用了：取消归档（自动续跑与派生唤醒不算）
+    if (!family && !limitResume && sessionId) unarchiveOnTurn(ctx, sessionId);
+    if (sessionId) {
+      const held = familyTurnStart(ctx, sessionId, family, limitReplay, { auto: !!limitResume });
+      if (held) message = message ? message + '\n\n' + held : held;
+    }
+    // 拉取请求：真人发话 → Auto-fix 连续唤醒计数清零、刷新唤醒用的身份（新会话也记一份身份：它可能接管预热的 CLI）
+    notePrTurnStart(ctx, sessionId, { auto: !!family || !!limitResume, replay: limitReplay });
+  }
+  // 设置项（runtime/claude-turn-settings.mjs）：输入建议 / 压缩点以服务端设置为准，老客户端请求体兜底
+  const ts = turnSettings(ctx, { suggest, compactFrac, sessionId: ownSid, outputStyle: chatPrefs && chatPrefs.outputStyle });
+  const wantSuggest = ts.suggest;
   // Ultracode = xhigh + 常驻动态工作流编排（Workflow 工具会派一群子 agent，成本倍增器）。快照访客 /
   // 无 shell 的沙箱用户不给：降到 xhigh（chat.mjs 对快照已拦一道，这里是 runClaudeChat 全部入口的兜底）。
   if (effort === ULTRACODE && (snap || (ctx.sandbox && !ctx.shell))) effort = 'xhigh';
+  // 成员的高消耗功能（开源路线 S2-6，控制台「额度与注册」）：没给成员开放的 fast 不开、Ultracode 降到 xhigh、
+  // 不跑 1M 上下文（见下面 effModel）。管理员、服务账号、管理员代发的轮不受限（runtime/quota.mjs memberRules）。
+  const memberCaps = memberRules(ctx);
+  if (!memberCaps.fast) fast = false;
+  if (effort === ULTRACODE && !memberCaps.ultracode) effort = 'xhigh';
+  const modelFor = (m) => (memberCaps.ctx1m ? to1M(m) : String(m || '').replace(/\[1m\]$/i, '') || m);
+  // 这一轮记到谁的账上：注册用户本人（含管理员代他发的）/ 快照的铸造者；管理员自己不记（runtime/quota.mjs billingUser）
+  const billTo = billingUser(ctx);
   const wantUltracode = effort === ULTRACODE;
   // 共享终端手眼：与右侧「终端」面板同一 PTY（人机同座）。shell 身份（admin/Pro）专属，
   // 快照访客绝不给（它就是个 shell）。
@@ -500,36 +694,69 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 会截到匿名访客的屏幕，隐私上不成立。
   const wsToolsOn = !snap;
   // 扩展中心（设置→个性化→扩展）：托管技能聚合成本地 plugin、插件按目录、连接器并入
-  // mcpServers。仅 admin 非沙箱注入（扩展可带任意脚本/凭据，沙箱身份不配）；每轮现读
-  // 注册表，改动下一条消息即生效。
-  const ext = (!snap && !ctx.sandbox) ? claudeExtensionOptions() : { plugins: [], mcpServers: {} };
+  // mcpServers。管理员自用的那一套只注入 admin 非沙箱会话（扩展可带任意脚本/凭据）；管理员「全服统一」
+  // 加装的那一套也注入注册用户（沙箱）。快照访客两样都没有。每轮现读注册表，改动下一条消息即生效。
+  const ext = claudeExtensionsFor(ctx, { snap });
+  // 拉取请求（mcp__pr__* + 流里认 PR）：gh 令牌是主机本人的 GitHub 账号——只给主机管理员（pr-monitor.prCapable）。
+  const prOn = !snap && prCapable(ctx);
   const { prompt, imageBlocks } = composeTurnPrompt(message, attachments);
   // 恒流式输入 + gate 挂流（见 makeTurnInput 注释）：release 在读循环收轮/finally 时调。
-  const turnInput = makeTurnInput(prompt, imageBlocks);
+  const turnInput = makeTurnInput(prompt, imageBlocks, isSpare);
 
   // 1M 默认开启（2026-07-12）：支持 [1m] 的模型一律直跑 1M 兄弟档——200k 以下按标准价
   // 计费，超了正好要大窗口，没有理由再走「近顶才升档」的旧 latch。picker 只见裸 id。
-  const effModel = to1M(model);
+  const effModel = custom ? custom.model.id : modelFor(model);   // 自定义模型：直接用服务里的真实型号；成员没开放 1M 时用裸 id
 
   // ---- 启动参数（一律在这里算好：既喂给 query，也拼成 warmSig 判断停放的 CLI 能不能接着用）----
   // styleText（用户可控文本）拼在沙箱 nudge 之前——让沙箱铁律保持"最后说话"，
   // 降低自定义风格对软约束的对抗力（硬边界在 canUseTool，不受提示词影响）。
-  const appendText = identityNudge(model) + (STYLE_NUDGE[style] || (styleText ? '\n\n[回复风格 · 自定义] ' + styleText : '')) + (snap ? SNAP_NUDGE : ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE)) : (hostNudge() + HOST_TOOLS_NUDGE)) + (termOn ? TERMINAL_NUDGE : '') + (wsToolsOn ? WORKSPACE_NUDGE : '') + DELIVER_NUDGE + (research ? RESEARCH_NUDGE : '');
+  // 子 agent 调度（设置 › Claude › 对话 › 子 agent 调度偏好）：动态工作流开着的轮告诉 Claude 每个子 agent 按难度定档、能派哪些模型。
+  // 第三方模型清单只给主机管理员（自定义 API 只有它能用）；只有主会话本身走自定义 API 时代理才转得过去，官方会话里只提一句。
+  const customSmall = custom && custom.provider.fastModel && custom.provider.models.some((m) => m.id === custom.provider.fastModel && m.enabled && m.kind !== 'other') ? custom.provider.fastModel : custom && custom.model.id;
+  const dispatchText = dispatchNudge({
+    on: !snap && (!!ts.sdk.enableWorkflows || wantUltracode), text: ts.dispatch,
+    custom: custom ? { main: custom.model.id, small: customSmall } : null,
+    catalog: ctx.kind === 'admin' && !ctx.sandbox ? subagentModelCatalog() : [],
+  });
+  const appendText = (custom ? customIdentityNudge(custom) : identityNudge(model)) + (STYLE_NUDGE[style] || (styleText ? '\n\n[回复风格 · 自定义] ' + styleText : '')) + (snap ? SNAP_NUDGE : ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE)) : (hostNudge() + HOST_TOOLS_NUDGE)) + (termOn ? TERMINAL_NUDGE : '') + (wsToolsOn ? WORKSPACE_NUDGE : '') + (bridgeOn ? BRIDGE_NUDGE : '') + DELIVER_NUDGE + (research ? RESEARCH_NUDGE : '') + (sessionsOn ? sessionsNudge(ctx, { peers: peersOn(ctx, snap) }) + childNudge(familyLink(ctx, ownSid), sessionPolicy(ctx)) : '') + (prOn ? prNudge(ctx, ownSid) : '') + vizNudge(vizOn, { phone: fromPhone === true, narrow: narrow === true }) + dispatchText;
   // 当前激活的 Claude 账号 token（+ 沙箱 configDir）现取现注——切账号即时生效。
-  const engineEnv = claudeEngineEnv(ctx);
+  // 自定义 API：CLI 指向本机代理、去掉订阅 OAuth token（绝不发给第三方），后台小任务 / 子 agent 的模型也映射到这个服务。
+  // 自定义服务填的是官方 api.anthropic.com + 自己的 Key：fast 由本机代理加 speed 与 beta 头（CLI 那套 settings.fastMode 点不亮，见 providerEngineEnv）
+  const customFast = !!(fast && custom && customSupportsFast(custom.provider, custom.model));
+  const engineEnv = custom
+    ? await providerEngineEnv(claudeEngineEnv(ctx) || { ...process.env }, { provider: custom.provider, model: custom.model, effort: customEffort, fast: customFast })
+    : claudeEngineEnv(ctx);
+  markTurn(req, 'env');
+  // 额度事件记回本轮启动时的那个号（各号额度分槽，轮中切号不串）。
+  const engineAcct = activeAccountId();
   // effort：ultracode 不是 SDK 的 effort 取值（TS 类型只列五档）——翻译成 effort:'xhigh' +
   // settings {ultracode:true, enableWorkflows:true}（Pro 计划 enableWorkflows 默认关，必须显式开）。
   // settings 与 fast mode 合成【同一份】JSON 字面量（不是文件路径），不落盘、仅本轮生效。
-  const effortOpts = claudeEffortOptions(effort);
+  // 自定义模型：也给 CLI 一档 = 本轮档位换算成的官方档（levelForTier）。真正发出去的仍是代理按档位表写的值；
+  // CLI 每个请求都带 output_config.effort，代理靠「是不是这一档」分辨主循环 / 继承的子 agent 与自己挑了档的子 agent（pickTarget）。
+  const effortOpts = custom
+    ? { effort: levelForTier(custom.model, customEffort), ...(effort === ULTRACODE ? { settings: { ultracode: true, enableWorkflows: true } } : {}) }
+    : claudeEffortOptions(effort);
   // 安全栅门「会话暂停」（claude.ai 的 Paused 卡 / 官方 /code 的 refusal_fallback_prompt 对话框）：
   // switchModelsOnFlag=false + 声明 supportedDialogKinds 后，消息被拒时 CLI 不再自动切回退模型，而是
   // 发 request_user_dialog 停在原地等宿主回话（没声明 kind 则 fail-closed = 经典拒答直接收尾）。
-  // 快照访客没有回滚 UI，维持 CLI 默认的自动切换。
-  const pauseOnFlag = !snap;
+  // 快照访客没有回滚 UI，维持 CLI 默认的自动切换。设置「消息被拦时自动换模型」开着时也走自动切换（ts.pauseOnFlag=false）。
+  const pauseOnFlag = ts.pauseOnFlag;
+  // 自动压缩点（用量弹层滑块）→ 官方设置项 autoCompactWindow；默认位置不覆盖。改了下一条消息
+  // warmSig 不同 → 冷起生效（窗口只在 spawn 时定）。
+  // 自定义模型：把它真实的上下文窗口告诉 CLI（它不认识这个型号、默认按 200k 算），设了压缩点就按比例。
+  const compactWindow = snap ? undefined : custom ? customCompactWindow(ts.compactFrac, custom.model.contextWindow) : compactWindowFor(ts.compactFrac, effModel);
   const sdkSettings = {
-    ...(fast && claudeSupportsFast(model) ? { fastMode: true } : {}),   // SDK 0.3.220 起 settings.fastMode 可点亮；仅支持的模型注入
+    ...(compactWindow ? { autoCompactWindow: compactWindow } : {}),
+    ...(fast && !custom && claudeSupportsFast(model) ? { fastMode: true } : {}),   // SDK 0.3.220 起 settings.fastMode 可点亮；仅支持的模型注入
+    ...ts.sdk,                                  // 设置页的偏好（含 switchModelsOnFlag:false）；排在 effort 之前——ultracode 仍强制开工作流
     ...(effortOpts.settings || {}),
-    ...(pauseOnFlag ? { switchModelsOnFlag: false } : {}),
+    // 计划文件默认在 <CLAUDE_CONFIG_DIR>/plans——沙箱身份的 configDir 在工作目录外，会被自己的路径围栏拦死（计划卡是空的）。
+    // 改到工作目录里（CLI 要求 plansDirectory 必须在项目根内）。
+    ...(ctx.sandbox && !snap ? { plansDirectory: '.claude/plans' } : {}),
+    // 跨会话消息入站闸（session-peers.mjs）：管理员按设置 accept / hold / refuse，其余身份一律 refuse。flag 层压过用户 / 项目设置。
+    // 「跟随 Claude 默认」不写这个键：CLI 自己按权限模式判（绕过权限 / 对方模式不一致时扣留），显式 accept 会把这层保护压掉。
+    ...(peerInbound(ctx, snap) ? { crossSessionInbound: peerInbound(ctx, snap) } : {}),
   };
   // 停放 CLI 的复用判据：凡是只在 spawn 时定下、进程里改不了的东西都进来（快照访客不停放）。
   // ext 里有连接器凭据，只进哈希。
@@ -539,16 +766,25 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   const warmSig = snap ? '' : createHash('sha256').update(JSON.stringify([
     ctx.key, normDir(ctx.cwd), ctx.configDir || '', ctx.media || '', normDir(ctx.homeRoot || ctx.cwd),
     effModel || '', effortOpts, sdkSettings, appendText, ext,
-    engineEnv ? [engineEnv.CLAUDE_CODE_OAUTH_TOKEN || '', engineEnv.CLAUDE_CONFIG_DIR || ''] : null,
-    [!!ctx.sandbox, !!ctx.shell, termOn, wsToolsOn, wantSuggest],
+    engineEnv ? [engineEnv.CLAUDE_CODE_OAUTH_TOKEN || '', engineEnv.CLAUDE_CONFIG_DIR || '', engineEnv.ANTHROPIC_BASE_URL || ''] : null,
+    [!!ctx.sandbox, !!ctx.shell, termOn, wsToolsOn, wantSuggest, sessionsOn, vizOn && vizPf],
+    [permPolicy, allowSkip],
+    custom ? providersRev() : 0,   // 自定义 API：服务配置改了（输出上限 / 小任务模型 / 提示缓存这些 spawn 时定的 env）下一条冷起
   ])).digest('hex');
 
-  writeSseHeaders(res);
+  if (isSpare) {
+    // 已有同参数的预热进程：续期即可；参数变了（换模型/项目/开关）就换掉旧的。
+    const cur = spareRuns.get(ctx.key);
+    if (cur && cur.sig === warmSig) { cur.touch(); return; }
+    if (cur) cur.close();
+  } else {
+    writeSseHeaders(res);
+  }
 
   // 额度（三端拆分 P4）：注册用户超了每天 / 最近 7 天的上限就不开跑——放在「顶掉同会话上一轮」
-  // 之前，被拒的重发不该把还在跑的那一轮停掉。管理员与快照访客不走这里。
-  if (ctx.kind === 'user' && ctx.user) {
-    const block = quotaBlock(ctx.user);
+  // 之前，被拒的重发不该把还在跑的那一轮停掉。管理员不走这里；快照访客的轮查铸造者的额度（billTo）。
+  if (billTo) {
+    const block = quotaBlock(billTo);
     if (block) {
       genWrite(res, { type: 'error', kind: 'quota', title: block.title, message: block.message });
       res.end();
@@ -556,20 +792,31 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     }
   }
 
+  // 新会话：有预热好的 CLI 且启动参数一致 → 接管它（与续聊的 warmTake 同一条路，首字不再等 spawn）；
+  // 参数不一致就关掉它（它还没有 transcript，不必等它退干净），照常冷起。
+  // 派生的子会话不碰预热进程：它的提示词带子会话身份，签名必然对不上，碰了只会白白关掉用户刚预热好的那个。
+  if (!sessionId && !isSpare && !snap && !family) {
+    const sp = spareRuns.get(ctx.key);
+    if (sp) {
+      if (sp.sig === warmSig && await sp.take({ res, message, attachments, source, chatPrefs, permMode: turnPerm.mode, limitReplay })) { handedTurn(req, sessionId, 'spare'); return; }
+      console.log(`[claude] spare CLI not used (${sp.sig !== warmSig ? 'options changed' : 'gone'}) — cold start`);
+      sp.close();
+    }
+  }
   // 上一轮定局后停放着的 CLI（见 WARM_IDLE_MS）：参数一致就直接接着用；否则关掉它再冷起
   //（一份 transcript 不许两个 CLI）。新一轮开跑，上一条输入建议也就过时了。
   if (sessionId) {
     clearSuggestion(ctx.key, sessionId);
     // 上一轮已经回了 done、正在做定局后的收尾（见 emitDone 里的 finalizing）：等它收完停放好，最多 10s。
     const fin = findGenBySession(ctx.key, sessionId);
-    if (fin && !fin.done && fin.finalizing) await Promise.race([fin.settled, sleep(10_000)]);
+    if (fin && !fin.done && fin.finalizing) { markTurn(req, 'prep'); if (fin.hurry) fin.hurry(); await Promise.race([fin.settled, sleep(10_000)]); markTurn(req, 'fin-wait'); }
     const w = warmRuns.get(ctx.key + '|' + sessionId);
     if (w) {
       const sp = sessionPaths(sessionId, ctx.cwd, ctx.configDir);
       const why = w.sig !== warmSig ? 'options changed'
         : pendingRewindAnchor(sessionId) ? 'rewind pending'
           : (sp && warmStat(sp.file) !== w.stat()) ? 'transcript changed by someone else' : '';
-      if (!why && await w.take({ res, message, attachments, source, chatPrefs })) return;
+      if (!why && await w.take({ res, message, attachments, source, chatPrefs, family, permMode: turnPerm.mode, limitReplay, auto: !!limitResume })) { handedTurn(req, sessionId, 'warm'); return; }
       console.log(`[claude] warm CLI ${sessionId.slice(0, 8)} not reused (${why || 'gone'}) — cold start`);
       await closeWarm(w);
     }
@@ -582,17 +829,34 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 活着的 CLI 开新一轮，后台任务照跑、完成时照常续轮汇报。以前这里一律顶掉上一轮，
   // 顶掉 = abort = CLI 连同后台任务一起被杀（想接着聊只能先点停止，一停任务就没了）。
   if (prev && !prev.done && typeof prev.handoff === 'function') {
-    const took = await prev.handoff({ res, message, attachments, source, model, chatPrefs });
-    if (took) return;
+    const took = await prev.handoff({ res, message, attachments, source, model, chatPrefs, family, permMode: turnPerm.mode, permPolicy, limitReplay, auto: !!limitResume });
+    if (took === 'policy' || took === 'mode' || took === 'model' || took === 'busy') {
+      genWrite(res, { type: 'error', kind: 'busy', title: '会话正在后台工作', message: took === 'policy'
+        ? '这个会话在等后台任务做完。这条消息和它不是同一种发起方式（管理台代聊 / 本人发话），没有插进去，也没有打断它。等它做完再发，或先到该会话点「停止」。'
+        : took === 'model' ? '这个会话在等后台任务做完。切换到 / 切换出自定义 API 的模型要重开会话进程，所以这条消息没有插进去，也没有打断它。等它做完再发，或先到该会话点「停止」。'
+        : took === 'mode' ? '这个会话在等后台任务做完，没能切到你选的更严格的权限模式，所以这条消息没有插进去，也没有打断它。等它做完再发，或先到该会话点「停止」。'
+          : '这个会话正在接收另一条消息，这条没有插进去。稍后再发。' });
+      res.end();
+      return;
+    }
+    if (took) { handedTurn(req, sessionId, 'handoff'); return; }
+  }
+  // 服务端自动发起的轮（Auto-fix 唤醒，pr-monitor.mjs 的 family.noPreempt）绝不顶掉同会话正在跑的轮：回 busy，发起方下次再来。
+  if (prev && !prev.done && family && family.noPreempt) {
+    genWrite(res, { type: 'error', kind: 'busy', title: '会话正在工作', message: '这个会话有一轮正在跑，自动发起的消息没有插进去。' });
+    res.end();
+    return;
   }
   // prev.stopping：用户按了停止，那一轮对界面已收尾（done），但 CLI 还在退出中——同样要等它退干净，
   // 否则新旧两个进程同写一份 transcript。
   if (prev && (!prev.done || prev.stopping)) {
     if (!prev.done) { try { prev.abort.abort(); } catch {} }
+    markTurn(req, 'prep');
     const stopped = await Promise.race([
       (prev.done ? prev.stopping : prev.settled).then(() => true, () => true),
       new Promise((resolve) => setTimeout(() => resolve(false), 10_000)),
     ]);
+    markTurn(req, 'prev-stop');
     if (!stopped) {
       // Never start a second SDK writer for the same transcript. A wedged old
       // turn is inconvenient; overlapping JSONL writers permanently corrupt it.
@@ -621,11 +885,16 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     startedAt: Date.now(), // boundary for reattach: transcript msgs at/after this belong to this in-flight turn
     settled: new Promise((r) => { settleGen = r; }),
   });
-  let gen = newGen(message, source, sessionId);
+  let gen = newGen(message, source, ownSid);
+  gen.family = family;   // 会话间发起的轮（session-family.mjs）：收尾时据此给父会话送汇报
+  gen.autoTurn = !!limitResume;   // 额度重置后的自动续跑：没人在场，sessions MCP 不替用户开会话（session-tools.mjs）
   // 全服上限：快照访客（c:）一个通道；注册用户（u:）合计一个通道（策略 maxUserTurns，0 = 不限）。管理员不设。
   const userCap = ctx.kind === 'user' ? getPolicy().maxUserTurns : 0;
-  const slot = tryStartGen(ctx.key, gen, {
-    maxPerKey: MAX_PARALLEL_CHATS,
+  // 预热的占位「轮」不占并发槽、不登记——真消息接管时 warmTake 才为新一轮占位。
+  // 每人同时在跑的轮数：成员按策略 maxParallelPerUser（0 = 不限），其余身份不限（MAX_PARALLEL_CHATS）。
+  const perKeyCap = Math.min(MAX_PARALLEL_CHATS, memberCaps.maxParallel);
+  const slot = isSpare ? { ok: true } : tryStartGen(ctx.key, gen, {
+    maxPerKey: perKeyCap,
     singleSession: true,
     ...(ctx.snap && Number.isFinite(globalMax) ? { globalPrefix: 'c:', maxGlobal: globalMax }
       : userCap ? { globalPrefix: 'u:', maxGlobal: userCap } : {}),
@@ -638,18 +907,22 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         ? { type: 'error', kind: 'busy', title: '服务器正忙', message: '现在大家同时在跑的对话已经到上限（' + userCap + ' 个），稍等片刻再发送这条消息。' }
         : slot.reason === 'session'
           ? { type: 'error', kind: 'busy', title: '会话正在启动', message: '这个会话已有一轮刚刚开始，请稍后再试。' }
-          : { type: 'error', kind: 'busy', title: '并行对话已满', message: '同时最多 ' + MAX_PARALLEL_CHATS + ' 个对话在跑。等一个完成，或到带呼吸点的对话里按「停止」，再重发这条消息。' });
+          : { type: 'error', kind: 'busy', title: '并行对话已满', message: '同时最多 ' + perKeyCap + ' 个对话在跑。等一个完成，或到带呼吸点的对话里按「停止」，再重发这条消息。' });
     res.end();
     return;
   }
   // 占到了位才记一轮（额度的轮数在开跑时算：并行发几轮也绕不过去）
-  if (ctx.kind === 'user' && ctx.user) { try { noteTurnStart(ctx.user); } catch {} }
-  genSubscribe(gen, res);
+  if (billTo) { try { noteTurnStart(billTo); } catch {} }
+  if (!isSpare) genSubscribe(gen, res);
   // 同账号的【别的设备】据此 0 延迟挂上这一轮的直播（以前靠 4s 轮询 /api/active 才发现）。
   // resume 的会话这里就有 sessionId；新会话要等 SDK 的 init 消息，那边再播一次，
   // 客户端按 sessionId 幂等处理。
+  // 每一轮（gen）对同一个 id 只播一次：续聊 / 接力的轮开跑时已经有 id，随后每轮的 init 帧又会调一次——以前同一轮成对推两帧 run.start。
+  // init 带来的是新 id（新会话 / 分叉）才再播。
+  const announced = new WeakMap();   // gen → 已播过的 sessionId
   const announceStart = () => {
-    if (!gen.sessionId) return;
+    if (!gen.sessionId || announced.get(gen) === gen.sessionId) return;
+    announced.set(gen, gen.sessionId);
     // 落盘台账：进程要是死在这一轮中间，下次启动能凭它在 transcript 上留下「被中断」，
     // 而不是让这轮无声无息地断在一个 tool_result 上（见 runtime/inflight.mjs）。
     beginInflight({
@@ -682,7 +955,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // Deliberately NOT aborting on client disconnect: the generation keeps running
   // and buffering so a refreshed page can reattach via /api/attach.
   const send = (obj) => { if (!userStopped) genEmit(gen, obj); };
-  // 多对话并发下 MCP 工具（终端/工作区）不能再按 caller key 找「唯一活跃 gen」——
+  // 多对话并发下 MCP 工具（终端/工作区/会话）不能再按 caller key 找「唯一活跃 gen」——
   // 会串到并行的另一轮。per-run 闭包把事件精确路由回发起调用的这一轮。
   const getGen = () => gen;
   // Both error paths (query throw → catch, and a result message carrying api_error_status)
@@ -696,7 +969,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   };
   // 文件面板自动刷新：agent 的写类工具落盘后把变更广播进本轮 SSE（{type:'wsx',op:'fs'}），
   // 前端文件面板收到即静默 reload——用户看着 agent 改文件、列表实时跟上，不用手动刷新。
-  // 前端的文档预览靠它实时跟盘；PostToolUse 只观察不拦截。
+  // 前端的文件面板与文档预览靠它实时跟盘；PostToolUse 只观察不拦截。
   const FS_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
   const fsEchoHook = async (input) => {
     try {
@@ -715,6 +988,24 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       }
     } catch { /* 观察钩子绝不拖垮轮次 */ }
     return {};
+  };
+
+  // 模型主动推送（PushNotification 工具）：CLI 在 SDK 宿主下没有投递通道（只回「Mobile push not sent」），
+  // 这里接住 message 记下（/api/active 带 pushes，见 push-notices.mjs）并推进本轮直播，再告诉模型
+  // 实情——别让它以为没送到、又在正文里重复一遍。快照访客不挂。
+  const pushHook = async (input) => {
+    try {
+      const msgText = String(input?.tool_input?.message || '');
+      const item = notePush(ctx.key, { sessionId: gen.sessionId, message: msgText });
+      if (!item) return {};
+      send({ type: 'push', message: item.message, at: item.at });
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse',
+          additionalContext: '[Muse Bridge] 这条通知已经由 Muse Bridge 记下并显示在用户的对话界面里（上面那句「Mobile push not sent」说的是 Claude 官方的手机推送通道，不影响这条）。不必在回答里重复通知内容。',
+        },
+      };
+    } catch { return {}; }
   };
 
   // ---- 后台任务悬停收轮（08-27 agent/workflow；09-15 起后台 shell 同治）--------
@@ -761,9 +1052,13 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 有 agent/workflow 的悬停到点只掐 shell、本轮继续（见 bgWatch），没有整轮硬期限 → 0。
   const bgDeadline = (list) => (holdStartedAt && list.length && !list.some((t) => AGENTISH.has(t.task_type)) ? holdStartedAt + BG_SHELL_HOLD_MS : 0);
   const streamBlocks = {}; // content-block index -> { type, name, json, shown, id }
+  // show_widget 的参数增量 → widget_* 帧（mcp/visualize.mjs）：流式渲染、定稿、tool_result 收尾
+  const widgets = makeWidgetStream(send, getGen);
   // 文件编辑工具的 tool_use id → 目标路径：tool_result 成功后才推 {type:'fs'} 事件
   //（写盘完成的时点），前端打开中的文档/预览据此自动跟盘刷新。
   const fsPending = new Map();
+  // 流里认 PR（code_change_published / <pr-created> / gh pr create 的输出）→ 绑到本会话（pr-monitor.mjs）
+  const prSniff = prOn ? makePrSniffer(ctx, () => gen.sessionId, limitReplay) : null;
   // 露出的工具行 tool_use id → content_block_start 时刻：tool_result 到达时算耗时，发 tool_done。
   const toolStarts = new Map();
   // 本轮任务 taskId → task_type（task_notification 帧不带类型；读 .output 前要知道是不是工作流）。
@@ -780,9 +1075,17 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   let hookLevel = null;                              // ultracode 轮 Stop hook 回报的档位，等 settleEffort 定局
   let turnOut = 0, turnThink = 0; // running output / thinking token totals for the live thinking-status bar
   let lastMainUsage = null; // usage of the MAIN conversation's last API call (for real context fill)
+  // 按人记账的计价表：result 的 total_cost_usd 是 CLI 进程（续聊还含恢复的整段会话）的累计值，按「上一次」取差入账
+  //（runtime/usage-ledger.mjs）。续聊时开跑前换成从 transcript 读出的起点，见下面 query 之前。
+  let costMeter = makeCostMeter(0);
   // CLI 认证失败时不走 API：发一条合成的 assistant（model:"<synthetic>"、error:'authentication_failed'，
   // 文字是「Not logged in · Please run /login」），result 却不标 is_error——记下来，定局时改发错误卡。
   let authFailed = false;
+  // 本轮被额度拒绝的那一帧 rate_limit_info（status:'rejected'）——号池智能路由据此给该号记冷却并换号。
+  let turnRejection = null;
+  // 撞限额时 CLI 不走流式、直接写一条合成回答（model:"<synthetic>"、error:'rate_limit'，文字「You've hit your
+  // session limit · resets 3pm (…)」，jsonl 里另带 apiErrorParams.rate_limit_info）。记下来，定局时改发限额卡。
+  let limitFrame = null;   // { text, info }
   // 上下文压缩：compactAwait = 刚过去的边界 uuid，等紧随其后那条带摘要的 user 帧；
   // compactSeen = 本轮压缩过——手动 /compact 的 result 是零轮次空壳，不能当幻影 result 扣住。
   let compactAwait = '';
@@ -819,7 +1122,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     const shells = live.filter((t) => !AGENTISH.has(t.task_type));
     for (const t of shells) if (!shellSeenAt.has(t.task_id)) shellSeenAt.set(t.task_id, now);
     const agentOnly = live.length > 0 && !shells.length;
-    const quiet = now - lastMsgAt;
+    // 有审批卡在等人（后台子 agent 要批）：等审批的 agent 本来就一声不吭，别按静默判死把它连同这一轮收掉
+    const quiet = permGate && permGate.pending() ? 0 : now - lastMsgAt;
     if (agentOnly && quiet > BG_HOLD_SILENCE_MS) finalizeHold('silence');
     else if (!live.length && quiet > BG_EMPTY_GRACE_MS) finalizeHold('drained');
     else if (shells.length) {
@@ -847,8 +1151,14 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 挂起接力（见 gen.handoff）：接力来的用户消息 uuid → 等它的 result（user_message_uuids 带回）。
   // 在它答完之前出的 result（CLI 先跑了一轮后台任务完成通知之类）只是中间态，暂存不定局。
   const awaitingUser = new Set();
+  // 插话进来的消息 uuid（见 gen.steer）——command_lifecycle 帧据此转成前端的 steer_state。
+  const steerUuids = new Set();
   let interimResult = null;
   let runModel = model;       // 这个 CLI 进程眼下的模型（接力时用户换了模型 → setModel）
+  let runPermMode = turnPerm.mode;   // 这个 CLI 进程眼下的权限模式（init / status 帧实况、会话中切换）
+  let askedPermMode = turnPerm.mode; // 眼下这一轮要的模式（停放复用 / 接力换成新请求的）——init 帧据此认 CLI 降级
+  let permGate = null;        // 逐次审批 / 计划审批闸门（runtime/permissions.mjs），query 前建
+  let unbindMode = null;      // 会话中切模式的控制口登记（拿到会话 id 时登记，进程退出注销）
   let interruptTimer = null;  // 软停止（interruptTurn）的兜底：CLI 迟迟不回 result 就整个停
   let softStopping = false;   // 软停止已发出、等被打断那一轮的 result
 
@@ -875,7 +1185,12 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     // 不然下次启动会把它误判成「进程死在中途」的孤儿。
     if (gen.sessionId) endInflight(ctx.key, gen.sessionId);
     // 别的设备据此把呼吸点熄掉、并（若正看着这个会话）在直播流收尾后转回静态跟随。
-    if (gen.sessionId) busPublish(ctx.key, { type: 'run.end', sessionId: gen.sessionId });
+    // pending：这一轮的卡都作废了，但同会话还可能扣着跨会话消息等你确认（pendingFor 把它算上）——别让 run.end 把那颗点熄了
+    if (gen.sessionId) busPublish(ctx.key, { type: 'run.end', sessionId: gen.sessionId, pending: pendingFor(gen.sessionId, ctx.key) });
+    // 这一轮收尾了：有排队消息（Ctrl+Enter）就合并发出（claude-queue.mjs，稍后检查确实没有新一轮接上）
+    if (gen.sessionId) noteRunEnd(ctx.key, gen.sessionId);
+    // 会话派生：子会话这一轮是父会话发起的 → 汇报进父会话收件箱，该唤醒谁就唤醒谁（session-family.mjs）
+    if (gen.sessionId && !snap) { try { familyTurnEnded(ctx, gen); } catch (e) { console.log('[family] turn-end hook failed:', e && e.message); } }
     if (settleGen) settleGen();
     // 完成的轮【长保留】（同会话下一轮开跑时替换 + LRU/时效兜底，见 gen.mjs）：
     // 手机离开多久回来都能 /api/attach 整轮重放（含最终 done），不再有 60s 悬崖。
@@ -883,12 +1198,17 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   }
 
   // done 的唯一出口（正常收轮 / 悬停后最终收轮 / 看门狗与流意外终止的兜底共用）。
+  let finHurry = null;
   function emitDone(rmsg) {
     if (doneEmitted) return;
     doneEmitted = true;
+    // 正常收尾：之前撞的限额（若有）翻篇，等着的自动续跑作废（续跑轮自己跑完也走这里）。
+    if (!snap && (rmsg.session_id || gen.sessionId)) noteLimitTurnSettled(ctx.key, rmsg.session_id || gen.sessionId);
     // done 发出 → 收尾还要 1–3s（effort 定局、上下文用量），之后才 closeTurn + 停放。这期间同会话来的
     // 下一条消息认这个标记：等它收完再接着用停放的 CLI，而不是把它当「还在跑」顶掉（顶掉 = 杀进程冷起）。
     gen.finalizing = true;
+    // 下一条已经在等（fin-wait）就喊一声：收尾里最慢的上下文用量（首次 ~6s）改到后台收完，不挡下一轮。
+    finHurry = new Promise((r) => { gen.hurry = r; });
     // 产物附件：最终回答里 markdown 链接指向的真实文件/文件夹（根守卫内）→ 附件卡。
     let attachments = [];
     // nav = 文件夹卡「在工作空间里打开」的定位。项目制下 ctx.cwd 已被覆写成项目目录，
@@ -908,7 +1228,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       type: 'done',
       result: rmsg.result ?? '',
       isError: Boolean(rmsg.is_error),
-      cost: rmsg.total_cost_usd ?? 0,
+      cost: custom ? 0 : (rmsg.total_cost_usd ?? 0),   // 自定义 API：CLI 不认识型号，按 Claude 价目表瞎估的美元数，不报
       sessionId: rmsg.session_id,
       ...(attachments.length ? { attachments } : {}),
     });
@@ -916,6 +1236,17 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
 
   let qHandle = null;   // finally 里收尾用（q 本身声明在 try 块里）
   let iterDone = false;   // 读循环读到流尾（CLI 自己退了）；见 readNext
+  // 跨会话消息（session-peers.mjs）：peerGate = 改这个 CLI 的入站闸（hold 档「待你确认」卡放行 / 拒收用）
+  const peerAware = peersOn(ctx, snap);
+  let peerGate = null;
+  const peerSeen = new Set();   // 正在跑的轮里认过的 command_uuid
+  // 自定义服务的 fast 被上游拒（fast 额度 429 / 没开通）：代理已按普通速度重发，这里在对话里说一声，芯片的「· Fast」跟着熄
+  const offFastFallback = customFast ? onFastFallback((ev) => {
+    if (ev.pid !== custom.provider.id || gen.done) return;
+    const minutes = Math.round(ev.cooldownMs / 60_000);
+    send({ type: 'model_notice', subtype: 'model_fallback', trigger: 'fast_refused', scope: 'local', from: model, to: model, text: `Fast mode 被拒（${ev.status}），已改用普通速度，${minutes} 分钟内不再尝试`, at: Date.now() });
+    if (gen.sessionId) send({ type: 'session', sessionId: gen.sessionId, model, fast: false });
+  }) : null;
   try {
     // The SDK persists extended-thinking blocks to the session log with their text
     // emptied but the signature kept; on resume the API can 400 on those dead blocks.
@@ -924,6 +1255,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     if (sessionId) {
       const sp = sessionPaths(sessionId, ctx.cwd, ctx.configDir);
       if (sp) { try { const r = sanitizeSessionThinking(sp.file); if (r && r.dropped) console.log(`[sanitize] ${sessionId.slice(0, 8)} dropped ${r.dropped} dead thinking block(s)`); } catch {} }
+      // 续聊：CLI 会从该会话最后一条 cost-state 恢复整段会话的累计花费——以它为起点取差，别把历史再记一遍
+      if (sp && billTo) { try { costMeter = makeCostMeter(await sessionCostBaseline(sp.file, sessionId)); } catch {} }
     }
     // engineEnv / effortOpts / pauseOnFlag / sdkSettings 已在开头算好（同时进 warmSig）。
     // 暂停对话框走 AskUserQuestion 同一条等待通道：发 refusal_prompt 给前端（输入框上方的 Paused 卡）、
@@ -943,15 +1276,16 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         try { const sp = sessionPaths(sid, ctx.cwd, ctx.configDir); const a = sp ? lastRealUserUuid(sp.file) : null; if (a) send({ type: 'anchor', uuid: a, sessionId: sid }); } catch {}
       }
       send({ type: 'refusal_prompt', qid, sessionId: sid || null, from, to, category: p.apiRefusalCategory ?? null, at: Date.now() });
-      const announce = (pending) => { if (sid) busPublish(ctx.key, { type: 'question', sessionId: sid, pending }); };
-      if (sid) sessionQuestions.set(sid, { qid, questions: [{ header: 'Session paused', question: `Safeguards flagged this message. Edit and retry, or switch to ${to || 'the fallback model'}.` }], ts: Date.now() });
+      // pending 按「这个会话还有没有别的在等」算：同一会话可能同时挂着审批卡（sessionQuestions 一会话多条）
+      const announce = () => { if (sid) busPublish(ctx.key, { type: 'question', sessionId: sid, pending: pendingFor(sid, ctx.key) }); };
+      if (sid) sessionQuestions.set(sid, { qid, kind: 'refusal', ownerKey: ctx.key, questions: [{ header: 'Session paused', question: `Safeguards flagged this message. Edit and retry, or switch to ${to || 'the fallback model'}.` }], ts: Date.now() });
       announce(true);
       let choice = 'cancelled';
       try {
         const ans = await waitForAnswer(qid, opts && opts.signal, undefined, ctx.key);
         if (ans && !ans.cancelled && (ans.choice === 'retry_fallback' || ans.choice === 'edit_prompt')) choice = ans.choice;
       } catch {}
-      if (sid) sessionQuestions.delete(sid);
+      if (sid) sessionQuestions.delete(sid, qid);
       announce(false);
       const retracted = Array.isArray(p.retractedMessageUuids) ? p.retractedMessageUuids.filter((u) => typeof u === 'string') : [];
       if (retracted.length) applyRetraction(retracted);
@@ -964,37 +1298,86 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       send({ type: 'refusal_answer', qid, choice, sessionId: sid || null });
       return choice === 'cancelled' ? { behavior: 'cancelled' } : { behavior: 'completed', result: choice };
     };
+    // 逐次工具审批 / 计划审批（AskUserQuestion 之外的工具在 canUseTool 末尾交给它）。沙箱复检放在弹卡之前
+    // （别让人批一个注定被拒的调用）；拒绝且不带反馈 = 停下这一轮（官方），按软停止收、不报错。
+    permGate = makePermissionGate({
+      ctx, policy: permPolicy, send: (ev) => send(ev), sid: () => gen.sessionId, currentMode: () => runPermMode,
+      guard: ctx.sandbox ? (name, input) => ((!ctx.shell && (name === 'Bash' || name === 'PowerShell')) ? NO_SHELL_MSG : sandboxFence(ctx, name, input)) : null,
+      onInterrupt: () => { softStopping = true; },
+      // 卡片作答算一次活动（挂起看门狗的静默计时从这里重新算，见 bgTick）
+      onActivity: () => { lastMsgAt = Date.now(); },
+      // 取值函数：停放复用 / 预热接管 / 挂起接力会把 limitReplay 换成眼下这条请求的（见 warmTake / handoff）
+      limitReplay: () => limitReplay,
+      // 眼下这一轮是谁发起的（gen 在停放复用 / 接力时会换）：Auto-fix 叫醒的轮（'ci'）里开长期授权的调用直接拒，不弹卡
+      turnOrigin: () => (gen && gen.family && gen.family.origin && gen.family.origin.kind) || '',
+      // 没有真人发起的轮（会话间 / 跨会话 / Auto-fix 开的、额度重置后的自动续跑）：审批卡等 30 分钟没人答就收掉这一轮
+      unattended: () => !!(gen && (gen.family || gen.autoTurn)),
+    });
+    // 权限模式实况变了（init / status 帧、会话中切换、接管时对齐）：发 perm_mode（前端芯片）并记进会话记忆，
+    // 下一轮 spawn 照它。init 每轮都发一次（新设备 attach 也拿得到实况）；无人值守的轮不记（别把用户选的模式改成 default）。
+    // init 只在会话还没记过模式时落一笔（新会话首轮）：会话记忆同时承载「待生效的选择」——干活时选的绕过权限、冷启动
+    // 还没出 init 时刚选的模式——挂起后的续轮 / 冷启动首帧的 init 只报实况，不许把它冲掉。事件带上待生效的绕过权限，
+    // 前端芯片的小红点才不会被 init 抹掉。
+    const notePermMode = (mode, trigger) => {
+      if (!mode || (mode === runPermMode && trigger !== 'init')) return;
+      const from = runPermMode;
+      runPermMode = mode;
+      const sidM = gen.sessionId;
+      if (!sidM || snap) return;
+      if (permPolicy !== 'host') noteSessionMode(ctx, sidM, mode, { ifUnset: trigger === 'init' });
+      const pendingMode = permPolicy !== 'host' ? pendingModeFor(ctx, sidM, mode) : null;
+      const ev = { type: 'perm_mode', sessionId: sidM, mode, ...(from !== mode ? { from } : {}), ...(pendingMode ? { pendingMode } : {}), trigger, at: Date.now() };
+      if (!turnClosed) send(ev);
+      if (trigger !== 'init') busPublish(ctx.key, ev);
+    };
+    if (!isSpare) handedTurn(req, sessionId, 'cold');
     const q = qHandle = query({
       prompt: turnInput.stream,
       options: {
+        // Claude Code 可执行文件：SDK 自带的不传；还没就绪（首启下载中 / 失败）抛人话错误，下面 catch 成错误卡片
+        ...claudeCliOptions(),
         cwd: ctx.cwd,
         // Sandboxed users: no dirs beyond their own cwd. admin: its uploads + media dirs too.
-        additionalDirectories: ctx.sandbox ? [] : [UPLOADS, MEDIA],
+        // 例外：注册用户可以只读管理员「全服统一」加装的扩展目录（技能正文与脚本）。
+        additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' && !snap ? sharedExtensionDirs() : []) : [UPLOADS, MEDIA],
         mcpServers: {
-          // 快照：只有 close_snapshot 一个工具（外加下面对快照关着的终端/工作区工具都不给）。
+          // 快照：只有 close_snapshot 一个工具（下面对快照关着的终端/工作区/会话等工具都不给）。
           ...(snap ? { snapshot: makeSnapshotMcp({ getGen, token: snap.token }) } : {}),
+          // 终端的池子按（属主, 工作空间）键控（principal.poolRef），与右侧面板同一把键。
           // 共享终端（右侧「终端」面板同一 PTY）+ 工作区协同（视图感知/预览下发/截图/草稿）。
-          ...(termOn ? { terminal: makeTerminalMcp({ getGen, ws: ctx.cwd }) } : {}),
+          ...(termOn ? { terminal: makeTerminalMcp({ getGen, ws: poolRef(ctx, ctx.cwd) }) } : {}),
           ...(wsToolsOn ? { workspace: makeWorkspaceMcp({ getGen, ws: ctx.cwd, ctxKey: ctx.key }) } : {}),
+          // bridge 本身：项目手册 + 操作（与外部 agent 的 /agent/v1 同一张操作表；身份就是这一轮的身份）。
+          ...(bridgeOn ? { bridge: makeBridgeMcp({ ctx, getGen }) } : {}),
+          // 会话协作：派生子会话 / 会话间互发消息（session-family.mjs）。快照访客不给。
+          ...(sessionsOn ? { sessions: makeSessionsMcp({ getGen, ctx, lastUserUuidFor: (sid) => { const sp = sessionPaths(sid, ctx.cwd, ctx.configDir); return sp ? lastRealUserUuid(sp.file) : null; } }) } : {}),
+          // 拉取请求：状态 / 绑定 / 自动修复与自动合并开关 / 同步基线分支（pr-tools.mjs，主机本人才有）。
+          ...(prOn ? { pr: makePrMcp({ getGen, ctx }) } : {}),
+          // 内嵌交互图表（read_me + show_widget）：platform 按发起端（手机 App / 窄屏网页 → mobile，约 380px 宽）
+          ...(vizOn ? { visualize: makeVisualizeMcp({ platform: vizPf }) } : {}),
           // 扩展中心连接器（外部 MCP server，stdio/http/sse）。键名已在注册侧避让内置保留名。
           ...ext.mcpServers,
         },
         // 扩展中心：聚合技能 plugin + 用户装的 Claude Code 插件。
         ...(ext.plugins.length ? { plugins: ext.plugins } : {}),
+        // 内嵌图表两件工具免过 auto 模式分类器（纯展示，见 VIZ_ALLOWED_TOOLS 注释）
+        ...(vizOn ? { allowedTools: VIZ_ALLOWED_TOOLS } : {}),
         // append 的拼法见开头 appendText。
         // snapshot:false —— SDK 0.3.267 起 system prompt 默认「首轮录制、之后原样复用」，同一会话里后续
         // 轮次换 append 一律无视（09-22 探针：第二轮仍答第一轮的口令）。bridge 的 append 是逐轮拼的
-        //（切模型后的身份、按身份注入的工具说明），必须每轮现渲染。
+        //（切模型后的身份、按身份与设置注入的工具说明），必须每轮现渲染。
         systemPrompt: { type: 'preset', preset: 'claude_code', snapshot: false, append: appendText },
         // MCP 长调用（共享终端等）必须同步等结果——SDK 2.1.212 起
         // 默认超 2 分钟自动转后台，会破坏「模型等产物再回看质检」的语义，显式关掉（设 24h）。
-        env: { ...(engineEnv || process.env), CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '86400000' },
+        env: { ...(engineEnv || process.env), CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '86400000', ...peerEngineEnv(ctx, snap) },
         // 显式关掉 Claude in Chrome：服务器上没有用户的浏览器，别指望 ~/.claude.json 的默认值。
         extraArgs: { 'no-chrome': null },
         ...(effModel ? { model: effModel } : {}),
         ...(effortOpts.effort ? { effort: effortOpts.effort } : {}),
         ...(Object.keys(sdkSettings).length ? { settings: JSON.stringify(sdkSettings) } : {}),
         ...(sessionId ? { resume: sessionId } : {}),
+        // 派生的子会话：id 事先定好（父子关系开跑前已登记、工具当场就能把 id 告诉父会话）
+        ...(!sessionId && family && family.newSessionId ? { sessionId: family.newSessionId } : {}),
         // 检查点回滚：① 每次文件编辑前快照（SDK 默认关，必须显式开，否则 rewindFiles
         // 报 not enabled）；② 有待生效的对话回滚锚点时本轮从锚点续起——CLI 在同一
         // jsonl 里按 parentUuid 分叉，之后普通 resume 自动走新分支（claude-rewind.mjs）。
@@ -1009,7 +1392,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         // PostToolUse 观察钩全员挂（文件面板自动刷新）；沙箱身份再叠 PreToolUse 硬闸。
         hooks: {
           ...(ctx.sandbox ? { PreToolUse: [{ hooks: [makeSandboxPreToolUse(ctx)] }] } : {}),
-          PostToolUse: [{ hooks: [fsEchoHook] }],
+          PostToolUse: [{ hooks: [fsEchoHook] }, ...(snap ? [] : [{ matcher: 'PushNotification', hooks: [pushHook] }])],
           // 实际生效 effort（SDK 0.3.257）：Stop hook 的 input.effort 是这轮真正发给 API 的档位
           // （经 env 覆盖 / 组织上限 / 模型不支持降档之后）。init 帧在 SDK 宿主上不带 effort
           // （只有 Remote Control 帧带，probe 验证过是 undefined），只能从这里拿。前端芯片据此
@@ -1028,6 +1411,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
               // ultracode 轮：hook 只能回解析后的 xhigh（没有 ultracode 标记），实况留到 result 后
               // getSettings() 定局（settleEffort）——这里只暂存，不发。
               if (wantUltracode) { hookLevel = level; return {}; }
+              // 自定义模型：CLI 回报的是它眼里的官方档位，真正发出去的是代理按档位表写的值——不回报，芯片显示所选
+              if (custom) return {};
               if (sid && !snap) { applyEffort(ctx.key, sid, level); send({ type: 'effort', sessionId: sid, level }); }
             } catch {}
             return {};
@@ -1035,9 +1420,13 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         },
         ...(ctx.sandbox ? {
           settingSources: [],
-          // 快照访客再收紧：不许 Task/Agent 派子 agent、不许 Workflow 跑动态工作流（都是成本倍增器，匿名访客不配）。
-          ...(!ctx.shell ? { disallowedTools: snap ? [...SHELL_DENY, 'Task', 'Agent', 'Workflow'] : SHELL_DENY } : {}),
+          // 快照访客再收紧：不许 Task/Agent 派子 agent、不许 Workflow 跑动态工作流（都是成本倍增器，匿名访客不配）；
+          // 也没有计划模式（没人能批计划，访客界面也没有审批卡）。
+          ...(!ctx.shell ? { disallowedTools: snap ? [...SHELL_DENY, 'Task', 'Agent', 'Workflow', 'EnterPlanMode', 'ExitPlanMode'] : SHELL_DENY } : {}),
         } : {}),
+        // 权限模式显式传（不传 = CLI 按服务端闸自己挑 default / auto）；bypass 要能中途切进去，启动时就得带 allowDangerouslySkipPermissions。
+        permissionMode: turnPerm.mode,
+        ...(allowSkip ? { allowDangerouslySkipPermissions: true } : {}),
         includePartialMessages: true,
         agentProgressSummaries: true, // periodic AI summaries on task_progress for long-running subagents
         // 工作台「任务」面板每条运行中的任务都有停止钮（走控制请求 stop_task，见 gen.stopTask）——
@@ -1055,19 +1444,20 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
             const sidQ = gen.sessionId;
             // 「待回答」点要在别的设备的会话列表上也亮起来——同账号任何设备都能替它作答
             //（handleAnswer 只认账号身份），所以这个状态必须是账号级广播的。
-            const announceQ = (pending) => { if (sidQ) busPublish(ctx.key, { type: 'question', sessionId: sidQ, pending }); };
-            if (sidQ) sessionQuestions.set(sidQ, { qid, questions: input.questions, ts: Date.now() });
+            // pending 按「这个会话还有没有别的在等」算（同一会话可能同时挂着审批卡，见 questions.mjs）
+            const announceQ = () => { if (sidQ) busPublish(ctx.key, { type: 'question', sessionId: sidQ, pending: pendingFor(sidQ, ctx.key) }); };
+            if (sidQ) sessionQuestions.set(sidQ, { qid, kind: 'question', ownerKey: ctx.key, questions: input.questions, ts: Date.now() });
             announceQ(true);
             try {
-              const ans = await waitForAnswer(qid, opts && opts.signal, undefined, ctx.key);
-              if (sidQ) sessionQuestions.delete(sidQ);
+              const ans = await waitForAnswer(qid, opts && opts.signal, questionTimeoutMs(ctx), ctx.key);   // 设置「Claude 提问无人回答时」
+              if (sidQ) sessionQuestions.delete(sidQ, qid);
               announceQ(false);
               // 广播「已回答」——直播/重连/别设备镜像据此把 ask 块标成已回答（带结构化选择），
               // 不再是「问句后 Claude 连贯输出、看不到用户答了什么」。事件进缓冲，/api/attach 重放也重建已答块。
               send({ type: 'answer', qid, answers: (ans && Array.isArray(ans.answers)) ? ans.answers : null, cancelled: !!(ans && ans.cancelled) });
               return { behavior: 'deny', message: formatAnswer(input.questions, ans) };
             } catch (e) {
-              if (sidQ) sessionQuestions.delete(sidQ);
+              if (sidQ) sessionQuestions.delete(sidQ, qid);
               announceQ(false);
               // 超时/取消也标记为已处理（跳过），避免重连再弹一个已经过期的交互卡（原 phantom-question bug）。
               send({ type: 'answer', qid, answers: null, cancelled: true });
@@ -1077,15 +1467,28 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
             // 刻意不再从缓冲里删掉 question 事件：保留它 + 上面的 answer 事件，
             // 重连/镜像重放时先建 ask 卡再标记已答（而非重弹交互卡），比删事件更一致。
           }
-          if (ctx.sandbox) {
-            if (!ctx.shell && (name === 'Bash' || name === 'PowerShell')) return { behavior: 'deny', message: NO_SHELL_MSG };
-            const v = sandboxViolation(name, input, ctx.cwd);
-            if (v) return { behavior: 'deny', message: v };
-          }
-          return { behavior: 'allow', updatedInput: input };
+          // 其余工具：沙箱复检 → 无人值守放行 → bridge 自带 MCP 白名单 → 逐次审批卡；ExitPlanMode → 计划审批卡
+          return permGate.canUseTool(name, input, opts);
         },
       },
     });
+
+    // v = null：清掉 flag 内联层里 bridge 写过的值，回到 spawn 时 --settings 里的（「跟随 Claude 默认」时那里没有这个键 = CLI 默认）
+    if (peerAware) peerGate = (v) => q.applyFlagSettings({ crossSessionInbound: v || null });
+    // 设置「其它会话发来的消息」一改就当场换到这个 CLI 上（session-peers.mjs）；预热的那个被接走时才登记（之前一直关着）
+    if (peerGate && !isSpare) registerPeerGate(ctx.key, peerGate);
+    // 跨会话消息插进了正在跑的这一轮（CLI 在下一个工具回合读到它，流里只有 command_lifecycle）：等 transcript 落盘后
+    // 补一个插话段，直播当场看得见（不补的话要刷新才出现）。不是跨会话消息（后台任务通知之类）就什么都不做。
+    const echoPeer = (uuid) => {
+      peerSeen.add(uuid);
+      const g0 = gen;
+      const sp = gen.sessionId ? sessionPaths(gen.sessionId, ctx.cwd, ctx.configDir) : null;
+      waitPeerRecord(sp && sp.file, uuid).then((r) => {
+        if (!r || !r.peer || g0 !== gen || gen.done) return;
+        send({ type: 'steer', uuid, text: peerDisplay(r.peer), files: [], at: Date.now() });
+        send({ type: 'steer_state', uuid, state: 'started' });
+      }).catch(() => {});
+    };
 
     // 单条停止后台任务（工作台任务面板的 ⏹）：控制请求 stop_task 走同一条活着的控制通道，
     // 所以必须挂在这一轮的 gen 上（悬停期间通道正是活的，这也是能停的前提）。
@@ -1145,8 +1548,31 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     // 挂起接力：挂起中（模型已停笔、后台任务在跑）同会话又来一条消息 → 上一轮按正常定局收尾
     //（done + 附件卡、台账结清），新消息推进同一个 CLI 的输入流开新一轮；gen 换新，后台任务、
     // 权限通道、封顶计时都原样延续。返回 false = 不接（这一轮并没在挂起），调用方照旧顶掉重开。
-    const handoff = async ({ res: nres, message: nmsg, attachments: natts, source: nsrc, model: nmodel, chatPrefs: nprefs }) => {
+    let handoffSwitching = false;
+    const handoff = async ({ res: nres, message: nmsg, attachments: natts, source: nsrc, model: nmodel, chatPrefs: nprefs, family: nfam, permMode: nmode, permPolicy: npolicy, limitReplay: nreplay, auto: nauto }) => {
       if (!heldResult || doneEmitted || bgFinalized || turnClosed || abort.signal.aborted) return false;
+      // 权限策略不同不接（管理台代聊 = 宿主放行 / 用户自己发 = 弹卡）：停放复用靠 warmSig 分开，接力不过签名，要在这里拦。
+      // 混用的后果：用户的这一轮全程宿主放行；或代聊把用户的会话模式改成 default、弹出控制台看不到的卡。
+      // 回 'policy'（不是 false）：调用方据此回 busy，不能照「没在挂起」那样顶掉——顶掉会连后台任务一起杀掉。
+      if (npolicy && npolicy !== permPolicy) return 'policy';
+      // 换到 / 换出自定义 API 的模型：env（地址 / 鉴权）是 spawn 时定的，同一进程里换不了——不接（回 'model'，调用方回 busy，
+      // 不顶掉挂起的后台任务）；等这一轮收掉，下一条消息按新模型冷起。
+      if (nmodel && nmodel !== runModel && (isCustomModelId(nmodel) || isCustomModelId(runModel))) return 'model';
+      // 权限模式先切（上一轮还没动）：切不过去、而要的比进程眼下的更严格 → 不接（'mode'，调用方回 busy）——
+      // 不能让这条消息在更宽松的旧模式下跑（以前失败只打一行日志就照推）。切向更宽松的失败照旧用当前模式跑。
+      // 等控制请求这一下让出了执行权：另一条接力这时进来不能也往下走（两条一起把上一轮收掉）——回 'busy'
+      if (handoffSwitching) return 'busy';
+      if (nmode && nmode !== runPermMode && permPolicy !== 'host') {
+        handoffSwitching = true;
+        try {
+          try { await q.setPermissionMode(nmode); notePermMode(nmode, 'user'); }
+          catch (e) {
+            console.log('[claude] handoff setPermissionMode failed:', e && e.message);
+            if (stricterMode(nmode, runPermMode)) return 'mode';
+          }
+        } finally { handoffSwitching = false; }
+        if (!heldResult || doneEmitted || bgFinalized || turnClosed || abort.signal.aborted) return false;   // 等控制请求期间这一轮收了
+      }
       const uuid = randomUUID();
       const next = composeTurnPrompt(nmsg, natts || []);
       const prevResult = heldResult;
@@ -1154,6 +1580,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       emitDone(prevResult);
       retireTurn();
       gen = newGen(nmsg, nsrc, gen.sessionId);
+      gen.family = nfam || null;
+      gen.autoTurn = !!nauto;
       // 并发槽原样继承（旧轮刚让出），只守「同会话一个写入者」。
       const slot = tryStartGen(ctx.key, gen, { singleSession: true });
       if (!slot.ok) {
@@ -1163,7 +1591,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         try { abort.abort(); } catch {}
         return true;
       }
-      if (ctx.kind === 'user' && ctx.user) { try { noteTurnStart(ctx.user); } catch {} }
+      if (billTo) { try { noteTurnStart(billTo); } catch {} }
       genSubscribe(gen, nres);
       armGen(gen);
       heartbeat = startMultiHeartbeat(gen.subscribers);
@@ -1172,6 +1600,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       interimResult = null;
       turnOut = 0; turnThink = 0;
       authFailed = false;
+      turnRejection = null; limitFrame = null;
       compactAwait = ''; compactSeen = false;
       compactCmd = /^\s*\/compact(?:\s|$)/.test(String(nmsg || ''));
       hookLevel = null;
@@ -1183,11 +1612,34 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       if (nprefs && gen.sessionId) { try { recordChatPrefs(ctx, gen.sessionId, nprefs); } catch {} }
       // 选择器换了模型：同一进程里 setModel（effort / fast 这类启动参数本轮沿用，下一次新开进程才生效）。
       if (nmodel && nmodel !== runModel) {
-        try { await q.setModel(to1M(nmodel)); runModel = nmodel; } catch (e) { console.log('[claude] handoff setModel failed:', e && e.message); }
+        try { await q.setModel(modelFor(nmodel)); runModel = nmodel; } catch (e) { console.log('[claude] handoff setModel failed:', e && e.message); }
       }
+      // 后台子 agent 还在等的审批卡：重发进新一轮的缓冲、待回答点重新亮（retireTurn 刚把旧轮的清掉）
+      if (permGate) permGate.rehome();
+      // 这一轮的请求身份换成接力进来的这条（清空上下文后执行 / 限额续跑重放用它）
+      if (nreplay) limitReplay = nreplay;
+      // 权限模式：这一轮要的与进程眼下的不同（会话里切过 / 绕过权限待生效）→ 先切再推消息
+      if (nmode && permPolicy !== 'host') askedPermMode = nmode;   // 模式已在接力开头切过
       turnInput.push(next.prompt, next.imageBlocks, uuid);
       console.log(`[claude] handoff — new message fed into the held run (${liveBgTasks().length} background task(s) keep running)`);
       return true;
+    };
+
+    // 插话（官方 Code 页：Claude 工作中按回车）：消息带 priority:'next' 推进【正在跑的】这一轮，
+    // CLI 做完手头这一步就读到，不打断、不另起一轮。界面上它是这一轮回答流里的一个插话气泡（steer 事件，
+    // 进可重放缓冲，别的设备 attach 也看得见）；CLI 读到 / 这轮答完时发 steer_state。
+    // 返回 uuid；返回 null = 现在插不进（这一轮已定局 / 挂起等后台任务 / 进程在收尾），调用方按普通发送处理。
+    const steer = ({ message: smsg, attachments: satts }) => {
+      if (heldResult || doneEmitted || bgFinalized || turnClosed || userStopped || abort.signal.aborted) return null;
+      const uuid = randomUUID();
+      const next = composeTurnPrompt(smsg, satts || []);
+      if (!turnInput.push(next.prompt, next.imageBlocks, uuid, 'next')) return null;
+      awaitingUser.add(uuid);
+      steerUuids.add(uuid);
+      lastMsgAt = Date.now();
+      send({ type: 'steer', uuid, text: smsg, files: (satts || []).map((p) => path.basename(p)), at: Date.now() });
+      console.log(`[claude] steer — message fed into the running turn at priority next (${uuid.slice(0, 8)})`);
+      return uuid;
     };
 
     // 挂在 gen 上的控制口（/api/stop、任务面板 ⏹、同会话新消息都按会话找到当前 gen 来调）。
@@ -1197,6 +1649,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       g.interruptTurn = interruptTurn;
       g.hardStop = hardStop;
       g.handoff = handoff;
+      g.steer = steer;
     }
     armGen(gen);
 
@@ -1205,21 +1658,34 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     const captureContextUsage = async (rmsg) => {
       const sid = rmsg.session_id || gen.sessionId;
       if (!sid || snap) return;
-      try {
-        const raw = await Promise.race([
-          q.getContextUsage({ detail: 'full' }),
-          new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
-        ]);
+      // 'full' 首次要逐类真打 count_tokens（10-25 实测 5.8s，之后有缓存 4ms）；这期间同会话的下一条在 fin-wait 里干等。
+      // 它一喊（gen.hurry）就不等了：控制请求在 CLI 里与新一轮并发无碍（实测），结果晚到照样记账、推给界面。
+      const HURRIED = Symbol('hurried');
+      const apply = (raw) => {
         const usage = normalizeContextUsage(raw, effModel || model || '');
         if (!usage) return;
         applyContextUsage(ctx.key, sid, usage);
         send({ type: 'ctx_usage', sessionId: sid, usage });
+      };
+      try {
+        const p = q.getContextUsage({ detail: 'full' });
+        const raw = await Promise.race([
+          p,
+          new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
+          ...(finHurry ? [finHurry.then(() => HURRIED)] : []),
+        ]);
+        if (raw === HURRIED) {
+          console.log('[claude] next message waiting — context usage finishes in background');
+          p.then(apply, () => {});
+          return;   // 额度窗口也留给下一轮收尾
+        }
+        apply(raw);
       } catch (e) {
         console.log('[claude] getContextUsage failed:', e && e.message);
       }
       // 额度窗口（= Claude Code /usage 的数据源）：五小时/每周之外还有按模型的每周桶
       //（Fable/Opus/Sonnet 单桶，服务端给了才有）与套餐类型。接口是实验性的，10 分钟一次、
-      // 5s 兜底，失败只记日志——响应头那条老路（usage-probe）照常兜着。
+      // 5s 兜底，失败只记日志——rate_limit_event 那条路照常兜着。
       if (Date.now() - lastSdkUsageAt > 600_000) {
         lastSdkUsageAt = Date.now();
         try {
@@ -1227,7 +1693,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
             q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
             new Promise((resolve) => setTimeout(() => resolve(null), 5000)),
           ]);
-          if (u && u.rate_limits_available && applySdkUsage(u)) send({ type: 'limits', limits: statusState.limits, updatedAt: statusState.updatedAt });
+          if (u && u.rate_limits_available && applySdkUsage(u, engineAcct)) send({ type: 'limits', limits: statusState.limits, updatedAt: statusState.updatedAt });
         } catch (e) {
           console.log('[claude] sdk usage failed:', e && e.message);
         }
@@ -1238,32 +1704,51 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     // 读循环不用 for-await：停放期要自己拉 q.next()（收输入建议），被新一轮接走时那个还悬着的 next()
     // 会落到新一轮的第一帧上——塞回 pendingNext，主循环先读它，一帧不丢。
     let pendingNext = null;
-    const readNext = () => { const p = pendingNext || q.next(); pendingNext = null; return p; };
+    const earlyMsgs = [];   // 预热停放期 CLI 先吐出来的帧（第一条消息之前），接管后按序先读
+    // 直接从 CLI 流取下一帧（不经 earlyMsgs）。预热停放期只能用这个：用 readNext 的话，刚存进 earlyMsgs 的帧
+    // 会被下一圈立刻原样读回来、又存回去——纯微任务死循环，I/O 饿死、每圈还在 wakeP 上挂一个永不释放的
+    // 回调，几十秒堆满 4GB（2026-10-19 两次 OOM 都紧跟在「spare CLI ready」之后，堆快照坐实）。
+    const readRaw = () => { const p = pendingNext || q.next(); pendingNext = null; return p; };
+    const readNext = () => {
+      if (earlyMsgs.length) return Promise.resolve({ value: earlyMsgs.shift(), done: false });
+      return readRaw();
+    };
 
     // 接着用：同会话新消息、启动参数一致 → 新 gen 订阅这条 POST，消息推进同一个输入流开新一轮。
     // 与挂起接力（handoff）同一套换 gen 手法，差别是上一轮早已定局收尾（turnClosed），要把看门狗/计时重挂。
     // 返回 'taken' = 接走了；'busy' = 并发上限把它挡下（错误帧已回给这条 POST，CLI 原样留着停放）；false = 接不了。
-    const warmTake = ({ res: nres, message: nmsg, attachments: natts, source: nsrc, chatPrefs: nprefs }) => {
+    // adopt = { uuid }：不是推一条新消息，而是接住 CLI 自己已经开起来的那一轮（跨会话消息，见 parkWarm）——
+    // 没有发起请求（nres 为空，别的设备经总线 run.start 挂上直播），也不往输入流推东西。
+    const warmTake = ({ res: nres, message: nmsg, attachments: natts, source: nsrc, chatPrefs: nprefs, family: nfam, permMode: nmode, limitReplay: nreplay, auto: nauto, adopt }) => {
       if (!turnClosed || userStopped || abort.signal.aborted || iterDone) return false;
       const g = newGen(nmsg, nsrc, gen.sessionId);
+      g.family = nfam || null;
+      g.autoTurn = !!nauto;
       const userCap = ctx.kind === 'user' ? getPolicy().maxUserTurns : 0;
+      const perKeyCap = Math.min(MAX_PARALLEL_CHATS, memberCaps.maxParallel);
       const slot = tryStartGen(ctx.key, g, {
-        maxPerKey: MAX_PARALLEL_CHATS,
+        maxPerKey: perKeyCap,
         singleSession: true,
         ...(userCap ? { globalPrefix: 'u:', maxGlobal: userCap } : {}),
       });
       if (!slot.ok) {
-        genWrite(nres, slot.reason === 'global'
-          ? { type: 'error', kind: 'busy', title: '服务器正忙', message: '现在大家同时在跑的对话已经到上限（' + userCap + ' 个），稍等片刻再发送这条消息。' }
-          : { type: 'error', kind: 'busy', title: '会话正在启动', message: '这个会话已有一轮刚刚开始，请稍后再试。' });
-        nres.end();
+        if (nres) {
+          genWrite(nres, slot.reason === 'global'
+            ? { type: 'error', kind: 'busy', title: '服务器正忙', message: '现在大家同时在跑的对话已经到上限（' + userCap + ' 个），稍等片刻再发送这条消息。' }
+            : slot.reason === 'per-key'
+              ? { type: 'error', kind: 'busy', title: '并行对话已满', message: '同时最多 ' + perKeyCap + ' 个对话在跑。等一个完成，或到带呼吸点的对话里按「停止」，再重发这条消息。' }
+              : { type: 'error', kind: 'busy', title: '会话正在启动', message: '这个会话已有一轮刚刚开始，请稍后再试。' });
+          nres.end();
+        }
         return 'busy';
       }
-      const uuid = randomUUID();
-      const next = composeTurnPrompt(nmsg, natts || []);
+      const uuid = adopt ? adopt.uuid : randomUUID();
+      const next = adopt ? null : composeTurnPrompt(nmsg, natts || []);
       gen = g;
-      if (ctx.kind === 'user' && ctx.user) { try { noteTurnStart(ctx.user); } catch {} }
-      genSubscribe(gen, nres);
+      // 预热进程被新会话接管：会话 id 要等 init 帧才有，选择器记忆改用这条请求的、届时由 recordPrefs 落上。
+      if (!gen.sessionId && nprefs) { chatPrefs = nprefs; prefsRecorded = false; }
+      if (billTo) { try { noteTurnStart(billTo); } catch {} }
+      if (nres) genSubscribe(gen, nres);
       armGen(gen);
       heartbeat = startMultiHeartbeat(gen.subscribers);
       bgWatch = armBgWatch();
@@ -1276,6 +1761,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       softStopping = false;
       turnOut = 0; turnThink = 0;
       authFailed = false;
+      turnRejection = null; limitFrame = null;
       compactAwait = ''; compactSeen = false;
       compactCmd = /^\s*\/compact(?:\s|$)/.test(String(nmsg || ''));
       hookLevel = null;
@@ -1285,7 +1771,27 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       awaitingUser.add(uuid);
       announceStart();
       if (nprefs && gen.sessionId) { try { recordChatPrefs(ctx, gen.sessionId, nprefs); } catch {} }
-      turnInput.push(next.prompt, next.imageBlocks, uuid);
+      // 这一轮的请求身份换成接管进来的这条：预热进程起的时候根本没有（预热不带 limitReplay），停放的进程是上一条的——
+      // 不换的话，预热接管的会话计划卡永远没有「清空上下文后执行」，撞了限额也排不上自动续跑
+      if (nreplay) limitReplay = nreplay;
+      // 权限模式：这一轮要的与停放 / 预热的 CLI 眼下的不同（会话里切过、绕过权限待生效、预热时按另一个默认起的）
+      // → 先 setPermissionMode 再推消息（控制请求回了才推，免得第一条在旧模式下跑）
+      if (nmode && permPolicy !== 'host') askedPermMode = nmode;
+      // 接住 CLI 自己开起来的那一轮（adopt，跨会话消息）：没有要推的消息，模式也不在这时切
+      if (!next) { /* adopt：什么都不推 */ }
+      else if (nmode && nmode !== runPermMode && permPolicy !== 'host') {
+        const from = runPermMode;
+        q.setPermissionMode(nmode).then(() => { notePermMode(nmode, 'user'); turnInput.push(next.prompt, next.imageBlocks, uuid); }, (e) => {
+          console.log('[claude] warm setPermissionMode failed:', e && e.message);
+          // 要的比停放进程眼下的更严格却切不过去：这条不推（不能在更宽松的模式下跑），报错收掉这一轮、关掉进程，重发即冷起
+          if (stricterMode(nmode, from)) {
+            send({ type: 'error', title: '没能切换权限模式', message: '这条消息没有发出：Claude 进程没能切到你选的更严格的权限模式。请重发一次（会重新启动 Claude）。' });
+            try { abort.abort(); } catch {}
+            return;
+          }
+          turnInput.push(next.prompt, next.imageBlocks, uuid);
+        });
+      } else turnInput.push(next.prompt, next.imageBlocks, uuid);
       return 'taken';
     };
 
@@ -1299,6 +1805,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       const sp = sessionPaths(sid, ctx.cwd, ctx.configDir);
       let baseline = sp ? warmStat(sp.file) : '';
       let closed = false, taken = false, wake = null;
+      // 正在认一条跨会话消息（waitPeerRecord 最多 3s）：这期间 CLI 已经在跑对方那一轮，用户的新消息不能推进同一个输入流
+      //（会排在对方那轮后面、两轮输出混进用户这一轮的气泡）——take 先等结论；接住了 = 回「正在处理别的会话的消息」，没接 = 照旧冷起。
+      let adopting = null, peerAdopted = false;
       const wakeP = new Promise((r) => { wake = r; });
       let finish;
       const done = new Promise((r) => { finish = r; });
@@ -1314,6 +1823,12 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           wake();
         },
         take: async (p) => {
+          if (adopting) await adopting;
+          if (peerAdopted && p.res) {
+            genWrite(p.res, { type: 'error', kind: 'busy', title: '会话正在处理别的消息', message: '这个会话刚收到另一个 Claude 会话发来的消息，正在处理。等这一轮结束再发，或者在它进行中插话。' });
+            p.res.end();
+            return 'busy';
+          }
           if (closed || taken || !WARM_IDLE_MS) return false;
           const r = warmTake(p);
           if (r !== 'taken') return r;
@@ -1333,6 +1848,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       const settle = setTimeout(() => { if (!closed && !taken && sp) baseline = warmStat(sp.file); }, 3000);
       if (settle.unref) settle.unref();
       const deadline = Date.now() + idleMs;
+      const peerTried = new Set();   // 认过的 command_uuid（hold 放行会先后来 queued / started 两帧）
+      const wakeNull = wakeP.then(() => null);   // 只挂一次：每圈新挂一个，停放期每来一帧就多一个永不释放的回调
       try {
         while (!closed && !taken) {
           const left = deadline - Date.now();
@@ -1342,7 +1859,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           let timer;
           const r = await Promise.race([
             nextP.then((v) => ({ v })),
-            wakeP.then(() => null),
+            wakeNull,
             new Promise((resolve) => { timer = setTimeout(() => resolve(null), left); }),
           ]);
           clearTimeout(timer);
@@ -1358,6 +1875,32 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
             }
             continue;
           }
+          // 跨会话消息（session-peers.mjs）：hold 档扣住的消息登记出来等用户确认；对方消息让 CLI 自己开了一轮
+          //（先来 command_lifecycle，再 init）→ transcript 里认出是跨会话消息就当一次自动续跑接住，推给前端。
+          if (peerAware && m && m.type === 'system' && m.subtype === 'peer_message_hold') { notePeerHold(ctx, sid, m, peerGate); continue; }
+          if (peerAware && m && m.type === 'command_lifecycle' && m.command_uuid && (m.state === 'queued' || m.state === 'started')) {
+            if (peerTried.has(m.command_uuid)) continue;
+            peerTried.add(m.command_uuid);
+            let settleAdopt;
+            adopting = new Promise((r) => { settleAdopt = r; });
+            try {
+              const pr = await waitPeerRecord(sp && sp.file, m.command_uuid);
+              if (taken) return true;
+              if (closed) break;
+              if (pr && pr.peer && familyPeerTurn(ctx, sid) && warmTake({ res: null, message: peerDisplay(pr.peer), attachments: [], source: 'peer', chatPrefs: null, family: { origin: { kind: 'peer', from: [pr.peer.from] } }, adopt: { uuid: m.command_uuid } }) === 'taken') {
+                taken = true; peerAdopted = true;
+                if (warmRuns.get(lk) === entry) warmRuns.delete(lk);
+                finish();
+                console.log(`[claude] parked CLI ${sid.slice(0, 8)} took a cross-session message from ${pr.peer.name || pr.peer.from || '?'} — adopted as a turn`);
+                return true;
+              }
+              console.log(`[claude] parked CLI ${sid.slice(0, 8)} started a turn on its own (${pr && pr.peer ? 'cross-session message not adopted' : 'command'}) — closing it`);
+              break;
+            } finally {
+              adopting = null;
+              settleAdopt();   // 等着的 take 在下一个微任务里看结论：没接住时 finally 里的 entry.close() 已先关好
+            }
+          }
           // CLI 自己开了一轮（定时唤醒之类，没有人在看）——不替它挂着，照旧收掉。
           if (m && (m.type === 'assistant' || m.type === 'stream_event' || m.type === 'result' || (m.type === 'system' && m.subtype === 'init'))) {
             console.log(`[claude] parked CLI ${sid.slice(0, 8)} started a turn on its own (${m.type}) — closing it`);
@@ -1370,6 +1913,91 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         clearTimeout(settle);
         entry.close();
       }
+      return false;
+    };
+
+    // 预热停放（见 SPARE_MS）：第一轮之前就停着，等新会话的第一条消息经 warmTake 接管。
+    // 返回 true = 被接走（主循环照常读新一轮）；false = 到点 / 被换掉 / 初始化失败 → 收尾退出。
+    const parkSpare = async () => {
+      closeTurn();   // 占位轮从没开始：结清它（停掉看门狗/心跳），warmTake 才认得这是「上一轮已收」
+      let closed = false, taken = false, wake = null;
+      const wakeP = new Promise((r) => { wake = r; });
+      let deadline = Date.now() + SPARE_MS;
+      const entry = {
+        sig: warmSig, parkedAt: Date.now(), readyAt: 0,
+        touch: () => { deadline = Date.now() + SPARE_MS; },
+        close: () => {
+          if (closed || taken) return;
+          closed = true;
+          if (spareRuns.get(ctx.key) === entry) spareRuns.delete(ctx.key);
+          try { q.close(); } catch {}
+          wake();
+        },
+        take: async (p) => {
+          if (closed || taken) return false;
+          const r = warmTake(p);
+          if (r !== 'taken') return r;
+          taken = true;
+          // 跨会话入站闸还给真会话（预热期关着，见下）：清掉预热期写进内联层的 refuse，回到 spawn 时下发的那个
+          //（warmSig 一致才接得走；「跟随 Claude 默认」时 spawn 没写 = CLI 默认）
+          if (peerAware) q.applyFlagSettings({ crossSessionInbound: null }).catch(() => {});
+          if (peerGate) registerPeerGate(ctx.key, peerGate);
+          if (spareRuns.get(ctx.key) === entry) spareRuns.delete(ctx.key);
+          wake();
+          console.log(`[claude] spare CLI taken by a new session — parked ${Math.round((Date.now() - entry.parkedAt) / 1000)}s, ${entry.readyAt ? 'initialized' : 'still initializing'}`);
+          return true;
+        },
+      };
+      spareRuns.set(ctx.key, entry);
+      // 预热的 CLI 还不是任何会话：别让终端里的会话经跨会话通道把消息投进来（没人看着就跑一整轮，
+      // 接管后那一轮还会混进新对话的第一条回答里）。入站闸先关成 refuse，被接走时再还原（session-peers.mjs）。
+      if (peerAware) q.applyFlagSettings({ crossSessionInbound: 'refuse' }).catch(() => {});
+      // 现在就把初始化（spawn、工具、插件、MCP 握手）做完，第一条消息只等模型。
+      q.initializationResult().then(() => {
+        entry.readyAt = Date.now();
+        console.log(`[claude] spare CLI ready in ${entry.readyAt - entry.parkedAt}ms`);
+      }, (e) => {
+        if (!closed && !taken) { console.log('[claude] spare CLI init failed:', e && e.message); entry.close(); }
+      });
+      let nextP = null;
+      const wakeNull = wakeP.then(() => null);
+      try {
+        while (!closed && !taken) {
+          const left = deadline - Date.now();
+          if (left <= 0) break;
+          // 必须 readRaw：这里读到的帧是往 earlyMsgs 里存的，经 readNext 会立刻把它读回来（见 readRaw）
+          if (!nextP) { nextP = readRaw(); nextP.catch(() => {}); }
+          let timer;
+          const r = await Promise.race([
+            nextP.then((v) => ({ v })),
+            wakeNull,
+            new Promise((resolve) => { timer = setTimeout(() => resolve(null), left); }),
+          ]);
+          clearTimeout(timer);
+          if (taken) {
+            if (!r) pendingNext = nextP;
+            else if (r.v.done) iterDone = true;
+            else earlyMsgs.push(r.v.value);
+            return true;
+          }
+          if (!r) continue;   // 到点（touch 续过期就接着等）或被关（循环条件收）
+          nextP = null;
+          if (r.v.done) { iterDone = true; break; }
+          // 第一条消息之前 CLI 自己开了一轮（入站闸关上之前漏进来的跨会话消息之类）：同 parkWarm，不替它挂着，收掉
+          const em = r.v.value;
+          if (em && (em.type === 'command_lifecycle' || em.type === 'assistant' || em.type === 'stream_event' || em.type === 'result')) {
+            console.log(`[claude] spare CLI started a turn on its own (${em.type}) — closing it`);
+            break;
+          }
+          // 第一条消息之前 CLI 不该说话；init 这类帧先存着，接管后照常处理
+          if (r.v.value) earlyMsgs.push(r.v.value);
+        }
+      } catch (e) {
+        if (!closed) console.log('[claude] spare CLI wait failed:', e && e.message);
+      } finally {
+        if (!taken) entry.close();
+      }
+      if (!taken) console.log('[claude] spare CLI closed unused');
       return false;
     };
 
@@ -1448,15 +2076,21 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       } catch (e) {
         console.log('[claude] getSettings failed:', e && e.message);
       }
+      // 自定义模型：工作流没真开时 hook 回的是 CLI 眼里的官方档位，换成代理实际发的那档（模型最高档）；档位表空就不回报
+      if (custom && level !== ULTRACODE) { if (!customEffort) return; level = customEffort; }
       applyEffort(ctx.key, sid, level);
       send({ type: 'effort', sessionId: sid, level });
     };
+
+    // 预热：停在第一轮之前，被新会话接管才往下读；没人接就收尾退出（finally 关进程）。
+    if (isSpare && !(await parkSpare())) return;
 
     while (true) {
       const step = await readNext();
       if (step.done) { iterDone = true; break; }
       const msg = step.value;
       lastMsgAt = Date.now();
+      if (prSniff) prSniff(msg);
       // 硬停止后：这一轮对界面已收尾，只等被打断那轮的 result 就走正常收尾（见 hardStop）。
       if (userStopped) { if (msg.type === 'result') break; continue; }
       // 幻影 result 之后只要还有任何消息（正常是紧接着的第二个 init），兜底计时器就作废。
@@ -1479,7 +2113,27 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         // 对话回滚锚点已随本轮 resumeSessionAt 消费（分支从此落进 transcript）——清账。
         if (sessionId) clearPendingRewind(sessionId);
         // fast：本轮加速是否真点亮（开了开关也可能因冷却/额度不可用——前端据此显示实况）。
-        send({ type: 'session', sessionId: msg.session_id, model: msg.model, ...(fast ? { fast: msg.fast_mode_state === 'on' } : {}), ...(ctx.worktree ? { wt: ctx.worktree } : {}) });
+        // 自定义模型：CLI 报的是裸型号（mimo-v2.6-pro），前端拿它和所选（custom:<服务>:<模型>）对账会误判成「实际用的是别的模型」
+        // 自定义服务的 fast 由代理发，实况 = 支持且这个服务不在 fast 退避期
+        send({ type: 'session', sessionId: msg.session_id, model: custom ? model : msg.model, ...(fast ? { fast: custom ? customFast && !fastCooling(custom.provider.id) : msg.fast_mode_state === 'on' } : {}), ...(ctx.worktree ? { wt: ctx.worktree } : {}) });
+        // 权限模式实况（init 帧带 permissionMode；与要的不同 = CLI 降级了，如 auto 对这个模型不可用）+ 会话中切模式的控制口
+        if (msg.permissionMode) notePermMode(msg.permissionMode, msg.permissionMode !== askedPermMode && runPermMode === askedPermMode ? 'fallback' : 'init');
+        // 冷启动还没出 init 时用户在芯片上选过模式（控制口没登记，接口只记进会话记忆、回 next）：现在口通了，当场切过去。
+        // 绕过权限照官方等这一轮定局（deferredModeFor 在停放前切）。
+        if (msg.permissionMode && msg.session_id && !snap && permPolicy !== 'host') {
+          const want = deferredModeFor(ctx, msg.session_id, runPermMode);
+          if (want && want !== 'bypassPermissions') {
+            q.setPermissionMode(want).then(() => notePermMode(want, 'user'), (e) => console.log('[claude] init setPermissionMode failed:', e && e.message));
+          }
+        }
+        if (!unbindMode && msg.session_id && !snap && permPolicy !== 'host') {
+          unbindMode = bindModeControl(ctx.key, msg.session_id, {
+            set: (m) => q.setPermissionMode(m),
+            busy: () => !turnClosed && !heldResult,
+            current: () => runPermMode,
+            note: (m) => notePermMode(m, 'user'),
+          });
+        }
         // 斜杠命令表（输入栏「/」菜单用）：控制接口 supportedCommands() 给全表（内置 + 技能，
         // 带 description/argumentHint），init 帧的 terminal_slash_commands（SDK 0.3.257）标出
         // 绑定本地终端 UX 的命令（doctor/color），手机/远程 UI 该藏。表跟账号/技能走不跟会话，
@@ -1488,9 +2142,31 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           const termCmds = Array.isArray(msg.terminal_slash_commands) ? msg.terminal_slash_commands : [];
           q.supportedCommands().then((list) => applyCommands(ctx.key, list, termCmds)).catch(() => {});
         }
+        // 连接器（MCP）状态：init 帧自带全表 [{name,status}]——会话信息面板的「连接器」卡吃这份，
+        // 不必等进程活着时再走控制通道。快照访客没有面板，跳过。
+        if (!snap && Array.isArray(msg.mcp_servers)) {
+          const servers = noteSessionMcp(ctx.key, msg.session_id, msg.mcp_servers);
+          send({ type: 'mcp', sessionId: msg.session_id, servers });
+        }
+        // 可选输出风格清单（设置页 / 会话菜单的「输出风格」用）：按身份 10 分钟问一次控制通道
+        refreshOutputStyles(ctx, q);
+      } else if (msg.type === 'command_lifecycle') {
+        // 插话消息的生命周期（queued → started → completed / cancelled）：started = CLI 已把它读进这一轮。
+        if (msg.command_uuid && steerUuids.has(msg.command_uuid) && msg.state !== 'queued') {
+          send({ type: 'steer_state', uuid: msg.command_uuid, state: msg.state });
+        } else if (peerAware && msg.state === 'started' && msg.command_uuid && !awaitingUser.has(msg.command_uuid) && !peerSeen.has(msg.command_uuid)) {
+          echoPeer(msg.command_uuid);   // 可能是跨会话消息插进来了（session-peers.mjs）
+        }
+      } else if (msg.type === 'system' && msg.subtype === 'peer_message_hold') {
+        // hold 档扣住 / 放行 / 丢弃了一条跨会话消息：登记出来，前端「待你确认」卡据此显示
+        if (peerAware) notePeerHold(ctx, gen.sessionId || msg.session_id, msg, peerGate);
       } else if (msg.type === 'rate_limit_event') {
-        applyRateLimit(msg.rate_limit_info);
-        send({ type: 'limits', limits: statusState.limits, updatedAt: statusState.updatedAt });
+        // 自定义 API：第三方的限流跟官方号的额度窗口无关，不记账
+        if (!custom) {
+          applyRateLimit(msg.rate_limit_info, engineAcct);
+          if (msg.rate_limit_info && msg.rate_limit_info.status === 'rejected') turnRejection = msg.rate_limit_info;
+          send({ type: 'limits', limits: statusState.limits, updatedAt: statusState.updatedAt });
+        }
       } else if (msg.type === 'system' && msg.subtype === 'api_retry') {
         send({ type: 'retry', attempt: msg.attempt, max: msg.max_retries, status: msg.error_status, errorKind: msg.error });
       } else if (msg.type === 'system' && msg.subtype === 'status') {
@@ -1501,6 +2177,11 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         if (msg.status === 'requesting') send({ type: 'mode', mode: 'requesting' });
         else if (msg.status === 'compacting') send({ type: 'compact', phase: 'start' });
         else if (msg.compact_result) send({ type: 'compact', phase: 'end', ok: msg.compact_result !== 'failed', error: msg.compact_error ? clip(String(msg.compact_error), 300) : '' });
+        // 权限模式变化（计划批准切到目标模式、模型自行 EnterPlanMode、会话中 setPermissionMode）——与上面的运行相位 mode 帧别撞名
+        if (msg.permissionMode) notePermMode(msg.permissionMode, 'cli');
+      } else if (msg.type === 'system' && msg.subtype === 'permission_denied') {
+        // 不经 canUseTool 就被拒的调用（auto 模式分类器 / 规则）：工具行标「被自动模式拦下」
+        send({ type: 'perm_denied', toolUseId: msg.tool_use_id || '', tool: msg.tool_name || '', kind: msg.decision_reason_type || '', reason: clip(String(msg.decision_reason || msg.message || ''), 400), agentId: msg.agent_id || null, at: Date.now() });
       } else if (msg.type === 'system' && msg.subtype === 'compact_boundary' && !msg.parent_tool_use_id) {
         // 压缩边界（只认主线程；子 agent 自己的压缩不上主时间线，同官方）。id = 边界 uuid，与 jsonl 那条
         // system 记录同一个——历史重建的条目指纹对得上（routes/sessions.mjs）。
@@ -1522,6 +2203,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         if (ev?.type === 'message_start') {
           // 撤回记账：API 消息边界——被拒的半截若没凑成完整 block（没有 uuid 可对），按整条消息的区间撤。
           ledger.messageStart();
+          widgets.reset();   // 内嵌图表：上一条消息没收尾的 show_widget 记录作废（index 重新数）
           send({ type: 'mode', mode: 'requesting' });   // 新一条 API 消息开跑：状态行「等待 Claude…」
         } else if (ev?.type === 'message_stop') {
           ledger.messageStop();
@@ -1536,6 +2218,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           const shown = toolShown(n);
           const id = ev.content_block.id || '';
           streamBlocks[ev.index] = { type: 'tool_use', name: n, json: '', shown, id };
+          if (widgets.start(ev.index, n, id)) ledger.addWidget();   // show_widget 不露成工具行，落 widget 段（撤回按段序号记账）
           if (shown) {
             ledger.addTool();
             if (id) { toolStarts.set(id, Date.now()); taskGuard.mainTools.add(id); }
@@ -1552,11 +2235,12 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           send({ type: 'thinking', text: t });
         } else if (ev?.type === 'content_block_delta' && ev.delta?.type === 'input_json_delta') {
           const b = streamBlocks[ev.index];
-          if (b) b.json += ev.delta.partial_json || '';
+          if (b) { b.json += ev.delta.partial_json || ''; widgets.delta(ev.index, b.json); }
         } else if (ev?.type === 'content_block_stop') {
           const b = streamBlocks[ev.index];
           if (b && b.type === 'tool_use') {
             let input = {}; try { input = JSON.parse(b.json || '{}'); } catch {}
+            widgets.stop(ev.index, input);
             if (b.shown) {
               // 摘要 + 安全输入子集（file_path/command/pattern/description/prompt≤200…），前端工具行的参数表用。
               const summary = toolSummary(b.name, input);
@@ -1591,6 +2275,14 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           // 200k window reported ~1.6M and pinned the bar at a bogus 100%).
           if (msg.message && msg.message.usage) lastMainUsage = msg.message.usage;
           if (msg.error === 'authentication_failed') authFailed = true;
+          if (msg.error === 'rate_limit') {
+            const parts = msg.message && Array.isArray(msg.message.content) ? msg.message.content : [];
+            const params = msg.apiErrorParams || msg.api_error_params || null;
+            limitFrame = {
+              text: parts.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('').trim(),
+              info: (params && params.rate_limit_info) || msg.quotaLimits || null,
+            };
+          }
           // 撤回记账：回退模型重试的首条 assistant 帧带 supersedes[]（与通知里的 retracted 名单同一份，幂等）；
           // 先撤再把本帧覆盖的区间记下来（上一帧结束 → 当前计数），供之后的撤回名单按 uuid 对账。
           const sup = Array.isArray(msg.supersedes) ? msg.supersedes : (Array.isArray(msg.supersedesUuids) ? msg.supersedesUuids : null);
@@ -1612,6 +2304,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         for (const blk of parts) {
           if (!blk || blk.type !== 'tool_result' || !blk.tool_use_id) continue;
           const tid = blk.tool_use_id;
+          if (widgets.result(blk)) continue;
           if (toolStarts.has(tid)) {
             const t0 = toolStarts.get(tid);
             toolStarts.delete(tid);
@@ -1665,11 +2358,16 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           const anchor = sp ? lastRealUserUuid(sp.file) : null;
           if (anchor) send({ type: 'anchor', uuid: anchor, sessionId: msg.session_id });
         }
-        // Per-user usage accounting (visibility only; admin has ctx.user=null → untracked).
-        if (ctx.user) {
+        // Per-user usage accounting（admin 不记账）。花费按这个 CLI 进程上一次报的累计值取差（costMeter），
+        // 不再把整段会话的累计花费每轮加一遍；tokens 本来就是这一轮的。
+        if (billTo) {
           const u = msg.usage || {};
           const toks = (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
-          try { addUsage(ctx.user, { tokens: toks, costUsd: msg.total_cost_usd || 0 }); } catch {}
+          const turnCost = costMeter.turnCost(msg.total_cost_usd);
+          try { addUsage(billTo, { tokens: toks, costUsd: custom ? 0 : turnCost }); } catch {}
+          // 用量事件流（开源路线 C12，runtime/audit-log.mjs）：同一口径再落一条带维度的元数据——谁发的、归谁、记谁的账、
+          // 哪个号、哪个模型。只追加写 _system/usage-events，不读、不影响额度与界面；是将来按组 / 按号分摊的底账。
+          try { noteTurnUsage(ctx, { billTo, accountId: custom ? '' : engineAcct, model: custom ? custom.model.id : modelFor(runModel), tokens: toks, cost: custom ? 0 : turnCost, source: snap ? 'snap' : ctx.actor && ctx.actor !== ctx.key ? 'proxy' : 'chat' }); } catch {}
         }
         const ctxInfo = applyContext(msg.modelUsage, msg.session_id, lastMainUsage || msg.usage, ctx.key);
         if (ctxInfo) {
@@ -1694,12 +2392,41 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           break;
         }
         const apiStatus = typeof msg.api_error_status === 'number' ? msg.api_error_status : null;
-        const errored = Boolean(msg.is_error) || (apiStatus != null && apiStatus >= 400) || authFailed;
+        const errored = Boolean(msg.is_error) || (apiStatus != null && apiStatus >= 400) || authFailed || !!limitFrame;
         const hasText = msg.result && String(msg.result).trim();
-        if (errored && isThinkingBlockError(msg.result)) {
+        // 撞额度墙（429 / 本轮收到 rejected / 合成的限额回答）→ 官方同款限额卡 + 5 小时重置后自动继续。
+        // 自定义 API 不进这套：第三方的 401 / 429 跟官方号的额度、登录态无关（不弹官方限额卡、不挂自动续跑）
+        const limitKind = !errored || custom || isThinkingBlockError(msg.result) ? ''
+          : (apiStatus === 429 || turnRejection || limitFrame) ? 'rate_limit'
+            : (authFailed || apiStatus === 401) ? 'auth' : '';
+        // 撞的是哪个限额、几点重置：合成回答带的 info 最准，其次本轮的 rejected 事件，再其次最近一次硬拒绝。
+        const lim = limitKind === 'rate_limit' ? limitNotice((limitFrame && limitFrame.info) || turnRejection, limitFrame && limitFrame.text, { live: true }) : null;
+        const settledSid = msg.session_id || gen.sessionId;
+        if (errored && !snap && settledSid && !lim) noteLimitTurnSettled(ctx.key, settledSid);
+        if (lim) {
+          // 撞限额：官方 /code 页同款限额卡（Session limit reached /
+          // Weekly limit reached）。CLI 那句英文原话不再当回答渲染——以前它要么顶替正文（零产出时），要么
+          // 干了一半时直接被吞，这一轮看着像无声结束。limit 字段给新前端排版；title/hint/message 给老 apk 的错误框。
+          // 5 小时限额另带自动续跑的状态（limit-resume.mjs：默认勾上，到点服务端自己发「接着做」）。
+          const resume = !snap && settledSid && limitReplay
+            ? noteLimitTurn(ctx.key, settledSid, { type: lim.type, resetsAt: lim.resetsAt, replay: limitReplay, defaultOn: autoContinueDefault(ctx) })   // 撞墙时现读设置（停放复用的闭包里 ts 是首轮的值）
+            : null;
+          console.log(`[claude] usage limit reached (${lim.type || '?'}, resets ${lim.resetsAt ? new Date(lim.resetsAt).toISOString() : '?'})${resume && resume.armed ? ' — auto-continue armed' : ''}`);
+          send({
+            type: 'error', kind: 'rate_limit', title: lim.title, hint: lim.hint, resetsAt: lim.resetsAt,
+            limit: { type: lim.type, resetsAt: lim.resetsAt, text: (limitFrame && limitFrame.text) || String(msg.result || '').trim() },
+            resume, sessionId: settledSid || undefined,
+            message: lim.title + ' — ' + lim.hint,
+          });
+        } else if (errored && isThinkingBlockError(msg.result)) {
           // SDK wrote dead thinking blocks mid tool-loop → the 400 came back AS the
           // result text. Don't render that raw error as the answer; clean + hint.
           emitThinkingError();
+        } else if (errored && custom && (apiStatus != null || authFailed || limitFrame || !hasText)) {
+          // 自定义 API 的错：代理已把上游的 404 / 401 / 403 / 非 JSON 改写成人话（claude-providers-proxy.mjs upstreamError），
+          // CLI 把它包成「API Error: 400 {…}」——抠出那句人话，别按「Claude 登录失效」「额度已满」分类。
+          const c = customErrorCard(custom, msg.result, apiStatus);
+          send({ type: 'error', kind: 'model', title: c.title, hint: c.hint, resetsAt: 0, message: c.title + ' — ' + c.hint });
         } else if (errored && (!hasText || authFailed || /^\s*(not logged in|invalid api key)/i.test(String(msg.result)))) {
           // 认证类错误哪怕带了文字（「Not logged in · Please run /login」）也不当回答渲染：
           // bridge 用户没有地方跑 /login，要给的是服务端该怎么配。
@@ -1738,6 +2465,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           //（顺带收输入建议）。被接走就 continue 接着读新一轮；否则照旧收尾退出。快照访客不停放。
           if (!snap && !userStopped && !abort.signal.aborted) {
             closeTurn();
+            // 干活时选的绕过权限（官方「这一轮结束后开启」）：定局了，停放前切过去（runtime/permissions.mjs deferredModeFor）
+            const dm = permPolicy !== 'host' ? deferredModeFor(ctx, msg.session_id || gen.sessionId, runPermMode) : null;
+            if (dm) { try { await q.setPermissionMode(dm); notePermMode(dm, 'user'); } catch (e) { console.log('[claude] deferred setPermissionMode failed:', e && e.message); } }
             if (await parkWarm(msg.session_id || gen.sessionId)) continue;
           }
         }
@@ -1768,6 +2498,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       }
     }
   } finally {
+    if (offFastFallback) offFastFallback();
+    if (unbindMode) unbindMode();   // 会话中切模式的控制口跟着进程走
     turnInput.release(); // 松开输入流 gate——挂着的生成器结束，SDK 得以完全收尾
     closeTurn();
     // 以前 for-await 的 break 会自动调迭代器 return()（SDK cleanup：关 stdin、等 CLI 退、必要时杀）；
@@ -1776,6 +2508,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       try { await Promise.race([qHandle.return(undefined), sleep(10_000)]); } catch {}
       try { qHandle.close(); } catch {}
     }
+    // 进程没了：hold 档扣着的跨会话消息随之作废（session-peers.mjs）
+    if (peerGate && gen.sessionId) dropPeerGate(ctx.key, gen.sessionId, peerGate);
+    if (peerGate) unregisterPeerGate(ctx.key, peerGate);
     // 停放登记：走到这里子进程已收完，等着它退干净的人（同会话冷起 / releaseWarm）这才放行。
     if (warmEntry) {
       if (warmRuns.get(warmEntry.lk) === warmEntry) warmRuns.delete(warmEntry.lk);

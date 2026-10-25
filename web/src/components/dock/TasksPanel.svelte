@@ -249,8 +249,6 @@
 <style>
   .tp { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .tp-scroll { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; scrollbar-gutter: stable; padding: 6px 12px 24px; display: flex; flex-direction: column; gap: 16px; }
-  .tp-scroll::-webkit-scrollbar { width: 6px; }
-  .tp-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 35%, transparent); border-radius: 3px; }
   .tp-tr { padding-top: 10px; }
 
   .tp-sec { display: flex; flex-direction: column; gap: 8px; }

@@ -593,6 +593,30 @@ export async function searchUnifiedKnowledge(
   return response;
 }
 
+// 自动召回（每轮不请自来地塞进上下文）比显式检索要求高：语义检索没用上时，代码结构类文档只靠「路径 / 标题里命中几个分词」
+// 排上来的基本是噪音——中文按双字切、路径按 ./-_ 切，一句「更新下 bridge 客户端」就能让几十个路径里带 bridge 的模块各命中五六个词
+// （2026-10-09 实况：每轮捞回 6 条 worktree 副本里的 chunk-*.js）。这类文档只有用户原话里点了名（完整路径、带扩展名的文件名、
+// 配置键名）才召回；记忆、验证记录照旧按分数走。指南（AGENTS.md / GUIDE.md）与命令、项目概况本来就整段在 system 里，
+// 不点名不重复塞。显式 Recall / ProjectKnowledge 不受影响。
+const NAMED_ONLY_KINDS: ReadonlySet<KnowledgeKind> = new Set(["module", "config", "test", "route", "data", "ci", "deploy", "command", "profile", "guide"]);
+
+export function worthAutoRecall(item: KnowledgeSearchResult, query: string, semantic: KnowledgeSearchResponse["semantic"]): boolean {
+  if (semantic === "used" && (item.semanticScore ?? 0) >= SEMANTIC_RESULT_MIN) return true;
+  if (!NAMED_ONLY_KINDS.has(item.document.kind)) return true;
+  const q = normalize(query);
+  const named = (value: string): boolean => {
+    const v = normalize(value);
+    if (v.length < 3) return false;
+    const at = q.indexOf(v);
+    if (at < 0) return false;
+    const before = q[at - 1] ?? " ";
+    const after = q[at + v.length] ?? " ";
+    return !/[\p{L}\p{N}_]/u.test(before) && !/[\p{L}\p{N}_]/u.test(after);
+  };
+  return item.document.paths.some((p) => named(p) || (/\.[a-z0-9]+$/i.test(path.posix.basename(slash(p))) && named(path.posix.basename(slash(p)))))
+    || (item.document.kind === "config" && named(item.document.title));
+}
+
 export function renderSearchResults(response: KnowledgeSearchResponse): string {
   if (!response.results.length) {
     return `No current knowledge matched. ${response.skippedQuarantined} quarantined memory notes were excluded. Semantic: ${response.semantic}.`;

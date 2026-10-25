@@ -1,0 +1,52 @@
+// 英文界面文案 · agent-access（设置「Agent 接入」：给别的 agent 用的地址与密钥；agent 界面指令的提示）（键 = 中文原文，见 lib/i18n.js）
+export default {
+  // —— 设置 · Agent 接入（components/settings/SecAgentAccess.svelte）——
+  'Agent 接入': 'Agent access',
+  '让别的 agent（比如部署它的 Muse、Claude Code、脚本）直接调用这台 Muse Bridge：读项目手册、给 Claude 派活、管文件和定时任务、看谁在跑，不用开浏览器模拟点击。':
+    'Let other agents (such as the Muse that set this up, Claude Code, or scripts) call this Muse Bridge directly: read the project handbook, hand tasks to Claude, manage files and routines, and see what’s running, without driving a browser.',
+  '登录后才能生成 agent 密钥': 'Sign in to create agent keys',
+  '地址': 'URL',
+  'Agent 入口': 'Agent endpoint',
+  '项目手册': 'Project handbook',
+  '生成密钥': 'Create key',
+  '给每个 agent 单独一把，名字写清是谁在用，方便以后吊销。': 'Give each agent its own key and name it after who uses it, so it’s easy to revoke later.',
+  '名字': 'Name',
+  '例如「我的 Muse」': 'e.g. “My Muse”',
+  '生成': 'Generate',
+  '新密钥：{name}': 'New key: {name}',
+  '复制给 agent 的说明': 'Copy instructions for the agent',
+  '已复制给 agent 的说明': 'Instructions copied',
+  '复制密钥': 'Copy key',
+  '密钥已复制': 'Key copied',
+  '我已保存好': 'I’ve saved it',
+  '关掉之后就再也看不到这把密钥了。丢了就吊销它，再生成一把新的。': 'You won’t see this key again after you close this. If you lose it, revoke it and create a new one.',
+  '密钥': 'Keys',
+  '还没有密钥': 'No keys yet',
+  '生成一把，交给要接入的 agent': 'Create one and give it to the agent you want to connect',
+  '创建于 {date}': 'Created {date}',
+  '最近使用 {when}': 'Last used {when}',
+  '还没用过': 'Never used',
+  '确认吊销': 'Confirm revoke',
+  '已吊销，用这把密钥的 agent 立刻失去访问': 'Revoked. Agents using this key lost access right away.',
+  '密钥等同你的登录：拿到它的 agent 能做你能做的一切。每把 90 天后过期。': 'A key works like your sign-in: an agent that has it can do anything you can. Each key expires after 90 days.',
+  '改密码会让你的全部密钥立即失效。': 'Changing your password invalidates all your keys immediately.',
+  '重置访问令牌会让全部密钥立即失效。': 'Resetting the access token invalidates all keys immediately.',
+  // 通用小词（别的字典里也有，译法保持一致；放一份在这里，免得那些字典被删后这一节缺词）
+  '复制': 'Copy',
+  '已复制': 'Copied',
+  '复制失败': 'Couldn’t copy',
+  '打开': 'Open',
+  '取消': 'Cancel',
+  '吊销': 'Revoke',
+  '正在读取…': 'Loading…',
+  '{date} 到期': 'Expires {date}',
+  // 设置搜索（Settings.svelte 的 INDEX 用得上）
+  'Agent 入口与项目手册': 'Agent endpoint and project handbook',
+  'agent 接口 API 地址 手册 manual 接入 Muse': 'agent api endpoint url handbook manual access muse',
+  'agent 接口 API 密钥 key token 接入': 'agent api key token access',
+  '吊销密钥': 'Revoke key',
+  'agent 密钥 key token 吊销 revoke': 'agent key token revoke',
+
+  // —— agent 界面指令（lib/agentUi.js）——
+  '这个分页没有对你开放': 'This page isn’t available to you',
+};

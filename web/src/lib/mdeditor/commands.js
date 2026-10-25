@@ -452,31 +452,78 @@ function itemGeom(state, li) {
     : colOf(state.sliceDoc(base, mark.to)) + 1;
   return { markCol, contentCol };
 }
-// 选区覆盖到的列表项（取最外层，子树由移动自然带上）；同时报告是否落在代码块里
+// 段落下一行只有一个「-」（后面可带空白；引用里在「> 」之后、列表项里在缩进之后）：lezer 按 CommonMark 认成
+// setext 下划线，上一行成了 H2。Obsidian 编辑器的 setext 下划线至少两个「-」，这一行在它那里是普通文字，
+// 带空白的「- 」就是一个空列表项——LP 画成空圆点（livePreview），Enter / Tab 也按空列表项处理（keys / indentList）。
+// isSingleDash(line, mark)：mark 是这一行的 HeaderMark 节点；singleDash(tree, line) 自己去树里找。
+// 命中返回 { mark, heading: SetextHeading2 节点, blank: 「-」后有没有空白 }，否则 null
+export function isSingleDash(line, mark) {
+  if (mark?.name !== 'HeaderMark' || mark.parent?.name !== 'SetextHeading2' || mark.to - mark.from !== 1) return null;
+  const a = mark.from - line.from, b = mark.to - line.from;
+  if (a < 0 || b > line.length || !/^[ \t>]*$/.test(line.text.slice(0, a))) return null;
+  const rest = line.text.slice(b);
+  return /^[ \t]*$/.test(rest) ? { mark, heading: mark.parent, blank: rest.length > 0 } : null;
+}
+export function singleDash(tree, line) {
+  const pre = /^[ \t>]*/.exec(line.text)[0].length;
+  return line.text[pre] === '-' ? isSingleDash(line, tree.resolveInner(line.from + pre, 1)) : null;
+}
+
+// 选区覆盖到的行，分三类（同时报告是否落在代码块里）：
+//   items  本行就是某一项的标记行 → 那一项（取最外层，子树由移动自然带上）
+//   conts  项里没有标记的行（续行，含顶格的懒续行）→ { line, item: 所属的最内层项 }；落在选中项子树里的
+//          不单列（随子树移动）。以前续行被当成它所属的那一项：在续行上按 Tab，整个上一项被搬成子项
+//   plain  不在任何列表项里的非空行
 function selectedItems(state) {
   // 解析拉到选区后面一段就够（子树一般不长）；超大文档首按 Tab 不为整篇解析卡住
   const upto = Math.min(state.doc.length, state.selection.ranges.reduce((m, r) => Math.max(m, r.to), 0) + 5000);
   const tree = ensureSyntaxTree(state, upto, 100) || syntaxTree(state);
-  const items = [];
+  const items = [], conts = [], plain = [];
+  const seen = new Set();
   let code = false;
   for (const r of state.selection.ranges) {
     const lf = state.doc.lineAt(r.from).number;
     let lt = state.doc.lineAt(r.to).number;
     if (!r.empty && lt > lf && r.to === state.doc.line(lt).from) lt--;   // 选到下一行行首不算那行
     for (let n = lf; n <= lt; n++) {
+      if (seen.has(n)) continue;
+      seen.add(n);
       const line = state.doc.line(n);
       const ws = /^[\s>]*/.exec(line.text)[0].length;
       if (ws >= line.length) continue;
-      let node = tree.resolveInner(line.from + ws, 1);
+      let node = tree.resolveInner(line.from + ws, 1), inCodeBlock = false;
       for (; node; node = node.parent) {
-        if (CODE_NODES.includes(node.name)) { code = true; node = null; break; }
+        if (CODE_NODES.includes(node.name)) { code = inCodeBlock = true; break; }
         if (node.name === 'ListItem') break;
       }
-      if (node && !items.some((x) => x.from === node.from)) items.push(node);
+      if (inCodeBlock) continue;
+      if (!node) { plain.push(line); continue; }
+      const mark = node.getChild('ListMark');
+      if (mark && state.doc.lineAt(mark.from).number === n) { if (!items.some((x) => x.from === node.from)) items.push(node); }
+      else conts.push({ line, item: node });
     }
   }
   const top = items.filter((it) => !items.some((o) => o !== it && o.from <= it.from && o.to >= it.to && (o.from < it.from || o.to > it.to)));
-  return { items: top.sort((a, b) => a.from - b.from), code };
+  const loose = conts.filter((c) => !top.some((it) => c.line.from >= it.from && c.line.from <= it.to));
+  return { items: top.sort((a, b) => a.from - b.from), conts: loose, plain, code, tree };
+}
+// 续行 / 普通行的行首缩进（引用前缀之后）：{ q 引用前缀长, ind 缩进空白 }；引用层数不够（懒续行）→ null
+function lineIndent(line, depth) {
+  const q = skipQuotes(line.text, depth);
+  if (q < 0) return null;
+  return { q, ind: /^[ \t]*/.exec(line.text.slice(q))[0] };
+}
+// 往上跳过空行，最近的非空行若在列表项里 → 那一项（最内层）
+function itemAbove(state, tree, lineNo) {
+  let k = lineNo - 1;
+  while (k >= 1 && !state.doc.line(k).text.trim()) k--;
+  if (k < 1) return null;
+  const above = state.doc.line(k);
+  for (let node = tree.resolveInner(above.from + /^[\s>]*/.exec(above.text)[0].length, 1); node; node = node.parent) {
+    if (CODE_NODES.includes(node.name)) return null;
+    if (node.name === 'ListItem') return { item: node, line: k };
+  }
+  return { item: null, line: k };
 }
 // 子树逐行（跳过空行与不够层数的懒续行）改缩进；fn(at, ind) 返回该行的 change 或 null
 function eachSubtreeLine(state, li, fn, out) {
@@ -509,17 +556,31 @@ function lastSubItem(li) {
   return k;
 }
 
-export function indentList(view) {
+// opts.flash：首项按 Tab 挂不上去时提示一句（键位、右键菜单、手机浮条都传进来，见 menu.js / index.js cmd）
+export function indentList(view, opts) {
   const { state } = view;
   if (state.readOnly) return false;
-  const { items, code } = selectedItems(state);
-  if (!items.length) return code ? indentMore(view) : true;   // 段落/标题/引用：吞掉 Tab 不做事（行首 \t 会变代码块）
+  const sel = selectedItems(state);
+  const { items, code, tree } = sel;
+  let stuck = false;   // 有选中的项没有前一个兄弟（首项）：挂不上去
+  // 段落下一行的「- 」（setext 下划线，LP 画成空圆点，见 singleDash）：在 Obsidian 里是新列表的首项，
+  // 同样挂不上去——以前它被归成普通行、上面又找不到列表项，Tab 既不缩进也不提示
+  const dash = (line) => (singleDash(tree, line) ? (stuck = true) : false);
+  const plain = sel.plain.filter((line) => !dash(line));
+  const conts = sel.conts.filter((c) => !dash(c.line));
+  // 不在列表里、上面也没有可挂靠的列表项的段落/标题/引用：吞掉 Tab 不做事（行首 \t 会变缩进代码块）
+  if (!items.length && !conts.length && !plain.length) {
+    if (code) return indentMore(view);
+    if (stuck) opts?.flash?.(t('首项没有可挂靠的上一项'));
+    return true;
+  }
   const useTab = state.facet(indentUnit).includes('\t');
+  const unitCols = colOf(state.facet(indentUnit));
   const changes = [];
   for (const li of items) {
     let prev = li.prevSibling;
     while (prev && prev.name !== 'ListItem') prev = prev.prevSibling;
-    if (!prev) continue;
+    if (!prev) { stuck = true; continue; }
     const g = itemGeom(state, li), pg = itemGeom(state, prev);
     // 新标记列的合法区间 [lo, hi)：不小于前一项的正文列（成为它的子项），又不能够到它最后一个子项
     // 的正文列（否则成了孙项，一次缩两级）；没有子项时上限是正文列+4（再深就是缩进代码块）。
@@ -541,17 +602,64 @@ export function indentList(view) {
       return { from: at, to: at + ind.length, insert: makeIndent(colOf(ind) + delta, useTab) };   // 行首空白里有 tab：按列重写
     }, changes);
   }
+  // 续行：从属到它所在的那一项（Obsidian 的 Tab 是「这一行往里缩」，不搬整项）——
+  //   缩进不到正文列（顶格的懒续行）→ 补到正文列，挂进这一项；
+  //   已对齐的段落续行（所在段落从上面的行开始）→ 再进一级（同 Obsidian，纯视觉：段落续行多缩进不改结构）；
+  //   段落首行、引用/表格等其它块的行已对齐就不动——再缩就成了缩进代码块，或把引用变成段落里的字面「>」
+  for (const { line, item } of conts) {
+    const li = lineIndent(line, quoteDepth(item));
+    if (!li) continue;
+    const col = colOf(li.ind), g = itemGeom(state, item);
+    let want = -1;
+    if (col < g.contentCol) want = g.contentCol;
+    else {
+      let para = null;
+      for (let n = tree.resolveInner(line.from + li.q + li.ind.length, 1); n && n !== item && n.from >= item.from; n = n.parent) {
+        if (n.name === 'Paragraph') { para = n; break; }
+        if (/^(Blockquote|BulletList|OrderedList|Table|HTMLBlock|ATXHeading\d|SetextHeading\d)$/.test(n.name)) break;
+      }
+      if (para && para.from < line.from) want = col + unitCols;
+    }
+    if (want > col) changes.push({ from: line.from + li.q, to: line.from + li.q + li.ind.length, insert: makeIndent(want, useTab) });
+  }
+  // 不在列表里的行：往上（跳过空行）最近的非空行在列表项里 → 补到那一项的正文列，成为它的下一段（从属）。
+  // 连着选中的多行段落一起挪（上一行是本次挪过的，跟它对齐）；上面不是列表就不动
+  const moved = new Map();   // 行号 → { col, depth }
+  for (const line of plain) {
+    const up = itemAbove(state, tree, line.number);
+    if (!up) continue;
+    let to = moved.get(up.line);
+    if (!to && up.item) to = { col: itemGeom(state, up.item).contentCol, depth: quoteDepth(up.item) };
+    if (!to) continue;
+    const li = lineIndent(line, to.depth);
+    if (!li || colOf(li.ind) >= to.col) continue;
+    changes.push({ from: line.from + li.q, to: line.from + li.q + li.ind.length, insert: makeIndent(to.col, useTab) });
+    moved.set(line.number, to);
+  }
   if (changes.length) dispatchIndent(view, changes, 'input.indent');
+  else if (stuck) opts?.flash?.(t('首项没有可挂靠的上一项'));
   return true;
 }
 
-export function outdentList(view) {
+export function outdentList(view, opts) {   // opts 与 indentList 同签名（键位统一传）
   const { state } = view;
   if (state.readOnly) return false;
-  const { items, code } = selectedItems(state);
-  if (!items.length) return code ? indentLess(view) : true;
+  const { items, conts, code } = selectedItems(state);
+  if (!items.length && !conts.length) return code ? indentLess(view) : true;
   const useTab = state.facet(indentUnit).includes('\t');
+  const unitCols = colOf(state.facet(indentUnit));
   const changes = [];
+  // 续行：比正文列还深（Tab 多缩过的段落续行）→ 退一级、不浅于正文列；否则清零——成了懒续行，
+  // 编辑态按普通段落顶格显示（同 Obsidian 的「缩进不到正文列就不是列表行」）
+  for (const { line, item } of conts) {
+    const li = lineIndent(line, quoteDepth(item));
+    if (!li) continue;
+    const col = colOf(li.ind);
+    if (!col) continue;
+    const g = itemGeom(state, item);
+    const want = col > g.contentCol ? Math.max(g.contentCol, col - unitCols) : 0;
+    changes.push({ from: line.from + li.q, to: line.from + li.q + li.ind.length, insert: makeIndent(want, useTab) });
+  }
   for (const li of items) {
     const parent = li.parent?.parent;
     if (!parent || parent.name !== 'ListItem') continue;
@@ -632,8 +740,8 @@ export function toggleTask(view) {
   return true;
 }
 
-// 菜单/浮条入口：执行后把焦点还给编辑器
-const withFocus = (fn) => (v) => { fn(v); v.focus(); };
+// 菜单/浮条入口：执行后把焦点还给编辑器。opts（{ flash }）原样转给命令：缩进命令靠它在首项上给提示
+const withFocus = (fn) => (v, opts) => { fn(v, opts); v.focus(); };
 
 let olCounter = 0;
 export const commands = {

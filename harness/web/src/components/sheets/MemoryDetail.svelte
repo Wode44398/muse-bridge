@@ -142,7 +142,7 @@
   }
 </script>
 
-<div class="md">
+<div class="md sel-text">
   <div class="meta">
     <span class="st" class:rej={note.status === "rejected"}>{STATUS_LABEL[note.status] ?? note.status}</span>
     <span class="kv">{tc("dimensio", "主题")} <code>{note.topic}</code></span>

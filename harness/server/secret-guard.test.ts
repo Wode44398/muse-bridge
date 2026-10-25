@@ -163,6 +163,33 @@ test("S4: Bash names credential stores anywhere in a path (probe-bash-secret-reg
   }
 });
 
+// 2026-10-09：核对打包目录里没有凭据文件的存在性检查被整句拒了。只回真假的测试放行；读内容、列目录、动态拼的照旧拒。
+test("S4: existence-only tests of a credential path are allowed; anything that can read or list it is not", () => {
+  const E = "." + "env";
+  const K = "id_" + "rsa";
+  for (const cmd of [
+    `[ -e stage/app/harness/${E} ] && echo LEAK || echo clean`,
+    `[[ -f ~/.ssh/${K} ]]`,
+    `test -f config/${E} || echo none`,
+    `if [ ! -e "C:/Users/x/claude-bridge/harness/${E}" ]; then echo ok; fi`,
+  ]) {
+    assert.equal(commandScopeViolation(cmd, ws, "full"), null, cmd);
+  }
+  for (const cmd of [
+    `[ -e x ] && cat ${E}`,
+    `ls ~/.ssh`,
+    `ls stage/${E}`,
+    `test -f ${E} && source ${E}`,
+    `[ -e ${E} ] > ${E}.bak`,
+    `[ -e "$(cat ${E})" ]`,
+    `[ -n "$(cat ${E})" ]`,
+    `[ ${E} ]`,
+    `stat -c %s ${E}`,
+  ]) {
+    assert.ok(commandScopeViolation(cmd, ws, "full"), `must refuse: ${cmd}`);
+  }
+});
+
 test("S4: Browser file:// goes through the same gate as Read (probe-browser-file-scheme), without launching a browser", async () => {
   const key = put(home, ".ssh/id_ed25519", `${MARK}\n`);
   const ok = put(ws, "page.html", "<p>hi</p>");

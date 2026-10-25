@@ -72,7 +72,11 @@
     api.post('/api/claude/term/resize', { ws: dockState.ws, cols, rows }).catch(() => {});
   }
 
+  // 断流后的 1.5 秒重连计时器放在组件作用域：restart / 重试都会再调 connect()，
+  // 计时器若留在旧闭包里清不掉，会在新流建好后再触发一次 connect()，把刚接上的流掐掉重连。
+  let closeRetry = 0;
   function connect() {
+    clearTimeout(closeRetry);
     stop?.();
     connecting = true; exited = false; failMsg = '';
     stop = readDockSse(`/api/claude/term/stream?ws=${enc(dockState.ws)}&cols=${term.cols}&rows=${term.rows}`, (ev) => {
@@ -82,7 +86,7 @@
       else if (ev.type === 'exit') exited = true;
     }, {
       onDead: (status) => { connecting = false; failMsg = status === 403 ? t('终端仅对完整权限用户开放') : t('连接失败'); },
-      onClose: () => { if (!exited) { connecting = true; setTimeout(() => { if (term) connect(); }, 1500); } },
+      onClose: () => { if (!exited) { connecting = true; clearTimeout(closeRetry); closeRetry = setTimeout(() => { if (term) connect(); }, 1500); } },
     });
   }
 
@@ -128,6 +132,7 @@
     })();
     return () => {
       dead = true;
+      clearTimeout(closeRetry);
       stop?.(); stop = null;
       ro?.disconnect(); ro = null;
       if (sendTimer) { clearTimeout(sendTimer); sendTimer = 0; sendBuf = ''; }
@@ -164,8 +169,6 @@
   .tm-body { flex: 1; min-height: 0; border-radius: 10px; overflow: hidden; background: var(--bg); padding: 6px 0 0 8px; }
   .tm-body :global(.xterm) { height: 100%; }
   .tm-body :global(.xterm-viewport) { background: transparent !important; }
-  .tm-body :global(.xterm-viewport)::-webkit-scrollbar { width: 6px; }
-  .tm-body :global(.xterm-viewport)::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 38%, transparent); border-radius: 999px; }
 
   .tm-veil { position: absolute; inset: 6px 6px 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
     background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(2px); color: var(--muted); font-size: 14px; border-radius: 10px; }

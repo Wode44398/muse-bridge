@@ -13,12 +13,14 @@
 
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { readFileSync, statSync } from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import { readBody } from '../runtime/body.mjs';
 import { requireCtx } from '../runtime/identity.mjs';
 import { withinRoot } from '../runtime/http-file.mjs';
 import { authorizeProjectPath } from '../claude-projects.mjs';
 import { writeSseHeaders, sseWrite, startHeartbeat } from '../runtime/sse.mjs';
+import { poolRef } from '../runtime/principal.mjs';
+import { gitInvocation } from '../runtime/member-boundary.mjs';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'; // git 恒定空树 hash
 const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
@@ -26,9 +28,11 @@ const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 const fail = (res, e) => json(res, e?.status || 500, { error: e?.message || String(e) });
 
+// 成员目录里的仓库配置是成员自己能写的：经 gitInvocation 加覆盖（钩子、fsmonitor、签名程序、外部 diff）并剔凭据环境
 function git(ws, args, { maxBuffer = 16 * 1024 * 1024 } = {}) {
+  const inv = gitInvocation(ws, ['-c', 'core.quotepath=false', ...args], GIT_ENV);
   return new Promise((resolve) => {
-    execFile('git', ['-c', 'core.quotepath=false', ...args], { cwd: ws, env: GIT_ENV, timeout: 15_000, maxBuffer, windowsHide: true }, (err, stdout) => {
+    execFile('git', inv.args, { cwd: ws, env: inv.env, timeout: 15_000, maxBuffer, windowsHide: true }, (err, stdout) => {
       resolve(err ? null : String(stdout ?? ''));
     });
   });
@@ -39,19 +43,29 @@ function git(ws, args, { maxBuffer = 16 * 1024 * 1024 } = {}) {
 // git diff/status 会把【整个仓库】的变更端上来——对公开快照访客等于泄露整份源码工作树。
 // 所以下面所有 git 调用一律 `-- .` 限定到本目录子树，并把输出路径拉回工作空间相对：
 // diff 用 --relative（git 自己按 cwd 剥前缀），status 只认仓库相对路径、手工剥 prefix。
-async function gitPrefix(ws) {
-  return ((await git(ws, ['rev-parse', '--show-prefix'])) || '').trim();
+// 「是不是仓库」与前缀并成一次 rev-parse（Windows 上每起一个 git 约 100ms，以前审阅一次串行起 8 个）。
+// → null（不是 git 仓库）| { prefix }
+async function repoInfo(ws) {
+  const out = await git(ws, ['rev-parse', '--is-inside-work-tree', '--show-prefix']);
+  if (out == null) return null;
+  return { prefix: (out.split('\n')[1] || '').trim() };
 }
 
 // 基线选择：在分支上且存在 main/master → merge-base（分支全部工作+未提交都算变更）；
 // 否则 HEAD（只看未提交）；无任何提交的新仓库 → 空树。label 是「X → working tree」里的 X。
+// 分支名、有没有 HEAD、main/master 在不在三问并成一轮并行（以前串行 4–5 次 spawn）。
 async function reviewBase(ws) {
-  const branch = ((await git(ws, ['rev-parse', '--abbrev-ref', 'HEAD'])) || '').trim() || 'HEAD';
-  const hasHead = (await git(ws, ['rev-parse', '--verify', '-q', 'HEAD'])) != null;
-  if (!hasHead) return { base: EMPTY_TREE, label: branch, branch };
+  const [abbrev, head, heads] = await Promise.all([
+    git(ws, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    git(ws, ['rev-parse', '--verify', '-q', 'HEAD']),
+    git(ws, ['for-each-ref', '--format=%(refname)', 'refs/heads/main', 'refs/heads/master']),
+  ]);
+  const branch = (abbrev || '').trim() || 'HEAD';
+  if (head == null) return { base: EMPTY_TREE, label: branch, branch };
+  const have = new Set(String(heads || '').split('\n').map((s) => s.trim()).filter(Boolean));
   for (const main of ['main', 'master']) {
     if (branch === main) break;
-    if ((await git(ws, ['rev-parse', '--verify', '-q', 'refs/heads/' + main])) == null) continue;
+    if (!have.has('refs/heads/' + main)) continue;
     const mb = await git(ws, ['merge-base', 'HEAD', main]);
     if (mb) return { base: mb.trim(), label: main, branch };
     break;
@@ -103,22 +117,43 @@ function parseNameStatusZ(out) {
 
 const looksBinary = (buf) => buf.subarray(0, 8000).includes(0);
 
-// 未跟踪文件行数（读上限 1MB 内数 \n；二进制不数）。
-function untrackedStat(abs) {
-  let st;
-  try { st = statSync(abs); } catch { return null; }
-  if (!st.isFile()) return null;
-  if (st.size === 0) return { add: 0, bin: false };
-  let buf;
+// 读文件开头至多 max 字节（异步）。→ { buf, size }；不是普通文件 / 读不了就抛。
+async function readHead(abs, max) {
+  const fh = await fsp.open(abs, 'r');
   try {
-    buf = readFileSync(abs);
-  } catch { return null; }
-  if (looksBinary(buf)) return { add: 0, bin: true };
-  const slice = buf.length > 1024 * 1024 ? buf.subarray(0, 1024 * 1024) : buf;
+    const st = await fh.stat();
+    if (!st.isFile()) throw new Error('not a file');
+    const len = Math.min(st.size, max);
+    const buf = Buffer.allocUnsafe(len);
+    const { bytesRead } = len ? await fh.read(buf, 0, len, 0) : { bytesRead: 0 };
+    return { buf: buf.subarray(0, bytesRead), size: st.size };
+  } finally { await fh.close().catch(() => {}); }
+}
+
+// 未跟踪文件行数（读上限 1MB 内数 \n；二进制不数）。
+// 10-21：以前 statSync + readFileSync 整读（只为数前 1MB 的行），工作区里堆着 Chrome 配置、构建产物时一次几十 MB 同步 IO，
+// 卡住整个事件循环 0.6–1.4s。现在只异步读前 1MB；调用方限并发、另有总字节预算（超了的只报文件、行数记 0）。
+const UNTRACKED_HEAD = 1024 * 1024;
+async function untrackedStat(abs, { count = true } = {}) {
+  let r;
+  try { r = await readHead(abs, count ? UNTRACKED_HEAD : 8000); } catch { return null; }
+  const { buf, size } = r;
+  if (size === 0) return { add: 0, bin: false, bytes: 0 };
+  if (looksBinary(buf)) return { add: 0, bin: true, bytes: buf.length };
+  if (!count) return { add: 0, bin: false, bytes: buf.length };
   let lines = 0;
-  for (let i = 0; i < slice.length; i++) if (slice[i] === 10) lines++;
-  if (slice.length && slice[slice.length - 1] !== 10) lines++;
-  return { add: lines, bin: false };
+  for (let i = buf.indexOf(10); i >= 0; i = buf.indexOf(10, i + 1)) lines++;
+  if (buf.length && buf[buf.length - 1] !== 10) lines++;
+  return { add: lines, bin: false, bytes: buf.length };
+}
+
+// 一组异步任务限并发跑，结果按原顺序
+async function mapLimit(list, n, fn) {
+  const out = new Array(list.length);
+  let next = 0;
+  const worker = async () => { while (next < list.length) { const i = next++; out[i] = await fn(list[i], i); } };
+  await Promise.all(Array.from({ length: Math.min(n, list.length) }, worker));
+  return out;
 }
 
 // 未跟踪清单：status -z --untracked-files=all 里的 "?? path" 记录。
@@ -152,6 +187,94 @@ function insideWs(ws, rel) {
   return abs;
 }
 
+// 同一个工作空间【同时】到的请求共用一次计算（会话信息面板 + 审阅面板在一轮收尾时一起拉）。
+// 只让「还没开始读 git 状态」的在途计算搭车：compute(ws, seal) 在开读工作区 / 引用之前调 seal()，之后到的请求另起一次——
+// 更早开读的那次可能在本请求的起因（这一轮最后一次写文件、刚改完点刷新）之前就读过状态，搭上去会拿到改动前的快照
+// （10-21 审查实测：合并到在途那次 + 算完 2 秒内复用，新建的文件要等下一轮收尾才出现）。所以算完也不留结果。
+// 不调 seal 的计算（dock/meta）在途期间都可搭车。键按路径折叠大小写（Windows）；表里只放在途的。
+export function _coalesceByWs() {
+  const inflight = new Map();   // ws → { open, p }
+  return (ws, compute) => {
+    const k = process.platform === 'win32' ? ws.toLowerCase() : ws;
+    const m = inflight.get(k);
+    if (m && m.open) return m.p;
+    const entry = { open: true, p: null };
+    entry.p = compute(ws, () => { entry.open = false; });
+    inflight.set(k, entry);
+    const done = () => { if (inflight.get(k) === entry) inflight.delete(k); };
+    entry.p.then(done, done);
+    return entry.p;
+  };
+}
+
+// 审阅概览（GET /api/claude/review）。10-21 实测大仓库上要 3–7 秒、末尾还同步整读未跟踪文件卡事件循环 ~1s：
+//   · git 调用并轮：是不是仓库+前缀一次 → 基线三问并行 + 未跟踪清单同时起 → 两份 diff 并行；
+//   · 未跟踪文件数行改异步、8 并发、每个只读前 1MB，总共最多读 UNTRACKED_BUDGET（超了的只报文件，行数记 0）；
+//   · 同时到的请求合并（只在头一次 rev-parse 期间，见 _coalesceByWs）；不做结果缓存：一轮收尾那次必须看到最新改动。
+//     晚到的自己另算：读文件已全异步，几份并行只多占 git 子进程，不再卡事件循环。
+const UNTRACKED_BUDGET = 64 * 1024 * 1024;
+const reviewMemo = _coalesceByWs();
+const reviewOf = (ws) => reviewMemo(ws, computeReview);
+async function computeReview(ws, seal = () => {}) {
+  const repo = await repoInfo(ws);
+  if (!repo) return { git: false };
+  seal();   // 从这里起读工作区与引用：之后到的请求不再搭这一次
+  const untrackedP = untrackedFiles(ws, repo.prefix);
+  const { base, label, branch } = await reviewBase(ws);
+  const [numstat, nameStatus, untracked] = await Promise.all([
+    git(ws, ['diff', '--numstat', '-z', '-M', '--relative', base, '--', '.']),
+    git(ws, ['diff', '--name-status', '-z', '-M', '--relative', base, '--', '.']),
+    untrackedP,
+  ]);
+  const stMap = parseNameStatusZ(nameStatus);
+  const files = parseNumstatZ(numstat).map((f) => ({ ...f, st: stMap.get(f.path) || 'M' }));
+  const seen = new Set(files.map((f) => f.path));
+  const cand = [];
+  for (const rel of untracked) {
+    if (seen.has(rel)) continue;
+    const abs = insideWs(ws, rel);
+    if (abs) cand.push({ rel, abs });
+  }
+  let budget = UNTRACKED_BUDGET;
+  const stats = await mapLimit(cand, 8, async (c) => {
+    const s = await untrackedStat(c.abs, { count: budget > 0 });
+    if (s) budget -= s.bytes;
+    return s;
+  });
+  let truncated = false;
+  for (let i = 0; i < cand.length; i++) {
+    const stat = stats[i];
+    if (!stat) continue;
+    files.push({ path: cand[i].rel, add: stat.add, del: 0, bin: stat.bin, st: 'U' });
+    if (files.length >= 800) { truncated = true; break; }
+  }
+  const total = files.reduce((a, f) => ({ add: a.add + (f.add || 0), del: a.del + (f.del || 0) }), { add: 0, del: 0 });
+  return { git: true, branch, base: label, files, total, truncated };
+}
+
+// 输入框上方「归属状态栏」芯片要的 git 信息（GET /api/claude/dock/meta）：
+//   branch   分支名；detached HEAD 回落短 sha（芯片总得有字可显）
+//   worktree 本目录是不是 linked worktree（--git-dir 落在主仓 .git/worktrees/<名>，
+//            与 --git-common-dir 不同即是）。--git-common-dir 在主检出里返回相对路径、
+//            在 worktree 里返回绝对路径，故一律 resolve(ws, …) 后再比。
+// 以前串行起 4–5 个 git（切会话时 ~500ms）；现在「是不是仓库 + git-dir + common-dir」并成一次，与分支名并行。
+// 并发请求合并、在途期间都可搭车（分支名之类，晚几百毫秒无妨；前端自己按 ws 缓存，这里不留结果）。
+const metaMemo = _coalesceByWs();
+const gitMetaOf = (ws) => metaMemo(ws, computeGitMeta);
+async function computeGitMeta(ws) {
+  let [info, abbrev] = await Promise.all([
+    git(ws, ['rev-parse', '--is-inside-work-tree', '--absolute-git-dir', '--git-common-dir']),
+    git(ws, ['rev-parse', '--abbrev-ref', 'HEAD']),
+  ]);
+  // 合并那条失败（极老的 git 不认 --absolute-git-dir 之类）：退回只判是不是仓库
+  if (info == null && (await git(ws, ['rev-parse', '--is-inside-work-tree'])) == null) return { isGit: false, branch: null, worktree: false };
+  const [, gitDir = '', commonRaw = ''] = String(info || '').split('\n').map((s) => s.trim());
+  let branch = (abbrev || '').trim() || null;
+  if (branch === 'HEAD') branch = ((await git(ws, ['rev-parse', '--short', 'HEAD'])) || '').trim() || null;
+  const worktree = !!gitDir && !!commonRaw && path.resolve(gitDir) !== path.resolve(ws, commonRaw);
+  return { isGit: true, branch, worktree };
+}
+
 export function registerClaudeDockRoutes(router, { identify }) {
   // 统一守卫：登录 → ctx；ws 参数 → 授权后的绝对路径。失败已回响应，返回 null。
   //   shell:true = 需要完整权限（终端）——snap/普通 user 403。
@@ -163,7 +286,9 @@ export function registerClaudeDockRoutes(router, { identify }) {
     let ws;
     // 快照身份忽略客户端传来的 ws，一律锁死在自己的桶：作用域不由前端说了算。
     try { ws = authorizeProjectPath(ctx, isSnap ? ctx.cwd : wsRaw); } catch (e) { fail(res, e); return null; }
-    return { ctx, ws };
+    // ref = 终端池的引用（属主, 工作空间）：与 agent 侧同一把键（claude.mjs 按 poolRef(ctx, cwd) 取），
+    // 面板与 agent 继续共用同一个 shell；别人进了同一个目录拿到的是另一份（开源路线 C6）。
+    return { ctx, ws, ref: poolRef(ctx, ws) };
   };
 
   // ── 元信息：文件页跳转用的相对路径 + git 仓库判定 + 能力位 ──────────────────
@@ -174,21 +299,7 @@ export function registerClaudeDockRoutes(router, { identify }) {
     const root = path.resolve(ctx.cwd || '');
     const relRaw = path.relative(root, ws);
     const rel = relRaw === '' ? '' : (!relRaw.startsWith('..') && !path.isAbsolute(relRaw) ? relRaw.split(path.sep).join('/') : null);
-    const isGit = (await git(ws, ['rev-parse', '--is-inside-work-tree'])) != null;
-    // 输入框上方的「归属状态栏」芯片要的两项——只在 git 仓库里才多跑这几条：
-    //   branch   分支名；detached HEAD 回落短 sha（芯片总得有字可显）
-    //   worktree 本目录是不是 linked worktree（--git-dir 落在主仓 .git/worktrees/<名>，
-    //            与 --git-common-dir 不同即是）。--git-common-dir 在主检出里返回相对路径、
-    //            在 worktree 里返回绝对路径，故一律 resolve(ws, …) 后再比。
-    let branch = null;
-    let worktree = false;
-    if (isGit) {
-      branch = ((await git(ws, ['rev-parse', '--abbrev-ref', 'HEAD'])) || '').trim() || null;
-      if (branch === 'HEAD') branch = ((await git(ws, ['rev-parse', '--short', 'HEAD'])) || '').trim() || null;
-      const gitDir = ((await git(ws, ['rev-parse', '--absolute-git-dir'])) || '').trim();
-      const commonRaw = ((await git(ws, ['rev-parse', '--git-common-dir'])) || '').trim();
-      worktree = !!gitDir && !!commonRaw && path.resolve(gitDir) !== path.resolve(ws, commonRaw);
-    }
+    const { isGit, branch, worktree } = await gitMetaOf(ws);
     // snap = 快照访客：前端据此只摆 审阅/文件两件，并藏掉工作空间路径。
     // wtNew = 本服务端能在这里开 worktree 会话（git 主检出、非快照）——输入栏 worktree 勾选框只认它：
     // 前端先于服务端上线时勾选框不出现，不会勾了却悄悄跑在主检出里。
@@ -199,29 +310,7 @@ export function registerClaudeDockRoutes(router, { identify }) {
   router.on('GET', '/api/claude/review', async (req, res, url) => {
     const g = dockCtx(req, res, url.searchParams.get('ws'));
     if (!g) return;
-    const { ws } = g;
-    if ((await git(ws, ['rev-parse', '--is-inside-work-tree'])) == null) return json(res, 200, { git: false });
-    const { base, label, branch } = await reviewBase(ws);
-    const prefix = await gitPrefix(ws);
-    const [numstat, nameStatus] = await Promise.all([
-      git(ws, ['diff', '--numstat', '-z', '-M', '--relative', base, '--', '.']),
-      git(ws, ['diff', '--name-status', '-z', '-M', '--relative', base, '--', '.']),
-    ]);
-    const stMap = parseNameStatusZ(nameStatus);
-    const files = parseNumstatZ(numstat).map((f) => ({ ...f, st: stMap.get(f.path) || 'M' }));
-    const seen = new Set(files.map((f) => f.path));
-    let truncated = false;
-    for (const rel of await untrackedFiles(ws, prefix)) {
-      if (seen.has(rel)) continue;
-      const abs = insideWs(ws, rel);
-      if (!abs) continue;
-      const stat = untrackedStat(abs);
-      if (!stat) continue;
-      files.push({ path: rel, add: stat.add, del: 0, bin: stat.bin, st: 'U' });
-      if (files.length >= 800) { truncated = true; break; }
-    }
-    const total = files.reduce((a, f) => ({ add: a.add + (f.add || 0), del: a.del + (f.del || 0) }), { add: 0, del: 0 });
-    json(res, 200, { git: true, branch, base: label, files, total, truncated });
+    try { json(res, 200, await reviewOf(g.ws)); } catch (e) { fail(res, e); }
   });
 
   // ── 审阅：单文件 diff（懒加载展开）──────────────────────────────────────────
@@ -241,8 +330,9 @@ export function registerClaudeDockRoutes(router, { identify }) {
     const untracked = String(url.searchParams.get('u') || '') === '1';
     if (untracked) {
       // 未跟踪：合成整篇新增的伪 diff（git diff 不含未跟踪文件）。
+      // 只异步读开头 2MB：下面最多留 40 万字符（UTF-8 一个字符至多 4 字节，2MB 够切），不再同步整读大文件。
       let buf;
-      try { buf = readFileSync(abs); } catch { return json(res, 404, { error: '文件不存在' }); }
+      try { ({ buf } = await readHead(abs, 2 * 1024 * 1024)); } catch { return json(res, 404, { error: '文件不存在' }); }
       if (looksBinary(buf)) return json(res, 200, { bin: true, text: '' });
       let text = buf.toString('utf8');
       let truncated = false;
@@ -273,11 +363,10 @@ export function registerClaudeDockRoutes(router, { identify }) {
   router.on('GET', '/api/claude/term/stream', async (req, res, url) => {
     const g = dockCtx(req, res, url.searchParams.get('ws'), { shell: true });
     if (!g) return;
-    const { ws } = g;
     let term;
     try {
       const svc = await import('../runtime/claude-term.mjs');
-      const t = svc.ensureTerm(ws, url.searchParams.get('cols'), url.searchParams.get('rows'));
+      const t = svc.ensureTerm(g.ref, url.searchParams.get('cols'), url.searchParams.get('rows'));
       term = { svc, t };
     } catch (e) { return fail(res, e); }
     writeSseHeaders(res);
@@ -294,7 +383,7 @@ export function registerClaudeDockRoutes(router, { identify }) {
     const g = dockCtx(req, res, body.ws, { shell: true });
     if (!g) return;
     const svc = await import('../runtime/claude-term.mjs');
-    json(res, 200, { ok: svc.writeTerm(g.ws, String(body.d ?? '')) });
+    json(res, 200, { ok: svc.writeTerm(g.ref, String(body.d ?? '')) });
   });
 
   router.on('POST', '/api/claude/term/resize', async (req, res) => {
@@ -302,7 +391,7 @@ export function registerClaudeDockRoutes(router, { identify }) {
     const g = dockCtx(req, res, body.ws, { shell: true });
     if (!g) return;
     const svc = await import('../runtime/claude-term.mjs');
-    json(res, 200, { ok: svc.resizeTerm(g.ws, body.cols, body.rows) });
+    json(res, 200, { ok: svc.resizeTerm(g.ref, body.cols, body.rows) });
   });
 
   router.on('POST', '/api/claude/term/kill', async (req, res) => {
@@ -310,6 +399,6 @@ export function registerClaudeDockRoutes(router, { identify }) {
     const g = dockCtx(req, res, body.ws, { shell: true });
     if (!g) return;
     const svc = await import('../runtime/claude-term.mjs');
-    json(res, 200, { ok: svc.killTerm(g.ws) });
+    json(res, 200, { ok: svc.killTerm(g.ref) });
   });
 }

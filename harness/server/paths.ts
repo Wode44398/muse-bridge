@@ -60,31 +60,37 @@ function fromEnv(name: string): string | undefined {
 
 const harnessCwd = (): string => process.cwd();
 
+// 可写状态的默认落点：下面凡是没单独指定、默认放在「harness 目录」里的（会话、记忆、知识、运行配置、自定义模型服务、
+// 快照指针、项目表、默认工作区、.env）都相对它。DIMENSIO_DATA_DIR 没设就是 harness 工作目录——独立开发与程序目录内置
+// harness 的部署不设，行为不变。bridge 给每个用户实例设成他自己的数据目录，兜住以后新加的默认位置；部署脚本也可以自己设。
+// 各项自己的环境变量（含 .env 里写的）照旧优先。
+const dataHome = (): string => fromEnv("DIMENSIO_DATA_DIR") ?? harnessCwd();
+
 export function sessionsDir(): string {
-  return guard("会话目录", fromEnv("SESSIONS_DIR") ?? path.resolve(harnessCwd(), "sessions"));
+  return guard("会话目录", fromEnv("SESSIONS_DIR") ?? path.resolve(dataHome(), "sessions"));
 }
 
 export function memoryRoot(): string {
-  return guard("记忆目录", fromEnv("MEMORY_DIR") ?? path.resolve(harnessCwd(), "memory"));
+  return guard("记忆目录", fromEnv("MEMORY_DIR") ?? path.resolve(dataHome(), "memory"));
 }
 
 export function knowledgeRoot(): string {
-  return guard("项目知识目录", fromEnv("KNOWLEDGE_DIR") ?? path.resolve(harnessCwd(), "knowledge"));
+  return guard("项目知识目录", fromEnv("KNOWLEDGE_DIR") ?? path.resolve(dataHome(), "knowledge"));
 }
 
 // 上次选的厂商 / 模型 / 思考档与权限配置（config.ts）。
 export function configFile(): string {
-  return guard("运行配置文件", fromEnv("DIMENSIO_CONFIG_FILE") ?? path.resolve(harnessCwd(), "runtime-config.json"));
+  return guard("运行配置文件", fromEnv("DIMENSIO_CONFIG_FILE") ?? path.resolve(dataHome(), "runtime-config.json"));
 }
 
 // 自定义模型服务（custom-providers.ts）：providers.json 是地址与备注，同目录的 connector-secrets.* 是加密的 API key。
 export function customProvidersDir(): string {
-  return guard("自定义模型服务目录", fromEnv("DIMENSIO_CUSTOM_PROVIDERS_DIR") ?? path.resolve(harnessCwd(), "custom-providers"));
+  return guard("自定义模型服务目录", fromEnv("DIMENSIO_CUSTOM_PROVIDERS_DIR") ?? path.resolve(dataHome(), "custom-providers"));
 }
 
 // 快照对话：当前那只桶的指针，与桶根（quick.ts）。
 export function quickFile(): string {
-  return guard("快照对话指针", fromEnv("DIMENSIO_QUICK_FILE") ?? path.resolve(harnessCwd(), "quick.json"));
+  return guard("快照对话指针", fromEnv("DIMENSIO_QUICK_FILE") ?? path.resolve(dataHome(), "quick.json"));
 }
 
 export function quickRoot(): string {
@@ -93,7 +99,7 @@ export function quickRoot(): string {
 
 // 项目注册表与新建项目的默认父目录（projects.ts）。
 export function projectsFile(): string {
-  return guard("项目注册表", fromEnv("PROJECTS_FILE") ?? path.resolve(harnessCwd(), "projects.json"));
+  return guard("项目注册表", fromEnv("PROJECTS_FILE") ?? path.resolve(dataHome(), "projects.json"));
 }
 
 export function projectsRoot(): string {
@@ -102,7 +108,7 @@ export function projectsRoot(): string {
 
 // 启动时的默认工作区；配置里 `workspace: ""` 就回到它。
 export function defaultWorkspace(): string {
-  return guard("默认工作区", fromEnv("WORKSPACE_DIR") ?? path.resolve(harnessCwd(), "workspace"));
+  return guard("默认工作区", fromEnv("WORKSPACE_DIR") ?? path.resolve(dataHome(), "workspace"));
 }
 
 // 机器级 GUIDE（对所有工作区生效，注入 system prompt）。
@@ -114,7 +120,7 @@ export function globalGuideFile(): string {
 export function envFile(): string | null {
   const explicit = fromEnv("HARNESS_ENV_FILE");
   if (inTestProcess()) return explicit && underTmp(explicit) ? explicit : null;
-  return explicit ?? path.resolve(harnessCwd(), ".env");
+  return explicit ?? path.resolve(dataHome(), ".env");
 }
 
 // bridge 数据根的候选（扩展注册表 extensions/registry.json、本机 broker 描述文件 local-pc-broker.json 放在这里），

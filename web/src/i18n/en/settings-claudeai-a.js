@@ -1,6 +1,8 @@
-// 英文界面文案 · settings-claudeai-a：单 agent 模式 claude.ai 风设置——外壳与搜索、通用、关于与更新、快捷键、提交反馈、更新推送（键 = 中文原文，见 lib/i18n.js）
+// 英文界面文案 · settings-claudeai-a：外壳与搜索、通用、关于与更新、快捷键、提交反馈、更新推送（键 = 中文原文，见 lib/i18n.js）
+// 词条最早随单 agent 模式 claude.ai 风设置（components/settings/Settings 与 Sec*）而来，那套外壳 2026-10-21 已下线；
+// 下面分区小标题里的 SecX 只标出处，词条现由 iOS 风 Settings.svelte、桌面 SettingsDesktop.svelte 等复用，别按标题删。
 export default {
-  // —— 外壳：左栏导航 / 手机根页（components/settings/Settings.svelte）——
+  // —— 外壳：左栏导航 / 手机根页（原 components/settings/Settings.svelte）——
   '设置': 'Settings',
   '通用': 'General',
   '账户': 'Account',
@@ -76,12 +78,12 @@ export default {
   '版本 升级 下载 安装 update': 'version upgrade download install update',
   '自动 更新': 'automatic updates',
   '未知应用 安装': 'unknown apps install permission',
-  'agent claude gemini codex dimensio antigravity 启用 关闭 认证': 'agent claude gemini codex dimensio antigravity enable disable sign-in auth',
+  'agent claude gemini codex dimensio 启用 关闭 认证': 'agent claude gemini codex dimensio enable disable sign-in auth',
   '操控 无障碍 输入法 悬浮 自动化': 'control accessibility keyboard overlay automation',
   '远程 被控 桌面控制 急停': 'remote controlled desktop control emergency stop',
   '反馈 建议 bug 问题 吐槽': 'feedback suggestion bug issue problem report',
 
-  // —— 通用（SecGeneral.svelte）——
+  // —— 通用（原 SecGeneral.svelte）——
   '外观': 'Appearance',
   '跟随系统': 'System',
   '浅色': 'Light',
@@ -99,7 +101,7 @@ export default {
   'settings::图片': 'Images',
   '看图直接加载原图，最清晰但费流量；关掉时先看 1280px 轻量图，放大再换原图': 'Loads original images right away: sharpest, but uses more data. When off, a 1280px preview loads first, and the original loads when you zoom in.',
 
-  // —— 关于与更新（SecAbout.svelte）——
+  // —— 关于与更新（原 SecAbout.svelte）——
   '安卓离线版': 'Android (offline)',
   'Windows 桌面版': 'Windows desktop',
   '网页版': 'Web',
@@ -165,7 +167,7 @@ export default {
   '首次安装': 'First installed',
   '最近更新': 'Last updated',
 
-  // —— 快捷键（SecShortcuts.svelte，仅桌面壳）——
+  // —— 快捷键（原 SecShortcuts.svelte，现桌面 SettingsDesktop）——
   '{failure}——换一个组合键': '{failure}. Try a different shortcut.',
   '和另一条撞在同一个键上，只有一条能生效': 'Uses the same keys as another shortcut. Only one of them will work.',
   '配置里的「{key}」认不出来，已退回默认': 'Didn’t recognize “{key}” in the config. Using the default.',
@@ -181,7 +183,7 @@ export default {
   '清掉自定义键位，回到出厂组合': 'Clear custom shortcuts and restore the original defaults',
   '恢复默认': 'Reset to defaults',
 
-  // —— 提交反馈（SecFeedback.svelte）——
+  // —— 提交反馈（原 SecFeedback.svelte）——
   '写给开发者': 'Write to the developer',
   '遇到的问题、想要的功能、体验吐槽都行，会直接进开发者的反馈库。': 'Report a problem, request a feature, or share what bugs you. It goes straight to the developer’s feedback inbox.',
   '收到，谢谢！反馈已经记下了。': 'Thanks. Your feedback has been sent.',

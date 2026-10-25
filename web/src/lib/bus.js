@@ -7,7 +7,7 @@
 // 事件（服务端 src/runtime/bus.mjs）：
 //   {type:'hello', runs:[{sessionId,userText,startedAt,source}], pending:[sessionId]}
 //   {type:'run.start', sessionId, userText, startedAt, source}
-//   {type:'run.end', sessionId}
+//   {type:'run.end', sessionId, pending?}   pending=同会话还有别的在等你（跨会话消息待确认）
 //   {type:'session.touch', sessionId, mtime, live}   live=此刻正由本机一轮在写
 //   {type:'question', sessionId, pending}
 //   {type:'suggestion', sessionId, text, at}   定局后预测的下一句（输入建议；hello 另带全量 suggestions）
@@ -54,8 +54,12 @@ function noteHello(ev) {
   if (ev.type === 'hello') {
     lastHello = { type: 'hello', runs: [...(ev.runs || [])], pending: [...(ev.pending || [])] };
     if (ev.suggestions) lastHello.suggestions = { ...ev.suggestions };   // 老服务端不带就别造一个空表（空表=清掉全部建议）
+    // 自定义模型清单（只给管理员）：同源跟随页回放的 hello 也带上，芯片不用等 ensureCustomModels 补拉
+    if (Array.isArray(ev.claudeModels)) lastHello.claudeModels = ev.claudeModels;
     return;
   }
+  // 服务改了（总线整份推来）：快照里那份跟着换，免得之后才起来的跟随页回放到旧清单
+  if (ev.type === 'claude.providers') { if (lastHello && Array.isArray(ev.models)) lastHello.claudeModels = ev.models; return; }
   if (!lastHello || !ev.sessionId) return;
   if (ev.type === 'suggestion') {
     if (lastHello.suggestions) lastHello.suggestions[ev.sessionId] = { text: ev.text, at: ev.at };
@@ -66,6 +70,7 @@ function noteHello(ev) {
   } else if (ev.type === 'run.end') {
     lastHello.runs = lastHello.runs.filter((r) => r.sessionId !== ev.sessionId);
     lastHello.pending = lastHello.pending.filter((id) => id !== ev.sessionId);
+    if (ev.pending) lastHello.pending.push(ev.sessionId);
   } else if (ev.type === 'question') {
     lastHello.pending = lastHello.pending.filter((id) => id !== ev.sessionId);
     if (ev.pending) lastHello.pending.push(ev.sessionId);

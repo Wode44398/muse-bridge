@@ -3,14 +3,16 @@
   // 点一家 = 切过去（会话绑定创建时的厂商：切家就是开新对话，旧的留在历史里，在跑的转入后台继续）；同一家就是收起。
   // 切换只换厂商与身份标识，界面不换装；成功后空态标志重演一遍入场（dimensio-pulse）。
   //
-  // 「＋」卡 = 自定义服务（OpenAI 兼容接口）：面板里下钻一层表单（‹ 回到网格），备注 + 接口地址 + API Key。
-  // 保存时服务端先打一次 GET {地址}/models，拿型号清单、顺带验地址与 key；接口列不出型号时表单多出一栏手填模型 ID。
+  // 「＋」卡 = 自定义服务：面板里下钻一层表单（‹ 回到网格）。服务端有能力位 custom-providers-v2 时是「智能识别」编辑器
+  // （vendor/ProviderEditor.svelte：协议、检测连接、拉型号附能力猜测、★ 默认、档位、探测、测试——和 bridge 的 Claude 外接同一种样式）；
+  // 老服务端照旧是备注 + 接口地址 + API Key 的简表单（保存时服务端打 GET {地址}/models，列不出型号时多出一栏手填模型 ID）。
   // 自定义卡右下角的铅笔进同一张表单（编辑 / 删除，删除两步确认）。内置几家的 API Key 仍在设置里填。
   import { tick } from "svelte";
   import * as api from "../../lib/api.ts";
   import {
     app,
     canAddCustomVendor,
+    customVendorV2,
     customVendors,
     modelsOf,
     newChat,
@@ -18,6 +20,8 @@
     switchVendor,
     toast,
     vendorId,
+    vendorInfo,
+    vendorSwitchNote,
     type VendorView,
   } from "../../lib/state.svelte.ts";
   import { VENDOR_ORDER, VENDORS } from "../../lib/theme.ts";
@@ -31,6 +35,7 @@
   import Mark from "../brand/Mark.svelte";
   import VendorLogo from "../brand/VendorLogo.svelte";
   import Section from "../sheets/Section.svelte";
+  import ProviderEditor, { newCtl } from "./vendor/ProviderEditor.svelte";
   import { t, tc, tr } from "../../lib/i18n.ts";
 
   let { onclose }: { onclose: () => void } = $props();
@@ -68,7 +73,35 @@
   let urlEl: HTMLInputElement | undefined = $state();
   let keyEl: HTMLInputElement | undefined = $state();
 
-  function openForm(v: VendorView | null) {
+  // ── 新编辑器（v2）──
+  const v2 = $derived(customVendorV2());
+  let ctl = $state(newCtl());
+  let editorRef: ReturnType<typeof ProviderEditor> | undefined = $state();
+  let record = $state<api.CustomProviderRecord | null>(null);
+  let recordLoading = $state(false);
+  let editorKey = $state(0);
+
+  async function openForm(v: VendorView | null) {
+    if (customVendorV2()) {
+      editing = v;
+      error = "";
+      ctl = newCtl();
+      record = null;
+      formOpen = true;
+      haptic("light");
+      if (v) {
+        recordLoading = true;
+        try {
+          record = await api.getCustomProvider(v.id);
+        } catch (e: any) {
+          error = e?.message ?? String(e);
+        } finally {
+          recordLoading = false;
+        }
+      }
+      editorKey++;
+      return;
+    }
     editing = v;
     const spec = v ? (app.info?.catalog as any[] | undefined)?.find((p) => p.id === v.id) : null;
     name = v?.name ?? "";
@@ -85,7 +118,29 @@
     });
   }
   function back() {
-    if (saving || deleting) return;
+    if (saving || deleting || ctl.saving || ctl.deleting) return;
+    formOpen = false;
+  }
+  // 编辑器落盘了（随后的自动测试过没过都算）：刷新目录；新建的换成「编辑这条」——页脚出「删除」、按钮写「保存」，
+  // 测试失败留在表单里改的时候，再点保存走的是更新，不会再加一条重复的
+  async function onEditorPersisted(r: { record: api.CustomProviderRecord; isNew: boolean }) {
+    await reloadMeta();
+    if (r.isNew) {
+      record = r.record;
+      editing = vendorInfo(r.record.id);
+    }
+  }
+  async function onEditorSaved(r: { name: string; models: number; warning?: string; isNew: boolean }) {
+    haptic("medium");
+    toast(r.warning ? tr(r.warning) : r.isNew ? t("已添加「{name}」· {n} 个模型", { name: r.name, n: r.models }) : t("已保存「{name}」", { name: r.name }));
+    formOpen = false;
+  }
+  async function onEditorDeleted(name: string) {
+    const wasCur = editing?.id === cur;
+    await reloadMeta();
+    if (wasCur) newChat(); // 正在用的那家被删了：服务端已退回默认厂商，这边开一个新对话跟上
+    haptic("medium");
+    toast(t("已删除「{name}」", { name }));
     formOpen = false;
   }
 
@@ -160,10 +215,20 @@
   {onclose}
   onback={formOpen ? back : undefined}
   backLabel={t("回到模型服务")}
-  footer={formOpen ? formFooter : undefined}
-  size="md"
+  footer={formOpen ? (v2 ? editorFooter : formFooter) : undefined}
+  size={formOpen && v2 ? "lg" : "md"}
 >
-  {#if formOpen}
+  {#if formOpen && v2}
+    {#if recordLoading}
+      <p class="loading">{t("正在读取…")}</p>
+    {:else if editing && !record}
+      <p class="err" role="alert">{tr(error || t("这个自定义服务不存在（可能已被删除）"))}</p>
+    {:else}
+      {#key editorKey}
+        <ProviderEditor bind:this={editorRef} bind:ctl source={record} onpersisted={onEditorPersisted} onsaved={onEditorSaved} ondeleted={onEditorDeleted} />
+      {/key}
+    {/if}
+  {:else if formOpen}
     <div class="form" in:rise={{ y: 8 }}>
       <p class="lede">{t("兼容 OpenAI Chat Completions 的接口都能接：中转站、OpenRouter、自己部署的 vLLM / Ollama……")}</p>
 
@@ -218,15 +283,30 @@
         >
           <span class="plus" aria-hidden="true"><Icon name="plus" size={20} stroke={1.8} /></span>
           <span class="add-t">{t("添加自定义服务")}</span>
-          <span class="add-s">{t("OpenAI 兼容接口")}</span>
+          <span class="add-s">{v2 ? t("OpenAI / Anthropic / Gemini 接口") : t("OpenAI 兼容接口")}</span>
         </button>
       {/if}
     </div>
     <p class="note">
-      {app.chat.running ? t("当前任务转入后台继续跑；切换后开启新对话") : t("切换后开启新对话，历史会话保留各自的服务归属")}
+      {vendorSwitchNote(app.chat)}
     </p>
   {/if}
 </Sheet>
+
+{#snippet editorFooter()}
+  {#if editing && record}
+    <span class="del">
+      <Button variant={ctl.confirmDelete ? "danger-solid" : "danger"} icon="trash" loading={ctl.deleting} onclick={() => void editorRef?.remove()}>
+        {ctl.confirmDelete ? tc("dimensio", "确认删除") : t("删除")}
+      </Button>
+    </span>
+  {/if}
+  {#if ctl.msg}<span class="fmsg" class:bad={ctl.err} title={ctl.msg}>{ctl.msg}</span>{/if}
+  <Button variant="ghost" onclick={back} disabled={ctl.saving || ctl.deleting}>{t("取消")}</Button>
+  <Button variant="primary" loading={ctl.saving} disabled={!ctl.canSave || ctl.deleting || recordLoading} onclick={() => void editorRef?.save()}>
+    {ctl.saving ? t("正在连接…") : editing ? t("保存") : t("连接并添加")}
+  </Button>
+{/snippet}
 
 {#snippet formFooter()}
   {#if editing}
@@ -451,5 +531,29 @@
   }
   .del {
     margin-right: auto;
+  }
+  /* 新编辑器的页脚那句话（有改动没保存 / 保存后测试失败……） */
+  .fmsg {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-sm);
+    color: var(--text3);
+  }
+  .fmsg.bad {
+    color: var(--err);
+  }
+  .loading,
+  .err {
+    margin: 8px 4px;
+    font-size: var(--fs-sm);
+  }
+  .loading {
+    color: var(--text3);
+  }
+  p.err {
+    color: var(--err);
   }
 </style>

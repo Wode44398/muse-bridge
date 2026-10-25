@@ -1,6 +1,7 @@
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { fail } from "./types.ts";
 import type { ThinkingLevel } from "../agent/turn.ts";
+import { EFFORT_ORDER } from "../catalog.ts";
 import { normalizeObjectSchema } from "../agent/schema.ts";
 import { SUBAGENT_REPORT_NOTE } from "./untrusted.ts";
 
@@ -16,12 +17,10 @@ const META_TEXT_CAP = 4_000;
 const META_RESULT_CAP = 20_000;
 const META_PROMPT_CAP = 4_000;
 
-const EFFORTS: ThinkingLevel[] = ["off", "low", "medium", "high", "max"];
 function parseEffort(v: unknown): ThinkingLevel | undefined {
   if (typeof v !== "string") return undefined;
   const s = v.trim().toLowerCase();
-  if (s === "xhigh") return "max";
-  return (EFFORTS as string[]).includes(s) ? (s as ThinkingLevel) : undefined;
+  return (EFFORT_ORDER as string[]).includes(s) ? (s as ThinkingLevel) : undefined;
 }
 
 export const agentTool: Tool = {
@@ -70,8 +69,8 @@ export const agentTool: Tool = {
         },
         effort: {
           type: "string",
-          enum: ["low", "medium", "high", "max"],
-          description: "Reasoning effort override. Omit to inherit this session's effort.",
+          enum: ["low", "medium", "high", "xhigh", "max"],
+          description: "Reasoning effort override, clamped to the nearest tier the target model has. Omit to inherit this session's effort.",
         },
         maxTurns: {
           type: "integer",

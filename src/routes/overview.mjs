@@ -14,13 +14,33 @@ import { interruptedRun, clearInterrupted, INTERRUPT_NOTE } from '../runtime/inf
 import { busAttach } from '../runtime/bus.mjs';
 import { watchSessions } from '../runtime/session-watch.mjs';
 import { sessionQuestions } from '../runtime/questions.mjs';
+import { recentPushes } from '../runtime/push-notices.mjs';
 import { statusState, getContext, pruneStaleLimits } from '../runtime/status.mjs';
 import { getContextUsage, getEffort, getCommands } from '../runtime/ctx-usage.mjs';
 import { listSuggestions } from '../runtime/suggestions.mjs';
+import { getLibrary } from '../runtime/session-library.mjs';
+import { claudeSettingsSnapshot } from '../runtime/claude-settings.mjs';
+import { getArchiveState } from '../runtime/session-archive.mjs';   // hello 带归档记录版本（重连对账）
 import { maybeRefreshLimits } from '../runtime/usage-probe.mjs';
 import { outboundProxyStatus, recheckOutboundProxy } from '../runtime/net-proxy.mjs';
 import { requireCtx } from '../runtime/identity.mjs';
 import { readBody } from '../runtime/body.mjs';
+import { peerHoldSessions, peerHoldsSnapshot, peerHoldsOf } from '../runtime/session-peers.mjs';   // 跨会话消息「待你确认」
+import { customModelsView } from '../runtime/claude-providers.mjs';   // 自定义 API 的模型清单（hello 带上，刷新后芯片不用等打开菜单）
+
+// 扣着跨会话消息等你确认的会话 → 通知条目（kind 'peer'；只给发送方名字，不带正文——CLI 扣着时也没给正文）。
+// 那个 CLI 多半停放着、不在 live 里，所以不按「在跑的轮」过滤。
+function peerAsks(key) {
+  return peerHoldSessions(key).map((sessionId) => {
+    const items = peerHoldsOf(key, sessionId);
+    const last = items[items.length - 1] || {};
+    const who = String(last.name || (last.source === 'desktop' ? 'Claude Desktop' : last.source === 'terminal' ? '终端会话' : '另一个 Claude 会话')).slice(0, 40);
+    return {
+      sessionId, ts: Number(last.at) || 0, kind: 'peer', uuid: String(last.uuid || ''), header: who,
+      question: items.length > 1 ? `${items.length} 条其它 Claude 会话的消息等你确认` : `${who} 发来一条消息，等你确认`,
+    };
+  });
+}
 
 export function registerOverviewRoutes(router, { authOk, identify }) {
   // Auth + per-identity context resolution is shared in requireCtx (runtime/identity.mjs).
@@ -40,16 +60,19 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
     res.end(JSON.stringify({
       active: newest ? (newest.sessionId || null) : null,
       actives: live.map((g) => g.sessionId).filter(Boolean),
-      pending: [...sessionQuestions.keys()],
+      // 只给本人的（sessionQuestions 全服共用，按 ownerKey 过滤——以前把全服待回答会话连题面一起吐给任何登录身份）
+      // 跨会话消息「待你确认」也算在等你（桌面壳 / 手机通知靠这里，不在页面上时也得知道）
+      pending: [...new Set([...sessionQuestions.keysFor(ctx.key), ...peerHoldSessions(ctx.key)])],
       // pendingDetail：问题原文，给桌面壳的系统通知用（「Claude 在等你回答：要覆盖旧文件吗？」
       // 比一句干巴巴的"有提问"有用得多）。qid 不外泄——那是作答凭据，只走该 caller 自己的 SSE。
       // 老客户端只读 pending，多这个字段无害。
-      pendingDetail: [...sessionQuestions.entries()].map(([sessionId, entry]) => ({
+      pendingDetail: [...sessionQuestions.entriesFor(ctx.key)].map(([sessionId, entry]) => ({
         sessionId,
         ts: entry?.ts || 0,
+        kind: entry?.kind || 'question',   // question / permission / plan / offer / refusal：客户端按本机通知分类开关取舍
         header: String(entry?.questions?.[0]?.header || '').slice(0, 40),
         question: String(entry?.questions?.[0]?.question || '').slice(0, 200),
-      })),
+      })).concat(peerAsks(ctx.key).map(({ uuid, ...d }) => d)),
     }));
   });
 
@@ -59,12 +82,26 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
     const ctx = requireCtx(identify, req, res); if (!ctx) return;
     const live = getLiveGens(ctx.key);
     const newest = live[live.length - 1] || null;
+    // 手机 App 的原生后台服务（AgentService）据下面两项弹通知（旧 apk 不读、无害）：
+    //  pushes —— 模型用 PushNotification 工具主动推的提醒（push-notices.mjs，带 ageMs 免受两端时钟差影响）；
+    //  asks   —— 本 caller 在跑的轮里正在等人回答的问题（AskUserQuestion / 会话暂停卡）：人不在屏幕前，
+    //            这一轮就一直卡着——通知栏得说清楚「在等你」。qid 是作答凭据，不外泄。
+    const mine = new Set(live.map((g) => g.sessionId).filter(Boolean));
+    const asks = [...sessionQuestions.entriesFor(ctx.key)].filter(([sid]) => mine.has(sid)).map(([sessionId, e]) => ({
+      sessionId,
+      id: `${sessionId}:${e?.ts || 0}`,
+      kind: e?.kind || 'question',
+      header: String(e?.questions?.[0]?.header || '').slice(0, 40),
+      question: String(e?.questions?.[0]?.question || '').slice(0, 200),
+    })).concat(peerAsks(ctx.key).map(({ uuid, ts, ...d }) => ({ ...d, id: `${d.sessionId}:peer:${uuid}` })));
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       // 旧字段=最新一轮（旧 apk AgentService/胶囊兼容）；runs=全部在跑的轮。
       active: !!newest,
       ...(newest ? runSnapshot(newest) : { sessionId: null, userText: '', startedAt: 0, source: null }),
       runs: live.map(runSnapshot),
+      pushes: recentPushes(ctx.key),
+      asks,
     }));
   });
 
@@ -121,14 +158,27 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
     genWrite(res, {
       type: 'hello',
       runs: live.map(runSnapshot),
-      pending: [...sessionQuestions.keys()],
+      // 有跨会话消息扣着等确认的会话也算「在等你」；peerHolds = 扣着的消息快照（session-peers.mjs，重连即对账）
+      pending: [...new Set([...sessionQuestions.keysFor(ctx.key), ...peerHoldSessions(ctx.key)])],
+      peerHolds: peerHoldsSnapshot(ctx.key),
       // 各会话眼下的输入建议（{sid:{text,at}}）：刷新页面 / 换设备 / 断线重连后输入框照样有。
       suggestions: listSuggestions(ctx.key),
+      // 会话收藏 + 自定义标题（跨设备同步，见 runtime/session-library.mjs）：重连即对账。
+      library: getLibrary(ctx),
+      // Claude 分页设置（runtime/claude-settings.mjs）：重连即对账。
+      claudeSettings: claudeSettingsSnapshot(ctx),
+      // 会话归档记录的版本（runtime/session-archive.mjs）：断线期间别处归档 / 取消归档过，重连即对账（前端拉快照 + 重拉列表）
+      archiveRev: getArchiveState(ctx).rev,
+      // 自定义 API 的模型清单（设置 › Claude › 模型服务，只给主机管理员）：冷启动 / 重连即对账——以前要打开一次模型菜单
+      // 或设置页才拉，刷新后用自定义模型的会话芯片显示「自定义模型」、推理强度芯片消失。不碰密钥，很便宜。
+      ...(ctx.kind === 'admin' ? { claudeModels: customModelsView() } : {}),
     });
-    const offBus = busAttach(ctx.key, res);
-    const offWatch = watchSessions(ctx.key, ctx);
     let closed = false;
+    let offBus = () => {}, offWatch = () => {};
     const cleanup = () => { if (closed) return; closed = true; offBus(); offWatch(); };
+    // 第三个参数：被 busDropKey 强制断开（删号 / 停用）时同样收尾，session-watch 当场关掉
+    offBus = busAttach(ctx.key, res, cleanup);
+    offWatch = watchSessions(ctx.key, ctx);
     res.on('close', cleanup);
     res.on('error', cleanup);
   });

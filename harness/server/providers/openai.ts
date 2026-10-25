@@ -7,6 +7,7 @@ import { httpErrorEvent, streamErrorEvent } from "./classify.ts";
 import { observeWire } from "./wire-fingerprint.ts";
 import { TOOL_PROGRESS_EVERY_MS } from "./anthropic.ts";
 import { modelLimits, modelSpec, modelSupportsImages, modelSupportsVideo, modelSupportsAudio, providerMediaBudget } from "../catalog.ts";
+import { applyCustomThinking } from "../custom-tiers.ts";
 
 const DEFAULTS = {
   contextWindow: 128_000,
@@ -33,24 +34,34 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
     cache: false,
     parallelToolCalls: true,
     compactAt: limits.compactAt,
-    mediaBudget: providerMediaBudget(cfg.provider),
+    mediaBudget: providerMediaBudget(cfg.provider, cfg.model),
   };
   const baseUrl = (cfg.baseUrl ?? DEFAULTS.baseUrl).replace(/\/$/, "");
+  const custom = cfg.custom;
   // Kimi and MiMo require the original reasoning trace on subsequent tool
   // turns; keep it in the neutral transcript and replay as reasoning_content.
-  const replayReasoning = cfg.provider === "kimi" || cfg.provider === "mimo";
+  // 自定义服务：标了「不发参数也会思考」的型号（小米、Kimi、GLM-5.3 经第三方接进来）或服务上打开了「回传思考」时同样回传。
+  const replayReasoning = cfg.provider === "kimi" || cfg.provider === "mimo" || Boolean(custom && (custom.replayReasoning || custom.model?.alwaysThinks));
 
   return {
     id: cfg.provider,
     model: cfg.model,
     capabilities,
     async *stream(turn: Turn, signal?: AbortSignal): AsyncIterable<StreamEvent> {
-      const body = encode(turn, cfg.model, capabilities, replayReasoning);
+      let body = encode(turn, cfg.model, capabilities, replayReasoning);
       const level = turn.budget.thinking ?? "off";
       const on = level !== "off";
       // Each OpenAI-compatible vendor gates reasoning differently — these mirror
       // the per-model effort ladders declared in catalog.ts.
-      if (cfg.provider === "openai") {
+      if (custom) {
+        // 自定义服务：不看厂商 id，按型号的档位表发（会话档 → 槽 → 档位，custom-tiers.ts；写法同 Claude 外接，共用 applyTier）。
+        // 「默认」档 / 没登记的型号什么都不发。输出上限字段按服务设置（OpenAI 自家推理模型要 max_completion_tokens）。
+        body = applyCustomThinking(body, custom.model, level, { protocol: "openai" });
+        if (custom.maxTokensField === "max_completion_tokens" && body.max_tokens !== undefined) {
+          body.max_completion_tokens = body.max_tokens;
+          delete body.max_tokens;
+        }
+      } else if (cfg.provider === "openai") {
         // DeepSeek: thinking:{type} + reasoning_effort. 自 V4.1-Flash
         // (`deepseek-flash`, 2026-09-10) 起 low/high/max 三档都是真的——实测同一道
         // 组合数题，low 的 reasoning_content 明显短于 high/max，所以 low 不再折叠成
@@ -58,16 +69,19 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
         // （catalog 的 efforts 已经把 low 夹掉了）。普通 OpenAI 端点会忽略这两个字段。
         body.thinking = { type: on ? "enabled" : "disabled" };
         if (on) {
-          body.reasoning_effort = level === "max" ? "max" : level === "low" ? "low" : "high";
+          body.reasoning_effort = level === "max" || level === "xhigh" ? "max" : level === "low" || level === "minimal" ? "low" : "high";
         }
       } else if (cfg.provider === "qwen") {
-        // Qwen3.7/3.8 (DashScope): enable_thinking + thinking_budget. No
-        // reasoning_effort. 3.8 的思维链上限是 262144 token，这里的三档远在其下，
-        // 是刻意的成本闸——要更长的思考就把下面的数字调大，不是模型不支持。
         body.enable_thinking = on;
-        if (on) {
+        if (on && /qwen3\.8/i.test(cfg.model)) {
+          // Qwen3.8：官方档位是 reasoning_effort low / medium / xhigh（默认 xhigh；high、max 是 xhigh 的别名，
+          // minimal 是 low 的别名，其余值 400——实测回包列出了全部可选值）。与 thinking_budget 互斥（同时给实测 400）。
+          // 以前走 thinking_budget 8k/16k/32k，把官方的三档硬截成了自定预算。旧会话里存的 high/max 照官方别名落到 xhigh。
+          body.reasoning_effort = level === "low" || level === "minimal" ? "low" : level === "medium" ? "medium" : "xhigh";
+        } else if (on) {
+          // Qwen3.7：没有 reasoning_effort，只有 thinking_budget（token 预算）。三档是自定的成本闸。
           body.thinking_budget =
-            level === "high" ? 32_768 : level === "medium" ? 16_384 : 8_192;
+            level === "high" || level === "xhigh" || level === "max" ? 32_768 : level === "medium" ? 16_384 : 8_192;
         }
         // DashScope built-in web search: let Qwen consult the live web when it
         // judges the prompt needs current facts (same "model decides" model as
@@ -92,7 +106,7 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
         body.thinking = { type: on || alwaysThinks ? "enabled" : "disabled" };
         if ((on || alwaysThinks) && /glm-5\.[23]/i.test(cfg.model)) {
           body.reasoning_effort =
-            level === "max" ? "max" : level === "low" || level === "off" ? "low" : "high";
+            level === "max" || level === "xhigh" ? "max" : level === "low" || level === "minimal" || level === "off" ? "low" : "high";
         }
       } else if (cfg.provider === "kimi") {
         // Kimi for Coding: thinking is permanent (supports_thinking_type:"only"),
@@ -107,7 +121,7 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
         const ladder = modelSpec("kimi", cfg.model)?.efforts;
         if (!ladder || ladder.length > 1) {
           body.reasoning_effort =
-            level === "max" ? "max" : level === "high" || level === "medium" ? "high" : "low";
+            level === "max" || level === "xhigh" ? "max" : level === "high" || level === "medium" ? "high" : "low";
         }
       } else if (cfg.provider === "mimo") {
         // MiMo V2.6 exposes a binary thinking switch, not an effort ladder.
@@ -119,11 +133,13 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
         delete body.reasoning_effort;
       }
       observeWire(turn, "openai", body);
-      const res = await fetch(`${baseUrl}/chat/completions`, {
+      const url = `${baseUrl}/chat/completions`;
+      const res = await fetch(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${cfg.apiKey}`,
+          // 自定义服务：鉴权方式（Bearer / 无……）和自定义请求头按服务设置
+          ...(custom ? custom.headers : { authorization: `Bearer ${cfg.apiKey}` }),
         },
         body: JSON.stringify(body),
         signal,
@@ -135,7 +151,8 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
             res.status === 400 && /not supported model/i.test(raw)) {
           raw = "当前 MiMo API 端点或密钥未开放 UltraSpeed。请在设置中配置有 UltraSpeed 权限的 API Key/地址，或选择普通 Pro / Flash。\n" + raw;
         }
-        yield httpErrorEvent(res, raw); // R7：按业务码 / 话术 / 状态码 / 响应头分类
+        // R7：按业务码 / 话术 / 状态码 / 响应头分类；自定义服务另认「地址或协议不对」「不是对话模型」，话术带上地址与服务名
+        yield httpErrorEvent(res, raw, custom ? { url, name: custom.name, protocol: "openai", model: cfg.model } : undefined);
         return;
       }
       // R7：有的厂商出错时回 200 + 一段 JSON（不是 SSE）——读出来按错误分类，别当成「空回复」
@@ -194,8 +211,10 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
           yield { e: "text_delta", text: delta.content };
         }
         // DeepSeek-reasoner and some compatible endpoints stream reasoning here.
-        if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
-          yield { e: "thinking_delta", text: delta.reasoning_content };
+        // D11：OpenRouter / 部分 vLLM、Ollama 版本用 delta.reasoning（字符串）或 reasoning_details[].text——同一块只取一种，别重复。
+        const reasoning = reasoningText(delta);
+        if (reasoning) {
+          yield { e: "thinking_delta", text: reasoning };
         }
 
         if (Array.isArray(delta.tool_calls)) {
@@ -247,6 +266,19 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
       yield { e: "turn_done", stopReason };
     },
   };
+}
+
+// 流式增量里的思考原文：reasoning_content（DeepSeek、Kimi、智谱、小米、通义、llama.cpp）> reasoning（OpenRouter、部分 vLLM / Ollama）
+// > reasoning_details[].text / summary（OpenRouter 的结构化写法）。
+export function reasoningText(delta: any): string {
+  if (typeof delta?.reasoning_content === "string" && delta.reasoning_content) return delta.reasoning_content;
+  if (typeof delta?.reasoning === "string" && delta.reasoning) return delta.reasoning;
+  if (Array.isArray(delta?.reasoning_details)) {
+    return delta.reasoning_details
+      .map((d: any) => (typeof d?.text === "string" ? d.text : typeof d?.summary === "string" ? d.summary : ""))
+      .join("");
+  }
+  return "";
 }
 
 function mapStop(reason: string): StopReason {

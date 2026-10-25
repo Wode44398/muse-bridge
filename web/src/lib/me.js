@@ -29,5 +29,8 @@ export function quotaRows(u) {
   ];
 }
 
+/** 花费是怎么算的（大家共用订阅时不是真花出去的钱）：界面在额度旁边带这一句。 */
+export const costNote = () => t('花费按 API 价估算：大家共用一个订阅时，它反映用了多少，不是真花出去的钱。');
+
 /** 这个人有没有被设上限（没有的话界面上只说「不限」就行）。 */
 export const hasLimits = (u) => !!u && !u.unlimited && Object.keys(u.limits || {}).length > 0;

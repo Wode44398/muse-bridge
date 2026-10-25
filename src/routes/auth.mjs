@@ -4,8 +4,8 @@
 
 import { readBody } from '../runtime/body.mjs';
 import * as users from '../users.mjs';
-import { contextFor } from '../runtime/identity.mjs';
-import { EDITION, FEATURES } from '../config/index.mjs';
+import { contextFor, ownerKey } from '../runtime/identity.mjs';
+import { FEATURES, TOKEN_HASH } from '../config/index.mjs';
 import { enabledAgents } from '../runtime/agent-status.mjs';
 import { registrationOpen } from '../runtime/policy.mjs';
 import { describeClient } from './pair.mjs';
@@ -37,18 +37,22 @@ function clientIp(req) {
 
 export function registerAuthRoutes(router, { adminCredential, adminGen, identify, getCookie, bearerToken, authCookie, clearAuthCookie, userCookie, clearUserCookie }) {
   // "Who am I?" — the page polls this on load to decide login vs app.
-  // 客户端不分版本，全靠这里告诉它：服务器是什么形态（edition）、这个身份能用哪些 agent（agents，
-  // 统一 id，已与全局开关与按人授权取过交集）、有哪些功能（features）。没登录也回 edition/features，
+  // 客户端不分版本，全靠这里告诉它：这个身份能用哪些 agent（agents，统一 id，已与全局开关与按人授权
+  // 取过交集）、服务器开了哪些功能（features）、管理员令牌是不是只存了哈希（tokenHashed）。没登录也回 features，
   // 登录卡据此决定要不要摆「注册」。allow* 三个旧字段保留给旧前端。
   router.on('GET', '/api/auth', (req, res) => {
     const id = identify(req);
     const ctx = id.kind === 'none' ? null : contextFor(id);
     res.writeHead(id.kind === 'none' ? 401 : 200, { 'Content-Type': 'application/json' });
+    const isAcct = id.kind === 'user' || id.kind === 'admin';
     res.end(JSON.stringify({
       kind: id.kind,
-      user: id.user || null,
+      // user = 登录名（显示用，可改）；uid = 账号 id（不变）；key = owner 键（桌面客户端登记设备时据此认主人）
+      user: id.kind === 'user' ? (ctx?.name || id.name || id.user || null) : (id.user || null),
+      uid: id.kind === 'user' ? (id.user || null) : null,
+      key: isAcct ? (ctx?.key || null) : null,
       tier: ctx?.tier || null,
-      edition: EDITION,
+      tokenHashed: !!TOKEN_HASH,
       // 没登录时给全局已启用的名单：只开了一个 agent 的服务器，访客打开网址就该直接落在那一页的登录框上。
       agents: ctx ? ctx.agents : enabledAgents(),
       features: { multiUser: FEATURES.multiUser, register: registrationOpen(), remoteAdmin: FEATURES.remoteAdmin },
@@ -77,7 +81,10 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
     }
     let body; try { body = JSON.parse(await readBody(req)); } catch { body = {}; }
     const username = String(body.username || '').trim();
-    const key = 'u:' + users.normName(username);
+    // 按账号计数（登录名和 id 都能登，同一个人换着写也算同一份次数）；没这个人就按写的名字计。
+    // 计数键与 owner 键同形（principal.ownerKey，C2）；用户名为空时 ownerKey 会抛，按以前的 'u:' 计。
+    const who = users.accountIdOf(username) || users.normName(username);
+    const key = who ? ownerKey('user', who) : 'u:';
     const ipKey = 'ip:' + clientIp(req);
     if (locked(key) || locked(ipKey)) { res.writeHead(429, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: '登录尝试过多，请稍后再试' })); return; }
     const r = await users.checkLogin(username, String(body.password || ''));
@@ -92,7 +99,7 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
     }
     clearFail(key);
     clearFail(ipKey);
-    const tok = users.createSession(r.name);
+    const tok = users.createSession(r.id || r.name);
     // token 一并回前端：网页靠 Set-Cookie，跨源客户端不带 cookie → 存 localStorage 当 Bearer。
     res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': userCookie(req, tok) });
     res.end(JSON.stringify({ ok: true, kind: 'user', user: r.name, token: tok }));
@@ -117,12 +124,15 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
     if (users.getUser(username)) return fail('该用户名已存在');
     // Consume the invite only after everything else validates, so a bad form
     // doesn't burn a code. createUser 若仍失败（极小概率竞态/校验），回滚邀请码。
-    const tier = users.consumeInvite(invite, users.normName(username)); // 'pro' | 'user' | null
-    if (!tier) { noteFail(ipKey); return fail('邀请码无效或已被使用'); }
+    const tier = users.consumeInvite(invite, users.normName(username)); // 'pro' | 'user' | null（过期 / 作废 / 用过都是 null）
+    if (!tier) { noteFail(ipKey); return fail('邀请码无效、已过期或已被使用'); }
     const c = await users.createUser(username, password, tier);
     if (c.error) { users.revertInvite(invite); return fail(c.error, 500); }
+    // 补记新账号 id；完全信任的码是管理员确认过才发的，用它注册的账号直接记为已确认。
+    const ackAt = users.noteInviteAccount(invite, c.id);
+    if (c.tier === users.TIER_FULL && ackAt) users.ackTrust(c.id);
     clearFail(ipKey);
-    const tok = users.createSession(c.name);
+    const tok = users.createSession(c.id || c.name);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': userCookie(req, tok) });
     res.end(JSON.stringify({ ok: true, kind: 'user', user: c.name, token: tok }));
   });

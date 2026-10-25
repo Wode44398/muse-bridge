@@ -155,8 +155,11 @@ export function ensureDockMeta() {
     let m;
     // 必须走 api.get 而不是裸 fetch：网络层失败要 noteServerUnreachable 亮离线态，
     // 成功要 noteServerReachable 熄灭它。
-    try { m = await api.get(`/api/claude/dock/meta?ws=${encodeURIComponent(ws)}`); } catch { m = null; }
-    if (!m) m = { rel: null, git: false, branch: null, worktree: false, shell: false };
+    // gone = 服务端 404（工作空间目录已不在盘上）：工作台据此如实说「文件夹不存在」，
+    // 别再落进「在云端文件区之外」那句——那句只对 rel==null 的库外目录成立。
+    let gone = false;
+    try { m = await api.get(`/api/claude/dock/meta?ws=${encodeURIComponent(ws)}`); } catch (e) { m = null; gone = e?.status === 404; }
+    if (!m) m = { rel: null, git: false, branch: null, worktree: false, shell: false, gone };
     // 拉取期间可能已切走工作空间——晚到的结果不许盖到新 ws 头上
     if (claudeState.ws === ws) claudeState.meta = m;
     metaInflight = null;
@@ -188,7 +191,8 @@ export function readDockSse(path, onEvent, { onDead, onClose } = {}) {
     try {
       res = await fetch(apiUrl(path), { headers: authHeaders(), credentials: 'same-origin', signal: ctrl.signal });
     } catch { if (!ctrl.signal.aborted) onClose?.(); return; }
-    if (!res.ok || !res.body) { onDead?.(res?.status || 0); return; }
+    // 第二个参数：服务端回的 JSON（{error}），面板据此给出具体原因
+    if (!res.ok || !res.body) { onDead?.(res?.status || 0, res ? await res.json().catch(() => null) : null); return; }
     const dec = new TextDecoder();
     const reader = res.body.getReader();
     let buf = '';

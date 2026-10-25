@@ -90,7 +90,7 @@ function hostDanger(c: ShellCommand): string | null {
   const del = recursiveDelete(c);
   const hit = del?.targets.find(protectedTarget);
   if (del && hit) {
-    return `\`${del.verb}\` on ${hit.text} — recursive deletes of an absolute path, a drive, the home directory or the registry are never run`;
+    return `\`${del.verb}\` on ${hit.text} — recursive deletes of a drive or filesystem root, the home directory (or anything above it), a system directory or the registry are never run`;
   }
   return null;
 }
@@ -105,6 +105,18 @@ function runtimeDanger(c: ShellCommand): Reason | null {
     };
   }
   return null;
+}
+
+// 更深的绝对路径（C:/Users/x/proj/build、/opt/app/cache）：以前一律硬拒、用户批准也没用（2026-10-09 删自己建的临时文件被拒）。
+// 现在归 P12「检查点兜不住」：问人，用户的 allow 规则优先；没人在场 / 离开模式按「没被批准」处理。
+function deepAbsoluteDelete(c: ShellCommand): Reason | null {
+  const del = recursiveDelete(c);
+  const deep = del?.targets.find((w) => !w.dynamic && absolutePath(w.text));
+  if (!del || !deep) return null;
+  return {
+    en: `\`${del.verb}\` on the absolute path ${deep.text}`,
+    zh: `递归删除绝对路径 ${deep.text}，工作区检查点救不回来`,
+  };
 }
 
 // 递归删除：rm -r（任何写法）、rd/rmdir/del/erase /s、Remove-Item -Recurse（含 PowerShell 里的 rm/del/rd 别名）
@@ -180,20 +192,55 @@ function psRemoveItem(args: ShellWord[]): { verb: string; targets: ShellWord[] }
 const HOME_VARS =
   /^(?:\$\{?HOME\}?|\$env:(?:USERPROFILE|HOMEPATH|HOMEDRIVE|SystemRoot|windir|SystemDrive|ProgramFiles|ProgramData|APPDATA|LOCALAPPDATA)|%(?:USERPROFILE|HOMEPATH|HOMEDRIVE|SystemRoot|windir|SystemDrive|ProgramFiles|ProgramData|APPDATA|LOCALAPPDATA)%)(?![\w])/i;
 
-// 递归删除绝不落在这些目标上：绝对路径（POSIX、git-bash 的 /c/…、盘符）、家目录、注册表。
-// 与旧正则同一条线（旧的 `rm -rf? (~|/|$HOME)` 也拒所有绝对路径），只是不再挑旗标写法、引号与参数顺序。
+// 递归删除绝不落在这些目标上：盘符 / 文件系统根、家目录（~、变量、C:/Users/<名>）及其上层、系统目录、注册表。
+// 更深的绝对路径不在这里拒，走 runtimeDanger 问人。
 function protectedTarget(w: ShellWord): boolean {
   if (w.text.startsWith("~") && !w.leadQuoted) return true;
   if (w.dynamic && HOME_VARS.test(w.text)) return true;
-  return protectedPath(w.text);
+  return catastrophicPath(w.text);
 }
 
+// 运行时才知道的目标抹掉变量后落在任何绝对路径上（`$DIR/*` → `/*`）：变量空了就是从根删
 function protectedPath(t: string): boolean {
-  return (
-    /^\/(?!\/)/.test(t) ||
-    /^[A-Za-z]:(?:[\\/]|$)/.test(t) ||
-    /^(?:HKLM|HKCU|HKCR|HKU|HKCC|HKEY_\w+)(?::|\\|$)|^Registry::/i.test(t)
-  );
+  return absolutePath(t) || /^(?:HKLM|HKCU|HKCR|HKU|HKCC|HKEY_\w+)(?::|\\|$)|^Registry::/i.test(t);
+}
+
+function absolutePath(t: string): boolean {
+  return /^\/(?!\/)/.test(t) || /^[A-Za-z]:(?:[\\/]|$)/.test(t);
+}
+
+// 盘上整棵都不碰的系统目录；Users 例外——C:/Users、C:/Users/<名>（家目录）本身拒，再往下问人
+const WIN_SYSTEM_TREE = /^(?:windows|program files(?: \(x86\))?|programdata|documents and settings|\$recycle\.bin|system volume information|recovery|boot)$/i;
+// POSIX：整棵都不碰的系统目录；以及只拒前两层的（/home/<名>、/tmp/x 再往下问人）
+const POSIX_SYSTEM_TREE = /^(?:bin|boot|dev|etc|lib|lib32|lib64|proc|run|sbin|sys|usr|system|library|private|applications)$/i;
+const POSIX_SHALLOW = /^(?:home|users|root|tmp|var|opt|srv|mnt|media|volumes)$/i;
+
+function catastrophicPath(t: string): boolean {
+  if (/^(?:HKLM|HKCU|HKCR|HKU|HKCC|HKEY_\w+)(?::|\\|$)|^Registry::/i.test(t)) return true;
+  if (!absolutePath(t)) return false;
+  let p = t.replace(/\\/g, "/");
+  let drive = "";
+  const win = /^([A-Za-z]):(.*)$/.exec(p);
+  const gitBash = /^\/([A-Za-z])(?=\/|$)(.*)$/.exec(p);
+  if (win) [, drive, p] = win;
+  else if (gitBash) [, drive, p] = gitBash;
+  // 规范化：去掉 . 与空段；通配段就按它所在的目录判（`C:/a/*` ≈ 清空 C:/a）；遇到 .. 当最坏情况（可能爬回根）
+  const parts: string[] = [];
+  for (const part of p.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") return true;
+    if (/[*?[]/.test(part)) break;
+    parts.push(part);
+  }
+  if (parts.length === 0) return true; // 根、盘符
+  if (drive) {
+    if (WIN_SYSTEM_TREE.test(parts[0])) return true;
+    if (/^users$/i.test(parts[0])) return parts.length <= 2;
+    return parts.length === 1; // 盘符下的顶层目录（D:/Work）
+  }
+  if (POSIX_SYSTEM_TREE.test(parts[0])) return true;
+  if (POSIX_SHALLOW.test(parts[0])) return parts.length <= 2;
+  return parts.length === 1;
 }
 
 // 抹掉运行时才知道的部分：`$DIR/*` → `/*`（变量为空时真正删的东西）
@@ -621,7 +668,7 @@ function irreversibleReason(parsed: ShellParse, command: string): Reason | null 
     };
   }
   for (const c of parsed.commands) {
-    const why = forcePush(c) ?? publishes(c) ?? globalPackages(c) ?? persistentConfig(c) ?? remoteDaemon(c);
+    const why = forcePush(c) ?? publishes(c) ?? globalPackages(c) ?? persistentConfig(c) ?? remoteDaemon(c) ?? deepAbsoluteDelete(c);
     if (why) return why;
   }
   if (SET_ENV_PERSISTENT.test(command)) {

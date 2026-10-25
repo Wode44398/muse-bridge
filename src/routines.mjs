@@ -104,7 +104,8 @@ export function update(dir, id, patch = {}) {
   if ('model' in patch) r.model = patch.model ? String(patch.model) : null;
   if ('effort' in patch) r.effort = patch.effort ? String(patch.effort) : null;
   if (patch.search != null) r.search = !!patch.search;
-  for (const k of ['lastRun', 'lastStatus', 'lastSessionId', 'lastPreview', 'nextRun']) {
+  // missedAt：服务端停着 / 睡着时错过的那次的计划时刻（启动时 reconcile 记下；界面在它晚于 lastRun 时标「已错过」）
+  for (const k of ['lastRun', 'lastStatus', 'lastSessionId', 'lastPreview', 'nextRun', 'missedAt']) {
     if (k in patch) r[k] = patch[k];
   }
   if ((patch.schedule != null || patch.enabled != null) && !('nextRun' in patch)) {

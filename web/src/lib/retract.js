@@ -37,6 +37,17 @@ function retractRange(m, ev, forget) {
       off += len;
     }
   }
+  // 内嵌图表段（widget，可选的 widgetsFrom/widgetsTo）：按服务端发过 widget_start 的顺序数，
+  // 区间内的整段删掉（被拒那截画了一半的图）
+  const wr = rng(ev.widgetsFrom, ev.widgetsTo);
+  if (wr) {
+    let k = 0;
+    for (let i = 0; i < m.segments.length; i++) {
+      if (m.segments[i].kind !== 'widget') continue;
+      if (k >= wr[0] && k < wr[1]) { m.segments.splice(i, 1); i--; }
+      k++;
+    }
+  }
   const or = rng(ev.toolsFrom, ev.toolsTo);
   if (or) {
     const victims = [];

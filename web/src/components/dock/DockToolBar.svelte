@@ -6,7 +6,9 @@
   //     位置跟着工作台这一列走，不靠这一格右上角的坐标去「碰巧」对上。
   // 材质：触屏（手机 / 折叠屏 / 平板）用桌面主页 Dock 同款的 Figma 液态玻璃（见样式区 .fg），
   // `?oldglass` 退回原来的纯毛玻璃；鼠标设备（电脑浏览器）一律扁平实底（.flat）。
-  import { toggleTheme, ui } from '../../lib/state.svelte.js';
+  import { toggleTheme, ui, session } from '../../lib/state.svelte.js';
+  import { toggleRail, railVisible } from '../../lib/sessionRail.svelte.js';
+  import { IS_CSNAP } from '../../lib/csnap.js';
   import { dock, toggleDockView, closeDock, ensureDockMeta, dockToolOk, DOCK_TOOLS } from '../../lib/dock.svelte.js';
   import { bgHoldNow } from '../../lib/chat.svelte.js';
   import { dockIcon } from '../../lib/dockIcons.js';
@@ -56,6 +58,11 @@
 </script>
 
 <div class="tbar" class:fg class:flat class:split class:docked style:top={docked ? null : top} bind:this={barEl}>
+  {#if session.id && !dock.snap && !IS_CSNAP}
+    <!-- 会话信息面板开关（官方标题栏第一颗 Info：Show/Hide session rail） -->
+    <button class="tb" class:on={railVisible()} aria-pressed={railVisible()} data-rail-toggle aria-label={t('会话信息')}
+      title={railVisible() ? t('隐藏会话信息') : t('显示会话信息')} onclick={() => toggleRail()}>{@html dockIcon('info')}</button>
+  {/if}
   {#each barTools as k (k)}
     <button class="tb" class:on={isOn(k)} aria-pressed={isOn(k)} aria-label={LABEL[k].label} title={tip(k)} onclick={() => toggleDockView(k)}>
       {@html dockIcon(k)}

@@ -50,6 +50,20 @@ const AUDIT_CLOSURE_TOOLS = new Set(["MemoryAudit", "Remember"]);
 // finished reply (see the audit-closure early finish below).
 const announcesMore = (text: string): boolean => /[:：]\s*$/.test(text.trim());
 
+// 10-10 实测：MiMo 正文停在「……重来一遍，逐」、工具调用没发出来，provider 却报正常结束（finish_reason=stop，
+// usage 也到了），这一轮就当答完收了尾——待办还挂着 in_progress，用户看到的是「干一半断了」。另有本机模型、
+// OpenAI 各一例同样断在半个字上。偏保守：只在待办还有没做完时判（那是模型自己说过活没干完），且最后一行是普通段落
+// （不是列表 / 标题 / 表格 / 代码）：结尾是逗号顿号冒号；或结尾是汉字 / 字母、而这一行前面已经有过标点（写到一半的
+// 长句）——「好的」「做完了」这种不带句号的短答是常事，不算。
+export function looksCutOff(text: string, openTodos: boolean): boolean {
+  const body = text.trimEnd();
+  if (!openTodos || !body || /```\s*$/.test(body)) return false;
+  const last = body.slice(body.lastIndexOf("\n") + 1).trim();
+  if (!last || /^([-*+>|#]|\d+[.)]\s)/.test(last)) return false;
+  if (/[，、,:：]$/.test(last)) return true;
+  return /[\u4e00-\u9fffA-Za-z]$/.test(last) && /[。，、；！？,.;!?]/.test(last);
+}
+
 // Marks a mid-run insertion so the model can tell it apart from the original
 // task ("the user is talking to me right now"), and knows a correction here
 // overrides earlier instructions rather than adding a second task.
@@ -97,6 +111,12 @@ export const ANSWER_NUDGE =
   "[Automated check] Your last turn contained only reasoning — nothing reached the user. " +
   "Write your reply to the user now (do not repeat the reasoning). " +
   "If you meant to call tools, issue those tool calls now.";
+// 正文断在半句、却报了正常结束（见 looksCutOff）——追一句接着干。每条用户消息最多两次，追问不进聊天记录。
+export const MAX_CUTOFF_NUDGES = 2;
+export const CUTOFF_NUDGE =
+  "[Automated check] Your previous reply stopped mid-sentence and no tool call came through. " +
+  "Continue exactly where you stopped — do not repeat what you already wrote. " +
+  "If you were about to call tools, issue those tool calls now.";
 
 export const MEMORY_AUDIT_NUDGE =
   "[Memory audit required] Before finishing, inspect the memory index and decide whether this run " +
@@ -694,6 +714,9 @@ export async function* runAgent(
             case "turn_done":
               stop = ev.stopReason;
               break;
+            case "notice":
+              yield { e: "notice", code: ev.code, cooldownMs: ev.cooldownMs };
+              break;
             case "error":
               // Not yielded yet: a retriable error may be retried below, and
               // the frontend treats an error event as terminal.
@@ -880,6 +903,18 @@ export async function* runAgent(
         // 计数进会话 trace（诊断永不影响主链路：traceEvent 自己吞错）
         if (state.ctx.ownerId) traceEvent(state.ctx.ownerId, { e: "answer_nudge", thinkingChars: thinkingText.length });
         state.appendUserBlocks([{ t: "text", text: ANSWER_NUDGE }], true, { origin: "harness", kind: "answer-nudge" });
+        continue;
+      }
+      if (
+        stop === "end" &&
+        !internalAuditTurn &&
+        !state.budgetExhausted &&
+        state.cutoffNudges < MAX_CUTOFF_NUDGES &&
+        looksCutOff(text, state.todos.some((todo) => todo.status !== "completed"))
+      ) {
+        state.cutoffNudges++;
+        if (state.ctx.ownerId) traceEvent(state.ctx.ownerId, { e: "cutoff_nudge", tail: text.trimEnd().slice(-40) });
+        state.appendUserBlocks([{ t: "text", text: CUTOFF_NUDGE }], true, { origin: "harness", kind: "cutoff-continue" });
         continue;
       }
       // Done-gate: one structural nudge per user message, on either miss —

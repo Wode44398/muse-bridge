@@ -52,6 +52,7 @@ export default {
   // ── ModelMenu：型号 / 思考深度 / 切换模型服务 ──
   "模型": "Model",
   "思考深度": "Effort",
+  "输出更快，按更高单价计费": "Faster output, billed at a higher rate",
   "开关::开启": "On",
   "开关::关闭": "Off",
   "切换模型服务…": "Switch provider…",

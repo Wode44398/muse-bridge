@@ -15,11 +15,14 @@
   let loadingThread = $state(false);
   let input = $state('');
   let busy = $state(false);
-  let question = $state(null);     // AskUserQuestion: { qid, questions, picks:[] }
+  let question = $state(null);     // AskUserQuestion: { qid, questions, picks:[] }；「新会话还是在这里做」的卡：{ qid, offer:true, title }
   let threadEl = $state(null);
   let ctrl = null;
 
   const userList = $derived([{ name: 'admin' }, ...sa.users]);
+  // 这个成员允许了管理员什么：没允许看内容就不读正文，没允许协助就不让代发（服务端也拦，这里只是不白点）
+  const access = $derived(user === 'admin' ? { view: true, assist: true } : (sa.users.find((u) => u.name === user)?.adminAccess || {}));
+  let denied = $state('');            // 读正文被拒的原因（服务端 403 code:'consent'）
 
   $effect(() => { sa.tick; user; loadSessions(); });
 
@@ -35,17 +38,21 @@
   }
   function pickUser(name) {
     if (name === user) return;
-    user = name; cur = null; msgs = []; question = null;
+    user = name; cur = null; msgs = []; question = null; denied = '';
     try { ctrl?.abort(); } catch {}
   }
   async function openSession(id) {
-    cur = id; loadingThread = true; question = null;
+    cur = id; loadingThread = true; question = null; denied = '';
     try {
       const d = user === 'admin'
         ? await api.get('/api/session?id=' + encodeURIComponent(id))
         : await api.get('/api/admin/user/session?name=' + encodeURIComponent(user) + '&id=' + encodeURIComponent(id));
       msgs = (d?.messages || []).map((m) => ({ role: m.role === 'user' ? 'user' : 'asst', text: m.text || '' }));
-    } catch (e) { msgs = []; saToast(t('读取会话失败：{reason}', { reason: tr(e?.message || e) }), true); }
+    } catch (e) {
+      msgs = [];
+      if (e?.body?.code === 'consent') denied = tr(e.body.error);
+      else saToast(t('读取会话失败：{reason}', { reason: tr(e?.message || e) }), true);
+    }
     loadingThread = false;
     scrollBottom();
   }
@@ -71,24 +78,34 @@
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     })
+      // 成员没允许代聊等服务端拒绝：把 JSON 里的原因读出来，别只显示「HTTP 403」
+      .then(async (r) => { if (!r.ok) { let m = 'HTTP ' + r.status; try { m = (await r.json()).error || m; } catch {} throw Object.assign(new Error(m), { refused: true }); } return r; })
       .then((r) => pumpSSE(r, (ev) => {
         if (ev.type === 'session' && ev.sessionId) cur = ev.sessionId;
         else if (ev.type === 'text') { asst.text += ev.text || ''; scrollBottom(); }
         else if (ev.type === 'question') { question = { qid: ev.qid, questions: ev.questions || [], picks: (ev.questions || []).map(() => null) }; }
+        // sessions MCP 的 offer 卡（调用阻塞等答，不答要等 30 分钟超时）：同一个弹窗里给两个按钮，走 /api/answer 的 choice
+        else if (ev.type === 'offer' && ev.qid) { question = { qid: ev.qid, offer: true, title: ev.title || '', questions: [] }; }
         else if (ev.type === 'error') { asst.text += '\n' + t('[错误] {message}', { message: tr(ev.message || '') }); scrollBottom(); }
         else if (ev.type === 'done') { if (!asst.text && ev.result) { asst.text = ev.result; scrollBottom(); } }
       }))
-      .catch((e) => { if (!ctrl.signal.aborted) { asst.text += '\n' + t('[连接中断] {reason}', { reason: tr(e?.message || e) }); } })
+      .catch((e) => {
+        if (ctrl.signal.aborted) return;
+        // 服务端拒绝（没允许代聊 / 接着聊他的会话要「查看」……）不是断线：按错误显示原因
+        asst.text += '\n' + (e?.refused ? t('[错误] {message}', { message: tr(e.message) }) : t('[连接中断] {reason}', { reason: tr(e?.message || e) }));
+      })
       .finally(() => { busy = false; loadSessions(); });
   }
   function stop() { try { ctrl?.abort(); } catch {} busy = false; }
+  // 不接着哪段会话，下一条消息开新会话（成员没允许「查看」时，代聊只能接着管理员自己代发开的会话）
+  function newChat() { cur = null; msgs = []; question = null; denied = ''; }
 
-  async function answer(cancelled) {
+  async function answer(cancelled, choice) {
     const q = question; if (!q) return;
     const answers = cancelled ? [] : q.questions.map((_, i) => ({ selected: q.picks[i] != null ? [q.picks[i]] : [] }));
     question = null;
     const url = user === 'admin' ? '/api/answer' : '/api/admin/user/answer';
-    const body = { qid: q.qid, cancelled, answers };
+    const body = { qid: q.qid, cancelled, answers, ...(choice ? { choice } : {}) };
     if (user !== 'admin') body.name = user;
     try { await api.post(url, body); } catch (e) { saToast(t('回传失败：{reason}', { reason: tr(e?.message || e) }), true); }
   }
@@ -130,29 +147,36 @@
   <!-- 消息 + 续聊 -->
   <div class="sa-card col tcol">
     <div class="colh">
-      {#if cur}{user === 'admin' ? 'admin' : user} · <span class="sa-mono sa-dim">{cur.slice(0, 8)}</span>{:else}{t('选择会话后可预览、续聊')}{/if}
+      {#if cur}{user === 'admin' ? 'admin' : user} · <span class="sa-mono sa-dim">{cur.slice(0, 8)}</span>
+        <button class="sa-btn sm newc" onclick={newChat} disabled={busy}>{t('新会话')}</button>
+      {:else}{t('选择会话后可预览、续聊')}{/if}
     </div>
     <div class="thread" bind:this={threadEl}>
       {#if loadingThread}
         <div class="sa-empty">{t('加载中…')}</div>
+      {:else if denied}
+        <div class="sa-empty">{denied}</div>
       {:else if !msgs.length}
-        <div class="sa-empty">{t('左侧选一个会话开始（也可不选，直接发消息开新会话）')}</div>
+        <div class="sa-empty">{user !== 'admin' && !access.view ? t('这个成员没有允许你查看对话内容，这里只列标题和时间。') : t('左侧选一个会话开始（也可不选，直接发消息开新会话）')}</div>
       {:else}
         {#each msgs as m, i (i)}
           <div class="msg" class:mine={m.role === 'user'}>
             <div class="who">{m.role === 'user' ? t('用户') : 'Claude'}</div>
-            <div class="bubble">{m.text}{#if busy && i === msgs.length - 1 && m.role === 'asst' && !m.text}<span class="typing">{t('思考中…')}</span>{/if}</div>
+            <div class="bubble sel-text">{m.text}{#if busy && i === msgs.length - 1 && m.role === 'asst' && !m.text}<span class="typing">{t('思考中…')}</span>{/if}</div>
           </div>
         {/each}
       {/if}
     </div>
     <div class="foot">
-      <textarea rows="1" placeholder={user === 'admin' ? t('代 自己 发消息续聊…（Enter 发送）') : t('代 {user} 发消息续聊…（Enter 发送）', { user })} bind:value={input}
+      <textarea rows="1" disabled={user !== 'admin' && !access.assist}
+        placeholder={user === 'admin' ? t('代 自己 发消息续聊…（Enter 发送）') : !access.assist ? t('这个成员没有允许代聊（在他自己的设置里打开）')
+          : cur && !access.view ? t('他没允许查看内容：只能接着聊你代发开的会话，或点「新会话」另开')
+          : t('代 {user} 发消息续聊…（Enter 发送，他那边会标「管理员代发」）', { user })} bind:value={input}
         onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}></textarea>
       {#if busy}
         <button class="sa-btn dgr" onclick={stop}>{t('停止')}</button>
       {:else}
-        <button class="sa-btn pri" onclick={send} disabled={!input.trim()}>{t('发送')}</button>
+        <button class="sa-btn pri" onclick={send} disabled={!input.trim() || (user !== 'admin' && !access.assist)}>{t('发送')}</button>
       {/if}
     </div>
   </div>
@@ -162,6 +186,14 @@
 {#if question}
   <button class="sa-mask" aria-label={t('跳过')} onclick={() => answer(true)}></button>
   <div class="sa-modal">
+    {#if question.offer}
+      <h3>{t('单独开一个会话来做？')}</h3>
+      <p style="color:#fff;font-weight:600">{question.title}</p>
+      <div class="acts">
+        <button class="sa-btn" onclick={() => answer(false, 'here')}>{t('在这里做')}</button>
+        <button class="sa-btn pri" onclick={() => answer(false, 'new_session')}>{t('新会话')}</button>
+      </div>
+    {:else}
     <h3>{t('Claude 提了个问题')}</h3>
     {#each question.questions as q, qi (qi)}
       {#if qi > 0}<div class="qsep"></div>{/if}
@@ -179,6 +211,7 @@
       <button class="sa-btn" onclick={() => answer(true)}>{t('跳过')}</button>
       <button class="sa-btn pri" onclick={() => answer(false)}>{t('提交')}</button>
     </div>
+    {/if}
   </div>
 {/if}
 
@@ -186,6 +219,7 @@
   .wrap { display: grid; grid-template-columns: 190px 260px 1fr; gap: 12px; height: 100%; min-height: 420px; }
   .col { display: flex; flex-direction: column; overflow: hidden; }
   .colh { flex: none; font-size: 12.5px; font-weight: 650; color: var(--sa-tx2); padding: 13px 16px 10px; border-bottom: .5px solid rgba(255,255,255,.09); }
+  .newc { float: right; margin: -4px 0 -4px 8px; }
   .list { flex: 1; overflow-y: auto; padding: 6px; }
   .li { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 9px 11px; border-radius: 12px;
     border: 0; background: none; color: #fff; font: inherit; font-size: 13.5px; cursor: pointer; text-align: left; transition: background .13s ease; }

@@ -68,11 +68,19 @@ export function hiddenInList(ctx, name, rel) {
   return false;
 }
 
+// 没有命令行的身份（普通档成员、快照访客）不许往任何一段叫 .git 的路径写（.git 目录本身与 worktree 用的 .git 指针文件）：
+// 工作台审阅、worktree、PR 会由服务端在他的目录里跑 git，仓库配置（core.fsmonitor、钩子、过滤器、凭据助手……）能让 git
+// 执行命令——服务端已用 member-boundary 的 gitInvocation 关掉能关的几项，过滤器这类没有总开关，最后一道防线是成员写不进 .git。
+// agent 那一侧由 gitInternalsViolation 挡住，这里挡上传 / 新建 / 改名 / 解压这一侧。没有 ctx 的调用方按保守默认算。
+export const gitGuarded = (ctx) => !ctx || (Boolean(ctx.sandbox) && !ctx.shell);
+const isGitSeg = (seg) => (process.platform === 'win32' ? String(seg).toLowerCase() : String(seg)) === '.git';
+
 // 写操作要不要拒绝这个目标。没有 ctx 的调用方（agent 侧的 workspace 工具）走保守默认：
 // 一律护住根下的 .bridge。
 export function protectedTarget(root, target, ctx = null) {
   const segs = path.relative(path.resolve(root), path.resolve(target)).split(/[\\/]+/).filter(Boolean);
   if (segs.some((seg) => PART_RE.test(seg))) return true;
+  if (gitGuarded(ctx) && segs.some(isGitSeg)) return true;
   const sandbox = ctx ? Boolean(ctx.sandbox) : true;
   return sandbox && segs[0] === SYS_DIR;
 }
@@ -274,6 +282,12 @@ export function handleUpload(req, res, url, identify) {
   if (!ctx) return;
   const dir = safeJoin(ctx.cwd, url.searchParams.get('path') || '');
   if (!dir || protectedTarget(ctx.cwd, dir, ctx)) return bad(res, 403, 'forbidden');
+  // 转正时的文件名也要过一遍（比如传一个叫 .git 的指针文件）
+  const upName = url.searchParams.get('name');
+  if (upName != null) {
+    let n = 'file'; try { n = sanitizeName(decodeURIComponent(upName)); } catch {}
+    if (protectedTarget(ctx.cwd, path.join(dir, n), ctx)) return bad(res, 403, 'forbidden');
+  }
   if (url.searchParams.get('mk') === '1') { try { mkdirSync(dir, { recursive: true }); } catch {} }
   try { if (!statSync(dir).isDirectory()) return bad(res, 404, 'no such folder'); } catch { return bad(res, 404, 'no such folder'); }
   const id = url.searchParams.get('id') || '';
@@ -423,6 +437,31 @@ export async function handleMkdir(req, res, identify) {
   if (!withinRoot(ctx.cwd, dir) || dir === path.resolve(ctx.cwd) || protectedTarget(ctx.cwd, dir, ctx)) return bad(res, 403, 'forbidden');
   if (existsSync(dir)) return bad(res, 409, 'exists');
   try { mkdirSync(dir, { recursive: true }); } catch { return bad(res, 500, 'mkdir error'); }
+  okJson(res, { ok: true, name });
+}
+
+// 新建文件（工作空间里「新建 Markdown」）：只建不覆盖——同名已存在回 409，由前端换名或提示。
+// 只收文本类扩展名（与保存接口同一张表），内容可选（缺省空文件）。
+export async function handleNewFile(req, res, identify) {
+  let ctx = requireCtx(identify, req, res);
+  if (!ctx) return;
+  let body;
+  try { body = JSON.parse(await readBody(req)); } catch { return bad(res, 400, 'bad json'); }
+  ctx = scopeCtx(ctx, body.ws, res);
+  if (!ctx) return;
+  const parent = safeJoin(ctx.cwd, String(body.path || ''));
+  const name = sanitizeName(body.name);
+  if (!parent || !name || name === 'file') return bad(res, 400, 'bad name');
+  if (!TEXT_EXT.has(path.extname(name).slice(1).toLowerCase())) return bad(res, 415, 'not a text file');
+  const file = path.join(parent, name);
+  if (!withinRoot(ctx.cwd, file) || protectedTarget(ctx.cwd, file, ctx)) return bad(res, 403, 'forbidden');
+  try { if (!statSync(parent).isDirectory()) return bad(res, 400, 'not a folder'); }
+  catch { return bad(res, 404, 'not found'); }
+  const content = String(body.content ?? '');
+  if (Buffer.byteLength(content, 'utf8') > 5_000_000) return bad(res, 413, 'too large');
+  // flag 'wx'：存在即失败——existsSync 与写之间的空隙里别处建了同名文件也不会被盖掉
+  try { writeFileSync(file, content, { encoding: 'utf8', flag: 'wx' }); }
+  catch (error) { return error?.code === 'EEXIST' ? bad(res, 409, 'exists') : bad(res, 500, 'write error'); }
   okJson(res, { ok: true, name });
 }
 

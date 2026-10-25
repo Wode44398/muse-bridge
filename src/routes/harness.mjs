@@ -28,9 +28,14 @@ import { EXT_REGISTRY_FILE } from '../extensions.mjs';
 import { outboundProxyStatus } from '../runtime/net-proxy.mjs';
 import { ensureHarnessUp, killTreeAndWait, stopHarnessGracefully } from '../runtime/harness-watchdog.mjs';
 import { agentEnabled } from '../runtime/agent-status.mjs';
+import { accountEvents } from '../runtime/account-lifecycle.mjs';
 
 // harness 是本仓库的子目录；相对本文件解析，worktree 里各自指向自己那份。
+// 管理员实例的数据位置由部署（systemd 单元里的 SESSIONS_DIR / HARNESS_ENV_FILE / DIMENSIO_CUSTOM_PROVIDERS_DIR 等，
+// 都在 <数据根>/dimensio 下）经继承的环境变量给；没给就是 harness 目录自己。
 const HARNESS_DIR = fileURLToPath(new URL('../../harness', import.meta.url));
+// 管理员实例加载的 .env（用户实例共用这一份厂商 key）。
+const adminEnvFilePath = () => process.env.HARNESS_ENV_FILE || path.join(HARNESS_DIR, '.env');
 // 可经环境变量覆盖：并行 worktree 各跑一份 bridge，就得各带一个 harness，不能共抢 8799。
 const HARNESS_PORT = Number(process.env.HARNESS_PORT || 8799);
 const HARNESS_HOST = '127.0.0.1';
@@ -226,6 +231,8 @@ function tenantDirs(user) {
     PROJECTS_ROOT: home,
     WORKSPACE_DIR: home,
     DIMENSIO_GLOBAL_GUIDE: path.join(d, 'GUIDE.md'),
+    // 加密 key 存储（设置页填的厂商 key 落这里）：各用各的，别读写管理员那份
+    DIMENSIO_CUSTOM_PROVIDERS_DIR: path.join(d, 'custom-providers'),
   };
 }
 
@@ -241,7 +248,7 @@ function tenantEnv(user, port, token, { shell }) {
   const base = {};
   for (const [k, v] of Object.entries(process.env)) if (!TENANT_ENV_DROP.some((re) => re.test(k))) base[k] = v;
   // 共用管理员那份厂商 key 文件（harness 默认读 harness/.env；管理员实例若经 HARNESS_ENV_FILE 指了别处就跟着走）。
-  const envFile = process.env.HARNESS_ENV_FILE || path.join(HARNESS_DIR, '.env');
+  const envFile = adminEnvFilePath();
   // 不许碰的位置（命令里出现就拒）：bridge 的数据根 / 程序目录 / 用户根（自己的目录除外）/ 管理员工作区。
   const deny = [ROOT, PROGRAM_ROOT, NATIVE_ROOT, VAULT].filter(Boolean).join(path.delimiter);
   return {
@@ -252,6 +259,8 @@ function tenantEnv(user, port, token, { shell }) {
     DIMENSIO_INTERNAL_TOKEN: token,
     DIMENSIO_OUTBOUND_PROXY: outboundKnob(),
     HARNESS_ENV_FILE: envFile,
+    // 数据目录也指到他自己那份：下面逐项都给了，这里兜住 harness 以后新加的默认位置（不落进管理员的数据目录）
+    DIMENSIO_DATA_DIR: dirs.d,
     SESSIONS_DIR: dirs.SESSIONS_DIR,
     MEMORY_DIR: dirs.MEMORY_DIR,
     KNOWLEDGE_DIR: dirs.KNOWLEDGE_DIR,
@@ -262,6 +271,7 @@ function tenantEnv(user, port, token, { shell }) {
     PROJECTS_ROOT: dirs.PROJECTS_ROOT,
     WORKSPACE_DIR: dirs.WORKSPACE_DIR,
     DIMENSIO_GLOBAL_GUIDE: dirs.DIMENSIO_GLOBAL_GUIDE,
+    DIMENSIO_CUSTOM_PROVIDERS_DIR: dirs.DIMENSIO_CUSTOM_PROVIDERS_DIR,
     // 租户模式（harness 侧的锁定见 harness/server/tenant.ts）：
     DIMENSIO_TENANT: '1',
     SANDBOX_ACCESS: 'workspace',
@@ -340,6 +350,23 @@ const reaper = setInterval(async () => {
   }
 }, 60_000);
 reaper.unref?.();
+
+// 账号结束（删号 / 停用）或降为普通（收回命令行）：他的租户进程当场结束，不等闲置回收
+// （runtime/account-lifecycle.mjs 的 accountEvents；降档时旧实例还带着命令行，下次请求再换就晚了）。
+function endTenant(key, why) {
+  const run = tenantLock.then(async () => {
+    const t = tenants.get(key);
+    if (!t) return false;
+    tenants.delete(key);
+    try { await t.stop(); } catch {}
+    console.log(`[harness] 用户实例 ${key} 已结束（${why}）`);
+    return true;
+  });
+  tenantLock = run.catch(() => {});
+  return run;
+}
+accountEvents.on('ended', (e) => { if (e && e.key) endTenant(e.key, e.reason === 'disabled' ? '账号已停用' : '账号已删除').catch(() => {}); });
+accountEvents.on('downgraded', (e) => { if (e && e.key) endTenant(e.key, '降为普通档').catch(() => {}); });
 
 // 档位变了（Pro ↔ 普通 = 有没有命令行）：旧实例按旧档位起的，下次请求前换一份。
 async function instanceFor(ctx) {

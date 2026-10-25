@@ -442,7 +442,13 @@ export class CdpSession {
     const total = pages.length;
     pages = withoutControlPlane(pages);
     if (!pages.length) {
-      throw new Error(`the ${total} page(s) on 127.0.0.1:${port} are dimensio / bridge's own control plane — attaching to them is not allowed`);
+      // 不开口子：这些页面带着已登录的 bridge 会话，Eval 能在里面跑任意脚本，「只读 attach」做不到真只读。
+      // 但把能走的路说清楚，别让模型反复撞墙（2026-10-09 验证桌面壳时就撞了）。
+      throw new Error(
+        `the ${total} page(s) on 127.0.0.1:${port} are dimensio / bridge's own control plane (a logged-in bridge session) — attaching to them is not allowed. ` +
+          `To check such a window visually use LocalPCInspect(action:"screenshot", window:<hwnd from action:"windows">) — it captures that window even when others cover it. ` +
+          `To test bridge UI behaviour, run a separate bridge/dev instance on another port with its own data root and attach or navigate to that.`,
+      );
     }
     let pick = pages[0];
     if (targetFilter) {

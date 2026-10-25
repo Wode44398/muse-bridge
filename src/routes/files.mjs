@@ -7,6 +7,7 @@ import {
   handleList,
   handleMkdir,
   handleMove,
+  handleNewFile,
   handleRename,
   handleSaveFile,
   handleToUpload,
@@ -14,7 +15,9 @@ import {
 } from './file-core.mjs';
 import { handleFile, handleOfficePdf } from './file-preview.mjs';
 import { handleStream } from './file-video.mjs';
-import { handleExtract, handleMdLinks, handleMdNames, handleRelPaths } from './file-derived.mjs';
+import {
+  handleCompress, handleCompressStatus, handleExtract, handleMdLinks, handleMdNames, handleRelPaths,
+} from './file-derived.mjs';
 
 export {
   moveWorkspaceFile,
@@ -29,6 +32,7 @@ export function registerFileRoutes(router, { identify }) {
   router.on('GET', '/api/file', (req, res, url) => handleFile(req, res, url, identify));
   router.on('POST', '/api/files/upload', (req, res, url) => handleUpload(req, res, url, identify));
   router.on('POST', '/api/files/mkdir', (req, res) => handleMkdir(req, res, identify));
+  router.on('POST', '/api/files/newfile', (req, res) => handleNewFile(req, res, identify));
   router.on('POST', '/api/files/delete', (req, res) => handleDelete(req, res, identify));
   router.on('POST', '/api/files/rename', (req, res) => handleRename(req, res, identify));
   router.on('POST', '/api/files/move', (req, res) => handleMove(req, res, identify));
@@ -40,5 +44,7 @@ export function registerFileRoutes(router, { identify }) {
   router.on('GET', '/api/file/stream', (req, res, url) => handleStream(req, res, url, identify));
   router.on('POST', '/api/files/to-upload', (req, res) => handleToUpload(req, res, identify));
   router.on('POST', '/api/files/extract', (req, res) => handleExtract(req, res, identify));
+  router.on('POST', '/api/files/compress', (req, res) => handleCompress(req, res, identify));
+  router.on('GET', '/api/files/compress', (req, res, url) => handleCompressStatus(req, res, url, identify));
   router.on('POST', '/api/files/relpaths', (req, res) => handleRelPaths(req, res, identify));
 }

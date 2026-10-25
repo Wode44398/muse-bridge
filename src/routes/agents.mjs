@@ -4,7 +4,7 @@
 // 开关属于主机级设置（影响所有人），不下放注册用户。写操作受 server.mjs 全局 Origin 闸保护。
 import { readBody } from '../runtime/body.mjs';
 import { agentStatusList, setAgentSwitch } from '../runtime/agent-status.mjs';
-import { EDITION, FEATURES } from '../config/index.mjs';
+import { FEATURES } from '../config/index.mjs';
 
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 
@@ -18,7 +18,7 @@ export function registerAgentRoutes(router, { identify }) {
 
   router.on('GET', '/api/agents', (req, res) => {
     if (!gate(req, res)) return;
-    json(res, 200, { ok: true, edition: EDITION, features: FEATURES, agents: agentStatusList() });
+    json(res, 200, { ok: true, features: FEATURES, agents: agentStatusList() });
   });
 
   // { id, enabled } —— 即时生效，并广播 agents.changed 让在线客户端刷新。

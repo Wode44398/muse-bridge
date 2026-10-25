@@ -64,7 +64,8 @@ test("R12 退役阶梯：超额才退，一批 8 张、从最老的工具图起�
 });
 
 test("R12 请求里的历史图超了额度：退一批最老的工具图——转录照留、发出去换成一句文字，之后每次请求字节都一样", async (t) => {
-  const { state } = loopState(t, scripted(t), { memoryAudit: false });
+  // 能看图的模型（纯文本模型收到的历史图一律换成一句话，见 state.ts materializeMessages，轮不到额度）
+  const { state } = loopState(t, scripted(t, { capabilities: { image: true } }), { memoryAudit: false });
   state.addUserMessageBlocks([{ t: "text", text: "看这两张" }, img("upload-a"), img("upload-b")], "看这两张");
   for (let i = 0; i < 30; i++) {
     state.appendUserBlocks([{ t: "text", text: "Attachment(s) from the previous tool call:" }, img(`shot${i}`)], false, { origin: "harness", kind: "tool-attachments" });
@@ -80,6 +81,15 @@ test("R12 请求里的历史图超了额度：退一批最老的工具图——�
   assert.equal(kept.length, 32, "转录里的图一张不少（界面照样能看）");
   assert.equal(kept.filter((b) => b.retired).length, 16);
   assert.equal(JSON.stringify(state.toTurn().messages), JSON.stringify(first.messages), "之后的请求字节一样，不再改写前缀");
+});
+
+test("会话中途换到纯文本模型：历史里的图发出去换成一句话（转录照留），不让请求 400", async (t) => {
+  const { state } = loopState(t, scripted(t), { memoryAudit: false });
+  state.addUserMessageBlocks([{ t: "text", text: "看这张" }, img("upload-a")], "看这张");
+  const turn = state.toTurn();
+  assert.equal(turn.messages.flatMap((m) => m.content).filter((b) => b.t === "image").length, 0);
+  assert.match(JSON.stringify(turn.messages), /Image upload-a is not visible to .*takes no image input/);
+  assert.equal(state.messages.flatMap((m) => m.content).filter((b) => b.t === "image").length, 1, "转录里的图还在（换回能看图的模型照样能看）");
 });
 
 test("R12 降采样：长边超过 2000px 的工具图缩到 2000，小图原样，fullRes 原样放过", async () => {

@@ -1,5 +1,6 @@
 // 英文界面文案 · settings-claudeai-b （键 = 中文原文，见 lib/i18n.js）
-// 单 agent 模式设置（claude.ai 风）：连接、账户、手机操控、Agent、本机 Agent、远程控制
+// 连接、账户、手机操控、Agent、本机 Agent、远程控制。词条最早随单 agent 模式 claude.ai 风设置而来（2026-10-21 下线），
+// 现由 iOS 风 Settings.svelte、桌面 SettingsDesktop.svelte 等复用，别按出处删。
 export default {
   // —— 通用 ——
   '取消': 'Cancel',
@@ -166,7 +167,6 @@ export default {
   '服务器配置里填 geminiApiKey，或 vertexProject + 服务账号 / gcloud ADC。': 'Set geminiApiKey in the server configuration, or vertexProject with a service account or gcloud ADC.',
   '在服务器上跑一次 codex login（或配 OPENAI_API_KEY）。': 'Run codex login once on the server (or set OPENAI_API_KEY).',
   '在 dimensio 的 .env 里填至少一家厂商的 API key。': 'Add an API key for at least one provider to dimensio’s .env.',
-  '在这台电脑上装好并登录 Antigravity（agy）。': 'Install Antigravity (agy) on this computer and sign in.',
   '主机端': 'Host edition',
   'settings::服务端': 'Server edition',
   '多用户': 'Multi-user',
@@ -175,8 +175,6 @@ export default {
   '关掉的 agent，手机、网页、桌面客户端都不再显示它的分页。只开一个时打开 app 直接就是那一页；再开一个就回到主页。': 'Agents you turn off no longer show their pages on phone, web, or desktop clients. With only one on, the app opens straight to that page. Turn on another to bring back Home.',
   '启用 {name}': 'Enable {name}',
   // 服务端下发、经 tr() 显示（/api/agents 的 note 与报错）
-  '这台电脑没装 Antigravity（agy）': 'Antigravity (agy) isn’t installed on this computer',
-  'Antigravity 只有 Windows 版': 'Antigravity is only available on Windows',
   '没找到 Codex CLI': 'Codex CLI not found',
   '程序目录里缺 harness': 'harness is missing from the app folder',
   'Agent 设置仅对管理员开放': 'Only admins can change agent settings',

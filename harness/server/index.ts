@@ -27,6 +27,7 @@ import {
   lookupClientRun,
   getOrLoadSession,
   getSession,
+  liveSessionMetas,
   mirrorBaseCount,
   sweepOrphanResources,
   pendingInteractions,
@@ -64,6 +65,7 @@ import {
   pendingSummary,
   waitingOf,
   watchGlobal,
+  noteListChanged,
   workspaceRoot,
   type Session,
 } from "./session.ts";
@@ -88,11 +90,14 @@ import {
   importProject,
   listProjects,
   projectsRoot,
+  registerSavedQuick,
+  renameProject,
   setProjectFlags,
   setProjectOrder,
 } from "./projects.ts";
 import {
-  isCurrentQuickPath,
+  adoptCurrentQuick,
+  currentQuickForSave,
   isQuickPath,
   newQuickProject,
   quickProject,
@@ -101,7 +106,21 @@ import {
 import { Sandbox } from "./sandbox.ts";
 import { getConfig, setConfig, hasKey, sessionConfigSnapshot, forgetProvider, type ConfigPatch } from "./config.ts";
 import { allProviders } from "./catalog.ts";
-import { addCustomProvider, isCustomProviderId, removeCustomProvider, updateCustomProvider } from "./custom-providers.ts";
+import {
+  addCustomProvider,
+  customKeysReady,
+  customProviderView,
+  detectConnection,
+  draftConn,
+  fetchModels,
+  getCustomProvider,
+  guessModels,
+  isCustomProviderId,
+  probeCustomModel,
+  removeCustomProvider,
+  testCustomProvider,
+  updateCustomProvider,
+} from "./custom-providers.ts";
 import { shell, killAllJobs, listJobs, moveForegroundToBackground, stopJob } from "./tools/bash.ts";
 import { ALL_TOOLS, toolDefs } from "./tools/registry.ts";
 import { ruleProblems } from "./agent/permissions.ts";
@@ -220,6 +239,23 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "10mb" }));
 
+// 改了侧栏结构的写接口成功之后，经全局事件通道通知所有设备重拉列表（以前只有发起的那台设备自己更新，
+// 别的设备上新快照 / 删掉的会话 / 新项目要等手动刷新才出现）。
+const LIST_CHANGES: [RegExp, "sessions" | "projects" | "both"][] = [
+  [/^\/api\/quick\/(new|save)$/, "both"],
+  [/^\/api\/projects(\/(rename|flags|order))?$/, "projects"],
+  [/^\/api\/sessions\/[^/]+(\/(delete|handoff))?$/, "sessions"],
+];
+app.use((req, res, next) => {
+  if (req.method !== "POST" && req.method !== "DELETE") return next();
+  const hit = LIST_CHANGES.find(([re]) => re.test(req.path));
+  // DELETE 只认 /api/sessions/:id 本身；POST /api/sessions/:id（没有这个路由）不会 2xx，自然不发
+  if (hit) res.on("finish", () => {
+    if (res.statusCode >= 200 && res.statusCode < 300) noteListChanged(hit[1]);
+  });
+  next();
+});
+
 // 租户实例的接口闸（多用户服务端上每个用户一个 harness，见 tenant.ts）：连用户的 Edge（主机主人的真实登录态）
 // 整组关掉；没有命令行的租户连终端也关。工作区类路径的限制在各处理器里。
 app.use((req, res, next) => {
@@ -296,9 +332,12 @@ app.get("/api/config", (_req, res) => {
   res.json({ ...cfg, hasKey: hasKey(cfg.provider), accessLocked: accessLock() });
 });
 
-// ── 自定义模型服务（「模型服务」面板里的「＋」卡；OpenAI 兼容端点，key 加密存） ─────────────
-// 新目录随 /api/info 的 catalog 下发（custom 字段）；这里只管增删改。保存前先打一次 GET {base}/models：
-// 既拿到型号清单，也当场验地址与 key。租户实例不开放（服务端替用户去连任意地址 = SSRF）。
+// ── 自定义模型服务（「模型服务」面板里的「＋」卡；OpenAI / Anthropic / Gemini 协议，key 加密存） ─────────────
+// 菜单用的目录随 /api/info 的 catalog 下发（custom 字段，只含启用的对话型号）；编辑器要完整记录走 GET /api/custom-providers/:id。
+// 识别（v2，能力位 custom-providers-v2）：models 拉型号附能力猜测、guess 手动加的型号按知识层猜、detect 检测连接（同站兄弟地址
+// × 协议真打一次）、probe 探测一个型号的能力、test 真发一句——都收编辑中的草稿（draft，可带 apiKey；不带用已存的），不落盘。
+// 老表单（{name, baseUrl, apiKey, model?}，旧版 apk）照收：服务端自己拉型号、猜能力。
+// 租户实例一律不开放（服务端替用户去连任意地址 = SSRF）。
 function customProvidersAllowed(res: express.Response): boolean {
   if (!tenantInfo().tenant) return true;
   res.status(403).json({ error: "这台服务器不允许添加自定义模型服务" });
@@ -309,14 +348,67 @@ const customErr = (res: express.Response, e: unknown) => {
   res.status(400).json({ error: err.message, needsModel: err.needsModel || undefined });
 };
 
+// 「N 个模型」只数启用的对话型号（asr / tts 这类不进菜单）
+const chatCount = (p: { models: { enabled: boolean; kind: string }[] }) => p.models.filter((m) => m.enabled && m.kind === "chat").length;
+
 app.post("/api/custom-providers", async (req, res) => {
   if (!customProvidersAllowed(res)) return;
   try {
     const { provider, warning } = await addCustomProvider(req.body ?? {});
-    res.json({ ok: true, id: provider.id, models: provider.models.length, warning });
+    res.json({ ok: true, id: provider.id, models: chatCount(provider), warning, provider: customProviderView(provider) });
   } catch (e) {
     customErr(res, e);
   }
+});
+
+// 识别用的几个草稿接口（不落盘）：要先于 /:id 注册，免得被当成「改 id=models 的服务」
+app.post("/api/custom-providers/models", async (req, res) => {
+  if (!customProvidersAllowed(res)) return;
+  try {
+    const { conn, key } = draftConn(req.body?.draft ?? req.body ?? {});
+    res.json(await fetchModels(conn, key));
+  } catch (e) {
+    customErr(res, e);
+  }
+});
+app.post("/api/custom-providers/guess", (req, res) => {
+  if (!customProvidersAllowed(res)) return;
+  res.json({ models: guessModels(req.body?.ids, req.body?.protocol) });
+});
+app.post("/api/custom-providers/detect", async (req, res) => {
+  if (!customProvidersAllowed(res)) return;
+  try {
+    const { conn, key, models } = draftConn(req.body?.draft ?? req.body ?? {});
+    res.json(await detectConnection(conn, key, models));
+  } catch (e) {
+    customErr(res, e);
+  }
+});
+app.post("/api/custom-providers/probe", async (req, res) => {
+  if (!customProvidersAllowed(res)) return;
+  try {
+    const { conn, key } = draftConn(req.body?.draft ?? req.body ?? {});
+    res.json(await probeCustomModel(conn, req.body?.model, key));
+  } catch (e) {
+    customErr(res, e);
+  }
+});
+app.post("/api/custom-providers/test", async (req, res) => {
+  if (!customProvidersAllowed(res)) return;
+  try {
+    const { conn, key, models } = draftConn(req.body?.draft ?? req.body ?? {});
+    res.json(await testCustomProvider(conn, models, key, req.body?.model));
+  } catch (e) {
+    customErr(res, e);
+  }
+});
+
+// 编辑器用：一个服务的完整记录（型号能力、协议、鉴权；key 只给尾 4 位）
+app.get("/api/custom-providers/:id", (req, res) => {
+  if (!customProvidersAllowed(res)) return;
+  const p = isCustomProviderId(req.params.id) ? getCustomProvider(req.params.id) : undefined;
+  if (!p) return void res.status(404).json({ error: "这个自定义服务不存在（可能已被删除）" });
+  res.json(customProviderView(p));
 });
 
 // 改 / 删都走 POST：离线 apk 跨源访问 bridge，反代的 CORS 只放行 GET / POST
@@ -325,7 +417,7 @@ app.post("/api/custom-providers/:id", async (req, res) => {
   if (!isCustomProviderId(req.params.id)) return void res.status(404).json({ error: "not found" });
   try {
     const { provider, warning } = await updateCustomProvider(req.params.id, req.body ?? {});
-    res.json({ ok: true, id: provider.id, models: provider.models.length, warning });
+    res.json({ ok: true, id: provider.id, models: chatCount(provider), warning, provider: customProviderView(provider) });
   } catch (e) {
     customErr(res, e);
   }
@@ -591,6 +683,11 @@ app.get("/api/knowledge/metrics", (_req, res) => {
 
 // ── Run (SSE stream) ─────────────────────────────────────────────────────────
 
+// SSE 心跳间隔，与 bridge 的 src/runtime/sse.mjs HEARTBEAT_MS 一致（10s）。离线 apk 里内置的旧版 dimensio 前端
+// 回前台阈值还是 12s 且挂着 window focus：15s 心跳下最近一次 ping 之后 12–15s 回前台，健康的直播流会被当半开掐掉、整轮重放；
+// 10s 让老前端也有余量（新前端 22s / 40s 阈值不受影响），每条连接只是每 10s 多几个字节。
+const SSE_PING_MS = 10_000;
+
 // M8：退役冻结期间不接新 run——客户端按「没送达」把这一条放回输入框（M2），稍后再发。
 const RETIRING_ERROR = { error: "服务正在重启（部署中），这一条没有发出；稍后再发", code: "retiring" };
 
@@ -745,7 +842,7 @@ app.post("/api/run", async (req, res) => {
   heartbeat = setInterval(() => {
     if (res.destroyed || res.writableEnded) detach();
     else res.write(": ping\n\n");
-  }, 15_000);
+  }, SSE_PING_MS);
 
   // The response is only a detachable view of the run. A phone switching
   // networks closes this watcher but the background job continues; the client
@@ -900,11 +997,11 @@ app.post("/api/sessions/:id/access", async (req, res) => {
   res.json({ ok: true });
 });
 
-// 型号 / 思考深度同样是会话级——见 session.ts setSessionModel（空闲当场生效；运行中下一条消息起生效，回 pending）。
+// 厂商 / 型号 / 思考深度同样是会话级——见 session.ts setSessionModel（空闲当场生效；运行中下一条消息起生效，回 pending）。
 app.post("/api/sessions/:id/model", async (req, res) => {
   const session = await sessionForRequest(String(req.params.id), res);
   if (!session) return;
-  const result = setSessionModel(session, { model: req.body?.model, thinking: req.body?.thinking });
+  const result = setSessionModel(session, { provider: req.body?.provider, model: req.body?.model, thinking: req.body?.thinking });
   if (!result.ok) {
     res.status(400).json({ error: result.error });
     return;
@@ -979,6 +1076,12 @@ app.post("/api/sessions/:id/steer/interrupt", async (req, res) => {
 
 // ── Persisted sessions (list / read / delete) ────────────────────────────────
 
+// 在跑或在等人的会话：快照过滤器据此留住旧桶里还没收尾的那条
+const sessionBusy = (id: string): boolean => {
+  const live = getSession(id);
+  return Boolean(live && (live.running || waitingOf(live)));
+};
+
 // Newest-first sessions. Response stays a bare array (the frontend and the bridge
 // page both consume it that way); paging is opt-in via ?offset=/?limit=, with the
 // full count in X-Total-Count so a client can tell there are older ones. Without
@@ -987,10 +1090,11 @@ app.get("/api/sessions", async (req, res) => {
   const page = await listSessionsPage({
     offset: Number(req.query.offset) || 0,
     limit: Number(req.query.limit) || undefined,
-    // 快照对话：旧桶的会话全部隐藏，当前桶只露最新一条，且置顶保住第一页
+    // 快照对话：只留当前那条 + 还在跑 / 刚动过的（见 quickSessionFilter），且置顶保住第一页
     // （否则聊久了会被新会话挤出列表，侧栏那条快照就凭空消失了）。
-    filter: quickSessionFilter(),
-    pin: (m) => isCurrentQuickPath(m.workspace),
+    filter: quickSessionFilter({ busy: sessionBusy }),
+    pin: (m) => isQuickPath(m.workspace),
+    live: liveSessionMetas(),
   });
   res.setHeader("X-Total-Count", String(page.total));
   res.setHeader("Access-Control-Expose-Headers", "X-Total-Count");
@@ -999,6 +1103,8 @@ app.get("/api/sessions", async (req, res) => {
       const live = getSession(m.id);
       return {
         ...m,
+        // 快照会话（哪只桶都算）：侧栏把它们全放进快照区，不按「当前桶路径」认——别处换了快照桶也不丢
+        ...(isQuickPath(m.workspace) ? { quick: true } : {}),
         workspace: m.workspace || workspaceRoot(),
         running: live?.running ?? false,
         // P8（X34）：在等你回答 / 批准 / 审计划——侧栏据此标「等你」
@@ -1012,7 +1118,7 @@ app.get("/api/sessions", async (req, res) => {
 // 范围与列表一致（快照桶只露最新一条）；q 走查询串、截到 100 字。
 app.get("/api/sessions/search", async (req, res) => {
   const q = typeof req.query.q === "string" ? req.query.q.slice(0, MAX_QUERY_CHARS) : "";
-  const found = await searchSessions(q, { limit: Number(req.query.limit) || undefined, filter: quickSessionFilter() });
+  const found = await searchSessions(q, { limit: Number(req.query.limit) || undefined, filter: quickSessionFilter({ busy: sessionBusy }) });
   res.json({ items: found.items.map((h) => ({ ...h, workspace: h.workspace || workspaceRoot() })) });
 });
 
@@ -1044,7 +1150,7 @@ app.get("/api/events", (req, res) => {
   const off = watchGlobal(send);
   const ping = setInterval(() => {
     if (!res.destroyed && !res.writableEnded) res.write(": ping\n\n");
-  }, 15_000);
+  }, SSE_PING_MS);
   ping.unref?.();
   const close = () => {
     off();
@@ -1095,6 +1201,35 @@ app.post("/api/quick/new", (_req, res) => {
     res.json(newQuickProject());
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// 「存为工作空间」：当前快照桶原地登记成普通项目（名字「<base> <编号>」，base 由前端按界面语言给），
+// 快照位同时换新桶——此后它不再被「新建快照」顶掉，会话照常列在项目下。{path?: 前端以为的当前快照, base?}
+// → {project, quick}。先登记再摘出快照：中途失败桶还是快照，不会两头落空。
+app.post("/api/quick/save", async (req, res) => {
+  try {
+    const cur = currentQuickForSave(String(req.body?.path ?? ""));
+    const base = String(req.body?.base ?? "").replace(/[\u0000-\u001f]/g, "").trim().slice(0, 40) || "快照会话";
+    const project = await registerSavedQuick(cur.path, `${base} ${cur.seq}`);
+    const quick = adoptCurrentQuick(cur);
+    res.json({ project, quick });
+  } catch (e) {
+    res.status((e as { status?: number }).status ?? 400).json({ error: (e as Error).message });
+  }
+});
+
+// 项目改名：只改显示名（注册表），目录与会话不动；name 留空 = 恢复成文件夹名。快照对话不能改。
+app.post("/api/projects/rename", async (req, res) => {
+  try {
+    const p = String(req.body?.path ?? "");
+    if (isQuickPath(p)) {
+      res.status(400).json({ error: "快照对话不能改名" });
+      return;
+    }
+    res.json(await renameProject(p, String(req.body?.name ?? "")));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
   }
 });
 
@@ -1391,7 +1526,7 @@ app.get("/api/sessions/:id/stream", (req, res) => {
   backlog.arm();
   const heartbeat = setInterval(() => {
     if (open()) res.write(": ping\n\n");
-  }, 15_000);
+  }, SSE_PING_MS);
   res.on("close", () => {
     clearInterval(heartbeat);
     unsub();
@@ -1809,7 +1944,7 @@ app.get("/api/dock/term/stream", async (req, res) => {
     } else {
       res.write(": ping\n\n");
     }
-  }, 15_000);
+  }, SSE_PING_MS);
   res.on("close", () => {
     clearInterval(heartbeat);
     unsub();
@@ -1964,7 +2099,7 @@ app.get("/api/browser/stream", async (req, res) => {
       return;
     }
   }
-  const heartbeat = setInterval(() => res.write(": ping\n\n"), 15_000);
+  const heartbeat = setInterval(() => res.write(": ping\n\n"), SSE_PING_MS);
   res.on("close", () => {
     clearInterval(heartbeat);
     unsub?.();
@@ -2254,6 +2389,9 @@ startLoopDelayMonitor();
 
 // M5（K03）：owner 会话已不在的后台 job / dev server，5 分钟巡检一次收掉
 setInterval(() => void sweepOrphanResources(), 5 * 60_000).unref();
+
+// 加密存储里的 key 解开再开门：否则刚拉起那一下的 /api/info、首轮请求会看到「缺 Key」
+await customKeysReady;
 
 const httpServer = app.listen(PORT, HOST, () => {
   console.log(`\n  harness server → http://${HOST}:${PORT}`);

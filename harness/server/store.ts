@@ -330,9 +330,19 @@ export async function listSessionsPage(
     limit?: number;
     filter?: (m: SessionMeta) => boolean;
     pin?: (m: SessionMeta) => boolean;
+    // 内存里已开跑、盘上可能还没落地的会话：盘上没有的补进来（新会话第一次落盘要等检查点 + 知识召回）
+    live?: SessionMeta[];
   } = {},
 ): Promise<{ items: SessionMeta[]; total: number; offset: number; limit: number }> {
   const metas = await listAllSessionMetas();
+  if (opts.live?.length) {
+    const onDisk = new Set(metas.map((m) => m.id));
+    const extra = opts.live.filter((m) => !onDisk.has(m.id));
+    if (extra.length) {
+      metas.push(...extra);
+      metas.sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+  }
   const filtered = opts.filter ? metas.filter(opts.filter) : metas;
   const pin = opts.pin;
   const all = pin ? [...filtered].sort((a, b) => Number(pin(b)) - Number(pin(a))) : filtered;

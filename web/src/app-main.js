@@ -5,6 +5,7 @@ import { IS_CSNAP } from './lib/csnap.js';
 import App from './App.svelte';
 import SharePage from './components/SharePage.svelte';
 import SnapPage from './components/SnapPage.svelte';
+import './lib/scrollbars.js';   // Edge 同款滚动条：滚动或鼠标移到滚条上才显形，停下隐身
 
 // /w/<token> = 公开只读分享工作空间，挂轻量 SharePage（复用 FilesPanel + 预览查看器）；
 // /c/<token> = 公开聊天快照，挂 SnapPage（阉割版 Claude 分页：只有对话，复用 Thread/Composer）；

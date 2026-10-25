@@ -272,6 +272,67 @@ export default {
   "请填写 API key": "Enter an API key",
   "API key 没能加密保存：{reason}": "Couldn’t encrypt and save the API key: {reason}",
   "这个自定义服务不存在（可能已被删除）": "This custom provider doesn’t exist (it may have been deleted)",
+  // v2：智能识别（拉型号 / 检测连接 / 探测 / 测试）与校验
+  "模型列表格式认不出": "Couldn’t read the model list format",
+  "{msg}；检测到 {url} 能通，改用这个地址再试": "{msg}; {url} works — try that URL instead",
+  "连接超时（{n} 秒没有响应）": "Connection timed out (no response in {n} sec)",
+  "{what}要是 {lo}–{hi} 之间的整数": "{what} must be a whole number from {lo} to {hi}",
+  "档位「{id}」的发送值不是有效数字": "The value of tier “{id}” isn’t a valid number",
+  "档位「{id}」的发送值太长（上限 2000 字符）": "The value of tier “{id}” is too long (2000 characters max)",
+  "档位「{id}」的发送值要是文字、数字、true / false 或 JSON 对象": "The value of tier “{id}” must be text, a number, true / false or a JSON object",
+  "请求头「{name}」由 dimensio 自己管，不能自定义": "Header “{name}” is managed by dimensio and can’t be customized",
+  "请求头名「{name}」不合法": "Header name “{name}” is invalid",
+  "第 {n} 个模型的 ID 不合法（不能有空白，最长 200）": "The ID of model {n} is invalid (no spaces, up to 200 characters)",
+  "模型 ID 不合法": "Invalid model ID",
+  "模型「{id}」重复了": "Model “{id}” is duplicated",
+  "至少启用一个对话模型": "Turn on at least one chat model",
+  "先添加至少一个模型": "Add at least one model first",
+  "接口列出了 {total} 个模型，只收了 {max} 个（对话模型优先）；在「编辑」里可以重新挑":
+    "The endpoint lists {total} models; only {max} were kept (chat models first). You can pick again in Edit.",
+  "接口地址不对：POST {url} 返回 {status}，这里不是 {kind} 接口。{hint}去「模型服务 › {svc}」改地址，或点「检测连接」一键识别。":
+    "Wrong base URL: POST {url} returned {status}, so this isn’t a {kind} endpoint. {hint}Change the URL in Model providers › {svc}, or tap “Check connection” to detect it.",
+  "接口地址不对：POST {url} 返回 {status}，这里不是 {kind} 接口。去「模型服务 › {svc}」改地址，或点「检测连接」一键识别。":
+    "Wrong base URL: POST {url} returned {status}, so this isn’t a {kind} endpoint. Change the URL in Model providers › {svc}, or tap “Check connection” to detect it.",
+  "这个站的 …/v1 只有 OpenAI 兼容接口：把协议改成 OpenAI，或改用同站的 …/anthropic 地址。":
+    "This site’s …/v1 is OpenAI-compatible only: switch the protocol to OpenAI, or use the …/anthropic URL on the same host.",
+  "有的服务 …/v1 下只有 OpenAI 兼容接口：可以把协议改成 OpenAI，或试试同站的 …/anthropic 地址。":
+    "Some services offer only an OpenAI-compatible API under …/v1: you can switch the protocol to OpenAI, or try the …/anthropic URL on the same host.",
+  "很多 OpenAI 兼容地址要带 /v1。": "Many OpenAI-compatible URLs need /v1 at the end.",
+  "找不到这个模型（404）：{msg}": "Model not found (404): {msg}",
+  "这把 API Key 被拒绝了（{status}）：{msg}。去「模型服务 › {svc}」检查 Key 和鉴权方式。":
+    "The API key was rejected ({status}): {msg}. Check the key and authentication in Model providers › {svc}.",
+  "这把 API Key 被拒绝了（{status}）。去「模型服务 › {svc}」检查 Key 和鉴权方式。":
+    "The API key was rejected ({status}). Check the key and authentication in Model providers › {svc}.",
+  "「{model}」不是对话模型（语音识别 / 合成、向量这类）：{msg}": "“{model}” isn’t a chat model (speech recognition / synthesis, embeddings and the like): {msg}",
+  "「{model}」（或这个服务）不收音频：{msg}": "“{model}” (or this service) doesn’t accept audio: {msg}",
+  "型号最多 {max} 个（这次提交了 {n} 个），先删掉一些再保存": "Up to {max} models per provider ({n} submitted). Remove some and save again.",
+  "型号最多 {max} 个，先在「编辑」里删掉一些": "Up to {max} models per provider. Remove some in Edit first.",
+  "「{id}」的思考档位放不下：dimensio 只有 7 级思考档（关闭档以外最多 6 档），{ids} 进不去。删掉几档，或把档位 ID 改成 off / minimal / low / medium / high / xhigh / max":
+    "The thinking tiers of “{id}” don’t fit: dimensio has only 7 thinking levels (at most 6 besides off), so {ids} can’t be used. Remove some tiers, or change their IDs to off / minimal / low / medium / high / xhigh / max",
+  "上游返回 {status}（不是 JSON，{where}）：{msg}": "The provider returned {status} (not JSON, {where}): {msg}",
+  "空": "Empty",
+  // 探测能力的结论
+  "不发思考参数也会思考": "Thinks even without a thinking parameter",
+  "不发思考参数时不思考": "Doesn’t think without a thinking parameter",
+  "普通对话被拒：{msg}": "Plain chat was rejected: {msg}",
+  "输出上限 {n}": "Max output {n}",
+  "输出上限没读出来（端点没校验）": "Couldn’t read the max output (the endpoint doesn’t check it)",
+  "能看图": "Accepts images",
+  "看图答错了（{r}）": "Got the image wrong ({r})",
+  "不收图片": "Doesn’t accept images",
+  "reasoning_effort 可选：{ids}": "reasoning_effort accepts: {ids}",
+  // 运行时报错（providers/classify.ts）：自定义服务的地址 / 协议不对、非对话模型、鉴权
+  "接口地址或协议不对：去「模型服务」点「检测连接」": "Wrong URL or protocol: tap “Check connection” in Model providers",
+  "这个型号不是对话模型（语音识别 / 合成、向量这类）：换一个型号": "This model isn’t a chat model (speech recognition / synthesis, embeddings and the like): pick another one",
+  "接口地址或协议不对：POST {url} 返回 {status}，这里不是 {kind} 接口；去「模型服务 › {svc}」点「检测连接」":
+    "Wrong URL or protocol: POST {url} returned {status}, so this isn’t a {kind} endpoint; tap “Check connection” in Model providers › {svc}",
+  "找不到型号「{model}」：去「模型服务 › {svc}」刷新型号或换一个": "Model “{model}” not found: refresh the models in Model providers › {svc}, or pick another one",
+  "「{model}」（或这个服务）不收音频：去掉音频附件再发，或在「模型服务 › {svc}」里关掉这个型号的「音频」能力":
+    "“{model}” (or this service) doesn’t accept audio: send without the audio attachment, or turn off audio for this model in Model providers › {svc}",
+  "「{model}」不是对话模型（语音识别 / 合成、向量这类）：换一个型号，或在「模型服务 › {svc}」里把它关掉":
+    "“{model}” isn’t a chat model (speech recognition / synthesis, embeddings and the like): pick another model, or turn it off in Model providers › {svc}",
+  "「{svc}」的 API Key 被拒绝或没有这个型号的权限：去「模型服务 › {svc2}」检查 Key 和鉴权方式":
+    "The API key for “{svc}” was rejected or lacks access to this model: check the key and authentication in Model providers › {svc2}",
 
   // ── 项目 / 工作空间（projects.ts、tenant.ts、index.ts）─────────────────────────
   "项目名称不能为空": "Enter a project name",
@@ -283,6 +344,8 @@ export default {
   "所选工作空间不是有效文件夹": "The selected workspace isn’t a valid folder",
   "快照桶不能作为项目导入": "A snapshot workspace can’t be imported as a project",
   "快照对话不参与置顶/隐藏": "Snapshot chats can’t be pinned or hidden",
+  "快照对话不能改名": "Snapshot chats can’t be renamed",
+  "快照已经换过了，请刷新后再试": "The snapshot has already changed. Refresh and try again.",
   // 租户实例的越界报错：{what} 只有这四种（tenant.ts assertInTenant 的调用方），逐个成键——「工作区」在这里是工作空间文件夹，不是侧边面板
   "路径超出了你的工作空间：{path}": "Path is outside your workspace: {path}",
   "工作区超出了你的工作空间：{path}": "Folder is outside your workspace: {path}",

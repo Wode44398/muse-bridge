@@ -27,8 +27,8 @@ import { editTool } from "../tools/edit.ts";
 import { bashTool, shell } from "../tools/bash.ts";
 import { disabledTools } from "../tenant.ts";
 import { verificationAuditTool } from "../tools/verificationaudit.ts";
-import { allProviders, clampEffort, defaultModel, providerBaseUrl } from "../catalog.ts";
-import { resolveKey } from "../config.ts";
+import { allProviders, clampEffort, defaultModel } from "../catalog.ts";
+import { providerEndpoint, resolveKey } from "../config.ts";
 import { coerceToSchema, formatSchemaErrors, validateSchema } from "./schema.ts";
 import type { UsageDelta } from "../usage-ledger.ts";
 
@@ -145,6 +145,8 @@ export interface SubAgentEnv {
   model: string;
   baseUrl?: string;
   thinking: ThinkingLevel;
+  // fast mode 开关（现读全局设置）；子 agent 换了不支持的型号时适配器自己不发
+  fast?: () => boolean;
   sandbox: Sandbox;
   limits: { bashTimeoutMs: number; bashMaxTimeoutMs: number };
   // Live getters, not snapshots: plan approval flips the parent's mode mid-run
@@ -303,7 +305,7 @@ function resolveTarget(env: SubAgentEnv, req: SubAgentRequest): Target | { error
     const key = resolveKey(provider);
     if (!key) return { error: `model "${model}" needs provider "${provider}", which has no API key configured` };
     apiKey = key;
-    baseUrl = providerBaseUrl(provider);
+    baseUrl = providerEndpoint(provider);
   }
   return { provider, model, apiKey, baseUrl, thinking: clampEffort(provider, model, req.thinking ?? env.thinking) };
 }
@@ -370,6 +372,7 @@ export function makeSubAgentRunner(
       apiKey: target.apiKey,
       model: target.model,
       baseUrl: target.baseUrl,
+      fast: env.fast,
     });
 
     const tools = tierTools(tier);

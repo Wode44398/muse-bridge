@@ -141,6 +141,8 @@ export function buildMemoryOverview(opts: {
     }
     for (const name of dirs) {
       const dir = path.join(opts.quickRoot, name);
+      // 已「存为工作空间」的桶在上面按项目列过了，同一份记忆不出现两次
+      if (seen.has(fold(dir))) continue;
       let createdAt = 0;
       try {
         const st = statSync(dir);

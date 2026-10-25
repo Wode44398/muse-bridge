@@ -1,10 +1,12 @@
 // Claude 分页右侧栏的终端服务：一个工作空间一个 PTY（PowerShell，cwd=工作空间），
-// 断开重连不丢现场（滚回缓冲 + SSE 快照重放）。node-pty 经 createRequire 惰性加载，
-// 沿用 agy.mjs 的约定——桌面 Electron 的 node 环境编不出原生模块，谁用谁加载。
+// 断开重连不丢现场（滚回缓冲 + SSE 快照重放）。node-pty 经 createRequire 惰性加载——
+// 桌面 Electron 的 node 环境编不出原生模块，谁用谁加载。
 
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { sseWrite } from './sse.mjs';
+import { poolKey, refPath, refOwner, HOST_OWNER } from './principal.mjs';
+import { terminalEnv } from './member-boundary.mjs';
 
 const require = createRequire(import.meta.url);
 let ptyLib = null;
@@ -18,7 +20,14 @@ const fold = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase(
 const clampC = (n) => Math.max(20, Math.min(320, Math.floor(+n || 100)));
 const clampR = (n) => Math.max(5, Math.min(120, Math.floor(+n || 30)));
 
-const terms = new Map(); // key(folded ws) -> term
+// 池键 =（属主, 工作空间）（开源路线 C6）：下面每个函数的 ws 参数可以是路径，也可以是
+// principal.poolRef(ctx, 路径)。主机身份与只给路径的老调用方仍只按路径（键与以前逐字一致）；
+// 其他身份带属主前缀——将来两个人进了同一个共享目录，也接不到对方的 shell（环境变量、历史）。
+const keyOf = (ws) => poolKey(ws, fold);
+// 池项的属主：主机身份与只给路径的老调用方都记成 'admin'，其余是 owner 键原样（'u:<账号 id>' / 'c:<令牌>'…）。
+const ownerOfRef = (ref) => { const o = refOwner(ref); return o && o !== HOST_OWNER ? o : HOST_OWNER; };
+
+const terms = new Map(); // key((属主 +) folded ws) -> term
 
 function shellSpec() {
   if (process.platform === 'win32') return { file: 'powershell.exe', args: ['-NoLogo'] };
@@ -26,8 +35,9 @@ function shellSpec() {
 }
 
 // 取或创建该工作空间的终端。已退出的旧壳原地重生（保留同一个入口语义）。
-export function ensureTerm(ws, cols, rows) {
-  const key = fold(ws);
+export function ensureTerm(ref, cols, rows) {
+  const ws = refPath(ref);
+  const key = keyOf(ref);
   let t = terms.get(key);
   if (t && !t.exited) return t;
   if (t) terms.delete(key);
@@ -36,12 +46,13 @@ export function ensureTerm(ws, cols, rows) {
     let oldest = null;
     for (const x of terms.values()) if (!x.subs.size && (!oldest || x.lastUsed < oldest.lastUsed)) oldest = x;
     if (!oldest) throw Object.assign(new Error('终端数量已达上限'), { status: 429 });
-    killTerm(oldest.ws);
+    dropTerm(oldest);
   }
   const { file, args } = shellSpec();
   const c = clampC(cols), r = clampR(rows);
-  const pty = loadPty().spawn(file, args, { name: 'xterm-256color', cols: c, rows: r, cwd: ws, env: process.env });
-  t = { ws, key, pty, chunks: [], bytes: 0, subs: new Set(), taps: new Set(), lastUsed: Date.now(), cols: c, rows: r, exited: false };
+  // 成员工作区（属主不是主机身份，或路径在用户根 / 快照桶下）的终端：按名字剔掉凭据与 bridge 内部变量（runtime/member-boundary.mjs）
+  const pty = loadPty().spawn(file, args, { name: 'xterm-256color', cols: c, rows: r, cwd: ws, env: terminalEnv(ws, process.env, { owner: refOwner(ref) }) });
+  t = { ws, key, owner: ownerOfRef(ref), pty, chunks: [], bytes: 0, subs: new Set(), taps: new Set(), lastUsed: Date.now(), cols: c, rows: r, exited: false };
   pty.onData((d) => {
     // 有产出也算活着——agent 起的长跑任务（编译/下载）没人订阅也不该被 reaper 半路收走。
     t.lastUsed = Date.now();
@@ -62,11 +73,11 @@ export function ensureTerm(ws, cols, rows) {
 }
 
 export function getTerm(ws) {
-  return terms.get(fold(ws)) || null;
+  return terms.get(keyOf(ws)) || null;
 }
 
 export function writeTerm(ws, data) {
-  const t = terms.get(fold(ws));
+  const t = terms.get(keyOf(ws));
   if (!t || t.exited) return false;
   t.lastUsed = Date.now();
   t.pty.write(String(data));
@@ -74,7 +85,7 @@ export function writeTerm(ws, data) {
 }
 
 export function resizeTerm(ws, cols, rows) {
-  const t = terms.get(fold(ws));
+  const t = terms.get(keyOf(ws));
   if (!t || t.exited) return false;
   t.cols = clampC(cols);
   t.rows = clampR(rows);
@@ -83,12 +94,32 @@ export function resizeTerm(ws, cols, rows) {
 }
 
 export function killTerm(ws) {
-  const t = terms.get(fold(ws));
-  if (!t) return false;
-  terms.delete(t.key);
+  const t = terms.get(keyOf(ws));
+  return t ? dropTerm(t) : false;
+}
+
+// 按池里的那一项收掉（回收器 / 上限踢人用：它们手里是 term 本身，不再拿路径反查——带属主前缀的键反查不回来）。
+// end:true = 连观众的 SSE 一起断开（账号删除 / 停用：已经打开的直播流不会重新鉴权，不能让他接着看输出）。
+// 平时的 kill 不断流：面板收到 exit 自己显示「已退出」，断了 EventSource 会自动重连、又开出一个新壳。
+function dropTerm(t, { end = false } = {}) {
+  if (terms.get(t.key) === t) terms.delete(t.key);
   try { t.pty.kill(); } catch { /* already gone */ }
   for (const res of t.subs) sseWrite(res, { type: 'exit', code: -1 });
+  if (end) {
+    for (const res of t.subs) { try { res.end(); } catch { /* 已断 */ } }
+    t.subs.clear();
+  }
   return true;
+}
+
+// 按属主收掉他名下的全部终端（账号删除 / 停用时调，runtime/account-lifecycle.mjs 按这个名字取）。
+// owner = owner 键（'u:<账号 id>' 等）；主机的终端只有显式传 'admin' 才收。返回收掉几个。
+export function killTermsOf(owner) {
+  const o = String(owner || '');
+  if (!o) return 0;
+  let n = 0;
+  for (const t of [...terms.values()]) if (t.owner === o) { dropTerm(t, { end: true }); n++; }
+  return n;
 }
 
 export function snapshotTerm(t) {
@@ -112,7 +143,7 @@ export function tapTerm(t, cb) {
 const reaper = setInterval(() => {
   const now = Date.now();
   for (const t of [...terms.values()]) {
-    if (t.exited || (!t.subs.size && now - t.lastUsed > IDLE_MS)) killTerm(t.ws);
+    if (t.exited || (!t.subs.size && now - t.lastUsed > IDLE_MS)) dropTerm(t);
   }
 }, 5 * 60 * 1000);
 reaper.unref?.();

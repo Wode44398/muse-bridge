@@ -17,6 +17,8 @@ const cid = (() => {
     return v;
   } catch { return 'c' + Math.random().toString(36).slice(2, 10); }
 })();
+// 本标签页的客户端 id（sessionStorage，刷新不变）：视图上报带它；agent 的界面指令（ui.cmd）按它点名「只让这一端执行」。
+export const uiClientId = cid;
 const clientKind = () => 'web';
 
 // —— ① 视图上报（防抖合并；登录前/离线失败静默）——

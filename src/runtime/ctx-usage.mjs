@@ -18,6 +18,7 @@ let _file = '';
 const usages = new Map();    // key|sid -> usage（归一后）
 const efforts = new Map();   // key|sid -> { level, at }
 const commands = new Map();  // key -> { commands:[{name,description,argumentHint}], terminal:[], at }
+const nativeMax = new Map(); // model -> 模型原生窗口（只从没设 autoCompactWindow 的轮记）
 const MAX_USAGES = 60;
 let saveTimer = null;
 
@@ -26,7 +27,7 @@ export function initCtxUsage(root) {
   if (!existsSync(_file)) return;
   try {
     const s = JSON.parse(readFileSync(_file, 'utf8'));
-    for (const [k, v] of Object.entries(s?.usages || {})) if (v && typeof v === 'object' && v.max > 0) usages.set(k, v);
+    for (const [k, v] of Object.entries(s?.usages || {})) if (v && typeof v === 'object' && v.max > 0) { usages.set(k, v); noteNative(v); }
     for (const [k, v] of Object.entries(s?.efforts || {})) if (v && typeof v === 'object') efforts.set(k, v);
     for (const [k, v] of Object.entries(s?.commands || {})) if (v && Array.isArray(v.commands)) commands.set(k, v);
   } catch {}
@@ -66,20 +67,70 @@ export function categoryKind(c) {
 const num = (v) => (typeof v === 'number' && isFinite(v) ? v : 0);
 const str = (v, n = 200) => String(v == null ? '' : v).slice(0, n);
 
+// 自动压缩点（用量弹层滑块，2026-10-10）：走官方设置项 autoCompactWindow（= /autocompact 命令那个，
+// 合法 100k–1M）。CLI 实测：窗口 W → 阈值 W − 33k、getContextUsage 的 maxTokens/rawMaxTokens 都变成 W、
+// autocompactSource='settings'。所以 ① 想在 P 处压缩就传 W = P + 33k；② 归一时把上限换回模型原生窗口，
+// 计量条照旧按整窗画、滑块位置才对得上。CLAUDE_AUTOCOMPACT_PCT_OVERRIDE 不进 getContextUsage 的
+// autoCompactThreshold（实测仍报默认值），面板会说谎，不用它。
+export const COMPACT_GAP = 33_000;
+const COMPACT_WIN_MIN = 100_000, COMPACT_WIN_MAX = 1_000_000;
+function noteNative(v) {
+  if (v && v.model && v.max > 0 && v.autocompact?.source !== 'settings' && !v.autocompact?.window) nativeMax.set(v.model, v.max);
+}
+// 模型原生窗口：先查记过的，没记过按 id 猜（bridge 的 Claude 默认都跑 1M 档；猜大了 CLI 会把窗口夹回模型上限）。
+export function nativeWindow(model) {
+  const m = String(model || '');
+  return nativeMax.get(m) || (/haiku-4/.test(m) ? 200_000 : 1_000_000);
+}
+// 滑块位置（占原生窗口的比例）→ autoCompactWindow；到默认点及以上 = 不覆盖（auto）。
+export function compactWindowFor(frac, model) {
+  if (!(typeof frac === 'number' && frac > 0 && frac < 1)) return undefined;
+  const native = nativeWindow(model);
+  const w = Math.round(frac * native) + COMPACT_GAP;
+  if (w >= native) return undefined;
+  return Math.max(COMPACT_WIN_MIN, Math.min(COMPACT_WIN_MAX, w));
+}
+
+// 自定义 API 的模型（runtime/claude-providers.mjs）：真实窗口经 CLAUDE_CODE_MAX_CONTEXT_TOKENS 告诉 CLI
+//（providerEngineEnv；CLI 不认识第三方型号，只认这个变量，autoCompactWindow 会被它夹回 200K）。
+// 没设压缩点 → 不覆盖（CLI 按真实窗口自己定阈值，小窗口模型也能在溢出前压缩）；设了 → 按比例，同官方模型夹进
+// autoCompactWindow 合法区间（100k–1M）：200K 窗口设得低时夹到 100K（约 67K 压缩，比不覆盖的约 167K 更接近用户要的）；
+// 原生窗口不到 100K 的，CLI 按 min(真实窗口, 设置窗口) 自己夹回去，等于不覆盖。
+export function customCompactWindow(frac, contextWindow) {
+  if (!(typeof frac === 'number' && frac > 0 && frac < 1)) return undefined;
+  const native = Number(contextWindow) > 0 ? Number(contextWindow) : 200_000;
+  const w = Math.round(frac * native) + COMPACT_GAP;
+  if (w >= native) return undefined;
+  return Math.max(COMPACT_WIN_MIN, Math.min(COMPACT_WIN_MAX, w));
+}
+// 自定义模型的原生窗口由配置给出（CLI 报的 model 是裸型号，按 id 猜会猜成 1M）：开跑时记一笔，用量面板据此画整窗。
+export function noteNativeWindow(model, max) {
+  if (model && Number(max) > 0) nativeMax.set(String(model), Number(max));
+}
+
 // SDK 的 SDKControlGetContextUsageResponse → 前端面板用的紧凑结构（几 KB，可持久化）。
 export function normalizeContextUsage(u, model = '') {
   if (!u || typeof u !== 'object') return null;
-  const max = num(u.rawMaxTokens) || num(u.maxTokens);
-  if (!max) return null;
+  const reported = num(u.rawMaxTokens) || num(u.maxTokens);
+  if (!reported) return null;
+  const mdl = str(u.model || model, 60);
+  const overridden = u.autocompactSource === 'settings';
+  const max = overridden ? Math.max(reported, nativeWindow(mdl)) : reported;
   const categories = (Array.isArray(u.categories) ? u.categories : []).map((c) => ({
     name: str(c.name, 60), tokens: num(c.tokens), kind: categoryKind(c), color: str(c.color, 40),
   }));
+  // 覆盖时 CLI 的 Free space 是按 W 算的：补成按原生窗口算（已用 + buffer 不变）。
+  if (overridden && max > reported) {
+    const taken = categories.filter((c) => c.kind === 'used' || c.kind === 'buffer').reduce((a, c) => a + c.tokens, 0);
+    const free = categories.find((c) => c.kind === 'free');
+    if (free) free.tokens = Math.max(0, max - taken);
+  }
   // 已用 = 非 free、非 deferred 的类别之和（官方 w()）；SDK 的 totalTokens 是同一口径的自报值，
   // 两者取自报值优先（它含未归类的零头），没有再用求和。
   const summed = categories.filter((c) => c.kind === 'used' || c.kind === 'buffer').reduce((a, c) => a + c.tokens, 0);
   const total = num(u.totalTokens) || summed;
-  return {
-    model: str(u.model || model, 60),
+  const out = {
+    model: mdl,
     total, max,
     pct: Math.max(0, Math.min(100, Math.round(total / max * 100))),
     categories,
@@ -89,9 +140,14 @@ export function normalizeContextUsage(u, model = '') {
     skills: Array.isArray(u.skills?.skillFrontmatter)
       ? u.skills.skillFrontmatter.map((s) => ({ name: str(s.name, 80), source: str(s.source, 40), plugin: str(s.pluginName, 60), tokens: num(s.tokens) }))
       : [],
-    autocompact: { enabled: !!u.isAutoCompactEnabled, threshold: num(u.autoCompactThreshold), source: str(u.autocompactSource, 30) },
+    autocompact: {
+      enabled: !!u.isAutoCompactEnabled, threshold: num(u.autoCompactThreshold), source: str(u.autocompactSource, 30),
+      ...(overridden ? { window: reported } : {}),   // 本轮生效的 autoCompactWindow（前端据此反推默认压缩点）
+    },
     at: Date.now(),
   };
+  noteNative(out);
+  return out;
 }
 
 export function applyContextUsage(key, sessionId, usage) {

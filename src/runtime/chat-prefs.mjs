@@ -21,7 +21,8 @@ function load(file) {
   let data = null;
   try { data = JSON.parse(readFileSync(file, 'utf8')); } catch {}
   if (!data || typeof data !== 'object') data = {};
-  if (!data.sessions || typeof data.sessions !== 'object') data.sessions = {};
+  // 会话表按会话 id 做键：用无原型对象，键名是 __proto__ / constructor 也只是普通键（10-21 审查）
+  data.sessions = Object.assign(Object.create(null), data.sessions && typeof data.sessions === 'object' ? data.sessions : {});
   cache.set(file, data);
   return data;
 }
@@ -39,14 +40,24 @@ const norm = (p) => ({
   effort: p && typeof p.effort === 'string' && p.effort ? p.effort : null,
   fast: !!(p && p.fast),
 });
+// 会话级输出风格覆盖（2026-10-20，官方会话菜单「Output style」同款）：只挂在会话条目上，不进 last——
+// 新会话从设置里的默认风格起步（官方语义），不沿用上一个会话单独选的。null = 跟随默认。
+const styleOf = (p) => (p && typeof p.outputStyle === 'string' && p.outputStyle ? p.outputStyle : null);
 
 export function recordChatPrefs(ctx, sessionId, prefs) {
   if (!ctx?.dataDir || !sessionId) return;
   const file = fileFor(ctx);
   const data = load(file);
-  const entry = { ...norm(prefs), at: Date.now() };
+  // 会话条目上挂两样会话级覆盖，每轮记选择器时都要保住：
+  //  · outputStyle（会话菜单选的输出风格）：请求没带（老客户端 / 没改过）就保留原有的；
+  //  · permissionMode（runtime/permissions.mjs 经 setChatPrefsPermissionMode 写）：原样带上。
+  // 两者都不进 last——新对话的默认风格 / 模式另有来源（设置默认、按文件夹记忆）。
+  const prev = data.sessions[sessionId];
+  const style = prefs && prefs.outputStyle !== undefined ? styleOf(prefs) : styleOf(prev);
+  const prevMode = prev?.permissionMode;
+  const entry = { ...norm(prefs), ...(style ? { outputStyle: style } : {}), ...(prevMode ? { permissionMode: prevMode } : {}), at: Date.now() };
   data.sessions[sessionId] = entry;
-  data.last = entry;
+  data.last = { ...norm(prefs), at: entry.at };
   const ids = Object.keys(data.sessions);
   if (ids.length > CAP) {
     ids.sort((a, b) => (data.sessions[a]?.at || 0) - (data.sessions[b]?.at || 0));
@@ -75,6 +86,34 @@ export function swapChatPrefsModel(ctx, sessionId, model, from) {
   const data = load(file);
   const cur = data.sessions[sessionId] || norm(null);
   data.sessions[sessionId] = { ...cur, model, swappedFrom: from || cur.swappedFrom || null, swappedAt: Date.now(), at: Date.now() };
+  persist(file, data);
+}
+
+// 会话菜单里给单个会话选输出风格（null = 回到设置里的默认）。下一轮起生效：风格进了启动参数签名，
+// 停放的 CLI 判「options changed」冷起。不动 at——这不是选择器记忆，别让它顶掉别的设备上刚选的模型。
+export function setChatPrefsOutputStyle(ctx, sessionId, style) {
+  if (!ctx?.dataDir || !sessionId) return;
+  const file = fileFor(ctx);
+  const data = load(file);
+  const cur = data.sessions[sessionId] || { ...norm(null), at: 0 };
+  const next = { ...cur };
+  if (style) next.outputStyle = style; else delete next.outputStyle;
+  data.sessions[sessionId] = next;
+  persist(file, data);
+}
+
+// 会话级权限模式（runtime/permissions.mjs）：会话里切模式、CLI 自己报来的模式变化（计划批准 / 模型自行进入计划）
+// 都记在该会话的条目上，下一轮 spawn 时按它显式传 permissionMode。只改这一个字段。
+export function setChatPrefsPermissionMode(ctx, sessionId, mode) {
+  if (!ctx?.dataDir || !sessionId || !mode) return;
+  const file = fileFor(ctx);
+  const data = load(file);
+  // 还没有条目（Desktop / 终端开的会话、被 CAP 淘汰的）：占位条目的 at 记 0——前端按 at 合并选择器记忆，
+  // 占位的 null 模型 / effort 不能盖掉本机给这个会话记的选择
+  const cur = data.sessions[sessionId] || { ...norm(null), at: 0 };
+  if (cur.permissionMode === mode) return;
+  // at 不动：它是选择器（model/effort/fast）跨设备合并的时间戳，模式变化不该让服务端那份「更新」盖掉本机刚选的模型
+  data.sessions[sessionId] = { ...cur, permissionMode: mode };
   persist(file, data);
 }
 

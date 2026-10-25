@@ -105,6 +105,9 @@
 /* 行内已按行级放大时，token 的 em 缩放归一，防复利 */
 .mde .mde-line-h1 .mde-t-h, .mde .mde-line-h2 .mde-t-h, .mde .mde-line-h3 .mde-t-h,
 .mde .mde-line-h4 .mde-t-h, .mde .mde-line-h5 .mde-t-h, .mde .mde-line-h6 .mde-t-h { font-size: inherit; }
+/* 段落下单个「-」（setext 下划线要 ≥2 个，同 Obsidian）：语法树仍是 SetextHeading2，高亮照样打 mde-t-h2；
+   这几行（livePreview.js singleDashPlain，两种模式都挂）的标题 token 归一成正文字号字重 */
+.mde .mde-line-sdash .mde-t-h { font-size: inherit; font-weight: inherit; }
 
 /* ———— 行级：引用 / callout 源码态 / 数学源码态 / frontmatter 源码态 ———— */
 /* 引用：「>」前缀恒隐藏，正文起点 = 3px 边线 + 16px = 阅读态 blockquote 的 19px。嵌套层级的竖线
@@ -235,6 +238,11 @@
 .mde .mde-imgwrap:hover .mde-img-rs, .mde .mde-img-active .mde-img-rs, .mde .mde-img-resizing .mde-img-rs { opacity: 1; }
 .mde .mde-img-resizing .mde-img { outline: 2px solid var(--md-accent); outline-offset: 1px; }
 .mde .mde-img-broken { color: var(--md-fg-3); background: var(--md-bg-2); border: 1px dashed var(--md-line-2); border-radius: 8px; padding: 3px 10px; font-size: .85em; }
+/* 地址还在解析（出链索引在路上，通常几百毫秒）：淡色占位块，不发请求、不显示「加载失败」 */
+.mde .mde-img-pending { width: 160px; max-width: 100%; height: 96px; border-radius: 8px; background: var(--md-bg-2); vertical-align: bottom; }
+/* callout 卡里的 ![[图]]（HTML 由 obsmd 出，同阅读态 img.wk-pending）：同一副占位块；写了尺寸的按它的宽 */
+.mde .mde-callout-w img.wk-pending { display: inline-block; max-width: 100%; height: 96px; border-radius: 8px; background: var(--md-bg-2); vertical-align: bottom; }
+.mde .mde-callout-w img.wk-pending:not([width]) { width: 160px; }
 
 /* 数学：块公式不再「widget 内边距 .5em + KaTeX 自带 1em 外边距 + 空行」三层叠，四周留白与阅读态
    同一量级，揭示前后高度也接近；源码态左右 14px、首末行圆角 + 6px（类由 livePreview 挂）——和代码块同一副框 */
@@ -518,3 +526,4 @@
   animation: mde-upl-spin .8s linear infinite;
 }
 @keyframes mde-upl-spin { to { transform: rotate(360deg); } }
+.mde .mde-upl-block { padding: 4px 0; }   /* 块尾落点（阅读态插图）：标记独占一行，画在那一块下面 */

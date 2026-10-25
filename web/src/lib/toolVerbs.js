@@ -106,6 +106,92 @@ const BROWSER = {
   browser_batch: ['Performing browser actions', 'Performed browser actions'],
 };
 
+// —— 官方 Claude Desktop 专有工具（3.1623 渲染层 shared-130 的 yz 表，原文照录）——
+// 只在打开官方桌面端建的会话、走历史重建时出现（bridge 自己不挂这些 MCP）。以前落进默认分支，显示成
+// 「Used ccd session mgmt: list sessions」。[running, done, meta]：meta=true 取 summary（标题 / 路径 / 查询词）当行尾，
+// 其余不带（summary 兜底取的是第一个字符串字段，对这些工具多半是 id 或 "first_task" 之类，挂上去反而难看）。
+// 本轮任务清单（update_plan）、下一步框（wrap_up）、章节（mark_chapter）官方另有整块渲染，bridge 先给一行动词。
+const DESKTOP_TOOLS = {
+  mcp__ccd_turn__update_plan: ['Updating the plan', 'Updated the plan'],
+  mcp__ccd_turn__wrap_up: ['Wrapping up', 'Wrapped up', true],
+  mcp__ccd_session__mark_chapter: ['Starting a chapter', 'Started a chapter', true],
+  MarkChapter: ['Starting a chapter', 'Started a chapter', true],
+  mcp__ccd_connectors__session_connectors_status: ['Checking session connectors', 'Checked session connectors'],
+  mcp__ccd_connectors__set_session_connector_enabled: ['Updating connector', 'Updated connector'],
+  mcp__ccd_connectors__reconnect_session_connector: ['Requesting connector reconnect', 'Requested connector reconnect'],
+  mcp__ccd_directory__request_directory: ['Asking to access a folder', 'Asked to access a folder'],
+  mcp__ccd_directory__change_directory: ['Asking to move this session to a folder', 'Asked to move this session to a folder'],
+  mcp__ccd_directory__propose_branch: ['Asking which branch to use', 'Asked which branch to use'],
+  mcp__ccd_session__start_session: ['Starting session', 'Started session', true],
+  mcp__ccd_session__hand_off_to_session: ['Handing off to a new session', 'Handed off to a new session', true],
+  mcp__ccd_session__move_to_cloud: ['Moving session to the cloud', 'Moved session to the cloud'],
+  mcp__ccd_session__list_start_targets: ['Checking where a session can start', 'Checked where a session can start'],
+  mcp__ccd_session__dismiss_task: ['Withdrawing suggestion', 'Withdrew suggestion'],
+  mcp__ccd_session__read_widget_context: ['Reading widget context', 'Read widget context'],
+  mcp__ccd_session_mgmt__list_sessions: ['Listing sessions', 'Listed sessions'],
+  mcp__ccd_session_mgmt__get_session: ['Looking up session', 'Looked up session'],
+  mcp__ccd_session_mgmt__search_session_transcripts: ['Searching sessions', 'Searched sessions', true],
+  mcp__ccd_session_mgmt__list_events: ['Reading session transcript', 'Read session transcript'],
+  mcp__ccd_session_mgmt__archive_session: ['Archiving session', 'Archived session'],
+  mcp__ccd_session_mgmt__set_session_title: ['Renaming session', 'Renamed session'],
+  mcp__ccd_session_mgmt__send_message: ['Messaging session', 'Message sent to another session'],
+  mcp__ccd_session_mgmt__unarchive_session: ['Unarchiving session', 'Unarchived session'],
+  mcp__ccd_session_mgmt__stop_session: ['Stopping session', 'Stopped session'],
+  mcp__ccd_session_mgmt__clear_session: ['Clearing session', 'Cleared session'],
+  mcp__ccd_session_mgmt__delete_session: ['Deleting sessions', 'Deleted sessions'],
+  mcp__ccd_session_mgmt__set_session_model: ['Changing session model', 'Changed session model'],
+  mcp__ccd_session_mgmt__set_session_effort: ['Changing session effort', 'Changed session effort'],
+  mcp__ccd_session_mgmt__set_remote_control: ['Updating Remote Control', 'Updated Remote Control'],
+  mcp__ccd_session_mgmt__get_usage: ['Checking usage', 'Checked usage'],
+  mcp__ccd_session_mgmt__export_transcript: ['Exporting transcript', 'Exported transcript'],
+  mcp__ccd_session_mgmt__set_session_permission_mode: ['Changing session permission mode', 'Changed session permission mode'],
+  mcp__ccd_session_mgmt__set_session_fast_mode: ['Changing session fast mode', 'Changed session fast mode'],
+  mcp__ccd_session_mgmt__set_session_output_style: ['Changing session output style', 'Changed session output style'],
+  mcp__ccd_session_mgmt__detach_session: ['Moving session to top level', 'Moved session to top level'],
+  mcp__ccd_host__open_in_editor: ['Opening in editor', 'Opened in editor', true],
+  mcp__ccd_host__reveal_path: ['Showing in file manager', 'Shown in file manager', true],
+  mcp__ccd_host__request_keep_awake: ['Keeping computer awake', 'Set computer to stay awake'],
+  mcp__ccd_host__get_storage_usage: ['Checking storage', 'Checked storage'],
+  mcp__ccd_host__clean_up_worktrees: ['Cleaning up inactive worktrees', 'Cleaned up inactive worktrees'],
+  mcp__ccd_host__discard_kept_worktree: ['Discarding kept worktree', 'Discarded kept worktree'],
+  mcp__ccd_host__sync_with_base_branch: ['Merging base branch', 'Merged base branch'],
+  mcp__ccd_pr__get_status: ['Checking pull request', 'Checked pull request'],
+  mcp__ccd_pr__set_monitor: ['Updating pull request settings', 'Updated pull request settings'],
+  mcp__ccd_pr__set_auto_merge: ['Updating auto-merge', 'Updated auto-merge'],
+  mcp__ccd_pr__bind_pr: ['Adding pull request', 'Added pull request'],
+  mcp__ccd_pr__unbind_pr: ['Dismissing pull request', 'Dismissed pull request'],
+  mcp__ccd_sidebar__list_groups: ['Listing groups', 'Listed groups'],
+  mcp__ccd_sidebar__create_group: ['Creating group', 'Created group'],
+  mcp__ccd_sidebar__rename_group: ['Renaming group', 'Renamed group'],
+  mcp__ccd_sidebar__delete_group: ['Deleting group', 'Deleted group'],
+  mcp__ccd_sidebar__move_sessions: ['Moving sessions', 'Moved sessions'],
+  mcp__ccd_sidebar__set_pinned: ['Updating pinned sessions', 'Updated pinned sessions'],
+  mcp__ccd_sidebar__set_unread: ['Updating unread sessions', 'Updated unread sessions'],
+  mcp__ccd_sidebar__mark_completed: ['Updating completed sessions', 'Updated completed sessions'],
+  mcp__ccd_sidebar__set_view: ['Changing sidebar view', 'Changed sidebar view'],
+  mcp__ccd_sidebar__list_sections: ['Listing sections', 'Listed sections'],
+  mcp__ccd_sidebar__create_section: ['Creating section', 'Created section'],
+  mcp__ccd_sidebar__rename_section: ['Renaming section', 'Renamed section'],
+  mcp__ccd_sidebar__delete_section: ['Deleting section', 'Deleted section'],
+  mcp__ccd_window__open_session_in: ['Opening session', 'Opened session'],
+  mcp__ccd_window__close_split: ['Closing split view', 'Closed split view'],
+  mcp__ccd_window__set_sidebar_collapsed: ['Updating sidebar', 'Updated sidebar'],
+  mcp__ccd_window__get_window_layout: ['Checking window layout', 'Checked window layout'],
+  mcp__ccd_view__show_pane: ['Opening pane', 'Opened pane'],
+  mcp__ccd_view__close_pane: ['Closing pane', 'Closed pane'],
+  mcp__ccd_view__get_layout: ['Checking open panes', 'Checked open panes'],
+  mcp__ccd_view__set_transcript_view: ['Switching transcript view', 'Switched transcript view'],
+  mcp__ccd_settings__get_settings: ['Checking settings', 'Checked settings'],
+  mcp__ccd_settings__set_setting: ['Changing a setting', 'Changed a setting'],
+  mcp__terminal__read_terminal: ['Reading terminal', 'Read terminal'],
+  mcp__terminal__run_in_terminal: ['Starting command in terminal', 'Started command in terminal'],
+  mcp__terminal__open_terminal_tab: ['Opening terminal tab', 'Opened terminal tab'],
+  mcp__terminal__list_terminal_tabs: ['Listing terminal tabs', 'Listed terminal tabs'],
+  mcp__terminal__stop_terminal_tab: ['Stopping terminal tab', 'Stopped terminal tab'],
+};
+// 表外的 mcp__ccd_* 新工具：别再显示「Used ccd …」，退成「Used Claude Desktop: <工具名>」
+const isDesktopMcp = (name) => /^mcp__ccd_[a-z_]+__/.test(name);
+
 // —— 描述句变位（官方 ll/Yh）——
 // "Fix login bug" → running "Fixing login bug" / done "Fixed login bug" / infinitive "fix login bug"
 const PREFIX_RE = /^(re|un|de|pre|co|sub|over|out|mis|auto|post)-(.+)$/i;
@@ -310,7 +396,37 @@ export function toolVerb(tool) {
       if (to) return R(`Messaged @${to}`, `Messaging @${to}`, `Failed to message @${to}`, fallback, { kind: 'peerMessage' });
       return R('Messaged teammate', 'Messaging teammate', 'Failed to message teammate', fallback, { kind: 'peerMessage' });
     }
+    // 会话协作（bridge 自己的 mcp/session-tools.mjs）：meta 是会话——sessionRef 交给 ToolRow 解析成会话 id、点了跳过去
+    // start_session 按 initiation 选词（官方 c96d752d0 工具行文案）：offer = 问用户要不要新开、own_initiative = 提议卡；
+    // 带 proposal_id 的那次（卡片开始 / offer 选了新会话后补说明）照常是 Started session。卡片本身见 SessionStartCards.svelte。
+    case 'mcp__sessions__start_session': {
+      const ini = input.proposal_id ? '' : str(input.initiation);
+      const meta = norm(input.title) || fallback;
+      // offer 卡的结局（SessionStartCards 退回工具行时挂 outcome）：留在这里做 / 没作答 / 开始前被停下
+      const oc = str(tool && tool.outcome);
+      if (ini === 'offer' && oc === 'kept_here') return R('Kept in this session', 'Offering a new session', undefined, meta);
+      if (ini === 'offer' && (oc === 'unanswered' || oc === 'superseded')) return R('Not answered', 'Offering a new session', undefined, meta);
+      if (ini === 'offer' && oc === 'dismissed') return R('Stopped before it started', 'Offering a new session', undefined, meta);
+      if (ini === 'offer') return R('Offered a new session', 'Offering a new session', 'Failed to offer a new session', meta);
+      if (ini === 'own_initiative') return R('Suggested task', 'Suggesting task', 'Failed to suggest task', meta);
+      return R('Started session', 'Starting session', 'Failed to start session', meta, { sessionRef: { title: norm(input.title) } });
+    }
+    case 'mcp__sessions__dismiss_task':
+      return R('Withdrew suggestion', 'Withdrawing suggestion', 'Failed to withdraw suggestion', norm(input.task_id) || fallback, { metaIsCode: true });
+    case 'mcp__sessions__send_message':
+      return R('Messaged', 'Messaging', 'Failed to message', norm(input.to) || fallback, { sessionRef: { to: norm(input.to) } });
+    case 'mcp__sessions__read_session':
+      return R('Read session', 'Reading session', 'Failed to read session', norm(input.to) || fallback, { sessionRef: { to: norm(input.to) } });
+    case 'mcp__sessions__list_sessions':
+      return R('Listed sessions', 'Listing sessions', 'Failed to list sessions');
     default: {
+      // 官方 Desktop 专有工具（见 DESKTOP_TOOLS）
+      const dt = DESKTOP_TOOLS[name];
+      if (dt) return R(dt[1], dt[0], undefined, dt[2] ? fallback || undefined : undefined);
+      if (isDesktopMcp(name)) {
+        const tool = name.replace(/^mcp__ccd_[a-z_]+__/, '').replace(/_+/g, ' ').trim();
+        return R(`Used Claude Desktop: ${tool}`, `Using Claude Desktop: ${tool}`, undefined);
+      }
       // mcp / 未列出：先查标签表（running≠done 才成对使用），否则 "Used {label}"
       const mp = mcpParts(name);
       const key = mp ? snake(mp.tool) : snake(name);
@@ -325,8 +441,16 @@ export function toolVerb(tool) {
 // —— 官方 HD 分桶的 standalone 集合（桌面端 c06cf64bb `xr`）——
 // 这些工具永远自己一段（Workflow 的 318px 卡只在不分组时渲染，被夹进 Grep/Bash 的分组里就只剩一行字），
 // 前后连续的 tool_use 各自另起一段。服务端历史重建 runtime/tool-summary.mjs 抄了同一份——改一处记得改另一处。
-export const STANDALONE_TOOLS = new Set(['Workflow', 'ExitPlanMode', 'SendUserMessage', 'SendUserFile', 'PushNotification', 'Artifact', 'ReportFindings', 'ClaudeDesign']);
+// mcp__sessions__start_session：下面挂「新会话 / 在这里做」卡、提议卡、「已开始」卡，也自己一段（连续几次并成一组，见 toolJoins）。
+export const STANDALONE_TOOLS = new Set(['Workflow', 'ExitPlanMode', 'SendUserMessage', 'SendUserFile', 'PushNotification', 'Artifact', 'ReportFindings', 'ClaudeDesign', 'mcp__sessions__start_session']);
 export function toolStandalone(name) { return typeof name === 'string' && STANDALONE_TOOLS.has(name); }
+// 新 tool_use 能不能并进上一段（prev = 上一段最后一个工具名）。连续几次 start_session 并成一段——
+// 同一条回复里的几张提议卡画成一组（官方「{n} suggested tasks · Start all」）。服务端 tool-summary.mjs 同构。
+export const START_SESSION_TOOL = 'mcp__sessions__start_session';
+export function toolJoins(prev, name) {
+  if (prev === START_SESSION_TOOL && name === START_SESSION_TOOL) return true;
+  return !toolStandalone(name) && !(prev && toolStandalone(prev));
+}
 
 // —— 上下文压缩条目（官方 `compacted` 条目；服务端 runtime/tool-summary.mjs 抄了同一个名字）——
 // 它不是 tool_use：tools 段里一条合成条目（带 compact 字段），Claude 干活途中压缩就并进循环分组

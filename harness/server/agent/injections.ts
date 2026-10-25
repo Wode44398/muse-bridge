@@ -9,6 +9,7 @@ const KINDS: readonly [RegExp, string][] = [
   [/^\[Pre-compaction memory audit\]/, "precompact-audit-nudge"],
   [/^\[Automated check\] Your previous reply was cut off/, "length-continue"],
   [/^\[Automated check\] You have not delivered your result/, "submit-nudge"],
+  [/^\[Automated check\] Your previous reply stopped mid-sentence/, "cutoff-continue"],
   [/^\[Automated check\]/, "verify-nudge"],
   [/^\[Plan mode\]/, "plan-nudge"],
   [/^\[Budget exhausted\]/, "budget-exhausted"],
@@ -30,6 +31,7 @@ const KINDS: readonly [RegExp, string][] = [
   [/^\[Handoff\]/, "handoff-summary"], // C8：带摘要开新会话——新会话开头那条接续摘要
   [/^\[Resumed\]/, "resume"], // M13：服务重启 / 进程死掉之后自动续跑那一轮的首条
   [/^\[Auto-resume stopped\]/, "resume-stopped"], // M13：连着被切断，不再自动续跑
+  [/^\[Model switched\]/, "model-switch"], // 会话中途换了厂商 / 型号：从这里起是谁在答（别照抄前面别的模型的自我介绍）
 ];
 
 export function injectionKind(text: string): string | null {

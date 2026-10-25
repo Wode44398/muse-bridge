@@ -16,13 +16,16 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { CONFIG_PATH, OAUTH } from '../config/index.mjs';
+import os from 'node:os';
+import path from 'node:path';
+import { CONFIG_PATH, OAUTH, API_KEY_FROM_CONFIG, API_KEY_SOURCE } from '../config/index.mjs';
+import { memberEngineBase } from './member-boundary.mjs';
 
 let accounts = [];   // [{ id, label, token }]
 let activeId = '';
 
 function loadRaw() {
-  try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); } catch { return {}; }
+  try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '')); } catch { return {}; }
 }
 
 // 只改这两个字段落盘，其余配置原样保留（别覆写 token/port 等）。
@@ -40,7 +43,9 @@ function init() {
   if (Array.isArray(raw.claudeAccounts) && raw.claudeAccounts.length) {
     accounts = raw.claudeAccounts
       .filter((a) => a && typeof a === 'object')
-      .map((a) => ({ id: String(a.id || newId()), label: String(a.label || ''), token: String(a.token || '') }));
+      // 认不出的字段原样留着、落盘时照写回去（开源路线 C14：新版本加的字段，装回旧版本也不丢）。
+      // 其中 groups（[组 id]，缺省 = 所有人可用）是给将来「按组分配号」预留的，今天不参与选号（run-as.mjs accountGroups）。
+      .map((a) => ({ ...a, id: String(a.id || newId()), label: String(a.label || ''), token: String(a.token || '') }));
     activeId = (raw.claudeActiveAccount && accounts.some((a) => a.id === raw.claudeActiveAccount))
       ? raw.claudeActiveAccount : accounts[0].id;
   } else {
@@ -54,6 +59,9 @@ function init() {
 init();
 
 export function getActiveAccount() { return accounts.find((a) => a.id === activeId) || null; }
+
+// 当前激活账号 id——额度快照按号分槽（status.mjs），每轮 query 启动时取一次随事件记账。
+export function activeAccountId() { return activeId; }
 
 // 当前激活账号的 token（空串 = 不覆盖，沿用环境/登录态）。
 export function activeToken() { const a = getActiveAccount(); return a ? a.token : ''; }
@@ -78,8 +86,16 @@ export function addAccount({ label, token } = {}) {
   const l = String(label || '').trim() || ('账号 ' + (accounts.length + 1));
   const id = newId();
   accounts.push({ id, label: l, token: t });
+  // S4：当前激活的号没有 token（向导里跳过了 Claude、播种出来的空「默认账号」），加了号却不激活，
+  // Claude 照样没有认证——这时直接把新号设为激活号。
+  // 但留空令牌的号 = 沿用本机登录态（~/.claude 凭据，见文件头的播种与 claudeEngineEnv）：本机真 claude login 过，
+  // 空令牌也是在用订阅，别把全局激活号静默切走（计费跟着换号）。
+  // 例外：此刻在用 config 里的按量 key（apiKeyMode 'config'）——加订阅号就是要改用订阅，照旧激活。
+  const act = getActiveAccount();
+  const activated = !act || (!act.token && (!localLoginToken() || apiKeyMode() === 'config'));
+  if (activated) activeId = id;
   persist();
-  return { ok: true, id };
+  return { ok: true, id, ...(activated ? { active: id } : {}) };
 }
 
 export function updateAccount(id, { label, token } = {}) {
@@ -87,6 +103,17 @@ export function updateAccount(id, { label, token } = {}) {
   if (!a) return { error: '无此账号' };
   if (typeof label === 'string' && label.trim()) a.label = label.trim();
   if (typeof token === 'string' && token.trim()) a.token = token.trim();
+  persist();
+  return { ok: true };
+}
+
+// 调整账号列表顺序（控制台里上移 / 下移）。delta：-1 上移、1 下移。
+export function moveAccount(id, delta) {
+  const i = accounts.findIndex((a) => a.id === id);
+  if (i < 0) return { error: '无此账号' };
+  const j = i + (delta < 0 ? -1 : 1);
+  if (!delta || j < 0 || j >= accounts.length) return { ok: true };
+  [accounts[i], accounts[j]] = [accounts[j], accounts[i]];
   persist();
   return { ok: true };
 }
@@ -102,14 +129,40 @@ export function deleteAccount(id) {
   return { ok: true, active: activeId };
 }
 
+// 本机 claude login 留下的凭据。
+// macOS 的凭据在钥匙串里、读不到，按「没登录」算（加号照旧自动激活，同改动前）。
+function localLoginToken() {
+  const dir = String(process.env.CLAUDE_CONFIG_DIR || '').trim() || path.join(os.homedir(), '.claude');
+  try { return JSON.parse(readFileSync(path.join(dir, '.credentials.json'), 'utf8')).claudeAiOauth.accessToken || ''; } catch { return ''; }
+}
+
+// Claude 现在是不是走按量 API Key（给设置「订阅号池」页一句提示、报错卡片挑说法；来源见 config/index.mjs API_KEY_SOURCE）：
+//   'env'           环境变量给的 ANTHROPIC_API_KEY——CLI 见到它就不用 OAuth，号池里的令牌都不生效；
+//   'desktop'       桌面安装包的本机服务端、向导里选了 API Key——同上，号池令牌不生效；改用订阅号要去托盘「本机服务端 › 重新配置…」；
+//   'config'        config.json 的 anthropicApiKey（启动时号池没有令牌才注入）且激活号没有令牌——在用 key，号池里加了令牌就改用订阅号；
+//   'config-unused' config.json 里写了 anthropicApiKey 但没在用：号池里有令牌（启动时就有、没注入，或运行中激活号有了令牌）；
+//   ''              没走 API Key（用号池 / 本机登录态）。
+export function apiKeyMode() {
+  if (API_KEY_SOURCE === 'unused') return 'config-unused';
+  if (!process.env.ANTHROPIC_API_KEY) return '';
+  if (API_KEY_SOURCE === 'config') return activeToken() ? 'config-unused' : 'config';
+  return API_KEY_SOURCE === 'desktop' ? 'desktop' : API_KEY_SOURCE === 'env' ? 'env' : '';
+}
+
 // 每次跑 Claude query() 时构造子进程 env：叠加当前激活账号 token + 沙箱 configDir。
 // 返回 null 表示无需覆盖（configDir 为空且激活账号无 token）——此时让子进程直接继承
 // process.env（含 boot 时设的默认 token），行为与切换功能上线前一致。
+// 成员身份（ctx.sandbox：注册用户、聊天快照）不再继承服务进程的全部环境：没有命令行的走白名单（家目录 / 临时目录
+// 指到他自己的目录），有命令行的按名字剔掉凭据；CLI 认证要的那一份单独带上（runtime/member-boundary.mjs，开源路线 S2-5）。
 export function claudeEngineEnv(ctx) {
   let touched = false;
-  const env = { ...process.env };
+  const env = ctx && ctx.sandbox ? memberEngineBase(ctx) : { ...process.env };
+  if (ctx && ctx.sandbox) touched = true;
   if (ctx && ctx.configDir) { env.CLAUDE_CONFIG_DIR = ctx.configDir; touched = true; }
   const tok = activeToken();
   if (tok) { env.CLAUDE_CODE_OAUTH_TOKEN = tok; touched = true; }
+  // config.json 的 anthropicApiKey 只在启动时号池没有令牌才注入（config/index.mjs）；之后号池里有了激活号的令牌，
+  // 就别再把它带给 CLI——CLI 见到 ANTHROPIC_API_KEY 会关掉 OAuth，订阅号白加、照样按量计费。
+  if (tok && API_KEY_FROM_CONFIG && env.ANTHROPIC_API_KEY) { delete env.ANTHROPIC_API_KEY; touched = true; }
   return touched ? env : null;
 }

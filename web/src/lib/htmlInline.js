@@ -16,6 +16,12 @@ try{document.cookie}catch(e){var jar={};try{Object.defineProperty(document,'cook
 document.addEventListener('click',function(e){if(e.defaultPrevented||e.button)return;var a=e.target&&e.target.closest&&e.target.closest('a[href^="#"]');if(!a||(a.target&&a.target!=='_self'))return;e.preventDefault();var id=a.getAttribute('href').slice(1);try{id=decodeURIComponent(id)}catch(_){}if(!id||id==='top'){window.scrollTo(0,0);return}var el=document.getElementById(id)||document.getElementsByName(id)[0];if(el)el.scrollIntoView()});
 })();`;
 
+// Edge 同款滚动条垫片（平时隐身、滚动或移到滚条上浮出细线；根滚动条走 body，槽底色跟随页面背景）。
+// 与服务端 src/runtime/html-site.mjs 的 SCROLLBAR_SHIM 必须逐字节一致（htmlInline.test.js 校验）：路径式挂载由服务端注入，
+// srcdoc 回落路径在这里补。字面量里的 </script> 只写一层转义 <\/script>（值仍是 </script>）——多转义一层标签就关不上，
+// 整页正文被吞进脚本、srcdoc 白屏。
+export const SCROLLBAR_SHIM = "<style>@media (pointer:fine){::-webkit-scrollbar{width:12px;height:12px;background:transparent}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}::-webkit-scrollbar-button{display:none}body::-webkit-scrollbar-track,body::-webkit-scrollbar-corner{background:var(--bsb-bg,transparent)}::-webkit-scrollbar-thumb{background-color:transparent;background-clip:padding-box;border:solid transparent;border-width:0 3px 0 5px;border-radius:999px;min-height:40px}::-webkit-scrollbar-thumb:horizontal{border-width:5px 0 3px 0;min-width:40px}[data-bsb]::-webkit-scrollbar-thumb{background-color:rgba(140,140,140,.72)}::-webkit-scrollbar-thumb:hover{border-width:0 2px;background-color:rgba(140,140,140,.9)}::-webkit-scrollbar-thumb:horizontal:hover{border-width:2px 0}}</style><script>(function(){if(!window.matchMedia||!matchMedia('(pointer: fine)').matches)return;var D=document,R=D.documentElement,T=new WeakMap(),H=null;function s(e){if(!e.hasAttribute('data-bsb'))e.setAttribute('data-bsb','');clearTimeout(T.get(e))}function l(e){clearTimeout(T.get(e));T.set(e,setTimeout(function(){if(e!==H)e.removeAttribute('data-bsb')},1000))}function o(c){return c&&c!=='transparent'&&!/^rgba\\(.*,\\s*0\\)$/.test(c)}function g(){var c=getComputedStyle(R).backgroundColor;if(!o(c)&&D.body)c=getComputedStyle(D.body).backgroundColor;if(!o(c)&&D.elementsFromPoint){var a=D.elementsFromPoint(R.clientWidth-2,innerHeight/2);for(var i=0;i<a.length&&!o(c);i++)c=getComputedStyle(a[i]).backgroundColor}if(!o(c))c='#fff';if(R.style.getPropertyValue('--bsb-bg')!==c)R.style.setProperty('--bsb-bg',c)}function q(){g();setTimeout(g,450)}D.addEventListener('DOMContentLoaded',function(){q();try{var m=new MutationObserver(q),f={attributes:true,attributeFilter:['class','style','data-theme']};m.observe(R,f);m.observe(D.body,f)}catch(_){}});addEventListener('load',q);D.addEventListener('scroll',function(v){var e=v.target===D?(D.body||R):v.target;if(!(e instanceof Element))return;s(e);if(e!==H)l(e)},{capture:true,passive:true});D.addEventListener('mousemove',function(v){var e=v.target,n=null;if(e instanceof Element){if((e===R||e===D.body)&&((v.clientX>=R.clientWidth&&innerWidth>R.clientWidth+1)||(v.clientY>=R.clientHeight&&innerHeight>R.clientHeight+1)))n=D.body||R;else if(e!==R&&((v.offsetX>=e.clientWidth&&e.offsetWidth>e.clientWidth+1&&e.scrollHeight>e.clientHeight)||(v.offsetY>=e.clientHeight&&e.offsetHeight>e.clientHeight+1&&e.scrollWidth>e.clientWidth)))n=e}if(n===H)return;if(H)l(H);H=n;if(H)s(H)},{passive:true})})();<\/script>";
+
 const ASSET_MAX = 8 * 1024 * 1024;     // 单个资源上限（data: URL 会撑大 srcdoc，大视频不内联）
 const TOTAL_MAX = 32 * 1024 * 1024;    // 整页内联总量上限
 
@@ -172,5 +178,6 @@ export async function prepareHtml(html, baseUrl) {
   shim.textContent = SHIM;
   doc.head.insertBefore(shim, doc.head.firstChild);
   const dt = doc.doctype ? `<!DOCTYPE ${doc.doctype.name}>\n` : '';
-  return dt + doc.documentElement.outerHTML;
+  // 滚动条垫片按字符串拼在 <head> 开始标签之后（DOMParser 产出的文档一定有 <head>）；函数式替换，免得 $ 被当成替换模式
+  return dt + doc.documentElement.outerHTML.replace(/<head\b[^>]*>/i, (m) => m + SCROLLBAR_SHIM);
 }

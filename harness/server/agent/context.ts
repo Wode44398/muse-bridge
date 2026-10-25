@@ -291,16 +291,32 @@ function microCompact(state: AgentState, minReclaim = 0): number {
   ) ?? null;
   picks.forEach(({ m, j }, k) => {
     const b = results[k];
+    const gist = elidedGist(toolNames.get(b.id), elidedText(b.content));
     const text = saved
       ? `[old tool output elided to save context — saved under "### [tool_result ${b.id}]" in ${saved}; Grep for that line or Read the file instead of re-running the tool]`
       : ELIDED_TEXT;
-    m.content[j] = { t: "tool_result", id: b.id, ok: b.ok, content: [{ t: "text", text }] };
+    m.content[j] = { t: "tool_result", id: b.id, ok: b.ok, content: [{ t: "text", text: gist ? `${text}\nGist: ${gist}` : text }] };
   });
   return Math.ceil(freed);
 }
 
-// 占位里的路径与头大约多出这么多 token（算回收量时先扣掉，免得高估）
-const ELIDED_REF_TOKENS = 45;
+// 占位里的路径、头与 Gist 大约多出这么多 token（算回收量时先扣掉，免得高估）
+const ELIDED_REF_TOKENS = 45 + 90;
+const GIST_MAX = 300;
+
+// 被清掉的输出留一句「要点」：以前只剩一个档案指针，回头想核对一个结论（子 agent 查出的某处行为、某条命令过没过）
+// 就得 Grep 档案拿行号再 Read，两三步（2026-10-09 长会话里反复发生）。子 agent 报告本身就是浓缩的结论，留开头；
+// Bash 留命令行与末尾两行（退出码、tail 结果多在那）；其余留第一行。只是提示，全文仍在档案里。
+function elidedGist(tool: string | undefined, text: string): string {
+  const lines = text.split("\n").map((l) => l.trim()).filter((l) => l && !/^\[Sub-agent report/.test(l));
+  if (!lines.length) return "";
+  let picked: string[];
+  if (tool === "Agent" || tool === "Workflow") picked = lines.slice(0, 4);
+  else if (tool === "Bash" && lines.length > 3) picked = [lines[0], "…", ...lines.slice(-2)];
+  else picked = lines.slice(0, 1);
+  const gist = picked.join(" ⏎ ").replace(/\s+/g, " ");
+  return gist.length > GIST_MAX ? `${gist.slice(0, GIST_MAX - 1)}…` : gist;
+}
 
 function elidedText(blocks: Block[]): string {
   return blocks

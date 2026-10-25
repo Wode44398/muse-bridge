@@ -59,9 +59,9 @@ export const ui = $state({
 // Capability catalog from /api/capabilities (models, efforts).
 export const caps = $state({ loaded: false, data: null });
 
-// Who am I (/api/auth)：{ kind:'admin'|'user'|'none', user, tier, edition, agents, features, canSnapshot, service }。
+// Who am I (/api/auth)：{ kind:'admin'|'user'|'none', user, tier, tokenHashed, agents, features, canSnapshot, service }。
 // 显示哪些分页全看 agents（统一 id：claude / dimensio，服务端已把全局开关与按人授权取过交集；
-// 没登录时是服务器全局开着的名单）。edition = 'host' | 'server'；features = { multiUser, register, remoteAdmin }。
+// 没登录时是服务器全局开着的名单）。features = { multiUser, register, remoteAdmin }。
 // 初始值从同步快照(storeGet)恢复：已登录用户每次进 app 启动瞬间即按上次登录态渲染，不再
 // 闪一下"未登录"。/api/auth 回来后经 applyMe 校正（仅 token 真失效才退登录）。快照非凭证（真鉴权靠 token），伪造无害。
 function normMe(m) {
@@ -69,7 +69,7 @@ function normMe(m) {
   return {
     kind, user: m?.user || null, tier: m?.tier || null,
     agents: Array.isArray(m?.agents) ? m.agents.filter((id) => AGENT_IDS.includes(id)) : null,
-    edition: m?.edition === 'host' || m?.edition === 'server' ? m.edition : null,
+    tokenHashed: !!m?.tokenHashed,   // 服务器只存访问令牌的哈希（服务端安装）——登录框据此挑提示语
     features: m?.features && typeof m.features === 'object' ? { ...m.features } : null,
     canSnapshot: !!m?.canSnapshot, service: !!m?.service,
   };
@@ -84,7 +84,7 @@ export const me = $state(loadMe());
 export function applyMe(a) {
   // 退出登录（applyMe(null)）：服务器形态与 agent 名单不变，只把身份清掉——单 agent 的服务器退出后
   // 还该停在那一页的登录框上，而不是闪回一个满是入口的主页。
-  if (!a) a = { kind: 'none', edition: me.edition, features: me.features, agents: me.agents };
+  if (!a) a = { kind: 'none', tokenHashed: me.tokenHashed, features: me.features, agents: me.agents };
   Object.assign(me, normMe(a));
   try { storeSet('bridge-me', JSON.stringify($state.snapshot(me))); } catch {}
 }
@@ -149,10 +149,12 @@ export function toggleTheme() { setTheme(ui.theme === 'dark' ? 'light' : 'dark')
 // worktree: 输入栏分支胶囊右半的 worktree 勾选框——勾着开新对话＝先切一个 git worktree 再跑（官方同款，默认关）
 // promptSuggest: 输入建议（Claude 每轮回复完预测下一句，输入框空着时显示，Tab 填入；默认开，与官方同）
 // claudeMark: Claude 运行标记——'clay'=新版 Claude Code 的活动标记（默认）/ 'sprite'=新版 claude.ai 聊天页（星形→节点）/ 'classic'=原来的 claude.ai 星标五态
+// compactFrac: Claude 自动压缩点（用量弹层计量条上的滑块）= 占模型窗口的比例，null = 默认（CLI 自定）
 const PREFS_KEY = 'bridge-prefs';
+const fracOk = (v) => (typeof v === 'number' && v > 0 && v < 1 ? v : null);
 function loadPrefs() {
-  try { const p = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); if (p) return { followSys: !!p.followSys, noEnterAnim: !!p.noEnterAnim, fullResMedia: !!p.fullResMedia, promptSuggest: p.promptSuggest !== false, worktree: !!p.worktree, claudeMark: p.claudeMark === 'classic' || p.claudeMark === 'sprite' ? p.claudeMark : 'clay' }; } catch {}
-  return { followSys: false, noEnterAnim: false, fullResMedia: false, promptSuggest: true, worktree: false, claudeMark: 'clay' };
+  try { const p = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); if (p) return { followSys: !!p.followSys, noEnterAnim: !!p.noEnterAnim, fullResMedia: !!p.fullResMedia, promptSuggest: p.promptSuggest !== false, worktree: !!p.worktree, claudeMark: p.claudeMark === 'classic' || p.claudeMark === 'sprite' ? p.claudeMark : 'clay', compactFrac: fracOk(p.compactFrac) }; } catch {}
+  return { followSys: false, noEnterAnim: false, fullResMedia: false, promptSuggest: true, worktree: false, claudeMark: 'clay', compactFrac: null };
 }
 export const prefs = $state(loadPrefs());
 
@@ -161,7 +163,7 @@ export const prefs = $state(loadPrefs());
 // 工作台与归属芯片据此指向 worktree，而不是项目的主检出。
 export const sessionWt = $state({});
 export function savePrefs() {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ followSys: prefs.followSys, noEnterAnim: prefs.noEnterAnim, fullResMedia: prefs.fullResMedia, promptSuggest: prefs.promptSuggest, worktree: prefs.worktree, claudeMark: prefs.claudeMark })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ followSys: prefs.followSys, noEnterAnim: prefs.noEnterAnim, fullResMedia: prefs.fullResMedia, promptSuggest: prefs.promptSuggest, worktree: prefs.worktree, claudeMark: prefs.claudeMark, compactFrac: prefs.compactFrac })); } catch {}
 }
 
 // 跟随系统明暗：监听 prefers-color-scheme；开关打开瞬间也调一次（applyFollowSys）。

@@ -7,7 +7,11 @@ web/dist/
 
 # secrets & local config (access token / oauth token live here)
 config.json
+# config.json 的手工备份（键名同 config.json：令牌、oauthToken、各家 key）
+config.json.bak*
 .env
+# 贡献者自己的 agent 规则（只对自己有用的写这里，不提交）
+AGENTS.local.md
 
 # runtime data when BRIDGE_DATA_ROOT is left at the program dir (local development)
 uploads/
@@ -23,6 +27,8 @@ chat-snapshots/
 chat-snapshots.json
 claude-chat-prefs.json
 claude-projects.json
+desktop-lineage-cache.json
+desktop-lineage-cache.json.tmp
 claude-quick.json
 quickchat/
 bridge-sessions.json
@@ -32,12 +38,28 @@ share-links.json
 share-spaces.json
 share-spaces/
 status.json
+# 5 小时限额重置后自动继续的待续会话（含重放用的身份头，见 src/runtime/limit-resume.mjs）
+claude-limit-resume.json
+claude-limit-resume.json.tmp
+# 会话 ↔ 拉取请求绑定台账（含 Auto-fix 唤醒用的身份头，见 src/runtime/pr-monitor.mjs）
+claude-session-prs.json
+claude-session-prs.json.tmp
+# Claude 分页的其余按身份 / 全服数据（管理员的 dataDir 就是程序根）：全文索引（全服所有身份的对话正文）、设置、
+# 按文件夹的权限模式、归档 / 活跃 / 移出、提议卡（含任务说明）、家族台账、跨会话来源……一律不进 git
+/claude-*.json
+/claude-*.json.tmp
+# 自定义 API 模型服务：配置 + 加密的 API Key（runtime/claude-providers.mjs）
+/claude-providers/
 ctx-usage.json
+code-stats-cache.json
+code-stats-cache.json.tmp
 escalated-sessions.json
 inflight-runs.json
 interrupted-runs.json
 rewind-pending.json
 harness/projects.json
+# harness 的临时脚本 / 探针输出
+harness/tmp/
 knowledge/
 memory/.workspace-isolation-migrated
 
@@ -53,3 +75,6 @@ CLAUDE.local.md
 
 # 安卓 app（发版时由 GitHub Actions 放进安装包；本地预览可以手动放一份）
 /downloads/
+
+# 堆近上限自动快照（fatal-guard.mjs，几个 GB）
+*.heapsnapshot

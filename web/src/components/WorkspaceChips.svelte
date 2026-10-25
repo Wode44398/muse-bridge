@@ -8,8 +8,7 @@
   //   分支与 worktree 不是两颗芯片，是【同一颗胶囊的左右两半】——底色与描边挂外层、
   //   两半透明且圆角继承，中间 1px×10 分隔线在 hover/focus 整颗时淡出。
   //
-  // 两处按 bridge 自己的规矩改：
-  //   · 不搬官方那颗「运行设备」芯片（Local/Cloud）——bridge 的 agent 恒在本机，没这个维度。
+  // 按 bridge 自己的规矩改的一处：
   //   · worktree 勾选框不用官方那抹蓝（#2a78d6）——本页配色铁律「彩色只留星芒」，
   //     故走 .submit 同款黑白反相（底 --text / 勾 --bg）。
   //
@@ -22,6 +21,7 @@
   import { dock, openDock, ensureDockMeta } from '../lib/dock.svelte.js';
   import { prefs, savePrefs } from '../lib/state.svelte.js';
   import { t } from '../lib/i18n.js';
+  import PrChip from './claude/PrChip.svelte';   // 当前会话绑定了拉取请求时，分支胶囊后面接一颗「#123 ●」
 
   // name = 当前项目名（真实项目里就等于文件夹名；快照对话的桶目录名是 UUID，只有项目名可读）
   // armable = 还没有会话的新对话空态——只有这时 worktree 勾选框能点
@@ -62,7 +62,7 @@
               <span class="box" class:off={!prefs.worktree}>
                 {#if prefs.worktree}
                   <svg width="6" height="5" viewBox="0 0 5.875 5.375" fill="none" aria-hidden="true">
-                    <path d="M0.5 2.75L2.25 4.88L5.38 0.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" />
+                    <path d="M.6 2.8 2.3 4.8 5.3.6" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" />
                   </svg>
                 {/if}
               </span>
@@ -75,7 +75,7 @@
             <span class="cb">
               <span class="box">
                 <svg width="6" height="5" viewBox="0 0 5.875 5.375" fill="none" aria-hidden="true">
-                  <path d="M0.5 2.75L2.25 4.88L5.38 0.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" />
+                  <path d="M.6 2.8 2.3 4.8 5.3.6" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </span>
             </span>
@@ -84,6 +84,7 @@
         {/if}
       </div>
     {/if}
+    {#if !armable}<PrChip />{/if}
   </div>
 {/if}
 
@@ -152,7 +153,7 @@
   }
   .lbl { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  /* 勾选框：外槽 16 / 内框 11.2 / 圆角 2.4（官方数值），勾是官方原样 SVG 路径 */
+  /* 勾选框：外槽 16 / 内框 11.2 / 圆角 2.4（官方数值），勾是一笔三点的折线 */
   .cb { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 2.4px; }
   .box {
     display: flex; align-items: center; justify-content: center;

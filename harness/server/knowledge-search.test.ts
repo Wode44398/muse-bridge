@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test, { afterEach } from "node:test";
-import { getSearchMetrics, searchUnifiedKnowledge } from "./knowledge-search.ts";
+import { getSearchMetrics, searchUnifiedKnowledge, worthAutoRecall, type KnowledgeSearchResult } from "./knowledge-search.ts";
 import { memoryDir, saveMemory } from "./memory.ts";
 import { recallIds } from "./agent/injections.ts";
 import { visibleMessages } from "./agent/state.ts";
@@ -136,6 +136,28 @@ test("semantic retrieval supplements lexical matching and persists only document
   const cache = fs.readFileSync(path.join(process.env.KNOWLEDGE_DIR!, "workspaces", fs.readdirSync(path.join(process.env.KNOWLEDGE_DIR!, "workspaces"))[0], "semantic-index.json"), "utf8");
   assert.doesNotMatch(cache, /conceptual arithmetic/);
   assert.doesNotMatch(cache, /test-key/);
+});
+
+// 2026-10-09 实况：语义检索失败时，「帮我更新下bridge客户端」每轮召回 6 条路径里带 bridge 的 chunk-*.js / 配置键——全是分词撞上的噪音
+test("automatic recall: code-structure documents need to be named unless semantic retrieval vouches for them", () => {
+  const item = (kind: KnowledgeSearchResult["document"]["kind"], p: string, title = p, semanticScore?: number): KnowledgeSearchResult => ({
+    document: { id: `${kind}:${p}`, kind, title, text: "", paths: [p], scope: [], source: "x" },
+    score: 40,
+    lexicalScore: 40,
+    reasons: ["路径命中 5 个词"],
+    ...(semanticScore === undefined ? {} : { semanticScore }),
+  });
+  const noisy = item("module", ".claude/worktrees/bridge-x/bridge前端设计/chunk-44CKZOEJ.js");
+  assert.equal(worthAutoRecall(noisy, "帮我更新下bridge客户端", "failed"), false);
+  assert.equal(worthAutoRecall(item("config", "a/probe.ts", "DIMENSIO_CONFIG_FILE"), "你现在就跑在dimensio上，有什么不顺手的", "failed"), false);
+  assert.equal(worthAutoRecall(item("guide", ".claude/worktrees/x/AGENTS.md"), "更新 bridge build 的客户端", "failed"), false);
+
+  assert.equal(worthAutoRecall(item("module", "src/api.ts"), "fix the /health route in src/api.ts", "failed"), true, "完整路径点名");
+  assert.equal(worthAutoRecall(item("module", "client/desktop/main.cjs"), "main.cjs 启动崩了", "unavailable"), true, "带扩展名的文件名点名");
+  assert.equal(worthAutoRecall(item("config", "server/x.ts", "DIMENSIO_CONFIG_FILE"), "DIMENSIO_CONFIG_FILE 怎么用", "failed"), true, "配置键点名");
+  assert.equal(worthAutoRecall(item("module", "src/api.ts"), "fix src/api.tsx", "failed"), false, "前缀撞上不算点名");
+  assert.equal(worthAutoRecall(item("module", "src/math.ts", "src/math.ts", 0.45), "conceptual arithmetic", "used"), true, "语义检索够格就照常召回");
+  assert.equal(worthAutoRecall(item("memory", "memory/x.md"), "随便什么", "failed"), true, "记忆照旧按分数走");
 });
 
 // C1（#35，改掉原来钉住「召回不落盘」的错误契约）：自动召回作为 internal 消息追加在本轮用户消息之后、随会话落盘——

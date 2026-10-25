@@ -157,10 +157,24 @@
   const curModel = $derived(models.find((m: any) => m.id === shownCfg?.model));
   const modelLabel = $derived<string>(tr(curModel?.label ?? shownCfg?.model ?? "…")); // 型号名来自服务端 catalog（个别带中文注）
   const thinking = $derived<string>(shownCfg?.thinking ?? "off");
-  // effortLabels 是服务端 catalog 的数据（开关式档位写「开启」），这里只拿来比对
-  const thinkingLabel = $derived(curModel?.effortLabels?.[thinking] === "开启" /* i18n-ignore */ ? t("思考") : thinking);
+  // effortLabels 是服务端 catalog 的数据（开关式档位写「开启」、自定义服务的档名），这里只拿来比对 / 按运行时文案翻译
+  const effLabel = $derived<string | undefined>(curModel?.effortLabels?.[thinking]);
+  // 模型自带思考（自定义服务标了 alwaysThinks）：当前这档关不掉——这一档什么都不发（「默认」档、没有档位），或者根本不在
+  // 这个型号的档里（没经 clamp 的旧值，同样什么都不发）——胶囊照实写，不能显示成没在思考。哪些档关不掉由服务端算好给
+  // autoThinkAt（看这一档真发不发东西），不比对档名文字：关闭档叫「关闭」「Off」还是「不思考」都一样
+  const alwaysOn = $derived(
+    curModel?.alwaysThinks === true &&
+      (!(curModel.efforts ?? []).includes(thinking) || (Array.isArray(curModel.autoThinkAt) && curModel.autoThinkAt.includes(thinking))),
+  );
+  const thinkingShown = $derived(thinking !== "off" || alwaysOn);
+  const thinkingLabel = $derived(
+    alwaysOn ? t("模型自带思考") : effLabel === "开启" /* i18n-ignore */ ? t("思考") : effLabel && effLabel !== "默认" /* i18n-ignore */ ? tr(effLabel) : thinking,
+  );
+  // fast mode 是全局开关（不进会话快照），型号支持且开着才在胶囊上写「Fast」——与 bridge 本体「Opus 5.5 · Fast」同款
+  const fastShown = $derived(app.config?.fast === true && curModel?.fast === true);
   const modelAria = $derived(
-    thinking !== "off" ? t("模型：{model}，思考：{effort}", { model: modelLabel, effort: thinkingLabel }) : t("模型：{model}", { model: modelLabel }),
+    (thinkingShown ? t("模型：{model}，思考：{effort}", { model: modelLabel, effort: thinkingLabel }) : t("模型：{model}", { model: modelLabel })) +
+      (fastShown ? " · Fast" : ""),
   );
   const vid = $derived(shownCfg?.provider ?? "anthropic");
 
@@ -407,7 +421,8 @@
 {#snippet modelText()}
   <span class="mlab">
     <span class="mname">{modelLabel}</span>
-    {#if thinking !== "off"}<span class="mdot" aria-hidden="true">·</span><span class="meff">{thinkingLabel}</span>{/if}
+    {#if thinkingShown}<span class="mdot" aria-hidden="true">·</span><span class="meff">{thinkingLabel}</span>{/if}
+    {#if fastShown}<span class="mdot" aria-hidden="true">·</span><span class="meff">Fast</span>{/if}
   </span>
 {/snippet}
 

@@ -100,6 +100,6 @@ export function markActivity(m) {
 export function spritePhase(m) {
   if (m.paused || m.segments.some((s) => s.kind === 'ask' && !s.answered)) return 'blocked';
   if (m.phase === 'waiting' && !m.bgHold) return 'blocked';
-  const out = m.segments.some((s) => (s.kind === 'text' && s.md.trim()) || (s.kind === 'tools' && s.tools.length) || s.kind === 'media');
+  const out = m.segments.some((s) => (s.kind === 'text' && s.md.trim()) || (s.kind === 'tools' && s.tools.length) || s.kind === 'media' || s.kind === 'widget');
   return out ? 'working' : 'pending';
 }

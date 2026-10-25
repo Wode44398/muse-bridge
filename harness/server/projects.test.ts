@@ -89,3 +89,20 @@ test("a workspace discovered from history can be hidden and stays hidden", async
   await importProject(seen);
   assert.equal((await listProjects([seen]))[0]?.hidden, false);
 });
+
+test("renameProject 只改显示名，隐式项目顺手登记，留空恢复文件夹名", async () => {
+  const { renameProject } = await import("./projects.ts");
+  const root = temp("dimensio-rename-");
+  const workspace = path.join(root, "repo");
+  fs.mkdirSync(workspace);
+  process.env.PROJECTS_ROOT = path.join(root, "managed");
+  process.env.PROJECTS_FILE = path.join(root, "projects.json");
+
+  const r = await renameProject(workspace, "我的仓库");
+  assert.equal(r.name, "我的仓库");
+  assert.equal(r.path, workspace);
+  const listed = await listProjects();
+  assert.equal(listed.find((p) => p.path === workspace)?.name, "我的仓库");
+  assert.equal(fs.existsSync(workspace), true, "目录不动");
+  assert.equal((await renameProject(workspace, "   ")).name, "repo");
+});

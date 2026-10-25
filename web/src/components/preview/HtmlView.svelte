@@ -1,63 +1,209 @@
 <script>
-  // HTML 直接渲染查看器：把文件内容塞进一个 sandbox iframe 的 srcdoc（无 allow-same-origin ⇒
-  // 脚本跑在不透明源、碰不到 bridge cookie/接口）。既能真渲染（自包含页/PPT 翻页、键盘、全屏都在），
-  // 又安全隔离。文本已读（本地）就直接用，否则 fetch 原始字节（云端 /api/file，分享模式带 ?st）。
-  // 塞进去之前经 prepareHtml：补存储垫片 + 内联同目录的 js/css/图片，否则不透明源里脚本跑不起来。
-  import { onMount } from 'svelte';
+  // HTML 直接渲染查看器。
+  //
+  // 加载：优先走服务端「站点挂载」（item.siteUrl → { url:'/api/hv/<id>/<入口>' }，见
+  // src/runtime/html-site.mjs）——路径式 URL，页面里相对引用的 app.js / css / assets 全能解析，
+  // 和电脑上双击打开一个样。此前一律 srcdoc：基址是 about:srcdoc，带资源目录的课件/网站
+  // 相对引用全落空，黑屏转圈。挂载不可用（dimensio 产物、分享链接、
+  // 老服务端）时回落 srcdoc：lib/htmlInline 内联同目录资源，自包含单文件照样能开。
+  //
+  // 隔离：两条路都是 sandbox 且不给 allow-same-origin ⇒ 脚本跑在不透明源，碰不到 bridge 的
+  // cookie / 接口；挂载响应头还带同款 CSP sandbox（顶层直开也一样隔离）。不透明源里
+  // localStorage 一碰就抛错，服务端注入了内存垫片；srcdoc 这条由 lib/htmlInline 补。
+  //
+  // 外观：一条贴着应用主题的细工具栏（暗/亮两套），不再是压在深色界面上的大白条；
+  // 加载用工具栏底边的细进度线，页面就绪前舞台留主题底色，不闪白。
+  import { onMount, tick } from 'svelte';
   import { t, tr } from '../../lib/i18n.js';
   import { prepareHtml } from '../../lib/htmlInline.js';
   const { item, onClose } = $props();
-  let html = $state(null);
+
+  const SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-forms allow-pointer-lock allow-downloads allow-presentation';
+  let src = $state('');        // 挂载模式：iframe src
+  let srcdoc = $state(null);   // 回落模式：iframe srcdoc
   let err = $state('');
-  let loading = $state(true);
-  onMount(async () => {
+  let ready = $state(false);   // 舞台显出页面（load 或兜底超时）
+  let loaded = $state(false);  // 进度线收起（真正 load）
+  let gen = $state(0);         // 重载代数：{#key} 重建 iframe
+  let frame = $state(null);
+  let stage = $state(null);
+  let full = $state(false);
+  let revealTimer = 0;
+
+  async function resolve() {
+    err = ''; ready = false; loaded = false;
+    clearTimeout(revealTimer);
+    if (item.siteUrl) {
+      try {
+        const r = await fetch(item.siteUrl, { credentials: 'same-origin' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        if (!j?.url) throw new Error('no url');
+        // 挂载路径相对【请求它的那台服务器】（LAN 直连 / 隧道 / 离线壳的远端），不是当前页面源
+        src = new URL(j.url, new URL(item.siteUrl, location.href)).href;
+        srcdoc = null;
+        armReveal();
+        return;
+      } catch {}   // 老服务端 / 鉴权边角：回落 srcdoc，至少自包含页能开
+    }
     try {
-      let src = item.text;
-      if (src == null) {
+      let text = item.text;
+      if (text == null) {
         const r = await fetch(item.url, { credentials: 'same-origin' });
         if (!r.ok) throw new Error('HTTP ' + r.status);
-        src = await r.text();
+        text = await r.text();
       }
-      try { html = await prepareHtml(src, item.url); } catch { html = src; }
+      // 回落 srcdoc：lib/htmlInline 补存储垫片 + Edge 同款滚动条垫片，并把同目录的 js/css/图片内联进来
+      // （srcdoc 的基址不是文件所在目录，相对引用否则全落空）。预处理出错就原样塞进去。
+      let html;
+      try { html = await prepareHtml(text, item.url); } catch { html = text; }
+      src = '';
+      srcdoc = html;
+      armReveal();
     } catch (e) { err = String(e?.message || e); }
-    finally { loading = false; }
+  }
+  // 页面 load 要等全部图片/音视频，素材多的课件能拖好几秒——先让首屏露出来，进度线继续走。
+  function armReveal() { revealTimer = setTimeout(() => { ready = true; }, 1200); }
+  function onFrameLoad() {
+    clearTimeout(revealTimer);
+    ready = true; loaded = true;
+    // 键盘翻页类页面（课件 / PPT）开箱即用：焦点交给页面，方向键/空格直接到它手里
+    try { frame?.focus(); } catch {}
+  }
+
+  async function reload() {
+    if (srcdoc != null && item.text == null) { srcdoc = null; await resolve(); }
+    else { ready = false; loaded = false; armReveal(); }
+    gen++;
+  }
+
+  const canFull = typeof document !== 'undefined' && !!document.fullscreenEnabled;
+  async function toggleFull() {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else { await stage?.requestFullscreen(); await tick(); frame?.focus(); }
+    } catch {}
+  }
+  function onFsChange() { full = !!document.fullscreenElement && document.fullscreenElement === stage; }
+
+  onMount(() => {
+    resolve();
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => { clearTimeout(revealTimer); document.removeEventListener('fullscreenchange', onFsChange); };
   });
 </script>
 
 <div class="hv">
-  <div class="hv-bar">
-    <button class="hv-btn" aria-label={t('返回')} onclick={onClose}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7" /></svg>
+  <header class="hv-bar">
+    <button class="hv-btn" aria-label={t('返回')} title={t('返回')} onclick={onClose}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5" /></svg>
     </button>
-    <span class="hv-name">{item.name}</span>
-    {#if item.downloadHref}
-      <a class="hv-btn" href={item.downloadHref} aria-label={t('下载')} download>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5" /><path d="M5 20h14" /></svg>
-      </a>
-    {/if}
-  </div>
-  <div class="hv-body">
-    {#if loading}
-      <div class="hv-msg">{t('加载中…')}</div>
-    {:else if err}
-      <div class="hv-msg">{t('打开失败：{reason}', { reason: tr(err) })}</div>
-    {:else}
-      <iframe class="hv-frame" title={item.name} sandbox="allow-scripts allow-popups allow-modals allow-forms" allowfullscreen srcdoc={html}></iframe>
+    <div class="hv-title" title={item.name}>
+      <svg class="hv-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.25" /><path d="M3.75 12h16.5M12 3.75c2.3 2.4 3.4 5.15 3.4 8.25S14.3 17.85 12 20.25C9.7 17.85 8.6 15.1 8.6 12S9.7 6.15 12 3.75Z" /></svg>
+      <span class="hv-name">{item.name}</span>
+    </div>
+    <div class="hv-tools">
+      <button class="hv-btn" aria-label={t('刷新')} title={t('刷新')} onclick={reload} disabled={!!err}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19.25 12a7.25 7.25 0 1 1-2.12-5.13" /><path d="M19.5 4.75v3.75h-3.75" /></svg>
+      </button>
+      {#if canFull}
+        <button class="hv-btn" aria-label={full ? t('退出全屏') : t('全屏')} title={full ? t('退出全屏') : t('全屏')} onclick={toggleFull} disabled={!!err}>
+          {#if full}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4.75V9.5H4.75M14.5 4.75V9.5h4.75M9.5 19.25V14.5H4.75M14.5 19.25V14.5h4.75" /></svg>
+          {:else}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.75 9.25v-4.5h4.5M19.25 9.25v-4.5h-4.5M4.75 14.75v4.5h4.5M19.25 14.75v4.5h-4.5" /></svg>
+          {/if}
+        </button>
+      {/if}
+      {#if src}
+        <a class="hv-btn" href={src} target="_blank" rel="noopener noreferrer" aria-label={t('在浏览器中打开')} title={t('在浏览器中打开')}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.75 4.75h5.5v5.5M19 5l-8 8" /><path d="M17.25 13.75v4a1.5 1.5 0 0 1-1.5 1.5h-9.5a1.5 1.5 0 0 1-1.5-1.5v-9.5a1.5 1.5 0 0 1 1.5-1.5h4" /></svg>
+        </a>
+      {/if}
+      {#if item.downloadHref}
+        <a class="hv-btn" href={item.downloadHref} download={item.name} aria-label={t('下载')} title={t('下载')}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.75v10.5M7.75 11 12 15.25 16.25 11" /><path d="M5 19.25h14" /></svg>
+        </a>
+      {/if}
+    </div>
+    <div class="hv-progress" class:on={!loaded && !err}></div>
+  </header>
+
+  <div class="hv-stage" bind:this={stage}>
+    {#if err}
+      <div class="hv-msg">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.25" /><path d="M12 8v4.75M12 15.9v.1" /></svg>
+        <div class="hv-msg-t">{t('打开失败：{reason}', { reason: tr(err) })}</div>
+        <button class="hv-retry" onclick={resolve}>{t('重试')}</button>
+      </div>
+    {:else if src || srcdoc != null}
+      {#key gen}
+        {#if src}
+          <iframe bind:this={frame} class="hv-frame" class:ready title={item.name} {src} sandbox={SANDBOX} allow="fullscreen; autoplay; clipboard-write" allowfullscreen onload={onFrameLoad}></iframe>
+        {:else}
+          <iframe bind:this={frame} class="hv-frame" class:ready title={item.name} {srcdoc} sandbox={SANDBOX} allow="fullscreen; autoplay; clipboard-write" allowfullscreen onload={onFrameLoad}></iframe>
+        {/if}
+      {/key}
     {/if}
   </div>
 </div>
 
 <style>
-  .hv { position: fixed; inset: 0; display: flex; flex-direction: column; background: #fff; z-index: 1; }
-  /* 顶栏让开系统状态栏（--sat，apk 原生注入）：与 DocViewer/PdfView/OfficeView 的头同一规矩。
-     此前写死 height:52px、padding 0——手机全屏与折叠屏工作台侧列里，返回/下载键都压在状态栏下点不到。
-     --pv-bar-h：宿主可调（手机工作台 sheet 里收成 44px 省地方）。 */
-  .hv-bar { flex: none; box-sizing: border-box; height: calc(var(--pv-bar-h, 52px) + var(--sat, 0px)); display: flex; align-items: center; gap: 8px; padding: var(--sat, 0px) 10px 0; background: #f6f6f8; border-bottom: 1px solid #e5e5ea; color: #1c1c1e; }
-  .hv-name { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .hv-btn { width: 38px; height: 38px; flex: none; display: grid; place-items: center; border: 0; background: none; color: #1c1c1e; border-radius: 50%; cursor: pointer; text-decoration: none; }
-  .hv-btn:hover { background: rgba(0, 0, 0, .06); }
-  .hv-btn svg { width: 22px; height: 22px; }
-  .hv-body { flex: 1; position: relative; background: #fff; }
-  .hv-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
-  .hv-msg { position: absolute; inset: 0; display: grid; place-items: center; color: #888; font-size: 14px; }
+  /* 主题令牌：bridge 暗色为默认，亮色挂 html[data-theme="light"]。与应用外框同一块色，
+     查看器像应用里的一页，而不是一张压上来的白纸。 */
+  .hv {
+    --hv-bar: #1c1c1b; --hv-line: rgba(255, 255, 255, .07); --hv-fg: rgba(250, 249, 245, .93);
+    --hv-dim: rgba(250, 249, 245, .5); --hv-hover: rgba(255, 255, 255, .075); --hv-press: rgba(255, 255, 255, .12);
+    --hv-stage: #151514; --hv-run: rgba(250, 249, 245, .55);
+    position: fixed; inset: 0; z-index: 1; display: flex; flex-direction: column;
+    background: var(--hv-stage); color: var(--hv-fg);
+  }
+  :global(html[data-theme="light"]) .hv {
+    --hv-bar: #faf9f5; --hv-line: rgba(31, 30, 29, .09); --hv-fg: #1f1e1d;
+    --hv-dim: rgba(31, 30, 29, .5); --hv-hover: rgba(31, 30, 29, .055); --hv-press: rgba(31, 30, 29, .1);
+    --hv-stage: #f0eee8; --hv-run: rgba(31, 30, 29, .45);
+  }
+
+  /* 顶栏让开系统状态栏（--sat，apk 原生注入），与 DocViewer/PdfView/OfficeView 同一规矩。
+     --pv-bar-h：宿主可调（手机工作台 sheet 里收得更矮）。 */
+  .hv-bar {
+    position: relative; flex: none; box-sizing: border-box;
+    height: calc(var(--pv-bar-h, 44px) + var(--sat, 0px)); padding: var(--sat, 0px) 6px 0;
+    display: flex; align-items: center; gap: 2px;
+    background: var(--hv-bar); box-shadow: inset 0 -1px 0 var(--hv-line);
+  }
+  .hv-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 0 6px 0 2px; }
+  .hv-glyph { width: 15px; height: 15px; flex: none; color: var(--hv-dim); }
+  .hv-name { min-width: 0; font-size: 13.5px; font-weight: 550; letter-spacing: .005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hv-tools { flex: none; display: flex; align-items: center; gap: 1px; }
+  .hv-btn {
+    width: 32px; height: 32px; flex: none; display: grid; place-items: center; padding: 0;
+    border: 0; border-radius: 8px; background: none; color: var(--hv-dim);
+    cursor: pointer; text-decoration: none; transition: background-color .12s, color .12s;
+  }
+  .hv-btn:first-child { color: var(--hv-fg); }
+  .hv-btn:hover { background: var(--hv-hover); color: var(--hv-fg); }
+  .hv-btn:active { background: var(--hv-press); }
+  .hv-btn:disabled { opacity: .35; pointer-events: none; }
+  .hv-btn:focus-visible { outline: 1.5px solid var(--hv-run); outline-offset: -1.5px; }
+  .hv-btn svg { width: 18px; height: 18px; }
+
+  /* 加载进度：工具栏底边一根细线来回走，载完淡出 */
+  .hv-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; overflow: hidden; opacity: 0; transition: opacity .3s; pointer-events: none; }
+  .hv-progress.on { opacity: 1; }
+  .hv-progress::before { content: ''; position: absolute; top: 0; bottom: 0; width: 32%; border-radius: 2px; background: var(--hv-run); animation: hv-run 1.15s cubic-bezier(.45, 0, .25, 1) infinite; }
+  @keyframes hv-run { from { transform: translateX(-100%); } to { transform: translateX(320%); } }
+  @media (prefers-reduced-motion: reduce) { .hv-progress::before { animation-duration: 2.4s; } }
+
+  .hv-stage { flex: 1; position: relative; min-height: 0; background: var(--hv-stage); }
+  /* 网页默认画布是白的：iframe 自己铺白，但就绪前隐身，避免深色界面上先闪一下白 */
+  .hv-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; opacity: 0; transition: opacity .16s ease-out; }
+  .hv-frame.ready { opacity: 1; }
+  .hv-stage:fullscreen { background: #000; }
+
+  .hv-msg { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; color: var(--hv-dim); }
+  .hv-msg svg { width: 28px; height: 28px; }
+  .hv-msg-t { max-width: 420px; font-size: 13.5px; line-height: 1.5; }
+  .hv-retry { margin-top: 4px; height: 30px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--hv-hover); color: var(--hv-fg); font: inherit; font-size: 13px; cursor: pointer; }
+  .hv-retry:hover { background: var(--hv-press); }
 </style>

@@ -67,3 +67,44 @@ test('非 git 目录拒绝创建 worktree', async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('分支前缀跟设置走（不合法回落 claude）；起点 fresh = fetch 后从 origin 默认分支切、不设上游', async () => {
+  const { root, ctx, file, data } = fixture();
+  const originDir = mkdtempSync(path.join(tmpdir(), 'wt-origin-'));
+  const other = mkdtempSync(path.join(tmpdir(), 'wt-other-'));
+  try {
+    const project = claudeProjects.createProject(file, ctx, { path: root });
+    const a = await createSessionWorktree(file, project, { prefix: 'bot' });
+    assert.equal(a.branch, 'bot/' + a.name);
+    assert.equal(a.from, 'head');
+    const b = await createSessionWorktree(file, project, { prefix: 'main' });
+    assert.equal(b.branch, 'claude/' + b.name, '保留前缀回落默认');
+
+    // origin 比本地 HEAD 多一个提交；本地切到别的分支，fresh 仍从 origin/main 切
+    git(originDir, 'init', '-q', '--bare', '-b', 'main');
+    git(root, 'remote', 'add', 'origin', originDir);
+    git(root, 'push', '-q', 'origin', 'main');
+    git(other, 'clone', '-q', originDir, '.');
+    writeFileSync(path.join(other, 'up.txt'), 'up\n');
+    git(other, 'add', '.'); git(other, 'commit', '-q', '-m', 'upstream');
+    git(other, 'push', '-q', 'origin', 'main');
+    git(root, 'checkout', '-q', '-b', 'local-work');
+    const c = await createSessionWorktree(file, project, { baseRef: 'fresh' });
+    assert.equal(c.from, 'fresh');
+    assert.equal(c.base, 'main');
+    assert.equal(git(c.root, 'rev-parse', 'HEAD'), git(other, 'rev-parse', 'HEAD'));
+    assert.ok(existsSync(path.join(c.root, 'up.txt')));
+    assert.throws(() => git(c.root, 'rev-parse', '--abbrev-ref', '@{upstream}'), '新分支没有上游');
+
+    // 没有 origin：fresh 退回当前 HEAD
+    git(root, 'remote', 'remove', 'origin');
+    const d = await createSessionWorktree(file, project, { baseRef: 'fresh' });
+    assert.equal(d.from, 'head');
+    assert.equal(d.base, 'local-work');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(data, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true });
+  }
+});

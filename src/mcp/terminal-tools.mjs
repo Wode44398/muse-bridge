@@ -77,6 +77,7 @@ const tailText = (lines, n, maxChars = 24000) => {
 
 export const TERMINAL_NUDGE = '\n\n【共享终端】你有一个 MCP 工具 `mcp__terminal__terminal`：操作用户右侧栏「终端」面板里那个 PTY——你们共用同一个 shell 会话，你敲的每个字用户实时看得见，用户敲过/跑过的东西也全在你读到的滚回里。用户说「看我终端 / 我终端里报了个错 / 帮我在终端里跑」这类话时，直接 read() 读屏而不是让用户粘贴。跑普通命令优先用你自己的 Bash（互不干扰）；需要【共享上下文】时才用它——比如接管用户开着的 CLI/REPL、回应终端里正在等的交互式提问、或用户想全程看着你操作。终端里有前台程序时 run() 的文本会喂给那个程序，先 read() 看清状态。';
 
+// ws：终端池引用——工作空间路径，或 principal.poolRef(ctx, 路径)（池按（属主, 工作空间）键控，与右侧面板同一把键）。
 export const makeTerminalMcp = ({ getGen, ws } = {}) => createSdkMcpServer({
   name: 'terminal',
   version: '1.0.0',

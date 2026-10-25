@@ -14,6 +14,7 @@ import { contextFor } from '../runtime/identity.mjs';
 import { toolSummary, clip } from '../runtime/tool-summary.mjs';
 import { findGenBySession } from '../runtime/gen.mjs';
 import { readBody } from '../runtime/body.mjs';
+import { getCodeStats } from '../runtime/code-stats.mjs';
 
 const MAX_BYTES = 32 * 1024 * 1024;   // 子 agent 转录通常几十 KB 到几 MB；再大就不整读了
 const TEXT_CAP = 20000;               // 单段正文封顶（相邻正文合并到这个长度就另起一段，不截断）
@@ -137,6 +138,19 @@ export function registerClaudeTaskRoutes(router, { identify }) {
         ? { agentType: String(meta.agentType || ''), description: String(meta.description || ''), toolUseId: String(meta.toolUseId || ''), spawnDepth: Number(meta.spawnDepth) || 0 }
         : null,
     }));
+  });
+
+  // GET /api/claude/code-stats(?force=1) —— 新对话空态的用量卡（官方 /code 落地页 getCodeStats 同款口径，
+  // 见 runtime/code-stats.mjs）。只给本人的 Claude 配置目录：admin=~/.claude，注册用户=自己的沙箱 configDir；
+  // 公开分享 / 聊天快照身份不给（快照桶不是谁的历史，也不该看见宿主的用量）。
+  router.on('GET', '/api/claude/code-stats', async (req, res, url) => {
+    const who = identify(req);
+    const json = (code, o) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(o)); };
+    if (who.kind === 'none' || who.kind === 'share') return json(401, { error: 'unauthorized' });
+    const ctx = contextFor(who);
+    if (ctx.kind !== 'admin' && ctx.kind !== 'user') return json(403, { error: 'forbidden' });
+    try { json(200, await getCodeStats(ctx, { force: url.searchParams.get('force') === '1' })); }
+    catch (e) { json(500, { error: String((e && e.message) || e) }); }
   });
 
   // POST /api/claude/task/stop {sessionId, taskId} —— 单条停止后台任务（任务面板每行的 ⏹）。

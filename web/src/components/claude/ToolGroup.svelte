@@ -15,7 +15,8 @@
   // 字段，没有单独的芯片行。配色铁律「彩色只留星芒」：官方 accent 一律改 var(--text)。
   import { untrack } from 'svelte';
   import { openTaskDetail } from '../../lib/dock.svelte.js';
-  import { toolVerb, groupSummary, morphText, isCompactTool } from '../../lib/toolVerbs.js';
+  import { toolVerb, groupSummary, morphText, isCompactTool, START_SESSION_TOOL } from '../../lib/toolVerbs.js';
+  import SessionStartCards from './SessionStartCards.svelte';
   import { taskRunning } from '../../lib/taskModel.js';
   import { glyph } from '../../lib/claudeIcons.js';
   import ToolRow from './ToolRow.svelte';
@@ -106,7 +107,10 @@
   {/if}
 {/snippet}
 
-{#if runs.length === 1}
+{#if tools.length && tools.every((x) => x.name === START_SESSION_TOOL)}
+  <!-- 「Claude 发起新会话」：连续几次 start_session 一段（toolJoins），offer 卡 / 提议卡 / 已开始卡 -->
+  <SessionStartCards {tools} {live} />
+{:else if runs.length === 1}
   {@render runView(runs[0], false)}
 {:else if runs.length > 1}
   <div class="grp">

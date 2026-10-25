@@ -10,19 +10,26 @@
   import ClaudeLogo from './ClaudeLogo.svelte';
   import ClaudeCodeWordmark from './claude/ClaudeCodeWordmark.svelte';
   import RefusalBand from './claude/RefusalBand.svelte';
+  import PermissionCard from './claude/PermissionCard.svelte';   // 逐次工具审批卡（输入框上方停靠）
+  import QueueBar from './claude/QueueBar.svelte';
+  import PeerHoldBand from './claude/PeerHoldBand.svelte';
+  import LandingTexture from './claude/LandingTexture.svelte';
+  import SessionRail from './claude/SessionRail.svelte';
+  import CodeStatsCard from './claude/CodeStatsCard.svelte';
   import RoutinesPage from './RoutinesPage.svelte';
   import CustomizePage from './CustomizePage.svelte';
   import { api } from '../lib/api.js';
-  import { uiAlert } from '../lib/dialogs.js';
+  import { uiAlert, uiConfirm } from '../lib/dialogs.js';
   import { me, ui, session, settings, setTheme, singleMode, sessionWt } from '../lib/state.svelte.js';
   import AccountCard from './AccountCard.svelte';
   import { swipeDismiss } from '../lib/motion.js';
   import { closePage, backPeek } from '../lib/pageMorph.js';
   import { untrack } from 'svelte';
   import { chat, newConversation, openSession, requestSync, prefetchSessions, onBusEvent } from '../lib/chat.svelte.js';
+  import { setSessionSource } from '../lib/sessionFamily.svelte.js';
   import { busStart, busStop, busOn, busConnected } from '../lib/bus.js';
   import { placeTouched } from '../lib/sessionsOrder.js';
-  import { isStarred, toggleStar, titleFor, renameSession } from '../lib/library.svelte.js';
+  import { isStarred, toggleStar, titleFor, renameSession, applyServerLibrary, resetLibrary, forgetSession } from '../lib/library.svelte.js';
   import { registerCloser } from '../lib/nav.js';
   import { marquee } from '../lib/marquee.js';
   import { cacheSessions, getCachedSessions, removeCachedMessages } from '../lib/cache.js';
@@ -34,10 +41,23 @@
   import { drag, dropZone, dragScrollGuard, beginDrag, makeHold, dropToast } from '../lib/dragdrop.svelte.js';
   import { applyProjectOrder, moveId, splitDropPlan, splitDropLabel, canSplitWidth, dockOverlayFor, MIN_PANE } from '../lib/claudeSplit.js';
   import { soloUrl, PANE_MSG, isPaneMsg } from '../lib/solo.js';
+  import { openSettings } from '../lib/settingsNav.svelte.js';   // 分屏格托宿主页开设置（onPaneMsg 的 settings）
   import { agentDropZone, attachToAgent, dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent, WS_FILE } from '../lib/fileDrag.js';
   import { CHAT_REF, isChatRef, canQuote, quoteSession } from '../lib/chatQuote.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { t, tc, tr } from '../lib/i18n.js';
+  // 归档 / 已归档视图 / 搜索会话（2026-10-20，对齐官方 Claude Desktop）
+  import SessionSearch from './claude/SessionSearch.svelte';
+  import ArchivedBand from './claude/ArchivedBand.svelte';
+  import { arch, archClock, noteSessionList, noteArchiveRev, stickyArchived, setArchivedIds, archiveProject, loadArchived, openArchivedView, closeArchivedView, dropArchivedRow, resetArchive, isArchivedId, markArchivedSeen } from '../lib/sessionArchive.svelte.js';
+  import { pushBackLayer } from '../lib/nav.js';
+  import { relTime } from '../lib/format.js';
+  import { descendantsOf, mergeOlder, pagerFrom, serverRestOf } from '../lib/sessionArchiveView.js';
+  import { reportUi } from '../lib/uiReport.js';
+  // 新对话入口 + 临时对话（原「快照」）按时间回收（S1-6，2026-10-22）
+  import TempChatBand from './claude/TempChatBand.svelte';
+  import { cs as claudeCs } from '../lib/claudeSettings.svelte.js';
+  import { daysLeft, expiryWarn, quickPolicy, newChatTarget, isNewChatKey, newChatKbd, landingFor } from '../lib/quickChat.js';
 
   // 从工作空间拎一份文件过来松手 = 挂进【当前这个会话】的输入栏（不移动文件本身）。
   // 公开快照页不给：那儿的输入栏本来就不属于访客。
@@ -91,6 +111,8 @@
   let composerWrapEl = $state();
   let composerInnerEl = $state();   // 输入卡片本体（.composer-inner），量卡片上沿用
   let sessions = $state([]);
+  // 会话协作（sessionFamily.svelte.js）：工具行 / 会话消息卡按这份列表把「标题 / name」解析成会话 id
+  setSessionSource(() => sessions);
   // Claude 项目（路径制：项目=工作空间目录=会话 cwd，服务端 claude-projects.json，[0] 恒为
   // 默认项目）。显示名由服务端固定为工作空间文件夹名（不可改名）。列表小，本地缓存走
   // localStorage 即可（v3：v2 存过自定义名，弃掉避免旧名闪现）。
@@ -116,6 +138,7 @@
     const measure = () => {
       const wrapH = composerWrapEl.offsetHeight;
       scrollEl?.style.setProperty('--composer-h', wrapH + 'px');
+      scrollEl?.parentElement?.style.setProperty('--composer-h', wrapH + 'px');   // 会话信息面板（停靠形态）据此让出输入栏
       const cardTop = composerInnerEl ? wrapH - composerInnerEl.offsetTop : wrapH;
       scrollEl?.style.setProperty('--composer-card-top', cardTop + 'px');
       // 滚动条那一列让出来：wrap 的遮罩（芯片上缘渐隐罩、卡片下方垫底色）若横跨整宽，
@@ -131,7 +154,8 @@
     return () => ro.disconnect();
   });
 
-  const greetName = $derived(me.user ? `Hey there, ${me.user}` : 'Hey there');
+  // 官方 /code 落地页问候（cc43287c9 nz，What’s up next, {name}?）
+  const greetName = $derived(me.user ? t('{name}，接下来做什么？', { name: me.user }) : t('接下来做什么？'));
 
   // —— 三档形态（断点单源见 lib/layout.svelte.js）——
   //   expanded ≥1100：侧栏常驻左列 + 工作台右列，两根并存（原桌面行为）
@@ -195,7 +219,10 @@
     if (!prev) return;   // 没登录 → 登录：上一个人退出时已经清过
     untrack(() => {
       sessions = []; projects = []; projOrder = [];
-      cacheSessions([]); cacheProjects([]); cacheOrder([]);
+      cacheSessions([]); cacheProjects([]); cacheOrder([]); resetLibrary();
+      resetArchive(); older = []; projCounts = {}; pager = {}; cutoff = 0; searchOpen = false;
+      quickExp = {}; quickBin = 0; binOpen = false; binItems = []; shownQuick = 0;
+      quickCount = 0; quickCut = 0; quickPager = null; quickOrph = []; chosenQuick = null;
       newConversation();
     });
   });
@@ -224,16 +251,21 @@
   // requestSync（内核幂等，探活+收敛一体），体验退化成"最多等 4s"而不是"完全不同步"。
   // 总线连着就不跑，不做重复网络请求。回前台/联网的对账由内核自己的 wake 钩子负责，
   // 页面层不再各挂各的。
+  // 总线一直连不上（10-21）：间隔逐步拉长——头一分钟 4s，之后 8s、再之后 16s 封顶，每次带一点抖动，
+  // 多台设备不会踩着同一拍一起打服务端；总线一恢复就归零。
   $effect(() => {
     if (ui.screen !== 'claude' || !who) return;
     if (!document.hidden && !busConnected()) requestSync('page');
-    let tick = 0;
+    let tick = 0, miss = 0, skip = 0;
     const iv = setInterval(() => {
-      if (document.hidden || busConnected()) return;
+      if (document.hidden || busConnected()) { miss = 0; skip = 0; return; }
+      if (skip > 0) { skip--; return; }
       requestSync('poll');
-      // 列表刷新降频到 ~16s：/api/sessions 是全量扫盘（遍历项目目录 + 逐文件读标题），
+      // 列表刷新降频到 ~16s 起：/api/sessions 要扫一遍所有项目目录，
       // 跟着 4s 探活一起跑会把兜底路径变成持续的磁盘压力。
       if (++tick % 4 === 0) untrack(refreshSessions);
+      miss++;
+      skip = (1 << Math.min(2, Math.floor(miss / 15))) - 1 + (Math.random() < 0.3 ? 1 : 0);
     }, 4000);
     return () => clearInterval(iv);
   });
@@ -264,7 +296,10 @@
     _syncPending = setTimeout(() => { _syncPending = null; untrack(refreshSessions); }, 800);
   }
   function onSync(ev) {
+    if (ev.type === 'library') { applyServerLibrary(ev.library); return; }   // 别的设备收藏/改名
     if (ev.type === 'hello') {
+      if (ev.library) applyServerLibrary(ev.library);
+      if (noteArchiveRev(ev.archiveRev)) refreshSoon();   // 断线期间别处归档 / 取消归档过：整表重拉
       const live = new Set((ev.runs || []).map((r) => r.sessionId).filter(Boolean));
       const pend = new Set(ev.pending || []);
       for (const s of sessions) {
@@ -275,11 +310,19 @@
     } else if (ev.type === 'run.start') {
       if (!patchSession(ev.sessionId, { thinking: true })) refreshSoon();
     } else if (ev.type === 'run.end') {
-      patchSession(ev.sessionId, { thinking: false, pending: false });
+      patchSession(ev.sessionId, { thinking: false, pending: !!ev.pending });   // pending：同会话还扣着跨会话消息等你确认（服务端 pendingFor）
     } else if (ev.type === 'question') {
       patchSession(ev.sessionId, { pending: !!ev.pending });
     } else if (ev.type === 'session.touch') {
-      if (!bumpToTop(ev.sessionId, ev.mtime)) refreshSoon();
+      // 手动归档的会话在 Desktop / CLI 里接着聊：它不会回到列表，不为它每轮整表重拉
+      if (!bumpToTop(ev.sessionId, ev.mtime) && !stickyArchived(ev.sessionId)) refreshSoon();
+    } else if (ev.type === 'family' && ev.child) {
+      refreshSoon();   // 某个会话刚派生了子会话：侧栏重拉，让它挂到父会话下面
+    } else if (ev.type === 'archive') {
+      refreshSoon();   // 归档 / 取消归档（本机、别的设备或自动归档）：整表重拉——归档的让出名额，取消归档的回到列表
+    } else if (ev.type === 'session.gone' && ev.sessionId) {
+      // 别处删了一条会话：整表刷新只管最新 60 条，翻页拿回来的老行、已归档列表里的这一行得就地摘掉
+      dropRows((s) => s.id === ev.sessionId); dropArchivedRow(ev.sessionId);
     }
     onBusEvent(ev);   // 正文侧：挂直播 / 静态跟随
   }
@@ -288,17 +331,30 @@
   // 列表等值跳过：内容没变就不赋值——反复开抽屉/轮询刷新不再每次重建列表 DOM。
   const sameSessions = (a, b) => a.length === b.length && a.every((x, i) => {
     const y = b[i];
-    return x.id === y.id && x.title === y.title && !!x.thinking === !!y.thinking && !!x.pending === !!y.pending && (x.projectId || null) === (y.projectId || null);
+    return x.id === y.id && x.title === y.title && !!x.thinking === !!y.thinking && !!x.pending === !!y.pending && (x.projectId || null) === (y.projectId || null) && (x.parentId || null) === (y.parentId || null);
   });
   function applySessions(list) { if (!sameSessions(sessions, list)) sessions = list; }
-  const sameProjects = (a, b) => a.length === b.length && a.every((x, i) => x.id === b[i].id && x.name === b[i].name);
+  // path 也要比：存好的临时对话工作空间会被服务端挪到固定位置（id、名字不变，只换 path），工作台得跟过去。
+  // current 也要比：开新临时对话用的那只空桶换了，落点要跟上。
+  const sameProjects = (a, b) => a.length === b.length && a.every((x, i) => x.id === b[i].id && x.name === b[i].name && x.path === b[i].path && !!x.current === !!b[i].current);
 
+  let sessionsAt = 0;   // 上次整表拉成功的时刻（非响应式，抽屉开合据此决定要不要重拉）
   async function refreshSessions() {
     if (!sessions.length) { try { const c = await getCachedSessions(); if (c && c.length && !sessions.length) sessions = c; } catch {} }  // 先出缓存，再后台刷新
     if (!projects.length) { const c = loadCachedProjects(); if (c.length && !projects.length) projects = c; }
     // 缓存/预取都吃网络原样列表而非 sessions：等值跳过时 sessions 保留旧 mtime，
     // 预取器会看不见「桌面端刚聊过的会话」（id/title 没变、只有 mtime 变）。
-    try { const d = await api.sessions(); const list = d.sessions || []; applySessions(list); cacheSessions(list); prefetchSessions(list); if (d.prefsLast) absorbLastPrefs(d.prefsLast); }   // 跨设备：别的设备最近的选择也能当本机新对话默认
+    try {
+      const since = archClock();   // 请求在路上时归档态有没有再变（lib/sessionArchive.svelte.js 的乐观隐藏收尾）
+      const d = await api.sessions(older.slice(0, 150).map((s) => s.id)); const list = d.sessions || [];   // keep 走 URL：控制在 ~6KB
+      // 翻页拿回来的老行对账：别处删了 / 归档了（含跟随 Desktop）的服务端回在 gone 里，摘掉，不留幽灵行
+      if (Array.isArray(d.gone) && d.gone.length) { const g = new Set(d.gone); older = older.filter((s) => !g.has(s.id)); }
+      noteSessionList(d, since); if (d.projectCounts) projCounts = d.projectCounts;   // 已归档总数 / 各项目活跃会话总数（组内翻页用）
+      noteQuick(d);   // 临时对话的到期时刻 / 回收策略 / 回收站计数
+      cutoff = Number(d.cutoff) || 0;
+      applySessions(withOlder(list)); cacheSessions(list); prefetchSessions(list); if (d.prefsLast) absorbLastPrefs(d.prefsLast); if (d.library) applyServerLibrary(d.library);   // 跨设备：别的设备最近的选择也能当本机新对话默认
+      sessionsAt = Date.now();
+    }
     catch { if (!sessions.length) sessions = (await getCachedSessions()) || []; }   // 离线 → 读本地缓存的会话列表
     // 项目列表单独拉、单独兜底——项目接口失败不拖累会话列表本身。
     try {
@@ -363,6 +419,8 @@
     ui.drawerOpen = true;
     // 列表已有内容时：网络刷新错峰到滑入动画（260ms）之后——数据返回替换列表 DOM
     // 正撞动画帧是「开抽屉卡一下」的元凶。首次（空列表）立即拉，宁可边滑边出内容。
+    // 总线连着、10 秒内刚拉过：列表有总线增量在跟，不再每开一次抽屉就整表重拉（10-21）。
+    if (sessions.length && busConnected() && Date.now() - sessionsAt < 10_000) return;
     if (sessions.length) setTimeout(refreshSessions, 320);
     else refreshSessions();
   }
@@ -432,23 +490,59 @@
   function openCustomize() { closeDrawer(); ui.customizeOpen = true; }
   const czOn = $derived(ui.customizeOpen && me.kind === 'admin');
 
-  // —— 快照对话（服务端 claude-quick.mjs）——
-  // 一只一次性桶伪装成的项目（quick 标记）：不属于任何工作空间、不共用记忆、同时只有
-  // 一条对话，且常驻置顶。它不进「项目」区，也不参与收藏/分组。
-  const quickProj = $derived(projects.find((p) => p.quick) || null);
-  const realProjects = $derived(applyProjectOrder(projects.filter((p) => !p.quick), projOrder));
-  const quickSession = $derived(quickProj ? (sessions.find((s) => s.projectId === quickProj.id) || null) : null);
-  // 置顶行是否处于「当前」：已有那条快照对话正开着，或还没聊过但落点已经是快照桶。
-  const quickCur = $derived(!!quickProj && (quickSession ? session.id === quickSession.id : (!session.id && session.projectId === quickProj.id)));
-  function openQuick() {
-    if (!quickProj) return;
-    closeDrawer();
-    if (quickSession) { session.projectId = quickProj.id; openSession(quickSession.id); }
-    else newConversation(quickProj.id);
+  // —— 新对话（S1-6，审查 G21）：侧栏第一行 + 手机顶栏 + 快捷键（网页 Ctrl/⌘+Shift+O，桌面壳另认 Ctrl/⌘+N）——
+  // 落点（lib/quickChat.js 的 newChatTarget）：当前在真实项目里就在它里面开；在临时对话里（或还没有归属）
+  // 就落到最近用过的真实项目，都没有落默认工作空间。分屏时开在有焦点的那一格，「当前项目」也认那一格的
+  //（那一格的会话在侧栏列表里就按列表，空白对话按它报上来的 / 我们刚让它开的项目）。
+  function openNew(pid) {
+    if (splitOn && paneFocus) { paneProjId = pid || null; postPane({ t: 'new', projectId: pid || null }); return; }
+    newConversation(pid || undefined);
   }
-  // 「新建快照」= 服务端换一只全新的桶（新 cwd → 新自动记忆目录，前尘不带），随即开空对话。
-  // 旧桶留在盘上不删，只是不再被列出（同「删项目不删 transcript」的规矩）。
+  function newChat() {
+    closeDrawer();
+    const cur = splitOn && paneFocus ? ((paneId && sessions.find((s) => s.id === paneId)?.projectId) || paneProjId) : sessionProjId;
+    openNew(newChatTarget({ currentProjectId: cur, projects, sessions: listed }));
+  }
+  const IS_DESKTOP_SHELL = false;   // Muse 只有网页 / 安卓壳：新对话快捷键按浏览器那套
+  const NEW_KBD = newChatKbd({ desktop: IS_DESKTOP_SHELL, mac: typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '') });
+
+  // —— 临时对话（服务端 claude-quick.mjs，原「快照」）——
+  // 每条临时对话一只一次性桶，桶伪装成项目（quick 标记）：不属于任何工作空间、不共用记忆。current = 开新临时
+  // 对话时落进的那只空桶（它一用过，服务端就换一只新的）。全部临时对话在侧栏单独一区（不进项目区、不参与收藏 /
+  // 分组 / 归档），最后活动超过 30 天才清理（先进回收站，再放 30 天），剩几天时侧栏角标 + 输入框上方横条提示，
+  // 可「存为工作空间」或「继续保留」。天数一律按服务端给的到期时刻算（/api/sessions 的 quickExpires）。
+  const quickIds = $derived(new Set(projects.filter((p) => p.quick).map((p) => p.id)));
+  const quickProj = $derived(projects.find((p) => p.quick && p.current) || projects.find((p) => p.quick) || null);
+  const realProjects = $derived(applyProjectOrder(projects.filter((p) => !p.quick), projOrder));
+  let quickExp = $state({});                    // 桶 id → 到期时刻（ms）
+  let quickPol = $state(quickPolicy(null));     // { ttlDays, warnDays, trashDays }
+  let quickBin = $state(0);                     // 回收站里有几只
+  // 首页只带最近 20 条临时对话（服务端 QUICK_HEAD）：总数、翻页截断点；更早的「显示更多」时向服务端要
+  let quickCount = $state(0);
+  let quickCut = $state(0);                     // 首页最旧那条临时对话的 mtime；0 = 首页就是全部
+  let quickPager = $state(null);                // { hi, lo, done }（lib/sessionArchiveView.js 的 pagerFrom）
+  let quickOlderBusy = $state(false);
+  // 只有文件、没有对话的临时对话桶（删光了对话 / 老版本留下的）：[{ id, items, expiresAt }]
+  let quickOrph = $state([]);
+  function noteQuick(d) {
+    if (!d) return;
+    if (Array.isArray(d.quickOrphans)) quickOrph = d.quickOrphans.filter((o) => o && typeof o.id === 'string');
+    // 合并而不是整个换掉：翻页拿回来的那些桶的到期时刻不在首页这份里（桶 id 不复用，留着旧键无妨）
+    if (d.quickExpires && typeof d.quickExpires === 'object') {
+      const orph = Array.isArray(d.quickOrphans) ? quickOrph.filter((o) => Number.isFinite(o.expiresAt)).map((o) => [o.id, o.expiresAt]) : [];
+      quickExp = { ...quickExp, ...d.quickExpires, ...Object.fromEntries(orph) };
+    }
+    if (d.quickPolicy) quickPol = quickPolicy(d.quickPolicy);
+    if (Number.isFinite(d.quickRecycled)) quickBin = d.quickRecycled;
+    if (Number.isFinite(d.quickCount)) { quickCount = d.quickCount; quickCut = d.quickMore ? Number(d.quickCursor) || 0 : 0; }
+  }
+  // 快到期了才给天数（侧栏角标 / 横条），否则 null
+  const quickWarnDays = (pid) => (expiryWarn(quickExp[pid], quickPol) ? daysLeft(quickExp[pid]) : null);
+
   let quickBusy = $state(false);
+  const errDetail = (e) => tr(typeof e?.body === 'string' ? e.body : (e?.body?.error || e?.message || ''));
+  // 「新建临时对话」= 服务端给一只没用过的空桶（新 cwd → 新自动记忆目录，前尘不带），随即开空对话。
+  // 用过的旧桶照常列在「临时对话」区里，按时间回收（不再像以前那样从列表里消失、攒满 10 条就连产物删掉）。
   async function newQuick() {
     if (quickBusy) return;
     quickBusy = true;
@@ -456,24 +550,119 @@
     try {
       const r = await api.newQuickChat();
       const p = r && r.project;
-      if (!p || !p.id) throw new Error(t('服务器未返回新的快照'));
-      projects = [...projects.filter((x) => !x.quick), p];   // [0] 仍是默认工作空间
+      if (!p || !p.id) throw new Error(t('服务器没有返回新的临时对话'));
+      // 旧的当前桶摘掉 current 标记、留在列表里；新桶补在末尾（[0] 仍是默认工作空间）
+      projects = [...projects.filter((x) => x.id !== p.id).map((x) => (x.quick && x.current ? { ...x, current: false } : x)), { ...p, current: true }];
       cacheProjects(projects);
-      newConversation(p.id);
+      openNew(p.id);
       refreshSessions();
     } catch (e) {
-      const detail = typeof e?.body === 'string' ? e.body : (e?.body?.error || e?.message || '');
-      uiAlert(t('新建快照失败，请重试'), { type: 'error', detail: tr(detail) });
+      uiAlert(t('新建临时对话失败，请重试'), { type: 'error', detail: errDetail(e) });
     } finally { quickBusy = false; }
   }
-  // 「没进任何目录」时的默认目录 = 快照工作空间。只在【冷启动没有可恢复会话】那一次落点，
-  // 之后由用户显式选目录/点快照决定——否则助手转交、文件面板「新对话」这类程序化发起的
-  // 新会话也会被拽进快照桶，而它们的上下文本来就是工作空间。
+  // 「存为工作空间」（临时对话那条会话的 ⋮ / 右键、输入框上方的芯片与横条）：服务端把它所在的桶登记成普通项目
+  //（id 沿用桶 id、名字取这条对话的标题），随后挪到固定位置。会话的 projectId 不变、只是它的项目摘掉了 quick
+  // 标记——那条对话自然从「临时对话」区落进项目列表，正开着的也不用重开；此后不再按时间回收。
+  async function saveQuick(pid, s) {
+    closeMenu();
+    if (!pid || quickBusy) return;
+    quickBusy = true;
+    try {
+      const title = s ? titleFor(s.id, s.title) : '';
+      const label = title && title !== '（进行中…）' ? tr(title) : '';   // i18n-ignore 服务端给在跑的无标题会话的占位，不是界面文案
+      const r = await api.saveQuickChat(pid, t('存下的对话'), label);
+      const p = r && r.project;
+      if (!p || !p.id) throw new Error(t('服务器未返回存好的工作空间'));
+      const q = r.quick && r.quick.id ? { ...r.quick, current: true } : null;
+      const rest = projects.filter((x) => x.id !== p.id && (!q || x.id !== q.id)).map((x) => (q && x.quick && x.current ? { ...x, current: false } : x));
+      projects = [...rest, p, ...(q ? [q] : [])];   // [0] 仍是默认工作空间
+      cacheProjects(projects);
+      // 手上是一张还没发出的空白对话、落点原本是这只桶：它跟着临时对话走（落到当前空桶），不跟着被存走的那只。
+      // 点名进的那只（只有文件的桶）除外：存的就是它，留在刚存好的工作空间里
+      if (!session.id && session.projectId === p.id && q && p.id !== chosenQuick) session.projectId = q.id;
+      if (collapsed[p.id]) { delete collapsed[p.id]; try { localStorage.setItem(COLL_LS, JSON.stringify(collapsed)); } catch {} }
+      refreshSessions();
+    } catch (e) {
+      uiAlert(t('存为工作空间失败，请重试'), { type: 'error', detail: errDetail(e) });
+      refreshSessions();
+    } finally { quickBusy = false; }
+  }
+  // 「继续保留」：服务端给这只桶记一次活动，回收时钟从头算
+  async function keepQuick(pid) {
+    closeMenu();
+    if (!pid || quickBusy) return;
+    quickBusy = true;
+    try {
+      const r = await api.keepQuickChat(pid);
+      if (r && Number.isFinite(r.expiresAt)) quickExp = { ...quickExp, [pid]: r.expiresAt };
+    } catch (e) {
+      uiAlert(t('操作失败，请重试'), { type: 'error', detail: errDetail(e) });
+    } finally { quickBusy = false; }
+  }
+  // 「没进任何目录」时的默认落点（审查 D10 选 b，lib/quickChat.js 的 landingFor）：管理员默认落临时对话
+  //（沿用一直以来的习惯），其他成员默认落自己的工作空间；设置里有「新对话落点」时照设置。只在【冷启动没有
+  // 可恢复会话】那一次落点，之后由用户显式选目录 / 点临时对话决定——否则文件面板「新对话」这类
+  // 程序化发起的新会话也会被拽进临时对话，而它们的上下文本来就是工作空间。
   let quickDefaulted = false;
+  let landedQuick = null;   // 冷启动落点给的那只桶 id（非响应式；可能来自本地缓存，已经过时）
+  let chosenQuick = $state(null);   // 用户点名要进的那只桶（只有文件的那种 / 刚从回收站恢复的）：空白对话就留在它里面，不跟到当前空桶
   $effect(() => {
     if (quickDefaulted || !quickProj) return;
     quickDefaulted = true;
-    if (!session.id && !session.projectId) session.projectId = quickProj.id;
+    if (!session.id && !session.projectId && landingFor({ setting: claudeCs.values?.newChatLanding, kind: me.kind }) === 'temp') {
+      session.projectId = quickProj.id;
+      landedQuick = quickProj.id;
+    }
+  });
+  // 空白的临时对话指着的桶已经不是当前空桶（它刚在别处开过对话、冷启动用的是缓存里的旧当前桶——服务端早换了，
+  // 甚至已经不在列表里）：跟到当前空桶，免得第一条消息挤进别的临时对话的桶、或者发给一只不存在的桶。
+  $effect(() => {
+    const cur = quickProj;
+    const pid = session.projectId;
+    if (!cur || session.id || !pid || pid === cur.id || pid === chosenQuick) return;
+    if (quickIds.has(pid) || pid === landedQuick) session.projectId = cur.id;
+  });
+
+  // —— 临时对话回收站：到期的临时对话整只挪在这里（对话记录不动），再放 trashDays 天才永久删除；能恢复 ——
+  let binOpen = $state(false);
+  let binItems = $state([]);
+  let binLoading = $state(false);
+  let binBusy = $state(false);
+  async function openBin() {
+    closeDrawer();
+    binOpen = true;
+    binLoading = true;
+    try {
+      const r = await api.recycledQuickChats();
+      binItems = Array.isArray(r?.items) ? r.items : [];
+      quickBin = binItems.length;
+    } catch (e) {
+      uiAlert(t('读取回收站失败'), { type: 'error', detail: errDetail(e) });
+    } finally { binLoading = false; }
+  }
+  async function restoreBin(it) {
+    if (binBusy || !it) return;
+    binBusy = true;
+    try {
+      const r = await api.restoreQuickChat(it.id);
+      binItems = binItems.filter((x) => x.id !== it.id);
+      quickBin = binItems.length;
+      const p = r && r.project;
+      if (p && p.id && !projects.some((x) => x.id === p.id)) { projects = [...projects, p]; cacheProjects(projects); }
+      await refreshSessions();
+      // 恢复的就是想接着看的那条：直接打开它最新的一段对话；没有对话、只有文件的，就在那只桶里开空白对话（工作台里看得见文件）
+      if (it.sessionId) { binOpen = false; pickSession({ id: it.sessionId, projectId: it.id }); }
+      else { binOpen = false; openOrphan(it.id); }
+    } catch (e) {
+      uiAlert(t('恢复失败，请重试'), { type: 'error', detail: errDetail(e) });
+    } finally { binBusy = false; }
+  }
+  $effect(() => {
+    if (!binOpen) return;
+    const offBack = pushBackLayer(() => { binOpen = false; });
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); binOpen = false; } };
+    window.addEventListener('keydown', onKey, true);
+    return () => { offBack(); window.removeEventListener('keydown', onKey, true); };
   });
 
   // —— 项目组折叠：chevron 切换收起该项目下的会话列表（行点击=开新聊天不变）。
@@ -488,20 +677,279 @@
 
   // —— 分组派生：收藏优先（收藏的会话不再重复出现在项目组里）；其余按 projectId 归入
   // 项目组。项目制下会话必有归属；万一撞上过期缓存（旧 id 对不上号）就兜进默认工作空间组。 ——
-  // 快照对话不参与收藏/分组——它常驻置顶，不附属任何目录。
-  const isQuickSession = (s) => !!quickProj && s.projectId === quickProj.id;
-  const starred = $derived(sessions.filter((s) => isStarred(s.id) && !isQuickSession(s)));
+  // 临时对话不参与收藏/分组——它们在侧栏单独一区，不附属任何目录。
+  const isQuickSession = (s) => !!s && quickIds.has(s.projectId);
+  // 刚归档、服务端列表还没反映的先藏起来（乐观，lib/sessionArchive.svelte.js 的 hidden）
+  const listed = $derived(sessions.filter((s) => !arch.hidden[s.id]));
+  const starred = $derived(listed.filter((s) => isStarred(s.id) && !isQuickSession(s)));
+  // 「临时对话」区：服务端按最近活动倒序（与普通会话按 mtime 合成一列）。折着时只放最近的 1 条（10-23 维护者：其余全收进
+  // 「显示更多」，只剩 1 条也不直接放出来；只有文件的那种也一并折起），「显示更多」每次再放 PAGE_STEP 条；
+  // 当前打开的那条折在后面时单独补在末尾。当前这张空白对话落在临时对话里（还没发第一条）时，区首补一行占位，看得出人在哪。
+  // 服务端首页只带最近 20 条：本地放完了还有没拿到的，「显示更多」接着向服务端要（loadOlderQuick）。
+  const QUICK_PAGE = 1;
+  let shownQuick = $state(0);
+  const quickSessions = $derived(listed.filter(isQuickSession));
+  // 服务端那头还有多少条临时对话没拿到（翻到底了、或首页就是全部 → 0）
+  const quickSrvRest = $derived(pagerFrom(quickPager, quickCut).done ? 0 : Math.max(0, quickCount - quickSessions.length));
+  const quickRows = $derived.by(() => {
+    const n = shownQuick || QUICK_PAGE;
+    // 只有文件、没有对话的那种：展开后才列；折着时只留正开着的那只
+    const orph = shownQuick ? quickOrphRows : quickOrphRows.filter((o) => quickBlank && session.projectId === o.id);
+    const orphRest = quickOrphRows.length - orph.length;
+    if (!quickSrvRest && quickSessions.length <= n) return { rows: quickSessions, orph, rest: orphRest };
+    const rows = quickSessions.slice(0, n);
+    const cur = curId ? quickSessions.find((s, i) => i >= n && s.id === curId) : null;
+    return { rows: cur ? [...rows, cur] : rows, orph, rest: quickSessions.length - rows.length - (cur ? 1 : 0) + quickSrvRest + orphRest };
+  });
+  function showMoreQuick() {
+    shownQuick = (shownQuick || QUICK_PAGE) + PAGE_STEP;
+    if (shownQuick >= quickSessions.length && quickSrvRest > 0) loadOlderQuick();
+  }
+  async function loadOlderQuick() {
+    if (quickOlderBusy) return;
+    quickOlderBusy = true;
+    try {
+      let p = pagerFrom(quickPager, quickCut);
+      // 一页全是已经拿到的 / 没标题被滤掉的，就接着往下要，最多几页（同 loadOlder）
+      for (let i = 0; i < 6 && !p.done; i++) {
+        const d = await api.get(`/api/sessions?quick=2&project=${encodeURIComponent('@quick')}&before=${p.lo}&limit=${PAGE_STEP + 10}`);
+        noteQuick({ quickExpires: d?.quickExpires });
+        const have = new Set(sessions.map((s) => s.id));
+        const add = (d?.sessions || []).filter((s) => !have.has(s.id));
+        const lo = Number(d?.cursor) || 0;
+        p = { hi: p.hi, lo: lo && lo < p.lo ? lo : p.lo, done: !d?.more || !lo || lo >= p.lo };
+        if (add.length) { older = [...older, ...add]; sessions = [...sessions, ...add]; break; }
+      }
+      quickPager = p;
+    } catch {} finally { quickOlderBusy = false; }
+  }
+  const quickBlank = $derived(!session.id && !!session.projectId && quickIds.has(session.projectId));
+  // 只有文件、没有对话的临时对话：单独列在区尾，点开 = 在那只桶里开空白对话（工作台里看得见文件），也能存为工作空间
+  const quickOrphRows = $derived(quickOrph.filter((o) => quickIds.has(o.id) && !quickSessions.some((s) => s.projectId === o.id)));
+  const orphanBlank = $derived(quickBlank && (session.projectId === chosenQuick || quickOrphRows.some((o) => o.id === session.projectId)));
+  function openOrphan(id) {
+    closeDrawer();
+    chosenQuick = id;
+    openNew(id);
+  }
   const grouped = $derived.by(() => {
     const map = new Map(realProjects.map((p) => [p.id, []]));
     // 默认工作空间认 def 标记（服务端保证 projects[0] 是它，但侧栏顺序可以被拖乱）
     const defId = (realProjects.find((p) => p.def) || realProjects[0])?.id ?? null;
-    for (const s of sessions) {
+    for (const s of listed) {
       if (isStarred(s.id) || isQuickSession(s)) continue;
       const key = (s.projectId && map.has(s.projectId)) ? s.projectId : defId;
       if (key != null) map.get(key).push(s);
     }
+    for (const [k, list] of map) map.set(k, nestFamilies(list));
     return map;
   });
+  // 官方 Desktop 同款子会话树：服务端给子会话带 parentId（顶层祖先，见 src/runtime/desktop-lineage.mjs），
+  // 同组里根在场就把子行紧贴在根下面缩进一级；一家子的位置＝其中最新那条的位置（列表本就按 mtime 倒序，
+  // 第一次碰到哪个成员就在哪落座）。根不在本组（被收藏走了 / 不在列表里）时子会话照常平铺。
+  const childIds = $derived.by(() => {
+    const out = new Set();
+    for (const list of grouped.values()) for (const s of list) if (s.parentId && list.some((x) => x.id === s.parentId)) out.add(s.id);
+    return out;
+  });
+  function nestFamilies(list) {
+    if (!list.some((s) => s.parentId)) return list;
+    const ids = new Set(list.map((s) => s.id));
+    const kids = new Map();
+    for (const s of list) {
+      if (!s.parentId || !ids.has(s.parentId)) continue;
+      if (!kids.has(s.parentId)) kids.set(s.parentId, []);
+      kids.get(s.parentId).push(s);
+    }
+    const out = [];
+    const placed = new Set();
+    for (const s of list) {
+      const rootId = s.parentId && ids.has(s.parentId) ? s.parentId : s.id;
+      if (placed.has(rootId)) continue;
+      placed.add(rootId);
+      out.push(rootId === s.id ? s : list.find((x) => x.id === rootId));
+      for (const k of kids.get(rootId) || []) out.push(k);
+    }
+    return out;
+  }
+
+  // —— 组内懒加载：一个项目会话一多整条侧栏就被它撑满，每组先只渲染最新 PAGE 条，
+  // 末尾「显示更多」每次再放 PAGE_STEP 条，全放完换成「收起」。展开数只活在本次页面里（不持久化）。
+  // 截断点落在一家子中间时顺延到这家的子行放完；当前打开的会话若被折在后面，单独补在可见段末尾，
+  // 免得切过去的那条在侧栏里「消失」。 ——
+  const PAGE = 10, PAGE_STEP = 20;
+  let shown = $state({});
+  const paged = $derived.by(() => {
+    const out = new Map();
+    for (const [id, list] of grouped) {
+      let n = shown[id] || PAGE;
+      while (n < list.length && childIds.has(list[n].id)) n++;
+      // 只剩 1 条就直接放出来：「显示更多（1）」自己也占一行，折着不省地方，还多点一下
+      if (n >= list.length - 1) { out.set(id, { rows: list, rest: 0 }); continue; }
+      const rows = list.slice(0, n);
+      const cur = curId ? list.find((s, i) => i >= n && s.id === curId) : null;
+      out.set(id, { rows: cur ? [...rows, cur] : rows, rest: list.length - rows.length });
+    }
+    return out;
+  });
+  function showMore(id) {
+    shown[id] = (shown[id] || PAGE) + PAGE_STEP;
+    // 本地这组放完了、服务端还有更早的：接着向服务端要一页
+    if (shown[id] >= (grouped.get(id) || []).length && serverRest(id) > 0) loadOlder(id);
+  }
+  function showLess(id) { delete shown[id]; }
+  // 服务端那头同理：组里本地一条都没有（整组会话都比首页截断点老），或本地放完了、服务端只剩 1 条，
+  // 别让组下孤零零挂一行「显示更多」——直接替用户要回来。每个项目只自动要一次，要不回来就退回按钮。
+  // 10-21：服务端首页已经顺带「整组都比截断点老」的项目的最新几条，这里多半不再触发；真要补也一次只补一个组、
+  // 放到空闲时再发（以前进页同一时刻并发 5 个 ?project= 翻页，每个都让服务端全量扫一遍盘，整台服务冻住一两秒）。
+  const autoOlder = new Set();
+  let autoBusy = false;               // 非响应式：一次只跑一个
+  let autoTick = $state(0);           // 跑完一个就拨一下，让下面的 effect 接着看下一个组
+  const whenIdle = (fn) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 2000 }) : setTimeout(fn, 300));
+  $effect(() => {
+    void autoTick;
+    if (autoBusy) return;
+    for (const p of projects) {
+      if (collapsed[p.id] || olderBusy[p.id] || autoOlder.has(p.id)) continue;
+      const pg = paged.get(p.id);
+      if (pg?.rest) continue;
+      const rest = serverRest(p.id);
+      if (rest > 0 && (!pg?.rows.length || rest <= 1)) {
+        const pid = p.id;
+        autoOlder.add(pid);
+        autoBusy = true;
+        whenIdle(() => { loadOlder(pid).finally(() => { autoBusy = false; autoTick++; }); });
+        break;
+      }
+    }
+  });
+
+  // —— 组内翻页找回老会话（2026-10-20）：/api/sessions 只回最新 60 条活跃会话（已归档的不占名额），
+  // 各项目的活跃会话总数在 projectCounts 里。本地这组放完了而服务端还有，「显示更多」就向服务端要
+  // 更早的一页（?project=&before=）；拿回来的行记在 older 里，整表刷新时并回列表，不然下一次刷新就把它们冲掉了。
+  // 游标不能取「本组最旧那行」：收藏、一家子补进来的老行比首页截断点早得多，拿它当 before 会把中间整段跳过。
+  // 所以从服务端给的截断点 cutoff 起翻、每页接着服务端回的 cursor（lib/sessionArchiveView.js 的 pagerFrom）。 ——
+  let projCounts = $state({});
+  let cutoff = $state(0);           // 首页（最新 60 条）里最旧那条的 mtime；0 = 首页就是全部
+  let older = [];                   // 翻页拿回来的老会话行（非响应式；并进 sessions 才上屏）
+  let olderBusy = $state({});
+  let pager = $state({});           // 项目 id → { hi, lo, done }：[lo, hi) 这段翻过了；done = 服务端说更早的没了
+  function withOlder(list) {
+    // 已归档的、所属项目已经不在了的（别处删了项目）不再并回来
+    const pids = projects.length ? new Set(projects.map((p) => p.id)) : null;
+    older = older.filter((s) => !isArchivedId(s.id) && (!pids || pids.has(s.projectId)));
+    return mergeOlder(list, older);
+  }
+  // 会话被删（别的设备删的，总线 session.gone）/ 项目被删：列表与翻页拿回来的老行一起摘掉
+  function dropRows(pred) {
+    older = older.filter((s) => !pred(s));
+    if (sessions.some(pred)) sessions = sessions.filter((s) => !pred(s));
+  }
+  // 这个项目在服务端还有多少条没拿到（收藏的也算在已拿到里）；翻到底了、且与首页接得上就是 0
+  const serverRest = (pid) => (pagerFrom(pager[pid], cutoff).done ? 0 : serverRestOf(sessions, projCounts, pid));
+  async function loadOlder(pid) {
+    if (olderBusy[pid]) return;
+    olderBusy[pid] = true;
+    try {
+      let p = pagerFrom(pager[pid], cutoff);
+      // 一页全是已经拿到的（断档重翻、或整页都是没标题被滤掉的文件）就接着往下要，最多几页
+      for (let i = 0; i < 6 && !p.done; i++) {
+        const d = await api.get(`/api/sessions?project=${encodeURIComponent(pid)}&before=${p.lo}&limit=${PAGE_STEP + 10}`);
+        const have = new Set(sessions.map((s) => s.id));
+        const add = (d?.sessions || []).filter((s) => s.projectId === pid && !have.has(s.id));
+        const lo = Number(d?.cursor) || 0;
+        p = { hi: p.hi, lo: lo && lo < p.lo ? lo : p.lo, done: !d?.more || !lo || lo >= p.lo };
+        if (add.length) { older = [...older, ...add]; sessions = [...sessions, ...add]; break; }
+      }
+      pager[pid] = p;
+    } catch {} finally { delete olderBusy[pid]; }
+  }
+
+  // —— 归档 / 取消归档（2026-10-20，对齐官方 Claude Desktop 的 Archive）——
+  // 归档 = 从侧栏收起（不停会话、不删转录、不动 worktree）；在工作 / 在等回答的不归档。
+  // 有子会话时问一句：只归档这一条（子会话移到顶层：不再缩进挂在它下面，它以后取消归档也不挂回来）
+  // 还是一家子全部归档（官方同款二选一）。
+  // 已归档的会话在侧栏底部「已归档」里找，能取消归档；取消过归档的以后不再被自动归档（服务端记着）。
+  let archAsk = $state(null);       // { id, title, kids:[id], working }
+  const focusBtn = (el) => { requestAnimationFrame(() => el.focus()); };   // 默认焦点在「仅归档此会话」（官方同款）
+  // 弹窗开着：系统返回键 / Esc 先关它（不然返回键被下层抽屉吃掉、弹窗还盖在正文上）
+  $effect(() => {
+    if (!archAsk) return;
+    const offBack = pushBackLayer(() => { archAsk = null; });
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); archAsk = null; } };
+    window.addEventListener('keydown', onKey, true);
+    return () => { offBack(); window.removeEventListener('keydown', onKey, true); };
+  });
+  function doArchive(s) {
+    closeMenu();
+    if (!s) return;
+    const kids = descendantsOf(sessions, s.id).filter((k) => !arch.hidden[k.id]);
+    if (kids.length) { archAsk = { id: s.id, title: titleFor(s.id, s.title) || '', kids: kids.map((k) => k.id), working: kids.filter((k) => k.thinking || k.pending).length }; return; }
+    runArchive([s.id]);
+  }
+  async function runArchive(ids, opts) {
+    archAsk = null;
+    older = older.filter((s) => !ids.includes(s.id));
+    try {
+      const r = await setArchivedIds(ids, true, opts);
+      if (r.skipped.length && r.skipped.length === ids.length) uiAlert(t('正在工作的会话不能归档'));
+    } catch (e) { libFail(t('归档失败，请重试'))(e); }
+  }
+  // 项目 ⋮「归档全部会话」（官方 Archive all sessions in "{group}"?）：收藏的不动、在工作的跳过；列表随 archive 事件重拉
+  async function doArchiveProject(p) {
+    closeMenu();
+    if (!p) return;
+    const ok = await uiConfirm(t('归档「{name}」里的全部会话？', { name: tr(p.name || '') }), {
+      detail: t('收藏的会话和正在工作的会话不受影响。归档的会话可以在侧栏底部的「已归档」里找回。'), okLabel: t('全部归档'),
+    });
+    if (!ok) return;
+    try {
+      const r = await archiveProject(p.id);
+      dropRows((s) => s.projectId === p.id && !isStarred(s.id) && !s.thinking && !s.pending); delete pager[p.id];
+      if (!r.count && r.skipped.length) uiAlert(t('正在工作的会话不能归档'));
+    } catch (e) { libFail(t('归档失败，请重试'))(e); }
+  }
+  async function doUnarchive(id) {
+    closeMenu();
+    try { await setArchivedIds([id], false); } catch (e) { libFail(t('无法取消归档，请重试'))(e); }
+  }
+  // 已归档视图里点一条 = 打开它看（输入框上方有「此会话已归档」横条）
+  function openArchived(s) { markArchivedSeen(s.id); pickSession(s); }
+  const projName = (id) => tr(projects.find((p) => p.id === id)?.name || '');
+  // 已归档视图看得见时（常驻侧栏，或窄屏抽屉拉开着）：系统返回先回到会话列表；抽屉收着时不拦
+  $effect(() => { if (arch.view && (pinned || ui.drawerOpen)) return pushBackLayer(closeArchivedView); });
+
+  // 开着的会话报给服务端（视图上报 /api/ui/state 的 claudeOpen）：自动归档跳过有人正开着的会话（官方 on_screen）
+  $effect(() => {
+    if (!who || IS_CSNAP) return;
+    const open = ui.screen === 'claude' ? [session.id, splitOn ? paneId : null].filter(Boolean) : [];
+    untrack(() => reportUi({ claudeOpen: open }));
+  });
+
+  // —— 搜索会话（Ctrl+K / 侧栏「搜索」）：宽屏是居中面板，手机是全屏页（claude/SessionSearch.svelte）——
+  let searchOpen = $state(false);
+  function openSearch() { searchOpen = true; }
+  function openHit(h) {
+    searchOpen = false;
+    if (h.archived) markArchivedSeen(h.sessionId);
+    pickSession({ id: h.sessionId, projectId: h.projectId });
+  }
+  const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '');
+  function onSearchKey(e) {
+    // defaultPrevented：工作台里的编辑器（md 编辑器 Ctrl+K 插链接）已经接住了，不抢
+    if (e.defaultPrevented || ui.screen !== 'claude' || ui.settingsOpen || IS_CSNAP || !who) return;
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      searchOpen = !searchOpen;
+      return;
+    }
+    // 新对话（官方同款）：网页 Ctrl/⌘+Shift+O；桌面壳另认 Ctrl/⌘+N（lib/quickChat.js 的 isNewChatKey）
+    if (isNewChatKey(e, { desktop: IS_DESKTOP_SHELL })) {
+      e.preventDefault();
+      searchOpen = false;
+      newChat();
+    }
+  }
 
   // 行尾 ⋮ 菜单：会话（收藏/重命名/删除）与项目（重命名/删除）共用一套。
   // menuFor = { kind: 'session'|'project', id }。
@@ -510,8 +958,11 @@
   let delConfirm = $state(false);
   function openMenu(e, kind, id) {
     e.stopPropagation();
-    if (menuFor && menuFor.kind === kind && menuFor.id === id) { closeMenu(); return; }
-    const r = e.currentTarget.getBoundingClientRect();
+    // 右键（鼠标）：菜单开在指针处，再右键别处直接换过去；⋮ 照旧锚在按钮下沿、再点一下收起
+    const ctx = e.type === 'contextmenu';
+    if (ctx) e.preventDefault();
+    if (!ctx && menuFor && menuFor.kind === kind && menuFor.id === id) { closeMenu(); return; }
+    const r = ctx ? { top: e.clientY, bottom: e.clientY, right: Math.min(e.clientX + 176, window.innerWidth - 8) } : e.currentTarget.getBoundingClientRect();
     // 下方放不下就锚到按钮上方（bottom 定位，向上生长不出屏）。
     const up = (window.innerHeight - r.bottom) < 180;
     menuPos = up
@@ -520,16 +971,47 @@
     menuFor = { kind, id }; delConfirm = false;
   }
   function closeMenu() { menuFor = null; delConfirm = false; }
+  // 行上右键 = 同一个 ⋮ 菜单。只认鼠标：触屏长按在安卓上也会发 contextmenu，那是「拿起拖动」的手势，不抢。
+  function rowCtx(e, kind, id) { if (!pointer.fine || IS_CSNAP) return; openMenu(e, kind, id); }
+  const menuProject = () => projects.find((x) => x.id === (menuFor && menuFor.id)) || null;
   const menuStyle = $derived(menuFor
     ? (menuPos.top != null ? `top:${menuPos.top}px;` : `bottom:${menuPos.bottom}px;`) + `right:${menuPos.right}px;`
     : '');
   const menuSession = () => sessions.find((x) => x.id === (menuFor && menuFor.id)) || null;
 
-  function doStar(id) { toggleStar(id); closeMenu(); }
-  // 重命名：应用内小对话框（替代浏览器原生 window.prompt）。
-  let renameFor = $state(null);   // { id, name }
-  function doRename(s) { closeMenu(); if (s) renameFor = { id: s.id, name: titleFor(s.id, s.title) || '' }; }
-  function commitRename() { const r = renameFor; renameFor = null; if (r) renameSession(r.id, r.name.trim()); }
+  // 收藏 / 改名存服务端（跨设备）：乐观上屏，失败由 library 退回原状，这里只提示。
+  const libFail = (msg) => (e) => {
+    const detail = typeof e?.body === 'string' ? e.body : (e?.body?.error || e?.message || '');
+    uiAlert(msg, { type: 'error', detail: tr(detail) });
+  };
+  function doStar(id) { toggleStar(id).catch(libFail(t('收藏失败，请重试'))); closeMenu(); }
+  // 重命名：应用内小对话框。原来用 window.prompt——Electron 压根不实现 prompt()，
+  // 桌面壳里点「重命名」毫无反应；网页端也是浏览器原生弹窗，一并换掉。
+  // 同一个对话框也给项目（工作空间）改名用：renameFor.kind 区分。
+  let renameFor = $state(null);   // { kind: 'session'|'project', id, name }
+  function doRename(s) { closeMenu(); if (s) renameFor = { kind: 'session', id: s.id, name: titleFor(s.id, s.title) || '' }; }
+  function doRenameProject(p) { closeMenu(); if (p) renameFor = { kind: 'project', id: p.id, name: p.name || '' }; }
+  function commitRename() {
+    const r = renameFor; renameFor = null;
+    if (!r) return;
+    if (r.kind === 'project') commitProjectRename(r.id, r.name.trim());
+    else renameSession(r.id, r.name.trim()).catch(libFail(t('重命名失败，请重试')));
+  }
+  // 工作空间改名：只改显示名（服务端存 label），目录与会话都不动；留空 = 恢复成文件夹名。乐观上屏，失败退回。
+  async function commitProjectRename(id, name) {
+    const prev = projects;
+    const cur = prev.find((p) => p.id === id);
+    if (!cur || cur.quick || name === cur.name) return;
+    if (name) { projects = prev.map((p) => (p.id === id ? { ...p, name } : p)); cacheProjects(projects); }
+    try {
+      const r = await api.renameClaudeProject(id, name);
+      if (r && r.project) { projects = projects.map((p) => (p.id === id ? { ...p, name: r.project.name } : p)); cacheProjects(projects); }
+    } catch (e) {
+      projects = prev; cacheProjects(prev);
+      const detail = typeof e?.body === 'string' ? e.body : (e?.body?.error || e?.message || '');
+      uiAlert(t('重命名失败，请重试'), { type: 'error', detail: tr(detail) });
+    }
+  }
   const renameKey = (e) => { if (e.key === 'Enter') { e.preventDefault(); commitRename(); } else if (e.key === 'Escape') { e.preventDefault(); renameFor = null; } };
   const renameFocus = (el) => { el.focus(); el.select(); };
   async function doDelete(id) {
@@ -537,16 +1019,16 @@
     // 删除请求后台跑；失败再把条目放回去（不留"删不掉的幽灵"）。
     closeMenu();
     const prev = sessions;
-    const wasStarred = isStarred(id);
-    const wasQuick = !!quickProj && prev.find((x) => x.id === id)?.projectId === quickProj.id;
+    const wasQuick = isQuickSession(prev.find((x) => x.id === id));
     sessions = sessions.filter((x) => x.id !== id);
     try {
       const r = await api.deleteSession(id);
       if (r && r.ok === false) throw new Error(t('服务器未删除该会话'));
       await Promise.all([cacheSessions(sessions), removeCachedMessages(id)]);
-      if (wasStarred && isStarred(id)) toggleStar(id);
-      // 删掉的就是那条快照 → 落回同一只快照桶开空对话（置顶行永远在，不会被删没）
-      if (session.id === id) newConversation(wasQuick ? quickProj.id : undefined);
+      forgetSession(id);   // 服务端删除接口已顺手清掉它的收藏/改名，本地同步摘掉
+      dropArchivedRow(id); older = older.filter((x) => x.id !== id);   // 已归档列表 / 翻页拿回来的老会话同步摘掉（服务端归档记录也清了）
+      // 删掉的是正开着的临时对话 → 落到当前那只空桶开一张空白的临时对话
+      if (session.id === id) newConversation(wasQuick && quickProj ? quickProj.id : undefined);
       if (splitOn && paneId === id) closePane();   // 分屏那一格正开着它：那一格也收掉
     } catch (e) {
       sessions = prev;
@@ -555,7 +1037,7 @@
     }
   }
 
-  // 项目名固定=文件夹名（服务端派生），不提供重命名。
+  // 项目名默认 = 文件夹名（服务端派生），可在 ⋮ 里改名（见 commitProjectRename）。
   // 删项目 = 不再列出该目录的会话（transcript 留在磁盘不删）；默认工作空间项目不可删（服务端也拦）。
   async function doDeleteProject(id) {
     closeMenu();
@@ -564,6 +1046,7 @@
     cacheProjects(projects);
     try { const r = await api.deleteClaudeProject(id); if (r && r.ok === false) throw 0; }
     catch { projects = prev; cacheProjects(prev); return; }
+    dropRows((s) => s.projectId === id); delete pager[id];   // 翻页拿回来的老会话别被兜进默认工作空间组
     refreshSessions();   // 拿回服务端真值（该项目目录的会话不再出现）
   }
 
@@ -572,7 +1055,7 @@
   // newConversation）。冷启动恢复与挂直播续看走的是 chat 内核的 loadSession，那条路只认
   // session.id——它虽已把服务端返回的归属回写进 session.projectId，但离线读缓存那一支拿不到，
   // 所以这里再用会话列表回查一次：有 id 就以列表里的归属为准，列表还没有它（刚拿到 id 的
-  // 新会话）才回落 session.projectId。少了这一步，快照对话在冷启动后会被当成"没选目录"。
+  // 新会话）才回落 session.projectId。少了这一步，临时对话在冷启动后会被当成"没选目录"。
   const sessionProjId = $derived(session.id
     ? (sessions.find((s) => s.id === session.id)?.projectId || session.projectId || null)
     : (session.projectId || null));
@@ -587,22 +1070,30 @@
     : '');
   const dockWs = $derived(sessionWtCwd || (dockProject ? dockProject.path : ''));
   // 归属芯片的标签取【项目名】而不是路径末段：真实项目里两者本就相同（项目名固定=文件夹名），
-  // 但快照对话的桶目录名是个 UUID，只有项目名（「快照对话」）读得懂。
+  // 但临时对话的桶目录名是个 UUID，只有项目名（「临时对话」）读得懂。
   // —— 归属芯片认的项目：和 dockProject 有一处关键不同 ——
   // dockProject 找不到会退回 projects[0]（工作台沿用已久的兜底，不动它）；芯片不能这么退：
   // 会话指着一个【还没加载完 / 已被删 / 快照桶刚轮转】的项目时，退回默认项目等于把一个跟
   // 本会话毫不相干的目录和分支写在脸上。解析不出来就干脆不显。
   // 【只有还没有会话的空态才允许退默认工作空间】——那是新对话真实的落点；已经有会话在手
-  // 却查不出归属，一律不显（冷启动恢复快照对话时误摆「Claude / main」就是这么来的）。
+  // 却查不出归属，一律不显（冷启动恢复临时对话时误摆「Claude / main」就是这么来的）。
   const chipProject = $derived(sessionProjId
     ? (projects.find((x) => x.id === sessionProjId) || null)
     : (session.id ? null : (projects[0] || null)));
   // 芯片标签取【项目名】而不是路径末段：真实项目里两者本就相同（项目名固定=文件夹名），
-  // 但快照对话的桶目录名是个 UUID，只有项目名读得懂。
+  // 但临时对话的桶目录名是个 UUID，只有项目名读得懂。
   const dockName = $derived(tr(chipProject?.name || ''));
-  // 快照对话整条状态栏都不摆：它的工作空间是个一次性空桶（仓库外、无 git、名字是 UUID），
-  // 「归属」对它没有意义。解析不出项目时同样不摆。
+  // 临时对话整条状态栏都不摆：它的工作空间是个一次性空桶（仓库外、无 git、名字是 UUID），
+  // 「归属」对它没有意义——换成「临时对话」芯片（claude/TempChatBand），说清它什么时候清理、能存为工作空间。
+  // 解析不出项目时同样不摆。
   const showChips = $derived(!!chipProject && !chipProject.quick);
+  const curQuick = $derived(!!chipProject && !!chipProject.quick && !IS_CSNAP);
+  // 天数只对「有东西的」临时对话有意义：有对话的，或只有文件的那种（orphanBlank）；全新的空白临时对话不倒计时
+  const curQuickLive = $derived(curQuick && (!!session.id || orphanBlank));
+  const curQuickDays = $derived(curQuickLive ? daysLeft(quickExp[chipProject.id]) : null);
+  const curQuickWarn = $derived(curQuickLive && expiryWarn(quickExp[chipProject.id], quickPol));
+  const saveCurQuick = () => { if (curQuick) saveQuick(chipProject.id, sessions.find((s) => s.id === session.id)); };
+  const keepCurQuick = () => { if (curQuick) keepQuick(chipProject.id); };
   $effect(() => setDockWs(dockWs));
   function toggleDock() { if (dock.open) closeDock(); else openDock(dock.view === 'menu' ? 'menu' : dock.view); }
 
@@ -888,6 +1379,7 @@
   const curId = $derived(splitOn && paneFocus ? paneId : session.id);
   const altId = $derived(splitOn ? (paneFocus ? session.id : paneId) : null);
 
+  let paneProjId = null;   // 非响应式：那一格当前会话（或空白对话）所在的项目（它的 session 消息报上来的）
   const postPane = (msg) => { try { paneFrame?.contentWindow?.postMessage({ [PANE_MSG]: 1, ...msg }, location.origin); } catch {} };
   function focusPane() { paneFocus = true; try { paneFrame?.contentWindow?.focus(); } catch {} }
   function enterSplit(id, side) {
@@ -895,7 +1387,7 @@
     paneId = id; paneReady = false; paneFocus = true;
     split = { side, initId: id };
   }
-  function closePane() { split = null; paneId = null; paneFocus = false; paneReady = false; }
+  function closePane() { split = null; paneId = null; paneProjId = null; paneFocus = false; paneReady = false; }
   // 关掉本页这一格：iframe 那一格的对话接到本页来，分屏结束
   function closeMain() {
     const id = paneId;
@@ -908,12 +1400,22 @@
     const d = e.data;
     if (d.t === 'ready') paneReady = true;
     else if (d.t === 'focus') { paneFocus = true; window.dispatchEvent(new Event('bridge-pane-away')); }
-    else if (d.t === 'session') { paneId = d.id || null; if (d.id && !sessions.some((s) => s.id === d.id)) refreshSoon(); }
+    else if (d.t === 'session') { paneId = d.id || null; paneProjId = typeof d.projectId === 'string' ? d.projectId : null; if (d.id && !sessions.some((s) => s.id === d.id)) refreshSoon(); }
     else if (d.t === 'close') closePane();
+    else if (d.t === 'settings') openSettings(typeof d.sec === 'string' ? d.sec : null);   // 格里的「打开设置」（如回退横条）：设置外壳只挂在宿主页
+    else if (d.t === 'search') searchOpen = true;   // 焦点在分屏那一格里按 Ctrl+K：搜索面板开在整页上（SoloPage 转来）
+    else if (d.t === 'newchat') { paneFocus = true; searchOpen = false; newChat(); }   // 那一格里按了新对话快捷键（SoloPage 转来）：开在那一格
   }
   $effect(() => {
     window.addEventListener('message', onPaneMsg);
     return () => window.removeEventListener('message', onPaneMsg);
+  });
+  // 桌面壳全局快捷键「新会话」（App.svelte 转来）：和侧栏「新对话」走同一套落点规则；接住了就 preventDefault，
+  // 本页没挂着时 App 自己回落到默认工作空间
+  $effect(() => {
+    const onNew = (e) => { e.preventDefault(); searchOpen = false; newChat(); };
+    window.addEventListener('bridge:newchat', onNew);
+    return () => window.removeEventListener('bridge:newchat', onNew);
   });
   // 分屏时在本页任何地方按下（侧栏 / 本格）：告诉那一格收起它开着的弹层（⋮ 菜单）——
   // 它是另一份文档，收不到本页的 pointerdown。反方向见 onPaneMsg 的 focus。
@@ -1107,8 +1609,8 @@
 <!-- 顶栏挂在【这一格】上而不是对话列里：侧列形态的工具开关组要坐在这一格右上角——工作台展开时正好在
      卡片上方那条带里，盖在正文上的工作台也压不住它。
      汉堡在 expanded 档才彻底隐藏；medium 档留着当「侧栏常驻」开关（on=已常驻）。
-     分屏时每一格各有一组（工具开关 · ⋮ · 关掉这一格）。 -->
-<TopBar onMenu={onMenuKey} onDock={toggleDock} hideMenu={wide} menuOn={pinned} tools={sideMode} split={splitOn} onClose={splitOn ? closeMain : null} />
+     分屏时每一格各有一组（工具开关 · ⋮ · 关掉这一格）；贴窗口右缘的那一格才让系统窗控（--pane-wco-r）。 -->
+<TopBar onMenu={onMenuKey} onDock={toggleDock} onNew={IS_CSNAP ? null : newChat} hideMenu={wide} menuOn={pinned} tools={sideMode} split={splitOn} onClose={splitOn ? closeMain : null} />
 <div class="main-col" bind:this={mainColEl} class:dnd-on={drag.overKey === 'chat:claude' || wsDragOver} role="presentation" use:dropZone={claudeDrop}
   ondragover={onWsDragOver} ondragleave={onWsDragLeave} ondrop={onWsDrop}>
 
@@ -1117,18 +1619,35 @@
 <div class="stage" class:cz-on={czOn}>
 {#if czOn}<CustomizePage />{/if}
 {#if ui.view === 'greeting'}
+  <!-- 空态 = Claude 桌面端 /code 落地页：左上问候 + 用量卡（claude/CodeStatsCard），输入框沉到底部——
+       位置、外边距与聊天态 .composer-wrap/.composer-inner 完全一致（只挪位置、样式不动），
+       发出第一条时 crossfade 两端几何相同，输入框原地不跳。 -->
   <main class="hero">
-    <div class="greeting">
-      <span class="logo-fly" in:fade={{ duration: 420, delay: 80 }} out:fly={{ x: -80, y: -22, duration: 320, easing: softDrop }}><ClaudeLogo anim="static" size={30} interactive /></span>
-      <h1 in:fly={{ y: 22, duration: 480, delay: 130 }} out:fade={{ duration: 150 }}>{greetName}</h1>
+    <!-- 官方 Code 空态的字符风背景（LandingTextureLayer 移植）：只在空会话里，离开空态随 .hero 一起卸载 -->
+    {#if !IS_CSNAP}<LandingTexture />{/if}
+    <div class="hero-scroll">
+      <div class="hero-col">
+        <div class="greeting">
+          <span class="logo-fly" in:fade={{ duration: 420, delay: 80 }} out:fly={{ x: -80, y: -22, duration: 320, easing: softDrop }}><ClaudeLogo anim="static" size={24} interactive /></span>
+          <h1 in:fly={{ y: 22, duration: 480, delay: 130 }} out:fade={{ duration: 150 }}>{greetName}</h1>
+        </div>
+        {#if !IS_CSNAP}
+          <div class="hero-stats" in:fly={{ y: 24, duration: 520, delay: 170 }} out:fade={{ duration: 120 }}><CodeStatsCard /></div>
+        {/if}
+      </div>
     </div>
-    <!-- 归属状态栏（目录/分支/worktree）：刻意放在 crossfade 元素【外面】——
-         .hero-composer 与 .composer-inner 是同一 key 的形变两端，塞进去会让两端盒子
-         内容不等、形变歪掉。故两处都做成输入框的前置兄弟。 -->
-    {#if showChips}
-      <div class="hero-chips" in:fly={{ y: 30, duration: 540, delay: 190 }} out:fade={{ duration: 120 }}><WorkspaceChips name={dockName} armable={!session.id} /></div>
-    {/if}
-    <div class="hero-composer" in:fly={{ y: 30, duration: 540, delay: 210 }} out:sendComposer={{ key: 'composer' }}><Composer /></div>
+    <div class="hero-foot">
+      <!-- 归属状态栏（目录/分支/worktree）：刻意放在 crossfade 元素【外面】——
+           .hero-composer 与 .composer-inner 是同一 key 的形变两端，塞进去会让两端盒子
+           内容不等、形变歪掉。故两处都做成输入框的前置兄弟。 -->
+      {#if showChips}
+        <div class="hero-chips" in:fly={{ y: 30, duration: 540, delay: 190 }} out:fade={{ duration: 120 }}><WorkspaceChips name={dockName} armable={!session.id} /></div>
+      {:else if curQuick}
+        <!-- 只有文件的那种（orphanBlank）已经在倒计时，也能直接存为工作空间；全新的空白临时对话只说规矩 -->
+        <div class="hero-chips" in:fly={{ y: 30, duration: 540, delay: 190 }} out:fade={{ duration: 120 }}><TempChatBand days={curQuickDays} ttlDays={quickPol.ttlDays} canSave={orphanBlank} busy={quickBusy} onSave={saveCurQuick} /></div>
+      {/if}
+      <div class="hero-composer" in:fly={{ y: 30, duration: 540, delay: 210 }} out:sendComposer={{ key: 'composer' }}><Composer /></div>
+    </div>
   </main>
 {:else}
   <!-- 首尾两条渐隐带 = claude.ai /code 转录滚动区原件（app.css .scroll-fade-strip-*）：sticky + 负 margin
@@ -1144,15 +1663,29 @@
            要不要跟着滚」，两件事本就是同一个「人在不在底部」。另立紧阈值反而会在正文
            延后加载撑高后卡在离底几十像素、芯片打不开。class: 指令写法编译器认得，样式不会被剪。 -->
       <div class="chips-slot" class:foot={atBottom}><WorkspaceChips name={dockName} /></div>
+    {:else if curQuick}
+      <div class="chips-slot" class:foot={atBottom}><TempChatBand days={curQuickDays} ttlDays={quickPol.ttlDays} canSave={!!session.id && !curQuickWarn} busy={quickBusy} onSave={saveCurQuick} /></div>
     {/if}
+    <!-- 临时对话快到清理的时候（S1-6）：同 aux band 槽位，不受「滚到底才显形」约束 -->
+    {#if curQuickWarn}<div class="band-slot"><TempChatBand mode="warn" days={curQuickDays} canSave busy={quickBusy} onSave={saveCurQuick} onKeep={keepCurQuick} /></div>{/if}
     <!-- 安全栅门回退横条（官方 /code 输入框上方 aux band：Switched to X · Why? · Edit prompt and retry）：
          与归属芯片同层、同宽同轴，同样放在 crossfade 元素（.composer-inner）【外面】（理由同上：
          形变两端盒子内容必须相等）。芯片规矩一并适用——底必须不透明 + 上缘渐隐罩（正文从悬浮
          输入栏底下穿过）；但它不受「滚到底才显形」约束：这是一条要人处理的通知，不是装饰。
          高度随内容进 .composer-wrap 的 ResizeObserver 量进 --composer-h，滚动区底衬自动加高。 -->
     <div class="band-slot"><RefusalBand sessionId={session.id} /></div>
+    <!-- 逐次工具审批卡（官方 dock 形态）：同槽位规矩，没卡时整槽收起 -->
+    {#if !IS_CSNAP}<div class="band-slot"><PermissionCard sessionId={session.id} /></div>{/if}
+    <!-- 排队消息栏（官方 QueuedMessageBar：输入框正上方，与提示条同层）：同样放在 crossfade 元素外面 -->
+    {#if !IS_CSNAP}<div class="band-slot"><QueueBar /></div>{/if}
+    <!-- 「此会话已归档」横条（官方同款）：同层、同理放在 crossfade 元素外面 -->
+    {#if !IS_CSNAP}<div class="band-slot"><ArchivedBand sessionId={session.id} /></div>{/if}
+    <!-- 其它 Claude 会话（Desktop / 终端）发来、等你确认的消息（session-peers.mjs，设置「暂存等我确认」） -->
+    {#if !IS_CSNAP}<div class="band-slot"><PeerHoldBand /></div>{/if}
     <div class="composer-inner" bind:this={composerInnerEl} in:receiveComposer={{ key: 'composer' }} out:sendComposer={{ key: 'composer' }}><Composer placeholder={tc('claude', '发消息…')} /></div>
   </div>
+  <!-- 会话信息面板（官方 Session rail）：停靠在舞台右侧 / 窄时弹层，开关在右上角工具条第一颗 -->
+  {#if !IS_CSNAP}<SessionRail name={dockName} path={dockWs} />{/if}
 {/if}
 </div>
 </div>
@@ -1194,16 +1727,37 @@
 
 {#snippet convRow(s, indent)}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="d-row" class:cur={s.id === curId} class:alt={!!altId && s.id === altId} class:indent class:dnd-on={drag.overKey === 'chat:claude:' + s.id || rowHover === s.id}
+    <div class="d-row" class:cur={s.id === curId} class:alt={!!altId && s.id === altId} class:indent class:child={indent && childIds.has(s.id)} class:dnd-on={drag.overKey === 'chat:claude:' + s.id || rowHover === s.id}
       class:lifted={liftedId === s.id} draggable={mouseDnd ? 'true' : 'false'} ondragstart={(e) => onSessDragStart(e, s)} ondragend={onSideDragEnd}
       ondragover={(e) => onRowDragOver(e, s)} ondragleave={(e) => onRowDragLeave(e, s)} ondrop={(e) => onRowDrop(e, s)}
-      onpointerdown={(e) => sessHoldDown(e, s)} onpointermove={sessHoldMove} onpointerup={sessHoldUp} onpointercancel={sessHoldUp}>
+      onpointerdown={(e) => sessHoldDown(e, s)} onpointermove={sessHoldMove} onpointerup={sessHoldUp} onpointercancel={sessHoldUp}
+      oncontextmenu={(e) => rowCtx(e, 'session', s.id)}>
       <!-- 落点挂在按钮上而不是外层 div：它本来就是可交互元素，省掉一条 a11y 例外 -->
       <button class="d-recent" use:dropZone={sessionDrop(s)} onclick={() => pickSession(s)}>
-        {#if s.thinking || s.pending}<span class="d-dot {s.thinking ? 'work' : 'ask'}"></span>{/if}
+        <!-- 待回答（提问 / 审批卡）压过「在跑」：等人的那一轮本来就还在跑，不压过去这个点永远亮不出来（官方 Needs your input） -->
+        {#if s.thinking || s.pending}<span class="d-dot {s.pending ? 'ask' : 'work'}"></span>{/if}
         <span class="d-title" use:marquee><span class="d-scroll">{tr(titleFor(s.id, s.title)) || t('（无标题）')}</span></span>
+        <!-- 临时对话快到清理时：行尾一枚「剩 n 天」——话写全，别让人读成「n 天前」（触屏没有悬停提示；悬停时让位给 ⋮） -->
+        {#if isQuickSession(s)}
+          {@const qd = quickWarnDays(s.projectId)}
+          {#if qd != null}<span class="d-exp" title={t('{n} 天后清理', { n: qd })}>{qd ? t('剩 {n} 天', { n: qd }) : t('今天清理')}</span>{/if}
+        {/if}
       </button>
       <button class="d-more" aria-label={t('更多')} onclick={(e) => openMenu(e, 'session', s.id)}><span class="ic">&#xe062;</span></button>
+    </div>
+  {/snippet}
+
+  {#snippet archRow(s)}
+    <!-- 已归档视图的一行：标题 + 所在项目 · 归档时间（跨项目平铺，得看得出是哪个项目的） -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="d-row arch" class:cur={s.id === curId} oncontextmenu={(e) => rowCtx(e, 'archived', s.id)}>
+      <button class="d-recent" onclick={() => openArchived(s)}>
+        <span class="d-two">
+          <span class="d-title">{tr(titleFor(s.id, s.title)) || t('（无标题）')}</span>
+          <span class="d-sub">{#if projName(s.projectId)}{projName(s.projectId)}{' · '}{/if}{relTime(s.archivedAt || s.mtime)}</span>
+        </span>
+      </button>
+      <button class="d-more" aria-label={t('更多')} onclick={(e) => openMenu(e, 'archived', s.id)}><span class="ic">&#xe062;</span></button>
     </div>
   {/snippet}
 
@@ -1212,7 +1766,8 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="d-row proj" title={p.path || ''} class:lifted={liftedId === p.id}
       draggable={mouseDnd ? 'true' : 'false'} ondragstart={(e) => onProjDragStart(e, p)} ondragend={onSideDragEnd}
-      onpointerdown={(e) => projHoldDown(e, p)} onpointermove={projHoldMove} onpointerup={projHoldUp} onpointercancel={projHoldUp}>
+      onpointerdown={(e) => projHoldDown(e, p)} onpointermove={projHoldMove} onpointerup={projHoldUp} onpointercancel={projHoldUp}
+      oncontextmenu={(e) => rowCtx(e, 'project', p.id)}>
       <button class="d-recent" onclick={() => newInProject(p)}>
         <span class="d-bub"><span class="ic pj">&#xe0c9;</span></span>
         <span class="d-title">{tr(p.name)}</span>
@@ -1222,10 +1777,18 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
         </button>
       {/if}
-      {#if !p.def}<button class="d-more" aria-label={t('项目选项')} onclick={(e) => openMenu(e, 'project', p.id)}><span class="ic">&#xe062;</span></button>{/if}
+      <button class="d-more" aria-label={t('项目选项')} onclick={(e) => openMenu(e, 'project', p.id)}><span class="ic">&#xe062;</span></button>
     </div>
     {#if !collapsed[p.id] && !projDragging}
-      {#each grouped.get(p.id) || [] as s (s.id)}{@render convRow(s, true)}{/each}
+      {@const pg = paged.get(p.id)}
+      {@const more = (pg?.rest || 0) + serverRest(p.id)}
+      {#each pg?.rows || [] as s (s.id)}{@render convRow(s, true)}{/each}
+      {#if more}
+        <!-- 剩余数 = 本地还没放出来的 + 服务端还没拿到的（老会话翻页，见 loadOlder） -->
+        <button class="d-pager" disabled={!!olderBusy[p.id]} onclick={() => showMore(p.id)}>{olderBusy[p.id] ? t('加载中…') : t('显示更多（{n}）', { n: more })}</button>
+      {:else if shown[p.id]}
+        <button class="d-pager" onclick={() => showLess(p.id)}>{t('收起')}</button>
+      {/if}
     {/if}
     </div>
   {/snippet}
@@ -1234,9 +1797,24 @@
   <!-- 左上角标题 = claude.ai /code 原件「Claude Code」SVG 字标（14px 高、text-primary），不是文字 -->
   <div class="brand"><ClaudeCodeWordmark /></div>
   {#if !single}<button class="d-item" onclick={slideOut}><span class="ic d-lead w7">&#xe08a;</span>{t('主页')}</button>{/if}
+  <!-- 新对话（官方侧栏第一行 New session；S1-6）：落在当前项目，在临时对话里就落到最近用过的真实项目。
+       图标是自绘的「方框 + 笔」，不走图标字体 -->
+  {#if !IS_CSNAP}
+    <button class="d-item" onclick={newChat}>
+      <span class="d-lead svg" aria-hidden="true">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M7.25 3H4.5A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13h7a1.5 1.5 0 0 0 1.5-1.5V8.75"/><path d="M11.75 2.6a1.25 1.25 0 0 1 1.77 1.77L8.6 9.3l-2.35.6.6-2.35z"/></svg>
+      </span>{tc('claude', '新对话')}{#if pointer.fine}<span class="d-kbd" aria-hidden="true">{NEW_KBD}</span>{/if}</button>
+  {/if}
+  <!-- 搜索会话（官方侧栏顶部的 Search，Ctrl+K）：标题 / 曾用名 / 全文，覆盖所有项目、临时对话与已归档会话 -->
+  {#if !IS_CSNAP && who}
+    <button class="d-item" onclick={openSearch}><span class="ic d-lead">&#xe0d3;</span>{t('搜索')}{#if pointer.fine}<span class="d-kbd" aria-hidden="true">{IS_MAC ? '⌘K' : 'Ctrl K'}</span>{/if}</button>
+  {/if}
   <button class="d-item" onclick={openProjectModal}><span class="ic d-lead w7">&#xe001;</span>{t('新建项目')}</button>
-  <!-- 闪电 = claude.ai /code 侧栏 Routines 的原版字形（Anthropicons U+E098，20px/430，官网无悬停动效） -->
-  <button class="d-item" disabled={!quickProj || quickBusy} onclick={newQuick}><span class="ic d-lead">&#xe098;</span>{t('新建快照')}</button>
+  <!-- 新建临时对话（原「新建快照」）：虚线气泡＝不进任何项目、放久了会清理 -->
+  <button class="d-item" disabled={!quickProj || quickBusy} onclick={newQuick}>
+    <span class="d-lead svg" aria-hidden="true">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 3h7A2.5 2.5 0 0 1 14 5.5v3.5a2.5 2.5 0 0 1-2.5 2.5H8l-3 2.25V11.5h-.5A2.5 2.5 0 0 1 2 9V5.5A2.5 2.5 0 0 1 4.5 3Z" stroke-dasharray="2 1.7"/></svg>
+    </span>{t('新建临时对话')}</button>
   <button class="d-item" onclick={openRoutines}>
     <span class="d-lead ck" aria-hidden="true">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
@@ -1249,15 +1827,47 @@
     <button class="d-item" class:cur={ui.customizeOpen} onclick={openCustomize} aria-current={ui.customizeOpen ? 'page' : undefined}>
       <span class="ic d-lead bag" aria-hidden="true">&#xe100;</span>{t('自定义')}</button>
   {/if}
-  {#if quickProj}
-    <div class="d-sec">{t('快照')}</div>
+  {#if arch.view}
+    <!-- 已归档视图（官方 Sessions 页的 Archived 标签 / 侧栏 Status=Archived）：抽屉内整页切换，平铺、按归档时间倒序，
+         每行能打开看、取消归档、删除；底部「显示更多」走服务端分页。宽屏常驻侧栏与手机抽屉同一份。 -->
+    <div class="d-arch-head">
+      <button class="d-back" aria-label={t('返回')} onclick={closeArchivedView}><span class="ic">&#xe00c;</span></button>
+      <span class="d-arch-t">{t('已归档')}</span>
+      {#if arch.total}<span class="d-count">{arch.total}</span>{/if}
+    </div>
     <div class="d-list">
-      {#if quickSession}
-        {@render convRow(quickSession, false)}
-      {:else}
-        <div class="d-row" class:cur={quickCur}>
-          <button class="d-recent" onclick={openQuick}><span class="d-title">{t('快照对话')}</span></button>
+      {#each arch.rows as s (s.id)}{@render archRow(s)}{/each}
+      {#if !arch.rows.length}<div class="d-empty">{arch.loading ? t('加载中…') : t('还没有归档的会话。')}</div>{/if}
+      {#if arch.more}
+        <button class="d-pager flat" disabled={arch.loading} onclick={() => loadArchived(true)}>{arch.loading ? t('加载中…') : t('显示更多')}</button>
+      {/if}
+    </div>
+  {:else}
+  <!-- 临时对话区（原「快照」，S1-6）：全部还留着的临时对话，最近的在上；30 天没动才清理，先进回收站 -->
+  {#if quickProj && (quickSessions.length || quickBlank || quickBin || quickOrphRows.length)}
+    <div class="d-sec">{tc('临时对话区', '临时对话')}</div>
+    <div class="d-list">
+      {#if quickBlank && !quickOrphRows.some((o) => o.id === session.projectId)}
+        <div class="d-row cur"><button class="d-recent" onclick={closeDrawer}><span class="d-title">{t('新的临时对话')}</span></button></div>
+      {/if}
+      {#each quickRows.rows as s (s.id)}{@render convRow(s, false)}{/each}
+      <!-- 只有文件、没有对话的临时对话（删光了对话 / 老版本留下的）：点开在那只桶里开空白对话，工作台里看得见文件 -->
+      {#each quickRows.orph as o (o.id)}
+        {@const od = quickWarnDays(o.id)}
+        <div class="d-row" class:cur={quickBlank && session.projectId === o.id}>
+          <button class="d-recent" onclick={() => openOrphan(o.id)}>
+            <span class="d-title">{t('{n} 个文件，还没有对话', { n: o.items || 0 })}</span>
+            {#if od != null}<span class="d-exp" title={t('{n} 天后清理', { n: od })}>{od ? t('剩 {n} 天', { n: od }) : t('今天清理')}</span>{/if}
+          </button>
         </div>
+      {/each}
+      {#if quickRows.rest}
+        <button class="d-pager flat" disabled={quickOlderBusy} onclick={showMoreQuick}>{quickOlderBusy ? t('加载中…') : t('显示更多（{n}）', { n: quickRows.rest })}</button>
+      {:else if shownQuick}
+        <button class="d-pager flat" onclick={() => (shownQuick = 0)}>{t('收起')}</button>
+      {/if}
+      {#if quickBin}
+        <button class="d-pager flat" onclick={openBin}>{t('回收站（{n}）', { n: quickBin })}</button>
       {/if}
     </div>
   {/if}
@@ -1272,6 +1882,11 @@
     {#each realProjects as p, i (p.id)}{@render projRow(p, i)}{/each}
     {#if !realProjects.length}<div class="d-empty">{who ? t('加载中…') : t('登录后显示')}</div>{/if}
   </div>
+  <!-- 「已归档（n）」入口：项目列表最底下一行，点进去是已归档视图（没有归档过的会话就不出现） -->
+  {#if arch.count && !IS_CSNAP}
+    <button class="d-item d-arch-ent" onclick={openArchivedView}><span class="ic d-lead">&#xe008;</span>{t('已归档')}<span class="d-count">{arch.count}</span></button>
+  {/if}
+  {/if}
   <div class="d-spacer"></div>
   <!-- 账户卡：贴底不随列表滚走（sticky）。设置 / 账户 / 关于都从这里进；常规模式菜单里多一项「主页」 -->
   <div class="d-foot">
@@ -1282,11 +1897,37 @@
     <button class="rowmenu-bd" aria-label={t('关闭')} onclick={closeMenu}></button>
     <div class="rowmenu" style={menuStyle}>
       {#if menuFor.kind === 'session'}
-        <button onclick={() => doStar(menuFor.id)}><span class="ic mi">&#xe0bd;</span>{isStarred(menuFor.id) ? t('取消收藏') : t('收藏')}</button>
+        {@const mq = menuSession()}
+        {#if isQuickSession(mq)}
+          <!-- 临时对话：收藏 / 归档对它没意义（不进收藏区、不归档），换成「存为工作空间」；快到清理时多一项「继续保留」 -->
+          <button disabled={quickBusy} onclick={() => saveQuick(mq.projectId, mq)}><span class="ic mi">&#xe0c9;</span>{t('存为工作空间')}</button>
+          {#if quickWarnDays(mq.projectId) != null}
+            <button disabled={quickBusy} onclick={() => keepQuick(mq.projectId)}><span class="ic mi">&#xe03b;</span>{t('继续保留')}</button>
+          {/if}
+        {:else}
+          <button onclick={() => doStar(menuFor.id)}><span class="ic mi">&#xe0bd;</span>{isStarred(menuFor.id) ? t('取消收藏') : t('收藏')}</button>
+        {/if}
         <button onclick={() => doRename(menuSession())}><span class="ic mi">&#xe064;</span>{t('重命名')}</button>
+        {#if !isQuickSession(mq)}
+          <!-- 归档（官方 remove 组）：在工作 / 在等回答的会话不能归档（官方同款） -->
+          {@const ms = menuSession()}
+          <button disabled={!!(ms && (ms.thinking || ms.pending))} title={ms && (ms.thinking || ms.pending) ? t('正在工作的会话不能归档') : undefined}
+            onclick={() => doArchive(ms)}><span class="ic mi">&#xe008;</span>{t('归档')}</button>
+        {/if}
+        <button class="danger" onclick={() => (delConfirm ? doDelete(menuFor.id) : (delConfirm = true))}><span class="ic mi">&#xe101;</span>{delConfirm ? tc('claude', '确认删除') : t('删除')}</button>
+      {:else if menuFor.kind === 'archived'}
+        <button onclick={() => doUnarchive(menuFor.id)}><span class="ic mi">&#xe008;</span>{t('取消归档')}</button>
         <button class="danger" onclick={() => (delConfirm ? doDelete(menuFor.id) : (delConfirm = true))}><span class="ic mi">&#xe101;</span>{delConfirm ? tc('claude', '确认删除') : t('删除')}</button>
       {:else}
-        <button class="danger" onclick={() => (delConfirm ? doDeleteProject(menuFor.id) : (delConfirm = true))}><span class="ic mi">&#xe101;</span>{delConfirm ? tc('claude', '确认删除') : t('删除项目')}</button>
+        <button onclick={() => doRenameProject(menuProject())}><span class="ic mi">&#xe064;</span>{t('重命名')}</button>
+        <!-- 归档全部会话（官方分组菜单的 Archive all）：组里有会话才出 -->
+        {#if (grouped.get(menuFor.id) || []).length || projCounts[menuFor.id]}
+          <button onclick={() => doArchiveProject(menuProject())}><span class="ic mi">&#xe008;</span>{t('归档全部会话')}</button>
+        {/if}
+        <!-- 默认工作空间只能改名，不能删（服务端也拦） -->
+        {#if !menuProject()?.def}
+          <button class="danger" onclick={() => (delConfirm ? doDeleteProject(menuFor.id) : (delConfirm = true))}><span class="ic mi">&#xe101;</span>{delConfirm ? tc('claude', '确认删除') : t('删除项目')}</button>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -1307,8 +1948,13 @@
 {#if renameFor}
   <button class="pm-bd" aria-label={t('关闭')} onclick={() => (renameFor = null)}></button>
   <div class="pmodal rnmodal" role="dialog" aria-modal="true">
-    <div class="pm-head"><span class="ic pm-ic">&#xe064;</span>{tc('claude', '重命名对话')}</div>
-    <input class="rn-input" bind:value={renameFor.name} onkeydown={renameKey} use:renameFocus placeholder={tc('claude', '对话名称')} maxlength="120" />
+    {#if renameFor.kind === 'project'}
+      <div class="pm-head"><span class="ic pm-ic">&#xe064;</span>{tc('claude', '重命名工作空间')}</div>
+      <input class="rn-input" bind:value={renameFor.name} onkeydown={renameKey} use:renameFocus placeholder={tc('claude', '留空恢复为文件夹名')} maxlength="80" />
+    {:else}
+      <div class="pm-head"><span class="ic pm-ic">&#xe064;</span>{tc('claude', '重命名对话')}</div>
+      <input class="rn-input" bind:value={renameFor.name} onkeydown={renameKey} use:renameFocus placeholder={tc('claude', '对话名称')} maxlength="120" />
+    {/if}
     <div class="pm-actions">
       <button class="pm-cancel" onclick={() => (renameFor = null)}>{t('取消')}</button>
       <button class="pm-create" onclick={commitRename}>{t('保存')}</button>
@@ -1316,9 +1962,56 @@
   </div>
 {/if}
 
+<!-- 归档父会话时有子会话：只归档这一条，还是一家子全部归档（官方 Archive session? 对话框） -->
+{#if archAsk}
+  <button class="pm-bd" aria-label={t('关闭')} onclick={() => (archAsk = null)}></button>
+  <div class="pmodal archmodal" role="dialog" aria-modal="true">
+    <div class="pm-head"><span class="ic pm-ic">&#xe008;</span>{t('归档会话？')}</div>
+    <p class="am-body">
+      {archAsk.title ? t('「{title}」有 {n} 个子会话。只归档此会话的话，它们会移到顶层。', { title: tr(archAsk.title), n: archAsk.kids.length }) : t('此会话有 {n} 个子会话。只归档此会话的话，它们会移到顶层。', { n: archAsk.kids.length })}
+      {#if archAsk.working}{t('其中 {n} 个仍在工作，全部归档时会跳过它们。', { n: archAsk.working })}{/if}
+    </p>
+    <div class="pm-actions am-actions">
+      <button class="pm-cancel" onclick={() => (archAsk = null)}>{t('取消')}</button>
+      <button class="pm-cancel am-all" onclick={() => runArchive([archAsk.id, ...archAsk.kids])}>{t('全部归档（{n} 个会话）', { n: archAsk.kids.length + 1 })}</button>
+      <!-- 仅归档此会话：子会话移到顶层（服务端记下，之后它取消归档也不再挂回来——官方 detach 同款） -->
+      <button class="pm-create" use:focusBtn onclick={() => runArchive([archAsk.id], { detach: true })}>{t('仅归档此会话')}</button>
+    </div>
+  </div>
+{/if}
+
+<!-- 临时对话回收站（S1-6）：30 天没动的临时对话整只挪在这里，再放 trashDays 天才永久删除；点「恢复」原样回到列表 -->
+{#if binOpen}
+  <button class="pm-bd" aria-label={t('关闭')} onclick={() => (binOpen = false)}></button>
+  <div class="pmodal binmodal" role="dialog" aria-modal="true" aria-label={t('临时对话回收站')}>
+    <div class="pm-head"><span class="ic pm-ic">&#xe101;</span>{t('临时对话回收站')}</div>
+    <p class="am-body">{t('超过 {n} 天没动的临时对话会移到这里，再过 {m} 天永久删除。恢复后对话和产物原样接上。', { n: quickPol.ttlDays, m: quickPol.trashDays })}</p>
+    <div class="bin-list">
+      {#each binItems as it (it.id)}
+        {@const left = daysLeft(it.purgeAt)}
+        <div class="d-row bin-row">
+          <span class="d-two">
+            <span class="d-title">{tr(it.sessionId ? titleFor(it.sessionId, it.title) : it.title) || t('（无标题）')}</span>
+            <span class="d-sub">{t('{when}移入', { when: relTime(it.recycledAt) })}{#if left != null}{' · '}{t('{n} 天后永久删除', { n: left })}{/if}{#if it.sessions > 1}{' · '}{t('{n} 段对话', { n: it.sessions })}{/if}{#if it.items}{' · '}{t('有 {n} 个文件', { n: it.items })}{/if}</span>
+          </span>
+          <button class="pm-cancel bin-restore" disabled={binBusy} onclick={() => restoreBin(it)}>{t('恢复')}</button>
+        </div>
+      {/each}
+      {#if !binItems.length}<div class="d-empty">{binLoading ? t('加载中…') : t('回收站是空的。')}</div>{/if}
+    </div>
+    <div class="pm-actions"><button class="pm-cancel" onclick={() => (binOpen = false)}>{t('关闭')}</button></div>
+  </div>
+{/if}
+
+<!-- 搜索会话：宽屏居中面板 / 手机全屏页 -->
+{#if searchOpen}
+  <SessionSearch sessions={listed} {projects} full={layout.compact} onOpen={openHit} onClose={() => (searchOpen = false)} />
+{/if}
+
 <RoutinesPage />
 </div>
 </div>
+<svelte:window onkeydown={onSearchKey} />
 
 <style>
   /* 分页层：fixed 全屏盖在主页之上；左缘右滑时缩小露出身后主页（backPeek）。
@@ -1386,15 +2079,25 @@
   .sb-handle:focus-visible .sb-pill { opacity: 1; background: var(--coral); transition-delay: 0s; }
   .stage { flex: 1; position: relative; min-height: 0; display: flex; flex-direction: column; }
   .stage.cz-on > :global(:not(.cz):not(.dlg):not(.dlg-bd)) { display: none; }   /* .dlg / .dlg-bd = 自定义页自己的弹窗 */
-  /* edge-to-edge 后页面顶到物理屏顶，15vh 要再加状态栏高度才回到原设计位置（不然 greeting 偏上）。 */
-  .hero { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: calc(15vh + var(--sat)) 16px 24px; gap: 0; }
-  .greeting { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+  /* 空态（官方 /code 落地页）：上半区可滚（问候 + 用量卡），底部是输入框。
+     edge-to-edge 后页面顶到物理屏顶，顶距要再加状态栏高度（--sat）。 */
+  .hero { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  .hero > .hero-scroll, .hero > .hero-foot { position: relative; z-index: 1; }
+  .hero-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch;
+    padding: calc(clamp(60px, 11vh, 112px) + var(--sat)) 16px 24px; }
+  /* 与输入框卡片同一根轴（760 列、左缘对齐）：问候和卡片贴列左缘，官方同款 */
+  .hero-col { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; align-items: flex-start; gap: 24px; }
+  /* 官方问候（cc43287c9 nz）：22px 星芒 + text-title 22/28、常规字重（wght 360）、主文字色 */
+  .greeting { display: flex; align-items: center; gap: 8px; }
   .logo-fly { display: inline-flex; flex: none; }
-  .greeting h1 { font-family: var(--serif-stack); font-weight: 290; font-size: 27px; line-height: 1.12; color: var(--serif); text-align: center; }
-  .hero-composer { width: 100%; max-width: 760px; }
+  .greeting h1 { font-family: var(--sans); font-weight: 400; font-size: 22px; line-height: 28px; color: var(--text); margin: 0; }
+  .hero-stats { width: 100%; max-width: 480px; background: var(--bg); border-radius: 8px; }   /* 卡片自身是 5% 半透明底：垫一层页面底色，背后的字符风不透上来（观感与原来一样） */
+  /* 底部输入区 = 聊天态 .composer-wrap 的几何（6/8/安全区 内边距、760 居中），只是放在文档流里不悬浮 */
+  .hero-foot { flex: none; padding: 6px 8px max(10px, var(--sab)); }
+  .hero-composer { max-width: 760px; margin: 0 auto; }
   /* 归属状态栏两处的对齐槽：与输入框卡片同宽同轴（.composer-wrap 整层 pointer-events:none，
      故聊天态这一槽要自己把事件收回来，否则芯片点不动）。 */
-  .hero-chips { width: 100%; max-width: 760px; }
+  .hero-chips { max-width: 760px; margin: 0 auto; }
   /* 聊天态的归属芯片只在【滚到底】时显形：不动布局，只淡入 + 6px 上浮。
      高度恒占着（--composer-h 不变），所以显隐不会改滚动区内边距、不会在底部抖一下。
      transform 常驻（收起态也写 translateY(0) 而非 none）——保证 .chips-slot 始终是层叠
@@ -1458,11 +2161,6 @@
      被卡片（z-index 更高）盖住，实底与卡片无缝相接。 */
   .scroll > .scroll-fade-strip-bottom { --scroll-fade-size: var(--sf-bottom); bottom: calc(var(--composer-card-top, var(--composer-h, 84px)) - var(--composer-h, 84px) - 10px); }
   @media (max-width: 699px) { .scroll { --sf-top: 18px; --sf-lead: 0px; --sf-bottom: 28px; } }
-  /* 正文滚条=侧栏聊天列表同款 6px 细滚条（只用 webkit 伪元素，别设标准属性——同 .drawer 的坑注） */
-  .scroll::-webkit-scrollbar { width: 6px; }
-  .scroll::-webkit-scrollbar-track { background: transparent; }
-  .scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 38%, transparent); border-radius: 999px; }
-  @media (hover: hover) { .scroll::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--muted) 62%, transparent); } }
   /* 输入栏卡片：绝对定位悬浮在正文之上，无实心背景/隔层——正文向上滚时从卡片下方穿过 */
   .composer-wrap { position: absolute; left: 0; right: var(--sb-w, 0px); bottom: 0; z-index: 5;
     padding: 6px 8px max(10px, var(--sab)); background: transparent; pointer-events: none; }
@@ -1479,12 +2177,6 @@
   /* 关闭态 visibility:hidden —— 侧滑返回时 .claude-slide 的 transform 会把屏外的 drawer 推进屏内，
      隐藏掉就不会"先展开侧边栏"；visibility 用 .26s 延迟，保证关闭滑出动画本身可见、滑完才隐藏。 */
   .drawer.open { transform: none; visibility: visible; transition: transform .26s cubic-bezier(.22,1,.36,1), background-color .25s ease, visibility 0s linear 0s; box-shadow: 0 0 40px rgba(0,0,0,.3); }
-  /* claude.ai 同款内置细滚条：6px 圆头拇指、无轨道。只用 webkit 私有伪元素——
-     别再设标准 scrollbar-width/scrollbar-color，Chromium 里标准属性一出现伪元素即整体失效。 */
-  .drawer::-webkit-scrollbar { width: 6px; }
-  .drawer::-webkit-scrollbar-track { background: transparent; }
-  .drawer::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 38%, transparent); border-radius: 999px; }
-  @media (hover: hover) { .drawer::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--muted) 62%, transparent); } }
   /* 字标行：官方标题栏里字标垂直居中、高 14px；这里给 44px 行高（与原 21px 衬线文字的占位持平），
      下留 2px 让字标视觉上略高于几何中线。颜色 = 官方 text-primary。 */
   .brand { display: flex; align-items: center; flex: none; height: 44px; padding: 0 10px 2px; color: var(--text); }
@@ -1502,6 +2194,18 @@
      0.6s cubic-bezier(.3,.9,.4,1)；表盘不动。触屏无 hover，:active 走同一套。 */
   .d-lead.ck { display: flex; align-items: center; justify-content: center; }
   .d-lead.ck svg { width: 16px; height: 16px; }
+  /* 新对话 / 新建临时对话：自绘 16px 描边图标（与定时触发的钟同一套尺寸） */
+  .d-lead.svg { display: flex; align-items: center; justify-content: center; }
+  .d-lead.svg svg { width: 16px; height: 16px; }
+  /* 临时对话快到清理：行尾一枚「n 天」，悬停时让位给 ⋮ */
+  .d-exp { flex: none; margin-left: auto; padding: 0 4px 0 6px; font-size: 12px; color: var(--warn); font-variant-numeric: tabular-nums; transition: opacity .12s ease; }
+  @media (hover: hover) { .d-row:hover .d-exp, .d-row:focus-within .d-exp { opacity: 0; } }
+  /* 临时对话回收站弹窗 */
+  .binmodal { max-height: min(560px, calc(100vh - 80px)); }
+  .bin-list { flex: 1; min-height: 0; overflow-y: auto; margin: 6px -6px 0; }
+  .bin-row { gap: 8px; padding: 6px 6px 6px 10px; }
+  .bin-restore { flex: none; border: 1px solid var(--divider); padding: 5px 12px; }
+  @media (hover: hover) { .bin-restore:hover { background: var(--hover); color: var(--text); } }
   .d-lead.ck line { transform-box: view-box; transform-origin: 8px 8px;
     transition: rotate .6s cubic-bezier(.3, .9, .4, 1); }
   .d-item:active .ck .hh { rotate: 30deg; }
@@ -1535,6 +2239,10 @@
   .d-projs.ins-end::after { bottom: 16px; }
   /* 会话缩进到项目标题文字正下方（项目行 8 padding + 20 图标 + 8 gap = 36 − 本行 8 padding） */
   .d-row.indent { margin-left: 28px; }
+  /* 子会话（官方 Desktop 子会话树）：再缩 18px，左侧一根细竖线对齐父行标题起点（28+8=36px）；
+     相邻子行的竖线首尾相接成一条（行间 .5px 缝用 -1px 盖住）。 */
+  .d-row.indent.child { margin-left: 46px; }
+  .d-row.child::before { content: ''; position: absolute; left: -10px; top: -1px; bottom: -1px; width: 1px; background: var(--divider); pointer-events: none; }
   .d-recent { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 8px 2px 8px 8px; border-radius: 8px; text-align: left; color: var(--serif); font-size: 14px; }
   .d-recent:active { background: var(--hover); }
   .d-bub { position: relative; width: 20px; height: 20px; flex: none; display: flex; align-items: center; justify-content: center; }
@@ -1594,12 +2302,14 @@
   .rowmenu button:active { background: var(--hover); }
   @media (hover: hover) { .rowmenu button:hover { background: var(--hover); } }
   .rowmenu button.danger { color: var(--crit); }
+  .rowmenu button:disabled { opacity: .45; pointer-events: none; }
   .mi { width: 20px; text-align: center; font-size: 18px; font-weight: 450; flex: none; }
   /* 会话行不再有图标 → 状态点占「左侧空位」：项目行有 20px 图标、会话行那一列是空的。
      缩进的会话行把点绝对定位进 28px 缩进带里（正对项目图标列中心），既不吃标题宽度、
      也不会在开跑/跑完时把标题推来推去；收藏区的会话行没有缩进带，就内联在标题前。 */
   .d-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
   .d-row.indent .d-dot { position: absolute; left: -14px; top: 50%; transform: translateY(-50%); }
+  .d-row.indent.child .d-dot { left: -32px; }   /* 子行多缩了 18px，点仍落在项目图标那一列 */
   .d-dot.work { background: var(--coral); animation: pulse 1.2s ease-in-out infinite; }
   .d-dot.ask { background: var(--warn); animation: blink 1s steps(2) infinite; }
   @keyframes pulse { 50% { opacity: .4; } }
@@ -1619,11 +2329,37 @@
   .pm-create { padding: 8px 14px; border-radius: 10px; background: var(--text); color: var(--bg); font-weight: 600; }
   .pm-create:disabled { opacity: .5; }
   .rnmodal { max-height: none; }
+  .archmodal { max-height: none; }
   .rn-input { width: 100%; padding: 9px 11px; border: 1px solid var(--divider); border-radius: 10px;
     background: var(--bg); color: var(--text); font-size: 14px; }
   .rn-input:focus { outline: none; border-color: var(--serif); }
   .d-empty { color: var(--muted); font-size: 13px; padding: 10px 11px; }
+  /* 组内「显示更多 / 收起」：与会话行同缩进、同行高，次级色小一号，看得出不是一条会话 */
+  .d-pager { display: block; width: calc(100% - 28px); margin-left: 28px; padding: 7px 8px; border-radius: 8px; text-align: left;
+    color: var(--muted); font-size: 13px; transition: background-color .12s ease, color .12s ease; }
+  .d-pager:active { background: var(--hover); }
+  @media (hover: hover) { .d-pager:hover { background: var(--hover); color: var(--text); } }
   .d-spacer { flex: 1; min-height: 10px; }
+  .d-pager:disabled { opacity: .6; pointer-events: none; }
+  /* 搜索行右侧的快捷键提示（官方 df-search-field-keys：平时隐身、悬停才出） */
+  .d-kbd { margin-left: auto; padding-left: 8px; font-size: 11.5px; color: var(--muted); font-family: Consolas, 'Cascadia Mono', Menlo, monospace; opacity: 0; transition: opacity .12s ease; }
+  @media (hover: hover) { .d-item:hover .d-kbd, .d-item:focus-visible .d-kbd { opacity: 1; } }
+  /* 已归档：入口行（项目列表最底下）与视图头（← 已归档 n） */
+  .d-count { margin-left: auto; padding-left: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .d-arch-ent { margin-top: 6px; }
+  .d-arch-head { display: flex; align-items: center; gap: 4px; padding: 12px 4px 6px 2px; color: var(--text); font-size: 14px; font-weight: 560; }
+  .d-arch-head .d-count { font-weight: 400; padding-right: 8px; }
+  .d-back { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--serif); flex: none; }
+  .d-back .ic { font-size: 18px; }
+  .d-back:active { background: var(--hover-strong); }
+  @media (hover: hover) { .d-back:hover { background: var(--hover); color: var(--text); } }
+  .d-two { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .d-sub { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--muted); }
+  .d-pager.flat { width: 100%; margin-left: 0; }
+  /* 归档父会话的二选一对话框：三颗按钮，窄屏换行 */
+  .am-body { margin: 0 0 4px; font-size: 14px; line-height: 21px; color: var(--serif); text-wrap: pretty; overflow-wrap: anywhere; }
+  .am-actions { flex-wrap: wrap; }
+  .am-all { border: 1px solid var(--divider); }
   /* —— 底部账户卡（AccountCard）的托座。贴底：列表长了也不被滚走 —— */
   .d-foot { position: sticky; bottom: -10px; z-index: 2; flex: none; margin: 0 -8px -10px; padding: 8px 8px max(10px, var(--sab));
     background: var(--bg); transition: background-color .25s ease; }

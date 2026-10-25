@@ -11,18 +11,24 @@ import { EditorView, Decoration, WidgetType } from '@codemirror/view';
 import { t } from '../i18n.js';
 
 const attachConf = Facet.define({ combine: (v) => v[0] || null });
-const addPending = StateEffect.define();    // { id, pos, label }
+const addPending = StateEffect.define();    // { id, pos, label, block }
 const dropPending = StateEffect.define();   // id
 
+// block：落点在块尾、链接要另起一行写（阅读态插图，见 insertFiles 的 lead）——标记挂成块、画在那一块下面，
+// 不挤在块的最后一行行尾（表格/callout 这类整块替换的块，行尾根本没有地方放行内标记）
 class PendingWidget extends WidgetType {
-  constructor(id, label) { super(); this.id = id; this.label = label; }
-  eq(o) { return o.id === this.id && o.label === this.label; }
+  constructor(id, label, block = false) { super(); this.id = id; this.label = label; this.block = block; }
+  eq(o) { return o.id === this.id && o.label === this.label && o.block === this.block; }
   toDOM() {
     const s = document.createElement('span');
     s.className = 'mde-upl';
     s.innerHTML = '<span class="mde-upl-spin"></span><span class="mde-upl-lb"></span>';
     s.lastChild.textContent = this.label;
-    return s;
+    if (!this.block) return s;
+    const d = document.createElement('div');
+    d.className = 'mde-upl-block';
+    d.appendChild(s);
+    return d;
   }
   ignoreEvent() { return true; }
 }
@@ -33,8 +39,8 @@ const pendingField = StateField.define({
     set = set.map(tr.changes);
     for (const e of tr.effects) {
       if (e.is(addPending)) {
-        const { id, pos, label } = e.value;
-        set = set.update({ add: [Decoration.widget({ widget: new PendingWidget(id, label), side: 1, pendingId: id }).range(pos)] });
+        const { id, pos, label, block } = e.value;
+        set = set.update({ add: [Decoration.widget({ widget: new PendingWidget(id, label, !!block), side: 1, block: !!block, pendingId: id }).range(pos)] });
       } else if (e.is(dropPending)) {
         set = set.update({ filter: (_f, _t, d) => d.spec.pendingId !== e.value });
       }
@@ -71,12 +77,14 @@ function nameFor(file, pasted, i) {
 }
 
 let seq = 0;
-async function insertFiles(view, files, at, pasted) {
+// lead：第一条链接前面要补的换行（阅读态插图落在块后另起一行，见 index.js insertFiles）——跟链接同一笔写入，
+// 一个都没存成就什么都不写
+async function insertFiles(view, files, at, pasted, lead = '') {
   const conf = view.state.facet(attachConf);
   if (!conf?.saveAttachment || !files.length) return;
   const jobs = files.map((file, i) => ({ id: 'up' + (++seq), file, name: nameFor(file, pasted, i) }));
   view.dispatch({
-    effects: jobs.map((j) => addPending.of({ id: j.id, pos: at, label: t('正在保存 {name}…', { name: j.name }) })),
+    effects: jobs.map((j) => addPending.of({ id: j.id, pos: at, label: t('正在保存 {name}…', { name: j.name }), block: !!lead })),
   });
   let placed = 0;
   for (const j of jobs) {
@@ -93,7 +101,7 @@ async function insertFiles(view, files, at, pasted) {
     const link = res.text || (EMBED_RE.test(res.link) ? '!' : '') + '[[' + res.link + ']]';
     // 落点所在文字已被删掉（标记随之消失）→ 退到当前光标处
     const where = pos ?? view.state.selection.main.head;
-    const insert = (placed ? '\n' : '') + link;
+    const insert = (placed ? '\n' : lead) + link;
     view.dispatch({
       changes: { from: where, insert },
       effects: dropPending.of(j.id),
@@ -167,6 +175,14 @@ export function pickAttachments(view) {
 export function pasteFiles(view, files) {
   if (!canAttach(view.state) || !files.length) return false;
   insertFiles(view, files, view.state.selection.main.head, true);
+  return true;
+}
+
+// 指定落点插入（阅读态里粘贴/拖进来的图：DocViewer 先切到编辑态，再经 index.js 的 insertFiles 落到映射出的位置）
+// lead：第一条链接前补的换行（见 insertFiles）
+export function insertFilesAt(view, files, at, pasted = false, lead = '') {
+  if (!canAttach(view.state) || !files?.length) return false;
+  insertFiles(view, files, at, pasted, lead);
   return true;
 }
 

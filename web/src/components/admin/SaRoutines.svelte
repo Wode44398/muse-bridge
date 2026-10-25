@@ -69,7 +69,8 @@
           {:else if r.lastStatus === 'error'}<span class="sa-badge red">{t('出错')}</span>
           {:else}<span class="sa-badge gray">—</span>{/if}
         </span>
-        <span class="sa-trunc sa-dim" title={r.prompt || ''}>{r.prompt || ''}</span>
+        <!-- hidden：成员没允许管理员看内容，只给名字、时间、状态 -->
+        <span class="sa-trunc sa-dim" title={r.prompt || ''}>{r.hidden ? t('（内容未授权查看）') : (r.prompt || '')}</span>
       </div>
     {/each}
     <div style="height:8px"></div>

@@ -107,6 +107,14 @@
   // R14（K37）：运行中的前台 Bash 跑满 10 秒后可以「转后台」——不杀，这次调用立刻交回已有输出，之后 agent 自己 poll
   let bgBusy = $state(false);
   const canBackground = $derived(!kind && live && Boolean(item.progress?.canBackground) && (item.progress?.elapsedMs ?? 0) >= 10_000);
+  // 精简模式下跑了几秒还没完的命令（前台长命令、Bash(wait) 等后台 job）：头行下面给一行「已运行多久 · 最新一行输出」，
+  // 不点开也看得出它在动（2026-10-09：打安装包压缩两分多钟，用户这边一片静止，只能问「怎么这么慢」）
+  const pulse = $derived.by(() => {
+    if (kind || !live || !compact || item.open || !item.progress || item.progress.elapsedMs < 3_000) return "";
+    const last = (item.progress.tail ?? "").split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
+    const dur = t("已运行 {dur}", { dur: fmtDur(item.progress.elapsedMs) });
+    return last ? `${dur} · ${last}` : dur;
+  });
   async function toBackground(e: MouseEvent) {
     e.stopPropagation();
     if (!pane.chat.id || bgBusy) return;
@@ -162,10 +170,14 @@
       <div class="outcome" class:bad={item.status === "fail"} class:warn={item.status === "denied"}>{outcomeText}</div>
     {/if}
 
+    {#if pulse}
+      <div class="outcome pulse">{pulse}</div>
+    {/if}
+
     {#if !kind && live && item.progress && (!compact || item.open)}
       <div class="livewrap" transition:collapse>
         <div class="live">
-          {#if item.progress.tail}<div class="tailbox"><pre class="tail">{item.progress.tail}</pre></div>{/if}
+          {#if item.progress.tail}<div class="tailbox"><pre class="tail sel-text">{item.progress.tail}</pre></div>{/if}
           {#if canBackground}
             <Button variant="ghost" size="sm" loading={bgBusy} onclick={toBackground}>{t("转后台")}</Button>
           {/if}
@@ -181,11 +193,11 @@
             <ApprovalPreview {preview} open />
           {:else}
             <div class="sec">{t("参数")}</div>
-            <pre class="code">{JSON.stringify(item.args, null, 2)}</pre>
+            <pre class="code sel-text">{JSON.stringify(item.args, null, 2)}</pre>
           {/if}
           {#if item.output}
             <div class="sec after">{t("结果")}</div>
-            <pre class="code out">{shownOutput}</pre>
+            <pre class="code out sel-text">{shownOutput}</pre>
           {:else if item.status === "running"}
             <div class="sec after dim">{t("运行中…")}</div>
           {/if}
@@ -268,6 +280,10 @@
   }
   .outcome.warn {
     color: color-mix(in srgb, var(--warn) 85%, var(--text3));
+  }
+  .outcome.pulse {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
   }
 
   /* R14：运行中的实时尾行（贴底：新行在下，旧行从上沿淡出）+「转后台」 */

@@ -37,6 +37,8 @@
 
   const interrupted = $derived(!!tool.interrupted);
   const rejected = $derived(!!(tool.rejected || tool.denied));
+  // 自动模式分类器拦下的（perm_denied 帧 / 历史里 CLI 的分类器拒绝句）：官方尾巴「Blocked by auto mode」
+  const autoBlocked = $derived(tool.denied === 'classifier' || tool.denied === 'auto');
   const stopped = $derived(U === 'stopped');
   const B = $derived(F === 'error' || U === 'failed' || stopped);
   const le = $derived((F === 'error' || U === 'failed') && !interrupted && !rejected);
@@ -49,7 +51,7 @@
   const showMeta = $derived(!!d.meta && !ce);
   const danger = $derived(!V && B && !stopped && !interrupted && !rejected);
   const tail = $derived(V || (!stopped && !interrupted)
-    ? (!V && rejected ? 'Denied' : (!V && B && !ce && !ue ? 'Failed' : ''))
+    ? (!V && rejected ? (autoBlocked ? 'Blocked by auto mode' : 'Denied') : (!V && B && !ce && !ue ? 'Failed' : ''))
     : 'Stopped');
 
   // 子 agent 活动（官方 subagentActivity，只在逻辑运行中显示）：最近工具名 + 工具计数

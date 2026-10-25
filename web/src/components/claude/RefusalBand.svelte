@@ -5,7 +5,8 @@
   // notice 为空 / 已 dismiss / 不是当前会话的 → 什么都不渲染（ClaudePage 的 .band-slot 靠 :has() 判空收起）。
   // 动作：Why?（弹层：Switched to X + 解释 + Details）、Edit prompt and retry with {原模型}
   // （refusalRetry.retryRefused：回滚到被拒消息 + 切回原模型 + 原文填回输入框，成功时内核已清 notice）、X。
-  // 不做官方的「Don't switch models automatically」（bridge 聊天轮一律先暂停问人，见下）。
+  // 「不要自动切换模型」（官方横条同款链接，2026-10-20）：设置 › Claude › 对话 › 消息被拦时自动换模型 开着才会走到
+  // 这条横条（关着是下面的 Paused 卡）；点了把设置关掉，横条里换成「已关闭自动切换。打开设置」。
   //
   // 同一槽位的另一种形态：Paused 卡（claude.ai 的 Paused 卡 / 官方 /code 的 refusal_fallback_prompt 对话框 aR）。
   // 聊天轮不再自动切模型：被拒时本轮停在原地（state.refusalBand.prompt），卡上二选一——
@@ -17,6 +18,10 @@
   import { modelLabel, learnMoreUrl } from '../../lib/toolVerbs.js';
   import { glyph } from '../../lib/claudeIcons.js';
   import { onMdClick } from '../../lib/linkNav.js';
+  import { cs, setClaudeSetting } from '../../lib/claudeSettings.svelte.js';
+  import { openSettingsFromChat, canOpenSettingsFromChat } from '../../lib/settingsNav.svelte.js';
+  import { IS_CSNAP } from '../../lib/csnap.js';
+  import { t as tt } from '../../lib/i18n.js';   // 本文件 whyBody 里有局部变量 t，翻译函数取别名
 
   let { sessionId = null } = $props();
 
@@ -112,6 +117,26 @@
     } catch {} finally { busy = false; }
   }
   function dismiss() { why = false; if (n) n.dismissed = true; }
+
+  // —— 不要自动切换模型 ——（快照访客改不了设置，不给）
+  let switchOff = $state('');   // '' | 'busy' | 'done' | 'err'
+  // 每条新的回退通知重新开始：上一条横条上点过的「已关闭」不带到下一条（期间设置可能又被打开了）
+  $effect(() => { void n; switchOff = ''; });
+  const canOptOut = $derived(!IS_CSNAP && cs.values.switchModelsOnFlag === true);
+  // 「已关闭」只在设置此刻确实是关着时才说（别处又打开了就不再显示过期的状态）
+  const offShown = $derived(switchOff === 'done' && cs.values.switchModelsOnFlag !== true);
+  async function stopAutoSwitch() {
+    if (switchOff === 'busy') return;
+    switchOff = 'busy';
+    try { await setClaudeSetting('switchModelsOnFlag', false); switchOff = 'done'; }
+    catch { switchOff = 'err'; }
+  }
+  // 「打开设置」：主页面直接开；分屏格（iframe）托宿主页开（格里没挂设置外壳）；拖出去的独立窗口没有设置页，不给链接
+  const canOpenSettings = canOpenSettingsFromChat;
+  function openClaudeSettings() {
+    dismiss();
+    openSettingsFromChat('claude');
+  }
 </script>
 
 {#if paused}
@@ -141,6 +166,15 @@
       <span class="band-cta">
         <button type="button" class="lnk" aria-expanded={why} aria-haspopup="dialog" bind:this={whyBtn} onclick={() => { why = !why; }}>Why?</button>
         <button type="button" class="lnk" disabled={busy} onclick={retry}>Edit prompt and retry with {from}</button>
+        {#if offShown}
+          <span class="band-note">{tt('已关闭自动切换。')}</span>
+          {#if canOpenSettings}<button type="button" class="lnk" onclick={openClaudeSettings}>{tt('打开设置')}</button>{/if}
+        {:else if switchOff === 'err'}
+          <span class="band-note">{tt('没改成，到 设置 › Claude 里改。')}</span>
+          {#if canOpenSettings}<button type="button" class="lnk" onclick={openClaudeSettings}>{tt('打开设置')}</button>{/if}
+        {:else if canOptOut}
+          <button type="button" class="lnk" disabled={switchOff === 'busy'} onclick={stopAutoSwitch}>{tt('不要自动切换模型')}</button>
+        {/if}
       </span>
     </div>
     <button type="button" class="band-x" aria-label="Dismiss" onmousedown={(e) => e.preventDefault()} onclick={dismiss}>
@@ -168,6 +202,7 @@
     font-size: 14px; line-height: 20px; border-radius: 4px; }
   @media (hover: hover) { .lnk:hover { color: var(--text); } }
   .lnk:disabled { opacity: .5; cursor: default; }
+  .band-note { flex: none; color: var(--muted); }
   /* 右侧 X：ghost 图标钮 24×24 */
   .band-x { flex: none; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--muted); }
   @media (hover: hover) { .band-x:hover { color: var(--text); background: var(--hover-strong); } }

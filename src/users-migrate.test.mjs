@@ -18,7 +18,7 @@ test('路径改写：整串 / 正文里的 / 键，盘符不分大小写，分�
   assert.equal(rw.str('e:\\old bridge users\\alice'), '/var/lib/bridge/users/alice');
   assert.equal(rw.str('E:/Old Bridge Users/alice/a.txt'), '/var/lib/bridge/users/alice/a.txt');
   assert.equal(rw.str('已写入 E:\\Old Bridge Users\\alice\\notes\\a.md 完成'), '已写入 /var/lib/bridge/users/alice/notes/a.md 完成');
-  assert.equal(rw.str('E:\\Vault\\Claude\\x'), 'E:\\Vault\\Claude\\x');
+  assert.equal(rw.str('D:\\Notes\\x'), 'D:\\Notes\\x');
   assert.equal(rw.str('E:\\Old Bridge UsersX\\bob'), 'E:\\Old Bridge UsersX\\bob', '同前缀的别的目录不算');
   // 多行工具输出以路径开头：每个都换，别的反斜杠不动
   assert.equal(rw.str('E:\\Old Bridge Users\\alice\\a.txt\r\nE:/Old Bridge Users/alice/b.txt\r\nC:\\tmp\\x'),
@@ -100,4 +100,41 @@ test('导出 → 导入：会话目录按新 cwd 改名、路径改写、用户�
   assert.equal(JSON.parse(readFileSync(path.join(srvSys, 'usage.json'), 'utf8')).alice.tokens, 5);
 
   assert.deepEqual(m.importUsers({ usersRoot: srv, systemDir: srvSys, from: out, log: () => {} }), [], '已有同名账号默认跳过');
+});
+
+test('导入不许撞账号 id（S2-4 不变 id）：改过名的老账号、本机删过的 id、登录名等于别人的 id、不合法的名字一律跳过', () => {
+  const srv = path.join(tmp, 'collide', 'users');
+  const sys = path.join(srv, '_system');
+  mkdirSync(path.join(srv, 'bob'), { recursive: true });
+  mkdirSync(sys, { recursive: true });
+  // 本机：老账号 bob 改名成 robert（id 仍是 bob）；dora-x7k2 是新账号；gone 这个 id 删过
+  writeFileSync(path.join(sys, 'users.json'), JSON.stringify({
+    robert: { id: 'bob', name: 'robert', salt: 's', hash: 'h', created: 1, renamedFrom: 'bob' },
+    dora: { id: 'dora-x7k2', name: 'dora', salt: 's', hash: 'h', created: 2 },
+  }));
+  writeFileSync(path.join(sys, 'retired-accounts.json'), JSON.stringify([{ id: 'gone', name: 'gone', deletedAt: 1, data: 'purged' }]));
+  const out = path.join(tmp, 'collide-export');
+  mkdirSync(out, { recursive: true });
+  const rec = (name, extra = {}) => ({ name, salt: 's2', hash: 'h2', created: 9, ...extra });
+  writeFileSync(path.join(out, m.MANIFEST), JSON.stringify({ version: 1, exportedAt: 1, from: { platform: 'win32', usersRoot: 'E:\\U' }, users: [
+    { name: 'bob', record: rec('bob'), usage: null, hasFiles: false },                          // 老包：id = bob，撞 robert 的 id
+    { name: 'dora-x7k2', record: rec('dora-x7k2'), usage: null, hasFiles: false },              // 登录名等于本机 dora 的 id
+    { name: 'eve', id: 'robert', record: rec('eve', { id: 'robert' }), usage: null, hasFiles: false },   // id 等于本机的登录名
+    { name: 'gone', record: rec('gone'), usage: null, hasFiles: false },                        // 本机删过的 id
+    { name: '__proto__', record: rec('__proto__'), usage: null, hasFiles: false },
+    { name: 'ok-new', id: 'ok-new-abcd', record: rec('ok-new', { id: 'ok-new-abcd' }), usage: { tokens: 1 }, hasFiles: false },
+    { name: 'legacy', record: rec('legacy'), usage: null, hasFiles: false },
+  ] }));
+  const logs = [];
+  const done = m.importUsers({ usersRoot: srv, systemDir: sys, from: out, log: (s) => logs.push(s) });
+  assert.deepEqual(done, ['ok-new', 'legacy']);
+  const users = JSON.parse(readFileSync(path.join(sys, 'users.json'), 'utf8'));
+  assert.equal(users.robert.id, 'bob', '本机账号原样');
+  assert.equal(users.bob, undefined);
+  assert.equal(users['ok-new'].id, 'ok-new-abcd');
+  assert.equal('id' in users.legacy, false, '老账号（id = 用户名）不补 id 字段');
+  assert.equal(JSON.parse(readFileSync(path.join(sys, 'usage.json'), 'utf8'))['ok-new-abcd'].tokens, 1, '用量按 id 记');
+  assert.ok(logs.some((s) => /bob.*已属于本机账号 robert/.test(s)));
+  // --overwrite 也不放行 id 冲突
+  assert.deepEqual(m.importUsers({ usersRoot: srv, systemDir: sys, from: out, overwrite: true, only: ['bob', 'gone'], log: () => {} }), []);
 });

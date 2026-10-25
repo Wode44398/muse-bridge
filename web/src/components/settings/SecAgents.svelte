@@ -9,9 +9,9 @@
   import SRow from './SRow.svelte';
   import SToggle from './SToggle.svelte';
   import SButton from './SButton.svelte';
-  import { t, tc, tr } from '../../lib/i18n.js';
+  import { t, tr } from '../../lib/i18n.js';
 
-  let data = $state(null);      // { edition, features, agents:[{id,label,multiUser,switch,runnable,authed,enabled,note}] }
+  let data = $state(null);      // { features, agents:[{id,label,multiUser,switch,runnable,authed,enabled,note}] }
   let err = $state('');
   let busy = $state('');
   api.get('/api/agents').then((r) => { data = r; }).catch((e) => {
@@ -45,7 +45,7 @@
     claude: t('在「服务端控制台 → Claude 账号」里添加 claude setup-token 生成的长期 token，或在服务器环境里配 ANTHROPIC_API_KEY。'),
     dimensio: t('在 dimensio 的 .env 里填至少一家厂商的 API key。'),
   };
-  const editionLine = $derived(!data ? '' : (data.edition === 'host' ? t('主机端') : tc('settings', '服务端')) + ' · ' + (data.features?.multiUser ? t('多用户') : t('单人')));
+  const editionLine = $derived(!data || !data.features ? '' : (data.features.multiUser ? t('多用户') : t('单人')));
   const pending = $derived(data ? data.agents.filter((a) => a.runnable && a.switch && !a.authed) : []);
   const foot = $derived(data?.features?.multiUser
     ? t('关掉的 agent，所有人都不再看到它的分页。只开一个时打开网页直接就是那一页；注册用户能用哪些，另在「服务端控制台 → 用户」里按人勾选。')

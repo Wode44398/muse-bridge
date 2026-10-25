@@ -321,7 +321,7 @@
         </Row>
       </Group>
 
-      <Section title={t("API Key")} footnote={vendor.custom ? t("自定义服务的 Key 加密存在服务端，不回传浏览器。") : t("Key 只存于服务端内存，不落盘、不回传浏览器。")}>
+      <Section title={t("API Key")} footnote={t("Key 加密存在服务端，重启不丢，不回传浏览器。")}>
         <TextField
           type="password"
           mono

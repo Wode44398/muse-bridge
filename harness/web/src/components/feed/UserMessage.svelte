@@ -70,7 +70,7 @@
           {/each}
         </div>
       {/if}
-      {#if text}<div class="text">{text}</div>{/if}
+      {#if text}<div class="text sel-text">{text}</div>{/if}
     </div>
     {#if text || canRewind}
       <div class="acts">

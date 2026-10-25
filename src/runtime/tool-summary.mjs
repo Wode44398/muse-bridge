@@ -13,12 +13,15 @@ export const clip = (s, n) => {
   return t.length > n ? t.slice(0, n) + '…' : t;
 };
 
-// 不当普通工具行的工具：AskUserQuestion→ask 块；agy 委托 / 媒体生成有各自专属 UI（胶囊 / 媒体卡）。
+// 不当普通工具行的工具：AskUserQuestion→ask 块；媒体生成有专属 UI（媒体卡）；
+// mcp__antigravity__*（Antigravity 委托，已下线）只剩历史会话里有，照旧不露。
 // Agent/Task/Workflow 从 2026-09-02 起【也露】——它们的工具行就是子 agent 卡 / 工作流卡的宿主
 //（task_* 事件按 tool_use id 挂到那一行上），不再另立一颗「并行子任务」胶囊。
+// 内嵌图表 mcp__visualize__*：show_widget 落 widget 段、read_me 不显示（官方 hidden_in_chat），见 mcp/visualize.mjs。
 export function toolShown(name) {
   if (typeof name !== 'string' || !name) return false;
-  return name !== 'AskUserQuestion' && !name.startsWith('mcp__antigravity__') && !name.startsWith('mcp__media__');
+  // ExitPlanMode（2026-10-20）→ 计划审批卡（plan 段，runtime/permissions.mjs + 历史重建 sessions.mjs），不再露成「Proposed plan」工具行
+  return name !== 'AskUserQuestion' && name !== 'ExitPlanMode' && !name.startsWith('mcp__antigravity__') && !name.startsWith('mcp__media__') && !name.startsWith('mcp__visualize__');
 }
 
 // 官方 /code 页工具分组的 standalone 桶（桌面端 c06cf64bb `xr` 集合，HD 分桶时命中即单独成组）：
@@ -27,8 +30,15 @@ export function toolShown(name) {
 // 直播（web/src/lib/chat.svelte.js pushTool）与历史重建（routes/sessions.mjs）必须同构，
 // 前端在 toolVerbs.js 里抄了同一份集合——改一处记得改另一处。AskUserQuestion 在 bridge 里
 // 本就不是工具行（ask 段），不在此列。
-export const STANDALONE_TOOLS = new Set(['Workflow', 'ExitPlanMode', 'SendUserMessage', 'SendUserFile', 'PushNotification', 'Artifact', 'ReportFindings', 'ClaudeDesign']);
+// mcp__sessions__start_session：它下面挂「新会话 / 在这里做」卡、提议卡、「已开始」卡（官方 suggested_task 走 own-run），也自己一段。
+export const STANDALONE_TOOLS = new Set(['Workflow', 'ExitPlanMode', 'SendUserMessage', 'SendUserFile', 'PushNotification', 'Artifact', 'ReportFindings', 'ClaudeDesign', 'mcp__sessions__start_session']);
 export function toolStandalone(name) { return typeof name === 'string' && STANDALONE_TOOLS.has(name); }
+// 新 tool_use 能不能并进上一段（prev = 上一段最后一个工具名，没有就是 ''）。例外：连续几次 start_session
+// 并成一段——官方把同一条回复里的几张提议卡画成一组（「{n} 个建议任务 · 全部开始」）。前端 toolVerbs.js 同构。
+export function toolJoins(prev, name) {
+  if (prev === 'mcp__sessions__start_session' && name === 'mcp__sessions__start_session') return true;
+  return !toolStandalone(name) && !(prev && toolStandalone(prev));
+}
 
 // —— 上下文压缩（compact_boundary）——
 // 官方 /code 页把压缩记成一条 `compacted` 条目：Claude 干活途中压缩时「rolls-up」并进工具循环分组，
@@ -57,6 +67,8 @@ const TOOL_PICK = {
   Bash: 'command', PowerShell: 'command', Read: 'file_path', Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path',
   NotebookEdit: 'notebook_path', Glob: 'pattern', Grep: 'pattern', WebFetch: 'url', WebSearch: 'query',
   Task: 'description', Agent: 'description', Skill: 'skill', Monitor: 'command', TaskStop: 'task_id',
+  // 会话协作（mcp/session-tools.mjs）
+  mcp__sessions__start_session: 'title', mcp__sessions__send_message: 'message', mcp__sessions__read_session: 'to',
 };
 
 // 官方 y()：input.name 显式给了用它；否则从脚本前 4KB 的 `meta = { name: '…' }` 抠；再不济用 scriptPath 文件名。
@@ -133,6 +145,13 @@ export function toolInputSubset(name, input) {
   }
   if (typeof input.prompt === 'string' && input.prompt) out.prompt = clip(input.prompt, 200);
   if (name === 'Workflow') { const n = workflowNameFromInput(input); if (n) out.name = n; }
+  // 会话协作工具（bridge 自己的，字段都是模型写的说明文字）：工具行要拿 title / to 跳到对应会话、展开体列出发了什么
+  if (typeof name === 'string' && name.startsWith('mcp__sessions__')) {
+    for (const k of ['title', 'to', 'context', 'name', 'model', 'message']) if (typeof input[k] === 'string' && input[k]) out[k] = clip(input[k], k === 'message' ? 400 : 120);
+    // start_session 三态与提议卡（session-tools.mjs）：工具行按 initiation 选动词，卡片按 proposal_id / task_id 对上
+    for (const k of ['initiation', 'proposal_id', 'task_id', 'tldr']) if (typeof input[k] === 'string' && input[k]) out[k] = clip(input[k], 300);
+    if (typeof input.use_worktree === 'boolean') out.use_worktree = input.use_worktree;
+  }
   if (Array.isArray(input.todos)) out.todosCount = input.todos.length;
   return out;
 }

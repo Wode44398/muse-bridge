@@ -73,7 +73,7 @@ export interface ProjectProfile {
   // in a multi-project bucket that root profile actively misleads (2026-08-16: a
   // Gradle/Java Android project got described as "npm, HTML, JavaScript;
   // entrypoints server.js" from a leftover app in the same bucket).
-  subProjects: Array<{ dir: string; manifest: string }>;
+  subProjects: Array<{ dir: string; manifest: string; nested?: number }>;
   frameworks: string[];
   scripts: Record<string, string>;
   commands: Partial<Record<"test" | "build" | "lint" | "typecheck" | "start" | "dev", string>>;
@@ -132,10 +132,40 @@ function atomicJson(file: string, value: unknown): void {
   fs.renameSync(tmp, file);
 }
 
+// 工作区是 git 仓库时，被 .gitignore 忽略的东西（临时构建目录、下载缓存……）不进知识：它们不是项目的一部分，
+// 却会占满「子项目」栏、让召回捞到（2026-10-09：.scratch/md2pdf、.scratch/web-build-* 被当成子项目）。
+// 一次 git 调用拿全（--directory 把整个被忽略的目录折成一条）；不是仓库或 git 不可用就什么都不跳。
+function gitIgnored(root: string): { dirs: Set<string>; files: Set<string> } {
+  const dirs = new Set<string>();
+  const files = new Set<string>();
+  let out: string;
+  try {
+    out = execFileSync("git", [...helperGitArgs(), "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], {
+      cwd: root,
+      env: helperEnv(),
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 16 * 1024 * 1024,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return { dirs, files };
+  }
+  // 工作区可能是仓库的子目录：git 给的路径相对于 cwd，直接可用
+  for (const entry of out.split("\0")) {
+    if (!entry) continue;
+    if (entry.endsWith("/")) dirs.add(entry.slice(0, -1));
+    else files.add(entry);
+  }
+  return { dirs, files };
+}
+
 function scan(root: string): { files: ScannedFile[]; truncated: boolean } {
   const files: ScannedFile[] = [];
   const stack = [path.resolve(root)];
   const generatedRoot = knowledgeRoot();
+  const ignored = gitIgnored(root);
   let truncated = false;
   while (stack.length) {
     const dir = stack.pop()!;
@@ -150,10 +180,16 @@ function scan(root: string): { files: ScannedFile[]; truncated: boolean } {
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (path.resolve(abs) === generatedRoot) continue;
-        if (!IGNORE_DIRS.has(entry.name) && !entry.name.endsWith(".egg-info")) stack.push(abs);
+        if (IGNORE_DIRS.has(entry.name) || entry.name.endsWith(".egg-info")) continue;
+        // 工作区下面嵌着的 git 仓库 / worktree（有 .git 文件或目录）是另一棵代码树：.claude/worktrees/<分支> 这种整份副本
+        // 会把模块、配置、过时的 AGENTS.md 全收进来，挤掉真子项目，还让自动召回天天捞到它们（2026-10-09）
+        if (fs.existsSync(path.join(abs, ".git"))) continue;
+        if (ignored.dirs.has(slash(path.relative(root, abs)))) continue;
+        stack.push(abs);
         continue;
       }
       if (!entry.isFile()) continue;
+      if (ignored.files.has(slash(path.relative(root, abs)))) continue;
       let stat: fs.Stats;
       try {
         stat = fs.statSync(abs);
@@ -278,17 +314,22 @@ function entrypoints(root: string, files: ScannedFile[], pkg: Record<string, unk
 // Reported rather than merged: guessing which one is "the" project from file
 // counts or mtimes is exactly how the root profile came to describe the wrong
 // one. The model gets the list and picks by what it is actually working on.
-function subProjects(manifests: string[]): Array<{ dir: string; manifest: string }> {
+// 嵌在另一个子项目里的（Cargo workspace 的几十个 crate、monorepo 的 packages/*）并进最外层那一项、只记个数，
+// 先并再截 12 条——2026-10-09 一个下载来的 codex-main 占了 12 个名额里的 11 个，后面真正的子项目被截掉。
+function subProjects(manifests: string[]): Array<{ dir: string; manifest: string; nested?: number }> {
   const byDir = new Map<string, string>();
   for (const rel of manifests) {
     const dir = path.posix.dirname(slash(rel));
     if (dir === "." || dir === "/" || !MANIFEST_NAMES.has(path.posix.basename(slash(rel)))) continue;
     if (!byDir.has(dir)) byDir.set(dir, path.posix.basename(slash(rel)));
   }
-  return [...byDir.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .slice(0, 12)
-    .map(([dir, manifest]) => ({ dir, manifest }));
+  const tops: Array<{ dir: string; manifest: string; nested?: number }> = [];
+  for (const [dir, manifest] of [...byDir.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const parent = tops.find((t) => dir.startsWith(`${t.dir}/`));
+    if (parent) parent.nested = (parent.nested ?? 0) + 1;
+    else tops.push({ dir, manifest });
+  }
+  return tops.slice(0, 12);
 }
 
 function commandFor(manager: string | null, name: string, scripts: Record<string, string>): string | undefined {
@@ -569,7 +610,7 @@ export function renderProjectKnowledgeForPrompt(root: string, current?: ProjectK
       ? [
           `Sub-projects with their own manifest — the Stack/Entrypoints/Commands above describe the workspace ROOT only, ` +
             `so for work inside one of these, read its manifest instead of trusting that line: ` +
-            (profile.subProjects ?? []).map((item) => `${item.dir} (${item.manifest})`).join(", "),
+            (profile.subProjects ?? []).map((item) => `${item.dir} (${item.manifest}${item.nested ? `; +${item.nested} nested` : ""})`).join(", "),
         ]
       : []),
     modules.modules.length ? `Modules: ${modules.modules.length} source files across ${modules.boundaries.length} boundaries.` : "",

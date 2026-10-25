@@ -100,7 +100,9 @@ export const api = {
   }),
 
   // conversations
-  sessions: () => req('GET', '/api/sessions'),
+  // keep：侧栏组内翻页拿回来的老会话 id——服务端回 gone（其中已不在活跃列表里的），前端据此摘掉幽灵行
+  // quick=2：认得「多条临时对话」（S1-6）。不带的是老前端，服务端只给它一只临时对话桶（见 routes/sessions.mjs）
+  sessions: (keep) => req('GET', '/api/sessions?quick=2' + (keep && keep.length ? '&keep=' + encodeURIComponent(keep.join(',')) : '')),
   // fp：上次拿到的响应指纹。带上它，服务端在「transcript / 回滚锚点 / prefs 都没变」
   // 时只回一个几十字节的 {unchanged:true}，不再重传整份记录（见 routes/sessions.mjs）。
   session: (id, fp) => req('GET', '/api/session?id=' + encodeURIComponent(id) + (fp ? '&fp=' + encodeURIComponent(fp) : '')),
@@ -114,12 +116,21 @@ export const api = {
   projectLocations: () => req('GET', '/api/project/locations'),
 
   // Claude 项目（路径制：项目=工作空间目录=会话 cwd）
-  claudeProjects: () => req('GET', '/api/claude/projects'),
+  claudeProjects: () => req('GET', '/api/claude/projects?quick=2'),   // quick=2 同上：全部临时对话桶
   createClaudeProject: (name, path) => req('POST', '/api/claude/project/create', { name, path }),
   renameClaudeProject: (id, name) => req('POST', '/api/claude/project/rename', { id, name }),
   deleteClaudeProject: (id) => req('POST', '/api/claude/project/delete', { id }),
-  // 快照对话：换一只全新的一次性桶（=开一条全新快照），旧桶留盘不再列出
+  // 会话收藏 / 自定义标题（服务端按账号存，跨设备）：{op:'star'|'title'|'merge', …} → { library }
+  claudeLibrary: (op) => req('POST', '/api/claude/library', op),
+  // 临时对话（服务端 claude-quick.mjs）：拿一只没用过的空桶开新的临时对话 → { project }
   newQuickChat: () => req('POST', '/api/claude/quick/new', {}),
+  // 把某条临时对话（它所在的桶 id）存为工作空间；label = 显示名（对话标题），没有就用 base + 编号 → { project, quick }
+  saveQuickChat: (id, base, label) => req('POST', '/api/claude/quick/save', { id, base, quick: 2, ...(label ? { label } : {}) }),
+  // 继续保留：回收时钟从头算 → { id, expiresAt }
+  keepQuickChat: (id) => req('POST', '/api/claude/quick/keep', { id }),
+  // 临时对话回收站 → { items }；恢复 → { project }
+  recycledQuickChats: () => req('GET', '/api/claude/quick/recycled'),
+  restoreQuickChat: (id) => req('POST', '/api/claude/quick/restore', { id }),
 
   // live turn（多对话并发：status 可按会话取 context；stop 可点名停某一轮）
   status: (sessionId) => req('GET', '/api/status' + (sessionId ? '?session=' + encodeURIComponent(sessionId) : '')),
@@ -147,6 +158,8 @@ export const api = {
   // —— 工作空间文件（per-user 沙箱根；admin=数据目录）——
   files: (path, ws, opts) => req('GET', '/api/files?path=' + encodeURIComponent(path || '') + wsQuery(ws), null, opts),
   mkdir: (path, name, ws) => req('POST', '/api/files/mkdir', wsBody({ path, name }, ws)),
+  // 新建文本文件（只建不覆盖：同名已存在 → 409 'exists'）
+  newFile: (path, name, ws, content = '') => req('POST', '/api/files/newfile', wsBody({ path, name, content }, ws)),
   renameFile: (path, name, ws) => req('POST', '/api/files/rename', wsBody({ path, name }, ws)),
   deleteFile: (path, ws) => req('POST', '/api/files/delete', wsBody({ path }, ws)),
   // dest=目标目录相对路径；fromWs=源作用域根（跨作用域拖放时给，'' 表示身份文件根），不给＝与 ws 同根
@@ -160,6 +173,11 @@ export const api = {
 
   fileToUpload: (path, copy = true, ws) => req('POST', '/api/files/to-upload', wsBody(copy ? { path } : { path, copy: false }, ws)),   // 工作空间文件 →「发送给 AI」素材（copy=false 零拷贝直给源路径；默认拷进 uploads）
   extractFile: (path, ws) => req('POST', '/api/files/extract', wsBody({ path }, ws)),   // 服务端解压压缩包（bsdtar）→ 同目录同名文件夹，返回 {ok,name,path}
+  // 服务端压缩（同一文件夹里的若干项 → 同目录存档）。opts = { format:'zip'|'7z'|'tar.gz'|'rar', level:'store'|'fast'|'normal'|'max', name }
+  // 立即回 { job, name }；进度/结果用 compressStatus(job) 轮询 → { state:'running'|'done'|'error', name, path, error, bytes }
+  compressFiles: (paths, opts, ws) => req('POST', '/api/files/compress', wsBody({ paths, ...(opts || {}) }, ws)),
+  compressStatus: (job) => req('GET', '/api/files/compress?job=' + encodeURIComponent(job)),
+  compressFormats: () => req('GET', '/api/files/compress?formats=1'),   // 服务器能压的格式 { formats:[…] }
   // —— 分享链接（学 qq-bot：文件 → /s/ 直链；文件夹 → /w/ 只读分享空间）——
   // opts = { ttlHours, password? }；返回 { ok, path:'/s|w/<token>', url?, expiresAt, locked }
   shareLink: (path, opts, ws) => req('POST', '/api/share', wsBody({ path, ...(opts || {}) }, ws)),

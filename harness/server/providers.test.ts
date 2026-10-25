@@ -142,6 +142,64 @@ test("provider adapters replay neutral tool transcripts in their native wire for
   });
 });
 
+// 会话中途换厂商：转录里是别家留下的东西——Kimi 风格的 id（带 . 和 :、每轮从 0 数所以会重复）、没签名的思考、只剩思考的空回答
+const foreignTurn: Turn = {
+  system: "system prompt",
+  messages: [
+    { role: "user", content: [{ t: "text", text: "看看两个文件" }] },
+    { role: "assistant", content: [{ t: "thinking", text: "kimi 的思考" }, { t: "tool_call", id: "functions.Read:0", name: "Read", args: { path: "a.ts" } }] },
+    { role: "user", content: [{ t: "tool_result", id: "functions.Read:0", ok: true, content: [{ t: "text", text: "A" }] }] },
+    { role: "assistant", content: [{ t: "thinking", text: "只想没说" }, { t: "text", text: "" }] },
+    { role: "user", content: [{ t: "text", text: "再看一个" }] },
+    { role: "assistant", content: [{ t: "tool_call", id: "functions.Read:0", name: "Read", args: { path: "b.ts" } }, { t: "tool_call", id: "functions.Read:1", name: "Read", args: { path: "c.ts" } }] },
+    { role: "user", content: [
+      { t: "tool_result", id: "functions.Read:0", ok: true, content: [{ t: "text", text: "B" }] },
+      { t: "tool_result", id: "functions.Read:1", ok: true, content: [{ t: "text", text: "C" }] },
+    ] },
+    { role: "user", content: [{ t: "text", text: "现在换成你来" }] },
+  ],
+  tools: turn.tools,
+  budget: { maxOutputTokens: 1000, thinking: "low" },
+};
+
+test("会话中途换厂商：Claude / Gemini 3 把别家留下的转录收拾成自己认的样子", async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies = new Map<string, any>();
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    bodies.set(url, JSON.parse(String(init?.body ?? "{}")));
+    if (url.includes("anthropic.test")) return response([{ type: "message_start", message: { usage: { input_tokens: 5 } } }, { type: "message_stop" }]);
+    return response([{ candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1 } }]);
+  }) as typeof fetch;
+  try {
+    await drain(createAnthropicAdapter({ provider: "anthropic", apiKey: "k", model: "claude-sonnet-4-6", baseUrl: "https://anthropic.test" }), foreignTurn);
+    await drain(createGeminiAdapter({ provider: "gemini", apiKey: "k", model: "gemini-3.5-flash", baseUrl: "https://google.test/v1beta" }), foreignTurn);
+    await drain(createGeminiAdapter({ provider: "gemini", apiKey: "k", model: "gemini-2.5-flash", baseUrl: "https://google.test/v1beta" }), foreignTurn);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const a = bodies.get("https://anthropic.test/v1/messages");
+  const blocks = a.messages.flatMap((m: any) => m.content);
+  assert.ok(!blocks.some((b: any) => b.type === "thinking"), "没签名的思考一律丢掉（验签必拒）");
+  assert.ok(a.messages.every((m: any) => m.content.length > 0), "只剩思考的空回答整条跳过");
+  assert.ok(!blocks.some((b: any) => b.type === "text" && !b.text), "空文本块不发");
+  const uses = blocks.filter((b: any) => b.type === "tool_use").map((b: any) => b.id);
+  const results = blocks.filter((b: any) => b.type === "tool_result").map((b: any) => b.tool_use_id);
+  assert.equal(uses.length, 3);
+  assert.ok(uses.every((id: string) => /^[a-zA-Z0-9_-]+$/.test(id)), `id 只含合规字符：${uses}`);
+  assert.equal(new Set(uses).size, 3, "重复的 functions.Read:0 拆成不同的 id");
+  assert.deepEqual(results, uses, "每个结果跟着自己那次调用");
+
+  const g3 = bodies.get("https://google.test/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse");
+  const calls3 = g3.contents.filter((c: any) => c.role === "model").map((c: any) => c.parts.filter((p: any) => p.functionCall));
+  assert.equal(calls3[0][0].thoughtSignature, "skip_thought_signature_validator");
+  assert.equal(calls3[1][0].thoughtSignature, "skip_thought_signature_validator", "并行调用只给第一个填");
+  assert.equal(calls3[1][1].thoughtSignature, undefined);
+  const g25 = bodies.get("https://google.test/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse");
+  assert.ok(!JSON.stringify(g25).includes("skip_thought_signature_validator"), "2.5 不强制签名，不填占位");
+});
+
 test("OpenAI-compatible adapter preserves malformed streamed tool arguments for loop recovery", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => response([

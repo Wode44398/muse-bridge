@@ -80,7 +80,8 @@ test('登录令牌落盘只存哈希；旧明文键第一次读就迁移、照�
   // 旧格式：键就是明文令牌。经 users 自己的写入口让热缓存失效（直接改文件要等 5 秒缓存过期）。
   const legacyTok = 'legacyTokenAbcdefghijklmnopqrstuv';
   const s = JSON.parse(readFileSync(file, 'utf8'));
-  s[legacyTok] = { user: 'alice', created: Date.now() };
+  // 会话里落的是账号 id（老账号的 id 就是用户名；新账号是「名字-随机串」，S2-4）
+  s[legacyTok] = { user: users.accountIdOf('alice'), created: Date.now() };
   writeFileSync(file, JSON.stringify(s));
   const other = users.createSession('alice');
   assert.equal(users.getSession(legacyTok)?.user, 'alice', '迁移前的明文键照常能认');

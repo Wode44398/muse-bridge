@@ -159,7 +159,7 @@ export function registerPairRoutes(router, { identify, adminGen, authCookie, use
     if (t.status !== 'pending' && t.status !== 'scanned') return json(res, 409, { error: '这张二维码已经用过了' });
     t.status = 'scanned'; t.scannedAt = Date.now();
     notify(t);
-    json(res, 200, { ok: true, device: describeClient(t.ua), label: t.label, ip: t.ip, created: t.created, expiresAt: t.expiresAt, as: id.kind === 'admin' ? null : id.user });
+    json(res, 200, { ok: true, device: describeClient(t.ua), label: t.label, ip: t.ip, created: t.created, expiresAt: t.expiresAt, as: id.kind === 'admin' ? null : (id.name || id.user) });
   });
 
   // ④ 手机确认：按手机身份铸凭据，网页那头的 wait 立刻醒。

@@ -73,9 +73,14 @@ export default defineConfig(({ command }) => ({
   server: {
     host: '127.0.0.1',
     port: 5173,
-    // 允许 dev 从 web/ 上级 import 后端的 src/config/*.mjs（caps.js 的编译期兜底）；
-    // 仓库根同时覆盖 harness/web/src（@hx 别名），无需再单列。
-    fs: { allow: ['..'] },
+    // 允许 dev 从 web/ 上级 import 后端的 src/config/capabilities.mjs（caps.js 的编译期兜底）等 src/ 下的共用代码、
+    // harness/web/src（@hx 别名）。只放开这几个代码目录，不放开仓库根：数据根 = 程序根时 config.json、
+    // claude-providers/connector-secrets.key、users/ 都在仓库根，/@fs/ 会把它们当静态文件发出去（pv- 预览链接绕过鉴权）。
+    // deny 会整个替换 vite 默认值，默认那四条照抄再加凭据文件。
+    fs: {
+      allow: ['.', '../src', '../harness/web', '../node_modules'],
+      deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/config.json*', '**/connector-secrets.*'],
+    },
     proxy: {
       '/api': { target: API, changeOrigin: true },
       '/healthz': { target: API, changeOrigin: true },

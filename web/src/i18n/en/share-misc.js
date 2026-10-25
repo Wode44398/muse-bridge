@@ -172,7 +172,7 @@ export default {
   '流体尺寸': 'Fluid size',
 
   // —— 壁纸库（wallpaper.svelte.js）——
-  '多洛米蒂': 'Dolomites',
+  '层峦': 'Ridges',
   '流光': 'Flux',
   '我的壁纸': 'My wallpaper',
 

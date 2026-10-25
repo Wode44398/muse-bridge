@@ -3,6 +3,30 @@
    Dark is the default theme; light is a complete second theme (design spec §2.1).
    Brand coral: #d97757. */
 
+/* —— 全站滚动条 = Edge（Win11 Fluent 浮层滚动条）同款 ——
+   实测 Edge：平时完全隐身；滚动时、或鼠标移到滚条那一条上时，才浮出一根 4px 圆头细线贴右沿（离边 3px），
+   鼠标停在拇指上加粗到 ~8px；停下约 1 秒再隐身。无轨道底色、无箭头。
+   「何时显形」由 lib/scrollbars.js 给滚动容器挂/摘 data-sb 属性驱动（伪元素没法自己知道在滚动）。
+   webkit 伪元素做不出浮层（槽总要占宽），故槽 12px 全透明、靠透明边框把拇指收细，悬停时边框收窄=加粗。
+   颜色取 currentColor 混透明：拇指永远是所在区域文字色的半透明——暗底上浅灰、亮底上深灰，
+   不依赖 color-scheme 声明对不对（以前原生滚条在「暗底+color-scheme:light」的区域里画成一根白条）。
+   只用 webkit 私有伪元素——别设标准 scrollbar-width/scrollbar-color，Chromium 里标准属性一出现伪元素即整体失效。
+   各组件不要再自定义滚条，统一走这里（Settings 等明确隐藏滚条的除外）。 */
+@media (pointer: fine) {
+  ::-webkit-scrollbar { width: 12px; height: 12px; background: transparent; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-button { display: none; }
+  ::-webkit-scrollbar-thumb {
+    background-color: transparent; background-clip: padding-box;
+    border: solid transparent; border-width: 0 3px 0 5px; border-radius: 999px; min-height: 40px;
+  }
+  ::-webkit-scrollbar-thumb:horizontal { border-width: 5px 0 3px 0; min-width: 40px; }
+  [data-sb]::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, currentColor 48%, transparent); }
+  ::-webkit-scrollbar-thumb:hover { border-width: 0 2px; background-color: color-mix(in srgb, currentColor 62%, transparent); }
+  ::-webkit-scrollbar-thumb:horizontal:hover { border-width: 2px 0; }
+  ::-webkit-scrollbar-thumb:active { background-color: color-mix(in srgb, currentColor 72%, transparent); }
+}
+
 /* Claude 侧栏拖放的拖拽图（ClaudePage dragGhost 现造、挂在 body 屏幕外，setDragImage 采样后即摘）：
    一颗干净的卡片代替浏览器默认的整行截图。项目带 Anthropicons 项目字形。 */
 .bridge-side-ghost {
@@ -169,6 +193,8 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .ic{font-family:var(--icons);font-style:normal;line-height:1;display:inline-block}
 /* 可选中的正文区（组件里用 class 挂上）：Claude 回答/用户气泡/思考体/工具参数等 */
 .sel-text,.sel-text *{-webkit-user-select:text;user-select:text}
+/* 正文里嵌的控件（代码块复制、展开钮…）照旧不可选：拖选一段回答不该把按钮字也带进去 */
+.sel-text button,.sel-text [role="button"]{-webkit-user-select:none;user-select:none}
 
 /* 触摸/点击不显示焦点轮廓：可聚焦元素被点后、或转场组件卸载后焦点回退到 body 时，移动浏览器
    会沿整屏画一圈，直到点背景失焦才消失。仅键盘导航(:focus-visible)保留轮廓做无障碍。 */

@@ -112,11 +112,17 @@ export function withImgSize(src, w) {
   if (m) return '![' + swap(m[1]) + '](' + m[2] + ')';
   return null;
 }
+// src：'' ＝地址还在解析（出链索引在路上）→ 先画一个不发请求的占位；null ＝解析不出 → 裂图块。
+// alts：主地址只是猜的时候的备选地址，加载失败按序换下一个，都不行才算裂图
 export class ImageWidget extends WidgetType {
-  constructor(src, alt, block = false, w = 0, h = 0, active = false) {
+  constructor(src, alt, block = false, w = 0, h = 0, active = false, alts = null) {
     super(); this.src = src; this.alt = alt || ''; this.block = block; this.w = w; this.h = h; this.active = active;
+    this.alts = alts?.length ? alts : null;
   }
-  eq(o) { return o.src === this.src && o.alt === this.alt && o.block === this.block && o.w === this.w && o.h === this.h && o.active === this.active; }
+  eq(o) {
+    return o.src === this.src && o.alt === this.alt && o.block === this.block && o.w === this.w && o.h === this.h && o.active === this.active
+      && (o.alts || []).join('\n') === (this.alts || []).join('\n');
+  }
   toDOM(view) {
     const el = document.createElement(this.block ? 'div' : 'span');
     el.className = 'mde-imgwrap' + (this.block ? ' mde-imgwrap-block' : '') + (this.active ? ' mde-img-active' : '');
@@ -133,6 +139,11 @@ export class ImageWidget extends WidgetType {
       view.dispatch({ selection: { anchor: Math.min(at, state.doc.length) } });
       view.focus();
     });
+    if (this.src === '') {
+      el.className += ' mde-img-pending';
+      if (this.w) el.style.width = this.w + 'px';
+      return el;
+    }
     if (!this.src) { el.className += ' mde-img-broken'; el.textContent = '🖼 ' + (this.alt || t('图片')); return el; }
     const box = document.createElement('span');
     box.className = 'mde-imgbox';
@@ -144,7 +155,11 @@ export class ImageWidget extends WidgetType {
     if (this.w) img.style.width = this.w + 'px';
     if (this.h) img.style.height = this.h + 'px';
     img.onload = () => view.requestMeasure();
-    img.onerror = () => { el.className += ' mde-img-broken'; box.remove(); el.textContent = '🖼 ' + (this.alt || t('加载失败')); view.requestMeasure(); };
+    const alts = [...(this.alts || [])];
+    img.onerror = () => {
+      if (alts.length) { img.src = alts.shift(); return; }
+      el.className += ' mde-img-broken'; box.remove(); el.textContent = '🖼 ' + (this.alt || t('加载失败')); view.requestMeasure();
+    };
     img.src = this.src;
     box.appendChild(img);
     if (!view.state.readOnly) box.appendChild(this.resizer(view, el, img));
@@ -291,9 +306,24 @@ export class FenceHeadWidget extends WidgetType {
 }
 
 // —— callout 卡（整块替换；HTML 由 opts.renderMd（obsmd）生成，与阅读模式同观感）——
+// 相等判断除了源码，还比卡里嵌入图此刻的解析结果（emb）：![[图]] 的地址靠出链索引/名单解析，它们是异步到货的，
+// 在路上时渲染成不发请求的占位。到货后 LP 整篇重建（DocViewer.refreshEmbeds → lpRefresh），只比 src 的话
+// 新旧 widget 判等、CM 沿用旧 DOM，卡里的图一直停在占位上，要点进卡里揭示一次源码才出来
+const CALLOUT_EMBED_RE = /!\[\[([^[\]\n]+?)\]\]|!\[[^\]\n]*\]\(\s*<?([^)\s>]+)/g;
+function calloutEmbedSig(src, opts) {
+  if (!opts?.resolveUrl || !src.includes('![')) return '';
+  let sig = '';
+  for (const m of src.matchAll(CALLOUT_EMBED_RE)) {
+    if (m[1] != null) { sig += (opts.resolveUrl(m[1].split(/[|#]/)[0].trim(), true) ?? '') + '\n'; continue; }
+    let name = m[2];
+    try { name = decodeURIComponent(name); } catch {}
+    if (!/^([a-z][a-z0-9+.-]*:|\/)/i.test(name)) sig += (opts.resolveUrl(name) ?? '') + '\n';   // 同 obsmd：带协议/站内绝对地址不解析
+  }
+  return sig;
+}
 export class CalloutWidget extends WidgetType {
-  constructor(src, opts) { super(); this.src = src; this.opts = opts; }
-  eq(o) { return o.src === this.src; }
+  constructor(src, opts) { super(); this.src = src; this.opts = opts; this.emb = calloutEmbedSig(src, opts); }
+  eq(o) { return o.src === this.src && o.emb === this.emb; }
   toDOM(view) {
     const el = document.createElement('div');
     el.className = 'mde-callout-w';

@@ -38,10 +38,29 @@
   const artOf = (c) => (c === 'security' ? 'shield' : ['development', 'testing', 'database', 'deployment', 'monitoring', 'migration'].includes(c) ? 'code' : 'list');
   // 横幅标题：目录名是 kebab-case 标识，展示时拆词首字母大写（卡片上保留原名，与官方一致）
   const pretty = (s) => String(s || '').split(/[-_]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
-  const AGENTS = [
-    { key: 'claude', label: 'Claude Code', hint: t('下一条消息生效') },
-    { key: 'dimensio', label: 'dimensio', hint: t('新会话生效') },
-  ];
+  // 生效范围（标题旁的分段）：「我自用」= 只进管理员自己的会话；「全服统一」= 给服务器上所有成员加装（成员的 Claude
+  // 会话与定时任务都加载，管理员自己也用得上）。列表、上传、目录安装、下载目录都按当前范围走（?scope= / body.scope）。
+  // 服务端不认 scope 的老版本：不传 = 原行为，回包里没有 counts / multiUser，切换也就不出。
+  const OWNER_KEY = 'bridge-ext-scope';
+  let owner = $state((() => { try { return localStorage.getItem(OWNER_KEY) === 'shared' ? 'shared' : 'admin'; } catch { return 'admin'; } })());
+  let counts = $state({ admin: 0, shared: 0 });
+  let multiUser = $state(false);
+  let scopeOk = $state(false);       // 服务端回了 scope：认这个参数
+  const shared = $derived(owner === 'shared');
+  // 没开多用户时「全服」只有管理员自己用得上，不摆这个切换（已经装过全服扩展的照样摆，免得找不着）
+  const showOwner = $derived(scopeOk && (multiUser || counts.shared > 0 || shared));
+  const withScope = (url) => url + (url.includes('?') ? '&' : '?') + 'scope=' + owner;
+  function setOwner(v) {
+    if (v === owner) return;
+    owner = v; mine = []; loaded = false;
+    try { localStorage.setItem(OWNER_KEY, v); } catch {}
+    refresh();
+  }
+  // 全服范围：成员只有 Claude；dimensio 的勾选只影响管理员自己
+  const AGENTS = $derived([
+    { key: 'claude', label: 'Claude Code', hint: shared ? t('所有成员下一条消息生效') : t('下一条消息生效') },
+    { key: 'dimensio', label: 'dimensio', hint: shared ? t('只对管理员生效 · 新会话') : t('新会话生效') },
+  ]);
 
   const LS = 'bridge-customize';
   const saved = (() => { try { return JSON.parse(localStorage.getItem(LS)) || {}; } catch { return {}; } })();
@@ -71,11 +90,16 @@
   let catErr = $state('');
   const errMsg = (e) => tr((e?.body && typeof e.body === 'object' ? e.body.error : typeof e?.body === 'string' ? e.body : '') || e?.message || String(e));
   async function loadMine() {
-    const r = await api.get('/api/extensions');
+    const want = owner;
+    const r = await api.get(withScope('/api/extensions'));
+    if (want !== owner) return;   // 加载途中切了范围：丢掉旧范围的结果
     mine = r.items || []; support = r.support || {}; mineErr = '';
+    scopeOk = !!r.scope;
+    if (r.counts) counts = { admin: r.counts.admin || 0, shared: r.counts.shared || 0 };
+    multiUser = !!r.multiUser;
   }
   async function refresh() {
-    const [a, b] = await Promise.allSettled([loadMine(), api.get('/api/extensions/catalog')]);
+    const [a, b] = await Promise.allSettled([loadMine(), api.get(withScope('/api/extensions/catalog'))]);
     if (a.status === 'rejected') mineErr = errMsg(a.reason);
     if (b.status === 'fulfilled') { catalog = b.value.items || []; markets = b.value.markets || []; catErr = ''; }
     else catErr = errMsg(b.reason);
@@ -136,7 +160,7 @@
     if (x.type === 'connector' && !values && x.fields?.some((f) => f.required)) { openCfg({ mode: 'install', item: x, fields: x.fields }); return; }
     busy[x.id] = true;
     try {
-      const r = await api.post('/api/extensions/catalog/install', { id: x.id, ...(values ? { values } : {}) });
+      const r = await api.post('/api/extensions/catalog/install', { id: x.id, scope: owner, ...(values ? { values } : {}) });
       x.installed = true;
       cfg = null;
       await loadMine().catch(() => {});
@@ -183,7 +207,7 @@
     e.target.value = '';
     if (!f) return;
     try {
-      const r = await api.post(`/api/extensions/upload?type=${upType}&name=${encodeURIComponent(f.name)}`, f);
+      const r = await api.post(withScope(`/api/extensions/upload?type=${upType}&name=${encodeURIComponent(f.name)}`), f);
       tab = upType; scope = 'yours';
       await refresh();
       const got = mine.find((m) => m.id === r.item?.id);
@@ -200,7 +224,7 @@
     if (fetching) return;
     fetching = true;
     try {
-      const r = await api.post('/api/extensions/catalog/fetch', {});
+      const r = await api.post('/api/extensions/catalog/fetch', { scope: owner });
       catalog = r.items || []; markets = r.markets || []; catErr = '';
       showToast(t('官方目录已更新'));
     } catch (e) { showToast(errMsg(e), 'err'); }
@@ -329,7 +353,18 @@
 
 <section class="cz">
   <div class="in">
-    <h1 class="h">{t('自定义')}</h1>
+    <div class="hrow">
+      <h1 class="h">{t('自定义')}</h1>
+      {#if showOwner}
+        <div class="seg own" role="tablist" aria-label={t('生效范围')}>
+          <button class:on={!shared} role="tab" aria-selected={!shared} onclick={() => setOwner('admin')}>{t('我自用')}{#if counts.admin}<i>{counts.admin}</i>{/if}</button>
+          <button class:on={shared} role="tab" aria-selected={shared} onclick={() => setOwner('shared')}>{t('全服统一')}{#if counts.shared}<i>{counts.shared}</i>{/if}</button>
+        </div>
+      {/if}
+    </div>
+    {#if shared}
+      <p class="own-note">{multiUser ? t('这里加装的扩展给服务器上所有成员用：成员的 Claude 会话和定时任务都会加载，你自己的会话也会。和你自用的那一套互不影响。') : t('这台服务器没开多用户，全服扩展眼下只有你自己用得上；开了多用户后所有成员的 Claude 会话都会加载。')}</p>
+    {/if}
 
     <div class="bar">
       <div class="left">
@@ -612,6 +647,11 @@
   .tab.on { background: var(--st-sel); color: var(--text); font-weight: 500; }
   .vr { width: 1px; height: 22px; background: var(--st-line); margin: 0 8px; }
   .seg { display: flex; padding: 3px; border-radius: 10px; background: var(--st-seg); }
+  .hrow { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 4px 0 28px; }
+  .hrow .h { margin: 0; }
+  .seg.own button { display: inline-flex; align-items: center; gap: 6px; }
+  .seg.own i { font-style: normal; font-size: 12px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--st-hover); color: var(--st-muted); display: inline-flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
+  .own-note { margin: -16px 0 22px; font-size: 13.5px; line-height: 1.55; color: var(--st-muted); }
   .seg button { height: 30px; padding: 0 12px; border-radius: 7px; font-size: 15px; color: var(--st-muted); transition: background-color .12s ease, color .12s ease, box-shadow .12s ease; }
   .seg button.on { background: var(--st-thumb); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 0 0 .5px var(--st-line); }
   .search { width: 290px; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--st-line); border-radius: 10px; background: var(--st-field); color: var(--st-muted); cursor: text; transition: border-color .12s ease; }

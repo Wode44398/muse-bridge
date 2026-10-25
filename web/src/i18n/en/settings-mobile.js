@@ -14,6 +14,11 @@ export default {
   '开关各个 agent · 认证状态': 'Turn agents on or off · Sign-in status',
   '关掉的 agent，所有客户端都不再显示它的分页。': 'When you turn off an agent, its page is hidden on every client.',
   '启用通知': 'Enable notifications',
+  // —— v5「墨与象牙」改版新增 ——
+  '偏好': 'Preferences',
+  '使用中': 'In use',
+  '顺序': 'Order',
+  '明亮': 'Light',
   '跟随系统明暗': 'Match system appearance',
   '分页跟随主页明暗': 'Pages match Home appearance',
   '分页跟随主页': 'Pages match Home',
@@ -29,17 +34,6 @@ export default {
   'Claude 回复进行中，对话底部那颗标记的动画。新版 Claude Code 与桌面端 Code 页一致，会按正在做的事换动画（思考、搜索、读文件、跑命令、写文件、等你回答）；新版聊天页与 claude.ai 聊天一致，等首字时是会变形的星形，开始干活后散成几颗连线的节点；经典是原来的星标动画。': 'The mark at the bottom of the chat while Claude is replying. Claude Code (new) matches the Code page in the desktop app and changes with what Claude is doing (thinking, searching, reading files, running commands, writing files, waiting for you); Chat (new) matches claude.ai chat: a shape-shifting spark until the first words arrive, then a few connected nodes while it works; Classic is the original spark animation.',
   '回复进行中的 Claude 标记：Claude Code 版按正在做的事换动画，聊天页版是星形散成节点，经典是原来的星标': 'The Claude mark while a reply is running: the Claude Code one animates what Claude is doing, the chat one turns the spark into nodes, Classic is the original spark',
   'Claude 每次回复完会猜你接下来想说的话，输入框空着时以灰字显示；点右上角「填入」（电脑上按 Tab）放进输入框，改不改都由你再发送。回复结束后几秒才出现，不是每轮都有。': 'After each response, Claude predicts what you might say next and shows it in gray while the composer is empty. Tap “Insert” in the top-right corner (or press Tab on a computer) to put it in the composer, then edit it or send it as is. Suggestions appear a few seconds after a response ends and don’t show up after every turn.',
-
-  // —— 通用：全局助手 ——
-  '全局助手': 'Assistant',
-  'Flash · 快': 'Flash · Fast',
-  'Pro · 强': 'Pro · Powerful',
-  '选择模型 {name}': 'Select model {name}',
-  'settings::深度思考': 'DeepThink',
-  '推理强度': 'Reasoning effort',
-  '高': 'High',
-  '最高': 'Max',
-  '悬浮球助手的大脑。深度思考开启后答前先推理，更准但更慢；关闭则秒答。': 'The model that powers the floating Assistant. With DeepThink on, it reasons before answering, which is more accurate but slower. With it off, it answers instantly.',
 
   // —— 通用：本机 Agent（桌面壳） ——
   '本机 Agent': 'Local Agent',
@@ -134,12 +128,10 @@ export default {
   '明亮壁纸': 'Light wallpaper',
   '深色壁纸': 'Dark wallpaper',
   '空间壁纸': 'Spatial wallpaper',
-  '正在空间化…首次需生成深度，约几秒': 'Adding depth… This takes a few seconds the first time.',
   '随视角产生景深 · 电脑指针 / 手机重力跟随': 'Depth shifts with your view · Follows the pointer on a computer, tilt on a phone',
-  '空间化中': 'Adding depth…',
   '空间壁纸开关': 'Spatial wallpaper',
   '景深运动幅度': 'Depth intensity',
-  '空间化失败——确认电脑端已装好深度模型，再重试': 'Couldn’t add depth. Make sure the depth model is installed on your computer, then try again.',
+  '要做空间壁纸，请只选原图和深度图两张，深度图文件名带 depth': 'For a spatial wallpaper, choose just two files: the photo and its depth map, with “depth” in the depth map’s file name.',
   '关闭': 'Close',
   '删除壁纸': 'Delete wallpaper',
 
@@ -198,13 +190,13 @@ export default {
   '颜色': 'Color',
   '画面': 'Visuals',
   '点预览进入实景：设置页退开，主页就是预览。': 'Tap a preview to try it live. Settings steps aside and Home becomes the preview.',
-  '长按自己上传的壁纸可以删除。': 'Touch and hold a wallpaper you uploaded to delete it.',
+  '长按自己上传的壁纸可以删除。上传时同时选中原图和它的深度图（文件名带 depth），就能开空间壁纸。': 'Touch and hold a wallpaper you uploaded to delete it. To get a spatial wallpaper, choose the photo and its depth map together when uploading (with “depth” in the depth map’s file name).',
   '性能档只保留光感，折射与色散关闭。': 'Performance keeps only Glow. Refraction and Dispersion are turned off.',
   '拖动滑块时设置页会暂时退开，直接在主页上看实时效果。': 'While you drag a slider, Settings steps aside so you can see the effect live on Home.',
   '切换预设会把三个滑块重置为该档的默认值。': 'Choosing a preset resets the three sliders to its defaults.',
   '仅暗主题的流体壁纸使用这些参数。': 'These settings apply only to the fluid wallpaper in Dark appearance.',
 
-  // —— 键位录制器（settings/ShortcutRecorder.svelte） ——
+  // —— 键位录制器（desktop/settings/ShortcutRecorder.svelte） ——
   '未设置': 'Not set',
   '直接按下组合键；Esc 取消，Backspace 关掉': 'Press a key combination · Esc to cancel · Backspace to turn off',
   '点击改键': 'Click to change',

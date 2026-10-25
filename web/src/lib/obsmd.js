@@ -123,7 +123,10 @@ export function propKind(p) {
 }
 
 // ============================== 行内扩展 ==============================
-let _embedUrl = null;   // 渲染期临时注入：(相对名) => 可加载 URL（图片嵌入/相对资源改写用）
+// 渲染期临时注入：(名字, wiki) => 可加载 URL（图片嵌入/相对资源改写用）。wiki=true 是 ![[名字]]（按全库名字解析），
+// 这时可能返回 ''＝出链索引还在路上：先占位、不发请求
+let _embedUrl = null;
+let _embedAlts = null;  // 渲染期临时注入：(相对名) => 备选 URL 数组（主地址只是猜的时候，加载失败按序换下一个）
 
 // 图片尺寸（Obsidian 语法）：![[x.png|300]] / ![[x.png|说明|300x200]] / ![说明|300](x.png)——
 // 「|」分隔的最后一段是 宽 或 宽x高 就当尺寸，其余仍是说明文字。编辑器（livePreview / 拖动缩放）共用。
@@ -155,9 +158,16 @@ const wikilink = {
   renderer(t) {
     const disp = t.alias || (t.target ? t.target + (t.head ? ' › ' + t.head : '') : t.head);
     if (t.embed && t.target && IMG_EXT_RE.test(t.target)) {
-      const u = _embedUrl && _embedUrl(t.target);
+      const u = _embedUrl && _embedUrl(t.target, true);
       const sz = splitImgSize('x|' + t.alias);   // 别名里只有尺寸 / 说明|尺寸 两种都认
-      if (u) return `<img class="wk-embed" src="${escAttr(u)}" alt="${escAttr(sz.alt.slice(2) || t.target)}"${sizeAttrs(sz.w, sz.h)}>`;
+      // 地址先放 data-src：桌面壳里是 bridge-workspace:// 本地协议，DOMPurify 不认识会把 src 整个剥掉
+      // （阅读态裂图）。净化之后 transformDoc 再挪回 src，只放行我们自己生成的那几种地址
+      if (u) {
+        const alts = _embedAlts?.(t.target) || [];
+        return `<img class="wk-embed" data-src="${escAttr(u)}"${alts.length ? ` data-alt="${escAttr(alts.join('\n'))}"` : ''} alt="${escAttr(sz.alt.slice(2) || t.target)}"${sizeAttrs(sz.w, sz.h)}>`;
+      }
+      // 出链索引还在路上：先占位（没有 src 不发请求；带了尺寸的按尺寸留出位置），到货后整块重渲成真图
+      if (u === '') return `<img class="wk-embed wk-pending" alt=""${sizeAttrs(sz.w, sz.h)}>`;
     }
     return `<a class="wk${t.embed ? ' wk-file' : ''}" data-wk="${escAttr(t.target)}"${t.head ? ` data-head="${escAttr(t.head)}"` : ''}>${escapeHtml(disp)}</a>`;
   },
@@ -415,7 +425,16 @@ function tryCallout(bq) {
   bq.replaceWith(co);
 }
 
+// 嵌入图的地址（渲染器写在 data-src / data-alt 里，见 wikilink）：只认我们自己生成的几种——
+// 站内 /api…、http(s)、blob、data:image、桌面壳本地协议 bridge-workspace:
+export const EMBED_SRC_OK = /^(?:https?:|blob:|data:image\/|bridge-workspace:|\/(?!\/))/i;
+
 function transformDoc(root) {
+  for (const img of root.querySelectorAll('img[data-src]')) {
+    const u = img.getAttribute('data-src') || '';
+    img.removeAttribute('data-src');
+    if (EMBED_SRC_OK.test(u)) img.setAttribute('src', u);
+  }
   for (const m of root.querySelectorAll('i.nb-mk')) { m.nextElementSibling?.classList.add('nb'); m.remove(); }   // 见 markTight
   const bqs = [...root.querySelectorAll('blockquote')];
   for (let i = bqs.length - 1; i >= 0; i--) tryCallout(bqs[i]);   // 深层优先，嵌套先变
@@ -430,7 +449,7 @@ function transformDoc(root) {
   // 相对资源改写：![](pic.png) / <a href="附件"> 指向工作空间同目录 → 换成可加载 URL
   for (const img of root.querySelectorAll('img')) {
     const src = img.getAttribute('src') || '';
-    if (src && !/^(https?:|data:|blob:|\/)/i.test(src)) {
+    if (src && !/^([a-z][a-z0-9+.-]*:|\/)/i.test(src)) {   // 带协议的（含上面挪回来的 bridge-workspace:）不是相对路径
       let t = src; try { t = decodeURIComponent(src); } catch {}
       const u = _embedUrl(t);
       if (u) img.setAttribute('src', u);
@@ -459,7 +478,8 @@ function finish(html) {
 
 // footnotes：分块渲染时传同一个 scanFootnotes(全文) 的上下文，各块共用编号、不各自出脚注区，
 // 全部块渲完再调 renderFootnoteSection 补在文末。不传 = 整篇一次渲染，脚注区直接接在结果末尾。
-export function renderObsMarkdown(src, { embedUrl = null, footnotes = null } = {}) {
+// embedAlts：![[图]] 的备选地址（见 _embedAlts），由宿主在 img 的 error 事件里按序换上（DocViewer）。
+export function renderObsMarkdown(src, { embedUrl = null, embedAlts = null, footnotes = null } = {}) {
   void mdState.epoch;                       // 建立响应式依赖（勿删）：katex 到位后重渲，见 mdState.svelte.js
   if (!src) return '';
   let text = String(src);
@@ -468,12 +488,13 @@ export function renderObsMarkdown(src, { embedUrl = null, footnotes = null } = {
   const whole = !footnotes;
   const fn = footnotes || scanFootnotes(text);
   _embedUrl = embedUrl;
+  _embedAlts = embedAlts;
   _fn = fn;
   let html;
   try { html = mk.parse(text, { async: false }); }
-  catch { _embedUrl = null; _fn = null; return '<pre>' + escapeHtml(text) + '</pre>'; }
-  try { html = finish(html); } finally { _embedUrl = null; _fn = null; }
-  return whole ? html + renderFootnoteSection(fn, { embedUrl }) : html;
+  catch { _embedUrl = null; _embedAlts = null; _fn = null; return '<pre>' + escapeHtml(text) + '</pre>'; }
+  try { html = finish(html); } finally { _embedUrl = null; _embedAlts = null; _fn = null; }
+  return whole ? html + renderFootnoteSection(fn, { embedUrl, embedAlts }) : html;
 }
 
 // 一段正文的顶层 token（DocViewer 模式切换按块对齐进度用，见 lib/mdanchors.js）：与 renderObsMarkdown
@@ -488,11 +509,12 @@ export function lexObsBlocks(src, { footnotes = null } = {}) {
 
 // 文末脚注区：按编号列出被引用的定义（带返回箭头），再接上写了定义却没被引用的
 //（阅读态不至于凭空吞掉一段字，编号顺延、不带返回箭头）。没有任何脚注时返回 ''。
-export function renderFootnoteSection(fn, { embedUrl = null } = {}) {
+export function renderFootnoteSection(fn, { embedUrl = null, embedAlts = null } = {}) {
   void mdState.epoch;
   if (!fn || !fn.defs.size) return '';
   const back = escAttr(tt('返回引用处'));
   _embedUrl = embedUrl;
+  _embedAlts = embedAlts;
   _fn = fn;
   try {
     let items = '';
@@ -505,7 +527,7 @@ export function renderFootnoteSection(fn, { embedUrl = null } = {}) {
     for (let i = 0; i < fn.order.length; i++) item(fn.order[i], true);   // 定义里再引用别的脚注会追加进 order，边走边长
     for (const id of fn.defs.keys()) if (!fn.num.has(id)) { fnNumber(id); item(id, false); }
     return finish(`<section class="footnotes"><ol>${items}</ol></section>`);
-  } finally { _embedUrl = null; _fn = null; }
+  } finally { _embedUrl = null; _embedAlts = null; _fn = null; }
 }
 
 // 行内渲染（mdeditor 表格单元格的渲染态用）：只走 inline 语法，净化后返回
@@ -533,12 +555,26 @@ export function renderPropWikilinks(str) {
   return out + escapeHtml(s.slice(last));
 }
 
-// 词数/字符数（CJK 每字一词 + 拉丁词；字符数不含空白）——对齐 Obsidian 状态栏口径
+// 词数/字符数（CJK 每字一词 + 拉丁词；字符数不含空白）——对齐 Obsidian 状态栏口径。
+// 单趟扫 charCode：以前是 match(/[CJK]/g) 给每个汉字建数组、再 replace 复制一份全文，长文档每次
+// 重算 4ms 多（与旧写法同口径：CJK 区段 3040–30FF/3400–4DBF/4E00–9FFF/AC00–D7AF/F900–FAFF、
+// 拉丁词 [A-Za-z0-9_$'-]+、空白集合同正则 \s）
+const isWs = (c) => (c >= 9 && c <= 13) || c === 32 || c === 0xa0 || c === 0x1680 || (c >= 0x2000 && c <= 0x200a)
+  || c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000 || c === 0xfeff;
 export function noteStats(text) {
   const s = String(text || '');
-  const cjk = (s.match(/[぀-ヿ㐀-䶿一-鿿가-힯豈-﫿]/g) || []).length;
-  const words = cjk + (s.match(/[A-Za-z0-9_$'-]+/g) || []).length;
-  return { words, chars: s.replace(/\s/g, '').length };
+  let words = 0, chars = 0, inWord = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (isWs(c)) { inWord = false; continue; }
+    chars++;
+    if ((c >= 0x3040 && c <= 0x30ff) || (c >= 0x3400 && c <= 0x4dbf) || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7af) || (c >= 0xf900 && c <= 0xfaff)) {
+      words++; inWord = false; continue;
+    }
+    const w = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 36 || c === 39 || c === 45;
+    if (w) { if (!inWord) words++; inWord = true; } else inWord = false;
+  }
+  return { words, chars };
 }
 
 // ============================== 属性面板图标 ==============================

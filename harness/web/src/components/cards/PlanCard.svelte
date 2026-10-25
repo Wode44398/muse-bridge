@@ -128,7 +128,7 @@
   windowMs={cardWindowMs("plan", true)}
   footer={interactive ? actions : undefined}
 >
-  <div class="md plan" class:quiet={!interactive}>{@html html}</div>
+  <div class="md plan sel-text" class:quiet={!interactive}>{@html html}</div>
   {#if !interactive && item.decided === "returned" && item.note}
     <p class="retnote">{t("修改意见：{note}", { note: item.note })}</p>
   {/if}

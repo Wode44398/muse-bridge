@@ -238,7 +238,7 @@
       <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
       <div class="tr-md sel-text" onclick={onMdClick}>{@html renderMarkdown(en.text)}</div>
     {:else if en.kind === 'tools'}
-      <div class="tr-tools">
+      <div class="tr-tools sel-text">
         {#each en.tools as tl, j (j)}
           <div class="tr-tool"><span class="tr-tname">{mcpDisplayName(tl.name) || tl.name || 'Tool'}</span>{#if tl.summary}<span class="tr-tsum">{tl.summary}</span>{/if}</div>
         {/each}

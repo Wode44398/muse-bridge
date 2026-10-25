@@ -18,17 +18,25 @@
   // sat=false：宿主自己已经吃掉安全区（快照页在根容器加了 padding-top），别再叠一次
   // split：分屏里的一格；onClose 给了就在工具组末尾多一颗 ✕（关掉这一格）——工作台展开时宿主
   //   要把同一个 onClose 交给 ClaudeDock（toolsClose），那边的工具组照样有 ✕
-  let { onMenu, onDock, hideMenu = false, menuOn = false, sat = true, split = false, onClose = null, tools = false } = $props();
+  // onNew：「新对话」（S1-6）。手机形态塞进右上胶囊的最前面；侧列形态（折叠屏 / 平板）只在侧栏没常驻时
+  //   紧挨汉堡摆一颗圆钮——侧栏常驻时侧栏里就有「新对话」，不重复。宿主不给就不出（快照页、分屏格）。
+  let { onMenu, onDock, onNew = null, hideMenu = false, menuOn = false, sat = true, split = false, onClose = null, tools = false } = $props();
   const top = $derived(sat ? 'calc(var(--sat) + 10px)' : '10px');
   const flat = typeof matchMedia !== 'undefined' && !matchMedia('(pointer: coarse)').matches;
   const fg = !flat && (typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass'));
 </script>
 
+{#snippet newIcon()}
+  <!-- 方框 + 笔（新对话）：自绘，不走图标字体 -->
+  <svg class="nc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.5H6.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V13"/><path d="M17.6 3.9a1.9 1.9 0 0 1 2.7 2.7l-7.6 7.6-3.6.9.9-3.6z"/></svg>
+{/snippet}
 {#if !hideMenu}<button class="fab round" class:fg class:flat class:sm={tools} class:on={menuOn} aria-label={menuOn ? tc('claude', '收起侧栏') : t('菜单')} aria-pressed={menuOn} style:top onclick={onMenu}>&#xe0dd;</button>{/if}
+{#if onNew && tools && !hideMenu && !menuOn}<button class="fab round sm nc" class:fg class:flat aria-label={tc('claude', '新对话')} title={tc('claude', '新对话')} style:top onclick={onNew}>{@render newIcon()}</button>{/if}
 {#if tools}
   {#if !dock.open}<DockToolBar {top} {split} {onClose} />{/if}
 {:else}
 <div class="fab pill" class:fg class:flat style:top>
+  {#if onNew}<button class="pbtn" aria-label={tc('claude', '新对话')} onclick={onNew}>{@render newIcon()}</button>{/if}
   <button class="pbtn" aria-label={t('切换明暗主题')} onclick={toggleTheme}>
     <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
     <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
@@ -84,8 +92,12 @@
   :global(html[data-theme="light"]) .pbtn .sun { display: none; }
   :global(html[data-theme="light"]) .pbtn .moon { display: block; }
 
+  /* 侧列形态的「新对话」圆钮：紧挨汉堡（10 + 36 + 8）；图标是自绘 SVG，不吃图标字体的字号 */
+  .fab.round.nc { left: 54px; }
+  .fab.round.nc .nc-ic { width: 18px; height: 18px; }
+
   /* 触屏（平板 / 折叠屏展开）：和工具开关组（DockToolBar，触屏 40px）同高同中线 */
-  @media (pointer: coarse) { .fab.round.sm { width: 40px; height: 40px; } }
+  @media (pointer: coarse) { .fab.round.sm { width: 40px; height: 40px; } .fab.round.nc { left: 58px; } }
 
   /* —— Figma 液态玻璃（默认；?oldglass 退回上面的毛玻璃）——
      ::before 盖住控件外扩 24px（投影在里面），画烘焙好的图层；控件自身只留 backdrop 模糊，底色从下面透上来。

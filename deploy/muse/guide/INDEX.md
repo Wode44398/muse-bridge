@@ -21,12 +21,12 @@
 |---|---|
 | [onboarding.md](onboarding.md) | 入门讲解：几档讲解各自怎么带（5 分钟快速上手、Claude Code 深入、dimensio 深入、管理员、手机），以及更新后怎么演示新功能 |
 | [01-access.md](01-access.md) | 打开与登录：公网地址、管理员令牌、账号密码、注册、扫码登录、换了地址要重新登录、退出、主页、安卓 app、iPhone |
-| [02-claude-code.md](02-claude-code.md) | Claude Code 页：对话、项目、历史对话、模型和思考深度、权限、附件、斜杠命令、工作台（终端 / 文件 / 任务 / 审阅）、worktree、引用对话、定时任务、分享对话 |
-| [03-dimensio.md](03-dimensio.md) | dimensio 页：选模型和厂商、加 key、自定义模型服务、联网搜索、项目和访问范围、权限规则、记忆、子 agent 和任务、产物文件 |
-| [04-files.md](04-files.md) | 文件：工作空间在哪、上传下载、预览、Markdown 编辑、把文件发给 AI、分享链接（文件 / 文件夹 / 对话快照） |
-| [05-customize.md](05-customize.md) | 自定义：技能、连接器、插件（装、配置、按 agent 启用） |
-| [06-users-admin.md](06-users-admin.md) | 多人使用与服务端控制台：邀请码、普通账号和 Pro 账号的区别、额度、给谁开 dimensio、Claude 账号、服务控制、日志 |
-| [07-settings.md](07-settings.md) | 设置逐项说明：通用、账户、Agent、连接、dimensio、安卓 app、反馈、关于，以及设置里的搜索 |
+| [02-claude-code.md](02-claude-code.md) | Claude Code 页：对话、项目、临时对话、历史对话（搜索、归档）、模型和思考深度、权限模式与批准卡、排队发消息、附件、斜杠命令、限额卡、会话协作、拉取请求（PR）、交互图表、工作台（终端 / 文件 / 任务 / 审阅）、worktree、引用对话、定时任务 |
+| [03-dimensio.md](03-dimensio.md) | dimensio 页：选模型和厂商、加 key、自定义模型服务（按模型设思考档位）、Fast mode、联网搜索、项目和访问范围、权限规则、记忆、子 agent 和任务、产物文件 |
+| [04-files.md](04-files.md) | 文件：工作空间在哪、上传下载、新建 Markdown、压缩、隐藏项、预览、Markdown 编辑、把文件发给 AI、分享链接（文件 / 文件夹 / 对话快照） |
+| [05-customize.md](05-customize.md) | 自定义：技能、连接器、插件（装、配置、按 agent 启用、我自用 / 全服统一） |
+| [06-users-admin.md](06-users-admin.md) | 多人使用与服务端控制台：邀请码、普通账号和 Pro 账号的区别、额度、管理员可见性（隐私）、给谁开 dimensio、Claude 账号、服务控制、日志 |
+| [07-settings.md](07-settings.md) | 设置逐项说明：通用、账户、Claude、模型服务、Agent、连接、dimensio、Agent 接入、安卓 app、反馈、关于，以及设置里的搜索 |
 | [08-faq.md](08-faq.md) | 常见问题与现象速查：一直转圈、审核卡、地址变了、费用、数据放在哪、安全、备份、限制 |
 
 ## 按问题找章节
@@ -36,12 +36,23 @@
 | 刚装好不知道从哪开始、「带我熟悉一下」 | onboarding.md |
 | 地址、登录、令牌、密码、注册、扫码、退出、换了地址登录不上 | 01-access.md（令牌丢了、重置令牌：`../MUSE.md` 第 6 节） |
 | 安卓 app、iPhone、手机上怎么用 | 01-access.md |
-| 跟 Claude 对话、项目、历史、换模型、停止、附件、图片、终端、文件面板、改动审阅、worktree、定时任务、分享对话 | 02-claude-code.md |
+| 跟 Claude 对话、项目、新对话、换模型、停止、附件、图片、终端、文件面板、改动审阅、worktree、定时任务、分享对话 | 02-claude-code.md |
+| 临时对话（原「快照」）、30 天清理、存为工作空间、回收站 | 02-claude-code.md「临时对话」 |
+| 搜索对话、归档 / 取消归档 / 自动归档、收藏、重命名（跨设备同步） | 02-claude-code.md「历史对话」；自动归档设置：07-settings.md「Claude」 |
+| Claude 每一步问不问我、权限模式、批准卡、计划卡 | 02-claude-code.md「权限模式和批准」；默认模式：07-settings.md「Claude」 |
+| Claude 回复时能不能继续发消息（插话 / 稍后发送队列）、草稿 | 02-claude-code.md「Claude 在干活的时候」 |
+| 撞上 5 小时限额、限额卡、自动继续、用量环不准 | 02-claude-code.md「用量」；08-faq.md |
+| Claude 另开子会话、会话之间发消息、相关会话、建议的任务 | 02-claude-code.md「会话协作」 |
+| 拉取请求（PR）、合并、自动修复、gh 没登录 | 02-claude-code.md「拉取请求」 |
+| 对话里的交互图表、新对话落地页的用量统计 | 02-claude-code.md |
+| Claude 页接 DeepSeek / Kimi / OpenRouter 等别家模型（自定义 API） | 07-settings.md「模型服务」 |
+| Agent 密钥、让别的 agent / Muse 经 HTTP 操作 Muse Bridge、`/agent` | 07-settings.md「Agent 接入」；Muse 自己怎么用：`../MUSE.md` 4.8 |
+| 管理员能不能看我的对话、管理员可见性、访问记录 | 07-settings.md「账户」；06-users-admin.md |
 | Claude 显示没配认证、用量 / 额度 | 02-claude-code.md；配令牌：`../MUSE.md` 4.4 |
 | dimensio 怎么换模型、加 key、加自定义服务（OpenAI 兼容）、联网搜索、记忆、权限、子 agent | 03-dimensio.md；加 key：`../MUSE.md` 4.5 |
-| 文件在哪、上传下载、大小限制、预览、编辑 Markdown、分享链接、密码、过期 | 04-files.md |
-| 技能、连接器、插件、MCP | 05-customize.md |
-| 给朋友开账号、邀请码、Pro、额度、谁能用什么、服务端控制台、重启服务、看日志 | 06-users-admin.md |
+| 文件在哪、上传下载、大小限制、预览、新建 / 编辑 Markdown、压缩文件夹、隐藏文件、分享链接、密码、过期 | 04-files.md |
+| 技能、连接器、插件、MCP、给所有成员统一装（全服统一） | 05-customize.md |
+| 给朋友开账号、邀请码（作废、7 天）、改登录名、删除并归档、Pro、额度、成员高消耗功能、单人 / 多人、谁能用什么、服务端控制台、重启服务、看日志 | 06-users-admin.md |
 | 某个设置项是干什么的、语言、主题、通知、思考动画 | 07-settings.md |
 | 一直转圈 / 等待模型回复、审核卡片、地址变了、费用、隐私、数据放在哪、备份 | 08-faq.md |
 | 让 agent 打开网页、截图、操作浏览器（这台 VM 没有浏览器） | 08-faq.md |
