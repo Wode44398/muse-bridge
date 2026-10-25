@@ -36,7 +36,7 @@
       "workaround_en": "Ask Muse to save built-in provider keys with set-api-key (stored on disk, survives restarts). Entering them in the web settings only lasts until the next restart.",
       "cause": "设计上网页里填的内置厂商 key 只放在 dimensio 进程内存里，不落盘；Muse 的 VM 每隔几小时就会重启。",
       "since": null,
-      "fixed_in": null,
+      "fixed_in": "v0.2.0",
       "notify": false,
       "issue": null
     },
