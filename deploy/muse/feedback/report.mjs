@@ -1,5 +1,5 @@
-// 出草稿、发报告、补发。网页（routes/feedback.mjs）、Muse（bootstrap.sh report → cli.mjs）、自动上报（auto.mjs）
-// 三个入口都走这里：同一套白名单收集、同一份脱敏、同一个提交通道。
+// 出草稿、发报告、补发。Muse（bootstrap.sh report → cli.mjs）与看门狗（report --auto）
+// 两个入口都走这里：同一套白名单收集、同一份脱敏、同一个提交通道。
 //
 // 提交通道：项目方的 Cloudflare Worker（feedback-worker/）。它手里有 GitHub App 的私钥，以 App 的身份在
 // 公开仓库开 Issue（同一个指纹已有 Issue 就 +1），安全问题改走仓库的私密漏洞报告。这台服务器上没有任何
@@ -8,7 +8,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
-import { PROGRAM_ROOT } from '../runtime/paths.mjs';
+import { PROGRAM_ROOT } from './fsutil.mjs';
 import { cleanReport } from './schema.mjs';
 import { issueTitle, issueBody } from './render.mjs';
 import { recentErrors } from './errors.mjs';

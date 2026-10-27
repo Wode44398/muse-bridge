@@ -7,8 +7,8 @@
 //   · 安全问题 → 仓库的私密漏洞报告（只有维护者看得到）
 // App 的私钥只在这里（Worker secret GITHUB_APP_PRIVATE_KEY），换成 1 小时有效的安装令牌再调 GitHub。
 // 防滥用：每台装机每天、全局每天各有上限；PAUSED=1 或 KV 里 cfg:paused=1 一键停收（客户端会存着之后补发）。
-import { cleanReport } from '../../src/feedback/schema.mjs';
-import { issueTitle, issueBody, plusOneBody, issueLabels } from '../../src/feedback/render.mjs';
+import { cleanReport } from '../../deploy/muse/feedback/schema.mjs';
+import { issueTitle, issueBody, plusOneBody, issueLabels } from '../../deploy/muse/feedback/render.mjs';
 // claude-bridge 反馈收件箱（/v1/cb/*，不进 GitHub、进 KV 私有收件箱）：见 cb.mjs
 import { createCbHandler } from './cb.mjs';
 

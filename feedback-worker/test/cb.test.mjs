@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHandler } from '../src/worker.mjs';
-import { cleanCbReport, CB_MAX_IMAGE_BYTES } from '../../src/feedback/cb-schema.mjs';
+import { cleanCbReport, CB_MAX_IMAGE_BYTES } from '../../deploy/muse/feedback/cb-schema.mjs';
 
 function memKV() {
   const m = new Map();

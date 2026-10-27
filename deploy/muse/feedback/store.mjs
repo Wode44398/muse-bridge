@@ -1,4 +1,4 @@
-// 反馈的本地状态，都在数据目录 feedback/ 底下（服务进程和 bootstrap.sh 调的命令行共用，读写都是原子的）：
+// 反馈的本地状态，都在数据目录 muse-feedback/ 底下（bootstrap.sh 调的命令行用，读写都是原子的；不用 feedback/：那是 bridge 自带反馈插件的地盘）：
 //   install-id     这台装机的随机编号（Worker 按它限流、查重；跟用户、地址都没有关系）
 //   settings.json  { auto: true|false|null }  出错时自动上报（null = 还没问过用户）
 //   errors.json    最近记下的报错（按指纹去重计数），出草稿时挑最近的几条附上
@@ -8,10 +8,10 @@
 import { randomUUID, randomBytes } from 'node:crypto';
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import path from 'node:path';
-import { DATA_ROOT } from '../runtime/paths.mjs';
-import { readJson, writeJson } from '../jsonfile.mjs';
+import { DATA_ROOT } from './fsutil.mjs';
+import { readJson, writeJson } from './fsutil.mjs';
 
-export const DIR = path.join(DATA_ROOT, 'feedback');
+export const DIR = path.join(DATA_ROOT, 'muse-feedback');
 // 只给服务用户自己看（草稿、待发报告里有用户写的描述）
 try { mkdirSync(DIR, { recursive: true, mode: 0o700 }); chmodSync(DIR, 0o700); } catch {}
 const P = (...a) => path.join(DIR, ...a);

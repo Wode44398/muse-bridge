@@ -291,6 +291,43 @@ edit_config() {
   jq "$expr" "$f" > "$f.new" && chown "$SVC_USER:$SVC_USER" "$f.new" && chmod 600 "$f.new" && mv "$f.new" "$f"
 }
 
+# —— Muse 与 bridge 本体的差别都经声明表达（代码是 bridge 公开版原样，见 deploy/muse/sync/README.md）——
+# 每次安装 / 更新都写一遍（幂等）。插件开关只在第一次对齐时关，之后尊重用户在设置里的选择。
+apply_bridge_declarations() {
+  local plug="$RELS/current/deploy/muse/plugin" pj="$DATA/plugins.json" stamp="$OPS/aligned-bridge-public" first=false hint
+  # 发行版：品牌 Muse Bridge、没选过语言时跟浏览器（前端在启动前经 window.__DISTRO__ 读）
+  edit_config '.distro = {id:"muse", brand:"Muse Bridge", langDefault:"browser"}'
+  # 多人 / 单人由 set-users 管：控制台里的开关只读，提示用户在 Muse 里说
+  if [ "$UI_LANG" = en ]; then hint='Managed by Muse: say “make bridge multi-user” or “make bridge just for me” in Muse'
+  else hint='由 Muse 管理：在 Muse 里说「把 bridge 改成多人用」或「改成只自己用」'; fi
+  set_bridge_env BRIDGE_AUDIENCE_HINT "$hint"
+  # 出站只能走 Muse 的代理：模型服务一律经代理；每个新站点都要用户批，不自动下 Claude CLI（SDK 平台包自带）
+  set_bridge_env BRIDGE_PROXY_FORCED 1
+  set_bridge_env BRIDGE_CLAUDE_CLI_DOWNLOAD 0
+  # 8G 的 VM：每人并行对话、常驻 CLI 个数、堆快照（写进发布目录、每份可达 GB 级）
+  set_bridge_env BRIDGE_MAX_PARALLEL_CHATS 3
+  set_bridge_env BRIDGE_CLAUDE_WARM_MAX 2
+  set_bridge_env BRIDGE_HEAP_SNAPSHOT 0
+  # Chromium 在 VM 上没有沙箱、起不来：dimensio 不给浏览器工具
+  set_bridge_env DIMENSIO_BROWSER off
+  # 插件：登记 Muse 插件（经 current 链接，换版本不用改）；第一次对齐时关掉 VM 上用不了的内置功能
+  [ -f "$stamp" ] || first=true
+  [ -f "$pj" ] || printf '{"version":1,"plugins":{},"local":[]}\n' > "$pj"
+  jq --arg p "$plug" --argjson first "$first" '
+    .version //= 1 | .plugins //= {} | .local = (((.local // []) - [$p]) + [$p])
+    | if $first then reduce ("phone-control", "phone-files", "browser", "edge", "keep-awake") as $id
+        (.; .plugins[$id] = ((.plugins[$id] // {}) + {enabled: false})) else . end' "$pj" > "$pj.new" \
+    && chown "$SVC_USER:$SVC_USER" "$pj.new" && chmod 600 "$pj.new" && mv "$pj.new" "$pj"
+  # 旧数据挪位置：Muse 自己的反馈工具从 feedback/ 搬到 muse-feedback/（feedback/ 归 bridge 的反馈插件）
+  if [ -d "$DATA/feedback" ] && [ ! -e "$DATA/muse-feedback" ]; then
+    install -d -m 0700 -o "$SVC_USER" -g "$SVC_USER" "$DATA/muse-feedback"
+    local f; for f in install-id settings.json errors.json sent.json drafts outbox; do
+      if [ -e "$DATA/feedback/$f" ]; then mv "$DATA/feedback/$f" "$DATA/muse-feedback/$f"; fi
+    done
+  fi
+  date -u +%FT%TZ > "$stamp"
+}
+
 # 只保留 current 与上一个版本，更早的解压目录删掉（只动 bridge-releases/<时间戳> 这种目录）
 prune_releases() {
   local keep1 keep2 d
@@ -556,6 +593,7 @@ cmd_install() {
   # Claude Code 的遥测 / 错误上报（datadoghq.com、sentry 等）在这台 VM 上每个站点都要用户批一次审核卡，
   # 用户看到「允许 Muse 与 http-intake.logs…datadoghq.com 分享信息？」只会困惑。关掉这些非必要流量
   set_bridge_env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC 1
+  apply_bridge_declarations
 
   say "装隧道与运维件到 $OPS"
   write_muse_env
@@ -889,23 +927,23 @@ cmd_reset_token() {
 }
 
 # —— 问题反馈 ——
-# 报告由服务端的 src/feedback/cli.mjs 出草稿、发送（跟网页里的「报告问题」同一套：白名单收集、脱敏、
+# 报告由 deploy/muse/feedback/cli.mjs 出草稿、发送（Muse 自己的反馈工具：白名单收集、脱敏、
 # 经项目方的反馈服务提交到 GitHub）。这里只负责把 Muse 这边才知道的东西（服务状态、网站放行、隧道模式、
 # 更新日志）交给它，并以服务用户身份跑（跟服务进程共用数据目录）。
-FEEDBACK_HOST_DEFAULT="$(grep -ohE 'https://[a-z0-9.-]+\.workers\.dev' "$REPO/src/feedback/report.mjs" 2>/dev/null | head -1 | sed 's|https://||' || true)"
+FEEDBACK_HOST_DEFAULT="$(grep -ohE 'https://[a-z0-9.-]+\.workers\.dev' "$REPO/deploy/muse/feedback/report.mjs" 2>/dev/null | head -1 | sed 's|https://||' || true)"
 feedback_cli() {
   local code origin
   code="$(readlink -f "$RELS/current" 2>/dev/null || true)"
-  [ -f "$code/src/feedback/cli.mjs" ] || code="$REPO"
-  [ -f "$code/src/feedback/cli.mjs" ] || die "这个版本还没有问题反馈功能（找不到 src/feedback/cli.mjs），先更新"
+  [ -f "$code/deploy/muse/feedback/cli.mjs" ] || code="$REPO"
+  [ -f "$code/deploy/muse/feedback/cli.mjs" ] || die "这个版本还没有问题反馈功能（找不到 deploy/muse/feedback/cli.mjs），先更新"
   origin="$(grep -E '^BRIDGE_PUBLIC_ORIGIN=' /etc/bridge/bridge.env 2>/dev/null | tail -1 | cut -d= -f2- || true)"
   runuser -u "$SVC_USER" -- env HOME="$DATA/home" BRIDGE_DATA_ROOT="$DATA" UI_LANG="$UI_LANG" \
     HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" NO_PROXY=127.0.0.1,localhost BRIDGE_PUBLIC_ORIGIN="$origin" \
     MB_OPS_CMD="bash $OPS/bootstrap.sh" ${MUSE_FEEDBACK_URL:+MUSE_FEEDBACK_URL="$MUSE_FEEDBACK_URL"} \
-    "$(command -v node)" "$code/src/feedback/cli.mjs" "$@"
+    "$(command -v node)" "$code/deploy/muse/feedback/cli.mjs" "$@"
 }
 feedback_auto_label() {
-  local a; a="$(jq -r 'if .auto == true then "on" elif .auto == false then "off" else "unset" end' "$DATA/feedback/settings.json" 2>/dev/null || echo unset)"
+  local a; a="$(jq -r 'if .auto == true then "on" elif .auto == false then "off" else "unset" end' "$DATA/muse-feedback/settings.json" 2>/dev/null || echo unset)"
   if [ "$UI_LANG" = en ]; then case "$a" in on) echo 'auto-report on' ;; off) echo 'auto-report off' ;; *) echo 'auto-report not asked yet (off)' ;; esac; return; fi
   case "$a" in on) echo '自动上报 开' ;; off) echo '自动上报 关' ;; *) echo '自动上报 还没问过用户（按关处理）' ;; esac
 }

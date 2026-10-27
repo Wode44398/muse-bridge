@@ -1,8 +1,8 @@
-// 报错记录：服务进程里没接住的异常、路由 500、浏览器报上来的页面错误，按指纹去重计数，落在 feedback/errors.json。
+// 报错记录：服务进程里没接住的异常、路由 500、浏览器报上来的页面错误，按指纹去重计数，落在 muse-feedback/errors.json。
 // 只记归一后的消息和我们自己代码的帧（scrub.mjs），不记请求内容。出报告时从这里挑最近的几条附上；
-// 用户开了「自动上报」时，服务端自己的新错误会触发一次自动报告（auto.mjs）。
+// （服务端自己的报错捕获随旧服务端下线：bridge 本体还没有对应的钩子，这里暂时只剩读写。）
 import path from 'node:path';
-import { readJson, writeJson } from '../jsonfile.mjs';
+import { readJson, writeJson } from './fsutil.mjs';
 import { DIR } from './store.mjs';
 import { normalizeMessage, ownFrames, errorFingerprint, clip } from './scrub.mjs';
 
@@ -20,7 +20,7 @@ function saveSoon() {
 }
 export function flushErrors() { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; } if (cache) writeJson(FILE, cache, 2); }
 
-/** 有新指纹（这个进程里第一次见）时通知：auto.mjs 订阅 */
+/** 有新指纹（这个进程里第一次见）时通知 */
 export function onNewError(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
 /**

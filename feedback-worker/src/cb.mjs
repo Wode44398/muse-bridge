@@ -1,14 +1,14 @@
 // claude-bridge（The Bridge）的反馈收件箱：别人服务器上的用户反馈经这里汇到开发者那台 bridge。
 //
 // 跟 Muse 的 /v1/report 互不相干（Muse 那条路一行没动）：
-//   POST /v1/cb/report        各台 bridge 服务器推反馈（字段白名单 + 脱敏见 src/feedback/cb-schema.mjs）。
+//   POST /v1/cb/report        各台 bridge 服务器推反馈（字段白名单 + 脱敏见 deploy/muse/feedback/cb-schema.mjs）。
 //                             不发 GitHub，存进 KV 私有收件箱（cbi:<id>，默认 30 天过期）。
 //                             收件箱没配（没有 INBOX_TOKEN）时回 503：对方留在自己的待发队列里，之后补发。
 //   GET  /v1/cb/inbox         开发者那台 bridge 来取：列出还没确认的（含图片 base64），?limit= 一次几条（≤25）。
 //   POST /v1/cb/inbox/ack     { ids } 写进库之后确认，确认过的从 KV 删掉。
 // 后两个只认 Worker secret INBOX_TOKEN（Authorization: Bearer）；没配这个 secret 时一律 404，像不存在一样。
 // 限流跟 Muse 分开计数（rl:<日>:cb:*）；PAUSED / cfg:paused 停收对这里同样生效。
-import { cleanCbReport, CB_MAX_BODY } from '../../src/feedback/cb-schema.mjs';
+import { cleanCbReport, CB_MAX_BODY } from '../../deploy/muse/feedback/cb-schema.mjs';
 
 const json = (code, o) => new Response(JSON.stringify(o), { status: code, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 const ID_RE = /^\d{13}-[0-9a-f]{8}$/;

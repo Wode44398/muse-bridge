@@ -122,7 +122,7 @@ if [ -n "${CHANNEL:-}" ] && [ ! -f "$PS" ] && [ "$DRY" != 1 ] && ! busy && \
         # 这台机器报告过、新版本里修好了的问题（latest.json 的 fixed = 这个版本修掉的 Issue 编号）
         fixed="$(jq -r --argjson f "$(jq -c '.fixed // []' <<<"$m" 2>/dev/null || echo '[]')" \
           '[.[] | select(.issue != null and ((.issue.number) as $n | $f | index($n)))] | unique_by(.issue.number) | map("#\(.issue.number) \(.title)") | join("; ")' \
-          "$DATA/feedback/sent.json" 2>/dev/null || true)"
+          "$DATA/muse-feedback/sent.json" 2>/dev/null || true)"
         # 影响当前版本、新版本里已经没有了的已知问题：更新的理由之一
         kfix="$(jq -r --arg a "$installed" --arg b "$latest" "$KI_HIT"' [.[]? | select(hit($a) and (hit($b) | not)) | .title] | join("; ")' \
           "$OPS/known-issues.json" 2>/dev/null || true)"

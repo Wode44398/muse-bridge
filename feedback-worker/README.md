@@ -4,11 +4,11 @@
 `muse-bridge-feedback` 的身份提交到本仓库：普通问题开公开 Issue（同一个指纹已有开着的 Issue 就 +1），
 安全问题走私密漏洞报告。App 的私钥只存在 Worker secret 里，安装包里没有任何 GitHub 凭据。
 
-报告格式、脱敏规则、Issue 排版都跟服务端共用 `src/feedback/` 下的同一份代码（`wrangler deploy` 时打包进来）。
+报告格式、脱敏规则、Issue 排版都跟服务端共用 `deploy/muse/feedback/` 下的同一份代码（`wrangler deploy` 时打包进来）。
 
 ## 接口
 
-- `POST /v1/report`：报告（格式见 `src/feedback/schema.mjs`）。回 `{ ok, issue:{number,url}, duplicate }`，
+- `POST /v1/report`：报告（格式见 `deploy/muse/feedback/schema.mjs`）。回 `{ ok, issue:{number,url}, duplicate }`，
   安全问题回 `{ ok, private:true }`；400 格式不对、413 太大、429 限流、503 停收、502 GitHub 出错（客户端会存着补发）。
 - `GET /v1/health`
 
@@ -17,7 +17,7 @@
 同一个 Worker 顺带给 claude-bridge（The Bridge）当反馈中继：别人服务器上的用户反馈推到这里，
 开发者自己那台 bridge 定时来取。跟上面 Muse 的报告完全分开——**不进 GitHub**，只存 KV 私有收件箱。
 
-- `POST /v1/cb/report`：一份反馈（白名单见 `src/feedback/cb-schema.mjs`：文字、界面位置、版本、平台、角色，
+- `POST /v1/cb/report`：一份反馈（白名单见 `deploy/muse/feedback/cb-schema.mjs`：文字、界面位置、版本、平台、角色，
   最多 3 张 ≤2MB 的图片，按文件头只认 png/jpeg/gif/webp）。文字按 Muse 同一套规则脱敏；存成 `cbi:<id>`，
   `CB_TTL_DAYS` 天后过期。回 `{ ok, id }`；400 格式不对、413 太大、429 限流、503 停收或收件箱没配（对方会存着补发）。
 - `GET /v1/cb/inbox?limit=10`：列出还没确认的（含图片 base64），`more` 表示还有下一页。
@@ -46,7 +46,7 @@ npx wrangler deploy
 ```
 
 App 的权限只开了 Issues 读写、元数据读、仓库安全公告读写，只装在本仓库上。部署地址变了要同步改
-`src/feedback/report.mjs` 里的 `FEEDBACK_URL`（`bootstrap.sh` 的放行网站列表从那里读）。
+`deploy/muse/feedback/report.mjs` 里的 `FEEDBACK_URL`（`bootstrap.sh` 的放行网站列表从那里读）。
 
 ## 运维
 

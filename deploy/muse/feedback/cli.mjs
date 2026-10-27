@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // 问题反馈的命令行：bootstrap.sh 的 report / feedback-auto 子命令以服务用户身份调它（跟服务进程共用数据目录）。
-//   node src/feedback/cli.mjs draft <输入 json 文件> [--lang zh|en]   出草稿，打印预览和草稿编号（不发）
-//   node src/feedback/cli.mjs send <草稿编号> [--lang zh|en]          用户同意后发出去
-//   node src/feedback/cli.mjs auto on|off|status                       自动上报开关
-//   node src/feedback/cli.mjs list [--json]                            发过的报告
-//   node src/feedback/cli.mjs flush                                    补发没发出去的
-//   node src/feedback/cli.mjs host                                     提交通道的主机名（allow-sites 用）
+//   node deploy/muse/feedback/cli.mjs draft <输入 json 文件> [--lang zh|en]   出草稿，打印预览和草稿编号（不发）
+//   node deploy/muse/feedback/cli.mjs send <草稿编号> [--lang zh|en]          用户同意后发出去
+//   node deploy/muse/feedback/cli.mjs auto on|off|status                       自动上报开关
+//   node deploy/muse/feedback/cli.mjs list [--json]                            发过的报告
+//   node deploy/muse/feedback/cli.mjs flush                                    补发没发出去的
+//   node deploy/muse/feedback/cli.mjs host                                     提交通道的主机名（allow-sites 用）
 import { readFileSync } from 'node:fs';
 import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
 import { makeDraft, sendDraft, flushOutbox, feedbackHost } from './report.mjs';
