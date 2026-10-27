@@ -1,19 +1,23 @@
 <script>
-  // 服务端控制台 — 管理员的全功能管理面，设置 → 连接 → 服务端控制台进入。
-  // 总览 / 活跃进程 / 用户 / 额度与注册 / 会话续聊 / 定时任务 / Claude 账号 / 服务控制。
-  // 数据面 = /api/admin/*（管理员门）。
-  // 材质：盖在设置对话框之上，自带一层磨砂罩（深色 tint + blur），其上是亮玻璃 chrome + 素卡片。
+  // 服务端控制台 — 服务端的全功能管理面，设置 › 服务端设置进入（本机直连；远程管理开着时手机 / 网页上的管理员也能进）。
+  // 旧 debug.html 八页全量收编：总览 / 活跃进程 / 用户 / 会话续聊 / 定时任务 / 媒体 /
+  // Claude 账号 / 服务控制（含公网访问）；另有「额度与注册」「设备」两页。数据面 = /api/admin/* 与 /api/devices*。
+  // 材质铁律（同屏只许一层 backdrop）：本页自己【不开】backdrop——磨砂由下层设置页的
+  // 罩提供（入口只在设置页，打开时设置页恒在下层挂着，只藏 .sheet 不撤罩），
+  // 这里仅叠深色 tint + 亮玻璃 chrome + 素卡片——与设置页 v3 同一套语言。
   import './admin.css';
   import { ui } from '../../lib/state.svelte.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { t, tc, tr } from '../../lib/i18n.js';
-  import { sa, loadOverview, loadLimits, loadActive, loadUsers, loadAccounts, accLabel, pageVisible, liveGens, saToastState, saConfirmState, saConfirmSettle } from '../../lib/serverAdmin.svelte.js';
+  import { sa, loadOverview, loadLimits, loadActive, loadUsers, loadAccounts, loadDevs, loadPublicAccess, watchPublicAccess, pageVisible, liveGens, supervisedBy, saToastState, saConfirmState, saConfirmSettle } from '../../lib/serverAdmin.svelte.js';
   import SaOverview from './SaOverview.svelte';
   import SaActive from './SaActive.svelte';
   import SaUsers from './SaUsers.svelte';
   import SaSessions from './SaSessions.svelte';
   import SaRoutines from './SaRoutines.svelte';
+  import SaMedia from './SaMedia.svelte';
   import SaAccounts from './SaAccounts.svelte';
+  import SaDevices from './SaDevices.svelte';
   import SaControl from './SaControl.svelte';
   import SaPolicy from './SaPolicy.svelte';
 
@@ -23,27 +27,30 @@
     closing = true;
     setTimeout(() => { ui.serverAdminOpen = false; closing = false; }, 260);
   }
-  // 系统返回逐级关：确认弹窗 → 整页
+  // 系统返回（安卓/浏览器）逐级关：确认弹窗 → 整页
   $effect(() => pushBackLayer(() => {
     if (saConfirmState.open) { saConfirmSettle(false); return; }
     close();
   }));
 
   // 打开即拉全量一轮；随后 overview 30s、活跃 3.5s（总览/活跃页时）、limits 20s——页面在后台（切走标签 / 最小化）
-  // 时一律不拉，回到前台补一轮。服务端那头另有单飞 + 30 秒缓存；活跃 agent 有 3.5 秒的 loadActive 盖着。
+  // 时一律不拉，回到前台补一轮。overview 在 Windows 主机上要跑 admin.ps1 status（冷起 PowerShell + WMI，3–6 秒），
+  // 以前 8 秒一次几乎首尾相接（FR3 / S9）；服务端那头另有单飞 + 30 秒缓存。活跃 agent 有 3.5 秒的 loadActive 盖着。
+  // 公网访问的状态变化走总线推（快速隧道换了地址也能马上看到）。
   $effect(() => {
-    loadOverview(); loadLimits(); loadUsers(); loadAccounts(); loadActive();
+    loadOverview(); loadLimits(); loadUsers(); loadAccounts(); loadActive(); loadDevs(); loadPublicAccess();
     const t1 = setInterval(() => { if (pageVisible()) loadOverview(); }, 30000);
     const t2 = setInterval(() => { if (pageVisible() && (sa.page === 'overview' || sa.page === 'active')) loadActive(); }, 3500);
     const t3 = setInterval(() => { if (pageVisible()) loadLimits(); }, 20000);
     const onVis = () => { if (pageVisible()) { loadOverview(); loadLimits(); } };
     document.addEventListener('visibilitychange', onVis);
-    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); document.removeEventListener('visibilitychange', onVis); };
+    const offBus = watchPublicAccess();
+    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); document.removeEventListener('visibilitychange', onVis); offBus(); };
   });
 
-  // 手动刷新：核心数据 + 页面本地数据（页面 $effect 监听 sa.tick）
+  // 手动刷新：核心数据 + 页面本地数据（页面 $effect 监听 sa.tick；设备页自己随 tick 重拉，这里不再重复拉）
   function refresh() {
-    loadOverview(); loadLimits();
+    loadOverview(); loadLimits(); loadPublicAccess();
     if (sa.page === 'active' || sa.page === 'overview') loadActive();
     if (sa.page === 'users') loadUsers();
     if (sa.page === 'accounts') loadAccounts();
@@ -63,10 +70,15 @@
     people: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.4a3.2 3.2 0 0 1 0 5.7M17.8 15.1A5.5 5.5 0 0 1 20.8 20"/></svg>',
     chat: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.2L4 21l1.9-5A8 8 0 1 1 21 12z"/></svg>',
     clock: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
+    photo: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="3"/><circle cx="9" cy="9.8" r="1.7"/><path d="m5.5 17.5 4.4-4.6 3 3 2.5-2.6 3.1 3.3"/></svg>',
     key: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15.5" r="4.5"/><path d="m11.5 12 8-8M16 7.5l2.5 2.5M13.5 10l2 2"/></svg>',
+    link: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="11" height="8" rx="1.6"/><path d="M6 15h4M8 12v3"/><rect x="15.5" y="8" width="6" height="11" rx="1.6"/><path d="M18.5 16.2h.01"/></svg>',
     gift: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M5 8h14v4H5z"/><path d="M6.5 12v8.5h11V12"/><path d="M12 8c-1.6-2.8-5-3.4-5-1.2C7 8 9 8 12 8zM12 8c1.6-2.8 5-3.4 5-1.2C17 8 15 8 12 8z"/></svg>',
     wrench: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6.5a4.9 4.9 0 0 0-6.4 6L3 17.6 6.4 21l5.1-5.1a4.9 4.9 0 0 0 6-6.4l-3 3-2.5-.5-.5-2.5 3-3z"/></svg>',
   };
+  // 各页远程管理时都能进；会把自己关在门外的按钮（停服务 / 停隧道 / 开机自启）在「服务控制」页里按 sa.remote 藏掉，
+  // 服务端那头也会拒（routes/admin.mjs 的 R2）。
+  const hasShell = typeof window !== 'undefined' && !!window.BridgeDesktop;
   const PAGES = $derived([
     { key: 'overview', label: t('总览'), c: '#0a84ff', g: G.gauge },
     { key: 'active', label: t('活跃进程'), c: '#34c759', g: G.bolt },
@@ -74,14 +86,19 @@
     ...(sa.multiUser ? [{ key: 'policy', label: t('额度与注册'), c: '#30b0c7', g: G.gift }] : []),
     { key: 'sessions', label: t('会话 / 续聊'), c: '#64d2ff', g: G.chat },
     { key: 'routines', label: t('定时任务'), c: '#ff453a', g: G.clock },
+    { key: 'media', label: t('媒体'), c: '#32ade6', g: G.photo },
     { key: 'accounts', label: tc('admin', 'Claude 账号'), c: '#bf5af2', g: G.key },
-    // 服务控制：有主机管理脚本时多一套进程 / 自启操作；否则靠守护进程（systemd / docker / pm2）重启
+    // 设备：远程管理也能进（接口走管理员身份，不要求本机直连）
+    { key: 'devices', label: t('设备'), c: '#5e5ce6', g: G.link },
+    // 服务控制任何形态都有：Windows 主机多一套 admin.ps1（进程 / 隧道 / 自启），Linux / Docker 靠守护进程重启
     { key: 'control', label: t('服务控制'), c: '#8e8e93', g: G.wrench },
   ]);
   $effect(() => { if (!PAGES.some((p) => p.key === sa.page)) sa.page = 'overview'; });
   const title = $derived(PAGES.find((p) => p.key === sa.page)?.label || '');
   const liveN = $derived(liveGens(sa.overview?.gens?.length ? sa.overview.gens : sa.gens).length);
   const activeAcct = $derived(sa.accounts.find((a) => a.active));
+  const devList = $derived((sa.devs?.devices || []).filter((d) => !d.revoked));
+  const devOnline = $derived(devList.filter((d) => d.online).length);
   const sub = $derived({
     overview: sa.overview?.host?.name || '',
     active: t('{n} 个运行中', { n: liveGens(sa.gens).length }),
@@ -89,8 +106,10 @@
     policy: t('注册开关 · 默认额度 · 全服并发'),
     sessions: t('预览任意用户的对话，可代发续聊'),
     routines: t('各用户的定时触发一览'),
-    accounts: activeAcct ? t('当前：{label}', { label: accLabel(activeAcct.label) }) : '',
-    control: sa.scriptAvailable ? t('进程 · 开机自启') : sa.supervisor ? t('由 {name} 托管 · 资源 · 日志', { name: sa.supervisor }) : t('资源 · 日志'),
+    media: t('各用户的生成媒体库'),
+    accounts: activeAcct ? t('当前：{label}', { label: activeAcct.label }) : '',
+    devices: sa.devs?.error ? t('读不到设备表') : sa.devs ? t('{a} 台设备 · {b} 台在线', { a: devList.length, b: devOnline }) : '',
+    control: sa.scriptAvailable ? t('进程 · 隧道 · 开机自启') : hasShell ? t('由桌面壳托管运行时') : sa.supervisor ? t('{by} · 资源 · 日志', { by: supervisedBy(sa.supervisor) }) : t('资源 · 日志'),
   }[sa.page] || '');
 </script>
 
@@ -112,12 +131,13 @@
             <span class="nlab">{p.label}</span>
             {#if p.key === 'active' && liveN}<span class="npill green">{liveN}</span>{/if}
             {#if p.key === 'users' && sa.users.length}<span class="npill">{sa.users.length}</span>{/if}
-            {#if p.key === 'accounts' && activeAcct}<span class="ntag sa-trunc">{accLabel(activeAcct.label)}</span>{/if}
+            {#if p.key === 'devices' && devOnline}<span class="npill green">{devOnline}</span>{/if}
+            {#if p.key === 'accounts' && activeAcct}<span class="ntag sa-trunc">{tr(activeAcct.label)}</span>{/if}
           </button>
         {/each}
       </nav>
       <div class="rail-foot sa-mono">
-        {sa.overview?.host?.name || '—'}
+        {#if sa.overview?.host?.lan?.length}{sa.overview.host.lan[0]}{:else}—{/if}
       </div>
     </aside>
 
@@ -141,7 +161,9 @@
         {:else if sa.page === 'policy'}<SaPolicy />
         {:else if sa.page === 'sessions'}<SaSessions />
         {:else if sa.page === 'routines'}<SaRoutines />
+        {:else if sa.page === 'media'}<SaMedia />
         {:else if sa.page === 'accounts'}<SaAccounts />
+        {:else if sa.page === 'devices'}<SaDevices />
         {:else if sa.page === 'control'}<SaControl />
         {/if}
       </div>
@@ -166,12 +188,10 @@
 </div>
 
 <style>
-  /* 全屏磨砂罩：下层是不透明的设置对话框，不自带磨砂的话它的文字会透上来跟控制台内容叠在一起 */
+  /* 全屏深色 tint：磨砂来自下层设置页的罩（本页不再开 backdrop，同屏单层铁律） */
   .sadm {
     position: fixed; inset: 0; z-index: 62; display: flex;
-    background: rgba(9, 11, 16, .74);
-    -webkit-backdrop-filter: blur(26px) saturate(1.12);
-    backdrop-filter: blur(26px) saturate(1.12);
+    background: rgba(9, 11, 16, .38);
     animation: sadm-in var(--mo-base) var(--ea-fade);
     transition: opacity var(--mo-quick) var(--ea-fade);
   }

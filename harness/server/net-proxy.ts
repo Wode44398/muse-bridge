@@ -1,7 +1,7 @@
 // 出站代理自适应 —— 移植 bridge 的 src/runtime/net-proxy.mjs（病根与修法同源）。
 //
 // 旧行为：启动时环境里有 HTTP(S)_PROXY 才装一次 EnvHttpProxyAgent——那是 bridge
-// spawn 本进程那一刻的快照。本机代理抖动 / 开机晚启动 / bridge 每 60s 自愈翻转，
+// spawn 本进程那一刻的快照。Clash 抖动 / 开机晚启动 / bridge 每 60s 自愈翻转，
 // 常驻的 harness 都跟不上：WebSearch 的 Gemini 后端（googleapis）和 WebFetch 在
 // 国内网络直连即整批 fetch failed（2026-08-05、08-09 两次实锤，后者正是全栈停机
 // 重启日）。现在 harness 自己探测本地代理端口、验证出海、每分钟自愈；代理状态
@@ -158,7 +158,7 @@ async function validateDirect(): Promise<boolean> {
 
 // ── Q12（F2）：全局出站拦截 ──────────────────────────────────────────────────────────────────────────
 // 一轮 trace 里发出的每个请求记一行元数据（方法、主机 + 路径——不带查询串，里面可能有 key——状态码、耗时、出自哪个 span）
-// 进会话的事件日志；只有模型调用（model span）加关联头（中继 / 自建模型服务的日志能据此对上这一轮），WebFetch 访问的
+// 进会话的事件日志；只有模型调用（model span）加关联头（中继 / 本机 llama-server 的日志能据此对上这一轮），WebFetch 访问的
 // 任意网站不带。不在任何 trace 里的请求（探测、后台任务）原样放行。
 function withTraceHeaders(headers: Dispatcher.DispatchOptions["headers"], t: TraceContext): Dispatcher.DispatchOptions["headers"] {
   const extra: [string, string][] = [[TRACE_HEADER, t.traceId], [SPAN_HEADER, t.spanId]];
@@ -264,7 +264,7 @@ async function detect(): Promise<Detection> {
     if (!(await portAlive(port))) continue;
     const url = `http://127.0.0.1:${port}`;
     if (await validateProxy(url)) return { kind: "proxy", proxy: url, reason: "探测到可用本地代理" };
-    // 端口开着但出不去：多半是代理在但上游挂了。继续试下一个端口。
+    // 端口开着但出不去：多半是 Clash 在但节点挂了。继续试下一个端口。
   }
 
   if (spent()) return { kind: "unknown", reason: "探测超时（未及验证直连）" };
@@ -342,7 +342,7 @@ async function refresh(): Promise<ProxyState> {
   return state;
 }
 
-// 启动时调用一次，之后每分钟自愈（代理后开 / 换端口 / 上游恢复都能跟上）。
+// 启动时调用一次，之后每分钟自愈（Clash 后开 / 换端口 / 节点恢复都能跟上）。
 export async function initOutboundProxy(): Promise<ProxyState> {
   const knob = (process.env.DIMENSIO_OUTBOUND_PROXY ?? "auto").trim();
   if (knob === "off") {

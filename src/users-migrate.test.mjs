@@ -13,31 +13,31 @@ process.env.BRIDGE_USERS_ROOT = path.join(tmp, 'data', 'users');
 const m = await import('./users-migrate.mjs');
 
 test('路径改写：整串 / 正文里的 / 键，盘符不分大小写，分隔符换成新系统的，别的路径不碰', () => {
-  const rw = m.makeRewriter('E:\\Old Bridge Users', '/var/lib/bridge/users');
-  assert.equal(rw.str('E:\\Old Bridge Users\\alice\\.bridge\\quickchat\\q1'), '/var/lib/bridge/users/alice/.bridge/quickchat/q1');
-  assert.equal(rw.str('e:\\old bridge users\\alice'), '/var/lib/bridge/users/alice');
-  assert.equal(rw.str('E:/Old Bridge Users/alice/a.txt'), '/var/lib/bridge/users/alice/a.txt');
-  assert.equal(rw.str('已写入 E:\\Old Bridge Users\\alice\\notes\\a.md 完成'), '已写入 /var/lib/bridge/users/alice/notes/a.md 完成');
+  const rw = m.makeRewriter('E:\\Bridge Users', '/var/lib/bridge/users');
+  assert.equal(rw.str('E:\\Bridge Users\\alice\\.bridge\\quickchat\\q1'), '/var/lib/bridge/users/alice/.bridge/quickchat/q1');
+  assert.equal(rw.str('e:\\bridge users\\alice'), '/var/lib/bridge/users/alice');
+  assert.equal(rw.str('E:/Bridge Users/alice/a.txt'), '/var/lib/bridge/users/alice/a.txt');
+  assert.equal(rw.str('已写入 E:\\Bridge Users\\alice\\notes\\a.md 完成'), '已写入 /var/lib/bridge/users/alice/notes/a.md 完成');
   assert.equal(rw.str('D:\\Notes\\x'), 'D:\\Notes\\x');
-  assert.equal(rw.str('E:\\Old Bridge UsersX\\bob'), 'E:\\Old Bridge UsersX\\bob', '同前缀的别的目录不算');
+  assert.equal(rw.str('E:\\Bridge UsersX\\bob'), 'E:\\Bridge UsersX\\bob', '同前缀的别的目录不算');
   // 多行工具输出以路径开头：每个都换，别的反斜杠不动
-  assert.equal(rw.str('E:\\Old Bridge Users\\alice\\a.txt\r\nE:/Old Bridge Users/alice/b.txt\r\nC:\\tmp\\x'),
+  assert.equal(rw.str('E:\\Bridge Users\\alice\\a.txt\r\nE:/Bridge Users/alice/b.txt\r\nC:\\tmp\\x'),
     '/var/lib/bridge/users/alice/a.txt\r\n/var/lib/bridge/users/alice/b.txt\r\nC:\\tmp\\x');
   // Git Bash 写法
-  assert.equal(rw.str('cd "/e/Old Bridge Users/bob/tmp" && ls'), 'cd "/var/lib/bridge/users/bob/tmp" && ls');
-  assert.equal(rw.str('/home/e/Old Bridge Users/x'), '/home/e/Old Bridge Users/x', '别的目录里恰好有 /e/ 不算');
+  assert.equal(rw.str('cd "/e/Bridge Users/carol/tmp" && ls'), 'cd "/var/lib/bridge/users/carol/tmp" && ls');
+  assert.equal(rw.str('/home/e/Bridge Users/x'), '/home/e/Bridge Users/x', '别的目录里恰好有 /e/ 不算');
   // 单条路径的深层段带空格：整段换
-  assert.equal(rw.str('E:\\Old Bridge Users\\alice\\My Docs\\x.txt'), '/var/lib/bridge/users/alice/My Docs/x.txt');
-  assert.deepEqual(rw.value({ 'E:\\Old Bridge Users\\alice': { p: ['E:\\Old Bridge Users\\alice\\x'] } }),
+  assert.equal(rw.str('E:\\Bridge Users\\alice\\My Docs\\x.txt'), '/var/lib/bridge/users/alice/My Docs/x.txt');
+  assert.deepEqual(rw.value({ 'E:\\Bridge Users\\alice': { p: ['E:\\Bridge Users\\alice\\x'] } }),
     { '/var/lib/bridge/users/alice': { p: ['/var/lib/bridge/users/alice/x'] } });
   assert.equal(m.encodeCwd('/var/lib/bridge/users/alice'), '-var-lib-bridge-users-alice');
-  assert.equal(m.encodeCwd('E:\\Old Bridge Users\\alice'), 'E--Old-Bridge-Users-alice');
+  assert.equal(m.encodeCwd('E:\\Bridge Users\\alice'), 'E--Bridge-Users-alice');
 });
 
 test('jsonl：只改有路径的行，没变的行一个字节不动', () => {
-  const rw = m.makeRewriter('E:\\Old Bridge Users', '/srv/users');
+  const rw = m.makeRewriter('E:\\Bridge Users', '/srv/users');
   const keep = '{"type":"x","a" : 1}';   // 故意不规范的空格：没路径就不该被重新序列化
-  const text = keep + '\n{"cwd":"E:\\\\Old Bridge Users\\\\alice"}\nnot json\n';
+  const text = keep + '\n{"cwd":"E:\\\\Bridge Users\\\\alice"}\nnot json\n';
   const out = m.rewriteJsonlText(text, rw).split('\n');
   assert.equal(out[0], keep);
   assert.equal(JSON.parse(out[1]).cwd, '/srv/users/alice');

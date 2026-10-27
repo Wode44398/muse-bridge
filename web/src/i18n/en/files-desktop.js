@@ -158,7 +158,7 @@ export default {
   '添加位置失败：{reason}': 'Couldn’t add location: {reason}',
   '移除位置失败：{reason}': 'Couldn’t remove location: {reason}',
   '创建分享失败：{reason}': 'Couldn’t create share link: {reason}',
-  '从 Muse Bridge 移除「{name}」？': 'Remove “{name}” from Muse Bridge?',
+  '从 The Bridge 移除「{name}」？': 'Remove “{name}” from The Bridge?',
   '不会删除电脑上的文件。': 'Files on your computer won’t be deleted.',
 
   // —— 属性对话框 ——
@@ -250,5 +250,6 @@ export default {
   '本会话的工作目录：{path}': 'This session’s working folder: {path}',
   '复制地址': 'Copy address',
   '编辑地址': 'Edit address',
+  '「{path}」不在已添加的位置里，可在左侧「添加位置…」里授权': '“{path}” isn’t in any added location. Use Add location… on the left to grant access.',
   '「{path}」不在可访问的位置里': '“{path}” isn’t in a location you can access',
 };

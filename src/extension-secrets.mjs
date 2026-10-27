@@ -66,7 +66,7 @@ function createKey(extRoot) {
 }
 
 // 缓存按密钥文件的内容认：文件被换掉（从备份恢复、别的账户重建）或删掉，缓存跟着作废。
-// 不按 mtime 认——Linux 的 overlay / tmpfs 时间戳粒度有几毫秒，同尺寸的新密钥会被当成旧的。
+// 不按 mtime 认——Linux 的 overlay / tmpfs 时间戳粒度有几毫秒，同尺寸的新密钥会被当成旧的（移植自 Muse Bridge）。
 // 文件只有几十字节，每次读一下很便宜；贵的是 DPAPI 解包，那一步照样缓存。
 function dataKey(extRoot, create) {
   const file = path.join(extRoot, KEY_FILE);

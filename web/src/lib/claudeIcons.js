@@ -1,16 +1,15 @@
 // Claude 分页（官方 /code 页复刻）组件用的图标。
 //
-// 官方 /code 页的图标不是 SVG，而是 Anthropicons-Variable 图标字体的码位（组件
-// `<span data-cds="Icon">{String.fromCodePoint(cp)}</span>`）。bridge 随「code 状态栏芯片」
-// 已经带上了同一份字体（app.css @font-face，asset hash c0f671921 与官方 bundle 一致，
-// `.ic` 类即用它），所以组件里优先用字体字形——这是 1:1 的那条路。
+// 官方 /code 页的图标是图标字体的私有区码位（组件 `<span data-cds="Icon">{String.fromCodePoint(cp)}</span>`）。
+// bridge 沿用同一套码位：公开版的图标字体是自带的「Bridge Icons」（Lucide 图标放在这些码位上，见
+// web/scripts/public-assets/build_fonts.py 的 ICONS），维护者的私有 overlay 可经 --icons 换回原版字体；
+// `.ic` 类即用 var(--icons)，所以组件里照旧优先用字体字形。新加码位要同时加进 build_fonts.py 的 ICONS。
 //
-// 同时给出一套 Phosphor 风格的 16×16 描边 SVG path 作后备（无字体环境 / 需要 SVG 的
-// 场合，如 <svg> 里内联），viewBox 0 0 16 16，stroke 绘制（fill:none）。
+// 同时给出一套 16×16 描边 SVG path 作后备（需要 SVG 的场合，如 <svg> 里内联），viewBox 0 0 16 16，
+// stroke 绘制（fill:none）。
 //
-// 例外（2026-09-02 实测）：bridge 那份字体【没有 U+E11C AgentsSimple】——canvas 墨水探针=0，
-// 页面上渲染成一片空白（其余码位 caret/Check/Warning/X 都有墨）。AgentsSimple 一律走
-// iconSvg（AgentRow / TaskSheet 已如此），别用 glyph('AgentsSimple')。
+// 例外：原版图标字体【没有 U+E11C AgentsSimple】（公开版的 Bridge Icons 有，但 overlay 换回原版后
+// 会是空白）。AgentsSimple 一律走 iconSvg（AgentRow / TaskSheet 已如此），别用 glyph('AgentsSimple')。
 //
 // 用法：
 //   <span class="ic" aria-hidden="true">{glyph('CaretRight')}</span>   ← 字体字形（推荐）

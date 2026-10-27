@@ -24,6 +24,7 @@ const STUBS = {
   'api.js': `export const calls = []; export const api = { async get(u) { calls.push(u); await new Promise((r) => setTimeout(r, 5)); return { view: { available: true, prs: [], git: { github: true }, pollMs: 30000 } }; }, async post() { return {}; } };`,
   'bus.js': `export const busOn = () => () => {};`,
   'csnap.js': `export const IS_CSNAP = false;`,
+  'nativeDesktop.js': `export const isNativeDesktop = () => false; export const desktopOpenExternal = () => {};`,
   'store.js': `export const storeGet = () => null; export const storeSet = () => {};`,
   'toast.svelte.js': `export const showToast = () => {};`,
   'i18n.js': `export const t = (s) => s; export const tc = (_c, s) => s;`,

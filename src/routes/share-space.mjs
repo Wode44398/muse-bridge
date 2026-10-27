@@ -1,6 +1,6 @@
 // 公开只读「分享工作空间」——把调用者标出的一批文件/文件夹拷进一个独立的桶目录，
 // 铸一枚公开 token，任何人凭 https://bridge.<域>/w/<token> 就能像逛工作空间一样浏览、
-// 预览这些内容（复用现有前端 FilesPanel + 预览查看器）。用于把一个文件夹只读分享给别人。
+// 预览这些内容（复用现有前端 FilesPanel + 预览查看器）。首个消费者：QQ 群 bot。
 //
 //   POST /api/share-space  （走正常 per-identity 鉴权）  body { paths:[rel...][, ttlHours] }
 //        → 把每个 rel 从调用者沙箱拷进 share-spaces/<token>/，返回

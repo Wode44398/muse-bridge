@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "dimensio for Edge / Chrome",
+  "version": "0.2.0",
+  "description": "让 dimensio 在你的 Edge 或 Chrome 里操作「dimensio」标签组里的标签页——只在你交给它的标签里看、点、输入。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApsmOtvNz0Kli9txgcCpkRxUotKnPZMc2UnTxczusHrhOE/oDP1oTjUfkfWklx1N1hrghvtzACt0jxUX1X5H/04yaVCLpiO2DUjgBDZF6ArLVsbNkrVdDCz0CKsIRb7OXx3BzDT+x1K2QpBjOm8GtUrzU1dQgYg5M4p9JFiOz2e+p8BA/HlbrJa3t9NR7cN6PAQujYtHujle2fUodzpMfkSVaCX28fwLt8oX91KcxyQrhvFewU2UYlzEHJ6I2iQkeeS2w5OnUyYnKNrPEickmIZDzErgFBeKCk61JzoChLRVvTIklmP4dV8drEcr9UyfxsNlXywxB0Eyv2nAIH2TSLwIDAQAB",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "tabGroups",
+    "storage",
+    "scripting",
+    "alarms",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "dimensio",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}

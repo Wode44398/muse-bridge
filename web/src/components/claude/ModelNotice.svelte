@@ -76,7 +76,7 @@
   const learnHref = $derived(isTrigger ? '' : learnMoreUrl(seg.from, seg.category));
 </script>
 
-<!-- 点击只做链接分流（linkNav），卡片本身非交互 -->
+<!-- 点击只做链接分流（linkNav：桌面壳外链交系统浏览器），卡片本身非交互 -->
 <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
 <div class="mn sel-text" data-subtype={seg.subtype} onclick={onMdClick}>
   <div class="mn-head">

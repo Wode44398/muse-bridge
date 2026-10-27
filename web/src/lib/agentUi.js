@@ -5,12 +5,13 @@
 //   · 按 id 去重；at 超过 60 秒的旧指令丢弃（同 uiReport.handleWsx 的口径——总线断线重连不重放，但同源多实例转发可能重复）。
 //   · op:'toast' → showToast(text)
 //   · op:'open' 的 target：
-//       { page, section? }           换页（page ∈ home/claude/files/routines/settings/dimensio；settings 的 section = 设置分区名）
+//       { page, module?, section? }  换页（page ∈ home/claude/files/routines/settings/chatgpt/dimensio/vertex；
+//                                    vertex 的 module ∈ chat/image/video/voice/music；settings 的 section = 设置分区名）
 //       { session }                  到 Claude 页打开这个会话
 //       { file }                     把工作空间里的文件推进预览（复用 handleWsx 的 preview）
 //       { folder }                   打开文件页并定位到这个文件夹（复用 handleWsx 的 goto）
 // 依赖纪律：只静态 import 轻模块（state / toast / i18n / uiReport）；换页、聊天内核、设置导航一律动态 import。
-import { ui, screenOn, rootScreen } from './state.svelte.js';
+import { ui, vertex, screenOn, rootScreen } from './state.svelte.js';
 import { showToast } from './toast.svelte.js';
 import { t, tr } from './i18n.js';
 import { handleWsx, uiClientId } from './uiReport.js';
@@ -19,10 +20,11 @@ const seen = new Set();
 const MAX_AGE = 60_000;
 
 // 对外的 page 名 → 前端顶层页面（ui.screen）
-const PAGE_SCREEN = { home: 'home', claude: 'claude', files: 'files', dimensio: 'harness', harness: 'harness' };
-// 设置外壳认的分区名（lib/settingsNav 的 openSettings）；外壳里没有的落首页
-const SETTINGS_SECS = new Set(['general', 'account', 'agents', 'claude', 'providers', 'agentapi', 'agent-api', 'connection',
-  'dimensio', 'android', 'feedback', 'about']);
+const PAGE_SCREEN = { home: 'home', claude: 'claude', files: 'files', chatgpt: 'chatgpt', codex: 'chatgpt', dimensio: 'harness', vertex: 'vertex', gemini: 'vertex' };
+const VERTEX_MODULES = new Set(['chat', 'image', 'video', 'voice', 'music']);
+// 两套设置外壳都认的分区名（lib/settingsNav 的 openSettings）；外壳里没有的落首页
+const SETTINGS_SECS = new Set(['general', 'appearance', 'language', 'account', 'about', 'connection', 'devices', 'claude', 'agents',
+  'feedback', 'phone', 'shortcuts', 'wallpaper', 'agentapi', 'agent-api', 'extensions', 'policy']);
 
 const notOpen = () => { showToast(t('这个分页没有对你开放'), 'err'); return false; };
 
@@ -33,12 +35,15 @@ async function gotoScreen(screen) {
   await goto(screen === 'home' ? rootScreen() : screen);
 }
 
-async function openPageTarget({ page, section }) {
+async function openPageTarget({ page, module, section }) {
   const p = String(page || '').toLowerCase();
   if (p === 'settings') {
     const { openSettings } = await import('./settingsNav.svelte.js');
+    const { isNativeDesktop } = await import('./nativeDesktop.js');
     let sec = SETTINGS_SECS.has(String(section || '')) ? String(section) : null;
     if (sec === 'agent-api') sec = 'agentapi';
+    // 桌面外壳没有这两页（手机操控、单独的语言页）：落「通用」
+    if (sec && isNativeDesktop() && (sec === 'phone' || sec === 'language')) sec = 'general';
     ui.routinesOpen = false; ui.loginOpen = false;
     openSettings(sec);
     return true;
@@ -52,6 +57,8 @@ async function openPageTarget({ page, section }) {
   const screen = PAGE_SCREEN[p];
   if (!screen) return false;
   if (screen !== 'home' && screen !== 'files' && !screenOn(screen)) return notOpen();
+  // Gemini 的模块先设好再换页：分页此刻藏着时改模块看不见，新快照里直接就是目标模块
+  if (screen === 'vertex' && VERTEX_MODULES.has(String(module || ''))) vertex.func = module;
   await gotoScreen(screen);
   return true;
 }

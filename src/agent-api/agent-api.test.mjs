@@ -170,7 +170,7 @@ test('重放身份标记：只能来自进程内身份，网络请求头伪造�
 test('手册：每章恰好一个 # 标题、占位符都填上、提到的操作名都存在', () => {
   const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'manual');
   const ids = readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
-  assert.ok(ids.length >= 10);
+  assert.ok(ids.length >= 12);
   assert.deepEqual(manualToc(null, 'https://x').map((c) => c.id).sort(), [...ids].sort());
   const ops = new Set(allOps().map((o) => o.name));
   const groups = new Set(allOps().map((o) => o.group));

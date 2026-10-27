@@ -10,6 +10,7 @@ export type EnvArea =
   | "服务" // 端口、绑定、令牌、来源白名单
   | "路径" // 数据目录与文件的位置
   | "厂商" // 模型厂商的 key / 型号 / 地址
+  | "本机模型" // llama.cpp 本机 provider
   | "知识与记忆"
   | "联网搜索"
   | "网络" // 出站代理与探测
@@ -42,7 +43,7 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
     name: "DIMENSIO_DATA_DIR",
     area: "路径",
     description:
-      "可写状态的默认目录（下面写作 <数据目录>）：会话、记忆、知识、运行配置、项目表、自定义模型服务、快照指针、默认工作区与 .env 没单独指定时都落在这里；bridge 给用户实例设成他自己的数据目录，部署脚本也可自设",
+      "可写状态的默认目录（下面写作 <数据目录>）：会话、记忆、知识、运行配置、项目表、自定义模型服务、快照指针、默认工作区与 .env 没单独指定时都落在这里；harness 是扩展自带（离线包）时 bridge 设成 <数据根>/dimensio，部署脚本也可自设",
     default: "<harness>",
   },
   { name: "SESSIONS_DIR", area: "路径", description: "会话记录目录", default: "<数据目录>/sessions" },
@@ -85,6 +86,16 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "GEMINI_MODEL", area: "厂商", description: "Gemini 默认型号", default: "目录里的默认" },
   { name: "GEMINI_BASE_URL", area: "厂商", description: "Gemini 接口地址", default: "目录里的地址" },
 
+  // ── 本机模型 ──
+  { name: "LOCAL_API_KEY", area: "本机模型", description: "本机 llama.cpp 的 key（一般随便填）", default: "local", secret: true },
+  { name: "LOCAL_MODEL", area: "本机模型", description: "本机默认型号", default: "目录里的默认" },
+  { name: "LOCAL_BASE_URL", area: "本机模型", description: "本机 llama-server 地址", default: "目录里的地址" },
+  { name: "LOCAL_START_SCRIPT", area: "本机模型", description: "「本机」胶囊启动模型用的脚本", default: "E:\\LLM\\start-qwen.bat" },
+  { name: "LOCAL_AI_SETTINGS", area: "本机模型", description: "「本机」面板里的启动参数（上下文 / 缓存精度 / 视觉 / MTP）存放位置", default: "启动脚本同目录的 local-ai.json" },
+  { name: "STRATA_START_SCRIPT", area: "本机模型", description: "Strata（Qwen3.8 Flash Next 125B）的启动脚本", default: "E:\\Strata\\start-strata.bat" },
+  { name: "STRATA_BASE_URL", area: "本机模型", description: "Strata 服务地址（不带 /v1）", default: "http://127.0.0.1:8081" },
+  { name: "STRATA_AI_SETTINGS", area: "本机模型", description: "Strata 的启动参数存放位置", default: "启动脚本同目录的 local-ai.json" },
+
   // ── 知识与记忆 ──
   { name: "KNOWLEDGE_AUTO_SEMANTIC", area: "知识与记忆", description: "每轮自动召回是否带语义检索；0 = 只用关键词", default: "开" },
   { name: "KNOWLEDGE_EMBEDDING_API_KEY", area: "知识与记忆", description: "语义检索的 embedding key；没有就用通义 key", secret: true },
@@ -120,6 +131,8 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "DIMENSIO_GREP_TIMEOUT_MS", area: "超时与重试", description: "Grep 工具的时限" },
   { name: "DIMENSIO_NET_WAIT_MS", area: "超时与重试", description: "断网时等网络恢复的总上限", default: "1800000" },
   { name: "DIMENSIO_NET_WAIT_BASE_MS", area: "超时与重试", description: "等网络恢复的首次退避", default: "5000" },
+  { name: "DIMENSIO_LOCAL_LOAD_WAIT_MS", area: "超时与重试", description: "本机模型加载中时最多等多久", default: "180000" },
+  { name: "DIMENSIO_LOCAL_WAIT_BASE_MS", area: "超时与重试", description: "等本机模型的首次退避", default: "2000" },
   { name: "DIMENSIO_RETRY_SCALE", area: "超时与重试", description: "重试退避的倍率（测试里调小）", default: "1" },
   { name: "DIMENSIO_INTERACTION_TIMEOUT_SCALE", area: "超时与重试", description: "卡片倒计时（提问 / 权限 / 计划）的倍率", default: "1" },
 
@@ -136,8 +149,9 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "DIMENSIO_ACCESS_LOCK", area: "沙箱与子进程", description: "锁定访问范围（workspace / full），配置与会话接口都不许改；租户默认 workspace" },
   { name: "DIMENSIO_DENY_PATHS", area: "沙箱与子进程", description: "额外禁区（分隔符同 PATH）：文件工具与命令行都拒；租户自己的根除外" },
   { name: "DIMENSIO_DISABLED_TOOLS", area: "沙箱与子进程", description: "关掉的工具名（逗号分隔），主会话与子 agent 都没有" },
-  { name: "DIMENSIO_DISABLE_PROVIDERS", area: "沙箱与子进程", description: "关掉的 provider（逗号分隔）：目录与配置接口里都不出现" },
+  { name: "DIMENSIO_DISABLE_PROVIDERS", area: "沙箱与子进程", description: "关掉的 provider（逗号分隔）；租户默认关 local（本机模型）" },
   { name: "HEADLESS_BROWSER", area: "沙箱与子进程", description: "无头浏览器可执行文件（Browser / 截图工具用）", default: "自动找 Edge / Chrome" },
+  { name: "DIMENSIO_BROWSER", area: "沙箱与子进程", description: "这台机器有没有浏览器：off = 当作没有（不提供 Browser / ReadPage / Eval / Network，提示词跟着降级），on = 一律当作有", default: "自动（本机 Chromium 系浏览器、桌面壳的浏览器宿主、经扩展连着的用户浏览器，有一个就算有）" },
   { name: "PV_PUBLIC_DOMAIN", area: "沙箱与子进程", description: "Preview 服务的公网域名后缀（有就给预览生成公网地址）" },
 
   // ── 检查点 ──
@@ -153,11 +167,13 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "BRIDGE_DESKTOP_HOST_FILE", area: "bridge 集成", description: "桌面壳落盘的宿主信息（共享浏览器的 CDP 端口等）" },
   { name: "BRIDGE_DESKTOP_BROKER", area: "bridge 集成", description: "桌面壳 broker 地址（给了就不读宿主文件）" },
   { name: "BRIDGE_DESKTOP_CDP_PORT", area: "bridge 集成", description: "桌面壳的 CDP 端口（与 broker 一起给）" },
-  { name: "BRIDGE_LOCAL_PC_DESCRIPTOR", area: "bridge 集成", description: "本机 Agent（LocalPC 工具）的描述文件" },
+  { name: "BRIDGE_DEVICE_API", area: "bridge 集成", description: "bridge 内部设备接口的本机地址（http://127.0.0.1:<端口>）；与密钥都在才有 Device* 设备工具" },
+  { name: "BRIDGE_DEVICE_SECRET", area: "bridge 集成", description: "调内部设备接口时出示的凭据：管理员实例是主机密钥，用户实例是 bridge 按人铸的令牌（dvt1.…，只能操作他自己的电脑）", secret: true },
   { name: "DIMENSIO_EDGE_EXTENSION_IDS", area: "bridge 集成", description: "额外认可的 Edge 扩展 ID（逗号分隔；自己打包的扩展 ID 与内置的不同时用）" },
 
   // ── 测试 ──
   { name: "DIMENSIO_TEST_ISOLATION", area: "测试", description: "测试进程标记（test-setup 设的）：数据全在临时目录、不自动续跑、不连 MCP" },
+  { name: "EDGE_SMOKE_OUT", area: "测试", description: "连 Edge 冒烟脚本的截图输出目录", default: "%TEMP%" },
   { name: "DIMENSIO_AUTO_RESUME", area: "测试", description: "测试里强制打开 M13 自动续跑" },
   { name: "NODE_TEST_CONTEXT", area: "测试", description: "node --test 自己设的；用来认出测试进程" },
 

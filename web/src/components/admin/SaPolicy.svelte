@@ -2,7 +2,7 @@
   // 额度与注册（三端拆分 P4；开源路线 S2-6 扩充）：注册开不开、注册用户的默认额度（轮数 / 花费 / 媒体 / 视频）、
   // 全服与每人同时最多几轮、每人最多几条定时任务、成员能不能用高消耗功能、「每天」按哪个时区换日。
   // 数据面 /api/admin/policy（存 config.json 的 policy 键，即时生效）。个人额度在「用户」页按人覆盖。
-  // 额度只算 Claude：共享的是 Claude 订阅；dimensio 不计。管理员不受限。
+  // 管理员不受限；服务账号（QQ 机器人这类）不吃默认额度、不受成员功能开关管。
   import { api } from '../../lib/api.js';
   import { sa, saToast, saConfirm, loadUsers } from '../../lib/serverAdmin.svelte.js';
   import { costNote } from '../../lib/me.js';
@@ -10,7 +10,7 @@
 
   let p = $state(null);               // { register, quota:{...}, maxUserTurns, maxParallelPerUser, maxRoutinesPerUser, member:{...}, timezone }
   let regOpen = $state(false);
-  let form = $state({ dayTurns: '', weekTurns: '', dayCostUsd: '', weekCostUsd: '', maxUserTurns: '', maxParallelPerUser: '', maxRoutinesPerUser: '', timezone: '' });
+  let form = $state({ dayTurns: '', weekTurns: '', dayCostUsd: '', weekCostUsd: '', dayMedia: '', dayVideo: '', maxUserTurns: '', maxParallelPerUser: '', maxRoutinesPerUser: '', timezone: '' });
   let busy = $state(false);
 
   const FIELDS = [
@@ -18,12 +18,16 @@
     { k: 'weekTurns', label: t('最近 7 天最多几轮'), unit: tc('admin', '轮'), step: 1 },
     { k: 'dayCostUsd', label: t('每天最多花多少'), unit: t('美元'), step: 0.5 },
     { k: 'weekCostUsd', label: t('最近 7 天最多花多少'), unit: t('美元'), step: 1 },
+    { k: 'dayMedia', label: t('每天最多生成几次图片、语音、音乐'), unit: t('次'), step: 1 },
+    { k: 'dayVideo', label: t('每天最多生成几条视频'), unit: t('条'), step: 1 },
   ];
   // 成员（注册用户，服务账号除外）能不能用这些高消耗功能。
   const MEMBER_FEATS = [
     { k: 'fast', label: t('快速模式（fast）'), sub: t('同样的回答更快出来，但按更高的价格计用量') },
     { k: 'ultracode', label: 'Ultracode', sub: t('常驻动态工作流，一轮会派一群子 agent，用量成倍增加；关着时降到 Extra') },
     { k: 'ctx1m', label: t('1M 上下文'), sub: t('长对话超过 20 万 token 后按长上下文价格计；关着时到 20 万就自动压缩') },
+    { k: 'media', label: t('生成图片、语音、音乐'), sub: t('媒体页和 Claude 的媒体工具，按次计到服务器的 Google Cloud 账单') },
+    { k: 'video', label: t('生成视频'), sub: t('Veo 视频，单次花费最高') },
   ];
 
   function fill(r) {
@@ -119,7 +123,7 @@
     </div>
   </div>
   <div class="sa-foot">
-    {t('留空或填 0 = 不限。额度只算 Claude（Claude 对话和定时任务都算轮数），dimensio 不计；管理员不受限，服务账号不吃默认额度（要限就单独设）。')}
+    {t('留空或填 0 = 不限。Claude 对话、Gemini 对话和定时任务都算轮数；图片、语音、音乐、视频按次数另算。管理员不受限，服务账号不吃默认额度（要限就单独设）。')}
     {t('轮数在开跑时记（同时发几轮也绕不过去），花费按每轮结束时 Claude 报的金额、取这一轮新增的那部分记。某个人要多给或少给，到「用户」页他的「管理」里单独设。')}
     {costNote()}
   </div>

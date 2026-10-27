@@ -1,31 +1,41 @@
-// —— 页面级转场引擎：主页 ⇄ 分页、分页 ⇄ 分页 ——
+// —— 页面级转场引擎：主页 ⇄ 分页、分页 ⇄ 分页、主页明暗换场 ——
 //
-// 空间模型：主页是底座，每个分页都是住在自己入口里的一张卡片。
+// 【2026-09-26 重做】此前五个入口三种说法：Claude / Gemini 是「裁窗从方块展开」、ChatGPT /
+// dimensio / 工作空间硬切（ChatGPT 首开还黑→白→黑闪三下），返回又一律「整页往右滑走」——
+// 打开像放大、关闭像翻页，空间关系自相矛盾；且裁窗动画跑在主线程上，切页那一帧要渲染整个
+// 分页，点完常常先愣一两百毫秒才开始动。粗糙感主要来自这两件事，不在于哪一段不够花哨。
+//
+// 现在只有一个空间模型：主页是底座，每个分页都是住在自己入口里的一张卡片。
 //   打开 = 入口长成这一页，主页同时以入口为原点往后退、压暗（纵深）；
 //   关闭 = 这一页收回它自己的入口，主页回到前面——入口在哪，卡片就回哪；
-//   分页之间直达 = 纵深淡换：旧页后退淡出，新页从近处落定。
+//   分页之间直达（助手 / 命令面板）= 纵深淡换：旧页后退淡出，新页从近处落定。
 //
 // 实现：View Transitions。浏览器把切页前后两个画面各拍一张快照，动画只在快照（贴图）上做：
-// 分页再重（长会话、iframe）也不参与逐帧重绘，切页那一帧的渲染也藏在快照后面。
+// 分页再重（长会话、液态玻璃、iframe）也不参与逐帧重绘，切页那一帧的渲染也藏在快照后面。
 // 几何全部由这里用 WAAPI 驱动伪元素（弹簧离线积分成 linear() 缓动，见 motion.springCurve），
 // 不用 UA 默认的交叉淡化；伪元素的静态样式（裁切、铺放、原点）在 app.css 的 html[data-vt] 段。
 //
 // 兜底：内核不支持 / 系统减弱动效 / 用户关了转场 / 页面在后台——直接切，绝不卡住；
 // 任何一次转场 1.8s 内没落幕就强制跳到终态。
 import { tick } from 'svelte';
-import { noteTrail } from './feedback.svelte.js';
 import { ui, prefs, rootScreen } from './state.svelte.js';
-import { springCurve, NAV_SPRING, EASE, reduced } from './motion.js';
+import { springCurve, NAV_SPRING, EASE, reduced, bezier } from './motion.js';
 
 export const PAGE_NAME = 'bridge-page';
+const HERO_NAME = 'bridge-hero';
 const HOME_PUSH = 1.08;      // 打开分页时主页朝入口推近的倍率（关闭时从这里退回 1）
 
 // 各分页的根盒（必须是真正产生盒子的元素：dimensio 的 .hxroot 是 display:contents，取它的 .shell）
 const ROOTS = {
   claude: '.claude-slide',
+  vertex: '.vertex-slide',
+  chatgpt: '.chatgpt-page',
   harness: '.hxroot > .shell, .hx-placeholder',   // 入场期间是同色底板（HarnessPage 延后挂载）
+  antigravity: '.hxroot > .shell, .hx-placeholder',
   files: '.fd-root:not(.embedded), .ws-root:not(.embedded)',
 };
+// 入口：手机四宫格里是 [data-entry=<key>] .tile；桌面 Dock 按 aria-label 找图标
+const DOCK_LABEL = { claude: 'Claude', chatgpt: 'ChatGPT', harness: 'dimensio', vertex: 'Vertex' };
 
 const html = () => document.documentElement;
 const vp = () => ({ W: innerWidth, H: innerHeight });
@@ -61,16 +71,29 @@ export function pageRoot(key) {
   }
   return null;
 }
-// 入口方块 { el, rect, radius }（主页 [data-entry=<key>] .tile）；拿不到（入口被隐藏）返回 null。
+// 入口方块 { el, rect, radius }；拿不到（入口被隐藏、从助手 / 命令面板进来）返回 null。
 export function entryOf(key) {
-  const tile = document.querySelector(`[data-entry="${key}"] .tile`);
-  if (tile) { const rect = rectOf(tile); if (onScreen(rect)) return { el: tile, rect, radius: 24 }; }
+  const k = key === 'antigravity' ? 'harness' : key;
+  const tile = document.querySelector(`[data-entry="${k}"] .tile`);
+  if (tile) { const rect = rectOf(tile); if (onScreen(rect)) return { el: tile, rect, radius: 30 }; }
+  const lab = DOCK_LABEL[k];
+  const dico = lab && document.querySelector(`button.ditem[aria-label="${lab}"] .dico`);
+  if (dico) { const rect = rectOf(dico); if (onScreen(rect)) return { el: dico, rect, radius: 12 }; }
   return null;
 }
 
 function clearNames() {
   for (const el of document.querySelectorAll('[style*="view-transition-name"]')) el.style.viewTransitionName = '';
 }
+// 主页那张静态壁纸 <img> 本身解码好了没有：另开 Image 预解码不保证页面里这个元素首帧就画得出来
+// （大图按显示尺寸异步解码，头几帧是空的——转场里就是先一片黑、图再冒出来）。在转场的更新回调里
+// 等它（此时画面冻结在旧快照上，不算卡），有封顶。
+export async function homeWallpaperReady(cap = 300) {
+  const img = document.querySelector('.home .wp-img:not(.wp-fx)');
+  if (!img?.decode) return;
+  try { await Promise.race([img.decode(), new Promise((r) => setTimeout(r, cap))]); } catch {}
+}
+
 // 伪元素动画挂在 <html> 上、按名字指向伪元素：转场结束后它们不会自己消失（fill:'both' 停在终值），
 // 下一次转场建出同名伪元素时会被旧终值串味（例如上一次「打开」把 new(root) 压成透明的终值）。
 // 所以每一段都记账，收场 / 下一段开场时统一撤掉。
@@ -136,8 +159,9 @@ function cleanup(my, vars) {
 }
 
 // —— 打开：入口 → 分页 ——
-// from：入口方块（元素或 {x,y,w,h}；缺省按 key 自己找）；radius：它的圆角。
-export function openPage(key, { from = null, radius = null, onSwitch = null } = {}) {
+// from：入口方块（元素或 {x,y,w,h}；缺省按 key 自己找）；radius：它的圆角；
+// hero + heroTo：入口里要单独飞过去的图标、分页里它的落点选择器（可选）。
+export function openPage(key, { from = null, radius = null, hero = null, heroTo = null, onSwitch = null } = {}) {
   const doSwitch = () => { ui.screen = key; onSwitch?.(); };
   if (ui.screen === key) return Promise.resolve();
   if (!canMorph()) { doSwitch(); return Promise.resolve(); }
@@ -146,13 +170,24 @@ export function openPage(key, { from = null, radius = null, onSwitch = null } = 
   const r0 = ent?.radius ?? radius ?? 30;
   const { W, H } = vp();
   const ox = src ? src.x + src.w / 2 : W / 2, oy = src ? src.y + src.h / 2 : H / 2;
+  let heroOk = false;
   return run('open', {
     vars: { '--vt-ox': ox + 'px', '--vt-oy': oy + 'px' },
+    before: () => {
+      // 共享元素：入口里的图标单独飞到分页里的同款图标上（Gemini 十字星 → 问候语上方那颗）
+      if (hero && heroTo && onScreen(rectOf(hero))) { hero.style.viewTransitionName = HERO_NAME; heroOk = true; }
+    },
     update: doSwitch,
     afterUpdate: (ctx) => {
       const root = pageRoot(key);
       if (root) root.style.viewTransitionName = PAGE_NAME;
       ctx.page = !!root;
+      if (heroOk) {
+        const land = root && [...root.querySelectorAll(heroTo)].find((el) => onScreen(rectOf(el)));
+        // 没有落点（分页停在对话记录里）：图标不单飞，留在主页快照里跟着退后
+        if (land) land.style.viewTransitionName = HERO_NAME;
+        else hero.style.viewTransitionName = '';
+      }
     },
     play: ({ spring, page }) => {
       const d = spring.duration;
@@ -205,6 +240,7 @@ export async function closePage(key = ui.screen, { fromRect = null, fromRadius =
       if (root) root.style.viewTransitionName = '';
       doSwitch();
       await tick();
+      await homeWallpaperReady(250);
     },
     afterUpdate: (ctx) => {
       // 新画面（主页）已排好版：量入口方块的落点，主页「回到前面」的原点也放在它上面，
@@ -224,7 +260,7 @@ export async function closePage(key = ui.screen, { fromRect = null, fromRadius =
     play: ({ spring, page, tiles }) => {
       const d = spring.duration;
       tapThrough(tiles, d);
-      // 找不到入口（入口被隐藏）：收成屏幕中间一张小卡再化开
+      // 找不到入口（从助手 / 命令面板开的页、入口被隐藏）：收成屏幕中间一张小卡再化开
       const t = tgt || { x: W * 0.3, y: H * 0.34, w: W * 0.4, h: H * 0.32, r: 28 };
       if (page) {
         anim(`group(${PAGE_NAME})`, [
@@ -296,14 +332,14 @@ function tapThrough(tiles, d) {
     try { e.preventDefault(); } catch {}
     try { vt.skipTransition(); } catch {}
     // 等跳过落地（DOM 已是主页终态）再开下一段，否则新转场拍到的旧画面是半路的快照
-    vt.finished.catch(() => {}).then(() => openPage(hit.key, { from: hit.el, radius: 24 }));
+    vt.finished.catch(() => {}).then(() => openPage(hit.key, { from: hit.el, radius: 30 }));
   };
   const off = () => window.removeEventListener('pointerdown', onDown, true);
   window.addEventListener('pointerdown', onDown, true);
   vt?.finished.catch(() => {}).then(off);
 }
 
-// —— 分页 ⇄ 分页（不经主页，如单 agent 模式下工作空间关回根页）：纵深淡换 ——
+// —— 分页 ⇄ 分页（不经主页：助手导航、命令面板）：纵深淡换 ——
 export function switchPage(key, { onSwitch = null } = {}) {
   const doSwitch = () => { ui.screen = key; onSwitch?.(); };
   if (ui.screen === key) return Promise.resolve();
@@ -342,8 +378,111 @@ export function backPeek(dragX, W = innerWidth) {
 // —— 统一入口：去某个分页 / 回主页，自动选打开、关闭还是直达 ——
 export function goto(key, opts = {}) {
   if (!key || key === ui.screen) return Promise.resolve();
-  noteTrail('page ' + key);
   if (key === 'home') return closePage(ui.screen, opts);
   if (ui.screen === 'home') return openPage(key, opts);
   return switchPage(key, opts);
+}
+
+// —— 入口图标「浮现」：从虚到实、微微放大落定（主题换场 / 开机揭幕共用）——
+// items: [{ el, at }]，at = 该图标开始浮现的时刻（ms，相对动画起点）
+function bloom(items) {
+  const sp = springCurve(NAV_SPRING.settle);
+  for (const { el, at } of items) {
+    try {
+      el.animate([
+        { opacity: 0, transform: 'scale(.8)', filter: 'blur(6px)' },
+        { opacity: 1, transform: 'scale(1)', filter: 'blur(0px)' },
+      ], { duration: sp.duration, delay: Math.max(0, Math.round(at)), easing: sp.easing, fill: 'backwards' });
+    } catch {}
+  }
+}
+const homeIcons = () => [...document.querySelectorAll('.grid .entry .ico, .ditem .dico')]
+  .map((el) => ({ el, r: rectOf(el) })).filter((o) => o.r && onScreen(o.r));
+
+// —— 开机揭幕：封面方块打开成一扇窗，主页在窗里 ——
+// 旧版窗口是「透明洞 + 9999px 黑环」在主线程上逐帧改宽高，且只等了另一张 Image 的解码——主页里那张
+// 壁纸元素本身常常还没画出来，窗子打开看见的是一片黑，半秒后主页才「啪」地出现；标题飞往左上
+// 靠逐帧改 top/left/字号，字形一路抖。现在：
+//   · 旧快照 = 封面（底色 + 方块 + 居中标题），新快照 = 已经解码画好的主页（更新回调里等 img.decode）；
+//   · 主页快照裁成方块、随弹簧张开到整屏（clip-path），窗里的景同时从 1.06 落定——推近对焦的感觉；
+//   · 白方块到风景之间 140ms 交叉淡化，不再一帧硬换；
+//   · 标题是共享元素：UA 按两端几何插值、贴图缩放，零重排，字不抖；
+//   · 入口图标在窗口张到它时逐个浮现。
+// square：封面方块 {x,y,w,h,r}；apply()：切到主页的状态改动（booted 等）。
+export function bootReveal({ square, apply }) {
+  const { W, H } = vp();
+  const q = square || { x: W / 2 - 74, y: H / 2 - 74, w: 148, h: 148, r: 34 };
+  const cx = q.x + q.w / 2, cy = q.y + q.h / 2;
+  return run('boot', {
+    spring: NAV_SPRING.settle,
+    vars: { '--vt-ox': cx + 'px', '--vt-oy': cy + 'px' },
+    before: () => {
+      const brand = document.querySelector('.brand.show');
+      if (brand) brand.style.viewTransitionName = 'bridge-brand';
+    },
+    update: async () => { await apply(); await tick(); await homeWallpaperReady(450); },
+    afterUpdate: (ctx) => { ctx.icons = homeIcons(); },
+    play: ({ spring, icons }) => {
+      const d = spring.duration;
+      anim('new(root)', [
+        { clipPath: `inset(${q.y}px ${W - q.x - q.w}px ${H - q.y - q.h}px ${q.x}px round ${q.r}px)` },
+        { clipPath: 'inset(0px 0px 0px 0px round 0px)' },
+      ], { duration: d, easing: spring.easing });
+      anim('new(root)', [{ transform: 'scale(1.06)' }, { transform: 'scale(1)' }], { duration: d + 380, easing: EASE.decel });
+      anim('new(root)', [{ opacity: 0 }, { opacity: 1 }], { duration: 140, easing: EASE.fade });
+      // 窗口（方块）半边长从 q.w/2 张到覆盖整屏：图标所在的「切比雪夫半径」被扫到的那一刻浮现
+      const full = Math.max(cx, W - cx, cy, H - cy);
+      bloom((icons || []).map(({ el, r }) => {
+        const dd = Math.max(Math.abs(r.x + r.w / 2 - cx), Math.abs(r.y + r.h / 2 - cy)) + Math.max(r.w, r.h) * 0.3;
+        const p = Math.min(1, Math.max(0, (dd - q.w / 2) / Math.max(1, full - q.w / 2)));
+        return { el, at: spring.reach(p) };
+      }));
+    },
+  });
+}
+
+// —— 主页明暗换场（点 THE BRIDGE）——
+// 新主题从标题那一点以柔边圆波铺开（暗→明像天光漫开，明→暗像夜色合拢）：
+//   · 波前起步快、收尾慢——点下去的一瞬间标题周围就换了天色，最远的角落慢慢收完；
+//   · 新画面边铺边从 1.045 落定到 1，旧画面同时朝外推远 3%：波前两侧一收一放，纵深出来了；
+//   · 入夜时旧画面先暗下去（黄昏），天亮时不压（暗场压了也看不出）；
+//   · 入口图标按离标题的远近，在波前扫到自己的那一刻逐个浮现（从虚到实、微微放大落定）。
+// 整段 ~1.05s，一个焦点。apply()：同步切换状态的函数（setHomeMode）；prepare()：可选预备
+// （解码新壁纸），在拍旧快照之前等完（封顶 900ms，拿不到图也照样换）。
+const REVEAL = { dur: 1050, ease: [0.3, 0.55, 0.18, 1] };
+export async function morphTheme(originEl, apply, { prepare = null, toLight = true } = {}) {
+  if (!canMorph()) { apply(); return; }
+  if (prepare) { try { await Promise.race([prepare(), new Promise((r) => setTimeout(r, 900))]); } catch {} }
+  const { W, H } = vp();
+  const o = rectOf(originEl);
+  const ox = o ? o.x + Math.min(o.w, 60) / 2 : 40, oy = o ? o.y + o.h / 2 : 40;
+  const far = Math.max(Math.hypot(ox, oy), Math.hypot(W - ox, oy), Math.hypot(ox, H - oy), Math.hypot(W - ox, H - oy));
+  const feather = Math.round(Math.min(300, Math.max(150, far * 0.24)));
+  const R = far + feather;
+  const ease = bezier(...REVEAL.ease);
+  await run('theme', {
+    vars: { '--vt-ox': ox + 'px', '--vt-oy': oy + 'px', '--vt-f': feather + 'px' },
+    update: apply,
+    afterUpdate: (ctx) => {
+      // 新画面里的入口图标（手机四宫格 / 桌面 Dock），记下各自离标题多远
+      ctx.icons = homeIcons().map(({ el, r }) => ({ el, d: Math.hypot(r.x + r.w / 2 - ox, r.y + r.h / 2 - oy) }));
+    },
+    play: (ctx) => {
+      const D = REVEAL.dur;
+      const easing = `cubic-bezier(${REVEAL.ease.join(',')})`;
+      anim('new(root)', [{ '--vt-r': '0px' }, { '--vt-r': R + 'px' }], { duration: D, easing });
+      anim('new(root)', [{ transform: 'scale(1.045)' }, { transform: 'scale(1)' }], { duration: D + 200, easing: EASE.decel });
+      // 旧画面朝外推远（以标题为原点放大——缩小会在右下露出黑边）；入夜时先暗下去
+      anim('old(root)', toLight
+        ? [{ transform: 'scale(1)' }, { transform: 'scale(1.03)' }]
+        : [{ transform: 'scale(1)', filter: 'brightness(1)' }, { transform: 'scale(1.03)', filter: 'brightness(.5)' }],
+      { duration: D, easing });
+      // 图标：波前（实心区外沿）扫到它的时刻浮现
+      bloom((ctx.icons || []).map(({ el, d }) => {
+        let t = 1;
+        for (let i = 0; i <= 80; i++) { const tt = i / 80; if (R * ease(tt) - feather * 0.55 >= d) { t = tt; break; } }
+        return { el, at: t * D };
+      }));
+    },
+  });
 }

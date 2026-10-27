@@ -1,23 +1,19 @@
-// 设置的跨组件导航句柄：外部入口（侧栏账户菜单、新会话卡「不再询问 → 设置」、安全栅门横条…）写 sec 再开 ui.settingsOpen，
-// 设置页（components/settings/Settings）挂载时消费一次（读完即清；开着时再写也会被接住），实现「直达某个设置分区」。
+// 设置的跨组件导航句柄：外部入口（侧栏账户菜单、命令面板、桌面壳窗口 chrome、输入框电脑芯片、安全栅门横条…）
+// 写 sec 再开 ui.settingsOpen。设置外壳只有两套（2026-10-21 合一，单页模式也用它们）：桌面壳的 SettingsDesktop、
+// 手机 / 网页的 iOS 风 components/Settings——哪个在显示就由哪个消费（读完即清；开着时再写也会被接住）。
 import { ui } from './state.svelte.js';
+import { settingsNav } from '../desktop/settings/settingsNav.svelte.js';
 import { IS_SOLO, IS_PANE, PANE_MSG } from './solo.js';
 
-export const settingsNav = $state({ sec: null });
-
-// 本体（两套设置外壳）的分区名 → Muse 设置外壳的分区名。Muse 没有的页（设备、手机操控、快捷键、壁纸、单独的外观/语言页）落「通用」。
-const ALIAS = {
-  appearance: 'general', language: 'general', devices: 'general', phone: 'general', shortcuts: 'general', wallpaper: 'general', localpc: 'general',
-  'agent-api': 'agentapi', agent_api: 'agentapi',
-  model: 'providers', models: 'providers',
-};
+export { settingsNav };
 
 /**
- * 打开设置，可直达分区：general | account | claude（Claude 设置）| providers（模型服务）| agents（Agent 开关，管理员）
- *   | connection | dimensio | agentapi（Agent 接入）| android | feedback | about。本体的分区名也认（见 ALIAS）。
+ * 打开设置，可直达分区。分区名两套外壳都认（各自映射到自己的页；外壳里没有的落首页）：
+ *   general | appearance | account | about（关于与更新）| connection（服务器地址 / 线路）| devices（设备与端口转发）
+ *   | claude（Claude 设置页；agents 同义）| feedback | phone（安卓手机操控）| shortcuts（桌面快捷键）| wallpaper | agentapi（Agent 接入）
  */
 export function openSettings(sec = null) {
-  settingsNav.sec = sec ? (ALIAS[sec] || sec) : null;
+  settingsNav.sec = sec;
   ui.settingsOpen = true;
 }
 

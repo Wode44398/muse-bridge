@@ -85,7 +85,7 @@ export default {
 
   // —— 邀请文本（复制到剪贴板发给对方）——
   '（找主机要中继地址）': '(ask the host for the relay URL)',
-  '【bridge 客户端接入】': 'Join Muse Bridge as a client',
+  '【bridge 客户端接入】': 'Join The Bridge as a client',
   '1. 下载安装包（v{version}，{size}）：{url}': '1. Download the installer (v{version}, {size}): {url}',
   '1. 找主机要 bridge 客户端安装包': '1. Ask the host for the Bridge client installer',
   '2. 安装时选「成为客户端」': '2. During setup, choose “Become a client”',
@@ -93,11 +93,11 @@ export default {
 
   // —— 安全 ——
   '主机派发密钥': 'Host dispatch secret',
-  '本机 bridge 调中继（派发远程操作、读这一页）用的密钥，存在 config.json 的 remotePcSecret。怀疑外泄就轮换': 'Used by Muse Bridge on this computer to call the relay (to dispatch remote actions and load this page). Stored as remotePcSecret in config.json. Rotate it if you suspect a leak.',
+  '本机 bridge 调中继（派发远程操作、读这一页）用的密钥，存在 config.json 的 remotePcSecret。怀疑外泄就轮换': 'Used by The Bridge on this computer to call the relay (to dispatch remote actions and load this page). Stored as remotePcSecret in config.json. Rotate it if you suspect a leak.',
   '轮换': 'Rotate',
   'Agent 远程操作工具': 'Agent remote access tools',
   '已开启：主机 admin 的 Claude 带 mcp__remotePc__* 工具': 'On. The host admin’s Claude has the mcp__remotePc__* tools.',
-  '未开启：config.json 设 remotePc:true 并重启 bridge 后，Claude 才能远程操作客户端': 'Off. Set remotePc:true in config.json and restart Muse Bridge to let Claude operate clients remotely.',
+  '未开启：config.json 设 remotePc:true 并重启 bridge 后，Claude 才能远程操作客户端': 'Off. Set remotePc:true in config.json and restart The Bridge to let Claude operate clients remotely.',
   '轮换主机派发密钥？': 'Rotate the host dispatch secret?',
   '生成新的 remotePcSecret，旧密钥立即失效。已配对的客户端不受影响（它们用各自的设备令牌），也不用重启任何服务。': 'A new remotePcSecret is generated and the old one stops working immediately. Paired clients aren’t affected (they use their own device tokens), and no services need to restart.',
   '已轮换 · {time}': 'Rotated · {time}',

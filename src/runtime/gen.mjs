@@ -235,6 +235,8 @@ export function initSessionStores(root) {
   if (existsSync(_bridgeSessionsPath)) for (const id of loadSet(_bridgeSessionsPath)) bridgeSessions.add(id);
   if (existsSync(_routineSessionsPath)) for (const id of loadSet(_routineSessionsPath)) routineSessions.add(id);
   if (existsSync(_escalatedSessionsPath)) for (const id of loadSet(_escalatedSessionsPath)) escalatedSessions.add(id);
+  _pluginSessionsPath = path.join(root, 'plugin-sessions.json');
+  for (const e of loadSet(_pluginSessionsPath)) if (Array.isArray(e) && e[0] && e[1]) pluginSessions.set(e[0], e[1]);
 }
 
 // Cap how many ids we retain (and rewrite to disk) so a long-lived install doesn't
@@ -255,6 +257,18 @@ export function markRoutineSession(id) {
   routineSessions.add(id);
   trimSet(routineSessions);
   try { writeFileSync(_routineSessionsPath, JSON.stringify([...routineSessions])); } catch {}
+}
+
+// 插件代为发起的会话（ctx.chat，见 plugins/chat.mjs）：id → { plugin, label }，会话列表据此标来源。
+let _pluginSessionsPath = '';
+export const pluginSessions = new Map();
+export function markPluginSession(id, info) {
+  if (!id) return;
+  const prev = pluginSessions.get(id);
+  if (prev && prev.plugin === info.plugin && prev.label === info.label) return;
+  pluginSessions.set(id, { plugin: String(info.plugin || ''), label: String(info.label || '').slice(0, 60) });
+  while (pluginSessions.size > SESSION_CAP) pluginSessions.delete(pluginSessions.keys().next().value);
+  if (_pluginSessionsPath) try { writeFileSync(_pluginSessionsPath, JSON.stringify([...pluginSessions])); } catch {}
 }
 
 export function isEscalatedSession(id) { return !!id && escalatedSessions.has(id); }

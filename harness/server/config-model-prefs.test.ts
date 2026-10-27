@@ -1,4 +1,4 @@
-// 切厂商继承这家上次用的型号（以前一切换到 Claude 就回到 Sonnet 4.6——常用 Opus 5.5 就该默认 Opus 5.5）。
+// 切厂商继承这家上次用的型号（维护者 10-11：「一切换 claude 模型就默认是 sonnet4.6」——常用 Opus 5.5 就该默认 Opus 5.5）。
 // 没用过这家才回厂商默认；Claude 的厂商默认也换成了当前主力 Opus 5.5。
 import assert from "node:assert/strict";
 import fs from "node:fs";

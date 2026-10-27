@@ -1,16 +1,16 @@
-// 本地聊天缓存（IndexedDB）——连不上服务器时也能浏览历史聊天。
+// 本地聊天缓存（IndexedDB）——让 apk 离线（连不上 PC）也能浏览历史聊天，类似微信本地存档。
 //
 // 写入：在线成功拿到会话列表 / 单会话消息 / 一轮对话结束时，把快照写进 IndexedDB。
 // 读出：① 离线（fetch 失败）时从缓存取，UI 照常渲染（只读）；
 //      ② 在线也【缓存优先】：列表/会话先用本地快照秒出，网络返回有变化再替换
-//        （stale-while-revalidate——网络往返不再挡在用户和内容之间）。
-// 范围：文本 / 工具 / 思考 / 工作流结构都缓存；离线时图片等附件无法从服务器加载（显示占位），
-//   但对话文本与结构完整。
+//        （stale-while-revalidate——隧道往返 ~1s 不再挡在用户和内容之间）。
+// 范围：文本 / 工具 / 思考 / 工作流结构都缓存；媒体段缓存的是引用 id —— 离线时图片/视频/音频
+//   无法从 PC 加载（显示占位），但对话文本与结构完整。媒体 blob 离线缓存可作为后续增强。
 // 存储用 IndexedDB（容量远大于 localStorage 的 ~5MB，适合多会话长对话）。
 
 const DB = 'bridge-chat-cache';
 const VER = 1;
-const MESSAGE_PREFIXES = ['msg:'];
+const MESSAGE_PREFIXES = ['msg:', 'vmsg:'];
 const MAX_MESSAGE_ENTRIES = 100;
 const MAX_MESSAGE_BYTES = 48 * 1024 * 1024; // 每个聊天源约 48 MiB，保留最近写入的正文
 let dbp = null;
@@ -151,7 +151,20 @@ export const getCachedMessages = (id) => get('msg:' + id);
 export const getCachedMessagesMeta = (id) => getMeta('msg:' + id);
 export const removeCachedMessages = (id) => remove('msg:' + id);
 
-// 启动即预热 DB 连接：手机浏览器冷启的 indexedDB.open 可到几百 ms，提前开好，
+// —— Vertex (Gemini)：会话列表 + 单会话消息（vchat.messages 渲染态快照）——
+export const cacheVertexSessions = (list) => put('vsessions', snap(list));
+export const getCachedVertexSessions = () => get('vsessions');
+export const cacheVertexMessages = (id, messages) => put('vmsg:' + id, snap(messages));
+export const getCachedVertexMessages = (id) => get('vmsg:' + id);
+export const getCachedVertexMessagesMeta = (id) => getMeta('vmsg:' + id);
+export const removeCachedVertexMessages = (id) => remove('vmsg:' + id);
+
+// 启动即预热 DB 连接：Android WebView 冷启的 indexedDB.open 可到几百 ms，提前开好，
 // 首次「拉抽屉读缓存」不吃这笔开销。模块顶层跑一次，失败静默（open 内部已 try）。
 try { open(); } catch {}
 scheduleMessageTrim();
+
+// —— 登录态：小数据，且在主页启动时写入(此刻主页折射动画可能占满主线程、拖慢 IndexedDB 异步回调)，
+//    故用【同步】的 localStorage 更稳妥——保证离线放行一定能拿到身份，不被主页动画饿死。
+export const cacheMe = (me) => { try { localStorage.setItem('bridge-cache-me', JSON.stringify(me)); } catch {} };
+export const getCachedMe = () => { try { const s = localStorage.getItem('bridge-cache-me'); return s ? JSON.parse(s) : null; } catch { return null; } };

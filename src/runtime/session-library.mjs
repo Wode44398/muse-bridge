@@ -1,4 +1,4 @@
-// Claude 分页会话「收藏 + 自定义标题」（sidecar，2026-10-11 起跨设备同步）。
+// Claude 分页会话「收藏 + 自定义标题」（sidecar，2026-10-11 维护者要求跨设备同步）。
 //
 // 以前两样都只存在前端 localStorage（bridge-stars / bridge-titles）——换台设备收藏夹就空了。
 // 现在按身份数据目录（ctx.dataDir）落 claude-session-library.json，多用户互不可见：

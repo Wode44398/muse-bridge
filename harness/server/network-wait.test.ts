@@ -1,7 +1,9 @@
-// R3（#39）：连接失败分账——零字节的连接失败不消耗重试次数，等网络回来。
+// R3（#39）：连接失败分账——零字节的连接失败不消耗重试次数，等网络回来；本机模型区分「没启动」和「加载中」。
+// 改写自探针 04-codex/笔记/probe-network-blip.ts。
 //
 // 修前：连接都没建立（fetch failed / ECONNREFUSED）与流到一半断共用每步 4 次尝试、0.5→1→2s 退避，出口断开
-// 3.5 秒以上整轮就以 stream failed 结束；net-proxy 的自愈周期却是 60 秒。
+// 3.5 秒以上整轮就以 stream failed 结束；net-proxy 的自愈周期却是 60 秒。本机 llama-server 加载期的 503 也
+// 按 4 次计数，模型 30–60 秒的加载期里整轮先死。
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -10,7 +12,7 @@ import path from "node:path";
 import test, { after, beforeEach } from "node:test";
 import { AgentState } from "./agent/state.ts";
 import { RETRY_ATTEMPTS, runAgent } from "./agent/loop.ts";
-import { isConnectFailure } from "./agent/netwait.ts";
+import { isConnectFailure, setLocalModelProbe } from "./agent/netwait.ts";
 import type { AgentEvent, StreamEvent } from "./agent/events.ts";
 import type { ProviderAdapter, ProviderId } from "./providers/types.ts";
 import { Sandbox } from "./sandbox.ts";
@@ -21,8 +23,10 @@ after(() => fs.rmSync(ws, { recursive: true, force: true }));
 beforeEach(() => {
   // 等待的节奏调快几十倍，逻辑不变
   process.env.DIMENSIO_NET_WAIT_BASE_MS = "20";
+  process.env.DIMENSIO_LOCAL_WAIT_BASE_MS = "20";
   process.env.DIMENSIO_RETRY_SCALE = "0.001"; // R8 的按次重试退避同样调快
   delete process.env.DIMENSIO_NET_WAIT_MS;
+  delete process.env.DIMENSIO_LOCAL_LOAD_WAIT_MS;
 });
 
 const caps = { contextWindow: 100_000, maxOutputTokens: 1000, thinking: false, image: false, video: false, cache: false, parallelToolCalls: false };
@@ -107,6 +111,25 @@ test("流到一半断（已经有字节）仍按次数重试，不进入无限�
   const end = lastOf(await run(adapter));
   assert.equal(end?.e, "error");
   assert.equal(adapter.calls, RETRY_ATTEMPTS);
+});
+
+test("本机模型没启动：立刻明说，不干等", async () => {
+  setLocalModelProbe(async () => "off");
+  const adapter = adapterOf("local", () => "refuse");
+  const end = lastOf(await run(adapter));
+  assert.equal(end?.e, "error");
+  assert.match(end.e === "error" ? end.message : "", /本机模型没有启动/);
+  assert.equal(adapter.calls, 1);
+});
+
+test("本机模型加载中（503 / 端口还没绑上）：等它就绪，不算失败", async () => {
+  setLocalModelProbe(async () => "starting");
+  const adapter = adapterOf("local", (n) => (n < 3 ? "refuse" : n < 6 ? "503" : "ok"));
+  const events = await run(adapter);
+  const end = lastOf(events);
+  assert.equal(end?.e, "done", JSON.stringify(end));
+  assert.equal(adapter.calls, 7);
+  assert.ok(events.some((e) => e.e === "context" && e.waiting === "local_model"));
 });
 
 test("连接失败的判别：只认 fetch 本身被拒的系统错误码", () => {

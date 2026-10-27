@@ -1,6 +1,6 @@
 import path from 'node:path';
 import {
-  createWriteStream, statSync, readdirSync, existsSync, renameSync, rmSync,
+  createWriteStream, statSync, existsSync, renameSync, rmSync,
   mkdirSync, cpSync, readFileSync, writeFileSync, openSync, closeSync,
 } from 'node:fs';
 import { pipeline } from 'node:stream';
@@ -9,6 +9,7 @@ import { requireCtx, requireReadCtx } from '../runtime/identity.mjs';
 import { readBody } from '../runtime/body.mjs';
 import { sanitizeName, sweepStaleParts } from '../runtime/paths.mjs';
 import { safeJoin, isPathInside, withinRoot } from '../runtime/http-file.mjs';
+import { recyclePaths } from '../runtime/recycle.mjs';
 import { authorizeProjectPath } from '../project-paths.mjs';
 
 export const bad = (res, code, msg) => {
@@ -465,6 +466,13 @@ export async function handleNewFile(req, res, identify) {
   okJson(res, { ok: true, name });
 }
 
+// 删除有两种语义：
+//   · 缺省＝永久删除（rmSync）。身份工作空间里一直如此（vault 有 git 台账兜底）。
+//   · trash:true＝送进 Windows 回收站，可在电脑上还原（见 runtime/recycle.mjs）。手机工作空间在
+//     「电脑位置」（整机任意目录）里删东西走这条，与桌面版的 shell.trashItem 同一语义。只给 admin：
+//     回收站是宿主账户（主机管理员）自己的，不该收别的账号的文件；电脑位置也只有 admin 拿得到。
+//     可带 paths:[…] 一次删多项——每次回收都要起一个 PowerShell，多选删除必须合成一次。
+//     回应恒为 JSON：{ ok, results:[{ path, ok, error? }] }，全部失败时状态码 500 并带 error。
 export async function handleDelete(req, res, identify) {
   let ctx = requireCtx(identify, req, res);
   if (!ctx) return;
@@ -472,11 +480,40 @@ export async function handleDelete(req, res, identify) {
   try { body = JSON.parse(await readBody(req)); } catch { return bad(res, 400, 'bad json'); }
   ctx = scopeCtx(ctx, body.ws, res);
   if (!ctx) return;
+  if (body.trash) return trashTargets(ctx, body, res);
   const target = safeJoin(ctx.cwd, String(body.path || ''));
   if (!target || target === path.resolve(ctx.cwd) || protectedTarget(ctx.cwd, target, ctx)) return bad(res, 403, 'forbidden');
   if (!existsSync(target)) return bad(res, 404, 'not found');
   try { rmSync(target, { recursive: true, force: true }); } catch { return bad(res, 500, 'delete error'); }
   okJson(res, { ok: true });
+}
+
+async function trashTargets(ctx, body, res) {
+  if (ctx.kind !== 'admin') return okJson(res, { error: '只有管理员能把文件移到电脑的回收站' }, 403);
+  const rels = (Array.isArray(body.paths) ? body.paths : [body.path]).map((rel) => String(rel || ''));
+  if (!rels.length || rels.length > 500) return okJson(res, { error: '要删除的项数不对' }, 400);
+  const targets = [];
+  for (const rel of rels) {
+    const target = safeJoin(ctx.cwd, rel);
+    // 位置根自己不许删（盘根送回收站没有意义，还会被当成「把整个盘清空」）
+    if (!rel || !target || target === path.resolve(ctx.cwd) || protectedTarget(ctx.cwd, target, ctx)) {
+      return okJson(res, { error: '不能删除这一项' }, 403);
+    }
+    targets.push(target);
+  }
+  const results = rels.map((rel, index) => (existsSync(targets[index]) ? null : { path: rel, ok: false, error: '不存在' }));
+  const live = results.flatMap((result, index) => (result ? [] : [index]));
+  if (live.length) {
+    let out;
+    try { out = await recyclePaths(live.map((index) => targets[index])); }
+    catch (error) { return okJson(res, { error: error?.message || '回收站调用失败' }, 500); }
+    live.forEach((index, k) => {
+      results[index] = out[k].ok ? { path: rels[index], ok: true } : { path: rels[index], ok: false, error: out[k].error };
+    });
+  }
+  const failed = results.filter((result) => !result.ok);
+  if (failed.length === results.length) return okJson(res, { ok: false, error: failed[0].error, results }, 500);
+  okJson(res, { ok: failed.length === 0, results });
 }
 
 export async function handleRename(req, res, identify) {

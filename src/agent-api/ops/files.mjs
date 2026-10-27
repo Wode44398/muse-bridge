@@ -181,17 +181,19 @@ defineOp({
 
 defineOp({
   name: 'files.delete', title: '删除文件或文件夹',
-  desc: 'Muse Bridge 跑在 Linux 上，没有回收站：删除一律是永久删除、找不回来（返回的 recoverable 恒为 false）。删之前先征得用户同意。',
+  desc: '服务端跑在 Windows 上时，主机身份删的东西送进那台电脑的回收站（能在电脑上还原）；Linux / Docker 服务端没有回收站，成员也一样，都是永久删除、找不回来。返回的 recoverable 说明这次能不能恢复。删之前先征得用户同意。',
   access: 'danger',
   params: { path: { type: 'string', required: true }, ws: WS },
   handler: async (ctx, args, env) => {
     const rel = norm(args.path);
     if (!rel) throw new OpError('bad_args', '不能删工作空间根');
-    const r = await internalRequest(env.identity, 'POST', '/api/files/delete', withWs(args, { path: rel }), { timeoutMs: 120_000 });
+    // 回收站只有 Windows 有实现（runtime/recycle.mjs），而且只收主机身份的文件；其余一律永久删除
+    const trash = ctx.kind === 'admin' && process.platform === 'win32';
+    const r = await internalRequest(env.identity, 'POST', '/api/files/delete', withWs(args, trash ? { paths: [rel], trash: true } : { path: rel }), { timeoutMs: 120_000 });
     if (r.status !== 200 || (r.json && r.json.ok === false)) {
       if (r.json?.error) throw new OpError(r.status === 403 ? 'forbidden' : 'failed', '删除：' + r.json.error);
       fail(r, '删除');
     }
-    return { path: rel, deleted: true, recoverable: false };
+    return { path: rel, deleted: true, recoverable: trash };
   },
 });

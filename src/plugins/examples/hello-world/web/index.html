@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>你好世界 · 示例插件</title>
+<style>
+  :root { color-scheme: light dark; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bp-bg, Canvas); color: var(--bp-text, CanvasText); }
+  main { width: min(420px, 90vw); }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+  p { margin: 0 0 20px; opacity: .65; font-size: 14px; line-height: 1.6; }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; padding: 9px 12px; border-radius: 9px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); background: transparent; color: inherit; font: inherit; }
+  button { padding: 9px 16px; border-radius: 9px; border: 0; background: CanvasText; color: Canvas; font: inherit; cursor: pointer; }
+  output { display: block; margin-top: 18px; font-size: 22px; min-height: 1.4em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>你好世界</h1>
+  <p>插件页面放在插件目录的 web/ 里，由 bridge 在 /plugins/&lt;id&gt;/web/ 下提供。页面跑在不透明源里（碰不到 bridge 的登录态），调插件自己的接口用 SDK 的 bridge.json。</p>
+  <form id="f"><input id="n" placeholder="名字" value="小明"><button>打招呼</button></form>
+  <output id="o"></output>
+</main>
+<script type="module">
+  import { bridge } from '/plugins/_sdk/bridge-plugin.js';
+  const f = document.getElementById('f');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    try { document.getElementById('o').textContent = (await bridge.json('greet?name=' + encodeURIComponent(document.getElementById('n').value))).text; }
+    catch (err) { document.getElementById('o').textContent = err.message; }
+  };
+</script>
+</body>
+</html>

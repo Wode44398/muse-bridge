@@ -29,6 +29,7 @@ export const cs = $state({
   shell: cached?.shell ?? true,
   permissionModes: cached?.permissionModes || [...PERMISSION_MODES_SANDBOX],
   outputStyles: cached?.outputStyles || [...BUILTIN_OUTPUT_STYLES],
+  unsupported: Array.isArray(cached?.unsupported) ? cached.unsupported : [],   // 这台服务端做不到的项（老服务端不给 = 都做得到）
   device: { ...deviceDefaults, ...load(LS_DEVICE, {}) },
   busy: false,
   err: '',
@@ -37,7 +38,7 @@ let rev = Number.isFinite(cached?.rev) ? cached.rev : -1;
 let inflight = 0;
 
 const saveCache = () => {
-  try { localStorage.setItem(LS_CACHE, JSON.stringify({ who: whoNow(), rev, values: cs.values, admin: cs.admin, shell: cs.shell, permissionModes: cs.permissionModes, outputStyles: cs.outputStyles })); } catch {}
+  try { localStorage.setItem(LS_CACHE, JSON.stringify({ who: whoNow(), rev, values: cs.values, admin: cs.admin, shell: cs.shell, permissionModes: cs.permissionModes, outputStyles: cs.outputStyles, unsupported: cs.unsupported })); } catch {}
 };
 
 function adopt(s) {
@@ -46,6 +47,7 @@ function adopt(s) {
   cs.shell = !!s.shell;
   if (Array.isArray(s.permissionModes)) cs.permissionModes = s.permissionModes;
   if (Array.isArray(s.outputStyles) && s.outputStyles.length) cs.outputStyles = s.outputStyles;
+  cs.unsupported = Array.isArray(s.unsupported) ? s.unsupported : [];
   cs.ok = true;
   rev = Number.isFinite(s.rev) ? s.rev : 0;
   saveCache();

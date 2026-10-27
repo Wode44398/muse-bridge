@@ -1,0 +1,6 @@
+{
+  "id": "dimensio",
+  "label": "dimensio",
+  "version": "dev",
+  "entry": "server/index.mjs"
+}

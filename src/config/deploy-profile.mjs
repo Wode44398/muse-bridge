@@ -106,7 +106,7 @@ export function resolveDeployProfile({ env = process.env, platform = process.pla
   // 给谁用（决定 features.multiUser 的默认值）
   let audienceDefault, audienceSource;
   const envAudience = normalizeAudience(env.BRIDGE_AUDIENCE);
-  // BRIDGE_EDITION 只认 server / host 这两个值（其它值不算数）
+  // BRIDGE_EDITION 现在也表示发行渠道（public / private，见 modules/registry.mjs）——只有 server / host 这两个老值在这里算数
   const edition = str(env.BRIDGE_EDITION || cfg.edition);
   if (envAudience) { audienceDefault = envAudience; audienceSource = 'env'; }
   else if (edition === 'server') { audienceDefault = 'shared'; audienceSource = 'edition'; }
@@ -126,6 +126,11 @@ export function resolveDeployProfile({ env = process.env, platform = process.pla
   else if (legacy) { listenHost = '0.0.0.0'; listenSource = 'legacy'; }
   else { listenHost = base.listenHost; listenSource = 'profile'; }
 
+  // 前端的「电脑 / 服务器」措辞（/api/auth 的 hosting：'host' | 'server'，断线提示等据此换说法；2026-10-27，Muse 同步第 24 条）。
+  // 显式声明了形态（BRIDGE_DEPLOY / config.json 的 deploy）就照形态；没声明时 Windows 一律算自己的电脑（计划任务启动器托管的
+  // 也多半是日常用的电脑，提示里「可能睡眠、关机」说得对），其余按形态：desktop → host，server / docker → server。
+  const hosting = (source === 'env' || source === 'config' || platform !== 'win32') && profile !== 'desktop' ? 'server' : 'host';
+
   const keepAwake = profile === 'docker' ? 'none'
     : platform === 'win32' ? 'windows'
       : platform === 'linux' ? 'inhibit'
@@ -139,6 +144,7 @@ export function resolveDeployProfile({ env = process.env, platform = process.pla
     listenHost, listenSource,
     claudeInChromeDefault: profile === 'desktop' && platform === 'win32',
     keepAwake,
+    hosting,
     label: PROFILE_LABEL[profile],
     labelEn: PROFILE_LABEL_EN[profile],
     sourceLabel: SOURCE_LABEL[source] || source,

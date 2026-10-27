@@ -1,0 +1,119 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   bridge 桌面形态设计令牌（批1 基座）。
+   与手机端 app.css 的 --bg/--card 等旧令牌完全独立：全部 --dsk- 前缀 +
+   scoped 到 html[data-desktop="1"]（手机/网页永不匹配，零成本零污染；
+   也规避「嵌入宿主的子应用 CSS 禁裸 :root」那课）。
+   暗色为默认，html[data-theme="light"] 提供完整第二主题。
+   组件规则：桌面组件只允许引用这里的令牌，禁止硬编码颜色/圆角/时长。
+   ═══════════════════════════════════════════════════════════════════════ */
+
+html[data-desktop="1"] {
+  /* —— 字阶（品牌字体走 app.css 的 --font-brand-sans，私有 overlay 可换；字号桌面梯，默认 UI 13px）—— */
+  --dsk-font: var(--font-brand-sans), system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  --dsk-fs-caption: 11px;   /* 组标签 / 脚注 */
+  --dsk-fs-sm: 12px;        /* 次要说明 */
+  --dsk-fs-ui: 13px;        /* 控件 / 行标题（桌面默认） */
+  --dsk-fs-body: 14px;      /* 正文 */
+  --dsk-fs-md: 15px;        /* 强调行 */
+  --dsk-fs-lg: 17px;        /* 小标题 */
+  --dsk-fs-title: 21px;     /* 面板标题 */
+  --dsk-fs-hero: 27px;      /* 页面大标题 */
+
+  /* —— 间距（4pt 梯）—— */
+  --dsk-s1: 4px; --dsk-s2: 8px; --dsk-s3: 12px; --dsk-s4: 16px;
+  --dsk-s5: 20px; --dsk-s6: 24px; --dsk-s7: 32px; --dsk-s8: 40px;
+
+  /* —— 圆角梯（告别单一 16px）—— */
+  --dsk-r-xs: 6px;   /* 小控件（field / 小按钮） */
+  --dsk-r-sm: 9px;   /* 按钮 / segmented */
+  --dsk-r-md: 12px;  /* 弹出层 / 行内卡 */
+  --dsk-r-lg: 16px;  /* 分组卡 */
+  --dsk-r-xl: 22px;  /* 面板 / 大卡 */
+  --dsk-r-full: 999px;
+
+  /* —— 尺寸 —— */
+  --dsk-row-h: 38px;   /* 设置行 */
+  --dsk-ctl-h: 28px;   /* 标准控件高 */
+  --dsk-titlebar: 40px;
+
+  /* —— 颜色（暗色默认）—— */
+  --dsk-bg: #171716;
+  --dsk-bg-raised: #201f1e;
+  --dsk-panel: rgba(255, 255, 255, .055);
+  --dsk-panel-strong: rgba(255, 255, 255, .09);
+  --dsk-ink: #f5f5f2;
+  --dsk-ink-2: rgba(245, 245, 242, .62);
+  --dsk-ink-3: rgba(245, 245, 242, .40);
+  --dsk-line: rgba(255, 255, 255, .075);
+  --dsk-line-strong: rgba(255, 255, 255, .15);
+  --dsk-hover: rgba(255, 255, 255, .06);
+  --dsk-active: rgba(255, 255, 255, .10);
+  --dsk-sel: rgba(217, 119, 87, .16);
+  --dsk-accent: #d97757;
+  --dsk-accent-hover: #e0835f;
+  --dsk-accent-ink: #ffffff;
+  --dsk-ok: #5aa468; --dsk-warn: #d9a441; --dsk-crit: #d96a5a;
+  --dsk-ctl: rgba(255, 255, 255, .14);        /* switch 关轨 / slider 余轨 */
+  --dsk-knob: #ffffff;
+
+  /* —— 材质（DOM 假玻璃：半透填充 + 发丝描边 + 顶部内高光；真折射归批2引擎）—— */
+  --dsk-glass-fill: rgba(32, 31, 30, .58);
+  --dsk-glass-stroke: rgba(255, 255, 255, .13);
+  --dsk-glass-hi: rgba(255, 255, 255, .10);
+  /* 设置页侧栏（macOS Tahoe 式半透明磨砂列）：底色 + 模糊量。整页唯一 backdrop 载体。 */
+  --dsk-sidebar-bg: rgba(26, 25, 24, .52);
+  --dsk-sidebar-blur: blur(52px) saturate(1.5);
+
+  /* —— 层级投影 —— */
+  --dsk-sh-1: 0 1px 2px rgba(0, 0, 0, .28), 0 0 0 1px var(--dsk-line);
+  --dsk-sh-2: 0 10px 28px rgba(0, 0, 0, .38), 0 2px 6px rgba(0, 0, 0, .24), 0 0 0 1px var(--dsk-line-strong);
+  --dsk-sh-3: 0 28px 72px rgba(0, 0, 0, .5), 0 6px 18px rgba(0, 0, 0, .3), 0 0 0 1px var(--dsk-line-strong);
+
+  /* —— 动效 —— */
+  --dsk-t-fast: 110ms;
+  --dsk-t-med: 190ms;
+  --dsk-t-slow: 280ms;
+  --dsk-ease: cubic-bezier(.2, .8, .2, 1);
+  --dsk-ease-out: cubic-bezier(.05, .7, .1, 1);
+  --dsk-ease-spring: cubic-bezier(.32, 1.36, .4, 1);
+
+  /* —— 焦点环（键盘可达性统一走这一个）—— */
+  --dsk-focus: 0 0 0 2px color-mix(in srgb, var(--dsk-accent) 85%, transparent);
+}
+
+html[data-desktop="1"][data-theme="light"] {
+  --dsk-bg: #f2f2ef;
+  --dsk-bg-raised: #ffffff;
+  --dsk-panel: rgba(255, 255, 255, .82);
+  --dsk-panel-strong: #ffffff;
+  --dsk-ink: #191918;
+  --dsk-ink-2: rgba(25, 25, 24, .60);
+  --dsk-ink-3: rgba(25, 25, 24, .38);
+  --dsk-line: rgba(25, 25, 24, .08);
+  --dsk-line-strong: rgba(25, 25, 24, .16);
+  --dsk-hover: rgba(25, 25, 24, .05);
+  --dsk-active: rgba(25, 25, 24, .09);
+  --dsk-sel: rgba(217, 119, 87, .13);
+  --dsk-ctl: rgba(25, 25, 24, .16);
+  --dsk-glass-fill: rgba(255, 255, 255, .62);
+  --dsk-glass-stroke: rgba(255, 255, 255, .55);
+  --dsk-glass-hi: rgba(255, 255, 255, .65);
+  --dsk-sidebar-bg: rgba(242, 242, 239, .58);
+  --dsk-sidebar-blur: blur(52px) saturate(1.7);
+  --dsk-sh-1: 0 1px 2px rgba(25, 25, 24, .07), 0 0 0 1px var(--dsk-line);
+  --dsk-sh-2: 0 10px 28px rgba(25, 25, 24, .14), 0 2px 6px rgba(25, 25, 24, .08), 0 0 0 1px var(--dsk-line);
+  --dsk-sh-3: 0 28px 72px rgba(25, 25, 24, .22), 0 6px 18px rgba(25, 25, 24, .10), 0 0 0 1px var(--dsk-line);
+}
+
+/* —— 全局工具提示（use:tooltip action 创建的浮层是脱离组件树的单例，样式只能放全局；
+      dsk- 前缀 + 仅 action 会挂这个类，不影响任何既有样式）—— */
+.dsk-tip {
+  position: fixed; z-index: 4000; pointer-events: none;
+  max-width: 260px; padding: 5px 9px; border-radius: var(--dsk-r-xs, 6px);
+  background: var(--dsk-bg-raised, #2a2a28); color: var(--dsk-ink, #f5f5f2);
+  font-family: var(--dsk-font, system-ui); font-size: var(--dsk-fs-sm, 12px); line-height: 1.45;
+  box-shadow: var(--dsk-sh-2, 0 10px 28px rgba(0, 0, 0, .38));
+  opacity: 0; transform: translateY(3px);
+  transition: opacity var(--dsk-t-fast, 110ms) ease, transform var(--dsk-t-fast, 110ms) ease;
+}
+.dsk-tip.show { opacity: 1; transform: none; }

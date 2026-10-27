@@ -10,11 +10,7 @@ export function langPref(): "zh" | "en" {
   try {
     const q = new URLSearchParams(location.search).get("lang");
     if (q === "zh" || q === "en") return q;
-    const v = localStorage.getItem(KEY);
-    if (v === "en" || v === "zh") return v;
-    // 没存过偏好时跟浏览器走：语言列表里有中文就用中文，否则英文（与 bridge 的 web/src/lib/i18n.js 同一规则）
-    const langs = navigator.languages?.length ? navigator.languages : [navigator.language || ""];
-    return langs.some((l) => /^zh/i.test(l)) ? "zh" : "en";
+    return localStorage.getItem(KEY) === "en" ? "en" : "zh";
   } catch {
     return "zh";
   }

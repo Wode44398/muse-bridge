@@ -1,9 +1,10 @@
-// Capability catalog (Claude models / efforts). Fetched once on boot from
+// Capability catalog (models / efforts / media options). Fetched once on boot from
 // /api/capabilities — the server's single source of truth (src/config/capabilities.mjs).
 // Falls back to a server-injected window.__CAPS__ if present.
 import { api } from './api.js';
-// 编译期兜底：直接 import 后端那份单一真相（同一个 capabilities.mjs）。fetch /api/capabilities
-// 万一失败（网络抖动 / 任意原因）也有一份完整列表，不至于整个模型 UI 空白。零漂移——和后端同一文件。
+// 编译期兜底：直接 import 后端那份单一真相（同一个 capabilities.mjs）。在线壳/dev 走
+// window.__CAPS__ 注入；离线 apk 退回 fetch /api/capabilities，万一失败（网络抖动 / 旧
+// 后端鉴权 / 任意原因）也有一份完整列表，不至于整个模型 UI 空白。零漂移——和后端同一文件。
 import { CAPABILITIES, claudeDefaultEffort } from '../../../src/config/capabilities.mjs';
 
 export async function loadCaps() {
@@ -23,6 +24,10 @@ export function claudeDefaultModel(capsData) {
 // 读后端 capabilities 的 effortDefaults（caps 未到位或旧后端没这张表时退回编译期同源那份）。
 export function claudeEffortFallback(capsData, model) {
   return claudeDefaultEffort(model || claudeDefaultModel(capsData), capsData?.claude?.effortDefaults ? capsData : CAPABILITIES);
+}
+
+export function codexCapabilities(capsData) {
+  return capsData?.codex || CAPABILITIES.codex;
 }
 
 // Claude model list split for the picker: a short primary list + the rest behind

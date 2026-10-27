@@ -1,7 +1,7 @@
 <script lang="ts">
   // 输入框：一张浮起的卡，与对话列同宽同中线，钉在底部（离底 14px + 安全区；手机软键盘弹起时贴住键盘上沿）。
   //  · 卡里从上到下：回应卡片的说明 / 目标模式的选项 · 附件芯片 · 文本域 · 底行
-  //  · 底行：左 = ＋附件 · 档位胶囊（运行档位 / 访问范围 / 离开 / 目标，09-26 把目标并进来）；
+  //  · 底行：左 = ＋附件 · 档位胶囊（运行档位 / 访问范围 / 离开 / 目标，维护者 09-26 把目标并进来）· 本机模型胶囊；
   //    右 = 型号胶囊（厂商小标 + 型号 + 思考档）· 发送键
   //  · 卡的高度随内容平滑生长（smoothHeight；内容贴底——长高时从上沿露出来，底行和发送键原地不动）
   //  · 菜单（型号 / 档位 / 本机）渲染在卡外（G3）；斜杠面板从卡的上沿浮出、与卡同宽
@@ -50,6 +50,9 @@
   import DropOverlay from "./DropOverlay.svelte";
   import ModelMenu from "./ModelMenu.svelte";
   import ModeMenu from "./ModeMenu.svelte";
+  import LocalAiChip from "./LocalAiChip.svelte";
+  import DeviceChip from "./DeviceChip.svelte";
+  import LocalAiMenu from "./LocalAiMenu.svelte";
 
   // 分屏：这一格的会话（没分屏 = app.chat）。显示一律认它；动作走 state 里的函数（作用于 app.chat）——点进这一格、焦点
   // 落进这一格时它先成为 app.chat（ChatPane 捕获阶段挪焦点），所以两者此刻是同一个
@@ -90,7 +93,7 @@
     };
   });
 
-  // 没有调用方（首页示例已去掉，不要加回），留着无害
+  // 没有调用方（首页示例已去掉，维护者说别加回），留着无害
   export function fill(text: string) {
     pane.chat.draft = text;
     ta?.focus();
@@ -191,10 +194,12 @@
   );
   const modeText = $derived(chipState.text);
   const modeAlt = $derived(chipState.alt);
+  const isLocal = $derived((pane.chat.cfg?.provider ?? app.config?.provider) === "local");
 
   // ── 菜单（锚点 = 点开它的那颗胶囊；再点一次收起）─────────────────────────────────────────
   let modelAnchor = $state<HTMLElement | null>(null);
   let modeAnchor = $state<HTMLElement | null>(null);
+  let localAnchor = $state<HTMLElement | null>(null);
   function toggleModel(e: MouseEvent) {
     haptic("light");
     modelAnchor = modelAnchor ? null : (e.currentTarget as HTMLElement);
@@ -203,6 +208,13 @@
     haptic("light");
     modeAnchor = modeAnchor ? null : (e.currentTarget as HTMLElement);
   }
+  function toggleLocal(e: MouseEvent) {
+    localAnchor = localAnchor ? null : (e.currentTarget as HTMLElement);
+  }
+  // 换到别家（或切到别的会话）之后本机胶囊没了：它的面板别悬在一个已经不在的锚点上
+  $effect(() => {
+    if (!isLocal) localAnchor = null;
+  });
   function openAttach() {
     haptic("light");
     app.sheet = "attach";
@@ -491,6 +503,11 @@
                 onclick={toggleMode}
               />
             </span>
+            {#if isLocal}
+              <span class="ctl"><LocalAiChip {compact} open={Boolean(localAnchor)} onclick={toggleLocal} /></span>
+            {/if}
+            <!-- 这个会话连哪台电脑（没登记设备 / 没接上 bridge 设备通道时整颗不出现，外层 span 是空的） -->
+            <span class="ctl"><DeviceChip {compact} /></span>
           </div>
           <div class="tail">
             {#if app.config}
@@ -531,6 +548,9 @@
 {/if}
 {#if modeAnchor}
   <ModeMenu anchor={modeAnchor} onclose={() => (modeAnchor = null)} goal={goalOk ? { on: goalOn, toggle: toggleGoal } : null} />
+{/if}
+{#if localAnchor}
+  <LocalAiMenu anchor={localAnchor} onclose={() => (localAnchor = null)} />
 {/if}
 
 <style>
@@ -664,6 +684,10 @@
     display: inline-flex;
     flex: none;
     min-width: 0;
+  }
+  /* 自己决定出不出现的胶囊（电脑）没渲染时，空壳不占底行的间距 */
+  .ctl:empty {
+    display: none;
   }
   /* 型号胶囊是底行唯一会让的：地方不够时型号名先省略（档位、目标这些状态优先） */
   .mwrap {

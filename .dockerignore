@@ -1,0 +1,46 @@
+# 构建上下文只要源码，按白名单收：依赖在镜像里重装，前端在镜像里重建，运行时数据与凭据一律不进镜像。
+# 用白名单而不是黑名单：源码直跑的主机「数据根 == 程序目录」，仓库根下满是 config.json、会话、设备、日志、
+# 安装包……黑名单漏一个就把凭据打进了镜像（发到镜像仓库就等于公开）。新加的顶层目录要进镜像，记得在这里放行。
+*
+!src
+!web
+!harness
+!modules
+!public
+!scripts
+!docker
+!package.json
+!package-lock.json
+!LICENSE
+!NOTICE
+!THIRD_PARTY_NOTICES.md
+!README*.md
+
+# dimensio（harness/）在程序目录里跑时把运行时数据与凭据写在自己目录里（.env 及其备份、会话、记忆、知识库、工作区、
+# 自定义服务、UI 测试会话、tmp……），而且还会继续多出新名字——harness 下面同样按白名单收，只要源码与依赖清单。
+# 运行时数据在镜像里由 DIMENSIO_DATA_DIR 等环境变量改落到 /data/dimensio（见 Dockerfile）。
+harness/*
+!harness/server
+!harness/web
+!harness/tools
+!harness/edge-extension
+!harness/package.json
+!harness/package-lock.json
+!harness/tsconfig.json
+
+# 白名单目录里也不要的：依赖与构建产物（镜像里重新装、重新构建）、本机环境与备份
+**/node_modules
+public/app
+harness/web/dist
+web/dist
+harness/tools/**/venv
+harness/tools/**/__pycache__
+**/.env
+**/.env.*
+**/*.bak
+**/*.bak-*
+**/*.bak.*
+**/*.apk
+**/*.log
+**/*.log.*
+**/*.heapsnapshot

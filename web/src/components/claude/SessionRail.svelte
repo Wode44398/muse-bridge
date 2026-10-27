@@ -6,7 +6,7 @@
   // 数据：环境 = 项目 + 工作台 meta（分支 / worktree）；上下文 = 用量圆环同一份；连接器 = 每轮 init 帧的
   // MCP 状态；输出内容 = 服务端按 transcript 推算（/api/claude/session-rail）；更改 = 审阅面板那份 git diff。
   // 官方还有一行 Remote Control 开关——它要全权限登录，bridge 的推理令牌开不了，不摆。
-  import { session, status, ui } from '../../lib/state.svelte.js';
+  import { session, status, ui, pluginOn } from '../../lib/state.svelte.js';
   import { dock, toggleDockView, openDockFiles, ensureDockMeta } from '../../lib/dock.svelte.js';
   import { chat, send, queueSend, mcpState, openSession } from '../../lib/chat.svelte.js';
   import { REL_LABEL } from '../../lib/sessionFamily.svelte.js';
@@ -117,7 +117,7 @@
   // —— 连接器 ——
   const servers = $derived((mcpState.bySession[sid]?.servers) || railData.mcp?.servers || []);
   const needFix = $derived(servers.filter((s) => s.status === 'failed' || s.status === 'needs-auth'));
-  const STATUS_TXT = { failed: t('重新连接'), 'needs-auth': t('需要登录'), pending: t('连接中…'), disabled: t('已停用'), connected: t('已连接') };
+  const STATUS_TXT = { failed: '重新连接', 'needs-auth': '需要登录', pending: '连接中…', disabled: '已停用', connected: '已连接' };
   const connSummary = $derived(needFix.length ? t('{n} 项待重新连接', { n: needFix.length }) : t('{n} 个已连接', { n: servers.length }));
   const connList = $derived([...needFix, ...servers.filter((s) => !needFix.includes(s))].slice(0, 3));
 
@@ -142,7 +142,7 @@
 
   // —— 更改 ——
   const hasChanges = $derived(review.add > 0 || review.del > 0);
-  const COMMIT_MSG = t('把工作区的改动提交，写一条合适的提交说明。');
+  const COMMIT_MSG = '把工作区的改动提交，写一条合适的提交说明。';
   function commitChanges() {
     if (!hasChanges || !sid) return;
     // 官方「Commit changes」= 以用户身份给 Claude 发一条消息让它自己提交；工作中就排进队列
@@ -216,7 +216,7 @@
                   <span class="rr-txt">{r.title || r.name || t('（无标题）')}</span>
                   <span class="rr-grow"></span>
                   {#if r.state === 'working'}<span class="fam-dot" aria-hidden="true"></span>{/if}
-                  <span class="rr-st">{REL_LABEL[r.relation] || REL_LABEL.linked}</span>
+                  <span class="rr-st">{t(REL_LABEL[r.relation] || REL_LABEL.linked)}</span>
                 </button>
               {/each}
             </div>
@@ -266,7 +266,7 @@
                 <div class="rr">
                   {@render ic('<path d="M9 7V4M15 7V4M7 7h10v4a5 5 0 0 1-10 0z"/><path d="M12 16v4"/>')}
                   <span class="rr-txt">{s.name}</span><span class="rr-grow"></span>
-                  <span class="rr-st" class:warn={s.status === 'failed' || s.status === 'needs-auth'}>{STATUS_TXT[s.status] || s.status}</span>
+                  <span class="rr-st" class:warn={s.status === 'failed' || s.status === 'needs-auth'}>{t(STATUS_TXT[s.status] || s.status)}</span>
                 </div>
               {/each}
               {#if servers.length > 3}<div class="rr"><span class="rr-dim small">{t('另有 {n} 个', { n: servers.length - 3 })}</span></div>{/if}
@@ -297,7 +297,7 @@
       {/if}
 
       <!-- 拉取请求（PrCard.svelte）：不是主机本人 / 不在 GitHub 仓库里时整张卡不出现 -->
-      {#if !IS_CSNAP}<PrCard {sid} />{/if}
+      {#if !IS_CSNAP && pluginOn('pr')}<PrCard {sid} />{/if}
 
       <!-- 更改 -->
       {#if review.git}

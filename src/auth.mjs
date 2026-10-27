@@ -48,9 +48,10 @@ export function createAuth(token, noAuth, { tokenHash = '', isAdminSession = nul
     return '';
   }
 
-  // ?token= 只对这些 GET 资源路径生效——<img>/<video>/下载链接加不了 Authorization 头。
-  // 全路由都收 ?token= 的话，admin 令牌会随手散进隧道访问日志/浏览器历史/Referer；收敛到真正需要的白名单。
-  const QTOKEN_PATHS = ['/api/file', '/api/upload/raw', '/api/claude/artifact'];
+  // ?token= 只对这些 GET 资源路径生效——<img>/<video>/下载链接加不了 Authorization 头、
+  // 跨源也不带 cookie，离线壳只能用查询参数携带。之前全路由都收 ?token=，admin 令牌
+  // 会随手散进 cloudflare 访问日志/浏览器历史/Referer；收敛到真正需要的白名单。
+  const QTOKEN_PATHS = ['/api/vertex/media', '/api/app/download', '/api/file', '/api/upload/raw', '/api/codex/artifact', '/api/claude/artifact'];
 
   // Raw query token only on the media/download allow-list above. identify()
   // also consumes this for ordinary user sessions; authOk uses it only for the
@@ -68,7 +69,7 @@ export function createAuth(token, noAuth, { tokenHash = '', isAdminSession = nul
   }
 
   // 取 Authorization: Bearer 的原始 token（不校验）。admin 用它比对主令牌 / 管理员会话；
-  // user 用它去 getSession——跨源客户端不带 cookie，user 会话只能靠这条 Bearer 通道。
+  // user 用它去 getSession——离线 apk 跨源不带 cookie，user 会话只能靠这条 Bearer 通道。
   function bearerToken(req) {
     const m = /^Bearer\s+(.+)$/i.exec(req.headers['authorization'] || '');
     return m ? m[1].trim() : '';

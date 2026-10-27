@@ -1,17 +1,18 @@
 // 「工作空间里的一份（或一叠）文件/文件夹」在全域拖拽里的契约：拖源怎么描述自己、落点怎么接。
 //
 // 拖源（FilesPanel / FilesDesktop）造 payload 时把三件能力一并交出来：
-//   moveInto(destRel)   —— 把整叠搬进【同一个文件系统作用域】里的某个目录（落点不关心细节），
-//                          逐项进行、汇总成 { ok, moved, failed, error }
+//   moveInto(destRel)   —— 把整叠搬进【同一个文件系统作用域】里的某个目录（云端/手机本地/桌面原生
+//                          各自实现，落点不关心细节），逐项进行、汇总成 { ok, moved, failed, error }
 //   materials(direct)   —— 整叠变成「发给 AI」的素材数组（走 /api/files/to-upload 那条既有链路）
 //   add(item)           —— 拖拽进行中再拎一份进来（iOS「点其他文件加进叠放」），同作用域且不重复才收
 // 落点只按 type 与 ctx 判断能不能接，不去猜来源是谁。
 //
-// 为什么把「同源」判定放这儿：跨作用域的搬运没有单一原子接口，做成半成功的搬家比不给做更糟；
-// 所以跨作用域默认不给「移动」，只给「发给 AI」。
-// 例外：云端 ↔ 云端（工作台里以项目目录为根的面板 ↔ 整页工作空间根页）两边都是服务端自己的盘，
-// /api/files/move 带 fromWs 一次搬完。
-import { compose } from './state.svelte.js';
+// 为什么把「同源」判定放这儿：跨作用域（手机 SAF ↔ 云端 ↔ 桌面另一个位置）的搬运没有
+// 单一原子接口，做成半成功的搬家比不给做更糟；所以这些跨作用域一律不给「移动」，只给「发给 AI」。
+// 例外（2026-09-12）：云端 ↔ 云端（工作台里以项目目录为根的面板 ↔ 整页 vault 根页）两边都是
+// 服务端自己的盘，/api/files/move 带 fromWs 一次搬完——维护者视频里「拎着 SUMMER 项目的文件夹
+// 跳到工作空间页松手没反应」就是这条被一刀切拒掉了（还零反馈）。
+import { compose, vertex as vs } from './state.svelte.js';
 import { api } from './api.js';
 import { cloudFileUrl } from './preview.svelte.js';
 import { dropToast } from './dragdrop.svelte.js';
@@ -19,7 +20,7 @@ import { t, tr } from './i18n.js';
 
 export const WS_FILE = 'ws-file';
 
-// 作用域指纹：origin（cloud）+ 云端 ws 根 + 位置 id
+// 作用域指纹：origin（cloud/local/native）+ 云端 ws 根 + 桌面原生位置 id
 export const fsKey = (c) => JSON.stringify([c?.origin || '', c?.ws || '', c?.locationId || '']);
 export const sameFs = (a, b) => fsKey(a) === fsKey(b);
 
@@ -75,20 +76,21 @@ export function folderDropZone({ key, name, ctx, rel, onDone, disabled = false, 
 
 // —— 落点②：某个 agent 的对话（挂进它的输入栏）——
 // 语义刻意不是「移动」而是「发送」：文件留在工作空间原地，只是这次对话多了一份附件。
-const AGENT_LABEL = { claude: 'Claude' };
+const AGENT_LABEL = { claude: 'Claude', gemini: 'Gemini' };
 
 function pushAttachment(target, att) {
-  if (target !== 'claude') return false;
-  compose.attachments.push(att);
+  if (target === 'claude') compose.attachments.push(att);
+  else if (target === 'gemini') { vs.func = 'chat'; vs.chatDraftAtts = [...(vs.chatDraftAtts || []), att]; }
+  else return false;
   return true;
 }
 
 export async function attachToAgent(payload, target) {
   if (!payload?.materials) return false;
   dropToast(t('正在准备…'));
-  const atts = await payload.materials(true);
+  const atts = await payload.materials(target !== 'gemini');
   const want = payload.count || 1;
-  if (!atts?.length) { dropToast(t('准备失败')); return false; }
+  if (!atts?.length) { dropToast(want > 1 ? t('准备失败') : (payload.isDir && payload.ctx?.origin === 'local' ? t('手机本地文件夹没有可发送的形态') : t('准备失败'))); return false; }
   let ok = 0;
   for (const att of atts) if (pushAttachment(target, att)) ok++;
   if (!ok) return false;
@@ -110,8 +112,8 @@ export function agentDropZone(target, { key = 'chat:' + target, label = t('挂�
 }
 
 // —— 桌面（鼠标）那半边：HTML5 拖拽 ——
-// 手指走的是上面那套 pointer 拖拽；鼠标在电脑版工作空间里走的是浏览器原生 HTML5 拖拽。
-// 两套语义要一致，就让 HTML5 侧也带上同一份
+// 手指走的是上面那套 pointer 拖拽；鼠标在电脑版工作空间里走的是浏览器原生 HTML5 拖拽
+// （它同时也是「拖去资源管理器/微信」的通道）。两套语义要一致，就让 HTML5 侧也带上同一份
 // 描述符：拖进对话时按 rel 现场备素材，落点表现与手指那套完全一样。
 export const WS_DT = 'application/x-bridge-ws';
 
@@ -133,7 +135,7 @@ export async function attachDescriptorToAgent(desc, target) {
     const name = String(rel).split('/').pop() || 'file';
     const isImg = /\.(png|jpe?g|gif|webp|bmp|svg|heic)$/i.test(name);
     try {
-      const up = await api.fileToUpload(rel, false, desc.ws || '');
+      const up = await api.fileToUpload(rel, target === 'gemini', desc.ws || '');
       const att = { path: up.path, name: up.name, kind: isImg ? 'image' : 'file', url: isImg ? cloudFileUrl(rel, { ws: desc.ws || '' }) : null };
       if (pushAttachment(target, att)) ok++;
     } catch {}

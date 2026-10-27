@@ -2,7 +2,7 @@
   // 文档查看/编辑器（亮色文档 surface，自带头部，盖在 MediaViewer 暗壳之上）。
   // Markdown 走 Obsidian 式三态：阅读（obsmd 渲染）｜编辑（Live Preview，CM6 懒加载，
   // 光标进块显源码、表格 Excel 式常驻编辑）｜源码（同一 CM 实例关装饰）。
-  // 纯文本/代码仍是 textarea 源码编辑。保存写回服务端(/api/file/save)。
+  // 纯文本/代码仍是 textarea 源码编辑。保存写回云端(/api/file/save)或手机本地(SAF localWrite)。
   //   · Obsidian 风笔记补全：frontmatter「笔记属性」面板、[[双链]]/相对 md 链接查看器内跳转
   //     （导航栈，返回逐级回退）、#标签 / ==高亮== / callout、底部「反向链接 / 出链」面板
   //     （/api/file/mdlinks，云端）+ 词数统计
@@ -10,9 +10,12 @@
   //     （磁盘期间被别处改过：先三方合并，合不上以磁盘为准、横幅让用户选）
   //   · 键盘避让（padding-bottom: --kb）；返回自动落盘（不可保存时才弹确认）
   import { untrack, tick } from 'svelte';
+  import { dragOut, previewDragSrc } from '../../lib/dragOut.js';
   import { api } from '../../lib/api.js';
+  import { localWrite, localWriteB64, hasLocalWrite, localList, localReadText, localFileUrl } from '../../lib/localfs.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { normalizeItem, cloudFileUrl, openPreview, preview } from '../../lib/preview.svelte.js';
+  import { nativeWorkspaceWriteText, isNativeDesktop, desktopOpenExternal, nativePathForFile } from '../../lib/nativeDesktop.js';
   import { parseNote, renderObsMarkdown, renderPropWikilinks, noteStats, escapeHtml, escapeRegex, propKind, PROP_ICONS, MD_EXT_RE, scanFootnotes, renderFootnoteSection, lexObsBlocks, EMBED_SRC_OK } from '../../lib/obsmd.js';
   import { findSafeCut } from '../../lib/md.js';
   import { srcBlocks, readMapper } from '../../lib/mdanchors.js';
@@ -22,18 +25,19 @@
   import { fsChange, fsMatches } from '../../lib/fsSync.svelte.js';
   import { IS_SHARE } from '../../lib/share.js';
   import { t, tr, locale } from '../../lib/i18n.js';
+  import { interceptAppDownload } from '../../lib/save.js';
   import { guardSelection } from '../../lib/touchSelection.js';
   import { edgeAutoScroll } from '../../lib/touchAutoScroll.js';
 
   let { item, onClose } = $props();
 
-  // —— 双链导航栈：栈顶=当前文档；[[链接]]/反链点击 push、返回 pop（系统返回同步接管）——
+  // —— 双链导航栈：栈顶=当前文档；[[链接]]/反链点击 push、返回 pop（安卓返回同步接管）——
   let stack = $state([item]);
   const cur = $derived(stack[stack.length - 1]);
   const isMd = $derived(cur.kind === 'markdown');
   const isText = $derived(cur.kind === 'text' || isMd);
   // 公开分享页（/w/）是只读身份：写接口对 share 一律 401，编辑入口直接不给。
-  const editable = $derived(!IS_SHARE && !!cur.saveTarget);
+  const editable = $derived(!IS_SHARE && !!cur.saveTarget && (cur.saveTarget.origin !== 'local' || hasLocalWrite()));
 
   // —— 未保存草稿（按文件键存内存，跨重开恢复）——
   // 值是 { text, base }：base=这份草稿基于的磁盘原文。重开时磁盘若已不是 base（期间 Claude/其他端改过），
@@ -41,8 +45,8 @@
   const DRAFTS = (window.__bridgeDocDrafts ||= new Map());
   const STALE = (window.__bridgeDocStale ||= new Map());      // 与磁盘冲突、没自动恢复的草稿：文件键 → { text }（关掉重开还在，等用户决定）
   const SAVEQ = (window.__bridgeDocSaveQ ||= new Map());      // 每篇最后一个写请求（只 resolve）：写入按篇串行，load() 读盘前先等它
-  const draftKeyOf = (c) => (c.saveTarget ? c.saveTarget.origin + ':' + (c.saveTarget.ws || '') + ':' + c.saveTarget.rel : c.key);
-  const linksKeyOf = (c) => (c.saveTarget?.ws || '') + ':' + (c.saveTarget?.rel || '');
+  const draftKeyOf = (c) => (c.saveTarget ? c.saveTarget.origin + ':' + (c.saveTarget.ws || c.saveTarget.nativeLocation || '') + ':' + c.saveTarget.rel : c.key);
+  const linksKeyOf = (c) => (c.saveTarget?.ws || c.saveTarget?.nativeLocation || '') + ':' + (c.saveTarget?.rel || '');
   const draftKey = $derived(draftKeyOf(cur));
 
   let content = $state(''), original = $state('');
@@ -193,6 +197,8 @@
       let text;
       if (c.text != null) {                                     // 本地：调用方已读
         text = c.text;
+        // 栈里的 text 是压栈那一刻读的：跳走期间存过就旧了（返回再拿它当原文，下次自动保存会把刚存的盖回去）。能现读就现读
+        if (c.saveTarget?.origin === 'local') { const fresh = localReadText(c.saveTarget.rel); if (fresh || !text) text = fresh; }
       } else {
         // 这篇还有写请求在途（跳走马上回来 / 关掉马上重开）：先等它落盘再读，否则读到写入之前的旧文（最多等 8s）
         const q = SAVEQ.get(dk);
@@ -274,7 +280,7 @@
   let fsT = null, pendingFs = false;
   async function refreshFromDisk() {
     const my = ++seq, c = cur, key = draftKeyOf(c);
-    if (c.text != null || !c.url) return;   // 内联文本不是 agent 改的对象
+    if (c.text != null || !c.url) return;   // 本地 SAF 文件不是 agent 改的对象
     try {
       const r = await fetch(c.url, { cache: 'no-store', credentials: 'same-origin' });
       if (!r.ok) return;
@@ -332,14 +338,26 @@
   const topItem = () => stack[stack.length - 1];   // 当前文档（直接读状态，卸载后读也不触发派生量告警）
 
   // 写前校验：base=这次保存基于的那份磁盘原文。磁盘已经不是它（别处改过）→ 抛 conflict（带磁盘现状），
-  // 由 saveDoc 走三方合并，不覆盖。交给服务端比指纹（409）
+  // 由 saveDoc 走三方合并，不覆盖。云端交给服务端比指纹（409）；电脑客户端本地文件壳没有读接口，
+  // 拿加载时那个地址现读一次；手机本地 SAF 现读比对（后两者读写之间有极小窗口，够用）
   function conflictErr(current) { const e = new Error('conflict'); e.conflict = true; e.current = current; return e; }
   async function writeDoc(c, text, base) {
     const st = c.saveTarget, guard = typeof base === 'string';
+    if (st.origin === 'cloud' && st.nativeLocation) {
+      if (guard && c.url) {
+        let cur = null;
+        try { const r = await fetch(c.url, { cache: 'no-store', credentials: 'same-origin' }); if (r.ok) cur = await r.text(); } catch {}
+        if (cur != null && cur !== base) throw conflictErr(cur);
+      }
+      return nativeWorkspaceWriteText(st.rel, text, st.nativeLocation);
+    }
     if (st.origin === 'cloud') {
       try { return await api.saveFileGuarded(st.rel, text, st.ws, guard ? textHash(base) : undefined); }
       catch (e) { if (e?.status === 409 && typeof e.body?.current === 'string') throw conflictErr(e.body.current); throw e; }
     }
+    if (guard) { const cur = localReadText(st.rel); if (cur && cur !== base) throw conflictErr(cur); }
+    const r = localWrite(st.rel, text);
+    if (!r || r.error) throw new Error(r && r.error || t('写入失败'));
   }
   function queueWrite(key, c, text, base) {
     const p = (SAVEQ.get(key) || Promise.resolve()).then(() => writeDoc(c, text, base));
@@ -475,8 +493,8 @@
     const cacheKey = linksKeyOf(c);
     if (linksFor !== cacheKey) { links = null; linksFor = cacheKey; }
     linksPending = false;
-    // 双链/反链由服务端算（/api/file/mdlinks）。
-    if (c.kind !== 'markdown' || c.saveTarget?.origin !== 'cloud') return;
+    // primary 的双链/反链仍由服务端算（它就在 vault 根上）；只有服务端不认识的额外位置才跳过。
+    if (c.kind !== 'markdown' || c.saveTarget?.origin !== 'cloud' || (c.saveTarget?.nativeLocation && c.saveTarget.nativeLocation !== 'primary')) return;
     const rel = c.saveTarget.rel;
     if (LINKS_CACHE.has(cacheKey)) links = LINKS_CACHE.get(cacheKey);
     else if (!links) linksPending = true;
@@ -533,16 +551,25 @@
   // —— [[ 补全名单（/api/file/mdnames，与 mdlinks 同一棵目录树）——
   // 编辑器补全用；resolveWiki / embedUrl 也拿它兜底：出链只在保存后重算，编辑时新写的 [[X]]
   // 在那之前点开会报「未找到笔记」。按「位置 + 目录」缓存 30s，过期先给旧名单、后台换新。
-  // 分享只读页/接口不可用时给空表（补全不弹）。
+  // 本地（手机 SAF）没有服务端遍历，退化成同目录；分享只读页/接口不可用时给空表（补全不弹）。
   const NAMES_CACHE = (window.__bridgeMdNames ||= new Map());
   const ATTACH_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif|heic|ico|pdf|mp3|wav|m4a|ogg|flac|aac|opus|mp4|webm|mov|mkv|ogv|m4v|canvas|base)$/i;
-  const namesKeyOf = (c) => (c.saveTarget?.origin || '') + ':' + (c.saveTarget?.ws || '') + ':' + dirOf(c.saveTarget?.rel || '');
+  const namesKeyOf = (c) => (c.saveTarget?.origin || '') + ':' + (c.saveTarget?.ws || c.saveTarget?.nativeLocation || '') + ':' + dirOf(c.saveTarget?.rel || '');
   let namesNow = null;   // 当前笔记最近拿到的名单（embedUrl 同步查；换文档即清）
   $effect(() => { cur; namesNow = null; });
   async function fetchNames(c) {
     const st = c.saveTarget;
     if (c.kind !== 'markdown' || !st) return [];
     const dir = dirOf(st.rel);
+    if (st.origin === 'local') {
+      let l; try { l = localList(dir); } catch {}
+      const arr = Array.isArray(l?.items) ? l.items : Array.isArray(l) ? l : [];
+      return arr.filter((f) => f && !f.isDir && f.name && (MD_EXT_RE.test(f.name) || ATTACH_RE.test(f.name))).map((f) => {
+        const md = MD_EXT_RE.test(f.name);
+        return { name: md ? f.name.replace(/\.[^.]+$/, '') : f.name, md, path: joinRel(dir, f.name), rel: f.name };
+      });
+    }
+    if (st.nativeLocation && st.nativeLocation !== 'primary') return [];   // 服务端不认识的额外位置（同 loadLinks）
     try {
       const r = await api.mdNames(st.rel, st.ws);
       const base = dir ? dir + '/' : '';
@@ -588,15 +615,16 @@
     const rel = o?.path || findInNames(await linkNames(c), name)?.path;
     if (!rel || !MD_EXT_RE.test(rel)) return null;
     if (rel === st.rel) return content;
+    if (st.origin === 'local') { try { return localReadText(rel); } catch { return null; } }
     try {
-      const r = await fetch(cloudFileUrl(rel, { ws: st.ws }), { cache: 'no-store', credentials: 'same-origin' });   // 同 load()：别拿 30s 缓存里的旧标题
+      const r = await fetch(cloudFileUrl(rel, { ws: st.ws, nativeLocation: st.nativeLocation }), { cache: 'no-store', credentials: 'same-origin' });   // 同 load()：别拿 30s 缓存里的旧标题
       return r.ok && +(r.headers.get('content-length') || 0) < 2_000_000 ? await r.text() : null;
     } catch { return null; }
   }
 
   // ![[嵌入]] / 相对资源 → 可加载 URL：mdlinks 已解析的路径优先，回落同目录拼接。
   // wiki=true（![[名字]]，按全库名字解析）且出链索引还在路上、名单里也没有 → ''（占位，见 linksPending）
-  const fileUrlOf = (st, rel) => cloudFileUrl(rel, { ws: st.ws });
+  const fileUrlOf = (st, rel) => (st.origin === 'cloud' ? cloudFileUrl(rel, { ws: st.ws, nativeLocation: st.nativeLocation }) : localFileUrl(rel));
   const resolvedEmbed = (name) => {
     const k = String(name).toLowerCase();
     return links?.outgoing?.find((o) => o.path && o.name.toLowerCase() === k)?.path
@@ -634,7 +662,26 @@
     if (!st || IS_SHARE) throw new Error(t('此文档不可写'));
     const dir = dirOf(st.rel);
     let folder, finalName;
-    {
+    if (st.origin === 'local') {
+      if (file.size > 20 * 1024 * 1024) throw new Error(t('手机本地附件不能超过 20MB'));
+      const here = localList(dir);
+      const hasSub = here.some((f) => f.isDir && f.name === ATTACH_DIR);
+      folder = hasSub ? joinRel(dir, ATTACH_DIR) : dir;
+      const taken = new Set((hasSub ? localList(folder) : here).map((f) => f.name.toLowerCase()));
+      finalName = name;
+      const dot = name.lastIndexOf('.'), base = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : '';
+      for (let i = 1; taken.has(finalName.toLowerCase()); i++) finalName = `${base} (${i})${ext}`;   // SAF 同名直接覆盖，先避让
+      const b64 = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result).replace(/^data:[^,]*,/, ''));
+        fr.onerror = () => reject(fr.error || new Error(t('读取文件失败')));
+        fr.readAsDataURL(file);
+      });
+      const r = localWriteB64(joinRel(folder, finalName), b64);
+      if (!r.ok) throw new Error(r.error);
+      finalName = r.name || finalName;
+    } else {
+      if (st.nativeLocation && st.nativeLocation !== 'primary') throw new Error(t('这个位置暂不支持插入附件'));
       folder = joinRel(dir, ATTACH_DIR);
       const id = 'up' + Math.random().toString(36).slice(2, 12), CHUNK = 1024 * 1024;
       const ws = st.ws ? '&ws=' + encodeURIComponent(st.ws) : '';
@@ -650,9 +697,40 @@
     let names = [];
     try { names = await linkNames(); } catch {}
     const clash = findInNames(names, finalName);
-    const link = clash && clash.path !== rel ? entry.rel : finalName;
+    // 手机本地的名单只列笔记同目录，放进 attachments/ 的下次打开就认不出裸名 → 一律带前缀
+    const link = (clash && clash.path !== rel) || (st.origin === 'local' && folder !== dir) ? entry.rel : finalName;
     for (const list of [names, namesNow]) if (list && !list.some((n) => n.path === rel)) list.push(entry);
     return { link, rel };
+  }
+
+  // 拖进来的文件本来就在这个工作空间里（桌面端从文件面板 / 资源管理器拖）：不复制，直接写链接（Obsidian
+  // 从侧栏拖笔记/附件同款）。绝对路径→相对路径由服务端换算（壳不把位置根的绝对路径给页面）。
+  // 笔记目录子树里的写 [[ ]]（同名唯一写裸名，否则带相对笔记目录的路径；md 去扩展名、不嵌入）；
+  // 子树外的 [[ ]] 认不到（名单只扫子树），写标准相对链接 ![](../x.png) / [名](../x.md)。
+  async function linkExisting(file) {
+    const st = cur.saveTarget;
+    if (!st || st.origin !== 'cloud' || (st.nativeLocation && st.nativeLocation !== 'primary')) return null;
+    const abs = nativePathForFile(file);
+    if (!abs) return null;
+    let rel = null;
+    try { rel = (await api.post('/api/files/relpaths', { paths: [abs], ws: st.ws || '' }))?.rels?.[0] || null; } catch {}
+    if (!rel) return null;
+    const dir = dirOf(st.rel), name = rel.split('/').pop();
+    const md = MD_EXT_RE.test(name), embed = !md && ATTACH_RE.test(name) && !/\.(canvas|base)$/i.test(name);
+    if (!dir || rel.startsWith(dir + '/')) {
+      const sub = dir ? rel.slice(dir.length + 1) : rel;
+      const bare = md ? name.replace(/\.[^.]+$/, '') : name;
+      let names = [];
+      try { names = await linkNames(); } catch {}
+      const hit = findInNames(names, bare);
+      const target = hit && hit.path !== rel ? (md ? sub.replace(/\.[^.]+$/, '') : sub) : bare;
+      return { text: (embed ? '!' : '') + '[[' + target + ']]' };
+    }
+    const up = dir.split('/'), down = rel.split('/');
+    let k = 0;
+    while (k < up.length && k < down.length - 1 && up[k] === down[k]) k++;
+    const relPath = [...Array(up.length - k).fill('..'), ...down.slice(k)].join('/').replace(/ /g, '%20');
+    return { text: embed ? `![](${relPath})` : `[${md ? name.replace(/\.[^.]+$/, '') : name}](${relPath})` };
   }
 
   // —— 阅读态分块渐进渲染 ——
@@ -736,7 +814,9 @@
     // name 必须取 rel 的真实文件名（带扩展名）——normalize 按 name 推 kind，
     // 反链/出链给的是去掉 .md 的展示名，直接用会被当成未知类型走占位页。
     const base = { rel, name: rel.split('/').pop() };
-    const it = normalizeItem({ origin: 'cloud', ...base, ws: cur.saveTarget?.ws || '' });
+    const it = cur.saveTarget?.origin === 'local'
+      ? normalizeItem({ origin: 'local', ...base, text: localReadText(rel) })
+      : normalizeItem({ origin: 'cloud', ...base, ws: cur.saveTarget?.ws || '', nativeLocation: cur.saveTarget?.nativeLocation || '' });
     stack = [...stack, it];
     jumpHead = head ? { key: draftKeyOf(it), depth: stack.length, head } : null;
   }
@@ -792,10 +872,20 @@
         }
         return openNote(hit.path, head);
       }
-      openAttachment(hit.path);   // 附件类：应用内统一查看器
+      openAttachment(hit.path);   // 附件类：应用内统一查看器（曾经 window.open 在桌面壳会被丢去系统浏览器）
       return;
     }
+    if (cur.saveTarget?.origin === 'local') return resolveLocalWiki(name, head);
     showToast(links ? t('未找到笔记「{name}」', { name }) : t('链接索引加载中…'));
+  }
+  function resolveLocalWiki(name, head = '') {
+    const dir = dirOf(cur.saveTarget.rel);
+    let l; try { l = localList(dir); } catch {}
+    const arr = Array.isArray(l?.items) ? l.items : Array.isArray(l) ? l : [];
+    const k = String(name).toLowerCase();
+    const hit = arr.find((f) => f && !f.isDir && MD_EXT_RE.test(f.name || '') && String(f.name).replace(/\.[^.]+$/, '').toLowerCase() === k);
+    if (hit) openNote(joinRel(dir, hit.name), head);
+    else showToast(t('未找到笔记「{name}」', { name }));
   }
   // 相对链接拆成 路径 + #片段（片段交给 openNote 定位标题，不再直接扔掉）
   function splitHref(href) {
@@ -902,14 +992,20 @@
 
   function destroyEditor() { try { editor?.destroy(); } catch {} editor = null; edFor = null; }
 
-  // 外链：新标签打开。
+  // 外链：桌面壳显式交系统浏览器（window.open 在壳里靠 setWindowOpenHandler 兜底，
+  // 语义含混且非 http 协议会被静默 deny）；网页保持新标签。
   function openExt(url) {
+    if (isNativeDesktop() && /^https?:/i.test(url)) { desktopOpenExternal(url); return; }
     window.open(url, '_blank', 'noopener');
   }
-  // 笔记里的附件（图/PDF/音视频…）：进应用内统一查看器（沿用当前宿主：全屏或 dock 内嵌）。
+  // 笔记里的附件（图/PDF/音视频…）：进应用内统一查看器（沿用当前宿主：全屏或 dock 内嵌），
+  // 不再 window.open 裸 URL——桌面壳里那会打开系统浏览器（bridge-workspace:// 则被静默吞掉）。
   function openAttachment(rel) {
     const st = cur.saveTarget || {};
-    openPreview({ origin: 'cloud', rel, name: rel.split('/').pop(), ws: st.ws || '' }, 0, { host: preview.host });
+    const desc = st.origin === 'local'
+      ? { origin: 'local', rel, name: rel.split('/').pop() }
+      : { origin: 'cloud', rel, name: rel.split('/').pop(), ws: st.ws || '', nativeLocation: st.nativeLocation || '' };
+    openPreview(desc, 0, { host: preview.host });
   }
 
   function openRelHref(href) {
@@ -957,6 +1053,7 @@
         linkNames: () => linkNames(),   // [[ 补全名单（complete.js）
         readNote,                       // [[笔记#标题 补全取那篇笔记的原文
         saveAttachment,                 // 粘贴/拖入/选择的图片与文件存成附件（mdeditor/attach.js）
+        linkExisting,                   // 拖进来的是库里已有的文件：直接写链接不复制
       });
       embedSig = untrack(() => embedSigOf(content));
       if (m === 'live') noteTooBig(mod);
@@ -1019,6 +1116,12 @@
   }
   async function insertFromRead(files, pos, pasted) {
     if (!editable) { showToast(t('此文档不可写')); return; }
+    // 额外授权位置（桌面壳 loc-*）存不了附件（saveAttachment 必然抛错）：当场说清楚，别先切到编辑态再报失败
+    const st = cur.saveTarget;
+    if (st?.origin === 'cloud' && st.nativeLocation && st.nativeLocation !== 'primary') {
+      showToast(t('插入失败：{reason}', { reason: t('这个位置暂不支持插入附件') }));
+      return;
+    }
     setMdMode('live');
     const ed = await whenEditor();
     if (!alive) return;
@@ -1049,7 +1152,7 @@
     // 自动保存还没触发的内容当场补存，不能只留在内存草稿里
     // （卸载后别读派生量 editable：直接按当前文档的保存目标判断）
     const c = topItem(), st = c?.saveTarget;
-    if (st && !IS_SHARE && content !== original && !conflict) saveDoc(c, content, true, original);
+    if (st && !IS_SHARE && content !== original && !conflict && (st.origin !== 'local' || hasLocalWrite())) saveDoc(c, content, true, original);
     alive = false; destroyEditor(); loadCtrl?.abort(); clearTimeout(linksT); clearTimeout(statsT); flushEdWaiters();
   });   // 组件卸载兜底：编辑器销毁 + 在途加载掐断（在途的写照常发完，见 saveDoc）
 
@@ -1070,7 +1173,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
     </button>
     <div class="doc-title-wrap">
-      <span class="doc-title">{cur.name}</span>
+      <span class="doc-title" use:dragOut={() => previewDragSrc(cur)}>{cur.name}</span>
       {#if status}
         {#key status.kind}
           {#if status.kind === 'dirty'}
@@ -1126,7 +1229,7 @@
     {:else if loadError}
       <div class="doc-center doc-err"><p>{t('加载失败')}</p><button onclick={load}>{t('重试')}</button></div>
     {:else if !isText}
-      <div class="doc-center"><p class="doc-ph-name">{cur.name}</p><p>{t('该类型预览即将到来')}</p>{#if cur.downloadHref}<a class="doc-dl" href={cur.downloadHref} download={cur.name}>{t('下载查看')}</a>{/if}</div>
+      <div class="doc-center"><p class="doc-ph-name">{cur.name}</p><p>{t('该类型预览即将到来')}</p>{#if cur.downloadHref}<a class="doc-dl" href={cur.downloadHref} download={cur.name} onclick={(e) => interceptAppDownload(e, { url: cur.downloadHref, name: cur.name })}>{t('下载查看')}</a>{/if}</div>
     {:else if isMd && mode === 'preview'}
       <div class="doc-scroll" bind:this={docScrollEl}>
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->

@@ -51,6 +51,9 @@ export const CAPABILITIES = [
   // （完整记录）、POST /api/custom-providers/{models,guess,detect,probe,test}（草稿，不落盘）；add / update 收 models[] / defaultModel /
   // protocol / authStyle / headers；/api/info 的 catalog 只列启用的对话型号，custom 字段带 protocol 与 all（型号总数）
   "custom-providers-v2",
+  // 用户的电脑（设备芯片）：GET /api/devices?session=（available / enabled / devices / link）、POST /api/devices/link {session, link}
+  //（link = 设备 id / "none" / "" 恢复自动）；会话里的 Device* 工具省略 device 时就操作连着的那台
+  "devices",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];

@@ -12,7 +12,7 @@ import { api } from './api.js';
 import { busOn } from './bus.js';
 import { session } from './state.svelte.js';
 import { cs } from './claudeSettings.svelte.js';
-import { t, tr } from './i18n.js';
+import { t } from './i18n.js';
 import { CLAUDE_SETTING_BY_KEY, BUILTIN_OUTPUT_STYLES } from '../../../src/config/claude-settings.mjs';
 
 export const ostyle = $state({
@@ -61,13 +61,13 @@ busOn((ev) => {
 export function outputStyleLabel(v) {
   const s = CLAUDE_SETTING_BY_KEY.outputStyle;
   const i = BUILTIN_OUTPUT_STYLES.findIndex((x) => x.toLowerCase() === String(v || 'default').toLowerCase());
-  return i >= 0 ? tr(s.optionLabels[i]) : String(v);
+  return i >= 0 ? t(s.optionLabels[i]) : String(v);
 }
 /** 内置风格的一行说明（自定义风格没有）。 */
 export function outputStyleDesc(v) {
   const s = CLAUDE_SETTING_BY_KEY.outputStyle;
   const i = BUILTIN_OUTPUT_STYLES.findIndex((x) => x.toLowerCase() === String(v || '').toLowerCase());
-  return i > 0 && s.optionDescs[i] ? tr(s.optionDescs[i]) : '';
+  return i > 0 && s.optionDescs[i] ? t(s.optionDescs[i]) : '';
 }
 
 /** 新会话要随第一条消息带的风格（chat 内核 chatParams 用）。 */

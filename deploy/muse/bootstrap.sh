@@ -310,6 +310,8 @@ apply_bridge_declarations() {
   set_bridge_env BRIDGE_HEAP_SNAPSHOT 0
   # Chromium 在 VM 上没有沙箱、起不来：dimensio 不给浏览器工具
   set_bridge_env DIMENSIO_BROWSER off
+  # 不带 Gemini（Vertex）与 Codex 扩展：扩展中心与 Agent 页都不列
+  set_bridge_env BRIDGE_MODULES_HIDE vertex,codex
   # 插件：登记 Muse 插件（经 current 链接，换版本不用改）；第一次对齐时关掉 VM 上用不了的内置功能
   [ -f "$stamp" ] || first=true
   [ -f "$pj" ] || printf '{"version":1,"plugins":{},"local":[]}\n' > "$pj"

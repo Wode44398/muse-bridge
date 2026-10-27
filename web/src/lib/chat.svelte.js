@@ -29,15 +29,15 @@
 //   usage{output,thinking} · context{used,total,pct} · limits{limits,updatedAt} · retry{...} ·
 //   question{qid,questions[]} · task_start/task_progress/task_update/task_done{taskId,toolUseId,…} ·
 //   agent_msg{toolUseId,kind,text|name,summary,model} · model_notice{subtype,from,to,scope,…} ·
-//   retract{text,thinking,tools} · error{message,title,...} · done{result,isError} ·
+//   retract{text,thinking,tools} · gen_media*{...} · error{message,title,...} · done{result,isError} ·
 //   ctx_usage{sessionId,usage}（done 之后才到，只改 status）· effort{sessionId,level}
 // 工具行有结果【状态】事件（tool_done：成败/耗时）但没有结果正文——正文只在服务端 transcript。
 
 import { pump, watch, linkAbort } from './sse.js';
 import { api, getToken, authHeaders } from './api.js';
-import { apiUrl } from './server.js';
+import { apiUrl, noteNetFail, mediaFallbackUrl } from './server.js';
 import { claudeArtifactUrl, kindOf as previewKindOf } from './preview.svelte.js';
-import { session, settings, ui, status, compose, refusalBand, caps, prefs, sessionWt } from './state.svelte.js';
+import { session, settings, ui, status, compose, refusalBand, caps, prefs, sessionWt, hostIsServer } from './state.svelte.js';
 import { closeTaskDetail, forgetTaskTool, dock } from './dock.svelte.js';
 import { toolJoins, COMPACT_TOOL, isCompactTool } from './toolVerbs.js';
 import { claudeDefaultModel } from './caps.js';
@@ -48,10 +48,11 @@ import { agentStart, agentStream, agentEnd, notifyKind } from './notify.js';
 // 设置 › Claude（服务端按身份存、多设备同步）：输入建议 / 自动压缩点；本文件 chatParams 里有局部变量 cs，取别名
 import { cs as claudeCs } from './claudeSettings.svelte.js';
 import { pendingOutputStyle, markOutputStyleSent, adoptOutputStyleSent, absorbSessionOutputStyle } from './outputStyle.svelte.js';
-import { noteAgentTerm } from './dock.svelte.js';
+import { noteAgentBrowser, noteAgentTerm } from './dock.svelte.js';
 import { handleWsx } from './uiReport.js';
 import { noteFsChange } from './fsSync.svelte.js';
 import { storeGet, storeSet } from './store.js';
+import { runPhoneCmd } from './phonecmd.js';
 import { IS_CSNAP } from './csnap.js';
 import { IS_SOLO } from './solo.js';
 import { prefsFor, lastPrefs, notePrefs, absorbServerPrefs } from './chatPrefs.js';
@@ -64,10 +65,11 @@ import { t as tt, tr } from './i18n.js';   // 本文件的 t 是工具行/任务
 import { noteFamilyLink, noteCollabEvent } from './sessionFamily.svelte.js';
 import { noteSessionArchived } from './sessionArchive.svelte.js';   // 单条加载带回的归档态（「此会话已归档」横条）
 import { applyWidgetEvent, narrowViewport } from './widgetSeg.js';   // 对话内嵌交互图表（widget_* 帧 → widget 段；窄屏按手机宽度出图）
+import { devices, thisDeviceId } from './devices.svelte.js';   // 用户的电脑（设备）：发消息带上本机设备 id / 新会话选的电脑
 import { effectiveEffort } from './claudeProviders.svelte.js';   // 自定义模型只带它档位表里的推理强度（换模型带过来的不发）
 import { showToast } from './toast.svelte.js';
 
-// 最近一次打开的会话 id（强持久：关掉页面冷启动也能找回）。session.id 的每个赋值点
+// 最近一次打开的会话 id（强持久：apk 杀后台冷启动也能找回）。session.id 的每个赋值点
 // 都同步写入；boot 时 restoreOnBoot 用它把上次的对话自动加载回来。
 // 快照模式不持久化：访客的快照会话不该污染同浏览器里主 app 的「上次会话」与本地缓存。
 // 分屏那一格 / 拖出的独立窗口（?solo=）同理：它们开的会话不是主页面的「上次会话」。
@@ -156,14 +158,20 @@ function persistable(list) {
 }
 const cacheChat = (sid, list) => cacheMessages(sid, persistable(list));
 
-// 气泡 <img> 加载失败时的自愈（onerror 调）：依次试其余候选：缩略图 → 原图 → 按服务端文件名
-// 现算（带【当前】token，治缓存里 token 已轮换 / blob 已回收的旧 URL）。
-// 候选全试过就停手，交给元素自己的失败态（不会死循环）。每一条试过的地址都记账。
+// 气泡 <img> 加载失败时的自愈（onerror 调）：
+//   ① 正走 LAN → 降级回隧道重试（mediaFallbackUrl，与媒体图同款）；
+//   ② 仍失败 → 依次试其余候选：缩略图 → 原图 → 按服务端文件名现算（带【当前】token 与地址，
+//      治缓存里 token 已轮换 / 局域网地址写死 / blob 已回收的旧 URL）。
+// 候选全试过就停手，交给元素自己的失败态（不会死循环）。
 export function attImgFallback(img, a) {
   if (!img || !a) return;
+  // 每一条试过的地址都记账（含 LAN 那条原址）：否则隧道版也失败后，候选里的 a.thumb 还是
+  // LAN 原址，会被当成「没试过」又切回去——LAN↔隧道来回乒乓。
   const tried = (img.dataset.tried || '').split('\n').filter(Boolean);
   const go = (u) => { tried.push(u); img.dataset.tried = tried.join('\n'); img.src = u; };
   tried.push(img.src);
+  const next = mediaFallbackUrl(img.src);
+  if (next !== img.src && !tried.includes(next)) { go(next); return; }
   const cands = [a.thumb, a.url, a.file && uploadRawUrl(a.file, 'preview'), a.file && uploadRawUrl(a.file)]
     .filter((u) => u && !isBlobUrl(u) && !tried.includes(u));
   if (cands.length) go(cands[0]);
@@ -204,7 +212,7 @@ function newAssistant() {
     role: 'assistant',
     // 段模型（与服务端 /api/session 历史重建同构，见 impl-contract §4.1）：
     //   {kind:'text',md} | {kind:'tools',open,tools:[{id,name,index,summary,input,status,ms,task}]} |
-    //   {kind:'notice',subtype,from,to,…}（模型切换/安全栅门卡）| {kind:'ask',…}
+    //   {kind:'notice',subtype,from,to,…}（模型切换/安全栅门卡）| {kind:'ask',…} | {kind:'media',…}
     segments: [],
     thinking: '',
     thinkingOpen: false,
@@ -255,6 +263,10 @@ function findToolByIndex(m, index) {
     const s = m.segments[i];
     if (s.kind === 'tools') { const t = s.tools.find((x) => x.index === index); if (t) return t; }
   }
+  return null;
+}
+function findMedia(m, id) {
+  for (let i = m.segments.length - 1; i >= 0; i--) { const s = m.segments[i]; if (s.kind === 'media' && s.id === id) return s; }
   return null;
 }
 
@@ -434,6 +446,43 @@ function noticeFromEvent(ev) {
 // 发，出错/中断的轮永远等不到它）。done：工具行=done；Agent/Workflow 任务若还 running，说明
 // 悬停看门狗放弃了它（bridge 只为这两类悬停）→ stopped；后台 shell 可以常驻，不动。
 // error/stopped：工具行=error+interrupted，所有 running 任务=stopped。
+// 号池智能路由撞墙换号后的无缝接续（服务端只在本端声明了 autoRetry、且确实换成了号时才下发）：
+//   resend   = 这一轮什么都没产出 → 撤掉这对气泡、用新号原样重发（服务端已把失败那条从上下文分叉掉）；
+//   continue = 已经干了一半 → 保留，发一句「接着做」。
+// 同一条消息最多自动接 2 次（服务端号池全员用尽时本就不再下发，这里再兜一道防打转）。
+// 只在发起这轮的设备上做（__sentHere）：attach 重放到别的设备的同一张错误卡不会重复重发。
+// 守卫用发送序号而不是对象身份：收轮后的历史对账会把 chat.messages 整组换成服务端视图（resend 时
+// 失败那条已被分叉锚点截掉），旧对象全对不上，但这不是「用户接手了」。
+const AUTO_RETRY_MAX = 2;
+let sendSeq = 0;   // 每次 reallySend +1
+function scheduleAutoRetry(m, mode) {
+  const i = chat.messages.indexOf(m);
+  const u = i > 0 ? chat.messages[i - 1] : null;
+  if (!u || u.role !== 'user') return;
+  const n = (u.__autoRetries || 0) + 1;
+  if (n > AUTO_RETRY_MAX) return;
+  const sid = session.id;
+  const seq = sendSeq;
+  const text = u.text;
+  const atts = (u.attachments || []).filter((a) => a.path);
+  setTimeout(() => {
+    // 用户已经接手（发了别的、换了会话、又开了一轮）就不插手
+    if (session.busy || session.id !== sid || sendSeq !== seq) return;
+    if (mode === 'resend') {
+      // 失败的这对气泡还在本地视图里就撤掉（历史对账可能已经替我们截掉了）
+      const j = chat.messages.indexOf(m);
+      if (j > 0 && chat.messages[j - 1] === u) chat.messages.splice(j - 1, 2);
+      else if (j >= 0) chat.messages.splice(j, 1);
+      revokeMessageBlobUrls([m]);   // 只清助手气泡；用户附件对象随重发的新气泡沿用，不能吊销
+      reallySend(text, atts);
+    } else {
+      reallySend(tt('刚才的账号额度用尽，已自动换号。请从中断的地方继续。'), []);
+    }
+    const nu = chat.messages[chat.messages.length - 2];
+    if (nu && nu.role === 'user') nu.__autoRetries = n;
+  }, 800);
+}
+
 function settleTurn(m, how) {
   for (const s of m.segments) {
     if (s.kind !== 'tools') continue;
@@ -459,10 +508,10 @@ function settleTurn(m, how) {
 //（runtime/retract-ledger.mjs）给出 {textFrom,textTo,thinkFrom,thinkTo,toolsFrom,toolsTo}，区间之后已流出的
 // 回退模型开头原样保留。删法在 lib/retract.js（纯函数，node 单测覆盖），这里只挂索引清理。
 function retractTurn(m, ev) { retractSegments(m, ev, forgetEntry); }
-// 有「正文类」内容（文本/工具行）——done.result 兜底只看它；hasContent 另认 notice 段
+// 有「正文类」内容（文本/工具行/媒体）——done.result 兜底只看它；hasContent 另认 notice 段
 //（只剩一张切换卡的轮也不是空幽灵轮，settleView 不许 pop）。
 function hasBody(m) {
-  return m.segments.some((s) => (s.kind === 'text' && s.md.trim()) || (s.kind === 'tools' && s.tools.length) || s.kind === 'widget');
+  return m.segments.some((s) => (s.kind === 'text' && s.md.trim()) || (s.kind === 'tools' && s.tools.length) || s.kind === 'media' || s.kind === 'widget');
 }
 function hasContent(m) {
   return hasBody(m) || m.segments.some((s) => s.kind === 'notice');
@@ -491,8 +540,8 @@ function queueText(m, t) {
 }
 
 // —— 助手交付的产物附件（done 事件 / 历史重建共用）：补 kind + 预览/下载 URL ——
-// 服务端只给 {name,path,kind,size,count,nav?}；URL 在客户端拼（带 ?token=，<img>/下载
-// 带不了 Authorization 头）。文件夹无预览 URL：点卡走 nav 在工作台的工作空间视图里打开
+// 服务端只给 {name,path,kind,size,count,nav?}；URL 在客户端拼（带 ?token=，离线壳 <img>/下载
+// 跨源带不了 Authorization）。文件夹无预览 URL：点卡走 nav 在工作台的工作空间视图里打开
 // （服务端算好的 {rel} / {ws,rel}），没有 nav 才回落成整包 zip 下载。
 function toDeliverAtts(list, sessionId) {
   if (!Array.isArray(list) || !list.length) return [];
@@ -520,6 +569,7 @@ const PHASE = {
   tool: 'tool', tool_args: 'tool',   // tool_done 不改相位：结果回来不等于活干完
   task_start: 'tool', task_progress: 'tool', task_update: 'tool', task_done: 'tool',
   agent_msg: 'tool',                 // 子 agent 在干活 → 环绕
+  gen_media_start: 'tool', gen_media_progress: 'tool',
   widget_start: 'writing', widget_delta: 'writing',   // 内嵌图表：模型正在写图表代码
   question: 'waiting', answer: 'thinking',
   refusal_prompt: 'waiting', refusal_answer: 'thinking',   // 安全栅门暂停：等人二选一
@@ -767,7 +817,10 @@ function onEvent(m, ev) {
       }
       break;
     }
-    case 'retry': chat.reconnecting = true; break;
+    // 档2：Claude 下发的手机文件命令——调原生 SAF 执行并回传（不渲染 UI，fire-and-forget）。
+    case 'phone_cmd': runPhoneCmd(ev); break;
+    // agent 用了浏览器工具：宽屏自动拉开右侧浏览器面板同屏直播，窄屏亮提示点。
+    case 'browser': noteAgentBrowser(ev.url); break;
     // agent 用了共享终端：宽屏自动拉开终端面板同屏，窄屏亮提示点。
     case 'term': noteAgentTerm(); break;
     // 工作区协同指令（文件面板刷新/导航、推预览、截图/草稿请求）——uiReport 统一处理。
@@ -806,6 +859,11 @@ function onEvent(m, ev) {
       if (ev.limit) m.limit = ev.limit;
       if ('resume' in ev) noteLimitResume(ev.sessionId || session.id, ev.resume || null);
       settleTurn(m, 'error');
+      if (ev.autoRetry && m.__sentHere) scheduleAutoRetry(m, ev.autoRetry);
+      break;
+    // 号池智能路由开跑前换了号（只发给主机 admin）：轻提示一下，只在发起这轮的那台设备上弹。
+    case 'account_switch':
+      if (m.__sentHere && ev.to) showToast(tt('已自动切到「{to}」（{reason}）', { to: ev.to, reason: tr(ev.reason || '') }));
       break;
     case 'interrupted': settleTurn(m, 'stopped'); break;
     // —— 后台任务生命周期：挂在对应工具行（toolUseId）的 task 上；Agent/Task/Workflow/Bash 的
@@ -919,6 +977,13 @@ function onEvent(m, ev) {
     }
     // 悬停被兜底收尾（封顶/静默/用户点「结束等待」）：挂起提示退场，紧随其后的 done 定局。
     case 'bg_release': m.bgHold = null; break;
+    case 'gen_media_start':
+      m.segments.push({ kind: 'media', id: ev.id, mediaKind: ev.kind, status: 'generating', elapsed: 0, error: null, prompt: '', dataUrl: null });
+      break;
+    case 'gen_media_progress': { const s = findMedia(m, ev.id); if (s) s.elapsed = ev.elapsed || 0; break; }
+    // dataUrl：图片用内嵌 data: URI 直送（Claude 发截图走这条，绕开离线壳跨源 <img> 取图坏掉的问题）。
+    case 'gen_media': { const s = findMedia(m, ev.id); if (s) { s.status = 'ready'; s.prompt = ev.prompt || ''; if (ev.dataUrl) s.dataUrl = ev.dataUrl; } break; }
+    case 'gen_media_error': { const s = findMedia(m, ev.id); if (s) { s.status = 'error'; s.error = ev.message || tt('生成失败'); } break; }
     case 'widget_start': case 'widget_delta': case 'widget': case 'widget_done': applyWidgetEvent(m, ev); break;
     case 'done': {
       if (!hasBody(m) && ev.result) textSeg(m).md += ev.result;
@@ -1142,6 +1207,7 @@ async function tryAttach(sid) {
   catch (e) {
     if (ep !== kernelEpoch) return 'stale';
     if (e && (e.status === 401 || e.status === 403)) return 'auth';
+    noteNetFail();
     return 'unreachable';
   }
   if (ep !== kernelEpoch) { try { ctrl.abort(); } catch {} return 'stale'; }
@@ -1309,11 +1375,11 @@ async function doSync() {
   if (ep !== kernelEpoch) return;
   const runs = runsOf(a).filter((r) => r.sessionId);
   for (const id of [...mutedLive]) if (!runs.some((r) => r.sessionId === id)) mutedLive.delete(id);   // 已结束 → 解除静音
-  // 空态（greeting）：自动挂上最新的一轮（别处发起的直播镜像）。
+  // 空态（greeting）：自动挂上最新的非胶囊轮（别处发起的直播镜像，老体验）。
   // 其它 Claude 会话（Desktop / 终端）发来消息、停放的 CLI 接住开的轮（source 'peer'）也不挂：那不是谁在别处发起的对话，别把视图拽走。
   if (!sid) {
     if (session.busy || live) return;   // 新会话首轮正在发
-    const cand = runs.filter((r) => r.source !== 'peer' && !mutedLive.has(r.sessionId));
+    const cand = runs.filter((r) => r.source !== 'capsule' && r.source !== 'peer' && !mutedLive.has(r.sessionId));
     if (cand.length) await openRun(cand[cand.length - 1]);
     return;
   }
@@ -1437,9 +1503,8 @@ export function detachLive() {
 }
 
 // 抽屉点会话的统一入口：直播中也能切换。看的就是直播会话 → 不动；否则先 detach 再加载；
-// 点回一个正在跑的会话（被静音的直播 / 并行后台轮）→ requestSync 重新挂直播续看。
+// 点回一个正在跑的会话（被静音的直播 / 并行后台轮 / 胶囊轮）→ requestSync 重新挂直播续看。
 export async function openSession(id) {
-  ui.customizeOpen = false;   // 「自定义」页占着正文列：打开任何会话都先让回对话
   if (session.busy || live || pendingSend) {
     const liveId = (live && live.sessionId) || session.id;
     if (id === liveId) { ui.view = 'chat'; return; }
@@ -1468,7 +1533,7 @@ export function send(text, attachments) {
     chat.messages.push({ role: 'user', text: t, attachments: sentAttachments(atts) });
     const me = newAssistant();
     me.status = 'error';
-    me.error = tt('离线：连不上服务器，无法发送（恢复网络后会自动重连，届时重试即可）');
+    me.error = hostIsServer() ? tt('离线：连不上服务器，无法发送（恢复网络后会自动重连，届时重试即可）') : tt('离线：连不上电脑，无法发送（恢复网络后会自动重连，届时重试即可）');
     if (attachments === undefined) compose.attachments = [];   // 与正常发送一致：消费掉 composer 暂存
     return;
   }
@@ -1493,6 +1558,7 @@ function settleHeldForHandoff() {
 }
 
 function reallySend(t, atts, handoff = false) {
+  sendSeq++;
   bumpLoadGen();   // 作废在途的历史刷新——慢返回不覆盖即将开始的流式轮
   bumpEpoch();     // 作废在途 sync 的应用
   if (handoff) settleHeldForHandoff();
@@ -1503,6 +1569,7 @@ function reallySend(t, atts, handoff = false) {
   session.busy = true;
   lastLiveAt = Date.now();   // 刚发出去、还一个事件都没回：这段时间不许被判成陈旧流
   const m = newAssistant();
+  m.__sentHere = true;   // 本端发起的轮：号池换号后的自动重发 / 换号提示只在这里做
   startTimer();
   agentStart('Claude');
 
@@ -1516,6 +1583,15 @@ function reallySend(t, atts, handoff = false) {
 // 发送与新会话预热共用的请求选项——预热进程的启动参数要和随后那条真消息逐项一致，服务端才会接管它。
 function chatParams(t, atts) {
   const params = { message: t, agent: 'claude' };
+  // 客户端形态：手机 App（apk，有原生桥）才有手机文件/操控的物理通道——后端据此决定
+  // 本轮要不要给 Claude 注手机工具（修「电脑网页端误宣称能操作手机」）。
+  params.client = (typeof window !== 'undefined' && window.AndroidStore) ? 'apk' : 'web';
+  if (narrowViewport()) params.narrow = true;   // 内嵌图表：窄屏（手机浏览器）按约 380px 宽出图
+  // 用户的电脑（设备）：从桌面客户端发的带上本机设备 id——新会话没选过电脑时默认连这台；
+  // 新会话在电脑芯片里选过（某台 / 不连）就随第一条带上（续聊改连走 /api/devices/link）。
+  const pc = thisDeviceId();
+  if (pc && !IS_CSNAP) params.fromComputer = pc;
+  if (!session.id && !IS_CSNAP && devices.draft && devices.draft !== 'auto') params.computer = devices.draft;
   if (session.id) params.sessionId = session.id;
   // 项目制：新会话带上项目（=cwd）；续聊服务端按 transcript 所在目录反查，此值被忽略。
   if (!session.id && session.projectId) params.claudeProjectId = session.projectId;
@@ -1534,7 +1610,6 @@ function chatParams(t, atts) {
     if (cs && cs.text) params.styleText = cs.text;
   }
   if (settings.research) params.research = true;
-  if (narrowViewport()) params.narrow = true;   // 内嵌图表：窄屏（手机浏览器）按约 380px 宽出图
   // 输入建议：开关开着才让服务端生成（定局后 CLI 预测下一句）。自 2026-10-20 起两项都以服务端设置为准
   //（claudeCs），这里照带只为与老服务端兼容；新服务端改过的值盖过请求体。
   if (claudeCs.values.promptSuggestions !== false && !IS_CSNAP) params.suggest = true;
@@ -1543,6 +1618,7 @@ function chatParams(t, atts) {
   if (!session.id && !IS_CSNAP && pendingOutputStyle()) params.outputStyle = pendingOutputStyle();
   // 权限模式：只有新会话带草稿里选的（续聊用会话自己的记忆，见 src/runtime/permissions.mjs）
   if (!session.id && !IS_CSNAP && draftPermissionMode()) params.permissionMode = draftPermissionMode();
+  params.autoRetry = true;   // 声明：号池撞墙被自动换号时本端会自己重发（见 scheduleAutoRetry）
   if (atts.length) params.attachments = atts.map((a) => a.path).filter(Boolean);
   return params;
 }
@@ -1586,6 +1662,7 @@ async function openChatStream(params, m) {
   } catch {
     pendingSend = false;
     if (ep !== kernelEpoch) return;
+    noteNetFail();                       // 发送阶段网络失败：LAN 失效，重试走隧道
     m.__sendLost = true;                 // POST 可能落地也可能没有——由收敛路径判定
     chat.reconnecting = true;
     requestSync('send-lost', 600);
@@ -1672,7 +1749,6 @@ export function stop() {
 }
 
 export function newConversation(projectId) {
-  ui.customizeOpen = false;
   if (session.busy || live || pendingSend || unsettled()) detachLive();   // 直播中也能开新聊天：后台轮继续跑，完成照常提醒
   bumpLoadGen();                    // 作废在途的历史刷新——慢返回不把空白新聊天顶回旧会话
   replaceMessages([]);
@@ -1968,7 +2044,7 @@ export function onBusEvent(ev) {
     case 'run.start':
       if (ev.sessionId) delete status.suggestions[ev.sessionId];   // 新一轮开跑：上一条建议过时
       if (!ev.sessionId || mutedLive.has(ev.sessionId)) return;
-      if (session.id === ev.sessionId || (!session.id && ev.source !== 'peer')) requestSync('run.start');
+      if (session.id === ev.sessionId || (!session.id && ev.source !== 'capsule' && ev.source !== 'peer')) requestSync('run.start');
       return;
     case 'run.end':
       // 稍等：健康直播流的 done 事件通常几百 ms 内就到，先让它自己收尾（doSync 里还有
@@ -2058,7 +2134,10 @@ async function postChatJSON(params) {
 
 function steerParams(t, atts, priority) {
   const params = { message: t, agent: 'claude', sessionId: session.id, priority };
+  params.client = (typeof window !== 'undefined' && window.AndroidStore) ? 'apk' : 'web';
   if (narrowViewport()) params.narrow = true;   // 内嵌图表：窄屏（手机浏览器）按约 380px 宽出图
+  const pc = thisDeviceId();
+  if (pc && !IS_CSNAP) params.fromComputer = pc;
   if (settings.model) params.model = settings.model;
   const eff = effectiveEffort(settings.model, settings.effort);
   if (eff) params.effort = eff;
@@ -2166,11 +2245,11 @@ export async function restoreOnBoot() {
   try { a = await probeActive(); } catch {}
   const saved = storeGet(LAST_KEY);
   const runs = runsOf(a).filter((r) => r.sessionId);
-  // 上次看的会话正在跑（属于"回到原处"）→ 挂直播。
+  // 上次看的会话正在跑（含胶囊轮——属于"回到原处"）→ 挂直播。
   const savedRun = saved ? runs.find((r) => r.sessionId === saved) : null;
   if (savedRun) { await openRun(savedRun); return; }
-  // 否则挂最新的一轮（别处发起的直播镜像）；跨会话消息接住的轮（peer）不劫持启动恢复。
-  const cand = runs.filter((r) => r.source !== 'peer');
+  // 否则挂最新的非胶囊轮（别处发起的直播镜像）；胶囊轮不劫持启动恢复（它有原生 HUD），跨会话消息接住的轮（peer）同理。
+  const cand = runs.filter((r) => r.source !== 'capsule' && r.source !== 'peer');
   if (cand.length) { await openRun(cand[cand.length - 1]); return; }
   if (saved) await loadSession(saved);
 }

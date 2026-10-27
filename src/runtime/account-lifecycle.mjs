@@ -1,20 +1,22 @@
 // 账号生命周期（开源路线 S2-4）：删号 / 停用 / 降档 / 退出登录时，把这个账号在服务器上「还活着的东西」一并收掉。
 //
-// 以前删号只删 users.json 里的一行：目录、定时任务、用量原样留着，owner 键又是 'u:<名字>'，
-// 同名的人重新注册就整个接手——文件、对话、定时任务。现在：
+// 以前删号只删 users.json 里的一行：目录、定时任务、用量、设备、端口转发原样留着，owner 键又是 'u:<名字>'，
+// 同名的人重新注册就整个接手——文件、对话、定时任务，甚至旧人的电脑（设备 owner 相同）。现在：
 //   · 账号有不可变 id（users.mjs「账号 id」），同名重新注册拿到全新的 id 和目录，什么都继承不到；
-//   · 删号（deleteAccount）：先让它登不上（账号行与全部登录会话），再停掉在跑的轮与停放着的 CLI、
-//     关它铸的聊天快照、清掉它用过的邀请记录、用量账本与管理员可见性记录，
+//   · 删号（deleteAccount）：先让它登不上（账号行与全部登录会话），再停掉在跑的轮与停放着的 CLI、断开并删掉它的设备
+//     （留墓碑）、删端口转发、关它铸的聊天快照、清掉它用过的邀请记录、用量账本与管理员可见性记录，
 //     等他在线的页面断开总线（waitBusDrained，见那里的说明），最后按选择处理数据：
 //       purge   连目录一起删（默认，控制台删除对话框默认勾选；异步删，不卡事件循环）；
 //       archive 整个目录挪进 <usersRoot>/_archive/<id>-<时间>/（附 account.json：名字、删除时间、用量），管理员能找回；
 //     还有页面没断开（半死的连接）就先不动目录，记成 'pending'，后台等断开再处理（finishPendingData）；
 //     id 记进 _system/retired-accounts.json，永不复用；
-//   · 停用（setAccountDisabled）：登录立即失效（getSession 本就不认停用账号）、
-//     在跑的轮与停放的 CLI 中止、他铸的聊天快照关停（快照是一次性的，不随启用恢复）；启用即恢复登录；
-//   · 降为普通（setAccountTier）：收回命令行当场生效——在跑的轮、侧栏终端、停放的 CLI 一并收掉。
+//   · 停用（setAccountDisabled）：登录立即失效（getSession 本就不认停用账号）、设备挂起（令牌留着，启用后照常）、
+//     在跑的轮与停放的 CLI 中止、他铸的聊天快照关停（快照是一次性的，不随启用恢复）；启用即恢复其余各项；
+//   · 降为普通（setAccountTier）：收回命令行当场生效——在跑的轮、侧栏终端、无头浏览器、停放的 CLI 一并收掉；
+//   · 设备凭据跟着登记它的那次登录走（deviceLoginState）：那次登录退出 / 过期 / 被踢 / 账号停用或删除，令牌就不认；
+//     在线的设备由会话结束事件与每分钟一次的巡检当场断开。
 //
-// 别的模块要在账号结束时收自己的东西（dimensio 租户进程、终端池、分享链接……）：订阅
+// 别的模块要在账号结束时收自己的东西（dimensio 租户进程、终端 / 浏览器池、分享链接……）：订阅
 // accountEvents 的 'ended'（{ id, key, name, reason: 'deleted' | 'disabled' }）；降为普通另发 'downgraded'（{ id, key, name }）。
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, renameSync, writeFileSync, readFileSync } from 'node:fs';
@@ -22,9 +24,14 @@ import { readdir, stat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import * as users from '../users.mjs';
 import { NATIVE_ROOT, ROOT, userRoot } from '../config/index.mjs';
-import { ownerKey } from './principal.mjs';
+import { ownerKey, parseOwnerKey } from './principal.mjs';
+import { listDevices, deviceById, revokeDevice, deleteDevice, setDevicesSuspended } from './device-registry.mjs';
+import { abortDevice, onlineDeviceIds } from './device-control.mjs';
+import { killDeviceTerm } from './device-term.mjs';
+import { dropForwardsOfDevice, dropForwardsOfOwner } from './device-forward.mjs';
 import { getLiveGens } from './gen.mjs';
 import { busPublish, busSubscribers, busDropKey } from './bus.mjs';
+import { deviceAudit } from './device-audit.mjs';
 import { dropAccessOf } from './admin-access.mjs';
 
 export const accountEvents = new EventEmitter();
@@ -36,6 +43,62 @@ const userKeyOf = (id) => ownerKey('user', id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 只当「最多等这么久」用的计时：unref，不拖住进程退出
 const cap = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
+
+// 主令牌指纹（routes/devices.mjs 注册时设）：管理员会话登记的设备，主令牌一换随之失效。
+let adminGen = '';
+export function setLifecycleAdminGen(gen) { adminGen = String(gen || ''); }
+
+// ── 设备凭据还算不算数 ─────────────────────────────────────────────────────
+// 'ok' | 'signed-out'（登记它的登录已退出 / 过期 / 被踢）| 'account'（账号停用 / 删除，或设备被挂起）。
+// 没有 login 的：
+//   · 管理员 / 主机名下的（比如 MOONLIGHT）——这一版之前登记的，行为不变；
+//   · 成员名下、这一版之前登记的——账号没了 / 停用 → 'account'；否则回一次 'signed-out'：新老客户端收到都会自动重新登记，
+//     重新登记时就绑上了当前这次登录（之后退出 / 改密码 / 被踢，这台电脑随之失效）。客户端没登录着就等他登录后再连；
+//   · 成员名下、这一版之后登记却没有可绑的登录（loginless，正常不会出现）——不再要求重新登记，免得来回重登。
+export function deviceLoginState(d) {
+  if (!d) return 'signed-out';
+  if (d.suspended) return 'account';
+  const l = d.login;
+  if (!l || typeof l !== 'object') {
+    const o = parseOwnerKey(d.owner || 'admin');
+    if (!o || o.kind !== 'user' || d.loginless) return 'ok';
+    return users.accountLoginState(o.id) === 'account' ? 'account' : 'signed-out';
+  }
+  if (l.kind === 'user') return users.loginState(l.sid);
+  if (l.kind === 'admin') return users.adminLoginAlive(l.sid, adminGen) ? 'ok' : 'signed-out';
+  if (l.kind === 'master') return !adminGen || l.gen === adminGen ? 'ok' : 'signed-out';
+  return 'ok';
+}
+
+// 在途 op 全拒、控制通道掐断、设备终端收掉。
+function cutDevices(ids, reason) {
+  for (const id of ids) {
+    try { abortDevice(id, reason); } catch {}
+    killDeviceTerm(id).catch(() => {});
+  }
+}
+
+// 登录会话结束（users.mjs 发事件：退出、改 / 重置密码踢下线、删号、吊销管理员会话）：这些会话登记的设备当场断开。
+export function onSessionsEnded(sids) {
+  const set = new Set((sids || []).filter(Boolean).map(String));
+  if (!set.size) return 0;
+  const hit = listDevices().filter((d) => d.login && set.has(String(d.login.sid || ''))).map((d) => d.id);
+  if (hit.length) cutDevices(hit, '登记这台设备的登录已退出');
+  return hit.length;
+}
+users.sessionEvents.on('ended', (sids) => { try { onSessionsEnded(sids); } catch {} });
+
+// 巡检：在线设备里凭据已经不算数的（登录过期、账号停用 / 删除、被吊销）断开。只看在线的，很便宜。
+export function sweepDeviceLogins() {
+  let n = 0;
+  for (const id of onlineDeviceIds()) {
+    const d = deviceById(id);
+    if (!d || d.revoked || deviceLoginState(d) !== 'ok') { cutDevices([id], d && d.revoked ? '设备已被吊销' : '设备凭据已失效'); n++; }
+  }
+  return n;
+}
+const sweepTimer = setInterval(() => { try { sweepDeviceLogins(); } catch {} }, 60_000);
+sweepTimer.unref?.();
 
 // 中止这个身份在跑的轮（Claude / 定时任务都挂在 gen 注册表上）。
 function stopRuns(key) {
@@ -90,8 +153,9 @@ export async function releaseParkedClis(key, id) {
   return sids.length;
 }
 
-// 侧栏终端池（按属主收）。模块按需加载：没加载过说明他没开过。
-const POOLS = [['./claude-term.mjs', 'killTermsOf']];
+// 侧栏终端与无头浏览器池（按属主收）。两个池模块按需加载：没加载过说明他没开过。
+// browserProfilesReleased：等他的共享无头宿主（持久配置档在他目录里）真正退出，否则 Windows 上目录删不掉。
+const POOLS = [['./claude-term.mjs', 'killTermsOf'], ['./claude-browser.mjs', 'closeBrowsersOf'], ['./claude-browser.mjs', 'browserProfilesReleased']];
 // 公开分享（/w/ 分享空间的桶是拷贝，删号后照样能看；/s/ 单文件）：按属主作废的入口由它们自己的模块提供，还没有时跳过。
 const SHARES = [['../routes/share-space.mjs', 'revokeShareSpacesOf'], ['../routes/share.mjs', 'revokeSharesOf']];
 async function callEach(list, key) {
@@ -108,8 +172,10 @@ export function setAccountDisabled(ref, disabled) {
   if (r.error) return r;
   const id = users.accountId(rec);
   const key = userKeyOf(id);
+  const changed = setDevicesSuspended(key, !!disabled);
   let runs = 0;
   if (disabled) {
+    cutDevices(listDevices({ owner: key }).map((d) => d.id), '账号已停用');
     runs = stopRuns(key);
     releaseParkedClis(key, id).catch(() => {});
     // 他铸的聊天快照是还在跑的对话（访客用的是号池、记他的账）：一并关掉；文件分享是静态拷贝，停用时留着，删号才收
@@ -117,12 +183,13 @@ export function setAccountDisabled(ref, disabled) {
     emitEnded({ id, key, name: rec.name, reason: 'disabled' });
   }
   busPublish(key, { type: 'me.changed' });   // 他在线的页面重新问一次 /api/auth：停用了就退回登录页
-  return { ok: true, id, runs };
+  deviceAudit({ ev: disabled ? 'account_disable' : 'account_enable', owner: key, devices: changed.length });
+  return { ok: true, id, devices: changed.length, runs };
 }
 
 // ── 改档位 ─────────────────────────────────────────────────────────────────
 // 降为普通 = 收回命令行，要当场生效：在跑的轮用的是开跑时捕获的身份（canUseTool 看的 ctx.shell 还是 true），
-// 侧栏终端里已经起来的进程也不会自己消失，停放的 CLI 还可能替跨会话消息开一轮——一并收掉。
+// 侧栏终端里已经起来的进程、无头浏览器也不会自己消失，停放的 CLI 还可能替跨会话消息开一轮——一并收掉。
 // 升档、档位没变都不用收什么（下一轮自然按新档位开）。opts.ack 同 users.setTier（升为完全信任要确认）。
 export async function setAccountTier(ref, tier, opts = {}) {
   const rec = users.getUser(ref);
@@ -136,7 +203,7 @@ export async function setAccountTier(ref, tier, opts = {}) {
   await callEach(POOLS, key);
   releaseParkedClis(key, id).catch(() => {});
   try { accountEvents.emit('downgraded', { id, key, name: rec.name }); } catch (e) { console.error('[account] downgraded 监听出错：', e?.message || e); }
-  console.log(`[account] ${rec.name}（${id}）降为普通：中止 ${runs} 轮，收掉终端`);
+  console.log(`[account] ${rec.name}（${id}）降为普通：中止 ${runs} 轮，收掉终端与浏览器`);
   return { ...r, runs };
 }
 
@@ -253,7 +320,7 @@ function dropAdminAccess(id) {
 
 /**
  * 删号。ref = 登录名或 id；mode = 'purge'（默认）| 'archive'；drainMs = 等他的页面断开总线最多多久（默认 5 秒）。
- * 返回 { ok, id, name, data, archive, dataError, runs, parked, snapshots, invites }；data 是数据的实际去向
+ * 返回 { ok, id, name, data, archive, dataError, devices, forwards, runs, parked, snapshots, invites }；data 是数据的实际去向
  * （'purged' / 'archived' / 'partial' 没删干净 / 'kept' 没动 / 'pending' 还有页面连着、断开后自动处理），
  * dataError 说明为什么没按要求处理。
  */
@@ -270,9 +337,17 @@ export async function deleteAccount(ref, { mode = 'purge', drainMs = 5000 } = {}
   if (del.error) return del;
   // 他在线的页面马上重新问一次 /api/auth：未登录 → 自己断开总线（下面 ④ 等它断干净再动目录）
   busPublish(key, { type: 'me.changed' });
-  // ② 停掉它在跑的东西：在跑的轮、停放的 CLI（与下面的清理并行，④ 之前等它退干净）、快照、终端池
+  // ② 停掉它在跑的东西：在跑的轮、停放的 CLI（与下面的清理并行，④ 之前等它退干净）、设备、端口转发、快照、终端 / 浏览器池
   const runs = stopRuns(key);
   const parkedP = releaseParkedClis(key, id).catch(() => 0);
+  const devs = listDevices({ owner: key, includeRevoked: true });
+  cutDevices(devs.map((d) => d.id), '账号已删除');
+  for (const d of devs) {
+    if (!d.revoked) revokeDevice(d.id);
+    deleteDevice(d.id);
+    dropForwardsOfDevice(d.id);
+  }
+  const forwards = dropForwardsOfOwner(key);
   const snapshots = await closeSnapshotsOf(key);
   await callEach(POOLS, key);
   await callEach(SHARES, key);
@@ -302,7 +377,8 @@ export async function deleteAccount(ref, { mode = 'purge', drainMs = 5000 } = {}
     schedulePending();
     console.warn(`[account] 删除 ${name}（${id}）：还有 ${busSubscribers(key)} 条总线连接没断开（半死的连接？），数据等断开后再${want === 'archive' ? '归档' : '删除'}`);
   }
-  console.log(`[account] 删除 ${name}（${id}）：数据 ${data.mode}${data.error ? '（' + data.error + '）' : ''}，中止 ${runs} 轮，停放会话 ${parked}`);
+  deviceAudit({ ev: 'account_delete', owner: key, devices: devs.length, data: data.mode });
+  console.log(`[account] 删除 ${name}（${id}）：数据 ${data.mode}${data.error ? '（' + data.error + '）' : ''}，设备 ${devs.length}，转发 ${forwards}，中止 ${runs} 轮，停放会话 ${parked}`);
   // 账号已经删了，数据没处理完不算失败（不放进 error，免得接口回 400、审计漏记）：dataError 交给控制台提示
-  return { ok: true, id, name, data: data.mode, want, archive: data.archive || null, dataError: data.error || null, runs, parked, snapshots, invites };
+  return { ok: true, id, name, data: data.mode, want, archive: data.archive || null, dataError: data.error || null, devices: devs.length, forwards, runs, parked, snapshots, invites };
 }

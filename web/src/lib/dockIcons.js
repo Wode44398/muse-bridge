@@ -1,4 +1,4 @@
-// Claude 工作台四件套的字形（标题栏工具开关、⋮ 菜单、手机 sheet 的 chip 条共用一份）。
+// Claude 工作台五件套的字形（标题栏工具开关、⋮ 菜单、手机 sheet 的 chip 条共用一份）。
 // 静态 SVG 串，宿主用 {@html} 挂；尺寸交给宿主 CSS（svg 宽高 100%）。
 import { iconSvg } from './claudeIcons.js';
 
@@ -10,6 +10,7 @@ const ICONS = {
   term: S('<path d="M5 7.5 9.5 12 5 16.5M12 17h7"/>', 1.8),
   // 审阅：方框里一加一减 = diff
   review: S('<rect x="4" y="4" width="16" height="16" rx="3.6"/><path d="M12 7.9v4.2M9.9 10h4.2M9.9 15.6h4.2"/>'),
+  browser: S('<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.4 3.9 5.2 3.9 8.5s-1.3 6.1-3.9 8.5M12 3.5C9.4 5.9 8.1 8.7 8.1 12s1.3 6.1 3.9 8.5"/>', 1.6),
   files: S('<path d="M3.5 7.2c0-1.5 1.2-2.7 2.7-2.7h3.4l2 2.3h6.2c1.5 0 2.7 1.2 2.7 2.7v8.3c0 1.5-1.2 2.7-2.7 2.7H6.2c-1.5 0-2.7-1.2-2.7-2.7z"/>'),
   more: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5.6" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.4" r="1.7"/></svg>',
   close: S('<path d="M7 7l10 10M17 7 7 17"/>', 1.9),

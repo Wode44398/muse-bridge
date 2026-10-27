@@ -1,7 +1,7 @@
 // K8（Codex X52）：外部记忆库只读挂载。
 //
-// 其他编码 agent（Codex、Claude Code、Kimi……）共管的记忆库（Claude Code 的格式：frontmatter 里 name / description /
-// metadata.type，正文在后；MEMORY.md 是索引）可以挂给 dimensio，在对应的工作区里可以读、永远不写：
+// `bridge build/memory` 是 Codex、Claude、Kimi 共管的记忆库（Claude Code 的格式：frontmatter 里 name / description /
+// metadata.type，正文在后；MEMORY.md 是索引），dimensio 在对应的工作区里可以读、永远不写：
 //   · Recall(query) 的检索带上它，Recall 用 external:<id> 读全文、layer:"external" 列目录——结果一律标明「外部记忆，未经
 //     dimensio 治理」（没有到期、证据、锚点这套治理，可能过时）；
 //   · Remember 没有写它的路；不进提示词的索引（只一句「挂着一个外部库、有多少条」），也不会晋升到全局层；

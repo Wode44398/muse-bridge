@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>快速提问</title><!-- i18n-ignore-file：开机默认标题；英文界面由 QuickAsk.svelte 启动时改写 document.title（检查器不解析 HTML） -->
+<!-- 与主页面同一个键：浮窗跟随全局主题，不会在暗色桌面上闪出一块白板。 -->
+<script>(function(){try{var t=localStorage.getItem('bridge-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
+</head>
+<body>
+<div id="app"></div>
+<script type="module" src="/src/quick.js"></script>
+</body>
+</html>

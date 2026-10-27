@@ -4,7 +4,7 @@
 //   ① 受控文件不变：开跑前记下 harness/ 下的 git status（含未跟踪、不含已忽略）和这些文件的内容指纹，收尾比对。
 //      测试改写或新建了受控文件就判整次失败——当初那条 memory/user-s-favorite-number.md 就是测试写出、被提交进库的；
 //   ② 生产数据目录里不多出测试桶：memory/workspaces、knowledge/workspaces 下新出现的 dimensio-* 桶（测试临时目录一律
-//      以 dimensio- 开头）。不做全量比对：同机另一个 harness 实例可能正往这里写真实工作区的桶。
+//      以 dimensio- 开头）。不做全量比对：测试服的 harness 可能正往这里写真实工作区的桶。
 // 另外开跑前清掉 24 小时前留下的测试临时目录：Windows 上句柄没放开时 rmSync 删不掉，日积月累攒了三千多个。
 // 跑测试的同时别手动改 harness/ 下的文件，否则收尾会把你的改动当成测试写的。
 import { createHash } from "node:crypto";

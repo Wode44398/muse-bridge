@@ -19,8 +19,8 @@ const sleep = (ms, signal) => new Promise((resolve) => {
   if (signal) signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
 });
 const needSid = (v) => { if (!SID_RE.test(String(v || ''))) throw new OpError('bad_args', 'sessionId 格式不对', { hint: '会话 id 来自 sessions.list / chat.send 的返回' }); return String(v); };
-// 会话从哪儿开起来的：bridge（网页 / 安卓 app / 本接口）、定时任务、服务器上直接跑的 Claude 命令行
-const ORIGIN = { phone: 'bridge', routine: 'routine', desktop: 'cli' };
+// 会话从哪儿开起来的：bridge（手机 / 网页 / 桌面客户端 / 本接口）、定时任务、电脑上的 Claude Desktop / 命令行
+const ORIGIN = { phone: 'bridge', routine: 'routine', desktop: 'desktop' };
 const clip = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; };
 
 // ---- 一轮的状态：从 gen 缓冲里读 ----
@@ -246,7 +246,7 @@ defineOp({
     '不带 sessionId = 开新会话（可用 project 选项目）；带 sessionId = 在那个会话里接着说。',
     '默认发出去就返回（status=running），拿返回的 sessionId 调 chat.wait 等结果；也可以用 wait 直接等最多若干秒。',
     '会话正在跑时，whenBusy 决定怎么办：queue（默认，排队，这一轮结束后自动发）、steer（插进正在跑的这一轮）、replace（停掉这一轮，改发这条）。',
-    'Claude 在 Muse Bridge 里有完整工具（读写文件、命令行按身份、联网搜索与抓网页……；这台服务器没有浏览器，不能打开网页截图）；它要你回答问题或批准工具时 status=needs_input，用 chat.answer 回。',
+    'Claude 在 bridge 里有完整工具（读写文件、命令行按身份、浏览器、媒体生成……）；它要你回答问题或批准工具时 status=needs_input，用 chat.answer 回。',
     '这一轮会出现在用户的界面上（会话列表、直播），和用户自己发的一样。',
   ].join(''),
   access: 'write', slow: true, need: ['agent:claude'],
@@ -295,7 +295,7 @@ defineOp({
         return await sendFresh(ctx, env, body, args);
       }
       const code = r.status === 401 ? 'unauthorized' : r.status === 403 ? 'forbidden' : r.status === 429 ? 'quota' : r.status === 409 ? 'conflict' : r.status === 400 ? 'bad_args' : 'failed';
-      throw new OpError(code, routeError(r), j.code === 'held_elsewhere' ? { hint: '这个会话正在别处续聊（另一个界面或服务器上的 Claude 命令行），等那边结束或换个会话' } : {});
+      throw new OpError(code, routeError(r), j.code === 'held_elsewhere' ? { hint: '这个会话正被电脑上的 Claude Desktop / 命令行占着，等那边结束或换个会话' } : {});
     }
     return await afterStart(ctx, env, r, args);
   },

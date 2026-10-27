@@ -1,9 +1,9 @@
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { ok, fail } from "./types.ts";
-import { existingSharedBrowser, claimBrowser } from "../cdp.ts";
-import { browserAvailable } from "../headless.ts";
+import { existingSharedBrowser, claimBrowser, noBrowserMessage } from "../cdp.ts";
 import { fileUrlBlock } from "../sandbox.ts";
 import { redactOutput } from "../redact.ts";
+import { browserAvailable } from "../headless.ts";
 
 // Eval: run JavaScript inside the Browser's page and get the result back.
 // The precision instrument for verification — assert DOM state, read computed
@@ -26,7 +26,9 @@ export const evalTool: Tool = {
       "counts, extracting text/data, or poking app state. Multiple statements: wrap in an IIFE — " +
       "`(() => { …; return x; })()`. Return JSON-serializable values (DOM nodes serialize as {} — return " +
       "their properties instead). Use this for DEBUGGING and INSPECTION; to change app behavior, edit the " +
-      "source files.",
+      "source files. To fill in or click through a form, use ReadPage refs + Browser(click/type) — they send real " +
+      "input events; a scripted `el.click()` / `input.checked = true` often leaves Vue/React/Element-UI component " +
+      "state out of sync with the DOM (looks selected, submit still says the field is empty).",
     parameters: {
       type: "object",
       properties: {
@@ -51,7 +53,7 @@ export const evalTool: Tool = {
     const denied = claimBrowser(ctx.ownerId ?? "");
     if (denied) return fail("eval", denied);
     const page = existingSharedBrowser();
-    if (!page) return fail("eval", "No browser is running — Browser(navigate, url:…) first.");
+    if (!page) return fail("eval", noBrowserMessage());
     // S4（#37②）：当前页是 file:// 且过不了与 Read 同一道闸（点链接、脚本跳转绕过了导航检查）→ 不读。
     const fileBlock = fileUrlBlock(page.url, ctx.sandbox);
     if (fileBlock) return fail("eval", `The current page is a blocked local file — ${fileBlock}. Navigate away first.`);

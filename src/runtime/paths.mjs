@@ -23,7 +23,7 @@ export const DATA_ROOT = path.resolve(process.env.BRIDGE_DATA_ROOT || PROGRAM_RO
 // spawn time, so reading at runtime too keeps reader and writer on the same ~/.claude.
 function homeProjects() { return path.join(os.homedir(), '.claude', 'projects'); }
 // configDir=null（admin）时按 SDK 子进程【实际会用的】位置读：进程环境里的 CLAUDE_CONFIG_DIR
-// 优先，没有才是 ~/.claude。子进程继承本进程环境，读写就此对齐——生产环境没设这个变量、
+// 优先，没有才是 ~/.claude。子进程继承本进程环境，读写就此对齐——正式服没设这个变量、
 // 行为一字不变；测试服的启动器设了它，此前读写分家：会话列表恒空、重开会话一律 404。
 export function projectsBase(configDir) {
   if (configDir) return path.join(configDir, 'projects');

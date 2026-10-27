@@ -1,8 +1,28 @@
-/* Muse Bridge — global styles & design tokens.
-   Ported from the claude.ai reference.
+/* The Bridge — global styles & design tokens.
+   Ported from the claude.ai reference (claude页面设计参考资源).
    Dark is the default theme; light is a complete second theme (design spec §2.1).
    Brand coral: #d97757. */
 
+/* bridge-client 桌面原生壳：恢复桌面输入语义，压低大面积玻璃合成成本，
+   并把常驻分页隔离为独立绘制域。全部由 preload 能力标记门控。
+   文本选择【不】在这里放开（10-13 维护者：模型/effort 选择器、设置、Dock 图标都能被拖选成灰块）：
+   桌面与手机同一套——骨架禁选，正文由下方 .sel-text / 输入框白名单放开。 */
+html[data-desktop="1"] button,
+html[data-desktop="1"] [role="button"] { cursor: pointer; }
+html[data-desktop="1"] .settings { backdrop-filter: blur(18px) saturate(1.08); }
+/* 服务端控制台 / 扩展中心盖在设置页之上，只画了 38% 的黑罩——手机端下面垫的是
+   毛玻璃 .settings 面板所以读得清；桌面端下面是不透明的逻辑板 .sd，底下的文字
+   会原样透上来跟控制台内容叠在一起（实测整页不可读）。桌面形态自带磨砂罩。 */
+html[data-desktop="1"] .sadm,
+html[data-desktop="1"] .extp {
+  background: rgba(9, 11, 16, .74);
+  -webkit-backdrop-filter: blur(26px) saturate(1.12);
+  backdrop-filter: blur(26px) saturate(1.12);
+}
+html[data-desktop="1"] .page,
+html[data-desktop="1"] .claude-page,
+html[data-desktop="1"] .vertex-page { contain: layout style paint; }
+html[data-desktop="1"] * { -webkit-tap-highlight-color: transparent; }
 /* —— 全站滚动条 = Edge（Win11 Fluent 浮层滚动条）同款 ——
    实测 Edge：平时完全隐身；滚动时、或鼠标移到滚条那一条上时，才浮出一根 4px 圆头细线贴右沿（离边 3px），
    鼠标停在拇指上加粗到 ~8px；停下约 1 秒再隐身。无轨道底色、无箭头。
@@ -25,8 +45,44 @@
   ::-webkit-scrollbar-thumb:hover { border-width: 0 2px; background-color: color-mix(in srgb, currentColor 62%, transparent); }
   ::-webkit-scrollbar-thumb:horizontal:hover { border-width: 2px 0; }
   ::-webkit-scrollbar-thumb:active { background-color: color-mix(in srgb, currentColor 72%, transparent); }
+  /* WCO frameless 桌面壳：Electron 在窗口内沿留了 5px 的拉伸热区（FramelessView kResizeInsideBoundsSize），
+     命中测试在系统层先于页面——贴窗口右沿的滚条一按就变成拖窗口宽度。槽加宽到 14px、拇指右侧垫 6px，
+     看得见的拇指整体落到热区之外。 */
+  html[data-wco="1"] ::-webkit-scrollbar { width: 14px; }
+  html[data-wco="1"] ::-webkit-scrollbar-thumb { border-width: 0 6px 0 4px; }
+  html[data-wco="1"] ::-webkit-scrollbar-thumb:hover { border-width: 0 6px 0 0; }
+  html[data-wco="1"] ::-webkit-scrollbar-thumb:horizontal { border-width: 5px 0 3px 0; }
+  html[data-wco="1"] ::-webkit-scrollbar-thumb:horizontal:hover { border-width: 2px 0; }
 }
 
+/* —— WCO frameless（桌面壳 BRIDGE_WCO，批4.5 全站走查）——
+   拖拽区按几何并集计算、与 z-index 无关：顶部 40px 带内残留的交互元素会被 drag 吞点击，
+   故【全部交互元素一律 no-drag 兜底】（带外元素上是零成本 no-op，未来新页自动被罩住）；
+   右上 ~140px 被系统最小化/最大化/关闭按钮覆盖：各分页顶栏按 --wco-right
+   （wco.svelte.js 实时同步的窗控占宽）平移避让。非 WCO 环境 data-wco 不存在，全部惰性。 */
+html[data-wco="1"] button,
+html[data-wco="1"] [role="button"],
+html[data-wco="1"] a,
+html[data-wco="1"] input,
+html[data-wco="1"] textarea,
+html[data-wco="1"] select,
+html[data-wco="1"] [contenteditable="true"] { -webkit-app-region: no-drag; }
+
+/* Claude 顶栏右浮钮组：钉在窗口右上与系统窗控做邻居——.claude-slide 常挂 transform，
+   fixed 的包含块=全屏滑动层，故 dock 展开挤窄聊天列时按钮原位不动；右距收紧到窗控左缘 4px。
+   收成标题栏带里的一颗紧凑胶囊（高 32，与窗控按钮同一条中线）：原先 44px 高、top:2 会伸出 40px
+   的窗控带，工作台展开后它压进面板第一行。现在工作台把自己那段第一行让出来当标题栏带
+   （ClaudeDock.svelte），胶囊正好坐在带里、窗控左边。top 组件里是内联样式，须 !important 压过。
+   左上汉堡（medium 档才出）同步收成 32px，两端同一条基线。 */
+html[data-wco="1"] .claude-slide .fab.pill {
+  position: fixed;
+  right: calc(4px + var(--wco-right, 0px));
+  top: calc((var(--wco-h, 40px) - 32px) / 2) !important;
+  height: 32px; border-radius: 16px; padding: 0 3px;
+}
+html[data-wco="1"] .claude-slide .fab.pill .pbtn { width: 38px; height: 26px; border-radius: 13px; }
+html[data-wco="1"] .claude-slide .fab.pill .pbtn svg { width: 18px; height: 18px; }
+html[data-wco="1"] .claude-slide .fab.pill .live-dot { top: 2px; right: 6px; }
 /* Claude 侧栏拖放的拖拽图（ClaudePage dragGhost 现造、挂在 body 屏幕外，setDragImage 采样后即摘）：
    一颗干净的卡片代替浏览器默认的整行截图。项目带 Anthropicons 项目字形。 */
 .bridge-side-ghost {
@@ -38,13 +94,62 @@
 }
 .bridge-side-ghost .t { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .bridge-side-ghost .ic { font-family: var(--icons); font-size: 17px; color: var(--serif); flex: none; }
+/* 侧列形态的工具开关组（TopBar tools：终端/审阅/浏览器 · ⋮）收进标题栏带的规则在 TopBar.svelte 里，
+   分屏两格各一组；iframe 那一格由宿主告知带高后挂 data-wco-band 对齐。 */
+/* 分屏的另一格是同源 iframe：它自己的按钮不在本文档的 no-drag 名单里，而顶部 40px 是整条拖拽带
+   （按几何并集算，与层级无关）——整个 iframe 打成 no-drag 洞，格里顶上那一行才点得动。 */
+html[data-wco="1"] iframe.bridge-pane { -webkit-app-region: no-drag; }
+html[data-wco="1"] .claude-slide .fab.round {
+  top: calc((var(--wco-h, 40px) - 32px) / 2) !important;
+  width: 32px; height: 32px; font-size: 18px;
+}
+/* Vertex：手机态顶栏 flex（右组 margin-left:auto）/ 桌面态右上功能钮 */
+html[data-wco="1"] .v-header { padding-right: calc(8px + var(--wco-right, 0px)); }
+html[data-wco="1"] .v-dt-top { padding-right: calc(16px + var(--wco-right, 0px)); }
+/* 工作空间工具栏的避让不在这里写：FilesDesktop 组件内按 --fd-avoid-r 让位（整页=窗控；
+   内嵌进 Claude 工作台时为 0：工作台在桌面壳下把自己那段第一行整条让给窗控当标题栏带，子树里
+   --wco-right 归零），见 FilesDesktop.svelte / ClaudeDock.svelte。下方查看器头的 --wco-right 避让
+   在工作台侧栏里同样因此失效，这是有意的。 */
+/* Harness（dimensio）分页的右上避让不在这里写：它按"哪一栏真的贴着窗口右缘"分情况
+   （dock 展开时右缘归面板，顶栏再让就成了隔空悬浮的钮），已下沉到 harness 组件内部，
+   由 App.svelte 的 --hx-hdr-r / --hx-pane-r 两个变量消费本文件下发的 --wco-right。
+   顺带解掉 .top / .dock 与 ServerAdmin、桌面主页启动器的撞名风险。 */
+/* 服务端控制台 / 扩展中心（右上刷新/关闭钮距右缘仅 ~20px） */
+html[data-wco="1"] .sadm .main > .top,
+html[data-wco="1"] .extp .main > .top { padding-right: calc(4px + var(--wco-right, 0px)); }
+/* 窄窗（≤880px 时 rail 横滑置顶）整体让出标题栏带 */
+@media (max-width: 880px) {
+  html[data-wco="1"] .sadm .frame,
+  html[data-wco="1"] .extp .frame { padding-top: calc(14px + var(--wco-h, 40px)); }
+}
+/* 沉浸查看器顶条 + 右上菜单 + 各文档查看器头部 */
+html[data-wco="1"] .mv-root .mv-top { padding-right: calc(10px + var(--wco-right, 0px)); }
+html[data-wco="1"] .mv-root .mv-menu { right: calc(10px + var(--wco-right, 0px)); }
+html[data-wco="1"] .doc-head,
+html[data-wco="1"] .pdf-head,
+html[data-wco="1"] .of-head,
+html[data-wco="1"] .hv-bar { padding-right: calc(10px + var(--wco-right, 0px)); }
+/* ChatGPT 分页是同源 iframe：主框架的拖拽区吞不掉也罩不住子文档（app-region 只收集主框架），
+   整体下推一个标题栏带最稳——顶带留给拖拽，clone 顶栏与窗控互不打扰 */
+/* 顶带底色不在这里硬写：写死 #212121 既跟 clone 的暗色面 #171717 差一截（顶部一条
+   肉眼可见的接缝），亮色主题下还会盖掉组件自己的白底。交给 .chatgpt-page 本体着色。 */
+html[data-wco="1"] .chatgpt-page .chat-frame {
+  margin-top: var(--wco-h, 40px);
+  height: calc(100% - var(--wco-h, 40px));
+}
 
-@font-face{font-family:"Anthropic Sans";src:url('./assets/font/cc27851ad-CFxw3nG7.woff2') format("woff2");font-weight:300 800;font-style:normal;font-display:swap}
-@font-face{font-family:"Anthropic Serif";src:url('./assets/font/c66fc489e-C-BHYa_K.woff2') format("woff2");font-weight:300 800;font-style:normal;font-display:swap}
-@font-face{font-family:"Anthropicons-Variable";src:url('./assets/font/c0f671921-DICoRAgs.woff2') format("woff2");font-weight:400 700;font-display:block}
+/* 公开版自带的开源字体（assets/font，许可文本同目录；生成方式见 web/scripts/public-assets）：
+   Bridge Sans = Inter（OFL）、Bridge Serif = Lora 插值成可变字重后改名（OFL）、Bridge Icons = Lucide 图标（ISC）
+   放在界面原来用的私有区码位上（.ic / --icons 按码位取字形的写法不用改）。
+   品牌字体一律经下面 :root 的 --font-brand-sans / --font-brand-serif / --icons 引用，别在组件里写死家族名：
+   维护者的私有 overlay（src/runtime/overlay-web.mjs）只改这三个变量就能换回原版字体。 */
+@font-face{font-family:"Bridge Sans";src:url('./assets/font/bridge-sans-var.woff2') format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
+@font-face{font-family:"Bridge Serif";src:url('./assets/font/bridge-serif-var.woff2') format("woff2");font-weight:400 700;font-style:normal;font-display:swap}
+@font-face{font-family:"Bridge Icons";src:url('./assets/font/bridge-icons.woff2') format("woff2");font-weight:100 900;font-display:block}
 
 :root{
-  /* 系统栏安全边距（浏览器/iOS 走 env()）。全前端统一引用 var(--sat)/var(--sab)。 */
+  /* 系统栏安全边距：浏览器/iOS 走 env()；apk 由原生 edge-to-edge 注入真值
+     （inline style 覆盖此定义）。全前端统一引用 var(--sat)/var(--sab)。 */
   --sat:env(safe-area-inset-top, 0px);
   --sab:env(safe-area-inset-bottom, 0px);
   --bg:#1f1f1e; --card:#2c2c2a; --text:#f8f8f6; --serif:#c3c2b7; --muted:#97958c;
@@ -53,9 +158,11 @@
   --card-shadow:0 2px 16px rgba(0,0,0,.2),0 0 0 .5px rgba(226,225,218,.28);
   --q-card:rgba(40,40,38,.97); --q-rowsel:rgba(255,255,255,.06); --q-skipborder:rgba(255,255,255,.22);
   --q-shadow:0 2px 16px rgba(0,0,0,.3),0 0 0 .5px rgba(226,225,218,.2);
-  --sans:"Anthropic Sans",system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  --serif-stack:"Anthropic Serif",Georgia,"Times New Roman",Times,serif;
-  --icons:"Anthropicons-Variable";
+  --font-brand-sans:"Bridge Sans";
+  --font-brand-serif:"Bridge Serif";
+  --sans:var(--font-brand-sans),system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --serif-stack:var(--font-brand-serif),Georgia,"Times New Roman",Times,serif;
+  --icons:"Bridge Icons";
   --ok:#5aa468; --warn:#d9a441; --crit:#d96a5a;
   --taskchip:#2f6fd6; --taskchip-fg:#ffffff;   /* 后台任务芯片（官方 /code 页「N running task」同款蓝） */
   --radius:16px;
@@ -79,8 +186,10 @@
   --ea-settle:cubic-bezier(.34,1.26,.5,1);   /* 仅「松手回弹」，绝不用于按下 */
   --ea-fade:cubic-bezier(.4,0,.6,1);
 
-  /* —— 设置 / 账户菜单 / 登录框（claude.ai 设置对话框同款）——
-     components/settings/*、UserMenu、LoginDialog 共用。 */
+  /* —— claude.ai 设置对话框同款配色（取自 Claude in Finance 的实测值）——
+     单 agent 模式的账户菜单 / 登录框（UserMenu、LoginDialog），以及两套设置共用的模型服务面板
+     （components/claude/providers 与它用的 settings/SToggle、SSegmented）。原单页模式那套设置外壳
+     2026-10-21 已下线，单页模式的设置页与普通模式共用 Settings / SettingsDesktop。 */
   --st-surface:#262624; --st-side:#222220; --st-text2:#c3c2b7; --st-muted:#97958c;
   --st-line:rgba(255,255,255,.12); --st-hair:rgba(255,255,255,.07); --st-sel:rgba(255,255,255,.09);
   --st-hover:rgba(255,255,255,.05); --st-field:rgba(0,0,0,.2); --st-seg:rgba(255,255,255,.06);
@@ -101,7 +210,8 @@
 
 /* —— 页面级转场（lib/pageMorph.js，View Transitions）的伪元素静态样式 ——
    几何与时间全在 JS 里用 WAAPI 驱动；这里只关掉 UA 默认的交叉淡化，定好裁切、铺放与原点。
-   html[data-vt] 只在转场进行中存在（open / close / switch）。 */
+   html[data-vt] 只在转场进行中存在（open / close / switch / theme）。 */
+@property --vt-r { syntax: "<length>"; inherits: true; initial-value: 0px; }
 html[data-vt]::view-transition { background: #000; }
 html[data-vt]::view-transition-old(root),
 html[data-vt]::view-transition-new(root) {
@@ -120,6 +230,30 @@ html[data-vt]::view-transition-new(bridge-page) {
   animation: none; mix-blend-mode: normal;
   height: 100%; object-fit: cover;
 }
+/* 共享图标：几何沿用 UA 两端插值，只把节奏换成同一条弹簧、交叉淡化收紧到前半程 */
+html[data-vt]::view-transition-group(bridge-hero) {
+  animation-duration: var(--vt-dur, 480ms); animation-timing-function: var(--vt-ease, ease);
+}
+html[data-vt]::view-transition-old(bridge-hero),
+html[data-vt]::view-transition-new(bridge-hero) { animation-duration: calc(var(--vt-dur, 480ms) * .5); }
+/* 层级：UA 按「旧画面里先出现的名字在下」排组——共享图标在旧画面就有、分页卡片只在新画面有，
+   不指定的话图标会被长大的卡片盖住，飞到一半就不见了 */
+html[data-vt]::view-transition-group(bridge-page) { z-index: 1; }
+html[data-vt]::view-transition-group(bridge-hero) { z-index: 2; }
+/* 主题换场：新画面以柔边圆波从标题铺开（--vt-r 由 JS 推进，--vt-f 为羽化宽度） */
+html[data-vt="theme"]::view-transition-new(root) {
+  -webkit-mask-image: radial-gradient(circle at var(--vt-ox) var(--vt-oy), #000 calc(var(--vt-r) - var(--vt-f, 200px)), transparent var(--vt-r));
+  mask-image: radial-gradient(circle at var(--vt-ox) var(--vt-oy), #000 calc(var(--vt-r) - var(--vt-f, 200px)), transparent var(--vt-r));
+}
+/* 开机揭幕：标题是共享元素（居中 → 左上），几何由 UA 两端插值，节奏换成同一条弹簧 */
+html[data-vt]::view-transition-group(bridge-brand) {
+  animation-duration: var(--vt-dur, 600ms); animation-timing-function: var(--vt-ease, ease); z-index: 4;
+}
+html[data-vt]::view-transition-old(bridge-brand),
+html[data-vt]::view-transition-new(bridge-brand) { animation-duration: calc(var(--vt-dur, 600ms) * .55); }
+/* 转场期间标题自己的 CSS 过渡全部关掉：位置 / 字号的变化交给快照几何插值（开机），颜色交给换场本身
+   （主题）——否则新画面里标题还在慢慢挪、慢慢变色，快照拍到的是半路的样子 */
+html[data-vt] .brand, html[data-vt] .brand .l1 { transition: none !important; }
 html[data-theme="light"]{
   color-scheme:light;
   --bg:#f8f8f6; --card:#ffffff; --text:#121212; --serif:#373734; --muted:#7b7974;
@@ -142,7 +276,7 @@ html[data-theme="light"]{
 @property --ca-anim { syntax: "<number>"; inherits: true; initial-value: 0; }
 
 /* markdown 宽表格的滚动壳（由 lib/md.js 在渲染时套上，所有 md 渲染面共用：
-   Claude / 扩展中心 / 文档预览）。表格按内容排自然列宽，超出的部分在壳里
+   Claude / Vertex / Codex / 扩展中心）。表格按内容排自然列宽，超出的部分在壳里
    横滚——绝不把正文列顶宽、更不能让整条会话变成可左右拖的画布。 */
 .md-tablewrap{max-width:100%;overflow-x:auto;margin:0 0 12px}
 .md-tablewrap>table{width:max-content;max-width:none;margin:0}
@@ -168,8 +302,8 @@ html[data-theme="light"]{
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%}
 /* 原生手感基建：
-   · overscroll-behavior:none —— 滚动到边不把滚动链传给浏览器（无 glow/下拉刷新误触）
-   · text-size-adjust —— 禁移动浏览器的字体膨胀算法（旋转/宽变时正文突然放大）
+   · overscroll-behavior:none —— 滚动到边不把滚动链传给 WebView（无 glow/下拉刷新误触）
+   · text-size-adjust —— 禁 WebView 字体膨胀算法（旋转/宽变时正文突然放大＝很 web）
    · touch-action:manipulation —— 消除残存的双击缩放判定延迟，点按即时响应 */
 html{overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{
@@ -196,8 +330,9 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 /* 正文里嵌的控件（代码块复制、展开钮…）照旧不可选：拖选一段回答不该把按钮字也带进去 */
 .sel-text button,.sel-text [role="button"]{-webkit-user-select:none;user-select:none}
 
-/* 触摸/点击不显示焦点轮廓：可聚焦元素被点后、或转场组件卸载后焦点回退到 body 时，移动浏览器
-   会沿整屏画一圈，直到点背景失焦才消失。仅键盘导航(:focus-visible)保留轮廓做无障碍。 */
+/* 触摸/点击不显示焦点轮廓——WebView 默认是橙黄色：可聚焦元素（如 THE BRIDGE 切主题钮）被点后、
+   或转场组件卸载后焦点回退到 body 时，会沿整屏画一圈，直到点背景失焦才消失（=暗色主题切换后那条
+   黄边框）。仅键盘导航(:focus-visible)保留轮廓做无障碍；手机无键盘故移动端不再出现。 */
 :focus{outline:none}
 :focus-visible{outline:2px solid var(--coral);outline-offset:2px}
 
@@ -235,6 +370,37 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .press-css{transition:transform var(--mo-tap) var(--ea-accel)}
 .press-css:active{transform:scale(.96)}
 
+/* —— 液态玻璃（use:liquidGlass 给元素加 .lg；折射滤镜由 JS 按尺寸注入）——
+   .lg 只负责玻璃本体淡底色 + 立体边光 + 镜面高光；折射/色散是 backdrop-filter。 */
+.lg{
+  position:relative; border-radius:var(--lg-radius,28px);
+  background:rgba(255,255,255,var(--lg-tint,.04));   /* 极淡底色，保证透光而非磨砂 */
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.32),
+    inset 1.5px 1.5px 1.5px rgba(255,255,255,.45),
+    inset -1.5px -2px 3px rgba(0,0,0,.16),
+    0 10px 26px rgba(0,0,0,.24);
+  isolation:isolate;                                  /* 让 ::after 的 screen 混合限定在自身 */
+}
+.lg::after{                                           /* 顶部斜向镜面高光，强化凸面反光 */
+  content:""; position:absolute; inset:0; border-radius:inherit;
+  background:linear-gradient(135deg,rgba(255,255,255,.38) 0%,rgba(255,255,255,.06) 21%,rgba(255,255,255,0) 44%);
+  mix-blend-mode:screen; pointer-events:none;
+}
+.lg-content{ position:relative; z-index:1; }         /* 玻璃上的图标/文字浮在高光之上 */
+/* 纯折射变体：去掉边光/镜面高光/淡底色，只留折射本身——图标入场「鼓包」(折射 scale 从 0 拉到预设)用 */
+/* 「光感」变体：默认 glow=0 完全纯折射（无打光，融入壁纸）；光感滑块(--lg-glow 0→1)按强度
+   加回立体边光+暗部+外投影（本体 box-shadow）＋镜面高光（::after）＝原登录胶囊那套打光质感。 */
+.lg.lg-bare{
+  background:transparent;
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,calc(.32*var(--lg-glow,0))),
+    inset 1.5px 1.5px 1.5px rgba(255,255,255,calc(.45*var(--lg-glow,0))),
+    inset -1.5px -2px 3px rgba(0,0,0,calc(.16*var(--lg-glow,0))),
+    0 10px 26px rgba(0,0,0,calc(.22*var(--lg-glow,0)));
+}
+.lg.lg-bare::after{ content:""; opacity:var(--lg-glow,0); }   /* 镜面高光按光感强度（背景/screen 继承 .lg::after） */
+
 /* 全域拖拽进行中（lib/dragdrop.svelte.js 挂在 <html> 上）：
    ① 禁掉整页文字选择——鼠标拖到一半会把沿途文字刷成蓝的；
    ② 光标改成「攥着」，桌面上一眼看出手里有东西。
@@ -247,53 +413,50 @@ html.dnd-live { cursor: grabbing; }
    lib/dragdrop.svelte.js 自己认（JS 滚动 + 惯性 + 合成 click）。 */
 html.dnd-live { touch-action: none !important; }
 /* ③ 拖拽期间让 iframe 对命中测试透明：指针一旦飘到 iframe 上，事件就被路由进它自己的
-   document，父页当场失去这根手指（Claude 分屏的另一格就是个 iframe，不让开就永远投不进去）。 */
+   document，父页当场失去这根手指（Codex 分页整块正文就是个 iframe，不让开就永远投不进去）。 */
 html.dnd-live iframe { pointer-events: none !important; }
 /* dimensio 正文列的落点高亮：规则必须落在【全局】——harness 那侧是另一个组件的 scoped CSS，
    宿主注入的 action 加的类在那里会被编译器当未使用剪掉。用 outline 而不是 ::after，
    免得依赖目标节点的定位上下文。 */
 .hx-dnd-on { outline: 2px solid var(--hx-accent, #6d7cff); outline-offset: -6px; border-radius: 14px; }
 
-/* ===== claude.ai /code 转录滚动区同款渐隐（CDS .scroll-fade-strip-*，2026-09-11 自官方桌面端
-   1.52386 的 c6a992d55 css 原样取回）=====
-   两条 sticky 渐变带贴在滚动容器首尾（负 margin 不占位），颜色 = 容器底色（--scroll-fade-color，
-   缺省 --bg），由 scroll() 时间线驱动两个注册属性：raw = 顶带在头 size 像素内 0→1、底带在尾 size
-   像素内 1→0；active = 容器可滚才为 1（不可滚时 scroll() 时间线不活跃、动画不生效、保持初值 0，
-   两带恒隐——官方靠这一手让短内容不出现渐隐）。不支持 scroll() 的引擎 opacity 恒 0，等于没这层。
-   官方转录：顶 32px（--epitaxy-top-fade-height）、底 48px（scroll-fade-size-[48px]）；本项目按页面覆写。
-   渐变梯度是官方原值：0%实色 → 13% .85 → 40% .5 → 70% .15 → 透明。 */
+/* ===== 转录滚动区首尾渐隐（视觉对齐 claude.ai /code 的转录区；梯度与高度是实测值，实现自写）=====
+   两条 sticky 渐变带贴在滚动容器首尾，用负 margin 不占位；颜色取容器底色（--scroll-fade-color，缺省 --bg）。
+   可见度 = 位置系数 × 可滚系数，两个系数都由 scroll() 时间线驱动的注册属性给出：
+     · --scroll-fade-raw：顶带在离开顶部的头 size 像素里 0→1，底带在接近底部的末 size 像素里 1→0；
+     · --scroll-fade-active：只有容器真能滚时 scroll() 时间线才活跃，动画才把它置 1；内容不够长时保持初值 0，两带都不出现。
+   不支持 scroll() 时间线的引擎 opacity 恒为 0，等于没有这层。参照值是顶 32px、底 48px；带高缺省 28px，各页面自己覆写 --scroll-fade-size。
+   梯度：实色 → 13% 处 85% → 40% 处 50% → 70% 处 15% → 透明。 */
 @property --scroll-fade-size { syntax: "<length>"; inherits: false; initial-value: 28px; }
 @property --scroll-fade-raw { syntax: "<number>"; inherits: false; initial-value: 0; }
 @property --scroll-fade-active { syntax: "<number>"; inherits: false; initial-value: 0; }
 .scroll-fade-strip-top, .scroll-fade-strip-bottom {
-  position: sticky; inset-inline-start: 0; height: var(--scroll-fade-size);
-  pointer-events: none; z-index: 1; opacity: 0;
+  --sf-c: var(--scroll-fade-color, var(--bg));
+  position: sticky; inset-inline-start: 0; z-index: 1;
+  height: var(--scroll-fade-size); pointer-events: none; opacity: 0;
+  background: linear-gradient(var(--sf-dir), var(--sf-c),
+    color-mix(in srgb, var(--sf-c) 85%, transparent) 13%,
+    color-mix(in srgb, var(--sf-c) 50%, transparent) 40%,
+    color-mix(in srgb, var(--sf-c) 15%, transparent) 70%,
+    transparent);
 }
-.scroll-fade-strip-top { top: 0; margin-bottom: calc(var(--scroll-fade-size) * -1);
-  background: linear-gradient(to bottom,
-    var(--scroll-fade-color, var(--bg)),
-    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 85%, transparent) 13%,
-    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 50%, transparent) 40%,
-    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 15%, transparent) 70%,
-    transparent); }
-.scroll-fade-strip-bottom { bottom: 0; margin-top: calc(var(--scroll-fade-size) * -1);
-  background: linear-gradient(to top,
-    var(--scroll-fade-color, var(--bg)),
-    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 85%, transparent) 13%,
-    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 50%, transparent) 40%,
-    color-mix(in srgb, var(--scroll-fade-color, var(--bg)) 15%, transparent) 70%,
-    transparent); }
+.scroll-fade-strip-top { --sf-dir: to bottom; top: 0; margin-bottom: calc(-1 * var(--scroll-fade-size)); }
+.scroll-fade-strip-bottom { --sf-dir: to top; bottom: 0; margin-top: calc(-1 * var(--scroll-fade-size)); }
 @supports (animation-timeline: scroll()) {
   .scroll-fade-strip-top, .scroll-fade-strip-bottom {
     opacity: calc(var(--scroll-fade-raw) * var(--scroll-fade-active));
-    animation-timing-function: linear; animation-fill-mode: both, none; animation-duration: auto;
-    animation-timeline: scroll(), scroll();
+    animation-duration: auto; animation-timing-function: linear;
+    animation-fill-mode: both, none; animation-timeline: scroll(), scroll();
   }
-  .scroll-fade-strip-top { animation-name: scroll-fade-strip-in, scroll-fade-strip-active;
-    animation-range: 0px var(--scroll-fade-size), 0px 101%; }
-  .scroll-fade-strip-bottom { animation-name: scroll-fade-strip-out, scroll-fade-strip-active;
-    animation-range: calc(100% - var(--scroll-fade-size)) 100%, 0px 101%; }
+  .scroll-fade-strip-top {
+    animation-name: sf-rise, sf-on;
+    animation-range: 0px var(--scroll-fade-size), 0px 101%;
+  }
+  .scroll-fade-strip-bottom {
+    animation-name: sf-fall, sf-on;
+    animation-range: calc(100% - var(--scroll-fade-size)) 100%, 0px 101%;
+  }
 }
-@keyframes scroll-fade-strip-in { 0% { --scroll-fade-raw: 0; } to { --scroll-fade-raw: 1; } }
-@keyframes scroll-fade-strip-out { 0% { --scroll-fade-raw: 1; } to { --scroll-fade-raw: 0; } }
-@keyframes scroll-fade-strip-active { 0%, to { --scroll-fade-active: 1; } }
+@keyframes sf-rise { from { --scroll-fade-raw: 0; } to { --scroll-fade-raw: 1; } }
+@keyframes sf-fall { from { --scroll-fade-raw: 1; } to { --scroll-fade-raw: 0; } }
+@keyframes sf-on { from, to { --scroll-fade-active: 1; } }

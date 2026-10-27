@@ -8,7 +8,7 @@
 // ~/.claude/projects/<slug>/<id>.jsonl 的文件名——也就是 bridge 会话列表里的 id。
 //
 // 数据目录（2026-10-20 修）：Desktop 3.x（MSIX）把用户数据搬到了
-//   %LOCALAPPDATA%\Claude-Data\claude_<包族名后缀>\
+//   %LOCALAPPDATA%\Claude-Data\claude_<包族名后缀>\  （本机 claude_pzs8sxrjxfjjc）
 // 旧的 %APPDATA%\Claude\ 只剩一个 0 字节的 .user-data-left.* 标记——bridge 一直读旧路径，10-14 起
 // 血缘树、Desktop worktree 补扫、Desktop 标题三样全空。官方主进程自己写明数据目录可能叫
 // Claude-Data / Claude-3p / Claude，在 %LOCALAPPDATA% 或 %APPDATA% 下：这里按候选列表探测、存在的都扫

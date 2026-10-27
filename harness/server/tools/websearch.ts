@@ -27,9 +27,9 @@ const NATIVE_BY_PROVIDER: Partial<Record<ProviderId, BackendId>> = {
   mimo: "mimo",
 };
 
-/** 默认优先级（原生那家之后的备胎）：先纯搜索 API（快、结构化），再经 LLM 的国内几家，再出海的，
- *  小米排在按次计费的几家后面（要开插件、¥16/千次），最后免 key 兜底。 */
-const DEFAULT_ORDER: BackendId[] = ["zhipu", "kimi", "deepseek", "qwen", "gemini", "anthropic", "mimo", "ddg"];
+/** 默认优先级（原生那家之后的备胎）。2026-10-04 起按维护者定的顺序打头：小米 → 智谱 → Kimi
+ *  （本机实测小米按量 key 最稳，智谱余额常不足，Kimi 订阅可用），其余国产搜索再出海，最后免 key 兜底。 */
+export const DEFAULT_ORDER: BackendId[] = ["mimo", "zhipu", "kimi", "deepseek", "qwen", "gemini", "anthropic", "ddg"];
 
 const TOTAL_BUDGET_MS = 45_000; // 整体预算：宁可少试一档也不拖死 agent loop
 const RETRY_BACKOFF_MS = 800;

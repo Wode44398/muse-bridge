@@ -1,6 +1,6 @@
 // C8（X42、K43、A3）：上下文卫生入口——立即压缩、带摘要开新会话、计划卡「在新会话中实施」。
 //
-// 修前：长会话只能等自动压缩；计划模式调研完，批准后就在占满调研内容的上下文里实施（小窗口模型尤其吃亏）；
+// 修前：长会话只能等自动压缩；计划模式调研完，批准后就在占满调研内容的上下文里实施（本机 128k 模型尤其吃亏）；
 // 没有「换个干净上下文接着干」的入口，缓存冷了也不知道下一条要按全价重读整段。
 // 修后：POST /api/sessions/:id/compact 手动压（不看阈值、按现在的用量切）；POST …/handoff {kind:"summary"} 整段写成
 // 摘要开新会话（沿用工作区、厂商、型号），{kind:"plan", planId} 把等审批的计划交给自主档的新会话起跑，原会话一句话收尾。
@@ -79,8 +79,7 @@ test("C8 带摘要开新会话：新会话以一条接续摘要开头，沿用�
 });
 
 test("C8 计划卡「在新会话中实施」：原会话的计划落定为转交，新会话自主档起跑、首条消息就是计划", async (t) => {
-  // 新会话用 openai 厂商，指向一个本地假服务（只回一句话），不碰网络
-  setConfig({ provider: "openai", apiKey: "DUMMY-c8-key" });
+  // 新会话用 local 厂商，指向一个本地假服务（只回一句话），不碰网络也不碰本机的 llama-server
   const seen: string[] = [];
   const server = http.createServer((req, res) => {
     let body = "";
@@ -97,7 +96,7 @@ test("C8 计划卡「在新会话中实施」：原会话的计划落定为转�
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
 
   const root = tmp("dimensio-c8-plan-");
-  const origin = attachSession(scripted(t, { id: "openai" }), root, { mode: "plan" });
+  const origin = attachSession(scripted(t, { id: "local" }), root, { mode: "plan" });
   origin.cfg = { ...origin.cfg!, baseUrl };
   const got: { verdict: PlanVerdict | null } = { verdict: null }; // 回调里赋值——放对象里，免得 TS 把它收窄成 null
   const plan = "# 改造登录页\n1. 拆表单组件\n2. 加校验";

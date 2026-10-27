@@ -12,7 +12,8 @@
   import SSegmented from '../../settings/SSegmented.svelte';
   import ParamsEditor from './ParamsEditor.svelte';
   import ThinkingTiers, { tierProblem } from './ThinkingTiers.svelte';
-  import { createProvider, updateProvider, deleteProvider, fetchRemoteModels, guessModels, testProvider, detectProvider, probeModel, providerLog } from '../../../lib/claudeProviders.svelte.js';
+  import { cp, createProvider, updateProvider, deleteProvider, fetchRemoteModels, guessModels, testProvider, detectProvider, probeModel, providerLog } from '../../../lib/claudeProviders.svelte.js';
+  import { proxyToggleShown } from '../../../lib/deployFlags.js';
   import { t, tr } from '../../../lib/i18n.js';   // tr：服务端下发的人话（报错、探测结论）按整句模式翻译
   import { protocolMismatch } from '../../../../../src/model-knowledge/knowledge.mjs';   // 与 dimensio 编辑器同一份规则
 
@@ -443,6 +444,11 @@
             <div class="numf"><input type="number" min="10" max="1800" bind:value={draft.timeoutSec} /><span class="unit">{t('秒')}</span></div></div>
           <div class="li"><div><div class="lt">{t('失败重试')}</div><div class="ls">{t('429 / 5xx / 网络错时重试，开始输出后不再重试')}</div></div>
             <div class="stepper"><button type="button" disabled={draft.retries <= 0} onclick={() => (draft.retries = Math.max(0, draft.retries - 1))}>−</button><span>{draft.retries}</span><button type="button" disabled={draft.retries >= 5} onclick={() => (draft.retries = Math.min(5, draft.retries + 1))}>＋</button></div></div>
+          <!-- 部署方强制走出站代理（cp.proxyForced，如 Muse Bridge 只能经代理出网）时不摆开关，服务端保存时也强制 -->
+          {#if proxyToggleShown(cp)}
+            <div class="li"><div><div class="lt">{t('走出站代理')}</div><div class="ls">{t('本机模型或国内直连的服务可以关掉')}</div></div>
+              <SToggle checked={draft.compat.useProxy} onchange={(v) => (draft.compat.useProxy = v)} label={t('走出站代理')} /></div>
+          {/if}
         </div>
       </section>
 

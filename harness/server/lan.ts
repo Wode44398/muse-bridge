@@ -6,8 +6,8 @@ import os from "node:os";
 // APIPA — and naming the wrong one is worse than saying nothing. So: ask the OS
 // which source address its default route would use (a connected UDP socket
 // sends no packet; connect() only runs the route lookup), then match that back
-// to a real interface. 2026-08-16: a k3 run only discovered it could reach a
-// smart speaker on the LAN by chance, and that discovery was the turning point of the task.
+// to a real interface. 2026-08-16: a k3 run only discovered it could reach the
+// user's HomePod by chance, and that discovery was the turning point of the task.
 
 export interface LanAddress {
   address: string;
@@ -78,7 +78,7 @@ export async function primeLanAddress(): Promise<void> {
     routed = null;
   }
   const match = routed ? candidates().find((row) => row.address === routed) : undefined;
-  // A non-private route source means the default route is a tunnel (proxy TUN/VPN),
+  // A non-private route source means the default route is a tunnel (Clash/VPN),
   // which is not where the phones and speakers live — fall back to the ranking.
   cached = match && PRIVATE_RE.test(match.address) ? match : bestGuess();
   probed = true;

@@ -4,38 +4,59 @@
   // 抛一次就换 jsQR），否则懒加载 jsQR 逐帧扫 canvas。相册选图走同一条解码链。
   // ui.pairScan = { mode:'scan' } 打开相机；{ mode:'confirm', id, key } 是系统相机扫到网址
   // 打开网页时的直达（App.svelte 解 ?pair= 后置入），跳过取景直接进确认卡。
+  //
+  // 两种码同一个取景层（开源路线 S1-2）：
+  //   · 登录码（?pair=，网页登录页出的）：手机已登录，替那台网页确认登录——上面这套。
+  //   · 配对码（?connect=，电脑「连接与更新」、桌面客户端完成页、控制台、终端出的）：这台手机自己连上那台服务器，
+  //     换到出示者身份的一张长期会话（lib/connectPair.js）。{ mode:'connect' } = 从 App 首屏、登录框、设置「扫码连接服务器」进来
+  //     （标题写「扫码连接」）。没登录扫到就直接连；只要已登录（不论从哪进来）扫到配对码都先弹确认卡，因为会换掉现在的登录，
+  //     确认后服务端顺手退出原来那张会话。
+  //   · { mode:'landing', conn } = 手机浏览器经系统相机打开 ?connect= 网址（lib/connectPair.js 接住参数后置入）：不开相机，
+  //     直接进确认卡——登录与否都要用户点「连接」，链接可能是别人转发来的。
   import { onMount } from 'svelte';
   import { fade, fly } from 'svelte/transition';
-  import { api } from '../lib/api.js';
-  import { ui, me } from '../lib/state.svelte.js';
+  import { api, setToken } from '../lib/api.js';
+  import { ui, me, applyMe } from '../lib/state.svelte.js';
   import { pushBackLayer } from '../lib/nav.js';
   import { parsePairPayload } from '../lib/pair.js';
+  import { parseConnectPayload, redeemConnect, applyConnect, connectErrorText } from '../lib/connectPair.js';
+  import { isOffline } from '../lib/server.js';
   import { t, tr, locale, isEn } from '../lib/i18n.js';
 
-  let phase = $state('camera');   // 'camera' | 'checking' | 'confirm' | 'approving' | 'done' | 'error'
+  // 'camera' | 'checking' | 'confirm' | 'approving' | 'done' | 'error'
+  // 配对码：'cconfirm'（已登录时先问）| 'connecting' | 'connected'
+  let phase = $state('camera');
   let err = $state(''), hint = $state('');
   let info = $state(null);        // /api/pair/scan 的返回：device / ip / created
   let ticket = null;              // { id, key }
+  let conn = $state(null);        // 扫到的配对码 { origin, id, secret, lan, sid }
+  let connAs = $state(null);      // 兑换结果 { kind, user }
+  let connVia = $state('');       // 正在试的地址（界面显示）
+  const connectMode = $derived(ui.pairScan?.mode === 'connect');
+  const landingMode = $derived(ui.pairScan?.mode === 'landing');
+  const loggedIn = $derived(me.kind !== 'none');
+  const connHost = $derived(conn ? conn.origin.replace(/^https?:\/\//, '') : '');
   let videoEl = $state(), fileEl = $state();
   let stream = null, timer = 0, canvas = null, detector = null, jsqr = null, running = false;
   let lastBadAt = 0;
   const ident = $derived(me.kind === 'admin' ? t('管理员') : (me.user || t('我')));
   const secure = typeof window !== 'undefined' && window.isSecureContext !== false;
 
-  function haptic(kind) { try { navigator.vibrate?.(kind === 'heavy' ? 18 : kind === 'tick' ? 6 : 10); } catch {} }
+  function haptic(kind) { try { window.AndroidStore?.haptic?.(kind); } catch {} }
   function close() { stopCam(); ui.pairScan = null; }
   $effect(() => pushBackLayer(close));
 
   onMount(() => {
     const p = ui.pairScan;
     if (p?.mode === 'confirm' && p.id && p.key) onPayload({ id: p.id, key: p.key });
+    else if (p?.mode === 'landing' && p.conn) { conn = p.conn; phase = 'cconfirm'; }
     else startCam();
     return stopCam;
   });
 
   function camErr(e) {
     const n = e?.name || '';
-    if (n === 'NotAllowedError' || n === 'SecurityError') return t('相机权限被拒绝。请在浏览器 / 系统设置里允许本站使用相机，或从相册选择二维码截图。');
+    if (n === 'NotAllowedError' || n === 'SecurityError') return t('相机权限被拒绝。请在系统设置里允许 The Bridge 使用相机，或从相册选择二维码截图。');
     if (n === 'NotFoundError' || n === 'OverconstrainedError') return t('没有找到可用的相机。');
     if (n === 'NotReadableError') return t('相机被其它应用占用，请关闭后重试。');
     return t('打不开相机：{reason}', { reason: e?.message || n || t('未知错误') });
@@ -113,9 +134,8 @@
       try { text = await decodeFrom(v, v.videoWidth, v.videoHeight); } catch {}
       if (!running || phase !== 'camera') return;
       if (text) {
-        const p = parsePairPayload(text);
-        if (p) { onPayload(p); return; }
-        if (Date.now() - lastBadAt > 2500) { lastBadAt = Date.now(); hint = t('这不是 Muse Bridge 的登录二维码'); haptic('error'); setTimeout(() => { if (hint) hint = ''; }, 1800); }
+        if (route(text)) return;
+        if (Date.now() - lastBadAt > 2500) { lastBadAt = Date.now(); hint = badHint(text); haptic('error'); setTimeout(() => { if (hint) hint = ''; }, 1800); }
       }
     }
     timer = setTimeout(tick, detector ? 160 : 110);
@@ -132,9 +152,62 @@
     let text = '';
     try { text = await decodeFrom(bmp, bmp.width, bmp.height); } catch {}
     try { bmp.close?.(); } catch {}
+    if (text && route(text)) return;
+    hint = text ? badHint(text) : t('图片里没有识别到二维码'); haptic('error'); setTimeout(() => { hint = ''; }, 2200);
+  }
+
+  // 扫到的文字分流：配对码 → 连接这台手机；登录码 → 替网页登录（要已登录）。认得返回 true。
+  function route(text) {
+    const cp = parseConnectPayload(text);
+    if (cp) { onConnect(cp); return true; }
     const p = parsePairPayload(text);
-    if (p) onPayload(p);
-    else { hint = text ? t('这不是 Muse Bridge 的登录二维码') : t('图片里没有识别到二维码'); haptic('error'); setTimeout(() => { hint = ''; }, 2200); }
+    if (p && me.kind !== 'none') { onPayload(p); return true; }
+    return false;
+  }
+  function badHint(text) {
+    // 没登录时扫到的是网页登录码：那是给已登录的手机替网页登录用的
+    if (parsePairPayload(text)) return t('这是网页的登录二维码：先连上服务器并登录，再扫它');
+    return connectMode ? t('这不是 The Bridge 的配对二维码') : t('这不是 The Bridge 的登录二维码');
+  }
+
+  // —— 配对码：这台手机连上那台服务器 ——
+  function onConnect(cp) {
+    stopCam();
+    conn = cp; err = ''; hint = '';
+    haptic('tick');
+    // 已登录（账户卡「扫一扫」、设置「扫码连接服务器」）：会换掉这台手机现在的服务器 / 登录，先问一句；没登录（首屏、登录框）直接连
+    if (me.kind !== 'none') { phase = 'cconfirm'; return; }
+    doConnect();
+  }
+  async function doConnect() {
+    if (!conn) return;
+    phase = 'connecting'; err = '';
+    // 网页（不是 App）只能兑换本站的码：别的服务器的码直接打开那个网址，由那边的网页接着登录（那边落地照样先弹确认卡）
+    if (!isOffline() && conn.origin !== location.origin) {
+      location.assign(conn.origin + '/?connect=' + conn.id + '.' + conn.secret);
+      return;
+    }
+    try {
+      // 网页：已登录时用户刚在确认卡上同意了替换，服务端兑换成功后顺手退出这个浏览器原来的登录（cookie 里带着的那张；
+      // 没登录就没有可退的，照样传）。App 那边在 applyConnect 里退。
+      const r = await redeemConnect(conn, { onStep: (o) => { connVia = o.replace(/^https?:\/\//, ''); }, replace: !isOffline() });
+      connAs = { kind: r.res.kind, user: r.res.user || null };
+      if (isOffline()) {
+        applyConnect(r);
+        phase = 'connected'; haptic('done');
+        setTimeout(() => location.reload(), 900);   // 用新地址、新会话重新走启动流程
+        return;
+      }
+      // 手机浏览器上的本站：会话令牌当 Bearer（Set-Cookie 也已种上），刷新身份即可
+      setToken(r.res.token);
+      try { applyMe(await api.auth()); } catch { applyMe({ kind: r.res.kind, user: r.res.user || null }); }
+      ui.loginOpen = false;
+      phase = 'connected'; haptic('done');
+      setTimeout(close, 1400);
+    } catch (e) {
+      phase = 'error';
+      err = connectErrorText(e);
+    }
   }
 
   async function onPayload(p) {
@@ -160,7 +233,7 @@
     if (tk) { try { await api.post('/api/pair/reject', tk); } catch {} }
     close();
   }
-  function rescan() { info = null; ticket = null; startCam(); }
+  function rescan() { info = null; ticket = null; conn = null; connAs = null; startCam(); }
   const fmtTime = (ts) => { try { return new Date(ts).toLocaleTimeString(isEn() ? locale() : [], { hour: isEn() ? 'numeric' : '2-digit', minute: '2-digit' }); } catch { return ''; } };
 </script>
 
@@ -178,21 +251,51 @@
       <button class="x" onclick={close} aria-label={t('关闭')}>
         <svg viewBox="0 0 20 20" width="20" height="20"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
-      <span class="title">{t('扫一扫')}</span>
+      <span class="title">{connectMode ? t('扫码连接') : t('扫一扫')}</span>
     </div>
     <div class="bot">
-      <p class="hint" class:warn={!!hint}>{phase === 'checking' ? t('正在校验…') : (hint || t('对准网页登录页上的二维码'))}</p>
+      <p class="hint" class:warn={!!hint}>{phase === 'checking' ? t('正在校验…') : (hint || (connectMode ? t('对准电脑上显示的配对二维码') : t('对准网页登录页或电脑上的二维码')))}</p>
       <button class="alt" onclick={() => fileEl?.click()}>{t('从相册选择')}</button>
     </div>
   {:else}
     <button class="bd" onclick={phase === 'done' ? close : undefined} aria-hidden="true" tabindex="-1"></button>
     <div class="sheet" in:fly={{ y: 48, duration: 300 }}>
-      {#if phase === 'confirm' || phase === 'approving'}
+      {#if phase === 'cconfirm'}
+        <div class="glyph">
+          <svg viewBox="0 0 48 48" width="44" height="44"><rect x="15" y="6" width="18" height="34" rx="4" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M22 35h4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M38 20a8 8 0 0 1 0 10M42 16a14 14 0 0 1 0 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </div>
+        {#if landingMode}
+          <!-- 手机浏览器经系统相机 / 链接打开 ?connect=：同一台服务器，换的是这个浏览器的登录 -->
+          <h3>{t('用配对码登录')}</h3>
+          <p class="sub">{loggedIn ? t('这个浏览器将改为以出示二维码的那个账号登录；现在的登录（{ident}）会被退出。', { ident }) : t('这个浏览器将以出示二维码的那个账号登录。')}</p>
+        {:else}
+          <h3>{t('连接这台手机')}</h3>
+          <p class="sub">{loggedIn ? t('这台手机将连到下面这台服务器，并以出示二维码的那个账号登录；现在的登录会被替换。') : t('这台手机将连到下面这台服务器，并以出示二维码的那个账号登录。')}</p>
+        {/if}
+        <div class="rows">
+          <div class="row"><span>{t('服务器')}</span><b>{connHost}</b></div>
+        </div>
+        <p class="foot">{landingMode ? t('只有你刚用这台设备扫了自己电脑上的二维码时才点「连接」；别人发来的链接请点「取消」。') : t('只扫你自己电脑上显示的二维码。')}</p>
+        <div class="acts">
+          <button class="act primary" onclick={doConnect}>{t('连接')}</button>
+          <button class="act ghost" onclick={close}>{t('取消')}</button>
+        </div>
+      {:else if phase === 'connecting'}
+        <div class="glyph"><span class="spin"></span></div>
+        <h3>{t('正在连接…')}</h3>
+        <p class="sub">{connVia || connHost}</p>
+      {:else if phase === 'connected'}
+        <div class="glyph ok">
+          <svg viewBox="0 0 48 48" width="44" height="44"><circle cx="24" cy="24" r="20" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M15 24l6 6 12-12" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>{t('已连接')}</h3>
+        <p class="sub">{connAs?.kind === 'admin' ? t('以管理员身份登录了 {host}。', { host: connHost }) : t('以 {user} 的身份登录了 {host}。', { user: connAs?.user || '', host: connHost })}</p>
+      {:else if phase === 'confirm' || phase === 'approving'}
         <div class="glyph">
           <svg viewBox="0 0 48 48" width="44" height="44"><rect x="6" y="9" width="36" height="24" rx="4" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M18 40h12M24 33v7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
         </div>
         <h3>{t('登录网页版')}</h3>
-        <p class="sub">{t('确认后，那台设备将以「{ident}」的身份登录 Muse Bridge。', { ident })}</p>
+        <p class="sub">{t('确认后，那台设备将以「{ident}」的身份登录 The Bridge。', { ident })}</p>
         <div class="rows">
           <div class="row"><span>{t('设备')}</span><b>{tr(info?.device) || t('未知设备')}</b></div>
           {#if info?.ip}<div class="row"><span>{t('来源')}</span><b>{info.ip}</b></div>{/if}
@@ -273,4 +376,6 @@
   .act.primary:disabled { opacity: .6; }
   .act.ghost { background: rgba(0,0,0,.05); color: #2f6fed; font-weight: 600; height: 46px; }
   .act.link { background: none; color: #5a5e68; font-weight: 500; height: 38px; font-size: 14px; }
+  .spin { width: 26px; height: 26px; border-radius: 50%; border: 3px solid currentColor; border-right-color: transparent; animation: ps-spin .8s linear infinite; }
+  @keyframes ps-spin { to { transform: rotate(360deg); } }
 </style>

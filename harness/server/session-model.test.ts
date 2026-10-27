@@ -117,7 +117,7 @@ test("用户自己加的服务（custom-…）：会话里在它的型号之间�
   await removeCustomProvider(provider.id);
 });
 
-test("会话里换厂商：不开新对话，当场换到那家的默认型号，对话、读过的文件照旧，身份句跟着换", async (t) => {
+test("会话里换厂商（维护者 10-10）：不开新对话，当场换到那家的默认型号，对话、读过的文件照旧，身份句跟着换", async (t) => {
   // 目标那家要有 key（设置页同一条路填；加密存储换成内存）
   let store: Record<string, unknown> = {};
   setCustomSecretsForTests({ readSecrets: () => store as any, writeSecrets: (_root, map) => { store = JSON.parse(JSON.stringify(map)); } });

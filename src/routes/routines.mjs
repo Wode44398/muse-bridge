@@ -7,12 +7,16 @@ import * as routines from '../routines.mjs';
 import { runRoutine, routineRunning } from '../runtime/routines-runner.mjs';
 import { requireCtx } from '../runtime/identity.mjs';
 import { routineCapFor, billingUser, quotaBlock } from '../runtime/quota.mjs';
-import { CLAUDE_MODELS, CLAUDE_EFFORTS, ULTRACODE } from '../config/capabilities.mjs';
+import { CLAUDE_MODELS, CLAUDE_EFFORTS, VERTEX_MODELS, VERTEX_THINK_LEVELS, ULTRACODE } from '../config/capabilities.mjs';
 
-// Validate the model / effort against the Claude whitelists; unknown values fall
-// through to undefined so the routine stores null = "server default".
+// Validate the engine selection against the per-agent whitelists; unknown values
+// fall through to undefined so the routine stores null = "server default".
 function engineFields(body) {
-  return { agent: 'claude', model: CLAUDE_MODELS.has(body.model) ? body.model : undefined, effort: CLAUDE_EFFORTS.has(body.effort) ? body.effort : undefined, search: false };
+  const agent = body.agent === 'vertex' ? 'vertex' : 'claude';
+  if (agent === 'vertex') {
+    return { agent, model: VERTEX_MODELS.has(body.model) ? body.model : undefined, effort: VERTEX_THINK_LEVELS.has(body.effort) ? body.effort : undefined, search: body.search === true };
+  }
+  return { agent, model: CLAUDE_MODELS.has(body.model) ? body.model : undefined, effort: CLAUDE_EFFORTS.has(body.effort) ? body.effort : undefined, search: false };
 }
 
 // Ultracode（xhigh + 常驻动态工作流）不给无人值守的定时路由：Workflow 会派一群子 agent，成本没有上限、
@@ -25,12 +29,12 @@ function rejectUltracode(body, res) {
   return true;
 }
 
-// 定时任务只跑 Claude：它对这个身份开着吗——全局开关 ∩ 按人授权，与聊天同口径。
+// 定时任务的引擎（Claude / Gemini）对这个身份开着吗——全局开关 ∩ 按人授权，与聊天同口径。
 function rejectAgent(ctx, body, res) {
-  const other = body.agent !== undefined && body.agent !== 'claude';
-  if (!other && ctx.allowClaude) return false;
-  res.writeHead(other ? 400 : 403, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ ok: false, error: other ? '定时任务只支持 Claude' : 'Claude 未启用，或你的账号没有使用权限' }));
+  const vertex = body.agent === 'vertex';
+  if (vertex ? ctx.allowGemini : ctx.allowClaude) return false;
+  res.writeHead(403, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: false, error: (vertex ? 'Gemini' : 'Claude') + ' 未启用，或你的账号没有使用权限' }));
   return true;
 }
 

@@ -6,12 +6,14 @@
   //   · 1 指且 scale==1 → 横向=翻页(轻微跟手，松手判定)、向下=下滑关闭(跟手 + 上报进度给壳调暗背景)
   //   · 双击 → 在 1 ↔ 2.5 间切换，以点按点为中心
   import { onMount } from 'svelte';
+  import { mediaFallbackUrl } from '../../lib/server.js';
   import { registerCapture } from '../../lib/uiReport.js';
   import { t } from '../../lib/i18n.js';
 
   let { item, canPrev = false, canNext = false, onClose, onPrev, onNext, onDragProgress } = $props();
 
-  // 工作区协同·网页端截图：把当前展示的图画进 canvas（同源 <img> 不污染画布）。长边压到 1600 省传输。
+  // 工作区协同·网页端截图兜底：把当前展示的图画进 canvas（同源 <img> 不污染画布；
+  // 桌面壳/apk 有原生整窗截图时轮不到这里）。长边压到 1600 省传输。
   $effect(() => registerCapture(() => {
     const img = stage?.querySelector('img');
     if (!img || !img.naturalWidth) return null;
@@ -32,12 +34,13 @@
   let fullLoaded = false;    // 已升级到原图
   let natW = 0, natH = 0;
 
-  // —— 渐进升级：缩放较大时偷偷加载原图换上（预览图是 1280，放大看原图更锐）——
+  // —— 渐进升级：缩放较大时偷偷加载原图换上（Vertex 预览是 1280，放大看原图更锐）——
   function upgradeFull() {
     if (fullLoaded || !item.url || item.url === mainSrc) return;
     fullLoaded = true;
     const im = new Image();
     im.onload = () => { mainSrc = im.src; };
+    im.onerror = () => { const fb = mediaFallbackUrl(im.src); if (fb !== im.src) im.src = fb; };   // 原图走 LAN 不通时回退隧道再升级
     im.src = item.url;
   }
 
@@ -47,6 +50,9 @@
     loaded = true; errored = false;
   }
   function onImgError() {
+    // 先试 LAN→隧道自愈（在家走 LAN 时媒体图常因明文/混合内容加载不通，fetch 会自动回退但 <img> 不会）。
+    const viaTunnel = mediaFallbackUrl(mainSrc);
+    if (viaTunnel !== mainSrc) { mainSrc = viaTunnel; return; }
     if (mainSrc === item.url && item.previewUrl && item.previewUrl !== item.url) { mainSrc = item.previewUrl; return; }
     errored = true;
   }

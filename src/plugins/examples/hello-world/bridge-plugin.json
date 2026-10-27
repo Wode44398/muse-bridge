@@ -1,0 +1,15 @@
+{
+  "id": "hello-world",
+  "name": "你好世界（示例插件）",
+  "version": "1.0.0",
+  "description": "插件写法示例：一个接口、一个给 Claude 的工具、一个 agent 操作、自动生成的设置表单和一个插件页面。复制这个目录改名就是你的插件起点。",
+  "author": "claude-bridge",
+  "category": "third-party",
+  "entry": "index.mjs",
+  "config": {
+    "greeting": { "type": "string", "label": "问候语", "default": "你好", "max": 20, "desc": "接口和 Claude 的 greet 工具都用它打招呼" },
+    "exclaim": { "type": "boolean", "label": "句末加感叹号", "default": true },
+    "hint": { "type": "boolean", "label": "告诉 Claude 有这个工具", "default": false, "desc": "打开后每轮对话的系统提示里多一句话（会多占一点上下文）" }
+  },
+  "web": { "page": "web/index.html" }
+}

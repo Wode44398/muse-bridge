@@ -37,11 +37,11 @@ export default {
   '备注': 'Note',
   '可不填': 'Optional',
   '接口协议': 'API protocol',
-  'OpenAI 兼容端点：bridge 把 Claude Code 的请求整体翻译过去（含工具调用与流式）': 'OpenAI-compatible endpoint: Muse Bridge translates Claude Code’s requests in full, including tool calls and streaming',
+  'OpenAI 兼容端点：bridge 把 Claude Code 的请求整体翻译过去（含工具调用与流式）': 'OpenAI-compatible endpoint: bridge translates Claude Code’s requests in full, including tool calls and streaming',
   '兼容 Anthropic Messages 的端点：请求原样转发，只改写参数': 'Anthropic Messages–compatible endpoint: requests are forwarded as-is, only parameters are rewritten',
   '接口地址': 'Base URL',
   '实际请求': 'Requests go to',
-  '更换': 'Change',
+  '更换': 'Replace',
   '保存后清除 Key': 'Key will be removed when you save',
   '这个服务不需要 Key': 'This service doesn’t need a key',
   '隐藏': 'Hide',
@@ -272,7 +272,7 @@ export default {
   '模型列表格式认不出': 'The model list format isn’t recognized',
   '没有这个模型服务': 'No such model provider',
   '先添加至少一个模型': 'Add at least one model first',
-  'bridge 自定义 API 代理出错': 'The Muse Bridge custom API proxy ran into an error',
+  'bridge 自定义 API 代理出错': 'The bridge custom API proxy ran into an error',
   // 探测能力的结论
   '不发思考参数也会思考': 'Thinks even without a thinking parameter',
   '不发思考参数时不思考': 'Doesn’t think without a thinking parameter',
@@ -290,7 +290,7 @@ export default {
   '接口地址里别带账号密码，API Key 单独填': 'Don’t put a username or password in the base URL; enter the API key separately',
   '接口地址里别带 ? 参数或 #': 'Don’t put ? parameters or # in the base URL',
   '请求头名「{name}」不合法': 'Header name “{name}” is invalid',
-  '请求头「{name}」由 bridge 自己管，不能自定义': 'Header “{name}” is managed by Muse Bridge and can’t be customized',
+  '请求头「{name}」由 bridge 自己管，不能自定义': 'Header “{name}” is managed by bridge and can’t be customized',
   '额外请求体太长（上限 8000 字符）': 'The extra request body is too long (up to 8000 characters)',
   '额外请求体不是合法 JSON：{e}': 'The extra request body isn’t valid JSON: {e}',
   '{what}要是 {lo}–{hi} 之间的整数': '{what} must be a whole number from {lo} to {hi}',
@@ -306,4 +306,13 @@ export default {
   '模型「{id}」重复了': 'Model “{id}” is duplicated',
   '模型服务最多 30 个': 'You can add up to 30 model providers',
   'API Key 太长': 'The API key is too long',
+
+  // —— 2026-10-27：成员自带 Key ——
+  '用你自己的 API Key 接入兼容 Anthropic 或 OpenAI 接口的服务：DeepSeek、Kimi、GLM、小米 MiMo、百炼、OpenRouter……接好后在输入框模型菜单的 More models 里按服务分组选用，Claude Code 的工具、子 agent、工作区照常可用。':
+    'Connect any Anthropic- or OpenAI-compatible service with your own API key: DeepSeek, Kimi, GLM, Xiaomi MiMo, Bailian, OpenRouter… Once connected, pick its models under More models in the message box’s model menu, grouped by provider — Claude Code’s tools, subagents and workspace keep working as usual.',
+  '这里的服务只有你自己能用：API Key 加密存在服务器上，不会显示给任何人，费用走你自己的账户、不占用本站额度。接口地址只能是公网地址（不能接本机或局域网服务）。':
+    'These providers are yours alone: API keys are stored encrypted on the server and never shown to anyone, usage is billed to your own account and doesn’t count against this site’s quota. The API URL must be a public address (local or LAN services aren’t allowed).',
+  '模型服务最多 10 个': 'You can add up to 10 model providers',
+  '这个身份不能用自定义 API': 'Custom APIs aren’t available for this identity',
+  '这里不能用自定义 API': 'Custom APIs aren’t available here',
 };

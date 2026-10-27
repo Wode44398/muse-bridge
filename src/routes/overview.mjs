@@ -26,7 +26,9 @@ import { outboundProxyStatus, recheckOutboundProxy } from '../runtime/net-proxy.
 import { requireCtx } from '../runtime/identity.mjs';
 import { readBody } from '../runtime/body.mjs';
 import { peerHoldSessions, peerHoldsSnapshot, peerHoldsOf } from '../runtime/session-peers.mjs';   // 跨会话消息「待你确认」
-import { customModelsView } from '../runtime/claude-providers.mjs';   // 自定义 API 的模型清单（hello 带上，刷新后芯片不用等打开菜单）
+import { customModelsView, customOwner } from '../runtime/claude-providers.mjs';   // 自定义 API 的模型清单（hello 带上，刷新后芯片不用等打开菜单）
+import { publicRestart } from './app-update.mjs';   // hello 带「是不是正等着重启 / 装更新」（S1-5，不含凭据），省掉每次连上补拉 server-info
+import { APP_VERSION_NAME } from '../config/versions.mjs';
 
 // 扣着跨会话消息等你确认的会话 → 通知条目（kind 'peer'；只给发送方名字，不带正文——CLI 扣着时也没给正文）。
 // 那个 CLI 多半停放着、不在 live 里，所以不按「在跑的轮」过滤。
@@ -169,9 +171,12 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
       claudeSettings: claudeSettingsSnapshot(ctx),
       // 会话归档记录的版本（runtime/session-archive.mjs）：断线期间别处归档 / 取消归档过，重连即对账（前端拉快照 + 重拉列表）
       archiveRev: getArchiveState(ctx).rev,
-      // 自定义 API 的模型清单（设置 › Claude › 模型服务，只给主机管理员）：冷启动 / 重连即对账——以前要打开一次模型菜单
+      // 自定义 API 的模型清单（设置 › Claude › 模型服务，各人一份：主机管理员与自带 Key 的成员）：冷启动 / 重连即对账——以前要打开一次模型菜单
       // 或设置页才拉，刷新后用自定义模型的会话芯片显示「自定义模型」、推理强度芯片消失。不碰密钥，很便宜。
-      ...(ctx.kind === 'admin' ? { claudeModels: customModelsView() } : {}),
+      ...(customOwner(ctx) ? { claudeModels: customModelsView(customOwner(ctx)) } : {}),
+      // 服务器是不是正等着空闲重启 / 装更新（与 /api/app/server-info 的 restart 同一口径；没有挂起时为 null）
+      restart: publicRestart(),
+      serverVersion: APP_VERSION_NAME,
     });
     let closed = false;
     let offBus = () => {}, offWatch = () => {};
@@ -243,7 +248,7 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
     res.end(JSON.stringify(outboundProxyStatus()));
   });
 
-  // 立刻重探出站代理（刚改了代理想马上生效，不必等 60s 的自愈轮）。
+  // 立刻重探出站代理（刚开/关 Clash 想马上生效，不必等 60s 的自愈轮）。
   router.on('POST', '/api/net/recheck', async (req, res) => {
     const ctx = requireCtx(identify, req, res); if (!ctx) return;
     try { await recheckOutboundProxy(); } catch {}

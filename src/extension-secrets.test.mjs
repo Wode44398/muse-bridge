@@ -27,6 +27,7 @@ const onDisk = () => (existsSync(extRoot) ? ['registry.json', 'connector-secrets
 test('S3: a connector token never lands in registry.json or the API response; the agents still get it', () => {
   const saved = ext.saveConnector({ name: 'github', transport: 'stdio', command: 'npx', args: ['-y', 'server-github'], env: { GITHUB_TOKEN: TOKEN, LOG_LEVEL: 'debug' } });
   const http = ext.saveConnector({ name: 'gw', transport: 'http', url: 'https://example.invalid/mcp', headers: { Authorization: BEARER } });
+  ext.updateExtension(saved.id, { agents: { codex: true } });
 
   assert.ok(!onDisk().includes('FAKE'), '盘上三个文件里都没有明文');
   const reg = JSON.parse(readFileSync(registry, 'utf8'));
@@ -39,6 +40,7 @@ test('S3: a connector token never lands in registry.json or the API response; th
   const claude = ext.claudeExtensionOptions().mcpServers;
   assert.equal(claude.github.env.GITHUB_TOKEN, TOKEN, 'Claude 拿到的是真值');
   assert.equal(claude.gw.headers.Authorization, BEARER);
+  assert.equal(ext.codexExtensionParams().mcpServers.github.env.GITHUB_TOKEN, TOKEN, 'Codex 也是');
 });
 
 test('S3: editing — the mask keeps a value, a new value replaces it, a dropped line deletes it; uninstall drops the secrets', () => {

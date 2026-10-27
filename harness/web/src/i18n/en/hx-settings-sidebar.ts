@@ -56,7 +56,7 @@ export default {
   // ── 设置：连接（安卓壳 / 独立页）· 首跑连接门（SetupSheet） ──
   "名词::连接": "Connection",
   "直连填电脑地址；走 bridge 填隧道地址 + 令牌，在家自动切局域网。":
-    "Direct: enter your computer’s address. Via Muse Bridge: enter the tunnel URL and token. At home it switches to LAN automatically.",
+    "Direct: enter your computer’s address. Via The Bridge: enter the tunnel URL and token. At home it switches to LAN automatically.",
   "同源": "Same origin",
   "直连": "Direct",
   "隧道": "Tunnel",
@@ -64,7 +64,7 @@ export default {
   "服务器地址": "Server URL",
   "http://192.168.1.10:8799 或 bridge 地址": "http://192.168.1.10:8799 or Bridge URL",
   "访问令牌": "Access token",
-  "访问令牌（走 bridge 时填）": "Access token (for Muse Bridge)",
+  "访问令牌（走 bridge 时填）": "Access token (for The Bridge)",
   "探测中…": "Checking…",
   "重新探测局域网": "Re-check LAN",
   "已切局域网直连": "Switched to LAN direct",
@@ -73,11 +73,11 @@ export default {
   "连接 dimensio": "Connect to dimensio",
   "连接": "Connect",
   "直连填电脑地址；走 bridge（出门可用）填隧道地址 + 令牌，在家会自动切局域网。":
-    "Direct: enter your computer’s address. Via Muse Bridge (works away from home): enter the tunnel URL and token. At home it switches to LAN automatically.",
+    "Direct: enter your computer’s address. Via The Bridge (works away from home): enter the tunnel URL and token. At home it switches to LAN automatically.",
   "填完整地址，如 http://192.168.1.10:8799 或 bridge 隧道 https://…": "Enter the full URL, e.g. http://192.168.1.10:8799 or a Bridge tunnel URL (https://…)",
   "令牌不对（bridge 401）": "Invalid token (Bridge 401)",
   "该账号无 harness 权限": "This account doesn’t have access to dimensio",
-  "bridge 连不通（{status}）": "Can’t reach Muse Bridge ({status})",
+  "bridge 连不通（{status}）": "Can’t reach The Bridge ({status})",
   "这像是 bridge 地址——请在下面填访问令牌": "This looks like a Bridge URL. Enter an access token below.",
   "连不上（网络不通）": "Couldn’t connect (network unreachable)",
   "连不上（HTTP {status}）": "Couldn’t connect (HTTP {status})",

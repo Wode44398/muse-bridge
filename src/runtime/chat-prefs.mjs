@@ -1,6 +1,6 @@
 // Claude 分页会话级模型偏好（sidecar）。
 //
-// 背景：模型/effort/fast 的选择器一直是纯内存态——杀后台重进全部重置（用户 08-11
+// 背景：模型/effort/fast 的选择器一直是纯内存态——杀后台重进全部重置（维护者 08-11
 // 点名）。transcript（SDK 的 jsonl）只记 assistant 消息用的 model，不记 effort/fast，
 // 也轮不到我们去改写；所以「这个对话上次用什么跑的」单独落一个小 JSON。
 //
@@ -55,7 +55,9 @@ export function recordChatPrefs(ctx, sessionId, prefs) {
   const prev = data.sessions[sessionId];
   const style = prefs && prefs.outputStyle !== undefined ? styleOf(prefs) : styleOf(prev);
   const prevMode = prev?.permissionMode;
-  const entry = { ...norm(prefs), ...(style ? { outputStyle: style } : {}), ...(prevMode ? { permissionMode: prevMode } : {}), at: Date.now() };
+  //  · computer（会话连接的设备，setDeviceLink 写；新会话的第一轮可由请求带来）：同上，不进 last。
+  const link = linkOf(prev?.computer) || linkOf(prefs?.computer);
+  const entry = { ...norm(prefs), ...(style ? { outputStyle: style } : {}), ...(prevMode ? { permissionMode: prevMode } : {}), ...(link ? { computer: link } : {}), at: Date.now() };
   data.sessions[sessionId] = entry;
   data.last = { ...norm(prefs), at: entry.at };
   const ids = Object.keys(data.sessions);
@@ -115,6 +117,31 @@ export function setChatPrefsPermissionMode(ctx, sessionId, mode) {
   // at 不动：它是选择器（model/effort/fast）跨设备合并的时间戳，模式变化不该让服务端那份「更新」盖掉本机刚选的模型
   data.sessions[sessionId] = { ...cur, permissionMode: mode };
   persist(file, data);
+}
+
+// 会话连接的设备（mcp/device-tools.mjs）：设备 id，或 'none' = 明确不连接；没有条目 = 还没定（自动）。
+// 输入框下方的设备芯片与 agent 的 devices(use=…) 都经这里改，工具每次调用现读——改了立刻生效，不用冷起 CLI。
+function linkOf(v) {
+  return typeof v === 'string' && (v === 'none' || /^d-[0-9a-f]{6,24}$/.test(v)) ? v : null;
+}
+
+export function deviceLinkFor(ctx, sessionId) {
+  if (!ctx?.dataDir || !sessionId) return null;
+  return linkOf(load(fileFor(ctx)).sessions[sessionId]?.computer);
+}
+
+export function setDeviceLink(ctx, sessionId, link) {
+  if (!ctx?.dataDir || !sessionId) return false;
+  const file = fileFor(ctx);
+  const data = load(file);
+  // 占位条目的 at 记 0（同 setChatPrefsPermissionMode）：不让它在跨设备合并时盖掉本机的选择器记忆
+  const cur = data.sessions[sessionId] || { ...norm(null), at: 0 };
+  const next = { ...cur };
+  const v = linkOf(link);
+  if (v) next.computer = v; else delete next.computer;
+  data.sessions[sessionId] = next;
+  persist(file, data);
+  return true;
 }
 
 // 会话删除时的卫生清理（留着也只是占条目，但能清就清）。

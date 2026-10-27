@@ -1,4 +1,4 @@
-// 给 agent 用的 HTTP 接口。任何 agent（包括部署它的 Muse 自己）拿到服务器地址 + 一把 agent 密钥就能操作 Muse Bridge，不用开浏览器模拟点击：
+// 给 agent 用的 HTTP 接口。任何 agent 拿到服务器地址 + 一把 agent 密钥就能操作 bridge，不用开浏览器模拟点击：
 //
 //   GET  /agent、/llms.txt          入口说明（markdown；?format=json 给机器读的目录）——不用登录
 //   GET  /agent/manual[/<章>][?q=]  项目手册：目录 / 整章 / 关键词检索——不用登录（带密钥时按身份标出能不能用）
@@ -8,7 +8,7 @@
 //
 // 鉴权只认请求头：Authorization: Bearer <密钥>（或 X-Bridge-Key）。cookie 一律不认——所以 /agent/* 可以放开跨域，
 // 别的网站在用户浏览器里也借不到他的登录态（没有 CSRF 面）。密钥之外，主令牌、管理员会话、账号登录令牌照样认。
-// 回应统一 { ok:true, op, data } / { ok:false, error:{ code, message, hint? } }。慢操作（等对话）先回 200 再
+// 回应统一 { ok:true, op, data } / { ok:false, error:{ code, message, hint? } }。慢操作（等对话、生成视频）先回 200 再
 // 每 10 秒写一个空白保活（JSON 前面的空白合法），这种情况下出错也是 200 + ok:false——调用方一律看 ok。
 
 import { randomUUID } from 'node:crypto';
@@ -68,9 +68,9 @@ function resolveCaller(req, identify) {
 function quickstartMd(ctx, origin) {
   const api = manualChapter('api', ctx, origin);
   const head = [
-    `<!-- 这是 Muse Bridge 服务器给 agent 的入口说明。完整手册：${origin}/agent/manual -->`,
+    `<!-- 这是 bridge 服务器给 agent 的入口说明。完整手册：${origin}/agent/manual -->`,
   ];
-  return head.join('\n') + '\n' + (api ? api.markdown : '# Muse Bridge agent 接口\n\n手册缺失：见 ' + origin + '/agent/manual');
+  return head.join('\n') + '\n' + (api ? api.markdown : '# bridge agent 接口\n\n手册缺失：见 ' + origin + '/agent/manual');
 }
 
 export function registerAgentApiRoutes(router, { identify, adminGen }) {
@@ -93,7 +93,7 @@ export function registerAgentApiRoutes(router, { identify, adminGen }) {
     if (p === '/agent' || p === '/agent/' || p === '/llms.txt') {
       if (wantJson) {
         sendJson(res, 200, {
-          ok: true, name: 'Muse Bridge', origin, authenticated: !!ctx,
+          ok: true, name: 'bridge', origin, authenticated: !!ctx,
           auth: 'Authorization: Bearer <agent 密钥>（设置 › Agent 接入里生成）',
           call: 'GET|POST ' + origin + '/agent/v1/<op>', manual: origin + '/agent/manual',
           ops: catalog(ctx), chapters: manualToc(ctx, origin).map(({ id, title, summary }) => ({ id, title, summary })),
@@ -170,7 +170,7 @@ export function registerAgentApiRoutes(router, { identify, adminGen }) {
 // 交给 agent 的一段话：地址、密钥、从哪开始。
 export function handoffPrompt(origin, key) {
   return [
-    `你可以直接操作我的 Muse Bridge 服务器（${origin}）：用 HTTP 调它给 agent 准备的接口，不需要打开浏览器。`,
+    `你可以直接操作我的 bridge 服务器（${origin}）：用 HTTP 调它给 agent 准备的接口，不需要打开浏览器。`,
     `- 密钥：${key}（每个请求带请求头 Authorization: Bearer <密钥>）`,
     `- 先读入口说明：GET ${origin}/agent（markdown，讲清了怎么调、有哪些操作）`,
     `- 项目手册：GET ${origin}/agent/manual（目录），GET ${origin}/agent/manual?q=关键词（检索）`,
@@ -184,7 +184,7 @@ async function runOp(req, res, url, { name, caller, origin }) {
   const op = getOp(name);
   if (!op) return sendJson(res, 404, errBody(new OpError('not_found', `没有操作「${name}」`, { hint: '操作目录见 GET /agent/v1（要带密钥）或 GET /agent' })));
   if (!caller || !apiAllowed(caller.ctx)) {
-    return sendJson(res, 401, errBody(new OpError('unauthorized', '要带 agent 密钥', { hint: '请求头 Authorization: Bearer <密钥>；密钥在 Muse Bridge 的 设置 › Agent 接入 里生成' })));
+    return sendJson(res, 401, errBody(new OpError('unauthorized', '要带 agent 密钥', { hint: '请求头 Authorization: Bearer <密钥>；密钥在 bridge 的 设置 › Agent 接入 里生成' })));
   }
   let args = {};
   if (req.method === 'POST') {

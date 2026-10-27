@@ -1,6 +1,6 @@
 // 瘦身 P0-1：记忆沉淀从「收工关口」挪到 run 之后、后台做。
 //
-// 以前主 agent 每一轮正常收尾前都必须交 MemoryAudit（updated / none），没交就被追问——实际使用中日常提问里 34% 的模型调用是
+// 以前主 agent 每一轮正常收尾前都必须交 MemoryAudit（updated / none），没交就被追问——正式服日常提问里 34% 的模型调用是
 // 这类纯流程轮，每条消息固定多一次往返；被追问拉回来的模型还常顺手存一条没用的 Remember（33 条 proposed 滞留、同标题
 // 重复存了两三份）。现在：
 //   - 收工不再设记忆关口（AgentState.memoryAuditRequired 对主会话关掉；MemoryAudit 工具不再下发给新会话）；

@@ -1,5 +1,6 @@
-// 用户自助：自己的额度 / 用量、改自己的密码。
-// 两处共用这份数据层：设置 → 账户（SecAccount）、主页右上的账户卡（LoginCard）。管理员没有额度，也没有密码可改。
+// 用户自助（三端拆分 P4）：自己的额度 / 用量、改自己的密码。
+// 三处共用这份数据层：手机 / 网页主页右上的账户卡（LoginCard）、iOS 风设置 › 账户（Settings.svelte）、
+// 桌面壳设置（SettingsDesktop）；单 agent 模式也走后两套设置。管理员没有额度，也没有密码可改。
 import { api } from './api.js';
 import { t } from './i18n.js';
 
@@ -23,14 +24,26 @@ export function quotaRows(u) {
   if (!u || u.unlimited) return [];
   const l = u.limits || {};
   const hot = (used, tk, ck) => !!((l[tk] && used.turns >= l[tk]) || (l[ck] && used.costUsd >= l[ck]));
-  return [
+  const rows = [
     { label: t('今天'), value: windowLine(u.today, l, 'dayTurns', 'dayCostUsd'), hot: hot(u.today, 'dayTurns', 'dayCostUsd') },
     { label: t('最近 7 天'), value: windowLine(u.week, l, 'weekTurns', 'weekCostUsd'), hot: hot(u.week, 'weekTurns', 'weekCostUsd') },
   ];
+  // 按次计的（开源路线 S2-6）：设了上限才显示一行「今天 3 / 20」
+  const f = u.features || {};
+  for (const [k, key, label, off] of [
+    ['media', 'dayMedia', t('今天的图片、语音、音乐'), f.media === false],
+    ['video', 'dayVideo', t('今天的视频'), f.video === false],
+  ]) {
+    if (off) { rows.push({ label, value: t('未开放'), hot: false }); continue; }
+    if (!l[key]) continue;
+    const used = (u.today && u.today[k]) || 0;
+    rows.push({ label, value: t('{used} / {n} 次', { used, n: l[key] }), hot: used >= l[key] });
+  }
+  return rows;
 }
 
-/** 花费是怎么算的（大家共用订阅时不是真花出去的钱）：界面在额度旁边带这一句。 */
-export const costNote = () => t('花费按 API 价估算：大家共用一个订阅时，它反映用了多少，不是真花出去的钱。');
+/** 花费是怎么算的（订阅号池下不是真花出去的钱）：界面在额度旁边带这一句。 */
+export const costNote = () => t('花费按 API 价估算：大家共用订阅号池时，它反映用了多少，不是真花出去的钱。');
 
 /** 这个人有没有被设上限（没有的话界面上只说「不限」就行）。 */
-export const hasLimits = (u) => !!u && !u.unlimited && Object.keys(u.limits || {}).length > 0;
+export const hasLimits = (u) => !!u && !u.unlimited && (Object.keys(u.limits || {}).length > 0 || Object.values(u.features || {}).some((v) => v === false));

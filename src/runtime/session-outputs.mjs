@@ -47,7 +47,7 @@ function inGitCheckout(file) {
 }
 
 // 「会话文件夹之外」与「git 仓库里的非交付扩展名」两条按官方实际表现收窄（2026-10-14 对照官方面板截图）：
-// 本会话在一个仓库里跑、写到另一个仓库的 .mjs，官方照样列进「输出内容」——
+// 本会话在 bridge build 里跑、写到另一个仓库 claude-bridge 的 .mjs 官方照样列进「输出内容」——
 // 所以只有落在会话自己文件夹（及其所在 git 仓库）里的源码类文件才算「改代码」不算输出，写到别处的照算。
 export function writeCounts(file, roots) {
   const abs = path.resolve(file);

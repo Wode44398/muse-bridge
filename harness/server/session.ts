@@ -438,7 +438,7 @@ export function getSession(id: string): Session | undefined {
 }
 
 // 已经开跑、盘上可能还没有的会话（列表接口并进去）：新会话第一次落盘要等检查点 + 知识召回，大工作区十几秒，
-// 这期间侧栏刷新拿不到它（以前发了个「你好」之后列表里压根没这个对话）。
+// 这期间侧栏刷新拿不到它（维护者 10-11：「发了个你好之后列表里压根没这个对话」）。
 export function liveSessionMetas(): SessionMeta[] {
   const out: SessionMeta[] = [];
   for (const s of sessions.values()) {
@@ -903,6 +903,7 @@ function buildState(
     sandbox,
     limits,
     parentMode: () => stateRef?.permissionMode ?? cfg.permissionMode,
+    parentBrowser: () => stateRef?.browser !== false,
     permissionRules: () => stateRef?.effectiveRules() ?? getConfig().permissionRules,
     ownerId: sessionId,
     // N26：子 agent 的破坏性命令同样先拍轮内快照（接父会话这一轮挂上的口；没在跑就什么都不做）
@@ -941,6 +942,10 @@ function buildState(
     defs = defs.filter((t) => t.name !== "MemoryAudit");
     tmap.delete("MemoryAudit");
   }
+  // D5：浏览器工具（Browser / ReadPage / Eval / Network）跟着 headless.ts browserAvailable 进出注册表——在这里、建会话时
+  // 定一次（新建 / 从盘上恢复 / 换型号重建都走 buildState），之后这个会话的工具清单与 system 不再跟着变（每轮改会打穿
+  // 提示词缓存）。桌面壳宿主晚注册、扩展后连上、刚装好浏览器，下一个会话就有。
+  const hasBrowser = tmap.has("Browser");
   // E1（G6）：基线里的 MCP 工具（直连的逐个；工具多的连接器走 McpDescribe / McpCall 网关）
   for (const t of mcpTools(mcp)) {
     if (tmap.has(t.def.name)) continue;
@@ -975,8 +980,8 @@ function buildState(
       memory: world.memory,
       date: world.date,
       webSearch: hasWebSearch,
-      // 浏览器工具没注册（这台机器没有 Chromium 系浏览器）：提示词里不写浏览器 / Electron / Android 那几段
-      browser: tmap.has("Browser"),
+      // D5：浏览器工具没注册（这台机器没有可用的浏览器后端，或部署方关了）：提示词里不写浏览器 / Electron / 安卓那几句
+      browser: hasBrowser,
     });
   let initialSystem: string;
   let initialWorld: WorldTokens;
@@ -1007,6 +1012,7 @@ function buildState(
     budget,
     ctx,
     toolMap: tmap,
+    browser: hasBrowser,
     permissionMode: cfg.permissionMode,
     permissionRules: cfg.permissionRules,
     // P1（#47）：规则每次判定现读全局配置（设置页新加的 deny/ask 对已开着的会话也立刻生效）；
@@ -1155,7 +1161,7 @@ export function setSessionAccess(session: Session, access: unknown): { ok: boole
 
 // 会话内换厂商 / 型号 / 思考深度（POST /api/sessions/:id/model）。以前输入框的型号菜单只写全局配置，已经开跑的会话照旧用
 // 建会话时拍下的型号——菜单上勾着新型号、实际回答的还是旧的；换厂商更是直接开新对话。现在都在这条会话里换：转录是厂商中立的
-// turn/block，各家适配器编码时把别家留下的东西（签名、思考、图片、工具调用 id……）收拾成自己认的样子。
+// turn/block，各家适配器编码时把别家留下的东西（签名、思考、图片、工具调用 id……）收拾成自己认的样子（维护者 10-10：「一切换模型就开新对话了」）。
 // 空闲时当场按新配置重建会话状态；运行中先记进快照配置，下一轮开跑前（startRun）再重建，这一轮不受影响。
 export function setSessionModel(
   session: Session,
@@ -2509,7 +2515,7 @@ async function executeRun(
   state.onReadRoots = (list) => applyReadRoots(session, list);
   // R6（#32）：有副作用的工具开跑前立即落盘（平时是 2 秒防抖）。
   state.beforeSideEffects = () => persistNow(session);
-  // K2（#28）：记忆来源里的「有没有人在场」。#71（09-24 定）：无人值守那套先不做，照常默认有人在——
+  // K2（#28）：记忆来源里的「有没有人在场」。#71（维护者 09-24 定）：无人值守那套先不做，照常默认有人在——
   // 只有明确开了离开模式（P3）才记为不在场；手机熄屏、SSE 断开都不算（以前按「有没有客户端连着」判，一熄屏就记成没人）。
   state.ctx.humanAttended = () => !isAway(session);
   // O7：有进行中的目标时 UpdateGoal 经它声明达成 / 要人
@@ -2735,7 +2741,7 @@ function scheduleMemoryFiling(session: Session, state: AgentState, digest: RunDi
   );
   const tracked: Promise<void> = job.finally(() => {
     if (session.memoryJob === tracked) session.memoryJob = null;
-    schedulePersist(session); // 用量账本多了一笔
+    void persistNow(session); // 用量账本多了一笔（不走防抖：评测台等 memoryPending 消失后就读记录）
   });
   session.memoryJob = tracked;
 }

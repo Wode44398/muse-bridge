@@ -9,6 +9,7 @@ export const SHARE_TTLS = Object.freeze([
 
 export const AI_NAMES = Object.freeze({
   claude: 'Claude',
+  gemini: 'Gemini',
 });
 
 export function normalizeFileQuery(value) {
@@ -51,6 +52,21 @@ export function formatShareExpiry(value) {
   return new Intl.DateTimeFormat(locale(), { month: 'short', day: 'numeric', ...hm }).format(new Date(value));
 }
 
+export function fileAiCapabilities(item, kindOf) {
+  if (!item) return { gemini: false, video: false, image: false, audio: false, music: false, mode: null };
+  const kind = item.isDir ? 'dir' : kindOf(item.name);
+  const isImage = kind === 'img';
+  const isText = kind === 'md' || kind === 'text';
+  return {
+    gemini: true,
+    video: isImage || isText,
+    image: isImage || isText,
+    audio: isText,
+    music: isText,
+    mode: isImage ? 'image' : (isText ? 'text' : 'file'),
+  };
+}
+
 export function filterAiSessions(sessions, query, titleForSession) {
   const needle = normalizeFileQuery(query);
   return needle
@@ -77,18 +93,82 @@ export async function loadAiSessions(target, {
   }
 }
 
-// 「发送给 AI」：把一份工作空间文件挂进 Claude 某个对话的输入栏。
-//   selectedSession：'new' = 开新对话；会话 id = 先切过去；空 = 就挂在当前对话上。
-//   material(item, direct) → 附件对象（direct=true：零拷贝直给源绝对路径，Claude 在服务器本机直读）。
-export async function sendFileToAi(item, selectedSession, { material, toast, chat, navigate }) {
-  toast(t('正在准备…'));
-  const attachment = await material(item, true);
-  if (!attachment) return;
-  if (selectedSession === 'new') chat.newChat();
-  else if (selectedSession && selectedSession !== chat.current()) await chat.load(selectedSession);
-  chat.attach(attachment);
-  navigate('claude');
-  toast(t('已加到对话输入，去问它吧'));
+export async function sendFileToAi(item, target, slot, selectedSession, {
+  kindOf,
+  material,
+  readText,
+  toast,
+  chats,
+  mediaState,
+  ensureVideoModel,
+  navigate,
+}) {
+  const kind = item.isDir ? 'dir' : kindOf(item.name);
+  const isImage = kind === 'img';
+  const isText = kind === 'md' || kind === 'text';
+
+  const chat = chats[target];
+  if (chat) {
+    toast(t('正在准备…'));
+    const attachment = await material(item, target !== 'gemini');
+    if (!attachment) return;
+    if (selectedSession === 'new') chat.newChat();
+    else if (selectedSession && selectedSession !== chat.current()) await chat.load(selectedSession);
+    chat.attach(attachment);
+    navigate(target === 'claude' ? 'claude' : 'vertex');
+    toast(t('已加到对话输入，去问它吧'));
+    return;
+  }
+
+  if (isImage && (target === 'video' || target === 'image')) {
+    toast(t('正在准备…'));
+    const attachment = await material(item);
+    if (!attachment?.url) {
+      toast(t('准备失败'));
+      return;
+    }
+    const draft = { path: attachment.path, url: attachment.url, name: attachment.name };
+    if (target === 'video') {
+      const targetSlot = slot || 'first';
+      if (targetSlot === 'last' || targetSlot === 'ref') ensureVideoModel(targetSlot);
+      mediaState.func = 'video';
+      mediaState.videoSrcDraft = { ...draft, slot: targetSlot };
+    } else {
+      mediaState.func = 'image';
+      if (/^imagen/.test(mediaState.imageModel || '')) mediaState.imageModel = '';
+      mediaState.imageSrcDraft = draft;
+    }
+    navigate('vertex');
+    toast(t('已挂为生成素材，可换模型/调参后点生成'));
+    return;
+  }
+
+  if (isText) {
+    toast(t('正在读取…'));
+    const content = await readText(item);
+    if (content == null) {
+      toast(t('读取失败'));
+      return;
+    }
+    if (target === 'video') {
+      mediaState.func = 'video';
+      mediaState.videoDraft = content;
+    } else if (target === 'image') {
+      mediaState.func = 'image';
+      mediaState.imageDraft = content;
+    } else if (target === 'audio') {
+      mediaState.func = 'voice';
+      mediaState.voiceDraft = content;
+    } else if (target === 'music') {
+      mediaState.func = 'music';
+      mediaState.musicDraft = content;
+    }
+    navigate('vertex');
+    toast(t('内容已填入提示词栏'));
+    return;
+  }
+
+  toast(t('该文件不支持发给这个目标'));
 }
 
 // —— 新建 Markdown ——

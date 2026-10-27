@@ -1,5 +1,5 @@
 // 瘦身 P0-3：按需注入的专章（playbook）。以前这四章（网页 / 桌面 / 安卓的验证流程、本地服务的安全规矩，合计约 6.6k 字符）写死在
-// system 里，每个会话、每次请求都带着——实际使用中 57 个会话里只有 1 个跑过 adb、1 个碰过 Electron。现在 system 里只留一句「做到这块时会
+// system 里，每个会话、每次请求都带着——正式服 57 个会话里只有 1 个跑过 adb、1 个碰过 Electron。现在 system 里只留一句「做到这块时会
 // 收到 [Playbook: …]」，第一次碰到时由 loop 注入一条 harness 消息（随会话落盘，同一个会话只注入一次；被整段压缩掉之后再碰到会再注入）。
 //
 // 触发分两种：用户点名（只给误报代价低、又必须开工前就知道的：安卓的工具链放哪、桌面应用的验证路线）；动手时的工具调用（写了网页文件、
@@ -15,7 +15,8 @@ export interface Playbook {
   id: PlaybookId;
   title: string;
   body: string;
-  // Muse：这台机器没有浏览器（Browser 工具没注册）时用的正文；needsBrowser = 没浏览器就整章不给（桌面 / 安卓的验证路线都靠 Browser）
+  // D5：这台机器没有浏览器（浏览器工具没注册，见 headless.ts browserAvailable）时用的正文；needsBrowser = 没浏览器就整章不给
+  // （桌面 / 安卓的验证路线都靠 Browser）。与 prompt.ts 的 browser 开关同一语义。
   bodyNoBrowser?: string;
   needsBrowser?: boolean;
   // 用户原话点名就注入（不给就只认工具调用）
@@ -40,6 +41,11 @@ const ELECTRON_CODE_RE = /require\(\s*["']electron["']\s*\)|from\s+["']electron[
 const ANDROID_CMD_RE = /\b(?:adb|gradlew|gradle|sdkmanager|avdmanager|emulator|assembleDebug|assembleRelease|bundleRelease)\b/;
 const ANDROID_FILE_RE = /\.(?:kt|kts|gradle)$|AndroidManifest\.xml$/i;
 
+// 网页章开头两步（有没有浏览器都一样）
+const WEB_INTRO = `NEVER start a server by backgrounding it with Bash (\`node server.js &\`, \`npm run dev &\`) — the shell pipe stays open and the tool hangs until it times out. Instead:
+1. Preview(action:"start", command:"node server.js", port: <port>) — starts it in the background, waits until the port is up, and opens a live preview pane for the user. It returns immediately with startup logs.
+2. Test the API endpoints with Bash + curl (register, log in, upload…), reading each response. Preview(action:"logs") reads the server's stdout/stderr (crashes, 500s, request logs).`;
+
 export const PLAYBOOKS: readonly Playbook[] = [
   {
     id: "web",
@@ -49,16 +55,12 @@ export const PLAYBOOKS: readonly Playbook[] = [
       (call.name === "Browser" && str(call.args.action) === "navigate" && LOCAL_URL_RE.test(str(call.args.url))) ||
       WEB_FILE_RE.test(writtenPath(call)) ||
       DEV_SERVER_RE.test(bashCommand(call)),
-    body: `NEVER start a server by backgrounding it with Bash (\`node server.js &\`, \`npm run dev &\`) — the shell pipe stays open and the tool hangs until it times out. Instead:
-1. Preview(action:"start", command:"node server.js", port: <port>) — starts it in the background, waits until the port is up, and opens a live preview pane for the user. It returns immediately with startup logs.
-2. Test the API endpoints with Bash + curl (register, log in, upload…), reading each response. Preview(action:"logs") reads the server's stdout/stderr (crashes, 500s, request logs).
+    body: `${WEB_INTRO}
 3. Exercise the real UI with the browser tools: Browser(navigate, url:"/") → ReadPage (structure + [refN] handles) → Browser(click/type, ref:N) → verify.
 4. VERIFY with exact checks first: Eval for DOM assertions ("did the error banner appear", "how many rows rendered"), Network for whether the page actually hit the API and what came back, Browser(action:"console") for JS errors. These are cheap, exact, and text-native. Use Browser(action:"screenshot") for visual/layout judgment on top.
 5. If the page draws with <canvas> or WebGL (charts, visualizations, custom graphics), run Browser(action:"dprprobe") once after your edits and treat a failure as a real bug. The headless browser runs at devicePixelRatio 1 — the ONE ratio where DPR-scaling mistakes (e.g. re-reading a canvas height you already multiplied by dpr) are symptom-free — while real displays run 1.25–3, so screenshots alone can pass on a page that explodes on every actual device.
 6. Fix and repeat. Preview(action:"stop") when finished.`,
-    bodyNoBrowser: `NEVER start a server by backgrounding it with Bash (\`node server.js &\`, \`npm run dev &\`) — the shell pipe stays open and the tool hangs until it times out. Instead:
-1. Preview(action:"start", command:"node server.js", port: <port>) — starts it in the background, waits until the port is up, and opens a live preview pane for the user. It returns immediately with startup logs.
-2. Test the API endpoints with Bash + curl (register, log in, upload…), reading each response. Preview(action:"logs") reads the server's stdout/stderr (crashes, 500s, request logs).
+    bodyNoBrowser: `${WEB_INTRO}
 3. There is no browser on this machine, so there are no Browser/ReadPage/Eval/Network tools. Verify pages over HTTP instead: curl each page (status, the markup that matters, the scripts/styles it references) and every API the UI calls, and check the server side with Preview(action:"logs"). Say plainly in your final answer that the UI itself was not exercised in a real browser.
 4. Fix and repeat. Preview(action:"stop") when finished.`,
   },

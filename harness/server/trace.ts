@@ -58,6 +58,6 @@ export function traceIterable<T>(source: AsyncIterable<T>, ctx: TraceContext | u
   };
 }
 
-// 模型请求带的关联头（中继 / 自建模型服务的日志能据此对上这一轮）
+// 模型请求带的关联头（中继 / 本机 llama-server 的日志能据此对上这一轮）
 export const TRACE_HEADER = "x-dimensio-trace-id";
 export const SPAN_HEADER = "x-dimensio-span-id";

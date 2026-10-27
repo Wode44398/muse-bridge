@@ -17,13 +17,14 @@
   import SessionRail from './claude/SessionRail.svelte';
   import CodeStatsCard from './claude/CodeStatsCard.svelte';
   import RoutinesPage from './RoutinesPage.svelte';
-  import CustomizePage from './CustomizePage.svelte';
   import { api } from '../lib/api.js';
   import { uiAlert, uiConfirm } from '../lib/dialogs.js';
-  import { me, ui, session, settings, setTheme, singleMode, sessionWt } from '../lib/state.svelte.js';
-  import AccountCard from './AccountCard.svelte';
+  import { me, ui, session, settings, setTheme, singleMode, sessionWt, pluginOn } from '../lib/state.svelte.js';
+  import UserMenu from './UserMenu.svelte';
+  import { updateInfo } from '../lib/updateStore.svelte.js';
   import { swipeDismiss } from '../lib/motion.js';
   import { closePage, backPeek } from '../lib/pageMorph.js';
+  import { mountDrag } from '../lib/capsule.js';
   import { untrack } from 'svelte';
   import { chat, newConversation, openSession, requestSync, prefetchSessions, onBusEvent } from '../lib/chat.svelte.js';
   import { setSessionSource } from '../lib/sessionFamily.svelte.js';
@@ -36,12 +37,14 @@
   import { absorbLastPrefs } from '../lib/chatPrefs.js';
   import ClaudeDock from './dock/ClaudeDock.svelte';
   import ProjectPicker from './ProjectPicker.svelte';
+  import { hasNativePickDirectory, nativePickDirectory } from '../lib/nativeDesktop.js';
   import { dock, openDock, closeDock, setDockWs } from '../lib/dock.svelte.js';
   import { layout, makeSideYield, pointer } from '../lib/layout.svelte.js';
   import { drag, dropZone, dragScrollGuard, beginDrag, makeHold, dropToast } from '../lib/dragdrop.svelte.js';
   import { applyProjectOrder, moveId, splitDropPlan, splitDropLabel, canSplitWidth, dockOverlayFor, MIN_PANE } from '../lib/claudeSplit.js';
   import { soloUrl, PANE_MSG, isPaneMsg } from '../lib/solo.js';
   import { openSettings } from '../lib/settingsNav.svelte.js';   // 分屏格托宿主页开设置（onPaneMsg 的 settings）
+  import { wcoHeight, wcoRightInset } from '../desktop/chrome/wco.svelte.js';
   import { agentDropZone, attachToAgent, dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent, WS_FILE } from '../lib/fileDrag.js';
   import { CHAT_REF, isChatRef, canQuote, quoteSession } from '../lib/chatQuote.js';
   import { IS_CSNAP } from '../lib/csnap.js';
@@ -131,7 +134,7 @@
   // 作为滚动区底部内边距 —— 最后一条消息仍能滚到卡片上方、不被挡住。
   // --composer-card-top = 输入【卡片】上沿到 wrap 底的距离（卡片高 + wrap 底 padding）。wrap 里在卡片
   // 上方还有归属芯片槽（滚到底才显形、高度恒占）和回退横条槽，滚动区底衬按整个 wrap 算，底部渐隐带
-  // 若钉在底衬边缘就会悬在透明的芯片槽上方、正文从带子和卡片之间透出来——
+  // 若钉在底衬边缘就会悬在透明的芯片槽上方、正文从带子和卡片之间透出来（2026-09-11 维护者截图）——
   // 带子要按这个值钉到卡片上沿，见 .scroll-fade-strip-bottom 的 bottom。
   $effect(() => {
     if (!composerWrapEl || !scrollEl) return;
@@ -228,7 +231,7 @@
   });
 
   // keep-alive 后本组件常驻挂载，刷新/镜像轮询都要看「确实在 claude 页」，
-  // 否则在主页 / 别的分页背后也白跑网络请求。
+  // 否则在主页/vertex 页背后也白跑网络请求。
   // 进 claude 页即拉会话列表（宽屏常驻列 + 窄屏抽屉共用）：本地缓存先出、网络刷新殿后，
   // 抽屉一拉开就有内容，不再「拉出等一下才看见列表」。每轮结束（busy→false）再刷一次
   // （状态点/新会话跟手）。untrack：refreshSessions 内读 sessions，别让它成为依赖。
@@ -236,7 +239,7 @@
   $effect(() => { if (ui.screen === 'claude' && !session.busy && who) untrack(refreshSessions); });
 
   // —— 多端实时同步：订阅账号级事件总线（/api/stream）——
-  // 别的设备 / 浏览器标签页发起一轮、跑完一轮，或任何进程写了 transcript
+  // 别的设备（手机 / 电脑网页 / 桌面客户端）发起一轮、跑完一轮，或任何进程写了 transcript
   //（含不经 bridge 的 CLI / 桌面 Claude Code / routines），都会即时推到这里：
   // 列表就地增量更新，正文交给 chat 层去挂直播或静态跟随。
   // 总线按身份订阅（服务端 key = 账号）：换人时随 who 断开重连。
@@ -433,7 +436,7 @@
   // ui.screen，就把人从刚进的新页里踢回主页。新版切 screen 发生在转场第一拍（快照后面），
   // 动画只在快照上跑，不存在「落地时改导航状态」的回调，这一类竞态从结构上没了。
   //
-  // 左缘右滑＝预测式返回：页面随手指缩小、
+  // 左缘右滑（浏览器 / iOS；apk 里系统返回手势走 __bridgeBack）＝预测式返回：页面随手指缩小、
   // 长圆角、身后露出主页（backPeek）；松手判定完成就把此刻的形态交给 closePage 续走，
   // 判定取消则弹簧回到 0。dragX = 手指已拖的距离（0..innerWidth）。
   let dragX = $state(0);
@@ -449,9 +452,15 @@
   }
   $effect(() => registerCloser('claudeSlide', () => slideOut()));
   // —— 单 agent 模式（lib/state 的 rootScreen）：这一页就是根——没有「主页」行、左缘右滑不退页。
-  // 侧栏底部是账户卡（AccountCard，claude.ai 左下角用户行同款），点开是设置 / 账户 / 关于菜单；
-  // 常规模式菜单里多一项「主页」。
+  // 侧栏底部是账户卡（claude.ai 左下角用户行同款），点开是设置 / 账户 / 关于与更新菜单；常规模式
+  // 同一张卡，菜单换成主页 / 设置 / 工作空间 / 退出。
+  // 菜单在页面级只挂一份（中屏「常驻列 + 隐藏抽屉」会把侧栏内容渲染两遍），锚点取被点那颗按钮的位置。
   const single = $derived(singleMode());
+  let umAnchor = $state(null);
+  function toggleUserMenu(e) { umAnchor = umAnchor ? null : e.currentTarget.getBoundingClientRect(); }
+  const meName = $derived(me.kind === 'none' ? t('未登录') : (me.user || (me.kind === 'admin' ? 'admin' : '')));
+  const meRole = $derived(me.kind === 'admin' ? t('管理员') : me.kind === 'user' ? (me.tier === 'pro' || me.tier === 'full' ? t('完全信任用户') : t('用户')) : '');
+  const meInitial = $derived(me.kind === 'none' ? '?' : (meName || '?').trim().charAt(0).toUpperCase());
   // 左缘右滑跟手返回。起手区 40px（安卓系统手势同量级；旧值 28px 偏窄，常"划不着"）。
   const edgeSwipe = (node) => swipeDismiss(node, {
     axis: 'x', dir: 1, edge: 40, threshold: 0.32,
@@ -487,8 +496,6 @@
     newConversation(p.id);
   }
   function openRoutines() { closeDrawer(); ui.routinesOpen = true; }
-  function openCustomize() { closeDrawer(); ui.customizeOpen = true; }
-  const czOn = $derived(ui.customizeOpen && me.kind === 'admin');
 
   // —— 新对话（S1-6，审查 G21）：侧栏第一行 + 手机顶栏 + 快捷键（网页 Ctrl/⌘+Shift+O，桌面壳另认 Ctrl/⌘+N）——
   // 落点（lib/quickChat.js 的 newChatTarget）：当前在真实项目里就在它里面开；在临时对话里（或还没有归属）
@@ -503,7 +510,7 @@
     const cur = splitOn && paneFocus ? ((paneId && sessions.find((s) => s.id === paneId)?.projectId) || paneProjId) : sessionProjId;
     openNew(newChatTarget({ currentProjectId: cur, projects, sessions: listed }));
   }
-  const IS_DESKTOP_SHELL = false;   // Muse 只有网页 / 安卓壳：新对话快捷键按浏览器那套
+  const IS_DESKTOP_SHELL = typeof window !== 'undefined' && !!window.BridgeDesktop;
   const NEW_KBD = newChatKbd({ desktop: IS_DESKTOP_SHELL, mac: typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '') });
 
   // —— 临时对话（服务端 claude-quick.mjs，原「快照」）——
@@ -1097,14 +1104,22 @@
   $effect(() => setDockWs(dockWs));
   function toggleDock() { if (dock.open) closeDock(); else openDock(dock.view === 'menu' ? 'menu' : dock.view); }
 
-  // —— 新建项目：选一个服务器上的文件夹当工作空间（路径即会话 cwd）；项目名固定取文件夹名。——
-  // 选择器是 ProjectPicker（工作空间文件管理器本体 + 底部拖入栏）。
+  // —— 新建项目：选一个本地文件夹当工作空间（路径即会话 cwd）；项目名固定取文件夹名。——
+  // 两条路按端分流，自建目录浏览弹窗已退役：
+  //   · 本机桌面壳 → 直接唤起系统原生文件夹选择器（壳与 bridge 恒在同一台机器上，
+  //     打的是 127.0.0.1，所以对话框回的绝对路径服务端一定认；老壳没这个 IPC 自动回落）；
+  //   · 网页 / 手机 / 老壳 → ProjectPicker（工作空间文件管理器本体 + 底部拖入栏）。
   let pickOpen = $state(false);
-  // 选择器的起始位置＝当前项目所在处。快照对话除外：它的「路径」是仓库外一只
-  // 一次性 UUID 桶，从那儿起步没有意义。
+  // 选择器/系统对话框的起始位置＝当前项目所在处。临时对话除外：它的「路径」是仓库外一只
+  // 一次性 UUID 桶，从那儿起步只会把人扔到 C:\Users\<你> 底下，不是任何人想去的地方。
   const pickFrom = $derived(chipProject && !chipProject.quick ? chipProject.path || '' : '');
-  function openProjectModal() {
+  async function openProjectModal() {
     closeMenu();
+    if (hasNativePickDirectory()) {
+      const dir = await nativePickDirectory(pickFrom);
+      if (dir) await createProjectAt(dir);
+      return;
+    }
     pickOpen = true;
   }
   // ═══════════════════════ 侧栏拖放（claude.ai 同款）═══════════════════════
@@ -1224,7 +1239,8 @@
   });
 
   // —— ③ 拖出窗口：一个只放这个对话的新窗口（?solo=<id>，见 SoloPage）——
-  // 浏览器弹窗（同名窗口复用——同一个对话拖两次是聚焦不是再开）。
+  // 桌面壳：主窗口的 window.open 一律交给系统浏览器，所以走壳的 IPC 开一个同会话、同登录态的窗口；
+  // 老壳没有这条 IPC 就明说要更新。网页：浏览器弹窗（同名窗口复用——同一个对话拖两次是聚焦不是再开）。
   function popOut(rec, pt) {
     const url = soloUrl(rec.id);
     const width = 800;
@@ -1232,6 +1248,18 @@
     // 让指针落在新窗口标题栏靠左的位置——像拖出来的标签页被「拎」着
     const x = Math.round((pt ? pt.x : window.screenX + 120) - 140);
     const y = Math.round((pt ? pt.y : window.screenY + 80) - 18);
+    const bd = typeof window !== 'undefined' ? window.BridgeDesktop : null;
+    if (bd) {
+      if (bd.window?.openChat) {
+        let bg = '';
+        try { bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(); } catch {}
+        Promise.resolve(bd.window.openChat({ url, key: rec.id, title: rec.title, x, y, width, height, bg }))
+          .catch(() => dropToast(t('没能打开新窗口')));
+      } else {
+        dropToast(tc('claude', '桌面客户端更新后才能把对话拖成独立窗口'));
+      }
+      return;
+    }
     let w = null;
     try { w = window.open(url, 'bridge-chat-' + rec.id, `popup=yes,width=${width},height=${height},left=${x},top=${y}`); } catch {}
     if (!w) dropToast(t('浏览器拦下了新窗口——允许本站弹出窗口后再拖一次'));
@@ -1425,6 +1453,13 @@
     window.addEventListener('pointerdown', down, true);
     return () => window.removeEventListener('pointerdown', down, true);
   });
+  // 桌面壳：iframe 那一格贴着窗口右缘时，告诉它右上被系统窗控占了多宽（它的工作台首行要让出来）
+  $effect(() => {
+    if (!splitOn || !paneReady) return;
+    const right = split.side === 'right' ? wcoRightInset() : 0;
+    const h = wcoHeight();
+    untrack(() => postPane({ t: 'wco', h, right }));
+  });
   // 主题跟着别的窗口（拖出去的对话窗 / 分屏格）走
   $effect(() => {
     const onStorage = (e) => { if (e.key === 'bridge-theme' && e.newValue && e.newValue !== ui.theme) setTheme(e.newValue); };
@@ -1603,21 +1638,18 @@
 <div class="panes" class:split={splitOn} class:side-dnd={!!sideDrag} class:resizing={splitDragging}
   use:measureW={(measureTick, (w) => { panesW = w; })}>
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pane main" class:focused={splitOn && !paneFocus} style={splitOn ? paneStyle(mainSide) : ''}
+<div class="pane main" class:focused={splitOn && !paneFocus} style={splitOn ? paneStyle(mainSide) + (mainSide === 'left' ? '--pane-wco-r:0px;' : '') : ''}
   use:measureW={(measureTick, (w) => { mainPaneW = w; })}
   onpointerdowncapture={() => { paneFocus = false; }} onfocusincapture={() => { paneFocus = false; }}>
 <!-- 顶栏挂在【这一格】上而不是对话列里：侧列形态的工具开关组要坐在这一格右上角——工作台展开时正好在
-     卡片上方那条带里，盖在正文上的工作台也压不住它。
+     卡片上方那条带里（桌面壳下＝标题栏带、与最小化/关闭同一排），盖在正文上的工作台也压不住它。
      汉堡在 expanded 档才彻底隐藏；medium 档留着当「侧栏常驻」开关（on=已常驻）。
      分屏时每一格各有一组（工具开关 · ⋮ · 关掉这一格）；贴窗口右缘的那一格才让系统窗控（--pane-wco-r）。 -->
 <TopBar onMenu={onMenuKey} onDock={toggleDock} onNew={IS_CSNAP ? null : newChat} hideMenu={wide} menuOn={pinned} tools={sideMode} split={splitOn} onClose={splitOn ? closeMain : null} />
 <div class="main-col" bind:this={mainColEl} class:dnd-on={drag.overKey === 'chat:claude' || wsDragOver} role="presentation" use:dropZone={claudeDrop}
   ondragover={onWsDragOver} ondragleave={onWsDragLeave} ondrop={onWsDrop}>
 
-<!-- 「自定义」页单独一层盖在对话上（不进下面的 if 链：问候页带着输入框的交叉转场，入场动画没播完就被切走会收不了尾、
-     新分支挂不上）；开着时对话内容整个藏起来（display:none，输入框草稿等状态都留着）。 -->
-<div class="stage" class:cz-on={czOn}>
-{#if czOn}<CustomizePage />{/if}
+<div class="stage">
 {#if ui.view === 'greeting'}
   <!-- 空态 = Claude 桌面端 /code 落地页：左上问候 + 用量卡（claude/CodeStatsCard），输入框沉到底部——
        位置、外边距与聊天态 .composer-wrap/.composer-inner 完全一致（只挪位置、样式不动），
@@ -1628,7 +1660,7 @@
     <div class="hero-scroll">
       <div class="hero-col">
         <div class="greeting">
-          <span class="logo-fly" in:fade={{ duration: 420, delay: 80 }} out:fly={{ x: -80, y: -22, duration: 320, easing: softDrop }}><ClaudeLogo anim="static" size={24} interactive /></span>
+          <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'new', model: settings.model, effort: settings.effort }) }} in:fade={{ duration: 420, delay: 80 }} out:fly={{ x: -80, y: -22, duration: 320, easing: softDrop }}><ClaudeLogo anim="static" size={24} interactive /></span>
           <h1 in:fly={{ y: 22, duration: 480, delay: 130 }} out:fade={{ duration: 150 }}>{greetName}</h1>
         </div>
         {#if !IS_CSNAP}
@@ -1815,18 +1847,12 @@
     <span class="d-lead svg" aria-hidden="true">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 3h7A2.5 2.5 0 0 1 14 5.5v3.5a2.5 2.5 0 0 1-2.5 2.5H8l-3 2.25V11.5h-.5A2.5 2.5 0 0 1 2 9V5.5A2.5 2.5 0 0 1 4.5 3Z" stroke-dasharray="2 1.7"/></svg>
     </span>{t('新建临时对话')}</button>
-  <button class="d-item" onclick={openRoutines}>
+  {#if pluginOn('routines')}<button class="d-item" onclick={openRoutines}>
     <span class="d-lead ck" aria-hidden="true">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="8" cy="8" r="5.5"/><line class="hh" x1="8" y1="8" x2="10" y2="9"/><line class="mh" x1="8" y1="8" x2="8" y2="5.5"/>
       </svg>
-    </span>{t('定时触发')}</button>
-  <!-- 自定义 = claude.ai /code 侧栏 Customize：公文包是 Anthropicons U+E100，自带 ANIM 轴（0→100 包身横向撑开、
-       提手上抬），悬停 / 按下走与项目盒盖同一条 --ca-anim 弹性过渡。扩展接口是 admin 门，非管理员不出这一行。 -->
-  {#if me.kind === 'admin'}
-    <button class="d-item" class:cur={ui.customizeOpen} onclick={openCustomize} aria-current={ui.customizeOpen ? 'page' : undefined}>
-      <span class="ic d-lead bag" aria-hidden="true">&#xe100;</span>{t('自定义')}</button>
-  {/if}
+    </span>{t('定时触发')}</button>{/if}
   {#if arch.view}
     <!-- 已归档视图（官方 Sessions 页的 Archived 标签 / 侧栏 Status=Archived）：抽屉内整页切换，平铺、按归档时间倒序，
          每行能打开看、取消归档、删除；底部「显示更多」走服务端分页。宽屏常驻侧栏与手机抽屉同一份。 -->
@@ -1888,9 +1914,16 @@
   {/if}
   {/if}
   <div class="d-spacer"></div>
-  <!-- 账户卡：贴底不随列表滚走（sticky）。设置 / 账户 / 关于都从这里进；常规模式菜单里多一项「主页」 -->
+  <!-- 账户卡：贴底不随列表滚走（sticky）。单 agent 模式下设置 / 账户 / 关于与更新都从这里进；
+       常规模式菜单里多一项「主页」 -->
   <div class="d-foot">
-    <AccountCard onpick={closeDrawer} onhome={single ? null : slideOut} />
+    <button class="d-me" class:open={!!umAnchor} onclick={toggleUserMenu} aria-haspopup="menu" aria-expanded={!!umAnchor}
+      title={t('设置与账户')}>
+      <span class="av">{meInitial}</span>
+      <span class="d-me-n">{meName}{#if meRole}<span class="d-me-r">{` · ${meRole}`}</span>{/if}</span>
+      {#if single && updateInfo.available}<span class="d-me-dot" title={t('有新版本')}></span>{/if}
+      <span class="d-me-chev" aria-hidden="true">&#xe027;</span>
+    </button>
   </div>
 
   {#if menuFor}
@@ -1939,12 +1972,18 @@
   <aside class="drawer {ui.drawerOpen ? 'open' : ''}" bind:this={drawerEl} use:dragScrollGuard>{@render drawerBody()}</aside>
 {/if}
 
+<!-- 账户卡菜单：页面级只挂一份（见 toggleUserMenu 注释） -->
+{#if umAnchor}
+  <UserMenu anchor={umAnchor} onclose={() => (umAnchor = null)} onpick={() => { umAnchor = null; closeDrawer(); }}
+    onhome={single ? null : slideOut} />
+{/if}
+
 <!-- 新建项目：工作空间文件管理器当选择器，长按文件夹拖进底栏＝选它当项目工作空间 -->
 {#if pickOpen}
   <ProjectPicker preferPath={pickFrom} onPick={createProjectAt} onClose={() => (pickOpen = false)} />
 {/if}
 
-<!-- 重命名对话（替代浏览器原生 window.prompt） -->
+<!-- 重命名对话（替代 window.prompt——Electron 不实现 prompt，桌面壳里原来点了没反应） -->
 {#if renameFor}
   <button class="pm-bd" aria-label={t('关闭')} onclick={() => (renameFor = null)}></button>
   <div class="pmodal rnmodal" role="dialog" aria-modal="true">
@@ -2017,7 +2056,7 @@
   /* 分页层：fixed 全屏盖在主页之上；左缘右滑时缩小露出身后主页（backPeek）。
      不挂 box-shadow：转场快照连同阴影一起拍（墨水溢出），会让快照比页面大一圈、落位对不齐。 */
   .claude-slide { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column;
-    padding-bottom: var(--kb, 0px);   /* 键盘高度兜底，interactive-widget 方案生效时恒 0 */
+    padding-bottom: var(--kb, 0px);   /* 键盘高度兜底（同 vertex-slide），原生方案生效时恒 0 */
     background: var(--bg); will-change: transform; transform-origin: 50% 50%;
     /* transform 不再走 CSS 过渡：位移全程由手势 / 弹簧逐帧驱动（lib/motion.js），
        两套插值并存会在松手瞬间打架（弹簧改一次值、过渡又去追它＝一顿一顿的）。 */
@@ -2078,7 +2117,6 @@
   .sb-handle:hover .sb-pill, .sb-handle.drag .sb-pill { opacity: 1; }
   .sb-handle:focus-visible .sb-pill { opacity: 1; background: var(--coral); transition-delay: 0s; }
   .stage { flex: 1; position: relative; min-height: 0; display: flex; flex-direction: column; }
-  .stage.cz-on > :global(:not(.cz):not(.dlg):not(.dlg-bd)) { display: none; }   /* .dlg / .dlg-bd = 自定义页自己的弹窗 */
   /* 空态（官方 /code 落地页）：上半区可滚（问候 + 用量卡），底部是输入框。
      edge-to-edge 后页面顶到物理屏顶，顶距要再加状态栏高度（--sat）。 */
   .hero { position: absolute; inset: 0; display: flex; flex-direction: column; }
@@ -2143,9 +2181,9 @@
      带子的静态位置也在这条线上，钉住与不钉住无缝衔接。
      手机端官方那两档占屏太宽（32/48 在 6 寸屏上吃掉近一行正文），收到 18/28；断点与 layout.svelte.js 的
      compact(<700) 同源。 */
-  /* 顶带桌面端加长并下移：32 → 52px，头上先垫 --sf-lead 12px 实色再开始官方那段梯度，
+  /* 顶带桌面端加长并下移（维护者 09-23）：32 → 52px，头上先垫 --sf-lead 12px 实色再开始官方那段梯度，
      渐隐起点等于整体下移 12px、渐隐段本身 40px（原 32）。不用 top 偏移去「挪」——那样带子上方会漏出一条
-     正文。 */
+     正文。实色头正好把标题栏带（WCO 40px 拖拽区）的上半截衬成一块干净底，拖拽区看得出来。 */
   .scroll { --sf-top: 52px; --sf-lead: 12px; --sf-bottom: 48px; --scroll-fade-color: var(--bg); }
   .scroll > .scroll-fade-strip-top { --scroll-fade-size: var(--sf-top);
     background: linear-gradient(to bottom,
@@ -2157,15 +2195,16 @@
   /* 底带钉到【卡片】上沿而不是底衬边缘：底衬 = 整个 wrap 高（含透明的芯片槽），卡片顶到 wrap 底只有
      --composer-card-top，差值用负 bottom 补回去（sticky 负偏移合法）。没量到时两者相等 → bottom:0。 */
   /* 再减 10px：底衬比卡片高出的 8px「呼吸」留白本来落在带子和卡片之间，那一条正文完全没被盖——
-     手机上（带子只 28px）就是一道亮缝。带子下沿压到卡片上沿下方 2px，
+     手机上（带子只 28px）就是一道亮缝（维护者 09-11 第三张截图）。带子下沿压到卡片上沿下方 2px，
      被卡片（z-index 更高）盖住，实底与卡片无缝相接。 */
   .scroll > .scroll-fade-strip-bottom { --scroll-fade-size: var(--sf-bottom); bottom: calc(var(--composer-card-top, var(--composer-h, 84px)) - var(--composer-h, 84px) - 10px); }
   @media (max-width: 699px) { .scroll { --sf-top: 18px; --sf-lead: 0px; --sf-bottom: 28px; } }
+  :global(html[data-wco="1"]) .scroll::-webkit-scrollbar-thumb { border-style: solid; border-color: transparent; border-width: 0 7px 0 1px; background-clip: padding-box; }
   /* 输入栏卡片：绝对定位悬浮在正文之上，无实心背景/隔层——正文向上滚时从卡片下方穿过 */
   .composer-wrap { position: absolute; left: 0; right: var(--sb-w, 0px); bottom: 0; z-index: 5;
     padding: 6px 8px max(10px, var(--sab)); background: transparent; pointer-events: none; }
   /* 卡片【下方】那段底部留白（手机手势条安全区可达 30–40px）是透明的：正文从卡片底边和屏幕底之间
-     透出来。垫一层页底色，再往上盖住卡片下半段（卡片圆角外的缝也一并封住）；
+     透出来（维护者 09-11 截图第二处）。垫一层页底色，再往上盖住卡片下半段（卡片圆角外的缝也一并封住）；
      z-index:-1 退到 .composer-wrap 这个层叠上下文的底，仍在滚动区之上。 */
   .composer-wrap::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0;
     height: calc(max(10px, var(--sab)) + 28px); background: var(--bg); pointer-events: none; z-index: -1; }
@@ -2180,6 +2219,11 @@
   /* 字标行：官方标题栏里字标垂直居中、高 14px；这里给 44px 行高（与原 21px 衬线文字的占位持平），
      下留 2px 让字标视觉上略高于几何中线。颜色 = 官方 text-primary。 */
   .brand { display: flex; align-items: center; flex: none; height: 44px; padding: 0 10px 2px; color: var(--text); }
+  /* 桌面壳 WCO：字标行整行划进窗口拖拽区（维护者 09-23：顶部可拖范围太窄、不明显）。DesktopChrome 那条
+     全局 `html[data-wco] .brand{no-drag}` 是给主页可点的 BrandTitle 打的洞，这里的字标只是一枚 img，
+     不可点——作用域类多一级优先级压过它。字标行（drawer 顶 10 + 44 = 54px）比 40px 标题栏带更深，
+     左上角那一块从窗口顶到「主页」上沿都能拖。 */
+  :global(html[data-wco="1"]) .brand { -webkit-app-region: drag; user-select: none; }
   /* flex:none 必须写：.drawer 是溢出的 flex 列，min-height:auto 会把这行压到内容高（实测 16px），字标贴到「主页」上 */
   /* —— claude.ai 同款侧栏（实测规格：行高 32/圆角 8/字号 14/悬停 rgba .06、
      图标 Anthropicons 可变字重：导航 20px/430、New·主页 16px/700、⋮ 16px/530、气泡 e037）—— */
@@ -2210,12 +2254,6 @@
     transition: rotate .6s cubic-bezier(.3, .9, .4, 1); }
   .d-item:active .ck .hh { rotate: 30deg; }
   .d-item:active .ck .mh { rotate: 390deg; }
-  /* 自定义 = 公文包 U+E100 的 ANIM 轴（包身撑开 + 提手上抬），曲线同项目盒盖（官网回弹）；
-     当前页 = 行底常亮（claude.ai 侧栏当前项同款）。 */
-  .d-lead.bag { font-variation-settings: "ANIM" var(--ca-anim, 0), "ANM2" 0, "opsz" 20, "wght" 430;
-    transition: --ca-anim .3s cubic-bezier(.34, 1.3, .64, 1); }
-  .d-item:active .bag { --ca-anim: 100; }
-  .d-item.cur { background: var(--hover-strong); color: var(--text); }
   .d-sec { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; padding: 14px 4px 4px 10px; }
   .d-list { display: flex; flex-direction: column; }
   .d-row { position: relative; display: flex; align-items: center; border-radius: 8px; margin-bottom: .5px; transition: background-color .12s ease; }
@@ -2277,8 +2315,6 @@
     .d-item:hover { background: var(--hover); color: var(--text); }
     .d-item:hover .ck .hh { rotate: 30deg; }
     .d-item:hover .ck .mh { rotate: 390deg; }
-    .d-item:hover .bag { --ca-anim: 100; }
-    .d-item.cur:hover { background: var(--hover-strong); }
     .d-row:hover, .d-row:focus-within { background: var(--hover); }
     .d-row:hover .d-title, .d-row:focus-within .d-title { color: var(--text); }
     .d-row.proj:hover .pj { --ca-anim: 100; }
@@ -2360,7 +2396,21 @@
   .am-body { margin: 0 0 4px; font-size: 14px; line-height: 21px; color: var(--serif); text-wrap: pretty; overflow-wrap: anywhere; }
   .am-actions { flex-wrap: wrap; }
   .am-all { border: 1px solid var(--divider); }
-  /* —— 底部账户卡（AccountCard）的托座。贴底：列表长了也不被滚走 —— */
+  /* —— 底部账户卡（claude.ai 左下角用户行实测：按钮 32px 圆角 8、头像 24px 圆、
+     名字 14px 次级色、名字后一枚 ⌄；手机上加高到 44px 好按）。贴底：列表长了也不被滚走 —— */
   .d-foot { position: sticky; bottom: -10px; z-index: 2; flex: none; margin: 0 -8px -10px; padding: 8px 8px max(10px, var(--sab));
     background: var(--bg); transition: background-color .25s ease; }
+  .d-me { width: 100%; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 4px; border: 0; border-radius: 8px;
+    background: none; color: var(--serif); font: inherit; font-size: 14px; text-align: left; cursor: pointer; transition: background-color .12s ease, color .12s ease; }
+  .d-me.open { background: var(--hover-strong); color: var(--text); }
+  .d-me:active { background: var(--hover); }
+  @media (hover: hover) { .d-me:hover { background: var(--hover); color: var(--text); } }
+  .d-me .av { width: 26px; height: 26px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+    background: var(--avatar-bg); color: var(--text); font-size: 12px; font-weight: 560; }
+  .d-me-n { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .d-me-r { color: var(--muted); }
+  .d-me-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--st-accent); }
+  .d-me-chev { flex: none; font-family: var(--icons); font-size: 16px; line-height: 1; color: var(--muted); transition: transform .15s ease; }
+  .d-me.open .d-me-chev { transform: rotate(180deg); }
+  @media (pointer: coarse) { .d-me { height: 44px; } .d-me .av { width: 30px; height: 30px; font-size: 13px; } }
 </style>

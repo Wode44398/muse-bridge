@@ -1,0 +1,5 @@
+#!/bin/sh
+# 提交说明过泄漏扫描（个人目录路径、个人邮箱、手机号、密钥形状……，规则见 scripts/public/asset-gate.mjs）。
+# 启用：git config core.hooksPath scripts/git-hooks
+# 私有泄漏规则：环境变量 BRIDGE_LEAKS_FILE 指向规则文件（格式同 asset-gate.mjs 的 --leaks-file）。
+exec node scripts/public/asset-gate.mjs --text-file "$1"

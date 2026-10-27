@@ -233,9 +233,9 @@ test("K4 /api/memory 按工作区：?workspace= 读写那个项目的桶；没�
 
     // 同 topic 再确认一条 → 409 带冲突；带 supersedes → 200
     const idB2 = proposeNote(projB, "b build jdk 21", "b.build.jdk", WHY);
-    const conflict = await post(`/api/memory/${idB2}/promote`, { workspace: projB });
-    assert.equal(conflict.status, 409);
-    assert.deepEqual(conflict.body.conflicts.map((c: { id: string }) => c.id), [idB]);
+    const clash = await post(`/api/memory/${idB2}/promote`, { workspace: projB });
+    assert.equal(clash.status, 409);
+    assert.deepEqual(clash.body.conflicts.map((c: { id: string }) => c.id), [idB]);
     assert.equal((await post(`/api/memory/${idB2}/promote`, { workspace: projB, supersedes: idB })).status, 200);
 
     // 驳回 → 撤销 → 删除，都在 B 的桶里

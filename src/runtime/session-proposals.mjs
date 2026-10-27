@@ -57,6 +57,7 @@ function normalize(id, p) {
     model: p.model ? clip(p.model, 80) : '',
     name: p.name ? clip(p.name, 40) : '',
     branchName: p.branchName ? clip(p.branchName, 80) : '',
+    project: p.project ? clip(p.project, 80) : '',   // 开到别的项目（项目 id；空 = 父会话所在的项目）
     toolUseId: clip(p.toolUseId, 128),
     asked: clip(p.asked, 300),
     qid: clip(p.qid, 64),
@@ -111,7 +112,7 @@ export function publicView(p) {
   if (!p) return null;
   return {
     id: p.id, parent: p.parent, kind: p.kind, title: p.title, tldr: p.tldr, prompt: p.prompt.slice(0, 4000),
-    context: p.context, useWorktree: p.useWorktree, model: p.model, toolUseId: p.toolUseId, asked: p.asked,
+    context: p.context, useWorktree: p.useWorktree, model: p.model, toolUseId: p.toolUseId, asked: p.asked, project: p.project,
     ...(p.qid && (p.status === 'pending') ? { qid: p.qid } : {}),
     createdAt: p.createdAt, expiresAt: p.expiresAt, status: p.status, child: p.child, auto: p.auto, reason: p.reason,
   };

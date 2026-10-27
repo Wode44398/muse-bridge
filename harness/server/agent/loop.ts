@@ -9,7 +9,7 @@ import { messageKind } from "./injections.ts";
 import { PLAYBOOK_KIND, playbookLoadedIn, playbookMessage, playbooksForCalls, playbooksForRequest, type Playbook } from "./playbooks.ts";
 import { loopStopText } from "./loop-guard.ts";
 import { cutAtLoop, isRunawayRepetition, LOOP_CUT_NOTICE } from "./repetition.ts";
-import { connectErrorLabel, isConnectFailure, planWait, type NetWait, type WaitPlan } from "./netwait.ts";
+import { connectErrorLabel, isConnectFailure, isLocalLoadingError, planWait, type NetWait, type WaitPlan } from "./netwait.ts";
 import { REPEAT_DENIAL_RULE, callSubject, decide, sessionRuleChoices, type Decision } from "./permissions.ts";
 import { normalizeToolArgs } from "./tool-input.ts";
 import { approvalPreview } from "./approval-preview.ts";
@@ -51,7 +51,7 @@ const AUDIT_CLOSURE_TOOLS = new Set(["MemoryAudit", "Remember"]);
 const announcesMore = (text: string): boolean => /[:：]\s*$/.test(text.trim());
 
 // 10-10 实测：MiMo 正文停在「……重来一遍，逐」、工具调用没发出来，provider 却报正常结束（finish_reason=stop，
-// usage 也到了），这一轮就当答完收了尾——待办还挂着 in_progress，用户看到的是「干一半断了」。另有本机模型、
+// usage 也到了），这一轮就当答完收了尾——待办还挂着 in_progress，用户看到的是「干一半断了」。正式服另有 Strata、
 // OpenAI 各一例同样断在半个字上。偏保守：只在待办还有没做完时判（那是模型自己说过活没干完），且最后一行是普通段落
 // （不是列表 / 标题 / 表格 / 代码）：结尾是逗号顿号冒号；或结尾是汉字 / 字母、而这一行前面已经有过标点（写到一半的
 // 长句）——「好的」「做完了」这种不带句号的短答是常事，不算。
@@ -105,7 +105,7 @@ export const LENGTH_CONTINUE_NUDGE =
   "Continue exactly where you stopped — do not repeat what you already wrote. " +
   "If you were about to call tools, issue those tool calls now.";
 // R19（hermes N23 的 reasoning-only 分流）：这一轮只写了思考、一个字的答复都没有就要收尾——用户那头只看得见一段思考。
-// 实际使用中 1825 次模型回合里出现过 2 次，其中一次就这样收了尾（用户看到八千多字的思考、没有答复）。追问这么多次，还是没有就照旧收尾。
+// 正式服 1825 次模型回合里出现过 2 次，其中一次就这样收了尾（用户看到八千多字的思考、没有答复）。追问这么多次，还是没有就照旧收尾。
 export const MAX_ANSWER_NUDGES = 1;
 export const ANSWER_NUDGE =
   "[Automated check] Your last turn contained only reasoning — nothing reached the user. " +
@@ -390,7 +390,7 @@ function destructiveLabel(args: Record<string, unknown>): string {
 
 const RETRACT_REASON = "答复先撤回：改了代码，但还没有通过的验证，正在让它补跑检查";
 // 撤回的那版答复模型自己的上下文里还在，它会以为用户看过了，收尾只写一句「验证通过」——用户那边正文就没了
-// （实例：六千字分析被撤回，最后只剩「分析已完成。补充验证结果：……」）。追问里明说。
+// （2026-10-05 本机 Qwen 分析 Strata：六千字分析被撤回，最后只剩「分析已完成。补充验证结果：……」）。追问里明说。
 const RETRACTED_NOTICE =
   " Note: the reply you just wrote has been withdrawn from the user's view — they will NOT see it. When you finish, " +
   "your final reply must be complete and self-contained: restate the full answer, then add the verification results.";
@@ -417,7 +417,7 @@ export function verificationFootnote(state: AgentState): string | null {
   if (state.runAudit) lines.push(`没有可跑的验证（${state.runAudit.decision}）：${state.runAudit.reason}`);
   // K6（G4）：记忆审计门禁追问用尽放行——服务端写明，模型去不掉
   if (state.memoryAuditGaveUp) lines.push(`⚠️ 记忆审计：追问 ${MAX_MEMORY_AUDIT_NUDGES} 次仍没交，已放行——这一轮值得记住的事可能没记下来`);
-  // 10-07：验收顺利就不打扰——通过的回执只在上面有问题时作为对照一起给，全绿不附尾注
+  // 10-07（维护者）：验收顺利就不打扰——通过的回执只在上面有问题时作为对照一起给，全绿不附尾注
   if (!lines.length) return null;
   const passed = [...new Set(state.runEvidence.filter((e) => e.passed).map((e) => clipDetail(e.detail)))].slice(-3);
   if (passed.length) lines.push(`通过的检查：${passed.map((d) => `✅ \`${d}\``).join(" · ")}`);
@@ -447,13 +447,13 @@ function noteInvariants(state: AgentState, invariants: RunInvariants, turn: Turn
 }
 
 // 瘦身 P0-3：专章（playbook）按需注入——用户点名或工作碰到那块时追加一条 harness 消息，同一章在转录里还在就不重复。
-// Muse：这台机器没有浏览器（Browser 工具没注册）时，网页章给 curl 版、桌面 / 安卓两章不给（与 prompt.ts 的 browser 开关一致）。
+// D5：这台机器没有浏览器（state.browser = false，见 headless.ts browserAvailable）时，网页章给 curl 版、桌面 / 安卓两章不给
+// （与 prompt.ts 的 browser 开关一致）。
 function attachPlaybooks(state: AgentState, picks: Playbook[], why: "request" | "work"): void {
-  const browser = state.toolMap.has("Browser");
   for (const p of picks) {
-    if (p.needsBrowser && !browser) continue;
+    if (p.needsBrowser && !state.browser) continue;
     if (playbookLoadedIn(state.messages, p)) continue;
-    state.appendUserBlocks([{ t: "text", text: playbookMessage(p, why, browser) }], false, { origin: "harness", kind: PLAYBOOK_KIND });
+    state.appendUserBlocks([{ t: "text", text: playbookMessage(p, why, state.browser) }], false, { origin: "harness", kind: PLAYBOOK_KIND });
   }
 }
 
@@ -605,9 +605,10 @@ export async function* runAgent(
     let errSummary = ""; // U6：分类器给的一句人话（上屏）
     let errCompress = false;
     let reactiveThisTurn = false; // R7：这一轮已经为超窗压过一次
-    // R3（#39）：第二本账。零字节的连接失败不消耗 MAX_ATTEMPTS，等网络回来。
+    // R3（#39）：第二本账。零字节的连接失败（和本机模型加载中）不消耗 MAX_ATTEMPTS，等网络 / 模型回来。
     let netWait: NetWait | null = null;
     let waitedForNetwork = false;
+    const local = state.adapter.id === "local";
     // Q12：这次模型调用的耗时（含重试退避、等网络）与实际发了几次，随 usage 一起报
     const callStartedAt = Date.now();
     let tries = 0;
@@ -664,7 +665,7 @@ export async function* runAgent(
       try {
         const turn = state.toTurn();
         // R9：输入 + 输出上限不能超过窗口（Anthropic、llama.cpp 等会直接拒）——离窗口边缘不远时，按剩下的地方夹住这一次的
-        // 输出上限（留一点估算误差，至少给 1024）。小窗口模型在逼近窗口时正是这个区间：还没到主动压缩线，请求已被拒。
+        // 输出上限（留一点估算误差，至少给 1024）。本机 qwen 在 98K–118K 之间正是这个区间：还没到主动压缩线，请求已被拒。
         const room = effectiveWindow(state) - contextTokens(state) - OUTPUT_ROOM_MARGIN;
         if (room < turn.budget.maxOutputTokens) turn.budget = { ...turn.budget, maxOutputTokens: Math.max(MIN_OUTPUT_TOKENS, room) };
         noteInvariants(state, invariants, turn);
@@ -744,6 +745,7 @@ export async function* runAgent(
           errRetriable = emptyRetries < EMPTY_RESPONSE_RETRIES;
           if (errRetriable) emptyRetries++;
         }
+        // 本机 llama-server 加载期回 503：等它加载完，不算一次失败。
         // R7：provider 说超窗 / 请求体过大——先压一次再发（每轮最多一次）；上一轮刚为这个压过、这一轮又超，是
         // rapid refill：停下来报错，不在循环里反复压。
         if (errored && errCompress && !text && !calls.length) {
@@ -766,8 +768,17 @@ export async function* runAgent(
           // U6：分类器那句是「先压缩再试」——这里已经压过了
           errSummary = "上下文超出了模型窗口，压缩之后仍然放不下：带摘要开一个新会话接着做";
         }
-        if (errored && errRetriable && attempt < MAX_ATTEMPTS - 1) continue;
-        break; // stream drained cleanly (may still carry an `error` event)
+        if (errored && local && !text && !calls.length && isLocalLoadingError(errKind)) {
+          waitPlan = await planWait(true, netWait, state.deadlineAt, errMessage.slice(0, 120));
+          if (!waitPlan.wait) {
+            errMessage = waitPlan.message;
+            errRetriable = false;
+          }
+        }
+        if (!waitPlan?.wait) {
+          if (errored && errRetriable && attempt < MAX_ATTEMPTS - 1) continue;
+          break; // stream drained cleanly (may still carry an `error` event)
+        }
       } catch (e) {
         streamThrew = e;
         // Retry only network-level throws; an abort is intentional, stop now.
@@ -777,8 +788,8 @@ export async function* runAgent(
           return;
         }
         if (!sawEvent && isConnectFailure(e)) {
-          if (!netWait) nudgeOutboundProxy(); // 首次命中：让出站探测立刻重探，不等 60s 周期
-          waitPlan = planWait(netWait, state.deadlineAt, connectErrorLabel(e));
+          if (!netWait && !local) nudgeOutboundProxy(); // 首次命中：让出站探测立刻重探，不等 60s 周期
+          waitPlan = await planWait(local, netWait, state.deadlineAt, connectErrorLabel(e));
           if (!waitPlan.wait) {
             streamThrew = new Error(waitPlan.message);
             break;
@@ -956,7 +967,7 @@ export async function* runAgent(
         state.memoryAuditNudges++;
         if (state.memoryAuditNudges > MAX_MEMORY_AUDIT_NUDGES) {
           // K6（G4）：门禁连败不再杀轮。答复在追问之前就给了（界面上已经看见），以前追问用尽整轮报错，那版答复下面
-          // 挂一张红卡、这一轮算失败；现在交付那一版，尾注写明没交审计（弱模型三次不交是常事）。
+          // 挂一张红卡、这一轮算失败；现在交付那一版，尾注写明没交审计（本机模型三次不交是常事）。
           // 追问之前一个字都没说的，照旧报错——那确实是没收成尾。
           if (pendingPreAuditFinal && state.messages.includes(pendingPreAuditFinal)) {
             state.memoryAuditGaveUp = true;
@@ -1457,7 +1468,7 @@ export async function* runAgent(
       yield { e: "done", stopReason: "end" };
       return;
     }
-    // #98：审计已经落定，模型还一轮接一轮地只交审计（不说话、不干活）——弱模型卡住时会这样；用户在界面上只看到活动行一直是
+    // #98：审计已经落定，模型还一轮接一轮地只交审计（不说话、不干活）——本机模型卡住时会这样；用户在界面上只看到活动行一直是
     // 「记忆审计」（这些轮都是 internal），重复熔断在有人在场时又只提醒不停，一跑就是几千轮。审计本身早就交了，
     // 连着超过 REDUNDANT_AUDIT_TURNS 轮就收工（交成审计的那一轮也算在内——交完之后模型本来就该接着说话）。
     // 「落定过」按这一轮里交成过一次算：Remember 落在审计之后会把 memoryAuditCompleted 拨回 false，Remember / MemoryAudit
@@ -1599,7 +1610,11 @@ function callContext(ctx: ToolContext, callId: string): ToolContext {
 // K9（X55）：会把外部内容（网页、搜索结果、浏览器里的页面、别的程序的界面）带进会话的工具。本会话真调过其中之一
 // ——成没成都算，WebFetch 遇到 4xx / 5xx 照样带回页面正文——之后 Remember 想存成 active 的，一律先存成 proposed 等用户确认：
 // 网页里写着的错误事实或注入，不能被模型自己写成以后每个会话都信的记忆。子 agent / Workflow 读过的，由它们的结果带上来。
-const EXTERNAL_CONTENT_TOOLS = new Set(["WebFetch", "WebSearch", "Browser", "ReadPage", "Eval", "Network", "LocalPCInspect"]);
+// 设备工具都算：DeviceAct 的结果里也有别的程序的界面（落点控件名、窗口标题、输入回读、操作后截图），设备浏览器 / 命令 / 文件同理。
+// LocalPCInspect / LocalPCAct 是它们的旧名：老会话的转录里还是旧名（transcriptReadExternal 从转录推）。
+const EXTERNAL_CONTENT_TOOLS = new Set([
+  "WebFetch", "WebSearch", "Browser", "ReadPage", "Eval", "Network", "DeviceInspect", "DeviceAct", "DeviceBrowser", "DeviceShell", "DeviceFiles", "LocalPCInspect", "LocalPCAct",
+]);
 // Bash 里直接抓网页同理：curl / wget、PowerShell 的 Invoke-WebRequest / Invoke-RestMethod 与别名 iwr / irm。只认命令位置
 // （开头、管道 / 分隔符 / 子命令 / 赋值之后），`grep -r wget docs/` 这种当参数的不算。
 const FETCH_COMMAND_RE = /(?:^|[;&|(\n`=]|\$\()\s*(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)(?:\.exe)?(?=[\s;&|)]|$)/im;

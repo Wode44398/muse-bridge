@@ -17,7 +17,7 @@ export default defineConfig({
   server: {
     port: 5178,
     // 共用的型号知识模块在仓库根的 src/model-knowledge（lib/model-knowledge.ts 相对引用）：开发态只多放开这一个目录，构建本来就能解析。
-    // 不能放开到仓库根：数据根 = 程序根的部署上，config.json / connector-secrets.key 会被 /@fs/ 当静态文件发出去（pv- 预览链接绕过鉴权）。
+    // 不能放开到仓库根：维护者那台数据根=程序根，config.json / connector-secrets.key 会被 /@fs/ 当静态文件发出去（pv- 预览链接绕过鉴权）。
     // allow 相对 vite root 解析，必须带 "."；deny 会整个替换 vite 默认值，所以默认那四条照抄再加凭据文件。
     fs: {
       allow: [".", "../../src/model-knowledge"],

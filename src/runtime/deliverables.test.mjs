@@ -1,5 +1,5 @@
 // 交付物根守卫：沙箱身份锁在交付根内；admin 不受限（它本来就有整机 shell）。
-// 场景：admin 会话正文链接指向 vault 之外的文件（如 dimensio 快照对话目录里的 .md），
+// 2026-10-07 维护者录屏：admin 会话正文链接指向 C:\Users\you\.dimensio\quick\…\x.md（vault 之外），
 // 附件卡不出、点开 403「加载失败」。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

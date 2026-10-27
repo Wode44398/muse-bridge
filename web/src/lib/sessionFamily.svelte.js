@@ -119,8 +119,8 @@ export function resolveSessionRef(currentId, to) {
 }
 
 // 会话信息面板：同一棵树里的会话（来自 /api/claude/session-rail 的 family）
-export const STATE_LABEL = { working: t('正在干活'), idle: t('空闲') };
-export const REL_LABEL = { parent: t('父会话'), child: t('子会话'), sibling: t('兄弟会话'), linked: t('相关会话') };
+export const STATE_LABEL = { working: '正在干活', idle: '空闲' };
+export const REL_LABEL = { parent: '父会话', child: '子会话', sibling: '兄弟会话', linked: '相关会话' };
 
 // —— 「Claude 发起新会话」的卡 ——
 // live：哪些会话此刻在跑（总线 hello.runs / run.start / run.end）——「已开始」卡判子会话在不在干活。

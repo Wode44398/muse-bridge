@@ -1,0 +1,45 @@
+{
+  "id": "qq-onebot",
+  "name": "QQ 机器人（OneBot）",
+  "version": "1.0.0",
+  "description": "把 QQ 群和私聊接到 Claude：群友 @ 机器人或用前缀提问，插件以你授权的账号跑 Claude、把回答发回群里。连接任何 OneBot 11 协议端（如 NapCat）。也是插件运行环境（ctx.chat / ctx.webhook / ctx.process / 面板）的完整示例。",
+  "author": "claude-bridge",
+  "category": "third-party",
+  "entry": "index.mjs",
+  "config": {
+    "runAs": { "type": "user", "grant": "chat", "options": "users", "required": true, "section": "账号", "label": "以哪个账号回答",
+      "desc": "群友的问题以这个 bridge 账号的身份交给 Claude（在它自己的工作区里）。建议专门建一个普通档的服务账号。" },
+
+    "mode": { "type": "string", "enum": [{ "value": "external", "label": "已经在跑" }, { "value": "managed", "label": "由 bridge 拉起" }],
+      "default": "external", "widget": "segmented", "section": "连接", "label": "协议端" },
+    "napcatDir": { "type": "string", "section": "连接", "label": "协议端目录", "when": { "mode": "managed" },
+      "desc": "里面要有 napcat.bat（或 launcher 脚本）。bridge 停用插件时会连同它的子进程一起关掉。" },
+    "napcatScript": { "type": "string", "section": "连接", "label": "启动脚本", "default": "napcat.bat", "when": { "mode": "managed" } },
+    "apiUrl": { "type": "string", "section": "连接", "label": "OneBot HTTP 地址", "default": "http://127.0.0.1:3000",
+      "desc": "协议端的 HTTP 服务（发消息用）。协议端的 HTTP 上报地址填设置页「运行状态」里列出的回调地址。" },
+    "apiToken": { "type": "string", "secret": true, "section": "连接", "label": "OneBot Token" },
+    "hookToken": { "type": "string", "secret": true, "section": "连接", "label": "上报密钥（可选）",
+      "desc": "协议端上报时带 Authorization: Bearer <密钥>。不填就只收本机直连的上报。" },
+
+    "prefix": { "type": "string", "default": "/ai", "max": 20, "section": "触发", "label": "触发前缀", "desc": "消息以它开头就回答；留空 = 只认 @" },
+    "replyAt": { "type": "boolean", "default": true, "section": "触发", "label": "@ 机器人时回答" },
+    "privateReply": { "type": "boolean", "default": true, "section": "触发", "label": "回答私聊", "desc": "好友私聊不用 @ 也不用前缀" },
+    "cooldownSec": { "type": "integer", "default": 3, "min": 0, "max": 120, "widget": "slider", "section": "触发", "label": "每人冷却（秒）" },
+
+    "model": { "type": "string", "options": "claude.models", "section": "回答", "label": "模型", "desc": "不选 = 跟随 bridge 默认" },
+    "effort": { "type": "string", "options": "claude.efforts", "widget": "chips", "section": "回答", "label": "思考强度" },
+    "plainReply": { "type": "boolean", "default": true, "section": "回答", "label": "纯文本回复", "desc": "QQ 不渲染 Markdown：让 Claude 回群里的话用纯文本（写进文件的内容不受影响）" },
+    "fileLink": { "type": "boolean", "default": true, "section": "回答", "label": "文件发链接", "desc": "Claude 产出的文件收进公开只读工作空间，发一条链接" },
+    "maxSeg": { "type": "integer", "default": 3000, "min": 200, "max": 4500, "section": "回答", "label": "每条消息最长（字）" },
+
+    "allowGroups": { "type": "array", "items": { "type": "string", "options": "plugin", "pattern": "^\\d+$" }, "max": 200, "section": "群",
+      "label": "群白名单", "desc": "空 = 所有群都回答" },
+    "groups": { "type": "map", "key": { "label": "群号", "options": "plugin", "pattern": "^\\d+$" }, "max": 500, "section": "群", "label": "按群设置",
+      "value": {
+        "enabled": { "type": "boolean", "default": true, "label": "本群回答" },
+        "effort": { "type": "string", "options": "claude.efforts", "label": "本群思考强度" }
+      } }
+  },
+  "engines": { "pluginApi": 2 },
+  "ui": { "panel": { "page": "web/index.html", "title": "QQ 控制台", "icon": "chat" } }
+}

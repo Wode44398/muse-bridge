@@ -15,7 +15,7 @@ import * as claudeQuick from '../claude-quick.mjs';
 import { collectDeliverables, deliverAnywhere, deliverRoots, isInside, resolveDeliverPath, streamArtifactFile, streamFolderZip, transcriptCwds } from '../runtime/deliverables.mjs';
 import { isHtmlFile, respondHtmlSite } from '../runtime/html-site.mjs';
 import { sessionsDir, sanitizeName } from '../runtime/paths.mjs';
-import { getLiveGens, findGenBySession, bridgeSessions, routineSessions } from '../runtime/gen.mjs';
+import { getLiveGens, findGenBySession, bridgeSessions, routineSessions, pluginSessions } from '../runtime/gen.mjs';
 import { findRewindAnchors, rewindClaudeFiles, pendingRewindAnchor, setPendingRewind } from '../agents/claude-rewind.mjs';
 import { releaseWarmClaude } from '../agents/claude.mjs';
 import { chatPrefsFor, lastChatPrefs, dropChatPrefs, setChatPrefsOutputStyle } from '../runtime/chat-prefs.mjs';
@@ -413,7 +413,7 @@ function applyToolResult(task, b, tur) {
 // 任何异常（缺 uuid 的旧格式、链断、环）→ 返回 null = 放弃过滤，回到线性全量（fail-open）。
 // 上下文压缩：compact_boundary 记录的 parentUuid 是 null（模型视角的新起点），压缩前那段对话
 // 挂在它的 logicalParentUuid 上——只认 parentUuid 的话链在边界处就「到根」了，压缩前的全部内容
-// 被当孤儿滤掉，重开会话只剩压缩摘要和之后的轮（09-23 的 bug）。显示要的是逻辑链：
+// 被当孤儿滤掉，重开会话只剩压缩摘要和之后的轮（09-23 维护者报的 bug）。显示要的是逻辑链：
 // 边界处顺着 logicalParentUuid 接着往回走；它不在本文件（极老的截断记录）才算真根。
 function chainIncludeSet(cs) {
   const byUuid = cs.byUuid;
@@ -1163,7 +1163,8 @@ export function registerSessionRoutes(router, { authOk, identify }) {
         title: s.title || '（进行中…）',
         thinking: workingIds.has(s.id),      // a turn is generating in this conversation
         pending: sessionQuestions.hasFor(s.id, ctx.key) || hasPeerHold(ctx.key, s.id), // an AskUserQuestion is waiting here（或跨会话消息等你确认）
-        origin: routineSessions.has(s.id) ? 'routine' : (bridgeSessions.has(s.id) ? 'phone' : 'desktop'),
+        origin: routineSessions.has(s.id) ? 'routine' : pluginSessions.has(s.id) ? 'plugin' : (bridgeSessions.has(s.id) ? 'phone' : 'desktop'),
+        ...(pluginSessions.has(s.id) ? { originLabel: pluginSessions.get(s.id).label || pluginSessions.get(s.id).plugin } : {}),
       }));
     res.writeHead(200, { 'Content-Type': 'application/json' });
     // prefsLast：最近一次发送用的 model/effort/fast——前端「新对话」的选择器默认（跨设备）。

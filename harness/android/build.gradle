@@ -1,0 +1,4 @@
+// AGP 版本与 bridge 工程一致（8.5.2）——共用同一个 .toolchain gradle 缓存，构建零下载。
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

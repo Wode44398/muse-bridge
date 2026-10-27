@@ -1,4 +1,4 @@
-// 界面语言：简体中文 / English（没存过偏好时跟浏览器语言）。与 bridge 的 web/src/lib/i18n.js 同一套约定、同一份全局字典：
+// 界面语言：简体中文（默认）/ English。与 bridge 的 web/src/lib/i18n.js 同一套约定、同一份全局字典：
 //   t('新建对话')、t('已选 {n} 项', { n })、tc('语境', '中文')、tr(运行时文案)
 // 中文原文就是键；英文在 src/i18n/en/*.ts。嵌进 bridge 时由 bridge 的入口统一加载两份字典，
 // 独立运行（8799 / dimensio 壳）时由本目录 main.ts 调 i18n-boot.ts 的 initI18n() 只加载本项目的字典。

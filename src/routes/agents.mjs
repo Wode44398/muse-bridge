@@ -1,6 +1,6 @@
 // 设置「Agent」页的 REST 面（管理员）：看每个 agent 的状态（勾选 / 能跑 / 认证），开关它。
 //
-// 门禁同扩展中心：admin 身份（token / cookie），可远程——管理员在手机上也能勾选。
+// 门禁同扩展中心：admin 身份（token / cookie），可远程——维护者出门在外也要能在手机上勾选。
 // 开关属于主机级设置（影响所有人），不下放注册用户。写操作受 server.mjs 全局 Origin 闸保护。
 import { readBody } from '../runtime/body.mjs';
 import { agentStatusList, setAgentSwitch } from '../runtime/agent-status.mjs';

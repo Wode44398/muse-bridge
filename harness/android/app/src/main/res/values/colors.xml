@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 冷启动窗口底色（Claude 皮肤浅色 bg，前端首帧同色接管） -->
+    <color name="boot_bg">#F8F8F6</color>
+    <color name="icon_bg">#1F1F1E</color>
+</resources>

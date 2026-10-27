@@ -1,5 +1,5 @@
-// 服务端形态的契约：agent 开关、按人授权、快照权限、登录令牌落盘存哈希、Linux 路径守卫。
-// 数据根改道到临时目录：别让测试碰到仓库里的 config.json / 账号库。
+// 三端拆分（2026-09-28）的契约：agent 开关、按人授权、快照权限、登录令牌落盘存哈希、Linux 路径守卫。
+// 数据根改道到临时目录：别让测试碰到仓库里（或正式服）的 config.json / 账号库。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -9,41 +9,47 @@ import path from 'node:path';
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'bridge-editions-'));
 process.env.BRIDGE_DATA_ROOT = tmp;
 process.env.BRIDGE_USERS_ROOT = path.join(tmp, 'users');
+// import claude.mjs 时若 Claude in Chrome 开着，会顺手改写本机 ~/.claude/chrome 的 native host 指向——测试里关掉。
+process.env.BRIDGE_CLAUDE_IN_CHROME = '0';
 
+// agent 能不能跑先看所属功能扩展加载了没（modules/registry.mjs），server.mjs 启动时同样先做这步。
+await (await import('./modules/registry.mjs')).loadModules();
 const { contextFor, agentsFor } = await import('./runtime/identity.mjs');
 const { enabledAgents, setAgentSwitch, agentSwitches, agentStatusList } = await import('./runtime/agent-status.mjs');
 const users = await import('./users.mjs');
 const { SYSTEM_DIR } = await import('./config/index.mjs');
 const { withinDir, absPathViolation, sandboxViolation } = await import('./agents/claude.mjs');
 
-test('注册用户：没设过名单 = 默认只有 Claude；显式名单照名单；空名单什么都没有', () => {
+test('注册用户：没设过名单 = 默认 Claude + Gemini；显式名单照名单；空名单什么都没有', () => {
   const on = enabledAgents();
   const legacy = contextFor({ kind: 'user', user: 'a', tier: 'pro' });
-  assert.deepEqual(legacy.agents, on.filter((id) => id === 'claude'));
-  assert.equal(legacy.allowDimensio, false);
-  const both = contextFor({ kind: 'user', user: 'b', tier: 'pro', agents: ['claude', 'dimensio'] });
-  assert.deepEqual(both.agents, on.filter((id) => id === 'claude' || id === 'dimensio'));
+  assert.deepEqual(legacy.agents, on.filter((id) => id === 'claude' || id === 'gemini'));
+  const onlyClaude = contextFor({ kind: 'user', user: 'b', tier: 'pro', agents: ['claude'] });
+  assert.deepEqual(onlyClaude.agents, on.filter((id) => id === 'claude'));
+  assert.equal(onlyClaude.allowGemini, false);
   const none = contextFor({ kind: 'user', user: 'c', tier: 'pro', agents: [] });
   assert.deepEqual(none.agents, []);
   assert.equal(none.allowClaude, false);
 });
 
 test('全局开关关掉一个 agent：管理员和用户都立刻拿不到', () => {
+  // 拿一个这棵树里真有的 agent 来关（发行版可能不带 Gemini 这类扩展，例如 Muse Bridge）
+  const id = enabledAgents().find((a) => a !== 'claude') || 'claude';
   const before = agentSwitches();
   try {
-    setAgentSwitch('claude', false);
-    assert.equal(enabledAgents().includes('claude'), false);
-    assert.equal(contextFor({ kind: 'admin' }).allowClaude, false);
-    assert.equal(contextFor({ kind: 'user', user: 'a', tier: 'pro' }).allowClaude, false);
+    setAgentSwitch(id, false);
+    assert.equal(enabledAgents().includes(id), false);
+    assert.equal(contextFor({ kind: 'admin' }).agents.includes(id), false);
+    assert.equal(contextFor({ kind: 'user', user: 'a', tier: 'pro' }).agents.includes(id), false);
     // 落盘只改 agents 这一个键
     const cfg = JSON.parse(readFileSync(path.join(tmp, 'config.json'), 'utf8'));
-    assert.equal(cfg.agents.claude, false);
+    assert.equal(cfg.agents[id], false);
     assert.ok(cfg.token, '其它键原样保留');
-    assert.equal(agentStatusList().find((a) => a.id === 'claude').enabled, false);
+    assert.equal(agentStatusList().find((a) => a.id === id).enabled, false);
   } finally {
-    setAgentSwitch('claude', before.claude !== false);
+    setAgentSwitch(id, before[id] !== false);
   }
-  assert.equal(enabledAgents().includes('claude'), true);
+  assert.equal(enabledAgents().includes(id), true);
 });
 
 test('快照身份只有 Claude，只读分享什么都没有', () => {
@@ -57,11 +63,11 @@ test('铸快照权限：管理员有；老账号（没写）保留；显式关�
   assert.equal(contextFor({ kind: 'user', user: 'a', tier: 'pro', snapshot: false }).canSnapshot, false);
 });
 
-test('新账号写显式默认：名单 = 只有 Claude、不能铸快照；管理员可改', async () => {
+test('新账号写显式默认：名单 = Claude + Gemini、不能铸快照；管理员可改', async () => {
   const r = await users.createUser('newbie', 'password123', 'user');
   assert.ok(r.ok);
   const g = users.userGrants(users.getUser('newbie'));
-  assert.deepEqual(g.agents, ['claude']);
+  assert.deepEqual(g.agents, ['claude', 'gemini']);
   assert.equal(g.snapshot, false);
   assert.equal(g.service, false);
   users.setAgents('newbie', ['claude', 'bogus', 'claude']);

@@ -7,6 +7,7 @@ import { httpErrorEvent, streamErrorEvent } from "./classify.ts";
 import { observeWire } from "./wire-fingerprint.ts";
 import { TOOL_PROGRESS_EVERY_MS } from "./anthropic.ts";
 import { modelLimits, modelSpec, modelSupportsImages, modelSupportsVideo, modelSupportsAudio, providerMediaBudget } from "../catalog.ts";
+import { localModelBaseUrl } from "../localai.ts";
 import { applyCustomThinking } from "../custom-tiers.ts";
 
 const DEFAULTS = {
@@ -36,7 +37,8 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
     compactAt: limits.compactAt,
     mediaBudget: providerMediaBudget(cfg.provider, cfg.model),
   };
-  const baseUrl = (cfg.baseUrl ?? DEFAULTS.baseUrl).replace(/\/$/, "");
+  // 本机两台引擎同属 local 这一家、端口不同：Strata 那个型号去 8081（localai.ts），其余照会话里的地址
+  const baseUrl = ((cfg.provider === "local" ? localModelBaseUrl(cfg.model) : undefined) ?? cfg.baseUrl ?? DEFAULTS.baseUrl).replace(/\/$/, "");
   const custom = cfg.custom;
   // Kimi and MiMo require the original reasoning trace on subsequent tool
   // turns; keep it in the neutral transcript and replay as reasoning_content.
@@ -131,6 +133,20 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
         body.max_completion_tokens = body.max_tokens;
         delete body.max_tokens;
         delete body.reasoning_effort;
+      } else if (cfg.provider === "local") {
+        // 本机 llama.cpp。Qwen3.8 把思考档位做在 chat template 里，顶层的
+        // reasoning_effort 不起作用（llama-server 直接忽略未知字段，不会报错，
+        // 所以走错通道的表现是「档位调了却没反应」而不是 400）——必须经
+        // chat_template_kwargs 下发。R4（#40）：按本机实际加载的模板——只认
+        // low / medium / xhigh（'high' 被模板改写成 xhigh），别的值 raise_exception、
+        // llama-server 拒掉整个请求；关思考是 enable_thinking:false（模板输出空的
+        // <think></think>），不是 none。什么都不发则默认 xhigh，「画个圆」也要想上几分钟。
+        const extras = (body.chat_template_kwargs ?? {}) as Record<string, unknown>;
+        // 菜单的顶档就叫 xhigh（与模板同名）；旧会话 / 保存的选择里的 high、max 当年发的就是 xhigh，照旧。
+        body.chat_template_kwargs =
+          level === "off"
+            ? { ...extras, enable_thinking: false }
+            : { ...extras, reasoning_effort: level === "low" || level === "minimal" ? "low" : level === "medium" ? "medium" : "xhigh" };
       }
       observeWire(turn, "openai", body);
       const url = `${baseUrl}/chat/completions`;
@@ -171,7 +187,7 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
       // Accumulate streamed tool calls by their choice index.
       const toolCalls = new Map<number, { id: string; name: string; argsBuf: string; reportedAt?: number }>();
       // R17（K18）：服务端没给 id 时的兜底要全局唯一——以前是 call_<序号>，每一轮都从 call_0 起，同一段转录里会撞 id
-      //（K1 按 id 查证据就会查到别的调用）。09-25 实测真实会话 2100 次调用四家都给了 id，这里只是兜底。
+      //（K1 按 id 查证据就会查到别的调用）。09-25 实测正式服 2100 次调用四家都给了 id，这里只是兜底。
       const idNonce = randomBytes(4).toString("hex");
       let inputTokens = 0;
       let outputTokens = 0;
@@ -200,7 +216,7 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
           const cached = ev.usage.prompt_tokens_details?.cached_tokens ?? ev.usage.prompt_cache_hit_tokens;
           if (typeof cached === "number") cacheReadTokens = cached;
         }
-        // llama.cpp 兼容服务（自定义 baseUrl）：最后一块带 timings，cache_n = 这次复用的 KV
+        // 本机 llama.cpp：最后一块带 timings，cache_n = 这次复用的 KV（前缀没断就接近整段提示）
         if (typeof ev.timings?.cache_n === "number") cacheReadTokens = ev.timings.cache_n;
 
         const choice = ev.choices?.[0];

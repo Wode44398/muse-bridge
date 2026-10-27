@@ -9,6 +9,7 @@
   import { session } from '../../lib/state.svelte.js';
   import { limitResume, fetchLimitResume, setLimitAutoContinue } from '../../lib/chat.svelte.js';
   import { t, tc, isEn, locale } from '../../lib/i18n.js';
+  import { ovData } from '../../lib/overlay.svelte.js';
 
   let { m, last = false, sid = '', onRetry } = $props();
 
@@ -71,12 +72,21 @@
     try { await navigator.clipboard.writeText(details); copied = true; setTimeout(() => { copied = false; }, 1400); } catch {}
   }
 
-  // 用量仪表图标：Lucide 的 gauge（ISC，描边）。
+  // 用量仪表图标：公开版用 Lucide 的 gauge（ISC，描边）；维护者的私有 overlay 在清单 data.glyphs.usageGauge 里带了
+  // 原版字形（{ viewBox, transform?, d }，填充轮廓）时换成原版。
+  const ovGauge = $derived.by(() => {
+    const g = ovData('glyphs')?.usageGauge;
+    return g && typeof g.d === 'string' && typeof g.viewBox === 'string' ? g : null;
+  });
 </script>
 
 <div class="lc sel-text" data-limit={lim.type || 'unknown'}>
   <div class="lc-head">
-    <svg class="lc-ic lc-ic-line" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" /></svg>
+    {#if ovGauge}
+      <svg class="lc-ic" viewBox={ovGauge.viewBox} aria-hidden="true"><path transform={ovGauge.transform || undefined} d={ovGauge.d} /></svg>
+    {:else}
+      <svg class="lc-ic lc-ic-line" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" /></svg>
+    {/if}
     <span class="lc-title">{headline}</span>
   </div>
   <div class="lc-body">

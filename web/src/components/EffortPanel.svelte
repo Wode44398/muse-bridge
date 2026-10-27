@@ -1,25 +1,25 @@
 <script>
-  // Effort 拉条面板——100% 复刻 claude.ai/code（2026-07-29 逆向官方 bundle
-  // chunk c360a9e1c 所得，shader 原文照搬、宿主逻辑逐行移植、明暗 token 实测值）：
+  // Effort 拉条面板：尺寸、明暗配色、动效节奏对齐 claude.ai/code 的 Effort 弹层（数值是对着官方界面量出来的，代码自写）：
   // - 卡片 220px / p10 / gap16 / r12，surface-popover + stroke-shadow 双模式；
   // - 标题行 Effort(t6) + 档名(t7, 换档 0.2s easeOut ±0.55em blur2px 方向交换) + ?(U+e088)
-  //   悬停 200ms 出官方帮助浮层；Faster/Smarter 12px t6；
+  //   悬停 200ms 出帮助浮层；Faster/Smarter 12px t6；
   // - 轨道 24 命中/20 视高 r6，fill 按 --slider-drag-pos/--slider-rest-pos 走；
-  //   拖拽自由跟手（catchUp 100ms cubic-out）、松手/点按吸附 400ms linear() 官方缓动、
-  //   拖动中档名跟随高亮、松手才提交；键盘即时提交（官方同为瞬移）；
+  //   拖拽自由跟手（起拖 120ms 内从当前位置追上手指）、松手/点按按 CSS 过渡吸附，
+  //   拖动中档名跟随高亮、松手才提交；
   // - 档位点 3px（末档 accent 紫）、35ms 步进错峰、顶档隐去；把手 16×19 r6 双模式色；
-  // - 顶档（accent）= data-top-stop：WebGL2 能量场常按（pressStart(1)），爆发波前 +
-  //   细胞网格 shader 原版；离开顶档 pressEnd 冷却。prefers-reduced-motion 全静。
+  // - 顶档（accent）= data-top-stop：点亮能量层。维护者的私有 overlay 提供原版 WebGL 能量场
+  //   （ovModule('effortField')）；公开版是自写的 CSS 光带。prefers-reduced-motion 全静。
   import { cubicOut } from 'svelte/easing';
   import { caps, settings } from '../lib/state.svelte.js';
   import { claudeEffortFallback, claudeDefaultModel } from '../lib/caps.js';
   import { isCustomModel, effortChoices, defaultEffortFor } from '../lib/claudeProviders.svelte.js';   // 自定义模型按它自己的档位表
-  import { cs } from '../lib/claudeSettings.svelte.js';
   import { rememberCurrentPrefs } from '../lib/chat.svelte.js';
   import { pushBackLayer } from '../lib/nav.js';
   import { clampX } from '../lib/clampx.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { t as tt } from '../lib/i18n.js';   // 本文件动画代码里 t 是插值进度变量，翻译函数取别名
+  import { cs } from '../lib/claudeSettings.svelte.js';
+  import { ovModule } from '../lib/overlay.svelte.js';
   let { onClose, dir = 'up' } = $props();
 
   $effect(() => pushBackLayer(() => { onClose?.(); }));
@@ -59,8 +59,6 @@
   let control = $state(), trackEl = $state(), fillEl = $state(), thumbEl = $state(), railEl = $state(), inputEl = $state(), canvasEl = $state();
 
   const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-  // 官方自定义弹性缓动（hse）：400ms linear() 前 48% 完成、尾段驻留
-  const HSE = '400ms linear(0, 0.0497, 0.1647, 0.3069, 0.4517, 0.5848, 0.6991, 0.7923, 0.8647, 0.9186, 0.9571, 0.9831, 0.9996, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)';
 
   function commit(i) {
     i = allowed(i);
@@ -83,373 +81,88 @@
   const lbIn = (n, { d }) => ({ duration: 200, easing: cubicOut, css: (t, u) => `opacity:${t};filter:blur(${(2 * u).toFixed(2)}px);transform:translateY(${(0.55 * u * d).toFixed(3)}em)` });
   const lbOut = (n, { d }) => ({ duration: 200, easing: cubicOut, css: (t, u) => `position:absolute;left:0;top:0;max-width:100%;opacity:${t};filter:blur(${(2 * u).toFixed(2)}px);transform:translateY(${(-0.55 * u * d).toFixed(3)}em)` });
 
-  // —— 拖拽（官方逐行移植：railRect 定位、thumb 抓取偏移、3px 起判、catchUp 100ms cubic-out、
-  //    松手 |raw-target|≥0.5px 才播吸附动画）——
-  let st = null;   // { railRect, grabOffsetX, downClientX, lastClientX, rafId, moved, catchUp }
-  let endCb = null;
-  const frac = () => Math.min(Math.max((st.lastClientX - st.grabOffsetX - st.railRect.left) / (st.railRect.width || 1), 0), 1);
-  function setTransitions() {
-    if (reduced()) { fillEl.style.transition = ''; thumbEl.style.transition = ''; return; }
-    fillEl.style.transition = `width ${HSE}`;
-    thumbEl.style.transition = `left ${HSE}, background-color 300ms`;
-  }
-  function clearEndCb() { if (endCb) { thumbEl.removeEventListener('transitionend', endCb); endCb = null; } }
+  // —— 拖拽：按下先把最近一档高亮（rest-pos 一变，把手按 CSS 过渡滑过去）；移动超过 3px 进入跟手，
+  //    起拖 120ms 内从当前位置缓动追上手指（免得跳一下）；松手落值，去掉 drag-pos 回到 rest-pos，同样按过渡吸附。
+  //    过渡写在 CSS（.ef-slider:not(.dragging)），减少动态效果时没有。
+  let drag = null;   // { rail, grab, x0, x, moved, from, t0, raf }
+  const fracAt = (d) => Math.min(Math.max((d.x - d.grab - d.rail.left) / (d.rail.width || 1), 0), 1);
+  const easeOut3 = (k) => 1 - (1 - k) ** 3;
   function down(e) {
     if (N < 2 || e.button !== 0) return;
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
-    clearEndCb();
-    setTransitions();
     control.style.removeProperty('--slider-drag-pos');
     const tr = thumbEl.getBoundingClientRect();
-    const onThumb = thumbEl.contains(e.target);
-    st = { railRect: railEl.getBoundingClientRect(), grabOffsetX: onThumb ? e.clientX - (tr.left + tr.width / 2) : 0,
-      downClientX: e.clientX, lastClientX: e.clientX, rafId: 0, moved: false, catchUp: null };
-    // 点按（未拖）：目标档即刻成为高亮 → rest-pos 变化经 hse 过渡滑过去（官方 base-ui 同构）
-    setDisp(Math.round(frac() * (N - 1)));
+    const grab = thumbEl.contains(e.target) ? e.clientX - (tr.left + tr.width / 2) : 0;
+    drag = { rail: railEl.getBoundingClientRect(), grab, x0: e.clientX, x: e.clientX, moved: false, from: 0, t0: 0, raf: 0 };
+    setDisp(Math.round(fracAt(drag) * (N - 1)));
   }
-  function tick() {
-    if (!st || !control || !railEl) return;
-    st.rafId = 0;
-    st.railRect = railEl.getBoundingClientRect();
-    const a = frac();
-    let r = a;
-    if (st.catchUp) {
-      const t = Math.min((performance.now() - st.catchUp.startTime) / 100, 1);
-      if (t >= 1) st.catchUp = null;
-      else { const n = 1 - (1 - t) ** 3; r = st.catchUp.fromFraction + (a - st.catchUp.fromFraction) * n; }
-    }
-    control.style.setProperty('--slider-drag-pos', (100 * r) + '%');
-    setDisp(Math.round(r * (N - 1)));
-    if (st.catchUp && st.rafId === 0) st.rafId = requestAnimationFrame(tick);
+  function frame() {
+    const d = drag;
+    if (!d || !control || !railEl) return;
+    d.raf = 0;
+    d.rail = railEl.getBoundingClientRect();
+    let f = fracAt(d);
+    const k = (performance.now() - d.t0) / 120;
+    if (k < 1) { f = d.from + (f - d.from) * easeOut3(Math.max(k, 0)); d.raf = requestAnimationFrame(frame); }
+    control.style.setProperty('--slider-drag-pos', (100 * f) + '%');
+    setDisp(Math.round(f * (N - 1)));
   }
   function move(e) {
-    if (!st) return;
-    st.lastClientX = e.clientX;
+    const d = drag;
+    if (!d) return;
+    d.x = e.clientX;
     if (e.buttons === 0) { up(); return; }
-    if (!st.moved) {
-      if (Math.abs(e.clientX - st.downClientX) < 3) return;
-      st.moved = true; dragging = true;
+    if (!d.moved) {
+      if (Math.abs(d.x - d.x0) < 3) return;
+      d.moved = true; dragging = true;
       const w = control.getBoundingClientRect().width;
-      if (w > 0 && !reduced()) {
-        const from = Math.min(Math.max(fillEl.getBoundingClientRect().width / w, 0), 1);
-        control.style.setProperty('--slider-drag-pos', (100 * from) + '%');
-        st.catchUp = { fromFraction: from, startTime: performance.now() };
-      }
-      fillEl.style.transition = ''; thumbEl.style.transition = '';
+      d.from = w > 0 ? Math.min(Math.max(fillEl.getBoundingClientRect().width / w, 0), 1) : fracAt(d);
+      d.t0 = reduced() ? -1e9 : performance.now();
     }
-    if (st.rafId === 0) st.rafId = requestAnimationFrame(tick);
+    if (!d.raf) d.raf = requestAnimationFrame(frame);
   }
   function up() {
-    const t = st;
-    st = null; dragging = false;
-    if (!t || !control || !fillEl || !thumbEl) return;
-    if (t.rafId !== 0) cancelAnimationFrame(t.rafId);
-    const raw = (() => { st = t; const v = frac(); st = null; return v; })();
-    if (!t.moved) {
-      // 点按：hse 过渡已在滑，落值 + transitionend 清理
-      commit(disp);
-      const done = (ev) => { if (ev && ev.propertyName !== 'left') return; clearEndCb(); fillEl.style.transition = ''; thumbEl.style.transition = ''; };
-      if (thumbEl.getAnimations().length > 0) { endCb = done; thumbEl.addEventListener('transitionend', done); } else done();
-      control.style.removeProperty('--slider-drag-pos');
-      return;
-    }
-    const target = Math.round(raw * (N - 1));
-    commit(target);
-    const d = N > 1 ? target / (N - 1) : 0;
-    if (Math.abs(raw - d) * (t.railRect.width || 1) < 0.5 || reduced()) { control.style.removeProperty('--slider-drag-pos'); return; }
-    const done = (ev) => {
-      if (ev && ev.propertyName !== 'left') return;
-      clearEndCb(); fillEl.style.transition = ''; thumbEl.style.transition = ''; control.style.removeProperty('--slider-drag-pos');
-    };
-    setTransitions();
-    control.style.setProperty('--slider-drag-pos', (100 * d) + '%');
-    endCb = done;
-    thumbEl.addEventListener('transitionend', done);
+    const d = drag;
+    drag = null;
+    if (!d || !control) { dragging = false; return; }
+    if (d.raf) cancelAnimationFrame(d.raf);
+    commit(d.moved ? Math.round(fracAt(d) * (N - 1)) : disp);
+    dragging = false;
+    control.style.removeProperty('--slider-drag-pos');
   }
   function dotTap(e, i) {
     e.stopPropagation();
-    clearEndCb(); setTransitions();
+    if (drag) { if (drag.raf) cancelAnimationFrame(drag.raf); drag = null; dragging = false; }
     control.style.removeProperty('--slider-drag-pos');
     i = allowed(i);
     setDisp(i); commit(i);
-    const done = (ev) => { if (ev && ev.propertyName !== 'left') return; clearEndCb(); fillEl.style.transition = ''; thumbEl.style.transition = ''; };
-    endCb = done; thumbEl.addEventListener('transitionend', done);
   }
-  // 键盘（隐藏 input）：官方即时落值、无动画
+  // 键盘（隐藏 input）：即时落值（把手照常按过渡滑过去）
   function onInput() { const i = allowed(+inputEl.value); setDisp(i); commit(i); }
   function onKeyEsc(e) { if (e.key === 'Escape') { e.preventDefault(); onClose?.(); } }
 
-  // —— WebGL2 能量场（官方 pse 宿主逐行移植 + shader 原文）——
-  const VERT = `#version 300 es
-in vec2 a_position;
-out vec2 v_uv;
-uniform vec2 u_resolution;
-void main() {
-  v_uv = (a_position * 0.5 + 0.5) * u_resolution;
-  gl_Position = vec4(a_position, 0.0, 1.0);
-}
-`;
-  const FRAG = `#version 300 es
-precision highp float;
-uniform vec2 u_resolution;
-uniform float u_time;
-uniform vec3 u_fg;
-uniform vec3 u_fg2;
-uniform float u_seed;
-const int MAX_BURSTS = 8;
-uniform float u_burstTime[MAX_BURSTS];
-uniform vec2  u_burstCenter[MAX_BURSTS];
-uniform float u_burstGain[MAX_BURSTS];
-uniform float u_fade;
-uniform float u_pos;
-uniform vec4 u_charge0;
-uniform vec4 u_charge1;
-uniform float u_bedFill;
-uniform vec4 u_tintA;
-uniform vec4 u_tintB;
-in vec2 v_uv;
-out vec4 fragColor;
-const float CELL_PITCH = 4.0;
-const float CELL_SIZE  = 3.0;
-const float CELL_R     = 0.9;
-const float SPEED_LO   = 20.0;
-const float SPEED_HI   = 36.0;
-const float RANGE_LO   = 10.0;
-const float RANGE_HI   = 55.0;
-const float DENSITY_LO = 0.30;
-const float DENSITY_HI = 0.85;
-const float JITTER     = 0.10;
-const float HEAD_GAIN  = 1.25;
-const float HEAD_DECAY = 5.0;
-const float BODY_GAIN  = 0.65;
-const float BODY_LO    = 3.3;
-const float BODY_HI    = 0.77;
-const float AMP_LO     = 0.55;
-const float MAX_AGE    = 5.0;
-const float RAMP_POW    = 1.4;
-const float BREATH_DIP  = 0.28;
-const float BREATH_BASE = 2.4;
-const float BREATH_VARY = 1.4;
-uniform float u_chargeMax;
-uniform float u_chargeRamp;
-uniform float u_inkFloor;
-uniform float u_inkCeil;
-uniform float u_energyGain;
-float hash21(vec2 p) {
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-void main() {
-  float pitch = u_resolution.y / max(round(u_resolution.y / CELL_PITCH), 1.0);
-  float cellScale = pitch / CELL_PITCH;
-  vec2 cell = floor(v_uv / pitch);
-  vec2 cellCenter = (cell + 0.5) * pitch;
-  float cellHalf = CELL_SIZE * 0.5 * cellScale;
-  float cellR = CELL_R * cellScale;
-  vec2 q = abs(v_uv - cellCenter) - vec2(cellHalf - cellR);
-  float distC = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - cellR;
-  float aa = min(fwidth(v_uv.x), 1.5);
-  float cellMask = 1.0 - smoothstep(-aa, aa, distC);
-  if (cellMask <= 0.0 && u_bedFill <= 0.0) {
-    fragColor = vec4(0.0);
-    return;
-  }
-  float jitter = (hash21(cell + 41.7 + u_seed) - 0.5) * 2.0 * JITTER;
-  float vary   = 0.35 + 0.65 * hash21(cell + 13.7 + u_seed);
-  float energy = 0.0;
-  float charged = 0.0;
-  for (int i = 0; i < MAX_BURSTS; i++) {
-    float age = u_time - u_burstTime[i];
-    if (age < 0.0 || age > MAX_AGE) continue;
-    float k = clamp(u_burstGain[i], 0.0, 1.0);
-    vec2 originCell = floor(u_burstCenter[i] / pitch);
-    float manh = abs(cell.x - originCell.x) + abs(cell.y - originCell.y);
-    float range   = mix(RANGE_LO, RANGE_HI, k);
-    float falloff = exp(-manh / (range * 0.85));
-    float reach   = exp(-max(manh - range, 0.0) * 0.12);
-    float speed   = mix(SPEED_LO, SPEED_HI, k);
-    float t = age - manh / speed - jitter;
-    charged = max(charged, smoothstep(0.0, 0.15, t) * reach);
-    if (t < 0.0) continue;
-    float rank = hash21(cell + 7.3 + u_seed + u_burstTime[i]);
-    if (rank > mix(DENSITY_LO, DENSITY_HI, k)) continue;
-    float head = HEAD_GAIN * exp(-t * HEAD_DECAY);
-    float body = BODY_GAIN * exp(-t * mix(BODY_LO, BODY_HI, k));
-    energy += (head + body) * mix(AMP_LO, 1.0, k) * falloff * reach * vary;
-  }
-  float lumA = hash21(cell + 8.8 + u_seed);
-  float lumB = hash21(cell + 88.8 + u_seed);
-  float lumDrift = 0.5 + 0.5 * sin(u_time * 0.35 + lumA * 6.2832);
-  float lum = pow(mix(lumA, lumB, lumDrift), 1.9);
-  float stream = 0.9 + 0.16 * sin(u_time * 1.3 + cell.x * 0.45 + lumB * 2.0);
-  float e = clamp(energy, 0.0, 1.0) * u_fade * mix(0.16, 1.0, lum) * stream
-    * u_energyGain;
-  float g = clamp(v_uv.x / max(u_pos * u_resolution.x, 1.0), 0.0, 1.0);
-  vec3 chargeColor = mix(u_charge0.rgb, u_charge1.rgb, g);
-  float bedMask = mix(u_bedFill, 1.0, cellMask);
-  float chargeA = u_chargeMax * pow(g, u_chargeRamp) * charged * u_fade
-    * bedMask * mix(u_charge0.a, u_charge1.a, g);
-  float lv = step(0.04, e) + step(0.2, e) + step(0.4, e) + step(0.6, e) + step(0.8, e);
-  float alpha = lv <= 0.0 ? 0.0 : mix(u_inkFloor, u_inkCeil, (lv - 1.0) / 4.0);
-  if (lv >= 5.0) {
-    float period = BREATH_BASE + BREATH_VARY * hash21(cell + 3.1 + u_seed);
-    float phase = hash21(cell + 5.5 + u_seed) * 6.2832;
-    alpha *= 1.0 - BREATH_DIP * 0.5 * (1.0 + sin(u_time * 6.2832 / period + phase));
-  }
-  vec3 ink = mix(u_fg2, u_fg, pow(lv / 5.0, RAMP_POW));
-  float hueSel = hash21(cell + 27.9 + u_seed);
-  ink = mix(ink, u_tintA.rgb, u_tintA.a * smoothstep(0.62, 0.95, hueSel));
-  ink = mix(ink, u_tintB.rgb, u_tintB.a * (1.0 - smoothstep(0.05, 0.38, hueSel)));
-  float eA = alpha * cellMask;
-  vec3 col = ink * eA + chargeColor * chargeA * (1.0 - eA);
-  float a = eA + chargeA * (1.0 - eA);
-  if (a <= 0.0) {
-    fragColor = vec4(0.0);
-    return;
-  }
-  fragColor = vec4(col, a);
-}
-`;
-  let energyApi = null;   // { pressStart(k), pressEnd(k) }
+  // —— 顶档能量层 ——
+  // 维护者的私有 overlay 带了原版 WebGL 能量场（modules/effort-field.js：mountEffortField(canvas) → { pressStart, pressEnd, destroy }）
+  // → 挂在 canvas 上，顶档常按、离开顶档冷却；公开版（没有这个模块）→ 自写的 CSS 光带（.ef-charge，跟着 .topstop 亮灭）。
+  let fieldMod = $state(undefined);   // undefined = 还在取；null = 没有
   $effect(() => {
-    const cnv = canvasEl;
-    if (!cnv || !accent) return;
-    const gl = cnv.getContext('webgl2', { alpha: true, antialias: false, depth: false, stencil: false });
-    if (!gl) return;
-    const mk = (type, src) => { const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh); return sh; };
-    const prog = gl.createProgram();
-    const vs = mk(gl.VERTEX_SHADER, VERT), fs = mk(gl.FRAGMENT_SHADER, FRAG);
-    gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog); gl.deleteShader(vs); gl.deleteShader(fs);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { gl.deleteProgram(prog); return; }
-    gl.useProgram(prog);
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
-    const aPos = gl.getAttribLocation(prog, 'a_position');
-    gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-    const U = (n) => gl.getUniformLocation(prog, n);
-    const uTime = U('u_time'), uRes = U('u_resolution'), uSeed = U('u_seed'), uPos = U('u_pos'),
-      uC0 = U('u_charge0'), uC1 = U('u_charge1'), uBed = U('u_bedFill'), uCMax = U('u_chargeMax'),
-      uCRamp = U('u_chargeRamp'), uFloor = U('u_inkFloor'), uCeil = U('u_inkCeil'), uGain = U('u_energyGain'),
-      uTA = U('u_tintA'), uTB = U('u_tintB'), uFg = U('u_fg'), uFg2 = U('u_fg2'),
-      uBT = U('u_burstTime[0]'), uBC = U('u_burstCenter[0]'), uBG = U('u_burstGain[0]'), uFade = U('u_fade');
-    gl.clearColor(0, 0, 0, 0);
-    gl.uniform3fv(uFg, [0.72, 0.59, 1]); gl.uniform3fv(uFg2, [1, 1, 1]);
-    gl.uniform1f(uFade, 0); gl.uniform1f(uSeed, 0); gl.uniform1f(uPos, 1);
-    gl.uniform4f(uC0, 0.62, 0.5, 0.92, 1); gl.uniform4f(uC1, 0.35, 0.25, 0.6, 1);
-    gl.uniform1f(uBed, 0); gl.uniform1f(uCMax, 0.85); gl.uniform1f(uCRamp, 1.1);
-    gl.uniform1f(uFloor, 0.08); gl.uniform1f(uCeil, 0.85); gl.uniform1f(uGain, 1);
-    gl.uniform4f(uTA, 0, 0, 0, 0); gl.uniform4f(uTB, 0, 0, 0, 0);
-    const bTimes = new Float32Array(8).fill(-1000), bCenters = new Float32Array(16), bGains = new Float32Array(8);
-    gl.uniform1fv(uBT, bTimes); gl.uniform2fv(uBC, bCenters); gl.uniform1fv(uBG, bGains);
-    // 颜色解析探针（官方 cse/dse 等价，canvas2d 认所有 CSS 色格式）
-    const pc = document.createElement('canvas'); pc.width = 1; pc.height = 1;
-    const px = pc.getContext('2d', { willReadFrequently: true });
-    const parse = (c, fb) => { try { px.clearRect(0, 0, 1, 1); px.fillStyle = '#000'; px.fillStyle = c; px.fillRect(0, 0, 1, 1);
-      const d = px.getImageData(0, 0, 1, 1).data; return [d[0] / 255, d[1] / 255, d[2] / 255, d[3] / 255]; } catch { return fb; } };
-    let slot = 0, T = false, E = 0, fade = 0, hold = 0;
-    let W = 1, H = 1, dirty = true, raf = 0, running = false, prev = 0;
-    let lastBurstU = -1 / 0, lastBurstWall = -1 / 0, nextGap = 0.45, hiddenHeld = false, Utime = 0;
-    const rm = matchMedia('(prefers-reduced-motion: reduce)');
-    const gain = (e, t) => Math.min((0.15 + 0.7 * e) * (0.45 + 0.55 * t), 1);
-    const draw = () => {
-      if (dirty) { gl.viewport(0, 0, cnv.width, cnv.height); gl.uniform2f(uRes, W, H); dirty = false; }
-      gl.uniform1f(uTime, Utime); gl.uniform1f(uPos, Math.max(E, 0.02));
-      gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLES, 0, 6);
-    };
-    const alive = () => Utime - lastBurstU < 5;
-    const frame = (now) => {
-      const dt = 0.001 * (now - prev);
-      Utime += dt; prev = now;
-      fade = T ? Math.min(fade + dt / 0.7, 1) : Math.max(fade - dt / 0.85, 0);
-      hold = T ? hold + dt : 0;
-      if (T && Utime - lastBurstU > nextGap) {
-        const h = Math.min(hold / 1.6, 1);
-        nextGap = 0.3 + 0.45 * Math.random();
-        emit(gain(E, h) * (0.85 + 0.3 * Math.random()), E + 0.08 * (Math.random() - 0.5));
-      }
-      const s = fade * fade * (3 - 2 * fade);
-      gl.uniform1f(uFade, s);
-      draw();
-      if ((T || (alive() && fade > 0)) && !document.hidden) raf = requestAnimationFrame(frame);
-      else running = false;
-    };
-    const start = () => { if (!running) { running = true; prev = performance.now(); raf = requestAnimationFrame(frame); } };
-    const stopLoop = () => { if (running) { running = false; cancelAnimationFrame(raf); } };
-    const size = (w, h, dpr) => {
-      const rw = Math.max(1, w), rh = Math.max(1, h);
-      if (rw !== W || rh !== H) {
-        const ex = rw / W, ey = rh / H;
-        for (let i = 0; i < 8; i++) { bCenters[2 * i] *= ex; bCenters[2 * i + 1] *= ey; }
-        gl.uniform2fv(uBC, bCenters); W = rw; H = rh; dirty = true;
-      }
-      let ow = Math.max(1, Math.round(w * dpr)), oh = Math.max(1, Math.round(h * dpr));
-      if (ow * oh > 4147200) { const sc = Math.sqrt(4147200 / (ow * oh)); ow = Math.max(1, Math.round(ow * sc)); oh = Math.max(1, Math.round(oh * sc)); }
-      if (cnv.width !== ow || cnv.height !== oh) { cnv.width = ow; cnv.height = oh; dirty = true; }
-    };
-    const emit = (k, posX) => {
-      bTimes[slot] = Utime;
-      bCenters[2 * slot] = posX * W;
-      bCenters[2 * slot + 1] = H * (0.35 + 0.3 * Math.random());
-      bGains[slot] = k;
-      slot = (slot + 1) % 8;
-      gl.uniform1fv(uBT, bTimes); gl.uniform2fv(uBC, bCenters); gl.uniform1fv(uBG, bGains);
-      lastBurstU = Utime; lastBurstWall = performance.now();
-      if (!document.hidden) start();
-    };
-    const refreshColors = () => {
-      const cs = getComputedStyle(cnv);
-      const fg = parse(cs.color, [0.72, 0.59, 1, 1]), fg2 = parse(cs.outlineColor, [1, 1, 1, 1]);
-      gl.uniform3fv(uFg, fg.slice(0, 3)); gl.uniform3fv(uFg2, fg2.slice(0, 3));
-      const c0 = parse(cs.borderTopColor, [0.62, 0.5, 0.92, 1]), c1 = parse(cs.borderBottomColor, [0.35, 0.25, 0.6, 1]);
-      gl.uniform4f(uC0, c0[0], c0[1], c0[2], c0[3]); gl.uniform4f(uC1, c1[0], c1[1], c1[2], c1[3]);
-      const ta = parse(cs.textDecorationColor, [0, 0, 0, 0]), tb = parse(cs.columnRuleColor, [0, 0, 0, 0]);
-      gl.uniform4f(uTA, ta[0], ta[1], ta[2], ta[3]); gl.uniform4f(uTB, tb[0], tb[1], tb[2], tb[3]);
-      const num = (n, fb) => { const v = parseFloat(cs.getPropertyValue(n)); return Number.isNaN(v) ? fb : v; };
-      const cl = (v) => Math.min(Math.max(v, 0), 1);
-      gl.uniform1f(uBed, cl(num('--ui-slider-energy-bed-fill', 0)));
-      gl.uniform1f(uCMax, cl(num('--ui-slider-energy-charge-max', 0.85)));
-      gl.uniform1f(uCRamp, Math.max(num('--ui-slider-energy-charge-ramp', 1.1), 0.01));
-      gl.uniform1f(uFloor, cl(num('--ui-slider-energy-ink-floor', 0.08)));
-      gl.uniform1f(uCeil, cl(num('--ui-slider-energy-ink-ceil', 0.85)));
-      gl.uniform1f(uGain, Math.max(num('--ui-slider-energy-gain', 1), 0));
-    };
-    const ro = new ResizeObserver((es) => {
-      const en = es[0], db = en.devicePixelContentBoxSize?.[0];
-      if (db) { const dpr = devicePixelRatio || 1; size(db.inlineSize / dpr, db.blockSize / dpr, dpr); }
-      else { const bb = en.borderBoxSize?.[0] ?? en.contentBoxSize?.[0]; size(bb?.inlineSize ?? cnv.clientWidth, bb?.blockSize ?? cnv.clientHeight, devicePixelRatio || 1); }
-      draw();
-    });
-    ro.observe(cnv);
-    const onVis = () => {
-      if (document.hidden) {
-        hiddenHeld = T; T = false; lastBurstU = -1 / 0; lastBurstWall = -1 / 0; fade = 0;
-        bTimes.fill(-1000); gl.uniform1fv(uBT, bTimes); stopLoop(); gl.uniform1f(uFade, 0); draw();
-      } else if (hiddenHeld && !rm.matches) {
-        hiddenHeld = false; refreshColors(); T = true; hold = 0; emit(gain(E, 0), E);
-      } else if (alive()) start();
-    };
-    document.addEventListener('visibilitychange', onVis);
-    energyApi = {
-      pressStart: (e) => {
-        if (rm.matches) return;
-        refreshColors();
-        if (performance.now() - lastBurstWall > 5000 && fade <= 0) { bTimes.fill(-1000); gl.uniform1fv(uBT, bTimes); gl.uniform1f(uSeed, 512 * Math.random()); }
-        T = true; hold = 0; E = e;
-        emit(gain(e, 0), e);
-      },
-      pressEnd: (e) => { hiddenHeld = false; if (T) { T = false; E = e; if (!document.hidden) start(); } }
-    };
-    size(cnv.clientWidth || 1, cnv.clientHeight || 1, devicePixelRatio || 1);
-    draw();
-    return () => {
-      energyApi = null; stopLoop(); ro.disconnect();
-      document.removeEventListener('visibilitychange', onVis);
-      gl.deleteProgram(prog); gl.deleteBuffer(buf);
-    };
+    if (!accent || fieldMod !== undefined) return;
+    let alive = true;
+    ovModule('effortField').then((m) => { if (alive) fieldMod = m && typeof m.mountEffortField === 'function' ? m : null; });
+    return () => { alive = false; };
   });
-
-  // 顶档进出 → 能量场常按/冷却（官方 data-top-stop 语义）
-  $effect(() => { if (topStop) { energyApi?.pressStart(1); return () => energyApi?.pressEnd(1); } });
+  let energyApi = $state.raw(null);   // { pressStart(k), pressEnd(k), destroy() }
+  $effect(() => {
+    const cnv = canvasEl, m = fieldMod;
+    if (!cnv || !accent || !m) return;
+    let api = null;
+    try { api = m.mountEffortField(cnv); } catch (e) { console.warn('[overlay] effortField 挂载失败：', e?.message || e); }   // i18n-ignore 只进控制台
+    if (!api) return;
+    energyApi = api;
+    return () => { energyApi = null; try { api.destroy?.(); } catch {} };
+  });
+  // 顶档进出 → 能量场常按 / 冷却
+  $effect(() => { const api = energyApi; if (topStop && api) { api.pressStart(1); return () => api.pressEnd(1); } });
 
   // —— help 悬浮层：200ms 延迟出、离开即收（官方 tooltip Root delay 200）——
   let helpOpen = $state(false);
@@ -502,7 +215,7 @@ void main() {
         <span class="ef-fill" bind:this={fillEl}>
           {#if accent}
             <span class="ef-energy-wrap" aria-hidden="true">
-              <canvas class="ef-energy" bind:this={canvasEl}></canvas>
+              {#if fieldMod}<canvas class="ef-energy" bind:this={canvasEl}></canvas>{:else if fieldMod === null}<span class="ef-charge"></span>{/if}
             </span>
           {/if}
         </span>
@@ -586,6 +299,7 @@ void main() {
     --ef-energy-op-max: 100%;
   }
 
+  .ef { --ef-snap: 380ms cubic-bezier(.2, .9, .3, 1); }
   .ef-backdrop { position: fixed; inset: 0; z-index: 60; }
   /* 卡片：220 / p10 / gap16 / r12（官方 w-[220px] p-p7 gap-[16px] rounded-r8，click 即现无入场动画） */
   .ef {
@@ -636,6 +350,17 @@ void main() {
     -webkit-mask-size: max(calc(var(--slider-drag-pos, var(--slider-rest-pos)) - 8px), 0px) 100%; }
   .ef { --ef-blend: normal; }
   :global(html:not([data-theme="light"])) .ef .ef-energy-wrap { mix-blend-mode: plus-lighter; }
+  /* 公开版顶档光带（没有 overlay 的能量场时）：充能色渐变打底，一道高光从左往右扫；进出顶档 0.6s 淡入淡出 */
+  .ef-charge { position: absolute; inset: 0; opacity: 0; transition: opacity .6s ease;
+    background: linear-gradient(90deg, var(--ui-slider-fill-charged-end), var(--ui-slider-fill-charged-start)); }
+  .ef-charge::after { content: ''; position: absolute; inset: 0; background-repeat: no-repeat; background-size: 55% 100%;
+    background-image: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--ui-slider-energy-hot) 75%, transparent) 50%, transparent 80%);
+    background-position: -150% 0; }
+  .ef-slider.topstop .ef-charge { opacity: 1; }
+  @media (prefers-reduced-motion: no-preference) {
+    .ef-slider.topstop .ef-charge::after { animation: ef-sweep 2.4s cubic-bezier(.45, 0, .25, 1) infinite; }
+  }
+  @keyframes ef-sweep { from { background-position: -150% 0; } to { background-position: 250% 0; } }
   .ef-energy { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
     color: var(--ui-slider-energy-hot); outline-color: var(--ui-slider-energy-cool);
     border-top: 0 none var(--ui-slider-fill-charged-start); border-bottom: 0 none var(--ui-slider-fill-charged-end);
@@ -664,6 +389,9 @@ void main() {
     background: var(--ui-slider-handle); box-shadow: var(--ef-thumb-shadow); cursor: ew-resize; }
   @media (prefers-reduced-motion: no-preference) {
     .ef-thumb { transition: background-color .3s; }
+    /* 吸附：不在拖动时，填充宽度与把手位置按过渡滑到档位上（快起慢收、无回弹） */
+    .ef-slider:not(.dragging) .ef-fill { transition: width var(--ef-snap); }
+    .ef-slider:not(.dragging) .ef-thumb { transition: left var(--ef-snap), background-color .3s; }
   }
   .ef-slider.topstop .ef-thumb { background: var(--ui-slider-handle-energized); }
   /* 键盘聚焦环：白 2px + 环 4px + 20% 辉光（官方 shadow-focus-slider；顶档换紫） */

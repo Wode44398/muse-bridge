@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QQ 控制台</title>
+<link rel="stylesheet" href="/plugins/_sdk/bridge-plugin.css">
+<style>
+  html, body { height: 100%; }
+  .wrap { display: grid; grid-template-columns: 260px 1fr; height: 100vh; }
+  .side { border-right: .5px solid var(--bp-line); overflow-y: auto; }
+  .side-h { padding: 14px 14px 8px; display: flex; align-items: center; justify-content: space-between; }
+  .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .chat-h { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: .5px solid var(--bp-line); }
+  .chat-h b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msgs { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .m { max-width: 82%; }
+  .m .who { font-size: 12px; color: var(--bp-muted); margin-bottom: 3px; }
+  .m .tx { background: var(--bp-card); box-shadow: 0 0 0 .5px var(--bp-line); border-radius: 12px; padding: 8px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .m.bot { align-self: flex-end; }
+  .m.bot .who { text-align: right; }
+  .m.bot .tx { background: color-mix(in srgb, var(--bp-accent) 18%, var(--bp-card)); }
+  .send { display: flex; gap: 8px; padding: 10px 16px 14px; border-top: .5px solid var(--bp-line); }
+  .send .bp-textarea { min-height: 40px; height: 40px; }
+  .back { display: none; }
+  @media (max-width: 640px) {
+    .wrap { grid-template-columns: 1fr; }
+    .wrap.open .side { display: none; }
+    .wrap:not(.open) .chat { display: none; }
+    .back { display: inline-block; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <aside class="side">
+    <div class="side-h"><span class="bp-badge" id="state">连接中…</span></div>
+    <div class="bp-group" style="margin: 0 10px 14px" id="list"><div class="bp-empty">还没有聊天记录</div></div>
+  </aside>
+  <section class="chat">
+    <div class="chat-h">
+      <button class="bp-btn bp-btn-plain back" id="back">‹ 返回</button>
+      <b id="title">选一个群或私聊</b>
+      <button class="bp-btn" id="reset" disabled>重开对话</button>
+    </div>
+    <div class="msgs" id="msgs"><div class="bp-empty">左边选一个群或私聊，看机器人收到和回复的消息。</div></div>
+    <div class="send">
+      <textarea class="bp-textarea" id="text" placeholder="以机器人的身份手动发一条（不经过 Claude）" disabled></textarea>
+      <button class="bp-btn bp-btn-primary" id="go" disabled>发送</button>
+    </div>
+  </section>
+</div>
+<script type="module">
+  import { bridge } from '/plugins/_sdk/bridge-plugin.js';
+  const $ = (id) => document.getElementById(id);
+  let cur = null;
+  let chats = [];
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const when = (t) => new Date(t).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  async function loadChats() {
+    const r = await bridge.json('chats');
+    chats = r.chats || [];
+    $('state').textContent = r.online ? 'QQ 在线 · ' + r.selfId : '协议端连不上';
+    $('state').className = 'bp-badge ' + (r.online ? 'ok' : 'warn');
+    $('list').innerHTML = chats.length ? chats.map((c) => `
+      <div class="bp-row bp-click" data-cid="${esc(c.cid)}" ${cur === c.cid ? 'style="background:var(--bp-hover)"' : ''}>
+        <div class="bp-row-main"><div class="bp-row-title">${esc(c.name)}</div><div class="bp-row-desc">${c.count} 条 · ${when(c.last)}</div></div>
+      </div>`).join('') : '<div class="bp-empty">还没有聊天记录</div>';
+    for (const el of $('list').querySelectorAll('[data-cid]')) el.onclick = () => open(el.dataset.cid);
+  }
+  async function open(cid) {
+    cur = cid;
+    $('wrap').classList.add('open');
+    $('title').textContent = chats.find((c) => c.cid === cid)?.name || cid;
+    for (const id of ['reset', 'text', 'go']) $(id).disabled = false;
+    await loadLog();
+    loadChats();
+  }
+  async function loadLog() {
+    if (!cur) return;
+    const r = await bridge.json('log?cid=' + encodeURIComponent(cur));
+    const box = $('msgs');
+    box.innerHTML = (r.messages || []).map((m) => `
+      <div class="m ${m.bot ? 'bot' : ''}"><div class="who">${esc(m.who)} · ${when(m.t)}</div><div class="tx">${esc(m.text)}</div></div>`).join('') || '<div class="bp-empty">这里还没有消息</div>';
+    box.scrollTop = box.scrollHeight;
+  }
+  $('go').onclick = async () => {
+    const text = $('text').value.trim();
+    if (!text || !cur) return;
+    $('go').disabled = true;
+    try { await bridge.json('send', { cid: cur, text }); $('text').value = ''; bridge.toast('已发送'); }
+    catch (e) { bridge.toast(e.message, { error: true }); }
+    finally { $('go').disabled = false; }
+  };
+  $('reset').onclick = async () => {
+    if (!cur || !(await bridge.confirm({ title: '重开这个群的对话？', desc: 'Claude 会忘掉之前在这里聊过的内容，下一个问题开一段新对话。', yes: '重开' }))) return;
+    await bridge.json('reset', { cid: cur });
+    bridge.toast('已重开');
+  };
+  $('back').onclick = () => { $('wrap').classList.remove('open'); cur = null; };
+  bridge.on('message', (p) => { loadChats(); if (p && p.cid === cur) loadLog(); });
+  bridge.onStatus(() => loadChats());
+  await bridge.ready();
+  loadChats().catch((e) => { $('state').textContent = e.message; });
+</script>
+</body>
+</html>

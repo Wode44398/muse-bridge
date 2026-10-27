@@ -167,8 +167,9 @@ async function verifyPw(pw, rec) {
 // ---- per-user grants（管理员在控制台「用户」页按人设置）----
 // agents  : 这个人能用哪些 agent（统一 id，见 config/agents.mjs）。没写 = 老账号 → USER_DEFAULT_AGENTS。
 //           最终还要与「全局开关 + 该 agent 是否支持多用户」取交集（identity.mjs）。
-// snapshot: 能不能铸公开聊天快照（/c/ 链接，用这台服务器的额度跑 Claude）。老账号没写 = 保留；新注册的默认没有。
-// service : 服务账号（程序在用的账号）。关掉多用户后，只有服务账号还能登录。
+// snapshot: 能不能铸公开聊天快照（/c/ 链接，用主机额度跑 Claude）。老账号没写 = 保留（QQ 机器人
+//           就是靠它开 /chat 快照）；新注册的默认没有。
+// service : 服务账号（QQ 机器人这类程序在用的账号）。主机形态关掉多用户后，只有服务账号还能登录。
 export function userGrants(rec) {
   return {
     agents: Array.isArray(rec?.agents) ? normAgentList(rec.agents) : [...USER_DEFAULT_AGENTS],

@@ -1,10 +1,10 @@
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { ok, fail } from "./types.ts";
-import { existingSharedBrowser, claimBrowser } from "../cdp.ts";
-import { browserAvailable } from "../headless.ts";
+import { existingSharedBrowser, claimBrowser, noBrowserMessage } from "../cdp.ts";
 import { fileUrlBlock } from "../sandbox.ts";
 import { redactOutput } from "../redact.ts";
 import { WEB_CONTENT_NOTE } from "./untrusted.ts";
+import { browserAvailable } from "../headless.ts";
 
 // ReadPage: the browser page as an accessibility tree — semantic structure
 // (roles, names, states) instead of pixels. Interactive nodes carry [refN]
@@ -48,7 +48,7 @@ export const readPageTool: Tool = {
     const denied = claimBrowser(ctx.ownerId ?? "");
     if (denied) return fail("readpage", denied);
     const page = existingSharedBrowser();
-    if (!page) return fail("readpage", "No browser is running — Browser(navigate, url:…) first.");
+    if (!page) return fail("readpage", noBrowserMessage());
     // S4（#37②）：当前页是 file:// 且过不了与 Read 同一道闸（点链接、脚本跳转绕过了导航检查）→ 不读。
     const fileBlock = fileUrlBlock(page.url, ctx.sandbox);
     if (fileBlock) return fail("readpage", `The current page is a blocked local file — ${fileBlock}. Navigate away first.`);

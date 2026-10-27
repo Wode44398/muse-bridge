@@ -1,5 +1,5 @@
 <script>
-  // PDF 只读查看器（PDF.js 打包，worker 走 ?url 本地资源，不依赖 CDN）。
+  // PDF 只读查看器（PDF.js 打包，worker 走 ?url 本地资源不依赖 CDN，离线壳可用）。
   //   · 连续纵向滚动 + 懒渲染（IntersectionObserver，只渲染进视口的页，省内存）
   //   · 缩放：−/＋ 按钮 + 双指捏合（捏合时 CSS transform 即时反馈，松手按新比例重渲清晰）
   //   · 页码指示、自带亮色头部（返回/标题/页码/缩放/下载）
@@ -7,10 +7,11 @@
   import { setPreviewDetail } from '../../lib/preview.svelte.js';
   import { registerCapture } from '../../lib/uiReport.js';
   import { t, tc } from '../../lib/i18n.js';
+  import { interceptAppDownload } from '../../lib/save.js';
 
   // PDF.js 按需加载（~350KB）：此前是静态 import，被打进主 chunk，于是每次启动都要
   // 解析一遍——而 PDF 只有真的去预览一个 pdf 时才用得上。worker 仍走 ?url 本地资源
-  // （不依赖 CDN），只是推迟到首次 load() 才解析。
+  // （不依赖 CDN，离线壳可用），只是推迟到首次 load() 才解析。
   let getDocument = null;
   async function ensurePdfjs() {
     if (getDocument) return;
@@ -25,7 +26,7 @@
   let { item, onClose } = $props();
 
   // —— 工作区协同：页码上抛（agent 知道用户在看第几页）+ 网页端截图兜底
-  //（当前页 canvas → JPEG）。——
+  //（当前页 canvas → JPEG；桌面壳/apk 有原生整窗截图时轮不到这里）。——
   $effect(() => { if (numPages) setPreviewDetail({ page: curPage, pages: numPages }); });
   $effect(() => registerCapture(() => {
     const c = rendered.get(curPage);
@@ -179,14 +180,14 @@
     {#if numPages}<span class="pdf-pageno">{curPage} / {numPages}</span>{/if}
     <button class="pdf-btn" aria-label={tc('files', '缩小')} onclick={zoomOut}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
     <button class="pdf-btn" aria-label={tc('files', '放大')} onclick={zoomIn}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
-    {#if item.downloadHref}<a class="pdf-btn" href={item.downloadHref} download={item.name} aria-label={t('下载')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg></a>{/if}
+    {#if item.downloadHref}<a class="pdf-btn" href={item.downloadHref} download={item.name} onclick={(e) => interceptAppDownload(e, { url: item.downloadHref, name: item.name })} aria-label={t('下载')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg></a>{/if}
   </header>
 
   <div class="pdf-scroll" bind:this={scroller} role="presentation" onpointerdown={pd} onpointermove={pm} onpointerup={pu} onpointercancel={pu}>
     {#if loading}
       <div class="pdf-center"><span class="pdf-spin"></span></div>
     {:else if error}
-      <div class="pdf-center pdf-err"><p>{t('PDF 加载失败')}</p><button onclick={load}>{t('重试')}</button>{#if item.downloadHref}<a class="pdf-dl" href={item.downloadHref} download={item.name}>{t('下载')}</a>{/if}</div>
+      <div class="pdf-center pdf-err"><p>{t('PDF 加载失败')}</p><button onclick={load}>{t('重试')}</button>{#if item.downloadHref}<a class="pdf-dl" href={item.downloadHref} download={item.name} onclick={(e) => interceptAppDownload(e, { url: item.downloadHref, name: item.name })}>{t('下载')}</a>{/if}</div>
     {:else}
       <div class="pdf-pages" bind:this={pagesWrap}>
         {#each pages as p (p.num)}

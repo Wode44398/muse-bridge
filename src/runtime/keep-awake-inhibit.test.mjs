@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { inhibitArgs, inhibitDriver, readOnBattery, _resetInhibitDenied } from './keep-awake-inhibit.mjs';
+import { inhibitArgs, inhibitDriver, inhibitUsable, readOnBattery, _resetInhibitDenied } from './keep-awake-inhibit.mjs';
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -132,4 +132,17 @@ test('被拒之后歇一阵：这段时间里不再起子进程（重建驱动�
   assert.equal(await c.hold(true), true, '没有进入被拒的歇息期');
   c.close();
   await sleep(200);
+});
+
+test('inhibitUsable：有 systemd-inhibit、不是虚拟机才算能保持唤醒（设置页据此显示两项）', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'bridge-cpu-'));
+  const bare = path.join(dir, 'bare'), vm = path.join(dir, 'vm');
+  writeFileSync(bare, ['processor\t: 0', 'flags\t\t: fpu vme de pse sse2', ''].join('\n'));
+  writeFileSync(vm, ['processor\t: 0', 'flags\t\t: fpu vme de pse sse2 hypervisor lahf_lm', ''].join('\n'));
+  const has = () => '/usr/bin/systemd-inhibit', none = () => null;
+  _resetInhibitDenied();
+  assert.equal(inhibitUsable({ which: has, cpuinfo: bare }), true);
+  assert.equal(inhibitUsable({ which: none, cpuinfo: bare }), false);
+  assert.equal(inhibitUsable({ which: has, cpuinfo: vm }), false);
+  assert.equal(inhibitUsable({ which: has, cpuinfo: path.join(dir, 'missing') }), true);   // 读不到 cpuinfo 不当虚拟机
 });

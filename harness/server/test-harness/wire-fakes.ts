@@ -36,7 +36,7 @@ export function anthropicSse(events: readonly StreamEvent[], usage: Record<strin
 
 const OPENAI_STOP: Record<StopReason, string> = { end: "stop", tool_use: "tool_calls", length: "length", refusal: "content_filter" };
 
-// usage 合进最后那块的 usage（如 { prompt_tokens_details: { cached_tokens: 900 } }）；键 timings 另起一块（llama.cpp 兼容服务的形状）。
+// usage 合进最后那块的 usage（如 { prompt_tokens_details: { cached_tokens: 900 } }）；键 timings 另起一块（本机 llama.cpp 的形状）。
 export function openaiSse(events: readonly StreamEvent[], usage: Record<string, unknown> = {}): string {
   const out: unknown[] = [];
   let toolIndex = 0;

@@ -419,6 +419,31 @@ export function toolVerb(tool) {
       return R('Read session', 'Reading session', 'Failed to read session', norm(input.to) || fallback, { sessionRef: { to: norm(input.to) } });
     case 'mcp__sessions__list_sessions':
       return R('Listed sessions', 'Listing sessions', 'Failed to list sessions');
+    // 用户的电脑（bridge 的 mcp/device-tools.mjs）：动词点明是在「你的电脑」上，不是服务器上
+    case 'mcp__device__devices':
+      return R('Checked computers', 'Checking computers', 'Failed to check computers', norm(input.use) || undefined);
+    case 'mcp__device__inspect':
+      return R('Looked at your computer', 'Looking at your computer', 'Failed to look at your computer', norm(input.action) || fallback || undefined);
+    case 'mcp__device__act':
+      return R('Used your computer', 'Using your computer', 'Failed to use your computer', norm(input.action) || fallback || undefined);
+    case 'mcp__device__browser':
+      return R('Browsed on your computer', 'Browsing on your computer', 'Failed to browse on your computer', norm(input.url) || norm(input.action) || fallback || undefined);
+    case 'mcp__device__shell':
+      return R('Ran on your computer', 'Running on your computer', 'Failed to run on your computer', norm(input.command) || fallback || undefined, { metaIsCode: true });
+    case 'mcp__device__files': {
+      const act = str(input.action);
+      if (act === 'pull') return R('Copied from your computer', 'Copying from your computer', 'Failed to copy from your computer', norm(input.path) || undefined, { metaIsPath: true });
+      if (act === 'push') return R('Copied to your computer', 'Copying to your computer', 'Failed to copy to your computer', norm(input.path) || undefined, { metaIsPath: true });
+      if (act === 'read' || act === 'list' || act === 'glob' || act === 'stat') return R('Read on your computer', 'Reading on your computer', 'Failed to read on your computer', norm(input.path) || norm(input.pattern) || undefined, { metaIsPath: true });
+      return R('Changed files on your computer', 'Changing files on your computer', 'Failed to change files on your computer', norm(input.path) || undefined, { metaIsPath: true });
+    }
+    case 'mcp__device__ports': {
+      const act = str(input.action);
+      const port = input.port != null ? 'port ' + input.port : undefined;
+      if (act === 'open') return R('Forwarded a port from your computer', 'Forwarding a port from your computer', 'Failed to forward a port', port);
+      if (act === 'close') return R('Closed a port forward', 'Closing a port forward', 'Failed to close a port forward', port);
+      return R('Checked port forwards', 'Checking port forwards', 'Failed to check port forwards');
+    }
     default: {
       // 官方 Desktop 专有工具（见 DESKTOP_TOOLS）
       const dt = DESKTOP_TOOLS[name];

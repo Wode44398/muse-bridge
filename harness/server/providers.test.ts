@@ -375,6 +375,52 @@ test("non-Kimi OpenAI-compatible vendors still drop thinking blocks from replay"
   assert.equal("reasoning_content" in assistant, false);
 });
 
+test("local llama.cpp: effort 走 chat_template_kwargs，不是顶层 reasoning_effort", async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: any[] = [];
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")));
+    return response([{ choices: [{ delta: {}, finish_reason: "stop" }] }, "[DONE]"]);
+  }) as typeof fetch;
+
+  try {
+    const local = createOpenAIAdapter({
+      provider: "local",
+      apiKey: "local",
+      model: "qwen3.8-27b",
+      baseUrl: "http://127.0.0.1:8080/v1",
+    });
+    // 目录声明的限额要落到 capabilities 上，别退回 128k/16k 的扁平默认值。
+    assert.equal(local.capabilities.contextWindow, 131_072);
+    assert.equal(local.capabilities.maxOutputTokens, 32_768);
+    assert.equal(local.capabilities.image, true);
+
+    await drain(local, turn); // turn 自带 budget.thinking = "low"
+    await drain(local, { ...turn, budget: { maxOutputTokens: 1000, thinking: "max" } });
+    await drain(local, { ...turn, budget: { maxOutputTokens: 1000, thinking: "off" } });
+    await drain(local, { ...turn, budget: { maxOutputTokens: 1000, thinking: "medium" } });
+    await drain(local, { ...turn, budget: { maxOutputTokens: 1000, thinking: "high" } }); // 旧会话里存的 high
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  // R4（#40）：按本机模板的真实档位——max/high→xhigh；off 走 enable_thinking:false，不发 none
+  //（模板对 none raise_exception，整个请求被拒）。模板本身的对照见 local-effort-contract.test.ts。
+  assert.equal(bodies[0].chat_template_kwargs.reasoning_effort, "low");
+  assert.equal(bodies[1].chat_template_kwargs.reasoning_effort, "xhigh");
+  assert.deepEqual(bodies[2].chat_template_kwargs, { enable_thinking: false });
+  assert.equal(bodies[3].chat_template_kwargs.reasoning_effort, "medium");
+  assert.equal(bodies[4].chat_template_kwargs.reasoning_effort, "xhigh");
+
+  for (const body of bodies) {
+    // 顶层字段会被 llama-server 静默忽略——发出去等于档位失效且不报错，
+    // 所以这里明确锁死「不许走顶层」。
+    assert.equal("reasoning_effort" in body, false);
+    assert.equal("thinking" in body, false);
+    assert.equal("enable_thinking" in body, false);
+  }
+});
+
 // 2026-09-10 新增的三家型号：DeepSeek V4.1-Flash（`deepseek-flash`，low 成了真档位 +
 // 原生视觉）、GLM-5.3 系列（恒思考，thinking.type 只收 enabled）、Qwen3.8（图+视频）。
 test("DeepSeek V4.1-Flash 的 low 不再折叠成 high", async () => {

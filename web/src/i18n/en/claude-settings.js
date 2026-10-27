@@ -72,7 +72,7 @@ export default {
   '不弹卡，Claude 判断该开就直接开，留一张可停止的卡': 'No prompt. Claude starts one when it sees fit and leaves a card you can stop it from.',
   'Claude 不主动提议，只有你明说才开': 'Claude doesn’t suggest new sessions. It starts one only when you ask.',
   '其它会话发来的消息': 'Messages from other sessions',
-  '官方 Claude Desktop 或终端里的 Claude 会话发给这里的消息': 'Messages sent here by Claude sessions in Claude Desktop or the terminal',
+  '同一台机器上别的 Claude 会话（官方 Claude Desktop、终端或这里的其它会话）发给这里的消息': 'Messages sent here by other Claude sessions on the same machine (Claude Desktop, the terminal, or other sessions here)',
   '跟随 Claude 默认': 'Claude default',
   '会问你的模式下直接接收；绕过权限时、或对方的权限模式和这里不一致时，暂存等你确认': 'Accepted in modes that ask you first. Held for your review while bypassing permissions, or when the sender’s permission mode differs from this one.',
   '一律直接接收，对方的话会马上开一轮': 'Always accepted. The message starts a turn right away.',

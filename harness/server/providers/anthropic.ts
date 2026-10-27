@@ -103,7 +103,7 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
       };
       const errCtx = custom ? { url, name: custom.name, protocol: "anthropic" as const, model: cfg.model } : undefined;
       let res = await send(fast);
-      // fast mode 的额度与普通额度分开算（2026-10-14 实测：有的 org 的 fast 额度是每分钟 0 input token，
+      // fast mode 的额度与普通额度分开算（2026-10-14 实测：维护者这个 org 的 fast 额度是每分钟 0 input token，
       // 只有十来个 token 的小请求偶尔放过，真对话一律 429）。撞上 fast 自己的 429 就当场按普通速度重发，
       // 之后一段时间不再试 fast，并在对话里说一声——不让它掉进通用的限流重试，一直「被限流，N 秒后重试」不出字。
       if (fast && res.status === 429) {

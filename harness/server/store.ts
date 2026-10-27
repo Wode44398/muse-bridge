@@ -45,7 +45,7 @@ export interface PersistedConfig {
 }
 
 // M7（D1）：会话记录的当前版本与迁移链（规矩见 record-version.ts）。提版本 = 这里 +1、在迁移链末尾追加一步、
-// 配一条旧版本夹具测试；而且要等本框架已经上了生产之后再提。
+// 配一条旧版本夹具测试；而且要等本框架已经上了正式服之后再提。
 export const SESSION_RECORD_VERSION = 1;
 const SESSION_MIGRATIONS: Readonly<Record<number, RecordMigration>> = {};
 

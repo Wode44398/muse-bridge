@@ -8,6 +8,8 @@
   //   分支与 worktree 不是两颗芯片，是【同一颗胶囊的左右两半】——底色与描边挂外层、
   //   两半透明且圆角继承，中间 1px×10 分隔线在 hover/focus 整颗时淡出。
   //
+  // 最左边是「电脑」芯片（DeviceChip，官方那颗运行环境芯片的 bridge 版）：Claude 跑在服务端，
+  // 这颗芯片说的是这个会话连着你哪台电脑（设备）——看屏幕、操作电脑都经它。
   // 按 bridge 自己的规矩改的一处：
   //   · worktree 勾选框不用官方那抹蓝（#2a78d6）——本页配色铁律「彩色只留星芒」，
   //     故走 .submit 同款黑白反相（底 --text / 勾 --bg）。
@@ -22,6 +24,7 @@
   import { prefs, savePrefs } from '../lib/state.svelte.js';
   import { t } from '../lib/i18n.js';
   import PrChip from './claude/PrChip.svelte';   // 当前会话绑定了拉取请求时，分支胶囊后面接一颗「#123 ●」
+  import DeviceChip from './claude/DeviceChip.svelte';
 
   // name = 当前项目名（真实项目里就等于文件夹名；快照对话的桶目录名是 UUID，只有项目名可读）
   // armable = 还没有会话的新对话空态——只有这时 worktree 勾选框能点
@@ -43,6 +46,7 @@
 
 {#if show}
   <div class="wchips">
+    <DeviceChip />
     <button class="chip" title={ws} onclick={() => openDock('files')}>
       <span class="ic" aria-hidden="true">&#xe072;</span>
       <span class="lbl">{folder}</span>
@@ -90,7 +94,7 @@
 
 <style>
   /* 令牌只挂在本组件根上——本页 CSS 会被打进宿主 bundle，裸 :root 会漏给别人
-     （曾出现过整站暗色令牌被改浅的事故）。 */
+     （apk218 暗色错乱就是这么来的）。 */
   .wchips {
     --wc-h: 24px; --wc-pad: 6px; --wc-gap: 6px; --wc-r: 6px;
     /* 官方 effect-contained-default：亮色一圈 1px 内描边 + 极淡投影，暗色【两条全无】 */

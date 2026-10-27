@@ -167,7 +167,7 @@ async function freePort(): Promise<number> {
 }
 
 test("真 harness：部署脚本经请求文件冻结 → 新 run 回 503 → 强制排空后进程自己退出，转录写明被重启打断", { timeout: 90_000 }, async () => {
-  // 假模型服务（OpenAI 兼容）：先吐一段字，然后一直挂着（这一轮在整个用例期间都在跑）
+  // 假本机模型：先吐一段字，然后一直挂着（这一轮在整个用例期间都在跑）
   const provider = http.createServer((req, res) => {
     req.resume();
     res.writeHead(200, { "content-type": "text/event-stream" });
@@ -179,7 +179,7 @@ test("真 harness：部署脚本经请求文件冻结 → 新 run 回 503 → �
   const ws = temp("dimensio-m8-live-");
   const sessions = path.join(ws, "sessions");
   const cfgFile = path.join(ws, "runtime-config.json");
-  fs.writeFileSync(cfgFile, JSON.stringify({ v: 1, provider: "openai", model: "deepseek-flash", thinking: "low" }));
+  fs.writeFileSync(cfgFile, JSON.stringify({ v: 1, provider: "local", model: "qwen3.8-27b", thinking: "low" }));
   const port = await freePort();
   const TOKEN = "m8-DUMMY-process-token";
   const child = spawn(process.execPath, ["server/index.ts"], {
@@ -195,8 +195,7 @@ test("真 harness：部署脚本经请求文件冻结 → 新 run 回 503 → �
       WORKSPACE_DIR: ws,
       SESSIONS_DIR: sessions,
       DIMENSIO_CONFIG_FILE: cfgFile,
-      OPENAI_API_KEY: "FAKE-m8-openai-key",
-      OPENAI_BASE_URL: `http://127.0.0.1:${(provider.address() as net.AddressInfo).port}/v1`,
+      LOCAL_BASE_URL: `http://127.0.0.1:${(provider.address() as net.AddressInfo).port}/v1`,
       BRIDGE_PORT: "",
     },
     stdio: ["ignore", "pipe", "pipe"],

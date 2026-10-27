@@ -1,6 +1,6 @@
 // C5（G1、K57、X51、G3 部分；#10）：技能目录经济学。
 //
-// 修前：扩展中心勾给 dimensio 的技能在 system 里平铺——每条完整描述 + SKILL.md 绝对路径，实际装机 73 条约 2.7 万字符常驻，
+// 修前：扩展中心勾给 dimensio 的技能在 system 里平铺——每条完整描述 + SKILL.md 绝对路径，正式服 73 条约 2.7 万字符常驻，
 // 77% 是两个财经包（gildata 45、caixin 11）；没有预算，小窗口模型照样整段塞；模型用 Read 读 SKILL.md，正文落在
 // tool_result 里，长任务一微压缩就被换成占位，技能指令悄悄没了。
 // 修后：成员 ≥3 的包折成一行（包说明 + 成员名单）、不列路径；预算 = 窗口 × 2%（封顶 1 万 token），超了按档退化；
@@ -74,7 +74,7 @@ afterEach(() => {
 
 const textOf = (blocks: Block[]): string => blocks.map((b) => (b.t === "text" ? b.text : b.t === "tool_result" ? textOf(b.content) : "")).join("");
 
-test("C5 目录：成员 ≥3 的包折成一行、不列路径；真实形状的目录缩到三成以内；预算按窗口 × 2% 退化", () => {
+test("C5 目录：成员 ≥3 的包折成一行、不列路径；正式服形状的目录缩到三成以内；预算按窗口 × 2% 退化", () => {
   install(FIXTURE);
   const section = managedSkillsSection({ contextWindow: 131_072 }) ?? "";
   assert.match(section, /^- acme-data \(package, 5 skills\) — Acme is a financial data platform/m, "包折成一行，说明取路由成员（acme ⊂ acme-data）");
@@ -105,7 +105,7 @@ test("C5 目录：成员 ≥3 的包折成一行、不列路径；真实形状�
   assert.equal(tight.level, 3);
   assert.ok(tight.omitted > 0 && tight.text.includes(`…and ${tight.omitted} more`), "省略的条目注明个数、说明仍能按名加载");
 
-  // 真实装机的形状：45 个英文描述的 gildata 成员（其一是路由）+ 11 个中文长描述的 caixin 成员 + 16 个单技能 + 1 个散装
+  // 正式服的形状：45 个英文描述的 gildata 成员（其一是路由）+ 11 个中文长描述的 caixin 成员 + 16 个单技能 + 1 个散装
   const prod: FakeSkill[] = [
     ...Array.from({ length: 45 }, (_, i) => ({
       name: i === 0 ? "gildata" : `gildata-workflow-${i}`,

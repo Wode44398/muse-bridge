@@ -91,15 +91,16 @@ export function deliverRoots(ctx, cwd, vault) {
 
 // 根守卫只管沙箱身份。admin 的 Claude 本来就有整机 shell（authorizeProjectPath 同理放行任意目录），
 // 交付提示词也教它「产物在工作目录外就写绝对路径」——以前这类链接一律被根守卫拒掉：附件卡不出、
-// 点正文链接 403「加载失败」。roots 对 admin 仍有用：相对路径的回退基准。
+// 点正文链接 403「加载失败」（2026-10-07 维护者录屏：C:\Users\you\.dimensio\quick\…\x.md）。
+// roots 对 admin 仍有用：相对路径的回退基准。
 export function deliverAnywhere(ctx) {
   return ctx?.kind === 'admin';
 }
 
 // 链接里的路径 → 盘上真实路径（realpath）。绝对路径原样；相对路径先按 cwd 解析，
 // 解析不到再依次按各交付根（vault / 身份文件根 / uploads / media）当基准试一遍。
-// 为什么要回退：项目制下会话 cwd 是项目目录（<工作空间>/projects/demo），但 Claude 常把
-// 产物放进 vault 里别的文件夹、再按工作空间根写相对链接（notes/research/x.md）——按 cwd 拼
+// 为什么要回退：项目制下会话 cwd 是项目目录（D:\Notes\binance），但 Claude 常把
+// 产物放进 vault 里别的文件夹、再按 vault 根写相对链接（笔记/博通研究/x.md）——按 cwd 拼
 // 出来的路径根本不存在，附件卡不出、点正文链接 404「加载失败」。找不到返回 null。
 // 回退只在 roots 之内找，所以不会放宽根守卫（调用方仍要再做一次 isInside 校验）。
 // cwd 可以是一组候选基准（按优先级）：模型在这一轮里 `cd` 进过子目录时，Claude Code 会把

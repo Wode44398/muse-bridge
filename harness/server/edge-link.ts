@@ -1,9 +1,12 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { acceptWebSocket, type LiteSocket } from "./ws-lite.ts";
 
 // ── Edge 扩展链路（dimensio 连用户自己的 Edge）──────────────────────────────────
-// 扩展（MV3，本仓库不附带；装了的话）的 service worker 拨回环 ws://127.0.0.1:<PORT>/edge-link，
+// 扩展（harness/edge-extension，MV3）的 service worker 拨回环 ws://127.0.0.1:<PORT>/edge-link，
 // 用 chrome.debugger 把我们发的 CDP 命令转给它那个标签组里的标签页，事件原样回传。
 // 对 cdp.ts 来说这里只是另一种「WebSocket」：每个频道（"browser" = Target 域的模拟、"<tabId>" = 某个标签页）
 // 都包成一个 WebSocket 形状的对象，收发的就是标准 CDP JSON，所以 Browser / ReadPage / Eval / Network 全部原样工作。
@@ -18,8 +21,16 @@ const PROTOCOL = 1;
 const PING_MS = 20_000;
 const RPC_TIMEOUT_MS = 15_000;
 
-// 期望的扩展版本：本仓库不附带扩展，不做版本比对（握手里照旧带这个字段，空串 = 不限）。
-const EXPECTED_EXTENSION_VERSION = "";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const EDGE_EXTENSION_DIR = path.resolve(__dirname, "..", "edge-extension");
+
+function extensionVersionOnDisk(): string {
+  try {
+    return String(JSON.parse(readFileSync(path.join(EDGE_EXTENSION_DIR, "manifest.json"), "utf8")).version ?? "");
+  } catch {
+    return "";
+  }
+}
 
 function allowedOrigins(): Set<string> {
   const ids = [EDGE_EXTENSION_ID, ...(process.env.DIMENSIO_EDGE_EXTENSION_IDS ?? "").split(",")]
@@ -132,6 +143,17 @@ export class EdgeLink {
   onStop: ((why: string) => void) | null = null;
   // 扩展连上 / 断开：cdp.ts 用它把挂在 Edge 上的共享浏览器标记为死
   private linkSubs = new Set<(connected: boolean) => void>();
+  // 这条链路接的是哪种浏览器（"edge" / "chrome"……）：Edge 和 Chrome 都装了扩展时各占一条，互不顶替（见 EdgeHub）
+  readonly kind: string;
+
+  constructor(kind = "edge") {
+    this.kind = kind;
+  }
+
+  // 给模型 / 界面看的名字：扩展自报的「Edge 154」「Chrome 141」，握手前按种类
+  get label(): string {
+    return this.status.browser || browserKindLabel(this.kind);
+  }
 
   get connected(): boolean {
     return Boolean(this.sock?.open) && this.status.connected;
@@ -179,14 +201,18 @@ export class EdgeLink {
   }
 
   private adopt(ws: LiteSocket): void {
-    // 一次只认一条链路：同一台机器上开了两个装着扩展的 Edge 配置，后连的顶掉先连的
-    if (this.sock?.open) {
+    // 同一种浏览器一次只认一条链路：同一台机器上开了两个装着扩展的 Edge 配置，后连的顶掉先连的
+    // （Edge 与 Chrome 各走各的链路，见 EdgeHub）。先按「被顶替」收掉旧链路再关它——旧 socket 的 close 同步回调
+    // 会看到 this.sock 已不是自己而跳过，日志里不再把顶替误记成「扩展断开」。
+    const old = this.sock;
+    if (old?.open) {
       try {
-        this.sock.send(JSON.stringify({ t: "replaced" }));
+        old.send(JSON.stringify({ t: "replaced" }));
       } catch {
         /* ignore */
       }
-      this.sock.close(4000, "replaced by a newer connection");
+      this.dropLink(`replaced by another ${browserKindLabel(this.kind)} connection`);
+      old.close(4000, "replaced by a newer connection");
     }
     this.sock = ws;
     ws.onMessage = (text) => this.onMessage(ws, text);
@@ -194,7 +220,7 @@ export class EdgeLink {
       if (this.sock !== ws) return;
       this.dropLink("extension disconnected");
     };
-    const expected = EXPECTED_EXTENSION_VERSION;
+    const expected = extensionVersionOnDisk();
     this.status = { connected: false, browser: "", extVersion: "", expectedVersion: expected, acting: false, since: Date.now() };
     ws.send(JSON.stringify({ t: "hello", protocol: PROTOCOL, expectVersion: expected }));
     if (this.pinger) clearInterval(this.pinger);
@@ -386,7 +412,61 @@ export class EdgeLink {
   }
 }
 
-let link: EdgeLink | null = null;
-export function edgeLink(): EdgeLink {
-  return (link ??= new EdgeLink());
+// ── 多浏览器：Edge 和 Chrome 可以同时装着扩展连进来 ─────────────────────────────
+// 以前全局只有一条链路：后连的顶掉先连的、被顶的 60 秒后又连回来把对方顶掉——两个浏览器来回抢，agent 也没法指定用哪个。
+// 现在扩展在连接地址上带 ?browser=<种类>（扩展按自己的 UA 判断），每种浏览器一条独立链路；Browser(edge) 用 `browser` 参数挑。
+const KIND_RE = /^[a-z]{1,16}$/;
+
+export function browserKindLabel(kind: string): string {
+  if (kind === "edge") return "Edge";
+  if (kind === "chrome") return "Chrome";
+  return kind ? kind[0].toUpperCase() + kind.slice(1) : "Edge";
+}
+
+export class EdgeHub {
+  private links = new Map<string, EdgeLink>();
+  // 用户在某个浏览器里点了停止：(原因, 浏览器种类)
+  onStop: ((why: string, kind: string) => void) | null = null;
+
+  link(kind = "edge"): EdgeLink {
+    const k = KIND_RE.test(kind) ? kind : "edge";
+    let l = this.links.get(k);
+    if (!l) {
+      l = new EdgeLink(k);
+      l.onStop = (why) => this.onStop?.(why, k);
+      this.links.set(k, l);
+    }
+    return l;
+  }
+
+  all(): EdgeLink[] {
+    return [...this.links.values()];
+  }
+
+  connectedLinks(): EdgeLink[] {
+    return this.all().filter((l) => l.connected);
+  }
+
+  // 老版本扩展不带 ?browser= → 按 Edge 算（它握手时收到新版本号会自己重载，重载后就带上了）
+  handleUpgrade(req: IncomingMessage, socket: Duplex): boolean {
+    const raw = String(req.url ?? "");
+    if (raw.split("?")[0] !== EDGE_LINK_PATH) return false;
+    let kind = "edge";
+    try {
+      const q = (new URL(raw, "http://x").searchParams.get("browser") ?? "").toLowerCase();
+      if (KIND_RE.test(q)) kind = q;
+    } catch {
+      /* 默认 edge */
+    }
+    return this.link(kind).handleUpgrade(req, socket);
+  }
+}
+
+let hub: EdgeHub | null = null;
+export function edgeHub(): EdgeHub {
+  return (hub ??= new EdgeHub());
+}
+
+export function edgeLink(kind = "edge"): EdgeLink {
+  return edgeHub().link(kind);
 }

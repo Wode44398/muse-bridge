@@ -2,7 +2,8 @@
   import { tick } from 'svelte';
   import { chat, answerQuestion, send, rewindToMessage, attImgFallback, openSession } from '../lib/chat.svelte.js';
   import { IS_CSNAP } from '../lib/csnap.js';
-  import { session, prefs } from '../lib/state.svelte.js';
+  import { session, settings, prefs } from '../lib/state.svelte.js';
+  import { mountDrag } from '../lib/capsule.js';
   import { renderMarkdown, streamBlocks } from '../lib/md.js';
   import { claudeFade } from '../lib/claudeFade.js';
   import { fmtElapsed, fmtTokens } from '../lib/format.js';
@@ -23,13 +24,20 @@
   // 拉取请求：/create-pr 提示词与 Auto-fix 的 CI 事件在转录里的样子（pr.svelte.js）
   import PrMsgCard from './claude/PrMsgCard.svelte';
   import { prEnvelope } from '../lib/pr.svelte.js';
+  import { apiUrl, mediaImgFallback } from '../lib/server.js';
+  import ChatMediaImage from './claude/ChatMediaImage.svelte';
   import WidgetFrame from './claude/WidgetFrame.svelte';   // 对话内嵌交互图表（show_widget）
+  import { getToken } from '../lib/api.js';
   import { openPreview } from '../lib/preview.svelte.js';
-  import { saveToDisk } from '../lib/save.js';
+  import { dragOut, attDragSrc } from '../lib/dragOut.js';
+  import { hasNativeSaveAs, interceptSave, saveToDisk } from '../lib/save.js';
   import { onMdClick } from '../lib/linkNav.js';
   import { openDockFiles, openDock } from '../lib/dock.svelte.js';
   import { taskNoun } from '../lib/taskModel.js';
   import { t, tc, tr } from '../lib/i18n.js';
+
+  // 附件拖出（#8 全覆盖，桌面壳）：产物卡 / 用户上传的图与文件统一走 lib/dragOut.js 的 use:dragOut
+  // （绝对路径零拷贝拖原文件；历史里只剩链接的图走壳的下载通道）。网页/手机端 action 不挂任何东西。
 
   const hasText = (m) => m.segments.some((s) => s.kind === 'text' && s.md.trim());
   // 运行标记三套（设置 → 思考动画）：默认新版 Claude Code 活动标记（ClaudeWorkingMark，按 markActivity
@@ -132,6 +140,14 @@
     if (sc) sc.scrollTop = t0 + (sc.scrollHeight - h0);   // 视口锚定：展开不跳动
   }
 
+  // 离线壳跨源时 <img>/<video> 标签无法加 Authorization 头、也不带 cookie，
+  // 故附 ?token=（后端 authOk 认它）。在线同源 base='' 且可走 cookie，附上无害。
+  // v='preview'：图像走 1280px 衍生图（4K 原图 ~20MB 会拖垮手机），视频/音频原样。
+  const mediaUrl = (id, v) => apiUrl('/api/vertex/media?id=' + encodeURIComponent(id) + (v ? '&v=' + v : '') + (getToken() ? '&token=' + encodeURIComponent(getToken()) : ''));
+  // 媒体卡的进度 / 失败整句（种类词嵌在句中，英文语序不同，按种类各给一句）
+  const mediaIng = (k, elapsed) => (k === 'image' ? t('生成图片中{elapsed}…', { elapsed }) : k === 'video' ? t('生成视频中{elapsed}…', { elapsed }) : k === 'music' ? t('生成音乐中{elapsed}…', { elapsed }) : t('生成语音中{elapsed}…', { elapsed }));
+  const mediaErr = (k, error) => (k === 'image' ? t('图片生成失败：{error}', { error }) : k === 'video' ? t('视频生成失败：{error}', { error }) : k === 'music' ? t('音乐生成失败：{error}', { error }) : t('语音生成失败：{error}', { error }));
+
   function toggleOpt(it, label) {
     if (it.multi) it.selected = it.selected.includes(label) ? it.selected.filter((o) => o !== label) : [...it.selected, label];
     else it.selected = [label];
@@ -222,10 +238,11 @@
   // 时 nav 为空，回落成老行为（整卡即下载）。
   const canOpenFolder = (a) => a.kind === 'folder' && !!a.nav;
   const openAttFolder = (a) => openDockFiles(a.nav);
-  const dlLabel = 'Download';
+  // 桌面壳：Download → 原生「另存为」（系统保存对话框 + 本机路径直拷）；网页保持官网词。
+  const dlLabel = hasNativeSaveAs() ? t('另存为') : 'Download';
 
-  // —— 正文链接分流：模型写的产物链接多是裸文件路径，浏览器会按相对 URL
-  //    整页跳走。委托拦截：能对上附件卡的 → 应用内预览（文件夹=zip
+  // —— 正文链接分流（去 web 化）：模型写的产物链接多是裸文件路径，浏览器会按相对 URL
+  //    整页跳走/被壳丢去系统浏览器。委托拦截：能对上附件卡的 → 应用内预览（文件夹=zip
   //    另存）；对不上但形如路径的 → 借会话 id 尝试 artifact 预览（服务端会再授权校验）。
   function resolveAnswerLink(m, raw) {
     let lk = raw;
@@ -299,7 +316,7 @@
                 {#if a.kind === 'image' && a.url}
                   <!-- 气泡里挂缩略图（a.thumb），原图只在点开灯箱时才拉；直播刚发出的那条
                        没有 thumb（用的是本地 blob:），回落 a.url 不受影响。 -->
-                  <button class="u-att u-img" class:single={imgCount === 1} aria-label={t('预览图片')} onclick={() => openImage(m.attachments, ai)}>
+                  <button class="u-att u-img" class:single={imgCount === 1} aria-label={t('预览图片')} use:dragOut={() => attDragSrc(a)} onclick={() => openImage(m.attachments, ai)}>
                     <img src={a.thumb || a.url} alt={a.name} loading="lazy" decoding="async" onerror={(e) => attImgFallback(e.currentTarget, a)} />
                   </button>
                 {:else if a.kind === 'chat'}
@@ -312,7 +329,7 @@
                     </span>
                   </button>
                 {:else}
-                  <div class="u-att u-file">
+                  <div class="u-att u-file" use:dragOut={() => attDragSrc(a)}>
                     <span class="u-file-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/></svg></span>
                     <span class="u-file-name">{a.name}</span>
                   </div>
@@ -380,6 +397,22 @@
               {#if seg.cancelled}<span class="steer-tag">{t('已撤回')}</span>
               {:else if !seg.read && m.status === 'streaming'}<span class="steer-tag">{t('插话 · 等 Claude 做完这一步就读')}</span>{/if}
             </div>
+          {:else if seg.kind === 'media'}
+            <div class="media">
+              {#if seg.status === 'generating'}
+                <div class="media-load"><ClaudeLogo anim="shimmer" size={18} /><span>{mediaIng(seg.mediaKind, seg.elapsed ? ` · ${seg.elapsed}s` : '')}</span></div>
+              {:else if seg.status === 'error'}
+                <div class="media-err sel-text">{mediaErr(seg.mediaKind, tr(seg.error || ''))}</div>
+              {:else if seg.mediaKind === 'image'}
+                <!-- dataUrl 优先（Claude 发的截图内嵌 data: URI，零网络/零跨源，必显示）；否则走媒体库 URL，
+                     加载失败自救（局域网→隧道、重试、换原图），见 ChatMediaImage -->
+                <ChatMediaImage id={seg.id} dataUrl={seg.dataUrl} prompt={seg.prompt} />
+              {:else if seg.mediaKind === 'video'}
+                <video class="media-video" src={mediaUrl(seg.id) + '#t=0.1'} controls preload="metadata" playsinline onerror={mediaImgFallback}></video>
+              {:else}
+                <audio class="media-audio" src={mediaUrl(seg.id)} controls preload="metadata" onerror={mediaImgFallback}></audio>
+              {/if}
+            </div>
           {:else if seg.kind === 'plan'}
             <!-- 计划审批卡：未批=批准 / 修改 / 拒绝；已处理=只读（结论 + 可展开的计划），常驻历史 -->
             <PlanCard {seg} live={m.status === 'streaming'} />
@@ -423,11 +456,11 @@
           <div class="a-atts">
             {#each m.attachments as a}
               {@const sub = attSub(a)}
-              <div class="att-card">
+              <div class="att-card" use:dragOut={() => attDragSrc(a)}>
                 {#if canOpenFolder(a)}
                   <button class="att-hit" aria-label={t('在工作空间中打开 {name}', { name: a.name })} onclick={() => openAttFolder(a)}></button>
                 {:else if a.kind === 'folder'}
-                  <a class="att-hit" href={a.downloadUrl} download={a.name + '.zip'} aria-label={a.name}></a>
+                  <a class="att-hit" href={a.downloadUrl} aria-label={a.name} onclick={(e) => interceptSave(e, { url: a.downloadUrl, name: a.name + '.zip' })}></a>
                 {:else}
                   <button class="att-hit" aria-label={a.name} onclick={() => openAtt(a)}></button>
                 {/if}
@@ -444,7 +477,7 @@
                   </div>
                 </div>
                 <div class="att-ctrl">
-                  <a class="att-dl" href={a.downloadUrl} download={a.kind === 'folder' ? a.name + '.zip' : a.name} aria-label="{dlLabel} {a.name}"><span class="att-dl-bg"></span>{dlLabel}</a>
+                  <a class="att-dl" href={a.downloadUrl} aria-label="{dlLabel} {a.name}" onclick={(e) => interceptSave(e, { url: a.downloadUrl, name: a.kind === 'folder' ? a.name + '.zip' : a.name, path: a.kind === 'folder' ? '' : a.path })}><span class="att-dl-bg"></span>{dlLabel}</a>
                 </div>
               </div>
             {/each}
@@ -478,7 +511,7 @@
 
         {#if i === chat.messages.length - 1}
           <div class="turn-foot">
-            <span class="logo-fly" in:fade|global={{ duration: 260 }}>{#if m.status === 'streaming' && prefs.claudeMark === 'sprite'}<ClaudeSpriteMark phase={spritePhase(m)} box={26} />{:else if m.status === 'streaming' && prefs.claudeMark !== 'classic'}{@const ma = markActivity(m)}<ClaudeWorkingMark activity={ma.activity} state={ma.state} size={24} box={26} />{:else}<ClaudeLogo anim={starState(m)} size={26} interactive />{/if}</span>
+            <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'continue', sessionId: session.id, model: settings.model, effort: settings.effort }) }} in:fade|global={{ duration: 260 }}>{#if m.status === 'streaming' && prefs.claudeMark === 'sprite'}<ClaudeSpriteMark phase={spritePhase(m)} box={26} />{:else if m.status === 'streaming' && prefs.claudeMark !== 'classic'}{@const ma = markActivity(m)}<ClaudeWorkingMark activity={ma.activity} state={ma.state} size={24} box={26} />{:else}<ClaudeLogo anim={starState(m)} size={26} interactive />{/if}</span>
             {#if m.status === 'streaming'}
               <!-- 官方 desktop 同款状态语法：时长 · tokens · 状态文字。悬停（等后台任务）拼第三段
                    作挂起提示——与真结束（无状态行）一眼可分；这一段可点，直开右侧工作台「任务」
@@ -567,6 +600,11 @@
 
   /* 工具行 / 分组 / Agent 卡 / Workflow 卡的样式全在 claude/ToolGroup.svelte 及其子组件里 */
 
+  .media { margin: 8px 0 12px; }
+  .media-load { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; padding: 6px 0; }
+  .media-err { color: var(--err, #d98a6a); font-size: 14px; padding: 6px 0; }
+  .media-video { max-width: 100%; border-radius: 12px; display: block; }
+  .media-audio { width: 100%; margin-top: 4px; }
 
   /* —— 助手产物附件卡：claude.ai 官网 100% 同款（2026-07-17 Edge 真站逐值提取）——
      卡：radius 8 / border .5px（基 15% 描边，hover 30%）/ hover 底=bg-000 50%，300ms 标准缓动。

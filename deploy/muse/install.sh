@@ -147,8 +147,11 @@ if [ "$WANT_DIMENSIO" = 1 ]; then
   as_svc npm --prefix harness ci --omit=dev --no-audit --no-fund
   as_svc npm --prefix harness/web run build
 else
-  rm -rf "$REPO/harness/node_modules"   # dimensio 的「能跑」判定看它：没选就别留着
+  rm -rf "$REPO/harness/node_modules"   # 没选就别留着
 fi
+# 没选 dimensio：bridge 把这个扩展当没装（它的「能跑」判定不看 node_modules）
+MODULES_SKIP_LINE=""
+[ "$WANT_DIMENSIO" = 1 ] || MODULES_SKIP_LINE="Environment=BRIDGE_MODULES_SKIP=dimensio"
 as_svc npm --prefix web ci --no-audit --no-fund
 as_svc npm --prefix web run build
 
@@ -197,7 +200,10 @@ User=$SVC_USER
 Group=$SVC_USER
 WorkingDirectory=$REPO
 Environment=NODE_ENV=production
-Environment=BRIDGE_EDITION=server
+Environment=BRIDGE_DEPLOY=server
+# 构建渠道：公开版（不提供 Codex 扩展；bridge 的 modules/registry.mjs）
+Environment=BRIDGE_EDITION=public
+${MODULES_SKIP_LINE}
 Environment=BRIDGE_SUPERVISED=systemd
 Environment=BRIDGE_DATA_ROOT=$DATA
 Environment=HOME=$DATA/home

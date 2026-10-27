@@ -218,7 +218,7 @@ export default {
   // —— 独立窗口 / 分屏格（SoloPage）——
   'claude::对话': 'Session',
   'claude::新对话': 'New session',
-  'claude::先在主窗口登录 bridge，再把对话拖出来。': 'Sign in to Muse Bridge in the main window, then drag the session out again.',
+  'claude::先在主窗口登录 bridge，再把对话拖出来。': 'Sign in to The Bridge in the main window, then drag the session out again.',
 
   // —— 聊天快照页（SnapPage，/c/<token>）——
   '快照已被关停': 'Snapshot shut down',
@@ -249,20 +249,13 @@ export default {
   '连接中断': 'Connection lost',
   '连接超时；任务可能仍在后台运行，网络恢复后会自动补全': 'Connection timed out. The task may still be running in the background. The rest loads automatically when you’re back online.',
   '连接超时；任务可能仍在后台运行，请稍后重新打开会话查看结果': 'Connection timed out. The task may still be running in the background. Reopen the session later to see the result.',
-  '离线：连不上电脑，无法发送（恢复网络后会自动重连，届时重试即可）': 'Offline: can’t reach your computer. Messages can’t be sent. Muse Bridge reconnects automatically when you’re back online. Try again then.',
+  '离线：连不上电脑，无法发送（恢复网络后会自动重连，届时重试即可）': 'Offline: can’t reach your computer. Messages can’t be sent. The Bridge reconnects automatically when you’re back online. Try again then.',
+  '离线：连不上服务器，无法发送（恢复网络后会自动重连，届时重试即可）': 'Offline: can’t reach the server. Messages can’t be sent. The Bridge reconnects automatically when you’re back online. Try again then.',
   '当前无法回滚': 'Can’t rewind right now',
   '进程结束时中止': 'Stopped when the process ended',
   '回不到那条消息，请用消息上的回滚按钮': 'Couldn’t go back to that message. Use Rewind on the message instead.',
   '这一轮还在生成，等它结束再重试': 'Claude is still responding. Try again after this turn finishes.',
   '先发送或清空输入框里的草稿，再点「编辑并重试」': 'Send or clear your draft first, then select “Edit prompt and retry” again.',
-  // —— 快照对话直链页（/q） ——
-  '当前身份不支持快照对话': 'Snapshot chat isn’t available for this account',
-  '登录未生效': 'Sign-in didn’t take effect',
-  '换一只全新的快照桶（旧的留在盘上）': 'Start a fresh snapshot (the old one stays on disk)',
-  '一次性的空工作空间 · 不属于任何项目、不共用任何记忆 · 左上角可换一只新的': 'A disposable, empty workspace · Not part of any project, no shared memory · Start a fresh one from the top left',
-  '这条链接需要先登录 bridge。': 'Sign in to Muse Bridge to open this link.',
-  '用管理员令牌登录': 'Sign in with admin token',
-  '打不开快照对话': 'Couldn’t open snapshot chat',
   // —— 引用对话（侧栏把一条会话拖进另一个对话，lib/chatQuote.js） ——
   'claude::引用到这个对话': 'Quote in this chat',
   'claude::引用到新对话': 'Quote in a new chat',
@@ -352,6 +345,7 @@ export default {
   '提交更改': 'Commit changes',
   // —— 号池智能路由（chat 内核 chat.svelte.js）——
   '已自动切到「{to}」（{reason}）': 'Switched to “{to}” automatically ({reason})',
+  '刚才的账号额度用尽，已自动换号。请从中断的地方继续。': 'The previous account hit its usage limit, so The Bridge switched accounts. Please continue from where you left off.',
   // —— 限额卡（claude/LimitCard.svelte，官方 /code 页 Session limit reached 卡原文）——
   '已达到 5 小时限额': 'Session limit reached',
   '已达到每周限额': 'Weekly limit reached',

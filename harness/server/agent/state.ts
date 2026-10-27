@@ -71,6 +71,9 @@ export interface AgentStateInit {
   // Main agents persist durable knowledge and must audit it. Read-only helper
   // agents have no memory tools, so their loop explicitly disables this gate.
   memoryAuditRequired?: boolean;
+  // D5：这台机器有没有浏览器可用（主会话 = 建会话时 Browser 工具注册了没有；子 agent 自己没有 Browser，跟父会话）。
+  // false = playbook 网页章给 curl 版、桌面 / 安卓章不给。不给 = 有（测试与旧调用方照旧）。
+  browser?: boolean;
 }
 
 export interface AssistantParts {
@@ -261,7 +264,7 @@ export class AgentState {
 
   totalInputTokens = 0;
   totalOutputTokens = 0;
-  // Q4（K11 的用量部分）：输入里命中缓存的读取量 / 写入缓存的量（provider 回报了才有；llama.cpp 兼容服务回报复用量）。
+  // Q4（K11 的用量部分）：输入里命中缓存的读取量 / 写入缓存的量（provider 回报了才有；本机 llama.cpp 回报复用量）。
   totalCacheReadTokens = 0;
   totalCacheWriteTokens = 0;
   lastContextTokens = 0;
@@ -336,6 +339,7 @@ export class AgentState {
   // Mandatory cross-session-memory audit. A normal run cannot finish until an
   // explicit MemoryAudit checkpoint; full context compaction uses the same gate.
   readonly memoryAuditRequired: boolean;
+  readonly browser: boolean;
   memoryAuditCompleted = false;
   memoryAuditAutoSkipped = false;
   memoryChangedSinceAudit = false;
@@ -369,6 +373,7 @@ export class AgentState {
     this.storeImageAsset = init.storeImageAsset;
     this.compactionArchive = init.compactionArchive;
     this.memoryAuditRequired = init.memoryAuditRequired ?? true;
+    this.browser = init.browser !== false;
     this.memoryAuditCompleted = !this.memoryAuditRequired;
     this.preCompactAuditPassed = !this.memoryAuditRequired;
     // C5：Skill 同名不重复注入——正文此刻还在转录里（加载过、没被整段压缩掉）就只提示「上面已有」

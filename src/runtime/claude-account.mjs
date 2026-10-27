@@ -74,6 +74,12 @@ export function listAccounts() {
   }));
 }
 
+// 服务端内部用（号池逐号用量，account-usage.mjs；配了 overlay 用量来源时交给它）：带完整 token，绝不直接回给前端。
+export function listAccountsWithTokens() { return accounts.map((a) => ({ id: a.id, token: a.token })); }
+
+// token 属于哪个号（无缝换号时 CLI env 里固定的那个号：它直连官方的 OAuth 接口按这个号算）。
+export function accountIdForToken(tok) { const a = tok ? accounts.find((x) => x.token === tok) : null; return a ? a.id : ''; }
+
 export function setActive(id) {
   if (!accounts.some((a) => a.id === id)) return { error: '无此账号' };
   activeId = id; persist();
@@ -89,7 +95,7 @@ export function addAccount({ label, token } = {}) {
   // S4：当前激活的号没有 token（向导里跳过了 Claude、播种出来的空「默认账号」），加了号却不激活，
   // Claude 照样没有认证——这时直接把新号设为激活号。
   // 但留空令牌的号 = 沿用本机登录态（~/.claude 凭据，见文件头的播种与 claudeEngineEnv）：本机真 claude login 过，
-  // 空令牌也是在用订阅，别把全局激活号静默切走（计费跟着换号）。
+  // 空令牌也是在用订阅，加第二个号多半是为了自动换号，别把全局激活号静默切走（计费跟着换号）。
   // 例外：此刻在用 config 里的按量 key（apiKeyMode 'config'）——加订阅号就是要改用订阅，照旧激活。
   const act = getActiveAccount();
   const activated = !act || (!act.token && (!localLoginToken() || apiKeyMode() === 'config'));
@@ -107,7 +113,7 @@ export function updateAccount(id, { label, token } = {}) {
   return { ok: true };
 }
 
-// 调整账号列表顺序（控制台里上移 / 下移）。delta：-1 上移、1 下移。
+// 列表顺序 = 智能路由「回到首选号」的优先级（account-router.mjs）。delta：-1 上移、1 下移。
 export function moveAccount(id, delta) {
   const i = accounts.findIndex((a) => a.id === id);
   if (i < 0) return { error: '无此账号' };
@@ -129,7 +135,7 @@ export function deleteAccount(id) {
   return { ok: true, active: activeId };
 }
 
-// 本机 claude login 留下的凭据。
+// 本机 claude login 留下的凭据（同 account-usage.loginToken；那边 import 了本模块，这里不反向 import 免得成环）。
 // macOS 的凭据在钥匙串里、读不到，按「没登录」算（加号照旧自动激活，同改动前）。
 function localLoginToken() {
   const dir = String(process.env.CLAUDE_CONFIG_DIR || '').trim() || path.join(os.homedir(), '.claude');
@@ -149,9 +155,14 @@ export function apiKeyMode() {
   return API_KEY_SOURCE === 'desktop' ? 'desktop' : API_KEY_SOURCE === 'env' ? 'env' : '';
 }
 
+// 号池「会话中无缝换号」的上游代理（claude-upstream.mjs 启动时注册；不反向 import，免得成环）。
+let upstreamHook = null;
+export function setEngineUpstream(fn) { upstreamHook = fn; }
+
 // 每次跑 Claude query() 时构造子进程 env：叠加当前激活账号 token + 沙箱 configDir。
 // 返回 null 表示无需覆盖（configDir 为空且激活账号无 token）——此时让子进程直接继承
 // process.env（含 boot 时设的默认 token），行为与切换功能上线前一致。
+// 无缝换号开着时改让 CLI 的模型请求走本机代理：token 由代理逐请求现换，env 里放一个固定的号。
 // 成员身份（ctx.sandbox：注册用户、聊天快照）不再继承服务进程的全部环境：没有命令行的走白名单（家目录 / 临时目录
 // 指到他自己的目录），有命令行的按名字剔掉凭据；CLI 认证要的那一份单独带上（runtime/member-boundary.mjs，开源路线 S2-5）。
 export function claudeEngineEnv(ctx) {
@@ -159,10 +170,18 @@ export function claudeEngineEnv(ctx) {
   const env = ctx && ctx.sandbox ? memberEngineBase(ctx) : { ...process.env };
   if (ctx && ctx.sandbox) touched = true;
   if (ctx && ctx.configDir) { env.CLAUDE_CONFIG_DIR = ctx.configDir; touched = true; }
-  const tok = activeToken();
+  const up = upstreamHook ? upstreamHook() : null;
+  const tok = up ? up.token : activeToken();
   if (tok) { env.CLAUDE_CODE_OAUTH_TOKEN = tok; touched = true; }
   // config.json 的 anthropicApiKey 只在启动时号池没有令牌才注入（config/index.mjs）；之后号池里有了激活号的令牌，
   // 就别再把它带给 CLI——CLI 见到 ANTHROPIC_API_KEY 会关掉 OAuth，订阅号白加、照样按量计费。
   if (tok && API_KEY_FROM_CONFIG && env.ANTHROPIC_API_KEY) { delete env.ANTHROPIC_API_KEY; touched = true; }
+  if (up) {
+    env.ANTHROPIC_BASE_URL = up.baseUrl;
+    env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL = '1';
+    // 出站代理（net-proxy.mjs）开着时，CLI 到本机代理这一跳不能再绕去 Clash。
+    for (const k of ['NO_PROXY', 'no_proxy']) if (!/(^|,)\s*127\.0\.0\.1\s*(,|$)/.test(env[k] || '')) env[k] = (env[k] ? env[k] + ',' : '') + '127.0.0.1';
+    touched = true;
+  }
   return touched ? env : null;
 }

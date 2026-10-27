@@ -30,8 +30,10 @@ export const VENDORS: Record<string, Vendor> = {
   zhipu: { id: "zhipu", name: "GLM", company: t("智谱 · Z.ai"), color: "#2b62ff" },
   kimi: { id: "kimi", name: "Kimi", company: t("月之暗面"), color: "#1783FF" },
   mimo: { id: "mimo", name: "MiMo", company: t("小米 · Xiaomi"), color: "#ff6900" },
+  local: { id: "local", name: tc("dimensio", "本机"), company: t("llama.cpp · 离线"), color: "#2ea86a" },
 };
-export const VENDOR_ORDER = ["anthropic", "openai", "gemini", "qwen", "zhipu", "kimi", "mimo"];
+// 本机排在最后：它是唯一不过网的一家，语义上跟前几家不同类。
+export const VENDOR_ORDER = ["anthropic", "openai", "gemini", "qwen", "zhipu", "kimi", "mimo", "local"];
 
 export function vendorOf(id: string | undefined | null): Vendor {
   return VENDORS[id ?? "anthropic"] ?? VENDORS.anthropic;

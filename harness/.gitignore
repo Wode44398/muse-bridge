@@ -11,11 +11,11 @@ workspace/*
 
 # Agent run state: transcripts, checkpoints, and the shadow git used for rollback.
 sessions/
-# Throwaway sessions/workspace of a side-by-side verification instance (e.g. PORT=8801).
+# 旁路验证实例（PORT=8801）的会话与工作空间——只是本机验证用的一次性数据。
 .ui-test-sessions/
 .ui-test-workspace/
 
-# Model memory is per-installation data and never committed.
+# 模型记忆全是本机数据，不入库（2026-09-27 起连当初那几篇种子笔记也移出了仓库）。
 memory/*.md
 memory/workspaces/
 memory/.workspace-isolation-migrated
@@ -25,14 +25,22 @@ memory/global/
 # Rebuildable project profile/module/test/contracts/health/vector cache (workspace-scoped).
 knowledge/
 
+# Android build output + the transient batch build-apk.ps1 writes.
+android/.gradle/
+android/app/build/
+_gradle-build.cmd
+# assets/www is the built frontend, copied in from web/dist by build-apk.ps1.
+android/app/src/main/assets/
+
+# Local tool installs (Python venvs etc. — recreated on demand)
+tools/*/venv/
+
 # Last-chosen provider/model persisted at runtime (server/config.ts)
 runtime-config.json
 runtime-config.json.tmp
-projects.json
-projects.json.tmp
 # 自定义模型服务（含加密的 API key）
 custom-providers/
 
-# Quick chat: pointer to the current throwaway bucket (the bucket itself lives under ~/.dimensio/quick)
+# 快照对话：当前那只一次性桶的指针（桶本身在 ~/.dimensio/quick 下，不在仓库里）
 quick.json
 quick.json.tmp

@@ -1212,6 +1212,12 @@ export async function initPrMonitor(ctx) {
   } catch (e) { console.log('[pr] init failed:', e && e.message); }
 }
 
+// 插件停用（设置 › 功能扩展 关掉「拉取请求」）：停掉后台扫描。台账不动，再打开照常接着盯。
+export function stopPrMonitor() {
+  if (timer) { clearInterval(timer); timer = null; }
+  background = false;
+}
+
 // —— 单测用 ——
 export async function _sweepForTest(ctx, sid) { rememberCtx(ctx); const s = slot(ctx, sid, false); if (s) await checkSession(ctx, sid, s); return slot(ctx, sid, false); }
 export function _resetPrMonitor() {

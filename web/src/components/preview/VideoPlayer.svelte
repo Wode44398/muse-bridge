@@ -3,25 +3,32 @@
   //
   // 播放内核 = 四级回退链（quality × transport）：
   //   ① 原画-MSE   /api/file/stream&remux=1（视频零转码全画质）+ msePump 全速深缓冲 —— 默认主路径。
-  //      <video src> 的取流被 Chromium 按播放进度限速（实测只拉 ~8MB/s，下载器能跑 90MB/s），
+  //      <video src> 的取流被 Chromium 按播放进度限速（实测 LAN 只拉 ~8MB/s，下载器能跑 90MB/s），
   //      120Mbps 4K 原片喂不饱必卡；MSE 自己一根 fetch 全速拉流灌 SourceBuffer，网络多快缓多快。
   //   ② 原画-直连  <video src=/api/file>（本地缓存 blob 命中时优先走这条：0 网络最快）
   //   ③ 流畅-MSE   /api/file/stream（服务端转码 H.264≤1080p ~6Mbps）+ msePump
   //   ④ 流畅-直连  <video src=stream&t=>（换 src 续播，tOff 偏移时间轴）
-  //   任一级失败（解码/网络/配额）自动降级下一级。
+  //   任一级失败（解码/网络/配额）自动降级下一级；LAN 死链先重写成隧道 URL 原级重试一次。
   //   MSE 级 timestampOffset 映射绝对时间轴，currentTime/buffered 全真值；只有 ④ 需要 tOff 换算。
   //
   // YouTube 手势：双击左右 ±10s（连击累计 + 半月 ripple）、长按 2 倍速（锐利震动 + 2x chip，
   // 松手恢复）、轻点显隐控件、向下滑动关闭（联动壳调暗背景）、进度条拖动出时间气泡。
   // 倍速/画质/下载收进右上 ⋮ 设置菜单（MediaViewer 的 ⋮ 调 api.openMenu 打开底部弹层）。
-  // 横屏全屏：requestFullscreen + 方向锁。
+  // 横屏全屏：apk 走原生桥 AndroidStore.setOrientation（转屏+沉浸）；网页走 requestFullscreen+方向锁。
   import { onMount, onDestroy } from 'svelte';
   import { resolveSrc, hasBlob } from '../../lib/mediaCache.js';
+  import { mediaFallbackUrl } from '../../lib/server.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { createMsePump, isMseSupported } from '../../lib/msePump.js';
+  import { nativeWorkspaceSaveAs } from '../../lib/nativeDesktop.js';
+  import { interceptSave, saveLabel } from '../../lib/save.js';
   import { t, tc } from '../../lib/i18n.js';
 
   let { item, onClose, onDragProgress, api = $bindable(null) } = $props();
+  function saveNative() {
+    closeMenu();
+    if (item.nativeLocation && item.saveTarget?.rel) nativeWorkspaceSaveAs(item.saveTarget.rel, item.nativeLocation).catch(() => {});
+  }
 
   let videoEl = $state();
   let src = $state(''), revoke = () => {};
@@ -40,13 +47,14 @@
   let stepAt = 0;                     // 本级起播位置（早期失败时接力用）
   let probeData = $state(null);       // /stream?probe=1：{duration,mseCodecs,hasAudio,...}
   let pump = null;                    // msePump 控制器（MSE 级）
-  let cacheDowngraded = false;
+  let lanRetried = false, cacheDowngraded = false;
+  let fixedUrl = null, fixedStreamUrl = null;   // LAN 死链重写后的隧道版
   let pendingSeek = -1;               // 直连级等 metadata 再应用的位置
   const qualityNow = $derived(step.startsWith('smooth') ? 'smooth' : 'orig');
   const isMse = $derived(step.endsWith('mse'));
 
-  const rawUrl = () => item.url;
-  const rawStream = () => item.streamUrl;
+  const rawUrl = () => fixedUrl || item.url;
+  const rawStream = () => fixedStreamUrl || item.streamUrl;
 
   const SMOOTH_V = 'avc1.64002A';   // 服务端转码钉死 high@4.2
   function mimeFor(s) {
@@ -99,8 +107,9 @@
     return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0');
   };
 
-  // —— 触觉（navigator.vibrate，不支持的浏览器静默）——
+  // —— 触觉（apk 原生桥优先：EFFECT_HEAVY_CLICK 那种短促锐利；网页兜底 navigator.vibrate）——
   function haptic(kind) {
+    try { if (window.AndroidStore?.haptic) { window.AndroidStore.haptic(kind); return; } } catch {}
     try { navigator.vibrate?.(kind === 'heavy' ? 30 : kind === 'tick' ? 8 : 15); } catch {}
   }
 
@@ -136,10 +145,16 @@
     }
   }
 
-  // 这一级失败就降级到下一可用级，全灭出错误 UI。
+  // LAN 死链先原级重试（重写成隧道 URL），不行降级下一可用级，全灭出错误 UI。
   function failStep(s) {
     if (dead || step !== s || errored) return;
     const at = effCur > 0.5 ? effCur : stepAt;
+    if (!lanRetried) {
+      lanRetried = true;
+      const fu = mediaFallbackUrl(item.url);
+      const fs = item.streamUrl ? mediaFallbackUrl(item.streamUrl) : null;
+      if (fu !== item.url || (fs && fs !== item.streamUrl)) { fixedUrl = fu; fixedStreamUrl = fs; runStep(s, at); return; }
+    }
     const i = STEPS.indexOf(s);
     for (let j = i + 1; j < STEPS.length; j++) if (stepOk(STEPS[j])) { runStep(STEPS[j], at); return; }
     errored = true; loading = false;
@@ -231,24 +246,32 @@
   function trackUp(e) { if (!scrubbing) return; scrubbing = false; seekTo(scrubAt(e.clientX)); armHide(); }
 
   // —— 横屏全屏 ——
-  // Fullscreen API + 方向锁。
+  // apk：原生桥转屏 + 沉浸（overlay 本来就满屏，缺的只是「横过来」）；网页：Fullscreen API + 方向锁。
+  const nativeOrient = () => { try { return typeof window.AndroidStore?.setOrientation === 'function'; } catch { return false; } };
   let fsOn = $state(false);
   function toggleFs() {
-    try {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else {
-        const p = wrap?.requestFullscreen?.();
-        if (p && p.then) p.then(() => { try { screen.orientation?.lock?.('landscape').catch(() => {}); } catch {} }).catch(() => {});
-      }
-    } catch {}
+    if (nativeOrient()) {
+      fsOn = !fsOn;
+      try { window.AndroidStore.setOrientation(fsOn ? 'landscape' : 'auto'); } catch {}
+    } else {
+      try {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else {
+          const p = wrap?.requestFullscreen?.();
+          if (p && p.then) p.then(() => { try { screen.orientation?.lock?.('landscape').catch(() => {}); } catch {} }).catch(() => {});
+        }
+      } catch {}
+    }
     showControls();
   }
   function onFsChange() {
+    if (nativeOrient()) return;
     fsOn = !!document.fullscreenElement;
     if (!fsOn) { try { screen.orientation?.unlock?.(); } catch {} }
   }
   function restoreOrientation() {
-    if (document.fullscreenElement) { try { document.exitFullscreen(); } catch {} }
+    if (fsOn && nativeOrient()) { try { window.AndroidStore.setOrientation('auto'); } catch {} fsOn = false; }
+    else if (document.fullscreenElement) { try { document.exitFullscreen(); } catch {} }
   }
 
   // —— 双击左右 ±10s（连击累计：指示存活期内同侧单击继续累加，YouTube 同款）——
@@ -349,7 +372,7 @@
       <div class="vp-err">
         <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8l6 4-6 4V8Z"/><circle cx="12" cy="12" r="9.2"/></svg>
         <p>{t('视频加载失败')}</p>
-        <button onclick={() => { cacheDowngraded = false; load(); }}>{t('重试')}</button>
+        <button onclick={() => { cacheDowngraded = false; lanRetried = false; load(); }}>{t('重试')}</button>
       </div>
     {/if}
 
@@ -440,10 +463,17 @@
             </button>
           {/if}
           {#if item.downloadHref}
-            <a class="vp-mrow" href={item.downloadHref} download={item.name} onclick={() => closeMenu()}>
+            {#if item.nativeLocation && item.saveTarget?.rel}
+            <button class="vp-mrow" onclick={saveNative}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg>
-              <span>{t('下载')}</span>
+              <span>{t('另存为…')}</span>
+            </button>
+            {:else}
+            <a class="vp-mrow" href={item.downloadHref} download={item.name} onclick={(e) => { closeMenu(); interceptSave(e, { url: item.downloadHref, name: item.name, path: item.absPath || '' }); }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg>
+              <span>{saveLabel(t('下载'))}</span>
             </a>
+            {/if}
           {/if}
         {:else if menu === 'rate'}
           <button class="vp-mrow head" onclick={() => (menu = 'main')}>

@@ -470,7 +470,7 @@ test("a Remember that precedes the same-turn checkpoint still finishes there", a
         name: "Remember",
         args: {
           title: "reply language",
-          content: "用户要求一律用中文回复。",
+          content: "维护者要求一律用中文回复。",
           description: "用户对回复语言的长期偏好。",
           type: "user",
           topic: "user.response-language",

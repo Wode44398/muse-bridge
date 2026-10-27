@@ -3,7 +3,7 @@
 // 每个能力登记成一条「操作」：名字、说明、参数、权限、处理函数。三处都从这一张表出：
 //   ① HTTP：GET|POST /agent/v1/<操作名>（agent-api/http.mjs）；
 //   ② 手册：接口参考与 /agent 首页的操作目录（agent-api/manual.mjs 现场渲染）；
-//   ③ Muse Bridge 自己的 Claude 会话：进程内 MCP 的 mcp__bridge__call 工具（mcp/bridge-tools.mjs）。
+//   ③ bridge 自己的 Claude 会话：进程内 MCP 的 bridge_call 工具（mcp/bridge-tools.mjs）。
 // 所以加一个能力只写一处，说明不会和实现脱节。处理函数只做薄封装，业务逻辑留在原模块里。
 //
 // 操作定义：
@@ -14,11 +14,12 @@
 //             type ∈ string | integer | number | boolean | object | array | any
 //   access    'read' 只读 | 'write' 会改东西 | 'danger' 删除/花钱/不可撤回——调用方应先征得用户同意
 //   need      额外要求：能力名（principal.mjs 的 can()，如 'workspace.shell'）或 'agent:<id>'（该 agent 对调用者开着）
-//   slow      可能跑很久（等对话）：HTTP 层会先回 200 再定期写空白保活
+//   slow      可能跑很久（等对话、生成视频）：HTTP 层会先回 200 再定期写空白保活
 //   handler   async (ctx, args, env) => 数据（普通 JSON 对象）；出错抛 OpError
 //   example   可选：一组示例参数（手册里展示）
 
 import { can } from '../runtime/principal.mjs';
+import { pluginOn } from '../plugins/state.mjs';
 
 const OPS = new Map();
 const GROUPS = new Map();   // group -> { title, desc }
@@ -37,8 +38,12 @@ const STATUS = { bad_args: 400, unauthorized: 401, forbidden: 403, not_found: 40
 
 export function defineGroup(id, title, desc = '') { GROUPS.set(id, { id, title, desc }); }
 
+// 插件停用时撤掉它登记的操作 / 组（见 plugins/host.mjs 的 ctx.agentOp）。只删同一个对象，别误删后来同名的。
+export function removeOp(op) { if (op && OPS.get(op.name) === op) OPS.delete(op.name); }
+export function removeGroup(id) { GROUPS.delete(id); }
+
 export function defineOp(spec) {
-  if (!spec || !/^[a-z]+(\.[a-z_]+)*$/.test(spec.name || '')) throw new Error('bad op name: ' + (spec && spec.name));
+  if (!spec || !/^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/.test(spec.name || '')) throw new Error('bad op name: ' + (spec && spec.name));
   if (OPS.has(spec.name)) throw new Error('duplicate op: ' + spec.name);
   if (typeof spec.handler !== 'function') throw new Error('op without handler: ' + spec.name);
   const op = {
@@ -66,7 +71,9 @@ export const apiAllowed = (ctx) => !!ctx && (ctx.kind === 'admin' || ctx.kind ==
 export function whyNot(ctx, op) {
   if (!apiAllowed(ctx)) return '需要登录身份（主机或账号）';
   for (const n of op.need || []) {
-    if (n.startsWith('agent:')) {
+    if (n.startsWith('plugin:')) {
+      if (!pluginOn(n.slice(7))) return '这项功能在这台服务器上关着（设置 › 扩展 › 功能扩展里可以打开）';
+    } else if (n.startsWith('agent:')) {
       const id = n.slice(6);
       if (!(ctx.agents || []).includes(id)) return `「${id}」对你没开（没装、被关了，或管理员没给你勾）`;
     } else if (!can(ctx, n)) {
@@ -79,6 +86,7 @@ const NEED_LABEL = {
   'workspace.shell': '需要有命令行权限的身份（主机或完全信任档）',
   'server.manage': '只有服务器主机能用',
   'users.manage': '只有服务器主机能用',
+  'devices.manageAll': '只有服务器主机能用',
   'fs.anyPath': '只有服务器主机能用',
 };
 

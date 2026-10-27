@@ -1,8 +1,8 @@
 <script>
-  // 自定义音频播放器（查看器内"正在播放"）。替换裸 <audio controls>：
+  // 自定义音频播放器（Vertex 语音/音乐内联 + 查看器内"正在播放"共用）。替换裸 <audio controls>：
   //   · 波形可视化（Web Audio 解码抽峰，按 cacheKey 内存缓存，再开不重解码）+ 点击/拖动波形 seek
   //   · 大播放/暂停、当前/总时长；本地缓存接入（mediaCache）听过即本地秒播
-  //   · 明/暗双配色（dark：查看器深底；浅：浅色宿主）；解码失败/超大文件回落纯进度条仍可用
+  //   · 明/暗双配色（dark：查看器深底；浅：Gemini 面板）；解码失败/超大文件回落纯进度条仍可用
   import { onMount, onDestroy } from 'svelte';
   import { getBlob, putBlob } from '../../lib/mediaCache.js';
   import { t } from '../../lib/i18n.js';

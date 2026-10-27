@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自绘四芒软星（中性、不属于任何一家）：多模型聚合的壳。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#F5F1E8"
+        android:pathData="M54,30 C56.5,42 60,47.5 66,50.5 C60,53.5 56.5,59 54,71 C51.5,59 48,53.5 42,50.5 C48,47.5 51.5,42 54,30 Z" />
+    <path
+        android:fillColor="#D97757"
+        android:pathData="M73,60 C74.2,65.4 75.8,67.9 78.5,69.3 C75.8,70.7 74.2,73.2 73,78.5 C71.8,73.2 70.2,70.7 67.5,69.3 C70.2,67.9 71.8,65.4 73,60 Z" />
+</vector>

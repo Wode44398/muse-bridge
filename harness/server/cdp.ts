@@ -3,18 +3,33 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { browserEnv, findBrowser, reapProfileProcesses, reapProfileProcessesSync } from "./headless.ts";
+import {
+  browserEnv,
+  clearBrowserLaunchFailure,
+  findBrowser,
+  noteBrowserLaunchFailure,
+  reapProfileProcesses,
+  reapProfileProcessesSync,
+} from "./headless.ts";
 import { controlPlaneUrlBlock } from "./control-plane.ts";
 import { desktopHostInfo, resolveCdpBase, type DesktopHost } from "./desktop-host.ts";
 import { killTree } from "./tools/bash.ts";
 import { registerResource } from "./resources.ts";
-import { edgeLink } from "./edge-link.ts";
+import { browserKindLabel, edgeHub, edgeLink } from "./edge-link.ts";
 
-// Edge 扩展模式里页面 / 浏览器频道的「地址」：openSocket 看到这个前缀就走扩展链路而不是真 WebSocket
+// Edge 扩展模式里页面 / 浏览器频道的「地址」：edge-link:<浏览器种类>:<频道>。openSocket 看到这个前缀就走扩展链路而不是真 WebSocket
 const EDGE_SCHEME = "edge-link:";
 
+function edgeUrl(kind: string, ch: string): string {
+  return `${EDGE_SCHEME}${kind}:${ch}`;
+}
+
 function openSocket(url: string): WebSocket {
-  if (url.startsWith(EDGE_SCHEME)) return edgeLink().channel(url.slice(EDGE_SCHEME.length)) as unknown as WebSocket;
+  if (url.startsWith(EDGE_SCHEME)) {
+    const rest = url.slice(EDGE_SCHEME.length);
+    const i = rest.indexOf(":");
+    return edgeLink(rest.slice(0, i)).channel(rest.slice(i + 1)) as unknown as WebSocket;
+  }
   return new WebSocket(url);
 }
 
@@ -50,6 +65,12 @@ export interface NetEntry {
   state: "pending" | "done" | "failed";
   error?: string;
 }
+
+// D5：本机没有能用的内置浏览器时，Browser 启动失败的报错里给的去路（只连着用户扩展 / 桌面壳宿主残留时工具仍然注册着）
+const NO_BUILTIN_BROWSER_HINT =
+  "Do not retry Browser(navigate) in this conversation: verify pages over HTTP with Bash + curl and Preview(action:\"logs\") instead, " +
+  "and say in your final answer that the UI was not exercised in a real browser. " +
+  "Browser(action:\"edge\") still drives the user's own Edge/Chrome if its dimensio extension is connected.";
 
 const MAX_CONSOLE = 400;
 const MAX_NET = 400;
@@ -254,6 +275,8 @@ export class CdpSession {
   // Edge 扩展模式：驱动的是用户自己的 Edge（已登录的真浏览器）里 dimensio 标签组的标签页。
   // 我们不拥有进程也不拥有标签：close 只断开，标签留给用户看结果。视口不做模拟（那是用户正在看的窗口）。
   edge = false;
+  // 接的是哪一个浏览器的扩展链路（"edge" / "chrome"），见 edge-link.ts 的 EdgeHub
+  edgeKind = "";
   private edgeUnsub: (() => void) | null = null;
   url = "";
   viewport = { width: 1280, height: 900 };
@@ -299,7 +322,8 @@ export class CdpSession {
       return;
     }
     const browser = findBrowser();
-    if (!browser) throw new Error("No Chrome/Edge found for the interactive browser.");
+    // 浏览器工具照样注册着（桌面壳宿主文件残留、只连着用户的扩展……）但本机没有内置浏览器：说清楚往哪走，别让模型反复重试
+    if (!browser) throw new Error(`No Chrome/Edge found for the interactive browser. ${NO_BUILTIN_BROWSER_HINT}`);
     this.tmp = mkdtempSync(path.join(tmpdir(), "harness-cdp-"));
     this.browserPath = browser;
     // S8（#54）：不再 --no-sandbox——这个浏览器打开模型挑的任意公网页面，renderer 一旦被
@@ -330,7 +354,19 @@ export class CdpSession {
     });
     this.url = startUrl;
 
-    const port = await this.readDevToolsPort();
+    let port: number;
+    try {
+      port = await this.readDevToolsPort();
+    } catch (e) {
+      // D5：浏览器进程没开调试端口就退了 / 根本没拉起来（snap 空壳、No usable sandbox……）——记一笔，接下来的新会话不再
+      // 提供浏览器工具（headless.ts browserAvailable）；这一会话的工具已经定了，报错里直说别再试。超时不记（机器忙也会超时）。
+      if (this.spawnError || this.child?.exitCode != null) {
+        noteBrowserLaunchFailure(browser);
+        throw new Error(`${(e as Error).message}. The browser cannot start on this machine. ${NO_BUILTIN_BROWSER_HINT}`);
+      }
+      throw e;
+    }
+    clearBrowserLaunchFailure(browser);
     this.debugPort = port;
     this.cdpBase = `http://127.0.0.1:${port}`;
     const pages = await this.waitPages(port);
@@ -446,7 +482,7 @@ export class CdpSession {
       // 但把能走的路说清楚，别让模型反复撞墙（2026-10-09 验证桌面壳时就撞了）。
       throw new Error(
         `the ${total} page(s) on 127.0.0.1:${port} are dimensio / bridge's own control plane (a logged-in bridge session) — attaching to them is not allowed. ` +
-          `To check such a window visually use LocalPCInspect(action:"screenshot", window:<hwnd from action:"windows">) — it captures that window even when others cover it. ` +
+          `If that window is on the user's computer, check it visually with DeviceInspect(action:"screenshot", window:<hwnd from action:"windows">) — it captures that window even when others cover it. ` +
           `To test bridge UI behaviour, run a separate bridge/dev instance on another port with its own data root and attach or navigate to that.`,
       );
     }
@@ -477,13 +513,14 @@ export class CdpSession {
     return { picked: `"${pick.title || "(untitled)"}" ${pick.url ?? ""}`.trim(), pages: pages.length };
   }
 
-  // 接到用户的 Edge（经 dimensio Edge 扩展，本仓库不附带）：标签组里有标签就接前台那个，没有就让扩展开组开一张。
-  async attachEdge(startUrl?: string): Promise<{ tabs: number; created: boolean }> {
-    const link = edgeLink();
-    if (!link.connected) throw new Error("the dimensio Edge extension is not connected");
+  // 接到用户的 Edge / Chrome（经 harness/edge-extension）：标签组里有标签就接前台那个，没有就让扩展开组开一张。
+  async attachEdge(startUrl?: string, kind = "edge"): Promise<{ tabs: number; created: boolean }> {
+    const link = edgeLink(kind);
+    if (!link.connected) throw new Error(`the dimensio extension in ${link.label} is not connected`);
     this.edge = true;
+    this.edgeKind = link.kind;
     this.attached = true;
-    this.cdpBase = EDGE_SCHEME;
+    this.cdpBase = edgeUrl(link.kind, "");
     // 扩展断开 = 这个会话死了（下一次调用拿到清楚的「未连接」，而不是 30 秒超时）
     this.edgeUnsub = link.onLink((up) => {
       if (!up) this.dead = true;
@@ -557,8 +594,8 @@ export class CdpSession {
 
   private async listPages(): Promise<any[]> {
     if (this.edge) {
-      const tabs = await edgeLink().listTabs();
-      return tabs.map((t) => ({ ...t, type: "page", webSocketDebuggerUrl: EDGE_SCHEME + t.id }));
+      const tabs = await edgeLink(this.edgeKind).listTabs();
+      return tabs.map((t) => ({ ...t, type: "page", webSocketDebuggerUrl: edgeUrl(this.edgeKind, t.id) }));
     }
     const res = await fetch(`${this.cdpBase}/json/list`);
     const targets = (await res.json()) as any[];
@@ -592,7 +629,7 @@ export class CdpSession {
   private connectBrowserSocket(): Promise<void> {
     return new Promise((resolve, reject) => {
       (async () => {
-        let wsUrl = EDGE_SCHEME + "browser"; // Edge 扩展模拟的 Target 域
+        let wsUrl = edgeUrl(this.edgeKind, "browser"); // Edge 扩展模拟的 Target 域
         if (!this.edge) {
           const res = await fetch(`${this.cdpBase}/json/version`);
           const v = (await res.json()) as any;
@@ -1802,17 +1839,19 @@ export function readDevToolsPortFile(file: string, read: (f: string) => string =
 
 // 上一个共享浏览器是用户的 Edge、它又断了（扩展断开、用户关掉了组里最后一张标签、点了停止）：不要悄悄换成无头浏览器——
 // agent 会以为自己还在用户的 Edge 里。明确报错，由它决定重连（Browser edge）还是回内置浏览器（Browser close）。
-let edgeLost = false;
+// 值 = 断掉的是哪种浏览器（"edge" / "chrome"），"" = 没断
+let edgeLost = "";
 
 export async function getSharedBrowser(): Promise<CdpSession> {
   if (shared?.alive) return shared;
   if (shared?.edge || edgeLost) {
-    edgeLost = true;
+    edgeLost ||= shared?.edgeKind || "edge";
     void shared?.close();
     shared = null;
+    const name = browserKindLabel(edgeLost);
     throw new Error(
-      "the connection to the user's Edge ended (extension disconnected, the dimensio tab group was emptied, or the user pressed Stop). " +
-        "Browser(action:\"edge\") reconnects; Browser(action:\"close\") goes back to the built-in browser.",
+      `the connection to the user's ${name} ended (extension disconnected, the dimensio tab group was emptied, or the user pressed Stop). ` +
+        `Browser(action:"edge", browser:"${edgeLost}") reconnects; Browser(action:"close") goes back to the built-in browser.`,
     );
   }
   if (launching) return launching;
@@ -1933,16 +1972,19 @@ export async function attachSharedBrowser(
   }
 }
 
-// 把唯一的共享浏览器换成用户的 Edge（经扩展）。和 attach 同理：先关掉原来那个（自己拉起的无头浏览器照常收尾）。
-export async function attachEdgeBrowser(startUrl?: string): Promise<{ session: CdpSession; tabs: number; created: boolean }> {
+// 把唯一的共享浏览器换成用户的 Edge / Chrome（经扩展，kind 选哪一个）。和 attach 同理：先关掉原来那个（自己拉起的无头浏览器照常收尾）。
+export async function attachEdgeBrowser(
+  startUrl?: string,
+  kind = "edge",
+): Promise<{ session: CdpSession; tabs: number; created: boolean }> {
   void shared?.close();
   shared = null;
   launching = null;
   const s = new CdpSession();
   try {
-    const info = await s.attachEdge(startUrl);
+    const info = await s.attachEdge(startUrl, kind);
     shared = s;
-    edgeLost = false;
+    edgeLost = "";
     syncEdgeActivity();
     return { session: s, ...info };
   } catch (e) {
@@ -1958,9 +2000,29 @@ export function sharedBrowserMode(): "edge" | "desktop" | "attach" | "headless" 
   return s.edge ? "edge" : s.external ? "desktop" : s.attached ? "attach" : "headless";
 }
 
-// Edge 氛围灯的「整轮常亮」来源：有会话占着共享浏览器、而它挂在 Edge 上
+// ReadPage / Eval / Network / Browser 找不到活着的浏览器时说的话。原来一律「先 Browser(navigate)」——
+// 可上一个浏览器是用户的 Edge/Chrome、链路断了时，照做会拉起没有登录态的无头浏览器（10-20 实测 agent 被它带偏）。
+export function noBrowserMessage(): string {
+  const kind = edgeLost || (shared?.edge && !shared.alive ? shared.edgeKind || "edge" : "");
+  if (!kind) return "No browser is running — Browser(navigate, url:…) first.";
+  const name = browserKindLabel(kind);
+  return (
+    `The connection to the user's ${name} ended (the extension disconnected, the dimensio tab group was emptied, or the user pressed Stop). ` +
+    `Browser(action:"edge", browser:"${kind}") reconnects to it. Do NOT Browser(navigate) to recover — that opens the built-in browser, which has none of the user's logins.`
+  );
+}
+
+// 共享浏览器挂在扩展上时，是哪一种浏览器（"edge" / "chrome"）；不在扩展模式 = ""。
+// includeDead：刚断的也算（用户在提示条上点「取消」时扩展先摘调试器、后报停止，那一刻会话已经死了）
+export function sharedEdgeKind(includeDead = false): string {
+  const s = includeDead ? shared : existingSharedBrowser();
+  return s?.edge ? s.edgeKind : "";
+}
+
+// 氛围灯的「整轮常亮」来源：有会话占着共享浏览器、而它挂在这条链路的浏览器上（另一个浏览器不跟着亮）
 function syncEdgeActivity(): void {
-  edgeLink().setClaimActive(Boolean(shared?.edge && shared.alive && browserClaimOwner()));
+  const on = Boolean(shared?.edge && shared.alive && browserClaimOwner());
+  for (const l of edgeHub().all()) l.setClaimActive(on && shared?.edgeKind === l.kind);
 }
 
 // exiting：进程退出处理器里调用（同步，等不了 close 的异步收尾）。
@@ -1968,7 +2030,7 @@ export function closeAllBrowserSessions(opts: { exiting?: boolean } = {}): void 
   if (opts.exiting) shared?.killNow();
   else void shared?.close();
   shared = null;
-  edgeLost = false; // 明确关掉（Browser close / 面板）= 下一次用回内置浏览器
+  edgeLost = ""; // 明确关掉（Browser close / 面板）= 下一次用回内置浏览器
   claimOwner = "";
   claimTouchedAt = 0;
   syncEdgeActivity();

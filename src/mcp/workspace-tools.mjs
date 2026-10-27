@@ -6,7 +6,7 @@
 //   ② 下行指令 —— 经本轮 gen 的 SSE 发 {type:'wsx', …}：给用户弹开文件预览
 //      （preview）、把文件面板带到某目录（goto）、让面板刷新（fs）。
 //   ③ 请求-应答 —— makeUiRequest 挂起等前端交货：截图用户正看到的画面
-//      （capture：网页按类型用 canvas 截图）、
+//      （capture：桌面壳 capturePage / 安卓壳 PixelCopy / 网页按类型 canvas 兜底）、
 //      拉取编辑器里未保存的草稿全文（draft）。
 // 文件内容/路径修改：内容用你本来的 Read/Write/Edit；改路径用这里的 move（无 shell
 // 的沙箱身份也能用），改完面板自动刷新（claude.mjs 的 PostToolUse 钩子 + move 自广播）。

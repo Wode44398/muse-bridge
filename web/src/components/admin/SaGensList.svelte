@@ -6,7 +6,7 @@
 
   let { gens = [], withStop = false } = $props();
   const live = $derived(liveGens(gens));
-  // 'u:<账号 id>' → 登录名（新账号 id = 名字-随机串）；用户列表没拉过就显示 id
+  // 'u:<账号 id>' → 登录名（S2-4：新账号 id = 名字-随机串）；用户列表没拉过就显示 id
   const ownerName = (key) => { const id = String(key || '').replace(/^u:/, ''); return sa.users.find((u) => (u.id || u.name) === id)?.name || id; };
 
   async function stopGen(g) {
@@ -27,7 +27,7 @@
         {#if g.key === 'admin'}<span class="sa-badge blue">admin</span>
         {:else}<span class="sa-badge purple">{ownerName(g.key)}</span>{/if}
         <span class="sa-mono sa-dim sid">{(g.sessionId || '').slice(0, 8) || '—'}</span>
-        <!-- hidden：成员没允许管理员看内容，提问原文不给 -->
+        <!-- hidden：成员没允许管理员看内容（S2-7），提问原文不给 -->
         <span class="sa-trunc req" title={g.userText || ''}>{g.hidden ? t('（内容未授权查看）') : (g.userText || '—')}</span>
         <span class="sa-mono elapsed"><span class="sa-live"></span>{fmtDur(g.elapsedMs)}</span>
         <span class="sa-mono sa-dim subs" title={t('订阅连接数')}>{g.subscribers}</span>

@@ -421,8 +421,8 @@ export interface Tool {
   def: ToolDef;
   effect: ToolEffect;
   concurrencySafe: boolean; // read-only tools may run in parallel
-  // Environment-backed capabilities (for example Electron Local-PC) may only
-  // exist while an external trusted host is alive. Registry filters them per turn.
+  // Environment-backed capabilities (for example the bridge device channel) may only
+  // exist while an external trusted host is reachable. Registry filters them per turn.
   enabled?: () => boolean;
   permissionView?: (args: Record<string, unknown>) => PermissionView | null;
   // P11（K20）：出卡之前的规划阶段（见 PreparedCall）；抛错按「没有」处理

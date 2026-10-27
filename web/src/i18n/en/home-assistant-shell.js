@@ -25,6 +25,7 @@ export default {
   // —— App 根：离线条、分页被关 ——
   '这个分页已被管理员关闭': 'Turned off by your admin',
   '离线 · 连不上电脑；可浏览本地缓存，恢复网络后自动重连': 'Offline: can’t reach your computer. Showing cached content. Reconnects automatically.',
+  '离线 · 连不上服务器；可浏览本地缓存，恢复网络后自动重连': 'Offline: can’t reach the server. Showing cached content. Reconnects automatically.',
   '服务控制台': 'Admin console',
 
   // —— 占位分页 ——
@@ -70,10 +71,8 @@ export default {
   '文件 files workspace': 'files workspace folders',
   '设置 · 通用': 'Settings · General',
   '通知 明暗 动画': 'notifications theme light dark animation motion',
-  '设置 · 个性化': 'Settings · Personalization',
-  '玻璃 画质 折射 flux 扩展': 'glass quality refraction flux extensions',
   '设置 · 壁纸': 'Settings · Wallpaper',
-  '空间 景深 上传': 'spatial depth upload',
+  '空间 景深 上传 flux 流体': 'spatial depth upload flux fluid',
   '设置 · 连接与更新': 'Settings · Connection & updates',
   '服务器 地址 版本 更新': 'server address url version update',
   '设置 · 帮助': 'Settings · Help',

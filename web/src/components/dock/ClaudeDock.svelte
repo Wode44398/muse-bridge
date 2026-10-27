@@ -1,11 +1,11 @@
 <script>
-  // Claude 分页右侧工作台：四件套——任务 / 审阅 / 终端 / 文件。
+  // Claude 分页右侧工作台：五件套——任务 / 审阅 / 终端 / 浏览器 / 文件。
   // 宽屏（侧列形态）= Claude 桌面版同款【圆角卡片】：这一格右上角标题栏带里的工具开关（TopBar tools）
-  //   一颗管一张卡，开几张摆几张（终端 / 审阅 / 任务叠在一列，文件另起一列；放不下两列就
+  //   一颗管一张卡，开几张摆几张（终端 / 审阅 / 任务叠在一列，浏览器 / 文件另起一列；放不下两列就
   //   全叠一列）；卡片自带标题行（放大铺满 / 关闭）；工作台顶上留一条和工具组同高的带，左缘拖拽调宽。
   //   宿主不许多卡时（分屏格 / 独立窗口 / 折叠屏）一次只放一张，开关就是切换。
   // 窄屏 = 移动端专属方案（dimensio 手机端同款）：底部 sheet（把手下拉/scrim 点击可关）
-  //        + 常驻工具切换条（chip 直切四件套）。
+  //        + 常驻工具切换条（chip 直切五件套）。
   import { ui } from '../../lib/state.svelte.js';
   import { dock, closeDock, closeDockView, toggleDockView, toggleDockMax, setDockMulti, openDock, ensureDockMeta, dockToolOk, dockSnapMode } from '../../lib/dock.svelte.js';
   import { layout } from '../../lib/layout.svelte.js';
@@ -13,6 +13,7 @@
   import { dragSheet } from '../../lib/dockTouch.js';
   import ReviewPanel from './ReviewPanel.svelte';
   import TermPanel from './TermPanel.svelte';
+  import BrowserPanel from './BrowserPanel.svelte';
   import WorkspaceEmbed from './WorkspaceEmbed.svelte';
   import TasksPanel from './TasksPanel.svelte';
   import DockToolBar from './DockToolBar.svelte';
@@ -34,15 +35,15 @@
   const mid = $derived(layout.medium);
   $effect(() => { const on = wide && multi; untrack(() => setDockMulti(on)); });
 
-  const TITLES = { tasks: tc('claude', '任务'), review: t('审阅'), term: t('终端'), files: tc('claude', '文件') };
+  const TITLES = { tasks: tc('claude', '任务'), review: t('审阅'), term: t('终端'), browser: t('浏览器'), files: tc('claude', '文件') };
   // 卡片标题行的 ✕：整句一键（英文 “Close terminal” 要小写名词，不能拿标题拼）
-  const CLOSE_LABEL = { tasks: tc('claude', '关闭任务'), review: t('关闭审阅'), term: t('关闭终端'), files: tc('claude', '关闭文件') };
+  const CLOSE_LABEL = { tasks: tc('claude', '关闭任务'), review: t('关闭审阅'), term: t('关闭终端'), browser: t('关闭浏览器'), files: tc('claude', '关闭文件') };
   const snapMode = $derived(dockSnapMode());
 
-  // 手机 sheet 的 chip 条：四件套按这个顺序（门禁藏掉的不出）
-  const MENU = $derived(['tasks', 'review', 'term', 'files'].filter(dockToolOk)
+  // 手机 sheet 的 chip 条：五件套按这个顺序（门禁藏掉的不出）
+  const MENU = $derived(['tasks', 'review', 'term', 'browser', 'files'].filter(dockToolOk)
     .map((key) => ({ key, label: TITLES[key] })));
-  // 窄屏没有卡片：dock.view 被门禁藏掉（无 shell 用户的终端）就回落审阅。
+  // 窄屏没有卡片：dock.view 被门禁藏掉（无 shell 用户的终端/浏览器）就回落审阅。
   const mView = $derived(MENU.some((m) => m.key === dock.view) ? dock.view : 'review');
   function pickTool(key) { openDock(key); }
 
@@ -55,11 +56,11 @@
   $effect(() => { reportUi({ dock: { open: dock.open, view: dock.open ? shown.join('+') : '' } }); });
 
   // —— 卡片排布 ——
-  // 左列：终端 / 审阅 / 任务（窄长、叠着看）；右列：文件（要宽）。两列都有卡且这一格够宽
+  // 左列：终端 / 审阅 / 任务（窄长、叠着看）；右列：浏览器 / 文件（要宽）。两列都有卡且这一格够宽
   // 才分两列，否则全叠进一列。卡片用绝对定位按比例摆，而不是分两个 flex 列：列数变化时
-  // （拉窗口、开关一张卡）卡片不换父节点、不重挂——终端的连接、滚回缓冲都留着。
+  // （拉窗口、开关一张卡）卡片不换父节点、不重挂——终端和浏览器的连接、滚回缓冲都留着。
   const COL_A = ['term', 'review', 'tasks'];
-  const COL_B = ['files'];
+  const COL_B = ['browser', 'files'];
   const TWO_COL_HOST = 1020;       // 这一格至少这么宽才摆两列（两列各 ≥300、对话还剩 ≥360）
   let hostW = $state(0);
   const colA = $derived(COL_A.filter((v) => shown.includes(v)));
@@ -147,8 +148,8 @@
   // meta 由 ensureDockMeta 统一拉（归属状态栏芯片 / 标题栏工具组在工作台没展开时就已经拉过，这里直接复用）
   $effect(() => { if (dock.open && dock.ws && !dock.meta) ensureDockMeta(); });
 
-  // 系统返回：收起工作台（预览层在 nav.js 里优先级更高、先被收掉）。
-  // 侧列形态也注册——折叠屏展开仍是手机、返回手势该先收工作台；只有 expanded（桌面浏览器/
+  // 安卓返回：收起工作台（预览层在 nav.js 里优先级更高、先被收掉）。
+  // 侧列形态也注册——折叠屏展开仍是安卓、返回键该先收工作台；只有 expanded（桌面浏览器/
   // 大平板，通常没有系统返回键）不占这一层。
   $effect(() => { if (dock.open && !layout.expanded) return pushBackLayer(closeDock); });
 
@@ -156,6 +157,7 @@
   const KEYS = [
     { view: 'review', match: (e) => e.ctrlKey && e.shiftKey && e.code === 'KeyG' },
     { view: 'term', match: (e) => e.ctrlKey && !e.shiftKey && e.code === 'Backquote' },
+    { view: 'browser', match: (e) => e.ctrlKey && e.shiftKey && e.code === 'KeyB' },
     { view: 'files', match: (e) => e.ctrlKey && e.shiftKey && e.code === 'KeyE' },
   ];
   $effect(() => {
@@ -173,7 +175,7 @@
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  // 本轮挂起等后台任务 → 「任务」chip 亮提示点（与 termLive 同一语言）
+  // 本轮挂起等后台任务 → 「任务」chip 亮提示点（与 browserLive / termLive 同一语言）
   const bgLive = $derived(!!bgHoldNow());
 
   // —— 文件卡：把真·工作空间页原封不动挂进来（电脑走 Explorer 级 FilesDesktop、
@@ -248,6 +250,7 @@
     {#key dock.ws}
       {#if view === 'review'}<ReviewPanel />
       {:else if view === 'term'}<TermPanel />
+      {:else if view === 'browser'}<BrowserPanel readonly={snapMode} />
       {:else if view === 'files'}
         {#if filesMount}
           {#key filesMount.key}
@@ -304,7 +307,7 @@
             <button class="chip" class:on={mView === m.key} onclick={() => pickTool(m.key)}>
               <span class="chip-ic">{@html dockIcon(m.key)}</span>
               {m.label}
-              {#if (m.key === 'term' && dock.termLive && mView !== 'term') || (m.key === 'tasks' && bgLive && mView !== 'tasks')}<span class="dk-live"></span>{/if}
+              {#if (m.key === 'browser' && dock.browserLive && mView !== 'browser') || (m.key === 'term' && dock.termLive && mView !== 'term') || (m.key === 'tasks' && bgLive && mView !== 'tasks')}<span class="dk-live"></span>{/if}
             </button>
           {/each}
         </div>
@@ -324,23 +327,26 @@
 
   /* —— 宽屏：常驻右列，与对话分栏 ——
      顶上留一条带：这一格的工具开关组（TopBar tools，宿主挂在这一格右上角）就坐在里面，卡片从带下开始。
-     带高 = 工具组（top 10 + 36）+ 8px 缝。
-     子树里 --sat 归零：根部已经吃掉了顶部的安全区，里面的面板头、内嵌文件页、
+     · 网页 / 平板：带高 = 工具组（top 10 + 36）+ 8px 缝。
+     · 桌面壳 WCO：带 = 窗控标题栏带（--wco-h），工具组收成 32px 和最小化/关闭同一排，其余是窗口拖拽区；
+       分屏的 iframe 那一格由宿主告知带高、挂 data-wco-band，同一条线。
+     子树里 --sat / --wco-right 归零：根部已经吃掉了顶部的「别人的地盘」，里面的面板头、内嵌文件页、
      查看器头不必再各自避让（归零必须挂在子节点上——同一元素上引用自己刚声明的变量拿的是新值）。
      卡片色：比页面底略亮一档 + 一圈细线 + 12px 圆角 + 8px 缝（官方实测：底 #141414、卡 #191919）。 */
   .dock.wide {
     --dk-card: #262625; --dk-line: rgba(255, 255, 255, .085);
     position: relative; flex: none; width: clamp(400px, 44%, 760px); min-width: 360px; max-width: 78%;
     padding: calc(var(--sat) + 54px) 8px 8px 6px;
-    /* 带里的工具开关组要读这一格的安全区，而子树里这个变量归零了——先在本元素上存一份
-       （var 在声明处解析，子节点继承的是算好的值）。 */
-    --dk-sat: var(--sat, 0px);
+    /* 带里的工具开关组要读这一格的安全区 / 窗控宽度，而子树里这两个变量归零了——先在本元素上存一份
+       （var 在声明处解析，子节点继承的是算好的值）。窗控宽度封个顶，免得几何读数异常把它推出工作台。 */
+    --dk-sat: var(--sat, 0px); --dk-wco-r: min(var(--pane-wco-r, var(--wco-right, 0px)), 240px);
   }
   /* 入场动画只给卡片：工具开关组从这一格右上角交接到带里，位置不变，不该跟着滑一下 */
   .dock.wide > .dk-cards { animation: dockInW .22s ease; }
   @media (pointer: coarse) { .dock.wide { padding-top: calc(var(--sat) + 58px); } }
   :global(html[data-theme="light"]) .dock.wide { --dk-card: #ffffff; --dk-line: rgba(0, 0, 0, .09); }
-  .dock.wide > * { --sat: 0px; }
+  :global(html[data-wco="1"]) .dock.wide, :global(html[data-wco-band="1"]) .dock.wide { padding-top: var(--wco-h, 40px); }
+  .dock.wide > * { --sat: 0px; --wco-right: 0px; }
   /* 两列：默认更宽（两列各自够用），给对话留 ≥360 */
   .dock.wide.two { width: clamp(640px, 62%, 1180px); min-width: 560px; max-width: calc(100% - 360px); }
   /* medium（折叠屏展开 ~750px / 竖屏平板）：默认占一半多一点，给正文留住 300px 下限。
@@ -358,7 +364,8 @@
   .dock.gripping :global(iframe) { pointer-events: none; }
   @keyframes dockInW { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
   /* 左缘拖拽把手：8px 命中区，悬停/拖动时亮出 2px 指示线；双击复位默认宽 */
-  .dk-grip { position: absolute; left: -4px; top: 0; bottom: 0; width: 9px; cursor: col-resize; z-index: 5; touch-action: none; }
+  /* no-drag：WCO 下工作台顶上那条标题栏带是窗口拖拽区，把手是 div 不在全局免拖名单里，不打洞的话顶端 40px 拖不动宽度 */
+  .dk-grip { position: absolute; left: -4px; top: 0; bottom: 0; width: 9px; cursor: col-resize; z-index: 5; touch-action: none; -webkit-app-region: no-drag; }
   .dk-grip::after { content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background-color .15s ease; }
   @media (hover: hover) { .dk-grip:hover::after { background: color-mix(in srgb, var(--muted) 45%, transparent); } }
   .dock.gripping .dk-grip::after { background: var(--coral); }

@@ -8,6 +8,7 @@
   import PdfView from './PdfView.svelte';
   import { recoverStaleChunk } from '../../lib/staleGuard.js';
   import { t, tr } from '../../lib/i18n.js';
+  import { interceptAppDownload } from '../../lib/save.js';
 
   let { item, onClose } = $props();
 
@@ -138,7 +139,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
       </button>
       <span class="of-title">{item.name}</span>
-      {#if item.downloadHref}<a class="of-btn" href={item.downloadHref} download={item.name} aria-label={t('下载')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg></a>{/if}
+      {#if item.downloadHref}<a class="of-btn" href={item.downloadHref} download={item.name} onclick={(e) => interceptAppDownload(e, { url: item.downloadHref, name: item.name })} aria-label={t('下载')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg></a>{/if}
     </header>
 
     {#if phase === 'sheet' && sheets.length > 1}
@@ -153,7 +154,7 @@
       {#if phase === 'loading'}
         <div class="of-center"><span class="of-spin"></span><p class="of-tip">{cat === 'sheet' ? t('解析表格…') : t('转换中…（首次稍候）')}</p></div>
       {:else if phase === 'error'}
-        <div class="of-center of-err"><p>{t('无法预览此文档')}</p><p class="of-sub sel-text">{tr(errMsg)}</p><button onclick={start}>{t('重试')}</button>{#if item.downloadHref}<a class="of-dl" href={item.downloadHref} download={item.name}>{t('下载原文件')}</a>{/if}</div>
+        <div class="of-center of-err"><p>{t('无法预览此文档')}</p><p class="of-sub sel-text">{tr(errMsg)}</p><button onclick={start}>{t('重试')}</button>{#if item.downloadHref}<a class="of-dl" href={item.downloadHref} download={item.name} onclick={(e) => interceptAppDownload(e, { url: item.downloadHref, name: item.name })}>{t('下载原文件')}</a>{/if}</div>
       {:else if phase === 'word'}
         <div class="of-scroll"><div class="of-doc sel-text">{@html wordHtml}</div></div>
       {:else if phase === 'sheet'}

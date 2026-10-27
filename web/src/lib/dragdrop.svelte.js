@@ -93,8 +93,11 @@ let lastZoneHaptic = 0;
 export const isDragging = () => !!rec;
 export const dragPayload = () => rec?.payload || null;
 
-// —— 触觉：navigator.vibrate（不支持的浏览器静默）——
+// —— 触觉：apk 走原生预置效果（MainActivity.haptic），网页退回 vibrate ——
 export function haptic(kind) {
+  try {
+    if (window.AndroidStore?.haptic) { window.AndroidStore.haptic(kind); return; }
+  } catch {}
   try { navigator.vibrate?.(kind === 'heavy' ? 18 : kind === 'tick' ? 6 : 10); } catch {}
 }
 

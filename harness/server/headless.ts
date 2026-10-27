@@ -1,10 +1,12 @@
 import { execFile, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { killTree } from "./tools/bash.ts";
 import { helperEnv } from "./helper-proc.ts";
 import { desktopHostInfo } from "./desktop-host.ts";
+import { edgeHub } from "./edge-link.ts";
+import { tenantMode } from "./tenant.ts";
 
 // Headless screenshot via a system Chromium browser's built-in one-shot
 // --screenshot flag. No puppeteer/CDP dependency — we launch the browser, let it
@@ -32,11 +34,102 @@ export function findBrowser(): string | undefined {
   return CANDIDATES.find((p) => existsSync(p));
 }
 
-// 浏览器工具（Browser / ReadPage / Eval / Network）能不能用：本机找得到 Chromium 系浏览器，或者桌面壳交来了它自己的
-// 浏览器宿主。都没有（例如没装浏览器的 Linux 服务器）就不向模型提供这几个工具，系统提示里的浏览器段也不写。
-// 现算不缓存：装上浏览器 / 设了 HEADLESS_BROWSER 之后，新会话就能用。
+// ── 这台机器上有没有浏览器可用（D5，移植自 Muse Bridge）────────────────────────────────────────────
+// Browser / ReadPage / Eval / Network 背后有三种后端：本机 Chromium 系浏览器（cdp.ts 拉起的无头浏览器）、桌面壳交来的
+// 浏览器宿主（desktop-host.ts，壳里的 WebContentsView）、用户自己的 Edge / Chrome 经 dimensio 扩展连进来（edge-link.ts，
+// Browser(edge)）。任何一个在就照常提供；一个都没有（例如没装浏览器的 Linux VPS）就不注册这四个工具，system 与 playbook
+// 里的浏览器段也不写——否则模型会反复调 Browser、每次都「起不来」，白耗轮次。
+//
+// 判定时机：工具集与 system 在会话建起来时（新建 / 从盘上恢复 / 换型号重建，session.ts 的 buildState）现算一次，此后这个
+// 会话不变——每轮重算会让工具清单与 system 前缀跟着变，提示词缓存整段失效。所以这里不缓存结论：桌面壳的宿主晚注册上来
+// （60 秒心跳）、扩展后连上、刚装好浏览器，下一个新会话就有。探测本身都便宜：几次 existsSync、读一个小 json、看内存里的
+// 连接——绝不为了判断去真启动一次浏览器。
+//
+// 「装着但起不来」只看文件在不在判断不出来（Ubuntu 的 chromium 是 snap 空壳；没有可用沙箱时 Chrome 报 No usable sandbox
+// 直接退出）：cdp.ts 真启动时浏览器进程没开调试端口就退了，就记一笔（按可执行文件路径 + 大小 / 修改时间认，10 分钟过期），
+// 这段时间里新会话不算它。等调试端口超时不记——机器忙也会超时。
+//
+// DIMENSIO_BROWSER：部署方的强制开关。off = 当作这台机器没有浏览器（不管探到什么）；on = 一律当作有；不设 = 自动探测。
+
+export type BrowserBackend = "local" | "desktop" | "extension";
+
+export interface BrowserProbe {
+  override: boolean | null; // DIMENSIO_BROWSER
+  localBrowser: string | undefined; // findBrowser()
+  localFailed: boolean; // 本机浏览器最近真启动过、没开调试端口就退了
+  desktopHost: boolean; // 桌面壳登记了浏览器宿主
+  extension: boolean; // 有用户的浏览器经扩展连着（租户实例不算：Browser(edge) 在那里是关的）
+}
+
+export function browserOverride(raw = process.env.DIMENSIO_BROWSER): boolean | null {
+  const v = String(raw ?? "").trim().toLowerCase();
+  if (["off", "0", "false", "no", "none"].includes(v)) return false;
+  if (["on", "1", "true", "yes"].includes(v)) return true;
+  return null;
+}
+
+// 纯函数：给定探测结果，哪几种后端可用（单测直接喂）
+export function browserBackendsFrom(p: Omit<BrowserProbe, "override">): BrowserBackend[] {
+  const out: BrowserBackend[] = [];
+  if (p.localBrowser && !p.localFailed) out.push("local");
+  if (p.desktopHost) out.push("desktop");
+  if (p.extension) out.push("extension");
+  return out;
+}
+
+export function judgeBrowserAvailable(p: BrowserProbe): boolean {
+  return p.override ?? browserBackendsFrom(p).length > 0;
+}
+
+function probeBrowser(): BrowserProbe {
+  const localBrowser = findBrowser();
+  return {
+    override: browserOverride(),
+    localBrowser,
+    localFailed: localBrowser ? browserLaunchFailedRecently(localBrowser) : false,
+    desktopHost: desktopHostInfo() !== null,
+    extension: !tenantMode() && edgeHub().connectedLinks().length > 0,
+  };
+}
+
+export function browserBackends(): BrowserBackend[] {
+  return browserBackendsFrom(probeBrowser());
+}
+
+// 浏览器工具（Browser / ReadPage / Eval / Network）注册不注册，见上
 export function browserAvailable(): boolean {
-  return Boolean(findBrowser()) || desktopHostInfo() !== null;
+  return judgeBrowserAvailable(probeBrowser());
+}
+
+const LAUNCH_FAIL_TTL_MS = 10 * 60_000;
+const launchFailures = new Map<string, { sig: string; at: number }>();
+
+function exeSignature(exe: string): string {
+  try {
+    const s = statSync(exe);
+    return `${s.size}:${s.mtimeMs}`;
+  } catch {
+    return "";
+  }
+}
+
+export function noteBrowserLaunchFailure(exe: string, now = Date.now()): void {
+  launchFailures.set(exe, { sig: exeSignature(exe), at: now });
+}
+
+export function clearBrowserLaunchFailure(exe: string): void {
+  launchFailures.delete(exe);
+}
+
+// 过期、或者可执行文件换了（重装 / 升级 / 换成真包）就不算
+export function browserLaunchFailedRecently(exe: string, now = Date.now()): boolean {
+  const f = launchFailures.get(exe);
+  if (!f) return false;
+  if (now - f.at > LAUNCH_FAIL_TTL_MS || f.sig !== exeSignature(exe)) {
+    launchFailures.delete(exe);
+    return false;
+  }
+  return true;
 }
 
 // 浏览器专用 env：helperEnv（不带凭据，S7）之上再去掉 __COMPAT_LAYER。Edge 看到它（会话里的

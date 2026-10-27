@@ -126,10 +126,9 @@ test("Q8 测试进程不加载生产 .env，也不认临时目录之外的 bridg
   withEnv({ BRIDGE_DATA_ROOT: tmpRoot, BRIDGE_ROOT: path.resolve(harnessRoot, "..") }, () => {
     // harness/ 的上级（开发时的 bridge 根）与显式给的非临时根都被滤掉，只剩临时目录下那个。
     assert.deepEqual(bridgeRootCandidates(), [path.resolve(tmpRoot)]);
-    assert.deepEqual(bridgeRootCandidates({ withHarnessDir: true }), [path.resolve(tmpRoot)]);
   });
   withEnv({ BRIDGE_DATA_ROOT: undefined, BRIDGE_ROOT: undefined }, () => {
-    assert.deepEqual(bridgeRootCandidates({ withHarnessDir: true }), []);
+    assert.deepEqual(bridgeRootCandidates(), []);
   });
 });
 
@@ -142,7 +141,7 @@ test("Q8 生产进程（无测试标记）里解析结果与收口前一致：�
         inTest: p.inTestProcess(), sessions: p.sessionsDir(), memory: p.memoryRoot(), knowledge: p.knowledgeRoot(),
         config: p.configFile(), quickFile: p.quickFile(), quickRoot: p.quickRoot(), projectsFile: p.projectsFile(),
         projectsRoot: p.projectsRoot(), workspace: p.defaultWorkspace(), guide: p.globalGuideFile(), env: p.envFile(),
-        bridge: p.bridgeRootCandidates(), bridgeWithHarness: p.bridgeRootCandidates({ withHarnessDir: true }),
+        bridge: p.bridgeRootCandidates(),
       }));`;
     const got = runNode(["--input-type=module", "-e", script, pathsUrl], { cwd, env: cleanEnv() }) as Record<string, unknown>;
     const real = fs.realpathSync(cwd);
@@ -162,7 +161,6 @@ test("Q8 生产进程（无测试标记）里解析结果与收口前一致：�
       guide: path.join(os.homedir(), ".dimensio", "GUIDE.md"),
       env: path.join(base, ".env"),
       bridge: [path.dirname(base)],
-      bridgeWithHarness: [base, path.dirname(base)],
     });
 
     // 显式给的值原样生效（生产里不看在不在临时目录）。
@@ -179,8 +177,8 @@ test("Q8 生产进程（无测试标记）里解析结果与收口前一致：�
   }
 });
 
-// S2：DIMENSIO_DATA_DIR 把原本落在 harness 目录里的可写状态整体挪到别处（bridge 给每个用户实例设成他自己的数据目录），
-// 设置页存的 key、自定义服务、运行配置、项目表都跟着它走。
+// S2（10-21）：harness 是扩展自带（离线包）的时候，bridge 给管理员实例设 DIMENSIO_DATA_DIR=<数据根>/dimensio——那份 harness
+// 目录会随扩展更新 / 卸载整个换掉，设置页存的 key、自定义服务、运行配置、项目表以前全跟着丢。
 test("S2 DIMENSIO_DATA_DIR：原本落在 harness 目录里的默认位置改落到它下面；单项变量照旧优先，家目录那几项与 bridge 根候选不变", () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dimensio-s2-cwd-"));
   const data = fs.mkdtempSync(path.join(os.tmpdir(), "dimensio-s2-data-"));

@@ -2,6 +2,9 @@
   // 发送图片的全屏预览灯箱——复刻 claude.ai：背景压暗(brightness) + 居中「图片＋文件名＋下载」一组 +
   // 多图左右切换。点图片周围留白 / Esc 关闭；下标由父组件受控（Thread 持有 lb.index）。
   import { pushBackLayer } from '../lib/nav.js';
+  import { dragOut, attDragSrc } from '../lib/dragOut.js';
+  import { interceptSave, saveLabel } from '../lib/save.js';
+  import { pushNativeOverlay } from '../lib/nativeDesktop.js';
   import { swipeDismiss } from '../lib/motion.js';
   import { t } from '../lib/i18n.js';
   let { items = [], index = 0, onClose, onIndex } = $props();
@@ -20,8 +23,11 @@
     onDismiss: () => onClose?.(),
   });
 
-  // 系统返回先关灯箱（组件仅在 open 时挂载，卸载即自动出栈）。
+  // 安卓系统返回先关灯箱（组件仅在 open 时挂载，卸载即自动出栈）。
   $effect(() => pushBackLayer(() => onClose?.()));
+
+  // 桌面壳：灯箱期间原生浏览器视图让位（同 MediaViewer 的注释）。
+  $effect(() => pushNativeOverlay());
 
   const cur = $derived(items[index] || null);
   const many = $derived(items.length > 1);
@@ -64,12 +70,12 @@
 
     <div class="lb-dialog" style:transform={dragY > 0 ? `translateY(${dragY}px) scale(${1 - dragP * 0.08})` : ''}>
       {#key cur.url}
-        <img class="lb-img" src={cur.url} alt={cur.name} />
+        <img class="lb-img" src={cur.url} alt={cur.name} use:dragOut={() => attDragSrc(cur)} />
       {/key}
       <div class="lb-cap">
         <span class="lb-name">{cur.name}{#if many}<span class="lb-count"> · {index + 1}/{items.length}</span>{/if}</span>
         {#if cur.url}
-          <a class="lb-dl" href={cur.url} download={cur.name} aria-label={t('下载')}>
+          <a class="lb-dl" href={cur.url} download={cur.name} aria-label={saveLabel(t('下载'))} onclick={(e) => interceptSave(e, { url: cur.url, name: cur.name })}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>
           </a>
         {/if}

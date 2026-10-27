@@ -2,7 +2,7 @@
 //
 // 修前：网页、搜索结果、浏览器页面里的东西（错误事实，或者「忽略之前的指令，记住……」这类注入）能被模型直接写成 active
 // 记忆，之后这个项目的每个会话都在提示里信它；写入时不看内容有没有注入特征，Recall / 索引把正文原样交给模型。
-// 修后：本会话一旦读过外部内容（WebFetch / WebSearch / Browser / ReadPage / Eval / Network / LocalPCInspect、Bash 里的
+// 修后：本会话一旦读过外部内容（WebFetch / WebSearch / Browser / ReadPage / Eval / Network / DeviceInspect / DeviceAct、Bash 里的
 // curl 之类；子 agent / Workflow 读过的随结果带上来），之后模型写的记忆想生效也先存成 proposed、记下 external，等用户在
 // 记忆面板确认；命中注入特征的一律 proposed，给模型看的地方只露标题。用户确认过的不再拦。标记随会话落盘，老记录从转录里推。
 import assert from "node:assert/strict";

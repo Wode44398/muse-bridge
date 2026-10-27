@@ -2,7 +2,7 @@ import type { Turn } from "../agent/turn.ts";
 import type { StreamEvent } from "../agent/events.ts";
 import type { Tier } from "../model-knowledge.ts";
 
-export type BuiltinProviderId = "anthropic" | "openai" | "qwen" | "zhipu" | "kimi" | "mimo" | "gemini";
+export type BuiltinProviderId = "anthropic" | "openai" | "qwen" | "zhipu" | "kimi" | "mimo" | "gemini" | "local";
 // custom-<hex>：用户在「模型服务」里自己加的第三方接口（OpenAI / Anthropic / Gemini 协议，server/custom-providers.ts）
 export type ProviderId = BuiltinProviderId | `custom-${string}`;
 

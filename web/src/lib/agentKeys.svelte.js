@@ -1,5 +1,5 @@
-// 设置「Agent 接入」的数据面：给别的 agent（部署它的 Muse、Claude Code、脚本…）用的密钥。设置分区
-// components/settings/SecAgentAccess.svelte 用这一份状态。后端 /api/agent-keys（list / create / revoke）；变更后服务端在总线发
+// 设置「Agent 接入」的数据面：给别的 agent（Claude Code、Codex、脚本…）用的密钥。手机 Settings 与桌面
+// SettingsDesktop 共用这一份状态。后端 /api/agent-keys（list / create / revoke）；变更后服务端在总线发
 // { type:'agent.keys' }——有面板开着（watchAgentKeys 计数 > 0）就重拉。
 // 明文密钥只在 create 的响应里出现一次：放在 agentKeys.fresh 里给面板醒目展示，关掉面板 / 再生成就丢掉，不落任何存储。
 import { api } from './api.js';

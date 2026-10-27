@@ -1,4 +1,4 @@
-// 「存为工作空间」后把桶挪出快照目录（10-21：存好的工作空间落固定位置，任何回收都碰不到）。
+// 「存为工作空间」后把桶挪出快照目录（10-21 维护者要求：存好的工作空间落固定位置，任何回收都碰不到）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';

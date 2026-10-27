@@ -21,7 +21,7 @@ export const IS_SOLO = !!SOLO;
 export const SOLO_ID = SOLO ? SOLO.id : '';
 export const IS_PANE = !!(SOLO && SOLO.pane);
 
-// 只开 id 这个对话的地址：<BASE_URL>solo.html（生产 /app/solo.html、dev /solo.html）。
+// 只开 id 这个对话的地址：<BASE_URL>solo.html（生产 /app/solo.html、dev /solo.html，apk 本地页同理）。
 export function soloUrl(id, { pane = false } = {}) {
   const u = new URL(import.meta.env.BASE_URL + 'solo.html', location.href);
   u.searchParams.set('solo', id);
@@ -34,6 +34,6 @@ export function soloUrl(id, { pane = false } = {}) {
 //             settings {sec}（格里要打开设置页：设置外壳只挂在宿主页）
 //             search（焦点在这一格时按了 Ctrl+K：宿主开搜索面板）
 //   宿主 → 格：open {id}（侧栏点会话、拖进这一格）/ quote {id,title}（会话拖到这一格的输入栏＝引用）/
-//             away（宿主那边被按下，收起弹层）
+//             wco {h,right}（桌面壳窗控避让）/ away（宿主那边被按下，收起弹层）
 export const PANE_MSG = 'bp';
 export function isPaneMsg(e) { return !!(e && e.data && e.data[PANE_MSG] === 1 && e.origin === location.origin); }

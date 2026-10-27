@@ -104,6 +104,15 @@
     {:else}
       <Icon name="plug" size={Math.round(size * 0.86)} />
     {/if}
+  {:else if skin === "local"}
+    <!-- 本机：机箱轮廓 + 中心一块自己的硅 -->
+    <svg viewBox="0 0 24 24" width={size} height={size}>
+      <rect x="4.2" y="4.2" width="15.6" height="15.6" rx="2.4" fill="none" stroke={tint("local")} stroke-width="1.6" />
+      <rect x="9.4" y="9.4" width="5.2" height="5.2" rx="1" fill={tint("local")} />
+      <g stroke={tint("local")} stroke-width="1.4" stroke-linecap="round" opacity="0.75">
+        <path d="M9 1.9v2.3M15 1.9v2.3M9 19.8v2.3M15 19.8v2.3M1.9 9h2.3M1.9 15h2.3M19.8 9h2.3M19.8 15h2.3" />
+      </g>
+    </svg>
   {:else}
     <Mark {size} />
   {/if}

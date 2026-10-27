@@ -2,7 +2,8 @@
 //
 // 纯数据、无 node 依赖：服务端（src/runtime/claude-settings.mjs 读写与校验）和前端两套设置外壳
 // （手机 Settings.svelte / 桌面 SettingsDesktop.svelte，单 agent 模式也用这两套）
-// 都从这一份表渲染与取默认值，避免同一项写两遍再写歪。官方同款做法（官方桌面端 ion-dist cc7db14f1 的注册表）。
+// 都从这一份表渲染与取默认值，避免同一项写两遍再写歪。官方同款做法见
+// bridge build/bridge前端设计/claude页面设计参考资源/桌面端对齐-1020/B4（ion-dist cc7db14f1 的注册表）。
 //
 // 每项字段：
 //   key        存储键（服务端 values[key] / 前端 cs.values[key]）
@@ -80,7 +81,7 @@ export const CLAUDE_SETTINGS = Object.freeze([
   { key: 'compactFrac', group: 'chat', scope: 'user', type: 'frac', default: null,
     label: '自动压缩点', desc: '上下文用到多少时自动压缩；在用量弹层的计量条上拖动设置' },
 
-  // —— 会话协作（10-20：Claude 发起新会话做成三档可选）——
+  // —— 会话协作（维护者 10-20：Claude 发起新会话做成三档可选）——
   { key: 'newSessionPolicy', group: 'collab', scope: 'user', type: 'enum', options: ['ask', 'direct', 'onRequest'], default: 'ask', shell: true,
     label: 'Claude 发起新会话', desc: '你提了与当前任务无关的事、或 Claude 发现值得另开一个会话的活时怎么办',
     optionLabels: ['先问我', '直接开始', '只在我要求时'],
@@ -88,7 +89,7 @@ export const CLAUDE_SETTINGS = Object.freeze([
   // 'default' = 不下发，交给 CLI 自己的判定（会问你的模式下直接接收；绕过权限时、对方权限模式不一致或没说明时扣留）。
   // 显式 accept 会压掉 CLI 的这两层保护，所以不能当默认（10-21 安全审查）。
   { key: 'crossSessionInbound', group: 'collab', scope: 'user', type: 'enum', options: ['default', 'accept', 'hold', 'refuse'], default: 'default', admin: true,
-    label: '其它会话发来的消息', desc: '官方 Claude Desktop 或终端里的 Claude 会话发给这里的消息',
+    label: '其它会话发来的消息', desc: '同一台机器上别的 Claude 会话（官方 Claude Desktop、终端或这里的其它会话）发给这里的消息',
     optionLabels: ['跟随 Claude 默认', '直接接收', '暂存等我确认', '拒收'],
     optionDescs: ['会问你的模式下直接接收；绕过权限时、或对方的权限模式和这里不一致时，暂存等你确认', '一律直接接收，对方的话会马上开一轮', '一律暂存，等你点接收才投递', '一律拒收'] },
 
@@ -136,6 +137,34 @@ export function claudeSettingDefaults({ scope } = {}) {
   const out = {};
   for (const s of CLAUDE_SETTINGS) if (s.scope !== 'device' && (!scope || s.scope === scope)) out[s.key] = s.default;
   return out;
+}
+
+// 这台服务端做不到的项（2026-10-27，Muse 同步第 22 条）：按真实能力算，不按发行版。服务端快照的 unsupported 就是它，
+// 前端 visible() 据此不显示。能力由 runtime/claude-settings.mjs 现探：
+//   · keepAwake：保持唤醒真能起作用——插件开着且这台机器有驱动（Windows；Linux 要有 systemd-inhibit、不是虚拟机、
+//     没被 polkit 拒过，见 runtime/keep-awake-inhibit.mjs 的 inhibitUsable）。做不到时两项一起藏；
+//   · desktop：找得到官方 Claude Desktop 的会话数据目录（runtime/desktop-lineage.mjs 的 desktopSessionsDirs）。
+//     Linux 服务器、没装 Desktop 的 Windows 都没有，「跟随 Claude Desktop 的归档」就无从跟起。
+export function unsupportedClaudeSettings({ keepAwake, desktop } = {}) {
+  const out = [];
+  if (!keepAwake) out.push('keepAwake', 'keepAwakeOnBattery');
+  if (!desktop) out.push('followDesktopArchive');
+  return out;
+}
+
+/**
+ * 这一项给不给这个身份看（前端 lib/claudeSettingsView.js 的 visible() 用；放这里是为了能在 node 里单测）。
+ * view = { admin, shell, unsupported:[键], val:(key)=>当前值 }：
+ * 管理员项 / 主机项只给管理员，shell 项只给能跑命令的身份，服务端说做不到的不出，依赖项主项关着时不出。
+ */
+export function claudeSettingVisible(key, view = {}) {
+  const s = CLAUDE_SETTING_BY_KEY[key];
+  if (!s) return false;
+  if ((s.admin || s.scope === 'host') && !view.admin) return false;
+  if (s.shell && !view.shell) return false;
+  if (Array.isArray(view.unsupported) && view.unsupported.includes(key)) return false;
+  if (s.dependsOn && !(typeof view.val === 'function' && view.val(s.dependsOn))) return false;
+  return true;
 }
 
 // 分支前缀校验：返回 null = 合法，否则是给人看的中文错误。

@@ -30,9 +30,8 @@ export interface PromptEnv {
   projectKnowledge?: string;
   // Whether the WebSearch tool is registered (it needs a Gemini key).
   webSearch?: boolean;
-  // Whether the browser tools (Browser / ReadPage / Eval / Network) are registered — they need a
-  // Chromium-based browser on this machine (headless.ts browserAvailable). false drops the browser,
-  // Electron and Android guidance from the prompt; omitted = available.
+  // D5：浏览器工具（Browser / ReadPage / Eval / Network）注册了没有——本机浏览器、桌面壳的浏览器宿主、经扩展连着的用户浏览器
+  // 至少有一个才注册（headless.ts browserAvailable）。false = 提示词里不写浏览器 / Electron / 安卓那几句；不给 = 有。
   browser?: boolean;
   // Rendered "managed skills" section from the Bridge extension center
   // (progressive disclosure: name + one-liner + SKILL.md path). Session-creation
@@ -203,7 +202,7 @@ export function systemPrompt(env: PromptEnv): string {
     : "";
   // Which subnet this machine sits on. Not a new capability (ipconfig always
   // worked) — but nobody runs ipconfig unprompted, and a k3 run only found it
-  // could reach a smart speaker on the LAN by accident. One line turns that into a plan.
+  // could reach the user's HomePod by accident. One line turns that into a plan.
   const lan = lanAddress();
   const lanLine = lan
     ? `\n- This machine on the local network: ${lan.cidr} (${lan.iface}). Devices on that subnet — phones, speakers, other computers — are directly reachable from here.`

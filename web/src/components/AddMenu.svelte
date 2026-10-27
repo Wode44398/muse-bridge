@@ -1,6 +1,6 @@
 <script>
   // Composer 加号菜单（claude.ai 原版子集）：Add files or photos / Research / Use style。
-  // 图标见 lib/menuIcons.svelte.js（原版 SVG path，lib/icons.js），viewBox 20、fill currentColor。
+  // 图标见 lib/menuIcons.svelte.js（公开版 Lucide 字形，私有 overlay 可换），viewBox 20、fill currentColor。
   // Use style 含自定义风格：本设备 localStorage（lib/styles.svelte.js），编辑表单内嵌第三视图。
   // 2026-10-20：claude.ai 式「Use style」中文改叫「回复语气」（英文 Tone），免得和 Claude Code 的「输出风格」混淆，功能不变；
   // 新增「输出风格 ›」：给【这个会话】单独选 Claude Code 输出风格（官方会话菜单 Output style 同款，lib/outputStyle）。

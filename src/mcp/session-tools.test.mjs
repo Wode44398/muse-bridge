@@ -439,3 +439,50 @@ test('父会话名称：不拿首条提问原文当标题（里面的指令会�
   const { rmSync } = await import('node:fs');
   rmSync(cfg, { recursive: true, force: true });
 });
+test('project：子会话开到别的项目（cwd / 项目 id 进重放），父子关系照常登记，收工照样把汇报放进父会话收件箱', async () => {
+  const srv = setup('ask');
+  const CP = await import('../claude-projects.mjs');
+  const other = mkdtempSync(path.join(tmpdir(), 'stools-other-'));
+  const proj = CP.createProject(ctx.claudeProjects, ctx, { path: other });
+  const label = path.basename(other);
+  // 认不出的项目：报错并列出能用的
+  const bad = await call(srv, 'start_session', { initiation: 'user_asked', title: 't', prompt: 'p', background: BG, project: '没有这个项目' });
+  assert.equal(bad.isError, true);
+  assert.match(text(bad), new RegExp('能用的项目：.*' + label));
+  // fork 不收 project
+  assert.equal((await call(srv, 'start_session', { initiation: 'user_asked', title: 't', prompt: 'p', context: 'fork', project: proj.id })).isError, true);
+  assert.equal(replays.length, 0);
+  // 按名字（不分大小写）开
+  const r = await call(srv, 'start_session', { initiation: 'user_asked', title: '去别的项目跑测试', prompt: '跑 `npm test`', background: BG, project: label.toUpperCase() });
+  assert.match(text(r), new RegExp('项目「' + label + '」'));
+  const fam = replays[0].family;
+  assert.equal(fam.cwd, CP.authorizeProjectPath(ctx, other));
+  assert.equal(fam.projectId, proj.id);
+  assert.equal(fam.worktree, null);
+  const kid = fam.newSessionId;
+  const link = F.familyLink(ctx, kid);
+  assert.equal(link.parent, PARENT);
+  assert.equal(link.projectId, proj.id);
+  assert.notEqual(link.shared, true);
+  assert.match(childNudge(link), /父会话在别的项目里/);
+  // list_sessions 列出子会话和能用的项目
+  const ls = text(await call(srv, 'list_sessions', {}));
+  assert.match(ls, /\[child\] 去别的项目跑测试/);
+  assert.match(ls, new RegExp('- ' + label + ' — id: ' + proj.id));
+  // 子会话这一轮收工 → 父会话收件箱里有汇报
+  const kg = findGenBySession(ctx.key, kid);
+  kg.events.push({ type: 'done', result: '测试全过了' });
+  kg.done = true;
+  F.familyTurnEnded(ctx, kg);
+  const box = F._inbox(ctx.key, PARENT);
+  assert.equal(box.length, 1);
+  assert.equal(box[0].kind, 'note');
+  assert.equal(box[0].from, kid);
+  assert.equal(box[0].text, '测试全过了');
+  // 提议卡记下项目，点卡开的时候照样开到那里
+  const own = await call(srv, 'start_session', { initiation: 'own_initiative', title: '顺手修 lint', prompt: 'p', background: BG, project: proj.id });
+  const tid = text(own).match(/task_[0-9a-f]{8}/)[0];
+  assert.equal(P.getProposal(ctx, tid).project, proj.id);
+  assert.match(text(await call(srv, 'start_session', { proposal_id: tid })), /已在自己的会话里开始/);
+  assert.equal(replays.at(-1).family.projectId, proj.id);
+});

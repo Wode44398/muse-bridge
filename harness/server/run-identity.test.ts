@@ -129,7 +129,7 @@ async function freePort(): Promise<number> {
 }
 
 test("真 harness：同一条重发不起第二轮（409 duplicate_run）；带旧 runId 的停止 / 插话回 409", { timeout: 90_000 }, async () => {
-  // 假模型服务（OpenAI 兼容）：先吐一个字，然后一直挂着，直到被停止（这一轮在整个用例期间都在跑）
+  // 假的本机模型：先吐一个字，然后一直挂着，直到被停止（这一轮在整个用例期间都在跑）
   const provider = http.createServer((req, res) => {
     req.resume();
     res.writeHead(200, { "content-type": "text/event-stream" });
@@ -178,7 +178,7 @@ test("真 harness：同一条重发不起第二轮（409 duplicate_run）；带�
       if (Date.now() > deadline || child.exitCode !== null) assert.fail(`harness did not come up:\n${out}`);
       await new Promise((r) => setTimeout(r, 200));
     }
-    const cfg = await post("/api/config", { provider: "openai", model: "deepseek-flash", baseUrl: providerBase, apiKey: "FAKE-m2-openai-key" });
+    const cfg = await post("/api/config", { provider: "local", model: "qwen3.8-27b", baseUrl: providerBase });
     assert.equal(cfg.status, 200, await cfg.text());
 
     // 第一次发送：读到 session 回执为止（之后断开，这一轮在服务端照跑）

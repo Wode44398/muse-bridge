@@ -15,7 +15,7 @@ import {
   type MemoryType,
 } from "../memory.ts";
 
-// K5（N57）：连续失败计数（按工具上下文，也就是按会话）。连败 3 次就明说别再试——每次失败都多一轮往返，弱模型尤其
+// K5（N57）：连续失败计数（按工具上下文，也就是按会话）。连败 3 次就明说别再试——每次失败都多一轮往返，本机模型尤其
 // 容易在这里原地打转。成功一次清零。
 const failStreak = new WeakMap<ToolContext, number>();
 function failed(ctx: ToolContext, title: string, text: string): ToolRunResult {

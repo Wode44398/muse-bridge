@@ -43,7 +43,7 @@ export default {
   '本轮挂起中 · 等待 {n} 个后台任务': { one: 'Turn on hold · waiting for {n} background task', other: 'Turn on hold · waiting for {n} background tasks' },
   '后台任务已完成，收尾中': 'Background tasks finished. Finishing up…',
   '主回答已经写完，但后台任务还在跑。bridge 把这一轮挂着不收尾——收尾会连同后台任务一起结束；任务完成时 Claude 会自动接着这一轮汇报结果。':
-    'The main response is done, but background tasks are still running. Muse Bridge keeps this turn open because finishing it would also end the background tasks. When they finish, Claude continues this turn and reports the results.',
+    'The main response is done, but background tasks are still running. The Bridge keeps this turn open because finishing it would also end the background tasks. When they finish, Claude continues this turn and reports the results.',
   '后台任务刚刚结束，正在等 Claude 接着汇报。': 'Background tasks just finished. Waiting for Claude to report back.',
   '最长再等 {n} 分钟，到点自动收尾（常驻服务不会把这一轮永远钉住）。': {
     one: 'Finishes up automatically within {n} minute, so the service never holds a turn open forever.',

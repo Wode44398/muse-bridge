@@ -2,7 +2,7 @@
 //
 //   scope 'user' → 按身份数据目录落 claude-settings.json：{ rev, values:{只存显式值} }，同账号多设备同步
 //                  （与 session-library.mjs 同一范式：rev 单调递增，前端据此丢弃乐观更新之后才到的旧快照）。
-//   scope 'host' → config.json 的 claudeHost 键（只改这一个键），仅管理员。
+//   scope 'host' → config.json 的 claudeHost 键（只改这一个键，同 account-router.mjs），仅管理员。
 //
 // 读：getClaudeSettings(ctx) 回「默认值 ⊕ 显式值」的完整 values（含 host 键：主机级开关对所有身份生效，服务端判定用真实值）。
 //     给前端的快照 claudeSettingsSnapshot 里，非管理员拿到的 host 键恒为默认值（主机配置状态不外露；可选模式已在服务端裁好）。
@@ -13,8 +13,9 @@ import { readJson, writeJson } from '../jsonfile.mjs';
 import { CONFIG_PATH } from '../config/index.mjs';
 import {
   CLAUDE_SETTINGS, CLAUDE_SETTING_BY_KEY, claudeSettingDefaults, normalizeClaudeSetting,
-  PERMISSION_MODES, PERMISSION_MODES_SANDBOX, BUILTIN_OUTPUT_STYLES,
+  PERMISSION_MODES, PERMISSION_MODES_SANDBOX, BUILTIN_OUTPUT_STYLES, unsupportedClaudeSettings,
 } from '../config/claude-settings.mjs';
+import { desktopSessionsDirs } from './desktop-lineage.mjs';
 
 const cache = new Map();   // file -> { rev, values }
 const fileFor = (ctx) => path.join(ctx.dataDir, 'claude-settings.json');
@@ -105,6 +106,26 @@ export function outputStylesFor(ctx) {
   return outputStyles.get(ctx?.key) || [...BUILTIN_OUTPUT_STYLES];
 }
 
+// 这台机器做不到的项（快照的 unsupported，前端据此不显示；规则见 config/claude-settings.mjs 的 unsupportedClaudeSettings）。
+// 保持唤醒能不能起作用由保持唤醒插件挂上来（plugins/catalog.mjs 的 keep-awake → setKeepAwakeCapability）：插件没开 / 这台
+// 机器不可用就从没挂过 = 做不到。探 Desktop 数据目录要碰文件系统，快照又随 /api/sessions、总线 hello 频繁出，所以一分钟探一次
+//（同 desktop-lineage 的重探周期，装上 / 卸掉 Desktop 不用重启）。_setClaudeHostProbe 给单测换探针。
+const PROBE_MS = 60_000;
+let keepAwakeCap = () => false;
+export function setKeepAwakeCapability(fn) { keepAwakeCap = typeof fn === 'function' ? fn : () => false; unsup = null; }
+const defaultProbe = () => ({ keepAwake: !!keepAwakeCap(), desktop: desktopSessionsDirs().length > 0 });
+let probe = defaultProbe;
+let unsup = null, unsupAt = 0;
+export function unsupportedClaudeSettingsNow() {
+  const now = Date.now();
+  if (!unsup || now - unsupAt > PROBE_MS) {
+    let caps; try { caps = probe(); } catch { caps = { keepAwake: false, desktop: false }; }
+    unsup = unsupportedClaudeSettings(caps); unsupAt = now;
+  }
+  return [...unsup];
+}
+export function _setClaudeHostProbe(fn) { probe = typeof fn === 'function' ? fn : defaultProbe; unsup = null; }
+
 /** 给前端的快照（GET /api/claude/settings、总线 hello、/api/sessions 附带）。 */
 export function claudeSettingsSnapshot(ctx) {
   const admin = isAdmin(ctx);
@@ -118,6 +139,7 @@ export function claudeSettingsSnapshot(ctx) {
     shell: !!ctx?.shell,
     permissionModes: permissionModesFor(ctx),
     outputStyles: outputStylesFor(ctx),
+    unsupported: unsupportedClaudeSettingsNow(),
   };
 }
 

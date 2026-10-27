@@ -24,7 +24,7 @@ const SRC = {
   BRIDGE_TOKEN: 'master', BRIDGE_DATA_ROOT: '/data', DATABASE_URL: 'postgres://u:p@h/db', AWS_SECRET_ACCESS_KEY: 'aws',
   CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-x', ANTHROPIC_API_KEY: 'sk-ant-api-y', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000', ANTHROPIC_MODEL: 'opus',
   DISABLE_AUTOUPDATER: '1', MAX_THINKING_TOKENS: '1000', SOME_TOOL_SETTING: 'keep-me', OTEL_EXPORTER_OTLP_HEADERS: 'Authorization=x',
-  // 服务进程若是从某个 Claude Code 会话里起的：那个会话的通道与身份
+  // 服务进程若是从维护者的 Claude Code 会话里起的：那个会话的通道与身份
   CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\host', CLAUDE_CODE_USER_EMAIL: 'boss@example.com', CLAUDE_CODE_HOST_SESSION_ID: 'h1', CLAUDE_AGENT_SDK_VERSION: '0.3',
 };
 const HOST_SESSION_KEYS = ['CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_USER_EMAIL', 'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_AGENT_SDK_VERSION'];

@@ -198,7 +198,7 @@ export const QUICK_LINGER_MS = 30 * 60_000;
 //   ③ 还在跑 / 在等人的（busy），哪只桶都算；
 //   ④ 最近 QUICK_LINGER_MS 内动过的。
 // 其余（旧桶的老会话、当前桶更旧的会话）隐藏，文件留盘不删。
-// 以前只认①：别处一点「新建快照」，正在跑的那条快照对话当场从所有侧栏消失（2026-10-13 实测）。
+// 以前只认①：别处一点「新建快照」，正在跑的那条快照对话当场从所有侧栏消失（2026-10-13 维护者截图）。
 export function quickSessionFilter(opts: { busy?: (id: string) => boolean; now?: number } = {}): (m: SessionMeta) => boolean {
   let seenCurrent = false;
   let seenAny = false;

@@ -37,13 +37,15 @@
   import { send, queueSend } from '../../lib/chat.svelte.js';
   import { IS_SHARE } from '../../lib/share.js';
   import { IS_CSNAP } from '../../lib/csnap.js';
+  import { isOffline } from '../../lib/server.js';
+  import { isNativeDesktop, desktopOpenExternal } from '../../lib/nativeDesktop.js';
   import { buildSrcdoc, themeVars, currentMode, bridgeVarRefs, styleText, widgetCss, ARROW_DEFS, sanitizeStatic, stripScripts, visibleMarkup, isSvgCode, standaloneFile, fileStem } from '../../lib/widgetShell.js';
   import ClaudeLogo from '../ClaudeLogo.svelte';
 
   const { seg, live = false } = $props();
 
-  // Android 壳：注入了原生桥（AndroidStore 在就是 apk）——图表按静态预览出
-  const STATIC = typeof window !== 'undefined' && !!window.AndroidStore;
+  // Android 壳：离线 apk 的 appassets 源（server.js isOffline），或在线壳里注入了原生桥（AndroidStore 在就是 apk）
+  const STATIC = isOffline() || (typeof window !== 'undefined' && !!window.AndroidStore);
   const HIDDEN = IS_SHARE || IS_CSNAP;
   const MAX_H = 1800;          // 再高就在框里滚（官方同样有上限）
   const PARTIAL_MS = 120;      // 流式代码推给 iframe 的节流
@@ -244,7 +246,8 @@
   function confirmAsk() { const s = askText; askText = ''; if (s) deliver(s); }
   function openExternal(url) {
     if (!/^https?:\/\//i.test(url) || !userClickedFrame()) return;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    if (isNativeDesktop()) desktopOpenExternal(url);
+    else window.open(url, '_blank', 'noopener,noreferrer');
   }
   async function saveDataUrl(url, name) {
     if (!/^data:/i.test(url) || !userClickedFrame()) return;

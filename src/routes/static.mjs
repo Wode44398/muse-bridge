@@ -5,14 +5,19 @@
 // directly (the /api/capabilities endpoint requires auth, so a logged-out first
 // paint would otherwise have no model list). no-store so iOS Safari never caches.
 //
+// `/legacy`: the old single-file frontend, kept as a fallback during the cutover.
+//
 // `/app` and `/app/*`: the new frontend's entry + static assets (hashed JS/CSS,
-// fonts, mascot, icons). The mini-router is exact-match with no
+// fonts, wallpaper, mascot, icons). The mini-router is exact-match with no
 // wildcards, so a middleware handles the /app/ prefix.
+//
+// `/debug.html`: the local-only debug console, served whole.
 
 import path from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
+import { moduleWebDirs } from '../modules/registry.mjs';
 import { CAPABILITIES } from '../config/capabilities.mjs';
-import { PUBLIC_DIR } from '../config/index.mjs';
+import { PUBLIC_DIR, NO_AUTH } from '../config/index.mjs';
 import { mimeType } from '../runtime/http-file.mjs';
 import { compressedStatic } from './static-compress.mjs';
 
@@ -59,6 +64,19 @@ async function serveStatic(req, res, file, { immutable = false } = {}) {
   }
 }
 
+// /app/<rel> 落到哪个文件：主构建优先，没有再去已装功能扩展（离线包）自带的 web/ 里找。
+// 以前每个资源请求同步 existsSync 一遍（本机每次 0.3–0.6ms，冷启动几十个资源一起来）；改成异步 stat。
+async function resolveAppFile(rel) {
+  const main = path.join(PUBLIC_DIR, 'app', rel);
+  const isFile = async (f) => { try { return (await stat(f)).isFile(); } catch { return false; } };
+  if (await isFile(main)) return main;
+  for (const d of moduleWebDirs()) {
+    const f = path.join(d, rel);
+    if (await isFile(f)) return f;
+  }
+  return main;
+}
+
 export function registerStaticRoutes(router) {
   // New frontend assets at /app/* (router has no wildcard — intercept the prefix).
   router.use(async (req, res, url) => {
@@ -67,7 +85,9 @@ export function registerStaticRoutes(router) {
     // claude-小人-正面站立.svg) resolve to the real on-disk file instead of 404.
     let rel; try { rel = decodeURIComponent(url.pathname.slice(5)); } catch { rel = url.pathname.slice(5); }
     rel = rel.replace(/\.\.+/g, '').replace(/^\/+/, '');
-    await serveStatic(req, res, path.join(PUBLIC_DIR, 'app', rel), { immutable: rel.startsWith('assets/') });
+    // 主构建里没有的，去已装功能扩展（离线包）自带的 web/ 里找——基础版的主包不含扩展前端 chunk。
+    const file = await resolveAppFile(rel);
+    await serveStatic(req, res, file, { immutable: rel.startsWith('assets/') });
     return false; // handled — stop dispatch
   });
 
@@ -91,11 +111,19 @@ export function registerStaticRoutes(router) {
   };
 
   const serveApp = serveHtml(path.join(PUBLIC_DIR, 'app', 'index.html'));    // new frontend
+  const serveLegacy = serveHtml(path.join(PUBLIC_DIR, 'index.html'));        // old single-file (fallback)
 
   router.on('GET', '/', serveApp);
   router.on('GET', '/index.html', serveApp);
   router.on('GET', '/app', serveApp);
+  router.on('GET', '/legacy', serveLegacy);
 
-  // 零信息探活端点：部署脚本、看门狗、前端可达性检测都用它。
-  router.on('GET', '/healthz', (_req, res) => { res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('ok'); });
+  // ACAO:* 必须有——离线壳（appassets 源）跨源 fetch /healthz 做局域网探活，无此头
+  // 浏览器会拦掉响应让 fetch reject，导致 LAN 自动直连永远探不通、形同虚设。零信息端点，放行安全。
+  router.on('GET', '/healthz', (_req, res) => { res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }); res.end('ok'); });
+  // 调试控制台只在本地 NO_AUTH 桌面实例提供；隧道侧 404（其 /api/admin/* 本就 404，HTML 壳也不外露）。
+  router.on('GET', '/debug.html', (req, res) => {
+    if (!NO_AUTH) { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('not found'); return; }
+    serveStatic(req, res, path.join(PUBLIC_DIR, 'debug.html'));
+  });
 }

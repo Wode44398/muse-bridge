@@ -28,7 +28,7 @@
 // 没有 Web Locks（非安全上下文，如局域网 http://192.168…）就退回各连各的老路。
 
 import { authHeaders } from './api.js';
-import { apiUrl } from './server.js';
+import { apiUrl, noteNetFail } from './server.js';
 import { pump, watch, linkAbort } from './sse.js';
 
 const handlers = new Set();
@@ -137,6 +137,7 @@ async function loop(signal) {
       if (signal.aborted) return;
       // 鉴权失败重连永远不会成功——安静退出，调用方回落轮询（它自己会撞出 401 提示）。
       if (e && (e.status === 401 || e.status === 403)) return;
+      noteNetFail();                       // LAN 失效 → 下次重试自动走隧道
       if (!(await backoff(attempt, signal))) return;
       continue;
     }

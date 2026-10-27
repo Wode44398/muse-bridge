@@ -86,6 +86,9 @@ function linkExtras(l) {
   if (typeof l.task === 'string' && /^task_[0-9a-f]{8}$/.test(l.task)) o.task = l.task;
   if (typeof l.toolUseId === 'string' && l.toolUseId) o.toolUseId = l.toolUseId.slice(0, 128);
   if (l.auto === true) o.auto = true;
+  // 10-26：开到别的项目里的子会话（start_session project）——记下项目 id 与显示名，给子会话提示词、结果文本用
+  if (typeof l.projectId === 'string' && l.projectId) o.projectId = l.projectId.slice(0, 80);
+  if (typeof l.projectName === 'string' && l.projectName) o.projectName = l.projectName.slice(0, 80);
   return o;
 }
 
@@ -533,6 +536,29 @@ async function dropChildWorktree(ctx, wt) {
   } catch {}
 }
 
+// start_session 的 project：项目 id、显示名（不分大小写）或项目目录的绝对路径 → 本身份项目表里的那一项。
+// 只认这个身份自己的项目（成员看不到别人的；临时对话桶不算——一次性目录，不是「别的工作空间」）。
+// 返回 { ok:true, project:{ id, name, path } } 或 { ok:false, reason }（reason 里列出能用的项目）。
+export function resolveProject(ctx, v) {
+  const want = String(v || '').trim();
+  const list = projectChoices(ctx);
+  if (!want) return { ok: false, reason: 'project 不能为空' };
+  const lc = want.toLowerCase();
+  let hits = list.filter((p) => p.id === want);
+  if (!hits.length && path.isAbsolute(want)) hits = list.filter((p) => foldPath(p.path) === foldPath(want));
+  if (!hits.length) hits = list.filter((p) => String(p.name || '').toLowerCase() === lc);
+  if (hits.length > 1) return { ok: false, reason: `有 ${hits.length} 个项目都叫「${want}」，改用 id：${hits.map((p) => `${p.id}（${p.path}）`).join('、')}` };
+  if (!hits.length) return { ok: false, reason: `没有叫「${want}」的项目。能用的项目：${list.map((p) => `「${p.name}」（id: ${p.id}）`).join('、') || '（无）'}` };
+  const p = hits[0];
+  let dir;
+  try { dir = claudeProjects.authorizeProjectPath(idc(ctx), p.path); } catch (e) { return { ok: false, reason: `项目「${p.name}」的目录不可用：${(e && e.message) || e}` }; }
+  return { ok: true, project: { id: p.id, name: p.name, path: dir } };
+}
+/** 这个身份能把子会话开过去的项目（不含临时对话桶）：resolveProject 与 list_sessions 用。 */
+export function projectChoices(ctx) {
+  try { return claudeProjects.listProjects(ctx.claudeProjects, idc(ctx)).filter((p) => !p.quick).map((p) => ({ id: p.id, name: p.name, path: p.path, def: !!p.def })); } catch { return []; }
+}
+
 /** 现在还能不能给这个会话开子会话（start_session 先问一声，开不了就不必落卡 / 占名额）。返回 null 或 { code, reason }。 */
 export function spawnLimit(ctx, parentSid) {
   if (childrenOf(ctx, parentSid).length + (childLaunching.get(K(ctx.key, parentSid)) || 0) >= MAX_CHILDREN) return { code: 'children', reason: `这个会话已经派生了 ${MAX_CHILDREN} 个子会话，到上限了` };
@@ -555,16 +581,20 @@ export function parentCtxFor(ctx, parentSid) {
 // 否则共用。fork 不收它：父会话在 worktree 里 → 新 worktree（从父分支末端切）；普通目录 → 共用目录。
 // 失败返回 { ok:false, code, reason, userReason? }：code ∈ children（子会话数到上限）/ live（同时在跑的到上限）/ worktree / fork / start；
 // reason 是写给模型的，userReason（有的话）是卡片上给用户看的——卡片一律取 userReason || reason。
-export async function spawnChild(ctx, parentSid, { title, prompt, background = '', context = 'fresh', model, name, worktree, useWorktree, branchName, lastUserUuid, task, toolUseId, auto }) {
+export async function spawnChild(ctx, parentSid, { title, prompt, background = '', context = 'fresh', model, name, worktree, useWorktree, branchName, lastUserUuid, task, toolUseId, auto, project }) {
   const lim = spawnLimit(ctx, parentSid);
   if (lim) return { ok: false, ...lim };
   const ck = K(ctx.key, parentSid);
   bump(childLaunching, ck, 1);   // 占一个子会话名额，直到记进父子表（或没开成）
-  try { return await spawnChildNow(ctx, parentSid, { title, prompt, background, context, model, name, worktree, useWorktree, branchName, lastUserUuid, task, toolUseId, auto }); }
+  try { return await spawnChildNow(ctx, parentSid, { title, prompt, background, context, model, name, worktree, useWorktree, branchName, lastUserUuid, task, toolUseId, auto, project }); }
   finally { bump(childLaunching, ck, -1); }
 }
-async function spawnChildNow(ctx, parentSid, { title, prompt, background, context, model, name, worktree, useWorktree, branchName, lastUserUuid, task, toolUseId, auto }) {
+async function spawnChildNow(ctx, parentSid, { title, prompt, background, context, model, name, worktree, useWorktree, branchName, lastUserUuid, task, toolUseId, auto, project }) {
   const fork = context === 'fork';
+  // 开到别的项目（project = resolveProject 的结果）；就是父会话所在的项目就当没给，照常走下面
+  if (project && project.id && !fork && claudeProjects.locateSessionProject(ctx.claudeProjects, idc(ctx), parentSid)?.id !== project.id) {
+    return spawnAway(ctx, parentSid, project, { title, prompt, background, model, name, useWorktree, branchName, task, toolUseId, auto });
+  }
   const parentWt = ctx.worktree && ctx.worktree.cwd ? ctx.worktree : null;
   const wantWt = fork ? !!parentWt : (typeof useWorktree === 'boolean' ? useWorktree : !!parentWt);
   let wt = null, startBase = null;
@@ -611,6 +641,37 @@ async function spawnChildNow(ctx, parentSid, { title, prompt, background, contex
   if (!r.ok) { removeLink(ctx, child); await dropChildWorktree(ctx, wt); return { ok: false, code: r.code || 'start', reason: r.reason }; }
   busPublish(ctx.key, { type: 'family', sessionId: parentSid, child, title: link.title });
   return { ok: true, id: child, name: link.name, title: link.title, ...(wt ? { worktree: { branch: wt.branch, cwd: wt.cwd }, startBase } : {}) };
+}
+
+// 子会话开在别的项目里：cwd = 那个项目的目录（useWorktree:true 时从那个项目当前分支切一个 worktree）。
+// 父子关系照常登记——汇报、send_message、read_session 都按会话 id 走，跟项目无关；侧栏里它列在那个项目下面。
+async function spawnAway(ctx, parentSid, project, { title, prompt, background, model, name, useWorktree, branchName, task, toolUseId, auto }) {
+  let wt = null;
+  if (useWorktree === true) {
+    try {
+      wt = await createSessionWorktree(ctx.claudeProjects, { id: project.id, path: project.path }, { hint: branchName || name || title, prefix: claudeSetting(ctx, 'branchPrefix'), baseRef: claudeSetting(ctx, 'worktreeBaseRef') });
+    } catch (e) { return { ok: false, code: 'worktree', reason: `在项目「${project.name}」里开 worktree 失败：${(e && e.message) || e}；不带 use_worktree 就直接在那个项目目录里干活`, userReason: `项目「${project.name}」没法单独开工作树` }; }
+  }
+  const child = randomUUID();
+  const parentTitle = await titleOf(ctx, parentSid);
+  const link = addLink(ctx, child, { parent: parentSid, parentTitle, title, name, kind: 'fresh', projectId: project.id, projectName: project.name, ...(wt ? { branch: wt.branch } : {}), task, toolUseId, auto });
+  const parentLink = familyLink(ctx, parentSid);
+  const text = [background ? '【背景】\n' + background : '', '【任务】\n' + prompt].filter(Boolean).join('\n\n');
+  const message = messageBlock({ from: parentSid, fromName: parentLink?.name || '', fromTitle: parentTitle, relation: 'parent', brief: true, text });
+  const rp = replayByKey.get(ctx.key);
+  const body = rp ? bodyFor(ctx, parentSid, rp) : null;
+  if (body && model) body.model = model;
+  const r = await startTurn(ctx, child, {
+    message, body, isNew: true,
+    family: {
+      origin: { kind: 'spawn', from: [parentSid] }, newSessionId: child,
+      cwd: wt ? wt.cwd : project.path, projectId: project.id,
+      worktree: wt ? { name: wt.name, branch: wt.branch, root: wt.root, projectId: project.id } : null,
+    },
+  });
+  if (!r.ok) { removeLink(ctx, child); await dropChildWorktree({ ...ctx, cwd: project.path }, wt); return { ok: false, code: r.code || 'start', reason: r.reason }; }
+  busPublish(ctx.key, { type: 'family', sessionId: parentSid, child, title: link.title });
+  return { ok: true, id: child, name: link.name, title: link.title, project: { id: project.id, name: project.name, path: project.path }, ...(wt ? { worktree: { branch: wt.branch, cwd: wt.cwd }, startBase: { from: wt.base, missing: 0 } } : {}) };
 }
 
 // 给同一棵树里的会话发消息

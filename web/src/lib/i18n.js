@@ -8,10 +8,15 @@
 //
 // 语言在启动时定死：入口（main.js / quick.js / solo.js）先 await initI18n() 拿到字典，再加载业务模块——
 // 所以模块顶层常量里调 t() 也安全。切换语言 = 写偏好 + 整页重载（setLang），不做热切换。
-// 默认简体中文、不跟随系统：系统界面是英文的电脑很常见，跟随系统会让界面突然变英文。
+// 默认简体中文、不跟随系统：维护者这台电脑 Windows 界面是 en-US，跟随系统会让桌面端突然变英文。
 //
 // 字典存在 globalThis 上：dimensio（harness/web，经 @hx 编进本包）的 lib/i18n.ts 读同一份，两边 t() 结果一致。
 // 字典键冲突、漏译、占位符不一致由 web/scripts/i18n-check.mjs 查（本文件自身 i18n-ignore-file）。
+//
+// 发行版（lib/distro.js）：别的发行版（Muse Bridge…）的品牌名在 t / tc / tr 出口统一替换「The Bridge」；
+// 发行版声明 langDefault:'browser' 时，没存过偏好就跟浏览器语言（本体仍默认中文）。
+
+import { DISTRO, brandText } from './distro.js';
 
 const KEY = 'bridge-lang';
 export const LANGS = [
@@ -26,14 +31,21 @@ function storedPref() {
   try { const v = localStorage.getItem(KEY); return v === 'en' || v === 'zh' ? v : null; } catch { return null; }
 }
 
-// 没存过偏好时跟浏览器走：浏览器语言列表里有中文就用中文，一个都没有就用英文
-// （与服务端分享密码页 share-gate 的 pageLang 同一规则）。Muse Bridge 是给所有 Muse 用户的公开产品，
-// 不能像自用的 bridge 那样默认中文——英文用户装完打开第一眼就是一屏中文。
-function browserDefault() {
+// 浏览器语言列表里一个中文都没有才用英文（与服务端分享密码页 share-gate 的 pageLang 同一规则）
+function browserLang() {
   try {
     const langs = navigator.languages?.length ? navigator.languages : [navigator.language || ''];
     return langs.some((l) => /^zh/i.test(l)) ? 'zh' : 'en';
-  } catch { return 'zh'; }
+  } catch { return null; }
+}
+
+// 没存过偏好时的默认：公开页（/w/ 只读分享、/c/ 聊天快照）的访客多半是外人，跟浏览器走；
+// 发行版声明跟浏览器的（langDefault:'browser'）整站都跟浏览器走；其余默认中文
+function defaultLang() {
+  try {
+    if (/^\/(w|c)\/[^/?#]+/.test(location.pathname)) return browserLang() || 'zh';
+  } catch {}
+  return (DISTRO.langDefault === 'browser' && browserLang()) || 'zh';
 }
 
 export function langPref() {
@@ -41,7 +53,7 @@ export function langPref() {
     const q = new URLSearchParams(location.search).get('lang');   // 调试/截图：?lang=en 临时覆盖
     if (q === 'zh' || q === 'en') return q;
   } catch {}
-  return storedPref() || browserDefault();
+  return storedPref() || defaultLang();
 }
 
 /** 当前界面语言：'zh' | 'en'（启动后不变） */
@@ -50,25 +62,29 @@ export const isEn = () => G.lang === 'en';
 /** 给 Intl / toLocaleString 用的 BCP 47 标签 */
 export const locale = () => (G.lang === 'en' ? 'en-US' : 'zh-CN');
 
-/** 入口在挂载任何业务模块之前调一次。英文时并行拉 bridge 与 dimensio 两份字典。 */
+/** 入口在挂载任何业务模块之前调一次。英文时拉 bridge 的字典；dimensio（功能扩展）的字典随它的页面
+ *  一起加载（modules/pages.js → addDict），基础版不去取不存在的 chunk。 */
 export async function initI18n() {
   G.lang = langPref();
   try { document.documentElement.lang = G.lang === 'en' ? 'en' : 'zh-CN'; } catch {}
   if (G.lang === 'en') {
-    const mods = await Promise.all([
-      import('../i18n/en/index.js'),
-      import('@hx/i18n/en/index.ts'),
-    ].map((p) => p.catch((e) => { console.warn('[i18n] 字典加载失败', e); return null; })));
-    for (const m of mods) if (m?.default) Object.assign(G.dict, m.default);
-    G.pats = null;
+    const m = await import('../i18n/en/index.js').catch((e) => { console.warn('[i18n] 字典加载失败', e); return null; });
+    if (m?.default) addDict(m.default);
   }
   // 原生壳（安卓通知/悬浮胶囊、桌面壳托盘/系统通知）跟着网页存下的偏好走；?lang= 临时覆盖不外溢到原生侧
-  const saved = storedPref() || browserDefault();
+  const saved = storedPref() || (DISTRO.langDefault === 'browser' && browserLang()) || 'zh';
   try { window.AndroidStore?.setLang?.(saved); } catch {}
   try { window.BridgeDesktop?.setLang?.(saved); } catch {}
 }
 
 /** 设置页切换语言：存偏好后整页重载 */
+/** 功能扩展带来的英文字典并进全局（中文界面下不需要，调用方先看 lang()）。 */
+export function addDict(dict) {
+  if (!dict) return;
+  Object.assign(G.dict, dict);
+  G.pats = null;
+}
+
 export function setLang(v) {
   if (v !== 'zh' && v !== 'en') return;
   try { localStorage.setItem(KEY, v); } catch {}
@@ -81,6 +97,7 @@ export function setLang(v) {
 }
 
 function fill(s, p) {
+  s = brandText(s);
   if (!p) return s;
   return s.replace(/\{(\w+)\}/g, (m, k) => (p[k] === undefined || p[k] === null ? m : String(p[k])));
 }
@@ -130,7 +147,10 @@ function patterns() {
   return (G.pats = out);
 }
 
-export function tr(s) {
+// 运行时文案的品牌替换在出口统一做一次（中文界面原样返回的也要换）
+export function tr(s) { return brandText(trRaw(s)); }
+
+function trRaw(s) {
   if (G.lang !== 'en' || typeof s !== 'string' || !s || !CJK.test(s)) return s;
   const v = G.dict[s];
   if (v !== undefined) return pick(v, null);

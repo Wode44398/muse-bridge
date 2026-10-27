@@ -1,10 +1,10 @@
 // agent 开关与状态：每个 agent「勾没勾 / 能不能跑 / 认证了没」的单一真相。
 //
 //   勾选 switch   —— 管理员在设置「Agent」页里的开关，存 config.json 的 agents 键
-//                    （{ claude:true, dimensio:false }，没写的项 = 默认开）。部署脚本按用户在
-//                    「只要 Claude / 只要 dimensio / 都要」里的选择写这个键。
-//   能跑 runnable —— 这台机器装了：dimensio 要 harness 目录且装好了依赖（只选 Claude 时部署脚本
-//                    不装 harness 的依赖）。探测不 spawn，结果缓存 20 秒。
+//                    （{ claude:true, codex:false, … }，没写的项 = 默认开）。
+//   能跑 runnable —— 所属功能扩展装了且加载成功（modules/registry.mjs；Claude 是核心恒在），
+//                    再由扩展自报这台机器上跑不跑得起来：codex 要 CLI、dimensio 要 harness 目录。
+//                    探测不 spawn，结果缓存 20 秒。
 //   认证 authed   —— 凭据配没配（仅作提示）：token 过期这种临时态不该让整个分页消失，
 //                    Claude 自己就有「未认证提示卡」，所以【不】参与 enabled 判定。
 //
@@ -17,12 +17,10 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { fileURLToPath } from 'node:url';
-import { CONFIG_PATH, config } from '../config/index.mjs';
+import { CONFIG_PATH, config, VERTEX_PROJECT, GEMINI_API_KEY } from '../config/index.mjs';
 import { AGENTS, AGENT_IDS, AGENT_BY_ID } from '../config/agents.mjs';
 import { busPublishAll } from './bus.mjs';
-
-const HARNESS_DIR = fileURLToPath(new URL('../../harness', import.meta.url));
+import { agentModuleRunnable, getModule, moduleOfAgent, moduleOffered, moduleStatus } from '../modules/registry.mjs';
 
 // ── 开关 ────────────────────────────────────────────────────────────────────
 function normSwitches(raw) {
@@ -51,12 +49,13 @@ export function setAgentSwitch(id, on) {
 }
 
 // ── 探测 ────────────────────────────────────────────────────────────────────
-const RUNNABLE = {
-  claude: () => true,                    // Agent SDK 自带引擎二进制
-  dimensio: () => existsSync(path.join(HARNESS_DIR, 'server', 'index.ts')) && existsSync(path.join(HARNESS_DIR, 'node_modules')),
-};
+// Claude 是核心（Agent SDK 自带引擎二进制）；其余 agent 交给所属扩展自报。
+const runnableOf = (id) => agentModuleRunnable(id);
 
 const fileHasKey = (file, re) => { try { return re.test(readFileSync(file, 'utf8')); } catch { return false; } };
+const gcloudAdc = () => (process.platform === 'win32'
+  ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'gcloud', 'application_default_credentials.json')
+  : path.join(os.homedir(), '.config', 'gcloud', 'application_default_credentials.json'));
 
 const AUTHED = {
   claude: () => {
@@ -67,15 +66,27 @@ const AUTHED = {
     const cfgDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
     return existsSync(path.join(cfgDir, '.credentials.json'));
   },
+  gemini: () => {
+    if (GEMINI_API_KEY) return true;
+    if (!VERTEX_PROJECT) return false;
+    const sa = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    return (!!sa && existsSync(sa)) || existsSync(gcloudAdc());
+  },
+  codex: () => !!process.env.OPENAI_API_KEY || existsSync(path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json')),
   dimensio: () => {
     const KEY_RE = /^\s*(ANTHROPIC|DEEPSEEK|ZHIPU|KIMI|MOONSHOT|QWEN|DASHSCOPE|GEMINI|OPENAI|MIMO)_API_KEY\s*=\s*\S+/m;
     if (Object.keys(process.env).some((k) => /^(ANTHROPIC|DEEPSEEK|ZHIPU|KIMI|MOONSHOT|QWEN|DASHSCOPE|GEMINI|OPENAI|MIMO)_API_KEY$/.test(k) && process.env[k])) return true;
-    if (fileHasKey(process.env.HARNESS_ENV_FILE || path.join(HARNESS_DIR, '.env'), KEY_RE)) return true;
-    // 设置页填的厂商 key 加密存在自定义模型服务目录的 connector-secrets.json 里（harness paths.ts customProvidersDir）：
-    // 它在也算配了。部署脚本把 DIMENSIO_CUSTOM_PROVIDERS_DIR 指到 <数据根>/dimensio/custom-providers。
+    const mod = getModule('dimensio');
+    const dir = mod?.harnessDir?.();
+    // 管理员实例实际加载的 .env：扩展说了算（数据根 ≠ 程序目录时默认在 <数据根>/dimensio/.env，见 harness-data.mjs）；
+    // 老扩展没这个导出时回落到原来的 HARNESS_ENV_FILE > <harness 目录>/.env。
+    const envFile = mod?.harnessEnvFile?.() || process.env.HARNESS_ENV_FILE || (dir && path.join(dir, '.env'));
+    if (fileHasKey(envFile, KEY_RE)) return true;
+    // 设置页填的厂商 key 加密存在自定义模型服务目录的 connector-secrets.json 里（harness paths.ts customProvidersDir）
     const cpEnv = String(process.env.DIMENSIO_CUSTOM_PROVIDERS_DIR || '').trim();
-    const cpDir = cpEnv ? path.resolve(HARNESS_DIR, cpEnv) : path.join(HARNESS_DIR, 'custom-providers');
-    return existsSync(path.join(cpDir, 'connector-secrets.json'));
+    const home = mod?.harnessDataDir?.() || dir;
+    const cpDir = cpEnv ? path.resolve(dir || '.', cpEnv) : (home && path.join(home, 'custom-providers'));
+    return !!cpDir && existsSync(path.join(cpDir, 'connector-secrets.json'));
   },
 };
 
@@ -86,7 +97,7 @@ function probes() {
   if (probeCache && Date.now() - probeCache.at < PROBE_TTL) return probeCache;
   const runnable = {}, authed = {};
   for (const id of AGENT_IDS) {
-    try { runnable[id] = !!RUNNABLE[id](); } catch { runnable[id] = false; }
+    try { runnable[id] = !!runnableOf(id); } catch { runnable[id] = false; }
     try { authed[id] = runnable[id] && !!AUTHED[id](); } catch { authed[id] = false; }
   }
   probeCache = { at: Date.now(), runnable, authed };
@@ -99,13 +110,23 @@ export function agentEnabled(id) { return !!AGENT_BY_ID[id] && agentRunnable(id)
 export function enabledAgents() { return AGENT_IDS.filter(agentEnabled); }
 
 const NOT_RUNNABLE_NOTE = {
-  dimensio: '部署时没装 dimensio（让部署助手重新选择要装的 agent）',
+  codex: '没找到 Codex CLI',
+  dimensio: '程序目录里缺 harness',
 };
+
+// 不能跑的原因：先看扩展装没装、加载有没有出错，再落到扩展自己的探测说明。
+function notRunnableNote(id) {
+  const mod = moduleStatus(moduleOfAgent(id));
+  if (mod && !mod.installed) return '未安装「' + mod.label + '」扩展';
+  if (mod && mod.error) return '「' + mod.label + '」扩展' + mod.error;
+  return NOT_RUNNABLE_NOTE[id] || '这台机器上不可用';
+}
 
 // 给设置「Agent」页（管理员）的完整视图。
 export function agentStatusList() {
   const p = probes();
-  return AGENTS.map((a) => ({
+  // 这一版不提供其扩展的 agent（公开版的 Codex）不列
+  return AGENTS.filter((a) => { const m = moduleOfAgent(a.id); return !m || moduleOffered(m); }).map((a) => ({
     id: a.id,
     label: a.label,
     multiUser: a.multiUser,
@@ -113,6 +134,7 @@ export function agentStatusList() {
     runnable: !!p.runnable[a.id],
     authed: !!p.authed[a.id],
     enabled: agentEnabled(a.id),
-    note: !p.runnable[a.id] ? (NOT_RUNNABLE_NOTE[a.id] || '这台机器上不可用') : (!p.authed[a.id] ? '还没配认证' : ''),
+    note: !p.runnable[a.id] ? notRunnableNote(a.id) : (!p.authed[a.id] ? '还没配认证' : ''),
+    module: moduleStatus(moduleOfAgent(a.id)),
   }));
 }

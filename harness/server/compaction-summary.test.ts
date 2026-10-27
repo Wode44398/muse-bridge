@@ -1,5 +1,5 @@
 // #83：压缩摘要请求以前只有转录本身、没有一句指令，关着思考的本机 Qwen 连跑 5 次有 2 次只回「.」或几十个字（Q6 的
-// 压缩召回 eval 在真实会话副本上照出来：生产摘要与空摘要的召回一样是 0）。压缩于是悄悄清空了上下文。
+// 压缩召回 eval 在正式服会话副本上照出来：生产摘要与空摘要的召回一样是 0）。压缩于是悄悄清空了上下文。
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ensureContextFits, estimateTokens, SUMMARY_INSTRUCTION, summarize } from "./agent/context.ts";

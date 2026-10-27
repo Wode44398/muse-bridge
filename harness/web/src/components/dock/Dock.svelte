@@ -52,7 +52,7 @@
     { key: "files", label: tc("dimensio", "文件"), icon: "folder", kbd: "Ctrl+Shift+E" },
   ];
   // 多用户服务端上没有命令行的账号（harness 租户实例报 tenant.shell=false）：不摆终端。
-  // 服务端没有浏览器工具（这台机器没装 Chromium 系浏览器，app.info.tools 里没有 Browser）：不摆浏览器。
+  // D5：服务端没有浏览器工具（这台机器没有可用的浏览器，app.info.tools 里没有 Browser）：不摆浏览器。
   const termOn = $derived(app.info?.tenant?.shell !== false);
   const browserOn = $derived(browserToolAvailable());
   const TOOLS = $derived(ALL_TOOLS.filter((x) => (x.key !== "term" || termOn) && (x.key !== "browser" || browserOn)));

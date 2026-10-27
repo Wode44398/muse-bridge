@@ -18,8 +18,7 @@
 //      版本不一致，过一会儿自动再试下载；还是什么都没有就如实报错——设置 › Claude 页显示原因与「重试」，
 //      发消息时错误卡片说明（status.mjs classifyError 认 code === 'CLAUDE_CLI_NOT_READY'）。
 // 进度与状态：claudeCliStatus()（GET /api/claude-cli，见 routes/claude-cli.mjs）。
-// 自动下载默认关（Muse Bridge）：要开就设 BRIDGE_CLAUDE_CLI_DOWNLOAD=1 或 config.json "claudeCliDownload": true。
-// 关着时第 5 步跳过，直接走第 6 步的本机退路。
+// 关掉自动下载：BRIDGE_CLAUDE_CLI_DOWNLOAD=0 或 config.json "claudeCliDownload": false（离线部署自己放二进制）。
 // 在源码目录里验收首启下载：BRIDGE_CLAUDE_CLI_SKIP_SDK=1（不认 node_modules 里的平台包）+ 临时数据根。
 //
 // 不读 config/index.mjs（那边导入即建目录、缺令牌直接退出）：config.json 按需现读，测试也能单独导入本模块。
@@ -322,8 +321,7 @@ export function createClaudeCli(opts = {}) {
   let explicitBad = null;    // 显式指定的路径不存在
 
   const cfg = () => { try { return readConfig() || {}; } catch { return {}; } };
-  // Muse Bridge 默认不联网下载：服务端靠 npm 装的 SDK 平台包自带 CLI，下载只在显式打开时做（出站只走代理、不该偷偷拉二进制）。
-  const downloadEnabled = () => env.BRIDGE_CLAUDE_CLI_DOWNLOAD === '1' || cfg().claudeCliDownload === true;
+  const downloadEnabled = () => env.BRIDGE_CLAUDE_CLI_DOWNLOAD !== '0' && cfg().claudeCliDownload !== false;
   // 验收 / 调试用：BRIDGE_CLAUDE_CLI_SKIP_SDK=1 不认 node_modules 里的平台包，在源码目录里模拟安装包布局（走首启下载）
   const skipSdk = () => env.BRIDGE_CLAUDE_CLI_SKIP_SDK === '1';
   // 下载源：自定义的（环境变量 / config.json）排最前，再官方、国内镜像。opts.registries（测试）整个替换。
@@ -535,7 +533,7 @@ export function createClaudeCli(opts = {}) {
       try { rmSync(d.path, { force: true }); } catch {}
     }
     if (!downloadEnabled()) {   // 离线部署：不下载，只找本机的；都没有时状态是 missing，提示装 Claude Code 或指定路径
-      if (!(await fallbackAny())) log(`没找到 Claude Code ${sdk.cliVersion}，自动下载没开（BRIDGE_CLAUDE_CLI_DOWNLOAD=1 / claudeCliDownload:true 才会下载）`);
+      if (!(await fallbackAny())) log(`没找到 Claude Code ${sdk.cliVersion}，自动下载已关闭（BRIDGE_CLAUDE_CLI_DOWNLOAD=0 / claudeCliDownload:false）`);
       return;
     }
     phase = 'downloading';

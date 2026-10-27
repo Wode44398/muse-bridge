@@ -7,7 +7,7 @@
 //   · 会话基线：建会话时拍下「此刻连上的连接器 + 各自的工具定义」随会话落盘（见 tools/mcp.ts）；会话里的工具清单从此
 //     不变（前缀缓存不断），重启读回也照旧。之后装的连接器、服务端新出的工具，下一个新会话才有。
 //   · 墓碑：会话建好之后连接器被删了、停了、对 dimensio 取消勾选——工具定义照旧留着，调用时回「已移除，新会话生效」。
-//   · 不做：OAuth（扩展中心本身只有静态请求头 / 环境变量，#107 待定）、resources / prompts、sampling、elicitation。
+//   · 不做：OAuth（扩展中心本身只有静态请求头 / 环境变量，#107 待维护者定）、resources / prompts、sampling、elicitation。
 import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -61,6 +61,7 @@ type SecretsReader = (extRoot: string) => Record<string, { env?: Record<string, 
 let secretsReader: SecretsReader | null = null;
 async function readSecretsFn(): Promise<SecretsReader> {
   if (secretsReader) return secretsReader;
+  // 经 core-link：dimensio 离线包里没有 ../../src，靠 bridge 拉起时的 @bridge/core 钩子找到程序目录的核心
   const mod = (await import(coreUrl("extension-secrets.mjs"))) as { readSecrets: SecretsReader };
   secretsReader = mod.readSecrets;
   return secretsReader;

@@ -1,4 +1,4 @@
-// 「临时对话存为工作空间」与「工作空间改名」（2026-10-10；10-22 S1-6：任意一条临时对话都能存）。
+// 「临时对话存为工作空间」与「工作空间改名」（2026-10-10 维护者要求；10-22 S1-6：任意一条临时对话都能存）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync, rmSync } from 'node:fs';

@@ -82,7 +82,7 @@ async function flush(group, sessionId) {
   if (!mtime) { if (group.lastMtime.delete(sessionId)) invalidateSessionFiles(); return; }
   // 只播【mtime 真变了】的写入。目录事件不等于内容变化（Windows 上关句柄、改属性、外部工具
   // 扫描都可能触发 change），以前照播不误：客户端每收一条就把那个会话顶到列表最前 + 重拉整份
-  // transcript——老会话被莫名顶上去、列表看着像乱序（09-13 回归「顺序是乱的」）。mtime 没变
+  // transcript——老会话被莫名顶上去、列表看着像乱序（09-13 维护者报「顺序是乱的」）。mtime 没变
   // 的事件只进汇总日志（noteNoise，便于下次追是谁在碰文件），不上总线。
   if (group.lastMtime.get(sessionId) === mtime) { noteNoise(sessionId, mtime); return; }
   group.lastMtime.set(sessionId, mtime);

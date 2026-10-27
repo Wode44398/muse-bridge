@@ -7,7 +7,7 @@ import { DATA_ROOT } from './runtime/paths.mjs';
 const CONFIG_PATH = path.join(DATA_ROOT, 'config.json');
 // --hash：config.json 只存主令牌的 SHA-256（tokenHash），明文只在这里打印一次、请自行存好。
 // 服务端形态（VPS）推荐：config.json 被读到也拿不到能登录的东西。代价是忘了就只能重新生成。
-// 需要从 config.json 读回明文令牌的场景（本机调试）才别用 --hash。
+// 桌面壳附着主机要从 config.json 读明文令牌，主机端别用 --hash。
 const HASH_ONLY = process.argv.includes('--hash');
 
 let cfg = {};

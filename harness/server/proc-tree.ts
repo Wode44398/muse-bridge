@@ -3,7 +3,7 @@
 // 以前一律 `taskkill /PID <pid> /T /F`。taskkill 找子进程只看 ParentProcessId，而 Windows 上父进程退出后它的 PID
 // 会被系统复用：一个早已退出的启动器（explorer / powershell 拉起 wscript 就走了）留下的 PID，一旦被我们新起的某个
 // 子进程拿到，对这个子进程做 /T 就会把那条毫不相干的链——wscript → cmd → bridge——整条带走，没有日志、也没人重启。
-// 2026-09-24 04:05 生产上的 bridge 就是在跑 harness 全量测试期间这样没的（它的 wscript 的父 PID 正是悬空的）。
+// 2026-09-24 04:05 正式服 bridge 就是在跑 harness 全量测试期间这样没的（它的 wscript 的父 PID 正是悬空的）。
 //
 // 规则：子进程一定比父进程晚创建。收一棵树时先取一次进程表，从根往下只认「创建时间不早于父进程」的子进程，
 // 再逐个结束（不用 /T）。根必须还是我们认得的那个进程：Node 还没收到它的退出时进程句柄仍开着，系统不会复用它的

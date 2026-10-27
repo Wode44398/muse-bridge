@@ -3,7 +3,7 @@
 // → 响应头」的顺序判：给出类别、要不要重试、要不要先压缩再试、一句人话；上游关联头（request-id、cf-ray、server）
 // 一并带上，找 provider 客服或查代理日志时对得上号。
 // 覆盖的形状：Anthropic（{type:"error", error:{type,message}}）、OpenAI 兼容（{error:{type,code,message}}：OpenAI、
-// DeepSeek、Kimi、智谱、通义、MiMo、llama.cpp 兼容服务）、Gemini（{error:{code,status,message}}）、通义原生（{code,message}），
+// DeepSeek、Kimi、智谱、通义、MiMo、本机 llama.cpp）、Gemini（{error:{code,status,message}}）、通义原生（{code,message}），
 // 以及代理 / CDN 自己回的 HTML 页。
 
 import type { StreamEvent } from "../agent/events.ts";
@@ -244,7 +244,7 @@ function eventOf(kind: string, c: Classified, raw: unknown, retryAfter?: number)
   };
 }
 
-// 适配器用：HTTP 层的错误（状态码不是 2xx）。kind 仍是 http_<状态码>，别处按它认具体状态。ctx：自定义服务的请求现场。
+// 适配器用：HTTP 层的错误（状态码不是 2xx）。kind 仍是 http_<状态码>，别处按它认本机模型加载中之类。ctx：自定义服务的请求现场。
 export function httpErrorEvent(res: Response, raw: string, ctx?: ErrorCtx): ErrorEvent {
   return eventOf(`http_${res.status}`, classifyHttpError(res.status, raw, res.headers, ctx), raw, retryAfterMs(res));
 }

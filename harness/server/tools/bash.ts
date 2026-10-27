@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
@@ -124,7 +124,7 @@ function streamPump(b: OutBuf): { write: (buf: Buffer) => void; finish: () => vo
 // its node grandchild survives a plain kill(), so the whole tree has to go. (Shared
 // with services.ts — lives here because services already imports from this module.)
 // #77：以前是 taskkill /T——它只按 ParentProcessId 找子进程，会顺着「悬空的父 PID」把不相干的进程链整条带走
-// （2026-09-24 生产上的 bridge 就这样没的）。现在由 proc-tree.ts 按创建时间核对子孙后逐个结束；Node 已经收到
+// （2026-09-24 正式服 bridge 就这样没的）。现在由 proc-tree.ts 按创建时间核对子孙后逐个结束；Node 已经收到
 // 退出的子进程不再按 PID 去杀（PID 可能已被复用）。
 export function killTree(child: ChildProcess): void {
   killChildTree(child);
@@ -322,7 +322,7 @@ interface ShellInfo {
 export const shell: ShellInfo = detectShell();
 
 // Child env for spawned commands/servers: make sure localhost bypasses any
-// system proxy — `curl http://localhost:<port>` routed through a
+// system proxy (Clash etc.) — `curl http://localhost:<port>` routed through a
 // proxy returns 000/502 and reads as "my server is broken" when it's fine.
 // HTTP(S)_PROXY pass through so pip/curl/git in the sandbox can reach abroad;
 // they track net-proxy.ts's adaptive state because childEnv reads process.env
@@ -450,13 +450,31 @@ function explicitChildEnvNames(): Set<string> {
   );
 }
 
-// Sanctioned tool dirs: the Bridge extension skill directories granted to dimensio
-// (managed skill scripts). They are exempt from the workspace containment guard
-// below in BOTH sandbox access modes. Computed lazily: the registry may appear
-// after harness started and takes effect immediately. Only each granted skill's
-// own directory is listed — skills not granted to dimensio and the registry
-// itself (connector tokens) are not.
-const sanctionedToolDirs = (): string[] => grantedSkillDirs();
+// Machine-level tool channel: <harness>/tools (sibling of server/) holds
+// agent-callable tooling installed on this machine (e.g. tools/ifind). These
+// paths are sanctioned in BOTH sandbox access modes — the workspace containment
+// guard below exempts them, and childEnv mirrors the single credential file
+// their SDKs resolve via ~/.kimi/agent-gw.json into the isolated child home.
+// 勾给 dimensio 的 Bridge 扩展技能目录（托管技能脚本）同享白名单——惰性现算：装第一个
+// 扩展前 harness 可能已在跑，注册表出现即生效，不吃启动时快照。S3 起只到各技能自己的
+// 目录：没勾给 dimensio 的技能与注册表（连接器令牌）都不在白名单里。
+const SANCTIONED_TOOL_DIRS = [path.resolve(import.meta.dirname, "..", "..", "tools")];
+const sanctionedToolDirs = (): string[] => [...SANCTIONED_TOOL_DIRS, ...grantedSkillDirs()];
+
+function mirrorAgentGwCred(isolatedHome: string): void {
+  // 租户实例不给：那是管理员的 kimi 数据插件凭据。
+  if (tenantMode()) return;
+  try {
+    const src = path.join(os.homedir(), ".kimi", "agent-gw.json");
+    if (!existsSync(src)) return;
+    const dst = path.join(isolatedHome, ".kimi", "agent-gw.json");
+    if (existsSync(dst) && statSync(dst).mtimeMs >= statSync(src).mtimeMs) return;
+    mkdirSync(path.dirname(dst), { recursive: true });
+    copyFileSync(src, dst);
+  } catch {
+    // Non-fatal: the ifind call itself will surface the auth failure.
+  }
+}
 
 // Windows JVMs write GBK bytes to a pipe, so any Chinese from a java/javac/
 // gradle run comes back as mojibake (verified 2026-08-17: `java Hi.java | od -c`
@@ -496,6 +514,7 @@ export function childEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
   const localAppData = path.join(isolatedHome, "AppData", "Local");
   mkdirSync(appData, { recursive: true });
   mkdirSync(localAppData, { recursive: true });
+  mirrorAgentGwCred(isolatedHome);
   // 隔离 HOME 让「本机装了什么、用户配置在哪」的查找全落空（2026-10-09：查已装客户端扑空，打包的 Electron 取不到 desktop 目录崩启动），
   // 模型又不知道被重定向了。真实位置单独给出来，要找用户目录下的东西、或要以真实身份起 GUI 程序时显式用它；租户实例不给（那是管理员的家目录）。
   const realHome = tenantMode()
@@ -908,8 +927,9 @@ export function commandScopeViolation(
     // to Windows before the containment comparison.
     if (/^https?:\/\//i.test(raw)) continue;
     const candidate = resolveCandidate(raw);
-    // Granted Bridge extension skills are sanctioned in every access mode;
-    // everything else outside the workspace is blocked.
+    // Machine-level tools (<harness>/tools, e.g. ifind) and Bridge extension
+    // skills are sanctioned in every access mode; everything else outside the
+    // workspace is blocked.
     if (candidate && sanctionedToolDirs().some((dir) => inside(dir, candidate))) continue;
     if (candidate && !inside(path.resolve(root), path.resolve(candidate))) {
       if (!write && pureRead && (insideReadOnlyRoot(candidate) || readRoots.some((dir) => inside(path.resolve(dir), path.resolve(candidate))))) continue;

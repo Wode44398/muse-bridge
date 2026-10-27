@@ -9,14 +9,13 @@
 //   · 越界不弹「允许这一次 / 本会话只读」的卡：批准的人就是用户自己，弹了等于没拦——直接拒。
 //   · DIMENSIO_DENY_PATHS：额外的禁区（bridge 数据根、程序目录、别人的用户目录……），文件工具与命令行都拒；
 //     租户自己的根在禁区里也照常可用。
-//   · 关掉的工具（DIMENSIO_DISABLED_TOOLS，租户默认 LocalPC；没有命令行的租户再关 Bash / Preview）与 provider
-//     （DIMENSIO_DISABLE_PROVIDERS）。
-//   · 共享凭据不外带：租户没填自己的 key 时，provider 的请求地址只能是服务端配置的默认地址（config.ts 的
-//     providerBaseUrlFor / resolveConfig）——否则一个 baseUrl 就能把服务端的共享 key 发到任意地址。
-//   · 不连 bridge 的集成件：扩展注册表（里面有连接器凭据）、桌面壳浏览器宿主、本机 PC broker、用户的 Edge、
-//     任意本机调试端口（Browser attach）。
+//   · 关掉的工具（DIMENSIO_DISABLED_TOOLS；没有命令行的租户关 Bash / Preview）与 provider
+//     （DIMENSIO_DISABLE_PROVIDERS，租户默认 local——本机 llama.cpp 是整机资源，停它会连带别人的）。
+//   · 不连 bridge 的集成件：扩展注册表（里面有连接器凭据）、桌面壳浏览器宿主、管理员的设备通道（主机密钥）、用户的 Edge、
+//     任意本机调试端口（Browser attach）。设备工具照给，但 bridge 发的是按人令牌：只能操作这个用户自己名下的电脑
+//     （同 Claude 给注册用户的 mcp__device__*，见 tools/localpc.ts）。
 //
-// 这仍是应用层护栏（同 bridge 的「软隔离」），不是 OS 沙箱：有命令行的用户存心绕，
+// 这仍是应用层护栏（同 bridge 的「软隔离」，维护者 09-28 知情选择），不是 OS 沙箱：有命令行的用户存心绕，
 // 字符串守卫拦不住。要真隔离得按人降权或上容器。
 import path from "node:path";
 
@@ -110,8 +109,6 @@ export function disabledTools(): Set<string> {
       .filter(Boolean),
   );
   if (tenantMode()) {
-    set.add("LocalPCInspect");
-    set.add("LocalPCAct");
     if (!tenantShell()) {
       set.add("Bash");
       set.add("Preview");
@@ -122,12 +119,14 @@ export function disabledTools(): Set<string> {
 
 // 关掉的 provider。
 export function disabledProviders(): Set<string> {
-  return new Set(
+  const set = new Set(
     (process.env.DIMENSIO_DISABLE_PROVIDERS ?? "")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
   );
+  if (tenantMode()) set.add("local");
+  return set;
 }
 
 // 给 /api/info 的一份状态：前端据此藏掉访问范围开关、终端、连 Edge 这些入口。

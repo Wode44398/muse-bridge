@@ -11,6 +11,7 @@ import { untrack } from 'svelte';
 import { api } from './api.js';
 import { busOn } from './bus.js';
 import { IS_CSNAP } from './csnap.js';
+import { isNativeDesktop, desktopOpenExternal } from './nativeDesktop.js';
 import { storeGet, storeSet } from './store.js';
 import { showToast } from './toast.svelte.js';
 import { t, tc } from './i18n.js';
@@ -111,9 +112,10 @@ export const GH_REASON = {
   unknown: t('请确认 gh 已安装并已登录'),
 };
 
-/** 外链：开新标签。只认 http(s)——检查条目的链接是第三方写的，别把别的协议交给系统去开。 */
+/** 外链：桌面壳交系统浏览器，网页 / 手机开新标签。只认 http(s)——检查条目的链接是第三方写的，别把别的协议交给系统去开。 */
 export function openGitHub(url) {
   if (!url || !/^https?:\/\//i.test(String(url))) return;
+  if (isNativeDesktop()) { desktopOpenExternal(url); return; }
   try { window.open(url, '_blank', 'noopener'); } catch {}
 }
 

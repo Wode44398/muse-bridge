@@ -1,10 +1,11 @@
-// 设置 › Claude（components/settings/SecClaude.svelte）用的取值、显示与可见性小函数。
+// 设置 › Claude 两套外壳（手机 / 网页 iOS 风 Settings.svelte、桌面 SettingsDesktop.svelte；单 agent 模式也用这两套，
+// 原 claude.ai 风 settings/SecClaude 已于 2026-10-21 下线）共用的取值、显示与可见性小函数（2026-10-20）。
 // 注册表 src/config/claude-settings.mjs，数据面 lib/claudeSettings.svelte.js。
 // 外壳只管排版：哪一项出现、叫什么、当前值怎么念、改了往哪写，都从这里拿，两处不会各写各的又写歪。
 import { cs, setClaudeSetting, setClaudeDeviceSetting, isClaudeSettingChanged } from './claudeSettings.svelte.js';
 import { outputStyleLabel, outputStyleDesc } from './outputStyle.svelte.js';
 import { t, tr } from './i18n.js';
-import { CLAUDE_SETTING_BY_KEY, BUILTIN_OUTPUT_STYLES, PERMISSION_MODES, PERMISSION_MODES_SANDBOX } from '../../../src/config/claude-settings.mjs';
+import { CLAUDE_SETTING_BY_KEY, BUILTIN_OUTPUT_STYLES, PERMISSION_MODES, PERMISSION_MODES_SANDBOX, claudeSettingVisible } from '../../../src/config/claude-settings.mjs';
 
 export const S = CLAUDE_SETTING_BY_KEY;
 
@@ -19,14 +20,13 @@ export function val(key) {
   return s.scope === 'device' ? cs.device[key] : cs.values[key];
 }
 
-/** 这个身份看不看得到这一项：管理员项 / 主机项只给管理员，shell 项只给能跑命令的身份，依赖项主项关着时不出。 */
+/**
+ * 这个身份看不看得到这一项：管理员项 / 主机项只给管理员，shell 项只给能跑命令的身份，
+ * 服务端快照说这台机器做不到的（cs.unsupported：非 Windows 没有保持唤醒、找不到 Claude Desktop 就没有跟随归档）不出，
+ * 依赖项主项关着时不出。规则本体在注册表模块的 claudeSettingVisible（node 单测覆盖）。
+ */
 export function visible(key) {
-  const s = S[key];
-  if (!s) return false;
-  if ((s.admin || s.scope === 'host') && !cs.admin) return false;
-  if (s.shell && !cs.shell) return false;
-  if (s.dependsOn && !val(s.dependsOn)) return false;
-  return true;
+  return claudeSettingVisible(key, { admin: cs.admin, shell: cs.shell, unsupported: cs.unsupported, val });
 }
 
 /** 写一项（null = 恢复默认）。失败时乐观值已回滚、错误在 cs.err；这里吞掉异常，外壳读 errText() 显示。 */

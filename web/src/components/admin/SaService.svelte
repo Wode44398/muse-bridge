@@ -1,9 +1,13 @@
 <script>
-  // 服务控制 · 运行状态与日志：进程与机器资源、在跑的轮、最近日志；在这里重启——本进程排空后退出，
-  // 交给守护进程（systemd / Docker / pm2）拉起。可以「等空闲再重启」，不打断正在跑的对话。
+  // 服务控制 · 运行状态与日志（三端拆分 P4，任何形态都有）：进程与机器资源、在跑的轮、最近日志；
+  // 没有 admin.ps1 / 桌面壳的机器（Linux 服务端、Docker）在这里重启——本进程排空后退出，交给守护进程
+  // （systemd / Docker / pm2）拉起。可以「等空闲再重启」，不打断正在跑的对话。
   import { api } from '../../lib/api.js';
   import { sa, saToast, saConfirm, fmtUptime, supervisedBy } from '../../lib/serverAdmin.svelte.js';
   import { t, tr } from '../../lib/i18n.js';
+
+  // otherRestart：这台机器另有重启手段（admin.ps1 / 桌面壳），这里就不摆重启按钮，免得两套打架
+  let { otherRestart = false } = $props();
 
   let info = $state(null);
   let logs = $state(null);
@@ -36,10 +40,12 @@
     };
     setTimeout(tick, 2500);
   }
+  // 快速隧道（临时地址）跟着服务端一起重启、地址必变：确认框里说清楚（经这个临时地址远程连着的，服务端直接回 409）
+  const withQuickNote = (s) => (sa.publicAccess?.mode === 'quick' ? s + ' ' + t('现在用的是临时地址：服务端重启后会换一个新地址，手机 App 和分享出去的链接要跟着改。') : s);
   async function restart(mode) {
     if (mode === 'now') {
       const n = info?.liveTurns || 0;
-      if (!(await saConfirm(t('立即重启服务？'), (n ? t('现在有 {n} 轮对话在跑，会被打断（记录会保留，可以接着问）。所有人会断开几秒，页面自动重连。', { n }) : t('现在没有在跑的对话。所有人会断开几秒，页面自动重连。')), { yes: t('立即重启'), danger: !!n }))) return;
+      if (!(await saConfirm(t('立即重启服务？'), withQuickNote(n ? t('现在有 {n} 轮对话在跑，会被打断（记录会保留，可以接着问）。所有人会断开几秒，页面自动重连。', { n }) : t('现在没有在跑的对话。所有人会断开几秒，页面自动重连。')), { yes: t('立即重启'), danger: !!n }))) return;
     }
     try {
       const r = await api.post('/api/admin/service/restart', { mode });
@@ -53,11 +59,11 @@
 
   // 更新：拉代码 → 装依赖 → 重建前端（以服务用户跑 scripts/server/update.sh），有新代码就等空闲重启
   async function doUpdate() {
-    // 说清此刻有几轮在跑——它们不会被打断，跑完才重启（总线会给每台设备推「服务器有 N 个对话在跑，跑完后自动更新」）
+    // S1-5：说清此刻有几轮在跑——它们不会被打断，跑完才重启（总线会给每台设备推「服务器有 N 个对话在跑，跑完后自动更新」）
     const n = info?.liveTurns || 0;
     const body = t('在服务器上拉最新代码、装依赖、重建前端（几分钟）；有新代码的话，等所有人的对话都跑完再自动重启。进度在下面的「最近日志」里。')
       + (n ? ' ' + t('现在有 {n} 轮对话在跑，不会被打断。', { n }) : '');
-    if (!(await saConfirm(t('更新到最新代码？'), body, { yes: t('开始更新') }))) return;
+    if (!(await saConfirm(t('更新到最新代码？'), withQuickNote(body), { yes: t('开始更新') }))) return;
     try {
       const r = await api.post('/api/admin/service/update', {});
       if (r?.error) throw new Error(r.error);
@@ -87,13 +93,43 @@
       {#if info.disk}<div class="st"><b>{gb(info.disk.free)}</b><small>{t('数据盘剩余 / {total}', { total: gb(info.disk.total) })}</small></div>{/if}
       <div class="st"><b>{info.harnessInstances}</b><small>{t('dimensio 实例')}</small></div>
       {#if info.deploy}
-        <!-- 部署形态（src/config/deploy-profile.mjs）：给谁用、监听地址等默认值按它定 -->
-        <div class="st" title={t('给谁用、监听地址等默认值按部署形态定；显式设置优先')}>
+        <!-- 部署形态（src/config/deploy-profile.mjs，S1-7）：给谁用、监听地址、Claude in Chrome、保持唤醒的默认值按它定 -->
+        <div class="st" title={t('给谁用、监听地址、Claude in Chrome、保持唤醒的默认值按部署形态定；显式设置优先')}>
           <b>{tr(info.deploy.label)}</b><small>{t('部署形态 · 监听 {host}', { host: info.deploy.listenHost })}</small>
         </div>
       {/if}
+      {#if info.apk}
+        <!-- 手机 App 从哪来（src/runtime/apk-source.mjs）：本机出包 → 发布页缓存 → OSS 镜像 → 公开发布页 → 都没有 -->
+        <div class="st" title={tr(info.apk.mirror?.error || info.apk.release?.error || info.apk.release?.prefetchError) || ''}>
+          <b>{info.apk.local ? info.apk.local.code : info.apk.mirror?.usable ? info.apk.mirror.latest.code : info.apk.release?.usable ? info.apk.release.code : '—'}</b>
+          <small>{info.apk.local ? (info.apk.local.source === 'cache' ? t('手机 App 安装包 · 发布页缓存') : t('手机 App 安装包 · 本机出包'))
+            : info.apk.mirror?.usable ? t('手机 App 安装包 · OSS 镜像')
+            : info.apk.release?.usable ? t('手机 App 安装包 · 公开发布页')
+            : info.apk.mirror?.configured ? (info.apk.mirror.latest ? t('镜像里的包比服务端新，先不发') : t('镜像清单拉取失败'))
+            : t('手机 App 安装包 · 这台服务器没有可发的版本')}</small>
+        </div>
+      {/if}
     </div>
-    <div class="sa-rows">
+    <!-- 打包形态（桌面安装包里的本机服务端）：服务端随桌面客户端发版，上游有新版就提示去更新客户端（S10） -->
+    {#if info.serverUpdate?.packaged}
+      <div class="sa-rows">
+        <div class="sa-row" title={info.serverUpdate.notes || ''}>
+          <span class="sa-row-tx">
+            <span>{t('服务端版本')}</span>
+            <small>{info.restart?.pending && info.restart?.reason === 'update'
+              ? t('桌面客户端已下好新版，等 {n} 轮对话跑完就装；装完服务端自动回来。', { n: info.liveTurns })
+              : info.serverUpdate.newer
+              ? t('有新版 {v}：更新这台电脑上的桌面客户端就行（安装包里带着服务端），装完服务端会一起换成新版。', { v: info.serverUpdate.latest })
+              : info.serverUpdate.feed && !info.serverUpdate.feed.ok && info.serverUpdate.feed.checkedAt
+                ? t('{v} · 暂时查不到新版本（{error}）', { v: info.serverUpdate.current, error: tr(info.serverUpdate.feed.error) })
+                : t('{v} · 已是最新', { v: info.serverUpdate.current })}</small>
+          </span>
+          {#if info.serverUpdate.newer}<span class="sa-badge amber">{t('有新版')}</span>{/if}
+        </div>
+      </div>
+    {/if}
+    {#if !otherRestart}
+      <div class="sa-rows">
         <div class="sa-row">
           <span class="sa-row-tx">
             <span>{t('重启服务')}</span>
@@ -119,6 +155,7 @@
           </div>
         {/if}
       </div>
+    {/if}
     <div style="height:8px"></div>
   </div>
 
@@ -140,7 +177,7 @@
     {/if}
     <div style="height:8px"></div>
   </div>
-  <div class="sa-foot">{t('日志只留本次启动以来最近几百行（内存里，重启即清）；完整日志在服务器上：journalctl -u bridge。')}</div>
+  <div class="sa-foot">{t('日志只留本次启动以来最近几百行（内存里，重启即清）；完整日志在服务器上：systemd 用 journalctl -u bridge，Docker 用 docker compose logs。')}</div>
 {/if}
 
 <style>

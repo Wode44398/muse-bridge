@@ -26,11 +26,10 @@ await users.createUser('robo', 'password123', 'user');
 users.setService('robo', true);
 const ninaId = userIdentity('nina').user;
 
-test('默认：成员两项都没允许；服务账号默认全开；不存在的账号一律不许', () => {
-  assert.deepEqual(acc.consentsOf('nina'), { view: false, assist: false, at: 0, service: false });
+test('默认：成员三项都没允许；服务账号默认全开；不存在的账号一律不许', () => {
+  assert.deepEqual(acc.consentsOf('nina'), { view: false, assist: false, device: false, at: 0, service: false });
   const r = acc.consentsOf('robo');
-  assert.equal(r.view && r.assist, true);
-  assert.equal(acc.accessAllowed('robo', 'device'), false, '没有「看他的电脑」这一项');
+  assert.equal(r.view && r.assist && r.device, true);
   assert.equal(acc.accessAllowed('ghost', 'view'), false);
   assert.equal(acc.ownerAllows('admin', 'view'), true, '主机自己的不经过成员允许');
   assert.equal(acc.ownerAllows('c:sometoken', 'view'), true, '快照桶不是成员');
@@ -38,7 +37,7 @@ test('默认：成员两项都没允许；服务账号默认全开；不存在�
 });
 
 test('成员自己改；按登录名 / 账号 id / owner 键都认', () => {
-  const r = acc.setConsents('nina', { view: true, assist: 'yes' });
+  const r = acc.setConsents('nina', { view: true, assist: 'yes', device: false });
   assert.equal(r.consents.view, true);
   assert.equal(r.consents.assist, false, '只收布尔值');
   assert.ok(r.consents.at > 0);
@@ -50,12 +49,12 @@ test('成员自己改；按登录名 / 账号 id / owner 键都认', () => {
 
 test('访问记录：新的在前、带人话标签、封顶', () => {
   acc.logAccess('nina', { action: 'view_session', what: 'abc' });
-  acc.logAccess('u:' + ninaId, { action: 'answer', what: 'permission' });
+  acc.logAccess('u:' + ninaId, { action: 'device', what: 'MOONLIGHT', detail: 'desktop' });
   const log = acc.accessLog('nina');
-  assert.equal(log[0].action, 'answer');
-  assert.equal(log[0].label, '替你回答了一个提问或审批');
+  assert.equal(log[0].action, 'device');
+  assert.equal(log[0].label, '查看或操作了你的电脑');
   assert.equal(log[1].what, 'abc');
-  for (let i = 0; i < 260; i++) acc.logAccess('nina', { action: 'view_session', what: 'k' + i });
+  for (let i = 0; i < 260; i++) acc.logAccess('nina', { action: 'view_media', what: 'k' + i });
   assert.equal(acc.accessLog('nina', 1000).length, 200);
 });
 
@@ -66,22 +65,22 @@ test('访问记录：一分钟内同一动作、同一对象的连续操作合�
   const off = busSubscribe('u:' + ninaId, { writableEnded: false, write: (c) => { if (String(c).includes('admin.access')) pushed++; return true; }, end() {} });
   const t0 = Date.now() + 10 * 60 * 1000;   // 跟上面的记录拉开，免得和它们合并
   const n0 = acc.accessLog('nina', 1000).length;
-  acc.logAccess('nina', { action: 'view_session', what: 'S1', detail: 'first' }, t0);
-  acc.logAccess('nina', { action: 'view_session', what: 'S1', detail: 'again' }, t0 + 5000);
-  acc.logAccess('nina', { action: 'view_session', what: 'S1', detail: 'again' }, t0 + 50000);
+  acc.logAccess('nina', { action: 'device', what: 'MOONLIGHT', detail: 'screenshot' }, t0);
+  acc.logAccess('nina', { action: 'device', what: 'MOONLIGHT', detail: 'click' }, t0 + 5000);
+  acc.logAccess('nina', { action: 'device', what: 'MOONLIGHT', detail: 'click' }, t0 + 50000);
   off();
   assert.equal(pushed, 1, '只在第一次弹提示');
   let log = acc.accessLog('nina', 1000);
   assert.equal(log.length, Math.min(200, n0 + 1), '三次连续操作只占一条');
   assert.equal(log[0].count, 3);
   assert.equal(log[0].at, t0 + 50000, '时间是最后一次');
-  assert.equal(log[0].detail, 'again');
-  acc.logAccess('nina', { action: 'view_session', what: 'S2' }, t0 + 51000);
-  acc.logAccess('nina', { action: 'view_session', what: 'S2' }, t0 + 51000 + 61000);
+  assert.equal(log[0].detail, 'click');
+  acc.logAccess('nina', { action: 'device', what: 'LAPTOP' }, t0 + 51000);
+  acc.logAccess('nina', { action: 'device', what: 'LAPTOP' }, t0 + 51000 + 61000);
   log = acc.accessLog('nina', 3);
-  assert.equal(log[0].what, 'S2');
+  assert.equal(log[0].what, 'LAPTOP');
   assert.equal(log[0].count, undefined, '隔了一分钟以上另记一条');
-  assert.equal(log[1].what, 'S2');
+  assert.equal(log[1].what, 'LAPTOP');
   assert.equal(log[2].count, 3);
 });
 
@@ -228,11 +227,9 @@ test('成员自己的接口：看与改自己的允许、看访问记录；管�
   assert.equal(g.status, 200);
   assert.equal(typeof g.body.consents.view, 'boolean');
   assert.ok(Array.isArray(g.body.log) && g.body.log.length > 0);
-  const p = await call(h, 'POST', '/api/me/admin-access', { body: { assist: true, device: true } });
-  assert.equal(p.body.consents.assist, true);
-  assert.equal('device' in p.body.consents, false, '没有「看他的电脑」这一项');
-  assert.equal(acc.accessAllowed('nina', 'device'), false);
-  acc.setConsents('nina', { assist: false });
+  const p = await call(h, 'POST', '/api/me/admin-access', { body: { device: true } });
+  assert.equal(p.body.consents.device, true);
+  assert.equal(acc.accessAllowed('nina', 'device'), true);
   const a = await call(me({ kind: 'admin' }), 'GET', '/api/me/admin-access');
   assert.deepEqual(a.body, { admin: true });
   const n = await call(me({ kind: 'none' }), 'GET', '/api/me/admin-access');

@@ -4,7 +4,7 @@
 //   custom-providers/connector-secrets.*       API key（自定义服务 + 设置页给内置厂商填的），沿用 bridge 的加密存储（AES-256-GCM + DPAPI 包住的数据密钥，
 //                                              src/extension-secrets.mjs，经 core-link 取）；密钥守卫按文件名挡住（sandbox.ts readVerdict）
 //
-// 2026-10-21 v2（和 Claude 外接一样「智能识别」）：
+// 2026-10-21 v2（维护者：和 Claude 外接一样「智能识别」）：
 //   · 协议：openai（Chat Completions）/ anthropic（Messages）/ gemini（generateContent），按协议分派到现成的三个适配器；
 //     鉴权方式 bearer / x-api-key / goog / none，可加自定义请求头。
 //   · 型号不再只是名字：每个型号带能力（上下文、输出上限、视觉 / 视频 / 音频、对话 / 非对话、思考方式与档位表、来源），形状和
@@ -380,6 +380,7 @@ let keysError = "";
 
 async function loadSecretsMod(): Promise<SecretsMod> {
   if (secretsOverride) return secretsOverride;
+  // 经 core-link：dimensio 离线包里没有 ../../src，靠 bridge 拉起时的 @bridge/core 钩子找到程序目录的核心（D2）
   if (!secretsMod) secretsMod = (await import(coreUrl("extension-secrets.mjs"))) as SecretsMod;
   return secretsMod;
 }

@@ -1,12 +1,13 @@
 {
-  "name": "Muse Bridge",
-  "short_name": "Muse Bridge",
-  "description": "在浏览器里使用 Claude Code 与 dimensio 的多用户工作台",
+  "name": "The Bridge",
+  "short_name": "Bridge",
+  "description": "远程驱动 Claude / Gemini 的桥",
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",
   "id": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#1f1f1e",
   "theme_color": "#1f1f1e",
   "icons": [

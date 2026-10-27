@@ -1,6 +1,7 @@
-// Claude 分页右侧工作台（dock）的后端三组接口：
+// Claude 分页右侧工作台（dock）的后端四组接口：
 //   审阅  GET  /api/claude/review, /api/claude/review/diff   — worktree 概览（git 变更清单 + 单文件 diff）
 //   终端  GET  /api/claude/term/stream + POST input/resize/kill — 工作空间 PTY（ctx.shell 门禁）
+//   浏览器 GET /api/claude/browser/{state,stream} + POST navigate/input/resize/close — CDP screencast（ctx.shell 门禁）
 //   元信息 GET /api/claude/dock/meta — 工作空间相对路径（文件页跳转）+ git 归属（分支 / 是否
 //          linked worktree，供输入框上方的归属状态栏芯片）+ 能力位
 //
@@ -8,10 +9,11 @@
 // share 走 requireCtx 直接 401），全局 Origin CSRF 闸已覆盖所有 POST。
 //
 // 聊天快照（kind:'snap'，公开 /c/ 链接的匿名访客）拿到的是【阉割版工作台】：
-//   审阅 ✓ / 文件 ✓ / 终端 ✗
+//   审阅 ✓ / 文件 ✓ / 浏览器【只读直播】✓ / 终端 ✗
 // ws 参数对 snap 一律忽略、强制取 ctx.cwd（快照桶），前端传什么都改不了作用域。
 
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
 import { readBody } from '../runtime/body.mjs';
@@ -23,6 +25,9 @@ import { poolRef } from '../runtime/principal.mjs';
 import { gitInvocation } from '../runtime/member-boundary.mjs';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'; // git 恒定空树 hash
+// 浏览器直播帧流控：每个观众最多这么多帧在路上没回 ack（见 stream 路由）。
+const FRAME_WINDOW = 2;
+const castFlows = new Map();   // sid → flow（stream 连接期间有效；sid 是不可猜的随机串）
 const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
 
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
@@ -277,17 +282,18 @@ async function computeGitMeta(ws) {
 
 export function registerClaudeDockRoutes(router, { identify }) {
   // 统一守卫：登录 → ctx；ws 参数 → 授权后的绝对路径。失败已回响应，返回 null。
-  //   shell:true = 需要完整权限（终端）——snap/普通 user 403。
-  const dockCtx = (req, res, wsRaw, { shell = false } = {}) => {
+  //   shell:true = 需要完整权限（终端、浏览器的一切【操作】）——snap/普通 user 403。
+  //   watch:true = 只读旁观也放行（浏览器 state/stream）：snap 访客看得见直播、动不了。
+  const dockCtx = (req, res, wsRaw, { shell = false, watch = false } = {}) => {
     const ctx = requireCtx(identify, req, res);
     if (!ctx) return null;
     const isSnap = ctx.kind === 'snap';
-    if (shell && !ctx.shell) { json(res, 403, { error: '该功能仅对完整权限用户开放' }); return null; }
+    if (shell && !ctx.shell && !(watch && isSnap)) { json(res, 403, { error: '该功能仅对完整权限用户开放' }); return null; }
     let ws;
     // 快照身份忽略客户端传来的 ws，一律锁死在自己的桶：作用域不由前端说了算。
     try { ws = authorizeProjectPath(ctx, isSnap ? ctx.cwd : wsRaw); } catch (e) { fail(res, e); return null; }
-    // ref = 终端池的引用（属主, 工作空间）：与 agent 侧同一把键（claude.mjs 按 poolRef(ctx, cwd) 取），
-    // 面板与 agent 继续共用同一个 shell；别人进了同一个目录拿到的是另一份（开源路线 C6）。
+    // ref = 终端 / 浏览器池的引用（属主, 工作空间）：与 agent 侧同一把键（claude.mjs 按 poolRef(ctx, cwd) 取），
+    // 面板与 agent 继续共用同一个 shell / 浏览器；别人进了同一个目录拿到的是另一份（开源路线 C6）。
     return { ctx, ws, ref: poolRef(ctx, ws) };
   };
 
@@ -300,9 +306,9 @@ export function registerClaudeDockRoutes(router, { identify }) {
     const relRaw = path.relative(root, ws);
     const rel = relRaw === '' ? '' : (!relRaw.startsWith('..') && !path.isAbsolute(relRaw) ? relRaw.split(path.sep).join('/') : null);
     const { isGit, branch, worktree } = await gitMetaOf(ws);
-    // snap = 快照访客：前端据此只摆 审阅/文件两件，并藏掉工作空间路径。
+    // snap = 快照访客：前端据此只摆 审阅/文件/浏览器（只读）三件，并藏掉工作空间路径。
     // wtNew = 本服务端能在这里开 worktree 会话（git 主检出、非快照）——输入栏 worktree 勾选框只认它：
-    // 前端先于服务端上线时勾选框不出现，不会勾了却悄悄跑在主检出里。
+    // 前端先于服务端上线（apk 连着没重启的老服务端）时勾选框不出现，不会勾了却悄悄跑在主检出里。
     json(res, 200, { rel, git: isGit, branch, worktree, wtNew: isGit && !worktree && ctx.kind !== 'snap', shell: !!ctx.shell, snap: ctx.kind === 'snap' });
   });
 
@@ -400,5 +406,234 @@ export function registerClaudeDockRoutes(router, { identify }) {
     if (!g) return;
     const svc = await import('../runtime/claude-term.mjs');
     json(res, 200, { ok: svc.killTerm(g.ref) });
+  });
+
+  // ── 浏览器：状态 / 直播流 / 导航 / 输入 / 视口 / 关闭 ───────────────────────
+  router.on('GET', '/api/claude/browser/state', async (req, res, url) => {
+    const g = dockCtx(req, res, url.searchParams.get('ws'), { shell: true, watch: true });
+    if (!g) return;
+    const { existingBrowser } = await import('../runtime/claude-browser.mjs');
+    const b = existingBrowser(g.ref);
+    if (!b) return json(res, 200, { alive: false });
+    // desktop = 这份浏览器开在桌面壳里（只有主机身份会）。成员 / 快照访客的是无头浏览器：本机桌面客户端挂不上原生视图，面板要走帧流。
+    json(res, 200, { alive: true, url: b.url, tabs: b.tabs, desktop: !!b.external, ...b.viewportReport() });
+  });
+
+  router.on('GET', '/api/claude/browser/stream', async (req, res, url) => {
+    const g = dockCtx(req, res, url.searchParams.get('ws'), { shell: true, watch: true });
+    if (!g) return;
+    const { existingBrowser, touchBrowser } = await import('../runtime/claude-browser.mjs');
+    const b = existingBrowser(g.ref);
+    if (!b) return json(res, 409, { alive: false });
+    writeSseHeaders(res);
+    const nativeView = url.searchParams.get('native') === '1';
+    if (nativeView) touchBrowser(g.ref);
+    // desktop:false 时 native=1 的面板收不到帧、原生视图也挂不上：新面板据此换 ack=1 帧流重连（老面板不认这个字段，照旧）
+    sseWrite(res, { type: 'state', url: b.url, desktop: !!b.external, ...b.viewportReport() });
+    const offPtr = b.subscribePointer((p) => sseWrite(res, { type: 'pointer', ...p }));
+    const offTabs = b.subscribeTabs((tabs) => sseWrite(res, { type: 'tabs', tabs }));
+    // 视口变化（面板设备钮 或 agent 的 browser(resize)）：所有观众同步点亮档位与实测角标；
+    // 桌面壳观众还要靠它按新视口重新缩放摆放原生视图。事件 = viewportReport() 全量。
+    const offVp = b.subscribeViewport((report) => sseWrite(res, { type: 'viewport', ...report }));
+    // 登记观众：agent 的 navigate / tabs 据此告诉它用户此刻看不看得到页面（runtime/claude-browser.mjs viewerReport）
+    const ua = String(req.headers['user-agent'] || '');
+    const offViewer = b.addViewer({
+      kind: g.ctx.kind === 'snap' ? 'guest' : nativeView ? 'native' : 'stream',
+      where: /bridge-client/i.test(ua) ? '桌面客户端' : /Android|iPhone|iPad|Mobile/i.test(ua) ? '手机' : '网页端',
+    });
+    let offCast = null;
+    // 帧流控（ack=1 的新面板）：以前收到一帧推一帧，经 Cloudflare 隧道到手机时 node 这边
+    // 永远看不到背压（cloudflared 在本机把帧全吞进去再慢慢发），画面排队落后好几秒，用户点了
+    // 看不到结果就以为没点上。现在每个观众最多 2 帧在路上，客户端画完回 ack 才发下一帧，中间
+    // 来的只留最新一帧——带宽 / 延迟自适应，画面永远是「最近的」。旧面板不带 ack=1 照旧全推。
+    const ackMode = url.searchParams.get('ack') === '1';
+    const sid = ackMode ? randomBytes(12).toString('hex') : '';
+    const flow = { inflight: 0, pending: null, lastSent: 0 };
+    const pushFrame = (f) => {
+      flow.inflight++; flow.lastSent = Date.now();
+      sseWrite(res, { type: 'frame', data: f.data, w: f.deviceWidth, h: f.deviceHeight, url: b.url });
+    };
+    flow.ack = () => {
+      flow.inflight = Math.max(0, flow.inflight - 1);
+      if (flow.pending && flow.inflight < FRAME_WINDOW) { const f = flow.pending; flow.pending = null; pushFrame(f); }
+    };
+    if (ackMode) { castFlows.set(sid, flow); sseWrite(res, { type: 'hello', sid }); }
+    // 桌面原生壳直接把同一 CDP target 收进 WebContentsView，不需要每秒反复
+    // JPEG 编码→base64→SSE→canvas 解码。native=1 仍保留状态/标签事件给工具条。
+    if (!nativeView) {
+      try {
+        offCast = await b.subscribeCast((f) => {
+          if (!ackMode) { sseWrite(res, { type: 'frame', data: f.data, w: f.deviceWidth, h: f.deviceHeight, url: b.url }); return; }
+          // ack 丢了（切后台、网络抖）别把画面冻住：3 秒没回音就当窗口已空
+          if (flow.inflight >= FRAME_WINDOW && Date.now() - flow.lastSent > 3000) flow.inflight = 0;
+          if (flow.inflight >= FRAME_WINDOW || res.writableNeedDrain) { flow.pending = f; return; }
+          pushFrame(f);
+        });
+      } catch (e) {
+        sseWrite(res, { type: 'error', message: e?.message || String(e) });
+      }
+    }
+    // 本机直连时 node 能看到背压：缓冲排空后补发攒着的最新帧
+    res.on('drain', () => { if (flow.pending && flow.inflight < FRAME_WINDOW) { const f = flow.pending; flow.pending = null; pushFrame(f); } });
+    const hb = startHeartbeat(res);
+    // 原截图路径靠 castSubs.size 阻止 15 分钟闲置回收；原生路径没有 screencast，
+    // 以轻量心跳证明面板仍在看，避免用户直接在 WebContentsView 浏览时被误回收。
+    const nativeKeepalive = nativeView ? setInterval(() => touchBrowser(g.ref), 30_000) : null;
+    nativeKeepalive?.unref?.();
+    req.on('close', () => {
+      clearInterval(hb);
+      if (sid) castFlows.delete(sid);
+      if (nativeKeepalive) clearInterval(nativeKeepalive);
+      offPtr();
+      offTabs();
+      offVp();
+      offViewer();
+      offCast?.();
+      touchBrowser(g.ref);
+    });
+  });
+
+  // 当前画面的一张静态图（JPEG）。桌面壳原生模式下面板弹菜单时用：原生视图恒在 DOM 之上会盖住
+  // 菜单，得先让位，让位期间拿这张图「定格」在原处。
+  router.on('GET', '/api/claude/browser/snapshot', async (req, res, url) => {
+    const g = dockCtx(req, res, url.searchParams.get('ws'), { shell: true });
+    if (!g) return;
+    const { existingBrowser } = await import('../runtime/claude-browser.mjs');
+    const b = existingBrowser(g.ref);
+    if (!b) return json(res, 409, { alive: false });
+    try {
+      const r = await b.send('Page.captureScreenshot', { format: 'jpeg', quality: 72, captureBeyondViewport: false }, 4000);
+      const buf = Buffer.from(String(r?.data || ''), 'base64');
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store', 'Content-Length': buf.length });
+      res.end(buf);
+    } catch (e) { fail(res, e); }
+  });
+
+  // 直播帧回执：面板画完一帧回一次（只有 ack=1 的新面板会发），见 stream 路由的帧流控。
+  router.on('POST', '/api/claude/browser/ack', async (req, res) => {
+    if (!requireCtx(identify, req, res)) return;
+    let body; try { body = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'bad json' }); }
+    const flow = castFlows.get(String(body.sid || ''));
+    if (!flow) return json(res, 410, { error: 'stream gone' });
+    flow.ack();
+    json(res, 200, { ok: true });
+  });
+
+  // 标签操作：new（可带 url，缺省空白页）/ select / close。面板与 agent 共用。
+  router.on('POST', '/api/claude/browser/tab', async (req, res) => {
+    let body; try { body = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'bad json' }); }
+    const g = dockCtx(req, res, body.ws, { shell: true });
+    if (!g) return;
+    const svc = await import('../runtime/claude-browser.mjs');
+    const b = svc.existingBrowser(g.ref);
+    if (!b) return json(res, 409, { error: '浏览器未启动' });
+    svc.touchBrowser(g.ref);
+    try {
+      const op = String(body.op || '');
+      if (op === 'new') await b.newTab(body.url ? svc.normalizeUrl(body.url) : 'about:blank');
+      else if (op === 'select') await b.activateTab(String(body.id || ''));
+      else if (op === 'close') await b.closeTab(String(body.id || ''));
+      else return json(res, 400, { error: 'bad op' });
+      json(res, 200, { ok: true, tabs: b.tabs, url: b.url });
+    } catch (e) { fail(res, e); }
+  });
+
+  router.on('POST', '/api/claude/browser/navigate', async (req, res) => {
+    let body; try { body = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'bad json' }); }
+    const g = dockCtx(req, res, body.ws, { shell: true });
+    if (!g) return;
+    const svc = await import('../runtime/claude-browser.mjs');
+    try {
+      if (body.dir === 'back' || body.dir === 'forward') {
+        const b = svc.existingBrowser(g.ref);
+        if (!b) return json(res, 409, { error: '浏览器未启动' });
+        const to = await b.history(body.dir === 'back' ? -1 : 1);
+        return json(res, 200, { ok: true, url: to || b.url });
+      }
+      if (body.dir === 'reload') {
+        const b = svc.existingBrowser(g.ref);
+        if (!b) return json(res, 409, { error: '浏览器未启动' });
+        await b.reload();
+        return json(res, 200, { ok: true, url: b.url });
+      }
+      const target = svc.normalizeUrl(body.url);
+      if (!target) return json(res, 400, { error: '请输入网址' });
+      const fresh = !svc.existingBrowser(g.ref);
+      const b = await svc.getBrowser(g.ref);   // 地址栏导航自动拉起浏览器
+      // 手机面板拉起时带 preset:'mobile'：先换好视口（含移动端 UA）再开页，免得先按桌面版加载一遍
+      if (fresh && body.preset) {
+        try { const spec = svc.resolveViewportSpec({ preset: body.preset }, b); if (spec) await b.setViewport(spec.width, spec.height, spec); } catch { /* 档位不认识就照默认 */ }
+      }
+      await b.navigate(target);
+      json(res, 200, { ok: true, url: b.url });
+    } catch (e) { fail(res, e); }
+  });
+
+  router.on('POST', '/api/claude/browser/input', async (req, res) => {
+    let body; try { body = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'bad json' }); }
+    const g = dockCtx(req, res, body.ws, { shell: true });
+    if (!g) return;
+    const svc = await import('../runtime/claude-browser.mjs');
+    const b = svc.existingBrowser(g.ref);
+    if (!b) return json(res, 409, { error: '浏览器未启动' });
+    svc.touchBrowser(g.ref);
+    const x = Number(body.x) || 0, y = Number(body.y) || 0;
+    try {
+      switch (body.type) {
+        case 'click': {
+          await b.clickCoord(x, y, { button: body.button === 'right' ? 'right' : 'left', clickCount: body.double ? 2 : 1, source: 'user' });
+          // 手机上的面板要知道这一下有没有点进输入框：点进了就拉起它的软键盘（画布本身唤不出键盘）
+          if (body.wantFocus) {
+            await new Promise((r) => setTimeout(r, 60));
+            const { focusInfo } = await import('../runtime/browser-verify.mjs');
+            const f = await focusInfo(b).catch(() => null);
+            return json(res, 200, { ok: true, url: b.url, editable: Boolean(f?.editable), field: f?.editable ? f.desc : '' });
+          }
+          break;
+        }
+        case 'move':
+          await b.hoverCoord(x, y, 'user');
+          break;
+        case 'wheel':
+          await b.wheel(x, y, Number(body.deltaY) || 0, Number(body.deltaX) || 0);
+          break;
+        case 'key':
+          await b.pressKey(String(body.key || ''));
+          break;
+        case 'text':
+          await b.typeText(String(body.text ?? ''));
+          break;
+        default:
+          return json(res, 400, { error: 'bad input type' });
+      }
+      json(res, 200, { ok: true, url: b.url });
+    } catch (e) { fail(res, e); }
+  });
+
+  router.on('POST', '/api/claude/browser/resize', async (req, res) => {
+    let body; try { body = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'bad json' }); }
+    const g = dockCtx(req, res, body.ws, { shell: true });
+    if (!g) return;
+    const svc = await import('../runtime/claude-browser.mjs');
+    const b = svc.existingBrowser(g.ref);
+    if (!b) return json(res, 409, { error: '浏览器未启动' });
+    // 参数与 agent 的 resize 完全同一套（preset / width+height / landscape / mobile / scheme / dpr），
+    // 什么都不给 = 查询当前视口（现测）。返回 viewportReport()：期望 + 仿真旗标 + 页面实测。
+    try {
+      let spec;
+      try { spec = svc.resolveViewportSpec(body, b); } catch (e) { return json(res, 400, { error: String(e?.message || e) }); }
+      if (!spec) { b.measured = await b.measure(); return json(res, 200, { ok: true, ...b.viewportReport() }); }
+      const r = await b.setViewport(spec.width, spec.height, spec);
+      json(res, 200, { ok: true, ...r });
+    } catch (e) { fail(res, e); }
+  });
+
+  router.on('POST', '/api/claude/browser/close', async (req, res) => {
+    let body; try { body = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'bad json' }); }
+    const g = dockCtx(req, res, body.ws, { shell: true });
+    if (!g) return;
+    const svc = await import('../runtime/claude-browser.mjs');
+    svc.closeBrowser(g.ref);
+    json(res, 200, { ok: true });
   });
 }

@@ -1,22 +1,24 @@
 <script>
-  // 侧栏底部账户卡的弹出菜单（claude.ai 左下角用户菜单同款：顶部一行身份，下面「设置 / 账户…退出」；
-  // 272px 宽、圆角 12、内边距 4、行高 32 / 圆角 8 / 图标 20px、1px 描边 + 双层投影）。
-  // 条目：（主页）、设置、账户、关于、工作空间、扫一扫（触屏）、退出 / 登录。
-  // 常规模式（传了 onhome）多一项「主页」，退出后回主页（常规模式的登录卡在主页右上）。
-  // 由 AccountCard 挂出（portal 到 <body>）。
+  // 侧栏底部账户卡的弹出菜单（claude.ai 左下角用户菜单同款：顶部一行身份，下面「设置 / 语言 / 帮助…
+  // 退出」；官方实测 272px 宽、圆角 12、内边距 4、行高 32 / 圆角 8 / 图标 20px、1px 描边 + 双层投影）。
+  // 单 agent 模式的条目：设置、关于与更新（有新版时带标）、工作空间、扫一扫（手机）；没登录时多一条「登录」。
+  // 常规模式（传了 onhome）：主页、设置、工作空间、扫一扫。
+  // 账户不单列：从「设置」进（顶部账户卡）；退出登录 / 切换账号也都在设置 › 账户（要先确认，免误触）。
+  // 由 ClaudePage 在页面级只挂一份（侧栏在中屏会同时渲染常驻列与隐藏抽屉两份，菜单不能跟着各挂一份）。
   import { onMount } from 'svelte';
-  import { ui, me, applyMe } from '../lib/state.svelte.js';
-  import { api, setToken } from '../lib/api.js';
+  import { ui, me } from '../lib/state.svelte.js';
   import { openSettings } from '../lib/settingsNav.svelte.js';
+  import { updateInfo } from '../lib/updateStore.svelte.js';
   import { pushBackLayer } from '../lib/nav.js';
+  import { isOffline } from '../lib/server.js';
   import { t } from '../lib/i18n.js';
 
   // anchor：账户卡按钮的 DOMRect；onclose：点空白 / Esc / 返回键；onpick：选了某一项（侧栏抽屉跟着收起）；
   // onhome：常规模式回主页（单 agent 模式不传——没有主页）
   let { anchor, onclose, onpick, onhome = null } = $props();
 
-  const canScan = (() => { try { return matchMedia('(pointer: coarse)').matches; } catch { return false; } })();
-  const roleLabel = $derived(me.kind === 'admin' ? t('管理员') : me.kind === 'user' ? (me.tier === 'pro' ? t('Pro 用户') : t('普通用户')) : t('未登录'));
+  const canScan = (() => { try { return isOffline() || matchMedia('(pointer: coarse)').matches; } catch { return false; } })();
+  const roleLabel = $derived(me.kind === 'admin' ? t('管理员') : me.kind === 'user' ? (me.tier === 'pro' || me.tier === 'full' ? t('完全信任用户') : t('普通用户')) : t('未登录'));
   const shownName = $derived(me.user || (me.kind === 'admin' ? 'admin' : ''));
 
   const W = Math.min(272, window.innerWidth - 16);
@@ -24,17 +26,13 @@
   const bottom = $derived(Math.max(8, window.innerHeight - anchor.top + 6));
 
   let el = $state();
-  $effect(() => pushBackLayer(onclose));   // 系统返回 / 浏览器后退先关菜单
+  $effect(() => pushBackLayer(onclose));   // 安卓返回键 / 浏览器后退先关菜单
   onMount(() => { el?.querySelector('.um-i')?.focus({ preventScroll: true }); });
 
   function pick(fn) { (onpick || onclose)?.(); fn(); }
-  async function logout() {
-    try { await api.logout(); } catch {}
-    setToken(null);
-    applyMe(null);
-    ui.loginOpen = true;
-    onhome?.();
-  }
+  // 登录：常规模式进设置 › 账户（那一页没登录时就是登录页）；单 agent 模式弹压在页上的登录框（LoginDialog），
+  // 不离开当前对话——它现在用的也是同一套设置，设置 › 账户同样能登录，两条路都通
+  function login() { if (onhome) openSettings('account'); else ui.loginOpen = true; }
   function onKey(e) {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onclose?.(); return; }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
@@ -57,18 +55,20 @@
   {/if}
   <!-- 不指定分区：宽屏落在「通用」，手机落在设置首页的列表 -->
   <button class="um-i" role="menuitem" onclick={() => pick(() => openSettings())}><span class="ic" aria-hidden="true">&#xe0d6;</span><span class="um-l">{t('设置')}</span></button>
-  <button class="um-i" role="menuitem" onclick={() => pick(() => openSettings('account'))}><span class="ic" aria-hidden="true">&#xe105;</span><span class="um-l">{t('账户')}</span></button>
-  <button class="um-i" role="menuitem" onclick={() => pick(() => openSettings('about'))}><span class="ic" aria-hidden="true">&#xe08f;</span><span class="um-l">{t('关于')}</span></button>
+  {#if !onhome}
+    <button class="um-i" role="menuitem" onclick={() => pick(() => openSettings('about'))}>
+      <span class="ic" aria-hidden="true">&#xe08f;</span><span class="um-l">{t('关于与更新')}</span>
+      {#if updateInfo.available}<span class="badge">{t('新版本')}</span>{/if}
+    </button>
+  {/if}
   <div class="um-sep" role="separator"></div>
   <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.screen = 'files'; })}><span class="ic" aria-hidden="true">&#xe072;</span><span class="um-l">{t('工作空间')}</span></button>
   {#if canScan && me.kind !== 'none'}
     <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.pairScan = { mode: 'scan' }; })}><span class="ic svg" aria-hidden="true">{@html SCAN}</span><span class="um-l">{t('扫一扫登录网页版')}</span></button>
   {/if}
-  <div class="um-sep" role="separator"></div>
   {#if me.kind === 'none'}
-    <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.loginOpen = true; onhome?.(); })}><span class="ic" aria-hidden="true">&#xe105;</span><span class="um-l">{t('登录')}</span></button>
-  {:else}
-    <button class="um-i" role="menuitem" onclick={() => pick(logout)}><span class="ic" aria-hidden="true">&#xe0a4;</span><span class="um-l">{t('退出登录')}</span></button>
+    <div class="um-sep" role="separator"></div>
+    <button class="um-i" role="menuitem" onclick={() => pick(login)}><span class="ic" aria-hidden="true">&#xe105;</span><span class="um-l">{t('登录')}</span></button>
   {/if}
 </div>
 
@@ -86,6 +86,7 @@
     display: inline-flex; align-items: center; justify-content: center; }
   .ic.svg :global(svg) { width: 18px; height: 18px; }
   .um-l { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .badge { flex: none; font-size: 11.5px; line-height: 18px; padding: 0 7px; border-radius: 999px; color: #fff; background: var(--st-accent); }
   .um-sep { height: 1px; margin: 4px 6px; background: var(--st-hair); }
   @media (pointer: coarse) {
     .um-i { height: 42px; font-size: 15px; }

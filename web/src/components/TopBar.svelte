@@ -2,13 +2,14 @@
   // claude 页顶部：不是整栏 header，而是悬浮控件浮在对话之上——
   // 左：圆形菜单钮（medium 档才出）；右：两种形态二选一——
   //   · tools（侧列形态：电脑 / 平板 / 分屏格）＝ Claude 桌面版同款的【工具开关组】（DockToolBar）。
-  //     工作台收着时挂在【这一格】的右上角；
+  //     工作台收着时挂在【这一格】的右上角（桌面壳 WCO 下坐进标题栏带、和最小化 / 关闭同一排）；
   //     工作台一展开就交给 ClaudeDock 挂进它顶上那条带里（卡片正上方），这里不再摆。
   //   · 否则（手机底部 sheet 形态）＝ 原来的「主题 + 两点键」胶囊，两点键开 sheet。
   // 材质：Figma iOS 27 kit 的液态玻璃（Liquid Glass - Regular - Small，明暗两个变体）。图形层是构建期
-  // 用 Figma 原版着色器烘焙的「与底色无关」图层（assets/figma-glass）：页面底色从下面透上来，在 --bg 上与
-  // Figma 逐像素一致；正文滚到底下时靠 backdrop 模糊透出（磨砂半径 6 → σ≈2.45，不做折射）。
-  // `?oldglass` 退回原来的纯毛玻璃，方便对比。玻璃只给触屏；鼠标设备（电脑浏览器）走扁平实底（.flat）。
+  // 用 Figma 原版着色器烘焙的「与底色无关」图层（assets/figma-glass，做法与核对数据见
+  // bridge build/design/figma-glass-controls/bake.html）：页面底色从下面透上来，在 --bg 上与 Figma
+  // 逐像素一致；正文滚到底下时靠 backdrop 模糊透出（磨砂半径 6 → σ≈2.45，不做折射）。
+  // `?oldglass` 退回原来的纯毛玻璃，方便对比。玻璃只给触屏；鼠标设备（电脑浏览器、桌面壳）走扁平实底（.flat）。
   import { toggleTheme } from '../lib/state.svelte.js';
   import { dock } from '../lib/dock.svelte.js';
   import DockToolBar from './dock/DockToolBar.svelte';
@@ -43,7 +44,7 @@
   </button>
   <button class="pbtn eyes" class:on={dock.open} aria-label={t('工作台')} onclick={onDock}>
     <svg viewBox="0 0 20 20" fill="none"><circle cx="7" cy="9" r="1.6" fill="currentColor"/><circle cx="13" cy="9" r="1.6" fill="currentColor"/></svg>
-    {#if dock.termLive && !dock.open}<span class="live-dot"></span>{/if}
+    {#if (dock.browserLive || dock.termLive) && !dock.open}<span class="live-dot"></span>{/if}
   </button>
 </div>
 {/if}
@@ -84,7 +85,7 @@
   .pbtn svg { width: 20px; height: 20px; }
   .pbtn.eyes { position: relative; }
   .pbtn.eyes.on { background: var(--hover-strong); color: var(--text); }
-  /* agent 正在用终端且面板没开：呼吸绿点提示（点开即清） */
+  /* agent 正在用浏览器且面板没开：呼吸绿点提示（点开即清） */
   .live-dot { position: absolute; top: 5px; right: 7px; width: 7px; height: 7px; border-radius: 50%;
     background: var(--ok); animation: tbPulse 1.2s ease-in-out infinite; }
   @keyframes tbPulse { 50% { opacity: .35; } }
@@ -99,13 +100,17 @@
   /* 触屏（平板 / 折叠屏展开）：和工具开关组（DockToolBar，触屏 40px）同高同中线 */
   @media (pointer: coarse) { .fab.round.sm { width: 40px; height: 40px; } .fab.round.nc { left: 58px; } }
 
+  /* 桌面壳 WCO：圆钮收成 32px、坐进 40px 标题栏带，与工具开关组、系统窗控同一条中线 */
+  :global(html[data-wco="1"]) .fab.round.sm { top: calc((var(--wco-h, 40px) - 32px) / 2) !important; width: 32px; height: 32px; }
+  :global(html[data-wco="1"]) .fab.round.nc { left: 50px; }
+  :global(html[data-wco="1"]) .fab.round.nc .nc-ic { width: 16px; height: 16px; }
+
   /* —— Figma 液态玻璃（默认；?oldglass 退回上面的毛玻璃）——
      ::before 盖住控件外扩 24px（投影在里面），画烘焙好的图层；控件自身只留 backdrop 模糊，底色从下面透上来。
-     每张图对应一个尺寸：44 手机、36 工具组形态、40 触屏工具组；胶囊按三段切片横向拉伸
+     每张图对应一个尺寸：44 手机、36 工具组形态、40 触屏工具组、32 桌面壳 WCO；胶囊按三段切片横向拉伸
      （两端各 64px 原样、中段拉伸——中段逐列不变，核对误差 ≤3/255）。
      图标色 = Figma 的标签色按其混合模式落在玻璃上的结果：亮 #1a1a1a LINEAR_BURN → #0d0d0d；
-     暗 #f5f5f5 LINEAR_DODGE（CSS 没有 linear-burn，这里统一用普通混合的等效色）。
-     烘焙时的锚点是页面底色 --bg：改了底色要重新烘焙，否则在新底色上不再精确。 */
+     暗 #f5f5f5 LINEAR_DODGE（CSS 没有 linear-burn，这里统一用普通混合的等效色）。 */
   :global(html) .fab.fg {
     background: transparent; color: #f5f5f5;
     -webkit-backdrop-filter: blur(2.45px); backdrop-filter: blur(2.45px);
@@ -118,19 +123,21 @@
     content: ''; position: absolute; inset: -24px; z-index: -1; pointer-events: none;
     background: center / 100% 100% no-repeat;
   }
-  .fab.round.fg::before { background-image: url(../assets/figma-glass/tb-orb44-dark.png); }
-  .fab.round.fg.sm::before { background-image: url(../assets/figma-glass/tb-orb36-dark.png); }
-  :global(html[data-theme="light"]) .fab.round.fg::before { background-image: url(../assets/figma-glass/tb-orb44-light.png); }
-  :global(html[data-theme="light"]) .fab.round.fg.sm::before { background-image: url(../assets/figma-glass/tb-orb36-light.png); }
+  .fab.round.fg::before { background-image: var(--ov-figma-glass-tb-orb44-dark, url(../assets/figma-glass/tb-orb44-dark.png)); }
+  .fab.round.fg.sm::before { background-image: var(--ov-figma-glass-tb-orb36-dark, url(../assets/figma-glass/tb-orb36-dark.png)); }
+  :global(html[data-theme="light"]) .fab.round.fg::before { background-image: var(--ov-figma-glass-tb-orb44-light, url(../assets/figma-glass/tb-orb44-light.png)); }
+  :global(html[data-theme="light"]) .fab.round.fg.sm::before { background-image: var(--ov-figma-glass-tb-orb36-light, url(../assets/figma-glass/tb-orb36-light.png)); }
   @media (pointer: coarse) {
-    .fab.round.fg.sm::before { background-image: url(../assets/figma-glass/tb-orb40-dark.png); }
-    :global(html[data-theme="light"]) .fab.round.fg.sm::before { background-image: url(../assets/figma-glass/tb-orb40-light.png); }
+    .fab.round.fg.sm::before { background-image: var(--ov-figma-glass-tb-orb40-dark, url(../assets/figma-glass/tb-orb40-dark.png)); }
+    :global(html[data-theme="light"]) .fab.round.fg.sm::before { background-image: var(--ov-figma-glass-tb-orb40-light, url(../assets/figma-glass/tb-orb40-light.png)); }
   }
+  :global(html[data-wco="1"]) .fab.round.fg.sm::before { background-image: var(--ov-figma-glass-tb-orb32-dark, url(../assets/figma-glass/tb-orb32-dark.png)); }
+  :global(html[data-theme="light"][data-wco="1"]) .fab.round.fg.sm::before { background-image: var(--ov-figma-glass-tb-orb32-light, url(../assets/figma-glass/tb-orb32-light.png)); }
   .fab.pill.fg::before {
     background: none; border-style: solid; border-width: 0 64px;
-    border-image: url(../assets/figma-glass/tb-cap44-dark.png) 0 192 fill / 0 64px / 0 stretch;
+    border-image: var(--ov-figma-glass-tb-cap44-dark, url(../assets/figma-glass/tb-cap44-dark.png)) 0 192 fill / 0 64px / 0 stretch;
   }
-  :global(html[data-theme="light"]) .fab.pill.fg::before { border-image-source: url(../assets/figma-glass/tb-cap44-light.png); }
+  :global(html[data-theme="light"]) .fab.pill.fg::before { border-image-source: var(--ov-figma-glass-tb-cap44-light, url(../assets/figma-glass/tb-cap44-light.png)); }
 
   /* —— 鼠标设备：扁平实底（同 DockToolBar .flat）——页面同色实底 + 细描边，不模糊不透色 */
   :global(html) .fab.flat {

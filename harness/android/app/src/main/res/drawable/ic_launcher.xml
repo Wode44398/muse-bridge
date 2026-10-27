@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动图标：暖黑圆角底 + 自绘四芒软星（中性壳标识，非任何一家的商标）。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#1F1F1E"
+        android:pathData="M24,4 H84 A20,20 0 0 1 104,24 V84 A20,20 0 0 1 84,104 H24 A20,20 0 0 1 4,84 V24 A20,20 0 0 1 24,4 Z" />
+    <path
+        android:fillColor="#F5F1E8"
+        android:pathData="M54,26 C57,41 61.5,48 69,51.8 C61.5,55.6 57,62.5 54,77.5 C51,62.5 46.5,55.6 39,51.8 C46.5,48 51,41 54,26 Z" />
+    <path
+        android:fillColor="#D97757"
+        android:pathData="M75.5,60 C77,66.8 79,69.9 82.5,71.7 C79,73.5 77,76.6 75.5,83.4 C74,76.6 72,73.5 68.5,71.7 C72,69.9 74,66.8 75.5,60 Z" />
+</vector>

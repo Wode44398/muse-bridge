@@ -8,7 +8,7 @@ import { installConsoleRing } from "./diag-ring.ts";
 installConsoleRing();
 // 出站代理：自适应探测 + 每分钟自愈（net-proxy.ts）。Node 的全局 fetch 不读环境变量
 // 代理，必须显式装 dispatcher；且 harness 常驻，不能只吃 bridge spawn 那一刻的 env
-// 快照——本机代理抖动/开机晚启动会把 WebSearch/WebFetch 整批打成 fetch failed
+// 快照——Clash 抖动/开机晚启动会把 WebSearch/WebFetch 整批打成 fetch failed
 //（2026-08-05、08-09 两次实锤）。NO_PROXY 里的 localhost/LAN 照常直连，CDP 不受影响。
 import { initOutboundProxy, outboundProxyStatus } from "./net-proxy.ts";
 import { primeLanAddress } from "./lan.ts";
@@ -123,6 +123,7 @@ import {
 } from "./custom-providers.ts";
 import { shell, killAllJobs, listJobs, moveForegroundToBackground, stopJob } from "./tools/bash.ts";
 import { ALL_TOOLS, toolDefs } from "./tools/registry.ts";
+import { deviceToolAvailable, listDevices, setDeviceLink } from "./tools/localpc.ts";
 import { ruleProblems } from "./agent/permissions.ts";
 
 // 权限规则自查用的工具名（含眼下没启用的工具——规则可以先写好）
@@ -157,9 +158,10 @@ import {
   existingSharedBrowser,
   getSharedBrowser,
   sharedBrowserMode,
+  sharedEdgeKind,
   VIEWPORT_PRESETS,
 } from "./cdp.ts";
-import { edgeLink } from "./edge-link.ts";
+import { edgeHub, edgeLink, EDGE_EXTENSION_DIR } from "./edge-link.ts";
 import { reviewOverview, reviewDiff } from "./review.ts";
 import {
   ensureTerm,
@@ -178,6 +180,7 @@ import {
 } from "./api-auth.ts";
 import { inertFileHeaders } from "./inert-file.ts";
 import { randomBytes } from "node:crypto";
+import { cleanEngine, localAiApply, localAiStart, localAiStatus, localAiStop, localGpuInfo } from "./localai.ts";
 import { BUILD_INFO } from "./build-info.ts";
 import { protocolInfo } from "./protocol.ts";
 import { backlogGuard } from "./sse-backlog.ts";
@@ -256,12 +259,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// 租户实例的接口闸（多用户服务端上每个用户一个 harness，见 tenant.ts）：连用户的 Edge（主机主人的真实登录态）
-// 整组关掉；没有命令行的租户连终端也关。工作区类路径的限制在各处理器里。
+// 租户实例的接口闸（多用户服务端上每个用户一个 harness，见 tenant.ts）：本机模型（整机资源，停它会连带别人）、
+// 连用户的 Edge（主机主人的真实登录态）整组关掉；没有命令行的租户连终端也关。工作区类路径的限制在各处理器里。
 app.use((req, res, next) => {
   if (!tenantMode()) return next();
   const p = req.path;
-  if (p.startsWith("/api/edge/") || p === "/api/browser/edge") {
+  if (p.startsWith("/api/localai/") || p.startsWith("/api/edge/") || p === "/api/browser/edge") {
     res.status(403).json({ error: "not available for multi-user accounts on this server" });
     return;
   }
@@ -324,6 +327,38 @@ app.get("/api/info", (_req, res) => {
     // M10：协议版本号、还服务的最老前端、能力位（见 protocol.ts 的纪律）
     protocol: protocolInfo(),
   });
+});
+
+// ── 用户的电脑（输入框下方的设备芯片）：这个会话连哪台——同 Claude 那颗（经 bridge 内部接口，见 tools/localpc.ts）──
+// 没接上 bridge 的设备通道（独立跑的 harness、bridge 关了设备）回 available:false，前端整颗不出现。
+const DEVICE_SESSION_RE = /^[0-9a-f-]{8,64}$/i;
+app.get("/api/devices", async (req, res) => {
+  if (!deviceToolAvailable()) {
+    res.json({ available: false, enabled: false, devices: [], link: "" });
+    return;
+  }
+  const session = String(req.query.session ?? "");
+  try {
+    res.json({ available: true, ...(await listDevices(DEVICE_SESSION_RE.test(session) ? session : "")) });
+  } catch (e) {
+    res.status(502).json({ error: (e as Error).message });
+  }
+});
+app.post("/api/devices/link", async (req, res) => {
+  const session = String(req.body?.session ?? "");
+  if (!deviceToolAvailable()) {
+    res.status(404).json({ error: "device channel not connected" });
+    return;
+  }
+  if (!DEVICE_SESSION_RE.test(session)) {
+    res.status(400).json({ error: "bad session id" });
+    return;
+  }
+  try {
+    res.json({ ok: true, link: await setDeviceLink(session, String(req.body?.link ?? "")) });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
 });
 
 app.get("/api/config", (_req, res) => {
@@ -452,6 +487,31 @@ app.get("/api/mcp", async (_req, res) => {
 // 是代理翻了还是上游挂了。
 app.get("/api/net", (_req, res) => {
   res.json({ outbound: outboundProxyStatus(), websearch: webSearchStats() });
+});
+
+// ── 本机模型（Qwen3.8-27B / Strata 125B）状态与启停 ─────────────────────────
+// composer 的「本机」状态面板用；start/stop 都是幂等的，返回操作后的实时状态。
+// ?engine=qwen|strata 选引擎，不带 = qwen（旧前端只认识这一台）。
+
+app.get("/api/localai/status", async (req, res) => {
+  res.json(await localAiStatus(cleanEngine(req.query.engine)));
+});
+
+app.post("/api/localai/start", async (req, res) => {
+  res.json(await localAiStart(cleanEngine(req.query.engine)));
+});
+
+app.post("/api/localai/stop", async (req, res) => {
+  res.json(await localAiStop(cleanEngine(req.query.engine)));
+});
+
+// 启动参数（上下文 / KV 精度 / 视觉 / MTP 或 KV 流式）：保存；在跑就按新参数重启。gpu 给面板做显存估算。
+app.get("/api/localai/gpu", async (req, res) => {
+  res.json(await localGpuInfo(cleanEngine(req.query.engine)));
+});
+
+app.post("/api/localai/settings", async (req, res) => {
+  res.json(await localAiApply(req.body?.settings, cleanEngine(req.query.engine)));
 });
 
 app.post("/api/config", (req, res) => {
@@ -2012,23 +2072,36 @@ app.post("/api/fs/mkdir", async (req, res) => {
 // least one viewer is subscribed; the browser itself is unaffected by viewers
 // coming and going (phone can disconnect mid-task, agent keeps working).
 
+// 扩展链路的状态：edge = 正在用的那个浏览器（没在用就取第一个连着的）的快照（老字段，形状不变）；
+// edges = Edge / Chrome 各自一条（同时装了扩展时两条都在）
+function edgeStatuses() {
+  const inUse = sharedEdgeKind();
+  const links = edgeHub().all();
+  const primary = (inUse && edgeLink(inUse)) || edgeHub().connectedLinks()[0] || edgeLink();
+  return {
+    edge: { ...primary.snapshot(), kind: primary.kind },
+    edges: links.map((l) => ({ ...l.snapshot(), kind: l.kind, inUse: l.kind === inUse })),
+  };
+}
+
 app.get("/api/browser/state", (_req, res) => {
   const page = existingSharedBrowser();
-  const edge = edgeLink().snapshot();
+  const st = edgeStatuses();
   res.json(
     page
-      ? { alive: true, url: page.url, viewport: page.viewport, tabs: page.tabs, mode: sharedBrowserMode(), edge }
-      : { alive: false, tabs: [], mode: null, edge },
+      ? { alive: true, url: page.url, viewport: page.viewport, tabs: page.tabs, mode: sharedBrowserMode(), ...st }
+      : { alive: false, tabs: [], mode: null, ...st },
   );
 });
 
-// ── 用户的 Edge（经 dimensio Edge 扩展；本仓库不附带扩展）───────────────────────
-// 扩展是否连着、共享浏览器现在是哪一种。
+// ── 用户的 Edge / Chrome（harness/edge-extension）─────────────────────────────
+// 扩展是否连着、装在哪（面板/设置页据此给出「去 edge://extensions 加载解压缩的扩展」的指引）。
 app.get("/api/edge/status", (_req, res) => {
-  res.json({ ...edgeLink().snapshot(), mode: sharedBrowserMode() });
+  const st = edgeStatuses();
+  res.json({ ...st.edge, edges: st.edges, extensionDir: EDGE_EXTENSION_DIR, mode: sharedBrowserMode() });
 });
 
-// 面板上的「接到我的 Edge」：把共享浏览器换成 Edge 里 dimensio 标签组的标签页。
+// 面板上的「接到我的 Edge」：把共享浏览器换成 Edge（或 body.browser="chrome" 指定 Chrome）里 dimensio 标签组的标签页。
 app.post("/api/browser/edge", async (req, res) => {
   const owner = browserClaimOwner();
   if (owner) {
@@ -2037,22 +2110,29 @@ app.post("/api/browser/edge", async (req, res) => {
   }
   try {
     const url = String(req.body?.url ?? "").trim();
-    const { session, tabs, created } = await attachEdgeBrowser(url || undefined);
-    res.json({ ok: true, url: session.url, tabs: session.tabs, count: tabs, created });
+    const want = String(req.body?.browser ?? "").trim().toLowerCase();
+    const kind = want || edgeHub().connectedLinks()[0]?.kind || "edge";
+    const { session, tabs, created } = await attachEdgeBrowser(url || undefined, kind);
+    res.json({ ok: true, url: session.url, tabs: session.tabs, count: tabs, created, browser: kind });
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }
 });
 
-// 用户在 Edge 页面上点了「停止」、或在「正在调试此浏览器」提示条上点了「取消」：
-// 停掉正占着浏览器的那一轮（与会话里的停止按钮同一个出口），再断开 Edge。
-edgeLink().onStop = (why) => {
+// 用户在 Edge / Chrome 页面上点了「停止」、或在「正在调试此浏览器」提示条上点了「取消」：
+// 停掉正占着浏览器的那一轮（与会话里的停止按钮同一个出口），再断开。只认正被驱动的那个浏览器——
+// 另一个浏览器里点停止（那边本来就没被附着）不该停掉这边的任务。
+edgeHub().onStop = (why, kind) => {
+  if (sharedEdgeKind(true) !== kind) {
+    console.log(`[edge] stop from ${kind} ignored: the shared browser is not on it`);
+    return;
+  }
   const owner = browserClaimOwner();
   if (owner) {
     const report = stopSession(owner);
-    console.log(`[edge] stopped session ${owner} from the browser (${why}): aborted=${report.turnAborted}`);
+    console.log(`[edge] stopped session ${owner} from ${kind} (${why}): aborted=${report.turnAborted}`);
   }
-  if (sharedBrowserMode() === "edge") closeAllBrowserSessions();
+  closeAllBrowserSessions();
 };
 
 app.get("/api/browser/stream", async (req, res) => {
@@ -2422,5 +2502,5 @@ const httpServer = app.listen(PORT, HOST, () => {
 
 // Edge 扩展的回环 WebSocket（/edge-link，只认固定扩展 ID 的 Origin，见 edge-link.ts）。harness 没有别的 WebSocket 端点。
 httpServer.on("upgrade", (req, socket) => {
-  if (!edgeLink().handleUpgrade(req, socket)) socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+  if (!edgeHub().handleUpgrade(req, socket)) socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
 });

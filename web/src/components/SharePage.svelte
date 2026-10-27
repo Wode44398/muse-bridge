@@ -345,7 +345,7 @@
 <div class="sp" onscroll={(e) => { scrolled = !!barEl && e.currentTarget.scrollTop > barEl.offsetTop - 1; if (menu) closeMenu(); }}>
   <div class="col">
     <header class="brand">
-      <span class="mark">Muse Bridge</span>
+      <span class="mark">The Bridge</span>
       <span class="ro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg>{t('只读分享')}</span>
     </header>
 

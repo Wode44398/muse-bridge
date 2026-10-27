@@ -2,7 +2,7 @@
 //
 // 病根：HtmlView 以前把文件文本塞进 iframe srcdoc，文档基址是 about:srcdoc，页面里
 // <script src="app.js">、assets/xx.png 之类相对引用全部落空——自包含单文件能开，带资源
-// 目录的课件/网站黑屏转圈（例如 课件成品/index.html + app.js + assets/）。
+// 目录的课件/网站黑屏转圈（2026-10-20 维护者截图：课件成品/index.html + app.js + assets/）。
 // 而 /api/file?path= 这类查询串式 URL 也解析不了相对路径。
 //
 // 做法：已鉴权的预览接口（/api/file、/api/claude/artifact、/api/codex/artifact）带 site=1

@@ -1,15 +1,16 @@
-// 注册账号迁移：把一台 bridge 上的注册账号连同聊天记录搬到另一台（比如从 Muse VM 搬到正式的 VPS），旧对话在新机器上能接着聊。
+// 注册账号迁移（三端拆分 P6）：把主机上的注册账号连同聊天记录搬到服务端，旧对话在服务端能接着聊。
 //
-//   旧机器：  npm run -s users:export -- --out <目录> [--users a,b]
-//   新机器：  npm run -s users:import -- --from <目录> [--users a,b] [--overwrite]
+//   主机上：  npm run -s users:export -- --out <目录> [--users a,b]
+//   服务端：  npm run -s users:import -- --from <目录> [--users a,b] [--overwrite]
 //   （两边都要带上各自的数据根：BRIDGE_DATA_ROOT=… 或在程序目录里跑）
 //
 // 搬什么：账号记录（密码哈希原样，朋友不用改密码；档位、能用的 agent、快照权限、服务账号、额度）、
-// 用量、每个人的整个目录（工作空间文件 + .bridge 里的 Claude 会话、项目表、快照桶、上传、媒体、dimensio 数据）。不搬登录会话（换了服务器大家重新登录一次）。
+// 用量、每个人的整个目录（工作空间文件 + .bridge 里的 Claude 会话、项目表、快照桶、Vertex
+// 历史、上传、媒体）。不搬登录会话（换了服务器大家重新登录一次）。
 //
 // 为什么要改写：Claude 的会话按「工作目录路径」归档（.bridge/claude/projects/<把 cwd 里的非字母数字换成 -
 // 得到的目录名>/），会话里每一行也记着 cwd 和一堆绝对路径；项目表、快照桶的 json 里也是绝对路径。路径从
-// E:\Old Bridge Users\<人> 变成 /var/lib/bridge/users/<人> 之后，不改的话旧对话找不到、也续不上。
+// E:\bridge-users\<人> 变成 /var/lib/bridge/users/<人> 之后，不改的话旧对话找不到、也续不上。
 // 所以导入时：① 按新的起始 cwd 重命名会话目录；② .bridge 里 json / jsonl 的字符串（值和键）凡是旧用户根下的
 // 绝对路径，换成新根并把分隔符改成新系统的；嵌在正文里的旧路径也换。用户自己的文件（工作空间、快照桶里
 // Claude 写的文件、上传、媒体）一个字节都不动。
@@ -36,7 +37,7 @@ export function makeRewriter(oldBase, newBase) {
   const sep = nb.includes('/') && !nb.includes('\\') ? '/' : (nb.includes('\\') ? '\\' : '/');
   const whole = new RegExp('^' + prefix + '(?=$|[\\\\/])', 'i');
   // 正文里的：前缀后面跟着的路径段一起换分隔符（段里不含空白与引号之类，遇到就当路径结束）
-  // (?![^…])：前缀后面得是分隔符或路径结束，不然「Old Bridge UsersX」这种同前缀的别的目录也会被换掉
+  // (?![^…])：前缀后面得是分隔符或路径结束，不然「bridge-usersX」这种同前缀的别的目录也会被换掉
   const inText = new RegExp(prefix + '(?![^\\\\/\\s"\'<>|*?`])((?:[\\\\/][^\\\\/\\s"\'<>|*?`]+)*)', 'gi');
   const fixRest = (rest) => rest.replace(/[\\/]+/g, sep);
   const probe = (segs[segs.length - 1] || '').toLowerCase();   // 先粗筛：不含旧根最后一段的字符串直接放过
@@ -146,7 +147,7 @@ export function rewriteUserData(userDir, rw, { candidates = [] } = {}) {
   return stats;
 }
 
-// ── 导出（旧机器）─────────────────────────────────────────────────────────────
+// ── 导出（主机）─────────────────────────────────────────────────────────────
 export function exportUsers({ usersRoot, systemDir, out, only = null, log = console.log }) {
   const users = readJson(path.join(systemDir, 'users.json'), {});
   const usage = readJson(path.join(systemDir, 'usage.json'), {});

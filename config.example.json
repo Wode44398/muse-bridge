@@ -1,7 +1,11 @@
 {
   "port": 8787,
   "token": "",
-  "vaultPath": "",
+  "vaultPath": "D:\\Notes",
   "model": "",
-  "oauthToken": ""
+  "oauthToken": "",
+  "vertexProject": "",
+  "vertexLocation": "global",
+  "vertexMediaLocation": "us-central1",
+  "geminiApiKey": ""
 }

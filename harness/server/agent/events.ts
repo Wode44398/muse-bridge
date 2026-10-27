@@ -31,7 +31,7 @@ export type StreamEvent =
       meta?: Record<string, unknown>;
     }
   // Q4：inputTokens 是整个提示的量（含命中缓存的部分）；cacheReadTokens / cacheWriteTokens 是其中读自缓存 /
-  // 写入缓存的量——provider 回报了才有（llama.cpp 兼容服务回报的是复用的 KV 量，记作读取）。
+  // 写入缓存的量——provider 回报了才有（本机 llama.cpp 回报的是复用的 KV 量，记作读取）。
   | { e: "usage"; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
   | { e: "turn_done"; stopReason: StopReason }
   // 适配器自己处理掉的事，要在对话里说一声（fast_fallback：fast mode 撞了自己的限流，这次及之后 cooldownMs 内改走普通速度）
@@ -166,7 +166,7 @@ export type AgentEvent =
       durationMs?: number;
       attempts?: number;
     }
-  // R3：waiting = 这次不是重试计数，而是在等网络恢复；waitedMs 是这一段已经等了多久。
+  // R3：waiting = 这次不是重试计数，而是在等网络 / 本机模型加载；waitedMs 是这一段已经等了多久。
   // U6：retryInMs / retryClass = 这次重试前要等多久、上一次为什么失败（分类器的类别；连接断了是 network）——只进活动行
   | {
       e: "context";
@@ -176,7 +176,7 @@ export type AgentEvent =
       retry?: number;
       retryInMs?: number;
       retryClass?: string;
-      waiting?: "network";
+      waiting?: "network" | "local_model";
       waitedMs?: number;
     }
   | { e: "todo"; items: TodoItem[] }
@@ -187,7 +187,7 @@ export type AgentEvent =
   | { e: "preview_closed"; serviceId: string }
   // The agent's shared browser moved somewhere — the frontend opens/updates the
   // live Browser pane (screencast) on this.
-  | { e: "browser"; url: string }
+  | { e: "browser"; url: string; edge?: boolean } // edge = 动的是用户自己的 Edge/Chrome（经扩展），不是内置浏览器——前端别为它展开浏览器面板
   // A headless screenshot of the preview, optionally with a multimodal model's
   // text verdict. Pushed by the Preview tool's screenshot action so the user can
   // see what the agent "looked at".

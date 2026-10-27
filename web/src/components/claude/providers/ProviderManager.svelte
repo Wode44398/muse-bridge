@@ -92,10 +92,11 @@
         <div class="intro">
           <div class="intro-tx">
             <h2>{t('接入你自己的模型')}</h2>
-            <p>{t('兼容 Anthropic 或 OpenAI 接口的服务都能接：DeepSeek、Kimi、GLM、小米 MiMo、百炼、OpenRouter、本机 Ollama……接好后在输入框模型菜单的 More models 里按服务分组选用，Claude Code 的工具、子 agent、工作区照常可用。')}</p>
+            <p>{cp.member ? t('用你自己的 API Key 接入兼容 Anthropic 或 OpenAI 接口的服务：DeepSeek、Kimi、GLM、小米 MiMo、百炼、OpenRouter……接好后在输入框模型菜单的 More models 里按服务分组选用，Claude Code 的工具、子 agent、工作区照常可用。') : t('兼容 Anthropic 或 OpenAI 接口的服务都能接：DeepSeek、Kimi、GLM、小米 MiMo、百炼、OpenRouter、本机 Ollama……接好后在输入框模型菜单的 More models 里按服务分组选用，Claude Code 的工具、子 agent、工作区照常可用。')}</p>
           </div>
           <button type="button" class="btn primary" onclick={() => (view = 'presets')}>＋ {t('添加服务')}</button>
         </div>
+        {#if cp.member}<div class="note">{t('这里的服务只有你自己能用：API Key 加密存在服务器上，不会显示给任何人，费用走你自己的账户、不占用本站额度。接口地址只能是公网地址（不能接本机或局域网服务）。')}</div>{/if}
         {#if cp.err}<div class="note warn">{cp.err}</div>{/if}
         {#if cp.providers.length}
           <div class="meta">{t('{p} 个服务 · {m} 个可用模型', { p: sum.p, m: sum.m })}{#if sum.h}{t('（{h} 个已隐藏）', { h: sum.h })}{/if}</div>
@@ -191,6 +192,8 @@
   .intro { display: flex; align-items: flex-start; gap: 24px; padding: 20px 22px; border-radius: 14px;
     background: linear-gradient(135deg, color-mix(in srgb, #d97757 9%, transparent), color-mix(in srgb, var(--st-seg) 80%, transparent)); border: 1px solid var(--st-hair); }
   .intro-tx { flex: 1; min-width: 0; }
+  .note { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--st-seg); font-size: 13px; color: var(--st-text2); line-height: 1.55; }
+  .note.warn { background: color-mix(in srgb, #e0a43b 14%, transparent); color: var(--text); }
   .intro h2 { margin: 0 0 6px; font-family: var(--font-brand-serif), Georgia, serif; font-size: 22px; font-weight: 500; letter-spacing: -.01em; }
   .intro p { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--st-text2); max-width: 600px; }
   .meta { margin: 22px 0 10px; font-size: 12.5px; color: var(--st-muted); }

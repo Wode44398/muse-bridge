@@ -8,9 +8,7 @@
     "raw-child-kill": {
       "terminal.ts": 1
     },
-    "pid-liveness": {
-      "tools/localpc.ts": 1
-    },
+    "pid-liveness": {},
     "no-bare-fake-adapter": {
       "ask.test.ts": 1,
       "away-mode.test.ts": 2,
@@ -36,6 +34,7 @@
     }
   },
   "tests": {
+    "ab-eval.test.ts": 3,
     "agent-loop.test.ts": 3,
     "artifacts.test.ts": 3,
     "ask.test.ts": 4,
@@ -45,6 +44,7 @@
     "bash-abort.test.ts": 1,
     "bash-long.test.ts": 5,
     "bash-orphan-pipe.test.ts": 2,
+    "browser-availability.test.ts": 7,
     "browser-lifecycle.test.ts": 2,
     "build-info.test.ts": 1,
     "catalog-contract.test.ts": 5,
@@ -53,6 +53,7 @@
     "compact-pairing.test.ts": 3,
     "compaction-archive.test.ts": 3,
     "compaction-cost.test.ts": 5,
+    "compaction-eval.test.ts": 5,
     "compaction-shape.test.ts": 15,
     "compaction-summary.test.ts": 4,
     "config-persist.test.ts": 3,
@@ -80,6 +81,7 @@
     "interrupt-truth.test.ts": 4,
     "knowledge-search.test.ts": 4,
     "knowledge.test.ts": 10,
+    "local-effort-contract.test.ts": 2,
     "loop-gates.test.ts": 7,
     "loop-guard.test.ts": 4,
     "media-budget.test.ts": 4,
@@ -91,7 +93,7 @@
     "mirror-base.test.ts": 2,
     "multi-session.test.ts": 4,
     "net-proxy.test.ts": 8,
-    "network-wait.test.ts": 5,
+    "network-wait.test.ts": 7,
     "pairing.test.ts": 2,
     "path-alias.test.ts": 3,
     "paths.test.ts": 6,
@@ -168,7 +170,7 @@
     "proc-tree.test.ts": 4,
     "projects.test.ts": 5,
     "prompt-sections.test.ts": 2,
-    "providers.test.ts": 10,
+    "providers.test.ts": 11,
     "quick.test.ts": 4,
     "read-typescript.test.ts": 2,
     "record-fp.test.ts": 6,
@@ -183,7 +185,7 @@
     "run-mode.test.ts": 5,
     "screenshot-asset.test.ts": 2,
     "secret-guard.test.ts": 7,
-    "security.test.ts": 10,
+    "security.test.ts": 12,
     "services-reclaim.test.ts": 2,
     "session-access.test.ts": 3,
     "session-delete.test.ts": 1,
@@ -200,7 +202,6 @@
     "subagent-mode.test.ts": 3,
     "subagent.test.ts": 10,
     "tasks-view.test.ts": 9,
-    "tenant.test.ts": 8,
     "test-global.test.ts": 4,
     "test-harness.test.ts": 6,
     "test-pollution.test.ts": 2,
@@ -219,7 +220,8 @@
     "world-state.test.ts": 6,
     "workflow.test.ts": 9,
     "ephemeral-tail.test.ts": 2,
-    "playbooks.test.ts": 5,
-    "memory-extract.test.ts": 7
+    "playbooks.test.ts": 7,
+    "memory-extract.test.ts": 7,
+    "device-tools.test.ts": 3
   }
 }

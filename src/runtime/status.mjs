@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { outboundHint } from './net-proxy.mjs';
-import { activeToken, activeAccountId } from './claude-account.mjs';
+import { activeAccountId, activeToken, apiKeyMode } from './claude-account.mjs';
 
 let _statusPath = '';
 // Rate limits are per SUBSCRIPTION ACCOUNT (everyone shares the bridge's account pool),
@@ -298,11 +298,31 @@ export function classifyError(raw, kind) {
   }
   if (k === 'authentication_failed' || /not logged in|unauthorized|\b401\b|oauth|invalid api key|authentication failed/.test(s)) {
     // 服务端从没配过认证（新装的服务器最常见）和配过但失效，是两种处理办法。
-    // 控制台「Claude 账号」里加的令牌不进环境变量（每次 query 现注），也要算「配过」——否则令牌被撤销时会误报「还没配置」
-    const configured = Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || activeToken());
+    // 号池上线后真正生效的是号池激活号的令牌（config.oauthToken 只在第一次启动时播种一次号池），所以都指到号池去改（S4）。
+    const configured = Boolean(activeToken() || process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY);
+    // 正在用按量 API Key 时失效的是 key、不是令牌（CLI 见到 key 就不用 OAuth）：别再让人去更新号池令牌，指到换 key 的地方。
+    const keyMode = apiKeyMode();
+    // 桌面客户端托管的本机服务端（壳设 BRIDGE_SUPERVISED=desktop）：没有 Docker / 命令行那一套，指到托盘里的重新配置。
+    if (String(process.env.BRIDGE_SUPERVISED || '').trim() === 'desktop') {
+      if (keyMode === 'desktop' || keyMode === 'env' || keyMode === 'config') {
+        return { kind: 'auth', title: 'API Key 无效', hint: 'API Key 无效或已被撤销：在托盘「本机服务端 › 重新配置…」里换一个 key，或改选订阅令牌。' };
+      }
+      return configured
+        ? { kind: 'auth', title: '登录已失效', hint: '令牌过期或被撤销：重新运行 claude setup-token，到「设置 › Claude › 订阅号池」里更新这个号的令牌，即时生效；也可以在托盘「本机服务端 › 重新配置…」里重填。' }
+        : { kind: 'auth', title: '服务端还没配置 Claude 认证', hint: '二选一：claude setup-token 生成的订阅令牌，或 Anthropic API key。在托盘「本机服务端 › 重新配置…」里填写；订阅令牌也可以直接加到「设置 › Claude › 订阅号池」里，即时生效。' };
+    }
+    if (keyMode === 'env') {
+      return { kind: 'auth', title: 'API Key 无效', hint: 'API Key 无效或已被撤销：换一个有效的 ANTHROPIC_API_KEY（Docker 改 .env 后 docker compose up -d，直接部署改服务的环境变量）后重启服务。设着它的时候，号池里的订阅令牌不会生效。' };
+    }
+    if (keyMode === 'config') {
+      return { kind: 'auth', title: 'API Key 无效', hint: 'config.json 里的 anthropicApiKey 无效或已被撤销：换一个 key 后重启服务；或者把订阅令牌加到「设置 › Claude › 订阅号池」里，加上就改用订阅号，即时生效。' };
+    }
+    if (configured && keyMode === 'config-unused') {
+      return { kind: 'auth', title: '登录已失效', hint: '令牌过期或被撤销：重新运行 claude setup-token，到「设置 › Claude › 订阅号池」（或服务端控制台「Claude 账号」）里更新这个号的令牌，即时生效。config.json 里的 anthropicApiKey 没在用：号池里有订阅令牌时优先用订阅号；要改用 API Key，把它设成环境变量 ANTHROPIC_API_KEY（Docker 写进 .env）后重启服务。' };
+    }
     return configured
-      ? { kind: 'auth', title: '登录已失效', hint: '令牌过期或被撤销：在你自己的电脑上重新运行 claude setup-token，把新令牌更新到「设置 → 连接 → 服务端控制台 → Claude 账号」（在 Muse 上部署的，也可以让 Muse 运行 set-claude-token）。' }
-      : { kind: 'auth', title: '服务端还没配置 Claude 认证', hint: '在你自己的电脑上运行 claude setup-token 生成订阅令牌，然后在「设置 → 连接 → 服务端控制台 → Claude 账号」里添加；在 Muse 上部署的，也可以把令牌发给 Muse，让它运行 set-claude-token。' };
+      ? { kind: 'auth', title: '登录已失效', hint: '令牌过期或被撤销：重新运行 claude setup-token，到「设置 › Claude › 订阅号池」（或服务端控制台「Claude 账号」）里更新这个号的令牌，即时生效；也可以运行 npm run set-auth -- <新令牌> 后重启服务。' }
+      : { kind: 'auth', title: '服务端还没配置 Claude 认证', hint: '二选一：claude setup-token 生成的订阅令牌，或 Anthropic API key（ANTHROPIC_API_KEY）。订阅令牌直接加到「设置 › Claude › 订阅号池」（或服务端控制台「Claude 账号」）里，即时生效；也可以 Docker 写进 .env 的 CLAUDE_CODE_OAUTH_TOKEN 后 docker compose up -d，直接部署用 npm run set-auth -- <令牌> 后重启服务。' };
   }
   if (k === 'billing_error' || /billing|payment|insufficient|out of credit/.test(s)) {
     return { kind: 'billing', title: '账户额度 / 计费异常', hint: '检查 Claude 订阅或额度状态。' };

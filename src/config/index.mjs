@@ -6,13 +6,14 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+import os from 'node:os';
 import { DATA_ROOT, PROGRAM_ROOT } from '../runtime/paths.mjs';
 import { CLAUDE_MODEL_DEFAULT } from './capabilities.mjs';
 import { resolveDeployProfile, DEFAULTS_VERSION } from './deploy-profile.mjs';
 
-// Mutable data lives under the data root (BRIDGE_DATA_ROOT; the deploy scripts point it
-// outside the program tree so versions can be swapped). ROOT is the historical public
-// name for it; static assets always resolve from PROGRAM_ROOT.
+// Mutable data can move out of the program tree in the packaged desktop client.
+// ROOT remains the historical public name for the data root; static assets always
+// resolve from PROGRAM_ROOT.
 export const ROOT = DATA_ROOT;
 export const CONFIG_PATH = path.join(ROOT, 'config.json');
 export const PUBLIC_DIR = path.join(PROGRAM_ROOT, 'public');
@@ -22,7 +23,8 @@ export const MEDIA = path.join(ROOT, 'media');
 mkdirSync(UPLOADS, { recursive: true });
 mkdirSync(MEDIA, { recursive: true });
 
-// 默认都落在数据根里（BRIDGE_DATA_ROOT，没设就是程序目录）：任何人拿到代码都能直接起。
+// 默认都落在数据根里（BRIDGE_DATA_ROOT，没设就是程序目录）：任何平台、任何人拿到代码都能直接起。
+// 原主机的 E:\ 路径写在它自己的 config.json 里，不再是代码默认值。
 const DEFAULT_VAULT = path.join(ROOT, 'workspace');
 const DEFAULT_USERS_ROOT = path.join(ROOT, 'users');
 
@@ -38,7 +40,9 @@ function loadConfigFile() {
       usersRoot: DEFAULT_USERS_ROOT,
       model: '',
       oauthToken: '',
-      // 新生成的配置按部署形态定默认值（见 deploy-profile.mjs）；没有这个键的老配置照旧按老规矩，升级不变
+      vertexProject: '',
+      vertexLocation: 'global',
+      // 新生成的配置按部署形态定默认值（见 deploy-profile.mjs）；没有这个键的老配置照旧按平台，升级不变
       defaultsVersion: DEFAULTS_VERSION,
     };
     writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 });
@@ -46,7 +50,7 @@ function loadConfigFile() {
     // 完整令牌不打进日志（S6：stdout 常被重定向落盘）；告诉人去哪取。
     const cli = String(process.env.BRIDGE_CLI || '').trim() || 'node src/cli.mjs';
     console.log('首次启动：已生成 ' + CONFIG_PATH + '（含访问令牌）。');
-    console.log('  查看令牌：' + cli + ' show-token');
+    console.log('  查看令牌：' + cli + ' show-token　　手机扫码配对：' + cli + ' pair');
     return cfg;
   }
   try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '')); }
@@ -55,17 +59,20 @@ function loadConfigFile() {
 
 const config = loadConfigFile();
 
-// 部署形态：desktop / server / docker，默认值按它定，规则与新老部署的区别见 deploy-profile.mjs。
-// server.mjs 的监听地址、下面的多用户默认值都从这里取。Muse 的部署脚本在服务单元里写 BRIDGE_EDITION=server、
-// BRIDGE_SUPERVISED=systemd（→ 无界面服务器形态，多用户默认开），选了「只自己用」再写 features.multiUser:false。
+// 部署形态（开源路线 S1-7）：desktop / server / docker，默认值按它定、不再按 win32 / linux，规则与新老部署的区别
+// 见 deploy-profile.mjs。server.mjs 的监听地址、下面的多用户与 Claude in Chrome 默认值都从这里取。
 export const DEPLOY = resolveDeployProfile({ env: process.env, platform: process.platform, config, exists: existsSync });
 
-// 功能开关，config.json 的 features.<名> 逐项覆盖：
-//   multiUser   注册、邀请码、普通账号登录。关着时只有管理员与「服务账号」（程序用的账号）能登录。
-//               默认值 = 「给谁用」（DEPLOY.multiUserDefault）：环境变量 BRIDGE_AUDIENCE=shared|self、
-//               BRIDGE_EDITION=server → 开、host → 关；都没写时按 deploy-profile.mjs 的新老规则。
-//   remoteAdmin 服务端控制台（/api/admin/*）对管理员身份远程开放。默认开：服务端在 VM 上时根本没有
+// 只有一个服务端（2026-10-21 起「主机端 / 服务端」两个版本合一）：装在 Linux VPS、Windows VPS、
+// 还是自己电脑上，差别只在部署配置与下面这几项功能开关，config.json 的 features.<名> 逐项覆盖。
+//   multiUser   注册、邀请码、普通账号登录。关着时只有管理员与「服务账号」（QQ 机器人这类）能登录。
+//               默认值 = 「给谁用」（DEPLOY.multiUserDefault）：环境变量 BRIDGE_AUDIENCE=shared|self 是安装时的选择；
+//               老配置写过 edition:"server" → 开、"host" → 关；S1-7 之前生成的配置（没有 defaultsVersion）沿用合一前的
+//               取值——非 Windows 开、Windows 关，老部署升级后行为不变；新生成的配置一律「只给我自己」，要给别人用就打开它。
+//   remoteAdmin 服务端控制台（/api/admin/*）对管理员身份远程开放。默认开：服务端在 VPS 上时根本没有
 //               「本机直连」可用；管理员令牌本来就能让 Claude 在服务器上执行任意命令，远程管理没有多给权限。
+//               会把自己关在门外的动作（停服务 / 停隧道 / 动开机自启、关掉正经由它连进来的公网隧道）
+//               远程一律拒绝，只能在那台机器上做，见 routes/admin.mjs。
 const FEATURE_DEFAULTS = {
   multiUser: DEPLOY.multiUserDefault,
   remoteAdmin: true,
@@ -98,7 +105,7 @@ if ((!TOKEN || TOKEN.length < 16) && !TOKEN_HASH) {
 export const OAUTH = process.env.CLAUDE_CODE_OAUTH_TOKEN || config.oauthToken || '';
 if (OAUTH) process.env.CLAUDE_CODE_OAUTH_TOKEN = OAUTH;
 if (process.env.ANTHROPIC_API_KEY === '') delete process.env.ANTHROPIC_API_KEY;
-// 按量 API Key 也可以写在 config.json 的 anthropicApiKey（手改；不必再另配环境变量）。
+// 按量 API Key 也可以写在 config.json 的 anthropicApiKey（安装向导 / 手改；Docker、Linux 不必再另配环境变量）。
 // 但 Claude Code 非交互模式下只要有 ANTHROPIC_API_KEY 就整个关掉 OAuth（CLI utils/auth.ts isAnthropicAuthEnabled），
 // 注进进程环境后号池里的订阅号全被它顶掉、悄悄改走按量计费。所以只在「没有任何订阅凭据」时注入：
 // 环境变量没给 key、没有 CLAUDE_CODE_OAUTH_TOKEN / oauthToken、号池里没有带令牌的号（播种出来的空「默认账号」不算）。
@@ -126,6 +133,53 @@ export const API_KEY_SOURCE = API_KEY_FROM_CONFIG ? 'config'
 // 调用统统 "Native CLI binary not found"。binary 版本升级由我们手动控制（npm update）。
 process.env.DISABLE_AUTOUPDATER = '1';
 
+// Codex CLI binary. On this box codex is the OpenAI *desktop app* build, not the
+// `npm i -g @openai/codex` package resolveCodex() hunts for — so point CODEX_BIN
+// at the real exe (config.toml's CODEX_CLI_PATH). The path carries a version hash
+// that changes on codex updates, so it's config-driven, not hardcoded. The codex
+// subprocess inherits process.env, so setting it here is enough.
+export const CODEX_BIN = process.env.CODEX_BIN || config.codexBin || '';
+if (CODEX_BIN) process.env.CODEX_BIN = CODEX_BIN;
+
+// Gemini-via-Vertex: ADC auth (gcloud auth application-default login). Project +
+// location come from config.json / env; the phone picks a model client-side from
+// capabilities.mjs.
+export const VERTEX_PROJECT = process.env.VERTEX_PROJECT || config.vertexProject || '';
+export const VERTEX_LOCATION = process.env.VERTEX_LOCATION || config.vertexLocation || 'global';
+// Media models (Veo/Imagen/Lyria) are NOT on the 'global' endpoint — they live
+// on a regional one (us-central1, verified for this project).
+export const VERTEX_MEDIA_LOCATION = process.env.VERTEX_MEDIA_LOCATION || config.vertexMediaLocation || 'us-central1';
+// Gemini Developer API key (for models not on Vertex, e.g. lyria-3).
+export const GEMINI_API_KEY = process.env.GEMINI_API_KEY || config.geminiApiKey || '';
+
+// 档 2「手机即远程文件系统」总开关。手机原生侧（SAF 文件桥）就绪前默认【关】——
+// 开了 Claude 会多出 mcp__phone__* 工具，老 apk 收到 phone_cmd 无人响应只会超时。
+// 测试：config.json 设 "phoneFs": true 或 env BRIDGE_PHONE_FS=1 + mock 手机端。
+export const PHONE_FS = process.env.BRIDGE_PHONE_FS === '1' || config.phoneFs === true;
+
+// 「手机操控」（Tier 2 意图 + Tier 3 无障碍）总开关。默认【关】——开了 Claude 会多出
+// mcp__phoneControl__* 工具；手机端需装新 apk 并在设置里开启「手机操控」前台服务，否则
+// 工具调用会回「未连接」。测试：config.json 设 "phoneControl": true 或 env BRIDGE_PHONE_CONTROL=1。
+export const PHONE_CONTROL = process.env.BRIDGE_PHONE_CONTROL === '1' || config.phoneControl === true;
+
+
+// Claude in Chrome：让 admin 的 Claude 驱动维护者本机已登录的 Edge（装了 Claude 扩展，经账号级
+// 云中继连接）。按部署形态定默认值（DEPLOY.claudeInChromeDefault）：Windows 上的「本机桌面」形态默认【开】
+// （服务端就装在自己电脑上，浏览器也在这台——维护者的主机 task-server.vbs、桌面安装包里的本机服务端）；
+// 无界面服务器与 Docker 默认【关】（VPS 上没有自己的浏览器，开着只会让每轮白带一个 --chrome；那时浏览器归设备），
+// 包括 install-windows.ps1 装的计划任务（scripts/server/win/bridge-service.mjs 托管，BRIDGE_SUPERVISED=windows）。
+// 仅 admin 注入（沙箱用户/Pro/快照一律不给——那是真实登录态）。
+// 显式开关：config.json 设 "claudeInChrome": true/false，或 env BRIDGE_CLAUDE_IN_CHROME=1/0。
+export const CLAUDE_IN_CHROME = process.env.BRIDGE_CLAUDE_IN_CHROME === '1' || (process.env.BRIDGE_CLAUDE_IN_CHROME !== '0'
+  && (config.claudeInChrome === true || (config.claudeInChrome !== false && DEPLOY.claudeInChromeDefault)));
+// Edge 扩展所登 claude.ai 账号的专用登录目录（`CLAUDE_CONFIG_DIR=<它> claude` 里 /login 一次）。
+// 有凭据时 Chrome 工具单独起子进程用它，推理照走号池激活号——切号不再连带断 Edge。
+export const CLAUDE_CHROME_CONFIG_DIR = process.env.BRIDGE_CLAUDE_CHROME_CONFIG_DIR || config.claudeChromeConfigDir
+  || path.join(os.homedir(), '.claude-edge');
+
+// wallpaperFolder = 工作空间内存放上传壁纸（及用户随附的深度图）的可见文件夹。
+export const WALLPAPER_DIR = config.wallpaperFolder || '壁纸';
+
 // Multi-user (Phase 1). Account/password users are sandboxed to their own folder
 // under NATIVE_ROOT/<username>; system data (accounts, invite codes, auth sessions,
 // usage — including password hashes) lives under NATIVE_ROOT/_system and must NEVER
@@ -136,12 +190,31 @@ export const SYSTEM_DIR = path.join(NATIVE_ROOT, '_system');
 try { mkdirSync(SYSTEM_DIR, { recursive: true }); } catch {}
 export const userRoot = (name) => path.join(NATIVE_ROOT, name);
 
-// 稳定公网 origin（自己域名的固定隧道），用于生成可分享的完整链接（/s/<token>）。
-// 空 = 用的是临时地址，/api/share 只回相对路径 /s/<token>，由前端按当前地址拼。
-export const PUBLIC_ORIGIN = (process.env.BRIDGE_PUBLIC_ORIGIN || config.publicOrigin || '').replace(/\/+$/, '');
+// 公网预览子域根域：pv-<token>.<该域> 经隧道 wildcard ingress 打回 bridge，由
+// routes/preview-host.mjs 按 Host 反代到本机 dev server（token 即能力凭证）。
+// 空 = 功能关闭（Preview 工具就不给公网 URL）。
+export const PV_PUBLIC_DOMAIN = (process.env.PV_PUBLIC_DOMAIN || config.pvPublicDomain || '').toLowerCase();
 
-// Local debugging only: BRIDGE_NO_AUTH=1 binds the instance to 127.0.0.1 with no
-// token. The deployed server never sets this, so it stays token-protected.
+// 稳定公网 origin，用于生成可分享的下载链接（/s/<token>）。cloudflared-bridge.yml
+// 的 named ingress `bridge.<域>` 固定指向本机 8787，跟 quick tunnel 不同、重启不变。
+// 优先级：显式 env/config > 从 PV_PUBLIC_DOMAIN 推 `bridge.<域>`。空 = 未配公网域名，
+// /api/share 只回相对路径 /s/<token>，由调用方（如 qq-bot）自己拼 base。
+// 运行态可覆盖（let + 活绑定）：控制台「公网访问」开着时（runtime/public-access.mjs），它拿到的地址
+// ——快速隧道的 trycloudflare 地址每起一次都会变——经 setRuntimePublicOrigin 换进来，各处 import 的
+// PUBLIC_ORIGIN 读到的就是新值（读的地方都在请求处理时现读，没有在模块加载时抄走）；传 null 恢复配置值。
+const CONFIGURED_PUBLIC_ORIGIN = (process.env.BRIDGE_PUBLIC_ORIGIN
+  || config.publicOrigin
+  || (PV_PUBLIC_DOMAIN ? 'https://bridge.' + PV_PUBLIC_DOMAIN : '')).replace(/\/+$/, '');
+export let PUBLIC_ORIGIN = CONFIGURED_PUBLIC_ORIGIN;
+export function setRuntimePublicOrigin(url) {
+  PUBLIC_ORIGIN = url ? String(url).replace(/\/+$/, '') : CONFIGURED_PUBLIC_ORIGIN;
+}
+export const configuredPublicOrigin = () => CONFIGURED_PUBLIC_ORIGIN;
+
+
+// Local desktop app sets BRIDGE_NO_AUTH=1: this server instance is bound to
+// 127.0.0.1 and is NOT tunnel-exposed, so a token is pointless friction.
+// The tunnel server never sets this, so it stays token-protected.
 export const NO_AUTH = process.env.BRIDGE_NO_AUTH === '1';
 
 // 服务端实际监听的地址（server.mjs 按它 listen）：NO_AUTH 的本机实例永远只听回环，其余按部署形态（DEPLOY.listenHost：
@@ -150,5 +223,5 @@ export const NO_AUTH = process.env.BRIDGE_NO_AUTH === '1';
 export const LISTEN_HOST = NO_AUTH ? '127.0.0.1' : DEPLOY.listenHost;
 
 // Re-export the original loaded config object so callers that need the verbatim
-// shape can read it without another fs hit.
+// shape (e.g. admin.ps1's PHONE_PORT) can read it without another fs hit.
 export { config };

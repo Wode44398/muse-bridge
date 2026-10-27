@@ -47,7 +47,7 @@ const SECRET_NAME_RE = new RegExp(
   '((^|_)(TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|KEY|AUTH|COOKIE|PAT|DSN|WEBHOOK|CREDENTIAL|CREDENTIALS|CREDS|APIKEY|ACCESSKEY|SECRETKEY|ACCOUNTKEY|PRIVATEKEY|AUTHKEY|SSHKEY|SIGNINGKEY|MASTERKEY|DEPLOYKEY|ENCRYPTIONKEY|PGPASSWORD|SSHPASS|(KEY|SECRET|PASSWORD|CREDENTIAL)S)'
   + '|_(PWD|PASS|JWT)|(TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE))(?=$|[_0-9])', 'i');
 // 连接串（DATABASE_URL 这类带口令的）与 bridge / dimensio 自己的内部变量，有命令行的身份也不给。
-// 还有服务进程自己若是从某个 Claude Code 会话里起的（在会话里重启服务）会继承的那个会话的身份与通道：
+// 还有服务进程自己若是从某个 Claude Code 会话里起的（维护者在会话里重启服务）会继承的那个会话的身份与通道：
 // 跨会话消息的套接字、宿主会话 id、登录邮箱 / 组织 / 账号 uuid、SDK 宿主标记——成员的 CLI 不该连到主机那个会话上。
 const ALWAYS_DROP = [
   /CONN(ECT(ION)?)?_?STR(ING)?S?($|[_0-9])/i, /^DATABASE_URL$/i, /^REDIS_URL$/i, /^BRIDGE_/i, /^DIMENSIO_/i, /^HARNESS_/i, /^OTEL_/i,

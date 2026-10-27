@@ -111,6 +111,32 @@ test("workspace Bash policy allows `..` that stays inside the workspace", () => 
   );
 });
 
+test("machine-level <harness>/tools paths are sanctioned in every access mode", () => {
+  const root = temp("dimensio-bash-tools-");
+  const toolsDir = path.resolve(import.meta.dirname, "..", "tools");
+  const ifindPy = path.join(toolsDir, "ifind", "venv", "Scripts", "python.exe");
+  const ifindScript = path.join(toolsDir, "ifind", "ifind_tool.py");
+  // workspace mode: sanctioned tool paths pass, unrelated outside paths still blocked
+  const cmd = `"${ifindPy}" "${ifindScript}" describe`;
+  assert.equal(commandScopeViolation(cmd, root, "workspace"), null);
+  assert.equal(commandScopeViolation(cmd, root, "full"), null);
+  assert.match(
+    commandScopeViolation(`"${ifindPy}" && type C:\\Windows\\system.ini`, root, "workspace")!,
+    /escapes the workspace/,
+  );
+});
+
+test("childEnv mirrors the agent-gw credential into the isolated home", () => {
+  const src = path.join(os.homedir(), ".kimi", "agent-gw.json");
+  const env = childEnv();
+  const mirror = path.join(String(env.USERPROFILE), ".kimi", "agent-gw.json");
+  if (fs.existsSync(src)) {
+    assert.equal(fs.existsSync(mirror), true);
+  } else {
+    assert.equal(fs.existsSync(mirror), false);
+  }
+});
+
 test("child commands do not inherit provider credentials", () => {
   process.env.OPENAI_API_KEY = "sk-test-secret-value";
   process.env.SAFE_CHILD_VALUE = "visible";

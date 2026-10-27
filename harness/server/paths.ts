@@ -61,9 +61,10 @@ function fromEnv(name: string): string | undefined {
 const harnessCwd = (): string => process.cwd();
 
 // 可写状态的默认落点：下面凡是没单独指定、默认放在「harness 目录」里的（会话、记忆、知识、运行配置、自定义模型服务、
-// 快照指针、项目表、默认工作区、.env）都相对它。DIMENSIO_DATA_DIR 没设就是 harness 工作目录——独立开发与程序目录内置
-// harness 的部署不设，行为不变。bridge 给每个用户实例设成他自己的数据目录，兜住以后新加的默认位置；部署脚本也可以自己设。
-// 各项自己的环境变量（含 .env 里写的）照旧优先。
+// 快照指针、项目表、默认工作区、.env）都相对它。DIMENSIO_DATA_DIR 没设就是 harness 工作目录——维护者正式服、独立开发
+// 与程序目录内置 harness 的部署都不设，行为不变。harness 是扩展自带的时候（离线包装在数据根里，安装包本机服务端），
+// bridge 把它设成 <数据根>/dimensio：那份 harness 目录会随扩展更新 / 卸载整个换掉，数据不能跟着它走（见 bridge 的
+// modules/dimensio/server/runtime/harness-data.mjs）。部署脚本也可以自己设。各项自己的环境变量（含 .env 里写的）照旧优先。
 const dataHome = (): string => fromEnv("DIMENSIO_DATA_DIR") ?? harnessCwd();
 
 export function sessionsDir(): string {
@@ -123,17 +124,16 @@ export function envFile(): string | null {
   return explicit ?? path.resolve(dataHome(), ".env");
 }
 
-// bridge 数据根的候选（扩展注册表 extensions/registry.json、本机 broker 描述文件 local-pc-broker.json 放在这里），
-// 按优先级：显式环境变量 → （本机 broker 另认 harness/ 自身）→ harness/ 的上级，也就是独立开发时的 bridge 根。
+// bridge 数据根的候选（扩展注册表 extensions/registry.json 放在这里），
+// 按优先级：显式环境变量 → harness/ 的上级，也就是独立开发时的 bridge 根。
 // 测试进程只认临时目录下的。
-export function bridgeRootCandidates(opts: { withHarnessDir?: boolean } = {}): string[] {
+export function bridgeRootCandidates(): string[] {
   // 租户实例（bridge 给注册用户拉的，DIMENSIO_TENANT=1）一个都不认：扩展注册表里是管理员的连接器凭据，
-  // 本机 broker 描述文件能驱动真桌面——都不是他的。见 tenant.ts。
+  // 不是他的。见 tenant.ts。
   if (process.env.DIMENSIO_TENANT === "1") return [];
   const roots = [
     process.env.BRIDGE_DATA_ROOT,
     process.env.BRIDGE_ROOT,
-    opts.withHarnessDir ? harnessCwd() : undefined,
     path.resolve(harnessCwd(), ".."),
   ]
     .filter((v): v is string => Boolean(v?.trim()))

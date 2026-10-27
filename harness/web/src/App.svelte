@@ -44,6 +44,7 @@
   // pickWorkspace：宿主接管「选一个文件夹当工作空间」（返回绝对路径，空串 = 取消）
   // chatDrop：宿主的「把工作空间里的文件投给这个对话」落点 action，只挂在正文列 .main 上——
   //           这个节点的 class 只许静态写 + class: 指令（宿主会往上加 hx-dnd-on，动态 class={…} 会把它冲掉）
+  // onExit：回宿主主页（侧栏「主页」行 + 返回键到底都走它）；宿主没有主页（单 agent 模式，dimensio 就是根页）传 null
   // sidebarFoot：宿主往侧栏底部（设置按钮上方，整宽、不加任何外框）放的内容；不给就什么都不多
   let {
     embedded = false,
@@ -53,7 +54,6 @@
     filesView = null,
     pickWorkspace = null,
     chatDrop = null,
-    openSettings = null,
   }: {
     embedded?: boolean;
     onExit?: (() => void) | null;
@@ -64,17 +64,7 @@
     > | null;
     pickWorkspace?: null | (() => Promise<string>);
     chatDrop?: null | ((node: HTMLElement) => { destroy?: () => void } | void);
-    // 宿主接管「设置」：嵌进 Muse Bridge 时只有一个设置页（宿主的），dimensio 的设置是其中一节。
-    // 给了它，任何地方把 app.sheet 置成 "settings"（侧栏、Hero 提示、记忆面板的「‹ 设置」）都转给宿主，自己的设置面板不出。
-    openSettings?: null | (() => void);
   } = $props();
-  $effect(() => {
-    if (app.sheet !== "settings" || !openSettings) return;
-    untrack(() => {
-      app.sheet = null;
-      openSettings?.();
-    });
-  });
   const chatDropAction = (node: HTMLElement) => chatDrop?.(node) ?? undefined;
 
   // Q13：宿主的「打开产物」回调登记成全局的（诊断包导出这类 Feed 之外的地方也要交给宿主查看器）
@@ -551,7 +541,7 @@
     <ProjectDialog onclose={() => (app.projectModal = false)} />
   {/if}
 
-  {#if app.sheet === "settings" && !openSettings}
+  {#if app.sheet === "settings"}
     <SettingsSheet onclose={() => (app.sheet = null)} />
   {:else if app.sheet === "attach"}
     <AttachSheet onclose={() => (app.sheet = null)} />

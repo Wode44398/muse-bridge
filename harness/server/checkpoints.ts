@@ -124,7 +124,7 @@ function git(args: string[], work: string): Promise<{ code: number | null; out: 
 //     就等于让子进程在整个执行期间攥住它——Windows 下那个目录删不动也移不走。
 //   · 仍传 --work-tree：非裸仓库若 config 里烙着一个【已经不存在】的 core.worktree，
 //     git 会在解析仓库时就 `fatal: Invalid path …` 直接退出，命令根本轮不到执行。生产
-//     上真出现过（config 里写着一个早已被搬走的 <旧目录>/workspace），
+//     那台机器正是如此（写着早已消失的 D:/Notes/harness platform preview/workspace），
 //     实测连用来修它的 `config --unset core.worktree` 自己都起不来。命令行上的
 //     --work-tree 覆盖 config，鸡生蛋的死结就此解开；指向 sessions 目录即可，反正不碰。
 function gitRepo(args: string[]): Promise<{ code: number | null; out: string; err: string }> {
@@ -263,8 +263,8 @@ async function ensureRepo(work: string): Promise<boolean> {
     // must reach shadow repos created by older versions too. Project .gitignore
     // rules apply on top, but credentials never depend on a project's hygiene.
     await writeExcludes(work);
-    // 旧仓库的 config 里烙着建库那天的 core.worktree 绝对路径（体检时见过写着一个
-    // 早已不存在的 `<旧目录>/workspace`）。本模块每条命令都显式
+    // 旧仓库的 config 里烙着建库那天的 core.worktree 绝对路径（体检时那台机器上还写着
+    // 早已不存在的 `D:/Notes/harness platform preview/workspace`）。本模块每条命令都显式
     // 传 --work-tree，所以运行时不受影响；但任何不带 --work-tree 的命令——包括我们自己
     // 要跑的 `git gc`——会直接 fatal 在那个死路径上。清掉它。
     await gitRepo(["config", "--unset", "core.worktree"]);
@@ -829,7 +829,7 @@ export async function restoreFromBaseline(sessionId: string, work: string, paths
 // Workflow、脚本生成的改动；两边都按同一套规矩消毒（凭据、超大文件不进索引），比得上。拿不到返回空数组。
 //
 // skipNestedRepos：工作区里 git clone 下来的仓库，`add -A` 只记成一个 gitlink 条目（模式 160000，路径就是那个目录名、
-// 没有后缀），门禁会把它当成「改了代码」，把只读分析的答复撤回去逼它验证（实例：分析一个刚 clone 下来的仓库，
+// 没有后缀），门禁会把它当成「改了代码」，把只读分析的答复撤回去逼它验证（2026-10-05 本机 Qwen 分析 Strata，
 // 六千字分析被撤回、用户什么都没看到）。gitlink 只记嵌套仓库的 HEAD，里面的文件改没改它看不见，对门禁没有信息量——
 // 门禁跳过它；回退提示照旧列出（「这个目录是这一轮新出现的」对用户有用）。
 export async function changedPathsSince(tree: string, work: string, opts: { skipNestedRepos?: boolean } = {}): Promise<string[]> {

@@ -44,9 +44,9 @@ export default {
     'Allowing all storage gives access to all your files at once, except each app’s private data, which the system protects. Turn on “All files access” in Settings.',
   '本地工作空间用于浏览手机本地文件，': 'Local workspace lets you browse files on your phone.',
   '需要在手机 App 内使用。': 'It’s available in the mobile app only.',
-  '这些是你授权 Muse Bridge 访问的手机文件夹，可随时增删。Claude 的手机文件工具也在这些位置内活动。':
-    'These are the phone folders you’ve allowed Muse Bridge to access. Add or remove them anytime. Claude’s phone file tools also work within these locations.',
-  '从 Bridge 移除「{name}」？': 'Remove “{name}” from Muse Bridge?',
+  '这些是你授权 The Bridge 访问的手机文件夹，可随时增删。Claude 的手机文件工具也在这些位置内活动。':
+    'These are the phone folders you’ve allowed The Bridge to access. Add or remove them anytime. Claude’s phone file tools also work within these locations.',
+  '从 Bridge 移除「{name}」？': 'Remove “{name}” from The Bridge?',
   '不会删除其中的文件。': 'Files in it won’t be deleted.',
   '移除「{name}」？': 'Remove “{name}”?',
   '不会删除手机上的文件。': 'Files on your phone won’t be deleted.',
@@ -149,6 +149,12 @@ export default {
   '上传失败：{reason}': 'Couldn’t upload: {reason}',
   '已取消下载 {name}': 'Download canceled: {name}',
   '已取消上传 {name}': 'Upload canceled: {name}',
+  '排队中…': 'Waiting…',
+  '网络不稳，重连中…': 'Connection unstable, reconnecting…',
+  '目标文件夹不存在': 'Destination folder not found',
+  '文件太大': 'File too large',
+  '网络卡住了': 'Connection stalled',
+  '网络中断': 'Connection lost',   // 与 dimensio 字典（hx-state.ts）同键同译
   '文件较大，已交给浏览器下载': 'Large file. Downloading with your browser instead.',
   '已下载 {name}': 'Downloaded {name}',
   '清除已完成': 'Clear completed',
@@ -257,14 +263,13 @@ export default {
   '{n} 项没能移到回收站': { one: 'Couldn’t move {n} item to Recycle Bin', other: 'Couldn’t move {n} items to Recycle Bin' },
   '这里一共 {total} 项，只列出了前 {shown} 项（文件夹排在前面），其余的可以': 'This folder has {total} items. Showing the first {shown} (folders first). Find the rest with ',
   '按名字搜索': 'search by name',
-  // —— 上传引擎（lib/uploads.svelte.js）与传输面板 ——
-  '排队中…': 'Waiting…',
-  '网络不稳，重连中…': 'Connection unstable, reconnecting…',
+  // —— 手机 App 内置下载（lib/downloads.svelte.js：下到手机「下载」文件夹，进度进「传输」面板）——
+  '开始下载 {name}': 'Downloading {name}',
+  '开始下载 {name}，可在工作空间「传输」里看进度': 'Downloading {name}. See progress in Workspace › Transfers',
+  '开始下载，可在工作空间「传输」里看进度': 'Downloading. See progress in Workspace › Transfers',
+  '已保存到「下载」：{name}': 'Saved to Downloads: {name}',
+  '无法打开这个文件': 'Couldn’t open this file',
   '没有权限': 'You don’t have permission',
-  '目标文件夹不存在': 'Destination folder not found',
-  '文件太大': 'File too large',
-  '网络卡住了': 'Connection stalled',
-  '网络中断': 'Connection lost',
 
   // —— 新建 Markdown / 压缩（FilesPanel 与 FilesDesktop 共用）——
   '新建 Markdown 文件': 'New Markdown file',

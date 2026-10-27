@@ -175,7 +175,7 @@ export function velocityTracker(window_ms = 100) {
 }
 
 // 速度投影：iOS 的"松手后它还会滑多远"。用于判定该完成还是回弹——只看位移
-// 会让"轻快一甩"被判成取消（"不跟手"的观感里很大一块是这个）。
+// 会让"轻快一甩"被判成取消（维护者说的"不跟手"里很大一块是这个）。
 export const project = (velocity, factor = 0.12) => velocity * factor;
 
 // —— 按下反馈（Svelte action）——

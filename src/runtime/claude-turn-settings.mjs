@@ -48,7 +48,7 @@ export function turnSettings(ctx, { suggest, compactFrac, sessionId, outputStyle
   if (ctx && (ctx.kind === 'admin' || ctx.shell)) sdk.enableWorkflows = v.enableWorkflows !== false;
   // 安全栅门：关着（默认）= 暂停二选一（switchModelsOnFlag:false + 声明 refusal 对话框）；
   // 开着 = 不声明对话框，走自动切换 → model_refusal_fallback → 输入框上方横条。
-  // 两种状态都必须显式下发布尔值：开着时若不写，CLI 回落去读 user / project 层——本机 ~/.claude/settings.json
+  // 两种状态都必须显式下发布尔值：开着时若不写，CLI 回落去读 user / project 层——维护者本机 ~/.claude/settings.json
   // 就写着 switchModelsOnFlag:false，而 CLI 2.1.299 的 shouldSuppressRefusalFallback 判定「宿主没声明对话框 &&
   // 解析值 === false」→ 直接压掉回退模型，这一轮按经典拒答收尾（既不换模型也不暂停）。flag 层写 true 才盖得过。
   const pauseOnFlag = !v.switchModelsOnFlag;

@@ -31,7 +31,7 @@ test('形态判定：显式 > 托管方 > 容器 > systemd / pm2 > 平台', () =
   assert.equal(d({ BRIDGE_DEPLOY: 'server' }, 'win32'), 'server', '显式的照样认');
 });
 
-test('Windows 源码直跑、老 config、显式开了多用户：一切照旧', () => {
+test('维护者这台（Windows 源码直跑、老 config、显式开了多用户）：一切照旧', () => {
   const cfg = { port: 8787, features: { multiUser: true }, claudeHost: { allowBypass: true } };
   const r = resolveDeployProfile({ env: {}, platform: 'win32', config: cfg });
   assert.equal(r.profile, 'desktop');
@@ -111,4 +111,17 @@ test('监听地址：BRIDGE_HOST > config.json 的 bindHost > 老规矩 / 形态
   assert.match(line, /无界面服务器/);
   assert.match(line, /systemd 托管/);
   assert.match(line, /只给我自己/);
+});
+
+test('hosting（/api/auth 的 hosting，前端「电脑 / 服务器」措辞）：Windows 没显式声明一律算电脑，其余按形态', () => {
+  const h = (env, platform, config = NEW) => resolveDeployProfile({ env, platform, config }).hosting;
+  assert.equal(h({}, 'win32'), 'host');
+  assert.equal(h({ BRIDGE_SUPERVISED: 'windows' }, 'win32'), 'host', '计划任务启动器托管的 Windows 也是自己的电脑');
+  assert.equal(h({ BRIDGE_DEPLOY: 'server' }, 'win32'), 'server', '显式声明照形态');
+  assert.equal(h({}, 'win32', { ...NEW, deploy: 'server' }), 'server');
+  assert.equal(h({ BRIDGE_SUPERVISED: 'systemd' }, 'linux'), 'server', 'Linux 系统服务（Muse 的 VM）');
+  assert.equal(h({ container: 'docker' }, 'linux'), 'server');
+  assert.equal(h({ DISPLAY: ':0' }, 'linux'), 'host');
+  assert.equal(h({}, 'darwin'), 'host');
+  assert.equal(h({ BRIDGE_DEPLOY: 'desktop' }, 'linux'), 'host');
 });

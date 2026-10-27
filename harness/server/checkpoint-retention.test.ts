@@ -205,8 +205,8 @@ test("config 里烙着一个已消失的 core.worktree 时，维护命令依然�
   // 复刻生产那台机器的状态：建库那天的绝对路径还写在 config 里，而那个目录早没了。
   // 此时任何【不带 --work-tree】的 git 命令会在解析仓库阶段就 fatal——连用来修它的
   // `config --unset core.worktree` 自己都起不来，是个鸡生蛋的死结。
-  // 关键要和生产同形：【中间一级】目录不存在（形如 /tmp/dimensio-gone-parent/workspace，
-  // 其中 "dimensio-gone-parent" 早被搬走了）。只有叶子缺失时
+  // 关键要和生产同形：【中间一级】目录不存在（生产上是 D:/Notes/harness platform
+  // preview/workspace，其中 "harness platform preview" 早被搬走了）。只有叶子缺失时
   // git 不一定报错，缺中间目录才会在解析仓库阶段就 fatal。
   const dead = path.join(os.tmpdir(), "dimensio-gone-parent", "workspace").split(path.sep).join("/");
   const wrote = spawnSync(

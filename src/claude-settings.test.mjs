@@ -115,3 +115,49 @@ test('快照：非管理员拿到的主机级键恒为默认值（服务端判�
   assert.equal(S.claudeSettingsSnapshot(admin).values.allowBypass, true);
   S.setClaudeSettings(admin, { keepAwake: null, allowBypass: null });
 });
+
+// —— 这台机器做不到的项（Muse 同步第 22 条）：按平台与 Desktop 数据目录算，前端据此隐藏 ——
+const { unsupportedClaudeSettings, claudeSettingVisible } = await import('./config/claude-settings.mjs');
+
+test('unsupportedClaudeSettings：保持唤醒做不到两项一起藏，找不到 Desktop 就没有跟随归档', () => {
+  assert.deepEqual(unsupportedClaudeSettings({ keepAwake: true, desktop: true }), []);
+  assert.deepEqual(unsupportedClaudeSettings({ keepAwake: true, desktop: false }), ['followDesktopArchive']);
+  assert.deepEqual(unsupportedClaudeSettings({ keepAwake: false, desktop: false }), ['keepAwake', 'keepAwakeOnBattery', 'followDesktopArchive']);
+  assert.deepEqual(unsupportedClaudeSettings({ keepAwake: false, desktop: true }), ['keepAwake', 'keepAwakeOnBattery']);
+});
+
+test('快照带 unsupported：保持唤醒插件没挂能力 = 做不到；挂了按它现算', () => {
+  try {
+    S._setClaudeHostProbe(() => ({ keepAwake: false, desktop: false }));   // Linux 服务器（Muse VM）
+    assert.deepEqual(S.claudeSettingsSnapshot(admin).unsupported, ['keepAwake', 'keepAwakeOnBattery', 'followDesktopArchive']);
+    assert.deepEqual(S.claudeSettingsSnapshot(user).unsupported, ['keepAwake', 'keepAwakeOnBattery', 'followDesktopArchive']);
+    S._setClaudeHostProbe(() => ({ keepAwake: true, desktop: true }));     // 装了 Desktop 的 Windows 主机
+    assert.deepEqual(S.claudeSettingsSnapshot(admin).unsupported, []);
+    S._setClaudeHostProbe(() => { throw new Error('boom'); });             // 探针出错：保守按做不到算，不抛
+    assert.ok(S.claudeSettingsSnapshot(admin).unsupported.includes('followDesktopArchive'));
+    // 默认探针：保持唤醒能力由插件经 setKeepAwakeCapability 挂上
+    S._setClaudeHostProbe(null);
+    S.setKeepAwakeCapability(null);
+    assert.ok(S.claudeSettingsSnapshot(admin).unsupported.includes('keepAwake'));
+    S.setKeepAwakeCapability(() => true);
+    assert.ok(!S.claudeSettingsSnapshot(admin).unsupported.includes('keepAwake'));
+  } finally {
+    S._setClaudeHostProbe(null);
+    S.setKeepAwakeCapability(null);
+  }
+});
+
+test('claudeSettingVisible（前端 visible() 的规则）：unsupported 里的不出，老服务端不给 unsupported = 照旧', () => {
+  const base = { admin: true, shell: true, val: (k) => (k === 'keepAwake' ? true : undefined) };
+  for (const k of ['keepAwake', 'keepAwakeOnBattery', 'followDesktopArchive', 'crossSessionInbound']) assert.equal(claudeSettingVisible(k, base), true, k);
+  const linux = { ...base, unsupported: ['keepAwake', 'keepAwakeOnBattery', 'followDesktopArchive'] };
+  assert.equal(claudeSettingVisible('keepAwake', linux), false);
+  assert.equal(claudeSettingVisible('keepAwakeOnBattery', linux), false);
+  assert.equal(claudeSettingVisible('followDesktopArchive', linux), false);
+  assert.equal(claudeSettingVisible('crossSessionInbound', linux), true);
+  // 原有门照旧：非管理员看不到主机项 / 管理员项，没 shell 看不到 shell 项，主项关着依赖项不出，不认识的键不出
+  assert.equal(claudeSettingVisible('keepAwake', { ...base, admin: false }), false);
+  assert.equal(claudeSettingVisible('branchPrefix', { ...base, shell: false }), false);
+  assert.equal(claudeSettingVisible('keepAwakeOnBattery', { ...base, val: () => false }), false);
+  assert.equal(claudeSettingVisible('nope', base), false);
+});

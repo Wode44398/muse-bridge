@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Bridge 控制台</title>
+<style>
+  :root {
+    --bg: #0d1117; --bg2: #010409; --card: #161b22; --card2: #1c2128;
+    --border: #2d333b; --border2: #373e47;
+    --tx: #e6edf3; --tx2: #adbac7; --tx3: #768390;
+    --blue: #2f81f7; --green: #3fb950; --red: #f85149; --amber: #d29922; --purple: #a371f7; --cyan: #39c5cf;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", system-ui, "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--tx); font-family: var(--sans); font-size: 14px; line-height: 1.5; overflow: hidden; -webkit-font-smoothing: antialiased; }
+  button { font-family: inherit; cursor: pointer; border: 0; background: none; color: inherit; }
+  input, textarea, select { font-family: inherit; font-size: 14px; }
+  a { color: var(--blue); text-decoration: none; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .app { display: flex; height: 100vh; }
+
+  /* ===== 左导航 ===== */
+  .nav { width: 212px; flex: none; background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 14px 10px; }
+  .brand { display: flex; align-items: center; gap: 9px; padding: 6px 8px 16px; font-size: 16px; font-weight: 700; letter-spacing: .2px; }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--tx3); box-shadow: 0 0 0 3px rgba(125,131,144,.18); transition: all .3s; }
+  .brand .dot.ok { background: var(--green); box-shadow: 0 0 0 3px rgba(63,185,80,.2); }
+  .brand .dot.bad { background: var(--red); box-shadow: 0 0 0 3px rgba(248,81,73,.2); }
+  .nav-item { display: flex; align-items: center; gap: 11px; padding: 9px 11px; border-radius: 8px; color: var(--tx2); font-size: 14px; transition: background .12s, color .12s; position: relative; }
+  .nav-item:hover { background: var(--card); color: var(--tx); }
+  .nav-item.on { background: var(--card2); color: var(--tx); font-weight: 600; }
+  .nav-item.on::before { content: ""; position: absolute; left: -10px; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--blue); }
+  .nav-item .ic { width: 18px; text-align: center; font-size: 15px; }
+  .nav-item .pill { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--blue); color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .nav-item .pill.green { background: var(--green); }
+  .nav-spacer { flex: 1; }
+  .nav-foot { font-size: 11px; color: var(--tx3); font-family: var(--mono); padding: 8px; border-top: 1px solid var(--border); }
+
+  /* ===== 主区 ===== */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar { flex: none; height: 52px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 20px; background: var(--bg); }
+  .topbar h1 { font-size: 16px; font-weight: 600; }
+  .topbar .sub { font-size: 12px; color: var(--tx3); font-family: var(--mono); }
+  .topbar .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .body { flex: 1; overflow-y: auto; padding: 20px; }
+  .page { display: none; }
+  .page.on { display: block; animation: fade .2s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+
+  /* ===== 组件 ===== */
+  .grid { display: grid; gap: 14px; }
+  .g4 { grid-template-columns: repeat(4, 1fr); }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 1100px) { .g4 { grid-template-columns: repeat(2, 1fr); } .g3, .g2 { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .card h3 { font-size: 13px; color: var(--tx3); font-weight: 600; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .stat { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 15px 17px; }
+  .stat .k { font-size: 12px; color: var(--tx3); margin-bottom: 7px; }
+  .stat .v { font-size: 28px; font-weight: 700; font-family: var(--mono); line-height: 1; }
+  .stat .v small { font-size: 14px; color: var(--tx3); font-weight: 400; }
+  .stat .x { font-size: 12px; color: var(--tx3); margin-top: 6px; }
+
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 8px; background: var(--card2); color: var(--tx); font-size: 13px; font-weight: 500; border: 1px solid var(--border2); transition: filter .12s, background .12s; }
+  .btn:hover { filter: brightness(1.18); }
+  .btn:active { transform: translateY(.5px); }
+  .btn.pri { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .btn.danger { background: transparent; border-color: var(--red); color: var(--red); }
+  .btn.danger:hover { background: var(--red); color: #fff; }
+  .btn.ghost { background: transparent; }
+  .btn.sm { padding: 4px 10px; font-size: 12px; }
+  .btn:disabled { opacity: .45; cursor: default; filter: none; }
+
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 20px; font-size: 11.5px; font-weight: 600; font-family: var(--mono); }
+  .badge.green { background: rgba(63,185,80,.16); color: var(--green); }
+  .badge.red { background: rgba(248,81,73,.16); color: var(--red); }
+  .badge.amber { background: rgba(210,153,34,.16); color: var(--amber); }
+  .badge.blue { background: rgba(47,129,247,.16); color: var(--blue); }
+  .badge.purple { background: rgba(163,113,247,.16); color: var(--purple); }
+  .badge.gray { background: rgba(125,131,144,.16); color: var(--tx3); }
+  .dot-s { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .live { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; box-shadow: 0 0 0 0 rgba(63,185,80,.5); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(63,185,80,.5); } 70% { box-shadow: 0 0 0 7px rgba(63,185,80,0); } 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); } }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--tx3); font-weight: 600; font-size: 12px; padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 11px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: var(--card2); }
+  .mono { font-family: var(--mono); }
+  .muted { color: var(--tx3); }
+  .trunc { max-width: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { padding: 40px; text-align: center; color: var(--tx3); font-size: 13px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .wrap { flex-wrap: wrap; }
+  .sp { flex: 1; }
+
+  .ring { --p: 0; width: 76px; height: 76px; border-radius: 50%; background: conic-gradient(var(--rc, var(--blue)) calc(var(--p) * 1%), var(--border) 0); display: flex; align-items: center; justify-content: center; flex: none; }
+  .ring::after { content: attr(data-l); width: 60px; height: 60px; border-radius: 50%; background: var(--card); display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 15px; font-weight: 700; }
+
+  /* 会话续聊 */
+  .ss-wrap { display: grid; grid-template-columns: 230px 280px 1fr; gap: 14px; height: calc(100vh - 52px - 40px); }
+  .ss-col { background: var(--card); border: 1px solid var(--border); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; }
+  .ss-col h3 { font-size: 12px; color: var(--tx3); font-weight: 600; padding: 12px 14px; border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .4px; }
+  .ss-list { overflow-y: auto; flex: 1; }
+  .ss-li { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 13px; transition: background .1s; }
+  .ss-li:hover { background: var(--card2); }
+  .ss-li.on { background: rgba(47,129,247,.12); border-left: 3px solid var(--blue); padding-left: 11px; }
+  .ss-li .t { color: var(--tx); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ss-li .m { font-size: 11px; color: var(--tx3); font-family: var(--mono); margin-top: 2px; }
+  .ss-thread { flex: 1; overflow-y: auto; padding: 16px; }
+  .ss-foot { flex: none; border-top: 1px solid var(--border); padding: 10px; display: flex; gap: 8px; }
+  .ss-foot textarea { flex: 1; resize: none; background: var(--bg); border: 1px solid var(--border2); border-radius: 8px; padding: 9px 12px; color: var(--tx); outline: none; max-height: 120px; }
+  .ss-foot textarea:focus { border-color: var(--blue); }
+  .msg { margin-bottom: 16px; }
+  .msg .who { font-size: 11px; color: var(--tx3); font-weight: 600; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 5px; }
+  .msg.user .bubble { background: var(--card2); border: 1px solid var(--border); border-radius: 10px; padding: 9px 13px; white-space: pre-wrap; word-break: break-word; }
+  .msg.asst .bubble { white-space: pre-wrap; word-break: break-word; color: var(--tx2); }
+
+  .seg { display: inline-flex; background: var(--card2); border: 1px solid var(--border); border-radius: 8px; padding: 3px; gap: 2px; }
+  .seg button { padding: 5px 12px; border-radius: 6px; font-size: 13px; color: var(--tx3); }
+  .seg button.on { background: var(--blue); color: #fff; font-weight: 600; }
+
+  #toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--card2); border: 1px solid var(--border2); border-radius: 10px; padding: 11px 18px; font-size: 13px; opacity: 0; pointer-events: none; transition: all .25s; z-index: 200; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+  #toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.err { border-color: var(--red); color: #ffb3ad; }
+  #modalMask { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: center; justify-content: center; z-index: 150; padding: 24px; }
+  #modalMask.on { display: flex; }
+  .modal { background: var(--card); border: 1px solid var(--border2); border-radius: 14px; padding: 22px; width: 100%; max-width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  .modal h2 { font-size: 17px; margin-bottom: 6px; }
+  .modal p { font-size: 13px; color: var(--tx3); margin-bottom: 14px; }
+  .modal .acts { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+  .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .media-grid img, .media-grid video { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; background: var(--bg2); border: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="nav">
+    <div class="brand"><span class="dot" id="connDot"></span> Bridge 控制台</div>
+    <a class="nav-item on" data-pg="overview"><span class="ic">📊</span> 总览</a>
+    <a class="nav-item" data-pg="active"><span class="ic">⚡</span> 活跃进程 <span class="pill green" id="navActive" style="display:none">0</span></a>
+    <a class="nav-item" data-pg="users"><span class="ic">👥</span> 用户 <span class="pill" id="navUsers" style="display:none">0</span></a>
+    <a class="nav-item" data-pg="sessions"><span class="ic">💬</span> 会话 / 续聊</a>
+    <a class="nav-item" data-pg="routines"><span class="ic">⏰</span> 定时任务</a>
+    <a class="nav-item" data-pg="media"><span class="ic">🖼️</span> 媒体</a>
+    <a class="nav-item" data-pg="accounts"><span class="ic">🔑</span> Claude 账号 <span class="pill" id="navAcct" style="display:none"></span></a>
+    <a class="nav-item" data-pg="control"><span class="ic">🛠️</span> 服务控制</a>
+    <div class="nav-spacer"></div>
+    <div class="nav-foot" id="navFoot">连接中…</div>
+  </nav>
+
+  <div class="main">
+    <header class="topbar">
+      <h1 id="pgTitle">总览</h1>
+      <span class="sub" id="pgSub"></span>
+      <div class="right">
+        <span class="sub" id="clock"></span>
+        <button class="btn sm ghost" id="refreshBtn">↻ 刷新</button>
+      </div>
+    </header>
+    <div class="body">
+      <div class="page on" id="page-overview"></div>
+      <div class="page" id="page-active"></div>
+      <div class="page" id="page-users"></div>
+      <div class="page" id="page-sessions"></div>
+      <div class="page" id="page-routines"></div>
+      <div class="page" id="page-media"></div>
+      <div class="page" id="page-accounts"></div>
+      <div class="page" id="page-control"></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<div id="modalMask"><div class="modal" id="modalBox"></div></div>
+
+<script>
+const token = (window.BRIDGE && window.BRIDGE.token) || localStorage.getItem("vaultbridge.token") || "";
+const H = token ? { "Authorization": "Bearer " + token } : {};
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtAgo = (ms) => { if (!ms) return "—"; const s = Math.round((Date.now() - ms) / 1000); if (s < 60) return s + "秒前"; if (s < 3600) return Math.round(s / 60) + "分前"; if (s < 86400) return Math.round(s / 3600) + "时前"; return Math.round(s / 86400) + "天前"; };
+const fmtDur = (ms) => { const s = Math.round(ms / 1000); if (s < 60) return s + "s"; const m = Math.floor(s / 60); return m + "m" + (s % 60) + "s"; };
+const fmtNum = (n) => (n || 0).toLocaleString();
+const fmtUptime = (s) => { if (!s) return "—"; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h${m}m` : `${m}m`; };
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { ...H, ...(opts.body ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) } });
+  if (!r.ok) throw Object.assign(new Error("HTTP " + r.status), { status: r.status });
+  const ct = r.headers.get("content-type") || "";
+  return ct.includes("json") ? r.json() : r.text();
+}
+let toastT;
+function toast(msg, err) { const t = $("#toast"); t.textContent = msg; t.className = "on" + (err ? " err" : ""); clearTimeout(toastT); toastT = setTimeout(() => t.className = "", 2600); }
+function modal(html) { $("#modalBox").innerHTML = html; $("#modalMask").className = "on"; }
+function closeModal() { $("#modalMask").className = ""; }
+$("#modalMask").addEventListener("click", (e) => { if (e.target.id === "modalMask") closeModal(); });
+
+const PG = { overview: "总览", active: "活跃进程", users: "用户管理", sessions: "会话 / 续聊", routines: "定时任务", media: "媒体库", accounts: "Claude 账号切换", control: "服务控制" };
+let cur = "overview";
+function go(pg) {
+  cur = pg;
+  $$(".nav-item").forEach((n) => n.classList.toggle("on", n.dataset.pg === pg));
+  $$(".page").forEach((p) => p.classList.toggle("on", p.id === "page-" + pg));
+  $("#pgTitle").textContent = PG[pg];
+  $("#pgSub").textContent = "";
+  RENDER[pg] && RENDER[pg]();
+}
+$$(".nav-item").forEach((n) => n.addEventListener("click", () => go(n.dataset.pg)));
+$("#refreshBtn").addEventListener("click", () => RENDER[cur] && RENDER[cur]());
+setInterval(() => { $("#clock").textContent = new Date().toLocaleTimeString("zh", { hour12: false }); }, 1000);
+
+// ===================== 总览 =====================
+let OV = null, LIMITS = null;
+async function loadOverview() {
+  try {
+    OV = await api("/api/admin/overview");
+    $("#connDot").className = "dot ok";
+    $("#navFoot").innerHTML = `${esc(OV.host?.name || "")}<br>:${OV.phonePort} · ${(OV.host?.lan || [])[0] || ""}`;
+    const liveN = (OV.gens || []).filter((g) => !g.done).length;
+    $("#navActive").style.display = liveN ? "flex" : "none"; $("#navActive").textContent = liveN;
+    $("#navUsers").style.display = "flex"; $("#navUsers").textContent = OV.userCount || 0;
+  } catch (e) { $("#connDot").className = "dot bad"; $("#navFoot").textContent = "连接失败"; if (cur === "overview") $("#page-overview").innerHTML = `<div class="empty">连不上后端。调试台需跑在 loopback NO_AUTH 实例上。<br>${esc(e.message)}</div>`; return; }
+  if (cur === "overview") renderOverview();
+  if (cur === "control") renderControl();
+}
+function svcBadge(o) { return o && o.running ? `<span class="badge green"><span class="dot-s" style="background:var(--green)"></span>运行中</span>` : `<span class="badge red">已停止</span>`; }
+function svcCtl(kind, running) { return running ? `<div class="row" style="justify-content:flex-end"><button class="btn sm" onclick="svc('restart-${kind}')">重启</button><button class="btn sm danger" onclick="svc('stop-${kind}')">停止</button></div>` : `<div class="row" style="justify-content:flex-end"><button class="btn sm pri" onclick="svc('start-${kind}')">启动</button></div>`; }
+function renderOverview() {
+  if (!OV) return;
+  const s = OV.service || {}, t = s.tunnel || {}, sv = s.server || {}, au = s.autostart || {};
+  const liveN = (OV.gens || []).filter((g) => !g.done).length;
+  const lim = LIMITS || {};
+  const ring = (o, label, color) => { const p = o && o.pct != null ? Math.round(o.pct) : 0; return `<div class="ring" style="--p:${p};--rc:${color}" data-l="${o && o.pct != null ? p + "%" : "—"}"></div><div><div style="font-weight:600">${label}</div><div class="muted" style="font-size:12px">${o ? (o.status || "") : "无数据"}</div></div>`; };
+  $("#page-overview").innerHTML = `
+    <div class="grid g4" style="margin-bottom:14px">
+      <div class="stat"><div class="k">活跃 Agent</div><div class="v" style="color:${liveN ? "var(--green)" : "var(--tx)"}">${liveN}</div><div class="x">${(OV.gens || []).length} 个会话槽</div></div>
+      <div class="stat"><div class="k">用户</div><div class="v">${OV.userCount || 0}</div><div class="x">含 admin 自己</div></div>
+      <div class="stat"><div class="k">定时任务运行中</div><div class="v" style="color:${(OV.routinesRunning || []).length ? "var(--amber)" : "var(--tx)"}">${(OV.routinesRunning || []).length}</div><div class="x">调度器 30s tick</div></div>
+      <div class="stat"><div class="k">Antigravity</div><div class="v" style="font-size:20px;padding-top:4px">${OV.agyAlive ? '<span class="badge green">在线</span>' : '<span class="badge gray">未启动</span>'}</div><div class="x">node-pty 单例</div></div>
+    </div>
+    <div class="grid g2">
+      <div class="card"><h3>🖧 服务进程</h3>
+        <table><tbody>
+          <tr><td>主服务</td><td>${svcBadge(sv)}</td><td class="mono muted">PID ${sv.pid || "—"}</td><td class="mono muted">${fmtUptime(sv.uptimeSec)}</td></tr>
+          <tr><td>Cloudflare 隧道</td><td>${svcBadge(t)}</td><td class="mono muted">PID ${t.pid || "—"}</td><td class="mono muted">${fmtUptime(t.uptimeSec)}</td></tr>
+          <tr><td>开机自启</td><td>${au.server && au.tunnel ? '<span class="badge green">已装</span>' : '<span class="badge gray">未装</span>'}</td><td colspan="2" class="muted">server:${au.server ? "✓" : "✗"} tunnel:${au.tunnel ? "✓" : "✗"}</td></tr>
+        </tbody></table>
+        ${t.url ? `<div class="row" style="margin-top:12px"><span class="muted">隧道地址</span><code class="mono" style="font-size:12px">${esc(t.url)}</code><button class="btn sm ghost" onclick="navigator.clipboard.writeText('${esc(t.url)}');toast('已复制')">复制</button></div>` : ""}
+      </div>
+      <div class="card"><h3>📈 用量额度</h3>
+        <div class="row" style="gap:20px;margin-bottom:6px">${ring(lim.five_hour, "5 小时窗口", "var(--blue)")}</div>
+        <div class="row" style="gap:20px;margin-top:14px">${ring(lim.seven_day, "7 天窗口", "var(--purple)")}</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>⚡ 活跃 Agent（去"活跃进程"页管理）</h3>${gensTable(OV.gens || [], false)}</div>
+  `;
+}
+
+// ===================== 活跃进程 =====================
+function gensTable(gens, withStop) {
+  const live = gens.filter((g) => !g.done);
+  if (!live.length) return `<div class="empty">当前没有正在运行的 Agent 对话</div>`;
+  return `<table><thead><tr><th>身份</th><th>会话</th><th>请求</th><th>已运行</th><th>订阅</th>${withStop ? "<th></th>" : ""}</tr></thead><tbody>${live.map((g) => `
+    <tr><td>${keyBadge(g.key)}</td>
+      <td class="mono muted trunc" style="max-width:120px">${esc((g.sessionId || "").slice(0, 8) || "—")}</td>
+      <td class="trunc" style="max-width:280px">${esc(g.userText || "—")}</td>
+      <td class="mono"><span class="live"></span> ${fmtDur(g.elapsedMs)}</td>
+      <td class="mono muted">${g.subscribers}</td>
+      ${withStop ? `<td><button class="btn sm danger" onclick="stopGen('${esc(g.key)}')">⊘ 中止</button></td>` : ""}
+    </tr>`).join("")}</tbody></table>`;
+}
+function keyBadge(key) { if (key === "admin") return `<span class="badge blue">admin</span>`; return `<span class="badge purple">${esc(key.replace(/^u:/, "👤 "))}</span>`; }
+async function stopGen(key) {
+  try { const r = await api("/api/admin/stop", { method: "POST", body: JSON.stringify({ key }) }); toast(r.ok ? "已中止 " + key : (r.error || "中止失败"), !r.ok); }
+  catch (e) { toast("中止失败：" + e.message, true); }
+  setTimeout(loadActive, 300);
+}
+async function killAgy() { if (!confirm("强杀 Antigravity 进程？")) return; try { await api("/api/admin/agy/kill", { method: "POST", body: "{}" }); toast("已强杀 agy"); } catch (e) { toast(e.message, true); } setTimeout(loadActive, 300); }
+let ACT = null;
+async function loadActive() { try { ACT = await api("/api/admin/active"); } catch { ACT = { gens: [] }; } if (cur === "active") renderActive(); }
+function renderActive() {
+  const gens = (ACT && ACT.gens) || [];
+  const live = gens.filter((g) => !g.done);
+  $("#pgSub").textContent = live.length + " 个运行中";
+  $("#page-active").innerHTML = `
+    <div class="card" style="margin-bottom:14px"><h3>⚡ Claude / Vertex 对话生成 <span class="muted" style="text-transform:none;font-weight:400">· 每 3.5s 刷新</span></h3>${gensTable(gens, true)}</div>
+    <div class="grid g2">
+      <div class="card"><h3>🛸 Antigravity</h3><div class="row">${OV && OV.agyAlive ? '<span class="badge green">进程在线</span>' : '<span class="badge gray">未启动</span>'}<div class="sp"></div><button class="btn sm danger" onclick="killAgy()">⊘ 强杀进程</button></div><div class="muted" style="font-size:12px;margin-top:10px">agy 是全局单例 node-pty，被 Claude 委托或单独对话时启动。</div></div>
+      <div class="card"><h3>⏰ 定时任务运行中</h3>${(OV && OV.routinesRunning || []).length ? (OV.routinesRunning).map((id) => `<div class="mono" style="padding:4px 0"><span class="live"></span> ${esc(id.slice(0, 8))}…</div>`).join("") : '<div class="muted" style="font-size:13px">无</div>'}</div>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:14px">中止 = 调用该用户活跃生成的 abort（等价于该用户自己点"停止"）。长跑媒体（Veo/Lyria）按秒计费、故意跑完不中断，不在此列。</div>
+  `;
+}
+
+// ===================== 用户 =====================
+let USERS = null;
+async function loadUsers() { try { USERS = await api("/api/admin/users"); } catch (e) { USERS = { users: [], invites: [] }; } if (cur === "users") renderUsers(); $("#navUsers").textContent = (USERS.users || []).length; }
+function tierBadge(t) { return t === "user" ? '<span class="badge amber">user</span>' : (t === "admin" ? '<span class="badge blue">admin</span>' : '<span class="badge green">pro</span>'); }
+function renderUsers() {
+  const us = (USERS && USERS.users) || [], inv = (USERS && USERS.invites) || [];
+  $("#pgSub").textContent = us.length + " 个账号";
+  $("#page-users").innerHTML = `
+    <div class="card" style="margin-bottom:14px"><h3>👥 账号 <div class="sp"></div>
+      <button class="btn sm" onclick="genInvite('user')">＋ 普通邀请码</button>
+      <button class="btn sm pri" onclick="genInvite('pro')">＋ Pro 邀请码</button></h3>
+      <table><thead><tr><th>用户名</th><th>档位</th><th>状态</th><th>用量</th><th>消耗</th><th>操作</th></tr></thead><tbody>${us.length ? us.map((u) => `
+        <tr><td><b>${esc(u.name)}</b></td>
+          <td>${tierBadge(u.tier)}</td>
+          <td>${u.disabled ? '<span class="badge red">已禁用</span>' : '<span class="badge green">正常</span>'}</td>
+          <td class="mono muted">${fmtNum(u.usage?.tokens)} tok · ${u.usage?.calls || 0} 次</td>
+          <td class="mono muted">$${(u.usage?.costUsd || 0).toFixed(3)}</td>
+          <td><div class="row wrap">
+            <button class="btn sm" onclick="userTier('${esc(u.name)}','${u.tier === "user" ? "pro" : "user"}')">${u.tier === "user" ? "升 Pro" : "降 user"}</button>
+            <button class="btn sm" onclick="userReset('${esc(u.name)}')">改密</button>
+            <button class="btn sm" onclick="userDisable('${esc(u.name)}',${!u.disabled})">${u.disabled ? "启用" : "禁用"}</button>
+            <button class="btn sm danger" onclick="userDel('${esc(u.name)}')">删除</button>
+          </div></td></tr>`).join("") : '<tr><td colspan="6" class="empty">还没有账号</td></tr>'}</tbody></table>
+    </div>
+    <div class="card"><h3>🎫 邀请码</h3>
+      <table><thead><tr><th>邀请码</th><th>档位</th><th>状态</th><th>创建</th></tr></thead><tbody>${inv.length ? inv.map((i) => `
+        <tr><td class="mono">${esc(i.code)} <button class="btn sm ghost" onclick="navigator.clipboard.writeText('${esc(i.code)}');toast('已复制')">复制</button></td>
+          <td>${tierBadge(i.tier)}</td>
+          <td>${i.used ? `<span class="badge gray">已用 · ${esc(i.usedBy || "")}</span>` : '<span class="badge green">未使用</span>'}</td>
+          <td class="muted">${fmtAgo(i.created)}</td></tr>`).join("") : '<tr><td colspan="4" class="empty">无</td></tr>'}</tbody></table>
+    </div>`;
+}
+async function genInvite(tier) { try { const r = await api("/api/admin/invite", { method: "POST", body: JSON.stringify({ tier }) }); modal(`<h2>邀请码已生成</h2><p>${tier === "pro" ? "Pro（全权限）" : "普通（无命令行）"}单次邀请码：</p><div class="row"><code class="mono" style="font-size:18px;background:var(--bg);padding:10px 14px;border-radius:8px;flex:1">${esc(r.code)}</code><button class="btn pri" onclick="navigator.clipboard.writeText('${esc(r.code)}');toast('已复制')">复制</button></div><div class="acts"><button class="btn" onclick="closeModal()">关闭</button></div>`); loadUsers(); } catch (e) { toast(e.message, true); } }
+async function userTier(name, tier) { try { await api("/api/admin/user/tier", { method: "POST", body: JSON.stringify({ name, tier }) }); toast(`${name} → ${tier}`); loadUsers(); } catch (e) { toast(e.message, true); } }
+async function userReset(name) { const pw = prompt("给 " + name + " 设新密码："); if (!pw) return; try { await api("/api/admin/user/reset", { method: "POST", body: JSON.stringify({ name, password: pw }) }); toast("已重置密码"); } catch (e) { toast(e.message, true); } }
+async function userDisable(name, disabled) { try { await api("/api/admin/user/disable", { method: "POST", body: JSON.stringify({ name, disabled }) }); toast(disabled ? "已禁用" : "已启用"); loadUsers(); } catch (e) { toast(e.message, true); } }
+function userDel(name) { modal(`<h2>删除账号 ${esc(name)}？</h2><p>勾选"连磁盘一起删"会清空该用户全部对话/媒体/文件，不可恢复；不勾则只删账号记录。</p><label class="row" style="margin-bottom:6px"><input type="checkbox" id="purgeChk"> 连磁盘文件夹一起删（彻底）</label><div class="acts"><button class="btn" onclick="closeModal()">取消</button><button class="btn danger" onclick="doUserDel('${esc(name)}')">删除</button></div>`); }
+async function doUserDel(name) { const purge = $("#purgeChk")?.checked; closeModal(); try { await api("/api/admin/user/delete", { method: "POST", body: JSON.stringify({ name, purge }) }); toast("已删除 " + name); loadUsers(); } catch (e) { toast(e.message, true); } }
+
+// ===================== 会话 / 续聊 =====================
+let SS = { user: "admin", sessions: [], cur: null, msgs: [], busy: false, ctrl: null, _q: null };
+function renderSessions() {
+  const us = [{ name: "admin", tier: "admin" }, ...((USERS && USERS.users) || [])];
+  $("#page-sessions").innerHTML = `
+    <div class="ss-wrap">
+      <div class="ss-col"><h3>用户</h3><div class="ss-list">${us.map((u) => `<div class="ss-li ${u.name === SS.user ? "on" : ""}" onclick="ssPickUser('${esc(u.name)}')"><div class="t">${u.name === "admin" ? "🛡️ admin（我）" : "👤 " + esc(u.name)}</div></div>`).join("")}</div></div>
+      <div class="ss-col"><h3>会话 <span class="muted" id="ssCount"></span></h3><div class="ss-list" id="ssList"><div class="empty">加载中…</div></div></div>
+      <div class="ss-col">
+        <h3 id="ssTitle">选择会话后可预览、续聊</h3>
+        <div class="ss-thread" id="ssThread"><div class="empty">左侧选一个会话开始</div></div>
+        <div class="ss-foot">
+          <textarea id="ssInput" rows="1" placeholder="代该用户发消息续聊…（Enter 发送）" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();ssSend()}"></textarea>
+          <button class="btn pri" id="ssSendBtn" onclick="ssSend()">发送</button>
+        </div>
+      </div>
+    </div>`;
+  ssLoadSessions();
+}
+function ssPickUser(name) { SS.user = name; SS.cur = null; SS.msgs = []; renderSessions(); }
+async function ssLoadSessions() {
+  let list = [];
+  try {
+    if (SS.user === "admin") list = (await api("/api/sessions")).sessions || [];
+    else list = (await api("/api/admin/user/sessions?name=" + encodeURIComponent(SS.user))).sessions || [];
+  } catch (e) { }
+  SS.sessions = list;
+  if ($("#ssCount")) $("#ssCount").textContent = list.length;
+  const el = $("#ssList"); if (!el) return;
+  el.innerHTML = list.length ? list.map((s) => `<div class="ss-li ${s.id === SS.cur ? "on" : ""}" onclick="ssOpen('${esc(s.id)}')"><div class="t">${esc(s.title || "(无标题)")}</div><div class="m">${esc((s.id || "").slice(0, 8))} · ${fmtAgo(s.mtime)}</div></div>`).join("") : '<div class="empty">无会话</div>';
+}
+async function ssOpen(id) {
+  SS.cur = id; ssLoadSessions();
+  $("#ssTitle").textContent = "加载中…";
+  let data;
+  try {
+    if (SS.user === "admin") data = await api("/api/session?id=" + encodeURIComponent(id));
+    else data = await api("/api/admin/user/session?name=" + encodeURIComponent(SS.user) + "&id=" + encodeURIComponent(id));
+  } catch (e) { $("#ssThread").innerHTML = `<div class="empty">读取失败：${esc(e.message)}</div>`; return; }
+  SS.msgs = (data.messages || []).map((m) => ({ role: m.role, text: m.text }));
+  $("#ssTitle").innerHTML = `${SS.user === "admin" ? "🛡️ admin" : "👤 " + esc(SS.user)} · <span class="mono muted">${esc(id.slice(0, 8))}</span>`;
+  ssRenderThread();
+}
+function ssRenderThread() {
+  const el = $("#ssThread"); if (!el) return;
+  el.innerHTML = SS.msgs.map((m) => `<div class="msg ${m.role === "user" ? "user" : "asst"}"><div class="who">${m.role === "user" ? "用户" : "Claude"}</div><div class="bubble">${esc(m.text)}</div></div>`).join("") || '<div class="empty">空会话</div>';
+  el.scrollTop = el.scrollHeight;
+}
+function ssSend() {
+  const ta = $("#ssInput"); const text = ta.value.trim(); if (!text || SS.busy) return;
+  ta.value = "";
+  SS.msgs.push({ role: "user", text });
+  const asst = { role: "asst", text: "" }; SS.msgs.push(asst);
+  ssRenderThread(); SS.busy = true; $("#ssSendBtn").textContent = "…"; $("#ssSendBtn").disabled = true;
+  const body = { message: text, sessionId: SS.cur || undefined };
+  const url = SS.user === "admin" ? "/api/chat" : "/api/admin/user/chat";
+  if (SS.user !== "admin") body.name = SS.user;
+  SS.ctrl = new AbortController();
+  fetch(url, { method: "POST", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify(body), signal: SS.ctrl.signal })
+    .then((r) => pumpSSE(r, (ev) => {
+      if (ev.type === "session" && ev.sessionId) SS.cur = ev.sessionId;
+      else if (ev.type === "text") { asst.text += ev.text || ""; ssRenderThread(); }
+      else if (ev.type === "question") ssQuestion(ev);
+      else if (ev.type === "error") { asst.text += "\n[错误] " + (ev.message || ""); ssRenderThread(); }
+      else if (ev.type === "done") { if (!asst.text && ev.result) { asst.text = ev.result; ssRenderThread(); } }
+    }))
+    .catch((e) => { if (!SS.ctrl.signal.aborted) { asst.text += "\n[连接中断] " + e.message; ssRenderThread(); } })
+    .finally(() => { SS.busy = false; $("#ssSendBtn").textContent = "发送"; $("#ssSendBtn").disabled = false; ssLoadSessions(); });
+}
+function ssQuestion(ev) {
+  const qs = ev.questions || []; SS._q = qs;
+  const html = `<h2>Claude 提了个问题</h2>` + qs.map((q, qi) => `<p style="color:var(--tx);font-weight:600">${esc(q.question || "")}</p>` + (q.options || []).map((o) => `<label class="row" style="padding:6px 0"><input type="radio" name="q${qi}" value="${esc(o.label)}"> ${esc(o.label)}${o.description ? ` <span class="muted">— ${esc(o.description)}</span>` : ""}</label>`).join("")).join("<hr style='border-color:var(--border);margin:10px 0'>") + `<div class="acts"><button class="btn" onclick="ssAnswer('${esc(ev.qid)}',true)">跳过</button><button class="btn pri" onclick="ssAnswer('${esc(ev.qid)}',false)">提交</button></div>`;
+  modal(html);
+}
+async function ssAnswer(qid, cancelled) {
+  const answers = cancelled ? [] : (SS._q || []).map((q, qi) => { const sel = $(`input[name="q${qi}"]:checked`); return { selected: sel ? [sel.value] : [] }; });
+  closeModal();
+  const url = SS.user === "admin" ? "/api/answer" : "/api/admin/user/answer";
+  const body = { qid, cancelled, answers }; if (SS.user !== "admin") body.name = SS.user;
+  try { await api(url, { method: "POST", body: JSON.stringify(body) }); } catch (e) { toast(e.message, true); }
+}
+async function pumpSSE(r, onEv) {
+  if (!r.ok || !r.body) throw new Error("HTTP " + r.status);
+  const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read(); if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i; while ((i = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+      let data = ""; for (const ln of frame.split("\n")) { if (ln.startsWith("data:")) data += ln.slice(5).replace(/^ /, ""); }
+      if (data) { try { onEv(JSON.parse(data)); } catch { } }
+    }
+  }
+}
+
+// ===================== 定时任务 =====================
+let RT = { user: "admin" };
+async function renderRoutines() {
+  const us = [{ name: "admin" }, ...((USERS && USERS.users) || [])];
+  let list = [];
+  try {
+    if (RT.user === "admin") list = (await api("/api/routines")).routines || [];
+    else list = (await api("/api/admin/user/routines?name=" + encodeURIComponent(RT.user))).routines || [];
+  } catch (e) { }
+  const schedTxt = (s) => { if (!s) return "—"; const t = { daily: "每天", weekdays: "工作日", weekly: "每周", hourly: "每小时" }[s.type] || s.type; return s.type === "hourly" ? `每小时 :${String(s.minute || 0).padStart(2, "0")}` : `${t} ${String(s.hour || 0).padStart(2, "0")}:${String(s.minute || 0).padStart(2, "0")}`; };
+  const stBadge = (st) => st === "running" ? '<span class="badge amber"><span class="live"></span>运行中</span>' : st === "ok" ? '<span class="badge green">成功</span>' : st === "error" ? '<span class="badge red">出错</span>' : '<span class="badge gray">—</span>';
+  $("#page-routines").innerHTML = `
+    <div class="row wrap" style="margin-bottom:14px;gap:6px">${us.map((u) => `<button class="btn sm ${u.name === RT.user ? "pri" : ""}" onclick="RT.user='${esc(u.name)}';renderRoutines()">${u.name === "admin" ? "🛡️ admin" : "👤 " + esc(u.name)}</button>`).join("")}</div>
+    <div class="card"><h3>⏰ ${esc(RT.user)} 的定时任务</h3>
+      <table><thead><tr><th>名称</th><th>频率</th><th>下次运行</th><th>上次</th><th>状态</th><th>提示词</th></tr></thead><tbody>${list.length ? list.map((r) => `
+        <tr><td><b>${esc(r.name || "(未命名)")}</b> ${r.enabled ? "" : '<span class="badge gray">停用</span>'}</td>
+          <td>${schedTxt(r.schedule)}</td>
+          <td class="muted">${r.nextRun ? new Date(r.nextRun).toLocaleString("zh", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+          <td class="muted">${r.lastRun ? fmtAgo(r.lastRun) : "—"}</td>
+          <td>${stBadge(r.lastStatus)}</td>
+          <td class="trunc muted" style="max-width:260px">${esc(r.prompt || "")}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">无定时任务</td></tr>'}</tbody></table>
+    </div>`;
+}
+
+// ===================== 媒体 =====================
+let MD = { user: "admin", kind: "image" };
+async function renderMedia() {
+  const us = [{ name: "admin" }, ...((USERS && USERS.users) || [])];
+  const kinds = [["image", "图片"], ["video", "视频"], ["audio", "语音"], ["music", "音乐"]];
+  let list = [];
+  try {
+    if (MD.user === "admin") list = (await api("/api/vertex/" + (MD.kind === "image" ? "images" : MD.kind === "video" ? "videos" : MD.kind === "audio" ? "audios" : "musics"))).media || [];
+    else list = (await api("/api/admin/user/media?name=" + encodeURIComponent(MD.user) + "&kind=" + MD.kind)).media || [];
+  } catch (e) { }
+  const murl = (id) => MD.user === "admin" ? ("/api/vertex/media?id=" + id + (token ? "&token=" + encodeURIComponent(token) : "")) : ("/api/admin/user/media-file?name=" + encodeURIComponent(MD.user) + "&id=" + id);
+  $("#page-media").innerHTML = `
+    <div class="row wrap" style="margin-bottom:12px;gap:6px">${us.map((u) => `<button class="btn sm ${u.name === MD.user ? "pri" : ""}" onclick="MD.user='${esc(u.name)}';renderMedia()">${u.name === "admin" ? "🛡️ admin" : "👤 " + esc(u.name)}</button>`).join("")}</div>
+    <div class="seg" style="margin-bottom:14px">${kinds.map(([k, l]) => `<button class="${MD.kind === k ? "on" : ""}" onclick="MD.kind='${k}';renderMedia()">${l}</button>`).join("")}</div>
+    ${list.length ? `<div class="media-grid">${list.map((m) => MD.kind === "image" ? `<img src="${murl(m.id)}" title="${esc(m.title)}" loading="lazy">` : MD.kind === "video" ? `<video src="${murl(m.id)}#t=0.1" muted preload="metadata" onclick="this.paused?this.play():this.pause()"></video>` : `<div class="card" style="padding:10px"><div class="trunc muted" style="font-size:12px;margin-bottom:6px">${esc(m.title)}</div><audio src="${murl(m.id)}" controls style="width:100%"></audio></div>`).join("")}</div>` : '<div class="empty">该用户没有这类媒体</div>'}`;
+}
+
+// ===================== 服务控制 =====================
+// ===================== Claude 账号切换 =====================
+// 整个 bridge 的 Claude Agent SDK 用哪个订阅账号（token）。切换即时全局生效：admin 对话、
+// 用户沙箱、定时路由的下一次生成都跟随激活账号。会话共享（都在 ~/.claude），切号可续同一对话。
+let ACCTS = [];
+// 逐号用量（5 小时 / 每周 / Fable 周限额；Pro 没有 Fable）：服务端每号一次直连探针、5 分钟缓存。
+let USAGE = {}, USAGE_BUSY = false;
+async function loadUsage(force) {
+  USAGE_BUSY = true; if (cur === "accounts") renderAccounts();
+  try { USAGE = (await api("/api/admin/claude-accounts/usage" + (force ? "?force=1" : ""))).usage || {}; } catch {}
+  USAGE_BUSY = false; if (cur === "accounts") renderAccounts();
+}
+function usageResetIn(ms) {
+  const m = Math.round(((ms || 0) - Date.now()) / 60000);
+  if (m <= 0) return "";
+  return m < 60 ? m + " 分钟后重置" : m < 2880 ? Math.round(m / 60) + " 小时后重置" : Math.round(m / 1440) + " 天后重置";
+}
+function usageCell(u, k) {
+  const b = u && u[k];
+  if (!u) return '<span class="muted">' + (USAGE_BUSY ? "读取中…" : "—") + "</span>";
+  if (!b) return '<span class="muted">' + (k === "fable" && u.plan === "pro" ? "Pro 无此额度" : "—") + "</span>";
+  const c = b.status === "rejected" || b.pct >= 100 ? "#ff6961" : b.pct >= 80 ? "#ffb340" : "#4cd964";
+  return `<div style="min-width:120px"><div style="display:flex;justify-content:space-between;font-size:12px"><b class="mono" style="color:${c}">${b.pct}%</b>`
+    + `<span class="muted">${b.status === "rejected" ? "已达上限" : ""}</span></div>`
+    + `<div style="height:5px;border-radius:3px;background:rgba(255,255,255,.1);margin:4px 0 3px;overflow:hidden"><i style="display:block;height:100%;width:${Math.min(100, b.pct)}%;background:${c}"></i></div>`
+    + `<div class="muted" style="font-size:11px">${usageResetIn(b.resetsAt)}</div></div>`;
+}
+async function loadAccounts() {
+  try { ACCTS = (await api("/api/admin/claude-accounts")).accounts || []; }
+  catch (e) { ACCTS = []; if (cur === "accounts") $("#page-accounts").innerHTML = `<div class="empty">读取账号失败：${esc(e.message)}</div>`; return; }
+  const a = ACCTS.find((x) => x.active);
+  $("#navAcct").style.display = "flex"; $("#navAcct").textContent = a ? a.label : "?";
+  if (cur === "accounts") renderAccounts();
+}
+function renderAccounts() {
+  const list = ACCTS.length ? ACCTS.map((a) => `
+    <tr>
+      <td>${a.active ? '<span class="badge green">● 当前</span>' : '<span class="badge gray">待用</span>'}</td>
+      <td style="font-weight:600">${esc(a.label)}${USAGE[a.id]?.plan ? ` <span class="badge ${USAGE[a.id].plan === "max" ? "purple" : "blue"}">${USAGE[a.id].plan === "max" ? "Max" : "Pro"}</span>` : ""}${USAGE[a.id]?.error && !USAGE[a.id].five_hour ? `<div class="muted" style="font-size:11px;color:#ff6961">${esc(USAGE[a.id].error)}</div>` : ""}</td>
+      <td>${usageCell(USAGE[a.id], "five_hour")}</td>
+      <td>${usageCell(USAGE[a.id], "seven_day")}</td>
+      <td>${usageCell(USAGE[a.id], "fable")}</td>
+      <td class="mono muted">${a.hasToken ? "…" + esc(a.tokenTail) : '<span class="badge amber">用本机登录态</span>'}</td>
+      <td style="text-align:right">
+        ${a.active ? "" : `<button class="btn sm pri" onclick="acctActivate('${esc(a.id)}')">切到此号</button>`}
+        <button class="btn sm ghost" onclick="acctEdit('${esc(a.id)}')">编辑</button>
+        ${ACCTS.length > 1 ? `<button class="btn sm danger" onclick="acctDel('${esc(a.id)}','${esc(a.label)}')">删除</button>` : ""}
+      </td>
+    </tr>`).join("") : '<tr><td colspan="7" class="empty">还没有账号</td></tr>';
+  $("#page-accounts").innerHTML = `
+    <div class="card" style="margin-bottom:14px"><h3>🔑 Claude 订阅账号 <div class="sp"></div>
+      <button class="btn sm ghost" onclick="loadUsage(true)" ${USAGE_BUSY ? "disabled" : ""}>${USAGE_BUSY ? "刷新中…" : "刷新用量"}</button>
+      <button class="btn sm pri" onclick="acctAdd()">＋ 添加账号</button></h3>
+      <table><thead><tr><th style="width:80px">状态</th><th>名称</th><th>5 小时</th><th>每周</th><th>Fable</th><th>Token</th><th></th></tr></thead>
+      <tbody>${list}</tbody></table>
+      <div class="muted" style="font-size:12px;margin-top:10px;line-height:1.7">
+        切换<b>即时全局生效</b>：admin 对话、用户沙箱、定时路由的下一次生成都会用新账号的额度（正在跑的那一轮不受影响）。<br>
+        两个账号<b>共享会话</b>（都落 ~/.claude）——一条对话可以在切号后无缝续聊，适合把两个订阅当额度池，一号限流了切另一号接着聊。<br>
+        添加账号的 token：在<b>对应账号</b>下登录后跑 <code class="mono">claude setup-token</code>，把返回的长期 token 粘进来。留空 token 的账号表示「用本机 ~/.claude 已登录的凭证」。
+      </div>
+    </div>`;
+}
+async function acctActivate(id) {
+  try { const r = await api("/api/admin/claude-account/active", { method: "POST", body: JSON.stringify({ id }) }); if (r.error) return toast(r.error, true); toast("已切换账号"); loadAccounts(); }
+  catch (e) { toast(e.message, true); }
+}
+function acctAdd() {
+  modal(`<h2>添加 Claude 账号</h2>
+    <p class="muted" style="font-size:13px">在目标账号下运行 <code class="mono">claude setup-token</code> 拿到长期 token 后粘贴到这里。</p>
+    <label class="row" style="margin:8px 0"><span style="width:70px">名称</span><input id="acLabel" placeholder="如：主号 / 备用号" style="flex:1"></label>
+    <label class="row" style="margin:8px 0"><span style="width:70px">Token</span><input id="acToken" placeholder="sk-ant-oat…" style="flex:1"></label>
+    <div class="acts"><button class="btn" onclick="closeModal()">取消</button><button class="btn pri" onclick="acctAddDo()">添加</button></div>`);
+  setTimeout(() => $("#acLabel") && $("#acLabel").focus(), 30);
+}
+async function acctAddDo() {
+  const label = $("#acLabel").value.trim(), token = $("#acToken").value.trim();
+  if (!token) return toast("token 不能为空", true);
+  try { const r = await api("/api/admin/claude-account/add", { method: "POST", body: JSON.stringify({ label, token }) }); if (r.error) return toast(r.error, true); closeModal(); toast("已添加"); loadAccounts(); }
+  catch (e) { toast(e.message, true); }
+}
+function acctEdit(id) {
+  const a = ACCTS.find((x) => x.id === id); if (!a) return;
+  modal(`<h2>编辑账号</h2>
+    <label class="row" style="margin:8px 0"><span style="width:70px">名称</span><input id="acLabel" value="${esc(a.label)}" style="flex:1"></label>
+    <label class="row" style="margin:8px 0"><span style="width:70px">Token</span><input id="acToken" placeholder="${a.hasToken ? "留空＝不改，当前 …" + esc(a.tokenTail) : "留空＝用本机登录态"}" style="flex:1"></label>
+    <div class="acts"><button class="btn" onclick="closeModal()">取消</button><button class="btn pri" onclick="acctEditDo('${esc(id)}')">保存</button></div>`);
+  setTimeout(() => $("#acLabel") && $("#acLabel").focus(), 30);
+}
+async function acctEditDo(id) {
+  const label = $("#acLabel").value.trim(), token = $("#acToken").value.trim();
+  try { const r = await api("/api/admin/claude-account/update", { method: "POST", body: JSON.stringify({ id, label, token }) }); if (r.error) return toast(r.error, true); closeModal(); toast("已保存"); loadAccounts(); }
+  catch (e) { toast(e.message, true); }
+}
+function acctDel(id, label) {
+  modal(`<h2>删除账号 ${esc(label)}？</h2><p class="muted" style="font-size:13px">只从切换列表移除；若删的是当前账号，会自动切到另一个。</p>
+    <div class="acts"><button class="btn" onclick="closeModal()">取消</button><button class="btn danger" onclick="acctDelDo('${esc(id)}')">删除</button></div>`);
+}
+async function acctDelDo(id) {
+  try { const r = await api("/api/admin/claude-account/delete", { method: "POST", body: JSON.stringify({ id }) }); if (r.error) return toast(r.error, true); closeModal(); toast("已删除"); loadAccounts(); }
+  catch (e) { toast(e.message, true); }
+}
+
+function renderControl() {
+  const s = (OV && OV.service) || {}, t = s.tunnel || {}, sv = s.server || {}, au = s.autostart || {};
+  $("#page-control").innerHTML = `
+    <div class="grid g2">
+      <div class="card"><h3>🔄 进程控制</h3>
+        <table><tbody>
+          <tr><td>主服务 ${svcBadge(sv)}</td><td>${svcCtl("server", sv.running)}</td></tr>
+          <tr><td>隧道 ${svcBadge(t)}</td><td>${svcCtl("tunnel", t.running)}</td></tr>
+          <tr><td>两者</td><td style="text-align:right"><button class="btn sm pri" onclick="svc('restart-both')">全部重启</button></td></tr>
+        </tbody></table>
+        <div class="muted" style="font-size:12px;margin-top:10px">重启服务只换 node 进程、不动隧道（地址不变）；重启隧道会换 trycloudflare 地址。</div>
+      </div>
+      <div class="card"><h3>🚀 开机自启</h3>
+        <div class="row" style="margin-bottom:12px">server: ${au.server ? '<span class="badge green">已装</span>' : '<span class="badge gray">未装</span>'} &nbsp; tunnel: ${au.tunnel ? '<span class="badge green">已装</span>' : '<span class="badge gray">未装</span>'}</div>
+        <div class="row"><button class="btn sm" onclick="svc('install')">安装自启</button><button class="btn sm danger" onclick="svc('remove')">移除自启</button></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>ℹ️ 主机</h3><table><tbody>
+      <tr><td>主机名</td><td class="mono">${esc(OV?.host?.name || "")}</td></tr>
+      <tr><td>局域网地址</td><td class="mono">${(OV?.host?.lan || []).map((ip) => `http://${esc(ip)}:${OV?.phonePort || ""}`).join("　") || "—"}</td></tr>
+      <tr><td>隧道地址</td><td class="mono">${esc(t.url || "—")}</td></tr>
+    </tbody></table></div>`;
+}
+async function svc(action) { const danger = { "remove": "移除开机自启？", "stop-server": "停止主服务？手机/网页会立刻断连，可在本页「启动」重新拉起。", "stop-tunnel": "停止隧道？外网将无法访问（同 WiFi 局域网仍可），可在本页「启动」重新拉起。" }; if (danger[action] && !confirm(danger[action])) return; toast("执行 " + action + "…"); try { const r = await api("/api/admin/action", { method: "POST", body: JSON.stringify({ action }) }); toast(r.error ? "失败：" + r.error : "完成：" + action, !!r.error); setTimeout(loadOverview, 1200); setTimeout(loadOverview, 3800); } catch (e) { toast(e.message, true); } }
+
+// ===================== 启动 =====================
+async function loadStatus() { try { const s = await api("/api/status"); LIMITS = s.limits; } catch { } }
+const RENDER = {
+  overview: () => { loadOverview(); loadStatus(); },
+  active: () => { loadActive(); },
+  users: () => { loadUsers(); },
+  sessions: () => { if (!USERS) loadUsers().then(renderSessions); else renderSessions(); },
+  routines: () => { if (!USERS) loadUsers().then(renderRoutines); else renderRoutines(); },
+  media: () => { if (!USERS) loadUsers().then(renderMedia); else renderMedia(); },
+  accounts: () => { loadAccounts(); loadUsage(false); },
+  control: () => { if (!OV) loadOverview().then(renderControl); else renderControl(); },
+};
+setInterval(() => { if (cur === "overview") { loadOverview(); loadStatus(); } if (cur === "active") loadActive(); }, 3500);
+setInterval(() => { loadOverview(); }, 8000);
+
+loadOverview(); loadStatus(); loadUsers(); loadAccounts();
+</script>
+</body>
+</html>

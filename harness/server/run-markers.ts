@@ -15,7 +15,7 @@ export interface RunMarker {
   resumes: number;
   interrupted?: "restart";
   // 写它的进程（PID + 创建时间）：扫的时候跳过「还活着的别的进程」的 marker——那是人家正在跑的轮，不是被切断的
-  // （测试里多个 harness 共用一个会话目录；生产重启时新旧进程也可能短暂重叠）。PID 会被复用，所以连创建时间一起核对。
+  // （测试里多个 harness 共用一个会话目录；正式服重启时新旧进程也可能短暂重叠）。PID 会被复用，所以连创建时间一起核对。
   pid?: number;
   pidCreated?: number;
 }

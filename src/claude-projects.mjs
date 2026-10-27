@@ -1,4 +1,4 @@
-// Claude 分页的「项目」：【路径制】项目——项目=一个本地
+// Claude 分页的「项目」：与 codex-projects 同构的【路径制】项目——项目=一个本地
 // 工作空间目录，新会话以它为 cwd 运行，transcript 落到 ~/.claude/projects/<路径slug>/。
 // 会话→项目的归属【由所在目录推导】（无 assign 表）：不管会话从哪来（手机/桌面/胶囊），
 // 必有 cwd，也就必然归到某个项目；ctx.cwd 是恒存在的「工作空间」默认项目，兜住一切
@@ -77,7 +77,7 @@ export function ensureDefaultProject(file, ctx) {
 }
 
 // 显示名：默认 = 工作空间文件夹名（分组按 Claude Code 启动目录的真实文件夹名）；用户改过名
-//（label，2026-10-10 加的「给工作空间改名」）就显示 label。存储里的 name 是建项目时的
+//（label，2026-10-10 维护者要的「给工作空间改名」）就显示 label。存储里的 name 是建项目时的
 // 遗留字段，不参与显示——别拿它当显示名（老条目里可能是早年的自定义名）。盘根等 basename
 // 为空时退回完整路径。快照存成的工作空间桶目录名是 UUID，所以存的时候就带上 label。
 const dirLabel = (p) => path.basename(path.resolve(p || '')) || String(p || '');

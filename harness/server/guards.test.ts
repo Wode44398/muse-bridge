@@ -56,7 +56,7 @@ const RULES: Rule[] = [
   },
   {
     id: "taskkill-tree",
-    why: "别用 taskkill /T：它只按 ParentProcessId 找子进程，会顺着悬空的父 PID 杀到不相干的进程（#77，生产上的 bridge 进程被这样带走过）；用 proc-tree.ts",
+    why: "别用 taskkill /T：它只按 ParentProcessId 找子进程，会顺着悬空的父 PID 杀到不相干的进程（#77，正式服被这样带走过）；用 proc-tree.ts",
     re: /taskkill[^\n]*\s\/T\b|["'`]\/T["'`]/,
     scope: "src",
   },

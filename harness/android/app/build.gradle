@@ -1,0 +1,31 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.harness.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.harness.app'
+        minSdk 24            // Android 7.0+
+        targetSdk 34
+        versionCode 2
+        versionName '1.1'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// 零依赖：单 Activity + 框架 WebView，构建期不需要从网络拉任何东西。
+dependencies {
+}

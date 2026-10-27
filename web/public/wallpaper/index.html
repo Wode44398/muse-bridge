@@ -1,0 +1,58 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>MacOS Drift Screensaver (Dynamic)</title><style> body { margin: 0; overflow: hidden; background: black; } canvas { width: 100vw; height: 100vh; display: block; } *:focus, *:focus-visible { outline: none !important; } </style></head><body><canvas id="canvas"></canvas><script>
+/* flux 的 wasm 初始化时会调 focus()：焦点被抢进这个 iframe，WebView 就沿整屏画一圈默认的琥珀色焦点框
+   （宿主 app.css 的 :focus{outline:none} 管不到 iframe 里的文档）——每次切回暗色主题重建壁纸都会出现，
+   点一下背景才消失；桌面端焦点被吸进 iframe 还会让宿主的快捷键失灵。壁纸不需要键盘，焦点一律不给。 */
+HTMLElement.prototype.focus = function(){};
+window.focus = function(){};
+/* Wallpaper Engine 专有 API 在普通浏览器里不存在；补空桩，否则 main.js 结尾调用会抛错、壁纸起不来 */
+window.wallpaperRegisterAudioListener = window.wallpaperRegisterAudioListener || function(){};
+window.wallpaperRequestRandomFileForProperty = window.wallpaperRequestRandomFileForProperty || function(){};
+/* main.js 帧循环里每画完一帧（C.animate 之后、同一任务内）调 window.__fluxFrame()：宿主页借此拷走 Dock 背后那块画面做玻璃 */
+</script>
+<script type="module" src="main.js?v=fluxframe1"></script>
+<script type="module">
+/* 打包的 flux（2026-05 前的版本）有个上游 9 月才修的缺陷（sandydoo/flux ce0237f）：流体纹理只在构造时按
+   「网格缩放档」建一次、之后从不重建，而 set_settings / resize 会按新档位改写记录的流体尺寸与噪声纹理——
+   两边对不上，每帧 WebGPU 校验失败、解算读写错位，画面变成一格一格的周期性乱线（桌面端截图那种）。
+   档位 = round(max(1, 列数/171)) × round(max(1, 行数/171))，列数≈逻辑宽/线条间距，超宽屏拖窗口就会跨档。
+   对策：① flux 构造前就把宿主的参数灌进去（这里运行时 main.js 还在 await 适配器，C 尚未构造），
+   不再「先按引擎默认 fluidSize 128 / gridSpacing 15 建好、再被宿主改掉」；② 构造之后凡是会改档位的变化
+   （fluidsize / gridspacing 变了、窗口跨档）都整页重建；③ 0×0 的 resize（宿主切走 display:none）
+   不传给 flux，免得切一次页面档位来回跳一次。重建后宿主 iframe onload 照常重新挂钩、补打参数。
+   另一个独立的坑：流体尺寸（fluidsize）不是 2 的幂时这版解算直接炸，整屏一格一格的放射乱线，跟窗口多大无关
+   （3381×1363 下 96、112、160、192 都炸，32/64/128/256 正常）。进引擎前一律取最近的 2 的幂。 */
+const L = window.wallpaperPropertyListener;
+const canvas = document.getElementById('canvas');
+function pow2(p) {
+  const v = p && p.fluidsize && Number(p.fluidsize.value);
+  if (v > 0) p.fluidsize = { ...p.fluidsize, value: 2 ** Math.round(Math.log2(Math.min(512, Math.max(32, v)))) };
+  return p;
+}
+let seed = null;
+try { seed = parent !== window && parent.__fluxProps ? parent.__fluxProps() : null; } catch {}
+// 宿主拿不到（旧缓存的宿主包 / 单独打开）就用重建前记下的那份，否则「改参数→重建→又是默认值→又改」会转圈
+try { seed = seed || JSON.parse(sessionStorage.getItem('flux-seed') || 'null'); } catch {}
+if (seed) L.applyUserProperties(pow2(seed));
+const built = { fluidsize: seed?.fluidsize?.value ?? 128, gridspacing: seed?.gridspacing?.value ?? 15 };
+function tier(w, h, sp) {
+  if (!(w > 0 && h > 0)) return '1x1';   // flux 把 0 尺寸建成 1×1 网格
+  const c = Math.floor(w / sp), r = Math.floor((h / w) * c) || 0;
+  const f = (n) => Math.round(Math.max(1, (n + 1) / 171));
+  return f(c) + 'x' + f(r);
+}
+built.tier = tier(canvas.clientWidth, canvas.clientHeight, built.gridspacing);
+let timer = 0;
+function rebuild() { clearTimeout(timer); timer = setTimeout(() => location.reload(), 350); }
+const apply = L.applyUserProperties;
+L.applyUserProperties = function (p) {
+  p = pow2({ ...p });
+  try { sessionStorage.setItem('flux-seed', JSON.stringify({ ...JSON.parse(sessionStorage.getItem('flux-seed') || '{}'), ...p })); } catch {}
+  if ((p.fluidsize && p.fluidsize.value !== built.fluidsize) || (p.gridspacing && p.gridspacing.value !== built.gridspacing)) rebuild();
+  return apply.call(this, p);
+};
+window.addEventListener('resize', (e) => {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) { e.stopImmediatePropagation(); return; }
+  if (tier(w, h, built.gridspacing) !== built.tier) rebuild();
+});
+</script></body></html>

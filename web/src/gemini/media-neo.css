@@ -1,0 +1,799 @@
+/* ═══════════════════════════════════════════════════════════════
+   媒体工坊（vmx）—— vertex 四媒体模块（视频/图片/语音/音乐）新版 UI。
+   设计语言：Google 巨扁平（大图标 / 大开大合 / 大圆角 / 极简）。
+   零复用 Gemini 克隆页样式；全部规则限定在 .vmx 作用域内。
+   排版：移动端纵向流；≥1080px studio（左画布 + 右设置栏 + 底部提示条）。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ——— tokens ——— */
+.vmx {
+  /* 中性（亮） */
+  --bg: #ffffff;
+  --sur: #f1f3f4;
+  --sur2: #e8eaed;
+  --on: #1f1f1f;
+  --on2: #5f6368;
+  --on3: #9aa0a6;
+  --line: #e6e8ea;
+  --scrim: rgba(32, 33, 36, .48);
+  --err: #c5221f; --err-c: #fce8e6; --err-on: #5c110f;
+  --r-xl: 44px; --r-lg: 32px; --r-md: 24px; --r-sm: 16px;
+  --hero-r: var(--r-xl);   /* hero 卡片底圆角（≥900 收小、≥1080 顶栏化归零）；mod-body 上缘同步钻入 */
+  --vmx-eo: cubic-bezier(.22, 1, .36, 1);      /* 强调减速（入场落位） */
+  --vmx-spring: cubic-bezier(.34, 1.5, .64, 1); /* 轻回弹（glyph/pill 弹入） */
+  --vmx-font: var(--gm-font-sans, "Bridge Sans"), "Segoe UI", system-ui, "Microsoft YaHei", "PingFang SC", sans-serif;
+}
+.vmx.dark {
+  --bg: #131314;
+  --sur: #1e1f20;
+  --sur2: #2a2b2d;
+  --on: #e3e3e3;
+  --on2: #9aa0a6;
+  --on3: #70757a;
+  --line: #303134;
+  --scrim: rgba(0, 0, 0, .58);
+  --err: #f2b8b5; --err-c: #3b1210; --err-on: #f9dedc;
+}
+/* 模块四色：亮=Google 50 色阶浅底 + 600/800 深字 + logo 原色大图标；暗=深容器 + 粉彩 */
+.vmx.m-video { --acc: #0b57d0; --viv: #1a73e8; --cont: #e8f0fe; --oncont: #0b3d91; --onacc: #fff; }
+.vmx.m-image { --acc: #137333; --viv: #34a853; --cont: #e6f4ea; --oncont: #0a3818; --onacc: #fff; }
+.vmx.m-voice { --acc: #a05a00; --viv: #f9ab00; --cont: #fef7e0; --oncont: #4e3200; --onacc: #fff; }
+.vmx.m-music { --acc: #c5221f; --viv: #ea4335; --cont: #fce8e6; --oncont: #5c110f; --onacc: #fff; }
+.vmx.dark.m-video { --acc: #a8c7fa; --viv: #a8c7fa; --cont: #14386b; --oncont: #d3e3fd; --onacc: #062e6f; }
+.vmx.dark.m-image { --acc: #6dd58c; --viv: #6dd58c; --cont: #0f5223; --oncont: #c4eed0; --onacc: #05320f; }
+.vmx.dark.m-voice { --acc: #fdc169; --viv: #fdc169; --cont: #5c4200; --oncont: #feefc3; --onacc: #402d00; }
+.vmx.dark.m-music { --acc: #f2b8b5; --viv: #f2b8b5; --cont: #601410; --oncont: #f9dedc; --onacc: #410e0b; }
+
+/* ——— 根：填满 v-stage ——— */
+.vmx {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  position: relative;
+  font-family: var(--vmx-font);
+  background: var(--bg);
+  color: var(--on);
+  font-size: 16px; line-height: 1.5;
+}
+.vmx button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.vmx img { display: block; }
+.vmx .ic { display: inline-flex; }
+.vmx .ic svg { width: 24px; height: 24px; display: block; }
+
+/* glyph 双色：镂空部分跟随所处底色 */
+.vmx .hero-glyph, .vmx .busy-glyph { --kn: var(--cont); }
+.vmx .empty-glyph { --kn: var(--bg); }
+
+/* ═══════════ hero（模块页头）═══════════
+   移动端：VertexPage 浮动顶栏（汉堡/新建/模块菜单）盖在上方 → 让出 54px；
+   模型 pill 在 hero 右上。桌面 v-dt（≥900）无浮动顶栏，右上让位 v-dt-top。 */
+.vmx .hero {
+  flex: none;
+  background: var(--cont); color: var(--oncont);
+  border-radius: 0 0 var(--hero-r) var(--hero-r);
+  padding: calc(var(--sat, 0px) + 54px) 20px 22px;
+  position: relative; z-index: 2;
+}
+.vmx .hero-head { display: flex; align-items: center; gap: 16px; }
+.vmx .hero-glyph { width: 56px; height: 56px; color: var(--viv); flex: none; }
+.vmx .hero-glyph svg { width: 100%; height: 100%; }
+.vmx .hero-tt { min-width: 0; flex: 1; }
+.vmx .hero-tt h2 { font-size: 36px; font-weight: 700; line-height: 1.12; letter-spacing: 1px; margin: 0; }
+.vmx .hero-tt p { font-size: 13.5px; opacity: .78; font-weight: 500; margin: 2px 0 0; }
+.vmx .model-pill {
+  display: flex; align-items: center; gap: 6px;
+  height: 48px; padding: 0 14px 0 20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--oncont) 9%, transparent);
+  color: var(--oncont);
+  font-size: 15px; font-weight: 600;
+  transition: transform .15s;
+  min-width: 0; max-width: min(58vw, 300px);
+  flex: none; align-self: center;
+}
+.vmx .model-pill:active { transform: scale(.95); }
+.vmx .model-pill .mp-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.vmx .model-pill .ic svg { width: 20px; height: 20px; }
+
+/* ═══════════ 主体 ═══════════ */
+.vmx .mod-body {
+  flex: 1; min-height: 0;
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+  /* 上缘钻进 hero 圆角带下方：圆角缺口透出的是滚动中的正文本身，
+     不再是一块白底矩形（修复：内容贴近卡片时缺口处露白）。 */
+  margin-top: calc(-1 * var(--hero-r));
+  /* 底部不留内边距：钉底的输入岛要贴到滚动区最下沿（sticky 会被容器 padding 顶起一截、
+     露出底下滚过去的内容），安全区由输入岛自己留 */
+  padding: calc(var(--hero-r) + 20px) 16px 0;
+}
+.vmx .sec-tt { font-size: 20px; font-weight: 700; padding: 14px 8px 2px; letter-spacing: .5px; }
+.vmx .sec-tt small { font-size: 12.5px; color: var(--on2); font-weight: 500; margin-left: 10px; letter-spacing: 0; }
+
+/* studio 三区骨架。四个模块同一套流程：
+   移动端（<1080）＝画布（结果 + 历史）在上、输入岛钉底；参数走输入岛上方的摘要 chips → sheet，右栏不显示。
+   桌面（≥1080）＝左画布 + 底部输入岛 + 右栏常驻参数（见文末 studio 横屏排版）。 */
+.vmx .studio { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; min-height: 100%; }
+.vmx .st-rail { display: none; flex-direction: column; gap: 12px; min-width: 0; }
+.vmx .st-canvas { display: flex; flex-direction: column; gap: 14px; order: 1; flex: 1; min-width: 0; }
+.vmx .st-composer { display: flex; flex-direction: column; gap: 14px; order: 2; min-width: 0; }
+.vmx .rail-model { display: none; }
+/* 钉底时下方滚过去的内容不和 chips 叠在一起：从透明渐变到底色垫一层 */
+.vmx .st-composer.st-sticky {
+  position: sticky; bottom: 0; z-index: 4;
+  margin: 0 -16px; padding: 18px 16px max(12px, var(--sab, 0px));
+  background: linear-gradient(to bottom, transparent, var(--bg) 18px);
+}
+.vmx .studio .dock { padding: 0; }
+
+/* ═══════════ 参数卡 ═══════════ */
+.vmx .p-grid { display: flex; flex-direction: column; gap: 12px; }
+.vmx .p-card { background: var(--sur); border-radius: var(--r-md); padding: 15px 17px 17px; }
+.vmx .p-lab { font-size: 13px; font-weight: 600; color: var(--on2); letter-spacing: .8px; margin-bottom: 11px; display: flex; align-items: center; }
+.vmx .p-lab i { font-style: normal; font-weight: 400; margin-left: auto; color: var(--on3); font-size: 12px; letter-spacing: 0; }
+
+.vmx .seg { display: flex; gap: 8px; flex-wrap: wrap; }
+.vmx .seg.seg-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); }
+.vmx .seg.seg-grid2 { display: grid; grid-template-columns: repeat(2, 1fr); }
+/* 时长档：Omni 有 3–10 共 8 档，用小一号的方胶囊，两行就摆得下 */
+.vmx .seg.seg-num .seg-b { height: 44px; min-width: 52px; font-size: 14px; }
+.vmx .seg-b {
+  flex: 1; min-width: 60px;
+  height: 52px; border-radius: 999px;
+  background: var(--bg); color: var(--on);
+  font-size: 15px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  transition: border-radius .28s cubic-bezier(.2, .8, .2, 1), background .2s, color .2s, transform .15s;
+  white-space: nowrap; padding: 0 12px;
+}
+.vmx .seg-b:active { transform: scale(.95); }
+.vmx .seg-b.on { background: var(--acc); color: var(--onacc); border-radius: 17px; }
+.vmx .seg-b .shp { display: inline-block; border: 2.5px solid currentColor; border-radius: 4px; flex: none; }
+.vmx .shp-169 { width: 24px; height: 14px; }
+.vmx .shp-916 { width: 14px; height: 24px; }
+.vmx .shp-11 { width: 18px; height: 18px; }
+.vmx .shp-43 { width: 22px; height: 17px; }
+.vmx .shp-34 { width: 17px; height: 22px; }
+.vmx .shp-32 { width: 23px; height: 15px; }
+.vmx .shp-23 { width: 15px; height: 23px; }
+.vmx .shp-54 { width: 21px; height: 17px; }
+.vmx .shp-45 { width: 17px; height: 21px; }
+.vmx .shp-219 { width: 27px; height: 12px; }
+.vmx .shp-41 { width: 28px; height: 9px; }
+.vmx .shp-14 { width: 9px; height: 26px; }
+.vmx .shp-81 { width: 32px; height: 7px; }
+.vmx .shp-18 { width: 7px; height: 28px; }
+
+.vmx .tgl {
+  width: 100%; height: 58px;
+  border-radius: 999px;
+  background: var(--bg);
+  display: flex; align-items: center; gap: 13px;
+  padding: 0 9px 0 19px;
+  font-size: 15.5px; font-weight: 600; color: var(--on);
+  transition: background .25s, color .25s;
+}
+.vmx .tgl small { font-weight: 400; font-size: 12px; color: var(--on2); display: block; line-height: 1.3; }
+.vmx .tgl .tgl-tx { flex: 1; text-align: left; min-width: 0; }
+.vmx .tgl.on { background: var(--acc); color: var(--onacc); }
+.vmx .tgl.on small { color: var(--onacc); opacity: .75; }
+.vmx .tgl-knob {
+  flex: none; width: 42px; height: 42px; border-radius: 50%;
+  background: var(--sur2); color: var(--on2);
+  display: flex; align-items: center; justify-content: center;
+  transition: background .25s, color .25s;
+}
+.vmx .tgl.on .tgl-knob { background: color-mix(in srgb, var(--onacc) 22%, transparent); color: var(--onacc); }
+.vmx .tgl-knob svg { width: 21px; height: 21px; }
+
+.vmx .sld { display: flex; align-items: center; gap: 14px; }
+.vmx .sld input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  flex: 1; height: 14px; border-radius: 999px;
+  background: var(--bg); outline: none; margin: 0; padding: 0; border: 0;
+}
+.vmx .sld input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--acc); border: 0;
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--acc) 18%, transparent);
+}
+.vmx .sld-val { flex: none; min-width: 52px; text-align: center; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; background: var(--bg); border-radius: 12px; padding: 8px 0; }
+
+.vmx .p-input {
+  width: 100%; height: 54px;
+  border: 0; outline: none;
+  background: var(--bg); color: var(--on);
+  border-radius: 999px;
+  padding: 0 20px;
+  font: inherit; font-size: 15px;
+}
+.vmx .p-input::placeholder { color: var(--on3); }
+.vmx .p-sub { margin: 10px 4px 0; font-size: 12.5px; color: var(--on2); line-height: 1.45; }
+.vmx .p-note { background: var(--sur); border-radius: var(--r-md); padding: 15px 17px; font-size: 13.5px; color: var(--on2); line-height: 1.55; }
+
+/* 多人对白的两行说话人（名字 + 音色）——点一行即把下方音色网格切给它 */
+.vmx .spk-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.vmx .spk-row { display: flex; gap: 8px; align-items: center; border-radius: 999px; padding: 3px; transition: background .2s; }
+.vmx .spk-row.on { background: color-mix(in srgb, var(--acc) 14%, transparent); }
+.vmx .spk-row .spk-name { flex: 1; min-width: 0; height: 46px; }
+.vmx .spk-voice {
+  flex: none; min-width: 96px; height: 46px; padding: 0 16px; border-radius: 999px;
+  background: var(--bg); color: var(--on); font-size: 14px; font-weight: 600;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.vmx .spk-row.on .spk-voice { background: var(--acc); color: var(--onacc); }
+
+.vmx .idea-wrap { display: flex; flex-direction: column; gap: 10px; margin-top: -8px; }
+.vmx .idea-tt { font-size: 13px; font-weight: 600; color: var(--on2); text-align: center; letter-spacing: .5px; }
+.vmx .idea-row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; padding: 2px 2px 6px; }
+.vmx .idea-row::-webkit-scrollbar { display: none; }
+.vmx .idea {
+  flex: none; height: 44px; padding: 0 19px;
+  border-radius: 999px;
+  background: var(--sur); color: var(--on);
+  font-size: 14px; font-weight: 500;
+  transition: transform .15s, background .2s, color .2s;
+}
+.vmx .idea:active { transform: scale(.94); background: var(--cont); color: var(--oncont); }
+
+.vmx .slot-x {
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  width: 25px; height: 25px; border-radius: 50%;
+  background: rgba(0, 0, 0, .58); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.vmx .slot-x svg { width: 13px; height: 13px; }
+.vmx .slot-spin {
+  position: absolute; z-index: 2; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px;
+  border-radius: 50%; border: 2.5px solid rgba(255,255,255,.5); border-top-color: #fff;
+  animation: vmxspin .8s linear infinite;
+}
+@keyframes vmxspin { to { transform: rotate(360deg); } }
+
+/* ═══════════ 生成中 / 空态 / 错误 ═══════════ */
+.vmx .busy-hero {
+  background: var(--cont); color: var(--oncont);
+  border-radius: var(--r-xl);
+  padding: 40px 24px 36px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  text-align: center; overflow: hidden;
+}
+.vmx .busy-glyph { width: 70px; height: 70px; color: var(--viv); animation: vmxpulse 1.6s ease-in-out infinite; }
+.vmx .busy-glyph svg { width: 100%; height: 100%; }
+@keyframes vmxpulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.88); opacity: .6; } }
+.vmx .busy-time { font-size: 68px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -1px; line-height: 1.15; margin-top: 6px; }
+.vmx .busy-hint { font-size: 14.5px; opacity: .78; font-weight: 500; }
+
+.vmx .empty-hero {
+  padding: 44px 20px 34px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  text-align: center;
+}
+.vmx .empty-glyph { width: 120px; height: 120px; color: var(--viv); opacity: .92; margin-bottom: 12px; }
+.vmx .empty-glyph svg { width: 100%; height: 100%; }
+.vmx .empty-hero h3 { font-size: 24px; font-weight: 700; letter-spacing: 1px; margin: 0; }
+.vmx .empty-hero p { font-size: 14px; color: var(--on2); max-width: 300px; margin: 0; }
+/* 有历史时空态收成一行引导，别把历史挤到一屏之外 */
+.vmx .empty-hero.compact { padding: 14px 20px 4px; gap: 4px; }
+.vmx .empty-hero.compact .empty-glyph { width: 60px; height: 60px; margin-bottom: 6px; }
+.vmx .empty-hero.compact h3 { font-size: 19px; }
+
+.vmx .err-card {
+  background: var(--err-c); color: var(--err-on);
+  border-radius: var(--r-md);
+  padding: 17px 19px;
+  display: flex; gap: 13px; align-items: flex-start;
+  font-size: 14.5px; line-height: 1.5;
+}
+.vmx .err-card .ic { color: var(--err); flex: none; margin-top: 1px; }
+
+/* ═══════════ 结果卡 ═══════════ */
+.vmx .res-card {
+  background: var(--sur);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  animation: vmxin .5s cubic-bezier(.16, 1, .3, 1);
+}
+@keyframes vmxin { from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: none; } }
+.vmx .res-media { position: relative; cursor: pointer; background: var(--sur2); }
+.vmx .res-media img { width: 100%; height: auto; min-height: 120px; }
+.vmx .res-play {
+  position: absolute; inset: 0; margin: auto;
+  width: 80px; height: 80px; border-radius: 50%;
+  background: var(--bg); color: var(--acc);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 6px 28px rgba(0, 0, 0, .22);
+  pointer-events: none;
+}
+.vmx .res-play svg { width: 34px; height: 34px; margin-left: 4px; }
+.vmx .res-cap { padding: 13px 19px 15px; font-size: 14px; color: var(--on2); display: flex; gap: 10px; align-items: baseline; }
+.vmx .res-cap b { color: var(--on); font-weight: 600; flex: 1; min-width: 0; word-break: break-word; }
+
+/* 音频播放器 */
+.vmx .player { display: flex; align-items: center; gap: 15px; padding: 6px 0 2px; }
+.vmx .pl-btn {
+  flex: none;
+  width: 70px; height: 70px; border-radius: 50%;
+  background: var(--acc); color: var(--onacc);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .16s, border-radius .25s;
+}
+.vmx .pl-btn:active { transform: scale(.92); }
+.vmx .pl-btn.playing { border-radius: 24px; }
+.vmx .pl-btn svg { width: 28px; height: 28px; }
+.vmx .pl-btn:not(.playing) svg { margin-left: 4px; }
+.vmx .pl-track-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.vmx .pl-track { height: 13px; border-radius: 999px; background: var(--bg); overflow: hidden; cursor: pointer; }
+.vmx .pl-fill { height: 100%; width: 0%; border-radius: 999px; background: var(--acc); transition: width .2s linear; }
+.vmx .pl-time { font-size: 12.5px; color: var(--on2); font-variant-numeric: tabular-nums; display: flex; justify-content: space-between; }
+.vmx .player.sm .pl-btn { width: 52px; height: 52px; }
+.vmx .player.sm .pl-btn svg { width: 21px; height: 21px; }
+.vmx .player.sm .pl-track { height: 10px; }
+
+.vmx .wave { display: flex; align-items: center; gap: 4px; height: 48px; padding: 4px 0 8px; }
+.vmx .wave i { flex: 1; border-radius: 999px; background: var(--sur2); transition: background .3s; min-width: 3px; }
+.vmx .wave i.lit { background: var(--acc); }
+
+/* ═══════════ 历史 ═══════════ */
+.vmx .hist-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.vmx .hist-thumb {
+  position: relative;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--sur);
+  cursor: pointer;
+  transition: transform .18s;
+  aspect-ratio: 16 / 10;
+}
+.vmx .hist-thumb:active { transform: scale(.955); }
+.vmx .hist-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.vmx .hist-play {
+  position: absolute; inset: 0; margin: auto;
+  width: 44px; height: 44px; border-radius: 50%;
+  background: rgba(255, 255, 255, .92); color: var(--acc);
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+.vmx .hist-play svg { width: 19px; height: 19px; margin-left: 2px; }
+.vmx .hist-x {
+  position: absolute; top: 8px; right: 8px;
+  width: 29px; height: 29px; border-radius: 50%;
+  background: rgba(0, 0, 0, .52); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.vmx .hist-x svg { width: 14px; height: 14px; }
+.vmx .hist-count {
+  position: absolute; left: 10px; bottom: 8px;
+  height: 27px; padding: 0 11px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .52); color: #fff;
+  font-size: 12px; font-weight: 600;
+  display: flex; align-items: center; gap: 5px;
+}
+.vmx .hist-count svg { width: 13px; height: 13px; }
+.vmx .hist-card {
+  background: var(--sur);
+  border-radius: var(--r-md);
+  padding: 15px 17px 13px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.vmx .hist-card-tt { display: flex; align-items: flex-start; gap: 10px; font-size: 14.5px; }
+.vmx .hist-card-tt b { flex: 1; min-width: 0; font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+.vmx .hist-card-tt .hist-x { position: static; flex: none; background: var(--sur2); color: var(--on2); }
+.vmx .hist-meta { font-size: 12px; color: var(--on2); }
+.vmx .hist-list { display: flex; flex-direction: column; gap: 10px; }
+
+/* ═══════════ 图片对话流 ═══════════ */
+.vmx .chat-list { display: flex; flex-direction: column; gap: 14px; }
+.vmx .chat-user { display: flex; justify-content: flex-end; }
+.vmx .chat-user-in {
+  max-width: 82%;
+  background: var(--cont); color: var(--oncont);
+  border-radius: 26px 26px 8px 26px;
+  padding: 12px 17px;
+  font-size: 15px; line-height: 1.5;
+  word-break: break-word; white-space: pre-wrap;
+}
+.vmx .chat-src { width: 62px; height: 62px; border-radius: 14px; object-fit: cover; margin-bottom: 8px; }
+.vmx .chat-img {
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  cursor: zoom-in;
+  animation: vmxin .5s cubic-bezier(.16, 1, .3, 1);
+  background: var(--sur);
+}
+.vmx .chat-img img { width: 100%; height: auto; min-height: 100px; }
+
+.vmx .psum {
+  flex: none; height: 46px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 17px;
+  border-radius: 999px;
+  background: var(--sur); color: var(--on);
+  font-size: 14px; font-weight: 600;
+  transition: transform .15s;
+}
+.vmx .psum:active { transform: scale(.94); }
+.vmx .psum .ic svg { width: 18px; height: 18px; }
+.vmx .psum.lead { background: var(--acc); color: var(--onacc); }
+
+/* 输入岛（四模块共用，NeoDock）：参数 chips 行 + 素材条 + 「＋ / 输入 / 发送」 + 提示行 */
+.vmx .dock-chips { display: flex; gap: 8px; overflow-x: auto; padding: 0 2px 10px; scrollbar-width: none; }
+.vmx .dock-chips::-webkit-scrollbar { display: none; }
+.vmx .psum.on { background: var(--cont); color: var(--oncont); }
+.vmx .psum .shp { display: inline-block; border: 2.2px solid currentColor; border-radius: 3.5px; flex: none; transform: scale(.82); }
+.vmx .psum small { font-size: 12px; font-weight: 500; color: var(--on2); }
+.vmx .psum-ava {
+  flex: none; width: 28px; height: 28px; margin-left: -9px; border-radius: 50%;
+  background: var(--cont); color: var(--oncont);
+  display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700;
+}
+.vmx .dock-hint {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 14px 0; font-size: 13px; font-weight: 500; color: var(--err);
+}
+.vmx .dock-hint .ic svg { width: 16px; height: 16px; }
+.vmx .dock-field.tall { max-height: 42vh; }
+.vmx .dock-att .att-lab {
+  position: absolute; left: 4px; bottom: 4px; z-index: 1;
+  padding: 1px 6px; border-radius: 7px;
+  background: rgba(0, 0, 0, .6); color: #fff;
+  font-size: 10.5px; font-weight: 600; line-height: 1.5;
+}
+.vmx .dock-att.ghost {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg); color: var(--on2);
+  border: 1.5px dashed color-mix(in srgb, var(--on3) 60%, transparent);
+}
+.vmx .dock-att.ghost .att-lab { background: none; color: var(--on2); left: 0; right: 0; text-align: center; }
+.vmx .dock-att.ghost .ic { margin-top: -10px; }
+.vmx .dock-att.ghost .ic svg { width: 20px; height: 20px; }
+.vmx .att-swap {
+  flex: none; align-self: center;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--bg); color: var(--on2);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .3s;
+}
+.vmx .att-swap:active { transform: rotate(180deg) scale(.92); }
+.vmx .att-swap svg { width: 18px; height: 18px; }
+.vmx .att-mode {
+  align-self: center; margin-left: auto; flex: none;
+  padding: 5px 11px; border-radius: 999px;
+  background: var(--cont); color: var(--oncont);
+  font-size: 12px; font-weight: 600;
+}
+.vmx .dock-in {
+  background: var(--sur);
+  border-radius: 32px;
+  padding: 9px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.vmx .dock-atts { display: flex; gap: 8px; padding: 4px 6px 0; align-items: center; }
+.vmx .dock-att { position: relative; width: 60px; height: 60px; border-radius: 17px; overflow: hidden; flex: none; background: var(--sur2); }
+.vmx .dock-att img { width: 100%; height: 100%; object-fit: cover; }
+.vmx .dock-att.pending img { opacity: .45; }
+.vmx .dock-att .slot-x { top: 4px; right: 4px; width: 21px; height: 21px; }
+.vmx .dock-row { display: flex; align-items: flex-end; gap: 8px; }
+.vmx .dock-plus {
+  flex: none;
+  width: 54px; height: 54px; border-radius: 50%;
+  background: var(--bg); color: var(--on);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .15s;
+}
+.vmx .dock-plus:active { transform: scale(.9); }
+.vmx .dock-field {
+  flex: 1; min-width: 0;
+  min-height: 54px; max-height: 30vh;
+  overflow-y: auto;
+  outline: none;
+  padding: 14px 8px;
+  font-size: 16px; line-height: 1.45;
+  word-break: break-word;
+}
+.vmx .dock-field:empty::before { content: attr(data-ph); color: var(--on3); }
+.vmx .dock-send {
+  flex: none;
+  width: 54px; height: 54px; border-radius: 50%;
+  background: var(--acc); color: var(--onacc);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .15s, border-radius .2s;
+}
+.vmx .dock-send:active { transform: scale(.9); }
+.vmx .dock-send:disabled { background: var(--sur2); color: var(--on3); }
+.vmx .dock-send.busy { border-radius: 17px; }
+
+/* ═══════════ 语音音色 ═══════════ */
+.vmx .voice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.vmx .voice-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 13px;
+  border-radius: var(--r-md);
+  background: var(--sur); color: var(--on);
+  text-align: left;
+  transition: background .22s, color .22s, border-radius .25s, transform .15s;
+}
+.vmx .voice-card:active { transform: scale(.96); }
+.vmx .voice-card.on { background: var(--acc); color: var(--onacc); border-radius: 18px; }
+.vmx .voice-ava {
+  flex: none;
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--cont); color: var(--oncont);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 700;
+  transition: background .22s, color .22s;
+}
+.vmx .voice-card.on .voice-ava { background: color-mix(in srgb, var(--onacc) 20%, transparent); color: var(--onacc); }
+.vmx .voice-tx { min-width: 0; }
+.vmx .voice-tx b { display: block; font-size: 15.5px; font-weight: 700; }
+.vmx .voice-tx small { font-size: 12px; opacity: .72; font-weight: 500; }
+
+/* ═══════════ sheet（模型/来源/参数/工作空间）═══════════ */
+.vmx .sh-mask {
+  position: fixed; inset: 0; z-index: 74;
+  background: var(--scrim);
+  display: flex; align-items: flex-end; justify-content: center;
+  animation: vmxfade .22s ease;
+}
+@keyframes vmxfade { from { opacity: 0; } to { opacity: 1; } }
+.vmx .sh-card {
+  width: 100%; max-width: 640px;
+  max-height: 86dvh;
+  background: var(--bg);
+  border-radius: 36px 36px 0 0;
+  padding: 10px 18px calc(20px + var(--sab, 0px));
+  display: flex; flex-direction: column;
+  animation: vmxup .34s cubic-bezier(.2, .9, .25, 1);
+  overflow: hidden;
+}
+@keyframes vmxup { from { transform: translateY(100%); } to { transform: none; } }
+.vmx .sh-grab { flex: none; width: 44px; height: 5px; border-radius: 3px; background: var(--sur2); margin: 6px auto 10px; }
+.vmx .sh-tt { flex: none; font-size: 21px; font-weight: 700; padding: 8px 8px 13px; letter-spacing: .5px; display: flex; align-items: center; }
+.vmx .sh-tt small { font-size: 12.5px; color: var(--on2); font-weight: 500; margin-left: auto; }
+.vmx .sh-body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; display: flex; flex-direction: column; gap: 8px; padding-bottom: 6px; }
+
+.vmx .sh-opt {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 15px;
+  border-radius: var(--r-md);
+  background: var(--sur); color: var(--on);
+  text-align: left;
+  transition: background .2s, color .2s, transform .13s, border-radius .22s;
+}
+.vmx .sh-opt:active { transform: scale(.97); }
+.vmx .sh-opt.on { background: var(--acc); color: var(--onacc); border-radius: 18px; }
+.vmx .sh-opt:disabled { opacity: .45; cursor: default; }
+.vmx .sh-opt:disabled:active { transform: none; }
+.vmx .role-prev { width: 92px; height: 92px; border-radius: 22px; object-fit: cover; margin: 0 auto 8px; }
+.vmx .sh-opt-ic {
+  flex: none;
+  width: 50px; height: 50px; border-radius: 15px;
+  background: var(--cont); color: var(--oncont);
+  display: flex; align-items: center; justify-content: center;
+}
+.vmx .sh-opt.on .sh-opt-ic { background: color-mix(in srgb, var(--onacc) 18%, transparent); color: var(--onacc); }
+.vmx .sh-opt-ic svg { width: 24px; height: 24px; }
+.vmx .sh-opt-tx { flex: 1; min-width: 0; }
+.vmx .sh-opt-tx b { display: block; font-size: 16px; font-weight: 700; }
+.vmx .sh-opt-tx small { font-size: 12.5px; opacity: .72; font-weight: 500; }
+.vmx .sh-opt-ck { flex: none; width: 28px; height: 28px; opacity: 0; transition: opacity .2s; }
+.vmx .sh-opt.on .sh-opt-ck { opacity: 1; }
+.vmx .sh-opt-ck svg { width: 100%; height: 100%; }
+
+/* 工作空间选择器 */
+.vmx .ws-crumb { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px 12px; overflow-x: auto; white-space: nowrap; font-size: 14px; scrollbar-width: none; }
+.vmx .ws-crumb::-webkit-scrollbar { display: none; }
+.vmx .ws-crumb button { color: var(--acc); font-weight: 600; flex: none; }
+.vmx .ws-crumb .cur { color: var(--on); font-weight: 700; flex: none; }
+.vmx .ws-crumb .sep { color: var(--on3); flex: none; }
+.vmx .ws-folder {
+  display: flex; align-items: center; gap: 13px;
+  padding: 13px 15px;
+  border-radius: var(--r-sm);
+  background: var(--sur); color: var(--on);
+  font-size: 15.5px; font-weight: 600;
+  text-align: left;
+}
+.vmx .ws-folder:active { background: var(--sur2); }
+.vmx .ws-folder .ic:first-child { color: var(--acc); }
+.vmx .ws-folder .ws-fname { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.vmx .ws-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding-top: 4px; }
+.vmx .ws-img { aspect-ratio: 1; border-radius: 18px; overflow: hidden; background: var(--sur); transition: transform .15s; padding: 0; }
+.vmx .ws-img:active { transform: scale(.93); }
+.vmx .ws-img img { width: 100%; height: 100%; object-fit: cover; }
+.vmx .ws-empty { text-align: center; color: var(--on3); padding: 40px 0; font-size: 14px; }
+.vmx .ws-spin { width: 30px; height: 30px; border-radius: 50%; border: 3px solid var(--sur2); border-top-color: var(--acc); animation: vmxspin .8s linear infinite; margin: 40px auto; }
+
+/* 拖拽高亮 */
+.vmx .drop-ov {
+  position: absolute; inset: 10px; z-index: 30;
+  border: 2.5px dashed var(--acc); border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--cont) 72%, transparent);
+  color: var(--oncont);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  font-size: 16px; font-weight: 600;
+  pointer-events: none;
+}
+.vmx .drop-ov small { font-size: 13px; font-weight: 400; opacity: .8; }
+
+/* ═══════════ 桌面 v-dt（≥900：vertex 桌面 chrome，仍纵排）═══════════ */
+@media (min-width: 900px) {
+  .vmx { --hero-r: 40px; }
+  /* 顶部必须自己让开系统状态栏：≥700 就切 v-dt 桌面 chrome、移动版浮动顶栏被隐藏，
+     此前这里把 var(--sat) 一起去掉了 —— 折叠屏展开后标题正好压在状态栏底下。 */
+  .vmx .hero { padding: calc(var(--sat, 0px) + 12px) 28px 18px; padding-right: 130px; }
+  .vmx .studio { max-width: 720px; }
+}
+
+/* ═══════════ studio 横屏排版（≥1080px）═══════════ */
+@media (min-width: 1080px) {
+  .vmx { --hero-r: 0px; }
+  .vmx .hero { padding: calc(var(--sat, 0px) + 10px) 28px 12px; padding-right: 130px; display: flex; align-items: center; gap: 18px; }
+  .vmx .hero .model-pill { display: none; }
+  .vmx .hero-head { gap: 12px; padding: 0; flex: 1; }
+  .vmx .hero-glyph { width: 36px; height: 36px; }
+  .vmx .hero-tt h2 { font-size: 22px; letter-spacing: .5px; display: inline; }
+  .vmx .hero-tt p { display: inline; margin-left: 10px; font-size: 12.5px; }
+
+  .vmx .mod-body { padding: 0; overflow: hidden; }
+  .vmx .studio {
+    max-width: none; margin: 0; gap: 0;
+    height: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 396px;
+    grid-template-rows: minmax(0, 1fr) auto;
+    min-height: 0;
+  }
+  .vmx .st-canvas {
+    grid-area: 1 / 1 / 2 / 2; order: 0;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    padding: 24px 32px 18px;
+    gap: 14px;
+  }
+  .vmx .st-canvas > * { max-width: 780px; width: 100%; margin-left: auto; margin-right: auto; }
+  .vmx .st-composer, .vmx .st-composer.st-sticky {
+    grid-area: 2 / 1 / 3 / 2; order: 0; position: static;
+    margin: 0; background: none;
+    padding: 6px 32px calc(18px + var(--sab, 0px));
+  }
+  .vmx .st-composer .dock { width: 100%; max-width: 780px; margin: 0 auto; }
+  .vmx .dock-chips { display: none; }
+  .vmx .dock-field.tall { max-height: 30vh; }
+  .vmx .st-rail {
+    grid-area: 1 / 2 / 3 / 3; order: 0;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    border-left: 1.5px solid var(--line);
+    padding: 20px 20px calc(24px + var(--sab, 0px));
+  }
+  .vmx .st-rail .sec-tt { padding-top: 10px; }
+
+  .vmx .rail-model {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+    background: var(--cont); color: var(--oncont);
+    border-radius: var(--r-md);
+    padding: 15px 17px;
+    text-align: left;
+    transition: transform .15s;
+    position: relative;
+  }
+  .vmx .rail-model:active { transform: scale(.98); }
+  .vmx .rail-model b { font-size: 18px; font-weight: 700; }
+  .vmx .rail-model small { font-size: 11.5px; opacity: .66; font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
+  .vmx .rail-model p { font-size: 12.5px; opacity: .85; line-height: 1.45; margin: 4px 0 0; }
+  .vmx .rail-model .rm-chev { position: absolute; top: 13px; right: 12px; opacity: .7; }
+  .vmx .rail-model .rm-chev svg { width: 20px; height: 20px; }
+
+  .vmx .studio .st-rail { display: flex; }
+  .vmx .studio .dock { padding: 0; }
+
+  .vmx .empty-hero { padding: 10vh 20px 36px; }
+  .vmx .hist-grid { grid-template-columns: repeat(3, 1fr); }
+
+  .vmx .sh-mask { align-items: center; padding: 26px; }
+  .vmx .sh-card { border-radius: 34px; max-width: 540px; max-height: 82vh; padding: 8px 18px 20px; animation: vmxpop .3s cubic-bezier(.2, .9, .3, 1.1); }
+  @keyframes vmxpop { from { transform: scale(.92); opacity: 0; } to { transform: none; opacity: 1; } }
+  .vmx .sh-grab { display: none; }
+}
+
+/* ═══════════ 入场 / 离场编排 ═══════════
+   进入模块（Gemini 对话 → 四媒体模块，或四模块互切、进页挂载）时：
+   hero 彩色卡片从屏顶整体推下，卡内 glyph/标题/模型 pill 跟进弹入；
+   正文三区（rail/composer/canvas）自下方按区错峰浮起，区内子块再各错 70ms。
+   模块互切由 VertexPage 编排：先给 .v-stage 挂 .v-leaving（旧页 hero 缩回顶部、
+   正文下沉淡出 190ms），再换 vs.func 重挂新面板重播入场。
+   设置「禁用系统转场动画」(.v-noanim) 与系统减动效偏好整段跳过。 */
+@media (prefers-reduced-motion: no-preference) {
+  /* —— hero 卡片自顶推下 + 卡内跟进 —— */
+  .vmx .hero { animation: vmxHeroDown .6s var(--vmx-eo) backwards; }
+  .vmx .hero-glyph { animation: vmxGlyphIn .55s var(--vmx-spring) .14s backwards; }
+  .vmx .hero-tt h2 { animation: vmxRise .5s var(--vmx-eo) .2s backwards; }
+  .vmx .hero-tt p { animation: vmxRise .5s var(--vmx-eo) .27s backwards; }
+  .vmx .hero .model-pill { animation: vmxPillIn .45s var(--vmx-spring) .32s backwards; }
+
+  /* —— 正文三区错峰浮起（--vd 区基准 + --vd2 区内子块递进）—— */
+  .vmx :is(.st-rail, .st-composer, .st-canvas) > * {
+    animation: vmxRise .55s var(--vmx-eo) backwards;
+    animation-delay: calc(var(--vd, .16s) + var(--vd2, 0s));
+  }
+  /* 视觉序：画布在上先起、输入岛收尾；桌面右栏跟画布同拍 */
+  .vmx .st-canvas > * { --vd: .18s; }
+  .vmx .st-rail > * { --vd: .24s; }
+  .vmx .st-composer > * { --vd: .42s; }
+  .vmx :is(.st-rail, .st-composer, .st-canvas) > :nth-child(2) { --vd2: .07s; }
+  .vmx :is(.st-rail, .st-composer, .st-canvas) > :nth-child(3) { --vd2: .14s; }
+  .vmx :is(.st-rail, .st-composer, .st-canvas) > :nth-child(4) { --vd2: .21s; }
+  .vmx :is(.st-rail, .st-composer, .st-canvas) > :nth-child(n + 5) { --vd2: .28s; }
+
+  /* 参数摘要 chips：横向依次滑入（叠加所在行的上浮 → 微斜入场） */
+  .vmx .psum { animation: vmxChip .45s var(--vmx-eo) backwards; }
+  .vmx .psum:nth-child(1) { animation-delay: .22s; }
+  .vmx .psum:nth-child(2) { animation-delay: .27s; }
+  .vmx .psum:nth-child(3) { animation-delay: .32s; }
+  .vmx .psum:nth-child(4) { animation-delay: .37s; }
+  .vmx .psum:nth-child(5) { animation-delay: .42s; }
+  .vmx .psum:nth-child(n + 6) { animation-delay: .47s; }
+
+  /* 空态大 glyph 弹性登场；灵感 chips 同 psum 节奏 */
+  .vmx .empty-glyph { animation: vmxGlyphIn .6s var(--vmx-spring) .32s backwards; }
+  .vmx .idea { animation: vmxChip .45s var(--vmx-eo) backwards; }
+  .vmx .idea:nth-child(1) { animation-delay: .3s; }
+  .vmx .idea:nth-child(2) { animation-delay: .35s; }
+  .vmx .idea:nth-child(3) { animation-delay: .4s; }
+  .vmx .idea:nth-child(4) { animation-delay: .45s; }
+  .vmx .idea:nth-child(n + 5) { animation-delay: .5s; }
+
+  /* 历史缩略图网格：错峰浮起 */
+  .vmx .hist-thumb { animation: vmxThumb .5s var(--vmx-eo) backwards; }
+  .vmx .hist-thumb:nth-child(1) { animation-delay: .3s; }
+  .vmx .hist-thumb:nth-child(2) { animation-delay: .36s; }
+  .vmx .hist-thumb:nth-child(3) { animation-delay: .42s; }
+  .vmx .hist-thumb:nth-child(4) { animation-delay: .48s; }
+  .vmx .hist-thumb:nth-child(5) { animation-delay: .54s; }
+  .vmx .hist-thumb:nth-child(6) { animation-delay: .6s; }
+  .vmx .hist-thumb:nth-child(n + 7) { animation-delay: .66s; }
+
+  /* 生成中卡片即时浮现（busy 出现在会话中，不吃入场 stagger）；
+     错误卡浮现后轻微横向抖动提示。二者是状态反馈，不受 .v-noanim 关闭。 */
+  .vmx .busy-hero { animation: vmxRise .45s var(--vmx-eo); }
+  .vmx .err-card { animation: vmxRise .4s var(--vmx-eo), vmxShake .5s ease .3s; }
+
+  /* —— 模块互切离场（.v-leaving 由 VertexPage 挂在 .v-stage 上）—— */
+  .v-leaving .vmx .hero { animation: vmxHeroUp .2s cubic-bezier(.4, 0, 1, 1) forwards; }
+  .v-leaving .vmx .mod-body { animation: vmxBodyOut .2s ease forwards; }
+}
+@keyframes vmxHeroDown { from { transform: translateY(-103%); } }
+@keyframes vmxHeroUp { to { transform: translateY(-103%); } }
+@keyframes vmxBodyOut { to { opacity: 0; transform: translateY(18px); } }
+@keyframes vmxRise { from { opacity: 0; transform: translateY(22px); } }
+@keyframes vmxGlyphIn {
+  0% { opacity: 0; transform: scale(.5) rotate(-8deg); }
+  62% { opacity: 1; transform: scale(1.06) rotate(1.5deg); }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes vmxPillIn { from { opacity: 0; transform: scale(.82); } }
+@keyframes vmxChip { from { opacity: 0; transform: translateX(-16px); } }
+@keyframes vmxThumb { from { opacity: 0; transform: translateY(16px) scale(.94); } }
+@keyframes vmxShake {
+  0%, 100% { transform: none; }
+  20% { transform: translateX(-3px); }
+  40% { transform: translateX(3px); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(2px); }
+}
+
+/* 「禁用系统转场动画」：入场编排整段跳过（busy/err 属状态反馈，保留） */
+.v-noanim .vmx :is(.hero, .hero-glyph, .hero-tt h2, .hero-tt p, .model-pill, .psum, .idea, .hist-thumb, .empty-glyph),
+.v-noanim .vmx :is(.st-rail, .st-composer, .st-canvas) > * { animation: none; }
+
+/* ═══════════ 桌面指针悬停微动效（触屏无 hover，不受影响）═══════════ */
+@media (hover: hover) and (pointer: fine) {
+  .vmx .hist-thumb { transition: transform .22s var(--vmx-eo), box-shadow .22s; }
+  .vmx .hist-thumb:hover { transform: translateY(-3px) scale(1.02); box-shadow: 0 10px 26px rgba(0, 0, 0, .16); }
+  .vmx .model-pill:hover { background: color-mix(in srgb, var(--oncont) 16%, transparent); }
+  .vmx .seg-b:not(.on):hover, .vmx .psum:not(.lead):hover, .vmx .idea:hover,
+  .vmx .tgl:not(.on):hover, .vmx .sh-opt:not(.on):hover, .vmx .voice-card:not(.on):hover,
+  .vmx .dock-plus:hover, .vmx .att-swap:hover { background: var(--sur2); }
+  .vmx .dock-send:not(:disabled):hover { transform: scale(1.07); }
+  .vmx .slot-x:hover, .vmx .hist-x:hover { background: rgba(0, 0, 0, .78); }
+  .vmx .rail-model:hover { transform: scale(1.012); }
+}

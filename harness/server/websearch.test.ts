@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setConfig } from "./config.ts";
 import { Sandbox } from "./sandbox.ts";
-import { webSearchTool, pickChain, webSearchAvailable } from "./tools/websearch.ts";
+import { webSearchTool, pickChain, webSearchAvailable, DEFAULT_ORDER } from "./tools/websearch.ts";
 import { resetNativeSearchState } from "./tools/websearch-backends.ts";
 import type { ToolContext } from "./tools/types.ts";
 
@@ -92,6 +92,29 @@ test.before(() => {
 test("默认链：国内直连的 zhipu 排第一，gemini 次之", () => {
   assert.deepEqual(pickChain().map((b) => b.id), ["zhipu", "gemini"]);
   assert.equal(webSearchAvailable(), true);
+});
+
+test("无原生搜索偏好的会话（本机 local）走默认链：小米 → 智谱 → Kimi 打头", () => {
+  // local 不在 NATIVE_BY_PROVIDER 里：它的会话没有「先搜自己家」的偏好，
+  // 落回 DEFAULT_ORDER。本机只注入了 zhipu / gemini 两把假 key，链里只剩这两档，
+  // 但相对顺序必须跟 DEFAULT_ORDER 一致——钉住维护者 2026-10-04 定的小米→智谱→Kimi 打头。
+  assert.deepEqual(DEFAULT_ORDER, ["mimo", "zhipu", "kimi", "deepseek", "qwen", "gemini", "anthropic", "ddg"]);
+  const chain = pickChain("local").map((b) => b.id);
+  assert.deepEqual(chain, ["zhipu", "gemini"]);
+  // zhipu 必须排在 gemini 前面（DEFAULT_ORDER 里 zhipu 的位置 < gemini）
+  assert.ok(
+    DEFAULT_ORDER.indexOf("zhipu") < DEFAULT_ORDER.indexOf("gemini"),
+    "zhipu 应在 gemini 之前",
+  );
+  // 每家可用后端的位置都要跟 DEFAULT_ORDER 一致
+  for (let i = 0; i < chain.length; i++) {
+    for (let j = i + 1; j < chain.length; j++) {
+      assert.ok(
+        DEFAULT_ORDER.indexOf(chain[i]) < DEFAULT_ORDER.indexOf(chain[j]),
+        `${chain[i]} 应排在 ${chain[j]} 前（跟 DEFAULT_ORDER 一致）`,
+      );
+    }
+  }
 });
 
 test("zhipu 命中即收手，不碰 gemini；结果标明后端", async () => {

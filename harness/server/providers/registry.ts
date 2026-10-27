@@ -44,10 +44,11 @@ function createProviderAdapter(cfg: AdapterConfig): ProviderAdapter {
     case "zhipu":
     case "kimi":
     case "mimo":
+    case "local":
       // All speak the OpenAI Chat Completions wire format; the adapter branches
       // on cfg.provider for the few provider-specific bits (Qwen's enable_thinking,
       // Zhipu's thinking:{type} + reasoning_effort, Kimi's permanent thinking +
-      // reasoning_content replay).
+      // reasoning_content replay, local llama.cpp's chat_template_kwargs).
       return createOpenAIAdapter(cfg);
     default:
       throw new Error(`Unknown provider: ${(cfg as AdapterConfig).provider}`);

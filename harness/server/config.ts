@@ -71,6 +71,11 @@ const envKeys: Partial<Record<ProviderId, string>> = {
   // Google Gemini via AI-Studio (generativelanguage) — a plain AIza… API key
   // sent as x-goog-api-key (no ADC/Vertex OAuth).
   gemini: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || undefined,
+  // 本机 llama.cpp 默认不鉴权（llama-server 不带 --api-key 时直接忽略
+  // Authorization 头），但 session.ts 有「无 key 就 throw」的硬闸，所以这里给个
+  // 占位值让本机这家永远算「已配」——它本来就不需要配。真给 llama-server 开了
+  // --api-key 时用 LOCAL_API_KEY 覆盖，或在设置面板里填。
+  local: process.env.LOCAL_API_KEY || "local",
 };
 const overrideKeys: Partial<Record<ProviderId, string>> = {};
 
@@ -119,6 +124,11 @@ function providerDefaults(p: ProviderId): { model: string; baseUrl?: string } {
         model: process.env.GEMINI_MODEL || catalogDefaultModel("gemini"),
         baseUrl: process.env.GEMINI_BASE_URL || providerBaseUrl("gemini"),
       };
+    case "local":
+      return {
+        model: process.env.LOCAL_MODEL || catalogDefaultModel("local"),
+        baseUrl: process.env.LOCAL_BASE_URL || providerBaseUrl("local"),
+      };
     case "openai":
     default:
       return {
@@ -161,13 +171,13 @@ interface SavedConfig {
   permissionRules?: PermissionRules;
   access?: SandboxAccess;
   fast?: boolean;
-  // 每家上次用的型号 / 深度（切回这家时继承，以前一切换到 Claude 就回到 Sonnet 4.6）
+  // 每家上次用的型号 / 深度（切回这家时继承，维护者 10-11：「一切换 claude 就默认 sonnet4.6」）
   models?: ModelPrefs;
 }
 
 type ModelPrefs = Record<string, { model: string; thinking: ThinkingLevel }>;
 
-// 新会话默认的访问范围：整机（09-26 的产品决定）；SANDBOX_ACCESS=workspace 才默认只给工作空间。
+// 新会话默认的访问范围：整机（维护者 09-26：「选择整机可访问设置应该变成默认」）；SANDBOX_ACCESS=workspace 才默认只给工作空间。
 // 用户在档位菜单 / 设置页选过的会记进 runtime-config.json，重启后照旧（以前不落盘，harness 一重启就回到仅工作空间）。
 export function defaultAccess(): SandboxAccess {
   // 访问范围锁（租户模式恒 workspace，见 tenant.ts）压过一切：环境默认、上次存的选择都不算。
@@ -305,22 +315,19 @@ export function getConfig(): RuntimeConfig {
   return { ...config };
 }
 
-export function hasKey(provider: ProviderId): boolean {
-  return Boolean(resolveKey(provider));
-}
-
-// 这家 provider 在服务端配置下的默认地址（环境变量覆盖优先，其次目录）。
+// 这家 provider 服务端配置的接口地址（环境变量覆盖优先）；联网搜索的原生后端据此找同一个接口域名。
 export function defaultBaseUrl(provider: ProviderId): string | undefined {
   return providerDefaults(provider).baseUrl;
 }
 
-// ── 共享凭据不外带（租户模式）───────────────────────────────────────────────────
-// 多用户服务端上，租户实例的 envKeys 是服务端的共享 key。租户若能随意改 baseUrl，adapter 就会把共享 key 发到他指定的
-// 任意地址。所以租户模式下：只有这家 provider 用的是租户自己填的 key（overrideKeys），才认他给的 baseUrl；否则地址
-// 一律是服务端配置的默认地址。配置接口（resolveConfig）当场拒，建 adapter 时（session.ts）再按这里兜一遍——
-// 落盘的会话配置、之前写进全局配置的地址都绕不过去。
+// ── 共享凭据不外带（租户模式；移植自 Muse Bridge）────────────────────────────────
+// 多用户服务端上，租户实例共用管理员那份厂商 key（modules/dimensio 的 tenantEnv）。租户若能随意改 baseUrl，adapter 就会
+// 把共享 key 发到他指定的任意地址。所以租户模式下：只有这家 provider 用的是租户自己的 key（这次填的 / 自己存下的 /
+// 他自己建的自定义服务），才认他给的 baseUrl；否则地址一律是服务端配置的默认地址。配置接口（resolveConfig）当场拒，
+// 建 adapter 时（session.ts，子 agent 跟着会话走）再按 effectiveBaseUrl 兜一遍——落盘的会话配置、之前写进全局配置的地址都绕不过去。
 function usesOwnKey(provider: ProviderId): boolean {
-  return Boolean(overrideKeys[provider]);
+  if (isCustomProviderId(provider)) return Boolean(customProviderKey(provider));
+  return Boolean(overrideKeys[provider] || savedBuiltinProviderKey(provider));
 }
 
 export function effectiveBaseUrl(provider: ProviderId, requested: string | undefined): string | undefined {
@@ -329,6 +336,10 @@ export function effectiveBaseUrl(provider: ProviderId, requested: string | undef
 }
 
 const trimUrl = (u: unknown): string => String(u ?? "").trim().replace(/\/+$/, "");
+
+export function hasKey(provider: ProviderId): boolean {
+  return Boolean(resolveKey(provider));
+}
 
 export interface ConfigPatch extends Partial<RuntimeConfig> {
   apiKey?: string;
@@ -398,7 +409,7 @@ export function resolveConfig(base: RuntimeConfig, patch: Omit<ConfigPatch, "api
     const d = providerDefaults(next.provider);
     if (patch.baseUrl === undefined) next.baseUrl = d.baseUrl;
     if (patch.model === undefined) {
-      // 这家上次用的型号 / 深度优先（常用 Opus 5.5 就该默认 Opus 5.5），没用过才是厂商默认
+      // 这家上次用的型号 / 深度优先（维护者 10-11：常用 Opus 5.5 就该默认 Opus 5.5），没用过才是厂商默认
       const pref = preferredModel(next.provider);
       next.model = pref?.model ?? d.model;
       if (patch.thinking === undefined) {

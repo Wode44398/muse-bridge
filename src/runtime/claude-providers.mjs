@@ -1,4 +1,4 @@
-// Claude 分页「自定义 API」——模型服务注册表（2026-10-21：给 Claude 接自定义 API，各种调用参数都能调）。
+// Claude 分页「自定义 API」——模型服务注册表（2026-10-21，维护者：给 Claude 接自定义 API，各种调用参数都能调）。
 //
 // 一个「模型服务」= 一个兼容 Anthropic Messages 或 OpenAI Chat Completions 的端点 + 一组模型 + 默认调用参数。
 // Claude Code（SDK 里的 CLI）照常跑，只是模型请求经本机代理（claude-providers-proxy.mjs）转到这个端点：
@@ -23,17 +23,42 @@
 // 存储（数据根下，已 gitignore）：
 //   claude-providers/providers.json   配置（不含密钥）：{ rev, providers:[…] }
 //   claude-providers/connector-secrets.*  API Key，AES-256-GCM + DPAPI（复用 extension-secrets.mjs）
-// 只给主机管理员：替别人连任意地址 = SSRF，密钥也是主机的。
+//
+// 按身份分开（2026-10-27，维护者：普通用户自带 Key）：主机管理员一份（上面两个文件），每个成员一份，
+// 放在 claude-providers/users/<账号>/ 下（主机数据根里，不在成员自己的工作空间——他的 Claude 读写不到）。
+// 成员的服务只许连公网（替他连任意地址 = SSRF，见 public-net.mjs），最多 10 个，没有「本机模型」预设。
+// 内存里的服务对象带 owner（owner 键：'admin' / 'u:<账号>'），落盘与给前端时去掉。
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { readJson, writeJson } from '../jsonfile.mjs';
-import { ROOT } from '../config/index.mjs';
+import { ROOT, config as bootConfig } from '../config/index.mjs';
 import { readSecrets, writeSecrets } from '../extension-secrets.mjs';
+import { HOST_OWNER, parseOwnerKey } from './principal.mjs';
 // 型号知识（已知型号表、思考模板、档位 ID 规则）和 dimensio 的自定义服务共用：src/model-knowledge/
 import { guessKind, tableEntry, thinkingTemplate, fixKnownBaseUrl, TIER_ID_RE, MAX_TIERS, OFF_TIER_IDS } from '../model-knowledge/knowledge.mjs';
 
 export const PROVIDERS_DIR = path.join(ROOT, 'claude-providers');
-const FILE = path.join(PROVIDERS_DIR, 'providers.json');
+export { HOST_OWNER };
+export const MEMBER_MAX_PROVIDERS = 10;
+
+/** 这个身份能不能用 / 管自定义 API，能的话回它的 owner 键（快照、分享、没开 Claude 的成员回 null）。 */
+export function customOwner(ctx) {
+  if (!ctx || ctx.snap) return null;
+  if (ctx.kind === 'admin') return HOST_OWNER;
+  if (ctx.kind === 'user' && ctx.key && ctx.allowClaude !== false) return ctx.key;
+  return null;
+}
+export const isMemberOwner = (owner) => !!owner && owner !== HOST_OWNER;
+const ownerOf = (owner) => owner || HOST_OWNER;
+// 成员的目录名：账号 id 本身（安全字符时），否则取哈希
+function dirOf(owner) {
+  owner = ownerOf(owner);
+  if (owner === HOST_OWNER) return PROVIDERS_DIR;
+  const p = parseOwnerKey(owner);
+  if (!p || p.kind !== 'user' || !p.id) throw new Error('自定义 API 只认主机管理员与成员账号');
+  const id = /^[A-Za-z0-9_-]{1,64}$/.test(p.id) ? p.id : 'h-' + createHash('sha256').update(p.id).digest('hex').slice(0, 24);
+  return path.join(PROVIDERS_DIR, 'users', id);
+}
 
 export const PROTOCOLS = ['anthropic', 'openai'];
 export const AUTH_STYLES = ['x-api-key', 'bearer', 'none'];
@@ -252,6 +277,16 @@ function normalizeModel(m, i, protocol) {
   };
 }
 
+// 模型服务强制走出站代理（2026-10-27，Muse 同步第 23 条）：只能经出站代理访问外网的部署（Muse Bridge 的 VM）声明
+//   环境变量 BRIDGE_PROXY_FORCED=1（其余非空值 = 不强制，可用来压掉 config），其次 config.json 的 "proxyForced": true。
+// 声明了：保存一律 useProxy:true（normalizeProvider）；发请求时也不认存档里早先的 false（claude-providers-proxy.mjs）；
+// GET /api/claude/providers 带 proxyForced:true，编辑器据此不摆「走出站代理」开关。走代理时照旧尊重 NO_PROXY（net-proxy.mjs）。
+export function providerProxyForced({ env = process.env, cfg = bootConfig } = {}) {
+  const v = String(env.BRIDGE_PROXY_FORCED ?? '').trim().toLowerCase();
+  if (v) return ['1', 'true', 'on', 'yes'].includes(v);
+  return !!(cfg && cfg.proxyForced === true);
+}
+
 const COMPAT_DEFAULTS = { promptCaching: false, stripBetas: true, slimBody: true, stripThinkingHistory: false, replayReasoning: false, maxTokensField: 'max_tokens', useProxy: true };
 
 export function normalizeProvider(input, prev = null) {
@@ -289,7 +324,7 @@ export function normalizeProvider(input, prev = null) {
       stripThinkingHistory: !!c.stripThinkingHistory,
       replayReasoning: !!c.replayReasoning,
       maxTokensField: oneOf(c.maxTokensField, MAX_TOKENS_FIELDS, 'max_tokens'),
-      useProxy: c.useProxy !== false,
+      useProxy: c.useProxy !== false || providerProxyForced(),
     },
     createdAt: prev?.createdAt || Date.now(),
     updatedAt: Date.now(),
@@ -309,11 +344,13 @@ function dropSpeedExtra(p) {
   return { ...p, params: strip(p.params), models: p.models.map((m) => ({ ...m, params: strip(m.params) })) };
 }
 
-// —— 存储 ——
-let data = null;   // { rev, providers }
-function load() {
-  if (data) return data;
-  const raw = readJson(FILE, {});
+// —— 存储（按 owner 一份）——
+const regs = new Map();   // owner → { rev, providers }
+function load(owner) {
+  owner = ownerOf(owner);
+  const hit = regs.get(owner);
+  if (hit) return hit;
+  const raw = readJson(path.join(dirOf(owner), 'providers.json'), {});
   const list = [];
   for (const p of Array.isArray(raw.providers) ? raw.providers : []) {
     if (!p || !ID_RE.test(String(p.id || ''))) continue;
@@ -322,76 +359,90 @@ function load() {
       const fixed = fixKnownBaseUrl(p.protocol, p.baseUrl);
       if (fixed !== p.baseUrl) console.log(`[claude-providers] ${p.id} baseUrl ${p.baseUrl} → ${fixed}（Anthropic 协议的地址）`);
       const np = normalizeProvider({ ...p, baseUrl: fixed }, p);
-      list.push({ ...(fastCapableProvider(np) ? dropSpeedExtra(np) : np), updatedAt: p.updatedAt || Date.now() });
+      list.push({ ...(fastCapableProvider(np) ? dropSpeedExtra(np) : np), updatedAt: p.updatedAt || Date.now(), owner });
     } catch (e) { console.error('[claude-providers] skip bad provider', p.id, e && e.message); }
   }
-  data = { rev: Number.isFinite(raw.rev) ? raw.rev : 0, providers: list };
-  return data;
+  const d = { rev: Number.isFinite(raw.rev) ? raw.rev : 0, providers: list };
+  regs.set(owner, d);
+  return d;
 }
-function save() { data.rev += 1; writeJson(FILE, data, 2); }
+const withoutOwner = ({ owner, ...p }) => p;
+function save(owner) {
+  const d = load(owner);
+  d.rev += 1;
+  writeJson(path.join(dirOf(owner), 'providers.json'), { rev: d.rev, providers: d.providers.map(withoutOwner) }, 2);
+}
 
 const listeners = new Set();
-/** 注册表变了（代理据此丢掉缓存、在线客户端刷新选择器）。 */
+/** 注册表变了（代理据此丢掉缓存、在线客户端刷新选择器）：fn(owner)。 */
 export function onProvidersChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
-function changed() { for (const fn of listeners) { try { fn(); } catch {} } }
+function changed(owner) { for (const fn of listeners) { try { fn(owner); } catch {} } }
 
-export function providersRev() { return load().rev; }
-export function getProvider(id) { return load().providers.find((p) => p.id === id) || null; }
+/** 已经读进内存的 owner（fast 探测结论变了要推给这些人）。 */
+export const loadedOwners = () => [...regs.keys()];
+export function providersRev(owner) { return load(owner).rev; }
+export function getProvider(id, owner) { return load(owner).providers.find((p) => p.id === id) || null; }
 
 // —— 密钥 ——
-function secrets() {
-  try { return readSecrets(PROVIDERS_DIR); } catch (e) { console.error('[claude-providers] secrets unreadable:', e && e.message); return {}; }
+function secrets(owner) {
+  try { return readSecrets(dirOf(owner)); } catch (e) { console.error('[claude-providers] secrets unreadable:', e && e.message); return {}; }
 }
-export function providerKey(id) { const s = secrets()[id]; return s && typeof s.key === 'string' ? s.key : ''; }
-function setKey(id, key) {
-  const map = { ...secrets() };
+export function providerKey(id, owner) { const s = secrets(owner)[id]; return s && typeof s.key === 'string' ? s.key : ''; }
+function setKey(id, key, owner) {
+  const map = { ...secrets(owner) };
   if (key) map[id] = { key }; else delete map[id];
-  writeSecrets(PROVIDERS_DIR, map);   // 失败就抛——绝不退回明文
+  writeSecrets(dirOf(owner), map);   // 失败就抛——绝不退回明文
 }
 
 /** 给前端的视图：不带完整密钥，只给尾 4 位供辨认。 */
 export function publicProvider(p) {
-  const key = providerKey(p.id);
-  return { ...p, hasKey: !!key, keyTail: key ? key.slice(-4) : '' };
+  const key = providerKey(p.id, p.owner);
+  return { ...withoutOwner(p), hasKey: !!key, keyTail: key ? key.slice(-4) : '' };
 }
-export function listProviders() { return load().providers.map(publicProvider); }
+export function listProviders(owner) { return load(owner).providers.map(publicProvider); }
+/** 这个 owner 能看到的预设（成员没有「本机模型」：只许连公网）。 */
+export const presetsFor = (owner) => (isMemberOwner(owner) ? PRESETS.filter((p) => p.id !== 'local') : PRESETS);
 
-export function createProvider(input) {
-  const d = load();
-  if (d.providers.length >= 30) throw bad('模型服务最多 30 个');
+export function createProvider(input, owner) {
+  owner = ownerOf(owner);
+  const d = load(owner);
+  const max = isMemberOwner(owner) ? MEMBER_MAX_PROVIDERS : 30;
+  if (d.providers.length >= max) throw bad(`模型服务最多 ${max} 个`);
   const id = 'p-' + randomBytes(4).toString('hex');
-  const p = normalizeProvider({ ...input, id });
+  const p = { ...normalizeProvider({ ...input, id }), owner };
   const key = typeof input?.apiKey === 'string' ? input.apiKey.trim() : '';
   if (key.length > 4000) throw bad('API Key 太长');
-  if (key) setKey(id, key);
+  if (key) setKey(id, key, owner);
   d.providers.push(p);
-  save(); changed();
+  save(owner); changed(owner);
   return publicProvider(p);
 }
 
-export function updateProvider(id, patch) {
-  const d = load();
+export function updateProvider(id, patch, owner) {
+  owner = ownerOf(owner);
+  const d = load(owner);
   const i = d.providers.findIndex((p) => p.id === id);
   if (i < 0) throw Object.assign(new Error('没有这个模型服务'), { status: 404 });
-  const next = normalizeProvider({ ...patch, id }, d.providers[i]);
+  const next = { ...normalizeProvider({ ...patch, id }, d.providers[i]), owner };
   // apiKey：字符串 = 换新；空串 = 清掉；不传 = 不动
   if (typeof patch?.apiKey === 'string') {
     const key = patch.apiKey.trim();
     if (key.length > 4000) throw bad('API Key 太长');
-    setKey(id, key);
+    setKey(id, key, owner);
   }
   d.providers[i] = next;
-  save(); changed();
+  save(owner); changed(owner);
   return publicProvider(next);
 }
 
-export function deleteProvider(id) {
-  const d = load();
+export function deleteProvider(id, owner) {
+  owner = ownerOf(owner);
+  const d = load(owner);
   const i = d.providers.findIndex((p) => p.id === id);
   if (i < 0) return false;
   d.providers.splice(i, 1);
-  try { setKey(id, ''); } catch {}
-  save(); changed();
+  try { setKey(id, '', owner); } catch {}
+  save(owner); changed(owner);
   return true;
 }
 
@@ -405,10 +456,11 @@ export function parseCustomModel(s) {
 }
 
 /** 解析成 { provider, model }：服务被删 / 停用、模型被删 / 关掉时回 null（调用方给人话错误）。「显示在模型列表」关着不影响。 */
-export function resolveCustomModel(s) {
+/** owner = 谁的注册表（会话属主的 owner 键；不传 = 主机管理员）。 */
+export function resolveCustomModel(s, owner) {
   const r = parseCustomModel(s);
   if (!r) return null;
-  const provider = getProvider(r.pid);
+  const provider = getProvider(r.pid, owner);
   if (!provider || !provider.enabled) return null;
   const model = provider.models.find((m) => m.id === r.mid && m.enabled);
   return model ? { provider, model } : null;
@@ -421,9 +473,9 @@ export function customTopTier(model) {
 }
 
 /** 这个档位 id 是不是该自定义模型档位表里的（chat 路由校验请求里的 effort 用）。 */
-export function customEffortOk(modelId, e) {
+export function customEffortOk(modelId, e, owner) {
   if (typeof e !== 'string' || !TIER_ID_RE.test(e)) return false;
-  const r = resolveCustomModel(modelId);
+  const r = resolveCustomModel(modelId, owner);
   return !!(r && (r.model.efforts || []).some((t) => t.id === e));
 }
 
@@ -468,9 +520,9 @@ export function customSupportsFast(provider, model) {
  * 模型选择器用的扁平清单：启用的服务里启用的对话模型。服务关了「显示在模型列表」的照样列出、标 hidden——
  * 正在用它的会话芯片要取名字，菜单只在它是当前模型时才露出来。
  */
-export function customModelsView() {
+export function customModelsView(owner) {
   const out = [];
-  for (const p of load().providers) {
+  for (const p of load(owner).providers) {
     if (!p.enabled) continue;
     for (const m of p.models) {
       if (!m.enabled || m.kind !== 'chat') continue;
@@ -491,9 +543,9 @@ export function customModelsView() {
 // —— 子 agent 跨服务调度（设置 › Claude › 对话 › 子 agent 调度偏好）——
 // 动态工作流的 agent({model}) 收任意字符串、CLI 原样写进 body.model，代理据此把这个子 agent 的请求转到对应服务。
 // 给 Claude 看的模型名：全服唯一就用型号 id 本身（好写、不易抄错），重名的用 custom:<服务>:<型号>。
-function chatModels() {
+function chatModels(owner) {
   const out = [];
-  for (const p of load().providers) {
+  for (const p of load(owner).providers) {
     if (!p.enabled) continue;
     for (const m of p.models) if (m.enabled && m.kind === 'chat') out.push({ provider: p, model: m });
   }
@@ -501,17 +553,17 @@ function chatModels() {
 }
 
 /** 按子 agent 写的模型名找 { provider, model }：custom:<服务>:<型号> 精确；裸型号 id 不分大小写、全服只有一个才算。 */
-export function resolveSubagentModel(name) {
+export function resolveSubagentModel(name, owner) {
   if (typeof name !== 'string' || !name) return null;
-  if (isCustomModelId(name)) return resolveCustomModel(name);
+  if (isCustomModelId(name)) return resolveCustomModel(name, owner);
   const n = name.replace(/\[1m\]$/i, '').toLowerCase();
-  const hits = chatModels().filter((x) => x.model.id.toLowerCase() === n);
+  const hits = chatModels(owner).filter((x) => x.model.id.toLowerCase() === n);
   return hits.length === 1 ? hits[0] : null;
 }
 
 /** 可派给子 agent 的模型清单（系统提示里列给 Claude）：[{ name, label, provider, contextWindow, vision, efforts }]。 */
-export function subagentModelCatalog() {
-  const all = chatModels();
+export function subagentModelCatalog(owner) {
+  const all = chatModels(owner);
   const count = new Map();
   for (const x of all) { const k = x.model.id.toLowerCase(); count.set(k, (count.get(k) || 0) + 1); }
   return all.map(({ provider: p, model: m }) => ({
@@ -521,4 +573,4 @@ export function subagentModelCatalog() {
   }));
 }
 
-export function _resetProvidersForTests() { data = null; }
+export function _resetProvidersForTests() { regs.clear(); }

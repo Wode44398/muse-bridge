@@ -1,6 +1,7 @@
-// 设置 › Claude › 模型服务（自定义 API）的前端数据面。后端：src/routes/claude-providers.mjs（仅主机管理员）。
+// 设置 › Claude › 模型服务（自定义 API）的前端数据面。后端：src/routes/claude-providers.mjs。
+// 主机管理员与成员各有一份（2026-10-27 起成员自带 Key）：成员的接口地址只许是公网、没有「本机模型」预设（cp.member）。
 // 模型选择器读 cp.models（custom:<服务>:<模型>）；总线 {type:'claude.providers'} 推来就整份替换，
-// 连上总线时的 hello 也带一份（claudeModels，只给管理员）——刷新后芯片不用等打开模型菜单。
+// 连上总线时的 hello 也带一份（claudeModels，各人自己的）——刷新后芯片不用等打开模型菜单。
 //
 // 推理强度（2026-10-21）：自定义模型的档位是它自己的表（设置里按模型配，含「不发」），不再套官方六档。
 //   effortsFor(model)      该模型的档位表（官方模型 = caps.claude.efforts）
@@ -13,7 +14,10 @@ import { me } from './state.svelte.js';
 import { t } from './i18n.js';
 
 export const cp = $state({
-  ok: false,          // 拿到过完整配置（= 当前身份是主机管理员）：设置入口显不显示看它
+  ok: false,          // 拿到过完整配置（= 当前身份能用自定义 API）：设置入口显不显示看它
+  member: false,      // 成员自己的那份（只许公网地址、有个数上限）
+  maxProviders: 0,
+  proxyForced: false, // 部署方强制走出站代理：编辑器不摆「走出站代理」开关（服务端保存时也强制，见 runtime/claude-providers.mjs）
   modelsReady: false, // 模型清单到过（hello / 总线 / 拉取任一）：芯片据此区分「还没到」与「已停用」
   providers: [],
   models: [],         // 选择器用的扁平清单（只有启用的对话模型；hidden = 服务关了「显示在模型列表」）
@@ -26,6 +30,8 @@ function adopt(r) {
   if (Array.isArray(r?.providers)) cp.providers = r.providers;
   if (Array.isArray(r?.models)) { cp.models = r.models; cp.modelsReady = true; }
   if (Array.isArray(r?.presets)) cp.presets = r.presets;
+  if (typeof r?.member === 'boolean') { cp.member = r.member; cp.maxProviders = r.maxProviders || 0; }
+  if (typeof r?.proxyForced === 'boolean') cp.proxyForced = r.proxyForced;   // 只在 GET 里有；总线推送不带，不动
   cp.ok = true;
 }
 
@@ -37,7 +43,8 @@ busOn((ev) => {
 
 const msg = (e) => (e && e.body && (e.body.error || (typeof e.body === 'string' ? e.body : ''))) || (e && e.message) || String(e);
 
-/** 拉一次（非管理员 403 → 静默，cp.ok 保持 false，界面不出入口）。 */
+/** 拉一次（不能用的身份 403 → 静默，cp.ok 保持 false，界面不出入口）。 */
+export const canUseCustomApi = () => me.kind === 'admin' || me.kind === 'user';
 export function loadProviders(force = false) {
   if (loading && !force) return loading;
   loading = api.get('/api/claude/providers')
@@ -46,9 +53,9 @@ export function loadProviders(force = false) {
     .finally(() => { loading = null; });
   return loading;
 }
-/** 模型清单还没到（老服务端的 hello 不带 / 同源跟随页没拿到 hello）：管理员补拉一次。 */
+/** 模型清单还没到（老服务端的 hello 不带 / 同源跟随页没拿到 hello）：补拉一次。 */
 export function ensureCustomModels() {
-  if (cp.modelsReady || loading || me.kind !== 'admin') return;
+  if (cp.modelsReady || loading || !canUseCustomApi()) return;
   loadProviders();
 }
 

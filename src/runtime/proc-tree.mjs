@@ -1,8 +1,8 @@
 // 进程树收尸（Windows）：按创建时间核对父子关系，不用 taskkill /T（实施记录 §4 #77）。
 //
-// taskkill /T 只按 ParentProcessId 找子进程；父进程退出后 PID 会被系统复用。Windows 上 bridge 自己的启动链
+// taskkill /T 只按 ParentProcessId 找子进程；父进程退出后 PID 会被系统复用。正式服 bridge 自己的启动链
 // wscript → cmd → node 里，wscript 的父进程（explorer / powershell 拉起它就走了）早已不存在——谁拿到那个悬空的
-// 父 PID，谁被 taskkill /T，就把整条 bridge 链一起带走（实际发生过一次）。
+// 父 PID，谁被 taskkill /T，就把整条 bridge 链一起带走（2026-09-24 04:05 正式服就这样被硬杀过一次）。
 // 规则：子进程一定比父进程晚创建。先取一次进程表，从根往下只认创建时间不早于父进程的子孙，再逐个结束。
 // 与 harness/server/proc-tree.ts 同一套规则（bridge 不引 harness 的代码，各留一份）。
 

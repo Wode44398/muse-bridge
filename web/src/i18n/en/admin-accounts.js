@@ -126,6 +126,7 @@ export default {
   '这个邀请码已经用过了': 'This invite code has already been used',
   '邀请码无效、已过期或已被使用': 'The invite code is invalid, expired, or already used',
   '缺少 multiUser（true / false）': 'multiUser is missing (true / false)',
+  '「给别人用」由部署方管理，这里改不了：{hint}': 'Sharing with others is managed by the deployment and can’t be changed here: {hint}',
   '读不了 config.json，没有改：{reason}': 'Couldn’t read config.json, so nothing was changed: {reason}',
   '写 config.json 失败：{reason}': 'Couldn’t write config.json: {reason}',
   '账号目录不在用户根下，没有动它': 'The account folder isn’t inside the users folder, so it was left alone',

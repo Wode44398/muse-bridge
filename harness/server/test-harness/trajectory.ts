@@ -213,6 +213,7 @@ export interface LoopStateOptions {
   finalFootnotes?: boolean;
   ctx?: Partial<ToolContext>;
   compactionArchive?: CompactionArchive; // R10（二）：压缩归档（测试给内存版）
+  browser?: boolean; // D5：这台机器有没有浏览器（false = playbook 走无浏览器版）；不给 = 有
 }
 
 // P11：把工作区里的这些文件记成「已经 Read 过」——Edit / Write 的规划阶段会在弹卡之前否决没读过的改动。拿 Edit 当
@@ -251,6 +252,7 @@ export function loopState(t: TestContext, adapter: ProviderAdapter, opts: LoopSt
     memoryAuditRequired: opts.memoryAudit ?? false,
     finalFootnotes: opts.finalFootnotes,
     compactionArchive: opts.compactionArchive,
+    browser: opts.browser,
   });
   if (opts.user) state.addUserMessage(opts.user);
   // Q3：loop 在生产上对请求不变量只计数；测试里收尾核对，违反即失败（含「同一次 run 内 system / tools 被悄悄改了」

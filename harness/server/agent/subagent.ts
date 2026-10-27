@@ -153,6 +153,8 @@ export interface SubAgentEnv {
   // and "allow for this session" appends rules while the run is going.
   parentMode?: () => PermissionMode;
   permissionRules?: () => PermissionRules;
+  // D5：父会话的「这台机器有没有浏览器」（决定子 agent 碰到网页 / 桌面 / 安卓时给哪版 playbook）；不给 = 有
+  parentBrowser?: () => boolean;
   // Session id — tags a coder child's background jobs so stopping the session
   // reaps them too.
   ownerId?: string;
@@ -433,6 +435,7 @@ export function makeSubAgentRunner(
       // This helper cannot write durable memory and intentionally has no
       // Remember/MemoryAudit tools. Do not run the main-agent lifecycle gate.
       memoryAuditRequired: false,
+      browser: env.parentBrowser?.(),
     });
     ctx.completeVerificationAudit = (decision, reason) => state.completeVerificationAudit(decision, reason);
     // O8：子 agent 的用量记进父会话的账本

@@ -47,7 +47,7 @@ const MATRIX: Case[] = [
   ["gemini 超窗", 400, `{"error":{"code":400,"message":"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).","status":"INVALID_ARGUMENT"}}`, {}, "context_overflow"],
   ["gemini 地区限制", 400, `{"error":{"code":400,"message":"User location is not supported for the API use.","status":"FAILED_PRECONDITION"}}`, {}, "egress_blocked"],
   ["gemini 403 没带 key", 403, `{"error":{"code":403,"message":"Method doesn't allow unregistered callers. Please use API Key.","status":"PERMISSION_DENIED"}}`, {}, "auth"],
-  // llama.cpp 兼容服务
+  // 本机 llama.cpp
   ["llama.cpp 超窗", 400, `{"error":{"code":400,"message":"the request exceeds the available context size, try increasing it","type":"exceed_context_size_error"}}`, {}, "context_overflow"],
   // 代理 / CDN / 网关
   ["Cloudflare 403 拦截页", 403, `<html><head><title>Attention Required! | Cloudflare</title></head><body>Sorry, you have been blocked</body></html>`, { "cf-ray": "8c1f2a3b4c5d6e7f-SJC", server: "cloudflare" }, "egress_blocked"],

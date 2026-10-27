@@ -1,11 +1,11 @@
 <script>
-  // Claude 桌面版同款的【工具开关组】：终端 / 审阅 / 文件三颗常驻 + ⋮（任务、明暗），
+  // Claude 桌面版同款的【工具开关组】：终端 / 审阅 / 浏览器三颗常驻 + ⋮（文件、任务、明暗），
   // 分屏格再多一颗 ✕。两处宿主、同一时刻只挂一处：
-  //   · 工作台收着：TopBar 把它挂在这一格右上角；
+  //   · 工作台收着：TopBar 把它挂在这一格右上角（桌面壳 WCO 下坐进标题栏带、和最小化/关闭同一排）；
   //   · 工作台展开：ClaudeDock 把它挂进自己顶上那条带里（docked），就坐在卡片正上方——
   //     位置跟着工作台这一列走，不靠这一格右上角的坐标去「碰巧」对上。
   // 材质：触屏（手机 / 折叠屏 / 平板）用桌面主页 Dock 同款的 Figma 液态玻璃（见样式区 .fg），
-  // `?oldglass` 退回原来的纯毛玻璃；鼠标设备（电脑浏览器）一律扁平实底（.flat）。
+  // `?oldglass` 退回原来的纯毛玻璃；鼠标设备（电脑浏览器、桌面壳）一律扁平实底（.flat）。
   import { toggleTheme, ui, session } from '../../lib/state.svelte.js';
   import { toggleRail, railVisible } from '../../lib/sessionRail.svelte.js';
   import { IS_CSNAP } from '../../lib/csnap.js';
@@ -19,19 +19,19 @@
   const flat = typeof matchMedia !== 'undefined' && !matchMedia('(pointer: coarse)').matches;
   const fg = !flat && (typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass'));
 
-  const BAR = ['term', 'review', 'files'];            // 标题栏常驻三颗，其余收进 ⋮
-  const MORE = ['tasks'];
+  const BAR = ['term', 'review', 'browser'];          // 标题栏常驻三颗（官方同款），其余收进 ⋮
+  const MORE = ['files', 'tasks'];
   const LABEL = Object.fromEntries(DOCK_TOOLS.map((x) => [x.key, x]));
   const barTools = $derived(BAR.filter(dockToolOk));
   const moreTools = $derived(MORE.filter(dockToolOk));
   const isOn = (k) => dock.open && dock.views.includes(k);
-  // agent 动了终端、本轮挂着等后台任务，而对应卡片没开：那颗开关亮呼吸点
+  // agent 动了浏览器 / 终端、本轮挂着等后台任务，而对应卡片没开：那颗开关亮呼吸点
   const bgLive = $derived(!!bgHoldNow());
-  const live = (k) => !isOn(k) && ((k === 'term' && dock.termLive) || (k === 'tasks' && bgLive));
+  const live = (k) => !isOn(k) && ((k === 'browser' && !!dock.browserLive) || (k === 'term' && dock.termLive) || (k === 'tasks' && bgLive));
   const moreLive = $derived(moreTools.some(live));
   const tip = (k) => (LABEL[k].kbd ? t('{label}（{kbd}）', { label: LABEL[k].label, kbd: LABEL[k].kbd }) : LABEL[k].label);
 
-  // 开关组要知道这个身份有没有 shell（终端给不给）——meta 在工作台没开时也得有
+  // 开关组要知道这个身份有没有 shell（终端 / 浏览器给不给）——meta 在工作台没开时也得有
   $effect(() => { if (dock.ws && !dock.meta) ensureDockMeta(); });
 
   let moreOpen = $state(false);
@@ -105,7 +105,9 @@
 
 <style>
   /* 贴宿主右上角。z 压过盖在正文上的工作台（overlay 32）。
-     docked 时工作台子树里 --sat 已归零，改读工作台在自己身上存下的 --dk-sat（见 ClaudeDock）。 */
+     右距：宿主格的右缘；桌面壳下贴着窗口右缘的那一格还要让出系统窗控（--pane-wco-r 由宿主按格下发，
+     没下发就用全局 --wco-right）。docked 时工作台子树里 --sat / --wco-right 已归零，改读工作台在自己
+     身上存下的 --dk-sat / --dk-wco-r（见 ClaudeDock）。 */
   .tbar {
     position: absolute; right: 10px; z-index: 34; height: 36px; border-radius: 12px;
     display: flex; align-items: center; gap: 1px; padding: 0 4px;
@@ -127,7 +129,7 @@
   @media (hover: hover) { .tb:hover { background: var(--hover-strong); color: var(--text); } }
   /* 开着的那几颗：实底 + 正文色（官方是一块高亮底；bridge 的朱色只给「正在发生」，这里用中性色） */
   .tb.on { background: color-mix(in srgb, var(--text) 15%, transparent); color: var(--text); }
-  /* agent 正在用终端 / 有后台任务且面板没开：呼吸绿点提示（点开即清） */
+  /* agent 正在用浏览器且面板没开：呼吸绿点提示（点开即清） */
   .live-dot { position: absolute; top: 3px; right: 4px; width: 6px; height: 6px; border-radius: 50%;
     background: var(--ok); animation: tbPulse 1.2s ease-in-out infinite; }
   @keyframes tbPulse { 50% { opacity: .35; } }
@@ -161,10 +163,23 @@
   .mi-ck :global(svg) { width: 100%; height: 100%; }
   .mi-sep { height: 1px; margin: 4px 6px; background: var(--divider); }
 
-  /* —— Figma 液态玻璃（默认；?oldglass 退回上面的毛玻璃）——
-     材质＝Figma「Notification」的 Clear Glass，去掉原稿三道 LINEAR_BURN 描边（叠起来是一圈纯黑细边）。
-     ::before 外扩 24px 画构建期用 Figma 原版着色器烘焙的图层（锚点＝--bg + 正文那一端），
-     三段切片横向拉伸（两端各 56px 原样）；圆角与这里的 border-radius 同值、不平滑，backdrop 裁切与玻璃形状严丝合缝。
+  /* 桌面壳 WCO：收成 32px 高、坐进 40px 标题栏带、与系统窗控同一条中线；右距让出窗控。
+     分屏的 iframe 那一格没有 data-wco（不贴右缘时不该让窗控），宿主告知带高后挂 data-wco-band 对齐；
+     贴右缘时宿主连 --wco-right 一起下发、同时挂上 data-wco。 */
+  :global(html[data-wco="1"]) .tbar, :global(html[data-wco-band="1"]) .tbar {
+    top: calc((var(--wco-h, 40px) - 32px) / 2) !important; height: 32px; border-radius: 10px;
+    right: calc(6px + var(--pane-wco-r, var(--wco-right, 0px)));
+  }
+  :global(html[data-wco="1"]) .tbar.docked, :global(html[data-wco-band="1"]) .tbar.docked {
+    right: calc(6px + var(--dk-wco-r, 0px));
+  }
+  :global(html[data-wco="1"]) .tb, :global(html[data-wco-band="1"]) .tb { height: 26px; width: 30px; border-radius: 7px; }
+
+  /* —— 桌面主页 Dock 同款 Figma 液态玻璃（默认；?oldglass 退回上面的毛玻璃）——
+     材质＝桌面 Dock 的 Clear Glass（Figma「Notification」，同 FigmaGlassDock 去掉三道 LINEAR_BURN 描边）。
+     ::before 外扩 24px 画构建期用 Figma 原版着色器烘焙的图层（做法与核对数据见
+     bridge build/design/figma-glass-controls，锚点＝--bg + 正文那一端），三段切片横向拉伸（两端各 56px 原样）；
+     圆角与这里的 border-radius 同值、不平滑，backdrop 裁切与玻璃形状严丝合缝。
      材质里均匀的 #101010 LINEAR_DODGE 是纯加法，over 合成做不出，交给 backdrop 滤镜：
      contrast(1/(1+2d)) brightness(1+2d) = min(1, B + d)，d = 16/255（Edge 实测逐级相等）；blur 2.45 = 磨砂 6。 */
   :global(html) .tbar.fg {
@@ -175,13 +190,15 @@
   .tbar.fg::before {
     content: ''; position: absolute; inset: -24px; z-index: -1; pointer-events: none;
     border-style: solid; border-width: 0 56px;
-    border-image: url(../../assets/figma-glass/tb-bar36-dark.png) 0 168 fill / 0 56px / 0 stretch;
+    border-image: var(--ov-figma-glass-tb-bar36-dark, url(../../assets/figma-glass/tb-bar36-dark.png)) 0 168 fill / 0 56px / 0 stretch;
   }
-  :global(html[data-theme="light"]) .tbar.fg::before { border-image-source: url(../../assets/figma-glass/tb-bar36-light.png); }
+  :global(html[data-theme="light"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar36-light, url(../../assets/figma-glass/tb-bar36-light.png)); }
   @media (pointer: coarse) {
-    .tbar.fg::before { border-image-source: url(../../assets/figma-glass/tb-bar40-dark.png); }
-    :global(html[data-theme="light"]) .tbar.fg::before { border-image-source: url(../../assets/figma-glass/tb-bar40-light.png); }
+    .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar40-dark, url(../../assets/figma-glass/tb-bar40-dark.png)); }
+    :global(html[data-theme="light"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar40-light, url(../../assets/figma-glass/tb-bar40-light.png)); }
   }
+  :global(html[data-wco="1"]) .tbar.fg::before, :global(html[data-wco-band="1"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar32-dark, url(../../assets/figma-glass/tb-bar32-dark.png)); }
+  :global(html[data-theme="light"][data-wco="1"]) .tbar.fg::before, :global(html[data-theme="light"][data-wco-band="1"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar32-light, url(../../assets/figma-glass/tb-bar32-light.png)); }
 
   /* —— 鼠标设备：扁平实底 —— 电脑上不需要玻璃，和页面同色的一块实底 + 一道细描边，
      不模糊、不透色；正文滚到底下时照样挡住，不会透出字来。 */

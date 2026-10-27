@@ -3,18 +3,18 @@
 // 客户端形态即本机、服务端/附着形态即主机，天然分流无需两套代码。
 //
 // 两个范围（?scope= / body.scope）：admin = 管理员自用（缺省），shared = 全服统一（注入所有成员的 Claude）。
-// 列表、上传、从目录添加、包级批量都按范围分开；按 id 的操作（开关、勾选、删、文件、配置）不用带，id 本身就定了范围。
+// 列表、上传、市场安装、包级批量都按范围分开；按 id 的操作（开关、勾选、删、文件）不用带，id 本身就定了范围。
 //
-// 门禁：全部 admin（token/cookie，可远程——管理员在手机上也能传技能），非 admin 一律 403。
+// 门禁：全部 admin（token/cookie，可远程——维护者出门也要能传技能），非 admin 一律 403。
 // 装/删/启停会改所有 admin 会话的 agent 行为，属主机级能力，不下放 Pro/普通 user。
 // 写操作受 server.mjs 全局 Origin CSRF 闸保护；上传走 raw body（Buffer），不引 multipart。
 import {
   listExtensions, getExtension, installSkill, installPlugin, saveConnector,
   updateExtension, deleteExtension, bulkByPkg, listExtensionFiles, readExtensionFile,
-  packExtensionZip, extensionDiagnostics, configureExtension, EXT_SUPPORT, extScope,
+  packExtensionZip, extensionDiagnostics, EXT_SUPPORT, extScope,
 } from '../extensions.mjs';
-import { listCatalog, installFromCatalog, fetchOfficialCatalog } from '../extensions-catalog.mjs';
 import { FEATURES } from '../config/index.mjs';
+import { marketIndex, marketInstall, editSources, installedKeys } from '../ext-market.mjs';
 import { readBody } from '../runtime/body.mjs';
 
 const MAX_UPLOAD = 64 * 1024 * 1024;   // 技能/插件包上限 64MB（一般几百 KB）
@@ -69,7 +69,7 @@ export function registerExtensionRoutes(router, { identify }) {
     });
   });
 
-  // 上传技能/插件：?type=skill|plugin&name=<原始文件名>&replace=<替换的扩展id>&pkg=<所属包名>&scope=admin|shared
+  // 上传技能/插件：?type=skill|plugin&name=<原始文件名>&replace=<替换的扩展id>&pkg=<所属包名>
   router.on('POST', '/api/extensions/upload', async (req, res, url) => {
     if (!gate(req, res)) return;
     try {
@@ -113,12 +113,35 @@ export function registerExtensionRoutes(router, { identify }) {
     } catch (e) { fail(res, e); }
   });
 
-  // 包级批量：{ pkg, action: enable|disable|agents|delete, agents?, scope? }——散装项（无 pkg）够不到此接口。
+  // 包级批量：{ pkg, action: enable|disable|agents|delete, agents? }——散装项（无 pkg）够不到此接口。
   router.on('POST', '/api/extensions/bulk', async (req, res) => {
     if (!gate(req, res)) return;
     try {
       let input; try { input = JSON.parse(await readBody(req)); } catch { input = {}; }
       json(res, 200, { ok: true, ...bulkByPkg(input.pkg, input) });
+    } catch (e) { fail(res, e); }
+  });
+
+  // —— 市场（「发现」）：索引（建好前 building=true，前端轮询）/ 一键安装 / 增删自定义市场源 ——
+  router.on('GET', '/api/extensions/market', (req, res, url) => {
+    if (!gate(req, res)) return;
+    try { json(res, 200, { ok: true, ...marketIndex({ refresh: url.searchParams.get('refresh') === '1' }), installed: installedKeys({ scope: url.searchParams.get('scope') || 'admin' }) }); }
+    catch (e) { fail(res, e); }
+  });
+
+  router.on('POST', '/api/extensions/market/install', async (req, res) => {
+    if (!gate(req, res)) return;
+    try {
+      let input; try { input = JSON.parse(await readBody(req)); } catch { input = {}; }
+      json(res, 200, { ok: true, ...(await marketInstall(input)) });
+    } catch (e) { fail(res, e); }
+  });
+
+  router.on('POST', '/api/extensions/market/sources', async (req, res) => {
+    if (!gate(req, res)) return;
+    try {
+      let input; try { input = JSON.parse(await readBody(req)); } catch { input = {}; }
+      json(res, 200, { ok: true, sources: editSources(input) });
     } catch (e) { fail(res, e); }
   });
 
@@ -134,41 +157,6 @@ export function registerExtensionRoutes(router, { identify }) {
       const text = readExtensionFile(url.searchParams.get('id'), url.searchParams.get('path'));
       json(res, 200, { ok: true, text });
     } catch (e) { fail(res, e); }
-  });
-
-  // 「自定义」页的「发现」：本机 Anthropic 官方插件目录里可装的插件 / 技能 / 连接器（extensions-catalog.mjs）。
-  // ?scope= 决定「已添加」按哪个范围标。
-  router.on('GET', '/api/extensions/catalog', (req, res, url) => {
-    if (!gate(req, res)) return;
-    const scope = url.searchParams.get('scope') === 'shared' ? 'shared' : 'admin';
-    try { json(res, 200, { ok: true, scope, ...listCatalog({ scope }) }); } catch (e) { fail(res, e); }
-  });
-
-  // 从目录装一项：{ id, values?, scope? }（id 只在现扫的目录里查，前端传不进任意路径；values = 连接器模板要填的字段）。
-  // 远程源的插件在这里 git 拉取，可能要几十秒。
-  router.on('POST', '/api/extensions/catalog/install', async (req, res) => {
-    if (!gate(req, res)) return;
-    try {
-      let input; try { input = JSON.parse(await readBody(req)); } catch { input = {}; }
-      const values = input.values && typeof input.values === 'object' ? input.values : {};
-      json(res, 200, { ok: true, item: await installFromCatalog(input.id, { values, scope: input.scope === 'shared' ? 'shared' : 'admin' }) });
-    } catch (e) { fail(res, e); }
-  });
-
-  // 插件配置（userConfig + MCP 里的 ${VAR}）：{ id, values }。敏感值进加密存储，回传打码占位符 = 沿用旧值。
-  router.on('POST', '/api/extensions/configure', async (req, res) => {
-    if (!gate(req, res)) return;
-    try {
-      let input; try { input = JSON.parse(await readBody(req)); } catch { input = {}; }
-      json(res, 200, { ok: true, item: configureExtension(input.id, input.values && typeof input.values === 'object' ? input.values : {}) });
-    } catch (e) { fail(res, e); }
-  });
-
-  // 下载 / 更新官方目录副本（新装的服务器上 Claude Code 可能还没拉过）：三个 Anthropic 官方目录一次拉齐。
-  router.on('POST', '/api/extensions/catalog/fetch', async (req, res, url) => {
-    if (!gate(req, res)) return;
-    const scope = url.searchParams.get('scope') === 'shared' ? 'shared' : 'admin';
-    try { json(res, 200, { ok: true, scope, ...(await fetchOfficialCatalog({ scope })) }); } catch (e) { fail(res, e); }
   });
 
   // 下载为 zip（前端 fetch+blob 取，带 Authorization/cookie，不走 ?token=）。

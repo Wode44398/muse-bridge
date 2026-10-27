@@ -5,7 +5,7 @@
   // 停靠卡放在最贴近输入框的位置、插话托盘放在它上面：托盘里的插话随时会被读走（那一行收起），要是托盘在卡下面，
   // 卡就会在指尖下面挪位——P10 要求停靠区只往上长、按钮不滑到指尖下。
   // 停靠区的内容归 cards/CardDock（另一路），这里只给它一个随内容平滑长高的框；有卡时补上与输入框之间的间距。
-  import { app } from "../../lib/state.svelte.ts";
+  import { app, browserToolAvailable } from "../../lib/state.svelte.ts";
   import { pendingCards } from "../../lib/card-dock.ts";
   import { smoothHeight } from "../../lib/motion.ts";
   import Slot from "./Slot.svelte";
@@ -20,7 +20,8 @@
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
   // 工作区浏览器是全局的一个（跟着有焦点的那一格）：分屏时只在有焦点的那格给入口；这一格自己的预览照常给
-  const pillVisible = $derived(Boolean(pane.chat.preview || (pane.focused && app.browser)) && !app.dockOpen);
+  // D5：这台机器没有浏览器（服务端没注册 Browser）时胶囊没处可开，不摆
+  const pillVisible = $derived(Boolean(pane.chat.preview || (pane.focused && app.browser)) && !app.dockOpen && browserToolAvailable());
   const stripVisible = $derived(pane.chat.todos.length > 0 || pillVisible);
   // 与 CardDock 同一个判定（纯函数）：此刻停着的那张还在等 → 停靠区有内容
   const docked = $derived(pendingCards(pane.chat.timeline, pane.chat.running).some((c) => c.id === pane.chat.dockedCardId));

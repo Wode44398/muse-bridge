@@ -1,12 +1,12 @@
 <script>
-  // 活跃进程：可中止的 Claude 生成列表 + 运行中的定时任务。
-  import { sa } from '../../lib/serverAdmin.svelte.js';
+  // 活跃进程：可中止的生成列表 + 运行中的定时任务。
+  import { sa, loadActive } from '../../lib/serverAdmin.svelte.js';
   import SaGensList from './SaGensList.svelte';
   import { t } from '../../lib/i18n.js';
 </script>
 
 <div class="sa-card">
-  <div class="sa-card-h">{t('Claude 对话生成')} <span class="sa-dim" style="font-weight:400;font-size:12px;text-transform:none">· {t('每 3.5s 刷新')}</span></div>
+  <div class="sa-card-h">{t('Claude / Vertex 对话生成')} <span class="sa-dim" style="font-weight:400;font-size:12px;text-transform:none">· {t('每 3.5s 刷新')}</span></div>
   <SaGensList gens={sa.gens} withStop={true} />
   <div style="height:8px"></div>
 </div>
@@ -27,4 +27,4 @@
   </div>
 </div>
 
-<div class="sa-foot" style="margin-top:12px">{t('中止 = 调用该用户活跃生成的 abort（等价于该用户自己点「停止」）。')}</div>
+<div class="sa-foot" style="margin-top:12px">{t('中止 = 调用该用户活跃生成的 abort（等价于该用户自己点「停止」）。长跑媒体（Veo/Lyria）按秒计费、故意跑完不中断，不在此列。')}</div>

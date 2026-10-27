@@ -1,17 +1,21 @@
 // 扫码配对登录的前端两半：
 //   网页端（未登录）：startPairLogin() 领票 → 出二维码 → 长轮询 → approved 即 claim 落登录态。
 //   手机端（已登录）：parsePairPayload() 解二维码内容，PairScan.svelte 再调 /api/pair/scan|approve。
-// 二维码内容 = 本站地址 + ?pair=<id>.<key>：PairScan 只解参数；若被系统相机扫到则会打开网页，
+// 二维码内容 = 本站地址 + ?pair=<id>.<key>：apk 只解参数；若被系统相机扫到则会打开网页，
 // 网页 boot 时识别 ?pair= 走同一套确认流程（见 App.svelte）。
 // 服务端语义见 src/routes/pair.mjs（key 只能扫/确认，claim 只能领凭据，两把钥匙分工）。
+// 方向相反的「扫码配对」（电脑出码、手机扫码换自己的会话，?connect=）在 ./connectPair.js；这里引它一下，
+// 手机浏览器经系统相机打开 ?connect= 网址时，它在模块加载时就把参数接住、从地址栏擦掉并自动兑换（App.svelte 引了本模块）。
 
 import { api, setToken } from './api.js';
 import { applyMe } from './state.svelte.js';
+import { getServerBase } from './server.js';
 import { t } from './i18n.js';
+import './connectPair.js';
 
 export function pairPayload(id, key) {
   let origin = '';
-  try { origin = location.origin; } catch {}
+  try { origin = getServerBase() || location.origin; } catch {}
   return `${origin}/?pair=${encodeURIComponent(id)}.${encodeURIComponent(key)}`;
 }
 
@@ -78,7 +82,7 @@ export function startPairLogin(onUpdate) {
           emit({ status: 'approved' });
           const c = await api.post('/api/pair/claim', { id: tk.id, claim: tk.claim });
           if (dead()) return;
-          // 拿到凭据即存为 Bearer（与账号密码登录同一课）
+          // 拿到凭据即存为 Bearer（与账号密码登录同一课：离线壳跨源不带 cookie，全靠它）
           if (c.token) setToken(c.token);
           let a;
           try { a = await api.auth(); } catch { a = { kind: c.kind, user: c.user }; }

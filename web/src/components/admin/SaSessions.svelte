@@ -20,7 +20,7 @@
   let ctrl = null;
 
   const userList = $derived([{ name: 'admin' }, ...sa.users]);
-  // 这个成员允许了管理员什么：没允许看内容就不读正文，没允许协助就不让代发（服务端也拦，这里只是不白点）
+  // 这个成员允许了管理员什么（S2-7）：没允许看内容就不读正文，没允许协助就不让代发（服务端也拦，这里只是不白点）
   const access = $derived(user === 'admin' ? { view: true, assist: true } : (sa.users.find((u) => u.name === user)?.adminAccess || {}));
   let denied = $state('');            // 读正文被拒的原因（服务端 403 code:'consent'）
 
@@ -78,7 +78,7 @@
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     })
-      // 成员没允许代聊等服务端拒绝：把 JSON 里的原因读出来，别只显示「HTTP 403」
+      // 成员没允许代聊（S2-7）等服务端拒绝：把 JSON 里的原因读出来，别只显示「HTTP 403」
       .then(async (r) => { if (!r.ok) { let m = 'HTTP ' + r.status; try { m = (await r.json()).error || m; } catch {} throw Object.assign(new Error(m), { refused: true }); } return r; })
       .then((r) => pumpSSE(r, (ev) => {
         if (ev.type === 'session' && ev.sessionId) cur = ev.sessionId;

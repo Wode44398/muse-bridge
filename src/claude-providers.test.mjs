@@ -691,3 +691,108 @@ test('代理：子 agent 写了另一个服务的模型名 → 用那个服务�
     P.deleteProvider(a.id); P.deleteProvider(b.id);
   } finally { upA.close(); upB.close(); }
 });
+
+// —— 成员自带 Key（2026-10-27）：注册表按 owner 分开、代理令牌按 owner 派生、成员只许连公网 ——
+const N = await import('./runtime/public-net.mjs');
+
+test('公网守卫：内网 / 本机 / 保留地址一律拦，公网 IP 放行', async () => {
+  for (const ip of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', '::ffff:127.0.0.1', 'fe80::1', 'fd00::1', 'not-an-ip']) assert.equal(N.isPrivateIp(ip), true, ip);
+  for (const ip of ['1.1.1.1', '8.8.8.8', '2606:4700:4700::1111']) assert.equal(N.isPrivateIp(ip), false, ip);
+  for (const u of ['http://127.0.0.1:11434/v1', 'http://localhost:8787', 'http://[::1]/x', 'http://router.lan', 'http://intranet', 'http://169.254.169.254/latest']) await assert.rejects(N.assertPublicUrl(u), /内网|本机/, u);
+  await N.assertPublicUrl('https://1.1.1.1/v1');
+});
+
+test('成员：注册表各管各的，互相看不见、解析不到；预设里没有本机模型', () => {
+  const alice = 'u:alice', bob = 'u:bob';
+  assert.equal(P.customOwner({ kind: 'admin' }), 'admin');
+  assert.equal(P.customOwner({ kind: 'user', key: alice, allowClaude: true }), alice);
+  assert.equal(P.customOwner({ kind: 'user', key: alice, allowClaude: false }), null);
+  assert.equal(P.customOwner({ kind: 'snap', snap: {} }), null);
+  assert.equal(P.customOwner({ kind: 'share', key: 's:x' }), null);
+  const a = P.createProvider({ name: 'Alice', baseUrl: 'https://api.example.com/anthropic', apiKey: 'k-alice', models: [{ id: 'm-1' }] }, alice);
+  assert.equal(a.owner, undefined);   // 给前端的视图不带 owner
+  assert.equal(P.listProviders(alice).length, 1);
+  assert.equal(P.listProviders(bob).length, 0);
+  assert.ok(!P.listProviders().some((p) => p.id === a.id));
+  assert.equal(P.providerKey(a.id, alice), 'k-alice');
+  assert.equal(P.providerKey(a.id), '');
+  assert.equal(P.providerKey(a.id, bob), '');
+  const mid = P.customModelId(a.id, 'm-1');
+  assert.ok(P.resolveCustomModel(mid, alice));
+  assert.equal(P.resolveCustomModel(mid, bob), null);
+  assert.equal(P.resolveCustomModel(mid), null);
+  assert.equal(P.customModelsView(alice).length, 1);
+  assert.equal(P.customModelsView(bob).length, 0);
+  assert.ok(!P.presetsFor(alice).some((x) => x.id === 'local'));
+  assert.ok(P.presetsFor('admin').some((x) => x.id === 'local'));
+  // 落盘位置：数据根下 claude-providers/users/<账号>/，不进成员的工作空间
+  P._resetProvidersForTests();
+  assert.equal(P.listProviders(alice).length, 1);
+  assert.throws(() => P.updateProvider(a.id, { name: 'x' }, bob), /没有这个模型服务/);
+  for (let i = 1; i < P.MEMBER_MAX_PROVIDERS; i++) P.createProvider({ name: 'A' + i, baseUrl: 'https://api.example.com/anthropic' }, alice);
+  assert.throws(() => P.createProvider({ name: 'over', baseUrl: 'https://api.example.com/anthropic' }, alice), /最多 10 个/);
+  for (const p of P.listProviders(alice)) P.deleteProvider(p.id, alice);
+});
+
+test('成员：代理令牌按 owner 分开，拿自己的令牌摸不到别人的服务；指向内网的地址代理拒发', async () => {
+  const up = await fakeUpstream((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'message', content: [{ type: 'text', text: 'OK' }], usage: { input_tokens: 1, output_tokens: 1 } })); });
+  try {
+    const alice = 'u:alice';
+    const adm = P.createProvider({ name: 'Host', baseUrl: up.url, apiKey: 'k-host', compat: { useProxy: false }, models: [{ id: 'big-1' }] });
+    // 成员的服务直接写进注册表（绕过路由的地址检查），看代理这一道能不能拦住
+    const mem = P.createProvider({ name: 'Mine', baseUrl: up.url, apiKey: 'k-alice', compat: { useProxy: false }, models: [{ id: 'big-1' }] }, alice);
+    const envA = await X.providerEngineEnv({}, { provider: P.getProvider(mem.id, alice), model: P.getProvider(mem.id, alice).models[0], effort: '' });
+    const envH = await X.providerEngineEnv({}, { provider: P.getProvider(adm.id), model: P.getProvider(adm.id).models[0], effort: '' });
+    const tok = (u) => new URL(u).pathname.split('/')[1];
+    assert.notEqual(tok(envA.ANTHROPIC_BASE_URL), tok(envH.ANTHROPIC_BASE_URL));
+    const post = (u) => fetch(u + '/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'big-1', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] }) });
+    // 成员令牌 + 主机的服务 id：解析不到
+    const cross = await post(envA.ANTHROPIC_BASE_URL.replace('/p/' + mem.id + '/', '/p/' + adm.id + '/'));
+    assert.equal(cross.status, 400);
+    assert.match((await cross.json()).error.message, /已被删除/);
+    // 成员自己的服务指向 127.0.0.1：代理拒发，上游一次都没收到
+    const r = await post(envA.ANTHROPIC_BASE_URL);
+    assert.notEqual(r.status, 200);
+    assert.match((await r.json()).error.message, /内网|本机/);
+    assert.equal(up.seen.length, 0);
+    assert.ok(X.providerLog(mem.id, alice).length >= 1);
+    assert.equal(X.providerLog(mem.id).length, 0);
+    // 主机的照常通
+    assert.equal((await post(envH.ANTHROPIC_BASE_URL)).status, 200);
+    assert.equal(up.seen[0].headers['x-api-key'], 'k-host');
+    // 随便编的令牌：404
+    assert.equal((await post(envH.ANTHROPIC_BASE_URL.replace(tok(envH.ANTHROPIC_BASE_URL), '0'.repeat(32)))).status, 404);
+    P.deleteProvider(adm.id); P.deleteProvider(mem.id, alice);
+  } finally { up.close(); }
+});
+
+test('部署方强制走出站代理（BRIDGE_PROXY_FORCED / config.json proxyForced）：保存一律 useProxy:true，GET 带 proxyForced', async () => {
+  assert.equal(P.providerProxyForced({ env: {}, cfg: {} }), false);
+  assert.equal(P.providerProxyForced({ env: {}, cfg: { proxyForced: true } }), true);
+  assert.equal(P.providerProxyForced({ env: { BRIDGE_PROXY_FORCED: '1' }, cfg: {} }), true);
+  assert.equal(P.providerProxyForced({ env: { BRIDGE_PROXY_FORCED: '0' }, cfg: { proxyForced: true } }), false, '环境变量显式关压过 config');
+  assert.equal(P.providerProxyForced({ env: {}, cfg: { proxyForced: 'yes' } }), false, 'config 只认 true');
+  // 没声明：照旧尊重编辑器里的开关
+  assert.equal(base({ compat: { useProxy: false } }).compat.useProxy, false);
+
+  const { createRouter } = await import('./runtime/router.mjs');
+  const { registerClaudeProviderRoutes } = await import('./routes/claude-providers.mjs');
+  const router = createRouter();
+  registerClaudeProviderRoutes(router, { identify: () => ({ kind: 'admin' }) });
+  const server = http.createServer((req, res) => router.dispatch(req, res));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const url = 'http://127.0.0.1:' + server.address().port;
+  const get = async () => (await fetch(url + '/api/claude/providers')).json();
+  try {
+    assert.equal((await get()).proxyForced, false, '本体默认不强制');
+    process.env.BRIDGE_PROXY_FORCED = '1';
+    assert.equal((await get()).proxyForced, true);
+    assert.equal(base({ compat: { useProxy: false } }).compat.useProxy, true, '强制时保存一律走代理');
+    const r = await (await fetch(url + '/api/claude/providers/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Forced', baseUrl: 'https://api.example.com', compat: { useProxy: false }, models: [{ id: 'm' }] }) })).json();
+    assert.equal(r.provider.compat.useProxy, true);
+    P.deleteProvider(r.provider.id);
+  } finally {
+    delete process.env.BRIDGE_PROXY_FORCED;
+    server.closeAllConnections?.(); server.close();
+  }
+});

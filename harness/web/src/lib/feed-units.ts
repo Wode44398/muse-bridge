@@ -18,9 +18,9 @@
 import type { Item, RunTiming, ToolItem } from "./timeline-types.ts";
 import { t, tc } from "./i18n.ts";
 
-// 只读探索：只看不改的工具
+// 只读探索：只看不改的工具（LocalPCInspect 是 DeviceInspect 的旧名，留着给老会话的历史）
 export const EXPLORE_TOOLS = new Set([
-  "Read", "Grep", "Glob", "WebFetch", "WebSearch", "ReadPage", "Recall", "ProjectKnowledge", "Network", "LocalPCInspect", "Skill",
+  "Read", "Grep", "Glob", "WebFetch", "WebSearch", "ReadPage", "Recall", "ProjectKnowledge", "Network", "DeviceInspect", "LocalPCInspect", "Skill",
 ]);
 
 export type FeedUnit =

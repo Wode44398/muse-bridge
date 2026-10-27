@@ -85,7 +85,7 @@ test("K5: recursive deletes of deep absolute paths are asked, catastrophic targe
   for (const command of [
     'rm -rf "C:/Users/someone/bridge-client-build/verify-home/config/client.json"',
     "rm -rf /c/Users/someone/proj/build",
-    "rm -rf D:/Work/project/tmp-out",
+    "rm -rf D:/Notes/tmp-out",
     "rm -rf /opt/app/cache",
     "rm -rf /tmp/dimensio-scratch/x",
     "powershell -NoProfile -Command 'Remove-Item -Recurse -Force C:\\Users\\someone\\proj\\dist'",
@@ -102,7 +102,7 @@ test("K5: recursive deletes of deep absolute paths are asked, catastrophic targe
     "rm -rf C:/Users/someone/",
     "rm -rf C:/Users",
     "rm -rf C:/Users/someone/*",
-    "rm -rf D:/Work",
+    "rm -rf D:/Notes",
     "rm -rf D:/",
     "rm -rf C:/Windows/Temp/x",
     "rm -rf 'C:/Program Files/foo'",

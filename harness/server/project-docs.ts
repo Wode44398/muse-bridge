@@ -1,6 +1,6 @@
 // C6（G2、K24、N29、X53）：兼容仓库里给编码 agent 写的指令文件（AGENTS.md，及同类的 CLAUDE.md）。
 //
-// 以前 dimensio 只读工作区根的 GUIDE.md——很多仓库只有 AGENTS.md / CLAUDE.md，dimensio 在里面读不到任何
+// 以前 dimensio 只读工作区根的 GUIDE.md——维护者最常用的几个仓库只有 AGENTS.md / CLAUDE.md，dimensio 在里面读不到任何
 // 项目约定。现在：
 //   · 从 git 根逐层往下收集到工作区，每层按 AGENTS.override.md → AGENTS.md → CLAUDE.md 只取第一个存在的（同一层两份
 //     内容往往重复，X53）；每段标出来源，离工作区最近的排在最后。

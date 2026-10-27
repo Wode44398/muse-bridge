@@ -2,6 +2,7 @@
   // 审阅面板：工作空间 worktree 概览（基线 → working tree 的变更清单），
   // 行点开懒加载单文件 unified diff（+绿 −红），Claude 分页配色。
   import { api } from '../../lib/api.js';
+  import { dragOut, joinAbs } from '../../lib/dragOut.js';
   import { dock } from '../../lib/dock.svelte.js';
   import { t, tc, tr } from '../../lib/i18n.js';
   let { dockState = dock } = $props();
@@ -76,7 +77,7 @@
       <div class="rv-list">
         {#each data.files as f (f.path)}
           <div class="rv-file">
-            <button class="rv-row" onclick={() => toggle(f)}>
+            <button class="rv-row" onclick={() => toggle(f)} use:dragOut={() => (dockState.ws && f.st !== 'D' ? { paths: [joinAbs(dockState.ws, f.path)] } : null)}>
               <svg class="chev" class:open={!!open[f.path]} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
               <span class="rv-name" title={f.from ? `${f.from} → ${f.path}` : f.path}>{f.path}</span>
               {#if f.st && f.st !== 'M'}<span class="rv-st st-{f.st}">{stLabel[f.st] || f.st}</span>{/if}

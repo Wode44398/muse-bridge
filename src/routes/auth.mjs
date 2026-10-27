@@ -2,10 +2,11 @@
 // against the account store (sets bridge_user session cookie). Registration needs a
 // single-use invite code. /api/auth reports the caller's identity to the page.
 
+import { pluginsOff, pluginOn } from '../plugins/state.mjs';
 import { readBody } from '../runtime/body.mjs';
 import * as users from '../users.mjs';
 import { contextFor, ownerKey } from '../runtime/identity.mjs';
-import { FEATURES, TOKEN_HASH } from '../config/index.mjs';
+import { FEATURES, TOKEN_HASH, DEPLOY } from '../config/index.mjs';
 import { enabledAgents } from '../runtime/agent-status.mjs';
 import { registrationOpen } from '../runtime/policy.mjs';
 import { describeClient } from './pair.mjs';
@@ -53,11 +54,17 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
       key: isAcct ? (ctx?.key || null) : null,
       tier: ctx?.tier || null,
       tokenHashed: !!TOKEN_HASH,
+      // 部署形态两分（'host' 自己的电脑 / 'server' 服务器，config/deploy-profile.mjs 的 hosting）：前端据此挑「电脑 / 服务器」
+      // 措辞（离线提示条等）。和发行版声明（品牌、默认语言：config/distro.mjs → window.__DISTRO__）不是一回事。
+      hosting: (DEPLOY && DEPLOY.hosting) || 'host',
       // 没登录时给全局已启用的名单：只开了一个 agent 的服务器，访客打开网址就该直接落在那一页的登录框上。
       agents: ctx ? ctx.agents : enabledAgents(),
       features: { multiUser: FEATURES.multiUser, register: registrationOpen(), remoteAdmin: FEATURES.remoteAdmin },
-      canSnapshot: !!ctx?.canSnapshot,
+      // 关着的内置功能（插件）：界面据此藏掉对应入口（设置 › 扩展 › 功能扩展里开关）
+      plugins: { off: pluginsOff() },
+      canSnapshot: !!ctx?.canSnapshot && pluginOn('chat-snapshot'),
       service: !!ctx?.service,
+      allowCodex: !!ctx?.allowCodex,
       allowDimensio: !!ctx?.allowDimensio,
     }));
   });
@@ -88,7 +95,7 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
     const ipKey = 'ip:' + clientIp(req);
     if (locked(key) || locked(ipKey)) { res.writeHead(429, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: '登录尝试过多，请稍后再试' })); return; }
     const r = await users.checkLogin(username, String(body.password || ''));
-    // 多用户关着：只有服务账号（程序用的账号）还能登；普通账号当作登录失败，
+    // 多用户关着（主机形态）：只有服务账号（QQ 机器人这类）还能登；普通账号当作登录失败，
     // 文案不区分「没这个人」和「不让登」，免得借此探账号。
     if (!r.error && !FEATURES.multiUser && !users.userGrants(users.getUser(r.name)).service) r.error = '这台主机只接受访问令牌登录';
     if (r.error) {
@@ -100,7 +107,7 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
     clearFail(key);
     clearFail(ipKey);
     const tok = users.createSession(r.id || r.name);
-    // token 一并回前端：网页靠 Set-Cookie，跨源客户端不带 cookie → 存 localStorage 当 Bearer。
+    // token 一并回前端：在线壳靠 Set-Cookie，离线 apk 跨源不带 cookie → 存 localStorage 当 Bearer。
     res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': userCookie(req, tok) });
     res.end(JSON.stringify({ ok: true, kind: 'user', user: r.name, token: tok }));
   });
@@ -138,7 +145,7 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
   });
 
   router.on('POST', '/api/logout', (req, res) => {
-    // 跨源登出不带 cookie → 也认 Bearer 里的 session token，确保后端真正删除会话。
+    // apk 跨源登出不带 cookie → 也认 Bearer 里的 session token，确保后端真正删除会话。
     const tok = getCookie(req, 'bridge_user') || bearerToken(req);
     if (tok) users.deleteSession(tok);
     // 管理员会话登出 = 吊销这一张（主令牌本身登不出去，也不需要）。

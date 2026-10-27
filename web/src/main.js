@@ -1,5 +1,7 @@
+import './lib/devDesktopMock.js';   // 必须最先：dev ?fdmock 伪装桌面壳（prod 构建为空模块）
 import './lib/staleGuard.js';       // 构建漂移自愈：新部署后旧页面懒加载 404 → 自动刷新一次
 import './app.css';
+import './lib/overlay.svelte.js';   // 私有 overlay（原版字体 / 素材）：有就叠加，公开版什么都不做
 import { initI18n } from './lib/i18n.js';
 
 // 界面语言先定、英文字典先到，再加载整个 app（app-main.js）——所有业务模块都在字典就绪后才求值，

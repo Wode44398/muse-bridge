@@ -1,5 +1,6 @@
 <script>
   import { uiAlert } from '../lib/dialogs.js';
+  import { dragOut, attDragSrc } from '../lib/dragOut.js';
   import { session, settings, caps, compose, status, prefs } from '../lib/state.svelte.js';
   import { send, stop, bgHoldNow, steer, queueSend, queuedItems, editLastQueued, prewarmNewChat } from '../lib/chat.svelte.js';
   import SlashMenu from './SlashMenu.svelte';
@@ -15,6 +16,7 @@
   import { claudeDefaultModel, claudeEffortFallback } from '../lib/caps.js';
   import { cp, customModelInfo, isCustomModel, ensureCustomModels, effortsFor, effortChoices, defaultEffortFor, effectiveEffort, modelSupportsFast } from '../lib/claudeProviders.svelte.js';   // 自定义 API 的模型（设置 › Claude › 模型服务）
   import { dropHasDirs, entriesFromDrop, walkEntries, itemsFromDirInput, groupByRoot, skipNote, pool } from '../lib/dirDrop.js';
+  import { nativePathForFile } from '../lib/nativeDesktop.js';
   import { fileToBase64, filesFromInput, removeAttachment, uploadAttachment } from '../lib/attachments.js';
   import { untrack } from 'svelte';
   import { draft, registerComposerReader } from '../lib/composerBridge.svelte.js';
@@ -183,9 +185,18 @@
   function pickFiles() { fileInput && fileInput.click(); }
   function pickPhotos() { photoInput && photoInput.click(); }
   // 统一附件入口：选文件 / 粘贴图片 / 拖拽文件三条路都汇到这里。逐个上传，pending 期间显示占位。
+  // 桌面壳零拷贝（#7）：OS 文件自带本机绝对路径（webUtils.getPathForFile）→ 非图片直接
+  // 引用原路径当附件，不读字节、无 20MB 上限；图片保持上传——vision 与历史缩略图链路
+  // 依赖 uploads 副本。粘贴的剪贴板图片没有路径，天然走上传。
   async function addFiles(fileList) {
     for (const f of [...(fileList || [])]) {
       if (!f) continue;
+      const isImgFile = (f.type || '').startsWith('image/');
+      const localPath = isImgFile ? '' : nativePathForFile(f);
+      if (localPath) {
+        compose.attachments.push({ path: localPath, name: f.name || localPath.split(/[\\/]/).pop(), kind: 'file', url: null, pending: false, local: true });
+        continue;
+      }
       if (f.size > 20_000_000) { uiAlert(f.name ? t('{name}：超过 20MB，暂不支持', { name: f.name }) : t('文件：超过 20MB，暂不支持')); continue; }
       // 先放占位（pending）再上传——上传期间附件先可见，用户点发送会被 uploading 拦住。
       const isImg = (f.type || '').startsWith('image/');
@@ -210,9 +221,30 @@
   async function onDirInput(e) {
     const fl = [...(e.target.files || [])];
     e.target.value = '';
+    // 桌面壳零拷贝：从首个文件的绝对路径反推所选文件夹的本机路径，直接引用原目录。
+    const root = localFolderRoot(fl);
+    if (root) { pushLocalFolder(root.path, root.name); return; }
     const { items, stat } = itemsFromDirInput(fl);
     if (!items.length) return;
     for (const g of groupByRoot(items)) await addFolder(g.name, g.items, stat);
+  }
+
+  // webkitdirectory 的 FileList：file.webkitRelativePath = "选中文件夹/子路径"，
+  // 绝对路径以「\子路径」结尾 → 截掉即得文件夹本身的绝对路径。空文件夹选不出文件，
+  // 推不出路径（也没东西可挂），回落原上传通路自然空转。
+  function localFolderRoot(files) {
+    const f = files?.[0];
+    const rel = f?.webkitRelativePath || '';
+    if (!rel.includes('/')) return null;
+    const abs = nativePathForFile(f);
+    if (!abs) return null;
+    const norm = abs.replace(/\//g, '\\');
+    const sub = rel.slice(rel.indexOf('/')).replace(/\//g, '\\');
+    if (!norm.toLowerCase().endsWith(sub.toLowerCase())) return null;
+    return { path: norm.slice(0, norm.length - sub.length), name: rel.split('/')[0] };
+  }
+  function pushLocalFolder(localPath, name) {
+    compose.attachments.push({ path: localPath, name, kind: 'folder', url: null, count: null, note: '', pending: false, local: true });
   }
 
   async function addFolder(name, items, stat) {
@@ -248,10 +280,32 @@
     if (!dtHasFiles(e.dataTransfer)) { dragOver = false; return; }
     e.preventDefault();
     dragOver = false;
+    // 桌面壳：顶层文件夹拿得到本机路径 → 零拷贝挂载原目录（20GB 目录秒挂，不复制）；
+    // 散文件交给 addFiles（非图片同样零拷贝）。任何文件夹拿不到路径（旧壳/网页）→
+    // 整批回落原整树上传。所有 dataTransfer 读取必须在【同步段】完成。
+    if (refDirsFromDrop(e)) return;
     // 拖进来的有文件夹 → 走整树「挂载」；纯文件维持原来的逐个附件上传。
     // entriesFromDrop 必须在这里【同步】调用：await 之后 dataTransfer 就废了。
     if (dropHasDirs(e)) { addDropped(entriesFromDrop(e)); return; }
     addFiles(e.dataTransfer.files);
+  }
+  function refDirsFromDrop(e) {
+    const items = [...(e.dataTransfer?.items || [])].filter((it) => it.kind === 'file');
+    const dirs = [];
+    const files = [];
+    for (const it of items) {
+      const entry = it.webkitGetAsEntry?.();
+      const f = it.getAsFile?.();
+      if (entry?.isDirectory) {
+        const p = f ? nativePathForFile(f) : '';
+        if (!p) return false;
+        dirs.push({ path: p, name: (f && f.name) || entry.name });
+      } else if (f) files.push(f);
+    }
+    if (!dirs.length) return false;
+    for (const d of dirs) pushLocalFolder(d.path, d.name);
+    if (files.length) addFiles(files);
+    return true;
   }
   // 一次拖拽可能文件夹与散文件混着来：文件夹各挂一条，散文件照旧逐个当附件。
   async function addDropped(entries) {
@@ -363,7 +417,7 @@
   {#if compose.attachments.length}
     <div class="attachments">
       {#each compose.attachments as a, ai (a.path || 'pending-' + ai)}
-        <div class="att" class:img={a.kind === 'image'} class:pending={a.pending} class:dir={a.kind === 'folder' || a.kind === 'chat'}>
+        <div class="att" class:img={a.kind === 'image'} class:pending={a.pending} class:dir={a.kind === 'folder' || a.kind === 'chat'} use:dragOut={() => attDragSrc(a)}>
           {#if a.kind === 'image' && a.url}
             <img src={a.url} alt={a.name} />
           {:else if a.kind === 'chat'}

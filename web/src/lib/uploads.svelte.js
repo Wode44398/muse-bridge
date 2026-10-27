@@ -16,21 +16,17 @@
 // 【Svelte 5 深代理】行对象必须先放进 $state 数组、再从数组里取出代理来改——改原始字面量界面收不到，
 // 以前「进度卡 0%、传完整行消失」就是这么来的。
 
-import { apiUrl } from './server.js';
+import { apiUrl, tunnelAlt, noteNetFail } from './server.js';
 import { authHeaders } from './api.js';
 import { t, tr } from './i18n.js';
-
-// bridge 本体的 app 在局域网直连与隧道之间切线路（tunnelAlt / noteNetFail）；Muse 只有一条线路，这两个是空操作。
-const noteNetFail = () => {};
-const tunnelAlt = () => null;
 
 const CHUNK = 8 * 1024 * 1024;
 const PAR = 3;            // 一个文件同时在途的块数
 const FILE_SLOTS = 2;     // 同时传几个文件/文件夹任务，其余排队
 const TREE_PAR = 3;       // 文件夹任务里同时传几个文件
 const STALL_MS = 40000;
-// 请求体已经全部交出去之后，等回执的耐心按块大小给：慢线路上（Muse 的隧道约 0.7 MB/s，3 块并行各分到更少）浏览器早把字节
-// 交给了本机网络栈 / 代理，进度事件就停了，服务端却还在一点点收——按 40 秒判卡死会把每一块都掐掉重发、永远传不完。
+// 请求体已经全部交出去之后，等回执的耐心按块大小给：慢线路上（Muse 的隧道约 0.7 MB/s；本机若开着代理，它会先把整块请求体收下）
+// 浏览器早把字节交给了本机网络栈 / 代理，进度事件就停了，服务端却还在一点点收——按 40 秒判卡死会把每一块都掐掉重发、永远传不完。
 const RESP_MIN_BPS = 32 * 1024;
 const MAX_TRIES = 10;     // 每块/每次 commit 最多连续失败几次（断网等待不计）
 

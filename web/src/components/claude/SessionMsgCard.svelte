@@ -9,7 +9,7 @@
   import { sessionTitle, briefSections, REL_LABEL } from '../../lib/sessionFamily.svelte.js';
   import { IS_CSNAP } from '../../lib/csnap.js';
   import { renderMarkdown } from '../../lib/md.js';   // 会话间的话基本是 Claude 写的，常带 markdown；md.js 内部 DOMPurify 清洗
-  import { t, tr } from '../../lib/i18n.js';
+  import { t } from '../../lib/i18n.js';
 
   let { part } = $props();
 
@@ -17,15 +17,15 @@
   let open = $state(false);
   const fromTitle = $derived(part.kind === 'message' ? (sessionTitle(part.from, part.title) || part.name || t('另一个会话')) : '');
   const head = $derived(part.kind !== 'message' ? '' : part.brief
-    ? t('{rel}派来的任务', { rel: (REL_LABEL[part.relation] || REL_LABEL.linked) })
-    : t('来自{rel}', { rel: (REL_LABEL[part.relation] || REL_LABEL.linked) }));
+    ? t('{rel}派来的任务', { rel: t(REL_LABEL[part.relation] || REL_LABEL.linked) })
+    : t('来自{rel}', { rel: t(REL_LABEL[part.relation] || REL_LABEL.linked) }));
   const sections = $derived(part.kind === 'message' && part.brief ? briefSections(part.body) : null);
   const long = $derived((part.kind === 'message' || part.kind === 'peer') && part.body.length > LONG);
   const peerHead = $derived(part.kind !== 'peer' ? ''
     : part.source === 'desktop' ? t('来自 Claude Desktop 会话')
     : part.source === 'terminal' ? t('来自终端会话')
     : t('来自另一个 Claude 会话'));
-  const STATUS = { done: t('这一轮已结束'), failed: t('这一轮出错了'), stopped: t('被停下') };
+  const STATUS = { done: '这一轮已结束', failed: '这一轮出错了', stopped: '被停下' };
   let openNotes = $state({});
   function go(id) { if (id && !IS_CSNAP) openSession(id); }
 </script>
@@ -42,7 +42,7 @@
     <div class="smc-body sel-text" class:clamp={long && !open}>
       {#if sections}
         {#each sections as s}
-          {#if s.label}<div class="smc-label">{tr(s.label)}</div>{/if}
+          {#if s.label}<div class="smc-label">{t(s.label)}</div>{/if}
           <div class="smc-md">{@html renderMarkdown(s.text)}</div>
         {/each}
       {:else}
@@ -63,7 +63,7 @@
           <div class="note-head">
             <span class="dot {n.status}" aria-hidden="true"></span>
             <button class="note-title" disabled={IS_CSNAP || !n.from} title={t('打开这个会话')} onclick={() => go(n.from)}>{sessionTitle(n.from, n.title) || n.name || t('子会话')}</button>
-            <span class="note-st">{STATUS[n.status] || STATUS.done}</span>
+            <span class="note-st">{t(STATUS[n.status] || STATUS.done)}</span>
           </div>
           {#if n.text}
             <div class="note-text smc-md sel-text" class:clamp={!openNotes[i] && n.text.length > 160}>{@html renderMarkdown(n.text)}</div>

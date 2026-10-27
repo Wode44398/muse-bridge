@@ -41,7 +41,7 @@ export const SPRING_SOFT = makeSpring(0.9, 0.42);
 export const SPRING = makeSpring(0.72, 0.5);
 // 弹跳：明显回弹（≈9%），只给小东西（徽标、勾、状态点）
 export const SPRING_POP = makeSpring(0.6, 0.56);
-// 快：同柔一样几乎不过冲，但 260ms 就停——跟手的选中块（分段控件、工作区标签带；420ms 的柔弹簧显得慢、不跟手）
+// 快：同柔一样几乎不过冲，但 260ms 就停——跟手的选中块（分段控件、工作区标签带；维护者 09-26 嫌 420ms 的柔弹簧「慢、不跟手」）
 export const SPRING_SNAP = makeSpring(0.9, 0.26);
 
 // 浏览器不认 linear() 时的近似（三次贝塞尔）

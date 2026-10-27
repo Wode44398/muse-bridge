@@ -18,14 +18,13 @@ import v8 from 'node:v8';
 import { spawn } from 'node:child_process';
 
 const WINDOW_MS = 60_000;
-const faultHooks = [];
-/** 每次兜住一个未捕获异常 / 未处理拒绝时通知（反馈模块记进报错记录） */
-export function onFault(fn) { faultHooks.push(fn); }
 const MAX_IN_WINDOW = 5;
 
-// V8 致命错误（含 OOM）和 Node 的 fail-fast 自崩都绕过上面那两个 JS 钩子、什么栈都不留，进程就这么没了。
-// 诊断报告专抓这一类：Node 在 abort 之前先写一份带 JS + 原生栈的 json 到 reportDir（数据目录的 crashdumps/），
-// 事后查「服务怎么突然没了」就看它。报告只留在本机，不会自动发出去。
+// 2026-10-08：审计定案，历次「无遗言消失」是 Node 自身 fail-fast（4689 退出码 0xC0000409）
+// 自崩，不是被 taskkill——而 fail-fast / V8 致命错误都绕过上面那两个 JS 钩子、什么栈都不留。
+// 诊断报告专抓这一类：V8 致命错误（含 OOM）触发时，Node 在 abort 之前先写一份带 JS+原生栈的
+// json 到 reportDir。原生模块段错误这类连 V8 都来不及接的，另靠 WER LocalDumps\node.exe 的 dump
+// 兜底（两者放同一个 crashdumps 目录）。见 memory/reference_taskkill_tree_stale_parent.md 顶部定案。
 function enableFatalReport(name, reportDir) {
   try {
     if (!process.report || !reportDir) return;
@@ -95,7 +94,6 @@ export function installFatalGuard(name = 'bridge', reportDir = null, { heapSnaps
     hits.push(now);
     // 完整堆栈——这条日志就是事后查「到底谁炸的」的唯一线索，别省。
     console.error(`[fatal-guard/${name}] ${kind}:`, err instanceof Error ? (err.stack || err.message) : err);
-    for (const h of faultHooks) { try { h(kind, err); } catch {} }
     if (hits.length >= MAX_IN_WINDOW) {
       console.error(`[fatal-guard/${name}] ${WINDOW_MS / 1000}s 内已 ${hits.length} 次——判定进程已进入坏状态，主动退出交给守护重启`);
       process.exit(1);

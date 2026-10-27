@@ -13,7 +13,7 @@
 // 官网是【增量 DOM】：旧节点不动、只往末尾追加，linear 从 0→1 一路涨，天然不回跳。
 // bridge 不同：Thread 里 {@html renderMarkdown(seg.md)} 每个 ~100ms delta 就把整棵子树全量重渲染，
 // 上一段尾巴的 DOM 被整棵替换。若给新尾巴挂 linear，它在下一次重渲染时会从半透明"啪"地变成实体（爆闪）。
-// （强 ease-out 能把这一跳藏进"几乎已到实体"的尾段——但那不是官网的 linear。）
+// （Gemini 版 streamFade 用强 ease-out 正是为了把这一跳藏进"几乎已到实体"的尾段——但那不是官网的 linear。）
 //
 // —— 复刻手法：负 animation-delay 续接 ——
 // 把"最近 DUR 毫秒内出生的每一段尾巴"都当作活跃段（记 born 时刻）。每次重渲染后回到纯文本，再把每个

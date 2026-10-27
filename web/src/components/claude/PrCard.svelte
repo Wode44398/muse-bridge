@@ -8,6 +8,7 @@
   import { send, queueSend } from '../../lib/chat.svelte.js';
   import { cs } from '../../lib/claudeSettings.svelte.js';
   import { isFolded, toggleFold } from '../../lib/sessionRail.svelte.js';
+  import { isNativeDesktop } from '../../lib/nativeDesktop.js';
   import { showToast } from '../../lib/toast.svelte.js';
   import {
     prViewOf, loadPr, watchPr, prAction, mainPr, ciStatus, conflicting, prTone, stateLabel, REVIEW_LABEL, GH_REASON,
@@ -57,6 +58,10 @@
 
   // 检查条目的链接是第三方写的（CheckRun detailsUrl / commit status targetUrl）：只认 http(s)，别的退回 PR 的 checks 页
   const safeHref = (u, fallback) => (/^https?:\/\//i.test(String(u || '')) ? u : fallback);
+  function linkClick(e, url) {
+    // 桌面壳：交系统浏览器（网页 / 手机由 <a target=_blank> 自己开新标签）
+    if (isNativeDesktop()) { e.preventDefault(); openGitHub(url); }
+  }
 
   // —— 创建拉取请求（交给 Claude）——
   let menuOpen = $state(false);
@@ -232,7 +237,7 @@
           {@const s = S(pr.url)}
           {@const ci = ciStatus(pr)}
           <div class="pr">
-            <a class="rr click prline" href={safeHref(pr.url, '#')} target="_blank" rel="noopener noreferrer" title={pr.title}>
+            <a class="rr click prline" href={safeHref(pr.url, '#')} target="_blank" rel="noopener noreferrer" title={pr.title} onclick={(e) => linkClick(e, pr.url)}>
               {@render ic('<circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8v8M18 16V9a3 3 0 0 0-3-3h-4"/><path d="M13 4l-2 2 2 2"/>')}
               <span class="num">#{pr.number}</span><span class="rr-txt">{pr.title || pr.repo}</span><span class="rr-grow"></span>
               <span class="pill {prTone(pr)}">{stateLabel(pr.state)}</span>
@@ -258,7 +263,7 @@
                 <div class="checks">
                   {#each sortedChecks(pr) as c, ci2 (ci2)}
                     {@const href = safeHref(c.url, pr.url + '/checks')}
-                    <a class="rr click chk" {href} target="_blank" rel="noopener noreferrer">
+                    <a class="rr click chk" {href} target="_blank" rel="noopener noreferrer" onclick={(e) => linkClick(e, href)}>
                       {@render dot(c.bucket)}<span class="rr-txt">{c.name}</span>{#if c.workflow}<span class="rr-dim small">· {c.workflow}</span>{/if}
                     </a>
                   {/each}

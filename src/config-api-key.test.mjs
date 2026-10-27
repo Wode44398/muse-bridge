@@ -82,3 +82,26 @@ test('桌面安装包：server-run 经环境变量交来向导里选的 key（�
   // 同值但不是桌面托管（Docker / Linux 两处都写了）：按部署者的环境变量算
   assert.equal(run(cfg, { env: { ANTHROPIC_API_KEY: 'sk-ant-api03-WIZ' } }).mode, 'env');
 });
+
+test('认证失败的提示跟着 key 的状态走：在用 key 时不再让人去更新号池令牌', () => {
+  const auth = `const s = await import(${url('runtime/status.mjs')}); const c2 = s.classifyError('Invalid API key', 'authentication_failed'); out.title = c2.title; out.hint = c2.hint;`;
+  const pool = { claudeAccounts: [{ id: 'a', label: 'A', token: 'sk-ant-oat01-A' }], claudeActiveAccount: 'a' };
+  const desk = run({ anthropicApiKey: 'sk-ant-api03-WIZ', ...pool }, { env: { ANTHROPIC_API_KEY: 'sk-ant-api03-WIZ', BRIDGE_SUPERVISED: 'desktop' }, body: auth });
+  assert.equal(desk.title, 'API Key 无效');
+  assert.match(desk.hint, /托盘「本机服务端 › 重新配置…」/);
+  const env = run(pool, { env: { ANTHROPIC_API_KEY: 'sk-ant-api03-ENV' }, body: auth });
+  assert.equal(env.title, 'API Key 无效');
+  assert.match(env.hint, /ANTHROPIC_API_KEY/);
+  const cfg = run({ anthropicApiKey: 'sk-ant-api03-CFG' }, { body: auth });
+  assert.equal(cfg.title, 'API Key 无效');
+  assert.match(cfg.hint, /anthropicApiKey/);
+  const unused = run({ anthropicApiKey: 'sk-ant-api03-CFG', ...pool }, { body: auth });
+  assert.equal(unused.title, '登录已失效');
+  assert.match(unused.hint, /anthropicApiKey 没在用/);
+  // 只有号池令牌：原来的说法一字不动
+  const tok = run(pool, { body: auth });
+  assert.equal(tok.title, '登录已失效');
+  assert.match(tok.hint, /^令牌过期或被撤销：.*npm run set-auth/);
+  const deskTok = run(pool, { env: { BRIDGE_SUPERVISED: 'desktop' }, body: auth });
+  assert.match(deskTok.hint, /^令牌过期或被撤销：.*托盘「本机服务端 › 重新配置…」里重填。$/);
+});

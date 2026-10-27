@@ -75,6 +75,6 @@ test("S10 止血：Browser(attach) 不认控制面页面——全是控制面就
   const session = new CdpSession();
   await assert.rejects(
     session.attach((server.address() as { port: number }).port),
-    /own control plane \(a logged-in bridge session\) — attaching to them is not allowed\. .*LocalPCInspect\(action:"screenshot", window:/,
+    /own control plane \(a logged-in bridge session\) — attaching to them is not allowed\. .*DeviceInspect\(action:"screenshot", window:/,
   );
 });

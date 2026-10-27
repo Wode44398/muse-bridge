@@ -52,7 +52,7 @@ test('设置值翻成 flag 层：风格 / 语言 / 署名 / 工作流 / 安全�
   });
   const r = T.turnSettings(admin, { suggest: true, compactFrac: 0.3 });
   assert.equal(r.pauseOnFlag, false);
-  // 开着也必须显式写 true：不写的话 CLI 回落读 ~/.claude/settings.json（本机可能写着 false），会把回退模型压掉
+  // 开着也必须显式写 true：不写的话 CLI 回落读 ~/.claude/settings.json（维护者本机写着 false），会把回退模型压掉
   assert.equal(r.sdk.switchModelsOnFlag, true, '自动切换时 flag 层显式 true，盖过 user / project 层的 false');
   assert.equal(r.sdk.outputStyle, 'Concise');
   assert.equal(r.sdk.language, 'Simplified Chinese');

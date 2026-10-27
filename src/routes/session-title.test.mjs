@@ -4,7 +4,7 @@
 // 绝对路径如下]」整段注进 prompt 并写入 transcript。气泡那条通道早就用
 // splitAttachments() 剥掉了，标题这条没有——体检时在线上 /api/sessions 实测到
 // 「…教我看懂这些数据 [用户上传了以下附件，绝对路径如下，请按需用 Read 工具读取
-// （图片也用 Read）] - C:\Users\alice\…」。该接口对普通 user 与公开快照访客同样开放。
+// （图片也用 Read）] - C:\Users\you\…」。该接口对普通 user 与公开快照访客同样开放。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,27 +16,27 @@ const withAtt = (text, ...paths) =>
 
 test('标题剥掉附件注入段，只留用户真正说的话', () => {
   const t = trimTitle(withAtt('这些都是什么意思，教我看懂这些数据',
-    'C:\\Users\\alice\\muse-bridge\\uploads\\1755000000000-截图.png'));
+    'C:\\Users\\you\\claude-bridge\\uploads\\1755000000000-截图.png'));
   assert.equal(t, '这些都是什么意思，教我看懂这些数据');
 });
 
 test('标题里绝不出现服务器绝对路径或提示词脚手架', () => {
-  const t = trimTitle(withAtt('看看这个', 'C:\\Users\\alice\\muse-bridge\\uploads\\1755000000000-a.png'));
+  const t = trimTitle(withAtt('看看这个', 'C:\\Users\\you\\claude-bridge\\uploads\\1755000000000-a.png'));
   assert.doesNotMatch(t, /用户上传了以下附件/);
   assert.doesNotMatch(t, /C:\\/);
   assert.doesNotMatch(t, /uploads/);
 });
 
 test('只传附件、一个字没写时用附件名兜底——不能剥成空标题（空标题会被列表整条丢掉）', () => {
-  const t = trimTitle(withAtt('', 'C:\\Users\\alice\\muse-bridge\\uploads\\1755000000000-年报.pdf'));
+  const t = trimTitle(withAtt('', 'C:\\Users\\you\\claude-bridge\\uploads\\1755000000000-年报.pdf'));
   assert.equal(t, '年报.pdf');
   assert.notEqual(t.trim(), '');
 });
 
 test('多个附件时名字都留下，仍然不带路径', () => {
   const t = trimTitle(withAtt('',
-    'C:\\Users\\alice\\muse-bridge\\uploads\\1-a.png',
-    'C:\\Users\\alice\\muse-bridge\\uploads\\2-b.png'));
+    'C:\\Users\\you\\claude-bridge\\uploads\\1-a.png',
+    'C:\\Users\\you\\claude-bridge\\uploads\\2-b.png'));
   assert.equal(t, 'a.png、b.png');
   assert.doesNotMatch(t, /C:\\/);
 });

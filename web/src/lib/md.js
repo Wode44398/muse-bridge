@@ -62,7 +62,7 @@ export function ensureKatex() {
 // CommonMark 的 flanking 规则把紧贴中文标点的 ** 判为"非定界符"：
 //   **“杀手锏”**。       → 字面 ** 残留（不加粗）
 //   **“即梦”**和**“Pix”** → 中间字错误加粗、两边星号裸奔
-// 中文回复里这类 pattern 海量出现，看起来就是"md 渲染失效"。
+// 中文回复里这类 pattern 海量出现，看起来就是"md 渲染失效"（claude/gemini 都中）。
 // 聊天场景里模型写成对 ** 的意图明确就是加粗，故用高优先级 inline 扩展放宽判定：
 // 成对 **…**（内部非空、无裸 **、不跨行）一律按 strong 处理，内部继续走 inline 解析。
 // inline 扩展不会进入 code block / `inline code`（block 阶段已切走、扫描指针在
@@ -86,7 +86,7 @@ export const cjkStrong = {   // obsmd.js（工作空间 md 阅读器）复用同
 // 形态：目标含空格或一层平衡括号、且无 scheme（本地路径）；其余一律还给内置解析。
 // 尖括号目标 [x](<带 空格 的/路径.html>) 是 CommonMark 给「目标含空格」的正规写法（DELIVER_NUDGE
 // 也这么教），尖括号只是定界符：以前原样留进 href，点开成「路径.html>」→ 对不上附件卡、文件也找不到，
-// 预览按未知类型显示「即将到来」（例：模型写出 replay-300682.html> 这类尾巴）。
+// 预览按未知类型显示「即将到来」（09-28 维护者报的 replay-300682.html>）。
 export const looseLink = {
   name: 'looseLink',
   level: 'inline',
@@ -169,7 +169,7 @@ marked.use({ extensions: [cjkStrong, looseLink, soloTilde] }, inlineHtmlGuard);
 
 // 只有真外链才新开（防 tab-nabbing）。内部链接（模型写的产物路径 / 同源 API）不加
 // target——由各渲染容器的 onMdClick 委托分流到应用内预览（lib/linkNav.js），加了 _blank
-// 会新开一个标签页去打开一个应用内才认得的路径，正文点「原文」就跳走了。
+// 会在桌面壳被 setWindowOpenHandler 抢先丢去系统浏览器，正文点「原文」就跳 web 去了。
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A' && node.getAttribute('href')) {
     const href = node.getAttribute('href');
@@ -218,7 +218,7 @@ export function findSafeCut(tail, min = 800, margin = 400) {
   return -1;
 }
 
-// 通用流式分块 memo：obj 是承载这段文本的响应式对象（text 段），text 是
+// 通用流式分块 memo：obj 是承载这段文本的响应式对象（text 段 / Gemini 消息），text 是
 // 其当前全文。返回 [稳定块..., 流式尾巴]。consumed 单调推进、重放（变短）自动重置。
 const _blkMemo = new WeakMap();
 export function streamBlocks(obj, text) {
@@ -289,8 +289,8 @@ function wrapTables(root) {
 // —— 代码块右上角「复制」按钮（claude.ai 同款）——
 // 同 wrapTables：sanitize 之后往树里塞自家节点。按钮是 <pre> 的兄弟而非子节点——<pre>
 // 自己横滚，塞在里面会跟着代码一起滚走；壳 .md-codewrap 定位、样式在 app.css。
-// 按钮里只有 SVG、没有文本节点：吐字渐入（claudeFade）按文本节点计数，不受影响。
-// 点击走下面 document 级委托，所有 md 渲染面（Claude 对话 / 扩展中心 / 文档预览…）自动生效。
+// 按钮里只有 SVG、没有文本节点：吐字渐入（claudeFade/streamFade）按文本节点计数，不受影响。
+// 点击走下面 document 级委托，所有 md 渲染面（Claude / Vertex / Codex…）自动生效。
 const ICON_COPY = '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg>';
 const ICON_DONE = '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 10.5l3.5 3.5 7.5-8"/></svg>';
 function wrapCode(root) {

@@ -1,0 +1,89 @@
+/* 纸墨：纸 #F4F1EA / 墨 #171614 / 朱只给正在发生 #C8412B（深色 #E4553A） */
+:root {
+  --paper: #F4F1EA;
+  --raised: #FAF8F3;
+  --ink: #171614;
+  --ink-2: #57534c;
+  --ink-3: #8a857c;
+  --line: rgba(23, 22, 20, .10);
+  --live: #C8412B;
+  --sheen: rgba(255, 255, 255, .8);
+  --shadow: 0 1px 2px rgba(40, 37, 33, .08), 0 6px 16px rgba(40, 37, 33, .08);
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #131210;
+    --raised: #1c1a17;
+    --ink: #EEE9DF;
+    --ink-2: #b9b3a8;
+    --ink-3: #8a857c;
+    --line: rgba(238, 233, 223, .10);
+    --live: #E4553A;
+    --sheen: rgba(255, 255, 255, .05);
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 16px rgba(0, 0, 0, .25);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  width: 320px;
+  padding: 14px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+header { display: flex; align-items: center; gap: 10px; }
+header img { border-radius: 7px; }
+.brand { flex: 1; line-height: 1.1; }
+.name { font-weight: 650; font-size: 15px; letter-spacing: .01em; }
+.sub { color: var(--ink-3); font-size: 11.5px; margin-top: 2px; }
+
+.switch { position: relative; width: 36px; height: 20px; flex: none; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--line); border: 1px solid var(--line); transition: background .2s ease; }
+.switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--raised); box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: transform .25s cubic-bezier(.2,.8,.2,1); }
+.switch input:checked + span { background: var(--ink); }
+.switch input:checked + span::after { transform: translateX(16px); background: var(--paper); }
+.switch input:focus-visible + span { outline: 2px solid var(--live); outline-offset: 2px; }
+
+.status {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 10px 12px; border-radius: 10px;
+  background: var(--raised); border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 var(--sheen), var(--shadow);
+}
+.lamp { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: none; background: var(--ink-3); }
+.status[data-s="ready"] .lamp { background: var(--ink); }
+.status[data-s="acting"] .lamp { background: var(--live); animation: pulse 1.8s ease-out infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(200, 65, 43, .45); } 80%, 100% { box-shadow: 0 0 0 6px rgba(200, 65, 43, 0); } }
+.line { font-weight: 600; }
+.hint { color: var(--ink-2); font-size: 12px; margin-top: 2px; }
+.hint:empty { display: none; }
+
+button { font: inherit; cursor: pointer; border-radius: 8px; padding: 8px 12px; border: 1px solid transparent; transition: background .15s ease, transform .1s ease; }
+button:active { transform: scale(.98); }
+button:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }
+button:disabled { opacity: .45; cursor: default; }
+.primary { background: var(--ink); color: var(--paper); font-weight: 600; width: 100%; }
+.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+.stop { background: var(--live); color: #fff; font-weight: 600; width: 100%; }
+
+.tab { display: flex; flex-direction: column; gap: 8px; }
+.tabTitle { color: var(--ink-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note { color: var(--ink-3); font-size: 11.5px; }
+.note:empty { display: none; }
+.rule { margin: 0; color: var(--ink-2); font-size: 12px; }
+
+details { border-top: 1px solid var(--line); padding-top: 8px; }
+summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
+form { display: flex; gap: 6px; margin: 8px 0 4px; }
+form input {
+  flex: 1; min-width: 0; font: 12px/1.3 ui-monospace, "Cascadia Code", Consolas, monospace;
+  padding: 7px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--raised); color: var(--ink);
+}
+form input:focus { outline: 2px solid var(--live); outline-offset: 0; }
+.meta { color: var(--ink-3); font-size: 11px; margin-top: 6px; }

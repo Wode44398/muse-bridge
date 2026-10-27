@@ -20,8 +20,8 @@ export { ownerKey, parseOwnerKey } from './principal.mjs';
 
 // 这个身份能用哪些 agent：全局开关（agent-status 的 enabled）∩ 身份名单。
 //   admin：全部已启用的。
-//   user ：管理员给这个人勾的名单（没勾过 = 默认只有 Claude），且只留支持多用户的 agent。
-//   snap ：只有 Claude（聊天快照就是个 Claude 对话框）。share：一个都没有。
+//   user ：管理员给这个人勾的名单（没勾过 = 默认 Claude + Gemini），且只留支持多用户的 agent。
+//   snap ：只有 Claude（QQ 群快照就是个 Claude 对话框）。share：一个都没有。
 export function agentsFor(identity) {
   const on = enabledAgents();
   const kind = identity && identity.kind;
@@ -37,6 +37,8 @@ function agentFlags(identity) {
   return {
     agents,
     allowClaude: agents.includes('claude'),
+    allowGemini: agents.includes('gemini'),
+    allowCodex: agents.includes('codex'),
     allowDimensio: agents.includes('dimensio'),
   };
 }
@@ -71,7 +73,7 @@ export function makeIdentify({ authOk, getCookie, bearerToken, queryToken, resol
   return function identify(req) {
     if (req && req[INTERNAL_IDENTITY]) return req[INTERNAL_IDENTITY];
     // 【显式能力 token 优先于环境登录态】——/c/ 快照页与 /w/ 分享页的每个请求都自带
-    // ?ct= / ?st=。若访客浏览器恰好登着 bridge（管理员自己点开分享出去的链接是典型场景），
+    // ?ct= / ?st=。若访客浏览器恰好登着 bridge（维护者自己点开群里的链接是典型场景），
     // cookie/Bearer 抢先解析会把请求接管成 admin/user：快照会话解析到错误 cwd
     // （历史 404 → 前端变欢迎页、SDK resume 报「No conversation found」），share 页
     // 则会浏览到登录者自己的工作空间。能力 token 只会【降权】（snap/share 沙箱 ⊂
@@ -80,8 +82,8 @@ export function makeIdentify({ authOk, getCookie, bearerToken, queryToken, resol
     //
     // 聊天快照：?ct=<token> 或 x-csnap-token 头 → kind:'snap'——【可写】但 cwd 锁死快照桶、
     // 无 shell 的沙箱身份。只有 server.mjs 显式拿到 resolveSnap 的路由模块（chat/upload/
-    // overview/sessions）认识它；其余模块用不带 resolveSnap 的 identify，snap token 解析成
-    // none → 401。
+    // overview/sessions）认识它；其余模块（vertex/媒体…）用不带 resolveSnap 的
+    // identify，snap token 解析成 none → 401，烧钱端点碰不到。
     if (resolveSnap) {
       let ct = '';
       try { ct = new URL(req.url, 'http://x').searchParams.get('ct') || ''; } catch {}
@@ -106,15 +108,15 @@ export function makeIdentify({ authOk, getCookie, bearerToken, queryToken, resol
     // for a valid token, so both resolve to admin here.
     if (authOk(req)) return { kind: 'admin', user: null };
     // user session token: bridge_user cookie (同源/在线壳) OR Authorization: Bearer.
-    // 跨源客户端的 credentials:'same-origin' 不带
+    // 离线 apk 前端跑在 appassets 源、API 跨源到隧道，credentials:'same-origin' 不带
     // cookie——user 只能靠 Bearer 携带 session token（admin 早就这么走）。authOk 已先
     // 判过 admin，所以走到这里的 Bearer 必然不是 admin token：getSession 命中才是 user，
     // 否则 none，绝不会把任意 Bearer 提权成 admin。
     const tok = getCookie(req, 'bridge_user') || (bearerToken ? bearerToken(req) : '') || (queryToken ? queryToken(req) : '');
     const s = tok ? getSession(tok) : null;
-    // 多用户关着：普通账号的会话一律不认，只剩服务账号（程序用的账号）。
+    // 多用户关着（主机形态）：普通账号的会话一律不认，只剩服务账号（QQ 机器人这类）。
     // user = 账号 id（目录 / owner 键 / 账本都认它，老账号 = 用户名），name = 登录名（显示用，可改），
-    // sid / loginAt = 这次登录。
+    // sid / loginAt = 这次登录（设备登记据此绑到这次登录上，见 routes/devices.mjs）。
     if (s && (FEATURES.multiUser || s.service)) return { kind: 'user', user: s.id || s.user, name: s.user, sid: s.sid || '', loginAt: s.since || 0, tier: s.tier, agents: s.agents, snapshot: s.snapshot, service: s.service };
     return { kind: 'none', user: null };
   };
@@ -169,11 +171,14 @@ function contextBase(identity) {
       dataDir: sys,
       uploads: path.join(sys, 'uploads'),
       media: path.join(sys, 'media'),
+      vertexHist: path.join(sys, 'vertex-history'),
+      codexHist: path.join(sys, 'codex-history'),
+      codexProjects: path.join(sys, 'codex-projects.json'),
       claudeProjects: path.join(sys, 'claude-projects.json'),
     };
   }
   // 聊天快照身份：与 share 同样【必须先于】admin 兜底判断，但可写（readOnly 不设）——
-  // Claude 在桶里真读真写，交付走附件卡。无 shell；key 按 token 隔离，
+  // Claude 在桶里真读真写，交付走附件卡。无 shell、无 codex；key 按 token 隔离，
   // 每个快照的 gen/会话/上传互不相干。ctx.snap 供 chat.mjs / claude.mjs 走快照专属分支。
   if (identity && identity.kind === 'snap') {
     const dir = identity.dir;
@@ -186,6 +191,9 @@ function contextBase(identity) {
       dataDir: sys,
       uploads: path.join(sys, 'uploads'),
       media: path.join(sys, 'media'),
+      vertexHist: path.join(sys, 'vertex-history'),
+      codexHist: path.join(sys, 'codex-history'),
+      codexProjects: path.join(sys, 'codex-projects.json'),
       claudeProjects: path.join(sys, 'claude-projects.json'),
     };
   }
@@ -199,6 +207,9 @@ function contextBase(identity) {
       dataDir: ROOT,
       uploads: UPLOADS,
       media: MEDIA,
+      vertexHist: path.join(ROOT, 'vertex-history'),
+      codexHist: path.join(ROOT, 'codex-history'),
+      codexProjects: path.join(ROOT, 'codex-projects.json'),
       claudeProjects: path.join(ROOT, 'claude-projects.json'),
     };
   }
@@ -206,12 +217,14 @@ function contextBase(identity) {
   const sys = path.join(base, '.bridge');
   const tier = identity.tier === 'user' ? 'user' : 'pro';
   return {
-    // 能用哪些 agent 由管理员按人勾（users.json 的 agents；没勾过 = 默认只有 Claude），
-    // 再与全局开关、「该 agent 是否支持多用户」取交集（agentsFor）。
+    // 能用哪些 agent 由管理员按人勾（users.json 的 agents；没勾过 = 默认 Claude + Gemini，
+    // 2026-09-23 维护者定的规则），再与全局开关、「该 agent 是否支持多用户」取交集（agentsFor）。
+    // codex 不支持多用户：进程内部的工具调用、命令、改文件都绕过 bridge 的 canUseTool
+    // 沙箱守卫，且共用主机上的登录与会话目录——所以注册用户恒拿不到，勾了也不生效。
     kind: 'user', user: identity.user, sandbox: true, ...agentFlags(identity),
     // user 是账号 id；name 是登录名（只用来显示，可改）。sid / loginAt：这次登录（定时任务等无请求入口为空）。
     name: identity.name || identity.user, sid: identity.sid || '', loginAt: identity.loginAt || 0,
-    // 能不能铸公开聊天快照；老账号没写 = 保留。
+    // 能不能铸公开聊天快照（QQ 机器人这类服务账号要）；老账号没写 = 保留。
     canSnapshot: identity.snapshot !== false,
     service: identity.service === true,
     key: ownerKey('user', identity.user),     // 'u:<账号 id>'——owner 键只经 principal.ownerKey 生成（C2）
@@ -222,6 +235,9 @@ function contextBase(identity) {
     dataDir: sys,
     uploads: path.join(sys, 'uploads'),
     media: path.join(sys, 'media'),
+    vertexHist: path.join(sys, 'vertex-history'),
+    codexHist: path.join(sys, 'codex-history'),
+    codexProjects: path.join(sys, 'codex-projects.json'),
     claudeProjects: path.join(sys, 'claude-projects.json'),
   };
 }

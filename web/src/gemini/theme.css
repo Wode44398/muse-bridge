@@ -1,0 +1,281 @@
+/* ============================================================
+   Gemini (Luminous / lr26) 主题 —— Vertex 分页专用，固定亮色。
+   令牌 / 排版数值按参考资源（真实 Gemini 移动页）实测，代码自写；字体与图标用自带的开源字体。
+   全部作用域在 .vertex-root，绝不污染 bridge 全局暗色主题。
+   字体放 src/assets/font 由 Vite 处理 base（dev=/ , prod=/app/），url() 用相对路径。
+   ============================================================ */
+
+/* —— 字体：正文用 app.css 的 Bridge Sans（Inter，OFL），中文走系统回退；图标是自带的连字图标字体 Bridge Symbols
+   （Lucide 图标，ISC；按名字出图：menu / plus / mic…，名单见 web/scripts/public-assets/build_fonts.py 的 SYMBOLS）。
+   维护者的私有 overlay 可经 --gm-font-brand / --gm-font-sans / --gm-font-symbols / --gm-font-gsym 换成别的字体。—— */
+@font-face { font-family: "Bridge Symbols"; font-style: normal; font-weight: 100 900; font-display: block; src: url('../assets/font/bridge-symbols.woff2') format('woff2'); }
+
+.vertex-root {
+  /* —— 表面 / 文字 —— */
+  --g-surface: #fdfcfc;        /* 页面底 */
+  --g-bright: #fff;            /* 表面 / 输入条 / 侧栏 */
+  --g-dim: #f2f0f0;
+  --g-container: #f0f4f9;      /* 用户气泡 / 代码块底 */
+  --g-container-high: #e9eef6;
+  --g-on: #1f1f1f;            /* 主文字 */
+  --g-on-strong: #000;
+  --g-on-variant: rgba(0,0,0,.55);   /* 次要文字 */
+  --g-on-low: rgba(0,0,0,.42);
+  --g-outline: #747775;
+  --g-outline-low: #e1e3e1;          /* 输入条边框 */
+  --g-divider: #ececec;
+  /* —— 品牌 / 强调 —— */
+  --g-primary: #0b57d0;        /* 链接 / 主操作 */
+  --g-primary-c: #d3e3fd;
+  --g-on-primary: #fff;
+  --g-accent: #3186ff;         /* aurora 蓝 */
+  --g-accent-c: #dcf1ff;
+  --g-blue: #3186ff; --g-green: #0ebc5f; --g-red: #ff4641; --g-yellow: #ffcc00;
+  --g-placeholder: #5f6368;
+  /* —— 态 —— */
+  --g-hover: rgba(68,71,70,.08);
+  --g-hover-strong: rgba(68,71,70,.12);
+  /* —— 形状 / 阴影（2026-06 实测自真实 Gemini 移动页计算样式）——
+     输入条：白底无边框 radius 40，阴影极软 0 0 20px rgba(31,31,31,.04)
+     用户气泡：#f2f0f0 radius 40 padding 20/28；弹层 radius 20 padding 8 */
+  --g-r-input: 40px; --g-r-card: 16px; --g-r-bubble: 40px; --g-r-pill: 999px;
+  --g-shadow-input: 0 0 20px rgba(31,31,31,.04);
+  --g-shadow-pop: 0 6px 24px rgba(0,0,0,.16);
+  /* 字体栈：拉丁/数字走品牌无衬线（overlay 可换），中文系统回退 */
+  --g-font: var(--gm-font-brand, "Bridge Sans"), "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column;
+  background: var(--g-surface); color: var(--g-on);
+  font-family: var(--g-font); font-size: 16px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+}
+.vertex-root *, .vertex-enter * { box-sizing: border-box; }
+.vertex-root button { font-family: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+/* ============================================================
+   深色模式 —— Vertex 独立明暗：分页顶栏日/月钮切 vertex.theme，根节点挂 .v-dark
+   控制（与全局 ui.theme 解耦；默认深色）。取色自真实 Gemini 移动端深色页
+   （2026-06-16 连 Edge 实测计算样式）：页面纯黑 #000 / 抬升面 #1e1f20 / 正文 #e3e3e3
+   / 图标 #e0e0e0 / 输入条软白微光 / 主色淡蓝 #a8c7fa。只改令牌 + 少数硬编码色。
+   ============================================================ */
+.vertex-root.v-dark {
+  /* 暗色令牌照搬真站 gem-sys-color 计算值（2026-07 实测 lr26 深色）：页底不是纯黑而是 #131314，
+     表面层级 lowest#0e0e0e/low#1b1b1b/container#1e1f20/high#282a2c/highest#333537。*/
+  --g-surface: #131314;
+  --g-bright: #1e1f20;
+  --g-dim: #282a2c;
+  --g-container: #1e1f20;
+  --g-container-high: #333537;
+  --g-on: #e3e3e3;
+  --g-on-strong: #ffffff;
+  --g-on-variant: #c4c7c5;
+  --g-on-low: #9a9b9c;
+  --g-outline: #8e918f;
+  --g-outline-low: #444746;
+  --g-divider: #2c2d2f;
+  --g-primary: #a8c7fa;
+  --g-primary-c: #004a77;
+  --g-on-primary: #062e6f;
+  --g-accent: #a8c7fa;
+  --g-accent-c: #004a77;
+  --g-blue: #8ab4f8; --g-green: #6dd58c; --g-red: #f2b8b5; --g-yellow: #ffe071;
+  --g-placeholder: #9aa0a6;
+  --g-hover: rgba(227,227,227,.08);
+  --g-hover-strong: rgba(227,227,227,.14);
+  --g-shadow-input: 0 0 0 .5px rgba(255,255,255,.05);
+  --g-shadow-pop: 0 8px 28px rgba(0,0,0,.6);
+}
+/* 顶栏渐隐：浅色硬编码近白渐变 → 深色改纯黑渐变（否则黑页顶上压一条白带）。 */
+.vertex-root.v-dark .v-header {
+  background: linear-gradient(to bottom, rgba(0,0,0,.97) 0%, rgba(0,0,0,.86) 64%, rgba(0,0,0,0) 100%);
+}
+/* 底部环境光晕：浅色淡蓝 → 深色极淡冷蓝（贴合真实 Gemini 深色页底部微光，不发白发灰）。 */
+.vertex-root.v-dark .v-glow {
+  background: linear-gradient(180deg, rgba(40,72,140,0) 0%, rgba(42,74,140,.10) 55%, rgba(60,96,168,.20) 100%);
+}
+/* 对话输入条底部渐隐：浅色近白 → 深色纯黑（对齐顶栏渐隐的明暗处理，避免黑页底部压一条白带）。 */
+.vertex-root.v-dark .v-composer-wrap.v-cw-chat {
+  background: linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,.96) 42%, rgba(0,0,0,0) 100%);
+}
+/* 填充主操作：深色主色变淡蓝，原硬编码白字会糊 → 改深蓝字（对齐真实 Gemini 填充按钮）。 */
+.vertex-root.v-dark .vm-gen,
+.vertex-root.v-dark .vm-chip.on,
+.vertex-root.v-dark .vp-chip.on { color: #062e6f; }
+/* 分段控件选中态：深色下 bright(#1e1f20) 反比 track 暗 → 选中改更亮灰凸显。 */
+.vertex-root.v-dark .vp-seg button.on { background: #3c4043; color: var(--g-on-strong); box-shadow: none; }
+/* 复制/重试图标：硬编码深灰 #444746 在黑页几乎不可见 → 提亮。 */
+.vertex-root.v-dark .v-act { color: var(--g-on-variant); }
+/* 停止按钮：浅色黑底白块在黑页里糊掉 → 浅底深块（发送按钮 .v-go 本就淡蓝深箭头，不改）。 */
+.vertex-root.v-dark .v-stop { background: #e3e3e3; color: #000; }
+/* 错误条：浅色硬编码粉底红字 → 深色暗红底浅红字。 */
+.vertex-root.v-dark .vm-err,
+.vertex-root.v-dark .v-err { background: rgba(242,184,181,.14); color: #f2b8b5; }
+
+/* —— 图标字体（连字写法，与真实 Gemini 一致：把图标名当文本写）—— */
+.vertex-root .lumi, .vertex-enter .lumi { font-family: var(--gm-font-symbols, "Bridge Symbols"); font-weight: normal; font-style: normal; line-height: 1; letter-spacing: normal; text-transform: none; white-space: nowrap; direction: ltr; font-feature-settings: "liga"; -webkit-font-smoothing: antialiased; display: inline-block; user-select: none; }
+.vertex-root .gsym { font-family: var(--gm-font-gsym, "Bridge Symbols"); font-weight: normal; font-style: normal; line-height: 1; letter-spacing: normal; text-transform: none; white-space: nowrap; direction: ltr; font-feature-settings: "liga"; -webkit-font-smoothing: antialiased; display: inline-block; user-select: none; }
+
+/* —— 对话 markdown 排版（Gemini 模型正文 17px / 行高 26px）—— */
+.vertex-root .g-md { font-size: 17px; line-height: 1.625; color: var(--g-on); word-break: break-word; }
+/* 流式「吐字渐入」：写头新增的尾部文本淡入（见 lib/streamFade.js）。inline + 纯 opacity，
+   不改文本流；强 ease-out 让淡入即便被下一 delta 打断也几乎无跳变（对齐克隆页 .fade-chunk）。 */
+.vertex-root .g-md .g-in { display: inline; animation: gmIn .42s cubic-bezier(.2,0,0,1) both; }
+@keyframes gmIn { from { opacity: 0; } to { opacity: 1; } }
+.vertex-root .g-md p { margin: 0 0 12px; }
+.vertex-root .g-md > :last-child { margin-bottom: 0; }
+.vertex-root .g-md h1, .vertex-root .g-md h2, .vertex-root .g-md h3, .vertex-root .g-md h4 { font-weight: 500; line-height: 1.3; margin: 18px 0 8px; }
+.vertex-root .g-md h1 { font-size: 22px; }
+.vertex-root .g-md h2 { font-size: 19px; }
+.vertex-root .g-md h3, .vertex-root .g-md h4 { font-size: 17px; }
+.vertex-root .g-md ul, .vertex-root .g-md ol { margin: 0 0 12px; padding-left: 24px; }
+.vertex-root .g-md li { margin: 4px 0; }
+.vertex-root .g-md a { color: var(--g-primary); text-decoration: none; }
+.vertex-root .g-md a:active { text-decoration: underline; }
+.vertex-root .g-md code { font-family: "Google Sans Mono", ui-monospace, "SF Mono", monospace; font-size: .9em; background: var(--g-container); padding: 2px 6px; border-radius: 6px; }
+.vertex-root .g-md pre { background: var(--g-container); border-radius: 12px; padding: 14px 16px; overflow-x: auto; margin: 0 0 12px; }
+.vertex-root .g-md pre code { background: none; padding: 0; }
+.vertex-root .g-md { --md-codecopy-bg: var(--g-container); }
+.vertex-root .g-md > .md-codewrap:last-child > pre { margin-bottom: 0; }
+.vertex-root .g-md blockquote { margin: 0 0 12px; padding-left: 14px; border-left: 3px solid var(--g-outline-low); color: var(--g-on-variant); }
+.vertex-root .g-md hr { border: 0; border-top: 1px solid var(--g-outline-low); margin: 16px 0; }
+.vertex-root .g-md strong { font-weight: 600; }
+.vertex-root .g-md img { max-width: 100%; border-radius: 10px; }
+
+/* —— 媒体生成页共享（图像/视频/语音/音乐）—— */
+.vertex-root .vm-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.vertex-root .vm-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: calc(var(--sat, 0px) + 64px) 16px 12px; }
+.vertex-root .vm-inner { max-width: 720px; margin: 0 auto; }
+.vertex-root .vm-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 13vh 20px; text-align: center; color: var(--g-on-low); }
+.vertex-root .vm-empty h3 { font-size: 19px; color: var(--g-on); font-weight: 400; }
+.vertex-root .vm-empty p { font-size: 14px; }
+.vertex-root .vm-card { background: var(--g-bright); border: 1px solid var(--g-outline-low); border-radius: var(--g-r-card); overflow: hidden; box-shadow: var(--g-shadow-input); margin-bottom: 14px; }
+.vertex-root .vm-load { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 44px 20px; }
+.vertex-root .vm-load-txt { font-size: 14px; color: var(--g-on-variant); }
+.vertex-root .vm-spin { animation: vspin 1.4s linear infinite; display: inline-flex; }
+.vertex-root .vm-img { width: 100%; display: block; }
+.vertex-root .vm-video { width: 100%; display: block; background: #000; }
+.vertex-root .vm-cap { padding: 11px 14px; font-size: 14px; color: var(--g-on-variant); border-top: 1px solid var(--g-outline-low); display: flex; align-items: center; gap: 10px; }
+.vertex-root .vm-cap-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vertex-root .vm-err { background: #fce8e6; color: #c5221f; border-radius: 12px; padding: 12px 15px; font-size: 14px; margin-bottom: 14px; }
+/* 对话式图像的用户气泡（右对齐灰底，gemini 风）*/
+.vertex-root .ic-user { width: fit-content; max-width: 82%; margin: 16px 0 10px auto; background: var(--g-container); color: var(--g-on); border-radius: var(--g-r-bubble); padding: 10px 15px; font-size: 15px; line-height: 1.5; word-break: break-word; white-space: pre-wrap; }
+.vertex-root .vm-audio { width: 100%; }
+.vertex-root .vm-h-sec { font-size: 12px; color: var(--g-on-low); margin: 8px 0 10px; }
+.vertex-root .vm-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.vertex-root .vm-thumb { position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; background: var(--g-container); }
+.vertex-root .vm-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vertex-root .vm-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
+.vertex-root .vm-del { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+/* 视频缩略图中央播放角标（海报帧 <img> 上叠放） */
+.vertex-root .vm-play { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 30px; height: 30px; border-radius: 50%; background: rgba(0,0,0,.45); color: #fff; font-size: 19px; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+/* 图像会话"多版本"角标（左下角；layers 图标 + 链上图数，提示这是一条连续修改链） */
+.vertex-root .vm-count { position: absolute; left: 5px; bottom: 5px; display: inline-flex; align-items: center; gap: 3px; height: 21px; padding: 0 8px 0 6px; border-radius: 11px; background: rgba(0,0,0,.55); color: #fff; font-size: 12px; font-weight: 600; line-height: 1; pointer-events: none; }
+.vertex-root .vm-hrow { display: flex; align-items: center; gap: 11px; padding: 10px 13px; border-radius: 12px; background: var(--g-bright); border: 1px solid var(--g-outline-low); margin-bottom: 8px; }
+.vertex-root .vm-hrow-txt { flex: 1; min-width: 0; font-size: 14px; color: var(--g-on); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vertex-root .vm-dock { flex: none; padding: 6px 12px max(10px, var(--sab)); }
+.vertex-root .vm-dock-inner { max-width: 720px; margin: 0 auto; }
+.vertex-root .vm-opts { display: flex; gap: 7px; overflow-x: auto; padding: 4px 2px 8px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.vertex-root .vm-opts::-webkit-scrollbar { display: none; }
+.vertex-root .vm-chip { flex: none; font-size: 13px; color: var(--g-on-variant); padding: 7px 13px; border-radius: var(--g-r-pill); background: var(--g-dim); white-space: nowrap; }
+.vertex-root .vm-chip.on { background: var(--g-primary); color: #fff; }
+.vertex-root .vm-chip.toggle.on { background: var(--g-accent-c); color: var(--g-primary); }
+.vertex-root .vm-input { background: var(--g-bright); border: 1px solid var(--g-outline-low); border-radius: 24px; box-shadow: var(--g-shadow-input); padding: 6px 6px 6px 16px; display: flex; align-items: flex-end; gap: 6px; }
+.vertex-root .vm-field { flex: 1; min-height: 38px; max-height: 30vh; overflow-y: auto; padding: 9px 0; font-size: 16px; line-height: 1.5; color: var(--g-on); outline: none; word-break: break-word; }
+.vertex-root .vm-field:empty::before { content: attr(data-ph); color: var(--g-placeholder); }
+.vertex-root .vm-gen { flex: none; height: 40px; padding: 0 18px; border-radius: var(--g-r-pill); background: var(--g-primary); color: #fff; font-size: 15px; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.vertex-root .vm-gen:disabled { opacity: .45; }
+.vertex-root .vm-gen.stop { background: var(--g-dim); color: var(--g-on); }
+
+/* 媒体生成 composer 的「源图素材」（Nano Banana 贴图编辑 / Veo 图生视频首帧）——
+   与聊天 composer 的附件 chip 同款（56px 圆角缩略 + 黑圆 ×），圆形 lumi 加号钮。 */
+.vertex-root .vm-atts { display: flex; flex-wrap: wrap; gap: 8px; max-width: 720px; margin: 0 auto 8px; padding: 0 6px; }
+.vertex-root .vm-att { position: relative; width: 56px; height: 56px; border-radius: 14px; overflow: hidden; background: var(--g-dim); }
+.vertex-root .vm-att img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vertex-root .vm-att.pending { opacity: .55; }
+.vertex-root .vm-att-x { position: absolute; top: 3px; right: 3px; width: 18px; height: 18px; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 13px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+.vertex-root .vm-att-x::before { content: ''; position: absolute; inset: -7px; }
+.vertex-root .vm-att-spin { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; animation: vmaspin .8s linear infinite; }
+@keyframes vmaspin { to { transform: rotate(360deg); } }
+.vertex-root .vm-input.has-attach { padding-left: 6px; }
+.vertex-root .vm-attach { flex: none; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--g-on-variant); font-size: 26px; }
+.vertex-root .vm-attach:active { background: var(--g-hover); }
+/* 对话流里：用户轮内显示这轮的源图缩略 */
+.vertex-root .ic-src { display: block; width: 56px; height: 56px; object-fit: cover; border-radius: 12px; margin-bottom: 7px; }
+
+/* —— 参数面板（做进分页内：每行 label + 控件，gemini 风 segmented/slider/toggle）—— */
+.vertex-root .vp-params { background: var(--g-bright); border: 1px solid var(--g-outline-low); border-radius: 16px; padding: 4px 14px; margin-bottom: 14px; }
+.vertex-root .vp-sec { font-size: 12px; font-weight: 500; color: var(--g-on-low); padding: 12px 0 2px; }
+.vertex-root .vp-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--g-divider); min-height: 50px; }
+.vertex-root .vp-row:first-of-type { border-top: 0; }
+.vertex-root .vp-label { flex: none; width: 80px; font-size: 14px; color: var(--g-on-variant); }
+.vertex-root .vp-control { flex: 1; min-width: 0; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+/* segmented control（输出格式 / 分辨率 / 思考强度）*/
+.vertex-root .vp-seg { display: inline-flex; background: var(--g-dim); border-radius: var(--g-r-pill); padding: 2px; }
+.vertex-root .vp-seg button { font-size: 13px; padding: 6px 13px; border-radius: var(--g-r-pill); color: var(--g-on-variant); white-space: nowrap; transition: background .15s, color .15s; }
+.vertex-root .vp-seg button.on { background: var(--g-bright); color: var(--g-on-strong); box-shadow: 0 1px 3px rgba(0,0,0,.14); font-weight: 500; }
+/* 比例 chips（右对齐换行）*/
+.vertex-root .vp-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.vertex-root .vp-chip { font-size: 13px; padding: 6px 12px; border-radius: var(--g-r-pill); background: var(--g-dim); color: var(--g-on-variant); }
+.vertex-root .vp-chip.on { background: var(--g-primary); color: #fff; }
+/* slider（temperature / top_p）*/
+.vertex-root .vp-slider { flex: 1; display: flex; align-items: center; gap: 12px; }
+.vertex-root .vp-range { flex: 1; -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: var(--g-outline-low); outline: none; }
+.vertex-root .vp-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--g-primary); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+.vertex-root .vp-range::-moz-range-thumb { width: 18px; height: 18px; border: 0; border-radius: 50%; background: var(--g-primary); cursor: pointer; }
+.vertex-root .vp-val { flex: none; width: 34px; text-align: right; font-size: 13px; color: var(--g-on); font-variant-numeric: tabular-nums; }
+/* toggle 行（工具：联网搜索 / 图片搜索）*/
+.vertex-root .vp-toggle { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--g-divider); min-height: 50px; }
+.vertex-root .vp-toggle-label { font-size: 14px; color: var(--g-on); }
+.vertex-root .vp-toggle-label small { display: block; font-size: 12px; color: var(--g-on-low); margin-top: 1px; }
+.vertex-root .vp-sw { width: 40px; height: 24px; border-radius: 12px; background: var(--g-outline-low); position: relative; transition: background .18s; flex: none; }
+.vertex-root .vp-sw.on { background: var(--g-primary); }
+.vertex-root .vp-sw-knob { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform .18s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+.vertex-root .vp-sw.on .vp-sw-knob { transform: translateX(16px); }
+/* dropdown 选择器（比例 / 分辨率：点击打开小窗选项面板）*/
+.vertex-root .vp-dd { position: relative; }
+.vertex-root .vp-dd-btn { display: inline-flex; align-items: center; gap: 4px; padding: 7px 10px 7px 14px; border-radius: var(--g-r-pill); background: var(--g-dim); font-size: 14px; color: var(--g-on); }
+.vertex-root .vp-dd-btn:active { background: var(--g-hover-strong); }
+.vertex-root .vp-dd-btn svg { width: 16px; height: 16px; color: var(--g-on-variant); flex: none; }
+.vertex-root .vp-dd-scrim { position: fixed; inset: 0; z-index: 62; }
+.vertex-root .vp-dd-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 63; min-width: 132px; background: var(--g-bright); border-radius: 14px; box-shadow: var(--g-shadow-pop); padding: 6px; animation: vddPop .14s ease; }
+@keyframes vddPop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.vertex-root .vp-dd-item { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 9px; font-size: 14px; color: var(--g-on); text-align: left; }
+.vertex-root .vp-dd-item:active { background: var(--g-hover); }
+.vertex-root .vp-dd-item.on { color: var(--g-primary); font-weight: 500; }
+.vertex-root .vp-dd-item .ck { width: 16px; height: 16px; color: var(--g-primary); flex: none; }
+/* 参数面板内的文本输入（音乐负面提示等）*/
+.vertex-root .vp-text { flex: 1; min-width: 0; background: var(--g-dim); border: 0; border-radius: 10px; padding: 9px 12px; font-size: 14px; color: var(--g-on); outline: none; font-family: inherit; }
+.vertex-root .vp-text::placeholder { color: var(--g-placeholder); }
+
+/* —— 桌面拖放遮罩（对话 / 图像 / 视频 共用）——
+   拖文件进面板时浮现的虚线框提示；pointer-events:none 让拖放事件穿透到底层节点，纯视觉层。 */
+.vertex-root .g-drop-ov { position: absolute; inset: 8px; z-index: 45; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  border-radius: 24px; border: 2px dashed var(--g-primary); color: var(--g-primary);
+  background: rgba(253,252,252,.82); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  animation: gDropIn .16s ease; }
+.vertex-root.v-dark .g-drop-ov { background: rgba(0,0,0,.72); }
+.vertex-root .g-drop-ic { width: 40px; height: 40px; }
+.vertex-root .g-drop-tx { font-size: 16px; font-weight: 500; }
+.vertex-root .g-drop-sub { font-size: 13px; color: var(--g-on-variant); margin-top: -6px; }
+@keyframes gDropIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* —— 视频「粘贴 / 拖入图片 → 选目标槽」小对话（首帧 / 尾帧 / 参考图）—— */
+.vertex-root .vd-slot-mask { position: fixed; inset: 0; z-index: 74; background: rgba(0,0,0,.42);
+  display: flex; align-items: center; justify-content: center; padding: 24px; animation: amfade .18s; }
+.vertex-root .vd-slot-card { width: 100%; max-width: 320px; background: var(--g-bright); border-radius: 24px;
+  box-shadow: var(--g-shadow-pop); padding: 18px 18px 14px; animation: vddPop .18s ease; }
+.vertex-root .vd-slot-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.vertex-root .vd-slot-prev { width: 52px; height: 52px; border-radius: 12px; object-fit: cover; flex: none; background: var(--g-dim); }
+.vertex-root .vd-slot-title { font-size: 16px; font-weight: 500; color: var(--g-on); }
+.vertex-root .vd-slot-title small { display: block; font-size: 12.5px; font-weight: 400; color: var(--g-on-variant); margin-top: 2px; }
+.vertex-root .vd-slot-opts { display: flex; flex-direction: column; gap: 8px; }
+.vertex-root .vd-slot-opt { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; background: var(--g-dim); color: var(--g-on); text-align: left; }
+.vertex-root .vd-slot-opt:active { background: var(--g-hover-strong); }
+.vertex-root .vd-slot-opt svg { width: 22px; height: 22px; color: var(--g-on-variant); flex: none; }
+.vertex-root .vd-slot-opt b { font-size: 15px; font-weight: 500; }
+.vertex-root .vd-slot-opt span { font-size: 12.5px; color: var(--g-on-variant); }
+.vertex-root .vd-slot-opt-tx { display: flex; flex-direction: column; gap: 1px; }
+.vertex-root .vd-slot-cancel { width: 100%; margin-top: 10px; padding: 11px; border-radius: 14px; font-size: 15px; font-weight: 600; color: var(--g-on); }
+.vertex-root .vd-slot-cancel:active { background: var(--g-hover); }

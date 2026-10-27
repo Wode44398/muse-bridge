@@ -258,7 +258,14 @@ app.chats.push(app.chat);
 // 用户在 agent 干活时亲手关掉了 Dock：这一轮里浏览器动了也别再自动展开（以前每次 Browser 调用都弹回来，
 // 关了马上又出来）。用户自己再打开 Dock、或发下一条消息，才恢复自动展开。
 let browserAutoMuted = false;
+// D5：服务端注册了浏览器工具吗（/api/info 的 tools 里有 Browser）。这台机器上本机浏览器、桌面壳的浏览器宿主、经扩展连着的
+// 用户浏览器一个都没有时没有——工作区不摆「浏览器」、快捷键与预览胶囊也不开它。info 还没到时按有算（不闪）。
+export function browserToolAvailable(): boolean {
+  const tools = app.info?.tools;
+  return !Array.isArray(tools) || tools.includes("Browser");
+}
 export function openDock(tool?: DockTool) {
+  if (tool === "browser" && !browserToolAvailable()) return;
   if (tool) setDockTool(tool);
   app.dockOpen = true;
   browserAutoMuted = false;
@@ -317,13 +324,6 @@ const DOCK_KEYS: { tool: DockTool; match: (e: KeyboardEvent) => boolean }[] = [
   { tool: "browser", match: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyB" },
   { tool: "files", match: (e) => e.ctrlKey && e.shiftKey && e.code === "KeyE" },
 ];
-// 服务端注册了浏览器工具吗（/api/info 的 tools 里有 Browser）。没装 Chromium 系浏览器的机器上没有——工作区不摆「浏览器」。
-// info 还没到时按有算（不闪）。
-export function browserToolAvailable(): boolean {
-  const tools = app.info?.tools;
-  return !Array.isArray(tools) || tools.includes("Browser");
-}
-
 export function handleDockShortcut(e: KeyboardEvent): boolean {
   for (const k of DOCK_KEYS) {
     if (!k.match(e)) continue;
@@ -936,7 +936,7 @@ export async function send(raw: string, cardTarget?: string | null) {
   scheduleResync(chat, gen, 0);
 }
 
-// 新会话一拿到 id 就先在侧栏占一行（以前发了「你好」半天列表里没这个对话——以前只在这一轮收尾时刷新列表）。
+// 新会话一拿到 id 就先在侧栏占一行（维护者 10-11：发了「你好」半天列表里没这个对话——以前只在这一轮收尾时刷新列表）。
 // 服务端的列表随后刷新时以它为准。
 function showNewSessionRow(chat: Chat) {
   if (!chat.id || app.sessions.some((s) => s.id === chat.id)) return;
@@ -1311,7 +1311,7 @@ async function patchGlobalConfig(patch: Record<string, unknown>) {
 }
 
 // 页内切换：同家收起浮层即可；异家切 provider。已经开跑的会话（服务端能力位 "session-provider"）就在这条会话里换家——
-// 聊过的内容接着用，在跑的这一轮照旧跑完、下一条消息起用新的（以前一切换模型就开新对话）；
+// 聊过的内容接着用，在跑的这一轮照旧跑完、下一条消息起用新的（维护者 10-10：「一切换模型就开新对话了」）；
 // 还没开跑的 / 老服务端，照旧切家 = 开新对话。成功打一发网格脉冲。
 export async function switchVendor(provider: string) {
   if (provider === app.config?.provider) {
@@ -1360,7 +1360,7 @@ export function vendorSwitchNote(chat: Chat): string {
 }
 
 // 型号 / 思考深度：先在本机上屏（菜单里的勾、思考深度的选中块当场挪过去），再写全局配置——以前要等服务端往返，
-// 隧道上半秒多块才动（不跟手）。服务端会按型号的支持面收档，回来的配置为准；写失败退回并说一声。
+// 隧道上半秒多块才动（维护者 09-26：不跟手）。服务端会按型号的支持面收档，回来的配置为准；写失败退回并说一声。
 // 与运行档位同一套语义：已经开跑的会话跑的是它自己的快照配置，只写全局等于没换（菜单勾着新型号、回答的还是旧的）——
 // 所以先点名当前会话（服务端能力位 "session-model"），再写全局作新对话的默认。
 export async function setModel(model: string) {
@@ -1463,7 +1463,7 @@ export async function setPermissionMode(mode: "auto" | "read-only" | "plan") {
 // 开设置→切→保存→再开新对话四步。现在与运行档位同一个菜单、同一套语义：
 // 读=前台会话快照优先；写=先点名当前会话（服务端沙箱当场改判），再写全局默认。
 export type AccessMode = "workspace" | "full";
-// 默认整机（09-26 的产品决定）；仅工作空间是「有人拉了闸」
+// 默认整机（维护者 09-26）；仅工作空间是「有人拉了闸」
 export function accessMode(chat: Chat = app.chat): AccessMode {
   return (chat.cfg?.access ?? app.config?.access ?? "full") as AccessMode;
 }
@@ -2397,8 +2397,8 @@ export function hygieneAvailable(): boolean {
   return Boolean(app.compat?.caps?.includes("hygiene"));
 }
 
-// 前缀缓存大概多久变冷（分钟，按厂商默认的缓存寿命）。DeepSeek（硬盘缓存）留得久，不提示；没列的按 5 分钟
-const CACHE_TTL_MIN: Record<string, number | null> = { anthropic: 5, openai: 10, gemini: 5, kimi: 5, zhipu: 5, deepseek: null };
+// 前缀缓存大概多久变冷（分钟，按厂商默认的缓存寿命）。本机 llama.cpp 与 DeepSeek（硬盘缓存）留得久，不提示；没列的按 5 分钟
+const CACHE_TTL_MIN: Record<string, number | null> = { anthropic: 5, openai: 10, gemini: 5, kimi: 5, zhipu: 5, deepseek: null, local: null };
 
 // 这段对话上一次跟模型打交道是什么时候（本机时钟优先；刚打开的老会话退回用列表里的 updatedAt）
 function lastActivityAt(c: Chat): number {
@@ -2406,7 +2406,7 @@ function lastActivityAt(c: Chat): number {
   return Math.max(c.lastRunEndAt || 0, meta?.updatedAt || 0);
 }
 
-// 前缀缓存大概已经冷了：返回冷了几分钟；还热 / 不适用（没会话、在跑、缓存寿命长的厂商……）返回 null。c：分屏时是哪一格的会话
+// 前缀缓存大概已经冷了：返回冷了几分钟；还热 / 不适用（没会话、在跑、本机模型……）返回 null。c：分屏时是哪一格的会话
 export function cacheColdMinutes(now: number, c: Chat = app.chat): number | null {
   if (!c.id || c.running || !c.ctx.used) return null;
   const provider = String(c.cfg?.provider ?? app.config?.provider ?? "");

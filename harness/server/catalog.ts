@@ -24,6 +24,8 @@
 //                         glm-5.3 / glm-5.3-flash → 恒思考（thinking.type 只收 enabled）
 //                         + reasoning_effort low/high/max（服务端默认 max）；5.3 纯文本、
 //                         5.3-flash 原生多模态。glm-5 → thinking:{type} (on/off only)。
+//                         注意：本机这把 key 调 glm-5.3* 会回 1113「余额不足或无可用资源
+//                         包」，同一把 key 调 glm-5.2 正常——是 5.3 没进资源包，不是欠费。
 //   Kimi                  Kimi-for-Coding subscription API (api.kimi.com/coding/v1).
 //                         Every model thinks permanently (supports_thinking_type:"only",
 //                         no off switch). 2026-09-11 /models re-probe: kimi-for-coding
@@ -35,6 +37,11 @@
 //                         the ladder is trusted from /models, not from a rejection.
 //                         All ingest image+video except k3-256k (image only). The old
 //                         open-platform kimi-k2/kimi-latest ids are EOL and 401 here.
+//   Local (llama.cpp)     qwen3.8-27b → reasoning_effort 走 chat_template_kwargs，
+//                         因为 Qwen3.8 把它做在 chat template 里而非顶层字段；
+//                         模板只认 low/medium/xhigh，关思考是 enable_thinking:false。
+//                         实测（2026-09-01，llama-server b10729）：tool_calls 与
+//                         reasoning_content 的流式增量都符合 OpenAI 形状。
 //
 // The frontend renders the chat-bar model menu + effort menu straight from this,
 // so the two stay in lockstep with the adapters.
@@ -44,6 +51,7 @@ import { getCustomProvider, hostOf, isCustomProviderId, listCustomProviders, typ
 import { autoThinkSlots, slotView } from "./custom-tiers.ts";
 import { MK } from "./model-knowledge.ts";
 import { DEFAULT_MEDIA_BUDGET } from "./agent/media-budget.ts";
+import { localAiSettings, STRATA_MODEL, strataSettings } from "./localai.ts";
 import type { ThinkingLevel } from "./agent/turn.ts";
 
 export interface ModelSpec {
@@ -100,14 +108,15 @@ export const CATALOG: ProviderSpec[] = [
   {
     id: "anthropic",
     name: "Anthropic",
-    // 没用过 Claude 时的默认＝当前主力 Opus 5.5（以前一直停在 Sonnet 4.6，像个莫名其妙的老模型）；
+    // 没用过 Claude 时的默认＝当前主力 Opus 5.5（以前一直停在 Sonnet 4.6，维护者 10-11 嫌「莫名其妙的老模型」）；
     // 用过的话切回这家继承上次的型号，见 config.ts preferredModel。
     defaultModel: "claude-opus-5-5",
     models: [
       // R1（#1）：ctx / maxOut 取自官方模型页（platform.claude.com/docs/en/models/*，2026-09-23 核对）：
       // 5 个 Opus/Sonnet 都是 1M 上下文、同步 Messages API 最多 128K 输出；Haiku 4.5 是 200K / 64K。
       // 以前适配器不读目录，一律 200k / 8192——Opus 5.5 一轮最多写 8192 token 就被截断。
-      // 配上 key 后可用 Models API（GET /v1/models/{id} 回 max_input_tokens / max_tokens）核一遍。
+      // 真请求核对：dimensio 这边（测试服、正式服的 harness/.env）都没有 Anthropic key，没法实测；
+      // 配上 key 后用 Models API（GET /v1/models/{id} 回 max_input_tokens / max_tokens）核一遍即可。
       // Opus 5.5（2026-09-22）：Opus 5 的接班人，更便宜（$4/$20，cache read $0.20/M），1M 上下文
       // （裸 id 即 1M）、128k 输出、知识截止 2026-06；adaptive thinking + effort（API 默认 medium）。
       { id: "claude-opus-5-5", label: "Opus 5.5", efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium", image: true, ctx: 1_000_000, maxOut: 128_000, fast: true, note: "新主力 · 1M 上下文" },
@@ -162,19 +171,20 @@ export const CATALOG: ProviderSpec[] = [
     id: "zhipu",
     name: "Zhipu GLM",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    // defaultModel 是 glm-5.2：它对各档资源包都可用；glm-5.3* 要账号的资源包覆盖 5.3，
-    // 否则一律回 1113。
+    // defaultModel 仍是 glm-5.2：本机这把 key 调 glm-5.3* 一律 1113（资源包没覆盖
+    // 5.3），把默认改成 5.3 会让整家 provider 开箱即废。资源包到位后把下面这行换成
+    // glm-5.3 即可，别的都不用动。
     defaultModel: "glm-5.2",
     models: [
       // 5.3 系列恒思考（thinking.type 只收 enabled）→ efforts 里没有 off；
       // 三档 low/high/max 与服务端一致（默认 max）。1M ctx / 128K max out。
-      // image/video 取自官方模型页，未能实测——按「猜错要
+      // image/video 取自官方模型页，未能实测（这把 key 调不通，见上）——按「猜错要
       // 吃 400、猜没有只退化成抽帧」的老规矩，video 一律不敢标 true。
       { id: "glm-5.3", label: "GLM-5.3", efforts: ["low", "high", "max"], image: false, ctx: 1_000_000, maxOut: 131_072, note: "旗舰 · 恒思考 · 1M ctx" },
       { id: "glm-5.3-flash", label: "GLM-5.3 Flash", efforts: ["low", "high", "max"], image: true, ctx: 1_000_000, maxOut: 131_072, note: "多模态 · 1/40 价 · 1M ctx" },
       // R1：5.2 / 5 取自智谱官方模型页（docs.bigmodel.cn/cn/guide/models/text/*，2026-09-23）：
       // GLM-5.2 1M / 128K 输出，GLM-5 200K / 128K 输出。真请求核对（09-23）：GLM-5.2 对 max_tokens=1e8
-      // 回「限制数值范围[1,131072]」；GLM-5 未能实测，按文档。
+      // 回「限制数值范围[1,131072]」；GLM-5 这把 key 回 1113（资源包不含，同 5.3），没法实测，按文档。
       { id: "glm-5.2", label: "GLM-5.2", efforts: ["off", "high", "max"], image: false, ctx: 1_000_000, maxOut: 131_072, note: "Coding/长程 · 1M ctx" },
       { id: "glm-5", label: "GLM-5", efforts: ["off", "high"], image: false, ctx: 200_000, maxOut: 131_072, note: "旗舰" },
     ],
@@ -236,6 +246,31 @@ export const CATALOG: ProviderSpec[] = [
       { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", efforts: ["off", "low", "medium", "high"], image: true, ctx: 1_048_576, maxOut: 65_536, note: "稳定 · 可关思考" },
     ],
   },
+  {
+    // 本机 llama.cpp（llama-server），OpenAI 兼容端点。唯一一家「不过网、不花钱、
+    // 断网可用」的服务；模型权重与启动脚本在 E:\LLM\，服务没起来时这一家会以
+    // http 连接错误示人（不做假装可用的探活）。
+    id: "local",
+    name: "本机",
+    baseUrl: "http://127.0.0.1:8080/v1",
+    defaultModel: "qwen3.8-27b",
+    models: [
+      // Qwen3.8-27B UD-Q4_K_XL + MTP 投机解码头，跑在 RTX 5090 上实测 108 tok/s。
+      // reasoning_effort 走 chat_template_kwargs（不是顶层字段）。R4（#40）：档位按本机 GGUF 里的
+      // chat template 实测——模板只认 low / medium / xhigh，'high' 被改写成 xhigh（菜单顶档就叫
+      // xhigh，与模板同名），关思考要 enable_thinking:false（发 none 会 raise_exception，整个请求被
+      // 拒）。档位文字排在渲染后提示词的最前面，改档等于整段 KV 重算。契约测试
+      // local-effort-contract.test.ts 对照模板本身。默认沿用改前的实际档位 xhigh。ctx / image 这里只是
+      // 默认值（启动脚本的 -c 131072 + mmproj），实际由「本机」面板的启动参数覆盖，见 withLocalSettings。
+      { id: "qwen3.8-27b", label: "Qwen3.8 27B", efforts: ["off", "low", "medium", "xhigh"], defaultEffort: "xhigh", image: true, ctx: 131_072, maxOut: 32_768, note: "本机 · 离线可用 · 视觉" },
+      // Strata 引擎（E:\Strata，端口 8081，适配器按型号换端点：localai.ts localModelBaseUrl）跑 Qwen3.8-Flash-Next
+      // 125B MoE（180B 总参 / 6B 激活）的官方 GSQ-RCO IQ3_S。id 沿用最初接入的 Orca 无审查版时起的 strata-orca（前端与旧会话都认它）。
+      // 2026-10-06 同机实测：难题 43/46 与 Qwen 27B 持平，长上下文读入快约 3 倍。用的是同一套 Qwen 模板：
+      // 档位同样只认 low / medium / xhigh + enable_thinking:false（serve/frontend.py EFFORT），chat_template_kwargs 照发。
+      // ctx / image 由面板里 Strata 的启动参数覆盖（默认 128k、识图关——官方版的识图模块没装）。
+      { id: "strata-orca", label: "Qwen3.8 Flash Next 125B", efforts: ["off", "low", "medium", "xhigh"], defaultEffort: "medium", image: false, ctx: 131_072, maxOut: 32_768, note: "本机 · 离线可用" },
+    ],
+  },
 ];
 
 // 自定义服务（custom-providers.ts）按同一形状并进目录：只列启用的对话型号（asr / tts 这类不进菜单）；上下文、输出、视觉 /
@@ -272,10 +307,28 @@ function customSpec(c: CustomProvider): ProviderSpec {
   };
 }
 
-// 内置七家 + 用户加的自定义服务（按添加顺序）。凡是「这个 provider 存不存在 / 有哪些型号」都从这里查。
+// 本机这家的上下文 / 视觉由「本机」面板里的启动参数决定（localai.ts）：报得比服务端 -c 大会在长会话里被截断，
+// 关了视觉（没挂 mmproj）还当能看图，图片会被 llama-server 整个拒掉——改走辅助视觉。
+// 两台引擎各跟各的设置（Qwen 27B ← E:\LLM\local-ai.json，Strata ← E:\Strata\local-ai.json）。
+function withLocalSettings(s: ProviderSpec): ProviderSpec {
+  if (s.id !== "local") return s;
+  return {
+    ...s,
+    models: s.models.map((m) => {
+      if (m.id === STRATA_MODEL) {
+        const { ctx, vision } = strataSettings();
+        return { ...m, ctx, image: vision, note: vision ? "本机 · 离线可用 · 视觉" : m.note };
+      }
+      const { ctx, vision } = localAiSettings();
+      return { ...m, ctx, image: vision, note: vision ? m.note : "本机 · 离线可用" };
+    }),
+  };
+}
+
+// 内置八家 + 用户加的自定义服务（按添加顺序）。凡是「这个 provider 存不存在 / 有哪些型号」都从这里查。
 export function allProviders(): ProviderSpec[] {
   const custom = listCustomProviders();
-  return [...CATALOG, ...custom.map(customSpec)];
+  return [...CATALOG.map(withLocalSettings), ...custom.map(customSpec)];
 }
 
 export function providerSpec(p: ProviderId): ProviderSpec {
@@ -283,7 +336,7 @@ export function providerSpec(p: ProviderId): ProviderSpec {
     const c = getCustomProvider(p);
     if (c) return customSpec(c);
   }
-  return CATALOG.find((s) => s.id === p) ?? CATALOG[0];
+  return withLocalSettings(CATALOG.find((s) => s.id === p) ?? CATALOG[0]);
 }
 
 // R12：这家 provider 一次请求里历史图片的额度（目录没配的项取默认）。自定义服务按型号家族取（共用型号表：经第三方接的
@@ -369,6 +422,10 @@ export function clampEffort(
     const below = on.filter((e) => EFFORT_ORDER.indexOf(e) <= want);
     return below.length ? below[below.length - 1] : on[0];
   }
+  // 本机模板把 'high' 改写成 xhigh：旧会话 / 保存的选择 / 子 agent 覆盖里的 high 实际一直是 xhigh，
+  // 照旧给 xhigh，别按「向下取」悄悄降成 medium。（旧的 max 向下取本来就落到 xhigh。）
+  // Qwen3.8 不跟：旧的 high 是 thinking_budget 32k 封顶，升成不封顶的 xhigh 会悄悄放大账单，按常规向下取 medium。
+  if (p === "local" && level === "high" && efforts.includes("xhigh")) return "xhigh";
   const want = EFFORT_ORDER.indexOf(level);
   let best: ThinkingLevel | null = null;
   for (const e of efforts) {

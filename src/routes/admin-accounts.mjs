@@ -5,6 +5,7 @@
 //                                     待确认的完全信任账号
 //   POST /api/admin/access            { multiUser } 写进 config.json 的 features.multiUser（与 S1-7「给谁用」是同一个设置），
 //                                     重启后生效——FEATURES 启动时冻结，运行中切换会让一半的路由看到旧值
+//                                     部署方接管时（见 audienceManaged）一律拒绝，GET 带 managed:{ hint }，控制台只读显示
 //   POST /api/admin/user/trust-ack    { name } 确认保留完全信任（N12：老账号逐个确认，不自动降级）
 //   POST /api/admin/user/rename       { name, newName } 改登录名（账号 id、目录、会话、设备都不动）
 //   POST /api/admin/invite/revoke     { code } 作废一张还没用的邀请码
@@ -40,6 +41,21 @@ export function writeFeature(name, value) {
   return { ok: true };
 }
 
+// 「给谁用」由部署方接管（2026-10-27，Muse 同步第 20 条）：部署脚本自己管多人 / 单人（比如 Muse Bridge 的 bootstrap.sh
+// set-users 直接改 features.multiUser，界面上改了会被下次 install / update 盖掉），就声明一句「该怎么切换」：
+//   环境变量 BRIDGE_AUDIENCE_HINT（写在服务单元里，同 BRIDGE_UPDATE_HINT），其次 config.json 的 "audienceHint"。
+// 值是给管理员看的一句中文原话（如「要切换，在 Muse 里说『改成多人用』或『改成自己用』。」），英文界面由前端字典 tr() 翻译。
+// 声明了：GET 带 managed:{ hint }，控制台把开关换成徽标 + 这句话；POST 拒绝改动。没声明 = null，照旧可切换。
+export function audienceManaged({ env = process.env, config = null } = {}) {
+  let hint = String(env.BRIDGE_AUDIENCE_HINT || '').trim();
+  if (!hint) {
+    let c = config;
+    if (!c) { try { c = readConfigRaw(); } catch { c = {}; } }
+    hint = typeof c.audienceHint === 'string' ? c.audienceHint.trim() : '';
+  }
+  return hint ? { hint } : null;
+}
+
 export function accessState() {
   const saved = savedMultiUser();
   const deploy = cfg.DEPLOY || null;
@@ -55,6 +71,7 @@ export function accessState() {
     isolation: isolationInfo(),
     trustPending: pending,
     supervisor: supervisor() || null,
+    managed: audienceManaged(),               // 部署方接管时 { hint }，否则 null
   };
 }
 
@@ -68,6 +85,8 @@ export function registerAccountAdminRoutes(router, { gate, userAction, touched }
   });
 
   router.on('POST', '/api/admin/access', userAction((b) => {
+    const m = audienceManaged();
+    if (m) return { error: '「给别人用」由部署方管理，这里改不了：' + m.hint, managed: m };
     if (typeof b.multiUser !== 'boolean') return { error: '缺少 multiUser（true / false）' };
     const w = writeFeature('multiUser', b.multiUser);
     if (w.error) return w;

@@ -151,6 +151,7 @@ export const previewTool: Tool = {
               `The user's browser pane now shows a "预览" button that opens this app in the shared browser.\n\n` +
               `Startup logs:\n${logTail}\n\n` +
               `Next: test endpoints with Bash (curl), Preview(action:"logs") for the server side` +
+              // D5：这台机器没有浏览器（浏览器工具没注册）就不指 Browser，见 headless.ts browserAvailable
               (browserAvailable()
                 ? `, and Browser(navigate, url:"${path}") → ReadPage → click/type → Eval/screenshot to exercise the real UI.`
                 : ".") +

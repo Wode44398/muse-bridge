@@ -1,5 +1,5 @@
 // Claude 分页的权限模式 + 逐次工具审批卡 + 计划审批卡（2026-10-20，对齐官方 Claude Desktop 3.1623）。
-// 调研依据：官方桌面端的 UI 与文案、SDK 核实（2026-10-20）。
+// 调研：bridge build/bridge前端设计/claude页面设计参考资源/桌面端对齐-1020/A1（官方 UI 与文案）、B1（bridge 现状与 SDK 核实）。
 //
 // 一、权限模式——每轮显式传给 SDK（以前不传，CLI 按 GrowthBook 闸自己挑 default / auto，服务端开关一翻全变）：
 //   resolveTurnMode 取值顺序：无人值守（快照访客 / 管理台代聊）固定 default
@@ -265,10 +265,13 @@ function alwaysScope(list) {
 }
 
 // bridge 自带的进程内 MCP（source 'sdk'）里没有对外副作用、或自己另有确认的那几组：手动模式下不必每次都弹卡。
-// 终端这类对外动手的照常审批。
+// 终端 / 远程 PC / 本机桌面 / 主机管理员的 Edge 这类对外动手的照常审批（对照官方 Chrome 工具「Claude wants to … in Chrome」）。
 // pr（拉取请求状态 / 绑定 / 同步基线）与 visualize（纯展示；开着时另经 SDK allowedTools 直接放行）也在内——
 // 但 pr 里开长期授权的那两样（needsUserApproval：开自动合并、开 Auto-fix）照官方要用户逐次批准，见 tool-approvals.mjs。
-const OWN_MCP = new Set(['workspace', 'sessions', 'snapshot', 'pr', 'visualize']);
+const OWN_MCP = new Set(['workspace', 'sessions', 'browser', 'media', 'phone', 'phoneControl', 'snapshot', 'pr', 'visualize']);
+// 用户的电脑（mcp/device-tools.mjs）里只看不动的几样：列设备、看屏幕 / 读界面、设备自己那个独立分区的浏览器
+// （与服务器上的 browser 同一取舍）。动鼠标键盘、跑命令、读写文件照常审批——设备端另有档位与授权弹窗，两道都在。
+const OWN_DEVICE_TOOLS = new Set(['mcp__device__devices', 'mcp__device__inspect', 'mcp__device__browser']);
 // bridge 本身的手册 + 操作（mcp/bridge-tools.mjs）：查手册与只读操作（操作表里 access='read'）免卡，会改东西的照常审批。
 function bridgeReadOnly(name, input) {
   if (name === 'mcp__bridge__manual') return true;
@@ -279,6 +282,7 @@ function bridgeReadOnly(name, input) {
 function ownMcp(name, opts, input) {
   if (typeof name !== 'string' || !name.startsWith('mcp__')) return false;
   if (opts && opts.mcpServer && opts.mcpServer.source !== 'sdk') return false;
+  if (OWN_DEVICE_TOOLS.has(name)) return true;
   if (name.startsWith('mcp__bridge__')) return bridgeReadOnly(name, input);
   const server = (opts && opts.mcpServer && opts.mcpServer.name) || name.split('__')[1] || '';
   return OWN_MCP.has(server);

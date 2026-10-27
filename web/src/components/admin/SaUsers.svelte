@@ -19,17 +19,17 @@
   let open = $state('');            // 展开了「权限」面板的那个用户
   let busy = $state(false);
 
-  const AGENT_LABEL = { claude: 'Claude', dimensio: 'dimensio' };
+  const AGENT_LABEL = { claude: 'Claude', gemini: 'Gemini', codex: 'Codex', dimensio: 'dimensio' };
   // 某个 agent 对这个人实际生效没有：他被勾了 + 全局开着 + 支持多用户
   const agentState = (id) => sa.agentStatus.find((a) => a.id === id) || null;
   const effective = (u) => (u.agents || []).filter((id) => { const a = agentState(id); return !a || (a.enabled && a.multiUser); });
 
-  // Pro = 等同管理员（L1 逻辑隔离下命令行没有可靠边界）：发码 / 建号 / 升档前都先说清楚再确认（服务端要 ack）。
-  const FULL_WHAT = () => t('Pro 档有命令行和终端，跑在服务端同一个系统账户下：能读到服务器上所有人的对话、文件和全部凭据（Claude 登录凭据、各家 API Key），等同管理员。只给你完全信任的人。');
-  const confirmFull = (title) => saConfirm(title, FULL_WHAT(), { yes: t('我了解，给 Pro'), danger: true });
+  // 完全信任 = 等同管理员（L1 逻辑隔离下命令行没有可靠边界）：发码 / 建号 / 升档前都先说清楚再确认（服务端要 ack）。
+  const FULL_WHAT = () => t('完全信任档有命令行、终端和浏览器，跑在服务端同一个系统账户下：能读到服务器上所有人的对话、文件和全部凭据（号池令牌、各家 API Key），等同管理员。只给你完全信任的人。');
+  const confirmFull = (title) => saConfirm(title, FULL_WHAT(), { yes: t('我了解，给完全信任'), danger: true });
   async function genInvite(tier) {
     if (busy) return;
-    if (tier === 'pro' && !(await confirmFull(t('发 Pro 邀请码？')))) return;
+    if (tier === 'pro' && !(await confirmFull(t('发完全信任邀请码？')))) return;
     busy = true;
     try { const r = await api.post('/api/admin/invite', { tier, ...(tier === 'pro' ? { ack: true } : {}) }); inviteModal = { code: r.code, tier: r.tier, expiresAt: r.expiresAt || null }; loadUsers(); }
     catch (e) { saToast(tc('admin', '生成失败：{reason}', { reason: tr(String(e?.body?.error || e?.message || e)) }), true); }
@@ -46,20 +46,20 @@
   const uid = (u) => u.id || u.name;
   async function setTier(u) {
     if (u.tier === 'user') {
-      if (!(await confirmFull(t('把 {name} 升为 Pro？', { name: u.name })))) return;
-      post('/api/admin/user/tier', { name: uid(u), tier: 'pro', ack: true }, t('{name} 已升为 Pro', { name: u.name }));
+      if (!(await confirmFull(t('把 {name} 升为完全信任？', { name: u.name })))) return;
+      post('/api/admin/user/tier', { name: uid(u), tier: 'pro', ack: true }, t('{name} 已升为完全信任', { name: u.name }));
     } else {
       // 降档当场生效（runtime/account-lifecycle.mjs setAccountTier）：在跑的轮是带着命令行开的，得中止
-      if (!(await saConfirm(t('把 {name} 降为普通？', { name: u.name }), t('马上收回命令行：他正在跑的对话会中止，侧栏终端关掉。账号、对话和文件都保留，以后可以再升回来。'), { yes: t('降为普通') }))) return;
+      if (!(await saConfirm(t('把 {name} 降为普通？', { name: u.name }), t('马上收回命令行：他正在跑的对话会中止，侧栏终端和浏览器关掉。账号、对话和文件都保留，以后可以再升回来。'), { yes: t('降为普通') }))) return;
       post('/api/admin/user/tier', { name: uid(u), tier: 'user' }, t('{name} 已降为普通', { name: u.name }));
     }
   }
   async function ackTrust(u) {
-    if (!(await confirmFull(t('确认 {name} 保留 Pro？', { name: u.name })))) return;
+    if (!(await confirmFull(t('确认 {name} 保留完全信任？', { name: u.name })))) return;
     post('/api/admin/user/trust-ack', { name: uid(u) }, t('已确认'));
   }
   async function setDisabled(u) {
-    if (!u.disabled && !(await saConfirm(t('停用 {name}？', { name: u.name }), t('他会立刻被登出、在跑的对话会中止，他发出去的聊天快照链接也会关掉；数据都保留，重新启用后就能照常登录。'), { yes: t('停用'), danger: true }))) return;
+    if (!u.disabled && !(await saConfirm(t('停用 {name}？', { name: u.name }), t('他会立刻被登出、在跑的对话会中止、他登记的电脑断开，他发出去的聊天快照链接也会关掉；数据都保留，重新启用后登录和电脑都恢复。'), { yes: t('停用'), danger: true }))) return;
     post('/api/admin/user/disable', { name: uid(u), disabled: !u.disabled }, u.disabled ? t('已启用') : t('已禁用'));
   }
   async function doRename() {
@@ -82,9 +82,10 @@
   const Q_FIELDS = [
     { k: 'dayTurns', label: t('每天轮数') }, { k: 'weekTurns', label: t('7 天轮数') },
     { k: 'dayCostUsd', label: t('每天美元') }, { k: 'weekCostUsd', label: t('7 天美元') },
+    { k: 'dayMedia', label: t('每天媒体次数') }, { k: 'dayVideo', label: t('每天视频条数') },
   ];
-  // 成员允许了管理员什么（后端 runtime/admin-access.mjs）：只读展示，开关在成员自己的设置里
-  const ACCESS_LABELS = () => [['view', t('看对话内容')], ['assist', t('代聊与代答')]];
+  // 成员允许了管理员什么（开源路线 S2-7，后端 runtime/admin-access.mjs）：只读展示，开关在成员自己的设置里
+  const ACCESS_LABELS = () => [['view', t('看对话内容')], ['assist', t('代聊与代答')], ['device', t('看他的电脑')]];
   const accessLine = (u) => {
     const a = u.adminAccess || {};
     const on = ACCESS_LABELS().filter(([k]) => a[k]).map(([, l]) => l);
@@ -117,7 +118,7 @@
     if (!pw) { saToast(t('密码不能为空'), true); return; }
     if (await post('/api/admin/user/reset', { name, password: pw }, t('已重置密码'))) resetModal = null;
   }
-  // 删号联动清理：登录、在跑的对话、聊天快照、邀请记录、用量一并收掉；数据默认一起删，或归档。
+  // 删号联动清理（S2-4）：登录、设备、端口转发、在跑的对话、聊天快照、邀请记录、用量一并收掉；数据默认一起删，或归档。
   async function doDelete() {
     const { name, id, mode } = delModal || {};
     delModal = null;
@@ -134,7 +135,7 @@
   async function doCreate() {
     const c = createModal || {};
     if (!c.name || !c.pw) { saToast(t('用户名和密码都要填'), true); return; }
-    if (c.tier === 'pro' && !(await confirmFull(t('建一个 Pro 账号？')))) return;
+    if (c.tier === 'pro' && !(await confirmFull(t('建一个完全信任账号？')))) return;
     if (await post('/api/admin/user/create', { name: c.name, password: c.pw, tier: c.tier, ...(c.tier === 'pro' ? { ack: true } : {}), service: c.service || !sa.multiUser }, t('已建账号 {name}', { name: c.name }))) createModal = null;
   }
 </script>
@@ -142,7 +143,7 @@
 {#snippet tierBadge(tier)}
   {#if tier === 'user'}<span class="sa-badge green">{t('普通')}</span>
   {:else if tier === 'admin'}<span class="sa-badge blue">admin</span>
-  {:else}<span class="sa-badge amber">Pro</span>{/if}
+  {:else}<span class="sa-badge amber">{t('完全信任')}</span>{/if}
 {/snippet}
 
 {#snippet check(on, dis)}
@@ -161,7 +162,7 @@
       <button class="sa-btn sm" onclick={() => { createModal = { name: '', pw: '', tier: 'user', service: !sa.multiUser }; }}>{sa.multiUser ? t('＋ 新建账号') : t('＋ 新建服务账号')}</button>
       {#if sa.multiUser}
         <button class="sa-btn sm pri" onclick={() => genInvite('user')} disabled={busy}>{t('＋ 普通邀请码')}</button>
-        <button class="sa-btn sm" onclick={() => genInvite('pro')} disabled={busy}>{t('＋ Pro 邀请码')}</button>
+        <button class="sa-btn sm" onclick={() => genInvite('pro')} disabled={busy}>{t('＋ 完全信任邀请码')}</button>
       {/if}
     </span>
   </div>
@@ -173,7 +174,7 @@
       {@const offBySwitch = !sa.multiUser && !u.service}
       <div class="sa-tr ucols">
         <b class="sa-trunc" title={u.id && u.id !== u.name ? t('账号 id：{id}', { id: u.id }) : ''}>{u.name}{#if u.service}<span class="svc">{t('服务')}</span>{/if}</b>
-        <span>{@render tierBadge(u.tier)}{#if u.trustPending}<span class="pend" title={t('升级前开的 Pro 账号，等你确认')}>{t('待确认')}</span>{/if}</span>
+        <span>{@render tierBadge(u.tier)}{#if u.trustPending}<span class="pend" title={t('改名「完全信任」之前开的，等你确认')}>{t('待确认')}</span>{/if}</span>
         <span>
           {#if u.disabled}<span class="sa-badge red">{t('已禁用')}</span>
           {:else if offBySwitch}<span class="sa-badge gray">{t('登不上')}</span>
@@ -191,8 +192,8 @@
       {#if open === u.name}
         <div class="perm">
           <div class="perm-acts">
-            {#if u.trustPending}<button class="sa-btn sm pri" onclick={() => ackTrust(u)}>{t('确认保留 Pro')}</button>{/if}
-            <button class="sa-btn sm" onclick={() => setTier(u)}>{u.tier === 'user' ? t('升为 Pro（给命令行）') : t('降为普通（收回命令行）')}</button>
+            {#if u.trustPending}<button class="sa-btn sm pri" onclick={() => ackTrust(u)}>{t('确认保留完全信任')}</button>{/if}
+            <button class="sa-btn sm" onclick={() => setTier(u)}>{u.tier === 'user' ? t('升为完全信任（给命令行）') : t('降为普通（收回命令行）')}</button>
             <button class="sa-btn sm" onclick={() => { resetModal = { name: u.name, pw: '' }; }}>{t('改密码')}</button>
             <button class="sa-btn sm" onclick={() => { renameModal = { name: u.name, id: uid(u), next: u.name }; }}>{t('改登录名')}</button>
             <button class="sa-btn sm" onclick={() => setDisabled(u)}>{u.disabled ? t('启用账号') : t('停用账号')}</button>
@@ -226,7 +227,7 @@
           </div>
           <div class="perm-h">{t('他允许管理员做什么')}</div>
           <div class="perm-acts"><span class="qnow">{accessLine(u)}</span></div>
-          <div class="qhint">{t('由成员在自己的「设置 › 账户 › 管理员可见性」里决定；你每次查看内容或代聊代答，他那边都有记录。服务账号默认全允许。')}</div>
+          <div class="qhint">{t('由成员在自己的「设置 › 账户 › 管理员可见性」里决定；你每次查看内容、代聊代答或看他的电脑，他那边都有记录。服务账号默认全允许。')}</div>
           <div class="perm-h">{t('额度')}{#if u.quota}<span class="own">{t('单独设过')}</span>{/if}</div>
           {#if qEdit?.name === u.name}
             <div class="qgrid">
@@ -264,14 +265,14 @@
         <div class="sa-tr icols">
           <span class="sa-hrow"><span class="sa-mono">{i.code}</span>{#if !i.used && !i.expired}<button class="sa-btn sm ghost" onclick={() => copyText(i.code)}>{t('复制')}</button>{/if}{#if !i.used}<button class="sa-btn sm ghost" onclick={() => revokeInvite(i)}>{t('作废')}</button>{/if}</span>
           <span>{@render tierBadge(i.tier)}</span>
-          <span class="istat">{#if i.used}<span class="sa-badge gray">{t('已用')}{i.usedBy ? ' · ' + i.usedBy : ''}</span>{:else if i.expired}<span class="sa-badge gray">{t('已过期')}</span>{:else}<span class="sa-badge green" title={i.expiresAt ? t('{date} 到期', { date: fmtDate(i.expiresAt) }) : t('老邀请码，不会过期')}>{t('未使用')}</span>{#if i.legacyFull}<span class="pend" title={t('升级前发的 Pro 码：不过期，用它注册立刻就有命令行、等同管理员。不再需要就作废。')}>{t('老码·不过期·等同管理员')}</span>{/if}{/if}</span>
+          <span class="istat">{#if i.used}<span class="sa-badge gray">{t('已用')}{i.usedBy ? ' · ' + i.usedBy : ''}</span>{:else if i.expired}<span class="sa-badge gray">{t('已过期')}</span>{:else}<span class="sa-badge green" title={i.expiresAt ? t('{date} 到期', { date: fmtDate(i.expiresAt) }) : t('老邀请码，不会过期')}>{t('未使用')}</span>{#if i.legacyFull}<span class="pend" title={t('升级前发的完全信任码：不过期，用它注册立刻就有命令行、等同管理员。不再需要就作废。')}>{t('老码·不过期·等同管理员')}</span>{/if}{/if}</span>
           <span class="sa-dim">{fmtAgo(i.created)}</span>
         </div>
       {/each}
       <div style="height:8px"></div>
     {/if}
   </div>
-  <div class="sa-foot">{t('普通（user）档没有命令行；能用哪些 agent 在「权限」里按人勾选（新账号默认只有 Claude，dimensio 按人放行）。邀请码一次性。')}<br />{t('邀请码 7 天内有效，没用的可以作废；Pro 码要你确认后才发，默认只发普通档。删掉的账号 id 不再复用：同名的人重新注册拿不到旧人的任何东西。')}</div>
+  <div class="sa-foot">{t('普通（user）档没有命令行；能用哪些 agent 在「权限」里按人勾选（新账号默认 Claude + Gemini）。Codex 暂不支持多用户，只给管理员。邀请码一次性。')}<br />{t('邀请码 7 天内有效，没用的可以作废；完全信任的码要你确认后才发，默认只发普通档。删掉的账号 id 不再复用：同名的人重新注册拿不到旧人的任何东西。')}</div>
 {:else}
   <div class="sa-foot">{t('这台主机没开多用户：注册与邀请码关闭，只有管理员（访问令牌 / 扫码）和服务账号能登录。')}</div>
 {/if}
@@ -287,7 +288,7 @@
     <input class="sa-in" type="text" placeholder={t('密码（至少 8 位）')} bind:value={createModal.pw} onkeydown={(e) => { if (e.key === 'Enter') doCreate(); }} />
     <div class="sa-hrow">
       <button class="sa-chip-btn" class:on={createModal.tier === 'user'} onclick={() => { createModal.tier = 'user'; }}>{t('普通（无命令行）')}</button>
-      <button class="sa-chip-btn" class:on={createModal.tier === 'pro'} onclick={() => { createModal.tier = 'pro'; }}>{t('Pro（有命令行）')}</button>
+      <button class="sa-chip-btn" class:on={createModal.tier === 'pro'} onclick={() => { createModal.tier = 'pro'; }}>{t('完全信任（有命令行）')}</button>
     </div>
     {#if sa.multiUser}
       <label class="purge"><input type="checkbox" bind:checked={createModal.service} />{t('服务账号（给程序用，例如 QQ 机器人）')}</label>
@@ -304,7 +305,7 @@
   <button class="sa-mask" aria-label={t('关闭')} onclick={() => (inviteModal = null)}></button>
   <div class="sa-modal">
     <h3>{t('邀请码已生成')}</h3>
-    <p>{inviteModal.tier === 'pro' ? t('Pro（有命令行）单次邀请码，注册时填入：') : t('普通（无命令行）单次邀请码，注册时填入：')}{#if inviteModal.expiresAt}<br /><small class="sa-dim">{t('{date} 前有效', { date: fmtDate(inviteModal.expiresAt) })}</small>{/if}</p>
+    <p>{inviteModal.tier === 'pro' ? t('完全信任（有命令行）单次邀请码，注册时填入：') : t('普通（无命令行）单次邀请码，注册时填入：')}{#if inviteModal.expiresAt}<br /><small class="sa-dim">{t('{date} 前有效', { date: fmtDate(inviteModal.expiresAt) })}</small>{/if}</p>
     <div class="sa-hrow">
       <code class="sa-mono invite-code">{inviteModal.code}</code>
       <button class="sa-btn pri" onclick={() => copyText(inviteModal.code)}>{t('复制')}</button>
@@ -327,12 +328,12 @@
   </div>
 {/if}
 
-<!-- 删除：登录、在跑的对话、聊天快照、邀请记录、用量一并收掉；数据默认一起删，可改成归档 -->
+<!-- 删除：登录、设备、端口转发、在跑的对话、聊天快照、邀请记录、用量一并收掉；数据默认一起删，可改成归档 -->
 {#if delModal}
   <button class="sa-mask" aria-label={t('关闭')} onclick={() => (delModal = null)}></button>
   <div class="sa-modal">
     <h3>{t('删除账号 {name}？', { name: delModal.name })}</h3>
-    <p>{t('他会立刻被登出；在跑的对话中止，他铸的聊天快照、用过的邀请记录和用量一并删除。这个账号 id 以后不再使用：同名的人重新注册，拿不到他的任何东西。')}</p>
+    <p>{t('他会立刻被登出；在跑的对话中止，他登记的电脑、端口转发、铸的聊天快照、用过的邀请记录和用量一并删除。这个账号 id 以后不再使用：同名的人重新注册，拿不到他的任何东西。')}</p>
     <label class="purge">
       <input type="radio" name="del-mode" value="purge" bind:group={delModal.mode} />
       {t('连对话、文件、媒体一起删（不可恢复）')}
@@ -348,12 +349,12 @@
   </div>
 {/if}
 
-<!-- 改登录名：账号 id、目录、对话都不动 -->
+<!-- 改登录名：账号 id、目录、对话、设备都不动 -->
 {#if renameModal}
   <button class="sa-mask" aria-label={t('关闭')} onclick={() => (renameModal = null)}></button>
   <div class="sa-modal">
     <h3>{t('改 {name} 的登录名', { name: renameModal.name })}</h3>
-    <p>{t('只改登录用的名字：他的对话、文件、用量都跟着账号走，不受影响。他下次登录要用新名字。')}</p>
+    <p>{t('只改登录用的名字：他的对话、文件、设备、用量都跟着账号走，不受影响。他下次登录要用新名字。')}</p>
     <input class="sa-in" type="text" placeholder={t('新登录名（字母 / 数字 / _ -）')} bind:value={renameModal.next}
       onkeydown={(e) => { if (e.key === 'Enter') doRename(); }} />
     <div class="acts">
@@ -364,7 +365,7 @@
 {/if}
 
 <style>
-  /* 档位列：「Pro」徽章 + 「待确认」小签，放不下就折行 */
+  /* 档位列：「完全信任」徽章 + 「待确认」小签，放不下就折行 */
   :global(.sa-root) .ucols { grid-template-columns: minmax(90px, 1fr) 96px 76px minmax(120px, 1.2fr) minmax(110px, .9fr) auto; }
   /* 英文「状态」徽章（Can’t sign in / Disabled，等宽字）比 76px 宽：只在英文界面放宽这一列，中文不变 */
   :global(.sa-root) .ucols:lang(en) { grid-template-columns: minmax(90px, 1fr) 104px 112px minmax(120px, 1.2fr) minmax(110px, .9fr) auto; }

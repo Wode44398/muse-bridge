@@ -6,7 +6,7 @@ export default {
   '搜索': 'Search',
   '后退': 'Back',
   '前进': 'Forward',
-  '登录 bridge 账户': 'Sign in to Muse Bridge',
+  '登录 bridge 账户': 'Sign in to The Bridge',
   '通用': 'General',
   'settings::Agent': 'Agents',   // 侧栏分区名：中文界面仍显示「Agent」（与 settings-mobile / claudeai 同一语境键）
   '扩展': 'Extensions',
@@ -132,7 +132,7 @@ export default {
   '注册新账号': 'Create account',
   '管理员令牌': 'Admin token',
   '登录': 'Sign in',
-  '打开手机上的 Muse Bridge，在账户卡点「扫一扫」对准这个码；手机上确认后这里自动登录。': 'Open Muse Bridge on your phone, tap “Scan” on the account card, and point it at this code. After you confirm on your phone, you’re signed in here automatically.',
+  '打开手机上的 The Bridge，在账户卡点「扫一扫」对准这个码；手机上确认后这里自动登录。': 'Open The Bridge on your phone, tap “Scan” on the account card, and point it at this code. After you confirm on your phone, you’re signed in here automatically.',
   '需要邀请码；注册即登录。': 'Requires an invite code. You’re signed in as soon as you sign up.',
   '粘贴服务端的访问令牌，以管理员身份直连。': 'Paste the server’s access token to connect directly as an admin.',
   '账号密码登录': 'Sign in with password',
@@ -277,7 +277,7 @@ export default {
   '连接异常（HTTP {status}），检查地址': 'Unexpected response (HTTP {status}). Check the address.',
   '连不上这个地址，确认电脑 server 开着、地址没填错': 'Can’t reach this address. Make sure the server is running on your computer and the address is correct.',
   '服务进程': 'Service process',
-  '这一行不走 bridge：服务停着也能在这里把它拉起来、看日志。': 'This row doesn’t go through Muse Bridge, so you can start the service and view its logs here even while it’s stopped.',
+  '这一行不走 bridge：服务停着也能在这里把它拉起来、看日志。': 'This row doesn’t go through The Bridge, so you can start the service and view its logs here even while it’s stopped.',
   'bridge 服务': 'Bridge service',
   '运行中 · PID {pid}': 'Running · PID {pid}',
   '运行中': 'Running',
@@ -300,6 +300,7 @@ export default {
 
   // —— 帮助 · 反馈 ——
   'settings::反馈': 'Feedback',
+  '直达开发者；可附截图/录屏。': 'Goes straight to the developer. You can attach screenshots or screen recordings.',
   '遇到什么问题、想要什么功能…': 'Describe a problem or a feature you’d like…',
   '添加图片 / 视频': 'Add image or video',
   '已提交，谢谢！': 'Thanks. Your feedback has been sent.',

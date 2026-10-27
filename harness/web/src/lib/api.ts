@@ -431,6 +431,70 @@ export const updateCustomProvider = (id: string, form: CustomProviderForm) =>
   j<CustomProviderSaved>(`/api/custom-providers/${encodeURIComponent(id)}`, POST(form));
 export const deleteCustomProvider = (id: string) => j<{ ok: true; config: any }>(`/api/custom-providers/${encodeURIComponent(id)}/delete`, POST());
 
+// ── 本机模型状态与启停（底栏「本机」状态面板）：qwen = llama.cpp 27B，strata = Strata 125B ──────
+export type LocalEngine = "qwen" | "strata";
+export const STRATA_MODEL = "strata-orca"; // 目录里 Strata 那个型号（server/localai.ts 同名常量）
+export const engineOfModel = (model: string | undefined): LocalEngine => (model === STRATA_MODEL ? "strata" : "qwen");
+export interface LocalAiStatus {
+  engine?: LocalEngine; // 旧后端没有（= qwen）
+  installed: boolean;
+  missing?: string[]; // 模型 / 打包 / 草稿层还缺的文件
+  process: boolean;
+  ready: boolean;
+  state: "off" | "starting" | "on";
+  pid?: number;
+  baseUrl: string;
+  settings?: LocalAiSettings | StrataSettings; // 旧后端没有
+  running?: { ctx: number; vision: boolean };
+}
+export type LocalKv = "q8_0" | "q8q4" | "q4_0";
+export interface LocalAiSettings {
+  ctx: number;
+  kv: LocalKv;
+  vision: boolean;
+  mtp: boolean;
+}
+export type StrataKv = "int8" | "k8v4" | "q4_0";
+export interface StrataSettings {
+  ctx: number;
+  kv: StrataKv;
+  vision: boolean;
+  stream: boolean;
+}
+export interface LocalGpuInfo {
+  name?: string;
+  totalMiB?: number;
+  usedMiB?: number;
+  self?: { dedicatedMiB: number; sharedMiB: number };
+}
+const eq = (e: LocalEngine) => `?engine=${e}`;
+export const localAiStatus = (e: LocalEngine = "qwen") => j<LocalAiStatus>(`/api/localai/status${eq(e)}`, { timeoutMs: 12000 });
+export const localAiStart = (e: LocalEngine = "qwen") => j<LocalAiStatus>(`/api/localai/start${eq(e)}`, POST());
+export const localAiStop = (e: LocalEngine = "qwen") => j<LocalAiStatus>(`/api/localai/stop${eq(e)}`, POST());
+export const localAiApply = (settings: LocalAiSettings | StrataSettings, e: LocalEngine = "qwen") =>
+  j<LocalAiStatus>(`/api/localai/settings${eq(e)}`, POST({ settings }));
+export const localGpuInfo = (e: LocalEngine = "qwen") => j<LocalGpuInfo>(`/api/localai/gpu${eq(e)}`, { timeoutMs: 15000 });
+
+// ── 用户的电脑（输入框下方的设备芯片，能力位 devices）─────────────────────────
+export interface DeviceRow {
+  id: string;
+  name: string;
+  online: boolean;
+  sameMachine?: boolean;
+  lastOnlineAt?: string;
+  lastOfflineAt?: string;
+  client?: { tier?: string; version?: string; os?: string } | null;
+}
+export interface DeviceListing {
+  available: boolean; // 接上了 bridge 的设备通道
+  enabled: boolean; // bridge 没关设备通道
+  devices: DeviceRow[];
+  link: string; // 这个会话连的：设备 id / "none" / "" = 自动
+}
+export const listDevices = (session = "") =>
+  j<DeviceListing>(`/api/devices${session ? `?session=${encodeURIComponent(session)}` : ""}`, { timeoutMs: 10_000 });
+export const linkDevice = (session: string, link: string) => j<{ ok: boolean; link: string }>("/api/devices/link", POST({ session, link }));
+
 // ── 会话 ──────────────────────────────────────────────────────────────────────
 export const listSessions = () => j<any[]>("/api/sessions");
 // 分页取会话：服务端按 updatedAt 倒序，总数走 X-Total-Count（超过一页的旧会话
@@ -540,7 +604,7 @@ async function hygieneCall(path: string, body: unknown, timeoutMs: number): Prom
     return { ok: false, error: String((e as Error)?.message ?? e) };
   }
 }
-// 压缩与写摘要都要调一次模型（慢的模型可能要一两分钟）
+// 压缩与写摘要都要调一次模型（本机模型可能要一两分钟）
 export const compactSessionNow = (id: string) => hygieneCall(`/api/sessions/${encodeURIComponent(id)}/compact`, {}, 240_000);
 export const handoffWithSummary = (id: string) =>
   hygieneCall(`/api/sessions/${encodeURIComponent(id)}/handoff`, { kind: "summary" }, 240_000);

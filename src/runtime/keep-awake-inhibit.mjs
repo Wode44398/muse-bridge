@@ -27,6 +27,18 @@ let deniedLogged = false;
 /** 单测用：清掉「被拒过」的记忆。 */
 export function _resetInhibitDenied() { deniedUntil = 0; deniedLogged = false; }
 
+/**
+ * 这台 Linux 上保持唤醒能不能起作用（设置页据此显示 / 隐藏「保持唤醒」两项，见 config/claude-settings.mjs 的
+ * unsupportedClaudeSettings）：要有 systemd-inhibit、不是虚拟机（云主机 / VM 客体不会闲置睡眠，拿锁也没意义）、
+ * 没被 polkit 拒过（系统服务的 bridge 用户通常拿不到锁——拒过一次就当这台做不到，日志里已说明）。参数可注入（单测）。
+ */
+export function inhibitUsable({ which = whichSync, cpuinfo = '/proc/cpuinfo' } = {}) {
+  if (deniedLogged) return false;
+  if (!which('systemd-inhibit')) return false;
+  try { if (/^flags\s*:.*\bhypervisor\b/m.test(readFileSync(cpuinfo, 'utf8'))) return false; } catch {}
+  return true;
+}
+
 /** systemd-inhibit 的参数：被抑制的命令是 `cat`（读标准输入直到 EOF——本进程死了它就退出，见文件头）。 */
 export function inhibitArgs() {
   return ['--what=sleep:idle', '--mode=block', '--who=' + WHO, '--why=' + WHY, 'cat'];

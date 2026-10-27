@@ -17,8 +17,8 @@ const MICRO_MIN_CHARS = 600; // eliding smaller results buys ~nothing
 const MICRO_PROTECT_TAIL = 6; // the most recent messages stay intact
 const ELIDED_TEXT =
   "[old tool output elided to save context — re-run the tool if you need it again]";
-// R11：微压缩的滞回——一次腾不出这么多就不改写。就地改写旧工具输出会让请求前缀从改写处断开（缓存从那里失效，自建的
-// llama.cpp 服务要从那里重新 prefill）；在触发线附近每轮腾一点、每轮断一次，不如直接整段压缩换一段长跑道。
+// R11：微压缩的滞回——一次腾不出这么多就不改写。就地改写旧工具输出会让请求前缀从改写处断开（缓存从那里失效，本机
+// llama.cpp 要从那里重新 prefill）；在触发线附近每轮腾一点、每轮断一次，不如直接整段压缩换一段长跑道。
 const MICRO_MIN_RECLAIM_TOKENS = 4_000;
 
 // R11：按成本压缩——1M 窗口不等于该用满：每轮都整段重发，缓存读费、首 token 延迟、长上下文里的质量衰减都跟着长
@@ -332,7 +332,7 @@ const carriesToolResults = (m: Msg) => m.role === "user" && m.content.some((b) =
 // （任务 + 第一条 assistant），而第一条 assistant 几乎总带 tool_call、它的结果却被压进了摘要；尾部按条数
 // 截，可能从一条孤儿 tool_result 开始。压出来的转录各家 API 都回 400（判为不可重试），落盘后每轮重放，
 // 会话就此报废。toTurn 出口另有一道统一配对修复兜底（state.ts 的 repairToolPairing）。
-// Q6：切分与摘要拆成可单独调用的纯步骤，离线评测可以直接 import 生产路径跑，不另抄一份。
+// Q6：切分与摘要拆成可单独调用的纯步骤，压缩召回 eval（evals/compaction）直接 import 生产路径跑，不另抄一份。
 export interface CompactionPlan {
   head: Msg[];
   middle: Msg[];

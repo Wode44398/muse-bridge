@@ -1,7 +1,7 @@
 // #77：进程树收尸不再用 taskkill /T。
 //
 // taskkill /T 只按 ParentProcessId 找子进程；父进程退出后 PID 会被复用，于是「悬空父 PID」恰好等于我们某个子进程
-// PID 的无关进程链（生产上的 bridge：wscript 的父进程早已退出）会被 /T 一起杀掉。修后按创建时间核对：子进程一定比
+// PID 的无关进程链（正式服 bridge：wscript 的父进程早已退出）会被 /T 一起杀掉。修后按创建时间核对：子进程一定比
 // 父进程晚创建。
 
 import assert from "node:assert/strict";

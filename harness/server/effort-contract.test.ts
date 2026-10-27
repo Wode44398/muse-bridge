@@ -1,6 +1,6 @@
 // 思考深度契约：目录里每个型号的每一档 → 适配器真实发出去的请求体，逐条对照「厂商官方怎么说」。
 //
-// 修前（2026-10-09：Claude 只有四档，没有 xhigh）：统一档位只有 off/low/medium/high/max，Anthropic 适配器把
+// 修前（2026-10-09 维护者问「Claude 怎么只有四档，extra 呢」）：统一档位只有 off/low/medium/high/max，Anthropic 适配器把
 // 界面上的 max 偷偷发成 xhigh——Opus/Sonnet/Haiku 5.x 真正的 max 永远发不出去，Sonnet 4.6 根本没有 xhigh、选 max 必 400；
 // Qwen3.8 的 low/medium/high 全靠 thinking_budget 8k/16k/32k 硬截断，没用上它自己的 reasoning_effort 档。
 // 以前的单测只钉「适配器发了什么」，钉的是自己——错映射照样全绿。这里改成对照一张独立的官方表：

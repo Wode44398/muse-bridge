@@ -1,14 +1,17 @@
 <script>
-  // 单 agent 模式的登录框（claude.ai 登录页样式）：只管「没登录时登录」——账号密码 / 注册 / 管理员令牌 /
-  // 扫码登录（网页出码、已登录的手机浏览器扫）。已登录后的账户信息、用量、工作空间、扫一扫、退出都在
+  // 登录卡（2026-09-18 按 claude.ai 登录页样式重做）：只管「没登录时登录」——账号密码 / 注册 / 管理员令牌 /
+  // 扫码登录（网页出码、手机 app 扫）。已登录后的账户信息、用量、工作空间、扫一扫、退出都在
   // 设置 → 账户（侧栏底部账户卡菜单进）。
-  // 常规模式的登录在主页右上角账户胶囊（LoginCard）里；单 agent 模式没有主页，
+  // 上游这里是主页右上角登录胶囊 ↔ 卡片的液态玻璃形变；本 app 没有主页，也不用玻璃，
   // 由 ui.loginOpen 控制（启动时没登录会自动打开）。
   import { fade, scale } from 'svelte/transition';
   import { api, setToken } from '../lib/api.js';
-  import { ui, me, applyMe } from '../lib/state.svelte.js';
+  import { ui, me, applyMe, rootScreen } from '../lib/state.svelte.js';
   import { startPairLogin } from '../lib/pair.js';
+  import { afterSignIn } from '../lib/account.js';
+  import { isOffline } from '../lib/server.js';
   import { pushBackLayer } from '../lib/nav.js';
+  import ClaudeLogo from './ClaudeLogo.svelte';
   import { t, tc, tr } from '../lib/i18n.js';
 
   let mode = $state('login');   // 'login' | 'register' | 'token' | 'qr'（扫码登录：网页出码、手机扫）
@@ -16,6 +19,9 @@
   let busy = $state(false), err = $state('');
 
   const open = $derived(ui.loginOpen && me.kind === 'none');
+  // 卡顶的 Claude 标只在 Claude 页当根页时摆：压在 dimensio 根页上的登录卡不冒充 Claude
+  //（dimensio 的标住在它的懒加载包里，核心包不引它——见 scripts/module-chunks.mjs）
+  const claudeRoot = $derived(rootScreen() === 'claude');
   // 已登录还被人置了 loginOpen（旧入口 / 竞态）：这张卡没有东西可显示，直接收掉
   $effect(() => { if (ui.loginOpen && me.kind !== 'none') ui.loginOpen = false; });
   $effect(() => { if (open) return pushBackLayer(close); });
@@ -24,18 +30,22 @@
   function reset() { username = ''; password = ''; password2 = ''; invite = ''; tok = ''; err = ''; }
   let picked = false;
   function setMode(m) { mode = m; err = ''; picked = true; }
-  // 单人服务器（没开多用户）账号密码只有服务账号能登：默认摆令牌登录（用户点过别的就不再改）
+  // 审查 2.3 / S1-2：单人服务器（没开多用户）账号密码只有服务账号能登，默认摆令牌登录；
+  // 手机（App / 触屏）上「扫码登录」是网页出码让手机扫的，自己用不上——换成扫电脑上的配对码（PairScan mode:'connect'）
   $effect(() => { if (open && !picked && mode === 'login' && me.features?.multiUser === false) mode = 'token'; });
+  const isPhone = (() => { try { return isOffline() || matchMedia('(pointer: coarse)').matches; } catch { return false; } })();
+  function scanConnect() { close(); ui.pairScan = { mode: 'connect' }; }
 
   // 登录成功后统一从 /api/auth 刷新身份（tier 等以它为准；login 响应不带这些）
   async function refreshMe(fallback) {
     try { const a = await api.auth(); applyMe(a); }
     catch { applyMe(fallback); }
+    afterSignIn();   // 桌面客户端按新登录立刻重新登记设备（lib/account.js）
   }
   async function doLogin() {
     if (busy) return; busy = true; err = '';
-    // 拿到 session token 即存为 Bearer（cookie 之外的兜底）：否则一旦 cookie 不可用，
-    // refreshMe 的 /api/auth 会 401、回落 fallback 假登录。
+    // 拿到 session token 即存为 Bearer：离线 apk 跨源不带 cookie，user 全靠它鉴权
+    //（在线壳仍有 cookie 兜底）。否则 refreshMe 的 /api/auth 会 401、回落 fallback 假登录。
     try { const r = await api.login({ username, password }); if (r.token) setToken(r.token); await refreshMe({ kind: r.kind, user: r.user || username }); reset(); close(); }
     catch (e) { err = tr(e.body?.error) || t('登录失败'); }
     busy = false;
@@ -87,13 +97,13 @@
   <button class="lg-bd" aria-label={t('关闭')} tabindex="-1" onclick={close} transition:fade={{ duration: 160 }}></button>
   <div class="lg-wrap">
     <div class="lg" role="dialog" aria-modal="true" aria-label={TITLE[mode]} transition:scale={{ duration: 180, start: .97, opacity: 0 }}>
-      <div class="lg-logo">Muse Bridge</div>
+      {#if claudeRoot}<div class="lg-logo"><ClaudeLogo anim="static" size={30} /></div>{/if}
       <h2 class="lg-t">{TITLE[mode]}</h2>
       <p class="lg-s">
-        {#if mode === 'qr'}{t('在已登录的手机浏览器里打开本站，在账户菜单里点「扫一扫」')}
+        {#if mode === 'qr'}{t('打开手机上的 The Bridge，在账户卡或账户菜单里点「扫一扫」')}
         {:else if mode === 'token'}{me.tokenHashed ? t('粘贴安装时显示的访问令牌（服务器上只存它的哈希），以管理员身份登录') : t('粘贴服务器数据目录 config.json 里的 token，以管理员身份登录')}
         {:else if mode === 'register'}{t('需要邀请码；注册后直接登录')} {t('服主默认只看得到你的会话标题、时间和用量；看内容要你在设置里允许。')}
-        {:else}{t('登录 Muse Bridge，继续你的工作')}{/if}
+        {:else}{t('登录 The Bridge，继续你的对话')}{/if}
       </p>
 
       {#if err}<div class="lg-err" role="alert">{err}</div>{/if}
@@ -128,7 +138,11 @@
         </form>
         {#if mode === 'login'}
           <div class="lg-alt">
-            <button class="lg-alt-b" onclick={() => setMode('qr')}><span class="ic" aria-hidden="true">{@html SCAN}</span>{t('扫码登录')}</button>
+            {#if isPhone}
+              <button class="lg-alt-b" onclick={scanConnect}><span class="ic" aria-hidden="true">{@html SCAN}</span>{t('扫码连接')}</button>
+            {:else}
+              <button class="lg-alt-b" onclick={() => setMode('qr')}><span class="ic" aria-hidden="true">{@html SCAN}</span>{t('扫码登录')}</button>
+            {/if}
           </div>
           <div class="lg-links">
             <!-- 服务器没开注册（主机形态 / 管理员关了）：不给一个点了必然 403 的入口 -->
@@ -139,6 +153,9 @@
             <button class="lg-link" onclick={() => setMode('token')}>{t('用访问令牌登录')}</button>
           </div>
         {:else}
+          {#if mode === 'token' && isPhone}
+            <div class="lg-alt"><button class="lg-alt-b" onclick={scanConnect}><span class="ic" aria-hidden="true">{@html SCAN}</span>{t('扫码连接')}</button></div>
+          {/if}
           <button class="lg-link" onclick={() => setMode('login')}>{t('返回登录')}</button>
         {/if}
       {/if}
@@ -153,8 +170,7 @@
   .lg { pointer-events: auto; width: min(400px, 100%); margin: auto; padding: 32px 28px 24px; border-radius: 16px;
     background: var(--st-surface); box-shadow: 0 0 0 1px var(--st-line), 0 24px 64px rgba(0, 0, 0, .3);
     display: flex; flex-direction: column; align-items: stretch; font-family: var(--sans); color: var(--text); }
-  .lg-logo { display: flex; justify-content: center; margin-bottom: 14px; font-family: var(--serif-stack); font-size: 15px;
-    font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--st-muted); }
+  .lg-logo { display: flex; justify-content: center; margin-bottom: 14px; }
   .lg-t { margin: 0; text-align: center; font-family: var(--serif-stack); font-weight: 400; font-size: 28px; line-height: 34px; color: var(--text); }
   .lg-s { margin: 8px 0 22px; text-align: center; font-size: 14px; line-height: 20px; color: var(--st-muted); }
   .lg-err { margin: -6px 0 14px; padding: 9px 12px; border-radius: 10px; font-size: 13px; line-height: 18px;

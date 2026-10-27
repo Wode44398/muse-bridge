@@ -4,21 +4,32 @@
   // 加载：优先走服务端「站点挂载」（item.siteUrl → { url:'/api/hv/<id>/<入口>' }，见
   // src/runtime/html-site.mjs）——路径式 URL，页面里相对引用的 app.js / css / assets 全能解析，
   // 和电脑上双击打开一个样。此前一律 srcdoc：基址是 about:srcdoc，带资源目录的课件/网站
-  // 相对引用全落空，黑屏转圈。挂载不可用（dimensio 产物、分享链接、
-  // 老服务端）时回落 srcdoc：lib/htmlInline 内联同目录资源，自包含单文件照样能开。
+  // 相对引用全落空，黑屏转圈。挂载不可用（手机本地 SAF、dimensio 产物、桌面壳额外位置、
+  // 老服务端）时回落 srcdoc，自包含单文件照样能开。
   //
   // 隔离：两条路都是 sandbox 且不给 allow-same-origin ⇒ 脚本跑在不透明源，碰不到 bridge 的
   // cookie / 接口；挂载响应头还带同款 CSP sandbox（顶层直开也一样隔离）。不透明源里
-  // localStorage 一碰就抛错，服务端注入了内存垫片；srcdoc 这条由 lib/htmlInline 补。
+  // localStorage 一碰就抛错，服务端注入了内存垫片；srcdoc 这条在这里补同一段。
   //
   // 外观：一条贴着应用主题的细工具栏（暗/亮两套），不再是压在深色界面上的大白条；
   // 加载用工具栏底边的细进度线，页面就绪前舞台留主题底色，不闪白。
   import { onMount, tick } from 'svelte';
   import { t, tr } from '../../lib/i18n.js';
-  import { prepareHtml } from '../../lib/htmlInline.js';
+  import { interceptSave, saveLabel } from '../../lib/save.js';
+  import { nativeWorkspaceSaveAs } from '../../lib/nativeDesktop.js';
   const { item, onClose } = $props();
 
   const SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-forms allow-pointer-lock allow-downloads allow-presentation';
+  // 与服务端 STORAGE_SHIM 同一段（srcdoc 回落路径用）
+  const SHIM = '<script>(function(){function m(){var d=Object.create(null);return{getItem:function(k){k=String(k);return k in d?d[k]:null},setItem:function(k,v){d[String(k)]=String(v)},removeItem:function(k){delete d[String(k)]},clear:function(){for(var k in d)delete d[k]},key:function(i){var a=Object.keys(d);return i<a.length?a[i]:null},get length(){return Object.keys(d).length}}}["localStorage","sessionStorage"].forEach(function(n){try{window[n].length}catch(e){try{Object.defineProperty(window,n,{value:m(),configurable:true})}catch(_){}}});try{document.cookie}catch(e){var c="";try{Object.defineProperty(document,"cookie",{get:function(){return c},set:function(){},configurable:true})}catch(_){}}})();<\/script>';
+  // 与服务端 SCROLLBAR_SHIM 同一段：沙箱页里换上 Edge 同款滚动条（平时隐身、滚动才浮出细线）
+  const SB_SHIM = "<style>@media (pointer:fine){::-webkit-scrollbar{width:12px;height:12px;background:transparent}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}::-webkit-scrollbar-button{display:none}body::-webkit-scrollbar-track,body::-webkit-scrollbar-corner{background:var(--bsb-bg,transparent)}::-webkit-scrollbar-thumb{background-color:transparent;background-clip:padding-box;border:solid transparent;border-width:0 3px 0 5px;border-radius:999px;min-height:40px}::-webkit-scrollbar-thumb:horizontal{border-width:5px 0 3px 0;min-width:40px}[data-bsb]::-webkit-scrollbar-thumb{background-color:rgba(140,140,140,.72)}::-webkit-scrollbar-thumb:hover{border-width:0 2px;background-color:rgba(140,140,140,.9)}::-webkit-scrollbar-thumb:horizontal:hover{border-width:2px 0}}</style><script>(function(){if(!window.matchMedia||!matchMedia('(pointer: fine)').matches)return;var D=document,R=D.documentElement,T=new WeakMap(),H=null;function s(e){if(!e.hasAttribute('data-bsb'))e.setAttribute('data-bsb','');clearTimeout(T.get(e))}function l(e){clearTimeout(T.get(e));T.set(e,setTimeout(function(){if(e!==H)e.removeAttribute('data-bsb')},1000))}function o(c){return c&&c!=='transparent'&&!/^rgba\\(.*,\\s*0\\)$/.test(c)}function g(){var c=getComputedStyle(R).backgroundColor;if(!o(c)&&D.body)c=getComputedStyle(D.body).backgroundColor;if(!o(c)&&D.elementsFromPoint){var a=D.elementsFromPoint(R.clientWidth-2,innerHeight/2);for(var i=0;i<a.length&&!o(c);i++)c=getComputedStyle(a[i]).backgroundColor}if(!o(c))c='#fff';if(R.style.getPropertyValue('--bsb-bg')!==c)R.style.setProperty('--bsb-bg',c)}function q(){g();setTimeout(g,450)}D.addEventListener('DOMContentLoaded',function(){q();try{var m=new MutationObserver(q),f={attributes:true,attributeFilter:['class','style','data-theme']};m.observe(R,f);m.observe(D.body,f)}catch(_){}});addEventListener('load',q);D.addEventListener('scroll',function(v){var e=v.target===D?(D.body||R):v.target;if(!(e instanceof Element))return;s(e);if(e!==H)l(e)},{capture:true,passive:true});D.addEventListener('mousemove',function(v){var e=v.target,n=null;if(e instanceof Element){if((e===R||e===D.body)&&((v.clientX>=R.clientWidth&&innerWidth>R.clientWidth+1)||(v.clientY>=R.clientHeight&&innerHeight>R.clientHeight+1)))n=D.body||R;else if(e!==R&&((v.offsetX>=e.clientWidth&&e.offsetWidth>e.clientWidth+1&&e.scrollHeight>e.clientHeight)||(v.offsetY>=e.clientHeight&&e.offsetHeight>e.clientHeight+1&&e.scrollWidth>e.clientWidth)))n=e}if(n===H)return;if(H)l(H);H=n;if(H)s(H)},{passive:true})})();<\/script>";
+  function withShim(html) {
+    const m = /<meta\b[^>]*charset[^>]*>/i.exec(html.slice(0, 1024)) || /<head\b[^>]*>/i.exec(html) || /<html\b[^>]*>/i.exec(html) || /<!doctype[^>]*>/i.exec(html);
+    const at = m ? m.index + m[0].length : 0;
+    return html.slice(0, at) + SHIM + SB_SHIM + html.slice(at);
+  }
+
   let src = $state('');        // 挂载模式：iframe src
   let srcdoc = $state(null);   // 回落模式：iframe srcdoc
   let err = $state('');
@@ -29,11 +40,12 @@
   let stage = $state(null);
   let full = $state(false);
   let revealTimer = 0;
+  let noSite = false;          // 挂载 iframe 被宿主 CSP 拦了：本次改走 srcdoc
 
   async function resolve() {
     err = ''; ready = false; loaded = false;
     clearTimeout(revealTimer);
-    if (item.siteUrl) {
+    if (item.siteUrl && !noSite) {
       try {
         const r = await fetch(item.siteUrl, { credentials: 'same-origin' });
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -53,12 +65,8 @@
         if (!r.ok) throw new Error('HTTP ' + r.status);
         text = await r.text();
       }
-      // 回落 srcdoc：lib/htmlInline 补存储垫片 + Edge 同款滚动条垫片，并把同目录的 js/css/图片内联进来
-      // （srcdoc 的基址不是文件所在目录，相对引用否则全落空）。预处理出错就原样塞进去。
-      let html;
-      try { html = await prepareHtml(text, item.url); } catch { html = text; }
       src = '';
-      srcdoc = html;
+      srcdoc = withShim(text);
       armReveal();
     } catch (e) { err = String(e?.message || e); }
   }
@@ -84,12 +92,29 @@
       else { await stage?.requestFullscreen(); await tick(); frame?.focus(); }
     } catch {}
   }
+  // apk 壳给本地页加了 frame-src 白名单（只放行自己电脑的 /api/hv/）：老壳、或服务器地址改了还没重载时
+  // 挂载 iframe 会被拦成 ERR_BLOCKED_BY_CSP——iframe 的 load 照样触发、看不出失败，只能听违规事件，回落 srcdoc。
+  function onCspViolation(e) {
+    if (!src || noSite || !/^(frame|child)-src/.test(e.effectiveDirective || e.violatedDirective || '')) return;
+    let origin = '';
+    try { origin = new URL(src).origin; } catch {}
+    if (!origin || !String(e.blockedURI || '').startsWith(origin)) return;
+    noSite = true; src = ''; gen++;
+    resolve();
+  }
   function onFsChange() { full = !!document.fullscreenElement && document.fullscreenElement === stage; }
+
+  async function saveNative() { await nativeWorkspaceSaveAs(item.saveTarget.rel, item.nativeLocation); }
 
   onMount(() => {
     resolve();
     document.addEventListener('fullscreenchange', onFsChange);
-    return () => { clearTimeout(revealTimer); document.removeEventListener('fullscreenchange', onFsChange); };
+    document.addEventListener('securitypolicyviolation', onCspViolation);
+    return () => {
+      clearTimeout(revealTimer);
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('securitypolicyviolation', onCspViolation);
+    };
   });
 </script>
 
@@ -120,8 +145,12 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.75 4.75h5.5v5.5M19 5l-8 8" /><path d="M17.25 13.75v4a1.5 1.5 0 0 1-1.5 1.5h-9.5a1.5 1.5 0 0 1-1.5-1.5v-9.5a1.5 1.5 0 0 1 1.5-1.5h4" /></svg>
         </a>
       {/if}
-      {#if item.downloadHref}
-        <a class="hv-btn" href={item.downloadHref} download={item.name} aria-label={t('下载')} title={t('下载')}>
+      {#if item.nativeLocation && item.saveTarget?.rel}
+        <button class="hv-btn" aria-label={t('另存为…')} title={t('另存为…')} onclick={saveNative}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.75v10.5M7.75 11 12 15.25 16.25 11" /><path d="M5 19.25h14" /></svg>
+        </button>
+      {:else if item.downloadHref}
+        <a class="hv-btn" href={item.downloadHref} download={item.name} aria-label={saveLabel(t('下载'))} title={saveLabel(t('下载'))} onclick={(e) => interceptSave(e, { url: item.downloadHref, name: item.name, path: item.absPath || '' })}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.75v10.5M7.75 11 12 15.25 16.25 11" /><path d="M5 19.25h14" /></svg>
         </a>
       {/if}

@@ -47,7 +47,7 @@ export default {
   '连接中…': 'Connecting…',
   '请输入地址': 'Enter an address',
   '连接异常（HTTP {status}），检查地址': 'Unexpected response (HTTP {status}). Check the address.',
-  '连不上这个地址：确认服务器上的 Muse Bridge 开着、地址没填错': 'Can’t reach this address. Make sure Muse Bridge is running on the server and the address is correct.',
+  '连不上这个地址：确认服务器上的 The Bridge 开着、地址没填错': 'Can’t reach this address. Make sure The Bridge is running on the server and the address is correct.',
   '当前线路': 'Current route',
   '和电脑在同一个 WiFi，直连电脑，最快': 'Connected directly to your computer on the same Wi‑Fi (fastest)',
   '经 Cloudflare 公网隧道；回到家同一 WiFi 下会自动切局域网': 'Connected through the Cloudflare public tunnel. Switches to LAN automatically when you’re back on the same Wi‑Fi.',

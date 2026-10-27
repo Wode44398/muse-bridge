@@ -14,7 +14,7 @@ const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'ext-scopes-')));
 process.env.BRIDGE_DATA_ROOT = root;
 process.env.BRIDGE_CLAUDE_IN_CHROME = '0';
 const ext = await import('./extensions.mjs');
-const catalog = await import('./extensions-catalog.mjs');
+const { installedKeys } = await import('./ext-market.mjs');
 const extRoot = path.join(root, 'extensions');
 
 beforeEach(() => rmSync(extRoot, { recursive: true, force: true }));
@@ -25,16 +25,16 @@ function skillDir(name, body = 'do things') {
   writeFileSync(path.join(d, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name} skill\n---\n\n${body}\n`);
   return d;
 }
-const install = async (name, opts) => { const d = skillDir(name); try { return await ext.installSkill('skill.zip', null, { fromDir: d, ...opts }); } finally { rmSync(d, { recursive: true, force: true }); } };
+const install = (name, opts) => { const d = skillDir(name); try { return ext.installSkillFromDir(d, opts); } finally { rmSync(d, { recursive: true, force: true }); } };
 
-test('shared items land in their own tree and aggregate; same name may exist in both scopes', async () => {
-  const mine = await install('xlsx', { pkg: 'docs' });
-  const shared = await install('xlsx', { pkg: 'docs', scope: 'shared' });
+test('shared items land in their own tree and aggregate; same name may exist in both scopes', () => {
+  const mine = install('xlsx', { pkg: 'docs' });
+  const shared = install('xlsx', { pkg: 'docs', scope: 'shared' });
   assert.equal(ext.extScope(mine), 'admin');
   assert.equal(shared.scope, 'shared');
   assert.equal(shared.dir, 'shared/skills/xlsx');
   assert.ok(existsSync(path.join(ext.SHARED_ROOT, 'skills', 'xlsx', 'SKILL.md')));
-  await assert.rejects(install('xlsx', { scope: 'shared' }), /同名/, '同一范围里照样不许重名');
+  assert.throws(() => install('xlsx', { scope: 'shared' }), /同名/, '同一范围里照样不许重名');
 
   const agg = JSON.parse(readFileSync(path.join(extRoot, 'runtime', 'claude-plugin-shared', '.claude-plugin', 'plugin.json'), 'utf8'));
   assert.equal(agg.name, 'server');
@@ -43,7 +43,7 @@ test('shared items land in their own tree and aggregate; same name may exist in 
 
   // 替换沿用原范围（传了别的 scope 也不搬家）
   const d = skillDir('xlsx', 'v2');
-  try { assert.equal((await ext.installSkill('skill.zip', null, { fromDir: d, replaceId: shared.id, scope: 'admin' })).scope, 'shared'); } finally { rmSync(d, { recursive: true, force: true }); }
+  try { assert.equal(ext.installSkillFromDir(d, { replaceId: shared.id, scope: 'admin' }).scope, 'shared'); } finally { rmSync(d, { recursive: true, force: true }); }
 
   assert.deepEqual(ext.listExtensions({ scope: 'shared' }).map((x) => x.id), [shared.id]);
   assert.deepEqual(ext.listExtensions({ scope: 'admin' }).map((x) => x.id), [mine.id]);
@@ -57,9 +57,9 @@ test('shared items land in their own tree and aggregate; same name may exist in 
   assert.ok(ext.getExtension(mine.id));
 });
 
-test('injection: admin gets both scopes, registered users only shared, snapshot visitors nothing', async () => {
-  await install('mine-skill');
-  await install('team-skill', { scope: 'shared' });
+test('injection: admin gets both scopes, registered users only shared, snapshot visitors nothing', () => {
+  install('mine-skill');
+  install('team-skill', { scope: 'shared' });
   ext.saveConnector({ name: 'mine-mcp', transport: 'stdio', command: 'node', args: ['a.js'] });
   const sc = ext.saveConnector({ name: 'team-mcp', transport: 'http', url: 'https://example.invalid/mcp', scope: 'shared' });
   assert.equal(sc.scope, 'shared');
@@ -81,27 +81,18 @@ test('injection: admin gets both scopes, registered users only shared, snapshot 
   assert.deepEqual(ext.claudeExtensionsFor({ kind: 'user', sandbox: true }, { snap: true }), { plugins: [], mcpServers: {} });
 });
 
-test('catalog "added" marks are per scope', async () => {
-  // 一份最小的目录副本：一个本地源插件，带一个技能
-  const croot = path.join(root, 'markets');
-  const m = path.join(croot, 'claude-plugins-official');
-  const w = (rel, text) => { const p = path.join(m, rel); mkdirSync(path.dirname(p), { recursive: true }); writeFileSync(p, text); };
-  w('.claude-plugin/marketplace.json', JSON.stringify({ name: 'claude-plugins-official', plugins: [{ name: 'docs', description: 'Docs', source: './plugins/docs' }] }));
-  w('plugins/docs/.claude-plugin/plugin.json', JSON.stringify({ name: 'docs' }));
-  w('plugins/docs/skills/pdf/SKILL.md', '---\nname: pdf\ndescription: pdf skill\n---\n\nbody\n');
-  const sid = 'claude-plugins-official/docs/skill/skills/pdf';
-  const added = (scope) => catalog.listCatalog({ root: croot, scope }).items.find((x) => x.id === sid).installed;
-  assert.equal(added('admin'), false);
-  const item = await catalog.installFromCatalog(sid, { root: croot, scope: 'shared' });
-  assert.equal(item.scope, 'shared');
-  assert.equal(added('shared'), true);
-  assert.equal(added('admin'), false, '全服装过的，自用那边照样能再装一份');
+test('market "added" marks are per scope', () => {
+  const d = skillDir('pdf');
+  try { ext.installSkillFromDir(d, { source: { market: 'anthropics/skills', plugin: 'document-skills', path: 'skills/pdf' } }); }
+  finally { rmSync(d, { recursive: true, force: true }); }
+  assert.deepEqual(installedKeys({ scope: 'admin' }), ['skill:anthropics/skills::skills/pdf']);
+  assert.deepEqual(installedKeys({ scope: 'shared' }), []);
 });
 
 test('sandbox fence: shared tree is read-only for members, admin-only tree stays closed', async () => {
   const { sharedExtRead, maskSharedRoot, sandboxViolation } = await import('./agents/claude.mjs');
-  await install('team-skill', { scope: 'shared' });
-  await install('mine-skill');
+  install('team-skill', { scope: 'shared' });
+  install('mine-skill');
   const sharedMd = path.join(ext.SHARED_ROOT, 'skills', 'team-skill', 'SKILL.md');
   const mineMd = path.join(extRoot, 'skills', 'mine-skill', 'SKILL.md');
 

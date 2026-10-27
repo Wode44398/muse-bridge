@@ -10,7 +10,7 @@
 import { readBody } from '../runtime/body.mjs';
 import { contextFor, replayHeadersOf } from '../runtime/identity.mjs';
 import { ID_RE } from '../jsonfile.mjs';
-import { spawnChild, parentCtxFor, rememberReplay } from '../runtime/session-family.mjs';
+import { spawnChild, parentCtxFor, rememberReplay, resolveProject } from '../runtime/session-family.mjs';
 import { TASK_ID_RE, OPEN_STATUSES, getProposal, proposalsOf, updateProposal, publicView } from '../runtime/session-proposals.mjs';
 import { peerHoldsOf, resolvePeerHold, peerInbound, peersOn } from '../runtime/session-peers.mjs';
 import { CLAUDE_MODELS } from '../config/capabilities.mjs';
@@ -32,13 +32,20 @@ export async function startFromCard(ctx, req, id, { useWorktree, client } = {}) 
   });
   const pctx = parentCtxFor(ctx, p.parent);
   if (!pctx) return { ok: false, status: 409, error: '找不到发起这张卡的会话' };
+  // 提议开到别的项目：落卡后项目可能被删了 / 改了权限，开之前再认一遍
+  let project;
+  if (p.project) {
+    const rp = resolveProject(ctx, p.project);
+    if (!rp.ok) { const n = updateProposal(ctx, p.id, { status: 'start_failed', reason: '要开到的项目不在了' }); return { ok: false, status: 200, error: '要开到的项目不在了', proposal: publicView(n) }; }
+    project = rp.project;
+  }
   updateProposal(ctx, p.id, { status: 'starting', ...(typeof useWorktree === 'boolean' ? { useWorktree } : {}) });
   const wt = typeof useWorktree === 'boolean' ? useWorktree : (typeof p.useWorktree === 'boolean' ? p.useWorktree : undefined);
   const r = await spawnChild(pctx, p.parent, {
     title: p.title, prompt: p.prompt, background: p.background, context: p.context,
     model: p.model && CLAUDE_MODELS.has(p.model) ? p.model : undefined, name: p.name || undefined,
     worktree: pctx.worktree || null, useWorktree: p.context === 'fork' ? undefined : wt, branchName: p.branchName || undefined,
-    task: p.id, toolUseId: p.toolUseId,
+    task: p.id, toolUseId: p.toolUseId, project,
   });
   if (!r.ok) {
     const why = r.userReason || r.reason;   // 卡片上给用户看的（session-family.mjs spawnChild）

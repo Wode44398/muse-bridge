@@ -35,7 +35,7 @@
   const stopped = $derived(status === 'stopped');
   const failed = $derived(status === 'failed');
   const reason = $derived((failed || stopped) ? (reasonFromSummary(task ? task.summary : '', task ? task.description : '') || '') : '');
-  // bridge 偏离（实测后定）：官方跑完即收成一行「Ran workflow X」，和「Ran 5 commands」混在一起
+  // bridge 偏离（09-30 维护者）：官方跑完即收成一行「Ran workflow X」，和「Ran 5 commands」混在一起
   // 认不出来；这里不在分组里就一律是卡片——跑完后停在终态（状态字 + 最终点阵 + 时长），
   // 只有被并进工具分组时才退回单行。
   const compact = $derived(!inGroup);

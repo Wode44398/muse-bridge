@@ -237,7 +237,7 @@ When over budget: drop articles, use the short variant listed in §4 (“Full ac
 - Emoji and symbols in the Chinese (⛔ ⏳ ✓ →) are kept as-is and in the same position.
 - If a string only makes sense in Chinese (a Chinese example sentence, a pinyin hint, an IME tip),
   write an English equivalent example rather than translating literally.
-- Internal shorthand like 菊花 (spinner) or 月桥 (the logo) never appears in English UI.
+- Internal shorthand like 菊花 (spinner) or 月桥 never appears in English UI.
 
 ### 1.15 Context ids for `tc()`
 

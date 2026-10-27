@@ -5,7 +5,7 @@
 // 改 ~/.bashrc）、执行刚下载内容的（`curl … | sh`、`iwr … | iex`）、碰云元数据端点的、把命令发给远程 Docker 的，
 // 检查点全都兜不住，却和 `ls` 一样静默执行。
 // 修后：这一档转问（卡片上的规则是「内置·不可恢复操作」）；用户自己写的 allow 规则仍优先、「本会话都允许」只记一字
-// 不差的原命令；没人在场 / 离开模式时按「没被批准」回给模型、命令不跑。清单宁少勿多，且不能误伤日常命令——真实会话的
+// 不差的原命令；没人在场 / 离开模式时按「没被批准」回给模型、命令不跑。清单宁少勿多，且不能误伤日常命令——正式服真实
 // 命令里有 17 条 `curl … | python -c "…"`（解析下载下来的数据，不是执行它），一条都不能拦。
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -85,7 +85,7 @@ const IRREVERSIBLE: [string, ShellDialect][] = [
 ];
 
 const EVERYDAY: [string, ShellDialect][] = [
-  // 真实会话命令里的形状：解析下载下来的数据、here-document 里写的程序、查版本
+  // 正式服真实命令里的形状：解析下载下来的数据、here-document 里写的程序、查版本
   ['curl -s http://127.0.0.1:8799/api/x | python -c "import json,sys; print(json.load(sys.stdin))"', "bash"],
   ["curl -s https://x.example/a.json | python -m json.tool", "bash"],
   ["curl -s -o data.json https://x.example/a && python - <<'EOF'\nimport json\nprint(json.load(open('data.json')))\nEOF", "bash"],
@@ -129,7 +129,7 @@ test("P12 不可恢复档：下载即执行、强推 / 发布、全局环境、�
   }
 });
 
-test("P12 不误伤日常命令（含真实会话命令的形状）", () => {
+test("P12 不误伤日常命令（含正式服真实命令的形状）", () => {
   for (const [cmd, dialect] of EVERYDAY) {
     assert.equal(assessCommand(cmd, dialect).irreversible, undefined, `不该转问：${cmd}`);
   }

@@ -16,7 +16,7 @@
   // 一次性消费的，连点两个产物也要每次都落到对的目录。
   let { ws = '', target = null, onExit = null } = $props();
   // 明暗跟 dimensio 自己的档（跟系统 / 浅 / 深），不跟 bridge 全站主题：HarnessPage 已把它同步进
-  // ui.pageChrome。没有它（理论上不会）才退回跟全站。
+  // ui.pageChrome（桌面壳窗控配色也吃这一份）。没有它（理论上不会）才退回跟全站。
   const theme = $derived(ui.pageChrome ? (ui.pageChrome.dark ? 'dark' : 'light') : '');
   const rootName = $derived(ws ? (ws.split(/[\\/]/).filter(Boolean).pop() || '') : '');
   const mountKey = $derived(ws + '|' + (target ? target.seq : ''));

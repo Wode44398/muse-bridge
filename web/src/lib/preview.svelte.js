@@ -1,19 +1,23 @@
-// 统一文件预览控制器 —— 工作空间文件与各 agent 产物共用的全屏沉浸查看器入口。
+// 统一文件预览控制器 —— Vertex(生成媒体) 与 工作空间(云端/本地 SAF) 三处共用的全屏沉浸查看器入口。
 //
 // 调用方只管把「描述符」交给 openPreview()，这里归一化成查看器认得的统一结构
 // （kind + 各档可加载 URL），MediaViewer.svelte 据 kind 路由到具体子查看器（图/视频/音频/文档…）。
-// 来源差异（?token 鉴权、衍生图）全收敛在此一处，子查看器与来源解耦。
+// 来源差异（?token 鉴权、Vertex 衍生图、SAF 本地）全收敛在此一处，子查看器与来源解耦。
 //
-// 描述符（调用方传入）：
-//   服务端文件： { origin:'cloud',  rel, name?, kind?, ws? }        —— /api/file（Range 流，?token 白名单内）
-//   Claude 产物：{ origin:'claude', id, path, name?, kind? }        —— /api/claude/artifact（会话项目/交付根授权）
-//   dimensio 产物：{ origin:'harness', id, path, name?, kind? }     —— /api/harness/api/sessions/:id/artifact
-//   可选 dataUrl / text：调用方已读好的内容（图片 dataURL / 文本），查看器直接用。
+// 描述符（调用方传入，三种来源）：
+//   Vertex 媒体： { origin:'vertex', id, name?, kind? }            —— /api/vertex/media（有 thumb/preview 衍生图）
+//   云端文件：   { origin:'cloud',  rel, name?, kind? }            —— /api/file（Range 流，?token 白名单内）
+//   手机本地：   { origin:'local',  rel, name?, kind?, dataUrl?, text? }  —— B6 前图片走 dataUrl、文本走已读 text
+//   Codex 产物： { origin:'codex', id?, path, name?, kind? }             —— /api/codex/artifact（会话/上传目录授权）
+//   Claude 产物：{ origin:'claude', id, path, name?, kind? }             —— /api/claude/artifact（会话项目/交付根授权）
+//   dimensio 产物：{ origin:'harness', id, path, name?, kind? }          —— /api/harness/api/sessions/:id/artifact
 
 import { untrack } from 'svelte';
 import { getToken } from './api.js';
-import { apiUrl } from './server.js';
+import { apiUrl, isOffline } from './server.js';
+import { localFileUrl, hasLocalThumb, localThumbUrl } from './localfs.js';
 import { prefs } from './state.svelte.js';
+import { serverOnThisMachine, nativeWorkspaceFileUrl } from './nativeDesktop.js';
 import { reportUi } from './uiReport.js';
 import { t } from './i18n.js';
 
@@ -39,9 +43,18 @@ export function kindOf(name = '') {
   return 'other';
 }
 
-// —— 媒体 URL（附 ?token：<img>/<video> 带不了 Authorization 头，只能查询参数携带）——
+// —— 媒体 URL（附 ?token：<img>/<video> 跨源带不了 Authorization 头，离线壳只能查询参数携带）——
 function tokenSuffix(sep) { const tok = getToken && getToken(); return tok ? sep + 'token=' + encodeURIComponent(tok) : ''; }
 
+export function vertexMediaUrl(id, variant) {
+  return apiUrl('/api/vertex/media?id=' + encodeURIComponent(id) + (variant ? '&v=' + variant : '') + tokenSuffix('&'));
+}
+export function codexArtifactUrl(id, filePath, { dl = false, name = '' } = {}) {
+  return apiUrl('/api/codex/artifact?path=' + encodeURIComponent(filePath)
+    + (id ? '&id=' + encodeURIComponent(id) : '')
+    + (name ? '&name=' + encodeURIComponent(name) : '')
+    + (dl ? '&dl=1' : '') + tokenSuffix('&'));
+}
 export function claudeArtifactUrl(id, filePath, { dl = false, name = '' } = {}) {
   return apiUrl('/api/claude/artifact?path=' + encodeURIComponent(filePath)
     + (id ? '&id=' + encodeURIComponent(id) : '')
@@ -52,8 +65,18 @@ export function harnessArtifactUrl(id, filePath, { dl = false } = {}) {
   return apiUrl('/api/harness/api/sessions/' + encodeURIComponent(id) + '/artifact?path=' + encodeURIComponent(filePath)
     + (dl ? '&dl=1' : '') + tokenSuffix('&'));
 }
-export function cloudFileUrl(rel, { dl = false, thumb = false, preview = false, mt = 0, ws = '' } = {}) {
+// http=true：强制走 bridge HTTP。要喂 WebGL/WebGPU 纹理的图（壁纸）必须用它——本地协议
+// bridge-workspace:// 对页面是跨源且不带 CORS 头，读进 GPU 会被安全策略拒绝（画布一片黑）。
+export function cloudFileUrl(rel, { dl = false, thumb = false, preview = false, mt = 0, ws = '', nativeLocation = '', http = false } = {}) {
   const name = String(rel).split('/').pop() || 'file';
+  // 桌面客户端默认工作空间用受控本地协议直读：图片/PDF/音视频 Range/文本都不再
+  // 绕 loopback HTTP。primary 的缩略图/衍生图/下载仍由 bridge 服务端处理（sharp 320
+  // 缩略远轻于原字节，nativeLocation='primary' 不得短路它们）；额外授权位置服务端
+  // 根本不认识，只能恒走本地协议原字节。
+  if (!ws && !http && serverOnThisMachine() &&((!dl && !thumb && !preview) || (nativeLocation && nativeLocation !== 'primary'))) {
+    const nativeUrl = nativeWorkspaceFileUrl(rel, nativeLocation || 'primary');
+    if (nativeUrl) return nativeUrl;
+  }
   // thumb=320 列表图标档 / preview=1280 画廊轻量档（服务端 sharp 衍生，见 files.mjs THUMB_TIERS）。
   // mt=文件 mtime（服务端忽略）：文件被同名替换时 URL 变化，绕开浏览器对旧衍生图的 max-age 缓存。
   const variant = thumb ? '&thumb=1' : preview ? '&thumb=preview' : '';
@@ -72,12 +95,14 @@ export function cloudStreamUrl(rel, { probe = false, ws = '' } = {}) {
 
 // HtmlView 的站点挂载请求：同一个鉴权接口带 site=1，服务端回 { url:'/api/hv/<id>/<入口>' }——
 // 路径式 URL，页面里相对引用的 js/css/图片才解析得到（见 src/runtime/html-site.mjs）。
-// 拿不到挂载地址（其它来源）时 HtmlView 回落 srcdoc（lib/htmlInline.js 内联同目录资源）。
+// 只走 bridge 服务端：桌面壳的额外授权位置服务端不认识，那种情况不给，HtmlView 回落 srcdoc。
 function htmlSiteUrl(raw) {
   if (raw.origin === 'cloud') {
+    if (raw.nativeLocation && raw.nativeLocation !== 'primary') return null;
     return apiUrl('/api/file?site=1&path=' + encodeURIComponent(raw.rel) + (raw.ws ? '&ws=' + encodeURIComponent(raw.ws) : '') + tokenSuffix('&'));
   }
   if (raw.origin === 'claude') return claudeArtifactUrl(raw.id, raw.path) + '&site=1';
+  if (raw.origin === 'codex') return codexArtifactUrl(raw.id, raw.path) + '&site=1';
   return null;
 }
 
@@ -86,40 +111,64 @@ function normalize(raw) {
   const name = raw.name || (raw.rel ? String(raw.rel).split('/').pop() : '') || (raw.path ? String(raw.path).split(/[\\/]/).pop() : '') || (raw.id ? t('生成结果') : t('文件'));
   const kind = raw.kind || kindOf(name);
   const out = {
-    key: raw.key || (raw.origin + ':' + (raw.ws || '') + ':' + (raw.path || raw.id || raw.rel || name)),
+    key: raw.key || (raw.origin + ':' + (raw.ws || raw.nativeLocation || '') + ':' + (raw.path || raw.id || raw.rel || name)),
     origin: raw.origin, name, kind, ext: extOf(name),
+    nativeLocation: raw.nativeLocation || '',
     url: null,          // 原始（原图/原视频/原文件）
     previewUrl: null,   // 中等档（图：1280 衍生图；其余=url）
     thumbUrl: null,     // 缩略（图/视频海报：320 衍生图）
     poster: null,       // 视频海报帧
     downloadHref: null, // 下载链接（带 dl/token）
-    dataUrl: raw.dataUrl ?? null,   // 调用方已读好的图片 base64 dataURL
-    text: raw.text ?? null,         // 调用方已读好的文本内容
+    dataUrl: raw.dataUrl ?? null,   // 本地图片：调用方已读好的 base64 dataURL
+    text: raw.text ?? null,         // 本地文本：调用方已读好的内容
     editable: false,
     startMode: raw.startMode || '',   // md 打开时的模式（'live' 等）；空＝沿用上次。新建的空笔记直接进编辑
-    saveTarget: null,   // { origin:'cloud', rel, ws }（编辑保存用）
-    cacheKey: raw.origin === 'cloud' ? 'c:' + (raw.ws || '') + ':' + raw.rel : null,  // 视频/音频本地缓存键
+    saveTarget: null,   // { origin:'cloud'|'local', rel }（B3 编辑保存用）
+    cacheKey: raw.origin === 'vertex' ? 'v:' + raw.id : raw.origin === 'cloud' ? 'c:' + (raw.ws || raw.nativeLocation || '') + ':' + raw.rel : null,  // 视频/音频本地缓存键（本地来源不缓存）
   };
-  if (raw.origin === 'cloud') {
+  if (raw.origin === 'vertex') {
+    out.url = vertexMediaUrl(raw.id);
+    out.previewUrl = vertexMediaUrl(raw.id, 'preview');
+    out.thumbUrl = vertexMediaUrl(raw.id, 'thumb');
+    out.poster = out.thumbUrl;
+    out.downloadHref = out.url;
+  } else if (raw.origin === 'cloud') {
     const mt = raw.mt || 0;
     const ws = raw.ws || '';
-    out.url = cloudFileUrl(raw.rel, { ws });
-    // 图片三档：blur 底=320（与列表图标 URL 一致，直接命中浏览器缓存秒出）、
+    const nativeLocation = raw.nativeLocation || '';
+    out.url = cloudFileUrl(raw.rel, { ws, nativeLocation });
+    // 图片三档（同 vertex）：blur 底=320（与列表图标 URL 一致，直接命中浏览器缓存秒出）、
     // 画廊主图=1280 webp 轻量档（相册/漫画侧滑逐张拉原图慢网顶不住）、原图留给缩放升级。
     // gif 例外：衍生图会丢动画（服务端对 gif 也是回落原图），直接原图。
     // 「原图加载」（设置-通用 prefs.fullResMedia）：开=主图直接原图（预载器跟着预载原图），
     // blur 底保留；对下次 openPreview 生效（归一化在打开时跑一次）。
-    if (kind === 'image' && out.ext !== 'gif') {
-      out.previewUrl = prefs.fullResMedia ? out.url : cloudFileUrl(raw.rel, { preview: true, mt, ws });
-      out.thumbUrl = cloudFileUrl(raw.rel, { thumb: true, mt, ws });
+    if (kind === 'image' && out.ext !== 'gif' && !(serverOnThisMachine() && !ws)) {
+      out.previewUrl = prefs.fullResMedia ? out.url : cloudFileUrl(raw.rel, { preview: true, mt, ws, nativeLocation });
+      out.thumbUrl = cloudFileUrl(raw.rel, { thumb: true, mt, ws, nativeLocation });
     } else out.previewUrl = out.url;
     // 视频海报=320 抽帧图（此前指向视频原字节，poster 属性根本不认）。
-    out.poster = kind === 'video' ? cloudFileUrl(raw.rel, { thumb: true, mt, ws }) : out.url;
+    out.poster = kind === 'video' ? (nativeLocation && nativeLocation !== 'primary' ? null : cloudFileUrl(raw.rel, { thumb: true, mt, ws })) : out.url;
     // 转码流兜底（「流畅」档）：直连解不动/带宽顶不住时 VideoPlayer 自动/手动切换
-    if (kind === 'video') { out.streamUrl = cloudStreamUrl(raw.rel, { ws }); out.streamProbeUrl = cloudStreamUrl(raw.rel, { probe: true, ws }); }
-    out.downloadHref = cloudFileUrl(raw.rel, { dl: true, ws });
-    out.saveTarget = { origin: 'cloud', rel: raw.rel, ws };
-    if (kind === 'office') out.officePdfUrl = officePdfUrl(raw.rel, ws);   // 服务端转 PDF（OfficeView 探测，失败回落客户端）
+    if (kind === 'video' && (!nativeLocation || nativeLocation === 'primary')) { out.streamUrl = cloudStreamUrl(raw.rel, { ws }); out.streamProbeUrl = cloudStreamUrl(raw.rel, { probe: true, ws }); }
+    out.downloadHref = cloudFileUrl(raw.rel, { dl: true, ws, nativeLocation });
+    out.saveTarget = { origin: 'cloud', rel: raw.rel, ws, nativeLocation };
+    if (kind === 'office' && (!nativeLocation || nativeLocation === 'primary')) out.officePdfUrl = officePdfUrl(raw.rel, ws);   // 服务端转 PDF（OfficeView 探测，失败回落客户端）
+  } else if (raw.origin === 'local') {
+    out.url = raw.dataUrl || localFileUrl(raw.rel);   // SAF 原生流式（带 Range），见 MainActivity.serveLocalFile
+    out.previewUrl = out.url;
+    out.poster = out.url;
+    // 新 apk 离线壳：原生 320 缩略当 blur 底/视频海报（旧 apk/在线壳无此能力，保持无占位）。
+    if (!raw.dataUrl && hasLocalThumb() && isOffline()) {
+      if (kind === 'image') out.thumbUrl = localThumbUrl(raw.rel);
+      else if (kind === 'video') out.poster = localThumbUrl(raw.rel);
+    }
+    out.saveTarget = { origin: 'local', rel: raw.rel };
+  } else if (raw.origin === 'codex') {
+    out.url = codexArtifactUrl(raw.id, raw.path, { name });
+    out.previewUrl = out.url;
+    out.poster = out.url;
+    out.downloadHref = codexArtifactUrl(raw.id, raw.path, { dl: true, name });
+    out.absPath = raw.path || '';   // 桌面壳原生另存为：本机绝对路径直拷（bridge 三形态都跑在本机）
   } else if (raw.origin === 'claude') {
     out.url = claudeArtifactUrl(raw.id, raw.path, { name });
     out.previewUrl = out.url;

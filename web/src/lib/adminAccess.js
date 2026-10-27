@@ -1,32 +1,38 @@
-// 成员的「管理员可见性」：服主默认只看得到会话标题、时间和用量；看对话内容、代聊代答要成员自己在设置里允许，每次都留记录。
-// 界面在设置 › 账户（components/settings/SecAdminAccess.svelte）。后端 src/routes/admin-access.mjs、src/runtime/admin-access.mjs。
+// 成员的「管理员可见性」（开源路线 S2-7 / N13）：服主默认只看得到会话标题、时间和用量；
+// 看对话内容、代聊代答、看这台成员的电脑要成员自己在设置里允许，每次都留记录。
+// 两套设置外壳共用：手机 / 网页的 iOS 风设置（Settings.svelte › 账户）、桌面壳设置（desktop/settings/AdminAccessSection.svelte）。
+// 后端 src/routes/admin-access.mjs、src/runtime/admin-access.mjs。
 import { api } from './api.js';
 import { t } from './i18n.js';
 import { busOn } from './bus.js';
 
-/** { consents:{view,assist}, at, service, log:[{at,action,label,what,detail}] }；管理员回 { admin:true } */
+/** { consents:{view,assist,device}, at, service, log:[{at,action,label,what,detail}] }；管理员回 { admin:true } */
 export const fetchAdminAccess = () => api.get('/api/me/admin-access');
 
-/** patch = { view?, assist? }（布尔）。成功回 { ok, consents, at }。 */
+/** patch = { view?, assist?, device? }（布尔）。成功回 { ok, consents, at }。 */
 export const saveAdminAccess = (patch) => api.post('/api/me/admin-access', patch);
 
-/** 两项开关：键、标题、说明。 */
+/** 三项开关：键、标题、说明（界面文案在这里统一，两套外壳不各写一份）。 */
 export function accessItems() {
   return [
-    { key: 'view', title: t('允许查看对话内容'), sub: t('Claude 的对话正文、定时任务的提示词和结果') },
+    { key: 'view', title: t('允许查看对话内容'), sub: t('Claude 与 Gemini 的对话正文、生成的媒体、定时任务的提示词和结果') },
     { key: 'assist', title: t('允许代聊与代答'), sub: t('管理员可以在你的空间里代你发消息、替你回答提问和审批；代发的消息开头标着「【管理员代发】」。接着聊你自己的会话，还要你允许查看对话内容') },
+    { key: 'device', title: t('允许查看我的电脑'), sub: t('管理员可以对你登记的电脑截屏、读取系统信息或派发操作') },
   ];
 }
 
 /** 设置页顶部的公示文字。 */
-export const accessDisclosure = () => t('服主（管理员）默认只能看到你的会话标题、时间和用量。下面两项由你决定；管理员每次查看或代你操作，都会记在最下面。服主管理着这台服务器，技术上仍能读到服务器上的文件——这里约束的是控制台的默认行为。');
+export const accessDisclosure = () => t('服主（管理员）默认只能看到你的会话标题、时间和用量。下面三项由你决定；管理员每次查看或代你操作，都会记在最下面。服主管理着这台服务器，技术上仍能读到服务器上的文件——这里约束的是控制台的默认行为。');
 
 // 访问记录的动作名（服务端也带了中文 label；这里按 action 再翻一次，界面切英文时用）
 const ACTION = () => ({
   view_session: t('查看了你的一段 Claude 对话'),
+  view_media: t('查看了你生成的媒体'),
+  view_gemini: t('查看了你的一段 Gemini 对话'),
   view_routines: t('查看了你的定时任务内容'),
   chat: t('以管理员身份在你的空间里代发了一条消息'),
   answer: t('替你回答了一个提问或审批'),
+  device: t('查看或操作了你的电脑'),
 });
 export function logLine(e) {
   const label = ACTION()[e.action] || e.label || e.action;

@@ -1,6 +1,6 @@
 // Bridge 扩展中心的 dimensio 侧适配：bridge 在 DATA_ROOT/extensions/registry.json 维护
 // 技能注册表（settings → 个性化 → 扩展），本模块只【读】它——env 传路径、用时现读
-// （与 BRIDGE_DESKTOP_HOST_FILE / local-pc descriptor 同一范式），装/删扩展无需重启
+// （与 BRIDGE_DESKTOP_HOST_FILE 同一范式），装/删扩展无需重启
 // harness。仅新会话生效（与 GUIDE.md 同契约：resume 会话保持原 prompt 不漂移）。
 //
 // 沙箱语义：技能目录在 workspace 之外，file tools 与 Bash 的 workspace 围栏只对【勾给
@@ -267,7 +267,7 @@ function readManaged(): { skills: ManagedSkill[]; pkgDescriptions: Map<string, s
 // ── C5（G1、K57、X51）技能目录经济学 ─────────────────────────────────────────
 // 以前目录平铺：73 条、每条完整描述 + SKILL.md 绝对路径，约 2.7 万字符常驻 system，其中 77% 是两个财经包（gildata 45、
 // caixin 11）。现在：
-//  · 成员 ≥3 的包折成一行（包说明 + 成员名单），按名加载——09-23 定为「折叠」，不做 implicit:false 摘除；
+//  · 成员 ≥3 的包折成一行（包说明 + 成员名单），按名加载——维护者 09-23 定「折叠」，不做 implicit:false 摘除；
 //  · 不再列路径（Skill 工具按名加载并交回目录；比 Codex 的路径别名更省）；
 //  · 预算 = 模型窗口 × 2%（封顶 1 万 token），拿不到窗口按 8000 字符；超了按「截描述 → 删描述 → 省略条目」退化，
 //    省略的条目仍能按名加载（Skill 报「没有这个名字」时列全部名字）。
@@ -314,7 +314,7 @@ export function catalogEntries(skills: ManagedSkill[], pkgDescriptions = new Map
 const clip = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`);
 
 // 瘦身 P0-3：目录里的描述只留第一句（到句末标点为止），再封顶——完整说明在 SKILL.md 里，Skill 载入时才要。以前每条截到 250 字，
-// 实际使用中 20 条目录约 6.9k 字符常驻，大半是第二句往后的用法细节与触发词清单。
+// 正式服 20 条目录约 6.9k 字符常驻，大半是第二句往后的用法细节与触发词清单。
 const ONE_LINE_MAX = 120;
 export function firstSentence(s: string, max = ONE_LINE_MAX): string {
   const flat = s.replace(/\s+/g, " ").trim();

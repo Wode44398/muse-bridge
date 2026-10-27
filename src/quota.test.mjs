@@ -9,6 +9,7 @@ import path from 'node:path';
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'bridge-quota-'));
 process.env.BRIDGE_DATA_ROOT = tmp;
 process.env.BRIDGE_USERS_ROOT = path.join(tmp, 'users');
+process.env.BRIDGE_CLAUDE_IN_CHROME = '0';
 
 const users = await import('./users.mjs');
 const { getPolicy, setPolicy, registrationOpen, dayKey } = await import('./runtime/policy.mjs');

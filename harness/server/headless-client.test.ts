@@ -2,7 +2,7 @@
 //
 // 修前：只有评测台自己写了一份 SSE 解析；别的没人盯着的调用方（Routines、QQ bot）要用 dimensio 就得各抄一份，卡片来了
 // 没人管，一轮挂到卡片超时（权限 10 分钟、计划 60 分钟）。
-// 修后：server/headless-client.ts 一份（评测台、命令行客户端都用它的 sseEvents）。
+// 修后：server/headless-client.ts 一份（评测台改用它的 sseEvents），scripts/dimensio-exec.ts 是命令行形态。
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";

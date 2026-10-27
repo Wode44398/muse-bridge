@@ -116,7 +116,7 @@ test('说明书里没有个人信息（本机路径、邮箱、私有网站）',
     'moonshot.cn', 'kimi.com', 'xiaomimimo.com', 'openrouter.ai', 'googleapis.com', 'google.com', 'duckduckgo.com',
     'npmjs.org', 'ubuntu.com', 'cogentco.com'];
   const EXACT = ['workers.dev'];   // 只认泛指；具体的 workers.dev 子域只放行反馈中继自己
-  const relay = (read(path.join(ROOT, 'src', 'feedback', 'report.mjs')).match(/https:\/\/([a-z0-9.-]+\.workers\.dev)/) || [])[1];
+  const relay = (read(path.join(ROOT, 'deploy', 'muse', 'feedback', 'report.mjs')).match(/https:\/\/([a-z0-9.-]+\.workers\.dev)/) || [])[1];
   const hostRe = /\b(?:[a-z0-9-]+\.)+(?:com|ai|dev|io|net|org|cn|app|me|co|xyz)\b/gi;
   for (const [f, text] of Object.entries(guide).concat([['MUSE.md', museMd]])) {
     for (const line of text.split('\n')) {

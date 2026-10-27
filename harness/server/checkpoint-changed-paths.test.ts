@@ -1,6 +1,6 @@
 // changedPathsSince 的 skipNestedRepos：工作区里 git clone 下来的仓库，影子 git 的 `add -A` 只记成一个 gitlink
 // （模式 160000、路径就是目录名、没有后缀），验证门禁曾把它当成「改了代码」，撤回了只读分析的整份答复
-// （分析刚 clone 下来的仓库时）。门禁那条路径跳过它；回退提示那条照旧列出。
+// （2026-10-05 本机 Qwen 分析 Strata）。门禁那条路径跳过它；回退提示那条照旧列出。
 
 import assert from "node:assert/strict";
 import fs from "node:fs";

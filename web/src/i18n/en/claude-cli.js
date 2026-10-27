@@ -15,7 +15,7 @@ export default {
   '首次使用要从官方源下载约 {mb} MB（解开后约 {full} MB），只需一次；下载完就能对话。': 'First use downloads about {mb} MB from the official source ({full} MB unpacked), just once. You can chat as soon as it finishes.',
   '首次使用要从官方源下载运行组件（解开后约 {full} MB），只需一次；下载完就能对话。': 'First use downloads the runtime from the official source ({full} MB unpacked), just once. You can chat as soon as it finishes.',
   '需要 {want}，正在用本机的 {have}，个别功能可能不正常。': 'Version {want} is needed, but the local {have} is in use. Some features may not work.',
-  '没找到 Claude Code {want}：在运行 bridge 服务端的电脑上安装它，或在服务端 config.json 里用 claudeCliPath 指定位置。': 'Claude Code {want} wasn’t found. Install it on the computer running the Muse Bridge server, or set its location with claudeCliPath in the server’s config.json.',
+  '没找到 Claude Code {want}：在运行 bridge 服务端的电脑上安装它，或在服务端 config.json 里用 claudeCliPath 指定位置。': 'Claude Code {want} wasn’t found. Install it on the computer running the bridge server, or set its location with claudeCliPath in the server’s config.json.',
   '正在重试…': 'Retrying…',
   '重试': 'Try again',
 
@@ -42,8 +42,8 @@ export default {
   'Claude Code 运行组件还没就绪': 'The Claude Code runtime isn’t ready',
   '已下载 {pct}%（{done} / {total} MB），完成后再发一次即可。': 'Downloaded {pct}% ({done} / {total} MB). Send again once it finishes.',
   '稍等几秒再发一次。': 'Wait a few seconds, then send again.',
-  '{reason}。管理员可以在「设置 › Claude」里重试，或在运行 bridge 服务端的电脑上安装 Claude Code。': '{reason}. An admin can try again in Settings › Claude, or install Claude Code on the computer running the Muse Bridge server.',
-  '需要 Claude Code {want}：管理员可以在运行 bridge 服务端的电脑上安装它，或在服务端 config.json 里用 claudeCliPath 指定位置。': 'Claude Code {want} is needed. An admin can install it on the computer running the Muse Bridge server, or set its location with claudeCliPath in the server’s config.json.',
+  '{reason}。管理员可以在「设置 › Claude」里重试，或在运行 bridge 服务端的电脑上安装 Claude Code。': '{reason}. An admin can try again in Settings › Claude, or install Claude Code on the computer running the bridge server.',
+  '需要 Claude Code {want}：管理员可以在运行 bridge 服务端的电脑上安装它，或在服务端 config.json 里用 claudeCliPath 指定位置。': 'Claude Code {want} is needed. An admin can install it on the computer running the bridge server, or set its location with claudeCliPath in the server’s config.json.',
   '服务端会自动下载它；管理员可以在「设置 › Claude」里看进度或重试。': 'The server downloads it automatically. An admin can check progress or try again in Settings › Claude.',
   // 合成整句：title + ' — ' + hint（hint 再过一遍 tr）
   'Claude Code 运行组件还在下载 — {hint}': 'The Claude Code runtime is still downloading. {hint}',

@@ -33,7 +33,7 @@
   import { busStart, busStop, busOn, busConnected } from '../lib/bus.js';
   import { dock, openDock, closeDock, setDockWs } from '../lib/dock.svelte.js';
   import { layout, pointer } from '../lib/layout.svelte.js';
-  import { onReachabilityChange, startReachabilityWatch } from '../lib/server.js';
+  import { initRoute, onReachabilityChange, startReachabilityWatch } from '../lib/server.js';
   import { titleFor } from '../lib/library.svelte.js';
   import { dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent } from '../lib/fileDrag.js';
   import { IS_PANE, SOLO_ID, PANE_MSG, isPaneMsg } from '../lib/solo.js';
@@ -92,6 +92,20 @@
       window.dispatchEvent(new Event('bridge-pane-away'));   // 宿主那边被按下了：收起本格的弹层
     } else if (d.t === 'new') {
       newConversation(d.projectId || undefined);   // 分屏时焦点在这一格、侧栏点了项目行
+    } else if (d.t === 'wco') {
+      // 桌面壳标题栏带：宿主顶上 40px 是窗口拖拽带，这一格右上的工具开关组、工作台顶上那条带都要和
+      // 宿主那一格坐在同一条线上（data-wco-band）；贴着窗口右缘时右上 ~140px 还被系统窗控盖着——
+      // 工具组再往左让出窗控（复用全站 html[data-wco] 那套规则，只在贴右缘时挂上）。
+      const root = document.documentElement;
+      if (d.h > 0) { root.dataset.wcoBand = '1'; root.style.setProperty('--wco-h', d.h + 'px'); }
+      else delete root.dataset.wcoBand;
+      if (d.right > 0) {
+        root.dataset.wco = '1';
+        root.style.setProperty('--wco-right', d.right + 'px');
+      } else {
+        delete root.dataset.wco;
+        root.style.removeProperty('--wco-right');
+      }
     }
   }
 
@@ -99,7 +113,7 @@
   // （编辑器先接住的不抢）
   function onPaneKey(e) {
     if (!IS_PANE || e.defaultPrevented) return;
-    if (isNewChatKey(e, { desktop: false })) {   // Muse 没有桌面壳：按网页版的新对话快捷键认
+    if (isNewChatKey(e, { desktop: !!(window.BridgeDesktop || window.parent?.BridgeDesktop) })) {
       e.preventDefault();
       toHost({ t: 'newchat' });
       return;
@@ -182,6 +196,7 @@
     (async () => {
       onReachabilityChange((down) => { ui.offline = down; });
       startReachabilityWatch();
+      try { await initRoute(); } catch {}
       try { caps.data = await loadCaps(); caps.loaded = true; } catch {}
       try { applyMe(await api.auth()); } catch { applyMe(null); }
       if (me.kind === 'none') { state = 'login'; return; }

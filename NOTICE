@@ -1,0 +1,20 @@
+Claude Bridge
+Copyright 2026 Claude Bridge contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes third-party fonts, icons and other assets that are distributed under
+their own licenses: Inter, Lora (modified and renamed "Bridge Serif"), JetBrains Mono
+and Noto Serif SC under the SIL Open Font License 1.1; Lucide icons under the ISC
+License (icons derived from Feather under the MIT License); LobeHub icons under the
+MIT License; the Flux wallpaper under the MIT License. It also includes code ported
+from Project Nayuki's QR Code generator library (src/runtime/qr.mjs), Copyright (c)
+Project Nayuki, under the MIT License. See THIRD_PARTY_NOTICES.md and
+web/public/licenses/ for details and full license texts.
+
+The Claude Agent SDK and Claude Code are proprietary software of Anthropic, PBC.
+They are not part of this product and are not covered by its license.
+
+Claude and Claude Code are trademarks of Anthropic, PBC. ChatGPT and Codex are
+trademarks of OpenAI. Gemini is a trademark of Google LLC. This project is not
+affiliated with, endorsed by, or sponsored by Anthropic, OpenAI or Google.

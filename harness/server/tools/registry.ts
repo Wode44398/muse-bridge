@@ -24,7 +24,7 @@ import { askUserQuestionTool } from "./ask.ts";
 import { exitPlanModeTool } from "./exitplanmode.ts";
 import { projectKnowledgeTool } from "./projectknowledge.ts";
 import { skillTool } from "./skill.ts";
-import { localPcInspectTool, localPcActTool } from "./localpc.ts";
+import { deviceInspectTool, deviceActTool, deviceBrowserTool, deviceShellTool, deviceFilesTool, devicePortsTool } from "./localpc.ts";
 import { disabledTools } from "../tenant.ts";
 
 export const ALL_TOOLS: Tool[] = [
@@ -52,8 +52,12 @@ export const ALL_TOOLS: Tool[] = [
   skillTool,
   memoryAuditTool,
   verificationAuditTool,
-  localPcInspectTool,
-  localPcActTool,
+  deviceInspectTool,
+  deviceActTool,
+  deviceBrowserTool,
+  deviceShellTool,
+  deviceFilesTool,
+  devicePortsTool,
 ];
 
 function enabledTools(): Tool[] {

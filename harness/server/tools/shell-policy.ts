@@ -236,7 +236,7 @@ function catastrophicPath(t: string): boolean {
   if (drive) {
     if (WIN_SYSTEM_TREE.test(parts[0])) return true;
     if (/^users$/i.test(parts[0])) return parts.length <= 2;
-    return parts.length === 1; // 盘符下的顶层目录（D:/Work）
+    return parts.length === 1; // 盘符下的顶层目录（D:/Notes）
   }
   if (POSIX_SYSTEM_TREE.test(parts[0])) return true;
   if (POSIX_SHALLOW.test(parts[0])) return parts.length <= 2;
@@ -647,7 +647,7 @@ function destroysFiles(c: ShellCommand): boolean {
 // 的执行前快照兜底；不可恢复的——落在远端（强推、发布）、落在工作区外的全局环境（全局装卸包、持久环境变量、注册表、
 // 全局 git 配置）、执行刚下载下来的内容、碰云元数据端点、把命令发给远程 Docker——auto 下也要问（用户自己写的 allow
 // 规则仍优先；没人在场 / 离开模式按「没被批准」处理）。改 shell 启动文件按路径判，在 permissions.ts。
-// 清单宁少勿多：真实使用的 24 个会话 1159 条命令里一条也没出现过，它只是兜底；但不能误伤日常命令——那里面有 17 条
+// 清单宁少勿多：正式服 24 个会话 1159 条命令里一条也没出现过，它只是兜底；但不能误伤日常命令——那里面有 17 条
 // `curl … | python -c "…"`，是在解析下载下来的数据，不是执行它。
 
 export function irreversibleCommand(parsed: ShellParse, command: string): string | null {

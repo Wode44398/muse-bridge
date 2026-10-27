@@ -2,7 +2,7 @@ import path from "node:path";
 import { sessionsDir } from "./store.ts";
 
 // S7（#55）：harness 自己拉起的辅助进程——审阅与知识扫描的 git、检查点影子仓库的 git、共享
-// 浏览器与截图浏览器、ffmpeg/ffprobe、语法诊断的 python——不是 agent 的
+// 浏览器与截图浏览器、ffmpeg/ffprobe、语法诊断的 python、本机模型的启动脚本——不是 agent 的
 // 工具，但要么跑在 agent 改得到的目录上，要么吃 agent 挑的输入。两条规矩：
 //   1. env 不带凭据（helperEnv）：provider key、harness 自己的令牌、桌面壳 broker 地址（URL 里
 //      带 secret）一律删掉。与 agent 子进程用的 childEnv 不同，这里保留真实 HOME/APPDATA：

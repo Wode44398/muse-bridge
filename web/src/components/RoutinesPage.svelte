@@ -4,11 +4,11 @@
   // claude.ai-styled New/Edit form. Wired to /api/routines (the bridge backend).
   // Schedule is the bridge's friendly preset {type:daily|weekdays|weekly|hourly,...}
   // in GMT+8 — not cron. Palette here is intentionally black/white/gray (no accent).
-  import { caps, ui } from '../lib/state.svelte.js';
+  import { caps, ui, agentOn, hostIsServer } from '../lib/state.svelte.js';
   import { api } from '../lib/api.js';
   import { registerCloser } from '../lib/nav.js';
-  import { claudeDefaultModel, claudeEffortFallback } from '../lib/caps.js';
-  import { t, tr, locale, isEn } from '../lib/i18n.js';
+  import { claudeDefaultModel } from '../lib/caps.js';
+  import { t, tc, tr, locale, isEn } from '../lib/i18n.js';
 
   // 星期名走 Intl（d = 0 周日 … 6 周六；2023-01-01 是周日）：zh-CN short = 周一…周日、narrow = 一…日，
   // 与改前手写的「周{一}」「每周{一}」逐字一致；en-US short = Mon…Sun、long = Monday…Sunday。
@@ -31,15 +31,18 @@
   let fAgent = $state('claude');
   let fModel = $state(null);
   let fEffort = $state(null);
+  let fSearch = $state(false);
   let fSched = $state({ type: 'daily', weekday: 1, hour: 9, minute: 0 });
   let fEnabled = $state(true);
 
-  const nameOf = (list, id) => (list || []).find((x) => x.id === id)?.name || id;
-  const modelList = $derived(caps.data?.claude?.models || []);
-  const effortList = $derived(caps.data?.claude?.efforts || []);
-  const defModel = $derived(claudeDefaultModel(caps.data));
-  const defEffort = $derived(claudeEffortFallback(caps.data, fModel || defModel));
-  const engineLabel = $derived(`Claude · ${nameOf(modelList, fModel || defModel)} · ${nameOf(effortList, fEffort || defEffort)}`);
+  const nameOf = (list, id) => tr((list || []).find((x) => x.id === id)?.name || id);   // 名字来自能力表（服务端）
+  const modelList = $derived(fAgent === 'vertex' ? (caps.data?.vertex?.models || []) : (caps.data?.claude?.models || []));
+  const effortList = $derived(fAgent === 'vertex'
+    ? (caps.data?.vertex?.thinkLevels || []).filter((lv) => !(/pro/.test(fModel || '') && lv.id === 'minimal'))
+    : (caps.data?.claude?.efforts || []));
+  const defModel = $derived(fAgent === 'vertex' ? caps.data?.vertex?.defaults?.model : claudeDefaultModel(caps.data));
+  const defEffort = $derived(fAgent === 'vertex' ? caps.data?.vertex?.defaults?.think : 'high');
+  const engineLabel = $derived(`${fAgent === 'vertex' ? 'Gemini' : 'Claude'} · ${nameOf(modelList, fModel || defModel)} · ${nameOf(effortList, fEffort || defEffort)}`);
 
   const pad = (n) => String(n).padStart(2, '0');
   // 钟点：中文保持 09:00；英文 12 小时制 9:00 AM（按 UTC 取值只为拿到 h:m 本身，时区是服务器 GMT+8）
@@ -55,7 +58,6 @@
     if (s.type === 'weekly') return t('每周{day} {time}', { day: s.weekday != null && Number.isInteger(w) && w >= 0 && w <= 6 ? wdName(w, isEn() ? 'long' : 'narrow') : '', time: at });
     return s.type === 'weekdays' ? t('每工作日 {time}', { time: at }) : t('每天 {time}', { time: at });
   };
-  const engineText = (r) => `Claude · ${nameOf(caps.data?.claude?.models, r.model || claudeDefaultModel(caps.data))}`;
   // 上次运行结果是服务端状态 id（ok / error / running）：中文界面一直原样拼（「上次ok」），英文换成整句
   const lastText = (s) => (isEn() && s === 'ok' ? t('上次运行成功')
     : isEn() && s === 'error' ? t('上次运行失败')
@@ -68,12 +70,19 @@
     const day = d.toDateString() === today.toDateString() ? '' : (d.getMonth() + 1) + '/' + d.getDate() + ' ';
     return t('已错过 {time} 那次（服务端当时没在运行）', { time: day + time });
   };
+  // 列表行的默认模型按【该行的 agent】取 caps 默认——不能用表单态 fAgent 派生的
+  // defModel（之前 vertex 路由未选模型时列表会显示成 "Gemini · claude-opus-4-8"）。
+  const engineText = (r) => {
+    const vx = r.agent === 'vertex';
+    const fallback = vx ? (caps.data?.vertex?.defaults?.model || '') : claudeDefaultModel(caps.data);
+    return `${vx ? 'Gemini' : 'Claude'} · ${nameOf(vx ? caps.data?.vertex?.models : caps.data?.claude?.models, r.model || fallback)}`;
+  };
 
   let listErr = $state('');
   async function load() {
     loading = true;
     try { const d = await api.routines(); items = d.routines || []; running = d.running || []; listErr = ''; }
-    catch { listErr = t('加载失败：连不上服务器（列表可能不是最新）'); }
+    catch { listErr = hostIsServer() ? t('加载失败：连不上服务器（列表可能不是最新）') : t('加载失败：连不上电脑（列表可能不是最新）'); }
     loading = false;
   }
   $effect(() => { if (ui.routinesOpen) { mode = 'list'; load(); } });
@@ -87,19 +96,20 @@
 
   function openNew() {
     editing = null; err = '';
-    fName = ''; fPrompt = ''; fAgent = 'claude'; fModel = null; fEffort = null;
+    fName = ''; fPrompt = ''; fAgent = 'claude'; fModel = null; fEffort = null; fSearch = false;
     fSched = { type: 'daily', weekday: 1, hour: 9, minute: 0 }; fEnabled = true;
     mode = 'form';
   }
   function openEdit(r) {
     editing = r.id; err = '';
-    fName = r.name || ''; fPrompt = r.prompt || ''; fAgent = 'claude';
-    fModel = r.model; fEffort = r.effort;
+    fName = r.name || ''; fPrompt = r.prompt || ''; fAgent = r.agent || 'claude';
+    fModel = r.model; fEffort = r.effort; fSearch = !!r.search;
     fSched = { type: r.schedule?.type || 'daily', weekday: r.schedule?.weekday ?? 1, hour: r.schedule?.hour ?? 9, minute: r.schedule?.minute ?? 0 };
     fEnabled = r.enabled !== false;
     mode = 'form';
   }
 
+  function setAgent(a) { fAgent = a; fModel = null; fEffort = null; if (a !== 'vertex') fSearch = false; }
   function setType(ty) { fSched = { ...fSched, type: ty }; }
   function timeStr() { return `${pad(fSched.hour)}:${pad(fSched.minute)}`; }
   function onTime(e) { const [h, m] = (e.target.value || '09:00').split(':').map(Number); fSched = { ...fSched, hour: h || 0, minute: m || 0 }; }
@@ -109,7 +119,7 @@
     if (busy) return;
     if (!fPrompt.trim()) { err = t('请填写指令（Instructions）'); return; }
     busy = true; err = '';
-    const body = { name: fName.trim(), prompt: fPrompt.trim(), agent: fAgent, model: fModel || undefined, effort: fEffort || undefined, schedule: fSched, enabled: fEnabled };
+    const body = { name: fName.trim(), prompt: fPrompt.trim(), agent: fAgent, model: fModel || undefined, effort: fEffort || undefined, search: fSearch, schedule: fSched, enabled: fEnabled };
     try {
       if (editing) await api.updateRoutine({ id: editing, ...body });
       else await api.createRoutine(body);
@@ -124,16 +134,16 @@
     const prev = items;
     items = items.map((x) => (x.id === r.id ? { ...x, enabled: next } : x));   // 乐观切换（即时），失败回滚
     try { const res = await api.updateRoutine({ id: r.id, enabled: next }); if (res && res.ok === false) throw 0; }
-    catch { items = prev; opFail(t('切换失败：连不上服务器，请重试')); }
+    catch { items = prev; opFail(hostIsServer() ? t('切换失败：连不上服务器，请重试') : t('切换失败：连不上电脑，请重试')); }
   }
-  async function runNow(r) { try { await api.runRoutine(r.id); await load(); } catch { opFail(t('运行失败：连不上服务器，请重试')); } }
+  async function runNow(r) { try { await api.runRoutine(r.id); await load(); } catch { opFail(hostIsServer() ? t('运行失败：连不上服务器，请重试') : t('运行失败：连不上电脑，请重试')); } }
   async function del(r) {
     // 英文确认钮重复动词（Delete）；中文仍走默认「确定」，与改前一致
     if (!(await uiConfirm(t('删除这条路由？'), isEn() ? { okLabel: t('删除') } : undefined))) return;
     const prev = items;
     items = items.filter((x) => x.id !== r.id);   // 乐观移除（即时），失败回滚
     try { const res = await api.deleteRoutine(r.id); if (res && res.ok === false) throw 0; }
-    catch { items = prev; opFail(t('删除失败：连不上服务器，请重试')); }
+    catch { items = prev; opFail(hostIsServer() ? t('删除失败：连不上服务器，请重试') : t('删除失败：连不上电脑，请重试')); }
   }
   function close() { ui.routinesOpen = false; }
 </script>
@@ -198,6 +208,12 @@
             {#if enginePop}
               <button class="eng-bd" aria-label={t('关闭')} onclick={() => (enginePop = false)}></button>
               <div class="eng-pop">
+                <div class="eng-sec">{t('引擎')}</div>
+                <div class="pills">
+                  <button class="pill {fAgent === 'claude' ? 'on' : ''}" onclick={() => setAgent('claude')}>Claude</button>
+                  <!-- Gemini 引擎属于 Vertex 功能扩展：没装 / 没开就不给选 -->
+                  {#if agentOn('gemini') || fAgent === 'vertex'}<button class="pill {fAgent === 'vertex' ? 'on' : ''}" onclick={() => setAgent('vertex')}>Gemini</button>{/if}
+                </div>
                 <div class="eng-sec">{t('模型')}</div>
                 <div class="pills">
                   {#each modelList as m}<button class="pill {(fModel || defModel) === m.id ? 'on' : ''}" onclick={() => (fModel = m.id)}>{tr(m.name)}</button>{/each}
@@ -206,6 +222,13 @@
                 <div class="pills">
                   {#each effortList as e}<button class="pill {(fEffort || defEffort) === e.id ? 'on' : ''}" onclick={() => (fEffort = e.id)}>{tr(e.name)}</button>{/each}
                 </div>
+                {#if fAgent === 'vertex'}
+                  <div class="eng-sec">{t('联网搜索')}</div>
+                  <div class="pills">
+                    <button class="pill {fSearch ? 'on' : ''}" onclick={() => (fSearch = true)}>{tc('开关', '开')}</button>
+                    <button class="pill {!fSearch ? 'on' : ''}" onclick={() => (fSearch = false)}>{tc('开关', '关')}</button>
+                  </div>
+                {/if}
               </div>
             {/if}
           </div>

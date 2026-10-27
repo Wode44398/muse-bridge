@@ -1,5 +1,5 @@
 // 公开凭证式文件分享（capability URL），给「把工作空间文件当公网下载链接发出去」的场景用
-// （发一条 https://<你的地址>/s/<token> 给别人点开下载）。
+// （首个消费者：QQ 群 bot——群里发一条 https://bridge.<域>/s/<token> 让群友点开下载）。
 //
 //   POST /api/share  （走正常 per-identity 鉴权）  body { path[, ttlHours] }
 //        → 为调用者自己沙箱内的一个文件铸一枚不可猜 token，返回

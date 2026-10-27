@@ -92,6 +92,7 @@ export default {
   '新一代 · 原生音轨对白 · 360p-4K': 'Next-gen · Native audio and dialogue · 360p–4K',
   '旗舰 · 多轮续改 · 联网搜索': 'Flagship · Multi-turn editing · Google Search grounding',
   '快 · 思考档 · 图片搜索': 'Fast · Thinking level · Image search',
+  '新款 · 超宽比例 · 图片搜索 · 最高 4K': 'Newest · Ultra-wide ratios · Image search · Up to 4K',
   '最省 · 仅 1K · 思考档': 'Lowest cost · 1K only · Thinking level',
   '轻量基础款': 'Basic and lightweight',
   '快速自然': 'Fast and natural',

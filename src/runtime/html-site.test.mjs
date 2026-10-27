@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { createRouter } from './router.mjs';
 import { mountHtmlSite, registerHtmlSiteRoutes, SCROLLBAR_SHIM } from './html-site.mjs';
 
@@ -69,10 +69,12 @@ test('未知挂载 id 回 404', async () => {
   });
 });
 
-// 前端 HtmlView 的 srcdoc 回落路径有一份同样的滚动条垫片（web/src/lib/htmlInline.js 的 SCROLLBAR_SHIM）。
-// 两份不一致时 srcdoc 页的 </script> 可能关不上，把整页吞进脚本成白屏。web/src/lib/htmlInline.test.js 另有同样的检查。
-test('前端 htmlInline 的 SCROLLBAR_SHIM 与服务端逐字节一致', async () => {
-  const { SCROLLBAR_SHIM: WEB_SHIM } = await import('../../web/src/lib/htmlInline.js');
-  assert.equal(WEB_SHIM, SCROLLBAR_SHIM);
+// 前端 HtmlView 的 srcdoc 回落路径有一份同样的滚动条垫片（写在 Svelte 的 <script> 里，结束标签得写成 <\/script>）。
+// 两份不一致时 srcdoc 页的 </script> 可能关不上，把整页吞进脚本成白屏（2026-10-23 出过一次）。
+test('HtmlView 的 SB_SHIM 与服务端 SCROLLBAR_SHIM 逐字节一致', () => {
+  const svelte = readFileSync(new URL('../../web/src/components/preview/HtmlView.svelte', import.meta.url), 'utf8');
+  const m = /const SB_SHIM = (".*");\r?\n/.exec(svelte);
+  assert.ok(m, '找不到 SB_SHIM');
+  assert.equal(JSON.parse(m[1]), SCROLLBAR_SHIM);   // JSON 认 \/ 转义；多转义一层（<\\/script>）就对不上
   assert.equal(SCROLLBAR_SHIM.match(/<\/script>/g).length, 1);
 });

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>dimensio</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="icons/icon-48.png" alt="" width="28" height="28">
+    <div class="brand">
+      <div class="name">dimensio</div>
+      <div class="sub" id="sub">for Edge / Chrome</div>
+    </div>
+    <label class="switch" title="允许 dimensio 控制这个浏览器">
+      <input id="enabled" type="checkbox" checked>
+      <span></span>
+    </label>
+  </header>
+
+  <section class="status" id="status" data-s="offline">
+    <span class="lamp"></span>
+    <div>
+      <div class="line" id="statusLine">正在连接…</div>
+      <div class="hint" id="statusHint"></div>
+    </div>
+  </section>
+
+  <button class="stop" id="stop" hidden>停止 dimensio</button>
+
+  <section class="tab" id="tabBox" hidden>
+    <div class="tabTitle" id="tabTitle"></div>
+    <button class="primary" id="share">把这个标签交给 dimensio</button>
+    <button class="ghost" id="unshare" hidden>从 dimensio 收回这个标签</button>
+    <div class="note" id="tabNote"></div>
+  </section>
+
+  <p class="rule">dimensio 只在「dimensio」标签组里操作。把标签拖进组＝交给它，拖出组＝收回。它在操作时，页面四边会亮起朱色的光。</p>
+
+  <details>
+    <summary>连接设置</summary>
+    <form id="endpointForm">
+      <input id="endpoint" spellcheck="false" autocomplete="off">
+      <button type="submit" class="ghost">保存</button>
+    </form>
+    <div class="note" id="endpointNote">默认 ws://127.0.0.1:8799/edge-link（本机的 dimensio）</div>
+    <div class="meta" id="meta"></div>
+  </details>
+
+  <script src="popup.js"></script>
+</body>
+</html>

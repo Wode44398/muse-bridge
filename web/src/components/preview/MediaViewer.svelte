@@ -3,6 +3,7 @@
   // 据当前条目 kind 路由到已接入的图片、视频、音频和文档查看器。
   // 画廊翻页（子查看器手势 + 桌面箭头 + 键盘）、下滑关闭联动调暗背景、顶栏、滚动锁、安全区。
   import { preview, closePreview, previewNext, previewPrev } from '../../lib/preview.svelte.js';
+  import { dragOut, previewDragSrc } from '../../lib/dragOut.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import ImageView from './ImageView.svelte';
   import VideoPlayer from './VideoPlayer.svelte';
@@ -11,6 +12,8 @@
   import PdfView from './PdfView.svelte';
   import OfficeView from './OfficeView.svelte';
   import HtmlView from './HtmlView.svelte';
+  import { nativeWorkspaceSaveAs, pushNativeOverlay } from '../../lib/nativeDesktop.js';
+  import { interceptSave, saveLabel } from '../../lib/save.js';
   import { t } from '../../lib/i18n.js';
 
   // host：本实例服务的宿主——'app'（App 末尾的全屏实例）| 'dock'（Claude 工作台侧栏内嵌
@@ -39,6 +42,10 @@
   function onMore() {
     if (cur?.kind === 'video' && playerApi?.openMenu) playerApi.openMenu();
     else mvMenu = !mvMenu;
+  }
+  async function saveNative() {
+    mvMenu = false;
+    if (cur?.nativeLocation && cur?.saveTarget?.rel) await nativeWorkspaceSaveAs(cur.saveTarget.rel, cur.nativeLocation);
   }
   $effect(() => { if (!mvMenu) return; return pushBackLayer(() => (mvMenu = false)); });   // 系统返回先关菜单
 
@@ -105,6 +112,13 @@
     html.style.overflow = 'hidden';
     return () => { html.style.overflow = prev; };
   });
+
+  // 桌面壳：查看器接管期间让原生浏览器视图（真 WebContentsView，恒在 DOM 之上）
+  // 先下去——否则它会糊在预览的文件上面（Claude / dimensio 工作台都吃这一刀）。
+  $effect(() => {
+    if (!active) return;
+    return pushNativeOverlay();
+  });
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -142,7 +156,7 @@
       <button class="mv-btn" aria-label={t('关闭')} onclick={close}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
       </button>
-      <span class="mv-title">{cur.name}</span>
+      <span class="mv-title" use:dragOut={() => previewDragSrc(cur)}>{cur.name}</span>
       {#if many}<span class="mv-count">{preview.index + 1} / {preview.items.length}</span>{/if}
       {#if cur.kind === 'video' || cur.downloadHref}
         <button class="mv-btn" aria-label={t('更多')} onclick={onMore}>
@@ -156,10 +170,17 @@
     {#if mvMenu && cur.downloadHref}
       <div class="mv-menu-back" role="presentation" onclick={() => (mvMenu = false)}>
         <div class="mv-menu" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()}>
-          <a class="mv-mrow" href={cur.downloadHref} download={cur.name} onclick={() => { mvMenu = false; }}>
+          {#if cur.nativeLocation && cur.saveTarget?.rel}
+          <button class="mv-mrow" use:dragOut={() => previewDragSrc(cur)} onclick={saveNative}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg>
-            <span>{t('下载')}</span>
-          </a>
+            <span>{t('另存为…')}</span>
+          </button>
+          {:else}
+            <a class="mv-mrow" href={cur.downloadHref} download={cur.name} use:dragOut={() => previewDragSrc(cur)} onclick={(e) => { mvMenu = false; interceptSave(e, { url: cur.downloadHref, name: cur.name, path: cur.absPath || '' }); }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M12 16l-5-5M12 16l5-5"/><path d="M5 20h14"/></svg>
+              <span>{saveLabel(t('下载'))}</span>
+            </a>
+          {/if}
         </div>
       </div>
     {/if}

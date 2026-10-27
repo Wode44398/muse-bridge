@@ -4,14 +4,14 @@ import { spawn } from 'node:child_process';
 import test from 'node:test';
 import { descendantsOf, killChildTreeSafe, parseProcTable } from './proc-tree.mjs';
 
-test('#77 descendantsOf：悬空父 PID 指过来的旧进程链不收（Windows 上 wscript → cmd → node 的启动链就是这种）', () => {
+test('#77 descendantsOf：悬空父 PID 指过来的旧进程链不收（正式服 bridge 的 wscript → cmd → node 就是这种）', () => {
   const table = [
     { pid: 1000, ppid: 500, created: 100, name: 'node.exe' }, // 根：bridge 拉起的 harness（复用了一个旧 PID）
     { pid: 1001, ppid: 1000, created: 150, name: 'msedge.exe' },
     { pid: 1002, ppid: 1001, created: 151, name: 'msedge.exe' },
     { pid: 2000, ppid: 1000, created: 50, name: 'wscript.exe' }, // 更早就在：它的父进程早退了，PID 1000 后来被复用
     { pid: 2001, ppid: 2000, created: 51, name: 'cmd.exe' },
-    { pid: 2002, ppid: 2001, created: 52, name: 'node.exe' }, // bridge
+    { pid: 2002, ppid: 2001, created: 52, name: 'node.exe' }, // 正式服 bridge
   ];
   assert.deepEqual(descendantsOf(1000, table), [1000, 1001, 1002]);
   assert.deepEqual(descendantsOf(9999, table), []);

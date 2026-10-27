@@ -1,13 +1,16 @@
 // 出站代理自适应。
 //
-// 背景：bridge 的出站请求（Claude Agent SDK 子进程、dimensio 的模型调用）在有些网络里必须经代理。
-// Node 不读系统代理设置，只认 HTTP_PROXY/HTTPS_PROXY；代理一旦不在，出站就裸直连，模型网关按出口 IP
-// 回 `403 forbidden: Request not allowed`——这条错在前端长得像鉴权失败，极易误判成 token 被封。
+// 背景（2026-07-21 事故）：bridge 的所有出海请求——Claude Agent SDK 子进程、Vertex/
+// Gemini、DeepSeek——在本机都要翻墙。此前全靠 Clash 的 TUN 模式在网络层透明接管，
+// 服务进程自己【没有】任何代理配置：`task-server.vbs`（计划任务拉起）不设 env，而
+// Node 不读 Windows 系统代理设置，只认 HTTP_PROXY/HTTPS_PROXY。于是 TUN 一关，出站
+// 全裸直连，Anthropic 网关按出口 IP 回 `403 forbidden: Request not allowed`——这条错
+// 在前端长得像鉴权失败（"Failed to authenticate"），极易误判成 token 被封。
 //
-// 这里的目标：有没有本地代理都不出错（显式配了 HTTPS_PROXY 的，比如 Muse 部署，照配置走）。
-//   · 探测本机常见的本地代理端口（7897/7890 等），活着就用它；
+// 这里的目标：TUN 开或不开都不出错。
+//   · 探测本机常见混合代理端口（Clash 默认 7897/7890 等），活着就用它；
 //   · 探不到就走直连——但**直连也必须先验证**，见下方 2026-08-24 判据重做；
-//   · 本地代理后启动/换端口/退出都能在 60s 内自愈，不用重启 bridge。
+//   · Clash 后启动/换端口/退出都能在 60s 内自愈，不用重启 bridge。
 //
 // ── 2026-08-24 判据重做（实测驱动，harness/server/net-proxy.ts 同源）────────
 // 生产日志里 `[net] 出站直连 ↔ 走代理` 交替了几十次。逐项实测后，**翻转不是探针在
@@ -76,8 +79,10 @@ function cfg() {
 }
 
 // 本机自己的 LAN 地址要绕过代理：手机直连、预览子域等都是内网流量。
+// 国内服务也直连：扩展中心的 github 连接器挂在 Kimi 网关（agent-gw.kimi.com），CLI 第一轮要等它连上并拉完
+// 工具清单才开跑；绕海外代理再回国，新会话首轮实测 9.6–23s、最坏挂满 30s 超时，直连稳定 2.7–4.2s（2026-10-20）。
 function noProxyList() {
-  const hosts = ['localhost', '127.0.0.1', '::1', '.local'];
+  const hosts = ['localhost', '127.0.0.1', '::1', '.local', '.kimi.com'];
   for (const list of Object.values(os.networkInterfaces())) {
     for (const ni of list || []) if (ni.family === 'IPv4' && !ni.internal) hosts.push(ni.address);
   }
@@ -177,7 +182,7 @@ async function detect() {
     if (!(await portAlive(port))) continue;
     const url = 'http://127.0.0.1:' + port;
     if (await validateProxy(url)) return { kind: 'proxy', proxy: url, reason: '探测到可用本地代理' };
-    // 端口开着但出不去：多半是本地代理在但它的上游挂了。继续试下一个端口。
+    // 端口开着但出不去：多半是 Clash 在但节点挂了。继续试下一个端口。
   }
 
   if (Date.now() >= deadline) return { kind: 'unknown', proxy: '', reason: '探测超时（未及验证直连）' };
@@ -250,7 +255,7 @@ async function refresh(quiet = false) {
   return state;
 }
 
-// 启动时调用一次，然后每分钟自愈一次（本地代理后开 / 换端口 / 退出都能跟上）。
+// 启动时调用一次，然后每分钟自愈一次（Clash 后开 / 换端口 / 退出都能跟上）。
 export async function initOutboundProxy() {
   const preset = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
   if (preset) {
@@ -282,8 +287,8 @@ export function outboundHint(err) {
   // 以为直连是正常状态（2026-08-24：实测 TUN 断开时直连 googleapis 100% 失败）。
   return state.verified
     ? '（当前是直连出站且已验证可出海，但仍被网关拒绝——多半是出口 IP 所在地区不被支持）'
-    : '（当前没有已验证的出口：本地代理端口探不到、直连也打不通探针。请检查出站代理（HTTPS_PROXY）或本地代理端口，bridge 会在 1 分钟内自动接上）';
+    : '（当前没有已验证的出口：本地代理端口探不到、直连也打不通探针。请开启 Clash 的 TUN 模式或让混合端口可用，bridge 会在 1 分钟内自动接上）';
 }
 
-// 立刻重新探测一次（刚改了代理想马上生效时用）。
+// 立刻重新探测一次（切了 Clash 想马上生效时用）。
 export function recheckOutboundProxy() { return refresh(); }

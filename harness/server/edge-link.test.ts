@@ -1,5 +1,5 @@
 // Edge 扩展链路（edge-link.ts + ws-lite.ts）的协议契约：用 Node 自带的 WebSocket 客户端扮演扩展。
-// 真 Edge + 真扩展的全路径要手动冒烟（本仓库不附带扩展），这里守住服务端这一半：
+// 真 Edge + 真扩展的全路径是手动冒烟（edge-tool.smoke.ts），这里守住服务端这一半：
 //   · 只认固定扩展 ID 的 Origin（WebSocket 没有 CORS，任何网页都能往回环地址发起升级）
 //   · 频道 = WebSocket 形状的对象，收发标准 CDP JSON；扩展关频道 / 链路断开都要让 cdp.ts 看到 close
 //   · 氛围灯：操作性流量点亮，直播帧确认不算；占用标记整轮常亮
@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { EDGE_EXTENSION_ID, EdgeLink } from "./edge-link.ts";
+import { EDGE_EXTENSION_ID, EdgeHub, EdgeLink } from "./edge-link.ts";
 
 const ORIGIN = `chrome-extension://${EDGE_EXTENSION_ID}`;
 
@@ -61,20 +61,18 @@ const until = async (cond: () => boolean, ms = 3000) => {
 
 test("只认固定扩展 ID 的 Origin：网页和别的扩展连不上", async () => {
   const r = await rig();
-  let ok: ReturnType<typeof fakeExtension> | null = null;
   try {
     for (const origin of ["https://evil.example", "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ""]) {
       const ext = fakeExtension(r.url, origin);
       assert.equal(await ext.opened, false, `origin ${origin || "(none)"} must be refused`);
     }
-    ok = fakeExtension(r.url);
+    const ok = fakeExtension(r.url);
     assert.equal(await ok.opened, true);
     const hello = await ok.next((m) => m.t === "hello");
     assert.equal(hello.protocol, 1);
-    // 本仓库不附带扩展，不钉版本：握手里照旧带这个字段，空串 = 不限
-    assert.equal(hello.expectVersion, "", "no bundled extension, so no version is pinned");
+    assert.match(String(hello.expectVersion), /^\d+\.\d+\.\d+$/, "harness tells the extension which version is on disk");
+    ok.ws.close();
   } finally {
-    ok?.ws.close(); // 连接不关，server.close() 会一直等下去
     await r.close();
   }
 });
@@ -206,5 +204,43 @@ test("同一台机器上第二个扩展连进来：顶掉先连的那个", async
     b.ws.close();
   } finally {
     await r.close();
+  }
+});
+
+test("Edge 和 Chrome 同时装着扩展：按 ?browser= 各占一条链路，互不顶替；停止按浏览器分开报", async () => {
+  const hub = new EdgeHub();
+  const server = http.createServer((_q, s) => s.end());
+  server.on("upgrade", (req, socket) => {
+    if (!hub.handleUpgrade(req, socket)) socket.destroy();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/edge-link`;
+  try {
+    const edge = fakeExtension(`${base}?browser=edge`);
+    const chrome = fakeExtension(`${base}?browser=chrome`);
+    await edge.opened;
+    await chrome.opened;
+    edge.send({ t: "hello", version: "0.2.0", browser: "Edge 155" });
+    chrome.send({ t: "hello", version: "0.2.0", browser: "Chrome 141" });
+    await until(() => hub.connectedLinks().length === 2);
+    assert.equal(hub.link("edge").label, "Edge 155");
+    assert.equal(hub.link("chrome").label, "Chrome 141");
+    assert.equal(edge.ws.readyState, WebSocket.OPEN, "Chrome connecting must not replace Edge");
+
+    const stops: string[] = [];
+    hub.onStop = (why, kind) => stops.push(`${kind}:${why}`);
+    chrome.send({ t: "stop", reason: "page-button" });
+    await until(() => stops.length === 1);
+    assert.deepEqual(stops, ["chrome:page-button"]);
+
+    // 老版本扩展不带 ?browser=：按 Edge 算（顶掉同种的那条）
+    const legacy = fakeExtension(base);
+    await legacy.opened;
+    await edge.next((m) => m.t === "replaced");
+    legacy.send({ t: "hello", version: "0.1.0", browser: "Edge 155" });
+    await until(() => hub.link("edge").connected && hub.link("chrome").connected);
+    for (const x of [legacy, chrome]) x.ws.close();
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
   }
 });

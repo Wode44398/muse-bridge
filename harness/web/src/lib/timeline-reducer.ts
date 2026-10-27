@@ -379,7 +379,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
     case "turn_start":
       settleCursors(m, fx);
       forgetRefs(m, startStreamTurn(m, ev.index).dropped);
-      // U3：新一次请求发出去了，模型还没开口（R3 的「等待网络」也在这里结束）。以前停在上一个工具的动词上
+      // U3：新一次请求发出去了，模型还没开口（R3 的「等待网络 / 本机模型」也在这里结束）。以前停在上一个工具的动词上
       if (m.running) m.activity = ACTIVITY_WAITING_MODEL;
       break;
     case "tool_call_begin":
@@ -798,9 +798,10 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       if (m.preview?.serviceId === ev.serviceId) m.preview = null;
       break;
     case "browser":
-      // agent 的浏览器动了 —— 共享浏览器是全局单例，数据全局记；面板自动展开只给前台
+      // agent 的浏览器动了 —— 共享浏览器是全局单例，数据全局记；面板自动展开只给前台。
+      // edge = 动的是用户自己的 Edge / Chrome（经扩展）：用户就在那个窗口里看着，再把内置浏览器面板拉出来只是挡视线（10-20 维护者报的 bug）
       fx.setBrowser(ev.url);
-      if (fx.foreground) fx.openBrowserPane();
+      if (fx.foreground && !ev.edge) fx.openBrowserPane();
       break;
     case "screenshot":
       pushItem(m, { kind: "screenshot", dataUri: ev.dataUri ?? "", ...(ev.asset ? { asset: ev.asset } : {}), url: ev.url, verdict: ev.verdict ?? "" });
@@ -812,10 +813,10 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       m.ctx = { used: ev.usedTokens, limit: ev.limitTokens };
       if (ev.compacted) pushItem(m, { kind: "notice", text: t("上下文已压缩") });
       if (m.running && m.activity === ACTIVITY_COMPACTING) m.activity = t("思考中"); // U3：整理完了
-      // R3：连接失败时服务端在等网络恢复，不是卡死；停止键照常有效。
+      // R3：连接失败时服务端在等网络 / 本机模型加载，不是卡死；停止键照常有效。
       if (ev.waiting && m.running) {
         const waited = waitedLabel(Number(ev.waitedMs) || 0);
-        m.activity = t("等待网络恢复（{waited}）", { waited });
+        m.activity = ev.waiting === "local_model" ? t("等待本机模型加载（{waited}）", { waited }) : t("等待网络恢复（{waited}）", { waited });
       } else if (ev.retry && typeof ev.retryInMs === "number" && m.running) {
         // U6：退避重试——活动行写清楚为什么、多久之后第几次（不进时间线）
         m.activity = retryActivity(ev.retryClass, ev.retryInMs, ev.retry);

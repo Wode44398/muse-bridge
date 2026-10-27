@@ -4,7 +4,7 @@ import { defineOp, OpError } from '../registry.mjs';
 import { manualToc, manualChapter, manualSearch } from '../manual.mjs';
 
 defineOp({
-  name: 'manual', title: '查 Muse Bridge 项目手册',
+  name: 'manual', title: '查 bridge 项目手册',
   desc: '不带参数 = 目录（各章 id、标题、摘要、小节名）；topic = 整章；q = 关键词检索，返回最相关的几个小节全文。用户问「这个 app 怎么 / 在哪 / 能不能……」先查这里，手册里没有的功能就当没有。',
   params: {
     topic: { type: 'string', max: 40, desc: '章 id（见目录），如 claude、workspace、settings' },

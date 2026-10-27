@@ -1,8 +1,8 @@
-// 「聊天快照」——share-space 的可写可聊版：铸一枚公开 token，任何人凭
+// 「聊天快照」（QQ 群 /chat）——share-space 的可写可聊版：铸一枚公开 token，任何人凭
 // https://bridge.<域>/c/<token> 打开一个【阉割版 Claude 分页】（无侧栏、只有对话），在一个
 // 完全隔离的临时工作空间（桶）里与 Claude 对话。链接即凭证，人人可聊。
 //
-//   POST /api/chat-snapshot   （正常 per-identity 鉴权，铸快照的人用自己的登录态调）
+//   POST /api/chat-snapshot   （正常 per-identity 鉴权，qq-bot 用自己的 user token 调）
 //        body { qq?, note? } → 建桶 chat-snapshots/<token>/，返回 { ok, token, path:'/c/<t>', url }
 //   GET  /api/csnap/meta?ct=<token>  （公开）→ { status:'active'|'closed'|'expired'|'gone', ... }
 //   GET  /c/<token>           （公开）→ 吐现有 SPA（前端据 /c/ 前缀进「快照聊天」模式）
@@ -63,7 +63,7 @@ export function touchSnap(token) {
   save();
 }
 
-// 该快照是否允许 Fable 5（铸快照时定死）。默认否——公开链接 + 最贵模型，
+// 该快照是否允许 Fable 5（QQ 群分群设置，铸桶时定死）。默认否——公开链接 + 最贵模型，
 // 想放开的群在管理台单独开。routes/chat.mjs 据此把 fable5 请求降级（抓包硬发也拦得住）。
 export function snapAllowsFable(token) {
   return !!store[token]?.fable5;
@@ -141,12 +141,12 @@ function serveSnapApp(req, res, url) {
 }
 
 export function registerChatSnapshotRoutes(router, { identify }) {
-  // 铸快照（有 canSnapshot 权限的登录身份）。走【不带 snap 解析】的 identify——快照身份自己不能再铸快照。
+  // 铸快照（qq-bot / admin）。走【不带 snap 解析】的 identify——快照身份自己不能再铸快照。
   router.on('POST', '/api/chat-snapshot', async (req, res) => {
     const ctx = requireCtx(identify, req, res);
     if (!ctx) return;
     // 快照是公开链接、用主机额度跑 Claude：管理员随意，注册用户要有「可铸快照」权限（控制台按人开关；
-    // 老账号保留、新注册默认没有）。Claude 关了也不许铸。
+    // 老账号保留、新注册默认没有——QQ 机器人的服务账号靠它开 /chat）。Claude 关了也不许铸。
     if (!ctx.canSnapshot) return bad(res, 403, '这个账号没有铸聊天快照的权限');
     if (!ctx.allowClaude) return bad(res, 403, 'Claude 未启用');
     let body = {}; try { body = JSON.parse(await readBody(req) || '{}'); } catch { return bad(res, 400, 'bad json'); }
@@ -169,7 +169,7 @@ export function registerChatSnapshotRoutes(router, { identify }) {
     okJson(res, { ok: true, token, path: rel, url: PUBLIC_ORIGIN ? PUBLIC_ORIGIN + rel : null, idleMs: SNAP_IDLE_MS });
   });
 
-  // 快照元数据（公开，前端进页先查；也可用来判断旧链接是否还活着）。
+  // 快照元数据（公开，前端进页先查；qq-bot 也用它判断旧链接是否还活着）。
   router.on('GET', '/api/csnap/meta', (req, res, url) => {
     const token = String(url.searchParams.get('ct') || '');
     const rec = store[token];

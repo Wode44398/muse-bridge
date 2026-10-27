@@ -4,7 +4,7 @@
 //     数据根，换源有记录；下次启动直接认数据根里那份（不再联网）；
 //   · 校验不过、卡住不动：丢掉半截文件，状态如实报人话；发消息时抛 CLAUDE_CLI_NOT_READY（status.mjs 翻成错误卡片）；
 //   · 按速度换源：给了 Content-Length 时进度按压缩包算；太慢换下一个源，后面的都不通再回到嫌慢的里面最快的那个；
-//   · 下载不成时退而用本机任意版本（标明版本不一致）；没开自动下载（Muse Bridge 默认）且什么都没有 → missing，提示装 Claude Code；
+//   · 下载不成时退而用本机任意版本（标明版本不一致）；关了自动下载且什么都没有 → missing，提示装 Claude Code；
 //   · tar 解析经得起任意切块、pax 长路径头、目录条目。
 // 下载源是本机假 registry；SDK、平台包、「可执行文件」都是临时目录里造的（MZ 开头的随机字节），不碰网络。
 import test from 'node:test';
@@ -117,8 +117,7 @@ function fakeSdk(name, { bundledVersion = null, cliVersion = '9.9.1', bin } = {}
 const tgzPath = (base) => `/${base}/@anthropic-ai/claude-agent-sdk-win32-x64/-/claude-agent-sdk-win32-x64-9.9.9.tgz`;
 const quiet = () => {};
 const base = (dataRoot, sdk, extra = {}) => ({
-  // Muse Bridge 默认不下载：测下载路径的用例显式打开（BRIDGE_CLAUDE_CLI_DOWNLOAD=1）
-  dataRoot, sdk, keys: ['win32-x64'], env: { BRIDGE_CLAUDE_CLI_DOWNLOAD: '1' }, config: () => ({}), localExact: () => null, localAny: () => [], log: quiet, ...extra,
+  dataRoot, sdk, keys: ['win32-x64'], env: {}, config: () => ({}), localExact: () => null, localAny: () => [], log: quiet, ...extra,
 });
 
 test('源码直跑：SDK 旁边有同版本平台包 → 不传路径（SDK 自己找）', async () => {
@@ -224,7 +223,7 @@ test('下载不成：退而用本机任意版本（标明不一致）；关了�
   assert.match(st.error, /^下载源上没有/);
   assert.deepEqual(cli.options(), { pathToClaudeCodeExecutable: local });
 
-  const off = createClaudeCli(base(path.join(root, 'd5'), sdk, { env: {}, fetch: () => { throw new Error('不该联网'); } }));   // env 什么都不设 = 默认不下载
+  const off = createClaudeCli(base(path.join(root, 'd5'), sdk, { env: { BRIDGE_CLAUDE_CLI_DOWNLOAD: '0' }, fetch: () => { throw new Error('不该联网'); } }));
   await off.init();
   assert.equal(off.status().state, 'missing');
   assert.equal(off.status().download, false);

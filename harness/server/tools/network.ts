@@ -1,6 +1,6 @@
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { ok, fail } from "./types.ts";
-import { existingSharedBrowser, claimBrowser } from "../cdp.ts";
+import { existingSharedBrowser, claimBrowser, noBrowserMessage } from "../cdp.ts";
 import { browserAvailable } from "../headless.ts";
 
 // Network: audit the Browser page's actual HTTP traffic — every request the
@@ -66,7 +66,7 @@ export const networkTool: Tool = {
     const denied = claimBrowser(ctx.ownerId ?? "");
     if (denied) return fail("network", denied);
     const page = existingSharedBrowser();
-    if (!page) return fail("network", "No browser is running — Browser(navigate, url:…) first.");
+    if (!page) return fail("network", noBrowserMessage());
     const action = String(args.action ?? "list").trim() || "list";
 
     if (action === "list") {
