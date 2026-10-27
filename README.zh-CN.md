@@ -12,15 +12,16 @@
 
 - **一句话部署**：把开场提示词发给 Muse，剩下的它来做，大约 5–10 分钟。
 - **手机、电脑都能用**：打开网址就是完整的工作台，界面支持简体中文和 English，默认跟着浏览器语言。
-- **安卓 app**：在「设置 → 安卓 app」里下载，或者[直接下载 apk](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk)。记得住服务器地址，临时地址变了能在 app 里直接换；界面和网页版一样，随服务器自动更新。
-- **Claude Code 完整体验**：由官方 Claude Agent SDK 驱动，支持工具调用、子 agent、工作流、上下文压缩和会话续接。右侧工作台有终端、文件、任务和改动审阅。另有权限模式与审批卡、计划卡，Claude 干活时可以插话或排队，会话搜索与归档，拉取请求跟踪，对话里直接画交互图表，撞上 5 小时限额后额度一恢复自动接着做。
-- **Claude Code 也能接别家模型**：管理员在「设置 → 模型服务」里添加 Anthropic / OpenAI 兼容的接口（DeepSeek、Kimi、OpenRouter 等），模型和官方的并列出现在模型菜单里。
+- **安卓 app**：在设置根页「插件」分组里的「安卓 App」下载，或者[直接下载 apk](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk)。记得住服务器地址，临时地址变了能在 app 里直接换；界面和网页版一样，随服务器自动更新。
+- **Claude Code 完整体验**：由官方 Claude Agent SDK 驱动，支持工具调用、子 agent、工作流、上下文压缩和会话续接。右侧工作台有终端、文件、任务和改动审阅，设置页像手机的「设置」一样一层层点进去。另有权限模式与审批卡、计划卡，Claude 干活时可以插话或排队，会话搜索与归档，拉取请求跟踪，对话里直接画交互图表，撞上 5 小时限额后额度一恢复自动接着做。
+- **Claude Code 也能接别家模型**：在「设置 → Claude → 自定义 API」里添加 Anthropic / OpenAI 兼容的接口（DeepSeek、Kimi、OpenRouter 等），模型出现在模型菜单的「More models」里；管理员和每个成员各有自己的一份。
+- **能连 bridge 的 Windows 桌面客户端**：绑了自己的域名（固定地址）时有完整的桌面体验——标题栏、快问浮窗、把电脑登记成设备让 Claude 操作；临时地址下客户端只当网页窗口用。
 - **让 agent 来操作它**：「设置 → Agent 接入」可以生成密钥，别的 agent（包括部署它的 Muse）拿到后能读项目手册、经 HTTP 操作 Muse Bridge。
 - **dimensio 多模型工作台**：一家一把 key，随时切换模型；也能接任意 OpenAI 兼容的自定义服务。自带工作区、记忆和子 agent。
 - **各家原生联网搜索**：当前对话用哪家模型，就先用哪家自己的搜索，失败了自动换下一家，最后才退回 DuckDuckGo。
 - **VM 重启自动恢复**：Muse 的 VM 会不定期重启，看门狗在 60 秒内把服务拉起来；临时地址变了，Muse 会主动告诉你新地址。
 - **主动提醒更新**：有新版本时，Muse 会用一两句话告诉你更新了什么，问你要不要更新。更新会等没人在聊天时才切换，新版本起不来会自动退回。
-- **可以多人用**：用邀请码注册，每个账号有独立的目录，可以按人分配 agent 和额度。
+- **可以多人用**：用邀请码注册，每个账号有独立的目录，可以按人分配 agent 和额度。管理员默认只看得到成员的会话标题、时间和用量，看对话内容要成员自己同意。
 
 ## 开始使用
 
@@ -73,13 +74,13 @@ Muse 会下载安装包、读安装指南，然后一次问你四个问题：
 | 小米 MiMo（按量付费或 Token Plan） | `MIMO_API_KEY` | 见下 |
 | 任意 OpenAI 兼容服务 | 在界面里点「＋」添加 | — |
 
-key 可以让 Muse 帮你写进去（`set-api-key`），也可以直接在 dimensio 的模型面板里填。
+key 可以让 Muse 帮你写进去（`set-api-key`），也可以在 dimensio 页侧栏底部的「设置」里自己填。同一家只用一种方式：网页里填过的 key 优先。
 
 **小米的联网搜索**是控制台「插件管理」里的一个插件，按次计费（约 ¥16 / 千次），钱从账户余额里扣，所以只有**按量付费**的 key 能用。如果你聊天用的是 Token Plan 订阅的 key（`tp-` 开头），可以再建一把按量付费的 key，单独配给搜索：`set-api-key MIMO_SEARCH_API_KEY <sk-…>`，聊天照旧用 Token Plan 的额度。不配也行，小米搜不了会自动换别家。
 
 ## 安卓 app
 
-用手机浏览器打开你的 Muse Bridge 地址并登录，进「**设置 → 安卓 app → 下载**」。装好后回到这一页点「**在 app 里打开**」，app 会自动填好地址。也可以从 GitHub [直接下载 apk](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk)，第一次打开时把地址粘进去。
+用手机浏览器打开你的 Muse Bridge 地址并登录，进「**设置**」，在「插件」分组里点「**安卓 App**」，「下载 apk」那一行点「**下载**」。装好后回到这一页，点「**在 App 里打开**」那一行的「打开」，app 会自动填好地址。也可以从 GitHub [直接下载 apk](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk)，第一次打开时把地址粘进去。
 
 app 只是把同一个网页界面装进独立窗口，新功能不用更新 app。连不上服务器时（比如 VM 重启后临时地址变了），app 会给出「更换地址」按钮，问 Muse 要现在的地址粘进去就行。手机拦着不让装时，按提示允许浏览器安装应用。iPhone 目前没有 app，可以用 Safari 的「分享 → 添加到主屏幕」。
 
@@ -98,7 +99,7 @@ Muse 的 VM 每访问一个新网站，都要你在 Muse 里批一次。安装�
 直接问 Muse（「怎么分享文件」「以前的对话在哪」「带我熟悉一下 dimensio」）。安装包里带着一份写给 Muse 的使用说明书（`deploy/muse/guide/`），它照着你这个版本的说明书回答，不靠猜；也可以让它带你上手：5 分钟快速版、Claude Code / dimensio 深入、管理员与多人使用、手机上用。已知问题也会随更新频道下发，Muse 能告诉你某个现象是不是已知问题、怎么绕过。
 
 **遇到 bug 怎么告诉开发者？**
-直接跟 Muse 说，或者在网页里点「设置 → 反馈 → 报告」（出错提示条上也有「报告问题」按钮）。一句话就行，不用 GitHub 账号：会作为 Issue 提交到本仓库，自动附上版本、服务状态和程序自己的报错，不含对话、文件、key 和地址，发送前可以先看内容。别人报过同一个问题的话，你的报告会变成对原报告的 +1；修好的版本发布时 Muse 会告诉你。安全问题私下发给维护者，不公开。
+直接跟 Muse 说。一句话就行，不用 GitHub 账号：Muse 先判断是不是已知问题，再出草稿给你看，你同意了才作为 Issue 提交到本仓库，自动附上版本、服务状态和程序自己的报错，不含对话、文件、key 和地址，发送前可以先看内容。别人报过同一个问题的话，你的报告会变成对原报告的 +1；修好的版本发布时 Muse 会告诉你。安全问题私下发给维护者，不公开。（网页里「设置 → 提交反馈」写的东西只留在你自己的服务器上，Muse 能读到，不会自动发给开发者。）
 
 **花钱吗？**
 Muse Bridge 本身免费开源。Claude Code 用的是你自己的 Claude 订阅；dimensio 用的是你自己的模型 API key，费用由各家厂商按量收取。
@@ -123,13 +124,12 @@ sudo bash deploy/muse/install.sh --agents claude,dimensio
 
 | 路径 | 内容 |
 |---|---|
-| `src/` | 服务端（Node 24，零构建） |
-| `web/` | 前端（Vite + Svelte 5） |
-| `harness/` | dimensio（TypeScript，Node 原生运行） |
+| `src/`、`web/`、`harness/`、`modules/`、`scripts/`、`docs/` | bridge 公开版（服务端、前端、dimensio、脚本），用 `deploy/muse/sync/sync-from-bridge.mjs` 整体同步过来；要改去 bridge 本体改，不在这里改 |
+| `deploy/muse/` | Muse 专属的全部东西：一键部署 `bootstrap.sh` / 装机 `install.sh` 和运维件模板 `ops/`、Muse 插件 `plugin/`（设置里的安卓 App 页、项目手册的「Muse 部署」一章）、问题报告工具 `feedback/`、给 Muse 看的说明书 `MUSE.md`、使用说明书 `guide/`（Muse 回答使用问题的依据）、已知问题清单 `known-issues.json`、同步脚本 |
 | `android/` | 安卓 app（WebView 壳，零依赖；发版流程负责构建） |
-| `scripts/server/` | 通用 Linux 安装 / 更新脚本 |
-| `deploy/muse/` | Muse 专用：一键部署脚本 `bootstrap.sh`、给 Muse 看的说明书 `MUSE.md`、使用说明书 `guide/`（Muse 回答使用问题的依据）、已知问题清单 `known-issues.json`、运维件模板 |
-| `feedback-worker/` | 问题反馈的中继（Cloudflare Worker）：把用户同意过的报告提交成 GitHub Issue；GitHub App 的私钥只在它那里，各台装机上没有 |
+| `feedback-worker/` | 问题反馈的中继（Cloudflare Worker）：把用户同意过的报告提交成 GitHub Issue；GitHub App 的私钥只在它那里，各台装机上没有。报告格式与 `deploy/muse/feedback/` 共用 |
+
+Muse Bridge 和 bridge 的差别只经声明表达，由 `bootstrap.sh` 装机时写：`config.json` 里的品牌和默认语言、服务单元的环境变量、`plugins.json`（关掉 Muse VM 上用不了的功能），以及 Muse 插件。
 
 ## 发布新版本（维护者）
 

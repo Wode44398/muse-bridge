@@ -12,15 +12,16 @@ Muse does the whole deployment for you. Send it one message and it downloads the
 
 - **Deploy with one message.** Paste the prompt below into Muse and it handles the rest, in about 5–10 minutes.
 - **Works on phone and desktop.** The URL opens the full workspace. The interface is available in English and Simplified Chinese and follows your browser's language.
-- **Android app.** Install it from **Settings → Android app**, or [download the APK](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk). It keeps your server address, and when a temporary URL changes you can switch to the new one right in the app. The interface is the same as the web version and updates with your server.
-- **Full Claude Code.** Powered by the official Claude Agent SDK: tool use, subagents, workflows, context compaction and session resume. A side dock gives you a terminal, files, tasks and a diff review. Permission modes with approval and plan cards, queued follow-ups while Claude is working, session search and archiving, pull-request tracking, interactive charts right in the chat, and automatic resume after a 5-hour limit resets.
-- **Bring your own models to Claude Code.** Under **Settings → Model providers**, admins can add Anthropic- or OpenAI-compatible endpoints (DeepSeek, Kimi, OpenRouter and others); their models show up next to the official ones.
+- **Android app.** Install it from the Android app page in **Settings** (under **Plugins**; the row is labelled “安卓 App”), or [download the APK](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk). It keeps your server address, and when a temporary URL changes you can switch to the new one right in the app. The interface is the same as the web version and updates with your server.
+- **Full Claude Code.** Powered by the official Claude Agent SDK: tool use, subagents, workflows, context compaction and session resume. A side dock gives you a terminal, files, tasks and a diff review, and settings are laid out like a phone’s Settings app. Permission modes with approval and plan cards, queued follow-ups while Claude is working, session search and archiving, pull-request tracking, interactive charts right in the chat, and automatic resume after a 5-hour limit resets.
+- **Bring your own models to Claude Code.** Under **Settings → Claude → Custom API**, add Anthropic- or OpenAI-compatible endpoints (DeepSeek, Kimi, OpenRouter and others); their models show up in the model menu under “More models”. The admin and every member each get their own list.
+- **Works with the bridge Windows desktop app.** The bridge desktop client can connect to your Muse Bridge. With your own domain (a permanent address) you get the full desktop experience: a native title bar, the quick-ask window, and registering your PC as a device Claude can operate. On a temporary address the client works as a plain web window.
 - **Let agents drive it.** **Settings → Agent access** issues keys so another agent — including the Muse that deployed it — can read the project manual and operate Muse Bridge over HTTP.
 - **dimensio, a multi-model workspace.** One API key per provider, switch models at any time, or add any OpenAI-compatible endpoint. It has its own workspaces, memory and subagents.
 - **Each provider's own web search.** Search uses the built-in search of whichever model the conversation is using, falls back to the next configured provider, and uses DuckDuckGo only as a last resort.
 - **Survives VM restarts.** Muse restarts its VMs from time to time. A watchdog brings the service back within 60 seconds, and Muse tells you if the temporary URL changed.
 - **Update prompts.** When a new version ships, Muse tells you what changed in a sentence or two and asks whether to update. It switches over only when nobody is chatting, and rolls back automatically if the new version fails to start.
-- **Multi-user if you want it.** Invite codes let friends sign up. Every account gets its own directory, and you can decide per person which agents they can use and how much.
+- **Multi-user if you want it.** Invite codes let friends sign up. Every account gets its own directory, and you can decide per person which agents they can use and how much. By default the admin sees only members’ chat titles, times and usage; reading chats needs the member’s own consent.
 
 ## Get started
 
@@ -73,13 +74,13 @@ Not sure? Pick Claude Code only, a temporary URL, and just you. You can change a
 | Xiaomi MiMo (pay-as-you-go or Token Plan) | `MIMO_API_KEY` | see below |
 | Any OpenAI-compatible endpoint | add it with "＋" in the UI | — |
 
-Ask Muse to store a key for you (`set-api-key`), or paste it into dimensio's model panel yourself.
+Ask Muse to store a key for you (`set-api-key`), or paste it into dimensio’s own settings yourself (the **Settings** button at the bottom of the dimensio sidebar). Pick one way per provider: a key saved in the web settings takes precedence.
 
 **Xiaomi MiMo web search** is a console plugin billed per call (about ¥16 per 1,000) and charged to your account balance, so it only works with a **pay-as-you-go** key. If you chat on a Token Plan subscription key (starts with `tp-`), create a pay-as-you-go key just for search with `set-api-key MIMO_SEARCH_API_KEY <sk-…>`; chat keeps using your Token Plan quota. Without it, MiMo conversations fall back to another provider's search.
 
 ## Android app
 
-Open your Muse Bridge URL in your phone's browser, sign in, and go to **Settings → Android app → Download**. Once it's installed, come back to that page and tap **Open in app**: the app fills in the address for you. You can also [download the APK from GitHub](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk) and paste the address the first time you open it.
+Open your Muse Bridge URL in your phone’s browser, sign in, open **Settings**, and under **Plugins** tap the Android app row (labelled “安卓 App”), then **Download** next to **Download the apk**. Once it’s installed, come back to that page and tap **Open** next to **Open in the app**: the app fills in the address for you. You can also [download the APK from GitHub](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk) and paste the address the first time you open it.
 
 The app is a thin shell around the same web interface, so it never needs updating for new features. If the server is unreachable (for example, the temporary URL changed after a VM restart), the app shows a **Change address** button; ask Muse for the current URL and paste it in. If your phone blocks the install, allow your browser to install apps when it asks. There's no iPhone app; use Safari's **Share → Add to Home Screen** instead.
 
@@ -98,7 +99,7 @@ You don't have to do anything. Muse asks you when a new version is out; just say
 Just ask Muse ("how do I share a file?", "where are my old chats?", "walk me through dimensio"). The release ships a user guide written for Muse (`deploy/muse/guide/`), so it answers from the guide for your exact version instead of guessing, and it can give you a guided tour: a 5-minute quick start, Claude Code or dimensio in depth, admin and multi-user, or using it on your phone. Known issues are published through the update channel too, so Muse can tell you when something is a known problem and how to work around it.
 
 **Something's broken. How do I tell you?**
-Tell Muse, or open **Settings → Feedback → Report** (an error message also gets a **Report a problem** button). One sentence is enough and you don't need a GitHub account: it's filed as an issue here, with the version, service status and the program's own error details attached. Chats, files, keys and addresses are never included, and you can see the report before it's sent. If someone already reported the same problem, your report becomes a +1 on theirs, and Muse tells you when a release fixes it. Security problems go privately to the maintainers.
+Tell Muse. One sentence is enough and you don’t need a GitHub account: Muse first checks whether it’s a known issue, then shows you a draft and files it as an issue here only after you agree, with the version, service status and the program's own error details attached. Chats, files, keys and addresses are never included, and you can see the report before it's sent. If someone already reported the same problem, your report becomes a +1 on theirs, and Muse tells you when a release fixes it. Security problems go privately to the maintainers. (**Settings → Send feedback** in the web app keeps your note on your own server, where Muse can read it; it isn’t sent to us automatically.)
 
 **What does it cost?**
 Muse Bridge itself is free and open source. Claude Code runs on your own Claude subscription, and dimensio runs on your own API keys, billed by each provider.
@@ -123,13 +124,12 @@ Run `install.sh --help` to see all options. The service listens on 127.0.0.1 onl
 
 | Path | Contents |
 |---|---|
-| `src/` | Server (Node 24, no build step) |
-| `web/` | Frontend (Vite + Svelte 5) |
-| `harness/` | dimensio (TypeScript, run natively by Node) |
+| `src/`, `web/`, `harness/`, `modules/`, `scripts/`, `docs/` | The bridge public edition (server, frontend, dimensio, scripts), synced as a whole with `deploy/muse/sync/sync-from-bridge.mjs`; changes are made upstream in bridge, not here |
+| `deploy/muse/` | Everything Muse-specific: the `bootstrap.sh` / `install.sh` installers and `ops/` templates, the Muse plugin `plugin/` (the Android app page and the “Muse deployment” handbook chapter), the problem-report tool `feedback/`, `MUSE.md` (the instructions Muse follows), `guide/` (the user guide Muse answers from), `known-issues.json` and the sync script |
 | `android/` | Android app (a WebView shell, no dependencies; built by the release workflow) |
-| `scripts/server/` | Generic Linux install / update scripts |
-| `deploy/muse/` | Muse-specific: the `bootstrap.sh` installer, `MUSE.md` (the instructions Muse follows), `guide/` (the user guide Muse answers from), `known-issues.json` and ops templates |
-| `feedback-worker/` | The Cloudflare Worker that turns user-approved problem reports into GitHub issues (holds the GitHub App key; installs never do) |
+| `feedback-worker/` | The Cloudflare Worker that turns user-approved problem reports into GitHub issues (holds the GitHub App key; installs never do). Shares its report format with `deploy/muse/feedback/` |
+
+Muse Bridge differs from bridge only through declarations that `bootstrap.sh` writes at install time: the brand and default language in `config.json`, environment variables in the service unit, `plugins.json` (features a Muse VM can’t use are switched off), and the Muse plugin.
 
 ## Releasing (maintainers)
 

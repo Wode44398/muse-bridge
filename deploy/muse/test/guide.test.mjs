@@ -1,9 +1,9 @@
 // 说明书的静态检查（不调模型，几秒跑完；release.yml 发版前也跑）：
 //   · INDEX.md 链到的章节都在、每一章都在 INDEX.md 里
 //   · 界面名字没编：说明书里用 **「中文」**（English） 写的界面元素，中文每一段都要在前端源码里出现过，
-//     英文每一段都要在英文字典里出现过（路径用「 → 」分隔，比如 **「设置 → 反馈」**（Settings → Feedback））
+//     英文每一段都要在英文字典里出现过（Muse 插件页的文案在 deploy/muse/plugin/web/ 里，也算；路径用「 → 」分隔，比如 **「设置 → 反馈」**（Settings → Feedback））
 //   · bootstrap.sh 的每个子命令、set-api-key 认的每个 key 名，MUSE.md 里都写到了
-//   · 设置里的每个分区，设置那一章都讲到了
+//   · 设置根页（components/Settings.svelte）上的每个分组和每一行，设置那一章都讲到了
 //   · known-issues.json 格式对、问答题目引用的章节都在
 //   · 没有个人信息
 import { test } from 'node:test';
@@ -32,10 +32,16 @@ function walk(dir, exts, out = []) {
   }
   return out;
 }
+// 界面文案的来源：bridge 前端、dimensio 前端，加上 Muse 插件的面板页（设置 › 插件 › 安卓 App，文案写在页面里）
+const PLUGIN_WEB = path.join(MUSE, 'plugin', 'web');
+const pluginPages = walk(PLUGIN_WEB, ['.html', '.js']).map(read);
 const sourceText = [path.join(ROOT, 'web', 'src'), path.join(ROOT, 'harness', 'web', 'src')]
-  .flatMap((d) => walk(d, ['.svelte', '.js', '.ts'])).map(read).join('\n');
+  .flatMap((d) => walk(d, ['.svelte', '.js', '.ts'])).map(read).concat(pluginPages).join('\n');
+// 英文：两份字典，加上插件页脚本里的 EN 对象（插件页自带中英两份文案，不进 bridge 的字典）
+const pluginEn = pluginPages.map((src) => (src.match(/const EN = \{[\s\S]*?\n\s*\};/) || [''])[0]).filter(Boolean);
+assert.ok(pluginEn.length, 'Muse 插件页里没找到 EN 对象（插件页的英文文案）');
 const enDictText = [path.join(ROOT, 'web', 'src', 'i18n', 'en'), path.join(ROOT, 'harness', 'web', 'src', 'i18n', 'en')]
-  .flatMap((d) => walk(d, ['.js', '.ts'])).map(read).join('\n')
+  .flatMap((d) => walk(d, ['.js', '.ts'])).map(read).concat(pluginEn).join('\n')
   .replace(/\\'/g, "'").replace(/’/g, "'");   // 字典里撇号写法不一，比对时统一
 
 test('INDEX.md 与章节一一对应', () => {
@@ -78,9 +84,16 @@ test('bootstrap.sh 的子命令、key 名都写进了 MUSE.md', () => {
 });
 
 test('设置的每个分区，设置那一章都讲到了', () => {
-  const settings = read(path.join(ROOT, 'web', 'src', 'components', 'settings', 'Settings.svelte'));
-  const block = settings.slice(settings.indexOf('const SECTIONS'), settings.indexOf('const CUSTOM'));
-  const labels = [...block.matchAll(/label:\s*(?:t|tc)\((?:'[^']*',\s*)?'([^']+)'\)/g)].map((m) => m[1]);
+  // 分区 = 设置根页（手机 / 网页那套 iOS 风外壳）上的分组标题 ghead(t('…')) 与每一行的行标题（class="r-tx"）
+  const settings = read(path.join(ROOT, 'web', 'src', 'components', 'Settings.svelte'));
+  const from = settings.indexOf('{#snippet pRoot()}');
+  assert.ok(from >= 0, 'Settings.svelte 里没找到根页（{#snippet pRoot()}）');
+  const block = settings.slice(from, settings.indexOf('{/snippet}', from));
+  const labels = [...new Set([
+    ...[...block.matchAll(/ghead\((?:t|tc)\((?:'[^']*',\s*)?'([^']+)'\)\)/g)].map((m) => m[1]),
+    ...[...block.matchAll(/class="r-tx">\{(?:t|tc)\((?:'[^']*',\s*)?'([^']+)'\)\}/g)].map((m) => m[1]),
+  ])];
+  assert.ok(labels.length >= 10, `根页分区没解析出来（只拿到 ${labels.length} 个）`);
   const chapter = Object.entries(guide).find(([f]) => /settings/.test(f));
   assert.ok(chapter, '缺设置那一章（文件名带 settings）');
   for (const l of labels) assert.ok(chapter[1].includes(l), `设置那一章没讲「${l}」分区`);
