@@ -58,9 +58,10 @@
   import { serverOnThisMachine } from '../../lib/nativeDesktop.js';
   import Customize from '../../components/ext/Customize.svelte';
   import PluginFrame from '../../components/ext/PluginFrame.svelte';
-  import { pluginPanels, watchPluginPanels } from '../../lib/pluginPanels.svelte.js';
+  import { pluginPanels, watchPluginPanels, panelTitle } from '../../lib/pluginPanels.svelte.js';
   import { filesFromInput, uploadAttachment } from '../../lib/attachments.js';
   import { t, tc, tr, lang, setLang, LANGS } from '../../lib/i18n.js';
+  import { DISTRO, stripBrand } from '../../lib/distro.js';
   import { ovUrl, ovMarks } from '../../lib/overlay.svelte.js';
 
   import { settingsNav } from './settingsNav.svelte.js';
@@ -209,7 +210,7 @@
       ...(pluginOn('devices') ? [{ key: 'devices', label: t('设备'), ico: 'localpc' }] : []),
       ...(single || !pluginOn('wallpapers') ? [] : [{ key: 'wallpaper', label: t('壁纸'), ico: 'wallpaper' }]),
     ],
-    pluginPanels.list.map((p) => ({ key: 'plg-' + p.id, label: tr(p.title), ico: 'extensions' })),
+    pluginPanels.list.map((p) => ({ key: 'plg-' + p.id, label: panelTitle(p), ico: 'extensions' })),
     [
       { key: 'connect', label: t('连接与更新'), ico: 'connect' },
       ...(pluginOn('feedback') ? [{ key: 'help', label: t('反馈'), ico: 'feedback' }] : []),
@@ -813,7 +814,7 @@
     : fbUp.lastPullOkAt ? t('这台是汇总端：上次拉取 {at}，累计收到 {n} 条外部反馈。', { at: fbWhen(fbUp.lastPullOkAt), n: fbUp.pulledTotal || 0 })
     : t('这台是汇总端：启动后约 20 秒第一次拉取外部反馈。'));
 
-  let verLine = $state('The Bridge');
+  let verLine = $state(DISTRO.brand);
   appVersionLine().then((l) => { verLine = l; }).catch(() => {});
 
   // ═══ 关闭 ═══
@@ -1489,7 +1490,7 @@
       {/if}
       <DGroup label={tc('settings', '更新')}>
         <!-- 行本身不可点：动作只在右侧按钮上（行内再放按钮会成按钮套按钮） -->
-        <DRow title={t('软件更新')} sub={upState === 'idle' || upState === 'checking' ? verLine.replace(/^The Bridge\s*·\s*/, '') : ''} highlight={fl('update')}>
+        <DRow title={t('软件更新')} sub={upState === 'idle' || upState === 'checking' ? stripBrand(verLine) : ''} highlight={fl('update')}>
           {#snippet trailing()}
             {#if upState === 'downloading'}<span class="num">{Math.round(progress * 100)}%</span><span class="ring" style:--p="{Math.round(progress * 360)}deg"></span>
             {:else if upState === 'checking'}<span class="spin"></span><span>{upMsg}</span>

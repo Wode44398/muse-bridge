@@ -20,6 +20,15 @@ export function brandText(s, brand = DISTRO.brand) {
   return brand !== BRIDGE_BRAND && typeof s === 'string' && s.includes(BRIDGE_BRAND) ? s.replaceAll(BRIDGE_BRAND, brand) : s;
 }
 
+/** 版本行去掉开头的品牌（「Muse Bridge · v6.70（483）」→「v6.70（483）」）；本体与别的发行版都认 */
+export function stripBrand(s, brand = DISTRO.brand) {
+  const str = String(s ?? '');
+  for (const b of new Set([brand, BRIDGE_BRAND])) {
+    if (str.startsWith(b)) return str.slice(b.length).replace(/^\s*·\s*/, '');
+  }
+  return str;
+}
+
 /** 品牌拆成大字标的两行（「THE / BRIDGE」→「MUSE / BRIDGE」）；只有一个词时第一行空着 */
 export function brandWords(brand = DISTRO.brand) {
   const parts = String(brand).trim().toUpperCase().split(/\s+/);

@@ -14,6 +14,7 @@
 // 动手后几秒一探 /healthz，回来就说「服务器已更新到 x」（版本没变说「回来了」）——见文件末尾 onServerRestartEvent。
 import { apiUrl, isOffline, adoptServerAddress, onServerRecovered, confirmReachability, isServerDown } from './server.js';
 import { getToken, api } from './api.js';
+import { DISTRO } from './distro.js';
 import { busOn } from './bus.js';
 import { desktopApp, desktopUpdates, isNativeDesktop } from './nativeDesktop.js';
 import { updateInfo } from './updateStore.svelte.js';
@@ -284,7 +285,7 @@ export async function appVersionLine() {
   try {
     const info = await (await fetch(apiUrl('/api/app/version'))).json();
     return t('The Bridge · v{name}（{code}）', { name: info.name, code: nativeVersion() || info.code });
-  } catch { return 'The Bridge'; }
+  } catch { return DISTRO.brand; }
 }
 
 // —— 服务器要重启 / 装更新（S1-5，见文件头）——

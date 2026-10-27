@@ -37,4 +37,4 @@ VM 上的 Chromium 没有沙箱、起不来：dimensio 在这台服务器上没�
 ## 版本与反馈
 
 - Muse Bridge 有自己的版本号（`deploy/muse/VERSION`），和 bridge 本体的版本号不是一回事；`bootstrap.sh status` 里两个都有。
-- 问题反馈走设置里的「反馈」，会发到 Muse Bridge 的 GitHub 仓库（公开 issue，发出前会脱敏）。
+- 问题反馈：网页设置里的「提交反馈」存在这台服务器上（管理员在服务端控制台里看），不会自动发出去。要报给 Muse Bridge 项目，在 Muse 里说「报告一个 bridge 的问题」，由 Muse 用 `bootstrap.sh report` 出草稿、经用户同意后提交到 GitHub（公开 issue，发出前会脱敏）。

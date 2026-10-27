@@ -9,9 +9,12 @@
 import { api } from './api.js';
 import { apiUrl } from './server.js';
 import { busOn } from './bus.js';
-import { isEn } from './i18n.js';
+import { isEn, tr } from './i18n.js';
 
 export const pluginPanels = $state({ list: [], loaded: false });
+
+// 面板标题：英文界面有插件自带的英文标题（清单 ui.panel.titleEn）就用它，否则照旧查 bridge 的字典
+export const panelTitle = (p) => (p ? (isEn() && p.titleEn ? p.titleEn : tr(p.title || '')) : '');
 
 let started = false;
 export async function loadPluginPanels() {

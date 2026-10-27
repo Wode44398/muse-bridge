@@ -274,7 +274,7 @@ export function registerPluginRoutes(router, { identify }) {
     const c = requireCtx(identify, req, res);
     if (!c) return;
     const panels = kernel.list().filter((p) => p.extra?.ui?.panel && pageAllowed(c, p)).map((p) => ({
-      id: p.id, name: p.name, title: p.extra.ui.panel.title, icon: p.extra.ui.panel.icon, page: p.extra.ui.panel.page,
+      id: p.id, name: p.name, title: p.extra.ui.panel.title, titleEn: p.extra.ui.panel.titleEn || '', icon: p.extra.ui.panel.icon, page: p.extra.ui.panel.page,
     }));
     json(res, 200, { panels });
   });

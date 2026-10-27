@@ -8,7 +8,7 @@
   "category": "third-party",
   "entry": "index.mjs",
   "ui": {
-    "panel": { "page": "web/index.html", "title": "安卓 App", "icon": "phone" },
+    "panel": { "page": "web/index.html", "title": "安卓 App", "titleEn": "Android app", "icon": "phone" },
     "who": "members"
   },
   "engines": { "pluginApi": 2 }

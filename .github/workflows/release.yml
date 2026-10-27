@@ -70,7 +70,7 @@ jobs:
           mkdir -p dist/stage
           # git archive 会按 .gitattributes 的 export-subst 把 deploy/muse/VERSION 填成「短哈希 日期」
           git archive --format=tar --prefix=bridge/ HEAD | tar -x -C dist/stage
-          # 安卓 app 随安装包走：服务器的 /download/MuseBridge.apk 读这里（src/routes/android-app.mjs）
+          # 安卓 app 随安装包走：服务器的 /download/MuseBridge.apk 读这里（Muse 插件 deploy/muse/plugin/index.mjs）
           mkdir -p dist/stage/bridge/downloads
           cp dist/MuseBridge.apk dist/android.json dist/stage/bridge/downloads/
           printf '# 发布频道（发版时写入）\n%s\n' "https://github.com/$REPO/releases/latest/download/latest.json" \

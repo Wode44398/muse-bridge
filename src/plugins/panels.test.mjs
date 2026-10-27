@@ -68,6 +68,9 @@ test('ui 声明：页面必须在 web/ 下；web.page 视同面板', () => {
   assert.equal(normUi({ id: 'a', ui: { panel: 'x.html' } }).panel, null);
   assert.equal(normUi({ id: 'a', ui: { settings: 'web/../../etc' } }).settings, null);
   assert.equal(normUi({ id: 'a', ui: { who: 'everyone' } }).who, 'host');
+  // 英文标题：给了就带上（第三方插件没法往 bridge 的英文字典里加词），空的不带
+  assert.equal(normUi({ id: 'a', ui: { panel: { page: 'web/i.html', title: '安卓 App', titleEn: ' Android app ' } } }).panel.titleEn, 'Android app');
+  assert.equal('titleEn' in normUi({ id: 'a', ui: { panel: { page: 'web/i.html', titleEn: ' ' } } }).panel, false);
 });
 
 test('面板列表：主机看得到全部，成员只看得到 who:members 的；没登录 401', async () => {

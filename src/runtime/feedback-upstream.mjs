@@ -30,6 +30,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, rmSync
 import { CONFIG_PATH, VAULT, PUBLIC_ORIGIN, PV_PUBLIC_DOMAIN } from '../config/index.mjs';
 import { APP_VERSION_NAME, APP_VERSION_CODE } from '../config/versions.mjs';
 import { DATA_ROOT, PROGRAM_ROOT } from './paths.mjs';
+import { DISTRO } from '../config/distro.mjs';
 
 /** 中继地址只认 http(s) 网址（去掉结尾的 /）；空串、写错的一律当没配。 */
 export function normalizeRelay(u) {
@@ -313,6 +314,8 @@ export function createFeedbackUpstream({
       os: `${os.type()} ${(os.release().match(/^\d+(?:\.\d+){0,2}/) || [''])[0]}`.trim().slice(0, 40),
       role: role === 'admin' ? 'admin' : 'user',
       ...(lang === 'zh' || lang === 'en' ? { lang } : {}),
+      // 别的发行版（Muse Bridge 等）带上发行版 id：中继据此分流（Muse 的转成它自己仓库的 issue），本体不带
+      ...(DISTRO.id !== 'bridge' ? { distro: DISTRO.id } : {}),
       ...(omitted ? { omitted } : {}),
       attachments,
     };

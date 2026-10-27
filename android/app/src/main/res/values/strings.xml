@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Muse Bridge</string>
     <string name="setup_title">Connect to your Muse Bridge</string>
-    <string name="setup_body">Paste the address Muse gave you, such as https://xxxx.trycloudflare.com or your own domain. You can also open the address in your phone\'s browser and tap \"Open in app\" under Settings → Android app.</string>
+    <string name="setup_body">Paste the address Muse gave you, such as https://xxxx.trycloudflare.com or your own domain. You can also open the address in your phone\'s browser and tap \"Open in the app\" under Settings › Plugins › Android app.</string>
     <string name="setup_hint">https://…</string>
     <string name="paste">Paste</string>
     <string name="connect">Connect</string>

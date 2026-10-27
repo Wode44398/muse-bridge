@@ -57,7 +57,8 @@ export function readPluginDir(dir) {
   return { manifest: m, entryPath };
 }
 
-// 清单的界面声明 → { panel: { page, title, icon } | null, settings: 页面 | null, who: 'host' | 'members' }。
+// 清单的界面声明 → { panel: { page, title, titleEn?, icon } | null, settings: 页面 | null, who: 'host' | 'members' }。
+// titleEn：英文界面用的标题（第三方插件没法往 bridge 的英文字典里加词；不给就照旧 tr(title)）。
 // 页面一律要在 web/ 下（由 /plugins/<id>/web/ 提供）；旧写法 web.page 等同 ui.panel.page。
 export function normUi(m) {
   const ui = m.ui && typeof m.ui === 'object' ? m.ui : {};
@@ -70,6 +71,7 @@ export function normUi(m) {
   const panel = pp ? {
     page: pp,
     title: String((typeof rawPanel === 'object' && rawPanel.title) || m.name || m.id).slice(0, 30),
+    ...(typeof rawPanel === 'object' && typeof rawPanel.titleEn === 'string' && rawPanel.titleEn.trim() ? { titleEn: rawPanel.titleEn.trim().slice(0, 30) } : {}),
     icon: /^[a-z][a-z0-9-]{0,23}$/.test(String(rawPanel.icon || '')) ? rawPanel.icon : 'puzzle',
   } : null;
   const settings = page(typeof ui.settings === 'string' ? ui.settings : ui.settings && ui.settings.page);

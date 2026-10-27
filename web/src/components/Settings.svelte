@@ -43,6 +43,7 @@
   import ConnectQr from './pairing/ConnectQr.svelte';
   import { settingsNav } from '../lib/settingsNav.svelte.js';
   import { t, tc, tr, lang, setLang, LANGS } from '../lib/i18n.js';
+  import { DISTRO, stripBrand } from '../lib/distro.js';
   import { wp, wpDef, setWp, addUpload, deleteUpload, splitWpFiles, LIGHT_IDS, DARK_IDS, spatial, setSpatialOn, setSpatialAmp, wpHasDepth, wpIsUpload } from '../lib/wallpaper.svelte.js';
   import { registerCloser } from '../lib/nav.js';
   import { swipeDismiss, spring, NAV_SPRING } from '../lib/motion.js';
@@ -75,7 +76,7 @@
   import GlassButton from './ios27/GlassButton.svelte';
   import Customize from './ext/Customize.svelte';
   import PluginFrame from './ext/PluginFrame.svelte';
-  import { pluginPanels, watchPluginPanels, openPluginStandalone, inAndroidApp } from '../lib/pluginPanels.svelte.js';
+  import { pluginPanels, watchPluginPanels, openPluginStandalone, inAndroidApp, panelTitle } from '../lib/pluginPanels.svelte.js';
   import { showToast } from '../lib/toast.svelte.js';
   import Alert from './ios27/Alert.svelte';
   import Sheet from './ios27/Sheet.svelte';
@@ -678,9 +679,9 @@
   }
 
   // 版本：「The Bridge · v5.67（380）」——根页应用卡片与「关于」页显示。
-  let verLine = $state('The Bridge');
+  let verLine = $state(DISTRO.brand);
   appVersionLine().then((line) => { verLine = line; }).catch(() => {});
-  const verShort = $derived(verLine.replace(/^The Bridge\s*·\s*/, ''));
+  const verShort = $derived(stripBrand(verLine));
   // 放弃正在下载 / 已下好的更新包（「关于」页；新壳才有这个桥，旧壳 cancelUpdate 回 false 就不动状态）
   function discardUpdate() {
     if (!cancelUpdate()) return;
@@ -853,12 +854,12 @@
   // 手机 App 交给原生另起的干净 WebView——App 的原生桥会注入所有帧，插件页面不能嵌在主页面里。
   watchPluginPanels();
   function openPlg(pp) {
-    if (inAndroidApp()) { openPluginStandalone(pp.id, { title: tr(pp.title) }).catch((e) => showToast(tr(e?.body?.error || e?.message || String(e)), 'err')); return; }
+    if (inAndroidApp()) { openPluginStandalone(pp.id, { title: panelTitle(pp) }).catch((e) => showToast(tr(e?.body?.error || e?.message || String(e)), 'err')); return; }
     push('plg-' + pp.id);
   }
   function titleOf(pid) {
     if (TITLES[pid]) return TITLES[pid]();
-    if (pid.startsWith('plg-')) return tr(pluginPanels.list.find((x) => 'plg-' + x.id === pid)?.title || '');
+    if (pid.startsWith('plg-')) return panelTitle(pluginPanels.list.find((x) => 'plg-' + x.id === pid));
     if (pid.startsWith('ag-')) { const id = pid.slice(3); return agentById(id)?.label || (id === 'claude' ? 'Claude' : id); }
     if (pid.startsWith('acct:')) return accLabel(acctById(pid.slice(5))?.label || '') || t('账号');
     if (pid.startsWith('device:')) return devices.list.find((d) => d.id === pid.slice(7))?.name || t('设备');
@@ -1102,7 +1103,7 @@
       {#each pluginPanels.list as pp (pp.id)}
         <button class="r" type="button" onclick={() => openPlg(pp)}>
           {@render ico('extensions')}
-          <span class="r-main"><span class="r-tx">{tr(pp.title)}</span>{@render chev()}</span>
+          <span class="r-main"><span class="r-tx">{panelTitle(pp)}</span>{@render chev()}</span>
         </button>
       {/each}
     </div>
@@ -1923,7 +1924,7 @@
 {#snippet pAbout()}
   <div class="hero">
     <img class="about-icon" src={appIcon} alt="" draggable="false" />
-    <div class="hero-name">The Bridge</div>
+    <div class="hero-name">{DISTRO.brand}</div>
     <div class="hero-sub num">{verShort}</div>
   </div>
   <div class="ig">
