@@ -114,7 +114,7 @@ Muse isn't required. On Debian / Ubuntu with systemd:
 
 ```bash
 git clone https://github.com/Wode44398/muse-bridge.git /opt/muse-bridge && cd /opt/muse-bridge
-sudo bash scripts/server/install.sh --agents claude,dimensio
+sudo bash deploy/muse/install.sh --agents claude,dimensio
 ```
 
 Run `install.sh --help` to see all options. The service listens on 127.0.0.1 only; for outside access, set up your own tunnel or reverse proxy (`--tunnel-token` can start a Cloudflare named tunnel for you). To update: `sudo bash scripts/server/update.sh`.

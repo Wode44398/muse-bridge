@@ -114,7 +114,7 @@ Muse Bridge 本身免费开源。Claude Code 用的是你自己的 Claude 订阅
 
 ```bash
 git clone https://github.com/Wode44398/muse-bridge.git /opt/muse-bridge && cd /opt/muse-bridge
-sudo bash scripts/server/install.sh --agents claude,dimensio
+sudo bash deploy/muse/install.sh --agents claude,dimensio
 ```
 
 `install.sh --help` 查看全部选项。服务只听本机 127.0.0.1，对外访问需要你自己配隧道或反向代理（加 `--tunnel-token` 可以顺带起一条 Cloudflare 命名隧道）。更新用 `sudo bash scripts/server/update.sh`。

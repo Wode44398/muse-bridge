@@ -3,7 +3,7 @@
 # 在 Muse 的 VM 上请用 deploy/muse/bootstrap.sh（它会处理代理、隧道、重启自愈，再调用本脚本）；
 # 普通 Linux 服务器可以直接用本脚本。
 #
-#   sudo bash scripts/server/install.sh [选项]
+#   sudo bash deploy/muse/install.sh [选项]
 #
 # 做的事（可以重复执行：已有的数据、令牌、账号一概不动，只补齐依赖、重建前端、刷新服务单元）：
 #   1. 装系统依赖与 Node 24（缺才装）

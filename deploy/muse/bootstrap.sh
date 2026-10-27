@@ -33,7 +33,7 @@
 # 已知问题（更新频道下发，看门狗每 6 小时更新一次）：
 #   known-issues [--all]              影响当前版本的已知问题：现象、绕过办法、哪个版本修好了
 #
-# 这个脚本包住的全是 Muse VM 独有的坑（通用的部分交给 scripts/server/install.sh）：
+# 这个脚本包住的全是 Muse VM 独有的坑（通用的部分交给 deploy/muse/install.sh）：
 #   · 出站只能走 hatch-egress-proxy：代理变量自动带上，并带进服务环境
 #   · apt 源里有经代理不可达的镜像（会卡住 apt 半小时，且每次开机被平台还原）：先探测，删掉不通的
 #   · cloudflared 不认代理、/etc/hosts 只读：两条 socat 中继 + mount namespace 盖 hosts，再起隧道
@@ -492,7 +492,7 @@ cmd_install() {
   fi
 
   say "检查环境"
-  grep -q hatch-egress-proxy /etc/hosts || die "这台机器不像 Muse VM（/etc/hosts 里没有 hatch-egress-proxy）。普通 Linux 请直接用 scripts/server/install.sh"
+  grep -q hatch-egress-proxy /etc/hosts || die "这台机器不像 Muse VM（/etc/hosts 里没有 hatch-egress-proxy）。普通 Linux 请直接用 deploy/muse/install.sh"
   command -v systemctl >/dev/null || die "没有 systemd"
   [ -d "$PERSIST" ] || die "持久目录 $PERSIST 不存在（可用环境变量 MUSE_PERSIST 指定）"
   case "$REPO/" in "$PERSIST"/*) ;; *) die "代码目录 $REPO 不在持久目录 $PERSIST 下，重启就没了。请解压到 $RELS/ 底下再跑" ;; esac
@@ -524,14 +524,14 @@ cmd_install() {
 
   wait_for_account
 
-  say "跑通用安装脚本 scripts/server/install.sh（装依赖、构建前端，第一次要几分钟；正在跑的服务不动）"
+  say "跑安装脚本 deploy/muse/install.sh（装依赖、构建前端，第一次要几分钟；正在跑的服务不动）"
   local raw; raw="$(mktemp /run/bridge-install.XXXXXX)"
   local args=(--port "$PORT" --data "$DATA" --user "$SVC_USER" --agents "$AGENTS" "--$USERS_MODE" --no-restart)
   [ -n "$claude_token" ] && args+=(--claude-token "$claude_token")
   set +e
   # 屏幕 / 进度日志上的访问令牌当场打码（令牌只经结果块交付）。别事后 sed -i 进度日志：那会换掉文件，
   # 后台进程之后的输出就全写进已删除的旧文件里了
-  bash "$REPO/scripts/server/install.sh" "${args[@]}" 2>&1 | tee "$raw" | sed -u -E 's/(访问令牌 +)[A-Za-z0-9_-]{16,}/\1<已打码>/'
+  bash "$REPO/deploy/muse/install.sh" "${args[@]}" 2>&1 | tee "$raw" | sed -u -E 's/(访问令牌 +)[A-Za-z0-9_-]{16,}/\1<已打码>/'
   local rc=${PIPESTATUS[0]}
   set -e
   local token; token="$(grep -oP '访问令牌\s+\K\S+' "$raw" || true)"
