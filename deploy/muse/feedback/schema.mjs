@@ -3,8 +3,10 @@
 import { scrub, clip, isPublicHost } from './scrub.mjs';
 
 // docs = 说明书（deploy/muse/guide）没写到或写错了：Muse 答不上用户的问题时，经用户同意报上来，好补说明书
-export const KINDS = ['bug', 'crash', 'update_failed', 'idea', 'security', 'docs'];
-export const SOURCES = ['web', 'muse', 'auto'];
+// feedback = 网页「提交反馈」经 bridge 反馈通道转来的（问题、想要的功能、吐槽都有，分不出是哪种，由维护者分拣）
+export const KINDS = ['bug', 'crash', 'update_failed', 'idea', 'security', 'docs', 'feedback'];
+// web = 网页「提交反馈」；claude = 网页里的 Claude 诊断后、经用户同意上报（这两种都经 bridge 反馈通道 /v1/cb/report 转来）
+export const SOURCES = ['web', 'muse', 'auto', 'claude'];
 export const SERVICE_NAMES = ['bridge', 'cf-relay-api', 'cf-relay-edge', 'muse-tunnel', 'local_health', 'public_health'];
 const AGENTS = ['claude', 'dimensio'];
 const WHERE = ['server', 'client', 'harness'];

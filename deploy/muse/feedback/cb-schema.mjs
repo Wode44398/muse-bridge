@@ -4,8 +4,10 @@
 // 同样走白名单：这里没列的字段，不管对方服务器塞了什么，一律存不进来。
 //   文字（用户自己写的，按 Muse 那套规则脱敏）、界面位置、bridge 版本、平台（系统 / 架构 / Node）、
 //   提交人在那台服务器上的角色（admin / user，不带用户名）、没随报告发来的附件个数、
+//   发行版 id（distro：bridge 本体不带；别的发行版带自己的 id，Worker 据此分流，见 feedback-worker/src/cb-muse.mjs）、
 //   最多 3 张图片（每张 ≤ 2MB；只认 png / jpeg / gif / webp，且按文件头认，声明的类型不算数；文件名一律重起）。
 // 图片没法脱敏：前端提交界面写明了「图片会一起发给开发者」，由用户自己决定放不放。
+// distro = 'muse' 的那份不进收件箱、转成 Muse Bridge 仓库的公开 Issue——图片不随 Issue 公开，只记个数。
 import { scrub, clip } from './scrub.mjs';
 
 export const CB_MAX_IMAGES = 3;
@@ -66,6 +68,7 @@ export function cleanCbReport(input) {
     os: tok(i.os, /^[A-Za-z_]+(?: [0-9.]+)?$/, 40),
     role: oneOf(i.role, ['admin', 'user']),
     lang: oneOf(i.lang, ['zh', 'en']),
+    distro: tok(i.distro, /^[a-z][a-z0-9-]{0,31}$/, 32),
     omitted: int(i.omitted, 50),
     attachments: [],
   };
@@ -76,7 +79,7 @@ export function cleanCbReport(input) {
     if (!type || out.attachments.length >= CB_MAX_IMAGES) { out.omitted++; continue; }
     out.attachments.push({ name: `image-${out.attachments.length + 1}.${EXT[type]}`, type, size: n, data });
   }
-  for (const k of ['screen', 'version', 'arch', 'node', 'os', 'role', 'lang']) if (!out[k]) delete out[k];
+  for (const k of ['screen', 'version', 'arch', 'node', 'os', 'role', 'lang', 'distro']) if (!out[k]) delete out[k];
   if (!out.omitted) delete out.omitted;
   if (!out.text && !out.attachments.length) throw new Error('empty report');
   return out;

@@ -24,6 +24,13 @@
 - `POST /v1/cb/inbox/ack`：`{ ids: [...] }`，写进库之后确认，确认过的删掉。
 
 后两个只认 `Authorization: Bearer <INBOX_TOKEN>`；Worker 没配 `INBOX_TOKEN` 这个 secret 时一律 404。
+
+**按发行版分流**：推来的反馈带 `distro` 字段（bridge 本体不带）。`distro: "muse"` 的——Muse Bridge 网页里的「提交反馈」
+和网页里 Claude 诊断后的上报（管理员开了推送、提交人同意才会推来）——**不进收件箱**，按 Muse 的规则转成本仓库的公开 Issue
+（`src/cb-muse.mjs`）：Claude 上报（正文头一行「【经 Claude 诊断后上报】」）开 `[Bug]`，其余网页反馈开 `[Feedback]`、只打
+`from-muse` 标签；正文再按 Muse 规则脱敏一遍，界面位置、提交人角色、附件个数写在末尾；**图片不进 Issue**（只记个数，留在
+那台服务器的反馈库里）。指纹 = 装机编号 + 正文哈希，同一份补发落回同一个 Issue。限流记在 Muse 的计数上（`DAILY_CAP`、
+`PER_INSTALL_DAILY`），不需要 `INBOX_TOKEN`。其它 distro 跟本体一样进收件箱（`distro` 一起存下）。
 claude-bridge 那边默认就推到本 Worker 的地址（它的 `config.json` 可用 `feedbackRelay` 改）；部署地址变了要两边一起改。
 限流单独计数：`CB_DAILY_CAP`（全局每天，默认 50）、`CB_PER_INSTALL_DAILY`（每台装机每天，默认 20）、
 `CB_DAILY_MB`（全局每天的体积，默认 30MB）；`cfg:paused` 停收对这里同样生效。

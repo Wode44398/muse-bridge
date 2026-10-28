@@ -168,6 +168,88 @@ test('GitHub 出错 → 502（客户端会存着补发）', async () => {
   assert.equal((await handle(post(base()), env(memKV()))).status, 502);
 });
 
+// —— Muse Bridge 网页经 bridge 反馈通道推来的（/v1/cb/report，distro: 'muse'）→ 转成 Muse 的报告开 Issue ——
+const cbPost = (body) => new Request('https://w.test/v1/cb/report', { method: 'POST', body: JSON.stringify(body) });
+const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16, 1)]).toString('base64');
+const cbBase = (o = {}) => ({
+  v: 1, install: 'cb-install-muse-0001', text: '工作空间里重命名中文文件夹报 500\n第二行细节', screen: 'settings-desktop',
+  version: '6.75 (488)', platform: 'linux', arch: 'x64', node: 'v24.22.1', os: 'Linux 6.8.0', role: 'user', lang: 'zh', distro: 'muse', ...o,
+});
+
+test('Muse 的网页反馈（distro=muse）→ 开 Issue：不进收件箱、不要 INBOX_TOKEN；图片不公开只记个数；脱敏', async () => {
+  const gh = fakeGitHub(); const kv = memKV();
+  const handle = createHandler({ fetch: gh.fetch });
+  const r = await handle(cbPost(cbBase({
+    text: '设置页打不开，我的 key sk-ant-api03-ABCDEFGHIJKLMNOPQRST123\n第二行',
+    attachments: [{ type: 'image/png', data: png }], omitted: 1,
+  })), env(kv));   // env 里没有 INBOX_TOKEN
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.deepEqual(j, { ok: true, issue: { number: 1, url: 'https://github.com/o/r/issues/1' } });
+  const it = gh.issues.get(1);
+  assert.equal(it.title, '[Feedback] 设置页打不开，我的 key <secret>');
+  assert.deepEqual(it.labels, ['from-muse'], '网页反馈分不出 bug / 建议，只打来源标签');
+  assert.match(it.body, /reported from the web UI · Muse Bridge 6\.75 \(488\)/);
+  assert.match(it.body, /Screen: settings-desktop · Submitted by a member · 2 attachments kept on that server/);
+  assert.ok(!it.body.includes('ABCDEFGHIJ'), '令牌被抹掉');
+  assert.ok(!it.body.includes(png.slice(0, 12)), '图片不进 Issue');
+  assert.ok(![...kv.m.keys()].some((k) => k.startsWith('cbi:')), '不进 bridge 开发者的收件箱');
+  assert.ok(kv.m.has(`rl:${new Date().toISOString().slice(0, 10)}:i:cb-install-muse-0001`), '限流记在 Muse 那边');
+});
+
+test('Muse 网页里 Claude 诊断后上报 → [Bug]，标题取「【经 Claude 诊断后上报】」那一行', async () => {
+  const gh = fakeGitHub();
+  const handle = createHandler({ fetch: gh.fetch });
+  const text = '【经 Claude 诊断后上报】工作空间里重命名中文文件夹报 500\n\n用户点重命名后弹红字。\n\n相关日志 / 报错：\n```\nTypeError: x is not a function\n```';
+  assert.equal((await handle(cbPost(cbBase({ text, screen: 'Claude 页 › 工作空间', role: 'admin' })), env(memKV()))).status, 200);
+  const it = gh.issues.get(1);
+  assert.equal(it.title, '[Bug] 工作空间里重命名中文文件夹报 500');
+  assert.deepEqual(it.labels, ['from-muse', 'bug']);
+  assert.match(it.body, /diagnosed by Claude in the web UI/);
+  assert.match(it.body, /用户点重命名后弹红字/);
+  assert.ok(!it.body.includes('【经 Claude 诊断后上报】'), '前缀不留在正文里');
+  assert.match(it.body, /Submitted by the server admin/);
+});
+
+test('Muse 的同一份反馈补发 → 落回同一个 Issue，不给自己 +1；别的装机同样文字另开', async () => {
+  const gh = fakeGitHub(); const kv = memKV();
+  const handle = createHandler({ fetch: gh.fetch });
+  const j1 = await (await handle(cbPost(cbBase()), env(kv))).json();
+  const j2 = await (await handle(cbPost(cbBase()), env(kv))).json();
+  assert.equal(j2.ok, true);
+  assert.equal(j2.duplicate, true);
+  assert.equal(j2.issue.number, j1.issue.number);
+  assert.equal(gh.issues.get(1).comments.length, 0, '补发不算 +1');
+  await handle(cbPost(cbBase({ install: 'cb-install-muse-0002' })), env(kv));
+  assert.equal(gh.issues.size, 2, '网页反馈没有报错指纹可比，不跨装机合并');
+});
+
+test('Muse 的反馈：每台装机每天的上限按 Muse 的 PER_INSTALL_DAILY；停收 503；空报告 400', async () => {
+  const gh = fakeGitHub(); const kv = memKV();
+  const handle = createHandler({ fetch: gh.fetch });
+  const e = env(kv, { PER_INSTALL_DAILY: '1' });
+  assert.equal((await handle(cbPost(cbBase({ text: '第一份' })), e)).status, 200);
+  assert.equal((await handle(cbPost(cbBase({ text: '第二份' })), e)).status, 429);
+  assert.ok(![...kv.m.keys()].some((k) => k.includes(':cb:')), '不占 bridge 收件箱的计数');
+  assert.equal((await handle(cbPost(cbBase()), env(memKV(), { PAUSED: '1' }))).status, 503);
+  assert.equal((await handle(cbPost(cbBase({ text: '' })), env(memKV()))).status, 400);
+});
+
+test('不带 distro（bridge 本体）照旧进收件箱、不碰 GitHub；没登记的 distro 也进收件箱并带上 distro', async () => {
+  const noGitHub = async () => { throw new Error('github must not be called'); };
+  const handle = createHandler({ fetch: noGitHub });
+  const kv = memKV();
+  const e = env(kv, { INBOX_TOKEN: 'tok-0123456789' });
+  const { distro: _d, ...plain } = cbBase();
+  assert.equal((await handle(cbPost(plain), e)).status, 200);
+  assert.equal((await handle(cbPost(cbBase({ distro: 'other-distro' })), e)).status, 200);
+  const stored = [...kv.m.entries()].filter(([k]) => k.startsWith('cbi:')).map(([, v]) => JSON.parse(v).report);
+  assert.equal(stored.length, 2);
+  assert.deepEqual(stored.map((x) => x.distro || ''), ['', 'other-distro']);
+  // 没配收件箱时，本体的照旧 503（对方留着补发）
+  assert.equal((await handle(cbPost(plain), env(memKV()))).status, 503);
+});
+
 test('建 Issue 时 labels 被 GitHub 丢掉 → 单独补上', async () => {
   const gh = fakeGitHub({ dropLabels: true });
   const handle = createHandler({ fetch: gh.fetch });

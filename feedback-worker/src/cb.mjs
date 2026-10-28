@@ -8,6 +8,9 @@
 //   POST /v1/cb/inbox/ack     { ids } 写进库之后确认，确认过的从 KV 删掉。
 // 后两个只认 Worker secret INBOX_TOKEN（Authorization: Bearer）；没配这个 secret 时一律 404，像不存在一样。
 // 限流跟 Muse 分开计数（rl:<日>:cb:*）；PAUSED / cfg:paused 停收对这里同样生效。
+// 按发行版分流：推来的反馈带 distro（bridge 本体不带），distros 里登记了这个 id 的，交给它处理、不进收件箱——
+// 现在只有 muse：转成 Muse Bridge 仓库的 GitHub Issue（cb-muse.mjs + worker.mjs 的 submitMuse，限流也记在 Muse 那边）。
+// 没登记的 distro 跟本体一样进收件箱（distro 一起存下）。
 import { cleanCbReport, CB_MAX_BODY } from '../../deploy/muse/feedback/cb-schema.mjs';
 
 const json = (code, o) => new Response(JSON.stringify(o), { status: code, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
@@ -30,10 +33,9 @@ async function authed(req, env) {
 
 const hex = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, '0')).join('');
 
-export function createCbHandler({ now = () => Date.now(), paused = async () => false } = {}) {
+export function createCbHandler({ now = () => Date.now(), paused = async () => false, distros = {} } = {}) {
   async function report(req, env) {
     const kv = env.FEEDBACK_KV;
-    if (!env.INBOX_TOKEN || !kv) return json(503, { error: 'inbox not configured' });
     if (await paused(env)) return json(503, { error: 'paused' });
     if (Number(req.headers.get('Content-Length')) > CB_MAX_BODY) return json(413, { error: 'too large' });
     const raw = await req.text();
@@ -41,6 +43,9 @@ export function createCbHandler({ now = () => Date.now(), paused = async () => f
     let r;
     try { r = cleanCbReport(JSON.parse(raw)); }
     catch (e) { return json(400, { error: String(e?.message || 'bad report') }); }
+    // 别的发行版的反馈按它自己的规则处理（不需要收件箱）
+    if (r.distro && Object.hasOwn(distros, r.distro)) return distros[r.distro](r, env);
+    if (!env.INBOX_TOKEN || !kv) return json(503, { error: 'inbox not configured' });
 
     // 限流：先全部查完、都过了才写。KV 免费档整个账号每天只有 1000 次写入（跟 Muse 那条路共用），这条路又不要凭据，
     // 所以全局份数和体积合在一个键里（"份数:字节数"）——收下一份只写 3 次（2 个计数 + 报告本身），被拒的一次都不写，

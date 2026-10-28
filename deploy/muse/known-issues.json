@@ -47,9 +47,9 @@
       "symptom": "Claude 跑完了也没有系统通知，设置里「任务通知」明明是开着的。",
       "workaround": "在「设置 → 通用 → 任务通知」里把开关关掉再打开一次，浏览器会弹出是否允许通知，选允许。浏览器以前选过「禁止」的话，要到浏览器的网站设置里改回允许。",
       "workaround_en": "In Settings → General → Task notifications, switch it off and on again; the browser then asks for permission. If you blocked notifications earlier, allow them again in the browser's site settings.",
-      "cause": "只有在设置里把开关拨到「开」的那一下才会请求浏览器权限。",
+      "cause": "只有在设置里把开关拨到「开」的那一下才会请求浏览器权限。v0.3.0 起换成 bridge 公开版的新网页：网页不再向浏览器请求通知权限，「任务通知」改成「设置 → 通用 → 通知」总开关（默认开）加「设置 → Claude → 通知」分项；浏览器已经允许过这个网址的通知才会弹，想要就到浏览器的网站设置里把它改成允许（说明书 07-settings.md「通用」）。",
       "since": null,
-      "fixed_in": null,
+      "fixed_in": "v0.3.0",
       "notify": false,
       "issue": null
     },

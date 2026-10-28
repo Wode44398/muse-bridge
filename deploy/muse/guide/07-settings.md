@@ -51,6 +51,7 @@
 | **「订阅号池」**（Subscription Pool）——只有管理员 | 服务器上的 Claude 订阅账号，每个号的 5 小时 / 每周用量，**「添加账号」**（Add Account）；点一个号进去能切换、编辑、调顺序、删除。见 06-users-admin.md「Claude 账号」 |
 | **「模型服务」**（Provider）→ **「自定义 API」**（Custom API） | 给 Claude 页接别家的模型，见下面「自定义 API」 |
 | **「撞上限额时」**（When you hit a usage limit） | **「限额重置后自动继续」**（Auto-continue when limits reset）：撞上 5 小时限额后，额度恢复时自动接着跑完这一轮，默认开；管理员还有 **「额度用尽自动换号」**（Switch accounts when a limit is reached） |
+| **「服务意外重启时」**（If the service restarts unexpectedly） | **「自动继续被中断的对话」**（Resume interrupted conversations）：服务中途崩溃、被结束或 VM 重启打断了正在跑的对话时，服务恢复后约 15 秒自动让 Claude 从中断的地方接着做，默认开，按账号各自设置。同一件事最多连着续 3 次；中断超过 12 小时、或你已经先发了消息就不续。关掉后只留一句「这一轮没跑完」，要你自己说「继续」（见 02-claude-code.md「Claude 在干活的时候」） |
 | **「新会话默认」**（New session defaults） | **「权限模式」**（Permission mode）（管理员默认「自动」，其他人默认「接受编辑」）、**「输出风格」**（Output style）；能跑命令的身份还有 **「用工作树」**（Use a worktree）（只管这台设备） |
 | **「对话」**（Chat） | **「输入建议」**（Prompt suggestions）、**「对话内交互图表」**（Inline visualizations）、**「动态工作流」**（Dynamic workflows）（关了用不了 Ultracode）和 **「子 agent 调度偏好」**（Subagent dispatch preferences）、**「消息被拦时自动换模型」**（Switch models when a message is flagged）、**「批准计划时可清空上下文」**（Offer to clear context when approving a plan）、**「Claude 提问无人回答时」**（When Claude’s question goes unanswered）（一直等 / 5 / 10（默认）/ 30 分钟后继续）、**「回复语言」**（Response language）（跟随对话 / 简体中文 / English）；在用量弹层里拖过自动压缩点的，这里多一行 **「自动压缩点」**（Auto-compact point）可以恢复默认 |
 | **「会话协作」**（Session collaboration） | **「Claude 发起新会话」**（New sessions started by Claude）：先问我（默认）/ 直接开始 / 只在我要求时（能跑命令的身份才有）；管理员还有 **「其它会话发来的消息」**（Messages from other sessions） |
@@ -142,9 +143,20 @@ dimensio 也会在等你批准、等你回答、交了计划、跑完时通知�
 
 **「提交反馈」**（Send feedback）：弹出一张表单，写下遇到的问题、想要的功能（**「写下你的反馈…」**（Write your feedback…）），可以 **「添加图片或视频」**（Add image or video），点 **「提交」**（Submit）。桌面客户端里是左栏的 **「反馈」** 分区。
 
-- **在这台 Muse 上，反馈只留在服务器上**，不会自动发给开发者：表单下面写着「反馈只留在这台服务器上…」，提交后显示 **「已记下，服务器管理员会看到。」**（Saved. The server admin will see it.）。每条存成一个文件，在 VM 的 `/home/hatch/bridge-srv/feedback/reports/` 里，Muse 可以读。
-- 想报给 Muse Bridge 的开发者：直接跟 Muse 说，Muse 先判断是不是已知问题 / 配置问题，再出草稿给用户看，用户同意才发（`../MUSE.md` 第 8 节）。报告只含版本、服务状态和程序自己的报错，不含对话、文件、key 和地址，不用 GitHub 账号。
-- 出错时自动上报（服务崩溃、更新失败这类）没有网页上的开关：装的时候问过用户，之后让 Muse 用 `feedback-auto on` / `feedback-auto off` 改。
+- **每条反馈都先存在这台服务器上**：VM 的 `/home/hatch/bridge-srv/feedback/reports/` 里，每条一个文件，Muse 可以直接读（推送没开时，管理员打开表单会在下面看到这个位置）。
+- **要不要同时发给开发者，看两道开关**，缺一道就只留在服务器上（提交后显示 **「已记下，服务器管理员会看到。」**（Saved. The server admin will see it.））：
+  1. 管理员在表单底部打开 **「把用户反馈同时发给 bridge 开发者」**（Share user feedback with the Bridge developer）。默认关，只有管理员看得到；关掉时还没发出去的会一并取消。
+  2. 打开之后，每个人提交时表单里多一行 **「这条也发给 bridge 开发者」**（Also send this to the Bridge developer），默认不勾，每一条都要自己勾了才发。
+- 两道都开了：提交后显示 **「已记下，也会转给 bridge 开发者。」**（Saved. It will also be sent to the Bridge developer.）。**在 Muse 上，「bridge 开发者」指的是 Muse Bridge 的维护者**：这条反馈经 Muse Bridge 的反馈服务提交成 **Muse Bridge 在 GitHub 上的公开 Issue**——谁都能看到。发出前去掉账号名和服务器地址，再把令牌、邮箱、网址、路径、IP 打码；**图片和视频不会公开**（表单上写着图片会原样发出，在 Muse 上只在 Issue 里记个数，图片本身留在服务器上）。所以别在文字里写隐私。发不出去（网络、审核卡没批）会自动补发。
+- 出错时自动上报（服务崩溃、更新失败这类）是另一回事：没有网页上的开关，装的时候问过用户，之后让 Muse 用 `feedback-auto on` / `feedback-auto off` 改。它和上面的两道开关互不影响。
+
+### 让 Claude 看看是不是 bug（「问 Claude」）
+
+- 界面上弹出红字报错时，提示条右边有 **「问 Claude」**（Ask Claude）：点一下会开一个新的 Claude 对话，把报错和出错的界面填进输入框，补一句就能发。Claude 页对你开着才有这个按钮。
+- 也可以直接在 Claude 对话里说「是不是出 bug 了」。Claude 先看现场：版本、服务已运行多久、上报会发到哪。**只有管理员身份它才看得到服务器最近的报错日志和崩溃记录**；成员看不到服务端日志（里面有别人的活动），Claude 就靠你的描述、截图和它自己复现。
+- 是操作或配置问题，它直接帮你解决，不上报。认定是 bug 时，它会先跟你说清要报什么（标题、现象、复现步骤、相关的几行日志）、发到哪，**你同意了才上报**。去向跟上面的表单一样：服务器上的反馈库总存一份（标着「经 Claude 诊断后上报」）；管理员开着「把用户反馈同时发给 bridge 开发者」、你也同意发出去时，才提交成 Muse Bridge 的公开 GitHub Issue。你是管理员而开关关着时，Claude 会问你要不要顺手打开它。
+- dimensio 也能帮你看是不是 bug，经同样的流程上报。
+- 也可以直接跟 Muse 说「报告一个 bridge 的问题」：Muse 先判断是不是已知问题 / 配置问题，再出草稿给你看，你同意才发（`../MUSE.md` 第 8 节）。Muse 的报告只带版本、服务状态和程序自己的报错，不含对话、文件、key 和地址，不用 GitHub 账号。三条路最后都到同一个 GitHub 仓库，同一件事报一次就够。
 
 ## 关于
 

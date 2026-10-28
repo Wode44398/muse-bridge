@@ -295,8 +295,12 @@ edit_config() {
 # 每次安装 / 更新都写一遍（幂等）。插件开关只在第一次对齐时关，之后尊重用户在设置里的选择。
 apply_bridge_declarations() {
   local plug="$RELS/current/deploy/muse/plugin" pj="$DATA/plugins.json" stamp="$OPS/aligned-bridge-public" first=false hint
-  # 发行版：品牌 Muse Bridge、没选过语言时跟浏览器（前端在启动前经 window.__DISTRO__ 读）
-  edit_config '.distro = {id:"muse", brand:"Muse Bridge", langDefault:"browser"}'
+  # 发行版：品牌 Muse Bridge、没选过语言时跟浏览器（前端在启动前经 window.__DISTRO__ 读）。
+  # 早期 Muse 把同样的声明写在 edition 对象里，删掉；字符串的 edition（bridge 本体 deploy-profile 的 host / server）不碰
+  edit_config '.distro = {id:"muse", brand:"Muse Bridge", langDefault:"browser"} | if (.edition | type) == "object" then del(.edition) else . end'
+  # 问题反馈的中继：bridge 的反馈推送（网页「提交反馈」、Claude 诊断后上报）发到 Muse 的 Worker，带 distro=muse，
+  # Worker 转成 muse-bridge 仓库的 Issue。只写地址；推送开关 feedbackUpstream 由管理员在网页设置里自己打开（默认关，不在这里写）
+  if [ -n "$FEEDBACK_HOST_DEFAULT" ]; then edit_config ".feedbackRelay = \"https://$FEEDBACK_HOST_DEFAULT\""; fi
   # 多人 / 单人由 set-users 管：控制台里的开关只读，提示用户在 Muse 里说
   if [ "$UI_LANG" = en ]; then hint='Managed by Muse: say “make bridge multi-user” or “make bridge just for me” in Muse'
   else hint='由 Muse 管理：在 Muse 里说「把 bridge 改成多人用」或「改成只自己用」'; fi
@@ -320,8 +324,9 @@ apply_bridge_declarations() {
     | if $first then reduce ("phone-control", "phone-files", "browser", "edge", "keep-awake") as $id
         (.; .plugins[$id] = ((.plugins[$id] // {}) + {enabled: false})) else . end' "$pj" > "$pj.new" \
     && chown "$SVC_USER:$SVC_USER" "$pj.new" && chmod 600 "$pj.new" && mv "$pj.new" "$pj"
-  # 旧数据挪位置：Muse 自己的反馈工具从 feedback/ 搬到 muse-feedback/（feedback/ 归 bridge 的反馈插件）
-  if [ -d "$DATA/feedback" ] && [ ! -e "$DATA/muse-feedback" ]; then
+  # 旧数据挪位置：Muse 自己的反馈工具从 feedback/ 搬到 muse-feedback/（feedback/ 归 bridge 的反馈插件）。
+  # 只在第一次对齐时搬：之后 feedback/ 里的 install-id、outbox/ 是 bridge 反馈推送自己的，不能当成 Muse 的旧数据挪走
+  if $first && [ -d "$DATA/feedback" ] && [ ! -e "$DATA/muse-feedback" ]; then
     install -d -m 0700 -o "$SVC_USER" -g "$SVC_USER" "$DATA/muse-feedback"
     local f; for f in install-id settings.json errors.json sent.json drafts outbox; do
       if [ -e "$DATA/feedback/$f" ]; then mv "$DATA/feedback/$f" "$DATA/muse-feedback/$f"; fi
@@ -635,7 +640,8 @@ cmd_install() {
   switch_to "$REPO" "$mode"
   wait_public
   # 用户自己跑的安装（不是 update / set-agents 调进来的）才放行：自动更新多在夜里，没人批，白等
-  # 用户在开工前答过「出错时要不要自动上报」：记进服务端的反馈设置（网页设置 → 反馈里也能改）
+  # 用户在开工前答过「出错时要不要自动上报」：记进 Muse 反馈工具的设置（muse-feedback/settings.json；网页里没有这个开关，
+  # 之后用 feedback-auto 改）。它跟网页里的「把用户反馈同时发给 bridge 开发者」（config.feedbackUpstream）是两回事，不联动
   if [ -n "$auto_report" ]; then feedback_cli auto "$auto_report" || warn "自动上报的设置没写成，之后可以用 feedback-auto $auto_report 再设"; fi
   [ "$FROM_SWITCH" = 1 ] || ALLOW_WAIT=120 allow_sites || true
   say "完成"
@@ -738,6 +744,12 @@ configured_sites() {
   case ",${AGENTS:-claude,dimensio}," in *,dimensio,*) echo html.duckduckgo.com ;; esac   # dimensio 的联网搜索兜底
   # 问题反馈的提交通道：装的时候就放行，用户报问题时才不用再批一张卡
   [ -z "$FEEDBACK_HOST_DEFAULT" ] || echo "$FEEDBACK_HOST_DEFAULT"
+  # GitHub：看门狗查新版本（latest.json）、bridge 的插件市场（签名索引与插件包）都在 GitHub Release 上，后台定时去拉，
+  # 没人在场批卡就会失败。Release 资产先 302 到 release-assets.githubusercontent.com，两个都要放行
+  echo github.com
+  echo release-assets.githubusercontent.com
+  # npm 源：更新（含夜里的自动更新）要在后台 npm ci，没放行就装失败
+  echo registry.npmjs.org
   if [ -f "$env" ]; then
     while IFS= read -r line; do
       name="${line%%=*}"; val="${line#*=}"

@@ -109,13 +109,21 @@
     { "id": "q40", "q": "用这个要花钱吗？", "chapters": ["08-faq.md"],
       "facts": ["Muse Bridge 本身免费开源", "Claude Code 用用户自己的 Claude 订阅", "dimensio 按各家 API 的价格计费，dimensio 里不显示花了多少钱"] },
     { "id": "q41", "q": "我在网页设置里点「提交反馈」写了个问题，开发者能收到吗？", "chapters": ["07-settings.md", "MUSE.md"],
-      "facts": ["在这台 Muse 上，网页里的反馈只留在服务器上（管理员 / Muse 能看到），不会自动发给开发者", "想报给开发者就跟 Muse 说，Muse 先判断是不是已知问题，再出草稿给用户看，同意了才发"],
-      "forbid": ["网页里提交的反馈会直接变成 GitHub Issue"] },
+      "facts": ["每条反馈都先存在服务器上（管理员 / Muse 能看到）", "默认不发给开发者：要管理员在反馈表单里打开「把用户反馈同时发给 bridge 开发者」，提交时再勾「这条也发给 bridge 开发者」，两道都开才发", "在 Muse 上发出去 = Muse Bridge 仓库的公开 GitHub Issue，文字脱敏，图片不公开", "也可以跟 Muse 说，Muse 出草稿给用户看，同意了才发"],
+      "forbid": ["网页里提交的反馈一定会直接变成 GitHub Issue", "网页里的反馈永远发不到开发者那里"] },
     { "id": "q42", "q": "控制台里那个「开放给其他人使用（多用户）」开关点不动，怎么改成多人用？", "chapters": ["06-users-admin.md", "MUSE.md"],
       "facts": ["这台 Muse 上这个开关是只读的，由 Muse 管理", "跟 Muse 说「把 bridge 改成多人用」，Muse 跑 set-users multi"] },
     { "id": "q43", "q": "Can I use the Windows desktop app with my Muse Bridge?", "chapters": ["01-access.md", "08-faq.md"],
       "facts": ["Yes, the bridge Windows desktop client can connect to this server", "The full desktop experience (title bar, quick-ask window, registering the PC as a device Claude can operate) needs your own domain (a permanent address)", "On a temporary trycloudflare address the client only works as a web window"] },
     { "id": "q44", "q": "dimensio 的设置在哪？我在右上的设置里只看到一个开关", "chapters": ["03-dimensio.md", "07-settings.md"],
-      "facts": ["dimensio 的设置在 dimensio 页侧栏最底下的「设置」里（API Key、记忆、权限规则、工作空间、访问范围、外观、诊断）", "总设置里的 dimensio 那一页只有管理员的启用开关"] }
+      "facts": ["dimensio 的设置在 dimensio 页侧栏最底下的「设置」里（API Key、记忆、权限规则、工作空间、访问范围、外观、诊断）", "总设置里的 dimensio 那一页只有管理员的启用开关"] },
+    { "id": "q45", "q": "VM 重启之后，Claude 在跑的那个任务是不是就断了？要我自己让它继续吗？", "chapters": ["02-claude-code.md", "07-settings.md"],
+      "facts": ["服务恢复后大约 15 秒会自动让 Claude 从中断的地方接着做，不用自己说「继续」", "同一件事最多连着自动续 3 次；中断超过 12 小时、或已经先发了新消息就不续", "在「设置 → Claude → 服务意外重启时 → 自动继续被中断的对话」里能关，默认开"],
+      "forbid": ["必须自己说「继续」才会接着做"] },
+    { "id": "q46", "q": "设置里「功能扩展」提示有插件更新，会自己装上吗？这跟「发现」里的插件是一回事吗？", "chapters": ["05-customize.md"],
+      "facts": ["不会自动装，只提示，点「更新」才装", "「功能扩展」里的「插件市场」是 bridge 官方发布、签过名的功能插件；「发现」里是 Anthropic 官方插件目录里给 Claude Code 用的插件，不是一回事", "装了不满意可以回退，内置功能换上的市场版可以恢复内置版"] },
+    { "id": "q47", "q": "界面上弹了个红字报错，旁边有个「问 Claude」，点了会怎样？会把东西发出去吗？", "chapters": ["07-settings.md"],
+      "facts": ["会开一个新的 Claude 对话，把报错和出错的界面填进输入框，补一句就能发", "Claude 先看现场判断是不是 bug；只有管理员身份它才看得到服务器的报错日志", "要上报时先跟你说清报什么、发到哪，你同意才报；服务器上总存一份，管理员开了推送才会提交成 Muse Bridge 的公开 GitHub Issue"],
+      "forbid": ["点了就会自动把报错发给开发者"] }
   ]
 }

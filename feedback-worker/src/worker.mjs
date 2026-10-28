@@ -9,8 +9,10 @@
 // 防滥用：每台装机每天、全局每天各有上限；PAUSED=1 或 KV 里 cfg:paused=1 一键停收（客户端会存着之后补发）。
 import { cleanReport } from '../../deploy/muse/feedback/schema.mjs';
 import { issueTitle, issueBody, plusOneBody, issueLabels } from '../../deploy/muse/feedback/render.mjs';
-// claude-bridge 反馈收件箱（/v1/cb/*，不进 GitHub、进 KV 私有收件箱）：见 cb.mjs
+// claude-bridge 反馈收件箱（/v1/cb/*，不进 GitHub、进 KV 私有收件箱）：见 cb.mjs。
+// 其中 Muse Bridge 推来的（distro: 'muse'）例外：转成 Muse 的报告，跟 /v1/report 走同一条路开 Issue（cb-muse.mjs）
 import { createCbHandler } from './cb.mjs';
+import { museReportFromCb } from './cb-muse.mjs';
 
 const MAX_BODY = 64 * 1024;
 
@@ -48,7 +50,18 @@ export async function appJwt(appId, pem, nowSec) {
 
 export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = () => Date.now() } = {}) {
   let tokenCache = null;   // { token, exp }（同一个 isolate 里复用）
-  const handleCb = createCbHandler({ now, paused });
+  const handleCb = createCbHandler({
+    now, paused,
+    distros: {
+      // Muse Bridge 网页里的「提交反馈」与 Claude 上报：同一份报告补发时（指纹相同）落回同一个 Issue，不给自己 +1
+      muse: async (cb, env) => {
+        let r;
+        try { r = await museReportFromCb(cb); }
+        catch (e) { return json(400, { error: String(e?.message || 'bad report') }); }
+        return submitMuse(r, env, { selfSeen: true });
+      },
+    },
+  });
 
   async function installationToken(env) {
     if (tokenCache && tokenCache.exp - now() > 5 * 60_000) return tokenCache.token;
@@ -94,7 +107,8 @@ export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = ()
     return hit || null;
   }
 
-  async function report(r, env) {
+  // selfSeen：建了新 Issue 就记下「这台装机已经算过」，它再补发同一个指纹只回 duplicate、不在自己的 Issue 下 +1
+  async function report(r, env, { selfSeen = false } = {}) {
     const repo = env.GITHUB_REPO;
     if (r.kind === 'security') {
       // 私密漏洞报告（仓库已开 Private vulnerability reporting）；不行再退到维护者私有的草稿公告
@@ -127,7 +141,17 @@ export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = ()
     const want = issueLabels(r).filter((l) => !got.has(l));
     if (want.length) { try { await gh(env, 'POST', `/repos/${repo}/issues/${x.body.number}/labels`, { labels: want }); } catch {} }
     if (r.fp && env.FEEDBACK_KV) await env.FEEDBACK_KV.put(`fp:${r.fp}`, String(x.body.number));
+    if (selfSeen && r.fp && env.FEEDBACK_KV) await env.FEEDBACK_KV.put(`fpi:${r.fp}:${r.install}`, '1', { expirationTtl: 90 * 86400 });
     return json(200, { ok: true, issue: { number: x.body.number, url: x.body.html_url } });
+  }
+
+  // 一份干净的 Muse 报告（cleanReport 的产物）：限流 → 查重 / 建 Issue。/v1/report 与 Muse 发来的 /v1/cb/report 共用
+  async function submitMuse(r, env, opts) {
+    const day = new Date(now()).toISOString().slice(0, 10);
+    if (!(await bump(env, `rl:${day}:all`, Number(env.DAILY_CAP) || 300))) return json(429, { error: 'daily limit reached', retryAfter: 'tomorrow' });
+    if (!(await bump(env, `rl:${day}:i:${r.install}`, Number(env.PER_INSTALL_DAILY) || 10))) return json(429, { error: 'too many reports from this install today', retryAfter: 'tomorrow' });
+    try { return await report(r, env, opts); }
+    catch (e) { return json(502, { error: String(e?.message || e).slice(0, 200) }); }
   }
 
   return async function handle(req, env) {
@@ -146,13 +170,7 @@ export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = ()
     // cleanReport 就是第二遍脱敏：服务器那边漏了什么，这里按同一套规则再抹一遍
     try { r = cleanReport(JSON.parse(raw)); }
     catch (e) { return json(400, { error: String(e?.message || 'bad report') }); }
-
-    const day = new Date(now()).toISOString().slice(0, 10);
-    if (!(await bump(env, `rl:${day}:all`, Number(env.DAILY_CAP) || 300))) return json(429, { error: 'daily limit reached', retryAfter: 'tomorrow' });
-    if (!(await bump(env, `rl:${day}:i:${r.install}`, Number(env.PER_INSTALL_DAILY) || 10))) return json(429, { error: 'too many reports from this install today', retryAfter: 'tomorrow' });
-
-    try { return await report(r, env); }
-    catch (e) { return json(502, { error: String(e?.message || e).slice(0, 200) }); }
+    return submitMuse(r, env);
   };
 }
 

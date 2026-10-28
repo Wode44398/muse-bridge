@@ -8,6 +8,15 @@
 | **连接器**（Connector） | 一个外部 MCP 服务，给 agent 增加工具（比如连 GitHub、数据库）。本地命令（stdio）或远程地址（HTTP / SSE）都行 | Claude Code、dimensio（dimensio 要在详情里勾上） |
 | **插件**（Plugin） | Claude Code 专用的一整包：命令、子 agent、技能、钩子、MCP 打包在一起 | 只有 Claude Code |
 
+**两个「市场」别搞混**（都在 **「设置 → 扩展」**（Settings → Extensions）里，但不是一回事）：
+
+| | 在哪 | 里面是什么 | 装上之后 |
+|---|---|---|---|
+| Anthropic 的官方插件目录 | **「插件」**（Plugins）/ **「技能」** / **「连接器」** 标签里的 **「发现」**（Discover） | Claude Code 的插件、技能、连接器（Anthropic 和社区发布的几百个） | 给 agent 用：Claude 从下一条消息起多了这些命令、技能、工具 |
+| bridge 的 **「插件市场」**（Plugin market） | **「功能扩展」**（Modules）标签里的「插件市场」一块 | Muse Bridge 自己的功能插件（bridge 官方发布并签名），以及内置功能的修复版 | 给这台服务器加功能、修毛病：不用等整个程序升级 |
+
+用户说「装个插件」时先问清是哪一种：想让 Claude 会做某件事 → 官方插件目录；Muse Bridge 提示某个功能插件有更新 → 插件市场。
+
 - **只有管理员能装、能管**。装的时候选生效范围（见下面「我自用 / 全服统一」）：
   - **「我自用」**（Just me）：只对管理员自己的对话生效（管理员的 Claude 对话、定时任务、dimensio）；
   - **「全服统一」**（Everyone）：给服务器上所有成员加装，注册账号的 Claude 会话和定时任务也会加载，管理员自己也用得上。
@@ -32,9 +41,9 @@
 - 四个标签：**「技能」**（Skills）/ **「连接器」**（Connectors）/ **「插件」**（Plugins）/ **「功能扩展」**（Modules）。前三个再切 **「我的」**（Mine）——装好的，和 **「发现」**（Discover）——可以装的。
 - 搜索框、**「筛选」**（Filter）、**「排序」**（Sort），以及 **「添加」**（Add）菜单：**「上传技能」**（Upload skill）、**「添加连接器」**（Add connector）、**「上传插件」**（Upload plugin）、**「管理市场…」**（Manage marketplaces…）、**「刷新市场」**（Refresh marketplaces）。
 
-### 「发现」：官方市场
+### 「发现」：Anthropic 的官方插件目录
 
-- 列的是 Anthropic 的官方市场（官方插件目录、知识工作插件、Agent Skills 三个来源，几百个插件，以及从里面拆出来的单独技能和连接器）。「筛选」里可以按来源、分类挑。
+- 列的是 Anthropic 的官方市场（跟「功能扩展」里 bridge 的「插件市场」不是一回事，见上面；官方插件目录、知识工作插件、Agent Skills 三个来源，几百个插件，以及从里面拆出来的单独技能和连接器）。「筛选」里可以按来源、分类挑。
 - 第一次打开「发现」时，服务器会自动从 GitHub 拉取市场（显示「正在从 GitHub 拉取官方市场…」）；以后点 **「刷新市场」** 更新。**「管理市场…」** 里还能添加别的 GitHub 市场（仓库里要有 `.claude-plugin/marketplace.json`）。
 - **在 Muse 上第一次拉取可能弹 github.com 的审核卡**：没人批就会失败（页面上会写哪个来源没拉下来，有「重试」）。提前让 Muse 跑 `bash /home/hatch/bridge-ops/bootstrap.sh allow-sites github.com`，提醒用户选「总是允许此站点」。
 - 每张卡片上的 **「添加」**（Add）就是装上（变成 **「已添加」**（Added））。外部仓库的插件添加时才从 GitHub 下载。第三方插件先看看它的主页再装。
@@ -60,11 +69,20 @@
 
 ## 「功能扩展」标签（一般不用动）
 
-- 这里是 Muse Bridge 自己的功能开关，分三块：
+- 这里是 Muse Bridge 自己的功能开关，从上到下：
   - **Agent**：agent 扩展（这台 Muse 上只有 dimensio）。装、卸 dimensio 别在这里点，让 Muse 跑 `set-agents`（见 06-users-admin.md）。
   - **「功能」**（Features）：随程序一起装好的内置功能（定时任务、分享链接、设备、反馈……），按分类逐项开关。这台 Muse 装好时已经关掉了在 VM 上用不了的几项——手机操控、手机文件、内置浏览器、主机的 Edge、保持唤醒——**别把它们打开**，打开了也用不了。
-  - **「第三方插件」**（Third-party plugins）：里面有一个 **Muse Bridge** 插件，它提供设置里的「安卓 App」那一页和项目手册里的「Muse 部署」一章，**别停用、别取消登记**。用户自己要装第三方插件（**「从 GitHub 安装插件」**（Install a plugin from GitHub）、**「上传 zip」**（Upload zip））要谨慎：插件和服务同进程、权限相同，只装信得过的。
+  - **「插件市场」**（Plugin market）：bridge 官方发布、签过名的功能插件，一点就装；内置功能（定时任务、分享链接这些）的修复也可能从这里单独发。下载后逐个校验，对不上就不装。刚上线，里面的插件还很少。
+  - **「已安装的插件」**（Installed plugins）：里面有一个 **Muse Bridge** 插件，它提供设置里的「安卓 App」那一页和项目手册里的「Muse 部署」一章，**别停用、别取消登记**。用户自己要装第三方插件（**「上传 zip」**（Upload zip）、**「GitHub 地址」**（GitHub repo）→ **「从 GitHub 安装插件」**（Install a plugin from GitHub））要谨慎：插件和服务同进程、权限相同，只装信得过的。
 - 有的开关改完要重启才生效，页面顶部会出现 **「有改动等重启生效」**（Changes take effect after a restart），可以选空闲时重启。
+
+### 插件市场：更新只提示，不自动装
+
+- 服务器启动 1 分钟后查一次市场，之后每 6 小时查一次；打开「功能扩展」时也会顺手刷新（标题旁的 **「检查更新」**（Check for updates）手动查）。
+- 有新版本时，「功能扩展」页顶上出现一块 **「{n} 个插件有更新」**（{n} plugin updates），写着 **「只提示，不会自动装」**（Nothing installs automatically）；设置里的「扩展」那一行和「功能扩展」标签上也会出个数字角标。点 **「更新」**（Update）才会装，不点就一直用现在的版本。
+- 装完不满意：插件详情里能 **「回退」**（Roll back）到上一版，或在 **「插件市场里的版本」**（Versions in the plugin market）里挑一个指定版本装；内置功能换上了市场版的，还能 **「恢复内置版」**（Restore built-in version）。市场版起不来时会自动退回内置版。有的要重启才生效，页面会提示。
+- 只有管理员能装、能更新。
+- **在 Muse 上**：市场的索引和插件包都放在 GitHub 的发布页上，服务器在后台去取，要先放行 `github.com` 和 `release-assets.githubusercontent.com`（让 Muse 跑 `allow-sites github.com release-assets.githubusercontent.com`，用户选「总是允许此站点」；新装时安装脚本已经一起放行）。页面上出现「插件市场没拉下来：…」多半就是审核卡没人批。
 
 ## 常见问题
 

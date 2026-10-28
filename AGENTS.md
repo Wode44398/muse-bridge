@@ -28,7 +28,9 @@
 
 不改公开版的代码，而是由 `deploy/muse/bootstrap.sh` 的 `apply_bridge_declarations` 在装机 / 更新时写：
 
-- `config.json` 的 `distro`：品牌 Muse Bridge、没选过语言时跟浏览器；
+- `config.json` 的 `distro`：品牌 Muse Bridge、没选过语言时跟浏览器（顺手删掉早期写的 `edition` 对象）；
+- `config.json` 的 `feedbackRelay`：bridge 的反馈推送发到 Muse 的反馈中继（`feedback-worker/`），带 `distro: "muse"`，中继转成本仓库的 Issue；
+  推送开关 `feedbackUpstream` 不写（默认关，管理员在网页里自己开）；
 - 服务单元的环境变量：`BRIDGE_AUDIENCE_HINT`（控制台的多人开关只读，提示在 Muse 里说）、`BRIDGE_PROXY_FORCED`（模型服务一律走出站代理）、
   `BRIDGE_MODULES_HIDE=vertex,codex`、`DIMENSIO_BROWSER=off`、`BRIDGE_UPDATE_HINT`、小内存旋钮等；
 - `plugins.json`：登记 Muse 插件，第一次对齐时关掉 VM 上用不了的内置功能（phone-control、phone-files、browser、edge、keep-awake）；
@@ -48,7 +50,9 @@
 - 在 Linux 上执行的脚本和单元文件必须是 LF（见 `.gitattributes`）。
 - 文档、注释、提交信息用中文；不要在代码、注释或测试里写任何个人信息（真实姓名、邮箱、个人路径、私有域名、账号）。
 - 问题报告只收 `deploy/muse/feedback/schema.mjs` 白名单里的字段；要往报告里加东西，先加进白名单并想清楚它会不会带出隐私（报告是公开的 GitHub Issue）。
-  网页里 bridge 自带的「提交反馈」在 Muse 上只留在服务器本地，不走这条通道。
+  网页里 bridge 自带的「提交反馈」和 Claude 诊断上报（`feedback.*`）先落在服务器本地（数据目录 `feedback/`）；管理员开了推送、提交人同意时，
+  经 bridge 的推送通道发到中继的 `/v1/cb/report`，中继按 `distro: "muse"` 转成 Muse 的报告（`feedback-worker/src/cb-muse.mjs`），
+  再走同一套白名单、脱敏、限流、建 Issue；图片不进 Issue。Muse 自己的报告工具的数据在 `muse-feedback/`，两边不共用目录。
 
 ## 界面多语言（简体中文 / English）
 
