@@ -2,6 +2,32 @@
   "_说明": "已知问题清单（维护者改这里）。推到 main 后，.github/workflows/known-issues.yml 把它算成「影响哪些版本」写进最新 Release 的 latest.json（known_issues 字段）；各台 Muse 的看门狗每 6 小时读一次，bootstrap.sh known-issues 能列出影响当前版本的条目，Muse 回答问题、判断是不是 bug 之前先查它。since / fixed_in 填版本标签（v0.1.0-beta.12 这种），不填 since = 从最早的版本起，不填 fixed_in = 还没修好；fixed_in 写了但那个版本还没发 = 当作还没修好。notify=true 的条目，看门狗会主动告诉受影响的用户一次。",
   "issues": [
     {
+      "id": "v030-install-refused",
+      "title": "新装 v0.3.0 时，Muse 读完安装说明书后拒绝安装（说那份文件没通过安全检查）",
+      "title_en": "Installing v0.3.0 fresh: Muse reads the install guide and refuses to continue (says the file didn't pass its safety check)",
+      "symptom": "照 README 的开场提示词安装：下载、校验、解压都成功，Muse 读完 deploy/muse/MUSE.md 后说这份文件没有通过安全检查，不按它的步骤装。已经装好的、从旧版本更新上来的不受影响。",
+      "workaround": "等 v0.3.1 发布后，把开场提示词原样再发一次（它总是下载最新的发布包）。",
+      "workaround_en": "Once v0.3.1 is out, send the opening prompt again as is (it always downloads the latest release).",
+      "cause": "v0.3.0 的说明书里有几句在教 agent 引导用户把网站审核卡选成「总是允许此站点」，还有标着「给你自己看的」「不用去提醒用户」的段落；Muse 的安全检查把它们当成诱导放宽权限、对用户隐瞒的提示注入。v0.3.1 改成中性说明：会访问哪些网站、各个选项的后果，由用户自己决定。",
+      "since": "v0.3.0",
+      "fixed_in": "v0.3.1",
+      "notify": false,
+      "issue": 7
+    },
+    {
+      "id": "quick-tunnel-403",
+      "title": "临时地址申请不下来：muse-tunnel 反复报 quick tunnel provisioning failed with status 403",
+      "title_en": "No temporary address: muse-tunnel keeps logging \"quick tunnel provisioning failed with status 403\"",
+      "symptom": "装好后本地健康 200、服务都在，但结果块里没有公网地址、公网健康 000；muse-tunnel 的日志反复出现 quick tunnel provisioning failed with status 403。网站放行那一行显示都已放行。",
+      "workaround": "换成自己的域名（固定地址，让 Muse 按说明书「用自己的域名」一节配）：固定地址用隧道令牌连接，不经过申请临时地址的接口。也可以过一段时间再让 Muse 跑 systemctl restart muse-tunnel 试试。",
+      "workaround_en": "Switch to your own domain (permanent address; ask Muse to follow the \"own domain\" section of the guide): it connects with a tunnel token and doesn't go through the temporary-address service. You can also wait a while and have Muse run systemctl restart muse-tunnel.",
+      "cause": "403 是 Cloudflare 申请临时地址的接口（api.trycloudflare.com）直接拒绝的：出站代理已经放行、请求到了 Cloudflare，被它按出口 IP 拒绝或限流。这台 VM 的出口 IP 由平台决定，部署脚本这边没有办法修。",
+      "since": null,
+      "fixed_in": null,
+      "notify": false,
+      "issue": 6
+    },
+    {
       "id": "quick-tunnel-get-stream",
       "title": "临时地址下：Claude 页的终端一直显示「连接终端…」，dimensio 的回复要等整轮做完才一次出来",
       "title_en": "On a temporary address: the terminal on the Claude page stays on \"Connecting to terminal…\", and dimensio replies only appear when the whole turn is done",
