@@ -6,6 +6,7 @@ import { defineGroup, defineOp, OpError } from '../registry.mjs';
 import { kernel } from '../../plugins/state.mjs';
 import { linkLocal, uninstallPlugin, reloadPlugin, PluginError } from '../../plugins/discover.mjs';
 import { installFromGithub, checkUpdate } from '../../plugins/github.mjs';
+import { marketOverview, installFromMarket, rollbackInstalled, restoreBuiltinVersion } from '../../plugins/market.mjs';
 import { scaffoldPlugin, EXAMPLES, ScaffoldError } from '../../plugins/scaffold.mjs';
 import path from 'node:path';
 import { pluginView, pluginsOverview, riskyGrants } from '../../routes/plugins.mjs';
@@ -154,6 +155,61 @@ defineOp({
   access: 'read', need: ['server.manage'],
   params: { id: { type: 'string', required: true, desc: '插件 id' } },
   handler: (ctx, args) => wrap(async () => { must(args.id); return checkUpdate(kernel, args.id); }),
+});
+
+defineOp({
+  name: 'plugins.market', title: '看官方插件市场',
+  desc: '官方插件市场（签过名的索引，只有 bridge 官方的插件）：每项 id、name、description、builtin（true = 内置功能的市场版，装上盖住内置实现）、'
+    + 'state（none 没装 / installed 装了 / builtin 用着内置版 / override 用着市场版 / taken id 被本机目录占了）、current（已装版本）、'
+    + 'latest（这台 bridge 能装的最新版：version、notes 更新说明、restart 要不要重启）、update（有没有更新）、versions（全部版本，problem 非空 = 这台装不了）、'
+    + 'blocked（latest 为空时这台为什么一版都装不了，多半是 bridge 版本不合）、rollback（回收区里能回退到的版本）。updates 汇总有更新的。'
+    + 'market.error 是最近一次拉取的错误（有缓存时照样列出）；market.off=true = 部署方在 config.json 关掉了市场；market.official=false = 换成了自建市场。refresh=true 强制重拉。',
+  access: 'read', need: ['server.manage'],
+  params: { refresh: { type: 'boolean', desc: '可选：不用缓存，马上重新拉索引' } },
+  handler: (ctx, args) => wrap(() => marketOverview(kernel, { refresh: !!args.refresh })),
+});
+
+defineOp({
+  name: 'plugins.market_install', title: '从官方插件市场装 / 更新插件',
+  desc: '下载、校验（签名 + sha256）并安装；已装的就是更新。builtin 条目 = 装内置功能的市场版（盖住内置实现，起不来会自动退回内置版）。'
+    + 'version 不填 = 这台 bridge 能装的最新版。更新只提示不自动装：用户没点名要装 / 更新时先跟用户确认。restart 插件装完要重启服务端才换上。',
+  access: 'danger', need: ['server.manage'],
+  params: {
+    id: { type: 'string', required: true, desc: '市场里的插件 id' },
+    version: { type: 'string', desc: '可选：装指定版本（如 1.2.0），用来降级或钉版本' },
+  },
+  example: { id: 'qq-onebot' },
+  handler: (ctx, args) => wrap(async () => {
+    const p = await installFromMarket(kernel, String(args.id || ''), args.version ? String(args.version) : '');
+    changed();
+    return { plugin: pluginView(kernel.get(args.id) || p), pendingRestart: !!p?.pendingRestart };
+  }),
+});
+
+defineOp({
+  name: 'plugins.rollback', title: '插件回退到上一版',
+  desc: '从回收区换回最近一份旧版（离线可用）：装的插件、或内置功能的市场版。当前版本照旧进回收区，可以再回退回来。没有旧版时报 not_found。',
+  access: 'write', need: ['server.manage'],
+  params: { id: { type: 'string', required: true, desc: '插件 id' } },
+  handler: (ctx, args) => wrap(async () => {
+    must(args.id);
+    const p = await rollbackInstalled(kernel, args.id);
+    changed();
+    return { plugin: pluginView(kernel.get(args.id) || p), pendingRestart: !!p?.pendingRestart };
+  }),
+});
+
+defineOp({
+  name: 'plugins.restore_builtin', title: '内置功能恢复内置版',
+  desc: '把内置功能的市场版移进回收区、换回随程序发布的内置实现；同一个市场版本之后不再提示更新。restart 插件要重启服务端才换回。',
+  access: 'write', need: ['server.manage'],
+  params: { id: { type: 'string', required: true, desc: '内置功能的插件 id' } },
+  handler: (ctx, args) => wrap(async () => {
+    must(args.id);
+    const p = await restoreBuiltinVersion(kernel, args.id);
+    changed();
+    return { plugin: pluginView(kernel.get(args.id) || p), pendingRestart: !!p?.pendingRestart };
+  }),
 });
 
 defineOp({

@@ -698,7 +698,7 @@ function evictWarm(keep) {
   }
 }
 
-export async function runClaudeChat(req, res, { message, sessionId, model, effort, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, autoRetry, limitReplay, limitResume, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy }) {
+export async function runClaudeChat(req, res, { message, sessionId, model, effort, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, autoRetry, limitReplay, limitResume, restartResume = 0, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy }) {
   ctx = ctx || { kind: 'admin', sandbox: false, cwd: VAULT, configDir: null, key: 'admin' };
   const snap = ctx.snap || null;   // 聊天快照轮：专属 MCP/提示词/更紧的工具面
   // 新会话预热（见 SPARE_MS）：没有消息、没有 SSE 接收方，建好 query 停在第一轮之前等人接管。
@@ -996,8 +996,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     }
     if (took) { handedTurn(req, sessionId, 'handoff'); return; }
   }
-  // 服务端自动发起的轮（Auto-fix 唤醒，pr-monitor.mjs 的 family.noPreempt）绝不顶掉同会话正在跑的轮：回 busy，发起方下次再来。
-  if (prev && !prev.done && family && family.noPreempt) {
+  // 服务端自动发起的轮（Auto-fix 唤醒，pr-monitor.mjs 的 family.noPreempt；重启后自动继续，restart-resume.mjs）
+  // 绝不顶掉同会话正在跑的轮：回 busy，发起方下次再来。
+  if (prev && !prev.done && ((family && family.noPreempt) || restartResume > 0)) {
     genWrite(res, { type: 'error', kind: 'busy', title: '会话正在工作', message: '这个会话有一轮正在跑，自动发起的消息没有插进去。' });
     res.end();
     return;
@@ -1088,6 +1089,11 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       startedAt: gen.startedAt,
       cwd: ctx.cwd,
       configDir: ctx.configDir || null,
+      // 服务意外重启后自动继续（runtime/restart-resume.mjs）：凭这一轮的请求在下一条命里重放一句「继续」；
+      // restartResume = 这一轮本身是第几次自动续跑（人发的没有 = 0），连续续跑的次数靠它封顶
+      dataDir: ctx.dataDir || '',
+      replay: limitReplay || null,
+      resume: Number(limitReplay && limitReplay.body && limitReplay.body.restartResume) || 0,
     });
     busPublish(ctx.key, {
       type: 'run.start',
@@ -1801,6 +1807,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       for (const k of Object.keys(streamBlocks)) delete streamBlocks[k];
       lastMsgAt = Date.now();
       awaitingUser.add(uuid);
+      // 这一轮的请求身份换成接力进来的这条（清空上下文后执行 / 限额续跑 / 重启后自动继续重放用它）——
+      // 先换再 announceStart：inflight 台账记的要是眼下这条请求
+      if (nreplay) limitReplay = nreplay;
       announceStart();
       if (nprefs && gen.sessionId) { try { recordChatPrefs(ctx, gen.sessionId, nprefs); } catch {} }
       // 选择器换了模型：同一进程里 setModel（effort / fast 这类启动参数本轮沿用，下一次新开进程才生效）。
@@ -1809,8 +1818,6 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       }
       // 后台子 agent 还在等的审批卡：重发进新一轮的缓冲、待回答点重新亮（retireTurn 刚把旧轮的清掉）
       if (permGate) permGate.rehome();
-      // 这一轮的请求身份换成接力进来的这条（清空上下文后执行 / 限额续跑重放用它）
-      if (nreplay) limitReplay = nreplay;
       // 权限模式：这一轮要的与进程眼下的不同（会话里切过 / 绕过权限待生效）→ 先切再推消息
       if (nmode && permPolicy !== 'host') askedPermMode = nmode;   // 模式已在接力开头切过
       turnInput.push(next.prompt, next.imageBlocks, uuid);
@@ -1962,11 +1969,12 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       for (const k of Object.keys(streamBlocks)) delete streamBlocks[k];
       lastMsgAt = Date.now();
       awaitingUser.add(uuid);
+      // 这一轮的请求身份换成接管进来的这条：预热进程起的时候根本没有（预热不带 limitReplay），停放的进程是上一条的——
+      // 不换的话，预热接管的会话计划卡永远没有「清空上下文后执行」，撞了限额也排不上自动续跑。
+      // 先换再 announceStart：inflight 台账记的要是眼下这条请求（重启后自动继续靠它重放）
+      if (nreplay) limitReplay = nreplay;
       announceStart();
       if (nprefs && gen.sessionId) { try { recordChatPrefs(ctx, gen.sessionId, nprefs); } catch {} }
-      // 这一轮的请求身份换成接管进来的这条：预热进程起的时候根本没有（预热不带 limitReplay），停放的进程是上一条的——
-      // 不换的话，预热接管的会话计划卡永远没有「清空上下文后执行」，撞了限额也排不上自动续跑
-      if (nreplay) limitReplay = nreplay;
       // 权限模式：这一轮要的与停放 / 预热的 CLI 眼下的不同（会话里切过、绕过权限待生效、预热时按另一个默认起的）
       // → 先 setPermissionMode 再推消息（控制请求回了才推，免得第一条在旧模式下跑）
       if (nmode && permPolicy !== 'host') askedPermMode = nmode;

@@ -109,7 +109,7 @@
     { "id": "q40", "q": "用这个要花钱吗？", "chapters": ["08-faq.md"],
       "facts": ["Muse Bridge 本身免费开源", "Claude Code 用用户自己的 Claude 订阅", "dimensio 按各家 API 的价格计费，dimensio 里不显示花了多少钱"] },
     { "id": "q41", "q": "我在网页设置里点「提交反馈」写了个问题，开发者能收到吗？", "chapters": ["07-settings.md", "MUSE.md"],
-      "facts": ["每条反馈都先存在服务器上（管理员 / Muse 能看到）", "默认不发给开发者：要管理员在反馈表单里打开「把用户反馈同时发给 bridge 开发者」，提交时再勾「这条也发给 bridge 开发者」，两道都开才发", "在 Muse 上发出去 = Muse Bridge 仓库的公开 GitHub Issue，文字脱敏，图片不公开", "也可以跟 Muse 说，Muse 出草稿给用户看，同意了才发"],
+      "facts": ["每条反馈都先存在服务器上（管理员 / Muse 能看到）", "默认不发给开发者：要管理员在反馈表单里打开「把用户反馈同时发给 Muse Bridge 项目的公开 GitHub Issue」，提交时再勾「这条也发给 Muse Bridge 项目的公开 GitHub Issue」，两道都开才发", "在 Muse 上发出去 = Muse Bridge 仓库的公开 GitHub Issue，文字脱敏，图片不公开", "也可以跟 Muse 说，Muse 出草稿给用户看，同意了才发"],
       "forbid": ["网页里提交的反馈一定会直接变成 GitHub Issue", "网页里的反馈永远发不到开发者那里"] },
     { "id": "q42", "q": "控制台里那个「开放给其他人使用（多用户）」开关点不动，怎么改成多人用？", "chapters": ["06-users-admin.md", "MUSE.md"],
       "facts": ["这台 Muse 上这个开关是只读的，由 Muse 管理", "跟 Muse 说「把 bridge 改成多人用」，Muse 跑 set-users multi"] },

@@ -3,6 +3,8 @@
   //   Agent      （排最上，原来这一页就是它）Gemini · Vertex / ChatGPT · Codex / dimensio 三个 agent 扩展（原 ModulesPanel：装卸、更新、agent 总开关）；
   //   功能       随 bridge 发布、默认开着的内置功能（定时任务、分享链接、设备、手机操控、内置浏览器……）按分类排，逐项开关；
   //   第三方插件  装的 zip / 登记的本机目录：开关、重新加载、卸载，「添加」上传 zip 或填本机目录。
+  //   插件市场    官方市场（/api/plugins/market，签过名的索引）里还没装的插件；有更新时页顶列出来——只提示，点了才装。
+  //              内置功能也可以换上市场版（盖住内置实现，详情里「恢复内置版」换回）；装的插件可以「回退」到回收区里的上一版。
   // 点卡片推入详情：状态、按插件 schema 自动生成的配置表单、来源信息与操作。热插件开关 / 改配置当场生效；
   // restart 插件只落盘，顶部出现「有改动等重启生效」。改动经总线 plugins.changed 推给所有在线页面（App 据此重拉 /api/auth，
   // 入口按开关显隐）——这里也听它，别的设备改了就重拉。
@@ -14,7 +16,7 @@
   import { apiUrl } from '../../lib/server.js';
   import { busOn } from '../../lib/bus.js';
   import { pushBackLayer } from '../../lib/nav.js';
-  import { t, tr } from '../../lib/i18n.js';
+  import { t, tr, isEn, locale } from '../../lib/i18n.js';
   import { ic } from './icons.js';
   import ModulesPanel from '../ModulesPanel.svelte';
   import PluginForm from './PluginForm.svelte';
@@ -50,7 +52,8 @@
   }
   load();
   $effect(() => busOn((ev) => {
-    if (ev?.type === 'plugins.changed') untrack(load);
+    if (ev?.type === 'plugins.changed') untrack(() => { load(); loadMarket(); });
+    else if (ev?.type === 'plugins.market') untrack(() => loadMarket());
     // 插件状态块 / 子进程状态实时更新（ctx.status.refresh、子进程起停）
     else if (ev?.type === 'plugins.status' && data) untrack(() => {
       const i = data.plugins.findIndex((p) => p.id === ev.id);
@@ -71,9 +74,13 @@
     if (p.pendingRestart) return { text: p.enabled ? (p.active ? t('重启后生效') : t('重启后开启')) : t('重启后关闭'), warn: true };
     if (p.status === 'blocked') return { text: t('缺依赖：{names}', { names: p.blockedBy.map(nameOf).join('、') }), warn: true };
     if (p.problems?.length) return { text: t('配置有 {n} 项无效，已用默认值', { n: p.problems.length }), warn: true };
+    if (p.override?.pending) return { text: p.override.pending.restore ? t('重启后恢复内置版') : t('重启后换上市场版 v{v}', { v: p.override.pending.install }), warn: true };
     const bits = [];
-    if (p.source === 'installed' || p.source === 'local') { if (p.version) bits.push('v' + p.version); bits.push(SOURCE[p.source]); }
+    if (p.source === 'installed' || p.source === 'local') { if (p.version) bits.push('v' + p.version); bits.push(p.market ? t('插件市场') : SOURCE[p.source]); }
     else bits.push(p.active ? t('已开启') : t('已关闭'));
+    if (p.override?.active) bits.push(t('市场版 v{v}', { v: p.override.version }));
+    const mx = mktOf(p.id);
+    if (mx?.update) return { text: bits.concat(t('有更新 v{v}', { v: mx.latest.version })).join(' · '), upd: true };
     if (p.restart) bits.push(t('改动重启生效'));
     return { text: bits.join(' · ') };
   }
@@ -240,6 +247,110 @@
     finally { busy[p.id + ':upd'] = false; }
   }
 
+  // ═══ 插件市场 ═══（plugins/market.mjs：官方签名索引；更新只提示，用户点了才装）
+  let mkt = $state(null);
+  let mktErr = $state('');
+  let mktBusy = $state(false);
+  async function loadMarket(refresh = false) {
+    if (refresh) mktBusy = true;
+    try { mkt = await api.get('/api/plugins/market' + (refresh ? '?refresh=1' : '')); mktErr = ''; }
+    catch (e) { mktErr = errMsg(e); }
+    finally { mktBusy = false; }
+  }
+  loadMarket();
+  const mktOf = (id) => (mkt?.plugins || []).find((x) => x.id === id) || null;
+  const mktNew = $derived((mkt?.plugins || []).filter((x) => !x.builtin && x.state === 'none'));
+  const mktUpdates = $derived((mkt?.plugins || []).filter((x) => x.update));
+  const mName = (x) => (isEn() && x.nameEn ? x.nameEn : tr(x.name));
+  const mDesc = (x) => (isEn() && x.descriptionEn ? x.descriptionEn : tr(x.description || ''));
+  const kb = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
+  const when = (ms) => { try { return new Date(ms).toLocaleString(locale(), { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
+  // 更新说明当一句话用：没收尾标点就补一个，后面还要接别的句子
+  const sentence = (s) => { const x = String(s || '').trim(); return /[。.!！?？]$/.test(x) ? x : x + (isEn() ? '.' : '。'); };
+  const cmpVer = (a, b) => {
+    const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+    for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0) ? -1 : 1;
+    return 0;
+  };
+
+  // 装 / 更新 / 装指定版本：先确认（标题写清版本，说明里带更新内容）
+  async function mktInstall(x, version = '') {
+    const v = version || x.latest?.version;
+    if (!v) return;
+    const ve = x.versions.find((y) => y.version === v) || x.latest;
+    const has = x.state === 'installed' || (x.builtin && !!x.current);
+    const down = has && x.current && cmpVer(v, x.current) < 0;
+    const title = x.builtin
+      ? (has ? t('把「{name}」换成市场版 v{v}？', { name: mName(x), v }) : t('给「{name}」换上市场版 v{v}？', { name: mName(x), v }))
+      : !has ? t('安装「{name}」v{v}？', { name: mName(x), v })
+      : down ? t('把「{name}」降到 v{v}？', { name: mName(x), v }) : t('把「{name}」更新到 v{v}？', { name: mName(x), v });
+    const desc = [ve?.notes ? t('这一版：{notes}', { notes: sentence(tr(ve.notes)) }) : '',
+      x.builtin ? t('市场版会盖住随 bridge 发布的内置实现；它起不来会自动退回内置版，也可以随时「恢复内置版」。') : has ? t('旧版留在回收区，可以随时回退。') : t('插件和 bridge 同进程运行，这是 bridge 官方发布、验过签名的插件。'),
+      ve?.restart ? t('要重启 bridge 才生效。') : ''].filter(Boolean).join(' ');
+    if (!(await confirm({ title, desc, yes: x.builtin || has ? (down ? t('降级') : t('更新')) : t('安装') }))) return;
+    busy['mk:' + x.id] = true;
+    try {
+      const r = await api.post('/api/plugins/market/install', { id: x.id, version: v });
+      apply(r);
+      await loadMarket();
+      const p = r.plugin;
+      if (p?.override?.error) toast(tr(p.override.error), true);
+      else if (p?.status === 'error') toast(t('已安装「{name}」，但启用失败：{reason}', { name: mName(x), reason: tr(p.error || '') }), true);
+      else if (p?.pendingRestart || p?.override?.pending) toast(t('已下载 v{v}，重启 bridge 后生效', { v }));
+      else if (x.builtin) toast(t('「{name}」已换上市场版 v{v}', { name: mName(x), v }));
+      else if (has) toast(t('「{name}」已换成 v{v}', { name: mName(x), v }));
+      else toast(t('已安装「{name}」v{v}', { name: mName(x), v }));
+    } catch (e) { toast(errMsg(e), true); }
+    finally { busy['mk:' + x.id] = false; }
+  }
+  // 回收区里那一份可能比现在的新（回退过一次又想换回来）：那就叫「换回」
+  const rbNewer = (p) => cmpVer(p.rollbackTo, p.override?.version || p.version || '0') > 0;
+  const rbLabel = (p) => (rbNewer(p) ? t('换回 v{v}', { v: p.rollbackTo }) : t('回退到 v{v}', { v: p.rollbackTo }));
+  async function rollback(p) {
+    if (!(await confirm({ title: rbNewer(p) ? t('「{name}」换回 v{v}？', { name: tr(p.name), v: p.rollbackTo }) : t('「{name}」回退到 v{v}？', { name: tr(p.name), v: p.rollbackTo }), desc: t('换回回收区里的上一版；现在这一版也留在回收区，可以再换回来。'), yes: t('回退') }))) return;
+    busy[p.id + ':rb'] = true;
+    try {
+      const r = await api.post('/api/plugins/rollback', { id: p.id });
+      apply(r);
+      await loadMarket();
+      toast(r.plugin?.pendingRestart || r.plugin?.override?.pending ? t('已换好，重启 bridge 后生效') : t('已换成 v{v}', { v: p.rollbackTo }));
+    } catch (e) { toast(errMsg(e), true); }
+    finally { busy[p.id + ':rb'] = false; }
+  }
+  async function restoreBuiltin(p) {
+    if (!(await confirm({ title: t('「{name}」恢复内置版？', { name: tr(p.name) }), desc: t('市场版移进回收区，换回随 bridge 发布的内置实现；这一版市场版之后不再提示更新。'), yes: t('恢复内置版') }))) return;
+    busy[p.id + ':rb'] = true;
+    try {
+      const r = await api.post('/api/plugins/restore-builtin', { id: p.id });
+      apply(r);
+      await loadMarket();
+      toast(r.plugin?.pendingRestart || r.plugin?.override?.pending ? t('重启 bridge 后恢复内置版') : t('已恢复内置版'));
+    } catch (e) { toast(errMsg(e), true); }
+    finally { busy[p.id + ':rb'] = false; }
+  }
+
+  // 市场条目详情（和插件详情同一套推入 / 返回）
+  let mkId = $state(null);
+  const mkSel = $derived(mkId ? mktOf(mkId) : null);
+  $effect(() => { if (!mkId) return; return pushBackLayer(() => mkBack()); });
+  let mkFrom = $state(null);   // 从插件详情点进来的：返回时回到那个详情
+  function openMk(x) {
+    if (selId) { mkFrom = selId; selId = null; } else { mkFrom = null; listScroll = scroller()?.scrollTop || 0; }
+    mkId = x.id;
+    queueMicrotask(() => { const sc = scroller(); if (sc) sc.scrollTop = 0; });
+  }
+  function mkBack() {
+    mkId = null;
+    if (mkFrom) { selId = mkFrom; mkFrom = null; return; }
+    requestAnimationFrame(() => { const sc = scroller(); if (sc) sc.scrollTop = listScroll; });
+  }
+  // 市场条目对应的已装插件 / 内置功能：进它的详情
+  function openInstalled(x) {
+    const p = (data?.plugins || []).find((y) => y.id === x.id);
+    mkId = null; mkFrom = null;
+    if (p) open(p);
+  }
+
   // ═══ 重启 ═══（同 ModulesPanel：先交给守护进程空闲重启；没有守护进程时桌面壳退回重拉本地运行时）
   let restarting = $state(false);
   async function restart() {
@@ -264,7 +375,7 @@
     <div class="cz-body">
       <b class="cz-name">{tr(p.name)}</b>
       <p class="cz-desc">{tr(p.description)}</p>
-      <span class="cz-foot" class:err={f.err} class:pp-warn={f.warn}>{f.text}</span>
+      <span class="cz-foot" class:err={f.err} class:pp-warn={f.warn} class:pp-upd-foot={f.upd}>{f.text}</span>
     </div>
     {#if !p.locked}
       <button class="cz-sw" class:on={p.enabled} role="switch" aria-checked={p.enabled} disabled={busy[p.id]}
@@ -275,13 +386,14 @@
 
 {#if sel}
   {@const f = footOf(sel)}
+  {@const mx = mktOf(sel.id)}
   <div class="pp-detail">
     <div class="cz-crumb"><button class="cz-back" onclick={back}>{@html ic('back', 2)}<span>{t('功能扩展')}</span></button></div>
     <div class="cz-dh">
       <span class="cz-tile lg">{@html glyph(sel)}</span>
       <div class="cz-dh-tx">
         <h2>{tr(sel.name)}</h2>
-        <p>{SOURCE[sel.source] || sel.source}{sel.version ? ' · v' + sel.version : ''}{sel.author ? ' · ' + sel.author : ''}</p>
+        <p>{sel.market ? t('插件市场') : SOURCE[sel.source] || sel.source}{sel.override?.active ? ' · ' + t('市场版 v{v}', { v: sel.override.version }) : sel.version ? ' · v' + sel.version : ''}{sel.author ? ' · ' + sel.author : ''}</p>
       </div>
       {#if !sel.locked}
         <button class="cz-sw" class:on={sel.enabled} role="switch" aria-checked={sel.enabled} disabled={busy[sel.id]} onclick={() => toggle(sel)} aria-label={t('启用 {name}', { name: tr(sel.name) })}><span></span></button>
@@ -290,6 +402,19 @@
     {#if sel.description}<p class="cz-lead">{tr(sel.description)}</p>{/if}
     {#if f.err || f.warn}<div class="pp-state" class:err={f.err}>{f.text}</div>{/if}
     {#if sel.problems?.length}<div class="pp-state">{#each sel.problems as pr}<div>{tr(pr)}</div>{/each}</div>{/if}
+    {#if sel.override?.error}<div class="pp-state">{tr(sel.override.error)}</div>{/if}
+
+    {#if mx || sel.rollbackTo || sel.override}
+      <div class="cz-sec">{t('版本')}</div>
+      <div class="cz-list">
+        {#if mx?.update}
+          <button class="cz-li act" disabled={busy['mk:' + mx.id]} onclick={() => mktInstall(mx)}><span class="cz-li-tx"><span class="pp-updtx">{busy['mk:' + mx.id] ? t('正在更新…') : mx.builtin && !mx.current ? t('换上市场版 v{v}', { v: mx.latest.version }) : t('更新到 v{v}', { v: mx.latest.version })}</span><small>{mx.latest.notes ? tr(mx.latest.notes) : t('插件市场有新版本')}</small></span></button>
+        {/if}
+        {#if mx}<button class="cz-li act" onclick={() => openMk(mx)}><span class="cz-li-tx"><span>{t('插件市场里的版本')}</span><small>{t('{n} 个版本 · 可以装指定版本', { n: mx.versions.length })}</small></span></button>{/if}
+        {#if sel.rollbackTo}<button class="cz-li act" disabled={busy[sel.id + ':rb']} onclick={() => rollback(sel)}><span class="cz-li-tx"><span>{rbLabel(sel)}</span><small>{t('换回回收区里的上一版')}</small></span></button>{/if}
+        {#if sel.override && !sel.override.pending?.restore}<button class="cz-li act danger" disabled={busy[sel.id + ':rb']} onclick={() => restoreBuiltin(sel)}><span class="cz-li-tx"><span>{t('恢复内置版')}</span><small>{t('不用市场版，换回随 bridge 发布的内置实现')}</small></span></button>{/if}
+      </div>
+    {/if}
     {#if sel.locked && sel.source === 'module'}<p class="cz-note">{t('agent 扩展的开关在上面的「Agent」区（或设置里的 Agent 页）。')}</p>{/if}
 
     {#if sel.active && (sel.panelStatus || sel.processes?.length || sel.actions?.length || sel.hooks?.length)}
@@ -347,7 +472,7 @@
     <div class="cz-sec">{t('信息')}</div>
     <div class="cz-list">
       <div class="cz-kv"><span>ID</span><b>{sel.id}</b></div>
-      <div class="cz-kv"><span>{t('来源')}</span><b>{SOURCE[sel.source] || sel.source}</b></div>
+      <div class="cz-kv"><span>{t('来源')}</span><b>{sel.market ? t('插件市场') + ' · v' + sel.market.version : sel.override?.active ? t('内置 · 市场版 v{v}', { v: sel.override.version }) : SOURCE[sel.source] || sel.source}</b></div>
       {#if sel.dir}<div class="cz-kv"><span>{t('目录')}</span><b class="pp-mono">{sel.dir}</b></div>{/if}
       {#if sel.requires?.length}<div class="cz-kv"><span>{t('依赖')}</span><b>{sel.requires.map(nameOf).join('、')}</b></div>{/if}
       <div class="cz-kv"><span>{t('生效方式')}</span><b>{sel.restart ? t('改开关 / 配置后重启 bridge 生效') : t('改了当场生效')}</b></div>
@@ -364,8 +489,71 @@
   </div>
 {/if}
 
+{#snippet mkCard(x)}
+  <div class="cz-card" role="button" tabindex="0" onclick={() => openMk(x)} onkeydown={(ev) => { if (ev.key === 'Enter') openMk(x); }}>
+    <span class="cz-tile">{@html glyph(x)}</span>
+    <div class="cz-body">
+      <b class="cz-name">{mName(x)}</b>
+      <p class="cz-desc">{mDesc(x)}</p>
+      <span class="cz-foot" class:pp-warn={!x.latest}>{x.latest ? 'v' + x.latest.version + (x.author ? ' · ' + x.author : '') + (x.latest.restart ? ' · ' + t('装完重启生效') : '') : tr(x.blocked || t('这台 bridge 装不了'))}</span>
+    </div>
+    {#if x.latest}
+      <button class="cz-add" disabled={busy['mk:' + x.id]} title={t('安装')} aria-label={t('安装 {name}', { name: mName(x) })}
+        onclick={(ev) => { ev.stopPropagation(); mktInstall(x); }}>{@html ic('plus', 2)}</button>
+    {/if}
+  </div>
+{/snippet}
+
+{#if mkSel}
+  <div class="pp-detail">
+    <div class="cz-crumb"><button class="cz-back" onclick={mkBack}>{@html ic('back', 2)}<span>{mkFrom ? tr((data?.plugins || []).find((p) => p.id === mkFrom)?.name || '') : t('功能扩展')}</span></button></div>
+    <div class="cz-dh">
+      <span class="cz-tile lg">{@html glyph(mkSel)}</span>
+      <div class="cz-dh-tx">
+        <h2>{mName(mkSel)}</h2>
+        <p>{t('插件市场')}{mkSel.latest ? ' · v' + mkSel.latest.version : ''}{mkSel.author ? ' · ' + mkSel.author : ''}</p>
+      </div>
+    </div>
+    {#if mkSel.description}<p class="cz-lead">{mDesc(mkSel)}</p>{/if}
+    {#if mkSel.blocked}<div class="pp-state">{tr(mkSel.blocked)}</div>{/if}
+    {#if mkSel.builtin}<p class="cz-note">{t('这是内置功能的市场版：装上后盖住随 bridge 发布的内置实现，开关和配置不变；它起不来会自动退回内置版。bridge 升级后内置实现自带修复，这一版会自动失效。')}</p>{/if}
+    {#if mkSel.state === 'taken'}<div class="pp-state">{t('这台服务器上有个同 id 的本机开发目录插件，先取消登记它才能从市场装。')}</div>{/if}
+
+    <div class="pp-actbar">
+      {#if mkSel.latest && (mkSel.update || mkSel.state === 'none')}
+        <button class="cz-btn pri" disabled={busy['mk:' + mkSel.id]} onclick={() => mktInstall(mkSel)}>{busy['mk:' + mkSel.id] ? t('正在安装…') : mkSel.state === 'none' ? t('安装 v{v}', { v: mkSel.latest.version }) : mkSel.builtin && !mkSel.current ? t('换上市场版 v{v}', { v: mkSel.latest.version }) : t('更新到 v{v}', { v: mkSel.latest.version })}</button>
+      {/if}
+      {#if mkSel.state !== 'none' && mkSel.state !== 'taken'}
+        <button class="cz-btn" onclick={() => openInstalled(mkSel)}>{mkSel.builtin ? t('打开这项功能') : t('打开已装的插件')}</button>
+      {/if}
+    </div>
+    {#if mkSel.current}<p class="cz-note">{mkSel.builtin ? (mkSel.state === 'override' ? t('现在用的是市场版 v{v}。', { v: mkSel.current }) : t('装过市场版 v{v}，现在用的是内置版。', { v: mkSel.current })) : t('已装 v{v}。', { v: mkSel.current })}</p>{/if}
+
+    <div class="cz-sec">{t('版本历史')}</div>
+    <div class="cz-list">
+      {#each mkSel.versions as v (v.version)}
+        <div class="cz-li pp-ver">
+          <span class="cz-li-tx"><span>v{v.version}{#if v.version === mkSel.current}<span class="pp-tag">{t('当前')}</span>{/if}{#if v.date}<small class="pp-date">{v.date}</small>{/if}</span>
+            <small>{v.notes ? tr(v.notes) : t('（没写更新说明）')}{v.restart ? ' · ' + t('装完重启生效') : ''} · {kb(v.size)}</small>
+            {#if v.problem}<small class="pp-warn">{tr(v.problem)}</small>{/if}</span>
+          {#if !v.problem && v.version !== mkSel.current && mkSel.state !== 'taken'}
+            <button class="cz-btn sm" disabled={busy['mk:' + mkSel.id]} onclick={() => mktInstall(mkSel, v.version)}>{t('装这一版')}</button>
+          {/if}
+        </div>
+      {/each}
+    </div>
+
+    <div class="cz-sec">{t('信息')}</div>
+    <div class="cz-list">
+      <div class="cz-kv"><span>ID</span><b>{mkSel.id}</b></div>
+      {#if mkSel.author}<div class="cz-kv"><span>{t('作者')}</span><b>{mkSel.author}</b></div>{/if}
+      {#if mkSel.homepage}<a class="cz-kv link" href={mkSel.homepage} target="_blank" rel="noopener"><span>{t('主页')}</span><b>{mkSel.homepage}</b>{@html ic('link')}</a>{/if}
+    </div>
+  </div>
+{/if}
+
 <!-- 列表在看详情时只藏不卸：Agent 区（ModulesPanel）不用重拉数据，返回时滚动位置也还原得回去 -->
-<div class:pp-hide={!!sel}>
+<div class:pp-hide={!!sel || !!mkSel}>
   {#if loadErr}
     <div class="cz-empty">{loadErr}</div>
   {:else if !data}
@@ -375,6 +563,21 @@
       <div class="cz-mp-banner">
         <span>{t('有改动等重启生效')}</span>
         <button class="cz-btn sm pri" disabled={restarting} onclick={restart}>{restarting ? t('正在重启…') : t('立即重启')}</button>
+      </div>
+    {/if}
+
+    {#if mktUpdates.length}
+      <div class="pp-upd" role="status">
+        <div class="pp-upd-h"><b>{t('{n} 个插件有更新', { n: mktUpdates.length })}</b><span>{t('只提示，不会自动装')}</span></div>
+        {#each mktUpdates as x (x.id)}
+          <div class="pp-upd-row">
+            <button class="pp-upd-tx" onclick={() => openMk(x)}>
+              <span>{mName(x)}</span>
+              <small>{x.current ? 'v' + x.current : x.builtin ? t('内置版') : ''} → v{x.latest.version}{x.latest.notes ? ' · ' + tr(x.latest.notes) : ''}</small>
+            </button>
+            <button class="cz-btn sm pri" disabled={busy['mk:' + x.id]} onclick={() => mktInstall(x)}>{busy['mk:' + x.id] ? t('正在更新…') : t('更新')}</button>
+          </div>
+        {/each}
       </div>
     {/if}
 
@@ -388,7 +591,24 @@
       <div class="cz-grid">{#each g.items as p (p.id)}{@render card(p)}{/each}</div>
     {/each}
 
-    <h3 class="cz-h pp-top">{t('第三方插件')} {#if thirdParty.length}<span class="cz-n">{thirdParty.length}</span>{/if}</h3>
+    <h3 class="cz-h pp-top pp-mkh">{t('插件市场')} {#if mktNew.length}<span class="cz-n">{mktNew.length}</span>{/if}
+      <button class="cz-btn sm" disabled={mktBusy} onclick={() => loadMarket(true)}>{mktBusy ? t('正在检查…') : t('检查更新')}</button></h3>
+    <p class="cz-note pp-intro">{t('bridge 官方发布的插件：不用升级 bridge 就能装新功能、更新插件，内置功能的修复也从这里来。有更新只提示，点了才装。')}</p>
+    {#if mkt?.market?.off}
+      <p class="cz-note">{t('插件市场在这台服务器上关着（config.json 的 pluginMarket）。')}</p>
+    {:else}
+      {#if mktErr || mkt?.market?.error}<div class="cz-diag">{t('插件市场没拉下来：{reason}', { reason: tr(mktErr || mkt.market.error) })}</div>{/if}
+      {#if mktNew.length}
+        <div class="cz-grid">{#each mktNew as x (x.id)}{@render mkCard(x)}{/each}</div>
+      {:else if mkt?.market?.ok}
+        <p class="cz-note pp-intro">{(mkt.plugins || []).length ? t('市场里的插件都装上了。') : t('市场里暂时还没有插件。')}</p>
+      {:else if !mkt && !mktErr}
+        <p class="cz-note pp-intro">{t('载入中…')}</p>
+      {/if}
+      {#if mkt?.market?.ok}<p class="pp-mkfoot">{t('索引第 {n} 版', { n: mkt.market.seq })}{mkt.market.checkedAt ? ' · ' + t('上次检查 {at}', { at: when(mkt.market.checkedAt) }) : ''}</p>{/if}
+    {/if}
+
+    <h3 class="cz-h pp-top">{t('已安装的插件')} {#if thirdParty.length}<span class="cz-n">{thirdParty.length}</span>{/if}</h3>
     {#if thirdParty.length}
       <div class="cz-grid">{#each thirdParty as p (p.id)}{@render card(p)}{/each}</div>
     {:else}
@@ -450,6 +670,24 @@
 
 <style>
   .pp-anchor { display: block; height: 0; }
+  .pp-upd { margin: 0 0 26px; padding: 14px 16px 6px; border-radius: 14px; background: color-mix(in srgb, var(--cz-crit) 7%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cz-crit) 22%, transparent); }
+  .pp-upd-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .pp-upd-h b { font-size: 15px; }
+  .pp-upd-h span { font-size: 12.5px; color: var(--cz-ink3); }
+  .pp-upd-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--cz-line); }
+  .pp-upd-h + .pp-upd-row { border-top: 0; }
+  .pp-upd-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; color: var(--cz-ink); font-size: 14.5px; }
+  .pp-upd-tx small { color: var(--cz-ink2); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pp-updtx { color: var(--cz-crit); font-weight: 600; }
+  .pp-mkh { display: flex; align-items: center; gap: 10px; }
+  .pp-mkh .cz-btn { margin-left: auto; }
+  .pp-mkfoot { margin: 10px 0 0; font-size: 12px; color: var(--cz-ink3); }
+  .pp-ver { display: flex; align-items: center; gap: 12px; }
+  .pp-ver .cz-li-tx { flex: 1; min-width: 0; }
+  .pp-tag { margin-left: 8px; padding: 1px 7px; border-radius: 6px; background: var(--cz-sel); color: var(--cz-ink2); font-size: 11.5px; font-weight: 500; vertical-align: 1px; }
+  .pp-date { margin-left: 8px; color: var(--cz-ink3); font-size: 12px; }
+  .pp-upd-foot { color: var(--cz-crit); }
   .pp-hide { display: none; }
   .pp-intro { margin: -6px 0 6px; }
   .pp-top { margin-top: 38px; }

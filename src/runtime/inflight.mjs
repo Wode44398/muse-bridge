@@ -15,6 +15,11 @@
 //      前端当场收敛，不必再走 4 轮 behind 的兜底路径。
 //
 // 幂等：同一个会话重新开跑会清掉它的中断标记；transcript 尾部已经有标记就不再追加。
+//
+// 2026-10-28 起台账还记着这一轮的请求（replay：身份头 + 请求体，与限额续跑同一个形状）、身份数据目录与
+// 「这是第几次自动续跑」，外加每分钟一次心跳（beat）：启动时 restart-resume.mjs 据此替用户把被中断的轮
+// 接着跑下去（设置「服务意外重启时 › 自动继续被中断的对话」）。身份头和 claude-limit-resume.json 同级，
+// 文件已 gitignore，不出本机；interrupted-runs.json 只记显示用的字段，不带它。
 
 import { existsSync, readFileSync, writeFileSync, appendFileSync, openSync, readSync, fstatSync, closeSync, renameSync } from 'node:fs';
 import path from 'node:path';
@@ -26,6 +31,8 @@ const NOTE = '⚠️ 这一轮没跑完：bridge 服务进程在它执行到一�
   + '已经落盘的文件和已经写进记录的内容都还在——说一句「继续」就能从这里接着往下做。';
 // 尾部读多少字节够找到最后一条记录。单条记录再大（含大段 tool_result）也远不到这个量级。
 const TAIL_BYTES = 512 * 1024;
+// 心跳间隔：有轮在跑时每分钟把台账重写一次（只是一个时间戳），下次启动据此估出上一条命大概死在什么时候。
+const BEAT_MS = 60_000;
 
 let FILE = '';
 let INT_FILE = '';
@@ -59,7 +66,16 @@ const persistInt = () => writeJson(INT_FILE, [..._interrupted.values()]);
 
 // ---- 台账读写 -------------------------------------------------------------------
 
-// rec: { key, sessionId, userText, startedAt, cwd, configDir, agent }
+// 重放请求只留续跑用得上的：正文和附件续跑时都要换掉，不必每次重写台账都背着几十 KB 的提示词。
+function slimReplay(rp) {
+  if (!rp || !rp.headers) return null;
+  const { message, attachments, ...body } = rp.body || {};
+  return { headers: rp.headers, url: rp.url || '/api/chat', body };
+}
+
+// rec: { key, sessionId, userText, startedAt, cwd, configDir, agent, dataDir, replay, resume }
+//   replay  这一轮的 /api/chat 请求（claude.mjs 的 limitReplay；快照访客 / 预热没有）
+//   resume  这一轮本身是第几次「重启后自动续跑」（人发的 = 0）
 export function beginInflight(rec) {
   if (!FILE || !rec || !rec.sessionId || !rec.key) return;
   const id = idOf(rec.key, rec.sessionId);
@@ -76,9 +92,26 @@ export function beginInflight(rec) {
     startedAt: rec.startedAt || Date.now(),
     cwd: rec.cwd || '',
     configDir: rec.configDir || null,
+    dataDir: rec.dataDir || '',
+    replay: slimReplay(rec.replay),
+    resume: Math.max(0, Number(rec.resume) || 0),
+    beat: Date.now(),
     pid: process.pid,
   });
   persist();
+  armBeat();
+}
+
+let beatTimer = null;
+function armBeat() {
+  if (beatTimer || !_live.size) return;
+  beatTimer = setInterval(() => {
+    if (!_live.size) { clearInterval(beatTimer); beatTimer = null; return; }
+    const now = Date.now();
+    for (const r of _live.values()) r.beat = now;
+    persist();
+  }, BEAT_MS);
+  if (beatTimer.unref) beatTimer.unref();
 }
 
 export function endInflight(key, sessionId) {
@@ -91,11 +124,27 @@ export function endInflight(key, sessionId) {
 export function interruptedRun(key, sessionId) {
   return sessionId ? (_interrupted.get(idOf(key, sessionId)) || null) : null;
 }
+// agent 接口用（overview）：这个 caller 名下所有还挂着「被中断」的会话。只读，不清标记。
+export function interruptedRunsOf(key) {
+  const k = String(key || '');
+  return [..._interrupted.values()].filter((r) => r && r.key === k).map((r) => ({ ...r }));
+}
 export const INTERRUPT_NOTE = NOTE;
+// 排上了重启后自动续跑（restart-resume.mjs）时 attach 回的那句：别让人以为还得自己说「继续」。
+export const RESUMING_NOTE = '⚠️ 这一轮没跑完：bridge 服务进程在它执行到一半时退出了（崩溃或重启）。'
+  + '服务已经恢复，马上会自动让 Claude 从中断的地方接着做。';
 
 // 前端已经看到并收敛过了就可以清掉——避免同一条中断在每次 attach 都再播一遍。
 export function clearInterrupted(key, sessionId) {
   if (sessionId && _interrupted.delete(idOf(key, sessionId))) persistInt();
+}
+
+// 这个会话的中断排没排上自动续跑（只影响 attach 的说法）。续跑真开跑时 beginInflight 会把整条标记清掉。
+export function setResuming(key, sessionId, on) {
+  const it = sessionId ? _interrupted.get(idOf(key, sessionId)) : null;
+  if (!it || !!it.resuming === !!on) return;
+  if (on) it.resuming = true; else delete it.resuming;
+  persistInt();
 }
 
 // ---- 启动时收尸 -----------------------------------------------------------------

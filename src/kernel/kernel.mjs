@@ -215,7 +215,23 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
   }
 
   // ── 启用 / 停用单个插件 ─────────────────────────────────────────────────
+  // 有后备实现的插件（插件市场盖住的内置功能）：市场版加载 / 启用失败就换回后备实现再试一次，
+  // 并经 fallback.onFallback(原因) 通知登记方（改元数据、记下出错原因）。只退一次：后备也失败就照常记成 error。
   async function activate(rec) {
+    const ok = await activateOnce(rec);
+    if (ok || !rec.fallback || rec.status !== 'error') return ok;
+    const fb = rec.fallback;
+    const why = rec.error;
+    rec.fallback = null;
+    rec.load = fb.load;
+    rec.def = null;
+    rec.rev += 1;
+    try { fb.onFallback?.(why); } catch (e) { logger.error?.('[plugins] ' + rec.id + ' 退回后备实现时出错：' + (e?.message || e)); }
+    logger.error?.('[plugins] ' + rec.id + ' 改用后备实现（' + why + '）');
+    return activateOnce(rec);
+  }
+
+  async function activateOnce(rec) {
     rec.error = null;
     rec.problems = [];
     try {
@@ -325,7 +341,8 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
   // ── 对外 ───────────────────────────────────────────────────────────────
   const kernel = {
     // 登记一个插件（不加载）。entry：{ id, name, description, category, source, dir, version, locked, restart,
-    // defaultEnabled, requires, config（schema）, load: async (rev) => 模块, web, homepage, author }
+    // defaultEnabled, requires, config（schema）, load: async (rev) => 模块, web, homepage, author,
+    // fallback?: { load, onFallback(原因) }（load 出的实现起不来时换用的后备实现，见 activate） }
     register(entry) {
       if (!entry || !ID_RE.test(entry.id || '')) throw new Error('插件 id 不合法：' + (entry && entry.id) + '（小写字母开头，只用小写字母、数字、连字符）');
       if (records.has(entry.id)) throw new Error('插件 id 重复：' + entry.id);
@@ -350,6 +367,7 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
         web: entry.web || null,
         extra: entry.extra || null,
         load: entry.load,
+        fallback: entry.fallback && typeof entry.fallback.load === 'function' ? entry.fallback : null,
         seq: regSeq++,
         rev: 0,
         def: null, ctx: null, active: false, status: 'disabled', error: null, problems: [],
@@ -449,6 +467,7 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
       if ('requires' in patch && Array.isArray(patch.requires)) rec.requires = patch.requires;
       if ('config' in patch) { rec.schema = normalizeSchema(patch.config); rec.schemaFromManifest = patch.config != null; }
       if (typeof patch.load === 'function') rec.load = patch.load;
+      if ('fallback' in patch) rec.fallback = patch.fallback && typeof patch.fallback.load === 'function' ? patch.fallback : null;
       changed(id);
       return summary(rec);
     },

@@ -46,6 +46,7 @@ import { registerAuthRoutes } from './routes/auth.mjs';
 import { registerPairRoutes } from './routes/pair.mjs';
 import { registerChatRoutes } from './routes/chat.mjs';
 import { initLimitResume } from './runtime/limit-resume.mjs';
+import { initRestartResume } from './runtime/restart-resume.mjs';
 import { registerUploadRoutes } from './routes/upload.mjs';
 import { registerSessionRoutes } from './routes/sessions.mjs';
 import { registerClaudeArchiveRoutes } from './routes/claude-archive.mjs';
@@ -143,7 +144,7 @@ initCtxUsage(ROOT);   // 会话级上下文分布 / 实际 effort / 斜杠命令
 initSessionStores(ROOT);
 // 上一条命死在半途的轮：在它们的 transcript 上补一条「本轮被中断」，
 // 并记下标记供 /api/attach 当场把前端收敛掉。见 runtime/inflight.mjs。
-initInflight(ROOT);
+const inflightOrphans = initInflight(ROOT);
 
 // 出站代理必须在任何出海调用（含 codex app-server 这种常驻子进程 spawn）之前定好：
 // 子进程只在 spawn 那一刻继承 process.env，晚一步就不生效。见 runtime/net-proxy.mjs。
@@ -245,6 +246,7 @@ registerAuthRoutes(router, { adminCredential, adminGen, identify, getCookie, bea
 registerPairRoutes(router, { identify, adminGen, authCookie, userCookie, lanIPs, adminCredential, getCookie, bearerToken, clearAuthCookie, clearUserCookie }); // /api/pair/{new,wait,scan,approve,reject,claim} 扫码登录 + /api/pair/connect*、/api/pair/redeem 扫码配对（S1-2；票绑出示方那次登录、确认后替换原登录）
 registerChatRoutes(router, { authOk, identify: identifySnap }); // /api/chat, /api/answer, /api/phone-result（快照身份可用）
 initLimitResume();   // 5 小时限额重置后自动继续：把落盘的待续会话重新排上（重放口由上一行挂好）
+initRestartResume(inflightOrphans);   // 服务意外重启后自动继续：上一条命没跑完的轮过十几秒在服务端替用户说「继续」（设置可关）
 registerExtensionRoutes(router, { identify });                // /api/extensions* — 扩展中心（技能/连接器/插件，admin）
 registerModuleAdminRoutes(router, { identify });              // /api/modules* — 扩展中心「功能扩展」（离线包装 / 卸，admin，重启生效）
 registerAgentRoutes(router, { identify });                    // /api/agents — 设置「Agent」页：各 agent 的勾选 / 能跑 / 认证（admin，可远程）

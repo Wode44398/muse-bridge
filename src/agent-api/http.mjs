@@ -21,6 +21,7 @@ import { callOp, catalog, getOp, apiAllowed, OpError } from './registry.mjs';
 import { setInternalRouter } from './internal.mjs';
 import { setAdminGen, keyOwnerOf } from './ops/keys.mjs';
 import { manualChapter, manualSearch, tocMarkdown, searchMarkdown, manualToc } from './manual.mjs';
+import { instanceCaller } from './instance-auth.mjs';
 import './ops/index.mjs';
 
 const HEARTBEAT_MS = 10_000;
@@ -55,6 +56,8 @@ function credentialOf(req) {
 }
 function resolveCaller(req, identify) {
   const tok = credentialOf(req);
+  const inst = instanceCaller(req, tok);   // 同机 agent 实例（dimensio）的主机密钥 / 按人令牌，见 instance-auth.mjs
+  if (inst !== undefined) return inst;
   if (!tok && !NO_AUTH) return null;
   const headers = { ...req.headers, cookie: '', authorization: tok ? 'Bearer ' + tok : '' };
   delete headers['x-share-token']; delete headers['x-csnap-token'];
@@ -201,6 +204,7 @@ async function runOp(req, res, url, { name, caller, origin }) {
   const env = {
     via: 'http', origin, identity: caller.identity, signal: ac.signal, requestId: randomUUID(),
     ...(caller.key ? { keyId: caller.key.id, keyLabel: caller.key.label } : {}),
+    ...(caller.instance ? { instance: caller.instance } : {}),   // 同机 agent 实例（如 'dimensio'），操作可据此标来源
   };
 
   // 慢操作：过了宽限期还没结果，先回 200 再定期写空白保活（隧道 / 代理对 100 秒没字节的响应会掐）
@@ -226,5 +230,5 @@ async function runOp(req, res, url, { name, caller, origin }) {
     clearTimeout(grace); clearInterval(hb);
   }
   const who = caller.ctx.kind === 'admin' ? 'admin' : (caller.ctx.name || caller.ctx.user);
-  console.log(`[agent-api] ${who}${caller.key ? '（' + caller.key.label + '）' : ''} ${name} → ${code === 'ok' ? 200 : status + ' ' + code} ${Date.now() - t0}ms`);
+  console.log(`[agent-api] ${who}${caller.key ? '（' + caller.key.label + '）' : caller.instance ? '（' + caller.instance + ' 实例）' : ''} ${name} → ${code === 'ok' ? 200 : status + ' ' + code} ${Date.now() - t0}ms`);
 }

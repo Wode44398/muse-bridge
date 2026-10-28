@@ -2,7 +2,8 @@
 // against the account store (sets bridge_user session cookie). Registration needs a
 // single-use invite code. /api/auth reports the caller's identity to the page.
 
-import { pluginsOff, pluginOn } from '../plugins/state.mjs';
+import { pluginsOff, pluginOn, pluginUpdates } from '../plugins/state.mjs';
+import { can } from '../runtime/principal.mjs';
 import { readBody } from '../runtime/body.mjs';
 import * as users from '../users.mjs';
 import { contextFor, ownerKey } from '../runtime/identity.mjs';
@@ -61,7 +62,8 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
       agents: ctx ? ctx.agents : enabledAgents(),
       features: { multiUser: FEATURES.multiUser, register: registrationOpen(), remoteAdmin: FEATURES.remoteAdmin },
       // 关着的内置功能（插件）：界面据此藏掉对应入口（设置 › 扩展 › 功能扩展里开关）
-      plugins: { off: pluginsOff() },
+      // updates：插件市场里有更新的个数（只给主机；只提示、不自动装）
+      plugins: { off: pluginsOff(), ...(ctx && can(ctx, 'server.manage') ? { updates: pluginUpdates().length } : {}) },
       canSnapshot: !!ctx?.canSnapshot && pluginOn('chat-snapshot'),
       service: !!ctx?.service,
       allowCodex: !!ctx?.allowCodex,

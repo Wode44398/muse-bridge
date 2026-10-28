@@ -58,7 +58,7 @@ async function shoot(args: Record<string, unknown>) {
 test("U5 截图只截一块：selector / ref / clip；视口外的元素先滚进来；找不到的元素说清楚", { skip, timeout: 120_000 }, async () => {
   const s = await getSharedBrowser();
   try {
-    await s.navigate(PAGE, 200);
+    await s.navigate(PAGE);
     const box = await shoot({ selector: "#box" });
     assert.equal(box.r.ok, true, box.text);
     assert.deepEqual(box.dims, { width: 120, height: 80 }, "只截 #box（修前是整个视口）");
@@ -98,7 +98,7 @@ test("U5 截图只截一块：selector / ref / clip；视口外的元素先滚�
 test("U5 截图默认等动画跑完；waitMs:0 立刻截（就要半截那一帧）", { skip, timeout: 120_000 }, async () => {
   const s = await getSharedBrowser();
   try {
-    await s.navigate(PAGE, 200);
+    await s.navigate(PAGE);
     // 整个视口截（不依赖取景），看 #box 里的一点 (100, 70)
     await s.eval("document.getElementById('box').classList.add('go')"); // 800ms 从红变蓝
     const settled = await shoot({});

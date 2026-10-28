@@ -6,6 +6,7 @@ import { internalRequest, routeError } from '../internal.mjs';
 import { findGenBySession, getLiveGens } from '../../runtime/gen.mjs';
 import { sessionQuestions } from '../../runtime/questions.mjs';
 import { listQueue } from '../../runtime/claude-queue.mjs';
+import { interruptedRun, INTERRUPT_NOTE } from '../../runtime/inflight.mjs';
 import { PERMISSION_MODES } from '../../config/claude-settings.mjs';
 
 defineGroup('projects', '项目', 'Claude 的项目（每个项目一个工作目录）。');
@@ -107,14 +108,27 @@ export async function waitTurn(ctx, sid, seconds, signal) {
 }
 
 // 会话最后一条回答（那一轮已不在内存里时用：读 transcript）。
-async function lastReply(env, sid) {
+async function lastReply(ctx, env, sid) {
   const r = await internalRequest(env.identity, 'GET', '/api/session?id=' + encodeURIComponent(sid));
   if (r.status === 404) throw new OpError('not_found', '没有这个会话', { hint: '会话 id 来自 sessions.list' });
   if (r.status !== 200 || !r.json) throw new OpError('failed', routeError(r));
   const msgs = Array.isArray(r.json.messages) ? r.json.messages : [];
   const last = [...msgs].reverse().find((m) => m.role === 'assistant');
-  return { sessionId: sid, status: 'idle', reply: last ? messageText(last) : '', note: '这个会话现在没有在跑的轮；reply 是最后一条回答' };
+  const reply = last ? messageText(last) : '';
+  // 上一轮被服务进程中途退出掐断（inflight.mjs 在 transcript 末尾留了「这一轮没跑完」）：别当成正常结束
+  const it = interruptedRun(ctx.key, sid);
+  if (it || reply.startsWith(INTERRUPT_PREFIX)) {
+    const resuming = !!(it && it.resuming);
+    return {
+      sessionId: sid, status: 'interrupted', reply, ...(resuming ? { autoResume: true } : {}),
+      note: resuming ? 'bridge 服务刚才意外重启打断了这一轮；服务端马上会自动让 Claude 从中断处接着做' : 'bridge 服务中途退出打断了这一轮，没有排上自动继续',
+      next: resuming ? '过十几秒再 chat.wait' : '要接着做就 chat.send 在这个会话里发一句「继续」',
+    };
+  }
+  return { sessionId: sid, status: 'idle', reply, note: '这个会话现在没有在跑的轮；reply 是最后一条回答' };
 }
+// transcript 里「被中断」那条合成消息的开头（两种说法共用这一截）
+const INTERRUPT_PREFIX = INTERRUPT_NOTE.slice(0, 9);
 
 function messageText(m) {
   if (m.role === 'user') return String(m.text || '');
@@ -322,7 +336,9 @@ async function afterStart(ctx, env, r, args) {
 
 defineOp({
   name: 'chat.wait', title: '等一个会话的结果',
-  desc: '等这个会话当前这一轮：完成（done，带 reply）、出错（error）、被停（stopped）、要人回答（needs_input，带 pending）或到点（running，带目前的 partial），先到先回。会话没在跑时返回最后一条回答（status=idle）。',
+  desc: '等这个会话当前这一轮：完成（done，带 reply）、出错（error）、被停（stopped）、要人回答（needs_input，带 pending）或到点（running，带目前的 partial），先到先回。'
+    + '会话没在跑时返回最后一条回答（status=idle）；上一轮被 bridge 服务中途退出（崩溃、重启）打断时 status=interrupted——'
+    + '排上了「自动继续被中断的对话」（autoResume=true）就在 timeout 内等它自动开跑再接着等，没排上的要接着做就 chat.send 发一句「继续」。',
   slow: true, need: ['agent:claude'],
   params: {
     sessionId: { type: 'string', required: true },
@@ -330,8 +346,14 @@ defineOp({
   },
   handler: async (ctx, args, env) => {
     const sid = needSid(args.sessionId);
-    const r = await waitTurn(ctx, sid, args.timeout, env.signal);
-    return r || await lastReply(env, sid);
+    const deadline = Date.now() + args.timeout * 1000;
+    let r = await waitTurn(ctx, sid, args.timeout, env.signal);
+    // 服务重启后排着自动继续（restart-resume.mjs，起来约 15 秒后发）：到点前等它开跑，开跑了就接着等这一轮
+    while (!r && interruptedRun(ctx.key, sid)?.resuming && Date.now() < deadline && !env.signal?.aborted) {
+      await sleep(500, env.signal);
+    }
+    if (!r && findGenBySession(ctx.key, sid)) r = await waitTurn(ctx, sid, Math.max(0, (deadline - Date.now()) / 1000), env.signal);
+    return r || await lastReply(ctx, env, sid);
   },
 });
 

@@ -15,8 +15,8 @@
   import { caps, me, ui, applyMe, agentOn, screenOn, rootScreen, applyFollowSys, hostIsServer } from './lib/state.svelte.js';
   import { openPage } from './lib/pageMorph.js';
   import { busStart, busStop, busOn } from './lib/bus.js';
-  import { showToast } from './lib/toast.svelte.js';
-  import { handleUiCmd } from './lib/agentUi.js';
+  import { showToast, setErrorToastAction } from './lib/toast.svelte.js';
+  import { handleUiCmd, askClaudeAboutError } from './lib/agentUi.js';
   import { warmThemeWallpapers } from './lib/homeTheme.js';
   import { reportUi } from './lib/uiReport.js';
   import { restoreOnBoot, openSession, newConversation } from './lib/chat.svelte.js';
@@ -63,6 +63,8 @@
     const r = root;
     untrack(() => { if (r !== 'home' && ui.screen === 'home') ui.screen = r; });
   });
+  // 红字报错提示的「问 Claude」：Claude 分页对这个人开着才出按钮（lib/toast.svelte.js）
+  $effect(() => { setErrorToastAction((me.kind === 'admin' || me.kind === 'user') && screenOn('claude') ? askClaudeAboutError : null); });
   // 单页模式没有主页右上的登录胶囊：启动完还没登录就直接弹登录框
   let loginNudged = false;
   $effect(() => {
@@ -121,7 +123,7 @@
     busStart();
     // ui.cmd：agent 经接口让用户的界面换页 / 打开会话 / 预览文件 / 弹提示（lib/agentUi.js）
     const off = busOn((ev) => {
-      if (ev.type === 'agents.changed' || ev.type === 'me.changed' || ev.type === 'plugins.changed') refreshMe();
+      if (ev.type === 'agents.changed' || ev.type === 'me.changed' || ev.type === 'plugins.changed' || ev.type === 'plugins.market') refreshMe();
       else if (ev.type === 'ui.cmd') handleUiCmd(ev);
     });
     return () => { off(); busStop(); };

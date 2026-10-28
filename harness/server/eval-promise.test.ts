@@ -29,7 +29,7 @@ const ctx: ToolContext = {
 test("Eval 真的 await：返回 Promise 的表达式、顶层 await、对象、异常；verify 的三种结局", { skip, timeout: 120_000 }, async () => {
   const s = await getSharedBrowser();
   try {
-    await s.navigate("data:text/html,<title>v4</title><p id=x>hi</p>", 200);
+    await s.navigate("data:text/html,<title>v4</title><p id=x>hi</p>");
     // 修前这两条拿回的是 {}
     assert.equal(await s.eval("(() => Promise.resolve(true))()"), true);
     assert.equal(await s.eval("(async () => { await new Promise((r) => setTimeout(r, 50)); return 42; })()"), 42);

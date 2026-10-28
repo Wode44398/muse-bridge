@@ -28,7 +28,8 @@
 
 不改公开版的代码，而是由 `deploy/muse/bootstrap.sh` 的 `apply_bridge_declarations` 在装机 / 更新时写：
 
-- `config.json` 的 `distro`：品牌 Muse Bridge、没选过语言时跟浏览器（顺手删掉早期写的 `edition` 对象）；
+- `config.json` 的 `distro`：品牌 Muse Bridge、没选过语言时跟浏览器、反馈的真实去向 `feedback`（公开 GitHub Issue，`public: true`：
+  网页表单和 `feedback.*` 操作据此说清去向并提醒公开、图片不公开）；顺手删掉早期写的 `edition` 对象；
 - `config.json` 的 `feedbackRelay`：bridge 的反馈推送发到 Muse 的反馈中继（`feedback-worker/`），带 `distro: "muse"`，中继转成本仓库的 Issue；
   推送开关 `feedbackUpstream` 不写（默认关，管理员在网页里自己开）；
 - 服务单元的环境变量：`BRIDGE_AUDIENCE_HINT`（控制台的多人开关只读，提示在 Muse 里说）、`BRIDGE_PROXY_FORCED`（模型服务一律走出站代理）、
@@ -71,4 +72,4 @@ node web/scripts/i18n-check.mjs                             # 同步后核对字
 node deploy/muse/sync/sync-from-bridge.mjs --from <公开版导出树> --check   # 看一次同步会动哪些文件
 ```
 
-服务端、前端、dimensio 的测试（`src/**/*.test.mjs`、`harness/`、`web/`）随 bridge 公开版一起来，改动和测试都在 bridge 本体里做。
+服务端、前端、dimensio 的测试（`src/` 下的各个 `.test.mjs`、`harness/`、`web/`）随 bridge 公开版一起来，改动和测试都在 bridge 本体里做。

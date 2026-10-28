@@ -35,6 +35,24 @@ async function gotoScreen(screen) {
   await goto(screen === 'home' ? rootScreen() : screen);
 }
 
+// 红字报错提示的「问 Claude」（lib/toast.svelte.js）：开一个新的 Claude 对话，把报错和出错的界面填进输入框，
+// 不替用户发出去——用户补一句再发，Claude 按系统提示里「bridge 的 bug」那套诊断、确认后上报。
+const SCREEN_LABEL = { home: () => t('主页'), files: () => t('文件'), claude: () => 'Claude', vertex: () => 'Gemini', chatgpt: () => 'Codex', harness: () => 'dimensio' };
+export async function askClaudeAboutError(text) {
+  if (!screenOn('claude')) return false;
+  const where = ui.settingsOpen ? t('设置') : (SCREEN_LABEL[ui.screen]?.() || String(ui.screen || ''));
+  await gotoScreen('claude');
+  ui.taskDone = false;
+  // Claude 页挂着就按它「新对话」的落点规则开；还没挂上时开在默认工作空间（同 App 里桌面快捷键的处理）
+  const handled = !window.dispatchEvent(new CustomEvent('bridge:newchat', { cancelable: true }));
+  if (!handled) { const { newConversation } = await import('./chat.svelte.js'); newConversation(); }
+  const { prefillComposer } = await import('./composerBridge.svelte.js');
+  const msg = t('我刚在「{where}」看到这个报错：「{err}」。帮我看看是不是 bridge 出 bug 了；是的话跟我确认后上报。', { where, err: String(text || '').slice(0, 500) });
+  // 等新对话的输入栏换好草稿再填，别被「换成新对话那份草稿」冲掉
+  setTimeout(() => prefillComposer(msg), 80);
+  return true;
+}
+
 async function openPageTarget({ page, module, section }) {
   const p = String(page || '').toLowerCase();
   if (p === 'settings') {

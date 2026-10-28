@@ -61,7 +61,7 @@
   import { pluginPanels, watchPluginPanels, panelTitle } from '../../lib/pluginPanels.svelte.js';
   import { filesFromInput, uploadAttachment } from '../../lib/attachments.js';
   import { t, tc, tr, lang, setLang, LANGS } from '../../lib/i18n.js';
-  import { DISTRO, stripBrand } from '../../lib/distro.js';
+  import { DISTRO, stripBrand, feedbackDest } from '../../lib/distro.js';
   import { ovUrl, ovMarks } from '../../lib/overlay.svelte.js';
 
   import { settingsNav } from './settingsNav.svelte.js';
@@ -205,7 +205,7 @@
       ...((me.kind === 'admin' || me.kind === 'user') && pluginOn('agent-api') ? [{ key: 'agentapi', label: t('Agent 接入'), ico: 'agentapi' }] : []),
     ],
     [
-      ...(extOk ? [{ key: 'extensions', label: t('扩展'), ico: 'extensions' }] : []),
+      ...(extOk ? [{ key: 'extensions', label: t('扩展'), ico: 'extensions', badge: me.pluginUpdates }] : []),
       ...(ags.policyOk && ags.multiUser ? [{ key: 'policy', label: t('额度与注册'), ico: 'policy' }] : []),
       ...(pluginOn('devices') ? [{ key: 'devices', label: t('设备'), ico: 'localpc' }] : []),
       ...(single || !pluginOn('wallpapers') ? [] : [{ key: 'wallpaper', label: t('壁纸'), ico: 'wallpaper' }]),
@@ -259,6 +259,7 @@
     ...(markOpts.length > 1 ? [{ sec: 'ag-claude', id: 'thinkmark', label: t('思考动画'), keys: t('菊花 星标 动画 Claude Code 经典 加载') }] : []),
     // Claude 设置（注册表项；key 用来按身份过滤：管理员项 / shell 项别人搜不到）。keys 带官方英文词
     { sec: 'ag-claude', id: 'climit', key: 'autoContinueOnLimit', label: t('限额重置后自动继续'), keys: t('限额 续跑 auto-continue usage limit') },
+    { sec: 'ag-claude', id: 'crestart', key: 'autoResumeOnRestart', label: t('自动继续被中断的对话'), keys: t('重启 崩溃 中断 续跑 自动继续 restart crash resume interrupted') },
     { sec: 'ag-claude', id: 'cdef-perm', key: 'permissionMode', label: t('权限模式'), keys: t('手动 接受编辑 计划 自动 permission mode') },
     { sec: 'ag-claude', id: 'cdef-style', key: 'outputStyle', label: t('输出风格'), keys: t('简洁 讲解 学习 主动 output style concise') },
     { sec: 'ag-claude', id: 'cviz', key: 'inlineVisualizations', label: t('对话内交互图表'), keys: t('图表 示意图 inline visualizations') },
@@ -316,7 +317,7 @@
     { sec: 'connect', id: 'keeponline', label: t('插电时保持在线'), keys: t('睡眠 休眠 唤醒 电源 常驻 在线 本机服务端 sleep awake') },
     { sec: 'connect', id: 'srvaccess', label: t('本机服务端访问信息'), keys: t('访问令牌 token 局域网 地址 公网 重新配置 端口') },
     { sec: 'help', id: 'feedback', label: t('提交反馈'), keys: t('问题 建议 截图') },
-    { sec: 'help', id: 'fbup', label: t('把用户反馈同时发给 bridge 开发者'), keys: t('反馈 推送 开发者 汇总 关闭') },
+    { sec: 'help', id: 'fbup', label: t('把用户反馈同时发给 {to}', { to: fbDest.to }), keys: t('反馈 推送 开发者 汇总 关闭') },
   ].filter((e) => !e.sec.startsWith('ag-') || agentRows.some((a) => 'ag-' + a.id === e.sec))
    .filter((e) => e.id !== 'fbup' || (fbUp?.admin && fbUp.mode !== 'inbox' && !fbUp.reason))   // 跟反馈页上开关的出现条件一致
    .filter((e) => e.id !== 'admin-access' || me.kind === 'user')
@@ -781,6 +782,8 @@
   // 没配中继地址（reason=no-relay）、不是正式实例时不出开关；开发者自己那台（mode=inbox）是汇总端，不出提示也不出开关。
   let fbUp = $state(null), fbUpBusy = $state(false), fbConsent = $state(false);
   function loadFbUp() { api.get('/api/feedback/upstream').then((r) => { fbUp = r; }).catch(() => {}); }
+  // 去向文案里的「发给谁」：发行版声明的（服务端回的 dest 优先，其次注入的 DISTRO.feedback），没声明 = 本体的「bridge 开发者」
+  const fbDest = $derived(feedbackDest(fbUp?.dest, lang()));
   // 打开设置就取一次（设置搜索按它决定出不出「同时发给 bridge 开发者」），进反馈页再刷新
   $effect(() => { const s = sec, k = me.kind; untrack(() => { if (k !== 'none' && (s === 'help' || !fbUp)) loadFbUp(); }); });
   async function onFbUp(v) {
@@ -795,13 +798,13 @@
   const fbUpNote = $derived.by(() => {
     if (!fbUp || fbUp.mode === 'inbox' || fbUp.mode === 'push') return '';
     const notOn = !fbUp.reason;
-    if (fbUp.admin && fbUp.libraryDir) return (notOn ? t('这台服务器没开「把用户反馈同时发给 bridge 开发者」。') + ' ' : '')
+    if (fbUp.admin && fbUp.libraryDir) return (notOn ? t('这台服务器没开「把用户反馈同时发给 {to}」。', { to: fbDest.to }) + ' ' : '')
       + t('反馈只留在这台服务器上，存放在 {dir}。', { dir: fbUp.libraryDir });
-    return notOn ? t('这台服务器没开「把用户反馈同时发给 bridge 开发者」，反馈只留在服务器上，由管理员查看。')
+    return notOn ? t('这台服务器没开「把用户反馈同时发给 {to}」，反馈只留在服务器上，由管理员查看。', { to: fbDest.to })
       : t('反馈只留在这台服务器上，由管理员查看。');
   });
   const fbUpAdminSub = $derived(!fbUp?.admin ? ''
-    : t('默认关。打开后，提交页会多一个「这条也发给 bridge 开发者」，提交的人自己勾了才发。')
+    : t('默认关。打开后，提交页会多一个「这条也发给 {to}」，提交的人自己勾了才发。', { to: fbDest.to }) + (fbDest.public ? ' ' + t('这个去向是公开的：提交的内容任何人都能看到，请提醒大家别写隐私、账号和密钥。') : '')
       + (fbUp.relayHost ? ' ' + t('发往 {host}。', { host: fbUp.relayHost }) : ''));
   // 汇总端（开发者自己那台）只给管理员看拉取状态：令牌对不上、中继没部署时一眼能看出来，不会悄悄一直失败
   const fbWhen = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
@@ -907,7 +910,7 @@
           <div class="ngrp">
             {#each grp as n (n.key)}
               <button class="nit" class:on={sec === n.key} class:off={n.off} onclick={() => navigate(n.key)}>
-                {@render nico(n)}<span class="nl">{n.label}</span>
+                {@render nico(n)}<span class="nl">{n.label}</span>{#if n.badge}<span class="nbadge" title={t('{n} 个插件有更新', { n: n.badge })}>{n.badge}</span>{/if}
               </button>
             {/each}
           </div>
@@ -1183,6 +1186,11 @@
             {/each}
           </DGroup>
         {/if}
+
+        <!-- 服务意外重启时：上一条命没跑完的轮，服务恢复后自动接着做（src/runtime/restart-resume.mjs） -->
+        <DGroup label={t('服务意外重启时')}>
+          {@render crow('autoResumeOnRestart', 'crestart')}
+        </DGroup>
 
         <!-- 新会话默认：会话里可以单独改（模式菜单 / 加号菜单的输出风格） -->
         <DGroup label={t('新会话默认')}>
@@ -1522,7 +1530,7 @@
         {/if}
         {#if fbUp?.mode === 'push'}
           <div class="fb-consent">
-            <span class="fb-consent-tx"><b>{t('这条也发给 bridge 开发者')}</b>{t('勾选后会同时发给 bridge 开发者：带文字、所在界面、版本和系统，不带账号名和服务器地址；图片最多 3 张，原样发出，截图里能看到的开发者也能看到；视频不发。')}</span>
+            <span class="fb-consent-tx"><b>{t('这条也发给 {to}', { to: fbDest.to })}</b>{fbDest.public ? t('勾选后会同时发给 {to}：带文字、所在界面、版本和系统，不带账号名和服务器地址。这是公开发布：内容任何人都能看到，请别写隐私、账号、密钥；图片不会公开发布（只记张数），视频不发。', { to: fbDest.to }) : t('勾选后会同时发给 {to}：带文字、所在界面、版本和系统，不带账号名和服务器地址；图片最多 3 张，原样发出，截图里能看到的开发者也能看到；视频不发。', { to: fbDest.to })}</span>
             <DSwitch bind:checked={fbConsent} />
           </div>
         {/if}
@@ -1539,7 +1547,7 @@
       {#if fbInboxLine}<p class="fb-note sel-text" class:bad={!!fbUp.lastPullError || fbUp.reason === 'no-relay'}>{fbInboxLine}</p>{/if}
       {#if fbUp?.admin && fbUp.mode !== 'inbox' && !fbUp.reason}
         <DGroup foot={fbUp.pending ? t('还有 {n} 条没发出去，连上后自动补发。', { n: fbUp.pending }) : ''}>
-          <DRow title={t('把用户反馈同时发给 bridge 开发者')} sub={fbUpAdminSub + ' ' + t('关掉后，这台服务器上的反馈只留在本机，还没发出去的也一并取消。')} highlight={fl('fbup')}>
+          <DRow title={t('把用户反馈同时发给 {to}', { to: fbDest.to })} sub={fbUpAdminSub + ' ' + t('关掉后，这台服务器上的反馈只留在本机，还没发出去的也一并取消。')} highlight={fl('fbup')}>
             {#snippet trailing()}<DSwitch checked={fbUp.mode === 'push'} disabled={fbUpBusy} onchange={onFbUp} />{/snippet}
           </DRow>
         </DGroup>
@@ -1709,6 +1717,9 @@
   .nit.on { background: var(--dsk-sel); color: var(--dsk-ink); font-weight: 600; }
   .nit.off .nl { opacity: .5; }
   .nl { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* 插件市场有更新：只提示的小红点数 */
+  .nbadge { margin-left: auto; flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--dsk-crit); color: #fff;
+    font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
   .nico { width: 18px; height: 18px; flex: none; display: inline-flex; align-items: center; justify-content: center; }
   .nico :global(svg) { width: 17px; height: 17px; display: block; }
   .nico img { width: 15px; height: 15px; object-fit: contain; display: block; }

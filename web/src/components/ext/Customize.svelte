@@ -10,7 +10,7 @@
   // 两个范围（标题旁的分段）：「我自用」= 只进管理员自己的会话；「全服统一」= 给服务器上所有成员加装（成员的 Claude
   // 会话与定时任务都加载，管理员自己也用得上）。列表、上传、市场「已添加」、包级批量都按当前范围走（?scope= / body.scope）。
   import './cz.css';
-  import { ui, agentOn } from '../../lib/state.svelte.js';
+  import { ui, me, agentOn } from '../../lib/state.svelte.js';
   import { extensionsNav } from '../../lib/extensionsNav.svelte.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { api, authHeaders } from '../../lib/api.js';
@@ -709,7 +709,7 @@
       <div class="cz-tabs" role="tablist">
         {#each TYPES as ty (ty.key)}
           <button role="tab" class="cz-tab" class:on={curType === ty.key} aria-selected={curType === ty.key} onclick={() => setType(ty.key)}>
-            {ty.label}{#if ty.key !== 'module' && countOf(ty.key) && view === 'mine'}<i>{countOf(ty.key)}</i>{/if}
+            {ty.label}{#if ty.key !== 'module' && countOf(ty.key) && view === 'mine'}<i>{countOf(ty.key)}</i>{:else if ty.key === 'module' && me.pluginUpdates}<i class="cz-tab-upd" title={t('{n} 个插件有更新', { n: me.pluginUpdates })}>{me.pluginUpdates}</i>{/if}
           </button>
         {/each}
       </div>

@@ -4,7 +4,9 @@
 //   ① 这台服务器配了中继地址：环境变量 BRIDGE_FEEDBACK_RELAY > config.feedbackRelay > 构建期渠道（程序根 bridge-build.json
 //      的 feedbackRelay，官方安装包由打包脚本写入）；源码里没有默认值，自己编译 / fork 的版本没配就整条通道不存在。
 //   ② 开服管理员在设置的反馈页里主动打开「把用户反馈同时发给 bridge 开发者」（config.feedbackUpstream === true，默认关）。
+//   （去向文案「bridge 开发者」是本体默认；发行版可在 config.json 的 distro.feedback 声明别的去向，见 config/distro.mjs，state() 的 dest 带给界面）
 //   ③ 提交反馈的人在提交页上自己勾了「这条也发给 bridge 开发者」（默认不勾；POST /api/feedback 的 shareWithDeveloper）。
+//      或者在对话里让 Claude 代报：Claude 说明内容和去向、用户同意后才调 feedback.report（agent-api/ops/feedback.mjs）。
 // 三者缺一，反馈就只留在这台服务器上（本机副本总是先落库，见下面 FEEDBACK_DIR 与 routes/feedback.mjs）。
 //
 // 两种角色，看数据根 config.json（每次现读，改了不用重启）：
@@ -171,6 +173,7 @@ export function createFeedbackUpstream({
   random = Math.random,
   instanceOk = INSTANCE_OK,
   appVersion = `${APP_VERSION_NAME} (${APP_VERSION_CODE})`,
+  distro = DISTRO,
   literals = defaultLiterals,
   log = (...a) => console.log(...a),
 } = {}) {
@@ -241,6 +244,8 @@ export function createFeedbackUpstream({
     const c = cfg();
     const r = relay(c);
     const out = { mode: mode(c), enabled: pushOn(c) };
+    // 发行版声明了反馈去向（distro.feedback）才带：界面据此说真实去向 / 公开提醒；没声明 = 本体，字段不出现
+    if (distro && distro.feedback) out.dest = { to: distro.feedback.to, toEn: distro.feedback.toEn, public: distro.feedback.public };
     if (!instanceOk) out.reason = 'instance';
     else if (!r) out.reason = 'no-relay';
     if (admin) {

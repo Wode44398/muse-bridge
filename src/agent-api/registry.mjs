@@ -70,6 +70,9 @@ export const apiAllowed = (ctx) => !!ctx && (ctx.kind === 'admin' || ctx.kind ==
 // 这个调用者能不能用某个操作：返回 null（能）或一句原因。
 export function whyNot(ctx, op) {
   if (!apiAllowed(ctx)) return '需要登录身份（主机或账号）';
+  // 入口自带的范围限制（同机 agent 实例不给设备 / 媒体组，见 instance-auth.mjs）
+  const denied = typeof ctx.opDeny === 'function' ? ctx.opDeny(op) : null;
+  if (denied) return denied;
   for (const n of op.need || []) {
     if (n.startsWith('plugin:')) {
       if (!pluginOn(n.slice(7))) return '这项功能在这台服务器上关着（设置 › 扩展 › 功能扩展里可以打开）';

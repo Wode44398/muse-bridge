@@ -1,8 +1,8 @@
 <script>
   import { uiAlert } from '../lib/dialogs.js';
   import { dragOut, attDragSrc } from '../lib/dragOut.js';
-  import { session, settings, caps, compose, status, prefs } from '../lib/state.svelte.js';
-  import { send, stop, bgHoldNow, steer, queueSend, queuedItems, editLastQueued, prewarmNewChat } from '../lib/chat.svelte.js';
+  import { session, settings, caps, compose, status, prefs, ui } from '../lib/state.svelte.js';
+  import { send, stop, bgHoldNow, steer, queueSend, queuedItems, editLastQueued, prewarmNewChat, chat, requestSync } from '../lib/chat.svelte.js';
   import SlashMenu from './SlashMenu.svelte';
   import { loadCommands, filterCommands } from '../lib/slashCommands.js';
   import { api } from '../lib/api.js';
@@ -321,6 +321,10 @@
   // 后台任务照跑。停后台任务走工作台「任务」页（逐条 ⏹ / 结束等待），不再只剩一个会连带杀掉它们的停止键。
   const holding = $derived(!!bgHoldNow());
   const busyNow = $derived(session.busy && !holding);
+  // 这个会话在不在跑还没经服务端确认（切会话 / 回前台后的头几百毫秒；网络慢时更久）：
+  // 发送键换成缓冲圈、暂不放行——它要是其实在跑，这时发出去会被当成新一轮、把在跑的那轮顶掉。
+  // 离线不算（离线发送有自己的明确报错）。确认一到（在跑 → 停止键；没跑 → 发送键）立刻换回。
+  const verifying = $derived(chat.unverified && !!session.id && !session.busy && !ui.offline && !IS_CSNAP);
 
   // innerText（非 textContent）：保留 contenteditable 里 <br>/<div> 代表的换行，
   // 多行 prompt / 粘贴的代码不再被压成一行。\u00a0 是 contenteditable 的填充空格。
@@ -336,6 +340,7 @@
     if (uploading) return;   // 附件还在上传——发送按钮已是禁用态，等传完再发
     const txt = fieldText();
     if (!txt && !compose.attachments.length) return;
+    if (verifying) { requestSync('send-wait'); return; }   // 文字留在输入框里，确认后再按一次
     if (busyNow) {
       if (!canSteer) return;
       clearField();
@@ -499,6 +504,9 @@
             </div>
           {/if}
         </div>
+      {:else if verifying}
+        <!-- 状态确认中：缓冲圈（延迟淡入，局域网下几百毫秒就确认完，用户看不到闪烁） -->
+        <button class="submit verifying" aria-label={t('正在同步会话状态…')} title={t('正在同步会话状态…')} disabled><span class="vspin"></span></button>
       {:else if busyNow}
         <button class="submit stop" aria-label={t('停止生成')} onclick={stop}><svg viewBox="0 0 20 20" width="13" height="13"><rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor"/></svg></button>
       {:else}
@@ -615,6 +623,11 @@
   .model-fast { color: var(--muted); }
   .submit { width: 38px; height: 38px; border-radius: 11px; background: var(--text); color: var(--bg); display: flex; align-items: center; justify-content: center; margin-left: 2px; }
   .submit.stop { border-radius: 11px; }
+  /* 确认中：底色压淡、不吃点击；圈 400ms 后才淡入，快速确认时只是按钮淡了一瞬 */
+  .submit.verifying, .submit.verifying:disabled { opacity: 1; background: var(--hover-strong); color: var(--muted); cursor: default; }
+  .vspin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
+    opacity: 0; animation: attspin .9s linear infinite, vfade .2s ease-out .4s forwards; }
+  @keyframes vfade { to { opacity: 1; } }
   /* 工作中的分体发送键：左半插话发送、右半下拉（稍后发送 / 停止） */
   .split-wrap { position: relative; display: flex; margin-left: 2px; }
   .split-main { margin-left: 0; width: 34px; border-radius: 11px 3px 3px 11px; }

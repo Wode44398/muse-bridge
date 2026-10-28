@@ -4,6 +4,17 @@ import { existingSharedBrowser, claimBrowser, noBrowserMessage } from "../cdp.ts
 import { fileUrlBlock } from "../sandbox.ts";
 import { redactOutput } from "../redact.ts";
 import { browserAvailable } from "../headless.ts";
+import { dialogNote } from "../browser-verify.ts";
+import type { CdpSession } from "../cdp.ts";
+
+// The script may have opened a native alert/confirm (auto-answered by cdp.ts): say so at the end of the result
+function withDialog(page: CdpSession, r: ToolRunResult): ToolRunResult {
+  const note = dialogNote(page);
+  if (!note) return r;
+  const last = [...r.content].reverse().find((c) => c.t === "text") as { text: string } | undefined;
+  if (last) last.text += note;
+  return r;
+}
 
 // Eval: run JavaScript inside the Browser's page and get the result back.
 // The precision instrument for verification — assert DOM state, read computed
@@ -75,19 +86,19 @@ export const evalTool: Tool = {
         const shown = rendered.length > MAX_RESULT ? rendered.slice(0, MAX_RESULT) + "\n… (truncated)" : rendered;
         // V4（#56）：形态不对（不是布尔）是写法问题，不是「检查没通过」——不记成失败证据。
         if (typeof value !== "boolean") {
-          return fail(
+          return withDialog(page, fail(
             "eval assertion malformed",
             `verify:true needs the expression to evaluate to a boolean (true = pass, false = fail), but it returned:\n${shown}\n` +
               "This call is NOT recorded as verification evidence. Return a boolean; to report why a check fails, throw an Error with the details.",
-          );
+          ));
         }
-        return {
+        return withDialog(page, {
           ...fail(
             "eval assertion failed",
             `Verification assertion at ${page.url} did not return boolean true. Received:\n${shown}`,
           ),
           verification: { passed: false, detail: `Eval assertion failed at ${page.url}: ${shown.slice(0, 240)}` },
-        };
+        });
       }
       let note = "";
       if (rendered.length > MAX_RESULT) {
@@ -98,7 +109,7 @@ export const evalTool: Tool = {
       if (args.verify === true) {
         result.verification = { passed: true, detail: `Eval assertion passed at ${page.url}` };
       }
-      return result;
+      return withDialog(page, result);
     } catch (e) {
       const message = redactOutput((e as Error).message);
       const res = fail("eval error", `Eval failed: ${message}`);
@@ -108,7 +119,7 @@ export const evalTool: Tool = {
       if (args.verify === true && thrown && thrown !== "SyntaxError") {
         res.verification = { passed: false, detail: `Eval assertion threw at ${page.url}: ${message.slice(0, 240)}` };
       }
-      return res;
+      return withDialog(page, res);
     }
   },
 };

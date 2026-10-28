@@ -361,6 +361,7 @@ export default {
   '将于 {when} 自动继续': 'Auto-resuming {when}',
   '限额已重置，正在继续会话…': 'Limits reset — resuming session…',
   '限额已重置，正在继续会话': 'Limits reset — resuming session',
+  '服务刚才意外重启，正在继续会话': 'The service restarted unexpectedly — resuming session',
   '限额重置后自动继续': 'Auto-continue when limits reset',
   '查看详情': 'View details',
   '请从中断的地方继续。': 'Please continue from where you left off.',
@@ -397,4 +398,8 @@ export default {
   '归档「{name}」里的全部会话？': 'Archive all sessions in "{name}"?',
   '收藏的会话和正在工作的会话不受影响。归档的会话可以在侧栏底部的「已归档」里找回。': 'Pinned sessions and sessions that are still working aren’t affected. Archived sessions are in Archived at the bottom of the sidebar.',
   '全部归档': 'Archive all',
+  // —— 运行状态未确认时的缓冲态（Thread 状态行 / 输入栏发送键）——
+  '正在同步状态…': 'Syncing status…',
+  '正在同步会话状态…': 'Syncing session status…',
+  '连不上服务器，这一轮的状态暂时未知': 'Can’t reach the server — this turn’s status is unknown for now',
 };

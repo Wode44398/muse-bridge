@@ -26,7 +26,7 @@ test('路径改写：Windows → Linux 换分隔符、大小写不敏感、正�
   const { value, changed } = rewriteJsonValue({ 'D:\\Notes': 1, cwd: 'D:\\Notes\\p', list: ['C:\\Users\\you\\x', 3] }, maps);
   assert.equal(changed, 2);
   assert.deepEqual(value, { 'D:\\Notes': 1, cwd: '/srv/vault/p', list: ['/home/bridge/x', 3] });
-  assert.equal(claudeProjectSlug('D:\\Notes\\bridge build'), 'E--Vault-Claude-bridge-build');
+  assert.equal(claudeProjectSlug('F:\\Work\\my project'), 'F--Work-my-project');
   assert.equal(claudeProjectSlug('/srv/vault/bridge build'), '-srv-vault-bridge-build');
 });
 

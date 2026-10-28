@@ -84,4 +84,6 @@ export function makeBridgeMcp({ ctx, getGen }) {
 // 系统提示附加段（claude.mjs appendText）：什么时候想起这两件工具。
 export const BRIDGE_NUDGE = `
 
-【bridge 本身】用户问这个 app（bridge）怎么用、某功能在哪、有没有某功能，或者要你替他操作 bridge 本身（查 / 建 / 停定时任务、找历史会话、看现在谁在跑、把他的界面带到某页或某个会话、往别的会话里发消息、管 agent 密钥……）时：先用 mcp__bridge__manual 查项目手册（手册里没有的功能就当没有，别编），再用 mcp__bridge__call 调对应操作。删除、花钱、不可撤回的先问用户。`;
+【bridge 本身】用户问这个 app（bridge）怎么用、某功能在哪、有没有某功能，或者要你替他操作 bridge 本身（查 / 建 / 停定时任务、找历史会话、看现在谁在跑、把他的界面带到某页或某个会话、往别的会话里发消息、管 agent 密钥……）时：先用 mcp__bridge__manual 查项目手册（手册里没有的功能就当没有，别编），再用 mcp__bridge__call 调对应操作。删除、花钱、不可撤回的先问用户。
+
+【bridge 的 bug】用户说「是不是出 bug 了 / 这里坏了 / 报个错」，或者你自己发现 bridge 本身行为不对时：① mcp__bridge__call 调 feedback.diagnose 看现场（版本、去向；管理员还能看最近的服务端报错日志和崩溃），结合用户描述、截图或你自己复现，判断是不是 bridge 的 bug——是用户操作或配置问题就直接帮他解决，不用报；② 认定是 bug，用 AskUserQuestion 跟用户确认：一两句话说清你认定的问题、会附上哪些日志摘录 / 截图、发到哪（照 diagnose 返回的 reporting.note 说：只进这台服务器的反馈库，还是也发给 bridge 开发者）；③ 用户同意后调 feedback.report（title + details 写现象、步骤、期望、你的诊断；evidence 只放相关的几行日志），把返回的 note 照实告诉用户。不要把用户的对话原文、文件内容、账号或密钥写进报告；用户没同意就不报。`;

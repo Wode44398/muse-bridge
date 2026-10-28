@@ -21,9 +21,9 @@
 
 要把反馈同时发给开发者，必须**三道门同时打开**：
 
-1. **这台服务器配了中继地址**：环境变量 `BRIDGE_FEEDBACK_RELAY` > `config.json` 的 `feedbackRelay` > 官方安装包打包时写入的渠道地址（`stage.ps1 -FeedbackRelay`，写进程序根的 `bridge-build.json`）。源码里没有默认值，自己编译或 fork 的版本没配就整条通道不存在，设置页连开关都不显示。
+1. **这台服务器配了中继地址**：环境变量 `BRIDGE_FEEDBACK_RELAY` > `config.json` 的 `feedbackRelay` > 官方安装包打包时写入的渠道地址（维护者的 `stage.ps1` 默认写官方中继，`-NoFeedbackRelay` 不写，写进程序根的 `bridge-build.json`）。源码里没有默认值，自己编译或 fork 的版本没配就整条通道不存在，设置页连开关都不显示。
 2. **开服管理员主动打开**「把用户反馈同时发给开发者」（`config.json` 的 `feedbackUpstream: true`，默认关）。
-3. **提交人在提交时勾选**发给开发者。
+3. **提交人同意**：在提交表单上勾选发给开发者；或者在对话里让 Claude 代报时，Claude 先说明报告内容和去向，提交人同意后才调 `feedback.report`（管理员本人同意时 Claude 也可以顺手打开第 2 道门）。
 
 测试实例（`BRIDGE_NO_AUTH=1`、`BRIDGE_NO_ROUTINES=1`）一律不推不拉；`BRIDGE_FEEDBACK_UPSTREAM=0` 强制关闭。
 

@@ -10,6 +10,8 @@ bridge 的功能都是插件：内置功能（定时任务、分享链接、设�
 - 关着的内置功能，它的接口、Claude 工具、agent 操作都不在；对应手册章节在目录里会注明「这台服务器关着这项功能」。
 - `plugins.status {id, logs?}`：插件自报的状态块、托管的子进程（带 logs=子进程名 附日志尾巴）、入站回调地址、动作按钮；`plugins.action {id, action}` 按按钮。
 - `plugins.install_github {repo}` 从 GitHub 装（只装用户点名、信得过的仓库，先确认）；`plugins.check_update {id}` 看有没有新版。
+- 官方插件市场：`plugins.market` 看有哪些、哪些有更新；`plugins.market_install {id, version?}` 装 / 更新（用户没点名要装时先确认）；
+  `plugins.rollback {id}` 回退到上一版；`plugins.restore_builtin {id}` 内置功能换回内置版。详见下面「插件市场」。
 - 授权字段（`type:"user"` + `grant:"chat"`）新选了服务器主机或 Pro 档账号时，`plugins.config` 要带 `confirmGrant: true`——先问用户。
 
 {{ops:plugins}}
@@ -279,10 +281,30 @@ ctx.webhook('onebot', async (req, res, { json, text, body }) => { const e = json
 - **GitHub 地址**：功能扩展 › 添加 › GitHub 地址，填 `owner/repo`、`owner/repo@ref` 或仓库网址。没写 ref 装最新 Release
   （有 .zip 资产用资产，没有用该 tag 的源码包），没发过 Release 用默认分支。详情页「检查更新」比最新 Release 的版本号。
   只从 github.com / codeload / 资产域下载，重定向逐跳校验，包最大 50MB。
+- **插件市场**：见下一节。
 - **agent 接口**：`plugins.list` / `plugins.status` / `plugins.toggle` / `plugins.config` / `plugins.action` / `plugins.scaffold` / `plugins.link` / `plugins.reload` /
-  `plugins.install_github` / `plugins.check_update` / `plugins.uninstall`。
+  `plugins.install_github` / `plugins.check_update` / `plugins.uninstall` / `plugins.market` / `plugins.market_install` / `plugins.rollback` / `plugins.restore_builtin`。
 
 开关和配置存在数据根的 `plugins.json`；装的插件在 `plugins/<id>/`；插件数据在 `plugin-data/<id>/`。
+
+## 插件市场
+
+设置 › 扩展 › 功能扩展里的「插件市场」：bridge 官方发布的插件（目前只上架官方的，不收第三方）。不用升级 bridge 就能装新插件、更新插件，
+**也能更新内置功能**。
+
+- 市场是一份签过名的索引（仓库 Wode44398/bridge-plugins 的 Release「index」），列出每个插件的各个版本：下载地址、sha256、大小、engines、更新说明。
+  bridge 验过签（公钥写死在程序里）才采用；下载的包按索引里的 sha256 逐字节核对；索引版本号（seq）只升不降。
+- **只提示，不自动装**：正式实例每 6 小时查一次，有更新时功能扩展页顶上列出来、设置里出角标；用户点「更新」才装。
+- 一个插件的版本列表里，这台 bridge 装不了的（engines 不满足）标着原因；默认装能装的最新版，也可以装指定的旧版（降级）。
+- **内置功能的市场版**（索引里 `builtin: true`）：id 等于内置功能的 id，装进 `plugins/.overrides/<id>/` 盖住内置实现——
+  开关、配置、分组都不变，详情里显示「市场版 vX」。它起不来（加载失败 / apply 抛错）就自动退回内置实现，详情里写明原因；
+  `engines.bridge` 必须有上界（如 `>=6.74 <6.75`），bridge 升级后内核自带修复，旧的市场版自动失效、回到内置版。
+  局限：只能换掉经插件 `load()` 加载的代码；门控型内置功能（代码在 Claude 主链路里的那些）和主界面、手机 App 本身不在范围内。
+- **回退**：装的插件「回退到上一版」= 从回收区（`plugins/.trash/`）换回最近一份旧版，离线可用、可以再回退回来；
+  内置功能「恢复内置版」= 市场版进回收区、换回内置实现，同一个市场版本之后不再提示。
+- 内置功能的 id 只有市场能占：上传 zip / GitHub 装同名包一律拒绝。
+- `config.json` 的 `pluginMarket: false` 关掉市场；`pluginMarket.index` / `pluginMarket.publicKeys` 换成自建市场（给了公钥就只认它们）。
+- 发布端（打包、签名、上传）在市场仓库里，`node scripts/publish.mjs`；只在用户说「发布插件」时跑。
 
 ## 内置插件
 

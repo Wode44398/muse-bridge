@@ -39,6 +39,8 @@ export interface PromptEnv {
   managedSkills?: string;
   // C4：会话建立那天的日期（本地时间 YYYY-MM-DD）；跨天由 World State 片段补
   date?: string;
+  // BridgeManual / BridgeCall 注册了没有（bridge 拉起的实例才有，tools/bridgeapi.ts）：有才写下面的 bridge 段
+  bridge?: boolean;
 }
 
 const MEMORY_SECTION_MARKER = "\n\n## Memory index\n";
@@ -71,6 +73,12 @@ ${PLAN_SECTION_BEGIN}
 ${planModeBody(webSearch)}
 ${PLAN_SECTION_END}`;
 }
+
+// bridge 本身（对标 bridge 里 Claude 系统提示的「【bridge 本身】」「【bridge 的 bug】」两节，src/mcp/bridge-tools.mjs BRIDGE_NUDGE）：
+// 只在 BridgeManual / BridgeCall 可用时注入。bug 那一节必须写在 system 里——用户说「坏了」时还没有任何工具调用可以触发 playbook。
+export const BRIDGE_SECTION = `## Bridge (the app hosting you)
+When the user asks how bridge works, where a feature is or whether it exists, or wants bridge itself operated (scheduled tasks, past sessions, what is running, bringing their UI to a page or session, messaging another session, agent keys …): BridgeManual first (a feature the manual lacks does not exist — don't invent), then BridgeCall.
+Bridge bugs — the user says something is broken / asks to report it, or you see bridge itself misbehave: (1) BridgeCall feedback.diagnose for the facts; with their description, screenshots or your own repro, decide whether it really is a bridge bug — a usage or config problem you just solve, no report. (2) If it is, AskUserQuestion: in a sentence or two the problem as you see it, what goes along (log excerpts / screenshots) and where it goes (diagnose's reporting.note). (3) Only after they agree, BridgeCall feedback.report (title; details = what happened, steps, expected, your diagnosis; evidence = only the relevant log lines) and pass on the returned note. Never put their conversation text, file contents, accounts or keys in a report.`;
 
 // 恢复会话时把 plan 段与当前模式对齐：不是 plan 就摘掉，是 plan 但原来没有就补上。
 export function refreshPlanSection(
@@ -254,6 +262,8 @@ You have a cross-session memory (Remember/Recall), isolated to this workspace �
 - Do not narrate every thought. Report findings, decisions, and results.`;
 
   const sections: string[] = [];
+
+  if (env.bridge) sections.push(BRIDGE_SECTION);
 
   const projectDocs = env.projectDocs?.trim();
   if (projectDocs) sections.push(projectDocsSection(projectDocs));

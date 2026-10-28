@@ -6,8 +6,8 @@
 
 bridge 是一个自托管服务：用户在手机、网页、桌面客户端上驱动服务端上的 Claude 等 AI agent，文件与会话都存在服务端（详见手册 overview 章）。这套接口把用户在界面上能做的主要事情做成了「操作」，每个操作一个地址：
 
-- 查：我是谁、现在在跑什么（`whoami`、`overview`）、项目手册（`manual`）、会话与历史（`sessions.*`）、文件（`files.list` / `files.read` / `files.search`）、定时任务、设备、额度。
-- 做：给 Claude 发消息并等结果、回答它的提问与审批（`chat.*`）；写 / 移动 / 删除文件；建 / 改 / 停 / 立即运行定时任务；生成图片、视频、语音、音乐（装了 Vertex 扩展时）；在用户登记的电脑上执行动作（`devices.run`）；把用户开着的 bridge 界面带到某页、某个会话或某个文件（`ui.open`）。
+- 查：我是谁、现在在跑什么（`whoami`、`overview`）、项目手册（`manual`）、会话与历史（`sessions.*`）、文件（`files.list` / `files.read` / `files.search`）、定时任务、设备、额度、Claude 的设置与能选的模型（`settings.claude`、`chat.models`）。
+- 做：给 Claude 发消息并等结果、回答它的提问与审批（`chat.*`）；改 Claude 的设置（`settings.claude_set`，如关掉「自动继续被中断的对话」）；写 / 移动 / 删除文件；建 / 改 / 停 / 立即运行定时任务；生成图片、视频、语音、音乐（装了 Vertex 扩展时）；在用户登记的电脑上执行动作（`devices.run`）；把用户开着的 bridge 界面带到某页、某个会话或某个文件（`ui.open`）。
 - 每个操作都以密钥所属的身份执行，和他本人在界面上操作的权限完全一样：成员只碰得到自己的东西，没有命令行的身份就没有命令行。
 
 入口一览（不带密钥也能看前两个）：
@@ -97,7 +97,8 @@ print(r.json())
    - `done`：`reply` 是 Claude 的最终回答，`files` 是它交付的文件；
    - `needs_input`：它在等人——`pending` 里是提问或工具审批，用 `chat.answer` 回，再接着 `chat.wait`；
    - `running`：还没完，`partial` 是目前说到的内容，继续 `chat.wait`；
-   - `error` / `stopped`：出错 / 被停；`idle`：这个会话现在没在跑（返回最后一条回答）。
+   - `error` / `stopped`：出错 / 被停；`idle`：这个会话现在没在跑（返回最后一条回答）；
+   - `interrupted`：上一轮被 bridge 服务中途退出（崩溃、重启）打断了。`autoResume: true` 表示服务端马上会自动让 Claude 接着做（`chat.wait` 会在 timeout 内等它开跑），否则要接着做就在这个会话里 `chat.send` 一句「继续」。`overview` 的 `claude.interrupted` 列出所有这样的会话。
 3. 要看完整过程：`sessions.read { sessionId }`。
 
 注意：这一轮会实时出现在用户的界面上（会话列表、直播），和他自己发的一样；Claude 在 bridge 里有完整工具（读写文件、按身份的命令行、浏览器、媒体、用户的电脑……），派活时把产出放在哪里写清楚。

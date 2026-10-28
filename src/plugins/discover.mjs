@@ -3,6 +3,8 @@
 //   2. agent 扩展（Vertex / Codex / dimensio，modules/registry.mjs 管装卸）——以「agent」类插件出现在同一张表里，
 //      开关仍在 Agent 页 / 功能扩展的 Agent 区（locked：插件表里不重复给开关）；
 //   3. 第三方插件——装在数据根 plugins/<id>/（设置页上传 zip / agent 接口安装），或登记的本机开发目录（plugins.json 的 local）。
+//   4. 插件市场盖住内置功能的版本——装在 plugins/.overrides/<id>/（只有验过签的官方市场能装，见 market.mjs）。
+//      登记时换掉内置插件的 load（来源仍是 builtin，开关 / 配置 / 分组不变）；市场版起不来就自动退回内置实现。
 //
 // 第三方插件目录：
 //   bridge-plugin.json   { id, name, version, description, entry?（默认 index.mjs）, category?, requires?, restart?,
@@ -22,10 +24,11 @@ import { DATA_ROOT } from '../runtime/paths.mjs';
 import { BUILTIN_PLUGINS } from './catalog.mjs';
 import { MODULE_CATALOG, getModule, moduleStatus } from '../modules/registry.mjs';
 import { installCoreResolver } from '../modules/core-resolve.mjs';
-import { enginesProblem } from './engines.mjs';
+import { enginesProblem, hasUpperBound } from './engines.mjs';
 
 export const MANIFEST = 'bridge-plugin.json';
 export const INSTALLED_PLUGINS_DIR = path.resolve(process.env.BRIDGE_PLUGINS_DIR || path.join(DATA_ROOT, 'plugins'));
+export const OVERRIDES_DIR = path.join(INSTALLED_PLUGINS_DIR, '.overrides');
 const STAGING = path.join(INSTALLED_PLUGINS_DIR, '.staging');
 const TRASH = path.join(INSTALLED_PLUGINS_DIR, '.trash');
 const ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
@@ -105,10 +108,13 @@ function entryOf(dir, source) {
 // ── 启动时登记全部 ─────────────────────────────────────────────────────────
 export async function registerAll(kernel) {
   installCoreResolver();
+  builtinEntries.clear();
   for (const e of BUILTIN_PLUGINS) {
     if (typeof e.available === 'function' && !e.available()) continue;
     const { available, defaultEnabled, ...rest } = e;
-    kernel.register({ ...rest, source: 'builtin', defaultEnabled: typeof defaultEnabled === 'function' ? !!defaultEnabled() : defaultEnabled !== false });
+    const ent = { ...rest, source: 'builtin', defaultEnabled: typeof defaultEnabled === 'function' ? !!defaultEnabled() : defaultEnabled !== false };
+    builtinEntries.set(ent.id, ent);
+    kernel.register(withOverride(kernel, ent));
   }
   for (const cat of MODULE_CATALOG) registerModulePlugin(kernel, cat);
   const seen = new Set();
@@ -122,6 +128,133 @@ export async function registerAll(kernel) {
   }
   // 登记的本机开发目录
   for (const p of kernel.readState().local) registerDir(kernel, String(p), 'local', seen);
+}
+
+// ── 市场版盖住内置功能 ─────────────────────────────────────────────────────
+// 内置插件的原始登记信息（换回内置实现时用）。
+const builtinEntries = new Map();
+export const isBuiltinId = (id) => builtinEntries.has(id) || BUILTIN_PLUGINS.some((e) => e.id === id);
+
+// 读 .overrides/<id>/：可用 → { dir, version, config, ui, load }；装着但用不了 → { dir, version, error }；没有 → null。
+export function overrideInfo(id) {
+  const dir = path.join(OVERRIDES_DIR, id);
+  if (!existsSync(path.join(dir, MANIFEST))) return null;
+  let m = null;
+  try { m = readJsonFile(path.join(dir, MANIFEST)); } catch {}
+  const version = String(m?.version || '');
+  try {
+    if (!m || m.id !== id) throw new PluginError(400, '清单里的 id 对不上');
+    if (!hasUpperBound(m.engines?.bridge)) throw new PluginError(400, 'engines.bridge 没写适用到哪一版 bridge（盖内置功能的版本必须有上界）');
+    const { entryPath } = readPluginDir(dir);
+    const url = pathToFileURL(entryPath).href;
+    return { dir, version, config: m.config ?? null, ui: normUi(m), load: (rev) => import(url + (rev ? '?bpv=' + rev : '')) };
+  } catch (e) {
+    return { dir, version, error: String(e?.message || e) };
+  }
+}
+
+// 内置实现的登记补丁（恢复内置版 / 市场版出错退回时用）。override：详情里显示的市场版状态，null = 没装市场版。
+function builtinPatch(ent, override) {
+  return { version: ent.version || '', dir: ent.dir || null, config: ent.config ?? null, extra: { ...(ent.extra || {}), override }, load: ent.load, fallback: null };
+}
+
+// 市场版的登记补丁：load 换成市场版，内置实现当后备（市场版起不来，内核自动换回并调 onFallback）。
+function overridePatch(kernel, ent, ov) {
+  return {
+    version: ov.version, dir: ov.dir, config: ov.config ?? ent.config ?? null,
+    extra: { ...(ent.extra || {}), ui: ov.ui, override: { version: ov.version, active: true, error: null } },
+    load: ov.load,
+    fallback: {
+      load: ent.load,
+      onFallback: (why) => kernel.update(ent.id, builtinPatch(ent, { version: ov.version, active: false, error: `市场版 v${ov.version} 出错，已退回内置版：${why}` })),
+    },
+  };
+}
+
+function withOverride(kernel, ent) {
+  const ov = overrideInfo(ent.id);
+  if (!ov) return ent;
+  if (ov.error) return { ...ent, extra: { ...(ent.extra || {}), override: { version: ov.version, active: false, error: `市场版 v${ov.version} 没用上：${ov.error}` } } };
+  const p = overridePatch(kernel, ent, ov);
+  return { ...ent, ...p };
+}
+
+// 把（已解包、校验过的）市场版放进 .overrides/<id>/ 并换上。热插件当场换；restart 插件下次启动换。
+async function placeOverride(kernel, srcDir, id) {
+  const ent = builtinEntries.get(id);
+  if (!ent || !kernel.has(id)) throw new PluginError(404, '这台 bridge 没有内置功能「' + id + '」');
+  const dest = path.join(OVERRIDES_DIR, id);
+  mkdirSync(OVERRIDES_DIR, { recursive: true });
+  if (existsSync(dest)) moveToTrash(dest, trashKey(id, true));
+  renameSync(srcDir, dest);
+  const ov = overrideInfo(id);
+  if (!ov || ov.error) {
+    moveToTrash(dest, trashKey(id, true));
+    throw new PluginError(400, '市场版用不了：' + (ov?.error || '清单缺失'));
+  }
+  if (ent.restart) {
+    // 运行中的还是启动时那一份：只记下「重启后换上 vX」
+    const cur = kernel.get(id).extra?.override || { version: '', active: false, error: null };
+    kernel.update(id, { extra: { ...(kernel.get(id).extra || {}), override: { ...cur, pending: { install: ov.version } } } });
+    return { ...kernel.get(id), pendingRestart: true };
+  }
+  kernel.update(id, overridePatch(kernel, ent, ov));
+  return kernel.reload(id);
+}
+
+// 恢复内置版：市场版移进回收区，换回内置实现。
+export async function restoreBuiltin(kernel, id) {
+  const ent = builtinEntries.get(id);
+  if (!ent || !kernel.has(id)) throw new PluginError(404, '没有内置功能「' + id + '」');
+  const dest = path.join(OVERRIDES_DIR, id);
+  if (!existsSync(dest)) throw new PluginError(400, '「' + ent.name + '」用的就是内置版');
+  moveToTrash(dest, trashKey(id, true));
+  kernel.writeState((s) => { if (s.sources) delete s.sources[id]; });
+  if (ent.restart) {
+    const cur = kernel.get(id).extra?.override;
+    kernel.update(id, { extra: { ...(kernel.get(id).extra || {}), override: cur?.active ? { ...cur, pending: { restore: true } } : null } });
+    return { ...kernel.get(id), pendingRestart: !!cur?.active };
+  }
+  kernel.update(id, builtinPatch(ent, null));
+  return kernel.reload(id);
+}
+
+// ── 回退到上一版（回收区里最近的一份）──────────────────────────────────────
+// 回收区命名：普通插件 <id>-<时间戳>，盖内置功能的市场版 @<id>-<时间戳>（@ 不会出现在插件 id 里，两类互不混淆）。
+const trashKey = (id, builtin) => (builtin ? '@' + id : id);
+function trashCandidates(id, builtin) {
+  const prefix = trashKey(id, builtin) + '-';
+  let names = [];
+  try { names = readdirSync(TRASH).filter((n) => n.startsWith(prefix) && /^\d+$/.test(n.slice(prefix.length))); } catch {}
+  return names.sort((a, b) => Number(b.slice(prefix.length)) - Number(a.slice(prefix.length))).map((n) => {
+    const dir = path.join(TRASH, n);
+    try { const m = readJsonFile(path.join(dir, MANIFEST)); return m && m.id === id ? { dir, version: String(m.version || '') } : null; } catch { return null; }
+  }).filter(Boolean);
+}
+
+// 能回退到哪一版（没有可回退的给 null）：插件详情据此显示「回退到 vX」。
+export function rollbackTarget(kernel, id) {
+  const p = kernel.get(id);
+  if (!p) return null;
+  if (p.source === 'installed') return trashCandidates(id, false)[0] || null;
+  if (p.source === 'builtin' && p.extra?.override) return trashCandidates(id, true)[0] || null;
+  return null;
+}
+
+export async function rollbackPlugin(kernel, id) {
+  const p = kernel.get(id);
+  if (!p) throw new PluginError(404, '没有插件「' + id + '」');
+  const builtin = p.source === 'builtin';
+  if (!builtin && p.source !== 'installed') throw new PluginError(400, '只有装的插件和市场版内置功能能回退');
+  const prev = trashCandidates(id, builtin)[0];
+  if (!prev) throw new PluginError(404, '回收区里没有「' + p.name + '」的旧版');
+  // 先挪进暂存区（腾出回收区里的那一份），再走正常的覆盖安装：当前版本照旧进回收区，可以再回退回来
+  const work = path.join(STAGING, crypto.randomBytes(6).toString('hex'));
+  mkdirSync(STAGING, { recursive: true });
+  renameSync(prev.dir, work);
+  try {
+    return builtin ? await placeOverride(kernel, work, id) : await placePlugin(kernel, work, id);
+  } finally { rmSync(work, { recursive: true, force: true }); }
 }
 
 function registerDir(kernel, dir, source, seen) {
@@ -210,13 +343,15 @@ const moveToTrash = (dir, id) => {
   renameSync(dir, dst);
   // 换下来的旧版只留最近几份
   try {
-    const old = readdirSync(TRASH).filter((n) => n.startsWith(id + '-')).sort().reverse().slice(3);
+    const old = readdirSync(TRASH).filter((n) => n.startsWith(id + '-') && /^\d+$/.test(n.slice(id.length + 1))).sort().reverse().slice(3);
     for (const n of old) rmSync(path.join(TRASH, n), { recursive: true, force: true });
   } catch {}
 };
 
 // 从 zip 安装（或覆盖安装同 id 的已装插件）。返回插件摘要。
-export async function installFromArchive(kernel, buf) {
+// opts（插件市场用，market.mjs）：expect { id, version } 包里的清单必须对得上；builtin:true = 盖内置功能的市场版。
+// 内置功能的 id 只有 builtin:true 才能占（上传 zip / GitHub 装同名包照旧拒绝）。
+export async function installFromArchive(kernel, buf, opts = {}) {
   if (!buf || !buf.length) throw new PluginError(400, '没收到文件');
   const work = path.join(STAGING, crypto.randomBytes(6).toString('hex'));
   mkdirSync(work, { recursive: true });
@@ -233,11 +368,19 @@ export async function installFromArchive(kernel, buf) {
     sanitizeTree(work);
     const root = findPluginRoot(work);
     const { manifest } = readPluginDir(root);
+    const ex = opts.expect;
+    if (ex && ex.id && manifest.id !== ex.id) throw new PluginError(400, `包里的插件是「${manifest.id}」，不是「${ex.id}」`);
+    if (ex && ex.version && String(manifest.version || '') !== ex.version) throw new PluginError(400, `包里的版本是 ${manifest.version || '（没写）'}，索引说是 ${ex.version}`);
+    if (opts.builtin) {
+      if (!isBuiltinId(manifest.id)) throw new PluginError(400, `「${manifest.id}」不是这台 bridge 的内置功能`);
+      return await placeOverride(kernel, root, manifest.id);
+    }
     return await placePlugin(kernel, root, manifest.id);
   } finally { rmSync(work, { recursive: true, force: true }); }
 }
 
 async function placePlugin(kernel, srcDir, id) {
+  if (isBuiltinId(id)) throw new PluginError(409, `id「${id}」是内置功能的名字（内置功能的新版只能从插件市场装）`);
   const existing = kernel.get(id);
   if (existing && existing.source !== 'installed') throw new PluginError(409, `id「${id}」已被${existing.source === 'local' ? '本机开发目录' : '内置功能'}占用`);
   const dest = path.join(INSTALLED_PLUGINS_DIR, id);
@@ -262,6 +405,7 @@ export async function uninstallPlugin(kernel, id) {
   const p = kernel.get(id);
   if (!p) throw new PluginError(404, '没有插件「' + id + '」');
   if (p.source === 'local') return unlinkLocal(kernel, id);
+  if (p.source === 'builtin' && existsSync(path.join(OVERRIDES_DIR, id))) { await restoreBuiltin(kernel, id); return { id, restored: true }; }
   if (p.source !== 'installed') throw new PluginError(400, '内置功能只能关，不能卸载');
   await kernel.unregister(id);
   const dir = path.join(INSTALLED_PLUGINS_DIR, id);
@@ -299,4 +443,4 @@ export async function reloadPlugin(kernel, id) {
   return kernel.reload(id, e.load);
 }
 
-export const pluginWebDir = (p) => (p && p.dir && (p.source === 'installed' || p.source === 'local') ? path.join(p.dir, 'web') : null);
+export const pluginWebDir = (p) => (p && p.dir && (p.source === 'installed' || p.source === 'local' || (p.source === 'builtin' && p.extra?.override?.active)) ? path.join(p.dir, 'web') : null);

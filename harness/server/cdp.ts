@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,6 +16,7 @@ import { desktopHostInfo, resolveCdpBase, type DesktopHost } from "./desktop-hos
 import { killTree } from "./tools/bash.ts";
 import { registerResource } from "./resources.ts";
 import { browserKindLabel, edgeHub, edgeLink } from "./edge-link.ts";
+import { browserProfileDir, inTestProcess } from "./paths.ts";
 
 // Edge 扩展模式里页面 / 浏览器频道的「地址」：edge-link:<浏览器种类>:<频道>。openSocket 看到这个前缀就走扩展链路而不是真 WebSocket
 const EDGE_SCHEME = "edge-link:";
@@ -75,6 +76,62 @@ const NO_BUILTIN_BROWSER_HINT =
 const MAX_CONSOLE = 400;
 const MAX_NET = 400;
 
+// 截图长边上限：视口更宽时先在这里缩好、记下比例（frame），x,y 一律按图上像素读、由 frameToCss 换算——
+// 否则 provider 入模时再缩一次，模型按图算的坐标就全对不上（对齐 bridge 的 cdp.mjs）。
+export const SHOT_MAX_PX = 1568;
+// 不算「还在加载」的长连接类请求（settle 不等它们）。
+const LONG_LIVED = new Set(["EventSource", "WebSocket", "Ping", "Manifest", "CSPViolationReport"]);
+// 页内 DOM 变动计数器（MutationObserver，按需装一次，导航后新文档自动重装）：n = DOM 变动条数，s = 滚动事件次数
+// （含内层滚动容器，捕获阶段收），t = 最近滚动的元素。settle 与 browser-verify 的页内助手共用同一个计数器。
+export const MUT_INIT =
+  "if(!window.__bridgeMut){const m=window.__bridgeMut={n:0,s:0};try{new MutationObserver((l)=>{m.n+=l.length}).observe(document,{subtree:true,childList:true,attributes:true,characterData:true});addEventListener('scroll',(e)=>{m.s++;m.t=e.target},{capture:true,passive:true})}catch{}}";
+const MUTATION_KEY = `(()=>{${MUT_INIT};return location.href+'#'+window.__bridgeMut.n})()`;
+
+// PNG 头里读宽高（IHDR 固定在第 16~24 字节）。
+export function pngSize(buf: Buffer): { width: number; height: number } {
+  if (!buf || buf.length < 24 || buf.readUInt32BE(12) !== 0x49484452) return { width: 0, height: 0 };
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+}
+
+// 页面弹过的原生对话框（alert / confirm / prompt / beforeunload）：当场自动应答，按序号记下，工具层在下一个动作结果里回报。
+export interface DialogEntry {
+  seq: number;
+  type: string;
+  message: string;
+  accepted: boolean;
+  t: number;
+}
+
+// 最近一次整屏截图的帧：图片像素 ↔ CSS 像素的换算比（k = CSS / 图片像素）与当时的视口、标签。
+export interface ShotFrame {
+  imgW: number;
+  imgH: number;
+  k: number;
+  vpW: number;
+  vpH: number;
+  targetId: string;
+  t: number;
+}
+
+// 页面自己量出来的视口（resize / 截图后实测；以页面说的为准，不靠「命令发过了」）。
+export interface MeasuredViewport {
+  w: number;
+  h: number;
+  dpr: number;
+  touch: number;
+  coarse: boolean;
+  dark: boolean;
+  sx?: number;
+  sy?: number;
+  at: number;
+}
+
+// 浏览器面板的观看者（直播连接各登记一条，断开即撤）：工具据此告诉 agent 用户此刻看不看得到这个浏览器。
+export interface BrowserViewer {
+  kind: "native" | "stream";
+  since: number;
+}
+
 // Roles that get a [refN] handle in the accessibility snapshot (clickable /
 // typeable things). Lowercased for matching.
 const INTERACTIVE_ROLES = new Set([
@@ -125,6 +182,7 @@ export interface ScreenshotResult {
   png: Buffer;
   region?: { x: number; y: number; width: number; height: number; clamped: boolean }; // 页面坐标（CSS px）
   settle: { waitedMs: number; stillRunning: number } | null; // null = 按 waitMs:0 没等
+  frame?: ShotFrame; // 整屏截图才有：这张图就是之后 x,y 的坐标基准
 }
 export const SETTLE_MAX_MS = 3_000;
 export const MAX_SHOT_WAIT_MS = 15_000;
@@ -252,6 +310,15 @@ async function liveDesktopHost(): Promise<(DesktopHost & { cdpBase: string; prox
   return cdp ? { ...info, ...cdp } : null;
 }
 
+// Touch-mode UA: copy the real Chrome major version (sites that branch on it should not treat us as an ancient browser).
+// Short edge < 600 = phone (Pixel 8), otherwise tablet (Galaxy Tab) - same as bridge's cdp.mjs.
+export function mobileUserAgent(baseUa: string, phone: boolean): string {
+  const major = /Chrome\/(\d+)/.exec(baseUa || "")?.[1] || "128";
+  return phone
+    ? `Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Mobile Safari/537.36`
+    : `Mozilla/5.0 (Linux; Android 14; SM-X910) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+}
+
 export class CdpSession {
   private child: ChildProcess | null = null;
   // 子进程 'error' 事件（spawn 本身失败）。见 launch() 里挂监听的理由。
@@ -310,11 +377,36 @@ export class CdpSession {
   // DOM.resolveNode for clicks/typing.
   private refs = new Map<number, { backendId: number; role: string; name: string }>();
 
+  // 主框架加载状态（frameStartedLoading / frameStoppedLoading）：settle 据此区分「页面还在跳转」与「已经安定」。
+  private mainFrameId = "";
+  loading = false;
+  private loadingSince = 0;
+  // 原生对话框：一弹出就替页面应答（不应答主线程整个挡住，之后的 eval / 点击统统 30 秒超时）
+  private dialogs: DialogEntry[] = [];
+  dialogSeq = 0;
+  dialogReported = 0; // 已回报给 agent 的最大序号（browser-verify.ts dialogNote 推进）
+  // 截图坐标帧（见 ShotFrame）与页面实测视口
+  frame: ShotFrame | null = null;
+  measured: MeasuredViewport | null = null;
+  // 触屏仿真：resize 到手机 / 平板档时开（touch 事件 + 移动端 UA + pointer:coarse），左键点击随之改发真触摸
+  emu = { mobile: false };
+  private baseUa = "";
+  private uaOverridden = false;
+  private touch0 = new Map<string, string>(); // targetId → 「桌面档 maxTouchPoints=0」注入脚本的 id
+  // drag() 开了 setInterceptDrags 时，HTML5 拖放被接住的回调
+  private onDragIntercepted: ((p: any) => void) | null = null;
+  // 面板观看者（见 BrowserViewer）
+  private viewers = new Map<number, BrowserViewer>();
+  private viewerSeq = 0;
+  // 持久配置档（登录态跨会话保留）：有值时 profile 就是它、关浏览器不删；空 = 临时目录 <tmp>/profile
+  private profileDir = "";
+
   get alive(): boolean {
     return !this.dead && this.ws?.readyState === WebSocket.OPEN && this.child?.exitCode == null;
   }
 
-  async launch(startUrl: string): Promise<void> {
+  // opts.profileDir：持久配置档（共享浏览器用，登录态跨会话保留，见 getSharedBrowser）；不给 = 一次性临时 profile。
+  async launch(startUrl: string, opts: { profileDir?: string } = {}): Promise<void> {
     // 桌面壳在场 → 真 WebContentsView（用户面板与 agent 同一个页面实体）；否则 headless。
     const host = await liveDesktopHost();
     if (host) {
@@ -324,7 +416,16 @@ export class CdpSession {
     const browser = findBrowser();
     // 浏览器工具照样注册着（桌面壳宿主文件残留、只连着用户的扩展……）但本机没有内置浏览器：说清楚往哪走，别让模型反复重试
     if (!browser) throw new Error(`No Chrome/Edge found for the interactive browser. ${NO_BUILTIN_BROWSER_HINT}`);
-    this.tmp = mkdtempSync(path.join(tmpdir(), "harness-cdp-"));
+    if (opts.profileDir) {
+      // Chromium 一个 user-data-dir 只能一个进程开（第二个把参数转交第一个后就退出）：上次崩溃留下的孤儿先请它退出、
+      // 再按命令行指纹收干净，并删掉它留下的 DevToolsActivePort（不删会读到死端口）。
+      this.profileDir = opts.profileDir;
+      mkdirSync(this.profileDir, { recursive: true });
+      await retireOrphanProfile(this.profileDir, browser);
+    } else {
+      this.tmp = mkdtempSync(path.join(tmpdir(), "harness-cdp-"));
+      this.profileDir = path.join(this.tmp, "profile");
+    }
     this.browserPath = browser;
     // S8（#54）：不再 --no-sandbox——这个浏览器打开模型挑的任意公网页面，renderer 一旦被
     // 利用就直接是用户权限。Windows 普通用户跑 Chromium 自己的沙箱不需要任何特权。
@@ -337,7 +438,7 @@ export class CdpSession {
       "--force-device-scale-factor=1",
       `--window-size=${this.viewport.width},${this.viewport.height}`,
       "--remote-debugging-port=0",
-      `--user-data-dir=${path.join(this.tmp, "profile")}`,
+      `--user-data-dir=${this.profileDir}`,
       startUrl || "about:blank",
     ];
     // S7（#55）：env 不带任何凭据（以前继承全部 provider key）；#64：也不带 __COMPAT_LAYER（见 browserEnv）。
@@ -562,7 +663,7 @@ export class CdpSession {
 
   // Chrome writes the actual debug port to <user-data-dir>/DevToolsActivePort.
   private async readDevToolsPort(timeoutMs = 15_000): Promise<number> {
-    const file = path.join(this.tmp, "profile", "DevToolsActivePort");
+    const file = path.join(this.profileDir, "DevToolsActivePort");
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (existsSync(file)) {
@@ -923,9 +1024,25 @@ export class CdpSession {
       // explicit navigate() calls.
       case "Page.frameNavigated":
         if (params?.frame && !params.frame.parentId) {
+          this.mainFrameId = String(params.frame.id ?? "");
           this.url = params.frame.url;
           this.syncActiveTabUrl(this.url);
         }
+        break;
+      case "Page.frameStartedLoading":
+        if (!this.mainFrameId || params?.frameId === this.mainFrameId) {
+          this.loading = true;
+          this.loadingSince = Date.now();
+        }
+        break;
+      case "Page.frameStoppedLoading":
+        if (!this.mainFrameId || params?.frameId === this.mainFrameId) this.loading = false;
+        break;
+      case "Page.javascriptDialogOpening":
+        this.onDialog(params ?? {});
+        break;
+      case "Input.dragIntercepted":
+        this.onDragIntercepted?.(params);
         break;
       case "Page.navigatedWithinDocument":
         if (params?.url) {
@@ -1031,7 +1148,7 @@ export class CdpSession {
     }
   }
 
-  private send(method: string, params: Record<string, unknown>): Promise<any> {
+  send(method: string, params: Record<string, unknown>, timeoutMs = 30_000): Promise<any> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("CDP not connected"));
     }
@@ -1045,8 +1162,26 @@ export class CdpSession {
           this.pending.delete(id);
           reject(new Error(`CDP ${method} timed out`));
         }
-      }, 30_000).unref();
+      }, timeoutMs).unref();
     });
+  }
+
+  // 页面弹出原生对话框：一律当场应答——不应答的话页面主线程整个挡住，之后的 eval / 点击 / 塞文件统统等不到回执，
+  // 无头里又没人去点。alert、beforeunload 点确定（只是通知 / 放行离开）；confirm、prompt 点取消——它们常守着删除之类
+  // 的动作，不能替 agent 默认同意。真要确认，先 Eval 把 window.confirm 换成返回 true。
+  private onDialog(params: Record<string, unknown>): void {
+    const type = String(params.type || "alert");
+    const accept = type === "alert" || type === "beforeunload";
+    const entry: DialogEntry = { seq: ++this.dialogSeq, type, message: String(params.message || "").slice(0, 500), accepted: accept, t: Date.now() };
+    this.dialogs.push(entry);
+    if (this.dialogs.length > 20) this.dialogs.splice(0, this.dialogs.length - 20);
+    this.pushConsole(`dialog.${type}`, `${entry.message} (auto-${accept ? "accepted" : "dismissed"})`);
+    this.send("Page.handleJavaScriptDialog", { accept }, 5_000).catch(() => {});
+  }
+
+  // 序号 mark 之后弹过的对话框
+  dialogsSince(mark: number): DialogEntry[] {
+    return this.dialogs.filter((d) => d.seq > mark);
   }
 
   // Evaluate an expression in the page, returning its value (returnByValue).
@@ -1104,12 +1239,16 @@ export class CdpSession {
     }
   }
 
-  async navigate(url: string, settleMs = 1200): Promise<void> {
+  // 导航后不再固定白等 1.2 秒：等 load 事件（最多 10 秒），再等页面安定（DOM 不再变、请求落定，最多 3 秒）。
+  // 快页面立刻返回，慢 SPA 也不会还没渲染完就交回去。errorText 是 Chrome 报的加载失败（DNS / 拒连……）。
+  async navigate(url: string): Promise<{ ms: number; settled: boolean; errorText: string }> {
+    const t0 = Date.now();
     const loaded = new Promise<void>((res) => this.loadWaiters.push(res));
-    await this.send("Page.navigate", { url });
+    const r = await this.send("Page.navigate", { url });
     this.url = url;
-    await Promise.race([loaded, delay(10_000)]);
-    await delay(settleMs); // let SPA JS render
+    if (r?.loaderId) await Promise.race([loaded, delay(10_000)]); // 没有 loaderId = 同文档跳转（只改 #hash），没有 load 事件
+    const s = await this.settle({ since: t0, quietMs: 300, maxMs: 3000 });
+    return { settled: s.settled, ms: Date.now() - t0, errorText: String(r?.errorText || "") };
   }
 
   // history: -1 = back, +1 = forward. Returns the URL we moved to, or null when
@@ -1119,10 +1258,80 @@ export class CdpSession {
     const next = (h?.currentIndex ?? 0) + dir;
     const entry = h?.entries?.[next];
     if (!entry) return null;
+    const t0 = Date.now();
     await this.send("Page.navigateToHistoryEntry", { entryId: entry.id });
-    await delay(800);
     this.url = entry.url;
+    await delay(60); // 让 frameStartedLoading 先到，settle 才知道在加载
+    await this.settle({ since: t0, quietMs: 300, maxMs: 6000 });
     return String(entry.url);
+  }
+
+  // ── 等页面安定 ────────────────────────────────────────────────────────────
+  // 每 ~80ms 看一次：主框架不在加载、页面 DOM 变动计数（页内 MutationObserver）与地址连续 quietMs 不变、since 之后发出
+  // 的请求都已落定（长轮询 / SSE / WebSocket 与挂了 4 秒以上的不算）。满足即返回；页面一直在变（动画、轮播、时钟）就到
+  // maxMs 为止。（截图前等动画跑完的是另一回事，见 settleAnimations。）
+  async settle({ since = Date.now(), quietMs = 250, maxMs = 2000 }: { since?: number; quietMs?: number; maxMs?: number } = {}): Promise<{ settled: boolean; ms: number }> {
+    const t0 = Date.now();
+    let last: unknown = null;
+    let quietFrom = 0;
+    while (Date.now() - t0 < maxMs) {
+      const loading = this.loading && Date.now() - this.loadingSince < 15_000;
+      const busy = this.pendingRequests(since).length > 0;
+      const key = await this.send("Runtime.evaluate", { expression: MUTATION_KEY, returnByValue: true }, 1500).then(
+        (x) => x?.result?.value ?? null,
+        () => null,
+      );
+      if (key != null && key === last && !loading && !busy) {
+        if (!quietFrom) quietFrom = Date.now();
+        if (Date.now() - quietFrom >= quietMs) return { settled: true, ms: Date.now() - t0 };
+      } else {
+        quietFrom = 0;
+      }
+      last = key;
+      await delay(80);
+    }
+    return { settled: false, ms: Date.now() - t0 };
+  }
+
+  // since 之后发出、还没落定的请求（settle 与动作结果用）。
+  pendingRequests(since = 0): NetEntry[] {
+    const now = Date.now();
+    return this.netOrder.filter(
+      (e) => e.state === "pending" && e.t >= since && now - e.t < 4000 && !LONG_LIVED.has(String(e.resourceType || "")),
+    );
+  }
+
+  // agent 给的 x,y（最近一张整屏截图里的像素）→ 页面 CSS 像素。截图是 1:1 时原样；缩过的图按帧比例换算。
+  // 越界、截图后视口或标签变了（且比例不是 1）直接报错，让 agent 重新截图，而不是悄悄点到别处。
+  frameToCss(x: number, y: number): { x: number; y: number; k: number } {
+    const vw = this.measured?.w || this.viewport.width;
+    const vh = this.measured?.h || this.viewport.height;
+    const f = this.frame;
+    const fresh = Boolean(f && f.targetId === this.activeTargetId && f.vpW === this.viewport.width && f.vpH === this.viewport.height);
+    if (f && Math.abs(f.k - 1) > 0.001 && !fresh) {
+      throw new Error("the viewport or tab changed since the last screenshot, so its coordinates no longer line up — take a new screenshot and give x,y from it");
+    }
+    const k = fresh && f ? f.k : 1;
+    const w = fresh && f ? f.imgW : vw;
+    const h = fresh && f ? f.imgH : vh;
+    if (!(x >= 0 && y >= 0 && x < w && y < h)) {
+      throw new Error(
+        `(${x}, ${y}) is outside ${fresh ? `the last screenshot (${w}×${h})` : `the viewport (${w}×${h})`} — give pixels you see in the screenshot, or target by ref / text instead`,
+      );
+    }
+    return { x: x * k, y: y * k, k };
+  }
+
+  // 页面自己量视口（innerWidth / DPR / 触屏 / 配色）
+  async measure(): Promise<MeasuredViewport | null> {
+    try {
+      const m = await this.eval(
+        "({w:innerWidth,h:innerHeight,dpr:Math.round(devicePixelRatio*1000)/1000,touch:navigator.maxTouchPoints,coarse:matchMedia('(pointer:coarse)').matches,dark:matchMedia('(prefers-color-scheme: dark)').matches,sx:scrollX,sy:scrollY})",
+      );
+      return m && typeof m === "object" && m.w > 0 ? { ...m, at: Date.now() } : null;
+    } catch {
+      return null;
+    }
   }
 
   async title(): Promise<string> {
@@ -1147,7 +1356,7 @@ export class CdpSession {
       }
       const waitMs = opts.waitMs == null ? null : Math.max(0, Math.min(MAX_SHOT_WAIT_MS, Math.round(opts.waitMs)));
       if (waitMs) await delay(waitMs);
-      const settle = waitMs === 0 ? null : await this.settle(SETTLE_MAX_MS);
+      const settle = waitMs === 0 ? null : await this.settleAnimations(SETTLE_MAX_MS);
 
       // 截图区域一律换成页面坐标（CSS px）：视口坐标 + 当前滚动量；超出视口的部分才让 Chrome 截视口以外
       let region: ScreenshotResult["region"];
@@ -1160,24 +1369,73 @@ export class CdpSession {
         region = clampRegion({ x: box.left + box.sx, y: box.top + box.sy, width: box.width, height: box.height });
         beyond = box.top < 0 || box.left < 0 || box.top + region.height > box.vh || box.left + region.width > box.vw;
       } else if (opts.clip) {
-        const c = opts.clip;
-        if (![c.x, c.y, c.width, c.height].every(Number.isFinite) || c.width < 1 || c.height < 1) {
-          throw new Error("clip needs numeric x, y, width, height (viewport CSS px), width and height ≥ 1");
+        const raw = opts.clip;
+        if (![raw.x, raw.y, raw.width, raw.height].every(Number.isFinite) || raw.width < 1 || raw.height < 1) {
+          throw new Error("clip needs numeric x, y, width, height (pixels of the last screenshot), width and height ≥ 1");
         }
+        // clip 与 click 的 x,y 同一个坐标系＝最近那张整屏截图的像素：缩过的图按帧比例换回 CSS px
+        const k = this.frameScale();
+        const c = { x: raw.x * k, y: raw.y * k, width: raw.width * k, height: raw.height * k };
         const v = await this.eval("({sx:scrollX,sy:scrollY,vw:innerWidth,vh:innerHeight})");
         region = clampRegion({ x: c.x + v.sx, y: c.y + v.sy, width: c.width, height: c.height });
         beyond = c.x < 0 || c.y < 0 || c.x + region.width > v.vw || c.y + region.height > v.vh;
       }
-      const r = await this.send("Page.captureScreenshot", {
-        format: "png",
-        captureBeyondViewport: beyond,
-        ...(region ? { clip: { x: region.x, y: region.y, width: region.width, height: region.height, scale: 1 } } : {}),
-      });
-      if (!r?.data) throw new Error("captureScreenshot returned no data");
-      return { png: Buffer.from(r.data, "base64"), region, settle };
+      if (region) {
+        const r = await this.send("Page.captureScreenshot", {
+          format: "png",
+          captureBeyondViewport: beyond,
+          clip: { x: region.x, y: region.y, width: region.width, height: region.height, scale: 1 },
+        });
+        if (!r?.data) throw new Error("captureScreenshot returned no data");
+        return { png: Buffer.from(r.data, "base64"), region, settle };
+      }
+      // 整屏：一律出成「CSS 像素 1:1、长边不超过 SHOT_MAX_PX」并记帧——桌面壳按显示器 DPR 渲染、视口宽过 1568 时
+      // provider 又会再缩一次，原样截的图模型按图算坐标全对不上。之后 click(x,y) 由 frameToCss 换算回去。
+      const m = await this.measure();
+      if (m) this.measured = m;
+      const cssW = m?.w || this.viewport.width;
+      const cssH = m?.h || this.viewport.height;
+      const dpr = m?.dpr && m.dpr > 0 ? m.dpr : 1;
+      const fit = Math.min(1, SHOT_MAX_PX / Math.max(cssW, cssH));
+      const params: Record<string, unknown> = { format: "png", captureBeyondViewport: false };
+      if (Math.abs(dpr - 1) > 0.01 || fit < 1) {
+        params.clip = { x: m?.sx ?? 0, y: m?.sy ?? 0, width: cssW, height: cssH, scale: fit / dpr };
+      }
+      const png = await this.capture(params, Math.round(cssW * fit));
+      const { width: imgW, height: imgH } = pngSize(png);
+      this.frame = {
+        imgW: imgW || Math.round(cssW * fit),
+        imgH: imgH || Math.round(cssH * fit),
+        k: imgW ? cssW / imgW : 1 / fit,
+        vpW: this.viewport.width,
+        vpH: this.viewport.height,
+        targetId: this.activeTargetId,
+        t: Date.now(),
+      };
+      return { png, settle, frame: this.frame };
     } finally {
       await this.send("Runtime.releaseObjectGroup", { objectGroup: group }).catch(() => {});
     }
+  }
+
+  // 最近那张整屏截图的「CSS / 图片像素」比（帧过期或没有 = 1）
+  frameScale(): number {
+    const f = this.frame;
+    return f && f.targetId === this.activeTargetId && f.vpW === this.viewport.width && f.vpH === this.viewport.height ? f.k : 1;
+  }
+
+  // 带 clip 的截图出图宽度应为 wantW：偏了（桌面壳里 clip.scale 与 zoom 叠出来的语义和文档不一致）就按比例重截一次。
+  private async capture(params: Record<string, unknown>, wantW: number): Promise<Buffer> {
+    let r = await this.send("Page.captureScreenshot", params);
+    if (!r?.data) throw new Error("captureScreenshot returned no data");
+    let buf = Buffer.from(r.data, "base64");
+    const clip = params.clip as { scale: number } | undefined;
+    const got = pngSize(buf).width;
+    if (clip && wantW > 0 && got > 0 && Math.abs(got - wantW) > 2) {
+      r = await this.send("Page.captureScreenshot", { ...params, clip: { ...clip, scale: clip.scale * (wantW / got) } });
+      if (r?.data) buf = Buffer.from(r.data, "base64");
+    }
+    return buf;
   }
 
   private async shotElement(opts: ScreenshotOptions, group: string): Promise<string> {
@@ -1202,7 +1460,7 @@ export class CdpSession {
 
   // 等页面「停下来」：字体、有限长的动画，最后两帧（后台页的 rAF 可能不跑，每帧最多等 100ms）。
   // 返回等了多久、到点时还有几个动画没跑完（那张截图可能是半截的，结果里要说）。
-  private async settle(maxMs: number): Promise<{ waitedMs: number; stillRunning: number }> {
+  private async settleAnimations(maxMs: number): Promise<{ waitedMs: number; stillRunning: number }> {
     const js = `(async (maxMs) => {
       const t0 = performance.now();
       const left = () => Math.max(0, maxMs - (performance.now() - t0));
@@ -1235,15 +1493,24 @@ export class CdpSession {
 
   // Read the page as an indented accessibility tree. Interactive nodes get a
   // [refN] tag; refs stay valid until the next snapshot or navigation.
-  async axSnapshot(opts: { filter?: "all" | "interactive"; query?: string; maxChars?: number } = {}): Promise<AxSnapshot> {
+  async axSnapshot(
+    opts: { filter?: "all" | "interactive"; query?: string; maxChars?: number; rootBackendId?: number; depth?: number } = {},
+  ): Promise<AxSnapshot> {
     const filter = opts.filter ?? "all";
     const maxChars = Math.max(2000, Math.min(80_000, opts.maxChars ?? 20_000));
     const r = await this.send("Accessibility.getFullAXTree", {});
     const nodes: any[] = r?.nodes ?? [];
     const byId = new Map<string, any>();
     for (const n of nodes) byId.set(String(n.nodeId), n);
-    const root = nodes.find((n) => !n.parentId) ?? nodes[0];
-    if (!root) return { text: "(empty accessibility tree)", refCount: 0, lineCount: 0, truncated: false };
+    // rootBackendId：只列这个 DOM 节点的子树（ReadPage(ref)）；depth：从根往下最多展开几层
+    const root = opts.rootBackendId != null
+      ? nodes.find((n) => n.backendDOMNodeId === opts.rootBackendId)
+      : (nodes.find((n) => !n.parentId) ?? nodes[0]);
+    if (!root) {
+      if (opts.rootBackendId != null) throw new Error("that element is no longer in the accessibility tree (the page changed) — ReadPage again for fresh refs");
+      return { text: "(empty accessibility tree)", refCount: 0, lineCount: 0, truncated: false };
+    }
+    const maxDepth = Number(opts.depth) > 0 ? Number(opts.depth) : Infinity;
 
     this.refs.clear();
     let refN = 0;
@@ -1292,6 +1559,7 @@ export class CdpSession {
         lines.push(filter === "interactive" ? line.trimStart() : line);
       }
 
+      if (depth + 1 > maxDepth) return;
       for (const c of children) {
         const cRole = String(c.role?.value ?? "").toLowerCase();
         const cName = String(c.name?.value ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
@@ -1332,7 +1600,7 @@ export class CdpSession {
 
   // Scroll a ref's element into view and return its viewport center. Uses
   // DOM.resolveNode + callFunctionOn (works even where getBoxModel is flaky).
-  private async refCenter(ref: number): Promise<{ x: number; y: number }> {
+  async refCenter(ref: number): Promise<{ x: number; y: number; objectId: string }> {
     const { backendId } = this.refInfo(ref);
     const { object } = await this.send("DOM.resolveNode", { backendNodeId: backendId });
     if (!object?.objectId) throw new Error(`ref${ref}: element is gone (page changed since ReadPage)`);
@@ -1345,7 +1613,7 @@ export class CdpSession {
     const c = r?.result?.value;
     if (!c || c.w === 0 || c.h === 0) throw new Error(`ref${ref}: element has no visible box (hidden?)`);
     await delay(100);
-    return { x: c.x, y: c.y };
+    return { x: c.x, y: c.y, objectId: String(object.objectId) };
   }
 
   subscribePointer(cb: (p: PointerEcho) => void): () => void {
@@ -1363,7 +1631,7 @@ export class CdpSession {
     }
   }
 
-  private async dispatchClick(
+  async dispatchClick(
     x: number,
     y: number,
     opts: { button?: "left" | "right"; clickCount?: number; modifiers?: number; source?: "agent" | "user" } = {},
@@ -1371,6 +1639,17 @@ export class CdpSession {
     const button = opts.button ?? "left";
     const clickCount = opts.clickCount ?? 1;
     const modifiers = opts.modifiers ?? 0;
+    // 触屏仿真（resize 到手机 / 平板档）下左键改发真触摸：此时开着 setEmitTouchEventsForMouse，合成的 mousePressed 被转成
+    // touchstart 后回执要等整个手势结束才回，而 mouseReleased 要等这个回执才发——互等 30 秒超时，页面永远等不到 click
+    // （agent 与用户在面板里手点都一样；bridge 10-07 踩过）。dispatchTouchEvent 是触屏下的正路，手势识别照常合成 click。
+    if (this.emu.mobile && button === "left" && !modifiers) {
+      for (let i = 0; i < clickCount; i++) {
+        await this.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+        await this.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      }
+      this.echoPointer("click", x, y, opts.source ?? "agent");
+      return;
+    }
     await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, modifiers });
     for (let i = 1; i <= clickCount; i++) {
       await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: i, modifiers });
@@ -1395,16 +1674,131 @@ export class CdpSession {
   // Click by visible text (best match among interactive elements) — the escape
   // hatch when the model skipped ReadPage.
   async clickText(text: string): Promise<void> {
+    const c = await this.findTextPoint(text);
+    await this.dispatchClick(c.x, c.y);
+  }
+
+  // 按可见文本找可交互元素（滚进视口），返回中心点 CSS 坐标；找不到抛错。
+  async findTextPoint(text: string): Promise<{ x: number; y: number }> {
     const needle = JSON.stringify(text.toLowerCase());
     const c = await this.eval(
       `(()=>{const n=${needle};const sel='a,button,input,select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[onclick],label';
        const nodes=Array.from(document.querySelectorAll(sel)).filter(el=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0;});
-       const t=el=>(el.getAttribute('aria-label')||el.value||el.innerText||el.textContent||'').replace(/\\s+/g,' ').trim().toLowerCase();
+       const t=el=>(el.getAttribute('aria-label')||el.value||el.innerText||el.textContent||el.getAttribute('placeholder')||'').replace(/\\s+/g,' ').trim().toLowerCase();
        let hit=nodes.find(el=>t(el)===n)||nodes.find(el=>t(el).includes(n));
        if(!hit)return null;hit.scrollIntoView({block:'center'});const r=hit.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`,
     );
-    if (!c) throw new Error(`no clickable element matching text "${text}"`);
-    await this.dispatchClick(c.x, c.y);
+    if (!c) throw new Error(`no clickable element matching text "${text}" — try another word, or Browser(find) / ReadPage for a ref`);
+    await delay(60); // 等 scrollIntoView 落定再点
+    return c;
+  }
+
+  // ── 手势：长按 / 拖拽 / 双指缩放 ──────────────────────────────────────────
+  // 触屏档（emu.mobile）走真触摸事件，浏览器自己的手势管线照常判；鼠标档：按下 → 插值移动（带 buttons）→ 松开。
+
+  async longPress(x: number, y: number, holdMs = 800): Promise<void> {
+    const hold = Math.max(100, Math.min(10_000, Number(holdMs) || 800));
+    if (this.emu.mobile) {
+      // 不能用 dispatchTouchEvent：注入的触摸绕过浏览器侧的手势识别，按多久都只合成 tap。触屏档开着
+      // setEmitTouchEventsForMouse，鼠标事件经触摸仿真器转成触摸、由它做手势识别，长按真补 contextmenu。这对事件的
+      // 回执要等整个手势收尾、而收尾又在等回执——互相挂住（见 dispatchClick），所以两下都不 await，回执超时静默丢掉。
+      const quiet = (type: string, buttons: number) =>
+        this.send("Input.dispatchMouseEvent", { type, x, y, button: "left", buttons, clickCount: 1 }, hold + 3_000).catch(() => {});
+      void quiet("mousePressed", 1);
+      await delay(hold);
+      void quiet("mouseReleased", 0);
+      await delay(150);
+    } else {
+      await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+      await delay(hold);
+      await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+    }
+    this.echoPointer("click", x, y, "agent");
+  }
+
+  // 返回 { html5 }：鼠标档里起点是 HTML5 可拖元素时，开 setInterceptDrags 把系统拖放接住，改发 dragEnter / dragOver / drop——
+  // 不接的话 headless 里 dragstart 之后永远等不到 drop，有头视图（桌面壳）还会进系统拖放循环把窗口卡住。
+  async drag(
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+    { steps = 16, holdMs = 0 }: { steps?: number; holdMs?: number } = {},
+  ): Promise<{ html5: boolean }> {
+    const n = Math.max(2, Math.min(60, Math.round(Number(steps) || 16)));
+    const hold = Math.max(0, Math.min(5_000, Number(holdMs) || 0));
+    const at = (i: number) => ({ x: from.x + ((to.x - from.x) * i) / n, y: from.y + ((to.y - from.y) * i) / n });
+    if (this.emu.mobile) {
+      // 触点带显式 id、抬起时点名：不带 id 的触点在 CDP 那边会残留，下一场双指里冒出第三根手指
+      const pt = (p: { x: number; y: number }) => [{ x: p.x, y: p.y, id: 0 }];
+      await this.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pt(from) });
+      if (hold) await delay(hold);
+      for (let i = 1; i <= n; i++) {
+        await this.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: pt(at(i)) });
+        await delay(16);
+      }
+      await this.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: pt(to) });
+      this.echoPointer("move", to.x, to.y, "agent");
+      return { html5: false };
+    }
+    const draggable = await this.eval(
+      `(()=>{const e=document.elementFromPoint(${from.x},${from.y});if(!e)return false;
+      const d=e.closest('[draggable]');if(d)return d.getAttribute('draggable')!=='false';
+      if(e.closest('a[href],img'))return true;const s=getSelection();return !!(s&&!s.isCollapsed&&s.containsNode(e,true));})()`,
+    ).catch(() => false);
+    let intercept = false;
+    if (draggable) {
+      intercept = await this.send("Input.setInterceptDrags", { enabled: true }).then(() => true, () => false);
+      if (!intercept) {
+        throw new Error("the drag starts on an HTML5-draggable element, but this browser does not accept drag interception (old desktop shell?) — not dragging, to avoid wedging the window");
+      }
+    }
+    let data: unknown = null;
+    this.onDragIntercepted = (p) => {
+      data = p?.data || null;
+    };
+    try {
+      await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y });
+      await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", buttons: 1, clickCount: 1 });
+      if (hold) await delay(hold);
+      let i = 1;
+      for (; i <= n && !data; i++) {
+        const p = at(i);
+        await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y, button: "left", buttons: 1 });
+        await delay(16);
+      }
+      if (data) {
+        // 拖放从第 i-1 步接管：dragEnter 落在当时的位置，dragOver 走完剩下的路，最后在终点 drop
+        const start = at(i - 1);
+        await this.send("Input.dispatchDragEvent", { type: "dragEnter", x: start.x, y: start.y, data });
+        for (; i <= n; i++) {
+          const p = at(i);
+          await this.send("Input.dispatchDragEvent", { type: "dragOver", x: p.x, y: p.y, data });
+          await delay(16);
+        }
+        await this.send("Input.dispatchDragEvent", { type: "dragOver", x: to.x, y: to.y, data });
+        await this.send("Input.dispatchDragEvent", { type: "drop", x: to.x, y: to.y, data });
+      }
+      await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", buttons: 0, clickCount: 1 });
+    } finally {
+      this.onDragIntercepted = null;
+      if (intercept) await this.send("Input.setInterceptDrags", { enabled: false }).catch(() => {});
+    }
+    this.echoPointer("move", to.x, to.y, "agent");
+    return { html5: Boolean(data) };
+  }
+
+  // 双指缩放：以 (x,y) 为中心，两指从 ±r 开到 ±r×scale（scale>1 放大、<1 捏合）。只在触屏档有意义。
+  async pinch(x: number, y: number, scale = 2, { steps = 12, radius = 60 }: { steps?: number; radius?: number } = {}): Promise<void> {
+    if (!this.emu.mobile) throw new Error('pinch only works in touch mode — Browser(resize, preset:"mobile") first');
+    const s = Math.max(0.1, Math.min(10, Number(scale) || 2));
+    const n = Math.max(2, Math.min(60, Math.round(Number(steps) || 12)));
+    const pts = (r: number) => [{ x: x - r, y, id: 0 }, { x: x + r, y, id: 1 }];
+    await this.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pts(radius) });
+    for (let i = 1; i <= n; i++) {
+      await this.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: pts(radius * (1 + ((s - 1) * i) / n)) });
+      await delay(16);
+    }
+    await this.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: pts(radius * s) });
   }
 
   async hoverRef(ref: number): Promise<void> {
@@ -1423,8 +1817,8 @@ export class CdpSession {
     await this.send("DOM.focus", { backendNodeId: backendId });
   }
 
-  // Focus a target (by ref or CSS selector) and type text into it.
-  async typeText(text: string, target?: { ref?: number; selector?: string }): Promise<void> {
+  // 聚焦目标（ref 或 CSS selector；都没给就保持当前焦点）。
+  async focusTarget(target?: { ref?: number; selector?: string }): Promise<void> {
     if (target?.ref != null) {
       await this.focusRef(target.ref);
     } else if (target?.selector) {
@@ -1433,7 +1827,181 @@ export class CdpSession {
       );
       if (!ok) throw new Error(`no element matching selector ${target.selector}`);
     }
+  }
+
+  // Focus a target (by ref or CSS selector) and type text into it.
+  async typeText(text: string, target?: { ref?: number; selector?: string }): Promise<void> {
+    await this.focusTarget(target);
     await this.send("Input.insertText", { text });
+  }
+
+  // ref（ReadPage / find 的句柄）或 CSS selector → 元素的 objectId。
+  async objectFor(target: { ref?: number; selector?: string } = {}): Promise<string> {
+    if (target.ref != null) {
+      const { backendId } = this.refInfo(target.ref);
+      const { object } = await this.send("DOM.resolveNode", { backendNodeId: backendId });
+      if (!object?.objectId) throw new Error(`ref${target.ref}: element is gone (page changed since ReadPage)`);
+      return String(object.objectId);
+    }
+    if (target.selector) {
+      const r = await this.send("Runtime.evaluate", { expression: `document.querySelector(${JSON.stringify(target.selector)})`, returnByValue: false });
+      if (r?.exceptionDetails) throw new Error(`invalid CSS selector ${JSON.stringify(target.selector)}`);
+      if (!r?.result?.objectId) throw new Error(`no element matching selector ${target.selector}`);
+      return String(r.result.objectId);
+    }
+    throw new Error("needs ref or selector");
+  }
+
+  // 直接设表单控件的值（对齐 bridge 的 set_value / Claude Code 桌面端 Browser 的 form_input）：原生 <select> 的下拉层
+  // 截图里看不见、点开也选不了；date / time / range / color 打字进不去。按控件类型设值，走原型上的 value setter
+  // （React 等受控组件认这个），再派发 input + change。
+  async setValue(
+    target: { ref?: number; selector?: string },
+    value: unknown,
+  ): Promise<{ ok: boolean; kind?: string; desc?: string; now?: string; why?: string; options?: string[] }> {
+    const objectId = await this.objectFor(target);
+    const r = await this.send("Runtime.callFunctionOn", {
+      objectId,
+      returnByValue: true,
+      arguments: [{ value }],
+      functionDeclaration: `function(v){
+        const el = this, tag = el.tagName, desc = (e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + (e.name ? '[name=' + e.name + ']' : '');
+        const fire = () => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
+        const truthy = (x) => x === true || /^(true|1|on|yes|checked)$/i.test(String(x));
+        try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
+        if (el.disabled) return { ok: false, why: desc(el) + ' is disabled' };
+        if (tag === 'SELECT') {
+          const opts = [...el.options], want = Array.isArray(v) ? v.map(String) : [String(v)];
+          const pick = (w) => opts.find((o) => o.value === w) || opts.find((o) => o.text.trim() === w.trim()) || opts.find((o) => o.text.toLowerCase().includes(w.trim().toLowerCase()));
+          const hits = want.map(pick);
+          if (hits.some((h) => !h)) return { ok: false, why: 'no option matches "' + want.join('", "') + '"', options: opts.slice(0, 30).map((o) => o.text.trim() + (o.value !== o.text.trim() ? ' (' + o.value + ')' : '')) };
+          if (el.multiple) opts.forEach((o) => { o.selected = hits.includes(o); }); else el.value = hits[0].value;
+          fire();
+          return { ok: true, kind: 'select', desc: desc(el), now: [...el.selectedOptions].map((o) => o.text.trim()).join(', ') };
+        }
+        if (tag === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+          const on = truthy(v);
+          if (el.checked !== on) { el.click(); if (el.checked !== on) { el.checked = on; fire(); } }
+          return { ok: true, kind: el.type, desc: desc(el), now: el.checked ? 'checked' : 'unchecked' };
+        }
+        if (tag === 'INPUT' || tag === 'TEXTAREA') {
+          if (el.type === 'file') return { ok: false, why: 'file inputs take Browser(upload)' };
+          const proto = tag === 'INPUT' ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+          el.focus();
+          Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, String(v));
+          fire();
+          const ok = el.value === String(v) || el.type === 'range' || el.type === 'number';
+          return { ok, kind: el.type || 'textarea', desc: desc(el), now: el.value, why: ok ? '' : 'the control turned the value into "' + el.value + '" (wrong format? date = YYYY-MM-DD, time = HH:MM, color = #rrggbb)' };
+        }
+        if (el.isContentEditable) {
+          el.focus();
+          const sel = getSelection(); const range = document.createRange(); range.selectNodeContents(el); sel.removeAllRanges(); sel.addRange(range);
+          if (!document.execCommand('insertText', false, String(v))) el.textContent = String(v);
+          return { ok: true, kind: 'contenteditable', desc: desc(el), now: el.textContent.slice(0, 80) };
+        }
+        return { ok: false, why: desc(el) + ' is not a settable form control (select / input / textarea / contenteditable) — use click for buttons' };
+      }`,
+    });
+    if (r?.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text || "set_value failed");
+    return r?.result?.value || { ok: false, why: "no result" };
+  }
+
+  // 页面正文：article / main / [role=main] 优先，退回 body——读文章、文档比 ReadPage 的无障碍树省得多。
+  async pageText(maxChars = 20_000): Promise<{ from: string; title: string; text: string; total: number; truncated: boolean }> {
+    const r = await this.eval(
+      `(()=>{const pick=document.querySelector('article')||document.querySelector('main,[role=main]')||document.body;const t=(pick?.innerText||'').replace(/\\n{3,}/g,'\\n\\n').trim();return{from:pick?(pick.tagName.toLowerCase()+(pick.id?'#'+pick.id:'')):'',title:document.title,text:t}})()`,
+    );
+    const text = String(r?.text || "");
+    const cap = Math.max(1000, Math.min(100_000, Number(maxChars) || 20_000));
+    return { from: String(r?.from || ""), title: String(r?.title || ""), text: text.length > cap ? text.slice(0, cap) : text, total: text.length, truncated: text.length > cap };
+  }
+
+  // 往 <input type=file> 塞本机文件（DOM.setFileInputFiles）：隐藏的 input 同样有效，Chrome 照常派发 input / change。
+  // 目标 = ref / CSS selector / 默认「此刻看得见的那部分页面里」的第一个文件框（后台常驻分页里的不算）。先验目标真是
+  // file input，再塞，再回读文件名——不接受多选的框只保留第一个。
+  async setInputFiles(
+    files: string[],
+    target: { ref?: number; selector?: string } = {},
+  ): Promise<{ names: string[]; target: string; multiple: boolean; dropped: boolean }> {
+    let objectId = "";
+    let chosenNote = "";
+    if (target.ref != null || target.selector) {
+      objectId = await this.objectFor(target);
+    } else {
+      const pick = await this.send("Runtime.evaluate", {
+        returnByValue: false,
+        expression: `(() => {
+          const all = [...document.querySelectorAll('input[type=file]')];
+          const shown = (el) => { const p = el.parentElement; if (!p) return false;
+            try { return p.checkVisibility({ contentVisibilityAuto: true, visibilityProperty: true }); } catch { return p.getClientRects().length > 0; } };
+          const vis = all.filter(shown);
+          const desc = (el) => { const bits = []; let n = el.parentElement;
+            for (let k = 0; n && k < 3; k++, n = n.parentElement) { const c = typeof n.className === 'string' ? n.className.trim().split(/\\s+/).find((x) => !/^svelte-/.test(x)) : ''; bits.push(n.tagName.toLowerCase() + (n.id ? '#' + n.id : c ? '.' + c : '')); }
+            return (el.multiple ? 'multiple ' : '') + (el.accept ? 'accept=' + el.accept + ' ' : '') + 'in ' + bits.join(' < '); };
+          const el = vis[0] || null;
+          window.__dimensioUploadPick = { total: all.length, visible: vis.length, chosen: el ? desc(el) : '', others: vis.slice(1, 5).map(desc) };
+          return el;
+        })()`,
+      });
+      objectId = String(pick?.result?.objectId ?? "");
+      const meta = await this.send("Runtime.evaluate", { expression: "window.__dimensioUploadPick", returnByValue: true }).then(
+        (x) => x?.result?.value || {},
+        () => ({}),
+      );
+      if (!objectId) {
+        throw new Error(
+          meta.total
+            ? `the page has ${meta.total} file input(s), but all of them are in parts that are not shown (background tabs / collapsed panels) — open the upload UI first, or pass selector / ref`
+            : "the page has no <input type=file>",
+        );
+      }
+      chosenNote = ` (picked the file input in the visible part of the page: ${meta.chosen}${meta.others?.length ? `; ${meta.others.length} more visible: ${meta.others.join(" | ")} — pass selector / ref to pick another` : ""})`;
+    }
+    const probe = await this.send("Runtime.callFunctionOn", {
+      objectId,
+      returnByValue: true,
+      functionDeclaration:
+        "function(){ const ok = this instanceof HTMLInputElement && this.type === 'file'; return { ok, tag: this.tagName, type: this.type || '', multiple: !!this.multiple, id: this.id || '', name: this.name || '' }; }",
+    });
+    const info = probe?.result?.value || {};
+    if (!info.ok) {
+      throw new Error(`the target is not an <input type=file> (it is ${info.tag || "?"}${info.type ? " type=" + info.type : ""}) — find the file input with ReadPage / find, or pass selector`);
+    }
+    const list = info.multiple ? files : files.slice(0, 1);
+    await this.send("DOM.setFileInputFiles", { files: list, objectId });
+    const after = await this.send("Runtime.callFunctionOn", {
+      objectId,
+      returnByValue: true,
+      functionDeclaration: "function(){ return [...(this.files || [])].map((f) => f.name); }",
+    });
+    const label = info.id ? `#${info.id}` : info.name ? `input[name=${info.name}]` : "input[type=file]";
+    return { names: after?.result?.value || [], target: label + chosenNote, multiple: Boolean(info.multiple), dropped: !info.multiple && files.length > 1 };
+  }
+
+  // ── 面板观看者 ────────────────────────────────────────────────────────────
+  addViewer(kind: BrowserViewer["kind"]): () => void {
+    const id = ++this.viewerSeq;
+    this.viewers.set(id, { kind, since: Date.now() });
+    return () => {
+      this.viewers.delete(id);
+    };
+  }
+
+  viewerList(): BrowserViewer[] {
+    return [...this.viewers.values()];
+  }
+
+  // 桌面壳：当前标签此刻是不是挂在面板里、窗口有没有显示（broker GET target/<id>/view）。旧壳没有这条 → null。
+  async shellViewState(): Promise<{ mounted?: boolean; windowShown?: boolean; focused?: boolean; parent?: string } | null> {
+    if (!this.desktopBroker || !this.activeTargetId) return null;
+    try {
+      const res = await fetch(`${this.desktopBroker}/target/${encodeURIComponent(this.activeTargetId)}/view`, { signal: AbortSignal.timeout(1500) });
+      if (!res.ok) return null;
+      const payload = (await res.json()) as any;
+      return payload?.ok ? payload : null;
+    } catch {
+      return null;
+    }
   }
 
   // Press a key or combo ("enter", "ctrl+a", "shift+tab"). Named keys per
@@ -1471,9 +2039,12 @@ export class CdpSession {
     await delay(200);
   }
 
-  async setViewport(width: number, height: number, _mobile = false): Promise<void> {
+  async setViewport(width: number, height: number, mobile = false): Promise<void> {
     const w = Math.round(width);
     const h = Math.round(height);
+    // 触屏仿真（手机 / 平板档）：touch 事件 + 移动端 UA + maxTouchPoints，与几何无关，headless 与桌面壳通用。
+    // （设备指标覆盖里仍然 mobile:false——那会顺带打开 viewport-meta 语义，没 meta 的页面按 980px 排版，见下。）
+    await this.applyTouch(Boolean(mobile), Math.min(w, h) < 600);
     // 桌面壳模式：视口由壳的 WebContentsView 几何决定（面板挂载时按 contain 缩放
     // 摆位 + zoomFactor，见 client/desktop main.cjs 的 mountBrowser）。这里再叠一层
     // 设备指标模拟只会打架：实测 override(1280×900) 撞上 zoom 0.5 会得到 2560×1800
@@ -1506,6 +2077,38 @@ export class CdpSession {
         .catch(() => {});
     }
     await delay(300); // let responsive layout settle
+  }
+
+  private async applyTouch(mobile: boolean, phone: boolean): Promise<void> {
+    if (this.edge) return; // 用户自己的浏览器：不改它的输入与 UA
+    this.emu = { mobile };
+    await this.send("Emulation.setTouchEmulationEnabled", { enabled: mobile, maxTouchPoints: 5 }).catch(() => {});
+    await this.send("Emulation.setEmitTouchEventsForMouse", { enabled: mobile, configuration: "mobile" }).catch(() => {});
+    // 桌面档把 navigator.maxTouchPoints 盖成 0：主机若是触屏本，真值是 10，页面会按触屏设备走
+    const src = "try{Object.defineProperty(navigator,'maxTouchPoints',{get:()=>0,configurable:true})}catch(e){}";
+    const id = this.touch0.get(this.activeTargetId);
+    if (!mobile) {
+      if (!id) {
+        const r = await this.send("Page.addScriptToEvaluateOnNewDocument", { source: src }).catch(() => null);
+        if (r?.identifier) this.touch0.set(this.activeTargetId, String(r.identifier));
+      }
+      await this.send("Runtime.evaluate", { expression: src }).catch(() => {});
+    } else {
+      if (id) {
+        await this.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: id }).catch(() => {});
+        this.touch0.delete(this.activeTargetId);
+      }
+      await this.send("Runtime.evaluate", { expression: "delete navigator.maxTouchPoints" }).catch(() => {});
+    }
+    if (mobile || this.uaOverridden) {
+      if (!this.baseUa) {
+        this.baseUa = String(await this.send("Browser.getVersion", {}).then((v) => v?.userAgent ?? "", () => ""));
+        if (!this.baseUa) this.baseUa = String(await this.eval("navigator.userAgent").catch(() => ""));
+      }
+      const ua = mobile ? mobileUserAgent(this.baseUa, phone) : this.baseUa;
+      if (ua) await this.send("Emulation.setUserAgentOverride", { userAgent: ua, ...(mobile ? { platform: "Linux armv8l" } : {}) }).catch(() => {});
+      this.uaOverridden = mobile;
+    }
   }
 
   // 视口变化广播：面板的设备三档钮点亮靠它，桌面壳还要靠它重新摆放原生视图
@@ -1556,6 +2159,7 @@ export class CdpSession {
     try {
       await setDpr(dpr);
       await this.reload();
+      await delay(700); // let entrance JS run
       // Cruise with real wheel input so IO/ScrollTrigger reveals and chart
       // entrance animations actually run under the probed DPR. Step count is
       // capped: an exploding page never reaches its own bottom.
@@ -1588,11 +2192,13 @@ export class CdpSession {
     }
   }
 
-  private async reload(): Promise<void> {
+  async reload(): Promise<{ settled: boolean; ms: number }> {
+    const t0 = Date.now();
     const loaded = new Promise<void>((res) => this.loadWaiters.push(res));
     await this.send("Page.reload", {});
     await Promise.race([loaded, delay(10_000)]);
-    await delay(1000); // let entrance JS run
+    const s = await this.settle({ since: t0, quietMs: 300, maxMs: 3000 });
+    return { settled: s.settled, ms: Date.now() - t0 };
   }
 
   private async startCast(): Promise<void> {
@@ -1690,8 +2296,8 @@ export class CdpSession {
         /* already gone */
       }
     }
-    reapProfileProcessesSync(path.join(owned.tmp, "profile"), owned.browser);
-    try {
+    reapProfileProcessesSync(owned.profileDir, owned.browser);
+    if (owned.tmp) try {
       rmSync(owned.tmp, { recursive: true, force: true });
     } catch {
       /* 收尸器会按指纹收残留 profile */
@@ -1745,7 +2351,7 @@ export class CdpSession {
       this.notifyTabs();
       return null;
     }
-    const owned = { bws: this.browserWs, child: this.child, tmp: this.tmp, browser: this.browserPath };
+    const owned = { bws: this.browserWs, child: this.child, tmp: this.tmp, profileDir: this.profileDir, browser: this.browserPath };
     this.browserWs = null;
     try {
       this.ws?.close();
@@ -1779,13 +2385,14 @@ export class CdpSession {
 interface OwnedBrowser {
   bws: WebSocket | null;
   child: ChildProcess;
-  tmp: string;
+  tmp: string; // temporary root to delete afterwards; "" = persistent profile (keep it)
+  profileDir: string;
   browser: string;
 }
 
 const BROWSER_CLOSE_GRACE_MS = 5_000;
 
-async function shutdownOwnedBrowser({ bws, child, tmp, browser }: OwnedBrowser): Promise<void> {
+async function shutdownOwnedBrowser({ bws, child, tmp, profileDir, browser }: OwnedBrowser): Promise<void> {
   // spawn 出来的进程在我们动手前就已经退了 = 它只是启动壳，真身不在这棵进程树上。
   const launcherOnly = child.exitCode !== null || child.signalCode !== null;
   const exited = launcherOnly ? null : new Promise<void>((r) => child.once("exit", () => r()));
@@ -1809,8 +2416,48 @@ async function shutdownOwnedBrowser({ bws, child, tmp, browser }: OwnedBrowser):
     /* ignore */
   }
   if (!inTime && child.exitCode === null) killTree(child);
-  if (launcherOnly || !inTime) await reapProfileProcesses(path.join(tmp, "profile"), browser);
-  await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {});
+  if (launcherOnly || !inTime) await reapProfileProcesses(profileDir, browser);
+  if (tmp) await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {});
+}
+
+// A persistent profile left behind by a crashed harness: Chromium allows one process per user-data-dir (a second one
+// forwards its args to the first and exits), so ask the orphan to quit over CDP (Browser.close flushes cookies),
+// then reap whatever still holds the profile, and drop its stale DevToolsActivePort.
+async function retireOrphanProfile(profileDir: string, browser: string): Promise<void> {
+  const file = path.join(profileDir, "DevToolsActivePort");
+  const port = existsSync(file) ? readDevToolsPortFile(file) : null;
+  if (port) {
+    try {
+      const v = (await (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) })).json()) as any;
+      const wsUrl = String(v?.webSocketDebuggerUrl ?? "");
+      if (wsUrl) {
+        const ws = new WebSocket(wsUrl);
+        await new Promise<void>((resolve) => {
+          const done = () => resolve();
+          const timer = setTimeout(done, 4000);
+          timer.unref?.();
+          ws.addEventListener("open", () => ws.send(JSON.stringify({ id: 1, method: "Browser.close", params: {} })));
+          ws.addEventListener("close", () => {
+            clearTimeout(timer);
+            done();
+          });
+          ws.addEventListener("error", () => {
+            clearTimeout(timer);
+            done();
+          });
+        });
+        await delay(300);
+      }
+    } catch {
+      /* nobody listening: the port file is just stale */
+    }
+  }
+  await reapProfileProcesses(profileDir, browser);
+  try {
+    rmSync(file, { force: true });
+  } catch {
+    /* the reaper above freed it; next launch rewrites it anyway */
+  }
 }
 
 // ── The shared browser ────────────────────────────────────────────────────────
@@ -1842,6 +2489,16 @@ export function readDevToolsPortFile(file: string, read: (f: string) => string =
 // 值 = 断掉的是哪种浏览器（"edge" / "chrome"），"" = 没断
 let edgeLost = "";
 
+// 共享无头浏览器用持久配置档：用户在面板里登录过的站点，下一个会话照样是登录态（对齐 bridge 10-26 的无头持久登录）。
+// 只有共享浏览器用它——一个 user-data-dir 同时只能一个进程开，单独 new CdpSession().launch() 的（测试、截图）照旧用临时档。
+// 测试进程默认关（同一测试进程里会起好几个浏览器），DIMENSIO_BROWSER_PERSIST=1 才开。
+export function persistBrowserProfile(): boolean {
+  const v = String(process.env.DIMENSIO_BROWSER_PERSIST ?? "").trim();
+  if (v === "0" || /^(off|false|no)$/i.test(v)) return false;
+  if (v === "1" || /^(on|true|yes)$/i.test(v)) return true;
+  return !inTestProcess();
+}
+
 export async function getSharedBrowser(): Promise<CdpSession> {
   if (shared?.alive) return shared;
   if (shared?.edge || edgeLost) {
@@ -1859,7 +2516,7 @@ export async function getSharedBrowser(): Promise<CdpSession> {
   launching = (async () => {
     const s = new CdpSession();
     try {
-      await s.launch("about:blank");
+      await s.launch("about:blank", persistBrowserProfile() ? { profileDir: browserProfileDir() } : {});
     } catch (e) {
       // #113：已经拉起的浏览器不能扔下不管——以前启动中途失败（读端口撞 EBUSY、等页面超时、连不上）就把它漏在后台，
       // 进程里还攥着它的句柄：harness 里多一个没人管的无头浏览器，测试进程则因此退不掉（09-25 全量卡了二十分钟）

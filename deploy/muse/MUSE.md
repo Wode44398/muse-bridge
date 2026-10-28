@@ -334,7 +334,7 @@ bridge 服务被意外打断时（VM 被平台重启、看门狗重启了服务�
 网页那边用户有自己的两条路（说明书 `guide/07-settings.md`「提交反馈」）：设置里的「提交反馈」，和在 Claude 对话里说「是不是出 bug 了」、Claude 诊断后经用户同意上报。它们的去向：
 
 - 每条都先存在 VM 上的反馈库 `/home/hatch/bridge-srv/feedback/reports/`（每条一个 .md，你能直接读；Claude 上报的那几条 frontmatter 里有 `via: claude`）。
-- 只有管理员在网页里打开了「把用户反馈同时发给 bridge 开发者」、提交人也同意了那一条，才会同时提交成 Muse Bridge 仓库的公开 GitHub Issue（经同一个反馈服务；图片不公开）。这个开关默认关，你不要替用户去开，也不要用 `bootstrap.sh` 改它。
+- 只有管理员在网页里打开了「把用户反馈同时发给 Muse Bridge 项目的公开 GitHub Issue」、提交人也同意了那一条，才会同时提交成 Muse Bridge 仓库的公开 GitHub Issue（经同一个反馈服务；图片不公开）。这个开关默认关，你不要替用户去开，也不要用 `bootstrap.sh` 改它。
 - 跟 `report` 用的不是同一份数据：`/home/hatch/bridge-srv/muse-feedback/` 是 `report` 的草稿、发送记录和自动上报设置，`feedback/` 是网页的反馈库，两边互不相干，别挪、别删。
 
 用户提到他在网页里提交过反馈或让 Claude 报过：去反馈库读那一条，按 8.1 判断。他说当时已经勾了「也发给开发者」（或 Claude 说已经发出去了），就别再用 `report` 重报；没发出去、而他想报给开发者，按 8.2 出草稿、他同意再发。

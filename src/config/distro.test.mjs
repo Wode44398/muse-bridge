@@ -35,3 +35,31 @@ test('品牌：本体原样；别的发行版换 <title> 与 iOS 主屏名、清
   assert.equal(mf.short_name, 'Muse & Bridge');
   assert.equal(brandManifest('not json', muse), 'not json');
 });
+
+test('反馈去向 distro.feedback：没声明 = 本体默认且结果里没有这一项；声明了只收字符串与布尔', async () => {
+  const { feedbackDest, isFeedbackDeclared, FEEDBACK_DEFAULT } = await import('./distro.mjs');
+  assert.equal('feedback' in resolveDistro({}), false);
+  assert.equal('feedback' in resolveDistro({ id: 'muse', brand: 'Muse Bridge' }), false);
+  assert.deepEqual({ ...feedbackDest(resolveDistro({})) }, { to: 'bridge 开发者', toEn: 'the Bridge developer', public: false });
+  assert.equal(isFeedbackDeclared(feedbackDest(resolveDistro({}))), false);
+
+  const muse = resolveDistro({ feedback: { to: ' Muse Bridge 的公开 GitHub Issue ', toEn: 'Muse Bridge’s public GitHub issues', public: true } });
+  assert.deepEqual({ ...muse.feedback }, { to: 'Muse Bridge 的公开 GitHub Issue', toEn: 'Muse Bridge’s public GitHub issues', public: true });
+  assert.equal(isFeedbackDeclared(feedbackDest(muse)), true);
+  // toEn 缺省 = to；public 只认严格的 true
+  assert.deepEqual({ ...resolveDistro({ feedback: { to: 'X 团队', public: 'true' } }).feedback }, { to: 'X 团队', toEn: 'X 团队', public: false });
+  // 不合规的 to（非字符串 / 空 / 太长 / 含换行）回落默认；全无有效内容时整项当没声明
+  for (const to of [5, '', '  ', 'x'.repeat(61), 'a\nb', null]) {
+    assert.equal('feedback' in resolveDistro({ feedback: { to } }), false, String(to));
+  }
+  for (const raw of ['x', 1, [], [{ to: 'a' }], null, true]) assert.equal('feedback' in resolveDistro({ feedback: raw }), false);
+  // public:true 配了坏 to：宁可多提醒，去向用默认、公开标记保留
+  assert.deepEqual({ ...resolveDistro({ feedback: { to: 'a\nb', public: true } }).feedback }, { to: 'bridge 开发者', toEn: 'the Bridge developer', public: true });
+  // 太长的 toEn 丢掉（回落成 to），不是截断
+  assert.equal(resolveDistro({ feedback: { to: '甲', toEn: 'e'.repeat(81) } }).feedback.toEn, '甲');
+  // 注入标签里带得出 feedback，且仍跳不出 <script>
+  const tag = distroHeadTag(resolveDistro({ feedback: { to: '</script>x', public: true } }));
+  assert.equal((tag.match(/<\/script>/g) || []).length, 1);
+  assert.ok(tag.includes('"feedback":{'));
+  assert.ok(FEEDBACK_DEFAULT.to);
+});

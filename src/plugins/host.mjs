@@ -25,7 +25,7 @@ import { kernel } from './state.mjs';
 import { DATA_ROOT, PROGRAM_ROOT } from '../runtime/paths.mjs';
 import { requireCtx, contextFor } from '../runtime/identity.mjs';
 import { ticketOf, resolveTicket } from './tickets.mjs';
-import { can } from '../runtime/principal.mjs';
+import { can, HOST_OWNER } from '../runtime/principal.mjs';
 import { readBody } from '../runtime/body.mjs';
 import { busPublish, busPublishAll } from '../runtime/bus.mjs';
 import { defineOp, defineGroup, removeOp, removeGroup } from '../agent-api/registry.mjs';
@@ -36,6 +36,7 @@ import { makeProcessService } from './process.mjs';
 import { makeWebhookService } from './webhook.mjs';
 import { makePanelMixins, makeStore } from './panel.mjs';
 import { setInternalRouter } from '../agent-api/internal.mjs';
+import { startMarketWatcher, setUpdatesPublisher } from './market.mjs';
 
 export { kernel };
 export const PLUGIN_DATA_ROOT = path.join(DATA_ROOT, 'plugin-data');
@@ -189,6 +190,9 @@ export async function bootPlugins({ register }) {
   const off = list.filter((p) => !p.active && p.status !== 'error').map((p) => p.id + (p.status === 'blocked' ? '(缺依赖)' : ''));
   if (off.length) console.log('[plugins] 关着：' + off.join(', '));
   for (const p of bad) console.error('[plugins] ' + p.id + ' 出错：' + p.error);
+  // 插件市场：「有更新」名单一变就推给主机（设置里的角标据此刷新）；正式实例定时查更新（只提示，不自动装）
+  setUpdatesPublisher((ids) => busPublish(HOST_OWNER, { type: 'plugins.market', updates: ids }));
+  if (kernel.hasService('runtime') && kernel.service('runtime').production) startMarketWatcher(kernel);
   return list;
 }
 

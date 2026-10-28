@@ -35,6 +35,8 @@ export interface AdapterConfig {
   thinking?: boolean;
   // Anthropic fast mode 开关，每次请求现读（全局粘性设置，菜单一关下一次请求就停）；型号不支持时适配器自己不发。
   fast?: () => boolean;
+  // 提示缓存 TTL：主会话传 "1h"（官方端点才生效，见 anthropic.ts）；不传＝默认 5 分钟（子 agent）
+  cacheTtl?: "1h";
   // 自定义服务（registry 现读注册表填）：鉴权与自定义头、型号的档位表等。有它时适配器不走按内置厂商 id / 型号名的分支。
   custom?: CustomWire;
 }

@@ -157,6 +157,8 @@ function normMe(m) {
     canSnapshot: !!m?.canSnapshot, service: !!m?.service,
     // 关着的内置功能（插件，/api/auth 的 plugins.off；本地快照里存成 pluginsOff）
     pluginsOff: Array.isArray(m?.plugins?.off) ? m.plugins.off.filter((x) => typeof x === 'string') : Array.isArray(m?.pluginsOff) ? m.pluginsOff : [],
+    // 插件市场里有更新的个数（只有主机拿得到；只提示不自动装）：设置 › 扩展 与「功能扩展」标签上的角标
+    pluginUpdates: Math.max(0, Number(m?.plugins?.updates ?? m?.pluginUpdates ?? 0) || 0),
   };
 }
 function loadMe() {

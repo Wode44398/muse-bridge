@@ -60,6 +60,15 @@ export function pluginConfig(id) {
   return kernel.started ? kernel.configOf(id) : null;
 }
 
+// 插件市场里有更新的插件 id（只读缓存、不碰网络）：/api/auth 给主机下发数量，设置里出角标。
+// 由 routes/plugins.mjs 登记实现（market.mjs 依赖 discover / catalog，别让这里反过来 import 它们）。
+let updatesProvider = () => [];
+export function setPluginUpdatesProvider(fn) { updatesProvider = typeof fn === 'function' ? fn : () => []; }
+export function pluginUpdates() {
+  if (!kernel.started) return [];
+  try { return updatesProvider(); } catch { return []; }
+}
+
 // 关着的内置插件（前端门控用：/api/auth 下发，界面据此藏入口）。没启动时为空。
 export function pluginsOff() {
   if (!kernel.started) return [];

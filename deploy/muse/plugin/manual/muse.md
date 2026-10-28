@@ -37,6 +37,6 @@ VM 上的 Chromium 没有沙箱、起不来：dimensio 在这台服务器上没�
 ## 版本与反馈
 
 - Muse Bridge 有自己的版本号（`deploy/muse/VERSION`），和 bridge 本体的版本号不是一回事；`bootstrap.sh status` 里两个都有。
-- 问题反馈（设置里的「提交反馈」、`feedback.*` 操作）：本机反馈库总是存一份。**在这台服务器上，「发给 bridge 开发者」= 提交成 Muse Bridge 仓库（GitHub `Wode44398/muse-bridge`）的公开 Issue**：反馈中继按发行版分流，Muse Bridge 的反馈不进 bridge 开发者的私有收件箱，而是公开；文字会去掉账号名、服务器地址并脱敏（令牌、邮箱、网址、路径、IP），**图片不公开**（只在 Issue 里记个数）。跟用户确认去向时照这个说：「会存在这台服务器上；管理员开着推送的话，还会在 Muse Bridge 的 GitHub 仓库开一个公开的 Issue，图片不会公开」。推送开关默认关，管理员自己决定。
+- 问题反馈（设置里的「提交反馈」、`feedback.*` 操作）：本机反馈库总是存一份。**在这台服务器上，发出去 = 提交成 Muse Bridge 仓库（GitHub `Wode44398/muse-bridge`）的公开 Issue**（部署声明 `distro.feedback` 写了这个去向，`feedback.status` 回的 destination、界面上的勾选项都照它说）：反馈中继按发行版分流，Muse Bridge 的反馈不进 bridge 开发者的私有收件箱，而是公开；文字会去掉账号名、服务器地址并脱敏（令牌、邮箱、网址、路径、IP），**图片不公开**（只在 Issue 里记个数）。跟用户确认去向时照这个说：「会存在这台服务器上；管理员开着推送的话，还会在 Muse Bridge 的 GitHub 仓库开一个公开的 Issue，图片不会公开」。推送开关默认关，管理员自己决定。
 - 用户也可以在 Muse 里说「报告一个 bridge 的问题」，由 Muse 用 `bootstrap.sh report` 出草稿、经用户同意后提交（同一个 GitHub 仓库，报告里带 Muse 那边的服务状态）。同一件事报一次就够。
 - 服务意外重启（VM 被平台重启、看门狗重启服务）会打断正在跑的对话；「服务意外重启时 › 自动继续被中断的对话」默认开，服务起来后自动接着做。VM 每隔几小时就会被平台整机重启一次，这在 Muse 上很常见。

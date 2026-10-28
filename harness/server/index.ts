@@ -2154,6 +2154,8 @@ app.get("/api/browser/stream", async (req, res) => {
   send({ e: "state", url: page.url, viewport: page.viewport });
 
   let unsub: (() => void) | null = null;
+  // 登记观看者：Browser 工具据此告诉模型用户此刻看不看得到这个浏览器（要用户动手前先确认他看得见）
+  const unView = page.addViewer(native ? "native" : "stream");
   // Pointer echo: viewers see where the agent (or another device) points/clicks.
   const unsubPtr = page.subscribePointer((p) => send({ e: "pointer", ...p }));
   // Tab strip: every viewer mirrors the shared browser's tabs live; an empty
@@ -2171,6 +2173,7 @@ app.get("/api/browser/stream", async (req, res) => {
         send({ e: "frame", data: f.data, w: f.deviceWidth, h: f.deviceHeight, url: page.url });
       });
     } catch (e) {
+      unView();
       unsubPtr();
       unsubTabs();
       unsubViewport();
@@ -2182,6 +2185,7 @@ app.get("/api/browser/stream", async (req, res) => {
   const heartbeat = setInterval(() => res.write(": ping\n\n"), SSE_PING_MS);
   res.on("close", () => {
     clearInterval(heartbeat);
+    unView();
     unsub?.();
     unsubPtr();
     unsubTabs();

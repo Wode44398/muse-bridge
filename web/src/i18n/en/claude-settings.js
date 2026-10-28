@@ -5,6 +5,7 @@
 export default {
   // —— 分组（注册表 CLAUDE_SETTING_GROUPS + 外壳组头）——
   '撞上限额时': 'When you hit a usage limit',
+  '服务意外重启时': 'If the service restarts unexpectedly',
   '新会话默认': 'New session defaults',
   '会话协作': 'Session collaboration',
   'Git 与拉取请求': 'Git and pull requests',
@@ -13,6 +14,8 @@ export default {
 
   // —— 注册表：标签 / 说明 / 选项（claudeSettingsView 运行时 t()，静态检查查不到，别删）——
   '撞上 5 小时限额时，等额度恢复后自动接着跑完这一轮': 'When you hit the 5-hour limit, Claude picks the turn back up once it resets',
+  '自动继续被中断的对话': 'Resume interrupted conversations',
+  'bridge 服务中途崩溃、被结束或电脑重启，打断了正在跑的对话时，服务恢复后自动让 Claude 从中断的地方接着做': 'If a crash, a stopped service, or a computer restart cuts off a running conversation, Claude picks it back up from where it left off once the service is back',
   '权限模式': 'Permission mode',
   'Claude 改文件、跑命令前要不要先问你。对新会话生效；在某个文件夹的新会话里手动选过模式的，那个文件夹沿用你上次选的。每个会话可以在输入框里另选': 'Whether Claude asks before editing files or running commands. Applies to new sessions; a folder where you picked a mode for a new session keeps your last pick there. Each session can pick its own in the prompt box.',
   '手动': 'Manual',
@@ -130,6 +133,7 @@ export default {
 
   // —— 搜索关键词（中英各搜各的，英文带官方原词）——
   '限额 续跑 auto-continue usage limit': 'limit resume auto-continue usage limit',
+  '重启 崩溃 中断 续跑 自动继续 restart crash resume interrupted': 'restart crash resume interrupted auto-continue',
   '手动 接受编辑 计划 自动 permission mode': 'manual accept edits plan auto permission mode',
   '简洁 讲解 学习 主动 output style concise': 'concise explanatory learning proactive output style',
   '图表 示意图 inline visualizations': 'chart diagram inline visualizations',

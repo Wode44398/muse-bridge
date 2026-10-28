@@ -2,7 +2,7 @@
   import { tick } from 'svelte';
   import { chat, answerQuestion, send, rewindToMessage, attImgFallback, openSession } from '../lib/chat.svelte.js';
   import { IS_CSNAP } from '../lib/csnap.js';
-  import { session, settings, prefs } from '../lib/state.svelte.js';
+  import { session, settings, prefs, ui } from '../lib/state.svelte.js';
   import { mountDrag } from '../lib/capsule.js';
   import { renderMarkdown, streamBlocks } from '../lib/md.js';
   import { claudeFade } from '../lib/claudeFade.js';
@@ -306,6 +306,7 @@
   {#each chat.messages.slice(winStart) as m, wi (winStart + wi)}
     {@const i = winStart + wi}
     {@const skippable = wi < chat.messages.length - winStart - 2 && m.status !== 'streaming'}
+    {@const unconfirmed = chat.unverified && i === chat.messages.length - 1 && m.status !== 'streaming'}
     {#if m.role === 'user'}
       <div class="turn-user" use:skipWhen={skippable}>
         <div class="u-col">
@@ -492,7 +493,7 @@
           {/if}
         {/if}
 
-        {#if m.status !== 'streaming'}
+        {#if m.status !== 'streaming' && !unconfirmed}
           <div class="actions" in:fade={{ duration: 220 }}>
             {#if hasText(m)}
               <button class="act" aria-label={t('复制')} onclick={() => copyMsg(m)}>
@@ -511,7 +512,13 @@
 
         {#if i === chat.messages.length - 1}
           <div class="turn-foot">
-            <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'continue', sessionId: session.id, model: settings.model, effort: settings.effort }) }} in:fade|global={{ duration: 260 }}>{#if m.status === 'streaming' && prefs.claudeMark === 'sprite'}<ClaudeSpriteMark phase={spritePhase(m)} box={26} />{:else if m.status === 'streaming' && prefs.claudeMark !== 'classic'}{@const ma = markActivity(m)}<ClaudeWorkingMark activity={ma.activity} state={ma.state} size={24} box={26} />{:else}<ClaudeLogo anim={starState(m)} size={26} interactive />{/if}</span>
+            <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'continue', sessionId: session.id, model: settings.model, effort: settings.effort }) }} in:fade|global={{ duration: 260 }}>{#if m.status === 'streaming' && prefs.claudeMark === 'sprite'}<ClaudeSpriteMark phase={spritePhase(m)} box={26} />{:else if m.status === 'streaming' && prefs.claudeMark !== 'classic'}{@const ma = markActivity(m)}<ClaudeWorkingMark activity={ma.activity} state={ma.state} size={24} box={26} />{:else}<ClaudeLogo anim={unconfirmed ? 'waiting' : starState(m)} size={26} interactive />{/if}</span>
+            {#if unconfirmed}
+              <!-- 缓冲态（unconfirmed）：最后一轮的结局还没经服务端确认（切会话 / 回前台后，摆的是缓存或
+                   transcript）——不摆完成态（复制/重试、静态星标），免得「其实在跑却显示已结束」。
+                   延迟淡入（局域网下几百毫秒就确认完，不闪）；离线时直说连不上、状态未知。 -->
+              <span class="meta syncing"><span class="hint shimmer">{ui.offline ? t('连不上服务器，这一轮的状态暂时未知') : t('正在同步状态…')}</span></span>
+            {/if}
             {#if m.status === 'streaming'}
               <!-- 官方 desktop 同款状态语法：时长 · tokens · 状态文字。悬停（等后台任务）拼第三段
                    作挂起提示——与真结束（无状态行）一眼可分；这一段可点，直开右侧工作台「任务」
@@ -741,6 +748,8 @@
   .turn-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
   .logo-fly { display: inline-flex; flex: none; }
   .meta { color: var(--muted); font-size: 13px; }
+  .meta.syncing { opacity: 0; animation: syncfade .25s ease-out .5s forwards; }
+  @keyframes syncfade { to { opacity: 1; } }
   /* 状态文字的呼吸（官方 epitaxy-thinking-shimmer 原值：opacity 1→.75，2s ease-in-out，先静 3s 再起） */
   .hint.shimmer { animation: hint-breathe 2s ease-in-out 3s infinite; will-change: opacity; }
   @keyframes hint-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .75; } }

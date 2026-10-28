@@ -2,6 +2,7 @@
   // 设置 · Agent 接入（桌面壳）：给别的 agent（Claude Code、Codex、脚本…）用的地址与密钥。
   // 数据面 lib/agentKeys.svelte.js（手机 Settings 的同名子页共用），后端 /api/agent-keys。
   // 明文密钥只在生成那一下展示（agentKeys.fresh），离开这一页就丢掉。
+  import { untrack } from 'svelte';
   import DGroup from '../kit/DGroup.svelte';
   import DRow from '../kit/DRow.svelte';
   import DButton from '../kit/DButton.svelte';
@@ -13,7 +14,9 @@
 
   let { fl = () => false } = $props();   // 设置搜索跳转后的高亮
 
-  $effect(() => watchAgentKeys());
+  // 必须 untrack：watchAgentKeys 里同步读了 agentKeys.loading，不隔离的话生成后重拉列表会让 effect 重跑，
+  // 清理函数顺手把 agentKeys.fresh 清空——刚生成的明文密钥一闪就没了
+  $effect(() => untrack(() => watchAgentKeys()));
 
   let label = $state('');
   let askId = $state('');      // 正在确认吊销的那一把

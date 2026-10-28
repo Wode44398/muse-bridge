@@ -22,6 +22,7 @@
 //   optionLabels  enum 各值的中文显示名（与 options 同序）；optionDescs 选择页里每项的一行说明
 export const CLAUDE_SETTING_GROUPS = Object.freeze([
   { id: 'limits', label: '撞上限额时' },
+  { id: 'restart', label: '服务意外重启时' },
   { id: 'defaults', label: '新会话默认' },
   { id: 'chat', label: '对话' },
   { id: 'collab', label: '会话协作' },
@@ -44,6 +45,10 @@ export const CLAUDE_SETTINGS = Object.freeze([
   // —— 撞上限额时（号池 / 智能路由仍由 agentSettings 管，这里只放按身份的那一项）——
   { key: 'autoContinueOnLimit', group: 'limits', scope: 'user', type: 'bool', default: true,
     label: '限额重置后自动继续', desc: '撞上 5 小时限额时，等额度恢复后自动接着跑完这一轮' },
+
+  // —— 服务意外重启时（runtime/restart-resume.mjs：启动时按 inflight 台账认出上一条命没跑完的轮，替用户发一句「继续」）——
+  { key: 'autoResumeOnRestart', group: 'restart', scope: 'user', type: 'bool', default: true,
+    label: '自动继续被中断的对话', desc: 'bridge 服务中途崩溃、被结束或电脑重启，打断了正在跑的对话时，服务恢复后自动让 Claude 从中断的地方接着做' },
 
   // —— 新会话默认（会话里可以单独改，改的只是那个会话）——
   { key: 'permissionMode', group: 'defaults', scope: 'user', type: 'enum', options: PERMISSION_MODES, default: 'auto',

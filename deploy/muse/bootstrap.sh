@@ -296,8 +296,12 @@ edit_config() {
 apply_bridge_declarations() {
   local plug="$RELS/current/deploy/muse/plugin" pj="$DATA/plugins.json" stamp="$OPS/aligned-bridge-public" first=false hint
   # 发行版：品牌 Muse Bridge、没选过语言时跟浏览器（前端在启动前经 window.__DISTRO__ 读）。
-  # 早期 Muse 把同样的声明写在 edition 对象里，删掉；字符串的 edition（bridge 本体 deploy-profile 的 host / server）不碰
-  edit_config '.distro = {id:"muse", brand:"Muse Bridge", langDefault:"browser"} | if (.edition | type) == "object" then del(.edition) else . end'
+  # 早期 Muse 把同样的声明写在 edition 对象里，删掉；字符串的 edition（bridge 本体 deploy-profile 的 host / server）不碰。
+  # feedback：反馈的真实去向（知情同意的措辞）——Muse 的中继把反馈发成本仓库的公开 Issue，图片不进 Issue；
+  # public:true 时网页表单与 feedback.* 操作会提醒「公开、别写隐私、截图不公开只记张数」
+  edit_config '.distro = {id:"muse", brand:"Muse Bridge", langDefault:"browser",
+      feedback: {to:"Muse Bridge 项目的公开 GitHub Issue", toEn:"the public Muse Bridge GitHub issues", public:true}}
+    | if (.edition | type) == "object" then del(.edition) else . end'
   # 问题反馈的中继：bridge 的反馈推送（网页「提交反馈」、Claude 诊断后上报）发到 Muse 的 Worker，带 distro=muse，
   # Worker 转成 muse-bridge 仓库的 Issue。只写地址；推送开关 feedbackUpstream 由管理员在网页设置里自己打开（默认关，不在这里写）
   if [ -n "$FEEDBACK_HOST_DEFAULT" ]; then edit_config ".feedbackRelay = \"https://$FEEDBACK_HOST_DEFAULT\""; fi
@@ -641,7 +645,7 @@ cmd_install() {
   wait_public
   # 用户自己跑的安装（不是 update / set-agents 调进来的）才放行：自动更新多在夜里，没人批，白等
   # 用户在开工前答过「出错时要不要自动上报」：记进 Muse 反馈工具的设置（muse-feedback/settings.json；网页里没有这个开关，
-  # 之后用 feedback-auto 改）。它跟网页里的「把用户反馈同时发给 bridge 开发者」（config.feedbackUpstream）是两回事，不联动
+  # 之后用 feedback-auto 改）。它跟网页里的「把用户反馈同时发给 Muse Bridge 项目的公开 GitHub Issue」（config.feedbackUpstream）是两回事，不联动
   if [ -n "$auto_report" ]; then feedback_cli auto "$auto_report" || warn "自动上报的设置没写成，之后可以用 feedback-auto $auto_report 再设"; fi
   [ "$FROM_SWITCH" = 1 ] || ALLOW_WAIT=120 allow_sites || true
   say "完成"

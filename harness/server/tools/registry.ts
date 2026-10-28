@@ -25,6 +25,7 @@ import { exitPlanModeTool } from "./exitplanmode.ts";
 import { projectKnowledgeTool } from "./projectknowledge.ts";
 import { skillTool } from "./skill.ts";
 import { deviceInspectTool, deviceActTool, deviceBrowserTool, deviceShellTool, deviceFilesTool, devicePortsTool } from "./localpc.ts";
+import { bridgeManualTool, bridgeCallTool } from "./bridgeapi.ts";
 import { disabledTools } from "../tenant.ts";
 
 export const ALL_TOOLS: Tool[] = [
@@ -58,6 +59,8 @@ export const ALL_TOOLS: Tool[] = [
   deviceShellTool,
   deviceFilesTool,
   devicePortsTool,
+  bridgeManualTool,
+  bridgeCallTool,
 ];
 
 function enabledTools(): Tool[] {

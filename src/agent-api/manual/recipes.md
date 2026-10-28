@@ -55,6 +55,14 @@
 
 `devices.list` 看有哪些设备、在不在线、什么档位 → `devices.run { device, op: "shell", args: { command } }`；看屏幕 `op: "desktop", args: { action: "screenshot" }`；读界面结构 `action: "uia_tree"`。设备在「只看」档时，操作类动作会在电脑上弹窗问用户。这是用户的真实电脑，只做被要求的事。
 
+## 「服务刚才重启了，我让它做的事呢」
+
+`overview` 的 `claude.interrupted` 列出被服务中途退出打断、还没人打开看过的会话（`autoResume: true` = 服务端约 15 秒后会自动让 Claude 接着做）；某个会话用 `chat.wait`，返回 `status: interrupted`。没排上自动继续的（设置关着、中断超过 12 小时、已连续自动继续 3 次），要接着做就 `chat.send { sessionId, message: "继续" }`。
+
+## 「把某个 Claude 设置打开 / 关掉」
+
+`settings.claude` 看全部存在服务端的项（当前值、可选值、界面上的名字与分组），`settings.claude_set { values: { 键: 值 } }` 改，null 恢复默认。例：关掉「自动继续被中断的对话」= `{ values: { autoResumeOnRestart: false } }`。只存在各台设备上的项（通知三项、思考动画、用工作树）接口改不了，带用户去 设置 › Claude（`ui.open { page: "settings" }`）。
+
 ## 「我还剩多少额度」
 
 `usage`：成员返回今天 / 本周已用与上限、哪些功能对他开着；主机身份不限额。界面：设置 › 账户。

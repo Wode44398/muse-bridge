@@ -44,3 +44,6 @@ custom-providers/
 # 快照对话：当前那只一次性桶的指针（桶本身在 ~/.dimensio/quick 下，不在仓库里）
 quick.json
 quick.json.tmp
+
+# 内置无头浏览器的持久配置档（登录态，server/paths.ts browserProfileDir）
+browser-profile/

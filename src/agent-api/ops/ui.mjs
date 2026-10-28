@@ -14,7 +14,8 @@ const VERTEX_MODULES = ['chat', 'image', 'video', 'voice', 'music'];
 
 defineOp({
   name: 'ui.view', title: '用户此刻在看什么',
-  desc: '列出这个账号开着的 bridge 界面（手机 app / 网页 / 桌面客户端），每个给出所在页面、工作台状态、文件面板路径、正在预览的文件。fresh=false 表示一分多钟没上报、多半已经切走了。',
+  desc: '列出这个账号开着的 bridge 界面（手机 app / 网页 / 桌面客户端），每个给出所在页面、工作台状态、文件面板路径、正在预览的文件。fresh=false 表示一分多钟没上报、多半已经切走了。'
+    + 'kernel（有时才有）= 这个界面的对话同步最近一次某一步超过 2 秒的记录（slow 哪一步、ms、trace 最近的步骤）：用户说「明明在跑却显示已结束」「切会话要转很久」时拿它当现场。',
   handler: async (ctx) => ({
     clients: getUiState(ctx.key).map((c) => ({ client: c.clientId, kind: c.client, fresh: c.fresh, at: c.at, ...c.state })),
   }),

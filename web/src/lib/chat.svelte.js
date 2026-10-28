@@ -49,7 +49,7 @@ import { agentStart, agentStream, agentEnd, notifyKind } from './notify.js';
 import { cs as claudeCs } from './claudeSettings.svelte.js';
 import { pendingOutputStyle, markOutputStyleSent, adoptOutputStyleSent, absorbSessionOutputStyle } from './outputStyle.svelte.js';
 import { noteAgentBrowser, noteAgentTerm } from './dock.svelte.js';
-import { handleWsx } from './uiReport.js';
+import { handleWsx, reportUi } from './uiReport.js';
 import { noteFsChange } from './fsSync.svelte.js';
 import { storeGet, storeSet } from './store.js';
 import { runPhoneCmd } from './phonecmd.js';
@@ -96,7 +96,44 @@ export function rememberCurrentPrefs() { notePrefsNow(session.id); }
 export const chat = $state({
   messages: [],
   reconnecting: false,
+  // 视图里这一轮的运行状态【还没经服务端确认】：消息是从本地缓存 / transcript 摆出来的
+  //（切会话、冷启动、回前台），这时界面上的「已结束」只是猜的——可能其实还在跑。
+  // 置位期间界面不许摆完成态（复制/重试、静态星标、发送键），改摆缓冲态；内核探活拿到
+  // 真相（在跑 → 挂上直播；没跑 → 确认结束）才清。宁可多缓冲一会儿，也不显示错的状态。
+  unverified: false,
 });
+
+// —— 内核计时记录（现场排障）——
+// 手机上切会话要干等 ~10s 才挂上直播（10-27 维护者录屏），而服务端每个接口都在毫秒级——卡在
+// WebView 里悬着的请求上，桌面复现不出来。每步收敛的耗时记进环形缓冲；某一步超过 2s 就把
+// 最近的记录随视图上报（/api/ui/state，agent 接口 ui.state 读得到），下次真机再慢直接看卡在哪。
+const _trace = [];
+function trace(what, extra) {
+  _trace.push([Date.now(), what, extra === undefined ? null : extra]);
+  if (_trace.length > 60) _trace.shift();
+}
+let _slowReportAt = 0;
+function noteSlow(what, ms) {
+  trace('slow:' + what, ms);
+  if (Date.now() - _slowReportAt < 5000) return;
+  _slowReportAt = Date.now();
+  try { reportUi({ kernel: { at: Date.now(), slow: what, ms, trace: _trace.slice(-40) } }); } catch {}
+}
+// 内核里的每个网络等待都有上限：任何一个请求悬着不回，都不许把唯一的收敛路径卡死
+//（_syncing 一直为真 → 之后所有唤醒都只记一笔 _syncAgain，视图就永远停在错的状态）。
+// 超时只是「这次不等了」，抛错走各自的失败分支（重试 / 回退缓存）。
+function timed(what, p, ms) {
+  const t0 = Date.now();
+  let to = 0;
+  const limit = new Promise((_, rej) => {
+    to = setTimeout(() => rej(Object.assign(new Error(what + ' timeout'), { timeout: true })), ms);
+  });
+  return Promise.race([p, limit]).finally(() => {
+    clearTimeout(to);
+    const d = Date.now() - t0;
+    if (d > 2000) noteSlow(what, d);
+  });
+}
 
 const isTerminal = (ev) => ev && (ev.type === 'done' || ev.type === 'interrupted' || ev.type === 'error');
 // /api/active 归一：新后端 runs[]=全部在跑的轮；旧后端只有顶层单轮字段。
@@ -1098,6 +1135,7 @@ function finishTurn(m) {
   rememberSession(session.id);
   session.busy = false;
   chat.reconnecting = false;
+  chat.unverified = false;   // 终止事件 / 服务端确认没在跑 / 用户亲手停 / 明确报错——结局都是确定的
   failingSince = 0;
   if (session.id && !IS_CSNAP) cacheChat(session.id, chat.messages);   // 缓存这轮结束后的会话快照，供离线浏览（快照模式不落访客本地）
 }
@@ -1134,6 +1172,8 @@ function errText(e) {
 function applyLiveEvent(my, ev) {
   if (live !== my || !ev) return;
   if ((ev.type === 'session' || ev.type === 'attach' || ev.type === 'start') && ev.sessionId) my.sessionId = ev.sessionId;
+  // 直播流本身就是服务端在说话：收到它的帧，视图的运行状态就有了着落
+  if (chat.unverified && (!my.sessionId || my.sessionId === session.id)) { chat.unverified = false; trace('live-confirmed'); }
   let m = cur();
   if (!m || m.role !== 'assistant' || m.status !== 'streaming') {
     // 轮已定局后的尾巴事件（ctx_usage 等，见 STATUS_ONLY）：只改 status，绝不为它们再开一条气泡。
@@ -1188,9 +1228,20 @@ function startPump(sid, res, ctrl) {
 
 async function openAttachFetch(sid, parentCtrl) {
   const attempt = linkAbort(parentCtrl.signal);
-  const res = await fetch(apiUrl('/api/attach' + (sid ? '?session=' + encodeURIComponent(sid) : '')), {
-    method: 'POST', headers: authHeaders(), credentials: 'same-origin', signal: attempt.signal,
-  });
+  // 服务端几十毫秒内就回响应头（实测 23ms）；8s 还没回 = 请求悬在 WebView 里了，掐掉这次重来，
+  // 不让收敛路径陪它干等（悬多久界面就错多久）。只管到响应头为止，之后的流归看门狗管。
+  const t0 = Date.now();
+  const headTimer = setTimeout(() => { trace('attach-head-timeout', sid); attempt.abort(); }, 8000);
+  let res;
+  try {
+    res = await fetch(apiUrl('/api/attach' + (sid ? '?session=' + encodeURIComponent(sid) : '')), {
+      method: 'POST', headers: authHeaders(), credentials: 'same-origin', signal: attempt.signal,
+    });
+  } finally {
+    clearTimeout(headTimer);
+    const d = Date.now() - t0;
+    if (d > 2000) noteSlow('attach', d);
+  }
   if (res.status === 204) return null;
   if (!res.ok || !res.body) throw Object.assign(new Error('attach HTTP ' + res.status), { status: res.status });
   try { res.__attemptAbort = () => attempt.abort(); } catch { /* 只读 Response：退化成不可单掐 */ }
@@ -1258,7 +1309,7 @@ async function reconcileFromTranscript(sid) {
   const ep = kernelEpoch;
   const minLen = chat.messages.length;
   try {
-    const data = await api.session(sid);
+    const data = await timed('reconcile', api.session(sid), 12_000);
     if (ep !== kernelEpoch || sid !== session.id) return 'stale';
     const msgs = toUiMessages(data.messages || [], sid);
     if (msgs.length < minLen) return 'behind';   // 落盘慢半拍：这份还不完整，别记指纹
@@ -1278,7 +1329,7 @@ async function freshen(sid) {
   _freshening = true;
   const gen = loadGen;
   try {
-    const data = await api.session(sid, _fp.get(sid));
+    const data = await timed('freshen', api.session(sid, _fp.get(sid)), 12_000);
     if (gen !== loadGen || sid !== session.id || session.busy || live) return;
     noteFp(sid, data);
     if (data.unchanged) return;   // 服务端定论：这一份跟你手里的一模一样
@@ -1303,13 +1354,20 @@ export function requestSync(reason, delayMs = 0) {
   _syncAt = at;
   _syncTimer = setTimeout(() => {
     _syncTimer = null;
-    syncOnce();
+    syncOnce(reason);
   }, Math.max(0, delayMs));
 }
 
-async function syncOnce() {
-  if (_syncing) { _syncAgain = true; return; }
+let _syncStartedAt = 0, _syncRun = 0;
+async function syncOnce(reason) {
+  // 保险丝：每个网络等待都已封顶，正常一次收敛最多十几秒；超过 30s 还没回来 = 有一步悬死了，
+  // 不再让它挡着后面所有唤醒（它晚到的结果各分支自有 epoch / session 校验兜着）。
+  if (_syncing && Date.now() - _syncStartedAt < 30_000) { _syncAgain = true; return; }
+  if (_syncing) trace('sync-wedged', Date.now() - _syncStartedAt);
+  const run = ++_syncRun;
   _syncing = true;
+  _syncStartedAt = Date.now();
+  trace('sync', reason || '');
   try { await doSync(); }
   catch (e) {
     // 收敛路径绝不允许静默死亡：报出去 + 兜底再约一次（唤醒源不在场时它就是唯一的续命）。
@@ -1317,8 +1375,12 @@ async function syncOnce() {
     requestSync('error-retry', 4000);
   }
   finally {
-    _syncing = false;
-    if (_syncAgain) { _syncAgain = false; requestSync('again'); }
+    if (run === _syncRun) {
+      const d = Date.now() - _syncStartedAt;
+      if (d > 2000) noteSlow('sync:' + (reason || ''), d);
+      _syncing = false;
+      if (_syncAgain) { _syncAgain = false; requestSync('again'); }
+    }
   }
 }
 
@@ -1339,14 +1401,14 @@ function noteFailing() {
 }
 
 async function probeActive() {
-  return await Promise.race([
-    api.active(),
-    new Promise((_, rej) => setTimeout(() => rej(new Error('probe timeout')), 10_000)),
-  ]);
+  // 服务端 1ms 内就回；6s 还没回就是这次请求悬住了——不再干等 10s（录屏里切会话的那 10 秒），
+  // 走失败分支，短间隔重探（视图未确认时见 doSync）。
+  return await timed('active', api.active(), 6000);
 }
 
 // detachLive 记住被主动切走的直播会话：① 不把用户拽回去；② 点回时重新 attach 续看。
 const mutedLive = new Set();
+let lastDetachAt = 0;   // 最近一次 detachLive 的时刻：切会话途中旧会话还静音着、session.id 还没换过去
 // 服务器可达时 transcript 连续落后的计数（区分「落盘慢半拍」与「记录永远不会来」）。
 let behindRuns = 0;
 
@@ -1358,6 +1420,7 @@ async function doSync() {
   // 会在服务器恢复后仍然卡死（实测踩过）。
   if (ui.offline) {
     if (unsettled()) { chat.reconnecting = true; requestSync('offline-wait', 4000); }
+    else if (chat.unverified) requestSync('offline-wait', 4000);   // 状态没确认也一样等旗子翻回
     return;
   }
   const ep = kernelEpoch;
@@ -1370,6 +1433,7 @@ async function doSync() {
     // 掐掉它，让「重连中」诚实亮起，恢复后由收敛路径重挂/补全。健康流（刚有过字节）不动。
     if (live && Date.now() - lastLiveAt > 45_000) killLive();
     if (unsettled() && !live) { chat.reconnecting = true; noteFailing(); }
+    else if (chat.unverified) requestSync('verify-retry', 2000);   // 视图状态还没确认：缓冲态挂着，短间隔重探
     return;
   }
   if (ep !== kernelEpoch) return;
@@ -1378,6 +1442,7 @@ async function doSync() {
   // 空态（greeting）：自动挂上最新的非胶囊轮（别处发起的直播镜像，老体验）。
   // 其它 Claude 会话（Desktop / 终端）发来消息、停放的 CLI 接住开的轮（source 'peer'）也不挂：那不是谁在别处发起的对话，别把视图拽走。
   if (!sid) {
+    chat.unverified = false;            // 空态没有「这一轮」可言
     if (session.busy || live) return;   // 新会话首轮正在发
     const cand = runs.filter((r) => r.source !== 'capsule' && r.source !== 'peer' && !mutedLive.has(r.sessionId));
     if (cand.length) await openRun(cand[cand.length - 1]);
@@ -1397,7 +1462,19 @@ async function doSync() {
     await openRun(run);
     return;
   }
+  if (run) {
+    // 正看着的会话在跑、却在静音集合里：只该出现在「切走途中」（detachLive 之后、新会话的
+    // session.id 落定之前）。这时不能说它结束了（那是假话），也不该把它挂回来（用户正要离开）——
+    // 缓冲态等切换落定。过了切换窗口还这样 = 静音残留，用户就在看它：解除静音、挂上直播。
+    if (Date.now() - lastDetachAt < 4000) { chat.unverified = true; requestSync('muted-wait', 1500); return; }
+    trace('unmute-viewed', sid);
+    mutedLive.delete(sid);
+    if (live) killLive();
+    await openRun(run);
+    return;
+  }
   // 服务端明确：这个会话现在没有在跑的轮。
+  if (chat.unverified && !unsettled()) { chat.unverified = false; trace('idle-confirmed'); }
   if (liveMine) {
     // 直播还开着：正常收尾时 done 几百 ms 内就到——宽限一下，别误杀正在重放结尾的流。
     if (Date.now() - lastLiveAt < 2500) { requestSync('grace', 1500); return; }
@@ -1454,6 +1531,7 @@ if (typeof window !== 'undefined') {
   window.__chatKernel = {
     sync: (reason) => requestSync(reason || 'manual'),
     bus: (ev) => onBusEvent(ev),
+    trace: () => _trace.map(([at, what, x]) => [new Date(at).toISOString().slice(11, 23), what, x]),
     // 生产构建剔除：feed 灌合成事件 / snapshot 取纯 JSON 供断言
     ...(import.meta.env.DEV ? { feed: (ev) => feedSynthetic(ev), snapshot: () => JSON.parse(JSON.stringify(chat.messages)) } : {}),
     state: () => ({
@@ -1461,7 +1539,7 @@ if (typeof window !== 'undefined') {
       lastLiveAgo: lastLiveAt ? Date.now() - lastLiveAt : null,
       epoch: kernelEpoch, pendingSend, failingSince, behindRuns,
       syncing: _syncing, timerSet: !!_syncTimer,
-      busy: session.busy, reconnecting: chat.reconnecting,
+      busy: session.busy, reconnecting: chat.reconnecting, unverified: chat.unverified,
       sessionId: session.id, msgs: chat.messages.length,
       lastStatus: (chat.messages[chat.messages.length - 1] || {}).status || null,
     }),
@@ -1471,14 +1549,27 @@ if (typeof window !== 'undefined') {
 // 回前台/联网/解冻：网络栈稍等 250ms 再收敛（也给看门狗的 wake 巡检让个身位）；
 // 醒时限的表随 wake 拨回——冻结/断网那段不计入放弃倒计时。
 if (typeof window !== 'undefined') {
+  let hiddenAt = 0;
   const wake = () => {
-    if (document.hidden) return;
+    if (document.hidden) { hiddenAt = Date.now(); return; }
     if (failingSince) failingSince = Date.now();
+    // 在后台待过一阵（WebView 被冻结、socket 可能早被系统掐了）：屏上那份状态是离开时的，
+    // 这期间别处可能开跑了新一轮、或这一轮早结束了——探活确认之前按未确认处理。
+    // 显式的流式态（转圈）本来就会被探活纠正，这里只管「看起来已结束」的那种。
+    if (hiddenAt && Date.now() - hiddenAt > 5000 && session.id && !session.busy && !live) chat.unverified = true;
+    hiddenAt = 0;
     requestSync('wake', 250);
   };
   document.addEventListener('visibilitychange', wake);
   window.addEventListener('pageshow', wake);    // 安卓 WebView 从冻结态回来只发这个
   window.addEventListener('online', wake);
+  // 兜底核对：视图看起来已结束、又没挂直播时，每 20s 探一次服务端（/api/active ~1KB，
+  // 没变化的 transcript 对账只回几十字节）。总线漏发 run.start、半开的总线、本地哪条路径
+  // 误判了结局——都不会让「其实在跑、屏上说完了」挂超过 20 秒。
+  setInterval(() => {
+    if (document.hidden || ui.screen !== 'claude' || !session.id || session.busy || live || pendingSend) return;
+    requestSync('verify-tick');
+  }, 20_000);
   // 不挂 window 'focus'（10-21 回归 FR4）：桌面上点一下窗口就是一次 focus，每次都打一遍 /api/active 收敛，
   // 实测 18 次 focus 打了约 20 次；从后台回来本来就会先发 visibilitychange / pageshow。
 }
@@ -1497,8 +1588,11 @@ export function detachLive() {
   const m = cur();
   if (m && m.role === 'assistant' && m.status === 'streaming') m.status = 'done';  // 不留永久转圈
   if (liveId) mutedLive.add(liveId);
+  lastDetachAt = Date.now();
   session.busy = false;
   chat.reconnecting = false;
+  // 上面那个 done 只是「本地不再看它」，不是服务端说它结束了：切换落定之前，这一屏一律当未确认
+  chat.unverified = true;
   failingSince = 0;
 }
 
@@ -1512,8 +1606,10 @@ export async function openSession(id) {
   }
   mutedLive.delete(id);                // 显式点开 = 解除静音
   refreshQueue(id);                    // 这个会话的排队消息（服务端持有）
-  await loadSession(id);
-  requestSync('open');                 // 正好有轮在跑 → 内核补挂直播续看
+  // sync:true —— 本地缓存一摆上屏（session.id 已换过来）就开始探活/挂直播，不等整份 transcript
+  // 下完：以前要先等 /api/session 回来才探活，手机上那个请求一慢，菊花就跟着晚出来十秒。
+  await loadSession(id, { sync: true });
+  requestSync('open');                 // 正好有轮在跑 → 内核补挂直播续看（幂等，上面已探过也无害）
 }
 
 // ---- public API --------------------------------------------------------------
@@ -1563,6 +1659,7 @@ function reallySend(t, atts, handoff = false) {
   bumpEpoch();     // 作废在途 sync 的应用
   if (handoff) settleHeldForHandoff();
   killLive();
+  chat.unverified = false;   // 本端亲手开的这一轮：流式态就是真相
   chat.messages.push({ role: 'user', text: t, attachments: sentAttachments(atts) });
   refusalBand.notice = null;   // 新回合开始：上一轮的「已切换到 X」横条收起（官方同款）
   if (!handoff) refusalBand.prompt = null;   // 接力进同一 CLI 时那张 Paused 卡仍在等人
@@ -1753,6 +1850,7 @@ export function newConversation(projectId) {
   bumpLoadGen();                    // 作废在途的历史刷新——慢返回不把空白新聊天顶回旧会话
   replaceMessages([]);
   session.id = null;
+  chat.unverified = false;          // 空白新对话没有要确认的轮
   syncComposerDraftKey();           // 输入栏换成新对话那份草稿（同步：调用方可能紧接着往里塞附件）
   session.pendingQid = null;
   session.projectId = projectId || null;  // 项目上下文：首轮拿到会话 id 时上报归属
@@ -1863,16 +1961,19 @@ export async function loadSession(id, opts) {
     if (cached && cached.length && gen === loadGen && !session.busy) {
       replaceMessages(cached);
       session.id = id;
+      chat.unverified = true;   // 缓存只说明「上次看到时是这样」，在不在跑要等内核探过才知道
       syncComposerDraftKey();
       rememberSession(id);
       ui.view = 'chat';
       shown = true;
+      if (opts && opts.sync) requestSync('open-cached');
     }
   }
   let msgs = null;
   let projId = null;
   try {
-    const data = await api.session(id);
+    // 封顶：有缓存垫着时这只是后台刷新，没缓存时它挡着首屏——都不许无限期悬着
+    const data = await timed('load', api.session(id), 15_000);
     projId = data.projectId || null;   // 会话归属（=工作空间/项目）：服务端按 transcript 所在目录判的真值
     if (!IS_CSNAP) noteSessionArchived(id, data);   // 冷启动恢复 / 助手 open_session 打开的已归档会话也认得出
     if (data.wt && data.wt.cwd) sessionWt[id] = data.wt;
@@ -1900,6 +2001,9 @@ export async function loadSession(id, opts) {
   if (shown && sameSnapshot(chat.messages, msgs)) return;   // 内容没变 → 不动 DOM/视口
   replaceMessages(msgs);
   session.id = id;
+  // transcript 里没有「这轮还在跑」的信息（摆出来的每一轮都像已结束）——同样等探活确认。
+  // before 模式是 openRun 挂直播前补历史，紧接着就 attach，结局由直播流定。
+  if (!before) chat.unverified = true;
   syncComposerDraftKey();
   rememberSession(id);
   ui.view = 'chat';
@@ -2069,6 +2173,10 @@ export function onBusEvent(ev) {
         if (ev.fired) showToast(tt('限额已重置，正在继续会话'));
         else if (ev.error) showToast(tr(ev.error));
       }
+      return;
+    case 'restart_resume':
+      // 服务意外重启后自动继续（src/runtime/restart-resume.mjs）发出了：新一轮的 run.start 会把直播挂上，这里只交代一声为什么
+      if (ev.fired && ev.sessionId && ev.sessionId === session.id) showToast(tt('服务刚才意外重启，正在继续会话'));
       return;
   }
 }
@@ -2251,5 +2359,8 @@ export async function restoreOnBoot() {
   // 否则挂最新的非胶囊轮（别处发起的直播镜像）；胶囊轮不劫持启动恢复（它有原生 HUD），跨会话消息接住的轮（peer）同理。
   const cand = runs.filter((r) => r.source !== 'capsule' && r.source !== 'peer');
   if (cand.length) { await openRun(cand[cand.length - 1]); return; }
-  if (saved) await loadSession(saved);
+  if (saved) {
+    await loadSession(saved);
+    requestSync('boot');   // 摆出来的是缓存/transcript（未确认）：开机探活那一下可能早于它落定，再核对一次
+  }
 }

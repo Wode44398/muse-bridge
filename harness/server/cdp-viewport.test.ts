@@ -23,7 +23,11 @@ function stub(desktop: boolean): { session: CdpSession; sent: string[]; seen: { 
 test("headless viewport switch emulates device metrics", async () => {
   const { session, sent, seen } = stub(false);
   await session.setViewport(375, 812, true);
-  assert.deepEqual(sent, ["Emulation.setDeviceMetricsOverride"]);
+  assert.equal(sent.filter((m) => m === "Emulation.setDeviceMetricsOverride").length, 1);
+  // 手机档顺带开触屏仿真（touch 事件 + 鼠标转触摸），左键点击随之改发真触摸
+  assert.ok(sent.includes("Emulation.setTouchEmulationEnabled"));
+  assert.ok(sent.includes("Emulation.setEmitTouchEventsForMouse"));
+  assert.equal(session.emu.mobile, true);
   assert.deepEqual(session.viewport, { width: 375, height: 812 });
   assert.deepEqual(seen, [{ width: 375, height: 812 }]);
 });
@@ -31,7 +35,7 @@ test("headless viewport switch emulates device metrics", async () => {
 test("desktop-shell viewport switch records and broadcasts without emulation", async () => {
   const { session, sent, seen } = stub(true);
   await session.setViewport(1280, 900);
-  assert.deepEqual(sent, [], "真 WebContentsView 上加设备指标模拟 = 画面被裁");
+  assert.ok(!sent.includes("Emulation.setDeviceMetricsOverride"), "真 WebContentsView 上加设备指标模拟 = 画面被裁");
   assert.deepEqual(session.viewport, { width: 1280, height: 900 });
   assert.deepEqual(seen, [{ width: 1280, height: 900 }], "面板靠广播重新缩放摆位");
 });

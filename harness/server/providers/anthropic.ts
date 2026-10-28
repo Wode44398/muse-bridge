@@ -74,6 +74,15 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
     mediaBudget: providerMediaBudget(cfg.provider, cfg.model),
   };
   const baseUrl = (cfg.baseUrl ?? DEFAULTS.baseUrl).replace(/\/$/, "");
+  // 提示缓存 TTL：默认 5 分钟——主对话每轮带几万到十几万 token 的系统提示 + 工具定义 + 历史，用户隔 5 分钟没说话就整段重算。
+  // 主会话（cfg.cacheTtl）走官方端点时给 1 小时（写入 2× 计价、读仍按命中价；对齐 bridge 里 Claude 的官方 API 服务）；
+  // 子 agent 一轮里请求间隔只有几秒，5 分钟够用、不多付写入费；第三方兼容端点不一定认 ttl，不动。
+  // 四个断点用同一个 TTL——官方要求长 TTL 的断点排在短的前面，统一了就不会撞。
+  const cacheMark: CacheMark | null = !capabilities.cache
+    ? null
+    : cfg.cacheTtl === "1h" && hostOf(baseUrl) === "api.anthropic.com"
+      ? { type: "ephemeral", ttl: "1h" }
+      : { type: "ephemeral" };
   // 地址带不带 /v1 都行（以前写死 `${base}/v1/messages`，以 /v1 结尾的自定义地址会拼出 /v1/v1）
   const url = MK.anthropicUrl(baseUrl, "/v1/messages");
 
@@ -82,7 +91,7 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
     model: cfg.model,
     capabilities,
     async *stream(turn: Turn, signal?: AbortSignal): AsyncIterable<StreamEvent> {
-      const body = encode(turn, cfg.model, capabilities, custom);
+      const body = encode(turn, cfg.model, capabilities, cacheMark, custom);
       // fast mode：开关开着、型号支持、且不在退避期才发（不支持的型号带 speed 必 400）。speed 参数离了 beta 头也是 400。
       const fast = cfg.fast?.() === true && modelSupportsFast(cfg.provider, cfg.model) && Date.now() >= fastCooldownUntil;
       const send = (withFast: boolean) => {
@@ -257,7 +266,17 @@ function mapStop(reason: string): StopReason {
 
 // ── Encode neutral Turn -> Anthropic Messages request body ───────────────────
 
-function encode(turn: Turn, model: string, caps: Capabilities, custom?: CustomWire) {
+type CacheMark = { type: "ephemeral"; ttl?: "1h" };
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function encode(turn: Turn, model: string, caps: Capabilities, cacheMark: CacheMark | null, custom?: CustomWire) {
   const level = turn.budget.thinking ?? "off";
   const thinkingOn = caps.thinking && level !== "off";
   // 自定义服务不按型号名猜 adaptive / budget（小米 /anthropic 不发参数照样思考，只认 thinking.type=disabled）：按型号的档位表发
@@ -270,12 +289,12 @@ function encode(turn: Turn, model: string, caps: Capabilities, custom?: CustomWi
     budgetTokens ? budgetTokens + 1024 : 0,
   );
 
-  const system = encodeSystem(turn, caps.cache);
-  const tools = encodeTools(turn, caps.cache);
+  const system = encodeSystem(turn, cacheMark);
+  const tools = encodeTools(turn, cacheMark);
 
   // 会话中途从别家换过来：别家的空消息（只剩思考）编码后是空 content，Anthropic 直接 400——跳过
   const messages = normalizeToolIds(turn.messages).map(encodeMsg).filter((m) => m.content.length > 0);
-  if (caps.cache) markMessageCache(messages);
+  if (cacheMark) markMessageCache(messages, cacheMark);
 
   let body: Record<string, unknown> = {
     model,
@@ -300,28 +319,28 @@ function encode(turn: Turn, model: string, caps: Capabilities, custom?: CustomWi
   return body;
 }
 
-function encodeSystem(turn: Turn, cache: boolean) {
+function encodeSystem(turn: Turn, cache: CacheMark | null) {
   if (typeof turn.system === "string") {
     if (!turn.system) return undefined;
     const block: any = { type: "text", text: turn.system };
-    if (cache) block.cache_control = { type: "ephemeral" };
+    if (cache) block.cache_control = { ...cache };
     return [block];
   }
   const arr = turn.system
     .filter((b) => b.t === "text")
     .map((b) => ({ type: "text", text: (b as { text: string }).text }) as any);
-  if (cache && arr.length) arr[arr.length - 1].cache_control = { type: "ephemeral" };
+  if (cache && arr.length) arr[arr.length - 1].cache_control = { ...cache };
   return arr.length ? arr : undefined;
 }
 
-function encodeTools(turn: Turn, cache: boolean) {
+function encodeTools(turn: Turn, cache: CacheMark | null) {
   const tools = turn.tools.map((t) => ({
     name: t.name,
     description: t.description,
     input_schema: t.parameters,
   })) as any[];
   // Cache the large static tool prefix (system + tools) with one breakpoint.
-  if (cache && tools.length) tools[tools.length - 1].cache_control = { type: "ephemeral" };
+  if (cache && tools.length) tools[tools.length - 1].cache_control = { ...cache };
   return tools;
 }
 
@@ -329,7 +348,7 @@ function encodeTools(turn: Turn, cache: boolean) {
 // monotonically growing prefix, so the older mark reproduces the breakpoint the
 // previous request wrote (guaranteed hit) and the newer one extends the cache
 // for the next turn. With the system + tools marks this uses all 4 allowed slots.
-function markMessageCache(messages: any[]) {
+function markMessageCache(messages: any[], cache: CacheMark) {
   let marked = 0;
   for (let i = messages.length - 1; i >= 0 && marked < 2; i--) {
     const content = messages[i].content;
@@ -337,7 +356,7 @@ function markMessageCache(messages: any[]) {
     const last = content[content.length - 1];
     // thinking blocks cannot carry cache_control; fall back to an earlier message.
     if (last.type === "thinking" || last.type === "redacted_thinking") continue;
-    last.cache_control = { type: "ephemeral" };
+    last.cache_control = { ...cache };
     marked++;
   }
 }

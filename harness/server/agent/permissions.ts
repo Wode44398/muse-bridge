@@ -137,6 +137,9 @@ export function callSubject(toolName: string, args: Record<string, unknown>): st
     // E2：MCP 网关——「本会话都允许」记到「连接器/工具」这一层，不一次放开所有连接器的所有工具
     case "McpCall":
       return `${s(args.server)}/${s(args.tool)}`;
+    // bridge 操作：规则与「本会话都允许」按操作名记（批了一次 routines.delete 不等于放开所有 bridge 操作）
+    case "BridgeCall":
+      return s(args.op);
     default:
       return "";
   }

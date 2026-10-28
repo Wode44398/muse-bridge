@@ -37,8 +37,9 @@ const LOOPBACK_API = /^http:\/\/(?:127\.0\.0\.1|\[::1\]):\d{1,5}$/i;
 const MIN_SECRET = 20; // 同 bridge 的 host-secret.mjs：短于它的密钥 bridge 会重新生成
 const SCOPED_PREFIX = "dvt1."; // bridge 按人铸的设备令牌（src/runtime/agent-device-token.mjs）
 
-// 两个变量都在、格式对才算接上；租户实例只认按人令牌（bridge 只发这种给它，主机密钥漏进来也不用）
-function channel(): Channel | null {
+// 两个变量都在、格式对才算接上；租户实例只认按人令牌（bridge 只发这种给它，主机密钥漏进来也不用）。
+// BridgeManual / BridgeCall（tools/bridgeapi.ts）经同一把凭据调 bridge 的 /agent/* 接口。
+export function channel(): Channel | null {
   const api = String(process.env.BRIDGE_DEVICE_API ?? "").trim().replace(/\/+$/, "");
   const secret = String(process.env.BRIDGE_DEVICE_SECRET ?? "").trim();
   if (!LOOPBACK_API.test(api) || secret.length < MIN_SECRET) return null;

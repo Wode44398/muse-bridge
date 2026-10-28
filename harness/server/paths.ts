@@ -107,6 +107,11 @@ export function projectsRoot(): string {
   return guard("项目根目录", fromEnv("PROJECTS_ROOT") ?? path.join(os.homedir(), "Dimensio Projects"));
 }
 
+// 共享浏览器的持久配置档（登录态跨会话保留，cdp.ts getSharedBrowser）。租户实例的数据目录各自独立，配置档也就各是各的。
+export function browserProfileDir(): string {
+  return guard("浏览器配置档", fromEnv("DIMENSIO_BROWSER_PROFILE") ?? path.resolve(dataHome(), "browser-profile"));
+}
+
 // 启动时的默认工作区；配置里 `workspace: ""` 就回到它。
 export function defaultWorkspace(): string {
   return guard("默认工作区", fromEnv("WORKSPACE_DIR") ?? path.resolve(dataHome(), "workspace"));

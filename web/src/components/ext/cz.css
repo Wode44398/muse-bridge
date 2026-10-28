@@ -49,6 +49,7 @@
 .cz-tab { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 13px; border-radius: 9px;
   color: var(--cz-ink2); font-size: 15px; font-weight: 500; transition: background .14s ease, color .14s ease; }
 .cz-tab i { font-style: normal; font-size: 12px; color: var(--cz-ink3); font-variant-numeric: tabular-nums; }
+.cz-tab i.cz-tab-upd { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--cz-crit); color: #fff; font-weight: 600; line-height: 18px; text-align: center; }
 .cz-tab:hover { color: var(--cz-ink); }
 .cz-tab.on { background: var(--cz-sel); color: var(--cz-ink); font-weight: 600; }
 .cz-vsep { width: 1px; height: 22px; background: var(--cz-line2); margin: 0 4px; flex: none; }

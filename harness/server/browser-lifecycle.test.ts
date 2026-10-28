@@ -56,7 +56,7 @@ async function lifecycle(): Promise<void> {
   try {
     await s.launch("about:blank");
     tmp = tmpOf(s);
-    await s.navigate("data:text/html,<title>s8-sandboxed</title><p>ok</p>", 300);
+    await s.navigate("data:text/html,<title>s8-sandboxed</title><p>ok</p>");
     assert.equal(await s.title(), "s8-sandboxed", "页面照常渲染");
     const procs = profileProcesses(path.join(tmp, "profile"));
     assert.ok(procs.length >= 2, `浏览器主进程 + 至少一个子进程（实得 ${procs.length}）`);

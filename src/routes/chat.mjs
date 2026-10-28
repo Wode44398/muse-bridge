@@ -378,14 +378,17 @@ export function registerChatRoutes(router, { authOk, identify }) {
     // 5 小时限额重置后自动继续（limit-resume.mjs）：撞墙时要把这条请求原样留着，到点在服务端重放
     //（身份头同 claude-queue 的排队消息）。快照访客不给——一次性公开链接，没人等它续。
     // limitResume = 这一轮本身就是自动续跑发的（重放时 body 带上），不当成「人接手了」。
+    // restartResume = 服务意外重启后的自动继续（restart-resume.mjs）发的第几次：同样是没人在场的自动轮（不取消归档、
+    // 不替用户开会话、不顶掉同会话正在跑的轮），次数随台账带到下一条命，连续续跑靠它封顶。
     const limitReplay = isSnap ? null : {
       headers: replayHeadersOf(req),
       url: req.url,
       body: parsed,
     };
+    const restartResume = isSnap || !sessionId ? 0 : Math.max(0, Math.min(9, Number(parsed.restartResume) | 0));
     return runClaudeChat(req, res, {
       message, sessionId, model, effort, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
-      limitReplay, limitResume: parsed.limitResume === true && !isSnap,
+      limitReplay, limitResume: (parsed.limitResume === true || restartResume > 0) && !isSnap, restartResume,
       globalMax: isSnap ? SNAP_MAX_TURNS : undefined,
       ctx: claudeCtx,
       family: isSnap ? null : family,

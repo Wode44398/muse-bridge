@@ -10,7 +10,7 @@
 
 import { writeSseHeaders } from '../runtime/sse.mjs';
 import { getCurrentGen, getLiveGens, findGenBySession, genWrite, genSubscribe } from '../runtime/gen.mjs';
-import { interruptedRun, clearInterrupted, INTERRUPT_NOTE } from '../runtime/inflight.mjs';
+import { interruptedRun, clearInterrupted, INTERRUPT_NOTE, RESUMING_NOTE } from '../runtime/inflight.mjs';
 import { busAttach } from '../runtime/bus.mjs';
 import { watchSessions } from '../runtime/session-watch.mjs';
 import { sessionQuestions } from '../runtime/questions.mjs';
@@ -126,7 +126,10 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
         // 会落在客户端【已经流到的那条气泡】上——既收敛了转圈，又不动它已经看到的内容。
         // 刻意不发 attach（那会清空气泡等整轮重放，而这一轮的缓冲已随进程一起没了），
         // 也刻意不补 done（done 会把 status 从 error 翻回 done，红旗就没了）。
-        genWrite(res, { type: 'error', kind: 'interrupted', title: '这一轮被中断', hint: '服务进程在执行中途退出了', message: INTERRUPT_NOTE });
+        // 排上了重启后自动继续（restart-resume.mjs）就换个说法：别让人以为还得自己说「继续」
+        genWrite(res, it.resuming
+          ? { type: 'error', kind: 'interrupted', title: '这一轮被中断', hint: '服务已恢复，马上自动继续', message: RESUMING_NOTE }
+          : { type: 'error', kind: 'interrupted', title: '这一轮被中断', hint: '服务进程在执行中途退出了', message: INTERRUPT_NOTE });
         res.end();
         clearInterrupted(ctx.key, want);   // 已经交代过了：持久那份在 transcript 里，不必每次重连都再播
         return;

@@ -152,6 +152,8 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "DIMENSIO_DISABLE_PROVIDERS", area: "沙箱与子进程", description: "关掉的 provider（逗号分隔）；租户默认关 local（本机模型）" },
   { name: "HEADLESS_BROWSER", area: "沙箱与子进程", description: "无头浏览器可执行文件（Browser / 截图工具用）", default: "自动找 Edge / Chrome" },
   { name: "DIMENSIO_BROWSER", area: "沙箱与子进程", description: "这台机器有没有浏览器：off = 当作没有（不提供 Browser / ReadPage / Eval / Network，提示词跟着降级），on = 一律当作有", default: "自动（本机 Chromium 系浏览器、桌面壳的浏览器宿主、经扩展连着的用户浏览器，有一个就算有）" },
+  { name: "DIMENSIO_BROWSER_PERSIST", area: "沙箱与子进程", description: "内置无头浏览器用持久配置档（登录态跨会话保留）：0 = 每次启动用一次性临时配置档", default: "开（测试进程里默认关）" },
+  { name: "DIMENSIO_BROWSER_PROFILE", area: "沙箱与子进程", description: "内置无头浏览器的持久配置档目录", default: "<数据目录>/browser-profile" },
   { name: "PV_PUBLIC_DOMAIN", area: "沙箱与子进程", description: "Preview 服务的公网域名后缀（有就给预览生成公网地址）" },
 
   // ── 检查点 ──

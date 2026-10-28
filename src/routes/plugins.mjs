@@ -6,6 +6,10 @@
 //   POST /api/plugins/reload   {id}          第三方插件重新读清单与代码（本机开发目录改完点一下）
 //   POST /api/plugins/install  zip 原始字节（Content-Type: application/zip）| JSON {path}（登记本机目录）| JSON {github}（从 GitHub 装）
 //   GET  /api/plugins/update?id=             从 GitHub 装的插件检查更新（比最新 Release 与清单版本）
+//   GET  /api/plugins/market[?refresh=1]     官方插件市场（plugins/market.mjs）：条目 + 本机安装状态 + 有更新的
+//   POST /api/plugins/market/install {id, version?}   从市场装 / 更新（没给版本 = 最新兼容版）；内置功能 = 装市场版盖住它
+//   POST /api/plugins/rollback {id}          回退到回收区里的上一版（装的插件 / 市场版内置功能）
+//   POST /api/plugins/restore-builtin {id}   内置功能换回内置版（市场版进回收区）
 //   POST /api/plugins/uninstall {id}         装的 → 卸载（旧版进 .trash）；本机目录 → 取消登记
 //   POST /api/plugins/action   {id, action, args?}   插件详情页的动作按钮（ctx.action）
 //   GET  /api/plugins/options?id=&field=     配置字段的动态选项（内置来源 claude.models / users… 或插件 ctx.configOptions）
@@ -20,7 +24,7 @@
 import { createReadStream, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { kernel } from '../plugins/state.mjs';
+import { kernel, setPluginUpdatesProvider } from '../plugins/state.mjs';
 import { installFromArchive, uninstallPlugin, linkLocal, reloadPlugin, pluginWebDir, PluginError } from '../plugins/discover.mjs';
 import { requireCtx, contextFor } from '../runtime/identity.mjs';
 import { mintTicket, resolveTicket, ticketOf } from '../plugins/tickets.mjs';
@@ -35,6 +39,8 @@ import { grantFields, grantedIn, grantNeedsConfirm, accountLabel, HOST_ACCOUNT }
 import { CAPABILITIES } from '../config/capabilities.mjs';
 import { listUsers } from '../users.mjs';
 import { installFromGithub, checkUpdate, sourceOf } from '../plugins/github.mjs';
+import { marketOverview, installFromMarket, rollbackInstalled, restoreBuiltinVersion, pendingUpdates } from '../plugins/market.mjs';
+import { rollbackTarget } from '../plugins/discover.mjs';
 import { FEATURES } from '../config/index.mjs';
 
 const MAX_ZIP = 50 * 1024 * 1024;
@@ -60,14 +66,18 @@ export function pluginView(p) {
     ...(extra && extra.agents ? { agents: extra.agents } : {}),
     ...(ui ? { ui } : {}),
     hasPage: !!(ui && ui.panel) || !!(p.web && p.web.page),
-    ...(p.source === 'installed' && sourceOf(kernel, p.id) ? { github: sourceOf(kernel, p.id) } : {}),
+    ...(p.source === 'installed' && sourceOf(kernel, p.id)?.github ? { github: sourceOf(kernel, p.id) } : {}),
+    ...(p.source === 'installed' && sourceOf(kernel, p.id)?.market ? { market: sourceOf(kernel, p.id) } : {}),
+    // 市场版内置功能：{ version, active, error, pending? }（pending.install = 重启后换上的版本，pending.restore = 重启后恢复内置版）
+    ...(extra && extra.override ? { override: extra.override } : {}),
+    ...(p.source === 'installed' || (p.source === 'builtin' && extra && extra.override) ? { rollbackTo: rollbackTarget(kernel, p.id)?.version || null } : {}),
     ...(p.active ? panelView(p.id) : {}),
   };
 }
 
 export function pluginsOverview() {
   const plugins = kernel.list().map(pluginView);
-  return { plugins, restartPending: plugins.some((p) => p.pendingRestart) };
+  return { plugins, restartPending: plugins.some((p) => p.pendingRestart || !!p.override?.pending), updates: pendingUpdates(kernel) };
 }
 
 // 这次改配置新授权了哪些要确认的账号（主机本人 / pro 档）。设置页与 agent 接口 plugins.config 同一口径。
@@ -135,6 +145,7 @@ const MIME = {
 };
 
 export function registerPluginRoutes(router, { identify }) {
+  setPluginUpdatesProvider(() => pendingUpdates(kernel));
   const admin = (req, res) => {
     const ctx = requireCtx(identify, req, res);
     if (!ctx) return null;
@@ -248,6 +259,29 @@ export function registerPluginRoutes(router, { identify }) {
     try { json(res, 200, await checkUpdate(kernel, url.searchParams.get('id') || '')); }
     catch (e) { fail(res, e); }
   });
+
+  // ── 插件市场 ──────────────────────────────────────────────────────────
+  router.on('GET', '/api/plugins/market', async (req, res, url) => {
+    if (!admin(req, res)) return;
+    try { json(res, 200, await marketOverview(kernel, { refresh: url.searchParams.get('refresh') === '1' })); }
+    catch (e) { fail(res, e); }
+  });
+
+  // 装 / 更新 / 回退 / 恢复内置版：回 { plugin, ...插件总览, marketPlugins? }，前端两块一起刷新
+  const marketOp = (fn) => async (req, res) => {
+    if (!admin(req, res)) return;
+    try {
+      const b = await body(req);
+      const id = String(b.id || '');
+      if (!id) throw new PluginError(400, '要 id');
+      const p = await fn(id, b);
+      changed();
+      json(res, 200, { plugin: pluginView(kernel.get(id) ? { ...kernel.get(id), pendingRestart: !!p?.pendingRestart || kernel.get(id).pendingRestart } : p), ...pluginsOverview() });
+    } catch (e) { fail(res, e); }
+  };
+  router.on('POST', '/api/plugins/market/install', marketOp((id, b) => installFromMarket(kernel, id, typeof b.version === 'string' ? b.version : '')));
+  router.on('POST', '/api/plugins/rollback', marketOp((id) => rollbackInstalled(kernel, id)));
+  router.on('POST', '/api/plugins/restore-builtin', marketOp((id) => restoreBuiltinVersion(kernel, id)));
 
   router.on('POST', '/api/plugins/uninstall', async (req, res) => {
     if (!admin(req, res)) return;

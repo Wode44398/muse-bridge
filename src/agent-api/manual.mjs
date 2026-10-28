@@ -64,7 +64,7 @@ function modelsMd() {
   const c = CAPABILITIES;
   const lines = [];
   if (c.claude) {
-    lines.push(`- **Claude**：${names(c.claude.models)}。默认 \`${c.claude.defaults?.model || ''}\`（不传 model 就用它）。思考强度：${(c.claude.efforts || []).map((e) => `${e.name}（\`${e.id}\`）`).join('、')}。主机管理员还可能在「模型服务」里接了自定义模型，id 形如 \`custom:<服务>:<模型>\`。`);
+    lines.push(`- **Claude**：${names(c.claude.models)}。默认 \`${c.claude.defaults?.model || ''}\`（不传 model 就用它）。思考强度：${(c.claude.efforts || []).map((e) => `${e.name}（\`${e.id}\`）`).join('、')}。另外每个身份（主机管理员与成员各一份）都可能在「模型服务」里接了自己的自定义模型，id 形如 \`custom:<服务>:<模型>\`，用 \`chat.models\` 列出。`);
   }
   if (c.codex) lines.push(`- **ChatGPT 分页（Codex）**：${names(c.codex.models)}。`);
   if (c.vertex) lines.push(`- **Gemini 对话**：${names(c.vertex.models)}；思考档：${(c.vertex.thinkLevels || []).map((t) => t.name || t.id || t).join(' / ')}。`);

@@ -55,3 +55,9 @@ export function enginesProblem(manifest) {
   if (e.pluginApi != null && Number(e.pluginApi) > PLUGIN_API_VERSION) return `这个插件要插件接口 v${e.pluginApi}，这台 bridge 只有 v${PLUGIN_API_VERSION}（先升级 bridge）`;
   return '';
 }
+
+// 版本范围有没有上界（盖内置功能的市场版必须写明适用到哪一版 bridge：下一版会把修复并进内核，旧的盖不住新的）。
+export function hasUpperBound(range) {
+  const r = String(range || '').trim();
+  return !!r && r !== '*' && !satisfies('999.0', r);
+}

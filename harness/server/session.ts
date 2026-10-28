@@ -868,6 +868,7 @@ function buildState(
     model: cfg.model,
     baseUrl,
     fast: fastMode,
+    cacheTtl: "1h",
   });
 
   // setTodos needs the state; wire it after construction via a holder.
@@ -982,6 +983,8 @@ function buildState(
       webSearch: hasWebSearch,
       // D5：浏览器工具没注册（这台机器没有可用的浏览器后端，或部署方关了）：提示词里不写浏览器 / Electron / 安卓那几句
       browser: hasBrowser,
+      // bridge 拉起的实例才有 BridgeManual / BridgeCall：有才写 bridge 段（手册、操作、bug 诊断上报）
+      bridge: tmap.has("BridgeCall"),
     });
   let initialSystem: string;
   let initialWorld: WorldTokens;

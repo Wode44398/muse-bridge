@@ -5,7 +5,7 @@ import { defineGroup, defineOp, OpError } from '../registry.mjs';
 import { MODULE_CATALOG } from '../../modules/registry.mjs';
 import { modulesOverviewRemote, installFromRelease } from '../../modules/remote.mjs';
 
-defineGroup('modules', '功能扩展', 'Gemini · Vertex、ChatGPT · Codex、dimensio 三个可选模块：查看状态，从 GitHub 发版一键安装 / 更新（重启服务端后生效）。');
+defineGroup('modules', 'agent 扩展', 'Gemini · Vertex、ChatGPT · Codex、dimensio 三个可选 agent 模块（功能扩展页的「Agent」区）：查看状态，从 GitHub 发版一键安装 / 更新（重启服务端后生效）。内置功能与第三方插件见 plugins 组。');
 
 const RESTART_HINT = '重启服务端后生效：设置 › 扩展 › 功能扩展 ›「立即重启」，或服务端控制台 › 服务控制';
 const CODE_OF = { 400: 'bad_args', 404: 'not_found', 409: 'conflict', 503: 'unavailable', 504: 'timeout' };
@@ -16,7 +16,7 @@ defineOp({
     '每项：id、label、installed（装没装）、loaded、version、builtin（随主程序内置，不能另装卸）、enabled（agent 开没开）、pending（重启后要装 / 卸）、',
     'remote（能不能从 GitHub 装：action 为 install / update 时可调 modules.install，version 是可装的版本；action 为 null 时 reason 写着为什么不能，',
     '如源码部署、这一版不提供、没在 GitHub 公开发布、连不上 GitHub、发版里没有这个扩展）、job（正在装的进度）。',
-    'release 是这一版发版来源的总体结论；restartNeeded 为 true 表示有改动等重启。公开版不提供 ChatGPT · Codex，不列出。',
+    'release 是这一版发版来源的总体结论；restartNeeded 为 true 表示有改动等重启。这一版不提供、也没装的扩展不列出（公开版没有 ChatGPT · Codex；发行版可经 BRIDGE_MODULES_HIDE 声明不带哪些，如 Muse Bridge 不带 Gemini / Codex）。',
   ].join(''),
   need: ['server.manage'],
   params: { refresh: { type: 'boolean', default: false, desc: '不看缓存，重新查询 GitHub' } },

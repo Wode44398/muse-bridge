@@ -41,6 +41,14 @@ export const readPageTool: Tool = {
           type: "integer",
           description: "Truncate the output beyond this many characters (default 20000).",
         },
+        ref: {
+          type: "integer",
+          description: "Only list this element's subtree (a [refN] from the previous ReadPage / Browser(find)); refs are renumbered.",
+        },
+        depth: {
+          type: "integer",
+          description: "Expand at most this many levels below the root (pair with ref to look at one region).",
+        },
       },
     },
   },
@@ -53,12 +61,16 @@ export const readPageTool: Tool = {
     const fileBlock = fileUrlBlock(page.url, ctx.sandbox);
     if (fileBlock) return fail("readpage", `The current page is a blocked local file — ${fileBlock}. Navigate away first.`);
     try {
+      const rootBackendId = args.ref != null && Number.isInteger(Number(args.ref)) ? page.refInfo(Number(args.ref)).backendId : undefined;
       const snap = await page.axSnapshot({
         filter: args.filter === "interactive" ? "interactive" : "all",
         query: typeof args.query === "string" && args.query.trim() ? args.query.trim() : undefined,
         maxChars: Number.isFinite(Number(args.maxChars)) ? Number(args.maxChars) : undefined,
+        rootBackendId,
+        depth: Number.isFinite(Number(args.depth)) ? Number(args.depth) : undefined,
       });
-      const head = `Page: ${page.url} — ${snap.refCount} interactive element(s) tagged [refN].`;
+      const scope = rootBackendId != null ? ` (only ref${args.ref}'s subtree; refs renumbered)` : "";
+      const head = `Page: ${page.url}${scope} — ${snap.refCount} interactive element(s) tagged [refN].`;
       return ok(
         `read ${snap.lineCount} nodes, ${snap.refCount} refs`,
         `${head}\n${WEB_CONTENT_NOTE}\n\n${redactOutput(snap.text)}\n\nUse Browser(action:"click"|"type"|"hover", ref:<N>) to act on a [refN] element.`,

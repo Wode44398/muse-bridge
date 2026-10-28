@@ -30,3 +30,17 @@ test('stripBrand：版本行去掉开头的品牌，本体与发行版都认', a
   assert.equal(stripBrand('bridge-client · 2026.10.27'), 'bridge-client · 2026.10.27');
   assert.equal(stripBrand('The Bridge'), '');
 });
+
+test('反馈去向：没声明 = 本体默认且 readDistro 形状不变；声明了才带 feedback', async () => {
+  const { feedbackDest, readFeedbackDest, FEEDBACK_DEFAULT } = await import('./distro.js');
+  assert.equal('feedback' in readDistro({}), false);
+  assert.deepEqual(feedbackDest(null, 'zh', readDistro({})), { to: 'bridge 开发者', public: false });
+  assert.deepEqual(feedbackDest(undefined, 'en', readDistro({})), { to: 'the Bridge developer', public: false });
+  const muse = readDistro({ id: 'muse', feedback: { to: 'Muse Bridge 的公开 GitHub Issue', toEn: 'Muse Bridge’s public GitHub issues', public: true } });
+  assert.deepEqual(feedbackDest(null, 'zh', muse), { to: 'Muse Bridge 的公开 GitHub Issue', public: true });
+  assert.deepEqual(feedbackDest(null, 'en', muse), { to: 'Muse Bridge’s public GitHub issues', public: true });
+  // 服务端回的 dest 优先（离线 apk 壳没有注入也能拿到）
+  assert.equal(feedbackDest({ to: 'X', public: true }, 'en', readDistro({})).to, 'X');
+  assert.equal(readFeedbackDest({ to: 5 }), null);
+  assert.equal(readFeedbackDest({ public: true }).to, FEEDBACK_DEFAULT.to);
+});

@@ -43,7 +43,7 @@
   import ConnectQr from './pairing/ConnectQr.svelte';
   import { settingsNav } from '../lib/settingsNav.svelte.js';
   import { t, tc, tr, lang, setLang, LANGS } from '../lib/i18n.js';
-  import { DISTRO, stripBrand } from '../lib/distro.js';
+  import { DISTRO, stripBrand, feedbackDest } from '../lib/distro.js';
   import { wp, wpDef, setWp, addUpload, deleteUpload, splitWpFiles, LIGHT_IDS, DARK_IDS, spatial, setSpatialOn, setSpatialAmp, wpHasDepth, wpIsUpload } from '../lib/wallpaper.svelte.js';
   import { registerCloser } from '../lib/nav.js';
   import { swipeDismiss, spring, NAV_SPRING } from '../lib/motion.js';
@@ -129,7 +129,7 @@
   function toggleFullRes() { prefs.fullResMedia = !prefs.fullResMedia; savePrefs(); }
   // —— 设置 › Claude（2026-10-20 对齐官方 Desktop「Settings → Claude Code」）——
   // 注册表 src/config/claude-settings.mjs、数据面 lib/claudeSettings.svelte.js、取值与文案 lib/claudeSettingsView.js（两套外壳共用）。
-  // Claude 页只放常用组（撞上限额时 / 新会话默认 / 对话 / 会话协作 / 安全），Git 与拉取请求、会话管理、通知、这台电脑、
+  // Claude 页只放常用组（撞上限额时 / 服务意外重启时 / 新会话默认 / 对话 / 会话协作 / 安全），Git 与拉取请求、会话管理、通知、这台电脑、
   // 扩展与记忆折成推入行；枚举项推入单选子页（cl-<键>，每项一行说明）。输入建议、自动压缩点 10-20 起存服务端。
   // 「自动压缩点」在对话页用量弹层上拖；这里只给一个恢复默认（CLI 自定）的出口
   const CL_CHOICE = { 'cl-perm': 'permissionMode', 'cl-style': 'outputStyle', 'cl-qto': 'questionTimeout', 'cl-lang': 'replyLanguage',
@@ -740,6 +740,8 @@
   // 没配中继地址（reason=no-relay）、不是正式实例时不出开关；开发者自己那台（mode=inbox）是汇总端，不出提示也不出开关。
   let fbUp = $state(null), fbUpBusy = $state(false), fbSentUp = $state(''), fbConsent = $state(false);
   function loadFbUp() { api.get('/api/feedback/upstream').then((r) => { fbUp = r; }).catch(() => {}); }
+  // 去向文案里的「发给谁」：发行版声明的（服务端回的 dest 优先，其次注入的 DISTRO.feedback），没声明 = 本体的「bridge 开发者」
+  const fbDest = $derived(feedbackDest(fbUp?.dest, lang()));
   async function toggleFbUp() {
     if (fbUpBusy || !fbUp) return;
     fbUpBusy = true;
@@ -752,13 +754,13 @@
   const fbUpNote = $derived.by(() => {
     if (!fbUp || fbUp.mode === 'inbox' || fbUp.mode === 'push') return '';
     const notOn = !fbUp.reason;
-    if (fbUp.admin && fbUp.libraryDir) return (notOn ? t('这台服务器没开「把用户反馈同时发给 bridge 开发者」。') + ' ' : '')
+    if (fbUp.admin && fbUp.libraryDir) return (notOn ? t('这台服务器没开「把用户反馈同时发给 {to}」。', { to: fbDest.to }) + ' ' : '')
       + t('反馈只留在这台服务器上，存放在 {dir}。', { dir: fbUp.libraryDir });
-    return notOn ? t('这台服务器没开「把用户反馈同时发给 bridge 开发者」，反馈只留在服务器上，由管理员查看。')
+    return notOn ? t('这台服务器没开「把用户反馈同时发给 {to}」，反馈只留在服务器上，由管理员查看。', { to: fbDest.to })
       : t('反馈只留在这台服务器上，由管理员查看。');
   });
   const fbUpAdminSub = $derived(!fbUp?.admin ? ''
-    : t('默认关。打开后，提交页会多一个「这条也发给 bridge 开发者」，提交的人自己勾了才发。')
+    : t('默认关。打开后，提交页会多一个「这条也发给 {to}」，提交的人自己勾了才发。', { to: fbDest.to }) + (fbDest.public ? ' ' + t('这个去向是公开的：提交的内容任何人都能看到，请提醒大家别写隐私、账号和密钥。') : '')
       + (fbUp.relayHost ? ' ' + t('发往 {host}。', { host: fbUp.relayHost }) : ''));
   // 汇总端（开发者自己那台）只给管理员看拉取状态：令牌对不上、中继没部署时一眼能看出来，不会悄悄一直失败
   const fbWhen = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
@@ -1115,7 +1117,7 @@
       {#if extOk}
         <button class="r" type="button" onclick={() => push('extensions')}>
           {@render ico('extensions')}
-          <span class="r-main"><span class="r-tx">{t('扩展')}</span>{@render chev()}</span>
+          <span class="r-main"><span class="r-tx">{t('扩展')}</span>{#if me.pluginUpdates}<span class="r-d accent">{t('{n} 个插件有更新', { n: me.pluginUpdates })}</span>{/if}{@render chev()}</span>
         </button>
       {/if}
       {#if ags.policyOk && ags.multiUser}
@@ -1331,6 +1333,12 @@
       {/each}
     </div>
   {/if}
+
+  <!-- 服务意外重启时：上一条命没跑完的轮，服务恢复后自动接着做（src/runtime/restart-resume.mjs） -->
+  {@render ghead(t('服务意外重启时'))}
+  <div class="ig">
+    {@render cToggle('autoResumeOnRestart')}
+  </div>
 
   <!-- 新会话默认：会话里可以单独改（输入框的模式菜单 / 加号菜单的输出风格），改的只是那个会话 -->
   {@render ghead(t('新会话默认'))}
@@ -2390,7 +2398,7 @@
       {#if fbDone}
         <div class="fb-done">
           <Sym name="checkmark.circle.fill" weight={400} size={56} class="fb-done-ic" />
-          <p>{fbSentUp === 'queued' ? t('已记下，也会转给 bridge 开发者。') : fbSentUp === 'off' ? t('已记下，服务器管理员会看到。') : t('反馈已记到开发者的库里，会看到。')}</p>
+          <p>{fbSentUp === 'queued' ? t('已记下，也会转给 {to}。', { to: fbDest.to }) : fbSentUp === 'off' ? t('已记下，服务器管理员会看到。') : t('反馈已记到开发者的库里，会看到。')}</p>
         </div>
       {:else}
         <p class="fb-intro">{fbUp && fbUp.mode !== 'inbox' ? t('遇到的问题、想要的功能、体验吐槽都行，可附图片/视频。') : t('遇到的问题、想要的功能、体验吐槽都行，可附图片/视频，会直接进开发者的反馈库。')}</p>
@@ -2409,16 +2417,16 @@
         </div>
         {#if fbUp?.mode === 'push'}
           <div class="fb-up-row">
-            <span class="fb-up-tx">{t('这条也发给 bridge 开发者')}<small>{t('勾选后会同时发给 bridge 开发者：带文字、所在界面、版本和系统，不带账号名和服务器地址；图片最多 3 张，原样发出，截图里能看到的开发者也能看到；视频不发。')}</small></span>
-            <Toggle checked={fbConsent} onchange={() => (fbConsent = !fbConsent)} label={t('这条也发给 bridge 开发者')} />
+            <span class="fb-up-tx">{t('这条也发给 {to}', { to: fbDest.to })}<small>{fbDest.public ? t('勾选后会同时发给 {to}：带文字、所在界面、版本和系统，不带账号名和服务器地址。这是公开发布：内容任何人都能看到，请别写隐私、账号、密钥；图片不会公开发布（只记张数），视频不发。', { to: fbDest.to }) : t('勾选后会同时发给 {to}：带文字、所在界面、版本和系统，不带账号名和服务器地址；图片最多 3 张，原样发出，截图里能看到的开发者也能看到；视频不发。', { to: fbDest.to })}</small></span>
+            <Toggle checked={fbConsent} onchange={() => (fbConsent = !fbConsent)} label={t('这条也发给 {to}', { to: fbDest.to })} />
           </div>
         {/if}
         {#if fbUpNote}<p class="fb-up">{fbUpNote}</p>{/if}
         {#if fbInboxLine}<p class="fb-up" class:bad={!!fbUp.lastPullError || fbUp.reason === 'no-relay'}>{fbInboxLine}</p>{/if}
         {#if fbUp?.admin && fbUp.mode !== 'inbox' && !fbUp.reason}
           <div class="fb-up-row">
-            <span class="fb-up-tx">{t('把用户反馈同时发给 bridge 开发者')}<small>{fbUpAdminSub}</small>{#if fbUp.pending}<small>{t('还有 {n} 条没发出去，连上后自动补发。', { n: fbUp.pending })}</small>{/if}</span>
-            <Toggle checked={fbUp.mode === 'push'} disabled={fbUpBusy} onchange={toggleFbUp} label={t('把用户反馈同时发给 bridge 开发者')} />
+            <span class="fb-up-tx">{t('把用户反馈同时发给 {to}', { to: fbDest.to })}<small>{fbUpAdminSub}</small>{#if fbUp.pending}<small>{t('还有 {n} 条没发出去，连上后自动补发。', { n: fbUp.pending })}</small>{/if}</span>
+            <Toggle checked={fbUp.mode === 'push'} disabled={fbUpBusy} onchange={toggleFbUp} label={t('把用户反馈同时发给 {to}', { to: fbDest.to })} />
           </div>
         {/if}
         {#if fbErr}<p class="fb-err">{fbErr}</p>{/if}
