@@ -70,6 +70,7 @@ Muse 自己的界面只有插件面板 `deploy/muse/plugin/web/index.html`：中
 node --test deploy/muse/test/guide.test.mjs                 # 使用说明书的静态检查（界面名字、设置分区、子命令、链接；发版前必过）
 node deploy/muse/test/guide-qa/run.mjs                      # 说明书问答测试（用本机 claude -p，发版前跑一次）
 node --test deploy/muse/feedback/*.test.mjs                 # Muse 的问题报告
+bash deploy/muse/test/muse-env.test.sh                      # 回写 muse.env 时保留自有服务和 cloudflared 路径（ops/muse-env-lib.sh）
 npm --prefix feedback-worker test                           # 反馈中继（不联网）
 node web/scripts/i18n-check.mjs                             # 同步后核对字典（bridge 自带）
 node deploy/muse/sync/sync-from-bridge.mjs --from <公开版导出树> --check   # 看一次同步会动哪些文件

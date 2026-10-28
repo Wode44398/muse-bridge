@@ -53,11 +53,16 @@ PORT=8787
 SVC_USER=bridge
 PROXY="${MUSE_PROXY:-http://hatch-egress-proxy:3128}"
 EDGE=region1.v2.argotunnel.com
+# 这个版本的内置服务。运维者在 muse.env 的 SERVICES 里追加的自有服务，回写时接在后面保留（ops/muse-env-lib.sh）
 SERVICES="bridge cf-relay-api cf-relay-edge muse-tunnel"
+# 以后去掉某个内置服务时写在这里，回写 muse.env 时从 SERVICES 里拿掉它（否则会被当成自有服务留下）
+SERVICES_RETIRED=""
 HOOK_DIR="$PERSIST/hooks/scripts"
 
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
+# shellcheck source=ops/muse-env-lib.sh
+. "$HERE/ops/muse-env-lib.sh"
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[33m[!] %s\033[0m\n' "$*" >&2; }
@@ -253,8 +258,18 @@ render() { # 模板里的 @XXX@ 换成真实值
 
 write_muse_env() {
   install -d -m 0770 "$OPS"
+  local old_svc old_cf svc cf m
+  old_svc="$(prev SERVICES)"; old_cf="$(prev CLOUDFLARED)"
+  svc="$(merge_services "$SERVICES" "$old_svc" "$SERVICES_RETIRED")"
+  cf="$(pick_cloudflared "$old_cf")"
+  m="$(env_change_note SERVICES "$old_svc" "$svc")"; [ -z "$m" ] || warn "$m"
+  m="$(env_change_note CLOUDFLARED "$old_cf" "$cf")"; [ -z "$m" ] || warn "$m"
   cat > "$OPS/muse.env" <<EOF
-# bootstrap.sh 生成，heal.sh / cf-wrap.sh / 看门狗都读它（下次 install 会按这里的选择重写）
+# bootstrap.sh 生成，heal.sh / cf-wrap.sh / 看门狗都读它。install、update 和各个 set-* 子命令每次都整体重写这个文件：
+#   AGENTS 到 UI_LANG 这几项（用户的选择）沿用这里的值，由对应的子命令改；
+#   SERVICES = 这个版本的内置服务 + 这里多出来的服务（自己加的服务追加在后面即可，单元副本放 $OPS/systemd/，看门狗会自愈）；
+#   CLOUDFLARED 这里的路径还能执行就沿用，否则重新查找；其余几项按安装脚本重算，手改会被覆盖。
+#   SERVICES、CLOUDFLARED 回写时跟这里不一样，安装输出里会提示一行。
 PERSIST=$PERSIST
 OPS=$OPS
 RELS=$RELS
@@ -263,8 +278,8 @@ PORT=$PORT
 SVC_USER=$SVC_USER
 EDGE=$EDGE
 PROXY=$PROXY
-CLOUDFLARED=$(command -v cloudflared || echo /usr/bin/cloudflared)
-SERVICES="$SERVICES"
+CLOUDFLARED=$cf
+SERVICES="$svc"
 AGENTS=$AGENTS
 USERS_MODE=$USERS_MODE
 TUNNEL_MODE=$TUNNEL_MODE
@@ -564,7 +579,8 @@ cmd_install() {
   command -v jq >/dev/null || need+=(jq)
   { command -v unshare >/dev/null && command -v setpriv >/dev/null; } || need+=(util-linux)
   if [ ${#need[@]} -gt 0 ]; then apt_wait update -y && DEBIAN_FRONTEND=noninteractive apt_wait install -y --no-install-recommends "${need[@]}"; fi
-  if ! command -v cloudflared >/dev/null; then
+  # muse.env 里记着的 cloudflared 还能用（可能被挪到了持久目录）就不另装
+  if ! command -v cloudflared >/dev/null && ! [ -x "$(prev CLOUDFLARED)" ]; then
     local tmp; tmp="$(mktemp -d)"
     curl -fsSL -o "$tmp/cloudflared.deb" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture).deb"
     dpkg -i "$tmp/cloudflared.deb"; rm -rf "$tmp"
