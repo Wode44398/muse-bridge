@@ -13,7 +13,7 @@
 #   status [--local]                公网地址、版本、各服务与健康状态（--local 不访问公网地址）
 #   set-claude-token T              写入 Claude 订阅令牌（claude setup-token 生成）并重启 bridge
 #   set-api-key 变量名 值            给 dimensio 填一家模型厂商的 key（如 ANTHROPIC_API_KEY sk-…），顺带放行这家的接口网站
-#   allow-sites [网站或地址…]         预先放行要用到的网站（不给参数 = 按现在的配置算）：Muse 弹审核时选「总是允许此站点」
+#   allow-sites [网站或地址…]         趁用户在场把要用到的网站访问一遍、让审核卡弹出来（不给参数 = 按现在的配置算）
 #   set-agents LIST                 改启用的 agent（claude / dimensio / claude,dimensio）
 #   set-users solo|multi            只自己用（关注册）/ 多人用（开注册与邀请码）
 #   set-domain 主机名 隧道令牌       换成自己域名的固定地址（Cloudflare 命名隧道）
@@ -173,7 +173,7 @@ Services        $(svc_states)
 Local health    $lc
 Public health   $pc
 Claude token    $( [ "$claude_ok" = 1 ] && echo set || echo 'not set (or added in the admin console under Claude accounts)')
-Sites           $( [ -f "$SITES_STATUS" ] || echo 'not checked yet (with the user present, run allow-sites once)')$( [ -f "$SITES_STATUS" ] && echo "${sites:-all approved}")$( [ -n "$sites" ] && echo ' -> not approved yet: with the user present, run allow-sites and have them choose "Always allow this site"')
+Sites           $( [ -f "$SITES_STATUS" ] || echo 'not checked yet (with the user present, run allow-sites once)')$( [ -f "$SITES_STATUS" ] && echo "${sites:-all approved}")$( [ -n "$sites" ] && echo ' -> not approved yet: tell the user what these sites are for; if they want, run allow-sites while they are present (MUSE.md 2.0)')
 Update channel  ${CHANNEL:-not set (manual updates only)}; auto-update $( [ "$AUTO_UPDATE" = 1 ] && echo on || echo off)
 Feedback        $(feedback_auto_label)
 Known issues    $(case "$kc" in -1) echo 'not checked yet (the watchdog reads the update channel every 6 hours)' ;; 0) echo 'none affect this version' ;; *) echo "$kc affect this version (run known-issues for symptoms and workarounds)" ;; esac)
@@ -197,7 +197,7 @@ agent       $(agents_label "${AGENTS:-claude,dimensio}")（服务端报告：${s
 本地健康    $lc
 公网健康    $pc
 Claude 令牌 $( [ "$claude_ok" = 1 ] && echo 已配置 || echo '未配置（也可能已在控制台「Claude 账号」里加过）')
-网站放行    $( [ -f "$SITES_STATUS" ] || echo '还没检查过（用户在场时跑一次 allow-sites）')$( [ -f "$SITES_STATUS" ] && echo "${sites:-全部已放行}")$( [ -n "$sites" ] && echo '（还没放行：用户在场时跑 allow-sites，让他选「总是允许此站点」）')
+网站放行    $( [ -f "$SITES_STATUS" ] || echo '还没检查过（用户在场时跑一次 allow-sites）')$( [ -f "$SITES_STATUS" ] && echo "${sites:-全部已放行}")$( [ -n "$sites" ] && echo '（还没放行：告诉用户这些网站做什么用；他愿意的话，在他在场时跑 allow-sites，见 MUSE.md 2.0）')
 更新频道    ${CHANNEL:-未设置（只能手动给地址更新）}；自动更新 $( [ "$AUTO_UPDATE" = 1 ] && echo 开 || echo 关)
 问题反馈    $(feedback_auto_label)
 已知问题    $(case "$kc" in -1) echo '还没读到（看门狗每 6 小时读一次更新频道）' ;; 0) echo '没有影响这个版本的' ;; *) echo "$kc 条影响这个版本（跑 known-issues 看现象和绕过办法）" ;; esac)
@@ -630,11 +630,11 @@ cmd_install() {
   cp "$HOOK_DIR/bridge-watchdog.sh" "$OPS/hooks/"
   local hj="$OPS/hooks/bridge-watchdog.json" new_hj; new_hj="$(render "$HERE/ops/hooks/bridge-watchdog.json")"
   if [ "$UI_LANG" = en ]; then
-    if [ ! -f "$hj" ]; then HOOK_NOTE="new install: register and enable it with the hooks tool, using $hj"
-    elif [ "$new_hj" != "$(cat "$hj")" ]; then HOOK_NOTE="definition changed: update bridge-watchdog with the hooks tool, using $hj (the script is already replaced)"
+    if [ ! -f "$hj" ]; then HOOK_NOTE="new install: tell the user what it does, then register and enable it with the hooks tool, using $hj"
+    elif [ "$new_hj" != "$(cat "$hj")" ]; then HOOK_NOTE="definition changed: tell the user, then update bridge-watchdog with the hooks tool, using $hj (the script is already replaced)"
     else HOOK_NOTE="definition unchanged, script replaced, nothing to do"; fi
-  elif [ ! -f "$hj" ]; then HOOK_NOTE="新装：请用 hooks 工具按 $hj 注册并启用"
-  elif [ "$new_hj" != "$(cat "$hj")" ]; then HOOK_NOTE="定义变了：请用 hooks 工具按 $hj 更新 bridge-watchdog（脚本已自动换新）"
+  elif [ ! -f "$hj" ]; then HOOK_NOTE="新装：跟用户说明它做什么后，用 hooks 工具按 $hj 注册并启用"
+  elif [ "$new_hj" != "$(cat "$hj")" ]; then HOOK_NOTE="定义变了：告诉用户后，用 hooks 工具按 $hj 更新 bridge-watchdog（脚本已自动换新）"
   else HOOK_NOTE="定义没变，脚本已换新，不用动"; fi
   printf '%s\n' "$new_hj" > "$hj"
   printf '%s\n' "$HOOK_NOTE" > "$OPS/last-hook-note"
@@ -720,7 +720,7 @@ cmd_set_users() {
 # —— 预先放行要用到的网站 ——
 # Muse 的出站代理按网站要用户批准（卡片「允许 Muse 与 X 分享信息？」）。服务在后台第一次访问某家模型接口时弹卡、
 # 没人批就一直卡着（对话停在「等待模型回复」）。平台不许预先声明白名单，Muse 自己也没有权限替用户批；
-# 唯一办法是用户在卡片上选「总是允许此站点」（覆盖该域名及全部子域，之后服务的请求也不再问——实测过）。
+# 用户在卡片上选「总是允许此站点」（覆盖该域名及全部子域）之后，服务的后台请求才不再问（实测过）；选不选由用户决定。
 # 所以在用户在场的时候（配置 key、装完、换域名）由这里挨个访问一遍，把卡片一张一张弹出来让他批掉。
 site_of() { local u="${1#*://}"; u="${u%%/*}"; u="${u%%:*}"; echo "$u"; }
 # 某个 key 对应的接口站点（跟 harness/server/config.ts 的默认地址一致；.env 里写了 *_BASE_URL 就用它）
@@ -771,7 +771,7 @@ allow_sites() {
   mapfile -t sites < <(printf '%s\n' "${sites[@]}" | grep -v '^$' | awk '!seen[$0]++')
   [ ${#sites[@]} -gt 0 ] || { echo "没有要放行的网站。"; return 0; }
   # 卡片可能出现在输入框上方，也可能在右侧「待审核 / Needs review」面板里（后台跑的安装触发的多半在那里）
-  say "放行要用到的网站（${#sites[@]} 个）：Muse 弹出「允许 Muse 与 … 分享信息？」时（输入框上方或右侧「待审核」面板），请选下拉里的「总是允许此站点」"
+  say "访问要用到的网站（${#sites[@]} 个）：没批过的网站，Muse 会弹「允许 Muse 与 … 分享信息？」（输入框上方或右侧「待审核」面板）。「允许一次」只放行这一次，服务以后在后台再访问还会问；下拉里的「总是允许此站点」以后不再问"
   for s in "${sites[@]}"; do
     r="$(curl -s -o /dev/null -x "$PROXY" --max-time "$wait" -w '%{http_connect} %{http_code}' "https://$s/" 2>/dev/null || true)"
     conn="${r%% *}"; code="${r##* }"

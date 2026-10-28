@@ -50,6 +50,9 @@
   通用修复去 bridge 本体做，不要写进 Muse 专用脚本。
 - 在 Linux 上执行的脚本和单元文件必须是 LF（见 `.gitattributes`）。
 - 文档、注释、提交信息用中文；不要在代码、注释或测试里写任何个人信息（真实姓名、邮箱、个人路径、私有域名、账号）。
+- `MUSE.md`、`guide/`、脚本打印给 Muse 看的话（结果块、hook 的 prompt）要经得起 Muse 的安全检查：照实说明会做什么、访问哪些网站、各选项的后果，
+  选择留给用户；不要劝用户选「总是允许此站点」这类放宽权限的选项，不要写「给你自己看的」「不用告诉用户」这种像对用户隐瞒的话
+  （v0.3.0 因此被新装的 Muse 拒装，Issue #7）。
 - 问题报告只收 `deploy/muse/feedback/schema.mjs` 白名单里的字段；要往报告里加东西，先加进白名单并想清楚它会不会带出隐私（报告是公开的 GitHub Issue）。
   网页里 bridge 自带的「提交反馈」和 Claude 诊断上报（`feedback.*`）先落在服务器本地（数据目录 `feedback/`）；管理员开了推送、提交人同意时，
   经 bridge 的推送通道发到中继的 `/v1/cb/report`，中继按 `distro: "muse"` 转成 Muse 的报告（`feedback-worker/src/cb-muse.mjs`），

@@ -45,7 +45,7 @@
 
 - 列的是 Anthropic 的官方市场（跟「功能扩展」里 bridge 的「插件市场」不是一回事，见上面；官方插件目录、知识工作插件、Agent Skills 三个来源，几百个插件，以及从里面拆出来的单独技能和连接器）。「筛选」里可以按来源、分类挑。
 - 第一次打开「发现」时，服务器会自动从 GitHub 拉取市场（显示「正在从 GitHub 拉取官方市场…」）；以后点 **「刷新市场」** 更新。**「管理市场…」** 里还能添加别的 GitHub 市场（仓库里要有 `.claude-plugin/marketplace.json`）。
-- **在 Muse 上第一次拉取可能弹 github.com 的审核卡**：没人批就会失败（页面上会写哪个来源没拉下来，有「重试」）。提前让 Muse 跑 `bash /home/hatch/bridge-ops/bootstrap.sh allow-sites github.com`，提醒用户选「总是允许此站点」。
+- **在 Muse 上第一次拉取可能弹 github.com 的审核卡**：没人批就会失败（页面上会写哪个来源没拉下来，有「重试」）。可以提前让 Muse 跑 `bash /home/hatch/bridge-ops/bootstrap.sh allow-sites github.com`，用户在场时把卡片弹出来批（选项见 `../MUSE.md` 2.0）。
 - 每张卡片上的 **「添加」**（Add）就是装上（变成 **「已添加」**（Added））。外部仓库的插件添加时才从 GitHub 下载。第三方插件先看看它的主页再装。
 - 需要填凭据的连接器（比如要填某个服务的 token）：添加后会打开编辑表单，填好才生效。凭据加密存在服务器上，存了就只显示 ••••••••，不改就原样保留。
 
@@ -82,7 +82,7 @@
 - 有新版本时，「功能扩展」页顶上出现一块 **「{n} 个插件有更新」**（{n} plugin updates），写着 **「只提示，不会自动装」**（Nothing installs automatically）；设置里的「扩展」那一行和「功能扩展」标签上也会出个数字角标。点 **「更新」**（Update）才会装，不点就一直用现在的版本。
 - 装完不满意：插件详情里能 **「回退」**（Roll back）到上一版，或在 **「插件市场里的版本」**（Versions in the plugin market）里挑一个指定版本装；内置功能换上了市场版的，还能 **「恢复内置版」**（Restore built-in version）。市场版起不来时会自动退回内置版。有的要重启才生效，页面会提示。
 - 只有管理员能装、能更新。
-- **在 Muse 上**：市场的索引和插件包都放在 GitHub 的发布页上，服务器在后台去取，要先放行 `github.com` 和 `release-assets.githubusercontent.com`（让 Muse 跑 `allow-sites github.com release-assets.githubusercontent.com`，用户选「总是允许此站点」；新装时安装脚本已经一起放行）。页面上出现「插件市场没拉下来：…」多半就是审核卡没人批。
+- **在 Muse 上**：市场的索引和插件包都放在 GitHub 的发布页上，服务器在后台去取，要先放行 `github.com` 和 `release-assets.githubusercontent.com`（让 Muse 跑 `allow-sites github.com release-assets.githubusercontent.com`，用户在 Muse 里批审核卡，选项见 `../MUSE.md` 2.0；新装时安装脚本已经一起弹过这两张卡）。页面上出现「插件市场没拉下来：…」多半就是审核卡没人批。
 
 ## 常见问题
 
