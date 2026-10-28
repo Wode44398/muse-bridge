@@ -95,5 +95,40 @@ has "文件头写清回写规则" "$out" "这里多出来的服务"
 # 回写出来的 muse.env 能被 heal.sh / 看门狗 source
 ( . "$TMP/ops/muse.env" && [ "$SERVICES" = "$B claude-relay" ] ) && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL 回写的 muse.env source 后 SERVICES 不对"; }
 
+# —— cloudflared 持久副本（#9：VM 重启清掉 /usr/bin/cloudflared）——
+CF="$TMP/cf/usr/bin/cloudflared" BK="$TMP/cf/ops/cloudflared"; mkdir -p "$TMP/cf/ops" "$(dirname "$CF")"
+printf '#!/bin/sh\necho v1\n' > "$CF"; chmod +x "$CF"
+keep_cloudflared "$CF" "$BK"
+eq "keep：存了副本" "$(cat "$BK" 2>/dev/null)" "$(cat "$CF")"
+[ -x "$BK" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL keep：副本不可执行"; }
+# 软链两条只在真 Linux 上测（Git Bash 的 ln -s 是复制）
+mkdir -p "$TMP/cf/usr/local/bin"; ln -sf "$CF" "$TMP/cf/usr/local/bin/cloudflared" 2>/dev/null
+[ -L "$TMP/cf/usr/local/bin/cloudflared" ] && LINKS=1 || LINKS=0
+printf '#!/bin/sh\necho v2\n' > "$CF"; chmod +x "$CF"
+if [ "$LINKS" = 1 ]; then keep_cloudflared "$TMP/cf/usr/local/bin/cloudflared" "$BK"; else keep_cloudflared "$CF" "$BK"; fi
+has "keep：原件更新了副本也更新（Linux 上经软链）" "$(cat "$BK")" "v2"
+keep_cloudflared "$TMP/cf/gone" "$BK"
+has "keep：原件不在不碰副本" "$(cat "$BK")" "v2"
+eq "restore：原件还在什么都不做" "$(restore_cloudflared "$CF" "$BK"; echo "rc=$?")" "rc=0"
+rm -rf "$TMP/cf/usr"   # 模拟 VM 重启：/usr 下的原件和软链都没了
+out="$(restore_cloudflared "$CF" "$BK"; echo "rc=$?")"
+has "restore：从副本补回并说一声" "$out" "已从 $BK 补回 $CF"
+has "restore：补回成功" "$out" "rc=0"
+[ -x "$CF" ] && [ "$(cat "$CF")" = "$(cat "$BK")" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL restore：补回的文件不对"; }
+if [ "$LINKS" = 1 ]; then
+  mkdir -p "$TMP/cf/usr/local/bin"; ln -sf "$TMP/cf/nowhere" "$TMP/cf/usr/local/bin/cloudflared"
+  restore_cloudflared "$TMP/cf/usr/local/bin/cloudflared" "$BK" >/dev/null
+  [ -x "$TMP/cf/usr/local/bin/cloudflared" ] && [ ! -L "$TMP/cf/usr/local/bin/cloudflared" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL restore：断链没换成真文件"; }
+fi
+rm -f "$CF"
+eq "restore：没有副本 = 1" "$(restore_cloudflared "$CF" "$TMP/cf/ops/none"; echo "rc=$?")" "rc=1"
+eq "restore：路径为空 = 1" "$(restore_cloudflared "" "$BK"; echo "rc=$?")" "rc=1"
+# 三处都接上了：安装存副本、heal.sh 和 cf-wrap.sh 补回
+has "bootstrap 把函数库装进 bridge-ops" "$(cat "$BOOT")" 'ops/muse-env-lib.sh" "$OPS/muse-env-lib.sh"'
+has "bootstrap 存副本" "$(cat "$BOOT")" 'keep_cloudflared "$(prev CLOUDFLARED)" "$OPS/cloudflared"'
+has "bootstrap 下载前先试副本" "$(cat "$BOOT")" 'restore_cloudflared "$(prev CLOUDFLARED)" "$OPS/cloudflared"'
+has "heal.sh 补回" "$(cat "$MUSE/ops/heal.sh")" 'restore_cloudflared "$CLOUDFLARED" "$OPS/cloudflared"'
+has "cf-wrap.sh 启动前补回" "$(cat "$MUSE/ops/cf-wrap.sh")" 'restore_cloudflared "$CLOUDFLARED" "$OPS/cloudflared"'
+
 printf '%d 通过，%d 失败\n' "$pass" "$fail"
 [ "$fail" = 0 ]

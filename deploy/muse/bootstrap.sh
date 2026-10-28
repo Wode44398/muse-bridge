@@ -579,7 +579,10 @@ cmd_install() {
   command -v jq >/dev/null || need+=(jq)
   { command -v unshare >/dev/null && command -v setpriv >/dev/null; } || need+=(util-linux)
   if [ ${#need[@]} -gt 0 ]; then apt_wait update -y && DEBIAN_FRONTEND=noninteractive apt_wait install -y --no-install-recommends "${need[@]}"; fi
-  # muse.env 里记着的 cloudflared 还能用（可能被挪到了持久目录）就不另装
+  # muse.env 里记着的 cloudflared 还能用（可能被挪到了持久目录）就不另装；VM 重启清掉了就先从持久副本补回，补不回才下载
+  if ! command -v cloudflared >/dev/null && ! [ -x "$(prev CLOUDFLARED)" ]; then
+    restore_cloudflared "$(prev CLOUDFLARED)" "$OPS/cloudflared" || restore_cloudflared /usr/bin/cloudflared "$OPS/cloudflared" || true
+  fi
   if ! command -v cloudflared >/dev/null && ! [ -x "$(prev CLOUDFLARED)" ]; then
     local tmp; tmp="$(mktemp -d)"
     curl -fsSL -o "$tmp/cloudflared.deb" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture).deb"
@@ -626,6 +629,8 @@ cmd_install() {
   write_muse_env
   install -m 0770 "$HERE/ops/cf-wrap.sh" "$OPS/cf-wrap.sh"
   install -m 0770 "$HERE/ops/heal.sh" "$OPS/heal.sh"
+  install -m 0770 "$HERE/ops/muse-env-lib.sh" "$OPS/muse-env-lib.sh"   # heal.sh / cf-wrap.sh 补回 cloudflared 要用
+  keep_cloudflared "$(prev CLOUDFLARED)" "$OPS/cloudflared" || true   # 刚写进 muse.env 的路径；存持久副本，VM 重启清掉原件时靠它补回（#9）
   ln -sfn "$RELS/current/deploy/muse/bootstrap.sh" "$OPS/bootstrap.sh"   # 永远跟着当前版本
   cp "$HERE/MUSE.md" "$OPS/MUSE.md"
   # 使用说明书（Muse 回答「怎么用」的依据）：整份换新，旧版本的章节不留

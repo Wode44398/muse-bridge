@@ -15,6 +15,8 @@ set -a
 . "$DIR/muse.env"
 if [ "${TUNNEL_MODE:-quick}" = named ]; then . "$DIR/tunnel.env"; fi
 set +a
+# VM 重启清掉了 cloudflared（#9）：从 bridge-ops/ 的持久副本补回再起，不用等看门狗、也不用重跑 install
+if [ -f "$DIR/muse-env-lib.sh" ]; then . "$DIR/muse-env-lib.sh"; restore_cloudflared "$CLOUDFLARED" "$OPS/cloudflared" || true; fi
 # 快速隧道申请地址只给 15 秒，而出站代理冷启动的第一个请求要 16 秒以上——先经代理把 api.trycloudflare.com
 # 碰一下，让代理热起来，申请就不会超时。失败无所谓，cloudflared 自己还会重试。
 if [ "${TUNNEL_MODE:-quick}" != named ] && [ -n "${PROXY:-}" ]; then

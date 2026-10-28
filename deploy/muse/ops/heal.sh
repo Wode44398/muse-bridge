@@ -1,7 +1,7 @@
 #!/bin/bash
 # 开机 / /etc 被平台还原之后的自愈，可以随时重复跑（看门狗每分钟调一次，bootstrap 收尾也调一次）。
 # Muse VM 重启时，平台只重写它自己管的 /etc 文件；它不认识的东西（我们的 systemd 单元、/etc/bridge/）会丢。
-# 这里把它们从持久目录 bridge-ops/ 补回来，再把没在跑的服务拉起。
+# 这里把它们从持久目录 bridge-ops/ 补回来（含 deb 装的 cloudflared 二进制），再把没在跑的服务拉起。
 # 注意：bridge 账号由平台重写 /etc/passwd 时保留，但开机后不会马上写好（实测往往要等 Muse 下一次干活）。
 # 服务全靠这个账号运行（没有它 systemd 报 217/USER，连数字 UID 都不认），所以不等平台：按数据目录属主当场补建。
 set -u
@@ -26,6 +26,13 @@ elif [ -f "$OPS/bridge.env" ]; then
   install -d -m 0750 /etc/bridge
   install -m 0600 "$OPS/bridge.env" /etc/bridge/bridge.env
   echo "已从 $OPS/bridge.env 恢复 /etc/bridge/bridge.env"
+fi
+
+# cloudflared：VM 重启会把 /usr/bin/cloudflared 一起清掉（#9），没了就从持久副本补回；还在就顺手更新副本
+if [ -n "${CLOUDFLARED:-}" ] && [ -f "$OPS/muse-env-lib.sh" ]; then
+  . "$OPS/muse-env-lib.sh"
+  restore_cloudflared "$CLOUDFLARED" "$OPS/cloudflared"     || { [ -x "$CLOUDFLARED" ] || echo "$CLOUDFLARED 不在，也没有持久副本 $OPS/cloudflared：要重跑 install 重新下载"; }
+  keep_cloudflared "$CLOUDFLARED" "$OPS/cloudflared" || true
 fi
 
 # 管理员令牌的明文暂存（bootstrap.sh 结果块用）：用户用它登录成功（出现了比它新的管理员会话）就删掉

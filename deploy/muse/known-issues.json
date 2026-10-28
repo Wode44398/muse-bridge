@@ -28,6 +28,19 @@
       "issue": 6
     },
     {
+      "id": "vm-reboot-cloudflared-gone",
+      "title": "VM 重启后公网地址打不开（530），muse-tunnel 反复报找不到 cloudflared",
+      "title_en": "After the VM restarts the public address is down (530) and muse-tunnel keeps saying cloudflared is missing",
+      "symptom": "VM 重启后本地健康 200、其余服务正常，但 muse-tunnel 每 5 秒重启一次、退出码 127，日志说找不到 cloudflared 程序；跑 heal.sh、重启服务都不管用，看门狗会叫你、但修不好。",
+      "workaround": "让 Muse 重跑一次 install（会重新下载 cloudflared，要用户批准访问 github.com）。更新到修好的版本后，重启就不会再这样。",
+      "workaround_en": "Have Muse run install again (it re-downloads cloudflared; the user needs to approve access to github.com). After updating to the fixed version this no longer happens on restart.",
+      "cause": "平台重启 VM 时会清掉 /home/hatch 以外它不认识的文件，安装时用 deb 装的 /usr/bin/cloudflared 也在其中；heal.sh 以前只补服务单元和配置，不管程序本身。修好的版本在 bridge-ops/ 存一份 cloudflared 副本，heal.sh 和隧道启动时发现没了就从副本拷回，不用联网。",
+      "since": null,
+      "fixed_in": "v0.3.2",
+      "notify": true,
+      "issue": 9
+    },
+    {
       "id": "quick-tunnel-get-stream",
       "title": "临时地址下：Claude 页的终端一直显示「连接终端…」，dimensio 的回复要等整轮做完才一次出来",
       "title_en": "On a temporary address: the terminal on the Claude page stays on \"Connecting to terminal…\", and dimensio replies only appear when the whole turn is done",

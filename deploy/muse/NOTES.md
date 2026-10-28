@@ -34,6 +34,7 @@
 | 查不了 edge 的 SRV 记录 | `--edge region1.v2.argotunnel.com:7844` 直接指定，`--protocol http2` 走 TCP |
 | 快速隧道的地址每次重启都变 | 看门狗发现新地址能通就唤醒 Muse 通知用户；想要固定地址就换命名隧道（`set-domain`） |
 | 重启后单元、`/etc/bridge/bridge.env` 丢失；`/home/hatch` 偶尔丢 o+x（服务报 `status=200/CHDIR`） | 规范副本放 `bridge-ops/`，`ops/heal.sh` 每分钟补回（看门狗 hook 调用） |
+| deb 装的 `/usr/bin/cloudflared` 重启后也会被清掉（`/home/hatch` 以外平台不认识的文件都会丢），muse-tunnel 127 循环；`heal.sh` 以前不管它，看门狗只能叫人重跑 install（#9） | install 后存一份到 `bridge-ops/cloudflared`；`heal.sh` 和 `cf-wrap.sh` 发现原件没了就拷回（`ops/muse-env-lib.sh` 的 `keep_cloudflared` / `restore_cloudflared`），不联网 |
 | 在 VM 上跑 `claude setup-token`：喂 code 后卡死；token 端点对出口 IP 限流（429，近一小时），拿假 code 试探也算次数 | Claude 令牌只在用户自己的电脑上生成；说明书里写成硬规矩 |
 | npm audit 阶段经代理容易 `socket hang up` | `npm ci --no-audit --no-fund` |
 | cloudflared 一直报 `Failed to refresh DNS local resolver … unable to parse IP` | 无害噪音，不用管 |

@@ -125,7 +125,7 @@ bash "$REL/bridge/deploy/muse/bootstrap.sh" install --agents claude --solo --aut
 这台 VM 每隔几个小时会被平台整机重启一次，重启后我们的服务会丢、临时地址会变。VM 上没有 cron，也没有用户级 systemd，只能靠 Muse 的 hook 定时把服务拉回来。
 
 - 脚本已经放在 `~/hooks/scripts/bridge-watchdog.sh`（副本在 `/home/hatch/bridge-ops/hooks/`），定义在 `/home/hatch/bridge-ops/hooks/bridge-watchdog.json`。
-- 它每分钟：补回丢失的服务和配置 → 检查健康 → 挂了先重启 → 还不行就唤醒一个 worker 排查 → 临时地址变了就唤醒你告诉用户 → 发现新版本 / 更新完成 / 更新失败自动回退时通知你。json 里的 `prompt` 是被唤醒的 worker 读到的说明（每种事件怎么处理、要告诉用户什么）。
+- 它每分钟：跑 `heal.sh` 补回重启时被清掉的东西（systemd 单元、`/etc/bridge/bridge.env`、bridge 账号、目录权限，还有 cloudflared 程序——装的时候在 `bridge-ops/cloudflared` 存了一份副本，从副本拷回，不联网）→ 检查健康 → 挂了先重启 → 还不行就唤醒一个 worker 排查 → 临时地址变了就唤醒你告诉用户 → 发现新版本 / 更新完成 / 更新失败自动回退时通知你。json 里的 `prompt` 是被唤醒的 worker 读到的说明（每种事件怎么处理、要告诉用户什么）。
 - 注册之前，用几句话告诉用户这个 hook 做什么、多久跑一次；他想看脚本或 `prompt` 原文，就给他看。他同意后，用你的 hooks 工具创建 id 为 `bridge-watchdog` 的 hook（已经有了就更新它），各字段照 json 填：`id`、`script_path`、`poll_interval_secs`=60、`script_timeout_secs`=600、`delivery`、`prompt`，然后启用。
 - 你的工具支持 dry-run 的话，先 dry-run 一次，把结果贴出来。
 - 以后每次安装或更新，结果块里「看门狗 hook」那一行会说定义有没有变；变了就告诉用户变了什么（新旧 json 的差别），他同意后按新的 json 更新这个 hook。
@@ -307,6 +307,7 @@ bridge 服务被意外打断时（VM 被平台重启、看门狗重启了服务�
 | 用自己的域名，muse-tunnel 日志报令牌无效（`Unauthorized` / `invalid token`） | 隧道令牌复制错了，或那条隧道在 Cloudflare 后台被删了 | 让用户重新复制令牌（第 5 节第 2 步），再 `set-domain` |
 | 用自己的域名，隧道连上了但打开是 Cloudflare 错误页（502 / 1033） | Public hostname 的服务地址没填对 | 让用户在 Cloudflare 后台把服务改成 `HTTP` + `localhost:8787` |
 | cloudflared 一直报 `Failed to refresh DNS local resolver … unable to parse IP` | 已知的无害噪音 | 不用管 |
+| VM 重启后 muse-tunnel 每 5 秒重启一次、退出码 127、日志说找不到 cloudflared；本地 200、公网 530 | 平台重启时把 `/usr/bin/cloudflared` 也清掉了 | `bash /home/hatch/bridge-ops/heal.sh`（看门狗每分钟也会做，muse-tunnel 启动时也会自己补）：从持久副本 `bridge-ops/cloudflared` 拷回。输出说「也没有持久副本」（v0.3.1 及更早装的、还没更新过）就重跑 `install`，它会重新下载并存好副本 |
 | 重启后服务单元没了（`Unit … not found`） | 平台重启时会清掉 `/etc` 里它不认识的文件 | `bash /home/hatch/bridge-ops/heal.sh`；看门狗每分钟也会自动做 |
 | bridge 报 `status=217/USER`，或者找不到 bridge 用户 | VM 重启后，平台不会马上把 `/etc/passwd` 里的 bridge 账号写回来 | 什么都不用做：看门狗下一轮（1 分钟内）会按数据目录的属主把同一个账号补回来、拉起服务；`install` 也会自己补 |
 | bridge 报 `status=200/CHDIR` | `/home/hatch` 丢了 o+x 权限 | `heal.sh` 会自动补上 |

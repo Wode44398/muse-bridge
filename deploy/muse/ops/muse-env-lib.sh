@@ -48,3 +48,21 @@ env_change_note() { # $1 = 键  $2 = 上次的值  $3 = 这次写的值
       printf 'muse.env 的 %s 变了：%s → %s\n' "$key" "$old" "$new" ;;
   esac
 }
+
+# cloudflared 的持久副本（Issue #9）：VM 重启时平台会清掉 /home/hatch 以外它不认识的文件，deb 装的 /usr/bin/cloudflared
+# 也在其中——muse.env 里的路径写得再对，文件没了隧道也只能 127 循环，以前只有重跑 install（重新下载）才救得回来。
+# 现在装好后在 bridge-ops/ 存一份副本：heal.sh（看门狗每分钟）和 cf-wrap.sh（muse-tunnel 每次启动）发现它没了，
+# 就从副本拷回原位，不联网、不下载。
+keep_cloudflared() { # $1 = CLOUDFLARED  $2 = 副本路径；$1 能执行就把它存成副本（内容一样就不动）
+  local src; src="$(readlink -f "${1:-}" 2>/dev/null)" || return 0
+  [ -n "$src" ] && [ -f "$src" ] && [ -x "$src" ] || return 0
+  cmp -s "$src" "$2" 2>/dev/null && return 0
+  install -m 0755 "$src" "$2.new" && mv -f "$2.new" "$2"
+}
+restore_cloudflared() { # $1 = CLOUDFLARED  $2 = 副本路径；$1 还能执行 = 0；从副本补回了 = 0 并输出一行；补不回 = 1
+  [ -n "${1:-}" ] || return 1
+  if [ -f "$1" ] && [ -x "$1" ]; then return 0; fi
+  [ -f "$2" ] && [ -s "$2" ] || return 1
+  rm -f "$1"   # 可能是指向已被清掉的文件的断链
+  install -D -m 0755 "$2" "$1" && printf '已从 %s 补回 %s\n' "$2" "$1"
+}
