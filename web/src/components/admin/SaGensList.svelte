@@ -42,9 +42,16 @@
 <style>
   .glist { padding: 4px 18px 8px; display: flex; flex-direction: column; }
   .grow { display: flex; align-items: center; gap: 12px; padding: 10px 0; position: relative; font-size: 13.5px; }
-  .grow + .grow::before { content: ''; position: absolute; top: 0; left: 0; right: -18px; height: .5px; background: rgba(255,255,255,.08); }
+  .grow + .grow::before { content: ''; position: absolute; top: 0; left: 0; right: -18px; height: 1px; background: var(--sa-sep); }
   .sid { width: 72px; flex: none; }
-  .req { flex: 1; min-width: 0; color: rgba(255,255,255,.85); }
+  .req { flex: 1; min-width: 0; color: var(--sa-tx); }
   .elapsed { flex: none; display: inline-flex; align-items: center; gap: 7px; }
   .subs { width: 22px; text-align: right; flex: none; }
+  /* 手机：谁 + 用时 + 中止一行，提问原文换到第二行 */
+  @media (max-width: 699px) {
+    .grow { flex-wrap: wrap; row-gap: 5px; }
+    .sid, .subs { display: none; }
+    .elapsed { margin-left: auto; }
+    .req { order: 9; flex-basis: 100%; color: var(--sa-tx2); }
+  }
 </style>

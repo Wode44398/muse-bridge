@@ -91,6 +91,7 @@ export function createGeminiAdapter(cfg: AdapterConfig): ProviderAdapter {
         },
         body: JSON.stringify(body),
         signal,
+        ...(cfg.custom?.noRedirect ? { redirect: "error" as const } : {}),
       });
 
       if (!res.ok || !res.body) {

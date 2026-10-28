@@ -108,6 +108,7 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
           },
           body: JSON.stringify(payload),
           signal,
+          ...(custom?.noRedirect ? { redirect: "error" as const } : {}),
         });
       };
       const errCtx = custom ? { url, name: custom.name, protocol: "anthropic" as const, model: cfg.model } : undefined;

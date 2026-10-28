@@ -10,7 +10,9 @@ import { EventEmitter } from 'node:events';
 import { INTERNAL_IDENTITY, userIdentity } from '../runtime/identity.mjs';
 
 let router = null;
-export function setInternalRouter(r) { router = r; }
+// 只收真路由器：agent-api 作为内置插件启用时拿到的 ctx.router 是插件宿主的记账版（只有 on / use / prefix），
+// 没有 dispatch；收了它会盖掉 bootPlugins 先登记的真路由器，所有走内部请求的操作都报「router.dispatch is not a function」。
+export function setInternalRouter(r) { if (r && typeof r.dispatch === 'function') router = r; }
 
 // 收集型假响应：JSON / 文本照单全收（有上限），SSE 逐帧解析成事件对象。
 // detach() = 调用方不再关心后续：发 'close'，挂在 gen 上的订阅随之摘掉（关连接不会停掉那一轮，见 runtime/gen.mjs）。

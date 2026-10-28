@@ -13,6 +13,10 @@ export default {
   'admin::Claude 账号': 'Claude accounts',
   '客户端配对': 'Client pairing',
   '服务控制': 'Service',
+  // 导航分组（v2 手机根列表 / 宽屏导航栏）与根列表状态卡
+  '成员': 'Members',
+  '资源': 'Resources',
+  '设备在线': 'Devices online',
   '{n} 个运行中': '{n} running',
   '{n} 个账号': { one: '{n} account', other: '{n} accounts' },
   '注册开关 · 默认额度 · 全服并发': 'Sign-ups · Default quota · Server-wide concurrency',

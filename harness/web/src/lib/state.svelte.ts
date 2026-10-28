@@ -1599,13 +1599,22 @@ export interface VendorView {
   name: string;
   company: string;
   custom: boolean;
+  managed?: boolean; // 成员实例：管理员共享过来的（只能用：没有铅笔、设置里不填 Key）
+  shared?: boolean; // 管理员实例：已共享给成员
 }
 export const isCustomVendor = (id: string | null | undefined) => typeof id === "string" && id.startsWith("custom-");
 export function vendorInfo(id: string | null | undefined): VendorView {
   const key = id ?? "anthropic";
   if (isCustomVendor(key)) {
     const spec = (app.info?.catalog as any[] | undefined)?.find((p) => p.id === key);
-    return { id: key, name: spec?.name ?? t("自定义服务"), company: spec?.custom?.host ?? t("已删除"), custom: true };
+    const managed = spec?.custom?.managed === true;
+    return {
+      id: key,
+      name: spec?.name ?? t("自定义服务"),
+      company: managed ? t("管理员共享") : (spec?.custom?.host ?? t("已删除")),
+      custom: true,
+      ...(managed ? { managed: true } : spec?.custom?.shared ? { shared: true } : {}),
+    };
   }
   const v = VENDORS[key] ?? VENDORS.anthropic;
   return { id: v.id, name: v.name, company: v.company, custom: false };
@@ -1615,9 +1624,15 @@ export function customVendors(): VendorView[] {
   const cat = (app.info?.catalog as any[] | undefined) ?? [];
   return cat.filter((p) => isCustomVendor(p.id)).map((p) => vendorInfo(p.id));
 }
-// 「＋」卡只在服务端支持、且不是租户实例（多用户服务端上不许替用户连任意地址）时出现
+// 「＋」卡：服务端支持就出现。成员实例（多用户服务端上的注册用户）要服务端有 custom-providers-shared——老服务端对成员一律 403，
+// 新的放开了（成员自己加的只能连公网地址）
 export function canAddCustomVendor(): boolean {
-  return Boolean(app.compat?.caps?.includes("custom-providers")) && !app.info?.tenant?.tenant;
+  const caps = app.compat?.caps;
+  return Boolean(caps?.includes("custom-providers")) && (!app.info?.tenant?.tenant || Boolean(caps?.includes("custom-providers-shared")));
+}
+// 编辑器里出「共享给成员」开关：多用户 bridge 上的管理员实例
+export function canShareCustomVendor(): boolean {
+  return Boolean(app.compat?.caps?.includes("custom-providers-shared")) && app.info?.tenant?.shareProviders === true;
 }
 // 服务端有「智能识别」（协议、型号能力、检测连接 / 拉型号 / 探测 / 测试）：编辑器用新表单；老服务端照旧显示地址 + Key 的简表单
 export function customVendorV2(): boolean {

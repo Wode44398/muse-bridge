@@ -49,6 +49,7 @@ export interface CustomWire {
   maxTokensField: "max_tokens" | "max_completion_tokens";
   promptCaching: boolean;
   replayReasoning: boolean;
+  noRedirect?: boolean; // 成员自己加的服务：不跟随重定向（公网地址 302 到内网一样能绕过地址把关，见 endpoint-guard.ts）
   // 这个型号的思考写法（档位表，形状同 src/model-knowledge）；注册表里没这个型号时没有，什么思考参数都不发
   model?: {
     thinking: string;

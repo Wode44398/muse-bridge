@@ -312,7 +312,9 @@
         <Row title={vendor.name} subtitle="{vendor.company} · {app.config.model ?? ''}">
           {#snippet leading()}<VendorLogo skin={app.config?.provider ?? "anthropic"} size={30} />{/snippet}
           {#snippet trailing()}
-            {#if app.config?.hasKey}
+            {#if vendor.managed}
+              <span class="tag">{t("管理员提供")}</span>
+            {:else if app.config?.hasKey}
               <span class="tag">{t("已配 Key")}</span>
             {:else}
               <span class="tag warn">{t("缺 Key")}</span>
@@ -321,15 +323,18 @@
         </Row>
       </Group>
 
-      <Section title={t("API Key")} footnote={t("Key 加密存在服务端，重启不丢，不回传浏览器。")}>
-        <TextField
-          type="password"
-          mono
-          bind:value={apiKey}
-          label={t("API Key")}
-          placeholder={app.config.hasKey ? t("••••••••（留空保持不变）") : t("粘贴 {name} API Key", { name: vendor.name })}
-        />
-      </Section>
+      <!-- 管理员共享的服务：Key 由管理员管，成员这里不填 -->
+      {#if !vendor.managed}
+        <Section title={t("API Key")} footnote={t("Key 加密存在服务端，重启不丢，不回传浏览器。")}>
+          <TextField
+            type="password"
+            mono
+            bind:value={apiKey}
+            label={t("API Key")}
+            placeholder={app.config.hasKey ? t("••••••••（留空保持不变）") : t("粘贴 {name} API Key", { name: vendor.name })}
+          />
+        </Section>
+      {/if}
 
       {#if hasMemory}
         <Group title={t("记忆")}>

@@ -162,6 +162,6 @@
   .sa-sw:disabled { opacity: .4; cursor: default; }
   .iso .sa-row-tx { gap: 4px; }
   .iso small { line-height: 1.5; }
-  .iso small.warn { color: #ffb340; }
-  .pend { margin-top: 12px; box-shadow: inset 0 0 0 1px rgba(255, 179, 64, .35); }
+  .iso small.warn { color: var(--sa-warn); }
+  .pend { margin-top: 12px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sa-warn) 40%, transparent); }
 </style>

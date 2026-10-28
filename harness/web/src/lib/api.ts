@@ -359,6 +359,7 @@ export interface CustomProviderRecord extends CustomConn {
   defaultModel: string;
   hasKey: boolean;
   keyTail: string;
+  shared?: boolean; // 多用户 bridge 的管理员实例：已共享给成员
 }
 // 编辑器的草稿（还没保存；apiKey 不带 = 用已存的）
 export interface CustomDraft extends CustomConn {
@@ -409,6 +410,7 @@ export interface CustomProviderForm {
   baseUrl: string;
   apiKey?: string; // 编辑时留空 = 保持不变
   model?: string; // 老表单：接口列不出模型时手填
+  shared?: boolean; // 共享给成员（只有多用户 bridge 的管理员实例认）
   // v2 编辑器：完整记录
   protocol?: CustomProtocol;
   authStyle?: CustomAuthStyle;

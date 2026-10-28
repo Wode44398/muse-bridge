@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import os from 'node:os';
 import path from 'node:path';
 import {
-  HARNESS_DATA_ITEMS, MIGRATED_MARKER, harnessDataEnv, harnessEnvFile, planHarnessData, prepareHarnessData, samePath, trashedHarnessDirs,
+  HARNESS_DATA_ITEMS, MIGRATED_MARKER, harnessDataEnv, harnessEnvFile, harnessItemPath, planHarnessData, prepareHarnessData, samePath, trashedHarnessDirs,
 } from './harness-data.mjs';
 
 const quiet = () => {};
@@ -426,5 +426,27 @@ test('S2 程序目录内置的 harness/、数据根之外的位置一律不当�
     await check({ dataRoot: s.at('tmp-data-2'), harnessDir: other });
     assert.deepEqual(readdirSync(builtin).sort(), before, '内置 harness 里一个文件都没多（没有 .migrated）');
     assert.equal(existsSync(path.join(other, MIGRATED_MARKER)), false);
+  } finally { s.done(); }
+});
+
+// 多用户（10-28）：成员实例要读管理员那份自定义服务目录（管理员共享的服务）——位置得和 harness 的 paths.ts 算得一模一样。
+test('harnessItemPath：进程环境 > .env > 数据目录（环境 / .env）> harness 目录；相对路径按 harness 目录解析', () => {
+  const s = sandbox();
+  try {
+    const h = s.at('harness');
+    const envFile = s.at('cfg', '.env');
+    const at = (env, envText = '') => {
+      put(envFile, envText);
+      return harnessItemPath('custom-providers', { env, envFile, harnessDir: h });
+    };
+    assert.equal(at({}), path.join(h, 'custom-providers'), '什么都没给：harness 目录里');
+    assert.equal(at({ DIMENSIO_DATA_DIR: s.at('data', 'dimensio') }), path.join(s.at('data', 'dimensio'), 'custom-providers'), '数据目录（扩展自带 harness）');
+    assert.equal(at({}, `DIMENSIO_DATA_DIR=${s.at('d2')}
+`), path.join(s.at('d2'), 'custom-providers'), '.env 里写的数据目录');
+    assert.equal(at({ DIMENSIO_DATA_DIR: s.at('d3') }, `DIMENSIO_CUSTOM_PROVIDERS_DIR=${s.at('cp-file')}
+`), s.at('cp-file'), '.env 单独改道优先于数据目录');
+    assert.equal(at({ DIMENSIO_CUSTOM_PROVIDERS_DIR: s.at('cp-env') }, `DIMENSIO_CUSTOM_PROVIDERS_DIR=${s.at('cp-file')}
+`), s.at('cp-env'), '进程环境优先于 .env');
+    assert.equal(at({ DIMENSIO_CUSTOM_PROVIDERS_DIR: 'rel/cp' }), path.join(h, 'rel', 'cp'), '相对路径按 harness 目录');
   } finally { s.done(); }
 });

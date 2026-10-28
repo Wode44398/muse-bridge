@@ -205,11 +205,11 @@
   .acts { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
   .sa-rows a.sa-btn { text-decoration: none; display: inline-flex; align-items: center; }
   .logh { display: flex; align-items: center; gap: 8px; padding: 12px 18px 0; font-size: 12.5px; }
-  .logs { margin: 8px 18px 0; max-height: 300px; overflow: auto; padding: 10px 12px; border-radius: 12px; background: rgba(0, 0, 0, .35);
+  .logs { margin: 8px 18px 0; max-height: 300px; overflow: auto; padding: 10px 12px; border-radius: 12px; background: var(--sa-code);
     font-family: var(--sa-mono); font-size: 11px; line-height: 1.55; color: var(--sa-tx2); }
   .ln { white-space: pre-wrap; word-break: break-all; }
-  .ln.lw { color: #ffd479; }
-  .ln.le { color: #ff8078; }
+  .ln.lw { color: var(--sa-warn); }
+  .ln.le { color: var(--sa-red); }
   /* 窄屏：地址行的按钮换到下一行，别把地址挤没 */
   @media (max-width: 560px) {
     .sa-row { flex-wrap: wrap; }

@@ -42,7 +42,7 @@
   <div class="tiles">
     <div class="sa-card sa-stat">
       <div class="k">{t('活跃 Agent')}</div>
-      <div class="v" style:color={liveN ? 'var(--sa-green)' : '#fff'}>{liveN}</div>
+      <div class="v">{liveN}</div>
       <div class="x">{t('{n} 个会话槽', { n: gens.length })}</div>
     </div>
     <div class="sa-card sa-stat">
@@ -52,7 +52,7 @@
     </div>
     <div class="sa-card sa-stat">
       <div class="k">{t('定时任务运行中')}</div>
-      <div class="v" style:color={(ov.routinesRunning || []).length ? 'var(--sa-amber)' : '#fff'}>{(ov.routinesRunning || []).length}</div>
+      <div class="v">{(ov.routinesRunning || []).length}</div>
       <div class="x">{t('调度器 30s tick')}</div>
     </div>
   </div>
@@ -73,13 +73,13 @@
           <div class="sa-row">
             <span class="sa-row-tx">{t('主服务')}</span>
             {@render badge(server)}
-            <span class="sa-mono sa-dim">PID {server.pid || '—'}</span>
+            <span class="sa-mono sa-dim pid">PID {server.pid || '—'}</span>
             <span class="sa-mono sa-dim">{fmtUptime(server.uptimeSec)}</span>
           </div>
           <div class="sa-row">
             <span class="sa-row-tx">{t('Cloudflare 隧道')}</span>
             {@render badge(tunnel)}
-            <span class="sa-mono sa-dim">PID {tunnel.pid || '—'}</span>
+            <span class="sa-mono sa-dim pid">PID {tunnel.pid || '—'}</span>
             <span class="sa-mono sa-dim">{fmtUptime(tunnel.uptimeSec)}</span>
           </div>
           <div class="sa-row">
@@ -87,7 +87,7 @@
             {#if svcErr}<span class="sa-badge gray">{t('状态未知')}</span>
             {:else}
               {#if auto.server && auto.tunnel}<span class="sa-badge green">{t('已装')}</span>{:else}<span class="sa-badge gray">{t('未装')}</span>{/if}
-              <span class="sa-dim" style="font-size:12px">server:{auto.server ? '✓' : '✗'} tunnel:{auto.tunnel ? '✓' : '✗'}</span>
+              <span class="sa-dim pid" style="font-size:12px">server:{auto.server ? '✓' : '✗'} tunnel:{auto.tunnel ? '✓' : '✗'}</span>
             {/if}
           </div>
           {#if svcErr}
@@ -118,16 +118,16 @@
       <div class="sa-card-h">{t('用量额度')}</div>
       <div class="rings">
         <div class="ring-row">
-          <div class="sa-ring" style="--p:{ringPct(sa.limits?.five_hour)};--rc:var(--sa-blue)" data-l={sa.limits?.five_hour?.pct != null ? ringPct(sa.limits.five_hour) + '%' : '—'}></div>
+          <div class="sa-ring" style="--p:{ringPct(sa.limits?.five_hour)};--rc:var(--sa-accent)" data-l={sa.limits?.five_hour?.pct != null ? ringPct(sa.limits.five_hour) + '%' : '—'}></div>
           <div>
-            <div style="font-weight:650">{t('5 小时窗口')}</div>
+            <div class="rl">{t('5 小时窗口')}</div>
             <div class="sa-dim" style="font-size:12px">{ringStatus(sa.limits?.five_hour)}</div>
           </div>
         </div>
         <div class="ring-row">
-          <div class="sa-ring" style="--p:{ringPct(sa.limits?.seven_day)};--rc:var(--sa-purple)" data-l={sa.limits?.seven_day?.pct != null ? ringPct(sa.limits.seven_day) + '%' : '—'}></div>
+          <div class="sa-ring" style="--p:{ringPct(sa.limits?.seven_day)};--rc:var(--sa-accent)" data-l={sa.limits?.seven_day?.pct != null ? ringPct(sa.limits.seven_day) + '%' : '—'}></div>
           <div>
-            <div style="font-weight:650">{t('7 天窗口')}</div>
+            <div class="rl">{t('7 天窗口')}</div>
             <div class="sa-dim" style="font-size:12px">{ringStatus(sa.limits?.seven_day)}</div>
           </div>
         </div>
@@ -147,6 +147,15 @@
   .two { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
   .rings { display: flex; flex-direction: column; gap: 16px; padding: 14px 18px 18px; }
   .ring-row { display: flex; align-items: center; gap: 16px; }
-  .pubrow { border-top: .5px solid rgba(255, 255, 255, .09); }
-  @media (max-width: 1080px) { .tiles { grid-template-columns: repeat(2, 1fr); } .two { grid-template-columns: 1fr; } }
+  .pubrow { border-top: 1px solid var(--sa-sep); }
+  .rl { font-size: 14.5px; font-weight: 600; }
+  @media (max-width: 1080px) { .two { grid-template-columns: 1fr; } }
+  /* 手机：三块瓦片仍并排（数字短），缩内距；进程行藏 PID / 自启明细，免得把状态挤没 */
+  @media (max-width: 699px) {
+    .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .tiles .sa-stat { padding: 12px 13px; }
+    .tiles :global(.sa-stat .v) { font-size: 24px; }
+    .tiles :global(.sa-stat .k) { margin-bottom: 6px; line-height: 1.35; }
+    .pid { display: none; }
+  }
 </style>

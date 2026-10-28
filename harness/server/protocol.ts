@@ -42,7 +42,7 @@ export const CAPABILITIES = [
   "project-order", // 侧栏项目块拖动排序：POST /api/projects/order {paths}（一个区拖完之后的完整次序）
   "session-refs", // 引用会话：/api/run 认 refs（会话 id，最多 3 个；被引用对话的摘要跟在消息后面给模型，消息上记 refs 给界面）
   "memory-overview", // K11 记忆总览：GET /api/memory/overview（全局层 + 各项目 + 旧快照桶的条目、用量、进提示字数、历史事件）
-  "custom-providers", // 自定义模型服务：POST /api/custom-providers {name, baseUrl, apiKey, model?}、POST …/:id（改）、POST …/:id/delete；/api/info 的 catalog 里带 custom 字段（租户实例回 403）
+  "custom-providers", // 自定义模型服务：POST /api/custom-providers {name, baseUrl, apiKey, model?}、POST …/:id（改）、POST …/:id/delete；/api/info 的 catalog 里带 custom 字段
   "session-model", // 会话内换型号 / 思考深度：POST /api/sessions/:id/model {model?, thinking?}（运行中回 pending，下一条消息起生效）；事件 model
   "session-provider", // 同一接口也能换厂商：{provider, model?, thinking?}（没点名型号用那家默认）；事件 model 带 provider
   "quick-save", // 快照存为工作空间：POST /api/quick/save {path?, base?} → {project, quick}（桶原地登记成项目、快照位换新桶）
@@ -51,6 +51,10 @@ export const CAPABILITIES = [
   // （完整记录）、POST /api/custom-providers/{models,guess,detect,probe,test}（草稿，不落盘）；add / update 收 models[] / defaultModel /
   // protocol / authStyle / headers；/api/info 的 catalog 只列启用的对话型号，custom 字段带 protocol 与 all（型号总数）
   "custom-providers-v2",
+  // 多用户：管理员把自定义服务共享给成员（add / update 收 shared；/api/info 的 tenant.shareProviders = 管理员实例能共享），
+  // 成员实例也能加自己的服务（只能连公网）；catalog 的 custom 带 shared（管理员实例上已共享）/ managed（成员实例上是管理员共享过来的，
+  // 不给地址、GET / 改 / 删回 403）
+  "custom-providers-shared",
   // 用户的电脑（设备芯片）：GET /api/devices?session=（available / enabled / devices / link）、POST /api/devices/link {session, link}
   //（link = 设备 id / "none" / "" 恢复自动）；会话里的 Device* 工具省略 device 时就操作连着的那台
   "devices",

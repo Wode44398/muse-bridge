@@ -256,6 +256,9 @@ export default {
 
   // ── 自定义模型服务（custom-providers.ts、index.ts）─────────────────────────────
   "这台服务器不允许添加自定义模型服务": "This server doesn’t allow custom providers",
+  "这是管理员共享的服务，只有管理员能修改": "This provider is shared by the admin. Only the admin can change it.",
+  "这台服务器上，自己添加的服务只能连公网地址（{host} 是本机或内网地址）。要连内网服务，请管理员添加后共享给成员。":
+    "On this server, providers you add can only reach public addresses ({host} is a local or private address). To use an internal service, ask the admin to add it and share it with members.",
   "请填写接口地址": "Enter a base URL",
   "接口地址格式不对": "Invalid base URL",
   "接口地址只支持 http / https": "Base URL must use http or https",

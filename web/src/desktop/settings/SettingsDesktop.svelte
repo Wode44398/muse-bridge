@@ -56,6 +56,7 @@
   // Claude Code 运行组件的下载进度 / 失败重试（安装包不再内嵌，首启服务端去拿；就绪时不显示），与手机设置共用
   import ClaudeCliStatus from '../../components/ClaudeCliStatus.svelte';
   import { serverOnThisMachine } from '../../lib/nativeDesktop.js';
+  import { createServerUpdate } from '../../lib/serverUpdate.svelte.js';
   import Customize from '../../components/ext/Customize.svelte';
   import PluginFrame from '../../components/ext/PluginFrame.svelte';
   import { pluginPanels, watchPluginPanels, panelTitle } from '../../lib/pluginPanels.svelte.js';
@@ -309,6 +310,7 @@
     { sec: 'connect', id: 'pairconnect', label: t('手机扫码连接'), keys: t('二维码 配对码 手机 扫码 连接 App') },
     { sec: 'connect', id: 'route', label: t('当前线路'), keys: t('隧道 局域网 lan') },
     { sec: 'connect', id: 'update', label: t('检查更新'), keys: t('版本 升级') },
+    { sec: 'connect', id: 'server-update', label: t('服务端更新'), keys: t('服务器 版本 升级 GitHub') },
     { sec: 'connect', id: 'auto-update', label: t('自动检查更新'), keys: t('自动 更新') },
     { sec: 'connect', id: 'public', label: t('公网地址'), keys: t('外网 域名 example') },
     { sec: 'connect', id: 'srvadmin', label: t('服务端控制台'), keys: t('admin 管理') },
@@ -323,6 +325,7 @@
    .filter((e) => e.id !== 'admin-access' || me.kind === 'user')
    .filter((e) => !single || (e.sec !== 'wallpaper' && e.id !== 'followpage'))
    .filter((e) => e.id !== 'auto-update' || hasSilentUpdate())
+   .filter((e) => e.id !== 'server-update' || (me.kind === 'admin' && !(hasSilentUpdate() && serverOnThisMachine())))   // 跟「服务端更新」那一组的出现条件一致
    .filter((e) => e.id !== 'quitconfirm' || (spPrefs?.managed && typeof spPrefs.confirmQuit === 'boolean'))   // 跟「连接与更新」里那一行的出现条件一致
    .filter((e) => e.id !== 'keeponline' || (spPrefs?.managed && typeof spPrefs.keepOnline === 'boolean'))
    .filter((e) => e.id !== 'srvaccess' || (spPrefs?.managed && ssCtl))
@@ -633,14 +636,29 @@
     if (r && r.ok === false && r.error) upNote = tr(r.error);
     pollState();
   }
+  // 壳经 IPC 抛回来的错带着 Electron 的前缀（Error invoking remote method 'update:check': Error: …）：只留壳自己的那句
+  const ipcErr = (e) => String(e?.message || e || '').replace(/^Error invoking remote method '[^']*':\s*/, '').replace(/^Error:\s*/, '');
   async function onUpdate() {
     if (upState === 'downloading' || upState === 'checking') return;
     if (upState === 'installable') { installNow(); return; }
-    upState = 'checking'; upMsg = t('检查中…');
+    upState = 'checking'; upMsg = t('检查中…'); upErr = ''; upNote = '';
     let checked;
+    // 10-28：以前一律说「连不上服务器」，壳给的真原因（没配对、服务端回 404…）被吞了，服主只看到「点了没用」
     try { checked = await checkForUpdate(); }
-    catch { upState = 'error'; upMsg = t('连不上服务器'); return; }
-    if (!checked?.available) { upState = 'latest'; upMsg = t('已是最新版本'); return; }
+    catch (e) { upState = 'error'; upMsg = t('检查更新失败'); upErr = tr(ipcErr(e)); return; }
+    if (!checked?.available) {
+      const lt = checked?.latest || {};
+      upState = 'latest'; upMsg = t('已是最新版本');
+      // 服务端查 GitHub 没查到（服主那台：本机服务端拿上游清单）：别装作已是最新
+      if (lt.feed && lt.feed.ok === false && lt.feed.checkedAt) {
+        upMsg = t('暂时查不到新版本');
+        upNote = t('服务端查不到 GitHub 上的新版本：{error}', { error: tr(lt.feed.error || '') });
+      } else if (lt.pinned) {
+        // 成员：客户端跟随服务器那一版（服务端只发同一次发布的客户端），服主升级后这里才会有新版
+        upNote = t('客户端跟随服务器的版本（v{v}）：服务器更新后，这里就能更新到同一版', { v: lt.pinned });
+      }
+      return;
+    }
     if (hasSilentUpdate()) {
       upState = 'downloading'; progress = 0; upMsg = t('正在下载');
       try { await startUpdate(checked.latest || {}); } catch { upState = 'error'; upMsg = t('下载失败'); return; }
@@ -651,6 +669,15 @@
     }
   }
   $effect(() => () => clearInterval(pollTimer));
+  // 服务端更新（管理员，lib/serverUpdate.svelte.js）：查 GitHub 上的版本、一键更新服务端。服务端就装在这台电脑、随客户端安装包走时
+  // （壳带更新桥 + 服务端在本机），上面的「软件更新」就是它——不重复摆一组。
+  const srvUpd = createServerUpdate();
+  const srvUpdShow = $derived(!!srvUpd.st && !(hasSilentUpdate() && serverOnThisMachine()));
+  const srvUpdView = $derived(srvUpd.view);
+  $effect(() => {
+    if (sec !== 'connect' || me.kind !== 'admin') return;
+    untrack(() => srvUpd.load());
+  });
   // 自动检查更新（启动时检查、后台下好，装不装由你）：只有带自更新桥的壳有（附着本机工程的形态没有）
   let autoUp = $state(autoUpdateEnabled());
   function onAutoUp(v) { autoUp = v; setAutoUpdateEnabled(v); }
@@ -1494,6 +1521,23 @@
               {/if}
             </div>
           </div>
+        </DGroup>
+      {/if}
+      <!-- 服务端更新（管理员）：查 GitHub 发布仓库上的版本，按部署形态一键更新（安装包里的本机服务端交给那台电脑的客户端去装）。
+           服务端随这台电脑的客户端一起装时不摆（下面的「软件更新」就是它） -->
+      {#if srvUpdShow && srvUpdView}
+        <DGroup label={t('服务端更新')} foot={srvUpdView.how}>
+          <DRow title={t('服务端版本')} sub={srvUpdView.sub} highlight={fl('server-update')}>
+            {#snippet trailing()}
+              {#if srvUpd.busy || srvUpd.loading}<span class="spin"></span>
+              {:else if srvUpdView.action}<DButton size="sm" variant={srvUpdView.action === 'update' ? 'primary' : 'secondary'} onclick={() => srvUpd.act(srvUpdView.action)}>{srvUpdView.label}</DButton>{/if}
+            {/snippet}
+          </DRow>
+          {#if srvUpd.st?.newer && srvUpd.st?.page}
+            <DRow title={t('新版本说明')} sub={srvUpd.st.notes ? tr(srvUpd.st.notes).slice(0, 160) + (srvUpd.st.notes.length > 160 ? '…' : '') : ''} onclick={() => window.open(srvUpd.st.page, '_blank', 'noopener')} />
+          {/if}
+          {#if srvUpd.err}<p class="err sel-text">{srvUpd.err}</p>{/if}
+          {#if srvUpd.note}<p class="note sel-text">{srvUpd.note}</p>{/if}
         </DGroup>
       {/if}
       <DGroup label={tc('settings', '更新')}>

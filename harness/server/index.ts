@@ -116,6 +116,7 @@ import {
   getCustomProvider,
   guessModels,
   isCustomProviderId,
+  isSharedProvider,
   probeCustomModel,
   removeCustomProvider,
   testCustomProvider,
@@ -373,14 +374,14 @@ app.get("/api/config", (_req, res) => {
 // × 协议真打一次）、probe 探测一个型号的能力、test 真发一句——都收编辑中的草稿（draft，可带 apiKey；不带用已存的），不落盘。
 // 老表单（{name, baseUrl, apiKey, model?}，旧版 apk）照收：服务端自己拉型号、猜能力。
 // 租户实例一律不开放（服务端替用户去连任意地址 = SSRF）。
-function customProvidersAllowed(res: express.Response): boolean {
-  if (!tenantInfo().tenant) return true;
-  res.status(403).json({ error: "这台服务器不允许添加自定义模型服务" });
-  return false;
+// 成员实例（租户）以前一律 403；2026-10-28 起成员也能加自己的服务（只能连公网，见 endpoint-guard.ts），管理员共享过来的
+// 只能用不能改（custom-providers.ts 抛 403）。留着这个口子：以后要按服务器关掉成员自建，在这里拦。
+function customProvidersAllowed(_res: express.Response): boolean {
+  return true;
 }
 const customErr = (res: express.Response, e: unknown) => {
-  const err = e as Error & { needsModel?: boolean };
-  res.status(400).json({ error: err.message, needsModel: err.needsModel || undefined });
+  const err = e as Error & { needsModel?: boolean; status?: number };
+  res.status(err.status === 403 ? 403 : 400).json({ error: err.message, needsModel: err.needsModel || undefined });
 };
 
 // 「N 个模型」只数启用的对话型号（asr / tts 这类不进菜单）
@@ -441,6 +442,7 @@ app.post("/api/custom-providers/test", async (req, res) => {
 // 编辑器用：一个服务的完整记录（型号能力、协议、鉴权；key 只给尾 4 位）
 app.get("/api/custom-providers/:id", (req, res) => {
   if (!customProvidersAllowed(res)) return;
+  if (isSharedProvider(req.params.id)) return void res.status(403).json({ error: "这是管理员共享的服务，只有管理员能修改" });
   const p = isCustomProviderId(req.params.id) ? getCustomProvider(req.params.id) : undefined;
   if (!p) return void res.status(404).json({ error: "这个自定义服务不存在（可能已被删除）" });
   res.json(customProviderView(p));

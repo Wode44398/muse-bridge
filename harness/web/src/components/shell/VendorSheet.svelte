@@ -7,6 +7,8 @@
   // （vendor/ProviderEditor.svelte：协议、检测连接、拉型号附能力猜测、★ 默认、档位、探测、测试——和 bridge 的 Claude 外接同一种样式）；
   // 老服务端照旧是备注 + 接口地址 + API Key 的简表单（保存时服务端打 GET {地址}/models，列不出型号时多出一栏手填模型 ID）。
   // 自定义卡右下角的铅笔进同一张表单（编辑 / 删除，删除两步确认）。内置几家的 API Key 仍在设置里填。
+  // 多用户服务端：管理员在编辑器里把服务「共享给成员」，卡上型号数后面标「已共享」；成员那边这张卡副标题是「管理员共享」、
+  // 没有铅笔（只能用，地址和 Key 都看不到）。成员也有「＋」卡，自己加的服务只能连公网地址。
   import { tick } from "svelte";
   import * as api from "../../lib/api.ts";
   import {
@@ -324,6 +326,7 @@
 
 {#snippet tile(id: string, title: string, sub: string, i: number, custom: boolean)}
   {@const n = modelsOf(id).length}
+  {@const view = custom ? vendorInfo(id) : null}
   <!-- 「N 个模型」整句一个键（英文语序照样放得下），数字仍单独一段等宽：按 {n} 切成前后两截 -->
   {@const nModels = t("{n} 个模型", { count: n }).split("{n}")}
   <div class="cell" in:rise|global={{ y: 8, delay: 40 + i * 35 }}>
@@ -339,14 +342,14 @@
         {#if pending === id}<Mark size={28} live />{:else}<VendorLogo skin={id} size={28} />{/if}
       </span>
       <span class="name">{title}</span>
-      <span class="co" class:mono={custom}>{sub}</span>
-      {#if n}<span class="models">{nModels[0]}<span class="num">{n}</span>{nModels[1] ?? ""}</span>{/if}
+      <span class="co" class:mono={custom && !view?.managed}>{sub}</span>
+      {#if n}<span class="models">{nModels[0]}<span class="num">{n}</span>{nModels[1] ?? ""}{#if view?.shared}<span class="shared">{" · "}{t("已共享")}</span>{/if}</span>{/if}
       {#if id === cur}
         <span class="check" aria-hidden="true"><Icon name="check" size={15} stroke={2.2} /></span>
         <span class="hx-sr">{t("当前")}</span>
       {/if}
     </button>
-    {#if custom}
+    {#if custom && !view?.managed}
       <span class="edit">
         <IconButton icon="edit" label={t("编辑「{name}」", { name: title })} size={30} iconSize={15} onclick={() => openForm({ id, name: title, company: sub, custom: true })} />
       </span>
@@ -435,6 +438,9 @@
   .models .num {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
+  }
+  .models .shared {
+    color: var(--text2);
   }
   .check {
     position: absolute;

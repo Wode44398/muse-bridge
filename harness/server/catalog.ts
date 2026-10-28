@@ -47,7 +47,7 @@
 // so the two stay in lockstep with the adapters.
 
 import type { ProviderId } from "./providers/types.ts";
-import { getCustomProvider, hostOf, isCustomProviderId, listCustomProviders, type CustomModel, type CustomProvider } from "./custom-providers.ts";
+import { getCustomProvider, hostOf, isCustomProviderId, isSharedProvider, listCustomProviders, type CustomModel, type CustomProvider } from "./custom-providers.ts";
 import { autoThinkSlots, slotView } from "./custom-tiers.ts";
 import { MK } from "./model-knowledge.ts";
 import { DEFAULT_MEDIA_BUDGET } from "./agent/media-budget.ts";
@@ -98,7 +98,8 @@ export interface ProviderSpec {
   // 不配走默认 20 张 / 24 MB。keepRecent = 最近几张工具图永不退（默认 3）。
   media?: { maxImages?: number; maxBytes?: number; keepRecent?: number };
   // 只有自定义服务有：卡片副标题显示的主机名、协议；all = 服务里一共多少个型号（菜单只列启用的对话型号）
-  custom?: { host: string; protocol: string; all: number };
+  // shared = 管理员实例上标了「共享给成员」；managed = 成员实例上这条是管理员共享过来的（不给地址，只能用不能改）
+  custom?: { host: string; protocol: string; all: number; shared?: boolean; managed?: boolean };
 }
 
 // Global effort ordering — used to clamp a chosen level to a model's supported set.
@@ -297,12 +298,19 @@ function customSpec(c: CustomProvider): ProviderSpec {
   const chat = c.models.filter((m) => m.enabled && m.kind === "chat");
   // 一个能对话的都没有（老配置全是语音模型）：至少把默认型号留在菜单里，别让这家变成空的
   const shown = chat.length ? chat : c.models.filter((m) => m.id === c.defaultModel);
+  // 管理员共享给成员的：地址不下发（成员只管用）
+  const managed = isSharedProvider(c.id);
   return {
     id: c.id as ProviderId,
     name: c.name,
-    baseUrl: c.baseUrl,
+    ...(managed ? {} : { baseUrl: c.baseUrl }),
     defaultModel: c.defaultModel,
-    custom: { host: hostOf(c.baseUrl), protocol: c.protocol, all: c.models.length },
+    custom: {
+      host: managed ? "" : hostOf(c.baseUrl),
+      protocol: c.protocol,
+      all: c.models.length,
+      ...(managed ? { managed: true } : c.shared ? { shared: true } : {}),
+    },
     models: shown.map((m) => customModelSpec(m, c.protocol)),
   };
 }

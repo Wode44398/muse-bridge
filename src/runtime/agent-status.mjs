@@ -64,7 +64,8 @@ const AUTHED = {
     try { accounts = JSON.parse(readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '')).claudeAccounts || []; } catch {}
     if (accounts.some((a) => a && a.token)) return true;
     const cfgDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-    return existsSync(path.join(cfgDir, '.credentials.json'));
+    // 只认 claude login 的凭据：这个文件里也可能只有 MCP 服务的 OAuth 状态（mcpOAuth）
+    return fileHasKey(path.join(cfgDir, '.credentials.json'), /"claudeAiOauth"/);
   },
   gemini: () => {
     if (GEMINI_API_KEY) return true;

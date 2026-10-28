@@ -147,12 +147,19 @@ const chromeNudge = (server) => '\n\n【主机管理员的 Edge（Claude in Chro
 //   一律回「Browser extension is not connected」，本机 ~/.claude 登录态才连得上。所以有登录凭据时
 //   这些轮去掉注入的 token、改用登录态（CLI 自己续期）；没有凭据文件（如 Docker）就只补 SCOPES。
 const CHROME_OAUTH_SCOPES = 'user:inference user:file_upload user:profile user:sessions:claude_code user:plugins';
+// 这个配置目录里有没有 claude login 的凭据。不能只看 .credentials.json 在不在：CLI 也往里存 MCP 服务的 OAuth 状态
+//（mcpOAuth，装个 context7 之类就会写出来），只有它没有 claudeAiOauth 时按「有登录」去掉 token，每轮都是
+// 「Not logged in · Please run /login」（10-28 用户 VPS 实测）。
+export function hasClaudeLogin(dir) {
+  try {
+    const o = JSON.parse(readFileSync(path.join(dir, '.credentials.json'), 'utf8')).claudeAiOauth;
+    return !!(o && (o.accessToken || o.refreshToken));
+  } catch { return false; }
+}
 export function chromeEngineEnv(base) {
   const env = { ...base };
   const credDir = env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-  let hasLogin = false;
-  try { hasLogin = statSync(path.join(credDir, '.credentials.json')).size > 0; } catch {}
-  if (hasLogin) { delete env.CLAUDE_CODE_OAUTH_TOKEN; delete env.CLAUDE_CODE_OAUTH_SCOPES; }
+  if (hasClaudeLogin(credDir)) { delete env.CLAUDE_CODE_OAUTH_TOKEN; delete env.CLAUDE_CODE_OAUTH_SCOPES; }
   else if (env.CLAUDE_CODE_OAUTH_TOKEN && !env.CLAUDE_CODE_OAUTH_SCOPES) env.CLAUDE_CODE_OAUTH_SCOPES = CHROME_OAUTH_SCOPES;
   return env;
 }
@@ -165,7 +172,7 @@ export function chromeEngineEnv(base) {
 // 专用目录没有凭据（还没 /login）就返回 null，回落到旧的 --chrome + chromeEngineEnv。
 const CHROME_MCP_NAME = 'edge';
 function chromeSplitServer() {
-  try { if (!(statSync(path.join(CLAUDE_CHROME_CONFIG_DIR, '.credentials.json')).size > 0)) return null; } catch { return null; }
+  if (!hasClaudeLogin(CLAUDE_CHROME_CONFIG_DIR)) return null;
   const command = claudeCliPath();   // 与推理同一个 Claude Code（以前写死 node_modules 里 SDK 自带的那份）；没就绪就退回 --chrome
   if (!command) return null;
   return {

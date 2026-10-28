@@ -45,6 +45,7 @@ import { serviceInfo, requestRestart, supervisor, startUpdate } from '../runtime
 import { recentLogs } from '../runtime/log-ring.mjs';
 import { publicAccess, NO_PROBE } from '../runtime/public-access.mjs';
 import { serverUpdateInfo } from '../runtime/client-release.mjs';
+import { serverUpdateStatus, startServerUpdate } from '../runtime/server-update.mjs';
 import { apkInfo, lanCandidates } from './app-update.mjs';
 import { CLAUDE_MODELS, CLAUDE_EFFORTS, VERTEX_MODELS, VERTEX_THINK_LEVELS } from '../config/capabilities.mjs';
 
@@ -222,6 +223,20 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
     if (svcSelfCut(req, res)) return;
     const r = startUpdate({ drain: drainAll });
     res.writeHead(r.error ? 400 : 200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(r));
+  });
+  // 服务端更新（设置「连接与更新 / 关于 › 服务端更新」、agent 操作 server.update.*）：查 GitHub 发布仓库的版本（?refresh=1 不看缓存），
+  // 按部署形态一键更新——安装包里的本机服务端交给那台电脑的桌面客户端去装，git 部署跑更新脚本（runtime/server-update.mjs）。
+  router.on('GET', '/api/admin/server-update', async (req, res, url) => {
+    if (!gate(req, res)) return;
+    const refresh = (url || new URL(req.url, 'http://x')).searchParams.get('refresh') === '1';
+    J(res, await serverUpdateStatus({ refresh }));
+  });
+  router.on('POST', '/api/admin/server-update', async (req, res) => {
+    if (!gate(req, res)) return;
+    if (svcSelfCut(req, res)) return;
+    const r = await startServerUpdate({ drain: drainAll });
+    res.writeHead(r.error ? (r.status || 400) : 200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(r));
   });
   // 公开端点（无鉴权）：返回的是纯模型/能力枚举，零敏感信息，本就随 window.__CAPS__ 对

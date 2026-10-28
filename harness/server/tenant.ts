@@ -129,7 +129,12 @@ export function disabledProviders(): Set<string> {
   return set;
 }
 
-// 给 /api/info 的一份状态：前端据此藏掉访问范围开关、终端、连 Edge 这些入口。
-export function tenantInfo(): { tenant: boolean; shell: boolean; accessLocked: "workspace" | "full" | null } {
-  return { tenant: tenantMode(), shell: tenantShell(), accessLocked: accessLock() };
+// 管理员实例能不能把自定义服务共享给成员（多用户 bridge 拉起管理员实例时给 DIMENSIO_PROVIDER_SHARING=1；成员实例恒 false）。
+export function providerSharing(): boolean {
+  return !tenantMode() && process.env.DIMENSIO_PROVIDER_SHARING === "1";
+}
+
+// 给 /api/info 的一份状态：前端据此藏掉访问范围开关、终端、连 Edge 这些入口；shareProviders = 编辑器里出「共享给成员」开关。
+export function tenantInfo(): { tenant: boolean; shell: boolean; accessLocked: "workspace" | "full" | null; shareProviders: boolean } {
+  return { tenant: tenantMode(), shell: tenantShell(), accessLocked: accessLock(), shareProviders: providerSharing() };
 }

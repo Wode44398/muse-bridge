@@ -188,7 +188,7 @@
   <div class="sa-modal">
     {#if question.offer}
       <h3>{t('单独开一个会话来做？')}</h3>
-      <p style="color:#fff;font-weight:600">{question.title}</p>
+      <p class="qtitle">{question.title}</p>
       <div class="acts">
         <button class="sa-btn" onclick={() => answer(false, 'here')}>{t('在这里做')}</button>
         <button class="sa-btn pri" onclick={() => answer(false, 'new_session')}>{t('新会话')}</button>
@@ -197,7 +197,7 @@
     <h3>{t('Claude 提了个问题')}</h3>
     {#each question.questions as q, qi (qi)}
       {#if qi > 0}<div class="qsep"></div>{/if}
-      <p style="color:#fff;font-weight:600">{tr(q.question) || ''}</p>
+      <p class="qtitle">{tr(q.question) || ''}</p>
       {#each q.options || [] as o (o.label)}
         <label class="qopt">
           <input type="radio" name="saq{qi}" value={o.label}
@@ -218,13 +218,14 @@
 <style>
   .wrap { display: grid; grid-template-columns: 190px 260px 1fr; gap: 12px; height: 100%; min-height: 420px; }
   .col { display: flex; flex-direction: column; overflow: hidden; }
-  .colh { flex: none; font-size: 12.5px; font-weight: 650; color: var(--sa-tx2); padding: 13px 16px 10px; border-bottom: .5px solid rgba(255,255,255,.09); }
+  .colh { flex: none; font-size: 13px; font-weight: 600; color: var(--sa-tx2); padding: 13px 16px 10px; border-bottom: 1px solid var(--sa-sep); }
   .newc { float: right; margin: -4px 0 -4px 8px; }
   .list { flex: 1; overflow-y: auto; padding: 6px; }
   .li { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 9px 11px; border-radius: 12px;
-    border: 0; background: none; color: #fff; font: inherit; font-size: 13.5px; cursor: pointer; text-align: left; transition: background .13s ease; }
-  .li:hover { background: rgba(255,255,255,.08); }
-  .li.on { background: rgba(10,132,255,.22); box-shadow: inset 0 0 0 .5px rgba(10,132,255,.5); }
+    border: 0; background: none; color: var(--sa-tx); font: inherit; font-size: 14px; cursor: pointer; text-align: left; transition: background-color .13s ease; }
+  .li:hover { background: var(--sa-press); }
+  .li.on { background: var(--sa-sel); font-weight: 600; }
+  .li.on .lm { font-weight: 400; }
   .ucol .li { flex-direction: row; align-items: center; gap: 8px; }
   .lt { width: 100%; }
   .lm { font-size: 10.5px; color: var(--sa-tx3); }
@@ -234,23 +235,25 @@
   .msg.mine { align-self: flex-end; }
   .who { font-size: 10.5px; font-weight: 650; letter-spacing: .4px; color: var(--sa-tx3); margin-bottom: 4px; }
   .msg.mine .who { text-align: right; }
-  .bubble { white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.55; color: rgba(255,255,255,.88); }
-  .msg.mine .bubble { background: rgba(255,255,255,.1); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.12); border-radius: 14px; padding: 9px 13px; }
+  .bubble { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.6; color: var(--sa-tx); }
+  .msg.mine .bubble { background: var(--sa-fill); border-radius: 16px; padding: 9px 13px; }
   .typing { color: var(--sa-tx3); animation: blink 1.2s ease-in-out infinite; }
   @keyframes blink { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
 
-  .foot { flex: none; display: flex; gap: 8px; padding: 10px; border-top: .5px solid rgba(255,255,255,.09); }
-  .foot textarea { flex: 1; resize: none; background: rgba(255,255,255,.07); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.14);
-    border: 0; outline: none; border-radius: 12px; padding: 10px 13px; color: #fff; font: inherit; font-size: 13.5px; max-height: 120px; }
-  .foot textarea:focus { box-shadow: inset 0 0 0 1px rgba(10,132,255,.65); }
+  .foot { flex: none; display: flex; align-items: flex-end; gap: 8px; padding: 10px; border-top: 1px solid var(--sa-sep); }
+  .foot textarea { flex: 1; min-width: 0; resize: none; background: var(--sa-field);
+    border: 0; outline: none; border-radius: 17px; padding: 8px 14px; min-height: 34px; color: var(--sa-tx); font: inherit; font-size: 14px; line-height: 18px; max-height: 120px; }
+  .foot textarea::placeholder { color: var(--sa-tx3); }
+  .foot textarea:focus { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--sa-accent) 45%, transparent); }
 
-  .qsep { height: .5px; background: rgba(255,255,255,.12); margin: 6px 0; }
-  .qopt { display: flex; align-items: flex-start; gap: 9px; padding: 6px 2px; font-size: 13.5px; color: #e8e8e8; cursor: pointer; }
-  .qopt input { margin-top: 2px; accent-color: var(--sa-blue); }
-  .qopt small { color: #9a9a9a; }
+  .qtitle { color: var(--sa-tx); font-weight: 600; }
+  .qsep { height: 1px; background: var(--sa-sep); margin: 6px 0; }
+  .qopt { display: flex; align-items: flex-start; gap: 9px; padding: 6px 2px; font-size: 14px; color: var(--sa-tx); cursor: pointer; }
+  .qopt input { margin-top: 3px; accent-color: var(--sa-accent); }
+  .qopt small { color: var(--sa-tx2); }
 
   @media (max-width: 1080px) {
-    .wrap { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; min-height: 0; }
+    .wrap { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; min-height: 0; height: auto; }
     .ucol .list { display: flex; flex-wrap: wrap; gap: 4px; }
     .ucol .li { width: auto; }
     .scol { max-height: 200px; }

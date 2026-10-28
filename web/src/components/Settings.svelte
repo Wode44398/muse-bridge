@@ -51,6 +51,7 @@
   import { updateState, installPending, hasSilentUpdate, checkForUpdate, startUpdate, appVersionLine,
     platform, nativeInfo, fetchLatest, fetchServerInfo, cancelUpdate, openInstallPermission, autoUpdateEnabled, setAutoUpdateEnabled, waitingLine } from '../lib/appUpdate.js';
   import { updateInfo } from '../lib/updateStore.svelte.js';
+  import { createServerUpdate } from '../lib/serverUpdate.svelte.js';
   import { api, getToken } from '../lib/api.js';
   import { saPing } from '../lib/serverAdmin.svelte.js';
   import { ags, loadAgents, setAgentOn, agentById, loadPool, loadUsage, setRouter, activateAccount, moveAccount, addAccount, updateAccount, deleteAccount,
@@ -952,9 +953,13 @@
     untrack(() => {
       if (!updateInfo.latest || Date.now() - updateInfo.checkedAt > 5 * 60_000) fetchLatest().catch(() => {});
       if (me.kind !== 'none') fetchServerInfo().then((r) => { srvInfo = r; }).catch(() => {});
+      if (me.kind === 'admin') srvUpd.load();
       if (plat === 'android') appInfo = nativeInfo();
     });
   });
+  // 服务端更新（管理员，lib/serverUpdate.svelte.js）：手机 / 网页上也能查 GitHub 上的版本、一键更新服务端（10-28 以前只能到服务端那台电脑上点）
+  const srvUpd = createServerUpdate();
+  const srvUpdView = $derived(srvUpd.view);
 
   // 每页的滚动状态：大标题滚到顶栏下 → 顶栏小标题出现；有内容滚到顶栏下 → 滚动边缘效果显形
   let scrolled = $state({});
@@ -1983,6 +1988,33 @@
     {/if}
   {/if}
 
+  <!-- 服务端更新（管理员）：查 GitHub 发布仓库上的版本，按部署形态一键更新服务端（lib/serverUpdate.svelte.js）。
+       整行就是动作：「一键更新」「检查更新」「检查并更新」；没有能做的动作时行不可点，脚注说怎么更新 -->
+  {#if srvUpd.st && srvUpdView}
+    {@render ghead(t('服务端更新'))}
+    <div class="ig">
+      {#snippet srvUpdMain()}
+        <span class="r-main">
+          <span class="r-tx">{t('服务端版本')}<span class="r-sub" class:warn={srvUpdView.tone === 'warn'}>{srvUpdView.sub}</span></span>
+          {#if srvUpd.busy || srvUpd.loading}<span class="spin" aria-hidden="true"></span>
+          {:else if srvUpdView.action}<span class="r-d accent">{#if srvUpdView.action === 'update'}<span class="new-dot" aria-hidden="true"></span>{/if}{srvUpdView.label}</span>{/if}
+        </span>
+      {/snippet}
+      <!-- 没有能做的动作（正在装 / 等对话跑完 / 这种部署形态只能手动）时是纯状态行，不摆成一个点了没反应的按钮 -->
+      {#if srvUpdView.action}
+        <button class="r" type="button" disabled={srvUpd.busy || srvUpd.loading} onclick={() => srvUpd.act(srvUpdView.action)}>{@render srvUpdMain()}</button>
+      {:else}
+        <div class="r">{@render srvUpdMain()}</div>
+      {/if}
+      {#if srvUpd.st.newer && srvUpd.st.page}
+        <a class="r" href={srvUpd.st.page} target="_blank" rel="noopener noreferrer">
+          <span class="r-main"><span class="r-tx">{t('新版本说明')}</span>{@render chev()}</span>
+        </a>
+      {/if}
+    </div>
+    {#if srvUpd.err}{@render gfoot(srvUpd.err)}{:else if srvUpd.note}{@render gfoot(srvUpd.note)}{:else if srvUpdView.how}{@render gfoot(srvUpdView.how)}{/if}
+  {/if}
+
   <!-- 更新：安卓壳是装包；网页的界面就是服务器发的，刷新即最新。
        「软件更新」这一行与根页共用：侧栏「关于与更新」直达的是这一页，有新版时在这里就能下载、装上，不用退回根页找 -->
   {#if plat === 'android'}
@@ -2248,7 +2280,7 @@
 <!-- ─────────────── 外壳 ─────────────── -->
 <svelte:window onkeydown={onKey} />
 <div class="settings ios" class:dark class:closing class:previewing={!!sliding} class:staged={!!stage} class:modal={addrOpen || fbOpen || !!wpMenu || !!acctAsk || !!pw || anyAgModal}
-  class:covered={ui.serverAdminOpen || ui.agentsOpen} style:--sq={`url("${sq26}")`} use:edgeSwipe>
+  class:covered={ui.serverAdminOpen || ui.agentsOpen} class:solid-cover={ui.serverAdminOpen && !ui.agentsOpen} style:--sq={`url("${sq26}")`} use:edgeSwipe>
   <div class="panel" class:dragging bind:clientWidth={panelW} style:transform={dragX > 0 ? `translateX(${dragX}px)` : null}>
     {#each stack as pid, i (pid + ':' + i)}
       {@const top = i === depth - 1}
@@ -2506,6 +2538,10 @@
   /* 服务端控制台 / 扩展 / Agent 盖在上面时：它们自带深色 tint、磨砂借本层——退回 v3 的毛玻璃罩（同屏单层 backdrop） */
   .settings.covered { background: rgba(9, 11, 16, .44); backdrop-filter: blur(26px) saturate(1.5); -webkit-backdrop-filter: blur(26px) saturate(1.5); }
   .settings.covered .panel { opacity: 0; pointer-events: none; }
+  /* 服务端控制台 v2 不透明、从右推入：设置页原样留在底下（像又推了一层子页），不需要毛玻璃罩 */
+  .settings.covered.solid-cover { background: rgba(0, 0, 0, .2); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .settings.covered.solid-cover.dark { background: rgba(0, 0, 0, .5); }
+  .settings.covered.solid-cover .panel { opacity: 1; }
 
   /* ── 页面层 ── */
   .pg { position: absolute; inset: 0; background: var(--i-bg); will-change: transform; transition: background-color 240ms var(--ea-fade); }

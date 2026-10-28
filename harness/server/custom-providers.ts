@@ -16,13 +16,22 @@
 //
 // 元数据同步读（config.ts 在模块初始化时就要认出上次选的自定义服务），key 在启动时异步解开后常驻内存——DPAPI 要起一次
 // PowerShell，不能放在每轮 resolveKey 的同步路径上。
+//
+// 2026-10-28 多用户（维护者：成员能用管理员公开的服务，也能自己加）：
+//   · 管理员在编辑器里把某个服务标「共享给成员」（shared，存在管理员的 providers.json 里）。bridge 拉起成员实例时给
+//     DIMENSIO_SHARED_PROVIDERS_DIR = 管理员那份目录：成员实例只读它，只认标了 shared 的，和成员自己的并在一起列出。
+//     成员用得上、看不见：目录里不下发地址和请求头，编辑器接口拒，Key 只在服务端现取（只取共享的那几条），地址照管理员的走。
+//     管理员取消共享 / 删掉，成员那边下一次读就没了。
+//   · 成员自己也能加服务（以前租户一律 403），存在他自己的数据目录里；但只能连公网地址（endpoint-guard.ts）。
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync } from "./atomic-write.ts";
 import { coreUrl } from "./core-link.ts";
+import { assertPublicEndpoint } from "./endpoint-guard.ts";
 import { MK, type Source, type Tier, type TierValue } from "./model-knowledge.ts";
-import { customProvidersDir } from "./paths.ts";
+import { customProvidersDir, sharedProvidersDir } from "./paths.ts";
+import { tenantMode } from "./tenant.ts";
 import { slotView, tierForLevel } from "./custom-tiers.ts";
 import type { ThinkingLevel } from "./agent/turn.ts";
 
@@ -62,6 +71,7 @@ export interface CustomProvider {
   defaultModel: string;
   createdAt: number;
   updatedAt?: number;
+  shared?: boolean; // 管理员实例：共享给成员（多用户服务端）。成员实例里只有管理员共享过来的那几条带它
 }
 
 const ID_RE = /^custom-[a-f0-9]{8}$/;
@@ -321,23 +331,24 @@ function clean(raw: unknown): CustomProvider | null {
     defaultModel: pickDefault(models, r.defaultModel),
     createdAt: typeof r.createdAt === "number" ? r.createdAt : 0,
     ...(typeof r.updatedAt === "number" ? { updatedAt: r.updatedAt } : {}),
+    ...(r.shared === true ? { shared: true } : {}),
   };
 }
 
 // ── 元数据 ───────────────────────────────────────────────────────────────────
-let metaCache: { file: string; mtimeMs: number; size: number; list: CustomProvider[] } | null = null;
+type MetaCache = { file: string; mtimeMs: number; size: number; list: CustomProvider[] } | null;
+let metaCache: MetaCache = null;
+let sharedMetaCache: MetaCache = null;
 
-// 全部自定义服务（按添加顺序）。文件缺失 / 损坏一律当空表——绝不因此起不来。
-export function listCustomProviders(): CustomProvider[] {
-  const file = path.join(customProvidersDir(), META_FILE);
+// 读一份 providers.json（按 mtime + 大小缓存）。文件缺失 / 损坏一律当空表——绝不因此起不来。
+function readMeta(file: string, cache: MetaCache): { list: CustomProvider[]; cache: MetaCache } {
   let st;
   try {
     st = statSync(file);
   } catch {
-    metaCache = null;
-    return [];
+    return { list: [], cache: null };
   }
-  if (metaCache && metaCache.file === file && metaCache.mtimeMs === st.mtimeMs && metaCache.size === st.size) return metaCache.list;
+  if (cache && cache.file === file && cache.mtimeMs === st.mtimeMs && cache.size === st.size) return { list: cache.list, cache };
   let list: CustomProvider[] = [];
   try {
     const raw = JSON.parse(readFileSync(file, "utf8"));
@@ -345,13 +356,46 @@ export function listCustomProviders(): CustomProvider[] {
   } catch {
     list = [];
   }
-  metaCache = { file, mtimeMs: st.mtimeMs, size: st.size, list };
-  return list;
+  return { list, cache: { file, mtimeMs: st.mtimeMs, size: st.size, list } };
+}
+
+// 这个实例自己的服务（按添加顺序）——增删改、草稿、Key 只碰这一份。成员实例里自己的服务不会带 shared。
+function ownProviders(): CustomProvider[] {
+  const r = readMeta(path.join(customProvidersDir(), META_FILE), metaCache);
+  metaCache = r.cache;
+  return tenantMode() ? r.list.map(({ shared: _s, ...p }) => p) : r.list;
+}
+
+// 管理员共享给成员的服务（只在成员实例上有）：管理员那份 providers.json 里标了 shared 的。
+function sharedProviders(): CustomProvider[] {
+  const dir = tenantMode() ? sharedProvidersDir() : null;
+  if (!dir) return [];
+  const r = readMeta(path.join(dir, META_FILE), sharedMetaCache);
+  sharedMetaCache = r.cache;
+  return r.list.filter((p) => p.shared);
+}
+
+// 全部能用的自定义服务：管理员共享的在前，自己的按添加顺序在后（id 撞了算自己的）。
+export function listCustomProviders(): CustomProvider[] {
+  const own = ownProviders();
+  const shared = sharedProviders();
+  if (!shared.length) return own;
+  const mine = new Set(own.map((p) => p.id));
+  return [...shared.filter((p) => !mine.has(p.id)), ...own];
 }
 
 export function getCustomProvider(id: string): CustomProvider | undefined {
   return isCustomProviderId(id) ? listCustomProviders().find((p) => p.id === id) : undefined;
 }
+
+/** 成员实例上，这个服务是管理员共享过来的（只能用：不能看地址、改、删、换 Key）。 */
+export function isSharedProvider(id: string): boolean {
+  if (!isCustomProviderId(id) || ownProviders().some((p) => p.id === id)) return false;
+  return sharedProviders().some((p) => p.id === id);
+}
+
+const ownProvider = (id: string) => ownProviders().find((p) => p.id === id);
+const managedByAdmin = () => Object.assign(new Error("这是管理员共享的服务，只有管理员能修改"), { status: 403 });
 
 /** 一个自定义型号的能力记录（适配器 / 目录用）。 */
 export function getCustomModel(id: string, model: string): CustomModel | undefined {
@@ -395,17 +439,44 @@ export function setCustomSecretsForTests(mod: SecretsMod | null): void {
 export const customKeysReady: Promise<void> = (async () => {
   try {
     const dir = customProvidersDir();
-    if (!existsSync(path.join(dir, "connector-secrets.json"))) return;
-    const all = (await loadSecretsMod()).readSecrets(dir);
-    for (const [id, rec] of Object.entries(all)) {
-      const k = rec?.headers?.apiKey;
-      if ((isCustomProviderId(id) || BUILTIN_ID_RE.test(id)) && typeof k === "string" && k) keys.set(id, k);
+    if (existsSync(path.join(dir, "connector-secrets.json"))) {
+      const all = (await loadSecretsMod()).readSecrets(dir);
+      for (const [id, rec] of Object.entries(all)) {
+        const k = rec?.headers?.apiKey;
+        if ((isCustomProviderId(id) || BUILTIN_ID_RE.test(id)) && typeof k === "string" && k) keys.set(id, k);
+      }
     }
   } catch (e) {
     keysError = String((e as Error)?.message ?? e).slice(0, 160);
     console.warn(`[custom-providers] API key 解不开：${keysError}`);
   }
+  // 成员实例：先把加密模块载好、管理员那份的数据密钥解开一次（DPAPI 起 PowerShell 约半秒），之后 sharedKey 同步现取
+  const shared = tenantMode() ? sharedProvidersDir() : null;
+  if (shared) {
+    try {
+      const mod = await loadSecretsMod();
+      if (existsSync(path.join(shared, "connector-secrets.json"))) mod.readSecrets(shared);
+    } catch (e) {
+      console.warn(`[custom-providers] 管理员共享的 API key 解不开：${String((e as Error)?.message ?? e).slice(0, 160)}`);
+    }
+  }
 })();
+
+// 管理员共享的服务的 Key：每次现从管理员那份加密存储里取（按文件 mtime 缓存，管理员换 Key 立刻生效），只取共享的这一条，
+// 不在成员实例里另存一份。取不到（还没解开、管理员删了 Key）就当没有 Key。
+function sharedKey(p: CustomProvider): string | undefined {
+  if (p.authStyle === "none") return NO_AUTH_KEY;
+  const dir = sharedProvidersDir();
+  const mod = secretsOverride ?? secretsMod;
+  if (!dir || !mod) return undefined;
+  try {
+    const k = mod.readSecrets(dir)[p.id]?.headers?.apiKey;
+    return typeof k === "string" && k ? k : undefined;
+  } catch (e) {
+    console.warn(`[custom-providers] 管理员共享的 API key 解不开：${String((e as Error)?.message ?? e).slice(0, 160)}`);
+    return undefined;
+  }
+}
 
 /**
  * 鉴权方式「不需要」（本机 vLLM / Ollama 一类）的服务没有 key：给会话链路一个非空占位——resolveKey / hasKey / 起会话 /
@@ -414,9 +485,14 @@ export const customKeysReady: Promise<void> = (async () => {
  */
 export const NO_AUTH_KEY = "none";
 export function customProviderKey(id: string): string | undefined {
+  const own = ownProvider(id);
+  if (!own) {
+    const shared = sharedProviders().find((p) => p.id === id);
+    return shared ? sharedKey(shared) : undefined;
+  }
   const k = keys.get(id);
   if (k) return k;
-  return getCustomProvider(id)?.authStyle === "none" ? NO_AUTH_KEY : undefined;
+  return own.authStyle === "none" ? NO_AUTH_KEY : undefined;
 }
 
 async function writeKeys(): Promise<void> {
@@ -456,7 +532,7 @@ export function normalizeBaseUrl(raw: unknown): string {
   return out;
 }
 
-// ── 联网：拉型号 / 检测连接 / 探测 / 测试（都只给非租户实例，路由层把关） ────────────
+// ── 联网：拉型号 / 检测连接 / 探测 / 测试（成员实例上每个地址先过 endpoint-guard 的公网把关，见 send） ────────────
 export interface Conn {
   id?: string;
   name: string;
@@ -472,7 +548,9 @@ export interface Conn {
 /** 编辑器发来的草稿（还没保存）→ 连接参数 + key（草稿没带 key 就用已存的）。 */
 export function draftConn(input: unknown): { conn: Conn; key: string; models: CustomModel[] } {
   const r = (input ?? {}) as Record<string, unknown>;
-  const prev = typeof r.id === "string" ? getCustomProvider(r.id) ?? null : null;
+  // 只认自己的服务：管理员共享的那几条不许拿来当草稿底子（否则换个地址就能把管理员的 Key 发出去）
+  if (typeof r.id === "string" && isSharedProvider(r.id)) throw managedByAdmin();
+  const prev = typeof r.id === "string" ? ownProvider(r.id) ?? null : null;
   const baseUrl = normalizeBaseUrl(r.baseUrl ?? prev?.baseUrl);
   const fields = connFields(r, prev, false, baseUrl);
   const conn: Conn = { ...(prev ? { id: prev.id } : {}), name: str(r.name, 40) || prev?.name || hostOf(baseUrl), baseUrl, ...fields };
@@ -505,10 +583,16 @@ interface Fetched {
   ms: number;
   error?: string; // 网络层失败（没拿到响应）
 }
+// 成员实例上，这里发出去的都是成员自己的服务（草稿只认自己的，见 draftConn）：每个地址都先过公网把关
 async function send(url: string, init: RequestInit, timeoutMs = 20_000): Promise<Fetched> {
+  const t0 = Date.now();
+  try {
+    await assertPublicEndpoint(url);
+  } catch (e) {
+    return { status: 0, text: "", url, ms: 0, error: (e as Error).message };
+  }
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
-  const t0 = Date.now();
   try {
     const res = await fetch(url, { ...init, signal: ctl.signal, redirect: "manual" });
     const text = await res.text().catch(() => "");
@@ -797,6 +881,14 @@ export interface CustomProviderInput {
   replayReasoning?: unknown;
   models?: unknown; // 新编辑器：完整的型号清单（带能力）
   defaultModel?: unknown;
+  shared?: unknown; // 管理员实例：共享给成员（成员实例上忽略）
+}
+
+// 「共享给成员」只有管理员实例认；成员实例上一律没有（他自己的服务不存在共享这回事）
+function sharedField(input: CustomProviderInput, prev: CustomProvider | null): { shared?: true } {
+  if (tenantMode()) return {};
+  const want = typeof input.shared === "boolean" ? input.shared : prev?.shared === true;
+  return want ? { shared: true } : {};
 }
 
 // 老表单（只有地址 + key，旧版 apk 也走这里）：拉型号、猜能力；手填的型号补进去。
@@ -864,9 +956,10 @@ function strictModels(list: unknown, protocol: CustomProtocol): CustomModel[] {
 }
 
 export async function addCustomProvider(input: CustomProviderInput): Promise<{ provider: CustomProvider; warning?: string }> {
-  const list = listCustomProviders();
+  const list = ownProviders();
   if (list.length >= MAX_PROVIDERS) throw bad(`最多添加 ${MAX_PROVIDERS} 个自定义服务`);
   const baseUrl = normalizeBaseUrl(input.baseUrl);
+  await assertPublicEndpoint(baseUrl); // 成员实例：不填型号清单、鉴权选「不需要」时一次请求都不发，这里先拦
   const fields = connFields(input as Record<string, unknown>, null, true, baseUrl);
   const apiKey = str(input.apiKey, 4000);
   if (!apiKey && fields.authStyle !== "none") throw bad("请填写 API key");
@@ -881,9 +974,10 @@ export async function addCustomProvider(input: CustomProviderInput): Promise<{ p
   const defaultModel = str(input.model, 200) && chatIds(models).includes(str(input.model, 200)) ? str(input.model, 200) : pickDefault(models, input.defaultModel);
   await verifyKey(conn, apiKey, models.find((m) => m.id === defaultModel));
   let id: `custom-${string}`;
+  const taken = new Set(listCustomProviders().map((p) => p.id)); // 连管理员共享过来的一起避开
   do id = `custom-${randomBytes(4).toString("hex")}`;
-  while (list.some((p) => p.id === id));
-  const provider: CustomProvider = { ...conn, id, models, defaultModel, createdAt: Date.now(), updatedAt: Date.now() };
+  while (taken.has(id));
+  const provider: CustomProvider = { ...conn, id, models, defaultModel, createdAt: Date.now(), updatedAt: Date.now(), ...sharedField(input, null) };
   if (apiKey) {
     keys.set(id, apiKey);
     try {
@@ -893,14 +987,16 @@ export async function addCustomProvider(input: CustomProviderInput): Promise<{ p
       throw bad(`API key 没能加密保存：${(e as Error).message}`);
     }
   }
-  writeMeta([...listCustomProviders(), provider]);
+  writeMeta([...ownProviders(), provider]);
   return { provider, warning };
 }
 
 export async function updateCustomProvider(id: string, input: CustomProviderInput): Promise<{ provider: CustomProvider; warning?: string }> {
-  const cur = getCustomProvider(id);
+  if (isSharedProvider(id)) throw managedByAdmin();
+  const cur = ownProvider(id);
   if (!cur) throw bad("这个自定义服务不存在（可能已被删除）");
   const baseUrl = input.baseUrl === undefined ? cur.baseUrl : normalizeBaseUrl(input.baseUrl);
+  await assertPublicEndpoint(baseUrl);
   const fields = connFields(input as Record<string, unknown>, cur, true, baseUrl);
   const newKey = str(input.apiKey, 4000);
   const apiKey = newKey || keys.get(id) || "";
@@ -923,7 +1019,8 @@ export async function updateCustomProvider(id: string, input: CustomProviderInpu
   // 只换 Key（旧版 apk 的编辑表单只传名字、地址、Key）：型号表不动——v2 编辑器里挑好的、手动加的型号不能被 /models 整表冲掉；
   // Key 对不对由下面的 verifyKey 真发一条来验
   const want = manual && chatIds(models).includes(manual) ? manual : input.defaultModel ?? cur.defaultModel;
-  const next: CustomProvider = { ...cur, ...conn, id: cur.id, models, defaultModel: pickDefault(models, want), updatedAt: Date.now() };
+  const { shared: _was, ...rest } = cur;
+  const next: CustomProvider = { ...rest, ...conn, id: cur.id, models, defaultModel: pickDefault(models, want), updatedAt: Date.now(), ...sharedField(input, cur) };
   if (connChanged || (newKey && newKey !== keys.get(id))) await verifyKey(conn, apiKey, models.find((m) => m.id === next.defaultModel));
   if (newKey && newKey !== keys.get(id)) {
     const prev = keys.get(id);
@@ -936,13 +1033,14 @@ export async function updateCustomProvider(id: string, input: CustomProviderInpu
       throw bad(`API key 没能加密保存：${(e as Error).message}`);
     }
   }
-  writeMeta(listCustomProviders().map((p) => (p.id === id ? next : p)));
+  writeMeta(ownProviders().map((p) => (p.id === id ? next : p)));
   return { provider: next, warning };
 }
 
 export async function removeCustomProvider(id: string): Promise<void> {
-  if (!getCustomProvider(id)) throw bad("这个自定义服务不存在（可能已被删除）");
-  writeMeta(listCustomProviders().filter((p) => p.id !== id));
+  if (isSharedProvider(id)) throw managedByAdmin();
+  if (!ownProvider(id)) throw bad("这个自定义服务不存在（可能已被删除）");
+  writeMeta(ownProviders().filter((p) => p.id !== id));
   if (keys.delete(id)) await writeKeys().catch((e) => console.warn(`[custom-providers] 删除后重写 key 失败：${(e as Error).message}`));
 }
 
@@ -953,8 +1051,9 @@ export function customProviderView(p: CustomProvider) {
 }
 
 // 设置页「API Key」一栏对自定义服务也有效：换 key 落进加密存储（同步路径上只改内存，写盘排队）。
+// 管理员共享的服务不收（成员换不了它的 Key，也不能给它存一把自己的）。
 export function setCustomProviderKey(id: string, apiKey: string): void {
-  if (!getCustomProvider(id)) return;
+  if (!ownProvider(id)) return;
   keys.set(id, apiKey);
   void writeKeys().catch((e) => console.warn(`[custom-providers] key 写盘失败：${(e as Error).message}`));
 }

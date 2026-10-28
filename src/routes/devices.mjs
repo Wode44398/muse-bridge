@@ -21,12 +21,12 @@ import {
   attachDevice, settleResult, abortDevice, parseClientInfo, deviceRuntime, deviceEvents, isDeviceOnline, DEVICE_MAX_BYTES,
 } from '../runtime/device-control.mjs';
 import { deviceAudit, readDeviceAudit } from '../runtime/device-audit.mjs';
-import { deviceDispatch, devicesEnabled, publicDevice, ownDevices, resolveDevice } from '../runtime/devices.mjs';
+import { deviceDispatch, devicesEnabled, publicDevice, ownDevices, resolveDevice, onServerMachine } from '../runtime/devices.mjs';
 import {
   ensureDeviceTerm, deviceTerm, snapshotDeviceTerm, subscribeDeviceTerm, writeDeviceTerm, resizeDeviceTerm, killDeviceTerm,
 } from '../runtime/device-term.mjs';
 import { listForwards, createForward, removeForward, dropForwardsOfDevice } from '../runtime/device-forward.mjs';
-import { clientRelease, streamClientFile, clientModuleFile } from '../runtime/client-release.mjs';
+import { clientReleaseFor, clientReleaseForAsync, streamClientFile, clientModuleFile } from '../runtime/client-release.mjs';
 import { busPublish } from '../runtime/bus.mjs';
 import { writeSseHeaders, sseWrite, startHeartbeat } from '../runtime/sse.mjs';
 import { deviceLinkFor, setDeviceLink } from '../runtime/chat-prefs.mjs';
@@ -122,7 +122,9 @@ export function registerDeviceRoutes(router, { identify, adminCredential = null,
 
   const handleStream = (req, res, d) => {
     if (!devicesEnabled()) return json(res, 403, { error: '这台 bridge 关闭了设备通道（config.devices=false）' });
-    const info = parseClientInfo(req.headers['x-bridge-client']);
+    const parsed = parseClientInfo(req.headers['x-bridge-client']);
+    // local：本机直连挂上来的（服务端判的，不信设备自报）——服务端所在电脑上的客户端，更新分流与「服务端更新」靠它认（runtime/devices.mjs onServerMachine）
+    const info = parsed ? { ...parsed, local: isLocalDirect(req) } : null;
     deviceAudit({ ev: 'attach', device: d.id, name: d.name, owner: d.owner, ip: clientIp(req), ...(info ? { version: info.version, tier: info.tier || (info.desktop ? 'control' : 'workspace') } : {}) });
     updateDeviceMeta(d.id, { lastOnlineAt: new Date().toISOString(), ...(info ? { client: { ...info, reportedAt: new Date().toISOString() } } : {}) });
     attachDevice(d.id, res, {
@@ -145,15 +147,20 @@ export function registerDeviceRoutes(router, { identify, adminCredential = null,
 
   // legacy：老客户端经 /d/<令牌>/client/version 来问，下载地址按「它的中继基址 + downloadPath」拼——
   // 得给它 /client/download（同在 /d/<令牌>/ 下），不能给新路径，否则老客户端永远升不上来。
-  const handleClientVersion = (req, res, d, url, { legacy = false } = {}) => {
-    const release = clientRelease();
-    if (!release) return json(res, 404, { error: '这台 bridge 还没有可发的桌面客户端' });
+  // 发哪一版看这台设备是不是服务端所在的电脑（runtime/client-release.mjs「谁拿哪一版」）：服主那台拿 GitHub 最新（连同服务端一起升），
+  // 打包形态服务端的其它设备只拿与服务端同一次发布的。回包带 feed（上次查 GitHub 的结果），客户端设置页据此说「暂时查不到新版本」。
+  const handleClientVersion = async (req, res, d, url, { legacy = false } = {}) => {
+    const hosting = onServerMachine(d, req);
+    const { release, feed } = await clientReleaseForAsync({ hosting });
+    if (!release) return json(res, 404, { error: '这台 bridge 还没有可发的桌面客户端', ...(feed ? { feed } : {}) });
     const current = String(url.searchParams.get('current') || '').slice(0, 40);
     if (/^[\w.+-]+$/.test(current)) updateDeviceMeta(d.id, { client: { version: current, reportedAt: new Date().toISOString() } });
     deviceAudit({ ev: 'client_update_check', device: d.id, version: release.version, ...(current ? { current } : {}) });
     const { file, ...meta } = release;
-    return json(res, 200, legacy && meta.downloadPath ? { ...meta, downloadPath: '/client/download' } : meta);
+    const out = { ...meta, ...(feed ? { feed } : {}), ...(hosting ? { hosting: true } : {}) };
+    return json(res, 200, legacy && meta.downloadPath ? { ...out, downloadPath: '/client/download' } : out);
   };
+  const releaseOf = (req, d) => clientReleaseFor({ hosting: onServerMachine(d, req) });
 
   router.on('GET', '/api/device/stream', (req, res) => {
     const d = deviceAuth(req, res, bearer(req));
@@ -168,14 +175,14 @@ export function registerDeviceRoutes(router, { identify, adminCredential = null,
     const d = deviceAuth(req, res, bearer(req));
     if (d) json(res, 200, { device: { id: d.id, name: d.name, owner: d.owner, kind: d.kind } });
   });
-  router.on('GET', '/api/device/client/version', (req, res, url) => {
+  router.on('GET', '/api/device/client/version', async (req, res, url) => {
     const d = deviceAuth(req, res, bearer(req));
-    if (d) handleClientVersion(req, res, d, url);
+    if (d) await handleClientVersion(req, res, d, url);
   });
   router.on('GET', '/api/device/client/download', (req, res) => {
     const d = deviceAuth(req, res, bearer(req));
     if (!d) return;
-    const release = clientRelease();
+    const release = releaseOf(req, d);
     if (!release) return json(res, 404, { error: '这台 bridge 还没有可发的桌面客户端' });
     deviceAudit({ ev: 'client_update_download', device: d.id, version: release.version });
     streamClientFile(req, res, release);
@@ -194,9 +201,9 @@ export function registerDeviceRoutes(router, { identify, adminCredential = null,
     if (!d) return false;
     if (sub === '/control/stream' && req.method === 'GET') { handleStream(req, res, d); return false; }
     if (sub === '/control/result' && req.method === 'POST') { await handleResult(req, res, d); return false; }
-    if (sub === '/client/version' && req.method === 'GET') { handleClientVersion(req, res, d, url, { legacy: true }); return false; }
+    if (sub === '/client/version' && req.method === 'GET') { await handleClientVersion(req, res, d, url, { legacy: true }); return false; }
     if (sub === '/client/download' && req.method === 'GET') {
-      const release = clientRelease();
+      const release = releaseOf(req, d);
       if (!release) json(res, 404, { error: '这台 bridge 还没有可发的桌面客户端' });
       else streamClientFile(req, res, release);
       return false;
@@ -375,9 +382,9 @@ export function registerDeviceRoutes(router, { identify, adminCredential = null,
     if (!ctx) return;
     const all = ctx.kind === 'admin' && url.searchParams.get('all') === '1';
     const devices = listDevices({ owner: all ? null : ctx.key }).map(publicDevice);
-    // 管理员（控制台「设备」页）顺带拿客户端的最新版本，用来标「落后」与远程更新
+    // 管理员（控制台「设备」页）顺带拿成员该装的那一版（打包形态 = 与服务端同一次发布），用来标「落后」与远程更新
     let release = null;
-    if (all) { const r = clientRelease(); if (r) { const { file, ...meta } = r; release = meta; } }
+    if (all) { const r = clientReleaseFor({ hosting: false }); if (r) { const { file, ...meta } = r; release = meta; } }
     json(res, 200, { enabled: devicesEnabled(), devices, ...(all ? { release, origin: PUBLIC_ORIGIN || '' } : {}) });
   });
 

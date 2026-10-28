@@ -10,12 +10,18 @@
 // 自己永远比不出「有新版」。所以再问一个上游清单——config.clientUpdateFeed，默认公开发布仓库
 // Wode44398/claude-bridge-releases 的 releases/latest/download/latest.json——本地清单缺失或比上游旧时，
 // 发上游那份（只发清单：安装包由客户端按清单里的镜像地址去下，sha256 校验不过就换源）。
-// 上游清单后台拉、6 小时一次（失败半小时后再试），请求路径上只读缓存，不阻塞。
+// 上游清单 6 小时拉一次（失败半小时后再试）；客户端来问版本时缓存已过 2 分钟就当场重查（最多等 8 秒，查不到照旧发缓存）——
+// 10-28 服主反馈「点检查更新升不了」：以前请求路径上只读缓存、后台再刷，发新版后的头一次检查（往往就是用户点的那一下）
+// 永远拿旧清单说「已是最新」，GitHub 连不上时也只是静默说「已是最新」。现在回包带 feed（上次查 GitHub 的结果），界面照实说。
 // 自己就是发版机（显式配了 clientDist / BRIDGE_CLIENT_DIST，比如维护者的正式服）默认不问上游——本地就是源头；
 // 要问就显式写 clientUpdateFeed。clientUpdateFeed 写 "" 或 false = 关（env BRIDGE_CLIENT_UPDATE_FEED 同义，优先）。
 //
-// 同一份上游清单顺带回答「服务端本身有没有新版」：桌面安装包里的本机服务端随安装包发版
-// （程序根 bridge-build.json 记着打包号），上游版本更高 = 更新桌面客户端就能连同服务端一起更新。
+// 谁拿哪一版（clientReleaseFor）：
+//   · 服主自己那台电脑（服务端就在它上面：本机直连或机器指纹相同）、源码 / Docker 部署的服务端：本地与上游取新的。
+//     打包形态下服主更新桌面客户端 = 连同服务端一起更新（安装包里带着服务端，程序根 bridge-build.json 记着打包号）。
+//   · 打包形态服务端的其它设备（成员、服主的另一台电脑）：只发与服务端同一次发布的客户端——本地暂存的同版本安装包，
+//     或 GitHub 上那次发布的清单 releases/download/v<版本>/latest.json。绝不发 releases/latest：服主还没升时
+//     成员先升到新客户端，新壳可能要用旧服务端没有的接口。服主升级后成员下次检查就能跟上。
 
 import { existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import path from 'node:path';
@@ -25,6 +31,9 @@ import { DATA_ROOT, PROGRAM_ROOT } from './paths.mjs';
 export const DEFAULT_CLIENT_FEED = 'https://github.com/Wode44398/claude-bridge-releases/releases/latest/download/latest.json';
 const FEED_OK_MS = 6 * 3600_000;
 const FEED_FAIL_MS = 30 * 60_000;
+const FEED_FRESH_MS = 2 * 60_000;     // 客户端来问版本时，缓存比这旧就当场重查
+const FEED_WAIT_MS = 8_000;           // 当场重查最多等这么久（客户端那头 12 秒超时）
+const PIN_FAIL_MS = 10 * 60_000;      // 同版本发布清单拉不到，隔这么久再试
 
 export function clientDistDir() {
   return path.resolve(String(process.env.BRIDGE_CLIENT_DIST || config.clientDist || path.join(DATA_ROOT, 'client-dist')));
@@ -108,6 +117,20 @@ export function sanitizeManifest(m) {
 
 const feed = { url: '', at: 0, ok: false, manifest: null, error: '', inflight: null };
 
+// 拉一份发布清单并按 sanitizeManifest 收字段（上游 latest 与同版本发布清单共用）。出站代理靠 net-proxy 的全局 dispatcher。
+async function fetchManifest(url, fetchImpl) {
+  const doFetch = fetchImpl || ((...a) => globalThis.fetch(...a));
+  const res = await doFetch(url, { signal: AbortSignal.timeout(20_000), redirect: 'follow', cache: 'no-store', headers: { accept: 'application/json' } });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const text = await res.text();
+  if (text.length > 512 * 1024) throw new Error('清单太大');
+  const m = sanitizeManifest(JSON.parse(text.replace(/^﻿/, '')));
+  if (!m) throw new Error('清单格式不对（缺 version / sha256 / https 镜像）');
+  return m;
+}
+
+const timeout = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
+
 /** 拉一次上游清单（单飞）。fetchImpl 给测试注入。 */
 export function refreshClientFeed({ force = false, fetchImpl = null } = {}) {
   const url = clientFeedUrl();
@@ -115,15 +138,9 @@ export function refreshClientFeed({ force = false, fetchImpl = null } = {}) {
   if (feed.url !== url) Object.assign(feed, { url, at: 0, ok: false, manifest: null, error: '' });
   if (feed.inflight) return feed.inflight;
   if (!force && feed.at && Date.now() - feed.at < (feed.ok ? FEED_OK_MS : FEED_FAIL_MS)) return Promise.resolve(feed.manifest);
-  const doFetch = fetchImpl || ((...a) => globalThis.fetch(...a));
   feed.inflight = (async () => {
     try {
-      const res = await doFetch(url, { signal: AbortSignal.timeout(20_000), redirect: 'follow', cache: 'no-store', headers: { accept: 'application/json' } });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const text = await res.text();
-      if (text.length > 512 * 1024) throw new Error('清单太大');
-      const m = sanitizeManifest(JSON.parse(text.replace(/^﻿/, '')));
-      if (!m) throw new Error('清单格式不对（缺 version / sha256 / https 镜像）');
+      const m = await fetchManifest(url, fetchImpl);
       Object.assign(feed, { manifest: m, ok: true, error: '' });
     } catch (e) {
       // 失败不清掉上一次拿到的清单：GitHub 抽风时照旧发已知的最新版
@@ -142,6 +159,68 @@ export function warmClientFeed(delayMs = 15_000) {
   if (!clientFeedUrl()) return;
   const t = setTimeout(() => { refreshClientFeed().catch(() => {}); }, delayMs);
   t.unref?.();
+}
+
+/**
+ * 有人在等结果的检查（客户端问版本、设置里点「检查更新」）：缓存比 maxAgeMs 旧就当场重查，最多等 waitMs，
+ * 查不完照旧用缓存（那次重查在后台接着跑完）。回 feedStatus()。
+ */
+export async function checkClientFeed({ maxAgeMs = FEED_FRESH_MS, waitMs = FEED_WAIT_MS, fetchImpl = null } = {}) {
+  if (!clientFeedUrl()) return feedStatus();
+  if (feed.url !== clientFeedUrl() || !feed.at || Date.now() - feed.at >= maxAgeMs || feed.inflight) {
+    await Promise.race([refreshClientFeed({ force: true, fetchImpl }).catch(() => {}), timeout(waitMs)]);
+  }
+  return feedStatus();
+}
+
+/** 上次查 GitHub（上游清单）的结果：没开上游时 null。界面据此说「暂时查不到新版本（原因）」而不是装作已是最新。 */
+export function feedStatus() {
+  if (!clientFeedUrl()) return null;
+  return { checkedAt: feed.at || 0, ok: feed.ok, error: feed.error, checking: !!feed.inflight, latest: feed.manifest ? feed.manifest.version : null };
+}
+
+// —— 某一次发布的清单（成员跟随服务端版本）——
+// releases/latest 随新发布漂走；要「与服务端同一次发布」的客户端，按标签取 releases/download/v<版本>/latest.json。
+// 发布出去的清单不会再变：拿到就一直用（进程内）；拉不到 10 分钟后再试。发版仓库从更新源推（releaseRepo），关了 / 自定义源就没有。
+const pinned = new Map();   // version → { at, ok, manifest, error, inflight }
+
+/** 某次发布的清单地址（releaseRepo 推不出 GitHub 仓库、版本号不像样时回 ''）。 */
+export function taggedManifestUrl(version) {
+  const v = String(version || '');
+  const rr = releaseRepo();
+  if (!rr.repo || !/^\d+(\.\d+){1,4}$/.test(v)) return '';
+  return `https://github.com/${rr.repo}/releases/download/v${v}/latest.json`;
+}
+
+/** 拉某次发布的清单（单飞；拿到过就不再拉）。回清单或 null。 */
+export function refreshPinnedRelease(version, { force = false, fetchImpl = null } = {}) {
+  const url = taggedManifestUrl(version);
+  if (!url) return Promise.resolve(null);
+  let p = pinned.get(version);
+  if (!p) { p = { at: 0, ok: false, manifest: null, error: '', inflight: null }; pinned.set(version, p); }
+  if (p.inflight) return p.inflight;
+  if (p.ok || (!force && p.at && Date.now() - p.at < PIN_FAIL_MS)) return Promise.resolve(p.manifest);
+  p.inflight = (async () => {
+    try {
+      const m = await fetchManifest(url, fetchImpl);
+      // 标签与清单里的版本必须是同一个：对不上就当没有（别把另一版当成「同版本」发给成员）
+      if (compareVersions(m.version, version) !== 0) throw new Error(`清单版本 ${m.version} 与标签 v${version} 对不上`);
+      Object.assign(p, { manifest: m, ok: true, error: '' });
+    } catch (e) {
+      Object.assign(p, { ok: false, error: String(e?.message || e).slice(0, 200) });
+    } finally {
+      p.at = Date.now();
+      p.inflight = null;
+    }
+    return p.manifest;
+  })();
+  return p.inflight;
+}
+
+function pinnedManifest(version) {
+  const p = pinned.get(version);
+  if (!p || !p.ok) { refreshPinnedRelease(version).catch(() => {}); return null; }
+  return p.manifest;
 }
 
 function upstreamRelease() {
@@ -174,6 +253,47 @@ export function clientRelease() {
   return local;
 }
 
+/**
+ * 发给某台设备的那一版（见文件头「谁拿哪一版」）。hosting = 这台设备就是服务端所在的电脑。
+ * 打包形态服务端的其它设备：只给与服务端同一次发布的（本地暂存的同版本安装包优先——服务端能兜底直发；
+ * 借 GitHub 同版本清单里的镜像，sha256 一样才借），都没有时退回本地那份（只要不比服务端新），再没有就是 null。
+ * 回包带 pinned（跟随的服务端版本），界面据此说「与服务器同一版本」。
+ */
+export function clientReleaseFor({ hosting = false } = {}) {
+  const pin = hosting ? '' : serverBuildVersion();
+  if (!pin) return clientRelease();
+  const local = localRelease();
+  const tagged = pinnedManifest(pin);
+  if (local && compareVersions(local.version, pin) === 0) {
+    const sha = String(local.sha256 || '').toLowerCase();
+    const borrow = tagged && tagged.sha256 === sha && !(Array.isArray(local.mirrors) && local.mirrors.length);
+    return { ...local, ...(borrow ? { mirrors: tagged.mirrors } : {}), pinned: pin };
+  }
+  const up = feed.manifest && compareVersions(feed.manifest.version, pin) === 0 ? feed.manifest : null;
+  const same = tagged || up;
+  if (same) return { ...same, file: '', size: same.size, downloadPath: '', source: 'release', pinned: pin };
+  if (local && compareVersions(local.version, pin) < 0) return { ...local, pinned: pin };
+  return null;
+}
+
+/**
+ * clientReleaseFor 的「有人在等」版本：先把要用的清单查新（服主那台查 GitHub 最新、缓存过 2 分钟就重查；
+ * 成员第一次问时拉同版本发布清单），最多等 waitMs。回 { release, feed }（feed = feedStatus()，没走上游时 null）。
+ */
+export async function clientReleaseForAsync({ hosting = false, waitMs = FEED_WAIT_MS, fetchImpl = null } = {}) {
+  const pin = hosting ? '' : serverBuildVersion();
+  if (!pin) {
+    const f = await checkClientFeed({ waitMs, fetchImpl });
+    return { release: clientRelease(), feed: f };
+  }
+  const p = pinned.get(pin);
+  // 本地就是同一版时也等一下：借到 GitHub 镜像，成员才不用经服主家里的隧道下整个安装包（拉不到照旧本地直发）
+  if (!(p && p.ok) && taggedManifestUrl(pin) && !(p && p.at && Date.now() - p.at < PIN_FAIL_MS && !p.inflight)) {
+    await Promise.race([refreshPinnedRelease(pin, { fetchImpl }).catch(() => {}), timeout(waitMs)]);
+  }
+  return { release: clientReleaseFor({ hosting: false }), feed: null };
+}
+
 /** 功能扩展离线包（latest.json 的 modules[id] → modules/ 下的 zip）。 */
 export function clientModuleFile(id) {
   const manifest = readManifest();
@@ -190,16 +310,25 @@ export function clientModuleFile(id) {
 // —— 服务端本身的版本 ——
 // 只有打包形态（桌面安装包里的本机服务端）知道自己是哪一版：程序根 bridge-build.json 的 buildId（版本+提交）。
 // git 部署 / Docker 没有这个文件——它们走控制台「检查并更新」（update.sh / update.ps1）或重建镜像。
-function serverBuildVersion() {
+// BRIDGE_BUILD_ID 覆盖（测试 / 隔离实例模拟打包形态，与 modules/registry.mjs 的 buildId 同一口径）。
+export function serverBuildVersion() {
   try {
-    const raw = readFileSync(path.join(PROGRAM_ROOT, 'bridge-build.json'), 'utf8');
-    const id = String(JSON.parse(raw.replace(/^﻿/, '')).buildId || '');
-    const v = id.split('+')[0];
+    const id = process.env.BRIDGE_BUILD_ID
+      || String(JSON.parse(readFileSync(path.join(PROGRAM_ROOT, 'bridge-build.json'), 'utf8').replace(/^﻿/, '')).buildId || '');
+    const v = String(id).split('+')[0];
     return /^\d+(\.\d+){1,4}$/.test(v) ? v : null;
   } catch { return null; }
 }
 
-/** 控制台「服务控制」用：服务端自己有没有新版（只对打包形态有意义）。 */
+/** 发布页：某一版（v<版本> 的 Release）或最新（releases/latest）。推不出 GitHub 发版仓库时回 ''。 */
+export function releasePageUrl(version = '') {
+  const rr = releaseRepo();
+  if (!rr.repo) return '';
+  const v = String(version || '');
+  return /^\d+(\.\d+){1,4}$/.test(v) ? `https://github.com/${rr.repo}/releases/tag/v${v}` : `https://github.com/${rr.repo}/releases/latest`;
+}
+
+/** 控制台「服务控制」、设置「服务端更新」用：服务端自己有没有新版（只对打包形态有意义）。 */
 export function serverUpdateInfo() {
   const current = serverBuildVersion();
   if (!current) return { packaged: false };
@@ -211,7 +340,8 @@ export function serverUpdateInfo() {
     latest: best ? best.version : null,
     newer,
     notes: newer ? String(best.notes || '').slice(0, 2000) : '',
-    feed: clientFeedUrl() ? { checkedAt: feed.at || 0, ok: feed.ok, error: feed.error } : null,
+    page: releasePageUrl(newer ? best.version : ''),
+    feed: feedStatus(),
   };
 }
 

@@ -89,6 +89,13 @@ export function customProvidersDir(): string {
   return guard("自定义模型服务目录", fromEnv("DIMENSIO_CUSTOM_PROVIDERS_DIR") ?? path.resolve(dataHome(), "custom-providers"));
 }
 
+// 管理员那份自定义服务目录（只读）：多用户服务端上 bridge 拉起成员实例时给，成员据此用管理员标了「共享给成员」的服务
+// （custom-providers.ts）。没给 = 不是成员实例，或这台服务器没开共享，返回 null。
+export function sharedProvidersDir(): string | null {
+  const v = fromEnv("DIMENSIO_SHARED_PROVIDERS_DIR");
+  return v ? guard("管理员共享的自定义服务目录", v) : null;
+}
+
 // 快照对话：当前那只桶的指针，与桶根（quick.ts）。
 export function quickFile(): string {
   return guard("快照对话指针", fromEnv("DIMENSIO_QUICK_FILE") ?? path.resolve(dataHome(), "quick.json"));

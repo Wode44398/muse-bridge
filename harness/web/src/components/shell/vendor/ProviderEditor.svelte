@@ -19,6 +19,7 @@
   //         （同站兄弟地址 × 协议真打一次，一键应用）/ API Key / 鉴权方式 / 更多（请求头、输出上限字段、回传思考、提示缓存）
   //   型号：从服务拉取（每项附能力猜测，非对话的默认不勾，「全选」跳过它们）、手动添加；每个型号可展开改能力、思考档位、探测能力；★ 默认
   //   测试：用编辑中的配置真发一句（没保存的草稿也能测）；保存后自动测一次默认型号，失败当场标红、不关表单
+  //   共享给成员（多用户 bridge 的管理员才有）：成员能用、看不到地址和 Key、改不了
   import { untrack } from "svelte";
   import * as api from "../../../lib/api.ts";
   import type { CustomAuthStyle, CustomModel, CustomProtocol, CustomProviderRecord } from "../../../lib/api.ts";
@@ -31,6 +32,7 @@
   import Icon from "../../ui/Icon.svelte";
   import ModelRow from "./ModelRow.svelte";
   import { collapse, rise } from "../../../lib/motion.ts";
+  import { canShareCustomVendor } from "../../../lib/state.svelte.ts";
   import { t, tc, tr } from "../../../lib/i18n.ts";
 
   let {
@@ -68,8 +70,10 @@
       defaultModel: p.defaultModel ?? "",
       hasKey: p.hasKey === true,
       keyTail: p.keyTail ?? "",
+      shared: p.shared === true,
     };
   };
+  const canShare = $derived(canShareCustomVendor());
   let draft = $state<Draft>(fromSource(untrack(() => source)));
   let baseline = $state(JSON.stringify(untrack(() => draft)));
   let keyInput = $state("");
@@ -322,6 +326,7 @@
     const form: api.CustomProviderForm = {
       ...conn(draft.models.length > 0),
       ...(keyInput.trim() ? { apiKey: keyInput.trim() } : {}),
+      ...(canShare ? { shared: draft.shared === true } : {}),
     };
     try {
       const r = wasNew ? await api.addCustomProvider(form) : await api.updateCustomProvider(draft.id, form);
@@ -471,6 +476,13 @@
     <Section title={t("鉴权方式")}>
       <Segmented size="sm" options={authOpts} value={draft.authStyle} onchange={(v) => (draft.authStyle = v)} full label={t("鉴权方式")} />
     </Section>
+
+    {#if canShare}
+      <div class="sw">
+        <span class="swt"><span class="lt">{t("共享给成员")}</span><span class="fh">{t("这台服务器上的成员也能用这个服务，用量记在这把 Key 上；他们看不到地址和 Key，也改不了")}</span></span>
+        <Switch checked={draft.shared === true} label={t("共享给成员")} onchange={(v) => (draft.shared = v)} />
+      </div>
+    {/if}
 
     <button type="button" class="more" aria-expanded={moreOpen} onclick={() => (moreOpen = !moreOpen)}>
       <Icon name="sliders" size={15} /> {t("更多设置")}

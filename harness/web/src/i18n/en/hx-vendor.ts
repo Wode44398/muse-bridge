@@ -184,4 +184,9 @@ export default {
   "档位「{id}」重复了": "Tier “{id}” is duplicated",
   "档位最多 {n} 个": "Up to {n} tiers",
   "写入字段「{f}」不合法（点分路径，如 reasoning_effort）": "Target field “{f}” is invalid (use a dotted path such as reasoning_effort)",
+  // 多用户：管理员共享给成员
+  "已共享": "Shared",
+  "共享给成员": "Share with members",
+  "这台服务器上的成员也能用这个服务，用量记在这把 Key 上；他们看不到地址和 Key，也改不了":
+    "Members on this server can use this provider too, billed to this key. They can’t see or change the address or key.",
 };

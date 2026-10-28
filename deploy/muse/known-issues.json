@@ -2,6 +2,19 @@
   "_说明": "已知问题清单（维护者改这里）。推到 main 后，.github/workflows/known-issues.yml 把它算成「影响哪些版本」写进最新 Release 的 latest.json（known_issues 字段）；各台 Muse 的看门狗每 6 小时读一次，bootstrap.sh known-issues 能列出影响当前版本的条目，Muse 回答问题、判断是不是 bug 之前先查它。since / fixed_in 填版本标签（v0.1.0-beta.12 这种），不填 since = 从最早的版本起，不填 fixed_in = 还没修好；fixed_in 写了但那个版本还没发 = 当作还没修好。notify=true 的条目，看门狗会主动告诉受影响的用户一次。",
   "issues": [
     {
+      "id": "agent-api-router-dispatch",
+      "title": "用 agent 密钥调 Muse Bridge 时，读会话、读设置、看额度、管文件等操作报「router.dispatch is not a function」",
+      "title_en": "With an agent key, operations such as reading sessions or settings, checking usage, and managing files fail with \"router.dispatch is not a function\"",
+      "symptom": "whoami、manual、devices 这类操作正常，但 sessions.list / sessions.read / settings.claude / usage / files.* / chat.wait 等返回 failed，message 是 router.dispatch is not a function。",
+      "workaround": "更新到修好的版本。更新前，这些事请用户在网页里自己操作。",
+      "workaround_en": "Update to the fixed version. Until then, ask the user to do these things in the web app.",
+      "cause": "agent 接口作为内置插件启用时，拿到的是插件宿主包过的路由器（没有 dispatch），把真正的路由器盖掉了。",
+      "since": "v0.3.0",
+      "fixed_in": "v0.3.3",
+      "notify": false,
+      "issue": null
+    },
+    {
       "id": "v030-install-refused",
       "title": "新装 v0.3.0 时，Muse 读完安装说明书后拒绝安装（说那份文件没通过安全检查）",
       "title_en": "Installing v0.3.0 fresh: Muse reads the install guide and refuses to continue (says the file didn't pass its safety check)",

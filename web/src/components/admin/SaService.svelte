@@ -182,8 +182,8 @@
 
 <style>
   .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; padding: 12px 18px 6px; }
-  .st { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 14px; background: rgba(255, 255, 255, .05); min-width: 0; }
-  .st b { font-size: 18px; font-weight: 700; color: var(--sa-tx); font-variant-numeric: tabular-nums; }
+  .st { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 14px; background: var(--sa-soft); box-shadow: inset 0 0 0 .5px var(--sa-hair); min-width: 0; }
+  .st b { font-size: 18px; font-weight: 600; color: var(--sa-tx); font-variant-numeric: tabular-nums; }
   .st small { font-size: 11.5px; color: var(--sa-tx3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 英文说明比中文长得多，单行省略会吃掉关键信息：英文下允许折行（中文保持单行） */
   .st small:lang(en) { white-space: normal; }
@@ -192,10 +192,10 @@
     .sa-row:lang(en) { flex-wrap: wrap; }
     .sa-row:lang(en) .sa-row-tx { flex-basis: 100%; }
   }
-  .logs { margin: 10px 18px 0; max-height: 420px; overflow: auto; padding: 10px 12px; border-radius: 12px; background: rgba(0, 0, 0, .35);
+  .logs { margin: 10px 18px 0; max-height: 420px; overflow: auto; padding: 10px 12px; border-radius: 12px; background: var(--sa-code);
     font-family: var(--sa-mono); font-size: 11.5px; line-height: 1.55; color: var(--sa-tx2); }
   .ln { white-space: pre-wrap; word-break: break-all; }
   .ln .tm { color: var(--sa-tx3); margin-right: 8px; }
-  .ln.lw { color: #ffd479; }
-  .ln.le { color: #ff8078; }
+  .ln.lw { color: var(--sa-warn); }
+  .ln.le { color: var(--sa-red); }
 </style>

@@ -6,6 +6,7 @@ export default {
   "设置": "Settings",
   "API Key": "API key",
   "已配 Key": "Key set",
+  "管理员提供": "Provided by admin",
   "缺 Key": "No key",
   "Key 加密存在服务端，重启不丢，不回传浏览器。": "The key is stored encrypted on the server, survives restarts, and is never sent to the browser.",
   "••••••••（留空保持不变）": "•••••••• (leave blank to keep current)",

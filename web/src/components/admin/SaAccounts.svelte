@@ -88,7 +88,7 @@
   }
 </script>
 
-{#snippet richLine(s)}{#each rich(s) as seg}{#if seg.startsWith('**')}<b style="color:rgba(255,255,255,.7)">{seg.slice(2, -2)}</b>{:else if seg.startsWith('`')}<code class="sa-mono">{seg.slice(1, -1)}</code>{:else}{seg}{/if}{/each}{/snippet}
+{#snippet richLine(s)}{#each rich(s) as seg}{#if seg.startsWith('**')}<b class="em">{seg.slice(2, -2)}</b>{:else if seg.startsWith('`')}<code class="sa-mono">{seg.slice(1, -1)}</code>{:else}{seg}{/if}{/each}{/snippet}
 
 <div class="sa-card">
   <div class="sa-card-h">{t('Claude 订阅账号')}
@@ -104,7 +104,7 @@
         {@const u = usage[a.id]}
         <div class="sa-row acct">
           <span style="width:74px;flex:none">
-            {#if a.active}<span class="sa-badge green">{t('● 当前')}</span>{:else}<span class="sa-badge gray">{t('待用')}</span>{/if}
+            {#if a.active}<span class="sa-badge green">{t('当前')}</span>{:else}<span class="sa-badge gray">{t('待用')}</span>{/if}
           </span>
           <span class="sa-row-tx">
             <span style="font-weight:650">{accLabel(a.label)}
@@ -225,11 +225,11 @@
   .plan { margin-left: 6px; padding: 1px 7px; font-size: 10.5px; vertical-align: 1px; }
   .m { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
   .m-h { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-size: 12px; color: var(--sa-tx2); }
-  .m-h b { font: 650 12.5px var(--sa-mono); color: var(--sa-tx); }
-  .m-h b.amber { color: #ffb340; } .m-h b.red { color: #ff6961; }
+  .m-h b { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--sa-tx); }
+  .m-h b.amber { color: var(--sa-warn); } .m-h b.red { color: var(--sa-red); }
   .m-na { font-size: 11.5px; color: var(--sa-tx3); }
-  .m-bar { height: 5px; border-radius: 3px; background: rgba(255,255,255,.09); overflow: hidden; }
-  .m-bar i { display: block; height: 100%; border-radius: 3px; background: var(--sa-green); transition: width .4s ease; }
+  .m-bar { height: 4px; border-radius: 2px; background: var(--sa-fill); overflow: hidden; }
+  .m-bar i { display: block; height: 100%; border-radius: 2px; background: var(--sa-accent); transition: width .4s ease; }
   .m-bar i.amber { background: var(--sa-amber); } .m-bar i.red { background: var(--sa-red); }
   .m small { font-size: 11px; color: var(--sa-tx3); min-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .m-note { grid-column: 1 / -1; font-size: 12px; color: var(--sa-tx3); }
@@ -241,11 +241,14 @@
   .rt-log-r { font-size: 12.5px; color: var(--sa-tx2); }
   .rt-log-r .sa-mono { color: var(--sa-tx3); margin-right: 6px; }
   .rt-log-r small { color: var(--sa-tx3); margin-left: 6px; }
-  .m-note.err { color: #ff6961; }
+  .m-note.err { color: var(--sa-red); }
+  :global(.sa-root) .em { color: var(--sa-tx); font-weight: 600; }
   /* 窄屏：徽章 + 账号名占一行、按钮换到下一行（中英文都要——加了套餐徽章后中文名也会被挤成竖排） */
   @media (max-width: 560px) {
     .sa-row.acct { flex-wrap: wrap; row-gap: 8px; }
     .sa-row.acct .sa-row-tx { flex-basis: calc(100% - 86px); }
+    /* 徽章列不再占固定 74px：徽章贴着账号名，按钮整排换到下一行，与用量条同一左边 */
+    .sa-row.acct > span:first-child { width: auto !important; }
     .meters { padding-left: 0; gap: 10px; }
   }
 

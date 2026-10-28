@@ -114,6 +114,24 @@ function effectiveTarget(item, { home, harnessDir, env, envVars, defaults = {} }
   return v ? path.resolve(harnessDir, v) : path.join(home, item.name);
 }
 
+/**
+ * 某一项在 harness 实例里实际落在哪（同 harness 的 paths.ts：进程环境 > .env 里写的 > <数据目录>/<名>；
+ * 数据目录同样是进程环境 > .env，都没给就是 harness 目录）。多用户时给成员实例指管理员那份自定义服务目录用。
+ * @param {string} name   HARNESS_DATA_ITEMS 里的名字，如 'custom-providers'
+ * @param {object} o
+ * @param {Record<string,string|undefined>} o.env   管理员实例的进程环境
+ * @param {string|null} o.envFile                   管理员实例加载的 .env
+ * @param {string} o.harnessDir                     harness 目录（实例的 cwd，相对路径按它解析）
+ */
+export function harnessItemPath(name, { env, envFile, harnessDir }) {
+  const item = HARNESS_DATA_ITEMS.find((i) => i.name === name);
+  if (!item) throw new Error(`unknown harness data item: ${name}`);
+  const envVars = readEnvFile(envFile);
+  const dataDir = given(env.DIMENSIO_DATA_DIR) || given(envVars.DIMENSIO_DATA_DIR);
+  const home = dataDir ? path.resolve(harnessDir, dataDir) : harnessDir;
+  return effectiveTarget(item, { home, harnessDir, env, envVars });
+}
+
 // 目标「还没有数据」：不存在、空目录、空文件。Docker 入口、install.sh 会先建好空目录和空 .env，那不算数据。
 function hasData(p) {
   let st;

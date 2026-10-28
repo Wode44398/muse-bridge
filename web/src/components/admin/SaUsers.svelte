@@ -141,14 +141,14 @@
 </script>
 
 {#snippet tierBadge(tier)}
-  {#if tier === 'user'}<span class="sa-badge green">{t('普通')}</span>
+  {#if tier === 'user'}<span class="sa-badge">{t('普通')}</span>
   {:else if tier === 'admin'}<span class="sa-badge blue">admin</span>
   {:else}<span class="sa-badge amber">{t('完全信任')}</span>{/if}
 {/snippet}
 
 {#snippet check(on, dis)}
   <span class="ack" class:on class:dis aria-hidden="true">
-    {#if on}<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>{/if}
+    {#if on}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>{/if}
   </span>
 {/snippet}
 
@@ -366,14 +366,15 @@
 
 <style>
   /* 档位列：「完全信任」徽章 + 「待确认」小签，放不下就折行 */
-  :global(.sa-root) .ucols { grid-template-columns: minmax(90px, 1fr) 96px 76px minmax(120px, 1.2fr) minmax(110px, .9fr) auto; }
+  :global(.sa-root) .ucols { grid-template-columns: minmax(90px, 1fr) 96px 76px minmax(120px, 1.2fr) minmax(110px, .9fr) 84px; }
   /* 英文「状态」徽章（Can’t sign in / Disabled，等宽字）比 76px 宽：只在英文界面放宽这一列，中文不变 */
-  :global(.sa-root) .ucols:lang(en) { grid-template-columns: minmax(90px, 1fr) 104px 112px minmax(120px, 1.2fr) minmax(110px, .9fr) auto; }
+  :global(.sa-root) .ucols:lang(en) { grid-template-columns: minmax(90px, 1fr) 104px 112px minmax(120px, 1.2fr) minmax(110px, .9fr) 84px; }
   :global(.sa-root) .icols { grid-template-columns: minmax(180px, 1.4fr) 96px minmax(100px, 1fr) 90px; }
   :global(.sa-root) .ucols > :nth-child(2) { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
   :global(.sa-root) .ucols > :nth-child(2) .pend { margin-left: 0; }
   /* 弹窗里的两颗档位芯片英文更长：英文界面窄屏允许折行（只在 :lang(en) 下，中文外观不变） */
   .sa-modal .sa-hrow:lang(en) { flex-wrap: wrap; }
+  /* 末列定宽：每行是独立网格，auto 列在表头（空）和数据行（按钮）里宽度不同，整表就错位 */
   .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   /* 标题栏：标题不许被按钮挤成竖排；按钮组窄屏时整组换到下一行 */
   .uhead { flex-wrap: wrap; row-gap: 8px; padding-bottom: 6px; }
@@ -381,45 +382,61 @@
   .uhead-acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .perm-acts { display: flex; gap: 6px; flex-wrap: wrap; padding: 2px 0 8px; }
   .agents { font-size: 12.5px; color: var(--sa-tx2); }
-  .svc { margin-left: 6px; font-size: 10px; font-weight: 650; padding: 1px 6px; border-radius: 20px; background: rgba(94,92,230,.22); color: #b3b1ff; vertical-align: 1px; }
-  .invite-code { flex: 1; font-size: 17px; background: rgba(255,255,255,.07); padding: 11px 14px; border-radius: 12px;
-    box-shadow: inset 0 0 0 .5px rgba(255,255,255,.14); letter-spacing: .5px; }
-  .purge { display: flex; align-items: center; gap: 9px; font-size: 13.5px; color: #e8e8e8; cursor: pointer; }
-  .purge input { width: 17px; height: 17px; accent-color: var(--sa-red); }
-  .purge.keep input { accent-color: var(--sa-blue); }
-  .pend { margin-left: 6px; font-size: 10px; font-weight: 650; padding: 1px 6px; border-radius: 20px; background: rgba(255, 179, 64, .2); color: #ffb340; vertical-align: 1px; white-space: nowrap; }
-  .trust-note { font-size: 11.5px; line-height: 1.5; color: #ffb340; margin: -2px 2px 8px; }
+  .svc { margin-left: 6px; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 20px; background: var(--sa-fill); color: var(--sa-tx2); vertical-align: 1px; }
+  .invite-code { flex: 1; font-size: 17px; background: var(--sa-field); padding: 11px 14px; border-radius: 12px; letter-spacing: .5px; }
+  .purge { display: flex; align-items: flex-start; gap: 9px; font-size: 14px; line-height: 1.45; color: var(--sa-tx); cursor: pointer; }
+  .purge input { width: 17px; height: 17px; margin-top: 1px; flex: none; accent-color: var(--sa-red); }
+  .purge.keep input { accent-color: var(--sa-accent); }
+  .pend { margin-left: 6px; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 20px; background: color-mix(in srgb, var(--sa-warn) 15%, transparent); color: var(--sa-warn); vertical-align: 1px; white-space: nowrap; }
+  .trust-note { font-size: 12px; line-height: 1.55; color: var(--sa-warn); margin: -2px 2px 8px; }
   /* 邀请码状态列：「未使用」+「老码·不过期·等同管理员」放不下就折行 */
   .istat { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
   .istat .pend { margin-left: 0; white-space: normal; }
   /* 按人授权面板：挂在该用户那一行下面 */
-  .perm { margin: 2px 18px 10px; padding: 10px 12px 12px; border-radius: 16px; background: rgba(255,255,255,.05); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.1); }
-  .perm-h { font-size: 12px; font-weight: 600; color: var(--sa-tx3); padding: 4px 2px 6px; }
+  .perm { margin: 2px 18px 12px; padding: 10px 12px 12px; border-radius: 16px; background: var(--sa-soft); box-shadow: inset 0 0 0 .5px var(--sa-hair); }
+  .perm-h { font-size: 12px; font-weight: 600; color: var(--sa-tx3); padding: 6px 2px 6px; }
   .perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; margin-bottom: 6px; }
-  .perm-it { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 12px; border: 0; background: rgba(255,255,255,.04);
-    color: var(--sa-tx); font: inherit; text-align: left; cursor: pointer; }
-  .perm-it:hover:not(:disabled) { background: rgba(255,255,255,.09); }
+  .perm-it { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 12px; border: 0; background: var(--sa-card);
+    box-shadow: inset 0 0 0 .5px var(--sa-hair); color: var(--sa-tx); font: inherit; text-align: left; cursor: pointer; }
+  .perm-it:hover:not(:disabled) { background: color-mix(in srgb, var(--sa-card) 92%, var(--sa-tx)); }
   .perm-it:disabled { cursor: default; }
   .perm-it.dis .perm-tx { opacity: .45; }
-  .perm-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 13.5px; }
-  .perm-tx small { font-size: 11.5px; line-height: 1.4; color: var(--sa-tx3); }
+  .perm-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 14px; }
+  .perm-tx small { font-size: 12px; line-height: 1.4; color: var(--sa-tx2); }
   .ack { width: 22px; height: 22px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
-    box-shadow: inset 0 0 0 1.6px rgba(255,255,255,.28); }
-  .ack.on { background: var(--sa-blue); box-shadow: inset 0 .5px .5px rgba(255,255,255,.4), 0 2px 8px rgba(10,132,255,.4); }
-  .ack.on.dis { background: rgba(10,132,255,.4); }
+    box-shadow: inset 0 0 0 1.5px var(--sa-track); color: var(--sa-on-accent); }
+  .ack.on { background: var(--sa-accent); box-shadow: none; }
+  .ack.on.dis { opacity: .45; }
   .ack :global(svg) { width: 12px; height: 12px; }
   @media (max-width: 1080px) {
-    :global(.sa-root) .ucols { grid-template-columns: minmax(80px, 1fr) 84px 70px auto; }
-    :global(.sa-root) .ucols:lang(en) { grid-template-columns: minmax(80px, 1fr) 92px 108px auto; }
+    :global(.sa-root) .ucols { grid-template-columns: minmax(80px, 1fr) 84px 70px 84px; }
+    :global(.sa-root) .ucols:lang(en) { grid-template-columns: minmax(80px, 1fr) 92px 108px 84px; }
     :global(.sa-root) .ucols > :nth-child(4), :global(.sa-root) .ucols > :nth-child(5) { display: none; }
   }
   .usecell { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 12px; color: var(--sa-tx2); }
-  .usecell .hot { color: #ff8078; }
+  .usecell .hot { color: var(--sa-red); }
   .usecell small { font-size: 11px; }
-  .own { margin-left: 8px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; color: #64d2ff; background: rgba(100, 210, 255, .14); }
+  .own { margin-left: 8px; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 20px; color: var(--sa-tx2); background: var(--sa-fill); }
   .qgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-bottom: 8px; }
   .qf { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--sa-tx2); }
   .qf .sa-in { height: 38px; }
   .qhint { font-size: 11.5px; color: var(--sa-tx3); margin: -2px 0 8px; }
-  .qnow { flex: 1; min-width: 0; font-size: 12.5px; color: var(--sa-tx2); }
+  .qnow { flex: 1; min-width: 0; font-size: 13px; color: var(--sa-tx2); }
+
+  /* 手机：表格改成两行列表——名字一行，档位 + 状态一行，「管理」靠右跨两行；表头不显示 */
+  @media (max-width: 699px) {
+    .uhead-acts { flex-basis: 100%; justify-content: flex-start; }
+    :global(.sa-root) .sa-thead.ucols, :global(.sa-root) .sa-thead.icols { display: none; }
+    :global(.sa-root) .sa-tr.ucols { grid-template-columns: auto auto minmax(0, 1fr) auto; grid-template-areas: "n n n a" "t s . a"; row-gap: 6px; padding-top: 12px; padding-bottom: 12px; }
+    :global(.sa-root) .sa-tr.ucols > :nth-child(1) { grid-area: n; font-size: 15px; }
+    :global(.sa-root) .sa-tr.ucols > :nth-child(2) { grid-area: t; }
+    :global(.sa-root) .sa-tr.ucols > :nth-child(3) { grid-area: s; }
+    :global(.sa-root) .sa-tr.ucols > :nth-child(6) { grid-area: a; }
+    :global(.sa-root) .sa-tr.icols { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "c c" "t s"; row-gap: 6px; }
+    :global(.sa-root) .sa-tr.icols > :nth-child(1) { grid-area: c; }
+    :global(.sa-root) .sa-tr.icols > :nth-child(2) { grid-area: t; }
+    :global(.sa-root) .sa-tr.icols > :nth-child(3) { grid-area: s; }
+    :global(.sa-root) .sa-tr.icols > :nth-child(4) { display: none; }
+    .perm { margin-left: 12px; margin-right: 12px; }
+  }
 </style>

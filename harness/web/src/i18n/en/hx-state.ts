@@ -119,6 +119,7 @@ export default {
   "离开模式需要重启 harness 服务后可用": "Restart the dimensio service to use away mode",
   "切换离开模式失败：{reason}": "Couldn’t change away mode: {reason}",
   "自定义服务": "Custom provider",
+  "管理员共享": "Shared by admin",
   "已删除": "Deleted",
   "排序没存上：{reason}": "Couldn’t save the order: {reason}",
   "置顶/隐藏需要重启 harness 服务后可用": "Restart the dimensio service to pin or hide projects",

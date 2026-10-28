@@ -30,7 +30,7 @@ import { devicesEnabled } from '@bridge/core/runtime/devices.mjs';
 import { ensureHostSecret } from '@bridge/core/runtime/host-secret.mjs';
 import { mintAgentDeviceToken } from '@bridge/core/runtime/agent-device-token.mjs';
 import { ensureHarnessUp, killTreeAndWait, stopHarnessGracefully } from '../runtime/harness-watchdog.mjs';
-import { harnessDataEnv, harnessEnvFile, planHarnessData, prepareHarnessData, trashedHarnessDirs } from '../runtime/harness-data.mjs';
+import { harnessDataEnv, harnessEnvFile, harnessItemPath, planHarnessData, prepareHarnessData, trashedHarnessDirs } from '../runtime/harness-data.mjs';
 import { harnessDir } from '../harness-dir.mjs';
 import { CORE_REGISTER_URL } from '@bridge/core/modules/core-resolve.mjs';
 import { agentEnabled } from '@bridge/core/runtime/agent-status.mjs';
@@ -68,6 +68,10 @@ const ADMIN_DATA_READY = prepareHarnessData({
   .finally(() => { adminDataSettled = true; });
 // 管理员实例实际在用的 .env：本次 .env 没复制成时先用原件。
 const currentAdminEnvFile = () => adminPrepared?.fallbacks?.HARNESS_ENV_FILE || ADMIN_ENV_FILE;
+// 管理员实例的数据位置环境（进程环境 + 数据目录 / 迁移定下的项），同下方 admin 的 env。
+const adminDataEnv = () => ({ ...process.env, ...harnessDataEnv({ dataDir: ADMIN_DATA.dataDir, prepared: adminPrepared, envFile: ADMIN_ENV_FILE }) });
+// 管理员那份自定义服务目录：成员实例只读它，用管理员标了「共享给成员」的服务（harness/server/custom-providers.ts）。
+const adminCustomProvidersDir = () => harnessItemPath('custom-providers', { env: adminDataEnv(), envFile: currentAdminEnvFile(), harnessDir: HARNESS_DIR });
 // 可经环境变量覆盖：并行 worktree 各跑一份 bridge，就得各带一个 harness，不能共抢 8799。
 const HARNESS_PORT = Number(process.env.HARNESS_PORT || 8799);
 const HARNESS_HOST = '127.0.0.1';
@@ -244,10 +248,11 @@ const admin = new HarnessInstance({
   token: ADMIN_TOKEN,
   ready: ADMIN_DATA_READY,
   env: () => ({
-    ...process.env,
     // 数据目录（S2）：只在 harness 是扩展自带的时候给；harness 各项自己的变量（含 .env 里写的）仍然优先。
     // 另加迁移定下的默认工作区（.env 里写了就不加）与本次没复制成、先指回原件的项，见 harness-data.mjs harnessDataEnv。
-    ...harnessDataEnv({ dataDir: ADMIN_DATA.dataDir, prepared: adminPrepared, envFile: ADMIN_ENV_FILE }),
+    ...adminDataEnv(),
+    // 自定义服务编辑器里出「共享给成员」开关：成员实例经 DIMENSIO_SHARED_PROVIDERS_DIR 读到标了共享的那几条（见 tenantEnv）。
+    DIMENSIO_PROVIDER_SHARING: '1',
     PORT: String(HARNESS_PORT),
     // bridge 自己的端口：harness 的 Preview 工具「回收端口」时一律拒绝碰它（services.ts
     // hostPorts）——以前 Preview(start, port=8787) 会 taskkill /T 把 bridge 整棵进程树带走。
@@ -309,8 +314,11 @@ function tenantEnv(user, port, token, { shell }) {
   for (const [k, v] of Object.entries(process.env)) if (!TENANT_ENV_DROP.some((re) => re.test(k))) base[k] = v;
   // 共用管理员那份厂商 key 文件（HARNESS_ENV_FILE > 数据目录 > harness 目录里的 .env，见 harnessEnvFile）。
   const envFile = currentAdminEnvFile();
-  // 不许碰的位置（命令里出现就拒）：bridge 的数据根 / 程序目录 / 用户根（自己的目录除外）/ 管理员工作区。
-  const deny = [ROOT, PROGRAM_ROOT, NATIVE_ROOT, VAULT].filter(Boolean).join(path.delimiter);
+  // 管理员共享给成员的自定义服务（只读）：成员实例在服务端现取共享的那几条，Key 不出服务端、地址不下发。
+  const sharedProviders = adminCustomProvidersDir();
+  // 不许碰的位置（命令里出现就拒）：bridge 的数据根 / 程序目录 / 用户根（自己的目录除外）/ 管理员工作区 / 管理员的自定义服务目录
+  //（通常已在前面几个里面；管理员用环境变量另指了位置时靠这一项）。
+  const deny = [ROOT, PROGRAM_ROOT, NATIVE_ROOT, VAULT, sharedProviders].filter(Boolean).join(path.delimiter);
   return {
     ...base,
     PORT: String(port),
@@ -332,6 +340,7 @@ function tenantEnv(user, port, token, { shell }) {
     WORKSPACE_DIR: dirs.WORKSPACE_DIR,
     DIMENSIO_GLOBAL_GUIDE: dirs.DIMENSIO_GLOBAL_GUIDE,
     DIMENSIO_CUSTOM_PROVIDERS_DIR: dirs.DIMENSIO_CUSTOM_PROVIDERS_DIR,
+    DIMENSIO_SHARED_PROVIDERS_DIR: sharedProviders,
     // 租户模式（harness 侧的锁定见 harness/server/tenant.ts）：
     DIMENSIO_TENANT: '1',
     SANDBOX_ACCESS: 'workspace',

@@ -381,11 +381,11 @@
   /* 设备列表 */
   .dlist { padding: 6px 8px 0; display: flex; flex-direction: column; gap: 2px; }
   .dev { border-radius: 16px; transition: background .18s ease; }
-  .dev.open { background: rgba(255,255,255,.05); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.08); }
+  .dev.open { background: var(--sa-soft); box-shadow: inset 0 0 0 .5px var(--sa-hair); }
   .dev.rev { opacity: .62; }
   .dev-main { width: 100%; display: flex; align-items: center; gap: 12px; padding: 11px 10px; border: 0; background: none; color: inherit;
     font: inherit; text-align: left; cursor: pointer; border-radius: 16px; }
-  .dev-main:hover { background: rgba(255,255,255,.04); }
+  .dev-main:hover { background: var(--sa-press); }
   .dev-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .dev-name b { font-size: 14.5px; }
   .dev-name small { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -398,10 +398,10 @@
   .kv { display: grid; grid-template-columns: 76px 1fr; gap: 5px 12px; font-size: 12.5px; padding: 4px 0; }
   .kv span { color: var(--sa-tx3); }
   .kv b { font-weight: 500; color: var(--sa-tx2); min-width: 0; overflow-wrap: anywhere; }
-  .kv.sys { margin-top: 6px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.05); }
+  .kv.sys { margin-top: 6px; padding: 10px 12px; border-radius: 12px; background: var(--sa-soft); }
   .hint { font-size: 12px; line-height: 1.5; color: var(--sa-tx3); padding: 4px 0; }
   .shot { margin-top: 8px; border: 0; padding: 0; background: none; cursor: zoom-out; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
-  .shot img { max-width: 100%; max-height: 420px; border-radius: 12px; box-shadow: inset 0 0 0 .5px rgba(255,255,255,.14), 0 6px 20px rgba(0,0,0,.35); }
+  .shot img { max-width: 100%; max-height: 420px; border-radius: 12px; box-shadow: inset 0 0 0 .5px var(--sa-hair), 0 6px 20px rgba(0,0,0,.2); }
   .shot span { font-size: 11px; }
   .sub-h { font-size: 12px; font-weight: 650; color: var(--sa-tx3); margin-top: 10px; }
 
@@ -409,10 +409,10 @@
   .ev-list { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; }
   .ev-list.pad { padding: 8px 18px 0; }
   .ev { display: grid; grid-template-columns: 76px auto 1fr; gap: 10px; align-items: baseline; font-size: 12.5px; padding: 5px 0;
-    border-top: .5px solid rgba(255,255,255,.06); }
+    border-top: 1px solid var(--sa-sep); }
   .ev:first-child { border-top: 0; }
-  .ev.bad > span:nth-child(2) { color: #ff8078; }
-  .ev.act > span:nth-child(2) { color: #6cb2ff; }
+  .ev.bad > span:nth-child(2) { color: var(--sa-red); }
+  .ev.act > span:nth-child(2) { color: var(--sa-tx); font-weight: 600; }
 
   /* 英文界面：标签/时间/状态列更长，只在 :lang(en) 下放宽，中文外观不变 */
   .ev:lang(en) { grid-template-columns: 112px auto 1fr; }

@@ -66,7 +66,7 @@
 
 <style>
   .acols { grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr) 90px 90px 70px; }
-  .me { margin-left: 8px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; color: #0a84ff; background: rgba(10, 132, 255, .14); }
+  .me { margin-left: 8px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; color: var(--sa-tx); background: var(--sa-fill); }
   .acts { display: flex; justify-content: flex-end; }
   .uhead { display: flex; align-items: center; gap: 8px; }
   @media (max-width: 720px) {

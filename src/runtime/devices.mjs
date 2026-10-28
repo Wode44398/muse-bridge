@@ -16,6 +16,7 @@ import { listDevices, deviceById } from './device-registry.mjs';
 import { dispatch, isDeviceOnline, deviceRuntime } from './device-control.mjs';
 import { deviceAudit } from './device-audit.mjs';
 import { ownerAllows, logAccess, deniedMessage } from './admin-access.mjs';
+import { isLocalDirect } from './host-secret.mjs';
 
 /** 设备通道总开关：config.json devices=false 关掉（默认开）。 */
 // 插件「设备」（plugins/catalog.mjs）：开关原是 config.json 的 devices，现在由插件管（默认值仍取 config.devices）。
@@ -58,6 +59,33 @@ export function serverMachineId() {
   if (machineIdMemo !== null) return machineIdMemo;
   primeServerMachineId();
   return '';
+}
+
+/**
+ * 这台设备就是 bridge 所在的电脑（服主自己那台）：挂上来时是本机直连（info.local，服务端判的，不是设备自报），
+ * 或自报的机器指纹与本机相同；带上 req 时这次请求本身是本机直连也算。客户端更新据此分流（runtime/client-release.mjs）。
+ */
+export function onServerMachine(d, req = null) {
+  if (req && isLocalDirect(req)) return true;
+  const info = d ? (deviceRuntime(d.id).info || d.client || null) : null;
+  if (!info) return false;
+  if (info.local === true) return true;
+  const mid = serverMachineId();
+  return !!(mid && info.machineId && info.machineId === mid);
+}
+
+/**
+ * 服务端所在电脑上那个在线、能远程更新的桌面客户端（打包形态的本机服务端就由它托管，更新它 = 连同服务端一起更新）。
+ * 有多台取最近挂上来的；没有回 null。
+ */
+export function serverHostDevice() {
+  let best = null, bestSince = -1;
+  for (const d of listDevices({ owner: null })) {
+    const rt = deviceRuntime(d.id);
+    if (!rt.online || !rt.info || rt.info.shell !== 'desktop' || !rt.info.update || !onServerMachine(d)) continue;
+    if (rt.since > bestSince) { best = d; bestSince = rt.since; }
+  }
+  return best;
 }
 
 /** 给前端 / 工具看的设备：注册信息 + 在线状态。不含令牌哈希与机器指纹。 */

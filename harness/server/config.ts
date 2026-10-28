@@ -22,6 +22,7 @@ import {
   customProviderKey,
   getCustomProvider,
   isCustomProviderId,
+  isSharedProvider,
   savedBuiltinProviderKey,
   setBuiltinProviderKey,
   setCustomProviderKey,
@@ -86,7 +87,8 @@ const overrideKeys: Partial<Record<ProviderId, string>> = {};
 function providerDefaults(p: ProviderId): { model: string; baseUrl?: string } {
   if (isCustomProviderId(p)) {
     const c = getCustomProvider(p);
-    if (c) return { model: c.defaultModel, baseUrl: c.baseUrl };
+    // 管理员共享给成员的服务：地址不进成员的配置（/api/info、/api/config 会下发）；适配器照样现读注册表里的地址
+    if (c) return { model: c.defaultModel, ...(isSharedProvider(p) ? {} : { baseUrl: c.baseUrl }) };
   }
   switch (p) {
     case "anthropic":
@@ -312,6 +314,9 @@ function preferredModel(p: ProviderId): { model: string; thinking: ThinkingLevel
 }
 
 export function getConfig(): RuntimeConfig {
+  // 成员实例：选着的是管理员共享的服务，管理员取消了共享（或删了）——退回默认厂商，别停在一个成员自己修不了的服务上
+  //（setConfig 收尾会再调一次这里，那时已经换掉了，不会再进来）
+  if (tenantMode() && isCustomProviderId(config.provider) && !getCustomProvider(config.provider)) forgetProvider(config.provider);
   return { ...config };
 }
 
@@ -326,7 +331,7 @@ export function defaultBaseUrl(provider: ProviderId): string | undefined {
 // 他自己建的自定义服务），才认他给的 baseUrl；否则地址一律是服务端配置的默认地址。配置接口（resolveConfig）当场拒，
 // 建 adapter 时（session.ts，子 agent 跟着会话走）再按 effectiveBaseUrl 兜一遍——落盘的会话配置、之前写进全局配置的地址都绕不过去。
 function usesOwnKey(provider: ProviderId): boolean {
-  if (isCustomProviderId(provider)) return Boolean(customProviderKey(provider));
+  if (isCustomProviderId(provider)) return !isSharedProvider(provider) && Boolean(customProviderKey(provider));
   return Boolean(overrideKeys[provider] || savedBuiltinProviderKey(provider));
 }
 
@@ -450,6 +455,9 @@ export function sessionConfigSnapshot(raw: unknown): RuntimeConfig {
 
 export function setConfig(patch: ConfigPatch): RuntimeConfig {
   const { apiKey, ...rest } = patch;
+  if (typeof apiKey === "string" && apiKey.trim() && isSharedProvider(rest.provider ?? config.provider)) {
+    throw new Error("这是管理员共享的服务，只有管理员能修改");
+  }
   config = resolveConfig(config, rest, { ownKey: typeof apiKey === "string" && Boolean(apiKey.trim()) });
   if (typeof apiKey === "string" && apiKey.trim()) {
     // 一律落加密存储（重启还在）。内置几家以前只在内存，harness 一重启就丢
