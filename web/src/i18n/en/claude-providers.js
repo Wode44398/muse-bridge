@@ -315,4 +315,17 @@ export default {
   '模型服务最多 10 个': 'You can add up to 10 model providers',
   '这个身份不能用自定义 API': 'Custom APIs aren’t available for this identity',
   '这里不能用自定义 API': 'Custom APIs aren’t available here',
+  // 管理员共享给成员（2026-10-28）
+  '共享给成员': 'Share with members',
+  '这台服务器上的成员也能在模型菜单里选用这个服务，用量记在这把 Key 上、计入他们的额度；他们看不到地址和 Key，也改不了':
+    'Members on this server can pick this provider in their model menu too. Usage is billed to this key and counts against their quota; they can’t see or change the URL or key.',
+  '已共享给成员': 'Shared with members',
+  '管理员共享': 'Shared by admin',
+  '管理员共享给你的服务': 'Providers shared with you by the admin',
+  '这些服务由管理员接入，在输入框模型菜单的 More models 里直接选用。用的是管理员的 API Key，计入本站额度；地址和 Key 你看不到，也改不了，有问题请联系管理员。':
+    'The admin connected these providers. Pick them under More models in the message box’s model menu. They use the admin’s API key and count against this site’s quota; you can’t see or change the URL or key. Contact the admin if something’s wrong.',
+  // 成员用管理员共享的服务出错（代理 lentMessage、claude.mjs customErrorCard）：前半句是上面那些人话去掉地址后的样子
+  '{msg}。这是管理员共享的服务，地址和 Key 由管理员维护，请联系管理员。': '{msg}. This provider is shared by the admin, who manages its URL and key. Please contact the admin.',
+  '服务出错了': 'The provider ran into an error',
+  '{msg}（这是管理员共享的服务，请联系管理员）': '{msg} (This provider is shared by the admin. Please contact the admin.)',
 };

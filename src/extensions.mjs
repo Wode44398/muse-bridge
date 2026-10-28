@@ -52,7 +52,7 @@ const dirPrefix = (scope) => (scope === 'shared' ? 'shared/' : '');
 const MAX_ITEMS = 400;   // 市场一键装整包技能后会多不少，200 不够用
 const httpErr = (status, msg) => Object.assign(new Error(msg), { status });
 // 控制字符清洗（\p{Cc} 含 NUL~US 与 DEL），防名字/描述携带终端注入或破坏 JSON 展示。
-const stripCc = (s) => String(s ?? '').replace(/\p{Cc}/gu, '');
+export const stripCc = (s) => String(s ?? '').replace(/\p{Cc}/gu, '');
 
 // 支持矩阵（值为 false=该 agent 不支持此类型；'stdio'=仅 stdio 传输时支持）。
 export const EXT_SUPPORT = {
@@ -103,6 +103,32 @@ function saveStore(store) {
   mkdirSync(EXT_ROOT, { recursive: true });
   writeJson(EXT_REGISTRY_FILE, store, 2);
   rebuildClaudeAggregate(store);
+  writeSharedSkillsView(store);
+}
+
+// —— 全服技能清单（给成员的 dimensio 实例）——
+// 成员实例不许读 registry.json（里面有连接器的凭据键与管理员自用的扩展），所以单独生成一份只含【全服统一的技能】的清单：
+// 字段只留目录与说明，root 写死扩展根（item.dir 相对它）。成员实例经 DIMENSIO_SKILL_REGISTRIES 读这份 + 他自己的那份
+// （member-skills.mjs）。每次注册表保存时重写；成员实例拉起前 ensureSharedSkillsView() 补一次（老数据从没写过）。
+export const SHARED_SKILLS_VIEW = path.join(EXT_ROOT, 'runtime', 'shared-skills.json');
+const viewSkill = (x) => ({
+  id: x.id, type: 'skill', name: x.name, description: x.description || '',
+  ...(x.pkg ? { pkg: x.pkg } : {}), ...(x.short ? { short: x.short } : {}),
+  enabled: !!x.enabled, agents: { dimensio: !!x.agents?.dimensio }, dir: x.dir, entry: x.entry || 'SKILL.md',
+});
+function writeSharedSkillsView(store) {
+  try {
+    const items = store.items.filter((x) => x.type === 'skill' && extScope(x) === 'shared').map(viewSkill);
+    mkdirSync(path.dirname(SHARED_SKILLS_VIEW), { recursive: true });
+    writeJson(SHARED_SKILLS_VIEW, { root: EXT_ROOT, items }, 2);
+  } catch (e) {
+    console.error('[extensions] 全服技能清单写入失败：', e?.message || e);
+  }
+}
+export function ensureSharedSkillsView() {
+  const store = readStore();
+  if (!registryError) writeSharedSkillsView(store);
+  return SHARED_SKILLS_VIEW;
 }
 
 // —— S3（#36、X02）：连接器凭据不进注册表 ——
@@ -204,7 +230,7 @@ function dropSecrets(ids) {
 const now = () => Date.now();
 const newId = () => 'x' + crypto.randomBytes(8).toString('hex');
 // 目录名安全化：只留常规字符，防路径注入；全非常规字符（如纯中文名）就退回 id。
-const slugify = (name, fallback) => (String(name).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)) || fallback;
+export const slugify = (name, fallback) => (String(name).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)) || fallback;
 
 // —— frontmatter 解析（只认 SKILL.md 需要的 name/description/version 三项，容错手写，不引 yaml 库）——
 // 支持单行值（含引号）与 |/> 块标量（后续缩进行拼接）。
@@ -244,7 +270,7 @@ const runTar = (args) => execFileAsync(BSDTAR(), args, {
   maxBuffer: 2 * 1024 * 1024,
 });
 
-async function extractArchive(buf, destDir) {
+export async function extractArchive(buf, destDir) {
   mkdirSync(destDir, { recursive: true });
   const tmpFile = path.join(destDir, '..', `.up-${crypto.randomBytes(4).toString('hex')}.bin`);
   writeFileSync(tmpFile, buf);
@@ -265,6 +291,10 @@ async function extractArchive(buf, destDir) {
 export async function packExtensionZip(item) {
   const dir = extensionDir(item);
   if (!dir) throw httpErr(400, '该扩展没有文件目录');
+  return packDirZip(dir);
+}
+
+export async function packDirZip(dir) {
   const out = path.join(EXT_ROOT, 'runtime', `.dl-${crypto.randomBytes(4).toString('hex')}.zip`);
   mkdirSync(path.dirname(out), { recursive: true });
   try {
@@ -275,7 +305,7 @@ export async function packExtensionZip(item) {
 }
 
 // 解包后的安全清扫：剔除凭据形状文件与符号链接（zip 里塞 symlink 可指向包外）。
-function sanitizeTree(dir) {
+export function sanitizeTree(dir) {
   for (const ent of readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, ent.name);
     if (ent.isSymbolicLink()) { rmSync(p, { recursive: true, force: true }); continue; }
@@ -284,7 +314,7 @@ function sanitizeTree(dir) {
   }
 }
 
-function treeStats(dir) {
+export function treeStats(dir) {
   let files = 0, size = 0;
   const walk = (d) => {
     for (const ent of readdirSync(d, { withFileTypes: true })) {
@@ -681,7 +711,7 @@ function rebuildClaudeAggregate(store = readStore()) {
   for (const agg of AGGREGATES) rebuildAggregate(agg, store.items.filter((x) => extScope(x) === agg.scope));
 }
 
-function rebuildAggregate({ dir: aggDir, name, description }, items) {
+export function rebuildAggregate({ dir: aggDir, name, description }, items, resolveDir = extensionDir) {
   const skillsDir = path.join(aggDir, 'skills');
   try {
     // 逐个拆链再删目录：junction 用 rmdir 删链接本身；rmSync recursive 兜底普通目录。
@@ -697,7 +727,7 @@ function rebuildAggregate({ dir: aggDir, name, description }, items) {
     writeJson(path.join(aggDir, '.claude-plugin', 'plugin.json'), { name, description, version: '1.0.0' }, 2);
     mkdirSync(skillsDir, { recursive: true });
     for (const item of active) {
-      const src = extensionDir(item);
+      const src = resolveDir(item);
       if (!src || !existsSync(src)) continue;
       const link = path.join(skillsDir, path.basename(item.dir));
       try { symlinkSync(src, link, 'junction'); }

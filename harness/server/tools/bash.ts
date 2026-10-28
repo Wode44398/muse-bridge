@@ -287,7 +287,7 @@ export function commandPolicyViolation(command: string, root: string, access: "w
   const hostKill = hostKillViolation(command);
   if (hostKill) return `Command blocked to protect the host: ${hostKill}`;
   // 租户模式的禁区字面兜底（引号拼接等抽不出候选路径的写法），见 tenant.ts。
-  const deniedRoot = deniedRootLiteral(command);
+  const deniedRoot = deniedRootLiteral(command, tenantMode() ? grantedSkillDirs() : []);
   if (deniedRoot) return `Command blocked by workspace policy: it references ${deniedRoot}, which belongs to the host or to another user.`;
   // 访问范围锁（租户恒 workspace）：调用方传进来的 access 被谁改成 full 都不算数。
   const scope = commandScopeViolation(command, root, accessLock() ?? access, readRoots);
@@ -930,7 +930,8 @@ export function commandScopeViolation(
     // Machine-level tools (<harness>/tools, e.g. ifind) and Bridge extension
     // skills are sanctioned in every access mode; everything else outside the
     // workspace is blocked.
-    if (candidate && sanctionedToolDirs().some((dir) => inside(dir, candidate))) continue;
+    // 成员实例对技能目录只读：全服技能是大家共用的，往里写等于改了所有人的（写落到下面按越界拒）。
+    if (candidate && !(write && tenantMode()) && sanctionedToolDirs().some((dir) => inside(dir, candidate))) continue;
     if (candidate && !inside(path.resolve(root), path.resolve(candidate))) {
       if (!write && pureRead && (insideReadOnlyRoot(candidate) || readRoots.some((dir) => inside(path.resolve(dir), path.resolve(candidate))))) continue;
       return `absolute path escapes the workspace: ${raw}${outsideHint(candidate, write)}`;

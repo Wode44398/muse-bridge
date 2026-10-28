@@ -796,3 +796,96 @@ test('部署方强制走出站代理（BRIDGE_PROXY_FORCED / config.json proxyFo
     server.closeAllConnections?.(); server.close();
   }
 });
+
+// 管理员共享给成员（2026-10-28）：成员用得上、看不见地址和 Key、改不了；令牌按成员算；报错不带地址。
+test('共享：管理员标了 shared 的成员才看得到；只有名字和模型，没有地址；改 / 删 / 拿 Key 都够不着；取消共享立刻没了', () => {
+  const alice = 'u:alice-share';
+  const sh = P.createProvider({ name: '团队网关', baseUrl: 'https://team.example.com/anthropic', apiKey: 'k-team', shared: true, models: [{ id: 'team-1' }] });
+  const priv = P.createProvider({ name: '私用', baseUrl: 'https://priv.example.com/anthropic', apiKey: 'k-priv', models: [{ id: 'priv-1' }] });
+  assert.equal(P.getProvider(sh.id).shared, true);
+  assert.equal(P.listProviders().find((p) => p.id === sh.id).shared, true);
+  // 成员：模型清单里有共享的（managed、不带地址），没有私用的
+  const view = P.customModelsView(alice);
+  assert.deepEqual(view.map((m) => m.id), [P.customModelId(sh.id, 'team-1')]);
+  assert.equal(view[0].managed, true);
+  assert.equal(view[0].baseUrl, '');
+  assert.ok(!JSON.stringify(view).includes('team.example.com'));
+  const sv = P.sharedProvidersView(alice);
+  assert.deepEqual(sv.map((p) => p.id), [sh.id]);
+  assert.ok(!JSON.stringify(sv).includes('team.example.com') && !JSON.stringify(sv).includes('k-team'));
+  assert.deepEqual(P.sharedProvidersView('admin'), [], '管理员自己没有「共享过来的」');
+  // 解析得到（拿到的是管理员那份：owner = admin，代理据此取管理员的 Key）；私用的解析不到
+  const r = P.resolveCustomModel(P.customModelId(sh.id, 'team-1'), alice);
+  assert.equal(r.provider.owner, 'admin');
+  assert.equal(P.resolveCustomModel(P.customModelId(priv.id, 'priv-1'), alice), null);
+  assert.equal(P.resolveSubagentModel('team-1', alice).provider.id, sh.id);
+  // 成员自己的注册表里没有它：列表、改、删、Key 都够不着
+  assert.equal(P.listProviders(alice).length, 0);
+  assert.equal(P.getProvider(sh.id, alice), null);
+  assert.equal(P.providerKey(sh.id, alice), '');
+  assert.throws(() => P.updateProvider(sh.id, { baseUrl: 'https://evil.example.com' }, alice), /没有这个模型服务/);
+  assert.equal(P.deleteProvider(sh.id, alice), false);
+  assert.equal(P.getProvider(sh.id).baseUrl, 'https://team.example.com/anthropic');
+  // 成员自己的服务标 shared 也不算
+  const own = P.createProvider({ name: '我的', baseUrl: 'https://mine.example.com/anthropic', shared: true, models: [{ id: 'mine-1' }] }, alice);
+  assert.equal(own.shared, false);
+  assert.equal(P.updateProvider(own.id, { shared: true }, alice).shared, false);
+  assert.ok(own.id !== sh.id);
+  assert.deepEqual(P.customModelsView(alice).map((m) => m.provider), [own.id, sh.id], '自己的在前、共享的在后');
+  assert.equal(P.customModelsView(alice).find((m) => m.provider === own.id).managed, undefined);
+  // 没提 shared 的修改不动它；停用 / 取消共享，成员立刻没了
+  P.updateProvider(sh.id, { name: '团队网关 2' });
+  assert.equal(P.getProvider(sh.id).shared, true);
+  P.updateProvider(sh.id, { enabled: false });
+  assert.equal(P.resolveCustomModel(P.customModelId(sh.id, 'team-1'), alice), null);
+  P.updateProvider(sh.id, { enabled: true, shared: false });
+  assert.equal(P.findProvider(sh.id, alice), null);
+  assert.deepEqual(P.sharedProvidersView(alice), []);
+  P.deleteProvider(sh.id); P.deleteProvider(priv.id); P.deleteProvider(own.id, alice);
+});
+
+test('共享：成员 CLI 的令牌按成员算（不是管理员的）；代理用管理员的 Key 发、不查公网；摸不到没共享的；报错不带地址', async () => {
+  let mode = 'ok';
+  const up = await fakeUpstream((req, res) => {
+    if (mode === '404') { res.writeHead(404, { 'content-type': 'text/html' }); res.end('<html>nope</html>'); return; }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ type: 'message', content: [{ type: 'text', text: 'OK' }], usage: { input_tokens: 1, output_tokens: 1 } }));
+  });
+  try {
+    const alice = 'u:alice-share2';
+    // 地址是本机：共享服务不过成员的公网限制（地址是管理员定的）
+    const sh = P.createProvider({ name: 'Team', baseUrl: up.url, apiKey: 'k-team', shared: true, compat: { useProxy: false }, models: [{ id: 'big-1' }] });
+    const priv = P.createProvider({ name: 'Priv', baseUrl: up.url, apiKey: 'k-priv', compat: { useProxy: false }, models: [{ id: 'big-1' }] });
+    const r = P.resolveCustomModel(P.customModelId(sh.id, 'big-1'), alice);
+    const envA = await X.providerEngineEnv({}, { provider: r.provider, model: r.model, effort: '', owner: alice });
+    const envH = await X.providerEngineEnv({}, { provider: P.getProvider(sh.id), model: P.getProvider(sh.id).models[0], effort: '' });
+    const tok = (u) => new URL(u).pathname.split('/')[1];
+    assert.notEqual(tok(envA.ANTHROPIC_BASE_URL), tok(envH.ANTHROPIC_BASE_URL), '成员的 CLI 拿不到管理员的令牌');
+    assert.ok(!JSON.stringify(envA).includes('k-team'));
+    const post = (u) => fetch(u + '/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'big-1', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] }) });
+    const ok = await post(envA.ANTHROPIC_BASE_URL);
+    assert.equal(ok.status, 200);
+    assert.equal(up.seen.at(-1).headers['x-api-key'], 'k-team');
+    // 成员令牌换成管理员没共享的服务 id：解析不到
+    const cross = await post(envA.ANTHROPIC_BASE_URL.replace('/p/' + sh.id + '/', '/p/' + priv.id + '/'));
+    assert.equal(cross.status, 400);
+    assert.equal(up.seen.length, 1);
+    // 上游 404（地址不对）：给成员的话不带地址、不叫他去设置里改；管理员那边原话照旧
+    mode = '404';
+    const bad = await (await post(envA.ANTHROPIC_BASE_URL)).json();
+    const host = new URL(up.url).host;
+    assert.ok(!bad.error.message.includes(host) && !bad.error.message.includes('127.0.0.1'), bad.error.message);
+    assert.match(bad.error.message, /联系管理员/);
+    assert.doesNotMatch(bad.error.message, /去「设置|检测连接/);
+    const adm = await (await post(envH.ANTHROPIC_BASE_URL)).json();
+    assert.ok(adm.error.message.includes(host), '管理员自己看到的是完整原话');
+    // 日志记在管理员那份（花的是他的 Key）
+    assert.ok(X.providerLog(sh.id).length >= 2);
+    assert.equal(X.providerLog(sh.id, alice).length, 0);
+    // 取消共享：成员的令牌立刻解析不到
+    P.updateProvider(sh.id, { shared: false });
+    mode = 'ok';
+    assert.equal((await post(envA.ANTHROPIC_BASE_URL)).status, 400);
+    P.deleteProvider(sh.id); P.deleteProvider(priv.id);
+  } finally { up.close(); }
+});

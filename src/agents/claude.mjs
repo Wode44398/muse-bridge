@@ -65,6 +65,7 @@ import { playbookSummary, playbookForMention } from '../runtime/phone-playbook.m
 import { isControlOnline } from '../runtime/phone-control.mjs';
 import { devicesEnabled, ownDevices } from '../runtime/devices.mjs';
 import { claudeExtensionsFor, sharedExtensionDirs, SHARED_ROOT } from '../extensions.mjs';
+import { memberClaudePlugins, memberSkillRootIfAny } from '../member-skills.mjs';
 import { PHONE_FS, PHONE_CONTROL, CLAUDE_IN_CHROME, CLAUDE_CHROME_CONFIG_DIR } from '../config/index.mjs';
 import { ensureChromeNativeHost } from '../runtime/chrome-native-host.mjs';
 import { pendingRewindAnchor, clearPendingRewind, findRetryAnchor, setPendingRewind } from './claude-rewind.mjs';
@@ -233,7 +234,7 @@ function customIdentityNudge({ provider, model }) {
 
 // 自定义 API 这一轮出错 → 错误卡文案。CLI 的 result 形如「API Error: 400 {"type":"error","error":{"message":"…"}}」：
 // 抠出 error.message（代理改写过的人话），抠不出就用原文。
-function customErrorCard({ provider }, result, apiStatus) {
+function customErrorCard({ provider, lent }, result, apiStatus) {
   const raw = String(result || '').trim();
   let msg = '';
   const i = raw.indexOf('{');
@@ -242,6 +243,8 @@ function customErrorCard({ provider }, result, apiStatus) {
   }
   msg = String(msg || raw.replace(/^API Error:\s*/i, '') || (apiStatus ? 'HTTP ' + apiStatus : '没有返回内容')).slice(0, 600);
   const title = apiStatus === 429 ? `模型服务「${provider.name}」限流了` : `模型服务「${provider.name}」出错了`;
+  // 管理员共享的服务：成员改不了，代理已经给了「请联系管理员」，不再指他去设置里测试
+  if (lent) return { title, hint: msg + (/联系管理员/.test(msg) ? '' : '（这是管理员共享的服务，请联系管理员）') };
   return { title, hint: msg + (/设置 › Claude/.test(msg) ? '' : '（设置 › Claude › 模型服务里可以测试连接）') };
 }
 
@@ -455,10 +458,17 @@ export function maskSharedRoot(cmd, { root = SHARED_ROOT, platform = process.pla
   for (const f of [...forms].sort((a, b) => b.length - a.length)) s = s.replace(new RegExp(esc(f), platform === 'win32' ? 'gi' : 'g'), '__bridge_shared_ext__');
   return s;
 }
-// 沙箱围栏（PreToolUse 主闸、canUseTool 复检、定时任务三处同一口径）：多根围栏 + 全服扩展只读豁免。
+// 沙箱围栏（PreToolUse 主闸、canUseTool 复检、定时任务三处同一口径）：多根围栏 + 全服扩展只读豁免
+// + 成员自己添加的技能目录（member-skills.mjs，只有他本人的那一棵）同样只读豁免。
 export function sandboxFence(ctx, name, input) {
-  if (sharedExtRead(name, input)) return null;
-  const ti = (name === 'Bash' || name === 'PowerShell') && input && typeof input.command === 'string' ? { ...input, command: maskSharedRoot(input.command) } : input;
+  const mine = ctx?.kind === 'user' && !ctx.snap ? memberSkillRootIfAny(ctx.user) : null;
+  if (sharedExtRead(name, input) || (mine && sharedExtRead(name, input, { root: mine }))) return null;
+  let ti = input;
+  if ((name === 'Bash' || name === 'PowerShell') && input && typeof input.command === 'string') {
+    let command = maskSharedRoot(input.command);
+    if (mine) command = maskSharedRoot(command, { root: mine });
+    ti = { ...input, command };
+  }
   return fenceViolation(allowedRoots(ctx), (root) => sandboxViolation(name, ti, root));
 }
 
@@ -716,6 +726,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 服务 / 模型被删或停用就直说，不悄悄换成别的模型。
   const cpOwner = snap ? null : customOwner(ctx);
   const custom = isCustomModelId(model) && cpOwner ? resolveCustomModel(model, cpOwner) : null;
+  // 用的是不是这个人自己的 Key：成员用管理员共享的服务时 custom.provider 是管理员那份（owner = 管理员），花的是管理员的钱，
+  // 照常过额度闸门、记轮数（runtime/claude-providers.mjs 文件头）
+  const ownKey = !!custom && (custom.provider.owner || cpOwner) === cpOwner;
   if (isCustomModelId(model) && !custom) {
     if (isSpare || !res) return;
     writeSseHeaders(res);
@@ -830,6 +843,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // mcpServers。管理员自用的那一套只注入 admin 非沙箱会话（扩展可带任意脚本/凭据）；管理员「全服统一」
   // 加装的那一套也注入注册用户（沙箱）。快照访客两样都没有。每轮现读注册表，改动下一条消息即生效。
   const ext = claudeExtensionsFor(ctx, { snap });
+  if (ctx.kind === 'user' && !snap) ext.plugins.push(...memberClaudePlugins(ctx.user));   // 成员自己添加的技能（mine:<名>）
   // 拉取请求（mcp__pr__* + 流里认 PR）：gh 令牌是主机本人的 GitHub 账号——与 remotePc 同一道门（pr-monitor.prCapable）。
   const prOn = pluginOn('pr') && !snap && prCapable(ctx);
   // 反提示：全局开关开着但本轮没注入时，明确告诉 Claude「这轮没有」——旧会话 transcript
@@ -873,7 +887,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 自定义服务填的是官方 api.anthropic.com + 自己的 Key：fast 由本机代理加 speed 与 beta 头（CLI 那套 settings.fastMode 点不亮，见 providerEngineEnv）
   const customFast = !!(fast && custom && customSupportsFast(custom.provider, custom.model));
   const engineEnv = custom
-    ? await providerEngineEnv(claudeEngineEnv(ctx) || { ...process.env }, { provider: custom.provider, model: custom.model, effort: customEffort, fast: customFast })
+    ? await providerEngineEnv(claudeEngineEnv(ctx) || { ...process.env }, { provider: custom.provider, model: custom.model, effort: customEffort, fast: customFast, owner: cpOwner })
     : claudeEngineEnv(ctx);
   markTurn(req, 'env');
   // 额度事件记回本轮启动时的那个号（号池下各号额度分槽，轮中切号不串）。
@@ -925,7 +939,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     switches: [!!ctx.sandbox, !!ctx.shell, !!ctx.allowGemini, phoneFsOn, phoneControlOn, originDevice || '',
       browserOn, termOn, wsToolsOn, deviceOn, chromeOn, !!chromeSplit, wantSuggest, sessionsOn, vizOn && vizPf],
     perm: [permPolicy, allowSkip],
-    provider: custom ? providersRev(cpOwner) : 0,   // 自定义 API：服务配置改了（输出上限 / 小任务模型 / 提示缓存这些 spawn 时定的 env）下一条冷起
+    provider: custom ? providersRev(custom.provider.owner || cpOwner) : 0,   // 自定义 API：服务配置改了（输出上限 / 小任务模型 / 提示缓存这些 spawn 时定的 env）下一条冷起
     // 插件工具集（哪些插件、第几版代码、哪些工具）：CLI 起来时就定了，插件开关 / 重载后停放的 CLI 不能接着用。没有插件贡献时不加这一段，签名与插件化之前一致。
     ...(plug.sig.length ? { plugins: plug.sig } : {}),
   };
@@ -944,8 +958,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
 
   // 额度（三端拆分 P4）：注册用户超了每天 / 最近 7 天的上限就不开跑——放在「顶掉同会话上一轮」
   // 之前，被拒的重发不该把还在跑的那一轮停掉。管理员不走这里；快照访客的轮查铸造者的额度（billTo）。
-  // 自定义 API 的轮花的是这个人自己的 Key，不占也不受主机额度管（同下面记账处）。
-  if (billTo && !custom) {
+  // 自定义 API 的轮花的是这个人自己的 Key，不占也不受主机额度管（同下面记账处）；管理员共享的服务照常受管。
+  if (billTo && !ownKey) {
     const block = quotaBlock(billTo);
     if (block) {
       genWrite(res, { type: 'error', kind: 'quota', title: block.title, message: block.message });
@@ -1417,7 +1431,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   if (seamless) upstreamEvents.on('switch', onUpstreamSwitch);
   // 自定义服务的 fast 被上游拒（fast 额度 429 / 没开通）：代理已按普通速度重发，这里在对话里说一声，芯片的「· Fast」跟着熄
   const offFastFallback = customFast ? onFastFallback((ev) => {
-    if (ev.pid !== custom.provider.id || ev.owner !== cpOwner || gen.done) return;
+    if (ev.pid !== custom.provider.id || ev.owner !== (custom.provider.owner || cpOwner) || gen.done) return;
     const minutes = Math.round(ev.cooldownMs / 60_000);
     send({ type: 'model_notice', subtype: 'model_fallback', trigger: 'fast_refused', scope: 'local', from: model, to: model, text: `Fast mode 被拒（${ev.status}），已改用普通速度，${minutes} 分钟内不再尝试`, at: Date.now() });
     if (gen.sessionId) send({ type: 'session', sessionId: gen.sessionId, model, fast: false });
@@ -1515,7 +1529,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         // Sandboxed users: no dirs beyond their own cwd, and no agy/media MCP yet
         // (per-user media routing lands in the storage pass). admin: host as before.
         // 例外：注册用户可以只读管理员「全服统一」加装的扩展目录（技能正文与脚本）。
-        additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' && !snap ? sharedExtensionDirs() : []) : [UPLOADS, MEDIA],
+        additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' && !snap ? [...sharedExtensionDirs(), ...[memberSkillRootIfAny(ctx.user)].filter(Boolean)] : []) : [UPLOADS, MEDIA],
         // Sandboxed users get their OWN media MCP (artifacts -> their .bridge/media,
         // gen_media streamed to their gen); no agy. admin keeps antigravity + media.
         // 档 2 手机文件桥（PHONE_FS 开关，默认关）：命令下发到本 caller 的活跃 gen，
@@ -2325,7 +2339,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         // fast：本轮加速是否真点亮（开了开关也可能因冷却/额度不可用——前端据此显示实况）。
         // 自定义模型：CLI 报的是裸型号（mimo-v2.6-pro），前端拿它和所选（custom:<服务>:<模型>）对账会误判成「实际用的是别的模型」
         // 自定义服务的 fast 由代理发，实况 = 支持且这个服务不在 fast 退避期
-        send({ type: 'session', sessionId: msg.session_id, model: custom ? model : msg.model, ...(fast ? { fast: custom ? customFast && !fastCooling(custom.provider.id, cpOwner) : msg.fast_mode_state === 'on' } : {}), ...(ctx.worktree ? { wt: ctx.worktree } : {}) });
+        send({ type: 'session', sessionId: msg.session_id, model: custom ? model : msg.model, ...(fast ? { fast: custom ? customFast && !fastCooling(custom.provider.id, custom.provider.owner || cpOwner) : msg.fast_mode_state === 'on' } : {}), ...(ctx.worktree ? { wt: ctx.worktree } : {}) });
         // 权限模式实况（init 帧带 permissionMode；与要的不同 = CLI 降级了，如 auto 对这个模型不可用）+ 会话中切模式的控制口
         if (msg.permissionMode) notePermMode(msg.permissionMode, msg.permissionMode !== askedPermMode && runPermMode === askedPermMode ? 'fallback' : 'init');
         // 冷启动还没出 init 时用户在芯片上选过模式（控制口没登记，接口只记进会话记忆、回 next）：现在口通了，当场切过去。
@@ -2574,7 +2588,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           const u = msg.usage || {};
           const toks = (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
           const turnCost = costMeter.turnCost(msg.total_cost_usd);
-          if (!custom) try { addUsage(billTo, { tokens: toks, costUsd: turnCost }); } catch {}   // 自定义 API：自己的 Key，不进额度账本
+          // 自定义 API：自己的 Key，不进额度账本。管理员共享的服务进账本，但第三方型号的价钱 CLI 算不准，花费记 0、只记轮数与 token
+          if (!ownKey) try { addUsage(billTo, { tokens: toks, costUsd: custom ? 0 : turnCost }); } catch {}
           // 用量事件流（开源路线 C12，runtime/audit-log.mjs）：同一口径再落一条带维度的元数据——谁发的、归谁、记谁的账、
           // 哪个号、哪个模型。只追加写 _system/usage-events，不读、不影响额度与界面；是将来按组 / 按号分摊的底账。
           try { noteTurnUsage(ctx, { billTo, accountId: custom ? '' : servedAcct(), model: custom ? custom.model.id : modelFor(runModel), tokens: toks, cost: custom ? 0 : turnCost, source: snap ? 'snap' : ctx.actor && ctx.actor !== ctx.key ? 'proxy' : 'chat' }); } catch {}
@@ -2666,7 +2681,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         } else if (errored && custom && (apiStatus != null || authFailed || limitFrame || !hasText)) {
           // 自定义 API 的错：代理已把上游的 404 / 401 / 403 / 非 JSON 改写成人话（claude-providers-proxy.mjs upstreamError），
           // CLI 把它包成「API Error: 400 {…}」——抠出那句人话，别按「Claude 登录失效」「额度已满」分类。
-          const c = customErrorCard(custom, msg.result, apiStatus);
+          const c = customErrorCard({ ...custom, lent: !ownKey }, msg.result, apiStatus);
           send({ type: 'error', kind: 'model', title: c.title, hint: c.hint, resetsAt: 0, message: c.title + ' — ' + c.hint });
         } else if (errored && (!hasText || authFailed || /^\s*(not logged in|invalid api key)/i.test(String(msg.result)))) {
           // 认证类错误哪怕带了文字（「Not logged in · Please run /login」）也不当回答渲染：

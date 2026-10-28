@@ -17,6 +17,8 @@ export const cp = $state({
   ok: false,          // 拿到过完整配置（= 当前身份能用自定义 API）：设置入口显不显示看它
   member: false,      // 成员自己的那份（只许公网地址、有个数上限）
   maxProviders: 0,
+  canShare: false,    // 多用户服务器上的管理员：编辑器里出「共享给成员」开关
+  shared: [],         // 成员：管理员共享给他的服务（只有名字、预设、协议、模型名；只能用，不能改）
   proxyForced: false, // 部署方强制走出站代理：编辑器不摆「走出站代理」开关（服务端保存时也强制，见 runtime/claude-providers.mjs）
   modelsReady: false, // 模型清单到过（hello / 总线 / 拉取任一）：芯片据此区分「还没到」与「已停用」
   providers: [],
@@ -31,6 +33,8 @@ function adopt(r) {
   if (Array.isArray(r?.models)) { cp.models = r.models; cp.modelsReady = true; }
   if (Array.isArray(r?.presets)) cp.presets = r.presets;
   if (typeof r?.member === 'boolean') { cp.member = r.member; cp.maxProviders = r.maxProviders || 0; }
+  if (typeof r?.canShare === 'boolean') cp.canShare = r.canShare;   // 只在 GET 里有
+  if (Array.isArray(r?.shared)) cp.shared = r.shared;
   if (typeof r?.proxyForced === 'boolean') cp.proxyForced = r.proxyForced;   // 只在 GET 里有；总线推送不带，不动
   cp.ok = true;
 }

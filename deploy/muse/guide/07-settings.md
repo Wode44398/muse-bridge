@@ -19,6 +19,7 @@
 | 同上 | **「Agent 接入」**（Agent access） | 登录的人 |
 | **「插件」**（Plugins） | **「安卓 App」**——英文界面下也写这几个中文字 | 登录的人 |
 | **「服务器」**（Server） | **「扩展」**（Extensions）、**「额度与注册」**（Quotas & sign-ups）（多人用时才有）、**「服务端控制台」**（Admin console） | 只有管理员 |
+| **「个性化」**（Personalization） | **「扩展」**（Extensions）——只有技能：自己添加的技能，以及管理员给所有人加装的（见 05-customize.md「成员自己的技能」） | 注册账号（成员）；管理员这一行在「服务器」分组里 |
 | **「偏好」**（Preference） | **「通用」**（General）、**「外观」**（Appearance）、**「壁纸」**（Wallpaper）、**「流体壁纸」**（Fluid wallpaper） | 所有人；壁纸只在有主页（两个 agent 都开着）时有，流体壁纸只在主页用深色流体壁纸时有 |
 | （不带标题） | **「设备」** | 登录的人 |
 | （不带标题） | **「提交反馈」**（Send feedback）、**「关于」**（About） | 所有人 |
@@ -58,7 +59,7 @@
 | **「Git 与拉取请求」**（Git and pull requests）——能跑命令的身份 | **「分支前缀」**（Branch prefix）（默认 claude）、**「工作树起点」**（Worktree base）（当前分支 / 远端默认分支）、**「自动修复拉取请求」**（Auto-fix pull requests）、**「拉取请求合并或关闭后自动归档」**（Auto-archive after PR merge or close）、**「提交与拉取请求署名」**（Commit and PR attribution）。需要 VM 上 gh 已登录，见 02-claude-code.md「拉取请求」 |
 | **「会话管理」**（Session management） | **「归档不活跃的会话」**（Archive inactive sessions）：从不（默认）/ 1 / 2 / 7 / 14 / 30 天 |
 | **「通知」**（Notifications）（这台设备） | **「权限请求」**（Permission requests）、**「提问」**（Questions）、**「任务完成」**（Task complete）三项，**只管这台设备**；总开关在「通用」里，关着时这里写「通知总开关在『通用』里关着」 |
-| **「扩展与记忆」**（Extensions and memory）——只有管理员 | **「技能」**、**「连接器」**、**「插件」**——打开「扩展」页的对应标签，见 05-customize.md——、**「定时任务」**（Routines） |
+| **「扩展与记忆」**（Extensions and memory） | 管理员：**「技能」**、**「连接器」**、**「插件」**——打开「扩展」页的对应标签，见 05-customize.md——、**「定时任务」**（Routines）；注册账号只有 **「技能」**——他自己的技能，见 05-customize.md「成员自己的技能」——和 **「定时任务」** |
 | **「安全」**（Security）——只有管理员 | **「允许绕过权限模式」**（Allow bypass permissions mode）（默认关）、**「允许自动模式」**（Allow auto mode）（默认开），对这台服务器上所有人生效。打开绕过权限前会再确认一次 |
 
 - 灰着的选项后面写着「在下方『安全』里开启」：先去「安全」打开对应开关。
@@ -67,13 +68,17 @@
 
 ### 自定义 API（给 Claude 页接别家模型）
 
-**「设置 → Claude → 自定义 API」**（Settings → Claude → Custom API）：给 **Claude 页**接别家的模型，和 dimensio 里的「模型服务」不是一回事。管理员和每个注册账号各有自己的一份，互相看不到；成员的只能连公网地址、最多 10 个。
+**「设置 → Claude → 自定义 API」**（Settings → Claude → Custom API）：给 **Claude 页**接别家的模型，和 dimensio 里的「模型服务」不是一回事。管理员和每个注册账号各有自己的一份，互相看不到；成员的只能连公网地址、最多 10 个，用自己的 Key、不占本站额度。管理员可以把自己的服务共享给成员（见下面「共享给成员」）。
 
 - 点进去是一个整页面板 **「Claude · 自定义 API」**，**「添加服务」**：从常用厂商预设开始（DeepSeek、Kimi、OpenRouter 等，预设只填好地址和协议），或 **「从头配置」** 接任意兼容端点。
 - 填 **「接口地址」**（Base URL）、**「接口协议」**（API protocol）——OpenAI 兼容端点由 Muse Bridge 把 Claude Code 的请求整体翻译过去；兼容 Anthropic Messages 的端点则原样转发——再填 API Key（加密存在服务器上，不回传浏览器），点 **「从服务拉取」** 拿模型列表，选要用的，保存。也可以 **「手动添加」** 模型 ID。**「检测连接」**（Check connection）能试出地址和协议对不对。
 - 编辑器里还能设 **「调用参数」**、兼容选项（第三方端点不认 Claude Code 的一些字段时调这里）、超时与重试，以及 **「测试与日志」**。这台 Muse 上请求一律经 Muse 的出站代理，编辑器里没有代理开关。
 - 加好的模型出现在 Claude 页模型菜单的「More models」里，按服务分组；每个服务可以单独停用、从菜单里隐藏。
 - **在 Muse 上要先放行这个网站**：加之前让 Muse 跑 `allow-sites <接口地址>`，用户在 Muse 里批这个地址的审核卡（选项见 `../MUSE.md` 2.0）；没放行的话请求会超时（`../MUSE.md` 第 6 节）。
+- **共享给成员**（Share with members）——多人模式下的管理员才有：编辑器「连接」那一页的开关。打开后，卡片上写着 **「已共享给成员」**（Shared with members）；成员的模型菜单「More models」里出现这个服务（组名后面写着 **「管理员共享」**（Shared by admin）），他们的自定义 API 面板底下多一组 **「管理员共享给你的服务」**（Providers shared with you by the admin）只读卡片。
+  - 用的是管理员的 API Key，**计入成员的额度**（按轮数；第三方模型的金额算不准，花费记 0）。
+  - 成员看不到接口地址和 Key，改不了、删不了、测不了；出错时提示「这是管理员共享的服务……请联系管理员」，报错里不带地址。
+  - 管理员关掉共享或停用这个服务后，成员那边立刻消失，正在用它的会话会报「已被删除或停用」，换个模型再发。
 
 ## dimensio
 

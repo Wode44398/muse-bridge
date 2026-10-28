@@ -105,4 +105,8 @@ export default {
   '将删除它的全部文件，所有成员的会话都不再加载它。此操作不可撤销。': 'All its files will be deleted and no member’s sessions will load it anymore. This can’t be undone.',
   '将删除包内 {n} 个扩展的全部文件，所有成员的会话都不再加载它们。此操作不可撤销。': 'All files of the {n} extensions in this package will be deleted and no member’s sessions will load them anymore. This can’t be undone.',
   '给所有成员统一加装：去「发现」里挑现成的，或者自己上传。': 'Add extensions for every member: pick ready-made ones in Discover, or upload your own.',
+  '所有成员新会话生效': 'All members · new sessions',
+  // 成员自己的技能页
+  '服务器统一提供': 'Provided by the server',
+  '管理员给所有成员加装的技能，直接可用，不能在这里改动。': 'Skills your admin added for every member. They’re ready to use and can’t be changed here.',
 };

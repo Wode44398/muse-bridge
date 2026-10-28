@@ -1,6 +1,7 @@
 <script>
   // 设置 › Claude › 模型服务（自定义 API）的管理面板：两套设置外壳共用这一份，盖在设置页上面——
   // 宽屏是居中大对话框，手机（< 700px）是从底部滑上来的整页。视图：服务列表 → 选预设 → 编辑器。
+  // 多用户服务器：管理员标了「共享给成员」的卡上带「已共享」；成员的列表下面多一组「管理员共享」的只读卡（点不进编辑器）。
   // 返回键 / Esc 逐层后退：编辑器 → 列表 → 关闭（编辑器有未保存改动时先问）。
   import { onMount } from 'svelte';
   import SToggle from '../../settings/SToggle.svelte';
@@ -123,18 +124,42 @@
                   <span class="tag">{p.protocol === 'openai' ? 'OpenAI' : 'Anthropic'}</span>
                   <span class="tag">{t('{n} 个模型', { n: chatCount(p) })}</span>
                   {#if p.showInPicker === false}<span class="tag">{t('已隐藏')}</span>{/if}
+                  {#if p.shared && cp.canShare}<span class="tag share">{t('已共享给成员')}</span>{/if}
                   {#if !p.hasKey && p.authStyle !== 'none'}<span class="tag warn">{t('缺 Key')}</span>{/if}
                   {#if p.defaultModel}<span class="tag mono">{p.models.find((m) => m.id === p.defaultModel)?.label || p.defaultModel}</span>{/if}
                 </div>
               </div>
             {/each}
           </div>
-        {:else}
+        {:else if !cp.shared.length}
           <div class="empty">
             <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="10" y="14" width="44" height="14" rx="4"/><rect x="10" y="36" width="44" height="14" rx="4"/><circle cx="18" cy="21" r="1.6" fill="currentColor"/><circle cx="18" cy="43" r="1.6" fill="currentColor"/><path d="M26 21h12M26 43h8"/></svg>
             <div class="e1">{t('还没有接入任何模型服务')}</div>
             <div class="e2">{t('从常用厂商预设开始，填上 API Key、拉取模型就能用。')}</div>
             <button type="button" class="btn primary" onclick={() => (view = 'presets')}>＋ {t('添加服务')}</button>
+          </div>
+        {/if}
+        {#if cp.shared.length}
+          <!-- 成员：管理员共享给他的服务（只读：地址和 Key 不下发，点不进编辑器） -->
+          <div class="meta">{t('管理员共享给你的服务')}</div>
+          <div class="note">{t('这些服务由管理员接入，在输入框模型菜单的 More models 里直接选用。用的是管理员的 API Key，计入本站额度；地址和 Key 你看不到，也改不了，有问题请联系管理员。')}</div>
+          <div class="grid shared">
+            {#each cp.shared as p (p.id)}
+              <div class="card ro" class:dis={!p.enabled}>
+                <div class="c-top">
+                  {#if providerLogo(p)}<span class="av logo">{@html providerLogo(p)}</span>{:else}<span class="av" style:--h={hue(p.name)}>{initial(p.name)}</span>{/if}
+                  <div class="c-name">
+                    <div class="n1">{p.name}</div>
+                    <div class="n2">{p.note || p.models.find((m) => m.id === p.defaultModel)?.label || p.defaultModel}</div>
+                  </div>
+                </div>
+                <div class="c-tags">
+                  <span class="tag">{p.protocol === 'openai' ? 'OpenAI' : 'Anthropic'}</span>
+                  <span class="tag">{t('{n} 个模型', { n: p.models.length })}</span>
+                  <span class="tag share">{t('管理员共享')}</span>
+                </div>
+              </div>
+            {/each}
           </div>
         {/if}
       </div>
@@ -200,6 +225,7 @@
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
   .card { position: relative; padding: 16px; border: 1px solid var(--st-line); border-radius: 14px; background: var(--st-surface); transition: border-color .15s, box-shadow .15s, transform .15s; }
   .card:hover { border-color: color-mix(in srgb, var(--text) 22%, transparent); box-shadow: 0 6px 22px rgba(0, 0, 0, .08); transform: translateY(-1px); }
+  .card.ro:hover { border-color: var(--st-line); box-shadow: none; transform: none; }
   .card.dis .c-top .c-name, .card.dis .c-tags, .card.dis .av { opacity: .5; }
   .card-hit { position: absolute; inset: 0; border: 0; background: transparent; border-radius: inherit; cursor: pointer; }
   .c-top { position: relative; display: flex; align-items: center; gap: 12px; pointer-events: none; }
@@ -228,6 +254,8 @@
   .c-tags { position: relative; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; pointer-events: none; }
   .tag { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 7px; background: var(--st-seg); color: var(--st-text2); font-size: 11.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tag.warn { background: color-mix(in srgb, #e0a43b 18%, transparent); color: #b7791f; }
+  .tag.share { background: color-mix(in srgb, var(--st-primary) 12%, transparent); color: var(--st-text2); }
+  .grid.shared { margin-bottom: 8px; }
   .tag.mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11px; }
   .empty { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 56px 20px 24px; color: var(--st-muted); }
   .empty svg { width: 64px; height: 64px; opacity: .55; margin-bottom: 14px; }

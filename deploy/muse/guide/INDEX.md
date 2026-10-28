@@ -46,13 +46,13 @@
 | Claude 另开子会话、会话之间发消息、相关会话、建议的任务 | 02-claude-code.md「会话协作」 |
 | 拉取请求（PR）、合并、自动修复、gh 没登录 | 02-claude-code.md「拉取请求」 |
 | 对话里的交互图表、新对话落地页的用量统计 | 02-claude-code.md |
-| Claude 页接 DeepSeek / Kimi / OpenRouter 等别家模型（自定义 API） | 07-settings.md「自定义 API」 |
+| Claude 页接 DeepSeek / Kimi / OpenRouter 等别家模型（自定义 API）、管理员把服务共享给成员、成员菜单里的「管理员共享」 | 07-settings.md「自定义 API」 |
 | Agent 密钥、让别的 agent / Muse 经 HTTP 操作 Muse Bridge、`/agent` | 07-settings.md「Agent 接入」；Muse 自己怎么用：`../MUSE.md` 4.8 |
 | 管理员能不能看我的对话、管理员可见性、访问记录 | 07-settings.md「账户」；06-users-admin.md |
 | Claude 显示没配认证、用量 / 额度 | 02-claude-code.md；配令牌：`../MUSE.md` 4.4 |
-| dimensio 怎么换模型、加 key、换了 key 不生效、加自定义服务（OpenAI 兼容）、联网搜索、记忆、权限、子 agent、dimensio 的设置在哪 | 03-dimensio.md；加 key：`../MUSE.md` 4.5；key 不生效：08-faq.md |
+| dimensio 怎么换模型、加 key、换了 key 不生效、加自定义服务（OpenAI 兼容）、把自定义服务共享给成员、联网搜索、记忆、权限、子 agent、dimensio 的设置在哪 | 03-dimensio.md；加 key：`../MUSE.md` 4.5；key 不生效：08-faq.md |
 | 文件在哪、上传下载、大小限制、预览、新建 / 编辑 Markdown、压缩文件夹、隐藏文件、分享链接、密码、过期 | 04-files.md |
-| 技能、连接器、插件、MCP、给所有成员统一装（全服统一）、功能扩展、插件市场（有更新只提示）跟官方插件目录的区别 | 05-customize.md |
+| 技能、连接器、插件、MCP、给所有成员统一装（全服统一）、成员自己添加技能、功能扩展、插件市场（有更新只提示）跟官方插件目录的区别 | 05-customize.md |
 | 给朋友开账号、邀请码（作废、7 天）、改登录名、删除并归档、完全信任（原 Pro）、额度、成员高消耗功能、单人 / 多人、谁能用什么、服务端控制台、重启服务、看日志 | 06-users-admin.md |
 | 某个设置项是干什么的、语言、明暗外观、壁纸、通知、设备和端口转发 | 07-settings.md |
 | 一直转圈 / 等待模型回复、审核卡片、地址变了、费用、隐私、数据放在哪、备份 | 08-faq.md |

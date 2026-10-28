@@ -217,7 +217,8 @@ export function readVerdict(abs: string, root?: string): string | null {
   if (isCustomProviderStorePath(p)) return "Blocked by secret guard (dimensio's custom model services hold encrypted API keys)";
   if (isDesktopHostFile(p)) return "Blocked by secret guard (the desktop host descriptor carries the browser broker's secret)";
   // 租户模式的额外禁区（bridge 数据根、程序目录、别人的用户目录……；自己的根除外），见 tenant.ts。
-  if (insideDeniedRoot(p)) return "Blocked: this location belongs to the host or to another user";
+  // 给他的技能目录（自己添加的 + 全服的，都在 bridge 数据根里）照常可读——写由调用方另拦。
+  if (insideDeniedRoot(p) && !insideGrantedSkillDir(p)) return "Blocked: this location belongs to the host or to another user";
   if (root && isInside(path.resolve(root), p)) return null;
   if (isKeyMaterialPath(p)) return "Blocked by secret guard (key material outside the workspace)";
   const dot = homeDotEntry(p);

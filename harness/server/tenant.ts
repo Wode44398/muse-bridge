@@ -11,6 +11,7 @@
 //     租户自己的根在禁区里也照常可用。
 //   · 关掉的工具（DIMENSIO_DISABLED_TOOLS；没有命令行的租户关 Bash / Preview）与 provider
 //     （DIMENSIO_DISABLE_PROVIDERS，租户默认 local——本机 llama.cpp 是整机资源，停它会连带别人的）。
+//   · 技能只认 bridge 给的两份清单（DIMENSIO_SKILL_REGISTRIES：他自己添加的 + 全服的），那些技能目录在禁区里也照常只读。
 //   · 不连 bridge 的集成件：扩展注册表（里面有连接器凭据）、桌面壳浏览器宿主、管理员的设备通道（主机密钥）、用户的 Edge、
 //     任意本机调试端口（Browser attach）。设备工具照给，但 bridge 发的是按人令牌：只能操作这个用户自己名下的电脑
 //     （同 Claude 给注册用户的 mcp__device__*，见 tools/localpc.ts）。
@@ -78,12 +79,16 @@ export function insideDeniedRoot(abs: string): boolean {
 }
 
 // 命令行里出现的禁区字面（引号拼接、变量前缀这类抽不出候选路径的写法，按字面兜底）。
-export function deniedRootLiteral(command: string): string | null {
+// allow：禁区里照常可引用的目录（给他的技能目录——跑技能自带的脚本）；越界与写入由命令闸的工作区围栏另判。
+export function deniedRootLiteral(command: string, allow: string[] = []): string | null {
   const roots = denyRoots();
   if (!roots.length) return null;
   const own = tenantRoot();
   const text = fold(command.replace(/\\/g, "/"));
   const ownLit = own ? fold(own.replace(/\\/g, "/")) : null;
+  const allowLits = allow.map((d) => fold(d.replace(/\\/g, "/")).replace(/\/+$/, "")).filter(Boolean);
+  const allowedAt = (at: number) =>
+    allowLits.some((lit) => text.startsWith(lit, at) && (text[at + lit.length] === undefined || /[\s/'"`;|&)]/.test(text[at + lit.length])));
   for (const r of roots) {
     const lit = fold(r.replace(/\\/g, "/")).replace(/\/+$/, "");
     if (!lit || lit === "/") continue;
@@ -93,7 +98,7 @@ export function deniedRootLiteral(command: string): string | null {
       const boundary = next === undefined || next === "/" || /[\s'"`;|&)]/.test(next);
       // 这一处是不是其实指着自己的根（自己的根在禁区里面时）
       const isOwn = Boolean(ownLit && text.startsWith(ownLit, at) && (text[at + ownLit.length] === undefined || /[\s/'"`;|&)]/.test(text[at + ownLit.length])));
-      if (boundary && !isOwn) return r;
+      if (boundary && !isOwn && !allowedAt(at)) return r;
       at = text.indexOf(lit, at + 1);
     }
   }

@@ -31,6 +31,7 @@
     const p = JSON.parse(JSON.stringify(s || {}));
     return {
       id: p.id || '', name: p.name || '', note: p.note || '', preset: p.preset || '', enabled: p.enabled !== false, showInPicker: p.showInPicker !== false,
+      shared: p.shared === true,   // 共享给成员（多用户服务器的管理员才有开关，cp.canShare）
       protocol: p.protocol || 'anthropic', baseUrl: p.baseUrl || '', authStyle: p.authStyle || (p.protocol === 'openai' ? 'bearer' : 'x-api-key'),
       headers: Array.isArray(p.headers) ? p.headers : [], timeoutSec: p.timeoutSec ?? 600, retries: p.retries ?? 2,
       models: (p.models || []).map(fullModel),
@@ -427,6 +428,10 @@
         <div class="list">
           <div class="li"><div><div class="lt">{t('显示在模型列表')}</div><div class="ls">{t('关掉后这个服务的模型不出现在输入框的模型菜单里；正在用它的会话照常能跑（要硬停用请关「启用」）')}</div></div>
             <SToggle checked={draft.showInPicker} onchange={(v) => (draft.showInPicker = v)} label={t('显示在模型列表')} /></div>
+          {#if cp.canShare}
+            <div class="li"><div><div class="lt">{t('共享给成员')}</div><div class="ls">{t('这台服务器上的成员也能在模型菜单里选用这个服务，用量记在这把 Key 上、计入他们的额度；他们看不到地址和 Key，也改不了')}</div></div>
+              <SToggle checked={draft.shared} onchange={(v) => (draft.shared = v)} label={t('共享给成员')} /></div>
+          {/if}
         </div>
 
         <h4>{t('请求头')}</h4>

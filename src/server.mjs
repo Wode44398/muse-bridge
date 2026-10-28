@@ -59,6 +59,7 @@ import { resolveShareToken } from './routes/share-space.mjs';
 import { resolveSnapToken } from './routes/chat-snapshot.mjs';
 import { registerAppUpdateRoutes } from './routes/app-update.mjs';
 import { registerExtensionRoutes } from './routes/extensions.mjs';
+import { registerMemberSkillRoutes } from './routes/member-skills.mjs';
 import { registerModuleAdminRoutes } from './routes/modules.mjs';
 import { registerAgentRoutes } from './routes/agents.mjs';
 import { registerMeRoutes } from './routes/me.mjs';
@@ -248,6 +249,7 @@ registerChatRoutes(router, { authOk, identify: identifySnap }); // /api/chat, /a
 initLimitResume();   // 5 小时限额重置后自动继续：把落盘的待续会话重新排上（重放口由上一行挂好）
 initRestartResume(inflightOrphans);   // 服务意外重启后自动继续：上一条命没跑完的轮过十几秒在服务端替用户说「继续」（设置可关）
 registerExtensionRoutes(router, { identify });                // /api/extensions* — 扩展中心（技能/连接器/插件，admin）
+registerMemberSkillRoutes(router, { identify });              // /api/my-extensions* — 成员自己添加的技能（只有技能；Claude + dimensio）
 registerModuleAdminRoutes(router, { identify });              // /api/modules* — 扩展中心「功能扩展」（离线包装 / 卸，admin，重启生效）
 registerAgentRoutes(router, { identify });                    // /api/agents — 设置「Agent」页：各 agent 的勾选 / 能跑 / 认证（admin，可远程）
 registerClaudeCliRoutes(router, { identify });                // /api/claude-cli(/retry) — Claude Code 运行组件的下载进度 / 重试（admin）

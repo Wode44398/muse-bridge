@@ -109,9 +109,11 @@
 
   // ═══ 扩展（独立分区）═══ admin 探针过了才在侧栏出现；内容＝官方「自定义」同款面板（components/ext/Customize），
   // 直接长在设置里（2026-10-20 起不再盖一层全屏玻璃页）。搜索命中某个类型时经 extensionsNav 直达、{#key} 重挂。
+  // 成员探的是自己的技能接口（/api/my-extensions：只有技能，见 ext/Customize 的成员模式）。
   let extOk = $state(false);
   let extKey = $state(0);
-  api.get('/api/extensions').then(() => { extOk = true; }).catch(() => {});
+  const extMember = me.kind === 'user';
+  api.get(extMember ? '/api/my-extensions' : '/api/extensions').then(() => { extOk = true; }).catch(() => {});
 
   // ═══ Agent：每个 agent 一个分区（ag-<id>），数据面与手机共用 lib/agentSettings.svelte.js ═══
   // 各接口都是 admin 门；非管理员全部 404/403 → 对应 ok 位为 false，那一节不出现。
@@ -323,6 +325,7 @@
   ].filter((e) => !e.sec.startsWith('ag-') || agentRows.some((a) => 'ag-' + a.id === e.sec))
    .filter((e) => e.id !== 'fbup' || (fbUp?.admin && fbUp.mode !== 'inbox' && !fbUp.reason))   // 跟反馈页上开关的出现条件一致
    .filter((e) => e.id !== 'admin-access' || me.kind === 'user')
+   .filter((e) => e.sec !== 'extensions' || (extOk && (!extMember || e.id === 'ext-skill')))   // 成员只有技能
    .filter((e) => !single || (e.sec !== 'wallpaper' && e.id !== 'followpage'))
    .filter((e) => e.id !== 'auto-update' || hasSilentUpdate())
    .filter((e) => e.id !== 'server-update' || (me.kind === 'admin' && !(hasSilentUpdate() && serverOnThisMachine())))   // 跟「服务端更新」那一组的出现条件一致
@@ -1314,8 +1317,10 @@
           <DGroup label={t('扩展与记忆')}>
             {#if extOk}
               <DRow title={t('技能')} onclick={() => openExtType('skill')} />
-              <DRow title={t('连接器')} onclick={() => openExtType('connector')} />
-              <DRow title={t('插件')} onclick={() => openExtType('plugin')} />
+              {#if !extMember}
+                <DRow title={t('连接器')} onclick={() => openExtType('connector')} />
+                <DRow title={t('插件')} onclick={() => openExtType('plugin')} />
+              {/if}
             {/if}
             {#if pluginOn('routines')}<DRow title={t('定时任务')} onclick={openRoutinesPage} />{/if}
           </DGroup>

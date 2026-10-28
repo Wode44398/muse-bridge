@@ -12,11 +12,15 @@
 //   POST /api/claude/providers/probe-model {id?|draft, model} → { ok, probe }  探测一个模型的输出上限 / 视觉 / 思考 / 档位
 //   GET  /api/claude/providers/log?id= → { ok, log }                   最近请求
 // 改动推总线 {type:'claude.providers'}，在线设备的模型选择器即时跟上；连上总线时的 hello 也带一份模型清单（overview.mjs）。
+// 管理员共享给成员（2026-10-28）：管理员的服务上可标 shared（create / update 收；canShare = 多用户服务器的管理员才显示开关）；
+// 成员的 GET 多带 shared（共享服务的名字与模型，不给地址和 Key），模型清单里并进它们（managed）。共享服务改 / 删 / 测试成员都够不着
+//（这些接口只认他自己那份）。管理员改了服务，读过注册表的成员也推一份。
 // 官方 api.anthropic.com 的服务：启动时与每次保存后在后台探一遍各型号支不支持 fast（ensureFastProbes），结论变了也推一次总线。
 import { readBody } from '../runtime/body.mjs';
 import { contextFor } from '../runtime/identity.mjs';
 import { busPublish } from '../runtime/bus.mjs';
-import { listProviders, createProvider, updateProvider, deleteProvider, customModelsView, getProvider, normalizeProvider, normalizeBaseUrl, presetsFor, customOwner, isMemberOwner, loadedOwners, providerProxyForced, MEMBER_MAX_PROVIDERS } from '../runtime/claude-providers.mjs';
+import { listProviders, createProvider, updateProvider, deleteProvider, customModelsView, getProvider, normalizeProvider, normalizeBaseUrl, presetsFor, customOwner, isMemberOwner, loadedOwners, providerProxyForced, sharedProvidersView, HOST_OWNER, MEMBER_MAX_PROVIDERS } from '../runtime/claude-providers.mjs';
+import { FEATURES } from '../config/index.mjs';
 import { assertPublicUrl } from '../runtime/public-net.mjs';
 import { fetchRemoteModels, guessModels, testProvider, detectProtocol, probeModel, providerLog, ensureFastProbes, onFastProbeChange } from '../runtime/claude-providers-proxy.mjs';
 
@@ -34,11 +38,15 @@ export function registerClaudeProviderRoutes(router, { identify }) {
   const body = async (req, res) => {
     try { return JSON.parse(await readBody(req, 512 * 1024)) || {}; } catch { json(res, 400, { error: 'bad json' }); return null; }
   };
-  const snapshot = (owner) => ({ providers: listProviders(owner), models: customModelsView(owner) });
-  // 各推各的总线（owner 键就是总线分区）
-  const publish = (owner) => busPublish(owner, { type: 'claude.providers', ...snapshot(owner) });
+  const snapshot = (owner) => ({ providers: listProviders(owner), models: customModelsView(owner), ...(isMemberOwner(owner) ? { shared: sharedProvidersView(owner) } : {}) });
+  // 各推各的总线（owner 键就是总线分区）。管理员的改动可能动到共享给成员的服务：读过注册表的成员一起推
+  const publishOne = (owner) => busPublish(owner, { type: 'claude.providers', ...snapshot(owner) });
+  const publish = (owner) => {
+    publishOne(owner);
+    if (owner === HOST_OWNER) for (const o of loadedOwners()) if (isMemberOwner(o)) publishOne(o);
+  };
   // fast 探测结论按型号记、各家共用：变了就推给所有读过注册表的人，菜单里的开关跟着出现 / 消失
-  onFastProbeChange(() => { for (const o of loadedOwners()) publish(o); });
+  onFastProbeChange(() => { for (const o of loadedOwners()) publishOne(o); });
   const probeFast = (id, owner) => { const p = id && getProvider(id, owner); if (p) ensureFastProbes(p).catch(() => {}); };
   // 成员的接口地址只许是公网（草稿、保存都查；代理发请求时还会再查）
   const checkUrl = async (owner, url) => { if (isMemberOwner(owner) && url) await assertPublicUrl(normalizeBaseUrl(url)); };
@@ -62,7 +70,12 @@ export function registerClaudeProviderRoutes(router, { identify }) {
 
   router.on('GET', '/api/claude/providers', async (req, res) => {
     const owner = guard(req, res); if (!owner) return;
-    run(res, () => ({ ...snapshot(owner), presets: presetsFor(owner), member: isMemberOwner(owner), proxyForced: providerProxyForced(), ...(isMemberOwner(owner) ? { maxProviders: MEMBER_MAX_PROVIDERS } : {}) }));
+    run(res, () => ({
+      ...snapshot(owner), presets: presetsFor(owner), member: isMemberOwner(owner), proxyForced: providerProxyForced(),
+      ...(isMemberOwner(owner) ? { maxProviders: MEMBER_MAX_PROVIDERS } : {}),
+      // 编辑器里出「共享给成员」开关：多用户服务器上的管理员
+      canShare: owner === HOST_OWNER && FEATURES.multiUser === true,
+    }));
   });
 
   router.on('POST', '/api/claude/providers/create', async (req, res) => {

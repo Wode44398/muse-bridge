@@ -28,6 +28,12 @@
 // 放在 claude-providers/users/<账号>/ 下（主机数据根里，不在成员自己的工作空间——他的 Claude 读写不到）。
 // 成员的服务只许连公网（替他连任意地址 = SSRF，见 public-net.mjs），最多 10 个，没有「本机模型」预设。
 // 内存里的服务对象带 owner（owner 键：'admin' / 'u:<账号>'），落盘与给前端时去掉。
+//
+// 管理员共享给成员（2026-10-28，维护者：成员能用管理员公开的服务）：管理员的服务上标 shared，成员解析模型 / 列菜单 /
+// 派子 agent 时在自己那份之后并进管理员标了 shared 的（findProvider）。拿到的就是管理员那份服务对象（owner = 管理员）：
+// 代理据此取管理员的 Key、不按成员的公网限制查地址（地址是管理员定的）。成员看得到名字和模型，看不到地址和 Key，
+// 改 / 删 / 测试 / 拉列表都只认他自己那份（getProvider），够不着。管理员取消共享或停用，成员那边立刻没了。
+// 用共享服务的轮花的是管理员的 Key：计入成员的额度（轮数），不像他自己的 Key 那样免额度（agents/claude.mjs）。
 import path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { readJson, writeJson } from '../jsonfile.mjs';
@@ -306,6 +312,8 @@ export function normalizeProvider(input, prev = null) {
     preset: str(p.preset, 24),
     enabled: p.enabled !== false,
     showInPicker: p.showInPicker !== false,
+    // 共享给成员：只有管理员那份认（成员的在 createProvider / updateProvider 里一律去掉）
+    shared: p.shared === true,
     protocol,
     baseUrl: normalizeBaseUrl(p.baseUrl),
     authStyle: oneOf(p.authStyle, AUTH_STYLES, protocol === 'openai' ? 'bearer' : 'x-api-key'),
@@ -383,6 +391,32 @@ export const loadedOwners = () => [...regs.keys()];
 export function providersRev(owner) { return load(owner).rev; }
 export function getProvider(id, owner) { return load(owner).providers.find((p) => p.id === id) || null; }
 
+// —— 管理员共享给成员 ——
+/** 这个 owner 能用的管理员共享服务（只有成员有；管理员自己的本来就在他那份里）。 */
+export function sharedProviders(owner) {
+  return isMemberOwner(owner) ? load(HOST_OWNER).providers.filter((p) => p.shared) : [];
+}
+/** 解析模型、列菜单、派子 agent 用：先找自己的，成员再找管理员共享的。改 / 删 / 测试一律用 getProvider（只认自己的）。 */
+export function findProvider(id, owner) {
+  return getProvider(id, owner) || sharedProviders(owner).find((p) => p.id === id) || null;
+}
+/** 自己的服务在前、管理员共享的在后（id 撞了算自己的）。 */
+function usableProviders(owner) {
+  const own = load(owner).providers;
+  const shared = sharedProviders(owner);
+  if (!shared.length) return own;
+  const mine = new Set(own.map((p) => p.id));
+  return [...own, ...shared.filter((p) => !mine.has(p.id))];
+}
+/** 设置页给成员看的共享服务：只有名字、预设（品牌标）、协议和模型名，不给地址、请求头、Key。 */
+export function sharedProvidersView(owner) {
+  return sharedProviders(owner).map((p) => ({
+    id: p.id, name: p.name, note: p.note, preset: p.preset, protocol: p.protocol, enabled: p.enabled,
+    models: p.models.filter((m) => m.enabled && m.kind === 'chat').map((m) => ({ id: m.id, label: m.label })),
+    defaultModel: p.defaultModel,
+  }));
+}
+
 // —— 密钥 ——
 function secrets(owner) {
   try { return readSecrets(dirOf(owner)); } catch (e) { console.error('[claude-providers] secrets unreadable:', e && e.message); return {}; }
@@ -408,8 +442,11 @@ export function createProvider(input, owner) {
   const d = load(owner);
   const max = isMemberOwner(owner) ? MEMBER_MAX_PROVIDERS : 30;
   if (d.providers.length >= max) throw bad(`模型服务最多 ${max} 个`);
-  const id = 'p-' + randomBytes(4).toString('hex');
-  const p = { ...normalizeProvider({ ...input, id }), owner };
+  // 连管理员共享过来的一起避开（成员的模型 id 里服务 id 撞了，会话就分不清是谁的）
+  const taken = new Set(usableProviders(owner).map((x) => x.id));
+  let id;
+  do id = 'p-' + randomBytes(4).toString('hex'); while (taken.has(id));
+  const p = { ...normalizeProvider({ ...input, id, ...(isMemberOwner(owner) ? { shared: false } : {}) }), owner };
   const key = typeof input?.apiKey === 'string' ? input.apiKey.trim() : '';
   if (key.length > 4000) throw bad('API Key 太长');
   if (key) setKey(id, key, owner);
@@ -423,7 +460,7 @@ export function updateProvider(id, patch, owner) {
   const d = load(owner);
   const i = d.providers.findIndex((p) => p.id === id);
   if (i < 0) throw Object.assign(new Error('没有这个模型服务'), { status: 404 });
-  const next = { ...normalizeProvider({ ...patch, id }, d.providers[i]), owner };
+  const next = { ...normalizeProvider({ ...patch, id, ...(isMemberOwner(owner) ? { shared: false } : {}) }, d.providers[i]), owner };
   // apiKey：字符串 = 换新；空串 = 清掉；不传 = 不动
   if (typeof patch?.apiKey === 'string') {
     const key = patch.apiKey.trim();
@@ -460,7 +497,7 @@ export function parseCustomModel(s) {
 export function resolveCustomModel(s, owner) {
   const r = parseCustomModel(s);
   if (!r) return null;
-  const provider = getProvider(r.pid, owner);
+  const provider = findProvider(r.pid, owner);
   if (!provider || !provider.enabled) return null;
   const model = provider.models.find((m) => m.id === r.mid && m.enabled);
   return model ? { provider, model } : null;
@@ -522,12 +559,15 @@ export function customSupportsFast(provider, model) {
  */
 export function customModelsView(owner) {
   const out = [];
-  for (const p of load(owner).providers) {
+  for (const p of usableProviders(owner)) {
     if (!p.enabled) continue;
+    // 管理员共享过来的：不给地址（managed = 菜单里标「管理员共享」）
+    const managed = p.owner !== ownerOf(owner);
     for (const m of p.models) {
       if (!m.enabled || m.kind !== 'chat') continue;
       out.push({
-        id: customModelId(p.id, m.id), name: m.label, provider: p.id, providerName: p.name, preset: p.preset, baseUrl: p.baseUrl,
+        id: customModelId(p.id, m.id), name: m.label, provider: p.id, providerName: p.name, preset: p.preset, baseUrl: managed ? '' : p.baseUrl,
+        ...(managed ? { managed: true } : {}),
         thinking: m.thinking, vision: m.vision, contextWindow: m.contextWindow,
         // 上下文窗口的来源（api / probe / user 实打实；table / guess / default 是估的）：菜单徽章据此加「≈」，同编辑器
         ctxSource: (m.source && m.source.contextWindow) || '',
@@ -545,7 +585,7 @@ export function customModelsView(owner) {
 // 给 Claude 看的模型名：全服唯一就用型号 id 本身（好写、不易抄错），重名的用 custom:<服务>:<型号>。
 function chatModels(owner) {
   const out = [];
-  for (const p of load(owner).providers) {
+  for (const p of usableProviders(owner)) {
     if (!p.enabled) continue;
     for (const m of p.models) if (m.enabled && m.kind === 'chat') out.push({ provider: p, model: m });
   }

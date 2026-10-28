@@ -6,6 +6,10 @@
 // 沙箱语义：技能目录在 workspace 之外，file tools 与 Bash 的 workspace 围栏只对【勾给
 // dimensio 的技能目录】有只读豁免（sandbox.ts / bash.ts 引用 grantedSkillDirs()）；写入仍拦。
 // 注册表本身是凭据文件（连接器令牌），任何模式都进密钥守卫（isExtensionRegistryPath）。
+//
+// 成员实例（租户模式）不认那份注册表，技能改走 DIMENSIO_SKILL_REGISTRIES：bridge 给的几份【只含技能】的清单
+// （他自己添加的 + 管理员加装给全服的，见 bridge 的 member-skills.mjs），按顺序合并、同名前面的优先。
+// 清单可带 root（item.dir 相对它；没有就相对清单所在目录）。连接器照旧只认 registryFile()——租户恒为空。
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { textTokens } from "./agent/context.ts";
@@ -93,6 +97,7 @@ export function managedConnectors(): ManagedConnector[] {
 
 // C5：注册表顶层可选的包说明（扩展中心以后可以写；现在没有就按成员推一句）
 interface RegistryFile {
+  root?: string; // 只有 bridge 生成的技能清单带：item.dir 相对它
   items?: ExtensionItem[];
   pkgs?: Record<string, { description?: string }>;
 }
@@ -105,6 +110,21 @@ function registryFile(): string | null {
     if (existsSync(file)) return file;
   }
   return null;
+}
+
+// 技能来源：显式给了 DIMENSIO_SKILL_REGISTRIES 就只认它们（不存在的跳过），否则就是扩展注册表本身
+function skillRegistryFiles(): string[] {
+  const list = process.env.DIMENSIO_SKILL_REGISTRIES;
+  if (list !== undefined) {
+    return list
+      .split(path.delimiter)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => path.resolve(s))
+      .filter((f) => existsSync(f));
+  }
+  const file = registryFile();
+  return file ? [file] : [];
 }
 
 // 扩展根目录（skills/plugins 的父级）。注册表还不存在时也返回稳定路径（env 显式给了
@@ -229,25 +249,42 @@ export function managedSkills(): ManagedSkill[] {
 }
 
 function readManaged(): { skills: ManagedSkill[]; pkgDescriptions: Map<string, string> } | null {
-  const file = registryFile();
-  if (!file) return null;
-  const raw = readRegistry(file);
-  if (!raw) return null;
-  const items = Array.isArray(raw.items) ? raw.items : [];
-  const root = path.dirname(file);
+  const files = skillRegistryFiles();
+  if (!files.length) return null;
   const skills: ManagedSkill[] = [];
+  const pkgDescriptions = new Map<string, string>();
+  const seen = new Set<string>();
+  let any = false;
+  for (const file of files) {
+    const raw = readRegistry(file);
+    if (!raw) continue;
+    any = true;
+    const root = typeof raw.root === "string" && path.isAbsolute(raw.root) ? path.resolve(raw.root) : path.dirname(file);
+    collectSkills(raw, root, skills, seen);
+    for (const [name, meta] of Object.entries(raw.pkgs && typeof raw.pkgs === "object" ? raw.pkgs : {})) {
+      if (!pkgDescriptions.has(name) && typeof meta?.description === "string" && meta.description.trim()) pkgDescriptions.set(name, oneLine(meta.description, 300));
+    }
+  }
+  return any ? { skills, pkgDescriptions } : null;
+}
+
+function collectSkills(raw: RegistryFile, root: string, skills: ManagedSkill[], seen: Set<string>): void {
+  const items = Array.isArray(raw.items) ? raw.items : [];
   for (const item of items) {
     if (item?.type !== "skill" || !item.enabled || !item.agents?.dimensio || !item.dir) continue;
     const dir = path.resolve(root, item.dir);
     if (dir !== root && !dir.startsWith(root + path.sep)) continue;   // 注册表被手改出穿越 → 弃
+    const name = oneLine(item.name, 80);
+    if (!name || seen.has(name.toLowerCase())) continue;   // 多份清单同名：前面的（成员自己的）优先
     const skillMd = path.join(dir, item.entry || "SKILL.md");
     const flags = skillFlags(skillMd);
     if (!flags) {
       warnOnce(`技能「${String(item.name || item.id).slice(0, 80)}」勾给了 dimensio，但 ${skillMd} 不在了，跳过`);
       continue;
     }
+    seen.add(name.toLowerCase());
     skills.push({
-      name: oneLine(item.name, 80),
+      name,
       description: oneLine(item.description, 600),
       skillMd,
       ...(typeof item.pkg === "string" && item.pkg.trim() ? { pkg: oneLine(item.pkg, 80) } : {}),
@@ -257,11 +294,6 @@ function readManaged(): { skills: ManagedSkill[]; pkgDescriptions: Map<string, s
       ...(flags.argumentHint ? { argumentHint: flags.argumentHint } : {}),
     });
   }
-  const pkgDescriptions = new Map<string, string>();
-  for (const [name, meta] of Object.entries(raw.pkgs && typeof raw.pkgs === "object" ? raw.pkgs : {})) {
-    if (typeof meta?.description === "string" && meta.description.trim()) pkgDescriptions.set(name, oneLine(meta.description, 300));
-  }
-  return { skills, pkgDescriptions };
 }
 
 // ── C5（G1、K57、X51）技能目录经济学 ─────────────────────────────────────────

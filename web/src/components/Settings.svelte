@@ -304,10 +304,11 @@
     if (want && !srvAdminOk) saPing().then(() => { srvAdminOk = true; }).catch(() => {});
   });
 
-  // —— 扩展中心入口：admin 探针通过才显示（普通 user 403 → 行不出现）。
-  // 门是 admin token/cookie（可远程），与控制台的 loopback 门不同——手机出门也能管扩展。
+  // —— 扩展中心入口：admin 探针通过才显示。门是 admin token/cookie（可远程），与控制台的 loopback 门不同——手机出门也能管扩展。
+  // 成员探的是自己的技能接口（/api/my-extensions：只有技能，见 ext/Customize 的成员模式）。
   let extOk = $state(false);
-  api.get('/api/extensions').then(() => { extOk = true; }).catch(() => {});
+  const extMember = me.kind === 'user';
+  api.get(extMember ? '/api/my-extensions' : '/api/extensions').then(() => { extOk = true; }).catch(() => {});
   // —— 按 agent 分页（2026-10-18）：根页「Agent」分组每个 agent 一行，各自一页堆它自己的设置——
   // 开关与认证（/api/agents）、Claude 的订阅号池与智能换号、对话偏好……
   // 号池 / 额度与注册原先只在服务端控制台（本机门），服务端给它们开了 settingsGate 后手机上也能改；
@@ -1117,7 +1118,7 @@
   {/if}
 
   {#if extOk || (ags.policyOk && ags.multiUser) || srvAdminOk}
-    {@render ghead(t('服务器'))}
+    {@render ghead(extMember ? t('个性化') : t('服务器'))}
     <div class="ig">
       {#if extOk}
         <button class="r" type="button" onclick={() => push('extensions')}>
@@ -1497,8 +1498,10 @@
       <!-- 扩展中心探针没过（服务端没开扩展）就只剩定时任务 -->
       {#if extOk}
         <button class="r" type="button" onclick={() => openExtType('skill')}><span class="r-main"><span class="r-tx">{t('技能')}</span>{@render chev()}</span></button>
+        {#if !extMember}
         <button class="r" type="button" onclick={() => openExtType('connector')}><span class="r-main"><span class="r-tx">{t('连接器')}</span>{@render chev()}</span></button>
         <button class="r" type="button" onclick={() => openExtType('plugin')}><span class="r-main"><span class="r-tx">{t('插件')}</span>{@render chev()}</span></button>
+        {/if}
       {/if}
       {#if pluginOn('routines')}<button class="r" type="button" onclick={openRoutinesPage}><span class="r-main"><span class="r-tx">{t('定时任务')}</span>{@render chev()}</span></button>{/if}
     </div>

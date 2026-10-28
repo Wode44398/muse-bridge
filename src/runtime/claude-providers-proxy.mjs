@@ -20,7 +20,7 @@
 import http from 'node:http';
 import { randomBytes, createHmac } from 'node:crypto';
 import { Agent } from 'undici';
-import { HOST_OWNER, isMemberOwner, providerProxyForced, getProvider, providerKey, resolveCustomModel, resolveSubagentModel, customModelId, customSupportsFast, fastCapableProvider, fastProbe, recordFastProbe } from './claude-providers.mjs';
+import { HOST_OWNER, isMemberOwner, providerProxyForced, getProvider, findProvider, providerKey, resolveCustomModel, resolveSubagentModel, customModelId, customSupportsFast, fastCapableProvider, fastProbe, recordFastProbe } from './claude-providers.mjs';
 import { assertPublicUrl, publicDispatcher } from './public-net.mjs';
 import { applyParams, pickTarget, keepsBetas, isOfficial, toOpenAI, openAIReasoning, OpenAIStream, fromOpenAI, estimateTokens } from './claude-providers-transform.mjs';
 // 型号知识 / 报错解读 / 检测与探测的判读和 dimensio 的自定义服务共用（src/model-knowledge/）
@@ -168,6 +168,27 @@ function sendJson(res, status, obj) {
 const apiError = (message, type = 'api_error') => ({ type: 'error', error: { type, message } });
 
 /**
+ * 成员用管理员共享的服务出错时给他的话：去掉地址（完整网址、主机名）和「去设置里改」那半句——他看不到也改不了，
+ * 换成「请联系管理员」。管理员自己的日志（note）照记原话。
+ */
+// 抹掉服务的主机名（带端口的、不带端口的，DNS / 连接报错里两种都会出现）
+function scrubHost(provider, text) {
+  let u = null;
+  try { u = new URL(provider.baseUrl); } catch {}
+  let s = String(text || '');
+  if (u) for (const h of [u.host, u.hostname]) if (h) s = s.split(h).join('…');
+  return s;
+}
+export function lentMessage(provider, message) {
+  let m = String(message || '');
+  m = m.replace(/(?:POST\s+)?https?:\/\/[^\s，。；、）)」"']+/g, '…');
+  m = scrubHost(provider, m);
+  m = m.replace(/[^。]*「检测连接」[^。]*。?/g, '').replace(/去「设置 › Claude › 模型服务 › [^」]*」[^。]*。?/g, '');
+  m = m.trim().replace(/[。，；\s]+$/, '');
+  return `${m || '服务出错了'}。这是管理员共享的服务，地址和 Key 由管理员维护，请联系管理员。`;
+}
+
+/**
  * 上游没成功 → 给 CLI / 设置页的错误。回 { status, type, message }；回 null = 原样转发（普通 JSON 的 4xx / 429 / 5xx：
  * CLI 自己会按 429、5xx 重试，4xx 的厂商原文它会照实显示）。非 JSON 的 429 / 5xx 只换成人话、状态码照旧，CLI 照样重试、
  * 错误卡照样分得出「限流了」。
@@ -223,7 +244,8 @@ async function handle(req, res) {
   let mainId = '';
   try { mainId = decodeURIComponent(modelEnc); } catch {}
   const resolved = resolveCustomModel(customModelId(pid, mainId), owner);
-  let provider = resolved ? resolved.provider : getProvider(pid, owner);
+  // 成员也能用管理员共享的服务（findProvider）：拿到的是管理员那份对象，下面按它的 owner 取 Key、记日志
+  let provider = resolved ? resolved.provider : findProvider(pid, owner);
   if (!provider) { sendJson(res, 400, apiError('这个模型服务已被删除', 'invalid_request_error')); return; }
   if (!resolved) { sendJson(res, 400, apiError(`模型「${mainId}」不存在或已停用（在「设置 › Claude › 模型服务 › ${provider.name}」里）`, 'invalid_request_error')); return; }
   let model = resolved.model;
@@ -273,9 +295,11 @@ async function handle(req, res) {
   const wantFast = !!fastSeg && !pick.routed && provider.protocol === 'anthropic' && customSupportsFast(provider, target);
   const fast = wantFast && !fastCooling(provider.id, provider.owner);
   const logBase = { model: target.id, effort: eff || '', stream: !!out.stream, ...(wantFast ? { fast } : {}) };
+  // 成员在用管理员共享的服务（子 agent 也可能换到别的共享服务上，所以现算）：给他的错误不带地址
+  const lent = () => (provider.owner || HOST_OWNER) !== owner;
   const fail = (status, message, type) => {
     note(provider, { ...logBase, status, ms: Date.now() - t0, error: String(message).slice(0, 300) });
-    sendJson(res, status, apiError(message, type || (status === 429 ? 'rate_limit_error' : status >= 500 ? 'api_error' : 'invalid_request_error')));
+    sendJson(res, status, apiError(lent() ? lentMessage(provider, message) : message, type || (status === 429 ? 'rate_limit_error' : status >= 500 ? 'api_error' : 'invalid_request_error')));
   };
 
   try {
@@ -313,7 +337,8 @@ async function handle(req, res) {
         if (mapped) { fail(mapped.status, mapped.message, mapped.type); return; }
         note(provider, { ...logBase, status: up.status, ms: Date.now() - t0, error: text.slice(0, 300) });
         const h = {}; up.headers.forEach((v, k) => { if (!DROP_RES.has(k)) h[k] = v; });
-        res.writeHead(up.status, h); res.end(text);
+        // 厂商原文照转（CLI 按状态码重试）；共享服务的把主机名抹掉
+        res.writeHead(up.status, h); res.end(lent() ? scrubHost(provider, text) : text);
         return;
       }
       const h = {}; up.headers.forEach((v, k) => { if (!DROP_RES.has(k)) h[k] = v; });
@@ -389,7 +414,8 @@ async function handle(req, res) {
   } catch (e) {
     if (e && e.aborted) { note(provider, { ...logBase, status: 499, ms: Date.now() - t0, error: '客户端中止' }); return; }
     if (res.headersSent) {
-      try { res.write(new OpenAIStream(target.id).error((e && e.message) || String(e))); res.end(); } catch {}
+      const why = (e && e.message) || String(e);
+      try { res.write(new OpenAIStream(target.id).error(lent() ? lentMessage(provider, why) : why)); res.end(); } catch {}
       note(provider, { ...logBase, status: 502, ms: Date.now() - t0, error: String((e && e.message) || e).slice(0, 300) });
       return;
     }
@@ -425,8 +451,11 @@ export async function providersProxyBase(owner) {
  * effort = 这一轮的档位 id（'' = 没选，代理按模型默认档）；fast = 开 fast mode（调用方已按 customSupportsFast 门控）。
  * fast 由代理自己加 speed 与 beta 头：CLI 的 fast 判定要拿 env 里的 Key 去官方查组织额度，而这里给它的只是占位 Key，永远点不亮。
  */
-export async function providerEngineEnv(base, { provider, model, effort, fast = false }) {
-  const root = await providersProxyBase(provider.owner);
+// owner = 这一轮是谁的（会话属主）。代理令牌必须按它算、不能按 provider.owner：成员用管理员共享的服务时 provider 是管理员那份，
+// 按 provider.owner 算就把管理员的令牌塞进成员 CLI 的环境变量里，成员能拿它摸到管理员没共享的服务。按成员算的令牌，
+// 代理那边只解析得到他自己的 + 管理员共享的（findProvider）。不传 = provider.owner（老调用方）。
+export async function providerEngineEnv(base, { provider, model, effort, fast = false, owner }) {
+  const root = await providersProxyBase(owner || provider.owner);
   const env = { ...base };
   for (const k of ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX']) delete env[k];
   env.ANTHROPIC_BASE_URL = `${root}/p/${provider.id}/${effort || '-'}${fast ? '.f' : ''}/${encodeURIComponent(model.id)}`;

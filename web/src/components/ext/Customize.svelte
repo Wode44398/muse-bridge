@@ -26,6 +26,11 @@
   const dark = $derived(ui.theme !== 'light');
   let rootEl = $state();
 
+  // 成员登录时同一个面板走 /api/my-extensions*（routes/member-skills.mjs）：只有技能、只有「我的 / 发现」，生效 agent 只有
+  // Claude 与 dimensio，不摆范围切换、不管市场源；管理员加装给全服的技能在「我的」下面只读列出。
+  const member = me.kind === 'user';
+  const B = member ? '/api/my-extensions' : '/api/extensions';
+
   const errMsg = (e) => tr((e?.body && typeof e.body === 'object' ? e.body.error : typeof e?.body === 'string' ? e.body : '') || e?.message || String(e));
 
   // ═══ 范围 ═══
@@ -35,7 +40,7 @@
   let multiUser = $state(false);
   const shared = $derived(scope === 'shared');
   // 没开多用户时「全服」只有管理员自己用得上，不摆这个切换（已经装过全服扩展的照样摆，免得找不着）
-  const showScope = $derived(multiUser || counts.shared > 0 || shared);
+  const showScope = $derived(!member && (multiUser || counts.shared > 0 || shared));
   function setScope(v) {
     if (v === scope) return;
     scope = v; stack = []; items = []; loaded = false;
@@ -46,6 +51,7 @@
 
   // ═══ 已装 ═══
   let items = $state([]);
+  let sharedSkills = $state([]);   // 成员：管理员加装给全服的技能（只读）
   let support = $state({});
   let diagnostics = $state([]);
   let loaded = $state(false);
@@ -53,9 +59,10 @@
   async function load() {
     const want = scope;
     try {
-      const r = await api.get('/api/extensions?scope=' + want);
+      const r = await api.get(B + '?scope=' + want);
       if (want !== scope) return;   // 加载途中切了范围：丢掉旧范围的结果
       items = r.items || [];
+      sharedSkills = Array.isArray(r.shared) ? r.shared : [];
       support = r.support || {};
       diagnostics = Array.isArray(r.diagnostics) ? r.diagnostics : [];
       if (r.counts) counts = r.counts;
@@ -72,7 +79,7 @@
   async function loadMarket(refresh = false) {
     clearTimeout(mkTimer);
     try {
-      const r = await api.get('/api/extensions/market?scope=' + scope + (refresh ? '&refresh=1' : ''));
+      const r = await api.get(B + '/market?scope=' + scope + (refresh ? '&refresh=1' : ''));
       mk = r; mkErr = '';
       if (r.building) mkTimer = setTimeout(() => loadMarket(), 2500);
     } catch (e) { mkErr = errMsg(e); }
@@ -85,9 +92,9 @@
     { key: 'connector', label: t('连接器'), glyph: 'connector' },
     { key: 'plugin', label: t('插件'), glyph: 'plugin' },
     { key: 'module', label: t('功能扩展'), glyph: 'box' },
-  ];
+  ].filter((x) => !member || x.key === 'skill');
   const glyphOf = (type) => TYPES.find((x) => x.key === type)?.glyph || 'box';
-  let curType = $state(extensionsNav.type || 'skill');
+  let curType = $state(member ? 'skill' : extensionsNav.type || 'skill');
   extensionsNav.type = null;
   const VIEW_KEY = 'bridge-ext-view';
   let view = $state((typeof localStorage !== 'undefined' && localStorage.getItem(VIEW_KEY)) || 'discover');
@@ -199,7 +206,7 @@
     if (!e || busy[e.key] || isInstalled(kind, e)) return;
     busy = { ...busy, [e.key]: true };
     try {
-      const r = await api.post('/api/extensions/market/install', { kind, key: e.key, scope });
+      const r = await api.post(B + '/market/install', { kind, key: e.key, scope });
       const got = r.items || [];
       if (mk) mk = { ...mk, installed: [...(mk.installed || []), ...got.map(srcKey).filter(Boolean)] };
       await load();
@@ -239,7 +246,7 @@
   async function toggleEnabled(item) {
     const v = !item.enabled;
     items = items.map((x) => (x.id === item.id ? { ...x, enabled: v } : x));
-    try { const r = await api.post('/api/extensions/update', { id: item.id, enabled: v }); patchItem(r.item); }
+    try { const r = await api.post(B + '/update', { id: item.id, enabled: v }); patchItem(r.item); }
     catch (e) { patchItem({ ...item, enabled: !v }); showToast(errMsg(e), true); }
   }
   function patchItem(item) { items = items.map((x) => (x.id === item.id ? item : x)); }
@@ -248,18 +255,18 @@
     const ms = pkgMembers(pkg);
     const v = !ms.every((x) => x.enabled);
     items = items.map((x) => (x.pkg === pkg ? { ...x, enabled: v } : x));
-    try { await api.post('/api/extensions/bulk', { pkg, scope, action: v ? 'enable' : 'disable' }); }
+    try { await api.post(B + '/bulk', { pkg, scope, action: v ? 'enable' : 'disable' }); }
     catch (e) { showToast(errMsg(e), true); }
     finally { await load(); }
   }
 
   // ═══ 生效 Agent ═══
-  // 全服范围：成员只有 Claude；dimensio / Codex 的勾选只影响管理员自己
+  // 全服范围：成员的 Claude 与 dimensio 都加载；Codex 不支持多用户，勾选只影响管理员自己。成员面板：只有 Claude 与 dimensio
   const AGENTS = $derived([
     { key: 'claude', label: 'Claude Code', hint: shared ? t('所有成员下一条消息生效') : t('下一条消息生效') },
-    { key: 'dimensio', label: 'dimensio', hint: shared ? t('只对管理员生效 · 新会话') : t('新会话生效') },
+    { key: 'dimensio', label: 'dimensio', hint: shared ? t('所有成员新会话生效') : t('新会话生效') },
     { key: 'codex', label: 'Codex', hint: shared ? t('只对管理员生效 · 新会话') : t('新会话生效') },
-  ].filter((a) => a.key === 'claude' || agentOn(a.key)));
+  ].filter((a) => (a.key === 'claude' || agentOn(a.key)) && (!member || a.key !== 'codex')));
   function agentAllowed(item, key) {
     const s = support[item.type]?.[key];
     if (!s) return false;
@@ -274,7 +281,7 @@
   async function toggleAgent(item, key) {
     if (!agentAllowed(item, key)) { showToast(agentDeniedWhy(item, key), true); return; }
     const v = !item.agents?.[key];
-    try { const r = await api.post('/api/extensions/update', { id: item.id, agents: { [key]: v } }); patchItem(r.item); }
+    try { const r = await api.post(B + '/update', { id: item.id, agents: { [key]: v } }); patchItem(r.item); }
     catch (e) { showToast(errMsg(e), true); }
   }
   function pkgAgentState(members, key) {
@@ -286,7 +293,7 @@
   async function togglePkgAgent(pkg, key) {
     const st = pkgAgentState(pkgMembers(pkg), key);
     if (st === 'na') { showToast(t('包内没有支持 {agent} 的扩展', { agent: key }), true); return; }
-    try { await api.post('/api/extensions/bulk', { pkg, scope, action: 'agents', agents: { [key]: st === 'off' } }); await load(); }
+    try { await api.post(B + '/bulk', { pkg, scope, action: 'agents', agents: { [key]: st === 'off' } }); await load(); }
     catch (e) { showToast(errMsg(e), true); }
   }
   const agentTags = (it) => AGENTS.filter((a) => it.agents?.[a.key] && agentAllowed(it, a.key)).map((a) => a.label);
@@ -331,7 +338,7 @@
     files = []; fileSel = ''; fileText = '';
     if (item.type === 'connector') return;
     try {
-      const r = await api.get('/api/extensions/files?id=' + encodeURIComponent(item.id));
+      const r = await api.get(B + '/files?id=' + encodeURIComponent(item.id));
       files = r.files || [];
       const first = files.find((f) => /(^|\/)SKILL\.md$/i.test(f.path)) || files.find((f) => /plugin\.json$/.test(f.path)) || files.find((f) => TEXT_RE.test(f.path));
       if (first) pickFile(item.id, first.path);
@@ -341,7 +348,7 @@
     fileSel = p; fileText = '';
     if (!TEXT_RE.test(p)) return;
     fileBusy = true;
-    try { fileText = (await api.get('/api/extensions/file?id=' + encodeURIComponent(id) + '&path=' + encodeURIComponent(p))).text || ''; }
+    try { fileText = (await api.get(B + '/file?id=' + encodeURIComponent(id) + '&path=' + encodeURIComponent(p))).text || ''; }
     catch (e) { fileText = t('（无法预览：{reason}）', { reason: errMsg(e) }); }
     finally { fileBusy = false; }
   }
@@ -360,7 +367,7 @@
     if (!ok) { upErr = upType === 'plugin' ? t('插件请上传 .zip 包') : t('技能支持 .md / .zip / .skill 文件'); return; }
     upBusy = true; upErr = '';
     try {
-      const q = `/api/extensions/upload?type=${upType}&name=${encodeURIComponent(f.name)}` + (upReplace ? `&replace=${encodeURIComponent(upReplace.id)}` : '') + (!upReplace && upPkg.trim() ? `&pkg=${encodeURIComponent(upPkg.trim())}` : '') + (!upReplace ? `&scope=${scope}` : '');
+      const q = `${B}/upload?type=${upType}&name=${encodeURIComponent(f.name)}` + (upReplace ? `&replace=${encodeURIComponent(upReplace.id)}` : '') + (!upReplace && upPkg.trim() ? `&pkg=${encodeURIComponent(upPkg.trim())}` : '') + (!upReplace ? `&scope=${scope}` : '');
       const r = await api.post(q, f);
       upOpen = false;
       showToast(upReplace ? t('已替换「{name}」', { name: r.item.name }) : t('已添加「{name}」', { name: r.item.name }));
@@ -404,7 +411,7 @@
         args: conn.argsText.split('\n').map((s) => s.trim()).filter(Boolean),
         env: kvParse(conn.envText), url: conn.url, headers: kvParse(conn.headersText),
       };
-      const r = await api.post('/api/extensions/connector', body);
+      const r = await api.post(B + '/connector', body);
       connOpen = false;
       showToast(conn.id ? t('已保存') : t('已添加「{name}」', { name: r.item.name }));
       await load();
@@ -420,21 +427,21 @@
     if (srcBusy || !srcRepo.trim()) return;
     srcBusy = true; srcErr = '';
     try {
-      await api.post('/api/extensions/market/sources', { action: 'add', repo: srcRepo.trim() });
+      await api.post(B + '/market/sources', { action: 'add', repo: srcRepo.trim() });
       srcRepo = ''; showToast(t('已添加市场，正在拉取'));
       await loadMarket(true);
     } catch (e) { srcErr = errMsg(e); }
     finally { srcBusy = false; }
   }
   async function removeSource(repo) {
-    try { await api.post('/api/extensions/market/sources', { action: 'remove', repo }); if (fMarket === repo) fMarket = ''; await loadMarket(true); }
+    try { await api.post(B + '/market/sources', { action: 'remove', repo }); if (fMarket === repo) fMarket = ''; await loadMarket(true); }
     catch (e) { srcErr = errMsg(e); }
   }
 
   // ═══ 下载 / 卸载 ═══
   async function download(item) {
     try {
-      const res = await fetch(apiUrl('/api/extensions/download?id=' + encodeURIComponent(item.id)), { headers: authHeaders(), credentials: 'same-origin' });
+      const res = await fetch(apiUrl(B + '/download?id=' + encodeURIComponent(item.id)), { headers: authHeaders(), credentials: 'same-origin' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(await res.blob());
@@ -445,13 +452,13 @@
   }
   async function uninstall(item) {
     if (!(await askConfirm({ title: t('卸载「{name}」？', { name: item.name }), desc: shared ? t('将删除它的全部文件，所有成员的会话都不再加载它。此操作不可撤销。') : t('将删除它的全部文件，并从所有 agent 移除。此操作不可撤销。'), yes: t('卸载'), danger: true }))) return;
-    try { await api.post('/api/extensions/delete', { id: item.id }); showToast(t('已卸载')); await load(); if (mk) loadMarket(); }
+    try { await api.post(B + '/delete', { id: item.id }); showToast(t('已卸载')); await load(); if (mk) loadMarket(); }
     catch (e) { showToast(errMsg(e), true); }
   }
   async function pkgUninstall(pkg) {
     const n = pkgMembers(pkg).length;
     if (!(await askConfirm({ title: t('整包卸载「{name}」？', { name: pkg }), desc: shared ? t('将删除包内 {n} 个扩展的全部文件，所有成员的会话都不再加载它们。此操作不可撤销。', { n }) : t('将删除包内 {n} 个扩展的全部文件，并从所有 agent 移除。此操作不可撤销。', { n }), yes: t('整包卸载'), danger: true }))) return;
-    try { await api.post('/api/extensions/bulk', { pkg, scope, action: 'delete' }); showToast(t('已整包卸载')); await load(); if (mk) loadMarket(); }
+    try { await api.post(B + '/bulk', { pkg, scope, action: 'delete' }); showToast(t('已整包卸载')); await load(); if (mk) loadMarket(); }
     catch (e) { showToast(errMsg(e), true); }
   }
 
@@ -761,11 +768,13 @@
           {:else if pop_ === 'add'}
             <div class="cz-pop">
               <button class="cz-mi" onclick={() => { pop_ = ''; openUpload('skill'); }}>{@html ic('skill')}{t('上传技能')}</button>
+              {#if !member}
               <button class="cz-mi" onclick={() => { pop_ = ''; openConnForm(); }}>{@html ic('connector')}{t('添加连接器')}</button>
               <button class="cz-mi" onclick={() => { pop_ = ''; openUpload('plugin'); }}>{@html ic('plugin')}{t('上传插件')}</button>
               <div class="cz-pop-sep"></div>
               <button class="cz-mi" onclick={() => { pop_ = ''; srcErr = ''; srcOpen = true; if (!mk) loadMarket(); }}>{@html ic('store')}{t('管理市场…')}</button>
               <button class="cz-mi" onclick={() => { pop_ = ''; view = 'discover'; loadMarket(true); }}>{@html ic('refresh')}{t('刷新市场')}</button>
+              {/if}
             </div>
           {/if}
         </div>
@@ -839,6 +848,26 @@
         <div class="cz-empty">{t('没有匹配的结果')}</div>
       {:else}
         <div class="cz-grid">{#each mineCards as c (c.id)}{@render mineCard(c)}{/each}</div>
+      {/if}
+      {#if member && loaded && sharedSkills.length}
+        {@const list = sharedSkills.filter((x) => hit(`${x.name} ${x.description}`))}
+        <h3 class="cz-h">{t('服务器统一提供')}<span class="cz-n">{sharedSkills.length}</span></h3>
+        <p class="cz-note">{t('管理员给所有成员加装的技能，直接可用，不能在这里改动。')}</p>
+        {#if list.length}
+          <div class="cz-grid">
+            {#each list as x (x.name)}
+              {@const tags = AGENTS.filter((a) => x.agents?.[a.key]).map((a) => a.label)}
+              <div class="cz-card static">
+                <span class="cz-tile">{@html ic('skill')}</span>
+                <div class="cz-body">
+                  <b class="cz-name">{x.name}</b>
+                  <p class="cz-desc">{x.description || t('（无描述）')}</p>
+                  <span class="cz-foot">{tags.length ? tags.join(' · ') : t('未对任何 agent 生效')}</span>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
       {/if}
     {/if}
   {/if}

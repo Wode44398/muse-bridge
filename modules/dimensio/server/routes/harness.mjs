@@ -25,6 +25,7 @@ import { PV_PUBLIC_DOMAIN, PORT as BRIDGE_PORT, ROOT, NATIVE_ROOT, VAULT, config
 import { PROGRAM_ROOT } from '@bridge/core/runtime/paths.mjs';
 import { DESKTOP_HOST_FILE } from '@bridge/core/runtime/desktop-host.mjs';
 import { EXT_REGISTRY_FILE } from '@bridge/core/extensions.mjs';
+import { memberDimensioRegistries } from '@bridge/core/member-skills.mjs';
 import { outboundProxyStatus } from '@bridge/core/runtime/net-proxy.mjs';
 import { devicesEnabled } from '@bridge/core/runtime/devices.mjs';
 import { ensureHostSecret } from '@bridge/core/runtime/host-secret.mjs';
@@ -308,6 +309,11 @@ const TENANT_ENV_DROP = [
   /^SANDBOX_ACCESS$/, /^PV_PUBLIC_DOMAIN$/, /^CLAUDE_CODE_OAUTH_TOKEN$/, /^TUNNEL_TOKEN$/,
 ];
 
+function skillRegistries(user) {
+  try { return memberDimensioRegistries(user).join(path.delimiter); }
+  catch (e) { console.error('[dimensio] 成员技能清单路径取不到：', e?.message || e); return ''; }
+}
+
 function tenantEnv(user, port, token, { shell }) {
   const dirs = tenantDirs(user);
   const base = {};
@@ -350,9 +356,12 @@ function tenantEnv(user, port, token, { shell }) {
     // 子进程的隔离 HOME 与 $WORKSPACE_TMP 各用各的（默认是整机共用的临时目录，彼此看得见）。
     DIMENSIO_CHILD_HOME: path.join(dirs.d, 'child-home'),
     DIMENSIO_SCRATCH_DIR: path.join(dirs.d, 'tmp'),
+    // 技能：他自己添加的 + 管理员加装给全服的（两份只含技能的清单，不含连接器与凭据；见 member-skills.mjs）。
+    // harness 现读，装 / 删技能不用重启实例（新会话生效）。
+    DIMENSIO_SKILL_REGISTRIES: skillRegistries(user),
     // 设备通道：他自己的电脑（按人令牌，见 deviceEnv）。
     ...deviceEnv(user),
-    // 不传 BRIDGE_DATA_ROOT / BRIDGE_ROOT / 扩展注册表 / 桌面壳宿主：租户模式下 harness 也一概不认 bridge 的集成件
+    // 不传 BRIDGE_DATA_ROOT / BRIDGE_ROOT / 扩展注册表（技能另走上面两份清单）/ 桌面壳宿主：租户模式下 harness 也一概不认 bridge 的集成件
     // （paths.ts bridgeRootCandidates 返回空）。
   };
 }

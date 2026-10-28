@@ -34,7 +34,8 @@
     const g = new Map();
     for (const m of cp.models) {
       if (m.hidden) continue;
-      if (!g.has(m.provider)) g.set(m.provider, { id: m.provider, name: m.providerName, models: [] });
+      // 管理员共享过来的服务（managed）：组名后面标一句，免得成员以为是自己加的
+      if (!g.has(m.provider)) g.set(m.provider, { id: m.provider, name: m.managed ? `${m.providerName} · ${t('管理员共享')}` : m.providerName, models: [] });
       g.get(m.provider).models.push(m);
     }
     for (const x of g.values()) x.models.sort((a, b) => (b.isDefault ? 1 : 0) - (a.isDefault ? 1 : 0));

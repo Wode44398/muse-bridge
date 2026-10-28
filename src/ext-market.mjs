@@ -20,7 +20,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs';
 import {
-  EXT_ROOT, stagingDir, installSkillFromDir, installPluginFromDir, saveConnector, parseFrontmatter, listExtensions,
+  EXT_ROOT, stagingDir, installSkillFromDir as installSkillFromDirAdmin, installPluginFromDir, saveConnector, parseFrontmatter, listExtensions,
 } from './extensions.mjs';
 import { writeJson } from './jsonfile.mjs';
 
@@ -312,8 +312,10 @@ async function fetchGitSource(so, work) {
 }
 
 // scope：装进哪个范围（admin 自用 / shared 全服），原样交给 extensions.mjs
-export async function marketInstall({ kind, key, scope } = {}) {
+// hooks.installSkillFromDir：成员装进他自己的注册表时换掉（member-skills.mjs），scope 那时不起作用
+export async function marketInstall({ kind, key, scope } = {}, hooks = {}) {
   key = String(key || '');
+  const installSkillFromDir = hooks.installSkillFromDir || installSkillFromDirAdmin;
   if (kind === 'connector') {
     const c = findEntry('connector', key);
     const s = c.spec || {};

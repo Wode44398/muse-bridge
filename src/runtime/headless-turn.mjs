@@ -25,6 +25,7 @@ import { claudeEngineEnv, activeAccountId } from './claude-account.mjs';
 import { routeBeforeQuery, noteLimitHit, reasonText } from './account-router.mjs';
 import { isUpstreamEnv, lastServedAccount } from './claude-upstream.mjs';
 import { claudeExtensionsFor, sharedExtensionDirs } from '../extensions.mjs';
+import { memberClaudePlugins, memberSkillRootIfAny } from '../member-skills.mjs';
 import { collectDeliverables, deliverAnywhere, deliverRoots } from './deliverables.mjs';
 import { addUsage } from '../users.mjs';
 import { PEER_OFF_ENV, PEER_OFF_SETTINGS } from './session-peers.mjs';   // 无人值守：跨会话通道关门
@@ -53,6 +54,7 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
   await routeBeforeQuery({ model: runModelBase });
   // 扩展中心与主聊天同源注入（管理员 = 自用 + 全服，注册用户 = 只有全服）。
   const ext = claudeExtensionsFor(ctx);
+  if (ctx.kind === 'user') ext.plugins.push(...memberClaudePlugins(ctx.user));
   const attachments = Array.isArray(o.attachments) ? o.attachments.filter((p) => typeof p === 'string' && p) : [];
   const composed = composeTurnPrompt(o.prompt || '（没有内容）', attachments);
   // 恒流式输入 + gate 挂流（同主聊天，见 agents/claude.mjs makeTurnInput 注释）：
@@ -78,7 +80,7 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
       ...claudeCliOptions(),
       cwd: ctx.cwd,
       ...(o.resume ? { resume: o.resume } : {}),
-      additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' ? sharedExtensionDirs() : []) : [UPLOADS, MEDIA],
+      additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' ? [...sharedExtensionDirs(), ...[memberSkillRootIfAny(ctx.user)].filter(Boolean)] : []) : [UPLOADS, MEDIA],
       // 功能扩展的工具（媒体）跟着 agent 开关走（ctx.allowGemini），与主聊天同口径。
       mcpServers: { ...moduleClaudeMcp(ctx), ...plug.mcpServers, ...ext.mcpServers },
       ...(ext.plugins.length ? { plugins: ext.plugins } : {}),

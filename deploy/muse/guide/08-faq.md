@@ -47,7 +47,7 @@
 ## 要花钱吗
 
 - Muse Bridge 本身免费开源。
-- Claude Code 用的是用户自己的 Claude 订阅（Pro / Max），额度按订阅算，所有登录的人共用这一份。Claude 页接的别家模型（自定义 API）按那家的价格计费。
+- Claude Code 用的是用户自己的 Claude 订阅（Pro / Max），额度按订阅算，所有登录的人共用这一份。Claude 页接的别家模型（自定义 API）按那家的价格计费：成员用自己的 Key 不占本站额度；用管理员「共享给成员」的服务，花的是管理员的 Key，计入成员的额度。
 - dimensio 用的是各家的 API key，按各家价格计费（dimensio 里不显示金额，去各家控制台看）。小米的联网搜索插件另外按次收费。
 - Muse 平台本身的费用以 Muse 为准。
 

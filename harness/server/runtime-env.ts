@@ -54,6 +54,7 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "DIMENSIO_QUICK_FILE", area: "路径", description: "快照对话的当前桶指针", default: "<数据目录>/quick.json" },
   { name: "DIMENSIO_QUICK_ROOT", area: "路径", description: "快照对话一次性桶的根目录", default: "~/.dimensio/quick" },
   { name: "DIMENSIO_CUSTOM_PROVIDERS_DIR", area: "路径", description: "自定义模型服务（地址、备注与加密的 API key）", default: "<数据目录>/custom-providers" },
+  { name: "DIMENSIO_SKILL_REGISTRIES", area: "路径", description: "技能清单列表（按 PATH 分隔符）：给了就只认这几份、同名前面的优先，不再读扩展注册表；bridge 拉起成员实例时给（他自己添加的 + 全服的技能）" },
   { name: "DIMENSIO_SHARED_PROVIDERS_DIR", area: "路径", description: "管理员那份自定义服务目录（只读）：成员实例据此用管理员标了「共享给成员」的服务；bridge 拉起成员实例时给" },
   { name: "MEMORY_DIR", area: "路径", description: "记忆库目录（按工作区分）", default: "<数据目录>/memory" },
   { name: "KNOWLEDGE_DIR", area: "路径", description: "项目知识索引目录", default: "<数据目录>/knowledge" },
