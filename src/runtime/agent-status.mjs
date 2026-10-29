@@ -21,6 +21,7 @@ import { CONFIG_PATH, config, VERTEX_PROJECT, GEMINI_API_KEY } from '../config/i
 import { AGENTS, AGENT_IDS, AGENT_BY_ID } from '../config/agents.mjs';
 import { busPublishAll } from './bus.mjs';
 import { agentModuleRunnable, getModule, moduleOfAgent, moduleOffered, moduleStatus } from '../modules/registry.mjs';
+import { vertexCredentials } from './vertex-credentials.mjs';
 
 // ── 开关 ────────────────────────────────────────────────────────────────────
 function normSwitches(raw) {
@@ -70,6 +71,7 @@ const AUTHED = {
   gemini: () => {
     if (GEMINI_API_KEY) return true;
     if (!VERTEX_PROJECT) return false;
+    if (vertexCredentials()) return true;   // 设置页上传的凭据
     const sa = process.env.GOOGLE_APPLICATION_CREDENTIALS;
     return (!!sa && existsSync(sa)) || existsSync(gcloudAdc());
   },
@@ -94,6 +96,8 @@ const AUTHED = {
 const PROBE_TTL = 20_000;
 let probeCache = null;   // { at, runnable:{}, authed:{} }
 function invalidateProbes() { probeCache = null; }
+// 凭据在别处改了（设置页的 Vertex 凭据）：重探并让在线客户端刷新 agent 列表。
+export function refreshAgentStatus() { invalidateProbes(); busPublishAll({ type: 'agents.changed' }); }
 function probes() {
   if (probeCache && Date.now() - probeCache.at < PROBE_TTL) return probeCache;
   const runnable = {}, authed = {};

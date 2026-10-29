@@ -10,7 +10,7 @@
 - **Claude Code**：Anthropic 的编程 / 通用 agent，用用户自己的 Claude 订阅（Pro 或 Max）。
 - **dimensio**：一个可以接各家模型 API（Anthropic、OpenAI、Gemini、DeepSeek、Kimi、智谱、Qwen、MiMo…）的 agent 工作台，用用户自己的 API key。
 
-两个 agent 都能读写文件、跑命令、做项目；还可以给朋友开账号。
+两个 agent 都能读写文件、跑命令、做项目；还可以给朋友开账号。另外带一个默认关着的 **Gemini · Vertex** 扩展（Google 的图像 / 视频 / 语音 / 音乐生成，要用户自己的 Google 云凭据，见 4.9）。
 
 ## 0. 几条约束（先读完再动手）
 
@@ -224,6 +224,13 @@ Muse Bridge 自带一套给 agent 用的 HTTP 接口（入口 `/agent`，项目�
 - **会改东西的操作先问用户**：给 Claude 派活、建定时任务、改设置之前，先告诉用户要做什么，他同意再做。
 - **别把密钥写进长期记忆或任何笔记**（同第 0 节第 6 条），只放在环境变量或权限 600 的文件里；丢了就请用户吊销再生成一把。
 - 用户问「这个设置页是干什么的」，说明书见 `guide/07-settings.md`「Agent 接入」。
+
+### 4.9 Gemini · Vertex（图像 / 视频 / 语音 / 音乐，可选）
+装好时是关着的。用户想用 Google 的生图、生视频、配音、配乐时：
+1. 请他在网页里打开：**「设置 → 扩展 → 功能扩展」**，「Agent」区 Gemini · Vertex 卡上的开关（只有管理员能开）。
+2. 打开后马上跑一次 `bash $OPS/bootstrap.sh allow-sites`（不带参数：Gemini 开着时会带上 Google 的 4 个接口站点），先告诉他要弹几张 Google 的审核卡，建议选「总是允许此站点」——生成是在后台跑的，只「允许一次」以后还会卡住（选项见 2.0）。
+3. 请他准备凭据并在 **「设置 → Agent → Gemini」** 的「Google 云凭据」卡片里上传、点「保存并测试」。**凭据（服务账号 JSON、gcloud 的凭据文件）只在设置页上传，别让他贴给你、别经你的命令行写进 VM**——你会把对话内容留在记忆里。
+4. 费用在他自己的 Google Cloud 账单上。详细步骤、报错对照、在 Claude 里怎么用：`guide/09-vertex.md`。
 
 ## 5. 用自己的域名（固定地址）
 

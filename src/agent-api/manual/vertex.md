@@ -16,6 +16,22 @@ Vertex 分页（agent id `gemini`，界面名 Vertex / Gemini）经 Google Verte
 
 {{vertex.params}}
 
+## 配置 Google 云凭据（设置 › Agent › Vertex）
+
+管理员在设置里直接给 Gemini · Vertex 配凭据，不用登录服务器、不用改环境变量或 config.json，VPS / Docker 部署也一样。
+
+- 入口：设置 › Agent › Vertex（显示为 Gemini 那一行），开关下面的「Google 云凭据」卡。只有管理员看得到；Gemini · Vertex 扩展没装或跑不起来时没有这张卡。
+- 凭据：拖入 JSON 文件、「选择文件」或「粘贴内容」。认两种常见的：
+  - 服务账号密钥（推荐，适合服务器）：Google Cloud 控制台启用 Vertex AI API → IAM 和管理 › 服务账号里创建服务账号、角色选「Vertex AI 用户」→ 这个服务账号 › 密钥 › 添加密钥 › 创建新密钥 › JSON。
+  - 自己的 Google 账号：在自己电脑上运行 `gcloud auth application-default login`，上传生成的 `application_default_credentials.json`（Windows 在 `%APPDATA%\gcloud\`，macOS / Linux 在 `~/.config/gcloud/`）。这种不带项目，项目 ID 要自己填。
+  - 也认工作负载身份联合、模拟服务账号；OAuth 客户端 ID 文件（含 installed / web）不是凭据，会被拒。
+- 项目 ID：服务账号密钥里带的会自动带出。Gemini API Key 可选（部分模型与 2K/4K 图像要用），保存后只显示末 4 位，可勾「清除已保存的 API Key」。「区域」里可改对话区域（默认 global）与媒体区域（默认 us-central1），一般不用动。
+- 「保存并测试」：即时生效、不用重启，并真打一次 Google（countTokens，不计费；填了 API Key 再列一次模型），结果显示「✓ Vertex 已连通」或一句能照着改的原因（没开 Vertex AI API、缺「Vertex AI 用户」角色、没开结算、项目 ID 不对、凭据被吊销、连不上 Google）。「测试连接」只测不改；「移除凭据」删掉上传的那份。
+- 优先级：这里上传的 > 服务器环境变量 GOOGLE_APPLICATION_CREDENTIALS > 服务器上的 gcloud 登录。环境变量设了 VERTEX_PROJECT / VERTEX_LOCATION / VERTEX_MEDIA_LOCATION / GEMINI_API_KEY 的那一项在卡片上是灰的（「由服务器环境变量指定」）。
+- 存放：凭据只存在服务器数据目录的 `secrets/vertex-credentials.json`，成员看不到、也不进任何人的工作区；接口只回服务账号邮箱等摘要，不回密钥。
+- 经家里主机中继使用 Vertex 的 Windows 客户端上，卡片只提示「凭据在主机上配置」。
+- 接口（管理员）：`GET /api/vertex/credentials` 看现状；`POST /api/vertex/credentials` 传 `credentials`（JSON 文本，null = 删除）、`project`、`location`、`mediaLocation`、`apiKey`（'' = 清除）、`test`；`POST /api/vertex/credentials/test` 只测。
+
 ## Vertex 分页的入口与模块切换
 
 - 手机：主页入口方块「Vertex」。顶部左侧「≡」打开历史抽屉；对话模块时左上是模型选择（显示「Gemini / 当前模型」）；右上「＋」新对话；右上图标按钮是「功能模块」菜单，在「对话 / 图像 / 视频 / 语音 / 音乐」间切换。

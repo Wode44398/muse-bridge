@@ -55,6 +55,7 @@
   import AdminAccessSection from './AdminAccessSection.svelte';
   // Claude Code 运行组件的下载进度 / 失败重试（安装包不再内嵌，首启服务端去拿；就绪时不显示），与手机设置共用
   import ClaudeCliStatus from '../../components/ClaudeCliStatus.svelte';
+  import VertexCredentials from '../../components/VertexCredentials.svelte';
   import { serverOnThisMachine } from '../../lib/nativeDesktop.js';
   import { createServerUpdate } from '../../lib/serverUpdate.svelte.js';
   import Customize from '../../components/ext/Customize.svelte';
@@ -144,7 +145,7 @@
   }
   const AG_AUTH_HINT = {
     claude: () => t('在下面「订阅号池」里添加账号。'),
-    gemini: () => t('在服务器配置里填 geminiApiKey 或 Vertex 凭据。'),
+    gemini: () => t('在下面「Google 云凭据」里上传凭据 JSON。'),
     codex: () => t('在服务器上运行一次 codex login。'),
     dimensio: () => t('在 dimensio 的 .env 里填一家模型厂商的 API key。'),
   };
@@ -1332,6 +1333,8 @@
         {/if}
         {#if clErr}<p class="err">{clErr}</p>{/if}
       {/if}
+
+      {#if id === 'gemini' && a?.runnable}<VertexCredentials onchange={loadAgents} />{/if}
 
       {#if !a && id !== 'claude'}<p class="note">{t('只有管理员能改这里')}</p>{/if}
 

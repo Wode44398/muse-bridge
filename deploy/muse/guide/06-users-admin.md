@@ -31,7 +31,7 @@
 - **「设置 → 服务端控制台」**（Settings → Admin console）：在设置根页的 **「服务器」**（Server）分组里，只有管理员看得到。手机、电脑上都能打开。
 - 左边（窄屏是顶部）是各个页面：**「总览」**（Overview）、**「活跃进程」**（Active processes）、**「用户」**（Users）、**「额度与注册」**（Quotas & sign-ups）、**「会话 / 续聊」**（Sessions）、**「定时任务」**（Routines）、**「媒体」**（Media）、**「Claude 账号」**（Claude accounts）、**「设备」**、**「服务控制」**（Service）。
 - 只自己用时，「用户」页叫 **「服务账号」**（Service accounts），没有「额度与注册」。
-- 「媒体」页列的是生成的图片 / 视频这类媒体；这台 Muse 不带媒体生成，一般是空的。
+- 「媒体」页列的是生成的图片 / 视频这类媒体；没打开 Gemini · Vertex（见 09-vertex.md）时一般是空的。
 
 ## 给朋友开账号
 

@@ -1,0 +1,4 @@
+git+https://github.com/huggingface/diffusers.git@8b33bfc04b6b5e8bb58a58e55f68746c1bbee4cd
+transformers==5.18.0
+accelerate==1.15.0
+pillow==12.3.0

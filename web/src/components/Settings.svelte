@@ -63,6 +63,7 @@
   import { cp, loadProviders, cpSummaryText, canUseCustomApi } from '../lib/claudeProviders.svelte.js';
   // Claude Code 运行组件的下载进度 / 失败重试（安装包不再内嵌，首启服务端去拿；就绪时不显示）
   import ClaudeCliStatus from './ClaudeCliStatus.svelte';
+  import VertexCredentials from './VertexCredentials.svelte';
   import { S as CS, val, visible, setVal, resetVal, changed, label as csLabel, options as csOptions, valueLabel, errText } from '../lib/claudeSettingsView.js';
   import { branchPrefixError } from '../../../src/config/claude-settings.mjs';
   import { extensionsNav } from '../lib/extensionsNav.svelte.js';
@@ -328,7 +329,7 @@
   const markSrc = (id) => { const m = agentMark(id, dark); return m ? ovUrl(m) : ''; };   // 私有 overlay 有同名原版就换
   const AG_AUTH_HINT = {
     claude: () => t('在下面「订阅号池」里添加账号。'),
-    gemini: () => t('在服务器配置里填 geminiApiKey 或 Vertex 凭据。'),
+    gemini: () => t('在下面「Google 云凭据」里上传凭据 JSON。'),
     codex: () => t('在服务器上运行一次 codex login。'),
     dimensio: () => t('在 dimensio 的 .env 里填一家模型厂商的 API key。'),
   };
@@ -1557,6 +1558,7 @@
 
 {#snippet pAgent(id)}
   {@render agSwitch(id)}
+  {#if id === 'gemini' && agentById(id)?.runnable}<VertexCredentials onchange={loadAgents} />{/if}
   {#if !agentById(id)}{@render gfoot(t('只有管理员能改这里'))}{/if}
 {/snippet}
 

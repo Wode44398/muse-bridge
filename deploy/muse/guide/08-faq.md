@@ -104,7 +104,7 @@
 
 ## 能不能加别的 agent（Codex、Gemini CLI……）
 
-- Muse Bridge 只有 Claude Code 和 dimensio 两个（不带 Codex、Gemini 这些扩展）。想用别家模型：在 dimensio 里配那家的 key，或用「自定义服务」接 OpenAI / Anthropic / Gemini 接口；想在 **Claude 页** 里用 DeepSeek、Kimi、OpenRouter 这类模型，在「设置 → Claude → 自定义 API」里接（见 07-settings.md）。
+- Muse Bridge 的 agent 是 Claude Code 和 dimensio（不带 Codex、Gemini CLI）；另带一个默认关着的 Gemini · Vertex 扩展，管 Google 的图像 / 视频 / 语音 / 音乐生成，要自己的 Google 云凭据，见 09-vertex.md。想用别家模型：在 dimensio 里配那家的 key，或用「自定义服务」接 OpenAI / Anthropic / Gemini 接口；想在 **Claude 页** 里用 DeepSeek、Kimi、OpenRouter 这类模型，在「设置 → Claude → 自定义 API」里接（见 07-settings.md）。
 
 ## 能同时跑几个任务
 

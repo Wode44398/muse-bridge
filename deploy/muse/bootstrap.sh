@@ -333,8 +333,14 @@ apply_bridge_declarations() {
   set_bridge_env BRIDGE_HEAP_SNAPSHOT 0
   # Chromium 在 VM 上没有沙箱、起不来：dimensio 不给浏览器工具
   set_bridge_env DIMENSIO_BROWSER off
-  # 不带 Gemini（Vertex）与 Codex 扩展：扩展中心与 Agent 页都不列
-  set_bridge_env BRIDGE_MODULES_HIDE vertex,codex
+  # 不带 Codex 扩展（公开版本来就没有）：扩展中心与 Agent 页都不列
+  set_bridge_env BRIDGE_MODULES_HIDE codex
+  # Gemini · Vertex 扩展随代码带着，但要用户自己的 Google 云凭据：第一次带上它时先关着（主页、成员那里都不出现），
+  # 管理员在 设置 → 扩展 → 功能扩展 打开、在 设置 → Agent → Gemini 上传凭据。之后尊重用户的开关，不再写
+  if [ ! -f "$OPS/vertex-offered" ]; then
+    edit_config 'if (.agents.gemini | type) == "boolean" then . else .agents = ((.agents // {}) + {gemini: false}) end'
+    date -u +%FT%TZ > "$OPS/vertex-offered"
+  fi
   # 插件：登记 Muse 插件（经 current 链接，换版本不用改）；第一次对齐时关掉 VM 上用不了的内置功能
   [ -f "$stamp" ] || first=true
   [ -f "$pj" ] || printf '{"version":1,"plugins":{},"local":[]}\n' > "$pj"
@@ -782,7 +788,22 @@ configured_sites() {
     done < "$env"
   fi
   [ -f "$cp" ] && jq -r '.providers[]?.baseUrl // empty' "$cp" 2>/dev/null | while IFS= read -r u; do site_of "$u"; done
+  # Gemini · Vertex 开着时：换令牌、对话（global 或所选区域）、媒体（默认 us-central1）、Gemini API Key 各一个站点
+  vertex_sites
   return 0
+}
+# Gemini · Vertex 要访问的 Google 接口（扩展关着时什么都不输出）。区域跟 config.json 的 vertexLocation / vertexMediaLocation 走
+vertex_sites() {
+  local f="$DATA/config.json" on loc mloc
+  [ -f "$f" ] || return 0
+  on="$(jq -r 'if .agents.gemini == false then "0" else "1" end' "$f" 2>/dev/null || echo 0)"
+  [ "$on" = 1 ] || return 0
+  loc="$(jq -r '.vertexLocation // "global" | if . == "" then "global" else . end' "$f" 2>/dev/null || echo global)"
+  mloc="$(jq -r '.vertexMediaLocation // "us-central1" | if . == "" then "us-central1" else . end' "$f" 2>/dev/null || echo us-central1)"
+  echo oauth2.googleapis.com
+  if [ "$loc" = global ]; then echo aiplatform.googleapis.com; else echo "$loc-aiplatform.googleapis.com"; fi
+  echo "$mloc-aiplatform.googleapis.com"
+  echo generativelanguage.googleapis.com
 }
 # $@ = 站点或网址；不给就按配置算。每个站点经代理访问一次：已放行的立刻过，没放行的会停住等用户在 Muse 里批
 allow_sites() {

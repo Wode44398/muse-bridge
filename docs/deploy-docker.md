@@ -43,7 +43,7 @@ docker compose exec bridge node src/cli.mjs pair --origin=http://192.168.1.10:87
 | 2 对外访问 | `BRIDGE_BIND` / `BRIDGE_PUBLISH_PORT` | 宿主机上监听的地址与端口，默认 `127.0.0.1:8787`。改成 `0.0.0.0` 同一个 Wi-Fi 的手机能直连（明文 http，只在自己的网络里用，记得看防火墙） |
 | | `BRIDGE_PUBLIC_ORIGIN` | 你的公网地址（如 `https://bridge.example.com`），分享链接与配对二维码用它 |
 | | `TUNNEL_TOKEN` | Cloudflare 隧道侧车容器用（第 4 节） |
-| 3–4 可选功能 | dimensio 厂商 key、Vertex | 留空就是不开 |
+| 3–4 可选功能 | dimensio 厂商 key、Vertex | 留空就是不开；Vertex 凭据也可以登录后在「设置 › Agent › Vertex」里上传，不用改这里 |
 | 构建 | `WITH_OFFICE` | `1` = 装 LibreOffice，Office 文档能在线预览（镜像约大 600MB） |
 | | `WITH_CLAUDE_CLI` | 见第 3 节 |
 

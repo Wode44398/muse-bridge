@@ -223,7 +223,7 @@ export default {
   '现在用的是配置文件里的 API Key（按量计费）；给使用中的账号填上令牌，就改用订阅号。': 'Claude is using the API key from the config file (pay-as-you-go). Add a token to the active account to switch to the subscription.',
   '现在用的是安装向导里填的 API Key，号池里的令牌不会生效；要改用订阅号，在那台电脑的托盘「本机服务端 › 重新配置…」里改选订阅令牌。': 'Claude is using the API key entered in the setup wizard, so tokens in the pool aren’t used. To switch to the subscription, choose a subscription token from the tray on that computer: Local server › Reconfigure…',
   'config.json 里的 anthropicApiKey 没在用：号池里有订阅令牌时优先用订阅号。要改用 API Key，把它设成环境变量 ANTHROPIC_API_KEY 后重启服务。': 'The anthropicApiKey in config.json isn’t being used: subscription tokens in the pool take priority. To use the API key instead, set it as the ANTHROPIC_API_KEY environment variable and restart the service.',
-  '在服务器配置里填 geminiApiKey 或 Vertex 凭据。': 'Set geminiApiKey or Vertex credentials in the server config.',
+  '在下面「Google 云凭据」里上传凭据 JSON。': 'Upload a credentials JSON under Google Cloud credentials below.',
   '在服务器上运行一次 codex login。': 'Run codex login once on the server.',
   '在 dimensio 的 .env 里填一家模型厂商的 API key。': 'Add an API key for a model provider to dimensio’s .env.',
   '可用 · 仅管理员': 'Available · Admin only',

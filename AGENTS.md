@@ -22,7 +22,7 @@
   - `feedback-worker/`：反馈中继（Cloudflare Worker，以 GitHub App 身份开 Issue），和 `deploy/muse/feedback/` 共用格式与脱敏代码，改那边要两边都测；
   - `android/`：Muse 自己的安卓 App（在线 WebView 壳）；
   - `.github/`、`README*.md`、`LICENSE`、`AGENTS.md`、`CLAUDE.md`。
-- 同步时还会剔除公开版里 Muse 不带的部分（脚本里的 `DROP`：Windows 客户端源码、bridge 的离线 apk 工程、Vertex 扩展、Docker 件等）。
+- 同步时还会剔除公开版里 Muse 不带的部分（脚本里的 `DROP`：Windows 客户端源码、bridge 的离线 apk 工程、Docker 件等）。Vertex 扩展随代码带着（默认关）。
 
 ## Muse 和 bridge 的差别只经声明表达
 
@@ -33,7 +33,7 @@
 - `config.json` 的 `feedbackRelay`：bridge 的反馈推送发到 Muse 的反馈中继（`feedback-worker/`），带 `distro: "muse"`，中继转成本仓库的 Issue；
   推送开关 `feedbackUpstream` 不写（默认关，管理员在网页里自己开）；
 - 服务单元的环境变量：`BRIDGE_AUDIENCE_HINT`（控制台的多人开关只读，提示在 Muse 里说）、`BRIDGE_PROXY_FORCED`（模型服务一律走出站代理）、
-  `BRIDGE_MODULES_HIDE=vertex,codex`、`DIMENSIO_BROWSER=off`、`BRIDGE_UPDATE_HINT`、小内存旋钮等；
+  `BRIDGE_MODULES_HIDE=codex`、第一次带上 Vertex 时写 `agents.gemini=false`（stamp `ops/vertex-offered`）、`DIMENSIO_BROWSER=off`、`BRIDGE_UPDATE_HINT`、小内存旋钮等；
 - `plugins.json`：登记 Muse 插件，第一次对齐时关掉 VM 上用不了的内置功能（phone-control、phone-files、browser、edge、keep-awake）；
 - Muse 插件 `deploy/muse/plugin/`。
 
@@ -44,7 +44,7 @@
 - **改了界面（bridge 同步带来的也算），同一个提交里改 `deploy/muse/guide/` 对应的章节**；界面名字用 **「中文」**（English）写，
   `deploy/muse/test/guide.test.mjs` 会核对中文在前端源码里、英文在英文字典里（Muse 插件页的文案在 `deploy/muse/plugin/web/`，英文在页面脚本的 `EN` 对象里，也算），
   设置根页（`web/src/components/Settings.svelte`）的每个分组和每一行，设置那一章都要讲到。说明书只写这台 Muse 上真有的东西。
-- Muse 上的 agent 只有 `claude` 与 `dimensio`（bridge 的 Gemini / Vertex、Codex 扩展不带）。
+- Muse 上的 agent 是 `claude` 与 `dimensio`；bridge 的 Gemini · Vertex 扩展带着但默认关（管理员在「功能扩展」里打开、设置页上传 Google 云凭据），Codex 不带。
 - 部署目标是 Linux 服务端形态，数据目录与程序目录分开（`BRIDGE_DATA_ROOT`）。
 - Muse VM 的限制（只能经 HTTP CONNECT 代理出站、`/etc` 重启不保留、没有浏览器沙箱、不能跑 Docker）都包在 `deploy/muse/bootstrap.sh` 里；
   通用修复去 bridge 本体做，不要写进 Muse 专用脚本。

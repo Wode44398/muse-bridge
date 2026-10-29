@@ -143,14 +143,37 @@ if (CODEX_BIN) process.env.CODEX_BIN = CODEX_BIN;
 
 // Gemini-via-Vertex: ADC auth (gcloud auth application-default login). Project +
 // location come from config.json / env; the phone picks a model client-side from
-// capabilities.mjs.
-export const VERTEX_PROJECT = process.env.VERTEX_PROJECT || config.vertexProject || '';
-export const VERTEX_LOCATION = process.env.VERTEX_LOCATION || config.vertexLocation || 'global';
+// capabilities.mjs. 凭据也可以在设置页上传（runtime/vertex-credentials.mjs）。
+// 这四个是 let：设置「Agent › Vertex」里改了即时生效（setVertexConfig）——ESM 导入是活绑定，各处下一次读到的就是新值。
+// 环境变量照旧优先：设了的那一项界面上只读（VERTEX_ENV）。
+export const VERTEX_ENV = Object.freeze({
+  project: !!process.env.VERTEX_PROJECT, location: !!process.env.VERTEX_LOCATION,
+  mediaLocation: !!process.env.VERTEX_MEDIA_LOCATION, apiKey: !!process.env.GEMINI_API_KEY,
+});
+export let VERTEX_PROJECT = process.env.VERTEX_PROJECT || config.vertexProject || '';
+export let VERTEX_LOCATION = process.env.VERTEX_LOCATION || config.vertexLocation || 'global';
 // Media models (Veo/Imagen/Lyria) are NOT on the 'global' endpoint — they live
 // on a regional one (us-central1, verified for this project).
-export const VERTEX_MEDIA_LOCATION = process.env.VERTEX_MEDIA_LOCATION || config.vertexMediaLocation || 'us-central1';
+export let VERTEX_MEDIA_LOCATION = process.env.VERTEX_MEDIA_LOCATION || config.vertexMediaLocation || 'us-central1';
 // Gemini Developer API key (for models not on Vertex, e.g. lyria-3).
-export const GEMINI_API_KEY = process.env.GEMINI_API_KEY || config.geminiApiKey || '';
+export let GEMINI_API_KEY = process.env.GEMINI_API_KEY || config.geminiApiKey || '';
+
+// { project?, location?, mediaLocation?, apiKey? }：只改传了的项，写回 config.json（其余键原样保留）。
+// 被环境变量占着的项不写（写了也不生效，免得界面上看着改了其实没变）。
+const VERTEX_KEYS = { project: 'vertexProject', location: 'vertexLocation', mediaLocation: 'vertexMediaLocation', apiKey: 'geminiApiKey' };
+export function setVertexConfig(v = {}) {
+  let raw;
+  try { raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf8').replace(/^﻿/, '')); } catch (e) { throw new Error('读不了 config.json：' + ((e && e.message) || e)); }
+  for (const [k, ck] of Object.entries(VERTEX_KEYS)) {
+    if (v[k] === undefined || VERTEX_ENV[k]) continue;
+    raw[ck] = config[ck] = String(v[k] ?? '').trim();
+  }
+  writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2), { mode: 0o600 });
+  if (!VERTEX_ENV.project) VERTEX_PROJECT = config.vertexProject || '';
+  if (!VERTEX_ENV.location) VERTEX_LOCATION = config.vertexLocation || 'global';
+  if (!VERTEX_ENV.mediaLocation) VERTEX_MEDIA_LOCATION = config.vertexMediaLocation || 'us-central1';
+  if (!VERTEX_ENV.apiKey) GEMINI_API_KEY = config.geminiApiKey || '';
+}
 
 // 档 2「手机即远程文件系统」总开关。手机原生侧（SAF 文件桥）就绪前默认【关】——
 // 开了 Claude 会多出 mcp__phone__* 工具，老 apk 收到 phone_cmd 无人响应只会超时。

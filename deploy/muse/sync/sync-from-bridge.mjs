@@ -37,7 +37,6 @@ export const KEEP = [
 export const DROP = [
   'client/',                      // bridge 的 Windows 客户端源码：客户端由 bridge 发布，Muse 只做服务端
   'android/',                     // bridge 的离线 apk 工程；Muse 有自己的在线 WebView 壳（KEEP 里的 android/）
-  'modules/vertex/',              // Vertex / Gemini 媒体扩展不带
   'docker/', 'Dockerfile', 'docker-compose.yml', 'build-apk.ps1',
   'scripts/public/',              // bridge 公开仓自己的素材闸门与 CI 用件（扫描规则里有邮箱域名等字样，Muse 的隐私自检会误报）
   'README.md', 'README.zh-CN.md', 'CONTRIBUTING.md', 'CONTRIBUTING.zh-CN.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE',

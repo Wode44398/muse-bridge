@@ -66,7 +66,7 @@
   };
   const AUTH_HINT = {
     claude: t('在「服务端控制台 → Claude 账号」里添加 `claude setup-token` 生成的长期 token，或在服务器环境里配 ANTHROPIC_API_KEY。'),
-    gemini: t('服务器配置里填 geminiApiKey，或 vertexProject + 服务账号 / gcloud ADC。'),
+    gemini: t('在「设置 › Agent › Vertex」里上传 Google 云凭据 JSON。'),
     codex: t('在服务器上跑一次 codex login（或配 OPENAI_API_KEY）。'),
     dimensio: t('在 dimensio 的 .env 里填至少一家厂商的 API key（DeepSeek / 智谱 / Kimi / Qwen / Anthropic / Gemini）。'),
   };

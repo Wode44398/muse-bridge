@@ -15,7 +15,7 @@
 | 分组 | 行 | 谁能看到 |
 |---|---|---|
 | （最上面） | 账户卡：名字和身份，点进去是「账户」；没登录时写「登录」 | 所有人 |
-| **「Agent」**（Agents） | Claude、dimensio，每个 agent 一行、各自一页 | 管理员看到所有开着的 agent；成员只有 Claude |
+| **「Agent」**（Agents） | Claude、dimensio，每个 agent 一行、各自一页；打开了 Gemini · Vertex 扩展时多一行 Gemini（Google 云凭据在它那一页，见 09-vertex.md） | 管理员看到所有开着的 agent；成员只有 Claude |
 | 同上 | **「Agent 接入」**（Agent access） | 登录的人 |
 | **「插件」**（Plugins） | **「安卓 App」**——英文界面下也写这几个中文字 | 登录的人 |
 | **「服务器」**（Server） | **「扩展」**（Extensions）、**「额度与注册」**（Quotas & sign-ups）（多人用时才有）、**「服务端控制台」**（Admin console） | 只有管理员 |
