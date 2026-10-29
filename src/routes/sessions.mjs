@@ -1439,7 +1439,7 @@ export function registerSessionRoutes(router, { authOk, identify }) {
     // 一条已归档的会话时，前端靠它亮「此会话已归档」横条（lib/sessionArchive.svelte.js）
     let arc = {}; try { const st = statSync(p.file); arc = sessionArchiveFlag(ctx, id, st.mtimeMs, st.size); } catch {}
     // 长会话的响应能有 ~1MB：超过 64KB 且客户端收 gzip 就压（LAN 直连收益最大）。消息对象与解析缓存共用，sendJson 当场序列化。
-    await sendJson(req, res, { id, projectId: p.project.id, ...(p.project.worktree ? { wt: { cwd: p.project.path, branch: p.project.worktree.branch } } : {}), messages, truncated: all.length > messages.length, prefs: chatPrefsFor(ctx, id), fp, ...arc });
+    await sendJson(req, res, { id, projectId: p.project.id, ...(p.project.worktree ? { wt: { cwd: p.project.path, branch: p.project.worktree.branch } } : {}), messages, truncated: all.length > messages.length, prefs: chatPrefsFor(ctx, id), fp, ...arc, ...(sessionMcp(ctx.key, id) ? { mcp: sessionMcp(ctx.key, id).servers } : {}) });
   });
 
   // —— 检查点回滚：文件恢复到某条用户消息发出前的状态（可选把对话也截回同一处）——

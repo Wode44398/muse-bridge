@@ -43,6 +43,7 @@ import { noteTurnUsage } from '../runtime/audit-log.mjs';
 import { systemWriteViolation, gitInternalsViolation } from '../runtime/member-boundary.mjs';
 import { getPolicy } from '../runtime/policy.mjs';
 import { noteSessionMcp } from '../runtime/session-mcp.mjs';
+import { noteLiveQuery } from '../runtime/mcp-oauth.mjs';
 import { noteRunEnd } from '../runtime/claude-queue.mjs';
 import { noteLimitTurn, noteTurnStart as noteLimitTurnStart, noteTurnSettled as noteLimitTurnSettled } from '../runtime/limit-resume.mjs';
 import { moduleClaudeText, moduleClaudeMcp } from '../modules/registry.mjs';
@@ -1423,6 +1424,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   }
 
   let qHandle = null;   // finally 里收尾用（q 本身声明在 try 块里）
+  let offLive = null, liveSid = '';   // 连接器授权借用的活 CLI 登记（进程收掉时撤）
   let iterDone = false;   // 读循环读到流尾（CLI 自己退了）；见 readNext
   // 跨会话消息（session-peers.mjs）：peerGate = 改这个 CLI 的入站闸（hold 档「待你确认」卡放行 / 拒收用）
   const peerAware = peersOn(ctx, snap);
@@ -2368,6 +2370,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         }
         // 连接器（MCP）状态：init 帧自带全表 [{name,status}]——会话信息面板的「连接器」卡吃这份，
         // 不必等进程活着时再走控制通道。快照访客没有面板，跳过。
+        // 同时登记这个活着的 CLI：连接器「授权」按钮直接借它发控制请求（runtime/mcp-oauth.mjs），不必另起进程
+        if (!snap && msg.session_id && liveSid !== msg.session_id) { if (offLive) offLive(); offLive = noteLiveQuery(ctx.key, msg.session_id, q); liveSid = msg.session_id; }
         if (!snap && Array.isArray(msg.mcp_servers)) {
           const servers = noteSessionMcp(ctx.key, msg.session_id, msg.mcp_servers);
           send({ type: 'mcp', sessionId: msg.session_id, servers });
@@ -2765,6 +2769,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       try { await Promise.race([qHandle.return(undefined), sleep(10_000)]); } catch {}
       try { qHandle.close(); } catch {}
     }
+    if (offLive) offLive();
     // 进程没了：hold 档扣着的跨会话消息随之作废（session-peers.mjs）
     if (peerGate && gen.sessionId) dropPeerGate(ctx.key, gen.sessionId, peerGate);
     if (peerGate) unregisterPeerGate(ctx.key, peerGate);

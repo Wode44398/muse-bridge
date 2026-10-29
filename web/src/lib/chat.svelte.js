@@ -1982,6 +1982,8 @@ export async function loadSession(id, opts) {
     else noteFp(id, data);   // 只在未过滤时记：裁过的视图 ≠ 服务端那份，不能拿来短路
     msgs = toUiMessages(raw, id);
     if (!before && !IS_CSNAP) cacheMessages(id, msgs, data.fp);    // 在线成功 → 写本地缓存（离线可读；截断态不缓存；快照模式不落）
+    // 连接器状态（最近一轮 init 帧，服务端内存）：重开会话时输入框上方的「需要授权」提示条靠它（流里的 mcp 事件更新的优先）
+    if (!before && !IS_CSNAP && Array.isArray(data.mcp) && !mcpState.bySession[id]) mcpState.bySession[id] = { servers: data.mcp, at: Date.now() };
     if (!before && !IS_CSNAP && data.prefs) {
       absorbServerPrefs(id, data.prefs);                  // 服务端 sidecar（可能来自别的设备）并入本地
       absorbSessionOutputStyle(id, data.prefs);           // 会话级输出风格覆盖（加号菜单 › 输出风格 主行首屏就对）

@@ -13,6 +13,7 @@
   import PermissionCard from './claude/PermissionCard.svelte';   // 逐次工具审批卡（输入框上方停靠）
   import QueueBar from './claude/QueueBar.svelte';
   import PeerHoldBand from './claude/PeerHoldBand.svelte';
+  import McpAuthBand from './claude/McpAuthBand.svelte';
   import LandingTexture from './claude/LandingTexture.svelte';
   import SessionRail from './claude/SessionRail.svelte';
   import CodeStatsCard from './claude/CodeStatsCard.svelte';
@@ -1714,6 +1715,8 @@
     {#if !IS_CSNAP}<div class="band-slot"><ArchivedBand sessionId={session.id} /></div>{/if}
     <!-- 其它 Claude 会话（Desktop / 终端）发来、等你确认的消息（session-peers.mjs，设置「暂存等我确认」） -->
     {#if !IS_CSNAP}<div class="band-slot"><PeerHoldBand /></div>{/if}
+    <!-- 这一轮报了 needs-auth 的远程连接器：一键授权（lib/mcpAuth.svelte.js） -->
+    {#if !IS_CSNAP}<div class="band-slot"><McpAuthBand sessionId={session.id} /></div>{/if}
     <div class="composer-inner" bind:this={composerInnerEl} in:receiveComposer={{ key: 'composer' }} out:sendComposer={{ key: 'composer' }}><Composer placeholder={tc('claude', '发消息…')} /></div>
   </div>
   <!-- 会话信息面板（官方 Session rail）：停靠在舞台右侧 / 窄时弹层，开关在右上角工具条第一颗 -->

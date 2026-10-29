@@ -186,7 +186,7 @@ Claude Code 是 Anthropic 的编程 / 通用 agent，在这台 VM 上替用户�
 - **Claude 提议另开会话**：你提了和当前任务无关的事，或 Claude 发现值得单独做的活时，对话里会出现卡片「单独开一个会话来做？」，选 **「新会话」**（New session）另开一个（可以勾在独立的 git 工作树里做），或 **「在这里做」**（Do it here）。可以选「总是新建会话」「总是在这里做」让它以后不再问。Claude 一次提出几个任务时是「N 个建议任务」的卡，可以 **「全部开始」**（Start all）或逐个 **「开始」** / **「忽略」**（Dismiss）。
 - 这个行为由 **「设置 → Claude → 会话协作 → Claude 发起新会话」**（Settings → Claude → Session collaboration → New sessions started by Claude）控制：先问我（默认）/ 直接开始 / 只在我要求时。能跑命令的身份（管理员、完全信任账号）才有这一项。
 - 开出来的子会话完成后，会把汇报以一张「子会话的汇报」卡发回原会话；会话之间也能互发消息，显示为「来自……」的会话消息卡，点 **「打开这个会话」** 跳过去。
-- **会话信息面板**：电脑 / 平板上对话右上角的 **「会话信息」**（Session details）按钮打开右侧面板，里面有 **「环境」**（Environment）、**「相关会话」**（Linked sessions）（父 / 子 / 兄弟会话，哪些在干活）、**「建议的任务」**（Suggested tasks）、**「上下文」**（Context）、**「连接器」**（Connectors）、**「输出内容」**（Outputs）、**「拉取请求」**（Pull request）等卡片，还有一张「更改」卡，上面有 **「提交更改」**（Commit changes）按钮。手机上没有这个按钮，点 PR 芯片能打开。
+- **会话信息面板**：电脑 / 平板上对话右上角的 **「会话信息」**（Session details）按钮打开右侧面板，里面有 **「环境」**（Environment）、**「相关会话」**（Linked sessions）（父 / 子 / 兄弟会话，哪些在干活）、**「建议的任务」**（Suggested tasks）、**「上下文」**（Context）、**「连接器」**（Connectors）（每个连接器的状态；要登录的远程连接器这里有「授权」按钮，见 05-customize.md「远程连接器授权」）、**「输出内容」**（Outputs）、**「拉取请求」**（Pull request）等卡片，还有一张「更改」卡，上面有 **「提交更改」**（Commit changes）按钮。手机上没有这个按钮，点 PR 芯片能打开。
 - 官方 Claude Desktop 或终端里的 Claude 会话发来的消息，管理员可以在设置里选直接接收、暂存等确认、拒收。这台 VM 上一般用不到。
 
 ## 拉取请求（PR）

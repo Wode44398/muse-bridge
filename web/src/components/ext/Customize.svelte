@@ -607,7 +607,7 @@
           <div class="cz-chips">{#each inner as s (s.key)}<button class="cz-chip" onclick={() => openMk('skill', s)}>{s.name}</button>{/each}</div>
         {/if}
       {/if}
-      <p class="cz-note">{kind === 'plugin' ? t('插件是 Claude Code 专属格式，只对 Claude Code 生效；里面的技能想给 dimensio、Codex 用，可以在「技能」里单独添加。') : kind === 'connector' ? (needsCreds(selMk) ? t('这个连接器要填凭据（${…} 占位），添加后会打开编辑表单。') : t('远程连接器若要求 OAuth 登录，需要服务支持令牌请求头，否则添加后连不上。')) : t('技能对 Claude Code 下一条消息生效，对 dimensio 与 Codex 在新会话生效。')}</p>
+      <p class="cz-note">{kind === 'plugin' ? t('插件是 Claude Code 专属格式，只对 Claude Code 生效；里面的技能想给 dimensio、Codex 用，可以在「技能」里单独添加。') : kind === 'connector' ? (needsCreds(selMk) ? t('这个连接器要填凭据（${…} 占位），添加后会打开编辑表单。') : t('远程连接器若要求 OAuth 登录，添加后在对话里点「授权」就能完成登录（会话信息面板的「连接器」卡或输入框上方的提示）。')) : t('技能对 Claude Code 下一条消息生效，对 dimensio 与 Codex 在新会话生效。')}</p>
 
     {:else if selPkg}
       {@const ms = selPkgMembers}

@@ -11,7 +11,9 @@
   import { chat, send, queueSend, mcpState, openSession } from '../../lib/chat.svelte.js';
   import { REL_LABEL } from '../../lib/sessionFamily.svelte.js';
   import SuggestedTasksCard from './SuggestedTasksCard.svelte';   // 「建议的任务」：Claude 提议了还没开的会话卡
-  import PrCard from './PrCard.svelte';   // 「拉取请求」卡（PR/CI 闭环，自带数据与样式）
+  import PrCard from './PrCard.svelte';
+  import McpAuthFlow from './McpAuthFlow.svelte';   // needs-auth 连接器的「授权」流程（lib/mcpAuth.svelte.js）
+  import { authFlow, startAuth } from '../../lib/mcpAuth.svelte.js';   // 「拉取请求」卡（PR/CI 闭环，自带数据与样式）
   import { rail, toggleRail, railVisible, isFolded, toggleFold } from '../../lib/sessionRail.svelte.js';
   import { ctxSummary, fmtCompact } from '../../lib/ctxUsage.js';
   import { openPreview } from '../../lib/preview.svelte.js';
@@ -266,8 +268,13 @@
                 <div class="rr">
                   {@render ic('<path d="M9 7V4M15 7V4M7 7h10v4a5 5 0 0 1-10 0z"/><path d="M12 16v4"/>')}
                   <span class="rr-txt">{s.name}</span><span class="rr-grow"></span>
-                  <span class="rr-st" class:warn={s.status === 'failed' || s.status === 'needs-auth'}>{t(STATUS_TXT[s.status] || s.status)}</span>
+                  {#if s.status === 'needs-auth' && !IS_CSNAP && !authFlow(sid, s.name)}
+                    <button class="rr-auth" title={t('需要登录')} onclick={() => startAuth(sid, s.name)}>{t('授权')}</button>
+                  {:else}
+                    <span class="rr-st" class:warn={s.status === 'failed' || s.status === 'needs-auth'}>{t(STATUS_TXT[s.status] || s.status)}</span>
+                  {/if}
                 </div>
+                <McpAuthFlow {sid} server={s.name} />
               {/each}
               {#if servers.length > 3}<div class="rr"><span class="rr-dim small">{t('另有 {n} 个', { n: servers.length - 3 })}</span></div>{/if}
             </div>
@@ -362,6 +369,8 @@
   .rr-grow { flex: 1; }
   .rr-st { flex: none; font-size: 12px; color: var(--muted); }
   .rr-st.warn { color: var(--r-warn); }
+  .rr-auth { flex: none; font-size: 12px; padding: 2px 9px; border-radius: 7px; background: var(--r-a2); color: var(--text); white-space: nowrap; }
+  .rr-auth:hover { background: color-mix(in srgb, var(--text) 15%, transparent); }
   .bar { display: inline-flex; width: 24px; height: 10px; padding: 2px; border-radius: 99px; background: var(--r-a2); }
   .bar-fill { display: block; min-width: 6px; height: 100%; border-radius: 99px; background: var(--r-accent); }
   .bar-fill.warn { background: var(--r-warn); }

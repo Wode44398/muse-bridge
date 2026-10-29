@@ -255,6 +255,7 @@ Muse Bridge 自带一套给 agent 用的 HTTP 接口（入口 `/agent`，项目�
 | 「我要在 dimensio 里加一个自定义模型服务」（OpenAI 兼容地址） | 先问他接口地址，告诉他会弹这个地址的审核卡（选项见 2.0），跑 `allow-sites <地址>`，放行后**再**让他去 dimensio 模型胶囊菜单的「切换模型服务…」里点「添加自定义服务」——否则添加时会卡在「连接中」。要接到 Claude 页的，同样先放行，再让他在「设置 → Claude → 自定义 API」里加 |
 | 「对话一直在等待模型回复」「模型没反应」 | 多半是有网站的审核卡没人批：让他看 Muse 里有没有待审核的卡片（输入框上方或右侧面板）；或者用户在场时跑 `allow-sites`（按现在的配置把要用的网站挨个访问一遍，卡片会再弹出来，选项见 2.0） |
 | 「我也想用 dimensio」「不要 dimensio 了」等 | `set-agents claude` / `set-agents dimensio` / `set-agents claude,dimensio`（要重新装依赖、构建，几分钟；跟 `install` 一样自己转后台，没等完就 `wait`；完了等没人在聊时自动切换） |
+| 「Figma（或别的远程连接器）连不上」「连接器要授权」「Claude 说没法完成授权」 | 不要在 VM 上跑 `claude mcp login`。告诉他在 Muse Bridge 的对话里点输入框上方提示里的「授权」（电脑上会话信息面板「连接器」卡里也有），在打开的页面登录并同意，会自动跳回（`guide/05-customize.md`「远程连接器授权」）。第一次会弹对方网站的审核卡（选项见 2.0），也可以在他在场时先跑 `allow-sites <网站>` |
 | 「让朋友也能用」「只给我自己用」 | `set-users multi` / `set-users solo` |
 | 结果块要换语言 | `set-lang en` / `set-lang zh` |
 | 「想要固定地址」 | 按第 5 节带他做 |

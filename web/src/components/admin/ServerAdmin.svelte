@@ -8,7 +8,7 @@
   //   · compact（手机）：设置 App 式「根列表 → 推入子页」，顶栏用 ios27 玻璃圆钮，大标题滚上去收成顶栏小标题；
   //   · medium / expanded：左侧中性导航栏（线稿图标、分组、选中＝浅墨底）+ 右侧内容。
   // 每页的滚动容器都是 absolute 撑满、自己 overflow——旧版窄屏把内容区放进 flex 列却没给 min-height:0，
-  // 内容把容器撑出屏幕，整页滚不动（2026-10-28 老板报的 bug）。
+  // 内容把容器撑出屏幕，整页滚不动（2026-10-28 用户报的 bug）。
   import './admin.css';
   import { setContext } from 'svelte';
   import { ui } from '../../lib/state.svelte.js';

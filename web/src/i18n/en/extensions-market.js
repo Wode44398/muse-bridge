@@ -64,7 +64,7 @@ export default {
   '插件里的技能': 'Skills in this plugin',
   '插件是 Claude Code 专属格式，只对 Claude Code 生效；里面的技能想给 dimensio、Codex 用，可以在「技能」里单独添加。': 'Plugins are a Claude Code format and only work with Claude Code. To use the skills inside with dimensio or Codex, add them individually under Skills.',
   '这个连接器要填凭据（${…} 占位），添加后会打开编辑表单。': 'This connector needs credentials (the ${…} placeholders). The edit form opens after adding.',
-  '远程连接器若要求 OAuth 登录，需要服务支持令牌请求头，否则添加后连不上。': 'If a remote connector requires OAuth sign-in, it only works when the service also accepts a token header.',
+  '远程连接器若要求 OAuth 登录，添加后在对话里点「授权」就能完成登录（会话信息面板的「连接器」卡或输入框上方的提示）。': 'If a remote connector requires OAuth sign-in, add it, then click Authorize in a chat (in the Connectors card of the session panel, or the notice above the message box) to sign in.',
   '技能对 Claude Code 下一条消息生效，对 dimensio 与 Codex 在新会话生效。': 'Skills take effect on the next Claude Code message, and in new dimensio and Codex sessions.',
 
   // 市场源
