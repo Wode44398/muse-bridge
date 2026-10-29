@@ -17,8 +17,8 @@ import { looksLikeAgentDeviceToken, agentDeviceTokenCtx } from '../runtime/agent
 import { contextFor } from '../runtime/identity.mjs';
 import { identityOfCtx } from './internal.mjs';
 
-/** 实例调不到的操作：设备组、媒体组。 */
-export const instanceExcluded = (name) => /^(devices|media)\./.test(String(name || ''));
+/** 实例调不到的操作：设备组（操作电脑用实例自己的 Device* 工具）。媒体组由 设置 › Agent › Gemini 按实例放行（ops/media.mjs）。 */
+export const instanceExcluded = (name) => /^devices\./.test(String(name || ''));
 
 function isHostSecret(tok) {
   const want = ensureHostSecret();
@@ -28,7 +28,7 @@ function isHostSecret(tok) {
 
 // 挂在 ctx 上，registry.whyNot 据此把排除的操作判成不可用（目录、whoami 的计数、执行三处一致）
 const opDeny = (op) => (instanceExcluded(op.name)
-  ? `同机 agent 实例不从这里调「${op.group}」组：操作电脑用实例自己的 Device* 工具，生成媒体不走这套接口`
+  ? `同机 agent 实例不从这里调「${op.group}」组：操作电脑用实例自己的 Device* 工具`
   : null);
 
 /**
@@ -56,5 +56,6 @@ export function instanceCaller(req, tok) {
   }
   const ctx = contextFor(identity);
   ctx.opDeny = opDeny;
+  ctx.agentCaller = instance;   // 'dimensio' / 'codex' / 'host'：媒体组按它查 设置 › Agent › Gemini
   return { identity, ctx, key: null, instance };
 }

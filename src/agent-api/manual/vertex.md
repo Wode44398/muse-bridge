@@ -32,6 +32,22 @@ Vertex 分页（agent id `gemini`，界面名 Vertex / Gemini）经 Google Verte
 - 经家里主机中继使用 Vertex 的 Windows 客户端上，卡片只提示「凭据在主机上配置」。
 - 接口（管理员）：`GET /api/vertex/credentials` 看现状；`POST /api/vertex/credentials` 传 `credentials`（JSON 文本，null = 删除）、`project`、`location`、`mediaLocation`、`apiKey`（'' = 清除）、`test`；`POST /api/vertex/credentials/test` 只测。
 
+## Gemini 设置：别的 agent、能生成什么、内容安全过滤（设置 › Agent › Gemini）
+
+「Google 云凭据」卡下面三组，管理员才看得到，改了即时生效（主机级，存 config.json 的 vertexHost）。只管 agent 自己调用，用户在 Vertex 页里手动生成不受影响。
+
+- 「让别的 agent 生成媒体」：
+  - 「Claude」（默认开）：Claude 对话和定时任务里的 mcp__media__* 生成工具。关掉就没有这组工具，也没有对应提示。
+  - 「需要素材时主动生成」（默认开，跟在 Claude 下面）：开着时 Claude 做网页、文档会不等用户开口就配图配乐；关掉后只在用户明确要求时生成。
+  - 「dimensio」（默认关）：打开后 dimensio 能经 BridgeCall 调 media.image / media.speech / media.music / media.video；图片和语音按 dimensio 的权限档审批，视频和音乐每次弹卡。dimensio 没装或跑不起来时没有这一行。
+  - 「ChatGPT · Codex」（默认关，只在有 Codex 的服务器上出现）：同上，经 Codex 的 bridge 接口。
+  - 「外部 agent（Agent 接入）」（默认开）：拿 agent 密钥调 /agent/v1/media.* 的 agent 和脚本。
+- 「agent 能生成什么」：「图片」「语音」「音乐」「视频」各一个开关（对上面开着的 agent 都生效）；「视频最高分辨率」720p / 1080p / 4K（默认 4K = 不封顶），agent 要更高会降到这一档。成员另受「额度与注册」里的媒体开关与每日次数限制。
+- 「内容安全过滤」：「骚扰」「仇恨言论」「色情内容」「危险内容」四类，每类「Google 默认」「不过滤」「只拦高风险」「拦中风险及以上」「拦低风险及以上」，即 Google AI Studio 的 Safety settings（Vertex safetySettings）。对 Gemini 对话和 Gemini 图像模型生效；全是「Google 默认」时不发这个参数（Google 对较新模型默认不过滤）。被拦下时对话里会出一句「被 Google 的内容安全过滤拦下了（原因）」，出图失败也写明原因。
+- 关掉的调用方或种类：agent 接口目录里对应的 media.* 标不可用，原因写着「管理员没让 … 生成媒体（设置 › Agent › Gemini）」；Claude 从下一条消息起没有那几个工具（已经在跑的这一轮调用时也会被拒）。
+- 卡片里有项目 ID 时还有「在 Google Cloud 查看：账单 · 配额 · 用量」三个直达链接（费用在用户自己的 Google Cloud 里）。
+- 接口（管理员）：`media.settings` 看全部项与当前值，`media.settings_set` 改（values = { key: 值 }，null = 恢复默认）；同机 agent 实例（dimensio、Codex）不能改这组。HTTP：`GET / POST /api/vertex/settings`。
+
 ## Vertex 分页的入口与模块切换
 
 - 手机：主页入口方块「Vertex」。顶部左侧「≡」打开历史抽屉；对话模块时左上是模型选择（显示「Gemini / 当前模型」）；右上「＋」新对话；右上图标按钮是「功能模块」菜单，在「对话 / 图像 / 视频 / 语音 / 音乐」间切换。
@@ -117,7 +133,8 @@ Gemini 对话是普通的多轮问答，适合日常问答、查最新资讯、�
 
 ## 在 Claude 和定时触发里用 Gemini
 
-- Claude 分页：Gemini 对该账号开着（成员还需管理员开放媒体生成）时，Claude 自带图像、视频、语音、音乐四个生成工具，用户直接对 Claude 说「画一张…」「配一段音乐」即可，作品内联显示在对话里，文件可被 Claude 拿去当素材。
+- Claude 分页：Gemini 对该账号开着（成员还需管理员开放媒体生成）时，Claude 自带图像、视频、语音、音乐四个生成工具，用户直接对 Claude 说「画一张…」「配一段音乐」即可，作品内联显示在对话里，文件可被 Claude 拿去当素材。管理员可以在 设置 › Agent › Gemini 关掉 Claude 的这组工具、关掉「主动生成」、只留某几种（见上面「Gemini 设置」）。
+- dimensio：管理员在 设置 › Agent › Gemini 打开「dimensio」后，它经 BridgeCall 的 media.* 生成，产物用 saveTo 放进工作区。
 - 定时触发：可选 Gemini 引擎做定时问答（可开联网搜索），结果进 Gemini 对话历史；定时触发不能直接调用媒体生成模块，需要定时出图时用 Claude 引擎并在指令里让它生成。
 
 ## Vertex 分页的限制

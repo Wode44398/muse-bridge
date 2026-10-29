@@ -64,6 +64,7 @@
   // Claude Code 运行组件的下载进度 / 失败重试（安装包不再内嵌，首启服务端去拿；就绪时不显示）
   import ClaudeCliStatus from './ClaudeCliStatus.svelte';
   import VertexCredentials from './VertexCredentials.svelte';
+  import { vx, VX, VERTEX_SETTING_GROUPS, loadVertexSettings, setVertexSetting, vxChanged, vxLabel, vxDesc, vxOptions, vxValueLabel, vxGroupLabel, vxGroupFoot, vxGroupKeys } from '../lib/vertexSettings.svelte.js';
   import { S as CS, val, visible, setVal, resetVal, changed, label as csLabel, options as csOptions, valueLabel, errText } from '../lib/claudeSettingsView.js';
   import { branchPrefixError } from '../../../src/config/claude-settings.mjs';
   import { extensionsNav } from '../lib/extensionsNav.svelte.js';
@@ -314,7 +315,7 @@
   // 开关与认证（/api/agents）、Claude 的订阅号池与智能换号、对话偏好……
   // 号池 / 额度与注册原先只在服务端控制台（本机门），服务端给它们开了 settingsGate 后手机上也能改；
   // 会影响连接的（服务控制、隧道、客户端配对、管理员会话）仍只在控制台。数据面见 lib/agentSettings.svelte.js。
-  if (me.kind === 'admin') { loadAgents(); loadPool(); loadPolicy(); }
+  if (me.kind === 'admin') { loadAgents(); loadPool(); loadPolicy(); loadVertexSettings(); }
   // 「扩展 › 功能扩展」拨了开关（或别的设备改了）：App 经总线 agents.changed 刷 me.agents，这里跟着重拉，根列表即时增减
   let agentsSeen = JSON.stringify(me.agents);
   $effect(() => { const k = JSON.stringify(me.agents); if (k !== agentsSeen && me.kind === 'admin') { agentsSeen = k; untrack(loadAgents); } });
@@ -866,6 +867,7 @@
     if (TITLES[pid]) return TITLES[pid]();
     if (pid.startsWith('plg-')) return panelTitle(pluginPanels.list.find((x) => 'plg-' + x.id === pid));
     if (pid.startsWith('ag-')) { const id = pid.slice(3); return agentById(id)?.label || (id === 'claude' ? 'Claude' : id); }
+    if (pid.startsWith('vx:')) return VX[pid.slice(3)] ? vxLabel(pid.slice(3)) : '';
     if (pid.startsWith('acct:')) return accLabel(acctById(pid.slice(5))?.label || '') || t('账号');
     if (pid.startsWith('device:')) return devices.list.find((d) => d.id === pid.slice(7))?.name || t('设备');
     return '';
@@ -1558,8 +1560,53 @@
 
 {#snippet pAgent(id)}
   {@render agSwitch(id)}
-  {#if id === 'gemini' && agentById(id)?.runnable}<VertexCredentials onchange={loadAgents} />{/if}
+  {#if id === 'gemini' && agentById(id)?.runnable}<VertexCredentials onchange={loadAgents} />{#if vx.loaded}{@render vxGroups()}{/if}{/if}
   {#if !agentById(id)}{@render gfoot(t('只有管理员能改这里'))}{/if}
+{/snippet}
+
+<!-- Gemini 页「Google 云凭据」下面那几组（注册表 src/config/vertex-settings.mjs）：开关行；单选项推入 vx:<key> 子页 -->
+{#snippet vxGroups()}
+  {@const ids = (ags.agents?.agents || []).filter((a) => a.runnable).map((a) => a.id)}
+  {#each VERTEX_SETTING_GROUPS as g (g.id)}
+    {@const keys = vxGroupKeys(g.id, ids)}
+    {#if keys.length}
+      {@render ghead(vxGroupLabel(g))}
+      <div class="ig">
+        {#each keys as key (key)}
+          {#if VX[key].type === 'bool'}
+            <div class="r" class:ind={!!VX[key].dependsOn}>
+              <span class="r-main"><span class="r-tx"><span class="r-lbl">{vxLabel(key)}{#if vxChanged(key)}{@render cDot('')}{/if}</span>{#if vxDesc(key)}<span class="r-sub">{vxDesc(key)}</span>{/if}</span>
+                <Toggle checked={!!vx.values[key]} disabled={vx.busy === key} onchange={() => setVertexSetting(key, !vx.values[key])} label={vxLabel(key)} /></span>
+            </div>
+          {:else}
+            <button class="r" class:ind={!!VX[key].dependsOn} type="button" onclick={() => push('vx:' + key)}>
+              <span class="r-main"><span class="r-tx"><span class="r-lbl">{vxLabel(key)}{#if vxChanged(key)}{@render cDot('')}{/if}</span>{#if vxDesc(key)}<span class="r-sub">{vxDesc(key)}</span>{/if}</span><span class="r-d">{vxValueLabel(key)}</span>{@render chev()}</span>
+            </button>
+          {/if}
+        {/each}
+      </div>
+      {@render gfoot(vxGroupFoot(g))}
+    {/if}
+  {/each}
+  {#if vx.err}<p class="gfoot err">{vx.err}</p>{/if}
+{/snippet}
+
+<!-- 单选子页（视频最高分辨率 / 内容安全过滤四类）：选中打勾；改过才出「恢复默认」 -->
+{#snippet pVxChoice(key)}
+  {#if VX[key]}
+    <div class="ig">
+      {#each vxOptions(key) as o (o.value)}
+        <button class="r" type="button" disabled={vx.busy === key} onclick={() => setVertexSetting(key, o.value)}>
+          <span class="r-main"><span class="r-tx">{o.label}</span>{#if vx.values[key] === o.value}{@render check()}{/if}</span>
+        </button>
+      {/each}
+    </div>
+    {#if vxDesc(key)}{@render gfoot(vxDesc(key))}{/if}
+    {#if vxChanged(key)}
+      <div class="ig"><button class="r" type="button" onclick={() => setVertexSetting(key, null)}><span class="r-main center"><span class="r-tx accent">{t('恢复默认')}</span></span></button></div>
+    {/if}
+    {#if vx.err}<p class="gfoot err">{vx.err}</p>{/if}
+  {/if}
 {/snippet}
 
 {#snippet pPolicy()}
@@ -2276,6 +2323,7 @@
     {:else}<p class="plg-gone">{t('这个插件面板不在了（插件被关掉或卸载了）')}</p>{/if}
   {:else if pid === 'ag-claude'}{@render pClaude()}
   {:else if pid.startsWith('ag-')}{@render pAgent(pid.slice(3))}
+  {:else if pid.startsWith('vx:')}{@render pVxChoice(pid.slice(3))}
   {:else if pid.startsWith('acct:')}{@render pAcct(pid.slice(5))}
   {:else if CL_CHOICE[pid]}{@render pChoice(CL_CHOICE[pid])}
   {:else if CL_GROUP[pid]}{@render pClGroup(pid)}

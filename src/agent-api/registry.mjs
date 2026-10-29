@@ -73,6 +73,9 @@ export function whyNot(ctx, op) {
   // 入口自带的范围限制（同机 agent 实例不给设备 / 媒体组，见 instance-auth.mjs）
   const denied = typeof ctx.opDeny === 'function' ? ctx.opDeny(op) : null;
   if (denied) return denied;
+  // 操作自带的放行判定（如 media.* 看 设置 › Agent › Gemini 让不让这个调用方生成，见 ops/media.mjs）
+  const own = typeof op.deny === 'function' ? op.deny(ctx) : null;
+  if (own) return own;
   for (const n of op.need || []) {
     if (n.startsWith('plugin:')) {
       if (!pluginOn(n.slice(7))) return '这项功能在这台服务器上关着（设置 › 扩展 › 功能扩展里可以打开）';

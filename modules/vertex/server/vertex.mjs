@@ -6,6 +6,7 @@
 // the SDK picks it up from the environment, we only pass project + location.
 import { vertexGenAI, vertexClientKey } from './google-clients.mjs';
 import { VERTEX_NO_MINIMAL, VERTEX_CODE_SOLO } from '@bridge/core/config/capabilities.mjs';
+import { vertexSafetySettings, safetyBlockNote } from '@bridge/core/runtime/vertex-settings.mjs';
 
 // One client per project+location (the bridge is single-user). Lazily built.
 const clients = new Map();
@@ -109,6 +110,9 @@ export async function runTurn({ history, message, files, model, useSearch, useUr
     if (MEDIA_RES[mediaRes]) config.mediaResolution = MEDIA_RES[mediaRes];
     else if (fastVision && LEVEL_FAMILY.test(model)) config.mediaResolution = 'MEDIA_RESOLUTION_MEDIUM';
   }
+  // 内容安全过滤（设置 › Agent › Gemini）：没改过就不带，跟 Google 的默认
+  const safety = vertexSafetySettings();
+  if (safety) config.safetySettings = safety;
   if (signal) config.abortSignal = signal;
 
   const contents = toContents(history, message, files);
@@ -124,8 +128,10 @@ export async function runTurn({ history, message, files, model, useSearch, useUr
   let full = '';
   const seen = new Set();
   const sources = [];
+  let blocked = '';   // 被安全过滤拦下的原因（提示词被拦 = promptFeedback.blockReason，回复被拦 = finishReason）
   for await (const chunk of stream) {
     if (signal && signal.aborted) break;
+    blocked = chunk?.promptFeedback?.blockReason || chunk?.candidates?.[0]?.finishReason || blocked;
     // 逐 part 分流：thought=true 是思考分片（走 onThink，让前端立刻有动静、消除"思考期死寂"），
     // 其余是可见正文（走 onText）。chunk.text 本就排除思考，这里手动遍历以同时拿到两者。
     const parts = chunk?.candidates?.[0]?.content?.parts;
@@ -141,6 +147,13 @@ export async function runTurn({ history, message, files, model, useSearch, useUr
       }
     } else if (chunk.text) { full += chunk.text; if (onText) onText(chunk.text); }   // 兜底
     collectSources(chunk, seen, sources);
+  }
+  // 被拦下时以前什么都不回（一条空回复）：补一句说明，进正文与历史
+  const note = safetyBlockNote(blocked);
+  if (note && !(signal && signal.aborted)) {
+    const md = (full ? '\n\n' : '') + '> ' + note;
+    full += md;
+    if (onText) onText(md);
   }
   return { text: full, sources, timedOut: false };
 }

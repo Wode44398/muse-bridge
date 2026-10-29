@@ -56,6 +56,7 @@
   // Claude Code 运行组件的下载进度 / 失败重试（安装包不再内嵌，首启服务端去拿；就绪时不显示），与手机设置共用
   import ClaudeCliStatus from '../../components/ClaudeCliStatus.svelte';
   import VertexCredentials from '../../components/VertexCredentials.svelte';
+  import { vx, VX, VERTEX_SETTING_GROUPS, loadVertexSettings, setVertexSetting, vxLabel, vxDesc, vxOptions, vxGroupLabel, vxGroupFoot, vxGroupKeys } from '../../lib/vertexSettings.svelte.js';
   import { serverOnThisMachine } from '../../lib/nativeDesktop.js';
   import { createServerUpdate } from '../../lib/serverUpdate.svelte.js';
   import Customize from '../../components/ext/Customize.svelte';
@@ -118,7 +119,7 @@
 
   // ═══ Agent：每个 agent 一个分区（ag-<id>），数据面与手机共用 lib/agentSettings.svelte.js ═══
   // 各接口都是 admin 门；非管理员全部 404/403 → 对应 ok 位为 false，那一节不出现。
-  loadAgents(); loadPool(); loadPolicy();
+  loadAgents(); loadPool(); loadPolicy(); loadVertexSettings();
   if (canUseCustomApi()) loadProviders();
   let provOpen = $state(false);
   // 摘要只数启用服务里启用的对话模型，关了「显示在模型列表」的另注「N 个已隐藏」（与 iOS 设置同一口径）
@@ -1334,7 +1335,32 @@
         {#if clErr}<p class="err">{clErr}</p>{/if}
       {/if}
 
-      {#if id === 'gemini' && a?.runnable}<VertexCredentials onchange={loadAgents} />{/if}
+      {#if id === 'gemini' && a?.runnable}
+        <VertexCredentials onchange={loadAgents} />
+        <!-- 「Google 云凭据」下面那几组（注册表 src/config/vertex-settings.mjs，与手机同一份） -->
+        {#if vx.loaded}
+          {@const ids = (ags.agents?.agents || []).filter((x) => x.runnable).map((x) => x.id)}
+          {#each VERTEX_SETTING_GROUPS as g (g.id)}
+            {@const keys = vxGroupKeys(g.id, ids)}
+            {#if keys.length}
+              <DGroup label={vxGroupLabel(g)} foot={vxGroupFoot(g)}>
+                {#each keys as key (key)}
+                  <DRow title={vxLabel(key)} sub={vxDesc(key)}>
+                    {#snippet trailing()}
+                      {#if VX[key].type === 'bool'}
+                        <DSwitch checked={!!vx.values[key]} disabled={vx.busy === key} onchange={(v) => setVertexSetting(key, v)} />
+                      {:else}
+                        <DSelect options={vxOptions(key)} value={vx.values[key]} disabled={vx.busy === key} onchange={(v) => setVertexSetting(key, v)} width="170px" />
+                      {/if}
+                    {/snippet}
+                  </DRow>
+                {/each}
+              </DGroup>
+            {/if}
+          {/each}
+          {#if vx.err}<p class="err">{vx.err}</p>{/if}
+        {/if}
+      {/if}
 
       {#if !a && id !== 'claude'}<p class="note">{t('只有管理员能改这里')}</p>{/if}
 

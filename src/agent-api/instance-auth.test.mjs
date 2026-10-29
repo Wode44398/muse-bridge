@@ -1,5 +1,5 @@
 // 同机 agent 实例（dimensio）调 /agent/* 的凭据（instance-auth.mjs）：按人令牌 = 那个成员本人、主机密钥 = 管理员；
-// 只认本机直连；伪造 / 篡改 / 换人 / 停用 / 删号 / 收回 dimensio 授权一律不认；设备组与媒体组不给；铸不了 agent 密钥。
+// 只认本机直连；伪造 / 篡改 / 换人 / 停用 / 删号 / 收回 dimensio 授权一律不认；设备组不给、媒体组按 设置 › Agent › Gemini 放行；铸不了 agent 密钥。
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -26,6 +26,7 @@ const { mintAgentDeviceToken } = await import('../runtime/agent-device-token.mjs
 const { ensureHostSecret } = await import('../runtime/host-secret.mjs');
 const { allOps } = await import('./registry.mjs');
 const { instanceExcluded } = await import('./instance-auth.mjs');
+const { setVertexSettings } = await import('../runtime/vertex-settings.mjs');
 
 const auth = createAuth(MASTER, false, { isAdminSession: users.isAdminSession });
 const identify = makeIdentify({ authOk: auth.authOk, getCookie: auth.getCookie, bearerToken: auth.bearerToken, queryToken: auth.queryToken });
@@ -69,13 +70,17 @@ test('按人令牌：就是那个成员本人；主机密钥：管理员', async
   assert.equal(man.status, 200);
 });
 
-test('设备组、媒体组不给：目录里标不可用，调用回 403；其余照常', async () => {
+test('设备组不给、媒体组默认不给：目录里标不可用，调用回 403；其余照常', async () => {
   for (const tok of [FRANK, ensureHostSecret()]) {
     const cat = await catalogOf(tok);
     assert.equal(cat.ok, true);
     const excluded = cat.ops.filter((o) => instanceExcluded(o.name));
-    assert.ok(excluded.some((o) => o.name === 'devices.list') && excluded.some((o) => o.name.startsWith('media.')));
+    assert.ok(excluded.some((o) => o.name === 'devices.list') && !excluded.some((o) => o.name.startsWith('media.')));
     for (const o of excluded) assert.equal(o.available, false, o.name);
+    // 媒体组：管理员没在 设置 › Agent › Gemini 打开 dimensio 之前不可用，原因指到那里
+    const img = cat.ops.find((o) => o.name === 'media.image');
+    assert.equal(img.available, false);
+    assert.match(img.unavailableReason, /设置 › Agent › Gemini|不能生成媒体/);
     assert.ok(cat.ops.find((o) => o.name === 'feedback.diagnose').available);
     const r = await call('devices.list', {}, tok);
     assert.equal(r.status, 403);
@@ -86,6 +91,21 @@ test('设备组、媒体组不给：目录里标不可用，调用回 403；其�
   const k = users.createAgentKey({ user: frank.id }, { label: 'plain' });
   assert.equal((await catalogOf(k.token)).ops.find((o) => o.name === 'devices.list').available, true);
   users.revokeAgentKey({ user: frank.id }, k.id);
+});
+
+test('媒体组按实例放行：打开 dimensio 后它那一项不再被设置挡；主机密钥没自报身份的照样不给', async () => {
+  const reasonOf = async (tok) => (await catalogOf(tok)).ops.find((o) => o.name === 'media.image').unavailableReason || '';
+  assert.equal(setVertexSettings({ dimensioMedia: true }).ok, true);
+  try {
+    // 测试环境里没装 Vertex 扩展 → 还是不可用，但原因换成了 agent 开关（设置这一关已经过了）
+    assert.doesNotMatch(await reasonOf(FRANK), /设置 › Agent › Gemini/);
+    assert.match(await reasonOf(ensureHostSecret()), /不能生成媒体/);
+    // 种类单独关：dimensio 开着也挡
+    assert.equal(setVertexSettings({ agentImage: false }).ok, true);
+    assert.match(await reasonOf(FRANK), /生成图片/);
+  } finally {
+    setVertexSettings({ dimensioMedia: null, agentImage: null });
+  }
 });
 
 test('bug 诊断：成员看不到服务端日志，管理员看得到', async () => {

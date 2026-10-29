@@ -4,9 +4,11 @@
 import { registerVertexHistoryRoutes } from './routes/vertex.mjs';
 import { registerMediaRoutes } from './routes/media.mjs';
 import { registerCredentialRoutes } from './routes/credentials.mjs';
+import { registerSettingsRoutes } from './routes/settings.mjs';
+import { getVertexSettings, agentMediaDeny } from '@bridge/core/runtime/vertex-settings.mjs';
 import { runVertexChat } from './agents/vertex.mjs';
 import { makeMediaMcp } from './mcp/media-phone.mjs';
-import { MEDIA_NUDGE } from './claude-nudge.mjs';
+import { mediaNudgeFor } from './claude-nudge.mjs';
 import * as vertexHist from './vertex-history.mjs';
 import { agentEnabled } from '@bridge/core/runtime/agent-status.mjs';
 import { memberRules } from '@bridge/core/runtime/quota.mjs';
@@ -26,6 +28,7 @@ export function register(router, { authOk, identify }) {
   registerVertexHistoryRoutes(router, { authOk, identify });   // /api/vertex/sessions, /api/vertex/session, /api/vertex/session/delete
   registerMediaRoutes(router, { authOk, identify });           // /api/vertex/{video,image,tts,music,videos,images,audios,musics, *_delete}、本机生图
   registerCredentialRoutes(router, { identify });             // /api/vertex/credentials（管理员）：上传凭据、项目与区域、API Key、测试连接
+  registerSettingsRoutes(router, { identify });               // /api/vertex/settings（管理员）：别的 agent 能不能生成、能生成什么、内容安全过滤
 }
 
 // 预热 Gemini（仅生产常驻服务）：开机就加载 @google/genai + 建 client + 取 ADC token，
@@ -66,11 +69,18 @@ export const chat = {
 // 给 Claude（主聊天与定时任务同口径）：Gemini 开着才给媒体工具与对应提示。
 // 沙箱用户的产物落自己的 .bridge/media、gen_media 推到自己的轮；admin 落主机 media。
 // 成员的媒体生成没开放（控制台「额度与注册」，核心 runtime/quota.mjs memberRules）就整个不给；开着的每次调用再过额度闸。
+// 管理员在 设置 › Agent › Gemini 关掉「Claude」或某种媒体，对应工具与提示就不给（runtime/vertex-settings.mjs）。
 const mediaOn = (ctx) => { const r = memberRules(ctx); return r.media || r.video; };
+const CLAUDE_KINDS = ['image', 'video', 'speech', 'music'];
+const claudeKinds = () => CLAUDE_KINDS.filter((k) => !agentMediaDeny('claude', k));
 export const claude = {
-  nudge: (ctx) => (ctx && ctx.allowGemini && mediaOn(ctx) ? MEDIA_NUDGE : ''),
+  nudge: (ctx) => {
+    if (!ctx || !ctx.allowGemini || !mediaOn(ctx)) return '';
+    const v = getVertexSettings();
+    return mediaNudgeFor({ proactive: v.claudeProactive, kinds: claudeKinds(), videoCap: v.agentVideoMaxRes });
+  },
   mcp: (ctx, { getGen } = {}) => {
-    if (!ctx || !ctx.allowGemini || !mediaOn(ctx)) return {};
+    if (!ctx || !ctx.allowGemini || !mediaOn(ctx) || !claudeKinds().length) return {};
     return { media: ctx.sandbox ? makeMediaMcp({ mediaDir: ctx.media, genKey: ctx.key, getGen, ctx }) : makeMediaMcp({ getGen }) };
   },
 };

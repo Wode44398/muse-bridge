@@ -1,9 +1,10 @@
 // apk 版本基准——【单一来源】：android/app/build.gradle 构建期从本文件解析注入
 // versionCode/versionName（不再手工双改），build-apk.ps1 出包后还会用 aapt 校验一致。
 // 每次出新 apk 时这里 +1；手机端用 /api/app/version 比对自己的 versionCode 判断「有新版」。
-export const APP_VERSION_CODE = 496;
-export const APP_VERSION_NAME = '6.83';
-export const APP_RELEASE_NOTES = 'Gemini · Vertex 现在能直接在设置里配了：以前要登上服务器写环境变量、把凭据文件放进容器，VPS 和 Docker 上很麻烦。现在管理员打开 设置 › Agent › Vertex，在「Google 云凭据」里拖入或选择凭据 JSON（服务账号密钥，或自己电脑上 gcloud 登录生成的文件），项目 ID 会自动填好，需要的话再填 Gemini API Key；点「保存并测试」马上生效、不用重启，并当场测一次连没连通，没通会直接说原因，比如没开 Vertex AI API、缺「Vertex AI 用户」权限、项目 ID 不对。凭据只存在服务器上，成员看不到。';
+export const APP_VERSION_CODE = 497;
+export const APP_VERSION_NAME = '6.84';
+export const APP_RELEASE_NOTES = '设置 › Agent › Gemini 多了几组开关：能决定别的 agent 能不能用 Google 的图像、视频、语音、音乐生成——Claude 默认能用，还可以关掉「需要素材时主动生成」，让它只在你开口时才生成；dimensio 现在也能生成了，打开就行（默认关）；拿密钥接进来的外部 agent 也能单独开关。还能限定 agent 只生成哪几种、视频最高多少分辨率，免得花钱太多。另外加了和 Google AI Studio 一样的内容安全过滤（骚扰、仇恨言论、色情、危险内容四类，各自调松紧）；Gemini 回复被过滤拦下时，现在会写明原因，不再是一条空回复。凭据卡片上也能直接打开 Google Cloud 的账单、配额和用量。';
+// v6.83 原 notes：Gemini · Vertex 现在能直接在设置里配了：以前要登上服务器写环境变量、把凭据文件放进容器，VPS 和 Docker 上很麻烦。现在管理员打开 设置 › Agent › Vertex，在「Google 云凭据」里拖入或选择凭据 JSON（服务账号密钥，或自己电脑上 gcloud 登录生成的文件），项目 ID 会自动填好，需要的话再填 Gemini API Key；点「保存并测试」马上生效、不用重启，并当场测一次连没连通，没通会直接说原因，比如没开 Vertex AI API、缺「Vertex AI 用户」权限、项目 ID 不对。凭据只存在服务器上，成员看不到。
 // v6.82 原 notes：远程连接器（比如 Figma）现在能直接在 bridge 里授权了：以前这类要 OAuth 登录的连接器装好后一直显示「需要授权」，对话里的 Claude 用不了，只能去终端跑命令再手动粘贴跳转地址。现在对话输入框上方会提示哪个连接器需要授权，会话信息面板的「连接器」卡里也有「授权」按钮；点了在浏览器里打开授权页，登录并同意后自动跳回 bridge，连接器随即连上，之后的对话都能直接用。少数服务只接受本机回调，这时按提示把浏览器地址栏的完整地址粘回来就行。每个账号各自授权，成员也能给自己的账号授权。
 // v6.81 原 notes：多人共用的服务器上，Claude 的自定义 API 也能共享了：管理员在 设置 › Claude › 模型服务 里编辑自己接的服务，打开「共享给成员」，成员就能在输入框模型菜单的 More models 里直接选用（标着「管理员共享」），用的是管理员的 API Key、计入成员的额度；成员在自己的模型服务页里能看到这些服务和模型，但看不到接口地址和 Key，也改不了、删不了，出错时提示联系管理员。管理员取消共享或停用后，成员那边立刻消失。成员自己接的服务照旧只有自己能用、不占本站额度。
 // v6.80 原 notes：多人共用的服务器上，成员也能用技能了：以前成员在 dimensio 里打「/」只看得到几个内置命令，管理员给全服加装的技能一个都搜不到；现在成员的 dimensio 和 Claude 一样，能用管理员加装给所有人的技能。成员还能自己添加技能：设置里新增「技能」，可以上传 SKILL.md / .zip / .skill，或者在「发现」里一键添加官方市场的技能，每个技能可以单独开关、选在 Claude 还是 dimensio 里用；自己加的只有自己看得到、用得到，管理员给大家加装的列在下面，直接可用。

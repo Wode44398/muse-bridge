@@ -28,7 +28,7 @@
 | [06-users-admin.md](06-users-admin.md) | 多人使用与服务端控制台：邀请码、普通账号和完全信任账号的区别、单人 / 多人（控制台里只读，在 Muse 里说）、额度、管理员可见性（隐私）、给谁开 dimensio、Claude 账号（订阅号池）、服务控制、日志 |
 | [07-settings.md](07-settings.md) | 设置逐项说明：根页各分组、账户、Claude（含自定义 API）、dimensio、Agent 接入、安卓 App、扩展 / 额度与注册 / 服务端控制台、通用、外观、壁纸、设备（桌面客户端）、提交反馈、关于，以及桌面客户端里的设置 |
 | [08-faq.md](08-faq.md) | 常见问题与现象速查：一直转圈、审核卡、地址变了、费用、数据放在哪、安全、备份、限制 |
-| [09-vertex.md](09-vertex.md) | Gemini · Vertex 扩展（默认关着）：打开、上传 Google 云凭据、放行 Google 的网站、测试报错对照、图像 / 视频 / 语音 / 音乐、在 Claude 里生成、给成员限次数、费用 |
+| [09-vertex.md](09-vertex.md) | Gemini · Vertex 扩展（默认关着）：打开、上传 Google 云凭据、放行 Google 的网站、测试报错对照、让 Claude / dimensio / 外部 agent 生成媒体与「主动生成」、agent 能生成哪几种与视频分辨率上限、内容安全过滤、图像 / 视频 / 语音 / 音乐、给成员限次数、费用 |
 
 ## 按问题找章节
 
@@ -59,5 +59,6 @@
 | 一直转圈 / 等待模型回复、审核卡片、地址变了、费用、隐私、数据放在哪、备份 | 08-faq.md |
 | 让 agent 打开网页、截图、操作浏览器（这台 VM 没有浏览器） | 08-faq.md |
 | 生成图片 / 视频 / 语音 / 音乐、Gemini、Vertex、Nano Banana、Veo、Google 云凭据、服务账号、「保存并测试」报错、gcloud | 09-vertex.md；Muse 要做的：`../MUSE.md` 4.9 |
+| Claude 老是自己配图 / 太费钱、不让 Claude 生成、让 dimensio 生成图片、关掉视频生成、限制视频分辨率、内容安全过滤、Gemini 回复「被内容安全过滤拦下了」 | 09-vertex.md「谁能生成、能生成什么、内容安全过滤」 |
 | 装、更新、回滚、换域名、自动更新、卸载、服务挂了 | `../MUSE.md`（第 2、5、6、7 节） |
 | 报 bug、提建议、自动上报、网页里的提交反馈、「问 Claude」、让 Claude 诊断上报、反馈会不会公开 | `../MUSE.md` 第 8 节；网页里的表单和 Claude 上报：07-settings.md「提交反馈」 |

@@ -35,14 +35,27 @@ Muse Bridge 带着 bridge 的 Gemini · Vertex 扩展：经 Google 的 Vertex AI
 
 凭据只存在这台 VM 的数据目录里（只有服务本身读得到），成员看不到，接口也只回服务账号邮箱这类摘要。**别把凭据文件的内容发在 Muse 的聊天里**，直接在设置页上传。
 
+## 谁能生成、能生成什么、内容安全过滤（设置 → Agent → Gemini）
+
+「Google 云凭据」卡下面还有三组，只有管理员看得到，改了马上生效。**只管 agent 自己去生成**，用户在 Vertex 页里手动生成不受影响。
+
+- **「让别的 agent 生成媒体」**（Let other agents generate media）：
+  - **Claude**：默认开，Claude 有画图、配音、配乐、视频这几个工具。下面的 **「需要素材时主动生成」**（Generate assets proactively）也默认开——Claude 做网页、文档时会不等用户开口就配图配乐；用户嫌费钱或不想要，关掉它，Claude 就只在被要求时才生成。
+  - **dimensio**：默认关。打开后 dimensio 也能生成（图片、语音按 dimensio 的权限档审批，视频、音乐每次先问用户），产物放进它的工作区。
+  - **「外部 agent（Agent 接入）」**（External agents (Agent access)）：默认开，指拿「设置 → Agent 接入」里的密钥来调用的 agent 和脚本（包括你自己用 agent 密钥调的时候，见 `../MUSE.md` 4.8）。
+- **「agent 能生成什么」**（What agents can generate）：图片、语音、音乐、视频各一个开关；**「视频最高分辨率」**（Maximum video resolution）可选 720p / 1080p / 4K，agent 要更高会自动降到这一档。想省钱：关掉视频，或把分辨率压到 720p。
+- **「内容安全过滤」**（Content safety filters）：骚扰、仇恨言论、色情内容、危险内容四类，每类从 **「Google 默认」**（Google default）、「不过滤」到「拦低风险及以上」五档，跟 Google AI Studio 的安全设置是同一套，对 Gemini 对话和 Gemini 图像模型生效。Gemini 回复被拦下时，对话里会写「被 Google 的内容安全过滤拦下了」和原因——遇到这句，换个说法再试，或请管理员调这里。
+- 卡片上填了项目 ID 后还有 **「在 Google Cloud 查看：」**（View in Google Cloud: ）账单、配额、用量三个直达链接。
+
 ## 用起来
 
 - 主页的 **Vertex** 方块进去，右上角的 **「功能模块」**（Modes）菜单在 **「对话」**（Chat）、**「图像」**（Image）、**「视频」**（Video）、**「语音」**（Speech）、**「音乐」**（Music）五个模块之间切换（电脑上是主页 Dock 里的 Vertex）。图像是对话式的：先描述生成，再接着说「改成…」逐轮修改；视频和音乐一次约 1–2 分钟。每个模块有自己的历史，在「≡」里。
-- **在 Claude 里**：Gemini 开着时，直接跟 Claude 说「画一张…」「配一段音乐」「把这段读出来」，作品显示在对话里，Claude 还能把文件拿去当素材（比如做网页配图）。
+- **在 Claude 里**：Gemini 开着时，直接跟 Claude 说「画一张…」「配一段音乐」「把这段读出来」，作品显示在对话里，Claude 还能把文件拿去当素材（比如做网页配图）。Claude 说「管理员没让 Claude 生成媒体」或「关掉了 agent 生成视频」，就是上一节的开关关着。
+- **在 dimensio 里**：管理员在上一节打开「dimensio」后，同样直接跟它说要什么。
 - 图像模型列表里的「Qwen Image 2.1 · 本机」是在有显卡的电脑上本地出图用的，**在 Muse 上用不了**，选别的模型。
 - 成员：Gemini 打开后，新注册的账号默认就有 Gemini；老账号要在「用户」页他那一行勾上（见 06-users-admin.md）。成员的图像 / 语音 / 音乐和视频生成可以在 **「额度与注册」**（Quotas & sign-ups）里分别关掉或限每天几次，所有生成都记在管理员的 Google 账单上。
 
 ## 要花多少钱
 
 - 全部按 Google Cloud 的 Vertex AI 价格计费，账单在用户自己的 Google Cloud 里，Muse Bridge 不收钱。视频按秒计、最贵；图像按张；对话按 token。
-- 想控制花费：在 Google Cloud 里设预算提醒；多人用时把成员的视频生成关掉或限次数。
+- 想控制花费：在 Google Cloud 里设预算提醒；关掉 Claude 的「需要素材时主动生成」、关掉 agent 生成视频或压低视频分辨率（见上面「谁能生成」一节）；多人用时把成员的视频生成关掉或限次数。

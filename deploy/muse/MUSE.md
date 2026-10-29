@@ -231,6 +231,7 @@ Muse Bridge 自带一套给 agent 用的 HTTP 接口（入口 `/agent`，项目�
 2. 打开后马上跑一次 `bash $OPS/bootstrap.sh allow-sites`（不带参数：Gemini 开着时会带上 Google 的 4 个接口站点），先告诉他要弹几张 Google 的审核卡，建议选「总是允许此站点」——生成是在后台跑的，只「允许一次」以后还会卡住（选项见 2.0）。
 3. 请他准备凭据并在 **「设置 → Agent → Gemini」** 的「Google 云凭据」卡片里上传、点「保存并测试」。**凭据（服务账号 JSON、gcloud 的凭据文件）只在设置页上传，别让他贴给你、别经你的命令行写进 VM**——你会把对话内容留在记忆里。
 4. 费用在他自己的 Google Cloud 账单上。详细步骤、报错对照、在 Claude 里怎么用：`guide/09-vertex.md`。
+5. 同一页下面能管别的 agent：用户嫌 Claude 自己配图配乐费钱，请他关掉「需要素材时主动生成」；想让 dimensio 也能生成，打开「dimensio」；还能只许生成某几种、限视频分辨率、调内容安全过滤。这些是管理员在网页里改的开关，你别经命令行去改 config.json。
 
 ## 5. 用自己的域名（固定地址）
 

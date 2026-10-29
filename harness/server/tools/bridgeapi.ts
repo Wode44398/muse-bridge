@@ -5,7 +5,8 @@
 //   GET  {BRIDGE_DEVICE_API}/agent/v1                    操作目录（含 access、对这个身份可不可用）
 //   POST {BRIDGE_DEVICE_API}/agent/v1/<op>               执行 → { ok, data } | { ok:false, error:{ code, message, hint? } }
 // 凭据与设备工具同一把（tools/localpc.ts channel）：管理员实例 = 主机密钥 → 管理员；成员实例 = bridge 按人铸的令牌 → 他本人
-// （src/agent-api/instance-auth.mjs）。bridge 只认本机直连，设备组与媒体组不给（那是 Device* 工具的事）。
+// （src/agent-api/instance-auth.mjs）。bridge 只认本机直连，设备组不给（那是 Device* 工具的事）；媒体组（media.*）由 bridge 的
+// 设置 › Agent › Gemini 决定给不给 dimensio——没开时目录里标不可用，这里照目录走。
 // 独立跑的 dimensio 没有这两个变量，工具不出现。
 //
 // 审批：read 操作免审；会改东西的（write）跟权限档走（只读 / 计划档拦下）；danger（删除、花钱、不可撤回）每次弹审批卡。
@@ -17,7 +18,7 @@ type OpInfo = { name: string; group?: string; title?: string; access?: string; s
 
 const MAX_TEXT = 60_000;
 const CATALOG_TTL_MS = 5 * 60_000;
-const EXCLUDED = /^(devices|media)\./;
+const EXCLUDED = /^devices\./;
 
 export const bridgeToolAvailable = (): boolean => channel() !== null;
 
@@ -109,7 +110,7 @@ const opArgs = (args: Record<string, unknown>): Record<string, unknown> =>
   args.args && typeof args.args === "object" && !Array.isArray(args.args) ? (args.args as Record<string, unknown>) : {};
 
 const EXCLUDED_TEXT = (op: string) =>
-  `${op} is not available here: operate the user's computer with the Device* tools; media generation is not offered to dimensio through bridge.`;
+  `${op} is not available here: operate the user's computer with the Device* tools.`;
 const UNKNOWN_TEXT = (op: string) => `bridge has no operation "${op}". Call BridgeCall without op to list the operations, or BridgeManual(q:"${op}").`;
 const accessTag = (a?: string) => (a === "danger" ? "danger, needs approval" : a === "write" ? "changes things" : "read");
 

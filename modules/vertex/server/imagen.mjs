@@ -6,6 +6,7 @@
 // Synchronous (no long-running operation) — returns the image bytes directly.
 import { vertexGenAI, geminiGenAI, vertexClientKey } from './google-clients.mjs';
 import { GEMINI_API_KEY } from '@bridge/core/config/index.mjs';
+import { vertexSafetySettings, safetyBlockNote } from '@bridge/core/runtime/vertex-settings.mjs';
 import { CAPABILITIES } from '@bridge/core/config/capabilities.mjs';
 
 const clients = new Map();
@@ -28,6 +29,12 @@ function pickClient(model, imageSize, project, location) {
   if (!viaDevApi(model, imageSize)) return { ai: client(project, location), dev: false };
   if (!devClient || devKey !== GEMINI_API_KEY) { devClient = geminiGenAI(GEMINI_API_KEY); devKey = GEMINI_API_KEY; }
   return { ai: devClient, dev: true };
+}
+
+// 没出图：被安全过滤拦下的说清原因，否则照旧
+function noImageMessage(res) {
+  const why = res?.promptFeedback?.blockReason || res?.candidates?.[0]?.finishReason;
+  return safetyBlockNote(why) || 'Nano Banana 未返回图片（可能被安全策略拦截或只回了文字）';
 }
 
 /**
@@ -71,6 +78,8 @@ export async function generate({ model, prompt, image, aspectRatio, imageSize, t
   // Image Search implies web search (it's a searchType under googleSearch).
   if (useImageSearch) config.tools = [{ googleSearch: { searchTypes: { webSearch: {}, imageSearch: {} } } }];
   else if (useSearch) config.tools = [{ googleSearch: {} }];
+  const safety = vertexSafetySettings();   // 内容安全过滤（设置 › Agent › Gemini）；没改过不带
+  if (safety) config.safetySettings = safety;
   if (signal) config.abortSignal = signal;
   const res = await ai.models.generateContent({ model, contents: [{ role: 'user', parts }], config });
   for (const part of (res.candidates?.[0]?.content?.parts || [])) {
@@ -78,7 +87,7 @@ export async function generate({ model, prompt, image, aspectRatio, imageSize, t
       return { bytes: Buffer.from(part.inlineData.data, 'base64'), mime: part.inlineData.mimeType || 'image/png' };
     }
   }
-  throw new Error('Nano Banana 未返回图片（可能被安全策略拦截或只回了文字）');
+  throw new Error(noImageMessage(res));
 }
 
 // 多轮对话式图像编辑（Nano Banana）：传入完整 contents 历史（user 文字 + model 图 + thoughtSignature），
@@ -97,10 +106,12 @@ export async function generateChat({ model, contents, aspectRatio, imageSize, th
   if (thinkingLevel) config.thinkingConfig = { thinkingLevel };
   if (useImageSearch) config.tools = [{ googleSearch: { searchTypes: { webSearch: {}, imageSearch: {} } } }];
   else if (useSearch) config.tools = [{ googleSearch: {} }];
+  const safety = vertexSafetySettings();   // 内容安全过滤（设置 › Agent › Gemini）；没改过不带
+  if (safety) config.safetySettings = safety;
   if (signal) config.abortSignal = signal;
   const res = await ai.models.generateContent({ model, contents, config });
   const parts = res.candidates?.[0]?.content?.parts || [];
   const imgPart = parts.find((p) => p.inlineData?.data);
-  if (!imgPart) throw new Error('Nano Banana 未返回图片（可能被安全策略拦截或只回了文字）');
+  if (!imgPart) throw new Error(noImageMessage(res));
   return { bytes: Buffer.from(imgPart.inlineData.data, 'base64'), mime: imgPart.inlineData.mimeType || 'image/png', signature: imgPart.thoughtSignature || '' };
 }

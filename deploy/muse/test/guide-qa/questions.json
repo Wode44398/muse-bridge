@@ -125,6 +125,16 @@
       "facts": ["不会自动装，只提示，点「更新」才装", "「功能扩展」里的「插件市场」是 bridge 官方发布、签过名的功能插件；「发现」里是 Anthropic 官方插件目录里给 Claude Code 用的插件，不是一回事", "装了不满意可以回退，内置功能换上的市场版可以恢复内置版"] },
     { "id": "q47", "q": "界面上弹了个红字报错，旁边有个「问 Claude」，点了会怎样？会把东西发出去吗？", "chapters": ["07-settings.md"],
       "facts": ["会开一个新的 Claude 对话，把报错和出错的界面填进输入框，补一句就能发", "Claude 先看现场判断是不是 bug；只有管理员身份它才看得到服务器的报错日志", "要上报时先跟你说清报什么、发到哪，你同意才报；服务器上总存一份，管理员开了推送才会提交成 Muse Bridge 的公开 GitHub Issue"],
-      "forbid": ["点了就会自动把报错发给开发者"] }
+      "forbid": ["点了就会自动把报错发给开发者"] },
+    { "id": "q48", "q": "我想用 Google 的 Nano Banana 生图，Muse Bridge 能用吗？怎么弄？",
+      "chapters": ["09-vertex.md"],
+      "facts": ["能：Gemini · Vertex 扩展装好时是关着的，管理员在 设置 → 扩展 → 功能扩展 里打开", "要自己的 Google 云凭据：在 设置 → Agent → Gemini 的「Google 云凭据」里上传凭据 JSON（服务账号密钥或 gcloud 生成的文件），点「保存并测试」", "费用记在用户自己的 Google Cloud 账单上"],
+      "extra": ["在 Muse 里先放行 Google 的网站（allow-sites），审核卡选「总是允许此站点」", "凭据别贴到聊天里，只在设置页上传"],
+      "forbid": ["Muse Bridge 不带图像生成", "把凭据文件内容发给我（Muse），我帮你写进去"] },
+    { "id": "q49", "q": "Claude 帮我做网页的时候老是自己生成一堆图片，太费钱了，能让它别这样吗？",
+      "chapters": ["09-vertex.md"],
+      "facts": ["管理员在 设置 → Agent → Gemini 的「让别的 agent 生成媒体」里关掉「需要素材时主动生成」，Claude 就只在被要求时才生成"],
+      "extra": ["也可以关掉 agent 生成某几种（比如视频），或压低视频最高分辨率", "整个关掉 Claude 那一项，Claude 就没有生成工具"],
+      "forbid": ["没办法关", "要卸载 Gemini · Vertex 扩展才行"] }
   ]
 }

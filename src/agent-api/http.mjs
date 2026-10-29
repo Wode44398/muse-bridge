@@ -65,7 +65,9 @@ function resolveCaller(req, identify) {
   const id = identify({ method: req.method, url: u.pathname, headers, socket: req.socket });
   if (!id || (id.kind !== 'admin' && id.kind !== 'user')) return null;
   const key = tok ? touchAgentKey(tok) : null;
-  return { identity: id, ctx: contextFor(id), key };
+  const ctx = contextFor(id);
+  ctx.agentCaller = 'api';   // 外部 agent（agent 密钥 / 令牌）：媒体组按「外部 agent」那一项放行
+  return { identity: id, ctx, key };
 }
 
 function quickstartMd(ctx, origin) {

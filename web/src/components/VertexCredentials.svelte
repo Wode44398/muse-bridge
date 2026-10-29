@@ -114,6 +114,7 @@
     busy = '';
   }
   const secs = (ms) => (ms / 1000).toFixed(1);
+  const gcpUrl = (page) => 'https://console.cloud.google.com/' + page + '?project=' + encodeURIComponent(st?.project || '');
 </script>
 
 {#if st}
@@ -208,6 +209,11 @@
         </div>
       {/if}
 
+      {#if st.project}
+        <!-- 费用都在用户自己的 Google Cloud 里：直达这个项目的账单、配额与 Vertex AI 用量 -->
+        <p class="vxc-gcp">{t('在 Google Cloud 查看：')}<a href={gcpUrl('billing/linkedaccount')} target="_blank" rel="noopener">{t('账单')}</a> · <a href={gcpUrl('iam-admin/quotas')} target="_blank" rel="noopener">{t('配额')}</a> · <a href={gcpUrl('apis/api/aiplatform.googleapis.com/metrics')} target="_blank" rel="noopener">{t('用量')}</a></p>
+      {/if}
+
       <button type="button" class="vxc-link" onclick={() => (help = !help)} aria-expanded={help}>{help ? '▾ ' : '▸ '}{t('怎么拿到凭据')}</button>
       {#if help}
         <div class="vxc-help">
@@ -293,6 +299,8 @@
     display: block; margin: 12px 0 0; padding: 0; border: 0; background: transparent; font: inherit; font-size: 12.5px; cursor: pointer;
     color: var(--i-accent, var(--dsk-accent, currentColor));
   }
+  .vxc-gcp { margin: 10px 0 0; font-size: 12px; color: var(--i-label2, var(--dsk-ink-2, currentColor)); }
+  .vxc-gcp a { color: var(--i-accent, var(--dsk-accent, currentColor)); text-decoration: none; }
   .vxc-help { margin-top: 6px; font-size: 12.5px; }
   .vxc-hh { margin: 8px 0 2px; font-weight: 600; }
   .vxc-help ol { margin: 0; padding-left: 18px; }

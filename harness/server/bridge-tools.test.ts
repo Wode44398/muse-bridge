@@ -43,7 +43,9 @@ const OPS = [
   { name: "feedback.report", group: "feedback", title: "上报一个 bug", access: "danger", slow: false, available: true },
   { name: "plugins.toggle", group: "plugins", title: "打开 / 关闭一个插件", access: "write", slow: false, available: false, unavailableReason: "只有服务器主机能用" },
   { name: "devices.list", group: "devices", title: "列出我的设备", access: "read", slow: false, available: false, unavailableReason: "同机 agent 实例不从这里调" },
-  { name: "media.image", group: "media", title: "生成图片", access: "write", slow: true, available: false, unavailableReason: "同机 agent 实例不从这里调" },
+  { name: "media.image", group: "media", title: "生成图片", access: "write", slow: true, available: false, unavailableReason: "管理员没让 dimensio 生成媒体（设置 › Agent › Gemini）" },
+  // 管理员在 设置 › Agent › Gemini 打开了 dimensio 时：媒体组照目录走（视频是 danger，每次弹卡）
+  { name: "media.video", group: "media", title: "生成视频", access: "danger", slow: true, available: true },
 ];
 
 // 假 bridge：凭据不对 401（同真接口）；手册回 markdown；操作回 { ok, op, data }
@@ -137,6 +139,7 @@ test("BridgeCall：不带 op 列可用操作；执行带凭据、参数原样转
     assert.match(body, /routines\.delete — 删除定时任务 \[danger, needs approval\]/);
     assert.match(body, /routines\.create — 新建定时任务 \[changes things\]/);
     for (const n of ["devices.list", "media.image", "plugins.toggle"]) assert.ok(!body.includes(n), n);
+    assert.match(body, /media\.video — 生成视频 \[danger, needs approval\]/);
 
     const me = await bridgeCallTool.run({ op: "whoami" }, ctx);
     assert.equal(me.ok, true);
@@ -192,8 +195,11 @@ test("审批：read 免审、write 跟权限档、danger 弹卡；设备 / 没�
     assert.equal(decide("auto", "BridgeCall", tools, { op: "routines.delete" }, allowDel, { confirm: del.prepared!.confirm! }).effect, "allow");
     const rep = await bridgeCallTool.prepare!({ op: "feedback.report" }, ctx);
     assert.equal(decide("auto", "BridgeCall", tools, { op: "feedback.report" }, allowDel, { confirm: rep!.confirm! }).effect, "ask");
+    // 媒体组不再写死排除：开着的照常（视频要人批），关着的照目录说原因
+    assert.equal((await plan("media.video")).decision.effect, "ask", "生成视频要人批");
     // 不弹卡直接回话
-    assert.match((await plan("media.image")).prepared?.veto?.content ?? "", /not available here/);
+    assert.match((await plan("devices.list")).prepared?.veto?.content ?? "", /not available here/);
+    assert.match((await plan("media.image")).prepared?.veto?.content ?? "", /设置 › Agent › Gemini/);
     assert.match((await plan("plugins.toggle")).prepared?.veto?.content ?? "", /只有服务器主机能用/);
     assert.match((await plan("no.such")).prepared?.veto?.content ?? "", /no operation "no\.such"/);
   } finally {

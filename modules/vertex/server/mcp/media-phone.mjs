@@ -16,6 +16,7 @@ import * as vertexMedia from '@bridge/core/vertex-media.mjs';
 import { buildMediaTools } from './media-tools.mjs';
 import { getCurrentGen, genEmit } from '@bridge/core/runtime/gen.mjs';
 import { admitUsage } from '@bridge/core/runtime/quota.mjs';
+import { agentMediaDeny, capVideoResolution } from '@bridge/core/runtime/vertex-settings.mjs';
 import { VERTEX_PROJECT, VERTEX_LOCATION, VERTEX_MEDIA_LOCATION, GEMINI_API_KEY } from '@bridge/core/config/index.mjs';
 
 function makeAdapter({ mediaDir, genKey, getGen }) {
@@ -55,11 +56,18 @@ function makeAdapter({ mediaDir, genKey, getGen }) {
 // 成员的媒体额度（核心 runtime/quota.mjs admitUsage）：每次调用先过闸，放行即记一次；拦下就把原因当工具结果回给 Claude。
 // ctx 不传（管理员 / 桌面 stdio 版）= 不限。
 const MEDIA_KIND = { generate_video: 'video' };
+// 工具 → 设置里的媒体种类（设置 › Agent › Gemini「agent 能生成什么」，核心 runtime/vertex-settings.mjs）
+const TOOL_KIND = { generate_image: 'image', generate_video: 'video', generate_speech: 'speech', generate_music: 'music' };
 function guarded(t, ctx) {
-  if (!ctx) return t.handler;
   return async (args, extra) => {
-    const block = admitUsage(ctx, MEDIA_KIND[t.name] || 'media');
-    if (block) return { isError: true, content: [{ type: 'text', text: block.title + '：' + block.message }] };
+    // 建工具集之后设置可能又改了：调用时再判一次（工具集下一条消息才换新）
+    const deny = agentMediaDeny('claude', TOOL_KIND[t.name]);
+    if (deny) return { isError: true, content: [{ type: 'text', text: deny }] };
+    if (t.name === 'generate_video' && args && args.resolution) args = { ...args, resolution: capVideoResolution(args.resolution) };
+    if (ctx) {
+      const block = admitUsage(ctx, MEDIA_KIND[t.name] || 'media');
+      if (block) return { isError: true, content: [{ type: 'text', text: block.title + '：' + block.message }] };
+    }
     return t.handler(args, extra);
   };
 }
@@ -75,7 +83,8 @@ export function makeMediaMcp({ mediaDir, genKey = 'admin', getGen, ctx = null } 
       adapter: makeAdapter({ mediaDir, genKey, getGen }),
       // getter：设置页改了 Vertex 配置即时生效，常驻的 MEDIA_MCP 也读到新值
       loc: { get project() { return VERTEX_PROJECT; }, get globalLoc() { return VERTEX_LOCATION; }, get mediaLoc() { return VERTEX_MEDIA_LOCATION; }, get apiKey() { return GEMINI_API_KEY; } },
-    }).map((t) => tool(t.name, t.description, t.schema, guarded(t, ctx))),
+    }).filter((t) => !agentMediaDeny('claude', TOOL_KIND[t.name]))   // 管理员关掉的种类不给
+      .map((t) => tool(t.name, t.description, t.schema, guarded(t, ctx))),
   });
 }
 
