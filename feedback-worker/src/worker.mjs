@@ -155,7 +155,13 @@ export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = ()
     // 没有推送权限的调用方建 Issue 时，GitHub 会悄悄丢掉 labels：缺了就单独补一次（失败不影响结果）
     const got = new Set((x.body.labels || []).map((l) => (typeof l === 'string' ? l : l?.name)));
     const want = issueLabels(r, tags).filter((l) => !got.has(l));
-    if (want.length) { try { await gh(env, 'POST', `/repos/${repo}/issues/${x.body.number}/labels`, { labels: want }); } catch {} }
+    if (want.length) {
+      // 补不上不影响结果，但要在 wrangler tail 里看得到（权限不够、仓库限制等）
+      try {
+        const l = await gh(env, 'POST', `/repos/${repo}/issues/${x.body.number}/labels`, { labels: want });
+        if (!l.ok) console.log(`labels ${repo}#${x.body.number} ${l.status} ${String(l.body?.message || '').slice(0, 200)}`);
+      } catch (e) { console.log(`labels ${repo}#${x.body.number} ${String(e?.message || e).slice(0, 200)}`); }
+    }
     if (r.fp && env.FEEDBACK_KV) await env.FEEDBACK_KV.put(`${t.kp}fp:${r.fp}`, String(x.body.number));
     if (selfSeen && r.fp && env.FEEDBACK_KV) await env.FEEDBACK_KV.put(`${t.kp}fpi:${r.fp}:${r.install}`, '1', { expirationTtl: 90 * 86400 });
     return json(200, { ok: true, issue: { number: x.body.number, url: x.body.html_url } });
