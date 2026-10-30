@@ -66,6 +66,7 @@ import { noteFamilyLink, noteCollabEvent } from './sessionFamily.svelte.js';
 import { noteSessionArchived } from './sessionArchive.svelte.js';   // 单条加载带回的归档态（「此会话已归档」横条）
 import { applyWidgetEvent, narrowViewport } from './widgetSeg.js';   // 对话内嵌交互图表（widget_* 帧 → widget 段；窄屏按手机宽度出图）
 import { devices, thisDeviceId } from './devices.svelte.js';   // 用户的电脑（设备）：发消息带上本机设备 id / 新会话选的电脑
+import { parseDeviceRef } from './deviceRefs.js';   // 引用电脑上的文件夹（device://）：排队消息放回输入框时认出来
 import { effectiveEffort } from './claudeProviders.svelte.js';   // 自定义模型只带它档位表里的推理强度（换模型带过来的不发）
 import { showToast } from './toast.svelte.js';
 
@@ -174,6 +175,7 @@ const sentAttachments = (list) => (list || []).map((a) => {
     ...(file ? { file } : {}),
     ...(a.quoteId ? { quoteId: a.quoteId } : {}),
     ...(a.local ? { local: true } : {}),
+    ...(a.device ? { device: a.device } : {}),   // 引用电脑上的文件夹：气泡卡写「在哪台电脑上」
   };
 });
 
@@ -1889,6 +1891,7 @@ function toUiAttachments(list) {
   return list.map((a) => {
     const name = a.name || a.file || tt('文件');
     if (a.kind === 'chat') return { name, kind: 'chat', url: null, quoteId: a.quoteId || null };   // 引用对话（sessions.mjs 按存盘名认出）
+    if (a.kind === 'folder') return { name, kind: 'folder', url: null, ...(a.device ? { device: a.device } : {}) };   // 电脑上的文件夹（只引用没上传）
     const isImg = IMG_EXT.includes((name.split('.').pop() || '').toLowerCase());
     if (!isImg) return { name, kind: 'file', url: null };
     const src = a.rel ? wsFileUrl : (a.file ? uploadRawUrl : null);
@@ -2341,6 +2344,13 @@ export async function editQueued(id) {
   prefillComposer(it.text || '');
   (it.attachments || []).forEach((p, i) => {
     if (compose.attachments.some((x) => x.path === p)) return;
+    // 引用电脑上的文件夹：放回成文件夹卡（原始文件不在了，不能再改为上传）
+    const ref = parseDeviceRef(p);
+    if (ref) {
+      const name = (it.files && it.files[i]) || ref.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+      compose.attachments.push({ path: p, name, kind: 'folder', url: null, count: null, note: '', pending: false, device: { id: ref.deviceId, name: devices.list.find((d) => d.id === ref.deviceId)?.name || '' } });
+      return;
+    }
     compose.attachments.push({ path: p, name: (it.files && it.files[i]) || String(p).split(/[\\/]/).pop(), kind: 'file', url: null, pending: false, local: true });
   });
   return true;

@@ -9,9 +9,14 @@
 //                to 嵌在「发给 {to}」里（≤60 字，不含换行）；toEn 嵌在 "send to {to}" 里（≤80，缺省 = to）；public:true = 去向是公开的
 //                （比如中继把反馈发成公开 GitHub Issue），界面与 feedback.* 操作会多一句「会公开发布、别写隐私；图片不公开」的提醒。
 //                没声明 = 本体的「bridge 开发者」，所有文案保持原样（此时 resolveDistro 的结果里没有 feedback 这一项）。
+//                config 里没声明时，官方安装包的构建期渠道可以带一份（bridge-build.json 的 feedbackDest，打包脚本在写官方中继时
+//                一并写入：The Bridge 的公开 GitHub Issue），见下面 channelFeedback。
 // 前端经 HTML 壳里注入的 window.__DISTRO__ 读（启动前就要知道：i18n 在任何请求之前定死），见 web/src/lib/distro.js；
 // 注入点与 overlay 同一处（runtime/overlay-web.mjs，覆盖 /、/app/*.html、/w/、/c/ 全部 HTML 壳）。
+import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { config } from './index.mjs';
+import { PROGRAM_ROOT } from '../runtime/paths.mjs';
 
 const DEFAULTS = Object.freeze({ id: 'bridge', brand: 'The Bridge', langDefault: 'zh' });
 // 反馈去向的本体默认值：声明表里没有 feedback 时所有文案用它（= 现状的「bridge 开发者」）
@@ -50,7 +55,36 @@ export function resolveDistro(raw) {
   return Object.freeze({ id, brand, langDefault, ...(feedback ? { feedback } : {}) });
 }
 
-export const DISTRO = resolveDistro(config.distro);
+/**
+ * 构建期渠道声明的反馈去向（程序根 bridge-build.json 的 feedbackDest；只跟构建期的中继地址 feedbackRelay 成对出现）。
+ * 中继另配了（环境变量 BRIDGE_FEEDBACK_RELAY 或 config.feedbackRelay，见 runtime/feedback-upstream.mjs）就不是那个去向了，不算数。
+ */
+export function channelFeedback({ programRoot = PROGRAM_ROOT, cfg = config, env = process.env } = {}) {
+  if (String(env.BRIDGE_FEEDBACK_RELAY || '').trim()) return null;
+  if (typeof cfg?.feedbackRelay === 'string' && cfg.feedbackRelay.trim()) return null;
+  try {
+    const j = JSON.parse(readFileSync(path.join(programRoot, 'bridge-build.json'), 'utf8'));
+    return j && j.feedbackRelay && j.feedbackDest && typeof j.feedbackDest === 'object' ? j.feedbackDest : null;
+  } catch { return null; }
+}
+
+/** config.distro 没声明反馈去向时，补上构建期渠道的那份（config 里声明的永远优先） */
+export function withChannelFeedback(raw, chan) {
+  const e = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return e.feedback || !chan ? e : { ...e, feedback: chan };
+}
+
+export const DISTRO = resolveDistro(withChannelFeedback(config.distro, channelFeedback()));
+
+/**
+ * 推给中继的 distro：别的发行版带自己的 id（中继按它分流，Muse 的开 Muse 仓库的 Issue）；
+ * 本体只有在去向声明为公开时才带 'bridge'（提交人看到过「会公开发布」）——中继据此开 The Bridge 的公开 Issue。
+ * 本体没声明公开去向（老版本、自己配中继的部署）不带：中继照旧放进开发者的私有收件箱，不会被公开。
+ */
+export function relayDistro(ed = DISTRO) {
+  if (ed.id !== DEFAULTS.id) return ed.id;
+  return ed.feedback && ed.feedback.public === true ? DEFAULTS.id : '';
+}
 
 // </head> 前那一行。JSON 里的 < 转义掉，品牌名里写了 </script> 也跳不出标签
 export function distroHeadTag(ed = DISTRO) {

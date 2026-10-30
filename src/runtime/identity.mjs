@@ -112,8 +112,12 @@ export function makeIdentify({ authOk, getCookie, bearerToken, queryToken, resol
     // cookie——user 只能靠 Bearer 携带 session token（admin 早就这么走）。authOk 已先
     // 判过 admin，所以走到这里的 Bearer 必然不是 admin token：getSession 命中才是 user，
     // 否则 none，绝不会把任意 Bearer 提权成 admin。
-    const tok = getCookie(req, 'bridge_user') || (bearerToken ? bearerToken(req) : '') || (queryToken ? queryToken(req) : '');
-    const s = tok ? getSession(tok) : null;
+    // 显式凭据（Bearer / ?token=）先于 cookie：本机快捷切换账号时页面带的是选中账号的 Bearer，cookie 可能还是上一个号；
+    // 显式那张无效（过期 / 被吊销）才回落 cookie。
+    let s = null;
+    for (const tok of [bearerToken ? bearerToken(req) : '', queryToken ? queryToken(req) : '', getCookie(req, 'bridge_user')]) {
+      if (tok && (s = getSession(tok))) break;
+    }
     // 多用户关着（主机形态）：普通账号的会话一律不认，只剩服务账号（QQ 机器人这类）。
     // user = 账号 id（目录 / owner 键 / 账本都认它，老账号 = 用户名），name = 登录名（显示用，可改），
     // sid / loginAt = 这次登录（设备登记据此绑到这次登录上，见 routes/devices.mjs）。

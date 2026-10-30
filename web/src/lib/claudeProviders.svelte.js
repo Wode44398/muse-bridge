@@ -120,10 +120,19 @@ export const customModelInfo = (id) => cp.models.find((m) => m.id === id) || nul
 // 工作流 progress 里的 model 是 Claude 写进 agent() 的原样字符串：custom:<服务>:<型号>、裸型号 id（deepseek-v4-pro）
 // 或 Claude 的 id / 别名。自定义模型用设置里的名字（「DeepSeek-V4-Pro」），清单里找不到（服务关了 / 不共享了）
 // 只留型号段；Claude 的走 modelLabel（claude-sonnet-5-5 → Sonnet 5.5）。不要把 custom:p-xxxx: 露给用户。
+// auto:<档>（按性价比阶梯由 bridge 在请求时换型号，见服务端 model-ratings.mjs）：served = 转录里实际答话的模型，
+// 有就显示「Opus 5.5（自动·难）」，还没开始答话只显示档名。
 const CLAUDE_ALIAS = /^(claude-|opus|sonnet|haiku|fable)/i;
-export function agentModelName(id) {
+const AUTO_TIER = { top: () => t('自动·最难'), hard: () => t('自动·难'), normal: () => t('自动·常规'), light: () => t('自动·机械') };
+export function agentModelName(id, served) {
   const s = typeof id === 'string' ? id.trim() : '';
   if (!s) return '';
+  const auto = /^auto:(\w+)$/i.exec(s);
+  if (auto) {
+    const tier = AUTO_TIER[auto[1].toLowerCase()] ? AUTO_TIER[auto[1].toLowerCase()]() : s;
+    const real = served ? agentModelName(served) : '';
+    return real ? t('{model}（{tier}）', { model: real, tier }) : tier;
+  }
   if (isCustomModel(s)) {
     const hit = customModelInfo(s);
     return (hit && hit.name) || s.split(':').slice(2).join(':') || s;
@@ -139,7 +148,7 @@ export const agentEffortName = (e) => (typeof e === 'string' && e ? EFFORT_NAME[
 export function agentModelMix(agents) {
   const out = new Map();
   for (const a of agents || []) {
-    const n = agentModelName(a && a.model);
+    const n = agentModelName(a && a.model, a && a.servedModel);
     if (n) out.set(n, (out.get(n) || 0) + 1);
   }
   return [...out].map(([name, count]) => ({ name, count }));

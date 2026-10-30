@@ -47,6 +47,7 @@ import { planRecordFor } from '../runtime/permissions.mjs';   // 计划卡的结
 // 工具行/任务卡规则与直播端（agents/claude.mjs）共用一份——直播与重开必须一致。
 import { toolShown, toolJoins, toolSummary, toolInputSubset, workflowNameFromInput, workflowMetaFromScript, parseTaskNotification, readWorkflowOutput, annotateWorkflowEfforts, clip, COMPACT_TOOL, compactMeta } from '../runtime/tool-summary.mjs';
 import { isVizTool, widgetSegFromToolUse, applyWidgetResult } from '../mcp/visualize.mjs';
+import { parseDeviceRefNote, basenameOf } from '../runtime/device-refs.mjs';
 
 function extractText(content) {
   if (typeof content === 'string') return content;
@@ -154,7 +155,7 @@ const isInjectedText = (t) => INJECTED_TEXT_RE.test(t);
 // （Date.now()-原名）+ 去时间戳前缀的显示名 name + 完整路径 raw（供 toClientAtt 按来源分类，
 // 不直接出服务器）；前端据此走 /api/upload/raw 或 /api/file 把图片渲染回缩略图。
 const ATT_MARK = '[用户上传了以下附件';
-function splitAttachments(text) {
+export function splitAttachments(text) {
   const mi = text.indexOf(ATT_MARK);
   if (mi < 0) return { text, attachments: [] };
   const clean = text.slice(0, mi).replace(/\n+$/, '');
@@ -164,6 +165,13 @@ function splitAttachments(text) {
   while ((m = re.exec(text.slice(mi)))) {
     // 行尾可能带 claude.mjs 加的标注（「  ← 文件夹」「  ← 引用的对话」），不属于路径
     const raw = m[1].replace(/\s+←.*$/, '').trim();
+    // 用户电脑上的文件夹（只引用、没上传，runtime/device-refs.mjs）：路径是他电脑上的，名字不剥时间戳前缀
+    const dev = parseDeviceRefNote((/\s+←\s*(.*)$/.exec(m[1]) || [])[1]);
+    if (dev) {
+      const p = raw.replace(/^`(.*)`$/, '$1');   // 提示词里这条路径包着反引号
+      attachments.push({ file: basenameOf(p), name: basenameOf(p), raw: p, kind: 'folder', device: { id: dev.deviceId, name: dev.deviceName } });
+      continue;
+    }
     const file = raw.split(/[\\/]/).pop() || '';
     if (!file) continue;
     const q = parseQuoteFile(file);
@@ -181,6 +189,7 @@ export function parseQuoteFile(file) {
 // 历史附件出口（绝对路径不出服务器）：uploads 里的 → {file}（前端走 /api/upload/raw）；
 // 工作空间直发的（「发送给 AI」零拷贝路径）→ {rel}（前端走 /api/file）；都不是 → 只留名字。
 function toClientAtt(a, ctx) {
+  if (a.device) return { name: a.name, kind: 'folder', device: a.device };   // 电脑上的路径不必回传，卡上只写名字与哪台电脑
   const raw = a.raw || '';
   const under = (dir) => dir && raw && path.resolve(raw).startsWith(path.resolve(dir) + path.sep);
   if (under(ctx.uploads)) return a.kind === 'chat' ? { file: a.file, name: a.name, kind: 'chat', quoteId: a.quoteId } : { file: a.file, name: a.name };

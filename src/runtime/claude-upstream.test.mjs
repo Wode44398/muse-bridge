@@ -32,7 +32,7 @@ const fake = http.createServer(async (req, res) => {
   let body = {};
   try { body = JSON.parse(raw); } catch {}
   const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
-  seen.push({ path: req.url, token, model: body.model });
+  seen.push({ path: req.url, token, model: body.model, effort: body.output_config && body.output_config.effort });
   const r = (behave[token] || (() => ({ status: 200, chunks: ['ok'] })))(body);
   res.writeHead(r.status, { 'content-type': 'text/event-stream', ...(r.headers || {}) });
   for (const c of r.chunks || []) { res.write(c); await new Promise((ok) => setTimeout(ok, 5)); }
@@ -230,6 +230,37 @@ test('第三方子 agent：claude-* 与没登记的模型名照旧去 Anthropic�
   const bad = await callRoute('mimo-flash', { tok: 'f'.repeat(32) });
   assert.equal(bad.status, 404);
   assert.equal(third.length, 0);
+});
+
+test('auto:<档>：按性价比阶梯换成首选——订阅的 Claude 改写型号与档位去 Anthropic，第三方转给那个服务；count_tokens 只换型号', async () => {
+  const R = await import('./model-ratings.mjs');
+  R._setRatingsForTests({
+    generated: 't', plans: { max20: { 'claude-opus-5-5': 1.4, 'claude-opus-5-5-high': 0.5 } },
+    models: [
+      { slug: 'claude-opus-5-5', base: 'claude-opus-5-5', effort: 'max', ii: 58, cost: 67 },
+      { slug: 'claude-opus-5-5-high', base: 'claude-opus-5-5', effort: 'high', ii: 52, cost: 23 },
+      { slug: 'mimo-flash', base: 'mimo-flash', effort: '', ii: 25, cost: 0.1 },
+    ],
+  });
+  try {
+    reset(); third.length = 0;
+    await (await callRoute('auto:top', { effort: 'low' })).text();
+    assert.deepEqual(seen.map((s) => [s.model, s.effort]), [['claude-opus-5-5', 'max']]);   // 子 agent 自己写的 low 不作数
+    await (await callRoute('auto:hard')).text();
+    assert.deepEqual(seen[1] && [seen[1].model, seen[1].effort], ['claude-opus-5-5', 'high']);
+    await (await callRoute('auto:light')).text();
+    assert.equal(seen.length, 2);
+    assert.deepEqual(third.map((x) => [x.model, x.key]), [['mimo-flash', 'sk-third-party']]);
+    const c = await callRoute('auto:top', { sub: '/v1/messages/count_tokens' });
+    await c.text();
+    assert.deepEqual(seen[2] && [seen[2].model, seen[2].effort], ['claude-opus-5-5', undefined]);
+    // 没有任何评上分的模型：明确报错，不把 auto 名发到 Anthropic
+    R._setRatingsForTests(false);
+    const bad = await callRoute('auto:hard');
+    assert.equal(bad.status, 400);
+    assert.match((await bad.json()).error.message, /auto:hard/);
+    assert.equal(seen.length, 3);
+  } finally { R._setRatingsForTests(null); }
 });
 
 test('无缝换号关着、只为第三方子 agent 走代理：env 不换 token，代理原样沿用 CLI 凭证、不换号', async () => {

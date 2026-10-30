@@ -22,6 +22,7 @@ const LIVE = {
   token: 'bridge-token',
   me: 'bridge-me',
   distro: 'bridge-distro',
+  accounts: 'bridge-accounts',   // 本机账号保险箱（lib/accountVault.js）：每台服务器各自一份
 };
 const CACHE_ME = 'bridge-cache-me';   // lib/cache.js 的离线登录态（只在 localStorage）
 const PALETTE = ['#d97757', '#5b8def', '#3fb68b', '#b07cf0', '#e0a43a', '#e2667f', '#3fb3c6'];
@@ -158,10 +159,12 @@ export function removeProfile(id) {
   if (!p || p.id === s.active) return false;
   s.list = s.list.filter((x) => x !== p);
   save(s);
-  if (p.base && p.token) {
+  // 当前令牌 + 账号保险箱里存着的其它账号，一并退出
+  const toks = new Set([p.token, ...((parse(p.accounts) || []).map((a) => a && a.token))].filter(Boolean));
+  if (p.base) for (const tok of toks) {
     try {
       fetch(p.base + '/api/logout', { method: 'POST', keepalive: true, cache: 'no-store', credentials: 'omit',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + p.token }, body: '{}' }).catch(() => {});
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: '{}' }).catch(() => {});
     } catch {}
   }
   if (p.ns) { try { indexedDB.deleteDatabase('bridge-chat-cache@' + p.ns); } catch {} }

@@ -19,7 +19,9 @@ const sha256hex = (s) => createHash('sha256').update(String(s)).digest('hex');
 
 // createAuth(token, noAuth, { tokenHash, isAdminSession }) returns the small bundle
 // of helpers + cookie strings the rest of the server uses.
-export function createAuth(token, noAuth, { tokenHash = '', isAdminSession = null } = {}) {
+// isUserSession(tok)：这张令牌是不是一张有效的账号会话（users.getSession 命中、且这台主机认它）——
+// 显式带来的账号会话压过残留的管理员 cookie，见 adminCredential。
+export function createAuth(token, noAuth, { tokenHash = '', isAdminSession = null, isUserSession = null } = {}) {
   const expectedHash = token ? sha256hex(token) : String(tokenHash || '').toLowerCase();
   // 主令牌指纹：管理员会话记在它名下，换令牌即失效。只取前 16 位，不足以反推令牌。
   const gen = expectedHash ? expectedHash.slice(0, 16) : '';
@@ -77,11 +79,18 @@ export function createAuth(token, noAuth, { tokenHash = '', isAdminSession = nul
 
   // 这个请求凭什么是管理员：'noauth'（本机无鉴权控制台）| 'master'（主令牌）| 'session'（管理员会话）| null。
   // token = 命中的那个凭据原文（登录时据此决定要不要铸会话、登出时据此吊销哪一张）。
+  // 显式凭据（Bearer / 白名单 ?token=）先于环境 cookie：本机存了几个账号快捷切换时，切到普通账号的页面带的是
+  // 那个账号的 Bearer，浏览器里可能还残留着管理员的 bridge_auth cookie——以前 cookie 也算管理员凭据，切过去仍是管理员。
+  // 现在显式凭据是一张有效的账号会话 → 不是管理员（只会降权）；显式凭据无效 / 没带 → 照旧看 cookie。
   function adminCredential(req) {
     if (noAuth) return { via: 'noauth', token: '' };
-    const cands = [bearerToken(req), queryToken(req), getCookie(req, 'bridge_auth')].filter(Boolean);
-    for (const c of cands) if (tokenMatches(c)) return { via: 'master', token: c };
-    for (const c of cands) if (sessionMatches(c)) return { via: 'session', token: c };
+    const explicit = [bearerToken(req), queryToken(req)].filter(Boolean);
+    for (const c of explicit) if (tokenMatches(c)) return { via: 'master', token: c };
+    for (const c of explicit) if (sessionMatches(c)) return { via: 'session', token: c };
+    if (isUserSession && explicit.some((c) => isUserSession(c))) return null;
+    const ck = getCookie(req, 'bridge_auth');
+    if (ck && tokenMatches(ck)) return { via: 'master', token: ck };
+    if (ck && sessionMatches(ck)) return { via: 'session', token: ck };
     return null;
   }
   function authOk(req) { return !!adminCredential(req); }

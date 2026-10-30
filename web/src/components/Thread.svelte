@@ -329,6 +329,15 @@
                       <span class="u-chat-sub">{t('引用的对话')}</span>
                     </span>
                   </button>
+                {:else if a.device}
+                  <!-- 引用电脑上的文件夹（没上传，Claude 经设备工具按需读）：文件夹图标 + 名字 + 在哪台电脑上 -->
+                  <div class="u-att u-file" title={t('没有上传，Claude 通过这台电脑按需读取；需要电脑开着客户端')}>
+                    <span class="u-file-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.2c0-1.5 1.2-2.7 2.7-2.7h3.4l2 2.3h6.2c1.5 0 2.7 1.2 2.7 2.7v8.3c0 1.5-1.2 2.7-2.7 2.7H6.2c-1.5 0-2.7-1.2-2.7-2.7z"/></svg></span>
+                    <span class="u-chat-col">
+                      <span class="u-file-name">{a.name}</span>
+                      <span class="u-chat-sub">{t('在「{device}」上', { device: a.device.name || t('这台电脑') })}</span>
+                    </span>
+                  </div>
                 {:else}
                   <div class="u-att u-file" use:dragOut={() => attDragSrc(a)}>
                     <span class="u-file-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/></svg></span>

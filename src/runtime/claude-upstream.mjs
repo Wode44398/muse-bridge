@@ -40,6 +40,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { activeAccountId, accountIdForToken, listAccountsWithTokens, setEngineUpstream } from './claude-account.mjs';
 import { isCustomModelId, resolveSubagentModel } from './claude-providers.mjs';
+import { isAutoModel, resolveAuto, applyAutoTarget } from './model-ratings.mjs';
 import { providersProxyBase, ownerOfRouteToken } from './claude-providers-proxy.mjs';
 import { seamlessActive, leaveIfBlocked, noteLimitHit, onRouterSettings } from './account-router.mjs';
 import { loginToken, bucket } from './account-usage.mjs';
@@ -147,11 +148,23 @@ async function handle(req, res, key) {
   }
   const chunks = [];
   try { for await (const c of req) chunks.push(c); } catch { return; }
-  const body = Buffer.concat(chunks);
+  let body = Buffer.concat(chunks);
   const isMessages = req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(path);
   const isCount = req.method === 'POST' && /^\/v1\/messages\/count_tokens(\?|$)/.test(path);
   let model = '';
   if (isMessages || isCount) { try { model = String(JSON.parse(body.toString('utf8')).model || ''); } catch {} }
+  // 工作流 agent({ model:'auto:hard' })：按性价比阶梯换成这一档首选（model-ratings.mjs）——订阅的 Claude 就改写型号与档位照旧去 Anthropic，
+  // 第三方就写成 custom:<服务>:<型号> 交给下面的 routedModel 转出去。只认带 /r/<令牌> 的 CLI（这一轮系统提示里才教了 auto 写法）。
+  if (owner && (isMessages || isCount) && isAutoModel(model)) {
+    const t = resolveAuto(model, owner, { official: true });
+    if (!t) { fail(res, 400, `bridge：「${model}」这一档没有可用的模型`); return; }
+    try {
+      const j = applyAutoTarget(JSON.parse(body.toString('utf8')), isCount ? { ...t, effort: '' } : t);   // count_tokens 只换型号
+      if (DEBUG) console.log(`[claude-upstream] ${model} → ${j.model}${t.effort ? ' · ' + t.effort : ''}`);
+      body = Buffer.from(JSON.stringify(j));
+      model = j.model;
+    } catch { fail(res, 400, 'bridge：请求体不是 JSON'); return; }
+  }
 
   // CLI 断开（用户停止 / 进程退出）就掐掉上游请求，别让它在后台继续烧额度。
   const ac = new AbortController();

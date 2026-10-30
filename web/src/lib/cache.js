@@ -9,9 +9,12 @@
 // 存储用 IndexedDB（容量远大于 localStorage 的 ~5MB，适合多会话长对话）。
 
 // 多服务器档案（lib/serverProfiles.js）：每台服务器一个库，切过去不会先冒出上一台的会话。第一台沿用老库名。
+// 本机多账号（lib/accountVault.js）：同一台服务器上每个账号再分一个库，切号不会先冒出上一个号的会话。第一个号沿用老库名。
 import { cacheNamespace } from './serverProfiles.js';
+import { bootCacheTag } from './accountVault.js';
 
-const DB = 'bridge-chat-cache' + (cacheNamespace() ? '@' + cacheNamespace() : '');
+const NS = [cacheNamespace(), bootCacheTag()].filter(Boolean).join('~');
+const DB = 'bridge-chat-cache' + (NS ? '@' + NS : '');
 const VER = 1;
 const MESSAGE_PREFIXES = ['msg:', 'vmsg:'];
 const MAX_MESSAGE_ENTRIES = 100;

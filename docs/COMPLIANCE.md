@@ -27,7 +27,7 @@
 
 测试实例（`BRIDGE_NO_AUTH=1`、`BRIDGE_NO_ROUTINES=1`）一律不推不拉；`BRIDGE_FEEDBACK_UPSTREAM=0` 强制关闭。
 
-汇总端（接收各服务器转来的反馈的那一台）要同时配 `feedbackInbox.token` 与 `feedbackRelay`。
+**发到哪里**：官方安装包（打包时写了官方中继）会在程序根的 `bridge-build.json` 里同时写入去向声明 `feedbackDest`——**The Bridge 的公开 GitHub Issue**（Wode44398/claude-bridge-releases）。提交页、Claude 代报时都会明说「会公开发布、别写隐私；图片不公开，只留在这台服务器」。中继把正文再脱敏一遍后开 Issue，图片只记个数。另配了中继（`config.json` 的 `feedbackRelay` 或环境变量）、或在 `config.json` 的 `distro.feedback` 里声明了别的去向，就以那个为准。没声明公开去向的服务器（老版本、自己配中继的部署）推上来的反馈不会被公开，只进开发者的私有收件箱——汇总端（开发者那台）要同时配 `feedbackInbox.token` 与 `feedbackRelay` 才收得到。
 
 ## 服务端会主动连接的地方
 
@@ -52,5 +52,5 @@
 - Independent open-source project, not affiliated with or endorsed by Anthropic, OpenAI or Google. Claude and Claude Code are trademarks of Anthropic, PBC. Code is Apache-2.0; third-party assets are listed in `THIRD_PARTY_NOTICES.md`. The Claude Agent SDK and Claude Code are proprietary to Anthropic and are not included.
 - **You are responsible for complying with the terms of every service you use through this project.**
 - All data stays on your server. There is no telemetry and no automatic error reporting.
-- Feedback is stored locally (`feedback/reports` under the data root, or `feedbackDir`). It is sent to the developers only when all three are true: a relay is configured (`BRIDGE_FEEDBACK_RELAY`, `feedbackRelay`, or the build-time channel from `stage.ps1 -FeedbackRelay`), the admin turned on `feedbackUpstream`, and the person submitting ticks the box.
+- Feedback is stored locally (`feedback/reports` under the data root, or `feedbackDir`). It is sent to the developers only when all three are true: a relay is configured (`BRIDGE_FEEDBACK_RELAY`, `feedbackRelay`, or the build-time channel from `stage.ps1 -FeedbackRelay`), the admin turned on `feedbackUpstream`, and the person submitting ticks the box. Official installers also declare the destination (`feedbackDest` in `bridge-build.json`): The Bridge's public GitHub issues (Wode44398/claude-bridge-releases). The form and Claude both say it will be public; the relay scrubs the text again and opens an issue, and images are not published (only counted). Servers that don't declare a public destination (older versions, self-configured relays) are never published: their reports go to the developer's private inbox.
 - Outbound connections besides the AI services you use: the Claude Code runtime download from npm on first start (`BRIDGE_CLAUDE_CLI_DOWNLOAD=0` / `claudeCliDownload: false` to disable), cloudflared from GitHub when public access is turned on, Cloudflare when a tunnel is active, and the release manifest for app updates (`clientUpdateFeed: false`, `apkFeed: false`).

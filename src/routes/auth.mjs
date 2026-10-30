@@ -146,9 +146,28 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
     res.end(JSON.stringify({ ok: true, kind: 'user', user: c.name, token: tok }));
   });
 
+  // 本机快捷切换账号（前端 lib/account.js 的账号保险箱）：页面已经换成目标账号的 Bearer，这一下把浏览器 cookie
+  // 也对齐到它——设上它的 cookie、清掉另一种身份的残留 cookie。不铸新会话、不吊销任何会话（切回来还能用）。
+  // 离线 apk 跨源本来就不带 cookie，调了也无妨。不带 Bearer = 「添加账号」：把两种 cookie 都摘掉（同样不吊销），
+  // 好让接下来的账号密码登录不被残留的管理员 cookie 认成管理员。
+  router.on('POST', '/api/auth/adopt', (req, res) => {
+    const bt = bearerToken(req);
+    const send = (code, body, cookies) => { res.writeHead(code, { 'Content-Type': 'application/json', ...(cookies ? { 'Set-Cookie': cookies } : {}) }); res.end(JSON.stringify(body)); };
+    if (!bt) return send(200, { ok: true, kind: 'none' }, [clearAuthCookie(req), clearUserCookie(req)]);
+    const id = identify(req);
+    if (id.kind === 'user') return send(200, { ok: true, kind: 'user' }, [userCookie(req, bt), clearAuthCookie(req)]);
+    if (id.kind === 'admin') {
+      const adm = adminCredential(req);
+      if (adm && adm.via === 'session' && adm.token === bt) return send(200, { ok: true, kind: 'admin' }, [authCookie(req, bt), clearUserCookie(req)]);
+      return send(200, { ok: true, kind: 'admin' });
+    }
+    send(401, { error: '这个账号的登录已失效，请重新登录' });
+  });
+
   router.on('POST', '/api/logout', (req, res) => {
     // apk 跨源登出不带 cookie → 也认 Bearer 里的 session token，确保后端真正删除会话。
-    const tok = getCookie(req, 'bridge_user') || bearerToken(req);
+    // Bearer 优先：本机存着几个账号时，退出的是页面当前用的这个号，而不是 cookie 里残留的那个。
+    const tok = bearerToken(req) || getCookie(req, 'bridge_user');
     if (tok) users.deleteSession(tok);
     // 管理员会话登出 = 吊销这一张（主令牌本身登不出去，也不需要）。
     const adm = adminCredential(req);

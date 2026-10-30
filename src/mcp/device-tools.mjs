@@ -40,6 +40,9 @@ const NEW_DESKTOP_ACTIONS = new Set(['zoom', 'wait_for_window', 'triple_click', 
 const CHUNK = 4 * 1024 * 1024;
 const MAX_TRANSFER = 512 * 1024 * 1024;
 const LEGACY_MAX = 10 * 1024 * 1024;   // 老执行器不认分块，只能一次读 / 写这么大
+// files(read) 回给模型的文本上限：同 Read 工具的口径，长文件按行分段读
+const READ_MAX_LINES = 2000;
+const READ_MAX_CHARS = 200 * 1024;
 
 export const expectSchema = z.object({
   window: z.string().optional().describe('应出现标题含这段文字的窗口'),
@@ -80,7 +83,7 @@ export function deviceNudge() {
     '你（Claude）跑在 bridge 服务器上：Read/Write/Edit/Bash 作用在服务器上，**不是**用户的电脑——除非 `devices` 把那台设备标成「与 bridge 同一台机器」。' +
     '凡是用户电脑上的事——看他的屏幕、点他的程序、读写他电脑上的文件、在他电脑上跑命令、用他已登录的浏览器——一律用 `mcp__device__*`。' +
     '\n用法：`devices` 看有哪些设备、哪台连在本会话、各自在线与权限档；`inspect` 观察桌面（active_window → uia_tree 读控件，读不到再 screenshot），`act` 操作桌面（优先 uia_action 或 click+ref，坐标兜底）；' +
-    '`browser` 驱动设备上的浏览器（带用户的登录态，操作对用户实时可见）；`shell` 在设备上跑命令（Windows 是 PowerShell）；`files` 读写设备上的文件，`files(action:"pull")` 把设备上的文件拷到服务器、`files(action:"push")` 把服务器上的产物拷到设备；' +
+    '`browser` 驱动设备上的浏览器（带用户的登录态，操作对用户实时可见）；`shell` 在设备上跑命令（Windows 是 PowerShell）；`files` 读写设备上的文件（glob 找文件、grep 搜内容、read 按行分段读），`files(action:"pull")` 把设备上的文件拷到服务器、`files(action:"push")` 把服务器上的产物拷到设备；' +
     '`ports(action:"open", port)` 把设备上的本机端口（他电脑上跑着的 dev server、本机模型接口）接到服务器，给出服务器上能直接访问的地址。' +
     COORD_RULES + '\n提速：能预判的连续步骤用 `act(action:"batch")` 一次做完；单步可加 `screenshot_after:true`；等弹窗用 `inspect(action:"wait_for_window")`。' + VERIFY_RULES +
     '\n权限由设备自己硬拦：observe 档只能看，control 档才能点击、输入、跑命令、写文件。这是用户本人的真实电脑：严格只做被要求的事；发送消息、删除、下单、改安全设置、关闭含未保存内容的窗口等高风险动作，执行前必须用 AskUserQuestion 确认。' +
@@ -284,19 +287,25 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
       }),
 
     tool('files',
-      '设备上的文件，以及两台机器之间搬文件。action: read/write/list/glob/stat/mkdir/move/delete（作用在设备上）；' +
+      '设备上的文件，以及两台机器之间搬文件。action: read/write/list/glob/grep/stat/mkdir/move/delete（作用在设备上）；' +
+      'grep = 在 path（文件夹或文件）里按正则 pattern 搜文件内容，include 限定文件名（如 *.ts），自动跳过 node_modules/.git 与二进制；' +
+      'read 可用 offset/limit 按行分段读（长文件不带范围时只回前 2000 行）；' +
       'pull = 把设备上的 path 拷到服务器（to，默认会话工作目录下同名文件）；push = 把服务器上的 from 拷到设备的 path。' +
       '大文件 pull/push 自动分块（上限 512MB）。',
       {
         device: deviceArg,
-        action: z.enum(['read', 'write', 'list', 'glob', 'stat', 'mkdir', 'move', 'delete', 'pull', 'push']),
-        path: z.string().optional().describe('设备上的路径（绝对路径；read/write/list/stat/mkdir/move/delete/pull/push）'),
+        action: z.enum(['read', 'write', 'list', 'glob', 'grep', 'stat', 'mkdir', 'move', 'delete', 'pull', 'push']),
+        path: z.string().optional().describe('设备上的路径（绝对路径；read/write/list/grep/stat/mkdir/move/delete/pull/push）'),
         to: z.string().optional().describe('move：设备上的新路径；pull：服务器上的目标路径（相对 = 会话工作目录）'),
         from: z.string().optional().describe('push：服务器上的源文件（相对 = 会话工作目录）'),
         content: z.string().optional().describe('write 的内容'),
         encoding: z.enum(['utf8', 'base64']).optional().describe('read/write 编码，默认 utf8；二进制用 base64'),
-        pattern: z.string().optional().describe('glob 的匹配式，如 **/*.mjs'),
+        pattern: z.string().optional().describe('glob 的匹配式（如 **/*.mjs）；grep 时是要搜的正则'),
         cwd: z.string().optional().describe('glob 的基准目录'),
+        include: z.string().optional().describe('grep：只搜文件名匹配这个通配的文件，如 *.ts 或 *.{js,mjs}'),
+        ignore_case: z.boolean().optional().describe('grep：忽略大小写'),
+        offset: z.number().int().optional().describe('read：从第几行开始（1 起）'),
+        limit: z.number().int().optional().describe('read：读多少行'),
         recursive: z.boolean().optional().describe('delete 是否递归'),
       },
       async (a) => {
@@ -304,10 +313,11 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
           const d = target(a.device);
           if (a.action === 'pull') return txt(await pull(d, a));
           if (a.action === 'push') return txt(await push(d, a));
+          if (a.action === 'grep') return txt(await grep(d, a));
           const r = await send(d, 'fs.' + a.action, {
             path: a.path, to: a.to, content: a.content, encoding: a.encoding, pattern: a.pattern, cwd: a.cwd, recursive: a.recursive,
           }, 60_000);
-          if (a.action === 'read') return txt(`${r.path}（${r.bytes} 字节，${r.encoding}）：\n\n${r.content}`);
+          if (a.action === 'read') return txt(readText(r, a));
           if (a.action === 'write') return txt(`已写入 ${r.path}（${r.bytes} 字节）`);
           if (a.action === 'list') return txt(`${r.path}：\n` + (r.entries || []).map((e) => `${e.type === 'dir' ? '📁' : '📄'} ${e.name}${e.size != null && e.type !== 'dir' ? '  ' + e.size : ''}`).join('\n'));
           if (a.action === 'glob') return txt(`${r.matches.length} 个匹配（${r.pattern} @ ${r.cwd}）：\n` + r.matches.join('\n'));
@@ -376,6 +386,41 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
       }
     } finally { await fh.close(); }
     return `已从设备「${d.name}」拷到服务器：${dest}（${offset} 字节）`;
+  }
+
+  // 设备上搜文件内容（引用的文件夹按需读的主力）。老客户端没有 fs.grep：指路 shell 的 Select-String。
+  async function grep(d, a) {
+    if (!a.path) throw new Error('grep 需要 path（设备上的文件夹或文件）');
+    if (!a.pattern) throw new Error('grep 需要 pattern（正则）');
+    if (!caps(d).has('fs.grep')) {
+      throw new Error(`设备「${d.name}」的客户端版本较旧，还不支持 grep——请对方更新客户端；眼下可用 shell：` +
+        `Get-ChildItem -Path '<文件夹>' -Recurse -File -Include *.ts | Select-String -Pattern '<正则>' | Select-Object -First 200`);
+    }
+    const r = await send(d, 'fs.grep', { path: a.path, pattern: a.pattern, include: a.include, ignoreCase: !!a.ignore_case }, 90_000);
+    const files = new Set((r.matches || []).map((m) => m.file)).size;
+    const head = `${r.matches.length} 处匹配，${files} 个文件（/${r.pattern}/${r.ignoreCase ? 'i' : ''} @ ${r.path}，扫了 ${r.scanned} 个文件）`;
+    const notes = [r.truncated && '匹配太多已截断，缩小 path 或 include 再搜', r.timedOut && '搜索超时只搜了一部分', r.skipped && `跳过 ${r.skipped} 个过大或二进制的文件`].filter(Boolean);
+    return head + (notes.length ? '——' + notes.join('；') : '') + '：\n' + (r.matches || []).map((m) => `${m.file}:${m.line}: ${m.text}`).join('\n');
+  }
+
+  // read 的文本回显：带 offset/limit 按行切（带行号）；不带范围的长文件只回前 READ_MAX_LINES 行，提示怎么接着读。
+  function readText(r, a) {
+    const headOf = (extra) => `${r.path}（${r.bytes} 字节，${r.encoding}${extra}）：\n\n`;
+    if (r.encoding !== 'utf8') return headOf('') + r.content;
+    const ranged = a.offset != null || a.limit != null;
+    const lines = String(r.content || '').split('\n');
+    if (!ranged && lines.length <= READ_MAX_LINES && r.content.length <= READ_MAX_CHARS) return headOf('') + r.content;
+    const from = Math.max(1, Number(a.offset) || 1);
+    let slice = lines.slice(from - 1, from - 1 + Math.max(1, Math.min(READ_MAX_LINES, Number(a.limit) || READ_MAX_LINES)));
+    let body = slice.map((l, i) => `${from + i}\t${l}`).join('\n');
+    if (body.length > READ_MAX_CHARS) {   // 超长行把字数撑爆：截在最后一个整行处（一行都不完整就硬截）
+      const cut = body.lastIndexOf('\n', READ_MAX_CHARS);
+      body = body.slice(0, cut > 0 ? cut : READ_MAX_CHARS);
+      slice = body.split('\n');
+    }
+    const to = from + slice.length - 1;
+    const more = to < lines.length ? `；后面还有，用 offset:${to + 1} 接着读` : '';
+    return headOf(`，共 ${lines.length} 行，这里是第 ${from}–${to} 行${more}`) + body;
   }
 
   // 服务器 → 设备

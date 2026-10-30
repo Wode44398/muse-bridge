@@ -26,7 +26,7 @@ import { bootLayout } from './runtime/layout-boot.mjs';
 import { describeDeploy } from './config/deploy-profile.mjs';
 import { announceAccess } from './cli/access.mjs';
 import { createAuth } from './auth.mjs';
-import { isAdminSession } from './users.mjs';
+import { isAdminSession, getSession } from './users.mjs';
 import { makeIdentify } from './runtime/identity.mjs';
 import { createRouter } from './runtime/router.mjs';
 import { installFatalGuard, attachCrashDebugger } from './runtime/fatal-guard.mjs';
@@ -161,7 +161,9 @@ initClaudeCli();
 // agent 能不能跑先看所属扩展在不在。没装 / 加载失败的扩展只是不可用，不影响核心。见 modules/registry.mjs。
 await loadModules();
 
-const { gen: adminGen, adminCredential, authOk, getCookie, bearerToken, queryToken, authCookie, clearAuthCookie, userCookie, clearUserCookie } = createAuth(TOKEN, NO_AUTH, { tokenHash: TOKEN_HASH, isAdminSession });
+const { gen: adminGen, adminCredential, authOk, getCookie, bearerToken, queryToken, authCookie, clearAuthCookie, userCookie, clearUserCookie } = createAuth(TOKEN, NO_AUTH, { tokenHash: TOKEN_HASH, isAdminSession,
+  // 与 identify 同口径：多用户关着时只认服务账号
+  isUserSession: (t) => { const s = getSession(t); return !!(s && (FEATURES.multiUser || s.service)); } });
 // 分享 / 快照令牌只在对应插件开着时才认：插件关了，已发出去的链接一并失效（而不是路由没了、令牌还能当身份用）。
 const resolveShare = (...a) => (pluginOn('share') ? resolveShareToken(...a) : null);
 const resolveSnap = (...a) => (pluginOn('chat-snapshot') ? resolveSnapToken(...a) : null);

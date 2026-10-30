@@ -165,8 +165,14 @@
     return () => { energyApi = null; try { api.destroy?.(); } catch {} };
   });
   // 勾着 Ultracode → 能量场常按；换档 = 在新档位重新按一下（爆发跟着把手走）；取消勾选 → 冷却。
-  // 最低档的填充几乎为零，爆发点给个下限，免得落在把手底下看不见。
-  const pressPos = $derived(N > 1 ? Math.max(disp / (N - 1), 0.08) : 1);
+  // 爆发点 / 充能渐变的终点 = 把手中心在轨道上的比例。把手在内缩 8px 的滑轨上（中心 = 8 + k·(宽 − 16)），
+  // 不是 k·宽——以前按 k 算，档位越低爆发点越落在把手左边（最低档差 8px），看着光流和把手对不上。
+  let trackW = $state(0);
+  const pressPos = $derived.by(() => {
+    if (N < 2) return 1;
+    const k = disp / (N - 1);
+    return trackW > 16 ? (8 + k * (trackW - 16)) / trackW : k;
+  });
   $effect(() => { const api = energyApi, k = pressPos; if (charged && api) { api.pressStart(k); return () => api.pressEnd(k); } });
 
   // —— help 悬浮层：200ms 延迟出、离开即收（官方 tooltip Root delay 200）——
@@ -211,7 +217,7 @@
     <div class="ef-slider" class:dragging class:charged bind:this={control}
       style:--slider-rest-pos={restPct + '%'}
       onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={up} onlostpointercapture={up}>
-      <div class="ef-track" bind:this={trackEl}>
+      <div class="ef-track" bind:this={trackEl} bind:clientWidth={trackW}>
         <span class="ef-fill" bind:this={fillEl}>
           {#if hasTrack}
             <span class="ef-energy-wrap" aria-hidden="true">
@@ -353,14 +359,16 @@
     overflow: hidden; container-type: inline-size; background: var(--ui-slider-background); }
   .ef-fill { position: absolute; inset: 0 auto 0 0; left: 0; overflow: hidden;
     width: var(--slider-drag-pos, var(--slider-rest-pos)); background: var(--ui-slider-fill); }
-  /* 能量层：官方 opacity clamp((pos-25%)*k) + mask 软渐入（reveal 45%/60%）+ mask-size 跟填充 */
-  .ef-energy-wrap { pointer-events: none; position: absolute; inset: 0 auto 0 0; width: 100cqw;
+  /* 能量层：官方 opacity clamp((pos-25%)*k) + mask 软渐入（reveal 45%/60%）。
+     遮罩层就是填充本身的宽度（width 100% of .ef-fill）：软渐入按填充宽度缩放，吸附时跟填充同一条宽度过渡走，
+     末端永远落在把手底下。以前遮罩另按「pos − 8px」算宽度、又不带过渡——低档时紫光停在把手左边几像素
+     （差值 = 8 − 16·pos px），松手吸附时遮罩先跳、填充后到，档位越低错位越明显。 */
+  .ef-energy-wrap { pointer-events: none; position: absolute; inset: 0 auto 0 0; width: 100%;
     opacity: clamp(0%, calc((var(--slider-drag-pos, var(--slider-rest-pos)) - 25%) * var(--ef-energy-op-k)), var(--ef-energy-op-max));
     mask-image: linear-gradient(to right, transparent 0%, #000 var(--ui-slider-energy-reveal));
     -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 var(--ui-slider-energy-reveal));
     mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat;
-    mask-size: max(calc(var(--slider-drag-pos, var(--slider-rest-pos)) - 8px), 0px) 100%;
-    -webkit-mask-size: max(calc(var(--slider-drag-pos, var(--slider-rest-pos)) - 8px), 0px) 100%; }
+    mask-size: 100% 100%; -webkit-mask-size: 100% 100%; }
   /* Ultracode 充能：任意档位都按原版顶档的浓度显示（顶档时 clamp 公式也正好落在上限），不再随位置渐隐 */
   .ef-slider.charged .ef-energy-wrap { opacity: var(--ef-energy-op-max); }
   .ef { --ef-blend: normal; }
@@ -376,7 +384,8 @@
     .ef-slider.charged .ef-charge::after { animation: ef-sweep 2.4s cubic-bezier(.45, 0, .25, 1) infinite; }
   }
   @keyframes ef-sweep { from { background-position: -150% 0; } to { background-position: 250% 0; } }
-  .ef-energy { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
+  /* 能量场画布始终铺满整条轨道（100cqw，不随档位改尺寸、不重建帧缓冲），只露出填充那一段 */
+  .ef-energy { position: absolute; left: 0; top: 0; width: 100cqw; height: 100%; pointer-events: none;
     color: var(--ui-slider-energy-hot); outline-color: var(--ui-slider-energy-cool);
     border-top: 0 none var(--ui-slider-fill-charged-start); border-bottom: 0 none var(--ui-slider-fill-charged-end);
     text-decoration-color: var(--ui-slider-energy-tint-blue); column-rule-color: var(--ui-slider-energy-tint-pink); }

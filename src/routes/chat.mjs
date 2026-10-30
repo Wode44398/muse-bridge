@@ -5,6 +5,7 @@
 
 import { readBody } from '../runtime/body.mjs';
 import { filterAttachmentPaths } from '../runtime/attachment-guard.mjs';
+import { deviceById } from '../runtime/device-registry.mjs';
 import { handleAnswer } from '../runtime/questions.mjs';
 import { handlePhoneResult } from '../runtime/phone-bridge.mjs';
 import { deviceIdFromReq } from '../runtime/phone-control.mjs';
@@ -313,9 +314,11 @@ export function registerChatRoutes(router, { authOk, identify }) {
     // 附件守卫（attachment-guard.mjs）：沙箱身份只收本人 uploads / 工作空间（cwd）/
     // 已授权项目内的路径；admin（桌面壳/主机本人）放行任意存在的绝对路径——
     // 桌面拖拽零拷贝引用（拖 20GB 目录进聊天不复制字节，agent 拿原路径按需读）。
+    // 设备文件夹引用（device://，runtime/device-refs.mjs）只收这个身份自己、没吊销的设备。
     const attachments = filterAttachmentPaths(parsed.attachments, {
       allowAnywhere: ctx.kind === 'admin',
       roots: [ctx.uploads, ctx.cwd, claudeProject?.path],
+      deviceRefOk: (id) => { const d = deviceById(id); return !!d && !d.revoked && d.owner === ctx.key; },
     });
     if (!message && !attachments.length && !prewarm) {
       res.writeHead(400, { 'Content-Type': 'text/plain' });

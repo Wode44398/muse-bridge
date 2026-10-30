@@ -40,7 +40,8 @@
 - **「工作空间」**（Workspace）：打开文件管理器（见 04-files.md）。
 - **「扫一扫 · 登录网页版」**（Scan to sign in on the web）——只在手机、平板上有：扫电脑上的二维码帮它登录（见 01-access.md）。
 - **「修改密码」**（Change password）——只有注册账号有（见 01-access.md）。
-- **「切换账号」**（Switch Account）、**「退出登录」**（Sign out）：只影响这台设备。
+- **「切换账号」**（Switch Account）：这台设备上登录过的账号，当前这个打勾；点另一个直接切过去，不用重新输密码；**「添加账号」**（Add Account）再登一个号，原来的照样留着；× 从这台设备移除。见 01-access.md「切换账号、退出登录」。
+- **「退出登录」**（Sign out）：只退出这台设备上的当前账号。
 
 ## Claude
 

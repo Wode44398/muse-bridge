@@ -155,6 +155,10 @@ export default {
   '拖到此处添加附件 · 文件夹会整个挂载': 'Drop files or whole folders here to attach',
   '上传中 {pct}%': 'Uploading… {pct}%',
   '本机引用 · 按需读取': 'Local folder · Read as needed',
+  '在「{device}」上 · 按需读取': 'On {device} · Read as needed',
+  '在「{device}」上': 'On {device}',
+  '改为上传': 'Upload instead',
+  '没有上传，Claude 通过这台电脑按需读取；需要电脑开着客户端': 'Not uploaded. Claude reads it from this computer as needed, so keep the app running.',
   '{n} 个文件 · 按需读取{note}': { one: '{n} file · Read as needed{note}', other: '{n} files · Read as needed{note}' },
   '移除': 'Remove',
   '填入建议（Tab）· Esc 收起': 'Tab to accept · Esc to dismiss',
@@ -427,4 +431,10 @@ export default {
   '正在完成授权，请稍候': 'Finishing authentication…',
   '授权超时，请重新点「授权」': 'Authentication timed out. Click Authorize again.',
   '会话没有在运行': 'The session isn’t running',
+  // 工作流 agent 写 auto:<档>（按模型性价比阶梯自动选型）
+  '自动·最难': 'Auto · Hardest',
+  '自动·难': 'Auto · Hard',
+  '自动·常规': 'Auto · Standard',
+  '自动·机械': 'Auto · Light',
+  '{model}（{tier}）': '{model} ({tier})',
 };

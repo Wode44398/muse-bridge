@@ -12,6 +12,7 @@
 import { getClaudeSettings, noteOutputStyles, outputStylesFor, claudeSettingsSnapshot } from './claude-settings.mjs';
 import { busPublish } from './bus.mjs';
 import { chatPrefsFor } from './chat-prefs.mjs';
+import { buildLadder, currentPlan, normKey } from './model-ratings.mjs';
 
 // 回复语言 → CLI 的 language 设置（自由文本，CLI 拼成「Always respond in {language}…」系统提示段）。
 const LANGUAGE = { zh: 'Simplified Chinese', en: 'English' };
@@ -74,13 +75,19 @@ const NL = String.fromCharCode(10);
  *   custom    主会话是自定义 API 模型：{ main, small }（型号 id）；官方模型为 null
  *   catalog   subagentModelCatalog()：能派给子 agent 的第三方模型
  *   routed    官方订阅会话也经上游代理转发第三方模型（claude-upstream.mjs 的 /r/<令牌>）；false = 只提一句派不了
+ *   plan      订阅档（'pro' | 'max20'，单测用；默认取当前激活号的）
+ * 有性价比快照（model-ratings.mjs）时给四档阶梯：每档首选 + 备选、auto:<档> 写法；没有快照就是老的「分档 + 全清单」。
  */
-export function dispatchNudge({ on, text = '', custom = null, catalog = [], routed = false } = {}) {
+export function dispatchNudge({ on, text = '', custom = null, catalog = [], routed = false, plan } = {}) {
   if (!on) return '';
+  const head = '[子 agent 调度] 派子 agent（Agent 工具、动态工作流脚本里的 agent()）时，按每个子任务的难度分别指定推理强度和模型，不要默认照搬主会话的模型和档位。'
+    + '这是用户的明确要求：Agent 工具 effort / model 参数说明里「只在被明确要求时才设」的条件已经满足，Workflow 的 opts.effort / opts.model 同理。';
+  // 有性价比快照、且至少一个能派的模型评上了分：给阶梯（model-ratings.mjs），不再让 Claude 自己从清单里比较
+  const ladder = buildLadder({ catalog, official: !custom, routed, plan: plan || currentPlan() });
+  if (ladder) return NL + ['', head, ...ladderLines(ladder, { custom, routed, catalog }), ...prefLines(text)].join(NL);
   const lines = [
     '',
-    '[子 agent 调度] 派子 agent（Agent 工具、动态工作流脚本里的 agent()）时，按每个子任务的难度分别指定推理强度和模型，不要默认照搬主会话的模型和档位。'
-      + '这是用户的明确要求：Agent 工具 effort / model 参数说明里「只在被明确要求时才设」的条件已经满足，Workflow 的 opts.effort / opts.model 同理。',
+    head,
     '· 推理强度（effort：low / medium / high / xhigh / max）：检索、读文件、机械改动、格式整理 → low；常规实现、一般审查 → medium；'
       + '需要设计取舍、难排查的问题 → high；最难的裁决与最终验证 → xhigh；max 只在用户要求时用。',
   ];
@@ -105,9 +112,55 @@ export function dispatchNudge({ on, text = '', custom = null, catalog = [], rout
     lines.push('· 模型：haiku 快且便宜（检索、机械活），sonnet 做常规实现，opus 留给难题。');
     if (list.length) lines.push('  设置里配置的第三方模型只有主会话本身是第三方模型时才能派给子 agent；这一轮主会话是 Claude 官方模型，偏好里点名的第三方模型改用最接近的 Claude 别名。');
   }
-  const t = String(text || '').trim();
-  if (t) lines.push('[用户的调度偏好，与上面的默认分档冲突时以这里为准]', t);
+  lines.push(...prefLines(text));
   return NL + lines.join(NL);
+}
+
+function prefLines(text) {
+  const t = String(text || '').trim();
+  return t ? ['[用户的调度偏好，与上面的默认分档冲突时以这里为准]', t] : [];
+}
+
+// 阶梯的一格：「opus · xhigh（Opus 5.5，智力 57 · ¥0.86 订阅等效）」。只写限制（上下文小、不看图），能力不缺的不啰嗦。
+const fmtCost = (c) => (c >= 10 ? c.toFixed(1) : c >= 0.1 ? c.toFixed(2) : c > 0 ? String(+c.toPrecision(2)) : '?');
+function cell(c) {
+  const notes = [`智力 ${Math.round(c.ii)}${c.est ? '（估）' : ''} · ¥${fmtCost(c.cost)}${c.channel === 'sub' ? ' 订阅等效' : ''}`];
+  if (c.ctx && c.ctx < 500_000) notes.push('上下文 ' + fmtCtx(c.ctx));
+  if (c.channel !== 'sub' && !c.vision) notes.push('不看图');
+  if (c.weaker) notes.push('比这档略弱');
+  return `${c.write}${c.effort ? ' · ' + c.effort : ''}（${c.label}，${notes.join('，')}）`;
+}
+
+function ladderLines(L, { custom, routed, catalog }) {
+  const auto = !!custom || routed;   // auto:* 要经过 bridge 换名：自定义 API 会话恒走本机代理，官方会话要这一轮挂了上游代理
+  const out = [
+    `· 选型已按用户的模型性价比库（${L.generated} 版：智力指数 + 这个会话实际付费口径下的每任务成本）算好，不用自己比较——先判断子任务属于哪一档，再照写。`,
+    auto ? '  档位（适用）→ 写法 = 首选落点；备选' : '  档位（适用）→ 首选；备选',
+  ];
+  for (const t of L.tiers) {
+    const alt = t.alt ? `；备选 ${cell(t.alt)}` : '';
+    out.push(`  ${t.title}（${t.use}）→ ${auto ? `auto:${t.key} = ` : ''}${cell(t.pick)}${alt}`);
+  }
+  if (auto) {
+    out.push('· 动态工作流 agent() 的 model 直接写 auto:<档>：bridge 在请求时换成该档首选的模型与档位（opts.effort 不用写，写了也以阶梯为准）。'
+      + '要用备选、或用户点名某个模型时，写它的模型名（括号前那段）并按它标的档位设 effort。');
+  } else {
+    out.push('· 动态工作流 agent() 与 Agent 工具都写括号前的别名，effort 按它标的档位设。');
+  }
+  if (custom) {
+    out.push(`· Agent 工具的 model 只能填别名：haiku = ${custom.small}，sonnet / opus = 主会话模型 ${custom.main}——要按阶梯选模型就用动态工作流；`
+      + 'Agent 工具只按档位设 effort（最难 xhigh、难 high、常规 medium、机械 low）。effort 会自动换算成各模型自己的档位。');
+  } else if (auto && L.agentTool.length) {
+    out.push('· Agent 工具的 model 只能填别名：' + L.agentTool.map((t) => `${t.title} ${t.pick.write} + effort ${t.pick.effort}`).join('，') + '。');
+  }
+  if (!custom && !routed && catalog.length) out.push('  设置里配置的第三方模型这一轮派不了（主会话是 Claude 官方模型、没挂上转发），用户点名第三方模型时改用最接近的 Claude 别名。');
+  // 显示名和型号名只差大小写 / 标点的不重复写
+  const named = (name, label) => (normKey(name) === normKey(label) ? name : `${name}（${label}）`);
+  if (L.others.length) out.push('· 其余已配模型（被表里更便宜或更聪明的选项胜出，只在用户点名时用）：' + L.others.map((c) => named(c.write, c.label)).join('、'));
+  if (L.unrated.length) out.push('· 未评分（库里没有数据，只在用户点名时用）：' + L.unrated.map((m) => named(m.name, m.label)).join('、'));
+  out.push('  写法 / 模型名只写进代码；跟用户说话、列分工表、汇报结果时一律用括号里的显示名（如「' + L.tiers[0].pick.label + '」）'
+    + (auto ? '，auto:<档> 说成「自动·难」这样' : '') + (catalog.length ? '，custom:<服务>:<型号> 这类 id 不要写给用户看' : '') + '。');
+  return out;
 }
 
 /**

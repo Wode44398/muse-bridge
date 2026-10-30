@@ -33,8 +33,8 @@
   import { getServerBase, setServerBase, apiUrl } from '../../lib/server.js';
   import { updateState, installPending, hasSilentUpdate, checkForUpdate, startUpdate, appVersionLine,
     autoUpdateEnabled, setAutoUpdateEnabled, fetchServerInfo, appDownloadUrls, cancelPendingInstall, waitingLine } from '../../lib/appUpdate.js';
-  import { api, getToken, setToken } from '../../lib/api.js';
-  import { afterSignIn } from '../../lib/account.js';
+  import { api, getToken } from '../../lib/api.js';
+  import { signIn, signUp, signInToken, signOut, savedAccounts, switchTo, parkCurrent, forgetAccount } from '../../lib/account.js';
   import { startPairLogin, qrSvg } from '../../lib/pair.js';
   import ConnectQr from '../../components/pairing/ConnectQr.svelte';
   import { normalizeServerAddress } from '../../lib/connectPair.js';
@@ -361,30 +361,47 @@
   let mode = $state('login'); // 'login' | 'register' | 'token'
   let lgUser = $state(''), lgPass = $state(''), lgPass2 = $state(''), lgInvite = $state(''), lgTok = $state('');
   let lgBusy = $state(false), lgErr = $state('');
-  async function refreshMe(fallback) {
-    try { const a = await api.auth(); applyMe(a); }
-    catch { applyMe(fallback); }
-    afterSignIn();   // 桌面客户端按新登录立刻重新登记设备（lib/account.js）
-  }
-  // 拿到 session token 即存为 Bearer（与 LoginCard 同一课：refreshMe 的 /api/auth 否则 401 假登录）
+  // 登录 / 注册 / 令牌 / 退出 / 切换都走 lib/account.js（与手机设置页同一套：存 Bearer、收进本机账号保险箱、换号整页重载）
   async function doLogin() {
     if (lgBusy) return; lgBusy = true; lgErr = '';
-    try { const r = await api.login({ username: lgUser, password: lgPass }); if (r.token) setToken(r.token); await refreshMe({ kind: r.kind, user: r.user || lgUser }); lgReset(); }
+    try { await signIn(lgUser.trim(), lgPass); lgReset(); }
     catch (e) { lgErr = tr(e.body?.error) || t('登录失败'); }
     lgBusy = false;
   }
   async function doRegister() {
     if (lgBusy) return; lgBusy = true; lgErr = '';
-    try { const r = await api.register({ username: lgUser, password: lgPass, password2: lgPass2, invite: lgInvite }); if (r.token) setToken(r.token); await refreshMe({ kind: r.kind, user: r.user || lgUser }); lgReset(); }
+    try { await signUp({ username: lgUser.trim(), password: lgPass, password2: lgPass2, invite: lgInvite.trim() }); lgReset(); }
     catch (e) { lgErr = tr(e.body?.error) || t('注册失败'); }
     lgBusy = false;
   }
   async function doToken() {
     if (lgBusy) return; lgBusy = true; lgErr = '';
-    try { setToken(lgTok.trim()); const r = await api.login({}); if (r.token) setToken(r.token); await refreshMe({ kind: r.kind, user: r.user || null }); lgReset(); }
-    catch (e) { setToken(null); lgErr = tr(e.body?.error) || t('令牌无效'); }
+    try { await signInToken(lgTok); lgReset(); }
+    catch (e) { lgErr = tr(e.body?.error) || t('令牌无效'); }
     lgBusy = false;
   }
+  // 这台设备上保存着登录的账号：「切换」直接换过去（整页重载），不退出、不重输密码
+  let accts = $state([]);
+  const refreshAccts = () => { accts = savedAccounts(); };
+  $effect(() => { if (sec === 'account') { void me.kind; refreshAccts(); } });
+  const acctRole = (a) => (a.kind === 'admin' ? t('管理员') : a.tier === 'pro' ? t('完全信任用户') : t('普通用户'));
+  let switching = $state(''), acctErr = $state('');
+  async function doSwitch(a) {
+    if (a.current || switching) return;
+    switching = a.key; acctErr = ''; lgErr = '';
+    try { await switchTo(a.key); }
+    catch (e) {
+      switching = '';
+      if (e?.expired) {
+        if (me.kind !== 'none') await parkCurrent();
+        refreshAccts(); lgReset(); mode = 'login';
+        lgUser = e.user || '';
+        lgErr = e.user ? t('{name} 的登录已失效，请重新输入密码。', { name: e.user }) : t('这个账号的登录已失效，请重新登录。');
+      } else acctErr = t('连不上服务器，稍后再试');
+    }
+  }
+  async function addSignIn() { if (switching) return; await parkCurrent(); lgReset(); mode = 'login'; refreshAccts(); }
+  async function dropAcct(a) { await forgetAccount(a.key); refreshAccts(); }
   // —— 我的额度 / 改密码（注册用户；三端拆分 P4）——
   let myUsage = $state(null);
   $effect(() => { if (sec === 'account' && me.kind === 'user') fetchMyUsage().then((r) => { myUsage = r; }).catch(() => {}); });
@@ -401,8 +418,7 @@
   }
   async function doLogout() {
     logoutAsk = false;
-    try { await api.logout(); } catch {}
-    setToken(null); applyMe(null); mode = 'login';
+    await signOut(); mode = 'login'; refreshAccts();
   }
   function lgReset() { lgUser = ''; lgPass = ''; lgPass2 = ''; lgInvite = ''; lgTok = ''; lgErr = ''; }
   // 扫码登录（与 LoginCard 同一套 lib/pair.js 状态机）：进 qr 模式即出码 + 长轮询，离开即停。
@@ -880,6 +896,20 @@
 {#snippet ava(cls = '')}
   <span class="ava {cls}" class:none={me.kind === 'none'}>{#if me.kind !== 'none'}{initial}{:else}{@html PERSON}{/if}</span>
 {/snippet}
+<!-- 这台设备上保存着登录的账号：当前这个标「当前」，别的号「切换」/「移除」（移除 = 在服务端退出那张会话） -->
+{#snippet acctRows()}
+  {#each accts as a (a.key)}
+    <DRow title={a.user} sub={acctRole(a)}>
+      {#snippet trailing()}
+        {#if a.current}<span class="qv">{t('当前账号')}</span>
+        {:else}
+          <DButton size="sm" variant="ghost" disabled={!!switching} onclick={() => dropAcct(a)}>{t('移除')}</DButton>
+          <DButton size="sm" variant="secondary" disabled={!!switching} onclick={() => doSwitch(a)}>{switching === a.key ? t('切换中…') : t('切换')}</DButton>
+        {/if}
+      {/snippet}
+    </DRow>
+  {/each}
+{/snippet}
 {#snippet nico(n)}
   <span class="nico" aria-hidden="true">{#if n.brand}{#if markSrc(n.brand)}<img src={markSrc(n.brand)} alt="" draggable="false" />{:else}{@html svgOf('orb')}{/if}{:else}{@html svgOf(n.ico)}{/if}</span>
 {/snippet}
@@ -1024,9 +1054,12 @@
           <!-- 管理员可见性（S2-7）：成员自己决定管理员能不能看内容、代聊代答、看他的电脑，并看到访问记录 -->
           <AdminAccessSection highlight={fl('admin-access')} />
         {/if}
+        <!-- 切换账号：这台设备上登录过的账号都留着登录（lib/accountVault.js），点「切换」直接换过去 -->
+        <DGroup label={t('切换账号')} foot={acctErr || t('这台设备上登录过的账号会留着登录，点一下直接切换，不用重新输入密码。')}>
+          {@render acctRows()}
+          <DRow title={t('添加账号')} chevron={false} onclick={addSignIn} />
+        </DGroup>
         <DGroup>
-          <!-- 切换账号＝退出这台设备，账户区随即变成登录表单（不囤多张会话令牌，理由见 lib/account.js） -->
-          <DRow title={t('切换账号')} chevron={false} onclick={() => { logoutAsk = 'switch'; }} />
           <DRow title={t('退出登录')} danger chevron={false} onclick={() => { logoutAsk = 'logout'; }} />
         </DGroup>
       {:else}
@@ -1035,6 +1068,9 @@
           <h2>{mode === 'qr' ? t('扫码登录') : mode === 'register' ? t('注册新账号') : mode === 'token' ? t('管理员令牌') : t('登录 The Bridge')}</h2>
           <p>{mode === 'qr' ? t('打开手机上的 The Bridge，在设置 › 账户点「扫一扫」') : mode === 'register' ? t('需要邀请码；注册即登录。') + ' ' + t('服主默认只看得到你的会话标题、时间和用量；看内容要你在设置里允许。') : mode === 'token' ? t('粘贴服务端的访问令牌，以管理员身份直连。') : t('登录后使用对话、工作空间与用量')}</p>
         </div>
+        {#if mode === 'login' && accts.length}
+          <DGroup label={t('这台设备上的账号')} foot={acctErr}>{@render acctRows()}</DGroup>
+        {/if}
         <div class="lwrap">
           {#if mode === 'qr'}
             <div class="qrpane">
@@ -1674,11 +1710,11 @@
             <DButton variant="danger" onclick={confirmBypass}>{t('允许')}</DButton>
           </div>
         {:else if logoutAsk}
-          <h3>{logoutAsk === 'switch' ? t('切换账号') : t('退出登录？')}</h3>
-          <p>{logoutAsk === 'switch' ? t('会先退出当前账号（{name}），再用别的账号登录。', { name: me.user || 'Admin' }) : t('只退出这台设备，其它设备上的登录不受影响。')}</p>
+          <h3>{t('退出登录？')}</h3>
+          <p>{t('只退出这台设备，其它设备上的登录不受影响。')}</p>
           <div class="dacts">
             <DButton variant="ghost" onclick={() => { logoutAsk = false; }}>{t('取消')}</DButton>
-            <DButton variant={logoutAsk === 'switch' ? 'primary' : 'danger'} onclick={doLogout}>{logoutAsk === 'switch' ? t('切换') : t('退出登录')}</DButton>
+            <DButton variant="danger" onclick={doLogout}>{t('退出登录')}</DButton>
           </div>
         {/if}
       </div>

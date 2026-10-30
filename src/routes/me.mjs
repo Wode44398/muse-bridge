@@ -42,7 +42,7 @@ export function registerMeRoutes(router, { identify, getCookie, bearerToken }) {
     wrong.delete(name);
     const s = await users.setPassword(name, pw);
     if (s.error) return J(res, 400, s);
-    users.deleteUserSessions(name, getCookie(req, 'bridge_user') || bearerToken(req));
+    users.deleteUserSessions(name, bearerToken(req) || getCookie(req, 'bridge_user'));
     J(res, 200, { ok: true });
   });
 }

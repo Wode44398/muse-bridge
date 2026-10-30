@@ -215,6 +215,15 @@ export default {
   '只记账号名，不存密码。': 'Only usernames are remembered — never passwords.',
   '退出登录？': 'Sign Out?',
   '会先退出当前账号（{name}），再用别的账号登录。': "You'll be signed out of {name} first, then you can sign in with another account.",
+  '添加账号': 'Add Account',
+  '这台设备上的账号': 'Accounts on This Device',
+  '这台设备上登录过的账号会留着登录，点一下直接切换，不用重新输入密码。': 'Accounts you sign in to on this device stay signed in — tap one to switch, no password needed.',
+  '切换中…': 'Switching…',
+  '当前账号': 'Current',
+  '从这台设备移除 {name}': 'Remove {name} from this device',
+  '{name} 的登录已失效，请重新输入密码。': '{name} has been signed out. Enter the password to sign in again.',
+  '这个账号的登录已失效，请重新登录。': 'This account has been signed out. Please sign in again.',
+  '连不上服务器，稍后再试': "Can't reach the server. Try again later.",
 
   // —— 按 agent 分页（v6.19）：根页 Agent 分组、各 agent 页、Claude 订阅号池、额度与注册；小字砍到只剩状态 ——
   '在下面「订阅号池」里添加账号。': 'Add an account under Subscription Pool below.',

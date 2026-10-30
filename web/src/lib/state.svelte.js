@@ -154,6 +154,8 @@ function normMe(m) {
   const kind = (m && m.kind) || 'none';
   return {
     kind, user: m?.user || null, tier: m?.tier || null,
+    // 账号 id 与 owner 键：本机账号保险箱（lib/accountVault.js）据此认「是不是同一个号」
+    uid: m?.uid || null, key: m?.key || null,
     allowCodex: !!m?.allowCodex, allowDimensio: !!m?.allowDimensio,
     agents: Array.isArray(m?.agents) ? m.agents.filter((id) => AGENT_IDS.includes(id)) : legacyAgents(m),
     tokenHashed: !!m?.tokenHashed,

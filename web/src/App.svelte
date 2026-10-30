@@ -35,9 +35,9 @@
   import { syncActiveProfile, canSwitchServers, listProfiles } from './lib/serverProfiles.js';
   import { arrival, finishArrival } from './lib/serverSwitch.js';
   import ServerSwitcher from './components/ServerSwitcher.svelte';
-  import ServerChip from './components/ServerChip.svelte';
   import { syncDistro } from './lib/distro.js';
   import { cacheMe, getCachedMe } from './lib/cache.js';
+  import { rememberCurrent } from './lib/account.js';   // 本机账号保险箱：启动认到的身份连同令牌收进去，之后能一键切回
   import Settings from './components/Settings.svelte';
   import SettingsDesktop from './desktop/settings/SettingsDesktop.svelte';
   import DesktopHome from './desktop/home/DesktopHome.svelte';
@@ -122,7 +122,7 @@
   // agent 名单变了（管理员在设置「Agent」页开关、或在控制台改了这个人的授权）：服务端经总线推
   // agents.changed / me.changed，这里现拉 /api/auth 刷新。正开着的分页若刚被关掉，提示一句退回主页。
   async function refreshMe() {
-    try { const a = await api.auth(); applyMe(a); cacheMe(a); }
+    try { const a = await api.auth(); applyMe(a); cacheMe(a); rememberCurrent(); }
     catch (e) { if (e?.status === 401 && e?.body && typeof e.body === 'object') applyMe(e.body); }
   }
   $effect(() => {
@@ -207,6 +207,7 @@
     try {
       const a = await api.auth(); applyMe(a);   // 同步写快照 → 下次进 app 启动瞬间即登录态，不闪
       cacheMe(a);   // 缓存登录态（整份，含 agents / hosting），供离线进 app 看历史聊天
+      rememberCurrent();
     }
     catch (e) {
       // 没登录（401）也要拿到服务器形态与开着的 agent 名单（回包体里有），单 agent 的服务器据此直接落页。
@@ -365,8 +366,6 @@
 
   <!-- 持久品牌标题（全程唯一）：预载中央→左上，之后留在主页左上 -->
   <BrandTitle />
-  <!-- 标题下的服务器胶囊（手机 App 存了多台服务器时）：点开切换面板 -->
-  <ServerChip />
 {:else if !needConfig}
   <!-- 单页模式的登录：没登录时压在那一页上（启动自动打开 / 退出后 / 账户菜单「登录」） -->
   <LoginDialog />

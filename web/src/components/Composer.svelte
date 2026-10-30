@@ -17,6 +17,7 @@
   import { cp, customModelInfo, isCustomModel, ensureCustomModels, effortsFor, effortChoices, defaultEffortFor, effectiveEffort, modelSupportsFast } from '../lib/claudeProviders.svelte.js';   // 自定义 API 的模型（设置 › Claude › 模型服务）
   import { dropHasDirs, entriesFromDrop, walkEntries, itemsFromDirInput, groupByRoot, skipNote, pool } from '../lib/dirDrop.js';
   import { nativePathForFile } from '../lib/nativeDesktop.js';
+  import { canRefDeviceFolder, localPathOf, deviceFolderAttachment, thisDeviceName } from '../lib/deviceRefs.js';
   import { fileToBase64, filesFromInput, removeAttachment, uploadAttachment } from '../lib/attachments.js';
   import { untrack } from 'svelte';
   import { draft, registerComposerReader } from '../lib/composerBridge.svelte.js';
@@ -234,6 +235,9 @@
     // 桌面壳零拷贝：从首个文件的绝对路径反推所选文件夹的本机路径，直接引用原目录。
     const root = localFolderRoot(fl);
     if (root) { pushLocalFolder(root.path, root.name); return; }
+    // 服务端在别处：默认只引用电脑上的这个文件夹（卡上可改为上传）
+    const dref = canRefDeviceFolder() ? localFolderRoot(fl, localPathOf) : null;
+    if (dref) { pushDeviceFolder(dref.path, dref.name, { files: fl }); return; }
     const { items, stat } = itemsFromDirInput(fl);
     if (!items.length) return;
     for (const g of groupByRoot(items)) await addFolder(g.name, g.items, stat);
@@ -242,19 +246,41 @@
   // webkitdirectory 的 FileList：file.webkitRelativePath = "选中文件夹/子路径"，
   // 绝对路径以「\子路径」结尾 → 截掉即得文件夹本身的绝对路径。空文件夹选不出文件，
   // 推不出路径（也没东西可挂），回落原上传通路自然空转。
-  function localFolderRoot(files) {
+  // pathOf：默认 nativePathForFile（服务端在本机才给路径）；引用电脑上的文件夹时传 localPathOf（不看服务端在哪）。
+  function localFolderRoot(files, pathOf = nativePathForFile) {
     const f = files?.[0];
     const rel = f?.webkitRelativePath || '';
     if (!rel.includes('/')) return null;
-    const abs = nativePathForFile(f);
+    const abs = pathOf(f);
     if (!abs) return null;
-    const norm = abs.replace(/\//g, '\\');
-    const sub = rel.slice(rel.indexOf('/')).replace(/\//g, '\\');
+    const sep = abs.includes('\\') ? '\\' : '/';
+    const norm = abs.replace(/[\\/]/g, sep);
+    const sub = rel.slice(rel.indexOf('/')).replace(/\//g, sep);
     if (!norm.toLowerCase().endsWith(sub.toLowerCase())) return null;
     return { path: norm.slice(0, norm.length - sub.length), name: rel.split('/')[0] };
   }
   function pushLocalFolder(localPath, name) {
     compose.attachments.push({ path: localPath, name, kind: 'folder', url: null, count: null, note: '', pending: false, local: true });
+  }
+
+  // —— 引用电脑上的文件夹（服务端在别处时，lib/deviceRefs.js）——
+  // 不上传，只把「这台设备 + 路径」交给 Claude，它经设备工具按需读。卡上「改为上传」再整树传一份副本：
+  // 选文件夹得到的 File 列表 / 拖进来的目录条目留在这里备用——不进 $state（上万个 File 进深代理白耗）。
+  const refSources = new Map();   // 附件 path → { files } | { entry }
+  function pushDeviceFolder(localPath, name, src) {
+    const att = deviceFolderAttachment(localPath, name);
+    if (compose.attachments.some((x) => x.path === att.path)) return;
+    if (src) refSources.set(att.path, src);
+    compose.attachments.push(att);
+  }
+  async function refToUpload(a) {
+    const src = refSources.get(a.path);
+    refSources.delete(a.path);
+    removeAtt(a);
+    if (src?.files) {
+      const { items, stat } = itemsFromDirInput(src.files);
+      for (const g of groupByRoot(items)) await addFolder(g.name, g.items, stat);
+    } else if (src?.entry) await addDropped([src.entry]);
   }
 
   async function addFolder(name, items, stat) {
@@ -293,13 +319,14 @@
     // 桌面壳：顶层文件夹拿得到本机路径 → 零拷贝挂载原目录（20GB 目录秒挂，不复制）；
     // 散文件交给 addFiles（非图片同样零拷贝）。任何文件夹拿不到路径（旧壳/网页）→
     // 整批回落原整树上传。所有 dataTransfer 读取必须在【同步段】完成。
-    if (refDirsFromDrop(e)) return;
+    if (refDirsFromDrop(e, canRefDeviceFolder())) return;
     // 拖进来的有文件夹 → 走整树「挂载」；纯文件维持原来的逐个附件上传。
     // entriesFromDrop 必须在这里【同步】调用：await 之后 dataTransfer 就废了。
     if (dropHasDirs(e)) { addDropped(entriesFromDrop(e)); return; }
     addFiles(e.dataTransfer.files);
   }
-  function refDirsFromDrop(e) {
+  // device：服务端在别处——文件夹改成「引用电脑上的」（目录条目留着，卡上改为上传时用）
+  function refDirsFromDrop(e, device = false) {
     const items = [...(e.dataTransfer?.items || [])].filter((it) => it.kind === 'file');
     const dirs = [];
     const files = [];
@@ -307,13 +334,13 @@
       const entry = it.webkitGetAsEntry?.();
       const f = it.getAsFile?.();
       if (entry?.isDirectory) {
-        const p = f ? nativePathForFile(f) : '';
+        const p = f ? (device ? localPathOf(f) : nativePathForFile(f)) : '';
         if (!p) return false;
-        dirs.push({ path: p, name: (f && f.name) || entry.name });
+        dirs.push({ path: p, name: (f && f.name) || entry.name, entry });
       } else if (f) files.push(f);
     }
     if (!dirs.length) return false;
-    for (const d of dirs) pushLocalFolder(d.path, d.name);
+    for (const d of dirs) device ? pushDeviceFolder(d.path, d.name, { entry: d.entry }) : pushLocalFolder(d.path, d.name);
     if (files.length) addFiles(files);
     return true;
   }
@@ -446,7 +473,12 @@
             <span class="att-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.2c0-1.5 1.2-2.7 2.7-2.7h3.4l2 2.3h6.2c1.5 0 2.7 1.2 2.7 2.7v8.3c0 1.5-1.2 2.7-2.7 2.7H6.2c-1.5 0-2.7-1.2-2.7-2.7z"/></svg></span>
             <span class="att-col">
               <span class="att-name">{a.name}</span>
-              <span class="att-sub">{a.pending ? t('上传中 {pct}%', { pct: Math.round((a.prog || 0) * 100) }) : a.count == null ? t('本机引用 · 按需读取') : t('{n} 个文件 · 按需读取{note}', { n: a.count, note: a.note ? ' · ' + a.note : '' })}</span>
+              {#if a.device}
+                <!-- 引用电脑上的文件夹（没上传）：Claude 经设备工具按需读；还留着原始文件时可改为上传一份副本 -->
+                <span class="att-sub" title={t('没有上传，Claude 通过这台电脑按需读取；需要电脑开着客户端')}>{t('在「{device}」上 · 按需读取', { device: a.device.name || thisDeviceName() || t('这台电脑') })}{#if refSources.has(a.path)}{' · '}<button class="att-link" onclick={() => refToUpload(a)}>{t('改为上传')}</button>{/if}</span>
+              {:else}
+                <span class="att-sub">{a.pending ? t('上传中 {pct}%', { pct: Math.round((a.prog || 0) * 100) }) : a.count == null ? t('本机引用 · 按需读取') : t('{n} 个文件 · 按需读取{note}', { n: a.count, note: a.note ? ' · ' + a.note : '' })}</span>
+              {/if}
             </span>
           {:else}
             <span class="att-name">{a.name}</span>
@@ -580,6 +612,8 @@
   .att-col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .att.dir .att-name { padding: 0; }
   .att-sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .att-link { font: inherit; color: var(--text); padding: 0; background: none; border: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); }
+  .att-link:hover { text-decoration-color: currentColor; }
   .att-spin { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; animation: attspin .8s linear infinite; }
   @keyframes attspin { to { transform: rotate(360deg); } }
   .submit:disabled { opacity: .45; }

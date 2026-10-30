@@ -5,22 +5,28 @@
   import { api } from '../../lib/api.js';
   import { sa, saToast, saConfirm, fmtUptime, supervisedBy } from '../../lib/serverAdmin.svelte.js';
   import { t, tr } from '../../lib/i18n.js';
+  import { createServerUpdate } from '../../lib/serverUpdate.svelte.js';
 
   // otherRestart：这台机器另有重启手段（admin.ps1 / 桌面壳），这里就不摆重启按钮，免得两套打架
   let { otherRestart = false } = $props();
 
   let info = $state(null);
+  // 服务端更新（与设置「服务端更新」同一套，lib/serverUpdate.svelte.js）：任何形态都摆这一行、管理员从哪进来都能一键——
+  // 安装包里的本机服务端交给那台电脑的桌面客户端去装，git 部署跑更新脚本，Docker / 手工部署只说怎么做。
+  // 以前这里打包形态只有一句「去更新桌面客户端」、脚本更新按钮又跟着重启按钮一起被 otherRestart 藏掉，手机上进控制台更新不了。
+  const srvUpd = createServerUpdate();
+  const updView = $derived(srvUpd.view);
   let logs = $state(null);
   let logsOpen = $state(false);
   let restarting = $state(false);
 
   async function load() { try { info = await api.get('/api/admin/service'); } catch {} }
   async function loadLogs() { try { logs = (await api.get('/api/admin/logs?n=400')).lines || []; } catch { logs = []; } }
-  $effect(() => { sa.tick; load(); if (logsOpen) loadLogs(); });
+  $effect(() => { sa.tick; load(); srvUpd.load(); if (logsOpen) loadLogs(); });
   // 等空闲重启挂着、或正在更新时，每 5 秒刷一次看进度
   $effect(() => {
     if (!info?.restart?.pending && !info?.update?.running) return;
-    const timer = setInterval(load, 5000);
+    const timer = setInterval(() => { load(); srvUpd.load(); }, 5000);
     return () => clearInterval(timer);
   });
 
@@ -57,25 +63,23 @@
     } catch (e) { saToast(tr(e?.body?.error || e?.message) || t('重启失败'), true); }
   }
 
-  // 更新：拉代码 → 装依赖 → 重建前端（以服务用户跑 scripts/server/update.sh），有新代码就等空闲重启
+  // 一键更新 / 检查并更新：先说清此刻有几轮在跑——它们不会被打断，跑完才装、才重启（总线给每台设备推提示）
   async function doUpdate() {
-    // S1-5：说清此刻有几轮在跑——它们不会被打断，跑完才重启（总线会给每台设备推「服务器有 N 个对话在跑，跑完后自动更新」）
+    const v = updView;
+    if (!v || !v.action) return;
+    if (v.action === 'check') { srvUpd.act('check'); return; }
     const n = info?.liveTurns || 0;
-    const body = t('在服务器上拉最新代码、装依赖、重建前端（几分钟）；有新代码的话，等所有人的对话都跑完再自动重启。进度在下面的「最近日志」里。')
-      + (n ? ' ' + t('现在有 {n} 轮对话在跑，不会被打断。', { n }) : '');
-    if (!(await saConfirm(t('更新到最新代码？'), withQuickNote(body), { yes: t('开始更新') }))) return;
-    try {
-      const r = await api.post('/api/admin/service/update', {});
-      if (r?.error) throw new Error(r.error);
-      saToast(t('开始更新…'));
-      logsOpen = true; loadLogs(); load();
-    } catch (e) { saToast(tr(e?.body?.error || e?.message) || t('更新失败'), true); }
+    const body = v.action === 'update'
+      ? t('交给服务端所在电脑上的桌面客户端下载新版；下好后等所有对话跑完自动安装，服务端会重启一次。')
+      : t('在服务器上拉最新代码、装依赖、重建前端（几分钟）；有新代码的话，等所有人的对话都跑完再自动重启。进度在下面的「最近日志」里。');
+    const live = n ? ' ' + t('现在有 {n} 轮对话在跑，不会被打断。', { n }) : '';
+    if (!(await saConfirm(v.action === 'update' ? t('更新服务端？') : t('更新到最新代码？'), withQuickNote(body + live), { yes: t('开始更新') }))) return;
+    await srvUpd.act(v.action);
+    if (srvUpd.err) saToast(srvUpd.err, true);
+    else if (srvUpd.note) saToast(srvUpd.note);
+    load();
   }
-  const updLine = $derived(!info?.update ? '' : info.update.running ? t('正在更新：拉代码、装依赖、重建前端…')
-    : info.update.exitCode != null && info.update.exitCode !== 0 ? t('上次更新失败（退出码 {code}），看最近日志', { code: info.update.exitCode })
-    : info.update.result === 'updated' ? (info.restart?.pending ? t('新代码已就位，等对话跑完就重启') : t('新代码已就位'))
-    : info.update.result === 'unchanged' ? t('已经是最新')
-    : tr(info.update.blocked) || t('拉最新代码、装依赖、重建前端，完成后空闲时重启'));
+  const updSub = $derived(!updView ? '' : srvUpd.err || srvUpd.note || updView.sub);
 
   const levelCls = (l) => (l === 'error' ? 'le' : l === 'warn' ? 'lw' : '');
   const hhmmss = (ts) => { const d = new Date(ts); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
@@ -110,22 +114,25 @@
         </div>
       {/if}
     </div>
-    <!-- 打包形态（桌面安装包里的本机服务端）：服务端随桌面客户端发版，上游有新版就提示去更新客户端（S10） -->
-    {#if info.serverUpdate?.packaged}
+    <!-- 服务端更新（任何形态；与设置「服务端更新」同一套）：一键更新 / 检查更新 / 检查并更新，做不了时脚注说怎么更新 -->
+    {#if updView}
       <div class="sa-rows">
-        <div class="sa-row" title={info.serverUpdate.notes || ''}>
+        <div class="sa-row" title={srvUpd.st?.notes ? tr(srvUpd.st.notes) : ''}>
           <span class="sa-row-tx">
             <span>{t('服务端版本')}</span>
-            <small>{info.restart?.pending && info.restart?.reason === 'update'
-              ? t('桌面客户端已下好新版，等 {n} 轮对话跑完就装；装完服务端自动回来。', { n: info.liveTurns })
-              : info.serverUpdate.newer
-              ? t('有新版 {v}：更新这台电脑上的桌面客户端就行（安装包里带着服务端），装完服务端会一起换成新版。', { v: info.serverUpdate.latest })
-              : info.serverUpdate.feed && !info.serverUpdate.feed.ok && info.serverUpdate.feed.checkedAt
-                ? t('{v} · 暂时查不到新版本（{error}）', { v: info.serverUpdate.current, error: tr(info.serverUpdate.feed.error) })
-                : t('{v} · 已是最新', { v: info.serverUpdate.current })}</small>
+            <small class:warn={updView.tone === 'warn' || !!srvUpd.err}>{updSub}</small>
+            {#if updView.how}<small>{updView.how}</small>{/if}
           </span>
-          {#if info.serverUpdate.newer}<span class="sa-badge amber">{t('有新版')}</span>{/if}
+          {#if srvUpd.st?.newer}<span class="sa-badge amber">{t('有新版')}</span>{/if}
+          {#if updView.action}
+            <button class="sa-btn sm" class:pri={updView.action !== 'check'} disabled={srvUpd.busy || srvUpd.loading || restarting} onclick={doUpdate}>{srvUpd.busy || srvUpd.loading ? t('处理中…') : updView.label}</button>
+          {/if}
         </div>
+        {#if srvUpd.st?.newer && srvUpd.st?.page}
+          <a class="sa-row" href={srvUpd.st.page} target="_blank" rel="noopener noreferrer">
+            <span class="sa-row-tx"><span>{t('新版本说明')}</span>{#if srvUpd.st.notes}<small>{tr(srvUpd.st.notes).slice(0, 160)}{srvUpd.st.notes.length > 160 ? '…' : ''}</small>{/if}</span>
+          </a>
+        {/if}
       </div>
     {/if}
     {#if !otherRestart}
@@ -148,12 +155,6 @@
             <button class="sa-btn sm dgr" onclick={() => restart('now')}>{t('立即重启')}</button>
           {/if}
         </div>
-        {#if info.update && !info.update.blocked}
-          <div class="sa-row">
-            <span class="sa-row-tx"><span>{t('更新')}</span><small>{updLine}</small></span>
-            <button class="sa-btn sm pri" disabled={info.update.running || restarting} onclick={doUpdate}>{info.update.running ? t('更新中…') : t('检查并更新')}</button>
-          </div>
-        {/if}
       </div>
     {/if}
     <div style="height:8px"></div>
@@ -198,4 +199,6 @@
   .ln .tm { color: var(--sa-tx3); margin-right: 8px; }
   .ln.lw { color: var(--sa-warn); }
   .ln.le { color: var(--sa-red); }
+  small.warn { color: var(--sa-warn); }
+  a.sa-row { text-decoration: none; color: inherit; }
 </style>

@@ -90,6 +90,8 @@ export default {
   '正在重启…': 'Restarting…',
   '重启失败': 'Couldn’t restart',
   '更新到最新代码？': 'Update to the latest code?',
+  '更新服务端？': 'Update the server?',
+  '交给服务端所在电脑上的桌面客户端下载新版；下好后等所有对话跑完自动安装，服务端会重启一次。': 'The desktop app on the server’s computer downloads the new version, then installs it automatically once all chats finish. The server restarts once.',
   '在服务器上拉最新代码、装依赖、重建前端（几分钟）；有新代码的话，等所有人的对话都跑完再自动重启。进度在下面的「最近日志」里。': 'Pulls the latest code on the server, installs dependencies, and rebuilds the frontend (a few minutes). If there’s new code, the service restarts automatically once everyone’s chats finish. Progress appears in “Recent logs” below.',
   '开始更新': 'Update',
   '开始更新…': 'Starting update…',

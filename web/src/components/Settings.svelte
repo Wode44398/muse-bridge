@@ -35,7 +35,7 @@
   import { agentKeys, watchAgentKeys, createAgentKey, revokeAgentKey, dismissFresh, fmtKeyDay, copyText } from '../lib/agentKeys.svelte.js';
   import { relTime } from '../lib/format.js';
   import { serverOnThisMachine } from '../lib/nativeDesktop.js';
-  import { signIn, signUp, signInToken, signOut, recentUsers, forgetUser } from '../lib/account.js';
+  import { signIn, signUp, signInToken, signOut, recentUsers, forgetUser, savedAccounts, switchTo, parkCurrent, forgetAccount } from '../lib/account.js';
   import { fetchMyUsage, changeMyPassword, quotaRows, hasLimits, costNote } from '../lib/me.js';
   import { fetchAdminAccess, saveAdminAccess, accessItems, accessDisclosure, logLine, onAdminAccess } from '../lib/adminAccess.js';
   import { startPairLogin } from '../lib/pair.js';
@@ -473,6 +473,37 @@
   }
   function pickRecent(name) { lgMode = 'login'; lgUser = name; lgPass = ''; lgErr = ''; setTimeout(() => document.querySelector('.settings .lg-pass input')?.focus(), 30); }
   function dropRecent(name) { forgetUser(name); recents = recentUsers(); }
+  // 这台设备上保存着登录的账号（lib/accountVault.js）：点一下直接切换（换令牌整页重载），不退出、不重输密码
+  let accts = $state([]);
+  const refreshAccts = () => { accts = savedAccounts(); };
+  $effect(() => { if (acctOpen) { void me.kind; refreshAccts(); } });
+  // 最近登录的名字里去掉保险箱里已有的号（那些点一下就进，不必再填密码）
+  const recentsShown = $derived(recents.filter((n) => !accts.some((a) => a.kind === 'user' && a.user === n)));
+  let switching = $state('');   // 正在切过去的账号键
+  let acctErr = $state('');
+  async function doSwitch(a) {
+    if (a.current || switching) return;
+    switching = a.key; acctErr = ''; lgErr = '';
+    try { await switchTo(a.key); }
+    catch (e) {
+      switching = '';
+      if (e?.expired) {
+        // 那张登录已失效：落到登录表单（当前号收进保险箱、不吊销），账号名填好，只差密码
+        if (me.kind !== 'none') await parkCurrent();
+        refreshAccts(); recents = recentUsers();
+        lgReset();
+        if (e.user) pickRecent(e.user);
+        lgErr = e.user ? t('{name} 的登录已失效，请重新输入密码。', { name: e.user }) : t('这个账号的登录已失效，请重新登录。');
+      } else acctErr = t('连不上服务器，稍后再试');
+    }
+  }
+  async function addSignIn() {
+    if (switching) return;
+    await parkCurrent();
+    mine = null; pwDone = false;
+    lgReset(); recents = recentUsers(); refreshAccts();
+  }
+  async function dropAcct(a) { await forgetAccount(a.key); refreshAccts(); }
   // 扫码登录（网页端出码、手机扫）：进 qr 模式即领票出码 + 长轮询，离开即停。
   // 回调里不读 pair（读了就成了本 effect 的依赖，写回触发自身重跑 → 每圈领一张新票把限流打满）。
   let pair = $state({ status: 'idle', svg: '', error: '' });
@@ -506,18 +537,17 @@
     try { await changeMyPassword(pw.old, pw.next); pw = null; pwDone = true; }
     catch (err) { pw.err = tr(err?.body?.error) || t('修改失败'); pw.busy = false; }
   }
-  // 退出 / 切换账号都先确认。切换＝退出这台设备上的当前会话，账户页随即变成登录页（最近登录过的账号点一下即填）。
-  let acctAsk = $state(null);   // null | 'logout' | 'switch'
+  // 退出登录先确认（真吊销这台设备上的这张会话、从保险箱删掉）；切换账号在上面的账号列表里，点一下就换、不用确认。
+  let acctAsk = $state(null);   // null | 'logout'
   let acctBusy = $state(false);
   async function acctConfirm() {
     if (acctBusy) return;
-    const kind = acctAsk;
     acctBusy = true;
     await signOut();
     acctBusy = false; acctAsk = null; mine = null; pwDone = false;
-    lgReset(); recents = recentUsers();
-    // 退出：回设置根页（账户卡变成「登录」）；切换：留在这一页，它此刻已是登录页
-    if (kind === 'logout' && stack.length > 1) pop();
+    lgReset(); recents = recentUsers(); refreshAccts();
+    // 回设置根页（账户卡变成「登录」）；保险箱里还有别的号就留在这一页，点一下切过去
+    if (!accts.length && stack.length > 1) pop();
   }
   function openWorkspaceFromAcct() { ui.settingsOpen = false; ui.screen = 'files'; }
   function openScanFromAcct() { ui.pairScan = { mode: 'scan' }; }   // 全屏取景层（z 400）盖在设置上，扫完回到这里
@@ -1070,6 +1100,23 @@
 {#snippet ico(name)}<span class="ri" aria-hidden="true">{@html svgOf(name)}</span>{/snippet}
 {#snippet agMark(id)}<span class="ri brand" aria-hidden="true">{#if markSrc(id)}<img src={markSrc(id)} alt="" draggable="false" />{:else}{@html svgOf('orb')}{/if}</span>{/snippet}
 {#snippet gfoot(text)}<p class="gfoot">{text}</p>{/snippet}
+<!-- 这台设备上保存着登录的账号：点一下切换；当前这个打勾；别的号右边 × 从这台设备移除（顺手在服务端退出那张会话） -->
+{#snippet acctRows()}
+  {#each accts as a (a.key)}
+    <div class="r recent" class:sel={a.current}>
+      <button class="rc-pick" type="button" onclick={() => doSwitch(a)} disabled={a.current || !!switching}>
+        <span class="av sm" aria-hidden="true">{(a.user || '?').charAt(0).toUpperCase()}</span>
+        <span class="r-main"><span class="r-tx">{a.user}<span class="r-sub">{a.kind === 'admin' ? t('管理员') : a.tier === 'pro' ? t('完全信任用户') : t('普通用户')}</span></span>
+          {#if switching === a.key}<span class="r-d">{t('切换中…')}</span>{/if}</span>
+      </button>
+      {#if a.current}
+        <span class="rc-x" aria-label={t('当前账号')}>{@render check()}</span>
+      {:else}
+        <button class="rc-x" type="button" onclick={() => dropAcct(a)} disabled={!!switching} aria-label={t('从这台设备移除 {name}', { name: a.user })}><Sym name="xmark" weight={500} size={13} /></button>
+      {/if}
+    </div>
+  {/each}
+{/snippet}
 {#snippet ghead(text)}<h2 class="ghead">{text}</h2>{/snippet}
 <!-- 「软件更新」行：根页（带行首图标）与「关于 › 更新」组（组里其余行都没图标，这里也不带）共用一份，
      状态（检查中 / 下载进度环 / 一键更新）是同一个 upState，两处看到的永远一致 -->
@@ -2282,10 +2329,16 @@
       {/if}
     </div>
 
+    {@render ghead(t('切换账号'))}
     <div class="ig">
-      <button class="r" type="button" onclick={() => (acctAsk = 'switch')}>
-        <span class="r-main center"><span class="r-tx accent">{t('切换账号')}</span></span>
+      {@render acctRows()}
+      <button class="r" type="button" onclick={addSignIn} disabled={!!switching}>
+        <span class="r-main"><span class="r-tx accent">{t('添加账号')}</span></span>
       </button>
+    </div>
+    {@render gfoot(acctErr || t('这台设备上登录过的账号会留着登录，点一下直接切换，不用重新输入密码。'))}
+
+    <div class="ig">
       <button class="r" type="button" onclick={() => (acctAsk = 'logout')}>
         <span class="r-main center"><span class="r-tx red">{t('退出登录')}</span></span>
       </button>
@@ -2311,10 +2364,15 @@
         <button class="r" type="button" onclick={() => lgSwitch('login')}><span class="r-main center"><span class="r-tx accent">{t('账号密码登录')}</span></span></button>
       </div>
     {:else}
-      {#if lgMode === 'login' && recents.length}
+      {#if lgMode === 'login' && accts.length}
+        {@render ghead(t('这台设备上的账号'))}
+        <div class="ig">{@render acctRows()}</div>
+        {#if acctErr}{@render gfoot(acctErr)}{/if}
+      {/if}
+      {#if lgMode === 'login' && recentsShown.length}
         {@render ghead(t('最近登录'))}
         <div class="ig">
-          {#each recents as name (name)}
+          {#each recentsShown as name (name)}
             <div class="r recent" class:sel={lgUser === name}>
               <button class="rc-pick" type="button" onclick={() => pickRecent(name)}>
                 <span class="av sm" aria-hidden="true">{name.charAt(0).toUpperCase()}</span>
@@ -2458,10 +2516,10 @@
   {/if}
 
   {#if acctAsk}
-    <Alert title={acctAsk === 'switch' ? t('切换账号') : t('退出登录？')}
-      message={acctAsk === 'switch' ? t('会先退出当前账号（{name}），再用别的账号登录。', { name: shownName }) : t('只退出这台设备，其它设备上的登录不受影响。')}
+    <Alert title={t('退出登录？')}
+      message={t('只退出这台设备，其它设备上的登录不受影响。')}
       onclose={() => { if (!acctBusy) acctAsk = null; }}
-      actions={[{ label: acctBusy ? t('请稍候…') : acctAsk === 'switch' ? t('切换') : t('退出登录'), role: acctAsk === 'switch' ? 'default' : 'destructive', disabled: acctBusy, onclick: acctConfirm },
+      actions={[{ label: acctBusy ? t('请稍候…') : t('退出登录'), role: 'destructive', disabled: acctBusy, onclick: acctConfirm },
         { label: t('取消'), role: 'cancel', onclick: () => { if (!acctBusy) acctAsk = null; } }]} />
   {/if}
 
@@ -2798,6 +2856,9 @@
   .rc-pick:active { background: var(--i-press); }
   .rc-x { flex: none; width: 48px; align-self: stretch; display: flex; align-items: center; justify-content: center; border: 0; background: none; color: var(--i-label3); cursor: pointer; }
   .rc-x:active { color: var(--i-label2); }
+  .rc-pick:disabled, .rc-x:disabled { cursor: default; opacity: 1; color: inherit; }
+  .rc-pick:disabled:active { background: none; }
+  span.rc-x { color: var(--i-accent); }
   .r.recent + .r.recent .r-main::before { right: -48px; }
   .qr-card { display: flex; justify-content: center; padding: 18px; }
   .qrbox { position: relative; width: 216px; height: 216px; padding: 12px; border-radius: 18px; background: #fff; }

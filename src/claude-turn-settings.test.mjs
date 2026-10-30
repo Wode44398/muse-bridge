@@ -15,6 +15,7 @@ const T = await import('./runtime/claude-turn-settings.mjs');
 const Q = await import('./runtime/questions.mjs');
 const P = await import('./runtime/chat-prefs.mjs');
 const B = await import('./runtime/bus.mjs');
+const R = await import('./runtime/model-ratings.mjs');
 
 const admin = { kind: 'admin', key: 'admin', dataDir: path.join(tmp, 'admin'), shell: true };
 const user = { kind: 'user', key: 'u:dora', dataDir: path.join(tmp, 'dora'), shell: false, sandbox: true };
@@ -157,6 +158,7 @@ test('子 agent 调度偏好：随设置存取、超长拒收；工作流关着�
   assert.equal(T.turnSettings(user, {}).dispatch, '');                       // 没有命令行的身份：工作流本就不开
   assert.throws(() => S.setClaudeSettings(admin, { subagentDispatch: 'x'.repeat(2001) }));
   const catalog = [{ name: 'mimo-v2.6-flash', label: 'MiMo', provider: '小米', contextWindow: 262144, vision: false, efforts: ['low', 'high'] }];
+  R._setRatingsForTests(false);   // 没有性价比快照：老写法（分档 + 全清单）
   assert.equal(T.dispatchNudge({ on: false, text: 'x', catalog }), '');
   const cus = T.dispatchNudge({ on: true, text: '简单任务用 mimo', custom: { main: 'big', small: 'tiny' }, catalog });
   assert.match(cus, /effort/);
@@ -174,6 +176,49 @@ test('子 agent 调度偏好：随设置存取、超长拒收；工作流关着�
   for (const s of [cus, routed]) assert.match(s, /一律用显示名（如「MiMo」/);
   assert.doesNotMatch(off, /一律用显示名/);
   S.setClaudeSettings(admin, { subagentDispatch: null });
+  R._setRatingsForTests(null);    // 回到读真快照
+});
+
+test('有性价比快照：调度提示给四档阶梯（首选 + 备选、auto 写法），被胜出的与未评分的各一行', () => {
+  R._setRatingsForTests({
+    generated: '2026-10-30',
+    models: [
+      { slug: 'claude-opus-5-5', base: 'claude-opus-5-5', effort: 'max', ii: 58, cost: 67 },
+      { slug: 'claude-opus-5-5-high', base: 'claude-opus-5-5', effort: 'high', ii: 52, cost: 23 },
+      { slug: 'claude-haiku-5-5-medium', base: 'claude-haiku-5-5', effort: 'medium', ii: 25, cost: 0.6 },
+      { slug: 'claude-sonnet-5-5-high', base: 'claude-sonnet-5-5', effort: 'high', ii: 41, cost: 11 },
+      { slug: 'mimo-v2-6-flash', base: 'mimo-v2-6-flash', effort: '', ii: 27, cost: 0.86 },
+    ],
+    plans: { max20: { 'claude-opus-5-5': 1.4, 'claude-opus-5-5-high': 0.5, 'claude-haiku-5-5-medium': 0.01, 'claude-sonnet-5-5-high': 0.24 } },
+  });
+  try {
+    const catalog = [
+      { name: 'mimo-v2.6-flash', label: 'MiMo Flash', provider: '小米', contextWindow: 262144, vision: false, efforts: ['off', 'on'] },
+      { name: 'odd-model', label: 'Odd', provider: 'X', contextWindow: 0, vision: true, efforts: [] },
+    ];
+    const routed = T.dispatchNudge({ on: true, catalog, routed: true, plan: 'max20', text: '偏好原文' });
+    assert.match(routed, /2026-10-30 版/);
+    assert.match(routed, /最难（[^）]+）→ auto:top = opus · max（Opus 5\.5，智力 58 · ¥1\.40 订阅等效）/);
+    assert.match(routed, /难（[^）]+）→ auto:hard = opus · high/);
+    // 机械档：订阅的 Haiku 最便宜；备选给不占订阅额度的第三方，带上下文与看图限制
+    assert.match(routed, /机械（[^）]+）→ auto:light = haiku · medium（Haiku 5\.5，[^）]+）；备选 mimo-v2\.6-flash（MiMo Flash，智力 27 · ¥0\.86，上下文 262K，不看图）/);
+    // 订阅里的模型都够不着的档，备选给不占额度里最强的一个并标「略弱」
+    assert.match(routed, /auto:hard = opus · high（[^）]+）；备选 mimo-v2\.6-flash（[^）]+比这档略弱）/);
+    assert.match(routed, /Agent 工具的 model 只能填别名：最难 opus \+ effort max，难 opus \+ effort high，常规 sonnet \+ effort high/);
+    assert.match(routed, /未评分[^\n]*odd-model（Odd）/);
+    assert.match(routed, /以这里为准\]\n偏好原文$/);
+    assert.doesNotMatch(routed, /^  - /m);                              // 不再列全清单
+    // 官方会话没挂上转发：只有 Claude 别名，不教 auto 写法
+    const plain = T.dispatchNudge({ on: true, catalog, plan: 'max20' });
+    assert.doesNotMatch(plain, /auto:/);
+    assert.doesNotMatch(plain, /mimo-v2\.6-flash · /);
+    assert.match(plain, /派不了/);
+    // 自定义 API 会话：全是 API 价，Agent 工具只设 effort
+    const cus = T.dispatchNudge({ on: true, catalog, custom: { main: 'big', small: 'tiny' } });
+    assert.match(cus, /auto:light = mimo-v2\.6-flash（MiMo Flash，智力 27 · ¥0\.86/);
+    assert.match(cus, /haiku = tiny，sonnet \/ opus = 主会话模型 big/);
+    assert.doesNotMatch(cus, /订阅等效/);
+  } finally { R._setRatingsForTests(null); }
 });
 
 test('工作流 agent 的档位从子 agent 转录的 api-request 行补', async () => {

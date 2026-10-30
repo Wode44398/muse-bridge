@@ -22,6 +22,7 @@ import { randomBytes, createHmac } from 'node:crypto';
 import { Agent } from 'undici';
 import { HOST_OWNER, isMemberOwner, providerProxyForced, getProvider, findProvider, providerKey, resolveCustomModel, resolveSubagentModel, customModelId, customSupportsFast, fastCapableProvider, fastProbe, recordFastProbe } from './claude-providers.mjs';
 import { assertPublicUrl, publicDispatcher } from './public-net.mjs';
+import { isAutoModel, resolveAuto, applyAutoTarget } from './model-ratings.mjs';
 import { applyParams, pickTarget, keepsBetas, isOfficial, toOpenAI, openAIReasoning, OpenAIStream, fromOpenAI, estimateTokens } from './claude-providers-transform.mjs';
 // 型号知识 / 报错解读 / 检测与探测的判读和 dimensio 的自定义服务共用（src/model-knowledge/）
 import { guessModel, siblingBaseUrls, anthropicUrl, openaiUrl, parseModelList, modelIdOf, labelOf, modelsUrlCandidates } from '../model-knowledge/knowledge.mjs';
@@ -269,6 +270,12 @@ async function handle(req, res) {
   }
   let body;
   try { body = JSON.parse(raw); } catch { sendJson(res, 400, apiError('请求体不是 JSON', 'invalid_request_error')); return; }
+  // 工作流 agent({ model:'auto:hard' })：按性价比阶梯换成这一档首选的模型与档位（model-ratings.mjs），再走下面的跨服务选路
+  if (isAutoModel(body.model)) {
+    const t = resolveAuto(body.model, owner, { official: false });
+    if (!t) { sendJson(res, 400, apiError(`「${body.model}」这一档没有可用的模型（设置 › Claude › 模型服务里启用的模型都没有评分）`, 'invalid_request_error')); return; }
+    body = applyAutoTarget(body, t);
+  }
   // 子 agent 选模型 / 选档（transform 的 pickTarget）：写了别的服务里的模型名就整个换成那个服务（Key、协议、地址、日志跟着走）
   const pick = pickTarget(body, provider, model, effort, (name) => resolveSubagentModel(name, owner));
   provider = pick.provider; model = pick.model; effort = pick.effort;

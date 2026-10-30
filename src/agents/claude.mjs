@@ -65,6 +65,8 @@ import { makeVisualizeMcp, vizOnFor, vizPlatform, vizNudge, makeWidgetStream, VI
 import { playbookSummary, playbookForMention } from '../runtime/phone-playbook.mjs';
 import { isControlOnline } from '../runtime/phone-control.mjs';
 import { devicesEnabled, ownDevices } from '../runtime/devices.mjs';
+import { deviceById } from '../runtime/device-registry.mjs';
+import { parseDeviceRef, isDeviceRef, deviceRefNote } from '../runtime/device-refs.mjs';
 import { claudeExtensionsFor, sharedExtensionDirs, SHARED_ROOT } from '../extensions.mjs';
 import { memberClaudePlugins, memberSkillRootIfAny } from '../member-skills.mjs';
 import { PHONE_FS, PHONE_CONTROL, CLAUDE_IN_CHROME, CLAUDE_CHROME_CONFIG_DIR } from '../config/index.mjs';
@@ -600,18 +602,28 @@ export function composeTurnPrompt(message, attachments) {
     // 引用对话（侧栏把另一条会话拖进来，/api/session/quote 落的 <ts>-chatref-<id>-<标题>.md）同理标注：
     // 那是另一段对话的完整记录，是这条消息的背景，不是要处理的「文件」。
     const isQuote = (p) => /[\\/]\d+-chatref-[0-9a-fA-F-]{36}-[^\\/]*\.md$/.test(p);
-    const lines = attachments.map((p) => (isDir(p) ? `- ${p}  ← 文件夹` : isQuote(p) ? `- ${p}  ← 引用的对话` : '- ' + p));
-    const anyDir = attachments.some(isDir);
-    const anyQuote = attachments.some(isQuote);
+    // 设备文件夹引用（device://，runtime/device-refs.mjs）：路径在用户电脑上、服务器上没有，
+    // 只能经 mcp__device__files 按需读；标注里带设备 id，agent 照填 device 参数，不依赖会话连的是哪台。
+    const lines = attachments.map((p) => {
+      const r = parseDeviceRef(p);
+      // 路径包反引号：「新建文件夹 (2)」这类以括号结尾的名字，裸写时模型会把括号当注释截掉（端到端实测）
+      if (r) return `- \`${r.path}\`  ← ${deviceRefNote(deviceById(r.deviceId)?.name, r.deviceId)}`;
+      return isDir(p) ? `- ${p}  ← 文件夹` : isQuote(p) ? `- ${p}  ← 引用的对话` : '- ' + p;
+    });
+    const local = attachments.filter((p) => !isDeviceRef(p));
+    const anyDev = local.length < attachments.length;
+    const anyDir = local.some(isDir);
+    const anyQuote = local.some(isQuote);
     prompt += (message ? '\n\n' : '') +
       '[用户上传了以下附件，绝对路径如下。图片已经直接附在本条消息里、你现在就看得见，不必再 Read 它（只有需要看更多细节时才 Read）；其余文件请按需用 Read 工具读取'
       + (anyDir ? '；标注「文件夹」的是整个目录已挂载在这里：先用 Glob/Grep 摸清结构再挑需要的文件 Read，不要把里面所有文件都读一遍' : '')
       + (anyQuote ? '；标注「引用的对话」的是用户从另一段对话拖过来的完整记录（Markdown），先 Read 它了解那段对话的来龙去脉，再结合用户这条消息作答' : '')
+      + (anyDev ? '；标注「用户电脑…上的文件夹」的【没有上传】，在用户自己的电脑上、服务器上不存在，Read/Glob/Grep/Bash 都碰不到它：一律用 mcp__device__files（path 就是反引号里的完整路径，device 参数照标注里的 device= 填），先 glob 或 list 摸清结构、grep 搜内容，再挑需要的文件 read（大文件用 offset/limit 按行分段），别把里面所有文件都读一遍；要在服务器上批量处理（跑脚本、大量改动）就先 pull 到工作目录再动手。设备离线或工具报错就如实告诉用户' : '')
       + ']\n' + lines.join('\n');
   }
   // 图片附件额外【原生】挂到用户消息上：这一轮就看得见，不必先花一个来回去 Read，
-  // 而且它待在用户轮里，长对话压缩时不像 tool_result 那样先被摘掉。
-  const imageBlocks = attachments.length ? nativeImageBlocks(attachments) : [];
+  // 而且它待在用户轮里，长对话压缩时不像 tool_result 那样先被摘掉。设备引用不在服务器上，跳过。
+  const imageBlocks = attachments.length ? nativeImageBlocks(attachments.filter((p) => !isDeviceRef(p))) : [];
   return { prompt, imageBlocks };
 }
 
@@ -838,7 +850,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 老会话第一次从桌面客户端发话（以前没连过）：连上这台，之后从手机接着聊也还是它。
   if (deviceOk && ownSid && !storedLink && originPc) { try { setDeviceLink(ctx, ownSid, originPc); } catch {} }
   const turnLink = storedLink || (chatPrefs && chatPrefs.computer) || originPc || '';
-  const deviceOn = deviceOk && myDevices.length > 0 && turnLink !== 'none';
+  // 这条消息引用了电脑上的文件夹（device://）：会话设成「不连接」也照样给工具——不给就读不到；工具按标注里的 device 指名，不改会话连接。
+  const deviceOn = deviceOk && myDevices.length > 0 && (turnLink !== 'none' || (attachments || []).some(isDeviceRef));
   // Claude in Chrome（主机管理员真实的 Edge + 全部登录态）：只给主机 admin
   //（ctx.shell、非沙箱、非快照）。Pro 虽有 shell 但属沙箱身份，不给。
   const chromeOn = CLAUDE_IN_CHROME && pluginOn('edge') && !snap && !ctx.sandbox && !!ctx.shell;

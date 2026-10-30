@@ -63,3 +63,32 @@ test('反馈去向 distro.feedback：没声明 = 本体默认且结果里没有�
   assert.ok(tag.includes('"feedback":{'));
   assert.ok(FEEDBACK_DEFAULT.to);
 });
+
+test('构建期渠道的反馈去向：跟构建期中继成对才算；另配了中继不算；config 里声明的优先', async () => {
+  const { channelFeedback, withChannelFeedback, relayDistro } = await import('./distro.mjs');
+  const os = await import('node:os'); const fs = await import('node:fs'); const path = await import('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'distro-chan-'));
+  const dest = { to: 'The Bridge 的公开 GitHub Issue', toEn: 'The Bridge’s public GitHub issues', public: true };
+  const write = (o) => fs.writeFileSync(path.join(root, 'bridge-build.json'), JSON.stringify(o));
+  try {
+    assert.equal(channelFeedback({ programRoot: root, cfg: {}, env: {} }), null, '没有文件');
+    write({ buildId: 'x', feedbackDest: dest });
+    assert.equal(channelFeedback({ programRoot: root, cfg: {}, env: {} }), null, '没有构建期中继');
+    write({ buildId: 'x', feedbackRelay: 'https://relay.example', feedbackDest: dest });
+    assert.deepEqual(channelFeedback({ programRoot: root, cfg: {}, env: {} }), dest);
+    assert.equal(channelFeedback({ programRoot: root, cfg: { feedbackRelay: 'https://mine.example' }, env: {} }), null, 'config 另配中继');
+    assert.equal(channelFeedback({ programRoot: root, cfg: {}, env: { BRIDGE_FEEDBACK_RELAY: 'https://env.example' } }), null, '环境变量另配中继');
+    fs.writeFileSync(path.join(root, 'bridge-build.json'), '{坏');
+    assert.equal(channelFeedback({ programRoot: root, cfg: {}, env: {} }), null, '坏文件');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+
+  const viaChan = resolveDistro(withChannelFeedback(undefined, dest));
+  assert.deepEqual({ ...viaChan.feedback }, dest);
+  assert.equal(relayDistro(viaChan), 'bridge');
+  const own = { to: 'X 团队' };
+  assert.deepEqual({ ...resolveDistro(withChannelFeedback({ feedback: own }, dest)).feedback }, { to: 'X 团队', toEn: 'X 团队', public: false });
+  assert.equal(relayDistro(resolveDistro(withChannelFeedback({ feedback: own }, dest))), '');
+  assert.equal(relayDistro(resolveDistro({})), '');
+  assert.equal(relayDistro(resolveDistro({ id: 'muse' })), 'muse');
+  assert.equal('feedback' in resolveDistro(withChannelFeedback({ id: 'x' }, null)), false);
+});

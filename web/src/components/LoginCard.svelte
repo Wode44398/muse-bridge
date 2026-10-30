@@ -6,6 +6,7 @@
   //   + content（表单/用户信息，展开时淡入）。
   // 四态：未登录 login/register/token(管理员令牌)/qr；已登录＝一眼看的账户摘要（用量 + 工作空间 / 扫一扫），
   // 退出登录、切换账号、改密码都在设置 › 账户（「账户」钮直达），卡片里不放。
+  // 手机 App 存了不止一台服务器时，卡片里多一行「切换服务器」（10-30 起替代主页左上标题下的服务器胶囊，那颗胶囊太抢眼）。
   // 展开后的卡＝iOS 27 警告框同一套材质（ios27/Alert：kit「Liquid Glass - Regular - Medium」9 宫图层 + frost 模糊 +
   // kit 大投影，圆角 34），配色是设置页的「墨与象牙」（ios27/ink.css），明暗跟 ui.theme。
   import { onMount } from 'svelte';
@@ -25,6 +26,7 @@
   import { startPairLogin } from '../lib/pair.js';
   import { isOffline } from '../lib/server.js';
   import { fetchMyUsage, quotaRows, hasLimits } from '../lib/me.js';
+  import { activeProfile, listProfiles, canSwitchServers } from '../lib/serverProfiles.js';
   import { openSettings as openSettingsAt } from '../lib/settingsNav.svelte.js';
   import { t, tc, tr } from '../lib/i18n.js';
   import { ovUrl } from '../lib/overlay.svelte.js';
@@ -146,6 +148,9 @@
   function openAccount() { openSettingsAt('account'); close(); }
   // 手机端：账户卡「扫一扫」→ 全屏取景层（PairScan，App 挂载），扫网页登录页上的码替它登录。
   function openScan() { close(); ui.pairScan = { mode: 'scan' }; }
+  // 多服务器档案（只在手机 App）：展开卡片时读一次；点了收卡、开切换面板
+  const srv = $derived(open && canSwitchServers() && listProfiles().filter((p) => !p.pending).length > 1 ? activeProfile() : null);
+  function openServers() { close(); ui.serverSwitcherOpen = true; }
 
   // 网页端扫码登录：进 qr 模式即领票出码 + 长轮询；离开模式 / 关卡 / 登录成功即停
   // （cleanup 掐断长轮询，作废的码服务端 3 分钟后自己过期）。
@@ -246,6 +251,14 @@
                 <Sym name="chevron.right" weight={600} size={13} class="chev" />
               </button>
             {/if}
+            {#if srv}
+              <button class="row" type="button" onclick={openServers} aria-label={t('当前服务器：{name}，点按切换', { name: srv.name })}>
+                <span class="ri" aria-hidden="true">{@html icon('server')}</span>
+                <span class="row-tx">{t('切换服务器')}</span>
+                <span class="row-d"><i class="sdot" class:off={ui.offline} style:--c={srv.color}></i><span class="nm">{srv.name}</span></span>
+                <Sym name="chevron.right" weight={600} size={13} class="chev" />
+              </button>
+            {/if}
           </div>
           <!-- kit 警告框 Side-by-Side：次要在左、主操作在右 -->
           <div class="btns side">
@@ -329,6 +342,10 @@
               <span class="dot" aria-hidden="true">·</span>
             {/if}
             <button class="link" type="button" onclick={() => go('token')}>{t('用访问令牌登录')}</button>
+            {#if srv}
+              <span class="dot" aria-hidden="true">·</span>
+              <button class="link" type="button" onclick={openServers}>{t('切换服务器')}</button>
+            {/if}
           </div>
         {/if}
         </div>
@@ -471,6 +488,11 @@
   .ri :global(svg) { width: 18px; height: 18px; display: block; }
   .row-tx { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row :global(.chev) { color: var(--i-label3); }
+  .row-d { flex: none; max-width: 45%; display: flex; align-items: center; gap: 6px; font-size: 15px; color: var(--i-label2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-d .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .sdot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+  .sdot.off { background: var(--i-red); }
 
   /* —— 网页扫码登录：白底码块 + 状态盖层 —— */
   .qrwrap { position: relative; width: 200px; height: 200px; margin: 0 auto 22px; flex: none; }

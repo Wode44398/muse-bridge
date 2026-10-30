@@ -66,6 +66,7 @@ const mk = (sb, relay, o = {}) => {
     buildRelay: () => o.buildRelay || '',
     fetch: relay.fetch, now: () => t, random: () => 0.5, instanceOk: o.instanceOk ?? true,
     literals: () => ['my-box.example.com', 'DESKTOP-SECRET1'], log: (s) => logs.push(String(s)), appVersion: '6.51 (464)',
+    ...(o.distro ? { distro: o.distro } : {}),
   });
   return { up, logs, tick: (ms) => { t += ms; }, now: () => t };
 };
@@ -323,6 +324,25 @@ test('反馈库位置：config.feedbackDir > 早期默认位置（已有就沿�
   const abs = path.join(sb.root, 'elsewhere');
   writeFileSync(sb.configPath, JSON.stringify({ feedbackDir: abs }));
   assert.equal(at(), abs);
+});
+
+test('载荷的 distro：本体声明了公开去向才带 bridge（中继开公开 Issue）；没声明不带（进私有收件箱）；别的发行版带自己的 id', async () => {
+  const { resolveDistro } = await import('../config/distro.mjs');
+  const pub = { to: 'The Bridge 的公开 GitHub Issue', toEn: 'The Bridge’s public GitHub issues', public: true };
+  const cases = [
+    [resolveDistro({}), undefined],
+    [resolveDistro({ feedback: { to: '某团队' } }), undefined],
+    [resolveDistro({ feedback: pub }), 'bridge'],
+    [resolveDistro({ id: 'muse', feedback: pub }), 'muse'],
+    [resolveDistro({ id: 'muse' }), 'muse'],
+  ];
+  for (const [distro, want] of cases) {
+    const relay = fakeRelay();
+    const { up } = mk(pushBox(), relay, { distro });
+    assert.equal(up.submit({ text: '设置页打不开', consent: true }), 'queued');
+    await up.flush();
+    assert.equal(relay.reports[0].distro, want, JSON.stringify(distro));
+  }
 });
 
 test('提交人没勾「这条也发给 bridge 开发者」（含旧版界面）：只留本机，不进待发队列', async () => {

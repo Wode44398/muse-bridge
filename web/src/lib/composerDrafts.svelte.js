@@ -49,7 +49,7 @@ let parkTimer = 0;
 
 // —— 附件：只存能复原的字段；图片的 blob: 预览换成服务端 uploads 副本的 1280 缩略图 ——
 const UPLOAD_FILE_RE = /[\\/]uploads[\\/]([^\\/]+)$/;
-const KEEP = ['local', 'count', 'note', 'quoteId'];
+const KEEP = ['local', 'count', 'note', 'quoteId', 'device'];   // device：引用电脑上的文件夹（lib/deviceRefs.js）卡上写哪台电脑
 function slim(list) {
   const out = [];
   for (const a of list || []) {

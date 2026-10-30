@@ -240,21 +240,40 @@ export function readWorkflowOutput(file) {
 // 转录在 <会话>/subagents/workflows/<wf>/agent-<id>.jsonl；只读文件头 512KB，找第一条带档位的 api-request。
 const EFFORT_RE = /"output_config":\{[^{}]*?"effort":"([a-z]+)"/;
 const HEAD_BYTES = 512 * 1024;
-export function agentEffortFromTranscript(file) {
+function transcriptHead(file) {
   let fd;
   try {
     fd = openSync(file, 'r');
     const buf = Buffer.alloc(HEAD_BYTES);
     const n = readSync(fd, buf, 0, buf.length, 0);
-    for (const line of buf.toString('utf8', 0, n).split('\n')) {
-      if (!line.includes('"type":"api-request"')) continue;
-      const m = EFFORT_RE.exec(line);
-      if (m) return m[1];
-    }
-  } catch { /* 文件不在 / 读不了：没有档位 */ } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* ignore */ } }
+    return buf.toString('utf8', 0, n).split('\n');
+  } catch { return []; /* 文件不在 / 读不了 */ } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* ignore */ } }
+}
+export function agentEffortFromTranscript(file) {
+  for (const line of transcriptHead(file)) {
+    if (!line.includes('"type":"api-request"')) continue;
+    const m = EFFORT_RE.exec(line);
+    if (m) return m[1];
+  }
   return '';
 }
-/** 给 progress 里的 workflow_agent 补 effort（subagentsDir = <会话>/subagents）；读不到的原样，返回新数组。 */
+// 实际答话的模型（第一条助手消息的 message.model）：auto:<档> 的 agent 由 bridge 在请求时换了型号，CLI 自己只知道 auto 名
+export function agentServedModel(file) {
+  for (const line of transcriptHead(file)) {
+    if (!line.includes('"type":"assistant"')) continue;
+    try {
+      const j = JSON.parse(line);
+      const m = j && j.type === 'assistant' && j.message && j.message.model;
+      if (typeof m === 'string' && m && !m.startsWith('<')) return m.slice(0, 120);
+    } catch { /* 截断的最后一行 */ }
+  }
+  return '';
+}
+const AUTO_RE = /^auto:/i;
+/**
+ * 给 progress 里的 workflow_agent 补 effort（subagentsDir = <会话>/subagents）；读不到的原样，返回新数组。
+ * auto:<档> 的 agent 改补 servedModel（实际落到的模型）——它的档位由 bridge 按阶梯定，转录里 CLI 发的那个不作数，不补。
+ */
 export function annotateWorkflowEfforts(progress, subagentsDir) {
   if (!Array.isArray(progress) || !subagentsDir) return progress;
   let wfDirs = null;
@@ -267,7 +286,14 @@ export function annotateWorkflowEfforts(progress, subagentsDir) {
     return '';
   };
   return progress.map((e) => {
-    if (!e || e.type !== 'workflow_agent' || e.effort || typeof e.agentId !== 'string' || !/^[\w-]{1,64}$/.test(e.agentId)) return e;
+    if (!e || e.type !== 'workflow_agent' || typeof e.agentId !== 'string' || !/^[\w-]{1,64}$/.test(e.agentId)) return e;
+    if (AUTO_RE.test(String(e.model || ''))) {
+      if (e.servedModel) return e;
+      const f = locate(e.agentId);
+      const served = f ? agentServedModel(f) : '';
+      return served ? { ...e, servedModel: served } : e;
+    }
+    if (e.effort) return e;
     const f = locate(e.agentId);
     const effort = f ? agentEffortFromTranscript(f) : '';
     return effort ? { ...e, effort } : e;

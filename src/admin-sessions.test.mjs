@@ -100,3 +100,38 @@ test('重置 / 修改密码：这个人别的设备下线，发起修改的那�
   users.deleteUserSessions('carol');
   assert.equal(users.getSession(keep), null);
 });
+
+// 本机快捷切换账号（10-30）：显式 Bearer 是一张有效的账号会话时，残留的管理员 cookie 不再让它变成管理员；
+// Bearer 无效 / 没带才回落 cookie。/api/auth/adopt 把 cookie 对齐到 Bearer 的身份，不带 Bearer = 两种 cookie 都摘掉。
+test('显式账号会话压过残留的管理员 cookie；adopt 对齐 cookie、不吊销', async () => {
+  users.revokeAdminSessions('all');
+  const isUserSession = (t) => !!users.getSession(t);
+  const auth = createAuth(MASTER, false, { isAdminSession: users.isAdminSession, isUserSession });
+  const adm = users.createAdminSession({ gen: auth.gen });
+  const c = await users.createUser('switcher', 'password-1234', 'user');
+  assert.ok(!c.error, c.error);
+  const ut = users.createSession(c.id || c.name);
+  const admCookie = 'bridge_auth=' + encodeURIComponent(adm);
+  assert.equal(auth.adminCredential(req({ bearer: ut, cookie: admCookie })), null, '切到账号后不再是管理员');
+  assert.equal(auth.adminCredential(req({ bearer: 'stale-token', cookie: admCookie })).via, 'session', '无效 Bearer 回落 cookie');
+  assert.equal(auth.adminCredential(req({ bearer: adm, cookie: 'bridge_user=' + encodeURIComponent(ut) })).via, 'session', '切回管理员');
+  assert.equal(auth.adminCredential(req({ url: '/api/file?token=' + encodeURIComponent(ut), cookie: admCookie })), null, '?token= 同样算显式');
+
+  const h = {};
+  const router = { on: (m, p, fn) => { h[m + ' ' + p] = fn; } };
+  const identify = (r) => (auth.authOk(r) ? { kind: 'admin', user: null } : users.getSession(auth.bearerToken(r)) ? { kind: 'user', user: c.id } : { kind: 'none', user: null });
+  registerAuthRoutes(router, { ...auth, adminGen: auth.gen, identify });
+  const adopt = (r) => { let code = 0, headers = {}; h['POST /api/auth/adopt'](r, { writeHead(cc, hh) { code = cc; headers = hh || {}; }, end() {} }); return { code, cookies: [].concat(headers['Set-Cookie'] || []) }; };
+  const toUser = adopt(req({ bearer: ut, cookie: admCookie, method: 'POST' }));
+  assert.equal(toUser.code, 200);
+  assert.ok(toUser.cookies.some((x) => x.startsWith('bridge_user=' + encodeURIComponent(ut))));
+  assert.ok(toUser.cookies.some((x) => /^bridge_auth=;/.test(x)));
+  const toAdmin = adopt(req({ bearer: adm, method: 'POST' }));
+  assert.ok(toAdmin.cookies.some((x) => x.startsWith('bridge_auth=' + encodeURIComponent(adm))));
+  assert.ok(toAdmin.cookies.some((x) => /^bridge_user=;/.test(x)));
+  const park = adopt(req({ cookie: admCookie, method: 'POST' }));
+  assert.equal(park.cookies.length, 2);
+  assert.equal(adopt(req({ bearer: 'stale-token', method: 'POST' })).code, 401);
+  assert.ok(users.getSession(ut) && users.isAdminSession(adm, auth.gen), '切来切去都不吊销会话');
+  users.revokeAdminSessions('all');
+});

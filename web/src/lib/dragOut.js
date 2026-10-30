@@ -25,7 +25,7 @@ const isFetchable = (u) => !!u && !/^(blob|data):/i.test(String(u));
 // 附件对象 → 拖拽来源：{ path, url, downloadUrl, name, pending }（Claude/Gemini/Codex 附件同构）。
 // 上传中的不拖；绝对路径优先；只有链接就走下载通道（blob:/data: 拖不了）。
 export function attDragSrc(a) {
-  if (!a || a.pending) return null;
+  if (!a || a.pending || a.device) return null;   // 引用电脑上的文件夹：path 是 device:// 编码，不是能拖出去的文件
   if (a.path) return { paths: [a.path] };
   const u = a.downloadUrl || a.url;
   return isFetchable(u) ? { url: u, name: a.name || '' } : null;

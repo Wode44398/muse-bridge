@@ -342,6 +342,7 @@ Claude 并行派出子 agent 或运行动态工作流（Workflow）时，回答�
 - 子 agent：工具组里显示为一行（「Running agent」/「Ran agent」），点开在工作台「任务」里看它的完整子转录。
 - 工作流卡：显示工作流名称、状态（「Starting workflow」/「Workflow · Completed|Failed|Stopped · {n} agents · 时长」）、每个 agent 的状态点阵和失败原因；结束后卡片保留。点卡片在工作台「任务」里打开该工作流。
 - 动态工作流需 设置 › Claude ›「对话」›「动态工作流」开着（仅有命令行的身份），开着才能用 Ultracode；「子 agent 调度偏好」随之出现。
+- 子 agent 选模型：bridge 按随版本发布的模型性价比快照（智力指数 + 每任务成本），把这个会话能派的模型排成「最难 / 难 / 常规 / 机械」四档，每档给 Claude 一个首选和一个备选；官方订阅会话里 Claude 模型按订阅等效成本算，第三方和自定义 API 按官方 API 价算。配了但快照里没有的模型标「未评分」，只在你点名时用。动态工作流里 Claude 可以直接写 `auto:top` / `auto:hard` / `auto:normal` / `auto:light`，请求时自动换成那一档的首选；工作流卡显示实际用的模型，如「Opus 5.5（自动·难）」。
 - 后台任务芯片：最后一轮状态行旁显示「{n} 个后台命令运行中」「{n} 个子 agent运行中」「{n} 个工作流运行中」等，点开工作台「任务」。
 
 ## 内嵌交互图表

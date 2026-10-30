@@ -94,7 +94,7 @@
 - **「运行状态」**（Status）：在跑的对话、内存、负载、数据盘剩余、dimensio 实例数，以及部署形态和监听地址：Muse 上是服务端形态，只监听本机端口，经 Cloudflare 隧道对外。
 - **「重启服务」**（Restart service）：**「空闲时重启」**（Restart when idle）——等没人在跑对话时重启，最多等 30 分钟；或 **「立即重启」**（Restart now）——会打断正在跑的对话，记录不丢。
 - **「最近日志」**（Recent logs）：最近几百行服务日志（重启后清空），完整日志让 Muse 用 `journalctl -u bridge` 看。
-- 「更新」那一行没有按钮，只写着「这台是 Muse 部署：在 Muse 里说「更新 bridge」…」：在 Muse 上更新跟 Muse 说「更新」就行（`../MUSE.md` 第 6 节）。
+- **「服务端版本」**（Server version）那一行写着现在的版本号，下面一行是「这台是 Muse 部署：在 Muse 里说「更新 bridge」…」，没有更新按钮：在 Muse 上更新跟 Muse 说「更新」就行（`../MUSE.md` 第 6 节）。bridge 本体在这里的「一键更新」只对 Windows 安装包和 git 部署的服务端有用，Muse 上不出现。
 
 ## 开关 agent
 

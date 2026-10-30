@@ -57,7 +57,7 @@
   const isOpen = (ph) => (ph.index in phaseOpen ? !!phaseOpen[ph.index] : (ph.counts.total > 0 && (running || agentCount <= 8)));
   // 第三方模型的友好名在模型清单里（hello 带来；没到就补拉一次）
   $effect(() => { if (!cp.modelsReady && wf && wf.phases.some((p) => p.agents.some((a) => String(a.model || '').startsWith('custom:')))) ensureCustomModels(); });
-  const modelTitle = (a) => [agentModelName(a.model), agentEffortName(a.effort), a.model].filter(Boolean).join(' · ');
+  const modelTitle = (a) => [agentModelName(a.model, a.servedModel), agentEffortName(a.effort), a.model].filter(Boolean).join(' · ');
   const toggle = (ph) => { phaseOpen[ph.index] = !isOpen(ph); };
   const dotOpts = () => (running ? { now } : undefined);
   // agent 行的 Time 列：running 且 progress 态且有 startedAt → 实时；否则 durationMs
@@ -151,7 +151,7 @@
                       <span class="ag-c ag-err" tabindex="0" title={a.error} aria-label={a.error}>Error</span>
                     {:else}
                       <!-- 模型友好名 + 档位（档位来自子 agent 转录，收轮后历史重建才补上；窄了先截档位） -->
-                      <span class="ag-c ag-model" class:dim title={modelTitle(a)}>{agentModelName(a.model)}{#if a.effort}<span class="ag-sep" aria-hidden="true">&nbsp;·&nbsp;</span><span class="ag-eff">{agentEffortName(a.effort)}</span>{/if}</span>
+                      <span class="ag-c ag-model" class:dim title={modelTitle(a)}>{agentModelName(a.model, a.servedModel)}{#if a.effort}<span class="ag-sep" aria-hidden="true">&nbsp;·&nbsp;</span><span class="ag-eff">{agentEffortName(a.effort)}</span>{/if}</span>
                       <span class="ag-c num" class:dim>{a.tokens ? fmtCompact(a.tokens) : ''}</span>
                       <span class="ag-c num r" class:dim>{agentTime(a)}</span>
                     {/if}
