@@ -51,6 +51,8 @@ export const ui = $state({
   drawerOpen: false,
   routinesOpen: false,    // the Routines (定时触发) full-screen page
   loginOpen: false,       // 登录/注册/用户信息卡（主页右上 pill 展开）
+  serverSwitcherOpen: false, // 切换服务器面板（手机 App 多服务器档案，lib/serverProfiles.js + components/ServerSwitcher.svelte）
+  serverSwitching: false, // 切换服务器的转场进行中（lib/serverSwitch.js）：主页标题让位给转场封面里的那一份
   pairScan: null,         // 手机端「扫一扫」登录网页版：null | { mode:'scan' } | { mode:'confirm', id, key }（系统相机扫到 ?pair= 直达确认卡）
   // 桌面 Dock / 命令面板要一次入场的旧契约旗子（App 接住后交给 lib/pageMorph.js，跑完放下）；手机四宫格直接调 openPage
   enterClaude: false,

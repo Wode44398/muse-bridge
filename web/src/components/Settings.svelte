@@ -48,6 +48,7 @@
   import { registerCloser } from '../lib/nav.js';
   import { swipeDismiss, spring, NAV_SPRING } from '../lib/motion.js';
   import { setServerBase, getServerBase, isOffline, onServerBaseChange } from '../lib/server.js';
+  import { canSwitchServers, activeProfile, listProfiles } from '../lib/serverProfiles.js';
   import { updateState, installPending, hasSilentUpdate, checkForUpdate, startUpdate, appVersionLine,
     platform, nativeInfo, fetchLatest, fetchServerInfo, cancelUpdate, openInstallPermission, autoUpdateEnabled, setAutoUpdateEnabled, waitingLine } from '../lib/appUpdate.js';
   import { updateInfo } from '../lib/updateStore.svelte.js';
@@ -1037,6 +1038,13 @@
   // 服务器换了地址、App 自动跟过去时（lib/server.js 地址簿）这一行要跟着刷新
   let baseTick = $state(0);
   $effect(() => onServerBaseChange(() => { baseTick++; }));
+  // 「切换服务器」行右侧：当前那台的名字，存了几台就带上台数（面板关上时重读——里面可能改了名 / 删了）
+  const srvSummary = $derived.by(() => {
+    if (ui.serverSwitcherOpen || !canSwitchServers()) return '';
+    const n = listProfiles().filter((p) => !p.pending).length;
+    const name = activeProfile()?.name || '';
+    return n > 1 ? t('{name} · 共 {n} 台', { name, n }) : name;
+  });
   const serverHost = $derived((baseTick, (getServerBase() || '').replace(/^https?:\/\//, '')) || t('同源'));
 </script>
 
@@ -1996,6 +2004,12 @@
     <button class="r" type="button" onclick={openAddr}>
       <span class="r-main"><span class="r-tx">{t('服务器地址')}</span><span class="r-d addr">{serverHost}</span>{@render chev()}</span>
     </button>
+    {#if canSwitchServers()}
+      <!-- 多服务器档案：在存过的几台服务器之间切换、添加新的（lib/serverProfiles.js） -->
+      <button class="r" type="button" onclick={() => { ui.serverSwitcherOpen = true; }}>
+        <span class="r-main"><span class="r-tx">{t('切换服务器')}</span><span class="r-d">{srvSummary}</span>{@render chev()}</span>
+      </button>
+    {/if}
     {#if isOffline()}
       <div class="r">
         <span class="r-main"><span class="r-tx">{t('当前线路')}</span><span class="r-d"><span class="conn-dot {ui.connMode}"></span>{ui.connMode === 'lan' ? t('局域网直连') : t('Cloudflare 隧道')}</span></span>

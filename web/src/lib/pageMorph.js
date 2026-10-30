@@ -409,6 +409,45 @@ const homeIcons = () => [...document.querySelectorAll('.grid .entry .ico, .ditem
 //   · 标题是共享元素：UA 按两端几何插值、贴图缩放，零重排，字不抖；
 //   · 入口图标在窗口张到它时逐个浮现。
 // square：封面方块 {x,y,w,h,r}；apply()：切到主页的状态改动（booted 等）。
+// —— 切换服务器：整个画面收进中央方块（开机揭幕倒着放）——
+// 新画面是转场封面（lib/serverSwitch.js：预载同款方块 + 光晕 + 名字），旧画面边缩小边被裁成方块窗、最后在方块里化开，
+// 像这台服务器的界面被收回成一块砖；重载后预载方块再张开成新服务器的主页，前后正好是一对。
+// 主页上的「THE BRIDGE」标题作为共享元素从左上飞回方块中央（封面里那一份），接着在封面里化开换成新品牌。
+const SERVER_SPRING = { stiffness: 190, damping: 25 };
+export function serverCollapse({ apply }) {
+  const { W, H } = vp();
+  const cx = W / 2, cy = H / 2, R = 34, S = 0.56;
+  let brand = null;
+  return run('server', {
+    spring: SERVER_SPRING,
+    vars: { '--vt-ox': cx + 'px', '--vt-oy': cy + 'px' },
+    before: () => {
+      brand = document.querySelector('.brand.show');
+      if (brand) brand.style.viewTransitionName = 'bridge-brand';
+    },
+    update: async () => {
+      if (brand) brand.style.viewTransitionName = '';
+      await apply();
+    },
+    afterUpdate: () => {
+      const nb = brand && document.querySelector('#sw-cover .sw-brand');
+      if (nb) nb.style.viewTransitionName = 'bridge-brand';
+    },
+    play: ({ spring }) => {
+      const d = spring.duration;
+      // 裁切在缩放之前生效：快照坐标里取 148/S 见方的窗，缩到 S 倍后屏幕上正好盖住封面方块
+      const hw = 74 / S;
+      anim('old(root)', [
+        { clipPath: 'inset(0px 0px 0px 0px round 0px)', transform: 'scale(1)' },
+        { clipPath: `inset(${cy - hw}px ${W - cx - hw}px ${H - cy - hw}px ${cx - hw}px round ${R / S}px)`, transform: `scale(${S})` },
+      ], { duration: d, easing: spring.easing });
+      anim('old(root)', [{ opacity: 1 }, { opacity: 1, offset: 0.5 }, { opacity: 0 }], { duration: d * 0.92, easing: EASE.fade });
+      // 封面本身（新画面）从微微后退处落定，光晕与名字跟着浮上来
+      anim('new(root)', [{ transform: 'scale(1.05)' }, { transform: 'scale(1)' }], { duration: d, easing: EASE.decel });
+    },
+  });
+}
+
 export function bootReveal({ square, apply }) {
   const { W, H } = vp();
   const q = square || { x: W / 2 - 74, y: H / 2 - 74, w: 148, h: 148, r: 34 };

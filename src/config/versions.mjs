@@ -1,9 +1,10 @@
 // apk 版本基准——【单一来源】：android/app/build.gradle 构建期从本文件解析注入
 // versionCode/versionName（不再手工双改），build-apk.ps1 出包后还会用 aapt 校验一致。
 // 每次出新 apk 时这里 +1；手机端用 /api/app/version 比对自己的 versionCode 判断「有新版」。
-export const APP_VERSION_CODE = 503;
-export const APP_VERSION_NAME = '6.90';
-export const APP_RELEASE_NOTES = '同一个手机 App 现在也能连 Muse Bridge 的服务器了：连上后界面里的产品名、默认语言自动换成那台服务器的（比如显示 Muse Bridge、跟手机语言走），换回 bridge 的服务器又会变回来。另外，手动填服务器地址时可以把别人发来的整句话直接粘进去，App 会自己找出里面的网址。';
+export const APP_VERSION_CODE = 504;
+export const APP_VERSION_NAME = '6.91';
+export const APP_RELEASE_NOTES = '手机 App 能在几台服务器之间一键切换了（比如自己电脑上的 bridge 和 Muse 上的 Muse Bridge）：长按主页左上角的标题、点标题下面的服务器胶囊，或者在 设置 › 关于 › 切换服务器 里打开面板，点一下另一台就切过去——整个界面先收进屏幕中央的方块，品牌名化开、服务器名字滚动换成新的，方块再张开成那台服务器的主页。每台服务器的登录和本地缓存各自保存，切过去不用重新登录；面板里还能看到每台的延迟、添加新服务器、改名和删除。连不上当前服务器时，顶部提示条上也有「切换服务器」按钮。';
+// v6.90 原 notes：同一个手机 App 现在也能连 Muse Bridge 的服务器了：连上后界面里的产品名、默认语言自动换成那台服务器的（比如显示 Muse Bridge、跟手机语言走），换回 bridge 的服务器又会变回来。另外，手动填服务器地址时可以把别人发来的整句话直接粘进去，App 会自己找出里面的网址。
 // v6.89 原 notes：设置 › Claude › 模型服务（自定义 API）在手机上重新做了：以前页面会被挤出屏幕右边、顶部被状态栏挡住。现在和设置页是同一套样式——每个服务一行，显示模型数和备注，右边直接开关；最后一行是「添加服务」，预设厂商也改成了列表；编辑页的输入框和按钮放大了，底部「关闭」「保存」铺满一行，好按。
 // v6.88 原 notes：Claude 的 Ultracode 和推理强度分开了（跟最新的官方桌面端一样）：点输入框右下的档位，拉条下面多了一个「Ultracode」勾选，勾上后拉条变成紫色能量效果，档位照样能拖——Low、High、Max 都能配 Ultracode，不再固定是 Extra。开着 Ultracode 时，输入框上的档名会变成紫色。它只对当前对话生效，新对话从关着开始；以前选过 Ultracode 的对话会自动变成「Extra + Ultracode」。
 // v6.87 原 notes：「扫一扫」能用超广角和长焦了：App 里的扫码改成直接调用手机相机，底部的镜头按钮现在对应手机上真实的镜头（比如 .6 超广角、1× 主摄、3× 长焦），捏合放大缩小时手机会自己换镜头，画面也更清楚；识别改在手机本地完成，对着小码、远处的码更快更稳。

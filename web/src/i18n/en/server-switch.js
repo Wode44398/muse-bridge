@@ -1,0 +1,21 @@
+// 英文界面文案 · server-switch 手机 App 多服务器档案：切换面板、主页服务器胶囊、切换转场、首屏已保存的服务器（键 = 中文原文，见 lib/i18n.js）
+export default {
+  '切换服务器': 'Switch server',
+  '新的服务器': 'New server',
+  '暂时连不上，进去后会自动重连': 'Can’t reach it right now. It will reconnect automatically.',
+  '使用中 · 连不上': 'In use · Unreachable',
+  '使用中 · 局域网直连': 'In use · LAN direct',
+  '检测中…': 'Checking…',
+  '暂时连不上': 'Can’t reach right now',
+  '{ms} 毫秒': '{ms} ms',
+  '{name}（使用中）': '{name} (in use)',
+  '切换到 {name}': 'Switch to {name}',
+  '删除 {name}': 'Delete {name}',
+  '添加服务器': 'Add server',
+  '扫码或填地址，连上另一台 bridge': 'Scan a code or enter an address to connect another Bridge server',
+  '改名只在这台手机上生效；删掉的服务器会在那边退出登录。': 'Names only change on this phone. Deleting a server signs this phone out of it.',
+  '每台服务器的登录和本地缓存各自保存，切换不用重新登录。': 'Each server keeps its own sign-in and local cache, so you don’t have to sign in again when you switch.',
+  '当前服务器：{name}，点按切换': 'Current server: {name}. Tap to switch.',
+  '或者切到已保存的服务器': 'Or switch to a saved server',
+  '{name} · 共 {n} 台': { one: '{name} · {n} server', other: '{name} · {n} servers' },
+};

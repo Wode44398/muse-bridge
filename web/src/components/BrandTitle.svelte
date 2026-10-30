@@ -7,6 +7,8 @@
   import { switchHomeTheme } from '../lib/homeTheme.js';
   import { t } from '../lib/i18n.js';
   import { brandWords } from '../lib/distro.js';
+  import { arrival } from '../lib/serverSwitch.js';
+  import { canSwitchServers } from '../lib/serverProfiles.js';
   // 两行字随发行版品牌走（本体「THE / BRIDGE」，Muse Bridge 是「MUSE / BRIDGE」）
   const [W1, W2] = brandWords();
 
@@ -20,8 +22,20 @@
   // 换场时新旧两种颜色分别在新旧快照里，由转场本身过渡，这里不必提前变色。
   const titleColor = $derived(ui.glassMode === 'B' ? '#0a0a0a' : '#ffffff');
   // 入场转场期间标题随主页一起留在主页快照里退后，不必单独隐藏。
-  const visible = $derived(mounted && (!ui.booted || ui.screen === 'home') && !ui.settingsOpen);
-  const toggle = () => switchHomeTheme(rootEl);
+  // 切换服务器的转场里，标题由转场封面里的那一份接手（lib/serverSwitch.js）
+  const visible = $derived(mounted && (!ui.booted || ui.screen === 'home') && !ui.settingsOpen && !ui.serverSwitching);
+  // 长按标题 = 切换服务器（手机 App 的多服务器档案）；长按触发后吞掉随之而来的那次点击，不换壁纸
+  let lpTimer = 0, lpFired = false, lpX = 0, lpY = 0;
+  function lpDown(e) {
+    lpFired = false;
+    if (!canSwitchServers() || !ui.booted) return;
+    lpX = e.clientX; lpY = e.clientY;
+    clearTimeout(lpTimer);
+    lpTimer = setTimeout(() => { lpFired = true; try { navigator.vibrate?.(12); } catch {} ui.serverSwitcherOpen = true; }, 480);
+  }
+  const lpCancel = () => clearTimeout(lpTimer);
+  const lpMove = (e) => { if (Math.hypot(e.clientX - lpX, e.clientY - lpY) > 10) clearTimeout(lpTimer); };
+  const toggle = () => { if (lpFired) { lpFired = false; return; } switchHomeTheme(rootEl); };
 
   // 「THE」居中位移量：用一个隐藏的「居中态」探针(26px / letter-spacing .2em) 测 THE、BRIDGE 宽度算得，
   // 而不是用当前 DOM(主页是左上态 14px / .14em)——后者字号、字距比例都不同，测出的值有偏差(iOS 字体渲染下
@@ -42,9 +56,11 @@
   });
 </script>
 
-<div class="brand" class:corner={atCornerPos} class:show={visible} class:tappable={visible} bind:this={rootEl}
+<div class="brand" class:corner={atCornerPos} class:show={visible} class:tappable={visible} class:arrive={!!arrival} bind:this={rootEl}
      style:color={titleColor}
      onclick={toggle}
+     onpointerdown={lpDown} onpointerup={lpCancel} onpointercancel={lpCancel} onpointerleave={lpCancel} onpointermove={lpMove}
+     oncontextmenu={(e) => { if (canSwitchServers()) e.preventDefault(); }}
      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }}
      role="button" tabindex="0" aria-label={t('切换壁纸主题')}
      title={t('点击切换壁纸 / 玻璃方案')}>
@@ -67,6 +83,10 @@
                 opacity var(--mo-base) var(--ea-fade), color var(--mo-hero) var(--ea-fade);
   }
   .brand.show { opacity: 1; }
+  /* 切换服务器重载来的：新品牌在封面方块中央逐行显影（接上一页旧品牌的化开，见 lib/serverSwitch.js） */
+  .brand.arrive > span { animation: brand-arrive 620ms cubic-bezier(.05,.7,.1,1) both; }
+  .brand.arrive > span + span { animation-delay: 90ms; }
+  @keyframes brand-arrive { from { opacity: 0; translate: 0 .5em; filter: blur(7px); } to { opacity: 1; translate: 0 0; filter: blur(0); } }
   .brand.tappable { pointer-events: auto; cursor: pointer; }
   /* 桌面：可点的标题得有悬停反馈，否则鼠标划过完全看不出这里能按（手机没鼠标所以一直没做）。
      注意别在这里写 transition —— .brand 那条长 transition 是「居中→左上」的飞入动画，

@@ -218,6 +218,8 @@ html[data-vt]::view-transition-new(root) {
   animation: none; mix-blend-mode: normal;
   transform-origin: var(--vt-ox, 50%) var(--vt-oy, 50%);
 }
+/* 切换服务器：旧画面收进方块，压在封面（新画面）之上 */
+html[data-vt="server"]::view-transition-old(root) { z-index: 1; }
 /* 关闭：旧画面里主页早已 display:none，只剩分页底下那层底色——整屏交给主页快照 */
 html[data-vt="close"]::view-transition-old(root) { opacity: 0; }
 /* 分页卡片：圆角裁切 + 快照居中铺满（卡片比例 ≠ 页面比例时裁掉上下，不拉伸） */

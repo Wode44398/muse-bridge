@@ -8,7 +8,10 @@
 //   无法从 PC 加载（显示占位），但对话文本与结构完整。媒体 blob 离线缓存可作为后续增强。
 // 存储用 IndexedDB（容量远大于 localStorage 的 ~5MB，适合多会话长对话）。
 
-const DB = 'bridge-chat-cache';
+// 多服务器档案（lib/serverProfiles.js）：每台服务器一个库，切过去不会先冒出上一台的会话。第一台沿用老库名。
+import { cacheNamespace } from './serverProfiles.js';
+
+const DB = 'bridge-chat-cache' + (cacheNamespace() ? '@' + cacheNamespace() : '');
 const VER = 1;
 const MESSAGE_PREFIXES = ['msg:', 'vmsg:'];
 const MAX_MESSAGE_ENTRIES = 100;
@@ -166,5 +169,5 @@ scheduleMessageTrim();
 
 // —— 登录态：小数据，且在主页启动时写入(此刻主页折射动画可能占满主线程、拖慢 IndexedDB 异步回调)，
 //    故用【同步】的 localStorage 更稳妥——保证离线放行一定能拿到身份，不被主页动画饿死。
-export const cacheMe = (me) => { try { localStorage.setItem('bridge-cache-me', JSON.stringify(me)); } catch {} };
+export const cacheMe = (me) => { try { if (!window.__bridgeStoreFrozen) localStorage.setItem('bridge-cache-me', JSON.stringify(me)); } catch {} };
 export const getCachedMe = () => { try { const s = localStorage.getItem('bridge-cache-me'); return s ? JSON.parse(s) : null; } catch { return null; } };

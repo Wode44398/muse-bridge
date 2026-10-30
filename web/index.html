@@ -25,9 +25,51 @@
      不再先闪一帧分页的灰底。App 开机结束（ui.booted）时撤掉。 -->
 <style>html[data-booting]{background:#0a0a0a}html[data-booting="A"]{background:#fff}html[data-booting] body{background:transparent}</style>
 <script>(function(){try{var g=localStorage.getItem('bridge-glass')||'B';document.documentElement.setAttribute('data-booting',g==='A'?'A':'B');}catch(e){document.documentElement.setAttribute('data-booting','B');}})();</script>
+<!-- 切换服务器的转场封面（lib/serverSwitch.js）：和开机预载同一个「方块封面」，外加目标服务器的光晕与名字。
+     切走时由 App 画出来，整页重载后由下面 body 里的脚本在第一帧就原样重建，接着交给预载方块张开成新主页——
+     重载那一下不露底。样式写在这里而不是 app.css：重载后 app.css 还没到，封面就得是对的。 -->
+<style>
+#sw-cover{--sw-bgc:#0a0a0a;--sw-blk:#fff;--sw-ink:#0a0a0a;--sw-cap:rgba(255,255,255,.82);--sw-pill:rgba(255,255,255,.09);--sw-shine:rgba(0,0,0,.07)}
+#sw-cover.sw-a{--sw-bgc:#fff;--sw-blk:#0a0a0a;--sw-ink:#fff;--sw-cap:rgba(0,0,0,.74);--sw-pill:rgba(0,0,0,.06);--sw-shine:rgba(255,255,255,.16)}
+#sw-cover>*{position:fixed;pointer-events:none}
+#sw-cover .sw-bg{inset:0;background:var(--sw-bgc);z-index:199}
+#sw-cover .sw-halo{top:50%;left:50%;width:340px;height:340px;margin:-170px 0 0 -170px;z-index:204;opacity:0;transition:opacity .5s cubic-bezier(.4,0,.6,1)}
+#sw-cover.glow .sw-halo{opacity:1}
+#sw-cover .sw-halo i{position:absolute;inset:0;border-radius:50%;background:radial-gradient(closest-side,var(--sw-c) 0%,color-mix(in srgb,var(--sw-c) 45%,transparent) 42%,transparent 100%);opacity:.55;animation:sw-breathe 2.6s ease-in-out var(--sw-t,0ms) infinite}
+#sw-cover .sw-block{top:50%;left:50%;width:148px;height:148px;margin:-74px 0 0 -74px;border-radius:34px;background:var(--sw-blk);box-shadow:0 24px 70px rgba(0,0,0,.28);overflow:hidden;z-index:205}
+#sw-cover .sw-block i{position:absolute;top:-20%;bottom:-20%;left:0;width:70%;background:linear-gradient(100deg,transparent 0%,var(--sw-shine) 45%,color-mix(in srgb,var(--sw-c) 30%,transparent) 50%,var(--sw-shine) 55%,transparent 100%);transform:translateX(-140%) skewX(-12deg);opacity:0}
+#sw-cover.glow .sw-block i{opacity:1;animation:sw-sweep 1.9s cubic-bezier(.4,0,.2,1) var(--sw-t,0ms) infinite}
+#sw-cover .sw-brand{top:50%;left:50%;transform:translate(-50%,-50%);z-index:10004;display:flex;flex-direction:column;align-items:center;gap:1px;padding-left:.2em;color:var(--sw-ink);font-family:var(--serif-stack,Georgia,serif);font-weight:300;font-size:26px;line-height:1.16;letter-spacing:.2em;text-shadow:0 1px 10px rgba(0,0,0,.5);white-space:nowrap}
+#sw-cover .sw-brand span{display:block}
+#sw-cover .sw-cap{top:calc(50% + 96px);left:0;right:0;z-index:206;display:flex;flex-direction:column;align-items:center;gap:8px;font:500 13px/1.2 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--sw-cap);letter-spacing:.02em}
+#sw-cover .sw-pill{position:relative;height:30px;min-width:60px;padding:0 14px;border-radius:15px;background:var(--sw-pill);overflow:hidden;display:flex;align-items:center;justify-content:center}
+#sw-cover .sw-name{display:flex;align-items:center;gap:8px;white-space:nowrap}
+#sw-cover .sw-name+.sw-name{position:absolute}
+#sw-cover .sw-dot{width:8px;height:8px;border-radius:50%;background:var(--c,var(--sw-c));box-shadow:0 0 10px var(--c,var(--sw-c))}
+#sw-cover .sw-note{font-size:12px;font-weight:400;opacity:.62;min-height:15px}
+#sw-cover.sw-out .sw-bg{z-index:10000}#sw-cover.sw-out .sw-halo{z-index:10001}#sw-cover.sw-out .sw-block{z-index:10002}#sw-cover.sw-out .sw-cap{z-index:10003}
+@keyframes sw-breathe{0%,100%{transform:scale(.86);opacity:.42}50%{transform:scale(1.08);opacity:.72}}
+@keyframes sw-sweep{0%{transform:translateX(-140%) skewX(-12deg)}62%,100%{transform:translateX(240%) skewX(-12deg)}}
+@media (prefers-reduced-motion:reduce){#sw-cover .sw-halo i,#sw-cover.glow .sw-block i{animation:none}}
+</style>
 </head>
 <body>
 <div id="app"></div>
+<!-- 转场封面的唯一画法（切走时 lib/serverSwitch.js 调 build，重载后这里按 sessionStorage 的交接条重建）。名字是用户起的，只走 textContent。 -->
+<script>window.__bridgeSwitchCover=(function(){var el=null;
+function mk(t,c,p){var e=document.createElement(t);if(c)e.className=c;if(p)p.appendChild(e);return e;}
+function nameEl(n,c){var s=mk('span','sw-name');var d=mk('i','sw-dot',s);if(c)d.style.setProperty('--c',c);mk('b',null,s).textContent=n||'';return s;}
+function drop(){if(el){el.remove();el=null;}}
+function build(o){drop();el=mk('div',o.glass==='A'?'sw-a':'');el.id='sw-cover';el.setAttribute('aria-hidden','true');
+if(o.out)el.classList.add('sw-out');if(o.glow)el.classList.add('glow');
+el.style.setProperty('--sw-c',o.color||'#5b8def');if(o.t0)el.style.setProperty('--sw-t',(o.t0-Date.now())+'ms');
+mk('div','sw-bg',el);mk('i',null,mk('div','sw-halo',el));mk('i',null,mk('div','sw-block',el));
+if(o.brand){var b=mk('div','sw-brand',el);mk('span',null,b).textContent=o.brand[0]||'';mk('span',null,b).textContent=o.brand[1]||'';}
+var cap=mk('div','sw-cap',el);mk('div','sw-pill',cap).appendChild(nameEl(o.name,o.color));mk('div','sw-note',cap).textContent=o.note||'';
+document.body.appendChild(el);return el;}
+try{var s=JSON.parse(sessionStorage.getItem('bridge-switch')||'null');sessionStorage.removeItem('bridge-switch');
+if(s&&Date.now()-s.at<20000){window.__bridgeSwitchArrive=s;build({glass:s.glass,name:s.name,color:s.color,t0:s.t0,glow:true});setTimeout(drop,8000);}}catch(e){}
+return{build:build,drop:drop,get:function(){return el;},nameEl:nameEl};})();</script>
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>

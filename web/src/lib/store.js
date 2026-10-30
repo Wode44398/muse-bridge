@@ -11,6 +11,9 @@ export function storeGet(k) {
 }
 
 export function storeSet(k, v) {
+  // 正在切换服务器（lib/serverProfiles.js commitSwitch 已写好目标服务器的键、页面马上重载）：
+  // 还在路上的回调（令牌续期、地址簿、局域网探活）别把旧服务器的值又写回去
+  try { if (window.__bridgeStoreFrozen) return; } catch {}
   try {
     if (window.AndroidStore) { if (v == null) window.AndroidStore.remove(k); else window.AndroidStore.set(k, v); }
   } catch {}

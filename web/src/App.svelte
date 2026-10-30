@@ -31,7 +31,11 @@
   import { loadPage } from './modules/pages.js';
   import BrandTitle from './components/BrandTitle.svelte';
   import ServerConfig from './components/ServerConfig.svelte';
-  import { isOffline, getServerBase, startLanAutoSwitch, onConnModeChange, initRoute, onReachabilityChange, startReachabilityWatch, offlineSince, apiUrl } from './lib/server.js';
+  import { isOffline, getServerBase, startLanAutoSwitch, onConnModeChange, initRoute, onReachabilityChange, startReachabilityWatch, offlineSince, apiUrl, onServerBaseChange } from './lib/server.js';
+  import { syncActiveProfile, canSwitchServers, listProfiles } from './lib/serverProfiles.js';
+  import { arrival, finishArrival } from './lib/serverSwitch.js';
+  import ServerSwitcher from './components/ServerSwitcher.svelte';
+  import ServerChip from './components/ServerChip.svelte';
   import { syncDistro } from './lib/distro.js';
   import { cacheMe, getCachedMe } from './lib/cache.js';
   import Settings from './components/Settings.svelte';
@@ -66,6 +70,8 @@
   });
   // 红字报错提示的「问 Claude」：Claude 分页对这个人开着才出按钮（lib/toast.svelte.js）
   $effect(() => { setErrorToastAction((me.kind === 'admin' || me.kind === 'user') && screenOn('claude') ? askClaudeAboutError : null); });
+  // 切换服务器重载来的：没有预载接手封面时（单页模式、首屏连接页）启动完由这里收场；预载接手过的这里是空操作
+  $effect(() => { if (arrival && ui.booted) finishArrival(); });
   // 单页模式没有主页右上的登录胶囊：启动完还没登录就直接弹登录框
   let loginNudged = false;
   $effect(() => {
@@ -214,6 +220,9 @@
         else { needConfig = true; bootSingle(); return; }
       }
     }
+    // 手机 App 多服务器档案：把这台连着的服务器（地址、登录、品牌）记进档案；服务器自己换了地址时跟着记
+    syncActiveProfile();
+    onServerBaseChange(() => syncActiveProfile());
     bootSingle();
     // 恢复消息流：有在跑的轮 → 先补历史再接直播；否则自动加载上次会话（含杀后台
     // 期间完成的结果）。离线时自动回落本地缓存。
@@ -356,6 +365,8 @@
 
   <!-- 持久品牌标题（全程唯一）：预载中央→左上，之后留在主页左上 -->
   <BrandTitle />
+  <!-- 标题下的服务器胶囊（手机 App 存了多台服务器时）：点开切换面板 -->
+  <ServerChip />
 {:else if !needConfig}
   <!-- 单页模式的登录：没登录时压在那一页上（启动自动打开 / 退出后 / 账户菜单「登录」） -->
   <LoginDialog />
@@ -382,6 +393,9 @@
     {#if srvProcCtl}
       <button class="ob-btn" onclick={() => srvProcCtl.open()}>{t('服务控制台')}</button>
     {/if}
+    {#if canSwitchServers() && listProfiles().filter((p) => !p.pending).length > 1}
+      <button class="ob-btn" onclick={() => { ui.serverSwitcherOpen = true; }}>{t('切换服务器')}</button>
+    {/if}
   </div>
 {/if}
 
@@ -399,6 +413,9 @@
 
 <!-- 手机端「扫一扫」登录网页版：全屏取景/确认卡（账户卡入口，或系统相机扫到 ?pair= 直达） -->
 {#if ui.pairScan}<PairScan />{/if}
+
+<!-- 切换服务器面板（手机 App 多服务器档案）：主页标题胶囊 / 长按标题 / 设置「关于」/ 离线提示条 / 首屏都能打开 -->
+{#if ui.serverSwitcherOpen}<ServerSwitcher />{/if}
 
 <!-- 设置「Agent」页（admin：各 agent 开关 / 能否运行 / 认证；同样盖在设置页之上） -->
 {#if ui.agentsOpen}<AgentsPage />{/if}

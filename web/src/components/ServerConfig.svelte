@@ -13,6 +13,11 @@
   import { getServerBase, setServerBase } from '../lib/server.js';
   import { normalizeServerAddress, looksLikeCode, looksLikeDigits, redeemCode, loginWithToken, applyConnect, probeServer, connectErrorText } from '../lib/connectPair.js';
   import { t } from '../lib/i18n.js';
+  import { listProfiles, monogram } from '../lib/serverProfiles.js';
+  import { switchServer } from '../lib/serverSwitch.js';
+
+  // 手机 App 存过别的服务器（多服务器档案）：正在添加新的、或者这台连不上时，可以直接切回去
+  const saved = listProfiles().filter((p) => !p.active && !p.pending);
 
   // 地址失效（以前填过）时直接展开手填，方便改地址
   let manual = $state(!!getServerBase());
@@ -67,6 +72,16 @@
       <p class="sc-note">{t('配对码和地址显示在电脑上的二维码旁边，3 分钟内有效。不填配对码也能先连上，进去再登录。')}</p>
       <button class="sc-btn ghost" onclick={connect} disabled={busy}>{busy ? t('连接中…') : t('连接')}</button>
     {/if}
+    {#if saved.length}
+      <div class="sc-sep"><span>{t('或者切到已保存的服务器')}</span></div>
+      <div class="sc-saved">
+        {#each saved as p (p.id)}
+          <button class="sc-srv" style:--c={p.color} onclick={() => switchServer(p.id)} disabled={busy}>
+            <span class="sc-orb">{monogram(p.name)}</span><span class="sc-nm">{p.name}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -86,5 +101,12 @@
   .sc-btn:active { transform: scale(.98); }
   .sc-link { align-self: center; padding: 8px 12px; font-size: 14.5px; color: #8fb2ff; background: none; }
   .sc-sep { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; color: #6c6c6c; font-size: 12.5px; }
+  .sc-saved { display: flex; flex-wrap: wrap; gap: 8px; }
+  .sc-srv { display: flex; align-items: center; gap: 9px; height: 44px; max-width: 100%; padding: 0 16px 0 7px; border-radius: 22px;
+    background: rgba(255,255,255,.08); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.16); color: #f2f2f2; font-size: 15px; font-weight: 600; }
+  .sc-srv:active { transform: scale(.97); }
+  .sc-orb { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; font-weight: 700; color: #fff;
+    background: radial-gradient(circle at 32% 26%, color-mix(in srgb, var(--c) 45%, #fff), var(--c) 60%); }
+  .sc-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sc-sep::before, .sc-sep::after { content: ''; flex: 1; height: .5px; background: rgba(255,255,255,.14); }
 </style>

@@ -20,6 +20,7 @@
   import { DUR, reduced } from '../lib/motion.js';
   import { canMorph, bootReveal, homeWallpaperReady } from '../lib/pageMorph.js';
   import ParticleReveal from './ParticleReveal.svelte';
+  import { arrival, arrivalHold, dropSwitchCover } from '../lib/serverSwitch.js';
   let { onDone } = $props();
   const glassB = ui.glassMode === 'B';
   let pr, preEl;
@@ -69,7 +70,7 @@
       else startShow();
     };
 
-    if (reduced()) { ui.preloadPhase = 'expand'; ui.revealIcons = true; finish(); return; }
+    if (reduced()) { dropSwitchCover(); ui.preloadPhase = 'expand'; ui.revealIcons = true; finish(); return; }
 
     essentials().then(() => decide(true));
     timers.push(setTimeout(() => decide(false), GRACE));
@@ -81,14 +82,17 @@
     // 时整段揭幕交给 bootReveal（快照上做：窗口张开 + 景深落定 + 标题共享元素飞往左上）。
     async function startFast() {
       await homeWallpaperReady(450);
+      // 切换服务器重载来的：封面（光晕 + 名字）多停一会儿，等新品牌在方块中央显影完再张开（lib/serverSwitch.js）
+      if (arrival) await arrivalHold();
       try { await Promise.race([preEl?.querySelector('.block')?.getAnimations?.()[0]?.finished, new Promise((r) => setTimeout(r, 260))]); } catch {}
       if (done) return;
       if (canMorph()) {
         const b = preEl?.querySelector('.block')?.getBoundingClientRect();
         const square = b && b.width > 1 ? { x: b.left, y: b.top, w: b.width, h: b.height, r: 34 } : null;
-        bootReveal({ square, apply: () => { ui.preloadPhase = 'expand'; if (glassB) ui.revealIcons = true; finish(); } });
+        bootReveal({ square, apply: () => { dropSwitchCover(); ui.preloadPhase = 'expand'; if (glassB) ui.revealIcons = true; finish(); } });
         return;
       }
+      dropSwitchCover();
       ui.preloadPhase = 'expand';
       if (glassB) {
         // 镂空窗直接揭主页：本层背景转透明（四周由方块的 9999px 黑环接管，肉眼无感），
@@ -105,6 +109,7 @@
       // 粒子舞台自己也要备料；备好即开演，仍有硬兜底
       prReady.then(() => {
         if (done) return;
+        dropSwitchCover();
         ui.preloadPhase = 'expand';
         pr?.begin();
       });
