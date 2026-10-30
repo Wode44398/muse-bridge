@@ -88,15 +88,19 @@ export function dispatchNudge({ on, text = '', custom = null, catalog = [], rout
     const meta = [m.provider, fmtCtx(m.contextWindow) && '上下文 ' + fmtCtx(m.contextWindow), m.vision ? '看图' : '', m.efforts.length ? '档位 ' + m.efforts.join('/') : '不分档'].filter(Boolean).join('，');
     return `  - ${m.name} — ${m.label}（${meta}）`;
   });
+  // 破折号左边是写进 agent() 的 id、右边是显示名。不说明的话 Claude 给用户列分工表时照抄 custom:p-xxxx:… 原始 id（10-30 宣传片录屏实遇）。
+  const naming = list.length
+    ? `  每行破折号左边是写进 agent() 的模型名，右边是显示名。跟用户说话、列分工表、汇报结果时一律用显示名（如「${catalog[0].label}」，Claude 模型说 Sonnet 5.5、Haiku 5.5 这样的名字），custom:<服务>:<型号> 这类 id 只写进代码，不要写给用户看。`
+    : '';
   if (custom) {
     lines.push('· 模型：动态工作流的 agent(prompt, { model }) 可以写下面任意一个模型名（照抄；重名的写 custom:<服务>:<型号>），请求会自动转到对应的服务；'
       + `Agent 工具的 model 只能填别名：haiku = ${custom.small}，sonnet / opus = 主会话模型 ${custom.main}。effort 会自动换算成各模型自己的档位。`);
-    lines.push(...(list.length ? list : ['  （没有别的可用模型）']));
+    lines.push(...(list.length ? [...list, naming] : ['  （没有别的可用模型）']));
   } else if (routed && list.length) {
     lines.push('· 模型：Claude 的 haiku 快且便宜（检索、机械活），sonnet 做常规实现，opus 留给难题；Agent 工具的 model 只能填这几个别名。');
     lines.push('  动态工作流的 agent(prompt, { model }) 还可以写下面任意一个第三方模型名（照抄；重名的写 custom:<服务>:<型号>），请求会自动转到对应的服务，effort 自动换算成它自己的档位。'
       + '注意它的上下文窗口可能比主会话小，别给它塞超长的材料。');
-    lines.push(...list);
+    lines.push(...list, naming);
   } else {
     lines.push('· 模型：haiku 快且便宜（检索、机械活），sonnet 做常规实现，opus 留给难题。');
     if (list.length) lines.push('  设置里配置的第三方模型只有主会话本身是第三方模型时才能派给子 agent；这一轮主会话是 Claude 官方模型，偏好里点名的第三方模型改用最接近的 Claude 别名。');

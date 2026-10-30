@@ -12,6 +12,7 @@ import { api } from './api.js';
 import { busOn } from './bus.js';
 import { me } from './state.svelte.js';
 import { t } from './i18n.js';
+import { modelLabel } from './toolVerbs.js';
 
 export const cp = $state({
   ok: false,          // 拿到过完整配置（= 当前身份能用自定义 API）：设置入口显不显示看它
@@ -114,6 +115,35 @@ export async function providerLog(id) {
 
 export const isCustomModel = (id) => typeof id === 'string' && id.startsWith('custom:');
 export const customModelInfo = (id) => cp.models.find((m) => m.id === id) || null;
+
+// —— 子 agent / 工作流 agent 的模型显示名（10-30）——
+// 工作流 progress 里的 model 是 Claude 写进 agent() 的原样字符串：custom:<服务>:<型号>、裸型号 id（deepseek-v4-pro）
+// 或 Claude 的 id / 别名。自定义模型用设置里的名字（「DeepSeek-V4-Pro」），清单里找不到（服务关了 / 不共享了）
+// 只留型号段；Claude 的走 modelLabel（claude-sonnet-5-5 → Sonnet 5.5）。不要把 custom:p-xxxx: 露给用户。
+const CLAUDE_ALIAS = /^(claude-|opus|sonnet|haiku|fable)/i;
+export function agentModelName(id) {
+  const s = typeof id === 'string' ? id.trim() : '';
+  if (!s) return '';
+  if (isCustomModel(s)) {
+    const hit = customModelInfo(s);
+    return (hit && hit.name) || s.split(':').slice(2).join(':') || s;
+  }
+  if (CLAUDE_ALIAS.test(s)) return modelLabel(s) || s;
+  const low = s.replace(/\[1m\]$/i, '').toLowerCase();
+  const hits = cp.models.filter((m) => m.id.split(':').slice(2).join(':').toLowerCase() === low);
+  return hits.length === 1 && hits[0].name ? hits[0].name : s;
+}
+const EFFORT_NAME = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
+export const agentEffortName = (e) => (typeof e === 'string' && e ? EFFORT_NAME[e] || e : '');
+/** 一组 agent 的模型构成（按首次出现排序）：[{ name, count }]——紧凑卡那一行「DeepSeek-V4-Pro ×2 · Sonnet 5.5 ×2」。 */
+export function agentModelMix(agents) {
+  const out = new Map();
+  for (const a of agents || []) {
+    const n = agentModelName(a && a.model);
+    if (n) out.set(n, (out.get(n) || 0) + 1);
+  }
+  return [...out].map(([name, count]) => ({ name, count }));
+}
 /** 能不能开 fast mode：官方模型看 caps 支持表；自定义模型看服务端给的 fast（官方 api.anthropic.com + 支持的 Opus 才有）。 */
 export const modelSupportsFast = (id, capsData) => (isCustomModel(id) ? !!customModelInfo(id)?.fast : (capsData?.claude?.fast || []).includes(id));
 

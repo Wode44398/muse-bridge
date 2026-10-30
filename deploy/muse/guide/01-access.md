@@ -106,6 +106,7 @@
 ## 电脑上用 Windows 桌面客户端
 
 - bridge 的 Windows 桌面客户端可以连这台服务器，在客户端里填公网地址、登录即可。
+- **下载**：在电脑浏览器里打开地址并登录，进 **「设置 → 关于」**（Settings → About）→ **「下载 App」**（Download the apps）一组 → **「Windows 桌面客户端」**（Windows desktop app）那一行点 **「下载」**（Download）。安装包在 GitHub 上，点了会转到 GitHub 下载。同一组里也有 **「安卓 App」**（Android app）的下载。
 - **只有绑了自己域名（固定地址）时才有完整的桌面体验**：标题栏、快问浮窗、把这台电脑登记成设备让 Claude 操作（见 07-settings.md「设备」）。用临时地址时客户端只当一个网页窗口用。
 - 客户端里的设置长得和网页不一样（左边一列分区），分区对应关系见 07-settings.md。
 

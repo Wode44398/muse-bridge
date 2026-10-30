@@ -18,6 +18,17 @@ export default {
   '已开始：{name} 正在下载 v{v}，下好后等所有对话跑完自动安装': 'Started: {name} is downloading v{v} and installs it automatically after all conversations finish',
   '更新没能开始': 'Couldn’t start the update',
 
+  // 网页「关于 › 下载 App」
+  '下载 App': 'Download the apps',
+  'Windows 桌面客户端': 'Windows desktop app',
+  '安卓 App': 'Android app',
+  '去发布页': 'Release page',
+  '暂时查不到': 'Couldn’t check right now',
+  '这台服务器没有可发的版本': 'This server has no build to hand out',
+  '这台服务器上还没有可发的安装包，可以去发布页下载。': 'This server doesn’t have installers to hand out yet. You can download them from the release page.',
+  '和这台服务器同一次发布（v{v}）：装好后打开，登录这台服务器即可。': 'Same release as this server (v{v}). After installing, open it and sign in to this server.',
+  '版本和这台服务器对齐：装好后打开，登录这台服务器即可。': 'Matched to this server’s version. After installing, open it and sign in to this server.',
+
   // 服务端回来的说明（tr）
   '这台服务器由那台电脑上的桌面客户端托管，但客户端现在没连上：在那台电脑上打开桌面客户端，「设置 › 连接与更新 › 软件更新」里更新（服务端随客户端安装包一起换）':
     'This server is managed by the desktop app on its computer, but the app isn’t connected right now. Open the desktop app on that computer and update in Settings › Connection & updates › Software Update (the server is updated along with the app).',

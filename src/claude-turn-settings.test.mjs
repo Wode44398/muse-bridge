@@ -170,5 +170,29 @@ test('子 agent 调度偏好：随设置存取、超长拒收；工作流关着�
   assert.match(routed, /- mimo-v2\.6-flash — MiMo/);
   assert.match(routed, /Agent 工具的 model 只能填这几个别名/);
   assert.doesNotMatch(routed, /最接近的 Claude 别名/);
+  // 有清单就交代 id / 显示名的分工：对用户只说显示名（10-30 录屏里分工表写成 custom:p-xxxx:… 原始 id）
+  for (const s of [cus, routed]) assert.match(s, /一律用显示名（如「MiMo」/);
+  assert.doesNotMatch(off, /一律用显示名/);
   S.setClaudeSettings(admin, { subagentDispatch: null });
+});
+
+test('工作流 agent 的档位从子 agent 转录的 api-request 行补', async () => {
+  const { annotateWorkflowEfforts } = await import('./runtime/tool-summary.mjs');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const sub = path.join(tmp, 'sess', 'subagents');
+  mkdirSync(path.join(sub, 'workflows', 'wf_1'), { recursive: true });
+  writeFileSync(path.join(sub, 'workflows', 'wf_1', 'agent-a1.jsonl'), [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi "output_config":{"effort":"max"}' } }),
+    JSON.stringify({ type: 'api-request', params: { model: 'custom:p-1:deepseek-v4-pro', output_config: { effort: 'medium' } } }),
+  ].join('\n') + '\n');
+  const out = annotateWorkflowEfforts([
+    { type: 'workflow_phase', index: 0, title: 'Write' },
+    { type: 'workflow_agent', index: 0, agentId: 'a1', model: 'custom:p-1:deepseek-v4-pro' },
+    { type: 'workflow_agent', index: 1, agentId: 'gone', model: 'sonnet' },
+    { type: 'workflow_agent', index: 2, agentId: '../x', model: 'sonnet' },
+  ], sub);
+  assert.equal(out[1].effort, 'medium');   // 用户正文里长得像的不算，只认 api-request 行
+  assert.equal(out[2].effort, undefined);
+  assert.equal(out[3].effort, undefined);
+  assert.equal(annotateWorkflowEfforts(undefined, sub), undefined);
 });

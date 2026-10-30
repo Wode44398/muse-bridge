@@ -4,7 +4,7 @@
 // 不一样（前端 mergeMessages 对账时整段替换闪屏）。2026-09-02 对齐 claude.ai /code 时把这些规则抽到
 // 这里：哪些工具露成工具行、行上那句摘要怎么取、条目带哪些【安全】输入字段、Workflow 脚本的 meta
 // 怎么抠、后台任务完成通知 <task-notification> 怎么解析、工作流 .output 怎么读——全在这一个模块。
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, openSync, readSync, closeSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -233,4 +233,43 @@ export function readWorkflowOutput(file) {
       tokens: n(j.totalTokens), toolCalls: n(j.totalToolCalls), agentCount: n(j.agentCount),
     };
   } catch { return null; }
+}
+
+// 工作流 agent 的推理强度：workflow_progress 快照不带，但 CLI 2.1.311 起子 agent 转录里落 api-request 行，
+// params.output_config.effort 就是主会话给这个 agent 定的档（第三方模型由代理再换算成它自己的档位）。
+// 转录在 <会话>/subagents/workflows/<wf>/agent-<id>.jsonl；只读文件头 512KB，找第一条带档位的 api-request。
+const EFFORT_RE = /"output_config":\{[^{}]*?"effort":"([a-z]+)"/;
+const HEAD_BYTES = 512 * 1024;
+export function agentEffortFromTranscript(file) {
+  let fd;
+  try {
+    fd = openSync(file, 'r');
+    const buf = Buffer.alloc(HEAD_BYTES);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    for (const line of buf.toString('utf8', 0, n).split('\n')) {
+      if (!line.includes('"type":"api-request"')) continue;
+      const m = EFFORT_RE.exec(line);
+      if (m) return m[1];
+    }
+  } catch { /* 文件不在 / 读不了：没有档位 */ } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* ignore */ } }
+  return '';
+}
+/** 给 progress 里的 workflow_agent 补 effort（subagentsDir = <会话>/subagents）；读不到的原样，返回新数组。 */
+export function annotateWorkflowEfforts(progress, subagentsDir) {
+  if (!Array.isArray(progress) || !subagentsDir) return progress;
+  let wfDirs = null;
+  const locate = (id) => {
+    if (wfDirs === null) { try { wfDirs = readdirSync(path.join(subagentsDir, 'workflows')).slice(0, 500); } catch { wfDirs = []; } }
+    for (const d of wfDirs) {
+      const f = path.join(subagentsDir, 'workflows', d, 'agent-' + id + '.jsonl');
+      try { if (statSync(f).isFile()) return f; } catch { /* 不在这个工作流目录 */ }
+    }
+    return '';
+  };
+  return progress.map((e) => {
+    if (!e || e.type !== 'workflow_agent' || e.effort || typeof e.agentId !== 'string' || !/^[\w-]{1,64}$/.test(e.agentId)) return e;
+    const f = locate(e.agentId);
+    const effort = f ? agentEffortFromTranscript(f) : '';
+    return effort ? { ...e, effort } : e;
+  });
 }

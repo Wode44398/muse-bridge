@@ -45,7 +45,7 @@ import { contextFor } from '../runtime/identity.mjs';
 import { classifyError, limitNotice } from '../runtime/status.mjs';
 import { planRecordFor } from '../runtime/permissions.mjs';   // 计划卡的结论 / 批准时选的目标模式（历史里的计划卡）
 // 工具行/任务卡规则与直播端（agents/claude.mjs）共用一份——直播与重开必须一致。
-import { toolShown, toolJoins, toolSummary, toolInputSubset, workflowNameFromInput, workflowMetaFromScript, parseTaskNotification, readWorkflowOutput, clip, COMPACT_TOOL, compactMeta } from '../runtime/tool-summary.mjs';
+import { toolShown, toolJoins, toolSummary, toolInputSubset, workflowNameFromInput, workflowMetaFromScript, parseTaskNotification, readWorkflowOutput, annotateWorkflowEfforts, clip, COMPACT_TOOL, compactMeta } from '../runtime/tool-summary.mjs';
 import { isVizTool, widgetSegFromToolUse, applyWidgetResult } from '../mcp/visualize.mjs';
 
 function extractText(content) {
@@ -583,7 +583,8 @@ function makeHistoryParser(file, opts = {}) {
         // 工作流的 .output（JSON，保留期不可靠）：逐 agent 进度 + 最终结果；读不到就只有通知里的状态/摘要
         const o = readWorkflowOutput(n.outputFile);
         if (o) {
-          if (o.progress) t.progress = o.progress;
+          // 逐 agent 档位不在快照里，从子 agent 转录补（<会话>.jsonl 旁边的 <会话>/subagents）
+          if (o.progress) t.progress = annotateWorkflowEfforts(o.progress, file.replace(/\.jsonl$/i, '') + path.sep + 'subagents');
           if (o.result != null) t.result = o.result;
           if (!t.usage && (o.tokens || o.toolCalls)) t.usage = { tokens: o.tokens, toolUses: o.toolCalls, ms: 0 };
         }

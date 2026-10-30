@@ -4,7 +4,8 @@
   //（种类 · 状态 · 时长 / 模型 · tokens · tool uses · 最近工具 · View transcript）+ 展开区
   //（prompt / 输出摘要 / 错误）。工作流走 WorkflowDetail（详细卡），不走这条。
   import { toolTaskStatus, toolTaskTitle, toolTaskKind, taskNoun } from '../../lib/taskModel.js';
-  import { modelLabel, fmtCompact, fmtDurPanel } from '../../lib/toolVerbs.js';
+  import { fmtCompact, fmtDurPanel } from '../../lib/toolVerbs.js';
+  import { agentModelName } from '../../lib/claudeProviders.svelte.js';
   import { glyph } from '../../lib/claudeIcons.js';
   import { t, tr } from '../../lib/i18n.js';
 
@@ -37,7 +38,7 @@
     const ms = (task && task.usage && task.usage.ms) || (task && task.endedAt && task.startedAt ? task.endedAt - task.startedAt : 0) || tool.ms || 0;
     return ms > 0 ? fmtDurPanel(ms) : '';
   });
-  const modelText = $derived(task && task.model ? (modelLabel(task.model) || task.model) : '');
+  const modelText = $derived(task && task.model ? agentModelName(task.model) : '');
   const tokens = $derived(task && task.usage ? task.usage.tokens : 0);
   const toolUses = $derived(task ? (task.usage ? task.usage.toolUses : task.toolCount) : 0);
   const lastTool = $derived(running && task ? (task.lastTool || task.latestToolName || '') : '');

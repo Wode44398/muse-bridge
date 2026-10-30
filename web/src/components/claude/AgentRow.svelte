@@ -14,6 +14,7 @@
   import { untrack } from 'svelte';
   import { openTaskDetail } from '../../lib/dock.svelte.js';
   import { toolVerb, mcpDisplayName, parseModel, morphText } from '../../lib/toolVerbs.js';
+  import { agentModelName } from '../../lib/claudeProviders.svelte.js';
   import { taskRunning } from '../../lib/taskModel.js';
   import { glyph, iconSvg } from '../../lib/claudeIcons.js';
 
@@ -58,7 +59,13 @@
   const activity = $derived(H && task && task.toolCount > 0 ? { latestToolName: task.latestToolName || '', toolCount: task.toolCount } : null);
   const started = $derived(!!task && (task.toolCount > 0 || (Array.isArray(task.entries) && task.entries.length > 0)));
   // 模型短名（官方 te：子 agent 帧的 message.model / 历史 resolvedModel），有就一直显示
-  const modelName = $derived.by(() => { const p = task && task.model ? parseModel(task.model) : null; return p ? p.base : ''; });
+  // 第三方模型（自定义 API 会话的子 agent）用设置里的名字，别把 custom:p-xxxx: 拆成乱码
+  const modelName = $derived.by(() => {
+    const m = task && task.model ? String(task.model) : '';
+    if (!m) return '';
+    const p = /^(claude-|opus|sonnet|haiku|fable)/i.test(m) ? parseModel(m) : null;
+    return p ? p.base : agentModelName(m);
+  });
   const metaIsLink = $derived(/^https?:\/\//i.test(String(d.meta || '')));
   // 形态 A 判定（官方 pe）：非分组、显示为运行中、无子活动、有 description 且不是链接/代码
   const card = $derived(!inGroup && V && !started && !!d.meta && !metaIsLink && !d.metaIsCode && !d.metaIsPath);

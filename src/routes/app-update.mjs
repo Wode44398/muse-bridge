@@ -4,6 +4,11 @@
 //   GET /api/app/download    —— 需登录（Bearer / cookie / ?token=）：本机文件流式 + Range；镜像 / 发布页 302 过去
 //   GET /download/android    —— 手机浏览器扫码下载 App 的入口（完成页、设置「连接与更新」的二维码指向它）：单人服务器免登录
 //                               （apk 里只有前端，和 / 下发的页面是同一份公开内容），多人服务器要登录；没有包时回一页人话
+//   GET /api/app/desktop     —— 需登录：网页设置「关于 › 下载 App」用，这台服务器能发的 Windows 桌面客户端（版本 / 大小 / 是否跟随服主版本）
+//   GET /download/windows    —— 需登录（Bearer / cookie / ?token=）：网页一键下载桌面客户端。版本与已登记设备拿到的同一口径
+//                               （client-release.mjs clientReleaseFor：打包形态的服务端只发同一次发布，源码 / Docker 部署取新）；
+//                               本机有安装包就流式发（带 Range），没有就 302 到清单里的第一个镜像（GitHub Release）。
+//                               和 /download/android 不同，单人服务器也要登录：没有扫码场景，安装包 140MB 走服主家里的隧道
 //   GET /api/app/hello       —— 无 auth：服务器 id + 对随机数的 ECDSA 签名。设备换候选地址（局域网 / 上一个公网地址 / 新推来的地址）
 //                               之前先验明正身，再把凭据发过去（见 runtime/server-address.mjs）
 //   GET /api/app/server-info —— 需登录：公网地址、地址簿（id / 公钥 / 地址类型；局域网候选只给管理员）、多用户开关、运行时长、
@@ -21,6 +26,7 @@ import { appVersionInfo, apkStatus, currentApk, releasePage, warmApkFeed } from 
 import { serverAddress } from '../runtime/server-address.mjs';
 import { restartState } from '../runtime/service-control.mjs';
 import { pageLang } from './share-gate.mjs';
+import { clientReleaseForAsync, releasePageUrl, serverBuildVersion, streamClientFile } from '../runtime/client-release.mjs';
 import { DISTRO } from '../config/distro.mjs';
 
 const STARTED_AT = Date.now();
@@ -102,8 +108,15 @@ function noApkPage(req, res) {
   res.end(body);
 }
 
+// 网页下载桌面客户端那一版：与「服主之外的已登记设备」同一口径（hosting:false），最多等 waitMs 把同版本发布清单查到
+export async function desktopForWeb({ waitMs = 5_000 } = {}) {
+  const { release } = await clientReleaseForAsync({ hosting: false, waitMs });
+  return release;
+}
+
 export function registerAppUpdateRoutes(router, { authOk, identify, lanIPs = null }) {
   warmApkFeed();
+  const signedIn = (req) => { const k = identify(req).kind; return authOk(req) || k === 'admin' || k === 'user' || sessionFromQuery(req); };
 
   router.on('GET', '/api/app/version', (req, res) => {
     json(res, 200, appVersionInfo());
@@ -130,6 +143,28 @@ export function registerAppUpdateRoutes(router, { authOk, identify, lanIPs = nul
     const a = currentApk();
     if (!a) { noApkPage(req, res); return; }
     sendApk(req, res, a, `ClaudeBridge-${String(a.name || a.code).replace(/[^\w.-]+/g, '_')}.apk`);
+  });
+
+  router.on('GET', '/api/app/desktop', async (req, res) => {
+    if (!signedIn(req)) { json(res, 401, { error: 'unauthorized' }); return; }
+    const r = await desktopForWeb();
+    if (!r) { json(res, 200, { available: false, page: releasePageUrl(serverBuildVersion() || '') }); return; }
+    json(res, 200, {
+      available: true, version: r.version, size: Number(r.size) || 0, pinned: r.pinned || '',
+      url: '/download/windows', page: releasePageUrl(r.version),
+    });
+  });
+
+  router.on('GET', '/download/windows', async (req, res) => {
+    if (!signedIn(req)) { res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(pageLang(req) === 'en' ? 'Sign in first' : '请先登录'); return; }
+    const r = await desktopForWeb();
+    if (r && r.file) { streamClientFile(req, res, r); return; }
+    const mirror = r && Array.isArray(r.mirrors) ? r.mirrors.find((u) => /^https:\/\//i.test(String(u))) : '';
+    if (mirror) { res.writeHead(302, { Location: mirror, 'Cache-Control': 'no-store' }); res.end(); return; }
+    const page = releasePageUrl(serverBuildVersion() || '');
+    if (page) { res.writeHead(302, { Location: page, 'Cache-Control': 'no-store' }); res.end(); return; }
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(pageLang(req) === 'en' ? 'This server has no desktop client build to hand out' : '这台服务器没有可发的桌面客户端');
   });
 
   router.on('GET', '/api/app/hello', (req, res) => {

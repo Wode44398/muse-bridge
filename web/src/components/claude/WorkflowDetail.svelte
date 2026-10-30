@@ -9,7 +9,8 @@
   // 数据只读：tool 是 chat.messages 里的 proxy（单写者规则——只有 chat 内核改它）。
   // 秒级时钟只在「卡片挂着且工作流还在跑」时 tick——官方 cD(running) 同款，页面隐藏时冻结。
   import { deriveWorkflow, agentState, agentDotStates, reasonFromSummary, toolTaskStatus, toolTaskTitle } from '../../lib/taskModel.js';
-  import { modelLabel, fmtCompact, fmtDurPanel } from '../../lib/toolVerbs.js';
+  import { fmtCompact, fmtDurPanel } from '../../lib/toolVerbs.js';
+  import { cp, ensureCustomModels, agentModelName, agentEffortName } from '../../lib/claudeProviders.svelte.js';
   import { glyph } from '../../lib/claudeIcons.js';
   import AgentDots from './AgentDots.svelte';
 
@@ -49,10 +50,14 @@
   const tokens = $derived((task && task.usage && task.usage.tokens) || (wf ? wf.totalTokens : 0) || 0);
   const reason = $derived(task && (status === 'failed' || status === 'stopped')
     ? (reasonFromSummary(task.summary, task.description) || task.error || '') : '');
-  // phase 展开态：用户点过才记；默认展开 = 工作流 running 且本 phase 有 agent（官方 OD）。换对象即清。
+  // phase 展开态：用户点过才记；默认展开 = 本 phase 有 agent 且（工作流 running（官方 OD）或总共不超过 8 个 agent）。
+  // bridge 偏离（10-30）：官方跑完全部收起，每个 agent 用了哪个模型 / 档位得逐个点开才看得到；小工作流直接摊开。换对象即清。
   let phaseOpen = $state({});
   $effect(() => { void tool; phaseOpen = {}; });
-  const isOpen = (ph) => (ph.index in phaseOpen ? !!phaseOpen[ph.index] : (running && ph.counts.total > 0));
+  const isOpen = (ph) => (ph.index in phaseOpen ? !!phaseOpen[ph.index] : (ph.counts.total > 0 && (running || agentCount <= 8)));
+  // 第三方模型的友好名在模型清单里（hello 带来；没到就补拉一次）
+  $effect(() => { if (!cp.modelsReady && wf && wf.phases.some((p) => p.agents.some((a) => String(a.model || '').startsWith('custom:')))) ensureCustomModels(); });
+  const modelTitle = (a) => [agentModelName(a.model), agentEffortName(a.effort), a.model].filter(Boolean).join(' · ');
   const toggle = (ph) => { phaseOpen[ph.index] = !isOpen(ph); };
   const dotOpts = () => (running ? { now } : undefined);
   // agent 行的 Time 列：running 且 progress 态且有 startedAt → 实时；否则 durationMs
@@ -145,7 +150,8 @@
                       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
                       <span class="ag-c ag-err" tabindex="0" title={a.error} aria-label={a.error}>Error</span>
                     {:else}
-                      <span class="ag-c ag-model" class:dim title={modelLabel(a.model)}>{modelLabel(a.model)}</span>
+                      <!-- 模型友好名 + 档位（档位来自子 agent 转录，收轮后历史重建才补上；窄了先截档位） -->
+                      <span class="ag-c ag-model" class:dim title={modelTitle(a)}>{agentModelName(a.model)}{#if a.effort}<span class="ag-sep" aria-hidden="true">&nbsp;·&nbsp;</span><span class="ag-eff">{agentEffortName(a.effort)}</span>{/if}</span>
                       <span class="ag-c num" class:dim>{a.tokens ? fmtCompact(a.tokens) : ''}</span>
                       <span class="ag-c num r" class:dim>{agentTime(a)}</span>
                     {/if}
@@ -234,7 +240,7 @@
   .ph-dots { display: block; padding-right: 22px; }
   .ag-empty { padding-left: 8px; font-size: 12.5px; line-height: 16px; color: var(--muted); }
   /* 四列表 Agent / Model / Tokens / Time；数据行 16px 高 */
-  .ag-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, max-content) 60px minmax(56px, max-content);
+  .ag-grid { display: grid; grid-template-columns: minmax(72px, 1fr) minmax(0, max-content) 60px minmax(56px, max-content);
     grid-auto-rows: 16px; align-items: center; column-gap: 12px; row-gap: 4px; padding: 0 8px; font-size: 12.5px; line-height: 16px; }
   .ag-h { color: var(--muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
   .ag-h.r, .ag-c.r { text-align: right; justify-self: end; }
@@ -246,6 +252,15 @@
   .ag-name.link .ag-lbl { text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 2px; transition: text-decoration-color .15s ease, color .15s ease; }
   @media (hover: hover) { .ag-name.link:hover .ag-lbl, .ag-name.link:focus-visible .ag-lbl { text-decoration-color: currentColor; color: var(--text); } }
   .ag-lbl, .ag-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ag-eff, .ag-sep { color: var(--muted); }
+  /* 窄（手机任务面板 ≈375）：一行放不下「DeepSeek-V4-Pro · Medium」——行高放开，模型名可在连字符处折行、档位落第二行 */
+  .rd-phases { container-type: inline-size; }
+  @container (max-width: 440px) {
+    .ag-grid { grid-template-columns: minmax(88px, 1fr) minmax(0, max-content) 48px minmax(52px, max-content); grid-auto-rows: auto; column-gap: 10px; row-gap: 6px; }
+    .ag-model { white-space: normal; overflow-wrap: anywhere; }
+    .ag-sep { display: none; }
+    .ag-eff { display: block; }
+  }
   .ag-err { grid-column: span 3; justify-self: end; color: var(--crit); cursor: default; outline: none; }
 
   .rd-result summary { font-size: 12.5px; color: var(--muted); cursor: pointer; }

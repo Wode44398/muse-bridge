@@ -171,4 +171,5 @@ dimensio 也会在等你批准、等你回答、交了计划、跑完时通知�
 - **「服务器地址」**（Server URL）：这个网页连的是哪台服务器。在网页里别改它；在安卓 App 里点这一行会弹出 **「更换服务器地址」**，临时地址变了、App 没自动跟上时在这里填新地址。
 - **「让另一台设备扫码连接」**（Let another device scan to connect）→ **「显示二维码」**（Show QR code）：给自己的另一台手机扫，扫到的会以你的身份登录（3 分钟内有效、只能用一次）。
 - **「服务器」**（Server）一组（登录后才有）：**「公网地址」**（Public URL）（点一下复制）、**「地址类型」**（Address type）：临时地址（重启会换）/ 固定地址、**「后端」**（Backend）已运行多久。
+- **「下载 App」**（Download the apps）一组（网页里、登录后才有）：**「Windows 桌面客户端」**（Windows desktop app）和 **「安卓 App」**（Android app）两行，带版本和大小，点 **「下载」**（Download）就开始下。版本和这台服务器对齐；Windows 客户端的安装包放在 GitHub 上，点了会转到 GitHub 下载。服务器上暂时没有可发的版本时，这一行写 **「这台服务器没有可发的版本」**，有发布页就显示 **「去发布页」**（Release page）。
 - **「网页版总是最新的」**（The web app is always up to date）：界面由服务器直接提供，刷新页面就是服务器上的版本。**「版本历史」**（Version history）列出服务器上发过的版本和说明。

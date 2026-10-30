@@ -47,7 +47,7 @@
   import { wp, wpDef, setWp, addUpload, deleteUpload, splitWpFiles, LIGHT_IDS, DARK_IDS, spatial, setSpatialOn, setSpatialAmp, wpHasDepth, wpIsUpload } from '../lib/wallpaper.svelte.js';
   import { registerCloser } from '../lib/nav.js';
   import { swipeDismiss, spring, NAV_SPRING } from '../lib/motion.js';
-  import { setServerBase, getServerBase, isOffline, onServerBaseChange } from '../lib/server.js';
+  import { setServerBase, getServerBase, isOffline, onServerBaseChange, apiUrl } from '../lib/server.js';
   import { canSwitchServers, activeProfile, listProfiles } from '../lib/serverProfiles.js';
   import { updateState, installPending, hasSilentUpdate, checkForUpdate, startUpdate, appVersionLine,
     platform, nativeInfo, fetchLatest, fetchServerInfo, cancelUpdate, openInstallPermission, autoUpdateEnabled, setAutoUpdateEnabled, waitingLine } from '../lib/appUpdate.js';
@@ -960,7 +960,22 @@
       if (me.kind !== 'none') fetchServerInfo().then((r) => { srvInfo = r; }).catch(() => {});
       if (me.kind === 'admin') srvUpd.load();
       if (plat === 'android') appInfo = nativeInfo();
+      if (plat === 'web' && me.kind !== 'none') {
+        deskDl = deskDl || { loading: true };
+        api.get('/api/app/desktop').then((r) => { deskDl = r; }).catch(() => { deskDl = { available: false, failed: true }; });
+      }
     });
+  });
+  // 网页「关于 › 下载 App」：一键下载这台服务器发的 Windows 桌面客户端与安卓 App（都跟服主的版本对齐，见 src/routes/app-update.mjs）。
+  // 两个下载都要登录：普通链接带不上 Authorization 头，令牌放在 ?token=（与 App 内更新取包同一做法）
+  let deskDl = $state(null);
+  const withTok = (p) => { const tok = getToken(); return apiUrl(p + (tok ? '?token=' + encodeURIComponent(tok) : '')); };
+  const mb = (n) => (n > 0 ? ' · ' + (n / 1048576).toFixed(n >= 100 * 1048576 ? 0 : 1) + ' MB' : '');
+  const dlFoot = $derived.by(() => {
+    const pin = deskDl?.pinned, an = upLatest && upLatest.available !== false;
+    if (deskDl && !deskDl.loading && !deskDl.available && upLatest && !an) return t('这台服务器上还没有可发的安装包，可以去发布页下载。');
+    return pin ? t('和这台服务器同一次发布（v{v}）：装好后打开，登录这台服务器即可。', { v: pin })
+      : t('版本和这台服务器对齐：装好后打开，登录这台服务器即可。');
   });
   // 服务端更新（管理员，lib/serverUpdate.svelte.js）：手机 / 网页上也能查 GitHub 上的版本、一键更新服务端（10-28 以前只能到服务端那台电脑上点）
   const srvUpd = createServerUpdate();
@@ -2079,6 +2094,34 @@
       {/if}
     </div>
     {#if srvUpd.err}{@render gfoot(srvUpd.err)}{:else if srvUpd.note}{@render gfoot(srvUpd.note)}{:else if srvUpdView.how}{@render gfoot(srvUpdView.how)}{/if}
+  {/if}
+
+  <!-- 下载 App（网页，已登录）：一键下载这台服务器发的桌面客户端与安卓 App。没有可发的包时给发布页（推得出来才有） -->
+  {#if plat === 'web' && me.kind !== 'none' && deskDl}
+    {@render ghead(t('下载 App'))}
+    <div class="ig">
+      {#if deskDl.loading}
+        <div class="r"><span class="r-main"><span class="r-tx">{t('Windows 桌面客户端')}</span><span class="spin" aria-hidden="true"></span></span></div>
+      {:else if deskDl.available}
+        <a class="r" href={withTok(deskDl.url || '/download/windows')} download>
+          <span class="r-main"><span class="r-tx">{t('Windows 桌面客户端')}<span class="r-sub">{'v' + deskDl.version + mb(deskDl.size)}</span></span><span class="r-d accent">{t('下载')}</span></span>
+        </a>
+      {:else}
+        <svelte:element this={deskDl.page ? 'a' : 'div'} class="r" href={deskDl.page || undefined} target={deskDl.page ? '_blank' : undefined} rel={deskDl.page ? 'noopener noreferrer' : undefined}>
+          <span class="r-main"><span class="r-tx">{t('Windows 桌面客户端')}<span class="r-sub">{deskDl.failed ? t('暂时查不到') : t('这台服务器没有可发的版本')}</span></span>{#if deskDl.page}<span class="r-d accent">{t('去发布页')}</span>{/if}</span>
+        </svelte:element>
+      {/if}
+      {#if upLatest && upLatest.available !== false}
+        <a class="r" href={withTok(upLatest.pageUrl || '/download/android')} download>
+          <span class="r-main"><span class="r-tx">{t('安卓 App')}<span class="r-sub">{'v' + t('{name}（{code}）', { name: upLatest.name, code: upLatest.code }) + mb(upLatest.size)}</span></span><span class="r-d accent">{t('下载')}</span></span>
+        </a>
+      {:else if upLatest}
+        <svelte:element this={upLatest.releasePage ? 'a' : 'div'} class="r" href={upLatest.releasePage || undefined} target={upLatest.releasePage ? '_blank' : undefined} rel={upLatest.releasePage ? 'noopener noreferrer' : undefined}>
+          <span class="r-main"><span class="r-tx">{t('安卓 App')}<span class="r-sub">{t('这台服务器没有可发的版本')}</span></span>{#if upLatest.releasePage}<span class="r-d accent">{t('去发布页')}</span>{/if}</span>
+        </svelte:element>
+      {/if}
+    </div>
+    {@render gfoot(dlFoot)}
   {/if}
 
   <!-- 更新：安卓壳是装包；网页的界面就是服务器发的，刷新即最新。

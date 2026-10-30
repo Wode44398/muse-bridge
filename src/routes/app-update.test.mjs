@@ -139,3 +139,49 @@ test('/download/android：多人服务器要登录；没有包时是一页人话
   assert.equal(got.status, 404);
   assert.match(got.body, /没有可发的 App 版本|no app build/);
 });
+
+// —— 网页一键下载桌面客户端（/api/app/desktop、/download/windows）——
+// 处理函数是 async 的：单独一个会 await 的小壳；发版目录用临时目录（配了 BRIDGE_CLIENT_DIST 就不问上游，单测不出网）
+function asyncRoutes(kind) {
+  const h = {};
+  registerAppUpdateRoutes({ on: (m, p, fn) => { h[m + ' ' + p] = fn; } }, { authOk: () => kind === 'admin', identify: () => ({ kind }) });
+  return async (p) => {
+    let status = 0, body = '', headers = {};
+    const res = { writeHead(s, hh) { status = s; headers = hh || {}; }, end(c) { body = c || ''; }, setHeader() {}, on() {}, once() {} };
+    await h['GET ' + p.split('?')[0]]({ headers: {}, url: p, method: 'GET' }, res, new URL('http://x' + p));
+    let json = null;
+    try { json = /json/.test(headers['Content-Type'] || '') ? JSON.parse(body) : null; } catch {}
+    return { status, json, headers, body: String(body || '') };
+  };
+}
+
+test('桌面客户端下载：没登录 401；没有可发的版本时 available=false', async () => {
+  const { writeFileSync, mkdirSync } = await import('node:fs');
+  const dist = path.join(tmp, 'client-dist-empty');
+  mkdirSync(dist, { recursive: true });
+  process.env.BRIDGE_CLIENT_DIST = dist;
+  try {
+    assert.equal((await asyncRoutes('none')('/api/app/desktop')).status, 401);
+    assert.equal((await asyncRoutes('none')('/download/windows')).status, 401);
+    assert.equal((await asyncRoutes('share')('/download/windows')).status, 401, '分享链接访客不算登录');
+    const v = await asyncRoutes('user')('/api/app/desktop');
+    assert.equal(v.status, 200);
+    assert.equal(v.json.available, false);
+    // 没有包：有发布页就 302 过去，没有就 404 一句人话，不会是空白
+    const d = await asyncRoutes('user')('/download/windows');
+    assert.ok(d.status === 302 || d.status === 404);
+    // 只有镜像、本机没有安装包（公开版服务端的常态）：照样能下，302 到镜像
+    writeFileSync(path.join(dist, 'latest.json'), JSON.stringify({
+      version: '2026.10.30.1053', file: 'bridge-client-setup-2026.10.30.1053.exe', size: 1234, sha256: 'a'.repeat(64),
+      mirrors: ['http://insecure.example/x.exe', 'https://mirror.example/v2026.10.30.1053/bridge-client-setup-2026.10.30.1053.exe'],
+    }));
+    const v2 = await asyncRoutes('user')('/api/app/desktop');
+    assert.equal(v2.json.available, true);
+    assert.equal(v2.json.version, '2026.10.30.1053');
+    assert.equal(v2.json.url, '/download/windows');
+    assert.doesNotMatch(JSON.stringify(v2.json), /[A-Z]:\|client-dist/, '不带本机路径');
+    const d2 = await asyncRoutes('admin')('/download/windows');
+    assert.equal(d2.status, 302);
+    assert.equal(d2.headers.Location, 'https://mirror.example/v2026.10.30.1053/bridge-client-setup-2026.10.30.1053.exe', '只跳 https 镜像');
+  } finally { delete process.env.BRIDGE_CLIENT_DIST; }
+});

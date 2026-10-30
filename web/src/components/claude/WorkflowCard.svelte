@@ -13,6 +13,7 @@
   import { openTaskDetail } from '../../lib/dock.svelte.js';
   import { deriveWorkflow, agentDotStates, workflowNameFromInput, reasonFromSummary, taskRunning, settleProgress, EMPTY_COUNTS } from '../../lib/taskModel.js';
   import { fmtDurPanel, morphText } from '../../lib/toolVerbs.js';
+  import { agentModelMix } from '../../lib/claudeProviders.svelte.js';
   import { glyph } from '../../lib/claudeIcons.js';
   import AgentDots from './AgentDots.svelte';
 
@@ -55,6 +56,8 @@
   const counts = $derived(wf ? wf.counts : EMPTY_COUNTS);
   const agents = $derived(wf ? agentDotStates(wf.phases.flatMap((p) => p.agents), running ? { now } : {}) : undefined);
   const hasAgents = $derived(!!wf && wf.counts.total > 0);
+  // bridge 偏离（10-30）：点阵下面一行模型构成「DeepSeek-V4-Pro ×2 · Sonnet 5.5 ×2」——子 agent 派给了谁，一眼可见
+  const modelLine = $derived(wf ? agentModelMix(wf.phases.flatMap((p) => p.agents)).map((m) => (m.count > 1 ? `${m.name} ×${m.count}` : m.name)).join(' · ') : '');
   const startedAt = $derived(task && task.startedAt ? task.startedAt : 0);
   const elapsed = $derived.by(() => {
     if (running) return startedAt ? fmtDurPanel(Math.max(0, now - startedAt)) : '';
@@ -80,6 +83,7 @@
         {#if running || hasAgents}
           <span class="dots"><AgentDots {counts} {agents} wrap={true} maxRows={8} anticipate={running} /></span>
         {/if}
+        {#if modelLine}<span class="models" title={modelLine}>{modelLine}</span>{/if}
         {#if reason}<span class="why">{reason}</span>{/if}
       </span>
       <span class="ic caret" aria-hidden="true">{glyph('CaretRight')}</span>
@@ -134,6 +138,7 @@
   .why { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; line-height: 16px; color: var(--crit); }
   .t7 { color: var(--cl-t7); }
   .dots { display: block; padding: 6px 0 2px; }
+  .models { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; line-height: 16px; color: var(--muted); }
   /* 右侧 CaretRight（官方 Sy：muted，高度对齐标题行 20px） */
   .caret { flex: none; display: flex; align-items: center; justify-content: center; width: 1em; height: 20px; font-size: 16px; font-weight: 533; color: var(--muted); font-feature-settings: "liga" 0; }
 
