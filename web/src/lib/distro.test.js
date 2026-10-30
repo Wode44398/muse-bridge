@@ -44,3 +44,18 @@ test('反馈去向：没声明 = 本体默认且 readDistro 形状不变；声�
   assert.equal(readFeedbackDest({ to: 5 }), null);
   assert.equal(readFeedbackDest({ public: true }).to, FEEDBACK_DEFAULT.to);
 });
+
+test('distroFromCaps：离线 apk 从 /api/app/caps 认发行版', async () => {
+  const { distroFromCaps } = await import('./distro.js');
+  const muse = { id: 'muse', brand: 'Muse Bridge', langDefault: 'browser' };
+  assert.deepEqual(distroFromCaps({ app: 'bridge', distro: 'muse', distroInfo: muse }), muse);
+  // 只带 id 的旧发行版服务端：至少认出 id，品牌回落本体
+  assert.deepEqual(distroFromCaps({ app: 'bridge', distro: 'muse' }), { id: 'muse' });
+  // 本体 / 没有这条路由的老服务端 = 本体（清缓存）
+  assert.equal(distroFromCaps({ app: 'bridge', distro: 'bridge' }), null);
+  assert.equal(distroFromCaps(null, true), null);
+  // 认不出的回包（网关错误页等）= 别动缓存
+  assert.equal(distroFromCaps({ error: 'x' }), undefined);
+  assert.equal(distroFromCaps(null), undefined);
+  assert.equal(distroFromCaps({ app: 'bridge', distroInfo: [] , distro: 'bridge' }), null);
+});

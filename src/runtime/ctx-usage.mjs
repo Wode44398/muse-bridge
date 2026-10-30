@@ -161,16 +161,15 @@ export function getContextUsage(key, sessionId) {
 }
 
 // hook 的 effort 字段三态：'xhigh' | {level:'xhigh',…} | 数字（内部预算）| 缺省。
-// 'ultracode' SDK 的 hook 永远不会回（它在 hook 层没有标记，只回解析后的 xhigh）——它由 claude.mjs
-// settleEffort 在 result 后按 getSettings().applied.ultracode 合成后经 applyEffort 落库；正则收下它
-// 只是让所有走 normalize 的路径口径一致。
 export function normalizeEffortLevel(e) {
   const v = (e && typeof e === 'object') ? e.level : e;
-  return (typeof v === 'string' && /^(low|medium|high|xhigh|max|ultracode)$/.test(v)) ? v : null;
+  return (typeof v === 'string' && /^(low|medium|high|xhigh|max)$/.test(v)) ? v : null;
 }
-export function applyEffort(key, sessionId, level) {
+// ultracode：这一轮 Ultracode 真开没开（claude.mjs settleEffort 按 getSettings().applied.ultracode 定；
+// 普通轮 false；取不到 = undefined，不落这个键）。与档位独立（10-30）。
+export function applyEffort(key, sessionId, level, ultracode) {
   if (!sessionId) return;
-  bump(efforts, key + '|' + sessionId, { level: level || null, at: Date.now() }, MAX_USAGES * 2);
+  bump(efforts, key + '|' + sessionId, { level: level || null, ...(typeof ultracode === 'boolean' ? { ultracode } : {}), at: Date.now() }, MAX_USAGES * 2);
   persist();
 }
 export function getEffort(key, sessionId) {

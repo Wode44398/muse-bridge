@@ -33,6 +33,14 @@ test('normalizeServerAddress：局域网补 http（裸 IP 补 :8787），其余�
   assert.equal(normalizeServerAddress(''), '');
 });
 
+test('normalizeServerAddress：粘来一整句话时取其中的网址', () => {
+  assert.equal(normalizeServerAddress('你的新地址是 https://abc-def.trycloudflare.com，登录后就能用。'), 'https://abc-def.trycloudflare.com');
+  assert.equal(normalizeServerAddress('Your URL: https://muse.example.com/app/ (open it on your phone)'), 'https://muse.example.com');
+  assert.equal(normalizeServerAddress('地址：「http://192.168.1.5:8787」'), 'http://192.168.1.5:8787');
+  // 句子里没有网址 = 没填对
+  assert.equal(normalizeServerAddress('这里没有地址。'), '');
+});
+
 test('isPrivateHost / looksLikeCode', () => {
   for (const h of ['localhost', '127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.0.1', '100.64.1.1', 'nas.local']) assert.equal(isPrivateHost(h), true, h);
   for (const h of ['8.8.8.8', '172.32.0.1', 'example.com', '100.128.0.1']) assert.equal(isPrivateHost(h), false, h);

@@ -72,9 +72,10 @@ const NL = String.fromCharCode(10);
  *   on        这一轮开着动态工作流（设置项或 Ultracode）
  *   text      用户写的调度偏好（可空）
  *   custom    主会话是自定义 API 模型：{ main, small }（型号 id）；官方模型为 null
- *   catalog   subagentModelCatalog()：能派给子 agent 的第三方模型（只有自定义 API 会话真能用）
+ *   catalog   subagentModelCatalog()：能派给子 agent 的第三方模型
+ *   routed    官方订阅会话也经上游代理转发第三方模型（claude-upstream.mjs 的 /r/<令牌>）；false = 只提一句派不了
  */
-export function dispatchNudge({ on, text = '', custom = null, catalog = [] } = {}) {
+export function dispatchNudge({ on, text = '', custom = null, catalog = [], routed = false } = {}) {
   if (!on) return '';
   const lines = [
     '',
@@ -91,6 +92,11 @@ export function dispatchNudge({ on, text = '', custom = null, catalog = [] } = {
     lines.push('· 模型：动态工作流的 agent(prompt, { model }) 可以写下面任意一个模型名（照抄；重名的写 custom:<服务>:<型号>），请求会自动转到对应的服务；'
       + `Agent 工具的 model 只能填别名：haiku = ${custom.small}，sonnet / opus = 主会话模型 ${custom.main}。effort 会自动换算成各模型自己的档位。`);
     lines.push(...(list.length ? list : ['  （没有别的可用模型）']));
+  } else if (routed && list.length) {
+    lines.push('· 模型：Claude 的 haiku 快且便宜（检索、机械活），sonnet 做常规实现，opus 留给难题；Agent 工具的 model 只能填这几个别名。');
+    lines.push('  动态工作流的 agent(prompt, { model }) 还可以写下面任意一个第三方模型名（照抄；重名的写 custom:<服务>:<型号>），请求会自动转到对应的服务，effort 自动换算成它自己的档位。'
+      + '注意它的上下文窗口可能比主会话小，别给它塞超长的材料。');
+    lines.push(...list);
   } else {
     lines.push('· 模型：haiku 快且便宜（检索、机械活），sonnet 做常规实现，opus 留给难题。');
     if (list.length) lines.push('  设置里配置的第三方模型只有主会话本身是第三方模型时才能派给子 agent；这一轮主会话是 Claude 官方模型，偏好里点名的第三方模型改用最接近的 Claude 别名。');

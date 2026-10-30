@@ -104,7 +104,8 @@ Claude Code 是 Anthropic 的编程 / 通用 agent，在这台 VM 上替用户�
 - 输入框里右下角、发送按钮左边有两个芯片。第一个是模型（显示型号名，比如 Opus 5.5），点开选（菜单是英文的）。主列表：Fable 5.1、Opus 5.5、Sonnet 5.5、Haiku 5.5；**「More models」** 里还有更早的型号（Haiku 4.5、Opus 5 等）。**默认是 Opus 5.5。**
 - Fable 5.1、Opus 5.5 等新型号自动用 1M 上下文。
 - **Fast mode**（只有部分 Opus 型号有）：更快、更费额度，开了芯片上显示 · Fast。
-- 第二个芯片（显示 Medium、High 这类字样）是思考深度（Effort）：Low · Medium · High · Extra · Max · Ultracode。没选时 Opus 5.5 和 Haiku 5.5 默认 Medium，大多数型号默认 High。**Ultracode** 会动用大量子 agent，最慢、最费额度；普通账号用不了（会自动降成 Extra），还要「设置 → Claude」里的 **「动态工作流」**（Dynamic workflows）开着。选过的深度会带到新对话里。
+- 第二个芯片（显示 Medium、High 这类字样）是思考深度（Effort）：Low · Medium · High · Extra · Max。没选时 Opus 5.5 和 Haiku 5.5 默认 Medium，大多数型号默认 High。选过的深度会带到新对话里。
+- **Ultracode** 不是一档深度，是拉条下面单独的一个勾选：勾上后拉条变成紫色，任何一档都能配 Ultracode，芯片上的档名也变成紫色。它会动用大量子 agent，最慢、最费额度；只对当前对话生效，新对话从关着开始。要「设置 → Claude」里的 **「动态工作流」**（Dynamic workflows）开着（关着时面板里会提示）；账号用不了时这一轮照常按所选深度跑，芯片的紫色会褪掉。以前选过 Ultracode 的对话会自动变成 Extra + Ultracode。
 - **接别家的模型**：在「模型服务」那一组的 **「设置 → Claude → 自定义 API」**（Settings → Claude → Custom API）里加 DeepSeek、Kimi、OpenRouter 这类 Anthropic / OpenAI 兼容接口（见 07-settings.md）。加好的模型出现在模型菜单的 **「More models」** 里，按服务分组。管理员和每个成员各有自己的一份。
 - 模型和深度按对话记住，也会作为新对话的默认值（多设备同步）。芯片带虚线下划线 = 这个对话实际用的和你选的不一样（比如安全回退换过模型），鼠标悬停看说明。
 

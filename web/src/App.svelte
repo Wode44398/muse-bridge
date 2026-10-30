@@ -31,7 +31,8 @@
   import { loadPage } from './modules/pages.js';
   import BrandTitle from './components/BrandTitle.svelte';
   import ServerConfig from './components/ServerConfig.svelte';
-  import { isOffline, getServerBase, startLanAutoSwitch, onConnModeChange, initRoute, onReachabilityChange, startReachabilityWatch, offlineSince } from './lib/server.js';
+  import { isOffline, getServerBase, startLanAutoSwitch, onConnModeChange, initRoute, onReachabilityChange, startReachabilityWatch, offlineSince, apiUrl } from './lib/server.js';
+  import { syncDistro } from './lib/distro.js';
   import { cacheMe, getCachedMe } from './lib/cache.js';
   import Settings from './components/Settings.svelte';
   import SettingsDesktop from './desktop/settings/SettingsDesktop.svelte';
@@ -193,6 +194,8 @@
     startReachabilityWatch();
     // 先用已知 LAN 解析路由（在家免隧道；隧道换域名/挂了也不掉线），再开后台学习/周期重探。
     try { await initRoute(); } catch {}
+    // 离线 apk：取所连服务器的发行版声明（品牌 / 默认语言）缓存起来，跟这次启动用的不一样就刷新一次（见 lib/distro.js）
+    syncDistro(apiUrl('/api/app/caps'));
     startLanAutoSwitch(() => api.get('/api/lan'));
     try { caps.data = await loadCaps(); caps.loaded = true; } catch {}
     try {

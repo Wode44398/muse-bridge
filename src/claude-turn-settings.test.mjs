@@ -165,5 +165,10 @@ test('子 agent 调度偏好：随设置存取、超长拒收；工作流关着�
   const off = T.dispatchNudge({ on: true, catalog });
   assert.doesNotMatch(off, /- mimo/);
   assert.match(off, /Claude 官方模型/);
+  // 官方订阅会话经上游代理转发第三方（routed）：列出清单，说明只有工作流 agent() 能写第三方名
+  const routed = T.dispatchNudge({ on: true, catalog, routed: true });
+  assert.match(routed, /- mimo-v2\.6-flash — MiMo/);
+  assert.match(routed, /Agent 工具的 model 只能填这几个别名/);
+  assert.doesNotMatch(routed, /最接近的 Claude 别名/);
   S.setClaudeSettings(admin, { subagentDispatch: null });
 });

@@ -146,6 +146,8 @@ export default {
   '本会话已切换到 {model}（安全栅门自动回退）；已选 {selected}，下一轮起生效': 'This session switched to {model} (safety fallback). {selected} is selected and applies from the next turn.',
   '本会话实际使用 {model}；已选 {selected}，下一轮起生效': 'This session is using {model}. {selected} is selected and applies from the next turn.',
   '已选 {selected}，本会话实际生效 {active}': 'Selected: {selected} · Active in this session: {active}',
+  '已勾选 Ultracode，但上一轮没有生效（动态工作流没开，或模型不支持）': 'Ultracode is on, but it didn’t apply last turn (dynamic workflows are off, or the model doesn’t support it).',
+  '上一轮开着 Ultracode，已取消勾选，下一轮起生效': 'Ultracode was on last turn. It’s now off and applies from the next turn.',
   '{name}：超过 20MB，暂不支持': '{name} is over 20 MB. Files this large aren’t supported yet.',
   '文件：超过 20MB，暂不支持': 'This file is over 20 MB. Files this large aren’t supported yet.',
   '上传失败：{name}': 'Couldn’t upload {name}',

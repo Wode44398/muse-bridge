@@ -92,12 +92,13 @@ export const CAPABILITIES = {
       // 窄屏（折叠屏分屏、桌面小窗）最长的这一档是把整行挤爆的元凶。id 不动。
       { id: 'xhigh', name: 'Extra' },
       { id: 'max', name: 'Max' },
-      // Ultracode（2026-09-02）：官方 /code 页的末档 = xhigh + 常驻动态工作流编排（Workflow 工具）。
-      // 【不是】SDK effort 的合法取值（TS 只列五档）——后端经 claudeEffortOptions 翻译成
-      // effort:'xhigh' + settings {ultracode:true, enableWorkflows:true}；实况由 result 后 getSettings()
-      // 的 applied.ultracode 定（Stop hook 只能回 xhigh）。放末尾 = EffortPanel 的紫色 accent 位。
-      { id: 'ultracode', name: 'Ultracode' },
     ],
+    // Ultracode = 常驻动态工作流编排（Workflow 工具），与 effort 档位【独立】（2026-10-30，对齐桌面端 4.29 的
+    // ultracodeSeparate：apply_flag_settings 分别收 effortLevel 与 ultracode）。SDK 0.3.311 探针实测
+    // effort:low/high/max + settings{ultracode:true} 都同时生效（getSettings().applied 两项各自回报）。
+    // 请求体带 ultracode:true，后端经 claudeEffortOptions 合进 settings {ultracode, enableWorkflows}。
+    // 旧客户端 / 旧偏好里的 effort:'ultracode'（09-02 起它曾是拉条末档）仍收，按 xhigh + ultracode 解释。
+    ultracode: { name: 'Ultracode' },
     // 「没主动选模型」这一档的唯一真相。前端芯片/picker 高亮读它，后端 MODEL 也回落到它
     // （config.json 的 model 若留空就走这里）。2026-07-25 前这两边各写各的字面量，导致
     // 芯片显示 Opus 5、实际却按 config.json 跑 Opus 4.8——加新模型时只改这一行。
@@ -403,14 +404,22 @@ export const CLAUDE_MODELS = new Set([
   ...ids(CAPABILITIES.claude.models),
   ...CAPABILITIES.claude.oneM.map((id) => id + '[1m]'),
 ]);
-export const CLAUDE_EFFORTS = idSet(CAPABILITIES.claude.efforts);
 export const ULTRACODE = 'ultracode';
-// effort 档位 → SDK query 选项。ultracode 翻译成 xhigh + settings（调用方把 settings 与 fastMode 合并后
-// JSON.stringify 成一份 settings 字面量；enableWorkflows 显式开是因为 Pro 计划默认关）；其余档位原样；空 → {}。
-export function claudeEffortOptions(effort) {
-  if (!effort) return {};
-  if (effort === ULTRACODE) return { effort: 'xhigh', settings: { ultracode: true, enableWorkflows: true } };
-  return { effort };
+// 白名单另收旧写法 'ultracode'（= xhigh + Ultracode，见上面 capabilities 的 ultracode 注释）
+export const CLAUDE_EFFORTS = new Set([...ids(CAPABILITIES.claude.efforts), ULTRACODE]);
+// 档位与 Ultracode 归一：旧写法 effort:'ultracode' 拆成 { effort:'xhigh', ultracode:true }；其余原样。
+export function splitUltracode(effort, ultracode) {
+  if (effort === ULTRACODE) return { effort: 'xhigh', ultracode: true };
+  return { effort: effort || undefined, ultracode: ultracode === true };
+}
+// effort 档位 + Ultracode → SDK query 选项。Ultracode 合成 settings {ultracode, enableWorkflows}（调用方把 settings 与
+// fastMode 合并成一份 settings 字面量；enableWorkflows 显式开是因为 Pro 计划默认关）；档位原样；都没有 → {}。
+export function claudeEffortOptions(effort, ultracode) {
+  const s = splitUltracode(effort, ultracode);
+  return {
+    ...(s.effort ? { effort: s.effort } : {}),
+    ...(s.ultracode ? { settings: { ultracode: true, enableWorkflows: true } } : {}),
+  };
 }
 // 未指定模型时的默认（config/index.mjs 的 MODEL 与前端芯片共用同一个值）。
 export const CLAUDE_MODEL_DEFAULT = CAPABILITIES.claude.defaults.model;

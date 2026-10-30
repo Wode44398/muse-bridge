@@ -270,6 +270,7 @@ defineOp({
     project: { type: 'string', desc: '新会话开在哪个项目（projects.list 的 id）；不填用默认项目' },
     model: { type: 'string', desc: '模型 id（见 manual 的模型表）；不填用会话/服务器默认' },
     effort: { type: 'string', desc: '思考强度：low / medium / high / xhigh / max（以模型支持为准）' },
+    ultracode: { type: 'boolean', desc: '开 Ultracode（动态工作流编排，与思考强度独立，最耗额度）' },
     permissionMode: { type: 'string', enum: [...PERMISSION_MODES], desc: '只对新会话生效。成员只能用 default / acceptEdits / plan' },
     attachments: { type: 'array', desc: '附件：服务器上的绝对路径（先用 files.write 写进工作空间，或用工作空间里已有的文件）' },
     worktree: { type: 'boolean', desc: '新会话先切一个 git worktree 再干活（项目得是 git 仓库）' },
@@ -285,6 +286,7 @@ defineOp({
     if (args.project && !sid) body.claudeProjectId = args.project;
     if (args.model) body.model = args.model;
     if (args.effort) body.effort = args.effort;
+    if (args.ultracode === true) body.ultracode = true;
     if (args.permissionMode && !sid) body.permissionMode = args.permissionMode;
     if (Array.isArray(args.attachments) && args.attachments.length) body.attachments = args.attachments.map(String).slice(0, 20);
     if (args.worktree && !sid) body.worktree = true;

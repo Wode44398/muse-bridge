@@ -17,7 +17,7 @@ import { applyRateLimit, applyContext } from './status.mjs';
 import { moduleClaudeMcp } from '../modules/registry.mjs';
 import { hostNudge, mediaNudge, USER_NUDGE, REGULAR_NUDGE, NO_SHELL_MSG, sandboxFence, identityNudge, makeSandboxPreToolUse, SHELL_DENY, makeTurnInput, isPhantomResult, composeTurnPrompt } from '../agents/claude.mjs';
 import { UPLOADS, MEDIA, MODEL, VAULT } from '../config/index.mjs';
-import { to1M, claudeEffortOptions, ULTRACODE } from '../config/capabilities.mjs';
+import { to1M, claudeEffortOptions, splitUltracode } from '../config/capabilities.mjs';
 import { billingUser, memberRules } from './quota.mjs';
 import { makeCostMeter } from './usage-ledger.mjs';
 import { noteTurnUsage } from './audit-log.mjs';
@@ -60,10 +60,11 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
   // 恒流式输入 + gate 挂流（同主聊天，见 agents/claude.mjs makeTurnInput 注释）：
   // 字符串 prompt 会让 SDK 在 result 后自动关 stdin，后台子任务被杀、续轮通知丢失。
   const turnInput = makeTurnInput(composed.prompt, composed.imageBlocks);
-  // effort 经 claudeEffortOptions 翻译（ultracode → xhigh + settings）。成员（runtime/quota.mjs memberRules）没给开放
-  // Ultracode / 1M 就降档、用裸模型 id；没有命令行的身份 ultracode 一律降到 xhigh。
+  // effort 经 claudeEffortOptions 翻译（Ultracode 与档位独立，合进 settings；旧写法 'ultracode' = xhigh + Ultracode）。
+  // 成员（runtime/quota.mjs memberRules）没给开放 Ultracode / 1M 就不开、用裸模型 id；没有命令行的身份一律不开 Ultracode。
   const caps = memberRules(ctx);
-  const effortOpts = claudeEffortOptions(o.effort === ULTRACODE && (!caps.ultracode || (ctx.sandbox && !ctx.shell)) ? 'xhigh' : o.effort);
+  const picked = splitUltracode(o.effort, o.ultracode);
+  const effortOpts = claudeEffortOptions(picked.effort, picked.ultracode && caps.ultracode && !(ctx.sandbox && !ctx.shell));
   const modelId = runModelBase ? (caps.ctx1m ? to1M(runModelBase) : String(runModelBase).replace(/\[1m\]$/i, '')) : '';
   // 按人记账：新会话 CLI 的累计花费从 0 起；续写的会话也从 0 起算（CLI 每次启动都重新累计）。
   const billTo = billingUser(ctx);

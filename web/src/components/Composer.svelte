@@ -86,8 +86,9 @@
   $effect(() => { if (curCustom && !cp.modelsReady) ensureCustomModels(); });
   // 选中的自定义模型已被删 / 停用：芯片别露出 custom:p-… 这串 id
   const modelName = $derived(curCustom && !customModelInfo(curModel) ? (customPending ? t('自定义模型') : t('已停用的自定义模型')) : nameOf(modelList, curModel));
-  // 自定义模型的推理强度按它自己的档位表（设置 › Claude › 模型服务）；表是空的 = 不发思考参数，芯片不显示
-  const effortHidden = $derived(curCustom && (customPending || !effortsFor(curModel, caps.data).length));
+  // 自定义模型的推理强度按它自己的档位表（设置 › Claude › 模型服务）；表是空的也留着芯片（只有「默认」一项），
+  // 面板里还能勾 Ultracode。模型已删 / 清单没到才不显示
+  const effortHidden = $derived(curCustom && (customPending || !effortChoices(curModel, caps.data).length));
   // 会话实际模型 ≠ 所选：安全栅门自动回退（system/model_refusal_fallback，scope session）后内核在
   // status.models[sid] 记下「本会话已切到 X」，settings.model 也随 session{swapped} 换成 X——两者
   // 一致时芯片就是 X，什么也不标；人再手动切回原模型才会不一致 → 点线下划 + title 说明
@@ -105,17 +106,26 @@
   // 跑完再以实况为准；实况 ≠ 选择时芯片加点线下划 + title 说明。
   const effortList = $derived(curCustom ? effortChoices(curModel, caps.data) : (caps.data?.claude?.efforts || []));
   // 自定义模型没有「实况」：CLI 回报的是它眼里的官方档位，真正发出去的是代理按档位表写的值——只显示所选
-  const effortApplied = $derived.by(() => {
-    if (curCustom) return null;
+  const effortLive = $derived.by(() => {
     const a = session.id ? status.efforts[session.id] : null;
-    return a && a.level && a.at > (settings.effortAt || 0) ? a.level : null;
+    return a && a.at > (settings.effortAt || 0) ? a : null;
   });
+  const effortApplied = $derived(!curCustom && effortLive && effortLive.level ? effortLive.level : null);
   // 没选 effort = 该模型的 API 默认档（Opus 5.5 是 medium，其余 high；capabilities.effortDefaults）；
   // 自定义模型 = 它的默认档，默认档为空就是「默认」（什么都不发）。选的不在它表里（换模型带过来的）按没选算。
   const effortChosen = $derived(curCustom ? (effectiveEffort(curModel, settings.effort) || defaultEffortFor(curModel) || '') : (settings.effort || claudeEffortFallback(caps.data, curModel)));
   const effortName = $derived(nameOf(effortList, effortApplied || effortChosen));
-  const effortMismatch = $derived(!!effortApplied && effortApplied !== effortChosen);
-  const effortTitle = $derived(effortMismatch ? t('已选 {selected}，本会话实际生效 {active}', { selected: nameOf(effortList, effortChosen), active: effortName }) : '');
+  // Ultracode（与档位独立的勾选）：芯片不另写「Ultracode」，档名变紫就是开着。实况同 effort：上一轮 getSettings
+  // 回报的 applied.ultracode（自定义模型也有），用户刚改过就先按所选；勾着却没真开（工作流被关 / 模型不支持）→ 褪回灰 + 点线
+  const ultraChosen = $derived(!!settings.ultracode && !IS_CSNAP);
+  const ultraApplied = $derived(effortLive && typeof effortLive.ultracode === 'boolean' ? effortLive.ultracode : null);
+  const ultraOn = $derived(ultraApplied ?? ultraChosen);
+  const levelMismatch = $derived(!!effortApplied && effortApplied !== effortChosen);
+  const ultraMismatch = $derived(ultraApplied !== null && ultraApplied !== ultraChosen);
+  const effortMismatch = $derived(levelMismatch || ultraMismatch);
+  const effortTitle = $derived(levelMismatch ? t('已选 {selected}，本会话实际生效 {active}', { selected: nameOf(effortList, effortChosen), active: effortName })
+    : ultraMismatch ? (ultraChosen ? t('已勾选 Ultracode，但上一轮没有生效（动态工作流没开，或模型不支持）') : t('上一轮开着 Ultracode，已取消勾选，下一轮起生效'))
+    : ultraOn ? effortName + ' · Ultracode' : '');
   // fast mode 生效中（开关开 + 当前模型支持）→ 芯片显示「Opus 5 · Fast」（官方同款）
   const fastOn = $derived(settings.fast && modelSupportsFast(settings.model || claudeDefaultModel(caps.data), caps.data));
 
@@ -488,7 +498,7 @@
       </div>
       {#if !effortHidden}
       <div class="model-wrap eff">
-        <button class="model lvl" class:mismatch={effortMismatch} title={effortTitle} bind:this={effortBtn} onclick={toggleEffort}><span class="mtxt">{effortName}</span></button>
+        <button class="model lvl" class:mismatch={effortMismatch} class:ultra={ultraOn} title={effortTitle} bind:this={effortBtn} onclick={toggleEffort}><span class="mtxt">{effortName}</span></button>
         {#if effortOpen}<EffortPanel onClose={() => (effortOpen = false)} dir={effortDir} />{/if}
       </div>
       {/if}
@@ -609,6 +619,10 @@
   /* 实际生效 ≠ 所选（effort：Stop hook 回报的档；模型：安全栅门回退后的会话模型）：点线下划提示（title 有说明） */
   .model.mismatch .mtxt { text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--muted); }
   .model.pending .mtxt { color: var(--muted); }   /* 自定义模型清单还没到：占位名先灰着 */
+  /* Ultracode 开着：档名变紫（EffortPanel 同一组 --extended-purple 实测值，暗 #b796ff / 亮 #8e6bd9），不另写「Ultracode」 */
+  .model.lvl.ultra { color: rgb(183, 150, 255); }
+  :global(html[data-theme="light"]) .model.lvl.ultra { color: rgb(142, 107, 217); }
+  .model.ultra.mismatch .mtxt { text-decoration-color: currentColor; }
   /* 折叠屏分屏 / 手机小窗（实测可用宽 ~285px）：把官方间距压一点点，让工具条继续排一行，
      不必提前换行。宽屏一律维持官方 p7/8 与 gap8。 */
   @media (max-width: 360px) {

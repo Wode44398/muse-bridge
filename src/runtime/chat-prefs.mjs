@@ -35,11 +35,18 @@ function persist(file, data) {
 }
 
 // 只存显式选择：model/effort 为 null = 用服务端默认（前端选择器的「默认」态）。
-const norm = (p) => ({
-  model: p && typeof p.model === 'string' && p.model ? p.model : null,
-  effort: p && typeof p.effort === 'string' && p.effort ? p.effort : null,
-  fast: !!(p && p.fast),
-});
+// ultracode 与档位独立（10-30）；旧写法 effort:'ultracode' 记成 xhigh + ultracode。
+const norm = (p) => {
+  const legacy = !!p && p.effort === 'ultracode';
+  return {
+    model: p && typeof p.model === 'string' && p.model ? p.model : null,
+    effort: legacy ? 'xhigh' : p && typeof p.effort === 'string' && p.effort ? p.effort : null,
+    fast: !!(p && p.fast),
+    ...(legacy || (p && p.ultracode === true) ? { ultracode: true } : {}),
+  };
+};
+// last（新对话的默认）不带 Ultracode：它只对当前会话生效，新会话从关着起步（官方 help 原话）。
+const lastOf = (p) => { const { ultracode: _drop, ...rest } = norm(p); return rest; };
 // 会话级输出风格覆盖（2026-10-20，官方会话菜单「Output style」同款）：只挂在会话条目上，不进 last——
 // 新会话从设置里的默认风格起步（官方语义），不沿用上一个会话单独选的。null = 跟随默认。
 const styleOf = (p) => (p && typeof p.outputStyle === 'string' && p.outputStyle ? p.outputStyle : null);
@@ -59,7 +66,7 @@ export function recordChatPrefs(ctx, sessionId, prefs) {
   const link = linkOf(prev?.computer) || linkOf(prefs?.computer);
   const entry = { ...norm(prefs), ...(style ? { outputStyle: style } : {}), ...(prevMode ? { permissionMode: prevMode } : {}), ...(link ? { computer: link } : {}), at: Date.now() };
   data.sessions[sessionId] = entry;
-  data.last = { ...norm(prefs), at: entry.at };
+  data.last = { ...lastOf(prefs), at: entry.at };
   const ids = Object.keys(data.sessions);
   if (ids.length > CAP) {
     ids.sort((a, b) => (data.sessions[a]?.at || 0) - (data.sessions[b]?.at || 0));

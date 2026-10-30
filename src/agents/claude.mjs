@@ -25,7 +25,7 @@ import { sessionQuestions, pendingQuestions, waitForAnswer, formatAnswer, questi
 // Claude 设置（设置页 › Claude）→ 每轮启动参数：输出风格 / 回复语言 / 署名 / 动态工作流 / 安全栅门 / 输入建议 / 压缩点
 import { turnSettings, refreshOutputStyles, autoContinueDefault, dispatchNudge } from '../runtime/claude-turn-settings.mjs';
 import { VAULT, UPLOADS, MEDIA, MODEL, ROOT, NATIVE_ROOT } from '../config/index.mjs';
-import { CAPABILITIES, to1M, claudeSupportsFast, claudeEffortOptions, ULTRACODE } from '../config/capabilities.mjs';
+import { CAPABILITIES, to1M, claudeSupportsFast, claudeEffortOptions, splitUltracode, ULTRACODE } from '../config/capabilities.mjs';
 // 工具行/任务卡规则与历史重建（routes/sessions.mjs）共用一份——直播与重开必须一致。
 import { toolShown, toolSummary, toolInputSubset, taskUsage, readWorkflowOutput, normTaskStatus, clip, compactMeta, COMPACT_SUMMARY_RE } from '../runtime/tool-summary.mjs';
 import { makeRetractLedger } from '../runtime/retract-ledger.mjs';
@@ -71,11 +71,11 @@ import { PHONE_FS, PHONE_CONTROL, CLAUDE_IN_CHROME, CLAUDE_CHROME_CONFIG_DIR } f
 import { ensureChromeNativeHost } from '../runtime/chrome-native-host.mjs';
 import { pendingRewindAnchor, clearPendingRewind, findRetryAnchor, setPendingRewind } from './claude-rewind.mjs';
 import { routeBeforeQuery, noteLimitHit, reasonText } from '../runtime/account-router.mjs';
-import { upstreamEvents, isUpstreamEnv, lastServedAccount } from '../runtime/claude-upstream.mjs';
+import { upstreamEvents, isUpstreamEnv, lastServedAccount, ensureClaudeUpstream } from '../runtime/claude-upstream.mjs';
 import { recordChatPrefs, swapChatPrefsModel, deviceLinkFor, setDeviceLink } from '../runtime/chat-prefs.mjs';
 // 自定义 API（设置 › Claude › 模型服务）：custom:<服务>:<模型> 的会话经本机代理转到第三方端点
 import { isCustomModelId, resolveCustomModel, providersRev, customSupportsFast, customTopTier, subagentModelCatalog, customOwner } from '../runtime/claude-providers.mjs';
-import { providerEngineEnv, onFastFallback, fastCooling } from '../runtime/claude-providers-proxy.mjs';
+import { providerEngineEnv, providerRouteToken, onFastFallback, fastCooling } from '../runtime/claude-providers-proxy.mjs';
 import { levelForTier } from '../runtime/claude-providers-transform.mjs';
 import { notePush } from '../runtime/push-notices.mjs';
 import { unarchiveOnTurn } from '../runtime/session-archive-auto.mjs';   // 真人在已归档会话里发消息 → 取消归档
@@ -716,11 +716,14 @@ function evictWarm(keep) {
   }
 }
 
-export async function runClaudeChat(req, res, { message, sessionId, model, effort, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, autoRetry, limitReplay, limitResume, restartResume = 0, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy }) {
+export async function runClaudeChat(req, res, { message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, autoRetry, limitReplay, limitResume, restartResume = 0, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy }) {
   ctx = ctx || { kind: 'admin', sandbox: false, cwd: VAULT, configDir: null, key: 'admin' };
   const snap = ctx.snap || null;   // 聊天快照轮：专属 MCP/提示词/更紧的工具面
   // 新会话预热（见 SPARE_MS）：没有消息、没有 SSE 接收方，建好 query 停在第一轮之前等人接管。
   const isSpare = !!prewarm;
+  // Ultracode 与档位独立（10-30）：旧写法 effort:'ultracode'（老客户端、助手、旧偏好重放）拆成 xhigh + Ultracode
+  const legacyUltra = effort === ULTRACODE;
+  ({ effort, ultracode } = splitUltracode(effort, ultracode));
   markTurn(req, 'pre');
   if (isSpare && (snap || ctx.sandbox || ctx.kind !== 'admin' || sessionId || !SPARE_MS)) return;
   // 自定义 API（runtime/claude-providers*.mjs）：主机管理员与成员各用各的注册表（成员自带 Key，2026-10-27）；快照访客不给。
@@ -739,9 +742,10 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   }
   // 自定义模型的推理强度 = 它自己档位表里的一档（设置 › Claude › 模型服务），走代理地址，不传给 CLI；不在表里的
   //（从官方模型带过来的 xhigh 之类）按没选算，代理用模型的默认档。Ultracode（动态工作流编排）第三方模型也有：
-  // 输入框档位表末尾统一追加这一档，主循环跑模型自己最高的那档，再加常驻工作流（见下面 effortOpts）。
+  // 和官方模型一样是独立勾选，主循环照所选档位跑，再加常驻工作流（见下面 effortOpts）。
+  // 旧写法 effort:'ultracode'（那时它是档位表末尾追加的一档）= 模型自己最高的那档 + 工作流。
   const customEffort = !custom || !effort ? ''
-    : effort === ULTRACODE ? customTopTier(custom.model)
+    : legacyUltra ? customTopTier(custom.model)
     : (custom.model.efforts || []).some((t) => t.id === effort) ? effort : '';
   if (custom) noteNativeWindow(custom.model.id, custom.model.contextWindow);   // 用量面板按配置的真实窗口画
   // 5 小时限额「重置后自动继续」：这个会话又开跑了——人自己发的就作废等着的那次续跑（limit-resume.mjs）。
@@ -783,18 +787,18 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 设置项（runtime/claude-turn-settings.mjs）：输入建议 / 压缩点以服务端设置为准，老客户端请求体兜底
   const ts = turnSettings(ctx, { suggest, compactFrac, sessionId: ownSid, outputStyle: chatPrefs && chatPrefs.outputStyle });
   const wantSuggest = ts.suggest;
-  // Ultracode = xhigh + 常驻动态工作流编排（Workflow 工具会派一群子 agent，成本倍增器）。快照访客 /
-  // 无 shell 的沙箱用户不给：降到 xhigh（chat.mjs 对快照已拦一道，这里是 runClaudeChat 全部入口的兜底）。
-  if (effort === ULTRACODE && (snap || (ctx.sandbox && !ctx.shell))) effort = 'xhigh';
-  // 成员的高消耗功能（开源路线 S2-6，控制台「额度与注册」）：没给成员开放的 fast 不开、Ultracode 降到 xhigh、
+  // Ultracode = 常驻动态工作流编排（Workflow 工具会派一群子 agent，成本倍增器）。快照访客 /
+  // 无 shell 的沙箱用户不给：只关 Ultracode，档位照旧（chat.mjs 对快照已拦一道，这里是 runClaudeChat 全部入口的兜底）。
+  if (ultracode && (snap || (ctx.sandbox && !ctx.shell))) ultracode = false;
+  // 成员的高消耗功能（开源路线 S2-6，控制台「额度与注册」）：没给成员开放的 fast 不开、Ultracode 关掉（档位照旧）、
   // 不跑 1M 上下文（见下面 effModel）。管理员、服务账号、管理员代发的轮不受限（runtime/quota.mjs memberRules）。
   const memberCaps = memberRules(ctx);
   if (!memberCaps.fast) fast = false;
-  if (effort === ULTRACODE && !memberCaps.ultracode) effort = 'xhigh';
+  if (ultracode && !memberCaps.ultracode) ultracode = false;
   const modelFor = (m) => (memberCaps.ctx1m ? to1M(m) : String(m || '').replace(/\[1m\]$/i, '') || m);
   // 这一轮记到谁的账上：注册用户本人（含管理员代他发的）/ 快照的铸造者；管理员自己不记（runtime/quota.mjs billingUser）
   const billTo = billingUser(ctx);
-  const wantUltracode = effort === ULTRACODE;
+  const wantUltracode = !!ultracode;
   // 手机能力按【发起客户端】分流（fromPhone 由 chat 路由判定：apk WebView / 原生胶囊）——
   // 电脑网页端发起的轮以前也全量注入，Claude 会误宣称能操作手机/读手机文件（实测投诉）。
   //  · 手机文件（PHONE_FS）：phone_cmd 走本轮 SSE、由【发起设备】原生执行——发起方不是
@@ -867,12 +871,16 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // styleText（用户可控文本）拼在沙箱 nudge 之前——让沙箱铁律保持"最后说话"，
   // 降低自定义风格对软约束的对抗力（硬边界在 canUseTool，不受提示词影响）。
   // 子 agent 调度（设置 › Claude › 对话 › 子 agent 调度偏好）：动态工作流开着的轮告诉 Claude 每个子 agent 按难度定档、能派哪些模型。
-  // 第三方模型清单只给主机管理员（自定义 API 只有它能用）；只有主会话本身走自定义 API 时代理才转得过去，官方会话里只提一句。
+  // 第三方模型清单按身份各一份（自己的服务 + 管理员共享的）。官方订阅会话有可派的第三方模型时，CLI 也经本机上游代理
+  //（claude-upstream.mjs，地址带这个身份的令牌）：工作流 agent() 写第三方模型名的请求转去自定义 API 代理，其余照旧去 Anthropic。
   const customSmall = custom && custom.provider.fastModel && custom.provider.models.some((m) => m.id === custom.provider.fastModel && m.enabled && m.kind !== 'other') ? custom.provider.fastModel : custom && custom.model.id;
+  const dispatchOn = !snap && (!!ts.sdk.enableWorkflows || wantUltracode);
+  const catalog = cpOwner ? subagentModelCatalog(cpOwner) : [];
+  const subRoute = dispatchOn && !custom && catalog.length && await ensureClaudeUpstream() ? providerRouteToken(cpOwner) : null;
   const dispatchText = dispatchNudge({
-    on: !snap && (!!ts.sdk.enableWorkflows || wantUltracode), text: ts.dispatch,
+    on: dispatchOn, text: ts.dispatch,
     custom: custom ? { main: custom.model.id, small: customSmall } : null,
-    catalog: cpOwner ? subagentModelCatalog(cpOwner) : [],
+    catalog, routed: !!subRoute,
   });
   // 插件给 Claude 的工具与提示段（plugins/claude-tools.mjs）：工具合成各插件自己的 MCP server，提示段排在内置提示之后、
   // 子 agent 调度说明之前；sig 进下面的停放签名。getGen 在下文才定义——工具被调用时它早已就绪。
@@ -889,7 +897,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   const customFast = !!(fast && custom && customSupportsFast(custom.provider, custom.model));
   const engineEnv = custom
     ? await providerEngineEnv(claudeEngineEnv(ctx) || { ...process.env }, { provider: custom.provider, model: custom.model, effort: customEffort, fast: customFast, owner: cpOwner })
-    : claudeEngineEnv(ctx);
+    : claudeEngineEnv(ctx, { route: subRoute });
   markTurn(req, 'env');
   // 额度事件记回本轮启动时的那个号（号池下各号额度分槽，轮中切号不串）。
   const engineAcct = activeAccountId();
@@ -898,14 +906,14 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   const servedAcct = () => (seamless && lastServedAccount()) || engineAcct;
   // SDK usage 接口不走代理（CLI 拿 env 里那个固定号直连 OAuth 接口），读数归那个号。
   const usageAcct = (seamless && accountIdForToken(engineEnv.CLAUDE_CODE_OAUTH_TOKEN)) || engineAcct;
-  // effort：ultracode 不是 SDK 的 effort 取值（TS 类型只列五档）——翻译成 effort:'xhigh' +
-  // settings {ultracode:true, enableWorkflows:true}（Pro 计划 enableWorkflows 默认关，必须显式开）。
+  // effort 原样传；Ultracode 不是 effort 取值，合成 settings {ultracode:true, enableWorkflows:true}
+  //（Pro 计划 enableWorkflows 默认关，必须显式开）——两者独立，任意档位都能开 Ultracode（SDK 0.3.311 实测）。
   // settings 与 fast mode 合成【同一份】JSON 字面量（不是文件路径），不落盘、仅本轮生效。
   // 自定义模型：也给 CLI 一档 = 本轮档位换算成的官方档（levelForTier）。真正发出去的仍是代理按档位表写的值；
   // CLI 每个请求都带 output_config.effort，代理靠「是不是这一档」分辨主循环 / 继承的子 agent 与自己挑了档的子 agent（pickTarget）。
   const effortOpts = custom
-    ? { effort: levelForTier(custom.model, customEffort), ...(effort === ULTRACODE ? { settings: { ultracode: true, enableWorkflows: true } } : {}) }
-    : claudeEffortOptions(effort);
+    ? { ...claudeEffortOptions(null, wantUltracode), effort: levelForTier(custom.model, customEffort) }
+    : claudeEffortOptions(effort, wantUltracode);
   // 安全栅门「会话暂停」（claude.ai 的 Paused 卡 / 官方 /code 的 refusal_fallback_prompt 对话框）：
   // switchModelsOnFlag=false + 声明 supportedDialogKinds 后，消息被拒时 CLI 不再自动切回退模型，而是
   // 发 request_user_dialog 停在原地等宿主回话（没声明 kind 则 fail-closed = 经典拒答直接收尾）。
@@ -1630,12 +1638,12 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
             try {
               const level = normalizeEffortLevel(input && input.effort);
               const sid = gen.sessionId;
-              // ultracode 轮：hook 只能回解析后的 xhigh（没有 ultracode 标记），实况留到 result 后
-              // getSettings() 定局（settleEffort）——这里只暂存，不发。
+              // ultracode 轮：hook 回的档位是真的，但没有 ultracode 标记——Ultracode 真开没开留到 result 后
+              // getSettings() 定局（settleEffort），档位与它一起发——这里只暂存，不发。
               if (wantUltracode) { hookLevel = level; return {}; }
               // 自定义模型：CLI 回报的是它眼里的官方档位，真正发出去的是代理按档位表写的值——不回报，芯片显示所选
               if (custom) return {};
-              if (sid && !snap) { applyEffort(ctx.key, sid, level); send({ type: 'effort', sessionId: sid, level }); }
+              if (sid && !snap) { applyEffort(ctx.key, sid, level, false); send({ type: 'effort', sessionId: sid, level, ultracode: false }); }
             } catch {}
             return {};
           }] }],
@@ -2285,25 +2293,25 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         send({ type: 'session', sessionId: gen.sessionId, model: bare, swapped: true, from: fromBare, at: Date.now(), requestId: pick('request_id', 'requestId') || null });
       }
     };
-    // effort 实况定局（仅 ultracode 轮）：Stop hook 回报的是解析后的档位（ultracode 下恒为 xhigh，没有标记）；
-    // 真值是控制通道 getSettings() 的 applied.ultracode——工作流没真开（Pro 计划默认关 / org policy 关 /
-    // CLAUDE_CODE_WORKFLOWS=false）或模型被封顶时它是 false，芯片就该老实显示 Extra 而不是说谎。
-    // 只能在 result 后、break 前调（同 getContextUsage）；3s 兜底，失败就用 hook 的值。
+    // effort 实况定局（仅 ultracode 轮）：Stop hook 回报档位（没有 ultracode 标记）；Ultracode 的真值是控制通道
+    // getSettings() 的 applied.ultracode——工作流没真开（Pro 计划默认关 / org policy 关 / CLAUDE_CODE_WORKFLOWS=false /
+    // 模型不支持）时它是 false，芯片就该老实褪掉紫色而不是说谎。
+    // 只能在 result 后、break 前调（同 getContextUsage）；3s 兜底，取不到就不回报 Ultracode（芯片按所选显示）。
     const settleEffort = async () => {
       if (!wantUltracode) return;
       const sid = gen.sessionId;
       if (!sid || snap) return;
-      let level = hookLevel;
+      let level = hookLevel, uc;
       try {
         const st = await Promise.race([q.getSettings(), new Promise((resolve) => setTimeout(() => resolve(null), 3000))]);
-        if (st && st.applied && st.applied.ultracode === true) level = ULTRACODE;
+        if (st && st.applied && typeof st.applied.ultracode === 'boolean') uc = st.applied.ultracode;
       } catch (e) {
         console.log('[claude] getSettings failed:', e && e.message);
       }
-      // 自定义模型：工作流没真开时 hook 回的是 CLI 眼里的官方档位，换成代理实际发的那档（模型最高档）；档位表空就不回报
-      if (custom && level !== ULTRACODE) { if (!customEffort) return; level = customEffort; }
-      applyEffort(ctx.key, sid, level);
-      send({ type: 'effort', sessionId: sid, level });
+      // 自定义模型：hook 回的是 CLI 眼里的官方档位，换成代理实际发的那档（前端对自定义模型只看 ultracode）
+      if (custom) level = customEffort || null;
+      applyEffort(ctx.key, sid, level, uc);
+      send({ type: 'effort', sessionId: sid, level, ...(uc !== undefined ? { ultracode: uc } : {}) });
     };
 
     // 预热：停在第一轮之前，被新会话接管才往下读；没人接就收尾退出（finally 关进程）。

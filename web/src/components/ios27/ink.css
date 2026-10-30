@@ -1,0 +1,34 @@
+/* 「墨与象牙」颜色令牌，给设置页以外用 ios27 控件与材质的浮层（主页账户卡、扫一扫）。
+   与 Settings.svelte 的 .ios / .ios.dark 同值（那边多几组设置页自己用的）：改色时两处一起改。
+   用法：浮层根节点挂 class="i27ink"，暗色再加 dark；TextField 等 ios27 控件读这里的变量。 */
+.i27ink {
+  --i-label: #1d1b18;
+  --i-label2: rgba(29, 27, 24, .56); --i-label3: rgba(29, 27, 24, .3); --i-label4: rgba(29, 27, 24, .13);
+  --i-sep: rgba(29, 27, 24, .075);
+  --i-fill2: rgba(29, 27, 24, .1); --i-fill3: rgba(29, 27, 24, .07); --i-fill4: rgba(29, 27, 24, .045);
+  --i-field: rgba(29, 27, 24, .06);
+  --i-accent: #1d1b18; --i-on-accent: #f6f3ec;
+  --i-tile: rgba(29, 27, 24, .05); --i-tile-ink: rgba(29, 27, 24, .82);
+  --i-av: linear-gradient(160deg, #e8e3d9, #d6cfc1); --i-av-ink: #3a352d;
+  --i-ok: #4f8a5b; --i-warn: #b0741c; --i-red: #c4473b;
+  --i-dim: rgba(24, 21, 17, .26);
+  /* kit 警告框按钮的灰底（Fills/Secondary 在玻璃上的等效色） */
+  --i-btn: rgba(120, 120, 128, .2);
+  --i-list: rgba(255, 255, 255, .5);
+  color-scheme: light;
+}
+.i27ink.dark {
+  --i-label: #f1ece2;
+  --i-label2: rgba(241, 236, 226, .54); --i-label3: rgba(241, 236, 226, .27); --i-label4: rgba(241, 236, 226, .11);
+  --i-sep: rgba(241, 236, 226, .065);
+  --i-fill2: rgba(241, 236, 226, .12); --i-fill3: rgba(241, 236, 226, .08); --i-fill4: rgba(241, 236, 226, .05);
+  --i-field: rgba(241, 236, 226, .07);
+  --i-accent: #ebe5d8; --i-on-accent: #151412;
+  --i-tile: rgba(241, 236, 226, .065); --i-tile-ink: rgba(241, 236, 226, .86);
+  --i-av: linear-gradient(160deg, #3a3631, #211f1b); --i-av-ink: #efe9dd;
+  --i-ok: #85b78f; --i-warn: #d9a441; --i-red: #e2725f;
+  --i-dim: rgba(0, 0, 0, .45);
+  --i-btn: rgba(255, 255, 255, .17);
+  --i-list: rgba(255, 255, 255, .06);
+  color-scheme: dark;
+}

@@ -12,7 +12,7 @@ import { runClaudeChat } from '../agents/claude.mjs';
 import * as claudeProjects from '../claude-projects.mjs';
 import { createSessionWorktree } from '../claude-worktrees.mjs';
 import { claudeSetting } from '../runtime/claude-settings.mjs';
-import { CLAUDE_MODELS, CLAUDE_EFFORTS, ULTRACODE } from '../config/capabilities.mjs';
+import { CLAUDE_MODELS, CLAUDE_EFFORTS, splitUltracode } from '../config/capabilities.mjs';
 import { isCustomModelId, customEffortOk, customOwner } from '../runtime/claude-providers.mjs';
 // 官方型号 + 自定义 API 的 custom:<服务>:<模型>（存在与否、谁能用由 runClaudeChat 判，给人话报错）
 const claudeModelOk = (m) => CLAUDE_MODELS.has(m) || isCustomModelId(m);
@@ -218,16 +218,19 @@ export function registerChatRoutes(router, { authOk, identify }) {
     }
     // 自定义 API 的模型：推理强度是它自己的档位表（设置 › Claude › 模型服务，档位 id 自由起名），按那张表收
     const effortOk = (e) => CLAUDE_EFFORTS.has(e) || (isCustomModelId(model) && customEffortOk(model, e, customOwner(ctx)));
-    let effort = effortOk(parsed.effort) ? parsed.effort : undefined;
-    // Ultracode = xhigh + 常驻动态工作流（Workflow 派一群子 agent，成本倍增器）：快照访客降到 xhigh
+    // Ultracode 与档位独立（请求体 ultracode:true）；旧写法 effort:'ultracode' 拆成 xhigh + Ultracode
+    const picked = splitUltracode(effortOk(parsed.effort) ? parsed.effort : undefined, parsed.ultracode);
+    const effort = picked.effort;
+    // Ultracode = 常驻动态工作流（Workflow 派一群子 agent，成本倍增器）：快照访客不给
     //（claude.mjs 对无 shell 的沙箱用户再拦一道；Workflow 工具对快照已 disallow）。
-    if (isSnap && effort === ULTRACODE) effort = 'xhigh';
+    const ultracode = picked.ultracode && !isSnap;
     const fast = parsed.fast === true && !isSnap;   // fast mode 消耗额外用量，快照访客不给
     // 会话级选择器记忆：记「用户显式选了什么」而非 clamp 后的回落值——没选就存 null，
     // 恢复时选择器回到「默认」态，服务端默认将来变了也跟着走。快照访客不记。
     const chatPrefs = isSnap ? null : {
       model: claudeModelOk(parsed.model) ? parsed.model : null,
-      effort: effortOk(parsed.effort) ? parsed.effort : null,
+      effort: effort || null,
+      ultracode,
       fast,
       // 会话级输出风格（新会话在发第一条前从加号菜单选的；续聊的覆盖存在 chat-prefs 里，这里不带）。
       // 只收像风格名的字符串，claude-turn-settings 再按可选清单下发。带 sessionId 的一律不收：请求随带的风格
@@ -370,7 +373,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
       res.writeHead(202, { 'Content-Type': 'application/json' });
       res.end('{"ok":true}');
       runClaudeChat(req, null, {
-        message: '', sessionId: undefined, model, effort, fast, chatPrefs, attachments: [], style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
+        message: '', sessionId: undefined, model, effort, ultracode, fast, chatPrefs, attachments: [], style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
         ctx: claudeCtx, prewarm: true, permissionMode,
       }).catch((e) => console.log('[claude] prewarm failed:', e && e.message));
       return;
@@ -387,7 +390,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
     };
     const restartResume = isSnap || !sessionId ? 0 : Math.max(0, Math.min(9, Number(parsed.restartResume) | 0));
     return runClaudeChat(req, res, {
-      message, sessionId, model, effort, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
+      message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
       limitReplay, limitResume: (parsed.limitResume === true || restartResume > 0) && !isSnap, restartResume,
       globalMax: isSnap ? SNAP_MAX_TURNS : undefined,
       ctx: claudeCtx,

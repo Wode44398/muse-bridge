@@ -24,14 +24,23 @@
 //
 // 代理只监听 127.0.0.1、路径带随机键；一旦起来就常驻到进程退出——停放 / 在跑的 CLI 的 env 里
 // 写死了这个地址，中途关掉它们就断了。开关关掉后 engineUpstream() 回 null，新起的 CLI 回到直连；
-// 还挂在代理上的旧 CLI 照常转发（用当前激活号，不再自动换号）。
+// 还挂在代理上的旧 CLI 照常转发（沿用 CLI 自己的凭证，不再自动换号）。
+//
+// 第二个用途（2026-10-30）：官方订阅会话的子 agent 用第三方模型。动态工作流的 agent(prompt, { model:'mimo-v2.6-flash' })
+// 会把模型名原样写进 body.model；直连 api.anthropic.com 时这只会 404。会话的身份能用自定义 API、这一轮开着动态工作流、
+// 也有可派的第三方模型时，CLI 走这个代理并在地址里带一段 /r/<令牌>（claude-providers-proxy 的 owner 令牌，HMAC 派生，
+// 成员拼不出别人的）：body.model 是第三方模型名（claude-* 与别名一律不算）→ 整个请求转给自定义 API 代理，
+// 那边按该服务的 Key / 协议 / 档位表处理（子 agent 选的 output_config.effort 照常换算）；订阅 OAuth 凭证在这一跳就剥掉，
+// 绝不发给第三方。其余请求照旧去 Anthropic。无缝换号没开时代理不换号，原样沿用 CLI 自己的 Authorization。
 
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { activeAccountId, listAccountsWithTokens, setEngineUpstream } from './claude-account.mjs';
+import { activeAccountId, accountIdForToken, listAccountsWithTokens, setEngineUpstream } from './claude-account.mjs';
+import { isCustomModelId, resolveSubagentModel } from './claude-providers.mjs';
+import { providersProxyBase, ownerOfRouteToken } from './claude-providers-proxy.mjs';
 import { seamlessActive, leaveIfBlocked, noteLimitHit, onRouterSettings } from './account-router.mjs';
 import { loginToken, bucket } from './account-usage.mjs';
 import { applyProbedLimits } from './status.mjs';
@@ -89,30 +98,79 @@ function fail(res, status, message) {
   res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message } }));
 }
 
+/**
+ * 官方订阅会话里，这个模型名该不该转给第三方服务：回 { provider, model } 或 null（照旧去 Anthropic）。
+ * claude-* 与 CLI 的别名一律不转——哪怕某个中转站也挂了同名的 Claude 型号，主循环和后台小任务也不能被拐去花别人的 Key。
+ */
+export function routedModel(name, owner) {
+  if (!owner || typeof name !== 'string' || !name) return null;
+  if (!isCustomModelId(name) && /^(claude[-_.]|opus|sonnet|haiku|fable)/i.test(name)) return null;
+  return resolveSubagentModel(name, owner);
+}
+
+const HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'te', 'trailer', 'upgrade']);
+
+// 整个请求交给自定义 API 代理（同进程、127.0.0.1，用 http.request 直连，不吃全局出站代理）。
+// 地址按会话的 owner 拼（不是服务的 owner）：成员用管理员共享的服务时也只拿得到自己的令牌，规则同 providerEngineEnv。
+async function toProvider(req, res, hit, owner, path, body, signal) {
+  const root = await providersProxyBase(owner);
+  const target = new URL(`${root}/p/${hit.provider.id}/-/${encodeURIComponent(hit.model.id)}${path}`);
+  const headers = {};
+  for (const [k, v] of Object.entries(req.headers)) if (!DROP_REQ.has(k) && v != null) headers[k] = Array.isArray(v) ? v.join(', ') : v;
+  if (body.length) headers['content-length'] = String(body.length);
+  if (DEBUG) console.log(`[claude-upstream] ${req.method} ${path.split('?')[0]} ${hit.model.id} → 第三方 ${hit.provider.name}`);
+  await new Promise((resolve) => {
+    const up = http.request(target, { method: req.method, headers }, (r) => {
+      const out = {};
+      for (const [k, v] of Object.entries(r.headers)) if (!HOP.has(k) && v != null) out[k] = v;
+      res.writeHead(r.statusCode || 502, out);
+      pipeline(r, res).catch(() => {}).finally(resolve);
+    });
+    up.on('error', (e) => { if (!signal.aborted) fail(res, 502, 'bridge 上游代理转不到自定义 API 代理：' + ((e && e.message) || e)); resolve(); });
+    signal.addEventListener('abort', () => { up.destroy(); resolve(); }, { once: true });
+    up.end(body.length ? body : undefined);
+  });
+}
+
 async function handle(req, res, key) {
   const prefix = '/' + key;
   const url = req.url || '';
   if (!url.startsWith(prefix + '/')) { res.writeHead(404); res.end(); return; }
-  const path = url.slice(prefix.length);
+  let path = url.slice(prefix.length);
+  // /r/<令牌>：这个 CLI 的子 agent 可以派第三方模型（令牌认不出 = 拼的，一律 404）
+  let owner = null;
+  const rm = /^\/r\/([0-9a-f]{32})(\/.*)$/.exec(path);
+  if (rm) {
+    owner = ownerOfRouteToken(rm[1]);
+    if (!owner) { res.writeHead(404); res.end(); return; }
+    path = rm[2];
+  }
   const chunks = [];
   try { for await (const c of req) chunks.push(c); } catch { return; }
   const body = Buffer.concat(chunks);
   const isMessages = req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(path);
+  const isCount = req.method === 'POST' && /^\/v1\/messages\/count_tokens(\?|$)/.test(path);
   let model = '';
-  if (isMessages) { try { model = String(JSON.parse(body.toString('utf8')).model || ''); } catch {} }
+  if (isMessages || isCount) { try { model = String(JSON.parse(body.toString('utf8')).model || ''); } catch {} }
 
   // CLI 断开（用户停止 / 进程退出）就掐掉上游请求，别让它在后台继续烧额度。
   const ac = new AbortController();
   res.on('close', () => { if (!res.writableFinished) ac.abort(); });
 
-  if (isMessages) {
+  const hit = owner && (isMessages || isCount) ? routedModel(model, owner) : null;
+  if (hit) { await toProvider(req, res, hit, owner, path, body, ac.signal); return; }
+
+  // 无缝换号没开（只为第三方子 agent 走这里）：不选号、不换号，沿用 CLI 自己的凭证
+  const seam = seamlessActive();
+  if (isMessages && seam) {
     const sw = await leaveIfBlocked(model);
     if (sw) upstreamEvents.emit('switch', sw);
   }
 
   for (let switches = 0; ; ) {
-    const acct = activeAccountId();
-    const token = tokenOf(acct);
+    const cliTok = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    const acct = seam ? activeAccountId() : (accountIdForToken(cliTok) || activeAccountId());
+    const token = seam ? tokenOf(acct) : '';
     const headers = {};
     for (const [k, v] of Object.entries(req.headers)) if (!DROP_REQ.has(k) && v != null) headers[k] = Array.isArray(v) ? v.join(', ') : v;
     if (token) headers.authorization = 'Bearer ' + token;
@@ -124,7 +182,7 @@ async function handle(req, res, key) {
       if (!ac.signal.aborted) fail(res, 502, 'bridge 上游代理连不上 Anthropic：' + ((e && e.cause && e.cause.code) || (e && e.message) || e));
       return;
     }
-    lastServed = acct;
+    if (seam) lastServed = acct;
     noteHeaders(up.headers, acct);
     if (DEBUG) console.log(`[claude-upstream] ${req.method} ${path.split('?')[0]} ${model || '-'} via ${acct} → ${up.status}`);
     if (isMessages && (up.status === 429 || up.status === 401) && seamlessActive() && switches < MAX_SWITCHES) {
@@ -181,16 +239,24 @@ export function initClaudeUpstream() {
   onRouterSettings(() => { if (seamlessActive()) ensure(); });
 }
 
-// claude-account.claudeEngineEnv 用：无缝换号生效且代理已就绪 → { baseUrl, token }，否则 null（直连，行为同以前）。
-// 刚打开开关、代理还在起的那一轮照旧直连。
-export function engineUpstream() {
-  if (!seamlessActive()) return null;
+// claude-account.claudeEngineEnv 用：无缝换号生效、或这一轮要派第三方子 agent（route = providerRouteToken(owner)），
+// 且代理已就绪 → { baseUrl, token? }，否则 null（直连，行为同以前）。只为第三方子 agent 走代理时不带 token
+//（CLI 照旧用激活号，代理原样转发）。刚打开开关、代理还在起的那一轮照旧直连——要派第三方的轮先 await ensureClaudeUpstream()。
+export function engineUpstream({ route } = {}) {
+  const seam = seamlessActive();
+  if (!seam && !route) return null;
   if (!baseUrl) { ensure(); return null; }
+  const url = route ? `${baseUrl}/r/${route}` : baseUrl;
+  if (!seam) return { baseUrl: url };
   const first = listAccountsWithTokens().find((a) => a.token);
-  return { baseUrl, token: first ? first.token : '' };
+  return { baseUrl: url, token: first ? first.token : '' };
 }
 
-export function isUpstreamEnv(env) { return !!(env && baseUrl && env.ANTHROPIC_BASE_URL === baseUrl); }
+/** 起好代理再返回（要派第三方子 agent 的轮在取 env 之前调，免得第一轮直连）。 */
+export async function ensureClaudeUpstream() { await ensure(); return !!baseUrl; }
+
+// 这个 env 是不是「无缝换号」的走法（一轮可能横跨几个号，额度事件记到实际服务的号名下）。只为第三方子 agent 走代理的不算。
+export function isUpstreamEnv(env) { return !!(env && baseUrl && seamlessActive() && String(env.ANTHROPIC_BASE_URL || '').startsWith(baseUrl)); }
 
 // 最近一个推理请求实际用的号（无缝模式下一轮可能横跨几个号，额度事件记到它名下）。
 export function lastServedAccount() { return lastServed; }

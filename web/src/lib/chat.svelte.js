@@ -83,11 +83,12 @@ function applyPrefs(p) {
   if (IS_CSNAP) return;
   settings.model = (p && p.model) || null;
   settings.effort = (p && p.effort) || null;
+  settings.ultracode = !!(p && p.ultracode);
   settings.fast = !!(p && p.fast);
 }
 function notePrefsNow(id) {
   if (IS_CSNAP) return;
-  notePrefs(id, { model: settings.model, effort: settings.effort, fast: settings.fast });
+  notePrefs(id, { model: settings.model, effort: settings.effort, ultracode: settings.ultracode, fast: settings.fast });
 }
 // 选择器组件（ModelPicker/EffortPanel）改动时调：当前会话与「新对话默认」都立刻记住，
 // 改完没发送就杀后台也不丢。
@@ -633,7 +634,8 @@ function applyStatusEvent(ev) {
       return;
     }
     case 'ctx_usage': if (ev.sessionId && ev.usage && ev.usage.max) status.usages[ev.sessionId] = ev.usage; return;
-    case 'effort': if (ev.sessionId) status.efforts[ev.sessionId] = { level: ev.level || null, at: Date.now() }; return;
+    // ultracode：这一轮 Ultracode 真开没开（undefined = 服务端没取到，按所选显示）；旧服务端的 level:'ultracode' 拆开
+    case 'effort': if (ev.sessionId) status.efforts[ev.sessionId] = ev.level === 'ultracode' ? { level: 'xhigh', ultracode: true, at: Date.now() } : { level: ev.level || null, ...(typeof ev.ultracode === 'boolean' ? { ultracode: ev.ultracode } : {}), at: Date.now() }; return;
     case 'limits': if (ev.limits) { status.limits = ev.limits; status.updatedAt = ev.updatedAt || Date.now(); } return;
     case 'perm_mode': onPermEvent(null, ev); return;
   }
@@ -1696,10 +1698,11 @@ function chatParams(t, atts) {
   // 勾选框也只在这时出现；dock.meta 此刻就是新对话落点的那份。项目本身已是 linked worktree 就不再套一层。
   if (!session.id && prefs.worktree && !IS_CSNAP && dock.meta?.wtNew) params.worktree = true;
   if (settings.model) params.model = settings.model;
-  // 快照访客没有 Ultracode（服务端静默降到 xhigh 且不发 effort 实况）：请求就按 xhigh 发，芯片不说谎
-  // 自定义模型：芯片藏着（没有档位）或选的不在它的档位表里就不带——以前残留的 Ultracode 会在后台悄悄开动态工作流
+  // 自定义模型：芯片藏着（没有档位）或选的不在它的档位表里就不带
   const eff = effectiveEffort(settings.model, settings.effort);
-  if (eff) params.effort = (IS_CSNAP && eff === 'ultracode') ? 'xhigh' : eff;
+  if (eff) params.effort = eff;
+  // Ultracode 与档位独立（10-30）；快照访客没有它（服务端也会拦），不带
+  if (settings.ultracode && !IS_CSNAP) params.ultracode = true;
   if (settings.fast) params.fast = true;
   if (settings.style && settings.style !== 'normal') {
     params.style = settings.style;
@@ -2251,6 +2254,7 @@ function steerParams(t, atts, priority) {
   if (settings.model) params.model = settings.model;
   const eff = effectiveEffort(settings.model, settings.effort);
   if (eff) params.effort = eff;
+  if (settings.ultracode && !IS_CSNAP) params.ultracode = true;
   if (settings.fast) params.fast = true;
   if (settings.style && settings.style !== 'normal') {
     params.style = settings.style;

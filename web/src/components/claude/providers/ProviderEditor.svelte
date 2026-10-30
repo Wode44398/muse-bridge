@@ -776,18 +776,36 @@
   .foot .msg.err { color: #d9534f; }
   .spin.light { border-color: currentColor; border-right-color: transparent; }
 
+  .li > div:first-child { flex: 1; min-width: 0; }
+
+  /* 窄屏：外层面板已把 --st-* 换成设置页的墨与象牙（--pm-bg 页底、--st-surface 卡片），这里只管排版与触控尺寸 */
   @media (max-width: 699px) {
-    .ed { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr) auto; }
-    .side { grid-row: 1; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 6px 12px; border-right: 0; border-bottom: 1px solid var(--st-hair); scrollbar-width: none; }
+    .ed { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+    .side { grid-row: 1; flex-direction: row; gap: 6px; overflow-x: auto; overflow-y: hidden; padding: 4px 16px 10px; border-right: 0; scrollbar-width: none; }
     .side::-webkit-scrollbar { display: none; }
-    .nav { flex: none; height: 32px; padding: 0 12px; }
+    .nav { flex: none; height: 34px; padding: 0 14px; border-radius: 999px; font-size: 14px; }
+    .nav.on { background: var(--st-surface); box-shadow: 0 0 0 1px var(--st-hair), 0 1px 3px rgba(0, 0, 0, .06); }
     .nav svg { display: none; }
-    .body { grid-row: 2; padding: 16px 16px 24px; }
-    .foot { grid-row: 3; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); flex-wrap: wrap; }
+    .nav .cnt { margin-left: 2px; }
+    .warn-dot { margin-left: 2px; }
+    .body { grid-row: 2; padding: 6px 16px 24px; overflow-x: hidden; overscroll-behavior: contain; }
+    section > h3 { display: none; }   /* 上面的标签已经写着分区名 */
+    h3 { font-family: inherit; font-size: 17px; font-weight: 600; letter-spacing: -.2px; }
+    .in, .numf { height: 42px; border-radius: 12px; background: var(--st-surface); font-size: 15px; }
+    .in.mono, .in .mono { font-size: 13.5px; }
+    .numf input { font-size: 15px; }
+    .keybox { height: 42px; border-radius: 12px; }
+    .btn { height: 40px; border-radius: 12px; font-size: 14px; }
+    .btn.sm { height: 34px; border-radius: 10px; }
+    .list, .models, .log { border: 0; border-radius: 16px; background: var(--st-surface); }
+    .li { padding: 13px 16px; }
+    .li:has(:global(.seg)) { flex-wrap: wrap; }   /* 分段控件（max_completion_tokens 那种长选项）放不下就换到下一行 */
+    .foot { grid-row: 3; padding: 10px 16px calc(10px + var(--sab, 0px)); flex-wrap: wrap; background: var(--pm-bg, var(--st-surface)); border-top-color: var(--st-hair); }
     .foot .msg { order: -1; flex-basis: 100%; text-align: left; }
     .foot .msg:empty { display: none; }
-    .foot > .btn.danger { margin-right: auto; }   /* 删除靠左，关闭 / 保存靠右（拇指够得着） */
-    .foot > .btn.ghost:not(.danger):first-child { margin-left: auto; }
+    /* 删除收在左边按内容宽；关闭 / 保存平分剩下的宽度（拇指够得着、不会挤在一角） */
+    .foot > .btn:not(.danger) { flex: 1 1 0; min-width: 0; }
+    .foot > .btn.ghost:not(.danger) { background: var(--st-surface); }
     .f2, .f3 { grid-template-columns: 1fr; gap: 0; }
     .hdr { grid-template-columns: 1fr 30px; }
     .hdr input:nth-child(2) { grid-column: 1; }

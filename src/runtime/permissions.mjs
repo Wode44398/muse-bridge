@@ -516,7 +516,7 @@ async function startClearedSession(ctx, fromSid, { plan, mode, feedback, limitRe
   const b0 = limitReplay.body || {};
   const body = {
     agent: 'claude', client: b0.client === 'apk' ? 'apk' : 'web', message, attachments: [], permissionMode: mode,
-    ...(p.model ? { model: p.model } : {}), ...(p.effort ? { effort: p.effort } : {}), ...(p.fast ? { fast: true } : {}),
+    ...(p.model ? { model: p.model } : {}), ...(p.effort ? { effort: p.effort } : {}), ...(p.ultracode ? { ultracode: true } : {}), ...(p.fast ? { fast: true } : {}),
     ...(b0.suggest === true ? { suggest: true } : {}), ...(typeof b0.compactFrac === 'number' ? { compactFrac: b0.compactFrac } : {}),
     autoRetry: true,
   };

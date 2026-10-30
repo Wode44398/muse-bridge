@@ -20,12 +20,19 @@
   let health = $state({});            // 服务 id → 'ok' | 'bad' | ''（最近一条请求）
   let toggling = $state({});
 
+  // 窄屏（手机 / 窄窗口）换成设置页同款的分组列表：卡片网格在 380px 宽里放不下开关、眼睛和标签
+  const NARROW = '(max-width: 699px)';
+  let narrow = $state(typeof window !== 'undefined' && window.matchMedia?.(NARROW).matches);
+
   onMount(() => {
     loadProviders(true).then(refreshHealth);
     const off = pushBackLayer(back);
     const key = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); back(); } };
     window.addEventListener('keydown', key);
-    return () => { off(); window.removeEventListener('keydown', key); };
+    const mq = window.matchMedia?.(NARROW);
+    const onMq = () => { narrow = mq.matches; };
+    mq?.addEventListener?.('change', onMq);
+    return () => { off(); window.removeEventListener('keydown', key); mq?.removeEventListener?.('change', onMq); };
   });
 
   async function refreshHealth() {
@@ -75,20 +82,102 @@
   const chatCount = (p) => p.models.filter((m) => m.enabled && m.kind !== 'other').length;
 </script>
 
-<div class="ov" role="presentation" onclick={(e) => { if (e.target === e.currentTarget && view !== 'edit') onClose?.(); }}>
+{#snippet avatar(p)}
+  {#if providerLogo(p)}<span class="av logo">{@html providerLogo(p)}</span>{:else}<span class="av" style:--h={hue(p.name)}>{initial(p.name)}</span>{/if}
+{/snippet}
+{#snippet chev()}
+  <svg class="chev" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg>
+{/snippet}
+
+<div class="ov" class:narrow role="presentation" onclick={(e) => { if (e.target === e.currentTarget && view !== 'edit') onClose?.(); }}>
   <div class="dlg" role="dialog" aria-modal="true" aria-label={title}>
+    <!-- 宽屏：标题靠左、右上角 ×；窄屏：iOS 导航栏（左返回、标题居中，顶部让出状态栏 --sat） -->
     <header class="top">
-      {#if view !== 'list'}
-        <button type="button" class="hbtn" aria-label={t('返回')} onclick={back}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 4.5 7 10l5.5 5.5"/></svg></button>
+      {#if view !== 'list' || narrow}
+        <button type="button" class="hbtn" aria-label={view === 'list' ? t('关闭') : t('返回')} onclick={back}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 4.5 7 10l5.5 5.5"/></svg></button>
       {/if}
       <div class="ttl">
         <div class="t1">{title}</div>
-        {#if view === 'list'}<div class="t2">{t('Claude · 自定义 API')}</div>{/if}
+        {#if view === 'list' && !narrow}<div class="t2">{t('Claude · 自定义 API')}</div>{/if}
       </div>
-      <button type="button" class="hbtn" aria-label={t('关闭')} onclick={() => (view === 'edit' ? back() : onClose?.())}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 5l10 10M15 5 5 15"/></svg></button>
+      {#if narrow}
+        <span class="hbtn ghost" aria-hidden="true"></span>
+      {:else}
+        <button type="button" class="hbtn" aria-label={t('关闭')} onclick={() => (view === 'edit' ? back() : onClose?.())}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 5l10 10M15 5 5 15"/></svg></button>
+      {/if}
     </header>
 
-    {#if view === 'list'}
+    {#if view === 'list' && narrow}
+      <!-- 窄屏列表：分组卡片 + 行（头像 · 名字 / 模型数与备注 · 启用开关），末行「添加服务」，说明放组脚 -->
+      <div class="scroll">
+        {#if cp.err}<div class="note warn">{cp.err}</div>{/if}
+        {#if cp.providers.length}
+          <div class="ghead">{t('{p} 个服务 · {m} 个可用模型', { p: sum.p, m: sum.m })}{#if sum.h}{t('（{h} 个已隐藏）', { h: sum.h })}{/if}</div>
+        {/if}
+        <div class="ig">
+          {#each cp.providers as p (p.id)}
+            <div class="row" class:dis={!p.enabled}>
+              <button type="button" class="row-hit" aria-label={t('编辑 {name}', { name: p.name })} onclick={() => openEdit(p)}></button>
+              {@render avatar(p)}
+              <div class="rtx">
+                <div class="n1"><span class="nm">{p.name}</span>{#if health[p.id]}<span class="hdot" class:ok={health[p.id] === 'ok'} class:bad={health[p.id] === 'bad'}></span>{/if}</div>
+                <div class="n2">
+                  <span class="num">{t('{n} 个模型', { n: chatCount(p) })}</span>
+                  {#if !p.hasKey && p.authStyle !== 'none'}<span class="flag warn">{t('缺 Key')}</span>{/if}
+                  {#if p.showInPicker === false}<span class="flag">{t('已隐藏')}</span>{/if}
+                  {#if p.shared && cp.canShare}<span class="flag">{t('已共享给成员')}</span>{/if}
+                  <span class="sub">{p.note || host(p.baseUrl)}</span>
+                </div>
+              </div>
+              <div class="c-sw"><SToggle checked={p.enabled} disabled={!!toggling[p.id]} onchange={(v) => toggleEnabled(p, v)} label={t('启用 {name}', { name: p.name })} /></div>
+            </div>
+          {/each}
+          <button type="button" class="row add" onclick={() => (view = 'presets')}>
+            <span class="av plain"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M10 4.5v11M4.5 10h11"/></svg></span>
+            <span class="add-tx">{t('添加服务')}</span>
+          </button>
+        </div>
+        <p class="gfoot">{cp.member ? t('用你自己的 API Key 接入兼容 Anthropic 或 OpenAI 接口的服务：DeepSeek、Kimi、GLM、小米 MiMo、百炼、OpenRouter……接好后在输入框模型菜单的 More models 里按服务分组选用，Claude Code 的工具、子 agent、工作区照常可用。') : t('兼容 Anthropic 或 OpenAI 接口的服务都能接：DeepSeek、Kimi、GLM、小米 MiMo、百炼、OpenRouter、本机 Ollama……接好后在输入框模型菜单的 More models 里按服务分组选用，Claude Code 的工具、子 agent、工作区照常可用。')}</p>
+        {#if cp.member}<p class="gfoot">{t('这里的服务只有你自己能用：API Key 加密存在服务器上，不会显示给任何人，费用走你自己的账户、不占用本站额度。接口地址只能是公网地址（不能接本机或局域网服务）。')}</p>{/if}
+        {#if cp.shared.length}
+          <div class="ghead">{t('管理员共享给你的服务')}</div>
+          <div class="ig">
+            {#each cp.shared as p (p.id)}
+              <div class="row ro" class:dis={!p.enabled}>
+                {@render avatar(p)}
+                <div class="rtx">
+                  <div class="n1"><span class="nm">{p.name}</span></div>
+                  <div class="n2"><span class="num">{t('{n} 个模型', { n: p.models.length })}</span><span class="sub">{p.note || p.models.find((m) => m.id === p.defaultModel)?.label || p.defaultModel}</span></div>
+                </div>
+              </div>
+            {/each}
+          </div>
+          <p class="gfoot">{t('这些服务由管理员接入，在输入框模型菜单的 More models 里直接选用。用的是管理员的 API Key，计入本站额度；地址和 Key 你看不到，也改不了，有问题请联系管理员。')}</p>
+        {/if}
+      </div>
+
+    {:else if view === 'presets' && narrow}
+      <div class="scroll">
+        <div class="ig">
+          <button type="button" class="row" onclick={() => pickPreset(null)}>
+            <span class="av plain"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></span>
+            <span class="rtx"><span class="n1"><span class="nm">{t('从头配置')}</span></span><span class="n2"><span class="sub">{t('任意兼容端点')}</span></span></span>
+            {@render chev()}
+          </button>
+        </div>
+        <div class="ig">
+          {#each cp.presets as pr (pr.id)}
+            <button type="button" class="row" onclick={() => pickPreset(pr)}>
+              {@render avatar({ preset: pr.id, name: pr.name })}
+              <span class="rtx"><span class="n1"><span class="nm">{pr.name}</span></span><span class="n2"><span class="num">{pr.protocol === 'openai' ? 'OpenAI' : 'Anthropic'}</span><span class="sub">{pr.note || host(pr.baseUrl)}</span></span></span>
+              {@render chev()}
+            </button>
+          {/each}
+        </div>
+        <p class="gfoot">{t('预设只填好地址与协议，型号以拉取到的为准，所有项都能再改。')}</p>
+      </div>
+
+    {:else if view === 'list'}
       <div class="scroll">
         <div class="intro">
           <div class="intro-tx">
@@ -222,8 +311,9 @@
   .intro h2 { margin: 0 0 6px; font-family: var(--font-brand-serif), Georgia, serif; font-size: 22px; font-weight: 500; letter-spacing: -.01em; }
   .intro p { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--st-text2); max-width: 600px; }
   .meta { margin: 22px 0 10px; font-size: 12.5px; color: var(--st-muted); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-  .card { position: relative; padding: 16px; border: 1px solid var(--st-line); border-radius: 14px; background: var(--st-surface); transition: border-color .15s, box-shadow .15s, transform .15s; }
+  /* 列宽下限要 min(…, 100%)、卡片 min-width:0：不然 1fr 的最小值是内容宽，一条长网址（nowrap）就把整列顶出屏幕 */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 12px; }
+  .card { min-width: 0; position: relative; padding: 16px; border: 1px solid var(--st-line); border-radius: 14px; background: var(--st-surface); transition: border-color .15s, box-shadow .15s, transform .15s; }
   .card:hover { border-color: color-mix(in srgb, var(--text) 22%, transparent); box-shadow: 0 6px 22px rgba(0, 0, 0, .08); transform: translateY(-1px); }
   .card.ro:hover { border-color: var(--st-line); box-shadow: none; transform: none; }
   .card.dis .c-top .c-name, .card.dis .c-tags, .card.dis .av { opacity: .5; }
@@ -262,8 +352,8 @@
   .e1 { font-size: 15px; color: var(--text); font-weight: 500; }
   .e2 { margin: 6px 0 18px; font-size: 13px; }
   .sub { margin: 0 0 16px; font-size: 13px; color: var(--st-muted); }
-  .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 10px; }
-  .ptile { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 14px; border: 1px solid var(--st-line); border-radius: 13px; background: var(--st-surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: border-color .15s, background-color .15s, transform .15s; }
+  .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(196px, 100%), 1fr)); gap: 10px; }
+  .ptile { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 14px; border: 1px solid var(--st-line); border-radius: 13px; background: var(--st-surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: border-color .15s, background-color .15s, transform .15s; }
   .ptile:hover { border-color: color-mix(in srgb, var(--text) 25%, transparent); background: var(--st-hover); transform: translateY(-1px); }
   .ptile .av { margin-bottom: 8px; width: 34px; height: 34px; font-size: 15px; border-radius: 10px; }
   .ptile.blank { border-style: dashed; }
@@ -276,14 +366,75 @@
   .note { padding: 10px 12px; border-radius: 10px; margin-top: 14px; font-size: 13px; }
   .note.warn { background: color-mix(in srgb, #d9534f 10%, transparent); }
 
-  @media (max-width: 699px) {
-    .ov { padding: 0; align-items: stretch; }
-    .dlg { width: 100%; height: 100%; border-radius: 0; animation: up .26s cubic-bezier(.2, .9, .3, 1); padding-top: env(safe-area-inset-top); }
-    @keyframes up { from { transform: translateY(24px); opacity: 0; } }
-    .scroll { padding: 16px 16px 28px; }
-    .intro { flex-direction: column; gap: 14px; padding: 16px; }
-    .intro h2 { font-size: 19px; }
-    .grid { grid-template-columns: 1fr; }
-    .pgrid { grid-template-columns: 1fr 1fr; }
+  /* ── 窄屏（手机 / 窄窗口）：设置页同款「墨与象牙」整页（色值同 Settings.svelte 的 .ios / .ios.dark）。
+     在这一层把 --st-* 换成墨与象牙：编辑器、开关、分段控件都读这组令牌，跟着一起换；--pm-bg 页底、--st-surface 卡片。
+     暗色是默认 :root，亮色是 html[data-theme="light"]。 ── */
+  .ov.narrow {
+    --pm-bg: #100f0d; --st-surface: #1a1917; --text: #f1ece2;
+    --st-text2: rgba(241, 236, 226, .74); --st-muted: rgba(241, 236, 226, .5);
+    --st-line: rgba(241, 236, 226, .1); --st-hair: rgba(241, 236, 226, .065);
+    --st-sel: rgba(241, 236, 226, .1); --st-hover: rgba(241, 236, 226, .05); --pm-press: rgba(241, 236, 226, .06);
+    --st-field: rgba(241, 236, 226, .06); --st-seg: rgba(241, 236, 226, .07); --st-thumb: rgba(241, 236, 226, .2);
+    --st-accent: #ebe5d8; --st-primary: #ebe5d8; --st-primary-ink: #151412; --pm-knob-on: #151412; --pm-warn: #d9a441;
+    padding: 0; align-items: stretch; background: transparent; backdrop-filter: none; animation: none;
+    font-family: var(--font-brand-sans), -apple-system, BlinkMacSystemFont, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
+  :global(html[data-theme="light"]) .ov.narrow {
+    --pm-bg: #f2f0eb; --st-surface: #fcfbf8; --text: #1d1b18;
+    --st-text2: rgba(29, 27, 24, .72); --st-muted: rgba(29, 27, 24, .5);
+    --st-line: rgba(29, 27, 24, .1); --st-hair: rgba(29, 27, 24, .075);
+    --st-sel: rgba(29, 27, 24, .08); --st-hover: rgba(29, 27, 24, .04); --pm-press: rgba(29, 27, 24, .055);
+    --st-field: rgba(29, 27, 24, .045); --st-seg: rgba(29, 27, 24, .06); --st-thumb: #fff;
+    --st-accent: #1d1b18; --st-primary: #1d1b18; --st-primary-ink: #f6f3ec; --pm-knob-on: #fff; --pm-warn: #b0741c;
+  }
+  .ov.narrow .dlg { width: 100%; height: 100%; border-radius: 0; box-shadow: none; background: var(--pm-bg);
+    padding-top: var(--sat, 0px); animation: push .34s cubic-bezier(.2, .95, .25, 1) both; }
+  @keyframes push { from { transform: translateX(28%); opacity: 0; } }
+  /* 开关放大到拇指尺寸（46×28），开着的旋钮跟设置页一样反色（暗色象牙底配墨色钮） */
+  .ov.narrow :global(.tg) { width: 46px; height: 28px; }
+  .ov.narrow :global(.tg .knob) { width: 24px; height: 24px; }
+  .ov.narrow :global(.tg.on .knob) { transform: translateX(18px); background: var(--pm-knob-on); }
+
+  /* 导航栏：左返回、标题居中（两侧等宽占位保证真居中） */
+  .ov.narrow .top { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 4px; height: 52px; padding: 0 6px; border-bottom: 0; }
+  .ov.narrow .hbtn { width: 44px; height: 44px; border-radius: 50%; color: var(--text); }
+  .ov.narrow .hbtn:hover { background: transparent; }   /* 触屏点过之后 hover 会粘住 */
+  .ov.narrow .hbtn:active { background: var(--pm-press); }
+  .ov.narrow .hbtn.ghost { pointer-events: none; }
+  .ov.narrow .hbtn svg { width: 22px; height: 22px; }
+  .ov.narrow .ttl { text-align: center; }
+  .ov.narrow .t1 { font-family: inherit; font-size: 17px; font-weight: 600; letter-spacing: -.2px; }
+
+  .ov.narrow .scroll { padding: 6px 16px calc(var(--sab, 0px) + 28px); overflow-x: hidden; overscroll-behavior: contain; }
+  .ov.narrow .note { margin: 0 0 14px; }
+  .ghead { padding: 10px 16px 8px; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--st-muted); }
+  .ig { background: var(--st-surface); border-radius: 18px; overflow: hidden; }
+  .ig + .ig { margin-top: 22px; }
+  .gfoot { margin: 0; padding: 8px 16px 20px; font-size: 12.5px; line-height: 18px; color: var(--st-muted); }
+  .gfoot + .gfoot { margin-top: -12px; }
+
+  .row { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 10px 14px;
+    border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; -webkit-tap-highlight-color: transparent; }
+  button.row { cursor: pointer; }
+  button.row:active, .row-hit:active { background: var(--pm-press); }
+  /* 行间细线从文字起头处开始（让开头像），同 iOS 分组列表 */
+  .row + .row::before { content: ''; position: absolute; top: 0; left: 62px; right: 0; height: 1px; background: var(--st-hair); }
+  .row-hit { position: absolute; inset: 0; border: 0; padding: 0; background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .row .av { width: 36px; height: 36px; border-radius: 10px; font-size: 15px; }
+  .row .av.plain svg { width: 18px; height: 18px; }
+  .rtx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ov.narrow .n1 { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 16px; line-height: 21px; font-weight: 500; letter-spacing: -.1px; }
+  .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ov.narrow .n2 { display: flex; align-items: baseline; min-width: 0; margin: 0; font-size: 13px; line-height: 18px; color: var(--st-muted); white-space: nowrap; overflow: hidden; }
+  .n2 > * { flex: none; }
+  .n2 > * + *::before { content: '·'; padding: 0 5px; color: var(--st-muted); }
+  .n2 .sub { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .n2 .num { font-variant-numeric: tabular-nums; }
+  .flag.warn { color: var(--pm-warn); }
+  .row .c-sw { position: relative; z-index: 1; flex: none; display: flex; }
+  .row.dis .av, .row.dis .rtx { opacity: .45; }
+  .row.add { min-height: 56px; }
+  .add-tx { font-size: 16px; font-weight: 500; }
+  .chev { flex: none; width: 16px; height: 16px; color: var(--st-muted); opacity: .7; }
 </style>

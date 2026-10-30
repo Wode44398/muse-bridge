@@ -112,6 +112,10 @@ test('caps：登录前可查；全是布尔，客户端认的几项都在', () =
     assert.equal(typeof r.json.caps[k], 'boolean', k);
   }
   assert.ok(Object.values(r.json.caps).every((v) => typeof v === 'boolean'));
+  // 发行版声明全文（离线 apk 拿不到 HTML 注入，靠这里）：id 与 distro 字段一致，品牌与默认语言都在
+  assert.equal(r.json.distroInfo.id, r.json.distro);
+  assert.equal(typeof r.json.distroInfo.brand, 'string');
+  assert.ok(['zh', 'browser'].includes(r.json.distroInfo.langDefault));
 });
 
 test('version：登录前可查；带 available 布尔、服务端版本与对齐策略', () => {

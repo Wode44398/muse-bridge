@@ -20,6 +20,11 @@ export default {
     'The pairing code and address are shown next to the QR code on your computer and are valid for 3 minutes. You can also leave the code blank, connect first and sign in afterwards.',
 
   // ——— 扫码层（PairScan）———
+  '正在打开相机…': 'Opening the camera…',
+  '打开手电筒': 'Turn on flashlight',
+  '关闭手电筒': 'Turn off flashlight',
+  '镜头': 'Lens',
+  '打不开相机，请重试，或从相册选择二维码截图。': 'Couldn’t open the camera. Try again, or choose a screenshot of the QR code from your gallery.',
   '对准电脑上显示的配对二维码': 'Point at the pairing QR code on your computer',
   '对准网页登录页或电脑上的二维码': 'Point at the QR code on the web sign-in page or on your computer',
   '这不是 The Bridge 的配对二维码': 'This isn’t a The Bridge pairing QR code',

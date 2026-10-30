@@ -11,7 +11,7 @@
 //                               不含任何凭据。单 agent 模式设置里的「连接」分区、App 的地址自愈（web/src/lib/serverAddress.js）用
 //   GET /api/app/caps        —— 无 auth：这台服务端支持哪些桌面客户端能力（SERVER_CAPS）。客户端登录前就要知道——
 //                               窗口要不要 frameless 只能在建窗时定。没有这条路由的服务端（Muse 现行版等）客户端按纯网页窗口处理
-//                               （client/desktop/server-caps.cjs）
+//                               （client/desktop/server-caps.cjs）。另带 distroInfo（发行版声明全文），离线 apk 连发行版服务器时用
 import { streamFile } from '../runtime/http-file.mjs';
 import { getSession } from '../users.mjs';
 import { existsSync } from 'node:fs';
@@ -140,7 +140,9 @@ export function registerAppUpdateRoutes(router, { authOk, identify, lanIPs = nul
   });
 
   router.on('GET', '/api/app/caps', (_req, res) => {
-    json(res, 200, { app: 'bridge', distro: DISTRO.id, v: 1, caps: SERVER_CAPS });
+    // distroInfo：完整发行版声明（品牌 / 默认语言 / 反馈去向，与注入 HTML 的 window.__DISTRO__ 同一份）。离线 apk 的前端不从
+    // 服务器加载 HTML、拿不到注入，连上后经这里取一份缓存下来（web/src/lib/distro.js syncDistro）
+    json(res, 200, { app: 'bridge', distro: DISTRO.id, distroInfo: DISTRO, v: 1, caps: SERVER_CAPS });
   });
 
   router.on('GET', '/api/app/server-info', (req, res) => {

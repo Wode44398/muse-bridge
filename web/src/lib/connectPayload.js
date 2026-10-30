@@ -16,12 +16,18 @@ export function isPrivateHost(h) {
   return host === 'localhost' || host === '::1' || /^127\./.test(host) || PRIVATE_V4.test(host) || /\.local$/.test(host);
 }
 
+// 从一段话里抠网址（用户常把助手回复的整句话粘过来，如 Muse 报的「你的地址是 https://xxx.trycloudflare.com，……」）；中英文标点都当结尾
+const URL_IN_TEXT = /https?:\/\/[^\s<>"'()（）[\]【】「」，。；、,;]+/i;
+
 /**
  * 用户手填的服务器地址 → origin：没写协议时局域网 / 本机补 http、其余补 https；裸局域网 IP 没写端口补 :8787（bridge 默认端口）。
- * 不合法回 ''。
+ * 粘来的是一整句话（带空白或中文）时取其中第一个 http(s) 网址。不合法回 ''。
  */
 export function normalizeServerAddress(input) {
-  let a = String(input || '').trim().replace(/\/+$/, '');
+  let a = String(input || '').trim();
+  // 只把空白与中文 / 全角标点（U+3000–303F、U+FF00–FFEF）当「这是一句话」的信号（中文域名本身不算），句子里找不到网址就当没填对
+  if (/[\s　-〿＀-￯]/.test(a)) { const m = URL_IN_TEXT.exec(a); if (!m) return ''; a = m[0]; }
+  a = a.replace(/\/+$/, '');
   if (!a || /^https?:\/?$/i.test(a)) return '';
   if (!/^https?:\/\//i.test(a)) {
     const hostPort = a.replace(/[/?#].*$/, '');

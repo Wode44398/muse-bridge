@@ -1057,7 +1057,7 @@ function wakeBody(ctx, sid, replay) {
   const b = (replay && replay.body) || {};
   return {
     agent: 'claude', client: b.client === 'apk' ? 'apk' : 'web',
-    ...(p.model ? { model: p.model } : {}), ...(p.effort ? { effort: p.effort } : {}), ...(p.fast ? { fast: true } : {}),
+    ...(p.model ? { model: p.model } : {}), ...(p.effort ? { effort: p.effort } : {}), ...(p.ultracode ? { ultracode: true } : {}), ...(p.fast ? { fast: true } : {}),
     ...(b.suggest === true ? { suggest: true } : {}), ...(typeof b.compactFrac === 'number' ? { compactFrac: b.compactFrac } : {}),
     autoRetry: true,
   };

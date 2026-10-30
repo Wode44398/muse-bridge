@@ -25,7 +25,10 @@ const _lp = IS_CSNAP ? null : lastPrefs();
 export const settings = $state({
   model: (_lp && _lp.model) || null,
   effort: (_lp && _lp.effort) || null,
-  effortAt: 0,                     // 用户最近一次改 effort 的时刻——比它旧的「实际生效档」回报不再盖住新选择
+  effortAt: 0,                     // 用户最近一次改 effort / Ultracode 的时刻——比它旧的「实际生效档」回报不再盖住新选择
+  // Ultracode（动态工作流编排）：与 effort 档位独立的勾选（10-30，对齐桌面端 4.29）。只对当前会话生效，
+  // 新对话从关着起步（lastPrefs 不带它）。
+  ultracode: false,
   fast: !!(_lp && _lp.fast),       // fast mode（Opus 5/4.8/4.7；加速输出、消耗额外用量）
 
   style: 'normal',   // Use style: normal/learning/concise/explanatory/formal

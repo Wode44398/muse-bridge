@@ -167,3 +167,89 @@ test('开关关掉：新起的 CLI 不再注入代理地址', () => {
   assert.equal(env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL, undefined);
   router.setRouterSettings({ seamless: true });
 });
+
+// —— 官方订阅会话的子 agent 派第三方模型（/r/<令牌>，2026-10-30）——
+// 假第三方服务（Anthropic 协议）：记下收到的鉴权与模型，订阅凭证绝不能到这里。
+const third = [];
+const fake3 = http.createServer(async (req, res) => {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  let body = {};
+  try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+  third.push({ path: req.url, key: req.headers['x-api-key'], auth: req.headers.authorization, model: body.model, effort: body.output_config && body.output_config.effort, thinking: body.thinking });
+  if (/count_tokens/.test(req.url)) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":7}'); return; }
+  res.writeHead(200, { 'content-type': 'text/event-stream' });
+  res.end('event: third\n\n');
+});
+await new Promise((ok) => fake3.listen(0, '127.0.0.1', ok));
+test.after(() => { fake3.close(); fake3.closeAllConnections(); });
+delete process.env.HTTPS_PROXY; delete process.env.https_proxy;
+const P = await import('./claude-providers.mjs');
+const { providerRouteToken } = await import('./claude-providers-proxy.mjs');
+const prov = P.createProvider({
+  name: '假三方', protocol: 'anthropic', baseUrl: `http://127.0.0.1:${fake3.address().port}`, apiKey: 'sk-third-party',
+  models: [{ id: 'mimo-flash', label: 'Mimo Flash', thinking: 'none' }],
+});
+const route = providerRouteToken(P.HOST_OWNER);
+const callRoute = (model, { tok = route, sub = '/v1/messages?beta=true', effort } = {}) => fetch(`${up.baseUrl}/r/${tok}${sub}`, {
+  method: 'POST',
+  headers: { authorization: 'Bearer from-cli', 'content-type': 'application/json' },
+  body: JSON.stringify({ model, max_tokens: 1000, stream: true, messages: [{ role: 'user', content: 'hi' }], ...(effort ? { output_config: { effort } } : {}) }),
+});
+
+test('第三方子 agent：env 地址带路由令牌', () => {
+  const env = claudeEngineEnv({}, { route });
+  assert.equal(env.ANTHROPIC_BASE_URL, `${up.baseUrl}/r/${route}`);
+  assert.equal(env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL, '1');
+});
+
+test('第三方子 agent：第三方模型名转给那个服务，用它的 Key、不带订阅凭证；Anthropic 那边收不到', async () => {
+  reset(); third.length = 0;
+  const r = await callRoute('mimo-flash', { effort: 'low' });
+  assert.equal(r.status, 200);
+  assert.equal(await r.text(), 'event: third\n\n');
+  assert.equal(seen.length, 0);
+  assert.equal(third.length, 1);
+  assert.equal(third[0].key, 'sk-third-party');
+  assert.equal(third[0].auth, undefined);
+  assert.equal(third[0].model, 'mimo-flash');
+  assert.equal(third[0].effort, undefined);   // CLI 的 output_config.effort 由代理按目标模型档位表改写（这个模型不分档 → 不发）
+  // custom:<服务>:<型号> 写法同样认；count_tokens 也转过去
+  third.length = 0;
+  const c = await callRoute(P.customModelId(prov.id, 'mimo-flash'), { sub: '/v1/messages/count_tokens' });
+  assert.deepEqual(await c.json(), { input_tokens: 7 });
+  assert.equal(third.length, 1);
+});
+
+test('第三方子 agent：claude-* 与没登记的模型名照旧去 Anthropic；拼出来的令牌 404', async () => {
+  reset(); third.length = 0;
+  await (await callRoute('claude-haiku-5-5')).text();
+  await (await callRoute('no-such-model')).text();
+  assert.deepEqual(seen.map((s) => s.model), ['claude-haiku-5-5', 'no-such-model']);
+  assert.equal(third.length, 0);
+  const bad = await callRoute('mimo-flash', { tok: 'f'.repeat(32) });
+  assert.equal(bad.status, 404);
+  assert.equal(third.length, 0);
+});
+
+test('无缝换号关着、只为第三方子 agent 走代理：env 不换 token，代理原样沿用 CLI 凭证、不换号', async () => {
+  router.setRouterSettings({ seamless: false });
+  try {
+    reset();
+    const env = claudeEngineEnv({}, { route });
+    assert.equal(env.ANTHROPIC_BASE_URL, `${up.baseUrl}/r/${route}`);
+    assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, 'tokA');   // 激活号
+    assert.equal(claudeEngineEnv({}).ANTHROPIC_BASE_URL, undefined);   // 不派第三方的轮照旧直连
+    behave['from-cli'] = () => rejected;
+    const r = await callRoute('claude-opus-5-5');
+    assert.equal(r.status, 429);
+    await r.text();
+    assert.deepEqual(seen.map((s) => s.token), ['from-cli']);
+    assert.equal(activeAccountId(), 'a1');
+    third.length = 0;
+    await (await callRoute('mimo-flash')).text();
+    assert.equal(third[0].auth, undefined);
+  } finally {
+    router.setRouterSettings({ seamless: true });
+  }
+});

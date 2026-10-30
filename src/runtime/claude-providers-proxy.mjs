@@ -42,6 +42,9 @@ function tokenFor(owner) {
   tokens.set(t, owner);
   return t;
 }
+/** 官方订阅会话的上游代理（claude-upstream.mjs）用同一套令牌认出路径里带的是谁的注册表；不认识回 null。 */
+export const providerRouteToken = (owner) => tokenFor(owner);
+export const ownerOfRouteToken = (t) => tokens.get(t) || null;
 // 日志、fast 退避按（owner, 服务 id）分开——服务 id 只在一个 owner 的注册表里唯一
 const slot = (p) => (p.owner || HOST_OWNER) + '|' + p.id;
 

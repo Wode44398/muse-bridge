@@ -23,7 +23,7 @@ function engineFields(body) {
 // 也没人在看；保存时就拒绝（runner 侧 claudeEffortOptions 仍兜底翻译旧数据，不会把非法值塞给 SDK）。
 const ULTRACODE_MSG = '定时路由不支持 Ultracode（无人值守跑动态工作流，成本不可控）。请改选 Extra 或 Max。';
 function rejectUltracode(body, res) {
-  if (body.effort !== ULTRACODE) return false;
+  if (body.effort !== ULTRACODE && body.ultracode !== true) return false;
   res.writeHead(400, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: false, error: ULTRACODE_MSG }));
   return true;

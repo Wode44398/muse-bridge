@@ -165,13 +165,14 @@ export function setEngineUpstream(fn) { upstreamHook = fn; }
 // 无缝换号开着时改让 CLI 的模型请求走本机代理：token 由代理逐请求现换，env 里放一个固定的号。
 // 成员身份（ctx.sandbox：注册用户、聊天快照）不再继承服务进程的全部环境：没有命令行的走白名单（家目录 / 临时目录
 // 指到他自己的目录），有命令行的按名字剔掉凭据；CLI 认证要的那一份单独带上（runtime/member-boundary.mjs，开源路线 S2-5）。
-export function claudeEngineEnv(ctx) {
+// route = providerRouteToken(owner)：这一轮的子 agent 要能派第三方模型，CLI 也走本机代理（地址里带令牌，见 claude-upstream.mjs）。
+export function claudeEngineEnv(ctx, { route } = {}) {
   let touched = false;
   const env = ctx && ctx.sandbox ? memberEngineBase(ctx) : { ...process.env };
   if (ctx && ctx.sandbox) touched = true;
   if (ctx && ctx.configDir) { env.CLAUDE_CONFIG_DIR = ctx.configDir; touched = true; }
-  const up = upstreamHook ? upstreamHook() : null;
-  const tok = up ? up.token : activeToken();
+  const up = upstreamHook ? upstreamHook({ route }) : null;
+  const tok = up && up.token !== undefined ? up.token : activeToken();
   if (tok) { env.CLAUDE_CODE_OAUTH_TOKEN = tok; touched = true; }
   // config.json 的 anthropicApiKey 只在启动时号池没有令牌才注入（config/index.mjs）；之后号池里有了激活号的令牌，
   // 就别再把它带给 CLI——CLI 见到 ANTHROPIC_API_KEY 会关掉 OAuth，订阅号白加、照样按量计费。

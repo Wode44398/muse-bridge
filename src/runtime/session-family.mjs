@@ -436,6 +436,7 @@ function bodyFor(ctx, sid, base) {
     client: b.client === 'apk' ? 'apk' : 'web',
     ...(p.model ? { model: p.model } : {}),
     ...(p.effort ? { effort: p.effort } : {}),
+    ...(p.ultracode ? { ultracode: true } : {}),
     ...(p.fast ? { fast: true } : {}),
     ...(b.suggest === true ? { suggest: true } : {}),
     ...(typeof b.compactFrac === 'number' ? { compactFrac: b.compactFrac } : {}),

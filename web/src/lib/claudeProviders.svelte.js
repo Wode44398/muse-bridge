@@ -119,14 +119,9 @@ export const modelSupportsFast = (id, capsData) => (isCustomModel(id) ? !!custom
 
 // —— 推理强度：按模型 ——
 /** 该模型的档位表 [{id, name}]。自定义模型取它自己的；官方模型取 capabilities。 */
-// 自定义模型的表末尾统一追加 Ultracode（= 这个模型最高档 + 动态工作流，服务端 customTopTier），名字取官方那档的。
+// Ultracode 不在档位表里：它是拉条面板下面独立的勾选（10-30），自定义模型同样有。
 export function effortsFor(modelId, capsData) {
-  if (isCustomModel(modelId)) {
-    const info = customModelInfo(modelId);
-    if (!info) return [];
-    const ultra = (capsData?.claude?.efforts || []).find((e) => e.id === 'ultracode') || { id: 'ultracode', name: 'Ultracode' };
-    return [...(info.efforts || []), ultra];
-  }
+  if (isCustomModel(modelId)) return customModelInfo(modelId)?.efforts || [];
   return capsData?.claude?.efforts || [];
 }
 /** 没选时用哪档：自定义模型的默认档（'' = 什么都不发，用厂商默认）；官方模型回 null（调用方按 claudeEffortFallback）。 */
@@ -134,10 +129,11 @@ export function defaultEffortFor(modelId) {
   if (!isCustomModel(modelId)) return null;
   return customModelInfo(modelId)?.effortDefault || '';
 }
-/** 拉条 / 芯片的可选项：自定义模型没有默认档时最前面放「默认」（id ''，选它 = 不带档位、什么都不发）。 */
+/** 拉条 / 芯片的可选项：自定义模型没有默认档时最前面放「默认」（id ''，选它 = 不带档位、什么都不发）。
+ *  档位表空的自定义模型也给这一项「默认」：芯片照常显示，面板里还能勾 Ultracode。 */
 export function effortChoices(modelId, capsData) {
   const list = effortsFor(modelId, capsData);
-  if (isCustomModel(modelId) && list.length && !defaultEffortFor(modelId)) return [{ id: '', name: t('默认') }, ...list];
+  if (isCustomModel(modelId) && customModelInfo(modelId) && !defaultEffortFor(modelId)) return [{ id: '', name: t('默认') }, ...list];
   return list;
 }
 /** 请求里该带的档位：自定义模型只认它自己表里的（清单还没到时照带，服务端会再校验）；官方模型原样。 */

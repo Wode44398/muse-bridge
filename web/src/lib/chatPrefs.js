@@ -19,7 +19,14 @@ function load() {
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(store)); } catch {}
 }
-const norm = (p) => (p ? { model: p.model || null, effort: p.effort || null, fast: !!p.fast, at: p.at || 0 } : null);
+// Ultracode 与档位独立（10-30）：旧写法 effort:'ultracode'（它曾是拉条末档）拆成 xhigh + ultracode。
+const norm = (p) => {
+  if (!p) return null;
+  const legacy = p.effort === 'ultracode';
+  return { model: p.model || null, effort: legacy ? 'xhigh' : (p.effort || null), ultracode: legacy || p.ultracode === true, fast: !!p.fast, at: p.at || 0 };
+};
+// 新对话的默认不带 Ultracode：它只对当前会话生效（官方 help 原话）
+const normLast = (p) => (p ? { ...norm(p), ultracode: false } : null);
 
 // 该会话上次用的选择（无记录 = null → 选择器回「默认」态）。
 export function prefsFor(id) {
@@ -28,15 +35,15 @@ export function prefsFor(id) {
 
 // 最近一次的选择——新对话的默认。
 export function lastPrefs() {
-  return norm(load().last);
+  return normLast(load().last);
 }
 
 // 本地记一笔（选择器变更 / 发送时）。id 为空 = 只更新 last（新会话 id 还没回来）。
 export function notePrefs(id, p) {
   const s = load();
-  const entry = { model: p?.model || null, effort: p?.effort || null, fast: !!p?.fast, at: Date.now() };
+  const entry = { model: p?.model || null, effort: p?.effort || null, ultracode: !!p?.ultracode, fast: !!p?.fast, at: Date.now() };
   if (id) s.sessions[id] = entry;
-  s.last = entry;
+  s.last = { ...entry, ultracode: false };
   const ids = Object.keys(s.sessions);
   if (ids.length > CAP) {
     ids.sort((a, b) => (s.sessions[a]?.at || 0) - (s.sessions[b]?.at || 0));
@@ -57,5 +64,5 @@ export function absorbServerPrefs(id, p) {
 export function absorbLastPrefs(p) {
   if (!p) return;
   const s = load();
-  if (!s.last || (p.at || 0) > (s.last.at || 0)) { s.last = norm(p); save(); }
+  if (!s.last || (p.at || 0) > (s.last.at || 0)) { s.last = normLast(p); save(); }
 }
