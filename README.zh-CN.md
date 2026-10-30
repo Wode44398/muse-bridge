@@ -12,7 +12,7 @@
 
 - **一句话部署**：把开场提示词发给 Muse，剩下的它来做，大约 5–10 分钟。
 - **手机、电脑都能用**：打开网址就是完整的工作台，界面支持简体中文和 English，默认跟着浏览器语言。
-- **安卓 app**：在设置根页「插件」分组里的「安卓 App」下载，或者[直接下载 apk](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk)。记得住服务器地址，临时地址变了能在 app 里直接换；界面和网页版一样，随服务器自动更新。
+- **安卓 app**：就是 bridge 的安卓 App（同一个 apk）：在设置根页「插件」分组里的「安卓 App」下载，或者[直接下载 apk](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk)。界面打包在 App 里，网速慢也秒开，连上后显示 Muse Bridge 品牌（桌面图标名字仍是 The Bridge）；App 版本跟着所连服务器走，临时地址变了一般会自动跟过去，没跟上就在「设置 › 关于 › 服务器地址」里更换。
 - **Claude Code 完整体验**：由官方 Claude Agent SDK 驱动，支持工具调用、子 agent、工作流、上下文压缩和会话续接。右侧工作台有终端、文件、任务和改动审阅，设置页像手机的「设置」一样一层层点进去。另有权限模式与审批卡、计划卡，Claude 干活时可以插话或排队，会话搜索与归档，拉取请求跟踪，对话里直接画交互图表，撞上 5 小时限额后额度一恢复自动接着做。
 - **Claude Code 也能接别家模型**：在「设置 → Claude → 自定义 API」里添加 Anthropic / OpenAI 兼容的接口（DeepSeek、Kimi、OpenRouter 等），模型出现在模型菜单的「More models」里；管理员和每个成员各有自己的一份。
 - **能连 bridge 的 Windows 桌面客户端**：绑了自己的域名（固定地址）时有完整的桌面体验——标题栏、快问浮窗、把电脑登记成设备让 Claude 操作；临时地址下客户端只当网页窗口用。
@@ -80,7 +80,7 @@ key 可以让 Muse 帮你写进去（`set-api-key`），也可以在 dimensio �
 
 ## 安卓 app
 
-用手机浏览器打开你的 Muse Bridge 地址并登录，进「**设置**」，在「插件」分组里点「**安卓 App**」，「下载 apk」那一行点「**下载**」。装好后回到这一页，点「**在 App 里打开**」那一行的「打开」，app 会自动填好地址。也可以从 GitHub [直接下载 apk](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk)，第一次打开时把地址粘进去。
+用手机浏览器打开你的 Muse Bridge 地址并登录，进「**设置**」，在「插件」分组里点「**安卓 App**」，「下载 apk」那一行点「**下载**」。也可以从 GitHub [直接下载 apk](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk)，或者从服务器自己下载（`/download/android`）。第一次打开 app，在「连接你的 bridge 服务器」页点「扫码连接」扫另一台已登录设备上的配对二维码（网页版在「设置 › 关于 › 让另一台设备扫码连接」），或者点「手动填写地址（有账号密码 / 配对码）」，填服务器地址（可以把 Muse 回复的整句话直接粘进去）和 8 位配对码（也可填访问令牌），点「连接」。服务器升级后，app 里设置根页的「软件更新」会提示新版本。用过旧版 Muse app 的话，它会提示换装新版：装好新 app、连上登录后，再把旧版卸载（两个 app 包名不同，不能覆盖升级）。
 
 app 只是把同一个网页界面装进独立窗口，新功能不用更新 app。连不上服务器时（比如 VM 重启后临时地址变了），app 会给出「更换地址」按钮，问 Muse 要现在的地址粘进去就行。手机拦着不让装时，按提示允许浏览器安装应用。iPhone 目前没有 app，可以用 Safari 的「分享 → 添加到主屏幕」。
 
@@ -126,7 +126,6 @@ sudo bash deploy/muse/install.sh --agents claude,dimensio
 |---|---|
 | `src/`、`web/`、`harness/`、`modules/`、`scripts/`、`docs/` | bridge 公开版（服务端、前端、dimensio、脚本），用 `deploy/muse/sync/sync-from-bridge.mjs` 整体同步过来；要改去 bridge 本体改，不在这里改 |
 | `deploy/muse/` | Muse 专属的全部东西：一键部署 `bootstrap.sh` / 装机 `install.sh` 和运维件模板 `ops/`、Muse 插件 `plugin/`（设置里的安卓 App 页、项目手册的「Muse 部署」一章）、问题报告工具 `feedback/`、给 Muse 看的说明书 `MUSE.md`、使用说明书 `guide/`（Muse 回答使用问题的依据）、已知问题清单 `known-issues.json`、同步脚本 |
-| `android/` | 安卓 app（WebView 壳，零依赖；发版流程负责构建） |
 | `feedback-worker/` | 问题反馈的中继（Cloudflare Worker）：把用户同意过的报告提交成 GitHub Issue；GitHub App 的私钥只在它那里，各台装机上没有。报告格式与 `deploy/muse/feedback/` 共用 |
 
 Muse Bridge 和 bridge 的差别只经声明表达，由 `bootstrap.sh` 装机时写：`config.json` 里的品牌和默认语言、服务单元的环境变量、`plugins.json`（关掉 Muse VM 上用不了的功能），以及 Muse 插件。
@@ -140,7 +139,7 @@ git tag -a v0.2.0 -m "这次更新了什么（给用户看的一两句）"
 git push origin v0.2.0
 ```
 
-GitHub Actions（`.github/workflows/release.yml`）会构建安卓 app（`MuseBridge.apk`，挂在 Release 上，也放进安装包的 `downloads/`），打包 `muse-bridge.tgz`，生成 `.sha256` 和更新频道 `latest.json`，并创建 Release。已经装好的 Muse 每 6 小时读一次 `latest.json`，发现新版本就问用户要不要更新。beta（如 `v0.2.0-beta.1`）也会推送。只有标签里带 `-test` 的（如 `v0.2.0-test.1`）会发成预发布版，不进更新频道，是给维护者在新 Muse 上试装用的。
+GitHub Actions（`.github/workflows/release.yml`）不再构建安卓 app，而是从 bridge 公开 Release 取同版本的 apk、校验 sha256，放进安装包的程序目录（`ClaudeBridge-offline-<版本号>.apk`），并在 Release 上挂一份 `MuseBridge.apk`；另外打包 `muse-bridge.tgz`，生成 `.sha256` 和更新频道 `latest.json`，并创建 Release。已经装好的 Muse 每 6 小时读一次 `latest.json`，发现新版本就问用户要不要更新。beta（如 `v0.2.0-beta.1`）也会推送。只有标签里带 `-test` 的（如 `v0.2.0-test.1`）会发成预发布版，不进更新频道，是给维护者在新 Muse 上试装用的。
 
 apk 用仓库 Actions secrets 里的密钥签名（`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`）。没配（比如 fork）就退回 debug 签名：照样能装，但不能覆盖安装官方发布的包。
 

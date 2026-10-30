@@ -14,13 +14,12 @@
 - Muse 专属、同步时原样保留的只有脚本里 `KEEP` 列出的位置：
   - `deploy/muse/`：
     - `bootstrap.sh`（Muse 上的一键部署与运维入口）、`install.sh`（装机）、`ops/`（隧道、看门狗等运维件模板）；
-    - `plugin/`（Muse 插件：设置里「插件 › 安卓 App」面板、apk 下载、项目手册的「Muse 部署」一章）；
+    - `plugin/`（Muse 插件：设置里「插件 › 安卓 App」面板、apk 下载（App 用的是 bridge 的安卓 App）、旧版 Muse App 的换装提示、项目手册的「Muse 部署」一章）；
     - `feedback/`（`bootstrap.sh report` 与看门狗用的问题报告：白名单收集、脱敏、出草稿、发送、补发、自动上报）；
     - `sync/`（同步脚本）；
     - `MUSE.md`（给 Muse 看的部署运维说明书）、`guide/`（使用说明书：Muse 回答「怎么用」、带用户上手的依据）、
       `known-issues.json`（已知问题，随更新频道下发）、`NOTES.md`（Muse VM 平台笔记）、`test/`；
   - `feedback-worker/`：反馈中继（Cloudflare Worker，以 GitHub App 身份开 Issue），和 `deploy/muse/feedback/` 共用格式与脱敏代码，改那边要两边都测；
-  - `android/`：Muse 自己的安卓 App（在线 WebView 壳）；
   - `.github/`、`README*.md`、`LICENSE`、`AGENTS.md`、`CLAUDE.md`。
 - 同步时还会剔除公开版里 Muse 不带的部分（脚本里的 `DROP`：Windows 客户端源码、bridge 的离线 apk 工程、Docker 件等）。Vertex 扩展随代码带着（默认关）。
 

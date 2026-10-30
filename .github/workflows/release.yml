@@ -3,9 +3,10 @@
 #     已装的 Muse 每 6 小时读一次，发现新版本就问用户。（GitHub 的 latest 不认预发布——beta 要是标成预发布，
 #     更新频道和 README 里的安装地址就全是 404。）
 #   试装版（标签里带 -test，如 v0.2.0-test.1）：发成预发布，不进 latest，用 Release 里附的 muse-prompt.txt 在新 Muse 上试装。
-# 安卓 app（android/）同一次构建：apk 附在 Release 上，也放进安装包的 downloads/，由各台 Muse 上的服务器自己提供下载。
-#   签名密钥放在仓库的 Actions secrets 里（ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD），
-#   没配（比如 fork）就用 debug 签名，照样能装，只是不能覆盖安装官方发布的包。
+# 安卓 app 用 bridge 的（同一个 apk，连上 Muse 后显示 Muse Bridge 的品牌）：从 bridge 公开 Release 取与服务端同版本的那份
+#   （src/config/versions.mjs 的 APP_VERSION_CODE；没有同版本就取更低版本里最高的——服务端兼容旧 App），校验 sha256 后放进安装包的
+#   程序目录（ClaudeBridge-offline-<版本号>.apk），服务器的 /download/android 与 App 内更新直接用它；Release 上另挂一份 MuseBridge.apk
+#   给旧链接。Muse 不再自己编 apk，以前的安卓签名密钥 secrets 用不上了。
 # 更新内容取带说明的标签（git tag -a v0.2.0 -m "…"）的说明；轻量标签就用最后一次提交的标题。
 name: release
 
@@ -28,37 +29,25 @@ jobs:
       - name: Check the Muse guide
         run: node --test deploy/muse/test/guide.test.mjs
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
-
-      - name: Build Android app
+      - name: Fetch the Android app (bridge public release)
         env:
-          TAG: ${{ github.ref_name }}
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          MB_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          MB_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          MB_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          FEED: https://github.com/Wode44398/claude-bridge-releases/releases/latest/download/latest.json
         run: |
           set -euo pipefail
-          if [ -n "${KEYSTORE_B64:-}" ]; then
-            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
-            export MB_KEYSTORE="$RUNNER_TEMP/release.keystore"
-          else
-            echo "::warning::没有配置安卓签名密钥，apk 用 debug 签名"
-          fi
-          # versionCode = 提交数：只增不减，覆盖安装才不会被系统拒
-          CODE="$(git rev-list --count HEAD)"
-          gradle -p android --no-daemon assembleRelease -PmbVersionCode="$CODE" -PmbVersionName="${TAG#v}"
+          CODE="$(sed -n 's/^export const APP_VERSION_CODE = \([0-9]*\);.*/\1/p' src/config/versions.mjs)"
+          [ -n "$CODE" ] || { echo "::error::读不到 src/config/versions.mjs 的 APP_VERSION_CODE"; exit 1; }
           mkdir -p dist
-          cp android/app/build/outputs/apk/release/app-release.apk dist/MuseBridge.apk
-          jq -n --arg name "${TAG#v}" --argjson code "$CODE" --arg sha256 "$(sha256sum dist/MuseBridge.apk | cut -d' ' -f1)"             '{versionName:$name, versionCode:$code, sha256:$sha256}' > dist/android.json
-          rm -f "$RUNNER_TEMP/release.keystore"
+          curl -fsSL --retry 3 -o dist/bridge-latest.json "$FEED"
+          # android 条目可以是单个对象或数组（多版本）；取版本号 ≤ 服务端的最高一版
+          ENTRY="$(jq -c --argjson code "$CODE" '[.android | if type == "array" then .[] else . end | select(.code <= $code)] | sort_by(.code) | last // empty' dist/bridge-latest.json)"
+          [ -n "$ENTRY" ] || { echo "::error::bridge 公开 Release 的清单里没有版本号 ≤ $CODE 的安卓 App"; exit 1; }
+          APK_CODE="$(jq -r .code <<<"$ENTRY")"; URL="$(jq -r '.url // empty' <<<"$ENTRY")"; SHA="$(jq -r .sha256 <<<"$ENTRY")"
+          # 相对地址按清单自己的版本标签补全（releases/latest/download/ 会漂走）
+          case "$URL" in http*) ;; *) URL="https://github.com/Wode44398/claude-bridge-releases/releases/download/v$(jq -r .version dist/bridge-latest.json)/${URL:-ClaudeBridge-offline-$APK_CODE.apk}" ;; esac
+          [ "$APK_CODE" = "$CODE" ] || echo "::warning::bridge 没有与服务端同版本（$CODE）的安卓 App，带上 $APK_CODE（服务端兼容旧 App）"
+          curl -fsSL --retry 3 -o "dist/ClaudeBridge-offline-$APK_CODE.apk" "$URL"
+          echo "$SHA  dist/ClaudeBridge-offline-$APK_CODE.apk" | sha256sum -c -
+          cp "dist/ClaudeBridge-offline-$APK_CODE.apk" dist/MuseBridge.apk
 
       - name: Package
         env:
@@ -70,9 +59,8 @@ jobs:
           mkdir -p dist/stage
           # git archive 会按 .gitattributes 的 export-subst 把 deploy/muse/VERSION 填成「短哈希 日期」
           git archive --format=tar --prefix=bridge/ HEAD | tar -x -C dist/stage
-          # 安卓 app 随安装包走：服务器的 /download/MuseBridge.apk 读这里（Muse 插件 deploy/muse/plugin/index.mjs）
-          mkdir -p dist/stage/bridge/downloads
-          cp dist/MuseBridge.apk dist/android.json dist/stage/bridge/downloads/
+          # 安卓 app 随安装包走：放在程序目录，本体的 /download/android、/api/app/version 认这个文件名（src/runtime/apk-source.mjs）
+          cp dist/ClaudeBridge-offline-*.apk dist/stage/bridge/
           printf '# 发布频道（发版时写入）\n%s\n' "https://github.com/$REPO/releases/latest/download/latest.json" \
             > dist/stage/bridge/deploy/muse/CHANNEL
           tar -czf dist/muse-bridge.tgz -C dist/stage bridge

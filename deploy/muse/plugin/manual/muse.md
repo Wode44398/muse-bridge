@@ -31,7 +31,7 @@ VM 上的 Chromium 没有沙箱、起不来：dimensio 在这台服务器上没�
 
 ## 安卓 App 与桌面客户端
 
-- **安卓 App**：在线 WebView 壳，界面就是这个网页、随服务器更新；记得住服务器地址，临时地址变了能在 App 里直接换。下载在 设置 ›「安卓 App」（服务器自带安装包，地址 `/download/MuseBridge.apk`），也挂在 GitHub 发布页。没有 iPhone App：在 Safari 里「添加到主屏幕」。
+- **安卓 App**：就是 bridge 的安卓 App（同一个 apk）：界面打包在 App 里，连上后显示 Muse Bridge 品牌，桌面图标名字是 The Bridge；版本跟着所连服务器走，服务器升级后设置根页的「软件更新」会提示新版本。临时地址变了一般会自动跟过去，没跟上就在 App 的「设置 › 关于 › 服务器地址」里更换。下载在 设置 ›「安卓 App」（服务器自带安装包，地址 `/download/android`，旧路径 `/download/MuseBridge.apk` 会跳转过去），也挂在 GitHub 发布页。以前装过 Muse 旧版 App 的用户会看到换装提示：装新的、登录后卸载旧的。没有 iPhone App：在 Safari 里「添加到主屏幕」。
 - **Windows 桌面客户端**：bridge 的桌面客户端可以连这台服务器。**只在绑了自己域名（固定地址）时提供完整的桌面体验**（标题栏、快问浮窗、把电脑登记成设备让 Claude 操作、客户端里的浏览器）；临时地址下客户端只当网页窗口用。
 
 ## 版本与反馈

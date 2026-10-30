@@ -100,7 +100,7 @@
   - **Agent**：agent 扩展：dimensio 和 Gemini · Vertex。装、卸 dimensio 别在这里点，让 Muse 跑 `set-agents`（见 06-users-admin.md）；Gemini · Vertex 装好时关着，要用就在这里打开它的开关、再去配 Google 云凭据（见 09-vertex.md）。
   - **「功能」**（Features）：随程序一起装好的内置功能（定时任务、分享链接、设备、反馈……），按分类逐项开关。这台 Muse 装好时已经关掉了在 VM 上用不了的几项——手机操控、手机文件、内置浏览器、主机的 Edge、保持唤醒——**别把它们打开**，打开了也用不了。
   - **「插件市场」**（Plugin market）：bridge 官方发布、签过名的功能插件，一点就装；内置功能（定时任务、分享链接这些）的修复也可能从这里单独发。下载后逐个校验，对不上就不装。刚上线，里面的插件还很少。
-  - **「已安装的插件」**（Installed plugins）：里面有一个 **Muse Bridge** 插件，它提供设置里的「安卓 App」那一页和项目手册里的「Muse 部署」一章，**别停用、别取消登记**。用户自己要装第三方插件（**「上传 zip」**（Upload zip）、**「GitHub 地址」**（GitHub repo）→ **「从 GitHub 安装插件」**（Install a plugin from GitHub））要谨慎：插件和服务同进程、权限相同，只装信得过的。
+  - **「已安装的插件」**（Installed plugins）：里面有一个 **Muse Bridge** 插件，它提供设置里的「安卓 App」那一页（下载 App、旧版 Muse App 的换装提示）和项目手册里的「Muse 部署」一章，**别停用、别取消登记**。用户自己要装第三方插件（**「上传 zip」**（Upload zip）、**「GitHub 地址」**（GitHub repo）→ **「从 GitHub 安装插件」**（Install a plugin from GitHub））要谨慎：插件和服务同进程、权限相同，只装信得过的。
 - 有的开关改完要重启才生效，页面顶部会出现 **「有改动等重启生效」**（Changes take effect after a restart），可以选空闲时重启。
 
 ### 插件市场：更新只提示，不自动装

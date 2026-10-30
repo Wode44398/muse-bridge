@@ -73,7 +73,7 @@ memory/.workspace-isolation-migrated
 # 本机私有的工作区说明
 CLAUDE.local.md
 
-# 安卓 app（发版时由 GitHub Actions 放进安装包；本地预览可以手动放一份）
+# 旧版安装包放安卓 App 的目录，已不用（安卓 App 现在是 bridge 的，放在程序目录里的 ClaudeBridge-offline-<版本号>.apk）；规则保留无害
 /downloads/
 
 # 堆近上限自动快照（fatal-guard.mjs，几个 GB）

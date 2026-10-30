@@ -10,7 +10,7 @@
       "facts": ["The phone must already be signed in", "On the laptop's sign-in screen choose \"Sign in with QR code\"", "On the phone use \"Scan to sign in on the web\" (account menu) and scan the code, then confirm on the phone", "The laptop is signed in as the phone's account"],
       "forbid": ["The laptop can scan a QR code to sign in the phone"] },
     { "id": "q04", "q": "有没有手机 app？我用的是安卓", "chapters": ["01-access.md"],
-      "facts": ["有安卓 app", "在手机浏览器里打开地址并登录，进设置根页「插件」分组里的「安卓 App」下载 apk（也可以从 GitHub 发布页下载）", "安装时要允许浏览器安装未知来源应用", "装好后填服务器地址（或回到那一页点「在 App 里打开」自动填）再登录一次"] },
+      "facts": ["有安卓 app", "在手机浏览器里打开地址并登录，进设置根页「插件」分组里的「安卓 App」下载 apk（也可以从 GitHub 发布页下载）", "安装时要允许浏览器安装未知来源应用", "第一次打开在「连接你的 bridge 服务器」页扫码连接，或手动填服务器地址（可粘贴整句话）和配对码 / 访问令牌再连接", "App 就是 bridge 的安卓 App，连上后显示 Muse Bridge，桌面图标名字是 The Bridge"] },
     { "id": "q05", "q": "Claude 页面上怎么新开一个对话？", "chapters": ["02-claude-code.md"],
       "facts": ["点侧栏的「新对话」", "也可以在侧栏点一个项目，在那个项目里开新对话", "随手问问可以点「新建临时对话」，30 天没动会自动清理"],
       "forbid": ["Claude 页没有新对话按钮"] },

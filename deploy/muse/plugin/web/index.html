@@ -14,38 +14,44 @@
 </style>
 </head>
 <body>
-<!-- 设置 · 安卓 App（Muse 插件的面板）。App 是个在线 WebView 壳（源码在 android/），界面就是这个网页，随服务器更新。
-     在 App 里：显示 App 版本、「更换服务器地址」（交给原生面板；要 App 把 MuseBridgeApp 注入到面板这一层，拿不到就不显示）。
-     安卓浏览器里：下载 + 「在 App 里打开」（intent 把服务器地址带进 App，没装就落到下载）。电脑上：二维码，手机扫了直接下载。 -->
+<!-- 设置 · 安卓 App（Muse 插件的面板）。Muse 用的就是 bridge 的安卓 App（界面打包在 App 里，连上 Muse 后显示 Muse Bridge 的品牌、
+     App 内更新跟着这台服务器的版本走）。包由服务器自己发（/download/android），见 ../index.mjs。
+     旧版 Muse App（在线 WebView 壳，UA 带 MuseBridgeApp/）里打开：提示换装新版。新 App 的插件页里打开：说明更新在哪。
+     浏览器里：下载 + GitHub 发布页；电脑上再给二维码，手机扫了直接下载。 -->
 <div class="bp-page">
-  <div class="bp-section" id="phone" hidden>
+  <div class="bp-section" id="legacy" hidden>
     <div class="bp-section-title" data-t="这台手机"></div>
     <div class="bp-group">
-      <div class="bp-row"><div class="bp-row-main"><div class="bp-row-title" data-t="安卓 App"></div><div class="bp-row-desc" data-t="界面由服务器提供，服务器更新后这里自动就是新版"></div></div><span class="val" id="appVer">—</span></div>
-      <div class="bp-row"><div class="bp-row-main"><div class="bp-row-title" data-t="服务器地址"></div><div class="bp-row-desc" data-t="临时地址变了，或者想连另一台 Muse，在这里换"></div></div><button class="bp-btn" id="change" data-t="更换"></button></div>
-      <div class="bp-row" id="updRow" hidden><div class="bp-row-main"><div class="bp-row-title" data-t="App 有新版本"></div><div class="bp-row-desc meta"></div></div><button class="bp-btn bp-btn-primary dl" data-t="下载"></button></div>
+      <div class="bp-row"><div class="bp-row-main"><div class="bp-row-title" data-t="旧版 App 已停止更新"></div><div class="bp-row-desc" data-t="请装新版 App（图标上写着 The Bridge），连上这个地址并登录后，把旧版卸载掉"></div></div></div>
+      <div class="bp-row"><div class="bp-row-main"><div class="bp-row-title" data-t="下载新版 App"></div><div class="bp-row-desc meta"></div></div><button class="bp-btn bp-btn-primary dl" data-t="下载"></button></div>
+    </div>
+  </div>
+  <div class="bp-section" id="inapp" hidden>
+    <div class="bp-section-title" data-t="这台手机"></div>
+    <div class="bp-group">
+      <div class="bp-row"><div class="bp-row-main"><div class="bp-row-title" data-t="你正在用安卓 App"></div><div class="bp-row-desc" data-t="App 跟着这台服务器的版本更新：服务器升级后，设置根页的「软件更新」会提示新版本"></div></div><span class="val" id="srvVer">—</span></div>
     </div>
   </div>
   <div class="bp-section" id="get" hidden>
     <div class="bp-group">
       <div class="bp-row"><div class="bp-row-main"><div class="bp-row-title" data-t="下载 apk"></div><div class="bp-row-desc meta"></div></div><button class="bp-btn bp-btn-primary dl" data-t="下载"></button></div>
-      <div class="bp-row" id="openRow" hidden><div class="bp-row-main"><div class="bp-row-title" data-t="在 App 里打开"></div><div class="bp-row-desc" data-t="装好之后点这里，App 会自动填好现在这个地址"></div></div><button class="bp-btn" id="open" data-t="打开"></button></div>
       <div class="bp-row"><div class="bp-row-main"><div class="bp-row-title" data-t="GitHub 发布页"></div><div class="bp-row-desc" data-t="每个版本的 apk 也都挂在这里"></div></div><button class="bp-btn" id="gh" data-t="打开"></button></div>
     </div>
     <div class="qr" id="qr" hidden></div>
-    <p class="bp-muted foot" data-t="App 只是把这个网页装进一个独立窗口：从桌面图标直接打开、记住服务器地址，临时地址变了可以在 App 里直接换。界面和网页版完全一样，随服务器自动更新。没有 iPhone App：在 Safari 里「添加到主屏幕」即可。"></p>
+    <p class="bp-muted foot" data-t="App 把界面装在手机里，网速慢也能秒开；第一次打开粘贴这个网址并登录，之后临时地址变了它多数时候自己就能找回来。App 跟着服务器的版本自动更新。图标上写的是 The Bridge（Muse Bridge 用的就是 bridge 的 App），进去后显示 Muse Bridge。没有 iPhone App：在 Safari 里「添加到主屏幕」即可。"></p>
   </div>
 </div>
 <script type="module">
   import { bridge } from '/plugins/_sdk/bridge-plugin.js';
   const EN = {
-    '这台手机': 'This phone', '安卓 App': 'Android app', '界面由服务器提供，服务器更新后这里自动就是新版': 'The interface comes from your server and updates with it',
-    '服务器地址': 'Server address', '临时地址变了，或者想连另一台 Muse，在这里换': 'Change it here if the temporary address changed or you want another Muse',
-    '更换': 'Change', 'App 有新版本': 'App update available', '下载': 'Download', '下载 apk': 'Download the apk',
-    '在 App 里打开': 'Open in the app', '装好之后点这里，App 会自动填好现在这个地址': 'After installing, tap here and the app fills in this address',
+    '这台手机': 'This phone', '旧版 App 已停止更新': 'This old app no longer gets updates',
+    '请装新版 App（图标上写着 The Bridge），连上这个地址并登录后，把旧版卸载掉': 'Install the new app (its icon says The Bridge), connect it to this address and sign in, then uninstall the old one',
+    '下载新版 App': 'Download the new app', '你正在用安卓 App': 'You are using the Android app',
+    'App 跟着这台服务器的版本更新：服务器升级后，设置根页的「软件更新」会提示新版本': 'The app updates to match this server: after the server is upgraded, “Software update” on the main Settings page offers the new version',
+    '下载': 'Download', '下载 apk': 'Download the apk',
     'GitHub 发布页': 'GitHub releases', '每个版本的 apk 也都挂在这里': 'Every version’s apk is also there', '打开': 'Open',
-    'App 只是把这个网页装进一个独立窗口：从桌面图标直接打开、记住服务器地址，临时地址变了可以在 App 里直接换。界面和网页版完全一样，随服务器自动更新。没有 iPhone App：在 Safari 里「添加到主屏幕」即可。':
-      'The app puts this web page in its own window: open it from the home screen, it remembers the server address, and you can switch when a temporary address changes. The interface is the same as the web version and updates with your server. There is no iPhone app: use “Add to Home Screen” in Safari.',
+    'App 把界面装在手机里，网速慢也能秒开；第一次打开粘贴这个网址并登录，之后临时地址变了它多数时候自己就能找回来。App 跟着服务器的版本自动更新。图标上写的是 The Bridge（Muse Bridge 用的就是 bridge 的 App），进去后显示 Muse Bridge。没有 iPhone App：在 Safari 里「添加到主屏幕」即可。':
+      'The app keeps the interface on your phone, so it opens instantly even on a slow connection. The first time, paste this address and sign in; after that it usually finds a changed temporary address by itself. The app updates to match your server. Its icon says The Bridge (Muse Bridge uses the Bridge app) and it shows Muse Bridge inside. There is no iPhone app: use “Add to Home Screen” in Safari.',
     '从 GitHub 下载最新版': 'Download the latest from GitHub', '版本 {v} · {kb} KB': 'Version {v} · {kb} KB',
   };
   const RELEASES = 'https://github.com/Wode44398/muse-bridge/releases/latest';
@@ -55,14 +61,14 @@
   const t = (s, p) => (en && EN[s] ? EN[s] : s).replace(/\{(\w+)\}/g, (m, k) => (p && p[k] != null ? String(p[k]) : m));
   for (const el of document.querySelectorAll('[data-t]')) el.textContent = t(el.dataset.t);
   document.documentElement.lang = en ? 'en' : 'zh-CN';
-
-  // App 把原生接口注入到每一层页面时才拿得到；拿不到就当普通浏览器
-  let app = null;
-  try { app = window.MuseBridgeApp || null; } catch { app = null; }
   const ua = navigator.userAgent || '';
+  // 旧版 Muse App：UA 带 MuseBridgeApp/，原生接口 MuseBridgeApp 也可能注入到这一层
+  let legacy = /\bMuseBridgeApp\//.test(ua);
+  try { legacy = legacy || !!window.MuseBridgeApp; } catch {}
+  // 新 App 的插件页是一个没有原生桥的独立 WebView（UA 里有 "; wv)"）；普通浏览器没有
+  const inApp = !legacy && /;\s*wv\)/.test(ua);
   const android = /Android/i.test(ua);
   const ios = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-
   let info = { available: false };
   try { info = await bridge.json('android'); } catch {}
   const kb = Math.max(1, Math.round((info.size || 0) / 1024));
@@ -70,21 +76,14 @@
   for (const el of document.querySelectorAll('.meta')) el.textContent = meta;
   const download = () => { if (info.download) bridge.openExternal(info.download); };
   for (const el of document.querySelectorAll('.dl')) el.onclick = download;
-
-  if (app) {
-    $('phone').hidden = false;
-    let code = 0;
-    try { $('appVer').textContent = String(app.versionName() || '—'); code = Number(app.versionCode()) || 0; } catch {}
-    $('updRow').hidden = !(info.available && code > 0 && info.versionCode > code);
-    $('change').onclick = () => { try { app.changeServer(); } catch {} };
+  if (legacy) {
+    $('legacy').hidden = false;
+  } else if (inApp) {
+    $('inapp').hidden = false;
+    $('srvVer').textContent = info.versionName ? 'v' + info.versionName : '—';
   } else {
     $('get').hidden = false;
     $('gh').onclick = () => bridge.openExternal(RELEASES);
-    if (android && info.origin) {
-      $('openRow').hidden = false;
-      // 插件页只能开 http(s)：开插件自己的跳转页，由它跳 intent://（装了 App 就把服务器地址带进去，没装就落到下载）
-      $('open').onclick = () => bridge.openExternal(info.origin + '/muse/open-app');
-    }
     if (!android && !ios && info.qr) { $('qr').innerHTML = info.qr; $('qr').hidden = false; }
   }
 </script>

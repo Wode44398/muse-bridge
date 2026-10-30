@@ -28,7 +28,7 @@ if (!FROM || !existsSync(path.join(FROM, 'src', 'server.mjs'))) {
 // Muse 专属：同步时原样保留（相对仓库根；目录以 / 结尾）
 export const KEEP = [
   '.git/', '.github/', '.claude/',
-  'deploy/muse/', 'feedback-worker/', 'android/', 'docs/images/',
+  'deploy/muse/', 'feedback-worker/', 'docs/images/',
   'README.md', 'README.zh-CN.md', 'LICENSE', 'AGENTS.md', 'CLAUDE.md', 'CLAUDE.local.md',
   '.gitignore', '.gitattributes',
 ];
@@ -36,7 +36,7 @@ export const KEEP = [
 // 公开版里有、Muse 不带的（相对导出树根）
 export const DROP = [
   'client/',                      // bridge 的 Windows 客户端源码：客户端由 bridge 发布，Muse 只做服务端
-  'android/',                     // bridge 的离线 apk 工程；Muse 有自己的在线 WebView 壳（KEEP 里的 android/）
+  'android/',                     // bridge 的离线 apk 工程：Muse 直接用 bridge 发的 apk（发版时从 bridge 公开 Release 取），不自己编
   'docker/', 'Dockerfile', 'docker-compose.yml', 'build-apk.ps1',
   'scripts/public/',              // bridge 公开仓自己的素材闸门与 CI 用件（扫描规则里有邮箱域名等字样，Muse 的隐私自检会误报）
   'README.md', 'README.zh-CN.md', 'CONTRIBUTING.md', 'CONTRIBUTING.zh-CN.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE',

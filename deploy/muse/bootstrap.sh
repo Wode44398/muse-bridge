@@ -149,8 +149,10 @@ known_affecting() {   # 影响 $1（默认：装好的版本）的已知问题�
 }
 known_count() { jq 'length' <<<"$(known_affecting)" 2>/dev/null || echo 0; }
 
-# 安卓 app：每个版本的安装包里都带一份（downloads/，服务器自己提供下载），GitHub Release 上也有
+# 安卓 app（就是 bridge 的安卓 App）：每个版本的安装包里都带一份与服务端同版本的（程序目录的 ClaudeBridge-offline-<版本号>.apk，
+# 服务器自己在 /download/android 提供下载），GitHub Release 上也有一份 MuseBridge.apk
 APK_GITHUB="https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk"
+has_apk() { compgen -G "$1/ClaudeBridge-offline-*.apk" >/dev/null; }
 
 # 统一的结果块：Muse 原样转给用户；管理员令牌在用户用它登录成功之前一直显示。UI_LANG=en 时整块英文
 result_block() {
@@ -172,7 +174,7 @@ Public URL      ${url:-(not available yet)}$( [ "$TUNNEL_MODE" = named ] && echo
 Admin token     ${token:-(already used to sign in, so it is no longer shown; run reset-token if it is lost)}$( [ -n "$token" ] && echo ' (give it to the user to keep safe; hidden after the first sign-in)')
 Agents          $(agents_label "${AGENTS:-claude,dimensio}") (server reports: ${served:-not up yet})
 Users           $( [ "$USERS_MODE" = solo ] && echo 'just me (sign-up off)' || echo 'multi-user (invite codes on)')
-Android app     $( [ -f "${run:-$cur}/downloads/MuseBridge.apk" ] && echo 'open the public URL in the phone browser -> Settings -> Plugins -> Android app' || echo "download from GitHub: $APK_GITHUB") (tell the user about it)
+Android app     $( has_apk "${run:-$cur}" && echo 'open the public URL in the phone browser -> Settings -> Plugins -> Android app' || echo "download from GitHub: $APK_GITHUB") (tell the user about it)
 Version         $( [ -n "$run" ] && version_of "$run" || echo 'not running')$( [ -n "$run" ] && [ -n "$cur" ] && [ "$run" != "$cur" ] && echo " ($(version_of "$cur") is installed; switches when nobody is chatting)")
 Services        $(svc_states)
 Local health    $lc
@@ -196,7 +198,7 @@ EOF
 管理员令牌  ${token:-（用户已经用它登录过了，这里不再显示；忘了就跑 reset-token）}$( [ -n "$token" ] && echo '（交给用户存好；他用它登录成功后，这里就不再显示）')
 agent       $(agents_label "${AGENTS:-claude,dimensio}")（服务端报告：${served:-还没起来}）
 使用方式    $( [ "$USERS_MODE" = solo ] && echo '只自己用（注册关闭）' || echo '多人用（可发邀请码）')
-安卓 app    $( [ -f "${run:-$cur}/downloads/MuseBridge.apk" ] && echo '手机浏览器打开公网地址 → 设置 → 插件 → 安卓 App 下载安装' || echo "从 GitHub 下载：$APK_GITHUB")（记得告诉用户有这个）
+安卓 app    $( has_apk "${run:-$cur}" && echo '手机浏览器打开公网地址 → 设置 → 插件 → 安卓 App 下载安装' || echo "从 GitHub 下载：$APK_GITHUB")（记得告诉用户有这个）
 运行版本    $( [ -n "$run" ] && version_of "$run" || echo 未运行)$( [ -n "$run" ] && [ -n "$cur" ] && [ "$run" != "$cur" ] && echo "（已装好 $(version_of "$cur")，等没人在聊时切换）")
 服务        $(svc_states)
 本地健康    $lc

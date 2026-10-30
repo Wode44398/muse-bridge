@@ -2,7 +2,7 @@
   "id": "muse",
   "name": "Muse Bridge",
   "version": "1.0.0",
-  "description": "Muse Bridge 专属的部分：安卓 App（在线 WebView 壳）的下载与「在 App 里打开」，以及项目手册里的 Muse 部署一章。由 deploy/muse/bootstrap.sh 登记，随发布包更新。",
+  "description": "Muse Bridge 专属的部分：安卓 App（就是 bridge 的安卓 App，由服务器按自己的版本发）的下载、旧版 Muse App 的换装提示，以及项目手册里的 Muse 部署一章。由 deploy/muse/bootstrap.sh 登记，随发布包更新。",
   "author": "Muse Bridge",
   "homepage": "https://github.com/Wode44398/muse-bridge",
   "category": "third-party",

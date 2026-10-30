@@ -157,7 +157,7 @@ bash "$REL/bridge/deploy/muse/bootstrap.sh" install --agents claude --solo --aut
 - 令牌就是管理员密码，请马上存进密码管理器或备忘录。他用它登录成功一次之后，你这边就再也看不到它了；丢了可以找你重置，重置后旧令牌作废。
 - 用临时地址时：地址大约每几个小时变一次（VM 重启导致），变了你会主动告诉他，他也可以随时问你「地址是多少」。**令牌不会变，但换了地址要重新用令牌登录一次**（浏览器的登录状态是跟着网址存的）。嫌麻烦可以换成自己的域名（第 5 节）。
 - 这个地址谁拿到都能打开登录页，但没有令牌或账号进不去。
-- **顺带告诉他有安卓 app**（结果块里「安卓 app」那一行）：用安卓手机的浏览器打开地址并登录，进设置根页「插件」分组里的「安卓 App」就能下载安装；也可以直接从 GitHub 下载 `https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk`。app 跟网页版界面一样、随服务器自动更新，好处是桌面上有图标、记得住地址，临时地址变了能在 app 里直接换。iPhone 目前没有 app，用 Safari 的「添加到主屏幕」。
+- **顺带告诉他有安卓 app**（结果块里「安卓 app」那一行）：用安卓手机的浏览器打开地址并登录，进设置根页「插件」分组里的「安卓 App」就能下载安装；也可以直接从 GitHub 下载 `https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk`。这个 app 就是 bridge 的安卓 App：界面打包在 app 里（网速慢也秒开），连上后显示 Muse Bridge 品牌，桌面图标名字是 The Bridge；版本跟着所连服务器走，服务器升级后 app 里设置根页的「软件更新」会提示新版本。第一次打开在「连接你的 bridge 服务器」页扫码或手动填地址（可直接粘贴你回复的整句话）；临时地址变了一般会自动跟过去，没跟上就在 app 的「设置 › 关于 › 服务器地址」里更换。以前装过 Muse 旧版 app 的用户会看到换装提示，装新的、登录后卸载旧的。iPhone 目前没有 app，用 Safari 的「添加到主屏幕」。
 
 交付完，接着第 4 节：问他要不要你带他上手。
 
@@ -267,8 +267,8 @@ Muse Bridge 自带一套给 agent 用的 HTTP 接口（入口 `/agent`，项目�
 | 「让朋友也能用」「只给我自己用」 | `set-users multi` / `set-users solo` |
 | 结果块要换语言 | `set-lang en` / `set-lang zh` |
 | 「想要固定地址」 | 按第 5 节带他做 |
-| 「有手机 app 吗」「怎么装到手机上」 | 安卓：手机浏览器打开地址并登录 → 设置根页「插件」分组里的「安卓 App」下载安装，或者给他 GitHub 链接 `https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk`；iPhone：Safari「分享 → 添加到主屏幕」 |
-| 「app 打不开了」「app 连不上」 | 多半是临时地址换了：`status` 拿到新地址告诉他，让他在 app 弹出的面板里点「更换地址」粘进去 |
+| 「有手机 app 吗」「怎么装到手机上」 | 安卓：手机浏览器打开地址并登录 → 设置根页「插件」分组里的「安卓 App」下载安装，或者给他 GitHub 链接 `https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk`（文件就是 bridge 的 App；服务器自己也能下：`/download/android`）；iPhone：Safari「分享 → 添加到主屏幕」 |
+| 「app 打不开了」「app 连不上」 | 多半是临时地址换了：`status` 拿到新地址告诉他，让他在 app 的「设置 › 关于 › 服务器地址」（弹出「更换服务器地址」）里粘新地址（app 一般会自己跟过去，没跟上才需要） |
 | 「有新版本吗」 | `check-update`，把当前版本、最新版本、更新内容告诉他 |
 | 「更新」 | `update`（自己转后台、前台打印进度，完了贴结果块；没等完就 `wait`）。切换完成后：结果块说 hook 定义变了，就告诉用户变了什么，他同意后按新 json 更新 hook；更新说明里有他用得上的新功能，问一句要不要带他试一下（`guide/onboarding.md` 最后一节）——当场切换完成时看门狗不会再发 update_done，这一步只能在这里做 |
 | 「装到哪一步了」「好了没」 | `wait` |
