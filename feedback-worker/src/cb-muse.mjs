@@ -1,4 +1,5 @@
 // Muse Bridge 上的 bridge 反馈通道（/v1/cb/report 带 distro: 'muse'）→ Muse 的问题报告 → muse-bridge 仓库的公开 Issue。
+// The Bridge 官方安装包推来的（distro: 'bridge'）用同一个转换，开在 The Bridge 的公开仓库（worker.mjs 的 TARGETS）。
 //
 // Muse Bridge 跑的是 bridge 公开版：网页「提交反馈」、以及网页里的 Claude 诊断后上报（agent 操作 feedback.report），
 // 在管理员打开「把用户反馈同时发给 bridge 开发者」、提交人自己同意时，经 bridge 的推送通道发到本 Worker 的 /v1/cb/report。

@@ -2,15 +2,16 @@
 //
 // 跟 Muse 的 /v1/report 互不相干（Muse 那条路一行没动）：
 //   POST /v1/cb/report        各台 bridge 服务器推反馈（字段白名单 + 脱敏见 deploy/muse/feedback/cb-schema.mjs）。
-//                             不发 GitHub，存进 KV 私有收件箱（cbi:<id>，默认 30 天过期）。
+//                             带 distro 的开 Issue（见下）；不带的不发 GitHub，存进 KV 私有收件箱（cbi:<id>，默认 30 天过期）。
 //                             收件箱没配（没有 INBOX_TOKEN）时回 503：对方留在自己的待发队列里，之后补发。
 //   GET  /v1/cb/inbox         开发者那台 bridge 来取：列出还没确认的（含图片 base64），?limit= 一次几条（≤25）。
 //   POST /v1/cb/inbox/ack     { ids } 写进库之后确认，确认过的从 KV 删掉。
 // 后两个只认 Worker secret INBOX_TOKEN（Authorization: Bearer）；没配这个 secret 时一律 404，像不存在一样。
 // 限流跟 Muse 分开计数（rl:<日>:cb:*）；PAUSED / cfg:paused 停收对这里同样生效。
-// 按发行版分流：推来的反馈带 distro（bridge 本体不带），distros 里登记了这个 id 的，交给它处理、不进收件箱——
-// 现在只有 muse：转成 Muse Bridge 仓库的 GitHub Issue（cb-muse.mjs + worker.mjs 的 submitMuse，限流也记在 Muse 那边）。
-// 没登记的 distro 跟本体一样进收件箱（distro 一起存下）。
+// 按发行版分流：推来的反馈带 distro，distros 里登记了这个 id 的，交给它处理、不进收件箱（worker.mjs 的 TARGETS，限流记在那边）：
+//   muse   → Muse Bridge 仓库的 GitHub Issue；
+//   bridge → The Bridge 的公开仓库的 Issue（官方安装包声明了公开去向才带，提交人看到过「会公开」）。
+// 不带 distro（老版本、没声明公开去向——提交人同意的是「发给开发者」，不能公开）和没登记的 distro 进收件箱（distro 一起存下）。
 import { cleanCbReport, CB_MAX_BODY } from '../../deploy/muse/feedback/cb-schema.mjs';
 
 const json = (code, o) => new Response(JSON.stringify(o), { status: code, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });

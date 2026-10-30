@@ -20,9 +20,10 @@ export function issueTitle(r) {
   return `[${KIND_LABEL[r.kind] || 'Report'}] ${r.title}`.slice(0, 140);
 }
 
-export function issueBody(r) {
+// product：Issue 里写的产品名（The Bridge 本体的反馈开在它自己的仓库，见 feedback-worker/src/worker.mjs 的 TARGETS）
+export function issueBody(r, { product = 'Muse Bridge' } = {}) {
   const out = [];
-  out.push(`_${SOURCE_LABEL[r.source] || 'reported'} · Muse Bridge ${r.env?.version || '(unknown version)'}_`);
+  out.push(`_${SOURCE_LABEL[r.source] || 'reported'} · ${product} ${r.env?.version || '(unknown version)'}_`);
   out.push('');
   if (r.description) {
     out.push('### What happened');
@@ -67,7 +68,7 @@ export function issueBody(r) {
     out.push('</details>');
     out.push('');
   }
-  out.push(`<sub>Report id \`${r.install.slice(0, 8)}\`${r.fp ? ` · fingerprint \`${r.fp}\`` : ''} · collected by Muse Bridge's built-in reporter (no chats, files, keys or addresses are included).</sub>`);
+  out.push(`<sub>Report id \`${r.install.slice(0, 8)}\`${r.fp ? ` · fingerprint \`${r.fp}\`` : ''} · collected by ${product}'s built-in reporter (no chats, files, keys or addresses are included).</sub>`);
   if (r.fp) out.push(fpMarker(r.fp));
   return out.join('\n');
 }
@@ -81,9 +82,11 @@ export function plusOneBody(r) {
   return out.join('\n');
 }
 
-export function issueLabels(r) {
+// from：来源标签（Muse 仓库是 from-muse；The Bridge 的仓库只收这一种来源，不打）
+export function issueLabels(r, { from = 'from-muse' } = {}) {
+  const src = from ? [from] : [];
   // 网页反馈分不出是 bug 还是建议：只打来源标签，由维护者分拣（不另起仓库里还没有的标签名）
-  if (r.kind === 'feedback') return ['from-muse'];
+  if (r.kind === 'feedback') return src;
   const main = r.kind === 'idea' ? 'enhancement' : r.kind === 'docs' ? 'documentation' : 'bug';
-  return ['from-muse', main].concat(r.kind === 'update_failed' ? ['update'] : []);
+  return [...src, main].concat(r.kind === 'update_failed' ? ['update'] : []);
 }

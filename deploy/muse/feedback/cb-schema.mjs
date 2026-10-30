@@ -7,7 +7,7 @@
 //   发行版 id（distro：bridge 本体不带；别的发行版带自己的 id，Worker 据此分流，见 feedback-worker/src/cb-muse.mjs）、
 //   最多 3 张图片（每张 ≤ 2MB；只认 png / jpeg / gif / webp，且按文件头认，声明的类型不算数；文件名一律重起）。
 // 图片没法脱敏：前端提交界面写明了「图片会一起发给开发者」，由用户自己决定放不放。
-// distro = 'muse' 的那份不进收件箱、转成 Muse Bridge 仓库的公开 Issue——图片不随 Issue 公开，只记个数。
+// distro = 'muse' / 'bridge' 的那份不进收件箱、转成 Muse Bridge / The Bridge 仓库的公开 Issue——图片不随 Issue 公开，只记个数。
 import { scrub, clip } from './scrub.mjs';
 
 export const CB_MAX_IMAGES = 3;

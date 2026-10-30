@@ -256,3 +256,52 @@ test('建 Issue 时 labels 被 GitHub 丢掉 → 单独补上', async () => {
   await handle(post(base()), env(memKV()));
   assert.deepEqual(gh.issues.get(1).labels, ['from-muse', 'bug']);
 });
+
+// The Bridge 官方安装包（声明了公开去向才带 distro: 'bridge'）→ BRIDGE_GITHUB_REPO 的 Issue；Muse 仍去 GITHUB_REPO
+const bridgeEnv = (kv, extra = {}) => env(kv, { GITHUB_REPO: 'm/muse', BRIDGE_GITHUB_REPO: 'o/r', ...extra });
+
+test('The Bridge 的反馈（distro=bridge）→ 开在 BRIDGE_GITHUB_REPO：产品名 The Bridge、不打 from-muse；不进收件箱', async () => {
+  const gh = fakeGitHub(); const kv = memKV();
+  const handle = createHandler({ fetch: gh.fetch });
+  const r = await handle(cbPost(cbBase({ distro: 'bridge', install: 'cb-install-brdg-0001', attachments: [{ type: 'image/png', data: png }] })), bridgeEnv(kv, { INBOX_TOKEN: 'tok-0123456789' }));
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { ok: true, issue: { number: 1, url: 'https://github.com/o/r/issues/1' } });
+  const it = gh.issues.get(1);
+  assert.equal(it.title, '[Feedback] 工作空间里重命名中文文件夹报 500');
+  assert.deepEqual(it.labels, [], '网页反馈不打标签');
+  assert.match(it.body, /reported from the web UI · The Bridge 6\.75 \(488\)/);
+  assert.match(it.body, /collected by The Bridge's built-in reporter/);
+  assert.ok(!/Muse/.test(it.body), '正文里不出现 Muse');
+  assert.ok(!it.body.includes(png.slice(0, 12)), '图片不进 Issue');
+  assert.ok(!gh.calls.some((c) => c.path.includes('/repos/m/muse')), '不碰 Muse 仓库');
+  assert.ok(![...kv.m.keys()].some((k) => k.startsWith('cbi:')), '不进私有收件箱');
+  const day = new Date().toISOString().slice(0, 10);
+  assert.ok(kv.m.has(`rl:${day}:b:i:cb-install-brdg-0001`), '限流记在 bridge 自己的计数上');
+  assert.ok([...kv.m.keys()].some((k) => k.startsWith('b:fp:')), '指纹映射带 bridge 前缀，不跟 Muse 仓库的 Issue 编号串');
+});
+
+test('The Bridge 的 Claude 代报 → [Bug] + bug 标签；补发落回同一个 Issue；每台装机每天上限按 BRIDGE_PER_INSTALL_DAILY', async () => {
+  const gh = fakeGitHub(); const kv = memKV();
+  const handle = createHandler({ fetch: gh.fetch });
+  const e = bridgeEnv(kv, { BRIDGE_PER_INSTALL_DAILY: '2' });
+  const body = cbBase({ distro: 'bridge', text: '【经 Claude 诊断后上报】上传卡在 0%\n\n日志里 ECONNRESET' });
+  const j1 = await (await handle(cbPost(body), e)).json();
+  assert.equal(gh.issues.get(1).title, '[Bug] 上传卡在 0%');
+  assert.deepEqual(gh.issues.get(1).labels, ['bug']);
+  const j2 = await (await handle(cbPost(body), e)).json();
+  assert.equal(j2.duplicate, true);
+  assert.equal(j2.issue.number, j1.issue.number);
+  assert.equal(gh.issues.get(1).comments.length, 0);
+  assert.equal((await handle(cbPost(cbBase({ distro: 'bridge', text: '第三份' })), e)).status, 429);
+  // Muse 的计数不受影响
+  assert.ok(![...kv.m.keys()].some((k) => /^rl:[0-9-]+:(all|i:)/.test(k)));
+});
+
+test('The Bridge 的仓库没配（BRIDGE_GITHUB_REPO 空）→ 503 留在对方队列，不落进收件箱也不开到 Muse 仓库', async () => {
+  const noGitHub = async () => { throw new Error('github must not be called'); };
+  const handle = createHandler({ fetch: noGitHub });
+  const kv = memKV();
+  const r = await handle(cbPost(cbBase({ distro: 'bridge' })), env(kv, { INBOX_TOKEN: 'tok-0123456789' }));
+  assert.equal(r.status, 503);
+  assert.ok(![...kv.m.keys()].some((k) => k.startsWith('cbi:')));
+});

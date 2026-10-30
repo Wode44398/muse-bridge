@@ -9,12 +9,22 @@
 // 防滥用：每台装机每天、全局每天各有上限；PAUSED=1 或 KV 里 cfg:paused=1 一键停收（客户端会存着之后补发）。
 import { cleanReport } from '../../deploy/muse/feedback/schema.mjs';
 import { issueTitle, issueBody, plusOneBody, issueLabels } from '../../deploy/muse/feedback/render.mjs';
-// claude-bridge 反馈收件箱（/v1/cb/*，不进 GitHub、进 KV 私有收件箱）：见 cb.mjs。
-// 其中 Muse Bridge 推来的（distro: 'muse'）例外：转成 Muse 的报告，跟 /v1/report 走同一条路开 Issue（cb-muse.mjs）
+// claude-bridge 反馈通道（/v1/cb/*）：见 cb.mjs。按 distro 分流，都转成同一种报告（cb-muse.mjs）再走下面同一条路开 Issue：
+//   · distro: 'muse'   Muse Bridge → Muse 仓库（GITHUB_REPO）
+//   · distro: 'bridge' The Bridge 官方安装包（提交人看到过「会公开」）→ The Bridge 的公开仓库（BRIDGE_GITHUB_REPO）
+//   · 不带 distro（老版本、没声明公开去向）→ 不公开，进 KV 私有收件箱
 import { createCbHandler } from './cb.mjs';
 import { museReportFromCb } from './cb-muse.mjs';
 
 const MAX_BODY = 64 * 1024;
+
+// 开 Issue 的目标仓库。kp = KV 里指纹映射的前缀、rl = 限流计数的前缀（两个仓库各记各的，Issue 编号不会串）
+const TARGETS = {
+  muse: (env) => ({ repo: env.GITHUB_REPO, product: 'Muse Bridge', from: 'from-muse', kp: '', rl: '',
+    cap: Number(env.DAILY_CAP) || 300, perInstall: Number(env.PER_INSTALL_DAILY) || 10 }),
+  bridge: (env) => ({ repo: env.BRIDGE_GITHUB_REPO, product: 'The Bridge', from: '', kp: 'b:', rl: 'b:',
+    cap: Number(env.BRIDGE_DAILY_CAP) || 100, perInstall: Number(env.BRIDGE_PER_INSTALL_DAILY) || 10 }),
+};
 
 const json = (code, o) => new Response(JSON.stringify(o), { status: code, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 
@@ -53,15 +63,20 @@ export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = ()
   const handleCb = createCbHandler({
     now, paused,
     distros: {
-      // Muse Bridge 网页里的「提交反馈」与 Claude 上报：同一份报告补发时（指纹相同）落回同一个 Issue，不给自己 +1
-      muse: async (cb, env) => {
-        let r;
-        try { r = await museReportFromCb(cb); }
-        catch (e) { return json(400, { error: String(e?.message || 'bad report') }); }
-        return submitMuse(r, env, { selfSeen: true });
-      },
+      // 网页里的「提交反馈」与 Claude 上报：同一份报告补发时（指纹相同）落回同一个 Issue，不给自己 +1
+      muse: (cb, env) => fromCb(cb, env, TARGETS.muse(env)),
+      bridge: (cb, env) => fromCb(cb, env, TARGETS.bridge(env)),
     },
   });
+
+  async function fromCb(cb, env, target) {
+    // 仓库没配：当作暂时收不了（503），对方留在待发队列里补发，不会落进别的地方
+    if (!target.repo) return json(503, { error: 'issues not configured' });
+    let r;
+    try { r = await museReportFromCb(cb); }
+    catch (e) { return json(400, { error: String(e?.message || 'bad report') }); }
+    return submit(r, env, { selfSeen: true, target });
+  }
 
   async function installationToken(env) {
     if (tokenCache && tokenCache.exp - now() > 5 * 60_000) return tokenCache.token;
@@ -93,26 +108,27 @@ export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = ()
     return true;
   }
 
-  async function findByFingerprint(env, fp) {
+  async function findByFingerprint(env, fp, t) {
     const kv = env.FEEDBACK_KV;
-    const known = kv ? Number(await kv.get(`fp:${fp}`)) : 0;
+    const known = kv ? Number(await kv.get(`${t.kp}fp:${fp}`)) : 0;
     if (known) {
-      const r = await gh(env, 'GET', `/repos/${env.GITHUB_REPO}/issues/${known}`);
+      const r = await gh(env, 'GET', `/repos/${t.repo}/issues/${known}`);
       if (r.ok) return r.body;
     }
-    const q = encodeURIComponent(`repo:${env.GITHUB_REPO} is:issue in:body "${fp}"`);
+    const q = encodeURIComponent(`repo:${t.repo} is:issue in:body "${fp}"`);
     const s = await gh(env, 'GET', `/search/issues?q=${q}&sort=created&order=desc&per_page=5`);
     const hit = s.ok && Array.isArray(s.body?.items) ? s.body.items.find((it) => String(it.body || '').includes(`muse-fp:${fp}`)) : null;
-    if (hit && kv) await kv.put(`fp:${fp}`, String(hit.number));
+    if (hit && kv) await kv.put(`${t.kp}fp:${fp}`, String(hit.number));
     return hit || null;
   }
 
   // selfSeen：建了新 Issue 就记下「这台装机已经算过」，它再补发同一个指纹只回 duplicate、不在自己的 Issue 下 +1
-  async function report(r, env, { selfSeen = false } = {}) {
-    const repo = env.GITHUB_REPO;
+  async function report(r, env, { selfSeen = false, target: t = TARGETS.muse(env) } = {}) {
+    const repo = t.repo;
+    const look = { product: t.product }, tags = { from: t.from };
     if (r.kind === 'security') {
       // 私密漏洞报告（仓库已开 Private vulnerability reporting）；不行再退到维护者私有的草稿公告
-      const body = { summary: issueTitle(r).slice(0, 1024), description: issueBody(r) };
+      const body = { summary: issueTitle(r).slice(0, 1024), description: issueBody(r, look) };
       let x = await gh(env, 'POST', `/repos/${repo}/security-advisories/reports`, body);
       if (!x.ok) x = await gh(env, 'POST', `/repos/${repo}/security-advisories`, { ...body, vulnerabilities: [] });
       if (!x.ok) return json(502, { error: `github ${x.status}` });
@@ -120,9 +136,9 @@ export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = ()
     }
     let regressionOf = 0;
     if (r.fp) {
-      const hit = await findByFingerprint(env, r.fp);
+      const hit = await findByFingerprint(env, r.fp, t);
       if (hit && hit.state === 'open') {
-        const seenKey = `fpi:${r.fp}:${r.install}`;
+        const seenKey = `${t.kp}fpi:${r.fp}:${r.install}`;
         const seen = env.FEEDBACK_KV ? await env.FEEDBACK_KV.get(seenKey) : null;
         if (!seen) {
           await gh(env, 'POST', `/repos/${repo}/issues/${hit.number}/comments`, { body: plusOneBody(r) });
@@ -132,25 +148,26 @@ export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = ()
       }
       if (hit) regressionOf = hit.number;
     }
-    let body = issueBody(r);
+    let body = issueBody(r, look);
     if (regressionOf) body = `_Possibly a regression of #${regressionOf} (closed)._\n\n` + body;
-    const x = await gh(env, 'POST', `/repos/${repo}/issues`, { title: issueTitle(r), body, labels: issueLabels(r) });
+    const x = await gh(env, 'POST', `/repos/${repo}/issues`, { title: issueTitle(r), body, labels: issueLabels(r, tags) });
     if (!x.ok) return json(502, { error: `github ${x.status}` });
     // 没有推送权限的调用方建 Issue 时，GitHub 会悄悄丢掉 labels：缺了就单独补一次（失败不影响结果）
     const got = new Set((x.body.labels || []).map((l) => (typeof l === 'string' ? l : l?.name)));
-    const want = issueLabels(r).filter((l) => !got.has(l));
+    const want = issueLabels(r, tags).filter((l) => !got.has(l));
     if (want.length) { try { await gh(env, 'POST', `/repos/${repo}/issues/${x.body.number}/labels`, { labels: want }); } catch {} }
-    if (r.fp && env.FEEDBACK_KV) await env.FEEDBACK_KV.put(`fp:${r.fp}`, String(x.body.number));
-    if (selfSeen && r.fp && env.FEEDBACK_KV) await env.FEEDBACK_KV.put(`fpi:${r.fp}:${r.install}`, '1', { expirationTtl: 90 * 86400 });
+    if (r.fp && env.FEEDBACK_KV) await env.FEEDBACK_KV.put(`${t.kp}fp:${r.fp}`, String(x.body.number));
+    if (selfSeen && r.fp && env.FEEDBACK_KV) await env.FEEDBACK_KV.put(`${t.kp}fpi:${r.fp}:${r.install}`, '1', { expirationTtl: 90 * 86400 });
     return json(200, { ok: true, issue: { number: x.body.number, url: x.body.html_url } });
   }
 
-  // 一份干净的 Muse 报告（cleanReport 的产物）：限流 → 查重 / 建 Issue。/v1/report 与 Muse 发来的 /v1/cb/report 共用
-  async function submitMuse(r, env, opts) {
+  // 一份干净的报告（cleanReport 的产物）：按目标仓库限流 → 查重 / 建 Issue。/v1/report 与 /v1/cb/report 的 muse、bridge 共用
+  async function submit(r, env, opts = {}) {
+    const t = opts.target || TARGETS.muse(env);
     const day = new Date(now()).toISOString().slice(0, 10);
-    if (!(await bump(env, `rl:${day}:all`, Number(env.DAILY_CAP) || 300))) return json(429, { error: 'daily limit reached', retryAfter: 'tomorrow' });
-    if (!(await bump(env, `rl:${day}:i:${r.install}`, Number(env.PER_INSTALL_DAILY) || 10))) return json(429, { error: 'too many reports from this install today', retryAfter: 'tomorrow' });
-    try { return await report(r, env, opts); }
+    if (!(await bump(env, `rl:${day}:${t.rl}all`, t.cap))) return json(429, { error: 'daily limit reached', retryAfter: 'tomorrow' });
+    if (!(await bump(env, `rl:${day}:${t.rl}i:${r.install}`, t.perInstall))) return json(429, { error: 'too many reports from this install today', retryAfter: 'tomorrow' });
+    try { return await report(r, env, { ...opts, target: t }); }
     catch (e) { return json(502, { error: String(e?.message || e).slice(0, 200) }); }
   }
 
@@ -170,7 +187,7 @@ export function createHandler({ fetch: doFetch = (...a) => fetch(...a), now = ()
     // cleanReport 就是第二遍脱敏：服务器那边漏了什么，这里按同一套规则再抹一遍
     try { r = cleanReport(JSON.parse(raw)); }
     catch (e) { return json(400, { error: String(e?.message || 'bad report') }); }
-    return submitMuse(r, env);
+    return submit(r, env);
   };
 }
 

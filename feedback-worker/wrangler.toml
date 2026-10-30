@@ -11,6 +11,11 @@ GITHUB_INSTALLATION_ID = "169122168"
 DAILY_CAP = "300"
 PER_INSTALL_DAILY = "10"
 PAUSED = "0"
+# The Bridge 官方安装包的反馈（/v1/cb/report 带 distro: "bridge"）开在这里；同一个 GitHub App 要装到这个仓库。
+# 限流跟 Muse 分开计：全局每天、每台装机每天
+BRIDGE_GITHUB_REPO = "Wode44398/claude-bridge-releases"
+BRIDGE_DAILY_CAP = "100"
+BRIDGE_PER_INSTALL_DAILY = "10"
 # claude-bridge 反馈收件箱（/v1/cb/*）：全局每天、每台装机每天的份数上限，全局每天的体积上限（MB），收件箱里没取走的保留几天。
 # 按 KV 免费档压的（整个账号每天 1000 次写入、存储 1GB，跟 Muse 共用）：收一份写 3 次 → 50 份占 150 次；
 # 汇总端停机一个月没人取，最多存 30MB × 30 天 ≈ 900MB。账号是 Workers Paid 的话可以放宽。
