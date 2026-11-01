@@ -8,6 +8,7 @@
 // mcp__remotePc__*（经中继操作已配对的客户端）。现在同机就是「不经公网的那台设备」，同一套工具。
 //
 // 目标设备：参数 device（id 或名字）> 会话连接的设备（输入框下方的设备芯片）> 恰好一台在线。
+// 「这条消息发自哪台客户端」不进提示词，devices 工具现查（runtime/client-origins.mjs）；清单里也列出用过的安卓 App。
 // 权限：设备服务按用户在客户端里选的档位硬拦（observe 只能看，control 才能动）；这里只做解析与提示。
 
 import { z } from 'zod';
@@ -16,6 +17,8 @@ import os from 'node:os';
 import { open, mkdir, stat as fsStat } from 'node:fs/promises';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { resolveDevice, deviceDispatch, ownDevices } from '../runtime/devices.mjs';
+import { phoneClients, phoneHandle, phoneName, originLabel, messageOrigins } from '../runtime/client-origins.mjs';
+import { isControlOnline } from '../runtime/phone-control.mjs';
 import { listForwards, createForward, removeForward } from '../runtime/device-forward.mjs';
 import { deliverRoots, deliverAnywhere } from '../runtime/deliverables.mjs';
 import { withinRoot } from '../runtime/http-file.mjs';
@@ -74,6 +77,8 @@ const batchItem = z.object({
 
 const deviceArg = z.string().optional().describe('目标设备 id 或名字；省略 = 会话连接的那台（输入框下方的设备芯片），没连接且只有一台在线时用那台');
 
+const utc = (iso) => String(iso || '').slice(0, 16).replace('T', ' ') + ' UTC';
+
 const TIER_LABEL = { control: '可观察并操作', observe: '只允许观察', off: '已关闭', workspace: '只开了命令与文件（老客户端，未开桌面控制）' };
 
 // 提示词按 CLI 启动时定稿（停放的 CLI 跨轮复用），所以不写死「连的是哪台」——会话中途换了设备，
@@ -82,7 +87,8 @@ export function deviceNudge() {
   return '\n\n【用户的电脑】你可以操作用户登记过的电脑（设备），会话连接的那台就是默认目标（输入框下方的设备芯片，用户随时可换）。' +
     '你（Claude）跑在 bridge 服务器上：Read/Write/Edit/Bash 作用在服务器上，**不是**用户的电脑——除非 `devices` 把那台设备标成「与 bridge 同一台机器」。' +
     '凡是用户电脑上的事——看他的屏幕、点他的程序、读写他电脑上的文件、在他电脑上跑命令、用他已登录的浏览器——一律用 `mcp__device__*`。' +
-    '\n用法：`devices` 看有哪些设备、哪台连在本会话、各自在线与权限档；`inspect` 观察桌面（active_window → uia_tree 读控件，读不到再 screenshot），`act` 操作桌面（优先 uia_action 或 click+ref，坐标兜底）；' +
+    '\n用户说「我屏幕上 / 这台电脑 / 我这边 / 我手机里」这类指代本地的话时，先调 `devices` 看这条消息是从哪台客户端发来的（用户可能同时开着几台 Win 客户端和手机 App），再决定操作哪台；发送端与会话连接的设备不是同一台时，按用户指的那台用 device 参数指定，拿不准就问。' +
+    '\n用法：`devices` 看有哪些设备（电脑与手机）、这条消息发自哪台、哪台连在本会话、各自在线与权限档；`inspect` 观察桌面（active_window → uia_tree 读控件，读不到再 screenshot），`act` 操作桌面（优先 uia_action 或 click+ref，坐标兜底）；' +
     '`browser` 驱动设备上的浏览器（带用户的登录态，操作对用户实时可见）；`shell` 在设备上跑命令（Windows 是 PowerShell）；`files` 读写设备上的文件（glob 找文件、grep 搜内容、read 按行分段读），`files(action:"pull")` 把设备上的文件拷到服务器、`files(action:"push")` 把服务器上的产物拷到设备；' +
     '`ports(action:"open", port)` 把设备上的本机端口（他电脑上跑着的 dev server、本机模型接口）接到服务器，给出服务器上能直接访问的地址。' +
     COORD_RULES + '\n提速：能预判的连续步骤用 `act(action:"batch")` 一次做完；单步可加 `screenshot_after:true`；等弹窗用 `inspect(action:"wait_for_window")`。' + VERIFY_RULES +
@@ -97,8 +103,9 @@ export function deviceNudge() {
  * @param {(id:string) => void} [o.setLink]  agent 用 devices(use=…) 切换连接的设备
  * @param {() => string} [o.getSession]  会话 id（审计与设备侧「谁在操作」提示用）
  * @param {() => string} [o.getTitle]    会话标题（同上）
+ * @param {() => object|null} [o.getOrigin]  当前这条用户消息的发送端（runtime/client-origins.mjs），每次调用现取
  */
-export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSession = () => '', getTitle = () => '' }) {
+export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSession = () => '', getTitle = () => '', getOrigin = () => null }) {
   const target = (want) => {
     const r = resolveDevice(ctx, { want: want || '', linked: getLink() || '' });
     if (r.error) throw new Error(r.error);
@@ -134,9 +141,14 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
 
   const tools = [
     tool('devices',
-      '列出你可以操作的电脑（设备）：在线状态、权限档、客户端版本，以及这个会话连接的是哪台。' +
-      'use=设备 id 或名字：把这个会话改连到那台设备（用户口头指定「用我的笔记本」时用）；use="none" 断开连接。',
-      { use: z.string().optional().describe('把会话连接改到这台设备（id 或名字）；"none" = 断开') },
+      '列出用户的全部客户端：Windows 桌面客户端（这组工具能操作的电脑）与安卓 App（手机），各自的在线状态、权限档、客户端版本，' +
+      '这个会话连接的是哪台电脑，以及【当前这条消息是从哪台客户端发来的】。要在用户本地做事（看他的屏幕、读写他的文件、操作他的手机）前先看这里。' +
+      'history=N：再列出这个会话最近 N 条用户消息各自发自哪台。' +
+      'use=设备 id 或名字：把这个会话改连到那台电脑（用户口头指定「用我的笔记本」时用）；use="none" 断开连接。',
+      {
+        use: z.string().optional().describe('把会话连接改到这台电脑（id 或名字）；"none" = 断开'),
+        history: z.number().int().min(1).max(50).optional().describe('列出最近 N 条用户消息的发送端'),
+      },
       async (a) => {
         try {
           const mine = ownDevices(ctx);
@@ -144,23 +156,51 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
             if (a.use === 'none') setLink('none');
             else {
               const hit = mine.find((d) => d.id === a.use || d.name === a.use || d.name.toLowerCase() === String(a.use).toLowerCase());
-              if (!hit) return err(new Error(`找不到设备「${a.use}」`));
+              if (!hit) return err(new Error(`找不到电脑「${a.use}」（手机不能连到会话，操作手机用 mcp__phoneControl__*）`));
               setLink(hit.id);
             }
           }
-          if (!mine.length) return txt('还没有登记任何设备。要让我操作你的电脑：在那台电脑上装 bridge 桌面客户端、用同一个账号登录（登录即自动登记）。');
+          const phones = phoneClients(ctx.key);
+          const origin = getOrigin();
+          const lookup = { desktop: (id) => mine.find((d) => d.id === id) || null, phone: (id) => phones.find((p) => p.id === id) || null };
+          const out = ['这条消息发自：' + (origin ? originLabel(origin, lookup) : '未知（这一轮没有记到发送端）')];
+
           const linked = getLink();
-          const lines = mine.map((d) => {
+          out.push('', '电脑（Windows 桌面客户端，这组 device 工具操作的就是它们）：');
+          if (!mine.length) out.push('  还没有登记任何电脑。要让我操作你的电脑：在那台电脑上装 bridge 桌面客户端、用同一个账号登录（登录即自动登记）。');
+          for (const d of mine) {
             const c = d.client || {};
-            return [
+            out.push('  ' + [
               d.online ? '● 在线' : '○ 离线', d.name, `[${d.id}]`,
               c.os || d.platform || '', c.version ? 'v' + c.version : '',
-              d.online ? (TIER_LABEL[c.tier] || '') : (d.lastOfflineAt ? '最后在线 ' + d.lastOfflineAt.slice(0, 16).replace('T', ' ') + ' UTC' : ''),
+              d.online ? (TIER_LABEL[c.tier] || '') : (d.lastOfflineAt ? '最后在线 ' + utc(d.lastOfflineAt) : ''),
               d.sameMachine ? '与 bridge 同一台机器' : '',
               d.id === linked ? '← 本会话连接的设备' : '',
-            ].filter(Boolean).join('  ');
-          });
-          return txt('你的设备：\n' + lines.join('\n') + (linked === 'none' ? '\n\n（这个会话设为不连接设备。）' : ''));
+              origin && origin.kind === 'desktop' && origin.id === d.id ? '← 这条消息发自这台' : '',
+            ].filter(Boolean).join('  '));
+          }
+          if (linked === 'none') out.push('  （这个会话设为不连接电脑。）');
+
+          out.push('', '手机（安卓 App；device 工具操作不了手机——操作手机用 mcp__phoneControl__*，读写手机文件用 mcp__phone__*，这两组只在可用时才有）：');
+          if (!phones.length) out.push('  还没有用过 bridge 安卓 App 的手机。');
+          for (const p of phones) {
+            out.push('  ' + [
+              isControlOnline(ctx.key, p.id) ? '● 手机操控在线' : '○ 手机操控未连接',
+              phoneName(p), `[${phoneHandle(p.id)}]`,
+              p.name && p.model && p.name !== p.model ? p.model : '', p.android ? '安卓 ' + p.android : '', p.appCode ? 'App ' + p.appCode : '',
+              p.lastSeenAt ? '最近在用 ' + utc(p.lastSeenAt) : '',
+              origin && origin.kind === 'phone' && origin.id === p.id ? '← 这条消息发自这台' : '',
+            ].filter(Boolean).join('  '));
+          }
+
+          if (a.history) {
+            const sid = getSession();
+            const rows = sid ? messageOrigins(ctx, sid, a.history) : [];
+            out.push('', `最近 ${rows.length} 条用户消息的发送端（旧 → 新）：`);
+            if (!rows.length) out.push('  （还没有记录——这个功能上线之前的消息不记发送端）');
+            for (const r of rows) out.push(`  ${utc(r.at)}  ${originLabel(r, lookup)}${r.text ? `  「${r.text}」` : ''}`);
+          }
+          return txt(out.join('\n'));
         } catch (e) { return err(e); }
       }),
 

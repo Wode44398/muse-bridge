@@ -16,6 +16,8 @@ import { compose, vertex as vs } from './state.svelte.js';
 import { api } from './api.js';
 import { cloudFileUrl } from './preview.svelte.js';
 import { dropToast } from './dragdrop.svelte.js';
+import { nativeLocLocalOnly } from './nativeDesktop.js';
+import { pcLocalMaterial } from './pcLocal.js';
 import { t, tr } from './i18n.js';
 
 export const WS_FILE = 'ws-file';
@@ -131,10 +133,16 @@ export async function attachDescriptorToAgent(desc, target) {
   if (!desc) return false;
   dropToast(t('正在准备…'));
   let ok = 0;
-  for (const rel of desc.rels) {
+  for (const [i, rel] of desc.rels.entries()) {
     const name = String(rel).split('/').pop() || 'file';
     const isImg = /\.(png|jpe?g|gif|webp|bmp|svg|heic)$/i.test(name);
     try {
+      // 服务端不认识的原生位置（这台电脑 / 额外授权位置）：按 rel 去服务端取会取错，现读现传
+      if (nativeLocLocalOnly(desc.locationId)) {
+        const att = await pcLocalMaterial({ rel, name, isDir: Boolean(desc.dirs?.[i]), locationId: desc.locationId, forClaude: target !== 'gemini' });
+        if (pushAttachment(target, att)) ok++;
+        continue;
+      }
       const up = await api.fileToUpload(rel, target === 'gemini', desc.ws || '');
       const att = { path: up.path, name: up.name, kind: isImg ? 'image' : 'file', url: isImg ? cloudFileUrl(rel, { ws: desc.ws || '' }) : null };
       if (pushAttachment(target, att)) ok++;

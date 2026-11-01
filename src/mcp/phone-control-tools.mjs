@@ -145,11 +145,13 @@ export function fmtReadiness(s) {
 }
 
 export function buildPhoneControlTools(genKey, getGen, originDevice) {
+  // originDevice 可以是函数：停放的 CLI 跨轮复用，每次调用现取「这条消息发自哪台手机」
+  const originOf = typeof originDevice === 'function' ? originDevice : () => originDevice;
   const resolveGen = () => (getGen && getGen()) || getCurrentGen(genKey);
   // 本轮锁定的设备（buildPhoneControlTools 每次 query 重建 = 每轮一份；子 agent 与主线程共用同一 MCP 实例）。
   const st = { deviceId: null };
   const pick = (want) => {
-    const r = resolveDevice(genKey, { want, sticky: st.deviceId, origin: originDevice });
+    const r = resolveDevice(genKey, { want, sticky: st.deviceId, origin: originOf() });
     if (r.error) throw new Error(r.error);
     const switched = st.deviceId && st.deviceId !== r.device.id;
     st.deviceId = r.device.id;
@@ -194,12 +196,12 @@ export function buildPhoneControlTools(genKey, getGen, originDevice) {
         try {
           const on = listDevices(genKey);
           if (!on.length) return txt('没有手机开着操控。请让用户在手机 app 的 设置 › 手机操控 里打开（读屏/点按还需要授予无障碍）。');
-          const target = resolveDevice(genKey, { sticky: st.deviceId, origin: originDevice });
+          const target = resolveDevice(genKey, { sticky: st.deviceId, origin: originOf() });
           const rows = await Promise.all(on.map(async (d) => {
             let s = null;
             try { s = await requestPhoneControl({ genKey, deviceId: d.id, op: 'status', args: {}, timeoutMs: 10_000 }); }
             catch (e) { if (!/未知操作/.test(String(e?.message))) s = { error: String(e?.message || e) }; }
-            const mark = target.device && target.device.id === d.id ? (d.id === originDevice ? '  ← 本轮目标（用户正在用它发消息）' : '  ← 本轮目标') : '';
+            const mark = target.device && target.device.id === d.id ? (d.id === originOf() ? '  ← 本轮目标（用户正在用它发消息）' : '  ← 本轮目标') : '';
             const head = '「' + d.handle + '」' + d.label + mark;
             if (s && s.error) return head + '\n  ✗ 查询失败：' + s.error;
             return head + '\n' + fmtReadiness(s || (d.ready ? { ...d.ready } : null));
@@ -471,7 +473,7 @@ export function buildPhoneControlTools(genKey, getGen, originDevice) {
   ];
 }
 
-// 绑定到一个 caller 的「手机操控」MCP。originDevice = 发起这轮对话的那台手机（从手机发起时才有）。
+// 绑定到一个 caller 的「手机操控」MCP。originDevice = 发起这轮对话的那台手机（从手机发起时才有；传函数则每次现取）。
 export function makePhoneControlMcp({ genKey = 'admin', getGen, originDevice } = {}) {
   return createSdkMcpServer({
     name: 'phoneControl',

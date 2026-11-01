@@ -527,6 +527,7 @@ export function saveConnector(input = {}) {
     const headers = resolveMasked(sanitizeKV(input.headers), oldCreds.headers);
     if (hasValues(headers)) creds.headers = headers;
     conn.headerKeys = Object.keys(headers);
+    if (old?.connector?.tools) conn.tools = old.connector.tools;   // 编辑配置不丢工具权限
   }
   // MCP server 键名：slug 化 + 内置保留名避让（撞名会顶掉内置能力）。
   let key = old?.connector?.key || slugify(name, 'connector');
@@ -613,6 +614,19 @@ export function updateExtension(id, patch = {}) {
       if (patch.agents[a] && a === 'codex' && item.type === 'connector' && item.connector?.transport !== 'stdio') throw httpErr(400, 'Codex 仅支持 stdio 连接器');
       item.agents[a] = patch.agents[a];
     }
+  }
+  // 远程连接器逐个工具的权限：{ 工具名: always_allow | always_ask | always_deny }，always_ask = 回到默认（删掉这一条）
+  if (patch.toolPolicy && typeof patch.toolPolicy === 'object' && item.type === 'connector' && item.connector) {
+    if (item.connector.transport === 'stdio') throw httpErr(400, '本地连接器不支持按工具设权限');
+    const tools = { ...(item.connector.tools || {}) };
+    for (const [k, v] of Object.entries(patch.toolPolicy)) {
+      const name = stripCc(k).trim().slice(0, 128);
+      if (!name) continue;
+      if (v === 'always_ask' || v === null) delete tools[name];
+      else if (TOOL_POLICIES.has(v)) tools[name] = v;
+    }
+    if (Object.keys(tools).length > 500) throw httpErr(400, '工具太多');
+    if (Object.keys(tools).length) item.connector.tools = tools; else delete item.connector.tools;
   }
   item.updated = now();
   saveStore(store);
@@ -759,15 +773,35 @@ export function claudeExtensionOptions({ scopes = EXT_SCOPES } = {}) {
   const mcpServers = {};
   const conns = items.filter((x) => x.type === 'connector' && x.agents?.claude && x.connector);
   const secrets = secretsForInjection(conns);
-  for (const item of conns) {
-    const c = item.connector;
-    const { env, headers } = connectorCreds(item, secrets);
-    mcpServers[c.key || slugify(item.name, item.id)] =
-      c.transport === 'stdio'
-        ? { type: 'stdio', command: c.command, args: c.args || [], ...(hasValues(env) ? { env } : {}) }
-        : { type: c.transport, url: c.url, ...(hasValues(headers) ? { headers } : {}) };
-  }
+  for (const item of conns) mcpServers[connectorMcpKey(item)] = connectorMcpConfig(item, secrets);
   return { plugins, mcpServers };
+}
+
+// 连接器 → Claude 的 MCP 服务配置。会话注入、扩展页的授权与状态检测都走这一个：CLI 按「服务名 + type/url/headers
+// 的哈希」存 OAuth 令牌，两边差一个字就是两份令牌（授权完会话里照样「需要登录」）。
+// 远程连接器带逐个工具的权限策略（tools: [{ name, permission_policy }]，CLI 原生支持；本地 stdio 的不认，不带）。
+const connectorMcpKey = (item) => item.connector.key || slugify(item.name, item.id);
+function connectorMcpConfig(item, secrets) {
+  const c = item.connector;
+  const { env, headers } = connectorCreds(item, secrets);
+  if (c.transport === 'stdio') return { type: 'stdio', command: c.command, args: c.args || [], ...(hasValues(env) ? { env } : {}) };
+  const tools = Object.entries(c.tools || {}).filter(([, p]) => TOOL_POLICIES.has(p) && p !== 'always_ask').map(([name, p]) => ({ name, permission_policy: p }));
+  return { type: c.transport, url: c.url, ...(hasValues(headers) ? { headers } : {}), ...(tools.length ? { tools } : {}) };
+}
+const TOOL_POLICIES = new Set(['always_allow', 'always_ask', 'always_deny']);
+
+// 扩展页「连接器」：按 id 取一个连接器的 { item, server, config }（不管停用与否、勾没勾 Claude——授权、检测就是要在启用之前做）
+export function connectorForAuth(id) {
+  const item = readStore().items.find((x) => x.id === String(id || '') && x.type === 'connector' && x.connector);
+  if (!item) return null;
+  return { item: publicItem(item), server: connectorMcpKey(item), config: connectorMcpConfig(item, secretsForInjection([item])) };
+}
+// 状态检测：这个范围里全部远程连接器（stdio 要拉起本地进程，不在这里探）
+export function remoteConnectorsForProbe({ scopes = EXT_SCOPES } = {}) {
+  const want = new Set(scopes.map(normScope));
+  const conns = readStore().items.filter((x) => x.type === 'connector' && x.connector && x.connector.transport !== 'stdio' && want.has(extScope(x)));
+  const secrets = secretsForInjection(conns);
+  return conns.map((item) => ({ id: item.id, server: connectorMcpKey(item), config: connectorMcpConfig(item, secrets) }));
 }
 
 // 沙箱用户的 additionalDirectories：全服扩展目录在就给（CLI 读工作区外的文件会先弹授权卡，给了就不弹）。

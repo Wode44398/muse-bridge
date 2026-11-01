@@ -628,7 +628,7 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
     }
     const { runClaudeChat } = await import('../agents/claude.mjs');
     // 代聊按无人值守处理（permissionPolicy 'host'）：控制台没有审批卡，固定 default + 宿主放行（runtime/permissions.mjs）
-    return runClaudeChat(req, res, { message, sessionId, model: CLAUDE_MODELS.has(b.model) ? b.model : undefined, effort: CLAUDE_EFFORTS.has(b.effort) ? b.effort : undefined, attachments: [], ctx, permissionPolicy: 'host', plain: true });   // plain：代聊页只渲染文本，不挂内嵌图表
+    return runClaudeChat(req, res, { message, sessionId, model: CLAUDE_MODELS.has(b.model) ? b.model : undefined, effort: CLAUDE_EFFORTS.has(b.effort) ? b.effort : undefined, attachments: [], ctx, permissionPolicy: 'host', plain: true, origin: { kind: 'admin' } });   // plain：代聊页只渲染文本，不挂内嵌图表
 
   });
 

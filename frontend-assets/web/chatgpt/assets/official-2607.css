@@ -1,0 +1,31 @@
+/* official-2607.css — 2026-07-14 从 chatgpt.com 生产 CSS 原样提取的增补规则
+   来源: root-htscxthp.css / conversation-small-o15acpgq.css / global-modals-5n50n0lo.css
+   仅包含旧版资源缺失、且被新嫁接组件用到的选择器；勿手改，重跑 extract_official_2607.py 再生成 */
+
+@layer components{.__menu-item-trailing-btn,.__menu-item-trailing-icon-lnk,.__menu-item-trailing-lnk{pointer-events:auto;color:var(--text-primary)}}
+@layer components{:is(.__menu-item-trailing-btn,.__menu-item-trailing-icon-lnk,.__menu-item-trailing-lnk):disabled{pointer-events:none;color:var(--text-tertiary)}}
+@layer components{.__menu-item-trailing-btn,.__menu-item-trailing-icon-lnk,.__menu-item-trailing-lnk{isolation:isolate;min-height:calc(var(--spacing) * 9);align-self:stretch;align-items:center;display:flex;position:relative}}
+@layer components{:is(.__menu-item-trailing-btn,.__menu-item-trailing-icon-lnk,.__menu-item-trailing-lnk):focus{--tw-outline-style:none;outline-style:none}}
+@layer components{@media (pointer:coarse){.__menu-item-trailing-btn,.__menu-item-trailing-icon-lnk,.__menu-item-trailing-lnk{min-height:calc(var(--spacing) * 10)}}}
+@layer components{:is(:is(.__menu-item-trailing-btn,.__menu-item-trailing-icon-lnk,.__menu-item-trailing-lnk):is(html[data-focus-mode=keyboard] :focus-visible)>*){outline-color:var(--interactive-outline-color,var(--text-primary));outline-offset:2.5px;outline-width:1.5px;outline-style:solid}}
+@layer components{.__menu-item-trailing-icon-action{isolation:isolate;margin-block:calc(var(--spacing) * -2);border-start-end-radius:10px;border-end-end-radius:10px;margin-inline-start:calc(var(--spacing) * -1);margin-inline-end:calc(var(--spacing) * -2.5);padding-inline-start:var(--spacing);padding-inline-end:calc(var(--spacing) * 1.5)}}
+@layer components{[data-has-submenu] .__menu-item-trailing-icon-action{margin-inline-end:calc(var(--spacing) * -6.5);padding-inline-end:calc(var(--spacing) * 5.5)}}
+@layer components{@media (hover:hover){:is(.__menu-item-trailing-icon-action:is(:where(.group)[data-disabled] *):hover>*){background-color:var(--menu-item-highlighted)}}}
+@layer components{:is(.__menu-item-trailing-icon-action:is(:where(.group)[data-disabled] *):active:active>*){background-color:var(--menu-item-active)}}
+@layer components{.__menu-item-trailing-icon-action>*{border-radius:var(--radius-lg);padding:var(--spacing);justify-content:center;align-items:center;display:flex}}
+@layer components{@media (hover:hover){.__menu-item[data-sidebar-item] .__menu-item-trailing-icon-action:hover{color:var(--interactive-label-hover-secondary)}}}
+@layer components{.__menu-item[data-sidebar-item] .__menu-item-trailing-icon-action:focus-visible{color:var(--interactive-label-hover-secondary)}}
+@layer components{.__menu-item[data-sidebar-item] .__menu-item-trailing-icon-action:disabled,.__menu-item[data-sidebar-item] .__menu-item-trailing-icon-action:where([data-visually-disabled]){color:var(--interactive-label-inactive-secondary)}}
+@layer components{.__menu-item[data-sidebar-item] .__menu-item-trailing-icon-action:checked{color:var(--interactive-label-selected-secondary)}}
+@layer components{.__menu-item[data-sidebar-item] .__menu-item-trailing-icon-action:active{color:var(--interactive-label-press-secondary)}}
+@layer components{.__menu-item[data-sidebar-item] .__menu-item-trailing-icon-action{color:inherit}}
+@layer components{.__menu-item[data-sidebar-item] .__menu-item-trailing-icon-action[data-state=open]{color:var(--interactive-label-hover-secondary)}}
+@layer utilities{.-inset-y-\[0\.5px\]{inset-block:-.5px}}
+@layer utilities{.-start-\[0\.5px\]{inset-inline-start:-.5px}}
+@layer utilities{.-end-\[8\.5px\]{inset-inline-end:-8.5px}}
+@layer utilities{.translucent-surface{background-color:var(--main-surface-primary)}}
+@layer utilities{@supports (color:color-mix(in lab, red, red)){.translucent-surface{background-color:color-mix(in oklab, var(--main-surface-primary) 60%, transparent)}}}
+@layer utilities{.translucent-surface{--tw-backdrop-blur:blur(var(--blur-xl));-webkit-backdrop-filter:var(--tw-backdrop-blur,) var(--tw-backdrop-brightness,) var(--tw-backdrop-contrast,) var(--tw-backdrop-grayscale,) var(--tw-backdrop-hue-rotate,) var(--tw-backdrop-invert,) var(--tw-backdrop-opacity,) var(--tw-backdrop-saturate,) var(--tw-backdrop-sepia,);backdrop-filter:var(--tw-backdrop-blur,) var(--tw-backdrop-brightness,) var(--tw-backdrop-contrast,) var(--tw-backdrop-grayscale,) var(--tw-backdrop-hue-rotate,) var(--tw-backdrop-invert,) var(--tw-backdrop-opacity,) var(--tw-backdrop-saturate,) var(--tw-backdrop-sepia,)}}
+@layer utilities{.text-body-regular\!{font-size:var(--text-body-regular)!important;line-height:var(--tw-leading,var(--text-body-regular--line-height))!important;font-weight:var(--tw-font-weight,var(--text-body-regular--font-weight))!important}}
+@layer utilities{@media (hover:hover){.not-keyboard-focused\:hover\:bg-transparent\!:not(:is(html[data-focus-mode=keyboard] :focus-visible)):hover{background-color:#0000!important}}}
+@layer utilities{.keyboard-focused\:-outline-offset-2:is(html[data-focus-mode=keyboard] :focus-visible){outline-offset:calc(2px * -1)}}

@@ -20,7 +20,7 @@
   let canvas = $state();
   let geom = $state(null);   // 玻璃在视口里的未变换布局矩形 {x,y,w,h}（css px）
   let img = $state(null);
-  let R = null, SCENE = null, ctx = null, alive = false, ready = $state(false);
+  let R = null, SCENE = null, ctx = null, alive = false, ready = $state(false), shown = true;
   let bgTex = null, bgKey = '', liveTex = null, liveOk = false, work = null;
   // 换成逐帧背景后、第一帧到之前先藏起来：流光的 WASM 引擎起得慢，画布上还留着换场前那张壁纸的玻璃
   let waiting = $state(false);
@@ -56,11 +56,21 @@
     window.addEventListener('resize', onR);
     const ro = new ResizeObserver(onR);
     if (canvas.parentElement) ro.observe(canvas.parentElement);
+    // 主页切到别的分页时整页 display:none（不卸载），玻璃还订阅着壁纸的每一帧：照旧位置每帧拷背景、
+    // 渲染 5 块玻璃，画布却不上屏——真机（S25 Edge）上 GPU 队列越积越深，writeBuffer 一次堵 40ms，
+    // 流光下每帧近 100ms，整个 app 掉到 10fps。看不见就不画，重新露面时重量位置、补画一帧。
+    const io = new IntersectionObserver((es) => {
+      const v = es[es.length - 1]?.isIntersecting ?? true;
+      if (v === shown) return;
+      shown = v;
+      if (v) { measure(); schedule(); }
+    });
+    if (canvas.parentElement) io.observe(canvas.parentElement);
     // 入口网格靠 transform 居中、字体晚到会挪位：挂载后补量几次
     const timers = [0, 120, 360, 1000].map((ms) => setTimeout(measure, ms));
     return () => {
       alive = false;
-      window.removeEventListener('resize', onR); ro.disconnect(); timers.forEach(clearTimeout);
+      window.removeEventListener('resize', onR); ro.disconnect(); io.disconnect(); timers.forEach(clearTimeout);
       bgTex?.destroy(); liveTex?.destroy();
     };
   });
@@ -90,7 +100,7 @@
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
-      if (!alive || !ready || !geom) return;
+      if (!alive || !ready || !geom || !shown) return;
       if (bg?.kind === 'live') { if (liveOk) paint(liveTex, true); bg.request?.(); }
       else paintStatic();
     });
@@ -155,8 +165,9 @@
   }
 
   // box：源画布在本页视口里的矩形（流光的画布在 iframe 里，自己量出来的是 iframe 内坐标）
-  function onLive(src, box = src.getBoundingClientRect()) {
-    if (!alive || !ready || !geom) return;
+  function onLive(src, box) {
+    if (!alive || !ready || !geom || !shown) return;
+    box ||= src.getBoundingClientRect();
     const { TW, TH, x0, y0, S, PW, PH } = dims(1);   // 视差 / 流光是连续帧：半超采样
     const kx = src.width / (box.width || window.innerWidth), ky = src.height / (box.height || window.innerHeight);
     const g = scratch(PW, PH);

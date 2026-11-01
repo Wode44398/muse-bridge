@@ -103,14 +103,13 @@ export function buildEdition() {
   return editionCache;
 }
 // 这一版提不提供某个扩展（扩展中心与 Agent 页据此隐去，别让人去找一个不存在的离线包）。装上了的（或排着待装的）一律照常列出。
-// 公开版不提供 codex；没有打包信息的 git 部署里也没有 modules/codex 时同样不提供（公开仓的克隆）。
+// Codex 与其他扩展一样随发行包提供；没有打包信息且源码也没带它的部署不列。
 // 发行版另有取舍时由部署声明：BRIDGE_MODULES_HIDE=vertex,codex（Muse Bridge 不带 Gemini / Codex）——没装的就不列。
 const HIDE = new Set(String(process.env.BRIDGE_MODULES_HIDE || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
 export function moduleOffered(id) {
   if (HIDE.has(id) && !found[id]) return false;
   if (id !== 'codex') return true;
   if (found[id] || existsSync(path.join(PENDING_DIR, id, MANIFEST_NAME))) return true;
-  if (buildEdition() === 'public') return false;
   return existsSync(path.join(BUILTIN_MODULES_DIR, id, MANIFEST_NAME)) || !!baseBuildId();
 }
 

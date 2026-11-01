@@ -25,16 +25,29 @@ function makeOverlay(root) {
   return web;
 }
 
-test('只在 apk 出包、找得到 overlay、且不是公开版出包时生效', () => {
+test('未带发行资源的源码树：私有 overlay 只用于私有 apk', () => {
   const root = tmp();
   try {
     const web = makeOverlay(root);
-    assert.equal(apkOverlayWeb({ BRIDGE_OVERLAY_DIR: root }), null, '生产构建（没设 BRIDGE_APK_OUT）不打');
-    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_OVERLAY_DIR: root }), web);
-    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_OVERLAY_DIR: root, BRIDGE_EDITION: 'public' }), null, '公开版出包不打');
-    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_DATA_ROOT: path.join(root, 'nope') }), null, '没有 overlay');
-    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_OVERLAY_DIR: path.join(root, 'web') }), null, 'overlay 里没有 web/');
+    const options = { repo: root };
+    assert.equal(apkOverlayWeb({ BRIDGE_OVERLAY_DIR: root }, options), null, '生产构建（没设 BRIDGE_APK_OUT）不打');
+    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_OVERLAY_DIR: root }, options), web);
+    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_OVERLAY_DIR: root, BRIDGE_EDITION: 'public' }, options), null, '不打外部 overlay');
+    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_DATA_ROOT: path.join(root, 'nope') }, options), null, '没有 overlay');
+    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_OVERLAY_DIR: path.join(root, 'web') }, options), null, 'overlay 里没有 web/');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('发行资源在普通网页与公开 apk 构建中都内置，且忽略本机私有覆盖层', () => {
+  const repo = tmp();
+  const unrelated = tmp();
+  try {
+    const web = makeOverlay(path.join(repo, 'frontend-assets'));
+    makeOverlay(unrelated);
+    for (const env of [{}, { BRIDGE_EDITION: 'public' }, { BRIDGE_EDITION: 'public', BRIDGE_APK_OUT: 'apk', BRIDGE_OVERLAY_DIR: unrelated }]) {
+      assert.equal(apkOverlayWeb(env, { repo }), web);
+    }
+  } finally { rmSync(repo, { recursive: true, force: true }); rmSync(unrelated, { recursive: true, force: true }); }
 });
 
 test('打进 _ov/：chatgpt/、lg-ref/、点文件不进；三个壳写入与服务端相同的标签；重复跑不重复插', () => {

@@ -319,3 +319,28 @@ button.cz-li:hover, .cz-li.row:hover { background: var(--cz-hover); }
   .cz-kv span { width: auto; font-size: 12.5px; }
   .cz-kv.link svg { display: none; }
 }
+
+/* —— 我的 › 连接器：官方「Connectors › Yours」三列表格（连接器 / 类型 / 状态）—— */
+.cz-table { display: flex; flex-direction: column; }
+.cz-tr { display: grid; grid-template-columns: minmax(0, 1fr) 150px 120px; align-items: center; gap: 12px; min-height: 60px; padding: 0 14px; border-radius: 10px; cursor: pointer; transition: background .12s ease; }
+.cz-tr:not(.th) { position: relative; }
+.cz-tr:not(.th):not(:last-child)::after { content: ''; position: absolute; left: 14px; right: 14px; bottom: 0; height: 1px; background: var(--cz-line); }
+.cz-tr:not(.th):hover { background: var(--cz-hover); }
+.cz-tr:focus-visible { outline: 2px solid var(--cz-ink3); outline-offset: -2px; }
+.cz-tr.th { min-height: 40px; cursor: default; color: var(--cz-ink3); font-size: 13.5px; font-weight: 500; border-bottom: 1px solid var(--cz-line); border-radius: 0; }
+.cz-tr.off .nm b, .cz-tr.off .cz-td { opacity: .55; }
+.cz-td { min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--cz-ink2); font-size: 14.5px; }
+.cz-td.nm { gap: 14px; color: var(--cz-ink); }
+.cz-td.nm b { font-weight: 500; font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cz-td.st svg { width: 19px; height: 19px; }
+.cz-td.st.k-ok { color: var(--cz-ink2); }
+.cz-td.st.k-fail { color: var(--cz-crit); }
+.cz-td.st .cz-spin { width: 14px; height: 14px; }
+.cz-tile.xs { width: 34px; height: 34px; border-radius: 9px; }
+.cz-tile.xs svg { width: 18px; height: 18px; }
+.cz-link { color: var(--cz-warn) !important; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, var(--cz-warn) 45%, transparent); }
+.cz-link:hover { text-decoration-color: currentColor; }
+@container (max-width: 520px) {
+  .cz-tr { grid-template-columns: minmax(0, 1fr) auto; padding: 0 8px; }
+  .cz-tr > :nth-child(2) { display: none; }
+}

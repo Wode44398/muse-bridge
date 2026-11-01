@@ -36,12 +36,13 @@
     nativeWorkspaceImportFiles, nativeWorkspaceImportDirectory, nativeWorkspaceSaveAs,
     hasNativeWorkspaceDropImport, nativeWorkspaceImportPaths, hasNativeWorkspaceRecent, nativeWorkspaceRecent,
     nativePathForFile, hasNativeDragOut, nativeDragWorkspace, nativeDragPaths,
-    isNativeDesktop, hasNativeWorkspaceOps,
+    isNativeDesktop, hasNativeWorkspaceOps, serverOnThisMachine, hasPcLocalFs, hasPcDropImport, pcPathForFile,
     hasNativeDirSizes, nativeWorkspaceDirSizes, onNativeDirSize,
     hasNativeFileClipboard, nativeClipboardWriteFiles, nativeClipboardPasteWorkspace, nativeClipboardClearOwn,
   } from '../lib/nativeDesktop.js';
   import { reportUi, onAgentFs, onAgentGoto } from '../lib/uiReport.js';
   import { WS_DT } from '../lib/fileDrag.js';
+  import { pcLocalMaterial, pcLocalText } from '../lib/pcLocal.js';
   import { t, tc, tr, locale, isEn } from '../lib/i18n.js';
   import { ovUrl } from '../lib/overlay.svelte.js';
 
@@ -73,16 +74,24 @@
 
   // —— 位置与数据通道 ——
   const nativeOk = isNativeDesktop() && hasNativeWorkspaceOps();
+  // 「这台电脑」：桌面客户端连的是远端服务端时，位置栏在服务器的位置之外再列一组本机授权过的文件夹
+  // （壳的原生位置，同手机 App 的本地 SAF）——本机直接列目录、本地协议直读预览，字节不经过服务器。
+  // 这组位置服务端不认识：分享链接 / 解压 / 零拷贝发给 AI 都没有，发给 AI 改成现读现传（lib/pcLocal.js）。
+  const pcOk = !nativeOk && isNativeDesktop() && hasPcLocalFs();
+  const nativeAny = nativeOk || pcOk;
   const idLocId = nativeOk ? 'primary' : 'ws';   // 身份文件根所在的位置（桌面壳 primary＝服务端 vaultPath）
-  // [{ id, name, kind:'native'|'cloud', root（云端 ws 作用域，''=身份根）, abs（根的绝对路径）, removable, hidden }]
+  // [{ id, name, kind:'native'|'cloud', root（云端 ws 作用域，''=身份根）, abs（根的绝对路径）, removable, hidden, pc（这台电脑）}]
   // 上次拿到的列表按形态缓存在 window 上：每次换会话侧栏都会重挂，进来即出、不晚一拍冒出侧栏。
-  const LOC_LIST = (window.__bridgeFdLocList ||= { native: null, cloud: null });
-  let locations = $state((nativeOk ? LOC_LIST.native : LOC_LIST.cloud) || []);
+  const LOC_LIST = (window.__bridgeFdLocList ||= { native: null, cloud: null, pc: null });
+  let locations = $state(nativeOk ? (LOC_LIST.native || []) : [...(LOC_LIST.cloud || []), ...((pcOk && LOC_LIST.pc) || [])]);
   // 有起点时先不认任何位置：位置列表（含各根绝对路径）到齐、按路径落好位再说，免得先闪一下身份根
   let locationId = $state(untrack(() => workspaceRoot) ? '' : idLocId);
   const curLoc = $derived(locations.find((l) => l.id === locationId) || null);
   // 列表没到之前 primary 先按原生算（独立分页老路，首屏不等位置列表）
-  const nativeFs = $derived(nativeOk && (curLoc ? curLoc.kind === 'native' : locationId === 'primary'));
+  const nativeFs = $derived(nativeOk ? (curLoc ? curLoc.kind === 'native' : locationId === 'primary') : pcOk && curLoc?.kind === 'native');
+  const pcFs = $derived(pcOk && nativeFs);   // 此刻在「这台电脑」的某个位置里
+  // 按绝对路径落位时只在同一边找：服务器和这台电脑的路径长得一样（都是 C:\…），混着找会把会话目录落进本机的盘
+  const absKind = $derived(pcOk ? (curLoc?.kind || 'cloud') : '');
   // 云端通道的作用域根（/api/files?ws=）：'' = 身份文件根
   const wsRoot = $derived(!nativeFs && curLoc?.kind === 'cloud' ? curLoc.root : '');
   const scopedTo = (url, root) => (root ? url + (url.includes('?') ? '&' : '?') + 'ws=' + encodeURIComponent(root) : url);
@@ -157,11 +166,15 @@
   // 「最近」是本机索引（每个原生位置一份）：人在云端临时位置里点它，落到 primary 的最近。
   const canRecent = $derived(nativeOk && hasNativeWorkspaceRecent());
   // 从桌面拖文件进来：原生走 importPaths（零拷贝拿本机路径），云端走分块上传。
-  const canDropImport = $derived(nativeFs ? hasNativeWorkspaceDropImport() : true);
+  const canDropImport = $derived(nativeFs ? (pcOk ? hasPcDropImport() : hasNativeWorkspaceDropImport()) : true);
+  // 云端作用域的绝对根只有服务端在本机时才是本机路径（系统剪贴板 / 拖出 / 文件夹大小 / 压缩向导都按本机路径干活）；
+  // 连远端时那是服务器上的路径，交给壳就成了这台电脑上同名的别的东西
+  const wsRootLocal = $derived(Boolean(wsRoot) && serverOnThisMachine());
   // srvRoot = bridge 服务端摸这份文件时用的 ws 作用域（发给 AI / 分享链接 / 解压都要它），null＝摸不到。
   // 云端通道本身就是服务端；原生 primary 就是服务端的身份文件根；其余原生位置（各盘、外加目录）
   // 对 admin 按根的绝对路径交给服务端 ws 作用域（服务端 authorizeProjectPath 再判一次）。
-  const srvRoot = $derived(!nativeFs ? wsRoot : locationId === 'primary' ? '' : (me.kind === 'admin' && curLoc?.abs) || null);
+  // 这台电脑的位置（连远端时的原生位置）服务端一律摸不到。
+  const srvRoot = $derived(!nativeFs ? wsRoot : !nativeOk ? null : locationId === 'primary' ? '' : (me.kind === 'admin' && curLoc?.abs) || null);
   const serverOps = $derived(srvRoot !== null);
   const locName = (l) => (/^drive-/.test(l?.id || '') ? t('{d} 盘', { d: String(l.name || '').replace(/:$/, '') }) : tr(l?.name || ''));
   const rootLabel = $derived((curLoc && locName(curLoc)) || tr(rootName) || t('工作空间'));
@@ -205,10 +218,11 @@
   }
   const baseName = (p) => normAbs(p).split(/[\\/]/).filter(Boolean).pop() || String(p || '');
   // 绝对路径落进哪个位置：取【最深】的那个（D:\Notes\x 落 Claude，不落 E:\）
-  function resolveAbs(abs) {
+  // kind：只在服务器（'cloud'）或这台电脑（'native'）那一边找；''＝不限（只有一边的形态）
+  function resolveAbs(abs, kind = absKind) {
     let best = null;
     for (const loc of locations) {
-      if (!loc.abs) continue;
+      if (!loc.abs || (kind && loc.kind !== kind)) continue;
       const rel = relUnder(loc.abs, abs);
       if (rel == null) continue;
       if (!best || normAbs(loc.abs).length > normAbs(best.loc.abs).length) best = { loc, rel };
@@ -216,17 +230,19 @@
     return best;
   }
   // 地址栏给不给看完整路径：桌面壳（本机自己的盘）或 admin；沙箱身份仍是「根名 › 子目录」，绝对路径不出服务器
-  const absOk = $derived(Boolean(curLoc?.abs) && (nativeOk || me.kind === 'admin'));
+  const absOk = $derived(Boolean(curLoc?.abs) && (nativeOk || curLoc.kind === 'native' || me.kind === 'admin'));
   // 人在「哪个位置都不含」的临时位置里（桌面壳没添加那个盘）：admin 的服务端 ws 作用域对任意已存在
   // 目录放行，↑ / 地址栏上级段就让临时位置跟着往上漂，而不是在会话目录根上卡死。
   const canFloat = $derived((curLoc?.id === 'session' || /^abs:/.test(curLoc?.id || '')) && me.kind === 'admin');
   const curAbs = $derived(curLoc?.abs ? joinPath(curLoc.abs, path) : '');
   const homeAbs = $derived(home || workspaceRoot);
   const homeLabel = $derived(home ? baseName(home) : (tr(rootName) || baseName(workspaceRoot)));
-  const atHome = $derived(Boolean(homeAbs && curAbs && inBrowse && foldAbs(curAbs) === foldAbs(homeAbs)));
+  const atHome = $derived(Boolean(homeAbs && curAbs && inBrowse && !pcFs && foldAbs(curAbs) === foldAbs(homeAbs)));   // 会话目录在服务器上，这台电脑里同名路径不算
   // 侧栏：桌面壳恒在；网页上只有一个可去处（非 admin 只拿到自己那条）就不摆
   const sideLocs = $derived(locations.filter((l) => !l.hidden));
-  const showSide = $derived(nativeOk || locations.length > 1);
+  const srvSide = $derived(sideLocs.filter((l) => !l.pc));
+  const pcSide = $derived(sideLocs.filter((l) => l.pc));
+  const showSide = $derived(nativeAny || locations.length > 1);
   // 位置行的选中态：正停在会话目录时让给「会话目录」那一行，侧栏只亮一处
   const locOn = (loc) => locationId === loc.id && (mode === 'browse' || searching) && !atHome;
 
@@ -370,7 +386,7 @@
   // —— 文件夹大小（壳主进程后台递归统计，算完一个推一个；老壳/网页没有这座桥 → 保持「—」）——
   // 键 = scope|rel：scope 区分授权位置与云端根，切位置时旧作业的尾包记在它自己名下、不串台。
   // 重算期间旧值继续显示（文件一变整列闪「…」太吵），新的最终值到了直接覆盖。
-  const canDirSize = $derived(hasNativeDirSizes() && (nativeFs || Boolean(wsRoot)));
+  const canDirSize = $derived(hasNativeDirSizes() && (nativeFs || wsRootLocal));
   const dsScope = $derived(nativeFs ? 'loc:' + locationId : 'ws:' + wsRoot);
   const dsClient = 'fd-' + Math.random().toString(36).slice(2, 10);   // 同一窗口里可能同时挂着好几个工作空间面板
   let dirSizes = $state({});
@@ -543,18 +559,20 @@
   }
   // 按绝对路径跳转（地址栏输入 / 位置根之上的上级段 / 侧栏「会话目录」）
   // float：没有位置含它时，让临时位置换成以它为根（见 canFloat）
-  async function goAbs(abs, { float = false } = {}) {
-    let hit = resolveAbs(abs);
-    if (!hit && homeAbs && foldAbs(abs) === foldAbs(homeAbs)) hit = { loc: sessionLocFor(homeAbs), rel: '' };
-    if (!hit && float && me.kind === 'admin') hit = { loc: floatLocFor(abs), rel: '' };
+  // kind：在哪一边找（见 resolveAbs）——会话目录恒在服务器那边；临时位置也只在服务器那边漂
+  async function goAbs(abs, { float = false, kind = absKind } = {}) {
+    let hit = resolveAbs(abs, kind);
+    const onSrv = kind !== 'native';
+    if (!hit && onSrv && homeAbs && foldAbs(abs) === foldAbs(homeAbs)) hit = { loc: sessionLocFor(homeAbs), rel: '' };
+    if (!hit && onSrv && float && me.kind === 'admin') hit = { loc: floatLocFor(abs), rel: '' };
     if (!hit) {
-      toast(nativeOk ? t('「{path}」不在已添加的位置里，可在左侧「添加位置…」里授权', { path: abs }) : t('「{path}」不在可访问的位置里', { path: abs }));
+      toast(nativeOk || kind === 'native' ? t('「{path}」不在已添加的位置里，可在左侧「添加位置…」里授权', { path: abs }) : t('「{path}」不在可访问的位置里', { path: abs }));
       return false;
     }
     await navTo({ locationId: hit.loc.id, mode: 'browse', path: hit.rel });
     return true;
   }
-  const goHomeDir = () => { if (!atHome) goAbs(homeAbs); };
+  const goHomeDir = () => { if (!atHome) goAbs(homeAbs, { kind: pcOk ? 'cloud' : '' }); };
 
   let loadSeq = 0;
   async function load(p = path, { keepSel = false, fresh = false } = {}) {
@@ -610,13 +628,20 @@
     } else {
       // 与手机版「电脑位置」同一份：admin＝工作空间 + 主目录 + 各盘符，其余身份只有自己那一条。
       // Dimensio Projects 是「新建项目」的捷径，在文件管理器里它只是主目录下的一个文件夹。
-      try {
-        const r = await api.projectLocations();
-        list = (r?.locations || []).filter((l) => l && l.id && l.path && l.id !== 'dimensio')
-          .map((l) => ({ id: l.id, name: l.name, kind: 'cloud', root: l.id === 'ws' ? '' : l.path, abs: l.path, removable: false }));
-      } catch {}
-      if (!list?.length) list = [{ id: 'ws', name: t('工作空间'), kind: 'cloud', root: '', abs: '', removable: false }];
+      // 这台电脑那组（pcOk）与服务器那份并行拉，各自失败互不拖累。
+      const [srv, pc] = await Promise.all([
+        api.projectLocations().catch(() => null),
+        pcOk ? nativeWorkspaceLocations().then(async (raw) => {
+          const abs = await Promise.all((raw || []).map((l) => nativeLocAbs(l.id)));
+          return (raw || []).map((l, i) => ({ ...l, kind: 'native', pc: true, abs: abs[i] || '' }));
+        }).catch(() => null) : null,
+      ]);
+      list = (srv?.locations || []).filter((l) => l && l.id && l.path && l.id !== 'dimensio')
+        .map((l) => ({ id: l.id, name: l.name, kind: 'cloud', root: l.id === 'ws' ? '' : l.path, abs: l.path, removable: false }));
+      if (!list.length) list = [{ id: 'ws', name: t('工作空间'), kind: 'cloud', root: '', abs: '', removable: false }];
       LOC_LIST.cloud = list;
+      if (pc) LOC_LIST.pc = pc;
+      if (pcOk) list = [...list, ...(LOC_LIST.pc || [])];
     }
     if (!list) return;
     // 临时位置（会话目录 + 往上漂出来的上级）不在服务端列表里，刷新时原样留着
@@ -633,7 +658,7 @@
       return load(p0);
     }
     await refreshLocations();
-    const hit = resolveAbs(joinPath(workspaceRoot, p0));
+    const hit = resolveAbs(joinPath(workspaceRoot, p0), pcOk ? 'cloud' : '');   // 会话目录在服务器上
     const loc = hit ? hit.loc : sessionLocFor(workspaceRoot);
     const rel = hit ? hit.rel : p0;
     locationId = loc.id; path = rel;
@@ -651,7 +676,7 @@
       const it = rows.find((f) => !f.isDir && f.name === initialOpen);
       if (it) openItem(it);
     }).catch(() => {});
-    if (!nativeOk) return;
+    if (!nativeAny) return;
     let browseTimer = 0, recentTimer = 0, searchTimer = 0;
     // 壳按目录推 { locationId, type, path, dir }：dir＝变化落在哪个目录；type='resync'＝系统通知缓冲区溢出，
     // 壳把有人看过的目录各推一条「整体作废」。整盘位置上后台写盘（编译、同步盘）能一秒几十条，
@@ -828,7 +853,7 @@
   // md 双链 / 出链 / 反链 / 插图、服务端转 PDF、视频流都只认 primary（＝服务端的身份文件根），
   // 不换的话同一篇笔记从「E 盘」点进去链接全断、图裂（M10/T10）。不在库里的照旧按原位置走。
   function primaryRelOf(rel) {
-    if (!nativeFs || locationId === 'primary' || !curLoc?.abs) return null;
+    if (!nativeOk || !nativeFs || locationId === 'primary' || !curLoc?.abs) return null;   // 连远端时没有「库」可换算
     const rootAbs = locations.find((l) => l.id === 'primary')?.abs;
     if (!rootAbs) return null;
     const r = relUnder(rootAbs, joinPath(curLoc.abs, rel));
@@ -950,7 +975,7 @@
   // 剪贴板两层：面板内部记一份 rel 清单（同位置粘贴直接按 rel 复制/移动，快且保留剪切语义），
   // 同时把真实文件写进 Windows 剪贴板（CF_HDROP）——资源管理器/微信/Word 里 Ctrl+V 都能粘。
   // 云端作用域同样可写：壳与 bridge 服务端在同一台机器，工作空间根 + rel 就是本机路径（与拖出同口径）。
-  const canSysClipboard = $derived(hasNativeFileClipboard() && (nativeFs || Boolean(wsRoot)));
+  const canSysClipboard = $derived(hasNativeFileClipboard() && (nativeFs || wsRootLocal));
   let clipSeq = 0;
   function setClipboard(mode2) {
     if (!selected.size) return;
@@ -1046,7 +1071,7 @@
   // 桌面壳（Windows）：直接弹系统自带的「创建存档」向导（资源管理器 压缩为 → 其他选项 同一个窗口），
   // 格式/方法/级别都在那里选，压缩进度也是系统的。壳与 bridge 服务端同机，云端作用域的根就是本机路径。
   // 其余情形（浏览器里的电脑版、旧壳）：内置选项对话框 → bridge 服务端压缩（/api/files/compress）。
-  const wizardOk = $derived(hasNativeCompressWizard() && (nativeFs || Boolean(wsRoot)));
+  const wizardOk = $derived(hasNativeCompressWizard() && (nativeFs || wsRootLocal));
   const canCompress = $derived(wizardOk || serverOps);
   let wizardOpen = false;
   async function doCompress() {
@@ -1203,11 +1228,14 @@
   async function aiMaterial(it, direct = false) {
     const kind = it.isDir ? 'folder' : (kindOf(it.name) === 'img' ? 'image' : 'file');
     try {
+      // 这台电脑的文件：服务端摸不到，现读现传（文件夹给 Claude 走设备引用）
+      if (pcFs) return await pcLocalMaterial({ rel: it.rel, name: it.name, isDir: it.isDir, locationId, forClaude: direct });
       const up = await api.fileToUpload(it.rel, !direct, srvRoot);
       return { path: up.path, name: up.name, kind, url: kind === 'image' ? cloudFileUrl(it.rel, { ws: srvRoot }) : null };
     } catch (e) { toast(t('准备失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); return null; }
   }
   async function aiTextContent(it) {
+    if (pcFs) return pcLocalText(it.rel, locationId);
     try {
       const res = await fetch(apiUrl(scopedTo('/api/file?path=' + encodeURIComponent(it.rel), srvRoot)), { headers: authHeaders(), credentials: 'same-origin' });
       if (!res.ok) return null;
@@ -1317,10 +1345,10 @@
       }
       if (nativeFs) entries.push({ label: t('在文件资源管理器中显示'), act: () => doReveal(it) });
       entries.push({ sep: true });
-      if (serverOps) {
+      if (serverOps || pcFs) {
         entries.push({ label: t('发送给 AI…'), act: () => openAi(it), accent: true });
-        if (pluginOn('share')) entries.push({ label: t('分享链接…'), act: () => openShare(it) });
-        if (!it.isDir && k === 'zip') entries.push({ label: t('解压到当前文件夹'), act: () => doExtract(it) });
+        if (serverOps && pluginOn('share')) entries.push({ label: t('分享链接…'), act: () => openShare(it) });
+        if (serverOps && !it.isDir && k === 'zip') entries.push({ label: t('解压到当前文件夹'), act: () => doExtract(it) });
         entries.push({ sep: true });
       }
       if (!it.isDir) entries.push(nativeFs ? { label: t('另存为…'), act: () => doSaveAs(it) } : { label: t('下载到本地'), act: () => doDownload(it) });
@@ -1359,7 +1387,7 @@
   function openLocMenu(e, loc) {
     const entries = [];
     if (loc.kind === 'native') entries.push({ label: t('在文件资源管理器中显示'), act: () => nativeWorkspaceReveal('', loc.id).catch(() => {}) });
-    if (loc.abs && (nativeOk || me.kind === 'admin')) entries.push({ label: t('复制地址'), act: () => copyText(loc.abs, t('已复制路径')) });
+    if (loc.abs && (nativeOk || loc.pc || me.kind === 'admin')) entries.push({ label: t('复制地址'), act: () => copyText(loc.abs, t('已复制路径')) });
     if (loc.removable) entries.push({ label: t('移除位置'), act: () => removeLocation(loc), danger: true });
     if (!entries.length) { e.preventDefault(); return; }
     popupMenu(e, entries);
@@ -1377,7 +1405,7 @@
     // promise resolve＝拖拽结束，在此清态并兜底刷新（外部 Shift 移动会把源文件搬走）。
     // 云端作用域（项目目录不在 primary 位置内）同样原生拖出：bridge 三形态都跑在本机，
     // 服务端绝对路径就是本机路径，拼位置根+rel 走 drag:start（主进程只做存在性校验）。
-    if (hasNativeDragOut() && (nativeFs || wsRoot)) {
+    if (hasNativeDragOut() && (nativeFs || wsRootLocal)) {
       e.preventDefault();
       const rels = dragRels;
       const run = nativeFs ? nativeDragWorkspace(rels, locationId) : nativeDragPaths(rels.map((r) => joinAbs(wsRoot, r)));
@@ -1449,7 +1477,7 @@
     const files = [...(e.dataTransfer?.files || [])];
     if (!files.length) return;
     if (!nativeFs) { await uploadFiles(files, destRel); return; }
-    const paths = files.map(nativePathForFile).filter(Boolean);
+    const paths = files.map(pcOk ? pcPathForFile : nativePathForFile).filter(Boolean);
     if (!paths.length) { toast(t('无法读取拖入的文件路径')); return; }
     busyLabel = t('导入中…');
     try {
@@ -1652,7 +1680,10 @@
   <!-- 工具栏：外层 .fd-toolbar 吃右上避让（--fd-avoid-r＝窗控，内嵌时宿主可另给），
        内层 .fd-tb 才是排版容器，宽度用 ResizeObserver 量出来分档（见 tbTier）。 -->
   {#snippet locIcon(loc)}
-    {#if loc.id === 'primary' || loc.id === 'ws'}
+    {#if loc.pc && loc.id === 'primary'}
+      <!-- 这台电脑的默认文件夹（连远端时 primary 不是服务器的库，是客户端自己的工作区目录） -->
+      <svg class="side-ic accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M9 20.5h6M12 16.5v4"/></svg>
+    {:else if loc.id === 'primary' || loc.id === 'ws'}
       <svg class="side-ic accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.2 12 4l8 7.2"/><path d="M6 10v9h12v-9"/></svg>
     {:else if loc.id === 'home'}
       <svg class="side-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.4" r="3.4"/><path d="M5.2 19.5c.9-3.4 3.5-5.2 6.8-5.2s5.9 1.8 6.8 5.2"/></svg>
@@ -1685,12 +1716,19 @@
               </button>
             {/if}
             {#if homeAbs || canRecent}<div class="pop-sep"></div>{/if}
-            {#each sideLocs as loc (loc.id)}
+            {#each srvSide as loc (loc.id)}
               <button class="pop-mi" class:on={locOn(loc)} title={loc.abs || undefined} onclick={() => { locPop = false; selectLocation(loc.id); }}>{@render locIcon(loc)}<span class="pm-nm">{locName(loc)}</span></button>
             {/each}
-            {#if nativeOk}
+            {#if pcOk}
               <div class="pop-sep"></div>
-              <button class="pop-mi" onclick={() => { locPop = false; addLocation(); }}>{t('添加位置…')}</button>
+              <div class="pop-cap">{t('这台电脑')}</div>
+              {#each pcSide as loc (loc.id)}
+                <button class="pop-mi" class:on={locOn(loc)} title={loc.abs || undefined} onclick={() => { locPop = false; selectLocation(loc.id); }}>{@render locIcon(loc)}<span class="pm-nm">{locName(loc)}</span></button>
+              {/each}
+            {/if}
+            {#if nativeAny}
+              <div class="pop-sep"></div>
+              <button class="pop-mi" onclick={() => { locPop = false; addLocation(); }}>{pcOk ? t('添加这台电脑上的文件夹…') : t('添加位置…')}</button>
             {/if}
           </div>
         {/if}
@@ -1873,15 +1911,26 @@
             <span class="side-nm">{t('最近')}</span>
           </button>
         {/if}
-        <div class="side-sec">{tc('explorer', '位置')}</div>
-        {#each sideLocs as loc (loc.id)}
+        <!-- 连远端服务端时分两组：服务器上的位置 / 这台电脑上授权过的文件夹（本机直读，不经服务器） -->
+        <div class="side-sec">{pcOk ? t('服务器') : tc('explorer', '位置')}</div>
+        {#each srvSide as loc (loc.id)}
           <button class="side-row" class:on={locOn(loc)} title={nativeOk || me.kind === 'admin' ? loc.abs || undefined : undefined}
             onclick={() => selectLocation(loc.id)} oncontextmenu={(e) => openLocMenu(e, loc)}>
             {@render locIcon(loc)}
             <span class="side-nm">{locName(loc)}</span>
           </button>
         {/each}
-        {#if nativeOk}
+        {#if pcOk}
+          <div class="side-sec">{t('这台电脑')}</div>
+          {#each pcSide as loc (loc.id)}
+            <button class="side-row" class:on={locOn(loc)} title={loc.abs || undefined}
+              onclick={() => selectLocation(loc.id)} oncontextmenu={(e) => openLocMenu(e, loc)}>
+              {@render locIcon(loc)}
+              <span class="side-nm">{locName(loc)}</span>
+            </button>
+          {/each}
+        {/if}
+        {#if nativeAny}
           <button class="side-row add" onclick={addLocation}>
             <svg class="side-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>
             <span class="side-nm">{t('添加位置…')}</span>

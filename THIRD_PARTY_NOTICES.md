@@ -69,3 +69,7 @@ JetBrains Mono、Noto Serif SC（均为 OFL 1.1）；图标 Lucide（ISC，源�
 LobeHub icons（MIT）；Flux 壁纸（MIT）；服务端二维码编码器 src/runtime/qr.mjs 移植自 Project Nayuki 的 QR Code generator
 library（MIT，许可全文见该文件头）。Claude Agent SDK 与 Claude Code 是 Anthropic 的专有软件，不在本仓库内、不受本项目
 许可覆盖。商标归各自权利人，仅用于标识对应服务；本项目与 Anthropic、OpenAI、Google 无隶属或背书关系。
+
+## Distribution visual assets
+
+Packaged releases also contain the full frontend visual snapshot under `frontend-assets/` and desktop `visuals/`: fonts, activity animations, glass textures and renderers, wallpaper and the Codex page. These third-party resources retain their original ownership and are not relicensed under the project Apache-2.0 license. `scripts/public/visual-assets.json` records the exact shipped file hashes and source snapshot. It is a build inventory, not a license grant.

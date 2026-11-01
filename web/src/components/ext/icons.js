@@ -18,6 +18,11 @@ const P = {
   store: '<path d="M4 9.5 5.6 4.5h12.8L20 9.5"/><path d="M4 9.5a2.7 2.7 0 0 0 5.3 0 2.7 2.7 0 0 0 5.4 0 2.7 2.7 0 0 0 5.3 0"/><path d="M5.5 12.2v7.3h13v-7.3"/>',
   x: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
   users: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5a5.5 5.5 0 0 1 11 0"/><path d="M15.2 5.6a3.2 3.2 0 0 1 0 5.8M17.5 14.6a5.5 5.5 0 0 1 3 4.9"/>',
+  // 连接器工具权限三档：总是允许（圈勾）/ 需要批准（手）/ 禁止（圈斜杠）
+  allow: '<circle cx="12" cy="12" r="8"/><path d="m8.6 12.2 2.4 2.4 4.4-4.6"/>',
+  hand: '<path d="M8.5 12.5V6.8a1.3 1.3 0 0 1 2.6 0v4.7M11.1 11V5.3a1.3 1.3 0 0 1 2.6 0V11M13.7 11.2V6.6a1.3 1.3 0 0 1 2.6 0v5.9"/><path d="M16.3 10.4a1.3 1.3 0 0 1 2.6 0v3.3a6.2 6.2 0 0 1-6.2 6.2h-.6a5.6 5.6 0 0 1-4.4-2.2l-2.6-3.4a1.3 1.3 0 0 1 2-1.6l1.4 1.6"/>',
+  deny: '<circle cx="12" cy="12" r="8"/><path d="m6.4 6.4 11.2 11.2"/>',
+  more: '<circle cx="6" cy="12" r=".9" fill="currentColor"/><circle cx="12" cy="12" r=".9" fill="currentColor"/><circle cx="18" cy="12" r=".9" fill="currentColor"/>',
 };
 
 export const ic = (name, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`;

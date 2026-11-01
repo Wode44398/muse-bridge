@@ -1,0 +1,194 @@
+{
+  "name": "bridge-visuals",
+  "css": [
+    "overlay.css"
+  ],
+  "varDirs": [
+    "ios27/",
+    "figma-glass/"
+  ],
+  "modules": {
+    "landingTexture": "modules/landing-texture.js",
+    "spriteMark": "modules/sprite-mark.js",
+    "figmaGlass": "modules/figma-glass/renderer.js",
+    "lgMap": "modules/lg-map.js",
+    "sfSymbols": "modules/sf-symbols.js",
+    "menuIcons": "modules/menu-icons.js",
+    "effortField": "modules/effort-field.js",
+    "clayMark": "modules/clay-mark.js"
+  },
+  "data": {
+    "wallpapers": [
+      {
+        "id": "dolomites",
+        "name": "多洛米蒂",
+        "name_en": "Dolomites",
+        "src": "wallpapers/dolomites.jpg",
+        "depth": "wallpapers/depth/dolomites.png",
+        "sys": "light",
+        "default": true
+      }
+    ],
+    "marks": {
+      "strips": {
+        "static": {
+          "file": "tickle",
+          "frames": 7,
+          "speed": 40,
+          "loop": false
+        },
+        "entrance": {
+          "file": "entrance",
+          "frames": 6,
+          "speed": 70,
+          "loop": false
+        },
+        "exit": {
+          "file": "exit",
+          "frames": 6,
+          "speed": 70,
+          "loop": false
+        },
+        "tickle": {
+          "file": "tickle",
+          "frames": 7,
+          "speed": 40,
+          "loop": false
+        },
+        "thinking": {
+          "file": "thinking",
+          "frames": 9,
+          "speed": 90,
+          "loop": true
+        },
+        "writing": {
+          "file": "writing",
+          "frames": 8,
+          "speed": 90,
+          "loop": true
+        },
+        "waiting": {
+          "file": "waiting",
+          "frames": 16,
+          "speed": 600,
+          "loop": true
+        },
+        "orbiting": {
+          "file": "orbiting",
+          "frames": 18,
+          "speed": 100,
+          "loop": true
+        },
+        "shimmer": {
+          "file": "shimmer",
+          "frames": 15,
+          "speed": 100,
+          "loop": true
+        }
+      },
+      "clay": {
+        "frameMs": 33.3333,
+        "sheets": {
+          "blocked.in": {
+            "frames": 16
+          },
+          "blocked.loop": {
+            "frames": 30,
+            "rest": 0
+          },
+          "blocked.out": {
+            "frames": 16
+          },
+          "code.in": {
+            "frames": 16
+          },
+          "code.loop": {
+            "frames": 75,
+            "seams": [
+              18,
+              37,
+              56
+            ],
+            "rest": 74
+          },
+          "code.out": {
+            "frames": 9
+          },
+          "default.in": {
+            "frames": 16
+          },
+          "default.loop": {
+            "frames": 40,
+            "rest": 38
+          },
+          "default.out": {
+            "frames": 14
+          },
+          "grow": {
+            "frames": 10
+          },
+          "compose.in": {
+            "frames": 16
+          },
+          "compose.loop": {
+            "frames": 62,
+            "rest": 49
+          },
+          "compose.out": {
+            "frames": 12
+          },
+          "read.in": {
+            "frames": 21
+          },
+          "read.loop": {
+            "frames": 60,
+            "rest": 44
+          },
+          "read.out": {
+            "frames": 19
+          },
+          "search.in": {
+            "frames": 16
+          },
+          "search.loop": {
+            "frames": 20,
+            "rest": 4
+          },
+          "search.out": {
+            "frames": 14
+          },
+          "think.in": {
+            "frames": 16
+          },
+          "think.loop": {
+            "frames": 110,
+            "seams": [
+              54
+            ],
+            "rest": 95
+          },
+          "think.out": {
+            "frames": 15
+          },
+          "write.in": {
+            "frames": 31
+          },
+          "write.loop": {
+            "frames": 60,
+            "rest": 36
+          },
+          "write.out": {
+            "frames": 14
+          }
+        }
+      }
+    },
+    "glyphs": {
+      "usageGauge": {
+        "viewBox": "0 0 1000 1000",
+        "transform": "translate(0 1000) scale(1 -1)",
+        "d": "M269.3 201.3Q280.3 191.3 280.9 176.3Q281.5 161.3 271.5 151.2Q261.5 139.7 246.4 139.1Q231.3 138.5 220.7 148.7L185 186.3Q140.1 240.2 115 307.4Q89.9 374.5 89.9 449.8Q89.9 518 110.4 579.6Q130.9 641.1 168.6 692.3Q206.3 743.4 257.2 781.2Q308.1 819.1 369.8 839.6Q431.4 860.1 499.6 860.1Q567.9 860.1 629.5 839.6Q691.1 819.1 742.1 781.4Q793.2 743.6 830.9 692.6Q868.7 641.7 889.6 580Q910.5 518.3 910.5 449.9Q910.5 361.2 875.4 283.4Q840.4 205.6 779.3 148.7Q769.2 138.9 754.1 139.4Q738.9 139.9 728.8 151.1Q718.9 161.1 719.4 176.1Q719.9 191.1 730.7 201.3Q780.7 247.3 810.1 311.4Q839.5 375.4 839.5 449.8Q839.5 520.2 813.1 581.9Q786.7 643.6 740.2 690.1Q693.8 736.6 632.2 763Q570.6 789.5 500.2 789.5Q429.8 789.5 368.1 763Q306.4 736.6 259.9 690.2Q213.4 643.7 187 582Q160.5 520.4 160.5 449.9Q160.5 387.3 181.6 331.5Q202.7 275.7 239.9 231.7ZM463 335Q433 352 426.5 381.5Q420 411 435 438Q451 464 479.5 473Q508 482 538 465Q545 461 555 451.5Q565 442 576 429Q586 417 597.5 402.5Q609 388 620 374Q631 359 640.5 346Q650 333 658 323Q662 317 665.5 311.5Q669 306 673 300Q628 303 584 308Q566 310 548 313Q530 316 514 319Q497 322 484 326Q471 330 463 335ZM444.1 304.7Q416.5 320.8 402.7 345.9Q388.9 371 388.9 399.9Q388.9 428.8 404.9 455.6Q419.9 481.4 444.5 496.4Q469.1 511.5 497.9 512Q526.8 512.5 555.7 495.5L579.3 477.3L602.5 453.1L648.8 395.6L703.2 319Q711 307.3 708.5 294.1Q705.9 280.9 695.8 272.2Q685.7 263.5 670.6 264.5L579.7 272.6L506.1 284.8L473.8 291.9Z"
+      }
+    }
+  }
+}

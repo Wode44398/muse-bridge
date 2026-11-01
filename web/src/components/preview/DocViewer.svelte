@@ -15,7 +15,7 @@
   import { localWrite, localWriteB64, hasLocalWrite, localList, localReadText, localFileUrl } from '../../lib/localfs.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { normalizeItem, cloudFileUrl, openPreview, preview } from '../../lib/preview.svelte.js';
-  import { nativeWorkspaceWriteText, isNativeDesktop, desktopOpenExternal, nativePathForFile } from '../../lib/nativeDesktop.js';
+  import { nativeWorkspaceWriteText, isNativeDesktop, desktopOpenExternal, nativePathForFile, nativeLocLocalOnly } from '../../lib/nativeDesktop.js';
   import { parseNote, renderObsMarkdown, renderPropWikilinks, noteStats, escapeHtml, escapeRegex, propKind, PROP_ICONS, MD_EXT_RE, scanFootnotes, renderFootnoteSection, lexObsBlocks, EMBED_SRC_OK } from '../../lib/obsmd.js';
   import { findSafeCut } from '../../lib/md.js';
   import { srcBlocks, readMapper } from '../../lib/mdanchors.js';
@@ -493,8 +493,8 @@
     const cacheKey = linksKeyOf(c);
     if (linksFor !== cacheKey) { links = null; linksFor = cacheKey; }
     linksPending = false;
-    // primary 的双链/反链仍由服务端算（它就在 vault 根上）；只有服务端不认识的额外位置才跳过。
-    if (c.kind !== 'markdown' || c.saveTarget?.origin !== 'cloud' || (c.saveTarget?.nativeLocation && c.saveTarget.nativeLocation !== 'primary')) return;
+    // primary 的双链/反链仍由服务端算（它就在 vault 根上）；服务端不认识的位置（额外位置 / 连远端时这台电脑的文件）才跳过。
+    if (c.kind !== 'markdown' || c.saveTarget?.origin !== 'cloud' || nativeLocLocalOnly(c.saveTarget?.nativeLocation)) return;
     const rel = c.saveTarget.rel;
     if (LINKS_CACHE.has(cacheKey)) links = LINKS_CACHE.get(cacheKey);
     else if (!links) linksPending = true;
@@ -569,7 +569,7 @@
         return { name: md ? f.name.replace(/\.[^.]+$/, '') : f.name, md, path: joinRel(dir, f.name), rel: f.name };
       });
     }
-    if (st.nativeLocation && st.nativeLocation !== 'primary') return [];   // 服务端不认识的额外位置（同 loadLinks）
+    if (nativeLocLocalOnly(st.nativeLocation)) return [];   // 服务端不认识的位置（同 loadLinks）
     try {
       const r = await api.mdNames(st.rel, st.ws);
       const base = dir ? dir + '/' : '';
@@ -681,7 +681,7 @@
       if (!r.ok) throw new Error(r.error);
       finalName = r.name || finalName;
     } else {
-      if (st.nativeLocation && st.nativeLocation !== 'primary') throw new Error(t('这个位置暂不支持插入附件'));
+      if (nativeLocLocalOnly(st.nativeLocation)) throw new Error(t('这个位置暂不支持插入附件'));
       folder = joinRel(dir, ATTACH_DIR);
       const id = 'up' + Math.random().toString(36).slice(2, 12), CHUNK = 1024 * 1024;
       const ws = st.ws ? '&ws=' + encodeURIComponent(st.ws) : '';
@@ -709,7 +709,7 @@
   // 子树外的 [[ ]] 认不到（名单只扫子树），写标准相对链接 ![](../x.png) / [名](../x.md)。
   async function linkExisting(file) {
     const st = cur.saveTarget;
-    if (!st || st.origin !== 'cloud' || (st.nativeLocation && st.nativeLocation !== 'primary')) return null;
+    if (!st || st.origin !== 'cloud' || nativeLocLocalOnly(st.nativeLocation)) return null;
     const abs = nativePathForFile(file);
     if (!abs) return null;
     let rel = null;
@@ -1118,7 +1118,7 @@
     if (!editable) { showToast(t('此文档不可写')); return; }
     // 额外授权位置（桌面壳 loc-*）存不了附件（saveAttachment 必然抛错）：当场说清楚，别先切到编辑态再报失败
     const st = cur.saveTarget;
-    if (st?.origin === 'cloud' && st.nativeLocation && st.nativeLocation !== 'primary') {
+    if (st?.origin === 'cloud' && nativeLocLocalOnly(st.nativeLocation)) {
       showToast(t('插入失败：{reason}', { reason: t('这个位置暂不支持插入附件') }));
       return;
     }

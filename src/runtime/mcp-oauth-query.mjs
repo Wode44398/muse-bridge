@@ -14,13 +14,15 @@ import { FLOW_TTL_MS } from './mcp-oauth.mjs';
 
 const HARD_MS = FLOW_TTL_MS + 2 * 60_000;
 
-export async function spawnAuthQuery(ctx) {
+// only：只挂这几个 MCP 服务（扩展页「连接器」的授权 / 状态检测）——不带插件，也不管扩展是否停用、勾没勾 Claude；
+// 服务名与配置要和会话注入的一字不差（CLI 按「名字 + type/url/headers 的哈希」存令牌），由调用方从注册表取。
+export async function spawnAuthQuery(ctx, { only } = {}) {
   const abort = new AbortController();
   let open;
   const gate = new Promise((r) => { open = r; });
   async function* input() { await gate; }   // 一条消息都不发，release 时结束
-  const ext = claudeExtensionsFor(ctx);
-  if (ctx.kind === 'user') ext.plugins.push(...memberClaudePlugins(ctx.user));
+  const ext = only ? { mcpServers: only, plugins: [] } : claudeExtensionsFor(ctx);
+  if (!only && ctx.kind === 'user') ext.plugins.push(...memberClaudePlugins(ctx.user));
   const q = query({
     prompt: input(),
     options: {
@@ -32,6 +34,7 @@ export async function spawnAuthQuery(ctx) {
       env: { ...(claudeEngineEnv(ctx) || process.env), ...PEER_OFF_ENV },
       settings: JSON.stringify({ ...PEER_OFF_SETTINGS }),
       ...(ctx.sandbox ? { hooks: { PreToolUse: [{ hooks: [makeSandboxPreToolUse(ctx)] }] }, settingSources: [] } : {}),
+      ...(only ? { strictMcpConfig: true, settingSources: [] } : {}),   // 只连这几个，用户 / 项目 / claude.ai 的 MCP 一个都不碰
       permissionMode: 'default',
       abortController: abort,
       canUseTool: async () => ({ behavior: 'deny', message: '授权专用进程，不执行工具' }),

@@ -171,7 +171,7 @@ test('非白名单域名：镜像不是 GitHub 的不下；GitHub 重定向到�
   assert.equal(existsSync(pendingManifest()), false);
 });
 
-test('内置扩展不给装；公开版不提供 codex', async () => {
+test('内置扩展不给装；公开版列出 codex，旧 Release 缺包时明确提示', async () => {
   publish(manifest());
   const ov = await modulesOverviewRemote({ waitMs: 3000 });
   const d = ov.modules.find((m) => m.id === 'dimensio');
@@ -179,8 +179,8 @@ test('内置扩展不给装；公开版不提供 codex', async () => {
   assert.equal(d.remote.action, null);
   assert.match(d.remote.reason, /内置/);
   await assert.rejects(installFromRelease('dimensio'), (e) => e.status === 409 && e.code === 'builtin');
-  assert.equal(ov.modules.some((m) => m.id === 'codex'), false, '公开版不列 codex');
-  await assert.rejects(installFromRelease('codex'), (e) => e.status === 409 && e.code === 'not-offered');
+  assert.equal(ov.modules.some((m) => m.id === 'codex'), true, '公开版列出 codex');
+  await assert.rejects(installFromRelease('codex'), (e) => e.status === 409 && e.code === 'absent');
   await assert.rejects(installFromRelease('nope'), (e) => e.status === 400);
 });
 

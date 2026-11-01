@@ -180,7 +180,7 @@
       const w = wpEl?.contentWindow, c = w?.document.getElementById('canvas');
       if (!c) return;
       w.__fluxFrame = () => {
-        if (!fluxSubs.size || !wpEl) return;
+        if (!fluxSubs.size || !wpEl || !wpShown) return;
         const now = performance.now();
         if (now - fluxLast < 30) return;
         fluxLast = now;
@@ -189,6 +189,24 @@
       };
     } catch {}
   }
+  // 主页被别的分页盖住（整页 display:none，不卸载）时流光照样按原生分辨率每帧解算：降到 1fps、
+  // 也不再把帧分给玻璃（玻璃自己也会停，见 FigmaGlass）；露面当场恢复全速。
+  // 走 main.js 自带的 applyGeneralProperties({fps})，同桌面 DesktopHome.throttleWallpaper（setPaused 有叠帧循环的坑）。
+  let wpShown = true;
+  function throttleFlux() {
+    try { wpEl?.contentWindow?.wallpaperPropertyListener?.applyGeneralProperties?.({ fps: wpShown ? Infinity : 1 }); } catch {}
+  }
+  $effect(() => {
+    if (!wpEl) return;
+    const io = new IntersectionObserver((es) => {
+      const v = es[es.length - 1]?.isIntersecting ?? true;
+      if (v === wpShown) return;
+      wpShown = v;
+      throttleFlux();
+    });
+    io.observe(wpEl);
+    return () => { io.disconnect(); wpShown = true; };
+  });
   // flux iframe 在预载结束(booted)后才挂载——让流体在主页里「从黑浮现」，开场完整可见，
   // 不在预载/转场覆盖层底下被提前播掉。WASM 初始化较慢，固定延迟可能赶在 listener ready
   // 之前、套不上预设(停在引擎原版彩虹)，故轮询：直到套上 Poolside 预设才停。
@@ -198,6 +216,7 @@
     const iv = setInterval(() => {
       if (tuneWallpaper() || ++tries > 80) {
         clearInterval(iv);
+        throttleFlux();   // iframe 重载＝全新帧循环、帧间隔归零：挂上时主页已被盖住就当场降下来
         // 命中后再补打几轮：applyUserProperties「调用成功 ≠ 引擎已消化」——WASM 流体
         // 引擎异步初始化，listener 先于引擎就绪时首次设置会被默认 Original 彩虹预设
         // 冲掉（主页小概率彩虹背景的根因）。补打幂等，无副作用。

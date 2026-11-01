@@ -25,6 +25,7 @@ import { appendFile } from 'node:fs';
 import path from 'node:path';
 import { ROOT } from '../config/index.mjs';
 import { preloadPlaybook } from './phone-playbook.mjs';
+import { notePhoneClient } from './client-origins.mjs';
 
 // genKey -> Map<deviceId, Device>
 //   Device = { id, name, model, android, appCode, legacy, ready, readyAt,
@@ -299,6 +300,8 @@ export async function handleControlNext(req, res, { identify }) {
   const d = dev(genKey, deviceIdFromReq(req));
   d.lastPoll = Date.now();
   absorbDeviceInfo(d, req);
+  // 手机名册（client-origins.mjs）：设备名 / 系统 / App 版本以这里报的为准，agent 的 devices 清单靠它显示真名
+  notePhoneClient(genKey, d.id, { name: d.name, model: d.model, android: d.android, appCode: d.appCode });
 
   // 顶掉【同一台设备】上一个还挂着的长轮询（进程重建/网络重连时的残留）。别的设备各挂各的。
   if (d.waiter) { try { clearTimeout(d.waiter.timer); d.waiter.res.writeHead(204); d.waiter.res.end(); } catch {} d.waiter = null; }

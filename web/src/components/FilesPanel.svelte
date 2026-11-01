@@ -50,7 +50,9 @@
     nativeWorkspaceReveal, nativeWorkspaceInspect, nativeWorkspaceThumbnail,
     nativeWorkspaceSearch, nativeWorkspaceImportFiles, nativeWorkspaceImportDirectory,
     nativeWorkspaceSaveAs, nativeWorkspaceCreateFile, hasNativeCompressWizard, nativeCompressWizard,
+    hasPcLocalFs, nativeLocLocalOnly,
   } from '../lib/nativeDesktop.js';
+  import { pcLocalMaterial, pcLocalText } from '../lib/pcLocal.js';
   import { reportUi, onAgentFs, onAgentGoto } from '../lib/uiReport.js';
   import { drag, dropZone, beginDrag, addToDrag, isDragging, dragScrollGuard, HOLD_MS, MOVE_TOL } from '../lib/dragdrop.svelte.js';
   import { folderDropZone, wsFilePayload } from '../lib/fileDrag.js';
@@ -152,7 +154,7 @@
   const canStart = untrack(() => !!startRoot && !readonly && !guest && !wsPick);
   let fenced = $state(!!startRoot);  // true＝以 startRoot 为根的老形态（起点尚未/无法落进某个位置）
   const cloudRoot = $derived(fenced ? startRoot : (cloudLoc && cloudLoc.id !== 'ws' ? cloudLoc.path : ''));
-  const atPcLoc = $derived(!fenced && !!cloudRoot);   // 此刻在「电脑位置」里，而不是身份工作空间
+  const atPcLoc = $derived(!fenced && !!cloudRoot && !desktopNative);   // 此刻在「电脑位置」里，而不是身份工作空间（原生通道/这台电脑不算：那是另一套位置）
   // target 在 root 之内 → root 相对路径（'/' 分隔，''＝就是根）；不在 → null。Windows 路径不分大小写
   function relUnderAbs(root, target) {
     const win = /^([a-z]:|\\\\)/i.test(String(root || ''));
@@ -224,8 +226,15 @@
   };
   const pkAbs = (rel) => joinAbs(workspaceRoot, rel);
 
-  let ws = $state('cloud');        // cloud=PC 文件系统 / local=手机本地（SAF）
+  let ws = $state('cloud');        // cloud=PC 文件系统 / local=手机本地（SAF）；桌面客户端连远端服务端时 local=这台电脑
   const localAvail = $derived(!fenced && hasLocalFs()); // 围栏形态固定在 ws 根，不混入手机 SAF 位置
+  // 「这台电脑」：桌面客户端连的是远端服务端时，「本地」分页换成这台电脑上授权过的文件夹（壳的原生位置）——
+  // 同手机本地 SAF：在本机列目录、本地协议直读预览，不经过服务器。下面 desktopNative 那一整套原生通道直接复用。
+  const pcAvail = $derived(!fenced && !readonly && !guest && !wsPick && isNativeDesktop() && hasPcLocalFs());
+  const pcLocal = $derived(ws === 'local' && pcAvail);
+  let pcHome = $state(true);         // 「这台电脑」位置主页（列出授权过的文件夹）；进了某个位置＝false
+  let pcLocMenu = $state(null);      // 这台电脑位置的管理菜单 { loc }
+  let pcLocAbs = $state({});         // 位置 id → 绝对路径（主页副标题；位置列表故意不带 path，向壳 inspect 根目录取）
   const canOpenWith = hasOpenWith(); // 原生「打开方式」可用（离线 apk 壳内；dev/在线壳=false，菜单项不显示）
   const canShare = hasShare();       // 原生「分享」可用（同上）
   // 本地写操作能力（新 apk 原生接口）：旧 apk 缺哪个就隐藏哪个菜单项/禁用哪个多选钮。
@@ -235,7 +244,7 @@
   let aiChat = $state(null);         // 「选择对话」层：{ target, from, sessions, loading, q }
   let localPicked = $state(false); // 本地工作空间已有 ≥1 个位置
   let localPicking = $state(false);
-  const isLocal = $derived(ws === 'local');
+  const isLocal = $derived(ws === 'local' && !pcLocal);   // 手机本地 SAF
   // —— 多根「本地位置」——
   const multiRoot = hasMultiRoot();  // 新 apk（支持多个本地位置）；旧 apk=false 走单根旧流程
   let roots = $state([]);            // 本地位置列表 [{id,name,mode}]
@@ -247,13 +256,14 @@
   let transferOpen = $state(false);
   let toastMsg = $state('');
   let fileInput = $state();
-  const desktopNative = $derived(isNativeDesktop() && !workspaceRoot && !readonly && !guest && hasNativeWorkspaceOps());
+  const desktopNative = $derived(pcLocal || (isNativeDesktop() && !workspaceRoot && !readonly && !guest && hasNativeWorkspaceOps()));
   let desktopLocationId = $state('primary');
   let desktopLocations = $state([]);
   let desktopMatches = $state([]);
   let desktopSearchBusy = $state(false);
   const desktopLocation = $derived(desktopLocations.find((item) => item.id === desktopLocationId));
-  const desktopExtra = $derived(desktopNative && desktopLocationId !== 'primary');
+  // 服务端不认识的原生位置（额外授权位置 / 这台电脑）：分享链接、解压、服务端压缩这些要服务端摸文件的动作都没有
+  const desktopExtra = $derived(desktopNative && nativeLocLocalOnly(desktopLocationId));
   const cloudLocsOn = $derived(!fenced && !readonly && !guest && !wsPick);   // 这一形态有没有「电脑位置」这回事
   const showCloudLocs = $derived(cloudLocsOn && !isLocal && !desktopNative && cloudLocs.length > 1);
   // 位置胶囊：顶栏返回键右边那枚「⌂ 主目录 ⌃⌄」——「在电脑的哪儿」恒在手边，任何深度都能一下换盘，
@@ -283,7 +293,7 @@
 
   // —— 面包屑 / 分组 / 派生 ——
   const segs = $derived(path ? path.split('/').filter(Boolean) : []);
-  const rootLabel = $derived(readonly ? t('分享空间') : isLocal ? (multiRoot ? t('本地') : localRootName()) : (tr(desktopLocation?.name) || (fenced ? tr(rootName) : '') || (atPcLoc ? locLabel(cloudLoc) : '') || t('工作空间')));   // rootName 出自服务端 /api/project/locations（「工作空间」「主目录」）：显示点兜 tr()
+  const rootLabel = $derived(readonly ? t('分享空间') : pcLocal && pcHome ? t('这台电脑') : isLocal ? (multiRoot ? t('本地') : localRootName()) : (tr(desktopLocation?.name) || (fenced ? tr(rootName) : '') || (atPcLoc ? locLabel(cloudLoc) : '') || t('工作空间')));   // rootName 出自服务端 /api/project/locations（「工作空间」「主目录」）：显示点兜 tr()
   // 面包屑首段（本地多根时是根 id）翻译成显示名；其余段原样。
   const segLabel = (s, i) => (isLocal && multiRoot && i === 0 ? (rootMap[s] || s) : s);
   const title = $derived(segs.length ? (segs.length === 1 ? segLabel(segs[0], 0) : segs[segs.length - 1]) : rootLabel);
@@ -310,7 +320,7 @@
   // 分享只读模式不出「最近」区：桶顶层就那几项，跟正文重复只添乱。
   // 电脑位置也不出：盘根/主目录顶层的「最近」是 DumpStack.log、NTUSER.DAT 这类系统文件，不是人要找的。
   const recents = $derived(
-    !segs.length && !query && !readonly && !wsPick && !atPcLoc    // 选择器只挑文件夹，「最近」全是文件，纯噪音
+    !segs.length && !query && !readonly && !wsPick && !atPcLoc && !pcLocal    // 选择器只挑文件夹，「最近」全是文件，纯噪音
       ? [...files].sort((a, b) => (b.mtime || 0) - (a.mtime || 0)).slice(0, 6)
       : []
   );
@@ -339,12 +349,13 @@
   const LIST_META = (window.__bridgeFilesListMeta ||= new Map());     // listKey → { truncated, total }
   const NO_META = { truncated: false, total: 0 };
   let listMeta = $state(NO_META);
-  const listKey = (p) => (ws === 'local' ? 'local' : desktopNative ? 'dt:' + desktopLocationId : readonly ? 'share' : 'cloud') + '\x1f' + (cloudRoot || '') + '\x1f' + p;
+  const listKey = (p) => (isLocal ? 'local' : desktopNative ? 'dt:' + desktopLocationId : readonly ? 'share' : 'cloud') + '\x1f' + (cloudRoot || '') + '\x1f' + p;
   let shownKey = null;   // 当前 items 属于哪个 listKey（跨 ws/位置切换时避免误判「同目录」）
   let loadSeq = 0, loadCtrl = null;   // 竞态闸 + 在途请求中止柄（快速连点只认最后一次）
   async function load(p) {
     const my = ++loadSeq;
-    if (ws === 'local') {
+    if (pcLocal && pcHome) { showPcHome(); return; }   // 主页只列位置，没有目录可列
+    if (isLocal) {
       try { items = localList(p); } catch { items = []; }
       path = p; loading = false; shownKey = listKey(p); loadErr = ''; listMeta = NO_META;
       if (scroller) scroller.scrollTop = 0; scrolled = false;
@@ -384,7 +395,7 @@
   }
   // 缓存镜像：屏上列表怎么变（乐观删除/改名/上传后刷新），缓存跟着变——返回时不会把
   // 刚删的文件短暂「复活」。loading 中不写（别把还没到货的空列表当真相存起来）。
-  $effect(() => { const list = items; if (!loading && shownKey && ws !== 'local') LIST_CACHE.set(shownKey, list); });
+  $effect(() => { const list = items; if (!loading && shownKey && !isLocal) LIST_CACHE.set(shownKey, list); });
   function itemRel(item) { return item?.rel || (path ? path + '/' + item.name : item?.name || ''); }
   function enterDir(item) {
     if (selecting) { toggleSel(item.name); return; }
@@ -403,7 +414,7 @@
     return resolveStart(cloudLocs, up);
   });
   // hostChrome 下 ‹ 出不出：还有地方可退（搜索 / 多选 / 子目录 / 位置根之上）才出
-  const canBack = $derived(searching || selecting || segs.length > 0 || Boolean(parentHit));
+  const canBack = $derived(searching || selecting || segs.length > 0 || Boolean(parentHit) || (pcLocal && !pcHome));
   function goSeg(i) { load(segs.slice(0, i + 1).join('/')); }
   function goRoot() { load(''); }
   // 切电脑位置（p = 在那个位置里直接去的相对路径，agent 的 goto 用）。多选/搜索都属于上一个位置，一并收掉。
@@ -425,6 +436,7 @@
   function back() {
     if (aiPick) { if (aiView === 'chat') { chatBack(); return; } if (aiView === 'video') { aiView = 'vertex'; return; } if (aiView === 'vertex') { aiView = 'root'; return; } aiPick = null; return; }
     if (rootMenu) { rootMenu = null; return; }
+    if (pcLocMenu) { pcLocMenu = null; return; }
     if (addSheet) { addSheet = false; return; }
     if (infoItem) { infoItem = null; return; }
     if (picker) { picker = null; return; }
@@ -440,6 +452,7 @@
     if (searching) { searching = false; query = ''; return; }
     if (selecting) { exitSelect(); return; }
     if (segs.length) { load(segs.slice(0, -1).join('/')); return; }
+    if (pcLocal && !pcHome) { showPcHome(); return; }   // 这台电脑某个位置的根 → 回位置主页（同手机本地）
     // 内嵌在工作台里：‹ 就是「上一级」——位置根之上还有父目录就换进含它的位置，到顶即止（收起交给宿主）
     if (hostChrome) { if (parentHit) selectCloudLoc(parentHit.loc.id, parentHit.rel); return; }
     // 电脑位置的根：独立分页先回「工作空间」再回主页；内嵌在工作台里直接交还宿主——
@@ -502,13 +515,14 @@
       const it = items.find((f) => !f.isDir && f.name === initialOpen);
       if (it) openFile(it);
     }).catch(() => {});
-    if (!desktopNative) return;
+    // 「这台电脑」分页是挂载后才切进去的：壳能列本机文件就先订上，事件来了再看此刻是不是原生通道
+    if (!desktopNative && !(isNativeDesktop() && hasPcLocalFs())) return;
     let refreshTimer = 0, searchTimer = 0;
     const parentOf = (rel) => { const i = rel.lastIndexOf('/'); return i < 0 ? '' : rel.slice(0, i); };
     // 壳按目录推 { locationId, type, path, dir }；type='resync'＝系统通知缓冲区溢出（一下子变了太多），
     // 壳把有人看过的目录各推一条整体作废。后台连续写盘时一秒能来几十条，只认跟眼前这一屏有关的。
     const off = onNativeWorkspaceChanged((event) => {
-      if (ws !== 'cloud') return;
+      if (!desktopNative || (pcLocal && pcHome)) return;
       if (String(event?.locationId || 'primary') !== desktopLocationId) return;
       const changedDir = String(event?.dir || '');
       const resync = event?.type === 'resync';
@@ -542,7 +556,10 @@
   });
 
   // —— 搜索 ——
-  function openSearch() { searching = true; setTimeout(() => searchEl?.focus(), 60); }
+  function openSearch() {
+    if (pcLocal && pcHome) { toast(t('先进入一个位置再搜索')); return; }   // 搜索是在某个位置里按名字找
+    searching = true; setTimeout(() => searchEl?.focus(), 60);
+  }
   function closeSearch() { searching = false; query = ''; }
   // 云端目录被截断（上千项只回了前 1500）时，搜索改问服务端：它在整个目录里按名字筛完再截，
   // 截掉的那部分才找得到。没截断的目录照旧在已到手的列表里就地筛，不多发请求。
@@ -605,6 +622,12 @@
 
   async function refreshDesktopLocations() {
     try { desktopLocations = await nativeWorkspaceLocations(); } catch {}
+    if (!pcAvail) return;
+    // 这台电脑主页的副标题＝各位置的完整路径（同一个 inspect 口子，按 id 记住）
+    for (const loc of desktopLocations) {
+      if (pcLocAbs[loc.id]) continue;
+      nativeWorkspaceInspect('', loc.id).then((r) => { if (r?.absolutePath) pcLocAbs = { ...pcLocAbs, [loc.id]: r.absolutePath }; }).catch(() => {});
+    }
   }
   async function addDesktopLocation() {
     addOpen = false;
@@ -613,14 +636,16 @@
       await refreshDesktopLocations();
       if (!result?.canceled && result?.location?.id) {
         desktopLocationId = result.location.id;
+        pcHome = false;
         query = ''; searching = false;
         await load('');
       }
     } catch (e) { toast(t('添加位置失败：{reason}', { reason: tr(e.message || '') })); }
   }
   async function selectDesktopLocation(locationId) {
-    if (locationId === desktopLocationId) return;
+    if (locationId === desktopLocationId && !(pcLocal && pcHome)) return;
     desktopLocationId = locationId;
+    pcHome = false;
     query = ''; searching = false; selecting = false; selected = new Set();
     await load('');
   }
@@ -634,6 +659,22 @@
       await load('');
     } catch (e) { toast(t('移除位置失败：{reason}', { reason: tr(e.message || '') })); }
   }
+  // 这台电脑的位置主页：清掉当前目录的一切（多选/搜索/列表），只摆位置卡片
+  function showPcHome() {
+    loadSeq++;
+    pcHome = true;
+    if (selecting) exitSelect();
+    searching = false; query = '';
+    path = ''; items = []; loading = false; shownKey = null; loadErr = ''; listMeta = NO_META;
+    if (scroller) scroller.scrollTop = 0;
+    scrolled = false;
+  }
+  async function revealPcLoc(loc) {
+    pcLocMenu = null;
+    try { await nativeWorkspaceReveal('', loc.id); }
+    catch (e) { toast(t('定位失败：{reason}', { reason: tr(e.message || '') })); }
+  }
+  function removePcLoc(loc) { pcLocMenu = null; removeDesktopLocation(loc); }
 
   // —— 多选 ——
   function enterSelect(seedName) { selecting = true; selected = new Set(seedName ? [seedName] : []); }
@@ -734,7 +775,7 @@
   $effect(() => { if (!drag.on && liftRels.size) liftRels = new Set(); });
 
   // 作用域指纹：云端(可带 ws 根) / 手机本地 SAF / 桌面原生位置——只有同作用域才谈得上「移动」
-  const dragCtx = $derived({ origin: isLocal ? 'local' : desktopNative ? 'native' : 'cloud', ws: cloudRoot || '', locationId: desktopNative ? desktopLocationId : '' });
+  const dragCtx = $derived({ origin: isLocal ? 'local' : desktopNative ? 'native' : 'cloud', ws: desktopNative ? '' : cloudRoot || '', locationId: desktopNative ? desktopLocationId : '' });
 
   // 本页的三类落点：当前目录（列表空白处）/ 某个文件夹格子 / 面包屑上的某一级。
   // 只读分享空间与选择器形态整体关掉（那儿没有写操作）。
@@ -755,7 +796,7 @@
   // 快照之后，落地这两件事只吃纯数据，与组件生死无关。
   const liftSnap = (item) => ({
     rel: itemRel(item), name: item.name, isDir: !!item.isDir,
-    local: isLocal, root: cloudRoot || '', nativeLoc: desktopNative ? desktopLocationId : '',
+    local: isLocal, root: desktopNative ? '' : cloudRoot || '', nativeLoc: desktopNative ? desktopLocationId : '',
   });
   let alive = true;
   $effect(() => () => { alive = false; });
@@ -777,6 +818,7 @@
   async function materialOf(snap, direct = false) {
     const kind = snap.isDir ? 'folder' : (kindOf(snap.name) === 'img' ? 'image' : 'file');
     try {
+      if (nativeLocLocalOnly(snap.nativeLoc)) return await pcLocalMaterial({ rel: snap.rel, name: snap.name, isDir: snap.isDir, locationId: snap.nativeLoc, forClaude: direct });
       if (snap.local) {
         if (snap.isDir) return null;      // 手机本地文件夹没有可发送的形态
         let up;
@@ -946,7 +988,8 @@
       add(true, t('在文件资源管理器中显示'), 'reveal', { icon: G.reveal });
       sep();
     }
-    if (!readonly && !guest && !desktopExtra) {
+    // 这台电脑的文件服务端看不到，发给 AI＝现读现传（文件夹给 Claude 走设备引用），同手机本地
+    if (!readonly && !guest && (!desktopExtra || pcLocal)) {
       add(true, t('发送给 AI'), 'ai', { symbol: 'sparkles', tint: '#cb30e0' });
       sep();
       add(!desktopNative, t('分享'), 'share', { symbol: 'square.and.arrow.up' });
@@ -992,7 +1035,7 @@
   function doOpenWith(item) {
     const r = itemRel(item);
     if (desktopNative) { nativeWorkspaceOpenWith(r, desktopLocationId).catch((e) => toast(t('打开方式失败：{reason}', { reason: tr(e.message || '') }))); return; }
-    if (ws === 'local') { openWith('', r, item.name, true); return; }
+    if (isLocal) { openWith('', r, item.name, true); return; }
     const tok = getToken();
     const url = apiUrl(scoped('/api/file?path=' + encodeURIComponent(r)) + (tok ? '&token=' + encodeURIComponent(tok) : ''));
     openWith(url, r, item.name, false);
@@ -1055,7 +1098,7 @@
     if (item.isDir) { toast(t('暂不支持分享文件夹')); return; }
     if (!canShare) { toast(t('分享需在手机 App 内使用')); return; }
     const r = itemRel(item);
-    if (ws === 'local') { shareFile('', r, item.name, true); return; }
+    if (isLocal) { shareFile('', r, item.name, true); return; }
     const tok = getToken();
     const url = apiUrl(scoped('/api/file?path=' + encodeURIComponent(r)) + (tok ? '&token=' + encodeURIComponent(tok) : ''));
     shareFile(url, r, item.name, false);
@@ -1075,7 +1118,8 @@
     const r = itemRel(item);
     const kind = item.isDir ? 'folder' : (kindOf(item.name) === 'img' ? 'image' : 'file');
     try {
-      if (ws === 'local') {
+      if (pcLocal) return await pcLocalMaterial({ rel: r, name: item.name, isDir: item.isDir, locationId: desktopLocationId, forClaude: direct });
+      if (isLocal) {
         if (item.isDir) { toast(t('本地文件夹暂不支持发送')); return null; }
         // 优先原生流式（/__localfile → uploadBlob，大文件不受 20MB base64 限制、blob 走磁盘
         // 后备不爆内存）；原生流不可用（在线壳/dev）或失败 → 退回 base64 单发。
@@ -1098,7 +1142,8 @@
   async function aiTextContent(item) {
     const r = itemRel(item);
     try {
-      if (ws === 'local') { const txt = localReadText(r); return txt == null ? null : String(txt).slice(0, 30000); }
+      if (pcLocal) return await pcLocalText(r, desktopLocationId);
+      if (isLocal) { const txt = localReadText(r); return txt == null ? null : String(txt).slice(0, 30000); }
       const res = await fetch(apiUrl(scoped('/api/file?path=' + encodeURIComponent(r))), { headers: authHeaders(), credentials: 'same-origin' });
       if (!res.ok) return null;
       return (await res.text()).slice(0, 30000);
@@ -1539,7 +1584,8 @@
   const OFFICE_EXTS = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf'];
   // 统一构造查看器条目：云端走 /api（origin cloud），本地走 SAF 原生流式（origin local，url=/__localfile，带 Range）。
   // mt=mtime：让查看器衍生图 URL 与列表图标完全一致（命中浏览器缓存秒出 blur 底）+ 文件替换后自动 bust。
-  const srcItem = (it, kind) => ({ origin: ws === 'local' ? 'local' : 'cloud', rel: itemRel(it), name: it.name, kind, mt: it.mtime, ws: cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '' });
+  // 原生位置（含这台电脑）不带 ws：带了 cloudFileUrl 就当成服务器上的路径去 /api/file 取了
+  const srcItem = (it, kind) => ({ origin: isLocal ? 'local' : 'cloud', rel: itemRel(it), name: it.name, kind, mt: it.mtime, ws: desktopNative ? '' : cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '' });
   async function openFile(item) {
     if (wsPick) return;                // 选择器形态只挑文件夹：文件列出来是给你认路的，不点开
     if (selecting) { toggleSel(item.name); return; }
@@ -1550,21 +1596,21 @@
     if (k === 'mov' || k === 'audio') { openPreview([srcItem(item, k === 'mov' ? 'video' : 'audio')], 0); return; }  // 音视频（本地走原生流式）
     if (k === 'md' || k === 'text') { openDocPreview(item, k); return; }                              // md/文本 编辑
     if (k === 'html') {                                                                               // HTML → 沙箱 iframe 直接渲染
-      if (ws === 'local') openPreview([{ origin: 'local', rel: r, name: item.name, kind: 'html', text: localReadText(r) }], 0);
-      else openPreview([{ origin: 'cloud', rel: r, name: item.name, kind: 'html', ws: cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '' }], 0);
+      if (isLocal) openPreview([{ origin: 'local', rel: r, name: item.name, kind: 'html', text: localReadText(r) }], 0);
+      else openPreview([{ origin: 'cloud', rel: r, name: item.name, kind: 'html', ws: desktopNative ? '' : cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '' }], 0);
       return;
     }
     if (k === 'pdf') { openPreview([srcItem(item, 'pdf')], 0); return; }                              // PDF
     if (OFFICE_EXTS.includes(ext)) { openPreview([srcItem(item, 'office')], 0); return; }             // Office
-    preview = { name: item.name, rel: r, kind: 'other', local: ws === 'local' };                     // 其余（压缩包等）
+    preview = { name: item.name, rel: r, kind: 'other', local: isLocal };                             // 其余（压缩包等）
   }
 
   // md/文本 → 沉浸式文档查看/编辑器（云端 fetch；本地 SAF 已读文本）
   function openDocPreview(item, k, extra = {}) {
     const r = itemRel(item);
     const kind = k === 'md' ? 'markdown' : 'text';
-    if (ws === 'local') openPreview([{ origin: 'local', rel: r, name: item.name, kind, text: localReadText(r), ...extra }], 0);
-    else openPreview([{ origin: 'cloud', rel: r, name: item.name, kind, ws: cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '', ...extra }], 0);
+    if (isLocal) openPreview([{ origin: 'local', rel: r, name: item.name, kind, text: localReadText(r), ...extra }], 0);
+    else openPreview([{ origin: 'cloud', rel: r, name: item.name, kind, ws: desktopNative ? '' : cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '', ...extra }], 0);
   }
 
   // 图片 → openPreview：当前目录全部图片做画廊（云端 URL / 本地原生流式 URL，均轻量，可左右滑/缩放）。
@@ -1675,7 +1721,14 @@
   function pickWs(w) {
     if (w === ws) return;
     if (selecting) exitSelect();
-    searching = false; query = ''; addSheet = false; rootMenu = null;
+    searching = false; query = ''; addSheet = false; rootMenu = null; pcLocMenu = null;
+    if (w === 'local' && pcAvail) {
+      // 电脑客户端连远端服务端：「本地」＝这台电脑，先到位置主页（同手机本地的「本地位置」）
+      ws = 'local';
+      showPcHome();
+      refreshDesktopLocations();
+      return;
+    }
     if (w === 'local') {
       if (!localAvail) { toast(t('本地工作空间需在手机 App 内使用')); return; }
       ws = 'local';
@@ -1805,6 +1858,7 @@
   // 「本地位置」行图标：文件夹（蓝）/ 整机存储（绿手机）
   const FOLDER_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="#0088ff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z"/></svg>';
   const PHONE_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.8" width="10" height="18.4" rx="2.6"/><path d="M10.5 18.6h3"/></svg>';
+  const PC_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M9 20.5h6M12 16.5v4"/></svg>';
   const GLYPH = {
     img: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.4"/><circle cx="9" cy="9.6" r="1.7"/><path d="m6 17 4.2-4.4 3 3 2.4-2.5 2.9 3.1"/>',
     mov: '<rect x="3.5" y="5.5" width="17" height="13" rx="2.6"/><path d="m10.3 9.5 4.4 2.5-4.4 2.5v-5Z" fill="#fff" stroke="none"/>',
@@ -1853,7 +1907,7 @@
     && it.nativeThumbW === it.nativeThumbH && it.nativeThumbW <= 48;
   const thumbSrc = (it) => (it.nativeThumb || (isLocal
     ? (canLocalThumb ? localThumbUrl(rel(it.name)) : localFileUrl(rel(it.name)))
-    : cloudFileUrl(itemRel(it), { thumb: true, mt: it.mtime, ws: cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '' })));
+    : cloudFileUrl(itemRel(it), { thumb: true, mt: it.mtime, ws: desktopNative ? '' : cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '' })));
   const thumbOk = (e) => e.currentTarget.classList.add('ok');
   // 失败：云端先按 mediaFallbackUrl 做一次 LAN→隧道自愈重试（媒体 <img> 没有 fetch 那套
   // noteNetFail 自愈，见 server.js）；仍失败/本地失败 → 保持透明，底下类型图标继续兜底。
@@ -1872,7 +1926,7 @@
   <button class="hid-tg" onclick={toggleHidden}>{showHidden ? t('收起隐藏项') : t('显示隐藏项')}<small>{hidTotal}</small></button>
 {/snippet}
 
-<div class="ws-root" class:narrow={rootW < 350} class:wpick={wsPick} class:embedded={embeddedUi} class:chrome={hostChrome} class:th-light={theme === 'light'} class:th-dark={theme === 'dark'} class:ios-dark={iosDark} class:modal={!!(menu || addOpen || locMenu || crumbMenu || transferOpen || renameTarget || mkOpen || mdOpen || zipDlg || shareDlg || rootMenu || addSheet || aiPick || picker || infoItem || preview)} style:--sq={`url("${sq26}")`} bind:this={rootEl} bind:clientWidth={rootW} ondragover={dragOverRoot} ondragleave={dragLeaveRoot} ondrop={onDropUpload} role="presentation">
+<div class="ws-root" class:narrow={rootW < 350} class:wpick={wsPick} class:embedded={embeddedUi} class:chrome={hostChrome} class:th-light={theme === 'light'} class:th-dark={theme === 'dark'} class:ios-dark={iosDark} class:modal={!!(menu || addOpen || locMenu || crumbMenu || transferOpen || renameTarget || mkOpen || mdOpen || zipDlg || shareDlg || rootMenu || pcLocMenu || addSheet || aiPick || picker || infoItem || preview)} style:--sq={`url("${sq26}")`} bind:this={rootEl} bind:clientWidth={rootW} ondragover={dragOverRoot} ondragleave={dragLeaveRoot} ondrop={onDropUpload} role="presentation">
   <!-- 从桌面拖文件/文件夹进来：整块提示；拖在某个文件夹格子上时改说传进那个文件夹 -->
   {#if dropOn !== null}
     <div class="dropveil">
@@ -1903,6 +1957,9 @@
     {#if wsPick}
       <!-- 选择器只留「新建文件夹」：要一个全新的空项目就在这儿建，建完拖进底栏即可 -->
       <GlassButton symbol="plus" weight={500} aria={t('新建文件夹')} onclick={() => (mkOpen = { value: '' })} />
+    {:else if pcLocal}
+      <!-- 这台电脑：主页上＋＝授权一个新文件夹；位置里＝导入/新建（都是本机原生操作，不走传输面板） -->
+      <GlassButton symbol="plus" weight={500} aria={pcHome ? t('添加位置') : t('添加')} onclick={() => (pcHome ? addDesktopLocation() : (addOpen = !addOpen))} />
     {:else if !isLocal}
       {#if !readonly}
         <GlassButton symbol="plus" weight={500} aria={t('添加')} onclick={() => (addOpen = !addOpen)} />
@@ -1955,6 +2012,7 @@
       {#if selecting}
         <span class="sel-count">{t('已选择 {n} 项', { n: selected.size })}</span>
       {:else}
+        {#if pcLocal && !pcHome}<button class="pb-seg" onclick={showPcHome}>{t('这台电脑')}</button><span class="pb-sep">›</span>{/if}
         {#if locPill}
           <button class="pb-root" class:dnd-on={drag.overKey === 'ws-crumb:-1'} use:dropZone={crumbZone(-1)} aria-label={rootLabel} onclick={goRoot}>{@html locGlyph(cloudLoc)}</button>
         {:else}
@@ -2002,6 +2060,29 @@
         </button>
       </div>
       <p class="loc-note">{t('这些是你授权 The Bridge 访问的手机文件夹，可随时增删。Claude 的手机文件工具也在这些位置内活动。')}</p>
+    {:else if pcLocal && pcHome}
+      <!-- 这台电脑的位置主页（同上面手机「本地位置」）：服务器在别处，这里列的是本机授权过的文件夹，
+           点进去在本机浏览、预览，字节不经过服务器 -->
+      <div class="sechead"><h2>{tc('files', '位置')}</h2></div>
+      {#if desktopLocations.length}
+        <div class="filecard loc-list">
+          {#each desktopLocations as loc (loc.id)}
+            <div class="frow" role="button" tabindex="0" onclick={() => selectDesktopLocation(loc.id)}
+              onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && selectDesktopLocation(loc.id)}>
+              <span class="loc-ic">{@html loc.id === 'primary' ? PC_GLYPH : FOLDER_GLYPH}</span>
+              <span class="meta"><span class="nm">{tr(loc.name)}</span><span class="fsub">{pcLocAbs[loc.id] || (loc.id === 'primary' ? t('默认文件夹') : t('电脑文件夹'))}</span></span>
+              <button class="dots" aria-label={t('管理')} onclick={(e) => { e.stopPropagation(); pcLocMenu = { loc }; }}><Sym name="ellipsis.circle" weight={400} size={20} /></button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      <div class="filecard">
+        <button class="frow loc-add" onclick={addDesktopLocation}>
+          <span class="loc-ic"><Sym name="plus.circle.fill" weight={400} size={24} /></span>
+          <span class="meta"><span class="nm">{t('添加文件夹')}</span></span>
+        </button>
+      </div>
+      <p class="loc-note">{t('这些是这台电脑上你授权 The Bridge 访问的文件夹：在本机直接浏览、预览，文件不经过服务器。可随时增删。')}</p>
     {:else}
 
     {#if wsPick && pickerLocations.length > 1}
@@ -2019,7 +2100,7 @@
     {/if}
 
 
-    {#if desktopNative && !path && !query && desktopLocations.length}
+    {#if desktopNative && !pcLocal && !path && !query && desktopLocations.length}
       <div class="sechead"><h2>{tc('files', '位置')}</h2></div>
       <div class="desktop-locations">
         {#each desktopLocations as loc (loc.id)}
@@ -2158,8 +2239,13 @@
           <span class="lb">{t('工作空间')}</span>
         </button>
         <button class="tab" class:on={ws === 'local'} onclick={() => pickWs('local')}>
-          <span class="tab-ic"><Sym name="iphone" weight={600} size={19} /></span>
-          <span class="lb">{t('本地')}</span>
+          {#if pcAvail}
+            <span class="tab-ic"><Sym name="desktopcomputer" weight={500} size={19} /></span>
+            <span class="lb">{t('这台电脑')}</span>
+          {:else}
+            <span class="tab-ic"><Sym name="iphone" weight={600} size={19} /></span>
+            <span class="lb">{t('本地')}</span>
+          {/if}
         </button>
       </div>{:else}<span></span>{/if}
       <button class="searchbtn lgo62" aria-label={t('搜索')} onclick={openSearch}><Sym name="magnifyingglass" weight={600} size={20} /></button>
@@ -2231,8 +2317,9 @@
           <div class="pv-other">
             <div class="big">{@html fileIcon(preview.name)}</div>
             <p>{t('该类型暂不支持内嵌预览')}</p>
-            {#if !isLocal && kindOf(preview.name) === 'zip' && !readonly}<button class="k-btn prom" disabled={extracting} onclick={() => { const n = preview.name; preview = null; doExtract({ name: n }); }}>{extracting ? t('解压中…') : t('解压到当前文件夹')}</button>{/if}
-            {#if !isLocal}<button class="k-btn" onclick={() => download(preview.rel)}>{t('下载文件')}</button>{/if}
+            {#if !isLocal && !desktopExtra && kindOf(preview.name) === 'zip' && !readonly}<button class="k-btn prom" disabled={extracting} onclick={() => { const n = preview.name; preview = null; doExtract({ name: n }); }}>{extracting ? t('解压中…') : t('解压到当前文件夹')}</button>{/if}
+            {#if desktopNative}<button class="k-btn prom" onclick={() => { const it = { name: preview.name, rel: preview.rel }; preview = null; doDesktopOpen(it); }}>{t('用默认应用打开')}</button>{/if}
+            {#if !isLocal}<button class="k-btn" onclick={() => download(preview.rel)}>{desktopNative ? t('另存为…') : t('下载文件')}</button>{/if}
           </div>
         {/if}
       </div>
@@ -2324,6 +2411,16 @@
         ...(rootMenu.root.mode !== 'all' ? [{ label: t('重新选择文件夹'), role: 'plain', onclick: () => doReselect(rootMenu.root) }] : []),
         { label: t('移除此位置'), role: 'destructive', onclick: () => doRemove(rootMenu.root) },
         { label: t('取消'), role: 'cancel', onclick: () => (rootMenu = null) },
+      ]} />
+  {/if}
+  {#if pcLocMenu}
+    <Alert title={tr(pcLocMenu.loc.name)}
+      message={pcLocAbs[pcLocMenu.loc.id] || ''}
+      onclose={() => (pcLocMenu = null)}
+      actions={[
+        { label: t('在文件资源管理器中显示'), role: 'plain', onclick: () => revealPcLoc(pcLocMenu.loc) },
+        ...(pcLocMenu.loc.removable ? [{ label: t('移除此位置'), role: 'destructive', onclick: () => removePcLoc(pcLocMenu.loc) }] : []),
+        { label: t('取消'), role: 'cancel', onclick: () => (pcLocMenu = null) },
       ]} />
   {/if}
   {#if addSheet}

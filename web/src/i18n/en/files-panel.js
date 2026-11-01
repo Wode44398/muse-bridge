@@ -296,4 +296,10 @@ export default {
   '正在打开系统压缩窗口…': 'Opening the Windows compression window…',
   '压缩在后台继续，完成后出现在原文件夹': 'Compression continues in the background. The archive will appear in the same folder.',
   '存档放在同一个文件夹里，重名自动编号': 'The archive is saved in the same folder. Duplicate names get a number.',
+  // —— 这台电脑（桌面客户端连远端服务端时的「本地」分页）——
+  '先进入一个位置再搜索': 'Open a location first, then search',
+  '默认文件夹': 'Default folder',
+  '电脑文件夹': 'Folder on this computer',
+  '这些是这台电脑上你授权 The Bridge 访问的文件夹：在本机直接浏览、预览，文件不经过服务器。可随时增删。': 'These are the folders on this computer you’ve given The Bridge access to. They’re browsed and previewed right here, and the files never go through the server. Add or remove them anytime.',
+  '这台电脑上的文件夹只能引用给 Claude': 'Folders on this computer can only be referenced in Claude',
 };

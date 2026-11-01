@@ -14,6 +14,9 @@ if (import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(
   // `?fdmock=embed&w=420`：把 FilesDesktop 按【工作台侧栏内嵌形态】挂在一根可指定宽度的右列里
   // （并画出 Claude 顶栏胶囊的占位），专验窄列工具栏分档 / 面包屑折叠 / 暗色主题。
   if (new URLSearchParams(location.search).get('fdmock') === 'embed') window.__FD_MOCK_EMBED = true;
+  // `&remote=1`：壳连的是远端服务端（connection.isLocal()=false）——工作空间整页走 FilesPanel 的「这台电脑」分页、
+  // 侧栏 FilesDesktop 在服务器位置之外多一组「这台电脑」。下面的假文件系统此时扮演这台电脑自己的盘。
+  const remote = new URLSearchParams(location.search).get('remote') === '1';
   const now = Date.now();
   const H = 3600e3, D = 24 * H;
   let seq = 0;
@@ -158,6 +161,7 @@ if (import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(
 
   window.BridgeDesktop = Object.freeze({
     platform: 'win32',
+    connection: { isLocal: () => !remote },
     app: { version: async () => 'fdmock', showInFolder: async () => ({}), openExternal: async () => ({}) },
     workspace: {
       async list(rel = '', locationId = 'primary') {

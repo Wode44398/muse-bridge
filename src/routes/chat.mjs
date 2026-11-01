@@ -8,7 +8,8 @@ import { filterAttachmentPaths } from '../runtime/attachment-guard.mjs';
 import { deviceById } from '../runtime/device-registry.mjs';
 import { handleAnswer } from '../runtime/questions.mjs';
 import { handlePhoneResult } from '../runtime/phone-bridge.mjs';
-import { deviceIdFromReq } from '../runtime/phone-control.mjs';
+import { deviceIdFromReq, modelFromUA } from '../runtime/phone-control.mjs';
+import { describeOrigin, notePhoneClient } from '../runtime/client-origins.mjs';
 import { runClaudeChat } from '../agents/claude.mjs';
 import * as claudeProjects from '../claude-projects.mjs';
 import { createSessionWorktree } from '../claude-worktrees.mjs';
@@ -33,6 +34,45 @@ import { FAMILY_REQ } from '../runtime/session-family.mjs';
 import { registerPermissionRoutes } from '../runtime/permissions.mjs';
 import { supersedeOffer } from '../runtime/session-proposals.mjs';
 import { startTurnTiming, markTurn, handedTurn } from '../runtime/turn-timing.mjs';
+
+// 这条请求的发起客户端（请求头 + JSON 体；排队消息重放时是当初那条的）。
+export function clientOf(headers, parsed, url = '/api/chat') {
+  const ua = String((headers && headers['user-agent']) || '');
+  // 悬浮胶囊（原生 ClaudeStream）发起的轮带 source:'capsule'——记到 gen 并经 /api/active
+  // 透出，手机网页端的镜像轮询据此不挂载（挂载预热/胶囊指令不该把 claude 分页拽进对话）。
+  const source = parsed.source === 'capsule' ? 'capsule' : undefined;
+  // 发起客户端是不是手机 App（离线 apk WebView / 原生胶囊）——决定要不要给 Claude 注入
+  // 手机文件/手机操控能力（电脑网页端注了也用不了，Claude 只会误宣称能操作手机）。
+  // 新前端显式带 client:'apk'|'web'（有原生桥=apk）；旧 apk 的本地 bundle 没这字段 →
+  // 用 Android WebView UA 的 "; wv)" 标记兜底；原生胶囊轮（source:capsule）必是手机。
+  // QQ bot / Routines / 管理台代聊都不带 client 且非 WebView UA → 一律按网页端处理。
+  const fromPhone = parsed.client === 'apk' || source === 'capsule'
+    || (parsed.client === undefined && /;\s?wv\)/.test(ua));
+  // 发起这轮的是【哪一台】手机（同账号多台手机都开着操控时，手机操控默认操作它）：新 apk 的 WebView UA
+  // 带 BridgeDevice/<id>、胶囊请求带 X-Bridge-Device 头；旧 apk 退到 UA 里的机型号。与操控长轮询同一套算法。
+  const originDeviceId = fromPhone ? deviceIdFromReq({ url: url || '/api/chat', headers: headers || {} }) : 'legacy';
+  const originDevice = originDeviceId === 'legacy' ? undefined : originDeviceId;
+  // 发起这轮的【桌面客户端】（瘦客户端里的网页带上壳登记的设备 id）：新会话默认连它——对标官方
+  // 「从这台电脑发起的云会话」。归属在 claude.mjs 里核对（只认本账号自己的设备）。
+  const fromComputer = typeof parsed.fromComputer === 'string' && /^d-[0-9a-f]{6,24}$/.test(parsed.fromComputer) ? parsed.fromComputer : undefined;
+  // 窄屏网页（手机浏览器）：内嵌图表按手机宽度出图（mcp/visualize.mjs vizPlatform）。
+  const narrow = parsed.narrow === true;
+  return { ua, source, fromPhone, originDevice, fromComputer, narrow };
+}
+
+// 这条消息从哪台客户端发来（runtime/client-origins.mjs）：不进提示词，agent 要在用户本地做事时用 devices 工具现查。
+// 桌面客户端只认这个身份自己、没吊销的设备；手机顺手记进手机名册（机型从 UA 抠）。
+export function chatOrigin(ctx, { headers, body, url, family = null }) {
+  const c = clientOf(headers || {}, body || {}, url);
+  const d = c.fromComputer ? deviceById(c.fromComputer) : null;
+  const computer = d && !d.revoked && (d.owner || 'admin') === ctx.key ? { id: d.id, name: d.name } : null;
+  const phoneModel = c.fromPhone ? modelFromUA(c.ua) : '';
+  if (c.fromPhone && c.originDevice && !ctx.snap) {
+    const m = c.ua.match(/Android ([\d.]+)/);
+    try { notePhoneClient(ctx.key, c.originDevice, { model: phoneModel, android: m ? m[1] : '' }); } catch {}
+  }
+  return describeOrigin({ headers: headers || {}, fromPhone: c.fromPhone, phoneId: c.originDevice || '', phoneModel, computer, capsule: c.source === 'capsule', narrow: c.narrow, family });
+}
 
 export function registerChatRoutes(router, { authOk, identify }) {
   // 排队消息的内部重放（claude-queue.mjs）：一轮收尾后把合并好的排队消息当成一条新 POST 走本路由。
@@ -82,7 +122,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
       if (live && !live.done && typeof live.steer === 'function') {
         const r = removeItem(ctx.key, sid, itemId);
         if (!r.raw) return reply(404, { error: '这条排队消息已经不在了', items: r.items });
-        const uuid = live.steer({ message: r.raw.text, attachments: r.raw.attachments });
+        const uuid = live.steer({ message: r.raw.text, attachments: r.raw.attachments, origin: chatOrigin(ctx, { headers: r.raw.headers, body: r.raw.body, url: r.raw.url }) });
         if (uuid) return reply(200, { items: r.items, steered: true, uuid });
         // 插不进（这一轮恰好在收尾 / 挂起等后台任务）：放回队首，收尾后第一个发
         enqueueFront(ctx.key, sid, r.raw);
@@ -162,23 +202,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
     }
     // 悬浮胶囊（原生 ClaudeStream）发起的轮带 source:'capsule'——记到 gen 并经 /api/active
     // 透出，手机网页端的镜像轮询据此不挂载（挂载预热/胶囊指令不该把 claude 分页拽进对话）。
-    const source = parsed.source === 'capsule' ? 'capsule' : undefined;
-    // 发起客户端是不是手机 App（离线 apk WebView / 原生胶囊）——决定要不要给 Claude 注入
-    // 手机文件/手机操控能力（电脑网页端注了也用不了，Claude 只会误宣称能操作手机）。
-    // 新前端显式带 client:'apk'|'web'（有原生桥=apk）；旧 apk 的本地 bundle 没这字段 →
-    // 用 Android WebView UA 的 "; wv)" 标记兜底；原生胶囊轮（source:capsule）必是手机。
-    // QQ bot / Routines / 管理台代聊都不带 client 且非 WebView UA → 一律按网页端处理。
-    const fromPhone = parsed.client === 'apk' || source === 'capsule'
-      || (parsed.client === undefined && /;\s?wv\)/.test(String(req.headers['user-agent'] || '')));
-    // 发起这轮的是【哪一台】手机（同账号多台手机都开着操控时，手机操控默认操作它）：新 apk 的 WebView UA
-    // 带 BridgeDevice/<id>、胶囊请求带 X-Bridge-Device 头；旧 apk 退到 UA 里的机型号。与操控长轮询同一套算法。
-    const originDeviceId = fromPhone ? deviceIdFromReq(req) : 'legacy';
-    const originDevice = originDeviceId === 'legacy' ? undefined : originDeviceId;
-    // 发起这轮的【桌面客户端】（瘦客户端里的网页带上壳登记的设备 id）：新会话默认连它——对标官方
-    // 「从这台电脑发起的云会话」。归属在 claude.mjs 里核对（只认本账号自己的设备）。
-    const fromComputer = typeof parsed.fromComputer === 'string' && /^d-[0-9a-f]{6,24}$/.test(parsed.fromComputer) ? parsed.fromComputer : undefined;
-    // 窄屏网页（手机浏览器）：内嵌图表按手机宽度出图（mcp/visualize.mjs vizPlatform）。
-    const narrow = parsed.narrow === true;
+    const { source, fromPhone, originDevice, fromComputer, narrow } = clientOf(req.headers, parsed, req.url);
     // agent 准入统一看 ctx.agents（= ctx.allow*）：全局开关（设置「Agent」页）∩ 按人授权（控制台「用户」页）∩
     // 是否支持多用户（agy / codex 的工具调用在进程内部执行、绕过沙箱守卫，只给管理员）。
     const denied = (label) => {
@@ -336,7 +360,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
       // 「新会话 / 在这里做」卡还在等、用户没点卡直接发了新消息：卡作废，工具调用照官方告诉 Claude 先处理这条新消息
       if (live && !live.done) supersedeOffer(live);
       if (parsed.priority === 'next' && live && !live.done && typeof live.steer === 'function') {
-        const uuid = live.steer({ message, attachments });
+        const uuid = live.steer({ message, attachments, origin: chatOrigin(ctx, { headers: req.headers, body: parsed, url: req.url }) });
         if (uuid) { handedTurn(req, sessionId, 'steer'); return reply(200, { ok: true, steered: true, uuid }); }
       }
       if (parsed.priority === 'later' && live && !live.done) {
@@ -394,6 +418,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
     const restartResume = isSnap || !sessionId ? 0 : Math.max(0, Math.min(9, Number(parsed.restartResume) | 0));
     return runClaudeChat(req, res, {
       message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
+      origin: isSnap ? null : chatOrigin(ctx, { headers: req.headers, body: parsed, url: req.url, family }),
       limitReplay, limitResume: (parsed.limitResume === true || restartResume > 0) && !isSnap, restartResume,
       globalMax: isSnap ? SNAP_MAX_TURNS : undefined,
       ctx: claudeCtx,

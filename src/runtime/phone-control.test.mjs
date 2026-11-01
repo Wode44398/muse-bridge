@@ -3,10 +3,16 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
-import {
+import { mkdtempSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// 长轮询会把手机记进手机名册（client-origins.mjs，落在 DATA_ROOT）——测试用临时目录，别写进程序根
+process.env.BRIDGE_DATA_ROOT = mkdtempSync(path.join(os.tmpdir(), 'bridge-phonectl-'));
+const {
   modelFromUA, deviceIdFromReq, parseReady, resolveDevice, listDevices, requestPhoneControl,
   handleControlNext, handleControlResult, handleControlEvent, isControlOnline, abortAll, __resetForTest,
-} from './phone-control.mjs';
+} = await import('./phone-control.mjs');
 
 const FOLD_DALVIK = 'Dalvik/2.1.0 (Linux; U; Android 17; SM-F9760 Build/CP1A.260805.001)';
 const S_DALVIK = 'Dalvik/2.1.0 (Linux; U; Android 16; SM-S9370 Build/BP2A.250605.031)';

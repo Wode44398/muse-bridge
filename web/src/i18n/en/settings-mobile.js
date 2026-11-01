@@ -215,7 +215,6 @@ export default {
   '只记账号名，不存密码。': 'Only usernames are remembered — never passwords.',
   '退出登录？': 'Sign Out?',
   '会先退出当前账号（{name}），再用别的账号登录。': "You'll be signed out of {name} first, then you can sign in with another account.",
-  '添加账号': 'Add Account',
   '这台设备上的账号': 'Accounts on This Device',
   '这台设备上登录过的账号会留着登录，点一下直接切换，不用重新输入密码。': 'Accounts you sign in to on this device stay signed in — tap one to switch, no password needed.',
   '切换中…': 'Switching…',

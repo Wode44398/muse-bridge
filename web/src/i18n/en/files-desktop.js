@@ -252,4 +252,5 @@ export default {
   '编辑地址': 'Edit address',
   '「{path}」不在已添加的位置里，可在左侧「添加位置…」里授权': '“{path}” isn’t in any added location. Use Add location… on the left to grant access.',
   '「{path}」不在可访问的位置里': '“{path}” isn’t in a location you can access',
+  '添加这台电脑上的文件夹…': 'Add a folder on this computer…',
 };

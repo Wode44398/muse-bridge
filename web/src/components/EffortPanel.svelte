@@ -92,7 +92,7 @@
   function down(e) {
     if (N < 2 || e.button !== 0) return;
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
-    control.style.removeProperty('--slider-drag-pos');
+    control.style.removeProperty('--slider-drag-pos'); control.style.removeProperty('--slider-drag-k');
     const tr = thumbEl.getBoundingClientRect();
     const grab = thumbEl.contains(e.target) ? e.clientX - (tr.left + tr.width / 2) : 0;
     drag = { rail: railEl.getBoundingClientRect(), grab, x0: e.clientX, x: e.clientX, moved: false, from: 0, t0: 0, raf: 0 };
@@ -107,6 +107,7 @@
     const k = (performance.now() - d.t0) / 120;
     if (k < 1) { f = d.from + (f - d.from) * easeOut3(Math.max(k, 0)); d.raf = requestAnimationFrame(frame); }
     control.style.setProperty('--slider-drag-pos', (100 * f) + '%');
+    control.style.setProperty('--slider-drag-k', String(f));
     setDisp(Math.round(f * (N - 1)));
   }
   function move(e) {
@@ -118,7 +119,8 @@
       if (Math.abs(d.x - d.x0) < 3) return;
       d.moved = true; dragging = true;
       const w = control.getBoundingClientRect().width;
-      d.from = w > 0 ? Math.min(Math.max(fillEl.getBoundingClientRect().width / w, 0), 1) : fracAt(d);
+      // 填充末端 = 把手中心（8 + k·(宽 − 16)），反推当前 k
+      d.from = w > 16 ? Math.min(Math.max((fillEl.getBoundingClientRect().width - 8) / (w - 16), 0), 1) : fracAt(d);
       d.t0 = reduced() ? -1e9 : performance.now();
     }
     if (!d.raf) d.raf = requestAnimationFrame(frame);
@@ -130,12 +132,12 @@
     if (d.raf) cancelAnimationFrame(d.raf);
     commit(d.moved ? Math.round(fracAt(d) * (N - 1)) : disp);
     dragging = false;
-    control.style.removeProperty('--slider-drag-pos');
+    control.style.removeProperty('--slider-drag-pos'); control.style.removeProperty('--slider-drag-k');
   }
   function dotTap(e, i) {
     e.stopPropagation();
     if (drag) { if (drag.raf) cancelAnimationFrame(drag.raf); drag = null; dragging = false; }
-    control.style.removeProperty('--slider-drag-pos');
+    control.style.removeProperty('--slider-drag-pos'); control.style.removeProperty('--slider-drag-k');
     setDisp(i); commit(i);
   }
   // 键盘（隐藏 input）：即时落值（把手照常按过渡滑过去）
@@ -215,7 +217,7 @@
     <div class="ef-ends"><span>Faster</span><span>Smarter</span></div>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="ef-slider" class:dragging class:charged bind:this={control}
-      style:--slider-rest-pos={restPct + '%'}
+      style:--slider-rest-pos={restPct + '%'} style:--slider-rest-k={restPct / 100}
       onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={up} onlostpointercapture={up}>
       <div class="ef-track" bind:this={trackEl} bind:clientWidth={trackW}>
         <span class="ef-fill" bind:this={fillEl}>
@@ -358,7 +360,8 @@
   .ef-track { position: relative; width: 100%; margin: 2px 0; height: calc(100% - 4px); border-radius: 6px;
     overflow: hidden; container-type: inline-size; background: var(--ui-slider-background); }
   .ef-fill { position: absolute; inset: 0 auto 0 0; left: 0; overflow: hidden;
-    width: var(--slider-drag-pos, var(--slider-rest-pos)); background: var(--ui-slider-fill); }
+    /* 末端落在把手中心：把手走的是两侧内缩 8px 的滑轨，填充也按同一范围（8px → 宽−8px），不是 0 → 100% */
+    width: calc(8px + (100% - 16px) * var(--slider-drag-k, var(--slider-rest-k))); background: var(--ui-slider-fill); }
   /* 能量层：官方 opacity clamp((pos-25%)*k) + mask 软渐入（reveal 45%/60%）。
      遮罩层就是填充本身的宽度（width 100% of .ef-fill）：软渐入按填充宽度缩放，吸附时跟填充同一条宽度过渡走，
      末端永远落在把手底下。以前遮罩另按「pos − 8px」算宽度、又不带过渡——低档时紫光停在把手左边几像素

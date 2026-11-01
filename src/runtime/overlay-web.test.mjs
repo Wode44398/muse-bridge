@@ -35,6 +35,8 @@ process.env.BRIDGE_OVERLAY_DIR = ov;
 
 const { createRouter } = await import('./router.mjs');
 const W = await import('./overlay-web.mjs');
+// 发布树可能已有内置 _ov；本组测试只验证临时素材，不依赖执行目录的构建历史。
+W._setOverlayWebDir(path.join(ov, 'web'));
 const { distroHeadTag } = await import('../config/distro.mjs');
 
 const HTML = '<!doctype html><html><head><meta charset="utf-8"><title>t</title></head><body>x</body></html>';

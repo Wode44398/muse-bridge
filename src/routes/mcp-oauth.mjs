@@ -12,10 +12,13 @@ import { requireCtx } from '../runtime/identity.mjs';
 import { busPublish } from '../runtime/bus.mjs';
 import { noteSessionMcp, sessionMcp } from '../runtime/session-mcp.mjs';
 import { PUBLIC_ORIGIN } from '../config/index.mjs';
-import { startMcpAuth, submitMcpCallback, confirmMcpAuth, cancelMcpAuth, flowByState, flowFor, flowView } from '../runtime/mcp-oauth.mjs';
+import { startMcpAuth, submitMcpCallback, confirmMcpAuth, cancelMcpAuth, flowByState, flowFor, flowView, reconnectLive } from '../runtime/mcp-oauth.mjs';
 import { spawnAuthQuery } from '../runtime/mcp-oauth-query.mjs';
+import { probeConnectors, noteConnectorStatus, forgetConnectorStatus, slimStatus, clearMcpTokens, hasMcpTokens } from '../runtime/mcp-probe.mjs';
+import { connectorForAuth, remoteConnectorsForProbe } from '../extensions.mjs';
 
 export const CALLBACK_PATH = '/api/mcp-oauth/callback';
+const EXT_SID = 'ext:';   // 扩展页发起的流程挂在这个「会话」名下（不是真会话）
 const LOOPBACK = /^(127\.|localhost(:|$)|\[::1\])/i;
 
 // 用户访问 bridge 用的公开地址：反代 / Cloudflare Tunnel 带的 X-Forwarded-* 优先（Forwarded 标准头次之），
@@ -40,9 +43,16 @@ async function body(req, res) {
 }
 
 // 流程结局 → 推给这个身份的各设备；成功时把连接器新状态记进会话（面板据此刷新）
-function settled(key) {
+// 扩展页发起的（sessionId = 'ext:<连接器 id>'）不属于任何会话：新状态记进扩展页的状态缓存
+function settled(key, ctx = null) {
   return (v) => {
-    if (v.status === 'done' && Array.isArray(v.servers)) {
+    const extId = String(v.sessionId || '').startsWith(EXT_SID) ? v.sessionId.slice(EXT_SID.length) : '';
+    let conn = null;
+    if (extId) {
+      const got = Array.isArray(v.servers) ? v.servers.find((s) => s && s.name === v.server) : null;
+      if (got) { conn = { ...slimStatus(got), oauth: !!ctx && hasMcpTokens(ctx, v.server) }; noteConnectorStatus(key, extId, got, { oauth: conn.oauth }); }
+      else forgetConnectorStatus(key, extId);
+    } else if (v.status === 'done' && Array.isArray(v.servers)) {
       // 只改刚授权的这一个：临时进程的清单里没有会话自己的进程内工具（媒体、浏览器……），不能拿它整份替换
       const prev = (sessionMcp(key, v.sessionId) || {}).servers || [];
       const got = v.servers.find((s) => s && s.name === v.server);
@@ -51,7 +61,7 @@ function settled(key) {
       busPublish(key, { type: 'mcp', sessionId: v.sessionId, servers });
     }
     const { authUrl, servers, ...slim } = v;   // 授权链接不在总线上广播
-    busPublish(key, { type: 'mcp_auth', ...slim });
+    busPublish(key, { type: 'mcp_auth', ...slim, ...(conn ? { connector: conn } : {}) });
   };
 }
 
@@ -61,14 +71,16 @@ function page(res, code, ok, text, sub, lang) {
   const esc = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   res.writeHead(code, {
     'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
-    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'", 'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" + (ok ? "; script-src 'unsafe-inline'" : ''), 'X-Frame-Options': 'DENY',
   });
+  // 成功：这页多半是 bridge 用脚本开的标签，过一会儿自己关掉回到 bridge（关不掉——用户自己开的——就留着这句话）
+  const closer = ok ? '<script>setTimeout(function(){try{window.close()}catch(e){}},1500)</script>' : '';
   res.end(`<!doctype html><html lang="${zh ? 'zh-CN' : 'en'}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:#faf9f5;color:#141413}
 @media (prefers-color-scheme:dark){body{background:#262624;color:#faf9f5}p{color:#b0aea5!important}}
 main{max-width:360px;padding:32px 24px;text-align:center}.mk{width:44px;height:44px;margin:0 auto 16px;border-radius:50%;display:grid;place-items:center;font-size:22px;color:#fff;background:${ok ? '#5a8f5a' : '#c0583e'}}
 h1{font-size:19px;font-weight:600;margin:0 0 8px}p{margin:0;color:#5e5d59}</style></head>
-<body><main><div class="mk">${ok ? '&#10003;' : '!'}</div><h1>${esc(title)}</h1><p>${esc(text)}</p>${sub ? `<p style="margin-top:8px;font-size:13px">${esc(sub)}</p>` : ''}</main></body></html>`);
+<body><main><div class="mk">${ok ? '&#10003;' : '!'}</div><h1>${esc(title)}</h1><p>${esc(text)}</p>${sub ? `<p style="margin-top:8px;font-size:13px">${esc(sub)}</p>` : ''}</main>${closer}</body></html>`);
 }
 
 export function registerMcpOAuthRoutes(router, { identify }) {
@@ -76,13 +88,30 @@ export function registerMcpOAuthRoutes(router, { identify }) {
     const ctx = requireCtx(identify, req, res); if (!ctx) return;
     if (ctx.snap) { json(res, 403, { error: 'forbidden' }); return; }
     const b = await body(req, res); if (!b) return;
+    const origin = publicOriginOf(req);
+    // 扩展页「连接器」：按连接器 id 发起，不需要会话（刚添加、还没开过对话就能登录）。只挂这一个服务起短命 CLI
+    if (b.connector) {
+      if (ctx.kind !== 'admin') { json(res, 403, { error: '扩展管理仅对管理员开放' }); return; }
+      const c = connectorForAuth(b.connector);
+      if (!c) { json(res, 404, { error: '连接器不存在' }); return; }
+      if (c.config.type === 'stdio') { json(res, 400, { error: '本地连接器不需要授权' }); return; }
+      try {
+        const v = await startMcpAuth({
+          key: ctx.key, sid: EXT_SID + c.item.id, server: c.server, precheck: true,
+          redirectUri: origin ? origin + CALLBACK_PATH : '',
+          spawn: () => spawnAuthQuery(ctx, { only: { [c.server]: c.config } }),
+          onSettled: settled(ctx.key, ctx),
+        });
+        json(res, 200, v);
+      } catch (e) { json(res, e.status || 500, { error: String((e && e.message) || e) }); }
+      return;
+    }
     const sid = String(b.session || ''), server = String(b.server || '');
     if (!/^[0-9a-fA-F-]{8,80}$/.test(sid) || !server || server.length > 200) { json(res, 400, { error: 'bad request' }); return; }
     // 会话必须是这个身份的（定位得到即所有权证明）；短命进程用它所在的项目目录当 cwd（项目级 .mcp.json 才读得到）
     const p = claudeProjects.locateSessionPaths(ctx.claudeProjects, ctx, sid);
     if (!p) { json(res, 404, { error: 'not found' }); return; }
     const cwd = (p.project && p.project.path) || ctx.cwd;
-    const origin = publicOriginOf(req);
     try {
       const v = await startMcpAuth({
         key: ctx.key, sid, server,
@@ -128,6 +157,33 @@ export function registerMcpOAuthRoutes(router, { identify }) {
     json(res, 200, flowView(f));
   });
 
+  // 扩展页「连接器」的状态与工具清单：GET /api/mcp-oauth/connectors[?refresh=1] → { statuses: { [id]: { status, tools[], ... } } }
+  router.on('GET', '/api/mcp-oauth/connectors', async (req, res, url) => {
+    const ctx = requireCtx(identify, req, res); if (!ctx) return;
+    if (ctx.kind !== 'admin') { json(res, 403, { error: '扩展管理仅对管理员开放' }); return; }
+    try {
+      const statuses = await probeConnectors(ctx, remoteConnectorsForProbe(), { force: url.searchParams.get('refresh') === '1' });
+      json(res, 200, { statuses });
+    } catch (e) { json(res, 500, { error: String((e && e.message) || e) }); }
+  });
+
+  // 断开连接：删掉这个身份存的令牌，活着的会话 CLI 重连（随即变回「需要登录」）
+  router.on('POST', '/api/mcp-oauth/disconnect', async (req, res) => {
+    const ctx = requireCtx(identify, req, res); if (!ctx) return;
+    if (ctx.kind !== 'admin') { json(res, 403, { error: '扩展管理仅对管理员开放' }); return; }
+    const b = await body(req, res); if (!b) return;
+    const c = connectorForAuth(b.connector);
+    if (!c) { json(res, 404, { error: '连接器不存在' }); return; }
+    let n;
+    try { n = clearMcpTokens(ctx, c.server); }
+    catch (e) { json(res, 500, { error: '清除登录信息失败：' + String((e && e.message) || e) }); return; }
+    forgetConnectorStatus(ctx.key, c.item.id);
+    reconnectLive(ctx.key, c.server).catch(() => {});
+    let statuses = {};
+    try { statuses = await probeConnectors(ctx, remoteConnectorsForProbe().filter((x) => x.id === c.item.id), { force: true }); } catch {}
+    json(res, 200, { cleared: n, status: statuses[c.item.id] || { status: 'unknown' } });
+  });
+
   // 授权服务器把浏览器跳回来：不看登录态（系统浏览器里没有），只认进行中流程的 state，一次性
   router.on('GET', CALLBACK_PATH, async (req, res, url) => {
     const lang = /^zh/i.test(String(req.headers['accept-language'] || 'zh')) ? 'zh' : 'en';
@@ -140,6 +196,6 @@ export function registerMcpOAuthRoutes(router, { identify }) {
     const r = await submitMcpCallback(f, (f.redirectUri || 'http://localhost' + CALLBACK_PATH) + qs);   // 原样交回（基址 = 当初登记的回调地址）
     if (denied) { page(res, 200, false, zh ? '你在授权页拒绝了授权。' : 'Authorization was declined.', String(url.searchParams.get('error_description') || denied).slice(0, 200), lang); return; }
     if (!r.ok) { page(res, 200, false, r.error, zh ? '回到 bridge 重新点「授权」。' : 'Go back to bridge and click Authorize again.', lang); return; }
-    page(res, 200, true, zh ? `${f.server} 已连接，可以关掉这页了。` : `${f.server} is connected. You can close this page.`, '', lang);
+    page(res, 200, true, zh ? `${f.server} 已连接，回到 bridge 就能用了。` : `${f.server} is connected. Head back to bridge.`, zh ? '可以关掉这一页了。' : 'You can close this page.', lang);
   });
 }

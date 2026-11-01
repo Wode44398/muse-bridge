@@ -18,10 +18,17 @@ export const serverOnThisMachine = () => {
   try { return (localCache = Boolean(D.connection.isLocal())); } catch { return true; }
 };
 export const hasNativeWorkspace = () => Boolean(D?.workspace?.list) && serverOnThisMachine();
+// 「这台电脑」：连的是远端服务端时，壳的原生位置照样能列、能读、能预览（本地协议直读，不经服务器），
+// 只是服务端不认识它们——工作空间的「本地」分页与侧栏「这台电脑」位置组靠它，同手机 App 的本地 SAF。
+// 服务端就在这台电脑上时恒 false：那时原生位置本身就是工作空间。
+export const hasPcLocalFs = () => Boolean(D?.workspace?.list && D?.workspace?.locations && D?.workspace?.fileUrl) && !serverOnThisMachine();
+// 某个原生位置服务端认不认识：只有「服务端在本机 + primary（＝服务端 vaultPath）」认识；额外授权的位置、
+// 以及连远端时的全部位置（这台电脑自己的盘）服务端都不认识——缩略图/转码/转 PDF/站点挂载/双链都没有，只能本地协议读原字节。
+export const nativeLocLocalOnly = (locationId) => Boolean(locationId) && (locationId !== 'primary' || !serverOnThisMachine());
 
 // opts.fresh：用户主动刷新（F5 / 右键「刷新」）时跳过主进程的列表缓存；老壳不认第三个参数，照常走缓存
 export async function nativeWorkspaceList(rel = '', locationId = 'primary', opts = null) {
-  if (!hasNativeWorkspace()) throw new Error('native workspace unavailable');
+  if (!D?.workspace?.list) throw new Error('native workspace unavailable');
   return opts?.fresh ? D.workspace.list(rel, locationId, { fresh: true }) : D.workspace.list(rel, locationId);
 }
 // 离开某个位置（换位置 / 关掉文件面板）：主进程给它挂的目录监听排到最先淘汰（不当场关，别的视图还在看也无妨）。
@@ -31,8 +38,9 @@ export function nativeWorkspaceRelease(locationId) {
   try { Promise.resolve(D.workspace.release(locationId)).catch(() => {}); } catch { /* 老壳半残 */ }
 }
 
+// 调用方（cloudFileUrl）自己判断该不该走本地：服务端在本机时任何位置都行，连远端时只给「这台电脑」的位置（nativeLocLocalOnly）。
 export function nativeWorkspaceFileUrl(rel = '', locationId = 'primary') {
-  return D?.workspace?.fileUrl && serverOnThisMachine() ? D.workspace.fileUrl(rel, locationId) : '';
+  return D?.workspace?.fileUrl ? D.workspace.fileUrl(rel, locationId) : '';
 }
 
 export function onNativeWorkspaceChanged(fn) {
@@ -83,6 +91,9 @@ export const hasNativeWorkspaceRecent = () => Boolean(D?.workspace?.recent);
 export const nativeWorkspaceRecent = (locationId = 'primary', limit = 50) => D.workspace.recent(locationId, limit);
 // 连远端服务端时回空串：本机路径对服务器没意义，调用方（输入框附件）据此改走上传。
 export const nativePathForFile = (file) => { if (!serverOnThisMachine()) return ''; try { return D?.workspace?.pathForFile?.(file) || ''; } catch { return ''; } };
+// 「这台电脑」位置收 OS 拖入：拖进来的是本机文件、导进本机位置，服务端不参与——所以不看服务端在哪。
+export const hasPcDropImport = () => Boolean(D?.workspace?.importPaths && D?.workspace?.pathForFile);
+export const pcPathForFile = (file) => { try { return D?.workspace?.pathForFile?.(file) || ''; } catch { return ''; } };
 // 文件夹递归大小（主进程后台统计、逐个推回）与系统剪贴板里的文件（CF_HDROP）。老壳没有 → 恒 false，
 // 大小列保持「—」、复制粘贴只在面板内部生效（原行为）。
 export const hasNativeDirSizes = () => Boolean(D?.workspace?.dirSizes && D?.workspace?.onDirSize);

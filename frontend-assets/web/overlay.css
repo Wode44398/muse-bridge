@@ -1,0 +1,25 @@
+/* 维护者私有 overlay：把 claude-bridge 公开版的开源字体换回原版字体。
+   claude-bridge 的 src/runtime/overlay-web.mjs 在每个 HTML 壳的 </head> 前插 <link> 引用本文件（离线 apk 由前端
+   lib/overlay.svelte.js 跨源挂上），所以首屏就是原版字体。url() 相对本文件解析（/app/_ov/…）。
+   公开版只认三个变量 --font-brand-sans / --font-brand-serif / --icons（app.css）和 Vertex 页的 --gm-font-*；
+   用 :root:root 压过 app.css 的 :root（不论样式表先后）。本文件永不进公开仓。 */
+
+@font-face{font-family:"Anthropic Sans";src:url(fonts/anthropic-sans.woff2) format("woff2");font-weight:300 800;font-style:normal;font-display:swap}
+@font-face{font-family:"Anthropic Serif";src:url(fonts/anthropic-serif.woff2) format("woff2");font-weight:300 800;font-style:normal;font-display:swap}
+@font-face{font-family:"Anthropicons-Variable";src:url(fonts/anthropicons.woff2) format("woff2");font-weight:400 700;font-display:block}
+
+/* Vertex（Gemini）分页 */
+@font-face { font-family: "Google Sans Flex"; font-style: oblique 0deg 10deg; font-weight: 280 540; font-stretch: 92% 100%; font-display: swap; src: url(fonts/gemini/google-sans-flex.woff2) format('woff2'); }
+@font-face { font-family: "Google Sans"; font-style: normal; font-weight: 400; font-display: swap; src: url(fonts/gemini/google-sans.woff2) format('woff2'); }
+@font-face { font-family: "Luminous Symbols"; font-style: normal; font-weight: 100 700; font-display: block; src: url(fonts/gemini/luminous-symbols.woff2) format('woff2'); }
+@font-face { font-family: "Google Symbols"; font-style: normal; font-weight: 100 700; font-display: block; src: url(fonts/gemini/google-symbols.woff2) format('woff2'); }
+
+:root:root {
+  --font-brand-sans: "Anthropic Sans";
+  --font-brand-serif: "Anthropic Serif";
+  --icons: "Anthropicons-Variable";
+  --gm-font-brand: "Google Sans Flex", "Google Sans";
+  --gm-font-sans: "Google Sans";
+  --gm-font-symbols: "Luminous Symbols";
+  --gm-font-gsym: "Google Symbols";
+}

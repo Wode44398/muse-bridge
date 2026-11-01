@@ -61,11 +61,12 @@ import { familyLink, familyTurnStart, familyTurnEnded, rememberReplay, familyPee
 // 与官方 Claude Desktop / 终端会话互发（CLI 自带跨会话通道；只给主机管理员）：env 开关、入站闸、停放 CLI 接住对方消息开的轮
 import { peersOn, peerEngineEnv, peerInbound, waitPeerRecord, peerDisplay, notePeerHold, dropPeerGate, registerPeerGate, unregisterPeerGate } from '../runtime/session-peers.mjs';
 // 对话内嵌交互图表（官方 visualize：read_me + show_widget）：MCP、提示、直播增量帧都在这个模块里
-import { makeVisualizeMcp, vizOnFor, vizPlatform, vizNudge, makeWidgetStream, VIZ_ALLOWED_TOOLS } from '../mcp/visualize.mjs';
+import { makeVisualizeMcp, vizOnFor, vizPlatform, makeWidgetStream, VIZ_ALLOWED_TOOLS } from '../mcp/visualize.mjs';
 import { playbookSummary, playbookForMention } from '../runtime/phone-playbook.mjs';
 import { isControlOnline } from '../runtime/phone-control.mjs';
 import { devicesEnabled, ownDevices } from '../runtime/devices.mjs';
 import { deviceById } from '../runtime/device-registry.mjs';
+import { recordMessageOrigin, describeOrigin } from '../runtime/client-origins.mjs';
 import { parseDeviceRef, isDeviceRef, deviceRefNote } from '../runtime/device-refs.mjs';
 import { claudeExtensionsFor, sharedExtensionDirs, SHARED_ROOT } from '../extensions.mjs';
 import { memberClaudePlugins, memberSkillRootIfAny } from '../member-skills.mjs';
@@ -728,7 +729,7 @@ function evictWarm(keep) {
   }
 }
 
-export async function runClaudeChat(req, res, { message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, autoRetry, limitReplay, limitResume, restartResume = 0, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy }) {
+export async function runClaudeChat(req, res, { message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, origin, autoRetry, limitReplay, limitResume, restartResume = 0, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy }) {
   ctx = ctx || { kind: 'admin', sandbox: false, cwd: VAULT, configDir: null, key: 'admin' };
   const snap = ctx.snap || null;   // 聊天快照轮：专属 MCP/提示词/更紧的工具面
   // 新会话预热（见 SPARE_MS）：没有消息、没有 SSE 接收方，建好 query 停在第一轮之前等人接管。
@@ -866,9 +867,10 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   const prOn = pluginOn('pr') && !snap && prCapable(ctx);
   // 反提示：全局开关开着但本轮没注入时，明确告诉 Claude「这轮没有」——旧会话 transcript
   // 里可能有成功的 mcp__phone__* 调用记录，不说清它会照着历史声称/重试这些不存在的工具。
+  // 只讲工具有没有、怎样才有，不报「这条消息从哪个客户端发来」——发送端由 devices 工具现查（runtime/client-origins.mjs）。
   const noPhoneNudge = (!snap && ((phoneFsAvail && !phoneFsOn) || (phoneCtlAvail && !phoneControlOn)))
-    ? '\n\n[本轮客户端=电脑网页端] 这轮对话不是从手机 App 发起的：'
-      + (phoneFsAvail && !phoneFsOn ? '「手机文件」工具（mcp__phone__*）本轮未注入，无法查看/读写/拉取用户手机上的文件；' : '')
+    ? '\n\n[手机工具] '
+      + (phoneFsAvail && !phoneFsOn ? '「手机文件」工具（mcp__phone__*）本轮未注入（只有从手机 App 发消息时才有），无法查看/读写/拉取用户手机上的文件；' : '')
       + (phoneCtlAvail && !phoneControlOn ? '「手机操控」工具（mcp__phoneControl__*）本轮未注入（手机端操控服务当前不在线）；' : '')
       + '即使早前的对话历史里用过这些工具，本轮也没有——不要声称能操作用户的手机。用户需要手机侧操作时，请他改在手机 App 里发起对话' + (phoneCtlAvail && !phoneControlOn ? '（手机操控还需手机 App 设置里开启「手机操控」服务）' : '') + '。'
     : '';
@@ -898,7 +900,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 插件给 Claude 的工具与提示段（plugins/claude-tools.mjs）：工具合成各插件自己的 MCP server，提示段排在内置提示之后、
   // 子 agent 调度说明之前；sig 进下面的停放签名。getGen 在下文才定义——工具被调用时它早已就绪。
   const plug = pluginClaudeTurn({ kind: 'chat', ctx, snap, getGen: () => getGen(), fromPhone: fromPhone === true, narrow: narrow === true, source, message, sessionId: ownSid });
-  const appendText = (custom ? customIdentityNudge(custom) : identityNudge(model)) + (STYLE_NUDGE[style] || (styleText ? '\n\n[回复风格 · 自定义] ' + styleText : '')) + (snap ? SNAP_NUDGE : ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) + mediaNudge(ctx)) : (hostNudge(ctx) + mediaNudge(ctx) + HOST_TOOLS_NUDGE + (phoneFsOn ? HOST_PHONE_PULL_NUDGE : ''))) + (browserOn ? (snap ? BROWSER_SNAP_NUDGE : BROWSER_NUDGE) : '') + (chromeOn ? chromeNudge(chromeSplit ? CHROME_MCP_NAME : 'claude-in-chrome') : '') + (termOn ? TERMINAL_NUDGE : '') + (wsToolsOn ? WORKSPACE_NUDGE : '') + (bridgeOn ? BRIDGE_NUDGE : '') + (deviceOn ? deviceNudge() : '') + deliverNudge(!snap && !!mediaNudge(ctx)) + (phoneFsOn ? PHONE_NUDGE : '') + (phoneControlOn ? PHONE_CONTROL_NUDGE + playbookSummary() + playbookForMention(message) : '') + noPhoneNudge + (research ? RESEARCH_NUDGE : '') + (sessionsOn ? sessionsNudge(ctx, { peers: peersOn(ctx, snap) }) + childNudge(familyLink(ctx, ownSid), sessionPolicy(ctx)) : '') + (prOn ? prNudge(ctx, ownSid) : '') + vizNudge(vizOn, { phone: fromPhone === true, narrow: narrow === true }) + plug.prompt + dispatchText;
+  const appendText = (custom ? customIdentityNudge(custom) : identityNudge(model)) + (STYLE_NUDGE[style] || (styleText ? '\n\n[回复风格 · 自定义] ' + styleText : '')) + (snap ? SNAP_NUDGE : ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) + mediaNudge(ctx)) : (hostNudge(ctx) + mediaNudge(ctx) + HOST_TOOLS_NUDGE + (phoneFsOn ? HOST_PHONE_PULL_NUDGE : ''))) + (browserOn ? (snap ? BROWSER_SNAP_NUDGE : BROWSER_NUDGE) : '') + (chromeOn ? chromeNudge(chromeSplit ? CHROME_MCP_NAME : 'claude-in-chrome') : '') + (termOn ? TERMINAL_NUDGE : '') + (wsToolsOn ? WORKSPACE_NUDGE : '') + (bridgeOn ? BRIDGE_NUDGE : '') + (deviceOn ? deviceNudge() : '') + deliverNudge(!snap && !!mediaNudge(ctx)) + (phoneFsOn ? PHONE_NUDGE : '') + (phoneControlOn ? PHONE_CONTROL_NUDGE + playbookSummary() + playbookForMention(message) : '') + noPhoneNudge + (research ? RESEARCH_NUDGE : '') + (sessionsOn ? sessionsNudge(ctx, { peers: peersOn(ctx, snap) }) + childNudge(familyLink(ctx, ownSid), sessionPolicy(ctx)) : '') + (prOn ? prNudge(ctx, ownSid) : '') + plug.prompt + dispatchText;
   // 号池智能路由（可选，默认关）：激活号已知用尽就先换号再开跑——必须在取 token / 算 warmSig 之前，
   // 换了号 token 变了，停放的旧 CLI 自然判 options changed 冷起。
   // 预热不换号：真消息来时若要换号，token 变了 warmSig 自然不一致、关掉冷起。
@@ -996,7 +998,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   if (!sessionId && !isSpare && !snap && !family) {
     const sp = spareRuns.get(ctx.key);
     if (sp) {
-      if (sp.sig === warmSig && await sp.take({ res, message, attachments, source, chatPrefs, permMode: turnPerm.mode, limitReplay })) { handedTurn(req, sessionId, 'spare'); return; }
+      if (sp.sig === warmSig && await sp.take({ res, message, attachments, source, chatPrefs, origin, permMode: turnPerm.mode, limitReplay })) { handedTurn(req, sessionId, 'spare'); return; }
       console.log(`[claude] spare CLI not used (${sp.sig !== warmSig ? 'options changed: ' + sigDiff(sp.digest) : 'gone'}) — cold start`);
       sp.close();
     }
@@ -1014,7 +1016,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       const why = w.sig !== warmSig ? 'options changed: ' + sigDiff(w.digest)
         : pendingRewindAnchor(sessionId) ? 'rewind pending'
           : (sp && warmStat(sp.file) !== w.stat()) ? 'transcript changed by someone else' : '';
-      if (!why && await w.take({ res, message, attachments, source, chatPrefs, family, permMode: turnPerm.mode, limitReplay, auto: !!limitResume })) { handedTurn(req, sessionId, 'warm'); return; }
+      if (!why && await w.take({ res, message, attachments, source, chatPrefs, origin, family, permMode: turnPerm.mode, limitReplay, auto: !!limitResume })) { handedTurn(req, sessionId, 'warm'); return; }
       console.log(`[claude] warm CLI ${sessionId.slice(0, 8)} not reused (${why || 'gone'}) — cold start`);
       await closeWarm(w);
     }
@@ -1027,7 +1029,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 活着的 CLI 开新一轮，后台任务照跑、完成时照常续轮汇报。以前这里一律顶掉上一轮，
   // 顶掉 = abort = CLI 连同后台任务一起被杀（维护者报：想接着聊只能先点停止，一停任务就没了）。
   if (prev && !prev.done && typeof prev.handoff === 'function') {
-    const took = await prev.handoff({ res, message, attachments, source, model, chatPrefs, family, permMode: turnPerm.mode, permPolicy, limitReplay, auto: !!limitResume });
+    const took = await prev.handoff({ res, message, attachments, source, model, chatPrefs, origin, family, permMode: turnPerm.mode, permPolicy, limitReplay, auto: !!limitResume });
     if (took === 'policy' || took === 'mode' || took === 'model' || took === 'busy') {
       genWrite(res, { type: 'error', kind: 'busy', title: '会话正在后台工作', message: took === 'policy'
         ? '这个会话在等后台任务做完。这条消息和它不是同一种发起方式（管理台代聊 / 本人发话），没有插进去，也没有打断它。等它做完再发，或先到该会话点「停止」。'
@@ -1156,6 +1158,19 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     try { recordChatPrefs(ctx, gen.sessionId, chatPrefs); } catch {}
   };
   recordPrefs();
+  // 这条消息从哪台客户端发来（runtime/client-origins.mjs）：不写进提示词——停放的 CLI 跨轮、跨设备复用，
+  // 写死就会过时；agent 要在用户本地做事时经 devices 工具现查。接力 / 预热接管 / 插话各自换成那条消息的。
+  // 新会话同 recordPrefs：等 init 拿到 id 再记。
+  let turnOrigin = origin || null;
+  let turnText = message;
+  let originRecorded = false;
+  const recordOrigin = () => {
+    if (originRecorded || !turnOrigin || !gen.sessionId) return;
+    originRecorded = true;
+    try { recordMessageOrigin(ctx, gen.sessionId, turnOrigin, turnText); } catch {}
+  };
+  const setTurnOrigin = (o, text) => { turnOrigin = o || null; turnText = text; originRecorded = false; recordOrigin(); };
+  recordOrigin();
   // Deliberately NOT aborting on client disconnect: the generation keeps running
   // and buffering so a refreshed page can reattach via /api/attach.
   const send = (obj) => { if (!userStopped) genEmit(gen, obj); };
@@ -1565,8 +1580,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           ...(phoneFsOn ? { phone: makePhoneMcp({ genKey: ctx.key, getGen }) } : {}),
           // 手机操控（PHONE_CONTROL 开关，默认关）：命令经独立长轮询下发到本 caller 的手机
           // 前台服务（不搭 SSE 流）。注入条件见上 phoneControlOn；手机离线时工具自身回「未连接」。
-          // originDevice＝发起这轮的那台手机：同账号多台手机开着操控时，不指定就默认操作它。
-          ...(phoneControlOn ? { phoneControl: makePhoneControlMcp({ genKey: ctx.key, getGen, originDevice }) } : {}),
+          // 默认操作「这条消息发自」的那台手机（同账号多台开着操控时）：每次调用现取，接力 / 插话换了手机也跟着换。
+          ...(phoneControlOn ? { phoneControl: makePhoneControlMcp({ genKey: ctx.key, getGen, originDevice: () => (turnOrigin && turnOrigin.kind === 'phone' && turnOrigin.id) || undefined }) } : {}),
           // 浏览器手眼（右侧工作台同款实例）：按工作空间隔离的 headless CDP 浏览器。
           // upload 的取文件范围：沙箱身份只准其私有目录/媒体目录/文件根；admin 不限（本就有全盘 shell）。
           // 浏览器与终端的池子按（属主, 工作空间）键控（principal.poolRef，开源路线 C6），与右侧面板同一把键。
@@ -1588,6 +1603,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
             getLink: () => { const sid = getGen()?.sessionId || ownSid; return (sid && deviceLinkFor(ctx, sid)) || turnLink; },
             setLink: (v) => { const sid = getGen()?.sessionId || ownSid; if (sid) setDeviceLink(ctx, sid, v); },
             getSession: () => getGen()?.sessionId || ownSid || '',
+            getOrigin: () => turnOrigin,
           }) } : {}),
           // 主机管理员的 Edge（拆分模式，见 chromeSplitServer）。
           ...(chromeSplit ? { [CHROME_MCP_NAME]: chromeSplit } : {}),
@@ -1792,7 +1808,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     //（done + 附件卡、台账结清），新消息推进同一个 CLI 的输入流开新一轮；gen 换新，后台任务、
     // 权限通道、封顶计时都原样延续。返回 false = 不接（这一轮并没在挂起），调用方照旧顶掉重开。
     let handoffSwitching = false;
-    const handoff = async ({ res: nres, message: nmsg, attachments: natts, source: nsrc, model: nmodel, chatPrefs: nprefs, family: nfam, permMode: nmode, permPolicy: npolicy, limitReplay: nreplay, auto: nauto }) => {
+    const handoff = async ({ res: nres, message: nmsg, attachments: natts, source: nsrc, model: nmodel, chatPrefs: nprefs, origin: norigin, family: nfam, permMode: nmode, permPolicy: npolicy, limitReplay: nreplay, auto: nauto }) => {
       if (!heldResult || doneEmitted || bgFinalized || turnClosed || abort.signal.aborted) return false;
       // 权限策略不同不接（管理台代聊 = 宿主放行 / 用户自己发 = 弹卡）：停放复用靠 warmSig 分开，接力不过签名，要在这里拦。
       // 混用的后果：用户的这一轮全程宿主放行；或代聊把用户的会话模式改成 default、弹出控制台看不到的卡。
@@ -1834,6 +1850,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         try { abort.abort(); } catch {}
         return true;
       }
+      setTurnOrigin(norigin, nmsg);
       if (billTo) { try { noteTurnStart(billTo); } catch {} }
       genSubscribe(gen, nres);
       armGen(gen);
@@ -1873,7 +1890,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     // CLI 做完手头这一步就读到，不打断、不另起一轮。界面上它是这一轮回答流里的一个插话气泡（steer 事件，
     // 进可重放缓冲，别的设备 attach 也看得见）；CLI 读到 / 这轮答完时发 steer_state。
     // 返回 uuid；返回 null = 现在插不进（这一轮已定局 / 挂起等后台任务 / 进程在收尾），调用方按普通发送处理。
-    const steer = ({ message: smsg, attachments: satts }) => {
+    const steer = ({ message: smsg, attachments: satts, origin: sorigin }) => {
       if (heldResult || doneEmitted || bgFinalized || turnClosed || userStopped || abort.signal.aborted) return null;
       const uuid = randomUUID();
       const next = composeTurnPrompt(smsg, satts || []);
@@ -1881,6 +1898,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       awaitingUser.add(uuid);
       steerUuids.add(uuid);
       lastMsgAt = Date.now();
+      if (sorigin) setTurnOrigin(sorigin, smsg);   // 插话也是一条用户消息：「这条消息发自」换成它的
       send({ type: 'steer', uuid, text: smsg, files: (satts || []).map((p) => path.basename(p)), at: Date.now() });
       console.log(`[claude] steer — message fed into the running turn at priority next (${uuid.slice(0, 8)})`);
       return uuid;
@@ -1963,7 +1981,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     // 返回 'taken' = 接走了；'busy' = 并发上限把它挡下（错误帧已回给这条 POST，CLI 原样留着停放）；false = 接不了。
     // adopt = { uuid }：不是推一条新消息，而是接住 CLI 自己已经开起来的那一轮（跨会话消息，见 parkWarm）——
     // 没有发起请求（nres 为空，别的设备经总线 run.start 挂上直播），也不往输入流推东西。
-    const warmTake = ({ res: nres, message: nmsg, attachments: natts, source: nsrc, chatPrefs: nprefs, family: nfam, permMode: nmode, limitReplay: nreplay, auto: nauto, adopt }) => {
+    const warmTake = ({ res: nres, message: nmsg, attachments: natts, source: nsrc, chatPrefs: nprefs, origin: norigin, family: nfam, permMode: nmode, limitReplay: nreplay, auto: nauto, adopt }) => {
       if (!turnClosed || userStopped || abort.signal.aborted || iterDone) return false;
       const g = newGen(nmsg, nsrc, gen.sessionId);
       g.family = nfam || null;
@@ -1991,6 +2009,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       gen = g;
       // 预热进程被新会话接管：会话 id 要等 init 帧才有，选择器记忆改用这条请求的、届时由 recordPrefs 落上。
       if (!gen.sessionId && nprefs) { chatPrefs = nprefs; prefsRecorded = false; }
+      // 跨会话消息（source:'peer'）没有请求可认：发送端按会话间消息记
+      setTurnOrigin(norigin || (nfam && nfam.origin ? describeOrigin({ family: nfam }) : null), nmsg);
       if (billTo) { try { noteTurnStart(billTo); } catch {} }
       if (nres) genSubscribe(gen, nres);
       armGen(gen);
@@ -2354,6 +2374,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         gen.sessionId = msg.session_id;
         announceStart();   // 新会话/分叉后 id 才定下来——总线补播，别的设备这才认得出该挂哪一轮
         recordPrefs();     // 新会话此刻才有 id——把本轮选择器记忆落上
+        recordOrigin();    // 同上：这条消息的发送端
         markBridgeSession(msg.session_id); // this conversation was started from the phone
         // 对话回滚锚点已随本轮 resumeSessionAt 消费（分支从此落进 transcript）——清账。
         if (sessionId) clearPendingRewind(sessionId);

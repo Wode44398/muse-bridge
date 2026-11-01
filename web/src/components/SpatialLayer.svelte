@@ -30,7 +30,7 @@
   let cover = [1, 1];
   let target = { x: 0, y: 0 }, cur = { x: 0, y: 0 };
   let usingGyro = false, neutral = null;
-  let raf = 0, last = 0, pageVisible = true, visible = true, dirty = true, lastSig = '';
+  let raf = 0, last = 0, pageVisible = true, visible = true, dirty = true, lastSig = '', resizePending = false;
   let curAmp = MAXAMP * 0.55, loadedImg = null, loadedDepth = null;   // 初值占位；真值由下方 $effect 按 amp 响应更新
 
   const VERT = `attribute vec2 aPos; varying vec2 vUv;
@@ -124,6 +124,10 @@
   }
   function resize(){
     if (!gl) return;
+    // 主页被盖住（display:none）时量出来是 0、按 innerWidth 兜底重建缓冲再同步补画（还会叫玻璃们各拷一遍）——
+    // 在分页里每弹一次键盘就白做一轮。看不见先记下，露面时再做。
+    if (!visible) { resizePending = true; return; }
+    resizePending = false;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     // buffer 按【元素实测尺寸】（CSS 是 100vw × 100dvh）——用 innerHeight 在 Android 带
     // 系统栏时会偏小、画布被拉伸，与同屏的 <img object-fit:cover> 差出约 10% 的构图。
@@ -209,7 +213,10 @@
     document.addEventListener('visibilitychange', onVis);
     // Home 切到 Claude/Vertex 等页时是 display:none（不卸载）——用 IntersectionObserver 侦测
     // 不可见即暂停循环，可见再恢复（与 RefractionLayer 同策略），避免后台空烧 GPU/耗电。
-    const io = new IntersectionObserver((es) => { visible = es[0] ? es[0].isIntersecting : true; });
+    const io = new IntersectionObserver((es) => {
+      visible = es.length ? es[es.length - 1].isIntersecting : true;
+      if (visible && resizePending) resize();
+    });
     io.observe(canvas);
     initOrientation();
     last = performance.now();

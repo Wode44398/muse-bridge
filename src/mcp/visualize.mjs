@@ -63,17 +63,8 @@ export function vizPlatform({ phone, narrow } = {}) {
   return phone === true || narrow === true ? 'mobile' : 'desktop';
 }
 
-/**
- * 手机 / 窄屏发起的轮补一句平台提示（官方：系统提示说明是手机时 read_me 传 mobile）。宽屏网页 / 桌面不加。
- * 第二个参数旧写法是布尔 fromPhone，仍认。
- */
-export function vizNudge(on, opts = {}) {
-  const { phone, narrow } = typeof opts === 'boolean' ? { phone: opts } : (opts || {});
-  if (!on) return '';
-  if (phone === true) return '\n\n【内嵌图表】本轮客户端是手机 App（对话栏约 380px 宽，图表只显示静态预览、不运行脚本）：调 mcp__visualize__read_me 时传 platform:"mobile"，图表用纯 SVG / HTML+CSS 画完整。';
-  if (narrow === true) return '\n\n【内嵌图表】本轮客户端是窄屏（手机浏览器，对话栏约 380px 宽）：调 mcp__visualize__read_me 时传 platform:"mobile"。';
-  return '';
-}
+// 以前手机 / 窄屏发起的轮会在提示词里补一句「本轮客户端是手机」（vizNudge）。现在发送端不写进提示词
+// （runtime/client-origins.mjs）：read_me 不传 platform 时按发起端自动选，手机版指南里写明了不跑脚本。
 
 // 两个工具的处理函数（纯函数，单测直接调）。
 export function readMeResult(args, platform = 'desktop') {
@@ -96,7 +87,7 @@ export const makeVisualizeMcp = ({ platform = 'desktop' } = {}) => createSdkMcpS
   tools: [
     tool('read_me', READ_DESC, {
       modules: z.array(z.enum(MODULES)).optional().describe('Which guide modules to load. Pick every one that fits.'),
-      platform: z.enum(PLATFORMS).optional().describe('Where the visual will be shown: "mobile" when your system prompt says the client is the phone app (≈380px wide, SVG viewBox and layout sized for it), otherwise "desktop". Omit or "unknown" to let the app decide.'),
+      platform: z.enum(PLATFORMS).optional().describe('Where the visual will be shown. Leave it out (or "unknown"): the app already knows which device the user is on and returns the matching guide ("mobile" = phone, ≈380px wide). Pass a value only to deliberately draw for the other layout.'),
     }, async (args) => readMeResult(args, platform), { annotations: { readOnlyHint: true } }),
     tool('show_widget', SHOW_DESC, {
       loading_messages: z.array(z.string()).min(1).max(4).describe(LOADING_DESC),

@@ -173,3 +173,37 @@ test('publicOriginOf：反代头优先，回环退到配置的公网地址', () 
   assert.equal(publicOriginOf(req({ host: 'localhost:8787' }), ''), 'http://localhost:8787');
   assert.equal(publicOriginOf(req({ host: '192.168.1.5:8787' }), 'https://pub.example'), 'http://192.168.1.5:8787');
 });
+
+test('precheck（扩展页刚添加）：不需要登录的直接算连上，不去要授权地址', async () => {
+  const q = fakeQ({ auth: custom });
+  q.setStatus('connected');
+  let released = 0;
+  const v = await startMcpAuth({ key: 'admin', sid: 'ext:c1', server: 'figma', precheck: true, spawn: async () => ({ q, release: () => { released++; } }) });
+  assert.equal(v.status, 'done');
+  assert.ok(!q.calls.some((c) => c[0] === 'auth'));
+  assert.equal(released, 1);
+});
+
+test('precheck：连不上如实报错；需要登录才发起授权', async () => {
+  const bad = fakeQ({ auth: custom });
+  bad.mcpServerStatus = async () => [{ name: 'figma', status: 'failed', error: 'HTTP 404' }];
+  const v = await startMcpAuth({ key: 'admin', sid: 'ext:c1', server: 'figma', precheck: true, spawn: async () => ({ q: bad, release() {} }) });
+  assert.equal(v.status, 'error');
+  assert.match(v.error, /404/);
+  const q = fakeQ({ auth: custom });
+  const w = await startMcpAuth({ key: 'admin', sid: 'ext:c2', server: 'figma', precheck: true, spawn: async () => ({ q, release() {} }) });
+  assert.equal(w.status, 'waiting');
+  assert.ok(q.calls.some((c) => c[0] === 'auth'));
+});
+
+test('授权完成：这个身份活着的其它会话 CLI 都重连，别的身份不碰', async () => {
+  const a = fakeQ(), b = fakeQ(), other = fakeQ();
+  noteLiveQuery('admin', 'sess-aaaa1111', a);
+  noteLiveQuery('admin', 'sess-bbbb2222', b);
+  noteLiveQuery('user:bob', 'sess-cccc3333', other);
+  const q = fakeQ({ auth: { requiresUserAction: false } });
+  await startMcpAuth({ key: 'admin', sid: 'ext:c1', server: 'figma', spawn: async () => ({ q, release() {} }) });
+  assert.ok(a.calls.some((c) => c[0] === 'reconnect'));
+  assert.ok(b.calls.some((c) => c[0] === 'reconnect'));
+  assert.ok(!other.calls.some((c) => c[0] === 'reconnect'));
+});

@@ -10,6 +10,7 @@
   // 两个范围（标题旁的分段）：「我自用」= 只进管理员自己的会话；「全服统一」= 给服务器上所有成员加装（成员的 Claude
   // 会话与定时任务都加载，管理员自己也用得上）。列表、上传、市场「已添加」、包级批量都按当前范围走（?scope= / body.scope）。
   import './cz.css';
+  import { untrack } from 'svelte';
   import { ui, me, agentOn } from '../../lib/state.svelte.js';
   import { extensionsNav } from '../../lib/extensionsNav.svelte.js';
   import { pushBackLayer } from '../../lib/nav.js';
@@ -20,6 +21,8 @@
   import { t, tc, tr, locale, isEn } from '../../lib/i18n.js';
   import { ic, HERO_ART } from './icons.js';
   import PluginsPanel from './PluginsPanel.svelte';   // 功能扩展 = bridge 的插件（内含 Agent 区的 ModulesPanel）
+  import ConnDetail from './ConnDetail.svelte';       // 连接器详情 = 官方同款控制面板（连接 / 断开 / 工具权限）
+  import { mcpAuth, authFlow, connSid, reserveAuthWindow, startConnectorAuth, submitAuthUrl, confirmAuth, cancelAuth, openAuthPage } from '../../lib/mcpAuth.svelte.js';
 
   // title：自己画大标题（桌面 / 单 agent 设置）；手机设置页自带 iOS 大标题，传 false
   let { title = true } = $props();
@@ -204,6 +207,9 @@
   let busy = $state({});   // key → true
   async function install(kind, e) {
     if (!e || busy[e.key] || isInstalled(kind, e)) return;
+    // 远程连接器（不用填凭据的）：添加完直接去它的登录授权页——授权地址要等服务端几秒，先在这一下点击里占个标签
+    const authNow = !member && kind === 'connector' && e.transport && e.transport !== 'stdio' && !needsCreds(e);
+    let win = authNow ? reserveAuthWindow() : null;
     busy = { ...busy, [e.key]: true };
     try {
       const r = await api.post(B + '/market/install', { kind, key: e.key, scope });
@@ -215,9 +221,83 @@
       // 连接器带 ${占位} 的凭据：直接打开编辑表单让人填
       const c = got.find((x) => x.type === 'connector');
       if (c && kind === 'connector' && needsCreds(e)) { const cur = items.find((x) => x.id === c.id); if (cur) openConnForm(cur); }
+      else if (c && authNow) {
+        // 落到它的控制面板（「我的」里），同时开始授权：不需要登录的服务端会直接回「已连接」并收掉占位标签
+        curType = 'connector'; view = 'mine'; stack = [{ k: 'item', id: c.id }];
+        queueMicrotask(toTop);
+        startConnectorAuth(c.id, c.connector?.key, win);
+        win = null;
+      }
     } catch (err) { showToast(errMsg(err), true); }
-    finally { const b = { ...busy }; delete b[e.key]; busy = b; }
+    finally {
+      if (win) { try { win.close(); } catch {} }
+      const b = { ...busy }; delete b[e.key]; busy = b;
+    }
   }
+
+  // ═══ 连接器：状态 / 授权 / 工具权限 ═══
+  // 状态与工具清单：服务端起短命 CLI 探（按身份缓存 1 分钟），只探远程连接器；授权完成的那一条直接用流程结局里的新状态
+  let connSt = $state({});          // 连接器 id → { status, tools[], oauth, error? }
+  let connStBusy = $state(false);
+  let connStAt = 0;
+  const hasRemoteConn = $derived(items.some((x) => x.type === 'connector' && x.connector?.transport !== 'stdio'));
+  async function loadConnSt(refresh = false) {
+    if (member || connStBusy) return;
+    connStBusy = true; connStAt = Date.now();
+    try { const r = await api.get('/api/mcp-oauth/connectors' + (refresh ? '?refresh=1' : '')); connSt = { ...connSt, ...(r.statuses || {}) }; }
+    catch (e) { if (refresh) showToast(errMsg(e), true); }
+    finally { connStBusy = false; }
+  }
+  // 看到连接器（「我的」列表或某个连接器的面板）时取一次；30 秒内不重复取
+  $effect(() => {
+    if (member || !loaded || !hasRemoteConn || curType !== 'connector') return;
+    if (view !== 'mine' && selItem?.type !== 'connector') return;
+    if (Date.now() - connStAt > 30_000) untrack(() => loadConnSt());
+  });
+  // 扩展页发起的授权有了结局：把新状态写进来，再取一次服务端的（带「存没存令牌」）
+  const seenFlows = new Set();
+  $effect(() => {
+    for (const [k, f] of Object.entries(mcpAuth.flows)) {
+      if (!k.startsWith('ext:') || !['done', 'error', 'expired'].includes(f.status) || seenFlows.has(f.id + f.status)) continue;
+      seenFlows.add(f.id + f.status);
+      const id = k.slice(4, k.indexOf('|'));
+      if (f.connector) connSt = { ...untrack(() => connSt), [id]: { ...(untrack(() => connSt[id]) || {}), ...f.connector } };
+      if (f.status === 'done') { connStAt = 0; setTimeout(() => loadConnSt(), 300); }
+    }
+  });
+  const connFlow = (it) => authFlow(connSid(it.id), it.connector?.key);
+  function connect(it) { startConnectorAuth(it.id, it.connector?.key, reserveAuthWindow()); }
+  async function disconnect(it) {
+    try {
+      const r = await api.post('/api/mcp-oauth/disconnect', { connector: it.id });
+      connSt = { ...connSt, [it.id]: r.status || { status: 'needs-auth' } };
+      showToast(r.cleared ? t('已断开「{name}」', { name: it.name }) : t('没有找到已保存的登录信息'), !r.cleared);
+    } catch (e) { showToast(errMsg(e), true); }
+  }
+  async function setToolPolicy(it, map) {
+    const prev = it.connector?.tools || {};
+    const next = { ...prev };
+    for (const [k, v] of Object.entries(map)) { if (v === 'always_ask') delete next[k]; else next[k] = v; }
+    patchItem({ ...it, connector: { ...it.connector, tools: next } });
+    try { const r = await api.post(B + '/update', { id: it.id, toolPolicy: map }); patchItem(r.item); }
+    catch (e) { patchItem({ ...it, connector: { ...it.connector, tools: prev } }); showToast(errMsg(e), true); }
+  }
+  // 「我的 › 连接器」表格的状态格
+  function connCell(it) {
+    if (!it.enabled) return { k: 'off', text: t('已停用') };
+    if (it.connector?.transport === 'stdio') return { k: 'local', text: '—' };
+    const f = connFlow(it);
+    if (f && ['starting', 'waiting'].includes(f.status)) return { k: 'busy', text: t('等待授权') };
+    const s = connSt[it.id];
+    if (!s) return connStBusy ? { k: 'busy', text: '' } : { k: 'local', text: '—' };
+    if (s.status === 'connected') return { k: 'ok', text: '' };
+    if (s.status === 'needs-auth') return { k: 'auth', text: t('需要登录') };
+    if (s.status === 'failed') return { k: 'fail', text: t('连接失败') };
+    if (s.status === 'pending') return { k: 'busy', text: '' };
+    return { k: 'local', text: '—' };
+  }
+  const mineConns = $derived(mineAll.filter((x) => (fState !== 'on' || x.enabled) && (fState !== 'off' || !x.enabled) && hit(`${x.name} ${x.description || ''} ${x.connector?.url || ''}`))
+    .sort(sortBy === 'updated' ? (a, b) => (b.updated || 0) - (a.updated || 0) : (a, b) => a.name.localeCompare(b.name)));
   const needsCreds = (e) => Object.values({ ...(e.spec?.env || {}), ...(e.spec?.headers || {}) }).some((v) => /\$\{/.test(String(v)));
 
   // ═══ 我的：数据整形 ═══
@@ -607,7 +687,7 @@
           <div class="cz-chips">{#each inner as s (s.key)}<button class="cz-chip" onclick={() => openMk('skill', s)}>{s.name}</button>{/each}</div>
         {/if}
       {/if}
-      <p class="cz-note">{kind === 'plugin' ? t('插件是 Claude Code 专属格式，只对 Claude Code 生效；里面的技能想给 dimensio、Codex 用，可以在「技能」里单独添加。') : kind === 'connector' ? (needsCreds(selMk) ? t('这个连接器要填凭据（${…} 占位），添加后会打开编辑表单。') : t('远程连接器若要求 OAuth 登录，添加后在对话里点「授权」就能完成登录（会话信息面板的「连接器」卡或输入框上方的提示）。')) : t('技能对 Claude Code 下一条消息生效，对 dimensio 与 Codex 在新会话生效。')}</p>
+      <p class="cz-note">{kind === 'plugin' ? t('插件是 Claude Code 专属格式，只对 Claude Code 生效；里面的技能想给 dimensio、Codex 用，可以在「技能」里单独添加。') : kind === 'connector' ? (needsCreds(selMk) ? t('这个连接器要填凭据（${…} 占位），添加后会打开编辑表单。') : selMk.transport === 'stdio' ? t('本地连接器在对话里按需启动，添加后下一条消息就能用。') : t('添加后会直接打开它的登录授权页（不需要登录的会直接连上），然后进入它的控制面板，可以按工具设置权限。')) : t('技能对 Claude Code 下一条消息生效，对 dimensio 与 Codex 在新会话生效。')}</p>
 
     {:else if selPkg}
       {@const ms = selPkgMembers}
@@ -637,6 +717,33 @@
       <div class="cz-sec">{t('管理')}</div>
       <div class="cz-list"><button class="cz-li act danger" onclick={() => pkgUninstall(selPkg)}><span class="cz-li-tx"><span>{t('整包卸载')}</span></span></button></div>
 
+    {:else if selItem && selItem.type === 'connector'}
+      {@const it = selItem}
+      {@const fl = connFlow(it)}
+      <ConnDetail {it} st={connSt[it.id] || null} loading={connStBusy} flow={fl}
+        onConnect={() => connect(it)} onDisconnect={() => disconnect(it)}
+        onCancelAuth={() => cancelAuth(connSid(it.id), it.connector?.key)} onReopen={() => openAuthPage(fl?.authUrl)}
+        onSubmitUrl={(u) => submitAuthUrl(connSid(it.id), it.connector?.key, u)} onConfirmWeb={() => confirmAuth(connSid(it.id), it.connector?.key)}
+        onRefresh={() => loadConnSt(true)} onPolicy={(m) => setToolPolicy(it, m)}
+        onEdit={() => openConnForm(it)} onToggle={() => toggleEnabled(it)} onUninstall={() => uninstall(it)}>
+        <div class="cz-sec">{t('生效 Agent')}</div>
+        {@render agentRows(AGENTS.map((a) => { const ok = agentAllowed(it, a.key); return { key: a.key, label: a.label, state: ok && it.agents?.[a.key] ? 'on' : 'off', na: !ok,
+          sub: ok ? a.hint : agentDeniedWhy(it, a.key), onclick: () => toggleAgent(it, a.key) }; }))}
+        {#if !it.enabled}<p class="cz-note">{t('此连接器当前已停用，对所有 agent 均不生效。')}</p>{/if}
+        <div class="cz-sec">{t('连接配置')}<span class="cz-sp"></span><button class="cz-btn sm" onclick={() => openConnForm(it)}>{t('编辑')}</button></div>
+        <div class="cz-list">
+          <div class="cz-kv"><span>{tc('admin', '传输')}</span><b>{transLabel[it.connector?.transport] || it.connector?.transport}</b></div>
+          {#if it.connector?.transport === 'stdio'}
+            <div class="cz-kv"><span>{t('命令')}</span><b class="mono">{it.connector?.command} {(it.connector?.args || []).join(' ')}</b></div>
+            {#if Object.keys(it.connector?.env || {}).length}<div class="cz-kv"><span>{t('环境变量')}</span><b class="mono">{Object.keys(it.connector.env).join(t('、'))}</b></div>{/if}
+          {:else}
+            <div class="cz-kv"><span>{t('地址')}</span><b class="mono">{it.connector?.url}</b></div>
+            {#if Object.keys(it.connector?.headers || {}).length}<div class="cz-kv"><span>{t('请求头')}</span><b class="mono">{Object.keys(it.connector.headers).join(t('、'))}</b></div>{/if}
+          {/if}
+          {#if it.pkg}<div class="cz-kv"><span>{t('所属插件')}</span><b>{it.pkg}</b></div>{/if}
+        </div>
+      </ConnDetail>
+
     {:else if selItem}
       {@const it = selItem}
       <div class="cz-dh">
@@ -656,19 +763,7 @@
         sub: ok ? a.hint : agentDeniedWhy(it, a.key), onclick: () => toggleAgent(it, a.key) }; }))}
       {#if !it.enabled}<p class="cz-note">{t('此扩展当前已停用，对所有 agent 均不生效。')}</p>{/if}
 
-      {#if it.type === 'connector'}
-        <div class="cz-sec">{t('连接配置')}<span class="cz-sp"></span><button class="cz-btn sm" onclick={() => openConnForm(it)}>{t('编辑')}</button></div>
-        <div class="cz-list">
-          <div class="cz-kv"><span>{tc('admin', '传输')}</span><b>{transLabel[it.connector?.transport] || it.connector?.transport}</b></div>
-          {#if it.connector?.transport === 'stdio'}
-            <div class="cz-kv"><span>{t('命令')}</span><b class="mono">{it.connector?.command} {(it.connector?.args || []).join(' ')}</b></div>
-            {#if Object.keys(it.connector?.env || {}).length}<div class="cz-kv"><span>{t('环境变量')}</span><b class="mono">{Object.keys(it.connector.env).join(t('、'))}</b></div>{/if}
-          {:else}
-            <div class="cz-kv"><span>{t('地址')}</span><b class="mono">{it.connector?.url}</b></div>
-            {#if Object.keys(it.connector?.headers || {}).length}<div class="cz-kv"><span>{t('请求头')}</span><b class="mono">{Object.keys(it.connector.headers).join(t('、'))}</b></div>{/if}
-          {/if}
-        </div>
-      {:else if files.length}
+      {#if files.length}
         <div class="cz-sec">{tc('admin', '文件')}<span class="cz-n">{files.length}</span></div>
         <div class="cz-fchips">
           {#each files.slice(0, 60) as f (f.path)}<button class="cz-chip mono" class:on={fileSel === f.path} onclick={() => pickFile(it.id, f.path)}>{f.path}</button>{/each}
@@ -685,10 +780,8 @@
 
       <div class="cz-sec">{t('管理')}</div>
       <div class="cz-list">
-        {#if it.type !== 'connector'}
-          <button class="cz-li act" onclick={() => openUpload(it.type, it)}><span class="cz-li-tx"><span>{t('替换')}</span><small>{t('上传新版本覆盖，保留开关与 agent 勾选')}</small></span></button>
-          <button class="cz-li act" onclick={() => download(it)}><span class="cz-li-tx"><span>{t('下载')}</span><small>{t('打包为 zip 存到本地')}</small></span></button>
-        {/if}
+        <button class="cz-li act" onclick={() => openUpload(it.type, it)}><span class="cz-li-tx"><span>{t('替换')}</span><small>{t('上传新版本覆盖，保留开关与 agent 勾选')}</small></span></button>
+        <button class="cz-li act" onclick={() => download(it)}><span class="cz-li-tx"><span>{t('下载')}</span><small>{t('打包为 zip 存到本地')}</small></span></button>
         <button class="cz-li act danger" onclick={() => uninstall(it)}><span class="cz-li-tx"><span>{t('卸载')}</span></span></button>
       </div>
     {:else}
@@ -844,6 +937,28 @@
             <button class="cz-btn" onclick={quickAdd}>{addLabel}</button>
           </div>
         </div>
+      {:else if curType === 'connector'}
+        <!-- 官方「Connectors › Yours」同款：连接器 / 类型 / 状态 三列表格，点一行进它的控制面板 -->
+        {#if !mineConns.length}
+          <div class="cz-empty">{t('没有匹配的结果')}</div>
+        {:else}
+          <div class="cz-table" role="table">
+            <div class="cz-tr th" role="row"><span role="columnheader">{t('连接器')}</span><span role="columnheader">{t('类型')}</span><span role="columnheader">{t('状态')}</span></div>
+            {#each mineConns as it (it.id)}
+              {@const cell = connCell(it)}
+              <div class="cz-tr" class:off={!it.enabled} role="row" tabindex="0" onclick={() => openItem(it)} onkeydown={(ev) => { if (ev.key === 'Enter') openItem(it); }}>
+                <span class="cz-td nm" role="cell"><span class="cz-tile xs">{@html ic('connector')}</span><b>{it.name}</b></span>
+                <span class="cz-td" role="cell">{it.connector?.transport === 'stdio' ? t('本地') : t('远程')}</span>
+                <span class="cz-td st k-{cell.k}" role="cell">
+                  {#if cell.k === 'ok'}{@html ic('check', 2)}
+                  {:else if cell.k === 'busy'}<span class="cz-spin"></span>{cell.text}
+                  {:else if cell.k === 'auth'}<button class="cz-link" onclick={(ev) => { ev.stopPropagation(); connect(it); }}>{cell.text}</button>
+                  {:else}{cell.text}{/if}
+                </span>
+              </div>
+            {/each}
+          </div>
+        {/if}
       {:else if !mineCards.length}
         <div class="cz-empty">{t('没有匹配的结果')}</div>
       {:else}

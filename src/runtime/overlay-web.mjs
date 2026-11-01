@@ -31,7 +31,7 @@
 // 另：overlay 钩子 registerRoutes(router, ctx) 存在时，核心路由挂完后调用（私有接口），见 registerOverlayRoutes。
 
 import path from 'node:path';
-import { statSync } from 'node:fs';
+import { statSync, readFileSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { OVERLAY_DIR, overlayHook } from './overlay-hooks.mjs';
 import { PROGRAM_ROOT } from './paths.mjs';
@@ -51,8 +51,11 @@ if (OVERLAY_DIR) {
   if (dirOk(d)) webDir = d;
   else console.warn('[overlay] 配了 overlay 目录，但没有 ' + d + '：网页层照公开版');
 }
+// 发布产物的壳与资源必须使用同一份固定清单；只加载网页层，不执行服务端钩子。
+let bundledWeb = dirOk(path.join(APP_DIR, '_ov'));
+if (bundledWeb) webDir = path.join(APP_DIR, '_ov');
 // 测试用：换一个 overlay web 目录（'' = 关）。正式代码不调。
-export function _setOverlayWebDir(d) { webDir = d || ''; cache = null; }
+export function _setOverlayWebDir(d) { webDir = d || ''; bundledWeb = false; cache = null; }
 export const overlayWebDir = () => webDir;
 
 const FONT_TYPES = {
@@ -67,7 +70,11 @@ let cache = null;   // { at, manifest, files:Set }
 function load() {
   if (!webDir) return null;
   if (cache && Date.now() - cache.at < 5000) return cache;
-  const { manifest, files } = buildManifest(webDir, { warn: (m) => console.warn('[overlay] ' + m) });
+  // 不重扫 baked manifest.json 本身，否则它会进入内容哈希，导致版本戳与 HTML 壳不一致。
+  const { manifest, files } = bundledWeb ? (() => {
+    const manifest = JSON.parse(readFileSync(path.join(webDir, 'manifest.json'), 'utf8'));
+    return { manifest, files: new Set(manifest.files) };
+  })() : buildManifest(webDir, { warn: (m) => console.warn('[overlay] ' + m) });
   cache = { at: Date.now(), manifest, files };
   return cache;
 }

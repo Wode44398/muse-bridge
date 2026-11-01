@@ -89,14 +89,17 @@ async function settleOk(f) {
   try { servers = await withTimeout(q.mcpServerStatus(), 15_000, '读取状态'); } catch {}
   await finishOk(f, servers);
 }
-// 用的是临时起的进程：会话自己的 CLI 若此刻活着，也让它重连一下（它的 needs-auth 是自己内存里的）
+// 令牌是整个身份共用的：这个身份此刻活着的其它会话 CLI 也让它们重连一下（它们的 needs-auth 是各自内存里的）
 async function finishOk(f, servers) {
   if (f.ended) return;
-  if (f.owned) {
-    const lq = liveQueryFor(f.key, f.sid);
-    if (lq && lq !== f.q) { try { await withTimeout(lq.reconnectMcpServer(f.server), CALL_MS, '重连'); } catch {} }
-  }
+  await reconnectLive(f.key, f.server, f.q);
   finish(f, 'done', { servers: Array.isArray(servers) ? servers : null });
+}
+
+/** 这个身份全部活着的会话 CLI 重连某个服务（授权完成 / 扩展页断开连接后）。尽力而为，不抛。 */
+export async function reconnectLive(key, server, except = null) {
+  const qs = [...live.entries()].filter(([k, q]) => k.startsWith(key + '|') && q !== except).map(([, q]) => q);
+  await Promise.all(qs.map(async (q) => { try { await withTimeout(q.reconnectMcpServer(server), CALL_MS, '重连'); } catch {} }));
 }
 
 function serverState(list, name) {
@@ -132,6 +135,24 @@ export async function startMcpAuth(o) {
   let r;
   try {
     if (owned && typeof q.initializationResult === 'function') await withTimeout(q.initializationResult(), CALL_MS, '启动');
+    // precheck（扩展页刚添加的连接器）：先看它到底要不要登录——不要登录的（如 Context7）直接算连上，
+    // 连不上的如实报错，只有 needs-auth 才去拿授权地址
+    if (o.precheck) {
+      const t0 = Date.now();
+      let list = [];
+      for (;;) {
+        list = await withTimeout(q.mcpServerStatus(), 15_000, '读取状态');
+        if (serverState(list, server) !== 'pending' || Date.now() - t0 > 15_000) break;
+        await new Promise((res) => setTimeout(res, 400));
+      }
+      const st = serverState(list, server);
+      if (st === 'connected') { await finishOk(f, list); return view(f); }
+      if (st === 'failed') {
+        const s = list.find((x) => x && x.name === server);
+        finish(f, 'error', { error: errText((s && s.error) || '连不上这个连接器'), servers: list });
+        return view(f);
+      }
+    }
     r = await withTimeout(q.mcpAuthenticate(server, o.redirectUri || undefined), CALL_MS, '发起授权');
   } catch (e) {
     finish(f, 'error', { error: errText(e) });

@@ -17,7 +17,7 @@ import { getToken } from './api.js';
 import { apiUrl, isOffline } from './server.js';
 import { localFileUrl, hasLocalThumb, localThumbUrl } from './localfs.js';
 import { prefs } from './state.svelte.js';
-import { serverOnThisMachine, nativeWorkspaceFileUrl } from './nativeDesktop.js';
+import { serverOnThisMachine, nativeWorkspaceFileUrl, nativeLocLocalOnly } from './nativeDesktop.js';
 import { reportUi } from './uiReport.js';
 import { t } from './i18n.js';
 
@@ -71,9 +71,9 @@ export function cloudFileUrl(rel, { dl = false, thumb = false, preview = false, 
   const name = String(rel).split('/').pop() || 'file';
   // 桌面客户端默认工作空间用受控本地协议直读：图片/PDF/音视频 Range/文本都不再
   // 绕 loopback HTTP。primary 的缩略图/衍生图/下载仍由 bridge 服务端处理（sharp 320
-  // 缩略远轻于原字节，nativeLocation='primary' 不得短路它们）；额外授权位置服务端
-  // 根本不认识，只能恒走本地协议原字节。
-  if (!ws && !http && serverOnThisMachine() &&((!dl && !thumb && !preview) || (nativeLocation && nativeLocation !== 'primary'))) {
+  // 缩略远轻于原字节，nativeLocation='primary' 不得短路它们）；额外授权位置、以及连远端
+  // 服务端时「这台电脑」的全部位置，服务端根本不认识，只能恒走本地协议原字节。
+  if (!ws && !http && ((serverOnThisMachine() && !dl && !thumb && !preview) || nativeLocLocalOnly(nativeLocation))) {
     const nativeUrl = nativeWorkspaceFileUrl(rel, nativeLocation || 'primary');
     if (nativeUrl) return nativeUrl;
   }
@@ -98,7 +98,7 @@ export function cloudStreamUrl(rel, { probe = false, ws = '' } = {}) {
 // 只走 bridge 服务端：桌面壳的额外授权位置服务端不认识，那种情况不给，HtmlView 回落 srcdoc。
 function htmlSiteUrl(raw) {
   if (raw.origin === 'cloud') {
-    if (raw.nativeLocation && raw.nativeLocation !== 'primary') return null;
+    if (nativeLocLocalOnly(raw.nativeLocation)) return null;
     return apiUrl('/api/file?site=1&path=' + encodeURIComponent(raw.rel) + (raw.ws ? '&ws=' + encodeURIComponent(raw.ws) : '') + tokenSuffix('&'));
   }
   if (raw.origin === 'claude') return claudeArtifactUrl(raw.id, raw.path) + '&site=1';
@@ -136,23 +136,24 @@ function normalize(raw) {
     const mt = raw.mt || 0;
     const ws = raw.ws || '';
     const nativeLocation = raw.nativeLocation || '';
+    const localOnly = nativeLocLocalOnly(nativeLocation);   // 服务端不认识的原生位置：没有任何服务端衍生物
     out.url = cloudFileUrl(raw.rel, { ws, nativeLocation });
     // 图片三档（同 vertex）：blur 底=320（与列表图标 URL 一致，直接命中浏览器缓存秒出）、
     // 画廊主图=1280 webp 轻量档（相册/漫画侧滑逐张拉原图慢网顶不住）、原图留给缩放升级。
     // gif 例外：衍生图会丢动画（服务端对 gif 也是回落原图），直接原图。
     // 「原图加载」（设置-通用 prefs.fullResMedia）：开=主图直接原图（预载器跟着预载原图），
     // blur 底保留；对下次 openPreview 生效（归一化在打开时跑一次）。
-    if (kind === 'image' && out.ext !== 'gif' && !(serverOnThisMachine() && !ws)) {
+    if (kind === 'image' && out.ext !== 'gif' && !localOnly && !(serverOnThisMachine() && !ws)) {
       out.previewUrl = prefs.fullResMedia ? out.url : cloudFileUrl(raw.rel, { preview: true, mt, ws, nativeLocation });
       out.thumbUrl = cloudFileUrl(raw.rel, { thumb: true, mt, ws, nativeLocation });
     } else out.previewUrl = out.url;
     // 视频海报=320 抽帧图（此前指向视频原字节，poster 属性根本不认）。
-    out.poster = kind === 'video' ? (nativeLocation && nativeLocation !== 'primary' ? null : cloudFileUrl(raw.rel, { thumb: true, mt, ws })) : out.url;
+    out.poster = kind === 'video' ? (localOnly ? null : cloudFileUrl(raw.rel, { thumb: true, mt, ws })) : out.url;
     // 转码流兜底（「流畅」档）：直连解不动/带宽顶不住时 VideoPlayer 自动/手动切换
-    if (kind === 'video' && (!nativeLocation || nativeLocation === 'primary')) { out.streamUrl = cloudStreamUrl(raw.rel, { ws }); out.streamProbeUrl = cloudStreamUrl(raw.rel, { probe: true, ws }); }
+    if (kind === 'video' && !localOnly) { out.streamUrl = cloudStreamUrl(raw.rel, { ws }); out.streamProbeUrl = cloudStreamUrl(raw.rel, { probe: true, ws }); }
     out.downloadHref = cloudFileUrl(raw.rel, { dl: true, ws, nativeLocation });
     out.saveTarget = { origin: 'cloud', rel: raw.rel, ws, nativeLocation };
-    if (kind === 'office' && (!nativeLocation || nativeLocation === 'primary')) out.officePdfUrl = officePdfUrl(raw.rel, ws);   // 服务端转 PDF（OfficeView 探测，失败回落客户端）
+    if (kind === 'office' && !localOnly) out.officePdfUrl = officePdfUrl(raw.rel, ws);   // 服务端转 PDF（OfficeView 探测，失败回落客户端）
   } else if (raw.origin === 'local') {
     out.url = raw.dataUrl || localFileUrl(raw.rel);   // SAF 原生流式（带 Range），见 MainActivity.serveLocalFile
     out.previewUrl = out.url;

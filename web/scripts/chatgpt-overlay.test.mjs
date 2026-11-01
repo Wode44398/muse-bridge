@@ -8,6 +8,19 @@ import { overlayDir, chatgptOverlay, stampChatgptDir } from './chatgpt-overlay.m
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'chatgpt-overlay-'));
 
+test('公开版从发行树加载完整 Codex 页面，不使用打包机器配置的覆盖层', () => {
+  const repo = tmp();
+  try {
+    const web = path.join(repo, 'frontend-assets', 'web');
+    mkdirSync(path.join(web, 'chatgpt'), { recursive: true });
+    writeFileSync(path.join(web, 'overlay.json'), '{}');
+    writeFileSync(path.join(web, 'chatgpt', 'index.html'), '<html>bundled</html>');
+    const got = chatgptOverlay({ BRIDGE_EDITION: 'public', BRIDGE_OVERLAY_DIR: path.join(repo, 'unrelated') }, { repo });
+    assert.equal(got.page, path.join(web, 'chatgpt'));
+    assert.equal(chatgptOverlay({ BRIDGE_DATA_ROOT: repo }, { repo }).page, got.page);
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
 test('overlay 位置：BRIDGE_OVERLAY_DIR 优先，其次数据根 config.json 的 overlayDir（相对路径按数据根解析）', () => {
   const root = tmp();
   try {
@@ -24,19 +37,19 @@ test('overlay 位置：BRIDGE_OVERLAY_DIR 优先，其次数据根 config.json �
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('overlay 里没有 web/chatgpt/index.html 就当没有；公开版出包（BRIDGE_EDITION=public）有也当没有', () => {
+test('外部 overlay 不作为公开版的构建输入；无内置资源时不混用本机页面', () => {
   const ov = tmp();
   try {
-    assert.equal(chatgptOverlay({ BRIDGE_OVERLAY_DIR: ov }), null);
+    assert.equal(chatgptOverlay({ BRIDGE_OVERLAY_DIR: ov }, { repo: ov }), null);
     const page = path.join(ov, 'web', 'chatgpt');
     mkdirSync(page, { recursive: true });
     writeFileSync(path.join(page, 'index.html'), '<html></html>');
-    const got = chatgptOverlay({ BRIDGE_OVERLAY_DIR: ov });
+    const got = chatgptOverlay({ BRIDGE_OVERLAY_DIR: ov }, { repo: ov });
     assert.equal(got.page, page);
     assert.equal(got.root, path.join(ov, 'assets', 'chatgpt'));
-    assert.equal(chatgptOverlay({ BRIDGE_OVERLAY_DIR: ov, BRIDGE_EDITION: 'public' }), null,
+    assert.equal(chatgptOverlay({ BRIDGE_OVERLAY_DIR: ov, BRIDGE_EDITION: 'public' }, { repo: ov }), null,
       '维护者机器配了 overlayDir 也能出公开版：前端构建不带这套页面');
-    assert.equal(chatgptOverlay({ BRIDGE_OVERLAY_DIR: ov, BRIDGE_EDITION: 'private' }).page, page);
+    assert.equal(chatgptOverlay({ BRIDGE_OVERLAY_DIR: ov, BRIDGE_EDITION: 'private' }, { repo: ov }).page, page);
   } finally { rmSync(ov, { recursive: true, force: true }); }
 });
 

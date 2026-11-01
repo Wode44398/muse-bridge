@@ -55,7 +55,7 @@
 | **「撞上限额时」**（When you hit a usage limit） | **「限额重置后自动继续」**（Auto-continue when limits reset）：撞上 5 小时限额后，额度恢复时自动接着跑完这一轮，默认开；管理员还有 **「额度用尽自动换号」**（Switch accounts when a limit is reached） |
 | **「服务意外重启时」**（If the service restarts unexpectedly） | **「自动继续被中断的对话」**（Resume interrupted conversations）：服务中途崩溃、被结束或 VM 重启打断了正在跑的对话时，服务恢复后约 15 秒自动让 Claude 从中断的地方接着做，默认开，按账号各自设置。同一件事最多连着续 3 次；中断超过 12 小时、或你已经先发了消息就不续。关掉后只留一句「这一轮没跑完」，要你自己说「继续」（见 02-claude-code.md「Claude 在干活的时候」） |
 | **「新会话默认」**（New session defaults） | **「权限模式」**（Permission mode）（管理员默认「自动」，其他人默认「接受编辑」）、**「输出风格」**（Output style）；能跑命令的身份还有 **「用工作树」**（Use a worktree）（只管这台设备） |
-| **「对话」**（Chat） | **「输入建议」**（Prompt suggestions）、**「对话内交互图表」**（Inline visualizations）、**「动态工作流」**（Dynamic workflows）（关了用不了 Ultracode）和 **「子 agent 调度偏好」**（Subagent dispatch preferences）、**「消息被拦时自动换模型」**（Switch models when a message is flagged）、**「批准计划时可清空上下文」**（Offer to clear context when approving a plan）、**「Claude 提问无人回答时」**（When Claude’s question goes unanswered）（一直等 / 5 / 10（默认）/ 30 分钟后继续）、**「回复语言」**（Response language）（跟随对话 / 简体中文 / English）；在用量弹层里拖过自动压缩点的，这里多一行 **「自动压缩点」**（Auto-compact point）可以恢复默认 |
+| **「对话」**（Chat） | **「输入建议」**（Prompt suggestions）、**「对话内交互图表」**（Inline visualizations）、**「动态工作流」**（Dynamic workflows）（关了用不了 Ultracode）和 **「子 agent 调度偏好」**（Subagent dispatch preferences）、**「思考动画」**（Thinking animation）（这台设备：**「新版 Claude Code」**（Claude Code (new)）、**「新版聊天页」**（Chat (new)）、**「经典星标」**（Classic spark）三选一）、**「消息被拦时自动换模型」**（Switch models when a message is flagged）、**「批准计划时可清空上下文」**（Offer to clear context when approving a plan）、**「Claude 提问无人回答时」**（When Claude’s question goes unanswered）（一直等 / 5 / 10（默认）/ 30 分钟后继续）、**「回复语言」**（Response language）（跟随对话 / 简体中文 / English）；在用量弹层里拖过自动压缩点的，这里多一行 **「自动压缩点」**（Auto-compact point）可以恢复默认 |
 | **「会话协作」**（Session collaboration） | **「Claude 发起新会话」**（New sessions started by Claude）：先问我（默认）/ 直接开始 / 只在我要求时（能跑命令的身份才有）；管理员还有 **「其它会话发来的消息」**（Messages from other sessions） |
 | **「Git 与拉取请求」**（Git and pull requests）——能跑命令的身份 | **「分支前缀」**（Branch prefix）（默认 claude）、**「工作树起点」**（Worktree base）（当前分支 / 远端默认分支）、**「自动修复拉取请求」**（Auto-fix pull requests）、**「拉取请求合并或关闭后自动归档」**（Auto-archive after PR merge or close）、**「提交与拉取请求署名」**（Commit and PR attribution）。需要 VM 上 gh 已登录，见 02-claude-code.md「拉取请求」 |
 | **「会话管理」**（Session management） | **「归档不活跃的会话」**（Archive inactive sessions）：从不（默认）/ 1 / 2 / 7 / 14 / 30 天 |
@@ -65,7 +65,7 @@
 
 - 灰着的选项后面写着「在下方『安全』里开启」：先去「安全」打开对应开关。
 - 提示「这一项你改不了」= 你的身份没有这一项（管理员项）；「这个版本的服务端还不认这一项」= 服务端比页面旧，先更新。
-- 这台 Muse 上看不到的：「这台电脑」（保持唤醒，Muse 关掉了）、「思考动画」（这一版只有一种样式）。
+- 这台 Muse 上不显示「这台电脑」里的保持唤醒设置；「思考动画」已包含完整的三套样式。
 
 ### 自定义 API（给 Claude 页接别家模型）
 
@@ -132,6 +132,8 @@ dimensio 也会在等你批准、等你回答、交了计划、跑完时通知�
 - 只管网页本身（主页、Claude 页、设置）；dimensio 页的明暗在 dimensio 自己的设置里。
 
 ## 壁纸、流体壁纸
+
+这一版的网页与安卓 App 都包含完整玻璃材质、三套思考动画、动态字符背景、Ultracode 能量效果和原版字体。支持 WebGPU 的设备使用主页与桌面 Dock 的实时玻璃；设备能力不足或系统减少动态效果时仍会正常回退。明亮壁纸包含多洛米蒂照片及对应空间视差；深色主页被页面盖住时暂停玻璃和流光，返回主页再恢复。手机 App 须更新到本次随服务器提供的版本，旧离线 App 不会仅靠网页更新换掉自身前端。
 
 - **「壁纸」**（Wallpaper）：主页的背景，**「明亮主题壁纸」**（Light theme wallpapers）和 **「深色主题壁纸」**（Dark theme wallpapers）各选一张，也可以 **「相册上传」**（Upload photo）自己的图（长按自己上传的可以删）。点上面的两张预览图能进实景预览。只有有主页时才有这一行。
 - **「流体壁纸」**（Fluid wallpaper）：主页用深色流体壁纸时出现，调颜色、画面和模拟参数，底部可以恢复默认。

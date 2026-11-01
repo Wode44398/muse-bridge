@@ -124,14 +124,8 @@ test('设置「对话内交互图表」关掉 → 不挂；手机轮才加平台
   fs.writeFileSync(path.join(dir2, 'claude-settings.json'), JSON.stringify({ rev: 1, values: { inlineVisualizations: false } }));
   assert.equal(V.vizEnabled({ kind: 'user', key: 'u:viz2', dataDir: dir2, sandbox: true }), false);
   assert.equal(V.vizEnabled({ kind: 'admin', key: 'snap', snap: { token: 't' } }), true, '快照访客按默认值');
-  assert.equal(V.vizNudge(true, false), '');
-  assert.equal(V.vizNudge(false, true), '');
-  assert.match(V.vizNudge(true, true), /platform:"mobile"/);
-  // 新写法：{ phone, narrow }——窄屏网页也按 mobile 出图，但不说「不运行脚本」
-  assert.match(V.vizNudge(true, { phone: true }), /静态预览/);
-  assert.match(V.vizNudge(true, { narrow: true }), /窄屏.*platform:"mobile"/);
-  assert.doesNotMatch(V.vizNudge(true, { narrow: true }), /静态预览/);
-  assert.equal(V.vizNudge(true, {}), '');
+  // 发送端不进提示词（vizNudge 已删）：平台只经 read_me 的默认值生效
+  assert.equal(V.vizNudge, undefined);
   assert.equal(V.vizPlatform({ phone: true }), 'mobile');
   assert.equal(V.vizPlatform({ narrow: true }), 'mobile');
   assert.equal(V.vizPlatform({}), 'desktop');

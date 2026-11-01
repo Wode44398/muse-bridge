@@ -36,6 +36,7 @@ export const KEEP = [
 // 公开版里有、Muse 不带的（相对导出树根）
 export const DROP = [
   'client/',                      // bridge 的 Windows 客户端源码：客户端由 bridge 发布，Muse 只做服务端
+  'modules/codex/',               // Bridge 公开版现已提供 Codex；Muse 仍保留自己的 agent 范围声明
   'android/',                     // bridge 的离线 apk 工程：Muse 直接用 bridge 发的 apk（发版时从 bridge 公开 Release 取），不自己编
   'docker/', 'Dockerfile', 'docker-compose.yml', 'build-apk.ps1',
   'scripts/public/',              // bridge 公开仓自己的素材闸门与 CI 用件（扫描规则里有邮箱域名等字样，Muse 的隐私自检会误报）
@@ -54,7 +55,8 @@ function walk(root, rel = '', out = []) {
   return out;
 }
 
-const src = walk(FROM).filter((r) => !matches(r, DROP) && !matches(r, KEEP));
+const VISUAL_INVENTORY = 'scripts/public/visual-assets.json';
+const src = walk(FROM).filter((r) => (!matches(r, DROP) || r === VISUAL_INVENTORY) && !matches(r, KEEP));
 const cur = walk(REPO).filter((r) => !matches(r, KEEP));
 // 本机运行产生的、被 .gitignore 挡掉的东西不碰：只删受版本管理、公开版里又没有的文件
 const tracked = new Set();
@@ -84,6 +86,11 @@ for (const r of [...toAdd, ...toChange]) {
   const dst = path.join(REPO, r);
   mkdirSync(path.dirname(dst), { recursive: true });
   cpSync(path.join(FROM, r), dst);
+  if (r === VISUAL_INVENTORY) {
+    const inventory = JSON.parse(readFileSync(dst, 'utf8'));
+    inventory.files = Object.fromEntries(Object.entries(inventory.files).filter(([file]) => file.startsWith('frontend-assets/')));
+    writeFileSync(dst, JSON.stringify(inventory, null, 2) + '\n');
+  }
 }
 // 删空的目录
 function prune(rel) {
