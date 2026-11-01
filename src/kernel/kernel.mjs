@@ -130,8 +130,17 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
     constructor(rec, config) {
       this.id = rec.id;
       this.config = Object.freeze({ ...config });
-      this.meta = Object.freeze({ id: rec.id, name: rec.name, version: rec.version, source: rec.source, dir: rec.dir });
+      const prevVer = storedOf(rec.id).ranVersion;
+      this.meta = Object.freeze({
+        id: rec.id, name: rec.name, version: rec.version, source: rec.source, dir: rec.dir,
+        // 插件清单 engines.pluginApi 写的接口版本（没写 = 2，内置功能 = 最新）：兼容层按它决定行为
+        pluginApi: rec.pluginApi,
+        // 上一次成功启用时的版本号（第一次装 = null）：插件据此做数据迁移
+        previousVersion: typeof prevVer === 'string' ? prevVer : null,
+      });
       this._disposers = [];
+      this._configHandlers = [];
+      this._busy = false;
       this._alive = true;
       const tag = '[plugin:' + rec.id + ']';
       this.log = (...a) => logger.log?.(tag, ...a);
@@ -186,6 +195,23 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
       return this.onDispose(() => listeners.get(event)?.delete(fn));
     }
     emit(event, payload) { emit(event, payload); }
+    // 配置热更新：登记了就不重启插件——改配置时依次调 fn(新配置, 旧配置)，ctx.config 换成新值；
+    // 任何一个返回 false（或抛错）= 这次还是整个重启（比如改了端口、要重新拉起子进程）。
+    // 注意：apply 的第二个参数是启用那一刻的配置，登记了 onConfig 就从 ctx.config 读（或在 fn 里更新自己的变量）。
+    onConfig(fn) {
+      if (typeof fn !== 'function') throw new Error('ctx.onConfig 要一个函数 (next, prev) => …');
+      this._configHandlers.push(fn);
+      return this.onDispose(() => { const i = this._configHandlers.indexOf(fn); if (i >= 0) this._configHandlers.splice(i, 1); });
+    }
+    // 插件改自己的配置：patch 合并进当前配置 → 按 schema 校验 → 落盘 → 走同一条生效路（有 onConfig 就热更新，否则整个重启）。
+    // 返回生效后的配置。apply / onConfig 里别 await 它（会等自己，死锁）——放进异步回调里调。
+    async setConfig(patch) {
+      if (!this._alive) throw new Error('插件已停用');
+      if (this._busy) throw new Error('apply / onConfig 里不能改自己的配置（会等自己）——放进回调或定时器里调');
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('ctx.setConfig 要一个对象');
+      await kernel.setConfig(this.id, { ...storedConfig(this.id), ...patch });
+      return kernel.configOf(this.id);
+    }
     async _dispose() {
       if (!this._alive) return;
       this._alive = false;
@@ -252,10 +278,16 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
     rec.ctx = ctx;
     rec.appliedRaw = JSON.stringify(raw);
     try {
-      const r = await rec.def.apply(ctx, ctx.config);
+      ctx._busy = true;
+      let r;
+      try { r = await rec.def.apply(ctx, ctx.config); } finally { ctx._busy = false; }
       if (typeof r === 'function') ctx.onDispose(r);
       rec.status = 'active';
       rec.active = true;
+      // 记下跑起来的版本（下次启用时给 ctx.meta.previousVersion）
+      if (rec.version && storedOf(rec.id).ranVersion !== rec.version) {
+        try { writeState((s) => { s.plugins[rec.id] = { ...(s.plugins[rec.id] || {}), ranVersion: rec.version }; }); } catch {}
+      }
       return true;
     } catch (e) {
       rec.waiting = [];
@@ -366,6 +398,7 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
         schemaFromManifest: entry.config != null,
         web: entry.web || null,
         extra: entry.extra || null,
+        pluginApi: Number.isInteger(entry.pluginApi) ? entry.pluginApi : null,
         load: entry.load,
         fallback: entry.fallback && typeof entry.fallback.load === 'function' ? entry.fallback : null,
         seq: regSeq++,
@@ -436,8 +469,10 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
         const prev = storedConfig(id);
         const clean = validateConfig(rec.schema, next, prev);
         writeState((s) => { s.plugins[id] = { ...(s.plugins[id] || {}), config: clean }; });
-        if (rec.active && !rec.restart) await restartLive([rec]);
-        else await reconcile();
+        if (rec.active && !rec.restart) {
+          if (await hotConfig(rec, clean)) changed(id);
+          else await restartLive([rec]);
+        } else await reconcile();
         return summary(rec);
       });
     },
@@ -465,6 +500,7 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
       if (!rec) return null;
       for (const k of ['name', 'description', 'category', 'version', 'author', 'homepage', 'web', 'dir', 'extra']) if (k in patch) rec[k] = patch[k];
       if ('requires' in patch && Array.isArray(patch.requires)) rec.requires = patch.requires;
+      if ('pluginApi' in patch) rec.pluginApi = Number.isInteger(patch.pluginApi) ? patch.pluginApi : null;
       if ('config' in patch) { rec.schema = normalizeSchema(patch.config); rec.schemaFromManifest = patch.config != null; }
       if (typeof patch.load === 'function') rec.load = patch.load;
       if ('fallback' in patch) rec.fallback = patch.fallback && typeof patch.fallback.load === 'function' ? patch.fallback : null;
@@ -507,6 +543,27 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
     writeState,
     serial,
   };
+
+  // 热更新配置：插件登记了 ctx.onConfig 就只调它们（不重启）。返回 false = 没登记 / 有一个不接受，要整个重启。
+  async function hotConfig(rec, raw) {
+    const ctx = rec.ctx;
+    if (!ctx || !ctx._configHandlers.length) return false;
+    const { config, problems } = resolveConfig(rec.schema, raw);
+    const next = Object.freeze({ ...config });
+    const prev = ctx.config;
+    ctx._busy = true;
+    try {
+      for (const fn of ctx._configHandlers.slice()) {
+        let ok;
+        try { ok = await fn(next, prev); } catch (e) { ctx.error('onConfig 出错，改为整个重启：', e?.message || e); return false; }
+        if (ok === false) return false;
+      }
+    } finally { ctx._busy = false; }
+    ctx.config = next;
+    rec.problems = problems;
+    rec.appliedRaw = JSON.stringify(raw);
+    return true;
+  }
 
   async function restartLive(roots) {
     // 连带依赖它的一起重启：先按逆序停，再走一遍对账（会按顺序重新启用）。

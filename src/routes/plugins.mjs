@@ -13,7 +13,7 @@
 //   POST /api/plugins/uninstall {id}         装的 → 卸载（旧版进 .trash）；本机目录 → 取消登记
 //   POST /api/plugins/action   {id, action, args?}   插件详情页的动作按钮（ctx.action）
 //   GET  /api/plugins/options?id=&field=     配置字段的动态选项（内置来源 claude.models / users… 或插件 ctx.configOptions）
-//   GET  /api/plugins/log?id=&name=&lines=   托管子进程（ctx.process）的日志尾巴
+//   GET  /api/plugins/log?id=&name=&lines=   托管子进程（ctx.process）的日志尾巴；name=plugin = 插件自己的日志（ctx.log，&level=warn|error 过滤）
 //   GET  /plugins/<id>/web/<path>           第三方插件自带的页面（web/），插件开着才给；免登录（同 /app 静态资源）
 //
 // 授权账号（schema 里 type:'user' + grant:'chat' 的字段）：新选上主机本人或 pro 档账号时，config 要带 confirmGrant:true，
@@ -42,6 +42,7 @@ import { installFromGithub, checkUpdate, sourceOf } from '../plugins/github.mjs'
 import { marketOverview, installFromMarket, rollbackInstalled, restoreBuiltinVersion, pendingUpdates } from '../plugins/market.mjs';
 import { rollbackTarget } from '../plugins/discover.mjs';
 import { FEATURES } from '../config/index.mjs';
+import { pluginLogs } from '../plugins/logs.mjs';
 
 const MAX_ZIP = 50 * 1024 * 1024;
 
@@ -71,6 +72,11 @@ export function pluginView(p) {
     // 市场版内置功能：{ version, active, error, pending? }（pending.install = 重启后换上的版本，pending.restore = 重启后恢复内置版）
     ...(extra && extra.override ? { override: extra.override } : {}),
     ...(p.source === 'installed' || (p.source === 'builtin' && extra && extra.override) ? { rollbackTo: rollbackTarget(kernel, p.id)?.version || null } : {}),
+    // 清单体检（不认识的字段、用了内部接口……）、能力声明、英文界面词条（locales/en.json）
+    ...(extra && extra.lint && extra.lint.length ? { lint: extra.lint } : {}),
+    ...(extra && extra.permissions ? { permissions: extra.permissions } : {}),
+    ...(extra && extra.i18n && extra.i18n.en ? { i18n: { en: extra.i18n.en } } : {}),
+    hasLogs: pluginLogs(p.id, { lines: 1 }).length > 0,
     ...(p.active ? panelView(p.id) : {}),
   };
 }
@@ -195,7 +201,15 @@ export function registerPluginRoutes(router, { identify }) {
 
   router.on('GET', '/api/plugins/log', (req, res, url) => {
     if (!admin(req, res)) return;
-    const c = kernel.contextOf(url.searchParams.get('id') || '');
+    const id = url.searchParams.get('id') || '';
+    // name=plugin：插件自己的日志（ctx.log / warn / error；插件关着也能看最近的）
+    if ((url.searchParams.get('name') || '') === 'plugin') {
+      if (!kernel.has(id)) { json(res, 404, { error: '没有这个插件' }); return; }
+      const lines = pluginLogs(id, { lines: Number(url.searchParams.get('lines')) || 200, level: url.searchParams.get('level') || '' });
+      json(res, 200, { name: 'plugin', entries: lines, lines: lines.map((l) => `${new Date(l.t).toLocaleString('zh-CN', { hour12: false })} ${l.level === 'info' ? '' : l.level.toUpperCase() + ' '}${l.text}`) });
+      return;
+    }
+    const c = kernel.contextOf(id);
     const h = c && c.process ? c.process.get(url.searchParams.get('name') || '') : null;
     if (!h) { json(res, 404, { error: '没有这个子进程' }); return; }
     json(res, 200, { lines: h.tail(Number(url.searchParams.get('lines')) || 200), ...h.info() });
@@ -308,7 +322,9 @@ export function registerPluginRoutes(router, { identify }) {
     const c = requireCtx(identify, req, res);
     if (!c) return;
     const panels = kernel.list().filter((p) => p.extra?.ui?.panel && pageAllowed(c, p)).map((p) => ({
-      id: p.id, name: p.name, title: p.extra.ui.panel.title, titleEn: p.extra.ui.panel.titleEn || '', icon: p.extra.ui.panel.icon, page: p.extra.ui.panel.page,
+      id: p.id, name: p.name, title: p.extra.ui.panel.title, icon: p.extra.ui.panel.icon, page: p.extra.ui.panel.page,
+      // 英文标题：插件 locales/en.json 的 ui.panel.title 优先，其次清单里的 ui.panel.titleEn
+      titleEn: (typeof p.extra.i18n?.en?.ui?.panel?.title === 'string' && p.extra.i18n.en.ui.panel.title.trim().slice(0, 30)) || p.extra.ui.panel.titleEn || '',
     }));
     json(res, 200, { panels });
   });
@@ -336,6 +352,61 @@ export function registerPluginRoutes(router, { identify }) {
     if (!ident) { json(res, 401, { error: 'plugin ticket expired' }); return; }
     const c = contextFor(ident);
     subscribePage(id, res, { admin: can(c, 'server.manage'), keepAlive: () => !!resolveTicket(tok, id) });
+  });
+
+  // 插件页面自己的设置与动作（SDK 的 bridge.config / bridge.options / bridge.action / bridge.status）：
+  //   /api/plugin/<id>/_bridge/{config,options,actions,action,status}
+  // 挂在插件自己的路径下（宿主代发与插件票据都只放行 /api/plugin/<本插件>/），前缀路由——插件自己挂的精确路径优先。
+  // 只给服务器主机：成员能开的面板（ui.who=members）也改不了插件设置、按不了动作按钮。
+  router.prefix(['GET', 'POST'], '/api/plugin/', async (req, res, url) => {
+    const m = /^\/api\/plugin\/([a-z][a-z0-9-]{0,47})\/_bridge\/([a-z]+)$/.exec(url.pathname);
+    if (!m) { json(res, 404, { error: 'not found' }); return; }
+    const [, id, op] = m;
+    if (!kernel.isActive(id)) { json(res, 404, { error: '插件没开着' }); return; }
+    const tok = ticketOf(req);
+    let who;
+    if (tok) {
+      const ident = resolveTicket(tok, id);
+      if (!ident) { json(res, 401, { error: 'plugin ticket expired' }); return; }
+      who = contextFor(ident);
+    } else {
+      who = requireCtx(identify, req, res);
+      if (!who) return;
+    }
+    if (!can(who, 'server.manage')) { json(res, 403, { error: '只有服务器主机能改插件设置' }); return; }
+    try {
+      if (op === 'config' && req.method === 'GET') {
+        const p = kernel.get(id);
+        json(res, 200, { schema: p.schema, config: p.config, problems: p.problems, i18n: p.extra?.i18n?.en ? { en: p.extra.i18n.en } : null });
+      } else if (op === 'config' && req.method === 'POST') {
+        // patch 合并进当前配置（没给的字段不动）；secret 字段回传打码串 = 沿用旧值
+        const b = await body(req);
+        const patch = b.patch && typeof b.patch === 'object' && !Array.isArray(b.patch) ? b.patch : null;
+        if (!patch) throw new PluginError(400, '要 patch：{ 字段: 新值 }');
+        const next = { ...(kernel.readState().plugins[id]?.config || {}), ...patch };
+        const risky = b.confirmGrant ? [] : riskyGrants(id, next);
+        if (risky.length) { json(res, 409, { error: '要确认授权', needConfirm: { accounts: risky } }); return; }
+        const p = await kernel.setConfig(id, next);
+        changed();
+        json(res, 200, { config: p.config, problems: p.problems });
+      } else if (op === 'options' && req.method === 'GET') {
+        const field = url.searchParams.get('field') || '';
+        const spec = specAt(kernel.schemaOf(id), field);
+        if (!spec) throw new PluginError(404, '没有字段「' + field + '」');
+        const src = spec.options;
+        const options = src === 'plugin' ? await optionsFor(id, field, who) : typeof src === 'string' ? builtinOptions(src, spec) : null;
+        json(res, 200, { options: options || [] });
+      } else if (op === 'actions' && req.method === 'GET') {
+        json(res, 200, { actions: panelView(id).actions || [] });
+      } else if (op === 'action' && req.method === 'POST') {
+        const b = await body(req);
+        json(res, 200, await runAction(id, String(b.action || ''), who, b.args));
+      } else if (op === 'status' && req.method === 'GET') {
+        await refreshStatuses([id]);
+        const { panelStatus, optionFields, ...rest } = panelView(id);
+        json(res, 200, { status: panelStatus || null, ...rest });
+      } else json(res, 404, { error: 'not found' });
+    } catch (e) { json(res, e.status || 400, { error: String(e?.message || e) }); }
   });
 
   // 插件页面：/plugins/<id>/web/<相对路径>（空路径给面板页）。SDK：/plugins/_sdk/<文件>（核心自带，所有插件页面共用）。

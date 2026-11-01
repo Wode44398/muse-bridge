@@ -157,6 +157,63 @@ export default {
   '请求体太大': 'Request body too large',
   '确定吗？': 'Are you sure?',
 
+  // —— 插件接口 v3（插件详情）：体检、能力、日志、健康检查、定时任务、用量 ——
+  '清单体检：{n} 条提示': { one: 'Manifest check: {n} note', other: 'Manifest check: {n} notes' },
+  '这个插件会': 'This plugin can',
+  '插件日志': 'Plugin log',
+  '插件自己记的日志（ctx.log / warn / error）': 'What the plugin logged itself (ctx.log / warn / error)',
+  '「{name}」的日志': 'Log of “{name}”',
+  '只看警告和错误': 'Warnings and errors only',
+  '（没有警告或错误）': '(no warnings or errors)',
+  '（还没有记录）': '(nothing logged yet)',
+  '健康': 'Healthy',
+  '不健康': 'Unhealthy',
+  '待检查': 'Not checked yet',
+  '健康检查不过，已不再自动重启': 'Failing health checks; no longer restarting automatically',
+  '健康检查不过已重启 {n} 次': { one: 'restarted {n}× for failed health checks', other: 'restarted {n}× for failed health checks' },
+  '健康检查：{reason}': 'Health check: {reason}',
+  '连续 {n} 次不过': { one: '{n} failure in a row', other: '{n} failures in a row' },
+  '正在运行': 'Running',
+  '开发实例不跑': 'doesn’t run on a dev instance',
+  '下次 {at}': 'next {at}',
+  '马上': 'any moment',
+  '{n} 分钟后': 'in {n} min',
+  '上次 {at}': 'Last run {at}',
+  '失败：{reason}': 'Failed: {reason}',
+  '累计': 'All time',
+
+  // —— 服务端：定时任务的时间表说明（plugins/schedule.mjs，tr()）——
+  '每 {n} 秒': 'Every {n} s',
+  '每 {n} 分钟': 'Every {n} min',
+  '每 {n} 小时': { one: 'Every hour', other: 'Every {n} hours' },
+  '每 {n} 天': { one: 'Every day', other: 'Every {n} days' },
+
+  // —— 服务端：清单体检（plugins/discover.mjs inspectManifest，tr()）——
+  '清单里有不认识的字段「{key}」（拼错了？）': 'Unknown manifest field “{key}” (typo?)',
+  '配置「{name}」的 widget「{widget}」不认识（可用：{list}）': 'Setting “{name}” uses an unknown widget “{widget}” (available: {list})',
+  'permissions 应为能力名的列表': 'permissions should be a list of capability names',
+  'permissions 里的「{name}」不认识（可用：{list}）': 'Unknown capability “{name}” in permissions (available: {list})',
+  '清单没写 engines.pluginApi，按接口 v2 对待（新插件写 3）': 'The manifest has no engines.pluginApi, so it’s treated as plugin API v2 (new plugins should use 3)',
+  '用了 bridge 的内部接口（{mods}），bridge 升级后可能失效——尽量改用 ctx 上的公共接口': 'Uses bridge internals ({mods}), which may break when bridge is upgraded. Prefer the public APIs on ctx',
+  'locales/en.json 应为对象': 'locales/en.json should be an object',
+  'locales/en.json 读不了：{reason}': 'Couldn’t read locales/en.json: {reason}',
+
+  // —— 服务端：能力声明的说明（plugins/discover.mjs PERMISSIONS，tr()）——
+  '以你授权的账号跑 Claude': 'Run Claude as an account you authorize',
+  '在插件自己的隔离工作区里跑 Claude（用服务器的 Claude 额度）': 'Run Claude in its own isolated workspace (using the server’s Claude quota)',
+  '给 Claude 加工具 / 提示词': 'Add tools / prompts for Claude',
+  '读写账号或沙箱工作区里的文件': 'Read and write files in an account’s or its sandbox workspace',
+  '生成公开链接（只读工作空间 / 快照对话页）': 'Create public links (read-only workspace / conversation snapshot)',
+  '在服务器上拉起外部程序': 'Start external programs on the server',
+  '接收外部推送（开一个回调地址）': 'Receive outside pushes (opens a webhook)',
+  '访问外部网络服务': 'Access outside network services',
+  '给你发通知（界面提示 + 手机通知栏）': 'Send you notifications (in-app + phone notification bar)',
+  '按时间表在后台运行': 'Run in the background on a schedule',
+  '加自己的接口': 'Add its own endpoints',
+
+  // —— 服务端：子进程健康检查（plugins/process.mjs，tr()）——
+  '检查没通过': 'Check failed',
+
   // —— 自动表单 ——
   '未选': 'Not selected',
   '选一个': 'Pick one',

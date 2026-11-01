@@ -80,6 +80,8 @@ function writeSkeleton(dir, id, panel) {
     version: '0.1.0',
     description: '一句话说明这个插件做什么。',
     entry: 'index.mjs',
+    engines: { pluginApi: 3 },
+    permissions: ['routes', 'claude.tools'],
     config: {
       message: { type: 'string', label: '示例设置', default: '你好', desc: '设置页会按这里自动生成表单' },
     },
@@ -93,7 +95,7 @@ export function apply(ctx, config) {
   // 接口：GET /api/plugin/${id}/hello（要登录）
   ctx.route('GET', '/api/plugin/${id}/hello', (req, res) => {
     if (!ctx.http.user(req, res)) return;
-    ctx.http.json(res, 200, { message: config.message });
+    ctx.http.json(res, 200, { message: ctx.config.message });
   });
 
   // 给 Claude 的工具：mcp__${id}__hello
@@ -102,16 +104,19 @@ export function apply(ctx, config) {
     description: '示例工具：返回插件配置里的 message。',
     access: 'read',
     params: { name: { type: 'string', desc: '可选：对谁说' } },
-    handler: ({ name }) => (name ? name + '，' : '') + config.message,
+    handler: ({ name }) => (name ? name + '，' : '') + ctx.config.message,
   });
 
   // agent 接口操作：${gid}.status
-  ctx.agentOp({ name: 'status', title: '${id} 的状态', handler: () => ({ ok: true, message: config.message }) });
+  ctx.agentOp({ name: 'status', title: '${id} 的状态', handler: () => ({ ok: true, message: ctx.config.message }) });
 
   // 设置页插件详情顶上的状态块（ctx.status.refresh() 立刻刷新）
-  ctx.status(() => ({ tone: 'ok', text: '运行中', items: [{ label: '示例设置', value: config.message }] }));
+  ctx.status(() => ({ tone: 'ok', text: '运行中', items: [{ label: '示例设置', value: ctx.config.message }] }));
 
-  ctx.log('已启用');
+  // 改设置时不重启插件，只换配置（不登记就整个重启）。所以上面都从 ctx.config 读最新值。
+  ctx.onConfig(() => { ctx.status.refresh(); });
+
+  ctx.log('已启用');   // 详情页「日志」里看得到
 }
 `);
 

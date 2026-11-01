@@ -24,7 +24,7 @@ import { DATA_ROOT } from '../runtime/paths.mjs';
 import { BUILTIN_PLUGINS } from './catalog.mjs';
 import { MODULE_CATALOG, getModule, moduleStatus } from '../modules/registry.mjs';
 import { installCoreResolver } from '../modules/core-resolve.mjs';
-import { enginesProblem, hasUpperBound } from './engines.mjs';
+import { enginesProblem, hasUpperBound, PLUGIN_API_VERSION } from './engines.mjs';
 
 export const MANIFEST = 'bridge-plugin.json';
 export const INSTALLED_PLUGINS_DIR = path.resolve(process.env.BRIDGE_PLUGINS_DIR || path.join(DATA_ROOT, 'plugins'));
@@ -81,9 +81,98 @@ export function normUi(m) {
   return { panel, settings, who: ui.who === 'members' ? 'members' : 'host' };
 }
 
+// ── 清单体检（不拒装，只提示）：未知字段、未知控件、能力声明、用了内部接口、英文界面 ───────────
+const KNOWN_KEYS = new Set(['$schema', 'id', 'name', 'version', 'description', 'author', 'homepage', 'license', 'repository', 'keywords',
+  'entry', 'category', 'config', 'requires', 'restart', 'defaultEnabled', 'ui', 'web', 'engines', 'permissions']);
+const WIDGETS = new Set(['textarea', 'password', 'slider', 'chips', 'segmented']);
+// 能力声明的词表（展示用，不强制）：清单 permissions 里写这些名字，安装后详情页按人话列出来
+export const PERMISSIONS = Object.freeze({
+  chat: '以你授权的账号跑 Claude',
+  sandbox: '在插件自己的隔离工作区里跑 Claude（用服务器的 Claude 额度）',
+  'claude.tools': '给 Claude 加工具 / 提示词',
+  files: '读写账号或沙箱工作区里的文件',
+  share: '生成公开链接（只读工作空间 / 快照对话页）',
+  process: '在服务器上拉起外部程序',
+  webhook: '接收外部推送（开一个回调地址）',
+  network: '访问外部网络服务',
+  notify: '给你发通知（界面提示 + 手机通知栏）',
+  schedule: '按时间表在后台运行',
+  routes: '加自己的接口',
+});
+const MAX_SCAN_FILES = 300;
+
+function scanInternalImports(dir) {
+  const hits = new Set();
+  let n = 0;
+  const walk = (d, depth) => {
+    if (depth > 6 || n > MAX_SCAN_FILES) return;
+    let ents = [];
+    try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { if (!(depth === 0 && e.name === 'web')) walk(p, depth + 1); continue; }
+      if (!/\.(mjs|cjs|js)$/i.test(e.name)) continue;
+      if (++n > MAX_SCAN_FILES) return;
+      let src = '';
+      try { if (statSync(p).size > 2 * 1024 * 1024) continue; src = readFileSync(p, 'utf8'); } catch { continue; }
+      for (const m of src.matchAll(/['"]@bridge\/core\/([^'"\s]+)['"]/g)) hits.add(m[1]);
+    }
+  };
+  walk(dir, 0);
+  return [...hits].sort();
+}
+
+function widgetProblems(schema, prefix = '') {
+  const out = [];
+  for (const [k, s] of Object.entries(schema && typeof schema === 'object' ? schema : {})) {
+    if (!s || typeof s !== 'object') continue;
+    const name = prefix + k;
+    if (s.widget != null && !WIDGETS.has(s.widget)) out.push(`配置「${name}」的 widget「${s.widget}」不认识（可用：${[...WIDGETS].join(' / ')}）`);
+    if (s.fields) out.push(...widgetProblems(s.fields, name + '.'));
+    if (s.items && s.items.fields) out.push(...widgetProblems(s.items.fields, name + '[].'));
+    if (s.value && typeof s.value === 'object') out.push(...(s.value.type ? widgetProblems({ $value: s.value }, name + '.') : widgetProblems(s.value, name + '.')));
+  }
+  return out;
+}
+
+// 返回 { lint: [人话], permissions: [{ id, label }] | null, internal: [模块], i18n: { en? } }
+export function inspectManifest(m, dir, source) {
+  const lint = [];
+  for (const k of Object.keys(m)) if (!KNOWN_KEYS.has(k)) lint.push(`清单里有不认识的字段「${k}」（拼错了？）`);
+  lint.push(...widgetProblems(m.config));
+  let permissions = null;
+  if (m.permissions != null) {
+    if (!Array.isArray(m.permissions)) lint.push('permissions 应为能力名的列表');
+    else {
+      permissions = [];
+      for (const p of m.permissions) {
+        if (typeof p !== 'string' || !PERMISSIONS[p]) { lint.push(`permissions 里的「${p}」不认识（可用：${Object.keys(PERMISSIONS).join(' / ')}）`); continue; }
+        permissions.push({ id: p, label: PERMISSIONS[p] });
+      }
+    }
+  }
+  const api = m.engines && m.engines.pluginApi != null ? Number(m.engines.pluginApi) : null;
+  if (api == null) lint.push('清单没写 engines.pluginApi，按接口 v2 对待（新插件写 3）');
+  const internal = source === 'installed' || source === 'local' ? scanInternalImports(dir) : [];
+  if (internal.length) lint.push(`用了 bridge 的内部接口（@bridge/core/${internal.slice(0, 3).join('、@bridge/core/')}${internal.length > 3 ? ' 等 ' + internal.length + ' 个' : ''}），bridge 升级后可能失效——尽量改用 ctx 上的公共接口`);
+  const i18n = {};
+  try {
+    const f = path.join(dir, 'locales', 'en.json');
+    if (existsSync(f) && statSync(f).size <= 200 * 1024) {
+      const j = readJsonFile(f);
+      if (j && typeof j === 'object' && !Array.isArray(j)) i18n.en = j;
+      else lint.push('locales/en.json 应为对象');
+    }
+  } catch (e) { lint.push('locales/en.json 读不了：' + (e?.message || e)); }
+  return { lint, permissions, internal, i18n };
+}
+
 function entryOf(dir, source) {
   const { manifest: m, entryPath } = readPluginDir(dir);
   const url = pathToFileURL(entryPath).href;
+  const ins = inspectManifest(m, dir, source);
+  const api = m.engines && Number.isInteger(Number(m.engines.pluginApi)) && m.engines.pluginApi != null ? Number(m.engines.pluginApi) : 2;
   return {
     id: m.id,
     name: String(m.name || m.id).slice(0, 60),
@@ -97,7 +186,8 @@ function entryOf(dir, source) {
     defaultEnabled: m.defaultEnabled !== false,
     config: m.config || null,
     web: m.web && typeof m.web === 'object' ? { page: typeof m.web.page === 'string' ? m.web.page : null } : null,
-    extra: { ui: normUi(m) },
+    extra: { ui: normUi(m), lint: ins.lint, permissions: ins.permissions, internal: ins.internal, i18n: ins.i18n },
+    pluginApi: api,
     source,
     dir,
     // rev 递增 = 重新加载：查询串让 Node 当成新模块；入口里的相对 import 由 core-resolve 的钩子带上同一个 rev。
@@ -112,7 +202,7 @@ export async function registerAll(kernel) {
   for (const e of BUILTIN_PLUGINS) {
     if (typeof e.available === 'function' && !e.available()) continue;
     const { available, defaultEnabled, ...rest } = e;
-    const ent = { ...rest, source: 'builtin', defaultEnabled: typeof defaultEnabled === 'function' ? !!defaultEnabled() : defaultEnabled !== false };
+    const ent = { ...rest, source: 'builtin', pluginApi: PLUGIN_API_VERSION, defaultEnabled: typeof defaultEnabled === 'function' ? !!defaultEnabled() : defaultEnabled !== false };
     builtinEntries.set(ent.id, ent);
     kernel.register(withOverride(kernel, ent));
   }

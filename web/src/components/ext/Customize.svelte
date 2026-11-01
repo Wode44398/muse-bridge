@@ -266,7 +266,13 @@
     }
   });
   const connFlow = (it) => authFlow(connSid(it.id), it.connector?.key);
-  function connect(it) { startConnectorAuth(it.id, it.connector?.key, reserveAuthWindow()); }
+  // 列表里点「需要登录」时人不在控制面板上：授权没起来（如 Google 不支持动态注册）要用提示条说出来，别悄悄退回原状
+  async function connect(it) {
+    await startConnectorAuth(it.id, it.connector?.key, reserveAuthWindow());
+    const f = connFlow(it);
+    if (f && f.needsApp) openItem(it);   // 要先配 OAuth 应用：带到它的控制面板，配置那一节就在那里
+    else if (f && f.status === 'error' && f.error) showToast(tr(f.error), true);
+  }
   async function disconnect(it) {
     try {
       const r = await api.post('/api/mcp-oauth/disconnect', { connector: it.id });
@@ -288,7 +294,9 @@
     if (it.connector?.transport === 'stdio') return { k: 'local', text: '—' };
     const f = connFlow(it);
     if (f && ['starting', 'waiting'].includes(f.status)) return { k: 'busy', text: t('等待授权') };
+    if (f && f.status === 'error' && !f.needsApp) return { k: 'fail', text: t('授权失败'), tip: tr(f.error || '') };
     const s = connSt[it.id];
+    if (s && s.status !== 'connected' && ((s.oauthApp && !s.oauthApp.configured) || f?.needsApp)) return { k: 'app', text: t('需要配置') };
     if (!s) return connStBusy ? { k: 'busy', text: '' } : { k: 'local', text: '—' };
     if (s.status === 'connected') return { k: 'ok', text: '' };
     if (s.status === 'needs-auth') return { k: 'auth', text: t('需要登录') };
@@ -498,6 +506,19 @@
       if (!conn.id) { curType = 'connector'; view = 'mine'; }
     } catch (e) { connErr = errMsg(e); }
     finally { connBusy = false; }
+  }
+  // 一键添加内置的本地连接器（现在只有 Figma 只读，用个人访问令牌；Muse 上令牌由平台保管，不用填）
+  async function addPreset(preset) {
+    try {
+      const r = await api.post(B + '/connector-preset', { preset, scope });
+      await load();
+      curType = 'connector'; view = 'mine'; stack = [{ k: 'item', id: r.item.id }];
+      queueMicrotask(toTop);
+      if (r.needsKey) {
+        const cur = items.find((x) => x.id === r.item.id);
+        if (cur) { openConnForm(cur); conn.envText = 'FIGMA_API_KEY='; }
+      } else showToast(r.existed ? t('「{name}」已经装过了', { name: r.item.name }) : t('已添加「{name}」', { name: r.item.name }));
+    } catch (e) { showToast(errMsg(e), true); }
   }
   const transLabel = { stdio: t('本地命令 (stdio)'), http: t('远程 HTTP'), sse: t('远程 SSE') };
 
@@ -725,7 +746,8 @@
         onCancelAuth={() => cancelAuth(connSid(it.id), it.connector?.key)} onReopen={() => openAuthPage(fl?.authUrl)}
         onSubmitUrl={(u) => submitAuthUrl(connSid(it.id), it.connector?.key, u)} onConfirmWeb={() => confirmAuth(connSid(it.id), it.connector?.key)}
         onRefresh={() => loadConnSt(true)} onPolicy={(m) => setToolPolicy(it, m)}
-        onEdit={() => openConnForm(it)} onToggle={() => toggleEnabled(it)} onUninstall={() => uninstall(it)}>
+        onEdit={() => openConnForm(it)} onToggle={() => toggleEnabled(it)} onUninstall={() => uninstall(it)}
+        app={{ onSaved: () => { cancelAuth(connSid(it.id), it.connector?.key); loadConnSt(true); }, onToast: showToast, onConfirm: askConfirm }}>
         <div class="cz-sec">{t('生效 Agent')}</div>
         {@render agentRows(AGENTS.map((a) => { const ok = agentAllowed(it, a.key); return { key: a.key, label: a.label, state: ok && it.agents?.[a.key] ? 'on' : 'off', na: !ok,
           sub: ok ? a.hint : agentDeniedWhy(it, a.key), onclick: () => toggleAgent(it, a.key) }; }))}
@@ -863,6 +885,7 @@
               <button class="cz-mi" onclick={() => { pop_ = ''; openUpload('skill'); }}>{@html ic('skill')}{t('上传技能')}</button>
               {#if !member}
               <button class="cz-mi" onclick={() => { pop_ = ''; openConnForm(); }}>{@html ic('connector')}{t('添加连接器')}</button>
+              <button class="cz-mi" onclick={() => { pop_ = ''; addPreset('figma-pat'); }}>{@html ic('connector')}{t('添加 Figma（个人访问令牌）')}</button>
               <button class="cz-mi" onclick={() => { pop_ = ''; openUpload('plugin'); }}>{@html ic('plugin')}{t('上传插件')}</button>
               <div class="cz-pop-sep"></div>
               <button class="cz-mi" onclick={() => { pop_ = ''; srcErr = ''; srcOpen = true; if (!mk) loadMarket(); }}>{@html ic('store')}{t('管理市场…')}</button>
@@ -949,10 +972,11 @@
               <div class="cz-tr" class:off={!it.enabled} role="row" tabindex="0" onclick={() => openItem(it)} onkeydown={(ev) => { if (ev.key === 'Enter') openItem(it); }}>
                 <span class="cz-td nm" role="cell"><span class="cz-tile xs">{@html ic('connector')}</span><b>{it.name}</b></span>
                 <span class="cz-td" role="cell">{it.connector?.transport === 'stdio' ? t('本地') : t('远程')}</span>
-                <span class="cz-td st k-{cell.k}" role="cell">
+                <span class="cz-td st k-{cell.k}" role="cell" title={cell.tip || undefined}>
                   {#if cell.k === 'ok'}{@html ic('check', 2)}
                   {:else if cell.k === 'busy'}<span class="cz-spin"></span>{cell.text}
                   {:else if cell.k === 'auth'}<button class="cz-link" onclick={(ev) => { ev.stopPropagation(); connect(it); }}>{cell.text}</button>
+                  {:else if cell.k === 'app'}<button class="cz-link" onclick={(ev) => { ev.stopPropagation(); openItem(it); }}>{cell.text}</button>
                   {:else}{cell.text}{/if}
                 </span>
               </div>

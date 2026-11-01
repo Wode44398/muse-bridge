@@ -11,6 +11,7 @@ import { scaffoldPlugin, EXAMPLES, ScaffoldError } from '../../plugins/scaffold.
 import path from 'node:path';
 import { pluginView, pluginsOverview, riskyGrants } from '../../routes/plugins.mjs';
 import { panelView, refreshStatuses, runAction } from '../../plugins/panel.mjs';
+import { pluginLogs } from '../../plugins/logs.mjs';
 import { busPublishAll } from '../../runtime/bus.mjs';
 
 defineGroup('plugins', '插件', 'bridge 的功能扩展：内置功能逐项开关、改配置；登记 / 重载 / 卸载第三方插件（写法见手册 plugins 章）。');
@@ -44,21 +45,25 @@ defineOp({
 
 defineOp({
   name: 'plugins.status', title: '看一个插件的运行状态',
-  desc: '插件自报的状态块（status：tone ok / warn / error / idle、text、items）、它托管的子进程（processes：state、pid、restarts、lastExit）、'
-    + '入站回调地址（hooks）、可用的动作按钮（actions）。logs=子进程名时附上该子进程最后 200 行日志。',
+  desc: '插件自报的状态块（status：tone ok / warn / error / idle、text、items）、它托管的子进程（processes：state、pid、restarts、lastExit、health）、'
+    + '入站回调地址（hooks）、定时任务（schedules）、用量（usage：用过 ctx.chat 的插件）、可用的动作按钮（actions）、清单体检提示（lint）。'
+    + 'logs=plugin 附上插件自己的日志（ctx.log / warn / error，最近 200 条）；logs=子进程名附上该子进程最后 200 行日志。',
   access: 'read', need: ['server.manage'],
   params: {
     id: { type: 'string', required: true, desc: '插件 id' },
-    logs: { type: 'string', desc: '可选：子进程名，附上它的日志尾巴' },
+    logs: { type: 'string', desc: "可选：'plugin' = 插件自己的日志；子进程名 = 它的日志尾巴" },
   },
   handler: (ctx, args) => wrap(async () => {
     must(args.id);
     await refreshStatuses([args.id]);
     const { panelStatus, optionFields, ...rest } = panelView(args.id);
-    const out = { id: args.id, active: kernel.isActive(args.id), status: panelStatus || null, ...rest };
-    if (args.logs) {
+    const ex = kernel.get(args.id)?.extra || {};
+    const out = { id: args.id, active: kernel.isActive(args.id), status: panelStatus || null, ...rest, ...(ex.lint && ex.lint.length ? { lint: ex.lint } : {}) };
+    if (args.logs === 'plugin') {
+      out.log = pluginLogs(args.id, { lines: 200 }).map((l) => `${new Date(l.t).toISOString()} ${l.level} ${l.text}`);
+    } else if (args.logs) {
       const h = kernel.contextOf(args.id)?.process?.get(args.logs);
-      if (!h) throw new OpError('not_found', '没有子进程「' + args.logs + '」');
+      if (!h) throw new OpError('not_found', '没有子进程「' + args.logs + '」（插件自己的日志用 logs=plugin）');
       out.log = h.tail(200);
     }
     return out;

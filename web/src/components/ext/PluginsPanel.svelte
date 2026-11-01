@@ -21,8 +21,9 @@
   import ModulesPanel from '../ModulesPanel.svelte';
   import PluginForm from './PluginForm.svelte';
   import PluginFrame from './PluginFrame.svelte';
-  import { openPluginStandalone, inAndroidApp } from '../../lib/pluginPanels.svelte.js';
+  import { openPluginStandalone, inAndroidApp, plText } from '../../lib/pluginPanels.svelte.js';
   import { openSettings } from '../../lib/settingsNav.svelte.js';
+  import { relTime } from '../../lib/format.js';
 
   let { toast = () => {}, confirm = async () => true } = $props();
 
@@ -42,6 +43,10 @@
   const PLUGIN_G = '<path d="M10 4.5a1.8 1.8 0 1 1 3.6 0H17a1.4 1.4 0 0 1 1.4 1.4v3.3a1.8 1.8 0 1 0 0 3.6v3.3A1.4 1.4 0 0 1 17 17.5h-3.3a1.8 1.8 0 1 0-3.6 0H7a1.4 1.4 0 0 1-1.4-1.4v-3.4a1.8 1.8 0 1 1 0-3.6V5.9A1.4 1.4 0 0 1 7 4.5z"/>';
   const glyph = (p) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${CATS.find((c) => c.key === p.category)?.g || PLUGIN_G}</svg>`;
   const SOURCE = { builtin: t('内置'), module: t('agent 扩展'), installed: t('已安装'), local: t('本机目录') };
+  // 插件的名称 / 说明 / 面板标题：英文界面优先用插件自带的英文词条（locales/en.json，lib/pluginPanels 的 plText），没有再 tr(中文)
+  const pName = (p) => (p ? plText(p, 'name', p.name || p.id) : '');
+  const pDesc = (p) => (p ? plText(p, 'description', p.description || '') : '');
+  const pPanelTitle = (p) => plText(p, 'ui.panel.title', isEn() && p?.ui?.panel?.titleEn ? p.ui.panel.titleEn : p?.ui?.panel?.title || p?.name || '');
 
   // ═══ 数据 ═══
   let data = $state(null);
@@ -57,7 +62,8 @@
     // 插件状态块 / 子进程状态实时更新（ctx.status.refresh、子进程起停）
     else if (ev?.type === 'plugins.status' && data) untrack(() => {
       const i = data.plugins.findIndex((p) => p.id === ev.id);
-      if (i >= 0) data.plugins[i] = { ...data.plugins[i], panelStatus: ev.panelStatus || null, processes: ev.processes || [], hooks: ev.hooks || [], actions: ev.actions || [] };
+      if (i >= 0) data.plugins[i] = { ...data.plugins[i], panelStatus: ev.panelStatus || null, processes: ev.processes || [], hooks: ev.hooks || [], actions: ev.actions || [],
+        schedules: ev.schedules || [], usage: ev.usage || undefined };
     });
   }));
   const apply = (r) => { if (r && Array.isArray(r.plugins)) data = { plugins: r.plugins, restartPending: !!r.restartPending }; };
@@ -67,7 +73,7 @@
   const groups = $derived(CATS.map((c) => ({ ...c, items: builtins.filter((p) => p.category === c.key) }))
     .concat([{ key: '_other', label: t('其他'), items: builtins.filter((p) => !CATS.some((c) => c.key === p.category)) }])
     .filter((g) => g.items.length));
-  const nameOf = (id) => tr((data?.plugins || []).find((p) => p.id === id)?.name || id);
+  const nameOf = (id) => { const p = (data?.plugins || []).find((x) => x.id === id); return p ? pName(p) : id; };
 
   function footOf(p) {
     if (p.status === 'error') return { text: t('出错：{reason}', { reason: tr(p.error || '') }), err: true };
@@ -93,7 +99,7 @@
       const r = await api.post('/api/plugins/toggle', { id: p.id, enabled: !p.enabled });
       apply(r);
       const np = r.plugin;
-      if (np?.status === 'error') toast(t('「{name}」启用失败：{reason}', { name: tr(np.name), reason: tr(np.error || '') }), true);
+      if (np?.status === 'error') toast(t('「{name}」启用失败：{reason}', { name: pName(np), reason: tr(np.error || '') }), true);
       else if (np?.pendingRestart) toast(t('已保存，重启 bridge 后生效'));
     } catch (e) { toast(errMsg(e), true); }
     finally { busy[p.id] = false; }
@@ -130,15 +136,15 @@
       const r = await api.post('/api/plugins/reload', { id: p.id });
       apply(r);
       if (r.plugin?.status === 'error') toast(t('重新加载失败：{reason}', { reason: tr(r.plugin.error || '') }), true);
-      else toast(t('已重新加载「{name}」', { name: tr(p.name) }));
+      else toast(t('已重新加载「{name}」', { name: pName(p) }));
     } catch (e) { toast(errMsg(e), true); }
     finally { busy[p.id] = false; }
   }
   async function uninstall(p) {
     const local = p.source === 'local';
     const ok = await confirm(local
-      ? { title: t('取消登记「{name}」？', { name: tr(p.name) }), desc: t('停用并从列表里移除；目录里的文件不动，随时可以重新登记。'), yes: t('取消登记'), danger: true }
-      : { title: t('卸载「{name}」？', { name: tr(p.name) }), desc: t('停用并移走它的程序文件（留在回收区，可找回）；它存的数据（plugin-data）不删。'), yes: t('卸载'), danger: true });
+      ? { title: t('取消登记「{name}」？', { name: pName(p) }), desc: t('停用并从列表里移除；目录里的文件不动，随时可以重新登记。'), yes: t('取消登记'), danger: true }
+      : { title: t('卸载「{name}」？', { name: pName(p) }), desc: t('停用并移走它的程序文件（留在回收区，可找回）；它存的数据（plugin-data）不删。'), yes: t('卸载'), danger: true });
     if (!ok) return;
     try { apply(await api.post('/api/plugins/uninstall', { id: p.id })); selId = null; toast(local ? t('已取消登记') : t('已卸载')); }
     catch (e) { toast(errMsg(e), true); }
@@ -149,7 +155,7 @@
     openSettings('plg-' + p.id);
   }
   async function standalone(p, which) {
-    try { await openPluginStandalone(p.id, { which, title: p.ui?.panel?.title || p.name }); }
+    try { await openPluginStandalone(p.id, { which, title: pPanelTitle(p) }); }
     catch (e) { toast(errMsg(e), true); }
   }
 
@@ -169,15 +175,38 @@
     finally { busy[p.id + ':' + a.id] = false; }
   }
 
-  // 子进程日志
-  let logOf = $state(null);   // { name, lines, state }
+  // 日志查看层：子进程日志（name=子进程名）与插件自己的日志（name=plugin，ctx.log / warn / error）共用
+  let logOf = $state(null);   // { name, lines, state, plugin?, level? }——plugin 有值 = 插件自己的日志
+  let logBusy = $state(false);
   $effect(() => { if (!logOf) return; return pushBackLayer(() => { logOf = null; }); });
   async function showLog(p, proc) {
     try { const r = await api.get('/api/plugins/log?id=' + encodeURIComponent(p.id) + '&name=' + encodeURIComponent(proc.name) + '&lines=300'); logOf = { name: proc.name, lines: r.lines || [], state: r.state }; }
     catch (e) { toast(errMsg(e), true); }
   }
-  const PROC_STATE = { starting: t('启动中'), running: t('运行中'), backoff: t('等待重启'), stopped: t('已停止'), failed: t('失败') };
-  const procTone = (st) => (st === 'running' ? 'ok' : st === 'failed' ? 'crit' : st === 'stopped' ? '' : 'warn');
+  // 插件日志：服务端给的 lines 是中文区域格式，这里按界面语言从 entries 重排一遍；level='warn' 只看警告和错误
+  const logLine = (e) => {
+    let at = '';
+    try { at = new Date(e.t).toLocaleString(locale(), { hour12: false }); } catch {}
+    return `${at} ${e.level && e.level !== 'info' ? String(e.level).toUpperCase() + ' ' : ''}${e.text}`;
+  };
+  async function showPluginLog(p, level = '') {
+    if (logBusy) return;
+    logBusy = true;
+    try {
+      const r = await api.get('/api/plugins/log?id=' + encodeURIComponent(p.id) + '&name=plugin&lines=300' + (level ? '&level=' + level : ''));
+      const lines = Array.isArray(r.entries) ? r.entries.map(logLine) : r.lines || [];
+      logOf = { name: 'plugin', plugin: p, level, lines };
+    } catch (e) { toast(errMsg(e), true); }
+    finally { logBusy = false; }
+  }
+  const PROC_STATE = { starting: t('启动中'), running: t('运行中'), backoff: t('等待重启'), stopped: t('已停止'), failed: t('失败'), unhealthy: t('健康检查不过，已不再自动重启') };
+  const procTone = (st) => (st === 'running' ? 'ok' : st === 'failed' || st === 'unhealthy' ? 'crit' : st === 'stopped' ? '' : 'warn');
+  // 子进程健康检查（process 的 health 选项）：ok null = 还没查过（启动后宽限期内）
+  const healthTag = (h) => (h.ok === true ? t('健康') : h.ok === false ? t('不健康') : t('待检查'));
+  // 定时任务：下次运行（一小时内说「N 分钟后」，再远写本地时间）、上次结果
+  const soon = (ms) => { const d = ms - Date.now(); return d < 60000 ? t('马上') : d < 3600000 ? t('{n} 分钟后', { n: Math.round(d / 60000) }) : when(ms); };
+  const schTone = (s) => (!s.enabled ? '' : s.running ? 'warn' : s.lastOk === false ? 'crit' : s.lastOk ? 'ok' : '');
+  const usd = (n) => '$' + (Number(n) || 0).toFixed(2);
   async function copyText(s) { try { await navigator.clipboard.writeText(s); toast(t('已复制')); } catch { toast(s); } }
 
   // ═══ 添加 ═══
@@ -193,8 +222,8 @@
       if (!res.ok) throw new Error(r?.error || 'HTTP ' + res.status);
       apply(r);
       const p = r.plugin;
-      if (p?.status === 'error') toast(t('已安装「{name}」，但启用失败：{reason}', { name: tr(p.name), reason: tr(p.error || '') }), true);
-      else toast(p?.pendingRestart ? t('已更新「{name}」，重启 bridge 后生效', { name: tr(p.name) }) : t('已安装「{name}」', { name: tr(p?.name || '') }));
+      if (p?.status === 'error') toast(t('已安装「{name}」，但启用失败：{reason}', { name: pName(p), reason: tr(p.error || '') }), true);
+      else toast(p?.pendingRestart ? t('已更新「{name}」，重启 bridge 后生效', { name: pName(p) }) : t('已安装「{name}」', { name: pName(p) }));
     } catch (e) { toast(tr(e?.message || String(e)), true); }
     finally { uploading = false; }
   }
@@ -210,8 +239,8 @@
       const r = await api.post('/api/plugins/install', { path: linkPath.trim() });
       apply(r);
       linkOpen = false; linkPath = '';
-      if (r.plugin?.status === 'error') toast(t('已登记「{name}」，但启用失败：{reason}', { name: tr(r.plugin.name), reason: tr(r.plugin.error || '') }), true);
-      else toast(t('已登记「{name}」', { name: tr(r.plugin?.name || '') }));
+      if (r.plugin?.status === 'error') toast(t('已登记「{name}」，但启用失败：{reason}', { name: pName(r.plugin), reason: tr(r.plugin.error || '') }), true);
+      else toast(t('已登记「{name}」', { name: pName(r.plugin) }));
     } catch (e) { linkErr = errMsg(e); }
     finally { linking = false; }
   }
@@ -230,8 +259,8 @@
       apply(r);
       ghOpen = false; ghRepo = '';
       const p = r.plugin;
-      if (p?.status === 'error') toast(t('已安装「{name}」，但启用失败：{reason}', { name: tr(p.name), reason: tr(p.error || '') }), true);
-      else toast(p?.pendingRestart ? t('已更新「{name}」，重启 bridge 后生效', { name: tr(p.name) }) : t('已安装「{name}」', { name: tr(p?.name || '') }));
+      if (p?.status === 'error') toast(t('已安装「{name}」，但启用失败：{reason}', { name: pName(p), reason: tr(p.error || '') }), true);
+      else toast(p?.pendingRestart ? t('已更新「{name}」，重启 bridge 后生效', { name: pName(p) }) : t('已安装「{name}」', { name: pName(p) }));
     } catch (e) { if (quiet) toast(errMsg(e), true); else ghErr = errMsg(e); }
     finally { ghBusy = false; }
   }
@@ -241,7 +270,7 @@
       const r = await api.get('/api/plugins/update?id=' + encodeURIComponent(p.id));
       if (r.pinned) { toast(t('钉在 {ref}，不跟新版', { ref: r.pinned })); return; }
       if (!r.newer) { toast(t('已经是最新版（v{v}）', { v: r.current || '?' })); return; }
-      const ok = await confirm({ title: t('更新「{name}」到 v{v}？', { name: tr(p.name), v: r.latest || r.tag }), desc: t('从 {repo} 下载最新 Release 覆盖安装，旧版留在回收区。', { repo: p.github.github }), yes: t('更新') });
+      const ok = await confirm({ title: t('更新「{name}」到 v{v}？', { name: pName(p), v: r.latest || r.tag }), desc: t('从 {repo} 下载最新 Release 覆盖安装，旧版留在回收区。', { repo: p.github.github }), yes: t('更新') });
       if (ok) await installGh(p.github.github, { quiet: true });
     } catch (e) { toast(errMsg(e), true); }
     finally { busy[p.id + ':upd'] = false; }
@@ -307,7 +336,7 @@
   const rbNewer = (p) => cmpVer(p.rollbackTo, p.override?.version || p.version || '0') > 0;
   const rbLabel = (p) => (rbNewer(p) ? t('换回 v{v}', { v: p.rollbackTo }) : t('回退到 v{v}', { v: p.rollbackTo }));
   async function rollback(p) {
-    if (!(await confirm({ title: rbNewer(p) ? t('「{name}」换回 v{v}？', { name: tr(p.name), v: p.rollbackTo }) : t('「{name}」回退到 v{v}？', { name: tr(p.name), v: p.rollbackTo }), desc: t('换回回收区里的上一版；现在这一版也留在回收区，可以再换回来。'), yes: t('回退') }))) return;
+    if (!(await confirm({ title: rbNewer(p) ? t('「{name}」换回 v{v}？', { name: pName(p), v: p.rollbackTo }) : t('「{name}」回退到 v{v}？', { name: pName(p), v: p.rollbackTo }), desc: t('换回回收区里的上一版；现在这一版也留在回收区，可以再换回来。'), yes: t('回退') }))) return;
     busy[p.id + ':rb'] = true;
     try {
       const r = await api.post('/api/plugins/rollback', { id: p.id });
@@ -318,7 +347,7 @@
     finally { busy[p.id + ':rb'] = false; }
   }
   async function restoreBuiltin(p) {
-    if (!(await confirm({ title: t('「{name}」恢复内置版？', { name: tr(p.name) }), desc: t('市场版移进回收区，换回随 bridge 发布的内置实现；这一版市场版之后不再提示更新。'), yes: t('恢复内置版') }))) return;
+    if (!(await confirm({ title: t('「{name}」恢复内置版？', { name: pName(p) }), desc: t('市场版移进回收区，换回随 bridge 发布的内置实现；这一版市场版之后不再提示更新。'), yes: t('恢复内置版') }))) return;
     busy[p.id + ':rb'] = true;
     try {
       const r = await api.post('/api/plugins/restore-builtin', { id: p.id });
@@ -373,13 +402,13 @@
   <div class="cz-card" class:off={!p.active} role="button" tabindex="0" onclick={() => open(p)} onkeydown={(ev) => { if (ev.key === 'Enter') open(p); }}>
     <span class="cz-tile">{@html glyph(p)}</span>
     <div class="cz-body">
-      <b class="cz-name">{tr(p.name)}</b>
-      <p class="cz-desc">{tr(p.description)}</p>
+      <b class="cz-name">{pName(p)}</b>
+      <p class="cz-desc">{pDesc(p)}</p>
       <span class="cz-foot" class:err={f.err} class:pp-warn={f.warn} class:pp-upd-foot={f.upd}>{f.text}</span>
     </div>
     {#if !p.locked}
       <button class="cz-sw" class:on={p.enabled} role="switch" aria-checked={p.enabled} disabled={busy[p.id]}
-        onclick={(ev) => { ev.stopPropagation(); toggle(p); }} aria-label={t('启用 {name}', { name: tr(p.name) })}><span></span></button>
+        onclick={(ev) => { ev.stopPropagation(); toggle(p); }} aria-label={t('启用 {name}', { name: pName(p) })}><span></span></button>
     {/if}
   </div>
 {/snippet}
@@ -387,22 +416,32 @@
 {#if sel}
   {@const f = footOf(sel)}
   {@const mx = mktOf(sel.id)}
+  {@const runOn = sel.active && !!(sel.panelStatus || sel.processes?.length || sel.actions?.length || sel.hooks?.length)}
+  <!-- 日志行：有记录就给；第三方插件开着时也给（hasLogs 是拉列表那一刻的，之后才记的看不到）。内置功能没记录就不占地方 -->
+  {@const logOn = !!(sel.hasLogs || (sel.active && (sel.source === 'installed' || sel.source === 'local')))}
   <div class="pp-detail">
     <div class="cz-crumb"><button class="cz-back" onclick={back}>{@html ic('back', 2)}<span>{t('功能扩展')}</span></button></div>
     <div class="cz-dh">
       <span class="cz-tile lg">{@html glyph(sel)}</span>
       <div class="cz-dh-tx">
-        <h2>{tr(sel.name)}</h2>
+        <h2>{pName(sel)}</h2>
         <p>{sel.market ? t('插件市场') : SOURCE[sel.source] || sel.source}{sel.override?.active ? ' · ' + t('市场版 v{v}', { v: sel.override.version }) : sel.version ? ' · v' + sel.version : ''}{sel.author ? ' · ' + sel.author : ''}</p>
       </div>
       {#if !sel.locked}
-        <button class="cz-sw" class:on={sel.enabled} role="switch" aria-checked={sel.enabled} disabled={busy[sel.id]} onclick={() => toggle(sel)} aria-label={t('启用 {name}', { name: tr(sel.name) })}><span></span></button>
+        <button class="cz-sw" class:on={sel.enabled} role="switch" aria-checked={sel.enabled} disabled={busy[sel.id]} onclick={() => toggle(sel)} aria-label={t('启用 {name}', { name: pName(sel) })}><span></span></button>
       {/if}
     </div>
-    {#if sel.description}<p class="cz-lead">{tr(sel.description)}</p>{/if}
+    {#if sel.description}<p class="cz-lead">{pDesc(sel)}</p>{/if}
     {#if f.err || f.warn}<div class="pp-state" class:err={f.err}>{f.text}</div>{/if}
     {#if sel.problems?.length}<div class="pp-state">{#each sel.problems as pr}<div>{tr(pr)}</div>{/each}</div>{/if}
     {#if sel.override?.error}<div class="pp-state">{tr(sel.override.error)}</div>{/if}
+    <!-- 清单体检：不拒装，只提示（插件作者看的，低调些） -->
+    {#if sel.lint?.length}
+      <div class="pp-state pp-hint">
+        <div class="pp-hint-h">{t('清单体检：{n} 条提示', { n: sel.lint.length })}</div>
+        <ul>{#each sel.lint as l}<li>{tr(l)}</li>{/each}</ul>
+      </div>
+    {/if}
 
     {#if mx || sel.rollbackTo || sel.override}
       <div class="cz-sec">{t('版本')}</div>
@@ -417,10 +456,20 @@
     {/if}
     {#if sel.locked && sel.source === 'module'}<p class="cz-note">{t('agent 扩展的开关在上面的「Agent」区（或设置里的 Agent 页）。')}</p>{/if}
 
-    {#if sel.active && (sel.panelStatus || sel.processes?.length || sel.actions?.length || sel.hooks?.length)}
+    <!-- 能力声明（清单 permissions）：展示用，不强制 -->
+    {#if sel.permissions?.length}
+      <div class="cz-sec">{t('这个插件会')}</div>
+      <div class="cz-list">
+        {#each sel.permissions as pm (pm.id)}
+          <div class="cz-kv pp-perm"><b>{tr(pm.label)}</b></div>
+        {/each}
+      </div>
+    {/if}
+
+    {#if runOn || logOn}
       <div class="cz-sec">{t('运行状态')}</div>
       <div class="cz-list">
-        {#if sel.panelStatus}
+        {#if runOn && sel.panelStatus}
           <div class="pp-st">
             <span class="pp-dot {sel.panelStatus.tone}"></span>
             <span class="pp-st-tx">{tr(sel.panelStatus.text || '')}</span>
@@ -429,20 +478,27 @@
             <div class="cz-kv"><span>{tr(it.label)}</span><b class:pp-tone-warn={it.tone === 'warn'} class:pp-tone-crit={it.tone === 'error'}>{tr(it.value)}</b></div>
           {/each}
         {/if}
-        {#each sel.processes || [] as proc (proc.name)}
+        {#each runOn ? sel.processes || [] : [] as proc (proc.name)}
           <button class="cz-li act" onclick={() => showLog(sel, proc)}>
-            <span class="cz-li-tx"><span><span class="pp-dot {procTone(proc.state)}"></span>{t('子进程')} {proc.name}</span>
-              <small>{PROC_STATE[proc.state] || proc.state}{proc.pid ? ' · pid ' + proc.pid : ''}{proc.restarts ? ' · ' + t('重启 {n} 次', { n: proc.restarts }) : ''}{proc.lastExit != null && proc.state !== 'running' ? ' · ' + t('上次退出 {code}', { code: proc.lastExit }) : ''} · {t('点开看日志')}</small></span>
+            <span class="cz-li-tx"><span><span class="pp-dot {procTone(proc.state)}"></span>{t('子进程')} {proc.name}{#if proc.health}<span class="pp-tag" class:pp-tag-ok={proc.health.ok === true} class:pp-tag-bad={proc.health.ok === false}>{healthTag(proc.health)}</span>{/if}</span>
+              <small>{PROC_STATE[proc.state] || proc.state}{proc.pid ? ' · pid ' + proc.pid : ''}{proc.restarts ? ' · ' + t('重启 {n} 次', { n: proc.restarts }) : ''}{proc.health?.restarts ? ' · ' + t('健康检查不过已重启 {n} 次', { n: proc.health.restarts }) : ''}{proc.lastExit != null && proc.state !== 'running' && proc.state !== 'unhealthy' ? ' · ' + t('上次退出 {code}', { code: proc.lastExit }) : ''} · {t('点开看日志')}</small>
+              {#if proc.health && proc.health.ok === false && proc.health.lastError}<small class="pp-wrap pp-tone-crit">{t('健康检查：{reason}', { reason: tr(proc.health.lastError) })}{proc.health.fails ? ' · ' + t('连续 {n} 次不过', { n: proc.health.fails }) : ''}</small>{/if}</span>
           </button>
         {/each}
-        {#each sel.hooks || [] as h (h.path)}
+        {#if logOn}
+          <button class="cz-li act" disabled={logBusy} onclick={() => showPluginLog(sel)}>
+            <span class="cz-li-tx"><span>{t('插件日志')}</span>
+              <small>{sel.hasLogs ? t('插件自己记的日志（ctx.log / warn / error）') : t('还没有记录')} · {t('点开看日志')}</small></span>
+          </button>
+        {/if}
+        {#each runOn ? sel.hooks || [] : [] as h (h.path)}
           <button class="cz-li act" onclick={() => copyText(h.path)}>
             <span class="cz-li-tx"><span>{t('回调地址')} <span class="pp-mono">{h.methods.join('/')} {h.path}</span></span>
               <small>{h.verify.map((v) => ({ loopback: t('只收本机直连'), secret: t('共享密钥'), hmac: t('HMAC 签名') }[v] || v)).join(' · ')} · {t('点一下复制')}</small></span>
           </button>
         {/each}
       </div>
-      {#if sel.actions?.length}
+      {#if runOn && sel.actions?.length}
         <div class="pp-actbar">
           {#each sel.actions as a (a.id)}
             <button class="cz-btn" class:pp-danger={a.danger} disabled={busy[sel.id + ':' + a.id]} title={tr(a.desc || '')} onclick={() => runAct(sel, a)}>{tr(a.label)}</button>
@@ -451,9 +507,35 @@
       {/if}
     {/if}
 
+    <!-- 定时任务（ctx.schedule）：开发实例上默认不跑（enabled=false） -->
+    {#if sel.active && sel.schedules?.length}
+      <div class="cz-sec">{t('定时任务')}</div>
+      <div class="cz-list">
+        {#each sel.schedules as s (s.name)}
+          <div class="cz-li">
+            <span class="cz-li-tx"><span><span class="pp-dot {schTone(s)}"></span>{tr(s.label || s.name)}</span>
+              <small>{tr(s.when || '')}{s.running ? ' · ' + t('正在运行') : !s.enabled ? ' · ' + t('开发实例不跑') : s.next ? ' · ' + t('下次 {at}', { at: soon(s.next) }) : ''}</small>
+              {#if s.lastRun}
+                <small class="pp-wrap" class:pp-tone-crit={s.lastOk === false}>{t('上次 {at}', { at: relTime(s.lastRun) })}{s.lastOk === true ? ' · ' + t('成功') : s.lastOk === false ? ' · ' + (s.lastError ? t('失败：{reason}', { reason: tr(s.lastError) }) : t('失败')) : ''}</small>
+              {/if}
+            </span>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    <!-- 用量：用过 ctx.chat 的插件才有（核心记账） -->
+    {#if sel.usage}
+      <div class="cz-sec">{t('用量')}</div>
+      <div class="cz-list">
+        <div class="cz-kv"><span>{t('今天')}</span><b>{t('{n} 轮', { n: sel.usage.today?.turns || 0 })} · {usd(sel.usage.today?.costUsd)}</b></div>
+        <div class="cz-kv"><span>{t('累计')}</span><b>{t('{n} 轮', { n: sel.usage.total?.turns || 0 })} · {usd(sel.usage.total?.costUsd)}</b></div>
+      </div>
+    {/if}
+
     {#if sel.ui?.panel && sel.active}
       <div class="cz-list pp-gap">
-        <button class="cz-li act" onclick={() => openPanel(sel)}><span class="cz-li-tx"><span>{t('打开「{name}」', { name: tr(sel.ui.panel.title) })}</span><small>{t('插件自己的控制面板')}</small></span></button>
+        <button class="cz-li act" onclick={() => openPanel(sel)}><span class="cz-li-tx"><span>{t('打开「{name}」', { name: pPanelTitle(sel) })}</span><small>{t('插件自己的控制面板')}</small></span></button>
         {#if !inAndroidApp()}<button class="cz-li act" onclick={() => standalone(sel, 'panel')}><span class="cz-li-tx"><span>{t('在新窗口打开')}</span></span></button>{/if}
       </div>
     {/if}
@@ -506,7 +588,7 @@
 
 {#if mkSel}
   <div class="pp-detail">
-    <div class="cz-crumb"><button class="cz-back" onclick={mkBack}>{@html ic('back', 2)}<span>{mkFrom ? tr((data?.plugins || []).find((p) => p.id === mkFrom)?.name || '') : t('功能扩展')}</span></button></div>
+    <div class="cz-crumb"><button class="cz-back" onclick={mkBack}>{@html ic('back', 2)}<span>{mkFrom ? nameOf(mkFrom) : t('功能扩展')}</span></button></div>
     <div class="cz-dh">
       <span class="cz-tile lg">{@html glyph(mkSel)}</span>
       <div class="cz-dh-tx">
@@ -627,9 +709,23 @@
   <div class="cz-modal-wrap">
     <button class="cz-mask" aria-label={t('关闭')} onclick={() => (logOf = null)}></button>
     <div class="cz-modal pp-logm" role="dialog" aria-modal="true">
-      <h3>{t('子进程 {name} 的日志', { name: logOf.name })}</h3>
-      <pre class="pp-log">{logOf.lines.length ? logOf.lines.join('\n') : t('（还没有输出）')}</pre>
-      <div class="cz-acts"><button class="cz-btn" onclick={() => (logOf = null)}>{t('关闭')}</button></div>
+      {#if logOf.plugin}
+        <h3>{t('「{name}」的日志', { name: pName(logOf.plugin) })}</h3>
+        <div class="pp-logbar">
+          <span>{t('只看警告和错误')}</span>
+          <button class="cz-sw" class:on={logOf.level === 'warn'} role="switch" aria-checked={logOf.level === 'warn'} aria-label={t('只看警告和错误')} disabled={logBusy}
+            onclick={() => showPluginLog(logOf.plugin, logOf.level === 'warn' ? '' : 'warn')}><span></span></button>
+        </div>
+        <pre class="pp-log">{logOf.lines.length ? logOf.lines.join('\n') : logOf.level ? t('（没有警告或错误）') : t('（还没有记录）')}</pre>
+        <div class="cz-acts">
+          <button class="cz-btn" disabled={logBusy} onclick={() => showPluginLog(logOf.plugin, logOf.level)}>{t('刷新')}</button>
+          <button class="cz-btn" onclick={() => (logOf = null)}>{t('关闭')}</button>
+        </div>
+      {:else}
+        <h3>{t('子进程 {name} 的日志', { name: logOf.name })}</h3>
+        <pre class="pp-log">{logOf.lines.length ? logOf.lines.join('\n') : t('（还没有输出）')}</pre>
+        <div class="cz-acts"><button class="cz-btn" onclick={() => (logOf = null)}>{t('关闭')}</button></div>
+      {/if}
     </div>
   </div>
 {/if}
@@ -695,6 +791,17 @@
   .pp-state { margin: 4px 0 6px; padding: 10px 14px; border-radius: 10px; font-size: 13.5px; line-height: 1.55; color: var(--cz-warn);
     background: color-mix(in srgb, var(--cz-warn) 11%, transparent); overflow-wrap: anywhere; }
   .pp-state.err { color: var(--cz-crit); background: color-mix(in srgb, var(--cz-crit) 11%, transparent); }
+  /* 清单体检：提示色（主题强调色淡底），比警告块低调 */
+  .pp-state.pp-hint { color: var(--cz-ink2); background: color-mix(in srgb, var(--cz-accent) 8%, transparent); font-size: 13px; }
+  .pp-hint-h { font-weight: 600; color: var(--cz-ink); margin-bottom: 2px; }
+  .pp-hint ul { margin: 0; padding-left: 1.2em; }
+  .pp-hint li { margin: 2px 0; }
+  .pp-perm b { font-weight: 400; }
+  /* .cz-li-tx small 默认单行截断；报错原因要能折行看全 */
+  .cz-li-tx small.pp-wrap { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
+  .pp-tag.pp-tag-ok { color: var(--cz-ok, #5aa468); background: color-mix(in srgb, var(--cz-ok, #5aa468) 14%, transparent); }
+  .pp-tag.pp-tag-bad { color: var(--cz-crit); background: color-mix(in srgb, var(--cz-crit) 12%, transparent); }
+  .pp-logbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; font-size: 13.5px; color: var(--cz-ink2); }
   .pp-gap { margin-top: 16px; }
   .pp-mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 13px; }
   .pp-add { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }

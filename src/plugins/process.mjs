@@ -1,4 +1,5 @@
-// 插件的托管子进程：ctx.process.spawn(name, { command, args?, cwd?, env?, restart?, maxRestarts?, hidden? })
+// 插件的托管子进程：ctx.process.spawn(name, { command, args?, cwd?, env?, restart?, maxRestarts?, hidden?, health? })
+// args / env 可以是函数（每次启动、重启时现算）。
 //
 // 插件要拉起外部程序（QQ 协议端、本地模型服务……）时用它，别自己 child_process.spawn：
 //   · 停用 / 改配置 / 重载 / bridge 退出时按【进程树】关掉。Windows 上 child.kill() 只打到直接子进程，经 cmd / bat 起的
@@ -10,7 +11,11 @@
 //     超过 maxRestarts（缺省 5）停在 failed。'always' 正常退出也重启；'never' 不重启。
 //   · stdout / stderr 写进 plugin-data/<id>/logs/<name>.log（满 2MB 轮转一份 .1），p.tail(n) 取最后几行；
 //     Windows 上缺省不弹黑窗（windowsHide）。
-//   · 状态（starting / running / backoff / stopped / failed、pid、重启次数、最后退出码）自动并进插件状态块。
+//   · 状态（starting / running / backoff / stopped / failed / unhealthy、pid、重启次数、最后退出码、健康）自动并进插件状态块。
+//   · health: { check: async () => bool, every?: 60s, failAfter?: 3, grace?: 120s, timeout?: 20s }：进程活着但不干活
+//     （比如 QQ 掉线、端口不应答）时，连续 failAfter 次检查不过就按进程树重启；启动后 grace 内不判。重启 maxRestarts 次
+//     还是不健康就停在 unhealthy（进程留着，不再重启），发 'unhealthy' 事件 { givenUp: true }——插件可以接着 ctx.notify 叫人。
+//     每次判定不健康都发 'unhealthy' { fails, restarts, givenUp: false }；恢复时发 'healthy'。
 
 import { spawn, execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -99,15 +104,26 @@ export function makeProcessService(ctx) {
     if (procs.has(name)) throw new Error(`子进程「${name}」已经在管着了（先 stop，或换个名字）`);
     const command = String(opts.command || '');
     if (!command) throw new Error('ctx.process.spawn 要 command');
-    const args = Array.isArray(opts.args) ? opts.args.map(String) : [];
+    // args / env 可以给函数：每次（重新）启动时现算——比如换了登录账号，下次重启就带上新参数，不用整个插件重启
+    const argsNow = () => { const a = typeof opts.args === 'function' ? opts.args() : opts.args; return Array.isArray(a) ? a.map(String) : []; };
+    const envNow = () => { const e = typeof opts.env === 'function' ? opts.env() : opts.env; return e && typeof e === 'object' ? e : {}; };
     const policy = ['on-failure', 'always', 'never'].includes(opts.restart) ? opts.restart : 'on-failure';
     const maxRestarts = Number.isInteger(opts.maxRestarts) ? Math.max(0, opts.maxRestarts) : 5;
     const ee = new EventEmitter();
+    ee.on('error', () => {});   // 'error' 没人听时 EventEmitter 会抛，别让插件因此崩
+    const hc = opts.health && typeof opts.health.check === 'function' ? {
+      check: opts.health.check,
+      every: Math.max(5_000, Number(opts.health.every) || 60_000),
+      failAfter: Math.max(1, Math.floor(Number(opts.health.failAfter) || 3)),
+      grace: Math.max(0, Number(opts.health.grace ?? 120_000)),
+      timeout: Math.max(1_000, Number(opts.health.timeout) || 20_000),
+    } : null;
+    const health = { ok: null, fails: 0, restarts: 0, lastCheck: null, lastError: '' };
     const logFile = path.join(logDir(), name + '.log');
     // .bat / .cmd 不能直接 spawn（Node 18.20+ / 20.12+ 起要 shell），套一层 cmd /d /s /c；收尸照样按树收得到。
     const isBatch = process.platform === 'win32' && /\.(bat|cmd)$/i.test(command);
     const exe = isBatch ? (process.env.ComSpec || 'cmd.exe') : command;
-    const argv = isBatch ? ['/d', '/s', '/c', `"${command}"${args.length ? ' ' + args.map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a)).join(' ') : ''}`] : args;
+    const argvOf = (args) => (isBatch ? ['/d', '/s', '/c', `"${command}"${args.length ? ' ' + args.map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a)).join(' ') : ''}`] : args);
     const h = {
       name, pid: 0, state: 'starting', restarts: 0, lastExit: null, startedAt: 0, image: path.basename(exe).toLowerCase(),
       child: null, timer: null, stopping: false,
@@ -128,10 +144,64 @@ export function makeProcessService(ctx) {
         if (!ctx.alive) return;
         h.stopping = false;
         h.restarts = 0;
+        health.restarts = 0; health.fails = 0; health.ok = null;
         start();
       },
-      info: () => ({ name, state: h.state, pid: h.pid || null, restarts: h.restarts, lastExit: h.lastExit, since: h.startedAt || null }),
+      info: () => ({
+        name, state: h.state, pid: h.pid || null, restarts: h.restarts, lastExit: h.lastExit, since: h.startedAt || null,
+        ...(hc ? { health: { ok: health.ok, fails: health.fails, restarts: health.restarts, lastCheck: health.lastCheck, lastError: health.lastError } } : {}),
+      }),
     };
+    // 健康检查：只在 running（或已判 unhealthy 但进程还在）时查；启动后 grace 内不判
+    let checking = false;
+    const healthTick = async () => {
+      if (!hc || checking || !ctx.alive || h.stopping) return;
+      if (h.state !== 'running' && h.state !== 'unhealthy') return;
+      if (h.startedAt && Date.now() - h.startedAt < hc.grace) return;
+      checking = true;
+      let ok = false;
+      try {
+        ok = !!(await Promise.race([Promise.resolve().then(hc.check), new Promise((_, rej) => { const t = setTimeout(() => rej(new Error('检查超时')), hc.timeout); t.unref?.(); })]));
+        if (!ok) health.lastError = '检查没通过';
+      } catch (e) { ok = false; health.lastError = String(e?.message || e).slice(0, 200); }
+      finally { checking = false; }
+      health.lastCheck = Date.now();
+      if (!ctx.alive || h.stopping) return;
+      if (ok) {
+        const was = health.ok;
+        health.ok = true; health.fails = 0; health.lastError = '';
+        if (h.state === 'unhealthy') setState('running');
+        if (h.startedAt && Date.now() - h.startedAt > STABLE_MS) health.restarts = 0;
+        if (was === false) ee.emit('healthy', {});
+        return;
+      }
+      health.ok = false;
+      health.fails += 1;
+      if (health.fails < hc.failAfter || h.state === 'unhealthy') return;
+      if (health.restarts >= maxRestarts) {
+        setState('unhealthy');
+        log(`[bridge] ${new Date().toISOString()} 健康检查连续不过，已重启 ${health.restarts} 次仍不行，不再重启（${health.lastError}）\n`);
+        ctx.warn(`子进程 ${name} 重启 ${health.restarts} 次后仍不健康：${health.lastError}`);
+        ee.emit('unhealthy', { fails: health.fails, restarts: health.restarts, givenUp: true, error: health.lastError });
+        return;
+      }
+      health.restarts += 1;
+      log(`[bridge] ${new Date().toISOString()} 健康检查连续 ${health.fails} 次不过（${health.lastError}），重启（第 ${health.restarts} 次）\n`);
+      ctx.warn(`子进程 ${name} 不健康（${health.lastError}），重启第 ${health.restarts} 次`);
+      ee.emit('unhealthy', { fails: health.fails, restarts: health.restarts, givenUp: false, error: health.lastError });
+      health.fails = 0;
+      const keep = health.restarts;
+      await h.stop();
+      if (!ctx.alive) return;
+      h.stopping = false;
+      health.restarts = keep;
+      start();
+    };
+    if (hc) {
+      const timer = setInterval(() => { healthTick().catch(() => {}); }, hc.every);
+      timer.unref?.();
+      ctx.onDispose(() => clearInterval(timer));
+    }
     const log = (s) => {
       try {
         mkdirSync(logDir(), { recursive: true });
@@ -144,10 +214,12 @@ export function makeProcessService(ctx) {
       if (!ctx.alive || h.stopping) return;
       setState('starting');
       let child;
+      let args = [];
       try {
-        child = spawn(exe, argv, {
+        args = argsNow();
+        child = spawn(exe, argvOf(args), {
           cwd: opts.cwd || ctx.dataDir,
-          env: { ...process.env, ...(opts.env || {}) },
+          env: { ...process.env, ...envNow() },
           windowsHide: opts.hidden !== false,
           windowsVerbatimArguments: isBatch,
           detached: process.platform !== 'win32',   // 非 Windows：自成进程组，killTree 能整组收

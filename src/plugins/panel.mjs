@@ -20,7 +20,13 @@ const statusFns = new Map();     // 插件 id → fn
 const statusCache = new Map();   // 插件 id → 最近一次结果
 const actions = new Map();       // 插件 id → Map(action id → spec)
 const optionFns = new Map();     // 插件 id → Map(字段 → fn)
-const extras = new Map();        // 插件 id → { processes: () => [], hooks: () => [] }
+const extras = new Map();        // 插件 id → { processes: () => [], hooks: () => [], schedules: () => [] }
+const usageProviders = new Map(); // 插件 id → () => 用量视图（plugins/chat.mjs：用过 ctx.chat 的插件才有）
+
+// 用过 ctx.chat 的插件，详情页多一块「用量」（核心记账，插件不用配合）。fn = null 撤掉。
+export function setUsageProvider(id, fn) {
+  if (typeof fn === 'function') usageProviders.set(id, fn); else usageProviders.delete(id);
+}
 
 const TONES = new Set(['ok', 'warn', 'error', 'idle']);
 const clip = (s, n) => String(s ?? '').slice(0, n);
@@ -88,11 +94,14 @@ export function panelView(pluginId) {
   const ex = extras.get(pluginId);
   const procs = ex?.processes?.() || [];
   const hooks = ex?.hooks?.() || [];
+  const schedules = ex?.schedules?.() || [];
   const acts = [...(actions.get(pluginId)?.values() || [])].map((a) => ({ id: a.id, label: a.label, desc: a.desc || '', danger: !!a.danger, confirm: a.confirm || '' }));
   const status = statusCache.get(pluginId) || null;
-  if (!status && !procs.length && !hooks.length && !acts.length) return {};
+  let usage = null;
+  try { const u = usageProviders.get(pluginId)?.(); if (u) usage = { today: u.today, total: u.total }; } catch {}
+  if (!status && !procs.length && !hooks.length && !acts.length && !schedules.length && !usage) return {};
   // 字段名 panelStatus：插件摘要里的 status 是运行状态（active / disabled / error），别撞
-  return { panelStatus: status, processes: procs, hooks, actions: acts, optionFields: [...(optionFns.get(pluginId)?.keys() || [])] };
+  return { panelStatus: status, processes: procs, hooks, schedules, actions: acts, optionFields: [...(optionFns.get(pluginId)?.keys() || [])], ...(usage ? { usage } : {}) };
 }
 
 export async function refreshStatuses(ids) {
@@ -124,8 +133,8 @@ function pushStatus(pluginId, status) {
 }
 
 // 每个插件上下文安装一份（host.mjs 的混入调用）。
-export function makePanelMixins(ctx, { processes, hooks }) {
-  extras.set(ctx.id, { processes, hooks });
+export function makePanelMixins(ctx, { processes, hooks, schedules }) {
+  extras.set(ctx.id, { processes, hooks, schedules });
   ctx.onDispose(() => {
     extras.delete(ctx.id); statusFns.delete(ctx.id); statusCache.delete(ctx.id); actions.delete(ctx.id); optionFns.delete(ctx.id);
   });

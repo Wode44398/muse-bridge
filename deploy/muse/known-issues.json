@@ -117,6 +117,19 @@
       "fixed_in": "v0.1.0",
       "notify": false,
       "issue": null
+    },
+    {
+      "id": "connector-oauth-egress-blocked",
+      "title": "Figma、Stripe、Zapier 等连接器在 Muse 上授权失败（refresh_rejected）：v0.5.1 起给出说明和替代办法，还不是真修复",
+      "title_en": "Figma, Stripe, Zapier and a few other connectors fail to authorize on Muse (refresh_rejected). From v0.5.1 there is an explanation and a workaround; it is not a real fix yet",
+      "symptom": "在 Muse Bridge 里给 Figma（以及 Stripe、Zapier 等几家）的远程连接器授权：官方页面登录、同意都成功，跳回后报错，原因里带 refresh_rejected；v0.5.1 起写成「这台服务器所在的平台（Muse）不允许在这里登录这个服务」。重试、批审核卡、反复点「授权」都没用。其它连接器（Slack、GitHub、Google 等）不受影响。",
+      "workaround": "别再重试授权。Figma：在扩展页连接器标签的「添加」菜单点「添加 Figma（个人访问令牌）」（v0.5.1 起有），再经用户同意，由 Muse 用 credentials.request_api_access 建一个 API Key 型自定义连接器 custom.figma_pat（网站 api.figma.com、请求头 X-Figma-Token），令牌由用户在卡片里自己填。这条路还没在真 Muse 上端到端验证过，请用过的用户回报结果。其它被拦的服务：让用户跟 Muse Bridge 里的 Claude 说，按「API Key 或个人令牌 + 平台 custom.* 自定义连接器」的思路现写一个连接器。不要在 VM 上跑 claude mcp login。",
+      "workaround_en": "Stop retrying the sign-in. For Figma: in Extensions, open the Connectors tab, choose Add › Add Figma (personal access token) (available from v0.5.1), then, with the user's consent, have Muse create an API-key custom connector custom.figma_pat with credentials.request_api_access (host api.figma.com, header X-Figma-Token); the user enters their own token in the card. This path has not been verified end to end on a real Muse yet, so please report back how it went. For other blocked services, ask Claude in Muse Bridge to write a connector that uses the service's API key or personal token together with a Muse custom.* connector. Do not run claude mcp login on the VM.",
+      "cause": "Muse 平台的出口代理只拦几家（Figma、Stripe、Zapier）的 OAuth 换令牌端点，回 502 refresh_rejected——这几家的令牌由平台自己托管。Muse Bridge 自己走 OAuth 拿不到令牌，只能改用平台保管令牌、程序拿替身的 API Key 型自定义连接器。",
+      "since": "v0.3.5",
+      "fixed_in": null,
+      "notify": false,
+      "issue": null
     }
   ]
 }

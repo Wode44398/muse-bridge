@@ -464,9 +464,43 @@ export function maskSharedRoot(cmd, { root = SHARED_ROOT, platform = process.pla
 }
 // 沙箱围栏（PreToolUse 主闸、canUseTool 复检、定时任务三处同一口径）：多根围栏 + 全服扩展只读豁免
 // + 成员自己添加的技能目录（member-skills.mjs，只有他本人的那一棵）同样只读豁免。
+// 身份上挂的只读资料目录（插件沙箱 ctx.sandbox(key, { readDirs }) 给的，ctx.readRoots = [{ root, hide: [相对路径…] }]）：
+// Read / Glob / Grep 的绝对路径落在里面就放行（只读，写照拦）；但隐藏的子路径、像密钥的文件名不给读，
+// 而且 Glob / Grep 搜的目录里只要含着隐藏项就拒（搜索会读到里面的内容，PreToolUse 过滤不了结果）——让它往具体子目录里搜。
+// 返回 null = 不归这条规则管（交给后面的围栏）；'' = 放行；字符串 = 拒绝原因。
+export function readRootDecision(ctx, name, input, platform = process.platform) {
+  const roots = Array.isArray(ctx?.readRoots) ? ctx.readRoots : [];
+  if (!roots.length || !SHARED_READ_TOOLS.has(name)) return null;
+  const p = input && input[PATH_TOOL_KEY[name]];
+  if (typeof p !== 'string' || !p) return null;
+  const abs = platform === 'win32' ? (/^[a-zA-Z]:[\\/]/.test(p) || /^[\\/]{2}/.test(p)) : p.startsWith('/');
+  if (!abs) return null;
+  const P = platform === 'win32' ? path.win32 : path.posix;
+  for (const r of roots) {
+    if (!r || !r.root || !withinDir(r.root, p, platform)) continue;
+    const rel = P.relative(P.resolve(r.root), P.resolve(p));
+    if (rel && SANDBOX_SECRET_RE.test(rel)) return '这个文件不对外开放：' + p;
+    const segs = rel ? rel.split(/[\\/]+/) : [];
+    for (const h of Array.isArray(r.hide) ? r.hide : []) {
+      const hs = String(h).replace(/^[\\/]+|[\\/]+$/g, '').split(/[\\/]+/).filter(Boolean);
+      if (!hs.length) continue;
+      const same = (a, b) => (platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+      const under = segs.length >= hs.length && hs.every((x, i) => same(x, segs[i]));
+      if (under) return '这个位置不对外开放：' + p;
+      const ancestor = name !== 'Read' && segs.length < hs.length && segs.every((x, i) => same(x, hs[i]));
+      if (ancestor) return `这个目录里有不对外开放的部分，不能整个搜：换成具体的子目录再搜（${p}）`;
+    }
+    return '';
+  }
+  return null;
+}
+
 export function sandboxFence(ctx, name, input) {
   const mine = ctx?.kind === 'user' && !ctx.snap ? memberSkillRootIfAny(ctx.user) : null;
   if (sharedExtRead(name, input) || (mine && sharedExtRead(name, input, { root: mine }))) return null;
+  const rr = readRootDecision(ctx, name, input);
+  if (rr === '') return null;
+  if (rr) return rr;
   let ti = input;
   if ((name === 'Bash' || name === 'PowerShell') && input && typeof input.command === 'string') {
     let command = maskSharedRoot(input.command);

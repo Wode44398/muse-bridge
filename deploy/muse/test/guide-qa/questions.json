@@ -155,6 +155,16 @@
       "chapters": ["01-access.md", "07-settings.md"],
       "facts": ["Switch Account 是在这台设备上已登录的几个账号之间切换，不会退出任何账号", "Sign out 只退出这台设备上的当前账号；这台设备上别的已登录账号还在，退出后账户页会列出来，点一下进去"],
       "extra": ["别的设备上的登录不受影响", "退出前会再确认一次"],
-      "forbid": ["退出会把所有设备都登出", "退出后这台设备上的其它账号也没了"] }
+      "forbid": ["退出会把所有设备都登出", "退出后这台设备上的其它账号也没了"] },
+    { "id": "q54", "q": "我在 Muse Bridge 里给 Figma 连接器点授权，Figma 那边都同意了，回来却报 refresh_rejected，说平台不允许在这里登录。我已经批过审核卡、试了好几次了，怎么办？",
+      "chapters": ["05-customize.md", "08-faq.md", "MUSE.md"],
+      "facts": ["这不是审核卡的问题，是 Muse 的出口代理拦了 Figma 的换令牌请求，重试、批卡、反复点授权都没用", "改用扩展页连接器「添加」菜单里的「添加 Figma（个人访问令牌）」，令牌交给 Muse 平台的 API Key 型自定义连接器 custom.figma_pat（api.figma.com、请求头 X-Figma-Token）保管，用户自己在卡片里填 Figma 个人访问令牌"],
+      "extra": ["这个 Figma 连接器是只读的", "这条路还没在真 Muse 上端到端验证过，用不了请报告问题", "Stripe、Zapier 也被拦，可以让 Muse Bridge 里的 Claude 按 API Key + custom.* 自定义连接器的思路现写一个"],
+      "forbid": ["再点一次授权就好", "去批审核卡就能连上", "在 VM 上跑 claude mcp login", "把令牌贴到聊天里"] },
+    { "id": "q55", "q": "Muse 上哪些连接器能用？Gmail、Slack、Stripe 这些都能连吗？",
+      "chapters": ["05-customize.md", "MUSE.md"],
+      "facts": ["大多数远程连接器（Slack、GitHub、Google 等）照常授权，第一次连接可能弹对方网站的审核卡要用户批", "Figma、Stripe、Zapier 这几家在 Muse 上不能用 OAuth 登录（refresh_rejected）：Figma 用个人访问令牌的只读连接器，其它几家让 Muse Bridge 里的 Claude 按「API Key 或个人令牌 + 平台 custom.* 自定义连接器」现写一个", "Gmail、Zoom 要管理员先在连接器面板的「OAuth 应用」里配好自备的 OAuth 应用（回调地址要是这台 Muse 的公网地址），之后每个人登自己的账号"],
+      "extra": ["临时地址会变，配了 OAuth 应用的回调地址也要跟着改，长期用建议换自己的域名", "要浏览器的连接器在这台 VM 上用不了"],
+      "forbid": ["所有连接器都能直接授权", "Stripe 有现成的替代连接器"] }
   ]
 }

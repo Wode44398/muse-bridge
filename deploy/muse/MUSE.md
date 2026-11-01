@@ -228,7 +228,7 @@ Muse Bridge 自带一套给 agent 用的 HTTP 接口（入口 `/agent`，项目�
 ### 4.9 Gemini · Vertex（图像 / 视频 / 语音 / 音乐，可选）
 装好时是关着的。用户想用 Google 的生图、生视频、配音、配乐时：
 1. 请他在网页里打开：**「设置 → 扩展 → 功能扩展」**，「Agent」区 Gemini · Vertex 卡上的开关（只有管理员能开）。
-2. 打开后马上跑一次 `bash $OPS/bootstrap.sh allow-sites`（不带参数：Gemini 开着时会带上 Google 的 4 个接口站点），先告诉他要弹几张 Google 的审核卡，建议选「总是允许此站点」——生成是在后台跑的，只「允许一次」以后还会卡住（选项见 2.0）。
+2. 打开后马上跑一次 `bash $OPS/bootstrap.sh allow-sites`（不带参数：Gemini 开着时会带上 Google 的 4 个接口站点），先告诉他要弹几张 Google 的审核卡，并说明各选项的后果：生成是在后台跑的，只「允许一次」的话以后后台生成时还会再弹、没人批就会停在那里；「总是允许此站点」以后不再问。怎么选由他决定（选项见 2.0）。
 3. 请他准备凭据并在 **「设置 → Agent → Gemini」** 的「Google 云凭据」卡片里上传、点「保存并测试」。**凭据（服务账号 JSON、gcloud 的凭据文件）只在设置页上传，别让他贴给你、别经你的命令行写进 VM**——你会把对话内容留在记忆里。
 4. 费用在他自己的 Google Cloud 账单上。详细步骤、报错对照、在 Claude 里怎么用：`guide/09-vertex.md`。
 5. 同一页下面能管别的 agent：用户嫌 Claude 自己配图配乐费钱，请他关掉「需要素材时主动生成」；想让 dimensio 也能生成，打开「dimensio」；还能只许生成某几种、限视频分辨率、调内容安全过滤。这些是管理员在网页里改的开关，你别经命令行去改 config.json。
@@ -263,7 +263,7 @@ Muse Bridge 自带一套给 agent 用的 HTTP 接口（入口 `/agent`，项目�
 | 「我要在 dimensio 里加一个自定义模型服务」（OpenAI 兼容地址） | 先问他接口地址，告诉他会弹这个地址的审核卡（选项见 2.0），跑 `allow-sites <地址>`，放行后**再**让他去 dimensio 模型胶囊菜单的「切换模型服务…」里点「添加自定义服务」——否则添加时会卡在「连接中」。要接到 Claude 页的，同样先放行，再让他在「设置 → Claude → 自定义 API」里加 |
 | 「对话一直在等待模型回复」「模型没反应」 | 多半是有网站的审核卡没人批：让他看 Muse 里有没有待审核的卡片（输入框上方或右侧面板）；或者用户在场时跑 `allow-sites`（按现在的配置把要用的网站挨个访问一遍，卡片会再弹出来，选项见 2.0） |
 | 「我也想用 dimensio」「不要 dimensio 了」等 | `set-agents claude` / `set-agents dimensio` / `set-agents claude,dimensio`（要重新装依赖、构建，几分钟；跟 `install` 一样自己转后台，没等完就 `wait`；完了等没人在聊时自动切换） |
-| 「Figma（或别的远程连接器）连不上」「连接器要授权」「Claude 说没法完成授权」 | 不要在 VM 上跑 `claude mcp login`。告诉他在 Muse Bridge 的对话里点输入框上方提示里的「授权」（电脑上会话信息面板「连接器」卡里也有），在打开的页面登录并同意，会自动跳回（`guide/05-customize.md`「远程连接器授权」）。第一次会弹对方网站的审核卡（选项见 2.0），也可以在他在场时先跑 `allow-sites <网站>` |
+| 「Figma（或别的远程连接器）连不上」「连接器要授权」「Claude 说没法完成授权」 | 先问清报错是什么。**报「平台（Muse）不允许在这里登录这个服务」/ `refresh_rejected`**（Figma、Stripe、Zapier 这几家）：是这台 VM 的出口代理拦了它们的换令牌请求，**别再让他反复点「授权」、批卡也没用**。Figma 走个人访问令牌：让他在扩展页连接器标签的「添加」菜单点「添加 Figma（个人访问令牌）」；令牌交给平台保管——经他同意后，你用 `credentials.request_api_access` 建一个 API Key 型自定义连接器（provider 填 `figma_pat`，登记名就是 `custom.figma_pat`；类型 api_key，网站 `api.figma.com`，placement `custom_header:X-Figma-Token`），卡片里的令牌让他自己填（在 Figma 的 Settings › Security › Personal access tokens 生成），别让他把令牌贴进聊天。这条路还没在真 Muse 上端到端验证过，用不了就请他报告问题（第 8 节）。Stripe、Zapier 等其它被拦的：不做现成的，让他直接跟 Muse Bridge 里的 Claude 说，按「API Key 或个人令牌 + 平台 `custom.*` 自定义连接器」的思路现写一个，`custom.*` 的登记同样由你经他同意后建。这两条走的都是平台自己的凭据机制（令牌由平台保管、程序只拿替身），**不要尝试绕过出口代理、换别的出口或让令牌进 VM**。**其它报错**（「需要登录」、跳回后一直转圈）：在 Muse Bridge 扩展页这个连接器的控制面板点「连接」，或对话里输入框上方提示的「授权」，登录同意后自动跳回；第一次可能弹对方网站的审核卡（选项见 2.0），也可以在他在场时先跑 `allow-sites <网站>`。显示「需要配置 OAuth 应用」（Gmail、Zoom）的：照面板里的步骤由管理员配，回调地址要是这台 Muse 的公网地址（`guide/05-customize.md`）。**任何情况都不要在 VM 上跑 `claude mcp login` 或 `claude setup-token`**（令牌端点对这台 VM 的出口 IP 会限流） |
 | 「让朋友也能用」「只给我自己用」 | `set-users multi` / `set-users solo` |
 | 结果块要换语言 | `set-lang en` / `set-lang zh` |
 | 「想要固定地址」 | 按第 5 节带他做 |

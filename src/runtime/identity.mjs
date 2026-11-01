@@ -190,6 +190,8 @@ function contextBase(identity) {
     return {
       kind: 'snap', user: null, sandbox: true, ...agentFlags(identity), canSnapshot: false, key: ownerKey('snap', identity.token),
       tier: 'user', shell: false, snap: { token: identity.token },
+      // 插件沙箱挂的只读资料目录（ctx.sandbox(key, { readDirs })）：[{ root, hide }]，围栏见 agents/claude.mjs readRootDecision
+      readRoots: Array.isArray(identity.readRoots) ? identity.readRoots : [],
       cwd: dir,
       configDir: path.join(sys, 'claude'),
       dataDir: sys,

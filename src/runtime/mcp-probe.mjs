@@ -3,10 +3,12 @@
 // 不带插件、不读用户 / 项目 / claude.ai 的 MCP），等它们不再 pending，读一次 mcpServerStatus 就收掉。
 // 按身份缓存 1 分钟；授权完成（流程结局里带着最新状态与工具）直接写进缓存，不用再探。
 // 断开连接 = 删掉 CLI 存在这个身份 CLAUDE_CONFIG_DIR/.credentials.json 里的 mcpOAuth 令牌（键 `服务名|配置哈希`）。
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnAuthQuery } from './mcp-oauth-query.mjs';
+import { humanMcpError } from './mcp-oauth.mjs';
 import { claudeEngineEnv } from './claude-account.mjs';
 
 const TTL_MS = 60_000;
@@ -22,7 +24,7 @@ export function slimStatus(s) {
   if (!s) return { status: 'unknown' };
   return {
     status: s.status,
-    ...(s.error ? { error: String(s.error).slice(0, 400) } : {}),
+    ...(s.error ? { error: humanMcpError(String(s.error).slice(0, 400)) } : {}),
     ...(s.serverInfo ? { serverInfo: { name: String(s.serverInfo.name || ''), version: String(s.serverInfo.version || '') } } : {}),
     tools: (Array.isArray(s.tools) ? s.tools : []).slice(0, 300).map((t) => ({
       name: String(t.name || ''),
@@ -57,25 +59,30 @@ export async function probeConnectors(ctx, list, { force = false } = {}) {
   if (!force && c && Date.now() - c.at < TTL_MS && list.every((x) => c.map[x.id])) return pick(c.map, list);
   if (inflight.has(key)) return pick(await inflight.get(key), list);
   const job = (async () => {
-    const only = Object.fromEntries(list.map((x) => [x.server, x.config]));
-    const { q, release } = await spawnAuthQuery(ctx, { only });
-    try {
-      if (typeof q.initializationResult === 'function') await withTimeout(q.initializationResult(), 60_000);
-      const t0 = Date.now();
-      let st = [];
-      for (;;) {
-        st = await withTimeout(q.mcpServerStatus(), 15_000);
-        if (!st.some((s) => s && only[s.name] && s.status === 'pending') || Date.now() - t0 > SETTLE_MS) break;
-        await sleep(400);
-      }
-      const map = { ...(cache.get(key)?.map || {}) };
-      for (const x of list) map[x.id] = { ...slimStatus(st.find((s) => s && s.name === x.server)), oauth: hasMcpTokens(ctx, x.server) };
-      cache.set(key, { at: Date.now(), map });
-      return map;
-    } finally { release(); }
+    const st = await rawStatus(ctx, Object.fromEntries(list.map((x) => [x.server, x.config])));
+    const map = { ...(cache.get(key)?.map || {}) };
+    for (const x of list) map[x.id] = { ...slimStatus(st.find((s) => s && s.name === x.server)), oauth: hasMcpTokens(ctx, x.server) };
+    cache.set(key, { at: Date.now(), map });
+    return map;
   })();
   inflight.set(key, job);
   try { return pick(await job, list); } finally { inflight.delete(key); }
+}
+
+// 起短命 CLI 只挂这几个服务，等它们不再 pending，返回 CLI 原样的状态帧（带完整工具注解）
+export async function rawStatus(ctx, only) {
+  const { q, release } = await spawnAuthQuery(ctx, { only });
+  try {
+    if (typeof q.initializationResult === 'function') await withTimeout(q.initializationResult(), 60_000);
+    const t0 = Date.now();
+    let st = [];
+    for (;;) {
+      st = await withTimeout(q.mcpServerStatus(), 15_000);
+      if (!st.some((s) => s && only[s.name] && s.status === 'pending') || Date.now() - t0 > SETTLE_MS) break;
+      await sleep(400);
+    }
+    return st;
+  } finally { release(); }
 }
 const pick = (map, list) => Object.fromEntries(list.map((x) => [x.id, map[x.id] || { status: 'unknown' }]));
 
@@ -101,20 +108,32 @@ function tokenKeys(ctx) {
   } catch { return []; }
 }
 
+// CLI 存令牌的键：`服务名|sha256(type,url,headers) 前 16 位`（CLI getServerKey，键序就是这个，headers 缺省 {}）
+export const mcpTokenKey = (server, config) => server + '|' + createHash('sha256')
+  .update(JSON.stringify({ type: config.type, url: config.url, headers: config.headers || {} })).digest('hex').slice(0, 16);
+
+// 读改写这个身份的 .credentials.json（原子替换）。fn 就地改传进来的对象。
+export function updateCreds(ctx, fn) {
+  const { f, data } = readCreds(ctx);
+  const d = data && typeof data === 'object' ? data : {};
+  fn(d);
+  mkdirSync(path.dirname(f), { recursive: true });
+  const tmp = f + '.' + process.pid + '.tmp';
+  writeFileSync(tmp, JSON.stringify(d, null, 2), { mode: 0o600 });
+  renameSync(tmp, f);
+}
+
 export const hasMcpTokens = (ctx, server) => tokenKeys(ctx).some((k) => k === server || k.startsWith(server + '|'));
 
 // 删掉某个服务名的全部 OAuth 令牌。返回删了几条（0 = 本来就没有，或令牌不在这个文件里——macOS 存钥匙串）。
 export function clearMcpTokens(ctx, server) {
-  const { f, data } = readCreds(ctx);
+  const { data } = readCreds(ctx);
   if (!data) return 0;
   const all = data && typeof data.mcpOAuth === 'object' && data.mcpOAuth ? data.mcpOAuth : null;
   if (!all) return 0;
   const gone = Object.keys(all).filter((k) => k === server || k.startsWith(server + '|'));
   if (!gone.length) return 0;
-  for (const k of gone) delete all[k];
-  const tmp = f + '.' + process.pid + '.tmp';
-  writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
-  renameSync(tmp, f);
+  updateCreds(ctx, (d) => { for (const k of gone) delete d.mcpOAuth[k]; });
   return gone.length;
 }
 

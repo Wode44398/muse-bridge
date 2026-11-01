@@ -10,6 +10,7 @@
   import { api } from '../../lib/api.js';
   import { t, tr } from '../../lib/i18n.js';
   import { ic } from './icons.js';
+  import { plText, plSchema } from '../../lib/pluginPanels.svelte.js';
 
   let { plugin, onSaved = () => {}, toast = () => {}, confirm = async () => true } = $props();
 
@@ -45,15 +46,20 @@
     if (plugin && (plugin.id !== seenId || (!dirty && sig !== seenCfg))) { seenId = plugin.id; seenCfg = sig; initDraft(plugin); }
   });
 
-  const fields = $derived(plugin ? Object.entries(plugin.schema || {}) : []);
-  // 分组：按 section 第一次出现的顺序；没写 section 的归到最前面的无标题组
+  // 英文界面叠上插件自带的英文词条（locales/en.json 的 config，见 lib/pluginPanels 的 plSchema）；只换展示文字
+  const fields = $derived(plugin ? Object.entries(plSchema(plugin)) : []);
+  // 分组：按 section 第一次出现的顺序；没写 section 的归到最前面的无标题组。
+  // 按清单原文的 section 归组（英文词条只给了部分字段也不会拆组），组名取组里第一个有英文词条的
   const groups = $derived.by(() => {
     const out = [];
     const at = new Map();
     for (const [k, s] of fields) {
-      const sec = s.section ? String(s.section) : '';
-      if (!at.has(sec)) { at.set(sec, out.length); out.push({ sec, items: [] }); }
-      out[at.get(sec)].items.push([k, s]);
+      const raw = plugin.schema?.[k]?.section;
+      const sec = raw ? String(raw) : '';
+      if (!at.has(sec)) { at.set(sec, out.length); out.push({ sec, title: '', items: [] }); }
+      const g = out[at.get(sec)];
+      if (!g.title && s.section && String(s.section) !== sec) g.title = String(s.section);
+      g.items.push([k, s]);
     }
     return out;
   });
@@ -141,7 +147,7 @@
         saving = false;
         const names = need.accounts.map((a) => a.host ? t('服务器主机') : a.name).join('、');
         const ok = await confirm({
-          title: t('授权「{name}」以「{who}」的身份跑 Claude？', { name: tr(plugin.name), who: names }),
+          title: t('授权「{name}」以「{who}」的身份跑 Claude？', { name: plText(plugin, 'name', plugin.name), who: names }),
           desc: t('这个账号有命令行、权限大：插件可以替它发起对话，Claude 会在它的工作区里读写文件、执行命令。只授权你信任的插件。'),
           yes: t('授权'), danger: true,
         });
@@ -273,7 +279,7 @@
   {#each groups as g (g.sec)}
     {@const shown = g.items.filter(([, s]) => visible(s))}
     {#if shown.length}
-      <div class="cz-sec">{g.sec ? tr(g.sec) : t('设置')}</div>
+      <div class="cz-sec">{g.sec ? g.title || tr(g.sec) : t('设置')}</div>
       <div class="cz-list pp-form">
         {#each shown as [k, s] (k)}{@render field(k, s)}{/each}
       </div>

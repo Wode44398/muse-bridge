@@ -45,6 +45,18 @@ const withTimeout = (p, ms, what) => new Promise((resolve, reject) => {
 });
 
 const errText = (e) => String((e && e.message) || e || '授权失败').slice(0, 400);
+// CLI 的英文原话翻成用户看得懂的：Google（Gmail / Drive）、Zoom 这类授权服务器不开放动态注册客户端，
+// CLI 无从生成授权地址；官方桌面端用的是 Anthropic 预注册的客户端，bridge 没有。探测状态（mcp-probe.mjs）也用这个。
+// Muse（Meta 的 agent 虚拟机）出口代理对它自己托管的几家（Figma、Stripe、Zapier……）拦令牌端点，回
+// 502 {"error":"refresh_rejected","detail":"token refresh not allowed through egress proxy"}：在虚拟机里换不了、也刷新不了令牌，
+// 重试没用。这是平台策略，别想办法绕；可走的是 Muse 自己的连接器，或平台的 API Key 型自定义连接器。
+export const EGRESS_BLOCKED_MSG = '这台服务器所在的平台（Muse）不允许在这里登录这个服务：它的出口代理拦下了换取登录令牌的请求（refresh_rejected），重试也没用。可以改用 Muse 设置 › 连接器 里平台自带的这个连接器，或在 Muse 里用 API Key 型自定义连接器接入';
+export const isEgressBlocked = (s) => /refresh_rejected|not allowed through egress proxy/i.test(String(s || ''));
+export const humanMcpError = (s) => isEgressBlocked(s) ? EGRESS_BLOCKED_MSG
+  : /dynamic client registration/i.test(String(s || ''))
+    ? '这个连接器的授权服务器不支持动态注册客户端（Gmail、Zoom 等官方连接器都是这样），要先给它配置 OAuth 应用才能连接'
+    : s;
+const authErrText = (e) => humanMcpError(errText(e));
 
 // 回调地址形状检查（交给 CLI 之前先挡掉明显不对的，免得把一次性的流程白白耗掉）。
 export function checkCallbackUrl(raw, state) {
@@ -149,13 +161,13 @@ export async function startMcpAuth(o) {
       if (st === 'connected') { await finishOk(f, list); return view(f); }
       if (st === 'failed') {
         const s = list.find((x) => x && x.name === server);
-        finish(f, 'error', { error: errText((s && s.error) || '连不上这个连接器'), servers: list });
+        finish(f, 'error', { error: authErrText((s && s.error) || '连不上这个连接器'), servers: list });
         return view(f);
       }
     }
     r = await withTimeout(q.mcpAuthenticate(server, o.redirectUri || undefined), CALL_MS, '发起授权');
   } catch (e) {
-    finish(f, 'error', { error: errText(e) });
+    finish(f, 'error', { error: authErrText(e) });
     return view(f);
   }
   r = r || {};
@@ -188,6 +200,29 @@ export async function startMcpAuth(o) {
   return view(f);
 }
 
+/**
+ * bridge 自己做授权的流程（自备 OAuth 应用，见 mcp-oauth-app.mjs）：没有 CLI 参与，换令牌、写凭据由调用方给的
+ * exchange 做，verify 回一份连接器最新状态。和 CLI 那条共用流程台账、回调路由、前端轮询与结局推送。
+ * @param o { key, sid, server, authUrl, state, redirectUri, exchange(callbackUrl), verify() → servers|null, onSettled?, ttlMs? }
+ */
+export function startExternalFlow(o) {
+  const { key, sid, server } = o;
+  if (!key || !sid || !server || !o.authUrl || String(o.state || '').length < 16) throw Object.assign(new Error('缺少参数'), { status: 400 });
+  for (const f of flows.values()) if (!f.ended && f.key === key && f.server === server) finish(f, 'cancelled');
+  const ttl = o.ttlMs || FLOW_TTL_MS;
+  const f = {
+    id: randomBytes(12).toString('hex'), key, sid, server, q: null, owned: false, release: null, redirectUri: o.redirectUri || '',
+    external: { exchange: o.exchange, verify: o.verify },
+    status: 'waiting', scheme: 'custom', authUrl: o.authUrl, callbackExpected: true, state: o.state,
+    createdAt: Date.now(), expiresAt: Date.now() + ttl, onSettled: o.onSettled, ended: false,
+  };
+  flows.set(f.id, f);
+  byState.set(f.state, f.id);
+  f.timer = setTimeout(() => finish(f, 'expired', { error: '授权超时，请重新点「授权」' }), ttl);
+  if (f.timer.unref) f.timer.unref();
+  return view(f);
+}
+
 /** 交回回调地址（回调路由按 state 找到的，或用户粘贴的）。一次性：交过就不能再交。 */
 export async function submitMcpCallback(f, rawUrl) {
   if (!f || f.ended) return { ok: false, error: '这次授权已经结束或过期，请重新点「授权」', status: 410 };
@@ -197,10 +232,18 @@ export async function submitMcpCallback(f, rawUrl) {
   if (!c.ok) return { ok: false, error: c.error, status: 400 };
   f.submitting = true;
   if (f.state && byState.get(f.state) === f.id) byState.delete(f.state);
+  if (f.external) {
+    try { await f.external.exchange(c.url); }
+    catch (e) { finish(f, 'error', { error: authErrText(e) }); return { ok: false, error: f.error, status: 502 }; }
+    let servers = null;
+    try { servers = await f.external.verify(); } catch {}
+    await finishOk(f, servers);
+    return { ok: true, flow: view(f) };
+  }
   try {
     await withTimeout(f.q.mcpSubmitOAuthCallbackUrl(f.server, c.url), CALL_MS, '提交授权');
   } catch (e) {
-    finish(f, 'error', { error: errText(e) });
+    finish(f, 'error', { error: authErrText(e) });
     return { ok: false, error: f.error, status: 502 };
   }
   await settleOk(f);
@@ -223,7 +266,7 @@ export const flowView = (f) => (f ? view(f) : null);
 
 /** 「我已完成」（不需要回调的那条路）/ 也给 localhost 路兜底：重连一次看连上没有。 */
 export async function confirmMcpAuth(f) {
-  if (!f || f.ended) return f ? view(f) : null;
+  if (!f || f.ended || !f.q) return f ? view(f) : null;
   let list = null;
   try { await withTimeout(f.q.reconnectMcpServer(f.server), CALL_MS, '重连'); } catch {}
   try { list = await withTimeout(f.q.mcpServerStatus(), 15_000, '读取状态'); } catch {}

@@ -5,6 +5,11 @@
 //   POST /api/mcp-oauth/cancel   { flow }
 //   GET  /api/mcp-oauth/status?flow=                        → 前端轮询
 //   GET  /api/mcp-oauth/callback?code=&state=               → 授权服务器跳回来（不要求登录，只认进行中流程的 state）
+//   GET  /api/mcp-oauth/app?connector=                      → 自备 OAuth 应用：这个连接器要不要、配了没有、配置指引要的数据
+//   POST /api/mcp-oauth/app          { connector, clientId, clientSecret?, redirectUri }
+//   POST /api/mcp-oauth/app/remove   { connector }
+// 授权服务器不开放动态注册（Google、Zoom……）时，CLI 拿不到授权地址：改由 bridge 用服主自备的 OAuth 应用授权
+// （runtime/mcp-oauth-app.mjs），流程照样挂在同一本台账里，前端看不出差别。
 // 结局（成功 / 失败 / 过期）经总线 {type:'mcp_auth'} 推给这个身份的各设备；成功时附带 {type:'mcp'} 连接器新状态。
 import * as claudeProjects from '../claude-projects.mjs';
 import { readBody } from '../runtime/body.mjs';
@@ -12,10 +17,11 @@ import { requireCtx } from '../runtime/identity.mjs';
 import { busPublish } from '../runtime/bus.mjs';
 import { noteSessionMcp, sessionMcp } from '../runtime/session-mcp.mjs';
 import { PUBLIC_ORIGIN } from '../config/index.mjs';
-import { startMcpAuth, submitMcpCallback, confirmMcpAuth, cancelMcpAuth, flowByState, flowFor, flowView, reconnectLive } from '../runtime/mcp-oauth.mjs';
+import { startMcpAuth, startExternalFlow, submitMcpCallback, confirmMcpAuth, cancelMcpAuth, flowByState, flowFor, flowView, reconnectLive, EGRESS_BLOCKED_MSG } from '../runtime/mcp-oauth.mjs';
 import { spawnAuthQuery } from '../runtime/mcp-oauth-query.mjs';
-import { probeConnectors, noteConnectorStatus, forgetConnectorStatus, slimStatus, clearMcpTokens, hasMcpTokens } from '../runtime/mcp-probe.mjs';
-import { connectorForAuth, remoteConnectorsForProbe } from '../extensions.mjs';
+import { probeConnectors, noteConnectorStatus, forgetConnectorStatus, slimStatus, clearMcpTokens, hasMcpTokens, rawStatus } from '../runtime/mcp-probe.mjs';
+import { discoverAuth, getApp, publicApp, saveApp, removeApp, buildAuthRequest, exchangeCode, writeTokens, PROVIDERS } from '../runtime/mcp-oauth-app.mjs';
+import { connectorForAuth, connectorForServer, remoteConnectorsForProbe } from '../extensions.mjs';
 
 export const CALLBACK_PATH = '/api/mcp-oauth/callback';
 const EXT_SID = 'ext:';   // 扩展页发起的流程挂在这个「会话」名下（不是真会话）
@@ -65,6 +71,46 @@ function settled(key, ctx = null) {
   };
 }
 
+// —— 自备 OAuth 应用 ——
+const NEEDS_APP = '这个连接器的授权服务器不支持动态注册客户端，要先给它配置 OAuth 应用（设置 › 扩展 › 连接器 › 这个连接器），配置要服主来做';
+const DCR_ERR = /动态注册|dynamic client registration/i;
+
+// 授权服务器不开放动态注册 → 走自备应用：{ d, app, appError }。null = 照旧交给 CLI（不要 OAuth、支持动态注册、探不到）
+async function appRoute(config) {
+  if (!config || !/^(http|sse)$/.test(config.type) || !config.url) return null;
+  let d;
+  try { d = await discoverAuth(config.url); } catch { return null; }
+  if (!d.oauth || d.dcr) return null;
+  try { return { d, app: getApp(d.issuer), appError: '' }; }
+  catch (e) { return { d, app: null, appError: 'OAuth 应用配置解不开：' + String((e && e.message) || e) }; }
+}
+
+// 用自备应用开一个授权流程：令牌写进这个身份的凭据文件，之后 CLI 自己用、自己续
+function startAppFlow(ctx, sid, c, r, onSettled) {
+  const { authUrl, state, verifier } = buildAuthRequest(r.d, r.app);
+  return startExternalFlow({
+    key: ctx.key, sid, server: c.server, authUrl, state, redirectUri: r.app.redirectUri,
+    exchange: async (url) => { writeTokens(ctx, c.server, c.config, r.d, r.app, await exchangeCode(r.d, r.app, verifier, url)); },
+    verify: () => rawStatus(ctx, { [c.server]: c.config }),
+    onSettled,
+  });
+}
+
+// 扩展页的状态表：不开放动态注册的连接器标上 oauthApp；已经配了应用的，CLI 报的「不支持动态注册」改成「需要登录」。
+// Gmail 这类列工具不要登录、调工具才 401 的，没令牌时 CLI 照样报「已连接」——其实用不了，也改成「需要登录」
+async function annotateApps(statuses, list) {
+  await Promise.all(list.map(async (x) => {
+    const st = statuses[x.id];
+    if (!st || (st.status === 'connected' && st.oauth)) return;
+    const r = await appRoute(x.config);
+    if (!r) return;
+    const { error, ...rest } = st;
+    const fix = st.status === 'connected' || (r.app && st.status === 'failed' && DCR_ERR.test(error || ''));
+    statuses[x.id] = { ...(fix ? { ...rest, status: 'needs-auth' } : st), oauthApp: { issuer: r.d.issuer, provider: r.d.provider, configured: !!r.app } };
+  }));
+  return statuses;
+}
+
 function page(res, code, ok, text, sub, lang) {
   const zh = lang !== 'en';
   const title = ok ? (zh ? '授权成功' : 'Connected') : (zh ? '授权没有完成' : 'Authorization failed');
@@ -95,6 +141,13 @@ export function registerMcpOAuthRoutes(router, { identify }) {
       const c = connectorForAuth(b.connector);
       if (!c) { json(res, 404, { error: '连接器不存在' }); return; }
       if (c.config.type === 'stdio') { json(res, 400, { error: '本地连接器不需要授权' }); return; }
+      const r = await appRoute(c.config);
+      if (r) {
+        if (!r.app) { json(res, 409, { error: r.appError || NEEDS_APP, code: 'needs_app' }); return; }
+        try { json(res, 200, startAppFlow(ctx, EXT_SID + c.item.id, c, r, settled(ctx.key, ctx))); }
+        catch (e) { json(res, e.status || 500, { error: String((e && e.message) || e) }); }
+        return;
+      }
       try {
         const v = await startMcpAuth({
           key: ctx.key, sid: EXT_SID + c.item.id, server: c.server, precheck: true,
@@ -112,6 +165,15 @@ export function registerMcpOAuthRoutes(router, { identify }) {
     const p = claudeProjects.locateSessionPaths(ctx.claudeProjects, ctx, sid);
     if (!p) { json(res, 404, { error: 'not found' }); return; }
     const cwd = (p.project && p.project.path) || ctx.cwd;
+    // 扩展里装的远程连接器：授权服务器不开放动态注册就用服主配的 OAuth 应用
+    const cs = connectorForServer(server);
+    const r = cs ? await appRoute(cs.config) : null;
+    if (r) {
+      if (!r.app) { json(res, 409, { error: r.appError || NEEDS_APP, code: 'needs_app' }); return; }
+      try { json(res, 200, startAppFlow({ ...ctx, cwd }, sid, cs, r, settled(ctx.key))); }
+      catch (e) { json(res, e.status || 500, { error: String((e && e.message) || e) }); }
+      return;
+    }
     try {
       const v = await startMcpAuth({
         key: ctx.key, sid, server,
@@ -162,7 +224,8 @@ export function registerMcpOAuthRoutes(router, { identify }) {
     const ctx = requireCtx(identify, req, res); if (!ctx) return;
     if (ctx.kind !== 'admin') { json(res, 403, { error: '扩展管理仅对管理员开放' }); return; }
     try {
-      const statuses = await probeConnectors(ctx, remoteConnectorsForProbe(), { force: url.searchParams.get('refresh') === '1' });
+      const list = remoteConnectorsForProbe();
+      const statuses = await annotateApps({ ...(await probeConnectors(ctx, list, { force: url.searchParams.get('refresh') === '1' })) }, list);
       json(res, 200, { statuses });
     } catch (e) { json(res, 500, { error: String((e && e.message) || e) }); }
   });
@@ -184,6 +247,60 @@ export function registerMcpOAuthRoutes(router, { identify }) {
     json(res, 200, { cleared: n, status: statuses[c.item.id] || { status: 'unknown' } });
   });
 
+  // 自备 OAuth 应用：配置面板要的全部数据（密钥只说有没有）
+  router.on('GET', '/api/mcp-oauth/app', async (req, res, url) => {
+    const ctx = requireCtx(identify, req, res); if (!ctx) return;
+    if (ctx.kind !== 'admin') { json(res, 403, { error: '扩展管理仅对管理员开放' }); return; }
+    const c = connectorForAuth(url.searchParams.get('connector'));
+    if (!c) { json(res, 404, { error: '连接器不存在' }); return; }
+    if (c.config.type === 'stdio') { json(res, 400, { error: '本地连接器不需要授权' }); return; }
+    let d;
+    try { d = await discoverAuth(c.config.url, { force: url.searchParams.get('refresh') === '1' }); }
+    catch (e) { json(res, 502, { error: String((e && e.message) || e) }); return; }
+    if (!d.oauth) { json(res, 200, { needed: false, oauth: false }); return; }
+    let app = null;
+    try { app = getApp(d.issuer); } catch (e) { json(res, 500, { error: 'OAuth 应用配置解不开：' + String((e && e.message) || e) }); return; }
+    // 同一个授权服务器的其它连接器共用这个应用（Gmail、Drive……配一次都能用）
+    const peers = await Promise.all(remoteConnectorsForProbe().filter((x) => x.id !== c.item.id).map(async (x) => {
+      try { const o = await discoverAuth(x.config.url); return o.oauth && o.issuer === d.issuer ? x.server : ''; } catch { return ''; }
+    }));
+    const origin = publicOriginOf(req);
+    json(res, 200, {
+      needed: !d.dcr, oauth: true, issuer: d.issuer, provider: d.provider, providerName: PROVIDERS[d.provider]?.name || new URL(d.issuer).hostname,
+      scopes: d.scopes, app: publicApp(app), suggestedRedirectUri: origin ? origin + CALLBACK_PATH : '', shared: peers.filter(Boolean),
+    });
+  });
+
+  router.on('POST', '/api/mcp-oauth/app', async (req, res) => {
+    const ctx = requireCtx(identify, req, res); if (!ctx) return;
+    if (ctx.kind !== 'admin') { json(res, 403, { error: '扩展管理仅对管理员开放' }); return; }
+    const b = await body(req, res); if (!b) return;
+    const c = connectorForAuth(b.connector);
+    if (!c || c.config.type === 'stdio') { json(res, 404, { error: '连接器不存在' }); return; }
+    let d;
+    try { d = await discoverAuth(c.config.url); } catch (e) { json(res, 502, { error: String((e && e.message) || e) }); return; }
+    if (!d.oauth) { json(res, 400, { error: '这个连接器不用 OAuth 登录' }); return; }
+    try {
+      const app = saveApp(d.issuer, { clientId: b.clientId, clientSecret: b.clientSecret, redirectUri: b.redirectUri });
+      forgetConnectorStatus(ctx.key);
+      json(res, 200, { app: publicApp(app) });
+    } catch (e) { json(res, e.status || 500, { error: String((e && e.message) || e) }); }
+  });
+
+  router.on('POST', '/api/mcp-oauth/app/remove', async (req, res) => {
+    const ctx = requireCtx(identify, req, res); if (!ctx) return;
+    if (ctx.kind !== 'admin') { json(res, 403, { error: '扩展管理仅对管理员开放' }); return; }
+    const b = await body(req, res); if (!b) return;
+    const c = connectorForAuth(b.connector);
+    if (!c || c.config.type === 'stdio') { json(res, 404, { error: '连接器不存在' }); return; }
+    try {
+      const d = await discoverAuth(c.config.url);
+      if (d.oauth) removeApp(d.issuer);
+      forgetConnectorStatus(ctx.key);
+      json(res, 200, { ok: true });
+    } catch (e) { json(res, 500, { error: String((e && e.message) || e) }); }
+  });
+
   // 授权服务器把浏览器跳回来：不看登录态（系统浏览器里没有），只认进行中流程的 state，一次性
   router.on('GET', CALLBACK_PATH, async (req, res, url) => {
     const lang = /^zh/i.test(String(req.headers['accept-language'] || 'zh')) ? 'zh' : 'en';
@@ -195,6 +312,8 @@ export function registerMcpOAuthRoutes(router, { identify }) {
     const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
     const r = await submitMcpCallback(f, (f.redirectUri || 'http://localhost' + CALLBACK_PATH) + qs);   // 原样交回（基址 = 当初登记的回调地址）
     if (denied) { page(res, 200, false, zh ? '你在授权页拒绝了授权。' : 'Authorization was declined.', String(url.searchParams.get('error_description') || denied).slice(0, 200), lang); return; }
+    // 平台拦了令牌端点（Muse）：重试没用，别让人回去再点
+    if (!r.ok && r.error === EGRESS_BLOCKED_MSG) { page(res, 200, false, zh ? r.error : 'The platform this server runs on (Muse) does not allow signing in to this service here: its egress proxy blocks the token request (refresh_rejected), so retrying will not help. Use the built-in connector under Muse Settings › Connectors, or an API-key custom connector in Muse.', '', lang); return; }
     if (!r.ok) { page(res, 200, false, r.error, zh ? '回到 bridge 重新点「授权」。' : 'Go back to bridge and click Authorize again.', lang); return; }
     page(res, 200, true, zh ? `${f.server} 已连接，回到 bridge 就能用了。` : `${f.server} is connected. Head back to bridge.`, zh ? '可以关掉这一页了。' : 'You can close this page.', lang);
   });

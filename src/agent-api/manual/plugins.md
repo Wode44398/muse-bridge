@@ -25,11 +25,30 @@ bridge 的功能都是插件：内置功能（定时任务、分享链接、设�
    `panel: true` 带一个控制面板页面；`from: "hello-world"` / `from: "qq-onebot"` 拿示例整个当起点（id 自动换成新的）。返回目录与文件清单。
 2. **改代码**：照本章下面的参考改 `bridge-plugin.json`（名字、配置 schema、`ui`）和 `index.mjs`（`apply(ctx, config)`），用你的文件工具直接写。
 3. **重新加载**：`plugins.reload {id}`，不用重启服务；返回的 `plugin.status` 不是 active 时看 `plugin.error` 修（语法错、apply 抛错都写在那）。
-4. **试**：插件的接口用 curl / 内置浏览器调；有面板就让用户去设置里「插件」组点开看；`plugins.status {id}` 看状态块、子进程、回调地址。
+4. **试**：插件的接口用 curl / 内置浏览器调；有面板就让用户去设置里「插件」组点开看；`plugins.status {id}` 看状态块、子进程、回调地址、定时任务；
+   `plugins.status {id, logs: "plugin"}` 看插件自己的日志（ctx.log / warn / error，也在详情页「日志」里）。详情页的「清单体检」提示（拼错的字段、用了内部接口……）要修掉。
    插件给 Claude 的工具**要下一条消息才出现**（工具集在这一轮开始时就定了），告诉用户「发下一条消息就能用」。
 5. **交付**：告诉用户插件在哪、怎么开关、设置里要填什么；要给别人用就把目录打成 zip（设置 › 功能扩展 › 添加 › 上传 zip），或放到 GitHub 用「GitHub 地址」装。
 
 两个示例的完整代码就在程序目录 `src/plugins/examples/` 下（`hello-world` 最小；`qq-onebot` 用到以账号跑 Claude、收外部推送、托管外部程序、分组表单、状态块、控制面板），不知道某个能力怎么写时先读对应示例。
+聊天平台机器人（QQ、微信、飞书、Telegram……）的完整写法参考官方插件「QQ 机器人」（qqchatbot）：每个聊天一个沙箱、群聊记录、单轮工具发文件、看门狗、每日上限、热更新设置。
+
+## 接口版本与兼容承诺
+
+**公共接口只有三样**：`apply(ctx, config)` 拿到的 `ctx`、清单 `bridge-plugin.json`、页面 SDK `/plugins/_sdk/bridge-plugin.js`。本章写到的都在承诺范围内。
+
+- 现在是**插件接口 v3**（`ctx.api === 3`）。新插件在清单写 `"engines": { "pluginApi": 3 }`；没写的按 v2 对待（区别只有一处：v2 的 `ctx.files.put` 同步返回路径，v3 返回 Promise）。
+- **只做加法**：以后加能力不升版本号，用 `ctx.has('能力名')` 探测（如 `ctx.has('chat.sandbox')`）。真要破坏性改动才升 v4，并且 v3 的写法至少再支持一个大版本。
+- `@bridge/core/*` 是**内部接口**：能 import（应急用），但不承诺兼容，bridge 升级可能改掉；插件用了会在详情页「清单体检」里标出来，官方插件市场不收。能用 ctx 做的就别碰它，缺什么能力告诉 bridge 维护者加进 ctx。
+- 新接口一律返回 Promise、参数与返回值都能 JSON 化（回调函数除外）——给以后把插件挪进独立进程留路。
+
+能力名（`ctx.has` 认的，不是 agent 接口操作）：
+
+```
+chat  chat.sandbox  chat.tools  chat.format  chat.history  chat.usage  chat.budget  chat.fast
+files  files.rw  share.space  share.chat  process  process.health  webhook  schedule  notify  log.view
+config.hot  config.self  status  action  configOptions  store  panel  panel.config  process.args  sandbox.readDirs  claude.tool  claude.prompt  claude.mcp  agentOp  manual
+```
 
 ## 插件目录
 
@@ -39,6 +58,7 @@ weather/
 ├─ index.mjs             入口（必需，清单 entry 可改名）
 ├─ lib/…                 随意拆文件，相对路径 import
 ├─ web/index.html        插件页面（可选，见「插件页面」）
+├─ locales/en.json       英文界面的词条（可选，见「英文界面」）
 └─ README.md
 ```
 
@@ -54,7 +74,10 @@ weather/
 | `restart` | `true` = 运行中不热插拔（开关、改配置、换版本都等重启服务）。只有包着不能撤销的东西时才用 |
 | `defaultEnabled` | 缺省 `true`；`false` 装上后先不启用 |
 | `ui` | 插件页面：`{ "panel": { "page": "web/index.html", "title": "控制台", "icon": "chat" }, "settings": "web/settings.html", "who": "host" }`（见「插件页面」）；旧写法 `web.page` 等同 `ui.panel.page` |
-| `engines` | 兼容要求：`{ "bridge": ">=6.70", "pluginApi": 2 }`。不满足就拒装、拒加载并说明原因。写法：`>= > <= < =`、`^`（同主版本）、`~`（同主次版本）、空格 = 且、`\|\|` = 或 |
+| `engines` | 兼容要求：`{ "bridge": ">=7.02", "pluginApi": 3 }`。不满足就拒装、拒加载并说明原因。写法：`>= > <= < =`、`^`（同主版本）、`~`（同主次版本）、空格 = 且、`\|\|` = 或 |
+| `permissions` | 这个插件会用到的能力（展示用，不强制）：`chat`（以授权账号跑 Claude）、`sandbox`（在插件自己的沙箱里跑 Claude）、`claude.tools`、`files`、`share`、`process`、`webhook`、`network`、`notify`、`schedule`、`routes`。详情页按人话列给用户看 |
+
+清单里写了不认识的字段（多半是拼错）、不认识的 `widget`、没写 `engines.pluginApi`、代码里 import 了 `@bridge/core/*`，详情页「清单体检」都会提示，不影响安装。
 
 ### 入口
 
@@ -67,8 +90,17 @@ export function apply(ctx, config) {
 
 也认 `export default { apply(ctx, config) {}, config: {…} }`（配置 schema 写在代码里时）。
 
-引用 bridge 核心模块：`import { busPublish } from '@bridge/core/runtime/bus.mjs'`（`@bridge/core/` = 程序的 `src/`）。
 第三方 npm 包：插件目录自带 `node_modules`；找不到时回落到 bridge 自己的依赖（sharp、MCP SDK 等不用再装一份）。
+bridge 内部模块（`@bridge/core/…` = 程序的 `src/`）技术上能 import，但属于内部接口、不承诺兼容（见「接口版本与兼容承诺」）。
+
+### 配置怎么生效
+
+- 缺省：用户改了配置，插件整个重启（先撤掉旧的，再按新配置 `apply` 一遍）——进行中的 Claude 对话、子进程都会被停掉。
+- **登记 `ctx.onConfig((next, prev) => …)` 就不重启**：只调它，`ctx.config` 换成新值。返回 `false`（或抛错）= 这次还是整个重启（比如改了端口、要重新拉起子进程）。
+  apply 的第二个参数是**启用那一刻**的配置——登记了 onConfig 就从 `ctx.config` 读，或在回调里更新自己的变量。
+- `await ctx.setConfig(patch)`：插件改**自己**的配置（合并进当前配置、按 schema 校验、落盘、走同一条生效路）。群里发「暂停」、面板上的开关都用它。
+  apply / onConfig 里别 await 它（会等自己，直接报错）。
+- `ctx.meta.previousVersion`：上一次成功启用时的版本号（第一次装是 `null`），升级时据此迁移数据。
 
 ## 配置 schema
 
@@ -112,7 +144,7 @@ export function apply(ctx, config) {
 - `user`：选一个 bridge 账号（值是登录名）。`grant: "chat"` = **选中即授权**插件以这个账号跑 Claude（见 `ctx.chat`）；
   `allowHost: true` 才能选服务器主机本人。新授权主机本人或 Pro 档账号时设置页会再要一次确认。
 - 存着的值坏了（比如升级后改了 schema）会退回默认值并在详情里提示，不会让插件起不来。
-- 改配置后热插件当场按新配置重启（先撤掉旧的，再 `apply` 一遍）。
+- 改配置后热插件当场按新配置重启（先撤掉旧的，再 `apply` 一遍）；登记了 `ctx.onConfig` 就只热更新、不重启（见「配置怎么生效」）。
 
 ## ctx 参考
 
@@ -122,8 +154,10 @@ export function apply(ctx, config) {
 
 | | |
 |---|---|
-| `ctx.id` / `ctx.config` / `ctx.meta` | 插件 id、生效配置（只读）、清单信息 |
-| `ctx.log()` / `ctx.warn()` / `ctx.error()` | 带 `[plugin:<id>]` 前缀的日志 |
+| `ctx.id` / `ctx.config` / `ctx.meta` | 插件 id、生效配置（只读，热更新后换新值）、清单信息（`meta.version`、`meta.pluginApi`、`meta.previousVersion`） |
+| `ctx.api` / `ctx.has(name)` | 插件接口版本（3）/ 这台 bridge 有没有某项能力（见「接口版本与兼容承诺」） |
+| `ctx.log()` / `ctx.warn()` / `ctx.error()` | 日志：进服务端控制台，也进插件自己的日志（详情页「日志」、`plugins.status {logs:'plugin'}`；内存留最近 500 条，第三方插件另落盘 `<数据目录>/logs/plugin.log`） |
+| `ctx.onConfig(fn)` / `await ctx.setConfig(patch)` | 配置热更新 / 插件改自己的配置（见「配置怎么生效」） |
 | `ctx.dataDir` | 插件自己的数据目录 `<数据根>/plugin-data/<id>/`（已建好）。卸载插件不删它 |
 | `ctx.setTimeout` / `ctx.setInterval` | 停用时自动清掉 |
 | `ctx.effect(fn)` | 运行 `fn`，它返回的撤销函数（或带 `dispose` / `close` 的对象）停用时调用 |
@@ -138,7 +172,7 @@ export function apply(ctx, config) {
 | `ctx.route(method, path, handler)` | 精确路径；`handler(req, res, url)`。建议放在 `/api/plugin/<id>/` 下。已被占用的路径会报错 |
 | `ctx.router.use(fn)` / `ctx.router.prefix(method, prefix, handler)` | 中间件 / 前缀路由 |
 | `ctx.http.user(req, res)` | 要求登录（主机或成员），返回身份上下文；失败已回 401 并返回 `null` |
-| `ctx.http.admin(req, res)` | 要求服务器主机 |
+| `ctx.http.host(req, res)` | 要求服务器主机（旧名 `ctx.http.admin` 同一个） |
 | `ctx.http.json(res, status, obj)` / `ctx.http.text(…)` | 回响应 |
 | `await ctx.http.body(req)` | 读 JSON 请求体 |
 | `ctx.bus.publish(key, event)` / `ctx.bus.publishAll(event)` | 往在线页面的实时总线推事件 |
@@ -159,8 +193,9 @@ ctx.claude.prompt('一段系统提示');        // 或 (turn) => 字符串；缺
 ctx.claude.mcp('my-server', (turn) => ({ type: 'stdio', command: 'node', args: ['server.js'] }));   // 挂现成 MCP
 ```
 
-`turn`：`{ kind: 'chat' | 'routine', ctx（身份上下文：kind、cwd、sandbox…）, snap, message, sessionId, getGen() }`。
-快照访客永远拿不到插件工具。工具集在 Claude 进程起来时定下，插件开关 / 重载后下一条消息自动换新。
+`turn`：`{ kind: 'chat' | 'routine' | 'plugin', ctx（身份上下文：kind、cwd、sandbox…）, snap, message, sessionId, getGen() }`。
+快照访客和插件沙箱永远拿不到这些常驻工具。工具集在 Claude 进程起来时定下，插件开关 / 重载后下一条消息自动换新。
+只想给**插件自己发起的那一轮**加工具（机器人「发图到群里」之类），用 `ctx.chat.run({ tools })`，见下。
 
 ### 给 agent 接口与手册
 
@@ -178,42 +213,85 @@ ctx.manual('manual');   // 插件目录下 manual/*.md 并入 bridge 项目手�
 | `ctx.service(name)` | 取服务（不存在抛错）。要用别的插件的服务，就在清单 `requires` 里写上它 |
 | `ctx.on(event, fn)` / `ctx.emit(event, payload)` | 插件之间的事件 |
 
-## 以账号身份做事（ctx.chat / files / share）
+## 以某个身份做事（ctx.chat / sandbox / files / share）
 
-插件要「替某个人问 Claude」时（QQ / 微信 / 邮件机器人、工单自动回复……），不用登录、不用自己调 `/api/chat`：
+插件要「替某个人问 Claude」时（QQ / 微信 / 邮件机器人、工单自动回复……），不用登录、不用自己调 `/api/chat`。先选身份 `as`：
+
+- **沙箱**（多数机器人用这个）：`const ws = ctx.sandbox('g774176839')`。每个名字一个独立工作区 `<数据目录>/sandboxes/<名字>/`：
+  没有命令行、只能读写自己的目录、碰不到主机文件和别的沙箱；不用建账号、不用开多用户。`ctx.sandbox(名字, { web: false })` 连网也关掉。
+  用的是服务器的 Claude 登录 / 号池，不记任何账号的额度——用量由核心按插件记账（下面的 `ctx.chat.usage`），上限用 `ctx.chat.configure({ daily })` 设。
+  名字：字母或数字开头，只用字母、数字、`_ . -`，≤80 字。简写 `{ sandbox: '名字' }` 等同句柄。`ctx.sandbox.list()` 列出建过的。
+  **只读资料目录**：`ctx.sandbox('g1', { readDirs: ['D:/kb', { dir: 'E:/project', hide: ['memory', 'secrets'] }] })`——沙箱里的 Claude 能用 Read / Glob / Grep 查阅这些主机目录（绝对路径），写不了；
+  像密钥的文件名（config.json、*.pem、token、.env…）和 `hide` 里的子路径一律不给读，搜索的目录里含着 hide 项也拒（让它往具体子目录搜）。核心会在系统提示里告诉 Claude 有哪些资料目录。
+  资料对能跟机器人说话的所有人都可读——别挂含私密内容的目录。最多 8 个，不存在的跳过。
+- **账号**：设置里 `type:'user'` + `grant:'chat'` 字段选过的账号（`as: config.runAs`），Claude 在那个账号的工作区里、按它的档位和额度干活。
+  多用户模式关着时只能用「服务账号」。
 
 ```js
+const ws = ctx.sandbox('g774176839');
 const turn = ctx.chat.run({
-  as: config.runAs,            // 必须是设置里 type:'user' + grant:'chat' 字段选过的账号
-  session: 'qq:774176839',     // 插件自己起的会话键：核心记下真实会话，下次同键自动续写
-  message: '今天天气怎么样',
-  attachments: [ctx.files.put(config.runAs, imageBuffer, 'a.jpg')],   // 可选：图片直接给 Claude 看
-  model, effort,               // 可选，缺省跟账号默认
+  as: ws,                      // 沙箱句柄，或授权的账号名
+  session: 'main',             // 可选，缺省 'default'：插件自己起的会话键，核心记下真实会话，下次同键自动续写
+  message: '【小明】今天天气怎么样',
+  attachments: [await ws.put(imageBuffer, 'a.jpg')],   // 可选：图片直接给 Claude 看
+  model, effort, fast: true,   // 可选，缺省跟 bridge 默认；fast = 快速模式（支持的模型才生效）
+  format: 'plain',             // 可选：聊天软件不渲染 Markdown——核心注入统一的纯文本提示（写进文件的不受限）
   prompt: '你在 QQ 群里答问…', // 可选：追加的系统提示
+  tools: [{                    // 可选：只在这一轮可用的工具（沙箱也给），模型看到 mcp__<插件 id>__send_file
+    name: 'send_file', description: '把文件发进当前聊天', params: { path: { type: 'string', required: true } },
+    handler: async ({ path }, turn) => { … },   // turn = { plugin, as, session, from, sessionId }
+  }],
+  from: { id: '42', name: '小明', role: 'admin' },   // 可选：提问人（传给工具的 turn.from）
   label: 'QQ · 某群',          // 可选：会话列表里的来源标签
 });
 for await (const ev of turn.events) { /* queued / start / text / tool / note / done */ }
-const { text, files, sessionId, isError } = await turn.result;   // files = 回答里链接到的真实文件
+const { ok, code, text, notes, files, sessionId, usage } = await turn.result;
 turn.stop();
 ```
 
-- 执行器与定时任务同一份：账号的沙箱围栏、额度、计费、号池换号照常生效；**无人值守**：不出审批卡（工具按账号档位直接放行或拒绝）、
+结果：`text` 是干净的回答（模型侧的通知——比如安全栅门换了模型——单独在 `notes` 里，别发给外人）；`files` = 回答里链接到的真实文件；
+`usage = { costUsd, durationMs }`；`code`：`ok` / `cancelled`（stop 了）/ `quota`（账号额度用完）/ `budget`（插件每日上限）/
+`session_lost`（记着的会话找不到，已自动开新对话重试仍失败）/ `engine`（Claude 出错，`text` 是原因）/ `disabled`（插件停用了）。`isError` = `!ok`（旧写法）。
+
+- 执行器与定时任务同一份：沙箱围栏、额度、计费、号池换号照常生效；**无人值守**：不出审批卡（工具按身份档位直接放行或拒绝）、
   提问直接取消、不进计划模式；不会顶掉这个账号在前端正在进行的对话。
-- 排队由核心做：同一个 `session` 串行，不同 `session` 并行，同一账号最多 2 路（`ctx.chat.configure({ maxParallel: 1..4 })`）。
-- `ctx.chat.reset(as, session)` 忘掉记着的会话（下次开新对话）；`ctx.chat.sessionOf(as, session)` 查真实会话 id。
-- 多用户模式关着时，只能用「服务账号」（账号设置里勾的那种）。
+- 排队由核心做：同一个 `(身份, session)` 串行；同一账号最多 2 路，所有沙箱合用 2 路（`ctx.chat.configure({ maxParallel: 1..4 })`）。
+- `ctx.chat.configure({ daily: { turns, costUsd } })`：每日上限（0 = 不限），到了直接回 `code: 'budget'`。
+- `ctx.chat.usage()` → `{ today: { turns, costUsd }, total, days: [{ day, turns, costUsd }], byKey }`。用过 ctx.chat 的插件，详情页自动有「用量」块。
+- `await ctx.chat.history(as, session, { limit })` → 这段会话的转录 `[{ role, text, ts, attachments?, tools? }]`（控制台用）。
+- `ctx.chat.reset(as, session)` 忘掉记着的会话（下次开新对话）；`ctx.chat.sessionOf(as, session)` 查真实会话 id；`ctx.chat.running` 在跑 / 排队的轮数。
+
+文件（`as` 同上；路径都相对工作区根，越界报错，`.bridge/` 不能写）：
 
 | | |
 |---|---|
-| `ctx.files.put(as, buffer, name)` | 存进该账号的上传目录，返回绝对路径（能当 `attachments`） |
-| `ctx.files.root(as)` | 该账号的工作区根目录 |
-| `await ctx.share.space(as, paths)` | 把该账号工作区里的文件 / 文件夹做成公开只读在线工作空间，返回 `{ url, path, token, expiresAt }` |
+| `await ctx.files.put(as, buffer, name)` | 存进上传目录，返回绝对路径（能当 `attachments`）。v2 插件同步返回 |
+| `await ctx.files.write(as, rel, data)` / `append(as, rel, text)` | 写 / 追加文件（目录自动建），返回绝对路径 |
+| `await ctx.files.read(as, rel, { encoding? })` | 读（不给 encoding 返回 Buffer） |
+| `await ctx.files.list(as, rel?)` / `remove(as, rel)` | 列目录 `[{ name, dir, size, mtime }]` / 删文件或文件夹 |
+| `ctx.files.root(as)` / `ctx.files.path(as, rel)` | 工作区根目录 / 某个相对路径的绝对路径 |
+| 沙箱句柄 | 同一套方法不用传 as：`ws.put / write / append / read / list / remove / path`、`ws.dir`；`await ws.wipe()` 清空整个沙箱 |
 
-## 外部程序与回调（ctx.process / webhook）
+分享：
+
+| | |
+|---|---|
+| `await ctx.share.space(as, paths)` | 把工作区里的文件 / 文件夹做成公开只读在线工作空间，返回 `{ url, path, token, expiresAt }`（要开着「分享链接」） |
+| `await ctx.share.chat({ note })` | 铸一个公开的**快照对话页** `/c/<token>`：拿到链接的人在网页上和 Claude 单独聊（隔离工作区、闲置自动销毁，用服务器主机的额度）。返回 `{ url, path, token }`（`url` 要配了公网地址才有；要开着「快照对话」） |
+| `await ctx.share.chats()` / `await ctx.share.chatLog(token)` / `ctx.share.forgetChat(token)` | 这个插件铸过的快照（`live` 是否还开着）/ 某个快照的对话转录（快照销毁后读归档）/ 从登记簿删掉 |
+
+## 外部程序、回调、定时、通知（ctx.process / webhook / schedule / notify）
 
 ```js
-const p = ctx.process.spawn('napcat', { command: 'D:/napcat/napcat.bat', cwd: 'D:/napcat', restart: 'on-failure', maxRestarts: 5 });
-p.on('exit', ({ code }) => …); p.restart(); p.stop(); p.tail(100);   // p.state：starting / running / backoff / stopped / failed
+const p = ctx.process.spawn('napcat', {
+  command: 'D:/napcat/node.exe', args: ['./index.js'], cwd: 'D:/napcat', restart: 'on-failure', maxRestarts: 5,
+  // 可选：健康检查（看门狗）。进程活着但不干活时（QQ 掉线、端口不应答）连续 failAfter 次不过就按进程树重启；
+  // 启动后 grace 内不判；重启 maxRestarts 次还不行就停在 unhealthy（进程留着），发 'unhealthy' { givenUp: true }
+  health: { check: async () => (await probe()).online, every: 15_000, failAfter: 2, grace: 90_000, timeout: 8_000 },
+});
+p.on('exit', ({ code }) => …); p.on('unhealthy', ({ givenUp, error }) => …); p.on('healthy', () => …); p.on('state', (s) => …);
+p.restart(); p.stop(); p.tail(100);   // p.state：starting / running / backoff / stopped / failed / unhealthy；p.info().health
+// args / env 可以写成函数，每次（重新）启动时现算：args: () => ['./index.js', ...(qq ? ['-q', qq] : [])]——换了参数下次重启就生效，不用整个插件重启
 
 ctx.webhook('onebot', async (req, res, { json, text, body }) => { const e = json(); … }, {
   verify: { loopbackOnly: true },          // 或 { secret, header } 、{ hmac: { secret, header, prefix, algo } }，可同时写
@@ -227,6 +305,19 @@ ctx.webhook('onebot', async (req, res, { json, text, body }) => { const e = json
 - 回调：没有 bridge 登录态的外部请求只能走这里，**必须声明校验**。`loopbackOnly` 只收本机直连——带隧道 / 代理头（cloudflared 也是从本机连进来的）
   一律拒。没回响应时自动回 200 `{}`。
 
+```js
+// 定时任务：比 setInterval 多三样——上次运行时间落盘、bridge 关机错过了开机补跑一次、状态（上次结果 / 下次时间）自动进详情页
+const job = ctx.schedule('clean', { daily: '04:20', label: '清理旧图片' }, async ({ lastRun, catchUp }) => { … });
+//   when：{ every: '30m' | '2h' | '1d' | 毫秒 }（最短 10 秒）、{ daily: 'HH:MM' }、{ cron: '0 4 * * 1-5' }（分 时 日 月 周，服务器本地时区）
+//   另可加 immediate: true（每次启用先跑一次）、dev: true（开发实例也跑；缺省只在正式实例跑）、catchUp: false（错过了不补）
+job.runNow(); job.info();
+
+// 提醒服务器主机：在线界面弹提示 + 手机 App 通知栏；同一条 10 分钟内只发一次
+ctx.notify({ title: 'QQ 掉线了', body: '到 WebUI 扫码', level: 'warn' });   // level：info / warn / error
+```
+
+- 定时任务抛错记进状态与插件日志，不影响下一次；上一次没跑完时到点的这次跳过。记录在 `<数据目录>/schedules.json`。
+
 ## 显示位（状态块、动作按钮、动态选项、store）
 
 | | |
@@ -235,6 +326,7 @@ ctx.webhook('onebot', async (req, res, { json, text, body }) => { const e = json
 | `ctx.action({ id, label, desc?, danger?, confirm?, handler(who, args) })` | 详情页按钮（也是 agent 接口 `plugins.action`）；返回字符串当结果提示 |
 | `ctx.configOptions(field, fn)` | `options: "plugin"` 字段的选项：`fn(who)` 返回 `[{ value, label, desc? }]`。登记 `'groups'` 同时管 `'groups.$key'`，登记 `'list'` 同时管 `'list[]'` |
 | `ctx.bus.toPage(type, payload)` | 推给插件自己的页面（SDK 里 `bridge.on(type, fn)` 收） |
+| （自动） | 子进程（含健康）、回调地址、定时任务、用量（用过 ctx.chat 的）、插件日志、清单体检、能力声明，不用插件自己报 |
 | `ctx.store` | `<数据目录>/store.json` 的键值存储：`get(k, 默认)` / `set(k, v)` / `delete(k)` / `all()`，防抖落盘、停用时写完 |
 
 子进程与回调的状态自动并进状态块，不用自己报。
@@ -266,12 +358,50 @@ ctx.webhook('onebot', async (req, res, { json, text, body }) => { const e = json
 </script>
 ```
 
+**面板就是控制台**：插件页面能直接改插件自己的设置、按详情页那些按钮，不用插件另写接口（只有服务器主机能用，成员打开的面板会被拒）：
+
+```js
+const { schema, config } = await bridge.config.get();   // 配置（secret 打码）与 schema
+await bridge.config.set({ paused: true });               // 合并进当前配置、按 schema 校验；插件登记了 ctx.onConfig 就热更新、不打断进行中的事
+const models = await bridge.options('model');            // 字段的选项（claude.models / users / ctx.configOptions…；表的子字段写 'groups.model'）
+const acts = await bridge.actions();                     // ctx.action 登记的按钮
+await bridge.action('probe');                            // 按一下（有 confirm / danger 的先弹确认）
+const st = await bridge.status();                        // 状态块 + 子进程 + 定时任务 + 用量
+const f = bridge.form(el, { fields?, exclude?, sections?, onChange? });   // 在页面里画一份设置表单：按清单 schema 生成，改了即存
+```
+
+`bridge.form` 支持开关、文字 / 多行 / 密码、数字、枚举（分段 / 下拉）、动态选项（下拉）、字符串列表（有选项 = 勾选列表，否则一行一项），按 `section` 分组、`when` 条件显示、英文界面用 `locales/en.json`；
+表（map）、对象、账号授权不画，显示「在插件详情里改」——这类设置面板自己按业务画（比如群列表里每个群一个开关），用 `bridge.config.set` 存。
+这些走的是 `/api/plugin/<id>/_bridge/*`（插件自己别挂这个前缀下的路径）。
+
 - 嵌在 bridge 里时，请求由宿主页代发、带宿主自己的登录态，只放行 `/api/plugin/<本插件>/` 下的路径；
 - 独立打开（「在新窗口打开」、手机 App）时，地址的 `#t=` 带一张**插件票据**：只对本插件的 `/api/plugin/<id>/` 有效，
   10 分钟不用就失效、用着就续（最长 12 小时），插件停用即作废；身份是打开面板的那个人。
 - 手机 App 里面板在原生另起的干净页面里打开（不挂 App 的任何原生接口）。
 - 主题：`<html>` 有 `data-theme`（dark / light）和 `data-mode`，`--bp-*` 颜色变量随 bridge 实时变；`bridge-plugin.css` 提供
   `.bp-page / .bp-section / .bp-group / .bp-row / .bp-btn / .bp-input / .bp-switch / .bp-seg / .bp-badge` 等现成控件，默认就和设置页一个样子。
+
+## 英文界面（locales/en.json）
+
+第三方插件没法往 bridge 的字典里加词：英文界面下，名称、说明、设置表单、面板标题优先用插件目录 `locales/en.json` 里的词条，没有就照中文显示。
+写法按字段路径覆盖清单里的人话，`config` 与 schema 同构：
+
+```json
+{
+  "name": "QQ bot",
+  "description": "…",
+  "ui": { "panel": { "title": "QQ bot" } },
+  "config": {
+    "prefix": { "label": "Trigger prefix", "desc": "…", "section": "When to answer" },
+    "mode": { "label": "Endpoint", "enum": { "external": "Already running", "managed": "Started by bridge" } },
+    "groups": { "label": "Per-group settings", "key": { "label": "Group number" },
+                "value": { "fields": { "enabled": { "label": "Answer in this group" } } } }
+  }
+}
+```
+
+子字段写在 `fields` 下（object、map 的值），列表项写 `items`，map 的键写 `key`；枚举的英文名写成 `enum: { 取值: 英文名 }`。
+旧写法 `ui.panel.titleEn` 照认。
 
 ## 安装与分发
 

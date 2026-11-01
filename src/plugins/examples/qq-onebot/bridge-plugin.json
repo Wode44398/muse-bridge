@@ -40,6 +40,7 @@
         "effort": { "type": "string", "options": "claude.efforts", "label": "本群思考强度" }
       } }
   },
-  "engines": { "pluginApi": 2 },
+  "engines": { "pluginApi": 3 },
+  "permissions": ["chat", "files", "share", "process", "webhook", "network", "routes"],
   "ui": { "panel": { "page": "web/index.html", "title": "QQ 控制台", "icon": "chat" } }
 }

@@ -7,9 +7,33 @@
   "category": "third-party",
   "entry": "index.mjs",
   "config": {
-    "greeting": { "type": "string", "label": "问候语", "default": "你好", "max": 20, "desc": "接口和 Claude 的 greet 工具都用它打招呼" },
-    "exclaim": { "type": "boolean", "label": "句末加感叹号", "default": true },
-    "hint": { "type": "boolean", "label": "告诉 Claude 有这个工具", "default": false, "desc": "打开后每轮对话的系统提示里多一句话（会多占一点上下文）" }
+    "greeting": {
+      "type": "string",
+      "label": "问候语",
+      "default": "你好",
+      "max": 20,
+      "desc": "接口和 Claude 的 greet 工具都用它打招呼"
+    },
+    "exclaim": {
+      "type": "boolean",
+      "label": "句末加感叹号",
+      "default": true
+    },
+    "hint": {
+      "type": "boolean",
+      "label": "告诉 Claude 有这个工具",
+      "default": false,
+      "desc": "打开后每轮对话的系统提示里多一句话（会多占一点上下文）"
+    }
   },
-  "web": { "page": "web/index.html" }
+  "web": {
+    "page": "web/index.html"
+  },
+  "engines": {
+    "pluginApi": 3
+  },
+  "permissions": [
+    "routes",
+    "claude.tools"
+  ]
 }

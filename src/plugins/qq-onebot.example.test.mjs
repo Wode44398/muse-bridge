@@ -100,7 +100,7 @@ test('群里用前缀提问：以授权账号跑 Claude，回答带引用和 @ �
   assert.ok(await until(() => sent.length === 1));
   assert.equal(asks[0].user, users.accountIdOf('qqbot'));
   assert.match(asks[0].prompt, /【小明（QQ 42）】今天天气/);
-  assert.match(asks[0].append, /QQ 不渲染 Markdown/);
+  assert.match(asks[0].append, /不渲染 Markdown/);
   assert.equal(asks[0].effort, 'high');
   assert.equal(sent[0].act, 'send_group_msg');
   assert.equal(sent[0].group_id, 555);

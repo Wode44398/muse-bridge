@@ -17,7 +17,7 @@ import { applyRateLimit, applyContext } from './status.mjs';
 import { moduleClaudeMcp } from '../modules/registry.mjs';
 import { hostNudge, mediaNudge, USER_NUDGE, REGULAR_NUDGE, NO_SHELL_MSG, sandboxFence, identityNudge, makeSandboxPreToolUse, SHELL_DENY, makeTurnInput, isPhantomResult, composeTurnPrompt } from '../agents/claude.mjs';
 import { UPLOADS, MEDIA, MODEL, VAULT } from '../config/index.mjs';
-import { to1M, claudeEffortOptions, splitUltracode } from '../config/capabilities.mjs';
+import { to1M, claudeEffortOptions, splitUltracode, claudeSupportsFast } from '../config/capabilities.mjs';
 import { billingUser, memberRules } from './quota.mjs';
 import { makeCostMeter } from './usage-ledger.mjs';
 import { noteTurnUsage } from './audit-log.mjs';
@@ -37,9 +37,13 @@ const UNATTENDED_DENY = '（这一轮是无人值守运行，没有用户在线�
  * @param ctx  身份上下文（runtime/identity.mjs contextFor）
  * @param o    { prompt, attachments?: 绝对路径[], resume?: sessionId, model?, effort?, append?: 追加到系统提示末尾,
  *              turn?: { kind, plugin? }（给插件工具槽判断：'routine' / 'plugin'）, source?: 用量事件来源,
- *              label?: 日志名, signal?: AbortSignal, onInit?(sessionId), onEvent?(ev) }
+ *              label?: 日志名, signal?: AbortSignal, onInit?(sessionId), onEvent?(ev),
+ *              runTools?: { owner, tools }（插件 ctx.chat.run 的 tools：只在这一轮可用）, mcpServers?: 追加的 MCP,
+ *              disallowedTools?: 追加禁用的工具, fast?: 快速模式 }
  *   onEvent 的帧：{ type:'text', text }（主对话每条 assistant 文字）/ { type:'tool', name, input } / { type:'note', text }
- * @returns { sessionId, text, isError, files }  files = 最终回答里链接到的真实文件（同主聊天的产物附件卡）
+ * @returns { sessionId, text, isError, files, answer, notes, costUsd, aborted }
+ *   files = 最终回答里链接到的真实文件（同主聊天的产物附件卡）；text = 「⚠ 通知」前缀 + 回答（定时任务原样展示），
+ *   answer = 不带通知的回答、notes = 通知原文（插件分开处理）；costUsd = 这次运行的花费（CLI 报的累计值）。
  */
 export async function runHeadlessTurn(ctx, o, attempt = 0) {
   const abort = new AbortController();
@@ -47,7 +51,7 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
   if (o.signal) { if (o.signal.aborted) onExternalAbort(); else o.signal.addEventListener('abort', onExternalAbort, { once: true }); }
   const emit = (ev) => { try { o.onEvent?.(ev); } catch {} };
   const label = o.label || 'headless';
-  let sessionId = o.resume || null, text = '', isError = false;
+  let sessionId = o.resume || null, text = '', isError = false, costUsd = 0;
   let rejection = null, apiStatus = null, produced = false;   // 撞额度墙判定（见文末 noteLimitHit）
   const runModelBase = o.model || MODEL;
   // 号池智能路由（可选，默认关）：激活号已知用尽就先换号再开跑。
@@ -74,16 +78,16 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
   const engineEnv = claudeEngineEnv(ctx);
   const servedAcct = () => (isUpstreamEnv(engineEnv) && lastServedAccount()) || engineAcct;
   // 插件给 Claude 的工具与提示段（kind 由调用方给：插件可据此决定无人值守的轮次里给不给）
-  const plug = pluginClaudeTurn({ ...(o.turn || { kind: 'routine' }), ctx, snap: null, message: o.prompt || '', sessionId: o.resume || null });
+  const plug = pluginClaudeTurn({ ...(o.turn || { kind: 'routine' }), ctx, snap: null, message: o.prompt || '', sessionId: o.resume || null }, o.runTools || null);
   const q = query({
     prompt: turnInput.stream,
     options: {
       ...claudeCliOptions(),
       cwd: ctx.cwd,
       ...(o.resume ? { resume: o.resume } : {}),
-      additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' ? [...sharedExtensionDirs(), ...[memberSkillRootIfAny(ctx.user)].filter(Boolean)] : []) : [UPLOADS, MEDIA],
+      additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' ? [...sharedExtensionDirs(), ...[memberSkillRootIfAny(ctx.user)].filter(Boolean)] : (ctx.readRoots || []).map((r) => r.root)) : [UPLOADS, MEDIA],
       // 功能扩展的工具（媒体）跟着 agent 开关走（ctx.allowGemini），与主聊天同口径。
-      mcpServers: { ...moduleClaudeMcp(ctx), ...plug.mcpServers, ...ext.mcpServers },
+      mcpServers: { ...moduleClaudeMcp(ctx), ...plug.mcpServers, ...ext.mcpServers, ...(o.mcpServers || {}) },
       ...(ext.plugins.length ? { plugins: ext.plugins } : {}),
       // snapshot:false 同 claude.mjs：SDK 0.3.267 起默认首轮录制复用，换模型后的身份 nudge 会被冻住。
       systemPrompt: { type: 'preset', preset: 'claude_code', snapshot: false, append: identityNudge(runModelBase) + (ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) + mediaNudge(ctx)) : (hostNudge(ctx) + mediaNudge(ctx))) + plug.prompt + (o.append || '') },
@@ -91,7 +95,7 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
       env: { ...(engineEnv || process.env), ...PEER_OFF_ENV },
       ...(modelId ? { model: modelId } : {}),
       ...(effortOpts.effort ? { effort: effortOpts.effort } : {}),
-      settings: JSON.stringify({ ...(effortOpts.settings || {}), ...PEER_OFF_SETTINGS }),
+      settings: JSON.stringify({ ...(effortOpts.settings || {}), ...PEER_OFF_SETTINGS, ...(o.fast && claudeSupportsFast(modelId || runModelBase) ? { fastMode: true } : {}) }),
       // 沙箱身份同样套硬边界（PreToolUse hook 含只读 + 无 shell disallow + 设置隔离）。
       ...(ctx.sandbox ? {
         hooks: { PreToolUse: [{ hooks: [makeSandboxPreToolUse(ctx)] }] },
@@ -100,7 +104,7 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
       // 权限模式显式传 default（不传 = CLI 按服务端闸自己挑，可能静默变成 auto 分类器审批）+ 下面的宿主放行。
       // 没人能批计划：不给 EnterPlanMode（ExitPlanMode 万一来了也直接放行）。
       permissionMode: 'default',
-      disallowedTools: [...(ctx.sandbox && !ctx.shell ? SHELL_DENY : []), 'EnterPlanMode'],
+      disallowedTools: [...(ctx.sandbox && !ctx.shell ? SHELL_DENY : []), 'EnterPlanMode', ...(Array.isArray(o.disallowedTools) ? o.disallowedTools : [])],
       includePartialMessages: false,
       abortController: abort,
       canUseTool: async (name, input) => {
@@ -186,6 +190,7 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
         text = msg.result || '';
         apiStatus = typeof msg.api_error_status === 'number' ? msg.api_error_status : null;
         isError = Boolean(msg.is_error) || (apiStatus != null && apiStatus >= 400);
+        if (typeof msg.total_cost_usd === 'number') costUsd = msg.total_cost_usd;
         if (billTo) {
           const u = msg.usage || {};
           const toks = (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
@@ -225,12 +230,13 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
     }
     if (sw) notes.push(`账号「${sw.fromLabel}」${reasonText(sw.reason)}，已自动切到「${sw.toLabel}」，下次运行会用新账号。`);
   }
+  const answer = text;
   if (notes.length) text = notes.map((n) => '⚠ ' + n).join('\n') + (text ? '\n\n' + text : '');
   let files = [];
-  if (!isError && text) {
+  if (!isError && answer) {
     try {
-      files = collectDeliverables(text, { cwd: ctx.cwd, roots: deliverRoots(ctx, ctx.cwd, VAULT), anywhere: deliverAnywhere(ctx) });
+      files = collectDeliverables(answer, { cwd: ctx.cwd, roots: deliverRoots(ctx, ctx.cwd, VAULT), anywhere: deliverAnywhere(ctx) });
     } catch {}
   }
-  return { sessionId, text, isError, files };
+  return { sessionId, text, isError, files, answer, notes: notes.slice(), costUsd, aborted: !!o.signal?.aborted };
 }

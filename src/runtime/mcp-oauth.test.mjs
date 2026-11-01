@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startMcpAuth, submitMcpCallback, confirmMcpAuth, flowByState, flowFor, noteLiveQuery, checkCallbackUrl, _resetMcpOAuth } from './mcp-oauth.mjs';
+import { startMcpAuth, submitMcpCallback, confirmMcpAuth, flowByState, flowFor, noteLiveQuery, checkCallbackUrl, _resetMcpOAuth, EGRESS_BLOCKED_MSG, isEgressBlocked, humanMcpError } from './mcp-oauth.mjs';
 import { publicOriginOf } from '../routes/mcp-oauth.mjs';
 
 const STATE = 'st_' + 'x'.repeat(30);
@@ -206,4 +206,15 @@ test('授权完成：这个身份活着的其它会话 CLI 都重连，别的身
   assert.ok(a.calls.some((c) => c[0] === 'reconnect'));
   assert.ok(b.calls.some((c) => c[0] === 'reconnect'));
   assert.ok(!other.calls.some((c) => c[0] === 'reconnect'));
+});
+
+test('Muse 出口代理拦令牌端点（refresh_rejected）：报错换成说明，不让人重试', async () => {
+  const q = fakeQ({ auth: custom, submitErr: 'refresh_rejected' });
+  noteLiveQuery('admin', 'sess-1234', q);
+  await startMcpAuth({ key: 'admin', sid: 'sess-1234', server: 'figma', redirectUri: 'https://b/cb' });
+  const r = await submitMcpCallback(flowByState(STATE), `https://b/cb?code=abc&iss=x&state=${STATE}`);
+  assert.equal(r.ok, false);
+  assert.equal(r.error, EGRESS_BLOCKED_MSG);
+  assert.ok(isEgressBlocked('{"detail":"token refresh not allowed through egress proxy","error":"refresh_rejected"}'));
+  assert.equal(humanMcpError('HTTP 404'), 'HTTP 404');
 });

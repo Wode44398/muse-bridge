@@ -7,17 +7,23 @@
   // 权限存在注册表 connector.tools，会话注入时作为 CLI 原生的 tools[].permission_policy 带上（只对远程连接器有效）。
   // 下面「生效 Agent / 连接配置 / 管理」几节还是 Customize 自己画，经 children 传进来。
   import { ic } from './icons.js';
-  import { t } from '../../lib/i18n.js';
+  import { t, tr } from '../../lib/i18n.js';
+  import OAuthAppSetup from './OAuthAppSetup.svelte';   // 授权服务器不开放动态注册时：服主自备 OAuth 应用
 
   let {
     it, st = null, loading = false, flow = null,
     onConnect, onDisconnect, onCancelAuth, onReopen, onSubmitUrl, onConfirmWeb,
     onRefresh, onPolicy, onEdit, onToggle, onUninstall, children,
+    app = null,   // OAuthAppSetup 的回调：{ onSaved, onToast, onConfirm }
   } = $props();
 
   const remote = $derived(it.connector?.transport && it.connector.transport !== 'stdio');
   const status = $derived(st?.status || '');
   const authing = $derived(!!flow && ['starting', 'waiting'].includes(flow.status));
+  // 要自备 OAuth 应用的连接器（状态表标了 oauthApp，或刚点连接被服务端回「先配置应用」）
+  const appNeeded = $derived(!!st?.oauthApp || !!flow?.needsApp);
+  const appMissing = $derived(!authing && ((st?.oauthApp && !st.oauthApp.configured) || (flow?.needsApp && flow.status === 'error')));
+  const toApp = () => document.getElementById('oauth-app-' + it.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   const tools = $derived((st?.tools || []).map((x) => ({
     name: x.name, description: x.description || '',
     readOnly: x.readOnly ?? !!x.annotations?.readOnly,
@@ -49,6 +55,7 @@
     if (!remote) return { tone: 'mute', text: t('本地连接器 · 在对话里启动') };
     if (flow?.status === 'starting') return { tone: 'busy', text: t('正在准备授权…') };
     if (flow?.status === 'waiting') return { tone: 'warn', text: t('等待你在授权页完成登录') };
+    if (appMissing && status !== 'connected') return { tone: 'warn', text: t('需要配置 OAuth 应用') };
     if (!st) return loading ? { tone: 'busy', text: t('正在检测…') } : { tone: 'mute', text: t('状态未知') };
     if (status === 'connected') return { tone: 'ok', text: tools.length ? t('已连接 · {n} 个工具', { n: tools.length }) : t('已连接') };
     if (status === 'needs-auth') return { tone: 'warn', text: t('需要登录') };
@@ -70,6 +77,8 @@
     {#if remote && it.enabled}
       {#if authing}
         <button class="cz-btn" disabled><span class="cz-spin"></span>{t('连接中…')}</button>
+      {:else if appMissing && status !== 'connected'}
+        <button class="cz-btn pri" onclick={toApp}>{t('配置 OAuth 应用')}</button>
       {:else if status === 'connected' && st?.oauth}
         <button class="cz-btn" onclick={onDisconnect}>{t('断开连接')}</button>
       {:else if status && status !== 'connected' && status !== 'pending'}
@@ -109,12 +118,18 @@
       <span class="cz-grow"></span>
       <button class="cz-btn sm" onclick={onCancelAuth}>{t('取消')}</button>
     </div>
-    {#if flow.error}<div class="cz-err">{flow.error}</div>{/if}
+    {#if flow.error}<div class="cz-err">{tr(flow.error)}</div>{/if}
   </div>
+{:else if appMissing}
+  <!-- 下面「OAuth 应用」一节就是解法，不再重复报「不支持动态注册」 -->
 {:else if flow && ['error', 'expired'].includes(flow.status) && flow.error}
-  <div class="cz-diag err">{flow.error}</div>
+  <div class="cz-diag err">{tr(flow.error)}</div>
 {:else if status === 'failed' && st?.error}
-  <div class="cz-diag err">{st.error}</div>
+  <div class="cz-diag err">{tr(st.error)}</div>
+{/if}
+
+{#if remote && appNeeded}
+  <OAuthAppSetup id={it.id} onSaved={app?.onSaved} onToast={app?.onToast} onConfirm={app?.onConfirm} />
 {/if}
 
 {#if remote}

@@ -15,6 +15,7 @@ import path from 'node:path';
 import { readJson, writeJson } from '../jsonfile.mjs';
 import { DATA_ROOT } from '../runtime/paths.mjs';
 import { createKernel } from '../kernel/kernel.mjs';
+import { pluginLogger } from './logs.mjs';
 
 export const PLUGINS_STATE_FILE = path.resolve(process.env.BRIDGE_PLUGINS_STATE || path.join(DATA_ROOT, 'plugins.json'));
 const FORCED_OFF = new Set(String(process.env.BRIDGE_PLUGINS_OFF || '').split(',').map((s) => s.trim()).filter(Boolean));
@@ -43,7 +44,8 @@ const fileStore = {
   },
 };
 
-export const kernel = createKernel({ store: fileStore });
+// logger：插件的 ctx.log / warn / error 另记进插件自己的日志（plugins/logs.mjs，详情页「日志」）
+export const kernel = createKernel({ store: fileStore, logger: pluginLogger });
 
 export function pluginOn(id) {
   if (!kernel.started) return true;

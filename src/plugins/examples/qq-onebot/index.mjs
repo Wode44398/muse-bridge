@@ -3,16 +3,16 @@
 // 这个插件只管两件事：OneBot 协议适配（收上报、调发消息接口）和群聊规则（触发、冷却、白名单、按群设置）。
 // 其余都交给 bridge 的插件运行环境：
 //   ctx.webhook   收协议端的 HTTP 上报（只收本机直连 / 带密钥）
-//   ctx.chat      以授权账号跑无人值守的 Claude：同一个群串行、记住会话续写、不出审批卡
+//   ctx.chat      以授权账号跑无人值守的 Claude：同一个群串行、记住会话续写、不出审批卡；format:'plain' 让它用纯文本回
 //   ctx.files     群里的图片存进账号工作区当附件       ctx.share   Claude 产出的文件做成公开只读链接
 //   ctx.process   「由 bridge 拉起」时托管协议端进程（停用时整棵收掉、崩了自动重启）
 //   ctx.status / ctx.action / ctx.configOptions   设置页的状态块、按钮、群号下拉
 //   ui.panel + web/index.html                     QQ 控制台（聊天记录、手动发消息、重开对话）
+// 不想建 bridge 账号、要每个群一个隔离沙箱的完整版本，见官方插件「QQ 机器人」（qqchatbot：ctx.sandbox + 看门狗 + 群聊记录）。
 
 import path from 'node:path';
 import { appendFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 
-const PLAIN_GUIDE = '你的回复会原样发进 QQ 群，QQ 不渲染 Markdown：发进群的话用纯文本（不要 #、**、`、代码块、表格、列表符号），分点用 1. 2. 3.。写进文件的内容照常用 Markdown / 代码，不受此限制。';
 const CHAT_GUIDE = '你在 QQ 里回答群友（或好友私聊）的问题。每条用户消息开头的【…】标着是谁在说话；多人共用这段对话，答的时候针对当前提问的人。回答简洁、口语化，适合在聊天软件里读。';
 
 export function apply(ctx, cfg) {
@@ -135,7 +135,7 @@ export function apply(ctx, cfg) {
     for (const [i, url] of q.imgs.entries()) {
       try {
         const r = await fetch(url, { signal: AbortSignal.timeout(20_000) });
-        if (r.ok) attachments.push(ctx.files.put(cfg.runAs, Buffer.from(await r.arrayBuffer()), `qq-${q.msgId}-${i}.jpg`));
+        if (r.ok) attachments.push(await ctx.files.put(cfg.runAs, Buffer.from(await r.arrayBuffer()), `qq-${q.msgId}-${i}.jpg`));
       } catch {}
     }
     const effort = (q.isGroup && cfg.groups[q.gid]?.effort) || cfg.effort || undefined;
@@ -146,13 +146,16 @@ export function apply(ctx, cfg) {
       attachments,
       model: cfg.model || undefined,
       effort,
-      prompt: CHAT_GUIDE + (cfg.plainReply ? '\n' + PLAIN_GUIDE : ''),
+      format: cfg.plainReply ? 'plain' : undefined,
+      prompt: CHAT_GUIDE,
+      from: { id: String(q.qq), name: q.nick },
       label: 'QQ · ' + q.chatName,
     });
     ctx.status.refresh();
     const out = await turn.result;
-    let text = out.isError ? '出错了：' + String(out.text || '').slice(0, 300) : out.text;
-    if (!out.isError && cfg.fileLink && out.files?.length) {
+    if (out.code === 'cancelled' || out.code === 'disabled') return;
+    let text = out.ok ? out.text : out.code === 'quota' || out.code === 'budget' ? '今天的额度用完了，晚点再来吧。' : '出错了：' + String(out.text || '').slice(0, 300);
+    if (out.ok && cfg.fileLink && out.files?.length) {
       try {
         const sh = await ctx.share.space(cfg.runAs, out.files.map((f) => f.path));
         text += '\n\n文件：' + (sh.url || sh.path);

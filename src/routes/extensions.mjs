@@ -16,6 +16,11 @@ import {
 import { FEATURES } from '../config/index.mjs';
 import { marketIndex, marketInstall, editSources, installedKeys } from '../ext-market.mjs';
 import { readBody } from '../runtime/body.mjs';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { AUTHD_SOCKET } from '../mcp/figma-rest.mjs';
+
+const FIGMA_REST_SCRIPT = fileURLToPath(new URL('../mcp/figma-rest.mjs', import.meta.url));
 
 const MAX_UPLOAD = 64 * 1024 * 1024;   // 技能/插件包上限 64MB（一般几百 KB）
 
@@ -93,6 +98,30 @@ export function registerExtensionRoutes(router, { identify }) {
     try {
       let input; try { input = JSON.parse(await readBody(req)); } catch { input = {}; }
       json(res, 200, { ok: true, item: saveConnector(input) });
+    } catch (e) { fail(res, e); }
+  });
+
+  // 一键添加内置的本地连接器（src/mcp/ 里随 bridge 发的 stdio 服务）。现在只有 figma-pat：Figma 只读（个人访问令牌）。
+  // Muse 上（有平台凭据服务 authd）令牌走平台的 API Key 型自定义连接器 custom.figma_pat、不进虚拟机；别处由服主填 FIGMA_API_KEY。
+  // 回 { item, needsKey }：needsKey 时前端打开编辑表单让人填令牌。已经装过就回原来那个。
+  router.on('POST', '/api/extensions/connector-preset', async (req, res) => {
+    if (!gate(req, res)) return;
+    try {
+      let input; try { input = JSON.parse(await readBody(req)); } catch { input = {}; }
+      if (input.preset !== 'figma-pat') throw Object.assign(new Error('未知的预设'), { status: 400 });
+      const scope = input.scope === 'shared' ? 'shared' : 'admin';
+      const name = 'figma-pat';
+      const existing = listExtensions({ scope }).find((x) => x.type === 'connector' && x.name === name);
+      if (existing) { json(res, 200, { ok: true, item: existing, needsKey: false, existed: true }); return; }
+      const muse = existsSync(AUTHD_SOCKET);
+      const item = saveConnector({
+        name, scope, transport: 'stdio', command: process.execPath, args: [FIGMA_REST_SCRIPT],
+        description: muse
+          ? 'Figma 只读（读文件、节点、导出图片、评论、组件与样式）。令牌由 Muse 平台的自定义连接 custom.figma_pat 保管，bridge 只拿替身。'
+          : 'Figma 只读（读文件、节点、导出图片、评论、组件与样式），用个人访问令牌（FIGMA_API_KEY）。',
+        env: muse ? { FIGMA_TOKEN_CREDENTIAL: 'custom.figma_pat' } : { FIGMA_API_KEY: '' },
+      });
+      json(res, 200, { ok: true, item, needsKey: !muse });
     } catch (e) { fail(res, e); }
   });
 

@@ -29,6 +29,8 @@ export function dropAuthFlow(sid, server) {
   mcpAuth.flows = rest;
 }
 
+// 服务端回 409 needs_app：这个连接器的授权服务器不开放动态注册，要服主先配 OAuth 应用（扩展页连接器面板里）
+const needsAppOf = (e) => !!(e && e.body && typeof e.body === 'object' && e.body.code === 'needs_app');
 const errOf = (e, fb) => (e && e.body && typeof e.body === 'object' && e.body.error) || (typeof e?.body === 'string' && e.body) || fb;
 
 export function openAuthPage(url) {
@@ -68,10 +70,10 @@ function poll(sid, server, id) {
 
 export async function startAuth(sid, server) {
   if (!sid || !server || authFlow(sid, server)?.busy) return;
-  put(sid, server, { status: 'starting', error: '', busy: true, authUrl: '', scheme: '' });
+  put(sid, server, { status: 'starting', error: '', busy: true, authUrl: '', scheme: '', needsApp: false });
   let v;
   try { v = await api.post('/api/mcp-oauth/start', { session: sid, server }); }
-  catch (e) { put(sid, server, { status: 'error', error: errOf(e, t('无法开始授权')), busy: false }); return; }
+  catch (e) { put(sid, server, { status: 'error', error: errOf(e, t('无法开始授权')), busy: false, needsApp: needsAppOf(e) }); return; }
   absorb(sid, server, v);
   if (v.status === 'waiting') {
     openAuthPage(v.authUrl);   // 弹窗被拦也没关系：卡片里留着「打开授权页」链接
@@ -95,10 +97,10 @@ export function reserveAuthWindow() {
 export async function startConnectorAuth(id, server, win = null) {
   const sid = connSid(id);
   if (!id || !server || authFlow(sid, server)?.busy) { try { win && win.close(); } catch {} return; }
-  put(sid, server, { status: 'starting', error: '', busy: true, authUrl: '', scheme: '', connector: null });
+  put(sid, server, { status: 'starting', error: '', busy: true, authUrl: '', scheme: '', connector: null, needsApp: false });
   let v;
   try { v = await api.post('/api/mcp-oauth/start', { connector: id }); }
-  catch (e) { try { win && win.close(); } catch {} put(sid, server, { status: 'error', error: errOf(e, t('无法开始授权')), busy: false }); return; }
+  catch (e) { try { win && win.close(); } catch {} put(sid, server, { status: 'error', error: errOf(e, t('无法开始授权')), busy: false, needsApp: needsAppOf(e) }); return; }
   absorb(sid, server, v);
   if (v.status === 'waiting') {
     if (win && !win.closed) { try { win.location.href = v.authUrl; } catch { openAuthPage(v.authUrl); } }

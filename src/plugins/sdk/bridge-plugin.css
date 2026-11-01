@@ -80,3 +80,12 @@ a { color: var(--bp-accent); }
 .bp-toast-out { opacity: 0; }
 .bp-expired { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bp-bg); color: var(--bp-muted);
   font-size: 14px; padding: 24px; text-align: center; z-index: 100; }
+
+/* bridge.form 画的设置表单 */
+.bp-row-stack { flex-wrap: wrap; }
+.bp-row-stack > .bp-row-main { flex: 1 1 100%; }
+.bp-row-stack > .bp-input, .bp-row-stack > .bp-select, .bp-row-stack > .bp-textarea, .bp-row-stack > .bp-num, .bp-row-stack > .bp-checks { flex: 1 1 100%; }
+.bp-num .bp-input { max-width: 160px; }
+.bp-checks { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; }
+.bp-check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
+.bp-check input { width: 16px; height: 16px; accent-color: var(--bp-accent); flex: none; }

@@ -8,7 +8,8 @@
 //   · access:'read' 的工具进 allowedTools（同内嵌图表：纯读不弹审批卡）；其余照会话的权限模式审批；
 //   · sig 进常驻 CLI 的签名（工具集在 CLI 起来时就定了）：插件开关 / 重载 / 改了工具后，停放的 CLI 不会被错用。
 //
-// turn：{ kind: 'chat' | 'routine', ctx（身份上下文）, snap, getGen?, fromPhone?, source?, message?, sessionId? }
+// turn：{ kind: 'chat' | 'routine' | 'plugin', ctx（身份上下文）, snap, getGen?, fromPhone?, source?, message?, sessionId? }
+// ctx.chat.run({ tools }) 只在那一轮可用的工具经 pluginClaudeTurn 的第二个参数并进来（无头执行器传）。
 
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
@@ -68,19 +69,24 @@ function audienceOk(who, turn) {
   return c.kind === 'admin' && !c.sandbox;
 }
 
-function check(spec) {
+export function checkTool(spec) {
   if (!spec || !TOOL_NAME.test(spec.name || '')) throw new Error('工具名只能用字母、数字、下划线、连字符（≤48 字）：' + (spec && spec.name));
   if (typeof spec.handler !== 'function') throw new Error('工具 ' + spec.name + ' 缺 handler(args, turn)');
 }
+const check = checkTool;
 
-export function pluginClaudeTurn(turn) {
+// runTools：ctx.chat.run({ tools }) 带来的「只在这一轮可用」的工具 { owner, tools }——不看 who / when（插件自己发起的这一轮，
+// 沙箱身份也给），与该插件的常驻工具合进同一个 server（模型看到的都是 mcp__<插件 id>__<名字>），同名时这一轮的优先。
+export function pluginClaudeTurn(turn, runTools = null) {
   const empty = { mcpServers: {}, prompt: '', allowedTools: [], sig: [] };
-  if (!kernel.started) return empty;
-  const entries = kernel.slot(CLAUDE_SLOT).entries();
-  if (!entries.length) return empty;
+  const extra = runTools && Array.isArray(runTools.tools) && runTools.tools.length ? runTools : null;
+  if (!kernel.started && !extra) return empty;
+  const entries = kernel.started ? kernel.slot(CLAUDE_SLOT).entries() : [];
+  if (!entries.length && !extra) return empty;
   const byOwner = new Map();   // 插件 id → { tools: [], mcp: {} }
   const prompts = [];
   const allowed = [];
+  if (extra) byOwner.set(extra.owner, { tools: extra.tools.slice(), mcp: {} });
   for (const { item, owner } of entries) {
     try {
       if (item.kind === 'tool') {
@@ -89,7 +95,8 @@ export function pluginClaudeTurn(turn) {
         if (!audienceOk(spec.who || 'host', turn)) continue;
         if (typeof spec.when === 'function' && !spec.when(turn)) continue;
         if (!byOwner.has(owner)) byOwner.set(owner, { tools: [], mcp: {} });
-        byOwner.get(owner).tools.push(spec);
+        const own = byOwner.get(owner).tools;
+        if (!own.some((t) => t.name === spec.name)) own.push(spec);
       } else if (item.kind === 'prompt') {
         if (!audienceOk(item.who, turn)) continue;
         const t = typeof item.text === 'function' ? item.text(turn) : item.text;

@@ -21,7 +21,7 @@ Muse Bridge 带着 bridge 的 Gemini · Vertex 扩展：经 Google 的 Vertex AI
 5. **「区域」**（Regions）一般别动：对话走 global，媒体模型在 us-central1。
 6. 点 **「保存并测试」**（Save and test）：马上生效，并真连一次 Google（不生成东西、不收费）。看到「✓ Vertex 已连通」就好了；**「测试连接」**（Test connection）只测不改，**「移除凭据」**（Remove credentials）删掉上传的那份。
 
-**在 Muse 上第一次测试多半会卡住**：出站代理要用户批准访问 Google 的接口，卡片在 Muse 里（输入框上方或右侧「待审核」面板），没人批时测试等 30 秒后报「30 秒没有回应…出站代理还在等你批准访问 googleapis.com」。最省事的做法：管理员打开扩展后，在 Muse 里说一句「放行 Vertex 要用的网站」，Muse 会跑 `allow-sites`（按现在的配置算，Gemini 开着时会带上 `oauth2.googleapis.com`、`aiplatform.googleapis.com`、`us-central1-aiplatform.googleapis.com`、`generativelanguage.googleapis.com`），用户在每张卡上选「总是允许此站点」，再回来点一次「保存并测试」。只选「允许一次」的话，之后在后台生成时还会再问，生成会停在那里。
+**在 Muse 上第一次测试多半会卡住**：出站代理要用户批准访问 Google 的接口，卡片在 Muse 里（输入框上方或右侧「待审核」面板），没人批时测试等 30 秒后报「30 秒没有回应…出站代理还在等你批准访问 googleapis.com」。最省事的做法：管理员打开扩展后，在 Muse 里说一句「放行 Vertex 要用的网站」，Muse 会跑 `allow-sites`（按现在的配置算，Gemini 开着时会带上 `oauth2.googleapis.com`、`aiplatform.googleapis.com`、`us-central1-aiplatform.googleapis.com`、`generativelanguage.googleapis.com`），用户在每张卡上自己选怎么批，再回来点一次「保存并测试」。各选项的后果：只选「允许一次」的话，之后在后台生成时还会再问，没人批生成就会停在那里；选「总是允许此站点」以后不再问（选项见 `../MUSE.md` 2.0）。
 
 测试没通过时，卡片上会写一句原因，照着改：
 

@@ -12,11 +12,15 @@
 //              ctx.bus.{ publish, publishAll }         往前端实时总线推事件
 //              ctx.dataDir                            插件自己的数据目录（<数据根>/plugin-data/<id>/，用到时才建）
 //              ctx.runtime                            { production, noAuth, port, dataRoot, programRoot }
-//   运行环境   ctx.chat.{ run, reset, sessionOf, configure }   以授权账号跑一轮无人值守的 Claude（plugins/chat.mjs）
-//              ctx.files.{ put, root } / ctx.share.space     往授权账号的工作区放文件 / 做公开只读链接
-//              ctx.process.{ spawn, get, list }              托管子进程：按进程树收尸、退避重启、日志（plugins/process.mjs）
+//   运行环境   ctx.chat.{ run, history, usage, reset, sessionOf, configure }   以授权账号 / 沙箱跑一轮无人值守的 Claude（plugins/chat.mjs）
+//              ctx.sandbox(key, { web })                    插件自管的隔离工作区（不用建账号），句柄能当 as 用
+//              ctx.files.{ put, write, append, read, list, remove, root, path } / ctx.share.{ space, chat, chats, chatLog }
+//              ctx.process.{ spawn, get, list }              托管子进程：按进程树收尸、退避重启、健康检查、日志（plugins/process.mjs）
 //              ctx.webhook(name, handler, { verify })        入站回调 /hook/<id>/<name>，必须声明校验（plugins/webhook.mjs）
+//              ctx.schedule(name, when, fn)                  定时任务：落盘、错过补跑、状态并进详情页（plugins/schedule.mjs）
+//              ctx.notify({ title, body, level })            提醒服务器主机：界面提示 + 手机通知栏
 //   显示位     ctx.status(fn) / ctx.action(spec) / ctx.configOptions(field, fn) / ctx.bus.toPage / ctx.store（plugins/panel.mjs）
+//   契约       ctx.api（接口版本）/ ctx.has(能力名)（plugins/engines.mjs PLUGIN_FEATURES）；内核自带 ctx.onConfig / ctx.setConfig / ctx.meta.previousVersion
 // 撤销都不用自己写：停用 / 改配置 / 重新加载时内核按相反顺序把这些全部撤掉。
 
 import { mkdirSync } from 'node:fs';
@@ -31,10 +35,14 @@ import { busPublish, busPublishAll } from '../runtime/bus.mjs';
 import { defineOp, defineGroup, removeOp, removeGroup } from '../agent-api/registry.mjs';
 import { addManualDir } from '../agent-api/manual.mjs';
 import { CLAUDE_SLOT } from './claude-tools.mjs';
-import { makeChatService, makeFilesService, makeShareService } from './chat.mjs';
+import { makeChatService, makeFilesService, makeShareService, makeSandboxFactory } from './chat.mjs';
 import { makeProcessService } from './process.mjs';
 import { makeWebhookService } from './webhook.mjs';
 import { makePanelMixins, makeStore } from './panel.mjs';
+import { makeScheduleService } from './schedule.mjs';
+import { PLUGIN_API_VERSION, PLUGIN_FEATURES } from './engines.mjs';
+import { notePush } from '../runtime/push-notices.mjs';
+import { randomUUID } from 'node:crypto';
 import { setInternalRouter } from '../agent-api/internal.mjs';
 import { startMarketWatcher, setUpdatesPublisher } from './market.mjs';
 
@@ -108,16 +116,22 @@ function installMixins() {
         const t = byTicket(req, res);
         return t !== undefined ? t : requireCtx(auth().identify, req, res);
       },
-      // 要求服务器主机（管理员）；失败已回 401 / 403，返回 null
-      admin: (req, res) => {
-        const t = byTicket(req, res);
-        const c = t !== undefined ? t : requireCtx(auth().identify, req, res);
-        if (!c) return null;
-        if (!can(c, 'server.manage')) { sendText(res, 403, 'forbidden'); return null; }
-        return c;
-      },
+      // 要求服务器主机（管理员）；失败已回 401 / 403，返回 null。host 是同一个（措辞统一成「服务器主机」，admin 保留）
+      admin: (req, res) => hostOnly(req, res),
+      host: (req, res) => hostOnly(req, res),
     };
+    function hostOnly(req, res) {
+      const t = byTicket(req, res);
+      const c = t !== undefined ? t : requireCtx(auth().identify, req, res);
+      if (!c) return null;
+      if (!can(c, 'server.manage')) { sendText(res, 403, 'forbidden'); return null; }
+      return c;
+    }
   });
+
+  // 契约：接口版本与能力探测（以后加能力只往 PLUGIN_FEATURES 里加名字，不升版本）
+  kernel.mixin('api', () => PLUGIN_API_VERSION);
+  kernel.mixin('has', () => (name) => PLUGIN_FEATURES.includes(String(name)));
 
   kernel.mixin('claude', (ctx) => ({
     // 给 Claude 加一个工具。spec：{ name, description, params, handler(args, turn), access?, who?, when?(turn) }
@@ -159,17 +173,42 @@ function installMixins() {
   // ── 运行环境 ──（工厂只建闭包，用到时才干活：每个插件上下文都会跑一遍）
   kernel.mixin('chat', (ctx) => makeChatService(ctx));
   kernel.mixin('files', (ctx) => makeFilesService(ctx));
+  kernel.mixin('sandbox', (ctx) => makeSandboxFactory(ctx));
   kernel.mixin('share', (ctx) => makeShareService(ctx));
   kernel.mixin('process', (ctx) => makeProcessService(ctx));
   kernel.mixin('webhook', (ctx) => makeWebhookService(ctx, sendJson));
+  kernel.mixin('_schedule', (ctx) => makeScheduleService(ctx));
+  kernel.mixin('schedule', (ctx) => ctx._schedule.schedule);
+  kernel.mixin('notify', (ctx) => makeNotify(ctx));
 
-  // ── 显示位 ──（状态块里要并进子进程与回调，所以排在它们后面）
-  kernel.mixin('_panel', (ctx) => makePanelMixins(ctx, { processes: () => ctx.process.list(), hooks: () => ctx.webhook.list() }));
+  // ── 显示位 ──（状态块里要并进子进程、回调与定时任务，所以排在它们后面）
+  kernel.mixin('_panel', (ctx) => makePanelMixins(ctx, { processes: () => ctx.process.list(), hooks: () => ctx.webhook.list(), schedules: () => ctx._schedule.list() }));
   kernel.mixin('status', (ctx) => ctx._panel.status);
   kernel.mixin('action', (ctx) => ctx._panel.action);
   kernel.mixin('configOptions', (ctx) => ctx._panel.configOptions);
   kernel.mixin('bus', (ctx) => ({ publish: busPublish, publishAll: busPublishAll, toPage: ctx._panel.toPage }));
   kernel.mixin('store', (ctx) => makeStore(ctx));   // 第一次读写才碰磁盘
+}
+
+// ctx.notify({ title, body?, level? })：提醒服务器主机——在线界面弹提示 + 手机 App 通知栏（push-notices，App 后台轮询）。
+// 同一条（标题 + 正文）10 分钟内只发一次，免得插件出故障时刷屏。也记进插件日志。返回 { sent }。
+function makeNotify(ctx) {
+  const recent = new Map();   // 内容 → 时间
+  return ({ title, body = '', level = 'info' } = {}) => {
+    const t = String(title || '').trim().slice(0, 80);
+    if (!t) throw new Error('ctx.notify 要 title');
+    const b = String(body || '').trim().slice(0, 200);
+    const k = t + '\n' + b;
+    const now = Date.now();
+    if (now - (recent.get(k) || 0) < 10 * 60_000) return { sent: false, deduped: true };
+    recent.set(k, now);
+    if (recent.size > 200) recent.delete(recent.keys().next().value);
+    const text = `${ctx.meta.name || ctx.id}：${t}${b ? ' — ' + b : ''}`;
+    (level === 'error' ? ctx.error : level === 'warn' ? ctx.warn : ctx.log)('通知：' + t + (b ? ' — ' + b : ''));
+    try { notePush(HOST_OWNER, { sessionId: null, message: text }); } catch {}
+    try { busPublish(HOST_OWNER, { type: 'ui.cmd', id: randomUUID(), at: now, op: 'toast', text }); } catch {}
+    return { sent: true };
+  };
 }
 
 /**

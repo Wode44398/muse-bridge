@@ -796,6 +796,11 @@ export function connectorForAuth(id) {
   if (!item) return null;
   return { item: publicItem(item), server: connectorMcpKey(item), config: connectorMcpConfig(item, secretsForInjection([item])) };
 }
+// 会话里点授权只知道服务名：按它找回注册表里的远程连接器（自备 OAuth 应用那条路要它的地址与配置）
+export function connectorForServer(server) {
+  const item = readStore().items.find((x) => x.type === 'connector' && x.connector && x.connector.transport !== 'stdio' && connectorMcpKey(x) === String(server || ''));
+  return item ? connectorForAuth(item.id) : null;
+}
 // 状态检测：这个范围里全部远程连接器（stdio 要拉起本地进程，不在这里探）
 export function remoteConnectorsForProbe({ scopes = EXT_SCOPES } = {}) {
   const want = new Set(scopes.map(normScope));
