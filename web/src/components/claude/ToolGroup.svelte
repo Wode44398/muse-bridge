@@ -23,6 +23,7 @@
   import AgentRow from './AgentRow.svelte';
   import WorkflowCard from './WorkflowCard.svelte';
   import CompactRow from './CompactRow.svelte';
+  import ToolCard from './ToolCard.svelte';   // 插件工具的结果卡片：分组折着时也要看得见，摆在组外
 
   // seg：tools 段；m：所属消息（契约保留，判活以 live 为准）；live：本轮仍在流式；
   // onOpen：点开 Agent / Workflow 的回调（缺省=打开 TaskSheet；TaskSheet 内嵌只读用时可传空函数）；
@@ -139,6 +140,7 @@
         </div>
       </div>
     {/if}
+    {#each tools as tl, i (tl.id || i)}{#if tl.card}<ToolCard card={tl.card} />{/if}{/each}
   </div>
 {/if}
 
@@ -158,6 +160,10 @@
     background-position: 150% 0; background-size: 200% 100%;
     -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
     animation: cl-text-shine 3s infinite;
+    /* background-position 动画进不了合成线程，每帧都要重画。不单独成层的话，重画落在整条对话滚动层上：
+       手机上（DPR 3.75）每帧要重新光栅化一整块屏宽瓦片，agent 跑着时 Claude 页常年掉到 80fps 左右。
+       单独成层后每帧只重画这几个字（真机：重画 624→258、光栅 199→37 / 2s）。各用处都在 flex 里，已是块级。 */
+    will-change: transform;
   }
   :global(html[data-theme="light"] .cl-shine) {
     background-image: linear-gradient(120deg, currentColor 25%, #b5b5b3 50%, currentColor 75%);

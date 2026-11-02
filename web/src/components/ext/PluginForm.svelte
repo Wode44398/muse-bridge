@@ -210,7 +210,22 @@
       <span>{tr(s.label || k)}{#if s.required}<i class="pp-req">*</i>{/if}</span>
       {#if s.desc}<small>{tr(s.desc)}</small>{/if}
     </div>
-    {#if s.type === 'array' && s.items}
+    {#if s.type === 'array' && s.widget === 'checks' && s.items && !s.items.fields && optionsOf(k + '[]', s.items)}
+      <!-- widget:'checks'：有选项的字符串列表画成勾选框（哪些 agent 能用、列哪些模型这类多选），同插件页面 SDK 的 bridge.form -->
+      {@const cur = Array.isArray(draft[k]) ? draft[k].map(String) : []}
+      {@const list = optionsOf(k + '[]', s.items)}
+      <div class="pf-checks">
+        {#each [...list, ...cur.filter((x) => !list.some((o) => String(o.value) === x)).map((x) => ({ value: x, label: x }))] as o (o.value)}
+          <label class="pf-check">
+            <input type="checkbox" checked={cur.includes(String(o.value))}
+              onchange={(e) => set(k, e.currentTarget.checked ? [...cur, String(o.value)] : cur.filter((x) => x !== String(o.value)))} />
+            <span>{tr(o.label)}{#if o.desc}<small> · {tr(o.desc)}</small>{/if}</span>
+          </label>
+        {:else}
+          <small class="pf-none">{t('还没有可选项')}</small>
+        {/each}
+      </div>
+    {:else if s.type === 'array' && s.items}
       {@const items = Array.isArray(draft[k]) ? draft[k] : []}
       <div class="pf-list">
         {#each items as it, i (i)}
@@ -304,6 +319,10 @@
   select.cz-in { appearance: auto; }
 
   .pf-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pf-checks { display: flex; flex-direction: column; gap: 6px; }
+  .pf-check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
+  .pf-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--cz-accent); flex: none; }
+  .pf-check small, .pf-none { color: var(--cz-ink3); font-size: 12px; }
   .pf-chips button { appearance: none; border: 0; font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap;
     background: transparent; color: var(--cz-ink2); box-shadow: inset 0 0 0 1px var(--cz-line); }
   .pf-chips button.on { background: var(--cz-accent); color: var(--cz-on-accent); box-shadow: none; }

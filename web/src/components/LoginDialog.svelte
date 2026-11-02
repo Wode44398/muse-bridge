@@ -13,6 +13,8 @@
   import { pushBackLayer } from '../lib/nav.js';
   import ClaudeLogo from './ClaudeLogo.svelte';
   import { t, tc, tr } from '../lib/i18n.js';
+  import { untrack } from 'svelte';
+  import { extAuth, loadAuthProviders, startExtLogin } from '../lib/authProviders.svelte.js';   // 插件提供的外部登录（「用 X 登录」）
 
   let mode = $state('login');   // 'login' | 'register' | 'token' | 'qr'（扫码登录：网页出码、手机扫）
   let username = $state(''), password = $state(''), password2 = $state(''), invite = $state(''), tok = $state('');
@@ -33,6 +35,8 @@
   // 审查 2.3 / S1-2：单人服务器（没开多用户）账号密码只有服务账号能登，默认摆令牌登录；
   // 手机（App / 触屏）上「扫码登录」是网页出码让手机扫的，自己用不上——换成扫电脑上的配对码（PairScan mode:'connect'）
   $effect(() => { if (open && !picked && mode === 'login' && me.features?.multiUser === false) mode = 'token'; });
+  // 插件提供的外部登录：卡一打开就拉一次（离线 App 里不拉、不显示）
+  $effect(() => { if (open) untrack(() => loadAuthProviders()); });
   const isPhone = (() => { try { return isOffline() || matchMedia('(pointer: coarse)').matches; } catch { return false; } })();
   function scanConnect() { close(); ui.pairScan = { mode: 'connect' }; }
 
@@ -144,6 +148,9 @@
               <button class="lg-alt-b" onclick={() => setMode('qr')}><span class="ic" aria-hidden="true">{@html SCAN}</span>{t('扫码登录')}</button>
             {/if}
           </div>
+          {#each extAuth.list as p (p.key)}
+            <div class="lg-alt"><button class="lg-alt-b ext" onclick={() => startExtLogin(p.key)}>{#if p.icon}<img class="ext-ic" src={p.icon} alt="" />{/if}<span class="ext-lab">{t('用 {name} 登录', { name: p.label })}</span></button></div>
+          {/each}
           <div class="lg-links">
             <!-- 服务器没开注册（主机形态 / 管理员关了）：不给一个点了必然 403 的入口 -->
             {#if me.features?.register !== false}
@@ -190,6 +197,10 @@
     background: transparent; color: var(--text); font: inherit; font-size: 15px; box-shadow: inset 0 0 0 1px var(--st-line); transition: background-color .15s ease; }
   @media (hover: hover) { .lg-alt-b:hover { background: var(--st-hover); } }
   .ic { display: inline-flex; }
+  .ext-ic { width: 18px; height: 18px; flex: none; object-fit: contain; border-radius: 4px; }
+  .ext-lab { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .lg-alt + .lg-alt { margin-top: 8px; }
+  .lg-alt-b.ext { min-width: 0; padding: 0 14px; }
   .lg-links { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 14px; }
   .lg-dot { color: var(--st-muted); font-size: 13px; }
   .lg-link { align-self: center; margin-top: 2px; padding: 6px 4px; border: 0; background: none; cursor: pointer; font: inherit; font-size: 13px; color: var(--st-text2); }

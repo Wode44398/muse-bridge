@@ -2,7 +2,7 @@
   import { tick } from 'svelte';
   import { chat, answerQuestion, send, rewindToMessage, attImgFallback, openSession } from '../lib/chat.svelte.js';
   import { IS_CSNAP } from '../lib/csnap.js';
-  import { session, settings, prefs, ui } from '../lib/state.svelte.js';
+  import { session, settings, prefs, ui, toggleTheme } from '../lib/state.svelte.js';
   import { mountDrag } from '../lib/capsule.js';
   import { renderMarkdown, streamBlocks } from '../lib/md.js';
   import { claudeFade } from '../lib/claudeFade.js';
@@ -35,6 +35,8 @@
   import { openDockFiles, openDock } from '../lib/dock.svelte.js';
   import { taskNoun } from '../lib/taskModel.js';
   import { t, tc, tr } from '../lib/i18n.js';
+  import { pluginUi, runPluginUi } from '../lib/pluginUi.svelte.js';   // 插件的消息动作（ctx.ui.messageAction）
+  import PluginMenu from './claude/PluginMenu.svelte';
 
   // 附件拖出（#8 全覆盖，桌面壳）：产物卡 / 用户上传的图与文件统一走 lib/dragOut.js 的 use:dragOut
   // （绝对路径零拷贝拖原文件；历史里只剩链接的图走壳的下载通道）。网页/手机端 action 不挂任何东西。
@@ -170,6 +172,21 @@
     m.copied = true;
     setTimeout(() => (m.copied = false), 1400);
   }
+  // —— 插件的消息动作（ctx.ui.messageAction）：按 roles 分给用户 / 助手消息，操作排多一颗「⋯」——
+  // 快照访客没有（插件 handler 跑在服务器上、按身份给）。
+  const msgActs = (role) => (IS_CSNAP ? [] : pluginUi.messageActions.filter((a) => (Array.isArray(a.roles) && a.roles.length ? a.roles : ['assistant']).includes(role)));
+  let pmenu = $state(null);   // { anchor: DOMRect, items, text, role }
+  function openMsgMenu(e, role, text) {
+    const items = msgActs(role);
+    if (!items.length) return;
+    pmenu = pmenu ? null : { anchor: e.currentTarget.getBoundingClientRect(), items, text, role };
+  }
+  function pickMsgAction(a) {
+    const p = pmenu;
+    if (!p) return;
+    runPluginUi(a, 'messageAction', { sessionId: session.id || null, text: p.text, role: p.role });
+  }
+
   // 重试 = 重发该回复对应的上一条用户消息（resume 续聊，作为新一轮追加）。
   // 显式传原轮附件——不消费、不清空 composer 里暂存的新附件；即时失败轮保留的上传
   // path 会原样重发，历史记录里只有展示 URL、无授权 path 的旧附件则安全跳过。
@@ -355,18 +372,23 @@
             {#each sp.parts as part, pi (pi)}<SessionMsgCard {part} />{/each}
             {#if sp.rest}<div class="bubble sel-text">{sp.rest}</div>{/if}
           {:else if m.text}<div class="bubble sel-text">{m.text}</div>{/if}
-          {#if m.uuid && !IS_CSNAP}
+          {#if (m.uuid || msgActs('user').length) && !IS_CSNAP}
             <div class="u-acts">
-              {#if m.__rw === 'confirm'}
+              {#if msgActs('user').length && (!m.__rw || !m.uuid)}
+                <button class="act rw-ico" aria-label={t('插件动作')} aria-haspopup="menu" title={t('插件动作')} onclick={(e) => openMsgMenu(e, 'user', m.text || '')}>
+                  <svg viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="18.5" cy="12" r="1" fill="currentColor"/></svg>
+                </button>
+              {/if}
+              {#if m.uuid && m.__rw === 'confirm'}
                 <span class="rw-ask">{t('回滚到这条消息之前：')}</span>
                 <button class="rw-btn primary" onclick={() => doRewind(m, 'both')}>{tc('claude', '文件+对话')}</button>
                 <button class="rw-btn" onclick={() => doRewind(m, 'files')}>{tc('claude', '仅文件')}</button>
                 <button class="rw-btn" onclick={() => (m.__rw = null)}>{t('取消')}</button>
-              {:else if m.__rw === 'busy'}
+              {:else if m.uuid && m.__rw === 'busy'}
                 <span class="rw-note">{t('回滚中…')}</span>
-              {:else if m.__rw === 'done' || m.__rw === 'err'}
+              {:else if m.uuid && (m.__rw === 'done' || m.__rw === 'err')}
                 <span class="rw-note sel-text" class:err={m.__rw === 'err'}>{m.__rwMsg}</span>
-              {:else}
+              {:else if m.uuid}
                 <button class="act rw-ico" aria-label={t('回滚到这条消息之前')} disabled={session.busy} onclick={() => (m.__rw = 'confirm')}>
                   <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
                 </button>
@@ -516,12 +538,18 @@
             <button class="act" aria-label={tc('claude', '重试')} disabled={session.busy} onclick={() => retryFrom(i)}>
               <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
             </button>
+            {#if msgActs('assistant').length}
+              <!-- 插件的消息动作（ctx.ui.messageAction）：点开一个小菜单 -->
+              <button class="act" aria-label={t('插件动作')} aria-haspopup="menu" title={t('插件动作')} onclick={(e) => openMsgMenu(e, 'assistant', msgText(m))}>
+                <svg viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="18.5" cy="12" r="1" fill="currentColor"/></svg>
+              </button>
+            {/if}
           </div>
         {/if}
 
         {#if i === chat.messages.length - 1}
           <div class="turn-foot">
-            <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'continue', sessionId: session.id, model: settings.model, effort: settings.effort }) }} in:fade|global={{ duration: 260 }}>{#if m.status === 'streaming' && prefs.claudeMark === 'sprite'}<ClaudeSpriteMark phase={spritePhase(m)} box={26} />{:else if m.status === 'streaming' && prefs.claudeMark !== 'classic'}{@const ma = markActivity(m)}<ClaudeWorkingMark activity={ma.activity} state={ma.state} size={24} box={26} />{:else}<ClaudeLogo anim={unconfirmed ? 'waiting' : starState(m)} size={26} interactive />{/if}</span>
+            <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'continue', sessionId: session.id, model: settings.model, effort: settings.effort }) }} in:fade|global={{ duration: 260 }}>{#if m.status === 'streaming' && prefs.claudeMark === 'sprite'}<ClaudeSpriteMark phase={spritePhase(m)} box={26} />{:else if m.status === 'streaming' && prefs.claudeMark !== 'classic'}{@const ma = markActivity(m)}<ClaudeWorkingMark activity={ma.activity} state={ma.state} size={24} box={26} />{:else}<ClaudeLogo anim={unconfirmed ? 'waiting' : starState(m)} size={26} interactive onpress={toggleTheme} />{/if}</span>
             {#if unconfirmed}
               <!-- 缓冲态（unconfirmed）：最后一轮的结局还没经服务端确认（切会话 / 回前台后，摆的是缓存或
                    transcript）——不摆完成态（复制/重试、静态星标），免得「其实在跑却显示已结束」。
@@ -545,6 +573,7 @@
   {/each}
 </div>
 
+{#if pmenu}<PluginMenu anchor={pmenu.anchor} items={pmenu.items} onPick={pickMsgAction} onClose={() => (pmenu = null)} />{/if}
 {#if lb.open}<ImgLightbox items={lb.items} index={lb.index} onClose={closeLb} onIndex={(n) => (lb.index = n)} />{/if}
 
 <style>

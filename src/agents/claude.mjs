@@ -25,7 +25,7 @@ import { sessionQuestions, pendingQuestions, waitForAnswer, formatAnswer, questi
 // Claude 设置（设置页 › Claude）→ 每轮启动参数：输出风格 / 回复语言 / 署名 / 动态工作流 / 安全栅门 / 输入建议 / 压缩点
 import { turnSettings, refreshOutputStyles, autoContinueDefault, dispatchNudge } from '../runtime/claude-turn-settings.mjs';
 import { VAULT, UPLOADS, MEDIA, MODEL, ROOT, NATIVE_ROOT } from '../config/index.mjs';
-import { CAPABILITIES, to1M, claudeSupportsFast, claudeEffortOptions, splitUltracode, ULTRACODE } from '../config/capabilities.mjs';
+import { CAPABILITIES, to1M, claudeSupportsFast, claudeEffortOptions, splitUltracode, ULTRACODE, CLAUDE_MODELS, CLAUDE_EFFORTS } from '../config/capabilities.mjs';
 // 工具行/任务卡规则与历史重建（routes/sessions.mjs）共用一份——直播与重开必须一致。
 import { toolShown, toolSummary, toolInputSubset, taskUsage, readWorkflowOutput, normTaskStatus, clip, compactMeta, COMPACT_SUMMARY_RE } from '../runtime/tool-summary.mjs';
 import { makeRetractLedger } from '../runtime/retract-ledger.mjs';
@@ -87,7 +87,9 @@ import { resolveTurnMode, allowSkipFor, makePermissionGate, bindModeControl, not
 // 拉取请求闭环（pr-monitor.mjs）：流里认 PR 自动绑定、真人发话清零 Auto-fix 连续唤醒、mcp__pr__* 工具
 import { prCapable, makePrSniffer, notePrTurnStart } from '../runtime/pr-monitor.mjs';
 import { pluginOn, pluginOr, pluginConfig } from '../plugins/state.mjs';
-import { pluginClaudeTurn } from '../plugins/claude-tools.mjs';
+import { pluginClaudeTurn, mergeHooks, pluginInput, pluginOptions, pluginPermission } from '../plugins/claude-tools.mjs';
+import { emitBridgeEvent, ownerOf as eventOwner, clip as eventClip } from '../plugins/events.mjs';
+import { cardOf } from '../plugins/tool-card.mjs';
 import { makePrMcp, prNudge } from '../mcp/pr-tools.mjs';
 import { markTurn, handedTurn } from '../runtime/turn-timing.mjs';
 
@@ -771,6 +773,17 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // Ultracode 与档位独立（10-30）：旧写法 effort:'ultracode'（老客户端、助手、旧偏好重放）拆成 xhigh + Ultracode
   const legacyUltra = effort === ULTRACODE;
   ({ effort, ultracode } = splitUltracode(effort, ultracode));
+  // 插件的每轮参数（ctx.claude.options，plugins/claude-tools.mjs）：模型 / 档位在这里就换（后面按换过的解析自定义模型），
+  // env / settings / 子 agent / 附加目录 / 追加提示在组启动参数时合并，并进停放签名。不合法的模型 / 档位记日志、忽略。
+  const pOpts = ctx.snap ? null : await pluginOptions({ kind: 'chat', ctx, snap: null, message: message || '', sessionId: sessionId || null, source, model, effort });
+  if (pOpts?.model) {
+    if (CLAUDE_MODELS.has(pOpts.model) || isCustomModelId(pOpts.model)) model = pOpts.model;
+    else console.warn('[plugins] ' + pOpts.by.join(',') + ' 给的模型「' + pOpts.model + '」不认识，忽略');
+  }
+  if (pOpts?.effort) {
+    if (CLAUDE_EFFORTS.has(pOpts.effort) || isCustomModelId(model)) effort = pOpts.effort;
+    else console.warn('[plugins] ' + pOpts.by.join(',') + ' 给的档位「' + pOpts.effort + '」不认识，忽略');
+  }
   markTurn(req, 'pre');
   if (isSpare && (snap || ctx.sandbox || ctx.kind !== 'admin' || sessionId || !SPARE_MS)) return;
   // 自定义 API（runtime/claude-providers*.mjs）：主机管理员与成员各用各的注册表（成员自带 Key，2026-10-27）；快照访客不给。
@@ -908,7 +921,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       + (phoneCtlAvail && !phoneControlOn ? '「手机操控」工具（mcp__phoneControl__*）本轮未注入（手机端操控服务当前不在线）；' : '')
       + '即使早前的对话历史里用过这些工具，本轮也没有——不要声称能操作用户的手机。用户需要手机侧操作时，请他改在手机 App 里发起对话' + (phoneCtlAvail && !phoneControlOn ? '（手机操控还需手机 App 设置里开启「手机操控」服务）' : '') + '。'
     : '';
-  const { prompt, imageBlocks } = composeTurnPrompt(message, attachments);
+  // 插件的消息改写（ctx.claude.input）：只改发给 Claude 的那份，界面与转录前的用户原话不变
+  const pIn = isSpare || snap ? null : await pluginInput({ kind: 'chat', ctx, snap: null, sessionId: sessionId || null, source }, { message, attachments });
+  const { prompt, imageBlocks } = composeTurnPrompt(pIn ? pIn.message : message, pIn ? pIn.attachments : attachments);
   // 恒流式输入 + gate 挂流（见 makeTurnInput 注释）：release 在读循环收轮/finally 时调。
   const turnInput = makeTurnInput(prompt, imageBlocks, isSpare);
 
@@ -934,7 +949,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 插件给 Claude 的工具与提示段（plugins/claude-tools.mjs）：工具合成各插件自己的 MCP server，提示段排在内置提示之后、
   // 子 agent 调度说明之前；sig 进下面的停放签名。getGen 在下文才定义——工具被调用时它早已就绪。
   const plug = pluginClaudeTurn({ kind: 'chat', ctx, snap, getGen: () => getGen(), fromPhone: fromPhone === true, narrow: narrow === true, source, message, sessionId: ownSid });
-  const appendText = (custom ? customIdentityNudge(custom) : identityNudge(model)) + (STYLE_NUDGE[style] || (styleText ? '\n\n[回复风格 · 自定义] ' + styleText : '')) + (snap ? SNAP_NUDGE : ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) + mediaNudge(ctx)) : (hostNudge(ctx) + mediaNudge(ctx) + HOST_TOOLS_NUDGE + (phoneFsOn ? HOST_PHONE_PULL_NUDGE : ''))) + (browserOn ? (snap ? BROWSER_SNAP_NUDGE : BROWSER_NUDGE) : '') + (chromeOn ? chromeNudge(chromeSplit ? CHROME_MCP_NAME : 'claude-in-chrome') : '') + (termOn ? TERMINAL_NUDGE : '') + (wsToolsOn ? WORKSPACE_NUDGE : '') + (bridgeOn ? BRIDGE_NUDGE : '') + (deviceOn ? deviceNudge() : '') + deliverNudge(!snap && !!mediaNudge(ctx)) + (phoneFsOn ? PHONE_NUDGE : '') + (phoneControlOn ? PHONE_CONTROL_NUDGE + playbookSummary() + playbookForMention(message) : '') + noPhoneNudge + (research ? RESEARCH_NUDGE : '') + (sessionsOn ? sessionsNudge(ctx, { peers: peersOn(ctx, snap) }) + childNudge(familyLink(ctx, ownSid), sessionPolicy(ctx)) : '') + (prOn ? prNudge(ctx, ownSid) : '') + plug.prompt + dispatchText;
+  const appendText = (custom ? customIdentityNudge(custom) : identityNudge(model)) + (STYLE_NUDGE[style] || (styleText ? '\n\n[回复风格 · 自定义] ' + styleText : '')) + (snap ? SNAP_NUDGE : ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) + mediaNudge(ctx)) : (hostNudge(ctx) + mediaNudge(ctx) + HOST_TOOLS_NUDGE + (phoneFsOn ? HOST_PHONE_PULL_NUDGE : ''))) + (browserOn ? (snap ? BROWSER_SNAP_NUDGE : BROWSER_NUDGE) : '') + (chromeOn ? chromeNudge(chromeSplit ? CHROME_MCP_NAME : 'claude-in-chrome') : '') + (termOn ? TERMINAL_NUDGE : '') + (wsToolsOn ? WORKSPACE_NUDGE : '') + (bridgeOn ? BRIDGE_NUDGE : '') + (deviceOn ? deviceNudge() : '') + deliverNudge(!snap && !!mediaNudge(ctx)) + (phoneFsOn ? PHONE_NUDGE : '') + (phoneControlOn ? PHONE_CONTROL_NUDGE + playbookSummary() + playbookForMention(message) : '') + noPhoneNudge + (research ? RESEARCH_NUDGE : '') + (sessionsOn ? sessionsNudge(ctx, { peers: peersOn(ctx, snap) }) + childNudge(familyLink(ctx, ownSid), sessionPolicy(ctx)) : '') + (prOn ? prNudge(ctx, ownSid) : '') + plug.prompt + (pOpts?.append.length ? '\n\n' + pOpts.append.join('\n\n') : '') + dispatchText + (family && typeof family.nudge === 'string' ? family.nudge : '');
   // 号池智能路由（可选，默认关）：激活号已知用尽就先换号再开跑——必须在取 token / 算 warmSig 之前，
   // 换了号 token 变了，停放的旧 CLI 自然判 options changed 冷起。
   // 预热不换号：真消息来时若要换号，token 变了 warmSig 自然不一致、关掉冷起。
@@ -975,6 +990,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   const sdkSettings = {
     ...(compactWindow ? { autoCompactWindow: compactWindow } : {}),
     ...(fast && !custom && claudeSupportsFast(model) ? { fastMode: true } : {}),   // SDK 0.3.220 起 settings.fastMode 可点亮；仅支持的模型注入
+    ...(pOpts ? pOpts.settings : {}),            // 插件的每轮 settings（排在设置页偏好之前：用户的设置、Ultracode 强制项照样说了算）
     ...ts.sdk,                                  // 设置页的偏好（含 switchModelsOnFlag:false）；排在 effort 之前——ultracode 仍强制开工作流
     ...(effortOpts.settings || {}),
     // 计划文件默认在 <CLAUDE_CONFIG_DIR>/plans——沙箱身份的 configDir 在工作目录外，会被自己的路径围栏拦死（计划卡是空的）。
@@ -1000,6 +1016,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     provider: custom ? providersRev(custom.provider.owner || cpOwner) : 0,   // 自定义 API：服务配置改了（输出上限 / 小任务模型 / 提示缓存这些 spawn 时定的 env）下一条冷起
     // 插件工具集（哪些插件、第几版代码、哪些工具）：CLI 起来时就定了，插件开关 / 重载后停放的 CLI 不能接着用。没有插件贡献时不加这一段，签名与插件化之前一致。
     ...(plug.sig.length ? { plugins: plug.sig } : {}),
+    // 插件的每轮参数（env / 子 agent / 附加目录）：spawn 时定的，变了就冷起。没有时不加这一段
+    ...(pOpts ? { pluginOpts: [pOpts.env, pOpts.agents, pOpts.additionalDirectories] } : {}),
   };
   const warmDigest = warmParts && Object.fromEntries(Object.entries(warmParts).map(([k, v]) => [k, createHash('sha256').update(JSON.stringify(v ?? null)).digest('hex').slice(0, 16)]));
   const warmSig = snap ? '' : createHash('sha256').update(JSON.stringify(warmDigest)).digest('hex');
@@ -1032,7 +1050,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   if (!sessionId && !isSpare && !snap && !family) {
     const sp = spareRuns.get(ctx.key);
     if (sp) {
-      if (sp.sig === warmSig && await sp.take({ res, message, attachments, source, chatPrefs, origin, permMode: turnPerm.mode, limitReplay })) { handedTurn(req, sessionId, 'spare'); return; }
+      if (sp.sig === warmSig && await sp.take({ res, message, attachments, pin: pIn, source, chatPrefs, origin, permMode: turnPerm.mode, limitReplay })) { handedTurn(req, sessionId, 'spare'); return; }
       console.log(`[claude] spare CLI not used (${sp.sig !== warmSig ? 'options changed: ' + sigDiff(sp.digest) : 'gone'}) — cold start`);
       sp.close();
     }
@@ -1050,7 +1068,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       const why = w.sig !== warmSig ? 'options changed: ' + sigDiff(w.digest)
         : pendingRewindAnchor(sessionId) ? 'rewind pending'
           : (sp && warmStat(sp.file) !== w.stat()) ? 'transcript changed by someone else' : '';
-      if (!why && await w.take({ res, message, attachments, source, chatPrefs, origin, family, permMode: turnPerm.mode, limitReplay, auto: !!limitResume })) { handedTurn(req, sessionId, 'warm'); return; }
+      if (!why && await w.take({ res, message, attachments, pin: pIn, source, chatPrefs, origin, family, permMode: turnPerm.mode, limitReplay, auto: !!limitResume })) { handedTurn(req, sessionId, 'warm'); return; }
       console.log(`[claude] warm CLI ${sessionId.slice(0, 8)} not reused (${why || 'gone'}) — cold start`);
       await closeWarm(w);
     }
@@ -1063,7 +1081,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 活着的 CLI 开新一轮，后台任务照跑、完成时照常续轮汇报。以前这里一律顶掉上一轮，
   // 顶掉 = abort = CLI 连同后台任务一起被杀（维护者报：想接着聊只能先点停止，一停任务就没了）。
   if (prev && !prev.done && typeof prev.handoff === 'function') {
-    const took = await prev.handoff({ res, message, attachments, source, model, chatPrefs, origin, family, permMode: turnPerm.mode, permPolicy, limitReplay, auto: !!limitResume });
+    const took = await prev.handoff({ res, message, attachments, pin: pIn, source, model, chatPrefs, origin, family, permMode: turnPerm.mode, permPolicy, limitReplay, auto: !!limitResume });
     if (took === 'policy' || took === 'mode' || took === 'model' || took === 'busy') {
       genWrite(res, { type: 'error', kind: 'busy', title: '会话正在后台工作', message: took === 'policy'
         ? '这个会话在等后台任务做完。这条消息和它不是同一种发起方式（管理台代聊 / 本人发话），没有插进去，也没有打断它。等它做完再发，或先到该会话点「停止」。'
@@ -1122,7 +1140,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   });
   let gen = newGen(message, source, ownSid);
   gen.family = family;   // 会话间发起的轮（session-family.mjs）：收尾时据此给父会话送汇报
-  gen.autoTurn = !!limitResume;   // 额度重置后的自动续跑：没人在场，sessions MCP 不替用户开会话（session-tools.mjs）
+  gen.autoTurn = !!limitResume || !!(family && family.origin && family.origin.kind === 'routine');   // 额度重置后的自动续跑 / 定时任务：没人在场，sessions MCP 不替用户开会话（session-tools.mjs）
   // 全服上限：快照访客（c:）一个通道；注册用户（u:）合计一个通道（策略 maxUserTurns，0 = 不限）。管理员不设。
   const userCap = ctx.kind === 'user' ? getPolicy().maxUserTurns : 0;
   // 预热的占位「轮」不占并发槽、不登记——真消息接管时 warmTake 才为新一轮占位。
@@ -1149,6 +1167,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 占到了位才记一轮（额度的轮数在开跑时算：并行发几轮也绕不过去）
   if (billTo) { try { noteTurnStart(billTo); } catch {} }
   if (!isSpare) genSubscribe(gen, res);
+  // 定时任务（routines-runner.mjs）经重放发起：真占到位开跑了告诉它一声（收尾见 retireTurn 的 onEnd）
+  if (family && typeof family.onStart === 'function') { try { family.onStart(gen); } catch {} }
   // 同账号的【别的设备】据此 0 延迟挂上这一轮的直播（以前靠 4s 轮询 /api/active 才发现）。
   // resume 的会话这里就有 sessionId；新会话要等 SDK 的 init 消息，那边再播一次，
   // 客户端按 sessionId 幂等处理。
@@ -1207,7 +1227,40 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   recordOrigin();
   // Deliberately NOT aborting on client disconnect: the generation keeps running
   // and buffering so a refreshed page can reattach via /api/attach.
-  const send = (obj) => { if (!userStopped) genEmit(gen, obj); };
+  // 插件订阅的 turn.start / turn.end（plugins/events.mjs）：从这一轮的事件流里看——每个 gen 一轮（挂起接力会换 gen），
+  // 头一个事件发 turn.start，done / interrupted / error 发 turn.end（各一次）。预热占位轮没有消息，不发。
+  const evTurns = new WeakMap();   // gen → { t0, sid, tools: Set }
+  // runModel 在下文才声明（let）：这里可能早于它被调到（号池换号提示），取不到就用请求里的 model
+  const curModel = () => { try { return runModel || model || ''; } catch { return model || ''; } };
+  const pluginTap = (obj) => {
+    try {
+      if (!obj || !gen) return;
+      let t = evTurns.get(gen);
+      if (!t) {
+        if (isSpare && !turnText) return;
+        t = { t0: Date.now(), sid: gen.sessionId || sessionId || null, tools: new Set(), ended: false };
+        evTurns.set(gen, t);
+        emitBridgeEvent('turn.start', {
+          agent: 'claude', kind: 'chat', owner: eventOwner(ctx), sessionId: t.sid, isNew: !sessionId,
+          model: curModel(), effort: effort || '', source: source || '', cwd: ctx.cwd || '',
+          message: eventClip(turnText || '', 4000),
+        });
+      }
+      if (obj.sessionId && !t.sid) t.sid = obj.sessionId;
+      if (obj.type === 'tool' && obj.name) t.tools.add(String(obj.name));
+      if (!t.ended && (obj.type === 'done' || obj.type === 'interrupted' || obj.type === 'error')) {
+        t.ended = true;
+        emitBridgeEvent('turn.end', {
+          agent: 'claude', kind: 'chat', owner: eventOwner(ctx), sessionId: obj.sessionId || t.sid || gen.sessionId || null,
+          model: curModel(), ok: obj.type === 'done' && !obj.isError, stopped: obj.type === 'interrupted',
+          ...(obj.type === 'error' ? { error: eventClip(obj.message || obj.title || '', 1000) } : {}),
+          result: obj.type === 'done' ? eventClip(obj.result || '', 8000) : '',
+          costUsd: obj.type === 'done' ? Number(obj.cost) || 0 : 0, durationMs: Date.now() - t.t0, tools: [...t.tools],
+        });
+      }
+    } catch {}
+  };
+  const send = (obj) => { if (!userStopped) { genEmit(gen, obj); pluginTap(obj); } };
   // 号名是管理员的数据：只告诉主机 admin，沙箱用户 / 快照访客不发。
   const showAccounts = !snap && !ctx.sandbox;
   if (routed && showAccounts) send({ type: 'account_switch', from: routed.fromLabel, to: routed.toLabel, reason: reasonText(routed.reason) });
@@ -1231,6 +1284,14 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   // 桌面壳原生层自己有 fs.watch，这条主要服务云端/手机路径；PostToolUse 只观察不拦截。
   const FS_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
   const fsEchoHook = async (input) => {
+    try {
+      emitBridgeEvent('tool.end', {
+        agent: 'claude', owner: eventOwner(ctx), sessionId: input?.session_id || gen.sessionId || null,
+        tool: String(input?.tool_name || ''), input: eventClip(JSON.stringify(input?.tool_input ?? {}), 2000),
+        isError: !!(input?.tool_response && typeof input.tool_response === 'object' && input.tool_response.is_error),
+        agentId: input?.agent_id || '',
+      });
+    } catch {}
     try {
       const name = String(input?.tool_name || '');
       const ti = input?.tool_input || {};
@@ -1450,6 +1511,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     if (gen.sessionId) noteRunEnd(ctx.key, gen.sessionId);
     // 会话派生：子会话这一轮是父会话发起的 → 汇报进父会话收件箱，该唤醒谁就唤醒谁（session-family.mjs）
     if (gen.sessionId && !snap) { try { familyTurnEnded(ctx, gen); } catch (e) { console.log('[family] turn-end hook failed:', e && e.message); } }
+    // 定时任务：这一轮的结局（done / error / interrupted 都在 gen.events 里）交回运行器记进运行记录
+    if (gen.family && typeof gen.family.onEnd === 'function') { try { gen.family.onEnd(gen); } catch (e) { console.log('[routine] turn-end hook failed:', e && e.message); } }
     if (settleGen) settleGen();
     // 完成的轮【长保留】（同会话下一轮开跑时替换 + LRU/时效兜底，见 gen.mjs）：
     // 手机离开多久回来都能 /api/attach 整轮重放（含最终 done），不再有 60s 悬崖。
@@ -1573,6 +1636,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       turnOrigin: () => (gen && gen.family && gen.family.origin && gen.family.origin.kind) || '',
       // 没有真人发起的轮（会话间 / 跨会话 / Auto-fix 开的、额度重置后的自动续跑）：审批卡等 30 分钟没人答就收掉这一轮
       unattended: () => !!(gen && (gen.family || gen.autoTurn)),
+      // 插件的审批策略（ctx.claude.permission）：快照访客不问
+      pluginPolicy: snap ? null : (name, input, o) => pluginPermission({ kind: 'chat', ctx, snap: null, sessionId: gen.sessionId || null, source },
+        { tool: name, input, mode: runPermMode, agentID: o && o.agentID, signal: o && o.signal }),
     });
     // 权限模式实况变了（init / status 帧、会话中切换、接管时对齐）：发 perm_mode（前端芯片）并记进会话记忆，
     // 下一轮 spawn 照它。init 每轮都发一次（新设备 attach 也拿得到实况）；无人值守的轮不记（别把用户选的模式改成 default）。
@@ -1601,7 +1667,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         // Sandboxed users: no dirs beyond their own cwd, and no agy/media MCP yet
         // (per-user media routing lands in the storage pass). admin: host as before.
         // 例外：注册用户可以只读管理员「全服统一」加装的扩展目录（技能正文与脚本）。
-        additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' && !snap ? [...sharedExtensionDirs(), ...[memberSkillRootIfAny(ctx.user)].filter(Boolean)] : []) : [UPLOADS, MEDIA],
+        additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' && !snap ? [...sharedExtensionDirs(), ...[memberSkillRootIfAny(ctx.user)].filter(Boolean)] : []) : [UPLOADS, MEDIA, ...(pOpts ? pOpts.additionalDirectories : [])],
         // Sandboxed users get their OWN media MCP (artifacts -> their .bridge/media,
         // gen_media streamed to their gen); no agy. admin keeps antigravity + media.
         // 档 2 手机文件桥（PHONE_FS 开关，默认关）：命令下发到本 caller 的活跃 gen，
@@ -1661,7 +1727,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         systemPrompt: { type: 'preset', preset: 'claude_code', snapshot: false, append: appendText },
         // MCP 长调用（媒体生成/agy 委托/手机操控/共享终端）必须同步等结果——SDK 2.1.212 起
         // 默认超 2 分钟自动转后台，会破坏「模型等产物再回看质检」的语义，显式关掉（设 24h）。
-        env: { ...(chromeOn && !chromeSplit ? chromeEngineEnv(engineEnv || process.env) : (engineEnv || process.env)), CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '86400000', ...peerEngineEnv(ctx, snap) },
+        env: { ...(chromeOn && !chromeSplit ? chromeEngineEnv(engineEnv || process.env) : (engineEnv || process.env)), CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '86400000', ...peerEngineEnv(ctx, snap), ...(pOpts ? pOpts.env : {}) },
+        // 插件给的子 agent 定义（ctx.claude.options 的 agents）
+        ...(pOpts && Object.keys(pOpts.agents).length ? { agents: pOpts.agents } : {}),
         // Claude in Chrome 两个方向都显式给：admin 带 --chrome 点亮；其余身份带 --no-chrome——
         // ~/.claude.json 里桌面 app 存着 claudeInChromeDefaultEnabled:true，不能指望默认值替我们关门。
         extraArgs: chromeOn && !chromeSplit ? { chrome: null } : { 'no-chrome': null },
@@ -1683,7 +1751,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         // disallowedTools 在 SDK 层拿掉危险工具（无 shell 用户连 Bash 都摸不到）；settingSources:[]
         // 隔离文件系统设置（不加载用户可写目录里的 .claude/settings，防止借此放宽权限）。
         // PostToolUse 观察钩全员挂（文件面板自动刷新）；沙箱身份再叠 PreToolUse 硬闸。
-        hooks: {
+        // 插件钩子（ctx.claude.hook）排在 bridge 自己的后面：沙箱围栏先说了算
+        hooks: mergeHooks({
           ...(ctx.sandbox ? { PreToolUse: [{ hooks: [makeSandboxPreToolUse(ctx)] }] } : {}),
           PostToolUse: [{ hooks: [fsEchoHook] }, ...(snap ? [] : [{ matcher: 'PushNotification', hooks: [pushHook] }])],
           // 实际生效 effort（SDK 0.3.257）：Stop hook 的 input.effort 是这轮真正发给 API 的档位
@@ -1710,7 +1779,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
             } catch {}
             return {};
           }] }],
-        },
+        }, plug.hooks),
         ...(ctx.sandbox ? {
           settingSources: [],
           // 快照访客再收紧：不许 Task/Agent 派子 agent、不许 Workflow 跑动态工作流（都是成本倍增器，匿名访客不配）；
@@ -1828,6 +1897,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       console.log('[claude] user stop — turn settled now, CLI shutting down in background');
       if (!turnClosed) {
         genEmit(gen, { type: 'interrupted', sessionId: gen.sessionId || null });
+        pluginTap({ type: 'interrupted', sessionId: gen.sessionId || null });
         gen.stopping = procExited;
         closeTurn();
       }
@@ -1842,7 +1912,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     //（done + 附件卡、台账结清），新消息推进同一个 CLI 的输入流开新一轮；gen 换新，后台任务、
     // 权限通道、封顶计时都原样延续。返回 false = 不接（这一轮并没在挂起），调用方照旧顶掉重开。
     let handoffSwitching = false;
-    const handoff = async ({ res: nres, message: nmsg, attachments: natts, source: nsrc, model: nmodel, chatPrefs: nprefs, origin: norigin, family: nfam, permMode: nmode, permPolicy: npolicy, limitReplay: nreplay, auto: nauto }) => {
+    const handoff = async ({ res: nres, message: nmsg, attachments: natts, pin: npin, source: nsrc, model: nmodel, chatPrefs: nprefs, origin: norigin, family: nfam, permMode: nmode, permPolicy: npolicy, limitReplay: nreplay, auto: nauto }) => {
       if (!heldResult || doneEmitted || bgFinalized || turnClosed || abort.signal.aborted) return false;
       // 权限策略不同不接（管理台代聊 = 宿主放行 / 用户自己发 = 弹卡）：停放复用靠 warmSig 分开，接力不过签名，要在这里拦。
       // 混用的后果：用户的这一轮全程宿主放行；或代聊把用户的会话模式改成 default、弹出控制台看不到的卡。
@@ -1867,7 +1937,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         if (!heldResult || doneEmitted || bgFinalized || turnClosed || abort.signal.aborted) return false;   // 等控制请求期间这一轮收了
       }
       const uuid = randomUUID();
-      const next = composeTurnPrompt(nmsg, natts || []);
+      const next = composeTurnPrompt(npin ? npin.message : nmsg, npin ? npin.attachments : (natts || []));   // 插件改写过的那份（ctx.claude.input）
       const prevResult = heldResult;
       heldResult = null;
       emitDone(prevResult);
@@ -2015,7 +2085,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     // 返回 'taken' = 接走了；'busy' = 并发上限把它挡下（错误帧已回给这条 POST，CLI 原样留着停放）；false = 接不了。
     // adopt = { uuid }：不是推一条新消息，而是接住 CLI 自己已经开起来的那一轮（跨会话消息，见 parkWarm）——
     // 没有发起请求（nres 为空，别的设备经总线 run.start 挂上直播），也不往输入流推东西。
-    const warmTake = ({ res: nres, message: nmsg, attachments: natts, source: nsrc, chatPrefs: nprefs, origin: norigin, family: nfam, permMode: nmode, limitReplay: nreplay, auto: nauto, adopt }) => {
+    const warmTake = ({ res: nres, message: nmsg, attachments: natts, pin: npin, source: nsrc, chatPrefs: nprefs, origin: norigin, family: nfam, permMode: nmode, limitReplay: nreplay, auto: nauto, adopt }) => {
       if (!turnClosed || userStopped || abort.signal.aborted || iterDone) return false;
       const g = newGen(nmsg, nsrc, gen.sessionId);
       g.family = nfam || null;
@@ -2039,7 +2109,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         return 'busy';
       }
       const uuid = adopt ? adopt.uuid : randomUUID();
-      const next = adopt ? null : composeTurnPrompt(nmsg, natts || []);
+      const next = adopt ? null : composeTurnPrompt(npin ? npin.message : nmsg, npin ? npin.attachments : (natts || []));
       gen = g;
       // 预热进程被新会话接管：会话 id 要等 init 帧才有，选择器记忆改用这条请求的、届时由 recordPrefs 落上。
       if (!gen.sessionId && nprefs) { chatPrefs = nprefs; prefsRecorded = false; }
@@ -2612,7 +2682,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           if (toolStarts.has(tid)) {
             const t0 = toolStarts.get(tid);
             toolStarts.delete(tid);
-            send({ type: 'tool_done', id: tid, isError: !!blk.is_error, ms: Math.max(0, Date.now() - t0) });
+            // 插件工具的结果卡片（plugins/tool-card.mjs）：带上卡片对象，前端画在工具行下
+            const card = cardOf(blk);
+            send({ type: 'tool_done', id: tid, isError: !!blk.is_error, ms: Math.max(0, Date.now() - t0), ...(card ? { card } : {}) });
           }
           if (fsPending.has(tid)) {
             const p = fsPending.get(tid);

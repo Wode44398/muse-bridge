@@ -1,14 +1,16 @@
 <script>
-  // Claude 分页右侧工作台：五件套——任务 / 审阅 / 终端 / 浏览器 / 文件。
+  // Claude 分页右侧工作台：六件套——任务 / 审阅 / 终端 / 浏览器 / 文件 / 记忆。
   // 宽屏（侧列形态）= Claude 桌面版同款【圆角卡片】：这一格右上角标题栏带里的工具开关（TopBar tools）
   //   一颗管一张卡，开几张摆几张（终端 / 审阅 / 任务叠在一列，浏览器 / 文件另起一列；放不下两列就
   //   全叠一列）；卡片自带标题行（放大铺满 / 关闭）；工作台顶上留一条和工具组同高的带，左缘拖拽调宽。
   //   宿主不许多卡时（分屏格 / 独立窗口 / 折叠屏）一次只放一张，开关就是切换。
   // 窄屏 = 移动端专属方案（dimensio 手机端同款）：底部 sheet（把手下拉/scrim 点击可关）
   //        + 常驻工具切换条（chip 直切五件套）。
-  import { ui } from '../../lib/state.svelte.js';
-  import { dock, closeDock, closeDockView, toggleDockView, toggleDockMax, setDockMulti, openDock, ensureDockMeta, dockToolOk, dockSnapMode } from '../../lib/dock.svelte.js';
-  import { layout } from '../../lib/layout.svelte.js';
+  import { ui, session } from '../../lib/state.svelte.js';
+  import { dock, closeDock, closeDockView, toggleDockView, toggleDockMax, setDockMulti, openDock, ensureDockMeta, dockToolOk, dockSnapMode, dockCols, setDockCols, dockToolLabel, dockToolIcon } from '../../lib/dock.svelte.js';
+  import { isPluginView, workbenchByKey, workbenchKeys } from '../../lib/pluginUi.svelte.js';
+  import PluginWorkbench from './PluginWorkbench.svelte';   // 插件的工作台标签（ctx.ui.workbench）
+  import { layout, pointer } from '../../lib/layout.svelte.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { dragSheet } from '../../lib/dockTouch.js';
   import ReviewPanel from './ReviewPanel.svelte';
@@ -16,14 +18,17 @@
   import BrowserPanel from './BrowserPanel.svelte';
   import WorkspaceEmbed from './WorkspaceEmbed.svelte';
   import TasksPanel from './TasksPanel.svelte';
+  import MemoryPanel from './MemoryPanel.svelte';
   import DockToolBar from './DockToolBar.svelte';
   import { dockIcon } from '../../lib/dockIcons.js';
   import { bgHoldNow } from '../../lib/chat.svelte.js';
   import MediaViewer from '../preview/MediaViewer.svelte';
   import { preview, closePreview } from '../../lib/preview.svelte.js';
   import { reportUi } from '../../lib/uiReport.js';
-  import { untrack } from 'svelte';
+  import { untrack, tick } from 'svelte';
   import { t, tc } from '../../lib/i18n.js';
+  import { cardUrl, DOCK_CHANNEL, IS_SOLO } from '../../lib/solo.js';
+  import { dropToast } from '../../lib/dragdrop.svelte.js';
 
   // wide = 以【侧列】形态摆（宿主按 layout.side 传入：expanded 与 medium 都是侧列）；
   // false = 手机底部 sheet。medium 档另给一套更窄的宽度区间（见 .dock.wide.mid）。
@@ -31,54 +36,85 @@
   // 宿主按这一格的宽度决定，够宽时仍是原来的挤开式）。宿主须是 position:relative 的容器。
   // multi = 允许几张卡同时开（宿主定：主窗口单格、够宽才给；理由见 dock.svelte.js 的 multi 注释）。
   // toolsClose = 分屏格的「关掉这一格」：工作台展开时工具开关组挂在本组件顶上的带里，✕ 跟着过来。
-  let { wide = false, overlay = false, multi = false, toolsClose = null } = $props();
+  // card = 卡片窗口（工作台的一张卡被拖出 app，solo.html?card=…）：整扇窗只放这一张，没有工具组 / 多卡 / 拖排。
+  let { wide = false, overlay = false, multi = false, toolsClose = null, card = '' } = $props();
   const mid = $derived(layout.medium);
   $effect(() => { const on = wide && multi; untrack(() => setDockMulti(on)); });
 
-  const TITLES = { tasks: tc('claude', '任务'), review: t('审阅'), term: t('终端'), browser: t('浏览器'), files: tc('claude', '文件') };
+  const TITLES = { tasks: tc('claude', '任务'), review: t('审阅'), term: t('终端'), browser: t('浏览器'), files: tc('claude', '文件'), memory: tc('claude', '记忆') };
   // 卡片标题行的 ✕：整句一键（英文 “Close terminal” 要小写名词，不能拿标题拼）
-  const CLOSE_LABEL = { tasks: tc('claude', '关闭任务'), review: t('关闭审阅'), term: t('关闭终端'), browser: t('关闭浏览器'), files: tc('claude', '关闭文件') };
+  const CLOSE_LABEL = { tasks: tc('claude', '关闭任务'), review: t('关闭审阅'), term: t('关闭终端'), browser: t('关闭浏览器'), files: tc('claude', '关闭文件'), memory: tc('claude', '关闭记忆') };
   const snapMode = $derived(dockSnapMode());
 
-  // 手机 sheet 的 chip 条：五件套按这个顺序（门禁藏掉的不出）
-  const MENU = $derived(['tasks', 'review', 'term', 'browser', 'files'].filter(dockToolOk)
-    .map((key) => ({ key, label: TITLES[key] })));
+  // 手机 sheet 的 chip 条：六件套按这个顺序（门禁藏掉的不出）
+  // 插件标签（'plg:<插件>:<id>'）没有固定表：标题用插件给的，关闭钮说「关闭「标题」」
+  const titleOf = (v) => (isPluginView(v) ? dockToolLabel(v) : TITLES[v]);
+  const closeLabelOf = (v) => (isPluginView(v) ? t('关闭「{name}」', { name: dockToolLabel(v) }) : CLOSE_LABEL[v]);
+  const PLG = $derived(workbenchKeys());
+  // 手机 sheet 的 chip 条：六件套（门禁藏掉的不出），插件标签跟在最后
+  const MENU = $derived([...['tasks', 'review', 'term', 'browser', 'files', 'memory'], ...PLG].filter(dockToolOk)
+    .map((key) => ({ key, label: titleOf(key) })));
+  // 插件撤掉了它的标签（或插件被关）：开着的那张卡跟着收掉，别留一块空工作台
+  $effect(() => {
+    for (const v of dock.views) if (isPluginView(v) && !workbenchByKey(v)) untrack(() => closeDockView(v));
+  });
   // 窄屏没有卡片：dock.view 被门禁藏掉（无 shell 用户的终端/浏览器）就回落审阅。
   const mView = $derived(MENU.some((m) => m.key === dock.view) ? dock.view : 'review');
   function pickTool(key) { openDock(key); }
 
   // 此刻真正摆出来的卡：宽屏 = 开着的全部（门禁过滤），窄屏 = chip 选中的那一张。
-  const shown = $derived(!dock.open ? [] : wide ? dock.views.filter(dockToolOk) : [mView]);
+  const shown = $derived(card ? [card] : !dock.open ? [] : wide ? dock.views.filter(dockToolOk) : [mView]);
 
   // —— 工作区协同：dock 状态上报（agent 的 workspace.view 知道工作台开没开、开着哪几张）；
-  // 终端卡摆出来就摘掉 termLive 提示点。——
+  // 终端卡摆出来就摘掉 termLive 提示点。卡片窗口不报：它不是「这个人正看着的那一页」。——
   $effect(() => { if (shown.includes('term')) dock.termLive = false; });
-  $effect(() => { reportUi({ dock: { open: dock.open, view: dock.open ? shown.join('+') : '' } }); });
+  $effect(() => { if (!card) reportUi({ dock: { open: dock.open, view: dock.open ? shown.join('+') : '' } }); });
 
   // —— 卡片排布 ——
-  // 左列：终端 / 审阅 / 任务（窄长、叠着看）；右列：浏览器 / 文件（要宽）。两列都有卡且这一格够宽
-  // 才分两列，否则全叠进一列。卡片用绝对定位按比例摆，而不是分两个 flex 列：列数变化时
-  // （拉窗口、开关一张卡）卡片不换父节点、不重挂——终端和浏览器的连接、滚回缓冲都留着。
-  const COL_A = ['term', 'review', 'tasks'];
-  const COL_B = ['browser', 'files'];
+  // 两列（dockCols.a / .b，用户拖卡片标题行排出来的，默认 终端/审阅/任务 一列、浏览器/文件/记忆 一列）。
+  // 两列都有卡且这一格够宽才分两列，否则按 a 再 b 全叠进一列。卡片用绝对定位按比例摆，而不是分两个
+  // flex 列：列数变化、拖动换位时（拉窗口、开关一张卡、排顺序）卡片不换父节点、不重挂——终端和
+  // 浏览器的连接、滚回缓冲都留着。
+  const RENDER_ORDER = ['term', 'review', 'tasks', 'browser', 'files', 'memory'];
   const TWO_COL_HOST = 1020;       // 这一格至少这么宽才摆两列（两列各 ≥300、对话还剩 ≥360）
   let hostW = $state(0);
-  const colA = $derived(COL_A.filter((v) => shown.includes(v)));
-  const colB = $derived(COL_B.filter((v) => shown.includes(v)));
-  const two = $derived(wide && !!colA.length && !!colB.length && hostW >= TWO_COL_HOST && !overlay);
+  // 拖动中：{ v, start, cols, n, split, out, tx, ty }——cols / n 是此刻按指针算出的预览排布（松手才落盘）
+  let sort = $state(null);
+  const cols = $derived(sort ? sort.cols : dockCols);
+  // 拖出窗口外那一刻起，这张卡就不占格子了（别的卡合拢补位，像把标签页拖出标签栏）
+  const inGrid = (v) => shown.includes(v) && !(sort && sort.out && sort.v === v);
+  const colA = $derived(cols.a.filter(inGrid));
+  const colB = $derived([...cols.b, ...PLG].filter(inGrid));   // 插件标签（页面要宽）固定挂在第二列末尾，不进拖动排序
+  const canTwo = $derived(wide && hostW >= TWO_COL_HOST && !overlay);
+  // 拖动中列数由预览定（拖空的那一列留作落点，不当场塌成一列，免得工作台宽度在指针底下跳）
+  const two = $derived(sort ? sort.n === 2 : canTwo && !!colA.length && !!colB.length);
   const maxed = $derived(wide && dock.max && shown.includes(dock.max) ? dock.max : '');
   const G = 8;
   const span = (i, n) => `calc((100% - ${G * (n - 1)}px) * ${i / n} + ${G * i}px)`;
   const size = (n) => `calc((100% - ${G * (n - 1)}px) / ${n})`;
-  const cards = $derived.by(() => {
-    const cols = two ? [colA, colB] : [[...colA, ...colB]];
+  const slots = $derived.by(() => {
+    const list = two ? [colA, colB] : [[...colA, ...colB]];
     const at = {};
-    cols.forEach((col, ci) => col.forEach((v, ri) => {
-      at[v] = `left:${span(ci, cols.length)};width:${size(cols.length)};top:${span(ri, col.length)};height:${size(col.length)}`;
+    list.forEach((col, ci) => col.forEach((v, ri) => {
+      at[v] = `left:${span(ci, list.length)};width:${size(list.length)};top:${span(ri, col.length)};height:${size(col.length)}`;
     }));
-    // 渲染顺序固定（keyed each 不因列数变化而重排出新节点）
-    return [...COL_A, ...COL_B].filter((v) => at[v]).map((v) => ({ v, box: maxed ? (maxed === v ? 'left:0;top:0;width:100%;height:100%' : '') : at[v] }));
+    return at;
   });
+  const cards = $derived.by(() => {
+    const at = slots;
+    // 渲染顺序固定（keyed each 不因列数 / 排序变化而重排出新节点）
+    const torn = sort && sort.out ? sort.v : '';
+    return [...RENDER_ORDER, ...PLG].filter((v) => at[v] || v === torn).map((v) => {
+      let box = v === torn ? `left:0;top:0;width:${sort.w}px;height:${sort.h}px`
+        : maxed ? (maxed === v ? 'left:0;top:0;width:100%;height:100%' : '') : at[v];
+      if (sort && sort.v === v && box) box += `;transform:translate(${sort.tx}px,${sort.ty}px)`;
+      return { v, box };
+    });
+  });
+  // 拖着那张卡的落点（虚线框）：就是它在预览排布里的格子；拖空了的那一列也描一圈，告诉你还能放回去
+  const slotBox = $derived(sort && !sort.out && !maxed ? slots[sort.v] || '' : '');
+  const emptyBox = $derived(sort && !sort.out && !maxed && two && (!colA.length || !colB.length)
+    ? `left:${span(colA.length ? 1 : 0, 2)};width:${size(2)};top:0;height:100%` : '');
 
   // —— 分栏拖拽：左缘把手调工作台宽度（px 持久化；CSS min/max 兜底钳制）——
   // 一列、两列各记各的：两列时默认更宽，拖出来的宽度也不该回灌给一列。
@@ -145,13 +181,262 @@
     else { dockW = null; try { localStorage.removeItem(DOCKW_LS); } catch {} }
   }
 
+  // —— 拖卡片标题行：排顺序 / 拖出 app 成独立的卡片窗口 ——
+  // 走指针事件 + 指针捕获而不是 HTML5 拖拽：卡片得实打实跟着指针走、别的卡实时让位（FLIP 滑过去），
+  // HTML5 拖拽只给一张半透明截图。按住鼠标拖出窗口时 Chromium 仍把 pointermove / pointerup 发给捕获者
+  // （坐标落在视口外），据此判「拖出 app」：这张卡离开格子、别的卡合拢；松手就开一扇只放它的窗口
+  // （lib/solo.js cardUrl → SoloPage 卡片形态），工作台里这张随之关掉。
+  let cardsEl = $state();
+  const cardEls = {};
+  function cardRef(node, v) {
+    cardEls[v] = node;
+    return { destroy() { if (cardEls[v] === node) delete cardEls[v]; } };
+  }
+  let press = null;   // 按下了标题行：{ v, x, y, pid, head, pop, fx, gy, px, py }；sort 非空 = 过了门槛、真在拖
+  const bdOf = () => { try { return window.BridgeDesktop || (window.parent !== window && window.parent.BridgeDesktop) || null; } catch { return null; } };
+  // 这一下能不能拖成窗口：桌面壳走 openChat IPC（'old' = 老壳没有，松手提示更新）；网页走弹窗；
+  // 壳里没挂 preload 的窗口（拖出来的对话窗）window.open 会被转给系统浏览器、那边没有登录态——不给拖。
+  function popMode() {
+    if (card || snapMode || !wide) return '';
+    const bd = bdOf();
+    if (bd) return bd.window?.openChat ? 'shell' : 'old';
+    return /\bElectron\//.test(navigator.userAgent) ? '' : 'web';
+  }
+  // 指针出没出 app：分屏那一格是 iframe，按顶层窗口的视口算（拖出这一格进了旁边那格不算）
+  function outsideApp(x, y) {
+    let ox = 0, oy = 0, W = window.innerWidth, H = window.innerHeight;
+    try {
+      if (window.frameElement && window.top !== window) {
+        const r = window.frameElement.getBoundingClientRect();
+        ox = r.left; oy = r.top; W = window.top.innerWidth; H = window.top.innerHeight;
+      }
+    } catch {}
+    const X = x + ox, Y = y + oy;
+    return X < 0 || Y < 0 || X >= W || Y >= H;
+  }
+  const sameCols = (p, q) => p.a.join() === q.a.join() && p.b.join() === q.b.join();
+  // v 插进 col 列、排在这一列第 idx 张【看得见的】卡前面（没开的卡留在原处，下次开出来还在老位置附近）
+  function place(st, v, col, idx) {
+    const a = st.a.filter((k) => k !== v), b = st.b.filter((k) => k !== v);
+    const arr = col === 'a' ? a : b;
+    const vis = arr.filter((k) => shown.includes(k));
+    const at = idx < vis.length ? arr.indexOf(vis[idx]) : vis.length ? arr.indexOf(vis[vis.length - 1]) + 1 : arr.length;
+    arr.splice(at, 0, v);
+    return { a, b };
+  }
+  // 按指针算预览排布。一律从起手时的排布推（不在上一帧预览上叠加），指针回到原处就原样复原。
+  //   · 起手两列：左半 / 右半定列，纵向按「这一列放进它之后每格多高」定第几格。拖空的那一列留着当落点。
+  //   · 起手一列：按纵向定第几格；这一格够宽、还有别的卡时拖到右侧三成【停一下】= 拆成两列、它单独占右列
+  //     （拆开后工作台变宽，退回门槛放宽到右半边，免得在门槛上来回抖；要停一下是因为工作台贴着窗口
+  //     右缘，往右拖出窗口必经这一带，一划而过不该让工作台先变宽再缩回去）。
+  const SPLIT_DWELL = 240;
+  function target(px, py, allowSplit = true) {
+    const r = cardsEl.getBoundingClientRect();
+    const v = sort.v, st = sort.start;
+    const vis = (arr) => arr.filter((k) => k !== v && shown.includes(k));
+    const ra = vis(st.a), rb = vis(st.b);
+    const slot = (count) => Math.max(0, Math.min(count, Math.floor((py - r.top) / (r.height / (count + 1)))));
+    if (sort.n0 === 2) {
+      const col = px < r.left + r.width / 2 ? 'a' : 'b';
+      return { n: 2, split: false, cols: place(st, v, col, slot(col === 'a' ? ra.length : rb.length)) };
+    }
+    const others = ra.length + rb.length;
+    if (allowSplit && canTwo && others > 0 && px > r.left + r.width * (sort.split ? 0.5 : 0.7)) {
+      const a = [...st.a.filter((k) => k !== v), ...st.b.filter((k) => k !== v && shown.includes(k))];
+      const b = [v, ...st.b.filter((k) => k !== v && !shown.includes(k))];
+      return { n: 2, split: true, cols: { a, b } };
+    }
+    const i = slot(others);
+    const toA = i < ra.length || (i === ra.length && (st.a.includes(v) || !rb.length));
+    return { n: 1, split: false, cols: toA ? place(st, v, 'a', i) : place(st, v, 'b', i - ra.length) };
+  }
+  function rects(skip) {
+    const m = {};
+    for (const k in cardEls) if (k !== skip && cardEls[k].offsetParent) m[k] = cardEls[k].getBoundingClientRect();
+    return m;
+  }
+  // FLIP：排布一变，各卡从刚才的视觉位置滑到新格子（只动 transform；尺寸当场换——拉伸动画会让终端 /
+  // 浏览器跟着逐帧重排）。before 量的是含进行中动画的视觉位置，连续换位也接得上不跳。
+  function flip(before) {
+    for (const k in before) {
+      const el = cardEls[k];
+      if (!el) continue;
+      for (const a of el.getAnimations?.() || []) if (a.id === 'dkflip') a.cancel();
+      const b = el.getBoundingClientRect(), o = before[k];
+      const dx = o.left - b.left, dy = o.top - b.top;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+      try {
+        const an = el.animate([{ transform: `translate(${dx}px,${dy}px)` }, { transform: 'translate(0,0)' }],
+          { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' });
+        an.id = 'dkflip';
+      } catch {}
+    }
+  }
+  // 拖着的卡钉在指针底下：横向保持按下时的相对位置（换列后卡片宽度变了也不跑偏），纵向保持抓住的那一点
+  function follow() {
+    const el = sort && cardEls[sort.v];
+    if (!el || !cardsEl || !press) return;
+    const cr = cardsEl.getBoundingClientRect();
+    let wantL = press.px - press.fx * el.offsetWidth, wantT = press.py - press.gy;
+    // 拖出窗口时卡片在窗口边上留一截（指针已经在外面了，不留的话 app 里看不出手上还拎着它）
+    if (sort.out) {
+      const keep = 56;
+      wantL = Math.min(Math.max(wantL, keep - el.offsetWidth), window.innerWidth - keep);
+      wantT = Math.min(Math.max(wantT, keep - el.offsetHeight), window.innerHeight - keep);
+    }
+    sort.tx = Math.round(wantL - (cr.left + el.offsetLeft));
+    sort.ty = Math.round(wantT - (cr.top + el.offsetTop));
+  }
+  function headDown(e, v) {
+    if (!wide || card || e.button !== 0 || e.target.closest?.('button') || isPluginView(v)) return;
+    press = { v, x: e.clientX, y: e.clientY, pid: e.pointerId, head: e.currentTarget, pop: e.pointerType === 'mouse' ? popMode() : '' };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+  }
+  function beginSort() {
+    const el = cardEls[press.v];
+    // 一张卡、又拖不出窗口（或放大铺满时）：没什么可排的，按普通按下处理
+    if (!el || (!press.pop && (maxed || shown.length < 2))) { press.dead = true; return; }
+    const r = el.getBoundingClientRect();
+    press.fx = (press.x - r.left) / (r.width || 1);
+    press.gy = press.y - r.top;
+    const start = { a: [...dockCols.a], b: [...dockCols.b] };
+    const n0 = two ? 2 : 1;
+    sort = { v: press.v, start, cols: start, n: n0, n0, split: false, out: false, tx: 0, ty: 0, w: el.offsetWidth, h: el.offsetHeight };
+    document.body.style.userSelect = 'none';
+  }
+  async function headMove(e) {
+    if (!press || press.dead || e.pointerId !== press.pid) return;
+    if (!sort) {
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < 5) return;
+      beginSort();
+      if (!sort) return;
+    }
+    press.px = e.clientX; press.py = e.clientY;
+    const out = !!press.pop && outsideApp(e.clientX, e.clientY);
+    let next = null;
+    if (out) {
+      // 拖出去了：排布回到起手（不带刚才的换位），这张让出格子；剩下的卡两列都还有才保持两列
+      const st = sort.start, v = sort.v;
+      const hasA = st.a.some((k) => k !== v && shown.includes(k)), hasB = st.b.some((k) => k !== v && shown.includes(k));
+      next = { out, n: canTwo && hasA && hasB ? 2 : 1, split: false, cols: st };
+    } else if (!maxed) {
+      let tg = target(e.clientX, e.clientY);
+      if (tg.split && !sort.split) {
+        // 刚进拆列带：先按不拆算，停够了（指针不动也算——定时器补一次）再拆
+        if (!press.bandAt) {
+          press.bandAt = performance.now();
+          clearTimeout(press.bandT);
+          press.bandT = setTimeout(() => { if (press && sort) headMove({ pointerId: press.pid, clientX: press.px, clientY: press.py }); }, SPLIT_DWELL + 10);
+        }
+        if (performance.now() - press.bandAt < SPLIT_DWELL) tg = target(e.clientX, e.clientY, false);
+      } else if (!tg.split) { press.bandAt = 0; clearTimeout(press.bandT); }
+      next = { out, ...tg };
+    } else next = { out, n: sort.n, split: sort.split, cols: sort.cols };
+    if (out) { press.bandAt = 0; clearTimeout(press.bandT); }
+    if (next.out !== sort.out || next.n !== sort.n || !sameCols(next.cols, sort.cols)) {
+      if (next.out && !sort.out) { const el = cardEls[sort.v]; if (el) { sort.w = el.offsetWidth; sort.h = el.offsetHeight; } }
+      const before = rects(sort.v);
+      sort.out = next.out; sort.n = next.n; sort.split = next.split; sort.cols = next.cols;
+      await tick();
+      if (!sort) return;
+      flip(before);
+    }
+    follow();
+  }
+  function headUp(e) {
+    if (!press || e.pointerId !== press.pid) return;
+    const p = press;
+    press = null;
+    clearTimeout(p.bandT);
+    try { p.head.releasePointerCapture(p.pid); } catch {}
+    const s = sort;
+    if (!s) return;   // 没过门槛 = 普通点击
+    document.body.style.userSelect = '';
+    if (s.out) { sort = null; popOut(s.v, e, p, s); return; }
+    // 落位：记下各卡（含拖着那张）此刻的视觉位置，落盘后一起滑进格子
+    const before = rects();
+    if (!sameCols(s.cols, s.start)) setDockCols(s.cols);
+    sort = null;
+    tick().then(() => flip(before));
+  }
+  // 取消（pointercancel / 丢了捕获 / Esc）：原样复原
+  function headCancel(e) {
+    if (!press || (e && e.pointerId != null && e.pointerId !== press.pid)) return;
+    const p = press;
+    press = null;
+    clearTimeout(p.bandT);
+    try { p.head.releasePointerCapture(p.pid); } catch {}
+    if (!sort) return;
+    document.body.style.userSelect = '';
+    const before = rects();
+    sort = null;
+    tick().then(() => flip(before));
+  }
+  $effect(() => {
+    if (!sort) return;
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); headCancel(); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  });
+  // 双击标题行 = 放大 / 还原（同窗口标题栏的习惯）
+  function headDbl(e, v) {
+    if (card || !wide || e.target.closest?.('button')) return;
+    toggleDockMax(v);
+  }
+
+  // —— 拖出窗口：一扇只放这张卡的窗口（像把浏览器标签页拖出来）——
+  // 桌面壳：主窗口的 window.open 一律交给系统浏览器，走壳的 openChat IPC（同登录态；同一张卡、同一个
+  // 工作空间再拖一次 = 聚焦已开的那扇）；网页：浏览器弹窗（同名窗口复用）。窗口大小取这张卡在工作台里
+  // 的大小，开在松手处、指针落在新窗口标题栏上。
+  const wsName = (ws) => String(ws || '').split(/[\\/]/).filter(Boolean).pop() || '';
+  function popOut(v, e, p, s) {
+    if (p.pop === 'old') { dropToast(tc('claude', '桌面客户端更新后才能把卡片拖成独立窗口')); return; }
+    const url = cardUrl(v, { id: session.id || '', ws: dock.ws });
+    const width = Math.round(Math.max(480, Math.min(1400, s.w || 560)));
+    const height = Math.round(Math.max(420, Math.min(1200, (s.h || 640) + 32)));
+    const x = Math.round(e.screenX - (p.fx ?? 0.5) * width);
+    const y = Math.round(e.screenY - 16);
+    const name = wsName(dock.ws);
+    const title = titleOf(v) + (name ? ' · ' + name : '');
+    // 工作台里这张先关掉（窗口要一会儿才出来，别让它弹回格子里闪一下）；没开成再摆回来
+    closeDockView(v);
+    const fail = (msg) => { dropToast(msg); if (dockToolOk(v)) openDock(v); };
+    if (p.pop === 'shell') {
+      let bg = '';
+      try { bg = getComputedStyle(dockEl || document.documentElement).getPropertyValue('--dk-card').trim(); } catch {}
+      Promise.resolve(bdOf().window.openChat({ url, key: `card:${v}:${dock.ws}`, title, x, y, width, height, bg }))
+        .then((r) => { if (r && r.ok === false) fail(t('没能打开新窗口')); })
+        .catch(() => fail(t('没能打开新窗口')));
+      return;
+    }
+    let w = null;
+    try { w = window.open(url, 'bridge-card-' + v, `popup=yes,width=${width},height=${height},left=${x},top=${y}`); } catch {}
+    if (!w) fail(t('浏览器拦下了新窗口——允许本站弹出窗口后再拖一次'));
+    else { try { w.focus(); } catch {} }
+  }
+
+  // 卡片窗口点「放回工作台」：主窗口（不是分屏格、不是别的独立窗）把这张卡摆回来
+  $effect(() => {
+    if (card || IS_SOLO || typeof BroadcastChannel === 'undefined') return;
+    const ch = new BroadcastChannel(DOCK_CHANNEL);
+    ch.onmessage = (e) => {
+      const d = e.data;
+      if (d?.t === 'back' && d.view && dockToolOk(d.view)) { openDock(d.view); try { window.focus(); } catch {} }
+    };
+    return () => ch.close();
+  });
+  function dockBack() {
+    try { const ch = new BroadcastChannel(DOCK_CHANNEL); ch.postMessage({ t: 'back', view: card, ws: dock.ws }); ch.close(); } catch {}
+    setTimeout(() => window.close(), 40);
+  }
+
   // meta 由 ensureDockMeta 统一拉（归属状态栏芯片 / 标题栏工具组在工作台没展开时就已经拉过，这里直接复用）
   $effect(() => { if (dock.open && dock.ws && !dock.meta) ensureDockMeta(); });
 
   // 安卓返回：收起工作台（预览层在 nav.js 里优先级更高、先被收掉）。
   // 侧列形态也注册——折叠屏展开仍是安卓、返回键该先收工作台；只有 expanded（桌面浏览器/
   // 大平板，通常没有系统返回键）不占这一层。
-  $effect(() => { if (dock.open && !layout.expanded) return pushBackLayer(closeDock); });
+  $effect(() => { if (dock.open && !layout.expanded && !card) return pushBackLayer(closeDock); });
 
   // 桌面快捷键（浏览器可拦截的组合；Ctrl+T/W 这类浏览器保留键拦不了，不用）：开关对应那张卡。
   const KEYS = [
@@ -161,7 +446,7 @@
     { view: 'files', match: (e) => e.ctrlKey && e.shiftKey && e.code === 'KeyE' },
   ];
   $effect(() => {
-    if (ui.screen !== 'claude') return;
+    if (ui.screen !== 'claude' || card) return;
     const onKey = (e) => {
       for (const k of KEYS) {
         if (k.match(e)) {
@@ -237,13 +522,19 @@
   });
   // 手机 sheet 里正开着文件预览：进「阅读形态」——sheet 升到顶（只让出状态栏）、chip 条收起、
   // 预览头收成 44px。这时要的是看文件，工具切换点返回退出预览就回来了。
-  const sheetPv = $derived(!wide && preview.open && preview.host === 'dock');
+  const sheetPv = $derived(!wide && preview.open && (preview.host === 'dock' || preview.host === 'memory'));
 </script>
 
 {#snippet panelBody(view)}
-  {#if view === 'tasks'}
+  {#if isPluginView(view)}
+    {@const w = workbenchByKey(view)}
+    {#if w}<PluginWorkbench {w} />{:else}<div class="dk-wait">{t('这个插件页面不在了（插件被关掉或卸载了）')}</div>{/if}
+  {:else if view === 'tasks'}
     <!-- 任务视图读的是本会话的对话状态，不按工作空间作用域、也不用等 meta -->
     <TasksPanel {wide} />
+  {:else if view === 'memory' && dock.ws}
+    <!-- 记忆：按工作目录找到 Claude 的记忆目录（服务端同 Claude Code 的找法），不用等 meta -->
+    {#key dock.ws}<MemoryPanel ws={dock.ws} />{/key}
   {:else if !dock.ws}
     <div class="dk-wait">{t('工作空间加载中…')}</div>
   {:else}
@@ -272,20 +563,41 @@
   {/if}
 {/snippet}
 
-{#if dock.open}
+{#if card}
+<!-- 卡片窗口：整扇窗就是这一张卡。顶上一条细标题行（哪个工作空间 + 放回工作台），其余全给面板 -->
+<div class="dock cardwin" bind:this={dockEl} aria-label={titleOf(card)}>
+  <header class="dk-win-head">
+    <span class="dk-win-ic">{@html dockToolIcon(card)}</span>
+    <span class="dk-card-t">{titleOf(card)}</span>
+    {#if wsName(dock.ws)}<span class="dk-win-ws" title={dock.ws}>{wsName(dock.ws)}</span>{/if}
+    <button class="dk-back" title={tc('claude', '放回工作台')} onclick={dockBack}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/><path d="M11.5 12H6.5m2.5-2.5L6.5 12 9 14.5"/></svg>
+      <span>{tc('claude', '放回工作台')}</span>
+    </button>
+  </header>
+  {@render panelBody(card)}
+</div>
+{:else if dock.open}
 {#if wide}
-<aside class="dock wide" class:mid class:overlay class:gripping class:two class:full={!!maxed} bind:this={dockEl}
+<aside class="dock wide" class:mid class:overlay class:gripping class:two class:full={!!maxed} class:sorting={!!sort} bind:this={dockEl}
   style={curW ? `width:${curW}px` : ''} aria-label={t('工作台')}>
   <!-- 工具开关组：工作台展开时就坐在卡片正上方这条带里（收起时由 TopBar 挂在这一格右上角） -->
   <DockToolBar docked onClose={toolsClose} />
   {#if !maxed}<div class="dk-grip" role="separator" aria-label={t('拖拽调整宽度')} onpointerdown={gripDown} ondblclick={gripReset}></div>{/if}
-  <div class="dk-cards">
+  <div class="dk-cards" bind:this={cardsEl}>
+    {#if emptyBox}<div class="dk-slot empty" style={emptyBox}></div>{/if}
+    {#if slotBox}<div class="dk-slot" style={slotBox}></div>{/if}
     {#each cards as c (c.v)}
-      <section class="dk-card" class:hid={!c.box} style={c.box} aria-label={TITLES[c.v]}>
-        <header class="dk-card-head">
-          <span class="dk-card-t">{TITLES[c.v]}</span>
+      <section class="dk-card" class:hid={!c.box} class:lifted={sort?.v === c.v} class:tearing={sort?.v === c.v && sort.out}
+        style={c.box} aria-label={titleOf(c.v)} use:cardRef={c.v}>
+        <!-- 标题行 = 拖拽把手：拖动排顺序，拖出 app 成独立窗口；双击放大 / 还原 -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <header class="dk-card-head" class:grab={pointer.fine}
+          onpointerdown={(e) => headDown(e, c.v)} onpointermove={headMove} onpointerup={headUp}
+          onpointercancel={headCancel} onlostpointercapture={headCancel} ondblclick={(e) => headDbl(e, c.v)}>
+          <span class="dk-card-t">{titleOf(c.v)}</span>
           <button class="dk-cbtn" aria-label={maxed === c.v ? t('还原') : t('放大')} title={maxed === c.v ? t('还原') : t('放大铺满')} onclick={() => toggleDockMax(c.v)}>{@html dockIcon(maxed === c.v ? 'shrink' : 'expand')}</button>
-          <button class="dk-cbtn" aria-label={CLOSE_LABEL[c.v]} title={t('关闭')} onclick={() => closeDockView(c.v)}>{@html dockIcon('close')}</button>
+          <button class="dk-cbtn" aria-label={closeLabelOf(c.v)} title={t('关闭')} onclick={() => closeDockView(c.v)}>{@html dockIcon('close')}</button>
         </header>
         {@render panelBody(c.v)}
       </section>
@@ -305,7 +617,7 @@
         <div class="dk-chips" bind:this={chipsEl}>
           {#each MENU as m (m.key)}
             <button class="chip" class:on={mView === m.key} onclick={() => pickTool(m.key)}>
-              <span class="chip-ic">{@html dockIcon(m.key)}</span>
+              <span class="chip-ic">{@html dockToolIcon(m.key)}</span>
               {m.label}
               {#if (m.key === 'browser' && dock.browserLive && mView !== 'browser') || (m.key === 'term' && dock.termLive && mView !== 'term') || (m.key === 'tasks' && bgLive && mView !== 'tasks')}<span class="dk-live"></span>{/if}
             </button>
@@ -379,8 +691,37 @@
   }
   .dk-card.hid { display: none; }
   @keyframes dkCardIn { from { opacity: 0; transform: translateY(6px); } }
-  .dk-card-head { flex: none; display: flex; align-items: center; gap: 2px; height: 38px; padding: 0 5px 0 13px; }
-  .dk-card-t { font-size: 13.5px; color: var(--serif); white-space: nowrap; }
+  .dk-card-head { flex: none; display: flex; align-items: center; gap: 2px; height: 38px; padding: 0 5px 0 13px; touch-action: none; user-select: none; }
+  .dk-card-head.grab { cursor: grab; }
+  /* 拖动排序：拿起的那张浮在最上、投影加深，跟着指针走（inline transform 每帧改，不加过渡）；
+     落点是一圈虚线框，随排布滑到新格子；拖出窗口时半透明，示意「松手就成独立窗口」 */
+  .dk-card.lifted { z-index: 6; animation: none; box-shadow: 0 22px 54px rgba(0, 0, 0, .42), 0 4px 14px rgba(0, 0, 0, .22);
+    transition: opacity .16s ease, box-shadow .16s ease; }
+  .dk-card.tearing { opacity: .6; }
+  .dock.sorting, .dock.sorting .dk-card-head { cursor: grabbing; }
+  .dock.sorting :global(iframe) { pointer-events: none; }
+  .dk-slot { position: absolute; border-radius: 12px; pointer-events: none;
+    border: 1.5px dashed color-mix(in srgb, var(--muted) 42%, transparent);
+    background: color-mix(in srgb, var(--muted) 7%, transparent);
+    transition: left .26s cubic-bezier(.2, .8, .2, 1), top .26s cubic-bezier(.2, .8, .2, 1), width .26s cubic-bezier(.2, .8, .2, 1), height .26s cubic-bezier(.2, .8, .2, 1);
+    animation: dkSlotIn .16s ease; }
+  .dk-slot.empty { border-color: color-mix(in srgb, var(--muted) 22%, transparent); background: none; transition: none; }
+  @keyframes dkSlotIn { from { opacity: 0; } }
+
+  /* —— 卡片窗口（拖出 app 的那一张）：整扇窗就是卡片底色，顶上一条细标题行 —— */
+  .dock.cardwin { --dk-card: #262625; --dk-line: rgba(255, 255, 255, .085);
+    flex: 1; min-height: 0; background: var(--dk-card); --bg: var(--dk-card); }
+  :global(html[data-theme="light"]) .dock.cardwin { --dk-card: #ffffff; --dk-line: rgba(0, 0, 0, .09); }
+  .dk-win-head { flex: none; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--dk-line); }
+  .dk-win-ic { width: 15px; height: 15px; display: flex; flex: none; color: var(--muted); }
+  .dk-win-ic :global(svg) { width: 100%; height: 100%; }
+  .dk-win-ws { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); }
+  .dk-back { margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 8px; border-radius: 7px;
+    font-size: 12.5px; color: var(--muted); }
+  .dk-back svg { width: 15px; height: 15px; }
+  .dk-back:active { background: var(--hover-strong); }
+  @media (hover: hover) { .dk-back:hover { background: var(--hover); color: var(--text); } }
+  .dk-card-t { font-size: 13.5px; color: var(--serif); white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .dk-cbtn { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: var(--muted); flex: none; }
   .dk-cbtn:first-of-type { margin-left: auto; }
   .dk-cbtn :global(svg) { width: 15px; height: 15px; }

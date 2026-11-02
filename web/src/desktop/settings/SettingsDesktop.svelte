@@ -62,6 +62,7 @@
   import Customize from '../../components/ext/Customize.svelte';
   import PluginFrame from '../../components/ext/PluginFrame.svelte';
   import { pluginPanels, watchPluginPanels, panelTitle } from '../../lib/pluginPanels.svelte.js';
+  import { extAuth, loadAuthProviders, startExtLogin } from '../../lib/authProviders.svelte.js';   // 插件提供的外部登录（「用 X 登录」）
   import { filesFromInput, uploadAttachment } from '../../lib/attachments.js';
   import { t, tc, tr, lang, setLang, LANGS } from '../../lib/i18n.js';
   import { DISTRO, stripBrand, feedbackDest } from '../../lib/distro.js';
@@ -424,6 +425,8 @@
   // 扫码登录（与 LoginCard 同一套 lib/pair.js 状态机）：进 qr 模式即出码 + 长轮询，离开即停。
   let pair = $state({ status: 'idle', svg: '', error: '' });
   let pairCtl = null;
+  // 登录页一露面就拉一次外部登录方式
+  $effect(() => { if (sec === 'account' && me.kind === 'none') untrack(() => loadAuthProviders()); });
   $effect(() => {
     if (!(sec === 'account' && me.kind === 'none' && mode === 'qr')) return;
     // 回调里不读 pair（否则成依赖 → effect 自击死循环，见 LoginCard 同款注释）
@@ -1097,6 +1100,13 @@
               {#if lgErr}<p class="err">{lgErr}</p>{/if}
               <button class="go" type="submit" disabled={lgBusy}>{lgBusy ? t('请稍候…') : mode === 'register' ? t('注册') : t('登录')}</button>
             </form>
+            {#if mode === 'login' && extAuth.list.length}
+              <div class="extl">
+                {#each extAuth.list as p (p.key)}
+                  <button class="extb" onclick={() => startExtLogin(p.key)}>{#if p.icon}<img src={p.icon} alt="" />{/if}<span>{t('用 {name} 登录', { name: p.label })}</span></button>
+                {/each}
+              </div>
+            {/if}
             <div class="alts">
               {#if mode === 'login'}
                 <button onclick={() => { mode = 'qr'; lgErr = ''; }}>{t('扫码登录')}</button>
@@ -2010,6 +2020,14 @@
   .go:hover:not(:disabled) { background: var(--dsk-accent-hover); }
   .go:active:not(:disabled) { transform: scale(.985); }
   .go:disabled { opacity: .5; cursor: default; }
+  /* 插件提供的外部登录：表单下面一排描边按钮 */
+  .extl { display: flex; flex-direction: column; gap: var(--dsk-s2); margin-top: var(--dsk-s2); }
+  .extb { height: 36px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; border-radius: 9px; min-width: 0;
+    font-family: inherit; font-size: var(--dsk-fs-body); color: var(--dsk-ink); box-shadow: inset 0 0 0 1px var(--dsk-line); background: transparent;
+    transition: background var(--dsk-t-fast) ease; }
+  .extb:hover { background: var(--dsk-hover, rgba(127, 127, 127, .1)); }
+  .extb img { width: 18px; height: 18px; flex: none; object-fit: contain; border-radius: 4px; }
+  .extb span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .alts { display: flex; justify-content: center; gap: 18px; margin-top: 14px; }
   .alts button { font-family: inherit; font-size: var(--dsk-fs-ui); color: var(--dsk-ink-2); }
   .alts button:hover { color: var(--dsk-ink); text-decoration: underline; text-underline-offset: 3px; }

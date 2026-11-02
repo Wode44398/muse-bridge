@@ -1,0 +1,46 @@
+// 插件界面扩展（ctx.ui.*）用的小图标：插件只给一个名字（服务端限定 [a-z][a-z0-9-]{0,23}），bridge 自己画。
+// 不认识的名字一律画成拼图块（plugin）。24 网格、1.6 描边，与 components/ext/icons.js 同一套笔触。
+const P = {
+  plugin: '<path d="M10 4.5a1.8 1.8 0 1 1 3.6 0H17a1.4 1.4 0 0 1 1.4 1.4v3.3a1.8 1.8 0 1 0 0 3.6v3.3A1.4 1.4 0 0 1 17 17.5h-3.3a1.8 1.8 0 1 0-3.6 0H7a1.4 1.4 0 0 1-1.4-1.4v-3.4a1.8 1.8 0 1 1 0-3.6V5.9A1.4 1.4 0 0 1 7 4.5z"/>',
+  star: '<path d="m12 4 2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"/>',
+  bolt: '<path d="M13 3.5 5.5 13.5H12l-1 7 7.5-10H12z"/>',
+  bell: '<path d="M6.5 16.5v-5a5.5 5.5 0 0 1 11 0v5l1.5 1.5H5z"/><path d="M10 20.2a2.2 2.2 0 0 0 4 0"/>',
+  chart: '<path d="M4.5 19.5h15"/><path d="M7.5 16v-4.5M12 16V7.5M16.5 16v-6"/>',
+  calendar: '<rect x="4" y="5.5" width="16" height="14" rx="2.5"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  checklist: '<path d="m4.5 7 1.7 1.7L9.5 5.5M4.5 15l1.7 1.7 3.3-3.2"/><path d="M12.5 7.5h7M12.5 15.5h7"/>',
+  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',
+  cloud: '<path d="M7.5 18.5a4 4 0 0 1-.6-7.95A5.5 5.5 0 0 1 17.6 9.6a4.5 4.5 0 0 1-.6 8.9z"/>',
+  code: '<path d="m8.5 7.5-4.5 4.5 4.5 4.5M15.5 7.5l4.5 4.5-4.5 4.5"/>',
+  doc: '<path d="M14 3.5v5h5"/><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M8.5 13h7M8.5 16.5h5"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.4 3.9 5.2 3.9 8.5s-1.3 6.1-3.9 8.5M12 3.5C9.4 5.9 8.1 8.7 8.1 12s1.3 6.1 3.9 8.5"/>',
+  heart: '<path d="M12 19.5s-7.5-4.3-7.5-9.6A4.1 4.1 0 0 1 12 7.6a4.1 4.1 0 0 1 7.5 2.3c0 5.3-7.5 9.6-7.5 9.6z"/>',
+  home: '<path d="M4.5 11 12 4.5l7.5 6.5"/><path d="M6.5 9.5v10h11v-10"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  list: '<path d="M9 7h11M9 12h11M9 17h11"/><circle cx="5" cy="7" r=".9" fill="currentColor"/><circle cx="5" cy="12" r=".9" fill="currentColor"/><circle cx="5" cy="17" r=".9" fill="currentColor"/>',
+  mail: '<rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="m4 7 8 6 8-6"/>',
+  search: '<circle cx="11" cy="11" r="6.3"/><path d="m20 20-4.4-4.4"/>',
+  send: '<path d="M20 4 9.5 14.5M20 4l-6.5 16-4-9.5L4 10.5z"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M6 18l1.6-1.6M16.4 7.6 18 6"/>',
+  tag: '<path d="M4 12.6V5.5A1.5 1.5 0 0 1 5.5 4h7.1l7.4 7.4a1.5 1.5 0 0 1 0 2.1L13.5 20a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8.5" cy="8.5" r="1.3"/>',
+  user: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 19.5a7 7 0 0 1 14 0"/>',
+  users: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5a5.5 5.5 0 0 1 11 0"/><path d="M15.2 5.6a3.2 3.2 0 0 1 0 5.8M17.5 14.6a5.5 5.5 0 0 1 3 4.9"/>',
+  sparkles: '<path d="M10 4.5 11.6 9l4.4 1.5-4.4 1.6L10 16.5l-1.6-4.4L4 10.5 8.4 9z"/><path d="M17.5 14.5 18.3 17l2.2.7-2.2.8-.8 2.5-.8-2.5-2.2-.8 2.2-.7z"/>',
+  translate: '<path d="M4 6h9M8.5 4v2c0 4-2 7-4.5 8.5M6.5 10c1.2 2 3 3.6 5 4.5"/><path d="m12.5 20 3.5-8.5 3.5 8.5M13.8 17h4.4"/>',
+  bookmark: '<path d="M7 4.5h10v15l-5-3.5-5 3.5z"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  share: '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M5 12.5v5.5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5.5"/>',
+  download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M4.5 19.5h15"/>',
+  upload: '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4.5 19.5h15"/>',
+  refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',
+  terminal: '<path d="M5 7.5 9.5 12 5 16.5M12 17h7"/>',
+  folder: '<path d="M3.5 7.2c0-1.5 1.2-2.7 2.7-2.7h3.4l2 2.3h6.2c1.5 0 2.7 1.2 2.7 2.7v8.3c0 1.5-1.2 2.7-2.7 2.7H6.2c-1.5 0-2.7-1.2-2.7-2.7z"/>',
+  image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.7"/><circle cx="9" cy="9.7" r="1.6"/><path d="m4 17.2 4.6-4.6a1.6 1.6 0 0 1 2.2 0l5.7 5.7"/>',
+  board: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15M3.5 10h6"/>',
+  wand: '<path d="m4.5 19.5 10-10M13 6l1-2.5L15 6l2.5 1-2.5 1-1 2.5L13 8l-2.5-1z"/>',
+  robot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4.5V8M9.5 13h.01M14.5 13h.01M9.5 16.5h5"/>',
+};
+P.chat = '<path d="M20 12.2c0 3.9-3.6 7-8 7-1.1 0-2.2-.2-3.1-.6L4.5 20l1.2-3.5C4.6 15.3 4 13.8 4 12.2c0-3.9 3.6-7 8-7s8 3.1 8 7z"/>';
+
+export const pluginIcon = (name, w = 1.6) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || P.plugin}</svg>`;

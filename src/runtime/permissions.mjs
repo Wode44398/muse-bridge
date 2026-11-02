@@ -319,7 +319,7 @@ const PLAN_NOBODY = 'No one can answer that prompt from plan mode in this sessio
  *                     停放复用 / 预热接管 / 挂起接力时一个进程换了请求方，要取「眼下这一轮」的
  */
 const UNATTENDED_WAIT_MS = 30 * 60_000;
-export function makePermissionGate({ ctx, policy = 'interactive', send, sid, currentMode, guard, onInterrupt, onActivity, limitReplay, turnOrigin, unattended }) {
+export function makePermissionGate({ ctx, policy = 'interactive', send, sid, currentMode, guard, onInterrupt, onActivity, limitReplay, turnOrigin, unattended, pluginPolicy }) {
   const replay = () => (typeof limitReplay === 'function' ? limitReplay() : limitReplay) || null;
   const pend = new Map();   // qid -> { ev, entry, sid, kind }
   const hostPolicy = policy === 'host' || !!ctx.snap;
@@ -471,6 +471,13 @@ export function makePermissionGate({ ctx, policy = 'interactive', send, sid, cur
     async canUseTool(name, input, opts) {
       if (name === 'ExitPlanMode') return planGate(input, opts);
       if (guard) { const v = guard(name, input); if (v) return { behavior: 'deny', message: v }; }
+      // 插件的审批策略（ctx.claude.permission，plugins/claude-tools.mjs）：沙箱复检之后问。拒绝随时有效；放行不越过计划模式、
+      // 也不越过要用户本人逐次批准的那几样（开自动合并 / Auto-fix）。都没表态就照原来的路走。
+      if (pluginPolicy && !planModeAsk(opts)) {
+        const r = await pluginPolicy(name, input, opts);
+        if (r && r.behavior === 'deny') return { behavior: 'deny', message: r.message };
+        if (r && r.behavior === 'allow' && !needsUserApproval(name, input)) return { behavior: 'allow', updatedInput: r.updatedInput };
+      }
       if (hostPolicy) {
         // 无人值守：保持宿主放行；只有计划模式里的写请求没人能批（官方无头措辞）
         if (planModeAsk(opts)) return { behavior: 'deny', message: PLAN_NOBODY };

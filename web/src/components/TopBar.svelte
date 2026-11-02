@@ -4,13 +4,12 @@
   //   · tools（侧列形态：电脑 / 平板 / 分屏格）＝ Claude 桌面版同款的【工具开关组】（DockToolBar）。
   //     工作台收着时挂在【这一格】的右上角（桌面壳 WCO 下坐进标题栏带、和最小化 / 关闭同一排）；
   //     工作台一展开就交给 ClaudeDock 挂进它顶上那条带里（卡片正上方），这里不再摆。
-  //   · 否则（手机底部 sheet 形态）＝ 原来的「主题 + 两点键」胶囊，两点键开 sheet。
+  //   · 否则（手机底部 sheet 形态）＝ 原来的「新对话 + 两点键」胶囊（明暗主题改由设置 / 单击菊花切换），两点键开 sheet。
   // 材质：Figma iOS 27 kit 的液态玻璃（Liquid Glass - Regular - Small，明暗两个变体）。图形层是构建期
   // 用 Figma 原版着色器烘焙的「与底色无关」图层（assets/figma-glass，做法与核对数据见
   // bridge build/design/figma-glass-controls/bake.html）：页面底色从下面透上来，在 --bg 上与 Figma
   // 逐像素一致；正文滚到底下时靠 backdrop 模糊透出（磨砂半径 6 → σ≈2.45，不做折射）。
   // `?oldglass` 退回原来的纯毛玻璃，方便对比。玻璃只给触屏；鼠标设备（电脑浏览器、桌面壳）走扁平实底（.flat）。
-  import { toggleTheme } from '../lib/state.svelte.js';
   import { dock } from '../lib/dock.svelte.js';
   import DockToolBar from './dock/DockToolBar.svelte';
   import { t, tc } from '../lib/i18n.js';
@@ -38,10 +37,6 @@
 {:else}
 <div class="fab pill" class:fg class:flat style:top>
   {#if onNew}<button class="pbtn" aria-label={tc('claude', '新对话')} onclick={onNew}>{@render newIcon()}</button>{/if}
-  <button class="pbtn" aria-label={t('切换明暗主题')} onclick={toggleTheme}>
-    <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
-    <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
-  </button>
   <button class="pbtn eyes" class:on={dock.open} aria-label={t('工作台')} onclick={onDock}>
     <svg viewBox="0 0 20 20" fill="none"><circle cx="7" cy="9" r="1.6" fill="currentColor"/><circle cx="13" cy="9" r="1.6" fill="currentColor"/></svg>
     {#if (dock.browserLive || dock.termLive) && !dock.open}<span class="live-dot"></span>{/if}
@@ -89,9 +84,6 @@
   .live-dot { position: absolute; top: 5px; right: 7px; width: 7px; height: 7px; border-radius: 50%;
     background: var(--ok); animation: tbPulse 1.2s ease-in-out infinite; }
   @keyframes tbPulse { 50% { opacity: .35; } }
-  .pbtn .moon { display: none; }
-  :global(html[data-theme="light"]) .pbtn .sun { display: none; }
-  :global(html[data-theme="light"]) .pbtn .moon { display: block; }
 
   /* 侧列形态的「新对话」圆钮：紧挨汉堡（10 + 36 + 8）；图标是自绘 SVG，不吃图标字体的字号 */
   .fab.round.nc { left: 54px; }

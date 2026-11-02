@@ -43,9 +43,9 @@
 
 ## 「每天 / 每周定时帮我做某事」
 
-`routines.create { name, prompt, schedule: { type: "daily", hour: 8, minute: 30 } }`。`type` 还有 `weekdays`（工作日）、`weekly`（配 `weekday`，0=周日）、`hourly`（只看 minute）；时间按服务器所在时区。prompt 里写清产出放哪。成员启用中的条数有上限；Ultracode 不能用于定时任务。
+`routines.create { name, prompt, schedule: { type: "daily", hour: 8, minute: 30 } }`。`type` 还有 `weekdays`（工作日）、`weekly`（配 `days` 数组，0=周日）、`hourly`（只看 minute）、`once`（配 `at` 毫秒时间戳）、`manual`（只手动跑）、`cron`（配 5 段 `cron`，最多每小时一次）；时间按服务器所在时区。要在某个仓库 / 文件夹里跑就带 `cwd`（绝对路径），要隔离改动加 `worktree: true`；要全程自己跑完 `permissionMode: "auto"`。prompt 里写清产出放哪。成员启用中的条数有上限；Ultracode 不能用于定时任务。
 
-管理：`routines.list` 看全部与上次结果；`routines.update { id, enabled: false }` 停用；`routines.run { id }` 立即跑一次；`routines.delete` 删除（⚠ 先问）。界面入口：Claude 分页历史抽屉（手机）/ 左侧栏（桌面）顶部的「定时触发」。
+管理：`routines.list` 看全部与上次结果；`routines.update { id, enabled: false }` 停用；`routines.run { id }` 立即跑一次；`routines.delete` 删除（⚠ 先问）。界面入口：Claude 分页历史抽屉（手机）/ 左侧栏（桌面）的「定时触发」；任务的运行记录在详情页。
 
 ## 「工作空间里有没有某个文件 / 这个文件讲什么」
 

@@ -175,6 +175,8 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "BRIDGE_DESKTOP_CDP_PORT", area: "bridge 集成", description: "桌面壳的 CDP 端口（与 broker 一起给）" },
   { name: "BRIDGE_DEVICE_API", area: "bridge 集成", description: "bridge 内部设备接口的本机地址（http://127.0.0.1:<端口>）；与密钥都在才有 Device* 设备工具" },
   { name: "BRIDGE_DEVICE_SECRET", area: "bridge 集成", description: "调内部设备接口时出示的凭据：管理员实例是主机密钥，用户实例是 bridge 按人铸的令牌（dvt1.…，只能操作他自己的电脑）", secret: true },
+  { name: "BRIDGE_PLUGIN_API", area: "bridge 集成", description: "bridge 本机地址：「bridge 插件」连接器（插件给 dimensio 的工具，/agent/mcp/plugins）与回合回报（/agent/events）用；与设备开关无关" },
+  { name: "BRIDGE_PLUGIN_SECRET", area: "bridge 集成", description: "连 bridge 插件端点时出示的同机实例凭据（同 BRIDGE_DEVICE_SECRET 的取法）", secret: true },
   { name: "DIMENSIO_EDGE_EXTENSION_IDS", area: "bridge 集成", description: "额外认可的 Edge 扩展 ID（逗号分隔；自己打包的扩展 ID 与内置的不同时用）" },
 
   // ── 测试 ──

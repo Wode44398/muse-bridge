@@ -20,6 +20,7 @@
   import { openSession } from '../../lib/chat.svelte.js';
   import { session } from '../../lib/state.svelte.js';
   import { IS_CSNAP } from '../../lib/csnap.js';
+  import ToolCard from './ToolCard.svelte';   // 插件工具的结果卡片（render:'card'，lib/toolCard）
 
   let { tool, run = undefined, inGroup = false, live = false } = $props();
 
@@ -147,6 +148,10 @@
       {/each}
       {#if summaryLine}<div class="params"><div class="param"><span class="val">{summaryLine}</span></div></div>{/if}
     </div>
+  {/if}
+  <!-- 插件工具回的结果卡片：不收在展开体里，直接摆在行下面（分组卡里由 ToolGroup 统一摆在组外） -->
+  {#if !inGroup}
+    {#each tools as tt, i (tt.id || i)}{#if tt.card}<ToolCard card={tt.card} />{/if}{/each}
   {/if}
 </div>
 

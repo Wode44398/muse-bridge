@@ -6,7 +6,8 @@
   // 页面经 /plugins/_sdk/bridge-plugin.js 和这里对话（postMessage，{ bp: 1, type, … }）：
   //   hello → 回 init（主题、颜色变量、语言、平台）     resize → 撑高（只在嵌入模式）
   //   fetch → 宿主带自己的登录态代发，只放行 /api/plugin/<本插件>/ 下的路径     toast / confirm / open / back
-  // 宿主往页面推：theme（切主题）、event（插件 ctx.bus.toPage 推的，以及 _status 状态块更新）。
+  // 宿主往页面推：theme（切主题）、event（插件 ctx.bus.toPage 推的，以及 _status 状态块更新）、
+  //   context（Claude 工作台标签：当前会话 / 工作目录 / agent，嵌入时随 init 给一次，切会话再推；SDK 的 bridge.context()）。
   // 手机 App 不走这里：主 WebView 的原生桥注入所有帧，iframe 挡不住，改由原生另起干净 WebView（lib/pluginPanels openPluginStandalone）。
   import { onMount } from 'svelte';
   import { apiUrl } from '../../lib/server.js';
@@ -18,7 +19,8 @@
   import { currentTheme, hostPlatform } from '../../lib/pluginPanels.svelte.js';
 
   // mode: 'embed'（嵌在插件详情里，高度跟内容走）| 'panel'（占满所在区域）
-  let { id, page, mode = 'embed', onBack = null, minHeight = 120 } = $props();
+  // context：{ sessionId, cwd, agent } | null（只有工作台标签给）
+  let { id, page, mode = 'embed', onBack = null, minHeight = 120, context = null } = $props();
 
   let frame = $state(null);
   let height = $state(0);
@@ -78,7 +80,8 @@
     switch (m.type) {
       case 'hello':
         failed = false;
-        post({ type: 'init', theme: currentTheme(), vars: themeVars(), lang: isEn() ? 'en' : 'zh', platform: hostPlatform(), mode, user: null });
+        post({ type: 'init', theme: currentTheme(), vars: themeVars(), lang: isEn() ? 'en' : 'zh', platform: hostPlatform(), mode, user: null, context: ctxNow() });
+        sentCtx = JSON.stringify(ctxNow());
         break;
       case 'resize':
         if (mode === 'embed') height = Math.max(minHeight, Math.min(4000, Number(m.height) || minHeight));
@@ -96,6 +99,17 @@
       case 'back': onBack?.(); break;
     }
   }
+
+  // 上下文变了（切会话 / 换工作目录）才推；页面还没 hello 时不推（init 里会带上）
+  const ctxNow = () => (context ? { sessionId: context.sessionId || null, cwd: context.cwd || null, agent: context.agent === 'dimensio' ? 'dimensio' : 'claude' } : null);
+  let sentCtx = '';
+  $effect(() => {
+    const c = ctxNow();
+    const k = JSON.stringify(c);
+    if (!c || !sentCtx || k === sentCtx) return;
+    sentCtx = k;
+    post({ type: 'context', context: c });
+  });
 
   onMount(() => {
     window.addEventListener('message', onMessage);

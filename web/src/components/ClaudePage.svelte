@@ -20,7 +20,7 @@
   import RoutinesPage from './RoutinesPage.svelte';
   import { api } from '../lib/api.js';
   import { uiAlert, uiConfirm } from '../lib/dialogs.js';
-  import { me, ui, session, settings, setTheme, singleMode, sessionWt, pluginOn } from '../lib/state.svelte.js';
+  import { me, ui, session, settings, setTheme, toggleTheme, singleMode, sessionWt, pluginOn } from '../lib/state.svelte.js';
   import UserMenu from './UserMenu.svelte';
   import { updateInfo } from '../lib/updateStore.svelte.js';
   import { swipeDismiss } from '../lib/motion.js';
@@ -61,6 +61,7 @@
   // 新对话入口 + 临时对话（原「快照」）按时间回收（S1-6，2026-10-22）
   import TempChatBand from './claude/TempChatBand.svelte';
   import { cs as claudeCs } from '../lib/claudeSettings.svelte.js';
+  import { pluginUi, runPluginUi, uiIcon } from '../lib/pluginUi.svelte.js';   // 插件的会话动作（ctx.ui.sessionAction）
   import { daysLeft, expiryWarn, quickPolicy, newChatTarget, isNewChatKey, newChatKbd, landingFor } from '../lib/quickChat.js';
 
   // 从工作空间拎一份文件过来松手 = 挂进【当前这个会话】的输入栏（不移动文件本身）。
@@ -993,6 +994,12 @@
     uiAlert(msg, { type: 'error', detail: tr(detail) });
   };
   function doStar(id) { toggleStar(id).catch(libFail(t('收藏失败，请重试'))); closeMenu(); }
+  // 会话菜单里插件的动作（ctx.ui.sessionAction）
+  function runSessionAction(pa, s) {
+    closeMenu();
+    if (!s) return;
+    runPluginUi(pa, 'sessionAction', { sessionId: s.id, title: titleFor(s.id, s.title) || '' });
+  }
   // 重命名：应用内小对话框。原来用 window.prompt——Electron 压根不实现 prompt()，
   // 桌面壳里点「重命名」毫无反应；网页端也是浏览器原生弹窗，一并换掉。
   // 同一个对话框也给项目（工作空间）改名用：renameFor.kind 区分。
@@ -1661,7 +1668,7 @@
     <div class="hero-scroll">
       <div class="hero-col">
         <div class="greeting">
-          <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'new', model: settings.model, effort: settings.effort }) }} in:fade={{ duration: 420, delay: 80 }} out:fly={{ x: -80, y: -22, duration: 320, easing: softDrop }}><ClaudeLogo anim="static" size={24} interactive /></span>
+          <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'new', model: settings.model, effort: settings.effort }) }} in:fade={{ duration: 420, delay: 80 }} out:fly={{ x: -80, y: -22, duration: 320, easing: softDrop }}><ClaudeLogo anim="static" size={24} interactive onpress={toggleTheme} /></span>
           <h1 in:fly={{ y: 22, duration: 480, delay: 130 }} out:fade={{ duration: 150 }}>{greetName}</h1>
         </div>
         {#if !IS_CSNAP}
@@ -1758,6 +1765,8 @@
     {/each}
   </div>
 {/if}
+<!-- 定时任务：侧栏常驻（电脑）时铺在正文区、侧栏照旧可点；手机是下面那份全屏页 -->
+{#if pinned}<RoutinesPage embedded />{/if}
 </div>
 
 {#snippet convRow(s, indent)}
@@ -1950,6 +1959,14 @@
           <button disabled={!!(ms && (ms.thinking || ms.pending))} title={ms && (ms.thinking || ms.pending) ? t('正在工作的会话不能归档') : undefined}
             onclick={() => doArchive(ms)}><span class="ic mi">&#xe008;</span>{t('归档')}</button>
         {/if}
+        {#if !IS_CSNAP && pluginUi.sessionActions.length}
+          <!-- 插件的会话动作（ctx.ui.sessionAction）：交给插件的 handler，带上会话 id 与标题 -->
+          <div class="rowmenu-sep" role="presentation"></div>
+          {#each pluginUi.sessionActions as pa (pa.plugin + '/' + pa.id)}
+            <button title={pa.pluginName} onclick={() => runSessionAction(pa, mq)}><span class="ic plg-ic" aria-hidden="true">{@html uiIcon(pa.icon)}</span><span class="plg-lab">{pa.label}</span></button>
+          {/each}
+          <div class="rowmenu-sep" role="presentation"></div>
+        {/if}
         <button class="danger" onclick={() => (delConfirm ? doDelete(menuFor.id) : (delConfirm = true))}><span class="ic mi">&#xe101;</span>{delConfirm ? tc('claude', '确认删除') : t('删除')}</button>
       {:else if menuFor.kind === 'archived'}
         <button onclick={() => doUnarchive(menuFor.id)}><span class="ic mi">&#xe008;</span>{t('取消归档')}</button>
@@ -2050,7 +2067,7 @@
   <SessionSearch sessions={listed} {projects} full={layout.compact} onOpen={openHit} onClose={() => (searchOpen = false)} />
 {/if}
 
-<RoutinesPage />
+{#if !pinned}<RoutinesPage />{/if}
 </div>
 </div>
 <svelte:window onkeydown={onSearchKey} />
@@ -2341,6 +2358,11 @@
   .rowmenu button:active { background: var(--hover); }
   @media (hover: hover) { .rowmenu button:hover { background: var(--hover); } }
   .rowmenu button.danger { color: var(--crit); }
+  /* 插件的会话动作：图标是插件给的名字（lib/pluginIcons），与字形图标同占 20px 宽 */
+  .rowmenu .plg-ic { width: 20px; height: 18px; flex: none; display: flex; align-items: center; justify-content: center; }
+  .rowmenu .plg-ic :global(svg) { width: 17px; height: 17px; }
+  .rowmenu .plg-lab { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .rowmenu-sep { height: 1px; margin: 4px 6px; background: var(--divider); }
   .rowmenu button:disabled { opacity: .45; pointer-events: none; }
   .mi { width: 20px; text-align: center; font-size: 18px; font-weight: 450; flex: none; }
   /* 会话行不再有图标 → 状态点占「左侧空位」：项目行有 20px 图标、会话行那一列是空的。

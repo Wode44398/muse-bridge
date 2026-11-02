@@ -5,6 +5,7 @@
   import { send, stop, bgHoldNow, steer, queueSend, queuedItems, editLastQueued, prewarmNewChat, chat, requestSync } from '../lib/chat.svelte.js';
   import SlashMenu from './SlashMenu.svelte';
   import { loadCommands, filterCommands } from '../lib/slashCommands.js';
+  import { pluginUi, filterPluginCommands, matchPluginAction, runPluginUi } from '../lib/pluginUi.svelte.js';   // 插件的「/」命令与「＋」菜单项（ctx.ui.*）
   import { api } from '../lib/api.js';
   import ModelPicker from './ModelPicker.svelte';
   import EffortPanel from './EffortPanel.svelte';
@@ -43,11 +44,13 @@
     if (!n || !field) return;
     const txt = untrack(() => draft.text);
     if (!txt) return;
-    untrack(() => { draft.text = ''; });
+    const andSend = untrack(() => draft.send);
+    untrack(() => { draft.text = ''; draft.send = false; });
     field.innerText = txt;
     onInput();   // 「/」菜单状态跟着重算（预填的是 /xxx 也要弹菜单）
     field.focus();
     placeCaretEnd(field);
+    if (andSend) untrack(() => { slashQ = null; submit(); });   // 插件动作回 { insert, send: true }：灌进去顺手发出
   });
   // —— 会话草稿缓存（lib/composerDrafts）：每个会话一份没发出去的文字 + 附件，切走 / 关窗口不丢 ——
   // 本模块写进来的文字不算用户输入（不上报、不触发新会话预热），只重算占位与「/」菜单状态。
@@ -56,6 +59,9 @@
     draftText.nonce;
     if (!field) return;
     const txt = untrack(() => draftText.text);
+    // 两边都空（最常见：切到没草稿的会话）直接收工——读 innerText 要强制整页排版，换会话这一拍新对话刚挂上，
+    // 真机上光这一读就 15ms
+    if (!txt && !field.firstChild) return;
     if ((field.innerText || '').replace(/ /g, ' ') === txt) return;
     if (txt) field.innerText = txt; else field.replaceChildren();
     syncFieldState();
@@ -134,7 +140,8 @@
   // 数据来自 /api/commands（SDK supportedCommands + terminal_slash_commands 段已在数据层藏掉）。
   let slashQ = $state(null);      // null = 关；'' 或查询串 = 开
   let slashIdx = $state(0);
-  const slashItems = $derived(slashQ == null ? [] : filterCommands(status.commands, slashQ));
+  // 插件命令（ctx.ui.command）排前、按插件分组；内置命令跟后（SlashMenu 画组头）
+  const slashItems = $derived(slashQ == null ? [] : [...(IS_CSNAP ? [] : filterPluginCommands(slashQ)), ...filterCommands(status.commands, slashQ)]);
 
   // —— 输入建议（官方 prompt suggestion）：上一轮定局后 CLI 预测的下一句（status.suggestions，总线推来）。
   // 输入框空着时替掉占位文字显示；Tab（手机点「填入」键帽）把它填进输入框，改不改都由人再按发送；
@@ -184,12 +191,26 @@
   }
   function pickSlash(c) {
     if (!c || !field) return;
+    // 插件的模板命令：选中 = 把模板换进输入框（人改完再发）；动作命令同内置——填「/名字 」等人补参数，发送时交给插件（见 submit）
+    if (c.plugin && c.mode === 'template') {
+      field.innerText = String(c.template || '');
+      slashQ = null;
+      onInput();
+      field.focus();
+      placeCaretEnd(field);
+      return;
+    }
     field.textContent = '/' + c.name + ' ';
     empty = false;
     slashQ = null;
     noteComposerText(field.innerText);
     field.focus();
     placeCaretEnd(field);
+  }
+
+  // 「＋」菜单里插件的动作（ctx.ui.composerAction）：把输入框此刻的文字交给插件，回的 insert 换掉输入框内容
+  function runComposerAction(a) {
+    runPluginUi(a, 'composerAction', { sessionId: session.id || null, text: fieldText() });
   }
 
   // —— Add files：选文件 / 粘贴(Ctrl+V) / 拖拽 → /api/upload（base64）→ 暂存附件 ——
@@ -377,6 +398,13 @@
     if (uploading) return;   // 附件还在上传——发送按钮已是禁用态，等传完再发
     const txt = fieldText();
     if (!txt && !compose.attachments.length) return;
+    // 插件的动作命令（/名字 后面的文字）：不发给 Claude，交给插件的 handler；回的 insert / send / toast 由 lib/pluginUi 落地
+    const pa = IS_CSNAP ? null : matchPluginAction(txt);
+    if (pa) {
+      clearField();
+      runPluginUi(pa.cmd, 'command', { args: pa.args, sessionId: session.id || null }).then((r) => { if (!r) refill(txt); });
+      return;
+    }
     if (verifying) { requestSync('send-wait'); return; }   // 文字留在输入框里，确认后再按一次
     if (busyNow) {
       if (!canSteer) return;
@@ -505,7 +533,8 @@
         <button class="tbtn plus" bind:this={plusBtn} aria-label={t('附件与功能')} onclick={toggleMenu}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
-        {#if menuOpen}<AddMenu dir={menuDir} onClose={() => (menuOpen = false)} onPickFiles={pickFiles} onPickPhotos={pickPhotos} onPickFolder={pickFolder} />{/if}
+        {#if menuOpen}<AddMenu dir={menuDir} onClose={() => (menuOpen = false)} onPickFiles={pickFiles} onPickPhotos={pickPhotos} onPickFolder={pickFolder}
+          pluginActions={IS_CSNAP ? [] : pluginUi.composerActions} onPluginAction={runComposerAction} />{/if}
       </div>
       {#if settings.research}
         <button class="chip" aria-label={t('Research 已开启')} onclick={toggleMenu}>

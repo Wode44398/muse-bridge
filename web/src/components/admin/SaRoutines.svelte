@@ -3,6 +3,7 @@
   import { api } from '../../lib/api.js';
   import { sa, fmtAgo } from '../../lib/serverAdmin.svelte.js';
   import { t, tc, locale, isEn } from '../../lib/i18n.js';
+  import { schedText } from '../../lib/routineText.js';
 
   let user = $state('admin');
   let list = $state([]);
@@ -21,20 +22,7 @@
     loading = false;
   }
 
-  const pad = (n) => String(n || 0).padStart(2, '0');
-  // 钟点：中文照旧 HH:mm；英文按 en-US 12 小时制（2:30 PM）
-  const hm = (h, m) => isEn()
-    ? new Date(2000, 0, 1, h || 0, m || 0).toLocaleTimeString(locale(), { hour: 'numeric', minute: '2-digit' })
-    : `${pad(h)}:${pad(m)}`;
-  function schedText(s) {
-    if (!s) return '—';
-    if (s.type === 'hourly') return t('每小时 :{mm}', { mm: pad(s.minute) });
-    const time = hm(s.hour, s.minute);
-    if (s.type === 'daily') return t('每天 {time}', { time });
-    if (s.type === 'weekdays') return t('工作日 {time}', { time });
-    if (s.type === 'weekly') return t('每周 {time}', { time });
-    return `${s.type} ${time}`;
-  }
+  // 频率文案与定时任务页同一份（lib/routineText.js）：手动 / 一次性 / 自定义 cron / 每周多天都认得
   const nextText = (ts) => ts ? new Date(ts).toLocaleString(locale(), isEn()
     ? { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }
     : { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';

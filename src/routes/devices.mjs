@@ -8,6 +8,7 @@
 //
 // 设备只给它的主人用（owner = 身份 key），工具侧的归属检查见 runtime/devices.mjs。
 
+import { emitBridgeEvent } from '../plugins/events.mjs';
 import { readBody } from '../runtime/body.mjs';
 import { requireCtx, contextFor } from '../runtime/identity.mjs';
 import {
@@ -65,6 +66,10 @@ async function jsonBody(req, res, max = 64 * 1024) {
 // 设备状态变化推给主人的所有在线页面（设备芯片、设置页、控制台）。
 deviceEvents.on('online', (id) => { const d = deviceById(id); if (d) busPublish(d.owner, { type: 'devices', id, online: true }); });
 deviceEvents.on('offline', (id) => { const d = deviceById(id); if (d) busPublish(d.owner, { type: 'devices', id, online: false }); });
+// 插件订阅的 device.online / device.offline（plugins/events.mjs）
+const devEvent = (id, on) => { const d = deviceById(id); if (d) emitBridgeEvent(on ? 'device.online' : 'device.offline', { id, name: d.name || '', owner: String(d.owner || ''), kind: d.kind || '' }); };
+deviceEvents.on('online', (id) => devEvent(id, true));
+deviceEvents.on('offline', (id) => devEvent(id, false));
 
 // adminCredential / adminGen（可选，server.mjs 传）：管理员登记的设备绑到那张管理员会话 / 那把主令牌上（S2-4）。
 export function registerDeviceRoutes(router, { identify, adminCredential = null, adminGen = '' }) {

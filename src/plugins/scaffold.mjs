@@ -16,6 +16,7 @@ export const EXAMPLES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url
 export const EXAMPLES = Object.freeze({
   'hello-world': '最小完整示例：一个接口、一个给 Claude 的工具、一个 agent 操作、自动生成的设置表单、一个插件页面',
   'qq-onebot': 'QQ 机器人（OneBot 11）：以授权账号跑 Claude（ctx.chat）、收外部推送（ctx.webhook）、托管外部程序（ctx.process）、分组表单 / 按群设置、状态块与动作按钮、控制面板',
+  'power-tools': '改到核心（四期）：订阅事件、钩子拦命令、审批策略、消息改写、每轮参数、两个 agent 都能用的卡片工具、主页卡片、「/」命令、消息菜单、通知渠道',
 });
 
 const ID_RE = /^[a-z][a-z0-9-]{0,47}$/;

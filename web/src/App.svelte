@@ -55,6 +55,7 @@
   import LoginDialog from './components/LoginDialog.svelte';
   import Toast from './components/Toast.svelte';
   import { t } from './lib/i18n.js';
+  import { syncPluginUi } from './lib/pluginUi.svelte.js';   // 插件界面扩展（主页卡片、工作台标签、各处菜单、主题变量）
 
   // —— 单 agent 模式 ——
   const root = $derived(rootScreen());
@@ -110,6 +111,8 @@
   $effect(() => { if (me.kind !== 'none') reportUi({ page: ui.screen }); });
   // 地址自愈（S1-1）：登录后学这台服务器的身份 / 公网地址 / 候选地址，地址变了自动跟（见 lib/serverAddress.js）
   $effect(() => { if (me.kind && me.kind !== 'none') untrack(() => startAddressHeal()); });
+  // 插件界面扩展：登录 / 换人就重拉 /api/plugins/ui，退出登录清空（连同插件设的主题变量）
+  $effect(() => { const k = me.kind && me.kind !== 'none' ? me.kind + ':' + (me.user || '') : ''; untrack(() => syncPluginUi(k)); });
   $effect(() => {
     if (!ui.booted || needConfig) return;
     // 预挂载只挂这个身份开着的分页（没开的 agent 连挂载成本都不付）。
@@ -292,7 +295,7 @@
         backdrop 合成 → 折射断层撕裂且不自愈（claude/vertex 走 display 切换路径就没事）。
      侧滑返回（claudeSliding/vertexSliding）时提前唤醒，露出底层主页。 -->
 {#if !single}
-  <div style:display={ui.screen !== 'home' && !ui.claudeSliding && !ui.vertexSliding ? 'none' : 'contents'}>
+  <div style:display={ui.screen !== 'home' && !ui.claudeSliding && !ui.vertexSliding && !ui.homeWarm ? 'none' : 'contents'}>
     <!-- 桌面壳走沉浸启动器（批4：Dock + Ctrl+K），手机/网页仍是四宫格 Home -->
     {#if isNativeDesktop()}<DesktopHome />{:else}<Home />{/if}
   </div>

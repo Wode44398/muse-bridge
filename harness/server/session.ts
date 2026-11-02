@@ -1,3 +1,4 @@
+import { notifyBridge, lastAnswer, clipMessage } from "./bridge-events.ts";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import path from "node:path";
@@ -2431,6 +2432,11 @@ export function startRun(
   session.running = true;
   touchSession(session);
   noteSessionStatus(session); // P8：全局通道——开跑
+  // bridge 插件订阅的 turn.start（bridge-events.ts）：续跑 / 目标续轮也发，kind 标出来
+  notifyBridge("turn.start", {
+    sessionId: session.id, model: session.cfg?.model ?? "", provider: session.cfg?.provider ?? "",
+    kind: opts.resume ? "resume" : opts.goal ? "goal" : "chat", isNew: !(session.state?.messages.length), message: clipMessage(message),
+  });
   // Pre-existing gap fixed: without this, tools never saw the abort signal —
   // stopping a session left running Bash children / fetches / walks alive.
   session.state.ctx.signal = abort.signal;
@@ -2485,6 +2491,7 @@ async function executeRun(
   ownUserMsg: Msg | null = null,
 ): Promise<void> {
   const state = session.state!;
+  const runMsgStart = state.messages.length; // bridge 插件的 turn.end 只取这一轮里的回答
   // P9（K22）：这一轮开跑时的检查点——收尾时给它补结束快照（回滚前据此分出外部改动）
   let runCheckpoint: { n: number; ws: string } | null = null;
   // O7：这一轮怎么结束的、动没动过工具（目标续跑据此决定续不续）
@@ -2687,6 +2694,14 @@ async function executeRun(
     // the turn, so they are left alone here (stopSession/DELETE reap them).
     disposeOwner(session.id, "run-end", ["browser"]); // M5：轮结束只放浏览器占用（后台 job、dev server 本来就活过这一轮）
     // Q12：收尾一行（整轮耗时、是不是被停的），然后把这一轮排着的行写下去
+    // bridge 插件订阅的 turn.end（bridge-events.ts）
+    notifyBridge("turn.end", {
+      sessionId: session.id, model: session.cfg?.model ?? "", provider: session.cfg?.provider ?? "",
+      ok: outcome.kind === "done" && !abort.signal.aborted, stopped: abort.signal.aborted,
+      ...(outcome.kind === "error" ? { error: String((outcome as { summary?: string }).summary ?? "") } : {}),
+      durationMs: session.runClock ? Date.now() - session.runClock.startedAt : 0,
+      result: lastAnswer(state.messages, runMsgStart), usedTools,
+    });
     traceEvent(session.id, {
       e: "run_end",
       durationMs: session.runClock ? Date.now() - session.runClock.startedAt : undefined,

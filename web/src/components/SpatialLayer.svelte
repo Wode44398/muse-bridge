@@ -19,7 +19,7 @@
   let { imgUrl, depthUrl, amp = 0.55, ondraw = null, onlost = null } = $props();
   // 外部要一帧新画面（如玻璃刚就绪、Dock 挪了位）：标脏，下一帧照常画并触发 ondraw
   // now=true 当场画（桌面 Dock 跟窗口尺寸挪位时用，晚一帧玻璃会落后 Dock 本体一抖一抖）
-  export function redraw(now = false) { dirty = true; if (now && ready && gl) draw(); }
+  export function redraw(now = false) { dirty = true; if (now && ready && gl) draw(); kick(); }
 
   const MAXAMP = SPATIAL_MAXAMP, FOCUS = 0.5, DAMP = 0.15;   // DAMP=追赶目标速度(越大越跟手、阻尼感越轻)；迭代次数在着色器里硬编码为 8（WebGL1 循环上界须字面量）
 
@@ -120,7 +120,7 @@
     let sx = 1, sy = 1;
     if (ca > ia) sy = ia / ca; else sx = ca / ia;
     const os = overscanFor(curAmp);
-    cover = [sx / os, sy / os]; dirty = true;
+    cover = [sx / os, sy / os]; dirty = true; kick();
   }
   function resize(){
     if (!gl) return;
@@ -147,8 +147,9 @@
     if (usingGyro || e.pointerType === 'touch') return;   // 触摸设备只用陀螺仪，指针仅电脑鼠标
     target.x = (e.clientX / window.innerWidth  - 0.5) * 2;
     target.y = (e.clientY / window.innerHeight - 0.5) * 2;
+    kick();
   }
-  function onLeave(){ if (!usingGyro){ target.x = 0; target.y = 0; } }
+  function onLeave(){ if (!usingGyro){ target.x = 0; target.y = 0; kick(); } }
   const GYRO_RANGE = 13;   // 满偏移所需倾角(度)：越小越灵敏、小幅倾斜就有明显视差（手机端幅度增强，且避开满偏极限撕裂）
   function onOrient(e){
     if (e.beta == null || e.gamma == null) return;
@@ -162,6 +163,7 @@
     } else { dx = e.gamma - neutral.gamma; dy = e.beta - neutral.beta; }
     target.x = Math.max(-1, Math.min(1, dx / GYRO_RANGE));
     target.y = Math.max(-1, Math.min(1, dy / GYRO_RANGE));
+    kick();
   }
   function initOrientation(){
     const DOE = window.DeviceOrientationEvent;
@@ -184,19 +186,27 @@
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     if (ondraw) { try { ondraw(canvas); } catch {} }
   }
-  // 循环（按需重绘：静止时零 GPU）
-  function frame(now){
+  // 循环（按需：静止 / 看不见时连 RAF 都不挂）。旧版每帧都挂 RAF、进来再判断要不要画——主页被盖住时也照挂，
+  // 等于整个 app 每帧都被叫醒跑一次主线程（真机：停在 Claude 页时每秒 120 次空转）。现在只在追赶目标、或标脏时跑，
+  // 追上了就停；陀螺仪 / 指针 / 标脏 / 露面时 kick() 重新挂上。
+  function kick(){
+    if (raf || !pageVisible || !visible) return;
+    last = performance.now();
     raf = requestAnimationFrame(frame);
-    if (!pageVisible || !visible) return;   // 页面后台 / Home 被 display:none（切到其它页）时停摆，省电
+  }
+  function frame(now){
+    raf = 0;
+    if (!pageVisible || !visible) return;   // 页面后台 / Home 被 display:none（切到其它页）时停摆，露面时 kick 续上
     const dt = Math.min(0.05, (now - last) / 1000); last = now;
     const k = 1 - Math.pow(1 - DAMP, dt * 60);
     cur.x += (target.x - cur.x) * k;
     cur.y += (target.y - cur.y) * k;
-    if (!ready) return;
-    const sig = cur.x.toFixed(4) + ',' + cur.y.toFixed(4) + ',' + curAmp.toFixed(5) + ',' + cover[0].toFixed(4) + ',' + canvas.width;
-    if (!dirty && sig === lastSig) return;   // 无变化不画
-    lastSig = sig; dirty = false;
-    draw();
+    const moving = Math.abs(target.x - cur.x) > 1e-4 || Math.abs(target.y - cur.y) > 1e-4;
+    if (ready) {
+      const sig = cur.x.toFixed(4) + ',' + cur.y.toFixed(4) + ',' + curAmp.toFixed(5) + ',' + cover[0].toFixed(4) + ',' + canvas.width;
+      if (dirty || sig !== lastSig) { lastSig = sig; dirty = false; draw(); }
+    }
+    if (moving) { raf = requestAnimationFrame(frame); }
   }
 
   onMount(() => {
@@ -206,7 +216,7 @@
     resize();
     loadScene();
     const onR = () => resize();
-    const onVis = () => { pageVisible = !document.hidden; };
+    const onVis = () => { pageVisible = !document.hidden; kick(); };
     window.addEventListener('resize', onR);
     window.addEventListener('pointermove', onPointer);
     document.addEventListener('mouseleave', onLeave);
@@ -216,11 +226,11 @@
     const io = new IntersectionObserver((es) => {
       visible = es.length ? es[es.length - 1].isIntersecting : true;
       if (visible && resizePending) resize();
+      kick();
     });
     io.observe(canvas);
     initOrientation();
-    last = performance.now();
-    raf = requestAnimationFrame(frame);
+    kick();
     return () => {
       canvas.removeEventListener('webglcontextlost', onLost);
       cancelAnimationFrame(raf);

@@ -4,6 +4,8 @@
 
 import { pluginsOff, pluginOn, pluginUpdates } from '../plugins/state.mjs';
 import { can } from '../runtime/principal.mjs';
+import { emitBridgeEvent } from '../plugins/events.mjs';
+import { registerAuthProviderRoutes } from '../plugins/auth-providers.mjs';
 import { readBody } from '../runtime/body.mjs';
 import * as users from '../users.mjs';
 import { contextFor, ownerKey } from '../runtime/identity.mjs';
@@ -38,6 +40,8 @@ function clientIp(req) {
 }
 
 export function registerAuthRoutes(router, { adminCredential, adminGen, identify, getCookie, bearerToken, authCookie, clearAuthCookie, userCookie, clearUserCookie }) {
+  // 插件提供的外部登录（plugins/auth-providers.mjs，四期）：/api/auth/providers、/api/auth/ext/{start,callback}
+  registerAuthProviderRoutes(router, { userCookie });
   // "Who am I?" — the page polls this on load to decide login vs app.
   // 客户端不分版本，全靠这里告诉它：这个身份能用哪些 agent（agents，统一 id，已与全局开关与按人授权
   // 取过交集）、服务器开了哪些功能（features）、管理员令牌是不是只存了哈希（tokenHashed）。没登录也回 features，
@@ -85,6 +89,7 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
       const tok = adm.via === 'session' ? adm.token
         : users.createAdminSession({ gen: adminGen, label: describeClient(req.headers['user-agent']), ip: clientIp(req) });
       res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': authCookie(req, tok) });
+      emitBridgeEvent('user.login', { kind: 'admin', login: 'host', via: 'token', ip: clientIp(req) });
       res.end(JSON.stringify({ ok: true, kind: 'admin', token: tok }));
       return;
     }
@@ -111,6 +116,7 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
     const tok = users.createSession(r.id || r.name);
     // token 一并回前端：在线壳靠 Set-Cookie，离线 apk 跨源不带 cookie → 存 localStorage 当 Bearer。
     res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': userCookie(req, tok) });
+    emitBridgeEvent('user.login', { kind: 'user', login: r.name, id: String(r.id || ''), via: 'password', ip: clientIp(req) });
     res.end(JSON.stringify({ ok: true, kind: 'user', user: r.name, token: tok }));
   });
 
@@ -143,6 +149,7 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
     clearFail(ipKey);
     const tok = users.createSession(c.id || c.name);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': userCookie(req, tok) });
+    emitBridgeEvent('user.login', { kind: 'user', login: c.name, id: String(c.id || ''), via: 'register', ip: clientIp(req) });
     res.end(JSON.stringify({ ok: true, kind: 'user', user: c.name, token: tok }));
   });
 

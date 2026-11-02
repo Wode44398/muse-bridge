@@ -12,7 +12,9 @@
   import { t, tc } from '../lib/i18n.js';
   import { cs } from '../lib/claudeSettings.svelte.js';
   import { ostyle, outputStyleLabel, outputStyleDesc, outputStyleOptions, currentOutputStyle, loadSessionOutputStyle, setSessionOutputStyle } from '../lib/outputStyle.svelte.js';
-  let { onClose, onPickFiles, onPickPhotos, onPickFolder, dir = 'up' } = $props();
+  import { uiIcon } from '../lib/pluginUi.svelte.js';
+  // pluginActions：插件登记的「＋」菜单项（ctx.ui.composerAction，lib/pluginUi）；按下交给 onPluginAction（Composer 带上输入框文字去调插件）
+  let { onClose, onPickFiles, onPickPhotos, onPickFolder, dir = 'up', pluginActions = [], onPluginAction = null } = $props();
 
   let view = $state('main'); // 'main' | 'style' | 'edit' | 'ostyle'
 
@@ -120,6 +122,15 @@
         <span class="am-name">{t('输出风格')}</span><span class="am-right">{oStyleName} ›</span>
       </button>
     {/if}
+    {#if pluginActions.length && onPluginAction}
+      <div class="am-div"></div>
+      {#each pluginActions as a (a.plugin + '/' + a.id)}
+        <button class="am-row" title={a.pluginName} onclick={() => { close(); onPluginAction(a); }}>
+          <span class="am-ic am-plg" aria-hidden="true">{@html uiIcon(a.icon)}</span>
+          <span class="am-name">{a.label}</span><span class="am-right am-from">{a.pluginName}</span>
+        </button>
+      {/each}
+    {/if}
   {:else if view === 'ostyle'}
     <button class="am-back" onclick={() => (view = 'main')}>{t('‹ 返回')}</button>
     <p class="am-note">{t('只改这个会话，下一条消息起生效')}</p>
@@ -199,6 +210,10 @@
   .am-ic { width: 20px; height: 20px; color: var(--serif); flex: none; }
   .am-name { font-size: 15px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .am-right { margin-left: auto; font-size: 13px; color: var(--muted); }
+  /* 插件项：图标是插件给的名字（lib/pluginIcons），右侧小字标出自哪个插件 */
+  .am-plg { display: flex; }
+  .am-plg :global(svg) { width: 100%; height: 100%; }
+  .am-from { flex: none; max-width: 40%; padding-left: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
   /* claude 页配色铁律：除星芒图标外全部黑白灰——勾选/按钮不用 coral（审美统一）。 */
   .am-check { margin-left: auto; color: var(--text); font-size: 15px; padding-right: 10px; }
   .am-div { height: 1px; background: var(--divider); margin: 5px 8px; }

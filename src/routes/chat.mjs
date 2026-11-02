@@ -326,7 +326,9 @@ export function registerChatRoutes(router, { authOk, identify }) {
       if (base && !base.quick) {
         try {
           // 分支前缀与起点跟设置走（Git 与拉取请求：branchPrefix / worktreeBaseRef）
-          const wt = await createSessionWorktree(ctx.claudeProjects, base, { prefix: claudeSetting(ctx, 'branchPrefix'), baseRef: claudeSetting(ctx, 'worktreeBaseRef') });
+          // worktreeFrom = 指定从哪个分支切（定时任务的「分支」设置）；没给就按设置的起点
+          const from = typeof parsed.worktreeFrom === 'string' ? parsed.worktreeFrom.trim().slice(0, 200) : '';
+          const wt = await createSessionWorktree(ctx.claudeProjects, base, { prefix: claudeSetting(ctx, 'branchPrefix'), baseRef: claudeSetting(ctx, 'worktreeBaseRef'), ...(from ? { startPoint: from } : {}) });
           claudeProject = { ...base, path: claudeProjects.authorizeProjectPath(ctx, wt.cwd), worktree: { name: wt.name, branch: wt.branch, root: wt.root } };
         } catch (e) {
           res.writeHead(e?.status || 400, { 'Content-Type': 'application/json' });

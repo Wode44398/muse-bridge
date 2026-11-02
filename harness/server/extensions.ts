@@ -51,12 +51,39 @@ export interface ManagedConnector {
   url?: string;
   envKeys: string[];
   headerKeys: string[];
+  inlineHeaders?: Record<string, string>; // 不走加密存储、直接带上的请求头（bridge 插件连接器的实例凭据）
+}
+
+// bridge 插件给 dimensio 的工具（bridge 插件接口四期，src/plugins/agent-mcp.mjs）：被 bridge 拉起时带 BRIDGE_PLUGIN_API /
+// BRIDGE_PLUGIN_SECRET（管理员实例 = 主机密钥，成员实例 = 按人令牌），这里当成一个常驻的 http 连接器，和扩展中心的连接器走同一套
+// MCP 客户端（会话基线、只读免审批、墓碑……）。独立跑的 dimensio 没有这两个变量，就没有它。
+export const BRIDGE_PLUGINS_CONNECTOR_ID = "bridge-plugins";
+function bridgePluginsConnector(): ManagedConnector | null {
+  const api = String(process.env.BRIDGE_PLUGIN_API ?? "").trim().replace(/\/+$/, "");
+  const secret = String(process.env.BRIDGE_PLUGIN_SECRET ?? "").trim();
+  if (!/^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(api) || secret.length < 16) return null;
+  return {
+    id: BRIDGE_PLUGINS_CONNECTOR_ID,
+    key: "bridge_plugins",
+    name: "bridge 插件",
+    description: "bridge 里装的插件提供的工具",
+    transport: "http",
+    url: api + "/agent/mcp/plugins",
+    envKeys: [],
+    headerKeys: [],
+    inlineHeaders: { Authorization: `Bearer ${secret}` },
+  };
 }
 
 const slugKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
 
 // enabled 且勾给 dimensio 的连接器（现读；形状不对的跳过并在日志里说一声）
 export function managedConnectors(): ManagedConnector[] {
+  const own = bridgePluginsConnector();
+  return own ? [...registryConnectors(), own] : registryConnectors();
+}
+
+function registryConnectors(): ManagedConnector[] {
   const file = registryFile();
   if (!file) return [];
   const raw = readRegistry(file);

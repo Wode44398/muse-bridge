@@ -7,13 +7,14 @@
   //   blocked 光芒收短、隔几秒轻抖一下（等你操作）  enter / exit 长出 / 收起    tickle 点一下扭一扭
   //   static 静止
   // 系统「减少动态效果」时一律静止。颜色跟 color（缺省陶土色），尺寸 = size，放在 box 见方的框里居中。
-  let { mode = 'static', size = 20, box = size, color = 'var(--coral, #d97757)', paused = false, interactive = false, label = 'Claude' } = $props();
+  let { mode = 'static', size = 20, box = size, color = 'var(--coral, #d97757)', paused = false, interactive = false, label = 'Claude', onpress = null } = $props();
 
   const RAYS = Array.from({ length: 12 }, (_, i) => ({ a: i * 30, long: i % 2 === 0 }));
   let tickling = $state(false);
   const shown = $derived(tickling ? 'tickle' : mode);
 
   function tickle() {
+    onpress?.();
     if (!interactive || tickling || (mode !== 'static' && mode !== 'enter')) return;
     tickling = true;
     setTimeout(() => { tickling = false; }, 620);

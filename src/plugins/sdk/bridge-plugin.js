@@ -9,6 +9,8 @@
 //   bridge.toast('已保存'); await bridge.confirm({ title: '清空？', danger: true });
 //   const src = await bridge.blobUrl('image?id=1');  // 要登录才拿得到的图片 → blob: 地址
 //   bridge.openExternal(url); bridge.back();
+//   const c = bridge.context();                    // Claude 工作台标签里：{ sessionId, cwd, agent }（别处全是 null / 'claude'）
+//   bridge.on('context', (c) => …);               // 用户切了会话 / 工作目录
 //
 // 插件自己的设置与动作（只有服务器主机能用；不用插件写接口）：
 //   const { schema, config } = await bridge.config.get();
@@ -33,6 +35,13 @@ const listeners = new Map();   // 事件名 → Set<fn>
 const pending = new Map();     // 请求号 → { resolve, reject }
 let seq = 0;
 let info = null;
+// 当前上下文（工作台标签用）：嵌入时宿主随 init 给、切会话再推 context；独立打开（手机 App）从地址的 # 读
+const readCtx = (c) => ({
+  sessionId: c && typeof c.sessionId === 'string' && c.sessionId ? c.sessionId : null,
+  cwd: c && typeof c.cwd === 'string' && c.cwd ? c.cwd : null,
+  agent: c && c.agent === 'dimensio' ? 'dimensio' : 'claude',
+});
+let ctx = readCtx({ sessionId: hash.get('sid'), cwd: hash.get('cwd'), agent: hash.get('agent') });
 let readyResolve;
 const readyP = new Promise((r) => { readyResolve = r; });
 
@@ -68,6 +77,7 @@ if (embedded) {
     if (!m || m.bp !== 1) return;
     if (m.type === 'init') {
       info = { pluginId, theme: m.theme, lang: m.lang, platform: m.platform, user: m.user, mode: m.mode || 'embed' };
+      if (m.context) ctx = readCtx(m.context);
       applyTheme(m.theme, m.vars);
       document.documentElement.dataset.mode = info.mode;
       readyResolve(info);
@@ -75,6 +85,9 @@ if (embedded) {
       if (info) info.theme = m.theme;
       applyTheme(m.theme, m.vars);
       emit('_theme', m.theme);
+    } else if (m.type === 'context') {
+      ctx = readCtx(m.context);
+      emit('context', { ...ctx });
     } else if (m.type === 'event') {
       emit(m.event, m.payload);
     } else if (m.type === 'reply' && pending.has(m.id)) {
@@ -399,6 +412,7 @@ export const bridge = {
   form,
   get embedded() { return embedded; },
   pluginId,
+  context: () => ({ ...ctx }),
   ready: () => readyP,
   fetch: bfetch,
   json: bjson,
@@ -406,7 +420,7 @@ export const bridge = {
     const k = String(event);
     if (!listeners.has(k)) listeners.set(k, new Set());
     listeners.get(k).add(fn);
-    openStream();
+    if (k !== 'context' && k !== '_theme') openStream();   // 这两种是宿主给的，不用开事件流
     return () => listeners.get(k)?.delete(fn);
   },
   onTheme(fn) { return bridge.on('_theme', fn); },

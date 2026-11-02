@@ -45,6 +45,15 @@ import { notePush } from '../runtime/push-notices.mjs';
 import { randomUUID } from 'node:crypto';
 import { setInternalRouter } from '../agent-api/internal.mjs';
 import { startMarketWatcher, setUpdatesPublisher } from './market.mjs';
+import { provideModelService, addModelMiddleware, MODEL_AGENTS } from '../runtime/model-services.mjs';
+import { checkTool, checkHook, checkWho } from './claude-tools.mjs';
+import { subscribe, EVENT_NAMES, emitBridgeEvent } from './events.mjs';
+import { makeNet } from './net.mjs';
+import { makeOAuth } from './oauth.mjs';
+import { registerAgentMcpRoute } from './agent-mcp.mjs';
+import { addChannel } from './channels.mjs';
+import { addAuthProvider } from './auth-providers.mjs';
+import { makeUi, watchUi } from './ui.mjs';
 
 export { kernel };
 export const PLUGIN_DATA_ROOT = path.join(DATA_ROOT, 'plugin-data');
@@ -133,16 +142,66 @@ function installMixins() {
   kernel.mixin('api', () => PLUGIN_API_VERSION);
   kernel.mixin('has', () => (name) => PLUGIN_FEATURES.includes(String(name)));
 
+  // 工具 / 提示的 agents：缺省只给 Claude（老写法不变）；ctx.tools.add 缺省两个都给。dimensio 经 /agent/mcp/plugins 拿到（plugins/agent-mcp.mjs）
+  const agentsOf = (v, dflt) => {
+    if (v == null) return dflt;
+    const list = Array.isArray(v) ? v : [v];
+    const bad = list.filter((a) => !MODEL_AGENTS.includes(a));
+    if (bad.length) throw new Error(`agents 里的「${bad.join('、')}」不认识（可用：${MODEL_AGENTS.join(' / ')}）`);
+    return list;
+  };
+  const addTool = (ctx, spec, dflt) => {
+    checkTool(spec);
+    checkWho(spec.who);
+    return ctx.contribute(CLAUDE_SLOT, { kind: 'tool', spec: { ...spec, agents: agentsOf(spec.agents, dflt) }, order: spec.order ?? 0 });
+  };
   kernel.mixin('claude', (ctx) => ({
-    // 给 Claude 加一个工具。spec：{ name, description, params, handler(args, turn), access?, who?, when?(turn) }
+    // 给 Claude 加一个工具。spec：{ name, description, params, handler(args, turn), access?, who?, when?(turn), agents?, render? }
     //   params 写法同 agent 接口操作：{ 参数名: { type, required?, desc?, enum?, min?, max?, default? } }
     //   access 'read'（只读：免审批）| 'write'（缺省：按会话的权限模式审批）| 'danger'
-    //   who    'host'（缺省：只给服务器主机本人的会话）| 'members'（成员的会话也给）
-    tool: (spec) => ctx.contribute(CLAUDE_SLOT, { kind: 'tool', spec, order: spec.order ?? 0 }),
-    // 加一段系统提示（字符串或 (turn) => 字符串；返回空串就不加）
-    prompt: (text, opts = {}) => ctx.contribute(CLAUDE_SLOT, { kind: 'prompt', text, who: opts.who || 'host', order: opts.order ?? 0 }),
+    //   who    'host'（缺省：只给服务器主机本人的会话）| 'members'（成员的会话也给）| 'all'（再加插件沙箱）
+    //   agents ['claude']（缺省）| ['claude', 'dimensio']（dimensio 也给）
+    tool: (spec) => addTool(ctx, spec, ['claude']),
+    // 加一段系统提示（字符串或 (turn) => 字符串；返回空串就不加）。opts.agents 同上（dimensio 那边是插件工具服务的说明）
+    prompt: (text, opts = {}) => { checkWho(opts.who); return ctx.contribute(CLAUDE_SLOT, { kind: 'prompt', text, who: opts.who || 'host', agents: agentsOf(opts.agents, ['claude']), order: opts.order ?? 0 }); },
     // 挂一个现成的 MCP server（stdio / http / SDK 实例都行）：make(turn) 返回 server 配置，返回 null 本轮不挂
     mcp: (name, make, opts = {}) => ctx.contribute(CLAUDE_SLOT, { kind: 'mcp', name, make, who: opts.who || 'host', order: opts.order ?? 0 }),
+    // ── 四期：改到 Claude 的主链路（plugins/claude-tools.mjs）──
+    // 钩子：event = PreToolUse / PostToolUse / UserPromptSubmit / Stop / SubagentStart …；fn(input, turn) 回 { decision, reason, input, context, block }
+    hook: (event, fn, opts = {}) => { checkHook(event, fn, opts); return ctx.contribute(CLAUDE_SLOT, { kind: 'hook', event, fn, matcher: opts.matcher || '', who: opts.who || 'host', timeout: opts.timeout }); },
+    // 审批策略：fn({ tool, input, mode, agentID, sessionId }, turn) 回 'allow' / 'deny' / { allow, input } / { deny, message } / 不表态
+    permission: (fn, opts = {}) => { if (typeof fn !== 'function') throw new Error('ctx.claude.permission 要一个函数'); checkWho(opts.who); return ctx.contribute(CLAUDE_SLOT, { kind: 'permission', fn, who: opts.who || 'host', timeout: opts.timeout }); },
+    // 消息改写：fn({ message, attachments }, turn) 回 { message?, prepend?, append?, attachments? }
+    input: (fn, opts = {}) => { if (typeof fn !== 'function') throw new Error('ctx.claude.input 要一个函数'); checkWho(opts.who); return ctx.contribute(CLAUDE_SLOT, { kind: 'input', fn, who: opts.who || 'host', timeout: opts.timeout }); },
+    // 每轮参数：fn(turn) 回 { model?, effort?, env?, settings?, agents?, additionalDirectories?, append? }
+    options: (fn, opts = {}) => { if (typeof fn !== 'function') throw new Error('ctx.claude.options 要一个函数'); checkWho(opts.who); return ctx.contribute(CLAUDE_SLOT, { kind: 'options', fn, who: opts.who || 'host', timeout: opts.timeout }); },
+  }));
+  // 两个 agent 都给的工具（写法同 ctx.claude.tool，agents 缺省 ['claude', 'dimensio']）
+  kernel.mixin('tools', (ctx) => ({ add: (spec) => addTool(ctx, spec, [...MODEL_AGENTS]) }));
+
+  // 订阅 bridge 事件（plugins/events.mjs）
+  kernel.mixin('events', (ctx) => ({ on: (name, fn) => subscribe(ctx, name, fn), names: () => [...EVENT_NAMES] }));
+  // 网络：当前出站代理、代理变化、带时限的 fetch（plugins/net.mjs）；OAuth 授权助手（plugins/oauth.mjs）
+  kernel.mixin('net', (ctx) => makeNet(ctx));
+  kernel.mixin('oauth', (ctx) => makeOAuth(ctx));
+
+  // 给 agent 提供模型服务（runtime/model-services.mjs）：provide(spec) 按 spec.agents 注进 Claude / dimensio 的模型列表，停用时撤掉；
+  // agents() 列出这台 bridge 上能接的 agent（dimensio 扩展关着时 available=false），插件拿它做「哪些 agent 能用」的勾选项
+  kernel.mixin('models', (ctx) => ({
+    provide: (spec) => {
+      const h = provideModelService(ctx.id, ctx.meta.name || ctx.id, spec);
+      ctx.onDispose(() => h.dispose());
+      return h;
+    },
+    agents: () => MODEL_AGENTS.map((id) => ({
+      id, label: id === 'claude' ? 'Claude' : 'dimensio',
+      available: id === 'claude' || kernel.isActive(id),
+    })),
+    // 模型请求中间件：fn({ provider, model, owner, body }) 回新的请求体（或不回 = 不改）。only: 'own'（只管自己提供的服务）| 'all'（缺省）
+    middleware: (fn, opts = {}) => {
+      if (typeof fn !== 'function') throw new Error('ctx.models.middleware 要一个函数');
+      return ctx.onDispose(addModelMiddleware(ctx.id, fn, { only: opts.only === 'own' ? 'own' : 'all', timeout: opts.timeout, warn: (m) => ctx.warn(m) }));
+    },
   }));
 
   kernel.mixin('agentGroup', (ctx) => (id, title, desc = '') => {
@@ -179,7 +238,12 @@ function installMixins() {
   kernel.mixin('webhook', (ctx) => makeWebhookService(ctx, sendJson));
   kernel.mixin('_schedule', (ctx) => makeScheduleService(ctx));
   kernel.mixin('schedule', (ctx) => ctx._schedule.schedule);
-  kernel.mixin('notify', (ctx) => makeNotify(ctx));
+  // ctx.notify(...) 发提醒；ctx.notify.channel({ id, label, send }) 登记通知渠道（plugins/channels.mjs，四期）
+  kernel.mixin('notify', (ctx) => Object.assign(makeNotify(ctx), { channel: (spec) => addChannel(ctx, spec) }));
+  // 外部登录（plugins/auth-providers.mjs，四期）
+  kernel.mixin('auth', (ctx) => ({ provider: (spec) => addAuthProvider(ctx, spec) }));
+  // 界面扩展（plugins/ui.mjs，四期）：主页卡片、工作台标签、「/」命令、＋菜单、消息 / 会话菜单、主题变量
+  kernel.mixin('ui', (ctx) => makeUi(ctx));
 
   // ── 显示位 ──（状态块里要并进子进程、回调与定时任务，所以排在它们后面）
   kernel.mixin('_panel', (ctx) => makePanelMixins(ctx, { processes: () => ctx.process.list(), hooks: () => ctx.webhook.list(), schedules: () => ctx._schedule.list() }));
@@ -205,7 +269,7 @@ function makeNotify(ctx) {
     if (recent.size > 200) recent.delete(recent.keys().next().value);
     const text = `${ctx.meta.name || ctx.id}：${t}${b ? ' — ' + b : ''}`;
     (level === 'error' ? ctx.error : level === 'warn' ? ctx.warn : ctx.log)('通知：' + t + (b ? ' — ' + b : ''));
-    try { notePush(HOST_OWNER, { sessionId: null, message: text }); } catch {}
+    try { notePush(HOST_OWNER, { sessionId: null, message: text, title: `${ctx.meta.name || ctx.id}：${t}`, level }); } catch {}
     try { busPublish(HOST_OWNER, { type: 'ui.cmd', id: randomUUID(), at: now, op: 'toast', text }); } catch {}
     return { sent: true };
   };
@@ -221,8 +285,20 @@ export async function bootPlugins({ register }) {
   installMixins();
   // ctx.share 等经进程内请求调现有路由；agent 接口插件关着时也得有路由器可用
   if (kernel.hasService('router')) setInternalRouter(kernel.service('router'));
+  // 插件工具给 dimensio 的 MCP 端点（plugins/agent-mcp.mjs）：核心路由，插件开关不影响它在不在
+  if (kernel.hasService('router')) registerAgentMcpRoute(kernel.service('router'));
   await register(kernel);
   const list = await kernel.start();
+  // 插件订阅的 plugin.state（plugins/events.mjs）：每次对账后比一遍谁开了谁关了
+  watchUi();   // 界面扩展的登记变了就推 plugins.ui 给在线页面
+  const lastActive = new Map(list.map((p) => [p.id, !!p.active]));
+  kernel.on('change', () => {
+    for (const p of kernel.list()) {
+      const was = lastActive.get(p.id) || false;
+      if (was !== !!p.active) emitBridgeEvent('plugin.state', { id: p.id, name: p.name || p.id, active: !!p.active, status: p.status, error: p.error || '' });
+      lastActive.set(p.id, !!p.active);
+    }
+  });
   const on = list.filter((p) => p.active).map((p) => p.id);
   const bad = list.filter((p) => p.status === 'error');
   console.log('[plugins] 已启用 ' + on.length + ' 个：' + on.join(', '));

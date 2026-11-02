@@ -17,6 +17,8 @@
   import { homeGlass } from '../lib/figmaHomeGlass.svelte.js';
   import { t } from '../lib/i18n.js';
   import { ovUrl } from '../lib/overlay.svelte.js';   // 入口图标：私有 overlay 有同名原版（如小人）就换成它
+  import PluginHomeCards from './PluginHomeCards.svelte';   // 插件的主页卡片（ctx.ui.homeCard）：贴在底部的一排玻璃卡
+  import { pluginUi } from '../lib/pluginUi.svelte.js';
 
   const BASE = import.meta.env.BASE_URL;
 
@@ -50,6 +52,9 @@
   const frostHigh = { blur: 9, saturate: 1.25, tint: 0.05 };    // 退路：极高透光毛玻璃
   let glassRects = $state([]);
   let gridEl = $state();
+  // 底部有插件卡片时入口整体上移一截，别和卡片叠在一起（矮屏照样放得下）；挪完重新量玻璃位置
+  const lift = $derived(me.kind !== 'none' && pluginUi.homeCards.length > 0);
+  $effect(() => { lift; if (useWebGL) requestAnimationFrame(measureRects); });
   function measureRects() {
     if (!gridEl) return;
     glassRects = [...gridEl.querySelectorAll('.tile')].map((tile) => {
@@ -315,14 +320,14 @@
 
   <LoginCard />
 
-  <div class="grid" class:fade={ui.glassMode === 'B'} class:revealed={ui.revealIcons} bind:this={gridEl}>
+  <div class="grid" class:fade={ui.glassMode === 'B'} class:revealed={ui.revealIcons} class:lift bind:this={gridEl}>
     {#each ENTRIES as e, i (e.key)}
       <button class="entry" data-entry={e.key} class:dnd-on={drag.overKey === 'home:' + e.key} style:--i={i} use:entryDrop={e} onclick={(ev) => openEntry(e, ev)} aria-label={e.label}>
         <!-- use:pressable —— 按下 90ms 干脆压下、松手弹簧回弹（见 lib/motion.js）。
              此前是 .16s 弹性曲线做【按下】，按下去像踩进棉花，正是"不跟手"的观感来源。 -->
         {#if useFigma}
           <span class="tile fg" use:pressable={{ scale: 0.93 }}>
-            <FigmaGlass bg={figBg} radius={30} strength={ui.glassMode === 'B' ? quality.ramp : 1} remeasure={ENTRIES.length} />
+            <FigmaGlass bg={figBg} radius={30} strength={ui.glassMode === 'B' ? quality.ramp : 1} remeasure={ENTRIES.length + (lift ? 100 : 0)} />
             <img class="ico" src={ovUrl(e.img)} alt="" draggable="false" />
           </span>
         {:else if useRefraction}
@@ -336,6 +341,8 @@
       </button>
     {/each}
   </div>
+
+  <PluginHomeCards />
 </div>
 
 <style>
@@ -368,6 +375,7 @@
     position: fixed; left: 0; right: 0; top: 50%; transform: translateY(-50%); z-index: 5;
     display: grid; grid-template-columns: repeat(2, auto); justify-content: center; gap: 26px 22px; padding: 0 24px;
   }
+  .grid.lift { top: calc(50% - min(110px, 13vh)); }
   /* 浮现入场：仅明亮主题(多洛米蒂 B)。玻璃框(.tile)带折射全程在、不淡入；只让框里的 logo(.ico)
      原地纯透明度 0→1 浮现——折射在 .tile 上、不被 opacity 破坏(全程可见)，logo 柔和浮现。轻微 stagger。
      暗主题(flux)logo 直接显示。触发见 Home $effect：明亮主页露出后才浮现，确保可见。 */

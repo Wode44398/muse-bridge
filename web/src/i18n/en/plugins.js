@@ -210,6 +210,11 @@ export default {
   '给你发通知（界面提示 + 手机通知栏）': 'Send you notifications (in-app + phone notification bar)',
   '按时间表在后台运行': 'Run in the background on a schedule',
   '加自己的接口': 'Add its own endpoints',
+  '给 Claude / dimensio 提供模型服务（出现在它们的模型列表里）': 'Provide model services to Claude / dimensio (they show up in their model lists)',
+  '订阅 bridge 的事件（对话开始 / 结束、工具调用、登录……）': 'Subscribe to bridge events (turns starting / ending, tool calls, sign-ins…)',
+  '拦截与改写 Claude 的每一步（钩子、审批策略、发出的消息、每轮参数）': 'Intercept and rewrite Claude’s every step (hooks, approval policy, outgoing messages, per-turn options)',
+  '往 bridge 的界面里加卡片、菜单项、命令和工作台标签': 'Add cards, menu items, commands and workbench tabs to bridge’s interface',
+  '提供外部登录方式': 'Provide an external sign-in method',
 
   // —— 服务端：子进程健康检查（plugins/process.mjs，tr()）——
   '检查没通过': 'Check failed',
@@ -219,6 +224,7 @@ export default {
   '选一个': 'Pick one',
   '键': 'Key',
   '添加一项': 'Add item',
+  '还没有可选项': 'No options yet',
   '删掉这一项': 'Remove this item',
   '删掉这一行': 'Remove this row',
   '服务器主机': 'Server host',

@@ -92,6 +92,7 @@ async function credsFor(cfgs: ManagedConnector[]): Promise<Map<string, Creds | {
     }
   }
   for (const c of cfgs) {
+    if (c.inlineHeaders) { out.set(c.id, { env: {}, headers: { ...c.inlineHeaders } }); continue; }
     const needsCreds = c.envKeys.length || c.headerKeys.length;
     if (needsCreds && failed) out.set(c.id, { error: failed });
     else out.set(c.id, { env: pick(all[c.id]?.env, c.envKeys), headers: pick(all[c.id]?.headers, c.headerKeys) });

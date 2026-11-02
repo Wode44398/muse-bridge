@@ -30,7 +30,7 @@ bridge 的功能都是插件：内置功能（定时任务、分享链接、设�
    插件给 Claude 的工具**要下一条消息才出现**（工具集在这一轮开始时就定了），告诉用户「发下一条消息就能用」。
 5. **交付**：告诉用户插件在哪、怎么开关、设置里要填什么；要给别人用就把目录打成 zip（设置 › 功能扩展 › 添加 › 上传 zip），或放到 GitHub 用「GitHub 地址」装。
 
-两个示例的完整代码就在程序目录 `src/plugins/examples/` 下（`hello-world` 最小；`qq-onebot` 用到以账号跑 Claude、收外部推送、托管外部程序、分组表单、状态块、控制面板），不知道某个能力怎么写时先读对应示例。
+三个示例的完整代码就在程序目录 `src/plugins/examples/` 下（`hello-world` 最小；`power-tools` 用到四期的事件、钩子、审批策略、卡片工具与界面扩展；`qq-onebot` 用到以账号跑 Claude、收外部推送、托管外部程序、分组表单、状态块、控制面板），不知道某个能力怎么写时先读对应示例。
 聊天平台机器人（QQ、微信、飞书、Telegram……）的完整写法参考官方插件「QQ 机器人」（qqchatbot）：每个聊天一个沙箱、群聊记录、单轮工具发文件、看门狗、每日上限、热更新设置。
 
 ## 接口版本与兼容承诺
@@ -48,6 +48,10 @@ bridge 的功能都是插件：内置功能（定时任务、分享链接、设�
 chat  chat.sandbox  chat.tools  chat.format  chat.history  chat.usage  chat.budget  chat.fast
 files  files.rw  share.space  share.chat  process  process.health  webhook  schedule  notify  log.view
 config.hot  config.self  status  action  configOptions  store  panel  panel.config  process.args  sandbox.readDirs  claude.tool  claude.prompt  claude.mcp  agentOp  manual
+models.provide
+events  claude.hook  claude.permission  claude.input  claude.options  tools.agents  net  oauth  models.middleware  tool.card
+replaces  service.priority  notify.channel  auth.provider
+ui.homeCard  ui.workbench  ui.command  ui.composerAction  ui.messageAction  ui.sessionAction  ui.theme
 ```
 
 ## 插件目录
@@ -70,12 +74,13 @@ weather/
 | `name` / `description` / `version` / `author` / `homepage` | 展示用 |
 | `entry` | 入口文件，缺省 `index.mjs` |
 | `config` | 配置 schema（见下），设置页据此自动生成表单 |
+| `replaces` | 接管的内置功能 id 列表（见「替换内置功能」）：这个插件开着时它们视同关闭 |
 | `requires` | 依赖的插件 id 列表：依赖没开时本插件记成「缺依赖」，依赖开了自动跟上；关掉依赖会先停掉本插件 |
 | `restart` | `true` = 运行中不热插拔（开关、改配置、换版本都等重启服务）。只有包着不能撤销的东西时才用 |
 | `defaultEnabled` | 缺省 `true`；`false` 装上后先不启用 |
 | `ui` | 插件页面：`{ "panel": { "page": "web/index.html", "title": "控制台", "icon": "chat" }, "settings": "web/settings.html", "who": "host" }`（见「插件页面」）；旧写法 `web.page` 等同 `ui.panel.page` |
 | `engines` | 兼容要求：`{ "bridge": ">=7.02", "pluginApi": 3 }`。不满足就拒装、拒加载并说明原因。写法：`>= > <= < =`、`^`（同主版本）、`~`（同主次版本）、空格 = 且、`\|\|` = 或 |
-| `permissions` | 这个插件会用到的能力（展示用，不强制）：`chat`（以授权账号跑 Claude）、`sandbox`（在插件自己的沙箱里跑 Claude）、`claude.tools`、`files`、`share`、`process`、`webhook`、`network`、`notify`、`schedule`、`routes`。详情页按人话列给用户看 |
+| `permissions` | 这个插件会用到的能力（展示用，不强制）：`chat`（以授权账号跑 Claude）、`sandbox`（在插件自己的沙箱里跑 Claude）、`claude.tools`、`files`、`share`、`process`、`webhook`、`network`、`notify`、`schedule`、`routes`、`models`（给 Claude / dimensio 提供模型服务、改模型请求）、`events`、`claude.control`（钩子 / 审批策略 / 消息改写 / 每轮参数）、`ui`、`auth`。详情页按人话列给用户看 |
 
 清单里写了不认识的字段（多半是拼错）、不认识的 `widget`、没写 `engines.pluginApi`、代码里 import 了 `@bridge/core/*`，详情页「清单体检」都会提示，不影响安装。
 
@@ -126,7 +131,7 @@ bridge 内部模块（`@bridge/core/…` = 程序的 `src/`）技术上能 impor
 |---|---|
 | `section` | 分组标题，同组字段排在一起（按第一次出现的顺序） |
 | `when` | 条件显示：`{ "mode": "managed" }`、`{ "mode": ["a", "b"] }` |
-| `widget` | `textarea` / `password` / `slider`（要 min、max）/ `chips` / `segmented` |
+| `widget` | `textarea` / `password` / `slider`（要 min、max）/ `chips` / `segmented`；有选项的字符串列表（`array` + `items.enum` 或 `items.options`）写 `checks` = 勾选框多选 |
 | `options` | 动态选项：`claude.models`、`claude.efforts`、`users`、`users:user`（只列普通档）、`users:service`，或 `plugin`（插件用 `ctx.configOptions` 现算） |
 
 结构化字段：
@@ -212,6 +217,174 @@ ctx.manual('manual');   // 插件目录下 manual/*.md 并入 bridge 项目手�
 | `ctx.provide(name, value)` | 提供一个服务（插件停用时撤掉） |
 | `ctx.service(name)` | 取服务（不存在抛错）。要用别的插件的服务，就在清单 `requires` 里写上它 |
 | `ctx.on(event, fn)` / `ctx.emit(event, payload)` | 插件之间的事件 |
+
+### 给 agent 提供模型（ctx.models）
+
+插件能把一个模型端点（兼容 Anthropic Messages 或 OpenAI Chat Completions）登记成**模型服务**，按勾选进 Claude 和 dimensio 的模型列表——
+本机反代（网页版订阅额度转成 API）、内网模型网关、自己托管的推理服务都这么接。用户不用再去两边的「模型服务」里各填一遍，插件停用就一起撤掉。
+
+```js
+const svc = ctx.models.provide({
+  id: 'default',                       // 插件内唯一（小写字母数字连字符），缺省 default
+  name: 'Gemini 网页版',
+  protocol: 'anthropic',               // 或 'openai'
+  baseUrl: 'http://127.0.0.1:8765',    // 插件是主机装的，本机地址也行
+  apiKey: key, authStyle: 'bearer',    // 可选；没 key = 不鉴权（authStyle 缺省按协议）；headers: [{ name, value }]
+  agents: ['claude', 'dimensio'],    // 给哪些 agent（缺省都给）
+  members: false,                     // true = 多用户服务端的成员也能用（缺省只给服务器主机）
+  models: [{ id: 'gemini-argon', label: 'Gemini 4 Argon', contextWindow: 200000, maxOutput: 32000, vision: false,
+            thinking: 'effort', efforts: [{ id: 'medium', name: '标准', value: { gemini_thinking: false } }, { id: 'high', name: '深度思考', value: { gemini_thinking: true } }],
+            effortDefault: 'medium' }],
+  defaultModel: 'gemini-argon', timeoutSec: 600,
+  compat: { promptCaching: false, stripBetas: true, slimBody: true, stripThinkingHistory: true },   // 可选：Claude 代理的兼容开关
+});
+svc.update({ agents: ['claude'] });   // 合并改动、两边当场换；svc.dispose() 撤掉（停用时自动撤）
+ctx.models.agents();                  // [{ id: 'claude', label, available }, { id: 'dimensio', …, available: dimensio 扩展开着没 }]
+```
+
+- 模型的能力字段和档位表与「设置 › Claude › 模型服务」同一套：`efforts` 每档的 `value` 深合并进请求体（或写进 `effortField`）；dimensio 只有七级思考档，档位 id 用 off / minimal / low / medium / high / xhigh / max 最省事。
+- Claude 里会话模型是 `custom:p-<10 位>:<模型>`（随插件 id 与服务 id 固定，重启后老会话照样认得），走 bridge 的本机代理，不走出站代理；dimensio 里是一张「插件 · 名字」的服务卡。
+  两边都**只能用、不能改**（改地址、Key、模型都在插件里），设置里的编辑器看不到它。
+- 端点要求鉴权就传 `apiKey`：只在内存和 dimensio 的自定义服务目录里（密钥守卫挡着），不进 Claude 的加密存储。
+- 用量：主机自己用不计额度；成员用（`members: true`）计成员的轮数额度，花费记 0。
+
+## 改到核心（插件接口四期）
+
+前面的能力都是「往旁边加」；这一节的能让插件改 bridge 自己的行为：订阅事件、拦截与改写 Claude 的每一步、替换内置功能、往界面里加东西。
+都是加法（`ctx.api` 仍是 3），用 `ctx.has()` 探测；插件给的回调一律隔离——抛错或超时只记插件日志、当它没表态，不会打断一轮对话。
+沙箱身份与快照访客的硬边界（路径围栏、没有命令行）永远在插件之前生效，插件放不开它们。
+
+### 订阅 bridge 事件（ctx.events）
+
+```js
+ctx.events.on('turn.end', (e) => { if (!e.ok) ctx.notify({ title: '对话出错', body: e.error }); });
+ctx.events.on('*', (e, name) => ctx.log(name, e.sessionId));   // 全收
+```
+
+| 事件 | 什么时候 | 主要字段 |
+|---|---|---|
+| turn.start | 一轮开始（Claude 主聊天、定时任务、插件代跑、dimensio） | agent（claude / dimensio）、kind（chat / routine / plugin / goal / resume）、owner、sessionId、isNew、model、message |
+| turn.end | 一轮结束 | 同上 + ok、stopped、error、result（回答，截到 8000 字）、costUsd、durationMs、tools |
+| tool.end | Claude 每次工具调用完 | owner、sessionId、tool、input（摘要）、isError、agentId（子 agent） |
+| routine.run | 定时任务跑完 | id、name、ok、sessionId、preview |
+| device.online / device.offline | 电脑设备上下线 | id、name、owner |
+| user.login | 有人登录 | kind、login、via（token / password / register / plugin:…） |
+| plugin.state | 插件开关 | id、active、status、error |
+| model.request | 模型服务（自定义 API、插件提供的）每次请求 | provider、plugin、model、status、ms、inTok、outTok |
+
+owner：`{ kind: 'admin', login: 'host' }`、`{ kind: 'user', login, id }`、`{ kind: 'sandbox', token }`。事件是事后通知：拿到的是副本，改了不影响 bridge。
+
+### 拦截与改写 Claude（ctx.claude.hook / permission / input / options）
+
+```js
+// 钩子：Claude Code 的生命周期钩子，事件 PreToolUse / PostToolUse / PostToolUseFailure / UserPromptSubmit / SessionStart /
+// Stop / SubagentStart / SubagentStop / PreCompact / PostCompact / Notification
+ctx.claude.hook('PreToolUse', (input, turn) => {
+  if (/rm -rf/.test(input.tool_input.command)) return { decision: 'deny', reason: '不许删整个目录' };
+}, { matcher: 'Bash' });                                   // matcher：工具名，'A|B' 任一，'mcp__github__*' 前缀
+ctx.claude.hook('UserPromptSubmit', () => ({ context: '今天的值班人：小王' }));
+ctx.claude.hook('Stop', (input) => (needsMore(input) ? { block: true, reason: '还没跑测试，接着做' } : undefined));
+
+// 审批策略：Claude 要审批时（当前权限模式要求）先问插件，第一个表态的说了算；不表态就照常弹审批卡
+ctx.claude.permission(({ tool, input }) => (tool === 'Bash' && /^git (status|diff|log)\b/.test(input.command) ? 'allow' : undefined));
+
+// 消息改写：只改发给 Claude 的那份（界面上显示的仍是用户原话）
+ctx.claude.input(({ message }) => ({ message: message.replace(/\d{11}/g, '<手机号>'), attachments: ['D:/kb/规范.md'] }));
+
+// 每轮参数
+ctx.claude.options((turn) => ({
+  model: 'claude-opus-5-5', effort: 'high',                // 模型 / 档位（不认识的忽略）
+  env: { MY_FLAG: '1' },                                   // 鉴权、代理、bridge 自己的变量不许改
+  agents: { reviewer: { description: '代码审查', prompt: '你是严格的审稿人……', tools: ['Read', 'Grep'] } },   // 子 agent 定义
+  additionalDirectories: ['D:/kb'],                        // 只给主机本人的会话
+  append: '回答末尾附一句今天的天气。',                       // 追加到系统提示
+  settings: { /* Claude Code 设置项，用户在设置页的偏好照样说了算 */ },
+}));
+```
+
+- 钩子返回：PreToolUse `{ decision: 'allow' | 'deny' | 'ask', reason, input }`（input = 改过的参数）；
+  UserPromptSubmit / SessionStart / PostToolUse / SubagentStart / Stop `{ context }`（给模型的补充上下文）；UserPromptSubmit / Stop / SubagentStop / PostToolUse `{ block: true, reason }`。
+  多个插件：deny 优先，input 依次叠，context 拼接。缺省 30 秒时限（`timeout` 改，最长 10 分钟）。
+- 审批策略只在需要审批时被问（绕过权限 / 自动模式下大多数调用根本不问）；要拦**所有**调用用 PreToolUse 钩子。放行越不过计划模式，
+  也越不过要用户本人逐次批准的那几样（开自动合并、Auto-fix）。可以慢慢答（比如转去飞书等人点）：缺省等 10 分钟，`timeout` 最长 30 分钟。
+- who：`'host'`（缺省）/ `'members'`（成员的会话也管）/ `'all'`（再加插件沙箱跑的轮）。
+- 钩子、子 agent、env、附加目录在 Claude 进程起来时就定了：插件改了这些，下一条消息自动冷起新进程。
+
+### 两个 agent 都给的工具（ctx.tools.add）
+
+`ctx.tools.add(spec)` 写法同 `ctx.claude.tool`，缺省 Claude 和 dimensio 都给；`ctx.claude.tool` / `ctx.claude.prompt` 也可以写 `agents: ['claude', 'dimensio']`。
+dimensio 那边是一个叫「bridge 插件」的连接器（模型看到 `mcp__bridge_plugins__<插件>__<工具>`），新会话生效；`access: 'read'` 的免审批。
+
+工具结果画成卡片：工具 spec 写 `render: 'card'`，handler 回 `{ card: { title, subtitle, fields: [{ label, value }], image, link: { url, label }, markdown, tone }, text }`——
+界面上是一张卡片，模型看到 text（没给就是卡片的文字摘要）。image / link 只收 http(s) 与站内地址。
+
+### 网络与授权（ctx.net / ctx.oauth）
+
+```js
+ctx.net.proxy();                         // bridge 当前的出站代理地址（直连时 ''）——写进托管程序自己的配置用
+ctx.net.onProxyChange((now) => restartMyProxy(now));
+await ctx.net.fetch(url, { timeoutMs: 15000 });   // 全局 fetch（本来就走出站代理）+ 时限
+
+const gh = ctx.oauth.client('github', {
+  authorizeUrl: 'https://github.com/login/oauth/authorize', tokenUrl: 'https://github.com/login/oauth/access_token',
+  clientId: cfg.clientId, clientSecret: cfg.clientSecret, scopes: ['repo'],
+});
+gh.redirectUri();   // 去对方后台登记的回调地址
+gh.startUrl();      // 一次性授权链接（面板里 bridge.openExternal 打开）
+await gh.fetch('https://api.github.com/user');   // 自动带令牌，快过期自动刷新
+```
+
+令牌加密存在插件数据目录里，不进配置、不回给页面。
+
+### 模型请求中间件（ctx.models.middleware）
+
+```js
+ctx.models.middleware(({ provider, model, body }) => ({ ...body, temperature: 0.2 }), { only: 'own' });
+```
+
+本机模型代理（自定义 API、插件提供的模型）按服务参数改写完、发给上游之前依次调；`only: 'own'` 只管自己 `ctx.models.provide` 的服务。用量在 model.request 事件里。
+
+### 替换内置功能（清单 replaces）
+
+清单写 `"replaces": ["browser"]`：这个插件开着时，内置的「内置浏览器」视同关闭（用户存的开关不动），详情页标「已由 X 接管」；
+插件关掉或起不来，内置的自动回来。接管者用 `ctx.claude.tool` 登记的工具用被接管那项的键名（还是 `mcp__browser__*`），老会话、提示词不用改。
+能接管的是可开关的内置功能（见文末内置插件表）；核心与 agent 扩展不能接管。
+
+### 服务叠放、通知渠道、外部登录
+
+```js
+ctx.provide('search.web', impl, { priority: 10 });   // 给了 priority 的同名服务可叠放：取优先级最高的，撤掉露出下一层
+
+ctx.notify.channel({ id: 'feishu', label: '飞书', who: 'host', send: async ({ title, body, level, sessionId, owner }) => { … } });
+// bridge 提醒人时（ctx.notify、Claude 的推送通知……）同时投给所有渠道；who:'members' 连成员的提醒也投（按 owner 找人）
+
+ctx.auth.provider({
+  id: 'sso', label: '公司 SSO',
+  start: (req, { callbackUrl, state }) => `https://sso.example.com/auth?redirect_uri=${encodeURIComponent(callbackUrl)}&state=${state}`,
+  callback: async (req, url, { callbackUrl }) => ({ login: await exchange(url.searchParams.get('code')) }),   // 回 { login } | { error }
+});
+// 登录页多一个「用 公司 SSO 登录」。只映射到已有账号（不自动建号、不能登成服务器主机）；手机 App 里不显示。
+```
+
+### 往界面里加东西（ctx.ui）
+
+手机 App 不跑第三方代码：下面除工作台标签外都是声明，bridge 自己画，按下去执行插件服务端的 handler。
+
+```js
+ctx.ui.homeCard({ id: 'oncall', title: '值班', icon: 'users', order: 1, data: async (who) => ({ text: '今天：小王', tone: 'ok', items: [{ label: '电话', value: '1234' }], badge: '3' }), open: 'panel' });
+ctx.ui.workbench({ id: 'board', title: '看板', page: 'web/board.html' });   // Claude 工作台多一个标签（插件页面；SDK 的 bridge.context() 拿当前会话）
+ctx.ui.command({ name: 'standup', description: '写站会', template: '总结一下今天做了什么：' });          // 「/」菜单：插模板
+ctx.ui.command({ name: 'ticket', description: '开工单', handler: (who, { args, sessionId }) => ({ toast: '已开：' + args }) });
+ctx.ui.composerAction({ id: 'tmpl', label: '插入模板', handler: () => ({ insert: '……' }) });        // 输入框「＋」菜单
+ctx.ui.messageAction({ id: 'save', label: '存到笔记', roles: ['assistant'], handler: (who, { text }) => '已存' });   // 消息菜单
+ctx.ui.sessionAction({ id: 'export', label: '导出到飞书', handler: (who, { sessionId, title }) => ({ open: url }) });   // 会话菜单
+ctx.ui.theme({ vars: { '--accent': '#d97757' } });   // 主题变量：只收 -- 开头，值里不许 url( / expression( / ; { }
+```
+
+- handler 回字符串（当提示）或 `{ toast, insert（换掉输入框里的文字）, send: true（换进去顺手发出）, open: 'panel' | 网址 }`；60 秒封顶。插件命令和内置命令同名时插件的优先。
+- 主页卡片的 data 每次打开主页现算，3 秒没回就只显示标题；`open`：`'panel'`（插件控制面板）、`{ action: 'id' }`（ctx.action 的按钮）、`{ url }`。
+- who：`'host'`（缺省）/ `'members'`。英文界面：插件 `locales/en.json` 的 `ui.<种类>.<id>.<字段>`（如 ui.homeCard.oncall.title、ui.command.standup.description）。
+- 登记变了，在线页面当场刷新；手机 App 里工作台标签点开是独立的干净页面。
 
 ## 以某个身份做事（ctx.chat / sandbox / files / share）
 

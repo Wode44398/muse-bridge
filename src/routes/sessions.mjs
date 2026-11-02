@@ -3,6 +3,7 @@
 // bridge always runs with cwd === VAULT, those logs ARE this app's chat history.
 // Any of them can be reopened by passing its id back as `resume`.
 
+import { cardOf } from '../plugins/tool-card.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { createReadStream, readFileSync, readdirSync, statSync, rmSync, mkdirSync } from 'node:fs';
@@ -759,6 +760,7 @@ function makeHistoryParser(file, opts = {}) {
           const entry = byToolUse.get(b.tool_use_id);
           if (!entry) continue;
           entry.status = b.is_error ? 'error' : 'done';
+          { const card = cardOf(b); if (card) entry.card = card; }   // 插件工具的结果卡片（同直播 tool_done 的 card）
           if (b.is_error) { const rt = resultText(b).trim(); if (isUserDenial(rt)) entry.denied = 'user'; else if (isAutoModeDenial(rt)) entry.denied = 'classifier'; }
           if (entry.task) applyToolResult(entry.task, b, o.toolUseResult);
           // 子 agent 出的图/视频：按 agentId（applyToolResult 刚回填）读它的子转录，就地展开成 media 段。

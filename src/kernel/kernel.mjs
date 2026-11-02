@@ -68,6 +68,7 @@ export function normalizeDef(mod) {
 export function createKernel({ store = memoryStore(), logger = console } = {}) {
   const records = new Map();       // id → 记录
   const services = new Map();      // 名字 → { value, owner }
+  let serviceSeq = 0;
   const slots = new Map();
   const mixins = new Map();        // 名字 → (ctx) => 值
   const listeners = new Map();     // 事件 → Set<fn>
@@ -181,7 +182,7 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
     }
     service(name) { return getService(name); }
     hasService(name) { return services.has(name); }
-    provide(name, value) { return this.onDispose(provide(name, value, this.id)); }
+    provide(name, value, opts) { return this.onDispose(provide(name, value, this.id, opts)); }
     contribute(slotName, item) { return this.onDispose(slot(slotName).add(item, this.id)); }
     when(phase, fn) {
       if (!PHASES.includes(phase)) throw new Error('未知阶段 ' + phase + '（可用：' + PHASES.join(' / ') + '）');
@@ -224,11 +225,24 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
   const runQuiet = (d) => { try { if (typeof d === 'function') d(); else d?.dispose?.(); } catch {} };
 
   // ── 服务与扩展槽 ────────────────────────────────────────────────────────
-  function provide(name, value, owner = 'core') {
-    if (services.has(name)) throw new Error('服务「' + name + '」已由 ' + services.get(name).owner + ' 提供');
-    const entry = { value, owner };
-    services.set(name, entry);
-    return () => { if (services.get(name) === entry) services.delete(name); };
+  // 服务（四期起可叠放）：opts.priority 给了数 = 可叠放的一层，service(name) 取优先级最高的那层，撤掉一层自动露出下一层；
+  // 同名的两层都没给 priority = 老规矩，第二个报「已由 X 提供」。
+  function provide(name, value, owner = 'core', opts = {}) {
+    const stackable = Number.isFinite(opts?.priority);
+    const cur = services.get(name);
+    if (cur && !(stackable && cur.stack)) throw new Error('服务「' + name + '」已由 ' + cur.owner + ' 提供' + (stackable ? '（它不能叠放：提供方没给 priority）' : ''));
+    const entry = { value, owner, priority: stackable ? opts.priority : 0, seq: ++serviceSeq };
+    const layers = cur ? [...cur.layers, entry] : [entry];
+    layers.sort((a, b) => b.priority - a.priority || b.seq - a.seq);
+    services.set(name, { ...layers[0], stack: stackable, layers });
+    return () => {
+      const s = services.get(name);
+      if (!s) return;
+      const rest = s.layers.filter((x) => x !== entry);
+      if (rest.length === s.layers.length) return;
+      if (!rest.length) services.delete(name);
+      else services.set(name, { ...rest[0], stack: s.stack, layers: rest });
+    };
   }
   function getService(name) {
     const s = services.get(name);
@@ -316,7 +330,7 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
       rec.blockedBy = [];
       rec.pendingRestart = false;
       if (cyclic.has(rec.id)) { rec.blockedBy = ['（依赖成环）']; continue; }
-      const on = wantEnabled(rec);
+      const on = wantEnabled(rec) && !replacedByOf(rec.id);
       // 需要重启的插件：运行中保持启动时的样子，只标 pending
       if (rec.restart && started) {
         rec.pendingRestart = on !== rec.bootWanted || (rec.active && JSON.stringify(storedConfig(rec.id)) !== rec.appliedRaw);
@@ -340,7 +354,7 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
       if (rec.active && !want.has(rec.id) && pinned.has(rec.id)) { want.add(rec.id); rec.pendingRestart = true; }
     }
     for (const rec of [...list].reverse()) {
-      if (rec.active && !want.has(rec.id)) await deactivate(rec, rec.blockedBy.length ? 'blocked' : 'disabled');
+      if (rec.active && !want.has(rec.id)) await deactivate(rec, rec.blockedBy.length ? 'blocked' : replacedByOf(rec.id) ? 'replaced' : 'disabled');
     }
     for (const rec of list) {
       if (want.has(rec.id)) {
@@ -352,13 +366,30 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
           if (ok) runWaiting(rec);
         }
       } else if (!rec.active && rec.status !== 'error') {
-        rec.status = rec.blockedBy.length ? 'blocked' : (rec.restart && started && rec.pendingRestart ? 'disabled' : 'disabled');
+        rec.status = rec.blockedBy.length ? 'blocked' : replacedByOf(rec.id) ? 'replaced' : 'disabled';
       } else if (!rec.active && rec.status === 'error' && !wantEnabled(rec)) {
         rec.status = 'disabled';
         rec.error = null;
       }
     }
+    // 接管者这一轮启用失败了：被它接管的内置功能要回来——再对一次账（只补一次，免得来回打转）
+    if (!reconcile._again && list.some((r) => r.replaces.length && r.status === 'error' && r.replaces.some((t) => records.get(t) && !records.get(t).active && wantEnabled(records.get(t))))) {
+      reconcile._again = true;
+      try { await reconcile(); } finally { reconcile._again = false; }
+      return;
+    }
     changed(null);
+  }
+
+  // 谁接管了它：开着（或该开、上次没出错）的插件里 replaces 含它的那个。没有回 null。锁定的（核心 / agent 扩展）不许被接管。
+  function replacedByOf(id) {
+    const target = records.get(id);
+    if (!target || target.locked) return null;
+    for (const r of records.values()) {
+      if (!r.replaces.includes(id) || r.id === id) continue;
+      if (wantEnabled(r) && r.status !== 'error') return r.id;
+    }
+    return null;
   }
 
   function runWaiting(rec) {
@@ -394,6 +425,8 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
         restart: !!entry.restart,
         defaultEnabled: entry.defaultEnabled !== false,
         requires: Array.isArray(entry.requires) ? entry.requires.filter((d) => typeof d === 'string') : [],
+        // 接管内置功能（四期）：这个插件开着时，replaces 里的插件视同关闭（用户存的开关不动，插件关掉就回来）
+        replaces: Array.isArray(entry.replaces) ? entry.replaces.filter((d) => typeof d === 'string' && d !== entry.id) : [],
         schema,
         schemaFromManifest: entry.config != null,
         web: entry.web || null,
@@ -524,7 +557,7 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
     contextOf: (id) => records.get(id)?.ctx || null,
     rawRecord: (id) => records.get(id) || null,
 
-    provide: (name, value) => provide(name, value, 'core'),
+    provide: (name, value, opts) => provide(name, value, 'core', opts),
     service: getService,
     hasService: (name) => services.has(name),
     slot,
@@ -596,6 +629,8 @@ export function createKernel({ store = memoryStore(), logger = console } = {}) {
       locked: rec.locked,
       restart: rec.restart,
       requires: rec.requires.slice(),
+      replaces: rec.replaces.slice(),
+      replacedBy: replacedByOf(rec.id),
       enabled,
       defaultEnabled: rec.defaultEnabled,
       customized: typeof stored.enabled === 'boolean' || !!(stored.config && Object.keys(stored.config).length),

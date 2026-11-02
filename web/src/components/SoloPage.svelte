@@ -36,11 +36,13 @@
   import { initRoute, onReachabilityChange, startReachabilityWatch } from '../lib/server.js';
   import { titleFor } from '../lib/library.svelte.js';
   import { dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent } from '../lib/fileDrag.js';
-  import { IS_PANE, SOLO_ID, PANE_MSG, isPaneMsg } from '../lib/solo.js';
+  import { IS_PANE, SOLO_ID, SOLO_CARD, SOLO_WS, PANE_MSG, isPaneMsg } from '../lib/solo.js';
   import { isNewChatKey } from '../lib/quickChat.js';
   import { quoteSession } from '../lib/chatQuote.js';
   import { dockOverlayFor } from '../lib/claudeSplit.js';
   import { t, tc } from '../lib/i18n.js';
+  import { syncPluginUi } from '../lib/pluginUi.svelte.js';   // 插件界面扩展（「/」菜单、＋菜单、消息菜单、工作台标签）
+  $effect(() => { const k = me.kind && me.kind !== 'none' ? me.kind + ':' + (me.user || '') : ''; untrack(() => syncPluginUi(k)); });
 
   // 'boot' 加载中 | 'login' 没登录（本页不带登录卡：主窗口登录后再拖一次即可）| 'ready'
   let state = $state('boot');
@@ -56,17 +58,23 @@
   const sideDock = $derived(IS_PANE || layout.side || pointer.fine);
   const overlay = $derived(sideDock && rootW > 0 && dockOverlayFor(rootW));
   const proj = $derived(projects.find((p) => p.id === session.projectId) || null);
-  const dockWs = $derived(proj ? proj.path : '');
+  // 卡片窗口（工作台的一张卡拖出 app，&card=）：作用域就是拖出时那个工作空间，不跟会话的项目走
+  const dockWs = $derived(SOLO_CARD ? SOLO_WS : proj ? proj.path : '');
   $effect(() => setDockWs(dockWs));
   const showChips = $derived(!!proj && !proj.quick);
   // 分屏格默认收着工作台、agent 动了浏览器/终端也只亮点不自己拉开（两格都窄，自己弹出来会盖住正文）
-  dock.noAuto = IS_PANE;
+  dock.noAuto = IS_PANE || !!SOLO_CARD;
   function toggleDock() { if (dock.open) closeDock(); else openDock(dock.view === 'menu' ? 'menu' : dock.view); }
 
   // —— 窗口标题 = 对话标题（独立窗口在任务栏里认得出是哪一个）：自定义名优先，否则取首条提问 ——
+  // 卡片窗口 = 卡片名 · 工作空间名
+  const CARD_TITLES = { tasks: tc('claude', '任务'), review: t('审阅'), term: t('终端'), browser: t('浏览器'), files: tc('claude', '文件'), memory: tc('claude', '记忆') };
   const firstAsk = $derived((chat.messages.find((m) => m.role === 'user')?.text || '').replace(/\s+/g, ' ').trim().slice(0, 60));
-  const title = $derived(session.id ? (titleFor(session.id, firstAsk) || tc('claude', '对话')) : tc('claude', '新对话'));
-  $effect(() => { document.title = title + ' · Claude'; });
+  const cardWsName = SOLO_WS.split(/[\\/]/).filter(Boolean).pop() || '';
+  const title = $derived(SOLO_CARD
+    ? CARD_TITLES[SOLO_CARD] + (cardWsName ? ' · ' + cardWsName : '')
+    : session.id ? (titleFor(session.id, firstAsk) || tc('claude', '对话')) : tc('claude', '新对话'));
+  $effect(() => { document.title = title + (SOLO_CARD ? '' : ' · Claude'); });
 
   // 这一格的宽度（决定工作台盖着还是挤开）。同 ClaudePage：自己挂 ResizeObserver，不靠 bind:clientWidth。
   function measureW(node) {
@@ -180,8 +188,9 @@
   });
 
   // —— 多端同步：总线（同源实例共用一条连接，见 lib/bus.js）+ 断线时 4s 兜底对账 ——
+  // 卡片窗口只有「任务」卡读对话状态，别的卡不占这条连接（本机 HTTP/1.1 每主机只有 6 条）
   $effect(() => {
-    if (state !== 'ready') return;
+    if (state !== 'ready' || (SOLO_CARD && SOLO_CARD !== 'tasks')) return;
     busStart();
     const off = busOn(onBusEvent);
     const iv = setInterval(() => { if (!document.hidden && !busConnected()) requestSync('poll'); }, 4000);
@@ -200,6 +209,12 @@
       try { caps.data = await loadCaps(); caps.loaded = true; } catch {}
       try { applyMe(await api.auth()); } catch { applyMe(null); }
       if (me.kind === 'none') { state = 'login'; return; }
+      if (SOLO_CARD) {
+        if (SOLO_CARD === 'tasks' && SOLO_ID) { try { await openSession(SOLO_ID); } catch {} }
+        openDock(SOLO_CARD);
+        state = 'ready';
+        return;
+      }
       try { projects = (await api.claudeProjects())?.projects || []; } catch {}
       try { await openSession(SOLO_ID); } catch {}
       state = 'ready';
@@ -211,7 +226,9 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="solo-root" class:pane={IS_PANE} class:row={sideDock && dock.open && !overlay} use:measureW
   onpointerdowncapture={claimFocus} onfocusincapture={claimFocus}>
-  {#if state === 'ready'}
+  {#if state === 'ready' && SOLO_CARD}
+    <ClaudeDock wide card={SOLO_CARD} />
+  {:else if state === 'ready'}
     <!-- 顶栏挂在根上（这一格 / 这扇窗的右上角），同 ClaudePage：工作台展开时工具开关就在卡片上方那条带里 -->
     <TopBar hideMenu sat={!IS_PANE} tools={sideDock} split={IS_PANE} onDock={toggleDock}
       onClose={IS_PANE ? () => toHost({ t: 'close' }) : null} />
@@ -257,7 +274,7 @@
     </div>
     <ClaudeDock wide={sideDock} {overlay} toolsClose={IS_PANE ? () => toHost({ t: 'close' }) : null} />
   {:else if state === 'login'}
-    <div class="mid"><p>{tc('claude', '先在主窗口登录 bridge，再把对话拖出来。')}</p></div>
+    <div class="mid"><p>{SOLO_CARD ? tc('claude', '先在主窗口登录 bridge，再把卡片拖出来。') : tc('claude', '先在主窗口登录 bridge，再把对话拖出来。')}</p></div>
   {:else}
     <div class="mid"><p>{t('加载中…')}</p></div>
   {/if}

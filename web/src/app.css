@@ -222,10 +222,11 @@ html[data-vt]::view-transition-new(root) {
 html[data-vt="server"]::view-transition-old(root) { z-index: 1; }
 /* 关闭：旧画面里主页早已 display:none，只剩分页底下那层底色——整屏交给主页快照 */
 html[data-vt="close"]::view-transition-old(root) { opacity: 0; }
-/* 分页卡片：圆角裁切 + 快照居中铺满（卡片比例 ≠ 页面比例时裁掉上下，不拉伸） */
+/* 分页卡片：圆角裁切 + 快照居中铺满（卡片比例 ≠ 页面比例时裁掉上下，不拉伸）。
+   不带投影：卡片宽高每帧都在变，投影就得每帧整块重画、重新光栅化（手机 DPR 3.75 下是近整屏的大半径模糊）。
+   真机实测去掉后转场期间 GPU 光栅 1300→400ms、渲染线程等 GPU 1000→124ms；身后主页压暗到 .4，投影本来也几乎看不见。 */
 html[data-vt]::view-transition-group(bridge-page) {
   animation: none; overflow: clip;
-  box-shadow: 0 22px 60px rgba(0, 0, 0, .34), 0 2px 10px rgba(0, 0, 0, .18);
 }
 html[data-vt]::view-transition-old(bridge-page),
 html[data-vt]::view-transition-new(bridge-page) {

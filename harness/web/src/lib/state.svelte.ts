@@ -1611,7 +1611,8 @@ export function vendorInfo(id: string | null | undefined): VendorView {
     return {
       id: key,
       name: spec?.name ?? t("自定义服务"),
-      company: managed ? t("管理员共享") : (spec?.custom?.host ?? t("已删除")),
+      // bridge 插件提供的（custom.plugin = 插件名）也是只能用不能改，副标题写插件名
+      company: spec?.custom?.plugin ? `${t("插件")} · ${spec.custom.plugin}` : managed ? t("管理员共享") : (spec?.custom?.host ?? t("已删除")),
       custom: true,
       ...(managed ? { managed: true } : spec?.custom?.shared ? { shared: true } : {}),
     };

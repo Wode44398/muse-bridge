@@ -22,6 +22,8 @@ import { randomBytes, createHmac } from 'node:crypto';
 import { Agent } from 'undici';
 import { HOST_OWNER, isMemberOwner, providerProxyForced, getProvider, findProvider, providerKey, resolveCustomModel, resolveSubagentModel, customModelId, customSupportsFast, fastCapableProvider, fastProbe, recordFastProbe } from './claude-providers.mjs';
 import { assertPublicUrl, publicDispatcher } from './public-net.mjs';
+import { applyModelMiddleware, hasModelMiddleware } from './model-services.mjs';
+import { emitBridgeEvent } from '../plugins/events.mjs';
 import { isAutoModel, resolveAuto, applyAutoTarget } from './model-ratings.mjs';
 import { applyParams, pickTarget, keepsBetas, isOfficial, toOpenAI, openAIReasoning, OpenAIStream, fromOpenAI, estimateTokens } from './claude-providers-transform.mjs';
 // 型号知识 / 报错解读 / 检测与探测的判读和 dimensio 的自定义服务共用（src/model-knowledge/）
@@ -104,6 +106,8 @@ function note(p, entry) {
   const k = slot(p);
   const a = logs.get(k) || [];
   a.unshift({ at: Date.now(), ...entry });
+  // 插件订阅的 model.request 事件（测试连接不发）
+  if (!entry.test) emitBridgeEvent('model.request', { provider: p.id, providerName: p.name, plugin: p.plugin?.id || '', owner: p.owner || '', ...entry });
   if (a.length > 50) a.length = 50;
   logs.set(k, a);
 }
@@ -300,7 +304,9 @@ async function handle(req, res) {
   }
 
   const t0 = Date.now();
-  const { body: out, model: target, effort: eff } = applyParams(body, provider, model, effort);
+  const { body: applied, model: target, effort: eff } = applyParams(body, provider, model, effort);
+  // 插件的模型请求中间件（ctx.models.middleware）：按服务参数改写完、发上游之前
+  const out = hasModelMiddleware() ? await applyModelMiddleware({ provider, model: target, owner, body: applied }) : applied;
   // fast：开关开着（路径 .f）、型号支持（换成了别的型号——如后台小任务映射到 Haiku——就不发，带了必 400）、不在退避期
   const wantFast = !!fastSeg && !pick.routed && provider.protocol === 'anthropic' && customSupportsFast(provider, target);
   const fast = wantFast && !fastCooling(provider.id, provider.owner);

@@ -4,12 +4,14 @@
 // 同一时刻可能有不止一只 Composer（greeting 态 / chat 态各一只，转场期短暂并存；快照页又是
 // 另一只）——谁在场谁接单；lib 层的调用方（refusalRetry 的「编辑并重试」、日后助手转交等）
 // 不需要知道哪只输入栏活着。nonce 单调递增：同一段文本连填两次也要各生效一次。
-export const draft = $state({ text: '', nonce: 0 });
+export const draft = $state({ text: '', nonce: 0, send: false });
 
 // 把文本灌进当前输入栏并聚焦。Composer 用完即清 draft.text——换会话 / 转场重挂的输入栏
-// 不会再灌一遍旧草稿。
-export function prefillComposer(text) {
+// 不会再灌一遍旧草稿。opts.send：灌进去顺手发出（插件界面动作回 { insert, send: true }，lib/pluginUi）——
+// 走输入栏自己的发送（在跑时是插话、附件照带），和人按发送键一样。
+export function prefillComposer(text, opts = null) {
   draft.text = String(text ?? '');
+  draft.send = !!(opts && opts.send);
   draft.nonce++;
 }
 

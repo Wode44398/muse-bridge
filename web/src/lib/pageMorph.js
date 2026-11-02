@@ -150,6 +150,7 @@ function run(kind, { before, update, afterUpdate, play, vars = {}, spring = null
 function cleanup(my, vars) {
   if (my !== seq) return;
   current = null;
+  ui.homeWarm = false;
   dropAnims();
   const root = html();
   delete root.dataset.vt;
@@ -228,6 +229,8 @@ export async function closePage(key = ui.screen, { fromRect = null, fromRadius =
   if (!canMorph()) { doSwitch(); return; }
   await settleKeyboard(pageRoot(key));
   if (ui.screen === 'home') { onSwitch?.(); return; }
+  await warmHome();
+  if (ui.screen === 'home') { ui.homeWarm = false; onSwitch?.(); return; }
   const root = pageRoot(key);
   const { W, H } = vp();
   if (typeof fromRect === 'function') fromRect = fromRect();
@@ -286,6 +289,18 @@ export async function closePage(key = ui.screen, { fromRect = null, fromRadius =
         : [{ transform: `scale(${HOME_PUSH})`, opacity: 0.4 }, { transform: 'scale(1)', opacity: 1 }],
       { duration: d, easing: spring.easing });
     },
+  });
+}
+
+// 主页平时 display:none：一露面就要整页重排、重建图层、重新光栅化，玻璃与景深壁纸各补画一帧——真机上这些全压在
+// 收回转场的头 200ms，帧帧 25–58ms。先让主页在分页底下（分页不透明、整屏盖着，画面不变）渲染两帧再开转场：
+// 返回晚一两帧起步，动画本身不再卡。侧滑返回（claudeSliding）本来就提前露着主页，不用等；有封顶，慢机也不拖。
+function warmHome() {
+  if (ui.claudeSliding || ui.vertexSliding) return Promise.resolve();
+  ui.homeWarm = true;
+  return new Promise((res) => {
+    const t = setTimeout(res, 120);
+    requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); res(); }));
   });
 }
 

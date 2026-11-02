@@ -18,6 +18,11 @@ export const PLUGIN_FEATURES = Object.freeze([
   'files', 'files.rw', 'share.space', 'share.chat',
   'process', 'process.health', 'webhook', 'schedule', 'notify', 'log.view',
   'config.hot', 'config.self', 'status', 'action', 'configOptions', 'store', 'panel', 'panel.config', 'process.args', 'sandbox.readDirs', 'claude.tool', 'claude.prompt', 'claude.mcp', 'agentOp', 'manual',
+  'models.provide',
+  // 四期：改到核心
+  'events', 'claude.hook', 'claude.permission', 'claude.input', 'claude.options', 'tools.agents', 'net', 'oauth', 'models.middleware', 'tool.card',
+  'replaces', 'service.priority', 'notify.channel', 'auth.provider',
+  'ui.homeCard', 'ui.workbench', 'ui.command', 'ui.composerAction', 'ui.messageAction', 'ui.sessionAction', 'ui.theme',
 ]);
 
 const parse = (v) => {

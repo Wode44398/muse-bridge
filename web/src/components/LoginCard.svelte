@@ -9,7 +9,8 @@
   // 手机 App 存了不止一台服务器时，卡片里多一行「切换服务器」（10-30 起替代主页左上标题下的服务器胶囊，那颗胶囊太抢眼）。
   // 展开后的卡＝iOS 27 警告框同一套材质（ios27/Alert：kit「Liquid Glass - Regular - Medium」9 宫图层 + frost 模糊 +
   // kit 大投影，圆角 34），配色是设置页的「墨与象牙」（ios27/ink.css），明暗跟 ui.theme。
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { extAuth, loadAuthProviders, startExtLogin } from '../lib/authProviders.svelte.js';   // 插件提供的外部登录（「用 X 登录」）
   import { fade } from 'svelte/transition';
   import { api } from '../lib/api.js';
   import { signIn, signUp, signInToken } from '../lib/account.js';
@@ -65,6 +66,8 @@
   // （网页出码让手机扫）换成「扫码连接」——扫电脑上的配对码，换这台手机自己的会话（PairScan mode:'connect'）
   let picked = false;
   $effect(() => { if (open && me.kind === 'none' && !picked && mode === 'login' && me.features?.multiUser === false) mode = 'token'; });
+  // 插件提供的外部登录：卡一展开（没登录时）就拉一次；离线 App 里不拉、不显示
+  $effect(() => { if (open && me.kind === 'none') untrack(() => loadAuthProviders()); });
   function scanConnect() { picked = true; ui.loginOpen = false; err = ''; ui.pairScan = { mode: 'connect' }; }
 
   let vw = $state(390), vh = $state(800), pillW = $state(88), pillEl = $state();
@@ -334,6 +337,9 @@
             {:else}
               <button class="btn" type="button" onclick={() => go('qr')}>{t('扫码登录')}</button>
             {/if}
+            {#each extAuth.list as p (p.key)}
+              <button class="btn ext" type="button" onclick={() => startExtLogin(p.key)}>{#if p.icon}<img class="ext-ic" src={p.icon} alt="" />{/if}<span class="ext-lab">{t('用 {name} 登录', { name: p.label })}</span></button>
+            {/each}
           </div>
           <div class="links">
             <!-- 服务器没开注册（主机形态）就不摆：点进去也只会被拒 -->
@@ -447,6 +453,9 @@
   .btn.default { background: var(--i-accent); color: var(--i-on-accent); }
   .btn:active:not(:disabled) { transform: scale(.97); filter: brightness(.92); }
   .btn:disabled { opacity: .45; cursor: default; }
+  .btn.ext { gap: 8px; min-width: 0; }
+  .ext-ic { width: 20px; height: 20px; flex: none; object-fit: contain; border-radius: 5px; }
+  .ext-lab { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .links { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; padding-top: 8px; }
   .link { height: 36px; padding: 0 8px; border: 0; background: none; cursor: pointer; font: inherit; font-size: 15px; line-height: 20px; color: var(--i-label2); -webkit-tap-highlight-color: transparent; }
   .link:active { color: var(--i-label); }

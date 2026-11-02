@@ -3,7 +3,7 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { mdState } from './mdState.svelte.js';
-import { t as tt } from './i18n.js';   // 本文件循环变量多叫 t（表格/列表节点），翻译函数用别名
+import { t as tt, lang } from './i18n.js';   // 本文件循环变量多叫 t（表格/列表节点），翻译函数用别名
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -236,11 +236,26 @@ export function streamBlocks(obj, text) {
   return tail ? [...st.blocks, tail] : st.blocks;
 }
 
+// 渲染结果缓存：切会话 / 重挂消息时同一段 md 不再重新 parse + DOMPurify（真机切到长会话，光 sanitize 一项就 ~35ms，
+// 全压在切换那一帧）。键带 katex 的 epoch（公式补渲）和界面语言（代码块复制钮的文案）；按最近使用淘汰、封顶条数。
+// 流式中途的半截末块也会进来，但每个只用一次，很快被挤掉。
+const mdCache = new Map();
+const MD_CACHE_MAX = 800;
+
 export function renderMarkdown(src) {
   if (!src) return '';
   // 建立响应式依赖（勿删）：katex 异步到位后 epoch++，模板里的 {@html renderMarkdown(...)}
   // 才会重跑、把先前吐成原文的 $...$ 补渲成公式。见 mdState.svelte.js。
-  void mdState.epoch;
+  const key = mdState.epoch + '\u0001' + lang() + '\u0001' + src;
+  const hit = mdCache.get(key);
+  if (hit !== undefined) { mdCache.delete(key); mdCache.set(key, hit); return hit; }
+  const out = renderUncached(src);
+  mdCache.set(key, out);
+  if (mdCache.size > MD_CACHE_MAX) mdCache.delete(mdCache.keys().next().value);
+  return out;
+}
+
+function renderUncached(src) {
   // 流式中途（或模型忘了闭合）的奇数个 ``` 会把后续内容全吞进 code block；
   // 渲染前补一个闭合 fence，让"代码块进行中"正确显示为代码块（claude.ai 同款行为）。
   // 只数行首 fence——正文行内提及 ``` 不算（否则误补出一个空代码块）。

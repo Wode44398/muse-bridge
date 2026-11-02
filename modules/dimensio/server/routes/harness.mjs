@@ -72,7 +72,7 @@ const currentAdminEnvFile = () => adminPrepared?.fallbacks?.HARNESS_ENV_FILE || 
 // 管理员实例的数据位置环境（进程环境 + 数据目录 / 迁移定下的项），同下方 admin 的 env。
 const adminDataEnv = () => ({ ...process.env, ...harnessDataEnv({ dataDir: ADMIN_DATA.dataDir, prepared: adminPrepared, envFile: ADMIN_ENV_FILE }) });
 // 管理员那份自定义服务目录：成员实例只读它，用管理员标了「共享给成员」的服务（harness/server/custom-providers.ts）。
-const adminCustomProvidersDir = () => harnessItemPath('custom-providers', { env: adminDataEnv(), envFile: currentAdminEnvFile(), harnessDir: HARNESS_DIR });
+export const adminCustomProvidersDir = () => harnessItemPath('custom-providers', { env: adminDataEnv(), envFile: currentAdminEnvFile(), harnessDir: HARNESS_DIR });
 // 可经环境变量覆盖：并行 worktree 各跑一份 bridge，就得各带一个 harness，不能共抢 8799。
 const HARNESS_PORT = Number(process.env.HARNESS_PORT || 8799);
 const HARNESS_HOST = '127.0.0.1';
@@ -99,9 +99,13 @@ function outboundKnob() {
 //     同 Claude 给注册用户的 mcp__device__*。主机密钥绝不进租户实例（tenantEnv 先剔掉全部继承的 BRIDGE_*）。
 function deviceEnv(userId = null) {
   const on = devicesEnabled();
+  const secret = userId ? mintAgentDeviceToken(userId, 'dimensio') : ensureHostSecret();
   return {
     BRIDGE_DEVICE_API: on ? `http://127.0.0.1:${BRIDGE_PORT}` : undefined,
-    BRIDGE_DEVICE_SECRET: on ? (userId ? mintAgentDeviceToken(userId, 'dimensio') : ensureHostSecret()) : undefined,
+    BRIDGE_DEVICE_SECRET: on ? secret : undefined,
+    // bridge 插件给 dimensio 的工具（src/plugins/agent-mcp.mjs）：与设备开关无关，一直给；凭据同一把（同机实例凭据，本机直连才认）
+    BRIDGE_PLUGIN_API: `http://127.0.0.1:${BRIDGE_PORT}`,
+    BRIDGE_PLUGIN_SECRET: secret,
   };
 }
 

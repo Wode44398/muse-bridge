@@ -375,27 +375,77 @@ function sharedProviders(): CustomProvider[] {
   return r.list.filter((p) => p.shared);
 }
 
-// 全部能用的自定义服务：管理员共享的在前，自己的按添加顺序在后（id 撞了算自己的）。
+// bridge 插件提供的服务（2026-11-01，bridge 的 ctx.models.provide 勾了 dimensio 的）：bridge 写在自定义服务目录的
+// plugin-providers.json（modules/dimensio/server/runtime/plugin-providers.mjs），形状同 providers.json v2，另带 plugin { id, name }
+// 与 apiKey（明文；整个目录在密钥守卫里）。管理员实例读自己目录那份；成员实例读管理员那份里标了 shared 的（插件勾了「成员也能用」）。
+// 插件停用 / 改配置后 bridge 重写这个文件，这边按 mtime 下一次读就换。只能用、不能改（同管理员共享的处理：不下发地址、编辑器拒）。
+const PLUGIN_FILE = "plugin-providers.json";
+type PluginRec = { provider: CustomProvider; plugin: { id: string; name: string }; key: string };
+let pluginCache: { file: string; mtimeMs: number; size: number; list: PluginRec[] } | null = null;
+function pluginRecs(): PluginRec[] {
+  const dir = tenantMode() ? sharedProvidersDir() : customProvidersDir();
+  if (!dir) return [];
+  const file = path.join(dir, PLUGIN_FILE);
+  let st;
+  try {
+    st = statSync(file);
+  } catch {
+    pluginCache = null;
+    return [];
+  }
+  if (!pluginCache || pluginCache.file !== file || pluginCache.mtimeMs !== st.mtimeMs || pluginCache.size !== st.size) {
+    const list: PluginRec[] = [];
+    try {
+      const raw = JSON.parse(readFileSync(file, "utf8"));
+      for (const r of Array.isArray(raw?.providers) ? raw.providers : []) {
+        const provider = clean(r);
+        if (!provider) continue;
+        const pl = r?.plugin && typeof r.plugin === "object" ? r.plugin : {};
+        list.push({
+          provider,
+          plugin: { id: String(pl.id ?? ""), name: str(pl.name, 40) || String(pl.id ?? "插件") },
+          key: typeof r.apiKey === "string" ? r.apiKey : "",
+        });
+      }
+    } catch {
+      /* 坏文件当空表 */
+    }
+    pluginCache = { file, mtimeMs: st.mtimeMs, size: st.size, list };
+  }
+  return tenantMode() ? pluginCache.list.filter((r) => r.provider.shared) : pluginCache.list;
+}
+
+// 全部能用的自定义服务：管理员共享的在前，插件提供的其次，自己的按添加顺序在后（id 撞了算自己的）。
 export function listCustomProviders(): CustomProvider[] {
   const own = ownProviders();
-  const shared = sharedProviders();
-  if (!shared.length) return own;
-  const mine = new Set(own.map((p) => p.id));
-  return [...shared.filter((p) => !mine.has(p.id)), ...own];
+  const extra = [...sharedProviders(), ...pluginRecs().map((r) => r.provider)];
+  if (!extra.length) return own;
+  const seen = new Set(own.map((p) => p.id));
+  return [...extra.filter((p) => !seen.has(p.id) && Boolean(seen.add(p.id))), ...own];
 }
 
 export function getCustomProvider(id: string): CustomProvider | undefined {
   return isCustomProviderId(id) ? listCustomProviders().find((p) => p.id === id) : undefined;
 }
 
-/** 成员实例上，这个服务是管理员共享过来的（只能用：不能看地址、改、删、换 Key）。 */
+/** 这个服务是 bridge 插件提供的：回 { id, name }（只能用：不能看地址、改、删、换 Key），否则 undefined。 */
+export function customProviderPlugin(id: string): { id: string; name: string } | undefined {
+  if (!isCustomProviderId(id) || ownProviders().some((p) => p.id === id)) return undefined;
+  return pluginRecs().find((r) => r.provider.id === id)?.plugin;
+}
+
+/** 这个服务是托管的：成员实例上管理员共享过来的，或 bridge 插件提供的（只能用：不能看地址、改、删、换 Key）。 */
 export function isSharedProvider(id: string): boolean {
   if (!isCustomProviderId(id) || ownProviders().some((p) => p.id === id)) return false;
-  return sharedProviders().some((p) => p.id === id);
+  return sharedProviders().some((p) => p.id === id) || pluginRecs().some((r) => r.provider.id === id);
 }
 
 const ownProvider = (id: string) => ownProviders().find((p) => p.id === id);
-const managedByAdmin = () => Object.assign(new Error("这是管理员共享的服务，只有管理员能修改"), { status: 403 });
+const managedByAdmin = (id = "") => {
+  const pl = id ? customProviderPlugin(id) : undefined;
+  const msg = pl ? `这个服务由 bridge 插件「${pl.name}」提供，到 bridge 的「设置 › 功能扩展」里改` : "这是管理员共享的服务，只有管理员能修改";
+  return Object.assign(new Error(msg), { status: 403 });
+};
 
 /** 一个自定义型号的能力记录（适配器 / 目录用）。 */
 export function getCustomModel(id: string, model: string): CustomModel | undefined {
@@ -488,7 +538,10 @@ export function customProviderKey(id: string): string | undefined {
   const own = ownProvider(id);
   if (!own) {
     const shared = sharedProviders().find((p) => p.id === id);
-    return shared ? sharedKey(shared) : undefined;
+    if (shared) return sharedKey(shared);
+    // bridge 插件提供的：Key 跟着 plugin-providers.json 走（没有 Key = 不鉴权）
+    const pl = pluginRecs().find((r) => r.provider.id === id);
+    return pl ? pl.key || NO_AUTH_KEY : undefined;
   }
   const k = keys.get(id);
   if (k) return k;
@@ -549,7 +602,7 @@ export interface Conn {
 export function draftConn(input: unknown): { conn: Conn; key: string; models: CustomModel[] } {
   const r = (input ?? {}) as Record<string, unknown>;
   // 只认自己的服务：管理员共享的那几条不许拿来当草稿底子（否则换个地址就能把管理员的 Key 发出去）
-  if (typeof r.id === "string" && isSharedProvider(r.id)) throw managedByAdmin();
+  if (typeof r.id === "string" && isSharedProvider(r.id)) throw managedByAdmin(r.id);
   const prev = typeof r.id === "string" ? ownProvider(r.id) ?? null : null;
   const baseUrl = normalizeBaseUrl(r.baseUrl ?? prev?.baseUrl);
   const fields = connFields(r, prev, false, baseUrl);
@@ -992,7 +1045,7 @@ export async function addCustomProvider(input: CustomProviderInput): Promise<{ p
 }
 
 export async function updateCustomProvider(id: string, input: CustomProviderInput): Promise<{ provider: CustomProvider; warning?: string }> {
-  if (isSharedProvider(id)) throw managedByAdmin();
+  if (isSharedProvider(id)) throw managedByAdmin(id);
   const cur = ownProvider(id);
   if (!cur) throw bad("这个自定义服务不存在（可能已被删除）");
   const baseUrl = input.baseUrl === undefined ? cur.baseUrl : normalizeBaseUrl(input.baseUrl);
@@ -1038,7 +1091,7 @@ export async function updateCustomProvider(id: string, input: CustomProviderInpu
 }
 
 export async function removeCustomProvider(id: string): Promise<void> {
-  if (isSharedProvider(id)) throw managedByAdmin();
+  if (isSharedProvider(id)) throw managedByAdmin(id);
   if (!ownProvider(id)) throw bad("这个自定义服务不存在（可能已被删除）");
   writeMeta(ownProviders().filter((p) => p.id !== id));
   if (keys.delete(id)) await writeKeys().catch((e) => console.warn(`[custom-providers] 删除后重写 key 失败：${(e as Error).message}`));

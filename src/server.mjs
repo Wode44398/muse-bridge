@@ -66,6 +66,7 @@ import { registerMeRoutes } from './routes/me.mjs';
 import { registerAdminAccessRoutes } from './routes/admin-access.mjs';
 import { enabledAgents } from './runtime/agent-status.mjs';
 import { registerClaudeDockRoutes } from './routes/claude-dock.mjs';
+import { registerClaudeMemoryRoutes } from './routes/claude-memory.mjs';
 import { registerClaudeTaskRoutes } from './routes/claude-tasks.mjs';
 import { registerMcpOAuthRoutes } from './routes/mcp-oauth.mjs';
 import { registerSessionCollabRoutes } from './routes/session-collab.mjs';
@@ -265,6 +266,7 @@ registerHtmlSiteRoutes(router);                               // GET /api/hv/<id
   registerSessionRoutes(router, { authOk, identify: identifySnap }); // /api/sessions, /api/session, /api/session/delete, /api/session/export（快照身份可用）
 // /api/claude/{review,dock}/* — Claude 分页右侧工作台的核心部分；终端（term）与浏览器（browser）两组归各自的插件挂
 registerClaudeDockRoutes(pathFilter(router, (p) => !p.startsWith(DOCK_PLUGIN_PATH.browser) && !p.startsWith(DOCK_PLUGIN_PATH.terminal)), { identify: identifySnap });
+registerClaudeMemoryRoutes(router, { identify: identifySnap }); // /api/claude/memory(/roots) — 工作台「记忆」卡：找记忆目录 + 按链接长出的导图（快照访客 403）
 registerClaudeTaskRoutes(router, { identify: identifySnap }); // GET /api/claude/agent-transcript（子 agent 转录）+ POST /api/claude/task/stop（任务面板单条停止，鉴权同 /api/session）
 registerMcpOAuthRoutes(router, { identify });                 // /api/mcp-oauth/* — 远程连接器 OAuth 授权（回调路由不要求登录，只认进行中流程的 state）
 registerClaudeArchiveRoutes(router, { identify });               // POST /api/claude/archive + GET /api/claude/search — 会话归档与全文搜索（登录身份，快照访客不开放）

@@ -1,21 +1,28 @@
 <script>
   // 输入栏「/」命令菜单（纯渲染：过滤/键盘/选中都在 Composer 里）。行 = /名字 + 参数提示 +
   // 一行省略的描述；mousedown 拦掉默认行为，点选不会把焦点从输入框抢走。
+  // 插件命令（ctx.ui.command，带 plugin / pluginName）排在前面，按插件分组、组头标插件名；内置命令跟在后面。
   import { t, tr } from '../lib/i18n.js';
   let { items = [], active = 0, onPick, onHover } = $props();
   let listEl = $state();
   $effect(() => {
-    const el = listEl && listEl.children && listEl.children[active];
+    const el = listEl && listEl.querySelectorAll('.sm-row')[active];
     if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
   });
+  const keyOf = (c) => (c.plugin ? c.plugin + '/' : '') + c.name;
 </script>
 
 <div class="sm" role="listbox" aria-label={t('斜杠命令')} bind:this={listEl}>
-  {#each items as c, i (c.name)}
+  {#each items as c, i (keyOf(c))}
+    {#if c.plugin && (i === 0 || items[i - 1].plugin !== c.plugin)}
+      <div class="sm-head" role="presentation">{c.pluginName || c.plugin}</div>
+    {:else if !c.plugin && i > 0 && items[i - 1].plugin}
+      <div class="sm-sep" role="presentation"></div>
+    {/if}
     <button class="sm-row" class:on={i === active} role="option" aria-selected={i === active}
       onmousedown={(e) => e.preventDefault()} onclick={() => onPick && onPick(c)} onpointerenter={() => onHover && onHover(i)}>
       <span class="sm-name">/{c.name}{#if c.argumentHint}<span class="sm-arg"> {c.argumentHint}</span>{/if}</span>
-      {#if c.description}<span class="sm-desc">{tr(c.description)}</span>{/if}
+      {#if c.description}<span class="sm-desc">{c.plugin ? c.description : tr(c.description)}</span>{/if}
     </button>
   {/each}
 </div>
@@ -33,4 +40,8 @@
   .sm-name { flex: none; max-width: 55%; font-size: 13.5px; color: var(--text); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .sm-arg { color: var(--muted); font-size: 12px; margin-left: 5px; }
   .sm-desc { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  /* 插件组头：小号灰字，和行文字左缘对齐 */
+  .sm-head { padding: 8px 10px 3px; font-size: 11.5px; line-height: 15px; color: var(--muted); letter-spacing: .02em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .sm-head:first-child { padding-top: 3px; }
+  .sm-sep { height: 1px; margin: 5px 8px; background: var(--divider); }
 </style>

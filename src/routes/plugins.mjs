@@ -43,6 +43,7 @@ import { marketOverview, installFromMarket, rollbackInstalled, restoreBuiltinVer
 import { rollbackTarget } from '../plugins/discover.mjs';
 import { FEATURES } from '../config/index.mjs';
 import { pluginLogs } from '../plugins/logs.mjs';
+import { uiView, runUi } from '../plugins/ui.mjs';
 
 const MAX_ZIP = 50 * 1024 * 1024;
 
@@ -329,12 +330,37 @@ export function registerPluginRoutes(router, { identify }) {
     json(res, 200, { panels });
   });
 
+  // 界面扩展（plugins/ui.mjs，四期）：这个身份能看到的主页卡片、工作台标签、「/」命令、各处菜单、主题变量。?lang=en 取英文词条。
+  router.on('GET', '/api/plugins/ui', async (req, res, url) => {
+    const c = requireCtx(identify, req, res);
+    if (!c) return;
+    try { json(res, 200, await uiView(c, url.searchParams.get('lang') || 'zh')); } catch (e) { fail(res, e); }
+  });
+  // 按下一个界面动作（「/」命令、＋菜单、消息 / 会话菜单）：{ plugin, kind, id, args } → { toast?, insert?, send?, open? }
+  router.on('POST', '/api/plugins/ui/run', async (req, res) => {
+    const c = requireCtx(identify, req, res);
+    if (!c) return;
+    try {
+      const b = await body(req);
+      json(res, 200, await runUi(c, { plugin: String(b.plugin || ''), kind: String(b.kind || ''), id: String(b.id || ''), args: b.args }));
+    } catch (e) { json(res, e.status || 400, { error: String(e?.message || e) }); }
+  });
+
   // 签一张插件票（独立打开页面用：新窗口、手机 App 的干净页面）。返回 { ticket, expiresIn, page }。
+  // which: 'panel'（缺省）| 'settings' | 'workbench'（带 page：Claude 工作台标签，四期）
   router.on('POST', '/api/plugins/ticket', async (req, res) => {
     const c = requireCtx(identify, req, res);
     if (!c) return;
     try {
       const b = await body(req);
+      if (b.which === 'workbench') {
+        const id = String(b.id || '');
+        const want = String(b.page || '').replace(/^\/+/, '');
+        const hit = (await uiView(c)).workbench.find((w) => w.plugin === id && w.page === want);
+        if (!hit || !kernel.isActive(id)) throw new PluginError(403, '打不开这个插件的页面');
+        json(res, 200, { ...mintTicket(id, identityOfContext(c)), page: '/plugins/' + id + '/' + hit.page });
+        return;
+      }
       const p = kernel.get(String(b.id || ''));
       if (!pageAllowed(c, p)) throw new PluginError(403, '打不开这个插件的页面');
       const ui = p.extra.ui;

@@ -46,7 +46,7 @@ test('最小骨架：清单合法、文件齐；panel 再带控制面板页面',
 });
 
 test('从示例起步：整个拷过来，示例 id（含下划线形式）换成新 id，示例本身不动', () => {
-  assert.deepEqual(Object.keys(EXAMPLES).sort(), ['hello-world', 'qq-onebot']);
+  assert.deepEqual(Object.keys(EXAMPLES).sort(), ['hello-world', 'power-tools', 'qq-onebot']);
   const h = scaffoldPlugin({ id: 'greeter', dir: path.join(tmp, 'h'), from: 'hello-world' });
   const idx = readFileSync(path.join(h.dir, 'index.mjs'), 'utf8');
   assert.match(idx, /\/api\/plugin\/greeter\/greet/);

@@ -83,8 +83,8 @@ export function normUi(m) {
 
 // ── 清单体检（不拒装，只提示）：未知字段、未知控件、能力声明、用了内部接口、英文界面 ───────────
 const KNOWN_KEYS = new Set(['$schema', 'id', 'name', 'version', 'description', 'author', 'homepage', 'license', 'repository', 'keywords',
-  'entry', 'category', 'config', 'requires', 'restart', 'defaultEnabled', 'ui', 'web', 'engines', 'permissions']);
-const WIDGETS = new Set(['textarea', 'password', 'slider', 'chips', 'segmented']);
+  'entry', 'category', 'config', 'requires', 'restart', 'defaultEnabled', 'ui', 'web', 'engines', 'permissions', 'replaces']);
+const WIDGETS = new Set(['textarea', 'password', 'slider', 'chips', 'segmented', 'checks']);
 // 能力声明的词表（展示用，不强制）：清单 permissions 里写这些名字，安装后详情页按人话列出来
 export const PERMISSIONS = Object.freeze({
   chat: '以你授权的账号跑 Claude',
@@ -98,6 +98,11 @@ export const PERMISSIONS = Object.freeze({
   notify: '给你发通知（界面提示 + 手机通知栏）',
   schedule: '按时间表在后台运行',
   routes: '加自己的接口',
+  models: '给 Claude / dimensio 提供模型服务（出现在它们的模型列表里）',
+  events: '订阅 bridge 的事件（对话开始 / 结束、工具调用、登录……）',
+  'claude.control': '拦截与改写 Claude 的每一步（钩子、审批策略、发出的消息、每轮参数）',
+  ui: '往 bridge 的界面里加卡片、菜单项、命令和工作台标签',
+  auth: '提供外部登录方式',
 });
 const MAX_SCAN_FILES = 300;
 
@@ -182,6 +187,7 @@ function entryOf(dir, source) {
     author: String(m.author || ''),
     homepage: String(m.homepage || ''),
     requires: Array.isArray(m.requires) ? m.requires.filter((x) => typeof x === 'string') : [],
+    replaces: Array.isArray(m.replaces) ? m.replaces.filter((x) => typeof x === 'string') : [],
     restart: !!m.restart,
     defaultEnabled: m.defaultEnabled !== false,
     config: m.config || null,

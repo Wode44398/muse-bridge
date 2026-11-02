@@ -81,6 +81,7 @@
   import Customize from './ext/Customize.svelte';
   import PluginFrame from './ext/PluginFrame.svelte';
   import { pluginPanels, watchPluginPanels, openPluginStandalone, inAndroidApp, panelTitle } from '../lib/pluginPanels.svelte.js';
+  import { extAuth, loadAuthProviders, startExtLogin } from '../lib/authProviders.svelte.js';   // 插件提供的外部登录（登录页「用 X 登录」）
   import { showToast } from '../lib/toast.svelte.js';
   import Alert from './ios27/Alert.svelte';
   import Sheet from './ios27/Sheet.svelte';
@@ -421,6 +422,8 @@
   // 「扫一扫登录网页版」只给手机形态（apk / 触屏）；网页登录页的「扫码登录」反过来只给电脑
   const canScan = (() => { try { return isOffline() || matchMedia('(pointer: coarse)').matches; } catch { return false; } })();
   const acctOpen = $derived(stack.includes('account'));
+  // 登录页一露面就拉一次外部登录方式（离线 App 里不拉、不显示）
+  $effect(() => { if (acctOpen && me.kind === 'none') untrack(() => loadAuthProviders()); });
   // 用量：进账户页才拉
   let mine = $state(null);
   $effect(() => {
@@ -2399,6 +2402,9 @@
       </form>
       <div class="ig">
         {#if lgMode === 'login'}
+          {#each extAuth.list as p (p.key)}
+            <button class="r" type="button" onclick={() => startExtLogin(p.key)}><span class="r-main"><span class="r-tx">{t('用 {name} 登录', { name: p.label })}</span>{@render chev()}</span></button>
+          {/each}
           {#if !canScan}
             <button class="r" type="button" onclick={() => lgSwitch('qr')}><span class="r-main"><span class="r-tx">{t('扫码登录')}</span>{@render chev()}</span></button>
           {/if}

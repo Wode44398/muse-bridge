@@ -59,6 +59,7 @@ export const ui = $state({
   enterVertex: false,
   vertexSliding: false,   // vertex 左缘右滑跟手中（预测式返回，页面缩小露出身后主页）——唤醒被 display:none 的 Home
   claudeSliding: false,   // claude 同上——只有此时才唤醒被 display:none 省掉的 Home
+  homeWarm: false,        // 返回键收回分页前，先在分页底下把主页渲染好（lib/pageMorph.js 的 closePage），重活不压在转场头几帧
   settingsOpen: false,    // 设置页是否打开（从登录 pill 菜单 morph 扩展到全屏）
   serverAdminOpen: false, // 服务端控制台（桌面服务端形态，设置页右上角入口）——盖在设置页之上
   agentsOpen: false,      // 设置「Agent」页（各 agent 开关 / 能否运行 / 认证，admin）——同样盖在设置页之上

@@ -42,6 +42,8 @@ import { readSecrets, writeSecrets } from '../extension-secrets.mjs';
 import { HOST_OWNER, parseOwnerKey } from './principal.mjs';
 // 型号知识（已知型号表、思考模板、档位 ID 规则）和 dimensio 的自定义服务共用：src/model-knowledge/
 import { guessKind, tableEntry, thinkingTemplate, fixKnownBaseUrl, TIER_ID_RE, MAX_TIERS, OFF_TIER_IDS } from '../model-knowledge/knowledge.mjs';
+// 插件提供的模型服务（ctx.models.provide，2026-11-01）：勾了 claude 的并进主机（勾了 members 时连成员）能用的服务，见文末「插件提供的服务」
+import { modelServices, modelServicesRev, onModelServicesChange, serviceHash } from './model-services.mjs';
 
 export const PROVIDERS_DIR = path.join(ROOT, 'claude-providers');
 export { HOST_OWNER };
@@ -388,8 +390,38 @@ function changed(owner) { for (const fn of listeners) { try { fn(owner); } catch
 
 /** 已经读进内存的 owner（fast 探测结论变了要推给这些人）。 */
 export const loadedOwners = () => [...regs.keys()];
-export function providersRev(owner) { return load(owner).rev; }
+// 插件服务变了也要换签名（下一条消息冷起 CLI，env 里的输出上限 / 模型名跟着换）
+export function providersRev(owner) { const r = load(owner).rev, pr = modelServicesRev(); return pr ? `${r}+${pr}` : r; }
 export function getProvider(id, owner) { return load(owner).providers.find((p) => p.id === id) || null; }
+
+// —— 插件提供的服务（ctx.models.provide，src/runtime/model-services.mjs）——
+// 只在内存里：id = p-<10 位哈希>（随插件与服务 id 固定，和随机的 8 位 id 不会撞），owner = 主机（代理按主机取 Key、不查公网），
+// 带 plugin = { id, name }。getProvider 不认它（设置里的编辑器改 / 删 / 测试都够不着），findProvider / usableProviders 认。
+let pluginCache = { rev: -1, list: [], keys: new Map() };
+function pluginProviders() {
+  const r = modelServicesRev();
+  if (pluginCache.rev === r) return pluginCache.list;
+  const list = [], keys = new Map();
+  for (const s of modelServices('claude')) {
+    const id = 'p-' + serviceHash(s.plugin, s.sid, 10);
+    try {
+      const p = normalizeProvider({
+        id, name: s.name, note: `插件 · ${s.pluginName}`, protocol: s.protocol, baseUrl: s.baseUrl, authStyle: s.authStyle, headers: s.headers,
+        timeoutSec: s.timeoutSec, retries: 1, models: s.models.map((m) => ({ enabled: true, kind: 'chat', ...m })), defaultModel: s.defaultModel,
+        compat: { useProxy: false, ...s.compat },
+      });
+      list.push({ ...p, owner: HOST_OWNER, plugin: { id: s.plugin, name: s.pluginName }, members: s.members });
+      keys.set(id, s.apiKey);
+    } catch (e) { console.error(`[claude-providers] 插件 ${s.plugin} 的模型服务「${s.name}」不可用：`, e?.message || e); }
+  }
+  pluginCache = { rev: r, list, keys };
+  return list;
+}
+const pluginProvidersFor = (owner) => pluginProviders().filter((p) => !isMemberOwner(owner) || p.members);
+/** 这个服务是插件提供的：回 { id, name }，否则 null。 */
+export function providerPlugin(id) { return pluginProviders().find((p) => p.id === id)?.plugin || null; }
+// 插件服务登记 / 撤掉：推给在线页面刷新选择器（路由层订阅了 onProvidersChange，主机变了顺带推给成员）
+onModelServicesChange(() => changed(HOST_OWNER));
 
 // —— 管理员共享给成员 ——
 /** 这个 owner 能用的管理员共享服务（只有成员有；管理员自己的本来就在他那份里）。 */
@@ -398,19 +430,20 @@ export function sharedProviders(owner) {
 }
 /** 解析模型、列菜单、派子 agent 用：先找自己的，成员再找管理员共享的。改 / 删 / 测试一律用 getProvider（只认自己的）。 */
 export function findProvider(id, owner) {
-  return getProvider(id, owner) || sharedProviders(owner).find((p) => p.id === id) || null;
+  return getProvider(id, owner) || sharedProviders(owner).find((p) => p.id === id) || pluginProvidersFor(owner).find((p) => p.id === id) || null;
 }
-/** 自己的服务在前、管理员共享的在后（id 撞了算自己的）。 */
+/** 自己的服务在前、管理员共享的其次、插件提供的最后（id 撞了算前面的）。 */
 function usableProviders(owner) {
   const own = load(owner).providers;
-  const shared = sharedProviders(owner);
-  if (!shared.length) return own;
-  const mine = new Set(own.map((p) => p.id));
-  return [...own, ...shared.filter((p) => !mine.has(p.id))];
+  const extra = [...sharedProviders(owner), ...pluginProvidersFor(owner)];
+  if (!extra.length) return own;
+  const seen = new Set(own.map((p) => p.id));
+  return [...own, ...extra.filter((p) => !seen.has(p.id) && seen.add(p.id))];
 }
-/** 设置页给成员看的共享服务：只有名字、预设（品牌标）、协议和模型名，不给地址、请求头、Key。 */
+/** 设置页给成员看的共享服务（管理员共享的 + 插件开给成员的）：只有名字、预设（品牌标）、协议和模型名，不给地址、请求头、Key。 */
 export function sharedProvidersView(owner) {
-  return sharedProviders(owner).map((p) => ({
+  const list = isMemberOwner(owner) ? [...sharedProviders(owner), ...pluginProvidersFor(owner)] : [];
+  return list.map((p) => ({
     id: p.id, name: p.name, note: p.note, preset: p.preset, protocol: p.protocol, enabled: p.enabled,
     models: p.models.filter((m) => m.enabled && m.kind === 'chat').map((m) => ({ id: m.id, label: m.label })),
     defaultModel: p.defaultModel,
@@ -421,7 +454,11 @@ export function sharedProvidersView(owner) {
 function secrets(owner) {
   try { return readSecrets(dirOf(owner)); } catch (e) { console.error('[claude-providers] secrets unreadable:', e && e.message); return {}; }
 }
-export function providerKey(id, owner) { const s = secrets(owner)[id]; return s && typeof s.key === 'string' ? s.key : ''; }
+export function providerKey(id, owner) {
+  // 插件提供的服务：Key 在插件给的 spec 里（内存），不进加密存储
+  if (pluginProviders().some((p) => p.id === id)) return pluginCache.keys.get(id) || '';
+  const s = secrets(owner)[id]; return s && typeof s.key === 'string' ? s.key : '';
+}
 function setKey(id, key, owner) {
   const map = { ...secrets(owner) };
   if (key) map[id] = { key }; else delete map[id];
@@ -567,7 +604,7 @@ export function customModelsView(owner) {
       if (!m.enabled || m.kind !== 'chat') continue;
       out.push({
         id: customModelId(p.id, m.id), name: m.label, provider: p.id, providerName: p.name, preset: p.preset, baseUrl: managed ? '' : p.baseUrl,
-        ...(managed ? { managed: true } : {}),
+        ...(managed ? { managed: true } : {}), ...(p.plugin ? { plugin: p.plugin.name } : {}),
         thinking: m.thinking, vision: m.vision, contextWindow: m.contextWindow,
         // 上下文窗口的来源（api / probe / user 实打实；table / guess / default 是估的）：菜单徽章据此加「≈」，同编辑器
         ctxSource: (m.source && m.source.contextWindow) || '',

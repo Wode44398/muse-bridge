@@ -15,12 +15,13 @@
   // logo-animations/strips/<file>.svg），用 Web Animations API 逐帧播条带。条带当 CSS 遮罩用（底色 = currentColor），
   // 不把取来的 SVG 塞进页面——离线壳跨源取到的东西只当图片用，不进 DOM。
   // `color` 给颜色；`interactive`：点一下播一次彩蛋（overlay 是 tickle 条带，公开版是轻轻一扭），然后回到原状态。
+  // `onpress`：点击时额外回调（Claude 页拿它当明暗主题快捷切换；运行态点了也照样触发，只是不播彩蛋）。
   // NB: the prop is `anim`, NOT `state` (which collides with the $state rune).
   import { ovData, ovUrl } from '../lib/overlay.svelte.js';
   import { CLAUDE_MARK_PATH } from '../lib/claudeMark.js';
   import StarMark from './StarMark.svelte';
 
-  let { anim = 'static', size = 30, color = 'var(--coral)', interactive = false } = $props();
+  let { anim = 'static', size = 30, color = 'var(--coral)', interactive = false, onpress = null } = $props();
 
   const ANIM = $derived(ovData('marks')?.strips || null);
   // 公开版的动作映射（见 StarMark 顶部）
@@ -73,6 +74,7 @@
   }
 
   function tickle() {
+    onpress?.();
     // 循环运行态（thinking/writing/orbiting/shimmer/waiting）不接彩蛋：状态动画不被点断。
     const tbl = ANIM;
     if (!tbl || !interactive || playing || (tbl[anim] && tbl[anim].loop)) return;
@@ -89,6 +91,7 @@
   // 公开版静止标志的彩蛋：点一下扭一扭
   let wiggle = $state(false);
   function poke() {
+    onpress?.();
     if (!interactive || wiggle) return;
     wiggle = true;
     setTimeout(() => { wiggle = false; }, 620);
@@ -106,7 +109,7 @@
     <span class="cmark" style="width:{size}px;height:{size}px;color:{color}" aria-hidden="true">{@render mark()}</span>
   {/if}
 {:else if !ANIM}
-  <StarMark mode={MODE[anim] || 'static'} {size} {color} {interactive} />
+  <StarMark mode={MODE[anim] || 'static'} {size} {color} {interactive} {onpress} />
 {:else if interactive}
   <button class="clogo interactive" style="width:{size}px;height:{size}px;color:{color}" onclick={tickle} aria-label="Claude">
     <span class="strip" bind:this={inner}></span>

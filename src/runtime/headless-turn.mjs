@@ -9,7 +9,9 @@
 //
 // 额度闸（quotaBlock / noteTurnStart）由调用方在开跑前判：定时任务和插件对「这次没跑」的交代方式不同。
 
-import { pluginClaudeTurn } from '../plugins/claude-tools.mjs';
+import { pluginClaudeTurn, mergeHooks, pluginInput, pluginOptions, pluginPermission } from '../plugins/claude-tools.mjs';
+import { emitBridgeEvent, ownerOf as eventOwner, clip as eventClip } from '../plugins/events.mjs';
+import { CLAUDE_MODELS, CLAUDE_EFFORTS } from '../config/capabilities.mjs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { claudeCliOptions } from './claude-cli.mjs';
 import { markBridgeSession } from './gen.mjs';
@@ -53,21 +55,32 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
   const label = o.label || 'headless';
   let sessionId = o.resume || null, text = '', isError = false, costUsd = 0;
   let rejection = null, apiStatus = null, produced = false;   // 撞额度墙判定（见文末 noteLimitHit）
-  const runModelBase = o.model || MODEL;
+  // 插件看到的这一轮（工具槽、钩子、审批策略、消息改写、每轮参数同一个）；kind 由调用方给：'routine' / 'plugin'
+  const tbase = { ...(o.turn || { kind: 'routine' }), ctx, snap: null, message: o.prompt || '', sessionId: o.resume || null, source: o.source || '' };
+  const t0 = Date.now();
+  // 插件的每轮参数（ctx.claude.options）：无头轮只认官方模型（定时任务本来就不走自定义 API）
+  const pOpts = await pluginOptions(tbase);
+  const runModelBase = (pOpts?.model && CLAUDE_MODELS.has(pOpts.model) ? pOpts.model : '') || o.model || MODEL;
+  if (attempt === 0) emitBridgeEvent('turn.start', {
+    agent: 'claude', kind: tbase.kind, plugin: tbase.plugin || '', owner: eventOwner(ctx), sessionId: o.resume || null, isNew: !o.resume,
+    model: runModelBase || '', effort: o.effort || '', source: o.source || '', cwd: ctx.cwd || '', message: eventClip(o.prompt || '', 4000),
+  });
   // 号池智能路由（可选，默认关）：激活号已知用尽就先换号再开跑。
   await routeBeforeQuery({ model: runModelBase });
   // 扩展中心与主聊天同源注入（管理员 = 自用 + 全服，注册用户 = 只有全服）。
   const ext = claudeExtensionsFor(ctx);
   if (ctx.kind === 'user') ext.plugins.push(...memberClaudePlugins(ctx.user));
   const attachments = Array.isArray(o.attachments) ? o.attachments.filter((p) => typeof p === 'string' && p) : [];
-  const composed = composeTurnPrompt(o.prompt || '（没有内容）', attachments);
+  // 插件的消息改写（ctx.claude.input）
+  const pIn = await pluginInput(tbase, { message: o.prompt || '（没有内容）', attachments });
+  const composed = composeTurnPrompt(pIn.message || '（没有内容）', pIn.attachments);
   // 恒流式输入 + gate 挂流（同主聊天，见 agents/claude.mjs makeTurnInput 注释）：
   // 字符串 prompt 会让 SDK 在 result 后自动关 stdin，后台子任务被杀、续轮通知丢失。
   const turnInput = makeTurnInput(composed.prompt, composed.imageBlocks);
   // effort 经 claudeEffortOptions 翻译（Ultracode 与档位独立，合进 settings；旧写法 'ultracode' = xhigh + Ultracode）。
   // 成员（runtime/quota.mjs memberRules）没给开放 Ultracode / 1M 就不开、用裸模型 id；没有命令行的身份一律不开 Ultracode。
   const caps = memberRules(ctx);
-  const picked = splitUltracode(o.effort, o.ultracode);
+  const picked = splitUltracode(pOpts?.effort && CLAUDE_EFFORTS.has(pOpts.effort) ? pOpts.effort : o.effort, o.ultracode);
   const effortOpts = claudeEffortOptions(picked.effort, picked.ultracode && caps.ultracode && !(ctx.sandbox && !ctx.shell));
   const modelId = runModelBase ? (caps.ctx1m ? to1M(runModelBase) : String(runModelBase).replace(/\[1m\]$/i, '')) : '';
   // 按人记账：新会话 CLI 的累计花费从 0 起；续写的会话也从 0 起算（CLI 每次启动都重新累计）。
@@ -78,29 +91,39 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
   const engineEnv = claudeEngineEnv(ctx);
   const servedAcct = () => (isUpstreamEnv(engineEnv) && lastServedAccount()) || engineAcct;
   // 插件给 Claude 的工具与提示段（kind 由调用方给：插件可据此决定无人值守的轮次里给不给）
-  const plug = pluginClaudeTurn({ ...(o.turn || { kind: 'routine' }), ctx, snap: null, message: o.prompt || '', sessionId: o.resume || null }, o.runTools || null);
+  const plug = pluginClaudeTurn(tbase, o.runTools || null);
+  // 插件订阅的 tool.end：无头轮也发（与主聊天同一形状）
+  const toolEndHook = async (input) => {
+    try {
+      emitBridgeEvent('tool.end', {
+        agent: 'claude', owner: eventOwner(ctx), sessionId: input?.session_id || sessionId || null,
+        tool: String(input?.tool_name || ''), input: eventClip(JSON.stringify(input?.tool_input ?? {}), 2000),
+        isError: !!(input?.tool_response && typeof input.tool_response === 'object' && input.tool_response.is_error), agentId: input?.agent_id || '',
+      });
+    } catch {}
+    return {};
+  };
   const q = query({
     prompt: turnInput.stream,
     options: {
       ...claudeCliOptions(),
       cwd: ctx.cwd,
       ...(o.resume ? { resume: o.resume } : {}),
-      additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' ? [...sharedExtensionDirs(), ...[memberSkillRootIfAny(ctx.user)].filter(Boolean)] : (ctx.readRoots || []).map((r) => r.root)) : [UPLOADS, MEDIA],
+      additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' ? [...sharedExtensionDirs(), ...[memberSkillRootIfAny(ctx.user)].filter(Boolean)] : (ctx.readRoots || []).map((r) => r.root)) : [UPLOADS, MEDIA, ...(pOpts ? pOpts.additionalDirectories : [])],
       // 功能扩展的工具（媒体）跟着 agent 开关走（ctx.allowGemini），与主聊天同口径。
       mcpServers: { ...moduleClaudeMcp(ctx), ...plug.mcpServers, ...ext.mcpServers, ...(o.mcpServers || {}) },
       ...(ext.plugins.length ? { plugins: ext.plugins } : {}),
       // snapshot:false 同 claude.mjs：SDK 0.3.267 起默认首轮录制复用，换模型后的身份 nudge 会被冻住。
-      systemPrompt: { type: 'preset', preset: 'claude_code', snapshot: false, append: identityNudge(runModelBase) + (ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) + mediaNudge(ctx)) : (hostNudge(ctx) + mediaNudge(ctx))) + plug.prompt + (o.append || '') },
+      systemPrompt: { type: 'preset', preset: 'claude_code', snapshot: false, append: identityNudge(runModelBase) + (ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) + mediaNudge(ctx)) : (hostNudge(ctx) + mediaNudge(ctx))) + plug.prompt + (pOpts?.append.length ? '\n\n' + pOpts.append.join('\n\n') : '') + (o.append || '') },
       // 跨会话通道（Desktop / 终端会话互发）一律关：env 关总开关、settings 关入站闸（session-peers.mjs PEER_OFF_*）
-      env: { ...(engineEnv || process.env), ...PEER_OFF_ENV },
+      env: { ...(engineEnv || process.env), ...PEER_OFF_ENV, ...(pOpts ? pOpts.env : {}) },
+      ...(pOpts && Object.keys(pOpts.agents).length ? { agents: pOpts.agents } : {}),
       ...(modelId ? { model: modelId } : {}),
       ...(effortOpts.effort ? { effort: effortOpts.effort } : {}),
-      settings: JSON.stringify({ ...(effortOpts.settings || {}), ...PEER_OFF_SETTINGS, ...(o.fast && claudeSupportsFast(modelId || runModelBase) ? { fastMode: true } : {}) }),
-      // 沙箱身份同样套硬边界（PreToolUse hook 含只读 + 无 shell disallow + 设置隔离）。
-      ...(ctx.sandbox ? {
-        hooks: { PreToolUse: [{ hooks: [makeSandboxPreToolUse(ctx)] }] },
-        settingSources: [],
-      } : {}),
+      settings: JSON.stringify({ ...(pOpts ? pOpts.settings : {}), ...(effortOpts.settings || {}), ...PEER_OFF_SETTINGS, ...(o.fast && claudeSupportsFast(modelId || runModelBase) ? { fastMode: true } : {}) }),
+      // 沙箱身份同样套硬边界（PreToolUse hook 含只读 + 无 shell disallow + 设置隔离）；插件钩子排在后面。
+      hooks: mergeHooks({ ...(ctx.sandbox ? { PreToolUse: [{ hooks: [makeSandboxPreToolUse(ctx)] }] } : {}), PostToolUse: [{ hooks: [toolEndHook] }] }, plug.hooks),
+      ...(ctx.sandbox ? { settingSources: [] } : {}),
       // 权限模式显式传 default（不传 = CLI 按服务端闸自己挑，可能静默变成 auto 分类器审批）+ 下面的宿主放行。
       // 没人能批计划：不给 EnterPlanMode（ExitPlanMode 万一来了也直接放行）。
       permissionMode: 'default',
@@ -115,6 +138,10 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
           // 多根围栏（principal.allowedRoots，开源路线 C5）+ 全服扩展目录只读豁免，与主聊天同一口径
           const v = sandboxFence(ctx, name, input); if (v) return { behavior: 'deny', message: v };
         }
+        // 插件的审批策略（ctx.claude.permission）：无人值守的轮里主要用来拦——没表态就照常放行
+        const pr = await pluginPermission({ ...tbase, sessionId }, { tool: name, input, mode: 'default', signal: abort.signal });
+        if (pr && pr.behavior === 'deny') return { behavior: 'deny', message: pr.message };
+        if (pr && pr.behavior === 'allow') return { behavior: 'allow', updatedInput: pr.updatedInput };
         return { behavior: 'allow', updatedInput: input };
       },
     },
@@ -238,5 +265,10 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
       files = collectDeliverables(answer, { cwd: ctx.cwd, roots: deliverRoots(ctx, ctx.cwd, VAULT), anywhere: deliverAnywhere(ctx) });
     } catch {}
   }
+  emitBridgeEvent('turn.end', {
+    agent: 'claude', kind: tbase.kind, plugin: tbase.plugin || '', owner: eventOwner(ctx), sessionId, model: runModelBase || '',
+    ok: !isError, stopped: !!o.signal?.aborted, ...(isError ? { error: eventClip(answer, 1000) } : {}),
+    result: isError ? '' : eventClip(answer, 8000), costUsd, durationMs: Date.now() - t0, tools: [],
+  });
   return { sessionId, text, isError, files, answer, notes: notes.slice(), costUsd, aborted: !!o.signal?.aborted };
 }

@@ -69,6 +69,7 @@ import { devices, thisDeviceId } from './devices.svelte.js';   // 用户的电�
 import { parseDeviceRef } from './deviceRefs.js';   // 引用电脑上的文件夹（device://）：排队消息放回输入框时认出来
 import { effectiveEffort } from './claudeProviders.svelte.js';   // 自定义模型只带它档位表里的推理强度（换模型带过来的不发）
 import { showToast } from './toast.svelte.js';
+import { cardOf } from './toolCard.js';   // 插件工具的结果卡片（[[bridge-card]] 段）
 
 // 最近一次打开的会话 id（强持久：apk 杀后台冷启动也能找回）。session.id 的每个赋值点
 // 都同步写入；boot 时 restoreOnBoot 用它把上次的对话自动加载回来。
@@ -347,8 +348,11 @@ function forgetEntry(entry) {
 // 已落过 settings.model 的会话模型切换（session{swapped}）：attach 整轮重放会把同一条再送一遍，同一次切换只落
 // 一次，否则用户在本轮里已手动切回的选择会被重放冲掉。键 = 会话 + from>to + 服务端时间戳。
 const appliedSwaps = new Set();
+// 插件工具的结果卡片：条目 / tool_done 帧带 card（对象）、content（MCP content）或 result（文字）任一种都认
+const cardOfTool = (x) => cardOf(x.card) || cardOf(x.content) || cardOf(x.result);
 // 工具行条目的统一形状——直播 push 与历史归一共用一份，组件与指纹都靠它稳定。
 function makeTool(x) {
+  const card = cardOfTool(x);
   return {
     id: x.id || '', name: x.name || '', index: typeof x.index === 'number' ? x.index : -1,
     summary: x.summary || '', input: x.input && typeof x.input === 'object' ? x.input : {},
@@ -359,6 +363,7 @@ function makeTool(x) {
     ...(x.denied ? { denied: x.denied } : {}),       // 审批被拒 / 自动模式拦下（ToolRow 尾巴 Denied）
     ...(x.compact ? { compact: makeCompact(x.compact) } : {}),   // 上下文压缩条目（name=COMPACT_TOOL）
     task: x.task ? makeTask(x.task) : null,
+    ...(card ? { card } : {}),   // 插件工具的结果卡片（render:'card'，lib/toolCard）
   };
 }
 // 压缩条目的载荷：token 数给官方文案「Compacted session · saved N tokens」，summary = 压缩后注入的
@@ -839,7 +844,11 @@ function onEvent(m, ev) {
     }
     case 'tool_done': {
       const t = ev.id ? toolById.get(ev.id) : null;
-      if (t) { t.status = ev.isError ? 'error' : 'done'; if (typeof ev.ms === 'number') t.ms = ev.ms; }
+      if (t) {
+        t.status = ev.isError ? 'error' : 'done'; if (typeof ev.ms === 'number') t.ms = ev.ms;
+        const card = cardOfTool(ev);   // 插件工具的结果卡片：服务端在 tool_done 带 card / content 时画出来
+        if (card) t.card = card;
+      }
       break;
     }
     case 'usage':

@@ -4,14 +4,18 @@
 // GET /api/active 带给手机 App 的原生后台服务（AgentService 每 5s 轮询），由它弹进通知栏。
 // 只存内存、按 caller key 隔离，30 分钟后自然过期——这是「提醒」，不是消息记录。
 
+import { deliverToChannels } from '../plugins/channels.mjs';
+
 const KEEP_MS = 30 * 60_000;
 const MAX_PER_KEY = 20;
 const store = new Map();   // key -> [{ id, sessionId, message, at }]
 let seq = 0;
 
-export function notePush(key, { sessionId, message }) {
+export function notePush(key, { sessionId, message, title, level }) {
   const text = String(message || '').replace(/\s+/g, ' ').trim().slice(0, 300);
   if (!key || !text) return null;
+  // 插件登记的通知渠道（飞书、Telegram……，plugins/channels.mjs）也投一份
+  try { deliverToChannels(key, { title: title || '', body: String(message || '').slice(0, 2000), level: level || 'info', sessionId: sessionId || null }); } catch {}
   const now = Date.now();
   const list = (store.get(key) || []).filter((p) => now - p.at < KEEP_MS);
   const item = { id: `${now.toString(36)}-${(++seq).toString(36)}`, sessionId: sessionId || null, message: text, at: now };

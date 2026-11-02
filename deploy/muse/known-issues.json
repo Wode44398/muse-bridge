@@ -75,7 +75,7 @@
       "workaround_en": "Enter times in the server's time zone (for 9:00 Beijing time on a UTC server, enter 01:00). Ask Muse to run `date` on the VM if you're not sure which time zone it uses.",
       "cause": "页面上的「GMT+8」是写死的文字；调度按服务器本地时间算，部署脚本没设时区。",
       "since": null,
-      "fixed_in": null,
+      "fixed_in": "v0.6.0",
       "notify": false,
       "issue": null
     },

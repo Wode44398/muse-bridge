@@ -116,7 +116,7 @@ export function browserOf(ua) {
 
 const FAMILY_LABEL = {
   spawn: '父会话派生出这个会话时交代的任务', inbox: '子会话 / 别的会话发来的汇报', peer: '另一个 Claude 会话发来的消息',
-  plan: '计划模式拆出的新会话', ci: '拉取请求监控（CI / 评审事件）',
+  plan: '计划模式拆出的新会话', ci: '拉取请求监控（CI / 评审事件）', routine: '定时任务按时间表发起',
 };
 
 /**

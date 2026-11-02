@@ -1,0 +1,32 @@
+{
+  "id": "power-tools",
+  "name": "改到核心（示例插件）",
+  "version": "1.0.0",
+  "description": "插件接口四期的示例：订阅对话事件、用钩子拦危险命令、审批策略自动放行只读 git 命令、给消息打码、每轮追加提示、两个 agent 都能用的卡片工具、主页卡片、「/」命令、消息菜单和通知渠道。复制这个目录改名就是起点。",
+  "author": "claude-bridge",
+  "category": "third-party",
+  "entry": "index.mjs",
+  "engines": { "pluginApi": 3 },
+  "permissions": ["events", "claude.control", "claude.tools", "ui", "notify"],
+  "config": {
+    "blockDangerous": {
+      "type": "boolean", "default": true, "section": "拦截", "label": "拦下危险命令",
+      "desc": "Claude 要执行 rm -rf、git push --force、格式化磁盘这类命令时直接拦下（所有权限模式都拦，包括绕过权限）"
+    },
+    "autoAllowGitRead": {
+      "type": "boolean", "default": true, "section": "拦截", "label": "只读 git 命令免审批",
+      "desc": "git status / diff / log / show 不再弹审批卡"
+    },
+    "maskPhones": {
+      "type": "boolean", "default": false, "section": "改写", "label": "发给 Claude 前给手机号打码",
+      "desc": "消息里的 11 位手机号换成 <手机号>（界面上照常显示原话）"
+    },
+    "appendNote": {
+      "type": "string", "default": "", "max": 500, "widget": "textarea", "section": "改写", "label": "每轮追加到系统提示的话",
+      "desc": "留空 = 不加"
+    },
+    "notifyFailures": {
+      "type": "boolean", "default": true, "section": "提醒", "label": "对话出错时提醒我"
+    }
+  }
+}

@@ -146,6 +146,9 @@ export function mcpResult(server: { key: string; name: string }, tool: string, r
   const images: Block[] = [];
   for (const c of Array.isArray(r.content) ? r.content : []) {
     const type = String(c.type ?? "");
+    // bridge 插件的工具结果卡片（bridge 插件接口四期：第二段以 [[bridge-card]] 开头的 JSON，给 bridge 的 Claude 页画卡片用）：
+    // dimensio 这边不画卡片，这段去掉——第一段已经是给模型看的文字摘要
+    if (type === "text" && String(c.text ?? "").startsWith("[[bridge-card]]")) continue;
     if (type === "text") texts.push(String(c.text ?? ""));
     else if (type === "image") {
       const data = String(c.data ?? "");

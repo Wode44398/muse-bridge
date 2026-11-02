@@ -174,6 +174,8 @@ export const api = {
   updateRoutine: (r) => req('POST', '/api/routines/update', r),
   deleteRoutine: (id) => req('POST', '/api/routines/delete', { id }),
   runRoutine: (id) => req('POST', '/api/routines/run', { id }),
+  duplicateRoutine: (id) => req('POST', '/api/routines/duplicate', { id }),
+  routineGit: (ws) => req('GET', '/api/routines/git?ws=' + encodeURIComponent(ws || '')),   // 工作文件夹的 git 信息（分支 / worktree）
 
   // —— 工作空间文件（per-user 沙箱根；admin=vault）——
   // 桌面客户端的默认工作空间直接走主进程预热索引：不经过 HTTP、不闪 loading，

@@ -1,15 +1,16 @@
 <script>
-  // Claude 桌面版同款的【工具开关组】：终端 / 审阅 / 浏览器三颗常驻 + ⋮（文件、任务、明暗），
+  // Claude 桌面版同款的【工具开关组】：终端 / 审阅 / 浏览器三颗常驻 + ⋮（文件、记忆、任务、明暗），
   // 分屏格再多一颗 ✕。两处宿主、同一时刻只挂一处：
   //   · 工作台收着：TopBar 把它挂在这一格右上角（桌面壳 WCO 下坐进标题栏带、和最小化/关闭同一排）；
   //   · 工作台展开：ClaudeDock 把它挂进自己顶上那条带里（docked），就坐在卡片正上方——
   //     位置跟着工作台这一列走，不靠这一格右上角的坐标去「碰巧」对上。
   // 材质：触屏（手机 / 折叠屏 / 平板）用桌面主页 Dock 同款的 Figma 液态玻璃（见样式区 .fg），
   // `?oldglass` 退回原来的纯毛玻璃；鼠标设备（电脑浏览器、桌面壳）一律扁平实底（.flat）。
-  import { toggleTheme, ui, session } from '../../lib/state.svelte.js';
+  import { session } from '../../lib/state.svelte.js';
   import { toggleRail, railVisible } from '../../lib/sessionRail.svelte.js';
   import { IS_CSNAP } from '../../lib/csnap.js';
-  import { dock, toggleDockView, closeDock, ensureDockMeta, dockToolOk, DOCK_TOOLS } from '../../lib/dock.svelte.js';
+  import { dock, toggleDockView, closeDock, ensureDockMeta, dockToolOk, dockToolLabel, dockToolIcon, DOCK_TOOLS } from '../../lib/dock.svelte.js';
+  import { workbenchKeys } from '../../lib/pluginUi.svelte.js';
   import { bgHoldNow } from '../../lib/chat.svelte.js';
   import { dockIcon } from '../../lib/dockIcons.js';
   import { t } from '../../lib/i18n.js';
@@ -20,16 +21,17 @@
   const fg = !flat && (typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass'));
 
   const BAR = ['term', 'review', 'browser'];          // 标题栏常驻三颗（官方同款），其余收进 ⋮
-  const MORE = ['files', 'tasks'];
-  const LABEL = Object.fromEntries(DOCK_TOOLS.map((x) => [x.key, x]));
+  const MORE = ['files', 'memory', 'tasks'];
+  const KBD = Object.fromEntries(DOCK_TOOLS.map((x) => [x.key, x.kbd]));
   const barTools = $derived(BAR.filter(dockToolOk));
-  const moreTools = $derived(MORE.filter(dockToolOk));
+  // ⋮ 里在内置三件之后跟插件的工作台标签（ctx.ui.workbench，'plg:<插件>:<id>'）
+  const moreTools = $derived([...MORE, ...workbenchKeys()].filter(dockToolOk));
   const isOn = (k) => dock.open && dock.views.includes(k);
   // agent 动了浏览器 / 终端、本轮挂着等后台任务，而对应卡片没开：那颗开关亮呼吸点
   const bgLive = $derived(!!bgHoldNow());
   const live = (k) => !isOn(k) && ((k === 'browser' && !!dock.browserLive) || (k === 'term' && dock.termLive) || (k === 'tasks' && bgLive));
   const moreLive = $derived(moreTools.some(live));
-  const tip = (k) => (LABEL[k].kbd ? t('{label}（{kbd}）', { label: LABEL[k].label, kbd: LABEL[k].kbd }) : LABEL[k].label);
+  const tip = (k) => (KBD[k] ? t('{label}（{kbd}）', { label: dockToolLabel(k), kbd: KBD[k] }) : dockToolLabel(k));
 
   // 开关组要知道这个身份有没有 shell（终端 / 浏览器给不给）——meta 在工作台没开时也得有
   $effect(() => { if (dock.ws && !dock.meta) ensureDockMeta(); });
@@ -64,7 +66,7 @@
       title={railVisible() ? t('隐藏会话信息') : t('显示会话信息')} onclick={() => toggleRail()}>{@html dockIcon('info')}</button>
   {/if}
   {#each barTools as k (k)}
-    <button class="tb" class:on={isOn(k)} aria-pressed={isOn(k)} aria-label={LABEL[k].label} title={tip(k)} onclick={() => toggleDockView(k)}>
+    <button class="tb" class:on={isOn(k)} aria-pressed={isOn(k)} aria-label={dockToolLabel(k)} title={tip(k)} onclick={() => toggleDockView(k)}>
       {@html dockIcon(k)}
       {#if live(k)}<span class="live-dot"></span>{/if}
     </button>
@@ -81,19 +83,15 @@
     <div class="tb-menu" role="menu">
       {#each moreTools as k (k)}
         <button class="mi" role="menuitemcheckbox" aria-checked={isOn(k)} onclick={() => pick(k)}>
-          <span class="mi-ic">{@html dockIcon(k)}</span>
-          <span class="mi-lab">{LABEL[k].label}</span>
+          <span class="mi-ic">{@html dockToolIcon(k)}</span>
+          <span class="mi-lab">{dockToolLabel(k)}</span>
           {#if live(k)}<span class="mi-live"></span>{/if}
-          {#if LABEL[k].kbd}<span class="mi-kbd">{LABEL[k].kbd}</span>{/if}
+          {#if KBD[k]}<span class="mi-kbd">{KBD[k]}</span>{/if}
           <span class="mi-ck">{#if isOn(k)}{@html dockIcon('check')}{/if}</span>
         </button>
       {/each}
-      <div class="mi-sep" role="separator"></div>
-      <button class="mi" role="menuitem" onclick={() => { moreOpen = false; toggleTheme(); }}>
-        <span class="mi-ic">{@html dockIcon(ui.theme === 'light' ? 'moon' : 'sun')}</span>
-        <span class="mi-lab">{ui.theme === 'light' ? t('深色模式') : t('浅色模式')}</span>
-      </button>
       {#if dock.open && dock.views.length > 1}
+        <div class="mi-sep" role="separator"></div>
         <button class="mi" role="menuitem" onclick={() => { moreOpen = false; closeDock(); }}>
           <span class="mi-ic">{@html dockIcon('close')}</span>
           <span class="mi-lab">{t('收起全部面板')}</span>
@@ -155,7 +153,7 @@
   @media (hover: hover) { .mi:hover { background: var(--hover); } }
   .mi-ic { width: 17px; height: 17px; flex: none; display: flex; color: var(--serif); }
   .mi-ic :global(svg) { width: 100%; height: 100%; }
-  .mi-lab { flex: 1; min-width: 0; }
+  .mi-lab { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mi-live { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); animation: tbPulse 1.2s ease-in-out infinite; flex: none; }
   .mi-kbd { font-size: 11.5px; color: var(--muted); font-family: Consolas, 'Cascadia Mono', Menlo, monospace; }
   @media (pointer: coarse) { .mi-kbd { display: none; } }

@@ -4,7 +4,8 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { harnessDir } from './harness-dir.mjs';
-import { registerHarnessRoutes } from './routes/harness.mjs';
+import { registerHarnessRoutes, adminCustomProvidersDir } from './routes/harness.mjs';
+import { startPluginProviderSync } from './runtime/plugin-providers.mjs';
 
 export { harnessDir };
 // 公网预览子域（core routes/preview-host.mjs）查注册表、控制台「服务控制」排空与计数用。
@@ -17,4 +18,5 @@ export function runnable() { return existsSync(path.join(harnessDir(), 'server',
 
 export function register(router, { identify }) {
   registerHarnessRoutes(router, { identify });   // /api/harness/* → 反代到独立 harness 底座进程(8799)
+  startPluginProviderSync(adminCustomProvidersDir);   // 插件提供的模型服务（ctx.models.provide）→ 管理员实例的 plugin-providers.json
 }

@@ -75,10 +75,16 @@ export const currentTheme = () => (typeof document !== 'undefined' && document.d
 export const hostPlatform = () => (typeof window === 'undefined' ? 'web' : window.AndroidStore ? 'android' : window.BridgeDesktop ? 'desktop' : 'web');
 export const inAndroidApp = () => typeof window !== 'undefined' && !!window.AndroidStore;
 
-// 独立打开一个插件页面（which: 'panel' | 'settings'）。返回 false = 打不开（已提示）。
-export async function openPluginStandalone(id, { which = 'panel', title = '' } = {}) {
-  const r = await api.post('/api/plugins/ticket', { id, which });
+// 独立打开一个插件页面（which: 'panel' | 'settings' | 'workbench'）。返回 false = 打不开（已提示）。
+// workbench（Claude 工作台标签，四期）要带 page；context = { sessionId, cwd, agent } 随地址的 # 交给页面（SDK 的 bridge.context()）。
+export async function openPluginStandalone(id, { which = 'panel', title = '', page = '', context = null } = {}) {
+  const r = await api.post('/api/plugins/ticket', which === 'workbench' ? { id, which, page } : { id, which });
   const hash = new URLSearchParams({ t: r.ticket, theme: currentTheme(), lang: isEn() ? 'en' : 'zh', platform: hostPlatform() });
+  if (context) {
+    if (context.sessionId) hash.set('sid', String(context.sessionId));
+    if (context.cwd) hash.set('cwd', String(context.cwd));
+    hash.set('agent', context.agent === 'dimensio' ? 'dimensio' : 'claude');
+  }
   const url = apiUrl(r.page) + '#' + hash.toString();
   const store = typeof window !== 'undefined' ? window.AndroidStore : null;
   if (store && typeof store.openPluginPage === 'function') { store.openPluginPage(url, String(title || ''), currentTheme() === 'dark'); return true; }
