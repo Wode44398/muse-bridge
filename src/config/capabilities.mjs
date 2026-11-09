@@ -11,6 +11,14 @@
 export const CAPABILITIES = {
   claude: {
     models: [
+      // Fable 5.2（2026-11-09，SDK 0.3.321 / 内核 2.1.321 首次收录，CLI fable 别名与 latest_per_family.fable 同日切到它）。
+      // 比 Fable 5.1 便宜（$8/$40，cache read $0.20/M；fast $16/$80），知识截止 2026-06。CLI 内置目录：**裸 id 直接 1M**
+      //（native_1m，不进 oneM）、maxOutputTokens 128k（5.1 是 64k）、effort 五档、**CLI 不传 effort 默认 medium**
+      //（API 默认是 high，两边不一样——见下 effortDefaults）、**fast mode 支持**（Fable 系第一个，进 fast 表）。
+      // 安全栅门回退目标 Opus 4.8 / Opus 5（CLI 内置表），走现有 onModelNotice。思考块只有 5.2 自己读得懂：
+      // 会话中途从 5.2 切到别的模型（含 5.1 / Opus 5.5 / 栅门回退）那一轮没有之前的推理，API 静默丢块、不报错。
+      // 「编辑历史使思考块失效」的前缀检查在 5.2 上对所有账号强制，但历史由 SDK 内核管，bridge 不感知。
+      { id: 'claude-fable-5-2', name: 'Fable 5.2' },
       // Fable 5.1 (2026-09-01，SDK 0.3.257 / 内核 2.1.257 首次收录，官方 /model 默认
       // Fable 档)。同价位接棒 Fable 5（$10/$50，cache read 降到 $0.25/M），长程 agent
       // 编码/文档表格/多步检索/视觉更强；思考恒开、effort 五档（probe 实测 max 通过）。
@@ -72,18 +80,18 @@ export const CAPABILITIES = {
       { id: 'claude-opus-4-6', name: 'Opus 4.6 Legacy' },
     ],
     // 支持 [1m] 兄弟档的裸 id（probe 验证过 contextWindow=1M 的那几个）。Sonnet 4.6 /
-    // Haiku 4.5 / Opus 4.6 没有 [1m] 档，保持 200k。Fable 5.1 / Opus 5.5 / Haiku 5.5 裸 id 本身就是 1M（见上），
+    // Haiku 4.5 / Opus 4.6 没有 [1m] 档，保持 200k。Fable 5.2 / Fable 5.1 / Opus 5.5 / Haiku 5.5 裸 id 本身就是 1M（见上），
     // 不必进这张表——to1M 原样放行即可。
     oneM: ['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5-5', 'claude-sonnet-5'],
     // fast mode 支持的模型（官方口径 Opus 5.5/5/4.8/4.7；SDK 0.3.220 起 settings.fastMode
     // 可点亮，2026-07-30 probe 实测 fast_mode_state=on，Opus 5.5 于 09-22 实测 on）。前端模型菜单
-    // 据此显隐 ⚡ 开关，后端 runClaudeChat 据此决定是否注入 settings。
-    fast: ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7'],
+    // 据此显隐 ⚡ 开关，后端 runClaudeChat 据此决定是否注入 settings。Fable 5.2 于 11-09 加入（CLI 2.1.321 目录带 fast_mode）。
+    fast: ['claude-fable-5-2', 'claude-opus-5-5','claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7'],
     // 「没选 effort」时实际跑的档位（bridge 不传 effort，由 CLI 按内置模型目录 default_effort 取；
     // 09-22 探针 Stop hook 实测 Opus 5.5=medium、Opus 4.7=xhigh；10-07 Haiku 5.5=medium）。表外一律 high。前端芯片/拉条的
     // 默认高亮读它，否则选 Opus 5.5 不动 effort 会恒显「已选 High，实际 Medium」。注意 admin 会话
     // 读 ~/.claude/settings.json，其 modelSettings.<id>.effortLevel（桌面端 /effort 按模型存）会盖过它。
-    effortDefaults: { 'claude-opus-5-5': 'medium', 'claude-haiku-5-5': 'medium', 'claude-opus-4-7': 'xhigh' },
+    effortDefaults: { 'claude-fable-5-2': 'medium', 'claude-opus-5-5': 'medium', 'claude-haiku-5-5': 'medium', 'claude-opus-4-7': 'xhigh' },
     efforts: [
       { id: 'low', name: 'Low' },
       { id: 'medium', name: 'Medium' },

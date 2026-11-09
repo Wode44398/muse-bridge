@@ -237,8 +237,8 @@ export function registerChatRoutes(router, { authOk, identify }) {
     let model = claudeModelOk(parsed.model) ? parsed.model : (MODEL || undefined);
     // 快照（公开链接）禁用 Fable 时（分群设置 fable5，覆盖整个 Fable 5.x 档），把 Fable 请求
     // 降级到默认模型——前端选择器已隐藏该项，这里再拦一道，防抓包直接指定
-    // claude-fable-5 / claude-fable-5-1 / 其 [1m] 兄弟档。
-    if (isSnap && !snapAllowsFable(ctx.snap.token) && /^claude-fable-5(-1)?(\[1m\])?$/.test(model || '')) {
+    // claude-fable-5 / claude-fable-5-1 / claude-fable-5-2（以及以后的 5.x）/ 其 [1m] 兄弟档。
+    if (isSnap && !snapAllowsFable(ctx.snap.token) && /^claude-fable-5(-\d+)?(\[1m\])?$/.test(model || '')) {
       model = MODEL || undefined;
     }
     // 自定义 API 的模型：推理强度是它自己的档位表（设置 › Claude › 模型服务，档位 id 自由起名），按那张表收

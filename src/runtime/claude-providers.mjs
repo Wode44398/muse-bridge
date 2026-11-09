@@ -557,8 +557,9 @@ export function customEffortOk(modelId, e, owner) {
 // 代理对官方地址的每个启用模型打一次 max_tokens=1 的带 speed 请求（claude-providers-proxy.mjs 的 ensureFastProbes），
 // 200 / fast 额度 429 = 支持，400「does not support the `speed` parameter」= 不支持，结果按型号落盘（fast-probe.json，7 天复探）。
 // 还没探出来（刚加的服务、网络错）先按实测表：2026-10-23 真 key 逐个打，Opus 5.5 / 5 / 4.8 / 4.6 回 200；
-// Opus 4.7、Fable、Sonnet、Haiku 回 400。订阅号那条路（CLI settings.fastMode）的支持表在 capabilities.mjs，两边不一样。
-const API_FAST = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-6']);
+// Opus 4.7、Fable 5 / 5.1、Sonnet、Haiku 回 400。订阅号那条路（CLI settings.fastMode）的支持表在 capabilities.mjs，两边不一样。
+// Fable 5.2（2026-11-09）按官方文档支持 fast（$16/$80），先进表，真探测结果照旧盖过它。
+const API_FAST = new Set(['claude-fable-5-2', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-6']);
 const FAST_HOSTS = new Set(['api.anthropic.com']);
 const isFirstPartyHost = (u) => { try { return FAST_HOSTS.has(new URL(u).hostname); } catch { return false; } };
 export function _fastHostForTests(h) { FAST_HOSTS.add(h); }

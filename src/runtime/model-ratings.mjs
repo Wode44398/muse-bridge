@@ -37,6 +37,9 @@ const ALIASES = {
   'mimo-v2-6-pro-ultraspeed': 'mimo-v2-6-pro',
   'claude-haiku-4-5': 'claude-4-5-haiku',
   'claude-sonnet-4-5': 'claude-4-5-sonnet',
+  // Fable 5.2（2026-11-09 发布）评分库里还没有：先借 5.1 的分数排阶梯（智力只高不低、单价更便宜，不会排错档）；
+  // 快照里有了 claude-fable-5-2 就删掉这行（精确匹配优先，留着也不碍事）。
+  'claude-fable-5-2': 'claude-fable-5-1',
 };
 
 // 官方订阅会话里 Agent 工具与工作流都认的 Claude 别名 → 当前内核把它解析成的型号（CLI 2.1.29x；新模型上架时跟 capabilities.mjs 一起改）
@@ -44,7 +47,7 @@ export const CLAUDE_SUBS = [
   { alias: 'opus', id: 'claude-opus-5-5', label: 'Opus 5.5' },
   { alias: 'sonnet', id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
   { alias: 'haiku', id: 'claude-haiku-5-5', label: 'Haiku 5.5' },
-  { alias: 'fable', id: 'claude-fable-5-1', label: 'Fable 5.1' },
+  { alias: 'fable', id: 'claude-fable-5-2', label: 'Fable 5.2' },
 ];
 
 // 四档：key 是 auto:<key>；frac = 门槛占「可派模型里最高智力指数」的比例（top 档取最高分 −1.5 以内最便宜的）

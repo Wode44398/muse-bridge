@@ -37,7 +37,8 @@ export function codexCapabilities(capsData) {
 // Sonnet 5 / Haiku 4.5，Fable 5 退进 More models。2026-09-22 Opus 5.5 接棒 Opus 位（CLI 2.1.280
 // 的 opus 别名与 /model 主项同日切换，Opus 5 标为 previous），Opus 5 退进 More models。
 // 2026-10-07 Haiku 5.5 接棒 Haiku 位（CLI 2.1.293 latest_per_family.haiku），Haiku 4.5 退进 More models。
-const PRIMARY_IDS = ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
+// 2026-11-09 Fable 5.2 接棒 Fable 位（CLI 2.1.321 latest_per_family.fable），Fable 5.1 退进 More models。
+const PRIMARY_IDS = ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
 
 export function splitClaudeModels(capsData) {
   const all = capsData?.claude?.models || [];
