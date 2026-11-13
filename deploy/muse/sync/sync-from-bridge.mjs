@@ -88,7 +88,9 @@ for (const r of [...toAdd, ...toChange]) {
   cpSync(path.join(FROM, r), dst);
   if (r === VISUAL_INVENTORY) {
     const inventory = JSON.parse(readFileSync(dst, 'utf8'));
-    inventory.files = Object.fromEntries(Object.entries(inventory.files).filter(([file]) => file.startsWith('frontend-assets/')));
+    // 只留 Muse 带着的文件：按上面的 DROP 剔（client/ 的桌面字体不带），不写死目录名——bridge 11-13 起视觉资源
+    // 从 frontend-assets/ 挪到了 web/src/visuals/、web/public/chatgpt/，以后再挪也照样对。
+    inventory.files = Object.fromEntries(Object.entries(inventory.files).filter(([file]) => !matches(file, DROP)));
     writeFileSync(dst, JSON.stringify(inventory, null, 2) + '\n');
   }
 }
