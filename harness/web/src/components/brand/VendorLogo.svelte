@@ -6,6 +6,7 @@
   import Mark from "./Mark.svelte";
   import Icon from "../ui/Icon.svelte";
   import { isCustomVendor, vendorInfo } from "../../lib/state.svelte.ts";
+  import { brandSvg } from "../../lib/brand-logos.svelte.ts";
   // Official favicon, vendored from https://mimo.mi.com/favicon.png (2026-09-21).
   import mimoLogo from "../../assets/mimo.png";
   import { t } from "../../lib/i18n.ts";
@@ -20,6 +21,8 @@
   // 「已删除」是 vendorInfo 给的占位公司名（这里只拿来比较）；vendorInfo 用 t() 出这个值，英文界面下比较的是译文
   const deleted = (c: string) => c === "已删除" || c === t("已删除"); // i18n-ignore
   const initial = $derived(custom && !deleted(custom.company) ? (Array.from(custom.name.trim())[0] ?? "").toUpperCase() : "");
+  // 收录过的提供商画它的品牌标（和 bridge 模型中心同一份图）；单色场合、图库还没到、没收录的照旧画首字
+  const brand = $derived(custom && !mono && !deleted(custom.company) ? brandSvg(custom.logo) : "");
 </script>
 
 <span class="vlogo" style="width:{size}px;height:{size}px" aria-hidden="true">
@@ -92,7 +95,10 @@
       {/if}
     </svg>
   {:else if custom}
-    {#if initial}
+    {#if brand}
+      <!-- 图库里的静态 SVG（生成物），不含任何外来内容 -->
+      <span class="brand">{@html brand}</span>
+    {:else if initial}
       <svg viewBox="0 0 24 24" width={size} height={size} class="mono-glyph" class:mono>
         {#if mono}
           <rect x="2.4" y="2.4" width="19.2" height="19.2" rx="5" fill="none" stroke="currentColor" stroke-width="1.7" />
@@ -127,6 +133,17 @@
   }
   .vlogo svg {
     display: block;
+  }
+  .brand {
+    display: block;
+    width: 100%;
+    height: 100%;
+    color: var(--text);
+  }
+  .brand :global(svg) {
+    display: block;
+    width: 100%;
+    height: 100%;
   }
   .mono-glyph text {
     font-family: var(--font-ui);

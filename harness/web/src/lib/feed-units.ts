@@ -17,6 +17,7 @@
 // 照原样展开；卡片回执、报错、提示、截图与这一轮最后一段回答照常显示。
 import type { Item, RunTiming, ToolItem } from "./timeline-types.ts";
 import { t, tc } from "./i18n.ts";
+import { isHiddenToolItem, isWidgetItem } from "./widget-tools.ts";
 
 // 只读探索：只看不改的工具（LocalPCInspect 是 DeviceInspect 的旧名，留着给老会话的历史）
 export const EXPLORE_TOOLS = new Set([
@@ -33,7 +34,8 @@ export type FeedUnit =
 
 const isExplore = (it: Item) => it.kind === "thinking" || (it.kind === "tool" && EXPLORE_TOOLS.has((it as ToolItem).name));
 const isAgent = (it: Item | undefined): it is ToolItem => it?.kind === "tool" && (it as ToolItem).name === "Agent";
-const isStep = (it: Item) => it.kind === "thinking" || (it.kind === "tool" && (it as ToolItem).name !== "Workflow" && !isAgent(it));
+// 内嵌图表（ShowWidget）是回答的一部分：不进工具组（下一行的 !isWidgetItem），轮次折叠时也照常显示（planFold）
+const isStep = (it: Item) => it.kind === "thinking" || (it.kind === "tool" && (it as ToolItem).name !== "Workflow" && !isAgent(it) && !isWidgetItem(it));
 
 // 工具组：tl[from, to) 里连续的只读探索（含穿插的思考）≥2 次工具且段长 ≥3 才收成组卡；
 // 精简模式：连续的工具 / 思考（Workflow、Agent 除外）≥2 次工具就收
@@ -96,7 +98,7 @@ export function planFold(tl: Item[], from: number, to: number): FoldPlan | null 
   for (let i = from; i < to; i++) {
     const it = tl[i];
     if (i === lastText) continue;
-    if (it.kind === "tool") {
+    if (it.kind === "tool" && !isWidgetItem(it)) {
       tools++;
       if (!firstTool) firstTool = it.id;
       folded.add(i);
@@ -116,11 +118,13 @@ export function planFold(tl: Item[], from: number, to: number): FoldPlan | null 
 }
 
 export function feedUnits(tl: Item[], running: boolean, openFolds: Record<string, boolean> = {}, compact = false): FeedUnit[] {
+  // 画图前读指南（WidgetGuide）对用户是内部步骤：不上对话流
+  if (tl.some(isHiddenToolItem)) tl = tl.filter((it) => !isHiddenToolItem(it));
   const out: FeedUnit[] = [];
   // 轮次边界：用户自己发的消息（运行中插话不算）
   const cuts = [0];
   tl.forEach((it, i) => {
-    if (i > 0 && it.kind === "user" && !it.steer) cuts.push(i);
+    if (i > 0 && ((it.kind === "user" && !it.steer) || (it.kind === "session" && it.turn))) cuts.push(i); // 会话间唤醒开的一轮也是一轮
   });
   cuts.push(tl.length);
   for (let s = 0; s + 1 < cuts.length; s++) {

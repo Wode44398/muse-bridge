@@ -33,6 +33,8 @@ const NOTE = '⚠️ 这一轮没跑完：bridge 服务进程在它执行到一�
 const TAIL_BYTES = 512 * 1024;
 // 心跳间隔：有轮在跑时每分钟把台账重写一次（只是一个时间戳），下次启动据此估出上一条命大概死在什么时候。
 const BEAT_MS = 60_000;
+// 「被中断」标记留多久：transcript 里的中断留痕是永久的，这张表只为 attach 当场收敛和 overview 提醒，过了几天就没意义了。
+const INT_TTL_MS = 3 * 24 * 3600_000;
 
 let FILE = '';
 let INT_FILE = '';
@@ -124,10 +126,12 @@ export function endInflight(key, sessionId) {
 export function interruptedRun(key, sessionId) {
   return sessionId ? (_interrupted.get(idOf(key, sessionId)) || null) : null;
 }
-// agent 接口用（overview）：这个 caller 名下所有还挂着「被中断」的会话。只读，不清标记。
+// agent 接口用（overview）：这个 caller 名下最近还挂着「被中断」的会话。只读，不清标记。
+// 超过 INT_TTL_MS 的不报：没人回去看的旧会话（11-07 正式服还挂着 09-26 的）只会占 agent 上下文、引它去续跑早就不要的活。
 export function interruptedRunsOf(key) {
   const k = String(key || '');
-  return [..._interrupted.values()].filter((r) => r && r.key === k).map((r) => ({ ...r }));
+  const since = Date.now() - INT_TTL_MS;
+  return [..._interrupted.values()].filter((r) => r && r.key === k && (r.resuming || (r.at || 0) >= since)).map((r) => ({ ...r }));
 }
 export const INTERRUPT_NOTE = NOTE;
 // 排上了重启后自动续跑（restart-resume.mjs）时 attach 回的那句：别让人以为还得自己说「继续」。
@@ -155,9 +159,12 @@ export function initInflight(root) {
   // 盘上那份台账属于【上一条命】，本进程的在跑集合从零开始。
   _live.clear();
 
-  for (const r of readJson(INT_FILE)) {
-    if (r && r.sessionId) _interrupted.set(idOf(r.key, r.sessionId), r);
+  const since = Date.now() - INT_TTL_MS;
+  const saved = readJson(INT_FILE);
+  for (const r of saved) {
+    if (r && r.sessionId && (r.resuming || (r.at || 0) >= since)) _interrupted.set(idOf(r.key, r.sessionId), r);
   }
+  if (_interrupted.size !== saved.length) persistInt();
 
   const orphans = readJson(FILE).filter((r) => r && r.sessionId);
   // 先清台账再留痕：留痕万一抛了，也不会在下次启动时被当成新的孤儿重复标记。

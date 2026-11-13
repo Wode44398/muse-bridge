@@ -20,6 +20,7 @@ export function parseLimit(text: unknown): number | null;
 export function parseEffortList(text: unknown): string[] | null;
 export function looksNotChat(status: number, text: unknown): boolean;
 export function looksNoAudio(status: number, text: unknown): boolean;
+export function looksBilling(status: number, text: unknown): boolean;
 export function mentionsModel(msg: unknown, model?: string): boolean;
 export function protocolName(protocol: string): string;
 export function endpointHint(protocol: string, baseUrl: string): string;

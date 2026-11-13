@@ -15,7 +15,6 @@
   import { layout } from '../../lib/layout.svelte.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { SI, agentMark } from '../../lib/settingsIcons.js';
-  import { ovUrl } from '../../lib/overlay.svelte.js';
   import { t, tc, tr } from '../../lib/i18n.js';
   import { sa, loadOverview, loadLimits, loadActive, loadUsers, loadAccounts, loadDevs, loadPublicAccess, watchPublicAccess, pageVisible, liveGens, supervisedBy, saToastState, saConfirmState, saConfirmSettle } from '../../lib/serverAdmin.svelte.js';
   import GlassButton from '../ios27/GlassButton.svelte';
@@ -105,7 +104,7 @@
   };
   const svg = (k, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ''}</svg>`;
   // Claude 账号那一行用 Claude 真标（设置页 agent 行同款：品牌只用真标，不自绘）
-  const claudeMark = $derived(ovUrl(agentMark('claude', !light)));
+  const claudeMark = $derived(agentMark('claude', !light));
 
   // 各页远程管理时都能进；会把自己关在门外的按钮（停服务 / 停隧道 / 开机自启）在「服务控制」页里按 sa.remote 藏掉，
   // 服务端那头也会拒（routes/admin.mjs 的 R2）。

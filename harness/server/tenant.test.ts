@@ -52,6 +52,24 @@ test("租户：访问范围锁死 workspace，配置接口不许切整机", () =
   } finally { restore(); }
 });
 
+test("租户：bypass 全权档不许用——配置接口拒、沙箱也不当真生效", () => {
+  tenantEnv();
+  try {
+    // config 校验：租户切 bypass 直接 400
+    assert.throws(() => resolveConfig(getConfig(), { permissionMode: "bypass" }), /not available/);
+    // auto / read-only / plan 照常
+    assert.equal(resolveConfig(getConfig(), { permissionMode: "read-only" }).permissionMode, "read-only");
+    // 防御性兜底：即便 access 被设成 bypass，租户实例里 bypassing 也为 false（沙箱仍按工作区 + 密钥守卫判）
+    assert.equal(new Sandbox(alice, "bypass").bypassing, false);
+  } finally { restore(); }
+});
+
+test("非租户：bypass 全权档可用，沙箱 bypassing 生效", () => {
+  restore(); // 确保不在租户模式
+  assert.equal(resolveConfig(getConfig(), { permissionMode: "bypass" }).permissionMode, "bypass");
+  assert.equal(new Sandbox(alice, "bypass").bypassing, true);
+});
+
 test("租户：工作区只能落在自己的文件夹里", () => {
   tenantEnv();
   try {

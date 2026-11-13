@@ -85,3 +85,82 @@ test('智能路由核实 / 探针结论 / 手机额度环：公开版都不发�
   assert.equal(await maybeRefreshLimits(), false);
   assert.equal(seen.length, 0);
 });
+
+// 2026-11：Ultra 订阅（原 Max 20x），部分 Ultra 没有 5 小时限额——权威来源只给周桶。
+test('没有 5 小时限额的号：清掉残留 five_hour、标 no_five_hour、套餐推断为 Ultra；再见到 5 小时桶就复位', async () => {
+  const { noteFiveHourPresence, accountNoFiveHour, accountPlan, applyRateLimit } = await import('./status.mjs');
+  const later = Date.now() + 3600_000;
+  applyProbedLimits({ five_hour: { pct: 10, resetsAt: later }, seven_day: { pct: 20, resetsAt: later } }, 'login');
+  // 响应头只有 7d
+  applyProbedLimits({ seven_day: { pct: 21, resetsAt: later } }, 'login');
+  noteFiveHourPresence('login', false, true);
+  let u = (await poolUsage()).login;
+  assert.equal(u.five_hour, null);
+  assert.equal(u.no_five_hour, true);
+  assert.equal(u.seven_day.pct, 21);
+  assert.equal(u.plan, 'ultra');
+  // 一次什么都没拿到（失败）不冲掉标记
+  noteFiveHourPresence('login', false, false);
+  assert.equal(accountNoFiveHour('login'), true);
+  // SDK 报 subscription_type 'ultra' 直接用；报 'max' 但没 5 小时桶也算 Ultra
+  applySdkUsage({ subscription_type: 'max', rate_limits: { five_hour: null, seven_day: { utilization: 22, resets_at: new Date(later).toISOString() } } }, 'login');
+  assert.equal(accountPlan('login'), 'ultra');
+  // 事件帧带回 five_hour → 复位，套餐回到服务端给的 max（分不出 5x / 20x）
+  applyRateLimit({ rateLimitType: 'seven_day', status: 'allowed', unifiedWindows: { five_hour: { utilization: 0.05, resetsAt: later / 1000 }, seven_day: { utilization: 0.22, resetsAt: later / 1000 } } }, 'login');
+  assert.equal(accountNoFiveHour('login'), false);
+  assert.equal(accountPlan('login'), 'max');
+  u = (await poolUsage()).login;
+  assert.equal(u.five_hour.pct, 5);
+  assert.equal(u.no_five_hour, undefined);
+  // 事件帧只有周桶 → 再次置位
+  applyRateLimit({ rateLimitType: 'seven_day', status: 'allowed', unifiedWindows: { seven_day: { utilization: 0.23, resetsAt: later / 1000 } } }, 'login');
+  assert.equal(accountNoFiveHour('login'), true);
+  assert.equal(accountLimitsOf('login').five_hour, undefined);
+  applySdkUsage({ subscription_type: 'ultra', rate_limits: {} }, 'login');
+  assert.equal(accountPlan('login'), 'ultra');
+});
+async function accountLimitsOfImpl() { return (await import('./status.mjs')).accountLimits; }
+const accountLimitsOf = await accountLimitsOfImpl();
+
+// 2026-11-09：Pro 体验 Fable 会带 Fable 周桶，不能再当 Max 的证据；Max 5x 与 Ultra（原 Max 20x）要分开。
+test('套餐定档：手动标的 > 本机登录凭据 > 权威 tier > SDK；upgrade-paths 到顶 = Ultra；Fable 桶不定档', async () => {
+  const S = await import('./status.mjs');
+  const A = await import('./claude-account.mjs');
+  assert.equal(S.planFromTier('max', 'default_claude_max_5x'), 'max5x');
+  assert.equal(S.planFromTier('max', 'default_claude_max_20x'), 'ultra');
+  assert.equal(S.planFromTier('claude_max', 'default_claude_max_20x'), 'ultra');
+  assert.equal(S.planFromTier('pro', 'default_claude_ai'), 'pro');
+  assert.equal(S.planFromTier('max', ''), null);
+  const later = Date.now() + 3600_000;
+  // k：有 Fable 桶、有 5 小时桶、SDK 没报套餐 → 不定档（以前会被当成 Max）
+  applySdkUsage({ subscription_type: null, rate_limits: {} }, 'k');
+  applyProbedLimits({ five_hour: { pct: 1, resetsAt: later }, seven_day: { pct: 1, resetsAt: later }, seven_day_overage_included: { pct: 1, resetsAt: later } }, 'k');
+  assert.equal(S.accountPlan('k'), null);
+  // upgrade-paths 只有 overage（不能再升档）= Ultra；看到 upgrade_plan 复位
+  S.noteUpgradePaths('k', 'overage');
+  assert.equal(S.accountPlan('k'), 'ultra');
+  S.noteUpgradePaths('k', ['upgrade_plan', 'overage']);
+  assert.equal(S.accountPlan('k'), null);
+  // 权威 tier
+  S.notePlanTier('k', 'max5x');
+  assert.equal(S.accountPlan('k'), 'max5x');
+  assert.equal((await poolUsage()).k.plan, 'max5x');
+  // 手动标的最优先；'' 改回自动
+  assert.equal(A.updateAccount('k', { plan: 'pro' }).ok, true);
+  assert.equal(S.accountPlan('k'), 'pro');
+  assert.equal(A.listAccounts().find((a) => a.id === 'k').plan, 'pro');
+  A.updateAccount('k', { label: '只改名' });
+  assert.equal(S.accountPlan('k'), 'pro');   // 不带 plan 不动
+  A.updateAccount('k', { plan: '' });
+  assert.equal(S.accountPlan('k'), 'max5x');
+  // 本机登录态的号看凭据的 rateLimitTier（有 5 小时限额的 20x 也叫 Ultra）
+  writeFileSync(path.join(cfgDir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'login-tok', subscriptionType: 'max', rateLimitTier: 'default_claude_max_5x' } }));
+  assert.equal(S.accountPlan('login'), 'max5x');
+  await new Promise((r) => setTimeout(r, 20));
+  writeFileSync(path.join(cfgDir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'login-tok', subscriptionType: 'max', rateLimitTier: 'default_claude_max_20x' } }));
+  assert.equal(S.accountPlan('login'), 'ultra');
+  A.setActive('login');
+  assert.equal(S.statusState.plan, 'Ultra');
+  A.setActive('k');
+  assert.equal(S.statusState.plan, 'Max 5x');
+});

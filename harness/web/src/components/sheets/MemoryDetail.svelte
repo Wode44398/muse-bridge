@@ -12,7 +12,7 @@
   import { t, tc, tr } from "../../lib/i18n.ts";
   import Button from "../ui/Button.svelte";
   import Switch from "../ui/Switch.svelte";
-  import { agoOf, explain, fmtDate, HISTORY_TEXT, issuesOf, STATUS_LABEL } from "./memory-text.ts";
+  import { agoOf, explain, fmtDate, HISTORY_TEXT, issuesOf, REVIEW_TEXT, reviewNoteText, reviewOf, STATUS_LABEL } from "./memory-text.ts";
 
   let {
     note,
@@ -62,6 +62,8 @@
   const evidence = $derived(note.evidence ?? []);
   const anchors = $derived(note.anchors ?? []);
   const scope = $derived(note.scope ?? []);
+  // 离线整理：对照原对话的复核意见（这一版看过才有）与写它的会话
+  const review = $derived(reviewOf(note));
 
   function startEdit() {
     draft = { title: note.title, description: note.description, content: note.content, dropExpiry: false };
@@ -190,8 +192,21 @@
     </div>
   {:else}
     <pre class="content">{note.content}</pre>
-    {#if evidence.length || anchors.length || scope.length || events.length}
+    {#if evidence.length || anchors.length || scope.length || events.length || review || note.sourceSession}
       <dl class="facts">
+        {#if review}
+          <dt>{t("整理复核")}</dt>
+          <dd>
+            <div class="rv" class:ok={review.verdict === "supported"} class:bad={review.verdict === "contradicted"}>
+              {REVIEW_TEXT[review.verdict]} <span class="num">{fmtDate(review.at)}</span>
+            </div>
+            {#if review.note}<div>{reviewNoteText(review.note)}</div>{/if}
+          </dd>
+        {/if}
+        {#if note.sourceSession}
+          <dt>{t("来源对话")}</dt>
+          <dd><code title={note.sourceSession}>{note.sourceSession.slice(0, 8)}</code></dd>
+        {/if}
         {#if evidence.length}
           <dt>{t("证据")}</dt>
           <dd>{#each evidence as e}<div>{e}</div>{/each}</dd>
@@ -401,6 +416,12 @@
     margin: 0;
     color: var(--text2);
     overflow-wrap: anywhere;
+  }
+  .rv.ok {
+    color: var(--ok);
+  }
+  .rv.bad {
+    color: var(--err);
   }
 
   .form,

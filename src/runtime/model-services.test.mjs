@@ -85,9 +85,116 @@ test('dimensio：勾了的写进 plugin-providers.json，形状对得上 harness
   assert.equal(p.modelSpecs[0].effortDefault, 'medium');
   assert.equal(p.authStyle, 'none');
   assert.equal(p.shared, true);
-  assert.deepEqual(p.plugin, { id: 'gemini-web', name: 'Gemini 网页版' });
+  // sid：提供方那边的服务 id（卡片据此跳回去改）；没给 logo 的不带 logo 字段
+  assert.equal(p.plugin.id, 'gemini-web');
+  assert.equal(p.plugin.name, 'Gemini 网页版');
+  assert.match(p.plugin.sid, /^[a-z0-9][a-z0-9-]{0,31}$/);
+  assert.ok(!('logo' in p.plugin));
 
   h.dispose(); onlyClaude.dispose();
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).providers, []);
   stop();
+});
+
+// —— 模型级 agents（2026-11-10 模型中心 v2：同一服务里每个模型各自给哪些 agent，服务 id 不拆不变）——
+const three = (over = {}) => spec({
+  models: [
+    { id: 'a', label: 'A', agents: ['claude'] },
+    { id: 'b', label: 'B', agents: ['dimensio'] },
+    { id: 'c', label: 'C', agents: ['claude', 'dimensio'] },
+  ],
+  ...over,
+});
+
+test('模型级 agents：a 只给 Claude、b 只给 dimensio、c 两边；两侧 id 与不带 agents 时一样', () => {
+  S._resetModelServicesForTests();
+  const dir = path.join(tmp, 'harness-cp-agents');
+  const stop = D.startPluginProviderSync(() => dir);
+  const file = path.join(dir, D.PLUGIN_PROVIDERS_FILE);
+  const pid = 'p-' + S.serviceHash('hub', 'svc', 10);
+  const did = 'custom-' + S.serviceHash('hub', 'svc', 8);
+
+  // 先按老写法（不带模型级 agents）登记一次，记下两侧 id
+  const h = S.provideModelService('hub', '模型中心', spec({ id: 'svc', models: ['a', 'b', 'c'] }));
+  assert.ok(P.customModelsView().some((m) => m.id === `custom:${pid}:a`));
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).providers[0].id, did);
+
+  h.update({ models: three().models, defaultModel: 'b' });
+  const claude = S.modelServices('claude');
+  assert.equal(claude.length, 1);
+  assert.deepEqual(claude[0].models.map((m) => m.id), ['a', 'c']);
+  assert.equal(claude[0].defaultModel, 'a', '默认模型 b 不给 Claude：回落到剩下的第一个');
+  const dim = S.modelServices('dimensio');
+  assert.deepEqual(dim[0].models.map((m) => m.id), ['b', 'c']);
+  assert.equal(dim[0].defaultModel, 'b');
+  assert.equal(S.modelServices().length, 1);
+  assert.deepEqual(S.modelServices()[0].models.map((m) => m.id), ['a', 'b', 'c'], '不带 agent 参数：全量原样');
+
+  const ids = P.customModelsView().filter((m) => m.provider === pid).map((m) => m.id).sort();
+  assert.deepEqual(ids, [`custom:${pid}:a`, `custom:${pid}:c`], 'Claude 的服务 id 不变，只剩 a、c');
+  assert.equal(P.resolveCustomModel(`custom:${pid}:b`), null);
+  const list = JSON.parse(readFileSync(file, 'utf8')).providers;
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, did, 'dimensio 的服务 id 不变');
+  assert.deepEqual(list[0].models, ['b', 'c']);
+  assert.equal(list[0].defaultModel, 'b');
+  h.dispose();
+  stop();
+});
+
+test('模型级 agents：某一侧一个不剩就整条不出现；坏值清洗；gemini 去掉 claude；跟服务级取交集', () => {
+  S._resetModelServicesForTests();
+  const h = S.provideModelService('hub', '模型中心', spec({ id: 'only-d', models: [{ id: 'x', agents: ['dimensio'] }, { id: 'y', agents: ['dimensio', 'studio', 7, 'claude-x'] }] }));
+  assert.equal(S.modelServices('claude').length, 0, 'Claude 一侧没有模型：整条不出现');
+  assert.equal(P.customModelsView().some((m) => m.provider === 'p-' + S.serviceHash('hub', 'only-d', 10)), false);
+  const rec = S.modelServices()[0];
+  assert.deepEqual(rec.models[1].agents, ['dimensio'], '不认识的去向清掉');
+
+  // 服务级只给 dimensio：模型上写了 claude 也不算
+  h.update({ agents: ['dimensio'], models: [{ id: 'x', agents: ['claude', 'dimensio'] }] });
+  assert.deepEqual(S.modelServices()[0].models[0].agents, ['dimensio']);
+  assert.equal(S.modelServices('claude').length, 0);
+
+  // gemini 协议：模型上的 claude 也去掉
+  const g = S.provideModelService('hub', '模型中心', spec({ id: 'gem', protocol: 'gemini', models: [{ id: 'g1', agents: ['claude', 'dimensio'] }, { id: 'g2', agents: ['claude'] }] }));
+  const gem = S.modelServices().find((s) => s.sid === 'gem');
+  assert.deepEqual(gem.models.map((m) => m.agents), [['dimensio'], []]);
+  assert.deepEqual(S.modelServices('dimensio').find((s) => s.sid === 'gem').models.map((m) => m.id), ['g1']);
+  assert.equal(S.modelServices('claude').some((s) => s.sid === 'gem'), false);
+  g.dispose(); h.dispose();
+});
+
+test('模型级 agents：老插件不传时逐字段不变，modelServices(agent) 返回的就是原记录', () => {
+  S._resetModelServicesForTests();
+  const h = S.provideModelService('gemini-web', 'Gemini 网页版', spec());
+  const all = S.modelServices();
+  assert.equal(all.length, 1);
+  assert.equal(Object.hasOwn(all[0].models[0], 'agents'), false, '没给就不多出 agents 字段');
+  assert.deepEqual(all[0].models[0], spec().models[0]);
+  assert.equal(S.modelServices('claude')[0], all[0], '没筛掉模型：原记录');
+  assert.equal(S.modelServices('dimensio')[0], all[0]);
+  h.dispose();
+});
+
+test('Claude：一个模型 id 不合 Claude 的规则只跳过它自己，不连累整条服务', () => {
+  S._resetModelServicesForTests();
+  const h = S.provideModelService('hub', '模型中心', spec({ id: 'mixed', models: ['good-1', 'bad?id', 'good-2'].map((id) => ({ id })) }));
+  const pid = 'p-' + S.serviceHash('hub', 'mixed', 10);
+  // model-services 自己只拦空白与控制字符，「bad?id」能登记；Claude 的规则更严（不收问号）
+  assert.equal(S.modelServices('claude')[0].models.length, 3);
+  const ids = P.customModelsView().filter((m) => m.provider === pid).map((m) => m.id).sort();
+  assert.deepEqual(ids, [`custom:${pid}:good-1`, `custom:${pid}:good-2`]);
+  h.dispose();
+});
+
+test('logo：提供方给的品牌标的键原样带给 dimensio；不合法的丢掉', () => {
+  S._resetModelServicesForTests();
+  const h = S.provideModelService('model-hub', '模型中心', { id: 'h-00aa11bb', name: 'OpenRouter', protocol: 'openai', baseUrl: 'http://127.0.0.1:1/x', models: ['a/b'], logo: 'openrouter' });
+  const rec = S.modelServices('dimensio')[0];
+  assert.equal(rec.logo, 'openrouter');
+  const p = D.toHarnessProvider(rec);
+  assert.deepEqual(p.plugin, { id: 'model-hub', name: '模型中心', sid: 'h-00aa11bb', logo: 'openrouter' });
+  h.update({ logo: '<svg onload=x>' });
+  assert.equal(S.modelServices('dimensio')[0].logo, '');
+  h.dispose();
 });

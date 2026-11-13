@@ -115,24 +115,29 @@ export async function providerLog(id) {
 
 export const isCustomModel = (id) => typeof id === 'string' && id.startsWith('custom:');
 export const customModelInfo = (id) => cp.models.find((m) => m.id === id) || null;
+/** 能选的对话模型：订阅模型 + 启用的自定义模型（[{ id, name }]，同输入框的模型芯片）。 */
+export const claudeModelChoices = (capsData) => [...(capsData?.claude?.models || []), ...cp.models];
 
 // —— 子 agent / 工作流 agent 的模型显示名（10-30）——
 // 工作流 progress 里的 model 是 Claude 写进 agent() 的原样字符串：custom:<服务>:<型号>、裸型号 id（deepseek-v4-pro）
 // 或 Claude 的 id / 别名。自定义模型用设置里的名字（「DeepSeek-V4-Pro」），清单里找不到（服务关了 / 不共享了）
 // 只留型号段；Claude 的走 modelLabel（claude-sonnet-5-5 → Sonnet 5.5）。不要把 custom:p-xxxx: 露给用户。
-// auto:<档>（按性价比阶梯由 bridge 在请求时换型号，见服务端 model-ratings.mjs）：served = 转录里实际答话的模型，
-// 有就显示「Opus 5.5（自动·难）」，还没开始答话只显示档名。
+// auto:<档>（按性价比阶梯由 bridge 在请求时换型号，见服务端 model-ratings.mjs）：served = 实际落到的模型
+//（服务端按改写记录 / 子 agent 转录补），有就只显示真实模型（档位另由 effort 显示），拿不到才显示档名；档名见 agentAutoTier。
 const CLAUDE_ALIAS = /^(claude-|opus|sonnet|haiku|fable)/i;
 const AUTO_TIER = { top: () => t('自动·最难'), hard: () => t('自动·难'), normal: () => t('自动·常规'), light: () => t('自动·机械') };
+/** auto:<档> → 「自动·难」；不是 auto 名回 ''。 */
+export function agentAutoTier(id) {
+  const auto = /^auto:(\w+)$/i.exec(typeof id === 'string' ? id.trim() : '');
+  if (!auto) return '';
+  const f = AUTO_TIER[auto[1].toLowerCase()];
+  return f ? f() : id.trim();
+}
 export function agentModelName(id, served) {
   const s = typeof id === 'string' ? id.trim() : '';
   if (!s) return '';
-  const auto = /^auto:(\w+)$/i.exec(s);
-  if (auto) {
-    const tier = AUTO_TIER[auto[1].toLowerCase()] ? AUTO_TIER[auto[1].toLowerCase()]() : s;
-    const real = served ? agentModelName(served) : '';
-    return real ? t('{model}（{tier}）', { model: real, tier }) : tier;
-  }
+  const tier = agentAutoTier(s);
+  if (tier) return (served && agentModelName(served)) || tier;
   if (isCustomModel(s)) {
     const hit = customModelInfo(s);
     return (hit && hit.name) || s.split(':').slice(2).join(':') || s;

@@ -1,0 +1,574 @@
+/* ═══════════════════════════════════════════════════════════════
+   Media Studio v3「纸墨工作台」（方案 §9.2）：令牌、字、外壳三栏、作品栏、浮层。创作页内部在 create.css。
+   设计语言照 dimensio（harness/DESIGN.md）：纸与墨，一抹朱只给正在发生的东西；纸的层次 = rail / bg / surface
+   + 上沿高光 sheen + 暖墨投影。令牌取值抄自 harness/web/src/lib/theme.ts（LIGHT / DARK，2026-11-06），
+   Studio 是扩展分块、不许 import @hx，所以值拷过来；那边改了这边同步。
+   名字一律带 --sd- 前缀：侧栏「文件」里嵌的是核心的 WorkspaceEmbed，核心组件也读 --bg / --text 这类名字，
+   在 .studio-root 上直接写那些名字会改掉它们的颜色。
+   这是全局样式（不带 svelte 哈希）：所有规则都限定在 .studio-root / .studio-slide 之下，别写裸的通用短名。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* —— 字：dimensio 三款子集（Inter 拉丁 / JetBrains Mono / 思源宋体 600 展示子集），拷进 Studio 自己的资源 —— */
+@font-face { font-family: "Studio Sans"; src: url("./fonts/studio-sans-var.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Studio Mono"; src: url("./fonts/studio-mono-var.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+/* 只含字标与空态展示句（modules/studio/display.js；改了要重跑 fonts/serif-subset.py） */
+@font-face { font-family: "Studio Serif"; src: url("./fonts/studio-serif-600.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+
+.studio-slide {
+  position: fixed; inset: 0; z-index: 30;
+  transform-origin: 50% 50%;
+}
+.studio-slide.peeking { overflow: hidden; }
+
+.studio-root {
+  /* —— 纸墨（LIGHT）—— */
+  --sd-bg: #F4F1EA; --sd-rail: #EEEAE2;
+  --sd-surface: #FBFAF6; --sd-surface2: #ECE8DF; --sd-surface3: #E2DDD1;
+  --sd-text: #171614; --sd-text2: #48453F; --sd-text3: #6F6B63;
+  --sd-border: rgba(23, 22, 20, .09); --sd-border2: rgba(23, 22, 20, .16);
+  --sd-accent: #171614; --sd-accent-soft: rgba(23, 22, 20, .07); --sd-on-accent: #F4F1EA;
+  --sd-primary: #171614; --sd-on-primary: #F4F1EA;
+  --sd-live: #C8412B; --sd-live-soft: rgba(200, 65, 43, .12);
+  --sd-ok: #3D7A4A; --sd-warn: #98610F; --sd-err: #AE2E3B;
+  --sd-scrim: rgba(23, 22, 20, .24);
+  --sd-shadow-1: 0 1px 1px rgba(23, 22, 20, .04), 0 3px 10px -3px rgba(23, 22, 20, .10);
+  --sd-shadow-2: 0 1px 2px rgba(23, 22, 20, .06), 0 14px 34px -10px rgba(23, 22, 20, .22);
+  --sd-shadow-3: 0 2px 6px rgba(23, 22, 20, .06), 0 30px 70px -18px rgba(23, 22, 20, .34);
+  --sd-sheen: rgba(255, 255, 255, .75);
+  --sd-hover: color-mix(in srgb, var(--sd-text) 4.5%, transparent);   /* 行悬停（dimensio 侧栏同值） */
+  --sd-press: color-mix(in srgb, var(--sd-text) 8%, transparent);
+  /* 浮起的面：一圈细线 + 上沿高光（纸的厚度）+ 暖墨投影 */
+  --sd-lift-1: 0 0 0 1px var(--sd-border), inset 0 1px 0 var(--sd-sheen), var(--sd-shadow-1);
+  --sd-lift-2: 0 0 0 1px var(--sd-border), inset 0 1px 0 var(--sd-sheen), var(--sd-shadow-2);
+  /* —— 字（dimensio theme.ts 同一套回落链）—— */
+  --sd-cjk: "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --sd-font-ui: "Studio Sans", system-ui, -apple-system, "Segoe UI", var(--sd-cjk);
+  --sd-font-mono: "Studio Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "PingFang SC", "Microsoft YaHei UI", monospace;
+  --sd-font-serif: "Studio Serif", "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", serif;
+  /* 字号阶梯 11 · 12 · 13 · 14 · 15 · 17 · 20 · 26；字重只用 400 / 500 / 600 */
+  --sd-fs-xs: 11px; --sd-fs-sm: 12px; --sd-fs-md: 13px; --sd-fs-base: 14px; --sd-fs-body: 15px; --sd-fs-lg: 17px; --sd-fs-xl: 20px; --sd-fs-2xl: 26px;
+  /* 圆角阶梯 */
+  --sd-r-xs: 6px; --sd-r-sm: 8px; --sd-r-md: 12px; --sd-r-lg: 16px; --sd-r-xl: 22px;
+  /* 动效（弹簧曲线由 modules/studio/motion.js 写进 style：--sd-spring* / --sd-t-spring*）*/
+  --sd-ease: cubic-bezier(.2, .8, .2, 1); --sd-ease-out: cubic-bezier(.16, 1, .3, 1); --sd-ease-in: cubic-bezier(.5, 0, .75, 0);
+  --sd-t-fast: 140ms; --sd-t-med: 240ms; --sd-t-slow: 420ms;
+  /* 版式：44 顶栏带（三栏的栏头同一条中线）；安全区在根上拍一份真值（侧栏为了子树归零写了 --sat:0） */
+  --sd-band: 44px;
+  --sd-sat: var(--sat, 0px); --sd-sab: var(--sab, 0px);
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  background: var(--sd-bg); color: var(--sd-text);
+  font-family: var(--sd-font-ui);
+  font-size: var(--sd-fs-base); line-height: 1.45;
+  text-wrap: pretty;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  color-scheme: light;
+}
+.studio-root.dark {
+  /* —— 纸墨（DARK）—— */
+  --sd-bg: #131210; --sd-rail: #0F0E0C;
+  --sd-surface: #1C1A17; --sd-surface2: #25231F; --sd-surface3: #2F2C28;
+  --sd-text: #EEEAE2; --sd-text2: #B9B3A8; --sd-text3: #8A857C;
+  --sd-border: rgba(238, 234, 226, .08); --sd-border2: rgba(238, 234, 226, .14);
+  --sd-accent: #EEEAE2; --sd-accent-soft: rgba(238, 234, 226, .09); --sd-on-accent: #131210;
+  --sd-primary: #EEEAE2; --sd-on-primary: #131210;
+  --sd-live: #E4553A; --sd-live-soft: rgba(228, 85, 58, .16);
+  --sd-ok: #79B887; --sd-warn: #D9A650; --sd-err: #E5707A;
+  --sd-scrim: rgba(0, 0, 0, .5);
+  --sd-shadow-1: 0 1px 1px rgba(0, 0, 0, .3), 0 4px 14px -4px rgba(0, 0, 0, .4);
+  --sd-shadow-2: 0 2px 4px rgba(0, 0, 0, .3), 0 16px 40px -10px rgba(0, 0, 0, .55);
+  --sd-shadow-3: 0 4px 10px rgba(0, 0, 0, .34), 0 32px 80px -20px rgba(0, 0, 0, .66);
+  --sd-sheen: rgba(255, 255, 255, .045);
+  color-scheme: dark;
+}
+:where(.studio-root) :where(button) { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; margin: 0; }
+:where(.studio-root) :where(button:disabled) { cursor: default; }
+:where(.studio-root) :where(input, textarea) { font: inherit; color: inherit; }
+.studio-root ::selection { background: color-mix(in srgb, var(--sd-live) 26%, transparent); }
+/* 键盘焦点是「正在发生」：朱色细圈（DESIGN.md §0 第 3 条） */
+.studio-root :focus-visible { outline: 1.5px solid var(--sd-live); outline-offset: 2px; }
+.studio-root .ic, .studio-root .ic svg { display: block; }
+.studio-root svg { flex: none; }
+.studio-root .mono { font-family: var(--sd-font-mono); font-variant-numeric: tabular-nums; }
+.studio-root.resizing { cursor: col-resize; user-select: none; }
+
+/* 一粒朱点：正在发生（标签上有任务在跑、进行中的作品、新发现的模型）。live 版带一圈慢呼吸的光晕 */
+.studio-root .sd-dot { flex: none; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--sd-live); }
+.studio-root .sd-dot.live { position: relative; }
+.studio-root .sd-dot.live::after { content: ''; position: absolute; inset: -3px; border-radius: 50%; background: var(--sd-live-soft); animation: sdHalo 2.2s var(--sd-ease) infinite; }
+@keyframes sdHalo { 0%, 100% { opacity: .2; transform: scale(.6); } 50% { opacity: 1; transform: none; } }
+.studio-root.sd-noanim .sd-dot.live::after { animation: none; }
+
+/* ——— 图标钮（34 方，圆角 = 边长 × 0.3）——— */
+.studio-root .sd-ib {
+  position: relative; flex: none; width: 34px; height: 34px; border-radius: 10px;
+  display: grid; place-items: center; color: var(--sd-text2);
+  transition: background-color var(--sd-t-fast) var(--sd-ease), color var(--sd-t-fast) var(--sd-ease);
+}
+.studio-root .sd-ib svg { width: 19px; height: 19px; }
+@media (pointer: coarse) { .studio-root .sd-ib::before { content: ''; position: absolute; inset: -4px; } }
+@media (hover: hover) { .studio-root .sd-ib:hover { background: var(--sd-hover); color: var(--sd-text); } }
+.studio-root .sd-ib:active { background: var(--sd-press); }
+.studio-root .sd-ib.on { color: var(--sd-text); }
+.studio-root .sd-ib[aria-pressed="true"] { background: var(--sd-surface2); color: var(--sd-text); }
+.studio-root .sd-ib .sd-dot { position: absolute; top: 7px; right: 7px; box-shadow: 0 0 0 2px var(--sd-bg); }
+
+/* ——— 外壳：作品栏 ｜ 画布（44 栏头带 + 创作页）｜ 参数坞 ——— */
+.studio-root .sd-body { flex: 1; min-height: 0; position: relative; display: flex; }
+.studio-root .sd-band {
+  flex: none; position: relative; z-index: 2;
+  height: calc(var(--sd-band) + var(--sd-sat)); padding-top: var(--sd-sat);
+  display: flex; align-items: center; gap: 4px;
+}
+
+/* 作品栏：深半档的纸 + 右缘一根细线；桌面可拖宽、可收起（收展裁切滑出，不逐帧重排内层） */
+.studio-root .sd-rail {
+  position: relative; z-index: 4; flex: none; width: var(--sd-rail-w, 272px); min-height: 0;
+  background: var(--sd-rail); box-shadow: inset -1px 0 0 var(--sd-border);
+  display: none; --sat: 0px;
+}
+.studio-root.rail-col .sd-rail { display: flex; }
+.studio-root.medium .sd-rail { width: 272px; }
+.studio-root .sd-rail-in { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.studio-root .sd-rail-hd { padding: var(--sd-sat) 6px 0 6px; }
+.studio-root .sd-brand { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding-left: 2px; color: var(--sd-text); }
+.studio-root .sd-mark { flex: none; width: 22px; height: 22px; display: grid; place-items: center; color: var(--sd-text); }
+.studio-root .sd-mark svg { width: 22px; height: 22px; }
+.studio-root .sd-word { font-family: var(--sd-font-serif); font-weight: 600; font-size: 17px; line-height: 1.5; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.studio-root .sd-fx { margin-left: 2px; padding: 2px 6px; border-radius: var(--sd-r-xs); font-size: var(--sd-fs-xs); color: var(--sd-text3); background: var(--sd-hover); white-space: nowrap; }
+.studio-root .sd-resize { position: absolute; top: 0; bottom: 0; right: -3px; width: 6px; cursor: col-resize; z-index: 3; touch-action: none; }
+.studio-root .sd-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2.5px; width: 1px; background: transparent; transition: background-color var(--sd-t-fast) var(--sd-ease); }
+@media (hover: hover) { .studio-root .sd-resize:hover::after { background: var(--sd-border2); } }
+.studio-root .sd-resize:focus-visible::after, .studio-root.resizing .sd-resize::after { background: var(--sd-accent); }
+
+/* 中栏 + 参数坞 */
+.studio-root .sd-work { flex: 1; min-width: 0; display: flex; }
+.studio-root .sd-center { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+.studio-root .sd-cbar { padding: var(--sd-sat) 8px 0 8px; }
+.studio-root .sd-cbar-l, .studio-root .sd-cbar-r { position: relative; z-index: 1; display: flex; align-items: center; gap: 2px; min-width: 0; }
+.studio-root .sd-cbar-r { margin-left: auto; }
+.studio-root .sd-cbar .sd-brand { flex: none; padding-left: 4px; }
+/* 四个创作页的分段：桌面居中在中栏栏头；手机贴顶单独一行 */
+.studio-root .sd-tabs { position: absolute; left: 50%; bottom: 5px; transform: translateX(-50%); z-index: 1; }
+.studio-root .sd-tabs .seg-tx { display: inline-flex; align-items: center; gap: 6px; }
+.studio-root .sd-segrow { flex: none; padding: 0 12px 8px; }
+.studio-root .sd-stage { flex: 1; min-height: 0; position: relative; overflow: hidden; }
+.studio-root .sd-page { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.studio-root .sd-page.dormant { content-visibility: hidden; visibility: hidden; }
+
+/* 任务钮：没任务 = 托盘线稿；有任务 = 朱点 + mono 计数；做完没看 = 右上一粒墨点 */
+.studio-root .sd-cap.live { width: auto; padding: 0 9px 0 8px; gap: 5px; display: inline-flex; align-items: center; color: var(--sd-text); }
+.studio-root .sd-cap.live b { font-family: var(--sd-font-mono); font-size: var(--sd-fs-sm); font-weight: 500; font-variant-numeric: tabular-nums; }
+.studio-root .sd-cap.seen::after { content: ''; position: absolute; top: 7px; right: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--sd-accent); box-shadow: 0 0 0 2px var(--sd-bg); }
+
+/* 参数坞：宽屏才有，可开关（像 dimensio 的工作区坞：同一张纸、左缘一根细线、44 栏头） */
+.studio-root .sd-dock { flex: none; width: 312px; min-height: 0; display: none; flex-direction: column; background: var(--sd-rail); box-shadow: inset 1px 0 0 var(--sd-border); }
+.studio-root .sd-dock.on { display: flex; }
+.studio-root .sd-dock-hd { padding: var(--sd-sat) 8px 0 18px; }
+.studio-root .sd-dock-t { flex: 1; min-width: 0; font-size: var(--sd-fs-md); font-weight: 500; color: var(--sd-text2); }
+.studio-root .sd-dock-body { flex: 1; min-height: 0; position: relative; }
+.studio-root .sd-dock-pane { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 28px 18px; display: none;
+  scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--sd-border2) transparent; }
+.studio-root .sd-dock-pane.on { display: block; }
+
+/* 手机：作品栏是左缘抽屉；栏头一行 + 分段一行 */
+.studio-root.compact .sd-cbar { padding: var(--sd-sat) 6px 0 4px; }
+.studio-root.compact .sd-cbar .sd-word { font-size: var(--sd-fs-lg); }
+.studio-root.compact .sd-rail {
+  display: flex; position: fixed; top: 0; bottom: 0; left: 0; z-index: 40;
+  width: min(86vw, 340px);
+  transform: translateX(-100%); transition: transform 380ms var(--sd-spring-soft, var(--sd-ease-out));
+  box-shadow: none;
+}
+.studio-root.compact .sd-rail.open, .studio-root.compact .sd-rail.dragging { transform: none; box-shadow: var(--sd-shadow-3); }
+.studio-root.compact .sd-rail.dragging { transition: none; }
+.studio-root.compact .sd-rail-hd { height: calc(var(--sd-band) + var(--sd-sat)); padding-top: var(--sd-sat); }
+.studio-root .sd-scrim { position: fixed; inset: 0; z-index: 39; background: var(--sd-scrim); opacity: 0; pointer-events: none; transition: opacity 260ms var(--sd-ease); }
+.studio-root .sd-scrim.open { opacity: 1; pointer-events: auto; }
+.studio-root.sd-noanim .sd-rail, .studio-root.sd-noanim .sd-scrim { transition: none; }
+
+/* ——— 切创作页：旧页 120ms 退隐，新页从 6px 外浮起落定 ——— */
+@media (prefers-reduced-motion: no-preference) {
+  .studio-root .sd-page.leaving { z-index: 1; pointer-events: none; animation: sdPageOut 120ms var(--sd-ease-in) forwards; }
+  .studio-root .sd-page.st-in { animation: sdPageIn var(--sd-t-spring-soft, 420ms) var(--sd-spring-soft, var(--sd-ease-out)) backwards; }
+}
+.studio-root.sd-noanim .sd-page.leaving, .studio-root.sd-noanim .sd-page.st-in { animation: none !important; }
+@keyframes sdPageOut { to { opacity: 0; } }
+@keyframes sdPageIn { from { opacity: 0; transform: translateX(calc(var(--sd-dir, 1) * 8px)); } }
+@keyframes sdSpin { to { transform: rotate(360deg); } }
+/* 「在做」的微光（dimensio .hx-shimmer）：进行中的文字 */
+.studio-root .sd-shimmer {
+  background: linear-gradient(100deg, var(--sd-text3) 0%, var(--sd-text3) 38%, var(--sd-text) 50%, var(--sd-text3) 62%, var(--sd-text3) 100%) 0 0 / 280% 100%;
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: sdShimmer 2.4s linear infinite;
+}
+@keyframes sdShimmer { from { background-position: 100% 0; } to { background-position: -180% 0; } }
+.studio-root.sd-noanim .sd-shimmer { animation: none; -webkit-text-fill-color: var(--sd-text3); }
+
+.studio-root .sd-cat-err { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--sd-text2); text-align: center; padding: 30px; background: var(--sd-bg); }
+.studio-root .sd-cat-err .ic svg { width: 28px; height: 28px; color: var(--sd-text3); }
+
+/* ——— 分段控件（ui/Segmented.svelte；dimensio Segmented 同款：轨道 surface2、滑块 surface + 细线）——— */
+.studio-root .seg { position: relative; display: inline-flex; padding: 3px; border-radius: 11px; background: var(--sd-surface2); isolation: isolate; max-width: 100%; }
+.studio-root .seg.full { display: flex; width: 100%; }
+.studio-root .seg.full > button { flex: 1 1 0; min-width: 0; }
+.studio-root .seg-ind {
+  position: absolute; top: 3px; bottom: 3px; left: 0; z-index: -1; border-radius: 8px;
+  background: var(--sd-surface); box-shadow: 0 0 0 1px var(--sd-border), 0 1px 3px color-mix(in srgb, var(--sd-text) 8%, transparent);
+  opacity: 0; will-change: transform;
+}
+/* 暗色：墨是浅色，选中块要比槽更亮（surface 比 surface2 暗，照抄浅色会成「更暗的凹槽」，复核 11-06） */
+.studio-root.dark .seg-ind { background: color-mix(in srgb, var(--sd-text) 13%, var(--sd-surface2)); box-shadow: 0 0 0 1px var(--sd-border2), 0 1px 3px rgba(0, 0, 0, .35); }
+.studio-root .seg-ind.shown { opacity: 1; }
+.studio-root .seg-ind.animate { transition: transform var(--sd-t-spring-snap, 260ms) var(--sd-spring-snap, var(--sd-ease-out)), width var(--sd-t-spring-snap, 260ms) var(--sd-spring-snap, var(--sd-ease-out)); }
+.studio-root .seg > button {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 30px; padding: 0 14px; border-radius: 8px;
+  font-size: var(--sd-fs-md); font-weight: 500; color: var(--sd-text2); white-space: nowrap;
+  transition: color var(--sd-t-fast) var(--sd-ease);
+}
+.studio-root .seg > button > span:not(.sd-dot) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.studio-root .seg.sm > button { height: 26px; padding: 0 10px; font-size: var(--sd-fs-sm); }
+.studio-root .seg > button.on { color: var(--sd-text); }
+@media (hover: hover) { .studio-root .seg > button:hover:not(.on):not(:disabled) { color: var(--sd-text); } }
+.studio-root .seg > button:disabled { opacity: .4; }
+.studio-root .seg > button.dnd-on { color: var(--sd-text); background: var(--sd-accent-soft); }
+.studio-root .seg.mono > button { font-family: var(--sd-font-mono); font-weight: 450; font-variant-numeric: tabular-nums; }
+@media (pointer: coarse) { .studio-root .seg > button::after { content: ''; position: absolute; inset: -4px 0; } }
+
+/* ——— 开关（ui/Switch.svelte；开 = 墨底，圆钮弹跳滑过去）——— */
+.studio-root .sw { position: relative; flex: none; width: 38px; height: 22px; border-radius: 11px; background: var(--sd-surface3); transition: background-color var(--sd-t-med) var(--sd-ease); }
+.studio-root .sw.on { background: var(--sd-accent); }
+.studio-root .sw-k { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--sd-surface);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--sd-text) 22%, transparent); transition: transform var(--sd-t-spring-pop, 500ms) var(--sd-spring-pop, var(--sd-ease-out)); }
+.studio-root.dark .sw-k { background: var(--sd-text2); }   /* 关着时深槽上要看得见钮 */
+.studio-root.dark .sw.on .sw-k { background: var(--sd-on-accent); }
+.studio-root .sw.on .sw-k { transform: translateX(16px); }
+.studio-root .sw:disabled { opacity: .4; }
+@media (pointer: coarse) { .studio-root .sw::after { content: ''; position: absolute; inset: -9px -4px; } }
+
+/* ——— 量度条（ui/Measure.svelte；细线 + 走过的一段 + 末端一粒点；live = 朱）——— */
+.studio-root .ms { --c: var(--sd-accent); position: relative; height: 7px; min-width: 40px; }
+.studio-root .ms.live { --c: var(--sd-live); }
+.studio-root .ms-rail, .studio-root .ms-fill { position: absolute; top: 3px; left: 3px; right: 3px; height: 1px; background: var(--sd-border2); }
+.studio-root .ms-fill { right: auto; width: calc((100% - 6px) * var(--v)); height: 1.5px; top: 2.75px; background: var(--c); transition: width var(--sd-t-slow) var(--sd-ease-out); }
+.studio-root .ms-head { position: absolute; top: .5px; left: calc((100% - 6px) * var(--v)); width: 6px; height: 6px; border-radius: 50%; background: var(--c);
+  opacity: 0; transform: scale(.4); transition: left var(--sd-t-slow) var(--sd-ease-out), opacity var(--sd-t-med) var(--sd-ease), transform var(--sd-t-med) var(--sd-ease-out); }
+.studio-root .ms-head.on { opacity: 1; transform: none; }
+/* 不知道进度时：一小段在细线上来回走（仍是朱色细线，不是转圈） */
+.studio-root .ms.indet .ms-fill { width: 22%; animation: sdScan 1.8s var(--sd-ease) infinite alternate; transition: none; }
+.studio-root .ms.indet .ms-head { display: none; }
+@keyframes sdScan { from { transform: translateX(0); } to { transform: translateX(calc((100cqw - 6px) * .78)); } }
+.studio-root .ms.indet { container-type: inline-size; }
+.studio-root.sd-noanim .ms.indet .ms-fill { animation: none; }
+
+/* ——— 胶囊（dimensio Chip：输入框底行、筛选行）——— */
+.studio-root .chip {
+  position: relative; flex: none; display: inline-flex; align-items: center; gap: 6px; height: 30px; max-width: 100%; padding: 0 10px; border-radius: 999px;
+  font-size: var(--sd-fs-md); font-weight: 500; color: var(--sd-text2); white-space: nowrap;
+  transition: background-color var(--sd-t-fast) var(--sd-ease), color var(--sd-t-fast) var(--sd-ease);
+}
+.studio-root .chip > svg { width: 15px; height: 15px; }
+.studio-root .chip-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.studio-root .chip.mono .chip-tx { font-family: var(--sd-font-mono); font-size: var(--sd-fs-sm); font-weight: 450; font-variant-numeric: tabular-nums; }
+.studio-root .chip .chev { display: inline-flex; margin: 0 -3px 0 -2px; opacity: .6; transition: transform var(--sd-t-med) var(--sd-ease-out); }
+.studio-root .chip .chev svg { width: 13px; height: 13px; }
+.studio-root .chip.open .chev { transform: rotate(180deg); }
+.studio-root .chip.soft, .studio-root .chip.open, .studio-root .chip[aria-pressed="true"], .studio-root .chip[aria-checked="true"] { background: var(--sd-surface2); color: var(--sd-text); }
+@media (hover: hover) { .studio-root .chip:hover:not(:disabled) { background: var(--sd-surface2); color: var(--sd-text); } }
+.studio-root .chip:active:not(:disabled) { background: var(--sd-surface3); }
+.studio-root .chip:disabled { opacity: .4; }
+@media (pointer: coarse) { .studio-root .chip { min-width: 32px; } .studio-root .chip::after { content: ''; position: absolute; inset: -5px 0; } }
+
+/* ═══ 作品栏内部 ═══ */
+.studio-root .sb { flex: 1; display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; }
+.studio-root .sb-top { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 8px 6px 10px; }
+.studio-root .sb-top .seg { flex: none; }
+.studio-root .sb-gap { flex: 1; }
+.studio-root .sb-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.studio-root .sb-pane[hidden] { display: none; }
+.studio-root .sb-filter { flex: none; display: flex; align-items: center; gap: 2px; padding: 0 6px 4px 10px; }
+.studio-root .sb-chips { flex: 1; min-width: 0; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.studio-root .sb-chips::-webkit-scrollbar { display: none; }
+.studio-root .sb-chips .chip { height: 28px; padding: 0 8px; font-size: var(--sd-fs-md); }
+.studio-root .sb-chips .chip[aria-checked="true"] { background: var(--sd-surface); color: var(--sd-text); box-shadow: 0 0 0 1px var(--sd-border); }
+/* 搜索框：dimensio 侧栏搜索同款（墨 4.5% 底，聚焦变白纸 + 强细线）*/
+.studio-root .sb-q { flex: 1; display: flex; align-items: center; gap: 8px; height: 34px; margin: 0 2px; padding: 0 4px 0 10px; border-radius: 10px; background: var(--sd-hover); color: var(--sd-text3);
+  transition: background-color var(--sd-t-fast) var(--sd-ease), box-shadow var(--sd-t-fast) var(--sd-ease); }
+.studio-root .sb-q:focus-within { background: var(--sd-surface); box-shadow: 0 0 0 1px var(--sd-border2); }
+.studio-root .sb-q > svg { width: 16px; height: 16px; }
+.studio-root .sb-q input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font-size: var(--sd-fs-md); color: var(--sd-text); }
+.studio-root .sb-q input::placeholder { color: var(--sd-text3); }
+.studio-root .sb-q .sd-ib { width: 28px; height: 28px; border-radius: 8px; }
+.studio-root .sb-q .sd-ib svg { width: 15px; height: 15px; }
+.studio-root .sb-files { position: relative; }
+.studio-root .sd-embed { position: absolute; inset: 0; transform: translateZ(0); overflow: hidden; }
+
+/* 作品流：行与 dimensio 侧栏会话行同族（圆角 10、悬停墨 4.5%、选中 = 白纸 + 细线）；左侧血缘「点 + 竖线」 */
+.studio-root .ws { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 2px 8px calc(20px + var(--sd-sab)) 8px;
+  scrollbar-width: thin; scrollbar-color: var(--sd-border2) transparent; }
+@media (pointer: coarse) { .studio-root .ws, .studio-root .sd-dock-pane, .studio-root .pv-scroll, .studio-root .sh-body { scrollbar-width: none; } }
+.studio-root .ws-empty { padding: 40px 18px; text-align: center; color: var(--sd-text3); font-size: var(--sd-fs-md); line-height: 1.55; display: grid; justify-items: center; gap: 12px; }
+.studio-root .ws-retry { height: 30px; padding: 0 14px; border-radius: 999px; background: var(--sd-surface2); color: var(--sd-text); font-size: var(--sd-fs-sm); font-weight: 500; }
+.studio-root .ws-load { display: grid; place-items: center; padding: 18px; }
+.studio-root .wr-h { position: relative; height: 34px; display: flex; align-items: flex-end; padding: 0 0 7px 34px; font-size: var(--sd-fs-sm); font-weight: 500; color: var(--sd-text3); }
+.studio-root .wr {
+  position: relative; display: flex; align-items: flex-start; gap: 10px;
+  min-height: 56px; padding: 8px 8px 8px 34px; border-radius: 10px;
+  cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  transition: background-color var(--sd-t-fast) var(--sd-ease), opacity 120ms var(--sd-ease);
+}
+@media (hover: hover) { .studio-root .wr:hover { background: var(--sd-hover); } }
+.studio-root .wr:active { background: var(--sd-press); }
+.studio-root .wr.cur { background: var(--sd-surface); box-shadow: 0 0 0 1px var(--sd-border); }
+.studio-root .wr.dim { opacity: .45; }
+.studio-root .wr.flash { animation: sdFlash 1.1s var(--sd-ease); }
+@keyframes sdFlash { 0%, 30% { background: var(--sd-surface); box-shadow: 0 0 0 1px var(--sd-border2); } 100% { background: transparent; box-shadow: 0 0 0 1px transparent; } }
+/* 血缘槽：灰点 + 1px 线（dimensio 对话流左侧的时间线母题）；在跑的那一件是朱点 */
+.studio-root .wr-g { position: absolute; left: 4px; top: 0; width: 28px; height: 100%; overflow: visible; pointer-events: none; }
+.studio-root .wr-g line, .studio-root .wr-g path { stroke: var(--sd-border2); stroke-width: 1; fill: none; stroke-linecap: round; transition: stroke 120ms var(--sd-ease); }
+.studio-root .wr-g .lit { stroke: var(--sd-text2); }
+.studio-root .wr-g .stub { stroke-dasharray: 1.5 2.5; }
+.studio-root .wr-node { fill: color-mix(in srgb, var(--sd-text3) 70%, var(--sd-rail)); transition: fill 120ms var(--sd-ease); }
+.studio-root .wr-node.lit { fill: var(--sd-text); }
+.studio-root .wr-node.live { fill: var(--sd-live); }
+.studio-root .wr-halo { fill: var(--sd-live-soft); animation: sdHalo 2.2s var(--sd-ease) infinite; transform-box: fill-box; transform-origin: center; }
+.studio-root.sd-noanim .wr-halo { animation: none; }
+.studio-root .wr-thumb {
+  position: relative; flex: none; width: 40px; height: 40px; border-radius: var(--sd-r-sm); overflow: hidden;
+  background: var(--sd-surface2); display: grid; place-items: center; color: var(--sd-text3); box-shadow: inset 0 0 0 1px var(--sd-border);
+}
+.studio-root .wr-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.studio-root .wr-thumb > svg { width: 19px; height: 19px; }
+.studio-root .wr-play { position: absolute; left: 3px; bottom: 3px; width: 15px; height: 15px; border-radius: 50%; background: rgba(0, 0, 0, .5); color: #fff; display: grid; place-items: center; }
+.studio-root .wr-play svg { width: 8px; height: 8px; margin-left: 1px; }
+/* 进行中：缩略图位一块纸 + 一道慢慢掠过的高光 */
+.studio-root .wr-busy { position: absolute; inset: 0; display: grid; place-items: center; background: var(--sd-surface); overflow: hidden; }
+.studio-root .wr-busy::after, .studio-root .busy-sheen::after {
+  content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--sd-text) 6%, transparent) 50%, transparent 80%);
+  animation: sdSweep 2.6s var(--sd-ease-in) infinite;
+}
+.studio-root.dark .wr-busy::after, .studio-root.dark .busy-sheen::after { background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .05) 50%, transparent 80%); }
+@keyframes sdSweep { 0% { transform: translateX(-100%); } 70%, 100% { transform: translateX(100%); } }
+.studio-root.sd-noanim .wr-busy::after, .studio-root.sd-noanim .busy-sheen::after { animation: none; opacity: 0; }
+.studio-root .wr-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding-top: 1px; }
+.studio-root .wr-p { font-size: var(--sd-fs-md); line-height: 1.38; color: var(--sd-text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+.studio-root .wr-m {
+  /* 作品：型号（放不下才省略）；在跑：计时。一行高用 em（系统字号放大时一起变大） */
+  display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; min-width: 0;
+  height: calc(15em / 11); overflow: hidden; font-size: var(--sd-fs-xs); line-height: calc(15em / 11); color: var(--sd-text3); white-space: nowrap;
+}
+.studio-root .wr-m > span { flex: none; }
+.studio-root .wr-m > .mono { font-size: calc(var(--sd-fs-xs) - .5px); }
+.studio-root .wr-m > span:first-child { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.studio-root .wr-m > span + span::before { content: '·'; margin-right: 6px; opacity: .7; }
+/* 在跑的计时：朱只做点和线、不做小字（DESIGN.md §2），字用墨的次一档 */
+.studio-root .wr-m .live-t { color: var(--sd-text2); }
+.studio-root .wr-more { flex: none; align-self: center; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--sd-text2); opacity: 0; transition: opacity var(--sd-t-fast) var(--sd-ease); }
+@media (hover: hover) and (pointer: fine) {
+  .studio-root .wr { --wr-bg: color-mix(in srgb, var(--sd-text) 4.5%, var(--sd-rail)); }
+  .studio-root .wr.cur { --wr-bg: var(--sd-surface); }
+  .studio-root .wr-more { position: absolute; right: 6px; top: 50%; margin-top: -14px; background: var(--wr-bg); }
+  .studio-root .wr-more::before { content: ''; position: absolute; top: 0; bottom: 0; right: 100%; width: 22px; background: linear-gradient(90deg, transparent, var(--wr-bg)); pointer-events: none; }
+}
+.studio-root .wr-more svg { width: 17px; height: 17px; }
+.studio-root .wr:hover .wr-more, .studio-root .wr:focus-within .wr-more, .studio-root .wr-more:focus-visible { opacity: 1; }
+@media (hover: hover) { .studio-root .wr-more:hover { color: var(--sd-text); box-shadow: inset 0 0 0 20px var(--sd-press); } }
+@media (pointer: coarse) { .studio-root .wr-more { opacity: 1; width: 32px; height: 32px; } }
+.studio-root .ws.flat .wr, .studio-root .ws.flat .wr-h { padding-left: 10px; }
+.studio-root .ws.flat .wr-g { display: none; }
+.studio-root .wr .ms { position: absolute; left: 31px; right: 5px; bottom: -2px; }
+.studio-root .ws.flat .wr .ms { left: 7px; }
+
+/* ═══ 浮层 ═══ */
+/* Popover（ui/Popover.svelte；dimensio 同款：白纸、圆角 14、细线 + 悬浮投影；从锚点方向弹出）*/
+.studio-root .pv {
+  position: fixed; z-index: 90; display: flex; flex-direction: column; min-height: 0;
+  max-height: min(460px, calc(100dvh - 24px)); padding: 6px; border-radius: 14px;
+  background: var(--sd-surface); color: var(--sd-text); font-size: var(--sd-fs-base); line-height: 1.45;
+  box-shadow: 0 0 0 1px var(--sd-border), inset 0 1px 0 var(--sd-sheen), var(--sd-shadow-2);
+  visibility: hidden; overflow: hidden;
+}
+/* 触屏（手机 / 折叠屏 / 平板）上浮层用 bridge 的苹果材质：ios27「Liquid Glass」烘焙切图（圆角 34，与设置页、文件面板的 ios27 菜单同一张），
+   背后模糊 + 大投影。维护者 11-06：「菜单之类的可以用苹果材质，没必要改扁平材质」；电脑端照 09-29 的定规（玻璃只给触屏、电脑端扁平）仍是上面的白纸。
+   切图由 StudioPage 按亮 / 暗挂成 --sd-glass-pop / --sd-glass-sheet */
+@media (pointer: coarse) {
+  .studio-root .pv { padding: 10px; border-radius: 34px; isolation: isolate; background: none;
+    -webkit-backdrop-filter: blur(6.53px); backdrop-filter: blur(6.53px); box-shadow: 0 8px 40.6px rgba(0, 0, 0, .25); }
+  .studio-root.dark .pv { box-shadow: 0 8px 40.6px rgba(0, 0, 0, .45); }
+  .studio-root .pv::before { content: ''; position: absolute; z-index: -1; inset: 0; pointer-events: none;
+    border: 0 solid transparent; border-image: var(--sd-glass-pop) 228 fill / 76px / 16px stretch; }
+  .studio-root .pv .op { border-radius: 12px; }
+}
+@media (pointer: coarse) { .studio-root .pv { max-height: min(640px, calc(100dvh - 24px)); } }
+.studio-root .pv.placed { visibility: visible; }
+.studio-root .pv.flush { padding: 0; }
+.studio-root .pv:focus-visible { outline: none; }
+.studio-root .pv-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--sd-border2) transparent; scrollbar-gutter: stable; }
+.studio-root .pv-h { flex: none; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 6px 4px 10px; }
+.studio-root .pv-h b { flex: 1; min-width: 0; font-size: var(--sd-fs-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-root .pv-h small { font-size: var(--sd-fs-xs); color: var(--sd-text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50%; }
+
+/* Sheet（ui/Sheet.svelte；手机 = 底部抽屉：把手、圆角 22、左对齐 17/600 标题、×；宽屏 = 居中对话框）*/
+.studio-root .sh { position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; justify-content: flex-end; }
+.studio-root .sh.wide { justify-content: center; align-items: center; padding: 40px 24px; }
+.studio-root .sh-scrim { position: absolute; inset: 0; background: var(--sd-scrim); cursor: default; }
+.studio-root .sh-panel {
+  position: relative; display: flex; flex-direction: column; width: 100%;
+  max-height: calc(100dvh - 40px - var(--sd-sat)); background: var(--sd-surface); color: var(--sd-text);
+  border-radius: 22px 22px 0 0; box-shadow: inset 0 1px 0 var(--sd-sheen), var(--sd-shadow-3); touch-action: pan-y;
+}
+.studio-root .sh.wide .sh-panel { width: min(var(--sh-w, 440px), 100%); max-height: min(720px, 100%); border-radius: 20px; box-shadow: 0 0 0 1px var(--sd-border), inset 0 1px 0 var(--sd-sheen), var(--sd-shadow-3); touch-action: auto; }
+.studio-root .sh-panel:focus-visible { outline: none; }
+.studio-root .sh-head { position: relative; flex: none; display: flex; align-items: center; gap: 8px; padding: 20px 10px 8px 22px; touch-action: none; }
+.studio-root .sh-panel.scrolled > :has(+ .sh-body) { box-shadow: 0 1px 0 var(--sd-border); position: relative; z-index: 1; }
+.studio-root .sh.tall:not(.wide) .sh-panel { height: calc(100dvh - 40px - var(--sd-sat)); }
+.studio-root .sh.wide .sh-head { padding: 16px 12px 8px 24px; touch-action: auto; }
+.studio-root .sh-grip { position: absolute; top: 7px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--sd-border2); }
+.studio-root .sh-titles { flex: 1; min-width: 0; }
+.studio-root .sh-titles h2 { margin: 0; font-size: var(--sd-fs-lg); font-weight: 600; line-height: 1.3; letter-spacing: -.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-root .sh-titles p { margin: 2px 0 0; font-size: var(--sd-fs-sm); color: var(--sd-text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-root .sh-extra { flex: none; padding: 0 16px; }
+.studio-root .sh-extra .mp-q { padding: 0 0 4px; }
+.studio-root .sh-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px calc(20px + var(--sd-sab)); }
+.studio-root .sh.wide .sh-body { padding: 4px 16px 20px; scrollbar-gutter: stable; }
+/* 触屏上的 Sheet = ios27 表单页（四周内缩 6、圆角 38、烘焙玻璃 --sd-glass-sheet、60×4 抓手；正文底边跟着圆角裁、还能滚时底部渐隐）；
+   宽屏弹窗用菜单那张玻璃（圆角 34）。标题行、副标题、搜索栏、按住下拉关仍是 Studio 自己的 */
+@media (pointer: coarse) {
+  .studio-root .sh-panel { width: auto; margin: 0 6px 6px; max-height: calc(100dvh - 18px - var(--sd-sat)); background: none; border-radius: 38px; isolation: isolate;
+    -webkit-backdrop-filter: blur(6.53px); backdrop-filter: blur(6.53px); box-shadow: 0 8px 40.6px rgba(0, 0, 0, .25); }
+  .studio-root.dark .sh-panel { box-shadow: 0 8px 40.6px rgba(0, 0, 0, .45); }
+  .studio-root .sh-panel::before { content: ''; position: absolute; z-index: -1; inset: 0; pointer-events: none;
+    border: 0 solid transparent; border-image: var(--sd-glass-sheet) 240 fill / 80px / 16px stretch; }
+  .studio-root .sh.wide .sh-panel { margin: 0; width: min(var(--sh-w, 440px), 100%); max-height: min(720px, 100%); border-radius: 34px; box-shadow: 0 8px 40.6px rgba(0, 0, 0, .25); }
+  .studio-root .sh.wide .sh-panel::before { border-image: var(--sd-glass-pop) 228 fill / 76px / 16px stretch; }
+  .studio-root .sh.tall:not(.wide) .sh-panel { height: calc(100dvh - 18px - var(--sd-sat)); }
+  .studio-root .sh-grip { top: 6px; width: 60px; margin-left: -30px; background: #b5b5b6; }
+  .studio-root.dark .sh-grip { background: #4d4d4d; }
+  .studio-root .sh-body { padding-bottom: max(20px, calc(var(--sd-sab) + 12px)); border-radius: 0 0 32px 32px;
+    -webkit-mask-image: linear-gradient(#000 calc(100% - 24px), transparent); mask-image: linear-gradient(#000 calc(100% - 24px), transparent); }
+  .studio-root .sh.wide .sh-body { padding-bottom: 20px; border-radius: 0 0 28px 28px; }
+}
+
+/* 浮层里的选项行（模型、来源、角色、音色、菜单项）：dimensio MenuItem 同族——圆角 8、悬停墨 4.5%、选中行尾墨勾 */
+.studio-root .op-gh { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 10px 10px 4px; font-size: var(--sd-fs-sm); font-weight: 500; color: var(--sd-text3); }
+.studio-root .op-gh:first-child { padding-top: 4px; }
+.studio-root .op-gh b { font-weight: 500; color: var(--sd-text2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-root .op-gh small { font-size: var(--sd-fs-xs); color: var(--sd-text3); }
+.studio-root .op-sub { padding: 8px 10px 2px 34px; font-size: var(--sd-fs-xs); font-weight: 500; color: var(--sd-text3); }
+/* 新发现的模型：墨色细线框小标签「新」（不用朱——朱只给正在发生的东西；只写小字太浅容易漏看，复核 11-06 三轮） */
+.studio-root .op-new { flex: none; display: inline-flex; align-items: center; height: 15px; padding: 0 4px; border-radius: 4px; font-size: 10.5px; font-weight: 500; line-height: 1; letter-spacing: .02em; color: var(--sd-text); box-shadow: inset 0 0 0 1px var(--sd-border2); }
+/* 模型选择器有组头时：模型行的字与服务名对齐（品牌标 16 + 间距 8 + 行内距 10）；厂商小组里的再缩一档 */
+.studio-root .mp.grouped .op { padding-left: 34px; }
+.studio-root .mp.grouped .mp-sec.sub .op { padding-left: 46px; }
+.studio-root .op-logo { flex: none; width: 16px; height: 16px; display: grid; place-items: center; filter: grayscale(1); opacity: .8; }
+.studio-root.dark .op-logo { filter: grayscale(1) brightness(1.8); }
+.studio-root .op-logo svg, .studio-root .op-logo img { width: 100%; height: 100%; }
+.studio-root .op-ini { border-radius: 4px; background: var(--sd-surface2); font-size: 10px; font-weight: 600; color: var(--sd-text2); }
+.studio-root .op {
+  width: 100%; display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 6px 10px; border-radius: var(--sd-r-sm); text-align: left; color: var(--sd-text);
+  transition: background-color var(--sd-t-fast) var(--sd-ease);
+}
+@media (hover: hover) { .studio-root .op:hover:not(:disabled) { background: var(--sd-hover); } }
+.studio-root .op:active:not(:disabled), .studio-root .op.kb { background: var(--sd-press); }
+.studio-root .op:disabled { opacity: .4; }
+@media (pointer: coarse) { .studio-root .op { min-height: 44px; } }
+.studio-root .op-ic { flex: none; width: 18px; height: 18px; color: var(--sd-text2); }
+.studio-root .op-ic svg { width: 18px; height: 18px; }
+.studio-root .op-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.studio-root .op-tx b { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: var(--sd-fs-base); font-weight: 400; line-height: 1.35; }
+.studio-root .op-tx b > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+/* 模型选择器：名字按行内排，「新」紧跟最后一个词（flex 时名字一折行，标签就被推到最右边，复核 11-06 第四轮） */
+.studio-root .mp .op-tx b { display: block; }
+.studio-root .mp .op-tx b > .op-new { margin-left: 6px; vertical-align: 1px; }
+.studio-root .op-tx small { font-size: var(--sd-fs-xs); line-height: 1.35; color: var(--sd-text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-root .op-tx small.mono { font-family: var(--sd-font-mono); font-size: 10.5px; letter-spacing: .01em; }
+.studio-root .op-hint { flex: none; max-width: 42%; font-size: var(--sd-fs-xs); color: var(--sd-text3); font-family: var(--sd-font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.studio-root .op-ck { flex: none; width: 16px; height: 16px; color: var(--sd-text); opacity: 0; }
+.studio-root .op-ck svg { width: 16px; height: 16px; }
+.studio-root .op.on .op-ck { opacity: 1; }
+.studio-root .op.on .op-tx b { font-weight: 500; }
+.studio-root .op-hit { background: none; color: inherit; font-weight: 600; }
+.studio-root .op-sep { height: 1px; margin: 5px 10px; background: var(--sd-border); }
+.studio-root .op-empty { padding: 20px 12px; font-size: var(--sd-fs-md); line-height: 1.55; color: var(--sd-text2); text-align: center; display: grid; justify-items: center; gap: 12px; }
+.studio-root .op-go { height: 32px; padding: 0 16px; border-radius: 999px; background: var(--sd-primary); color: var(--sd-on-primary); font-size: var(--sd-fs-md); font-weight: 500; }
+.studio-root .op-go:disabled { opacity: .4; }
+.studio-root .op-back { display: inline-flex; align-items: center; gap: 4px; margin: 6px 4px 2px; height: 28px; padding: 0 10px 0 4px; border-radius: 999px; font-size: var(--sd-fs-sm); color: var(--sd-text2); }
+.studio-root .op-back svg { width: 15px; height: 15px; }
+@media (hover: hover) { .studio-root .op-back:hover { background: var(--sd-hover); color: var(--sd-text); } }
+/* 选项里的搜索框（模型 > 8、长枚举 > 12）*/
+.studio-root .op-q { flex: none; display: flex; align-items: center; gap: 8px; height: 34px; margin: 1px 1px 4px; padding: 0 10px; border-radius: 10px; background: var(--sd-hover); color: var(--sd-text3);
+  transition: background-color var(--sd-t-fast) var(--sd-ease), box-shadow var(--sd-t-fast) var(--sd-ease); }
+.studio-root .op-q:focus-within { background: var(--sd-surface); box-shadow: 0 0 0 1px var(--sd-border2); }
+.studio-root .op-q svg { width: 15px; height: 15px; }
+.studio-root .op-q input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font-size: var(--sd-fs-md); color: var(--sd-text); }
+.studio-root .op-q input::placeholder { color: var(--sd-text3); }
+.studio-root .op-none { padding: 14px 10px; font-size: var(--sd-fs-md); color: var(--sd-text3); text-align: center; }
+.studio-root .sh-body .op { padding: 8px 8px; }
+@media (pointer: coarse) {
+  /* 苹果材质里的列表 = 白色分组卡片（inset grouped，同 v2 与 bridge 设置页）：Sheet 里连在一起的行合成一张卡，首尾两行带圆角、
+     行间一根细线；小节标题（服务名、厂商、「接着做」「进行中」）留在玻璃上。背后的内容就不会透到字底下 */
+  .studio-root .sh { --sd-card: var(--sd-surface); }
+  .studio-root.dark .sh { --sd-card: var(--sd-surface3); }   /* 暗色：卡片比玻璃亮一档（同 iOS 暗色 Sheet 里的单元格），不然看不出卡片 */
+  .studio-root .sh :is(.op, .wm-i, .tt-r) { border-radius: 0; background-color: var(--sd-card); padding-left: 16px; padding-right: 16px; }
+  .studio-root .sh :is(.op, .wm-i, .tt-r):not(:is(.op, .wm-i, .tt-r) + *) { border-top-left-radius: 14px; border-top-right-radius: 14px; }
+  .studio-root .sh :is(.op, .wm-i, .tt-r):not(:has(+ :is(.op, .wm-i, .tt-r))) { border-bottom-left-radius: 14px; border-bottom-right-radius: 14px; }
+  .studio-root .sh :is(.op, .wm-i, .tt-r) + :is(.op, .wm-i, .tt-r) {
+    background-image: linear-gradient(var(--sd-border), var(--sd-border)); background-repeat: no-repeat; background-size: calc(100% - 16px) 1px; background-position: 16px 0; }
+  @media (hover: hover) { .studio-root .sh :is(.op, .wm-i, .tt-r):hover:not(:disabled) { background-color: color-mix(in srgb, var(--sd-text) 4.5%, var(--sd-card)); } }
+  .studio-root .sh :is(.op, .wm-i, .tt-r):active:not(:disabled) { background-color: color-mix(in srgb, var(--sd-text) 8%, var(--sd-card)); }
+  .studio-root .sh .wm-sep { height: 0; margin: 4px 0; background: none; }
+  .studio-root .sh .mp.grouped .op, .studio-root .sh .mp.grouped .mp-sec.sub .op { padding-left: 16px; }
+  .studio-root .sh .op-sub { padding-left: 16px; }
+  .studio-root .sh .mp-sec + .mp-sec { margin-top: 2px; }
+  .studio-root .sh .pl.flat .pl-panel, .studio-root .sh .pl .pl-panel { background: var(--sd-card); border-radius: 14px; padding: 2px 14px 6px; }
+}
+
+/* ——— 任务托盘 ——— */
+.studio-root .tt-sec { padding: 8px 10px 4px; font-size: var(--sd-fs-sm); font-weight: 500; color: var(--sd-text3); }
+.studio-root .tt-empty { padding: 24px 16px 26px; font-size: var(--sd-fs-md); color: var(--sd-text3); text-align: center; }
+.studio-root .tt-r { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: var(--sd-r-sm); text-align: left; }
+@media (hover: hover) { .studio-root .tt-r[role=button]:hover { background: var(--sd-hover); } }
+.studio-root .tt-th { flex: none; position: relative; width: 32px; height: 32px; border-radius: var(--sd-r-xs); overflow: hidden; background: var(--sd-surface2); display: grid; place-items: center; color: var(--sd-text3); box-shadow: inset 0 0 0 1px var(--sd-border); }
+.studio-root .tt-th > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.studio-root .tt-th svg { width: 17px; height: 17px; }
+.studio-root .tt-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.studio-root .tt-p { font-size: var(--sd-fs-md); line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.studio-root .tt-m { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; min-width: 0; font-size: var(--sd-fs-xs); color: var(--sd-text3); white-space: nowrap; }
+.studio-root .tt-m > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.studio-root .tt-m > span + span::before { content: '·'; margin-right: 8px; opacity: .7; }
+.studio-root .tt-m .mono { font-family: var(--sd-font-mono); }
+.studio-root .tt-m .live-t { color: var(--sd-text2); }
+.studio-root .tt-r.err .tt-m { color: var(--sd-err); white-space: normal; }
+.studio-root .tt-r .ms { margin-top: 3px; }
+.studio-root .tt-x { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--sd-text3); }
+.studio-root .tt-x svg { width: 15px; height: 15px; }
+@media (hover: hover) { .studio-root .tt-x:hover { background: var(--sd-press); color: var(--sd-text); } }
+.studio-root .tt-ok { flex: none; width: 15px; height: 15px; color: var(--sd-text3); }
+.studio-root .tt-retry { flex: none; height: 28px; padding: 0 12px; border-radius: 999px; background: var(--sd-surface2); font-size: var(--sd-fs-sm); font-weight: 500; }
+@media (hover: hover) { .studio-root .tt-retry:hover { background: var(--sd-surface3); } }
+
+/* ——— 作品菜单（dimensio MenuItem / MenuLabel / MenuSep）——— */
+.studio-root .wm-head { display: flex; align-items: center; gap: 10px; padding: 6px 8px 8px; }
+.studio-root .wm-th { position: relative; flex: none; width: 34px; height: 34px; border-radius: var(--sd-r-xs); overflow: hidden; background: var(--sd-surface2); box-shadow: inset 0 0 0 1px var(--sd-border); }
+.studio-root .wm-th img { width: 34px; height: 34px; object-fit: cover; display: block; }
+.studio-root .wm-head p { flex: 1; min-width: 0; margin: 0; font-size: var(--sd-fs-sm); line-height: 1.4; color: var(--sd-text2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.studio-root .wm-sec { padding: 8px 10px 3px; font-size: var(--sd-fs-sm); font-weight: 500; color: var(--sd-text3); }
+.studio-root .wm-i { width: 100%; display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 10px; border-radius: var(--sd-r-sm); font-size: var(--sd-fs-base); color: var(--sd-text); text-decoration: none; text-align: left; }
+@media (pointer: coarse) { .studio-root .wm-i { min-height: 44px; } }
+.studio-root .wm-i svg { width: 17px; height: 17px; color: var(--sd-text2); }
+@media (hover: hover) { .studio-root .wm-i:hover { background: var(--sd-hover); } }
+.studio-root .wm-i:active { background: var(--sd-press); }
+.studio-root .wm-i.danger, .studio-root .wm-i.danger svg { color: var(--sd-err); }
+.studio-root .wm-sep { height: 1px; margin: 5px 10px; background: var(--sd-border); }
+
+/* 作品飞进作品栏的幽灵（挂在 body 上） */
+.sd-fly { position: fixed; z-index: 200; object-fit: cover; pointer-events: none; transform-origin: 0 0; border-radius: 8px; }
+
+/* ——— 触屏点按区（视觉不变，命中区扩到 32 以上）——— */
+@media (pointer: coarse) {
+  .studio-root .sb-chips .chip { height: 32px; min-width: 32px; }
+  .studio-root .tt-x, .studio-root .tt-retry, .studio-root .op-back, .studio-root .wp-crumb button { position: relative; }
+  .studio-root .tt-x::after, .studio-root .tt-retry::after, .studio-root .op-back::after, .studio-root .wp-crumb button::after { content: ''; position: absolute; inset: -4px -3px; }
+}

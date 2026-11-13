@@ -12,6 +12,7 @@ import { apiUrl, noteNetFail, noteServerReachable, noteServerUnreachable, confir
 const GATEWAY_DOWN = (s) => s === 502 || s === 503 || s === 504 || (s >= 520 && s <= 530);
 import { storeGet, storeSet } from './store.js';
 import { hasNativeWorkspace, nativeWorkspaceList } from './nativeDesktop.js';
+import { status as statusStore } from './state.svelte.js';
 
 let token = storeGet('bridge-token');
 const wsQuery = (ws) => ws ? '&ws=' + encodeURIComponent(ws) : '';
@@ -153,7 +154,9 @@ export const api = {
   restoreQuickChat: (id) => req('POST', '/api/claude/quick/restore', { id }),
 
   // live turn（多对话并发：status 可按会话取 context；stop 可点名停某一轮）
-  status: (sessionId) => req('GET', '/api/status' + (sessionId ? '?session=' + encodeURIComponent(sessionId) : '')),
+  // noFiveHour（激活号没有 5 小时限额，部分 Ultra）在这里统一落进 status，各处取额度快照的地方就不用逐个记。
+  status: (sessionId) => req('GET', '/api/status' + (sessionId ? '?session=' + encodeURIComponent(sessionId) : ''))
+    .then((d) => { if (d && 'noFiveHour' in d) statusStore.noFiveHour = !!d.noFiveHour; return d; }),
   commands: () => req('GET', '/api/commands'),   // 斜杠命令表 {commands:[{name,description,argumentHint}], terminal:[], at}
   active: () => req('GET', '/api/active'),
   // release:true =「结束等待」（这一轮只是挂着等后台任务）：服务端以暂存 result 正常定局，
@@ -233,17 +236,5 @@ export const api = {
   codexProjects: () => req('GET', '/api/codex/projects'),
   createCodexProject: (name, path) => req('POST', '/api/codex/project/create', { name, path }),
 
-  // —— Vertex (Gemini)：对话历史 + 媒体（图像/视频/语音/音乐）——
-  vertexSessions: () => req('GET', '/api/vertex/sessions'),
-  vertexSession: (id) => req('GET', '/api/vertex/session?id=' + encodeURIComponent(id)),
-  deleteVertexSession: (id) => req('POST', '/api/vertex/session/delete', { id }),
-  vertexImage: (b) => req('POST', '/api/vertex/image', b),   // 同步 JSON → {ok,id,url}
-  vertexImageChat: (b) => req('POST', '/api/vertex/image-chat', b),   // 多轮对话式编辑 → {ok,id,url,sessionId}
-  vertexImageChats: () => req('GET', '/api/vertex/image-chats'),             // 图像会话列表 → {sessions:[{id,coverId,title,count,mtime}]}
-  vertexImageChatSession: (id) => req('GET', '/api/vertex/image-chat/session?id=' + encodeURIComponent(id)), // 还原整链 → {id,turns}
-  deleteVertexImageChat: (id) => req('POST', '/api/vertex/image-chat/delete', { id }),   // 删整条图像会话
-  vertexTTS: (b) => req('POST', '/api/vertex/tts', b),       // 同步 JSON → {ok,id,url}
-  vertexMediaList: (kind) => req('GET', '/api/vertex/' + kind + 's'),       // images|videos|audios|musics
-  deleteVertexMedia: (kind, id) => req('POST', '/api/vertex/' + kind + '/delete', { id }), // image|video|audio|music
-  // 注：视频(Veo)/音乐(Lyria) 生成是 SSE 进度流，在 lib/vertexMedia 控制器里用 fetch 读流，不走 req()。
+  // Media Studio 的接口（/api/studio/*）在扩展自己的 modules/studio/api.js 里；Gemini 对话（/api/vertex/session*）11-04 下线。
 };

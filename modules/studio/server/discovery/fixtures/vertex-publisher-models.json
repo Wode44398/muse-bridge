@@ -1,0 +1,653 @@
+{
+ "publisherModels": [
+  {
+   "name": "publishers/google/models/occupancy-analytics",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/multimodalembedding",
+   "versionId": "001",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/pt-test",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/bert-base",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/vehicle-detector",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/language-v1-classify-text-v1",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/language-v1-analyze-sentiment",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/language-v1-analyze-entity-sentiment",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/language-v1-analyze-syntax",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/owlvit-base-patch32",
+   "versionId": "owlvit-base-patch32",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/object-detector",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/ppe-detector",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/people-blur",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/product-recognizer",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/tag-recognizer",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/imageclassification-proprietary-vit",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/imageobjectdetection-proprietary-spinenet",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/imageclassification-proprietary-efficientnet",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/t5-flan",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/t5-1.1",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/textembedding-gecko",
+   "versionId": "003",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/automl-e2e",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/content-moderation",
+   "versionId": "001",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/pretrained-ocr",
+   "versionId": "002",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/face-detector",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/pretrained-form-parser",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/label-detector-pali-001",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/tab-net",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/text-detector",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/imagewatermarkdetector",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/language-v1-moderate-text",
+   "versionId": "001",
+   "launchStage": "EXPERIMENTAL"
+  },
+  {
+   "name": "publishers/google/models/text-translation",
+   "versionId": "001",
+   "launchStage": "EXPERIMENTAL"
+  },
+  {
+   "name": "publishers/google/models/bart-large-cnn",
+   "versionId": "bart-large-cnn",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/vit-jax",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/pic2word",
+   "versionId": "pic2word",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/bert-base-uncased",
+   "versionId": "bert-base-uncased",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/tfvision-movinet-vcn",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/chirp-2",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/f-vlm-jax",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/keras-yolov8",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/automl-vision-image-classification",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/automl-vision-image-object-detection",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/cxr-foundation",
+   "versionId": "cxr-foundation",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/tfvision-movinet-var",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/dito",
+   "versionId": "001",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/jax-owl-vit-v2",
+   "versionId": "001",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/functiongemma",
+   "versionId": "function-gemma-270m",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemma",
+   "versionId": "gemma-2b",
+   "launchStage": "EXPERIMENTAL"
+  },
+  {
+   "name": "publishers/google/models/paligemma",
+   "versionId": "paligemma2-3b-pt-224",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/codegemma",
+   "versionId": "codegemma-7b-it",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/text-multilingual-embedding-002",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/text-embedding-005",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/mammut",
+   "versionId": "mammut-vqa",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/translategemma",
+   "versionId": "translategemma-27b-it",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemma3n",
+   "versionId": "gemma-3n-e4b-it",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/chirp-3",
+   "versionId": "default",
+   "launchStage": "PRIVATE_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/timesfm",
+   "versionId": "timesfm-2.5"
+  },
+  {
+   "name": "publishers/google/models/gemma2",
+   "versionId": "gemma-2-2b-it",
+   "launchStage": "EXPERIMENTAL"
+  },
+  {
+   "name": "publishers/google/models/translate-llm",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/video-text-detection",
+   "versionId": "001",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/video-speech-transcription",
+   "versionId": "001",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/path-foundation",
+   "versionId": "path-foundation",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/derm-foundation",
+   "versionId": "derm-foundation",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/txgemma",
+   "versionId": "txgemma-27b-predict",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/hear",
+   "versionId": "hear",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/medgemma",
+   "versionId": "medgemma-4b-it",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/medsiglip",
+   "versionId": "medsiglip-448",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/medasr",
+   "versionId": "medasr",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/embeddinggemma2",
+   "versionId": "embeddinggemma-2",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/diffusiongemma",
+   "versionId": "diffusiongemma-26b-a4b-it",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemma4",
+   "versionId": "gemma-4-31b-it",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/image-segmentation-001",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemma3",
+   "versionId": "gemma-3-1b-it",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/shieldgemma2",
+   "versionId": "shieldgemma-2-4b-it",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/lyria-3-pro-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/lyria-3-clip-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/text-embedding-large-exp-03-07",
+   "versionId": "default",
+   "launchStage": "EXPERIMENTAL"
+  },
+  {
+   "name": "publishers/google/models/gemini-embedding-001",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/weathernext",
+   "versionId": "weathernext-001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/lyria-002",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-2.5-pro",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-2.5-flash",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-2.5-flash-lite",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/t5gemma",
+   "versionId": "t5gemma",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-2.5-computer-use-preview-10-2025",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/embeddinggemma",
+   "versionId": "embeddinggemma-300m",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-2.5-flash-image",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-2.5-pro-tts",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-2.5-flash-tts",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/earth-ai-imagery-owlvit-eap-10-2025",
+   "versionId": "earth-ai-imagery-owlvit-eap-10-2025",
+   "launchStage": "EXPERIMENTAL"
+  },
+  {
+   "name": "publishers/google/models/earth-ai-imagery-mammut-eap-10-2025",
+   "versionId": "earth-ai-imagery-mammut-eap-10-2025",
+   "launchStage": "EXPERIMENTAL"
+  },
+  {
+   "name": "publishers/google/models/gemini-3-pro-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemini-live-2.5-flash-native-audio",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/veo-3.1-generate-001",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/veo-3.1-fast-generate-001",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/weather-next-v2",
+   "versionId": "weather-next-v2",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3-flash-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/virtual-try-on-001",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.1-flash-image-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.1-pro-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.5-flash",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/veo-3.1-lite-generate-001",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.1-flash-tts-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.1-flash-image",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3-pro-image",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-omni-flash-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemma-4-26b-a4b-it-maas",
+   "versionId": "001",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemini-embedding-2",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.1-flash-lite",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.1-flash-lite-image",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-robotics-er-2-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/alphagenome-request",
+   "versionId": "alphagenome-request-002",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/alphafold3-request",
+   "versionId": "alphafold3-request-001",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.5-transcribe-live-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.5-transcribe-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.5-flash-lite",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.6-flash",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-robotics-er-2-preview-info",
+   "versionId": "default",
+   "launchStage": "PRIVATE_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.5-live-translate-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemini-omni-1.1-flash-preview",
+   "versionId": "default",
+   "launchStage": "PUBLIC_PREVIEW"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.7-flash",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.8-live",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.8-flash",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-nano-banana-2.1",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.8-flash-tts",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.8-flash-lite-tts",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.5-transcribe",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-3.5-transcribe-live",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-4-argon",
+   "versionId": "default",
+   "launchStage": "GA"
+  },
+  {
+   "name": "publishers/google/models/gemini-omni-1.2-flash",
+   "versionId": "default",
+   "launchStage": "GA"
+  }
+ ]
+}

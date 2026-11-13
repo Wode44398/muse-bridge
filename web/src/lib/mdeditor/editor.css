@@ -1,38 +1,11 @@
 /* mdeditor —— Live Preview / 源码编辑器全局样式。
    随懒加载 chunk 注入；类名全部 mde- 前缀，不碰聊天/阅读模式。
 
-   配色（2026-09-16 换成 Anthropic/Claude 象牙白暖调）：全部走下面这组 --md-* 令牌，
-   DocViewer 的阅读态在 .doc-root 上定义同一组同值令牌（两态观感必须一致），改色两边一起改。
-   纸面 #faf9f5（claude.ai 的 ivory）、字 #141413、强调色 Claude 珊瑚 #d97757；
-   正文字号的链接/标签用深一档的 #b5532f 保对比度（珊瑚原色在象牙白上只有 3:1）。 */
+   配色全部走 --md-* 令牌，定义在 lib/doctheme.css（亮＝象牙白、暗＝暖墨，跟随全站明暗；
+   阅读态/编辑态/Office/PDF 共用一份）。这里不写死纸面颜色——要叠加深浅用 rgba(var(--md-ink), α)。 */
 
 .mde {
-  --md-bg: #faf9f5;            /* 纸面 */
-  --md-bg-2: #f3f1eb;          /* 沉底：代码块 / 表头 / 胶囊 / 悬停 */
-  --md-bg-3: #eae7df;          /* 再深一级：按下态 */
-  --md-panel: #fffefb;         /* 浮层：菜单 / 浮条 / 补全 */
-  --md-line: #e7e4db;          /* 分隔线 / 边框 */
-  --md-line-2: #d6d2c6;        /* 引用条 / 勾选框描边 */
-  --md-fg: #141413;            /* 正文 */
-  --md-fg-2: #5f5e59;          /* 次要 */
-  --md-fg-3: #8a8983;          /* 弱化：标签 / 图标 */
-  --md-fg-4: #b4b2aa;          /* 占位 / 定界符 */
-  --md-accent: #d97757;        /* Claude 珊瑚：光标 / 选区 / 勾选 / 焦点环 */
-  --md-accent-deep: #b5532f;   /* 深珊瑚：双链 / 标签 / 反链名（正文字号可读） */
-  --md-accent-soft: rgba(217, 119, 87, .16);
-  --md-accent-tint: rgba(217, 119, 87, .085);
-  --md-link: #2f6fbf;          /* 外链：天空蓝，和双链分得开 */
-  --md-mark: rgba(235, 196, 98, .42);   /* 高亮：manilla 暖黄 */
-  --md-math: #3f7a5a;          /* 数学：cactus 绿 */
-  --md-danger: #c2472f;
-  --md-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --md-shadow: 0 14px 40px rgba(70, 56, 34, .16), 0 2px 8px rgba(70, 56, 34, .07), 0 0 0 .5px rgba(20, 20, 19, .07);
-  --md-shadow-sm: 0 8px 24px rgba(70, 56, 34, .14), 0 1px 4px rgba(70, 56, 34, .06), 0 0 0 .5px rgba(20, 20, 19, .07);
-  --md-ease: cubic-bezier(.2, .8, .2, 1);
-  --md-ease-pop: cubic-bezier(.2, .9, .3, 1.12);
-  /* 纸面恒为象牙白：原生控件（属性面板的日期框/日历图标、滚动条）按浅色方案画。app.css 默认深色
-     主题在 :root 上声明了 color-scheme:dark，不在这里截住，日历图标画成白色、勾选框画成黑块 */
-  color-scheme: light;
+  /* 配色令牌（--md-*）在 lib/doctheme.css：与阅读态/Office/PDF 查看器共用一份，跟随全站明暗 */
   position: absolute; inset: 0;
 }
 .mde .cm-editor { height: 100%; background: var(--md-bg); color: var(--md-fg); }
@@ -71,7 +44,7 @@
 .mde .mde-t-h6 { font-size: .95em; color: var(--md-fg-2); }
 .mde .mde-t-strong { font-weight: 700; }
 .mde .mde-t-em { font-style: italic; }
-.mde .mde-t-strike { text-decoration: line-through; text-decoration-color: rgba(20, 20, 19, .45); }
+.mde .mde-t-strike { text-decoration: line-through; text-decoration-color: rgba(var(--md-ink), .45); }
 .mde .mde-t-code { font-family: var(--md-mono); font-size: .88em; }
 /* 外层已经缩过字号的地方不再叠乘：行内代码的 .mde-icode 已是 .88em，代码块行已是 13.5px
   （无语言围栏/缩进式代码块的正文也带 monospace tag）——否则实际成了 .88×.88，比阅读态小一号 */
@@ -119,15 +92,15 @@
 .mde .mde-bq-d4 { --mde-qpad: 73px; padding-left: 73px; background: linear-gradient(var(--md-line-2), var(--md-line-2)) 16px 0 / 3px 100% no-repeat, linear-gradient(var(--md-line-2), var(--md-line-2)) 35px 0 / 3px 100% no-repeat, linear-gradient(var(--md-line-2), var(--md-line-2)) 54px 0 / 3px 100% no-repeat; }
 /* callout 源码态：外框颜色 = 卡片类型色（--co 由 livePreview 按 [!type] 注入），首末行圆角——
    光标一进一出外框重合，只有内容在变 */
-.mde .mde-line-callout { --mde-qpad: 14px; border-left: 3px solid rgb(var(--co, 217, 119, 87)); background: rgba(var(--co, 217, 119, 87), .07); padding-left: 14px; padding-right: 14px; }
+.mde .mde-line-callout { --mde-qpad: 14px; border-left: 3px solid rgb(var(--co, 217, 119, 87)); background: rgba(var(--co, 217, 119, 87), var(--md-co-bg, .07)); padding-left: 14px; padding-right: 14px; }
 .mde .mde-line-callout-first { padding-top: 10px; border-radius: 10px 10px 0 0; }
 .mde .mde-line-callout-last { padding-bottom: 10px; border-radius: 0 0 10px 10px; }
 .mde .mde-line-callout .mde-t-quote { color: var(--md-fg); }
-.mde .mde-co-type, .mde .mde-co-type * { color: rgb(var(--co, 217, 119, 87)); font-weight: 600; }
+.mde .mde-co-type, .mde .mde-co-type * { color: color-mix(in srgb, rgb(var(--co, 217, 119, 87)), #fff var(--md-co-lift, 0%)); font-weight: 600; }
 /* 上面「callout 源码态正文用 fg」那条特异度 (0,3,0)，会把类型色与淡色定界符一起盖掉——同级、写在后面补回来 */
-.mde .mde-line-callout .mde-co-type, .mde .mde-line-callout .mde-co-type * { color: rgb(var(--co, 217, 119, 87)); }
+.mde .mde-line-callout .mde-co-type, .mde .mde-line-callout .mde-co-type * { color: color-mix(in srgb, rgb(var(--co, 217, 119, 87)), #fff var(--md-co-lift, 0%)); }
 .mde .mde-line-callout .mde-t-fmt { color: var(--md-fg-4); }
-.mde .mde-line-mathsrc { background: rgba(63, 122, 90, .07); font-family: var(--md-mono); font-size: .92em; }
+.mde .mde-line-mathsrc { background: color-mix(in srgb, var(--md-math) 8%, transparent); font-family: var(--md-mono); font-size: .92em; }
 .mde .mde-line-fm { background: var(--md-bg-2); font-family: var(--md-mono); font-size: .86em; color: var(--md-fg-2); padding-left: 12px; padding-right: 12px; }
 .mde .mde-line-fm-first { border-radius: 10px 10px 0 0; }
 .mde .mde-line-fm-last { border-radius: 0 0 10px 10px; }
@@ -138,7 +111,7 @@
    缩放的小数像素位置上会漏出一条发丝横线（每行交界一条，像横格纸）；border 还让文字正好落在
    1px 边 + 14px = 15px，和阅读态 pre 同位。行上下内边距归零，行距 = 13.5×1.6 = 21.6px，同阅读态。 */
 .mde .mde-line-code {
-  background: var(--md-bg-2); font-family: var(--md-mono);
+  color: var(--md-code-fg); background: var(--md-bg-2); font-family: var(--md-mono);
   font-size: 13.5px; line-height: 1.6; padding: 0 14px;
   border-left: 1px solid var(--md-line); border-right: 1px solid var(--md-line);
 }
@@ -166,13 +139,13 @@
 .mde .mde-link { color: var(--md-link); cursor: pointer; }
 .mde .mde-link:hover { text-decoration: underline; }
 .mde .mde-wk {
-  color: var(--md-accent-deep); cursor: pointer; border-bottom: 1px solid rgba(181, 83, 47, .35);
+  color: var(--md-accent-deep); cursor: pointer; border-bottom: 1px solid var(--md-wk-line);
   word-break: break-all;
 }
 .mde .mde-wk:active { background: var(--md-accent-tint); }
 .mde .mde-t-tag { background: var(--md-accent-tint); border-radius: 999px; padding: 1px 8px; font-size: .88em; }
 .mde .mde-hmark { font-weight: 400; }   /* 揭示态标题的 #：常规字重，不和标题抢 */
-.mde .mde-done { color: var(--md-fg-3); text-decoration: line-through; text-decoration-color: rgba(20, 20, 19, .3); }
+.mde .mde-done { color: var(--md-fg-3); text-decoration: line-through; text-decoration-color: rgba(var(--md-ink), .3); }
 
 /* ———— 列表（Live Preview）————
    「缩进 + 标记 + 其后空白」换成 .mde-lm 标记 widget，占一个 24px 槽；层级只看语法树，每级 24px
@@ -208,7 +181,7 @@
 .mde .mde-task {
   display: inline-block; position: relative; box-sizing: border-box;
   width: 17px; height: 17px; border-radius: 5px; border: 1.6px solid var(--md-line-2);
-  vertical-align: -3px; cursor: pointer; background: #fff;
+  vertical-align: -3px; cursor: pointer; background: var(--md-field);
   transition: background var(--mo-micro, 140ms), border-color var(--mo-micro, 140ms);
 }
 .mde .mde-task.on { background: var(--md-accent); border-color: var(--md-accent); }
@@ -231,7 +204,7 @@
 /* 缩放把手（widgets.js resizer）：右下角圆点，悬停或揭示态出现；拖动中整图描边 */
 .mde .mde-img-rs {
   position: absolute; right: -5px; bottom: -5px; width: 14px; height: 14px; border-radius: 50%;
-  background: var(--md-panel); border: 2px solid var(--md-accent); box-shadow: 0 1px 3px rgba(20, 20, 19, .25);
+  background: var(--md-panel); border: 2px solid var(--md-accent); box-shadow: 0 1px 3px rgba(0, 0, 0, .28);
   cursor: nwse-resize; touch-action: none; opacity: 0; transition: opacity .15s;
 }
 .mde .mde-img-rs::before { content: ''; position: absolute; inset: -10px; }   /* 手指命中区放大 */
@@ -289,7 +262,7 @@
 .mde .mde-props-n { margin-left: 2px; font-size: 11.5px; background: var(--md-bg-2); color: var(--md-fg-3); padding: 1px 7px; border-radius: 999px; }
 .mde .mde-props-tbl { display: flex; flex-direction: column; gap: 1px; }
 .mde .mde-prop { display: flex; gap: 6px; align-items: flex-start; font-size: 14px; border-radius: 8px; transition: background var(--mo-micro, 140ms); }
-@media (hover: hover) { .mde .mde-prop:hover { background: rgba(20, 20, 19, .03); } }
+@media (hover: hover) { .mde .mde-prop:hover { background: rgba(var(--md-ink), .03); } }
 
 .mde .mde-prop-k { position: relative; flex: none; width: 138px; display: flex; align-items: center; gap: 1px; padding: 2px 0; }
 .mde .mde-pk-ic {
@@ -305,7 +278,7 @@
   color: var(--md-fg-2); padding: 4px 6px; border-radius: 7px; outline: none; text-overflow: ellipsis;
   transition: background var(--mo-micro, 140ms), box-shadow var(--mo-micro, 140ms);
 }
-.mde .mde-pk:focus { background: #fff; color: var(--md-fg); box-shadow: 0 0 0 1.5px var(--md-accent); }
+.mde .mde-pk:focus { background: var(--md-field); color: var(--md-fg); box-shadow: 0 0 0 1.5px var(--md-accent); }
 .mde .mde-prop.bad .mde-pk { box-shadow: 0 0 0 1.5px var(--md-danger); }
 
 .mde .mde-prop-v { flex: 1; min-width: 0; color: var(--md-fg); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 2px 0; word-break: break-word; }
@@ -321,7 +294,7 @@
    空白；聚焦打字时才要 60px 的地方（点值格空白处也能聚焦它，见 props.js） */
 .mde .mde-padd { flex: 1 1 0; min-width: 0; font-size: 13.5px; }
 .mde .mde-padd:focus { min-width: 60px; }
-.mde .mde-pv:focus, .mde .mde-padd:focus { background: #fff; box-shadow: 0 0 0 1.5px var(--md-accent); }
+.mde .mde-pv:focus, .mde .mde-padd:focus { background: var(--md-field); box-shadow: 0 0 0 1.5px var(--md-accent); }
 .mde .mde-pv::placeholder, .mde .mde-padd::placeholder { color: var(--md-fg-4); }
 /* 日期框的内部字段 + 日历按钮比文字行高，定高到与文本框同一个 31.22px（23.22 + 上下 4px） */
 .mde .mde-pv[type="date"], .mde .mde-pv[type="datetime-local"] { flex: none; min-width: 0; height: calc(13.5px * 1.72 + 8px); }
@@ -331,7 +304,7 @@
 .mde .mde-prop-v[data-kind="bool"] { align-self: stretch; }
 .mde .mde-pv-bool {
   appearance: none; -webkit-appearance: none; flex: none; width: 16px; height: 16px; margin: 4px 6px; border-radius: 5px;
-  border: 1.6px solid var(--md-line-2); background: #fff; position: relative; opacity: 1; cursor: pointer;
+  border: 1.6px solid var(--md-line-2); background: var(--md-field); position: relative; opacity: 1; cursor: pointer;
   transition: background var(--mo-micro, 140ms), border-color var(--mo-micro, 140ms);
 }
 .mde .mde-pv-bool:checked { background: var(--md-accent); border-color: var(--md-accent); }
@@ -342,11 +315,11 @@
 .mde .mde-pv-bool:focus-visible { outline: none; box-shadow: 0 0 0 1.5px var(--md-accent); }   /* appearance:none 连原生焦点环一起去掉了，键盘可聚焦要补回 */
 .mde .mde-pv-bool:disabled { cursor: default; }
 .mde .mde-prop-empty { color: var(--md-fg-4); padding: 4px 6px; }
-.mde .mde-prop-json { font-family: var(--md-mono); font-size: 12.5px; color: #bc5215; background: rgba(188, 82, 21, .08); border-radius: 5px; padding: 3px 7px; word-break: break-all; }
+.mde .mde-prop-json { font-family: var(--md-mono); font-size: 12.5px; color: var(--md-json); background: var(--md-json-bg); border-radius: 5px; padding: 3px 7px; word-break: break-all; }
 
 .mde .mde-chip { display: inline-flex; align-items: center; max-width: 100%; background: var(--md-bg-2); border-radius: 999px; padding: 2px 3px 2px 10px; font-size: 13px; }
 .mde .mde-chip-t { outline: none; word-break: break-all; border-radius: 4px; }
-.mde .mde-chip-t:focus { box-shadow: 0 0 0 1.5px var(--md-accent); background: #fff; }
+.mde .mde-chip-t:focus { box-shadow: 0 0 0 1.5px var(--md-accent); background: var(--md-field); }
 .mde .mde-chip-tag { color: var(--md-accent-deep); background: var(--md-accent-tint); }
 .mde .mde-chip-tag .mde-chip-t::before { content: '#'; opacity: .65; }
 .mde .mde-chip-x {
@@ -355,8 +328,8 @@
   display: inline-flex; align-items: center; justify-content: center;
   transition: opacity var(--mo-micro, 140ms), background var(--mo-micro, 140ms);
 }
-@media (hover: hover) { .mde .mde-chip-x:hover { opacity: .95; background: rgba(20, 20, 19, .07); } }
-.mde .mde-chip-x:active { opacity: .95; background: rgba(20, 20, 19, .1); }
+@media (hover: hover) { .mde .mde-chip-x:hover { opacity: .95; background: rgba(var(--md-ink), .07); } }
+.mde .mde-chip-x:active { opacity: .95; background: rgba(var(--md-ink), .1); }
 
 .mde .mde-props-add {
   display: flex; align-items: center; gap: 6px; margin-top: 3px; padding: 5px 8px 5px 5px;
@@ -399,11 +372,11 @@
 }
 .mde .mde-table th { background: var(--md-bg-2); font-weight: 650; }
 .mde .mde-table td:focus, .mde .mde-table th:focus {
-  box-shadow: inset 0 0 0 2px var(--md-accent); background: #fff; border-radius: 2px;
+  box-shadow: inset 0 0 0 2px var(--md-accent); background: var(--md-field); border-radius: 2px;
 }
 .mde .mde-table td.src, .mde .mde-table th.src { font-family: inherit; }
-.mde .mde-table td a.wk, .mde .mde-table th a.wk { color: var(--md-accent-deep); border-bottom: 1px solid rgba(181, 83, 47, .35); text-decoration: none; }
-.mde .mde-table td mark, .mde .mde-table th mark { background: var(--md-mark); border-radius: 3px; }
+.mde .mde-table td a.wk, .mde .mde-table th a.wk { color: var(--md-accent-deep); border-bottom: 1px solid var(--md-wk-line); text-decoration: none; }
+.mde .mde-table td mark, .mde .mde-table th mark { background: var(--md-mark); border-radius: 3px; color: inherit; }   /* 不写 inherit 就是浏览器默认黑字，暗纸上看不见 */
 .mde .mde-table td code, .mde .mde-table th code { background: var(--md-bg-2); border-radius: 4px; padding: .08em .3em; font-family: var(--md-mono); font-size: .88em; }
 
 /* 表格工具条（聚焦格时浮现）：一条胶囊分组，按钮无边框、悬停沉底 */
@@ -466,7 +439,7 @@
 /* 子菜单：右/左飞出时从锚点行齐平起；两边都挤时（.stacked）叠在主菜单上、多一圈描边把层次拉开 */
 .mde .mde-submenu { z-index: 2; transform: scale(.96) translateX(-4px); }
 .mde .mde-submenu.open { transform: none; }
-.mde .mde-submenu.stacked { box-shadow: var(--md-shadow), 0 0 0 4px rgba(250, 249, 245, .85); }
+.mde .mde-submenu.stacked { box-shadow: var(--md-shadow), 0 0 0 4px color-mix(in srgb, var(--md-bg) 85%, transparent); }
 
 .mde .mde-selbar {
   position: absolute; box-sizing: border-box; display: flex; align-items: center; gap: 1px; padding: 3px;
@@ -491,9 +464,9 @@
 
 .mde .mde-flash {
   position: absolute; left: 50%; top: 12px; transform: translateX(-50%) translateY(-6px);
-  background: rgba(20, 20, 19, .86); color: #faf9f5; font-size: 12.5px; padding: 6px 14px; border-radius: 999px;
+  background: var(--md-toast-bg); color: var(--md-toast-fg); font-size: 12.5px; padding: 6px 14px; border-radius: 999px;
   opacity: 0; pointer-events: none !important; transition: opacity .18s, transform .18s var(--md-ease);
-  white-space: nowrap; box-shadow: 0 6px 20px rgba(20, 20, 19, .18);
+  white-space: nowrap; box-shadow: var(--md-shadow-sm);
 }
 .mde .mde-flash.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 
@@ -506,10 +479,10 @@
 /* 与 lib/mdrender.css 里阅读态的 kbd/mark/del 同值（那份的作用域不含编辑器正文行） */
 .mde .mde-html kbd {
   font-family: var(--md-mono); font-size: .82em; padding: .05em .4em; border: 1px solid var(--md-line-2);
-  border-bottom-width: 2px; border-radius: 5px; background: #fff; color: var(--md-fg); white-space: nowrap;
+  border-bottom-width: 2px; border-radius: 5px; background: var(--md-panel); color: var(--md-fg); white-space: nowrap;
 }
 .mde .mde-html mark { background: var(--md-mark); border-radius: 3px; padding: 0; color: inherit; }
-.mde .mde-html del { text-decoration-color: rgba(20, 20, 19, .45); }
+.mde .mde-html del { text-decoration-color: rgba(var(--md-ink), .45); }
 
 /* ———— callout 卡里的代码块头（语言 + 复制），与阅读态 .doc-fence 同尺寸 ———— */
 .mde .mde-callout-w pre > .mde-co-fence { display: flex; width: auto; height: 22px; min-height: 0; white-space: normal; font-family: var(--sans, inherit); line-height: 1.2; }

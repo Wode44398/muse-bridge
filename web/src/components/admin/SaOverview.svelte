@@ -118,10 +118,10 @@
       <div class="sa-card-h">{t('用量额度')}</div>
       <div class="rings">
         <div class="ring-row">
-          <div class="sa-ring" style="--p:{ringPct(sa.limits?.five_hour)};--rc:var(--sa-accent)" data-l={sa.limits?.five_hour?.pct != null ? ringPct(sa.limits.five_hour) + '%' : '—'}></div>
+          <div class="sa-ring" style="--p:{ringPct(sa.limits?.five_hour)};--rc:var(--sa-accent)" data-l={sa.limits?.five_hour?.pct != null ? ringPct(sa.limits.five_hour) + '%' : sa.noFiveHour ? '∞' : '—'}></div>
           <div>
             <div class="rl">{t('5 小时窗口')}</div>
-            <div class="sa-dim" style="font-size:12px">{ringStatus(sa.limits?.five_hour)}</div>
+            <div class="sa-dim" style="font-size:12px">{!sa.limits?.five_hour && sa.noFiveHour ? t('这个号没有 5 小时限额') : ringStatus(sa.limits?.five_hour)}</div>
           </div>
         </div>
         <div class="ring-row">

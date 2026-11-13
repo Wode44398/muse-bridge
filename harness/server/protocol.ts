@@ -42,6 +42,7 @@ export const CAPABILITIES = [
   "project-order", // 侧栏项目块拖动排序：POST /api/projects/order {paths}（一个区拖完之后的完整次序）
   "session-refs", // 引用会话：/api/run 认 refs（会话 id，最多 3 个；被引用对话的摘要跟在消息后面给模型，消息上记 refs 给界面）
   "memory-overview", // K11 记忆总览：GET /api/memory/overview（全局层 + 各项目 + 旧快照桶的条目、用量、进提示字数、历史事件）
+  "memory-dream", // 离线记忆整理：GET/POST /api/memory/dream（上次整理的结果、还有多少没复核、现在整理）；条目带 reviewed_* 复核意见
   "custom-providers", // 自定义模型服务：POST /api/custom-providers {name, baseUrl, apiKey, model?}、POST …/:id（改）、POST …/:id/delete；/api/info 的 catalog 里带 custom 字段
   "session-model", // 会话内换型号 / 思考深度：POST /api/sessions/:id/model {model?, thinking?}（运行中回 pending，下一条消息起生效）；事件 model
   "session-provider", // 同一接口也能换厂商：{provider, model?, thinking?}（没点名型号用那家默认）；事件 model 带 provider
@@ -58,6 +59,26 @@ export const CAPABILITIES = [
   // 用户的电脑（设备芯片）：GET /api/devices?session=（available / enabled / devices / link）、POST /api/devices/link {session, link}
   //（link = 设备 id / "none" / "" 恢复自动）；会话里的 Device* 工具省略 device 时就操作连着的那台
   "devices",
+  // 偏好设置注册表：GET /api/prefs（{groups, items}，每项带 en 英文文案）、POST /api/prefs {values:{key: 值 | null}}（null = 恢复默认）
+  "prefs",
+  // 逐家存内置厂商的 key（不切换当前厂商）：POST /api/provider-keys {provider, apiKey} → {ok, providers: {id: 有没有 key}}
+  "provider-keys",
+  // 拉取请求（会话面板的 PR 卡）：GET /api/pr?session=&refresh=1（bridge 的 PR 视图，available:false = 没接上 bridge / 成员实例）、
+  // POST /api/pr {session, op: bind | unbind | monitor | refresh, url?, autoFix?}；自动修复叫醒的那一轮首条是 harness 片段 kind ci-event
+  "pr",
+  // 工作区协同：POST /api/ui/state（「用户在看什么」上报）、POST /api/ui/answer（应答 agent 的草稿请求）；事件 workspace / terminal
+  "workspace-collab",
+  // ── 会话管理（server/sessmgmt/）──
+  // 稍后发送：POST /api/sessions/:id/queue {text, id?}、…/queue/remove {id}、…/queue/clear、…/queue/promote {id}；全局事件 queue
+  "send-queue",
+  // 改名与 AI 标题：POST /api/sessions/:id/rename {title}；全局事件 session_title
+  "session-rename",
+  // 归档：POST /api/sessions/:id/archive {on}；GET /api/sessions 与 /api/sessions/search 认 ?archived=only|include（默认不列已归档）
+  "session-archive",
+  // Tab 输入建议：GET /api/sessions/:id/extras 带 suggestion；全局事件 suggestion
+  "prompt-suggestions",
+  // 通知偏好与在场：GET /api/sessmgmt/state、POST /api/sessmgmt/presence；/api/pending 带 notify
+  "notify-prefs",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];

@@ -10,8 +10,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { liveDesktopHost } from './desktop-host.mjs';
 import { snapshotAccessibility } from './cdp-ax.mjs';
+import { PAGE_TEXT_LINKS_MAX, foldRepeatedLines, pageTextExpression } from './cdp-page-text.mjs';
 import { handleBrowserMessage, handlePageMessage } from './cdp-events.mjs';
 import { parseKeySpec } from './cdp-input.mjs';
+import { scalePng } from './png-scale.mjs';
 
 const MAX_CONSOLE = 400;
 // 截图长边上限：与官方 computer use 的 maxTargetPx 一致，超过它 Claude Code 会再缩一次图。
@@ -207,10 +209,22 @@ export class CdpSession {
   external = false;
   sharedHost = null;   // 共享无头宿主的句柄（持久配置档，headless-host.mjs）；external 且无 desktopBroker 时有值
   closed = null;       // close() 的善后 Promise（共享宿主时 = 标签关完、宿主若因此退出也退完）
+  // 隔离存储（claude-browser.mjs 按会话开关）：共享宿主里本会话独占的浏览上下文——cookie / 存储 / 缓存都不和别的会话共用，
+  // 关掉即清空。'' = 用宿主的默认上下文（持久配置档，登录态共享）。
+  browserContextId = '';
   desktopBroker = '';
   ownedTargets = new Set();
+  // Web Bridge（用户自己的 Edge / Chrome，经扩展，runtime/web-bridge.mjs）：传输层 + 用户分享来、接手的标签
+  //（close 只断开、绝不关它们）。这个模式下不做任何视口 / UA / 触屏仿真——那是用户正在用的窗口。
+  webBridge = null;
+  adopted = new Set();
 
   consoleBuf = [];
+  // 文档纪元：主框架每换一次文档（导航 / 刷新，cdp-events 维护）、每换一次附着（切标签 / 重连，见 connect）
+  // 就加一，console 条目落库时打上当前纪元。缓冲是整个会话共用的——同工作空间的别的对话、之前的页面
+  // 留下的旧报错以前原样交给 agent（11-07 会话 9e77cfb8 被别人访问过的 awwwards 报错带偏两轮），
+  // 现在 consoleEntries() 默认只给当前文档的。
+  docSeq = 0;
   // 页面弹过的原生对话框（alert/confirm/prompt/beforeunload），由 cdp-events 自动应答后记在这里；
   // 工具层按序号取「这次动作期间弹过的」写进结果，agent 才知道页面说了什么、我们替它点了什么。
   dialogs = [];
@@ -237,10 +251,12 @@ export class CdpSession {
 
   get alive() {
     return !this.dead && this.ws?.readyState === WebSocket.OPEN
-      && (this.external ? this.sharedHost?.alive !== false : this.child?.exitCode == null);
+      && (this.webBridge ? this.webBridge.connected
+        : this.external ? this.sharedHost?.alive !== false : this.child?.exitCode == null);
   }
 
-  async launch(startUrl, { desktop = true, profileDir = '' } = {}) {
+  async launch(startUrl, { desktop = true, profileDir = '', isolate = false } = {}) {
+    this.isolate = Boolean(isolate);   // 只对共享无头宿主有意义；临时 profile 本来就是独立进程
     // 宿主来源：env（壳 spawn 直传）→ 运行中注册（附着形态）→ 落盘文件（重启后）。
     // 现探活：壳没开/已退出 → 回落 headless，功能永不因壳缺席而断。
     // profileDir = 持久配置档（共享无头宿主）；空 = 临时 profile（快照访客、分享链接）。
@@ -262,6 +278,7 @@ export class CdpSession {
       } catch (e) {
         console.warn('[cdp] 持久配置档不可用，改用临时 profile：', e?.message || e);
         this.external = false;
+        this.browserContextId = '';
         this.ownedTargets.clear();
         try { this.browserWs?.close(); } catch {}
         this.browserWs = null;
@@ -347,10 +364,14 @@ export class CdpSession {
     this.cdpBase = this.sharedHost.cdpBase;
     this.url = startUrl;
     await this.connectBrowserSocket();
-    const created = await this.bsend('Target.createTarget', { url: 'about:blank' });
-    const id = String(created?.targetId ?? '');
+    if (this.isolate) {
+      // disposeOnDetach：这条 browser 级连接一断（close / bridge 崩了）上下文就随之销毁，不会在宿主里留下孤儿
+      const c = await this.bsend('Target.createBrowserContext', { disposeOnDetach: true });
+      this.browserContextId = String(c?.browserContextId || '');
+      if (!this.browserContextId) throw new Error('Target.createBrowserContext returned no id');
+    }
+    const id = await this.createOwnedTarget('about:blank');
     if (!id) throw new Error('Target.createTarget returned no targetId');
-    this.ownedTargets.add(id);
     this.activeTargetId = id;
     const pages = await this.waitPages(this.debugPort);
     const page = pages.find((p) => String(p.id ?? '') === id);
@@ -362,11 +383,85 @@ export class CdpSession {
     if (startUrl !== 'about:blank') await this.navigate(startUrl);
   }
 
+  // 附着到用户自己的浏览器（Web Bridge 扩展的一条链路上、属于这个 agent 会话的那部分）。
+  // transport：runtime/web-bridge.mjs WebBridgeHub.transport()。标签 id 是扩展给的 't<tabId>'。
+  // 会话自己标签组里已有的标签（客户端重启前开的、用户拖进来的）全部认领；adopt = 先接手这个用户分享的标签；
+  // 都没有就在会话的标签组里新开一个空白标签。
+  async attachWebBridge(transport, { adopt = '' } = {}) {
+    this.external = true;
+    this.webBridge = transport;
+    this.applied = { ok: true, via: 'user-browser' };
+    await this.connectBrowserSocket();
+    const { mine, shared } = await transport.list();
+    for (const t of mine) this.ownedTargets.add(String(t.id));
+    let id = '';
+    if (adopt) {
+      if (![...mine, ...shared].some((t) => String(t.id) === adopt)) throw new Error(`标签 ${adopt} 不在你的标签组里，也不在用户分享的「Web Bridge」组里——先 tabs() 看能用哪些`);
+      this.ownedTargets.add(adopt);
+      if (!mine.some((t) => String(t.id) === adopt)) this.adopted.add(adopt);
+      id = adopt;
+    } else {
+      id = String((mine.find((t) => t.active) || mine[0])?.id || '');
+    }
+    if (!id) {
+      const created = await this.bsend('Target.createTarget', { url: 'about:blank' });
+      id = String(created?.targetId ?? '');
+      if (!id) throw new Error('浏览器没有返回新标签');
+      this.ownedTargets.add(id);
+    }
+    this.activeTargetId = id;
+    await this.connect(`wb:${id}`);
+    await this.enableDomains();
+    const pages = [...mine, ...shared].filter((t) => this.ownedTargets.has(String(t.id)));
+    this.seedTabs(pages.length ? pages : [{ id, url: 'about:blank', title: '' }]);
+    this.url = String(pages.find((t) => String(t.id) === id)?.url || 'about:blank');
+    this.measured = await this.measure();
+    if (this.measured?.w > 0) this.viewport = { width: this.measured.w, height: this.measured.h };
+  }
+
+  // Web Bridge：把一个用户分享的标签接进来并切过去（tab_select / 任何带 tab:"t…" 的动作）。
+  async adoptTab(targetId) {
+    const id = String(targetId || '');
+    if (!this.webBridge || !id || this.ownedTargets.has(id)) {
+      if (id && id !== this.activeTargetId && this.ownedTargets.has(id)) await this.activateTab(id);
+      return;
+    }
+    const { mine, shared } = await this.webBridge.list();
+    const t = [...mine, ...shared].find((x) => String(x.id) === id);
+    if (!t) throw new Error(`标签 ${id} 不在你的标签组里，也不在用户分享的「Web Bridge」组里——先 tabs() 看能用哪些`);
+    this.ownedTargets.add(id);
+    if (!mine.some((x) => String(x.id) === id)) this.adopted.add(id);
+    this.upsertTab({ id, url: String(t.url || ''), title: String(t.title || ''), active: false });
+    try {
+      await this.activateTab(id);
+    } catch (e) {
+      // 别的会话正占着它：退回原状，报原因
+      this.ownedTargets.delete(id);
+      this.adopted.delete(id);
+      const i = this.tabs.findIndex((x) => x.id === id);
+      if (i >= 0) { this.tabs.splice(i, 1); this.notifyTabs(); }
+      throw e;
+    }
+  }
+
+  // Web Bridge 的 close 动作：关掉本会话自己开的标签（用户分享来的只断开）。返回关了几个。
+  async closeOwnTabs() {
+    if (!this.webBridge) return 0;
+    // 也算上会话组里还没接手过的（客户端重启前开的、漏报的弹窗）；用户拖进组的标签扩展会拒关（只关 agent 自己开的）
+    const ids = new Set([...this.ownedTargets].filter((id) => !this.adopted.has(id)));
+    try { for (const t of (await this.webBridge.list()).mine) ids.add(String(t.id)); } catch { /* 列不出就只关已知的 */ }
+    let n = 0;
+    for (const id of ids) {
+      try { await this.bsend('Target.closeTarget', { targetId: id }); n++; } catch { /* 用户已经关了 / 不是 agent 开的 */ }
+    }
+    return n;
+  }
+
   // 建 / 关一个本会话拥有的标签：桌面壳经 broker，共享无头宿主经 Target 域。
   async createOwnedTarget(url) {
     const r = this.desktopBroker
       ? await this.desktopTarget('POST', '', { url })
-      : await this.bsend('Target.createTarget', { url });
+      : await this.bsend('Target.createTarget', this.browserContextId ? { url, browserContextId: this.browserContextId } : { url });
     const id = String(r?.targetId ?? '');
     if (id) this.ownedTargets.add(id);
     return id;
@@ -430,6 +525,7 @@ export class CdpSession {
   }
 
   async listPages() {
+    if (this.webBridge) return (await this.webBridge.listPages()).filter((t) => this.ownedTargets.has(String(t.id ?? '')));
     const res = await fetch(`${this.cdpBase}/json/list`);
     const targets = await res.json();
     const pages = targets.filter(
@@ -440,11 +536,14 @@ export class CdpSession {
 
   connect(wsUrl) {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(wsUrl);
+      // Web Bridge 的标签：wb:<targetId> → 扩展上的一个页面频道（别的会话占着这个标签时 error 里带原因）
+      const ws = this.webBridge && String(wsUrl).startsWith('wb:') ? this.webBridge.openPage(String(wsUrl).slice(3)) : new WebSocket(wsUrl);
       this.ws = ws;
       this.dsfOverride = 0;   // 仿真随 CDP 会话走：换附着后新 target 上没有我们的覆盖
+      // 换附着 = 换了一份文档：之后 Runtime/Log.enable 重放的是新标签当前文档自己的日志，正好落进新纪元
+      this.docSeq++;
       ws.addEventListener('open', () => resolve());
-      ws.addEventListener('error', () => reject(new Error('CDP websocket error')));
+      ws.addEventListener('error', (ev) => reject(new Error(this.webBridge && ev?.message ? ev.message : 'CDP websocket error')));
       ws.addEventListener('message', (ev) => this.onMessage(String(ev.data)));
       ws.addEventListener('close', () => {
         for (const p of this.pending.values()) p.reject(new Error('CDP connection closed'));
@@ -461,11 +560,15 @@ export class CdpSession {
   connectBrowserSocket() {
     return new Promise((resolve, reject) => {
       (async () => {
-        const res = await fetch(`${this.cdpBase}/json/version`);
-        const v = await res.json();
-        const wsUrl = v?.webSocketDebuggerUrl;
-        if (!wsUrl) throw new Error('browser exposes no browser-level debugger url');
-        const ws = new WebSocket(wsUrl);
+        let ws;
+        if (this.webBridge) ws = this.webBridge.openBrowser();   // 扩展用 chrome.tabs / tabGroups 模拟 Target 域
+        else {
+          const res = await fetch(`${this.cdpBase}/json/version`);
+          const v = await res.json();
+          const wsUrl = v?.webSocketDebuggerUrl;
+          if (!wsUrl) throw new Error('browser exposes no browser-level debugger url');
+          ws = new WebSocket(wsUrl);
+        }
         this.browserWs = ws;
         ws.addEventListener('open', async () => {
           try {
@@ -536,6 +639,7 @@ export class CdpSession {
     if (!wasActive || this.retargetN > 0 || !this.alive) return;
     const next = this.tabs[0];
     if (next) this.activateTab(next.id).catch(() => {});
+    else if (this.webBridge) this.close();   // 用户浏览器里不替他凭空开空白标签：断开，下次 navigate 再开
     else this.newTab().catch(() => {});
   }
 
@@ -668,7 +772,7 @@ export class CdpSession {
   }
 
   pushConsole(type, msg) {
-    this.consoleBuf.push({ t: Date.now(), type, msg: String(msg).slice(0, 2000) });
+    this.consoleBuf.push({ t: Date.now(), type, msg: String(msg).slice(0, 2000), doc: this.docSeq, url: this.url });
     if (this.consoleBuf.length > MAX_CONSOLE) this.consoleBuf.splice(0, this.consoleBuf.length - MAX_CONSOLE);
   }
 
@@ -841,6 +945,8 @@ export class CdpSession {
     // 壳里面板一挂一收 zoom 就变：截图前把视口与 DPR 校回来，坐标系和画面才是 agent 以为的那个
     if (this.desktopBroker && m) m = (await this.syncShellMetrics({ m }).catch(() => m)) || m;
     this.measured = m || this.measured;
+    // 用户自己的窗口随时会被他拉大缩小：坐标基准跟着实测走
+    if (this.webBridge && m?.w > 0) this.viewport = { width: m.w, height: m.h };
     const cssW = m?.w > 0 ? m.w : this.viewport.width;
     const cssH = m?.h > 0 ? m.h : this.viewport.height;
     const dpr = m?.dpr > 0 ? m.dpr : (this.emu.dpr || 1);
@@ -875,6 +981,14 @@ export class CdpSession {
   // 视口截出 2038），这里量出偏差按比例重截一次，并把修正系数按当时的仿真记住，下次一次到位。
   shotFix = { key: '', c: 1 };
   async capture(params, wantW) {
+    // 用户自己的浏览器：不让 Chromium 代缩（clip.scale≠1 会临时套设备指标覆盖，截图途中链路一断就留在页面上——
+    // 页面缩在窗口左上角，只有刷新或改窗口大小才好）。按原尺寸截（scale 1 打断了也不留痕），在本地缩。
+    if (this.webBridge && params.clip && Math.abs(params.clip.scale - 1) > 1e-6) {
+      const r = await this.send('Page.captureScreenshot', { ...params, clip: { ...params.clip, scale: 1 } });
+      if (!r?.data) throw new Error('captureScreenshot returned no data');
+      const full = Buffer.from(r.data, 'base64');
+      return wantW > 0 ? scalePng(full, wantW) : full;
+    }
     const key = `${this.activeTargetId}|${this.dsfOverride}|${this.measured?.dpr ?? ''}`;
     const fix = params.clip && this.shotFix.key === key ? this.shotFix.c : 1;
     const p = fix !== 1 ? { ...params, clip: { ...params.clip, scale: params.clip.scale * fix } } : params;
@@ -1158,6 +1272,12 @@ export class CdpSession {
   // 实测一遍 innerWidth/innerHeight，返回 viewportReport()——期望值、实测值、下发结果三样
   // 齐全，调用方直接转述给 agent。
   async setViewport(width, height, opts = {}) {
+    if (this.webBridge) {
+      // 用户自己的窗口：不改尺寸，只量实际视口（切标签后坐标系以它为准）
+      this.measured = await this.measure();
+      if (this.measured?.w > 0) this.viewport = { width: this.measured.w, height: this.measured.h };
+      return this.viewportReport();
+    }
     const w = Math.max(VIEWPORT_MIN, Math.min(VIEWPORT_MAX, Math.round(width)));
     const h = Math.max(VIEWPORT_MIN, Math.min(VIEWPORT_MAX, Math.round(height)));
     this.viewport = { width: w, height: h };
@@ -1189,6 +1309,7 @@ export class CdpSession {
   //    面板没开/远端在看时 resize 等于没发生，页面 innerWidth 纹丝不动。
   //  触屏 / UA / 配色三样是页面级仿真，与几何无关，两种模式通用。
   async applyEmulation() {
+    if (this.webBridge) return;
     const { width: w, height: h } = this.viewport;
     const { mobile, scheme, dpr } = this.emu;
     if (this.desktopBroker) {
@@ -1425,7 +1546,8 @@ export class CdpSession {
     await this.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX, deltaY });
   }
 
-  consoleEntries() { return this.consoleBuf; }
+  // 默认只给当前文档（本纪元）的条目；all:true = 整个缓冲（含之前的页面 / 标签，条目上 doc ≠ docSeq）。
+  consoleEntries({ all = false } = {}) { return all ? this.consoleBuf : this.consoleBuf.filter((e) => e.doc === this.docSeq); }
   clearConsole() { this.consoleBuf = []; }
   networkEntries() { return this.netOrder; }
 
@@ -1503,11 +1625,17 @@ export class CdpSession {
   }
 
   // 页面正文：article / main / [role=main] 优先，退回 body——读文章、文档比 read_page 的无障碍树省得多。
-  async pageText(maxChars = 20_000) {
-    const r = await this.eval(`(()=>{const pick=document.querySelector('article')||document.querySelector('main,[role=main]')||document.body;const t=(pick?.innerText||'').replace(/\\n{3,}/g,'\\n\\n').trim();return{from:pick?(pick.tagName.toLowerCase()+(pick.id?'#'+pick.id:'')):'',title:document.title,text:t}})()`);
-    const text = String(r?.text || '');
+  // 页面里那段脚本在 cdp-page-text.mjs：有 open shadow DOM 时走扁平树（Web Components 里的正文 innerText 读不到）。
+  // 连续重复的长行先折叠再按 maxChars 截；扁平遍历攒到 4 倍 maxChars 就停（more）。links=true 顺带收链接（query 过滤）。
+  async pageText(maxChars = 20_000, { links = false, query = '' } = {}) {
     const cap = Math.max(1000, Math.min(100_000, Number(maxChars) || 20_000));
-    return { from: r?.from || '', title: r?.title || '', text: text.length > cap ? text.slice(0, cap) : text, total: text.length, truncated: text.length > cap };
+    const r = await this.eval(pageTextExpression({ links: !!links, query: links ? String(query || '') : '', maxLinks: PAGE_TEXT_LINKS_MAX, limit: cap * 4 }));
+    const text = foldRepeatedLines(String(r?.text || ''));
+    return {
+      from: r?.from || '', title: r?.title || '', text: text.length > cap ? text.slice(0, cap) : text, total: text.length,
+      truncated: text.length > cap || !!r?.more, more: !!r?.more, shadow: Number(r?.shadow) || 0,
+      lazy: Array.isArray(r?.lazy) ? r.lazy : [], links: Array.isArray(r?.links) ? r.links : null,
+    };
   }
 
   async setInputFiles(files, target = {}) {
@@ -1572,6 +1700,19 @@ export class CdpSession {
   close() {
     this.dead = true;
     clearTimeout(this.tabRefreshTimer);
+    if (this.webBridge) {
+      // 用户的浏览器：只断开（摘调试器），标签一个都不关——要关自己开的标签走 closeOwnTabs（close 动作）
+      this.ownedTargets.clear();
+      this.adopted.clear();
+      try { this.ws?.close(); } catch {}
+      try { this.browserWs?.close(); } catch {}
+      this.ws = null;
+      this.browserWs = null;
+      this.closed = Promise.resolve();
+      this.tabs = [];
+      this.notifyTabs();
+      return;
+    }
     if (this.external) {
       // 只关本会话拥有的 target，绝不能杀 Electron（那里面还有 bridge UI 与其他工作空间）/ 共享宿主（同一个人别的工作空间）。
       const targets = [...this.ownedTargets];
@@ -1579,7 +1720,11 @@ export class CdpSession {
       const closing = targets.map((targetId) => this.closeOwnedTarget(targetId).catch(() => {}));
       const host = this.sharedHost;
       this.sharedHost = null;
-      this.closed = Promise.allSettled(closing).then(() => {
+      const ctxId = this.browserContextId;
+      this.browserContextId = '';
+      this.closed = Promise.allSettled(closing).then(async () => {
+        // 隔离上下文：显式销毁（断连接也会销毁，这里先说一声，宿主那边立刻清掉它的存储）
+        if (ctxId) await this.bsend('Target.disposeBrowserContext', { browserContextId: ctxId }).catch(() => {});
         try { this.browserWs?.close(); } catch {}
         return host?.release();   // 最后一个会话走了，宿主体面退出（Cookie 落盘）
       });

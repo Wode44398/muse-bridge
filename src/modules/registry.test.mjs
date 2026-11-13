@@ -48,8 +48,8 @@ test('基础版（三个扩展都不在）：只剩 Claude，其余提示未安�
   assert.deepEqual(r.enabled, ['claude']);
   const others = Object.keys(r.notes).filter((id) => id !== 'claude');
   // codex 只在私有版 / 打包版提供（公开版的克隆里没有 modules/codex），在不在都对
-  assert.deepEqual(others.filter((id) => id !== 'codex'), ['gemini', 'dimensio']);
-  assert.ok(others.every((id) => ['gemini', 'codex', 'dimensio'].includes(id)));
+  assert.deepEqual(others.filter((id) => id !== 'codex'), ['studio', 'dimensio']);
+  assert.ok(others.every((id) => ['studio', 'codex', 'dimensio'].includes(id)));
   for (const id of others) assert.match(r.notes[id], /^未安装「.+」扩展$/);
 });
 

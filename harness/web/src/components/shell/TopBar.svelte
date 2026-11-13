@@ -1,16 +1,16 @@
 <script lang="ts">
   // 顶栏（减法）：左 = 当前项目 / 对话标题（手机上它就是侧栏抽屉的入口；桌面侧栏收起时前面多一颗展开钮）；
-  // 右 = 后台在跑的对话数 · 上下文用量环 · 回滚 · 工作区开关。
+  // 右 = 后台在跑的对话数 · 上下文用量环（也是运行设置的入口，RunButton）· 回滚 · 工作区开关。
   // 不放返回 / 新对话键（维护者定过：返回在侧栏「主页」，新对话在侧栏）。
   // 这一带在桌面壳里是窗口拖拽区：只有按钮可点，其余留给拖窗；右侧按「是否贴着窗口右缘」让出窗控。
   // 分屏时每一格一条：标题、上下文环、回滚说的都是这一格的会话；右端多一颗 × 关掉这一格；工作区开关只放在最右那一格。
-  import { app, backgroundRunning, cacheColdMinutes, pathKey, toggleDock } from "../../lib/state.svelte.ts";
+  import { app, backgroundRunning, pathKey, toggleDock } from "../../lib/state.svelte.ts";
   import { haptic } from "../../lib/touch.ts";
   import { fade, pop } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
   import IconButton from "../ui/IconButton.svelte";
   import Mark from "../brand/Mark.svelte";
-  import ContextPanel from "../sheets/ContextPanel.svelte";
+  import RunButton from "./RunButton.svelte";
   import { usePane } from "../../lib/pane.ts";
   import { t, tr } from "../../lib/i18n.ts";
 
@@ -53,20 +53,6 @@
   // 后台在跑的对话数：分屏时只在左格报一次
   const bgCount = $derived(pane.index === 0 ? backgroundRunning().length : 0);
 
-  // 上下文用量环：>82% 转警示色；前缀缓存大概冷了就褪成灰（30 秒对一次钟）
-  const ctxPct = $derived(pane.chat.ctx.limit ? Math.min(100, (pane.chat.ctx.used / pane.chat.ctx.limit) * 100) : 0);
-  let nowTick = $state(Date.now());
-  $effect(() => {
-    const timer = setInterval(() => (nowTick = Date.now()), 30_000);
-    return () => clearInterval(timer);
-  });
-  const ctxCold = $derived(cacheColdMinutes(nowTick, pane.chat) !== null);
-  const k = (n: number) => `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k`;
-  let ctxBtn: HTMLButtonElement | undefined = $state();
-  let ctxOpen = $state(false);
-  const R = 7.25;
-  const C = 2 * Math.PI * R;
-
   const canRollback = $derived(app.features.sessions && Boolean(pane.chat.id) && !empty);
 
   function titleClick() {
@@ -106,30 +92,7 @@
         <span>{bgCount}</span>
       </button>
     {/if}
-    {#if ctxPct > 0}
-      <button
-        bind:this={ctxBtn}
-        class="ctx"
-        class:hot={ctxPct > 82}
-        class:cold={ctxCold}
-        class:open={ctxOpen}
-        onclick={() => {
-          haptic("light");
-          ctxOpen = !ctxOpen;
-        }}
-        title={ctxCold
-          ? t("上下文 {used} / {limit}（{pct}%），缓存大概已经冷了", { used: k(pane.chat.ctx.used), limit: k(pane.chat.ctx.limit), pct: Math.round(ctxPct) })
-          : t("上下文 {used} / {limit}（{pct}%）", { used: k(pane.chat.ctx.used), limit: k(pane.chat.ctx.limit), pct: Math.round(ctxPct) })}
-        aria-label={t("上下文用量 {pct}%", { pct: Math.round(ctxPct) })}
-        aria-expanded={ctxOpen}
-        in:pop
-      >
-        <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">
-          <circle class="trk" cx="9" cy="9" r={R} />
-          <circle class="arc" cx="9" cy="9" r={R} stroke-dasharray="{(C * ctxPct) / 100} {C}" />
-        </svg>
-      </button>
-    {/if}
+    <RunButton {wide} />
     {#if canRollback}
       <IconButton icon="history" label={t("回滚到检查点")} size={32} onclick={() => (app.sheet = "checkpoints")} />
     {/if}
@@ -151,10 +114,6 @@
     {/if}
   </div>
 </header>
-
-{#if ctxOpen && ctxBtn}
-  <ContextPanel anchor={ctxBtn} onclose={() => (ctxOpen = false)} />
-{/if}
 
 <style>
   .tb {
@@ -259,45 +218,8 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .ctx {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border-radius: 10px;
-    transition: background-color var(--t-fast) var(--ease);
-  }
-  .ctx.open {
-    background: var(--surface2);
-  }
-  .ctx svg {
-    transform: rotate(-90deg);
-  }
-  .trk {
-    fill: none;
-    stroke: var(--border2);
-    stroke-width: 2;
-  }
-  .arc {
-    fill: none;
-    stroke: var(--accent);
-    stroke-width: 2;
-    stroke-linecap: round;
-    transition:
-      stroke-dasharray var(--t-slow) var(--ease-out),
-      stroke var(--t-med) var(--ease);
-  }
-  .hot .arc {
-    stroke: var(--warn);
-  }
-  .cold .arc {
-    stroke: var(--text3);
-  }
-
   @media (hover: hover) {
-    .where:not(.static):hover,
-    .ctx:hover {
+    .where:not(.static):hover {
       background: var(--surface2);
     }
   }

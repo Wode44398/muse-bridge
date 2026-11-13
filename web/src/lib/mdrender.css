@@ -5,7 +5,7 @@
 
    作用域写成 :is(.doc-md, .mde .mde-callout-w)：:is() 取参数里最高的特异度 (0,2,0)，与 DocViewer
    原先 Svelte 作用域规则（.doc-md.svelte-xxx p）同级，从组件里挪出来阅读态观感不变；
-   配色令牌 --md-* 由两边各自定义（DocViewer 的 .doc-root / editor.css 的 .mde），同名同值。
+   配色令牌 --md-* 定义在 lib/doctheme.css（两个作用域共用一份，跟随全站明暗），这里不写死纸面颜色。
    编辑态特有的差异（卡片外边距交给 CM 空行）就近写在对应规则后面，同文件后写者胜，不靠注入顺序。
 
    数值口径：阅读态段落/块的外边距 1.4em 模拟编辑态的一整行空行（只在源码真有空行处；没有空行的
@@ -43,7 +43,7 @@
 :is(.doc-md, .mde .mde-callout-w) ul > li.task-list-item { list-style: none; }
 :is(.doc-md, .mde .mde-callout-w) input.task-cb {
   appearance: none; -webkit-appearance: none; width: 17px; height: 17px; border-radius: 5px;
-  border: 1.6px solid var(--md-line-2); background: #fff; vertical-align: -3px; margin: 0 6px 0 0; position: relative;
+  border: 1.6px solid var(--md-line-2); background: var(--md-field); vertical-align: -3px; margin: 0 6px 0 0; position: relative;
 }
 :is(.doc-md, .mde .mde-callout-w) ul > li.task-list-item > .task-body > input.task-cb,
 :is(.doc-md, .mde .mde-callout-w) ul > li.task-list-item > .task-body > p:first-child > input.task-cb:first-child { margin-left: -23px; }
@@ -53,21 +53,21 @@
   border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(43deg);
 }
 /* 已完成：只划本项正文（子项在 .task-body 外）；勾选框是 inline-block，不吃划线 */
-:is(.doc-md, .mde .mde-callout-w) li.is-checked > .task-body { color: var(--md-fg-3); text-decoration: line-through; text-decoration-color: rgba(20, 20, 19, .3); }
+:is(.doc-md, .mde .mde-callout-w) li.is-checked > .task-body { color: var(--md-fg-3); text-decoration: line-through; text-decoration-color: rgba(var(--md-ink), .3); }
 
 /* ———— 行内 ———— */
 :is(.doc-md, .mde .mde-callout-w) a { color: var(--md-link); text-decoration: none; }
-:is(.doc-md, .mde .mde-callout-w) a.wk { color: var(--md-accent-deep); text-decoration: none; border-bottom: 1px solid rgba(181, 83, 47, .35); cursor: pointer; word-break: break-all; }
+:is(.doc-md, .mde .mde-callout-w) a.wk { color: var(--md-accent-deep); text-decoration: none; border-bottom: 1px solid var(--md-wk-line); cursor: pointer; word-break: break-all; }
 :is(.doc-md, .mde .mde-callout-w) a.wk:active { background: var(--md-accent-tint); }
 :is(.doc-md, .mde .mde-callout-w) .ob-tag { color: var(--md-accent-deep); background: var(--md-accent-tint); border-radius: 999px; padding: 1px 8px; font-size: .88em; }
 /* 高亮不加左右内边距：编辑态的 ==高亮== 会被行内格式切成好几段 span，逐段加内边距会在词中间
    撑出缝，两态统一不加（Obsidian 两态也不加） */
 :is(.doc-md, .mde .mde-callout-w) mark { background: var(--md-mark); border-radius: 3px; padding: 0; color: inherit; }
 /* 删除线用半透明灰线：纯黑 currentColor 压在中文横笔画上几乎看不出（编辑态 .mde-t-strike 同值） */
-:is(.doc-md, .mde .mde-callout-w, .mde .mde-table) del { text-decoration-color: rgba(20, 20, 19, .45); }
+:is(.doc-md, .mde .mde-callout-w, .mde .mde-table) del { text-decoration-color: rgba(var(--md-ink), .45); }
 :is(.doc-md, .mde .mde-callout-w, .mde .mde-table) kbd {
   font-family: var(--md-mono); font-size: .82em; padding: .05em .4em; border: 1px solid var(--md-line-2);
-  border-bottom-width: 2px; border-radius: 5px; background: #fff; color: var(--md-fg); white-space: nowrap;
+  border-bottom-width: 2px; border-radius: 5px; background: var(--md-panel); color: var(--md-fg); white-space: nowrap;
 }
 :is(.doc-md, .mde .mde-callout-w) img { max-width: 100%; border-radius: 8px; }
 
@@ -82,10 +82,10 @@
 :is(.doc-md, .mde .mde-callout-w) blockquote > p:has(+ blockquote) { margin-bottom: .3em; }
 
 /* ———— callout 卡 ———— 卡内段落 .45em、首个子元素贴着标题（标题与正文之间只有 co-body 的 4px） */
-:is(.doc-md, .mde .mde-callout-w) .callout { margin: 1.4em 0; border-radius: 10px; background: rgba(var(--co), .07); border-left: 3px solid rgb(var(--co)); padding: 10px 14px; }
+:is(.doc-md, .mde .mde-callout-w) .callout { margin: 1.4em 0; border-radius: 10px; background: rgba(var(--co), var(--md-co-bg, .07)); border-left: 3px solid rgb(var(--co)); padding: 10px 14px; }
 /* 编辑态卡片上下的间距交给 CM 的空行（和段落一样），卡片自己不再加外边距 */
 .mde .mde-callout-w > .callout { margin: 0; }
-:is(.doc-md, .mde .mde-callout-w) .co-title { display: flex; align-items: center; gap: 7px; font-weight: 650; color: rgb(var(--co)); font-size: .98em; }
+:is(.doc-md, .mde .mde-callout-w) .co-title { display: flex; align-items: center; gap: 7px; font-weight: 650; color: color-mix(in srgb, rgb(var(--co)), #fff var(--md-co-lift, 0%)); font-size: .98em; }
 :is(.doc-md, .mde .mde-callout-w) .co-title svg { width: 17px; height: 17px; flex: none; }
 :is(.doc-md, .mde .mde-callout-w) .co-body { margin-top: 4px; }
 :is(.doc-md, .mde .mde-callout-w) .co-body p { margin: .45em 0; }
@@ -97,22 +97,22 @@
    不再二次缩放；长行折行（pre-wrap），和编辑态的 lineWrapping 一样，不再横向溢出滚动。
    pre 的外边距 1.66em × 13.5px = 22.4px，与正文段落的 1.4em × 16px 相同（都模拟一行空行）。 */
 :is(.doc-md, .mde .mde-callout-w) code { background: var(--md-bg-2); border-radius: 5px; padding: .1em .28em; font-family: var(--md-mono); font-size: .88em; }
-:is(.doc-md, .mde .mde-callout-w) pre { background: var(--md-bg-2); border: 1px solid var(--md-line); border-radius: 10px; padding: 8px 14px; overflow-x: auto; margin: 1.66em 0; font-size: 13.5px; line-height: 1.6; }
+:is(.doc-md, .mde .mde-callout-w) pre { color: var(--md-code-fg); background: var(--md-bg-2); border: 1px solid var(--md-line); border-radius: 10px; padding: 8px 14px; overflow-x: auto; margin: 1.66em 0; font-size: 13.5px; line-height: 1.6; }
 :is(.doc-md, .mde .mde-callout-w) pre code { background: none; padding: 0; border-radius: 0; font-size: inherit; line-height: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* 代码语法配色（纸面暖调，Flexoki light 那组：在象牙白上不发冷）——类来自 mdeditor/theme.js 的
+/* 代码语法配色（Flexoki：亮纸 light 档在象牙白上不发冷、暗纸 dark 档，色值是 doctheme.css 的 --md-c-*）——类来自 mdeditor/theme.js 的
    mdHighlight：编辑态代码行由 CM 高亮挂上，阅读态代码块由 mdeditor/hl.js 按同一张表挂上。
    作用域 :is(.doc-md, .mde) 与原先 editor.css 的 .mde .mde-c-* 同特异度。 */
-:is(.doc-md, .mde) .mde-c-kw { color: #5e409d; }
-:is(.doc-md, .mde) .mde-c-str { color: #66800b; }
-:is(.doc-md, .mde) .mde-c-num { color: #bc5215; }
-:is(.doc-md, .mde) .mde-c-fn { color: #205ea6; }
-:is(.doc-md, .mde) .mde-c-type { color: #24837b; }
-:is(.doc-md, .mde) .mde-c-prop { color: #ad8301; }
-:is(.doc-md, .mde) .mde-c-op { color: #6f6e69; }
-:is(.doc-md, .mde) .mde-c-re { color: #af3029; }
-:is(.doc-md, .mde) .mde-c-def { color: #205ea6; }
-:is(.doc-md pre, .mde .mde-line-code) .mde-t-cmt { color: #9a9891; }
+:is(.doc-md, .mde) .mde-c-kw { color: var(--md-c-kw); }
+:is(.doc-md, .mde) .mde-c-str { color: var(--md-c-str); }
+:is(.doc-md, .mde) .mde-c-num { color: var(--md-c-num); }
+:is(.doc-md, .mde) .mde-c-fn { color: var(--md-c-fn); }
+:is(.doc-md, .mde) .mde-c-type { color: var(--md-c-type); }
+:is(.doc-md, .mde) .mde-c-prop { color: var(--md-c-prop); }
+:is(.doc-md, .mde) .mde-c-op { color: var(--md-c-op); }
+:is(.doc-md, .mde) .mde-c-re { color: var(--md-c-re); }
+:is(.doc-md, .mde) .mde-c-def { color: var(--md-c-fn); }
+:is(.doc-md pre, .mde .mde-line-code) .mde-t-cmt { color: var(--md-c-cmt); }
 /* 阅读态代码块里还会出现的几个 markdown 高亮类（如 ```md 块、C 的 #include 是 meta）：
    编辑态由 editor.css 的 .mde .mde-t-* 定义，这里给阅读态补同色（标题只加粗，不在代码里放大字号） */
 .doc-md pre .mde-t-fmt { color: var(--md-fg-4); }
@@ -120,7 +120,7 @@
 .doc-md pre .mde-t-quote { color: var(--md-fg-2); }
 .doc-md pre .mde-t-strong, .doc-md pre .mde-t-h { font-weight: 700; }
 .doc-md pre .mde-t-em { font-style: italic; }
-.doc-md pre .mde-t-strike { text-decoration: line-through; text-decoration-color: rgba(20, 20, 19, .45); }
+.doc-md pre .mde-t-strike { text-decoration: line-through; text-decoration-color: rgba(var(--md-ink), .45); }
 
 /* ———— 表格 ————
    按内容宽度排版（小表不再被撑满、宽表在自己框里横滚），尊重列对齐，单元格顶端对齐、

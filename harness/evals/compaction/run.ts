@@ -15,6 +15,7 @@ import { injectionKind } from "../../server/agent/injections.ts";
 import type { Msg } from "../../server/agent/turn.ts";
 import { providerBaseUrl } from "../../server/catalog.ts";
 import { initOutboundProxy } from "../../server/net-proxy.ts";
+import { customKeysReady, customProviderKey, isCustomProviderId } from "../../server/custom-providers.ts";
 import { createAdapter } from "../../server/providers/registry.ts";
 import type { ProviderId } from "../../server/providers/types.ts";
 import { answerRecall, answerRecallWithRecovery } from "./answer.ts";
@@ -56,9 +57,15 @@ const KEY_ENV: Partial<Record<ProviderId, string>> = {
   mimo: "MIMO_API_KEY",
   gemini: "GEMINI_API_KEY",
 };
-const apiKey = provider === "local" ? process.env.LOCAL_API_KEY || "local" : process.env[KEY_ENV[provider] ?? ""] ?? "";
+// 自定义服务（custom-<hex>）：地址、协议、档位表现读注册表，key 用 harness 自己的加密存储解开（不经环境变量、不打印）。
+// 评测时把 DIMENSIO_CUSTOM_PROVIDERS_DIR 指到正式服那份目录的副本。
+const custom = isCustomProviderId(provider);
+if (custom) await customKeysReady;
+const apiKey = custom
+  ? customProviderKey(provider) ?? ""
+  : provider === "local" ? process.env.LOCAL_API_KEY || "local" : process.env[KEY_ENV[provider] ?? ""] ?? "";
 if (!apiKey) {
-  console.error(`${provider} 没有 key：在环境变量 ${KEY_ENV[provider]} 里给`);
+  console.error(custom ? `${provider} 不在自定义服务目录里，或解不开它的 key` : `${provider} 没有 key：在环境变量 ${KEY_ENV[provider]} 里给`);
   process.exit(2);
 }
 if (provider !== "local") await initOutboundProxy(); // 云端要走本机代理；本机模型直连

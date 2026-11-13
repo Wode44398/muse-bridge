@@ -14,10 +14,12 @@ Muse does the whole deployment for you. Send it one message and it downloads the
 - **Works on phone and desktop.** The URL opens the full workspace. The interface is available in English and Simplified Chinese and follows your browser's language.
 - **Android app.** It is the regular Bridge Android app (the same APK): install it from the Android app page in **Settings** (under **Plugins**; the row is labelled “安卓 App”), or [download the APK](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk). The interface is bundled in the app, so it opens instantly even on a slow connection, and it shows the Muse Bridge branding once connected (the home-screen icon still says The Bridge). The app version follows the server it connects to; when a temporary URL changes the app usually follows it by itself, or you can change it under **Settings › About › Server URL**.
 - **Full Claude Code.** Powered by the official Claude Agent SDK: tool use, subagents, workflows, context compaction and session resume. A side dock gives you a terminal, files, tasks and a diff review, and settings are laid out like a phone’s Settings app. Permission modes with approval and plan cards, queued follow-ups while Claude is working, session search and archiving, pull-request tracking, interactive charts right in the chat, and automatic resume after a 5-hour limit resets.
-- **Bring your own models to Claude Code.** Under **Settings → Claude → Custom API**, add Anthropic- or OpenAI-compatible endpoints (DeepSeek, Kimi, OpenRouter and others); their models show up in the model menu under “More models”. The admin and every member each get their own list.
+- **One place for all your models (Model Hub).** Add a provider once under **Settings → Model Hub** (DeepSeek, Kimi, OpenRouter, any Anthropic-, OpenAI- or Gemini-compatible endpoint), let it detect the available models, and give each model to Claude, dimensio or Media Studio. In Claude they show up in the model menu under “More models”. The admin and every member each get their own list.
 - **Works with the bridge Windows desktop app.** The bridge desktop client can connect to your Muse Bridge. With your own domain (a permanent address) you get the full desktop experience: a native title bar, the quick-ask window, and registering your PC as a device Claude can operate. On a temporary address the client works as a plain web window.
 - **Let agents drive it.** **Settings → Agent access** issues keys so another agent — including the Muse that deployed it — can read the project manual and operate Muse Bridge over HTTP.
-- **dimensio, a multi-model workspace.** One API key per provider, switch models at any time, or add any OpenAI-compatible endpoint. It has its own workspaces, memory and subagents.
+- **dimensio, a multi-model workspace.** Its models come from the Model Hub and you can switch at any time. It has its own workspaces, memory and subagents, and can open sub-sessions with Claude.
+- **Media Studio (optional, off by default).** Image, video, voice and music in one workspace, using models and keys you connect yourself (Google Vertex, OpenAI, OpenRouter, fal and more); works can be dragged into chats or the workspace.
+- **Claude project conversations.** A coordinator splits a big job into threads that run in parallel, with a project overview, brief and memory.
 - **Each provider's own web search.** Search uses the built-in search of whichever model the conversation is using, falls back to the next configured provider, and uses DuckDuckGo only as a last resort.
 - **Survives VM restarts.** Muse restarts its VMs from time to time. A watchdog brings the service back within 60 seconds, and Muse tells you if the temporary URL changed.
 - **Update prompts.** When a new version ships, Muse tells you what changed in a sentence or two and asks whether to update. It switches over only when nobody is chatting, and rolls back automatically if the new version fails to start.
@@ -72,9 +74,9 @@ Not sure? Pick Claude Code only, a temporary URL, and just you. You can change a
 | Zhipu GLM | `ZHIPU_API_KEY` | ✓ built-in |
 | Qwen | `QWEN_API_KEY` | ✓ built-in |
 | Xiaomi MiMo (pay-as-you-go or Token Plan) | `MIMO_API_KEY` | see below |
-| Any OpenAI-compatible endpoint | add it with "＋" in the UI | — |
+| Any OpenAI-compatible endpoint | add it in the Model Hub | — |
 
-Ask Muse to store a key for you (`set-api-key`), or paste it into dimensio’s own settings yourself (the **Settings** button at the bottom of the dimensio sidebar). Pick one way per provider: a key saved in the web settings takes precedence.
+Keys for all of these go into **Settings → Model Hub** in the web app (ask Muse to allow the provider's API site first). When you upgrade from an older version, keys you set up before are moved into the Model Hub automatically.
 
 **Xiaomi MiMo web search** is a console plugin billed per call (about ¥16 per 1,000) and charged to your account balance, so it only works with a **pay-as-you-go** key. If you chat on a Token Plan subscription key (starts with `tp-`), create a pay-as-you-go key just for search with `set-api-key MIMO_SEARCH_API_KEY <sk-…>`; chat keeps using your Token Plan quota. Without it, MiMo conversations fall back to another provider's search.
 

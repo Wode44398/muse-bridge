@@ -6,6 +6,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { modelServices, onModelServicesChange, serviceHash } from '@bridge/core/runtime/model-services.mjs';
+import { hubFlag, onHubChange } from '@bridge/core/runtime/model-hub/registry.mjs';
 
 export const PLUGIN_PROVIDERS_FILE = 'plugin-providers.json';
 
@@ -35,10 +36,40 @@ export function toHarnessProvider(s) {
     modelSpecs,
     defaultModel: s.defaultModel,
     createdAt: 0,
-    plugin: { id: s.plugin, name: s.pluginName },
+    plugin: { id: s.plugin, name: s.pluginName, sid: s.sid, ...(s.logo ? { logo: s.logo } : {}) },   // sid / logo：卡片跳回提供方的页面、画品牌标用
     apiKey: s.apiKey || '',
     ...(s.members ? { shared: true } : {}),
+    // 请求实际发到的上游主机（地址是本机网关，harness 靠它认官方 Anthropic 与 OpenRouter）
+    ...(s.upstream ? { upstream: s.upstream } : {}),
+    // 上游是官方 Anthropic：提示缓存照开（harness 没说就按地址主机名判，网关地址会判成关）
+    ...(s.upstream === 'api.anthropic.com' && s.protocol === 'anthropic' ? { promptCaching: true } : {}),
   };
+}
+
+/**
+ * dimensio 自带适配的厂商（服务带 native，见 model-knowledge/dimensio-native.mjs）不登记成新卡：落在 builtins[厂商 id] 上，
+ * harness 让那家厂商用这把 Key（和地址），菜单里只列这里给的模型。一家只认第一个；同一家的第二个服务照普通服务登记。
+ * → { providers, builtins }
+ */
+export function splitNative(services) {
+  const providers = [], builtins = {};
+  for (const s of services) {
+    const n = s.native;
+    if (!n || builtins[n.vendor]) { providers.push(toHarnessProvider(s)); continue; }
+    builtins[n.vendor] = {
+      key: n.key, ...(n.baseUrl ? { baseUrl: n.baseUrl } : {}),
+      name: s.name, defaultModel: s.defaultModel,
+      plugin: { id: s.plugin, name: s.pluginName, sid: s.sid, ...(s.logo ? { logo: s.logo } : {}) },
+      models: s.models.map((m) => ({
+        id: m.id, label: m.label || m.id,
+        ...(Number.isFinite(m.contextWindow) ? { contextWindow: m.contextWindow } : {}),
+        ...(Number.isFinite(m.maxOutput) ? { maxOutput: m.maxOutput } : {}),
+        ...(typeof m.vision === 'boolean' ? { vision: m.vision } : {}),
+      })),
+      ...(s.members ? { shared: true } : {}),
+    };
+  }
+  return { providers, builtins };
 }
 
 function writeIfChanged(file, text) {
@@ -55,10 +86,16 @@ export function startPluginProviderSync(dirOf) {
     let dir;
     try { dir = dirOf(); } catch (e) { console.error('[harness] 插件模型服务：找不到自定义服务目录：', e?.message || e); return; }
     if (!dir) return;
-    const providers = modelServices('dimensio').map(toHarnessProvider);
-    try { writeIfChanged(path.join(dir, PLUGIN_PROVIDERS_FILE), JSON.stringify({ v: 2, providers }, null, 2) + '\n'); }
+    const list = modelServices('dimensio');
+    // 自带适配的厂商交给模型中心之后（迁移做完才有这个记号，见 native-migrate.mjs）文件里才带 builtins：
+    // harness 见到 builtins 就只认这里列的厂商；没迁移完之前照老样子（各厂商用自己存的 Key），带 native 的服务先按普通服务登记。
+    let managed = false;
+    try { managed = hubFlag('dimensioNative'); } catch (e) { console.error('[harness] 读不到模型中心的状态：', e?.message || e); }
+    const body = managed ? splitNative(list) : { providers: list.map(toHarnessProvider) };
+    try { writeIfChanged(path.join(dir, PLUGIN_PROVIDERS_FILE), JSON.stringify({ v: 2, ...body }, null, 2) + '\n'); }
     catch (e) { console.error('[harness] 插件模型服务写不进去：', e?.message || e); }
   };
   sync();
-  return onModelServicesChange(sync);
+  const offA = onModelServicesChange(sync), offB = onHubChange(sync);
+  return () => { offA(); offB(); };
 }

@@ -12,7 +12,7 @@
 # 日常：
 #   status [--local]                公网地址、版本、各服务与健康状态（--local 不访问公网地址）
 #   set-claude-token T              写入 Claude 订阅令牌（claude setup-token 生成）并重启 bridge
-#   set-api-key 变量名 值            给 dimensio 填一家模型厂商的 key（如 ANTHROPIC_API_KEY sk-…），顺带放行这家的接口网站
+#   set-api-key 变量名 值            往 dimensio 的 .env 写一家厂商的 key，顺带放行这家的接口网站（模型中心接管后只有 MIMO_SEARCH_API_KEY 还起作用，其余照实提示去网页模型中心填）
 #   allow-sites [网站或地址…]         趁用户在场把要用到的网站访问一遍、让审核卡弹出来（不给参数 = 按现在的配置算）
 #   set-agents LIST                 改启用的 agent（claude / dimensio / claude,dimensio）
 #   set-users solo|multi            只自己用（关注册）/ 多人用（开注册与邀请码）
@@ -337,10 +337,12 @@ apply_bridge_declarations() {
   set_bridge_env DIMENSIO_BROWSER off
   # 不带 Codex 扩展（公开版本来就没有）：扩展中心与 Agent 页都不列
   set_bridge_env BRIDGE_MODULES_HIDE codex
-  # Gemini · Vertex 扩展随代码带着，但要用户自己的 Google 云凭据：第一次带上它时先关着（主页、成员那里都不出现），
-  # 管理员在 设置 → 扩展 → 功能扩展 打开、在 设置 → Agent → Gemini 上传凭据。之后尊重用户的开关，不再写
+  # Media Studio（接替了以前的 Gemini · Vertex 扩展）随代码带着，但模型和 Key 要用户自己接：第一次带上它时先关着
+  # （主页、成员那里都不出现），管理员在 设置 → 扩展 → 功能扩展 打开、在 设置 → 模型中心 接模型。之后尊重用户的开关，不再写。
+  # 早期写的 agents.gemini 由服务端读的时候换成 studio（src/config/agents.mjs 的 RETIRED_AGENTS），已经写过的不用动
   if [ ! -f "$OPS/vertex-offered" ]; then
-    edit_config 'if (.agents.gemini | type) == "boolean" then . else .agents = ((.agents // {}) + {gemini: false}) end'
+    edit_config 'if (.agents.studio | type) == "boolean" or (.agents.gemini | type) == "boolean" then .
+      else .agents = ((.agents // {}) + {studio: false}) end'
     date -u +%FT%TZ > "$OPS/vertex-offered"
   fi
   # 插件：登记 Muse 插件（经 current 链接，换版本不用改）；第一次对齐时关掉 VM 上用不了的内置功能
@@ -772,7 +774,7 @@ key_site() {
 }
 # 按现在的配置算出要放行的站点：启用的 agent、已填的 key、自定义模型服务
 configured_sites() {
-  local env="$DATA/dimensio/.env" line name val cp="$DATA/dimensio/custom-providers/providers.json"
+  local env="$DATA/dimensio/.env" line name val cp="$DATA/dimensio/custom-providers/providers.json" hub="$DATA/model-hub/services.json"
   case ",${AGENTS:-claude,dimensio}," in *,claude,*) echo api.anthropic.com ;; esac
   case ",${AGENTS:-claude,dimensio}," in *,dimensio,*) echo html.duckduckgo.com ;; esac   # dimensio 的联网搜索兜底
   # 问题反馈的提交通道：装的时候就放行，用户报问题时才不用再批一张卡
@@ -790,15 +792,20 @@ configured_sites() {
     done < "$env"
   fi
   [ -f "$cp" ] && jq -r '.providers[]?.baseUrl // empty' "$cp" 2>/dev/null | while IFS= read -r u; do site_of "$u"; done
-  # Gemini · Vertex 开着时：换令牌、对话（global 或所选区域）、媒体（默认 us-central1）、Gemini API Key 各一个站点
+  # 模型中心（设置 → 模型中心）里启用着的服务：服务地址和各条线路单独填的地址（本机回环地址不用放行）
+  [ -f "$hub" ] && jq -r '.services[]? | select(.enabled != false) | .baseUrl, (.lines[]?.baseUrl // empty) | select(. != null and . != "")' "$hub" 2>/dev/null \
+    | while IFS= read -r u; do site_of "$u"; done | grep -vE '^(127\.|localhost$|\[?::1)' || true
+  # 用到 Vertex 时（Media Studio 开着，或上传了 Google 云凭据）：换令牌、对话（global 或所选区域）、媒体（默认 us-central1）、Gemini API Key 各一个站点
   vertex_sites
   return 0
 }
-# Gemini · Vertex 要访问的 Google 接口（扩展关着时什么都不输出）。区域跟 config.json 的 vertexLocation / vertexMediaLocation 走
+# Vertex 要访问的 Google 接口（Media Studio 关着、也没上传 Google 云凭据时什么都不输出）。区域跟 config.json 的 vertexLocation / vertexMediaLocation 走
 vertex_sites() {
   local f="$DATA/config.json" on loc mloc
   [ -f "$f" ] || return 0
-  on="$(jq -r 'if .agents.gemini == false then "0" else "1" end' "$f" 2>/dev/null || echo 0)"
+  # Media Studio 的开关：服务端写的是 agents.studio；早期 Muse 写的 agents.gemini 也算（服务端读的时候同样换成 studio）
+  on="$(jq -r '(if (.agents.studio | type) == "boolean" then .agents.studio else .agents.gemini end) as $s | if $s == false then "0" else "1" end' "$f" 2>/dev/null || echo 0)"
+  [ -f "$DATA/secrets/vertex-credentials.json" ] && on=1
   [ "$on" = 1 ] || return 0
   loc="$(jq -r '.vertexLocation // "global" | if . == "" then "global" else . end' "$f" 2>/dev/null || echo global)"
   mloc="$(jq -r '.vertexMediaLocation // "us-central1" | if . == "" then "us-central1" else . end' "$f" 2>/dev/null || echo us-central1)"
@@ -849,6 +856,26 @@ cmd_set_api_key() {
   { grep -vE "^$key=" "$f" || true; if [ -n "$val" ]; then echo "$key=$val"; fi; } > "$f.new"
   install -m 0600 -o "$SVC_USER" -g "$SVC_USER" "$f.new" "$f"; rm -f "$f.new"
   if [ -n "$val" ]; then echo "已写入 $key（末 4 位 …${val: -4}）"; else echo "已删除 $key"; fi
+  # 模型中心接管了 dimensio 自带适配的厂商之后（服务第一次启动时做的一次性搬家，记在 model-hub/services.json 的
+  # flags.dimensioNative），管理员的 dimensio 只认模型中心里的 Key，.env 里的这一份不再起作用（联网搜索专用的
+  # MIMO_SEARCH_API_KEY 除外）。照实说出来，别让人以为配好了
+  local hub="$DATA/model-hub/services.json" vid="" name=""
+  case "$key" in
+    ANTHROPIC_API_KEY) vid=anthropic ;; OPENAI_API_KEY) vid=openai ;; QWEN_API_KEY) vid=qwen ;; ZHIPU_API_KEY) vid=zhipu ;;
+    KIMI_API_KEY) vid=kimi ;; MIMO_API_KEY) vid=mimo ;; GEMINI_API_KEY) vid=gemini ;;
+  esac
+  if [ -n "$vid" ] && [ -f "$hub" ] && jq -e '.flags.dimensioNative == true' "$hub" >/dev/null 2>&1; then
+    name="$(jq -r --arg v "$vid" '[.services[]? | select(.native == $v)][0].name // empty' "$hub" 2>/dev/null || true)"
+    if [ -n "$name" ]; then
+      echo "注意：这一家已经是「设置 → 模型中心」里的服务「$name」，管理员的 dimensio 用的是那里的 Key，这次写进 .env 的不会替换它。"
+      echo "      换 Key / 删 Key 请用户在网页的模型中心里打开这个服务，在「API Key」一栏操作。"
+    else
+      echo "注意：这台服务器的 dimensio 现在只认「设置 → 模型中心」里的 Key，这次写进 .env 的不会生效。"
+      echo "      请用户在网页的模型中心里点「添加服务」加这一家（步骤见 guide/10-model-hub.md）；下面先把这家的接口网站放行，他加的时候就不会卡住。"
+    fi
+    [ -z "$val" ] || allow_sites "$(key_site "$key" "$val")"
+    return 0
+  fi
   restart_bridge idle
   [ -z "$val" ] || allow_sites "$(key_site "$key" "$val")"
 }

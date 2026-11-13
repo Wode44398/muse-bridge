@@ -11,15 +11,21 @@ import path from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { readJson, writeJson } from '../jsonfile.mjs';
 import { CONFIG_PATH } from '../config/index.mjs';
+import { CLAUDE_MODELS } from '../config/capabilities.mjs';
 import {
   CLAUDE_SETTINGS, CLAUDE_SETTING_BY_KEY, claudeSettingDefaults, normalizeClaudeSetting,
   PERMISSION_MODES, PERMISSION_MODES_SANDBOX, BUILTIN_OUTPUT_STYLES, unsupportedClaudeSettings,
 } from '../config/claude-settings.mjs';
 import { desktopSessionsDirs } from './desktop-lineage.mjs';
 
-const cache = new Map();   // file -> { rev, values }
+const cache = new Map();   // file -> { rev, values, legacy }
 const fileFor = (ctx) => path.join(ctx.dataDir, 'claude-settings.json');
 const isAdmin = (ctx) => ctx?.kind === 'admin';
+
+// 已从注册表删掉、但还有别处要从盘上读原值的旧键：读侧照样不认（不进 values），写回时原样带上，免得任何一次设置写入把它冲掉。
+//   subagentDispatch：旧「子 agent 调度偏好」，dispatch-policy.mjs 第一次读策略时直接读盘把它迁成默认那套的口述备注；
+//   升级后到那一刻之前（老 apk / agent 接口 settings.claude_set / 拖压缩点都可能抢在前面写设置）不能丢。
+const LEGACY_KEYS = Object.freeze(['subagentDispatch']);
 
 function loadUser(ctx) {
   const file = fileFor(ctx);
@@ -33,7 +39,9 @@ function loadUser(ctx) {
     const n = normalizeClaudeSetting(k, v, { dynamicOptions: null });
     if (n.ok) values[k] = n.value;
   }
-  const d = { rev: Number.isFinite(raw.rev) ? raw.rev : 0, values };
+  const legacy = {};
+  for (const k of LEGACY_KEYS) if (Object.hasOwn(src, k) && typeof src[k] === 'string') legacy[k] = src[k];
+  const d = { rev: Number.isFinite(raw.rev) ? raw.rev : 0, values, legacy };
   cache.set(file, d);
   return d;
 }
@@ -161,8 +169,10 @@ export function setClaudeSettings(ctx, patch) {
     if (!s || s.scope === 'device') throw err(400, 'unknown setting: ' + k);
     if ((s.admin || s.scope === 'host') && !admin) throw err(403, 'admin only: ' + k);
     if (s.shell && !ctx.shell) throw err(403, 'not available: ' + k);
-    const dyn = s.options === 'dynamic' ? outputStylesFor(ctx) : null;
+    const dyn = s.options === 'dynamic' && k === 'outputStyle' ? outputStylesFor(ctx) : null;   // 讨论串模型走 valueRe + 上面的白名单
     if (k === 'permissionMode' && v != null && !(admin ? PERMISSION_MODES : PERMISSION_MODES_SANDBOX).includes(String(v))) throw err(400, 'mode not available');
+    // 讨论串模型：Claude 模型按白名单；自定义模型只看格式（停用 / 删掉的到开讨论串时由 /api/chat 再收，收不下按默认模型）
+    if (k === 'projectThreadModel' && v != null && v !== 'inherit' && !String(v).startsWith('custom:') && !CLAUDE_MODELS.has(String(v))) throw err(400, 'not an allowed value');
     const n = normalizeClaudeSetting(k, v, { dynamicOptions: dyn });
     if (!n.ok) throw err(400, n.error);
     const target = s.scope === 'host' ? nextHost : nextUser;
@@ -174,7 +184,7 @@ export function setClaudeSettings(ctx, patch) {
   if (changed) {
     const keys = [...new Set([...Object.keys(nextUser), ...Object.keys(user.values)])].filter((k) => JSON.stringify(nextUser[k]) !== JSON.stringify(user.values[k]));
     user.values = nextUser; user.rev += 1;
-    writeJson(fileFor(ctx), { rev: user.rev, values: user.values }, 2);
+    writeJson(fileFor(ctx), { rev: user.rev, values: { ...user.legacy, ...user.values } }, 2);   // 旧键原样带回（见 LEGACY_KEYS）
     for (const fn of userListeners) { try { fn(ctx, keys); } catch {} }
   }
   if (hostChanged) {

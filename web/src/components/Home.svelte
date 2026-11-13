@@ -9,14 +9,14 @@
   import { pressable, stagger, DUR, EASE } from '../lib/motion.js';
   import { openPage } from '../lib/pageMorph.js';
   import { drag, dropZone } from '../lib/dragdrop.svelte.js';
-  import { WS_FILE, attachToAgent } from '../lib/fileDrag.js';
+  import { WS_FILE, attachToAgent, filesToStudio } from '../lib/fileDrag.js';
   import LoginCard from './LoginCard.svelte';
   import RefractionLayer from './RefractionLayer.svelte';
   import SpatialLayer from './SpatialLayer.svelte';
   import FigmaGlass from './FigmaGlass.svelte';
   import { homeGlass } from '../lib/figmaHomeGlass.svelte.js';
   import { t } from '../lib/i18n.js';
-  import { ovUrl } from '../lib/overlay.svelte.js';   // 入口图标：私有 overlay 有同名原版（如小人）就换成它
+  import { ovUrl } from '../lib/overlay.svelte.js';   // Claude 入口的小人是原版资源；其余入口图标是自有素材
   import PluginHomeCards from './PluginHomeCards.svelte';   // 插件的主页卡片（ctx.ui.homeCard）：贴在底部的一排玻璃卡
   import { pluginUi } from '../lib/pluginUi.svelte.js';
 
@@ -26,10 +26,10 @@
   //   正面站立 = 默认；举旗 = 有任务完成还没看（ui.taskDone，回 claude 页清除）。
   const claudeMascot = $derived(ui.taskDone ? '举旗' : '正面站立');   // i18n-ignore 素材文件名
   const ENTRIES = $derived([
-    { key: 'claude',      label: 'Claude',      img: `assets/mascot/claude-小人-${claudeMascot}.svg` },   // i18n-ignore 素材路径
-    { key: 'chatgpt',     label: 'ChatGPT',     img: `assets/icons/chatgpt-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
-    { key: 'harness', label: 'dimensio', img: `assets/icons/dimensio-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
-    { key: 'vertex',      label: 'Vertex',      img: 'assets/icons/gemini.svg' },
+    { key: 'claude',      label: 'Claude',      img: ovUrl(`assets/mascot/claude-小人-${claudeMascot}.svg`) },   // i18n-ignore 素材路径
+    { key: 'chatgpt',     label: 'ChatGPT',     img: `${BASE}assets/icons/chatgpt-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
+    { key: 'harness', label: 'dimensio', img: `${BASE}assets/icons/dimensio-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
+    { key: 'studio',      label: 'Media Studio', img: `${BASE}assets/icons/studio-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
   // 只摆这个身份开着的 agent（服务端下发的 me.agents：全局开关 ∩ 按人授权）；服务端各路由另有真闸。
   ].filter((e) => screenOn(e.key)));
   // 玻璃折射参数全部由全局画质驱动（设置页 4 档 + 3 滑块）；改 quality 即所有 tile 实时变。
@@ -240,20 +240,18 @@
   $effect(() => { for (const k in fluxParams) fluxParams[k]; tuneWallpaper(); });
 
   // 四个入口同一种打开方式：被点的方块长成这一页，主页以它为原点往后退（lib/pageMorph.js）。
-  // Gemini 额外带一个共享元素：方块里的十字星单独飞到分页问候语上方那颗星上。
   // 转场进行中不再开第二个（快照层本身也不吃点击，这里只是把门）；关了转场的走引擎里的直切兜底。
   function openEntry(e, ev) {
     if (me.kind === 'none') { ui.loginOpen = true; return; } // 未登录 → 唤起登录
-    if (ui.morphing || ui.enterClaude || ui.enterVertex) return;
+    if (ui.morphing || ui.enterClaude || ui.enterStudio) return;
     const tile = ev?.currentTarget?.querySelector('.tile');
-    const hero = e.key === 'vertex' ? ev?.currentTarget?.querySelector('.ico') : null;
-    openPage(e.key, { from: tile, radius: 30, hero, heroTo: '.v-land-star' });
+    openPage(e.key, { from: tile, radius: 30 });
   }
 
-  // 主页入口也是落点：从工作空间拎一份文件、另一根手指退回主页，直接丢在 Claude / Gemini 的
-  // 方块上＝打开那个分页并挂进它的输入栏（省掉「先进分页再找输入栏」那一步）。
+  // 主页入口也是落点：从工作空间拎一份文件、另一根手指退回主页，直接丢在 Claude / Media Studio 的
+  // 方块上＝打开那个分页并挂进它的输入栏（省掉「先进分页再找输入栏」那一步）。Studio 按文件类型挑创作页。
   // ChatGPT（iframe 里的克隆页）与 dimensio（附件契约不同，落法在各自分页里）不接。
-  const DROP_TARGET = { claude: 'claude', vertex: 'gemini' };
+  const DROP_TARGET = { claude: 'claude', studio: 'studio' };
   function entryDrop(node, e) {
     const optsFor = (en) => {
       const target = DROP_TARGET[en.key];
@@ -262,7 +260,8 @@
         label: (p) => (p?.count > 1 ? t('把 {n} 项发给 {name}', { n: p.count, name: en.label }) : t('发给 {name}', { name: en.label })),
         accept: (p) => !!target && p?.type === WS_FILE && !!p.materials && me.kind !== 'none',
         drop: async (p) => {
-          if (!(await attachToAgent(p, target))) return;
+          const ok = target === 'studio' ? await filesToStudio(p) : await attachToAgent(p, target);
+          if (!ok) return;
           openEntry(en, { currentTarget: node });
         },
       };
@@ -301,7 +300,7 @@
     {#if fluxOk}
       <!-- 流光(flux)：预载结束(booted)才挂载，让流体在主页里「从黑浮现」开场完整可见，不在预载/转场覆盖层下被提前播掉。
            主题换场（明→暗）期间也先不挂：WASM 初始化压在揭幕动画上会整段掉帧；夜色铺满后再挂，流体照旧从黑浮现 -->
-      <iframe class="wp" bind:this={wpEl} src={BASE + 'wallpaper/index.html?v=pow2'} title={t('背景')} scrolling="no" tabindex="-1" onload={onWpLoad}></iframe>
+      <iframe class="wp" bind:this={wpEl} src={BASE + 'wallpaper/drift.html?v=6'} title={t('背景')} scrolling="no" tabindex="-1" onload={onWpLoad}></iframe>
     {/if}
   {:else if spatialOn}
     <!-- 空间壁纸：深度视差 canvas 替代静态图（电脑指针 / 手机重力跟随），玻璃仍折射它 -->
@@ -328,14 +327,14 @@
         {#if useFigma}
           <span class="tile fg" use:pressable={{ scale: 0.93 }}>
             <FigmaGlass bg={figBg} radius={30} strength={ui.glassMode === 'B' ? quality.ramp : 1} remeasure={ENTRIES.length + (lift ? 100 : 0)} />
-            <img class="ico" src={ovUrl(e.img)} alt="" draggable="false" />
+            <img class="ico" src={e.img} alt="" draggable="false" />
           </span>
         {:else if useRefraction}
-          <span class="tile" use:pressable={{ scale: 0.93 }}><img class="ico" src={ovUrl(e.img)} alt="" draggable="false" /></span>
+          <span class="tile" use:pressable={{ scale: 0.93 }}><img class="ico" src={e.img} alt="" draggable="false" /></span>
         {:else}
           <span class="tile" class:frost={isIOS} use:pressable={{ scale: 0.93 }}
                 use:liquidGlass={isIOS ? frostHigh : (ui.glassMode === 'B' ? glassReveal : glassBare)}>
-            <img class="lg-content ico" src={ovUrl(e.img)} alt="" draggable="false" />
+            <img class="lg-content ico" src={e.img} alt="" draggable="false" />
           </span>
         {/if}
       </button>

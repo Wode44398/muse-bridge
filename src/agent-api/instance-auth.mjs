@@ -17,7 +17,7 @@ import { looksLikeAgentDeviceToken, agentDeviceTokenCtx } from '../runtime/agent
 import { contextFor } from '../runtime/identity.mjs';
 import { identityOfCtx } from './internal.mjs';
 
-/** 实例调不到的操作：设备组（操作电脑用实例自己的 Device* 工具）。媒体组由 设置 › Agent › Gemini 按实例放行（ops/media.mjs）。 */
+/** 实例调不到的操作：设备组（操作电脑用实例自己的 Device* 工具）。媒体组由 设置 › Media Studio 按实例放行（ops/media.mjs）。 */
 export const instanceExcluded = (name) => /^devices\./.test(String(name || ''));
 
 function isHostSecret(tok) {
@@ -56,6 +56,6 @@ export function instanceCaller(req, tok) {
   }
   const ctx = contextFor(identity);
   ctx.opDeny = opDeny;
-  ctx.agentCaller = instance;   // 'dimensio' / 'codex' / 'host'：媒体组按它查 设置 › Agent › Gemini
+  ctx.agentCaller = instance;   // 'dimensio' / 'codex' / 'host'：媒体组按它查 设置 › Media Studio
   return { identity, ctx, key: null, instance };
 }

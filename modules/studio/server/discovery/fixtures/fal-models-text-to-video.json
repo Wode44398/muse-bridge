@@ -1,0 +1,350 @@
+{
+ "models": [
+  {
+   "endpoint_id": "minimax/h3-max/text-to-video",
+   "metadata": {
+    "display_name": "MiniMax H3 Max Text to Video",
+    "category": "text-to-video",
+    "description": "fal's H3 Max is a post-trained variant of MiniMax H3, tuned for stronger prompt adherence and better aesthetics while co-optimized with our custom inference stack for higher throughput with no compromises on output quality",
+    "status": "active",
+    "tags": [
+     "stylized",
+     "transform",
+     "lipsync"
+    ],
+    "updated_at": "2026-10-30T18:44:30.635Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/0aa7657e/LlavC7cCdZ_GGyvyglA82.jpg",
+    "model_url": "https://fal.run/minimax/h3-max/text-to-video",
+    "license_type": "commercial",
+    "date": "2026-08-23T17:56:01.222Z",
+    "group": {
+     "key": "hailuo-03-new-turbo",
+     "label": "Text to Video"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  },
+  {
+   "endpoint_id": "minimax/h3-max-turbo/text-to-video",
+   "metadata": {
+    "display_name": "H3 Max Turbo Text to Video",
+    "category": "text-to-video",
+    "description": "fal's H3 Max Turbo is a post-trained variant of MiniMax H3, tuned for stronger prompt adherence and better aesthetics while co-optimized with our custom inference stack for higher throughput with no compromises on output quality",
+    "status": "active",
+    "tags": [
+     "stylized",
+     "transform",
+     "lipsync"
+    ],
+    "updated_at": "2026-10-30T18:46:09.233Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/0aa8d50b/vj4BiCoQwOlmK7ku4KBZq.jpg",
+    "model_url": "https://fal.run/minimax/h3-max-turbo/text-to-video",
+    "license_type": "commercial",
+    "date": "2026-09-02T16:44:59.129Z",
+    "group": {
+     "key": "hailuo-03-new-max-turbo",
+     "label": "Text to Video Max Turbo"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  },
+  {
+   "endpoint_id": "blackforestlabs/flux-3-max/text-to-video",
+   "metadata": {
+    "display_name": "FLUX 3 Max Text to Video",
+    "category": "text-to-video",
+    "description": "fal’s FLUX 3 Max is a post-trained variant of FLUX 3 Video, tuned for stronger prompt adherence and better visual quality while optimized for lower latency.",
+    "status": "active",
+    "tags": [
+     "text-to-video",
+     "fast",
+     "audio"
+    ],
+    "updated_at": "2026-10-30T22:35:55.706Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/0aae8ccd/cfm_KIh1OltujxYuHIzzV.jpg",
+    "model_url": "https://fal.run/blackforestlabs/flux-3-max/text-to-video",
+    "license_type": "commercial",
+    "date": "2026-10-16T01:38:32.705Z",
+    "group": {
+     "key": "flux-3-max",
+     "label": "Text to Video"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  },
+  {
+   "endpoint_id": "fal-ai/kling-video/v3/pro/text-to-video",
+   "metadata": {
+    "display_name": "Kling Video v3 Text to Video [Pro]",
+    "category": "text-to-video",
+    "description": "Kling 3.0 Pro: Top-tier text-to-video with cinematic visuals, fluid motion, and native audio generation, with multi-shot support.",
+    "status": "active",
+    "tags": [
+     "text-to-video"
+    ],
+    "updated_at": "2026-04-26T22:25:17.147Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/0a8cfd13/t6TSkWzl6cFAzvO1PCdDu_f38263f637d245929f03881454951540.jpg",
+    "model_url": "https://fal.run/fal-ai/kling-video/v3/pro/text-to-video",
+    "license_type": "commercial",
+    "date": "2026-02-04T15:48:44.935Z",
+    "group": {
+     "key": "kling-v3",
+     "label": "Text to Video (pro)"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  },
+  {
+   "endpoint_id": "fal-ai/kling-video/lipsync/audio-to-video",
+   "metadata": {
+    "display_name": "Kling LipSync Audio-to-Video",
+    "category": "text-to-video",
+    "description": "Kling LipSync is an audio-to-video model that generates realistic lip movements from audio input.",
+    "status": "active",
+    "tags": [
+     "audio to video",
+     "lipsync"
+    ],
+    "updated_at": "2026-04-26T22:25:17.147Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/elephant/njNipNC0TkA9fJguiS1NB_c75b090e2ebb4d9581d21d66cfc4a0d3.jpg",
+    "model_url": "https://fal.run/fal-ai/kling-video/lipsync/audio-to-video",
+    "license_type": "commercial",
+    "date": "2025-03-27T00:00:00.000Z",
+    "group": {
+     "key": "kling-video-lipsync",
+     "label": "LipSync (Audio to Video)"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "duration_estimate": 12,
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  },
+  {
+   "endpoint_id": "alibaba/wan-3.0/text-to-video",
+   "metadata": {
+    "display_name": "Wan Text to Video",
+    "category": "text-to-video",
+    "description": "Wan 3.0 is the latest generation AI video model, delivering enhanced motion smoothness, superior scene fidelity, and greater visual coherence.",
+    "status": "active",
+    "tags": [
+     "stylized",
+     "transform",
+     "lipsync"
+    ],
+    "updated_at": "2026-10-20T22:08:28.198Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/0aa4e92e/GZJ8RhOR3CRLj5vpHI2ah.jpg",
+    "model_url": "https://fal.run/alibaba/wan-3.0/text-to-video",
+    "license_type": "commercial",
+    "date": "2026-08-03T22:57:05.176Z",
+    "group": {
+     "key": "Wan30",
+     "label": "Text to Video"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  },
+  {
+   "endpoint_id": "kling/v4/text-to-video",
+   "metadata": {
+    "display_name": "Kling 4.0 Text to Video",
+    "category": "text-to-video",
+    "description": "Kling 4.0 generates videos from text prompts at 720p or 1080p, with durations from 3 to 30 seconds and support for per-shot prompts.  ",
+    "status": "active",
+    "tags": [
+     "text-to-video",
+     "multi-shot",
+     "cinematic",
+     "kling"
+    ],
+    "updated_at": "2026-10-23T16:50:43.429Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/0aae9ff4/BBn7FmeY6HUb0EJgkXkWJ.jpg",
+    "model_url": "https://fal.run/kling/v4/text-to-video",
+    "license_type": "commercial",
+    "date": "2026-10-16T15:18:34.007Z",
+    "group": {
+     "key": "kling-v4",
+     "label": "Text to Video"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  },
+  {
+   "endpoint_id": "fal-ai/kling-video/v2.5-turbo/pro/text-to-video",
+   "metadata": {
+    "display_name": "Kling v2.5 Text to Video",
+    "category": "text-to-video",
+    "description": "Kling 2.5 Turbo Pro: Top-tier text-to-video generation with unparalleled motion fluidity, cinematic visuals, and exceptional prompt precision.",
+    "status": "active",
+    "tags": [
+     "animation",
+     "stylized"
+    ],
+    "updated_at": "2026-10-20T22:09:09.586Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3.fal.media/files/panda/6YaK9lV7ySsUA9I3dUp5r_8a807b0c8e2641db9e345107ab8a809e.jpg",
+    "model_url": "https://fal.run/fal-ai/kling-video/v2.5-turbo/pro/text-to-video",
+    "license_type": "commercial",
+    "date": "2025-09-22T22:48:44.637Z",
+    "group": {
+     "key": "kling-video-v25",
+     "label": "2.5 Turbo (Text to Video) Pro"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  },
+  {
+   "endpoint_id": "fal-ai/kling-video/v3/standard/text-to-video",
+   "metadata": {
+    "display_name": "Kling Video v3 Text to Video [Standard]",
+    "category": "text-to-video",
+    "description": "Kling 3.0 Standard: Top-tier text-to-video with cinematic visuals, fluid motion, and native audio generation, with multi-shot support.",
+    "status": "active",
+    "tags": [
+     "text-to-video"
+    ],
+    "updated_at": "2026-04-26T22:25:17.147Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/0a8cfc9f/dei5OqFRB9HK8AgSHwk8f_9a5eea197b3045d1be55aedb0213f6f9.jpg",
+    "model_url": "https://fal.run/fal-ai/kling-video/v3/standard/text-to-video",
+    "license_type": "commercial",
+    "date": "2026-02-04T15:48:44.935Z",
+    "group": {
+     "key": "kling-v3",
+     "label": "Text To Video (standard)"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  },
+  {
+   "endpoint_id": "google/gemini-omni-flash/v1.1/text-to-video",
+   "metadata": {
+    "display_name": "Gemini Omni Flash 1.1 Text to Video",
+    "category": "text-to-video",
+    "description": "Gemini Omni Flash 1.1 is Google's multimodal video model. This endpoint generates video with synchronized native audio from a text prompt, grounded in Gemini's real-world knowledge and physics understanding, with cinematic camera control expressed in natural language.",
+    "status": "active",
+    "tags": [
+     "stylized",
+     "transform",
+     "lipsync"
+    ],
+    "updated_at": "2026-10-20T22:39:08.307Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/0aa7d019/qS1ezqi3w1fIQVwJCCw-r.jpg",
+    "model_url": "https://fal.run/google/gemini-omni-flash/v1.1/text-to-video",
+    "license_type": "commercial",
+    "date": "2026-08-25T23:11:57.494Z",
+    "group": {
+     "key": "gemini-omni-11",
+     "label": "Text to Video"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  },
+  {
+   "endpoint_id": "minimax/h3/text-to-video",
+   "metadata": {
+    "display_name": "MiniMax H3 Text to Video",
+    "category": "text-to-video",
+    "description": "MiniMax H3 is a frontier video model. This endpoint generates video from a text prompt alone, rendering at 2K in durations from 5 to 15 seconds across seven aspect ratios.",
+    "status": "active",
+    "tags": [
+     "stylized",
+     "transform",
+     "lipsync"
+    ],
+    "updated_at": "2026-08-26T06:41:51.586Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/0aa42d8c/uJC3CQO20PyPi5iM7eu3a.jpg",
+    "model_url": "https://fal.run/minimax/h3/text-to-video",
+    "license_type": "commercial",
+    "date": "2026-07-31T05:56:07.158Z",
+    "group": {
+     "key": "hailuo-03-new",
+     "label": "Text to Video"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  },
+  {
+   "endpoint_id": "bytedance/seedance-2.5/us/text-to-video",
+   "metadata": {
+    "display_name": "Seedance 2.5 US Text to Video",
+    "category": "text-to-video",
+    "description": "US-hosted ByteDance Seedance 2.5 generates cinematic video from text with synchronized audio, up to 30-second duration, and 480p, 720p or 1080p output.",
+    "status": "active",
+    "tags": [
+     "stylized",
+     "transform",
+     "lipsync"
+    ],
+    "updated_at": "2026-10-29T22:02:47.829Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/0aaafd52/5TgJyrglFwBoFB-lx_IZg.jpg",
+    "model_url": "https://fal.run/bytedance/seedance-2.5/us/text-to-video",
+    "license_type": "commercial",
+    "date": "2026-09-19T01:16:28.104Z",
+    "group": {
+     "key": "seedance-2.5-us",
+     "label": "Text to Video"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null
+  }
+ ],
+ "next_cursor": null,
+ "has_more": false
+}

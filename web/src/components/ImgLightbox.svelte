@@ -7,6 +7,7 @@
   import { pushNativeOverlay } from '../lib/nativeDesktop.js';
   import { swipeDismiss } from '../lib/motion.js';
   import { t } from '../lib/i18n.js';
+  import { mediaImgFallback } from '../lib/server.js';
   let { items = [], index = 0, onClose, onIndex } = $props();
 
   // 下滑关闭（相册类查看器的通用手势，此前只能点关闭钮）：位移 1:1 跟手，罩层随
@@ -70,7 +71,7 @@
 
     <div class="lb-dialog" style:transform={dragY > 0 ? `translateY(${dragY}px) scale(${1 - dragP * 0.08})` : ''}>
       {#key cur.url}
-        <img class="lb-img" src={cur.url} alt={cur.name} use:dragOut={() => attDragSrc(cur)} />
+        <img class="lb-img" src={cur.url} alt={cur.name} onerror={mediaImgFallback} use:dragOut={() => attDragSrc(cur)} />
       {/key}
       <div class="lb-cap">
         <span class="lb-name">{cur.name}{#if many}<span class="lb-count"> · {index + 1}/{items.length}</span>{/if}</span>

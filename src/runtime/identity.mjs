@@ -20,7 +20,7 @@ export { ownerKey, parseOwnerKey } from './principal.mjs';
 
 // 这个身份能用哪些 agent：全局开关（agent-status 的 enabled）∩ 身份名单。
 //   admin：全部已启用的。
-//   user ：管理员给这个人勾的名单（没勾过 = 默认 Claude + Gemini），且只留支持多用户的 agent。
+//   user ：管理员给这个人勾的名单（没勾过 = 默认 Claude + Media Studio），且只留支持多用户的 agent。
 //   snap ：只有 Claude（QQ 群快照就是个 Claude 对话框）。share：一个都没有。
 export function agentsFor(identity) {
   const on = enabledAgents();
@@ -37,7 +37,7 @@ function agentFlags(identity) {
   return {
     agents,
     allowClaude: agents.includes('claude'),
-    allowGemini: agents.includes('gemini'),
+    allowStudio: agents.includes('studio'),
     allowCodex: agents.includes('codex'),
     allowDimensio: agents.includes('dimensio'),
   };
@@ -223,7 +223,7 @@ function contextBase(identity) {
   const sys = path.join(base, '.bridge');
   const tier = identity.tier === 'user' ? 'user' : 'pro';
   return {
-    // 能用哪些 agent 由管理员按人勾（users.json 的 agents；没勾过 = 默认 Claude + Gemini，
+    // 能用哪些 agent 由管理员按人勾（users.json 的 agents；没勾过 = 默认 Claude + Media Studio，
     // 2026-09-23 维护者定的规则），再与全局开关、「该 agent 是否支持多用户」取交集（agentsFor）。
     // codex 不支持多用户：进程内部的工具调用、命令、改文件都绕过 bridge 的 canUseTool
     // 沙箱守卫，且共用主机上的登录与会话目录——所以注册用户恒拿不到，勾了也不生效。

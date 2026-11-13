@@ -11,6 +11,7 @@ import type { ThinkingLevel } from "./agent/turn.ts";
 import type { SandboxAccess } from "./sandbox.ts";
 import {
   allProviders,
+  CATALOG,
   EFFORT_ORDER,
   clampEffort,
   defaultEffort,
@@ -21,6 +22,8 @@ import {
 import {
   customProviderKey,
   getCustomProvider,
+  hostBuiltin,
+  hostManagesBuiltins,
   isCustomProviderId,
   isSharedProvider,
   savedBuiltinProviderKey,
@@ -85,6 +88,12 @@ const overrideKeys: Partial<Record<ProviderId, string>> = {};
 // default). Used both at boot and when the user switches provider without
 // naming a model.
 function providerDefaults(p: ProviderId): { model: string; baseUrl?: string } {
+  const d = ownDefaults(p);
+  // 宿主的模型中心接管了自带厂商：地址照它给的（小米 Token Plan 集群、百炼海外区、智谱 Coding 入口都是服务上填的那个）
+  const host = hostManagesBuiltins() && !isCustomProviderId(p) ? hostBuiltin(p) : undefined;
+  return host?.baseUrl ? { ...d, baseUrl: host.baseUrl } : d;
+}
+function ownDefaults(p: ProviderId): { model: string; baseUrl?: string } {
   if (isCustomProviderId(p)) {
     const c = getCustomProvider(p);
     // 管理员共享给成员的服务：地址不进成员的配置（/api/info、/api/config 会下发）；适配器照样现读注册表里的地址
@@ -146,7 +155,17 @@ export function providerEndpoint(p: ProviderId): string | undefined {
   return providerDefaults(p).baseUrl;
 }
 
+// 目录里有没有这家：菜单里现在列着的，或自带适配的厂商（宿主接管后没给 Key 的厂商不进菜单，但记着它的旧会话、
+// 上次的选择照样认——只是没有 Key，发消息时会说清楚）。
+function knownProvider(id: unknown): ProviderId | undefined {
+  return allProviders().find((p) => p.id === id)?.id ?? CATALOG.find((p) => p.id === id)?.id;
+}
+
 function initialProvider(): ProviderId {
+  if (hostManagesBuiltins()) {
+    // 宿主接管：挑第一家模型中心给了 Key 的；一家都没有就落在 anthropic（没 Key，界面会提示去模型中心添加）
+    return CATALOG.find((p) => p.id !== "local" && hostBuiltin(p.id))?.id ?? "anthropic";
+  }
   if (envKeys.anthropic) return "anthropic";
   if (envKeys.openai) return "openai";
   if (envKeys.qwen) return "qwen";
@@ -216,7 +235,8 @@ function loadSavedChoice(): SavedConfig | null {
   if (file.state !== "ok") return null;
   const raw = file.raw as any;
   const out: SavedConfig = {};
-  const provider = allProviders().find((p) => p.id === raw?.provider && !disabledProviders().has(p.id))?.id;
+  const known = knownProvider(raw?.provider);
+  const provider = known && !disabledProviders().has(known) ? known : undefined;
   if (provider) {
     // 模型必须仍在该厂商的目录里（目录会汰换退役型号）；退位则回厂商默认。
     const model = typeof raw.model === "string" && modelSpec(provider, raw.model)
@@ -228,7 +248,10 @@ function loadSavedChoice(): SavedConfig | null {
       ? clampEffort(provider, model, raw.thinking)
       : defaultEffort(provider, model);
   }
-  if (PERMISSION_MODES.includes(raw?.permissionMode)) out.permissionMode = raw.permissionMode;
+  // bypass 只在管理员实例认：租户实例即便盘上存着 bypass（配置被搬运等）也退回默认 auto。
+  if (PERMISSION_MODES.includes(raw?.permissionMode) && !(raw.permissionMode === "bypass" && tenantMode())) {
+    out.permissionMode = raw.permissionMode;
+  }
   if (raw?.permissionRules && typeof raw.permissionRules === "object") out.permissionRules = cleanRules(raw.permissionRules);
   if (raw?.access === "workspace" || raw?.access === "full") out.access = raw.access;
   if (typeof raw?.fast === "boolean") out.fast = raw.fast;
@@ -242,7 +265,7 @@ function cleanPrefs(v: unknown): ModelPrefs {
   const out: ModelPrefs = {};
   if (!v || typeof v !== "object" || Array.isArray(v)) return out;
   for (const [p, pref] of Object.entries(v as Record<string, any>)) {
-    if (!allProviders().some((s) => s.id === p) || typeof pref?.model !== "string" || !modelSpec(p as ProviderId, pref.model)) continue;
+    if (!knownProvider(p) || typeof pref?.model !== "string" || !modelSpec(p as ProviderId, pref.model)) continue;
     const thinking = EFFORT_ORDER.includes(pref.thinking) ? pref.thinking : defaultEffort(p as ProviderId, pref.model);
     out[p] = { model: pref.model, thinking: clampEffort(p as ProviderId, pref.model, thinking) };
   }
@@ -360,7 +383,7 @@ const cleanRuleList = (v: unknown): string[] =>
 // opts.ownKey：同一个补丁里带了这家 provider 的 key（setConfig 用；租户改 baseUrl 要靠它，见 effectiveBaseUrl）。
 export function resolveConfig(base: RuntimeConfig, patch: Omit<ConfigPatch, "apiKey">, opts: { ownKey?: boolean } = {}): RuntimeConfig {
   const { workspace, access, permissionMode, permissionRules, ...rest } = patch;
-  if (rest.provider !== undefined && !allProviders().some((p) => p.id === rest.provider)) {
+  if (rest.provider !== undefined && !knownProvider(rest.provider)) {
     throw new Error(`unknown provider: ${String(rest.provider)}`);
   }
   if (rest.provider !== undefined && disabledProviders().has(String(rest.provider))) {
@@ -395,6 +418,10 @@ export function resolveConfig(base: RuntimeConfig, patch: Omit<ConfigPatch, "api
   if (permissionMode !== undefined) {
     if (!PERMISSION_MODES.includes(permissionMode)) {
       throw new Error(`invalid permissionMode: ${String(permissionMode)} (use ${PERMISSION_MODES.join(" | ")})`);
+    }
+    // bypass 是管理员专用的全权档：租户 / 成员实例不许进（否则成员可借它越过访问范围锁与密钥守卫）。
+    if (permissionMode === "bypass" && tenantMode()) {
+      throw new Error("bypass mode is not available on this server");
     }
     extra.permissionMode = permissionMode;
   }
@@ -458,6 +485,9 @@ export function setConfig(patch: ConfigPatch): RuntimeConfig {
   if (typeof apiKey === "string" && apiKey.trim() && isSharedProvider(rest.provider ?? config.provider)) {
     throw new Error("这是管理员共享的服务，只有管理员能修改");
   }
+  if (typeof apiKey === "string" && apiKey.trim() && !isCustomProviderId(rest.provider ?? config.provider) && (rest.provider ?? config.provider) !== "local" && hostManagesBuiltins()) {
+    throw new Error("这家厂商的 Key 在模型中心里管理：到「设置 › 模型中心」添加或修改它的服务");
+  }
   config = resolveConfig(config, rest, { ownKey: typeof apiKey === "string" && Boolean(apiKey.trim()) });
   if (typeof apiKey === "string" && apiKey.trim()) {
     // 一律落加密存储（重启还在）。内置几家以前只在内存，harness 一重启就丢
@@ -475,9 +505,30 @@ export function setConfig(patch: ConfigPatch): RuntimeConfig {
   return getConfig();
 }
 
+// 设置页逐家填内置厂商的 key：只存 key，不切换当前厂商（setConfig 带 apiKey 时存给的是切过去之后的那家）。
+// 自定义服务的 key 归它自己的编辑器，本机这家不需要 key，都不收。不合法就抛——调用方回 400。
+export function setProviderKey(provider: unknown, apiKey: unknown): void {
+  const id = String(provider ?? "");
+  if (id === "local" || isCustomProviderId(id) || !knownProvider(id)) throw new Error(`unknown provider: ${id}`);
+  if (disabledProviders().has(id)) throw new Error(`provider ${id} is not available on this server`);
+  // 宿主的模型中心接管了自带厂商：Key 只在那里填（这里存了也不会用）
+  if (hostManagesBuiltins()) throw new Error("这家厂商的 Key 在模型中心里管理：到「设置 › 模型中心」添加或修改它的服务");
+  const key = typeof apiKey === "string" ? apiKey.trim() : "";
+  if (!key) throw new Error("apiKey is required");
+  if (key.length > 4000) throw new Error("apiKey is too long");
+  overrideKeys[id as ProviderId] = key;
+  setBuiltinProviderKey(id, key);
+  // MiMo 的地址跟着 key 前缀走（tp- = Token Plan）：正用着它就按新 key 重算一次地址
+  if (config.provider === "mimo" && id === "mimo") config.baseUrl = providerDefaults("mimo").baseUrl;
+}
+
 export function resolveKey(provider: ProviderId): string | undefined {
   if (isCustomProviderId(provider)) return customProviderKey(provider);
-  return overrideKeys[provider] || savedBuiltinProviderKey(provider) || envKeys[provider];
+  // 宿主的模型中心接管了自带厂商（管理员实例）：只认它给的 Key——在模型中心删掉 / 停用这家的服务，这家就没有 Key。
+  // 本机那家不归模型中心管，照旧。
+  if (provider !== "local" && hostManagesBuiltins()) return hostBuiltin(provider)?.key;
+  // 成员实例：自己填的 > 环境里的 > 管理员在模型中心里标了「共享给成员」的那一把
+  return overrideKeys[provider] || savedBuiltinProviderKey(provider) || envKeys[provider] || hostBuiltin(provider)?.key;
 }
 
 // 自定义服务被删了而全局正选着它：退回启动时的默认厂商（上次的选择文件也跟着改写）。

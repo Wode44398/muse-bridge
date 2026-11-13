@@ -1,25 +1,20 @@
 <script>
-  // 新对话空态的背景层。
-  // 公开版：一层静态的点阵底纹（自绘 CSS，中间输入区一带渐隐，不抢正文），淡入 600ms。
-  // 维护者的私有 overlay 提供了动态底纹模块时（清单 modules.landingTexture：
-  //   mountLandingTexture(el, onReady) → { setRunning(bool), destroy() }，可选导出 LANDING_FADE_IN_MS）改用它：
+  // 新对话空态的背景层：原版动态底纹（清单 modules.landingTexture：
+  //   mountLandingTexture(el, onReady) → { setRunning(bool), destroy() }，可选导出 LANDING_FADE_IN_MS）。
   //   画布真正就绪后才淡入，离开时 500ms 淡出；shown=false 时停帧，animate=false 时只画静帧。
   // 父元素要能收指针事件（模块可能要划过搅动、点击荡开波纹），且是定位容器。
   import { onDestroy } from 'svelte';
-  import { ov, ovModule } from '../../lib/overlay.svelte.js';
+  import { ovModule } from '../../lib/overlay.svelte.js';
 
   let { shown = true, animate = true } = $props();
   let el = $state(null);
-  let mod = $state(undefined);   // undefined = 等 overlay 模块；null = 没有（走静态底纹）
+  let mod = $state(null);
   let ready = $state(false);
   let ctrl = null;
-  // 清单里没有这个模块就不用等
-  const expect = $derived(!ov.ready || !!(ov.on && ov.modules.landingTexture));
 
   $effect(() => {
-    if (!expect) { mod = null; return; }
     let alive = true;
-    ovModule('landingTexture').then((m) => { if (alive) mod = m && typeof m.mountLandingTexture === 'function' ? m : null; });
+    ovModule('landingTexture').then((m) => { if (alive && m && typeof m.mountLandingTexture === 'function') mod = m; });
     return () => { alive = false; };
   });
 
@@ -37,15 +32,12 @@
   });
   onDestroy(() => { try { ctrl?.destroy(); } catch {} ctrl = null; });
 
-  const fadeIn = $derived(mod ? Number(mod.LANDING_FADE_IN_MS) || 3000 : 600);
-  const visible = $derived(shown && (mod ? ready : mod === null));
+  const fadeIn = $derived(mod ? Number(mod.LANDING_FADE_IN_MS) || 3000 : 3000);
+  const visible = $derived(shown && !!mod && ready);
 </script>
 
 {#if mod}
   <div bind:this={el} class="landing-texture" aria-hidden="true"
-    style:opacity={visible ? 1 : 0} style:transition-duration={(visible ? fadeIn : 500) + 'ms'}></div>
-{:else}
-  <div class="landing-texture dots" aria-hidden="true"
     style:opacity={visible ? 1 : 0} style:transition-duration={(visible ? fadeIn : 500) + 'ms'}></div>
 {/if}
 
@@ -56,15 +48,4 @@
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
     color: #c3c2b7; color-scheme: dark; }
   :global(html[data-theme="light"]) .landing-texture { color: #52514e; color-scheme: light; }
-
-  /* 公开版静态底纹：14px 点阵，四周与中部输入区渐隐 */
-  .dots {
-    background-image: radial-gradient(circle at center, color-mix(in srgb, currentColor 26%, transparent) 0 1px, transparent 1.4px);
-    background-size: 14px 14px;
-    background-position: center;
-    -webkit-mask-image: radial-gradient(ellipse 46% 30% at 50% 58%, transparent 0 55%, #000 100%), radial-gradient(ellipse 80% 70% at 50% 50%, #000 40%, transparent 100%);
-    -webkit-mask-composite: source-in;
-    mask-image: radial-gradient(ellipse 46% 30% at 50% 58%, transparent 0 55%, #000 100%), radial-gradient(ellipse 80% 70% at 50% 50%, #000 40%, transparent 100%);
-    mask-composite: intersect;
-  }
 </style>

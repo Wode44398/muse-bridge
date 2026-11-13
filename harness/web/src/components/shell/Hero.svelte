@@ -4,17 +4,24 @@
   // 同一屏各出现两遍（维护者 09-26：碎片化、冗余），去掉了。
   // 提示按优先级只出一条：连不上 > App 太旧 > 服务端太旧 > 没填 Key。
   // 换了厂商（dimensio-pulse）标志重演一遍入场——空间本身在应答。
+  // 标志可点：点一下切明暗（ThemeMark：悬停浮起、按下收紧、翻面换场）。
   import { onMount } from "svelte";
-  import { app, vendorId, vendorInfo } from "../../lib/state.svelte.ts";
+  import { app, hostBuiltins, openHostModelHub, openSettings, vendorId, vendorInfo } from "../../lib/state.svelte.ts";
   import { greeting } from "../../lib/theme.ts";
   import { rise } from "../../lib/motion.ts";
   import { t } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
-  import Mark from "../brand/Mark.svelte";
+  import ThemeMark from "../brand/ThemeMark.svelte";
 
   const vid = $derived(vendorId());
   const vendor = $derived(vendorInfo(vid));
   const hasKey = $derived(Boolean(app.config?.hasKey));
+  // 自带厂商的 Key 归宿主的模型中心管时：提示改成去那里添加（宿主没接住才退回设置页）
+  const viaHub = $derived(hostBuiltins() && !vendor?.custom && vid !== "local");
+  function fixKey() {
+    if (viaHub && openHostModelHub("add")) return;
+    openSettings();
+  }
 
   let replay = $state(0);
   onMount(() => {
@@ -27,7 +34,7 @@
 <div class="hero">
   <div class="stack">
     {#key replay}
-      <div class="mark"><Mark size={100} intro /></div>
+      <div class="mark"><ThemeMark size={100} intro /></div>
     {/key}
     <h1 in:rise={{ y: 10, delay: 120 }}>{greeting()}</h1>
     {#if !app.config && !app.connError}
@@ -35,7 +42,7 @@
     {/if}
 
     {#if app.connError}
-      <button class="note err" in:rise={{ y: 6, delay: 260 }} onclick={() => (app.sheet = "settings")}>
+      <button class="note err" in:rise={{ y: 6, delay: 260 }} onclick={openSettings}>
         <Icon name="wifiOff" size={15} />
         <span>{t("连不上服务器，检查连接设置")}</span>
         <Icon name="chevronR" size={14} />
@@ -45,9 +52,9 @@
     {:else if app.compat?.serverTooOld}
       <p class="note" role="status" in:rise={{ y: 6, delay: 260 }}><Icon name="info" size={15} /><span>{t("服务端版本较旧，部分功能可能用不了，请更新服务端")}</span></p>
     {:else if app.config && !hasKey}
-      <button class="note" in:rise={{ y: 6, delay: 260 }} onclick={() => (app.sheet = "settings")}>
+      <button class="note" in:rise={{ y: 6, delay: 260 }} onclick={fixKey}>
         <Icon name="key" size={15} />
-        <span>{t("先在设置里填 {name} 的 API Key", { name: vendor?.name ?? "" })}</span>
+        <span>{viaHub ? t("先在模型中心添加 {name} 的服务", { name: vendor?.name ?? "" }) : t("先在设置里填 {name} 的 API Key", { name: vendor?.name ?? "" })}</span>
         <Icon name="chevronR" size={14} />
       </button>
     {/if}

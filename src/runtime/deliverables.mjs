@@ -16,7 +16,11 @@ const ROOT = DATA_ROOT;
 const ZIP_CACHE = path.join(ROOT, 'zip-cache');   // 文件夹下载的临时 zip（流完即删）
 
 // 可当交付物的文件扩展（与 codex 分页同表）。
-const ARTIFACT_EXT = 'png|jpe?g|gif|webp|bmp|heic|heif|avif|svg|pdf|md|txt|json|csv|tsv|html?|mp4|webm|mov|m4v|avi|mkv|mp3|wav|m4a|aac|ogg|flac|opus|docx?|xlsx?|pptx?|zip|tar|gz';
+// 压缩包 / 安装包 / 发行包也算：以前只认 zip|tar|gz，回答里交付的 .tgz 插件包、.7z、.apk 一律不出卡，
+// 点正文链接还只能全屏预览（2026-11-02 维护者反馈 dsh-fast-mode-0.3.0.tgz）。
+const ARTIFACT_EXT = 'png|jpe?g|gif|webp|bmp|heic|heif|avif|svg|ico|pdf|md|txt|json|csv|tsv|html?|xml|mp4|webm|mov|m4v|avi|mkv|mp3|wav|m4a|aac|ogg|flac|opus|docx?|xlsx?|pptx?|rtf|odt|ods|odp|epub'
+  + '|zip|tar|gz|tgz|bz2|tbz2?|xz|txz|zst|7z|rar'
+  + '|exe|msi|msix|appx|apk|aab|ipa|dmg|pkg|deb|rpm|appimage|whl|jar|vsix|crx|xpi|nupkg';
 export const FILE_EXT_RE = new RegExp('\\.(?:' + ARTIFACT_EXT + ')$', 'i');
 
 // 正文里的 markdown 链接 [x](目标)。目标里允许一层平衡括号：文件名带 (EN) 这类后缀时，agent 常直接写裸路径

@@ -3,8 +3,7 @@
   // 字 17/20 Medium；底：亮 Fills/Secondary LINEAR_BURN、暗 Fills/Tertiary LINEAR_DODGE（在玻璃底上折成等效半透色）。
   // multiline 时是文本区（反馈用）。
   import { ovUrl } from '../../lib/overlay.svelte.js';
-  import sq26_pub from '../../assets/ios27/squircle26.svg';
-  const sq26 = $derived(ovUrl('ios27/squircle26.svg', sq26_pub));
+  const sq26 = $derived(ovUrl('ios27/squircle26.svg'));
   let { value = $bindable(''), placeholder = '', multiline = false, rows = 5, inputmode = undefined, autofocus = false, oninput, ...rest } = $props();
   let el = $state();
   $effect(() => { if (autofocus && el) setTimeout(() => { try { el.focus(); } catch {} }, 280); });

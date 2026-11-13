@@ -24,6 +24,10 @@
   import WorkflowCard from './WorkflowCard.svelte';
   import CompactRow from './CompactRow.svelte';
   import ToolCard from './ToolCard.svelte';   // 插件工具的结果卡片：分组折着时也要看得见，摆在组外
+  import ToolThumbs from './ToolThumbs.svelte';
+  import { toolShots } from '../../lib/toolImages.js';
+  import { session } from '../../lib/state.svelte.js';
+  import { t as tr } from '../../lib/i18n.js';
 
   // seg：tools 段；m：所属消息（契约保留，判活以 live 为准）；live：本轮仍在流式；
   // onOpen：点开 Agent / Workflow 的回调（缺省=打开 TaskSheet；TaskSheet 内嵌只读用时可传空函数）；
@@ -92,7 +96,36 @@
   let mounted = $state(untrack(() => !!seg.open));
   $effect(() => { if (isOpen) mounted = true; });
   function toggle() { if (onToggle) onToggle(); else seg.open = !seg.open; }
+
+  // —— 状态行尾巴（官方 4.4212 /code 页运行步骤行：elapsedSeconds / code-step-pictures 缩略图条 / agents 计数）——
+  // 缩略图条：本段工具结果里的图片（sid 取当前会话；子 agent 转录里的工具不带图，自然为空）
+  const shots = $derived(toolShots(tools, session.id));
+  const runShots = (run) => toolShots(run.tools, session.id);
+  // 子 agent 计数：本段里还在跑的 Agent / Task（官方「N agents」）
+  const agents = $derived(live ? tools.filter((x) => (x.name === 'Agent' || x.name === 'Task') && eff(x) === 'running').length : 0);
+  // 行内计时：本段在跑满 2 秒后才出现（官方 /code 页 Xj：≥2），每秒走；起点 = 本段第一个工具的直播开始时刻
+  const t0 = $derived.by(() => { let v = 0; for (const x of tools) if (x.t0 && (!v || x.t0 < v)) v = x.t0; return v; });
+  let now = $state(Date.now());
+  $effect(() => {
+    if (!running || !t0) return;
+    now = Date.now();
+    const id = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(id);
+  });
+  const secs = $derived(running && t0 ? Math.max(0, Math.floor((now - t0) / 1000)) : 0);
+  const fmtSecs = (n) => (n < 60 ? tr('{n}秒', { n }) : tr('{m}分{s}秒', { m: Math.floor(n / 60), s: n % 60 }));
+  const hasTrail = $derived(shots.length > 0 || agents > 0 || secs >= 2);
 </script>
+
+{#snippet trail()}
+  {#if hasTrail}
+    <span class="trail">
+      {#if secs >= 2}<span class="secs">{fmtSecs(secs)}</span>{/if}
+      {#if agents > 0}<span class="agents">{tr('{n} 个子 agent', { n: agents })}</span>{/if}
+      <ToolThumbs {shots} />
+    </span>
+  {/if}
+{/snippet}
 
 {#snippet runView(run, inGroup)}
   {@const t = run.tools[0]}
@@ -112,9 +145,14 @@
   <!-- 「Claude 发起新会话」：连续几次 start_session 一段（toolJoins），offer 卡 / 提议卡 / 已开始卡 -->
   <SessionStartCards {tools} {live} />
 {:else if runs.length === 1}
-  {@render runView(runs[0], false)}
+  {#if hasTrail}
+    <div class="soloLine"><div class="soloMain">{@render runView(runs[0], false)}</div>{@render trail()}</div>
+  {:else}
+    {@render runView(runs[0], false)}
+  {/if}
 {:else if runs.length > 1}
   <div class="grp">
+    <div class="headLine">
     <button type="button" class="head" aria-expanded={isOpen} onclick={toggle}>
       {#if running}<span class="sr-only">running</span>{/if}
       <span class="lbl" use:morphText={shownKey}>
@@ -131,11 +169,14 @@
       </span>
       <span class="ic caret" aria-hidden="true">{glyph(isOpen ? 'CaretDown' : 'CaretRight')}</span>
     </button>
+    {@render trail()}
+    </div>
     {#if mounted}
       <div class="body" hidden={!isOpen}>
         <div class="card">
           {#each runs as run (runId(run))}
-            <div class="item">{@render runView(run, true)}</div>
+            {@const rs = runShots(run)}
+            <div class="item" class:withShots={rs.length > 0}><div class="itemMain">{@render runView(run, true)}</div>{#if rs.length}<ToolThumbs shots={rs} />{/if}</div>
           {/each}
         </div>
       </div>
@@ -199,5 +240,14 @@
   .card { display: flex; flex-direction: column; margin-top: 8px; border-radius: 8px; box-shadow: 0 0 0 1px var(--divider); overflow: hidden; overflow: clip; }
   .item { padding: 8px 10px; min-width: 0; }
   .item + .item { border-top: 1px solid var(--divider); }
+  /* 状态行尾巴：计时 / agent 计数 / 缩略图条，推到行尾（官方 trailing + media） */
+  .headLine, .soloLine { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .soloLine { align-items: flex-start; margin: 0; }
+  .soloMain { flex: 1; min-width: 0; }
+  .trail { margin-inline-start: auto; display: inline-flex; align-items: center; gap: 8px; flex: none; min-height: 20px;
+    font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .soloLine > .trail { padding-top: 6px; }
+  .item.withShots { display: flex; align-items: flex-start; gap: 8px; }
+  .itemMain { flex: 1; min-width: 0; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 </style>

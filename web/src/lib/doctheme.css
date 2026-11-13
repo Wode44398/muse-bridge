@@ -1,0 +1,105 @@
+/* 文档纸面配色令牌（--md-*）——全部文档类查看器共用的唯一一份：
+   md 阅读态（DocViewer .doc-root）、md 编辑态（mdeditor .mde，也能脱离 DocViewer 单独挂）、
+   Office 查看器（.of-root）、PDF 查看器（.pdf-root）。以前 DocViewer 与 editor.css 各写一份同名同值，
+   Office/PDF 又是另一套写死的白；现在改色只改这里。
+
+   跟随全站明暗：亮色挂 html[data-theme="light"]，其余（含未设置）一律暗——与 app.css 同口径。
+   分享页（SharePage）没有 bridge 偏好，挂载时按系统明暗写 data-theme，这里不用另判。
+
+   亮＝Anthropic/Claude 象牙白暖调：纸面 #faf9f5、字 #141413、强调 Claude 珊瑚 #d97757；
+   正文字号的链接/标签用深一档的 #b5532f 保对比度（珊瑚原色在象牙白上只有 3:1）。
+   暗＝claude.ai 深色的暖墨：纸面 #262624（claude.ai bg-100）、浮层 #30302e、字 #ecebe5（12.7:1，
+   比纯 #faf9f5 收一点，长文不刺眼）；珊瑚在暗纸上 4.9:1 原样用，正文字号的链接/标签换亮一档 #e88d6a。
+   暗色的「沉底/悬停」用半透明白叠加（--md-bg-2/3），落在纸面、浮层、表头上都自洽——
+   亮色里沉底是更深、浮层是更亮，暗色两者都是「更亮」，写成实色会让菜单里的悬停看不出来。
+
+   --md-ink：叠加用的墨色三元组（rgba(var(--md-ink), α) 画发丝线/按下/悬停），亮=近黑、暗=近白。 */
+
+:is(.doc-root, .mde, .of-root, .pdf-root) {
+  --md-bg: #faf9f5;            /* 纸面 */
+  --md-bg-2: #f3f1eb;          /* 沉底：代码块 / 表头 / 胶囊 / 悬停 */
+  --md-bg-3: #eae7df;          /* 再深一级：按下态 */
+  --md-panel: #fffefb;         /* 浮层：菜单 / 浮条 / 补全 / 反链卡 */
+  --md-panel-hi: #ffffff;      /* 浮层悬停 */
+  --md-field: #ffffff;         /* 输入框聚焦底 / 勾选框底 */
+  --md-thumb: #ffffff;         /* 分段控件滑帽 */
+  --md-stage: #eeede8;         /* 版面外的台面（PDF 页间） */
+  --md-line: #e7e4db;          /* 分隔线 / 边框 */
+  --md-line-2: #d6d2c6;        /* 引用条 / 勾选框描边 */
+  --md-fg: #141413;            /* 正文 */
+  --md-fg-2: #5f5e59;          /* 次要 */
+  --md-fg-3: #8a8983;          /* 弱化：标签 / 图标 */
+  --md-fg-4: #b4b2aa;          /* 占位 / 定界符 */
+  --md-ink: 20, 20, 19;
+  --md-accent: #d97757;        /* Claude 珊瑚：光标 / 选区 / 勾选 / 焦点环 */
+  --md-accent-deep: #b5532f;   /* 深珊瑚：双链 / 标签 / 反链名（正文字号可读） */
+  --md-accent-soft: rgba(217, 119, 87, .16);
+  --md-accent-tint: rgba(217, 119, 87, .085);
+  --md-wk-line: rgba(181, 83, 47, .35);   /* 双链下划线 */
+  --md-link: #2f6fbf;          /* 外链：天空蓝，和双链分得开 */
+  --md-mark: rgba(235, 196, 98, .42);   /* 高亮：manilla 暖黄 */
+  --md-math: #3f7a5a;          /* 数学：cactus 绿 */
+  --md-danger: #c2472f;
+  --md-warn-bg: #fbf1ec;       /* 冲突提示条 */
+  --md-json: #bc5215;          /* 属性面板里表达不了的值（原样 JSON） */
+  --md-json-bg: rgba(188, 82, 21, .08);
+  --md-toast-bg: rgba(20, 20, 19, .86);
+  --md-toast-fg: #faf9f5;
+  /* callout 卡：标题/图标色 = 类型色（obsmd 写在卡上的 --co）向白混多少；卡底 = 类型色的不透明度 */
+  --md-co-lift: 0%;
+  --md-co-bg: .07;
+  /* 代码语法配色：Flexoki（亮=light 600 档，在象牙白上不发冷；暗=dark 400 档） */
+  --md-c-kw: #5e409d; --md-c-str: #66800b; --md-c-num: #bc5215; --md-c-fn: #205ea6;
+  --md-c-type: #24837b; --md-c-prop: #ad8301; --md-c-op: #6f6e69; --md-c-re: #af3029; --md-c-cmt: #9a9891;
+  --md-code-fg: #141413;       /* 代码块里没上语法色的字（标识符等）：暗纸上比正文收一档，不和语法色抢 */
+  --md-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --md-shadow: 0 14px 40px rgba(70, 56, 34, .16), 0 2px 8px rgba(70, 56, 34, .07), 0 0 0 .5px rgba(20, 20, 19, .07);
+  --md-shadow-sm: 0 8px 24px rgba(70, 56, 34, .14), 0 1px 4px rgba(70, 56, 34, .06), 0 0 0 .5px rgba(20, 20, 19, .07);
+  --md-shadow-thumb: 0 1px 2px rgba(70, 56, 34, .12), 0 2px 8px rgba(70, 56, 34, .06), 0 0 0 .5px rgba(20, 20, 19, .07);
+  --md-ease: cubic-bezier(.2, .8, .2, 1);
+  --md-ease-pop: cubic-bezier(.2, .9, .3, 1.12);
+  /* 原生控件（属性面板的日期框/日历图标、滚动条、勾选框）按纸面明暗画——app.css 在 :root 上声明的
+     color-scheme 是 app 外框的，不在这里截住，暗纸上会画出亮日历图标、亮纸上会画出黑块勾选框 */
+  color-scheme: light;
+}
+
+html:not([data-theme="light"]) :is(.doc-root, .mde, .of-root, .pdf-root) {
+  --md-bg: #262624;
+  --md-bg-2: rgba(255, 255, 255, .055);
+  --md-bg-3: rgba(255, 255, 255, .09);
+  --md-panel: #30302e;
+  --md-panel-hi: #363634;
+  --md-field: #1c1c1b;
+  --md-thumb: #46453f;
+  --md-stage: #1a1a19;
+  --md-line: rgba(255, 255, 255, .1);
+  --md-line-2: rgba(255, 255, 255, .2);
+  --md-fg: #ecebe5;
+  --md-fg-2: #c2c0b6;
+  --md-fg-3: #9c9a92;
+  --md-fg-4: #6e6c66;
+  --md-ink: 250, 249, 245;
+  --md-accent: #d97757;
+  --md-accent-deep: #e88d6a;
+  --md-accent-soft: rgba(217, 119, 87, .3);
+  --md-accent-tint: rgba(217, 119, 87, .15);
+  --md-wk-line: rgba(232, 141, 106, .42);
+  --md-link: #78aef0;
+  --md-mark: rgba(224, 176, 56, .34);
+  --md-math: #82c49c;
+  --md-danger: #ec7a63;
+  --md-warn-bg: #36261f;
+  --md-json: #da702c;
+  --md-json-bg: rgba(218, 112, 44, .14);
+  --md-toast-bg: rgba(60, 59, 56, .96);
+  --md-toast-fg: #faf9f5;
+  --md-co-lift: 30%;
+  --md-co-bg: .12;
+  --md-c-kw: #8b7ec8; --md-c-str: #879a39; --md-c-num: #da702c; --md-c-fn: #4385be;
+  --md-c-type: #3aa99f; --md-c-prop: #d0a215; --md-c-op: #878580; --md-c-re: #d14d41; --md-c-cmt: #7a7873;
+  --md-code-fg: #cecdc3;
+  --md-shadow: 0 14px 40px rgba(0, 0, 0, .45), 0 2px 8px rgba(0, 0, 0, .3), 0 0 0 .5px rgba(255, 255, 255, .12);
+  --md-shadow-sm: 0 8px 24px rgba(0, 0, 0, .4), 0 1px 4px rgba(0, 0, 0, .28), 0 0 0 .5px rgba(255, 255, 255, .12);
+  --md-shadow-thumb: 0 1px 2px rgba(0, 0, 0, .35), 0 2px 8px rgba(0, 0, 0, .2), 0 0 0 .5px rgba(255, 255, 255, .08);
+  color-scheme: dark;
+}

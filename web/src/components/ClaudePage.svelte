@@ -9,6 +9,7 @@
   import Thread from './Thread.svelte';
   import ClaudeLogo from './ClaudeLogo.svelte';
   import ClaudeCodeWordmark from './claude/ClaudeCodeWordmark.svelte';
+  import SidebarToggle from './claude/SidebarToggle.svelte';
   import RefusalBand from './claude/RefusalBand.svelte';
   import PermissionCard from './claude/PermissionCard.svelte';   // 逐次工具审批卡（输入框上方停靠）
   import QueueBar from './claude/QueueBar.svelte';
@@ -20,17 +21,18 @@
   import RoutinesPage from './RoutinesPage.svelte';
   import { api } from '../lib/api.js';
   import { uiAlert, uiConfirm } from '../lib/dialogs.js';
-  import { me, ui, session, settings, setTheme, toggleTheme, singleMode, sessionWt, pluginOn } from '../lib/state.svelte.js';
+  import { me, ui, session, settings, setTheme, singleMode, sessionWt, pluginOn } from '../lib/state.svelte.js';
+  import { switchPageTheme } from '../lib/homeTheme.js';
   import UserMenu from './UserMenu.svelte';
   import { updateInfo } from '../lib/updateStore.svelte.js';
   import { swipeDismiss } from '../lib/motion.js';
   import { closePage, backPeek } from '../lib/pageMorph.js';
   import { mountDrag } from '../lib/capsule.js';
   import { untrack } from 'svelte';
-  import { chat, newConversation, openSession, requestSync, prefetchSessions, onBusEvent } from '../lib/chat.svelte.js';
+  import { chat, newConversation, openSession, requestSync, prefetchSessions, onBusEvent, pendingNew, dropPendingNew } from '../lib/chat.svelte.js';
   import { setSessionSource } from '../lib/sessionFamily.svelte.js';
   import { busStart, busStop, busOn, busConnected } from '../lib/bus.js';
-  import { placeTouched } from '../lib/sessionsOrder.js';
+  import { placeTouched, insertByMtime, provisionalTitle } from '../lib/sessionsOrder.js';
   import { isStarred, toggleStar, titleFor, renameSession, applyServerLibrary, resetLibrary, forgetSession } from '../lib/library.svelte.js';
   import { registerCloser } from '../lib/nav.js';
   import { marquee } from '../lib/marquee.js';
@@ -163,19 +165,50 @@
   const greetName = $derived(me.user ? t('{name}，接下来做什么？', { name: me.user }) : t('接下来做什么？'));
 
   // —— 三档形态（断点单源见 lib/layout.svelte.js）——
-  //   expanded ≥1100：侧栏常驻左列 + 工作台右列，两根并存（原桌面行为）
-  //   medium 700–1099（折叠屏展开 / 竖屏平板）：侧栏可【点汉堡常驻】，工作台也是侧列，
+  //   expanded ≥1100：侧栏常驻左列 + 工作台右列，两根并存（原桌面行为）；侧栏默认展开、可收起
+  //   medium 700–1099（折叠屏展开 / 竖屏平板）：侧栏可【点开关常驻】，工作台也是侧列，
   //     但只塞得下一根——工作台一开侧栏自动让位，关掉自己回来（makeSideYield）
   //   compact <700：真手机，侧栏=抽屉、工作台=底部 sheet（原样不动）
   // 抽屉态只属于 compact：一进 side 档就强制关掉，汉堡语义随之从「拉抽屉」变成「切常驻」。
-  const wide = $derived(layout.expanded);          // 侧栏【恒】常驻
+  // 侧列两档的开关是 claude/SidebarToggle：展开时坐在侧栏标题行右端，收起时才露到正文左上角。
+  const wide = $derived(layout.expanded);          // 侧栏走常驻列（可收起，但从不变抽屉）
   const sideMode = $derived(layout.side);          // 工作台走侧列（而非底部 sheet）
   const PIN_LS = 'bridge-claude-sidepin';
   let sidePinned = $state((() => { try { return localStorage.getItem(PIN_LS) === '1'; } catch { return false; } })());
   const setPinned = (v) => { sidePinned = v; try { localStorage.setItem(PIN_LS, v ? '1' : '0'); } catch {} };
   const yielder = makeSideYield(() => sidePinned, (v) => { sidePinned = v; });   // 让位不写盘：用户的偏好仍是「常驻」
-  // 侧栏此刻是否真的钉在左边：expanded 恒是，medium 看用户开关，compact 永不。
-  const pinned = $derived(layout.expanded || (layout.medium && sidePinned));
+  // expanded 档的「收起侧栏」单独记：默认展开，与 medium 的常驻开关（默认收起）互不串味。
+  const HIDE_LS = 'bridge-claude-sbhide';
+  let sbHidden = $state((() => { try { return localStorage.getItem(HIDE_LS) === '1'; } catch { return false; } })());
+  const setHidden = (v) => { sbHidden = v; try { localStorage.setItem(HIDE_LS, v ? '1' : '0'); } catch {} };
+  // 侧栏此刻是否真的钉在左边：expanded 看「收起」开关（默认是），medium 看常驻开关，compact 永不。
+  const pinned = $derived((layout.expanded && !sbHidden) || (layout.medium && sidePinned));
+  // 收起要先播完滑出再卸载：pinned 落 false 后侧栏还留在 DOM 里（期间 inert），等外层宽度过渡真的
+  // 走完（transitionend）才摘；途中又点开就直接接着用这一份（宽度过渡从当前值折返）。计时器只是兜底——
+  // 分页休眠 / 过渡被取消时 transitionend 不来；那时外层宽度早已是 0、侧栏整块被裁掉，多留一会儿看不见。
+  let sbLive = $state(untrack(() => pinned));
+  let sbWrapEl = $state();
+  $effect(() => {
+    if (pinned) { sbLive = true; return; }
+    const wrap = sbWrapEl;
+    const done = () => { sbLive = false; };
+    const onEnd = (e) => { if (e.target === wrap && e.propertyName === 'width') done(); };
+    wrap?.addEventListener('transitionend', onEnd);
+    const tm = setTimeout(done, 2000);
+    return () => { clearTimeout(tm); wrap?.removeEventListener('transitionend', onEnd); };
+  });
+  // 常驻侧栏此刻的滚动条宽（列表溢出才有；触屏是覆盖式恒 0）：开关在缘内时要往里再让这么多
+  let sbEl = $state();
+  let sbGutter = $state(0);
+  $effect(() => {
+    const el = sbEl;
+    if (!el) return;
+    const read = () => { sbGutter = Math.max(0, el.offsetWidth - el.clientWidth - 1); };   // 1 = 右边框
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    read();
+    return () => ro.disconnect();
+  });
   $effect(() => { if (layout.side) ui.drawerOpen = false; });
   // 工作台开合 → medium 档让位/还原（expanded 不受影响，见 makeSideYield 内的档位判断）。
   // untrack：apply 内部要读写 sidePinned，不隔离的话这个 effect 会把自己的写入当依赖再跑一轮，
@@ -223,7 +256,7 @@
     lastWho = w;
     if (!prev) return;   // 没登录 → 登录：上一个人退出时已经清过
     untrack(() => {
-      sessions = []; projects = []; projOrder = [];
+      sessions = []; projects = []; projOrder = []; provRows.clear();
       cacheSessions([]); cacheProjects([]); cacheOrder([]); resetLibrary();
       resetArchive(); older = []; projCounts = {}; pager = {}; cutoff = 0; searchOpen = false;
       quickExp = {}; quickBin = 0; binOpen = false; binItems = []; shownQuick = 0;
@@ -238,7 +271,9 @@
   // 抽屉一拉开就有内容，不再「拉出等一下才看见列表」。每轮结束（busy→false）再刷一次
   // （状态点/新会话跟手）。untrack：refreshSessions 内读 sessions，别让它成为依赖。
   // 读 who：登录 / 换人后重拉。
-  $effect(() => { if (ui.screen === 'claude' && !session.busy && who) untrack(refreshSessions); });
+  // 首拉不等 busy：冷启动直接落进一个在跑的会话（重启 / 换包 / 回前台重载）时，旧写法要等这轮跑完
+  // 才拉第一次，侧栏一直停在「加载中…」、连本地缓存的项目都不出（11-08 维护者真机报）。
+  $effect(() => { if (ui.screen === 'claude' && who && (!session.busy || !sessionsAt)) untrack(refreshSessions); });
 
   // —— 多端实时同步：订阅账号级事件总线（/api/stream）——
   // 别的设备（手机 / 电脑网页 / 桌面客户端）发起一轮、跑完一轮，或任何进程写了 transcript
@@ -300,6 +335,54 @@
     if (_syncPending) return;
     _syncPending = setTimeout(() => { _syncPending = null; untrack(refreshSessions); }, 800);
   }
+  // —— 新会话就地上榜 ——
+  // /api/sessions 是按 transcript 文件扫出来的：新会话要等 CLI 把第一条写盘、再等一次整表重拉（800ms 合并 + 扫盘 +
+  // 服务端 2s 列表缓存）才出现在侧栏，前后好几秒看不见它。这里在它的 id 一定下来（总线 run.start 的 fresh 帧 /
+  // 本端 session 帧）就先插一行，标题用第一条消息；随后的整表刷新带回真标题与完整字段。
+  // 整表刷新回来时服务端可能还没扫到它：还在保质期里的行并回去（withProv），不让它闪一下又消失。
+  const provRows = new Map();   // id → 插入时刻
+  const PROV_TTL = 90_000;
+  let _provTimer = null;
+  function addProv(row) {
+    if (!row || !row.id || sessions.some((s) => s.id === row.id) || isArchivedId(row.id)) return false;
+    provRows.set(row.id, Date.now());
+    sessions = insertByMtime(sessions, { thinking: true, ...row, mtime: row.mtime || Date.now() });
+    // 真标题 / 形态 / worktree 这些只有整表里有：稍后补拉一次（那时 transcript 多半已落盘）
+    if (!_provTimer) _provTimer = setTimeout(() => { _provTimer = null; untrack(refreshSessions); }, 4000);
+    return true;
+  }
+  function withProv(list) {
+    if (!provRows.size) return list;
+    const ids = new Set(list.map((s) => s.id));
+    let out = list;
+    for (const [id, at] of provRows) {
+      // 服务端列表已经有它 / 过了保质期 / 本地已经摘掉（删除、归档）→ 不再管
+      const cur = ids.has(id) || Date.now() - at > PROV_TTL ? null : sessions.find((s) => s.id === id);
+      if (!cur) { provRows.delete(id); continue; }
+      out = insertByMtime(out, cur);
+    }
+    return out;
+  }
+  // 本端刚发出第一条的新会话：session 帧一到（session.id 落定）就上榜，不依赖总线那一帧
+  $effect.pre(() => {   // pre：和摘占位行同一帧落地，不闪
+    const id = session.id;
+    if (!id || !session.busy || IS_CSNAP) return;
+    untrack(() => {
+      if (sessions.some((s) => s.id === id)) return;
+      const mine = chat.messages.filter((m) => m.role === 'user');
+      if (mine.length !== 1) return;   // 只认新会话的第一轮（续聊一条不在首页里的老会话不算）
+      addProv({ id, title: provisionalTitle(mine[0].text), projectId: session.projectId || null });
+    });
+  });
+  // 占位行（新会话 id 还没回来）：按项目分到各组最上面；临时对话的进「临时对话」区
+  const pendRows = $derived(pendingNew.list.map((p) => ({ ...p, title: provisionalTitle(p.text), quick: !!p.projectId && quickIds.has(p.projectId) })));
+  const pendQuick = $derived(pendRows.filter((p) => p.quick));
+  const pendIn = (pid) => {
+    if (!pendRows.length) return [];
+    const ids = new Set(realProjects.map((x) => x.id));
+    const defId = (realProjects.find((x) => x.def) || realProjects[0])?.id ?? null;
+    return pendRows.filter((p) => !p.quick && ((p.projectId && ids.has(p.projectId)) ? p.projectId : defId) === pid);
+  };
   function onSync(ev) {
     if (ev.type === 'library') { applyServerLibrary(ev.library); return; }   // 别的设备收藏/改名
     if (ev.type === 'hello') {
@@ -313,7 +396,29 @@
         }
       }
     } else if (ev.type === 'run.start') {
-      if (!patchSession(ev.sessionId, { thinking: true })) refreshSoon();
+      if (!patchSession(ev.sessionId, { thinking: true })) {
+        // 新会话（服务端标 fresh）：当场插一行；子会话直接挂到父会话那一家下面、跟父会话同一个项目
+        if (ev.fresh && ev.sessionId) {
+          const parent = ev.parentId ? sessions.find((s) => s.id === ev.parentId) : null;
+          const row = {
+            id: ev.sessionId, title: provisionalTitle(ev.userText), mtime: Number(ev.startedAt) || 0,
+            projectId: ev.projectId || parent?.projectId || null,
+            ...(ev.parentId ? { parentId: parent?.parentId || ev.parentId, spawnedBy: ev.parentId } : {}),
+          };
+          // 本端发出、id 还没回来时画的占位行（lib/chat.svelte.js pendingNew）：按正文认领，换成这条真行。
+          // 正看着的那条不在这里换：它自己的 session 帧紧跟着就到（内核摘占位 + 上面的 effect 插真行，同一帧落地、
+          // 当前行高亮不断）；总线抢先几毫秒就换的话，会闪一下「没有当前行」。过一会儿还没等到（直播流丢了）再兜底换。
+          const sent = String(ev.userText || '').trim();
+          const pend = pendingNew.list.find((p) => p.text.trim() === sent);
+          if (pend && pend.key === pendingNew.mine) {
+            setTimeout(() => { if (pendingNew.list.some((p) => p.key === pend.key)) { dropPendingNew(pend.key); addProv(row); } }, 1500);
+          } else {
+            if (pend) dropPendingNew(pend.key);
+            addProv(row);
+          }
+        }
+        refreshSoon();
+      }
     } else if (ev.type === 'run.end') {
       patchSession(ev.sessionId, { thinking: false, pending: !!ev.pending });   // pending：同会话还扣着跨会话消息等你确认（服务端 pendingFor）
     } else if (ev.type === 'question') {
@@ -322,6 +427,7 @@
       // 手动归档的会话在 Desktop / CLI 里接着聊：它不会回到列表，不为它每轮整表重拉
       if (!bumpToTop(ev.sessionId, ev.mtime) && !stickyArchived(ev.sessionId)) refreshSoon();
     } else if (ev.type === 'family' && ev.child) {
+      if (ev.title && provRows.has(ev.child)) patchSession(ev.child, { title: ev.title });   // 刚插的那一行换成派生时起的标题
       refreshSoon();   // 某个会话刚派生了子会话：侧栏重拉，让它挂到父会话下面
     } else if (ev.type === 'archive') {
       refreshSoon();   // 归档 / 取消归档（本机、别的设备或自动归档）：整表重拉——归档的让出名额，取消归档的回到列表
@@ -331,12 +437,12 @@
     }
     onBusEvent(ev);   // 正文侧：挂直播 / 静态跟随
   }
-  $effect(() => () => { if (_syncPending) { clearTimeout(_syncPending); _syncPending = null; } });
+  $effect(() => () => { if (_syncPending) { clearTimeout(_syncPending); _syncPending = null; } if (_provTimer) { clearTimeout(_provTimer); _provTimer = null; } });
 
   // 列表等值跳过：内容没变就不赋值——反复开抽屉/轮询刷新不再每次重建列表 DOM。
   const sameSessions = (a, b) => a.length === b.length && a.every((x, i) => {
     const y = b[i];
-    return x.id === y.id && x.title === y.title && !!x.thinking === !!y.thinking && !!x.pending === !!y.pending && (x.projectId || null) === (y.projectId || null) && (x.parentId || null) === (y.parentId || null);
+    return x.id === y.id && x.title === y.title && !!x.thinking === !!y.thinking && !!x.pending === !!y.pending && (x.projectId || null) === (y.projectId || null) && (x.parentId || null) === (y.parentId || null) && (x.shape || null) === (y.shape || null);
   });
   function applySessions(list) { if (!sameSessions(sessions, list)) sessions = list; }
   // path 也要比：存好的临时对话工作空间会被服务端挪到固定位置（id、名字不变，只换 path），工作台得跟过去。
@@ -357,7 +463,7 @@
       noteSessionList(d, since); if (d.projectCounts) projCounts = d.projectCounts;   // 已归档总数 / 各项目活跃会话总数（组内翻页用）
       noteQuick(d);   // 临时对话的到期时刻 / 回收策略 / 回收站计数
       cutoff = Number(d.cutoff) || 0;
-      applySessions(withOlder(list)); cacheSessions(list); prefetchSessions(list); if (d.prefsLast) absorbLastPrefs(d.prefsLast); if (d.library) applyServerLibrary(d.library);   // 跨设备：别的设备最近的选择也能当本机新对话默认
+      applySessions(withProv(withOlder(list))); cacheSessions(list); prefetchSessions(list); if (d.prefsLast) absorbLastPrefs(d.prefsLast); if (d.library) applyServerLibrary(d.library);   // 跨设备：别的设备最近的选择也能当本机新对话默认
       sessionsAt = Date.now();
     }
     catch { if (!sessions.length) sessions = (await getCachedSessions()) || []; }   // 离线 → 读本地缓存的会话列表
@@ -410,10 +516,15 @@
     requestAnimationFrame(() => { toBottom(); requestAnimationFrame(toBottom); });
   });
 
-  // 汉堡键：compact 拉抽屉；medium 切「侧栏常驻」（工作台开着时手动点＝我就要侧栏，
-  // 让位记账作废、并把工作台收掉腾地方——一根侧列的档位里这是唯一讲得通的语义）。
+  // 汉堡 / 侧栏开关：compact 拉抽屉；expanded 切「收起侧栏」；medium 切「侧栏常驻」（工作台开着时
+  // 手动点＝我就要侧栏，让位记账作废、并把工作台收掉腾地方——一根侧列的档位里这是唯一讲得通的语义）。
   function onMenuKey() {
-    if (!layout.medium) { openDrawer(); return; }
+    if (layout.compact) { openDrawer(); return; }
+    if (layout.expanded) {
+      setHidden(!sbHidden);
+      if (!sbHidden && !sessions.length) refreshSessions();
+      return;
+    }
     const next = !sidePinned;
     setPinned(next);
     yielder.forget();
@@ -572,13 +683,19 @@
   // 「存为工作空间」（临时对话那条会话的 ⋮ / 右键、输入框上方的芯片与横条）：服务端把它所在的桶登记成普通项目
   //（id 沿用桶 id、名字取这条对话的标题），随后挪到固定位置。会话的 projectId 不变、只是它的项目摘掉了 quick
   // 标记——那条对话自然从「临时对话」区落进项目列表，正开着的也不用重开；此后不再按时间回收。
-  async function saveQuick(pid, s) {
+  // 存之前先弹小对话框让用户给工作空间取名（与重命名共用一个对话框，renameFor.kind = 'saveQuick'）：
+  // 预填这条对话的标题，可改；清空 = 服务端按「存下的对话 N」编号。取消 = 不存。
+  function saveQuick(pid, s) {
     closeMenu();
+    if (!pid || quickBusy) return;
+    const title = s ? titleFor(s.id, s.title) : '';
+    const name = title && title !== '（进行中…）' ? tr(title) : '';   // i18n-ignore 服务端给在跑的无标题会话的占位，不是界面文案
+    renameFor = { kind: 'saveQuick', id: pid, name: name.slice(0, 80) };
+  }
+  async function commitSaveQuick(pid, label) {
     if (!pid || quickBusy) return;
     quickBusy = true;
     try {
-      const title = s ? titleFor(s.id, s.title) : '';
-      const label = title && title !== '（进行中…）' ? tr(title) : '';   // i18n-ignore 服务端给在跑的无标题会话的占位，不是界面文案
       const r = await api.saveQuickChat(pid, t('存下的对话'), label);
       const p = r && r.project;
       if (!p || !p.id) throw new Error(t('服务器未返回存好的工作空间'));
@@ -759,6 +876,13 @@
   const childIds = $derived.by(() => {
     const out = new Set();
     for (const list of grouped.values()) for (const s of list) if (s.parentId && list.some((x) => x.id === s.parentId)) out.add(s.id);
+    return out;
+  });
+  // 项目对话（运行档位 › 项目）：它的讨论串有在等你的（审批卡 / 提问），项目行行尾亮一个红点——讨论串行滚出视野也看得见
+  const projectWaiting = $derived.by(() => {
+    const out = new Set();
+    const proj = new Set(sessions.filter((s) => s.shape === 'project').map((s) => s.id));
+    if (proj.size) for (const s of sessions) if (s.pending && s.spawnedBy && proj.has(s.spawnedBy)) out.add(s.spawnedBy);
     return out;
   });
   function nestFamilies(list) {
@@ -1009,7 +1133,8 @@
   function commitRename() {
     const r = renameFor; renameFor = null;
     if (!r) return;
-    if (r.kind === 'project') commitProjectRename(r.id, r.name.trim());
+    if (r.kind === 'saveQuick') commitSaveQuick(r.id, r.name.trim());
+    else if (r.kind === 'project') commitProjectRename(r.id, r.name.trim());
     else renameSession(r.id, r.name.trim()).catch(libFail(t('重命名失败，请重试')));
   }
   // 工作空间改名：只改显示名（服务端存 label），目录与会话都不动；留空 = 恢复成文件夹名。乐观上屏，失败退回。
@@ -1628,10 +1753,20 @@
      medium 档侧栏让位给工作台时 pinned=false，但仍必须是 row，否则工作台会掉到正文下面。 -->
 <div class="claude-root" class:wide={pinned || sideMode}>
 
+<!-- 侧列两档的常驻侧栏：外层 .sb-wrap 过渡宽度（0 ↔ sbW），里面的侧栏本体恒宽、贴外层右缘——
+     外层变窄时本体从左边被裁掉，看上去就是整块侧栏从左边滑进滑出、把正文推开；侧栏里的行自己不跟着
+     逐帧重排。收起时本体多留一个动画时长（sbLive）才卸载。开关按钮（SidebarToggle）挂在 .panes 里，
+     .panes 的左缘就是这里的右缘，跟着走。 -->
+{#if sideMode}
+  <div class="sb-wrap" class:open={pinned} class:drag={sbDrag} style:width={(pinned ? sbW : 0) + 'px'} inert={!pinned} bind:this={sbWrapEl}>
+    {#if pinned || sbLive}
+      <aside class="drawer pinned" style:width={sbW + 'px'} bind:this={sbEl} use:dragScrollGuard>{@render drawerBody()}</aside>
+    {/if}
+  </div>
+{/if}
 {#if pinned}
-  <aside class="drawer pinned" style:width={sbW + 'px'} use:dragScrollGuard>{@render drawerBody()}</aside>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
-  <div class="sb-handle" class:drag={sbDrag} style:left={(sbW - 6) + 'px'} role="separator"
+  <div class="sb-handle" class:drag={sbDrag} style:left={(sbW - 1) + 'px'} role="separator"
     aria-orientation="vertical" aria-label={t('调整侧栏宽度')} aria-valuenow={sbW} aria-valuemin={SB_MIN} aria-valuemax={SB_MAX}
     tabindex="0" onpointerdown={sbDown} onkeydown={sbKey}><span class="sb-pill"></span></div>
 {/if}
@@ -1645,15 +1780,20 @@
      中间一根分隔条。拖会话进来时整块盖一层落点（左/右半边 = 分屏）。 -->
 <div class="panes" class:split={splitOn} class:side-dnd={!!sideDrag} class:resizing={splitDragging}
   use:measureW={(measureTick, (w) => { panesW = w; })}>
+<!-- 侧列两档的侧栏开关：挂在 .panes 上而不是某一格里——.panes 左缘恒等于侧栏右缘（分屏时左边那格可能是
+     iframe），开关贴着这条缘在「侧栏标题行右端」与「正文左上角」之间滑。手机档仍是 TopBar 里的汉堡。 -->
+{#if sideMode}
+  <SidebarToggle open={pinned} gutter={sbGutter} onToggle={onMenuKey} onNew={IS_CSNAP ? null : newChat} />
+{/if}
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="pane main" class:focused={splitOn && !paneFocus} style={splitOn ? paneStyle(mainSide) + (mainSide === 'left' ? '--pane-wco-r:0px;' : '') : ''}
   use:measureW={(measureTick, (w) => { mainPaneW = w; })}
   onpointerdowncapture={() => { paneFocus = false; }} onfocusincapture={() => { paneFocus = false; }}>
 <!-- 顶栏挂在【这一格】上而不是对话列里：侧列形态的工具开关组要坐在这一格右上角——工作台展开时正好在
      卡片上方那条带里（桌面壳下＝标题栏带、与最小化/关闭同一排），盖在正文上的工作台也压不住它。
-     汉堡在 expanded 档才彻底隐藏；medium 档留着当「侧栏常驻」开关（on=已常驻）。
+     汉堡只在手机档出；侧列两档换成上面 .panes 里的 SidebarToggle（展开时并进侧栏标题行）。
      分屏时每一格各有一组（工具开关 · ⋮ · 关掉这一格）；贴窗口右缘的那一格才让系统窗控（--pane-wco-r）。 -->
-<TopBar onMenu={onMenuKey} onDock={toggleDock} onNew={IS_CSNAP ? null : newChat} hideMenu={wide} menuOn={pinned} tools={sideMode} split={splitOn} onClose={splitOn ? closeMain : null} />
+<TopBar onMenu={onMenuKey} onDock={toggleDock} onNew={IS_CSNAP ? null : newChat} hideMenu={sideMode} tools={sideMode} split={splitOn} onClose={splitOn ? closeMain : null} />
 <div class="main-col" bind:this={mainColEl} class:dnd-on={drag.overKey === 'chat:claude' || wsDragOver} role="presentation" use:dropZone={claudeDrop}
   ondragover={onWsDragOver} ondragleave={onWsDragLeave} ondrop={onWsDrop}>
 
@@ -1668,7 +1808,7 @@
     <div class="hero-scroll">
       <div class="hero-col">
         <div class="greeting">
-          <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'new', model: settings.model, effort: settings.effort }) }} in:fade={{ duration: 420, delay: 80 }} out:fly={{ x: -80, y: -22, duration: 320, easing: softDrop }}><ClaudeLogo anim="static" size={24} interactive onpress={toggleTheme} /></span>
+          <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'new', model: settings.model, effort: settings.effort }) }} in:fade={{ duration: 420, delay: 80 }} out:fly={{ x: -80, y: -22, duration: 320, easing: softDrop }}><ClaudeLogo anim="static" size={24} interactive onpress={switchPageTheme} /></span>
           <h1 in:fly={{ y: 22, duration: 480, delay: 130 }} out:fade={{ duration: 150 }}>{greetName}</h1>
         </div>
         {#if !IS_CSNAP}
@@ -1780,7 +1920,10 @@
       <button class="d-recent" use:dropZone={sessionDrop(s)} onclick={() => pickSession(s)}>
         <!-- 待回答（提问 / 审批卡）压过「在跑」：等人的那一轮本来就还在跑，不压过去这个点永远亮不出来（官方 Needs your input） -->
         {#if s.thinking || s.pending}<span class="d-dot {s.pending ? 'ask' : 'work'}"></span>{/if}
+        <!-- 项目对话：标题前一枚项目字形（协调者带两条讨论串）；讨论串在等你时行尾一个红点 -->
+        {#if s.shape === 'project'}<svg class="d-pj" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-label={t('项目对话')}><circle cx="8" cy="3.9" r="1.85"/><circle cx="3.9" cy="12.1" r="1.85"/><circle cx="12.1" cy="12.1" r="1.85"/><path d="M7 5.5 4.9 10.4M9 5.5l2.1 4.9"/></svg>{/if}
         <span class="d-title" use:marquee><span class="d-scroll">{tr(titleFor(s.id, s.title)) || t('（无标题）')}</span></span>
+        {#if projectWaiting.has(s.id)}<span class="d-pwait" title={t('有讨论串在等你')} aria-label={t('有讨论串在等你')}></span>{/if}
         <!-- 临时对话快到清理时：行尾一枚「剩 n 天」——话写全，别让人读成「n 天前」（触屏没有悬停提示；悬停时让位给 ⋮） -->
         {#if isQuickSession(s)}
           {@const qd = quickWarnDays(s.projectId)}
@@ -1788,6 +1931,16 @@
         {/if}
       </button>
       <button class="d-more" aria-label={t('更多')} onclick={(e) => openMenu(e, 'session', s.id)}><span class="ic">&#xe062;</span></button>
+    </div>
+  {/snippet}
+
+  <!-- 新会话的占位行：发送那一刻就有，id 回来换成真行（见 pendingNew）。还没有 id，点它只收抽屉 -->
+  {#snippet pendRow(p, indent)}
+    <div class="d-row" class:cur={p.key === pendingNew.mine && !session.id} class:indent>
+      <button class="d-recent" onclick={closeDrawer}>
+        <span class="d-dot work"></span>
+        <span class="d-title"><span class="d-scroll">{p.title || t('（无标题）')}</span></span>
+      </button>
     </div>
   {/snippet}
 
@@ -1826,6 +1979,7 @@
     {#if !collapsed[p.id] && !projDragging}
       {@const pg = paged.get(p.id)}
       {@const more = (pg?.rest || 0) + serverRest(p.id)}
+      {#each pendIn(p.id) as pn (pn.key)}{@render pendRow(pn, true)}{/each}
       {#each pg?.rows || [] as s (s.id)}{@render convRow(s, true)}{/each}
       {#if more}
         <!-- 剩余数 = 本地还没放出来的 + 服务端还没拿到的（老会话翻页，见 loadOlder） -->
@@ -1882,10 +2036,11 @@
     </div>
   {:else}
   <!-- 临时对话区（原「快照」，S1-6）：全部还留着的临时对话，最近的在上；30 天没动才清理，先进回收站 -->
-  {#if quickProj && (quickSessions.length || quickBlank || quickBin || quickOrphRows.length)}
+  {#if quickProj && (quickSessions.length || quickBlank || quickBin || quickOrphRows.length || pendQuick.length)}
     <div class="d-sec">{tc('临时对话区', '临时对话')}</div>
     <div class="d-list">
-      {#if quickBlank && !quickOrphRows.some((o) => o.id === session.projectId)}
+      {#each pendQuick as pn (pn.key)}{@render pendRow(pn, false)}{/each}
+      {#if quickBlank && !pendingNew.mine && !quickOrphRows.some((o) => o.id === session.projectId)}
         <div class="d-row cur"><button class="d-recent" onclick={closeDrawer}><span class="d-title">{t('新的临时对话')}</span></button></div>
       {/if}
       {#each quickRows.rows as s (s.id)}{@render convRow(s, false)}{/each}
@@ -2007,7 +2162,10 @@
 {#if renameFor}
   <button class="pm-bd" aria-label={t('关闭')} onclick={() => (renameFor = null)}></button>
   <div class="pmodal rnmodal" role="dialog" aria-modal="true">
-    {#if renameFor.kind === 'project'}
+    {#if renameFor.kind === 'saveQuick'}
+      <div class="pm-head"><span class="ic pm-ic">&#xe0c9;</span>{t('存为工作空间')}</div>
+      <input class="rn-input" bind:value={renameFor.name} onkeydown={renameKey} use:renameFocus placeholder={tc('claude', '给工作空间取个名字')} maxlength="80" />
+    {:else if renameFor.kind === 'project'}
       <div class="pm-head"><span class="ic pm-ic">&#xe064;</span>{tc('claude', '重命名工作空间')}</div>
       <input class="rn-input" bind:value={renameFor.name} onkeydown={renameKey} use:renameFocus placeholder={tc('claude', '留空恢复为文件夹名')} maxlength="80" />
     {:else}
@@ -2127,12 +2285,28 @@
   .drawer.pinned {
     position: static; transform: none; visibility: visible; transition: none;
     max-width: none; flex: none; height: auto; box-shadow: none;   /* 宽度由 style:width（拉动持久值）下发 */
+    /* 抽屉那份 z-index:50 不能带过来：它是弹性子项，带着 z-index 就自成层叠上下文、整块盖过 .panes 里
+       z 30 的侧栏开关（开关展开时正叠在本栏标题行上）。常驻列本来就各占一列，不需要抬层。 */
+    z-index: auto;
   }
-  /* 侧栏拉动把手（官方同款）：12px 隐形条骑缝右缘（left = 宽-6），全高 col-resize；
-     3×48 指示条悬停 200ms 延迟浮现、拖拽中常显、键盘聚焦转珊瑚色 */
-  .sb-handle { position: absolute; top: 0; bottom: 0; width: 12px; z-index: 45; cursor: col-resize; outline: none; }
-  .sb-pill { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 3px; height: 48px;
-    border-radius: 999px; background: var(--muted); opacity: 0;
+  /* 常驻侧栏的外层：只过渡宽度，本体贴右缘（flex-end，溢出落在左边被裁）＝整块从左边滑进滑出。
+     收起用 --mo-base、展开用 --mo-page（过渡取【变化后】那一侧的声明）；曲线与 SidebarToggle 的 left
+     必须同时长同曲线——开关就是靠这一点贴着侧栏右缘走的，改这里要两边一起改。
+     overflow 用 clip 不用 hidden：hidden 会变成可滚动容器，滑动途中焦点落进被裁掉的那截时浏览器
+     会把它横向滚过去，整块侧栏错位。拖宽度时跟手、不过渡。 */
+  .sb-wrap { flex: none; min-height: 0; display: flex; justify-content: flex-end; overflow: clip;
+    transition: width var(--mo-base) var(--ea-std); }
+  .sb-wrap.open { transition: width var(--mo-page) var(--ea-std); }
+  .sb-wrap.drag { transition: none; }
+  /* 侧栏拉动把手：全高 col-resize 隐形条，3×48 指示条悬停 200ms 延迟浮现、拖拽中常显、键盘聚焦转珊瑚色。
+     命中区只往【正文那一侧】长（left = 宽-1，从侧栏 1px 右边框起向右 8px）：侧栏自己是滚动容器，
+     10px 滚动条槽紧贴右边框内侧，官方那种 12px 骑缝会吃掉拇指右半、点上去变成拖宽度（11-08 维护者报）。
+     指示条仍居中压在接缝线上，pointer-events:none 免得它伸进侧栏的那半像素抢点击。 */
+  .sb-handle { position: absolute; top: 0; bottom: 0; width: 8px; z-index: 45; cursor: col-resize; outline: none;
+    transition: left var(--mo-page) var(--ea-std); }   /* 键盘方向键调宽时随 .sb-wrap 一起过渡；拖拽跟手 */
+  .sb-handle.drag { transition: none; }
+  .sb-pill { position: absolute; left: 1px; top: 50%; transform: translate(-50%, -50%); width: 3px; height: 48px;
+    border-radius: 999px; background: var(--muted); opacity: 0; pointer-events: none;
     transition: opacity .2s ease .2s, background-color .2s ease; }
   .sb-handle:hover .sb-pill, .sb-handle.drag .sb-pill { opacity: 1; }
   .sb-handle:focus-visible .sb-pill { opacity: 1; background: var(--coral); transition-delay: 0s; }
@@ -2219,7 +2393,11 @@
      被卡片（z-index 更高）盖住，实底与卡片无缝相接。 */
   .scroll > .scroll-fade-strip-bottom { --scroll-fade-size: var(--sf-bottom); bottom: calc(var(--composer-card-top, var(--composer-h, 84px)) - var(--composer-h, 84px) - 10px); }
   @media (max-width: 699px) { .scroll { --sf-top: 18px; --sf-lead: 0px; --sf-bottom: 28px; } }
-  :global(html[data-wco="1"]) .scroll::-webkit-scrollbar-thumb { border-style: solid; border-color: transparent; border-width: 0 7px 0 1px; background-clip: padding-box; }
+  /* 桌面壳 WCO：Electron 在窗口内沿留 5px 拉伸热区（系统层命中、先于页面），工作台收起时正文滚动区
+     贴着窗口右沿，官方款原生滚动条（槽 10px、拇指离右沿 ~3px）有一半拇指落进热区、一按变成拖窗口。
+     原生滚动条画在边框内侧，右边垫 4px 透明边框整条推进来，拇指离窗口右沿 ≥7px。--sb-w 量的是
+     offsetWidth-clientWidth，自动算上这 4px，输入栏照旧让开滚动条列。 */
+  :global(html[data-wco="1"]) .scroll, :global(html[data-wco="1"]) .hero-scroll { border-right: 4px solid transparent; }
   /* 输入栏卡片：绝对定位悬浮在正文之上，无实心背景/隔层——正文向上滚时从卡片下方穿过 */
   .composer-wrap { position: absolute; left: 0; right: var(--sb-w, 0px); bottom: 0; z-index: 5;
     padding: 6px 8px max(10px, var(--sab)); background: transparent; pointer-events: none; }
@@ -2238,7 +2416,22 @@
   .drawer.open { transform: none; visibility: visible; transition: transform .26s cubic-bezier(.22,1,.36,1), background-color .25s ease, visibility 0s linear 0s; box-shadow: 0 0 40px rgba(0,0,0,.3); }
   /* 字标行：官方标题栏里字标垂直居中、高 14px；这里给 44px 行高（与原 21px 衬线文字的占位持平），
      下留 2px 让字标视觉上略高于几何中线。颜色 = 官方 text-primary。 */
-  .brand { display: flex; align-items: center; flex: none; height: 44px; padding: 0 10px 2px; color: var(--text); }
+  /* 吸顶（11-08）：侧栏展开时开关（SidebarToggle）就坐在这一行右端，列表滚上去这一行不能跟着走。
+     负 margin + 等量 padding 把行盒向上、向两侧撑满侧栏内边距（字标位置不变），吸顶后底色盖住从下面
+     滚过的行；top 写负的顶内边距——Chromium 的 sticky 约束框扣掉了滚动容器自己的 padding（同 .d-foot）。 */
+  .brand { position: sticky; top: calc(-1 * max(10px, var(--sat))); z-index: 3;
+    display: flex; align-items: center; flex: none; height: calc(44px + max(10px, var(--sat)));
+    margin: calc(-1 * max(10px, var(--sat))) -8px 0; padding: max(10px, var(--sat)) 18px 2px;
+    background: var(--bg); transition: background-color .25s ease; color: var(--text); }
+  /* 行下沿一条 12px 渐隐：列表滚上来时从字标行底下柔和地化掉、不是一刀切。只在【已经滚动】时浮现
+     （侧栏自己的 scroll() 时间线，滚满 24px 到全显）——没滚时它会压淡「主页」那行的悬停底上沿。
+     不支持滚动驱动动画的环境保持透明＝原来的硬边。 */
+  .brand::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 12px; pointer-events: none;
+    background: linear-gradient(to bottom, var(--bg), color-mix(in srgb, var(--bg) 0%, transparent)); opacity: 0; }
+  @supports (animation-timeline: scroll()) {
+    .brand::after { animation: brandFade linear both; animation-timeline: scroll(nearest block); animation-range: 0 24px; }
+  }
+  @keyframes brandFade { to { opacity: 1; } }
   /* 桌面壳 WCO：字标行整行划进窗口拖拽区（维护者 09-23：顶部可拖范围太窄、不明显）。DesktopChrome 那条
      全局 `html[data-wco] .brand{no-drag}` 是给主页可点的 BrandTitle 打的洞，这里的字标只是一枚 img，
      不可点——作用域类多一级优先级压过它。字标行（drawer 顶 10 + 44 = 54px）比 40px 标题栏带更深，
@@ -2264,6 +2457,11 @@
   /* 临时对话快到清理：行尾一枚「n 天」，悬停时让位给 ⋮ */
   .d-exp { flex: none; margin-left: auto; padding: 0 4px 0 6px; font-size: 12px; color: var(--warn); font-variant-numeric: tabular-nums; transition: opacity .12s ease; }
   @media (hover: hover) { .d-row:hover .d-exp, .d-row:focus-within .d-exp { opacity: 0; } }
+  /* 项目对话：标题前的项目字形（跟标题同色、略淡）；讨论串在等你：行尾琥珀点（同侧栏「等人」那枚的颜色），悬停时让位给 ⋮ */
+  .d-pj { flex: none; width: 15px; height: 15px; margin-right: -2px; color: var(--muted); }
+  .d-row.cur .d-pj { color: var(--text); }
+  .d-pwait { flex: none; width: 7px; height: 7px; margin: 0 6px 0 auto; border-radius: 50%; background: var(--warn); transition: opacity .12s ease; }
+  @media (hover: hover) { .d-row:hover .d-pwait, .d-row:focus-within .d-pwait { opacity: 0; } }
   /* 临时对话回收站弹窗 */
   .binmodal { max-height: min(560px, calc(100vh - 80px)); }
   .bin-list { flex: 1; min-height: 0; overflow-y: auto; margin: 6px -6px 0; }

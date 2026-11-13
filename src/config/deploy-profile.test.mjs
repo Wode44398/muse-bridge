@@ -37,7 +37,7 @@ test('维护者这台（Windows 源码直跑、老 config、显式开了多用�
   assert.equal(r.profile, 'desktop');
   assert.equal(r.legacy, true);
   assert.equal(r.listenHost, '0.0.0.0');
-  assert.equal(r.claudeInChromeDefault, true);
+  assert.equal(r.claudeInChromeDefault, false, 'Claude in Chrome 一律默认关（用户浏览器走 Web Bridge）');
   assert.equal(r.audience, 'shared');
   assert.equal(r.multiUserDefault, false, '默认值仍是 Windows 的老默认，显式 features.multiUser 由 config/index.mjs 套用');
   assert.equal(r.keepAwake, 'windows');
@@ -62,7 +62,7 @@ test('老部署（没有 defaultsVersion）：多用户与监听地址按 S1-7 �
   const desk = resolveDeployProfile({ env: { BRIDGE_SUPERVISED: 'desktop', BRIDGE_HOST: '0.0.0.0' }, platform: 'win32', config: {} });
   assert.equal(desk.profile, 'desktop');
   assert.equal(desk.multiUserDefault, false);
-  assert.equal(desk.claudeInChromeDefault, true);
+  assert.equal(desk.claudeInChromeDefault, false);
   // 老配置写过 edition:"host"
   assert.equal(resolveDeployProfile({ env: {}, platform: 'linux', config: { edition: 'host' } }).multiUserDefault, false);
 });
@@ -81,7 +81,7 @@ test('新部署（defaultsVersion 2）：按形态——默认只给我自己；
   assert.equal(linuxDesk.profile, 'desktop');
   assert.equal(linuxDesk.multiUserDefault, false, 'Linux 桌面上的单人主机不再默认开注册');
   assert.equal(linuxDesk.listenHost, '0.0.0.0');
-  assert.equal(linuxDesk.claudeInChromeDefault, false, 'Claude in Chrome 只在 Windows 桌面默认开');
+  assert.equal(linuxDesk.claudeInChromeDefault, false);
   const mac = resolveDeployProfile({ env: {}, platform: 'darwin', config: NEW });
   assert.equal(mac.multiUserDefault, false);
   assert.equal(mac.keepAwake, 'none');

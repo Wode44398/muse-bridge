@@ -209,16 +209,19 @@ export function protectedStateViolation(abs: string): string | null {
 
 // S4（#37）：Read、Grep/Glob 遍历、Browser file://、Bash 命令行共用的凭据判定；null = 放行。
 // root 给出时，工作区之内只按名字判：项目自己的 .pem 夹具、.claude/ 项目配置照常可用。
-export function readVerdict(abs: string, root?: string): string | null {
+// opts.bypass（管理员 bypass 档）：跳过全部凭据/密钥守卫——但租户禁区永远先判，bypass 也绕不过
+// （它是管理员专用档，租户模式下根本进不到，这里的禁区判定是额外的一道保护同机其他用户的兜底）。
+export function readVerdict(abs: string, root?: string, opts: { bypass?: boolean } = {}): string | null {
   const p = path.resolve(abs);
+  // 租户模式的额外禁区（bridge 数据根、程序目录、别人的用户目录……；自己的根除外），见 tenant.ts。
+  // 给他的技能目录（自己添加的 + 全服的，都在 bridge 数据根里）照常可读——写由调用方另拦。
+  if (insideDeniedRoot(p) && !insideGrantedSkillDir(p)) return "Blocked: this location belongs to the host or to another user";
+  if (opts.bypass) return null; // 完全 bypass：凭据/密钥守卫全部跳过（整机全权）
   if (secretByName(p)) return "Blocked by secret guard";
   if (isExtensionRegistryPath(p)) return "Blocked by secret guard (the extension registry holds connector credentials)";
   if (isBridgeConfigPath(p)) return "Blocked by secret guard (the bridge config holds its tokens and keys)";
   if (isCustomProviderStorePath(p)) return "Blocked by secret guard (dimensio's custom model services hold encrypted API keys)";
   if (isDesktopHostFile(p)) return "Blocked by secret guard (the desktop host descriptor carries the browser broker's secret)";
-  // 租户模式的额外禁区（bridge 数据根、程序目录、别人的用户目录……；自己的根除外），见 tenant.ts。
-  // 给他的技能目录（自己添加的 + 全服的，都在 bridge 数据根里）照常可读——写由调用方另拦。
-  if (insideDeniedRoot(p) && !insideGrantedSkillDir(p)) return "Blocked: this location belongs to the host or to another user";
   if (root && isInside(path.resolve(root), p)) return null;
   if (isKeyMaterialPath(p)) return "Blocked by secret guard (key material outside the workspace)";
   const dot = homeDotEntry(p);
@@ -238,7 +241,12 @@ const PROTECTED_WRITE_RE = /(^|[/\\])[^/\\]*\.git([/\\]|$)/i;
 //   "full"      — Claude-Code-like: root is the primary working directory, but
 //                 absolute paths anywhere on the machine are allowed. The
 //                 secret guard and .git write-protection still apply globally.
-export type SandboxAccess = "workspace" | "full";
+//   "bypass"    — admin bypass level: whole-machine reach AND the secret guard +
+//                 .git write-protection are OFF. Only the tenant deny-roots (other
+//                 users / the host) and dimensio's own session-store integrity
+//                 (protectedStateViolation) still hold. Driven by permissionMode
+//                 "bypass"; effective only outside tenant mode (see `bypassing`).
+export type SandboxAccess = "workspace" | "full" | "bypass";
 
 export class SandboxError extends Error {
   // P13（X18）：纯粹因为「工作区外」被拒（不是凭据、不是别名 / 链接这类）时带上落点——loop 据此问人要不要放行这次读
@@ -269,6 +277,12 @@ export class Sandbox {
   constructor(root: string, access: SandboxAccess = "workspace") {
     this.root = path.resolve(root);
     this.access = access;
+  }
+
+  // 完全 bypass 是否当真生效：只认非租户实例（管理员）。租户模式下即便 access 被设成 "bypass"
+  // 也当没设——bypass 是管理员专用档，这一条是防御性兜底，确保它永远绕不过租户隔离。
+  get bypassing(): boolean {
+    return this.access === "bypass" && !tenantMode();
   }
 
   // R10（二）：工作区之外、只许读的目录——会话自己的压缩归档（Context Recovery）。只放本会话那一个目录，不放会话存储
@@ -331,15 +345,17 @@ export class Sandbox {
     // 工作区本身在映射网络盘上时，realpath 出来的就是 UNC——那是它的真身，不算别名。
     const alias = via && UNC_RE.test(root) ? null : rawPathViolation(abs);
     if (alias) throw new SandboxError(`${alias}: ${p}${via}`);
+    const bypass = this.bypassing; // 管理员 bypass：跳过边界 / 密钥守卫 / .git 写保护；租户锁与会话库写保护照旧
     const rel = path.relative(root, abs);
     const outside =
       rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel);
     // S4：凭据判定先于边界判定（名字 / 注册表 / bridge 配置 / 工作区外的密钥件与家目录点目录），
     // 这样模型拿到的是「密钥守卫」而不是「越界」，不会转头去切整机模式重试。
-    const verdict = readVerdict(abs, root);
+    const verdict = readVerdict(abs, root, { bypass });
     if (verdict) throw new SandboxError(`${verdict}: ${p}${via}`);
     // 访问范围锁（租户模式恒 workspace，见 tenant.ts）在这里现读：this.access 被谁改成 full 都不算数。
-    if (outside && (accessLock() ?? this.access) !== "full") {
+    // bypass（非租户）等同整机，放行一切绝对路径。
+    if (outside && !bypass && (accessLock() ?? this.access) !== "full") {
       // 勾给 dimensio 的技能目录在 workspace 模式下有【只读】豁免（S3：只到各技能自己的
       // 目录，不再是整个扩展根）：SKILL.md/脚本要能 Read/Grep，但写入仍然只许 full access。
       // 用户显式开的只读目录同理：读放行、写照旧拒绝。会话自己的压缩归档（R10 二）也是。
@@ -356,9 +372,10 @@ export class Sandbox {
     // The probe string the write guard runs against: rooted-relative inside the
     // workspace, the absolute path outside it (full mode only).
     const probe = outside ? abs : "/" + rel.split(path.sep).join("/");
-    if (opts.forWrite && PROTECTED_WRITE_RE.test(probe)) {
+    if (opts.forWrite && !bypass && PROTECTED_WRITE_RE.test(probe)) {
       throw new SandboxError(`Refusing to write inside a protected path: ${p}${via}`);
     }
+    // dimensio 自身的会话库 / 影子仓库 / 桌面宿主描述：bypass 也不许写坏（会当场搞挂正在跑的 harness）。
     const state = opts.forWrite ? protectedStateViolation(abs) : null;
     if (state) throw new SandboxError(`${state}: ${p}${via}`);
   }

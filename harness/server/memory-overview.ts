@@ -1,8 +1,9 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import {
-  GLOBAL_MEMORY,
+  globalMemoryFor,
   GLOBAL_PROMPT_BUDGET,
+  isGlobalMemory,
   listMemories,
   memoryDir,
   renderGlobalMemoryForPrompt,
@@ -87,7 +88,7 @@ function bucketFor(root: string, head: Omit<MemoryBucket, "items" | "promptChars
     const u = usage[m.id];
     return u ? { ...m, uses: u.n, firstUsed: u.first, lastUsed: u.last } : m;
   });
-  const prompt = root === GLOBAL_MEMORY ? renderGlobalMemoryForPrompt() : renderMemoryForPrompt(root);
+  const prompt = isGlobalMemory(root) ? renderGlobalMemoryForPrompt(root) : renderMemoryForPrompt(root);
   return { ...head, items, promptChars: prompt?.length ?? 0, history: historyOf(root) };
 }
 
@@ -109,7 +110,10 @@ export function buildMemoryOverview(opts: {
   const current = opts.currentWs ? fold(opts.currentWs) : "";
   const buckets: MemoryBucket[] = [];
 
-  if (hasNotes(GLOBAL_MEMORY)) buckets.push(bucketFor(GLOBAL_MEMORY, { kind: "global", ws: GLOBAL_WS, name: "全局" }));
+  // 全局层：正式服是唯一那份。评测隔离（DIMENSIO_GLOBAL_MEMORY_SCOPE=workspace）开着时全局层按工作区各一份，面板没有
+  // 「哪个工作区」的上下文——降级成只给当前工作空间那份（与 /api/memory?layer=global 不带 workspace 时同一份），别的工作区的不列
+  const globalRoot = globalMemoryFor(opts.currentWs);
+  if (hasNotes(globalRoot)) buckets.push(bucketFor(globalRoot, { kind: "global", ws: GLOBAL_WS, name: "全局" }));
 
   let emptyProjects = 0;
   const seen = new Set<string>();

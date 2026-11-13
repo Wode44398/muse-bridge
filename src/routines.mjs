@@ -17,10 +17,24 @@ const SESSION_MODES = new Set(['new', 'continue']);
 export const RUNS_KEPT = 30;   // 每条任务留最近多少次运行记录
 const fileIn = (dir) => path.join(dir, 'routines.json');
 
+// Gemini 对话 2026-11-04 下线：残留的 Gemini 引擎任务（agent 'vertex'）读到时停用并写明原因，不删（维护者：数据别动）
+export const GEMINI_ROUTINE_NOTE = 'Gemini 对话已下线，这条用 Gemini 跑的定时任务已停用；要接着用，请编辑它改用 Claude。';
+function retireGemini(list) {
+  let changed = false;
+  for (const r of list) {
+    if (!r || r.agent !== 'vertex' || r.retired === 'gemini') continue;
+    Object.assign(r, { enabled: false, nextRun: null, retired: 'gemini', lastStatus: 'error', lastPreview: GEMINI_ROUTINE_NOTE });
+    changed = true;
+  }
+  return changed;
+}
 function load(dir) {
   const f = fileIn(dir);
   if (!existsSync(f)) return [];
-  try { const v = JSON.parse(readFileSync(f, 'utf8')); return Array.isArray(v) ? v : []; } catch { return []; }
+  let list;
+  try { const v = JSON.parse(readFileSync(f, 'utf8')); list = Array.isArray(v) ? v : []; } catch { return []; }
+  if (retireGemini(list)) { try { persist(dir, list); } catch {} }
+  return list;
 }
 function persist(dir, list) {
   writeJson(fileIn(dir), list, 2); // atomic; ensures dir; pretty-printed
@@ -37,8 +51,9 @@ function settingsFields(input, base = {}) {
   if ('fast' in input) out.fast = input.fast === true;
   if ('sessionMode' in input) out.sessionMode = SESSION_MODES.has(input.sessionMode) ? input.sessionMode : 'new';
   if ('notify' in input) out.notify = input.notify === true;
-  // 换了工作文件夹 / worktree 开关 / 改回每次新会话：接着用的那个会话作废，下次重新开
-  if (('cwd' in out && out.cwd !== (base.cwd || null)) || out.sessionMode === 'new' || ('worktree' in out && out.worktree !== !!base.worktree)) out.threadSessionId = null;
+  if ('shape' in input) out.shape = input.shape === 'project' ? 'project' : null;   // 以项目对话运行（runtime/project-mode.mjs）
+  // 换了工作文件夹 / worktree 开关 / 项目形态 / 改回每次新会话：接着用的那个会话作废，下次重新开
+  if (('cwd' in out && out.cwd !== (base.cwd || null)) || out.sessionMode === 'new' || ('worktree' in out && out.worktree !== !!base.worktree) || ('shape' in out && out.shape !== (base.shape || null))) out.threadSessionId = null;
   return out;
 }
 
@@ -55,17 +70,15 @@ export function create(dir, input = {}) {
     name: String(name || '').trim().slice(0, 120) || '未命名任务',
     description: '',
     prompt: String(prompt || ''),
-    // Engine: which agent runs this routine + its model/effort. agent 'vertex' ->
-    // Gemini via Vertex; anything else (incl. legacy routines with no agent) -> Claude.
-    // model/effort are validated against the per-agent whitelists in the route; null
-    // here means "use the server default".
-    agent: agent === 'vertex' ? 'vertex' : 'claude',
+    // Engine: 只剩 Claude（Gemini 引擎 2026-11-04 随 Gemini 对话下线）。model/effort are validated
+    // against the whitelists in the route; null here means "use the server default".
+    agent: 'claude',
     model: model ? String(model) : null,
     effort: effort ? String(effort) : null,
     search: !!search,
     // Code 侧：工作文件夹（null = 身份的默认工作空间）、每次开新 worktree（branch = 从哪个分支切，null = 按设置）、
     // 权限模式（null = 跟设置默认）、Fast、会话方式（new 每次新会话 / continue 接着上次那个会话）、跑完通知。
-    cwd: null, worktree: false, branch: null, permissionMode: null, fast: false, sessionMode: 'new', notify: false,
+    cwd: null, worktree: false, branch: null, permissionMode: null, fast: false, sessionMode: 'new', notify: false, shape: null,
     schedule: sched,
     enabled: on,
     createdAt: Date.now(),
@@ -91,7 +104,8 @@ export function update(dir, id, patch = {}) {
   if (patch.prompt != null) r.prompt = String(patch.prompt);
   if (patch.schedule != null) r.schedule = normSchedule(patch.schedule);
   if (patch.enabled != null) r.enabled = !!patch.enabled;
-  if (patch.agent != null) r.agent = patch.agent === 'vertex' ? 'vertex' : 'claude';
+  // 引擎只剩 Claude：残留的 Gemini 任务被编辑时（改引擎 / 重新启用）一并转成 Claude，停用标记去掉
+  if (patch.agent != null || (patch.enabled === true && r.agent === 'vertex')) { r.agent = 'claude'; delete r.retired; }
   if ('model' in patch) r.model = patch.model ? String(patch.model) : null;
   if ('effort' in patch) r.effort = patch.effort ? String(patch.effort) : null;
   if (patch.search != null) r.search = !!patch.search;

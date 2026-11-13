@@ -5,7 +5,7 @@
 import type { IconName } from "./icons.ts";
 import { t } from "./i18n.ts";
 
-export type RunMode = "auto" | "read-only" | "plan";
+export type RunMode = "auto" | "read-only" | "plan" | "bypass";
 
 export interface ModeChipInput {
   mode: RunMode;
@@ -15,11 +15,13 @@ export interface ModeChipInput {
   goal: boolean; // 输入框里这条要作为目标发出
 }
 
-export const MODE_LABEL: Record<RunMode, string> = { auto: t("自主"), "read-only": t("只读"), plan: t("计划") };
-const MODE_ICON: Record<RunMode, IconName> = { auto: "shield", "read-only": "eye", plan: "todo" };
+export const MODE_LABEL: Record<RunMode, string> = { auto: t("自主"), "read-only": t("只读"), plan: t("计划"), bypass: t("全权") };
+const MODE_ICON: Record<RunMode, IconName> = { auto: "shield", "read-only": "eye", plan: "todo", bypass: "bolt" };
 
 export function modeChip(i: ModeChipInput): { text: string; alt: boolean; icon: IconName } {
-  const fenced = i.access === "workspace";
+  // bypass 是整机 + 跳过全部闸门：访问范围无从谈起，胶囊只写「全权」并亮起。
+  const bypass = i.mode === "bypass";
+  const fenced = !bypass && i.access === "workspace";
   const roots = fenced ? i.roots : 0;
   const parts = [
     MODE_LABEL[i.mode],

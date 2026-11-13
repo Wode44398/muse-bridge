@@ -53,7 +53,7 @@ export function createAuth(token, noAuth, { tokenHash = '', isAdminSession = nul
   // ?token= 只对这些 GET 资源路径生效——<img>/<video>/下载链接加不了 Authorization 头、
   // 跨源也不带 cookie，离线壳只能用查询参数携带。之前全路由都收 ?token=，admin 令牌
   // 会随手散进 cloudflare 访问日志/浏览器历史/Referer；收敛到真正需要的白名单。
-  const QTOKEN_PATHS = ['/api/vertex/media', '/api/app/download', '/api/file', '/api/upload/raw', '/api/codex/artifact', '/api/claude/artifact'];
+  const QTOKEN_PATHS = ['/api/vertex/media', '/api/app/download', '/api/file', '/api/upload/raw', '/api/codex/artifact', '/api/claude/artifact', '/api/tool-image'];
 
   // Raw query token only on the media/download allow-list above. identify()
   // also consumes this for ordinary user sessions; authOk uses it only for the

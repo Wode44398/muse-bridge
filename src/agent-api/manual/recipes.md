@@ -13,7 +13,7 @@
 1. `chat.send { message: "……做完把结果写进 notes/报告.md", wait: 300 }`——在 message 里写清产出放哪，Claude 自己会写文件。
 2. 没等到就循环 `chat.wait { sessionId }`，直到 `status: done`；`reply` 是最终回答，`files` 是它交付的文件。
 3. 要自己落盘：`files.write { path, content: reply }`。
-4. 要让用户马上看到：`ui.open { file: "notes/报告.md" }`（推进他的预览），或 `ui.notify { text: "报告写好了" }`。
+4. 要让用户马上看到：`ui.open { file: "notes/报告.md" }`（推进他的预览；要打开在某台手机上就加 `device`，取值见 `ui.view`），或 `ui.notify { text: "报告写好了" }`。以返回的 `confirmed` / `opened` 为准：`confirmed: false` 就是不确定用户看到了，别说已经打开。
 
 ## 「找我之前聊过某件事的那次对话 / 打开它」
 
@@ -29,17 +29,17 @@
 
 ## 「带我去某个页面」
 
-`ui.open { page }`：`claude`、`files`（工作空间）、`routines`（定时任务）、`settings`（可带 `section`，如 `devices`、`agentapi`、`account`）、`vertex`（带 `module`：`chat` / `image` / `video` / `voice` / `music`）、`chatgpt`、`dimensio`、`home`。用户只是问「在哪」时只指路，别直接跳；明确说「带我去 / 打开」才调。界面路径见各章。
+`ui.open { page }`：`claude`、`files`（工作空间）、`routines`（定时任务）、`settings`（可带 `section`，如 `devices`、`agentapi`、`account`）、`studio`（Media Studio，带 `module`：`image` / `video` / `voice` / `music`）、`chatgpt`、`dimensio`、`home`。用户只是问「在哪」时只指路，别直接跳；明确说「带我去 / 打开」才调。界面路径见各章。
 
 ## 「生成一张图 / 一段配音 / 视频 / 音乐」
 
-需要 Vertex 扩展且对这个身份开着（`whoami` 的 agents 里有 gemini）。
+需要 Media Studio 扩展且对这个身份开着（`whoami` 的 agents 里有 studio）。`model` 可传内置模型的裸 id，或 `<服务 id>/<模型 id>` 用这个人在 Studio 里接的任一服务；不传用 Studio 的默认模型。
 
 - 图片：`media.image { prompt, aspectRatio?, imageSize?, model?, saveTo? }`，几秒到几十秒；`saveTo: "images/"` 顺手复制进工作空间。
 - 语音：`media.speech { text, voice?, style? }`。
 - 视频（`media.video`）、音乐（`media.music`）按秒 / 按次计费、要一两分钟：用户没明确要时先确认。
-- 产物也会出现在 Vertex 分页对应模块的历史里；`url` 带同一把密钥可以下载。
-- 模型怎么选见 vertex 章。
+- 产物也会出现在 Media Studio 的作品流里；`url` 带同一把密钥可以下载。
+- 模型怎么选见 studio 章。
 
 ## 「每天 / 每周定时帮我做某事」
 

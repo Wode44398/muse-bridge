@@ -43,7 +43,7 @@ export async function startFromCard(ctx, req, id, { useWorktree, client } = {}) 
   const wt = typeof useWorktree === 'boolean' ? useWorktree : (typeof p.useWorktree === 'boolean' ? p.useWorktree : undefined);
   const r = await spawnChild(pctx, p.parent, {
     title: p.title, prompt: p.prompt, background: p.background, context: p.context,
-    model: p.model && CLAUDE_MODELS.has(p.model) ? p.model : undefined, name: p.name || undefined,
+    model: p.model && CLAUDE_MODELS.has(p.model) ? p.model : undefined, effort: p.effort || undefined, name: p.name || undefined,
     worktree: pctx.worktree || null, useWorktree: p.context === 'fork' ? undefined : wt, branchName: p.branchName || undefined,
     task: p.id, toolUseId: p.toolUseId, project,
   });

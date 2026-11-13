@@ -19,10 +19,12 @@
   let open = $state('');            // 展开了「权限」面板的那个用户
   let busy = $state(false);
 
-  const AGENT_LABEL = { claude: 'Claude', gemini: 'Gemini', codex: 'Codex', dimensio: 'dimensio' };
+  // 名单摘要用的显示名（勾选格本身按服务端的 agent 状态逐项渲染，跟着 AGENTS 走）。2026-11-04 Gemini 对话下线、Media Studio 接替。
+  const AGENT_LABEL = { claude: 'Claude', studio: 'Media Studio', codex: 'Codex', dimensio: 'dimensio' };
   // 某个 agent 对这个人实际生效没有：他被勾了 + 全局开着 + 支持多用户
   const agentState = (id) => sa.agentStatus.find((a) => a.id === id) || null;
-  const effective = (u) => (u.agents || []).filter((id) => { const a = agentState(id); return !a || (a.enabled && a.multiUser); });
+  // 状态表到了以后，表里没有的 id（已下线的 Gemini 这类残留权限）不算；表还没到时照名单显示
+  const effective = (u) => (u.agents || []).filter((id) => { const a = agentState(id); return a ? a.enabled && a.multiUser : !sa.agentStatus.length; });
 
   // 完全信任 = 等同管理员（L1 逻辑隔离下命令行没有可靠边界）：发码 / 建号 / 升档前都先说清楚再确认（服务端要 ack）。
   const FULL_WHAT = () => t('完全信任档有命令行、终端和浏览器，跑在服务端同一个系统账户下：能读到服务器上所有人的对话、文件和全部凭据（号池令牌、各家 API Key），等同管理员。只给你完全信任的人。');
@@ -272,7 +274,7 @@
       <div style="height:8px"></div>
     {/if}
   </div>
-  <div class="sa-foot">{t('普通（user）档没有命令行；能用哪些 agent 在「权限」里按人勾选（新账号默认 Claude + Gemini）。Codex 暂不支持多用户，只给管理员。邀请码一次性。')}<br />{t('邀请码 7 天内有效，没用的可以作废；完全信任的码要你确认后才发，默认只发普通档。删掉的账号 id 不再复用：同名的人重新注册拿不到旧人的任何东西。')}</div>
+  <div class="sa-foot">{t('普通（user）档没有命令行；能用哪些 agent 在「权限」里按人勾选（新账号默认 Claude + Media Studio）。Codex 暂不支持多用户，只给管理员。邀请码一次性。')}<br />{t('邀请码 7 天内有效，没用的可以作废；完全信任的码要你确认后才发，默认只发普通档。删掉的账号 id 不再复用：同名的人重新注册拿不到旧人的任何东西。')}</div>
 {:else}
   <div class="sa-foot">{t('这台主机没开多用户：注册与邀请码关闭，只有管理员（访问令牌 / 扫码）和服务账号能登录。')}</div>
 {/if}

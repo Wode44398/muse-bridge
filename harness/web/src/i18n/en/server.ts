@@ -429,4 +429,9 @@ export default {
   "稳定 · 可关思考": "Stable · Thinking optional",
   "本机 · 离线可用 · 视觉": "Local · Works offline · Vision",
   "本机 · 离线可用": "Local · Works offline",
+  "本机 · 离线可用 · 无审查": "Local · Works offline · Uncensored",
+  "本机 · 离线可用 · 无审查 · 视觉": "Local · Works offline · Uncensored · Vision",
+  "Strata · 官方 IQ3_S": "Strata · Official IQ3_S",
+  "Strata · Orca 无审查 IQ3_XXS": "Strata · Orca uncensored IQ3_XXS",
+  "Strata · NVIDIA NVFP4（QAD）": "Strata · NVIDIA NVFP4 (QAD)",
 };

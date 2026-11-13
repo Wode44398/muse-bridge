@@ -11,6 +11,8 @@
 //   （两头甩成 S）→ 月桥从水面重新升起（拱先、倒影慢半拍，冲过头再回落）→ 静一拍。线中心对称，转半圈与原样重合，
 //   所以每一周升起的都是正着的月桥。所有 live 标志按全局时钟同相——一屏几处同时在跑也是同一口气；
 //   中途开始的先就地走一遍，再在下一周期起点并进全局节拍；停下时从当前姿态用弹簧收回静止的月桥，不瞬断。
+// flip（点标志切明暗，约 1.35s）：live 的手势演一次、更利落，压平那一刻回调去换明暗（见 simFlip）。
+// 跟手（hover / press）：实时弹簧叠在以上任何姿态之上——悬停浮起并朝指针倾、按下收紧（见 Touch）。
 
 // ── 姿态通道 ─────────────────────────────────────────────────────────────────────────
 const OP = 0; // 整枚不透明度
@@ -253,8 +255,127 @@ function simSettle(x0: Float32Array, v0: Float32Array): Track {
   return tr;
 }
 
+// ── 翻面：点一下切明暗（与 live 同一个手势，一次、更利落）──────────────────────────────────
+// 月桥沉进水面（墨全流进线里）→ 线独自翻过半圈 → 月桥在新的明暗里重新升起。明暗就在压平的那一刻换：
+// 换的是整张纸的颜色，标志此刻只剩一根线，最不显眼；升起来的已经是新墨色。
+// 可以从任意姿态起（连点时从当前带速度的姿态接着沉，不回跳）。
+const FLIP_SWITCH_MS = 190; // 压平、换明暗的时刻
+const FLIP_MS = 1350;
+function simFlip(x0: Float32Array = new Float32Array(REST), v0: Float32Array = new Float32Array(NCH)): Track {
+  const tr = track(FLIP_MS);
+  const d = tr.data;
+  const r0 = x0[ROT] - 180 * Math.round(x0[ROT] / 180); // 线中心对称：角度按 180° 折到正位附近
+  const rot = new Spring(r0, 0, 1.8, 0.62);
+  rot.v = v0[ROT];
+  const archY = new Spring(x0[ARCH_Y], 0, 2.6, 0.55);
+  const reflY = new Spring(x0[REFL_Y], 0, 2.6, 0.55);
+  const len = new Spring(x0[LEN], 1, 3, 0.6);
+  len.v = v0[LEN];
+  const inr = inertia();
+  inr.bend.x = x0[BEND];
+  inr.bend.v = v0[BEND];
+  inr.lag.x = x0[LAG];
+  inr.lag.v = v0[LAG];
+  const sink = bezier(0.5, 0, 0.9, 0.45); // 越沉越快，砸进水面
+  const SINK = 180;
+  const a0 = Math.max(0, x0[ARCH_Y]);
+  const f0 = Math.max(0, x0[REFL_Y]);
+  for (let t = 0; t <= FLIP_MS; t++) {
+    if (t === 110) len.aim(1.16, 3.2, 0.5); // 墨流进线里：线变长
+    if (t === 170) rot.aim(180, 1.8, 0.74); // 线独自翻过半圈，过冲收在 5° 内（再大月桥就是歪着升起来的）
+    if (t === 480) {
+      rot.x -= 180; // 趁月桥还压平着把角度折回，升起来的是正的
+      rot.to -= 180;
+    }
+    if (t === 520) {
+      archY.aim(1);
+      len.aim(1, 2.4, 0.65);
+    }
+    if (t === 585) reflY.aim(1); // 倒影慢半拍
+    if (t > 0) {
+      rot.step();
+      inr.step(rot);
+      len.step();
+      archY.step();
+      reflY.step();
+    }
+    const held = (s: Spring, from: number, until: number) => {
+      if (t >= until) return;
+      s.x = t < SINK ? from * (1 - sink(t / SINK)) : 0;
+      s.v = 0;
+    };
+    held(archY, a0, 520);
+    held(reflY, f0, 585);
+    const o = t * NCH;
+    d.set(REST, o);
+    d[o + ROT] = rot.x;
+    d[o + ARCH_Y] = archY.x;
+    d[o + REFL_Y] = reflY.x;
+    d[o + LAG] = inr.lag.x;
+    d[o + LEN] = len.x;
+    d[o + THICK] = 1 + 0.22 * (1 - Math.min(1, Math.max(0, archY.x))); // 吃进了墨：变粗
+    d[o + BEND] = inr.bend.x;
+  }
+  d.set(REST, FLIP_MS * NCH);
+  return tr;
+}
+
+// ── 跟手：悬停与按下（实时弹簧，叠在当前姿态之上）────────────────────────────────────────
+// 悬停：月桥微微浮起（拱高一点、倒影短一点）、水面线舒展；整枚朝指针那侧倾几度——像指针有分量，
+//   压在哪头哪头就沉；倾角的角加速度照样经 inertia 把线甩成浅 S、让倒影慢半拍。
+// 按下：整枚收紧、墨挤进线里（线短而粗）；松开带回弹。
+const LEAN = 7; // 指针在边缘时的最大倾角（度）
+class Touch {
+  rot = new Spring(0, 0, 2.2, 0.5);
+  sc = new Spring(1, 1, 3.2, 0.5);
+  len = new Spring(1, 1, 2.6, 0.5);
+  thick = new Spring(1, 1, 3.2, 0.55);
+  arch = new Spring(1, 1, 2.6, 0.5);
+  refl = new Spring(1, 1, 2.2, 0.55);
+  inr = inertia();
+  over = false;
+  down = false;
+  lean = 0;
+  last = 0;
+  aim() {
+    const h = this.over;
+    const p = this.down;
+    this.rot.aim(h && !p ? this.lean * LEAN : 0);
+    this.sc.aim(p ? 0.9 : h ? 1.05 : 1, p ? 5 : 3.2, p ? 0.75 : 0.45);
+    this.len.aim(p ? 0.9 : h ? 1.1 : 1);
+    this.thick.aim(p ? 1.25 : 1);
+    this.arch.aim(p ? 0.82 : h ? 1.07 : 1);
+    this.refl.aim(p ? 0.7 : h ? 0.9 : 1);
+  }
+  // 推进到 now；返回 false = 已静止回原样（不用再叠）
+  step(now: number): boolean {
+    const n = Math.min(48, Math.max(0, Math.round(now - this.last)));
+    this.last += n;
+    if (now - this.last > 48) this.last = now; // 后台标签页回来：别补跑几秒的物理
+    const sp = [this.rot, this.sc, this.len, this.thick, this.arch, this.refl];
+    for (let i = 0; i < n; i++) {
+      for (const s of sp) s.step();
+      this.inr.step(this.rot);
+    }
+    if (this.over || this.down) return true;
+    const calm = (s: Spring) => Math.abs(s.x - s.to) < 2e-4 && Math.abs(s.v) < 4e-3;
+    return !(sp.every(calm) && Math.abs(this.inr.bend.x) < 2e-4 && Math.abs(this.inr.bend.v) < 4e-3 && Math.abs(this.inr.lag.x) < 2e-3);
+  }
+  apply(p: Float32Array) {
+    p[ROT] += this.rot.x;
+    p[S] *= this.sc.x;
+    p[LEN] *= this.len.x;
+    p[THICK] *= this.thick.x;
+    p[ARCH_Y] *= this.arch.x;
+    p[REFL_Y] *= this.refl.x;
+    p[BEND] += this.inr.bend.x;
+    p[LAG] += this.inr.lag.x;
+  }
+}
+
 let INTRO: Track | null = null;
 let LIVE: Track | null = null;
+let FLIP: Track | null = null;
 
 // 线性插值取第 ms 毫秒的姿态
 function sample(tr: Track, ms: number, out: Float32Array) {
@@ -384,6 +505,10 @@ export class MarkMotion {
   private localAt = 0; // 中途开始时就地走的起点
   private syncAt = 0; // 从这一刻起并进全局节拍
   private ticking = false;
+  private touch: Touch | null = null; // 跟手层（悬停 / 按下）；没交互过就是 null
+  private touching = false; // 跟手层还没静下来
+  private flipping = false; // 正在播的一次性动作是翻面
+  private onSwitch: (() => void) | null = null; // 翻面压平那一刻要做的事（切明暗）
 
   private job: Job = (now) => this.frame(now);
 
@@ -396,6 +521,8 @@ export class MarkMotion {
   intro() {
     if (reducedMotion()) return;
     INTRO ??= simIntro();
+    this.fireSwitch();
+    this.flipping = false;
     this.once = INTRO;
     this.onceAt = performance.now();
     sample(INTRO, 0, this.cur);
@@ -429,10 +556,70 @@ export class MarkMotion {
     }
   }
 
+  // 悬停：on = 指针在上面；x = 指针相对标志中心的横向位置（-1 左缘 … 1 右缘）
+  hover(on: boolean, x = 0) {
+    if (reducedMotion()) return;
+    const tc = this.wake();
+    tc.over = on;
+    tc.lean = on ? Math.max(-1, Math.min(1, x)) : 0;
+    tc.aim();
+  }
+
+  press(on: boolean) {
+    if (reducedMotion()) return;
+    const tc = this.wake();
+    tc.down = on;
+    tc.aim();
+  }
+
+  // 翻面：沉下 → 线翻半圈 → 升起；压平那一刻调 onSwitch。出场还在播 / 减弱动效时不演，onSwitch 立即调。
+  flip(onSwitch: () => void) {
+    if (reducedMotion() || !this.els || (this.once && !this.flipping)) {
+      onSwitch();
+      return;
+    }
+    this.fireSwitch(); // 上一次还没到压平就又点了：先把它欠的那次切换补上
+    const now = performance.now();
+    if (this.flipping && this.once) {
+      // 连点：从当前姿态（带速度）接着沉，不回跳
+      const t = now - this.onceAt;
+      const x0 = new Float32Array(NCH);
+      const x1 = new Float32Array(NCH);
+      const x2 = new Float32Array(NCH);
+      sample(this.once, t, x0);
+      sample(this.once, t - 1, x1);
+      sample(this.once, t + 1, x2);
+      this.once = simFlip(x0, x2.map((b, c) => (b - x1[c]) * 500));
+    } else {
+      FLIP ??= simFlip();
+      this.once = FLIP;
+    }
+    this.live = false;
+    this.flipping = true;
+    this.onSwitch = onSwitch;
+    this.onceAt = now;
+    this.tick();
+  }
+
   destroy() {
     jobs.delete(this.job);
     this.ticking = false;
     this.els = null;
+    this.fireSwitch(); // 翻到一半被卸载：切换照样完成
+  }
+
+  private fireSwitch() {
+    const f = this.onSwitch;
+    this.onSwitch = null;
+    f?.();
+  }
+
+  private wake(): Touch {
+    const tc = (this.touch ??= new Touch());
+    if (!this.touching) tc.last = performance.now();
+    this.touching = true;
+    this.tick();
+    return tc;
   }
 
   private join(now: number) {
@@ -461,26 +648,35 @@ export class MarkMotion {
     schedule(this.job);
   }
 
+  // 每帧：底层姿态（一次性动作 / live / 静止）+ 跟手层叠上去；都没有了就回到逐数原样
   private frame(now: number): boolean {
     if (!this.els) return (this.ticking = false);
+    let base = false;
     if (this.once) {
       const t = now - this.onceAt;
+      if (this.flipping && this.onSwitch && t >= FLIP_SWITCH_MS) this.fireSwitch();
       if (t >= this.once.n) {
         this.once = null;
-        this.rest();
+        this.flipping = false;
         if (this.want && !this.live && !reducedMotion()) this.join(now);
-        return (this.ticking = this.live);
+      } else {
+        sample(this.once, t, this.cur);
+        base = true;
       }
-      sample(this.once, t, this.cur);
-      this.paint(this.cur);
-      return true;
     }
-    if (this.live) {
+    if (!base && this.live) {
       sample(LIVE!, this.livePhase(now), this.cur);
-      this.paint(this.cur);
-      return true;
+      base = true;
     }
-    return (this.ticking = false);
+    if (this.touching && this.touch && !this.touch.step(now)) this.touching = false;
+    if (!base && !this.touching) {
+      if (this.posed) this.rest();
+      return (this.ticking = false);
+    }
+    if (!base) this.cur.set(REST);
+    if (this.touching) this.touch!.apply(this.cur);
+    this.paint(this.cur);
+    return true;
   }
 
   private paint(p: Float32Array) {

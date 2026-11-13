@@ -16,19 +16,21 @@ test('只开 dimensio = dimensio 页当根页', () => {
 
 test('开了两个及以上 = 主页（Claude + dimensio 同开时与原先一致）', () => {
   assert.equal(pickRootScreen(['claude', 'dimensio']), 'home');
-  assert.equal(pickRootScreen(['claude', 'gemini']), 'home');
+  assert.equal(pickRootScreen(['claude', 'studio']), 'home');
   assert.equal(pickRootScreen(['dimensio', 'codex']), 'home');
-  assert.equal(pickRootScreen(['claude', 'gemini', 'codex', 'dimensio']), 'home');
+  assert.equal(pickRootScreen(['claude', 'studio', 'codex', 'dimensio']), 'home');
 });
 
-test('只剩没做根页外壳的分页（Gemini / Codex）= 仍走主页', () => {
-  assert.equal(pickRootScreen(['gemini']), 'home');
+test('只剩没做根页外壳的分页（Media Studio / Codex）= 仍走主页', () => {
+  assert.equal(pickRootScreen(['studio']), 'home');
   assert.equal(pickRootScreen(['codex']), 'home');
 });
 
 test('一个都没开 / 只有不认识的 id = 主页；不认识的 id 不影响判定', () => {
   assert.equal(pickRootScreen([]), 'home');
   assert.equal(pickRootScreen(['antigravity', '__proto__', 'toString']), 'home');
+  // 已下线的 gemini（旧名单里残留）不算一个分页：只开着它和 Claude ＝ Claude 当根页
+  assert.equal(pickRootScreen(['claude', 'gemini']), 'claude');
   assert.equal(pickRootScreen(['dimensio', 'antigravity', 'constructor']), 'harness');
   assert.equal(pickRootScreen(['dimensio', 'dimensio']), 'harness');
 });

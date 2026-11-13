@@ -1,7 +1,7 @@
 // 扩展页「连接器」的状态与工具清单（官方 Customize › Connectors 同款控制面板的数据源）。
 // 没有会话也要知道「连上没有、有哪些工具」：起一个只挂这些远程连接器的短命 CLI（spawnAuthQuery only 模式，
 // 不带插件、不读用户 / 项目 / claude.ai 的 MCP），等它们不再 pending，读一次 mcpServerStatus 就收掉。
-// 按身份缓存 1 分钟；授权完成（流程结局里带着最新状态与工具）直接写进缓存，不用再探。
+// 按身份缓存 1 分钟（有失败的只缓存 10 秒）；授权完成（流程结局里带着最新状态与工具）直接写进缓存，不用再探。
 // 断开连接 = 删掉 CLI 存在这个身份 CLAUDE_CONFIG_DIR/.credentials.json 里的 mcpOAuth 令牌（键 `服务名|配置哈希`）。
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -12,6 +12,7 @@ import { humanMcpError } from './mcp-oauth.mjs';
 import { claudeEngineEnv } from './claude-account.mjs';
 
 const TTL_MS = 60_000;
+const FAILED_TTL_MS = 10_000;
 const SETTLE_MS = 15_000;    // 远程服务握手 + 拉工具清单，最多等这么久
 const cache = new Map();     // 身份 key → { at, map: { [连接器 id]: 状态 } }
 const inflight = new Map();  // 身份 key → Promise（同一身份同时只探一次）
@@ -56,12 +57,19 @@ export async function probeConnectors(ctx, list, { force = false } = {}) {
   if (!list.length) return {};
   const key = ctx.key;
   const c = cache.get(key);
-  if (!force && c && Date.now() - c.at < TTL_MS && list.every((x) => c.map[x.id])) return pick(c.map, list);
+  // 有连接失败的就只缓存 10 秒：本机服务（编辑器、dev server）随时会被打开，别让「连接失败」挂满一分钟
+  const ttl = c && list.some((x) => c.map[x.id]?.status === 'failed') ? FAILED_TTL_MS : TTL_MS;
+  if (!force && c && Date.now() - c.at < ttl && list.every((x) => c.map[x.id])) return pick(c.map, list);
   if (inflight.has(key)) return pick(await inflight.get(key), list);
   const job = (async () => {
     const st = await rawStatus(ctx, Object.fromEntries(list.map((x) => [x.server, x.config])));
     const map = { ...(cache.get(key)?.map || {}) };
-    for (const x of list) map[x.id] = { ...slimStatus(st.find((s) => s && s.name === x.server)), oauth: hasMcpTokens(ctx, x.server) };
+    for (const x of list) {
+      const s = slimStatus(st.find((s) => s && s.name === x.server));
+      // 指向本机地址的连接器连不上 = 那个程序没开，不是故障：前端显示「未运行」而不是红字
+      if (s.status === 'failed' && isLoopbackUrl(x.config && x.config.url)) s.offline = true;
+      map[x.id] = { ...s, oauth: hasMcpTokens(ctx, x.server) };
+    }
     cache.set(key, { at: Date.now(), map });
     return map;
   })();
@@ -83,6 +91,10 @@ export async function rawStatus(ctx, only) {
     }
     return st;
   } finally { release(); }
+}
+export function isLoopbackUrl(u) {
+  try { const h = new URL(String(u || '')).hostname.replace(/^\[|\]$/g, '').toLowerCase(); return h === 'localhost' || h.endsWith('.localhost') || h === '::1' || /^127\./.test(h); }
+  catch { return false; }
 }
 const pick = (map, list) => Object.fromEntries(list.map((x) => [x.id, map[x.id] || { status: 'unknown' }]));
 

@@ -26,6 +26,9 @@
   import WorkflowCard from "./WorkflowCard.svelte";
   import { usePane } from "../../lib/pane.ts";
   import { t, tr } from "../../lib/i18n.ts";
+  import Icon from "../ui/Icon.svelte";
+  import { isSessionTool, toolSessionTarget } from "../../lib/session-family.ts";
+  import { family, openFamilySession } from "../../lib/session-family.svelte.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
@@ -38,6 +41,8 @@
   }: { item: ToolItem; inGroup?: boolean; compact?: boolean; up?: boolean; down?: boolean } = $props();
 
   const meta = $derived(toolMeta(item.name));
+  // 会话协作：StartSession 开出来的会话、SendMessage / ReadSession 的对象——结果行下面给一个能点的会话名
+  const famRef = $derived(isSessionTool(item.name) ? toolSessionTarget(item, pane.chat.id, family) : null);
   // U8（E4）：展开后摆的执行事实（只在展开时算）
   const preview = $derived(item.open ? toolPreview(item.name, item.args) : null);
   // 第二行的结果：服务端给的是英文摘要的（待办的「todos: 1/3 done」）在这里说成中文
@@ -174,6 +179,14 @@
       <div class="outcome pulse">{pulse}</div>
     {/if}
 
+    {#if famRef}
+      <button class="famref" title={t("打开这个会话")} onclick={() => void openFamilySession(famRef.id, famRef.agent)}>
+        <Icon name="link" size={12} />
+        <span class="famref-t">{famRef.title || famRef.id.slice(0, 8)}</span>
+        {#if famRef.agent === "claude"}<span class="famref-tag">Claude</span>{/if}
+      </button>
+    {/if}
+
     {#if !kind && live && item.progress && (!compact || item.open)}
       <div class="livewrap" transition:collapse>
         <div class="live">
@@ -208,6 +221,38 @@
 {/if}
 
 <style>
+  /* 会话协作：工具行链到的会话（开出来的子会话 / 发消息的对象） */
+  .famref {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    margin-top: 2px;
+    padding: 1px 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: var(--fs-sm);
+    color: var(--text2);
+    cursor: pointer;
+  }
+  .famref-t {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .famref-tag {
+    flex: none;
+    font-size: var(--fs-xs);
+    color: var(--text3);
+  }
+  @media (hover: hover) {
+    .famref:hover .famref-t {
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+  }
   .line {
     display: flex;
     align-items: baseline;

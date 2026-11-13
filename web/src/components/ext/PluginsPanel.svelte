@@ -1,10 +1,10 @@
 <script>
-  // 扩展中心 ·「功能扩展」：bridge 的插件（服务端 src/plugins/，接口 /api/plugins*）。三个区：
-  //   Agent      （排最上，原来这一页就是它）Gemini · Vertex / ChatGPT · Codex / dimensio 三个 agent 扩展（原 ModulesPanel：装卸、更新、agent 总开关）；
+  // 扩展中心 ·「功能扩展」：bridge 的插件（服务端 src/plugins/，接口 /api/plugins*）。四个区：
+  //   插件市场    官方市场（/api/plugins/market，签过名的索引）里还没装的插件，置顶；有更新时页顶列出来——只提示，点了才装。
+  //              内置功能也可以换上市场版（盖住内置实现，详情里「恢复内置版」换回）；装的插件可以「回退」到回收区里的上一版。
+  //   Agent      （原来这一页就是它）Media Studio / ChatGPT · Codex / dimensio 三个 agent 扩展（原 ModulesPanel：装卸、更新、agent 总开关）；
   //   功能       随 bridge 发布、默认开着的内置功能（定时任务、分享链接、设备、手机操控、内置浏览器……）按分类排，逐项开关；
   //   第三方插件  装的 zip / 登记的本机目录：开关、重新加载、卸载，「添加」上传 zip 或填本机目录。
-  //   插件市场    官方市场（/api/plugins/market，签过名的索引）里还没装的插件；有更新时页顶列出来——只提示，点了才装。
-  //              内置功能也可以换上市场版（盖住内置实现，详情里「恢复内置版」换回）；装的插件可以「回退」到回收区里的上一版。
   // 点卡片推入详情：状态、按插件 schema 自动生成的配置表单、来源信息与操作。热插件开关 / 改配置当场生效；
   // restart 插件只落盘，顶部出现「有改动等重启生效」。改动经总线 plugins.changed 推给所有在线页面（App 据此重拉 /api/auth，
   // 入口按开关显隐）——这里也听它，别的设备改了就重拉。
@@ -663,17 +663,7 @@
       </div>
     {/if}
 
-    <h3 class="cz-h">{t('Agent')}</h3>
-    <ModulesPanel {toast} {confirm} />
-
-    <h3 class="cz-h pp-top">{t('功能')} <span class="cz-n">{builtins.filter((p) => p.active).length} / {builtins.length}</span></h3>
-    <p class="cz-note pp-intro">{t('随 bridge 一起装好、默认开着的功能。关掉用不上的：它的界面入口、接口和 Claude 的对应工具会一起消失，再打开就回来。')}</p>
-    {#each groups as g (g.key)}
-      <div class="cz-sec">{g.label}</div>
-      <div class="cz-grid">{#each g.items as p (p.id)}{@render card(p)}{/each}</div>
-    {/each}
-
-    <h3 class="cz-h pp-top pp-mkh">{t('插件市场')} {#if mktNew.length}<span class="cz-n">{mktNew.length}</span>{/if}
+    <h3 class="cz-h pp-mkh">{t('插件市场')} {#if mktNew.length}<span class="cz-n">{mktNew.length}</span>{/if}
       <button class="cz-btn sm" disabled={mktBusy} onclick={() => loadMarket(true)}>{mktBusy ? t('正在检查…') : t('检查更新')}</button></h3>
     <p class="cz-note pp-intro">{t('bridge 官方发布的插件：不用升级 bridge 就能装新功能、更新插件，内置功能的修复也从这里来。有更新只提示，点了才装。')}</p>
     {#if mkt?.market?.off}
@@ -689,6 +679,16 @@
       {/if}
       {#if mkt?.market?.ok}<p class="pp-mkfoot">{t('索引第 {n} 版', { n: mkt.market.seq })}{mkt.market.checkedAt ? ' · ' + t('上次检查 {at}', { at: when(mkt.market.checkedAt) }) : ''}</p>{/if}
     {/if}
+
+    <h3 class="cz-h pp-top">{t('Agent')}</h3>
+    <ModulesPanel {toast} {confirm} />
+
+    <h3 class="cz-h pp-top">{t('功能')} <span class="cz-n">{builtins.filter((p) => p.active).length} / {builtins.length}</span></h3>
+    <p class="cz-note pp-intro">{t('随 bridge 一起装好、默认开着的功能。关掉用不上的：它的界面入口、接口和 Claude 的对应工具会一起消失，再打开就回来。')}</p>
+    {#each groups as g (g.key)}
+      <div class="cz-sec">{g.label}</div>
+      <div class="cz-grid">{#each g.items as p (p.id)}{@render card(p)}{/each}</div>
+    {/each}
 
     <h3 class="cz-h pp-top">{t('已安装的插件')} {#if thirdParty.length}<span class="cz-n">{thirdParty.length}</span>{/if}</h3>
     {#if thirdParty.length}

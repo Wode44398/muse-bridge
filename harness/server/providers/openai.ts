@@ -5,10 +5,15 @@ import type { AdapterConfig, Capabilities, ProviderAdapter } from "./types.ts";
 import { readSSE } from "./sse.ts";
 import { httpErrorEvent, streamErrorEvent } from "./classify.ts";
 import { observeWire } from "./wire-fingerprint.ts";
+import { fetchReconnect } from "../net-proxy.ts";
 import { TOOL_PROGRESS_EVERY_MS } from "./anthropic.ts";
 import { modelLimits, modelSpec, modelSupportsImages, modelSupportsVideo, modelSupportsAudio, providerMediaBudget } from "../catalog.ts";
-import { localModelBaseUrl } from "../localai.ts";
-import { applyCustomThinking } from "../custom-tiers.ts";
+import { localModelBaseUrl, strataVariantMismatch, strataVariantOf } from "../localai.ts";
+import { applyCustomThinking, floorTierWhenNoOff } from "../custom-tiers.ts";
+import { MK } from "../model-knowledge.ts";
+
+// 必须思考的型号上，旁路请求在输出上限之外多给的推理余量（实测最低档的推理用量在一百到几百 token）
+const SIDE_REASONING_HEADROOM = 2048;
 
 const DEFAULTS = {
   contextWindow: 128_000,
@@ -43,14 +48,34 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
   // Kimi and MiMo require the original reasoning trace on subsequent tool
   // turns; keep it in the neutral transcript and replay as reasoning_content.
   // 自定义服务：标了「不发参数也会思考」的型号（小米、Kimi、GLM-5.3 经第三方接进来）或服务上打开了「回传思考」时同样回传。
-  const replayReasoning = cfg.provider === "kimi" || cfg.provider === "mimo" || Boolean(custom && (custom.replayReasoning || custom.model?.alwaysThinks));
+  // 共用型号表标了 replay 的家族也回传：开源权重的 Qwen3.8-Flash-Next（vLLM / SGLang 之类）的 chat template 默认
+  // preserve_thinking，历史里每条 assistant 都按 <think>reasoning_content</think> 渲染——不回传就渲染成空思考，和模型当时
+  // 生成的前缀对不上，服务端前缀缓存从上一条回复起作废，也不是模型训练时见到的样子。
+  // DeepSeek（内置厂商 id 是 openai）同样在表里标了 replay：思考模式下带工具调用的历史轮缺 reasoning_content 就 400
+  //（它只恢复得了自己在思考模式下发出的调用；会话中途开思考、从别家换过来的都恢复不了），关思考时带着也无害——实测。
+  const replayReasoning =
+    cfg.provider === "kimi" ||
+    cfg.provider === "mimo" ||
+    MK.tableEntry(cfg.model)?.replay === true ||
+    Boolean(custom && (custom.replayReasoning || custom.model?.alwaysThinks));
+  // 没有思考原文的工具轮也带空串：只给 DeepSeek（缺了就 400）；别家不带也照收，不去动它们的请求体
+  const replayEmpty = replayReasoning && MK.tableEntry(cfg.model)?.think === "deepseek";
 
   return {
     id: cfg.provider,
     model: cfg.model,
     capabilities,
     async *stream(turn: Turn, signal?: AbortSignal): AsyncIterable<StreamEvent> {
-      let body = encode(turn, cfg.model, capabilities, replayReasoning);
+      // 本机 Strata 几个变体共用 8081、服务对 model 字段来者不拒：在跑的不是会话选的那个变体就不发（localai.ts），别让换了的模型静默作答
+      // （只对 Strata 的型号 await：别的型号照旧同步走到 fetch，不多让一拍）
+      if (cfg.provider === "local" && strataVariantOf(cfg.model)) {
+        const clash = await strataVariantMismatch(cfg.model);
+        if (clash) {
+          yield { e: "error", kind: "local_variant_mismatch", retriable: false, class: "bad_request", compress: false, summary: clash, raw: clash };
+          return;
+        }
+      }
+      let body = encode(turn, cfg.model, capabilities, replayReasoning, replayEmpty);
       const level = turn.budget.thinking ?? "off";
       const on = level !== "off";
       // Each OpenAI-compatible vendor gates reasoning differently — these mirror
@@ -58,7 +83,22 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
       if (custom) {
         // 自定义服务：不看厂商 id，按型号的档位表发（会话档 → 槽 → 档位，custom-tiers.ts；写法同 Claude 外接，共用 applyTier）。
         // 「默认」档 / 没登记的型号什么都不发。输出上限字段按服务设置（OpenAI 自家推理模型要 max_completion_tokens）。
-        body = applyCustomThinking(body, custom.model, level, { protocol: "openai" });
+        // 旁路请求（不带工具、思考 off：压缩摘要、记忆提取、辅助模型）遇到关不掉思考的型号：发它最低的一档并留出推理余量，
+        // 不然上游按默认档想、把小小的输出上限整段吃光，正文为空（custom-tiers.ts floorTierWhenNoOff）。主循环不走这里：
+        // 它总带工具，用户选的「默认」档就是什么都不发。
+        const floor = turn.tools.length ? "" : floorTierWhenNoOff(custom.model, level);
+        if (floor && custom.model) {
+          body = MK.applyTier(body, custom.model, floor, { protocol: "openai" });
+          if (typeof body.max_tokens === "number") {
+            body.max_tokens = Math.max(body.max_tokens, Math.min(body.max_tokens + SIDE_REASONING_HEADROOM, capabilities.maxOutputTokens));
+          }
+        } else body = applyCustomThinking(body, custom.model, level, { protocol: "openai" });
+        if (MK.tableEntry(cfg.model)?.think === "qwen38-open") body = openQwenKwargs(body);
+        // OpenRouter 上的 Claude：Anthropic 的缓存要显式标记才生效——顶层放一个 cache_control，OpenRouter 自动把断点推进到最后
+        //（实测第二发整段命中；不带则每轮全价、首字也慢）。别家在 OpenRouter 上是自动缓存，不用管。
+        if (MK.routeOf(custom.upstreamHost) === "openrouter" && /^(?:claude-|opus-|sonnet-|haiku-|fable-)/.test(MK.bareModelId(cfg.model))) {
+          body.cache_control = { type: "ephemeral" };
+        }
         if (custom.maxTokensField === "max_completion_tokens" && body.max_tokens !== undefined) {
           body.max_completion_tokens = body.max_tokens;
           delete body.max_tokens;
@@ -97,7 +137,9 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
         // tools. Bare enable_search (default strategy) grounds fine alongside
         // function calling. Proof: without it qwen3.7-plus answered the STALE
         // deepseek-chat/-reasoner; with it, the current deepseek-v4-pro/-flash.
-        body.enable_search = true;
+        // 只在带工具的请求（主循环、子 agent）上开：压缩摘要、记忆提取、辅助模型这些旁路只该基于会话内容，
+        // 开着搜索既可能把网页内容混进摘要，又按次计费、搜索结果还计入输入 token。
+        if (turn.tools.length) body.enable_search = true;
       } else if (cfg.provider === "zhipu") {
         // Zhipu GLM: reasoning trace streams in delta.reasoning_content (handled
         // below). glm-5.2 takes reasoning_effort (high/max); glm-5 is on/off only.
@@ -150,7 +192,7 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
       }
       observeWire(turn, "openai", body);
       const url = `${baseUrl}/chat/completions`;
-      const res = await fetch(url, {
+      const res = await fetchReconnect(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -285,6 +327,24 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
   };
 }
 
+// 开源权重的 Qwen3.8-Flash-Next（vLLM / SGLang / llama.cpp 自己部署）：开关与档位只认 chat_template_kwargs，顶层的
+// enable_thinking / reasoning_effort 不生效（vLLM 实测关思考照样想）。知识层改对之前识别出来、已经存进 providers.json 的
+// 档位表是 DashScope 写法（顶层），用户没改过也不会自己重算——发之前搬进 chat_template_kwargs（已经在里面的不动）；
+// DashScope 专属的 enable_search / search_options 去掉。
+export function openQwenKwargs(body: Record<string, any>): Record<string, any> {
+  const moved: Record<string, unknown> = {};
+  for (const k of ["enable_thinking", "reasoning_effort"]) {
+    if (k in body) {
+      moved[k] = body[k];
+      delete body[k];
+    }
+  }
+  delete body.enable_search;
+  delete body.search_options;
+  if (Object.keys(moved).length) body.chat_template_kwargs = { ...moved, ...((body.chat_template_kwargs ?? {}) as Record<string, unknown>) };
+  return body;
+}
+
 // 流式增量里的思考原文：reasoning_content（DeepSeek、Kimi、智谱、小米、通义、llama.cpp）> reasoning（OpenRouter、部分 vLLM / Ollama）
 // > reasoning_details[].text / summary（OpenRouter 的结构化写法）。
 export function reasoningText(delta: any): string {
@@ -314,13 +374,13 @@ function mapStop(reason: string): StopReason {
 
 // ── Encode neutral Turn -> OpenAI Chat Completions request body ──────────────
 
-function encode(turn: Turn, model: string, caps: Capabilities, replayReasoning = false) {
+function encode(turn: Turn, model: string, caps: Capabilities, replayReasoning = false, replayEmpty = false) {
   const messages: any[] = [];
 
   const system = systemString(turn.system);
   if (system) messages.push({ role: "system", content: system });
 
-  for (const m of turn.messages) messages.push(...encodeMsg(m, replayReasoning));
+  for (const m of turn.messages) messages.push(...encodeMsg(m, replayReasoning, replayEmpty));
 
   const body: Record<string, unknown> = {
     model,
@@ -350,7 +410,7 @@ function systemString(system: Turn["system"]): string {
 // One neutral message can expand into several OpenAI messages: tool_result
 // blocks must become their own `role:"tool"` messages (OpenAI has no neutral
 // tool role — results ride in a user message in our model).
-function encodeMsg(m: Msg, replayReasoning = false): any[] {
+function encodeMsg(m: Msg, replayReasoning = false, replayEmpty = false): any[] {
   const out: any[] = [];
   const toolResults = m.content.filter((b) => b.t === "tool_result");
   const rest = m.content.filter((b) => b.t !== "tool_result");
@@ -386,7 +446,8 @@ function encodeMsg(m: Msg, replayReasoning = false): any[] {
     // and 400s, so the session can never continue. An empty string counts as
     // "set", so only leave content null when tool_calls carry the message.
     msg.content = textParts.join("") || (toolCalls.length ? null : "");
-    if (thinkParts.length) msg.reasoning_content = thinkParts.join("\n");
+    // DeepSeek：带工具调用的轮没有思考原文（别家留下的、关思考时产生的）也要带空串，缺了就 400
+    if (thinkParts.length || (replayEmpty && toolCalls.length)) msg.reasoning_content = thinkParts.join("\n");
     if (toolCalls.length) msg.tool_calls = toolCalls;
     out.push(msg);
   } else {

@@ -14,20 +14,20 @@
   import { onMount, setContext, untrack } from 'svelte';
   import GlassButton from './ios27/GlassButton.svelte';
   import Sym from './ios27/Sym.svelte';
-  import Menu from './ios27/Menu.svelte';
+  import MorphMenu from './ios27/MorphMenu.svelte';
+  import { LiquidTabs } from '../lib/liquid/tabs.js';
+  import { liquidPress } from '../lib/liquid/press.js';
   import Sheet from './ios27/Sheet.svelte';
   import Alert from './ios27/Alert.svelte';
-  import Popover from './ios27/Popover.svelte';
   import TextField from './ios27/TextField.svelte';
   import Toggle from './ios27/Toggle.svelte';
   import Segmented from './ios27/Segmented.svelte';
-  import sq26_pub from '../assets/ios27/squircle26.svg';
   import { ovUrl } from '../lib/overlay.svelte.js';
-  // 平滑圆角遮罩、文件夹图标：公开版自带，私有 overlay 有同名原版就换成它
-  const sq26 = $derived(ovUrl('ios27/squircle26.svg', sq26_pub));
+  // 平滑圆角遮罩、文件夹图标：原版资源
+  const sq26 = $derived(ovUrl('ios27/squircle26.svg'));
   const wsIcon = $derived(ovUrl('assets/icons/workspace.png'));
   import { t, tc, tr, locale, isEn } from '../lib/i18n.js';
-  import { ui, compose, vertex as vs, me, caps, session, agentOn, rootScreen, pluginOn } from '../lib/state.svelte.js';
+  import { ui, compose, studioInbox, me, caps, session, agentOn, screenOn, rootScreen, pluginOn } from '../lib/state.svelte.js';
   import { api, authHeaders, getToken } from '../lib/api.js';
   import { apiUrl, isOffline, mediaFallbackUrl } from '../lib/server.js';
   import { downloads, hasNativeDownload, startDownload, cancelDownload, openDownload, retryDownload, clearFinishedDownloads } from '../lib/downloads.svelte.js';
@@ -35,9 +35,7 @@
   import { registerCloser } from '../lib/nav.js';
   import { openPreview as openPreviewRaw, cloudFileUrl } from '../lib/preview.svelte.js';
   import { openSession, newConversation } from '../lib/chat.svelte.js';
-  // Gemini 的对话控制器属于功能扩展：经 services 按需加载（开着才加载），不静态 import。
-  import { mods, ensureModule } from '../modules/services.svelte.js';
-  import { getCachedSessions, getCachedVertexSessions } from '../lib/cache.js';
+  import { getCachedSessions } from '../lib/cache.js';
   import { titleFor } from '../lib/library.svelte.js';
   import { relTime } from '../lib/format.js';
   import { entriesFromDrop, walkEntries, groupByRoot, skipNote } from '../lib/dirDrop.js';
@@ -71,7 +69,7 @@
   // （回工作台菜单），并跳过全局 closer 注册（安卓返回由宿主 dock 的瞬态层接管）。
   // guest = 聊天快照访客（/c/ 链接，工作台内嵌）：文件读写照常（服务端已把 cwd 锁死在快照桶），
   // 但去掉「不属于这个身份」的入口——手机本地(SAF)切页、分享链接铸造（/api/share 对 snap 401）、
-  // 发送给 AI（会牵出 Vertex 这类快照够不着的东西）。
+  // 发送给 AI（会牵出 Media Studio 这类快照够不着的东西）。
   // picker = 「新建项目」选择器形态（ProjectPicker 挂进来的）：同一套文件管理器，但只做
   // 一件事——把某个文件夹选成新项目的工作空间。写操作只留「新建文件夹」（要一个全新的空
   // 项目就在这儿建），文件只展示不可点开，长按不再出菜单而是【起拖】。
@@ -90,14 +88,14 @@
   // 内嵌态的文件预览/编辑也留在侧栏（host:'dock' → 侧栏内嵌 MediaViewer 实例接管，
   // 不再全屏）；独立分页维持全屏。影子包装：本文件所有 openPreview 调用点零改动。
   const openPreview = (items, idx) => openPreviewRaw(items, idx, { host: previewHost || (onExit ? 'dock' : 'app') });
-  // 内嵌在工作台（Claude/Codex/dimensio 的侧列或底部 sheet）：跟随全站明暗；独立手机工作空间页维持固定浅色。
+  // 内嵌在工作台（Claude/Codex/dimensio 的侧列或底部 sheet）与独立手机工作空间页都跟随全站明暗。
   // theme='light'|'dark'：宿主有自己的明暗档（dimensio）时强制跟宿主，左右两栏不许一明一暗。
   const embeddedUi = $derived(Boolean(onExit) || previewHost === 'dock');
   // 搜索行（关闭钮 + 搜索框）用 Figma iOS 27 kit 的液态玻璃（见样式区 .fg）；`?oldglass` 退回原毛玻璃配方
   const fg = typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass');
   // iOS 27 kit 组件（components/ios27，与设置页同一套）按 'ios27' 上下文挑明暗两套烘焙玻璃。
-  // 独立工作空间页固定浅色；内嵌进工作台时跟宿主（theme 强制档优先，否则跟全站 data-theme）。
-  const iosDark = $derived(embeddedUi && (theme === 'dark' || (theme !== 'light' && ui.theme !== 'light')));
+  // 明暗：宿主强制档（theme）优先，否则跟全站 data-theme。独立页也跟（11-08 起：暗主题下不再亮一整屏白）。
+  const iosDark = $derived(theme === 'dark' || (theme !== 'light' && ui.theme !== 'light'));
   setContext('ios27', { get dark() { return iosDark; } });
   let rootW = $state(390);         // 根元素宽：锚在右上角的菜单 / 面板按它换算 left
   let edgeOn = $state(false);
@@ -117,8 +115,11 @@
     select: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5 11 15.5 16.5 9.5"/></svg>',
     cloud: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.8 19a4.6 4.6 0 0 1-.6-9.16 5.8 5.8 0 0 1 11.2-1.32A4.9 4.9 0 0 1 16.6 19H6.8Z"/></svg>',
     pcAdd: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 6h16v13H4z"/><path d="M8 3v3M16 3v3M12 10v5M9.5 12.5h5"/></svg>',
+    remove: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>',
   };
   // 「发送给 AI」各目标的小图标（白字形，垫在 kit 彩色圆角方块上，同设置页 IconTile）
+  // Media Studio 用自己的 App 瓦片：暖墨方块 + 象牙标（同 assets/icons/studio.svg，scripts/brand/studio-mark.cjs）
+  const STUDIO_TILE = 'linear-gradient(#282521, #0f0e0c)';
   const AI_IC = {
     claude: '<svg viewBox="0 0 24 24" fill="#fff"><path d="M12 2.5l2 6.1 6.1 1.9-6.1 2L12 18.5l-2-6 -6.1-2 6.1-1.9z"/></svg>',
     video: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.2l4.6 2.8L10 14.8z" fill="#fff" stroke="none"/></svg>',
@@ -200,8 +201,7 @@
   let selected = $state(new Set());
 
   let rootEl = $state();           // 根元素：长按菜单换算 fixed 定位坐标系用（见 openMenu）
-  let menu = $state(null);         // 长按菜单 { item, x, y, ox, oy }（x/y 是【局部】坐标）
-  let menuArmed = false;           // 菜单出现 300ms 后才响应点击（防长按抬起的 click 误触/秒关）
+  let menu = $state(null);         // 文件菜单 { item, point }（长按 / 右键，视口坐标）或 { item, anchor }（行尾「…」按钮）
   let infoItem = $state(null);     // 「显示简介」文件详情 { name, isDir, size, mtime, dir }
   let preview = $state(null);      // 文件预览 { name, rel, kind, url?, text?, loading }
   let renameTarget = $state(null); // 重命名 { item, value }
@@ -233,14 +233,14 @@
   const pcAvail = $derived(!fenced && !readonly && !guest && !wsPick && isNativeDesktop() && hasPcLocalFs());
   const pcLocal = $derived(ws === 'local' && pcAvail);
   let pcHome = $state(true);         // 「这台电脑」位置主页（列出授权过的文件夹）；进了某个位置＝false
-  let pcLocMenu = $state(null);      // 这台电脑位置的管理菜单 { loc }
+  let pcLocMenu = $state(null);      // 这台电脑位置的管理菜单 { loc, anchor }（从行尾「管理」按钮长出来）
   let pcLocAbs = $state({});         // 位置 id → 绝对路径（主页副标题；位置列表故意不带 path，向壳 inspect 根目录取）
   const canOpenWith = hasOpenWith(); // 原生「打开方式」可用（离线 apk 壳内；dev/在线壳=false，菜单项不显示）
   const canShare = hasShare();       // 原生「分享」可用（同上）
   // 本地写操作能力（新 apk 原生接口）：旧 apk 缺哪个就隐藏哪个菜单项/禁用哪个多选钮。
   const localOps = { del: hasLocalDelete(), rename: hasLocalRename(), move: hasLocalMove(), copy: hasLocalCopy() };
   let aiPick = $state(null);         // 「发送给 AI」选目标的 item
-  let aiView = $state('root');       // 菜单层级：root（Claude/Vertex）/ vertex（子菜单）/ chat（选择对话）
+  let aiView = $state('root');       // 菜单层级：root（Claude / Media Studio）/ studio（创作页）/ video（这张图用作）/ chat（选择对话）
   let aiChat = $state(null);         // 「选择对话」层：{ target, from, sessions, loading, q }
   let localPicked = $state(false); // 本地工作空间已有 ≥1 个位置
   let localPicking = $state(false);
@@ -248,8 +248,10 @@
   // —— 多根「本地位置」——
   const multiRoot = hasMultiRoot();  // 新 apk（支持多个本地位置）；旧 apk=false 走单根旧流程
   let roots = $state([]);            // 本地位置列表 [{id,name,mode}]
-  let addSheet = $state(false);      // 「添加本地位置」sheet
-  let rootMenu = $state(null);       // 位置管理菜单 { root }
+  let addSheet = $state(false);      // 「添加本地位置」菜单开着
+  let addLocAnchor = $state(null);   // 它从哪儿长出来：顶栏「＋」或「添加文件夹」那一行的加号
+  let addLocBtn = $state();
+  let rootMenu = $state(null);       // 位置管理菜单 { root, anchor }（从行尾「管理」按钮长出来）
   const atHome = $derived(isLocal && multiRoot && localPicked && path === '');   // 「本地位置」主页
   const rootMap = $derived(Object.fromEntries(roots.map((r) => [r.id, r.name]))); // 根 id → 显示名
   let tasks = $state([]);          // 分享页的跟踪下载（传输面板；上传行在 uploads 引擎里）
@@ -271,6 +273,33 @@
   const locPill = $derived(showCloudLocs);
   const pillLabel = $derived(cloudLoc ? (cloudLoc.id === 'ws' ? t('工作空间') : locLabel(cloudLoc)) : t('工作空间'));
   let locMenu = $state(null);      // { x, y }
+  // 顶栏「＋ / 位置胶囊 / 传输环」与路径条「…」的元素：点一下，菜单就从按钮本身长出来（ios27/MorphMenu）
+  let addBtn = $state(), locBtn = $state(), xferBtn = $state(), crumbBtn = $state(), backBtn = $state();
+  // 同排的顶栏按钮：哪个菜单展开时盖到了它们，它们就像水滴一样融进菜单、收起时再滴回来（ios27/MorphMenu neighbors）
+  const topBtns = () => [backBtn, locBtn, addBtn, xferBtn, addLocBtn];
+  // 有按钮融着：顶栏抬到菜单玻璃之上（符号流进 / 滴回来时看得见）。按菜单计数：一个还在收、另一个已经开了也不会提前放下
+  let topFuseN = $state(0);
+  const topFusing = $derived(topFuseN > 0);
+  const onTopFuse = (on) => { topFuseN = Math.max(0, topFuseN + (on ? 1 : -1)); };
+  // 底栏两个 Tab 的液态指示器（Kyant LiquidBottomTabs：按住拖、点按滑过去时化成透镜，lib/liquid/tabs.js）
+  let tabBarEl = $state(), tabSelEl = $state(), tabRowU = $state(), tabRowS = $state(), tabGlowEl = $state();
+  let ltabs = null;
+  const tabW = () => tabRowU?.children?.[0]?.offsetWidth || 104;
+  $effect(() => {
+    const bar = tabBarEl, host = rootEl;
+    if (!bar || !host || !tabRowU) return;
+    const lt = untrack(() => new LiquidTabs({
+      bar, pill: tabSelEl, rowU: tabRowU, rowS: tabRowS, glow: tabGlowEl, lensHost: host, count: 2,
+      index: ws === 'local' ? 1 : 0, tabW: tabW(), pad: 4, selH: 54, dark: iosDark,
+      onSelect: (i) => pickWs(i ? 'local' : 'cloud'),
+    }));
+    ltabs = lt;
+    const ro = new ResizeObserver(() => { lt.setTabW(tabW()); lt.measure(); });
+    ro.observe(bar);
+    return () => { ro.disconnect(); lt.destroy(); if (ltabs === lt) ltabs = null; };
+  });
+  $effect(() => { const i = ws === 'local' ? 1 : 0; untrack(() => ltabs?.setIndex(i)); });
+  $effect(() => { const d = iosDark; untrack(() => ltabs?.setDark(d)); });
   const convAbs = $derived(canStart && !fenced ? startRoot : '');
   const convName = $derived(convAbs ? (String(convAbs).split(/[\\/]/).filter(Boolean).pop() || convAbs) : '');
   function goConv() {
@@ -434,7 +463,7 @@
 
   // 系统返回键 / 侧滑：有搜索/多选/面包屑就逐级退，到根再回主页
   function back() {
-    if (aiPick) { if (aiView === 'chat') { chatBack(); return; } if (aiView === 'video') { aiView = 'vertex'; return; } if (aiView === 'vertex') { aiView = 'root'; return; } aiPick = null; return; }
+    if (aiPick) { if (aiView === 'chat') { chatBack(); return; } if (aiView === 'video') { aiView = 'studio'; return; } if (aiView === 'studio') { aiView = 'root'; return; } aiPick = null; return; }
     if (rootMenu) { rootMenu = null; return; }
     if (pcLocMenu) { pcLocMenu = null; return; }
     if (addSheet) { addSheet = false; return; }
@@ -675,6 +704,29 @@
     catch (e) { toast(t('定位失败：{reason}', { reason: tr(e.message || '') })); }
   }
   function removePcLoc(loc) { pcLocMenu = null; removeDesktopLocation(loc); }
+  // 位置管理 / 添加本地位置：原来是居中的警告框，现在是从按钮长出来的菜单（kit Menu），条目与显隐条件不变；
+  // 移除位置那一步 doRemove 自己还会再确认一次
+  const pcLocItems = $derived.by(() => {
+    const loc = pcLocMenu?.loc;
+    if (!loc) return [];
+    return [
+      { label: t('在文件资源管理器中显示'), icon: G.reveal, onclick: () => revealPcLoc(loc) },
+      ...(loc.removable ? [{ sep: true }, { label: t('移除此位置'), icon: G.remove, destructive: true, onclick: () => removePcLoc(loc) }] : []),
+    ];
+  });
+  const rootMenuItems = $derived.by(() => {
+    const r = rootMenu?.root;
+    if (!r) return [];
+    return [
+      ...(r.mode !== 'all' ? [{ label: t('重新选择文件夹'), icon: G.folder, onclick: () => doReselect(r) }, { sep: true }] : []),
+      { label: t('移除此位置'), icon: G.remove, destructive: true, onclick: () => doRemove(r) },
+    ];
+  });
+  const addLocItems = $derived([
+    { label: t('选择手机文件夹'), icon: G.folderAdd, disabled: localPicking, onclick: doPickLocal },
+    ...(canAllFiles() ? [{ label: t('整个手机存储'), symbol: 'iphone', disabled: localPicking, onclick: doPickAll }] : []),
+  ]);
+  function openAddLoc(el) { addLocAnchor = el; rootMenu = null; addSheet = true; }
 
   // —— 多选 ——
   function enterSelect(seedName) { selecting = true; selected = new Set(seedName ? [seedName] : []); }
@@ -931,36 +983,22 @@
     window.removeEventListener('pointerup', pkUp);
     window.removeEventListener('pointercancel', pkUp);
   }
+  // 长按 / 右键：菜单从按压点弹出（MorphMenu 长按形态，视口坐标；它自己换算到所在容器、夹进容器边界——
+  // 本页内嵌进 Claude 工作台时外面那层 .dk-embed 带 transform，容器不是整块视口）。
+  // 长按抬起后浏览器补发的那下 click 由 MorphMenu 当场就挡上的压暗层接住，不会秒关、也不会点穿到底下的行。
   function openMenu(e, item) {
     if (wsPick) return;                // 选择器形态没有长按菜单（长按＝起拖）
     pressTimer = null;
     try { navigator.vibrate?.(8); } catch {}
-    // 菜单宽 250、估高，避让边缘；从按压点缩放出现。
-    // 坐标必须换算到【定位坐标系】而不是视口：.ctxmenu 是 position:fixed，本页内嵌进
-    // Claude 工作台时外面那层 .dk-embed 带 transform，会把 fixed 的包含块从视口变成该容器
-    // ——直接用 clientX/innerWidth 算出来的点落在容器外，被 overflow:hidden 裁掉，
-    // 屏上就只剩背景层、菜单不见了。根元素 .ws-root 自身是 fixed inset:0，它的 rect
-    // 恰好就是这个坐标系的原点与尺寸；独立整页时 rect = 整个视口，行为与原来一致。
-    const box = rootEl?.getBoundingClientRect();
-    const ox0 = box?.left || 0, oy0 = box?.top || 0;
-    const vw = box?.width || window.innerWidth, vh = box?.height || window.innerHeight;
-    const cx = e.clientX - ox0, cy = e.clientY - oy0;   // 按压点（局部坐标）
-    const W = 250;
-    const x = Math.min(Math.max(12, cx - W / 2), Math.max(12, vw - W - 12));
-    const yRaw = cy + 14;
-    const estH = 360;
-    const y = yRaw + estH > vh - 20 ? Math.max(60, cy - estH - 10) : yRaw;
-    const ox = ((cx - x) / W) * 100;
-    const oy = y > cy ? 0 : 100;
-    menu = { item, x, y, ox, oy };
-    // 菜单出现后短暂锁定（300ms）：长按抬起会合成一次 click 落在刚出现的 scrim/菜单项上，
-    // 不锁的话菜单一闪即关（真机 bug）。锁定期内忽略 scrim 关闭和菜单项点击。
-    menuArmed = false;
-    setTimeout(() => { menuArmed = true; }, 300);
+    menu = { item, point: { x: e.clientX, y: e.clientY } };
   }
-  function menuAct(act) {
-    if (!menuArmed) return;            // 锁定期内的误触（长按抬起的 click）忽略
-    const it = menu.item; menu = null;
+  // 行尾「…」：点一下从按钮本身长出来（按钮菜单形态）
+  function openDots(e, item) {
+    if (wsPick) return;
+    menu = menu ? null : { item, anchor: e.currentTarget };
+  }
+  function menuAct(act, it) {
+    menu = null;
     if (act === 'info') showInfo(it);
     else if (act === 'rename') renameTarget = { item: it, value: it.name };
     else if (act === 'delete') doDelete(it);
@@ -981,7 +1019,7 @@
   const menuItems = $derived.by(() => {
     if (!menu) return [];
     const it = menu.item, L = [];
-    const add = (cond, label, act, more = {}) => { if (cond) L.push({ label, onclick: () => menuAct(act), ...more }); };
+    const add = (cond, label, act, more = {}) => { if (cond) L.push({ label, onclick: () => menuAct(act, it), ...more }); };
     const sep = () => { if (L.length && !L[L.length - 1].sep) L.push({ sep: true }); };
     if (desktopNative) {
       add(true, t('用默认应用打开'), 'open', { symbol: 'arrow.up.forward.app' });
@@ -1104,16 +1142,16 @@
     shareFile(url, r, item.name, false);
   }
 
-  // —— 「发送给 AI」：菜单两层（Claude / Vertex→子菜单），按素材类型决定 Vertex 子项是否出现 ——
-  // 能力判定：item 类型 → 哪些 Vertex 目标能吃它当输入素材（对话类恒有；媒体类按图/文本可用）。
-  // 文件类型决定能投给哪些模块，再与这个身份开着的 agent 取交集（服务端下发的 me.agents）。
+  // —— 「发送给 AI」：菜单两层（Claude / Media Studio→创作页），按素材类型决定 Studio 子项是否出现 ——
+  // 能力判定：item 类型 → 哪些创作页能吃它当输入素材（图片当改图素材 / 视频帧，文本当提示词）。
+  // 文件类型决定能投给哪些页，再与这个身份能不能进 Media Studio 取交集（服务端下发的 me.agents）。
   const aiCaps = $derived.by(() => {
     const c = fileAiCapabilities(aiPick, kindOf);
-    const g = agentOn('gemini');
-    return { ...c, claude: agentOn('claude'), gemini: c.gemini && g, video: c.video && g, image: c.image && g, audio: c.audio && g, music: c.music && g };
+    const g = screenOn('studio');
+    return { ...c, claude: agentOn('claude'), studio: g && (c.video || c.image || c.audio || c.music), video: c.video && g, image: c.image && g, audio: c.audio && g, music: c.music && g };
   });
   // 弄成可投递素材：云端 fileToUpload（Claude direct=零拷贝直给源绝对路径，agent 本机直读；
-  // Gemini/媒体默认拷 uploads——Vertex 要读内容上传且有 ownUpload 守卫）；本地 SAF base64→upload。
+  // Media Studio 默认拷 uploads——媒体任务要读内容上传且有 ownUpload 守卫）；本地 SAF base64→upload。
   async function aiMaterial(item, direct = false) {
     const r = itemRel(item);
     const kind = item.isDir ? 'folder' : (kindOf(item.name) === 'img' ? 'image' : 'file');
@@ -1150,21 +1188,21 @@
     } catch { return null; }
   }
   function pickAI(target) {
-    if (target === 'claude' || target === 'gemini') { openChatPick(target); return; }   // 对话类：先选会话再投递
+    if (target === 'claude') { openChatPick(target); return; }   // 对话类：先选会话再投递
     const it = aiPick; aiPick = null; aiView = 'root';
     if (it) sendToAI(it, target);
   }
   function pickVideoSlot(slot) { const it = aiPick; aiPick = null; aiView = 'root'; if (it) sendToAI(it, 'video', slot); }
 
   // —— 「选择对话」层（微信「选择聊天」式）：新对话 / 历史会话列表 + 搜索 ——
-  // 列表本地缓存先出（Claude/Gemini 有 IndexedDB 快照秒开），网络刷新殿后。
+  // 列表本地缓存先出（Claude 有 IndexedDB 快照秒开），网络刷新殿后。
   async function openChatPick(target) {
     aiChat = { target, from: aiView, sessions: [], loading: true, q: '' };
     aiView = 'chat';
     const st = aiChat;   // 代理引用：用户退出/重进后 aiChat 换了对象，旧请求返回即作废
     await loadAiSessions(target, {
-      cached: (tg) => tg === 'claude' ? getCachedSessions() : getCachedVertexSessions(),
-      remote: (tg) => tg === 'claude' ? api.sessions() : api.vertexSessions(),
+      cached: () => getCachedSessions(),
+      remote: () => api.sessions(),
       current: () => aiChat === st,
       onCached: (sessions) => { st.sessions = sessions; },
       onDone: (sessions) => { if (sessions) st.sessions = sessions; st.loading = false; },
@@ -1177,21 +1215,12 @@
     if (it && tg) sendToAI(it, tg, undefined, sel);
   }
   const chatTitle = (s) => tr(aiChat?.target === 'claude' ? titleFor(s.id, s.title) : s.title) || t('（无标题）');   // 服务端占位标题（「（进行中…）」「(无标题)」）走 tr
-  const aiChatCur = $derived(aiChat?.target === 'claude' ? session.id : aiChat?.target === 'gemini' ? mods.gemini?.vchat.sessionId : null);
+  const aiChatCur = $derived(aiChat?.target === 'claude' ? session.id : null);
   const aiChatFiltered = $derived.by(() => {
     if (!aiChat) return [];
     return filterAiSessions(aiChat.sessions, aiChat.q, chatTitle);
   });
-  // 尾帧/偏好图：确保当前视频模型支持该槽，否则复位到默认 3.1（不然进面板会被剪枝清掉）。
-  function ensureVideoModelFor(slot) {
-    const def = caps.data?.veo?.defaults?.model || 'veo-3.1-fast-generate-001';
-    const m = vs.videoModel || def;
-    const ic = caps.data?.veo?.imgCaps?.[m] || {};
-    const ok = slot === 'last' ? !!ic.last : (ic.ref || 0) > 0;
-    if (!ok) vs.videoModel = def;
-  }
   async function sendToAI(item, target, slot, sess) {
-    if (target === 'gemini') await ensureModule(target);   // 对话控制器在扩展里，先确保加载
     await sendFileToAi(item, target, slot, sess, {
       kindOf,
       material: aiMaterial,
@@ -1204,18 +1233,8 @@
           load: openSession,
           attach: (attachment) => compose.attachments.push(attachment),
         },
-        gemini: {
-          current: () => mods.gemini?.vchat.sessionId,
-          newChat: (...a) => mods.gemini?.vnewChat(...a),
-          load: (...a) => mods.gemini?.vloadSession(...a),
-          attach: (attachment) => {
-            vs.func = 'chat';
-            vs.chatDraftAtts = [...(vs.chatDraftAtts || []), attachment];
-          },
-        },
       },
-      mediaState: vs,
-      ensureVideoModel: ensureVideoModelFor,
+      studio: { push: (it) => studioInbox.items.push(it) },
       navigate: (screen) => { ui.screen = screen; },
     });
   }
@@ -1250,9 +1269,9 @@
       : item.isDir ? t('删除「{name}」？（含其中全部内容）', { name: item.name })
       : t('删除「{name}」？', { name: item.name });
     const detail = atPcLoc && !isLocal ? winAbs(cloudRoot, itemRel(item)) + '\n' + t('可以在电脑的回收站里还原。') : '';
-    // 确认钮：英文复述动词（§1.6）；中文不传，仍是默认「确定」
+    // 确认钮：英文复述动词（§1.6）；中文不传，仍是默认「确定」。danger：确认钮红色、默认焦点给「取消」
     const okLabel = isEn() ? (trashing ? t('移到回收站') : t('删除')) : undefined;
-    if (!(await uiConfirm(ask, { detail, okLabel }))) return;
+    if (!(await uiConfirm(ask, { detail, okLabel, danger: true }))) return;
     const prev = items;
     items = items.filter((x) => x.name !== item.name);   // 乐观移除（即时），失败回滚
     if (isLocal) {
@@ -1277,7 +1296,7 @@
     const names = [...selected];
     const ask = trashing ? t('把选中的 {n} 项移到回收站？', { n: names.length }) : t('删除选中的 {n} 项？', { n: names.length });
     const okLabel = isEn() ? (trashing ? t('移到回收站') : t('删除')) : undefined;   // 同上：只英文复述动词
-    if (!names.length || !(await uiConfirm(ask, { detail: atPcLoc && !isLocal ? t('可以在电脑的回收站里还原。') : '', okLabel }))) return;
+    if (!names.length || !(await uiConfirm(ask, { detail: atPcLoc && !isLocal ? t('可以在电脑的回收站里还原。') : '', okLabel, danger: true }))) return;
     const sel = new Set(names), prev = items;
     items = items.filter((x) => !sel.has(x.name));   // 乐观移除（即时）
     exitSelect();
@@ -1940,12 +1959,12 @@
        与设置页同一张烘焙玻璃）；底下一层滚动边缘效果（Scroll Edge Effect - Soft）把滚上来的内容重度模糊。
        分享只读＝只留传输环当下载指示；根目录连返回键也不出——没有主页可回。 -->
   <div class="edge" class:on={edgeOn}></div>
-  <div class="topbtns">
+  <div class="topbtns" class:fusing={topFusing}>
     {#if hostChrome ? canBack : !readonly || segs.length}
-      <GlassButton symbol="chevron.backward" weight={600} aria={hostChrome && !searching && !selecting ? t('上一级') : t('返回')} onclick={back} />
+      <GlassButton bind:el={backBtn} symbol="chevron.backward" weight={600} aria={hostChrome && !searching && !selecting ? t('上一级') : t('返回')} onclick={back} />
     {/if}
     {#if locPill && !selecting}
-      <GlassButton aria={t('位置：{name}', { name: pillLabel })} onclick={(e) => (locMenu = anchorBelow(e))}>
+      <GlassButton bind:el={locBtn} aria={t('位置：{name}', { name: pillLabel })} onclick={(e) => (locMenu = locMenu ? null : anchorBelow(e))}>
         <span class="lp-in">
           <span class="lp-ic">{@html locGlyph(cloudLoc)}</span>
           <span class="lp-nm">{pillLabel}</span>
@@ -1959,12 +1978,12 @@
       <GlassButton symbol="plus" weight={500} aria={t('新建文件夹')} onclick={() => (mkOpen = { value: '' })} />
     {:else if pcLocal}
       <!-- 这台电脑：主页上＋＝授权一个新文件夹；位置里＝导入/新建（都是本机原生操作，不走传输面板） -->
-      <GlassButton symbol="plus" weight={500} aria={pcHome ? t('添加位置') : t('添加')} onclick={() => (pcHome ? addDesktopLocation() : (addOpen = !addOpen))} />
+      <GlassButton bind:el={addBtn} symbol="plus" weight={500} aria={pcHome ? t('添加位置') : t('添加')} onclick={() => (pcHome ? addDesktopLocation() : (addOpen = !addOpen))} />
     {:else if !isLocal}
       {#if !readonly}
-        <GlassButton symbol="plus" weight={500} aria={t('添加')} onclick={() => (addOpen = !addOpen)} />
+        <GlassButton bind:el={addBtn} symbol="plus" weight={500} aria={t('添加')} onclick={() => (addOpen = !addOpen)} />
       {/if}
-      <GlassButton round aria={t('传输')} onclick={() => (transferOpen = !transferOpen)}>
+      <GlassButton bind:el={xferBtn} round aria={t('传输')} onclick={() => (transferOpen = !transferOpen)}>
         <span class="xfer" class:alldone={allDone}>
           <svg class="ringsvg" viewBox="0 0 44 44">
             <circle class="track" cx="22" cy="22" r="17" />
@@ -1977,22 +1996,19 @@
         </span>
       </GlassButton>
     {:else if multiRoot && localPicked}
-      <GlassButton symbol="plus" weight={500} aria={t('添加本地位置')} onclick={() => { addSheet = true; rootMenu = null; }} />
+      <GlassButton bind:el={addLocBtn} symbol="plus" weight={500} aria={t('添加本地位置')} onclick={() => openAddLoc(addLocBtn)} />
     {/if}
   </div>
 
-  {#if addOpen}
-    <Menu x={Math.max(12, rootW - 14 - 250)} y={barBottom() + 16} width={250} origin="top right" title=""
-      items={addItems} onclose={() => (addOpen = false)} />
-  {/if}
-  {#if locMenu}
-    <Menu x={locMenu.x} y={locMenu.y} width={250} origin="top left" title={tc('files', '位置')}
-      items={locItems} onclose={() => (locMenu = null)} />
-  {/if}
-  {#if crumbMenu}
-    <Menu x={crumbMenu.x} y={crumbMenu.y} width={250} origin="top left" title=""
-      items={crumbItems} onclose={() => (crumbMenu = null)} />
-  {/if}
+  <!-- 顶栏与路径条的下拉菜单：点一下就从按钮本身长出来（iOS 26 下拉按钮的液滴形变，kit Menu 材质）。
+       菜单一直挂着、open 只管展开 / 收起，收起动画才放得完；平铺在 .ws-root 里（玻璃要采得到底下的列表）。 -->
+  <MorphMenu open={addOpen} anchor={addBtn} neighbors={topBtns()} onfuse={onTopFuse} width={250} items={addItems} onclose={() => (addOpen = false)} />
+  <MorphMenu open={!!locMenu} anchor={locBtn} neighbors={topBtns()} onfuse={onTopFuse} width={250} title={tc('files', '位置')} items={locItems} onclose={() => (locMenu = null)} />
+  <MorphMenu open={!!crumbMenu} anchor={crumbBtn} width={250} items={crumbItems} onclose={() => (crumbMenu = null)} />
+  <MorphMenu open={addSheet} anchor={addLocAnchor} neighbors={topBtns()} onfuse={onTopFuse} width={250} title={t('添加本地位置')} items={addLocItems} onclose={() => (addSheet = false)} />
+  <MorphMenu open={!!rootMenu} anchor={rootMenu?.anchor || null} width={250} title={rootMenu?.root.name || ''} items={rootMenuItems} onclose={() => (rootMenu = null)} />
+  <MorphMenu open={!!pcLocMenu} anchor={pcLocMenu?.anchor || null} width={250} title={pcLocMenu ? pcLocAbs[pcLocMenu.loc.id] || tr(pcLocMenu.loc.name) : ''}
+    items={pcLocItems} onclose={() => (pcLocMenu = null)} />
 
   <!-- 滚动内容 -->
   <div class="scroll" bind:this={scroller} onscroll={onScroll} use:dragScrollGuard use:dropZone={hereZone} class:dnd-here={drag.overKey === 'ws-here'}>
@@ -2018,7 +2034,7 @@
         {:else}
           <button class="pb-seg" class:cur={!segs.length} class:dnd-on={drag.overKey === 'ws-crumb:-1'} use:dropZone={crumbZone(-1)} onclick={goRoot}>{#if readonly}<svg class="pb-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 13.7a4.2 4.2 0 0 0 6.1.3l2.4-2.4a4.2 4.2 0 0 0-5.9-5.9l-1.3 1.3" /><path d="M13.7 10.3a4.2 4.2 0 0 0-6.1-.3l-2.4 2.4a4.2 4.2 0 0 0 5.9 5.9l1.3-1.3" /></svg>{/if}{rootLabel}</button>
         {/if}
-        {#if crumbHidden}<span class="pb-sep">›</span><button class="pb-more" aria-label={t('上级文件夹')} onclick={(e) => (crumbMenu = anchorBelow(e))}>…</button>{/if}
+        {#if crumbHidden}<span class="pb-sep">›</span><button class="pb-more" bind:this={crumbBtn} aria-label={t('上级文件夹')} onclick={(e) => (crumbMenu = crumbMenu ? null : anchorBelow(e))}>…</button>{/if}
         {#each segs as s, i}{#if i >= crumbHidden}<span class="pb-sep">›</span>{#if i < segs.length - 1}<button class="pb-seg" class:dnd-on={drag.overKey === 'ws-crumb:' + i} use:dropZone={crumbZone(i)} onclick={() => goSeg(i)}>{segLabel(s, i)}</button>{:else}<span class="pb-seg cur" title={segLabel(s, i)}>{segLabel(s, i)}</span>{/if}{/if}{/each}
       {/if}
     </div>
@@ -2049,12 +2065,12 @@
             onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && load(r.id)}>
             <span class="loc-ic">{@html rootIcon(r.mode)}</span>
             <span class="meta"><span class="nm">{r.name}</span><span class="fsub">{r.mode === 'all' ? t('整机存储') : t('手机文件夹')}</span></span>
-            <button class="dots" aria-label={t('管理')} onclick={(e) => { e.stopPropagation(); rootMenu = { root: r }; }}><Sym name="ellipsis.circle" weight={400} size={20} /></button>
+            <button class="dots" aria-label={t('管理')} onclick={(e) => { e.stopPropagation(); rootMenu = rootMenu ? null : { root: r, anchor: e.currentTarget }; }}><Sym name="ellipsis.circle" weight={400} size={20} /></button>
           </div>
         {/each}
       </div>
       <div class="filecard">
-        <button class="frow loc-add" disabled={localPicking} onclick={() => (addSheet = true)}>
+        <button class="frow loc-add" disabled={localPicking} onclick={(e) => openAddLoc(e.currentTarget.querySelector('.loc-ic'))}>
           <span class="loc-ic"><Sym name="plus.circle.fill" weight={400} size={24} /></span>
           <span class="meta"><span class="nm">{t('添加文件夹')}</span></span>
         </button>
@@ -2071,7 +2087,7 @@
               onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && selectDesktopLocation(loc.id)}>
               <span class="loc-ic">{@html loc.id === 'primary' ? PC_GLYPH : FOLDER_GLYPH}</span>
               <span class="meta"><span class="nm">{tr(loc.name)}</span><span class="fsub">{pcLocAbs[loc.id] || (loc.id === 'primary' ? t('默认文件夹') : t('电脑文件夹'))}</span></span>
-              <button class="dots" aria-label={t('管理')} onclick={(e) => { e.stopPropagation(); pcLocMenu = { loc }; }}><Sym name="ellipsis.circle" weight={400} size={20} /></button>
+              <button class="dots" aria-label={t('管理')} onclick={(e) => { e.stopPropagation(); pcLocMenu = pcLocMenu ? null : { loc, anchor: e.currentTarget }; }}><Sym name="ellipsis.circle" weight={400} size={20} /></button>
             </div>
           {/each}
         </div>
@@ -2186,7 +2202,7 @@
             </span>
             <span class="meta"><span class="nm">{f.name}</span><span class="fsub">{f.parent ? `${f.parent} · ` : ''}{fmtTime(f.mtime)} · {fmtSize(f.size)}{f.linkType ? ` · ${f.linkType === 'external-link' ? t('外部链接（只读）') : t('链接')}` : ''}</span></span>
             {#if !wsPick}
-              <button class="dots" aria-label={t('更多')} onclick={(e) => { e.stopPropagation(); openMenu(e, f); }}><Sym name="ellipsis.circle" weight={400} size={20} /></button>
+              <button class="dots" aria-label={t('更多')} onclick={(e) => { e.stopPropagation(); openDots(e, f); }}><Sym name="ellipsis.circle" weight={400} size={20} /></button>
             {/if}
           </div>
         {/each}
@@ -2232,27 +2248,31 @@
   {#if !readonly && !wsPick}
   <div class="bottomwrap" class:searching class:selecting>
     <div class="bottombar">
-      {#if !fenced && !guest}<div class="tabbar lg62">
-        <span class="tabsel" style="transform:translateX({ws === 'local' ? 100 : 0}%)"></span>
-        <button class="tab" class:on={ws === 'cloud'} onclick={() => pickWs('cloud')}>
-          <span class="tab-ic">{@html G.cloud}</span>
-          <span class="lb">{t('工作空间')}</span>
-        </button>
-        <button class="tab" class:on={ws === 'local'} onclick={() => pickWs('local')}>
-          {#if pcAvail}
-            <span class="tab-ic"><Sym name="desktopcomputer" weight={500} size={19} /></span>
-            <span class="lb">{t('这台电脑')}</span>
-          {:else}
-            <span class="tab-ic"><Sym name="iphone" weight={600} size={19} /></span>
-            <span class="lb">{t('本地')}</span>
-          {/if}
-        </button>
-      </div>{:else}<span></span>{/if}
-      <button class="searchbtn lgo62" aria-label={t('搜索')} onclick={openSearch}><Sym name="magnifyingglass" weight={600} size={20} /></button>
+      {#if !fenced && !guest}
+        {#snippet tabCloud()}<span class="tab-ic">{@html G.cloud}</span><span class="lb">{t('工作空间')}</span>{/snippet}
+        {#snippet tabLocal()}
+          {#if pcAvail}<span class="tab-ic"><Sym name="desktopcomputer" weight={500} size={19} /></span><span class="lb">{t('这台电脑')}</span>
+          {:else}<span class="tab-ic"><Sym name="iphone" weight={600} size={19} /></span><span class="lb">{t('本地')}</span>{/if}
+        {/snippet}
+        <!-- 指针手势挂在整条栏上（lib/liquid/tabs.js）；两层同样的 Tab：未选样式在指示器处挖洞、选中样式（染蓝）只在指示器里露出。
+             上层的按钮只给键盘用（pointer-events: none），按下的透镜挂在 .ws-root 上压在栏之上 -->
+        <div class="tabbar lg62" bind:this={tabBarEl} role="tablist" aria-label={t('工作空间')}>
+          <span class="tabsel" bind:this={tabSelEl}></span>
+          <div class="tabrow" bind:this={tabRowU}>
+            <button class="tab" role="tab" aria-selected={ws === 'cloud'} onclick={() => pickWs('cloud')}>{@render tabCloud()}</button>
+            <button class="tab" role="tab" aria-selected={ws === 'local'} onclick={() => pickWs('local')}>{@render tabLocal()}</button>
+          </div>
+          <div class="tabrow tabrow-s" bind:this={tabRowS} aria-hidden="true">
+            <span class="tab">{@render tabCloud()}</span><span class="tab">{@render tabLocal()}</span>
+          </div>
+          <span class="tabglow" bind:this={tabGlowEl}></span>
+        </div>
+      {:else}<span></span>{/if}
+      <button class="searchbtn lgo62" use:liquidPress aria-label={t('搜索')} onclick={openSearch}><Sym name="magnifyingglass" weight={600} size={20} /></button>
     </div>
 
     <div class="searchrow">
-      <button class="closebtn" class:glass={!fg} class:fg aria-label={t('关闭搜索')} onclick={closeSearch}><Sym name="xmark" weight={600} size={16} /></button>
+      <button class="closebtn" class:glass={!fg} class:fg use:liquidPress aria-label={t('关闭搜索')} onclick={closeSearch}><Sym name="xmark" weight={600} size={16} /></button>
       <div class="searchfield" class:glass={!fg} class:fg>
         <Sym name="magnifyingglass" weight={500} size={17} />
         <input bind:this={searchEl} bind:value={query} placeholder={t('搜索文件')} autocomplete="off" />
@@ -2269,15 +2289,12 @@
   </div>
   {/if}
 
-  <!-- 长按菜单（kit Menu：Liquid Glass Medium 圆角 34，从按压点缩放出现） -->
-  {#if menu}
-    <Menu x={menu.x} y={menu.y} width={250} origin="{menu.ox}% {menu.oy}%" title={menu.item.name}
-      items={menuItems} onclose={() => { if (menuArmed) menu = null; }} />
-  {/if}
+  <!-- 文件菜单：长按 / 右键从按压点弹出，行尾「…」从按钮长出来（同一份条目、同一套 kit Menu 材质） -->
+  <MorphMenu open={!!menu} anchor={menu?.anchor || null} point={menu?.point || null} width={250} title={menu?.item.name || ''}
+    items={menuItems} onclose={() => (menu = null)} />
 
-  <!-- 传输面板：锚在传输环下方的玻璃面板（kit Popover，与菜单同材质） -->
-  {#if transferOpen}
-    <Popover right={14} y={barBottom() + 16} width={Math.min(354, rootW - 28)} label={t('传输')} onclose={() => (transferOpen = false)}>
+  <!-- 传输面板：从传输环长出来的玻璃面板（与菜单同一套液滴形变、同材质） -->
+  <MorphMenu open={transferOpen} anchor={xferBtn} neighbors={topBtns()} onfuse={onTopFuse} width={Math.min(354, rootW - 28)} title={t('传输')} onclose={() => (transferOpen = false)}>
       <div class="tp-head"><h3>{t('传输')}</h3>{#if xfers.some((x) => x.status !== 'up')}<button onclick={() => { tasks = tasks.filter((x) => x.status === 'up'); clearFinishedUploads(); clearFinishedDownloads(); }}>{t('清除已完成')}</button>{/if}</div>
       {#if !xfers.length}
         <div class="tp-empty">{t('暂无传输任务')}</div>
@@ -2303,8 +2320,7 @@
           {/each}
         </div>
       {/if}
-    </Popover>
-  {/if}
+  </MorphMenu>
 
   <!-- 文件预览（只给接不住的类型兜底：压缩包等）：kit 表单页 -->
   {#if preview}
@@ -2402,38 +2418,8 @@
     </Sheet>
   {/if}
 
-  <!-- 本地位置管理 / 添加本地位置：kit 动作单（警告框形态、按钮竖排） -->
-  {#if rootMenu}
-    <Alert title={rootMenu.root.name}
-      message={rootMenu.root.mode === 'all' ? t('不再作为本地位置（手机文件不删）') : t('撤销授权（不删除手机上的文件）')}
-      onclose={() => (rootMenu = null)}
-      actions={[
-        ...(rootMenu.root.mode !== 'all' ? [{ label: t('重新选择文件夹'), role: 'plain', onclick: () => doReselect(rootMenu.root) }] : []),
-        { label: t('移除此位置'), role: 'destructive', onclick: () => doRemove(rootMenu.root) },
-        { label: t('取消'), role: 'cancel', onclick: () => (rootMenu = null) },
-      ]} />
-  {/if}
-  {#if pcLocMenu}
-    <Alert title={tr(pcLocMenu.loc.name)}
-      message={pcLocAbs[pcLocMenu.loc.id] || ''}
-      onclose={() => (pcLocMenu = null)}
-      actions={[
-        { label: t('在文件资源管理器中显示'), role: 'plain', onclick: () => revealPcLoc(pcLocMenu.loc) },
-        ...(pcLocMenu.loc.removable ? [{ label: t('移除此位置'), role: 'destructive', onclick: () => removePcLoc(pcLocMenu.loc) }] : []),
-        { label: t('取消'), role: 'cancel', onclick: () => (pcLocMenu = null) },
-      ]} />
-  {/if}
-  {#if addSheet}
-    <Alert title={t('添加本地位置')} message={localPicking ? t('请在系统选择器中选择…') : t('浏览、预览、发给 AI')}
-      onclose={() => (addSheet = false)}
-      actions={[
-        { label: t('选择手机文件夹'), role: 'plain', disabled: localPicking, onclick: doPickLocal },
-        ...(canAllFiles() ? [{ label: t('整个手机存储'), role: 'plain', disabled: localPicking, onclick: doPickAll }] : []),
-        { label: t('取消'), role: 'cancel', onclick: () => (addSheet = false) },
-      ]} />
-  {/if}
 
-  <!-- 「发送给 AI」目标选择：kit 表单页 + 分组列表；子层（Vertex / 视频素材位 / 选择对话）左钮换成返回 -->
+  <!-- 「发送给 AI」目标选择：kit 表单页 + 分组列表；子层（Media Studio / 视频素材位 / 选择对话）左钮换成返回 -->
   {#snippet aiOpt(onclick, bg, icon, img, label, sub, chev)}
     <button class="k-row k-btnrow" {onclick}>
       <span class="k-tile" style:background={bg || null}>{#if img}<img src={img} alt="" />{:else}{@html icon}{/if}</span>
@@ -2444,33 +2430,30 @@
   {#if aiPick}
     <Sheet closeLabel={t('取消')} backLabel={t('返回')}
       title={aiView === 'root' ? t('发送「{name}」给', { name: aiPick.name })
-        : aiView === 'vertex' ? t('发送「{name}」给 Vertex', { name: aiPick.name })
-        : aiView === 'video' ? t('视频生成 · 这张图用作')
+        : aiView === 'studio' ? t('发送「{name}」到 Media Studio', { name: aiPick.name })
+        : aiView === 'video' ? t('视频 · 这张图用作')
         : t('发送到 {name} · 选择对话', { name: AI_NAMES[aiChat?.target] || '' })}
-      onback={aiView === 'root' ? null : aiView === 'chat' ? chatBack : aiView === 'video' ? () => (aiView = 'vertex') : () => (aiView = 'root')}
+      onback={aiView === 'root' ? null : aiView === 'chat' ? chatBack : aiView === 'video' ? () => (aiView = 'studio') : () => (aiView = 'root')}
       onclose={() => { aiPick = null; aiView = 'root'; }}>
       {#if aiView === 'root'}
         <div class="k-card">
           {#if aiCaps.claude}{@render aiOpt(() => pickAI('claude'), '#d97757', AI_IC.claude, '', 'Claude', t('当附件向 Claude 提问'), true)}{/if}
-          {#if aiCaps.gemini}{@render aiOpt(() => (aiView = 'vertex'), '', '', BASE + 'assets/icons/gemini.svg', 'Vertex', t('Gemini 对话 / 生成视频·图片·语音·音乐'), true)}{/if}
+          {#if aiCaps.studio}{@render aiOpt(() => (aiView = 'studio'), STUDIO_TILE, '', BASE + 'assets/icons/studio-light.svg', 'Media Studio', t('生成图像 / 视频 / 配音 / 音乐'), true)}{/if}
         </div>
-      {:else if aiView === 'vertex'}
-        <div class="k-card">
-          {#if aiCaps.gemini}{@render aiOpt(() => pickAI('gemini'), '', '', BASE + 'assets/icons/gemini.svg', t('Gemini 对话'), t('当附件提问'), true)}{/if}
-        </div>
+      {:else if aiView === 'studio'}
         {#if aiCaps.video || aiCaps.image || aiCaps.audio || aiCaps.music}
           <div class="k-card">
-            {#if aiCaps.video}{@render aiOpt(() => (aiCaps.mode === 'image' ? (aiView = 'video') : pickAI('video')), 'var(--i-indigo)', AI_IC.video, '', t('视频生成'), aiCaps.mode === 'image' ? t('选首帧 / 尾帧 / 偏好图') : t('作为提示词'), aiCaps.mode === 'image')}{/if}
-            {#if aiCaps.image}{@render aiOpt(() => pickAI('image'), 'var(--i-blue)', AI_IC.image, '', t('图片生成'), aiCaps.mode === 'image' ? t('作为改图素材') : t('作为提示词'), false)}{/if}
-            {#if aiCaps.audio}{@render aiOpt(() => pickAI('audio'), 'var(--i-pink)', AI_IC.audio, '', t('语音合成'), t('作为朗读文本'), false)}{/if}
-            {#if aiCaps.music}{@render aiOpt(() => pickAI('music'), 'var(--i-orange)', AI_IC.music, '', t('音乐生成'), t('作为描述'), false)}{/if}
+            {#if aiCaps.video}{@render aiOpt(() => (aiCaps.mode === 'image' ? (aiView = 'video') : pickAI('video')), 'var(--i-indigo)', AI_IC.video, '', t('视频'), aiCaps.mode === 'image' ? t('选首帧 / 尾帧 / 参考图') : t('作为提示词'), aiCaps.mode === 'image')}{/if}
+            {#if aiCaps.image}{@render aiOpt(() => pickAI('image'), 'var(--i-blue)', AI_IC.image, '', t('图像'), aiCaps.mode === 'image' ? t('作为改图素材') : t('作为提示词'), false)}{/if}
+            {#if aiCaps.audio}{@render aiOpt(() => pickAI('audio'), 'var(--i-pink)', AI_IC.audio, '', t('配音'), t('作为朗读文本'), false)}{/if}
+            {#if aiCaps.music}{@render aiOpt(() => pickAI('music'), 'var(--i-orange)', AI_IC.music, '', t('音乐'), t('作为描述'), false)}{/if}
           </div>
         {/if}
       {:else if aiView === 'video'}
         <div class="k-card">
           {@render aiOpt(() => pickVideoSlot('first'), 'var(--i-indigo)', AI_IC.first, '', t('首帧素材'), t('视频从这张图开始'), false)}
           {@render aiOpt(() => pickVideoSlot('last'), 'var(--i-indigo)', AI_IC.last, '', t('尾帧素材'), t('视频结束于这张图'), false)}
-          {@render aiOpt(() => pickVideoSlot('ref'), 'var(--i-indigo)', AI_IC.ref, '', t('偏好图'), t('带入主体 / 风格参考（Veo 3.1）'), false)}
+          {@render aiOpt(() => pickVideoSlot('ref'), 'var(--i-indigo)', AI_IC.ref, '', t('参考图'), t('带入主体 / 风格'), false)}
         </div>
       {:else if aiView === 'chat' && aiChat}
         <label class="k-search"><Sym name="magnifyingglass" weight={500} size={17} /><input type="search" placeholder={t('搜索对话')} bind:value={aiChat.q} /></label>
@@ -2561,7 +2544,7 @@
 
 <style>
   /* iOS 27（Apple「iOS and iPadOS 27」UI Kit，与设置页同一套取样：bridge build/design/ios27-settings）。
-     独立手机页固定浅色 grouped；内嵌进工作台（.embedded）时跟随宿主明暗（.ios-dark，由 iosDark 算出）。
+     独立手机页与内嵌进工作台（.embedded）都跟随明暗（.ios-dark，由 iosDark 算出）。
      颜色只走这些令牌；--i-* 是 components/ios27 那套 kit 组件读的同名令牌（Toggle / Segmented / TextField / Alert / Sheet）。 */
   .ws-root {
     --blue: #0088ff; --red: #ff383c; --green: #34c759; --orange: #ff8d28; --blue-soft: rgba(0,136,255,.1);
@@ -2628,6 +2611,9 @@
   .ws-root.embedded.chrome { --tbg: 4px; }
   .topbtns { position: absolute; top: calc(var(--sat,0px) + var(--tbg)); left: 16px; right: 16px; height: 44px; z-index: 44; display: flex; align-items: center; gap: 12px; pointer-events: none; }
   .topbtns > :global(*) { pointer-events: auto; }
+  /* 菜单把旁边的按钮融进去的那一段：整排抬到菜单玻璃（95）和内容（97）之上，不接点击（点到的是菜单的挡板） */
+  .topbtns.fusing { z-index: 98; }
+  .topbtns.fusing > :global(*) { pointer-events: none; }
   /* 滚动边缘效果（kit「Scroll Edge Effect - Soft」：顶上重度模糊 + 线性渐隐遮罩，同设置页 .edge） */
   .edge {
     position: absolute; left: 0; right: 0; top: 0; z-index: 43; height: calc(var(--sat,0px) + var(--tbg) + 76px); pointer-events: none; opacity: 0; transition: opacity 200ms linear;
@@ -2668,6 +2654,8 @@
   .pb-root { flex: none; width: 24px; height: 22px; display: inline-flex; align-items: center; justify-content: center; margin-left: -2px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--label2); cursor: pointer; }
   .pb-root :global(svg) { width: 19px; height: 19px; }
   .pb-root:active { opacity: .55; }
+  /* 触屏：图标只有 24×22，命中区扩到 36 左右（视觉不变） */
+  @media (pointer: coarse) { .pb-root { position: relative; } .pb-root::after { content: ''; position: absolute; inset: -7px -6px; } }
   .pb-root.dnd-on { background: var(--blue-soft); box-shadow: inset 0 0 0 1.5px var(--blue); color: var(--blue); }
   .pb-more { flex: none; height: 22px; padding: 0 7px; border: 0; border-radius: 11px; background: var(--fill3); color: var(--label2); font: inherit; font-size: 15px; line-height: 22px; font-weight: 600; letter-spacing: 1px; cursor: pointer; }
   .pb-more:active { background: var(--fill); }
@@ -2845,25 +2833,28 @@
   .lg62 { position: relative; isolation: isolate; height: 62px; border-radius: 31px; color: var(--glass-ink);
     -webkit-backdrop-filter: blur(2.45px); backdrop-filter: blur(2.45px); }
   .lg62::before { content: ''; position: absolute; z-index: -1; inset: 0; pointer-events: none;
-    border: 0 solid transparent; border-image: var(--ov-ios27-tab62-light, url(../assets/ios27/tab62-light.png)) 0 216 fill / 0 72px / 40px stretch; }
-  .ios-dark .lg62::before { border-image-source: var(--ov-ios27-tab62-dark, url(../assets/ios27/tab62-dark.png)); }
+    border: 0 solid transparent; border-image: var(--ov-ios27-tab62-light) 0 216 fill / 0 72px / 40px stretch; }
+  .ios-dark .lg62::before { border-image-source: var(--ov-ios27-tab62-dark); }
   .lgo62 { position: relative; isolation: isolate; flex: none; width: 62px; height: 62px; border-radius: 50%; border: 0; padding: 0; background: none; cursor: pointer;
     display: flex; align-items: center; justify-content: center; color: var(--glass-ink); -webkit-tap-highlight-color: transparent;
     -webkit-backdrop-filter: blur(2.45px); backdrop-filter: blur(2.45px); transition: transform 420ms cubic-bezier(.3, 1.5, .45, 1); }
-  .lgo62::before { content: ''; position: absolute; z-index: -1; inset: -40px; pointer-events: none; background: var(--ov-ios27-nav62-light, url(../assets/ios27/nav62-light.png)) center / 142px 142px no-repeat; }
-  .ios-dark .lgo62::before { background-image: var(--ov-ios27-nav62-dark, url(../assets/ios27/nav62-dark.png)); }
-  .lgo62:active { transform: scale(1.08); transition: transform 160ms cubic-bezier(.2, 0, 0, 1); }
+  .lgo62::before { content: ''; position: absolute; z-index: -1; inset: -40px; pointer-events: none; background: var(--ov-ios27-nav62-light) center / 142px 142px no-repeat; }
+  .ios-dark .lgo62::before { background-image: var(--ov-ios27-nav62-dark); }
   /* 标签：kit「_Tab Bar Button - iPhone」——符号 18pt Semibold、标签 10/12 Semibold 字距 −0.1；选中垫胶囊 + 染蓝 */
-  .tabbar { display: flex; align-items: center; padding: 0 4px; }
-  .tabsel { position: absolute; top: 4px; left: 4px; width: 104px; height: 54px; border-radius: 27px; background: var(--tab-sel); transition: transform .34s cubic-bezier(.3,1.25,.4,1); }
-  .tab { position: relative; width: 104px; height: 54px; border: none; background: none; padding: 6px 8px 7px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
-    color: inherit; border-radius: 27px; font: inherit; cursor: pointer; transition: color .22s; -webkit-tap-highlight-color: transparent; }
+  .tabbar { --tw: 104px; width: calc(2 * var(--tw) + 8px); flex: none; touch-action: pan-y; cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+  /* 选中垫片 / 两层 Tab / 光斑都按栏内局部坐标摆（lib/liquid/tabs.js 逐帧写 transform 与遮罩） */
+  .tabsel { position: absolute; top: 0; left: 0; width: var(--tw); height: 54px; border-radius: 27px; background: var(--tab-sel); transform: translate(4px, 4px); pointer-events: none; }
+  .tabrow { position: absolute; left: 4px; top: 4px; display: flex; pointer-events: none; }
+  .tabrow-s { color: var(--blue); }
+  .tabglow { position: absolute; inset: 0; border-radius: 31px; mix-blend-mode: plus-lighter; pointer-events: none; display: none; }
+  .tab { position: relative; width: var(--tw); height: 54px; border: none; background: none; padding: 6px 8px 7px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+    color: inherit; border-radius: 27px; font: inherit; -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+  .tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
   .tab-ic { height: 28px; display: flex; align-items: center; justify-content: center; }
   .tab-ic :global(svg:not(.sym)) { width: 25px; height: 25px; }
   .tab .lb { font-size: 10px; line-height: 12px; font-weight: 600; letter-spacing: -.1px; }
-  .tab.on { color: var(--blue); }
   /* 320 一档的窄屏：两个标签收窄，给右边的搜索钮让出间距 */
-  @media (max-width: 345px) { .tab, .tabsel { width: 88px; } .bottombar { padding: 0 16px; } }
+  @media (max-width: 345px) { .tabbar { --tw: 88px; } .bottombar { padding: 0 16px; } }
 
   .searchrow { position: absolute; inset: 0; display: flex; align-items: center; gap: 12px; padding: 0 28px; opacity: 0; pointer-events: none; transform: translateY(8px) scale(.96); transition: opacity .26s, transform .3s cubic-bezier(.32,.72,0,1); }
   .bottomwrap.searching .bottombar { opacity: 0; pointer-events: none; transform: translateY(4px) scale(.97); }
@@ -2883,14 +2874,14 @@
   .fg { position: relative; isolation: isolate; background: none; -webkit-backdrop-filter: blur(2.45px); backdrop-filter: blur(2.45px); }
   .fg::before { content: ''; position: absolute; inset: -24px; z-index: -1; pointer-events: none; }
   .closebtn.fg { color: #0d0d0d; }
-  .closebtn.fg::before { background: var(--ov-figma-glass-fp-orb48-light, url(../assets/figma-glass/fp-orb48-light.png)) center / 100% 100% no-repeat; }
-  .searchfield.fg::before { border-style: solid; border-width: 0 64px; border-image: var(--ov-figma-glass-fp-cap48-light, url(../assets/figma-glass/fp-cap48-light.png)) 0 192 fill / 0 64px / 0 stretch; }
+  .closebtn.fg::before { background: var(--ov-figma-glass-fp-orb48-light) center / 100% 100% no-repeat; }
+  .searchfield.fg::before { border-style: solid; border-width: 0 64px; border-image: var(--ov-figma-glass-fp-cap48-light) 0 192 fill / 0 64px / 0 stretch; }
   .searchfield.fg, .searchfield.fg input { color: #0d0d0d; }
   .searchfield.fg input { caret-color: #0088ff; }
   .searchfield.fg input::placeholder { color: #b1b1b3; }
   .ios-dark .closebtn.fg { color: #f5f5f5; }
-  .ios-dark .closebtn.fg::before { background-image: var(--ov-figma-glass-fp-orb48-dark, url(../assets/figma-glass/fp-orb48-dark.png)); }
-  .ios-dark .searchfield.fg::before { border-image-source: var(--ov-figma-glass-fp-cap48-dark, url(../assets/figma-glass/fp-cap48-dark.png)); }
+  .ios-dark .closebtn.fg::before { background-image: var(--ov-figma-glass-fp-orb48-dark); }
+  .ios-dark .searchfield.fg::before { border-image-source: var(--ov-figma-glass-fp-cap48-dark); }
   .ios-dark .searchfield.fg, .ios-dark .searchfield.fg input { color: #f5f5f5; }
   .ios-dark .searchfield.fg input::placeholder { color: #747473; }
 
@@ -3010,8 +3001,8 @@
     font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -.23px; animation: toastin .32s cubic-bezier(.25, 1.2, .4, 1);
     width: max-content; max-width: min(calc(100% - 32px), 560px); box-sizing: border-box; }
   .toast::before { content: ''; position: absolute; z-index: -1; inset: 0; pointer-events: none;
-    border: 0 solid transparent; border-image: var(--ov-ios27-cap44-light, url(../assets/ios27/cap44-light.png)) 0 210 fill / 0 70px / 40px stretch; }
-  .ios-dark .toast::before { border-image-source: var(--ov-ios27-cap44-dark, url(../assets/ios27/cap44-dark.png)); }
+    border: 0 solid transparent; border-image: var(--ov-ios27-cap44-light) 0 210 fill / 0 70px / 40px stretch; }
+  .ios-dark .toast::before { border-image-source: var(--ov-ios27-cap44-dark); }
   .toast > span { padding: 12px 0; overflow: hidden; text-overflow: ellipsis; }
   .toast :global(.sym) { color: var(--green); }
   .toast.warn :global(.sym) { color: var(--orange); }

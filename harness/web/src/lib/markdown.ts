@@ -15,7 +15,9 @@ function inline(s: string): string {
     .replace(/(^|[\s(（>])\*([^*\s][^*]*?)\*(?=[\s).,;:!?，。；：）]|$)/g, "$1<em>$2</em>")
     // [文字](https://…) — 仅放行 http(s)，转义后 & 已成 &amp; 无注入面
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    // 拉取请求：agent 建好 PR 后按约定报的 <pr-created>链接</pr-created>（给 bridge 绑定用）——界面上只显示成链接
+    .replace(/&lt;pr-created&gt;\s*(https?:\/\/[^\s<"]+?)\s*&lt;\/pr-created&gt;/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
 }
 
 function table(lines: string[]): string {

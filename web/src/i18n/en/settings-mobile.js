@@ -20,9 +20,6 @@ export default {
   '顺序': 'Order',
   '明亮': 'Light',
   '跟随系统明暗': 'Match system appearance',
-  '分页跟随主页明暗': 'Pages match Home appearance',
-  '分页跟随主页': 'Pages match Home',
-  '跟随系统：主页明暗随系统深色模式切换；分页跟随：对话分页与主页明暗联动。': 'Match system appearance: Home switches between light and dark with your system. Pages match Home: chat pages switch between light and dark along with Home.',
   '原图加载': 'Load full-resolution images',
   '开启后相册/图集查看直接加载原图（连滑预载也按原图进行，清晰度最高但流量大、慢网明显变慢）；关闭时先看 1280px 轻量图，双指放大会自动换成原图。下次打开图片时生效。': 'When on, the photo viewer loads original images directly, including preloading as you swipe. Images are sharpest, but this uses more data and is noticeably slower on slow networks. When off, you see a lightweight 1280px image first, and pinching to zoom switches to the original automatically. Takes effect the next time you open an image.',
   '输入建议': 'Prompt suggestions',
@@ -110,8 +107,6 @@ export default {
   '管理 Claude Code / dimensio / Codex 的技能、MCP 连接器与插件，每个扩展可勾选生效的 agent。': 'Manage skills, MCP connectors, and plugins for Claude Code, dimensio, and Codex. Choose which agents each extension is enabled for.',
   '流体壁纸': 'Fluid wallpaper',
   '仅暗主题背景': 'Dark theme only',
-  '模拟参数': 'Simulation parameters',
-  '恢复默认（Orange set）': 'Reset to defaults (Orange set)',
 
   // —— 壁纸 ——
   '明亮壁纸预览': 'Light wallpaper preview',

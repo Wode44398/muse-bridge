@@ -132,7 +132,7 @@ test("coder tier is refused when the parent session is not in auto mode", async 
   const run = makeSubAgentRunner(env(tmpRoot(), { parentMode: () => "read-only" }), () => adapter);
   const r = await run({ prompt: "edit stuff", tier: "coder", onEvent: (ev) => events.push(ev) });
   assert.equal(r.ok, false);
-  assert.match(r.error ?? "", /auto mode/);
+  assert.match(r.error ?? "", /auto or bypass mode/);
   assert.equal(adapter.calls.length, 0);
   // Even a refusal shows up on the event stream as a failed card.
   assert.deepEqual(events.map((e) => e.e), ["subagent_start", "subagent_end"]);

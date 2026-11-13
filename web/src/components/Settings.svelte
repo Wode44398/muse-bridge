@@ -47,6 +47,7 @@
   import { wp, wpDef, setWp, addUpload, deleteUpload, splitWpFiles, LIGHT_IDS, DARK_IDS, spatial, setSpatialOn, setSpatialAmp, wpHasDepth, wpIsUpload } from '../lib/wallpaper.svelte.js';
   import { registerCloser } from '../lib/nav.js';
   import { swipeDismiss, spring, NAV_SPRING } from '../lib/motion.js';
+  import { layout } from '../lib/layout.svelte.js';
   import { setServerBase, getServerBase, isOffline, onServerBaseChange, apiUrl } from '../lib/server.js';
   import { canSwitchServers, activeProfile, listProfiles } from '../lib/serverProfiles.js';
   import { updateState, installPending, hasSilentUpdate, checkForUpdate, startUpdate, appVersionLine,
@@ -56,19 +57,36 @@
   import { api, getToken } from '../lib/api.js';
   import { saPing } from '../lib/serverAdmin.svelte.js';
   import { ags, loadAgents, setAgentOn, agentById, loadPool, loadUsage, setRouter, activateAccount, moveAccount, addAccount, updateAccount, deleteAccount,
-    accLabel, whyText, hhmm, poolResetIn, poolResetAt, usageTone, loadPolicy, savePolicy, apiKeyNote } from '../lib/agentSettings.svelte.js';
+    accLabel, whyText, hhmm, poolResetIn, poolResetAt, usageTone, planPill, PLAN_CHOICES, loadPolicy, savePolicy, apiKeyNote, loadResets, resetsLeft } from '../lib/agentSettings.svelte.js';
+  import ClaudeResets from './ClaudeResets.svelte';   // 账号页「重置卡」一组（与桌面设置号池的弹窗共用）
   import { filesFromInput, removeAttachment, uploadAttachment } from '../lib/attachments.js';
   import { cs, loadClaudeSettings } from '../lib/claudeSettings.svelte.js';
-  // 模型服务（自定义 API）：管理面板盖在设置上，两套设置外壳共用（components/claude/providers）
-  import ProviderManager from './claude/providers/ProviderManager.svelte';
-  import { cp, loadProviders, cpSummaryText, canUseCustomApi } from '../lib/claudeProviders.svelte.js';
+  import { np, setNoticePref, kindValue, setKind, TONES, VIBES, toneLabel, pickTone, pickPhoneTone, canPickPhoneTone, previewVibe, canVibrate, nativeNotices, testNotice, browserPerm, requestBrowserPerm } from '../lib/notices.svelte.js';
+  // 模型中心（模型中心 v2）：根页「Agent」组里的一页，正文是 components/modelhub/HubHome；添加 / 编辑的浮层挂在 App 根上，
+  // 开着时 hubUi.sheet 非空。管理员看总览（hub），能自定义 API 的成员看自己那份（cp），两份都没有就不出这一页
+  import { cp, loadProviders, canUseCustomApi } from '../lib/claudeProviders.svelte.js';
+  import { hub, hubUi, loadHub, hubSummaryText, closeHubSheet } from '../lib/modelHub.svelte.js';
   // Claude Code 运行组件的下载进度 / 失败重试（安装包不再内嵌，首启服务端去拿；就绪时不显示）
   import ClaudeCliStatus from './ClaudeCliStatus.svelte';
-  import VertexCredentials from './VertexCredentials.svelte';
-  import { vx, VX, VERTEX_SETTING_GROUPS, loadVertexSettings, setVertexSetting, vxChanged, vxLabel, vxDesc, vxOptions, vxValueLabel, vxGroupLabel, vxGroupFoot, vxGroupKeys } from '../lib/vertexSettings.svelte.js';
+  // 设置 › Media Studio 的正文归 studio 扩展（components/studio/settings/），只经懒加载入口取，不许静态 import（2026-11-04）
+  import { loadPage } from '../modules/pages.js';
   import { S as CS, val, visible, setVal, resetVal, changed, label as csLabel, options as csOptions, valueLabel, errText } from '../lib/claudeSettingsView.js';
+  // 子 agent 调用策略子页的「离开前确认」登记处（不带依赖的小文件；子页正文与状态模块都是懒加载的，见下面 dpLoad）
+  import { dispatchLeaveGuard, dispatchHasUnsaved } from './claude/dispatch/leaveGuard.js';
   import { branchPrefixError } from '../../../src/config/claude-settings.mjs';
   import { extensionsNav } from '../lib/extensionsNav.svelte.js';
+  import ProjectPicker from './ProjectPicker.svelte';
+  import {
+    ds, loadDimensio, dimReady, errOf, setErr, hasCap,
+    providerOptions, modelOptions, effortOptions, fastOk, curSpec, curModel, vendorName, setProvider, setModel, setThinking, setFast,
+    keyVendors, canSetKey, setVendorKey, customSummary,
+    LOCAL_ENGINES, localOk, localLine,
+    MODES, ACCESS, accessLocked, setMode, setAccess, rulesOf, addRules, removeRule, setWorkspace,
+    memoryOk, memLine,
+    prefGroups, prefItems, prefGroupLabel, prefLabel, prefDesc, prefOptions, prefChanged, prefValueLabel, setPref, parsePrefNumber,
+    sessionTitle, exportDiag, versionLine, openInDimensio,
+    feed, setFeedDetail, FEED_DESC,
+  } from '../lib/dimensioSettings.svelte.js';
   import { goto } from '../lib/pageMorph.js';
   import Sym from './ios27/Sym.svelte';
   import ClaudeLogo from './ClaudeLogo.svelte';
@@ -85,28 +103,26 @@
   import { showToast } from '../lib/toast.svelte.js';
   import Alert from './ios27/Alert.svelte';
   import Sheet from './ios27/Sheet.svelte';
-  import Menu from './ios27/Menu.svelte';
+  import MorphMenu from './ios27/MorphMenu.svelte';
+  import { LiquidTabs } from '../lib/liquid/tabs.js';
   import TextField from './ios27/TextField.svelte';
   import { SI, agentMark } from '../lib/settingsIcons.js';
-  // 玻璃图层 / 平滑圆角遮罩：公开版自带的，私有 overlay 有同名原版就换成它（lib/overlay.svelte.js）
-  import { ovUrl, ovMarks } from '../lib/overlay.svelte.js';
-  import sq26_pub from '../assets/ios27/squircle26.svg';
-  import stagePanelGlass_pub from '../assets/ios27/stagepanel-light.png';
-  import stageCapGlass_pub from '../assets/ios27/stagecap44-light.png';
-  const sq26 = $derived(ovUrl('ios27/squircle26.svg', sq26_pub));
-  const stagePanelGlass = $derived(ovUrl('ios27/stagepanel-light.png', stagePanelGlass_pub));
-  const stageCapGlass = $derived(ovUrl('ios27/stagecap44-light.png', stageCapGlass_pub));
+  // 玻璃图层 / 平滑圆角遮罩：原版资源（lib/overlay.svelte.js）
+  import { ovUrl } from '../lib/overlay.svelte.js';
+  const sq26 = $derived(ovUrl('ios27/squircle26.svg'));
+  const stagePanelGlass = $derived(ovUrl('ios27/stagepanel-light.png'));
+  const stageCapGlass = $derived(ovUrl('ios27/stagecap44-light.png'));
 
   // 应用图标：满版方图（apple-touch-icon），iOS 图标形状由平滑圆角遮罩给
   const BASE = import.meta.env.BASE_URL;
   const appIcon = BASE + 'icons/apple-touch-icon.png';
   const svgOf = (name, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${SI[name] || ''}</svg>`;
 
-  // —— 外观：跟全局界面主题（与 Claude 等分页一致；「分页跟随主页」开着时即主页明暗）——
+  // —— 外观：跟全局界面主题（全局统一：主页与 Claude 等分页同一份明暗）——
   const dark = $derived(ui.theme !== 'light');
   setContext('ios27', { get dark() { return dark; }, ink: true });
   // 单页模式（只开着一个 agent，App 直接落在那一页、没有主页）也用这一套设置（2026-10-21 起，原 claude.ai 风那套下线）：
-  // 跟主页 / 跨分页的东西在这里没意义——壁纸与流体壁纸、「分页跟随主页明暗」——藏掉。
+  // 跟主页 / 跨分页的东西在这里没意义——壁纸与流体壁纸——藏掉。
   const single = $derived(rootScreen() !== 'home');
   const plat = platform();   // 'android' | 'web'（桌面壳走 SettingsDesktop，到不了这里）
 
@@ -116,18 +132,24 @@
 
   // —— 通用：开关 ——
   const load = (k, def = false) => { try { const v = localStorage.getItem(k); return v == null ? def : v === '1'; } catch { return def; } };
-  let notifyOn = $state(load('bridge-notify', true));   // 通知默认开（与 notify.js 门禁约定一致）
-  function toggleNotify() { notifyOn = !notifyOn; try { localStorage.setItem('bridge-notify', notifyOn ? '1' : '0'); } catch {} }
+  // 通知总开关（bridge-notify，默认开）：与「通用 › 通知」页、notify.js / notices.svelte.js 同一份
+  const notifyOn = $derived(np.on);
+  function toggleNotify() { setNoticePref('on', !np.on); }
+  const VIBE_HAS = canVibrate();
+  const NOTICE_KINDS = [
+    { k: 'question', label: () => t('在等你回答') },
+    { k: 'permission', label: () => t('需要你批准') },
+    { k: 'done', label: () => t('完成') },
+    { k: 'error', label: () => t('出错') },
+  ];
+  const vibeLabel = () => (VIBES.find((x) => x.id === np.vibe) || VIBES[1]).label();
+  const hasNotifySys = typeof window !== 'undefined' && !!window.AndroidStore?.openNotificationSettings;
+  function openNotifySystem() { try { window.AndroidStore?.openNotificationSettings?.(); } catch {} }
   function toggleFollowSys() { prefs.followSys = !prefs.followSys; savePrefs(); if (prefs.followSys) applyFollowSys(); }
-  function toggleFollowPage() {
-    prefs.followPage = !prefs.followPage; savePrefs();
-    if (prefs.followPage) setTheme(ui.glassMode === 'B' ? 'light' : 'dark');   // 开启瞬间先对齐一次
-  }
-  // 外观页的明暗卡片：手动选一种＝不再跟随系统（同 iOS）；「分页跟随主页」开着时主页一起换，免得下次被拉回去
+  // 外观页的明暗卡片：手动选一种＝不再跟随系统（同 iOS）；明暗全局统一，主页与各分页一起换
   function pickTheme(th) {
     if (prefs.followSys) { prefs.followSys = false; savePrefs(); }
     setTheme(th);
-    if (prefs.followPage) setHomeMode(th === 'light' ? 'B' : 'A');
   }
   function toggleNoAnim() { prefs.noEnterAnim = !prefs.noEnterAnim; savePrefs(); }
   // 「原图加载」：画廊查看器主图直接拉原图（预载也按原图跑）；关=1280 轻量档+缩放时升原图。
@@ -138,7 +160,8 @@
   // 扩展与记忆折成推入行；枚举项推入单选子页（cl-<键>，每项一行说明）。输入建议、自动压缩点 10-20 起存服务端。
   // 「自动压缩点」在对话页用量弹层上拖；这里只给一个恢复默认（CLI 自定）的出口
   const CL_CHOICE = { 'cl-perm': 'permissionMode', 'cl-style': 'outputStyle', 'cl-qto': 'questionTimeout', 'cl-lang': 'replyLanguage',
-    'cl-newsess': 'newSessionPolicy', 'cl-inbound': 'crossSessionInbound', 'cl-base': 'worktreeBaseRef', 'cl-attrib': 'attribution', 'cl-archive': 'autoArchiveDays' };
+    'cl-newsess': 'newSessionPolicy', 'cl-inbound': 'crossSessionInbound', 'cl-base': 'worktreeBaseRef', 'cl-attrib': 'attribution', 'cl-archive': 'autoArchiveDays',
+    'cl-pmax': 'projectMaxLive', 'cl-pdaily': 'projectDailyThreads', 'cl-pmodel': 'projectThreadModel', 'cl-peffort': 'projectThreadEffort' };
   const CL_GROUP = { 'cl-git': () => t('Git 与拉取请求'), 'cl-sessions': () => t('会话管理'), 'cl-notify': () => t('通知'), 'cl-host': () => t('这台电脑'), 'cl-ext': () => t('扩展与记忆') };
   const clErr = $derived(errText(cs.err));
   const GIT_KEYS = ['branchPrefix', 'worktreeBaseRef', 'autoFixPullRequests', 'autoArchiveOnPrClose', 'attribution'];
@@ -162,25 +185,125 @@
     if (await setVal('branchPrefix', e.value.trim() || null)) prefixEdit = null;
     else { e.err = errText() || t('分支前缀没保存上，请重试'); cs.err = ''; e.busy = false; }
   }
-  // 子 agent 调度偏好：警告框 + 多行文本框（同反馈那种），空 = 恢复默认（由 Claude 按任务难度自己定）
-  let dspEdit = $state(null);   // null | { value, err, busy }
-  function openDispatch() { cs.err = ''; dspEdit = { value: val('subagentDispatch') || '', err: '', busy: false }; }
-  async function saveDispatch() {
-    const e = dspEdit;
-    if (!e || e.busy) return;
-    e.busy = true;
-    if (await setVal('subagentDispatch', e.value.trim() || null)) dspEdit = null;
-    else { e.err = errText() || t('没保存上，请重试'); cs.err = ''; e.busy = false; }
+  // —— 子 agent 调用策略（Claude 页「对话」组里的一行 + 推入页 'cl-dispatch'）——
+  // 入口行：标题 + 随状态变的副标题，右边一个总开关，点行其余部分推入子页。能改策略的身份（管理员 / 能跑命令的）才有这一行。
+  // 状态模块 lib/dispatchPolicy.svelte.js 与子页正文 components/claude/dispatch/DispatchPolicy.svelte 都懒加载：
+  // Claude 页露面才取状态模块（副标题要读生效策略），推入子页才取正文——设置页首屏不带它们
+  const dpShown = $derived(cs.shell || cs.admin);
+  let dpm = $state.raw(null);      // 状态模块（{ dp, loadDispatch, setDispatch, … }）
+  const dp = $derived(dpm?.dp || null);
+  let dpImp = null;
+  function dpLoad() {
+    dpImp ||= import('../lib/dispatchPolicy.svelte.js');
+    dpImp.then((m) => { dpm = m; return m.loadDispatch(); }).catch(() => { if (!dpm) dpImp = null; });   // 模块没取到：下次进来再试
   }
+  // 副标题只放状态。关：一句去向；开：生效策略名 · 开着的范围（一个都没勾也照实说）
+  const dpSub = $derived.by(() => {
+    const p = dp?.policy;
+    if (!p) return dp?.err ? t('调用策略没读出来，点进去重试') : '';
+    if (!p.enabled) return t('已关闭 · 走 Claude Code 原生调用');
+    const s = (p.strategies || []).find((x) => x.id === p.activeId) || p.strategies?.[0];
+    const on = [p.scope?.workflow && tc('调用范围', '工作流'), p.scope?.subagent && tc('调用范围', '普通子 agent'), p.scope?.session && tc('调用范围', '发起新会话')].filter(Boolean);
+    // 迁移时自动建的那套叫「默认」，英文界面跟着译；用户自己起的名字原样显示
+    const named = !!s?.name && s.name !== '默认';   // i18n-ignore 与存下来的名字比较
+    return (named ? s.name : t('默认')) + ' · ' + (on.length ? on.join(t('、')) : t('未选生效范围'));
+  });
+  // 总开关即点即存（状态模块乐观更新，失败回滚并抛）：没存上时这一行的副标题换成红字说一声（开关自己会滑回去）
+  let dpRowErr = $state(''), dpErrTimer = 0;
+  async function toggleDispatch() {
+    if (!dpm || !dp?.policy) return;
+    dpRowErr = '';
+    try { await dpm.setDispatch({ enabled: !dp.policy.enabled }); }
+    catch (e) {
+      dpRowErr = tr(e?.message || '') || t('没保存上，请重试');   // 状态模块抛的 Error.message 就是给人看的那句话
+      clearTimeout(dpErrTimer); dpErrTimer = setTimeout(() => { dpRowErr = ''; }, 4000);
+    }
+  }
+  // 子页正文：它自己的浮层开着时告诉外壳（dpModal：算进弹层总闸，Esc 让给它）；有没保存的改动时，离开子页之前由它问
+  // 「保存 / 放弃 / 继续编辑」——正文挂着时把确认函数登记在 dispatch/leaveGuard.js（那个文件不带依赖，静态引它不会把正文的 chunk
+  // 带进来），外壳每条离开子页的路（返回钮、安卓返回键、Esc、双栏左列换分区、关设置）都先过 dpLeave；没有改动（或子页没挂）就同步放行。
+  // 左缘右滑没法停下来问：有改动时干脆不接这个手势（见 edgeSwipe 的 guard），改走返回钮
+  let dpModal = $state(false), dpAsking = false;
+  function dpLeave(go) {
+    if (!dispatchHasUnsaved()) return go();
+    if (dpAsking) return;
+    dpAsking = true;
+    dispatchLeaveGuard().then((ok) => { dpAsking = false; if (ok) go(); });
+  }
+  // 拖性价比图的判定线期间不接左缘右滑返回：手柄就贴在屏幕左缘那 40px 里。PlanChart 拖动开始 / 结束时派发 dp-drag（detail = true / false）。
+  // 另起一个标志，不借 sliding——那个会给整页加 .previewing、把分组卡变透明。松手时兜底复位（正文中途被卸掉也不会卡在「拖动中」）
+  let dpDrag = false;
+  $effect(() => {
+    const onDrag = (e) => { dpDrag = !!e.detail; };
+    const onUp = () => { dpDrag = false; };
+    window.addEventListener('dp-drag', onDrag);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => { window.removeEventListener('dp-drag', onDrag); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp); };
+  });
+  // 光靠 dp-drag 不够：组件里的 onpointerdown 走 Svelte 的事件委托，比右滑手势挂在外壳上的原生监听晚触发，按下那一刻标志还没立起来。
+  // 手柄声明了 touch-action:none（契约 §4.3），按在这样的元素上就认定是它的手势
+  function dpOwnsTouch(e) {
+    if (stack[stack.length - 1] !== 'cl-dispatch') return false;
+    for (let n = e?.target; n && n.nodeType === 1 && !n.classList.contains('settings'); n = n.parentElement) {
+      if (getComputedStyle(n).touchAction === 'none') return true;
+    }
+    return false;
+  }
+  // —— dimensio 页（数据面 lib/dimensioSettings.svelte.js，与桌面 DimensioSection 共用）——
+  // 单选项推入 dm:<项> / dp:<偏好键> 子页；要敲字的（key、路径、数字 / 文本偏好）走一个警告框 + 文本框（dmEdit）。
+  // 进这一页才拉（会把没在跑的 harness 拉起来）；管理员视角下开关关着 / 跑不起来时不拉。
+  const DM_TITLE = { provider: () => t('模型服务'), model: () => t('型号'), effort: () => t('思考深度'), mode: () => t('默认运行档位'),
+    access: () => t('访问范围'), ask: () => t('每次问我'), deny: () => t('从不允许'), diag: () => t('导出诊断包') };
+  const dimEnabled = $derived.by(() => { const a = agentById('dimensio'); return !a || (a.switch && a.runnable); });
+  const dimOpen = $derived(stack.includes('ag-dimensio'));
+  $effect(() => { if (dimOpen && dimEnabled) untrack(() => loadDimensio({ quiet: true })); });
+  let dmEdit = $state(null);   // null | { kind:'key'|'ws'|'num'|'text', id?, title, message, value, password?, multiline?, placeholder?, busy, err }
+  let dmPicking = $state(false);
+  function openKeyEdit(v) {
+    dmEdit = { kind: 'key', id: v.id, title: t('{name} 的 API Key', { name: v.name }), message: t('Key 加密存在服务端，重启不丢，不回传浏览器。'),
+      value: '', password: true, placeholder: v.hasKey ? t('••••••••（留空保持不变）') : t('粘贴 {name} API Key', { name: v.name }), busy: false, err: '' };
+  }
+  function openWsEdit() {
+    dmEdit = { kind: 'ws', title: t('工作空间'), message: t('新对话从这个文件夹开始，已经开着的对话不受影响。'), value: ds.config?.workspace || '', busy: false, err: '' };
+  }
+  function openPrefEdit(p) {
+    dmEdit = { kind: p.type === 'number' ? 'num' : 'text', id: p.key, title: prefLabel(p), message: prefDesc(p), value: String(p.value ?? ''),
+      multiline: p.type === 'text', placeholder: p.type === 'number' ? String(p.default) : '', busy: false, err: '' };
+  }
+  async function saveDmEdit() {
+    const e = dmEdit;
+    if (!e || e.busy) return;
+    let ok = false, tag = '';
+    if (e.kind === 'key') {
+      if (!e.value.trim()) { dmEdit = null; return; }
+      e.busy = true; tag = 'key:' + e.id; ok = await setVendorKey(e.id, e.value);
+    } else if (e.kind === 'ws') {
+      const p = e.value.trim();
+      if (!p || p === ds.config?.workspace) { dmEdit = null; return; }
+      e.busy = true; tag = 'workspace'; ok = await setWorkspace(p);
+    } else {
+      const item = ds.prefs?.items?.find((x) => x.key === e.id);
+      if (!item) { dmEdit = null; return; }
+      let v = e.value;
+      if (e.kind === 'num') { const r = parsePrefNumber(item, e.value); if (r.err) { e.err = r.err; return; } v = r.v; }
+      else if (v === item.default) v = null;
+      e.busy = true; tag = 'pref:' + e.id; ok = await setPref(e.id, v);
+    }
+    if (ok) dmEdit = null; else { e.err = errOf(tag) || t('保存失败'); setErr('', ''); e.busy = false; }
+  }
+  function pickDmFolder() { dmEdit = null; dmPicking = true; }
+  function resetDmPref() { const k = dmEdit?.id; dmEdit = null; if (k) setPref(k, null); }
+  // 规则子页的添加框
+  let dmRule = $state('');
+  async function addDmRule(kind) { if (await addRules(kind, dmRule)) dmRule = ''; }
   // 扩展与记忆：落到现有扩展中心（直达某个类型）/ Claude 分页的定时任务
   function openExtType(type) { extensionsNav.type = type; push('extensions'); }
   function openRoutinesPage() { ui.settingsOpen = false; goto('claude'); ui.routinesOpen = true; }
   // 「思考动画」：Claude 回复进行中那颗标记——新版 Claude Code 活动标记（默认）/ 原来的 claude.ai 星标。
-  // 三套都是原版动画，只有维护者的私有 overlay 带着；公开版只有一颗自绘星标，选项没有区别——overlay 带了两套以上才显示这一行。
-  const MARKS_ALL = [{ value: 'clay', label: () => t('新版 Claude Code') }, { value: 'sprite', label: () => t('新版聊天页') }, { value: 'classic', label: () => t('经典星标') }];
-  const MARKS = $derived.by(() => { const av = ovMarks(); return MARKS_ALL.filter((m) => av[m.value]); });
-  const showMarks = $derived(MARKS.length > 1);
-  const markLabel = $derived((MARKS.find((x) => x.value === prefs.claudeMark) || MARKS[0] || MARKS_ALL[0]).label());
+  // 三套都是原版动画。
+  const MARKS = [{ value: 'clay', label: () => t('新版 Claude Code') }, { value: 'sprite', label: () => t('新版聊天页') }, { value: 'classic', label: () => t('经典星标') }];
+  const markLabel = $derived((MARKS.find((x) => x.value === prefs.claudeMark) || MARKS[0]).label());
   function setMark(v) { prefs.claudeMark = v; savePrefs(); }
   // —— 手机操控（Phone Control · 实验性）：仅离线 apk 壳（有 window.AndroidStore 原生桥）里可用 ——
   const hasPhoneCtrl = typeof window !== 'undefined' && !!(window.AndroidStore && window.AndroidStore.startPhoneControl);
@@ -273,7 +396,7 @@
     finally { dvBusy = ''; }
   }
   // 设备与端口转发的拉取挂在「设备」页本身（见 stack 下面那个 effect），不挂在这一行的点击上
-  function openDevices() { dvErr = ''; dvNote = ''; push('devices'); }
+  function openDevices() { dvErr = ''; dvNote = ''; go('devices'); }
   function openDevice(d) { dvName = d.name; dvErr = ''; dvNote = ''; push('device:' + d.id); }
   function openFwdNew() {
     dvErr = ''; dvFwdPort = ''; dvFwdLabel = '';
@@ -317,7 +440,7 @@
   // 开关与认证（/api/agents）、Claude 的订阅号池与智能换号、对话偏好……
   // 号池 / 额度与注册原先只在服务端控制台（本机门），服务端给它们开了 settingsGate 后手机上也能改；
   // 会影响连接的（服务控制、隧道、客户端配对、管理员会话）仍只在控制台。数据面见 lib/agentSettings.svelte.js。
-  if (me.kind === 'admin') { loadAgents(); loadPool(); loadPolicy(); loadVertexSettings(); }
+  if (me.kind === 'admin') { loadAgents(); loadPool(); loadPolicy(); }
   // 「扩展 › 功能扩展」拨了开关（或别的设备改了）：App 经总线 agents.changed 刷 me.agents，这里跟着重拉，根列表即时增减
   let agentsSeen = JSON.stringify(me.agents);
   $effect(() => { const k = JSON.stringify(me.agents); if (k !== agentsSeen && me.kind === 'admin') { agentsSeen = k; untrack(loadAgents); } });
@@ -326,15 +449,22 @@
   // 管理员：服务器上全部 agent（含这台机器跑不了的，行尾标「不可用」）；其他人：只有 Claude 有本机偏好可调。
   // 在「扩展 › 功能扩展」里关掉的 agent 直接不列（维护者 10-21）；开着但这台机器跑不起来的仍列出、变灰，点进去看原因。
   // Claude 是核心、不在功能扩展里，关了也得留着入口才开得回来。
-  const agentRows = $derived((ags.agents?.agents?.length ? ags.agents.agents : agentOn('claude') ? [{ id: 'claude', label: 'Claude', local: true }] : [])
-    .filter((a) => a.local || a.id === 'claude' || a.switch !== false));
+  // 成员拿不到 /api/agents：被授权用 dimensio 就有它的一页，里面只出他自己能改的（模型、key、规则、偏好……）
+  // 2026-11-04 Gemini 对话下线：Gemini 那一页删掉，原来的位置由 Media Studio（'studio' 页）接替。服务端的 AGENTS 里有 studio 时
+  // 按它的次序排；成员拿不到 /api/agents、或 dev fixture（localStorage bridge-studio-fixture=1）时补在 Claude 后面。
+  const agentRows = $derived.by(() => {
+    const rows = (ags.agents?.agents?.length ? ags.agents.agents : agentOn('claude') ? [{ id: 'claude', label: 'Claude', local: true }] : [])
+      .filter((a) => (a.local || a.id === 'claude' || a.switch !== false) && a.id !== 'gemini');
+    if (!ags.agents?.agents?.length && me.kind === 'user' && Array.isArray(me.agents) && me.agents.includes('dimensio')) rows.push({ id: 'dimensio', label: 'dimensio', local: true });
+    if (studioOn && !rows.some((a) => a.id === 'studio')) rows.splice(rows[0]?.id === 'claude' ? 1 : 0, 0, { id: 'studio', label: 'Media Studio', local: true });
+    return rows;
+  });
   // agent 的品牌标（真标）：明暗两版的随界面明暗换
-  const markSrc = (id) => { const m = agentMark(id, dark); return m ? ovUrl(m) : ''; };   // 私有 overlay 有同名原版就换
+  const markSrc = (id) => agentMark(id, dark);
   const AG_AUTH_HINT = {
     claude: () => t('在下面「订阅号池」里添加账号。'),
-    gemini: () => t('在下面「Google 云凭据」里上传凭据 JSON。'),
     codex: () => t('在服务器上运行一次 codex login。'),
-    dimensio: () => t('在 dimensio 的 .env 里填一家模型厂商的 API key。'),
+    dimensio: () => t('在下面「API Key」里给一家厂商填 Key，或接一个自定义模型服务。'),
   };
   function agStatus(a) {
     if (!a || a.local) return '';
@@ -347,6 +477,7 @@
   const activeAcct = $derived(ags.accounts.find((x) => x.active) || null);
   function agTail(a) {
     if (a.local) return '';
+    if (a.id === 'studio') return !a.runnable ? t('不可用') : !a.switch ? tc('开关', '关闭') : '';
     if (!a.runnable) return t('不可用');
     if (!a.switch) return tc('开关', '关闭');
     if (a.id === 'claude' && ags.poolOk && activeAcct && ags.accounts.length > 1) return accLabel(activeAcct.label);
@@ -364,20 +495,20 @@
 
   // Claude 页：进页才拉逐号用量（服务端 5 分钟缓存；每号一次 max_tokens:1 探针，别在根页就打）
   const claudeOpen = $derived(stack.includes('ag-claude'));
-  $effect(() => { if (claudeOpen && ags.poolOk) untrack(() => loadUsage()); });
+  $effect(() => { if (claudeOpen && ags.poolOk) untrack(() => { loadUsage(); loadResets(); }); });
   const routerOn = $derived(!!ags.router?.settings?.enabled);
   const acctById = (id) => ags.accounts.find((x) => x.id === id) || null;
   // 添加 / 编辑账号（表单页）、删除账号（警告框）
   let acctForm = $state(null);   // null | { id?, label, token, isNew, hasToken, tokenTail, busy }
   let acctDel = $state(null);    // null | account
-  function openAddAcct() { ags.err = ''; acctForm = { label: '', token: '', isNew: true, busy: false, err: '' }; }
-  function openEditAcct(a) { ags.err = ''; acctForm = { id: a.id, label: a.label, token: '', isNew: false, hasToken: a.hasToken, tokenTail: a.tokenTail, busy: false, err: '' }; }
+  function openAddAcct() { ags.err = ''; acctForm = { label: '', token: '', plan: '', isNew: true, busy: false, err: '' }; }
+  function openEditAcct(a) { ags.err = ''; acctForm = { id: a.id, label: a.label, token: '', plan: a.plan || '', isNew: false, hasToken: a.hasToken, tokenTail: a.tokenTail, busy: false, err: '' }; }
   async function saveAcctForm() {
     const f = acctForm;
     if (!f || f.busy) return;
     if (f.isNew && !f.token.trim()) { f.err = t('token 不能为空'); return; }
     f.busy = true; f.err = '';
-    const done = f.isNew ? await addAccount(f.label, f.token) : await updateAccount(f.id, f.label, f.token);
+    const done = f.isNew ? await addAccount(f.label, f.token, f.plan) : await updateAccount(f.id, f.label, f.token, f.plan);
     // 表单里的错只在表单里说，别漏到背后那一页的脚注上
     if (done) acctForm = null; else { f.err = ags.err; ags.err = ''; f.busy = false; }
   }
@@ -409,9 +540,30 @@
     if (await savePolicy(patch)) numEdit = null; else { e.err = ags.err; ags.err = ''; e.busy = false; }
   }
   // 弹层总闸（左缘右滑 guard / 外壳 class:modal 都读它）：Claude 页的绕过权限确认、分支前缀编辑也登记在这里
-  let provOpen = $state(false);
-  if (canUseCustomApi()) loadProviders();
-  const anyAgModal = $derived(!!acctForm || !!acctDel || !!numEdit || !!agLast || bypassAsk || !!prefixEdit || !!dspEdit || provOpen);
+  // —— 设置 › Media Studio（'studio' 页 + 'st:*' 子页；正文是懒加载的 studio 扩展组件）——
+  // 显示条件：管理员看 /api/agents 里有没有 studio（关着也列出来，好在这里打开）；成员看自己的 agent 名单。
+  const studioDev = import.meta.env.DEV && (() => { try { return localStorage.getItem('bridge-studio-fixture') === '1'; } catch { return false; } })();
+  const studioOn = $derived(studioDev || (me.kind === 'admin' && !!agentById('studio')) || (Array.isArray(me.agents) && me.agents.includes('studio')));
+  let stModal = $state(false);       // Studio 正文的浮层（服务管理器 / 目录选择）开着
+  let stTitles = $state({});         // st:* 子页的标题由正文推入时给（外壳不认识 studio 的键）
+  function stPush(pid, title) { stTitles[pid] = title; push(pid); }
+  const studioIds = $derived((ags.agents?.agents || []).filter((a) => a.runnable).map((a) => a.id));
+  // 头图下面只在不正常时写一句状态（不可用 / 已关闭），正常开着不写口号（2026-11-06 维护者：设置页小字太多）
+  function studioStatus(a) {
+    if (!a) return '';
+    if (!a.runnable) return tr(a.note) || t('这台机器上不可用');
+    if (!a.switch) return tc('开关', '关闭');
+    return '';
+  }
+  // —— 模型中心（2026-11-10 起是根页 agent 组里的一页 'model-hub'，正文 components/modelhub/HubHome 懒加载）——
+  // 出不出现看 hub.ok（管理员的总览）|| cp.ok（能自定义 API 的成员自己的 Claude 服务），两样都是开设置才拉。
+  // 直达这一页时数据多半还在路上：mhSettled 落定前先停在这页等，落定了确实两边都没有再退回去（见下面 deepStack 与退回的 effect）
+  let mhSettled = $state(false);
+  Promise.allSettled([loadHub(), canUseCustomApi() ? loadProviders() : null]).then(() => { mhSettled = true; });
+  const mhOn = $derived(hub.ok || cp.ok || (me.kind === 'admin' && !!hub.err));
+  const mhMaybe = () => hub.ok || cp.ok || (!mhSettled && canUseCustomApi());
+  // 模型中心的浮层（添加 / 服务详情，挂在 App 根上）开着也算弹层：设置别响应左缘右滑、顶栏去掉磨砂；调用策略子页里的浮层（dpModal）同理
+  const anyAgModal = $derived(!!acctForm || !!acctDel || !!numEdit || !!agLast || bypassAsk || !!prefixEdit || !!hubUi.sheet || !!dmEdit || dmPicking || stModal || dpModal);
 
   // —— 账户（设置 App 顶上那张 Apple 账户卡）：资料、用量、改密码、切换账号、退出；没登录时这一页就是登录页。
   // 原先这些散在主页右上的账户胶囊卡和 Claude 侧栏菜单里，退出登录也在菜单里——统一收进这里。
@@ -586,6 +738,21 @@
   }
   function enterStage(sys) { setHomeMode(sys === 'light' ? 'B' : 'A'); stage = sys; ui.wpStage = true; }
   function stageSwap(sys) { setHomeMode(sys === 'light' ? 'B' : 'A'); stage = sys; }
+  // 舞台上「明亮 / 深色壁纸」切换的液态指示器（同工作空间底栏：Kyant LiquidBottomTabs，按住拖、点按滑过去时化成透镜）
+  let stageEl = $state(), segBar = $state(), segPill = $state(), segRowU = $state(), segRowS = $state(), segGlow = $state();
+  let segTabs = null;
+  $effect(() => {
+    const bar = segBar, host = stageEl;
+    if (!bar || !host || !segRowU) return;
+    const lt = untrack(() => new LiquidTabs({
+      bar, pill: segPill, rowU: segRowU, rowS: segRowS, glow: segGlow, lensHost: host, count: 2,
+      index: stage === 'dark' ? 1 : 0, tabW: segRowU.children[0]?.offsetWidth || 121, pad: 4, selH: 36, dark: false,
+      onSelect: (i) => stageSwap(i ? 'dark' : 'light'),
+    }));
+    segTabs = lt;
+    return () => { lt.destroy(); if (segTabs === lt) segTabs = null; };
+  });
+  $effect(() => { const i = stage === 'dark' ? 1 : 0; untrack(() => segTabs?.setIndex(i)); });
   function exitStage() { stage = null; ui.wpStage = false; }
   async function onUpload(slot, e) {
     const files = [...(e.target?.files || [])];
@@ -619,20 +786,19 @@
     if (Math.hypot(e.clientX - wpPressXY.x, e.clientY - wpPressXY.y) > 9) { clearTimeout(wpPressTimer); wpPressTimer = null; }
   }
   function wpPressUp() { if (wpPressTimer) { clearTimeout(wpPressTimer); wpPressTimer = null; } }
+  // 菜单从按压点弹出（ios27/MorphMenu 长按形态：自己避让屏幕边缘；手指不松开直接滑到「删除」上松手也算）
   function openWpMenu(e, id) {
     if (!wpIsUpload(id)) return;
     wpPressTimer = null; wpSuppressClick = true;
     try { navigator.vibrate?.(8); } catch {}
-    const W = 250, vw = window.innerWidth, vh = window.innerHeight;
-    const x = Math.min(Math.max(12, e.clientX - W / 2), vw - W - 12);
-    const y = Math.min(e.clientY + 14, vh - 150);
-    wpMenu = { id, x, y };
+    wpMenu = { id, x: e.clientX, y: e.clientY, name: wpDef(id)?.name || '' };
   }
   function closeWpMenu() { wpMenu = null; }
-  async function wpMenuDelete() {
-    const id = wpMenu.id; wpMenu = null;
+  async function wpMenuDelete(id) {
+    wpMenu = null;
     await deleteUpload(id);
   }
+  const wpMenuItems = $derived(wpMenu ? [{ label: t('删除壁纸'), symbol: 'trash', destructive: true, onclick: ((id) => () => wpMenuDelete(id))(wpMenu.id) }] : []);
   function consumeLongPress() { if (wpSuppressClick) { wpSuppressClick = false; return true; } return false; }
   function wpCardClick(slot, id) { if (consumeLongPress()) return; pickGrid(slot, id); }
 
@@ -882,10 +1048,11 @@
   // 页面层叠渲染：顶层页 x = navX（px，0＝就位，W＝移出右侧），下一层随之在 −30%·W…0 之间视差平移并压暗；
   // 推入 / 返回都用弹簧驱动 navX（NAV_SPRING），左缘右滑直接跟手改 navX，松手由 swipeDismiss 的弹簧续写。
   const TITLES = {
-    root: () => t('设置'), general: () => t('通用'), language: () => t('语言'), thinkmark: () => t('思考动画'), appearance: () => t('外观'),
-    wallpaper: () => t('壁纸'), flux: () => t('流体壁纸'), agentapi: () => t('Agent 接入'),
+    root: () => t('设置'), general: () => t('通用'), notify: () => t('通知'), 'notify-tone': () => t('提示音'), 'notify-vibe': () => t('振动方式'), language: () => t('语言'), thinkmark: () => t('思考动画'), appearance: () => t('外观'),
+    wallpaper: () => t('壁纸'), flux: () => t('流体壁纸'), agentapi: () => t('Agent 接入'), 'model-hub': () => t('模型中心'),
     phone: () => t('手机操控'), devices: () => t('设备'), 'fwd-new': () => t('新的转发'), about: () => t('关于'), history: () => t('版本历史'),
     account: () => (me.kind === 'none' ? t('登录') : t('账户')), policy: () => t('额度与注册'), extensions: () => t('扩展'),
+    studio: () => 'Media Studio', 'cl-dispatch': () => t('子 agent 调用策略'),
     ...CL_GROUP,
     ...Object.fromEntries(Object.entries(CL_CHOICE).map(([pid, key]) => [pid, () => csLabel(key)])),
   };
@@ -895,13 +1062,15 @@
   watchPluginPanels();
   function openPlg(pp) {
     if (inAndroidApp()) { openPluginStandalone(pp.id, { title: panelTitle(pp) }).catch((e) => showToast(tr(e?.body?.error || e?.message || String(e)), 'err')); return; }
-    push('plg-' + pp.id);
+    go('plg-' + pp.id);
   }
   function titleOf(pid) {
     if (TITLES[pid]) return TITLES[pid]();
     if (pid.startsWith('plg-')) return panelTitle(pluginPanels.list.find((x) => 'plg-' + x.id === pid));
     if (pid.startsWith('ag-')) { const id = pid.slice(3); return agentById(id)?.label || (id === 'claude' ? 'Claude' : id); }
-    if (pid.startsWith('vx:')) return VX[pid.slice(3)] ? vxLabel(pid.slice(3)) : '';
+    if (pid.startsWith('st:')) return stTitles[pid] || '';
+    if (pid.startsWith('dm:')) return DM_TITLE[pid.slice(3)]?.() || '';
+    if (pid.startsWith('dp:')) { const p = ds.prefs?.items?.find((x) => x.key === pid.slice(3)); return p ? prefLabel(p) : ''; }
     if (pid.startsWith('acct:')) return accLabel(acctById(pid.slice(5))?.label || '') || t('账号');
     if (pid.startsWith('device:')) return devices.list.find((d) => d.id === pid.slice(7))?.name || t('设备');
     return '';
@@ -913,27 +1082,71 @@
     const s = String(sec || '');
     if (!s || s === 'root') return ['root'];
     if (s === 'claude' || s === 'agents' || s === 'ag-claude') return ['root', 'ag-claude'];
+    // 子 agent 调用策略：Claude 页里推入的一页（没有这一行的身份落在 Claude 页）
+    if (s === 'dispatch' || s === 'cl-dispatch') return cs.shell || cs.admin ? ['root', 'ag-claude', 'cl-dispatch'] : ['root', 'ag-claude'];
+    // Media Studio；Gemini 设置页 11-04 删了，指向它的老入口（gemini / vertex）一并落到这里
+    if (s === 'studio' || s === 'ag-studio' || s === 'media' || s === 'gemini' || s === 'ag-gemini' || s === 'vertex') return studioOn ? ['root', 'studio'] : ['root'];
     if (s.startsWith('ag-')) return ['root', s];
     if (s === 'connection' || s === 'connect') return ['root', 'about'];   // 服务器地址、线路、公网地址都在「关于」
     if (s === 'devices' || s === 'localpc') return hasDevices ? ['root', 'devices'] : ['root'];
     if (s === 'phone') return hasPhoneCtrl ? ['root', 'phone'] : ['root'];
     if (s === 'wallpaper') return single ? ['root'] : ['root', s];
     if (s === 'agentapi' || s === 'agent-api') return hasDevices ? ['root', 'agentapi'] : ['root'];
+    // 模型中心：老入口名（模型服务 / 自定义 API 的 providers、cproviders）一并指过来。数据还没拉到时先当它在
+    // （mhMaybe），拉到了确实没有再由下面的收尾 effect 退回去——不然冷开设置直达这一页会先被打回首页
+    if (s === 'model-hub' || s === 'modelhub' || s === 'models' || s === 'providers' || s === 'cproviders') return mhMaybe() ? ['root', 'model-hub'] : ['root'];
     if (s === 'account' || s === 'about' || s === 'general' || s === 'appearance' || s === 'language') return ['root', s];
+    if (s === 'notify' || s === 'notifications') return ['root', 'general', 'notify'];
     if (s.startsWith('plg-')) return ['root', s];   // 插件面板（手机 App 里不进这里：交给原生页面，见 openPlg）
     return ['root'];
   }
   // 反馈是根页上弹出的表单页（Sheet），不是推入页：直达 = 叠在根页上把它弹出来
   const isFeedbackSec = (s) => s === 'feedback' || s === 'help';
+  // 宽屏双栏（2026-11-08 维护者：折叠屏展开后的设置要像电脑端那样）：视口 ≥700（折叠屏展开、平板、电脑浏览器，
+  // 断点同 lib/layout 的 side）时不再是靠右 440 的一条，而是满屏两栏——左列常驻根页当导航（样子照桌面设置的侧栏：
+  // 无卡片底、无箭头、选中＝中性底加粗），右侧是选中分区的页面栈。栈的结构不变：stack[0] 恒为根页，
+  // 双栏时它画在左列，stack[1] 是右侧当前分区（左列高亮它），再往里的子页照旧在右侧推入 / 返回。
+  // 双栏下栈至少两层（没指定分区时落「通用」，同桌面设置）；折回手机宽度时同一份栈照旧逐页显示。
+  const split = $derived(layout.side);
+  const SPLIT_HOME = 'general';
   const deep = settingsNav.sec;
   settingsNav.sec = null;
-  let stack = $state(deepStack(deep));
+  let stack = $state(withHome(deepStack(deep)));
+  function withHome(s) { return layout.side && s.length < 2 ? [...s, SPLIT_HOME] : s; }
   if (isFeedbackSec(deep)) openFeedback();
   let navX = $state(0);
   let navBusy = $state(false);
   let navSp = null;
-  let panelW = $state(400);
+  // 推入 / 返回的位移量程：手机＝整块面板宽；双栏＝右侧那一栏宽（子页只在右栏里推）
+  let panelBoxW = $state(400), detailW = $state(400);
+  const panelW = $derived(split ? detailW : panelBoxW);
   const depth = $derived(stack.length);
+  // 设置开着时展开 / 合上折叠屏（或拉宽 / 拉窄窗口）：两种形态的页面是各自重挂的——
+  // 掐掉跑到一半的推入 / 返回弹簧（不然手机形态的「返回」在双栏里落地，会把右栏那页弹掉、右侧变空），
+  // 滚动状态归零（新挂的页都在顶上），双栏缺右侧分区就补上。只跟 split 走，其余在 untrack 里读写（读写同一 state 的 effect 会自激）。
+  // 唯一不跟着重挂的是调用策略子页的正文（它有没保存的草稿，见下面 dpHost 那段）：它落座后滚回原处，滚动事件会把那一页的滚动状态补回来
+  $effect(() => {
+    const s = split;
+    untrack(() => {
+      navSp?.cancel(); navSp = null; navX = 0; navBusy = false; dragX = 0;
+      scrolled = {};
+      if (s && stack.length < 2) stack = withHome(stack);
+    });
+  });
+  // 根页上的行：手机上推入一页；双栏时换右侧分区（点当前分区＝退回它的第一页，iPad 设置同款），不做推入动画
+  function go(pid) {
+    if (!split) { push(pid); return; }
+    if (closing) return;
+    navSp?.cancel(); navX = 0; navBusy = false;
+    if (stack.length === 2 && stack[1] === pid) return;
+    // 右栏正开着调用策略子页、里面有没保存的改动：先由它问一句（dpLeave），答应了才换分区
+    dpLeave(() => {
+      if (stack[1] !== pid) scrolled[pid] = 0;
+      stack = ['root', pid];
+    });
+  }
+  // 左列高亮的分区（手机上没有）
+  const cur = $derived(split ? stack[1] || '' : '');
   function push(pid) {
     if (navBusy || closing) return;
     navSp?.cancel();
@@ -948,11 +1161,14 @@
     });
   }
   function pop(velocity = 0) {
-    if (stack.length < 2) return;
-    navSp?.cancel();
-    navBusy = true;
-    navSp = spring({ from: navX, to: panelW, velocity, ...NAV_SPRING.close, restDist: 0.4, restVel: 4,
-      onUpdate: (x) => (navX = x), onDone: () => { stack.pop(); navX = 0; navBusy = false; } });
+    if (stack.length < (split ? 3 : 2)) return;   // 双栏时右侧分区的第一页不再往回退（根页一直在左列）
+    // 顶上是调用策略子页、里面有没保存的改动：先由它问一句，答应了才退（别的页 dpLeave 直接放行）
+    dpLeave(() => {
+      navSp?.cancel();
+      navBusy = true;
+      navSp = spring({ from: navX, to: panelW, velocity, ...NAV_SPRING.close, restDist: 0.4, restVel: 4,
+        onUpdate: (x) => (navX = x), onDone: () => { stack.pop(); navX = 0; navBusy = false; } });
+    });
   }
   // 开着时外部又点了「直达某分区」（分屏格里的「打开设置」等）：直接换到那一页
   $effect(() => {
@@ -962,12 +1178,63 @@
       settingsNav.sec = null;
       if (isFeedbackSec(s)) { openFeedback(); return; }
       const want = deepStack(s);
-      if (want.length > 1 && stack[stack.length - 1] !== want[1]) { navSp?.cancel(); navX = 0; navBusy = false; stack = want; }
+      // 已经在要去的那一页上就不动（比的是目标栈的最后一页：直达「Claude › 子 agent 调用策略」这种三层的，人在 Claude 页上也要推过去）
+      if (want.length > 1 && stack[stack.length - 1] !== want[want.length - 1]) dpLeave(() => { navSp?.cancel(); navX = 0; navBusy = false; stack = want; });
+    });
+  });
+  // 冷开直达「模型中心」时数据还没到，deepStack 先让它停在那一页等（mhMaybe）；两边都拉完了确实没有这一页
+  // （成员没开自定义 API、服务端没装 dimensio），或者开着时它没了——把它连同叠在上面的子页一起撤掉，退回下面那一层。
+  // 只跟 mhSettled / mhOn 走，栈在 untrack 里读写（读写同一 state 的 effect 会自激）
+  $effect(() => {
+    if (!mhSettled || mhOn) return;
+    untrack(() => {
+      const i = stack.indexOf('model-hub');
+      if (i < 1) return;
+      navSp?.cancel(); navSp = null; navX = 0; navBusy = false;
+      stack = withHome(stack.slice(0, i));
     });
   });
   // 「设备」页一露面就拉设备与端口转发：根页那一行点进来、外部直达（输入框电脑芯片「管理设备…」）、
   // 从单台设备 / 新的转发页退回来都走这里（10-21 回归 R3：以前只有点根页那一行才拉，直达时端口转发列表是空的）
   $effect(() => { if (stack[stack.length - 1] === 'devices' && hasDevices) untrack(() => { loadDevices(true); loadForwards(); }); });
+  // Claude 页一露面（点进来、外部直达）就取调用策略：入口行的副标题要读它。子页不在栈里了，它报过的浮层状态一并清掉
+  const clOpen = $derived(stack.includes('ag-claude'));
+  $effect(() => { if (clOpen && dpShown) untrack(dpLoad); });
+  const dpOpen = $derived(stack.includes('cl-dispatch'));
+  $effect(() => { if (!dpOpen) dpModal = false; });
+  // 子页正文不挂在页面里。单栏 / 双栏一切换（视口跨过 700：手机转屏、折叠屏开合、拉窗口），页面是整组重挂的（见上面跟 split 走的
+  // 那个 effect）；正文要是跟着重挂，没保存的草稿和正在看的那一套都回到服务端那份，它还会把这当成「没问就离开了」、补弹一次
+  // 保存确认——人其实还在这一页。所以正文挂在模板里两种布局的分支之外（.dp-host，只跟「栈里有没有这一页」走），页面里只留一个
+  // 空位（pDispatch 的 .dp-slot）：页面每次挂出来，就把同一个节点挪进新的空位，组件实例从头到尾是那一个。
+  // 别的页没有草稿，照旧整组重挂——通用机制不动，只为这一页兜住。
+  // 节点离开文档再回来，有三样不会自己跟回来，重挂前记下（dpKeep）、落座后补上：页面滚到哪了（滚动容器是页面的，新挂的在顶上）、
+  // 正文里各处自己的滚动（策略签条横着滚到哪了）、焦点（正在写的备注框）。
+  let dpHost = $state(), dpSlot = $state();
+  let dpKeep = null;
+  // $effect.pre 先于模板更新：这时旧页面还在文档里，量得到，焦点也还在
+  $effect.pre(() => {
+    split;
+    untrack(() => {
+      const host = dpHost, sc = host?.isConnected ? host.closest('.pg-scroll') : null;
+      if (!sc) return;   // 这一页没开着；或者上一次重挂的落座还在路上——那就留着上一次记下的
+      const a = document.activeElement;
+      dpKeep = { host, y: sc.scrollTop, focus: a && host.contains(a) ? a : null,
+        inner: [...host.querySelectorAll('*')].filter((el) => el.scrollLeft || el.scrollTop).map((el) => [el, el.scrollLeft, el.scrollTop]) };
+    });
+  });
+  $effect(() => {
+    const host = dpHost, slot = dpSlot;
+    if (!host || !slot || host.parentNode === slot) return;
+    const keep = dpKeep && dpKeep.host === host ? dpKeep : null;   // 刚进这一页的头一次落座，没有要补的
+    dpKeep = null;
+    slot.appendChild(host);
+    if (!keep) return;
+    for (const [el, x, y] of keep.inner) { el.scrollLeft = x; el.scrollTop = y; }
+    const sc = slot.closest('.pg-scroll');
+    if (sc && keep.y > 0) sc.scrollTop = keep.y;
+    const f = keep.focus;
+    if (f && host.contains(f) && document.activeElement !== f) { try { f.focus({ preventScroll: true }); } catch {} }
+  });
   // 「Agent 接入」页露面期间拉密钥列表、听总线 agent.keys；退出这一页就丢掉没看完的明文密钥
   const akOpen = $derived(stack.includes('agentapi'));
   $effect(() => { if (akOpen) return untrack(() => watchAgentKeys()); });
@@ -1016,7 +1283,7 @@
 
   // 每页的滚动状态：大标题滚到顶栏下 → 顶栏小标题出现；有内容滚到顶栏下 → 滚动边缘效果显形
   let scrolled = $state({});
-  const hasHero = (pid) => pid === 'about' || pid === 'account' || pid.startsWith('ag-') || pid.startsWith('acct:') || pid.startsWith('device:');
+  const hasHero = (pid) => pid === 'about' || pid === 'account' || pid === 'studio' || pid === 'model-hub' || pid.startsWith('ag-') || pid.startsWith('acct:') || pid.startsWith('device:');
   function onPageScroll(pid, e) {
     const y = e.currentTarget.scrollTop;
     const s = y > 4 ? (y > (hasHero(pid) ? 120 : 44) ? 2 : 1) : 0;
@@ -1029,6 +1296,9 @@
   let swipeOn = false, swipeEndAt = 0;
   function back() {
     if (swipeOn || performance.now() - swipeEndAt < 600) return;
+    // 模型中心的浮层（添加服务 / 编辑 / 迁移）盖在设置上：正常由它自己挂的返回层先接住；万一没接住，
+    // 这一下也只关浮层，不能连设置的页一起退掉
+    if (hubUi.sheet) { closeHubSheet(); return; }
     if (addrOpen) { addrOpen = false; return; }
     if (fbOpen) { fbOpen = false; return; }
     if (acctAsk) { if (!acctBusy) acctAsk = null; return; }
@@ -1039,12 +1309,14 @@
     if (agLast) { agLast = false; return; }
     if (bypassAsk) { bypassAsk = false; return; }
     if (prefixEdit) { if (!prefixEdit.busy) prefixEdit = null; return; }
-    if (dspEdit) { if (!dspEdit.busy) dspEdit = null; return; }
+    if (dmEdit) { if (!dmEdit.busy) dmEdit = null; return; }
     if (wpMenu) { wpMenu = null; return; }
     if (stage) { exitStage(); return; }                  // 舞台中：先退回设置
-    if (stack.length > 1) { pop(); return; }
-    ui.homePop++; closing = true; setTimeout(() => { ui.settingsOpen = false; }, 360);
+    if (stack.length > (split ? 2 : 1)) { pop(); return; }   // 双栏：右侧分区第一页再返回＝关设置
+    close();
   }
+  // 关掉设置（根页返回钮、双栏左列的返回钮——那里右栏推到几层都直接关；右栏是调用策略子页且有没保存的改动时先由它问一句）
+  function close() { if (closing) return; dpLeave(() => { ui.homePop++; closing = true; setTimeout(() => { ui.settingsOpen = false; }, 360); }); }
   $effect(() => registerCloser('settings', back));
   // 键盘 Esc = 一次「返回」（电脑浏览器上用；原单页设置按 Esc 就关，合一后补回来）：先关弹层，子页退一页，根页关设置。
   // 让路：别人已经接住（扩展页的弹层在捕获阶段先 preventDefault）、供应商管理与服务端控制台自带 Esc、正在输入法组字。
@@ -1053,7 +1325,7 @@
   const TEXT_FIELD = 'textarea, input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="password"], input[type="tel"], input[type="number"], [contenteditable="true"]';
   function onKey(e) {
     if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing || closing) return;
-    if (provOpen || ui.serverAdminOpen) return;
+    if (hubUi.sheet || stModal || dpModal || ui.serverAdminOpen) return;   // 浮层（模型中心的添加 / 编辑、调用策略子页里的选择器、服务端控制台等）自己接 Esc
     const a = document.activeElement;
     if (a && a.matches?.(TEXT_FIELD) && String(a.value ?? a.textContent ?? '').trim() && !a.closest('[role="alertdialog"]')) {
       e.preventDefault(); a.blur(); return;
@@ -1069,8 +1341,9 @@
   const edgeSwipe = (node) => swipeDismiss(node, {
     axis: 'x', dir: 1, edge: 40, threshold: 0.32,
     size: () => panelW,
-    // 舞台态、拖滑块中、弹层开着、正在转场时不接管
-    guard: () => !(stage || sliding || addrOpen || fbOpen || wpMenu || acctAsk || pw || anyAgModal || closing || navBusy),
+    // 舞台态、拖滑块中、弹层开着、正在转场时不接管；双栏时屏幕左缘是导航列，不接管（返回走顶栏钮与系统返回）。
+    // 调用策略子页：拖判定线期间（dpDrag / 按在手柄上）不接管；有没保存的改动时也不接管——右滑没法停下来问，改走返回钮
+    guard: (e) => !(split || stage || sliding || addrOpen || fbOpen || wpMenu || acctAsk || pw || anyAgModal || closing || navBusy || dpDrag || dpOwnsTouch(e) || dispatchHasUnsaved()),
     base: () => (stack.length > 1 ? navX : dragX), cur: () => (stack.length > 1 ? navX : dragX),
     onStart: () => { navSp?.cancel(); swipeOn = true; dragging = true; if (stack.length > 1) navBusy = true; },
     onMove: (x) => { if (stack.length > 1) navX = x; else dragX = x; },
@@ -1124,7 +1397,7 @@
 <!-- 「软件更新」行：根页（带行首图标）与「关于 › 更新」组（组里其余行都没图标，这里也不带）共用一份，
      状态（检查中 / 下载进度环 / 一键更新）是同一个 upState，两处看到的永远一致 -->
 {#snippet upRow(withIco)}
-  <button class="r" type="button" onclick={onUpClick} disabled={upState === 'downloading' || upState === 'checking'}>
+  <button class="r upr" type="button" onclick={onUpClick} disabled={upState === 'downloading' || upState === 'checking'}>
     {#if withIco}{@render ico('update')}{/if}
     <span class="r-main">
       <span class="r-tx">{t('软件更新')}</span>
@@ -1151,7 +1424,7 @@
 
 {#snippet pRoot()}
   <div class="ig">
-    <button class="r acctcard" type="button" onclick={() => push('account')}>
+    <button class="r acctcard" class:on={cur === 'account'} type="button" onclick={() => go('account')}>
       {@render avatar(false)}
       <span class="r-main">
         {#if me.kind === 'none'}
@@ -1168,13 +1441,21 @@
   {@render ghead(tc('settings', 'Agent'))}
   <div class="ig">
     {#each agentRows as a (a.id)}
-      <button class="r" type="button" onclick={() => push('ag-' + a.id)}>
+      <button class="r" class:on={cur === (a.id === 'studio' ? 'studio' : 'ag-' + a.id)} type="button" onclick={() => go(a.id === 'studio' ? 'studio' : 'ag-' + a.id)}>
         {@render agMark(a.id)}
-        <span class="r-main" class:dim={!a.local && !a.enabled}><span class="r-tx">{a.label}</span><span class="r-d" class:warn={!a.local && a.enabled && !a.authed}>{agTail(a)}</span>{@render chev()}</span>
+        <span class="r-main" class:dim={!a.local && !a.enabled}><span class="r-tx">{a.label}</span><span class="r-d" class:warn={!a.local && a.enabled && !a.authed && a.id !== 'studio'}>{agTail(a)}</span>{@render chev()}</span>
       </button>
     {/each}
+    <!-- 模型中心：模型从哪来、分给哪些 agent，一处管——排在各 agent 之后、「Agent 接入」之前（同桌面设置的侧栏）。
+         管理员看总览，能自定义 API 的成员看自己那份；两份数据都没有就不出这一行 -->
+    {#if mhOn}
+      <button class="r" class:on={cur === 'model-hub'} type="button" onclick={() => go('model-hub')}>
+        {@render ico('modelhub')}
+        <span class="r-main"><span class="r-tx">{t('模型中心')}</span>{@render chev()}</span>
+      </button>
+    {/if}
     {#if hasDevices && pluginOn('agent-api')}
-      <button class="r" type="button" onclick={() => push('agentapi')}>
+      <button class="r" class:on={cur === 'agentapi'} type="button" onclick={() => go('agentapi')}>
         {@render ico('agentapi')}
         <span class="r-main"><span class="r-tx">{t('Agent 接入')}</span>{@render chev()}</span>
       </button>
@@ -1185,7 +1466,7 @@
     {@render ghead(t('插件'))}
     <div class="ig">
       {#each pluginPanels.list as pp (pp.id)}
-        <button class="r" type="button" onclick={() => openPlg(pp)}>
+        <button class="r" class:on={cur === 'plg-' + pp.id} type="button" onclick={() => openPlg(pp)}>
           {@render ico('extensions')}
           <span class="r-main"><span class="r-tx">{panelTitle(pp)}</span>{@render chev()}</span>
         </button>
@@ -1197,13 +1478,13 @@
     {@render ghead(extMember ? t('个性化') : t('服务器'))}
     <div class="ig">
       {#if extOk}
-        <button class="r" type="button" onclick={() => push('extensions')}>
+        <button class="r" class:on={cur === 'extensions'} type="button" onclick={() => go('extensions')}>
           {@render ico('extensions')}
           <span class="r-main"><span class="r-tx">{t('扩展')}</span>{#if me.pluginUpdates}<span class="r-d accent">{t('{n} 个插件有更新', { n: me.pluginUpdates })}</span>{/if}{@render chev()}</span>
         </button>
       {/if}
       {#if ags.policyOk && ags.multiUser}
-        <button class="r" type="button" onclick={() => push('policy')}>
+        <button class="r" class:on={cur === 'policy'} type="button" onclick={() => go('policy')}>
           {@render ico('policy')}
           <span class="r-main"><span class="r-tx">{t('额度与注册')}</span><span class="r-d">{ags.regOpen ? t('开放注册') : t('注册已关')}</span>{@render chev()}</span>
         </button>
@@ -1219,22 +1500,22 @@
 
   {@render ghead(t('偏好'))}
   <div class="ig">
-    <button class="r" type="button" onclick={() => push('general')}>
+    <button class="r" class:on={cur === 'general'} type="button" onclick={() => go('general')}>
       {@render ico('general')}
       <span class="r-main"><span class="r-tx">{t('通用')}</span>{@render chev()}</span>
     </button>
-    <button class="r" type="button" onclick={() => push('appearance')}>
+    <button class="r" class:on={cur === 'appearance'} type="button" onclick={() => go('appearance')}>
       {@render ico('appearance')}
       <span class="r-main"><span class="r-tx">{t('外观')}</span><span class="r-d">{prefs.followSys ? t('自动') : dark ? t('深色') : t('明亮')}</span>{@render chev()}</span>
     </button>
     {#if !single && pluginOn('wallpapers')}
-      <button class="r" type="button" onclick={() => push('wallpaper')}>
+      <button class="r" class:on={cur === 'wallpaper'} type="button" onclick={() => go('wallpaper')}>
         {@render ico('wallpaper')}
         <span class="r-main"><span class="r-tx">{t('壁纸')}</span>{@render chev()}</span>
       </button>
     {/if}
     {#if ui.glassMode === 'A' && !single}
-      <button class="r" type="button" onclick={() => push('flux')}>
+      <button class="r" class:on={cur === 'flux'} type="button" onclick={() => go('flux')}>
         {@render ico('flux')}
         <span class="r-main"><span class="r-tx">{t('流体壁纸')}</span>{@render chev()}</span>
       </button>
@@ -1246,13 +1527,13 @@
     {#if phoneRow}{@render ghead(t('这台设备'))}{/if}
     <div class="ig">
       {#if phoneRow}
-        <button class="r" type="button" onclick={() => push('phone')}>
+        <button class="r" class:on={cur === 'phone'} type="button" onclick={() => go('phone')}>
           {@render ico('phone')}
           <span class="r-main"><span class="r-tx">{t('手机操控')}</span><span class="r-d">{phoneCtrlOn ? tc('开关', '打开') : tc('开关', '关闭')}</span>{@render chev()}</span>
         </button>
       {/if}
       {#if devRow}
-        <button class="r" type="button" onclick={openDevices}>
+        <button class="r" class:on={cur === 'devices'} type="button" onclick={openDevices}>
           {@render ico('localpc')}
           <span class="r-main"><span class="r-tx">{t('设备')}</span><span class="r-d">{dvOnline ? t('{n} 台在线', { n: dvOnline }) : ''}</span>{@render chev()}</span>
         </button>
@@ -1270,7 +1551,7 @@
       <span class="r-main"><span class="r-tx">{t('提交反馈')}</span>{@render chev()}</span>
     </button>
     {/if}
-    <button class="r" type="button" onclick={() => push('about')}>
+    <button class="r" class:on={cur === 'about'} type="button" onclick={() => go('about')}>
       {@render ico('about')}
       <span class="r-main"><span class="r-tx">{t('关于')}</span><span class="r-d num">{verShort}</span>{@render chev()}</span>
     </button>
@@ -1279,9 +1560,9 @@
 
 {#snippet pGeneral()}
   <div class="ig">
-    <div class="r">
-      <span class="r-main"><span class="r-tx">{t('通知')}</span><Toggle checked={notifyOn} onchange={toggleNotify} label={t('启用通知')} /></span>
-    </div>
+    <button class="r" type="button" onclick={() => push('notify')}>
+      <span class="r-main"><span class="r-tx">{t('通知')}</span><span class="r-d">{notifyOn ? '' : tc('开关', '关闭')}</span>{@render chev()}</span>
+    </button>
     <button class="r" type="button" onclick={() => push('language')}>
       <span class="r-main"><span class="r-tx">{t('语言')}</span><span class="r-d">{langLabel}</span>{@render chev()}</span>
     </button>
@@ -1324,9 +1605,9 @@
 
 {#snippet agErr()}{#if ags.err}<p class="gfoot err">{ags.err}</p>{/if}{/snippet}
 
-{#snippet meter(name, b, na)}
+{#snippet meter(name, b, na, free = false)}
   <div class="u">
-    <div class="u-top"><span class="u-l">{name}</span><span class="u-v" class:hot={b && usageTone(b) === 'red'}>{b ? t('{pct}% 已用', { pct: b.pct }) : '—'}</span></div>
+    <div class="u-top"><span class="u-l">{name}</span><span class="u-v" class:hot={b && usageTone(b) === 'red'}>{b ? t('{pct}% 已用', { pct: b.pct }) : free ? t('无限制') : '—'}</span></div>
     <span class="bar-u">{#if b}<i style:width="{Math.min(100, b.pct)}%" class:hot={usageTone(b) === 'red'} class:warm={usageTone(b) === 'amber'}></i>{/if}</span>
     {#if b}<span class="u-r">{b.status === 'rejected' ? t('已达上限') + ' · ' : ''}{poolResetIn(b.resetsAt)}</span>{:else if na}<span class="u-r">{na}</span>{/if}
   </div>
@@ -1347,8 +1628,9 @@
           <span class="r-main">
             <span class="r-tx">
               <span class="acct-name">{accLabel(a.label)}
-                {#if u?.plan === 'max'}<span class="pill">Max</span>{:else if u?.plan === 'pro'}<span class="pill">Pro</span>{/if}
+                {#if planPill(u?.plan)}<span class="pill">{planPill(u.plan)}</span>{/if}
                 {#if a.active}<span class="cur">{t('使用中')}</span>{/if}
+                {#if ags.resetsOk && resetsLeft(ags.resets[a.id]) > 0}<span class="pill">{t('重置卡 {n}', { n: resetsLeft(ags.resets[a.id]) })}</span>{/if}
               </span>
               <span class="mini">
                 {#if !u}<span class="mini-na">{ags.usageBusy ? t('读取用量…') : (a.hasToken ? '…' + (a.tokenTail || '') : t('用本机登录态（~/.claude）'))}</span>
@@ -1356,7 +1638,8 @@
                 {:else}
                   {#each [['five_hour', t('5 小时')], ['seven_day', t('每周')], ['fable', 'Fable']] as [k, name] (k)}
                     {@const b = u[k]}
-                    <span class="mini-m"><span class="mini-h">{name}<b class={b ? usageTone(b) : ''}>{b ? b.pct + '%' : '—'}</b></span><span class="mini-bar"><i class={b ? usageTone(b) : ''} style:width="{b ? Math.min(100, b.pct) : 0}%"></i></span><span class="mini-r">{b ? poolResetAt(b.resetsAt) : ''}</span></span>
+                    {@const free = !b && k === 'five_hour' && u.no_five_hour}
+                    <span class="mini-m"><span class="mini-h">{name}<b class={b ? usageTone(b) : ''}>{b ? b.pct + '%' : free ? t('无限制') : '—'}</b></span><span class="mini-bar"><i class={b ? usageTone(b) : ''} style:width="{b ? Math.min(100, b.pct) : 0}%"></i></span><span class="mini-r">{b ? poolResetAt(b.resetsAt) : ''}</span></span>
                   {/each}
                 {/if}
               </span>
@@ -1376,15 +1659,7 @@
 
   {/if}
 
-  <!-- 模型服务（自定义 API，管理员与成员各一份）：紧跟号池——两者都是「模型从哪来」；点开是盖在设置上的整页面板 -->
-  {#if cp.ok}
-    {@render ghead(t('模型服务'))}
-    <div class="ig">
-      <button class="r" type="button" onclick={() => (provOpen = true)}>
-        <span class="r-main"><span class="r-tx">{t('自定义 API')}</span><span class="r-d">{cpSummaryText()}</span>{@render chev()}</span>
-      </button>
-    </div>
-  {/if}
+  <!-- 自定义 API（模型服务）归设置根页的「模型中心」一页管（模型中心 v2），这里不再放入口 -->
 
   <!-- 撞上限额时：按身份的「限额重置后自动继续」+ 号池智能路由（管理员）；号池最常看，限额相关三件事聚在它后面 -->
   {@render ghead(t('撞上限额时'))}
@@ -1440,10 +1715,20 @@
     {@render cToggle('promptSuggestions')}
     {@render cToggle('inlineVisualizations')}
     {@render cToggle('enableWorkflows')}
-    {#if visible('subagentDispatch')}
-      <button class="r ind" type="button" onclick={openDispatch}>
-        <span class="r-main"><span class="r-tx"><span class="r-lbl">{csLabel('subagentDispatch')}{@render cDot('subagentDispatch')}</span></span><span class="r-d dsp-d">{val('subagentDispatch') || t('按难度自动')}</span>{@render chev()}</span>
-      </button>
+    {#if dpShown}
+      <!-- 子 agent 调用策略：与「动态工作流」同级（普通子 agent 那个范围不靠它）。一行两块命中区——行按钮（标题 + 状态副标题）的命中区
+           铺满整行、点了推入子页；开关那一块压在它上面，四周留一圈不响应的边，按偏了既不进子页也不拨开关。
+           关着时这一行不置灰：照样能点进去看 -->
+      <div class="r dpr" role="group" aria-label={t('子 agent 调用策略')}>
+        <span class="r-main">
+          <button class="dpr-go" type="button" onclick={() => push('cl-dispatch')}>
+            <span class="r-tx">{t('子 agent 调用策略')}<span class="r-sub" class:err={!!dpRowErr}>{#if dpRowErr || dpSub}{dpRowErr || dpSub}{:else}&nbsp;{/if}</span></span>
+          </button>
+          <!-- 策略读到了才摆开关（位置先占着）：不然它会先以「关」露面、再滑到「开」 -->
+          <span class="dpr-sw">{#if dp?.policy}<Toggle checked={!!dp.policy.enabled} disabled={dp.canEdit === false} onchange={toggleDispatch} label={t('按策略调用')} />{/if}</span>
+          {@render chev()}
+        </span>
+      </div>
     {/if}
     {@render cToggle('switchModelsOnFlag')}
     {@render cToggle('planClearContext')}
@@ -1454,11 +1739,9 @@
         <span class="r-main"><span class="r-tx"><span class="r-lbl">{csLabel('compactFrac')}{@render cDot('compactFrac')}</span></span><span class="r-d num">{valueLabel('compactFrac')}</span><span class="r-d accent">{t('恢复默认')}</span></span>
       </button>
     {/if}
-    {#if showMarks}
-      <button class="r" type="button" onclick={() => push('thinkmark')}>
-        <span class="r-main"><span class="r-tx"><span class="r-lbl">{t('思考动画')}{@render devPill()}</span></span><span class="r-d">{markLabel}</span>{@render chev()}</span>
-      </button>
-    {/if}
+    <button class="r" type="button" onclick={() => push('thinkmark')}>
+      <span class="r-main"><span class="r-tx"><span class="r-lbl">{t('思考动画')}{@render devPill()}</span></span><span class="r-d">{markLabel}</span>{@render chev()}</span>
+    </button>
   </div>
 
   {#if visible('newSessionPolicy') || visible('crossSessionInbound')}
@@ -1466,6 +1749,18 @@
     <div class="ig">
       {@render cPush('newSessionPolicy', 'cl-newsess')}
       {@render cPush('crossSessionInbound', 'cl-inbound')}
+    </div>
+  {/if}
+
+  <!-- 项目对话（运行档位 › 项目：协调者只派活、讨论串去做，src/runtime/project-mode.mjs） -->
+  {#if visible('projectAskFirst')}
+    {@render ghead(t('项目对话'))}
+    <div class="ig">
+      {@render cToggle('projectAskFirst')}
+      {@render cPush('projectMaxLive', 'cl-pmax')}
+      {@render cPush('projectDailyThreads', 'cl-pdaily')}
+      {@render cPush('projectThreadModel', 'cl-pmodel')}
+      {@render cPush('projectThreadEffort', 'cl-peffort')}
     </div>
   {/if}
 
@@ -1502,6 +1797,14 @@
       {@render cToggle('allowBypass')}
       {@render cToggle('allowAutoMode')}
     </div>
+    <!-- 调试（改进 harness 用，v558 起注册表就有、外壳漏渲染）：只给主机管理员 -->
+    {#if visible('debugMode')}
+      {@render ghead(t('调试'))}
+      <div class="ig">
+        {@render cToggle('debugMode')}
+      </div>
+      {@render gfoot(t(CS.debugMode.desc))}
+    {/if}
   {/if}
   {#if clErr}<p class="gfoot err">{clErr}</p>{/if}
 {/snippet}
@@ -1523,6 +1826,13 @@
       <span class="r-main"><span class="r-tx"><span class="r-lbl">{csLabel(key)}{@render cDot(key)}</span></span><span class="r-d">{valueLabel(key)}</span>{@render chev()}</span>
     </button>
   {/if}
+{/snippet}
+
+<!-- 子 agent 调用策略（推入页 'cl-dispatch'）：大标题与返回钮归外壳。页面里只有一个空位——正文（懒加载的
+     claude/dispatch/DispatchPolicy）挂在外壳面板里两种布局的分支之外（.dp-host），由脚本里 dpHost / dpSlot 那段挪进来：
+     单栏 / 双栏切换时页面整组重挂，正文不跟着重挂 -->
+{#snippet pDispatch()}
+  <div class="dp-slot" bind:this={dpSlot}></div>
 {/snippet}
 
 <!-- 单选子页（权限模式 / 输出风格 / 提问超时 / 回复语言 / …）：每项一行说明，选中打勾；改过才出「恢复默认」 -->
@@ -1562,8 +1872,9 @@
       {@render cToggle('notifyPermission')}
       {@render cToggle('notifyQuestion')}
       {@render cToggle('notifyTaskComplete')}
+      {@render cToggle('notifyError')}
     </div>
-    {#if !notifyOn}{@render gfoot(t('通知总开关在「通用」里关着'))}{/if}
+    {#if !notifyOn}{@render gfoot(t('通知总开关在「通用」里关着'))}{:else}{@render gfoot(t('声音、振动和横幅在「通用 › 通知」里设置'))}{/if}
   {:else if pid === 'cl-host'}
     <div class="ig">
       {@render cToggle('keepAwake')}
@@ -1593,18 +1904,23 @@
     <div class="hero">
       <span class="av big" aria-hidden="true">{(accLabel(a.label) || '?').trim().charAt(0).toUpperCase()}</span>
       <div class="hero-name">{accLabel(a.label)}</div>
-      <div class="hero-sub">{a.active ? t('当前在用') : t('待用')}{u?.plan === 'max' ? ' · Max' : u?.plan === 'pro' ? ' · Pro' : ''}</div>
+      <div class="hero-sub">{a.active ? t('当前在用') : t('待用')}{planPill(u?.plan) ? ' · ' + planPill(u.plan) : ''}</div>
     </div>
     {@render ghead(t('用量'))}
     <div class="ig usage">
       {#if u?.error && !u.five_hour && !u.seven_day}
         <span class="u-r err">{tr(u.error)}</span>
       {:else}
-        {@render meter(t('5 小时'), u?.five_hour, '')}
+        {@render meter(t('5 小时'), u?.five_hour, u?.no_five_hour ? t('这个号没有 5 小时限额') : '', !!u?.no_five_hour)}
         {@render meter(t('每周'), u?.seven_day, '')}
         {@render meter('Fable', u?.fable, u?.plan === 'pro' ? t('Pro 无此额度') : '')}
       {/if}
     </div>
+    <!-- 重置卡：服务端有这项能力才出现（见 ClaudeResets.svelte） -->
+    {#if ags.resetsOk}
+      {@render ghead(t('重置卡'))}
+      <div class="ig"><ClaudeResets account={a} skin="ios" /></div>
+    {/if}
     <div class="ig">
       {#if !a.active}
         <button class="r" type="button" onclick={() => activateAccount(a)}><span class="r-main"><span class="r-tx accent">{t('切到此号')}</span></span></button>
@@ -1631,55 +1947,259 @@
   {/if}
 {/snippet}
 
-{#snippet pAgent(id)}
-  {@render agSwitch(id)}
-  {#if id === 'gemini' && agentById(id)?.runnable}<VertexCredentials onchange={loadAgents} />{#if vx.loaded}{@render vxGroups()}{/if}{/if}
-  {#if !agentById(id)}{@render gfoot(t('只有管理员能改这里'))}{/if}
-{/snippet}
+<!-- dimensio 页：模型 / API Key / 本机模型 / 权限与安全 / 工作空间 / 记忆 / 偏好注册表各组 / 诊断 / 版本（数据面 lib/dimensioSettings.svelte.js） -->
+{#snippet dmErr(tag)}{#if errOf(tag)}<p class="gfoot err">{errOf(tag)}</p>{/if}{/snippet}
+{#snippet pDimensio()}
+  {#if !dimEnabled}
+    <!-- 开关关着 / 跑不起来：原因已在头图下 -->
+  {:else if ds.phase === 'down'}
+    {@render ghead(t('dimensio 的设置暂时读不到'))}
+    <div class="ig">
+      <div class="r"><span class="r-main"><span class="r-tx">{ds.why}</span></span></div>
+      <button class="r" type="button" onclick={() => loadDimensio()}><span class="r-main center"><span class="r-tx accent">{t('重试')}</span></span></button>
+    </div>
+  {:else if !dimReady()}
+    {@render gfoot(t('读取中…'))}
+  {:else}
+    {@render ghead(t('模型'))}
+    <div class="ig">
+      <button class="r" type="button" onclick={() => push('dm:provider')}>
+        <span class="r-main"><span class="r-tx">{t('模型服务')}</span><span class="r-d">{vendorName(curSpec())}</span>{@render chev()}</span>
+      </button>
+      {#if modelOptions().length}
+        <button class="r" type="button" onclick={() => push('dm:model')}>
+          <span class="r-main"><span class="r-tx">{t('型号')}</span><span class="r-d">{modelOptions().find((o) => o.value === ds.config.model)?.label || ds.config.model}</span>{@render chev()}</span>
+        </button>
+      {/if}
+      {#if effortOptions().length > 1}
+        <button class="r" type="button" onclick={() => push('dm:effort')}>
+          <span class="r-main"><span class="r-tx">{t('思考深度')}</span><span class="r-d">{effortOptions().find((o) => o.value === ds.config.thinking)?.label || ds.config.thinking}</span>{@render chev()}</span>
+        </button>
+      {/if}
+      {#if fastOk()}
+        <div class="r">
+          <span class="r-main"><span class="r-tx">Fast mode<span class="r-sub">{t('输出更快，按更高单价计费')}</span></span>
+            <Toggle checked={ds.config.fast === true} disabled={ds.busy === 'fast'} onchange={() => setFast(!ds.config.fast)} label="Fast mode" /></span>
+        </div>
+      {/if}
+    </div>
+    {@render dmErr('fast')}
+    {@render gfoot(t('新对话默认用这里的模型；对话里随时可以在输入框的型号胶囊改。'))}
 
-<!-- Gemini 页「Google 云凭据」下面那几组（注册表 src/config/vertex-settings.mjs）：开关行；单选项推入 vx:<key> 子页 -->
-{#snippet vxGroups()}
-  {@const ids = (ags.agents?.agents || []).filter((a) => a.runnable).map((a) => a.id)}
-  {#each VERTEX_SETTING_GROUPS as g (g.id)}
-    {@const keys = vxGroupKeys(g.id, ids)}
-    {#if keys.length}
-      {@render ghead(vxGroupLabel(g))}
+    {@render ghead(keyVendors().length ? t('API Key') : t('模型服务'))}
+    <div class="ig">
+      {#each keyVendors() as v (v.id)}
+        <button class="r" type="button" disabled={!canSetKey(v.id)} onclick={() => openKeyEdit(v)}>
+          <span class="r-main"><span class="r-tx"><span class="r-lbl">{v.name}{#if v.current}<span class="pill">{t('默认')}</span>{/if}</span></span>
+            <span class="r-d" class:warn={!v.hasKey}>{v.hasKey ? t('已配 Key') : t('缺 Key')}</span>{#if canSetKey(v.id)}{@render chev()}{/if}</span>
+        </button>
+      {/each}
+      <!-- 有模型中心（管理员）：自定义服务都归那一页管，点了推入设置里的「模型中心」（双栏时换右侧分区）；
+           没有时才照旧去 dimensio 自己的供应商页 -->
+      <button class="r" type="button" onclick={() => { if (hub.ok) go('model-hub'); else openInDimensio('vendors'); }}>
+        <span class="r-main"><span class="r-tx">{hub.ok ? t('模型中心') : t('自定义模型服务')}<span class="r-sub">{hub.ok ? hubSummaryText() : customSummary()}</span></span>{@render chev()}</span>
+      </button>
+    </div>
+    {#each keyVendors() as v (v.id)}{@render dmErr('key:' + v.id)}{/each}
+    {@render gfoot(keyVendors().length ? t('Key 加密存在服务端，重启不丢，不回传浏览器。') : t('dimensio 能用的模型都在模型中心里添加和修改。'))}
+
+    {#if localOk()}
+      {@render ghead(t('本机模型'))}
       <div class="ig">
-        {#each keys as key (key)}
-          {#if VX[key].type === 'bool'}
-            <div class="r" class:ind={!!VX[key].dependsOn}>
-              <span class="r-main"><span class="r-tx"><span class="r-lbl">{vxLabel(key)}{#if vxChanged(key)}{@render cDot('')}{/if}</span>{#if vxDesc(key)}<span class="r-sub">{vxDesc(key)}</span>{/if}</span>
-                <Toggle checked={!!vx.values[key]} disabled={vx.busy === key} onchange={() => setVertexSetting(key, !vx.values[key])} label={vxLabel(key)} /></span>
+        {#each LOCAL_ENGINES as e (e.id)}
+          <button class="r" type="button" onclick={() => openInDimensio('local:' + e.id)}>
+            <span class="r-main"><span class="r-tx">{e.name}<span class="r-sub">{localLine(e.id)}</span></span>{@render chev()}</span>
+          </button>
+        {/each}
+      </div>
+      {@render gfoot(t('启动参数（上下文、缓存精度、识图……）与启停在 dimensio 的本机模型面板里改。'))}
+    {/if}
+
+    {@render ghead(t('权限与安全'))}
+    <div class="ig">
+      <button class="r" type="button" onclick={() => push('dm:mode')}>
+        <span class="r-main"><span class="r-tx">{t('默认运行档位')}</span><span class="r-d">{MODES().find((m) => m.value === ds.config.permissionMode)?.label || ds.config.permissionMode}</span>{@render chev()}</span>
+      </button>
+      {#if accessLocked()}
+        <div class="r"><span class="r-main"><span class="r-tx">{t('访问范围')}<span class="r-sub">{t('这台服务器把访问范围锁定了，改不了。')}</span></span><span class="r-d">{ACCESS().find((m) => m.value === ds.config.access)?.label || ds.config.access}</span></span></div>
+      {:else}
+        <button class="r" type="button" onclick={() => push('dm:access')}>
+          <span class="r-main"><span class="r-tx">{t('访问范围')}</span><span class="r-d">{ACCESS().find((m) => m.value === ds.config.access)?.label || ds.config.access}</span>{@render chev()}</span>
+        </button>
+      {/if}
+      <button class="r" type="button" onclick={() => { dmRule = ''; push('dm:ask'); }}>
+        <span class="r-main"><span class="r-tx">{t('每次问我')}</span><span class="r-d num">{rulesOf('ask').length || ''}</span>{@render chev()}</span>
+      </button>
+      <button class="r" type="button" onclick={() => { dmRule = ''; push('dm:deny'); }}>
+        <span class="r-main"><span class="r-tx">{t('从不允许')}</span><span class="r-d num">{rulesOf('deny').length || ''}</span>{@render chev()}</span>
+      </button>
+    </div>
+    {@render gfoot(t('新会话的默认；单个对话随时可在输入框的档位胶囊里切，对当前会话立刻生效。'))}
+
+    {@render ghead(t('工作空间'))}
+    <div class="ig">
+      <button class="r" type="button" onclick={openWsEdit}>
+        <span class="r-main"><span class="r-tx"><span class="dm-path">{ds.config.workspace}</span></span>{@render chev()}</span>
+      </button>
+    </div>
+    {@render dmErr('workspace')}
+    {@render gfoot(t('新对话从这个文件夹开始，已经开着的对话不受影响。'))}
+
+    {#if memoryOk()}
+      {@render ghead(t('记忆'))}
+      <div class="ig">
+        <button class="r" type="button" onclick={() => openInDimensio('memory')}>
+          <span class="r-main"><span class="r-tx">{t('记忆管理')}<span class="r-sub">{memLine()}</span></span>{#if ds.mem?.waiting}<span class="pill">{t('{n} 条待处理', { n: ds.mem.waiting })}</span>{/if}{@render chev()}</span>
+        </button>
+      </div>
+    {/if}
+
+    {#each prefGroups() as g (g.id)}
+      {@render ghead(prefGroupLabel(g))}
+      <div class="ig">
+        {#if g.id === 'chat'}
+          <div class="r">
+            <span class="r-main"><span class="r-tx"><span class="r-lbl">{t('显示全部工作过程')}</span><span class="r-sub">{FEED_DESC()}</span></span>
+              <Toggle checked={feed.detail} onchange={() => setFeedDetail(!feed.detail)} label={t('显示全部工作过程')} /></span>
+          </div>
+        {/if}
+        {#each prefItems(g.id) as p (p.key)}
+          {#if p.type === 'bool'}
+            <div class="r">
+              <span class="r-main"><span class="r-tx"><span class="r-lbl">{prefLabel(p)}{#if prefChanged(p)}{@render cDot('')}{/if}</span>{#if prefDesc(p)}<span class="r-sub">{prefDesc(p)}</span>{/if}</span>
+                <Toggle checked={!!p.value} onchange={() => setPref(p.key, !p.value)} label={prefLabel(p)} /></span>
             </div>
           {:else}
-            <button class="r" class:ind={!!VX[key].dependsOn} type="button" onclick={() => push('vx:' + key)}>
-              <span class="r-main"><span class="r-tx"><span class="r-lbl">{vxLabel(key)}{#if vxChanged(key)}{@render cDot('')}{/if}</span>{#if vxDesc(key)}<span class="r-sub">{vxDesc(key)}</span>{/if}</span><span class="r-d">{vxValueLabel(key)}</span>{@render chev()}</span>
+            <button class="r" type="button" onclick={() => (p.type === 'enum' ? push('dp:' + p.key) : openPrefEdit(p))}>
+              <span class="r-main"><span class="r-tx"><span class="r-lbl">{prefLabel(p)}{#if prefChanged(p)}{@render cDot('')}{/if}</span>{#if prefDesc(p)}<span class="r-sub">{prefDesc(p)}</span>{/if}</span>
+                <span class="r-d">{p.type === 'text' ? '' : prefValueLabel(p)}</span>{@render chev()}</span>
             </button>
           {/if}
         {/each}
       </div>
-      {@render gfoot(vxGroupFoot(g))}
+      {#each prefItems(g.id) as p (p.key)}{@render dmErr('pref:' + p.key)}{/each}
+    {/each}
+
+    {#if hasCap('diagnostics') && ds.sessions.length}
+      {@render ghead(t('诊断'))}
+      <div class="ig">
+        <button class="r" type="button" onclick={() => push('dm:diag')}>
+          <span class="r-main"><span class="r-tx">{t('导出诊断包')}</span>{@render chev()}</span>
+        </button>
+      </div>
+      {@render gfoot(t('卡住了、变慢了、报错了，导出这个包发给维护的人：里面是这一轮的事件记录、服务输出、体检结果与版本信息，不含对话正文和任何 key。'))}
     {/if}
-  {/each}
-  {#if vx.err}<p class="gfoot err">{vx.err}</p>{/if}
+
+    <p class="gfoot dm-ver">{versionLine()}</p>
+  {/if}
 {/snippet}
 
-<!-- 单选子页（视频最高分辨率 / 内容安全过滤四类）：选中打勾；改过才出「恢复默认」 -->
-{#snippet pVxChoice(key)}
-  {#if VX[key]}
+<!-- dimensio 的单选 / 规则 / 诊断子页 -->
+{#snippet dmChoice(opts, cur, pick, tag)}
+  <div class="ig">
+    {#each opts as o (o.value)}
+      <button class="r" type="button" disabled={ds.busy === tag} onclick={() => pick(o.value)}>
+        <span class="r-main"><span class="r-tx">{o.label}{#if o.desc}<span class="r-sub">{o.desc}</span>{/if}</span>{#if o.value === cur}{@render check()}{/if}</span>
+      </button>
+    {/each}
+  </div>
+  {@render dmErr(tag)}
+{/snippet}
+{#snippet pDmSub(sub)}
+  {#if !dimReady()}
+    {@render gfoot(ds.phase === 'down' ? ds.why : t('读取中…'))}
+  {:else if sub === 'provider'}{@render dmChoice(providerOptions(), ds.config.provider, setProvider, 'provider')}
+  {:else if sub === 'model'}{@render dmChoice(modelOptions(), ds.config.model, setModel, 'model')}
+  {:else if sub === 'effort'}{@render dmChoice(effortOptions(), ds.config.thinking, setThinking, 'thinking')}
+  {:else if sub === 'mode'}{@render dmChoice(MODES(), ds.config.permissionMode, setMode, 'mode')}
+  {:else if sub === 'access'}{@render dmChoice(ACCESS(), ds.config.access, setAccess, 'access')}
+  {:else if sub === 'ask' || sub === 'deny'}
+    {#if rulesOf(sub).length}
+      <div class="ig">
+        {#each rulesOf(sub) as r (r)}
+          <div class="r"><span class="r-main"><span class="r-tx dm-rule">{r}</span>
+            <span class="dv-minis"><button type="button" class="red" disabled={ds.busy === 'rules:' + sub} onclick={() => removeRule(sub, r)} aria-label={t('删除规则 {rule}', { rule: r })}>{t('删除')}</button></span></span></div>
+        {/each}
+      </div>
+    {/if}
+    {@render ghead(t('添加规则'))}
     <div class="ig">
-      {#each vxOptions(key) as o (o.value)}
-        <button class="r" type="button" disabled={vx.busy === key} onclick={() => setVertexSetting(key, o.value)}>
-          <span class="r-main"><span class="r-tx">{o.label}</span>{#if vx.values[key] === o.value}{@render check()}{/if}</span>
+      <div class="r"><span class="r-main"><input class="dv-in" bind:value={dmRule} placeholder={sub === 'ask' ? t('添加规则，如 Bash(git push:*)') : t('添加规则，如 Bash(rm -rf:*)')}
+        autocapitalize="off" autocorrect="off" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter' && !e.isComposing) addDmRule(sub); }} /></span></div>
+      <button class="r" type="button" disabled={!dmRule.trim() || ds.busy === 'rules:' + sub} onclick={() => addDmRule(sub)}><span class="r-main center"><span class="r-tx accent">{t('添加')}</span></span></button>
+    </div>
+    {@render dmErr('rules:' + sub)}
+    {@render gfoot(t('规则匹配命令或路径的前缀，是防误操作的软闸，不是安全沙箱。保存后所有会话下一次调用就按新规则判，重启也不丢。'))}
+  {:else if sub === 'diag'}
+    <div class="ig">
+      {#each ds.sessions as x (x.id)}
+        <button class="r" type="button" disabled={ds.busy === 'diag'} onclick={() => exportDiag(x.id)}>
+          <span class="r-main"><span class="r-tx">{sessionTitle(x)}</span><span class="r-d accent">{t('导出')}</span></span>
         </button>
       {/each}
     </div>
-    {#if vxDesc(key)}{@render gfoot(vxDesc(key))}{/if}
-    {#if vxChanged(key)}
-      <div class="ig"><button class="r" type="button" onclick={() => setVertexSetting(key, null)}><span class="r-main center"><span class="r-tx accent">{t('恢复默认')}</span></span></button></div>
-    {/if}
-    {#if vx.err}<p class="gfoot err">{vx.err}</p>{/if}
+    {#if errOf('diag')}{@render dmErr('diag')}{:else if ds.diagMsg}{@render gfoot(ds.diagMsg)}{:else}{@render gfoot(t('卡住了、变慢了、报错了，导出这个包发给维护的人：里面是这一轮的事件记录、服务输出、体检结果与版本信息，不含对话正文和任何 key。'))}{/if}
   {/if}
+{/snippet}
+{#snippet pDpChoice(key)}
+  {@const p = ds.prefs?.items?.find((x) => x.key === key)}
+  {#if p}
+    {@render dmChoice(prefOptions(p), p.value, (v) => setPref(p.key, v), 'pref:' + p.key)}
+    {#if prefDesc(p)}{@render gfoot(prefDesc(p))}{/if}
+    {#if prefChanged(p)}
+      <div class="ig"><button class="r" type="button" onclick={() => setPref(p.key, null)}><span class="r-main center"><span class="r-tx accent">{t('恢复默认')}</span></span></button></div>
+    {/if}
+  {/if}
+{/snippet}
+
+{#snippet pAgent(id)}
+  {@render agSwitch(id)}
+  {#if id === 'dimensio'}{@render pDimensio()}
+  {:else if !agentById(id)}{@render gfoot(t('只有管理员能改这里'))}{/if}
+{/snippet}
+
+<!-- ─────────────── Media Studio 页（2026-11-04 接替 Gemini 页）───────────────
+     头图 + 管理员的启用开关在外壳里画（同 agent 页），正文是懒加载的 studio 扩展组件：每一层页（'studio' 与 'st:*' 子页）各挂一份。 -->
+{#snippet pStudio(pid)}
+  {#if pid === 'studio'}
+    {@const a = agentById('studio')}
+    <div class="hero">
+      <span class="hero-mark">{#if markSrc('studio')}<img src={markSrc('studio')} alt="" draggable="false" />{/if}</span>
+      <div class="hero-name">Media Studio</div>
+      {#if studioStatus(a)}<div class="hero-sub">{studioStatus(a)}</div>{/if}
+    </div>
+    {#if a}
+      <div class="ig">
+        <div class="r">
+          <span class="r-main"><span class="r-tx">{t('启用 {name}', { name: 'Media Studio' })}</span>
+            <Toggle checked={a.switch && a.runnable} disabled={!a.runnable || ags.agentBusy === a.id} onchange={() => toggleAgent(a)} label={t('启用 {name}', { name: 'Media Studio' })} /></span>
+        </div>
+      </div>
+      {@render agErr()}
+    {/if}
+  {/if}
+  {#await loadPage.studioSettings() then m}
+    {@const StudioBody = m.default}
+    <StudioBody shell="ios" {dark} page={pid} push={stPush} agentIds={studioIds.length ? studioIds : null} onModal={(v) => { if (pid === 'studio') stModal = v; }} />
+  {:catch}
+    {@render gfoot(t('Media Studio 的设置没加载出来：这台服务器可能没装 Media Studio 扩展。'))}
+  {/await}
+{/snippet}
+
+<!-- 模型中心：头图（枢纽图标 + 名字 + 一行状态）归外壳，正文是 modelhub/HubHome 的 ios 版（懒加载，没打开设置的人不下这块代码）。
+     状态只在拿到时写；正文自己管空态、加载与出错 -->
+{#snippet pModelHub()}
+  {@const sum = hubSummaryText()}
+  <div class="hero">
+    <span class="hero-mark hub" aria-hidden="true">{@html svgOf('modelhub', 1.4)}</span>
+    <div class="hero-name">{t('模型中心')}</div>
+    {#if sum}<div class="hero-sub">{sum}</div>{/if}
+  </div>
+  {#await import('./modelhub/HubHome.svelte') then m}
+    <m.default shell="ios" />
+  {:catch}
+    {@render gfoot(t('模型中心没加载出来：关掉设置再打开试试。'))}
+  {/await}
 {/snippet}
 
 {#snippet pPolicy()}
@@ -1719,6 +2239,122 @@
   </div>
 {/snippet}
 
+<!-- 通用 › 通知：像微信的「新消息通知」——每个会话单独一条，铃声 / 振动 / 横幅 / 详情都在这里 -->
+{#snippet pNotify()}
+  <div class="ig">
+    <div class="r">
+      <span class="r-main"><span class="r-tx">{t('接收通知')}</span><Toggle checked={np.on} onchange={toggleNotify} label={t('接收通知')} /></span>
+    </div>
+  </div>
+  {@render gfoot(t('每个会话单独一条通知，标题就是会话名。正看着的那个会话不会提醒。'))}
+  {#if np.on}
+    {@render ghead(t('提醒哪些事'))}
+    <div class="ig">
+      {#each NOTICE_KINDS as k (k.k)}
+        <div class="r">
+          <span class="r-main"><span class="r-tx">{k.label()}</span><Toggle checked={kindValue(k.k)} onchange={() => setKind(k.k, !kindValue(k.k))} label={k.label()} /></span>
+        </div>
+      {/each}
+    </div>
+    {@render ghead(t('提醒方式'))}
+    <div class="ig">
+      <div class="r">
+        <span class="r-main"><span class="r-tx">{t('横幅')}</span><Toggle checked={np.inApp} onchange={() => setNoticePref('inApp', !np.inApp)} label={t('横幅')} /></span>
+      </div>
+      <div class="r">
+        <span class="r-main"><span class="r-tx">{t('显示内容详情')}</span><Toggle checked={np.preview} onchange={() => setNoticePref('preview', !np.preview)} label={t('显示内容详情')} /></span>
+      </div>
+    </div>
+    {@render gfoot(np.preview ? t('横幅：App 开着、在看别的页面时从顶部滑下来。关掉内容详情后，通知只写「你有一条新消息」。') : t('通知只写「你有一条新消息」，不露出问题和回复的内容。'))}
+    <div class="ig">
+      <div class="r">
+        <span class="r-main"><span class="r-tx">{t('声音')}</span><Toggle checked={np.sound} onchange={() => setNoticePref('sound', !np.sound)} label={t('声音')} /></span>
+      </div>
+      {#if np.sound}
+        <button class="r" type="button" onclick={() => push('notify-tone')}>
+          <span class="r-main"><span class="r-tx">{t('提示音')}</span><span class="r-d">{toneLabel()}</span>{@render chev()}</span>
+        </button>
+      {/if}
+      {#if VIBE_HAS}
+        <div class="r">
+          <span class="r-main"><span class="r-tx">{t('振动')}</span><Toggle checked={np.vibrate} onchange={() => setNoticePref('vibrate', !np.vibrate)} label={t('振动')} /></span>
+        </div>
+        {#if np.vibrate}
+          <button class="r" type="button" onclick={() => push('notify-vibe')}>
+            <span class="r-main"><span class="r-tx">{t('振动方式')}</span><span class="r-d">{vibeLabel()}</span>{@render chev()}</span>
+          </button>
+        {/if}
+      {/if}
+    </div>
+    {#if nativeNotices()}
+      {@render gfoot(t('手机调成静音时不响也不振，振动模式只振不响，开着免打扰时都不提醒。'))}
+      <div class="ig">
+        <div class="r">
+          <span class="r-main"><span class="r-tx">{t('后台保持接收')}</span><Toggle checked={np.keepAlive} onchange={() => setNoticePref('keepAlive', !np.keepAlive)} label={t('后台保持接收')} /></span>
+        </div>
+        {#if hasBatteryApi}
+          <button class="r" type="button" onclick={() => { if (!batteryOk) grantBattery(); }} aria-label={t('后台运行')}>
+            <span class="r-main"><span class="r-tx">{t('后台运行')}</span>{#if !batteryOk}<span class="r-d warn">{t('未开启')}</span>{/if}{@render statusTail(batteryOk)}</span>
+          </button>
+        {/if}
+        {#if hasNotifySys}
+          <button class="r" type="button" onclick={openNotifySystem}>
+            <span class="r-main"><span class="r-tx">{t('系统通知设置')}</span>{@render chev()}</span>
+          </button>
+        {/if}
+      </div>
+      {@render gfoot(np.keepAlive ? t('没有会话在跑时也常驻一条不响的通知，电脑上或定时任务发起的会话有动静也能马上告诉你；会多耗一点电。') : t('只在有会话在跑时跟踪；电脑上发起的会话，要等你打开过一次 App 才会被跟上。'))}
+    {:else if browserPerm.v !== 'unsupported' && browserPerm.v !== 'granted'}
+      <div class="ig">
+        <button class="r" type="button" onclick={requestBrowserPerm} disabled={browserPerm.v === 'denied'}>
+          <span class="r-main"><span class="r-tx">{t('允许浏览器通知')}</span><span class="r-d warn">{browserPerm.v === 'denied' ? t('已被拒绝') : t('未开启')}</span>{@render chev()}</span>
+        </button>
+      </div>
+      {@render gfoot(browserPerm.v === 'denied' ? t('浏览器拒绝了通知：在地址栏左边的网站设置里改回「允许」。') : t('标签页在后台时靠浏览器的系统通知提醒你。'))}
+    {/if}
+    <div class="ig">
+      <button class="r" type="button" onclick={testNotice}>
+        <span class="r-main"><span class="r-tx">{t('发一条测试通知')}</span></span>
+      </button>
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet pNotifyTone()}
+  {@const builtin = TONES.some((x) => x.id === np.tone)}
+  <div class="ig">
+    <button class="r" type="button" onclick={() => pickTone('system')}>
+      <span class="r-main"><span class="r-tx">{t('系统通知声音')}</span>{#if !builtin && np.tone !== 'custom'}{@render check()}{/if}</span>
+    </button>
+    {#if canPickPhoneTone()}
+      <button class="r" type="button" onclick={pickPhoneTone}>
+        <span class="r-main"><span class="r-tx">{t('手机里的提示音')}</span><span class="r-d">{np.tone === 'custom' ? (np.toneName || '') : ''}</span>{#if np.tone === 'custom'}{@render check()}{:else}{@render chev()}{/if}</span>
+      </button>
+    {/if}
+  </div>
+  {@render gfoot(canPickPhoneTone() ? t('默认用手机自己的通知提示音，跟着手机的铃声模式和免打扰走。也可以从手机里已有的提示音里挑一个。') : t('电脑上网页放不了系统的提示音：页面在前台时用「清脆」代替，在后台时是系统通知自带的声音。'))}
+  {@render ghead(t('内置提示音'))}
+  <div class="ig">
+    {#each TONES as x (x.id)}
+      <button class="r" type="button" onclick={() => pickTone(x.id)}>
+        <span class="r-main"><span class="r-tx">{x.label()}</span>{#if np.tone === x.id}{@render check()}{/if}</span>
+      </button>
+    {/each}
+  </div>
+  {@render gfoot(t('点一下试听。'))}
+{/snippet}
+
+{#snippet pNotifyVibe()}
+  <div class="ig">
+    {#each VIBES as x (x.id)}
+      <button class="r" type="button" onclick={() => { setNoticePref('vibe', x.id); previewVibe(x.id); }}>
+        <span class="r-main"><span class="r-tx">{x.label()}</span>{#if np.vibe === x.id}{@render check()}{/if}</span>
+      </button>
+    {/each}
+  </div>
+  {@render gfoot(t('点一下试一下。'))}
+{/snippet}
+
 {#snippet pLanguage()}
   <div class="ig">
     {#each LANGS as l (l.value)}
@@ -1744,11 +2380,6 @@
     <div class="r">
       <span class="r-main"><span class="r-tx">{t('跟随系统明暗')}</span><Toggle checked={prefs.followSys} onchange={toggleFollowSys} label={t('跟随系统明暗')} /></span>
     </div>
-    {#if !single}
-      <div class="r">
-        <span class="r-main"><span class="r-tx">{t('分页跟随主页明暗')}</span><Toggle checked={prefs.followPage} onchange={toggleFollowPage} label={t('分页跟随主页')} /></span>
-      </div>
-    {/if}
   </div>
   <div class="ig">
     <div class="r">
@@ -1815,10 +2446,10 @@
   <div class="seg-wrap"><Segmented options={FLUX_COLORMODES.map((c) => ({ value: c.id, label: c.name }))} value={fluxParams.colormode} onchange={pickColor} label={t('颜色')} /></div>
   {@render ghead(t('画面'))}
   <div class="ig">{@render fluxRows(FLUX_SLIDERS.filter((s) => !s.group))}</div>
-  {@render ghead(t('模拟参数'))}
+  {@render ghead(t('海浪'))}
   <div class="ig">{@render fluxRows(FLUX_SLIDERS.filter((s) => s.group))}</div>
   <div class="ig">
-    <button class="r" type="button" onclick={resetFlux}><span class="r-main center"><span class="r-tx accent">{t('恢复默认（Orange set）')}</span></span></button>
+    <button class="r" type="button" onclick={resetFlux}><span class="r-main center"><span class="r-tx accent">{t('恢复默认参数')}</span></span></button>
   </div>
 {/snippet}
 
@@ -2274,7 +2905,8 @@
 
     {@render ghead(t('用量'))}
     <div class="ig usage">
-      {#each [[t('当前会话（5 小时）'), usePct(lim.five_hour), lim.five_hour], [t('本周'), usePct(lim.seven_day), lim.seven_day]] as [name, p, b] (name)}
+      <!-- 没有 5 小时限额的号（部分 Ultra）不摆空的 5 小时条，只留本周 -->
+      {#each [...(status.noFiveHour && !lim.five_hour ? [] : [[t('当前会话（5 小时）'), usePct(lim.five_hour), lim.five_hour]]), [t('本周'), usePct(lim.seven_day), lim.seven_day]] as [name, p, b] (name)}
         <div class="u">
           <div class="u-top"><span class="u-l">{name}</span><span class="u-v">{p == null ? '—' : t('{pct}% 已用', { pct: p })}</span></div>
           <span class="bar-u">{#if p != null}<i style:width="{p}%" class:hot={p >= 80}></i>{/if}</span>
@@ -2425,11 +3057,15 @@
   {:else if pid === 'account'}{@render pAccount()}
   {:else if pid === 'general'}{@render pGeneral()}
   {:else if pid === 'language'}{@render pLanguage()}
+  {:else if pid === 'notify'}{@render pNotify()}
+  {:else if pid === 'notify-tone'}{@render pNotifyTone()}
+  {:else if pid === 'notify-vibe'}{@render pNotifyVibe()}
   {:else if pid === 'thinkmark'}{@render pThinkMark()}
   {:else if pid === 'appearance'}{@render pAppearance()}
   {:else if pid === 'wallpaper'}{@render pWallpaper()}
   {:else if pid === 'flux'}{@render pFlux()}
   {:else if pid === 'agentapi'}{@render pAgentApi()}
+  {:else if pid === 'model-hub'}{@render pModelHub()}
   {:else if pid === 'phone'}{@render pPhone()}
   {:else if pid === 'devices'}{@render pDevices()}
   {:else if pid === 'fwd-new'}{@render pFwdNew()}
@@ -2442,52 +3078,89 @@
     {@const pp = pluginPanels.list.find((x) => 'plg-' + x.id === pid)}
     {#if pp}<div class="plg-host">{#key pp.id}<PluginFrame id={pp.id} page={pp.page} mode="panel" onBack={pop} />{/key}</div>
     {:else}<p class="plg-gone">{t('这个插件面板不在了（插件被关掉或卸载了）')}</p>{/if}
+  {:else if pid === 'studio' || pid.startsWith('st:')}{@render pStudio(pid)}
   {:else if pid === 'ag-claude'}{@render pClaude()}
+  {:else if pid === 'cl-dispatch'}{@render pDispatch()}
   {:else if pid.startsWith('ag-')}{@render pAgent(pid.slice(3))}
-  {:else if pid.startsWith('vx:')}{@render pVxChoice(pid.slice(3))}
+  {:else if pid.startsWith('dm:')}{@render pDmSub(pid.slice(3))}
+  {:else if pid.startsWith('dp:')}{@render pDpChoice(pid.slice(3))}
   {:else if pid.startsWith('acct:')}{@render pAcct(pid.slice(5))}
   {:else if CL_CHOICE[pid]}{@render pChoice(CL_CHOICE[pid])}
   {:else if CL_GROUP[pid]}{@render pClGroup(pid)}
   {/if}
 {/snippet}
 
+<!-- 一页：页面层叠里的一层（手机），或双栏的左列 / 右栏里的一层。
+     nav＝双栏左列的根页：常驻、不参与推入层叠；右栏的层叠从 stack[1] 起算（base），它是右栏底层、没有返回钮 -->
+{#snippet pgSec(pid, i)}
+  {@const nav = split && i === 0}
+  {@const base = split ? 1 : 0}
+  {@const top = nav || i === depth - 1}
+  {@const under = !nav && i >= base && i === depth - 2}
+  <section class="pg" class:top class:under class:hidden={!top && !under} class:wide={pid === 'cl-dispatch'}
+    style:transform={!nav && top && i > base ? `translate3d(${navX}px,0,0)` : under ? `translate3d(${-0.3 * (panelW - navX) * (navX < panelW ? 1 : 0)}px,0,0)` : null}
+    style:--dim={under ? 0.1 * (1 - navX / Math.max(1, panelW)) : 0}
+    aria-hidden={!top}>
+    <div class="pg-scroll" onscroll={(e) => onPageScroll(pid, e)}>
+      {#if !hasHero(pid)}<h1 class="lt">{titleOf(pid)}</h1>{/if}
+      <div class="pg-body">{@render page(pid)}</div>
+    </div>
+    <div class="edge" class:on={(scrolled[pid] || 0) > 0}></div>
+    <div class="bar">
+      {#if split && i === base}<span class="bar-trail"></span>
+      {:else}<GlassButton symbol="chevron.backward" weight={600} aria={t('返回')} onclick={() => (nav ? close() : i === 0 ? back() : pop())} />{/if}
+      <span class="bar-title" class:on={(scrolled[pid] || 0) > 1}>{titleOf(pid)}</span>
+      <span class="bar-trail"></span>
+    </div>
+  </section>
+{/snippet}
+
 <!-- ─────────────── 外壳 ─────────────── -->
 <svelte:window onkeydown={onKey} />
-<div class="settings ios" class:dark class:closing class:previewing={!!sliding} class:staged={!!stage} class:modal={addrOpen || fbOpen || !!wpMenu || !!acctAsk || !!pw || anyAgModal}
+<div class="settings ios" class:dark class:split class:closing class:previewing={!!sliding} class:staged={!!stage} class:modal={addrOpen || fbOpen || !!wpMenu || !!acctAsk || !!pw || anyAgModal}
   class:covered={ui.serverAdminOpen || ui.agentsOpen} class:solid-cover={ui.serverAdminOpen && !ui.agentsOpen} style:--sq={`url("${sq26}")`} use:edgeSwipe>
-  <div class="panel" class:dragging bind:clientWidth={panelW} style:transform={dragX > 0 ? `translateX(${dragX}px)` : null}>
-    {#each stack as pid, i (pid + ':' + i)}
-      {@const top = i === depth - 1}
-      {@const under = i === depth - 2}
-      <section class="pg" class:top class:under class:hidden={!top && !under}
-        style:transform={top && i > 0 ? `translate3d(${navX}px,0,0)` : under ? `translate3d(${-0.3 * (panelW - navX) * (navX < panelW ? 1 : 0)}px,0,0)` : null}
-        style:--dim={under ? 0.1 * (1 - navX / Math.max(1, panelW)) : 0}
-        aria-hidden={!top}>
-        <div class="pg-scroll" onscroll={(e) => onPageScroll(pid, e)}>
-          {#if !hasHero(pid)}<h1 class="lt">{titleOf(pid)}</h1>{/if}
-          <div class="pg-body">{@render page(pid)}</div>
-        </div>
-        <div class="edge" class:on={(scrolled[pid] || 0) > 0}></div>
-        <div class="bar">
-          <GlassButton symbol="chevron.backward" weight={600} aria={t('返回')} onclick={() => (i === 0 ? back() : pop())} />
-          <span class="bar-title" class:on={(scrolled[pid] || 0) > 1}>{titleOf(pid)}</span>
-          <span class="bar-trail"></span>
-        </div>
-      </section>
-    {/each}
+  <div class="panel" class:dragging bind:clientWidth={panelBoxW} style:transform={dragX > 0 ? `translateX(${dragX}px)` : null}>
+    {#if split}
+      <!-- 双栏：左列＝根页（常驻导航），右栏＝stack[1…]（选中分区 + 它里面推入的子页） -->
+      <div class="side">{@render pgSec('root', 0)}</div>
+      <div class="detail" bind:clientWidth={detailW}>
+        {#each stack as pid, i (pid + ':' + i)}{#if i > 0}{@render pgSec(pid, i)}{/if}{/each}
+      </div>
+    {:else}
+      {#each stack as pid, i (pid + ':' + i)}{@render pgSec(pid, i)}{/each}
+    {/if}
+    <!-- 子 agent 调用策略子页的正文：挂在上面两种布局的分支之外，栈里有这一页就一直是同一个实例（单栏 / 双栏切换不重挂）；
+         落座到那一页的空位（pDispatch 的 .dp-slot）里显示。它的浮层开着时经 onModal 告诉外壳（dpModal） -->
+    {#if dpOpen}
+      <div class="dp-host" bind:this={dpHost}>
+        {#await import('./claude/dispatch/DispatchPolicy.svelte') then m}
+          <m.default shell="ios" onModal={(v) => { dpModal = !!v; }} />
+        {:catch}
+          {@render gfoot(t('调用策略没加载出来：关掉设置再打开试试。'))}
+        {/await}
+      </div>
+    {/if}
   </div>
 
   <!-- ── 壁纸实景舞台：设置页退开、主页即预览 ── -->
   {#if stage}
-    <div class="stage">
+    <div class="stage" bind:this={stageEl}>
       <div class="stage-top">
         <GlassButton variant="stage" symbol="chevron.backward" weight={600} aria={t('返回')} onclick={exitStage} />
         <GlassButton variant="stage" prominent label={t('完成')} onclick={exitStage} />
       </div>
-      <div class="stage-seg" style:--img={`url("${stageCapGlass}")`}>
-        <span class="stage-knob" class:right={stage === 'dark'}></span>
-        <button type="button" class:lit={stage === 'light'} onclick={() => stageSwap('light')}><Sym name="sun.max" weight={600} size={15} />{t('明亮壁纸')}</button>
-        <button type="button" class:lit={stage === 'dark'} onclick={() => stageSwap('dark')}><Sym name="moon.fill" weight={600} size={14} />{t('深色壁纸')}</button>
+      <!-- 指针手势挂在整条胶囊上（lib/liquid/tabs.js）；两层同样的标签：未选那层在指示器处挖洞、选中那层只在指示器里露出（按下放大）。
+           上层按钮只给键盘用（pointer-events: none），按下的透镜挂在 .stage 上压在胶囊之上 -->
+      {#snippet segLight()}<Sym name="sun.max" weight={600} size={15} />{t('明亮壁纸')}{/snippet}
+      {#snippet segDark()}<Sym name="moon.fill" weight={600} size={14} />{t('深色壁纸')}{/snippet}
+      <div class="stage-seg" bind:this={segBar} role="tablist" aria-label={t('壁纸')} style:--img={`url("${stageCapGlass}")`}>
+        <span class="stage-knob" bind:this={segPill}></span>
+        <div class="seg-row" bind:this={segRowU}>
+          <button type="button" role="tab" aria-selected={stage === 'light'} onclick={(e) => { if (e.detail === 0) stageSwap('light'); }}>{@render segLight()}</button>
+          <button type="button" role="tab" aria-selected={stage === 'dark'} onclick={(e) => { if (e.detail === 0) stageSwap('dark'); }}>{@render segDark()}</button>
+        </div>
+        <div class="seg-row" bind:this={segRowS} aria-hidden="true"><span>{@render segLight()}</span><span>{@render segDark()}</span></div>
+        <span class="seg-glow" bind:this={segGlow}></span>
       </div>
       <div style="flex:1"></div>
       {#if wpHasDepth(wp[stage])}
@@ -2508,10 +3181,8 @@
     </div>
   {/if}
 
-  {#if wpMenu}
-    <Menu x={wpMenu.x} y={wpMenu.y} title={wpDef(wpMenu.id).name} onclose={closeWpMenu}
-      items={[{ label: t('删除壁纸'), symbol: 'trash', destructive: true, onclick: wpMenuDelete }]} />
-  {/if}
+  <!-- 上传壁纸的长按菜单：平铺在外壳里（玻璃要采得到底下的设置页） -->
+  <MorphMenu open={!!wpMenu} point={wpMenu} title={wpMenu?.name || ''} items={wpMenuItems} onclose={closeWpMenu} />
 
   {#if addrOpen}
     <Alert title={t('更换服务器地址')} message={t('服务器换了地址时 App 一般会自动跟过去（在家连上同一个 Wi-Fi 时最快）；没跟上、或要改连另一台服务器时，在这里填新地址。')} error={addrErr}
@@ -2548,6 +3219,8 @@
         <TextField bind:value={acctForm.label} placeholder={t('如：主号 / 备用号')} autocapitalize="off" autocorrect="off" spellcheck="false" />
         <TextField bind:value={acctForm.token} type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
           placeholder={acctForm.isNew ? 'sk-ant-oat…' : (acctForm.hasToken ? t('留空＝不改，当前 …{tail}', { tail: acctForm.tokenTail || '' }) : t('留空＝用本机登录态'))} />
+        <Segmented options={PLAN_CHOICES()} value={acctForm.plan} onchange={(v) => { acctForm.plan = v; }} size="small" label={t('套餐')} />
+        <p class="fb-intro">{t('套餐：setup-token 读不到订阅档位，自动识别分不清 Pro / Max 5x / Ultra 时手动标一下。')}</p>
         {#if acctForm.err}<p class="fb-err">{acctForm.err}</p>{/if}
         <p class="fb-intro">{t('在目标账号登录状态下运行 claude setup-token，把返回的长期 token 粘进来。')}</p>
       </div>
@@ -2581,13 +3254,27 @@
     </Alert>
   {/if}
 
-  {#if dspEdit}
-    <Alert title={t('子 agent 调度偏好')} message={t('派子 agent 时怎么挑模型和推理强度，用大白话写就行。空着时由 Claude 按任务难度自己定，不再照搬主会话。')} error={dspEdit.err}
-      onclose={() => { if (!dspEdit.busy) dspEdit = null; }}
-      actions={[{ label: dspEdit.busy ? t('保存中…') : t('保存'), role: 'default', disabled: dspEdit.busy, onclick: saveDispatch }, { label: t('取消'), role: 'cancel', onclick: () => (dspEdit = null) }]}>
-      <TextField multiline rows={6} bind:value={dspEdit.value} maxlength={CS.subagentDispatch.maxLen}
-        placeholder={t('例：简单任务用 mimo-v2.6-flash；普通构建任务用 deepseek-v4.1-flash；其余按实际情况判断。')} autofocus />
+  {#if dmEdit}
+    <Alert title={dmEdit.title} message={dmEdit.message} error={dmEdit.err || ''}
+      onclose={() => { if (!dmEdit.busy) dmEdit = null; }}
+      actions={[
+        { label: dmEdit.busy ? t('保存中…') : t('保存'), role: 'default', disabled: dmEdit.busy, onclick: saveDmEdit },
+        ...(dmEdit.kind === 'ws' ? [{ label: t('选择文件夹…'), role: 'default', disabled: dmEdit.busy, onclick: pickDmFolder }] : []),
+        ...(dmEdit.kind === 'num' || dmEdit.kind === 'text' ? [{ label: t('恢复默认'), role: 'default', disabled: dmEdit.busy, onclick: resetDmPref }] : []),
+        { label: t('取消'), role: 'cancel', onclick: () => (dmEdit = null) },
+      ]}>
+      {#if dmEdit.multiline}
+        <TextField multiline rows={5} bind:value={dmEdit.value} placeholder={dmEdit.placeholder || ''} autofocus />
+      {:else}
+        <TextField bind:value={dmEdit.value} type={dmEdit.password ? 'password' : 'text'} placeholder={dmEdit.placeholder || ''}
+          inputmode={dmEdit.kind === 'num' ? 'decimal' : undefined} autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus />
+      {/if}
     </Alert>
+  {/if}
+
+  {#if dmPicking}
+    <ProjectPicker title={t('选择工作空间')} hint={t('把文件夹拖进底栏，它就是 dimensio 新对话的工作空间')} preferPath={ds.config?.workspace || ''}
+      onPick={async (p) => { dmPicking = false; if (p) await setWorkspace(p); }} onClose={() => { dmPicking = false; }} />
   {/if}
 
   {#if numEdit}
@@ -2643,7 +3330,6 @@
   {/if}
 </div>
 
-{#if provOpen}<ProviderManager onClose={() => (provOpen = false)} />{/if}
 
 <style>
   /* ── 颜色令牌 v5「墨与象牙」：取自应用图标（墨色渐变 #282521→#0F0E0C、月桥象牙 #F3EEE4）。
@@ -2717,6 +3403,47 @@
   .settings.covered.solid-cover.dark { background: rgba(0, 0, 0, .5); }
   .settings.covered.solid-cover .panel { opacity: 1; }
 
+  /* ── 宽屏双栏（≥700：折叠屏展开 / 平板 / 电脑浏览器）：满屏两栏，样子照桌面设置——
+     左列导航（无卡片底、无箭头与行尾说明、线稿图标不加方格、选中＝中性底加粗），右栏是分区页面、内容收在居中的一列 ── */
+  .settings.split .panel { max-width: none; display: flex; animation: panel-fade 260ms var(--ea-fade) both; }
+  @keyframes panel-fade { from { opacity: 0; transform: scale(.992); } }
+  .settings.split.closing .panel { opacity: 0; transform: scale(.992) !important; transition: opacity 220ms var(--ea-fade), transform 220ms var(--ea-fade); }
+  .side { --side-bg: color-mix(in srgb, var(--i-card) 55%, var(--i-bg));
+    position: relative; flex: none; width: clamp(288px, 34vw, 360px); height: 100%; overflow: hidden;
+    background: var(--side-bg); box-shadow: inset -1px 0 0 var(--i-label4); transition: background-color 240ms var(--ea-fade); }
+  .side .pg { background: none; }
+  .detail { position: relative; flex: 1; min-width: 0; height: 100%; overflow: hidden; }
+  .detail > .pg:first-child { animation: det-in 200ms var(--ea-fade) both; }
+  @keyframes det-in { from { opacity: 0; } }
+  .settings.previewing .side, .settings.staged .side { background: transparent; box-shadow: none; }
+  /* 左列的滚动边缘不叠 backdrop（同屏只留右栏那一层）：改用左列底色实盖顶栏那一截，往下照旧由遮罩化开 */
+  .side .edge { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--side-bg); right: 1px; }
+  .side .lt { padding: 4px 26px 6px; }
+  .side .pg-body { padding: 10px 12px 0; }
+  .side .ig { background: none; box-shadow: none; border-radius: 0; overflow: visible; margin-bottom: 14px; }
+  .side .ghead { display: none; }
+  .side .r { min-height: 46px; padding: 0 12px; gap: 12px; border-radius: 12px; }
+  .side .r-main { min-height: 46px; padding: 8px 0; }
+  .side .r + .r .r-main::before { display: none; }
+  .side .r :global(.chev), .side .r-d { display: none; }
+  /* 行尾只留要你处理的：有更新 / 出错 / 没配认证，以及软件更新的进度 */
+  .side .r-d.accent, .side .r-d.err, .side .r-d.warn, .side .upr .r-d { display: flex; }
+  .side .ri { width: 24px; height: 24px; background: none; color: var(--i-label2); transition: color 200ms var(--ea-fade); }
+  .side .ri :global(svg) { width: 20px; height: 20px; }
+  .side .r.on { background: var(--i-fill3); }
+  .side .r.on .r-tx { font-weight: 600; }
+  .side .r.on .r-sub { font-weight: 400; }
+  .side .r.on .ri { color: var(--i-label); }
+  @media (hover: hover) { .side button.r:hover:not(.on) { background: var(--i-fill4); } }
+  .side .r.acctcard { min-height: 64px; margin-bottom: 4px; }
+  .side .r.acctcard .r-main { min-height: 64px; }
+  .side .acctcard .av { width: 40px; height: 40px; font-size: 18px; }
+  .side .acct-title { font-size: 16px; line-height: 22px; }
+  .detail .lt, .detail .pg-body { max-width: 680px; margin-left: auto; margin-right: auto; }
+  .detail .lt { padding: 4px 40px 6px; }
+  .detail .pg-body { padding: 16px 24px 0; }
+  .detail .plg-host { margin: 0 -24px; }
+
   /* ── 页面层 ── */
   .pg { position: absolute; inset: 0; background: var(--i-bg); will-change: transform; transition: background-color 240ms var(--ea-fade); }
   .pg.hidden { visibility: hidden; }
@@ -2743,8 +3470,9 @@
   .edge {
     position: absolute; left: 0; right: 0; top: 0; height: calc(var(--sat) + 76px); pointer-events: none; opacity: 0; transition: opacity 200ms linear;
     -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
-    background: linear-gradient(to bottom, color-mix(in srgb, var(--i-bg) 72%, transparent) 0%, color-mix(in srgb, var(--i-bg) 30%, transparent) 60%, transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 45%, transparent 100%); mask-image: linear-gradient(to bottom, #000 0%, #000 45%, transparent 100%);
+    /* 状态栏 + 44px 的顶栏这一截要盖实（标题、返回钮所在的那一行，下面滚上来的字不许透出来压在标题上），往下 32px 再化开 */
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--i-bg) 90%, transparent) 0, color-mix(in srgb, var(--i-bg) 84%, transparent) calc(var(--sat) + 44px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(var(--sat) + 44px), transparent 100%); mask-image: linear-gradient(to bottom, #000 0, #000 calc(var(--sat) + 44px), transparent 100%);
   }
   .edge.on { opacity: 1; }
   /* 弹窗 / 表单页 / 菜单开着、或被控制台盖住时：它们自带一层 backdrop，这层让出去（同屏两层 backdrop 叠放，上层会静默失效） */
@@ -2794,12 +3522,16 @@
   .dv-minis button.red { color: var(--i-red); }
   .dv-minis button:disabled { opacity: .5; }
   .dv-url { word-break: break-all; }
+  .dm-path { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 14px; line-height: 20px; word-break: break-all; color: var(--i-label); }
+  .r-tx.dm-rule { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 14px; word-break: break-all; }
+  .gfoot.dm-ver { text-align: center; color: var(--i-label3); font-variant-numeric: tabular-nums; user-select: text; }
   .gfoot.dv-err { color: var(--i-red); }
   .chg { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--i-accent); }
   .pill.dev { font-weight: 500; letter-spacing: 0; }
   .r.ind { padding-left: 32px; }
   .mk-prev { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; margin-right: 12px; color: var(--coral); }
   .r-d.err { color: var(--i-red); }
+  .r-d.warn { color: var(--i-warn); }
   .r-d.num, .num { font-variant-numeric: tabular-nums; }
   .r-d.addr { direction: rtl; }   /* 长地址显示尾部（域名段） */
   .r-d.sel { user-select: text; }
@@ -2838,6 +3570,9 @@
   .hero-mark { width: 76px; height: 76px; border-radius: 22px; display: flex; align-items: center; justify-content: center;
     background: var(--i-card); box-shadow: inset 0 0 0 .5px var(--i-label4), 0 10px 30px -12px rgba(0, 0, 0, .25); }
   .hero-mark img { width: 42px; height: 42px; object-fit: contain; }
+  /* 模型中心没有品牌标，头图里放线稿图标：墨色跟正文走，明暗两套主题各自成立；尺寸与品牌标的视觉重量对齐 */
+  .hero-mark.hub { color: var(--i-label); }
+  .hero-mark.hub :global(svg) { width: 40px; height: 40px; }
   .hero-name { margin-top: 14px; font-family: var(--font-brand-serif), Georgia, "Songti SC", serif; font-size: 26px; line-height: 32px; font-weight: 500; letter-spacing: -.2px; }
   .hero-sub { margin-top: 4px; font-size: 13px; line-height: 18px; color: var(--i-label2); }
   .hero-sub.warn { color: var(--i-warn); }
@@ -2961,7 +3696,21 @@
   .n-b { margin: 6px 0 0; font-size: 14px; line-height: 21px; color: var(--i-label2); white-space: pre-line; }
   .r.hist .r-main { align-items: flex-start; }
   .r.hist .r-d { padding-top: 1px; font-size: 13px; }
-  .r-d.dsp-d { display: block; max-width: 45%; }
+  /* 子 agent 调用策略入口行：行按钮（标题 + 状态副标题）用 ::after 把命中区铺满整行（.r-main 是定位容器，左右各补回行的 16px 内边距），
+     按下的落墨也画在这层上；开关那一块是后来的定位元素、压在这层上面（不加 z-index：开关按下时的透镜要采得到底下的卡片，
+     不能给它建层叠上下文），四周的内边距是不响应的缓冲带。箭头不接事件，按它落在行按钮上 */
+  .dpr-go { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; margin: 0; padding: 0; border: 0; background: none;
+    font: inherit; color: inherit; text-align: left; cursor: pointer; outline: none; -webkit-tap-highlight-color: transparent; }
+  .dpr-go::after { content: ''; position: absolute; inset: 0 -16px; transition: background-color 260ms var(--ea-fade); }
+  .dpr-go:active::after { background: var(--i-press); transition-duration: 60ms; }
+  .dpr-go:focus-visible::after { box-shadow: inset 0 0 0 2px var(--i-label3); }
+  .dpr-sw { position: relative; flex: none; display: flex; align-items: center; box-sizing: content-box; min-width: 64px; min-height: 28px;
+    margin: -11px -2px -11px -10px; padding: 11px 2px 11px 10px; }
+  .dpr :global(.chev) { pointer-events: none; }
+  /* 双栏下调用策略子页的内容列放宽（标准列 680 摆不开性价比图；同桌面设置的 920） */
+  .detail .pg.wide .lt, .detail .pg.wide .pg-body { max-width: 920px; }
+  /* 调用策略子页的正文节点：落座在那一页的空位里才显示；还留在面板根上的那一瞬（刚建出来、同一轮刷新里就会被挪走）不露面 */
+  .panel > .dp-host { display: none; }
   .h-c { font-weight: 400; color: var(--i-label2); }
 
   /* ── 壁纸页 ── */
@@ -2997,13 +3746,17 @@
   .stage { position: absolute; inset: 0; display: flex; flex-direction: column; padding: var(--sat) 16px max(16px, var(--sab)); animation: stage-in 380ms cubic-bezier(.2, .95, .25, 1); }
   @keyframes stage-in { from { opacity: 0; transform: translateY(18px); } }
   .stage-top { display: flex; align-items: center; justify-content: space-between; height: 44px; }
-  .stage-seg { position: relative; align-self: center; margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; width: 250px; height: 44px; padding: 4px; isolation: isolate; }
+  .stage-seg { position: relative; align-self: center; margin-top: 16px; width: 250px; height: 44px; isolation: isolate;
+    touch-action: pan-y; cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
   .stage-seg::before { content: ''; position: absolute; z-index: -1; inset: 0; border: 0 solid transparent; border-image: var(--img) 0 210 fill / 0 70px / 40px stretch; pointer-events: none; }
-  .stage-knob { position: absolute; top: 4px; left: 4px; width: calc(50% - 4px); height: 36px; border-radius: 18px; background: rgba(255, 255, 255, .72);
-    box-shadow: 0 2px 10px rgba(0, 0, 0, .12); transition: transform 380ms cubic-bezier(.3, 1.15, .45, 1); }
-  .stage-knob.right { transform: translateX(100%); }
-  .stage-seg button { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 6px; border: 0; background: none; cursor: pointer;
+  /* 指示器与两层标签的位置都由 lib/liquid/tabs.js 逐帧写 transform / mask（静止时也是它摆好的） */
+  .stage-knob { position: absolute; top: 0; left: 0; width: 121px; height: 36px; border-radius: 18px; background: rgba(255, 255, 255, .72);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .12); transform: translate(4px, 4px); pointer-events: none; }
+  .seg-row { position: absolute; left: 4px; top: 4px; display: flex; pointer-events: none; }
+  .seg-row > * { position: relative; width: 121px; height: 36px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 0; padding: 0; background: none;
     font: inherit; font-size: 15px; font-weight: 600; color: #0c0c0e; white-space: nowrap; }
+  .seg-row button:focus-visible { outline: 2px solid rgba(0, 0, 0, .5); outline-offset: -2px; border-radius: 18px; }
+  .seg-glow { position: absolute; inset: 0; border-radius: 22px; mix-blend-mode: plus-lighter; pointer-events: none; display: none; }
   .stage-panel { position: relative; isolation: isolate; border-radius: 34px; padding: 6px 18px; box-shadow: 0 8px 40.6px rgba(0, 0, 0, .25); }
   .stage-panel::before { content: ''; position: absolute; z-index: -1; inset: 0; border: 0 solid transparent; border-image: var(--img) 228 fill / 76px / 16px stretch; pointer-events: none; }
   .sp-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; color: #000; }

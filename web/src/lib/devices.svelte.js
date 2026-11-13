@@ -163,7 +163,11 @@ export function forwardShareUrl(f) {
 // ── 这台电脑（只有桌面客户端有）：设备档位 off / observe / control 与设备通道状态 ──
 // 档位由桌面壳持久化并在设备服务里硬拦（window.BridgeDesktop.localPc）；这里只是读写与订阅。
 const lpCtl = typeof window !== 'undefined' ? window.BridgeDesktop?.localPc || null : null;
-export const thisComputer = $state({ supported: !!lpCtl, mode: 'off', active: false, lastAction: '', source: '', shortcut: '', device: null });
+export const thisComputer = $state({
+  supported: !!lpCtl, mode: 'off', active: false, lastAction: '', source: '', shortcut: '', device: null,
+  // Web Bridge：连着的用户浏览器（名字）；canInstallExtension＝壳带安装引导（老客户端没有）
+  browsers: [], canInstallExtension: typeof lpCtl?.installBrowserExtension === 'function',
+});
 function applyLp(s) {
   if (!s) return;
   thisComputer.mode = s.mode || 'off';
@@ -172,7 +176,9 @@ function applyLp(s) {
   thisComputer.source = s.source || '';
   thisComputer.shortcut = s.shortcut || '';
   thisComputer.device = s.device || null;
+  thisComputer.browsers = Array.isArray(s.webBridge?.browsers) ? s.webBridge.browsers : [];
 }
+export function installBrowserExtension() { return lpCtl?.installBrowserExtension?.(); }
 export function refreshThisComputer() { lpCtl?.state().then(applyLp).catch(() => {}); }
 if (lpCtl) {
   refreshThisComputer();

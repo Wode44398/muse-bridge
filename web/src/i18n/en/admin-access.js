@@ -69,8 +69,8 @@ export default {
     'Open chat snapshots belong to accounts that aren’t service accounts: {names}. They and their snapshots would get member limits too. Mark accounts used by programs as service accounts on the Users page first.',
   '给程序用的号（例如 QQ 机器人）请先到「用户」里标成服务账号，否则它和它铸的聊天快照也会按成员限额。':
     'Mark accounts used by programs (such as a QQ bot) as service accounts on the Users page first, or they and their chat snapshots will get member limits too.',
-  '留空或填 0 = 不限。Claude 对话、Gemini 对话和定时任务都算轮数；图片、语音、音乐、视频按次数另算。管理员不受限，服务账号不吃默认额度（要限就单独设）。':
-    'Leave blank or enter 0 for no limit. Claude chats, Gemini chats, and routines all count as turns; images, speech, music, and video are counted separately. Admins aren’t limited, and service accounts skip the defaults (set limits for them individually).',
+  '留空或填 0 = 不限。Claude 对话和定时任务都算轮数；图片、语音、音乐、视频按次数另算。管理员不受限，服务账号不吃默认额度（要限就单独设）。':
+    'Leave blank or enter 0 for no limit. Claude chats and routines both count as turns; images, speech, music, and video are counted separately. Admins aren’t limited, and service accounts skip the defaults (set limits for them individually).',
   '轮数在开跑时记（同时发几轮也绕不过去），花费按每轮结束时 Claude 报的金额、取这一轮新增的那部分记。某个人要多给或少给，到「用户」页他的「管理」里单独设。':
     'Turns count when they start, so sending several at once doesn’t get around the limit. Spending is recorded when each turn ends, counting only what that turn added. To give someone more or less, set it under Manage on the Users page.',
   '花费按 API 价估算：大家共用订阅号池时，它反映用了多少，不是真花出去的钱。': 'Spending is estimated at API prices. When everyone shares a subscription pool, it shows how much was used, not money actually spent.',

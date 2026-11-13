@@ -1,0 +1,6483 @@
+{
+ "_note": "Media Studio v3 目录样例（方案 §9.3）。由 discovery/make-sample.mjs 用 fixtures/ 里 2026-11-06 的真实目录跑真代码生成；顶层除 _note / _resolve / _providers 外就是 GET /api/studio/catalog 的原样响应。group.shelf = 备选轻条目（完整条目走 GET /api/studio/models/resolve?key=，示例见 _resolve）。",
+ "kinds": {
+  "image": {
+   "defaults": {
+    "provider": "p-76d6f84c",
+    "model": "gemini-3-pro-image"
+   },
+   "groups": [
+    {
+     "provider": {
+      "id": "p-76d6f84c",
+      "name": "Google Vertex AI",
+      "dialect": "vertex",
+      "preset": "vertex",
+      "mine": true
+     },
+     "models": [
+      {
+       "key": "p-76d6f84c/gemini-3-pro-image",
+       "id": "gemini-3-pro-image",
+       "label": "Nano Banana Pro",
+       "kind": "image",
+       "async": false,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 3,
+         "roles": [
+          "edit",
+          "ref"
+         ]
+        },
+        "multiTurn": true
+       },
+       "params": [
+        {
+         "key": "aspectRatio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "1:1",
+           "label": "1:1"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16"
+          },
+          {
+           "value": "4:3",
+           "label": "4:3"
+          },
+          {
+           "value": "3:4",
+           "label": "3:4"
+          },
+          {
+           "value": "3:2",
+           "label": "3:2"
+          },
+          {
+           "value": "2:3",
+           "label": "2:3"
+          },
+          {
+           "value": "5:4",
+           "label": "5:4"
+          },
+          {
+           "value": "4:5",
+           "label": "4:5"
+          },
+          {
+           "value": "21:9",
+           "label": "21:9"
+          }
+         ],
+         "default": "auto",
+         "format": "aspect"
+        },
+        {
+         "key": "imageSize",
+         "label": "尺寸",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "1K",
+           "label": "1K"
+          },
+          {
+           "value": "2K",
+           "label": "2K"
+          },
+          {
+           "value": "4K",
+           "label": "4K"
+          }
+         ],
+         "default": "",
+         "format": "resolution"
+        },
+        {
+         "key": "useSearch",
+         "label": "联网搜索",
+         "type": "bool",
+         "group": "advanced",
+         "default": false,
+         "desc": "真实世界的人物、地标、品牌、新事物更准"
+        },
+        {
+         "key": "personGeneration",
+         "label": "人物生成",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "ALLOW_ALL",
+           "label": "允许（含儿童）"
+          },
+          {
+           "value": "ALLOW_ADULT",
+           "label": "仅成人"
+          },
+          {
+           "value": "ALLOW_NONE",
+           "label": "不生成人物"
+          }
+         ],
+         "default": ""
+        },
+        {
+         "key": "outputFormat",
+         "label": "输出",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "both",
+           "label": "图文"
+          },
+          {
+           "value": "image",
+           "label": "仅图"
+          }
+         ],
+         "default": "both"
+        },
+        {
+         "key": "temperature",
+         "label": "温度",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 2,
+         "step": 0.05,
+         "default": 1
+        },
+        {
+         "key": "topP",
+         "label": "Top P",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 1,
+         "step": 0.01,
+         "default": 0.95
+        }
+       ],
+       "paramSource": "card"
+      }
+     ]
+    },
+    {
+     "provider": {
+      "id": "p-3439bc2c",
+      "name": "Gemini API",
+      "dialect": "gemini",
+      "preset": "gemini",
+      "mine": true
+     },
+     "models": [
+      {
+       "key": "p-3439bc2c/gemini-nano-banana-2.1",
+       "id": "gemini-nano-banana-2.1",
+       "label": "Nano Banana 2.1",
+       "desc": "画质与文字渲染更好，独有超宽比例 4:1 / 1:4 / 8:1 / 1:8",
+       "kind": "image",
+       "async": false,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 3,
+         "roles": [
+          "edit",
+          "ref"
+         ]
+        },
+        "multiTurn": true
+       },
+       "params": [
+        {
+         "key": "aspectRatio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "1:1",
+           "label": "1:1"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16"
+          },
+          {
+           "value": "4:3",
+           "label": "4:3"
+          },
+          {
+           "value": "3:4",
+           "label": "3:4"
+          },
+          {
+           "value": "3:2",
+           "label": "3:2"
+          },
+          {
+           "value": "2:3",
+           "label": "2:3"
+          },
+          {
+           "value": "5:4",
+           "label": "5:4"
+          },
+          {
+           "value": "4:5",
+           "label": "4:5"
+          },
+          {
+           "value": "21:9",
+           "label": "21:9"
+          },
+          {
+           "value": "4:1",
+           "label": "4:1"
+          },
+          {
+           "value": "1:4",
+           "label": "1:4"
+          },
+          {
+           "value": "8:1",
+           "label": "8:1"
+          },
+          {
+           "value": "1:8",
+           "label": "1:8"
+          }
+         ],
+         "default": "auto",
+         "format": "aspect"
+        },
+        {
+         "key": "imageSize",
+         "label": "尺寸",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "1K",
+           "label": "1K"
+          },
+          {
+           "value": "2K",
+           "label": "2K"
+          },
+          {
+           "value": "4K",
+           "label": "4K"
+          }
+         ],
+         "default": "",
+         "format": "resolution"
+        },
+        {
+         "key": "thinkingLevel",
+         "label": "思考",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "minimal",
+           "label": "Minimal"
+          },
+          {
+           "value": "high",
+           "label": "High"
+          }
+         ],
+         "default": ""
+        },
+        {
+         "key": "useSearch",
+         "label": "联网搜索",
+         "type": "bool",
+         "group": "advanced",
+         "default": false,
+         "desc": "真实世界的人物、地标、品牌、新事物更准"
+        },
+        {
+         "key": "useImageSearch",
+         "label": "图片搜索",
+         "type": "bool",
+         "group": "advanced",
+         "default": false,
+         "desc": "含联网搜索"
+        },
+        {
+         "key": "outputFormat",
+         "label": "输出",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "both",
+           "label": "图文"
+          },
+          {
+           "value": "image",
+           "label": "仅图"
+          }
+         ],
+         "default": "both"
+        },
+        {
+         "key": "temperature",
+         "label": "温度",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 2,
+         "step": 0.05,
+         "default": 1
+        },
+        {
+         "key": "topP",
+         "label": "Top P",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 1,
+         "step": 0.01,
+         "default": 0.95
+        }
+       ],
+       "paramSource": "card"
+      },
+      {
+       "key": "p-3439bc2c/gemini-2.5-flash-image",
+       "id": "gemini-2.5-flash-image",
+       "label": "Nano Banana",
+       "kind": "image",
+       "async": false,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 3,
+         "roles": [
+          "edit",
+          "ref"
+         ]
+        },
+        "multiTurn": true
+       },
+       "params": [
+        {
+         "key": "aspectRatio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "1:1",
+           "label": "1:1"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16"
+          },
+          {
+           "value": "4:3",
+           "label": "4:3"
+          },
+          {
+           "value": "3:4",
+           "label": "3:4"
+          },
+          {
+           "value": "3:2",
+           "label": "3:2"
+          },
+          {
+           "value": "2:3",
+           "label": "2:3"
+          },
+          {
+           "value": "5:4",
+           "label": "5:4"
+          },
+          {
+           "value": "4:5",
+           "label": "4:5"
+          },
+          {
+           "value": "21:9",
+           "label": "21:9"
+          }
+         ],
+         "default": "auto",
+         "format": "aspect"
+        },
+        {
+         "key": "imageSize",
+         "label": "尺寸",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "1K",
+           "label": "1K"
+          },
+          {
+           "value": "2K",
+           "label": "2K"
+          },
+          {
+           "value": "4K",
+           "label": "4K"
+          }
+         ],
+         "default": "",
+         "format": "resolution"
+        },
+        {
+         "key": "outputFormat",
+         "label": "输出",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "both",
+           "label": "图文"
+          },
+          {
+           "value": "image",
+           "label": "仅图"
+          }
+         ],
+         "default": "both"
+        },
+        {
+         "key": "temperature",
+         "label": "温度",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 2,
+         "step": 0.05,
+         "default": 1
+        },
+        {
+         "key": "topP",
+         "label": "Top P",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 1,
+         "step": 0.01,
+         "default": 0.95
+        }
+       ],
+       "paramSource": "card",
+       "isNew": true
+      },
+      {
+       "key": "p-3439bc2c/gemini-3-pro-image",
+       "id": "gemini-3-pro-image",
+       "label": "Nano Banana Pro",
+       "kind": "image",
+       "async": false,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 3,
+         "roles": [
+          "edit",
+          "ref"
+         ]
+        },
+        "multiTurn": true
+       },
+       "params": [
+        {
+         "key": "aspectRatio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "1:1",
+           "label": "1:1"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16"
+          },
+          {
+           "value": "4:3",
+           "label": "4:3"
+          },
+          {
+           "value": "3:4",
+           "label": "3:4"
+          },
+          {
+           "value": "3:2",
+           "label": "3:2"
+          },
+          {
+           "value": "2:3",
+           "label": "2:3"
+          },
+          {
+           "value": "5:4",
+           "label": "5:4"
+          },
+          {
+           "value": "4:5",
+           "label": "4:5"
+          },
+          {
+           "value": "21:9",
+           "label": "21:9"
+          }
+         ],
+         "default": "auto",
+         "format": "aspect"
+        },
+        {
+         "key": "imageSize",
+         "label": "尺寸",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "1K",
+           "label": "1K"
+          },
+          {
+           "value": "2K",
+           "label": "2K"
+          },
+          {
+           "value": "4K",
+           "label": "4K"
+          }
+         ],
+         "default": "",
+         "format": "resolution"
+        },
+        {
+         "key": "useSearch",
+         "label": "联网搜索",
+         "type": "bool",
+         "group": "advanced",
+         "default": false,
+         "desc": "真实世界的人物、地标、品牌、新事物更准"
+        },
+        {
+         "key": "outputFormat",
+         "label": "输出",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "both",
+           "label": "图文"
+          },
+          {
+           "value": "image",
+           "label": "仅图"
+          }
+         ],
+         "default": "both"
+        },
+        {
+         "key": "temperature",
+         "label": "温度",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 2,
+         "step": 0.05,
+         "default": 1
+        },
+        {
+         "key": "topP",
+         "label": "Top P",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 1,
+         "step": 0.01,
+         "default": 0.95
+        }
+       ],
+       "paramSource": "card",
+       "isNew": true
+      },
+      {
+       "key": "p-3439bc2c/gemini-3.1-flash-image",
+       "id": "gemini-3.1-flash-image",
+       "label": "Nano Banana 2",
+       "kind": "image",
+       "async": false,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 3,
+         "roles": [
+          "edit",
+          "ref"
+         ]
+        },
+        "multiTurn": true
+       },
+       "params": [
+        {
+         "key": "aspectRatio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "1:1",
+           "label": "1:1"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16"
+          },
+          {
+           "value": "4:3",
+           "label": "4:3"
+          },
+          {
+           "value": "3:4",
+           "label": "3:4"
+          },
+          {
+           "value": "3:2",
+           "label": "3:2"
+          },
+          {
+           "value": "2:3",
+           "label": "2:3"
+          },
+          {
+           "value": "5:4",
+           "label": "5:4"
+          },
+          {
+           "value": "4:5",
+           "label": "4:5"
+          },
+          {
+           "value": "21:9",
+           "label": "21:9"
+          }
+         ],
+         "default": "auto",
+         "format": "aspect"
+        },
+        {
+         "key": "imageSize",
+         "label": "尺寸",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "1K",
+           "label": "1K"
+          },
+          {
+           "value": "2K",
+           "label": "2K"
+          },
+          {
+           "value": "4K",
+           "label": "4K"
+          }
+         ],
+         "default": "",
+         "format": "resolution"
+        },
+        {
+         "key": "thinkingLevel",
+         "label": "思考",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "minimal",
+           "label": "Minimal"
+          },
+          {
+           "value": "high",
+           "label": "High"
+          }
+         ],
+         "default": ""
+        },
+        {
+         "key": "useSearch",
+         "label": "联网搜索",
+         "type": "bool",
+         "group": "advanced",
+         "default": false,
+         "desc": "真实世界的人物、地标、品牌、新事物更准"
+        },
+        {
+         "key": "useImageSearch",
+         "label": "图片搜索",
+         "type": "bool",
+         "group": "advanced",
+         "default": false,
+         "desc": "含联网搜索"
+        },
+        {
+         "key": "outputFormat",
+         "label": "输出",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "both",
+           "label": "图文"
+          },
+          {
+           "value": "image",
+           "label": "仅图"
+          }
+         ],
+         "default": "both"
+        },
+        {
+         "key": "temperature",
+         "label": "温度",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 2,
+         "step": 0.05,
+         "default": 1
+        },
+        {
+         "key": "topP",
+         "label": "Top P",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 1,
+         "step": 0.01,
+         "default": 0.95
+        }
+       ],
+       "paramSource": "card",
+       "isNew": true
+      },
+      {
+       "key": "p-3439bc2c/gemini-3.1-flash-lite-image",
+       "id": "gemini-3.1-flash-lite-image",
+       "label": "Nano Banana 2 Lite",
+       "kind": "image",
+       "async": false,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 3,
+         "roles": [
+          "edit",
+          "ref"
+         ]
+        },
+        "multiTurn": true
+       },
+       "params": [
+        {
+         "key": "aspectRatio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "1:1",
+           "label": "1:1"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16"
+          },
+          {
+           "value": "4:3",
+           "label": "4:3"
+          },
+          {
+           "value": "3:4",
+           "label": "3:4"
+          },
+          {
+           "value": "3:2",
+           "label": "3:2"
+          },
+          {
+           "value": "2:3",
+           "label": "2:3"
+          },
+          {
+           "value": "5:4",
+           "label": "5:4"
+          },
+          {
+           "value": "4:5",
+           "label": "4:5"
+          },
+          {
+           "value": "21:9",
+           "label": "21:9"
+          }
+         ],
+         "default": "auto",
+         "format": "aspect"
+        },
+        {
+         "key": "imageSize",
+         "label": "尺寸",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "1K",
+           "label": "1K"
+          }
+         ],
+         "default": "",
+         "format": "resolution"
+        },
+        {
+         "key": "thinkingLevel",
+         "label": "思考",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "minimal",
+           "label": "Minimal"
+          },
+          {
+           "value": "high",
+           "label": "High"
+          }
+         ],
+         "default": ""
+        },
+        {
+         "key": "outputFormat",
+         "label": "输出",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "both",
+           "label": "图文"
+          },
+          {
+           "value": "image",
+           "label": "仅图"
+          }
+         ],
+         "default": "both"
+        },
+        {
+         "key": "temperature",
+         "label": "温度",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 2,
+         "step": 0.05,
+         "default": 1
+        },
+        {
+         "key": "topP",
+         "label": "Top P",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 1,
+         "step": 0.01,
+         "default": 0.95
+        }
+       ],
+       "paramSource": "card",
+       "isNew": true
+      }
+     ]
+    },
+    {
+     "provider": {
+      "id": "p-2b60aaee",
+      "name": "OpenRouter",
+      "dialect": "openrouter",
+      "preset": "openrouter",
+      "mine": true
+     },
+     "models": [
+      {
+       "key": "p-2b60aaee/openai/gpt-image-2.6-sunburst",
+       "id": "openai/gpt-image-2.6-sunburst",
+       "label": "GPT Image 2.6 Sunburst",
+       "desc": "构图、文字与指令遵循精细；没有多轮上下文，续改拿上一张当参考",
+       "kind": "image",
+       "async": false,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 16,
+         "roles": [
+          "edit",
+          "ref"
+         ]
+        },
+        "multiTurn": false
+       },
+       "params": [
+        {
+         "key": "aspectRatio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "1:1",
+           "label": "1:1"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16"
+          },
+          {
+           "value": "4:3",
+           "label": "4:3"
+          },
+          {
+           "value": "3:4",
+           "label": "3:4"
+          },
+          {
+           "value": "3:2",
+           "label": "3:2"
+          },
+          {
+           "value": "2:3",
+           "label": "2:3"
+          },
+          {
+           "value": "5:4",
+           "label": "5:4"
+          },
+          {
+           "value": "4:5",
+           "label": "4:5"
+          },
+          {
+           "value": "21:9",
+           "label": "21:9"
+          }
+         ],
+         "default": "auto",
+         "format": "aspect"
+        },
+        {
+         "key": "imageSize",
+         "label": "尺寸",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "1K",
+           "label": "1K"
+          },
+          {
+           "value": "2K",
+           "label": "2K"
+          },
+          {
+           "value": "4K",
+           "label": "4K"
+          }
+         ],
+         "default": "2K",
+         "format": "resolution"
+        },
+        {
+         "key": "quality",
+         "label": "画质",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "low",
+           "label": "低"
+          },
+          {
+           "value": "medium",
+           "label": "中"
+          },
+          {
+           "value": "high",
+           "label": "高"
+          },
+          {
+           "value": "xhigh",
+           "label": "超高"
+          },
+          {
+           "value": "max",
+           "label": "最高"
+          }
+         ],
+         "default": "high"
+        }
+       ],
+       "paramSource": "card",
+       "vendor": "openai",
+       "priceHint": "1.5K medium ≈ $0.034，4K 16:9 low ≈ $0.047"
+      },
+      {
+       "key": "p-2b60aaee/krea/k3-edit",
+       "id": "krea/k3-edit",
+       "label": "K3 Edit",
+       "kind": "image",
+       "async": false,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 8,
+         "roles": [
+          "edit",
+          "ref"
+         ]
+        },
+        "multiTurn": false
+       },
+       "params": [
+        {
+         "key": "aspect_ratio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "1:1",
+           "label": "1:1"
+          },
+          {
+           "value": "4:3",
+           "label": "4:3"
+          },
+          {
+           "value": "3:2",
+           "label": "3:2"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9"
+          },
+          {
+           "value": "4:5",
+           "label": "4:5"
+          },
+          {
+           "value": "2:3",
+           "label": "2:3"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16"
+          }
+         ],
+         "format": "aspect",
+         "default": ""
+        },
+        {
+         "key": "resolution",
+         "label": "分辨率",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "1K",
+           "label": "1K"
+          },
+          {
+           "value": "2K",
+           "label": "2K"
+          }
+         ],
+         "format": "resolution",
+         "default": ""
+        },
+        {
+         "key": "seed",
+         "label": "种子",
+         "type": "seed",
+         "group": "advanced",
+         "min": 0,
+         "max": 4294967295
+        },
+        {
+         "key": "extra",
+         "label": "原始参数",
+         "type": "json",
+         "group": "advanced",
+         "desc": "JSON 对象，原样合并进请求体"
+        }
+       ],
+       "paramSource": "schema",
+       "vendor": "krea",
+       "isNew": true
+      },
+      {
+       "key": "p-2b60aaee/x-ai/grok-imagine-image-2.0",
+       "id": "x-ai/grok-imagine-image-2.0",
+       "label": "Grok Imagine Image 2.0",
+       "kind": "image",
+       "async": false,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 3,
+         "roles": [
+          "edit",
+          "ref"
+         ]
+        },
+        "multiTurn": false
+       },
+       "params": [
+        {
+         "key": "aspect_ratio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "1:1",
+           "label": "1:1"
+          },
+          {
+           "value": "3:4",
+           "label": "3:4"
+          },
+          {
+           "value": "4:3",
+           "label": "4:3"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9"
+          },
+          {
+           "value": "2:3",
+           "label": "2:3"
+          },
+          {
+           "value": "3:2",
+           "label": "3:2"
+          },
+          {
+           "value": "9:19.5",
+           "label": "9:19.5"
+          },
+          {
+           "value": "19.5:9",
+           "label": "19.5:9"
+          },
+          {
+           "value": "9:20",
+           "label": "9:20"
+          },
+          {
+           "value": "20:9",
+           "label": "20:9"
+          },
+          {
+           "value": "1:2",
+           "label": "1:2"
+          },
+          {
+           "value": "2:1",
+           "label": "2:1"
+          },
+          {
+           "value": "auto",
+           "label": "自动"
+          }
+         ],
+         "format": "aspect",
+         "default": "auto"
+        },
+        {
+         "key": "resolution",
+         "label": "分辨率",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "1K",
+           "label": "1K"
+          },
+          {
+           "value": "2K",
+           "label": "2K"
+          }
+         ],
+         "format": "resolution",
+         "default": ""
+        },
+        {
+         "key": "quality",
+         "label": "画质",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "low",
+           "label": "低"
+          },
+          {
+           "value": "medium",
+           "label": "中"
+          }
+         ],
+         "default": ""
+        },
+        {
+         "key": "extra",
+         "label": "原始参数",
+         "type": "json",
+         "group": "advanced",
+         "desc": "JSON 对象，原样合并进请求体"
+        }
+       ],
+       "paramSource": "schema",
+       "vendor": "x-ai",
+       "isNew": true
+      }
+     ],
+     "shelf": [
+      {
+       "key": "p-2b60aaee/openai/gpt-image-2.6-flare",
+       "id": "openai/gpt-image-2.6-flare",
+       "label": "GPT Image 2.6 Flare",
+       "vendor": "openai",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/sourceful/riverflow-v2.6-pro",
+       "id": "sourceful/riverflow-v2.6-pro",
+       "label": "Riverflow V2.6 Pro",
+       "vendor": "sourceful",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/qwen/qwen-image-2.1-turbo",
+       "id": "qwen/qwen-image-2.1-turbo",
+       "label": "Qwen Image 2.1 Turbo",
+       "vendor": "qwen",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/qwen/qwen-image-2.1-pro",
+       "id": "qwen/qwen-image-2.1-pro",
+       "label": "Qwen Image 2.1 Pro",
+       "vendor": "qwen",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/black-forest-labs/flux-3-image-klein",
+       "id": "black-forest-labs/flux-3-image-klein",
+       "label": "FLUX 3 Image Klein",
+       "vendor": "black-forest-labs",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/google/gemini-nano-banana-2.1",
+       "id": "google/gemini-nano-banana-2.1",
+       "label": "Nano Banana 2.1",
+       "vendor": "google",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/tencent/hy-image-v3.5-preview",
+       "id": "tencent/hy-image-v3.5-preview",
+       "label": "Hy Image 3.5 Preview",
+       "vendor": "tencent",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/bytedance-seed/seedream-5-0-flash",
+       "id": "bytedance-seed/seedream-5-0-flash",
+       "label": "Seedream 5.0 Flash",
+       "vendor": "bytedance-seed",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/black-forest-labs/flux-3-image",
+       "id": "black-forest-labs/flux-3-image",
+       "label": "FLUX 3 Image",
+       "vendor": "black-forest-labs",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4.1-flash",
+       "id": "recraft/recraft-v4.1-flash",
+       "label": "Recraft V4.1 Flash",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/openai/gpt-image-2.5-sunburst",
+       "id": "openai/gpt-image-2.5-sunburst",
+       "label": "GPT Image 2.5 Sunburst",
+       "vendor": "openai",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/openai/gpt-image-2.5-flare",
+       "id": "openai/gpt-image-2.5-flare",
+       "label": "GPT Image 2.5 Flare",
+       "vendor": "openai",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/microsoft/mai-image-2.6",
+       "id": "microsoft/mai-image-2.6",
+       "label": "MAI-Image-2.6",
+       "vendor": "microsoft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/microsoft/mai-image-2.6-flash",
+       "id": "microsoft/mai-image-2.6-flash",
+       "label": "MAI-Image-2.6 Flash",
+       "vendor": "microsoft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/meta/muse-image",
+       "id": "meta/muse-image",
+       "label": "Muse Image",
+       "vendor": "meta",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4-styles-pro",
+       "id": "recraft/recraft-v4-styles-pro",
+       "label": "Recraft V4 Styles Pro",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4-styles-vector",
+       "id": "recraft/recraft-v4-styles-vector",
+       "label": "Recraft V4 Styles Vector",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4-styles-pro-vector",
+       "id": "recraft/recraft-v4-styles-pro-vector",
+       "label": "Recraft V4 Styles Pro Vector",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4-styles",
+       "id": "recraft/recraft-v4-styles",
+       "label": "Recraft V4 Styles",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/bytedance-seed/seedream-5-0-lite",
+       "id": "bytedance-seed/seedream-5-0-lite",
+       "label": "Seedream 5.0 Lite",
+       "vendor": "bytedance-seed",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/bytedance-seed/seedream-5-0-pro",
+       "id": "bytedance-seed/seedream-5-0-pro",
+       "label": "Seedream 5.0 Pro",
+       "vendor": "bytedance-seed",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/qwen/qwen-image-3-pro",
+       "id": "qwen/qwen-image-3-pro",
+       "label": "Qwen Image 3 Pro",
+       "vendor": "qwen",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/qwen/qwen-image-3",
+       "id": "qwen/qwen-image-3",
+       "label": "Qwen Image 3",
+       "vendor": "qwen",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/microsoft/mai-image-2.5-pro",
+       "id": "microsoft/mai-image-2.5-pro",
+       "label": "MAI-Image-2.5 Pro",
+       "vendor": "microsoft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/krea/krea-2-large",
+       "id": "krea/krea-2-large",
+       "label": "Krea 2 Large",
+       "vendor": "krea",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/krea/krea-2-medium",
+       "id": "krea/krea-2-medium",
+       "label": "Krea 2 Medium",
+       "vendor": "krea",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/krea/krea-2-medium-turbo",
+       "id": "krea/krea-2-medium-turbo",
+       "label": "Krea 2 Medium Turbo",
+       "vendor": "krea",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/google/gemini-3.1-flash-lite-image",
+       "id": "google/gemini-3.1-flash-lite-image",
+       "label": "Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)",
+       "vendor": "google",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/openai/gpt-image-2",
+       "id": "openai/gpt-image-2",
+       "label": "GPT Image 2",
+       "vendor": "openai",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/openai/gpt-image-1-mini",
+       "id": "openai/gpt-image-1-mini",
+       "label": "GPT Image 1 Mini",
+       "vendor": "openai",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/openai/gpt-image-1",
+       "id": "openai/gpt-image-1",
+       "label": "GPT Image 1",
+       "vendor": "openai",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/google/gemini-3.1-flash-image",
+       "id": "google/gemini-3.1-flash-image",
+       "label": "Nano Banana 2 (Gemini 3.1 Flash Image)",
+       "vendor": "google",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/google/gemini-3-pro-image",
+       "id": "google/gemini-3-pro-image",
+       "label": "Nano Banana Pro (Gemini 3 Pro Image)",
+       "vendor": "google",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/sourceful/riverflow-v2.5-pro",
+       "id": "sourceful/riverflow-v2.5-pro",
+       "label": "Riverflow V2.5 Pro",
+       "vendor": "sourceful",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/sourceful/riverflow-v2.5-fast",
+       "id": "sourceful/riverflow-v2.5-fast",
+       "label": "Riverflow V2.5 Fast",
+       "vendor": "sourceful",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/microsoft/mai-image-2.5",
+       "id": "microsoft/mai-image-2.5",
+       "label": "MAI-Image-2.5",
+       "vendor": "microsoft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4.1-pro-vector",
+       "id": "recraft/recraft-v4.1-pro-vector",
+       "label": "Recraft V4.1 Pro Vector",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4.1-vector",
+       "id": "recraft/recraft-v4.1-vector",
+       "label": "Recraft V4.1 Vector",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4.1-utility-pro",
+       "id": "recraft/recraft-v4.1-utility-pro",
+       "label": "Recraft V4.1 Utility Pro",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4.1-utility",
+       "id": "recraft/recraft-v4.1-utility",
+       "label": "Recraft V4.1 Utility",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4.1-pro",
+       "id": "recraft/recraft-v4.1-pro",
+       "label": "Recraft V4.1 Pro",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4.1",
+       "id": "recraft/recraft-v4.1",
+       "label": "Recraft V4.1",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4-pro-vector",
+       "id": "recraft/recraft-v4-pro-vector",
+       "label": "Recraft V4 Pro Vector",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4-vector",
+       "id": "recraft/recraft-v4-vector",
+       "label": "Recraft V4 Vector",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4-pro",
+       "id": "recraft/recraft-v4-pro",
+       "label": "Recraft V4 Pro",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v4",
+       "id": "recraft/recraft-v4",
+       "label": "Recraft V4",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/recraft/recraft-v3",
+       "id": "recraft/recraft-v3",
+       "label": "Recraft V3",
+       "vendor": "recraft",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/openai/gpt-5.4-image-2",
+       "id": "openai/gpt-5.4-image-2",
+       "label": "GPT-5.4 Image 2",
+       "vendor": "openai",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/google/gemini-3.1-flash-image-preview",
+       "id": "google/gemini-3.1-flash-image-preview",
+       "label": "Nano Banana 2 (Gemini 3.1 Flash Image Preview)",
+       "vendor": "google",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/sourceful/riverflow-v2-pro",
+       "id": "sourceful/riverflow-v2-pro",
+       "label": "Riverflow V2 Pro",
+       "vendor": "sourceful",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/sourceful/riverflow-v2-fast",
+       "id": "sourceful/riverflow-v2-fast",
+       "label": "Riverflow V2 Fast",
+       "vendor": "sourceful",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/black-forest-labs/flux.2-klein-4b",
+       "id": "black-forest-labs/flux.2-klein-4b",
+       "label": "FLUX.2 Klein 4B",
+       "vendor": "black-forest-labs",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/bytedance-seed/seedream-4.5",
+       "id": "bytedance-seed/seedream-4.5",
+       "label": "Seedream 4.5",
+       "vendor": "bytedance-seed",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/black-forest-labs/flux.2-max",
+       "id": "black-forest-labs/flux.2-max",
+       "label": "FLUX.2 Max",
+       "vendor": "black-forest-labs",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/black-forest-labs/flux.2-flex",
+       "id": "black-forest-labs/flux.2-flex",
+       "label": "FLUX.2 Flex",
+       "vendor": "black-forest-labs",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/black-forest-labs/flux.2-pro",
+       "id": "black-forest-labs/flux.2-pro",
+       "label": "FLUX.2 Pro",
+       "vendor": "black-forest-labs",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/google/gemini-3-pro-image-preview",
+       "id": "google/gemini-3-pro-image-preview",
+       "label": "Nano Banana Pro (Gemini 3 Pro Image Preview)",
+       "vendor": "google",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/openai/gpt-5-image-mini",
+       "id": "openai/gpt-5-image-mini",
+       "label": "GPT-5 Image Mini",
+       "vendor": "openai",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/openai/gpt-5-image",
+       "id": "openai/gpt-5-image",
+       "label": "GPT-5 Image",
+       "vendor": "openai",
+       "kind": "image",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/google/gemini-2.5-flash-image",
+       "id": "google/gemini-2.5-flash-image",
+       "label": "Nano Banana (Gemini 2.5 Flash Image)",
+       "vendor": "google",
+       "kind": "image",
+       "shelf": true
+      }
+     ]
+    },
+    {
+     "provider": {
+      "id": "p-55a77e1e",
+      "name": "fal",
+      "dialect": "fal",
+      "preset": "fal",
+      "mine": true
+     },
+     "models": [
+      {
+       "key": "p-55a77e1e/fal-ai/flux/dev",
+       "id": "fal-ai/flux/dev",
+       "label": "FLUX.1 [dev]",
+       "desc": "文生图，可调步数、引导强度和尺寸",
+       "kind": "image",
+       "async": false,
+       "inputs": {
+        "text": true,
+        "multiTurn": false
+       },
+       "params": [
+        {
+         "key": "imageSize",
+         "label": "尺寸",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "square_hd",
+           "label": "方形 · 高清"
+          },
+          {
+           "value": "square",
+           "label": "方形"
+          },
+          {
+           "value": "portrait_4_3",
+           "label": "竖版 4:3"
+          },
+          {
+           "value": "portrait_16_9",
+           "label": "竖版 16:9"
+          },
+          {
+           "value": "landscape_4_3",
+           "label": "横版 4:3"
+          },
+          {
+           "value": "landscape_16_9",
+           "label": "横版 16:9"
+          }
+         ],
+         "default": "landscape_4_3",
+         "format": "resolution"
+        },
+        {
+         "key": "numImages",
+         "label": "张数",
+         "type": "number",
+         "group": "basic",
+         "min": 1,
+         "max": 4,
+         "step": 1,
+         "integer": true,
+         "default": 1,
+         "format": "count"
+        },
+        {
+         "key": "steps",
+         "label": "推理步数",
+         "type": "number",
+         "group": "advanced",
+         "min": 1,
+         "max": 50,
+         "step": 1,
+         "integer": true,
+         "default": 28
+        },
+        {
+         "key": "guidanceScale",
+         "label": "引导强度",
+         "type": "number",
+         "group": "advanced",
+         "min": 1,
+         "max": 20,
+         "step": 0.5,
+         "default": 3.5
+        },
+        {
+         "key": "outputFormat",
+         "label": "格式",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "jpeg",
+           "label": "jpeg"
+          },
+          {
+           "value": "png",
+           "label": "png"
+          }
+         ],
+         "default": "jpeg"
+        },
+        {
+         "key": "seed",
+         "label": "种子",
+         "type": "seed",
+         "group": "advanced",
+         "min": 0,
+         "max": 4294967295
+        },
+        {
+         "key": "extra",
+         "label": "额外参数",
+         "type": "json",
+         "group": "advanced",
+         "desc": "JSON 对象，原样合并进请求体"
+        }
+       ],
+       "paramSource": "card",
+       "vendor": "flux"
+      }
+     ]
+    }
+   ]
+  },
+  "video": {
+   "defaults": {
+    "provider": "p-76d6f84c",
+    "model": "veo-3.1-fast-generate-001"
+   },
+   "groups": [
+    {
+     "provider": {
+      "id": "p-76d6f84c",
+      "name": "Google Vertex AI",
+      "dialect": "vertex",
+      "preset": "vertex",
+      "mine": true
+     },
+     "models": [
+      {
+       "key": "p-76d6f84c/veo-3.1-fast-generate-001",
+       "id": "veo-3.1-fast-generate-001",
+       "label": "Veo 3.1 Fast",
+       "kind": "video",
+       "async": true,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 3,
+         "roles": [
+          "first",
+          "last",
+          "ref"
+         ]
+        },
+        "negative": true
+       },
+       "params": [
+        {
+         "key": "aspectRatio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9 横"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16 竖"
+          }
+         ],
+         "default": "auto",
+         "format": "aspect"
+        },
+        {
+         "key": "resolution",
+         "label": "分辨率",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "720p",
+           "label": "720p"
+          },
+          {
+           "value": "1080p",
+           "label": "1080p"
+          },
+          {
+           "value": "4k",
+           "label": "4K"
+          }
+         ],
+         "default": "720p",
+         "format": "resolution"
+        },
+        {
+         "key": "durationSeconds",
+         "label": "时长",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": 4,
+           "label": "4 秒"
+          },
+          {
+           "value": 6,
+           "label": "6 秒"
+          },
+          {
+           "value": 8,
+           "label": "8 秒"
+          }
+         ],
+         "default": 8,
+         "format": "duration"
+        },
+        {
+         "key": "generateAudio",
+         "label": "生成音频",
+         "type": "bool",
+         "group": "basic",
+         "default": false
+        },
+        {
+         "key": "enhancePrompt",
+         "label": "提示词增强",
+         "type": "bool",
+         "group": "advanced",
+         "default": true
+        },
+        {
+         "key": "compressionQuality",
+         "label": "画质",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "OPTIMIZED",
+           "label": "标准"
+          },
+          {
+           "value": "LOSSLESS",
+           "label": "无损"
+          }
+         ],
+         "default": ""
+        }
+       ],
+       "paramSource": "card"
+      }
+     ]
+    },
+    {
+     "provider": {
+      "id": "p-3439bc2c",
+      "name": "Gemini API",
+      "dialect": "gemini",
+      "preset": "gemini",
+      "mine": true
+     },
+     "models": [
+      {
+       "key": "p-3439bc2c/gemini-omni-1.1-flash",
+       "id": "gemini-omni-1.1-flash",
+       "label": "Gemini Omni 1.1",
+       "desc": "原生音轨与对白，360p 低价预览档，时长 3–10 秒",
+       "kind": "video",
+       "async": true,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 1,
+         "roles": [
+          "first"
+         ]
+        },
+        "negative": false
+       },
+       "params": [
+        {
+         "key": "aspectRatio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9 横"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16 竖"
+          }
+         ],
+         "default": "auto",
+         "format": "aspect"
+        },
+        {
+         "key": "resolution",
+         "label": "分辨率",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "360p",
+           "label": "360p"
+          },
+          {
+           "value": "720p",
+           "label": "720p"
+          },
+          {
+           "value": "1080p",
+           "label": "1080p"
+          },
+          {
+           "value": "4k",
+           "label": "4K"
+          }
+         ],
+         "default": "720p",
+         "format": "resolution"
+        },
+        {
+         "key": "durationSeconds",
+         "label": "时长",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": 3,
+           "label": "3 秒"
+          },
+          {
+           "value": 4,
+           "label": "4 秒"
+          },
+          {
+           "value": 5,
+           "label": "5 秒"
+          },
+          {
+           "value": 6,
+           "label": "6 秒"
+          },
+          {
+           "value": 7,
+           "label": "7 秒"
+          },
+          {
+           "value": 8,
+           "label": "8 秒"
+          },
+          {
+           "value": 9,
+           "label": "9 秒"
+          },
+          {
+           "value": 10,
+           "label": "10 秒"
+          }
+         ],
+         "default": 8,
+         "format": "duration"
+        }
+       ],
+       "paramSource": "card"
+      },
+      {
+       "key": "p-3439bc2c/gemini-omni-1.2-flash",
+       "id": "gemini-omni-1.2-flash",
+       "label": "Gemini Omni 1.2 Flash",
+       "kind": "video",
+       "async": true,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 1,
+         "roles": [
+          "first"
+         ]
+        },
+        "negative": false
+       },
+       "params": [
+        {
+         "key": "aspectRatio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9 横"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16 竖"
+          }
+         ],
+         "default": "auto",
+         "format": "aspect"
+        },
+        {
+         "key": "resolution",
+         "label": "分辨率",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "360p",
+           "label": "360p"
+          },
+          {
+           "value": "720p",
+           "label": "720p"
+          },
+          {
+           "value": "1080p",
+           "label": "1080p"
+          },
+          {
+           "value": "4k",
+           "label": "4K"
+          }
+         ],
+         "default": "720p",
+         "format": "resolution"
+        },
+        {
+         "key": "durationSeconds",
+         "label": "时长",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": 3,
+           "label": "3 秒"
+          },
+          {
+           "value": 4,
+           "label": "4 秒"
+          },
+          {
+           "value": 5,
+           "label": "5 秒"
+          },
+          {
+           "value": 6,
+           "label": "6 秒"
+          },
+          {
+           "value": 7,
+           "label": "7 秒"
+          },
+          {
+           "value": 8,
+           "label": "8 秒"
+          },
+          {
+           "value": 9,
+           "label": "9 秒"
+          },
+          {
+           "value": 10,
+           "label": "10 秒"
+          },
+          {
+           "value": 11,
+           "label": "11 秒"
+          },
+          {
+           "value": 12,
+           "label": "12 秒"
+          },
+          {
+           "value": 13,
+           "label": "13 秒"
+          },
+          {
+           "value": 14,
+           "label": "14 秒"
+          },
+          {
+           "value": 15,
+           "label": "15 秒"
+          }
+         ],
+         "default": 8,
+         "format": "duration"
+        }
+       ],
+       "paramSource": "family",
+       "inheritsFrom": "gemini-omni-1.1-flash",
+       "refinedBy": "openrouter",
+       "isNew": true
+      }
+     ]
+    },
+    {
+     "provider": {
+      "id": "p-2b60aaee",
+      "name": "OpenRouter",
+      "dialect": "openrouter",
+      "preset": "openrouter",
+      "mine": true
+     },
+     "models": [],
+     "shelf": [
+      {
+       "key": "p-2b60aaee/google/gemini-omni-1.2-flash",
+       "id": "google/gemini-omni-1.2-flash",
+       "label": "Gemini Omni 1.2 Flash",
+       "vendor": "google",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/google/gemini-omni-1.1-flash",
+       "id": "google/gemini-omni-1.1-flash",
+       "label": "Gemini Omni 1.1 Flash",
+       "vendor": "google",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/tbc/mischief-1",
+       "id": "tbc/mischief-1",
+       "label": "mischief 1",
+       "vendor": "tbc",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/x-ai/grok-imagine-video-1.5-lite",
+       "id": "x-ai/grok-imagine-video-1.5-lite",
+       "label": "Grok Imagine Video 1.5 Lite",
+       "vendor": "x-ai",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/heygen/heygen-video-1",
+       "id": "heygen/heygen-video-1",
+       "label": "HeyGen Video",
+       "vendor": "heygen",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/black-forest-labs/flux-video-edit",
+       "id": "black-forest-labs/flux-video-edit",
+       "label": "FLUX Video Edit",
+       "vendor": "black-forest-labs",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/minimax/hailuo-3-max",
+       "id": "minimax/hailuo-3-max",
+       "label": "H3 Max",
+       "vendor": "minimax",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/alibaba/wan-3.0-prime",
+       "id": "alibaba/wan-3.0-prime",
+       "label": "Wan 3.0 Prime",
+       "vendor": "alibaba",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/alibaba/wan-3.0",
+       "id": "alibaba/wan-3.0",
+       "label": "Wan 3.0",
+       "vendor": "alibaba",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/heygen/avatar-iv",
+       "id": "heygen/avatar-iv",
+       "label": "Avatar IV",
+       "vendor": "heygen",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/black-forest-labs/flux-video-upscale",
+       "id": "black-forest-labs/flux-video-upscale",
+       "label": "FLUX Video Upscale",
+       "vendor": "black-forest-labs",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/bytedance/seedance-2.0-mini",
+       "id": "bytedance/seedance-2.0-mini",
+       "label": "Seedance 2.0 Mini",
+       "vendor": "bytedance",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/bytedance/seedance-2.5",
+       "id": "bytedance/seedance-2.5",
+       "label": "Seedance 2.5",
+       "vendor": "bytedance",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/black-forest-labs/flux-3-video",
+       "id": "black-forest-labs/flux-3-video",
+       "label": "FLUX 3 Video",
+       "vendor": "black-forest-labs",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/minimax/hailuo-3",
+       "id": "minimax/hailuo-3",
+       "label": "H3",
+       "vendor": "minimax",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/runway/aleph-2",
+       "id": "runway/aleph-2",
+       "label": "Aleph 2.0",
+       "vendor": "runway",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/runway/gen-4.5",
+       "id": "runway/gen-4.5",
+       "label": "Gen-4.5",
+       "vendor": "runway",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/x-ai/grok-imagine-video-1.5",
+       "id": "x-ai/grok-imagine-video-1.5",
+       "label": "Grok Imagine Video 1.5",
+       "vendor": "x-ai",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/alibaba/happyhorse-1.1",
+       "id": "alibaba/happyhorse-1.1",
+       "label": "HappyHorse 1.1",
+       "vendor": "alibaba",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/alibaba/happyhorse-1.0",
+       "id": "alibaba/happyhorse-1.0",
+       "label": "HappyHorse 1.0",
+       "vendor": "alibaba",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/x-ai/grok-imagine-video",
+       "id": "x-ai/grok-imagine-video",
+       "label": "Grok Imagine Video",
+       "vendor": "x-ai",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/kwaivgi/kling-v3.0-pro",
+       "id": "kwaivgi/kling-v3.0-pro",
+       "label": "Video v3.0 Pro",
+       "vendor": "kwaivgi",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/kwaivgi/kling-v3.0-std",
+       "id": "kwaivgi/kling-v3.0-std",
+       "label": "Video v3.0 Standard",
+       "vendor": "kwaivgi",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/google/veo-3.1-fast",
+       "id": "google/veo-3.1-fast",
+       "label": "Veo 3.1 Fast",
+       "vendor": "google",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/google/veo-3.1-lite",
+       "id": "google/veo-3.1-lite",
+       "label": "Veo 3.1 Lite",
+       "vendor": "google",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/kwaivgi/kling-video-o1",
+       "id": "kwaivgi/kling-video-o1",
+       "label": "Video O1",
+       "vendor": "kwaivgi",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/minimax/hailuo-2.3",
+       "id": "minimax/hailuo-2.3",
+       "label": "Hailuo 2.3",
+       "vendor": "minimax",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/bytedance/seedance-2.0-fast",
+       "id": "bytedance/seedance-2.0-fast",
+       "label": "Seedance 2.0 Fast",
+       "vendor": "bytedance",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/bytedance/seedance-2.0",
+       "id": "bytedance/seedance-2.0",
+       "label": "Seedance 2.0",
+       "vendor": "bytedance",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/alibaba/wan-2.7",
+       "id": "alibaba/wan-2.7",
+       "label": "Wan 2.7",
+       "vendor": "alibaba",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/alibaba/wan-2.6",
+       "id": "alibaba/wan-2.6",
+       "label": "Wan 2.6",
+       "vendor": "alibaba",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/bytedance/seedance-1-5-pro",
+       "id": "bytedance/seedance-1-5-pro",
+       "label": "Seedance 1.5 Pro",
+       "vendor": "bytedance",
+       "kind": "video",
+       "shelf": true
+      },
+      {
+       "key": "p-2b60aaee/google/veo-3.1",
+       "id": "google/veo-3.1",
+       "label": "Veo 3.1",
+       "vendor": "google",
+       "kind": "video",
+       "shelf": true
+      }
+     ]
+    },
+    {
+     "provider": {
+      "id": "p-55a77e1e",
+      "name": "fal",
+      "dialect": "fal",
+      "preset": "fal",
+      "mine": true
+     },
+     "models": [
+      {
+       "key": "p-55a77e1e/fal-ai/kling-video/v3/pro/image-to-video",
+       "id": "fal-ai/kling-video/v3/pro/image-to-video",
+       "label": "Kling 3.0 Pro 图生视频",
+       "desc": "首帧必填，可加尾帧；首帧至少 300×300，宽高比 0.4–2.5（文档）",
+       "kind": "video",
+       "async": true,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 2,
+         "roles": [
+          "first",
+          "last"
+         ]
+        },
+        "negative": true
+       },
+       "params": [
+        {
+         "key": "durationSeconds",
+         "label": "时长",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "3",
+           "label": "3 秒"
+          },
+          {
+           "value": "4",
+           "label": "4 秒"
+          },
+          {
+           "value": "5",
+           "label": "5 秒"
+          },
+          {
+           "value": "6",
+           "label": "6 秒"
+          },
+          {
+           "value": "7",
+           "label": "7 秒"
+          },
+          {
+           "value": "8",
+           "label": "8 秒"
+          },
+          {
+           "value": "9",
+           "label": "9 秒"
+          },
+          {
+           "value": "10",
+           "label": "10 秒"
+          },
+          {
+           "value": "11",
+           "label": "11 秒"
+          },
+          {
+           "value": "12",
+           "label": "12 秒"
+          },
+          {
+           "value": "13",
+           "label": "13 秒"
+          },
+          {
+           "value": "14",
+           "label": "14 秒"
+          },
+          {
+           "value": "15",
+           "label": "15 秒"
+          }
+         ],
+         "default": "5",
+         "format": "duration"
+        },
+        {
+         "key": "generateAudio",
+         "label": "生成音频",
+         "type": "bool",
+         "group": "basic",
+         "default": true
+        },
+        {
+         "key": "cfgScale",
+         "label": "提示遵循度",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 1,
+         "step": 0.05,
+         "default": 0.5
+        },
+        {
+         "key": "extra",
+         "label": "额外参数",
+         "type": "json",
+         "group": "advanced",
+         "desc": "JSON 对象，原样合并进请求体"
+        }
+       ],
+       "paramSource": "card",
+       "vendor": "kling",
+       "isNew": true
+      },
+      {
+       "key": "p-55a77e1e/bytedance/seedance-2.5/us/reference-to-video",
+       "id": "bytedance/seedance-2.5/us/reference-to-video",
+       "label": "Seedance 2.5 参考生视频",
+       "kind": "video",
+       "async": true,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 10,
+         "roles": [
+          "ref"
+         ]
+        },
+        "video": {
+         "max": 10
+        },
+        "audio": {
+         "max": 10
+        }
+       },
+       "params": [
+        {
+         "key": "task",
+         "label": "任务",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "reference",
+           "label": "reference"
+          },
+          {
+           "value": "editing",
+           "label": "editing"
+          },
+          {
+           "value": "extension",
+           "label": "extension"
+          }
+         ],
+         "desc": "The type of video generation task. Reference uses the supplied media as guidance. Editing modifies a reference video and automatically coerces aspect_ratio and duration to auto. Extension continues a reference video and automatically coerces aspect_ratio to auto. Auto leaves the task type unset so t",
+         "default": "reference"
+        },
+        {
+         "key": "resolution",
+         "label": "分辨率",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "480p",
+           "label": "480p"
+          },
+          {
+           "value": "720p",
+           "label": "720p"
+          },
+          {
+           "value": "1080p",
+           "label": "1080p"
+          }
+         ],
+         "desc": "Video resolution - 480p for faster generation, 720p for balance, 1080p for high quality.",
+         "format": "resolution",
+         "default": "720p"
+        },
+        {
+         "key": "draft",
+         "label": "草稿",
+         "type": "bool",
+         "group": "advanced",
+         "desc": "Generate a draft preview at 480p, overriding resolution. Returns a draft_id for completing the draft at 1080p within 7 days.",
+         "default": false
+        },
+        {
+         "key": "duration",
+         "label": "时长",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "4",
+           "label": "4 秒"
+          },
+          {
+           "value": "5",
+           "label": "5 秒"
+          },
+          {
+           "value": "6",
+           "label": "6 秒"
+          },
+          {
+           "value": "7",
+           "label": "7 秒"
+          },
+          {
+           "value": "8",
+           "label": "8 秒"
+          },
+          {
+           "value": "9",
+           "label": "9 秒"
+          },
+          {
+           "value": "10",
+           "label": "10 秒"
+          },
+          {
+           "value": "11",
+           "label": "11 秒"
+          },
+          {
+           "value": "12",
+           "label": "12 秒"
+          },
+          {
+           "value": "13",
+           "label": "13 秒"
+          },
+          {
+           "value": "14",
+           "label": "14 秒"
+          },
+          {
+           "value": "15",
+           "label": "15 秒"
+          },
+          {
+           "value": "16",
+           "label": "16 秒"
+          },
+          {
+           "value": "17",
+           "label": "17 秒"
+          },
+          {
+           "value": "18",
+           "label": "18 秒"
+          },
+          {
+           "value": "19",
+           "label": "19 秒"
+          },
+          {
+           "value": "20",
+           "label": "20 秒"
+          },
+          {
+           "value": "21",
+           "label": "21 秒"
+          },
+          {
+           "value": "22",
+           "label": "22 秒"
+          },
+          {
+           "value": "23",
+           "label": "23 秒"
+          },
+          {
+           "value": "24",
+           "label": "24 秒"
+          },
+          {
+           "value": "25",
+           "label": "25 秒"
+          },
+          {
+           "value": "26",
+           "label": "26 秒"
+          },
+          {
+           "value": "27",
+           "label": "27 秒"
+          },
+          {
+           "value": "28",
+           "label": "28 秒"
+          },
+          {
+           "value": "29",
+           "label": "29 秒"
+          },
+          {
+           "value": "30",
+           "label": "30 秒"
+          }
+         ],
+         "desc": "Duration of the video in seconds. Supports 4 to 30 seconds, or auto to let the model decide based on the prompt.",
+         "format": "duration",
+         "default": "auto"
+        },
+        {
+         "key": "aspect_ratio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "21:9",
+           "label": "21:9"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9"
+          },
+          {
+           "value": "4:3",
+           "label": "4:3"
+          },
+          {
+           "value": "1:1",
+           "label": "1:1"
+          },
+          {
+           "value": "3:4",
+           "label": "3:4"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16"
+          }
+         ],
+         "desc": "The aspect ratio of the generated video. Use 16:9 for landscape, 9:16 for portrait/vertical, 1:1 for square, 21:9 for ultrawide cinematic, or auto to let the model decide.",
+         "format": "aspect",
+         "default": "auto"
+        },
+        {
+         "key": "generate_audio",
+         "label": "生成音频",
+         "type": "bool",
+         "group": "advanced",
+         "desc": "Whether to generate synchronized audio for the video, including sound effects, ambient sounds, and lip-synced speech. The cost of video generation is the same regardless of whether audio is generated or not.",
+         "default": true
+        },
+        {
+         "key": "bitrate_mode",
+         "label": "码率模式",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "standard",
+           "label": "标准"
+          },
+          {
+           "value": "high",
+           "label": "高"
+          }
+         ],
+         "desc": "Output bitrate mode. 'high' requests a higher-quality, larger-file encode from the model; 'standard' uses the default bitrate.",
+         "default": "standard"
+        },
+        {
+         "key": "codec",
+         "label": "编码",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "H264",
+           "label": "H264"
+          },
+          {
+           "value": "H265",
+           "label": "H265"
+          }
+         ],
+         "desc": "'auto' retains default video codec behaviour; 'H264' uses H.264; 'H265' uses H.265.",
+         "default": "auto"
+        },
+        {
+         "key": "seed",
+         "label": "种子",
+         "type": "seed",
+         "group": "advanced",
+         "min": 0,
+         "max": 4294967295,
+         "desc": "Random seed for reproducibility. Note that results may still vary slightly even with the same seed."
+        },
+        {
+         "key": "extra",
+         "label": "原始参数",
+         "type": "json",
+         "group": "advanced",
+         "desc": "JSON 对象，原样合并进请求体"
+        }
+       ],
+       "paramSource": "schema",
+       "vendor": "bytedance",
+       "isNew": true
+      },
+      {
+       "key": "p-55a77e1e/acme/unknown-video",
+       "id": "acme/unknown-video",
+       "label": "手填的未知模型",
+       "kind": "video",
+       "async": true,
+       "inputs": {
+        "text": true,
+        "images": {
+         "max": 1,
+         "roles": [
+          "first"
+         ]
+        }
+       },
+       "params": [
+        {
+         "key": "aspectRatio",
+         "label": "比例",
+         "type": "enum",
+         "group": "basic",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "16:9",
+           "label": "16:9 横"
+          },
+          {
+           "value": "9:16",
+           "label": "9:16 竖"
+          }
+         ],
+         "default": "auto",
+         "format": "aspect"
+        },
+        {
+         "key": "durationSeconds",
+         "label": "时长（秒）",
+         "type": "number",
+         "group": "basic",
+         "min": 1,
+         "max": 60,
+         "step": 1,
+         "integer": true,
+         "format": "duration",
+         "unit": "s"
+        },
+        {
+         "key": "extra",
+         "label": "额外参数",
+         "type": "json",
+         "group": "advanced",
+         "desc": "JSON 对象，原样合并进请求体"
+        }
+       ],
+       "paramSource": "generic",
+       "vendor": "acme",
+       "generic": true
+      }
+     ]
+    }
+   ]
+  },
+  "speech": {
+   "defaults": {
+    "provider": "p-76d6f84c",
+    "model": "gemini-2.5-flash-tts"
+   },
+   "groups": [
+    {
+     "provider": {
+      "id": "p-76d6f84c",
+      "name": "Google Vertex AI",
+      "dialect": "vertex",
+      "preset": "vertex",
+      "mine": true
+     },
+     "models": [
+      {
+       "key": "p-76d6f84c/gemini-2.5-flash-tts",
+       "id": "gemini-2.5-flash-tts",
+       "label": "Gemini 2.5 Flash TTS",
+       "kind": "speech",
+       "async": false,
+       "inputs": {
+        "text": true
+       },
+       "params": [
+        {
+         "key": "voice",
+         "label": "音色",
+         "type": "voice",
+         "group": "basic",
+         "default": "Kore",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "style",
+         "label": "风格",
+         "type": "text",
+         "group": "basic",
+         "max": 120,
+         "default": "",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "用轻松愉快的语气说：",
+           "label": "轻松"
+          },
+          {
+           "value": "用沉稳严肃的语气说：",
+           "label": "严肃"
+          },
+          {
+           "value": "用温柔平缓的语气说：",
+           "label": "温柔"
+          },
+          {
+           "value": "用激动兴奋的语气说：",
+           "label": "激动"
+          },
+          {
+           "value": "用低声耳语的方式说：",
+           "label": "耳语"
+          },
+          {
+           "value": "像新闻播报一样说：",
+           "label": "播报"
+          }
+         ],
+         "desc": "自然语言的语气说明，拼在正文前面"
+        },
+        {
+         "key": "speakerA",
+         "label": "说话人 A",
+         "type": "text",
+         "group": "advanced",
+         "max": 24,
+         "desc": "多人对白：正文里写「名字：台词」，名字和这里对上"
+        },
+        {
+         "key": "voiceA",
+         "label": "A 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "speakerB",
+         "label": "说话人 B",
+         "type": "text",
+         "group": "advanced",
+         "max": 24
+        },
+        {
+         "key": "voiceB",
+         "label": "B 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        }
+       ],
+       "paramSource": "card"
+      }
+     ]
+    },
+    {
+     "provider": {
+      "id": "p-3439bc2c",
+      "name": "Gemini API",
+      "dialect": "gemini",
+      "preset": "gemini",
+      "mine": true
+     },
+     "models": [
+      {
+       "key": "p-3439bc2c/gemini-2.5-flash-preview-tts",
+       "id": "gemini-2.5-flash-preview-tts",
+       "label": "Gemini 2.5 Flash Preview TTS",
+       "kind": "speech",
+       "async": false,
+       "inputs": {
+        "text": true
+       },
+       "params": [
+        {
+         "key": "voice",
+         "label": "音色",
+         "type": "voice",
+         "group": "basic",
+         "default": "Kore",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "style",
+         "label": "风格",
+         "type": "text",
+         "group": "basic",
+         "max": 120,
+         "default": "",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "用轻松愉快的语气说：",
+           "label": "轻松"
+          },
+          {
+           "value": "用沉稳严肃的语气说：",
+           "label": "严肃"
+          },
+          {
+           "value": "用温柔平缓的语气说：",
+           "label": "温柔"
+          },
+          {
+           "value": "用激动兴奋的语气说：",
+           "label": "激动"
+          },
+          {
+           "value": "用低声耳语的方式说：",
+           "label": "耳语"
+          },
+          {
+           "value": "像新闻播报一样说：",
+           "label": "播报"
+          }
+         ],
+         "desc": "自然语言的语气说明，拼在正文前面"
+        },
+        {
+         "key": "speakerA",
+         "label": "说话人 A",
+         "type": "text",
+         "group": "advanced",
+         "max": 24,
+         "desc": "多人对白：正文里写「名字：台词」，名字和这里对上"
+        },
+        {
+         "key": "voiceA",
+         "label": "A 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "speakerB",
+         "label": "说话人 B",
+         "type": "text",
+         "group": "advanced",
+         "max": 24
+        },
+        {
+         "key": "voiceB",
+         "label": "B 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        }
+       ],
+       "paramSource": "family",
+       "inheritsFrom": "gemini-2.5-flash-tts",
+       "isNew": true
+      },
+      {
+       "key": "p-3439bc2c/gemini-2.5-pro-preview-tts",
+       "id": "gemini-2.5-pro-preview-tts",
+       "label": "Gemini 2.5 Pro Preview TTS",
+       "kind": "speech",
+       "async": false,
+       "inputs": {
+        "text": true
+       },
+       "params": [
+        {
+         "key": "voice",
+         "label": "音色",
+         "type": "voice",
+         "group": "basic",
+         "default": "Kore",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "style",
+         "label": "风格",
+         "type": "text",
+         "group": "basic",
+         "max": 120,
+         "default": "",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "用轻松愉快的语气说：",
+           "label": "轻松"
+          },
+          {
+           "value": "用沉稳严肃的语气说：",
+           "label": "严肃"
+          },
+          {
+           "value": "用温柔平缓的语气说：",
+           "label": "温柔"
+          },
+          {
+           "value": "用激动兴奋的语气说：",
+           "label": "激动"
+          },
+          {
+           "value": "用低声耳语的方式说：",
+           "label": "耳语"
+          },
+          {
+           "value": "像新闻播报一样说：",
+           "label": "播报"
+          }
+         ],
+         "desc": "自然语言的语气说明，拼在正文前面"
+        },
+        {
+         "key": "speakerA",
+         "label": "说话人 A",
+         "type": "text",
+         "group": "advanced",
+         "max": 24,
+         "desc": "多人对白：正文里写「名字：台词」，名字和这里对上"
+        },
+        {
+         "key": "voiceA",
+         "label": "A 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "speakerB",
+         "label": "说话人 B",
+         "type": "text",
+         "group": "advanced",
+         "max": 24
+        },
+        {
+         "key": "voiceB",
+         "label": "B 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        }
+       ],
+       "paramSource": "family",
+       "inheritsFrom": "gemini-2.5-pro-tts",
+       "isNew": true
+      },
+      {
+       "key": "p-3439bc2c/gemini-3.1-flash-tts-preview",
+       "id": "gemini-3.1-flash-tts-preview",
+       "label": "Gemini 3.1 Flash TTS Preview",
+       "kind": "speech",
+       "async": false,
+       "inputs": {
+        "text": true
+       },
+       "params": [
+        {
+         "key": "voice",
+         "label": "音色",
+         "type": "voice",
+         "group": "basic",
+         "default": "Kore",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "style",
+         "label": "风格",
+         "type": "text",
+         "group": "basic",
+         "max": 120,
+         "default": "",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "用轻松愉快的语气说：",
+           "label": "轻松"
+          },
+          {
+           "value": "用沉稳严肃的语气说：",
+           "label": "严肃"
+          },
+          {
+           "value": "用温柔平缓的语气说：",
+           "label": "温柔"
+          },
+          {
+           "value": "用激动兴奋的语气说：",
+           "label": "激动"
+          },
+          {
+           "value": "用低声耳语的方式说：",
+           "label": "耳语"
+          },
+          {
+           "value": "像新闻播报一样说：",
+           "label": "播报"
+          }
+         ],
+         "desc": "自然语言的语气说明，拼在正文前面"
+        },
+        {
+         "key": "speakerA",
+         "label": "说话人 A",
+         "type": "text",
+         "group": "advanced",
+         "max": 24,
+         "desc": "多人对白：正文里写「名字：台词」，名字和这里对上"
+        },
+        {
+         "key": "voiceA",
+         "label": "A 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "speakerB",
+         "label": "说话人 B",
+         "type": "text",
+         "group": "advanced",
+         "max": 24
+        },
+        {
+         "key": "voiceB",
+         "label": "B 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        }
+       ],
+       "paramSource": "card",
+       "isNew": true
+      },
+      {
+       "key": "p-3439bc2c/gemini-3.8-flash-tts",
+       "id": "gemini-3.8-flash-tts",
+       "label": "Gemini 3.8 Flash TTS",
+       "kind": "speech",
+       "async": false,
+       "inputs": {
+        "text": true
+       },
+       "params": [
+        {
+         "key": "voice",
+         "label": "音色",
+         "type": "voice",
+         "group": "basic",
+         "default": "Kore",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "style",
+         "label": "风格",
+         "type": "text",
+         "group": "basic",
+         "max": 120,
+         "default": "",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "用轻松愉快的语气说：",
+           "label": "轻松"
+          },
+          {
+           "value": "用沉稳严肃的语气说：",
+           "label": "严肃"
+          },
+          {
+           "value": "用温柔平缓的语气说：",
+           "label": "温柔"
+          },
+          {
+           "value": "用激动兴奋的语气说：",
+           "label": "激动"
+          },
+          {
+           "value": "用低声耳语的方式说：",
+           "label": "耳语"
+          },
+          {
+           "value": "像新闻播报一样说：",
+           "label": "播报"
+          }
+         ],
+         "desc": "自然语言的语气说明，拼在正文前面"
+        },
+        {
+         "key": "speakerA",
+         "label": "说话人 A",
+         "type": "text",
+         "group": "advanced",
+         "max": 24,
+         "desc": "多人对白：正文里写「名字：台词」，名字和这里对上"
+        },
+        {
+         "key": "voiceA",
+         "label": "A 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "speakerB",
+         "label": "说话人 B",
+         "type": "text",
+         "group": "advanced",
+         "max": 24
+        },
+        {
+         "key": "voiceB",
+         "label": "B 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        }
+       ],
+       "paramSource": "family",
+       "inheritsFrom": "gemini-3.1-flash-tts-preview",
+       "isNew": true
+      },
+      {
+       "key": "p-3439bc2c/gemini-3.8-flash-lite-tts",
+       "id": "gemini-3.8-flash-lite-tts",
+       "label": "Gemini 3.8 Flash Lite TTS",
+       "kind": "speech",
+       "async": false,
+       "inputs": {
+        "text": true
+       },
+       "params": [
+        {
+         "key": "voice",
+         "label": "音色",
+         "type": "voice",
+         "group": "basic",
+         "default": "Kore",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "style",
+         "label": "风格",
+         "type": "text",
+         "group": "basic",
+         "max": 120,
+         "default": "",
+         "options": [
+          {
+           "value": "",
+           "label": "默认"
+          },
+          {
+           "value": "用轻松愉快的语气说：",
+           "label": "轻松"
+          },
+          {
+           "value": "用沉稳严肃的语气说：",
+           "label": "严肃"
+          },
+          {
+           "value": "用温柔平缓的语气说：",
+           "label": "温柔"
+          },
+          {
+           "value": "用激动兴奋的语气说：",
+           "label": "激动"
+          },
+          {
+           "value": "用低声耳语的方式说：",
+           "label": "耳语"
+          },
+          {
+           "value": "像新闻播报一样说：",
+           "label": "播报"
+          }
+         ],
+         "desc": "自然语言的语气说明，拼在正文前面"
+        },
+        {
+         "key": "speakerA",
+         "label": "说话人 A",
+         "type": "text",
+         "group": "advanced",
+         "max": 24,
+         "desc": "多人对白：正文里写「名字：台词」，名字和这里对上"
+        },
+        {
+         "key": "voiceA",
+         "label": "A 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        },
+        {
+         "key": "speakerB",
+         "label": "说话人 B",
+         "type": "text",
+         "group": "advanced",
+         "max": 24
+        },
+        {
+         "key": "voiceB",
+         "label": "B 的音色",
+         "type": "voice",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "Zephyr",
+           "label": "Zephyr · 明亮"
+          },
+          {
+           "value": "Puck",
+           "label": "Puck · 轻快"
+          },
+          {
+           "value": "Charon",
+           "label": "Charon · 知性"
+          },
+          {
+           "value": "Kore",
+           "label": "Kore · 沉稳"
+          },
+          {
+           "value": "Fenrir",
+           "label": "Fenrir · 激昂"
+          },
+          {
+           "value": "Leda",
+           "label": "Leda · 年轻"
+          },
+          {
+           "value": "Orus",
+           "label": "Orus · 坚定"
+          },
+          {
+           "value": "Aoede",
+           "label": "Aoede · 轻盈"
+          },
+          {
+           "value": "Callirrhoe",
+           "label": "Callirrhoe · 随和"
+          },
+          {
+           "value": "Autonoe",
+           "label": "Autonoe · 明快"
+          },
+          {
+           "value": "Enceladus",
+           "label": "Enceladus · 气声"
+          },
+          {
+           "value": "Iapetus",
+           "label": "Iapetus · 清晰"
+          },
+          {
+           "value": "Umbriel",
+           "label": "Umbriel · 从容"
+          },
+          {
+           "value": "Algieba",
+           "label": "Algieba · 顺滑"
+          },
+          {
+           "value": "Despina",
+           "label": "Despina · 柔滑"
+          },
+          {
+           "value": "Erinome",
+           "label": "Erinome · 清亮"
+          },
+          {
+           "value": "Algenib",
+           "label": "Algenib · 沙哑"
+          },
+          {
+           "value": "Rasalgethi",
+           "label": "Rasalgethi · 讲解"
+          },
+          {
+           "value": "Laomedeia",
+           "label": "Laomedeia · 欢快"
+          },
+          {
+           "value": "Achernar",
+           "label": "Achernar · 柔和"
+          },
+          {
+           "value": "Alnilam",
+           "label": "Alnilam · 果断"
+          },
+          {
+           "value": "Schedar",
+           "label": "Schedar · 平稳"
+          },
+          {
+           "value": "Gacrux",
+           "label": "Gacrux · 成熟"
+          },
+          {
+           "value": "Pulcherrima",
+           "label": "Pulcherrima · 外放"
+          },
+          {
+           "value": "Achird",
+           "label": "Achird · 友好"
+          },
+          {
+           "value": "Zubenelgenubi",
+           "label": "Zubenelgenubi · 随意"
+          },
+          {
+           "value": "Vindemiatrix",
+           "label": "Vindemiatrix · 温柔"
+          },
+          {
+           "value": "Sadachbia",
+           "label": "Sadachbia · 活泼"
+          },
+          {
+           "value": "Sadaltager",
+           "label": "Sadaltager · 博识"
+          },
+          {
+           "value": "Sulafat",
+           "label": "Sulafat · 温暖"
+          }
+         ]
+        }
+       ],
+       "paramSource": "family",
+       "inheritsFrom": "gemini-3.1-flash-tts-preview",
+       "isNew": true
+      }
+     ]
+    },
+    {
+     "provider": {
+      "id": "p-55a77e1e",
+      "name": "fal",
+      "dialect": "fal",
+      "preset": "fal",
+      "mine": true
+     },
+     "models": [
+      {
+       "key": "p-55a77e1e/elevenlabs/tts/eleven-v4",
+       "id": "elevenlabs/tts/eleven-v4",
+       "label": "ElevenLabs v4",
+       "kind": "speech",
+       "async": false,
+       "inputs": {
+        "text": true
+       },
+       "params": [
+        {
+         "key": "voice",
+         "label": "音色",
+         "type": "voice",
+         "group": "basic",
+         "desc": "The voice to use for speech generation",
+         "options": [
+          {
+           "value": "Rachel",
+           "label": "Rachel"
+          },
+          {
+           "value": "Aria",
+           "label": "Aria"
+          },
+          {
+           "value": "Roger",
+           "label": "Roger"
+          },
+          {
+           "value": "Sarah",
+           "label": "Sarah"
+          },
+          {
+           "value": "Laura",
+           "label": "Laura"
+          },
+          {
+           "value": "Charlie",
+           "label": "Charlie"
+          },
+          {
+           "value": "George",
+           "label": "George"
+          },
+          {
+           "value": "Callum",
+           "label": "Callum"
+          },
+          {
+           "value": "River",
+           "label": "River"
+          },
+          {
+           "value": "Liam",
+           "label": "Liam"
+          },
+          {
+           "value": "Charlotte",
+           "label": "Charlotte"
+          },
+          {
+           "value": "Alice",
+           "label": "Alice"
+          },
+          {
+           "value": "Matilda",
+           "label": "Matilda"
+          },
+          {
+           "value": "Will",
+           "label": "Will"
+          },
+          {
+           "value": "Jessica",
+           "label": "Jessica"
+          },
+          {
+           "value": "Eric",
+           "label": "Eric"
+          },
+          {
+           "value": "Chris",
+           "label": "Chris"
+          },
+          {
+           "value": "Brian",
+           "label": "Brian"
+          },
+          {
+           "value": "Daniel",
+           "label": "Daniel"
+          },
+          {
+           "value": "Lily",
+           "label": "Lily"
+          },
+          {
+           "value": "Bill",
+           "label": "Bill"
+          }
+         ],
+         "default": "Rachel"
+        },
+        {
+         "key": "stability",
+         "label": "稳定性",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 1,
+         "desc": "Voice stability. Lower values allow more expressive delivery; higher values make delivery more consistent.",
+         "integer": false,
+         "step": 0.01,
+         "default": 0.5
+        },
+        {
+         "key": "similarity_boost",
+         "label": "相似度",
+         "type": "number",
+         "group": "advanced",
+         "min": 0,
+         "max": 1,
+         "desc": "How closely the output follows the reference voice. Higher values increase similarity but may reduce naturalness.",
+         "integer": false,
+         "step": 0.01,
+         "default": 0.75
+        },
+        {
+         "key": "seed",
+         "label": "种子",
+         "type": "seed",
+         "group": "advanced",
+         "min": 0,
+         "max": 4294967295,
+         "desc": "Seed for best-effort reproducibility. Identical output is not guaranteed."
+        },
+        {
+         "key": "language_code",
+         "label": "语言",
+         "type": "text",
+         "group": "advanced",
+         "desc": "Language code (ISO 639-1) for speech generation and text normalization."
+        },
+        {
+         "key": "output_format",
+         "label": "格式",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "mp3_22050_32",
+           "label": "mp3_22050_32"
+          },
+          {
+           "value": "mp3_44100_32",
+           "label": "mp3_44100_32"
+          },
+          {
+           "value": "mp3_44100_64",
+           "label": "mp3_44100_64"
+          },
+          {
+           "value": "mp3_44100_96",
+           "label": "mp3_44100_96"
+          },
+          {
+           "value": "mp3_44100_128",
+           "label": "mp3_44100_128"
+          },
+          {
+           "value": "mp3_44100_192",
+           "label": "mp3_44100_192"
+          },
+          {
+           "value": "pcm_8000",
+           "label": "pcm_8000"
+          },
+          {
+           "value": "pcm_16000",
+           "label": "pcm_16000"
+          },
+          {
+           "value": "pcm_22050",
+           "label": "pcm_22050"
+          },
+          {
+           "value": "pcm_24000",
+           "label": "pcm_24000"
+          },
+          {
+           "value": "pcm_44100",
+           "label": "pcm_44100"
+          },
+          {
+           "value": "pcm_48000",
+           "label": "pcm_48000"
+          },
+          {
+           "value": "ulaw_8000",
+           "label": "ulaw_8000"
+          },
+          {
+           "value": "alaw_8000",
+           "label": "alaw_8000"
+          },
+          {
+           "value": "opus_48000_32",
+           "label": "opus_48000_32"
+          },
+          {
+           "value": "opus_48000_64",
+           "label": "opus_48000_64"
+          },
+          {
+           "value": "opus_48000_96",
+           "label": "opus_48000_96"
+          },
+          {
+           "value": "opus_48000_128",
+           "label": "opus_48000_128"
+          },
+          {
+           "value": "opus_48000_192",
+           "label": "opus_48000_192"
+          }
+         ],
+         "desc": "Output format of the generated audio. Formatted as codec_sample_rate_bitrate.",
+         "default": "mp3_44100_128"
+        },
+        {
+         "key": "apply_text_normalization",
+         "label": "文本规范化",
+         "type": "enum",
+         "group": "advanced",
+         "options": [
+          {
+           "value": "auto",
+           "label": "自动"
+          },
+          {
+           "value": "on",
+           "label": "on"
+          },
+          {
+           "value": "off",
+           "label": "off"
+          }
+         ],
+         "desc": "Whether to normalize text such as numbers and dates before generation.",
+         "default": "auto"
+        },
+        {
+         "key": "timestamps",
+         "label": "时间戳",
+         "type": "bool",
+         "group": "advanced",
+         "desc": "Whether to return character-level timing information with the generated audio.",
+         "default": false
+        },
+        {
+         "key": "extra",
+         "label": "原始参数",
+         "type": "json",
+         "group": "advanced",
+         "desc": "JSON 对象，原样合并进请求体"
+        }
+       ],
+       "paramSource": "schema",
+       "vendor": "elevenlabs"
+      }
+     ]
+    }
+   ]
+  },
+  "music": {
+   "defaults": {
+    "provider": "p-76d6f84c",
+    "model": "lyria-002"
+   },
+   "groups": [
+    {
+     "provider": {
+      "id": "p-3439bc2c",
+      "name": "Gemini API",
+      "dialect": "gemini",
+      "preset": "gemini",
+      "mine": true
+     },
+     "models": [
+      {
+       "key": "p-3439bc2c/lyria-3.5",
+       "id": "lyria-3.5",
+       "label": "Lyria 3.5",
+       "desc": "整首歌 · 可带人声与歌词",
+       "kind": "music",
+       "async": true,
+       "inputs": {
+        "text": true,
+        "negative": false
+       },
+       "params": [],
+       "paramSource": "card"
+      },
+      {
+       "key": "p-3439bc2c/lyria-3-clip-preview",
+       "id": "lyria-3-clip-preview",
+       "label": "Lyria 3 Clip Preview",
+       "kind": "music",
+       "async": true,
+       "inputs": {
+        "text": true,
+        "negative": false
+       },
+       "params": [],
+       "paramSource": "card",
+       "isNew": true
+      },
+      {
+       "key": "p-3439bc2c/lyria-3-pro-preview",
+       "id": "lyria-3-pro-preview",
+       "label": "Lyria 3 Pro Preview",
+       "kind": "music",
+       "async": true,
+       "inputs": {
+        "text": true,
+        "negative": false
+       },
+       "params": [],
+       "paramSource": "card",
+       "isNew": true
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "rev": "7.fa5f48d5",
+ "_resolve": {
+  "ok": true,
+  "model": {
+   "key": "p-2b60aaee/google/gemini-omni-1.2-flash",
+   "id": "google/gemini-omni-1.2-flash",
+   "label": "Gemini Omni 1.2 Flash",
+   "kind": "video",
+   "async": true,
+   "inputs": {
+    "text": true,
+    "images": {
+     "max": 1,
+     "roles": [
+      "first",
+      "last"
+     ]
+    }
+   },
+   "params": [
+    {
+     "key": "aspect_ratio",
+     "label": "比例",
+     "type": "enum",
+     "group": "basic",
+     "options": [
+      {
+       "value": "",
+       "label": "默认"
+      },
+      {
+       "value": "16:9",
+       "label": "16:9"
+      },
+      {
+       "value": "9:16",
+       "label": "9:16"
+      }
+     ],
+     "format": "aspect",
+     "default": ""
+    },
+    {
+     "key": "resolution",
+     "label": "分辨率",
+     "type": "enum",
+     "group": "basic",
+     "options": [
+      {
+       "value": "360p",
+       "label": "360p"
+      },
+      {
+       "value": "720p",
+       "label": "720p"
+      },
+      {
+       "value": "1080p",
+       "label": "1080p"
+      },
+      {
+       "value": "4K",
+       "label": "4K"
+      }
+     ],
+     "format": "resolution",
+     "default": "720p"
+    },
+    {
+     "key": "duration",
+     "label": "时长",
+     "type": "enum",
+     "group": "basic",
+     "options": [
+      {
+       "value": 3,
+       "label": "3 秒"
+      },
+      {
+       "value": 4,
+       "label": "4 秒"
+      },
+      {
+       "value": 5,
+       "label": "5 秒"
+      },
+      {
+       "value": 6,
+       "label": "6 秒"
+      },
+      {
+       "value": 7,
+       "label": "7 秒"
+      },
+      {
+       "value": 8,
+       "label": "8 秒"
+      },
+      {
+       "value": 9,
+       "label": "9 秒"
+      },
+      {
+       "value": 10,
+       "label": "10 秒"
+      },
+      {
+       "value": 11,
+       "label": "11 秒"
+      },
+      {
+       "value": 12,
+       "label": "12 秒"
+      },
+      {
+       "value": 13,
+       "label": "13 秒"
+      },
+      {
+       "value": 14,
+       "label": "14 秒"
+      },
+      {
+       "value": 15,
+       "label": "15 秒"
+      }
+     ],
+     "format": "duration",
+     "default": 5
+    },
+    {
+     "key": "seed",
+     "label": "种子",
+     "type": "seed",
+     "group": "advanced",
+     "min": 0,
+     "max": 4294967295
+    },
+    {
+     "key": "extra",
+     "label": "原始参数",
+     "type": "json",
+     "group": "advanced",
+     "desc": "JSON 对象，原样合并进请求体；可填：provider.options.<服务商>.task"
+    }
+   ],
+   "paramSource": "schema",
+   "vendor": "google",
+   "shelf": true,
+   "priceHint": "$0.023–0.21 / 秒"
+  }
+ },
+ "_providers": [
+  {
+   "id": "p-76d6f84c",
+   "name": "Google Vertex AI",
+   "dialect": "vertex",
+   "preset": "vertex",
+   "enabled": true,
+   "autoSync": true,
+   "sync": null
+  },
+  {
+   "id": "p-3439bc2c",
+   "name": "Gemini API",
+   "dialect": "gemini",
+   "preset": "gemini",
+   "enabled": true,
+   "autoSync": true,
+   "sync": {
+    "at": 1793968288097,
+    "ok": true,
+    "added": [
+     "gemini-2.5-flash-preview-tts",
+     "gemini-2.5-pro-preview-tts",
+     "gemini-2.5-flash-image",
+     "gemini-3-pro-image",
+     "gemini-3.1-flash-image",
+     "gemini-3.1-flash-lite-image",
+     "gemini-omni-1.2-flash",
+     "lyria-3-clip-preview",
+     "lyria-3-pro-preview",
+     "gemini-3.1-flash-tts-preview",
+     "gemini-3.8-flash-tts",
+     "gemini-3.8-flash-lite-tts"
+    ],
+    "gone": []
+   }
+  },
+  {
+   "id": "p-2b60aaee",
+   "name": "OpenRouter",
+   "dialect": "openrouter",
+   "preset": "openrouter",
+   "enabled": true,
+   "autoSync": true,
+   "sync": {
+    "at": 1793968288109,
+    "ok": true,
+    "added": [
+     "krea/k3-edit",
+     "x-ai/grok-imagine-image-2.0"
+    ],
+    "gone": []
+   }
+  },
+  {
+   "id": "p-55a77e1e",
+   "name": "fal",
+   "dialect": "fal",
+   "preset": "fal",
+   "enabled": true,
+   "autoSync": true,
+   "sync": {
+    "at": 1793957488115,
+    "ok": false,
+    "error": "fal 模型列表 401：API Key 无效或没权限",
+    "added": [],
+    "gone": []
+   }
+  }
+ ]
+}

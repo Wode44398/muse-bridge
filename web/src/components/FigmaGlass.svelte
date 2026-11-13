@@ -1,7 +1,7 @@
 <script>
   // 一块 Figma 玻璃（主页的入口方块 / 右上账户胶囊），各平台统一用它；没 WebGPU 才退回 SVG 折射 / 毛玻璃。
   // 材质＝桌面主页 Dock 的 Clear Glass（Figma「Notification」，同 FigmaGlassDock 去掉三道
-  // LINEAR_BURN 描边）。渲染模块只在维护者的私有 overlay 里（公开版主页不挂这个组件），见 lib/figmaHomeGlass.svelte.js。
+  // LINEAR_BURN 描边）。渲染模块是原版资源，见 lib/figmaHomeGlass.svelte.js。
   //
   // 画布挂在宿主元素里，外扩 margin（渲染器要这圈余量采背景），再用 clip-path 裁回玻璃形状本身：
   // 宿主被 pressable / 弹跳缩放时玻璃跟着一起缩，外沿那圈拷出来的壁纸不会和底下真壁纸错位

@@ -165,6 +165,14 @@ export const TOOL_META: Record<string, { icon: IconName; verb: string }> = {
   UpdateGoal: { icon: "goal", verb: t("汇报目标") },
   McpDescribe: { icon: "plug", verb: t("查看连接器") },
   McpCall: { icon: "plug", verb: t("调用连接器") },
+  PullRequest: { icon: "merge", verb: t("拉取请求") },
+  ShowWidget: { icon: "image", verb: t("画图表") },
+  WidgetGuide: { icon: "read", verb: t("准备画图") },
+  // 会话协作（server/tools/sessions.ts）
+  StartSession: { icon: "branch", verb: t("开新会话") },
+  SendMessage: { icon: "send", verb: t("给会话发消息") },
+  ListSessions: { icon: "listIcon", verb: t("查看相关会话") },
+  ReadSession: { icon: "read", verb: t("读会话回复") },
 };
 export const toolMeta = (name: string): { icon: IconName; verb: string } => {
   const hit = TOOL_META[name];

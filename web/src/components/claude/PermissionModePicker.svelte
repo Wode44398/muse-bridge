@@ -4,19 +4,29 @@
 </script>
 
 <script>
-  // 输入栏左侧的权限模式芯片 + 菜单（官方 Claude Desktop 3.1623 composer 的「Mode」按钮，A1 §8）。
+  // 输入栏的权限模式菜单（官方 Claude Desktop 3.1623 composer 的「Mode」按钮，A1 §8）。
+  // 11-11 起不再有自己的芯片：和用量环并成一颗（QuotaRing 画环、管开合，环色 = 当前档位），这里只出弹层——
+  // 上半是五档，下半是 QuotaRing 递进来的用量小节（usage 片段）。本组件常驻挂着：视图加载、Ctrl+Shift+M、首次确认框都在这。
   // 顺序固定：手动 / 接受编辑 / 计划 / 自动 / 绕过权限，每项一行说明，绕过权限警示色；Ctrl+Shift+M 打开，菜单里数字键直选。
   // 新会话草稿里选 = 记成这个文件夹的默认（plan 不记）；会话里选 = 只改这个会话（活着的 CLI 当场切）。
   // 可选列表以服务端为准（cs.permissionModes：主机开关 + 身份）；管理员看得到被主机关掉的自动 / 绕过权限（置灰，提示去设置里开）。
   // 自动模式首次选、绕过权限每个文件夹首次选：先弹确认框（官方文案，A1 §8.7 / §8.8）。
-  import { session } from '../../lib/state.svelte.js';
+  // 11-03 第六项「项目」（src/runtime/project-mode.mjs）：五档下面一条分隔线，项目是个开关——开着时这条新对话是协调者，
+  // 只规划和派活，干活的是它开出来的讨论串；上面选中的那档变成「讨论串权限」（讨论串开出来时继承它）。形态只能在新对话里定，
+  // 进了项目对话菜单顶上一行灰显「项目对话」，五档就是这个项目的讨论串权限；普通对话里这一行置灰（在新对话里选）。
+  import { session, pluginOn } from '../../lib/state.svelte.js';
+  import { convertToProject } from '../../lib/chat.svelte.js';
+  import { toggleRail } from '../../lib/sessionRail.svelte.js';
   import { cs } from '../../lib/claudeSettings.svelte.js';
-  import { perm, MODE_ORDER, modeLabel, modeDesc, currentMode, modeView, loadModeView, setMode, clampModeLocal } from '../../lib/permissions.svelte.js';
+  import { perm, MODE_ORDER, modeLabel, modeDesc, currentMode, modeView, loadModeView, setMode, clampModeLocal, isProjectView, setDraftShape } from '../../lib/permissions.svelte.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { clampX } from '../../lib/clampx.js';
   import { t } from '../../lib/i18n.js';
+  import { untrack } from 'svelte';
 
-  let open = $state(false), btn = $state(), root = $state(), dir = $state('up');
+  // open / dir 由环按钮那边（QuotaRing）定；ontoggle = Ctrl+Shift+M，onclose = 选完 / Esc / 点遮罩；usage = 弹层下半的用量小节
+  let { open = false, dir = 'up', ontoggle, onclose, usage } = $props();
+  let root = $state();
   let active = $state(0);
   let confirm = $state(null);   // { mode, kind:'auto'|'bypass', folder }
   let cancelBtn = $state();
@@ -44,14 +54,24 @@
     return live ? (live.pendingMode || null) : (view?.pendingMode || null);
   });
   const defMode = $derived(clampModeLocal((view && view.folderDefault) || cs.values.permissionMode));
-  const danger = $derived(cur === 'auto' || cur === 'bypassPermissions');
+  // 项目模式：讨论串靠会话工具开（服务端 sessionsOn：插件开着、能跑命令的身份），没有就不给这一项
+  const projAvail = $derived(pluginOn('session-tools') && cs.shell !== false);
+  const proj = $derived(isProjectView(session.id));
+  // 键盘可达的行：五档里能选的 + 新对话草稿里的「项目」开关（数字键 6 / 方向键）
+  // 普通对话里这一行是「转成项目」（以这段对话为背景另开一个项目对话，chat.svelte.js convertToProject）
+  const navRows = $derived(projAvail && !(proj && session.id) && !(session.id && session.busy) ? [...enabledRows, { project: true }] : enabledRows);
 
-  function toggle() {
-    if (!open && btn) { const r = btn.getBoundingClientRect(); dir = (window.innerHeight - r.bottom) >= r.top ? 'down' : 'up'; }
-    open = !open;
-    if (open) active = Math.max(0, enabledRows.findIndex((r) => r.mode === cur));
+  function toggle() { ontoggle?.(); }
+  function close() { onclose?.(); }
+  // 每次打开：键盘高亮落在当前档上
+  $effect(() => { if (open) untrack(() => { active = Math.max(0, navRows.findIndex((r) => r.mode === cur)); }); });
+  const note = $derived(proj ? (session.id ? t('讨论串开出来时用这一档，只改这个项目') : t('讨论串开出来时用上面这一档')) : session.id ? t('只改这个会话') : t('记成这个文件夹的默认'));
+  function pick(r) {
+    if (!r.project) { choose(r.mode); return; }
+    close();
+    if (!session.id) setDraftShape(!proj);
+    else convertToProject(session.id, t('把这段对话接着做成一个项目：先读原会话，告诉我你理解的目标、已经做到哪、打算怎么分讨论串，先别开讨论串。'));
   }
-  function close() { open = false; }
 
   async function choose(m) {
     close();
@@ -95,17 +115,17 @@
       }
       if (!open) return;
       if (/^[1-9]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        const r = enabledRows[Number(e.key) - 1];
-        if (r) { e.preventDefault(); e.stopPropagation(); choose(r.mode); }
+        const r = navRows[Number(e.key) - 1];
+        if (r) { e.preventDefault(); e.stopPropagation(); pick(r); }
         return;
       }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault(); e.stopPropagation();
-        const n = enabledRows.length || 1;
+        const n = navRows.length || 1;
         active = (active + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
       } else if (e.key === 'Enter') {
         e.preventDefault(); e.stopPropagation();
-        const r = enabledRows[active]; if (r) choose(r.mode);
+        const r = navRows[active]; if (r) pick(r);
       } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
     };
     window.addEventListener('keydown', onKey, true);
@@ -123,22 +143,29 @@
 </script>
 
 <div class="pmp" bind:this={root}>
-  <button type="button" class="chip" class:warn={cur === 'bypassPermissions'} bind:this={btn} aria-haspopup="menu" aria-expanded={open}
-    aria-label={t('权限模式：{mode}', { mode: modeLabel(cur) })}
-    title={pending ? t('Claude 这一轮结束后开启绕过权限') : danger ? t('Claude 可以不经询问修改或删除文件') : t('权限模式') + ' · Ctrl+Shift+M'}
-    onclick={toggle}>
-    <svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d={ICON[cur] || ICON.default} /></svg>
-    <span class="lbl">{modeLabel(cur)}</span>
-    {#if pending}<span class="dot" aria-hidden="true"></span>{/if}
-  </button>
-
   {#if open}
     <button class="backdrop" aria-label={t('关闭')} onclick={close}></button>
-    <div class="menu" class:down={dir === 'down'} role="menu" use:clampX={{ anchor: 'left' }}>
-      <div class="mh">{t('权限模式')}</div>
+    <div class="menu" class:down={dir === 'down'} use:clampX={{ anchor: 'left' }}>
+     <div class="modes" role="menu" aria-label={proj ? t('讨论串权限') : t('权限模式')}>
+      {#if proj && session.id}
+        <!-- 项目对话：形态定死了，顶上一行只是说明；下面五档 = 这个项目的讨论串权限 -->
+        <div class="mi pj static" aria-disabled="true">
+          {@render projIcon('ico')}
+          <span class="txt"><span class="nm">{t('项目对话')}</span><span class="ds">{t('只规划和派活，讨论串去做')}</span></span>
+          <svg class="ck" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10.5l3.5 3.5 7.5-8"/></svg>
+        </div>
+        <!-- 项目概览（会话信息面板：讨论串分组、项目说明、项目记忆、暂停）。手机上没有工作台工具栏，从这里打开 -->
+        <button type="button" class="mi" role="menuitem" onclick={() => { close(); toggleRail(true); }}>
+          <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M10 3v10"/></svg>
+          <span class="txt"><span class="nm">{t('项目概览')}</span><span class="ds">{t('讨论串、项目说明、项目记忆、暂停')}</span></span>
+        </button>
+        <div class="mh sep"><span>{t('讨论串权限')}</span><span class="mn" title={note}>{note}</span></div>
+      {:else}
+        <div class="mh"><span>{proj ? t('讨论串权限') : t('权限模式')}</span><span class="mn" title={note}>{note}</span></div>
+      {/if}
       {#each rows as r (r.mode)}
-        {@const n = enabledRows.indexOf(r) + 1}
-        <button type="button" class="mi" class:on={r.mode === cur} class:act={n > 0 && enabledRows[active] === r} class:warn={r.mode === 'bypassPermissions'}
+        {@const n = navRows.indexOf(r) + 1}
+        <button type="button" class="mi" data-m={r.mode} class:on={r.mode === cur} class:act={n > 0 && navRows[active] === r} class:warn={r.mode === 'bypassPermissions'}
           role="menuitemradio" aria-checked={r.mode === cur} disabled={!r.enabled}
           title={r.enabled ? '' : t('在设置里开启')} onclick={() => r.enabled && choose(r.mode)}>
           <svg class="ico" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d={ICON[r.mode]} /></svg>
@@ -151,10 +178,28 @@
           {:else if n > 0 && n < 10}<span class="num">{n}</span>{/if}
         </button>
       {/each}
-      <div class="mf">{session.id ? t('只改这个会话') : t('记成这个文件夹的默认')}</div>
+      {#if projAvail && !(proj && session.id)}
+        <!-- 第六项「项目」：新对话里是个开关（和上面那档同时打勾）；已开始的普通对话里置灰 -->
+        {@const n = navRows.findIndex((x) => x.project) + 1}
+        <div class="msep" aria-hidden="true"></div>
+        <button type="button" class="mi pj" class:on={proj} class:act={n > 0 && navRows[active]?.project} role={session.id ? 'menuitem' : 'menuitemcheckbox'} aria-checked={session.id ? undefined : proj}
+          disabled={!!session.id && session.busy} onclick={() => pick({ project: true })}>
+          {@render projIcon('ico')}
+          <span class="txt"><span class="nm">{session.id ? t('转成项目') : t('项目')}</span><span class="ds">{!session.id ? t('只规划和派活，讨论串去做') : session.busy ? t('等这一轮结束再转') : t('以这段对话为背景另开一个项目对话')}</span></span>
+          {#if proj}<svg class="ck" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10.5l3.5 3.5 7.5-8"/></svg>
+          {:else if n > 0 && n < 10}<span class="num">{n}</span>{/if}
+        </button>
+      {/if}
+     </div>
+      {#if usage}<div class="usep" aria-hidden="true"></div>{@render usage()}{/if}
     </div>
   {/if}
 </div>
+
+<!-- 项目字形：协调者（上）带两条讨论串（下），与侧栏项目对话行同一枚 -->
+{#snippet projIcon(cls)}
+  <svg class={cls} viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="3.9" r="1.85"/><circle cx="3.9" cy="12.1" r="1.85"/><circle cx="12.1" cy="12.1" r="1.85"/><path d="M7 5.5 4.9 10.4M9 5.5l2.1 4.9"/></svg>
+{/snippet}
 
 {#if confirm}
   <div class="cf-wrap" role="presentation" use:portal>
@@ -183,39 +228,44 @@
 {/if}
 
 <style>
-  .pmp { position: relative; display: flex; flex: none; min-width: 0; }
-  /* 素文本芯片（与模型 / Effort 芯片同族）：图标 + 当前模式；绕过权限警示色 */
-  .chip { display: flex; align-items: center; gap: 5px; height: 38px; padding: 0 9px 0 8px; border-radius: 10px; color: var(--muted); font-size: 13.5px; white-space: nowrap; min-width: 0; }
-  .chip:active { background: var(--hover); }
-  @media (hover: hover) { .chip:hover { background: var(--hover); color: var(--text); } }
-  .chip.warn { color: var(--crit, #d9534f); }
+  /* 不占位：弹层相对环按钮那层（QuotaRing 的 .qr-wrap）定位 */
+  .pmp { display: contents; }
   .ico { flex: none; width: 16px; height: 16px; }
-  .lbl { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--crit, #d9534f); }
-  /* 窄屏（手机竖屏 / 折叠屏分屏）：只留图标，保住发送键不被挤出卡片 */
-  @media (max-width: 380px) { .lbl { display: none; } .chip { padding: 0 8px; } }
 
   .backdrop { position: fixed; inset: 0; z-index: 60; }
-  .menu { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 61; width: max-content; min-width: 236px; max-width: min(320px, 92vw);
-    padding: 6px 0; background: var(--q-card); border-radius: 12px; box-shadow: var(--q-shadow); max-height: 70vh; overflow-y: auto;
+  /* 一张弹层两部分：上 = 权限模式，下 = 用量（宽度照官方用量弹层 360） */
+  .menu { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 61; width: min(360px, 100vw - 16px);
+    padding: 8px 0; background: var(--q-card); border-radius: 16px; box-shadow: var(--q-shadow); max-height: min(640px, 80vh); overflow-y: auto; overscroll-behavior: contain;
     animation: pmpPop var(--mo-quick, .16s) var(--ea-decel, ease-out); cursor: default; }
   .menu.down { bottom: auto; top: calc(100% + 8px); }
   @keyframes pmpPop { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
-  .mh { padding: 4px 12px 4px; font-size: 12px; color: var(--muted); }
-  .mi { width: 100%; display: flex; align-items: flex-start; gap: 10px; padding: 7px 12px; text-align: left; color: var(--text); }
-  .mi .ico { margin-top: 2px; color: var(--muted); }
-  .mi.on .ico { color: var(--text); }
-  .mi.warn .ico, .mi.warn .nm { color: var(--crit, #d9534f); }
+  .mh { display: flex; align-items: baseline; gap: 12px; padding: 4px 16px 4px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .mn { flex: 1; min-width: 0; text-align: right; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; opacity: .8; }
+  /* 一档一行：图标（环上那档的颜色）· 名称 · 说明（放不下就截断）· 勾 / 数字键 */
+  .mi { width: 100%; display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 5px 16px; text-align: left; color: var(--text); }
+  .mi .ico { color: var(--muted); }
+  .mi[data-m="acceptEdits"] .ico { color: var(--pm-acceptEdits); }
+  .mi[data-m="plan"] .ico { color: var(--pm-plan); }
+  .mi[data-m="auto"] .ico { color: var(--pm-auto); }
+  .mi[data-m="bypassPermissions"] .ico, .mi.warn .nm { color: var(--pm-bypassPermissions, var(--crit)); }
+  .mi[data-m="default"].on .ico { color: var(--text); }
   .mi:disabled { opacity: .45; cursor: default; }
   .mi.act, .mi:active:not(:disabled) { background: var(--hover); }
   @media (hover: hover) { .mi:hover:not(:disabled) { background: var(--hover); } }
-  .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  .nm { display: flex; align-items: center; gap: 6px; font-size: 13.5px; line-height: 19px; }
-  .ds { font-size: 12px; line-height: 16px; color: var(--muted); }
+  .txt { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+  .nm { flex: none; display: flex; align-items: center; gap: 6px; font-size: 13.5px; line-height: 20px; white-space: nowrap; }
+  .ds { flex: 1; min-width: 0; font-size: 12px; line-height: 20px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .badge { padding: 0 5px; border-radius: 4px; font-size: 10.5px; line-height: 15px; color: var(--muted); background: var(--hover-strong, var(--hover)); }
-  .ck { flex: none; width: 15px; height: 15px; margin-top: 2px; color: var(--text); }
+  .ck { flex: none; width: 15px; height: 15px; color: var(--text); }
   .num { flex: none; width: 15px; text-align: center; font-size: 11.5px; line-height: 19px; color: var(--muted); }
-  .mf { padding: 6px 12px 2px; margin-top: 4px; border-top: 1px solid var(--divider); font-size: 11.5px; color: var(--muted); }
+  /* 权限模式与用量之间 */
+  .usep { height: 1px; margin: 6px 16px; background: var(--divider); }
+  /* 第六项「项目」：五档下面一条分隔线；项目对话里顶上那行只是说明（不可点、不变色） */
+  .msep { height: 1px; margin: 4px 16px; background: var(--divider); }
+  .mh.sep { margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--divider); }
+  .mi.pj.on .ico { color: var(--text); }
+  .mi.static { cursor: default; }
+  .mi.static .ico { color: var(--text); }
   @media (pointer: coarse) { .num { display: none; } }
 
   /* 首次确认框（官方 ConfirmDialog：标题 / 说明 / 工作区路径等宽 / 脚注；初始焦点在「取消」） */

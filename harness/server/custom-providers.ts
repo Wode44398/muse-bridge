@@ -66,12 +66,15 @@ export interface CustomProvider {
   headers: { name: string; value: string }[];
   maxTokensField: "max_tokens" | "max_completion_tokens"; // 只对 OpenAI 协议有意义（OpenAI 自家推理模型要后者）
   promptCaching: boolean; // 只对 Anthropic 协议有意义：发 cache_control（官方端点默认开，第三方默认关）
+  // 请求实际发到的上游主机。只有 bridge 模型中心发布的卡带（它们的 baseUrl 是本机网关，看不出上游）；自己填地址的服务看 baseUrl
+  upstream?: string;
   replayReasoning: boolean; // 只对 OpenAI 协议有意义：工具续轮把思考原文回传为 reasoning_content（标了「自带思考」的型号总会回传）
   models: CustomModel[];
   defaultModel: string;
   createdAt: number;
   updatedAt?: number;
   shared?: boolean; // 管理员实例：共享给成员（多用户服务端）。成员实例里只有管理员共享过来的那几条带它
+  hubRef?: string; // 已经并进宿主的模型中心（它那边的服务 id，2026-11-13）：不进「模型服务」面板与子 agent 候选，老会话照常解析
 }
 
 const ID_RE = /^custom-[a-f0-9]{8}$/;
@@ -332,6 +335,7 @@ function clean(raw: unknown): CustomProvider | null {
     createdAt: typeof r.createdAt === "number" ? r.createdAt : 0,
     ...(typeof r.updatedAt === "number" ? { updatedAt: r.updatedAt } : {}),
     ...(r.shared === true ? { shared: true } : {}),
+    ...(typeof r.hubRef === "string" && /^h-[0-9a-f]{8}$/.test(r.hubRef) ? { hubRef: r.hubRef } : {}),
   };
 }
 
@@ -380,8 +384,73 @@ function sharedProviders(): CustomProvider[] {
 // 与 apiKey（明文；整个目录在密钥守卫里）。管理员实例读自己目录那份；成员实例读管理员那份里标了 shared 的（插件勾了「成员也能用」）。
 // 插件停用 / 改配置后 bridge 重写这个文件，这边按 mtime 下一次读就换。只能用、不能改（同管理员共享的处理：不下发地址、编辑器拒）。
 const PLUGIN_FILE = "plugin-providers.json";
-type PluginRec = { provider: CustomProvider; plugin: { id: string; name: string }; key: string };
-let pluginCache: { file: string; mtimeMs: number; size: number; list: PluginRec[] } | null = null;
+type PluginInfo = { id: string; name: string; sid?: string; logo?: string };
+type PluginRec = { provider: CustomProvider; plugin: PluginInfo; key: string };
+// 自带专门适配的厂商（anthropic、openai、kimi……）由宿主的模型中心接管（2026-11-11）：同一个文件里的 builtins { 厂商 id → 绑定 }。
+// 有 builtins 这一项 = 宿主接管了——管理员实例上只有列在里面的厂商能用（Key、地址取这里的，菜单只列这里给的型号），
+// 这一家在 dimensio 里的厂商 id 与适配都不变。没有这一项（老 bridge、独立运行）= 照老样子，各厂商用自己存的 Key。
+export interface HostBuiltin {
+  key: string;
+  baseUrl?: string;
+  name: string;
+  defaultModel?: string;
+  plugin: PluginInfo;
+  models: { id: string; label: string; contextWindow?: number; maxOutput?: number; vision?: boolean }[];
+  shared?: boolean;
+}
+function cleanBuiltins(raw: unknown): Map<string, HostBuiltin> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out = new Map<string, HostBuiltin>();
+  for (const [id, v] of Object.entries(raw as Record<string, any>)) {
+    if (!BUILTIN_ID_RE.test(id) || id === "local" || !v || typeof v !== "object") continue;
+    const key = typeof v.key === "string" ? v.key.trim() : "";
+    if (!key) continue;
+    const pl = v.plugin && typeof v.plugin === "object" ? v.plugin : {};
+    const models: HostBuiltin["models"] = [];
+    const seen = new Set<string>();
+    for (const m of Array.isArray(v.models) ? v.models : []) {
+      const mid = typeof m?.id === "string" ? m.id.trim() : "";
+      if (!mid || mid.length > 200 || seen.has(mid)) continue;
+      seen.add(mid);
+      models.push({
+        id: mid,
+        label: str(m.label, 80) || mid,
+        ...(Number.isFinite(m.contextWindow) && m.contextWindow > 0 ? { contextWindow: Math.round(m.contextWindow) } : {}),
+        ...(Number.isFinite(m.maxOutput) && m.maxOutput > 0 ? { maxOutput: Math.round(m.maxOutput) } : {}),
+        ...(typeof m.vision === "boolean" ? { vision: m.vision } : {}),
+      });
+      if (models.length >= MAX_MODELS) break;
+    }
+    out.set(id, {
+      key,
+      ...(typeof v.baseUrl === "string" && /^https?:\/\//i.test(v.baseUrl) ? { baseUrl: v.baseUrl.replace(/\/+$/, "") } : {}),
+      name: str(v.name, 40) || id,
+      ...(typeof v.defaultModel === "string" && v.defaultModel ? { defaultModel: v.defaultModel } : {}),
+      plugin: {
+        id: String(pl.id ?? ""),
+        name: str(pl.name, 40) || String(pl.id ?? "插件"),
+        ...(typeof pl.sid === "string" && /^[a-z0-9][a-z0-9-]{0,31}$/.test(pl.sid) ? { sid: pl.sid } : {}),
+        ...(typeof pl.logo === "string" && /^[a-z0-9][a-z0-9-]{0,47}$/.test(pl.logo) ? { logo: pl.logo } : {}),
+      },
+      models,
+      ...(v.shared === true ? { shared: true } : {}),
+    });
+  }
+  return out;
+}
+let pluginCache: { file: string; mtimeMs: number; size: number; list: PluginRec[]; builtins: Map<string, HostBuiltin> | null } | null = null;
+/** 宿主接管了自带厂商（只看管理员实例：成员实例照旧用自己 / 环境里的 Key，共享过来的绑定只是多一个 Key 来源）。 */
+export function hostManagesBuiltins(): boolean {
+  if (tenantMode()) return false;
+  pluginRecs();
+  return Boolean(pluginCache?.builtins);
+}
+/** 宿主给这家自带厂商的绑定（成员实例只拿得到标了共享的）；没有 = undefined。 */
+export function hostBuiltin(id: string): HostBuiltin | undefined {
+  pluginRecs();
+  const b = pluginCache?.builtins?.get(id);
+  return b && (!tenantMode() || b.shared) ? b : undefined;
+}
 function pluginRecs(): PluginRec[] {
   const dir = tenantMode() ? sharedProvidersDir() : customProvidersDir();
   if (!dir) return [];
@@ -395,22 +464,30 @@ function pluginRecs(): PluginRec[] {
   }
   if (!pluginCache || pluginCache.file !== file || pluginCache.mtimeMs !== st.mtimeMs || pluginCache.size !== st.size) {
     const list: PluginRec[] = [];
+    let builtins: Map<string, HostBuiltin> | null = null;
     try {
       const raw = JSON.parse(readFileSync(file, "utf8"));
+      builtins = cleanBuiltins(raw?.builtins);
       for (const r of Array.isArray(raw?.providers) ? raw.providers : []) {
         const provider = clean(r);
         if (!provider) continue;
+        if (typeof r?.upstream === "string" && /^[a-z0-9.-]{1,253}$/.test(r.upstream)) provider.upstream = r.upstream;
         const pl = r?.plugin && typeof r.plugin === "object" ? r.plugin : {};
         list.push({
           provider,
-          plugin: { id: String(pl.id ?? ""), name: str(pl.name, 40) || String(pl.id ?? "插件") },
+          plugin: {
+            id: String(pl.id ?? ""),
+            name: str(pl.name, 40) || String(pl.id ?? "插件"),
+            ...(typeof pl.sid === "string" && /^[a-z0-9][a-z0-9-]{0,31}$/.test(pl.sid) ? { sid: pl.sid } : {}),
+            ...(typeof pl.logo === "string" && /^[a-z0-9][a-z0-9-]{0,47}$/.test(pl.logo) ? { logo: pl.logo } : {}),
+          },
           key: typeof r.apiKey === "string" ? r.apiKey : "",
         });
       }
     } catch {
       /* 坏文件当空表 */
     }
-    pluginCache = { file, mtimeMs: st.mtimeMs, size: st.size, list };
+    pluginCache = { file, mtimeMs: st.mtimeMs, size: st.size, list, builtins };
   }
   return tenantMode() ? pluginCache.list.filter((r) => r.provider.shared) : pluginCache.list;
 }
@@ -429,7 +506,7 @@ export function getCustomProvider(id: string): CustomProvider | undefined {
 }
 
 /** 这个服务是 bridge 插件提供的：回 { id, name }（只能用：不能看地址、改、删、换 Key），否则 undefined。 */
-export function customProviderPlugin(id: string): { id: string; name: string } | undefined {
+export function customProviderPlugin(id: string): PluginInfo | undefined {
   if (!isCustomProviderId(id) || ownProviders().some((p) => p.id === id)) return undefined;
   return pluginRecs().find((r) => r.provider.id === id)?.plugin;
 }

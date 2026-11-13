@@ -1,6 +1,10 @@
-// Claude 分页的浏览器实例池：一个工作空间一个 CdpSession（独立 headless 进程）。
+// Claude 分页的浏览器实例池：一个对话一个 CdpSession（2026-11-08 起；以前是一个工作空间一个）。
 // agent 的 MCP browser 工具与右侧栏浏览器面板共用同一实例——agent 浏览时面板实时同屏。
-// 键 =（属主, 规范化工作空间路径）（同一个人、同一个 ws 的多个会话共享一个页面，语义与终端一致）。
+// 键 =（属主, 规范化工作空间路径, 会话 id）：同一工作空间里几个对话同时开发，各自的标签、前台标签、视口互不干扰。
+// 没带会话 id 的老调用方（Codex 的浏览器通道、快照、还没发出第一条消息的新对话）仍按（属主, 工作空间）共用一份。
+// 底层进程是共用的：桌面壳 / 同一个人的共享无头宿主里，每个会话只拥有自己建的标签，所以网站登录态大家共享、
+// 不多占浏览器进程。要连 cookie / 存储也分开（两个对话用不同账号测同一个站），给这个会话开【隔离存储】：
+// 换到共享无头宿主里的一个独立浏览上下文（Target.createBrowserContext，类似无痕窗口，关掉即清空）。
 // 各函数的 ws 参数可以是路径，也可以是 principal.poolRef(ctx, 路径)：主机身份与只给路径的老调用方
 // （Codex 的浏览器通道）仍只按路径，键与以前逐字一致；其他身份带属主前缀——将来两个人进了同一个
 // 共享目录，也拿不到对方的那一份（开源路线 C6）。
@@ -14,7 +18,9 @@
 
 import path from 'node:path';
 import { CdpSession, VIEWPORT_PRESETS, resolveViewportSpec, presetKeyFor } from './cdp.mjs';
-import { poolKey, refOwner, parseOwnerKey, HOST_OWNER } from './principal.mjs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { poolKey, refOwner, refSession, parseOwnerKey, HOST_OWNER } from './principal.mjs';
+import { busPublish } from './bus.mjs';
 import { DATA_ROOT } from './paths.mjs';
 import { userRoot } from '../config/index.mjs';
 import { killAllHostsSync, hostsUnderClosed } from './headless-host.mjs';
@@ -102,7 +108,8 @@ export function viewportLine(b) {
   return `viewport ${vp.width}×${vp.height}${real}${b.emu?.mobile ? ' · 触屏' : ''}${b.emu?.scheme && b.emu.scheme !== 'auto' ? ` · ${b.emu.scheme}` : ''}`;
 }
 
-const MAX_BROWSERS = 3;
+// 按会话开以后实例多了，但同一个人的实例大多只是共享宿主 / 桌面壳里的几个标签，不是独立进程。
+const MAX_BROWSERS = 8;
 const IDLE_MS = 15 * 60 * 1000;
 
 const fold = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
@@ -113,13 +120,62 @@ const ownerOfRef = (ref) => { const o = refOwner(ref); return o && o !== HOST_OW
 // 能不能开进桌面壳（壳里是主机自己的网站登录态）：只有主机身份。
 export const _desktopAllowed = (ref) => ownerOfRef(ref) === HOST_OWNER;   // 单测用
 
-const pool = new Map(); // key -> { owner, session: CdpSession, launching: Promise|null, lastUsed: number, closed? }
+const pool = new Map(); // key -> { owner, sid, session: CdpSession, launching: Promise|null, lastUsed: number, mounted, closed? }
 
 function slot(ws) {
   const key = keyOf(ws);
   let s = pool.get(key);
-  if (!s) { s = { owner: ownerOfRef(ws), session: null, launching: null, lastUsed: Date.now() }; pool.set(key, s); }
+  if (!s) { s = { owner: ownerOfRef(ws), sid: refSession(ws), session: null, launching: null, lastUsed: Date.now(), mounted: false }; pool.set(key, s); }
   return s;
+}
+
+// —— 挂载状态灯：这个会话的浏览器里有没有标签 ——
+// 前端工具开关上的绿灯只在【这个会话】有标签时亮。标签增减、浏览器关掉（含闲置回收、关掉最后一个标签）都会
+// 走 CdpSession.notifyTabs，这里去重后经账号总线推 {type:'browser.mount', sessionId, mounted, tabs}。
+function noteMount(s, n) {
+  const on = n > 0;
+  if (s.mounted === on) return;
+  s.mounted = on;
+  if (s.sid) busPublish(s.owner || HOST_OWNER, { type: 'browser.mount', sessionId: s.sid, mounted: on, tabs: n });
+}
+
+// —— 隔离存储开关（按会话，跨重启记着）——
+const ISO_FILE = path.join(DATA_ROOT, 'browser-isolated.json');
+const ISO_MAX = 300;
+let isoKeys = null;
+function isoSet() {
+  if (isoKeys) return isoKeys;
+  try { isoKeys = new Set(JSON.parse(readFileSync(ISO_FILE, 'utf8')).filter((k) => typeof k === 'string')); } catch { isoKeys = new Set(); }
+  return isoKeys;
+}
+function isoSave() {
+  const all = [...isoSet()];
+  if (all.length > ISO_MAX) isoKeys = new Set(all.slice(-ISO_MAX));
+  try { writeFileSync(ISO_FILE, JSON.stringify([...isoKeys])); } catch (e) { console.warn('[browser] 隔离开关没存上：', e?.message || e); }
+}
+// 只有带会话的引用能开隔离（工作空间共用的那份开了，等于替同空间的别的对话做主）。
+export function browserIsolated(ws) {
+  return Boolean(refSession(ws)) && isoSet().has(keyOf(ws));
+}
+// 开 / 关隔离存储。模式变了就关掉这个会话现有的浏览器（标签随之关闭），下次打开按新模式起。返回 { isolated, restarted }。
+export function setBrowserIsolated(ws, on) {
+  if (!refSession(ws)) throw Object.assign(new Error('还没有对话，先发一条消息再开隔离存储'), { status: 400 });
+  const key = keyOf(ws);
+  const set = isoSet();
+  const want = Boolean(on);
+  if (set.has(key) === want) return { isolated: want, restarted: false };
+  if (want) set.add(key); else set.delete(key);
+  isoSave();
+  const s = pool.get(key);
+  const restarted = Boolean(s?.session);
+  if (s?.session) { s.session.close(); s.session = null; }
+  return { isolated: want, restarted };
+}
+
+// 这个引用的挂载状态（不触发启动）：前端切会话时拉一次，之后靠 browser.mount 总线事件。
+export function browserMount(ws) {
+  const b = existingBrowser(ws);
+  return { mounted: Boolean(b && b.tabs.length), tabs: b ? b.tabs.length : 0, isolated: browserIsolated(ws) };
 }
 
 export function touchBrowser(ws) {
@@ -151,9 +207,13 @@ export async function getBrowser(ws) {
   }
   s.launching = (async () => {
     const sess = new CdpSession();
-    await sess.launch('about:blank', { desktop: s.owner === HOST_OWNER, profileDir: profileDirFor(s.owner) });
+    // 隔离存储：不进桌面壳（壳里是主机的持久分区），在共享无头宿主里开独立浏览上下文；没有持久配置档的身份本来就是独立进程
+    const isolate = browserIsolated(ws);
+    await sess.launch('about:blank', { desktop: s.owner === HOST_OWNER && !isolate, profileDir: profileDirFor(s.owner), isolate });
     // 启动途中这个槽被 closeBrowsersOf 收了（账号删除 / 停用）：刚起来的进程不能留成没人管的孤儿
     if (s.closed) { sess.close(); throw Object.assign(new Error('浏览器已关闭'), { status: 410 }); }
+    // 换了新实例后，旧实例晚到的「标签清空」不该把灯熄掉
+    sess.subscribeTabs((tabs) => { if (!s.session || s.session === sess) noteMount(s, tabs.length); });
     s.session = sess;
     s.launching = null;
     return sess;
@@ -211,6 +271,18 @@ export function normalizeUrl(raw) {
   return (isLocal ? 'http://' : 'https://') + u;
 }
 
+// 闲置回收收掉的（池键 → 时刻）：agent 隔了一阵再来，只看到「浏览器还没启动」会以为自己的页面莫名丢了——
+// 结果里说清楚是闲置被收（runtime/browser-actions.mjs 用 reapedNote）。只留最近 50 条。
+const reaped = new Map();
+
+/** 这个工作空间的浏览器是不是被闲置回收关掉的：是就返回给 agent 的一句话，否则 ''。 */
+export function reapedNote(ws) {
+  const r = reaped.get(keyOf(ws));
+  if (!r || Date.now() - r.t > 24 * 3600e3) return '';
+  const at = new Date(r.t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `（它在 ${at} 因为闲置超过 ${Math.round(IDLE_MS / 60_000)} 分钟、没人看，被自动关掉了——之前的页面和标签都没了，navigate 重新打开${r.persist ? '；网站登录状态还在' : ''}）`;
+}
+
 // 闲置回收：无直播观众且 IDLE_MS 内没有任何工具/面板活动 → 关进程省内存。
 const reaper = setInterval(() => {
   const now = Date.now();
@@ -218,8 +290,12 @@ const reaper = setInterval(() => {
     if (!s.session) { if (!s.launching) pool.delete(key); continue; }
     if (!s.session.alive) { s.session.close(); s.session = null; continue; }
     if (s.session.castSubs.size === 0 && now - s.lastUsed > IDLE_MS) {
+      // 登录态留不留得住：桌面壳的持久分区、或真附着上了持久配置档的共享无头宿主（起不来时会退回临时 profile）
+      const persist = Boolean(s.session.desktopBroker || s.session.sharedHost);
       s.session.close();
       s.session = null;
+      reaped.set(key, { t: now, persist });
+      if (reaped.size > 50) reaped.delete(reaped.keys().next().value);
     }
   }
 }, 60_000);

@@ -47,6 +47,7 @@ public class RcDesk {
   public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr extra);
+  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc cb, IntPtr extra);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int max);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder text, int max);
@@ -108,17 +109,24 @@ public class RcDesk {
   static bool Extended(ushort vk) { return (vk >= 0x21 && vk <= 0x28) || vk == 0x2D || vk == 0x2E || vk == 0x5B || vk == 0x5C || vk == 0x6F || vk == 0x90 || vk == 0xA3 || vk == 0xA5; }
 
   // Unicode 直输（KEYEVENTF_UNICODE）：不经过输入法、不碰剪贴板，中文/emoji 都行；换行/Tab 走真按键。
-  public static int TypeText(string s) {
-    var batch = new List<INPUT>(); int sent = 0;
+  // 逐字发、字间停 delayMs：新版记事本这类 WinUI/XAML 文本框是异步处理 VK_PACKET 的，成批突发会丢字、重复、乱序；
+  // 换行/Tab 前后多停 30ms（回车常触发自动缩进、补全）；代理对（emoji 等）两个码元放进同一次 SendInput
+  public static int TypeText(string s, int delayMs) {
+    int sent = 0, gap = Math.Max(0, Math.Min(200, delayMs));
     for (int i = 0; i < s.Length; i++) {
       char c = s[i];
       if (c == '\r') { if (i + 1 < s.Length && s[i + 1] == '\n') continue; c = '\n'; }
-      if (c == '\n' || c == '\t') { ushort vk = (ushort)(c == '\n' ? 0x0D : 0x09); batch.Add(Key(vk, 0, 0)); batch.Add(Key(vk, 0, 2)); }
-      else { batch.Add(Key(0, c, 4)); batch.Add(Key(0, c, 4 | 2)); }
-      sent++;
-      if (batch.Count >= 64) { Send(batch); batch.Clear(); Thread.Sleep(8); }
+      var l = new List<INPUT>();
+      bool real = c == '\n' || c == '\t';
+      if (real) { ushort vk = (ushort)(c == '\n' ? 0x0D : 0x09); l.Add(Key(vk, 0, 0)); l.Add(Key(vk, 0, 2)); Thread.Sleep(30); }
+      else {
+        l.Add(Key(0, c, 4)); l.Add(Key(0, c, 4 | 2));
+        if (char.IsHighSurrogate(c) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1])) { char d = s[++i]; l.Add(Key(0, d, 4)); l.Add(Key(0, d, 4 | 2)); }
+      }
+      Send(l); sent++;
+      if (real) Thread.Sleep(30);
+      if (gap > 0 && i + 1 < s.Length) Thread.Sleep(gap);
     }
-    Send(batch);
     return sent;
   }
   // 组合键：mods 依次按下、主键按下抬起、mods 逆序抬起
@@ -254,6 +262,75 @@ public class RcDesk {
     if (fg != 0 && fg != me) { AttachThreadInput(me, fg, true); SetForegroundWindow(h); BringWindowToTop(h); AttachThreadInput(me, fg, false); }
     for (int i = 0; i < 10 && GetForegroundWindow() != h; i++) Thread.Sleep(15);
     return GetForegroundWindow() == h;
+  }
+
+  // —— 窗口归属：按键发往哪个程序、expect 命中的是谁 ——
+  public static uint PidOf(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
+  static Dictionary<uint, string> pnames = new Dictionary<uint, string>(); static DateTime pnamesAt = DateTime.MinValue;
+  // 进程名（短时缓存：结果确认每 250ms 要把所有顶层窗口过一遍）
+  public static string ProcName(uint pid) {
+    if (pid == 0) return "";
+    if ((DateTime.UtcNow - pnamesAt).TotalSeconds > 5) { pnames.Clear(); pnamesAt = DateTime.UtcNow; }
+    string n; if (pnames.TryGetValue(pid, out n)) return n;
+    try { n = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch { n = ""; }
+    pnames[pid] = n; return n;
+  }
+  static bool IsProc(uint pid, string name) { return string.Equals(ProcName(pid), name, StringComparison.OrdinalIgnoreCase); }
+  // 窗口背后真正的应用进程。UWP 应用的外框窗口归 ApplicationFrameHost（所有 UWP 外框共用这一个进程），
+  // 收键的内容窗口（Windows.UI.Core.CoreWindow）是外框的子窗口、属于应用自己的进程——外框要往下找一层，
+  // 只比外框 pid 会把「计算器」和「设置」当成同一个程序，只比内容 pid 又会把外框和它自己的内容当成两个
+  public static List<uint> AppPids(IntPtr h) {
+    var l = new List<uint>(); uint p = PidOf(h);
+    if (p == 0) return l;
+    if (!IsProc(p, "ApplicationFrameHost")) { l.Add(p); return l; }
+    EnumChildWindows(h, (c, x) => { uint q = PidOf(c); if (q != 0 && q != p && !l.Contains(q)) l.Add(q); return true; }, IntPtr.Zero);
+    return l;
+  }
+  public static string AppName(IntPtr h) { var l = AppPids(h); return l.Count > 0 ? ProcName(l[0]) : ProcName(PidOf(h)); }
+  static bool PidsMeet(IntPtr a, IntPtr b) { var x = AppPids(a); foreach (var q in AppPids(b)) if (x.Contains(q)) return true; return false; }
+  static IntPtr Root(IntPtr h) { IntPtr r = GetAncestor(h, 2); return r == IntPtr.Zero ? h : r; }
+  // 同一个应用的窗口：同一个窗口、同一条所有者链（另存为、打开这类附属对话框），或同一个应用进程
+  public static bool SameApp(IntPtr a, IntPtr b) {
+    if (a == IntPtr.Zero || b == IntPtr.Zero) return false;
+    a = Root(a); b = Root(b);
+    if (a == b) return true;
+    IntPtr oa = GetAncestor(a, 3); if (oa != IntPtr.Zero && oa == GetAncestor(b, 3)) return true;
+    return PidsMeet(a, b);
+  }
+  // 前台 fg 算不算目标窗口 t：规则同 SameApp，只是 explorer 一个进程同时管着桌面、任务栏和所有文件夹窗口，
+  // 它只认所有者链——否则目标是某个文件夹窗口、前台是桌面也会放行
+  public static bool Fits(IntPtr fg, IntPtr t) {
+    if (fg == IntPtr.Zero || t == IntPtr.Zero) return false;
+    IntPtr rf = Root(fg), rt = Root(t);
+    if (rf == rt) return true;
+    IntPtr of = GetAncestor(rf, 3); if (of != IntPtr.Zero && of == GetAncestor(rt, 3)) return true;
+    if (IsProc(PidOf(rf), "explorer") || IsProc(PidOf(rt), "explorer")) return false;
+    // 同一程序的两个主窗口（新版记事本、Chrome 各开两个窗口都在一个进程里；两个 UWP 外框同属 ApplicationFrameHost）：
+    // 都没有所有者、类名相同就是两个窗口，键要发给目标那个——不放行，让上层切过去
+    if (of == rf && GetAncestor(rt, 3) == rt && ClassOf(rf) == ClassOf(rt)) return false;
+    return PidsMeet(rf, rt);
+  }
+  static string ClassOf(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, 256); return sb.ToString(); }
+  [DllImport("user32.dll")] static extern IntPtr GetLastActivePopup(IntPtr h);
+  // 切前台时切到目标最近激活的附属窗口：开着模态「另存为」时主窗口是禁用的，切主窗口键会被吞掉
+  public static IntPtr FocusTarget(IntPtr t) {
+    IntPtr r = Root(t), p = GetLastActivePopup(r);
+    return p != IntPtr.Zero && p != r && IsWindowVisible(p) ? p : r;
+  }
+  public class WinHit { public long hwnd; public string title; public string app; public bool same; }
+  // expect 的 window/gone：标题、进程名、类名里含 q 的可见顶层窗口（同 wait_for_window 的匹配）；scope 非零时标出与它同一应用的
+  public static List<WinHit> FindWins(string q, IntPtr scope) {
+    var res = new List<WinHit>(); q = (q ?? "").ToLowerInvariant();
+    if (q.Length == 0) return res;
+    EnumWindows((h, x) => {
+      if (!IsWindowVisible(h) || GetWindowTextLength(h) == 0 || Ours(h)) return true;
+      string t = Title(h), app = AppName(h); var cb = new StringBuilder(256); GetClassName(h, cb, 256);
+      if ((t + " " + ProcName(PidOf(h)) + " " + app + " " + cb.ToString()).ToLowerInvariant().Contains(q)) {
+        var w = new WinHit(); w.hwnd = h.ToInt64(); w.title = t; w.app = app; w.same = scope != IntPtr.Zero && SameApp(h, scope); res.Add(w);
+      }
+      return true;
+    }, IntPtr.Zero);
+    return res;
   }
   public static ushort Vk(char c) { return (ushort)(VkKeyScan(c) & 0xFF); }
   public static bool NeedsShift(char c) { return ((VkKeyScan(c) >> 8) & 1) == 1; }
@@ -650,20 +727,40 @@ function Find-Text($q) {
   if (-not (Fg-Ok)) { return $null }
   try { return [RcUia]::FindText([RcDesk]::GetForegroundWindow(), [string]$q, 1500, 1200) } catch { return $null }
 }
-function Check-Expect($exp) {
+# window/gone 按标题、进程名、类名匹配（同 wait_for_window），命中项带上程序名；
+# scope＝按键/打字的目标窗口（没给就是 0，全局匹配）
+function Check-Expect($exp, $scope) {
   $checks = New-Object System.Collections.ArrayList; $all = $true
-  $titles = @(); foreach ($k in ([RcDesk]::TopKey()).Split(',')) { if ($k) { $titles += [RcDesk]::Title([IntPtr][long]$k) } }
+  $sc = [IntPtr]::Zero; if ($null -ne $scope -and [long]$scope -ne 0) { $sc = [IntPtr][long]$scope }
   if ($null -ne $exp.window) {
-    $q = ([string]$exp.window).ToLower(); $hit = @($titles | Where-Object { $_.ToLower().Contains($q) }); $ok = $hit.Count -gt 0
+    # 给了目标窗口：先认它那个程序的窗口；别的程序的窗口只有这次新开的才算，动作前就在的同名窗口不能拿来冒充
+    $hits = @([RcDesk]::FindWins([string]$exp.window, $sc))
+    $pick = $null; $other = $false
+    if ($sc -eq [IntPtr]::Zero) { if ($hits.Count -gt 0) { $pick = $hits[0] } }
+    else {
+      $mine = @($hits | Where-Object { $_.same })
+      if ($mine.Count -gt 0) { $pick = $mine[0] }
+      else {
+        $new = @($hits | Where-Object { $null -eq $script:pre -or -not $script:pre.titles.ContainsKey([string]$_.hwnd) })
+        if ($new.Count -gt 0) { $pick = $new[0]; $other = $true }
+      }
+    }
+    $ok = $null -ne $pick
     if (-not $ok) { $all = $false }
-    $got = ''; if ($ok) { $got = [string]$hit[0] }
-    [void]$checks.Add(@{ key = 'window'; want = [string]$exp.window; ok = $ok; got = $got })
+    $chk = @{ key = 'window'; want = [string]$exp.window; ok = $ok; got = '' }
+    if ($ok) { $chk.got = [string]$pick.title; $chk.proc = [string]$pick.app; if ($other) { $chk.other = $true } }
+    elseif ($hits.Count -gt 0) { $chk.got = [string]$hits[0].title; $chk.proc = [string]$hits[0].app; $chk.stale = $true }
+    [void]$checks.Add($chk)
   }
   if ($null -ne $exp.gone) {
-    $q = ([string]$exp.gone).ToLower(); $hit = @($titles | Where-Object { $_.ToLower().Contains($q) }); $ok = $hit.Count -eq 0
+    # 给了目标窗口：只看它那个程序的窗口还在不在，别的程序恰好开着同名窗口不算没关掉
+    $hits = @([RcDesk]::FindWins([string]$exp.gone, $sc))
+    if ($sc -ne [IntPtr]::Zero) { $hits = @($hits | Where-Object { $_.same }) }
+    $ok = $hits.Count -eq 0
     if (-not $ok) { $all = $false }
-    $got = ''; if (-not $ok) { $got = [string]$hit[0] }
-    [void]$checks.Add(@{ key = 'gone'; want = [string]$exp.gone; ok = $ok; got = $got })
+    $chk = @{ key = 'gone'; want = [string]$exp.gone; ok = $ok; got = '' }
+    if (-not $ok) { $chk.got = [string]$hits[0].title; $chk.proc = [string]$hits[0].app }
+    [void]$checks.Add($chk)
   }
   if ($null -ne $exp.focus -or $null -ne $exp.value) {
     $fs = Focus-State
@@ -685,7 +782,7 @@ function Check-Expect($exp) {
   if ($null -ne $exp.text) {
     $q = [string]$exp.text
     $f = Find-Text $q
-    if ($null -eq $f) { $t = @($titles | Where-Object { $_.ToLower().Contains($q.ToLower()) }); if ($t.Count -gt 0) { $f = [string]$t[0] } }
+    if ($null -eq $f) { $titles = @(); foreach ($k in ([RcDesk]::TopKey()).Split(',')) { if ($k) { $titles += [RcDesk]::Title([IntPtr][long]$k) } }; $t = @($titles | Where-Object { $_.ToLower().Contains($q.ToLower()) }); if ($t.Count -gt 0) { $f = [string]$t[0] } }
     $ok = $null -ne $f
     if (-not $ok) { $all = $false }
     [void]$checks.Add(@{ key = 'text'; want = $q; ok = $ok; got = [string]$f })
@@ -714,13 +811,13 @@ function Obs-Post($o) {
     $last = $cur; $lastCaret = $caret
     $t = $sw.ElapsedMilliseconds
     if ($hasExp) {
-      if ($t -ge $nextExp) { $r = Check-Expect $exp; $checks = $r.checks; $expOk = [bool]$r.ok; $nextExp = $t + 250 }
+      if ($t -ge $nextExp) { $r = Check-Expect $exp $o.target; $checks = $r.checks; $expOk = [bool]$r.ok; $nextExp = $t + 250 }
       if ($expOk -and $quiet -ge 1) { break }
     } elseif (($ever -and $quiet -ge 2) -or (-not $ever -and $quiet -ge 1 -and $t -ge $noChange)) { break }
     if ($t -ge $max) { break }
     Start-Sleep -Milliseconds 80
   }
-  if ($hasExp -and -not $expOk) { $r = Check-Expect $exp; $checks = $r.checks; $expOk = [bool]$r.ok }
+  if ($hasExp -and -not $expOk) { $r = Check-Expect $exp $o.target; $checks = $r.checks; $expOk = [bool]$r.ok }
   $nowKey = [RcDesk]::TopKey()
   $now = @{}; foreach ($k in $nowKey.Split(',')) { if ($k) { $now[$k] = 1 } }
   $opened = New-Object System.Collections.ArrayList
@@ -800,18 +897,37 @@ function Do-Processes {
     $arr += @{ pid = $p.Id; name = $p.ProcessName; title = $p.MainWindowTitle; path = $pp; cpu = $p.CPU; workingSet = [long]$p.WorkingSet64 }
   }; return ,$arr
 }
-function Do-Launch($file, $args, $cwd) {
-  if (-not $file) { throw 'launch requires file' }
-  $sp = @{ FilePath = [string]$file; PassThru = $true }
-  if ($null -ne $args -and @($args).Count -gt 0) { $sp.ArgumentList = [string[]]@($args) }
-  if ($cwd) { $sp.WorkingDirectory = [string]$cwd }
-  $p = Start-Process @sp; return @{ ok = $true; pid = $p.Id; file = [string]$file }
+# 启动程序/打开文件/网址：走 ShellExecute（同双击和「运行」框），参数串由 node 侧按 Windows 命令行规则拼好。
+# 参数别叫 $args（PowerShell 的自动变量，传进来的值会被吞掉）；Start-Process -PassThru 碰到 URI/协议激活拿不到进程就直接报错，
+# 这里拿不到进程算正常（activated）
+function Do-Launch($file, $argline, $cwd, $obs) {
+  if (-not $file) { throw 'launch 需要 file' }
+  $on = Obs-On $obs
+  if ($on) { [RcUia]::WatchNone(); Obs-Pre $null $null }
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = [string]$file; $psi.UseShellExecute = $true
+  if ($argline) { $psi.Arguments = [string]$argline }
+  if ($cwd) { $psi.WorkingDirectory = [string]$cwd }
+  $p = $null
+  try { $p = [System.Diagnostics.Process]::Start($psi) }
+  catch {
+    $script:pre = $null
+    $e = $_.Exception; while ($null -ne $e.InnerException) { $e = $e.InnerException }
+    $where = 'file=' + [string]$file; if ($argline) { $where += '，参数=' + [string]$argline }; if ($cwd) { $where += '，cwd=' + [string]$cwd }
+    throw ('启动失败：' + $e.Message + '（' + $where + '）')
+  }
+  $procId = $null; if ($null -ne $p) { try { $procId = [int]$p.Id } catch {} }
+  $res = $null; if ($on) { $res = Obs-Post $obs }
+  return @{ ok = $true; pid = $procId; activated = ($null -eq $procId); file = [string]$file; foreground = (Window-Info ([RcDesk]::GetForegroundWindow())); obs = $res }
 }
-function Do-FocusWindow($window) {
+function Do-FocusWindow($window, $obs) {
   $h = [IntPtr][long]$window
   if (-not [RcDesk]::IsWindow($h)) { throw 'window not found (closed?)' }
+  $on = Obs-On $obs
+  if ($on) { [RcUia]::WatchNone(); Obs-Pre $null $null }
   $ok = [RcDesk]::Focus($h)
-  return @{ ok = $true; focused = [bool]$ok; window = (Window-Info $h); foreground = (Window-Info ([RcDesk]::GetForegroundWindow())) }
+  $res = $null; if ($on) { $res = Obs-Post $obs }
+  return @{ ok = $true; focused = [bool]$ok; window = (Window-Info $h); foreground = (Window-Info ([RcDesk]::GetForegroundWindow())); obs = $res }
 }
 function Do-SetWindow($window, $x, $y, $w, $h) {
   $hwnd = [IntPtr][long]$window; $cur = Window-Info $hwnd
@@ -823,7 +939,23 @@ function Do-SetWindow($window, $x, $y, $w, $h) {
 }
 function Do-CloseWindow($window) { $ok = [RcDesk]::PostMessage([IntPtr][long]$window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero); return @{ ok = [bool]$ok } }
 function Obs-On($obs) { return ($null -ne $obs) -and [bool]$obs.on }
-function Do-Type($text, $obs) {
+# 按键/打字前确认前台属于目标窗口（同进程的附属对话框如另存为、打开也算，UWP 看内容进程）；
+# 不是就切过去再查一次，还不是就不发——宁可报错，也不能把键打进别的程序
+function Ensure-Target($target) {
+  if ($null -eq $target -or [long]$target -eq 0) { return }
+  $h = [IntPtr][long]$target
+  if (-not [RcDesk]::IsWindow($h)) { throw ('目标窗口 ' + [string]$target + ' 不存在（已经关了？），按键未发送') }
+  if ([RcDesk]::Fits([RcDesk]::GetForegroundWindow(), $h)) { return }
+  [void][RcDesk]::Focus([RcDesk]::FocusTarget($h))
+  Start-Sleep -Milliseconds 150
+  $fg = [RcDesk]::GetForegroundWindow()
+  if ([RcDesk]::Fits($fg, $h)) { return }
+  $w = Window-Info $fg; $who = '无'; if ($null -ne $w) { $who = '「' + [string]$w.title + '」(' + [string]$w.process + ')' }
+  throw ('目标窗口 ' + [string]$target + ' 没能拿到前台，现在的前台是' + $who + '，按键未发送')
+}
+function Do-Type($text, $obs, $target, $delay) {
+  Ensure-Target $target
+  $to = Window-Info ([RcDesk]::GetForegroundWindow())
   $on = Obs-On $obs
   if ($on) { [RcUia]::WatchNone(); Obs-Pre $null $null }
   if ($script:fx) {
@@ -832,11 +964,14 @@ function Do-Type($text, $obs) {
     $shown = ''; if (-not $pw) { $shown = ([string]$text); if ($shown.Length -gt 200) { $shown = $shown.Substring(0, 200) } }
     Emit @{ type = 'type'; text = $shown; password = $pw; length = ([string]$text).Length; rect = (Caret-Or-Focus) }
   }
-  $n = [RcDesk]::TypeText([string]$text)
+  $gap = 10; if ($null -ne $delay) { $gap = [int]$delay }
+  $n = [RcDesk]::TypeText([string]$text, $gap)
   $res = $null; if ($on) { $res = Obs-Post $obs }
-  return @{ ok = $true; chars = $n; foreground = (Window-Info ([RcDesk]::GetForegroundWindow())); obs = $res }
+  return @{ ok = $true; chars = $n; sentTo = $to; foreground = (Window-Info ([RcDesk]::GetForegroundWindow())); obs = $res }
 }
-function Do-Chord($mods, $key, $char, $obs, $label) {
+function Do-Chord($mods, $key, $char, $obs, $label, $target) {
+  Ensure-Target $target
+  $to = Window-Info ([RcDesk]::GetForegroundWindow())
   $on = Obs-On $obs
   if ($on) { [RcUia]::WatchNone(); Obs-Pre $null $null }
   if ($script:fx -and $null -ne $label) { Emit @{ type = 'key'; keys = @($label); rect = (Caret-Or-Focus) } }
@@ -847,7 +982,7 @@ function Do-Chord($mods, $key, $char, $obs, $label) {
   elseif ($null -ne $key) { $k = [uint16]$key }
   [RcDesk]::Chord($m.ToArray(), $k)
   $res = $null; if ($on) { $res = Obs-Post $obs }
-  return @{ ok = $true; foreground = (Window-Info ([RcDesk]::GetForegroundWindow())); obs = $res }
+  return @{ ok = $true; sentTo = $to; foreground = (Window-Info ([RcDesk]::GetForegroundWindow())); obs = $res }
 }
 function Do-UiaTree($window, $depth, $max) {
   $hwnd = if ($null -ne $window -and [long]$window -ne 0) { [IntPtr][long]$window } else { [RcDesk]::GetForegroundWindow() }
@@ -887,15 +1022,15 @@ while ($true) {
       'shot'     { $r = Do-Shot $c.display $c.grid $c.window }
       'zoom'     { $r = Do-Zoom $c.display $c.window $c.ox $c.oy $c.rx $c.ry $c.rw $c.rh }
       'pointer'  { $r = Do-Pointer $c }
-      'type'     { $r = Do-Type $c.text $c.obs }
-      'chord'    { $r = Do-Chord $c.mods $c.key $c.char $c.obs $c.label }
+      'type'     { $r = Do-Type $c.text $c.obs $c.target $c.delay }
+      'chord'    { $r = Do-Chord $c.mods $c.key $c.char $c.obs $c.label $c.target }
       'displays' { $r = @{ ok = $true; displays = (Do-Displays) } }
       'cursor'   { $r = Do-Cursor }
       'windows'  { $r = @{ ok = $true; windows = (Do-Windows) } }
       'active'   { $r = @{ ok = $true; window = (Do-Active) } }
       'processes'{ $r = @{ ok = $true; processes = (Do-Processes) } }
-      'launch'   { $r = Do-Launch $c.file $c.args $c.cwd }
-      'focus_window' { $r = Do-FocusWindow $c.window }
+      'launch'   { $r = Do-Launch $c.file $c.argline $c.cwd $c.obs }
+      'focus_window' { $r = Do-FocusWindow $c.window $c.obs }
       'set_window' { $r = Do-SetWindow $c.window $c.x $c.y $c.w $c.h }
       'close_window' { $r = Do-CloseWindow $c.window }
       'uia_tree' { $r = Do-UiaTree $c.window $c.depth $c.max }
@@ -1116,23 +1251,55 @@ async function doZoom(args, frame) {
 const POINTER = { move: ['move', 1], click: ['click', 1], double_click: ['click', 2], triple_click: ['click', 3], right_click: ['click', 1], scroll: ['scroll', 1] };
 
 // —— 结果确认（动作后自动比对 + 可选预期）——
-// 默认开：点击/滚动/输入/按键/uia_action 做完都附一份「发生了什么」。verify:false 关掉（追求速度时）。
-const VERIFIED = new Set(['click', 'double_click', 'triple_click', 'right_click', 'scroll', 'type', 'key', 'uia_action']);
+// 默认开：点击/滚动/输入/按键/uia_action/launch 做完都附一份「发生了什么」。verify:false 关掉（追求速度时）。
+const VERIFIED = new Set(['click', 'double_click', 'triple_click', 'right_click', 'scroll', 'type', 'key', 'uia_action', 'launch']);
+// 只在带了 expect 时才确认：focus_window 自己就核对到没到前台，平时不必再等界面稳定
+const VERIFIED_ON_EXPECT = new Set(['focus_window']);
+// 带 window 时先确认前台是那个窗口再发（宿主 Ensure-Target），expect 的 window/gone 也按那个程序认
+const TARGETED = new Set(['type', 'key']);
 const EXPECT_KEYS = ['window', 'gone', 'focus', 'value', 'text'];
 // 返回宿主要的 obs 参数（null＝不确认）以及 node 侧自己核对的 changed 预期
 export function obsParams(action, args) {
-  if (!VERIFIED.has(action) || args.verify === false) return { obs: null, wantChanged: undefined };
+  const none = { obs: null, wantChanged: undefined };
+  if (!(VERIFIED.has(action) || VERIFIED_ON_EXPECT.has(action)) || args.verify === false) return none;
   const e = args.expect && typeof args.expect === 'object' ? args.expect : null;
   const hostExpect = {};
   for (const k of EXPECT_KEYS) if (e && e[k] != null && String(e[k]) !== '') hostExpect[k] = String(e[k]).slice(0, 200);
   const hasHost = Object.keys(hostExpect).length > 0;
   const wantChanged = e && typeof e.changed === 'boolean' ? e.changed : undefined;
-  const expectMs = Math.max(500, Math.min(15_000, Number(args.expect_timeout_ms) || 3000));
-  const maxMs = hasHost || wantChanged === true ? expectMs : 2500;
+  if (VERIFIED_ON_EXPECT.has(action) && !hasHost && wantChanged === undefined) return none;
+  // 启动程序慢：窗口常常一两秒后才出来，等得比点击久
+  const launch = action === 'launch';
+  const expectMs = Math.max(500, Math.min(15_000, Number(args.expect_timeout_ms) || (launch ? 5000 : 3000)));
+  const maxMs = hasHost || wantChanged === true ? expectMs : launch ? 5000 : 2500;
   // 一直没变化时等多久才下结论：按键（Ctrl+C 这类本就不改画面）短一点；期望「有变化」就等满预期时长
-  const noChangeMs = wantChanged === true ? expectMs : action === 'key' ? 400 : 800;
-  return { obs: { on: true, maxMs, noChangeMs, ...(hasHost ? { expect: hostExpect } : {}) }, wantChanged };
+  const noChangeMs = wantChanged === true ? expectMs : action === 'key' ? 400 : launch ? 2500 : 800;
+  const target = TARGETED.has(action) ? targetOf(args) : undefined;
+  return { obs: { on: true, maxMs, noChangeMs, ...(hasHost ? { expect: hostExpect } : {}), ...(target ? { target } : {}) }, wantChanged };
 }
+const targetOf = (args) => (args.window != null && Number(args.window) > 0 ? Number(args.window) : undefined);
+
+// 打字逐字发（宿主 TypeText 字间停 TYPE_DELAY_MS；Sleep(10) 在默认计时器精度下实际约 16ms），长文本要按字数放宽超时
+export const TYPE_DELAY_MS = 10;
+export function typeTimeoutMs(text) {
+  const s = String(text ?? '');
+  return Math.max(60_000, s.length * (TYPE_DELAY_MS + 16) * 2 + (s.match(/[\n\t]/g) || []).length * 60 + 20_000);
+}
+
+// launch 的参数数组 → 一条 Windows 命令行（CommandLineToArgvW 的规则）：含空白或引号的加引号，
+// 引号前的反斜杠加倍再转义引号，结尾的反斜杠在收尾引号前加倍
+export function winArg(a) {
+  const s = String(a ?? '');
+  if (s && !/[\s"]/.test(s)) return s;
+  let out = '"', bs = 0;
+  for (const ch of s) {
+    if (ch === '\\') { bs++; continue; }
+    if (ch === '"') { out += '\\'.repeat(bs * 2 + 1) + '"'; bs = 0; continue; }
+    out += '\\'.repeat(bs) + ch; bs = 0;
+  }
+  return out + '\\'.repeat(bs * 2) + '"';
+}
+export const winArgs = (list) => (Array.isArray(list) ? list : list == null ? [] : [list]).map(winArg).join(' ');
 
 const clip = (s, n = 120) => (s == null ? s : String(s).length > n ? String(s).slice(0, n) + '…' : String(s));
 const elBrief = (s) => (s && !s.gone ? { type: s.type, name: clip(s.name, 60), automationId: s.automationId || undefined } : null);
@@ -1152,17 +1319,38 @@ function stateChanges(before, after) {
   return { changes, gone: false };
 }
 
-// 打字后回读：焦点控件现在的内容里有没有刚打的字（取最后一行的最后 40 个字比对，长文本不必整段相等）
-function readback(typed, after) {
+// 宿主读文本控件最多读前 4000 字（TextPattern GetText(4000)）：读满了说明后面还有，看不到的部分不能判对错
+const READ_CAP = 4000;
+// 比对前抹掉编辑器自己加减的东西：空白（自动缩进、Tab 转空格）、弯引号、大小写（Word 句首自动大写）、行首的列表序号（Word 会把「1. 」变成自动编号）
+const squash = (s) => String(s).replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, '').toLowerCase();
+const LIST_MARK = /^\s*(?:\d{1,3}[.)、]|[-*•])\s+/;
+// 打字后回读：刚打的每一段都要在焦点控件的内容里（不只看最后一行——中间丢字、乱序也要发现）。
+// 回车、Tab 都切段：Tab 在表单里会跳到下一个框，前几段留在别的框里。
+// kind：ok 都在 / unchanged 同一个控件、内容和打字前一模一样（没打进去）/ committed 带回车且内容被清空（已提交）/
+//       mismatch 同一个控件内容变了但对不上，或只对上一部分（丢字、重复、乱序）/
+//       elsewhere 焦点换了控件（或打字前读不到）且一段都对不上——字可能打到了别处，判断不了对错
+export function readback(typed, after, before) {
   const text = String(typed ?? '');
   if (!text.trim()) return null;
   if (after?.password) return { password: true };
   if (!after || after.gone || after.value == null) return { ok: null };
-  const norm = (s) => String(s).replace(/\r/g, '');
-  const lines = norm(text).split('\n').filter((l) => l.trim());
-  const tail = (lines[lines.length - 1] || '').slice(-40);
+  const norm = (s) => String(s).replace(/\r\n?/g, '\n');
+  const segs = norm(text).split(/[\n\t]/).map((l) => squash(l.replace(LIST_MARK, ''))).filter(Boolean);
   const value = norm(after.value);
-  return { ok: tail ? value.includes(tail) : null, value: clip(value, 120), enter: /\n/.test(text) };
+  const flat = squash(value);
+  const enter = /[\r\n]/.test(text);
+  const base = { value: clip(value, 120), enter };
+  if (!segs.length) return { ok: null, ...base };
+  const hits = segs.map((l) => flat.includes(l));
+  if (hits.every(Boolean)) return { ok: true, kind: 'ok', ...base };
+  // 单行框里回车把前面几行提交走了、或 Tab 跳到了下一个框：前面的段一段都不在、最后一段完整在
+  if (/[\r\n\t]/.test(text) && hits[hits.length - 1] && hits.slice(0, -1).every((h) => !h)) return { ok: true, kind: 'ok', ...base };
+  if (String(after.value).length >= READ_CAP) return { ok: null, truncated: true, ...base };
+  if (enter && !value.trim()) return { ok: false, kind: 'committed', ...base };
+  const sameEl = Boolean(before && !before.gone && before.value != null && elId(before) === elId(after));
+  if (sameEl && norm(before.value) === value) return { ok: false, kind: 'unchanged', ...base };
+  if (sameEl || hits.some(Boolean)) return { ok: false, kind: 'mismatch', ...base };
+  return { ok: false, kind: 'elsewhere', ...base };
 }
 
 export function buildVerify(action, obs, { typed, wantChanged } = {}) {
@@ -1182,7 +1370,7 @@ export function buildVerify(action, obs, { typed, wantChanged } = {}) {
     focus: focusChanged ? elBrief(obs.focusAfter) : null,
     control: control && (control.gone || control.changes.length) ? control : null,
   };
-  if (action === 'type') v.readback = readback(typed, obs.focusAfter);
+  if (action === 'type') v.readback = readback(typed, obs.focusAfter, obs.focusBefore);
   if (obs.expect || wantChanged !== undefined) {
     const checks = [...(obs.expect?.checks || [])];
     if (wantChanged !== undefined) checks.push({ key: 'changed', want: wantChanged, ok: changed === wantChanged, got: changed });
@@ -1263,8 +1451,9 @@ async function runOne(a, args, key, frame, extra) {
     case 'type': {
       const text = String(args.text == null ? '' : args.text);
       const { obs, wantChanged } = obsParams(a, args);
-      const r = await sendCmd('type', { text, obs }, 60_000);
-      const out = { ok: true, action: a, chars: r.chars, foreground: brief(r.foreground) };
+      // target：发送前确认前台属于这个窗口（宿主 Ensure-Target）；别叫 win——那是指针指令的坐标帧窗口
+      const r = await sendCmd('type', { text, obs, target: targetOf(args), delay: TYPE_DELAY_MS }, typeTimeoutMs(text));
+      const out = { ok: true, action: a, chars: r.chars, sentTo: brief(r.sentTo), foreground: brief(r.foreground) };
       const verify = buildVerify(a, r.obs, { typed: text, wantChanged });
       if (verify) out.verify = verify;
       return out;
@@ -1272,8 +1461,8 @@ async function runOne(a, args, key, frame, extra) {
     case 'key': {
       const k = parseKeys(args.keys);
       const { obs, wantChanged } = obsParams(a, args);
-      const r = await sendCmd('chord', { mods: k.mods, key: k.key, char: k.char, obs, label: keyLabels(args.keys) }, obs ? 40_000 : 20_000);
-      const out = { ok: true, action: a, keys: String(args.keys), foreground: brief(r.foreground) };
+      const r = await sendCmd('chord', { mods: k.mods, key: k.key, char: k.char, obs, label: keyLabels(args.keys), target: targetOf(args) }, obs ? 40_000 : 20_000);
+      const out = { ok: true, action: a, keys: String(args.keys), sentTo: brief(r.sentTo), foreground: brief(r.foreground) };
       const verify = buildVerify(a, r.obs, { wantChanged });
       if (verify) out.verify = verify;
       return out;
@@ -1290,20 +1479,30 @@ async function runOne(a, args, key, frame, extra) {
     case 'active_window': { const r = await sendCmd('active'); return { window: r.window || null }; }
     case 'processes': { const r = await sendCmd('processes'); return { processes: r.processes || [] }; }
     case 'launch': {
+      const { obs, wantChanged } = obsParams(a, args);
       const r = await sendCmd('launch', {
         file: String(args.file || ''),
-        args: Array.isArray(args.args) ? args.args.map(String) : [],
+        argline: winArgs(Array.isArray(args.args) ? args.args.map(String) : []),
         cwd: args.cwd ? String(args.cwd) : undefined,
-      }, 30_000);
-      return { ok: true, pid: r.pid, file: r.file };
+        obs,
+      }, obs ? 45_000 : 30_000);
+      // pid 为空＝网址/协议/已在运行的单实例程序：系统交给了别的进程，没有新进程可报
+      const out = { ok: true, action: a, file: r.file, pid: r.pid ?? null, ...(r.activated ? { activated: true } : {}), foreground: brief(r.foreground) };
+      const verify = buildVerify(a, r.obs, { wantChanged });
+      if (verify) out.verify = verify;
+      return out;
     }
     case 'focus_window': {
-      const r = await sendCmd('focus_window', { window: Number(args.window) });
+      const { obs, wantChanged } = obsParams(a, args);
+      const r = await sendCmd('focus_window', { window: Number(args.window), obs }, obs ? 40_000 : 20_000);
       if (!r.focused) {
         const fg = r.foreground;
         throw new Error(`没能把窗口提到前台（Windows 前台锁拦下了；当前前台是「${fg?.title || fg?.process || '未知'}」）。可以直接点一下目标窗口的标题栏来激活它。`);
       }
-      return { ok: true, window: r.window || null };
+      const out = { ok: true, action: a, window: r.window || null };
+      const verify = buildVerify(a, r.obs, { wantChanged });
+      if (verify) out.verify = verify;
+      return out;
     }
     case 'set_window': {
       const r = await sendCmd('set_window', {
@@ -1362,6 +1561,16 @@ async function waitForWindow(args) {
   }
 }
 
+// batch 里这一步做完要不要停：后面的步骤是照着「它成功了」写的，这一步没达到目的就不能接着做
+export function batchStop(act, r) {
+  if (r?.verify?.expect && !r.verify.expect.ok) return '预期不符，批处理在这一步停下';
+  // 打字回读对不上：接着做（比如 Ctrl+S 保存）会把错的内容落下来
+  const rb = act === 'type' ? r?.verify?.readback : null;
+  if (rb?.kind === 'mismatch') return '回读和输入对不上（可能丢字或乱序），批处理在这一步停下';
+  if (rb?.kind === 'unchanged') return '回读显示字没打进去，批处理在这一步停下';
+  return null;
+}
+
 // 一次调用跑一串动作（官方 computer_batch 同语义）：
 //   · 批里所有坐标都按【调用前】最近那张截图；批里中途截的图不改变本批的坐标基准，
 //     批跑完后最后一张截图才成为下一次调用的基准；
@@ -1401,11 +1610,8 @@ async function runBatch(args, key, extra) {
         steps.push({ step: i + 1, action: act, ok: true, region: r.region });
       } else {
         steps.push({ step: i + 1, ...r, action: act });
-        // 预期不符＝这一步没达到目的：后面的步骤是照着「它成功了」写的，不能接着做
-        if (r.verify?.expect && !r.verify.expect.ok) {
-          steps[steps.length - 1].error = '预期不符，批处理在这一步停下';
-          break;
-        }
+        const stop = batchStop(act, r);
+        if (stop) { steps[steps.length - 1].error = stop; break; }
       }
     } catch (e) {
       steps.push({ step: i + 1, action: act, error: String(e?.message || e) });

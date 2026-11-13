@@ -207,19 +207,20 @@ class HarnessInstance {
     req.pipe(upstream);
   }
 
-  // M8：给 harness 发一个带令牌的请求，2xx 算成功。
-  request(method, pathname, body) {
+  // M8：给 harness 发一个带令牌的请求，2xx 算成功。opts：headers 多带的请求头（拉取请求事件 deliverPrEvent、会话协作 familyCall 用；
+  // 令牌头排在后面，调用方盖不掉）、timeout / timeoutMs 时限（默认 3 秒）。
+  request(method, pathname, body, { headers: more = {}, timeout, timeoutMs } = {}) {
     return new Promise((resolve) => {
       const payload = body === undefined ? null : JSON.stringify(body ?? {});
       const r = http.request(
         {
-          host: HARNESS_HOST, port: this.port, path: pathname, method, timeout: 3000,
-          headers: { ...this.headers(), ...(payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}) },
+          host: HARNESS_HOST, port: this.port, path: pathname, method, timeout: timeout || timeoutMs || 3000,
+          headers: { ...more, ...this.headers(), ...(payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}) },
         },
         (res) => {
           let buf = '';
           res.on('data', (c) => { buf += c; });
-          res.on('end', () => { let json = null; try { json = JSON.parse(buf); } catch {} resolve({ ok: (res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300, json }); });
+          res.on('end', () => { let json = null; try { json = JSON.parse(buf); } catch {} resolve({ ok: (res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300, status: res.statusCode || 0, json }); });
         },
       );
       r.on('error', () => resolve({ ok: false, json: null }));
@@ -464,6 +465,27 @@ async function instanceFor(ctx) {
   return t;
 }
 
+// ── 拉取请求自动修复的事件（2026-11-02）─────────────────────────────────────────
+// src/runtime/pr-monitor.mjs 的后台扫描发现 CI 失败 / 合并冲突 / 新评审意见，经 src/routes/agent-pr.mjs 登记的 deliver 调到这里：
+// 把 <ci-monitor-event> 推给这个人的 harness 实例（没在跑就拉起来），由它在那个会话里以 harness 片段开一轮（harness/server/pr.ts）。
+// 请求另带发给这个实例的同机凭据（BRIDGE_PLUGIN_SECRET，见 deviceEnv）：浏览器经 /api/harness 反代也打得到同一个路径，
+// 但拿不到这把凭据——伪造不出「bridge 发来的事件」。回 { ok } / { ok:false, busy } / { ok:false, gone } / { ok:false, reason }。
+export async function deliverPrEvent(ctx, sessionId, text) {
+  if (!agentEnabled('dimensio')) return { ok: false, reason: 'dimensio 未启用' };
+  if (ctx.kind === 'user' && !ctx.allowDimensio) return { ok: false, reason: '这个账号没有 dimensio 的使用权限' };
+  const inst = await instanceFor(ctx);
+  if (!inst || (inst === admin && !adminDataSettled)) return { ok: false, busy: true, reason: 'dimensio 实例暂时起不来' };   // 满了 / 在搬数据：当忙，下次扫描再来
+  if (!(await inst.ensure())) return { ok: false, reason: 'harness 启动失败' };
+  inst.lastUsed = Date.now();
+  const secret = deviceEnv(ctx.kind === 'user' ? ctx.user : null).BRIDGE_PLUGIN_SECRET;
+  const r = await inst.request('POST', '/api/pr/event', { sessionId, text }, { headers: { 'x-bridge-event-secret': secret }, timeout: 15_000 });
+  if (r.ok) return { ok: true };
+  const code = r.json && r.json.code;
+  if (r.status === 409 || r.status === 503) return { ok: false, busy: true, reason: (r.json && r.json.error) || '会话正在忙' };
+  if (r.status === 404 && code === 'session_not_found') return { ok: false, gone: true, reason: '会话已不存在' };
+  return { ok: false, reason: (r.json && r.json.error) || (r.status ? `harness 回 ${r.status}` : '连不上 harness') };
+}
+
 // bridge 进程内其他直连 harness 的调用方用：harness 的 API 一律只认令牌（S1），不再放行「回环 + 无 Origin」。
 export function harnessInternalHeaders() { return admin.headers(); }
 // 所有在跑的实例（预览子域路由要挨个问它们的服务注册表）。
@@ -478,7 +500,7 @@ export function adminDataDir() { return ADMIN_DATA.dataDir; }
 // M15（kimi K32）：远端的凭证不往 harness 带——bridge 的 Authorization / Cookie 与地址栏里的 ?token=（GET 资源用）只在 bridge
 // 这一层鉴权时用，harness 只认进程内能力令牌、根本不读它们。以前原样转过去：harness 或它起的工具哪天把请求头 / URL 记进
 // 日志、诊断包，管理员令牌就跟着落了盘。
-const STRIP_HEADERS = ['authorization', 'cookie', 'proxy-authorization'];
+const STRIP_HEADERS = ['authorization', 'cookie', 'proxy-authorization', 'x-dimensio-family-call'];
 export function upstreamRequest(reqHeaders, url, token = ADMIN_TOKEN) {
   let search = url.search || '';
   if (url.searchParams?.has('token')) {
@@ -494,6 +516,25 @@ export function upstreamRequest(reqHeaders, url, token = ADMIN_TOKEN) {
   delete headers[INTERNAL_TOKEN_HEADER];
   headers[INTERNAL_TOKEN_HEADER] = token;
   return { path: url.pathname.slice(PREFIX.length) + search, headers };
+}
+
+// 会话协作（bridge 里的 Claude ⇄ dimensio，核心 runtime/session-family.mjs 经 getModule('dimensio').familyCall 调）：
+// 带令牌直连这个身份的 harness 实例的 /api/family/<op>（harness/server/family-routes.ts）。成员身份只会落到他自己的实例
+//（instanceFor 按 ctx.key 选），实例没起就拉起来——消息要送到。x-dimensio-family-call 只有这里发得出：反代转发浏览器请求时
+// 剥掉它（STRIP_HEADERS），所以浏览器里的页面冒充不了「Claude 会话发来的消息」。
+const FAMILY_CALL_HEADER = 'x-dimensio-family-call';
+const FAMILY_OPS = new Set(['spawn', 'deliver', 'state', 'info']);
+export async function familyCall(ctx, op, body, timeoutMs = 30_000) {
+  if (!FAMILY_OPS.has(op)) throw new Error('unknown family op: ' + op);
+  if (!agentEnabled('dimensio') || !ctx || !ctx.allowDimensio) throw new Error('dimensio 没开，或这个账号没有 dimensio');
+  const inst = await instanceFor(ctx);
+  if (!inst) throw new Error(`同时在用 dimensio 的人太多了（上限 ${TENANT_MAX}），稍后再试`);
+  if (inst === admin && !adminDataSettled) throw new Error('dimensio 正在把旧数据复制到新的数据目录，稍后再试');
+  if (!(await inst.ensure())) throw new Error('dimensio 没起来');
+  inst.lastUsed = Date.now();
+  const r = await inst.request('POST', '/api/family/' + op, body ?? {}, { timeoutMs, headers: { [FAMILY_CALL_HEADER]: '1' } });
+  if (!r.json || typeof r.json !== 'object') throw new Error(`dimensio 没答（${r.status ? 'HTTP ' + r.status : '连不上'}）`);
+  return r.json;   // { ok, ... }：拒收 / 关系不对是 4xx + { ok:false, error }
 }
 
 // 2026-10-22：两个嵌入页（deepseek / zhipu）已删除，连同它们的免鉴权放行（STATIC_UI_RE）——

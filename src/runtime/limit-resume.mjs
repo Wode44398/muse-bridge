@@ -26,12 +26,19 @@ const GIVE_UP_MS = 6 * 3600_000;         // 官方 FU=21600s：过了重置时�
 const MAX_ATTEMPTS = 3;                  // 官方：attempt<3
 const SAME_WINDOW_MS = 3600_000;         // 官方 nW：重置时刻相差 1 小时以内算同一个限额窗口
 const jitter = () => 2000 + Math.floor(Math.random() * 6000);   // 官方 xU：2–8s
+const RECHECK_MS = 5 * 60_000;           // 等待期间每隔这么久重看一次号池：别的号先恢复了就提前续
+
+// 号池探针（claude.mjs 注入 account-router.poolAvailableAt）：model → 号池里最早有号可用的时刻（毫秒，0 = 不适用）。
+// 官方只有一个号，等的就是它自己的重置点；bridge 有号池，撞墙时全员用尽也该等「最先恢复的那个号」。
+let poolAt = () => 0;
+export function setLimitResumePool(fn) { poolAt = typeof fn === 'function' ? fn : () => 0; }
+const poolTarget = (e) => { try { const t = Number(poolAt(e.model)) || 0; return t > 0 ? t : 0; } catch { return 0; } };
 
 // 续跑时发给模型的那句话（官方 afterUsageLimit 原文的中文版）。
 export const RESUME_TEXT = '刚才工作时撞到了用量限额，现在已经重置。请从中断的地方继续。';
 
 let file = '';
-// entries: `${key}|${sid}` → { key, sid, type, resetsAt, optedIn, armed, attempt, fireAt, firing, replay }
+// entries: `${key}|${sid}` → { key, sid, type, resetsAt, model, optedIn, armed, attempt, fireAt, firing, replay }
 // prefs:   key → 旧版「勾选框记成默认」的选择（2026-10-20 起默认值改由设置 autoContinueOnLimit 给，
 //          调用方带 defaultOn；这份只在调用方没带时兜底，不再写入）
 let state = { entries: {}, prefs: {} };
@@ -79,19 +86,25 @@ const defaultOptIn = (key, defaultOn) => (typeof defaultOn === 'boolean' ? defau
 const liveTurn = (key, sid) => { const g = findGenBySession(key, sid); return !!(g && !g.done); };
 
 // 什么时候续（官方 S 里的 u/d 算法）：首次 = 重置时刻 + 90s + 抖动；再次尝试且重置时刻已过 = 至少 45s 后。
+// 「重置时刻」取撞墙那个号的重置点与号池里最早可用时刻中较早的一个。
+function resumeTarget(e) {
+  const p = poolTarget(e);
+  return p && p < e.resetsAt ? p : e.resetsAt;
+}
 function computeFireAt(e) {
   const now = Date.now();
-  const base = e.resetsAt + (e.attempt === 0 ? FIRST_FIRE_FLOOR_MS : 0);
+  const target = resumeTarget(e);
+  const base = target + (e.attempt === 0 ? FIRST_FIRE_FLOOR_MS : 0);
   const d = Math.max(0, base - now) + jitter();
-  return now + (e.attempt > 0 && e.resetsAt <= now ? Math.max(d, RETRY_FLOOR_MS) : d);
+  return now + (e.attempt > 0 && target <= now ? Math.max(d, RETRY_FLOOR_MS) : d);
 }
 function schedule(k) {
   clearTimeout(timers.get(k)); timers.delete(k);
   const e = state.entries[k];
   if (!e || !e.armed) return;
   if (!e.fireAt) e.fireAt = computeFireAt(e);
-  // setTimeout 上限 ~24.8 天；5 小时窗口远够不着，保险起见分段睡
-  const wait = Math.min(Math.max(0, e.fireAt - Date.now()), 2 ** 31 - 1);
+  // 分段睡：每 RECHECK_MS 醒一次重看号池（fire 里没到点会重算再排）
+  const wait = Math.min(Math.max(0, e.fireAt - Date.now()), RECHECK_MS);
   const t = setTimeout(() => { timers.delete(k); fire(k).catch((err) => console.log('[limit-resume] fire failed:', err && err.message)); }, wait);
   if (t.unref) t.unref();
   timers.set(k, t);
@@ -100,7 +113,18 @@ function schedule(k) {
 async function fire(k) {
   const e = state.entries[k];
   if (!e || !e.armed) return;
-  if (Date.now() < e.fireAt - 1000) { schedule(k); return; }
+  if (Date.now() < e.fireAt - 1000) {
+    // 还没到点：号池里有号比原计划更早恢复（撞墙后才读到别的号的新额度）→ 提前
+    const next = computeFireAt(e);
+    if (next < e.fireAt - 60_000) {
+      e.fireAt = next;
+      save();
+      publish(e);
+      console.log(`[limit-resume] ${e.sid.slice(0, 8)} a pooled account frees up sooner — resuming at ${new Date(next).toISOString()}`);
+    }
+    schedule(k);
+    return;
+  }
   if (Date.now() - e.resetsAt >= GIVE_UP_MS) return drop(k, 'past the 6h window');
   if (!e.optedIn) { e.armed = false; save(); publish(e); return; }
   // 有一轮正在跑（人自己先接着做了 / 别的设备发了消息）——那一轮开跑时本该把这条作废，这里兜底
@@ -134,7 +158,7 @@ async function fire(k) {
 // 一轮以「撞限额」收尾。type = rate_limit_info.rateLimitType；resetsAt 毫秒；replay = 撞墙那轮的 /api/chat 请求
 //（headers/url/body）；defaultOn = 设置「限额重置后自动继续」（新撞的墙默认勾不勾）。
 // 返回给前端的状态；不适用（不是 5 小时 / 没有重置时刻 / 没有重放身份）返回 null。
-export function noteLimitTurn(key, sid, { type, resetsAt, replay, defaultOn }) {
+export function noteLimitTurn(key, sid, { type, resetsAt, replay, defaultOn, model }) {
   load();
   const k = K(key, sid);
   const prev = state.entries[k];
@@ -144,7 +168,7 @@ export function noteLimitTurn(key, sid, { type, resetsAt, replay, defaultOn }) {
   const attempt = same ? prev.attempt || 0 : 0;
   const optedIn = same ? prev.optedIn !== false : defaultOptIn(key, defaultOn);
   const e = {
-    key, sid, type, resetsAt, optedIn, attempt,
+    key, sid, type, resetsAt, model: model || '', optedIn, attempt,
     armed: optedIn && attempt < MAX_ATTEMPTS && Date.now() - resetsAt < GIVE_UP_MS,
     fireAt: 0, firing: false, replay, at: Date.now(),
   };
@@ -199,6 +223,8 @@ export function setLimitAutoContinue(key, sid, on) {
 
 // 单测用：不等计时器，立刻走一遍到点逻辑
 export function _fireForTest(key, sid) { load(); const e = state.entries[K(key, sid)]; if (e) e.fireAt = Date.now(); return fire(K(key, sid)); }
+// 单测用：照计时器醒来那样走一遍（没到点 = 重看号池、可能提前）
+export function _wakeForTest(key, sid) { load(); return fire(K(key, sid)); }
 
 // 服务启动：把落盘的待续会话重新排上计时器；过期的清掉。
 export function initLimitResume() {

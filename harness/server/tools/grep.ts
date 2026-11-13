@@ -101,7 +101,7 @@ export const grepTool: Tool = {
 
     // S4（#37①）：递归遍历逐个过统一的凭据判定——以前 walk 不经 secret guard，
     // Read 拦得住的 .env、deploy/.ssh/id_rsa，一次 Grep 就原文吐出来。
-    const skip = (abs: string) => readVerdict(abs, ctx.sandbox.root) !== null;
+    const skip = (abs: string) => readVerdict(abs, ctx.sandbox.root, { bypass: ctx.sandbox.bypassing }) !== null;
     // U5（#57）：path 指向单个文件时就搜这个文件（以前对文件调 readdir，拿不到条目，静默回「No matches.」——
     // MiMo 因此误判成「不支持中文文件名」还存成了记忆）；path 不存在时明说，绝不回空结果。
     const baseStat = await fs.stat(base).catch(() => null);

@@ -10,7 +10,10 @@
 //     而实际没提交。
 //   · phone_devices = 就绪自检；phone_confirm = 子 agent 也能向用户确认高危动作。
 //
-// makePhoneControlMcp({genKey, getGen, originDevice}) 把工具绑定到一个 caller（只下发到这个人自己的手机）。
+//   · 【会话互斥（11-08）】每条命令带 owner（会话 id，主线程与子 agent 共用）：别的会话正在动这台手机时
+//     动作被通道拒绝并报出对方；编号表被别人的读屏刷过时按编号点也会被拒（runtime/phone-control.mjs）。
+//
+// makePhoneControlMcp({genKey, getGen, originDevice, owner}) 把工具绑定到一个 caller（只下发到这个人自己的手机）。
 
 import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
@@ -49,7 +52,9 @@ export function fmtObservation(r, tag) {
   const wins = Array.isArray(r?.windows) ? r.windows : [];
   const head = [tag, '前台 ' + (r?.package || '?'), '屏幕 ' + (r?.screenW || '?') + '×' + (r?.screenH || '?')].filter(Boolean);
   if (r?.ime && r.ime.visible) head.push('键盘已弹出' + (r.ime.bounds ? '（占 @' + r.ime.bounds.join(',') + '）' : ''));
-  if (r?.changed === false) head.push('⚠ 画面和动作前一样，这一下可能没生效');
+  // changed 只比较元素清单（网页 / 画布 / 视频的内容不在清单里）：带了截图就让模型以截图为准，别把「清单没变」说成「画面没变」
+  if (r?.changed === false) head.push(r.screenshot ? '⚠ 元素清单和动作前一样，可能没生效（网页、画布、视频的内容不在清单里，以截图为准）' : '⚠ 画面和动作前一样，这一下可能没生效（要确认请看截图）');
+  else if (r?.changed === true && r.changedBy === 'pixels') head.push('元素清单没变，但截图内容变了（网页/画布类内容）');
   if (r?.settle && r.settle.quiet === false) head.push('（画面还在动，可能没加载完）');
   const lines = [head.join(' · ')];
   if (wins.length > 1) lines.push('窗口（上层在前）：' + wins.map((w) => 'w' + w.i + ' ' + winDesc(w)).join('；'));
@@ -94,12 +99,16 @@ function showShotToUser(resolveGen, b64) {
 // —— 工具层硬确认闸 ——
 // 先走那台手机的悬浮胶囊 ✕/√ 卡片；悬浮壳没开/通道异常 → 站内 AskUserQuestion（等用户在任一端作答）。
 const CONFIRM = '确认执行';
-async function confirmDanger({ genKey, deviceId, resolveGen }, header, question, detail) {
+async function confirmDanger({ genKey, deviceId, resolveGen, owner, ownerLabel }, header, question, detail) {
   if (deviceId) {
     try {
-      const r = await requestPhoneControl({ genKey, deviceId, op: 'confirm', args: { title: header, question, detail }, timeoutMs: 150_000 });
+      const r = await requestPhoneControl({ genKey, deviceId, op: 'confirm', args: { title: header, question, detail }, timeoutMs: 150_000, owner, ownerLabel });
       if (r && typeof r.confirmed === 'boolean') return r.confirmed;
-    } catch { /* 回退站内确认 */ }
+    } catch (e) {
+      // 这台正被别的会话操控：别回退站内确认（用户点了确认也发不出去），直接把占用原因交回模型。
+      if (/正被另一个会话/.test(String(e?.message))) throw e;
+      /* 其余回退站内确认 */
+    }
   }
   const gen = resolveGen();
   if (!gen || gen.done) throw new Error('当前没有活跃的对话流，无法弹出确认——请在对话里发起该操作。');
@@ -141,28 +150,92 @@ export function fmtReadiness(s) {
     s.overlay === false ? '△ 没有悬浮窗权限（胶囊进度/确认卡用不了，会改在聊天里确认）' : '',
   ].filter(Boolean);
   const extra = [s.foreground ? '前台 ' + s.foreground : '', s.screenW ? '屏幕 ' + s.screenW + '×' + s.screenH : '', s.appVersion ? 'app v' + s.appVersion : ''].filter(Boolean).join(' · ');
-  return '  ' + parts.join('\n  ') + (extra ? '\n  ' + extra : '');
+  const info = fmtDeviceInfo(s);
+  return '  ' + parts.join('\n  ') + (extra ? '\n  ' + extra : '') + (info ? '\n  ' + info : '');
+}
+// 电量 / 存储 / 网络（新 apk 的 status 才有；旧 apk 缺字段就整行不显示）
+const PLUG = { ac: '充电器', usb: 'USB', wireless: '无线充', dock: '底座' };
+const NET = { wifi: 'Wi-Fi', cellular: '移动数据', ethernet: '有线网', vpn: 'VPN', none: '没联网', other: '其他网络' };
+const gb = (n) => { const v = Number(n) / 1e9; return v >= 10 ? String(Math.round(v)) : String(Math.round(v * 10) / 10); };
+export function fmtDeviceInfo(s) {
+  const out = [];
+  const b = s && s.battery;
+  if (b && Number.isFinite(b.level) && b.level >= 0) {
+    const how = b.full ? '已充满' : b.charging ? '充电中' + (PLUG[b.plugged] ? '·' + PLUG[b.plugged] : '') : '';
+    out.push('电量 ' + b.level + '%' + (how ? '（' + how + '）' : '') + (b.saver ? '（省电模式开着）' : '') + (b.tempC >= 42 ? '（电池 ' + Math.round(b.tempC) + '°C 偏热）' : ''));
+  }
+  const st = s && s.storage;
+  if (st && st.totalBytes > 0 && st.freeBytes >= 0) out.push('存储 剩余 ' + gb(st.freeBytes) + '/' + gb(st.totalBytes) + ' GB');
+  const n = s && s.network;
+  if (n && n.type) out.push('网络 ' + (NET[n.type] || n.type) + (n.vpn && n.type !== 'vpn' ? '（经 VPN）' : '') + (n.type !== 'none' && n.metered ? '（按流量计费）' : '') + (n.type !== 'none' && n.validated === false ? '（连上了但上不了网）' : ''));
+  return out.join(' · ');
 }
 
-export function buildPhoneControlTools(genKey, getGen, originDevice) {
+// 租约被别的会话撞上时给对方看的一句话：这一轮用户说了什么（去掉注入的标签块）+ 会话 id 前 8 位。
+function turnBrief(gen) {
+  let t = gen && gen.userText;
+  if (Array.isArray(t)) t = t.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join(' ');
+  t = String(t || '').replace(/<([a-z][\w-]*)[^>]*>[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  return t.length > 24 ? t.slice(0, 24) + '…' : t;
+}
+// 新 apk 的打开类动作自己会等前台切换（回包带 foreground）：认出来之后就不再先查一次前台（按 设备@app 版本记）。
+const OPEN_WAITS = new Set();
+
+export function buildPhoneControlTools(genKey, getGen, originDevice, owner) {
   // originDevice 可以是函数：停放的 CLI 跨轮复用，每次调用现取「这条消息发自哪台手机」
   const originOf = typeof originDevice === 'function' ? originDevice : () => originDevice;
   const resolveGen = () => (getGen && getGen()) || getCurrentGen(genKey);
+  // owner = 会话 id（设备租约 / 编号归属认它）；拿不到时用本实例的随机 id，至少本实例内一致。
+  const fallbackOwner = 'mcp-' + randomBytes(4).toString('hex');
+  const ownerOf = () => { const o = typeof owner === 'function' ? owner() : owner; return o ? String(o) : fallbackOwner; };
+  const ownerLabelOf = () => { const b = turnBrief(resolveGen()); const sid = ownerOf().slice(0, 8); return b ? '「' + b + '」（' + sid + '）' : sid; };
+  const who = () => ({ owner: ownerOf(), ownerLabel: ownerLabelOf() });
   // 本轮锁定的设备（buildPhoneControlTools 每次 query 重建 = 每轮一份；子 agent 与主线程共用同一 MCP 实例）。
   const st = { deviceId: null };
   const pick = (want) => {
-    const r = resolveDevice(genKey, { want, sticky: st.deviceId, origin: originOf() });
+    const r = resolveDevice(genKey, { want, sticky: st.deviceId, origin: originOf(), owner: ownerOf() });
     if (r.error) throw new Error(r.error);
     const switched = st.deviceId && st.deviceId !== r.device.id;
     st.deviceId = r.device.id;
-    return { d: r.device, switched };
+    return { d: r.device, switched, via: r.via };
   };
   const tagOf = (d) => '【' + (d.name || d.model || deviceHandle(d)) + '】';
-  // 发给选定设备；返回 {r, d, tag, note}。note 在换台时提醒「编号作废」。
+  // 发给选定设备；返回 {r, d, tag, note}。note 在换台时提醒「编号作废」、沿用上次那台时说明一句。
   const run = async (op, args, timeoutMs, want) => {
-    const { d, switched } = pick(want);
-    const r = await requestPhoneControl({ genKey, deviceId: d.id, op, args, timeoutMs });
-    return { r, d, tag: tagOf(d), note: switched ? '（已切换到 ' + deviceLabel(d) + '，之前那台的元素编号作废）' : '' };
+    const { d, switched, via } = pick(want);
+    const r = await requestPhoneControl({ genKey, deviceId: d.id, op, args, timeoutMs, ...who() });
+    const note = switched ? '（已切换到 ' + deviceLabel(d) + '，之前那台的元素编号作废）'
+      : via === 'last' ? '（多台在线，沿用本会话上次操作的 ' + deviceLabel(d) + '；不是这台就传 device 换）' : '';
+    return { r, d, tag: tagOf(d), note };
+  };
+  // 打开类动作（open_url / open_settings / share）：旧 apk 发完 intent 立刻看画面，常常还是动作前的界面。
+  // 先记下动作前的前台；回包前台没变就隔 700ms 补看一次（最多 4 次），还没变就在结果头部明说「以截图为准」。
+  const openAction = async (msg, op, args, a) => {
+    const mode = a.observe || 'both';
+    let fgBefore = null, d0 = null;
+    try { d0 = pick(a.device).d; } catch { /* 交给下面的 run 报错 */ }
+    const known = d0 && OPEN_WAITS.has(d0.id + '@' + d0.appCode);
+    if (mode !== 'none' && !known) {
+      try { const s = await run('status', {}, 10_000, a.device); fgBefore = (s.r && s.r.foreground) || null; } catch { /* 旧 apk 没有 status */ }
+    }
+    const pack = await run(op, { ...args, ...obsArgs(a) }, 30_000, a.device);
+    let r = pack.r || {};
+    let warn = '';
+    if (typeof r.foreground === 'boolean') {
+      OPEN_WAITS.add(pack.d.id + '@' + pack.d.appCode);
+      if (r.foreground === false) warn = '⚠ 等了 ' + Math.round((r.waitMs || 0) / 100) / 10 + ' 秒前台还是' + (r.package ? ' ' + r.package : '没换') + '：目标页面可能被选择器或系统框挡住，或就在原 app 里打开，以截图为准';
+    } else if (mode !== 'none' && hasObservation(r)) {
+      const stuck = (x) => !x.package || x.package === '?' || (fgBefore && x.package === fgBefore);
+      for (let i = 0; i < 4 && stuck(r); i++) {
+        await sleep(700);
+        try {
+          const nx = await run('screen', { format: mode, grid: true, som: true, clean: false }, 30_000, a.device);
+          if (nx.r && typeof nx.r === 'object') { r = { ...r, ...nx.r }; delete r.changed; }
+        } catch { break; }
+      }
+      if (stuck(r)) warn = '⚠ 目标页面尚未到前台（前台' + (r.package && r.package !== '?' ? '还是 ' + r.package : '读不到') + '；可能被选择器或系统框挡住、还在加载，或就在原 app 里打开），以截图为准';
+    }
+    return actionResult(msg + (warn ? '——' + warn : ''), { ...pack, r });
   };
   // 经验带回：按包名每轮一次，防刷屏。
   const surfaced = new Set();
@@ -180,7 +253,7 @@ export function buildPhoneControlTools(genKey, getGen, originDevice) {
     const { r, tag, note } = pack;
     const pre = msg + (note ? ' ' + note : '');
     if (hasObservation(r)) { const out = obsContent(r, tag, pre); surfaceExp(out, r.package); return out; }
-    return txt(tag + ' ' + pre + (r && r.changed === false ? '（⚠ 画面和动作前一样，可能没生效）' : ''));
+    return txt(tag + ' ' + pre + (r && r.changed === false ? '（⚠ 元素清单和动作前一样，可能没生效——网页、画布、视频的内容不在清单里，要确认请看截图）' : ''));
   };
 
   const device = z.string().optional().describe('操作哪台手机：phone_devices 列出的句柄或名字。只有一台在线、或本轮已选定时可省略');
@@ -190,19 +263,23 @@ export function buildPhoneControlTools(genKey, getGen, originDevice) {
     // ———————————————————————— 设备与就绪自检 ————————————————————————
     {
       name: 'phone_devices',
-      description: '列出开着「手机操控」的手机，以及每台现在能不能用：无障碍（读屏/点按）、截图、Bridge 输入法、是否亮屏解锁、前台 app。开始一个手机任务前、或操作失败想查原因时调用。标「本轮目标」的就是不传 device 时会操作的那台。',
+      description: '列出开着「手机操控」的手机，以及每台现在能不能用：无障碍（读屏/点按）、截图、Bridge 输入法、是否亮屏解锁、前台 app，还有电量、存储、网络（问这些先用它，别切到设置页去读屏），以及是否正被别的会话操控。开始一个手机任务前、或操作失败想查原因时调用。标「本轮目标」的就是不传 device 时会操作的那台。',
       schema: {},
       handler: async () => {
         try {
           const on = listDevices(genKey);
           if (!on.length) return txt('没有手机开着操控。请让用户在手机 app 的 设置 › 手机操控 里打开（读屏/点按还需要授予无障碍）。');
-          const target = resolveDevice(genKey, { sticky: st.deviceId, origin: originOf() });
+          const me = ownerOf();
+          const target = resolveDevice(genKey, { sticky: st.deviceId, origin: originOf(), owner: me });
           const rows = await Promise.all(on.map(async (d) => {
             let s = null;
-            try { s = await requestPhoneControl({ genKey, deviceId: d.id, op: 'status', args: {}, timeoutMs: 10_000 }); }
+            try { s = await requestPhoneControl({ genKey, deviceId: d.id, op: 'status', args: {}, timeoutMs: 10_000, ...who() }); }
             catch (e) { if (!/未知操作/.test(String(e?.message))) s = { error: String(e?.message || e) }; }
             const mark = target.device && target.device.id === d.id ? (d.id === originOf() ? '  ← 本轮目标（用户正在用它发消息）' : '  ← 本轮目标') : '';
-            const head = '「' + d.handle + '」' + d.label + mark;
+            const busy = d.lease && d.lease.owner !== me
+              ? '\n  ⚠ 正被另一个会话' + (d.lease.label ? '〈' + d.lease.label + '〉' : '') + '操控（' + Math.round(d.lease.agoMs / 1000) + ' 秒前有动作）——它做完或约 90 秒没动静前，这台的动作会被拦下'
+              : '';
+            const head = '「' + d.handle + '」' + d.label + mark + busy;
             if (s && s.error) return head + '\n  ✗ 查询失败：' + s.error;
             return head + '\n' + fmtReadiness(s || (d.ready ? { ...d.ready } : null));
           }));
@@ -223,7 +300,11 @@ export function buildPhoneControlTools(genKey, getGen, originDevice) {
           const r = pack.r || {};
           if (r.pkg) linkAppPkg(a.app, r.pkg);
           let msg = '已启动 ' + (r.label || a.app) + (r.pkg ? '（' + r.pkg + '）' : '');
-          if (r.foreground === false) msg += '——⚠ 等了 ' + Math.round((r.waitMs || 0) / 100) / 10 + ' 秒它还没到前台（被系统拦了后台启动 / 有别的界面盖着 / 还在加载），看下面的画面判断';
+          if (r.foreground === false) {
+            msg += hasObservation(r) && (!r.package || r.package === '?')
+              ? '——⚠ 读不到当前前台（可能被系统弹框盖住），没法确认它到没到前台，请看截图'
+              : '——⚠ 等了 ' + Math.round((r.waitMs || 0) / 100) / 10 + ' 秒它还没到前台（被系统拦了后台启动 / 有别的界面盖着 / 还在加载），看下面的画面判断';
+          }
           const out = actionResult(msg, pack);
           // open_app 知道 名字↔包名：按名字再兜一次经验（读屏按包名反查要求先登记过包名）。
           if (!(r.pkg && surfaced.has(nrm(r.pkg))) && !surfaced.has(nrm(a.app))) {
@@ -241,19 +322,19 @@ export function buildPhoneControlTools(genKey, getGen, originDevice) {
       name: 'phone_open_url',
       description: '用默认浏览器/对应 app 打开网址（http/https，或 geo:、tel: 等 scheme）。',
       schema: { url: z.string().describe('要打开的 URL'), device, observe },
-      handler: async (a) => { try { return actionResult('已打开 ' + a.url, await run('open_url', { url: a.url, ...obsArgs(a) }, 30_000, a.device)); } catch (e) { return errText(e); } },
+      handler: async (a) => { try { return await openAction('已打开 ' + a.url, 'open_url', { url: a.url }, a); } catch (e) { return errText(e); } },
     },
     {
       name: 'phone_open_settings',
       description: '打开系统设置的某一页：wifi / bluetooth / battery / location / data / display / sound / app / apps / nfc / hotspot / accessibility / input（输入法）/ storage；留空=设置首页。',
       schema: { page: z.string().optional().describe('设置子页关键字，留空=首页'), device, observe },
-      handler: async (a) => { try { return actionResult('已打开设置' + (a.page ? '：' + a.page : ''), await run('open_settings', { page: a.page || '', ...obsArgs(a) }, 30_000, a.device)); } catch (e) { return errText(e); } },
+      handler: async (a) => { try { return await openAction('已打开设置' + (a.page ? '：' + a.page : ''), 'open_settings', { page: a.page || '' }, a); } catch (e) { return errText(e); } },
     },
     {
       name: 'phone_share',
       description: '通过系统「分享」把一段文字发出去；target=目标 app（如「微信」）则直达它的分享入口，不填弹系统选择器。只分享文字。',
       schema: { text: z.string().describe('要分享的文字'), target: z.string().optional().describe('目标 app（中文名或包名）'), device, observe },
-      handler: async (a) => { try { return actionResult('已发起分享' + (a.target ? '到 ' + a.target : '（系统选择器）'), await run('share', { text: a.text, target: a.target || '', ...obsArgs(a) }, 30_000, a.device)); } catch (e) { return errText(e); } },
+      handler: async (a) => { try { return await openAction('已发起分享' + (a.target ? '到 ' + a.target : '（系统选择器）'), 'share', { text: a.text, target: a.target || '' }, a); } catch (e) { return errText(e); } },
     },
     {
       name: 'phone_clipboard_set',
@@ -286,9 +367,9 @@ export function buildPhoneControlTools(genKey, getGen, originDevice) {
       handler: async (a) => {
         try {
           const { d } = pick(a.device);
-          const ok = await confirmDanger({ genKey, deviceId: d.id, resolveGen }, '发送短信', '确认用 ' + deviceLabel(d) + ' 给 ' + a.to + ' 发这条短信吗？', '内容：' + a.body);
+          const ok = await confirmDanger({ genKey, deviceId: d.id, resolveGen, ...who() }, '发送短信', '确认用 ' + deviceLabel(d) + ' 给 ' + a.to + ' 发这条短信吗？', '内容：' + a.body);
           if (!ok) return txt('已取消：用户没有确认发送这条短信。');
-          await requestPhoneControl({ genKey, deviceId: d.id, op: 'send_sms', args: { to: a.to, body: a.body } });
+          await requestPhoneControl({ genKey, deviceId: d.id, op: 'send_sms', args: { to: a.to, body: a.body }, ...who() });
           return txt(tagOf(d) + ' ✓ 已发出短信给 ' + a.to);
         } catch (e) { return errText(e); }
       },
@@ -306,9 +387,9 @@ export function buildPhoneControlTools(genKey, getGen, originDevice) {
       handler: async (a) => {
         try {
           const { d } = pick(a.device);
-          const ok = await confirmDanger({ genKey, deviceId: d.id, resolveGen }, '拨打电话', '确认用 ' + deviceLabel(d) + ' 拨打 ' + a.number + ' 吗？', '会立即拨出。');
+          const ok = await confirmDanger({ genKey, deviceId: d.id, resolveGen, ...who() }, '拨打电话', '确认用 ' + deviceLabel(d) + ' 拨打 ' + a.number + ' 吗？', '会立即拨出。');
           if (!ok) return txt('已取消：用户没有确认拨打。');
-          await requestPhoneControl({ genKey, deviceId: d.id, op: 'call', args: { number: a.number } });
+          await requestPhoneControl({ genKey, deviceId: d.id, op: 'call', args: { number: a.number }, ...who() });
           return txt(tagOf(d) + ' ✓ 已拨打 ' + a.number);
         } catch (e) { return errText(e); }
       },
@@ -333,7 +414,7 @@ export function buildPhoneControlTools(genKey, getGen, originDevice) {
         try {
           let deviceId = null;
           try { deviceId = pick(a.device).d.id; } catch { /* 没设备在线也能在聊天里问 */ }
-          const ok = await confirmDanger({ genKey, deviceId, resolveGen }, '确认操作', a.question, a.detail || '');
+          const ok = await confirmDanger({ genKey, deviceId, resolveGen, ...who() }, '确认操作', a.question, a.detail || '');
           return txt(ok ? '用户已确认，可以执行。' : '用户没有确认（拒绝或超时）——不要执行，按用户意思换做法或停下回报。');
         } catch (e) { return errText(e); }
       },
@@ -474,11 +555,12 @@ export function buildPhoneControlTools(genKey, getGen, originDevice) {
 }
 
 // 绑定到一个 caller 的「手机操控」MCP。originDevice = 发起这轮对话的那台手机（从手机发起时才有；传函数则每次现取）。
-export function makePhoneControlMcp({ genKey = 'admin', getGen, originDevice } = {}) {
+// owner = 本会话的稳定标识（传函数则每次现取，如 () => gen.sessionId）：用于设备租约与编号归属，不传则每个实例自带一个随机标识。
+export function makePhoneControlMcp({ genKey = 'admin', getGen, originDevice, owner } = {}) {
   return createSdkMcpServer({
     name: 'phoneControl',
     version: '2.0.0',
-    tools: buildPhoneControlTools(genKey, getGen, originDevice).map((t) => tool(t.name, t.description, t.schema, t.handler)),
+    tools: buildPhoneControlTools(genKey, getGen, originDevice, owner).map((t) => tool(t.name, t.description, t.schema, t.handler)),
   });
 }
 
@@ -503,7 +585,7 @@ const OPERATOR_PROMPT = [
   '【确认】发消息、发帖、下单、删除、改账号或安全设置等不可撤回的动作：委派说明里明确授权了（对象和内容都对得上）才做；否则先 phone_confirm 问用户，用户不同意就停。phone_send_sms / phone_call 自带确认。发消息前再看一眼会话标题，确认对象没错。',
   '【金融】绝不完成支付、转账、下单结算、借贷、理财购买：带到付款/确认页就停，phone_notify 提醒用户自己操作，并在回报里说明。',
   '【隐私】画面里的聊天、通知、验证码只为完成任务而看；回报里别转述与任务无关的内容。',
-  '【设备】委派说明写了哪台手机就用 device 指定那台；本轮第一次选定后后续命令自动锁定它。报「无障碍没开 / 锁屏 / 未连接」时别硬试，phone_devices 看一眼后回报用户需要做什么。',
+  '【设备】委派说明写了哪台手机就用 device 指定那台；本轮第一次选定后后续命令自动锁定它。报「无障碍没开 / 锁屏 / 未连接」时别硬试，phone_devices 看一眼后回报用户需要做什么；报「正被另一个会话操控」就停下回报，别反复重试。',
   '【经验】开 app 时会带回以前记下的经验：当参考，坐标可能随机型/布局失效，以当前画面为准。做成一件非显然的事、或踩到反直觉的坑后，用 phone_learn 记一条（语义步骤 + 适用布局，不写死坐标）。',
   '【回报】最后一条消息写：做成了什么（附画面上的证据，如搜索结果标题、已发出的消息）、没做成什么及原因、需要用户自己做什么。',
 ].join('\n');
@@ -520,7 +602,7 @@ export function phoneOperatorAgent() {
 
 // 主线程 systemPrompt 追加：有这套工具 + 多设备规则 + 何时委派子 agent + 高危/金融护栏。
 export const PHONE_CONTROL_NUDGE = '\n\n你还有一组「手机操控」工具（mcp__phoneControl__*），通过用户安卓手机上的常驻服务真实操作手机：开 app、看画面、点按、输入、滚动、按键，以及剪贴板、通知、短信、拨号等。'
-  + '\n【哪台手机】用户可能有多台手机同时开着操控。不传 device 时：本轮已选定的那台 → 发起这轮对话的那台手机 → 唯一在线的那台；从电脑发起且多台在线时必须用 device 指定，不确定用户说的是哪台就先问。本轮选定后自动锁定，换台要显式传 device。phone_devices 列出在线设备和各自的就绪状态（无障碍/截图/输入法/亮屏解锁），开始任务前或出错时先看它。'
+  + '\n【哪台手机】用户可能有多台手机同时开着操控。不传 device 时：本轮已选定的那台 → 发起这轮对话的那台手机 → 本会话上次操作的那台（结果里会注明「沿用」）→ 唯一在线的那台；都对不上且多台在线时必须用 device 指定，不确定用户说的是哪台就先问。本轮选定后自动锁定，换台要显式传 device。phone_devices 列出在线设备和各自的就绪状态（无障碍/截图/输入法/亮屏解锁）与电量/存储/网络（问这些用它，别切到设置页），开始任务前或出错时先看它。'
   + '\n【多步任务交给子 agent】需要在 app 里连续操作的任务（搜东西、发消息、找设置项、填表、查页面信息……），用 Agent 工具派 subagent_type:"phone-operator"。委派说明写清：目标、哪台手机（句柄）、用户原话里明确授权的不可撤回动作（对象+内容；没授权的它会先向用户确认）、要回报什么。它在自己的上下文里跑，截图不会塞满主对话。单步的小事（开个 app、写剪贴板、发个通知、看一眼屏幕）直接调工具即可。'
   + '\n【高危】发消息、下单、删除、改安全设置等不可撤回的动作：用户原话已明确要求（对象+内容）才直接做，否则先确认（主对话用 AskUserQuestion；子 agent 用 phone_confirm）。phone_send_sms / phone_call 自带确认卡。'
   + '\n【金融护栏】绝不自动完成支付/转账/下单结算，只带到那一步交给用户。'

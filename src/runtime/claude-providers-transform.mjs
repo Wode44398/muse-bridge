@@ -12,7 +12,7 @@
 // 默认档也没有 = 什么都不发（厂商默认）。档位值在协议翻译之后才写：OpenAI 协议写进翻译后的请求（openAIReasoning）。
 
 // 档位怎么写进请求（budget / adaptive / effort）、深合并、点分路径写值都在共用的型号知识模块里（dimensio 的自定义服务同一份）。
-import { deepMerge, setPath, tierOf, writeTier, applyTier, OFF_TIER_IDS } from '../model-knowledge/knowledge.mjs';
+import { deepMerge, setPath, tierOf, writeTier, applyTier, OFF_TIER_IDS, tableEntry, replaysThinking, routeOf, bareModelId } from '../model-knowledge/knowledge.mjs';
 export { deepMerge, setPath };
 // 「关闭」档的常见名字：服务策略「始终关」找它，「始终开」跳过它
 const OFF_TIERS = new Set(OFF_TIER_IDS);
@@ -143,9 +143,20 @@ export function applyParams(body, provider, model, effort) {
   const p = effectiveParams(provider, target);
   // 输出上限：参数优先，否则 CLI 要的值，都不超过模型上限
   const cap = target.maxOutput || 32_000;
+  let room = 0;   // 第三方端点上这次请求还能给输出多少（0 = 不限）
   b.max_tokens = Math.min(p.maxTokens || b.max_tokens || cap, cap);
+  // 第三方端点：输出上限别超过「窗口 − 这次的输入」。自部署的 vLLM / llama.cpp 对「输入 + max_tokens 超过窗口」直接 400、不截断，
+  // 而 CLI 发的上限是固定值（最多 128000）、不看输入：窗口 26 万的型号输入一过 13 万就每个请求都 400，CLI 又认不出这句报错、
+  // 不会自己压缩（2026-11-13 在 fp8 上实测）。官方端点自己会处理，不动。
+  if (!isOfficial(provider) && target.contextWindow > 0) {
+    // 估算做不到精确，所以留一个 4096 的下限：真没地方了这次照样会被拒（和以前一样），但估多了的时候不至于把回答截成几百字
+    room = Math.max(4096, target.contextWindow - estimateInputTokens(b) - 2048);
+    if (room < b.max_tokens) b.max_tokens = room;
+  }
   // 思考：CLI 自己的 thinking / output_config 不转发，下面按档位重写（精简请求之后，免得被精简掉）
   const tierId = tierFor(p, target, effort);
+  // CLI 自己定的思考显示方式（新型号默认不回思考正文，要 display 才有摘要）：下面按档位重写 thinking 后带回去
+  const display = isObj(b.thinking) && typeof b.thinking.display === 'string' ? b.thinking.display : '';
   delete b.thinking;
   if (isObj(b.output_config)) {   // 只拿掉 effort，output_config 里别的（结构化输出的 format 之类）留着
     const { effort: _drop, ...rest } = b.output_config;
@@ -169,6 +180,18 @@ export function applyParams(body, provider, model, effort) {
       });
     }
   }
+  // 加密的思考块（redacted_thinking）只有 Claude 自己解得开：发给别家的 Anthropic 兼容端点没有意义，DeepSeek 直接 422。
+  // 会话中途从 Claude 换过来时历史里可能有；Claude 型号（含中转）照留。
+  if (Array.isArray(b.messages) && !isClaudeId(target.id)) {
+    b.messages = b.messages.map((m) => {
+      if (m.role !== 'assistant' || !Array.isArray(m.content) || !m.content.some((x) => x && x.type === 'redacted_thinking')) return m;
+      const content = m.content.filter((x) => !(x && x.type === 'redacted_thinking'));
+      return { ...m, content: content.length ? content : [{ type: 'text', text: '…' }] };
+    });
+  }
+  // DeepSeek 的 /anthropic：思考模式下（不发 thinking 也算开）带 tool_use 的历史轮必须有 thinking 块，否则 400。它自己发出的轮
+  // 带着签名、CLI 会原样回传；缺的是会话中途开思考、从别家换过来、或上面刚被剥掉的轮——补一个空块（实测开 / 关思考都收）。
+  if (provider.protocol !== 'openai' && Array.isArray(b.messages) && padsThinking(target.id)) b.messages = padThinkingBlocks(b.messages);
   if (!c.promptCaching) { b = dropCacheControl(b); }
   if (c.slimBody) {
     for (const k of SLIM_FIELDS) delete b[k];
@@ -188,8 +211,27 @@ export function applyParams(body, provider, model, effort) {
   if (tierId && (target.thinking !== 'effort' || provider.protocol !== 'openai')) {
     b = applyTier(b, target, tierId, { protocol: 'anthropic', cap, baseBudget: p.thinkingBudget || 16_000 });
   }
+  if (room && b.max_tokens > room) {
+    b.max_tokens = room;
+    if (isObj(b.thinking) && b.thinking.budget_tokens >= room) {
+      if (room - 1024 >= 1024) b.thinking = { ...b.thinking, budget_tokens: room - 1024 }; else delete b.thinking;
+    }
+  }
+  if (display && isObj(b.thinking) && b.thinking.type === 'adaptive' && !b.thinking.display) b.thinking = { ...b.thinking, display };
   const extra = official && p.extra && 'speed' in p.extra ? (({ speed: _s, ...rest }) => rest)(p.extra) : p.extra;
   return { body: deepMerge(b, extra), model: target, effort: tierId };
+}
+
+/** 这个型号在 Anthropic 协议下要不要给缺思考的工具轮补空 thinking 块（目前只有 DeepSeek 家族）。 */
+export const padsThinking = (id) => { const e = tableEntry(id); return !!e && e.think === 'deepseek' && e.replay === true; };
+/** 带 tool_use 而没有 thinking 块的 assistant 轮，最前面补一个空 thinking 块。 */
+export function padThinkingBlocks(messages) {
+  return messages.map((m) => {
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) return m;
+    if (!m.content.some((x) => x && x.type === 'tool_use')) return m;
+    if (m.content.some((x) => x && (x.type === 'thinking' || x.type === 'redacted_thinking'))) return m;
+    return { ...m, content: [{ type: 'thinking', thinking: '', signature: '' }, ...m.content] };
+  });
 }
 
 // 官方端点（预设 anthropic 或 api.anthropic.com）：metadata 照常转发
@@ -232,7 +274,8 @@ export function toOpenAI(body, provider, model) {
       const msg = { role: 'assistant', content: text || (calls.length ? null : '') };
       if (calls.length) msg.tool_calls = calls;
       // 回传上一轮思考：兼容里开了，或模型标了「不发参数也会思考」（小米 / Kimi 一类，思考模式下多轮工具调用不带回去会 400）
-      if (provider.compat?.replayReasoning || model.alwaysThinks) {
+      // 型号表标了 replay 的家族同理（DeepSeek：思考模式下带工具调用的历史轮缺思考就 400，没有原文也要带空串；开源权重 Qwen3.8）
+      if (provider.compat?.replayReasoning || model.alwaysThinks || replaysThinking(model.id)) {
         const r = blocks.filter((b) => b && b.type === 'thinking').map((b) => b.thinking).join('');
         if (r || calls.length) msg.reasoning_content = r;
       }
@@ -267,8 +310,13 @@ export function toOpenAI(body, provider, model) {
   if (body.top_k !== undefined) out.top_k = body.top_k;
   if (Array.isArray(body.stop_sequences) && body.stop_sequences.length) out.stop = body.stop_sequences.slice(0, 4);
   if (out.stream) out.stream_options = { include_usage: true };
+  // OpenRouter 上的 Claude：Anthropic 的缓存要显式标记才生效，OpenAI 协议这边 system 已经拍平成字符串、断点全没了——
+  // 顶层放一个 cache_control，OpenRouter 自动把断点推进到最后（实测第二发整段命中；不带则每轮全价、首字也慢）。
+  if (routeOf(provider.upstream || provider.baseUrl) === 'openrouter' && isClaudeId(model.id)) out.cache_control = { type: 'ephemeral' };
   return out;
 }
+// Bedrock 写法（us.anthropic.claude-…-v1:0）、中转站自己加前缀的（cc-claude-opus-4-5）也算
+const isClaudeId = (id) => /(?:^|[._-])claude-|^(?:opus|sonnet|haiku|fable)-/.test(bareModelId(id));
 
 /** OpenAI 协议：把选中那一档写进翻译后的请求（effort 方式才写；tierId 来自 applyParams 的返回）。 */
 export function openAIReasoning(out, model, tierId) {
@@ -277,11 +325,22 @@ export function openAIReasoning(out, model, tierId) {
 }
 
 const STOP_MAP = { stop: 'end_turn', length: 'max_tokens', tool_calls: 'tool_use', function_call: 'tool_use', content_filter: 'refusal' };
-const usageOf = (u) => ({
-  input_tokens: (u && (u.prompt_tokens ?? u.input_tokens)) || 0,
-  output_tokens: (u && (u.completion_tokens ?? u.output_tokens)) || 0,
-  ...(u && u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens ? { cache_read_input_tokens: u.prompt_tokens_details.cached_tokens } : {}),
-});
+// OpenAI 口径的 prompt_tokens 含缓存命中与缓存写入；Anthropic 口径的 input_tokens 不含——扣出来分开报，
+// 不然 CLI 里输入 token 虚高、缓存命中恒为 0。命中数：prompt_tokens_details.cached_tokens（OpenAI / OpenRouter / Kimi / Qwen / GLM）
+// 或 prompt_cache_hit_tokens（DeepSeek）；写入数：prompt_tokens_details.cache_write_tokens（OpenRouter 上的 GPT / Claude）。
+export function usageOf(u) {
+  const total = (u && (u.prompt_tokens ?? u.input_tokens)) || 0;
+  const d = (u && u.prompt_tokens_details) || {};
+  const num = (v) => (Number.isFinite(v) && v > 0 ? v : 0);
+  const read = Math.min(total, num(d.cached_tokens) || num(u && u.prompt_cache_hit_tokens));
+  const write = Math.min(total - read, num(d.cache_write_tokens));
+  return {
+    input_tokens: total - read - write,
+    output_tokens: (u && (u.completion_tokens ?? u.output_tokens)) || 0,
+    ...(read ? { cache_read_input_tokens: read } : {}),
+    ...(write ? { cache_creation_input_tokens: write } : {}),
+  };
+}
 
 /** OpenAI 非流式响应 → Anthropic message。 */
 export function fromOpenAI(json, modelId) {
@@ -374,13 +433,31 @@ export class OpenAIStream {
     if (this.done) return '';
     this.done = true;
     let s = this.#start() + this.#close();
-    s += sse('message_delta', { type: 'message_delta', delta: { stop_reason: this.stop || 'end_turn', stop_sequence: null }, usage: { output_tokens: this.usage.output_tokens, input_tokens: this.usage.input_tokens } });
+    s += sse('message_delta', { type: 'message_delta', delta: { stop_reason: this.stop || 'end_turn', stop_sequence: null }, usage: { ...this.usage } });
     s += sse('message_stop', { type: 'message_stop' });
     return s;
   }
   error(message) {
     return sse('error', { type: 'error', error: { type: 'api_error', message: String(message || 'upstream error') } });
   }
+}
+
+/**
+ * 这次请求的输入大概多少 token：ASCII 按 3.5 个字符一个 token（英文与代码实际 3.5–4），其余字符（中文等）按一个字 0.7 个 token
+ *（国产厂商公开口径每个汉字 0.6–0.7）。估高了会在离窗口还有余量时就把输出压小，所以不往保守里加码。
+ * 图片的 base64 不算（一张图几十万字符，会把估算撑爆），每张按 1500 记；思考块的签名、加密思考的密文不占模型上下文，也不算。
+ */
+export function estimateInputTokens(body) {
+  let images = 0;
+  const s = JSON.stringify({ system: body.system, messages: body.messages, tools: body.tools }, (k, v) => {
+    if (k === 'source' && v && typeof v === 'object' && v.type === 'base64' && typeof v.data === 'string') { images += 1; return { type: 'base64' }; }
+    if (k === 'signature' && typeof v === 'string') return '';
+    if (k === 'data' && typeof v === 'string' && v.length > 256) return '';
+    return v;
+  }) || '';
+  let wide = 0;
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) > 0x7f) wide += 1;
+  return Math.ceil((s.length - wide) / 3.5 + wide * 0.7) + images * 1500;
 }
 
 /** 粗估 token（count_tokens 端点第三方多半没有）：按字符数 / 3.5。 */

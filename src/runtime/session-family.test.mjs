@@ -78,7 +78,7 @@ test('子会话做完父会话派的活：汇报进父会话收件箱（前 400 
   assert.equal(box[0].text.length, 400);
   const extra = familyTurnStart(ctx, A, null, null);   // 用户在父会话发话
   assert.match(extra, /<side-sessions-event>/);
-  assert.match(extra, new RegExp(`<note from="${B}" name="runner" title="跑测试" status="done">`));
+  assert.match(extra, new RegExp(`<note from="${B}" name="runner" title="跑测试" status="done" nonce="[0-9a-f]{12}">`));
   assert.equal(_inbox('admin', A).length, 0);
   assert.equal(familyTurnStart(ctx, A, null, null), null);
 });
@@ -100,7 +100,7 @@ test('防止两个会话无限互相唤醒：连续自动续到上限就不再�
   assert.deepEqual([r.ok, r.how], [true, 'held']);
   assert.equal(_inbox('admin', B).length, 1);
   const extra = familyTurnStart(ctx, B, null, null);   // 用户在子会话里发话
-  assert.match(extra, /<session-message from="aaaaaaaa[^"]*" name="" title="[^"]*" relation="parent">\n再改一版\n<\/session-message>/);
+  assert.match(extra, /<session-message from="aaaaaaaa[^"]*" name="" title="[^"]*" relation="parent" nonce="[0-9a-f]{12}">\n再改一版\n<\/session-message>/);
   assert.match(extra, /<session-hint>/);
   assert.equal(_inbox('admin', B).length, 0);
 });

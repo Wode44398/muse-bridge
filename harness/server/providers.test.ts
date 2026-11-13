@@ -357,7 +357,7 @@ test("Kimi adapter maps efforts, replays reasoning, and takes catalog limits", a
   }
 });
 
-test("non-Kimi OpenAI-compatible vendors still drop thinking blocks from replay", async () => {
+test("OpenAI-compatible vendors without a replay rule still drop thinking blocks", async () => {
   const originalFetch = globalThis.fetch;
   let body: any;
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
@@ -366,13 +366,49 @@ test("non-Kimi OpenAI-compatible vendors still drop thinking blocks from replay"
   }) as typeof fetch;
   try {
     await drain(createOpenAIAdapter({
-      provider: "openai", apiKey: "test", model: "deepseek-flash", baseUrl: "https://openai.test/v1",
+      provider: "qwen", apiKey: "test", model: "qwen3.8-max", baseUrl: "https://qwen.test/v1",
     }), turn);
   } finally {
     globalThis.fetch = originalFetch;
   }
   const assistant = body.messages.find((message: any) => message.role === "assistant");
   assert.equal("reasoning_content" in assistant, false);
+});
+
+// DeepSeek：思考模式下带工具调用的历史轮缺 reasoning_content 就 400（实测）；它只恢复得了自己在思考模式下发出的调用，
+// 会话中途开思考、从别家换过来的轮都恢复不了——所以一律带回，没有原文也带空串。
+test("DeepSeek replays reasoning_content on tool turns, empty string when the turn has no thinking", async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: any[] = [];
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")));
+    return response([{ choices: [{ delta: {}, finish_reason: "stop" }] }, "[DONE]"]);
+  }) as typeof fetch;
+  const bare: Turn = {
+    ...turn,
+    messages: [
+      { role: "assistant", content: [{ t: "tool_call", id: "call-1", name: "Read", args: { path: "src/app.ts" } }] },
+      turn.messages[1],
+      { role: "assistant", content: [{ t: "text", text: "done" }] },
+    ],
+  };
+  try {
+    for (const model of ["deepseek-flash", "deepseek-v4-pro"]) {
+      const adapter = createOpenAIAdapter({ provider: "openai", apiKey: "test", model, baseUrl: "https://deepseek.test" });
+      await drain(adapter, turn);
+      await drain(adapter, bare);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  for (const i of [0, 2]) {
+    assert.equal(bodies[i].messages.find((m: any) => m.role === "assistant").reasoning_content, "reasoning");
+  }
+  for (const i of [1, 3]) {
+    const assistants = bodies[i].messages.filter((m: any) => m.role === "assistant");
+    assert.equal(assistants[0].reasoning_content, "", "工具轮没有思考原文也带空串");
+    assert.equal("reasoning_content" in assistants[1], false, "纯文本轮不带");
+  }
 });
 
 test("local llama.cpp: effort 走 chat_template_kwargs，不是顶层 reasoning_effort", async () => {

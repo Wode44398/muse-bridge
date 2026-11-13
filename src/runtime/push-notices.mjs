@@ -5,6 +5,7 @@
 // 只存内存、按 caller key 隔离，30 分钟后自然过期——这是「提醒」，不是消息记录。
 
 import { deliverToChannels } from '../plugins/channels.mjs';
+import { postNotice } from './notices.mjs';
 
 const KEEP_MS = 30 * 60_000;
 const MAX_PER_KEY = 20;
@@ -22,6 +23,8 @@ export function notePush(key, { sessionId, message, title, level }) {
   list.push(item);
   while (list.length > MAX_PER_KEY) list.shift();
   store.set(key, list);
+  // 会话消息通知（notices.mjs）：新版手机后台服务与网页横幅只读那一路，按会话归档
+  try { postNotice(key, { kind: 'push', sessionId: sessionId || null, body: text }); } catch {}
   return item;
 }
 

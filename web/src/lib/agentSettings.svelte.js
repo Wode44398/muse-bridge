@@ -19,6 +19,9 @@ export const ags = $state({
   usage: {},             // { [id]: { plan, five_hour, seven_day, fable, error } }
   usageBusy: false,
   router: null,          // { settings:{enabled,returnToPrimary}, blocks:{[id]:{until,type}}, log:[…] }
+  resetsOk: false,       // 服务端有没有「重置卡」能力（overlay 钩子）；没有就不出现入口
+  resets: {},            // { [id]: { login:{email,source}|null, needLogin, error, at, atLimit, grants:[…] } }（见服务端 limit-resets.mjs）
+  resetsBusy: false,
   routerBusy: false,
   policyOk: false,
   policy: null,          // { register, quota:{…}, maxUserTurns, timezone }
@@ -70,6 +73,65 @@ export async function loadUsage(force = false) {
   ags.usageBusy = false;
 }
 export async function loadRouter() { try { ags.router = await api.get('/api/admin/claude-accounts/router'); } catch {} }
+// —— 重置卡（Anthropic 偶尔发给订阅号的限额重置；官方在 claude.ai 设置 › 用量 › Resets 里用）——
+// 读账号级信息要给这个号做一次「完整登录」（号池里的 setup-token 权限不够）；没登录的号服务端不发请求、回 needLogin。
+export async function loadResets({ force = false, id = '' } = {}) {
+  if (ags.resetsBusy && !id) return;
+  ags.resetsBusy = true;
+  try {
+    const q = [force ? 'force=1' : '', id ? 'id=' + encodeURIComponent(id) : ''].filter(Boolean).join('&');
+    const r = await api.get('/api/admin/claude-accounts/resets' + (q ? '?' + q : ''));
+    ags.resetsOk = !!r?.available;
+    ags.resets = id ? { ...ags.resets, ...(r?.accounts || {}) } : (r?.accounts || {});
+  } catch { if (!id) ags.resetsOk = false; }
+  ags.resetsBusy = false;
+}
+// 这几个动作的错误交给调用方就地显示（重置卡面板自己有错误行），不写进 ags.err。
+async function resetsPost(path, body) {
+  try { const r = await api.post(path, body); return r?.error ? { error: tr(r.error) } : (r || { ok: true }); }
+  catch (e) { return { error: tr(e?.body?.error || e?.message) || t('失败') }; }
+}
+export async function useResetCard(id, grantId) {
+  const r = await resetsPost('/api/admin/claude-account/reset/use', { id, grantId });
+  if (r.status) ags.resets = { ...ags.resets, [id]: r.status };
+  if (r.ok) loadUsage(true);
+  return r;
+}
+export const resetsLoginStart = (id) => resetsPost('/api/admin/claude-account/login/start', { id });
+export async function resetsLoginFinish(id, code) {
+  const r = await resetsPost('/api/admin/claude-account/login/finish', { id, code: code.trim() });
+  if (r.ok) await loadResets({ force: true, id });
+  return r;
+}
+export async function resetsLoginClear(id) {
+  const r = await resetsPost('/api/admin/claude-account/login/clear', { id });
+  if (r.ok) await loadResets({ id });
+  return r;
+}
+// 还能用的卡（剩余次数 > 0、没暂停、没过期）；张数按剩余次数算。
+export const liveGrants = (v) => (v?.grants || []).filter((g) => g.left > 0 && !g.paused && (!g.endsAt || g.endsAt > Date.now()));
+export const resetsLeft = (v) => liveGrants(v).reduce((n, g) => n + g.left, 0);
+const BUCKET_NAME = { five_hour: () => t('5 小时'), seven_day: () => t('每周'), seven_day_overage_included: () => 'Fable', seven_day_opus: () => 'Opus', seven_day_sonnet: () => 'Sonnet' };
+/** 这张卡清哪些限额：['5 小时', '每周', 'Fable']（不认识的桶不列）。 */
+export const grantClears = (g) => (g?.clears || []).map((k) => BUCKET_NAME[k]?.()).filter(Boolean);
+/** 卡名：按清的范围起（官方给的 label 是英文活动名，另起一行原样显示）。 */
+export function grantTitle(g) {
+  const c = g?.clears || [];
+  const s = c.includes('five_hour'), w = c.includes('seven_day');
+  if (s && w) return t('完整重置');
+  if (s && c.length === 1) return t('5 小时限额重置');
+  if (c.includes('seven_day_overage_included') && !w) return t('Fable 限额重置');
+  if (w) return t('每周限额重置');
+  return t('限额重置');
+}
+/** 有效期：「12月10日到期」；24 小时内给钟点。 */
+export function grantExpiry(g) {
+  if (!g?.endsAt) return '';
+  const d = new Date(g.endsAt);
+  if (g.endsAt - Date.now() < 24 * 3600000) return t('{time} 到期', { time: hhmm(g.endsAt) });
+  return t('{month}月{day}日到期', { month: d.getMonth() + 1, day: d.getDate() });
+}
+
 async function poolPost(path, body, fallback) {
   try { const r = await api.post(path, body); if (r?.error) throw new Error(r.error); ok(); return r || { ok: true }; }
   catch (e) { fail(e, fallback); return null; }
@@ -91,14 +153,15 @@ export async function activateAccount(a) {
   return !!r;
 }
 export async function moveAccount(a, delta) { if (await poolPost('/api/admin/claude-account/move', { id: a.id, delta })) await reloadAccounts(); }
-export async function addAccount(label, token) {
-  const r = await poolPost('/api/admin/claude-account/add', { label: label.trim(), token: token.trim() });
+export async function addAccount(label, token, plan = '') {
+  const r = await poolPost('/api/admin/claude-account/add', { label: label.trim(), token: token.trim(), plan });
   if (r) { await reloadAccounts(); loadUsage(true); }
   return !!r;
 }
-export async function updateAccount(id, label, token) {
-  const r = await poolPost('/api/admin/claude-account/update', { id, label: label.trim(), token: token.trim() });
-  if (r) { await reloadAccounts(); if (token.trim()) loadUsage(true); }
+export async function updateAccount(id, label, token, plan) {
+  const body = { id, label: label.trim(), token: token.trim(), ...(typeof plan === 'string' ? { plan } : {}) };
+  const r = await poolPost('/api/admin/claude-account/update', body);
+  if (r) { await reloadAccounts(); if (token.trim() || typeof plan === 'string') loadUsage(true); }
   return !!r;
 }
 export async function deleteAccount(id) {
@@ -135,6 +198,11 @@ export function poolResetAt(ms) {
   if (d < 24 * 3600000) return t('{time} 重置', { time: hhmm(ms) });
   return t('{day} {time} 重置', { day: WEEKDAY()[new Date(ms).getDay()], time: hhmm(ms) });
 }
+// 号池套餐小标：ultra（2026-11 新出，原 Max 20x）/ max / pro；不认识的不标。
+// 套餐徽标：Ultra = 原 Max 20x（不管有没有 5 小时限额）；'max' = 只知道是 Max、分不出 5x / 20x。
+export const planPill = (p) => ({ ultra: 'Ultra', max5x: 'Max 5x', max: 'Max', pro: 'Pro' })[p] || '';
+// 号池编辑表单的「套餐」选项：'' = 自动识别（setup-token 读不到档位，自动识别常常定不了档，就手动标一下）。
+export const PLAN_CHOICES = () => [{ value: '', label: t('自动') }, { value: 'pro', label: 'Pro' }, { value: 'max5x', label: 'Max 5x' }, { value: 'ultra', label: 'Ultra' }];
 export const usageTone =(b) => (b.status === 'rejected' || b.pct >= 100 ? 'red' : b.pct >= 80 ? 'amber' : 'ok');
 
 // —— 额度与注册 ——

@@ -29,8 +29,8 @@
   let imgW = 1, imgH = 1, ready = false;
   let cover = [1, 1];
   let target = { x: 0, y: 0 }, cur = { x: 0, y: 0 };
-  let usingGyro = false, neutral = null;
-  let raf = 0, last = 0, pageVisible = true, visible = true, dirty = true, lastSig = '', resizePending = false;
+  let usingGyro = false;
+  let raf = 0, last = 0, lastDraw = 0, pageVisible = true, visible = true, dirty = true, lastSig = '', resizePending = false;
   let curAmp = MAXAMP * 0.55, loadedImg = null, loadedDepth = null;   // 初值占位；真值由下方 $effect 按 amp 响应更新
 
   const VERT = `attribute vec2 aPos; varying vec2 vUv;
@@ -44,9 +44,12 @@
       vec2 base = (vUv - 0.5) * uCover + 0.5;
       vec2 dir = uOffset * uAmp;
       vec2 s = base;
+      float pd = -1.0;
       for (int i = 0; i < 8; i++){
         float d = texture2D(uDepth, s).r;
         s = base - (d - uFocus) * dir;
+        if (abs(d - pd) < 0.0005) break;   // 已收敛（平坦区两三次就到）：后面几次是空算。0.0005 与跑满 8 次比仅遮挡边缘百余像素亚像素差
+        pd = d;
       }
       gl_FragColor = texture2D(uImage, s);
     }`;
@@ -57,7 +60,8 @@
     return sh;
   }
   function initGL(){
-    gl = canvas.getContext('webgl', { antialias: true, alpha: false });
+    // 不开 MSAA：全屏一张四边形没有几何边缘可抗，开了每帧白多一遍多重采样+解析
+    gl = canvas.getContext('webgl', { antialias: false, alpha: false, depth: false, stencil: false });
     if (!gl) return false;
     prog = gl.createProgram();
     gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
@@ -91,6 +95,29 @@
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
   }
+  // 纹理按屏幕需要的分辨率缩一次再进 GPU：上传壁纸常 4–6K，每像素 9 次相依取样在大纹理上全是缓存缺失，
+  // 且无 mipmap 时缩小采样还闪。原图缩到「cover×最大 overscan 后刚好 1 texel/px」；深度图只把超大的压到 2048（压到 1024 实测遮挡边缘挪位 2.7 万像素，别再降）。
+  function scaled(img, s){
+    const w = Math.max(1, Math.round(img.naturalWidth * s)), h = Math.max(1, Math.round(img.naturalHeight * s));
+    if (s >= 0.999) return img;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(img, 0, 0, w, h);
+    return c;
+  }
+  const OS_MAX = spatialOverscan(MAXAMP);
+  function needScale(img, pw, ph){   // 铺满 pw×ph 像素（任一方向旋转）所需的缩放比
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    return Math.min(1, OS_MAX * Math.max(Math.max(pw / iw, ph / ih), Math.max(ph / iw, pw / ih)));
+  }
+  let srcImg = null, texScale = 0;
+  function uploadImage(pw, ph){
+    texScale = needScale(srcImg, pw, ph);
+    upload(0, texImg, scaled(srcImg, texScale));
+  }
+  function screenPx(){
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    return [Math.max(canvas.width, (screen.width || 0) * dpr), Math.max(canvas.height, (screen.height || 0) * dpr)];
+  }
   function loadImg(src){
     return new Promise((res, rej) => {
       const im = new Image();   // 同源壁纸，无需 crossOrigin（设了反而在部分环境触发加载失败）
@@ -107,7 +134,8 @@
       const [im, dp] = await Promise.all([loadImg(iu), loadImg(du)]);
       if (iu !== imgUrl || du !== depthUrl) return;                 // 加载期间又切了，丢弃
       imgW = im.naturalWidth; imgH = im.naturalHeight;
-      upload(0, texImg, im); upload(1, texDepth, dp);
+      srcImg = im; uploadImage(...screenPx());
+      upload(1, texDepth, scaled(dp, Math.min(1, 2048 / Math.max(dp.naturalWidth, dp.naturalHeight))));
       ready = true; resize(); dirty = true;
       draw();   // 立即同步出一帧：壁纸即刻可见，不等 RAF（后台/被节流也先画上）
     } catch { loadedImg = loadedDepth = null; }                     // 失败可重试
@@ -137,6 +165,8 @@
     const changed = canvas.width !== w || canvas.height !== h;
     if (changed){ canvas.width = w; canvas.height = h; }
     gl.viewport(0, 0, canvas.width, canvas.height);
+    // 窗口挪到更大的屏上：纹理不够清晰时按新尺寸重缩一次
+    if (changed && srcImg && texScale < 1 && needScale(srcImg, w, h) > texScale * 1.02) uploadImage(...screenPx());
     computeCover();
     // 改尺寸会当场清空画布：同步补画一帧，不等 RAF（否则拖动窗口宽度时每次变化闪一帧空白）
     if (changed && ready) draw();
@@ -150,31 +180,82 @@
     kick();
   }
   function onLeave(){ if (!usingGyro){ target.x = 0; target.y = 0; kick(); } }
-  const GYRO_RANGE = 13;   // 满偏移所需倾角(度)：越小越灵敏、小幅倾斜就有明显视差（手机端幅度增强，且避开满偏极限撕裂）
-  function onOrient(e){
-    if (e.beta == null || e.gamma == null) return;
-    usingGyro = true;
-    if (!neutral) neutral = { beta: e.beta, gamma: e.gamma };
+  // —— 手机：陀螺仪角速度积分 + 缓慢回中（同 iOS 视差壁纸）——
+  // 旧版拿【第一帧姿势】当中心、按 beta/gamma 欧拉角差算：换个握姿就一直顶在边上；竖拿（beta≈90°）时 gamma
+  // 万向节翻转乱跳；左右转身（偏航）重力不变、完全没反应——空间感弱且怪。现改为：
+  //   ① 主路：devicemotion.rotationRate（绕机身 x/y 轴的角速度）积分成偏移，三向转动都有视差，竖拿左右转身也有；
+  //   ② 偏移按 RECENTER 时间常数缓慢漏回 0：停住后画面慢慢回正，任何握姿都从中间开始；
+  //   ③ 没有陀螺仪的机器退回重力向量（不走欧拉角，竖拿不翻转），中心同样缓慢跟随当前姿势。
+  const GYRO_RANGE = 11;   // 满偏移所需转角(度)：越小越灵敏
+  const RECENTER = 2.6;    // 回中时间常数(秒)：越大停住后保持偏移越久、慢转也有视差；越小越快回正
+  let rateLive = false, ox = 0, oy = 0, lastRateT = 0, lastOriT = 0;
+  function screenMap(dx, dy){   // 机身轴 → 屏幕轴（横屏换轴，与旧版同向）
     const ori = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
-    let dx, dy;
     if (ori === 90 || ori === -90 || ori === 270){
-      dx = e.beta - neutral.beta; dy = e.gamma - neutral.gamma;
-      if (ori === -90 || ori === 270){ dx = -dx; dy = -dy; }
-    } else { dx = e.gamma - neutral.gamma; dy = e.beta - neutral.beta; }
-    target.x = Math.max(-1, Math.min(1, dx / GYRO_RANGE));
-    target.y = Math.max(-1, Math.min(1, dy / GYRO_RANGE));
+      let x = dy, y = dx;
+      if (ori === -90 || ori === 270){ x = -x; y = -y; }
+      return [x, y];
+    }
+    return [dx, dy];
+  }
+  function setTarget(dGamma, dBeta){
+    const [dx, dy] = screenMap(dGamma, dBeta);
+    // 软限幅（tanh）：大幅转动时平滑地逼近满偏，不在 ±1 处硬顶出一道「撞墙」
+    target.x = Math.tanh(dx / GYRO_RANGE);
+    target.y = Math.tanh(dy / GYRO_RANGE);
     kick();
   }
+  function onMotion(e){
+    const r = e.rotationRate;
+    if (!r || r.beta == null || r.gamma == null) return;
+    if (!rateLive && !r.beta && !r.gamma && !r.alpha) return;   // 有的机器没陀螺仪也发事件、恒 0：别抢走重力路
+    rateLive = usingGyro = true;
+    const now = performance.now();
+    const dt = lastRateT ? Math.min(0.1, (now - lastRateT) / 1000) : 0; lastRateT = now;
+    if (!dt) return;
+    const leak = Math.exp(-dt / RECENTER), lim = GYRO_RANGE * 2.5;   // 限住积分，防持续转动后回中要等很久
+    const dz = (v) => (Math.abs(v) < 0.5 ? 0 : v);   // 陀螺仪静止噪声 ~0.1–0.5°/s：死区滤掉，拿稳不抖、也不白画
+    ox = Math.max(-lim, Math.min(lim, (ox + dz(r.gamma) * dt) * leak));
+    oy = Math.max(-lim, Math.min(lim, (oy + dz(r.beta)  * dt) * leak));
+    if (Math.abs(ox) < 0.03) ox = 0; if (Math.abs(oy) < 0.03) oy = 0;
+    setTarget(ox, oy);
+  }
+  // 兜底：重力「上」向量（机身系）u = (-cosβ·sinγ, sinβ, cosβ·cosγ)，与 alpha 无关、处处连续。
+  // 中心 n 缓慢追 u；n×u 的 x/y 分量 ≈ 绕机身 x/y 轴的转角（弧度，取负即 dβ/dγ 同向）。
+  let nUp = null;
+  function onOrient(e){
+    if (rateLive || e.beta == null || e.gamma == null) return;
+    usingGyro = true;
+    const R = Math.PI / 180, b = e.beta * R, g = e.gamma * R;
+    const u = [-Math.cos(b) * Math.sin(g), Math.sin(b), Math.cos(b) * Math.cos(g)];
+    const now = performance.now();
+    const dt = lastOriT ? Math.min(0.1, (now - lastOriT) / 1000) : 0; lastOriT = now;
+    if (!nUp) nUp = u.slice();
+    else {
+      const k = 1 - Math.exp(-dt / RECENTER);
+      for (let i = 0; i < 3; i++) nUp[i] += (u[i] - nUp[i]) * k;
+      const l = Math.hypot(nUp[0], nUp[1], nUp[2]) || 1; for (let i = 0; i < 3; i++) nUp[i] /= l;
+    }
+    const cx = nUp[1] * u[2] - nUp[2] * u[1], cy = nUp[2] * u[0] - nUp[0] * u[2];
+    setTarget(-cy / R, -cx / R);
+  }
   function initOrientation(){
-    const DOE = window.DeviceOrientationEvent;
-    if (DOE && typeof DOE.requestPermission === 'function'){
-      // iOS：需用户手势授权，绑一次「首次触摸」再申请
+    const DOE = window.DeviceOrientationEvent, DME = window.DeviceMotionEvent;
+    // 先直接监听：Android 无需授权就有数据。新版 Chrome / 安卓 WebView 也带了 requestPermission——旧版见到它就只走
+    // 「等首次触摸再申请」的 iOS 分支，安卓上不点一下屏幕视差根本不启动。重复 addEventListener 同一函数是空操作。
+    const listen = () => {
+      if (DME) window.addEventListener('devicemotion', onMotion);
+      if (DOE) window.addEventListener('deviceorientation', onOrient);   // 陀螺仪不发数时的兜底
+    };
+    listen();
+    if ((DME && typeof DME.requestPermission === 'function') || (DOE && typeof DOE.requestPermission === 'function')){
+      // iOS：需用户手势授权，绑一次「首次触摸」再申请（两类事件各自授权）
       const ask = async () => {
-        try { const p = await DOE.requestPermission(); if (p === 'granted') window.addEventListener('deviceorientation', onOrient); } catch {}
+        try { await DME?.requestPermission?.(); } catch {}
+        try { await DOE?.requestPermission?.(); } catch {}
+        listen();
       };
       window.addEventListener('pointerdown', ask, { once: true });
-    } else if (DOE){
-      window.addEventListener('deviceorientation', onOrient);   // Android/桌面：直接监听
     }
   }
 
@@ -203,8 +284,10 @@
     cur.y += (target.y - cur.y) * k;
     const moving = Math.abs(target.x - cur.x) > 1e-4 || Math.abs(target.y - cur.y) > 1e-4;
     if (ready) {
-      const sig = cur.x.toFixed(4) + ',' + cur.y.toFixed(4) + ',' + curAmp.toFixed(5) + ',' + cover[0].toFixed(4) + ',' + canvas.width;
-      if (dirty || sig !== lastSig) { lastSig = sig; dirty = false; draw(); }
+      // 偏移按 1/512 取整比对（满幅时 ≈0.1px）：回中尾段那些肉眼看不见的亚像素变化不再一帧帧重画+拷给玻璃
+      const sig = Math.round(cur.x * 512) + ',' + Math.round(cur.y * 512) + ',' + curAmp.toFixed(5) + ',' + cover[0].toFixed(4) + ',' + canvas.width;
+      // 高刷屏（120/144Hz）上限 60 帧：背景视差 60 帧已顺滑，再高只是双倍 GPU + 每块玻璃多拷一倍；停下那一帧不限
+      if ((dirty || sig !== lastSig) && (!moving || now - lastDraw >= 15)) { lastSig = sig; dirty = false; lastDraw = now; draw(); }
     }
     if (moving) { raf = requestAnimationFrame(frame); }
   }
@@ -240,6 +323,7 @@
       document.removeEventListener('mouseleave', onLeave);
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('deviceorientation', onOrient);
+      window.removeEventListener('devicemotion', onMotion);
     };
   });
 

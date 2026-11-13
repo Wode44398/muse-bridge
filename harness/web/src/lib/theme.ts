@@ -265,7 +265,28 @@ export function tokenVars(mode: Mode): Record<string, string> {
   };
 }
 
+// 换明暗的那一两帧里全页关掉 CSS 过渡（app.css 的 html[data-hx-theme-swap] 段）。
+// 很多控件给颜色 / 底色写了 140–280ms 的过渡，换一次令牌就有一百多个元素（连宿主 bridge 的 body、保活的分页）
+// 同时逐帧插值颜色——颜色过渡不上合成器，每帧主线程重算样式 + 重绘整片；换场期间新画面是实时快照，还要整页重画进去。
+// 实测切明暗后约 300ms 帧时间 16–50ms，就是它。明暗的过渡观感由换场（themeReveal / 视图过渡）负责，逐元素淡变是多余的。
+// 两帧后撤掉：新颜色已经在关着过渡时算定，撤掉不会再触发过渡。
+let swapRaf = 0;
+export function suppressTransitions() {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  root.dataset.hxThemeSwap = "1";
+  cancelAnimationFrame(swapRaf);
+  swapRaf = requestAnimationFrame(() => {
+    swapRaf = requestAnimationFrame(() => {
+      swapRaf = 0;
+      void getComputedStyle(root).color; // 先让关着过渡的那次样式计算落定，再撤
+      delete root.dataset.hxThemeSwap;
+    });
+  });
+}
+
 export function applyTheme(appearance: Appearance) {
+  suppressTransitions();
   const mode = resolveMode(appearance);
   const tk = mode === "dark" ? DARK : LIGHT;
   const standalone = document.documentElement.dataset.hxStandalone === "1";

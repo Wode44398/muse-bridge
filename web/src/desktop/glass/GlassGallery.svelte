@@ -7,6 +7,8 @@
   import GlassScene from './GlassScene.svelte';
   import { dskGlass } from './domGlass.js';
   import { GLASS } from './material.js';
+  import { ovUrl } from '../../lib/overlay.svelte.js';
+  const WP = ovUrl('wallpapers/dolomites.jpg');
   import DSlider from '../kit/DSlider.svelte';
   import DButton from '../kit/DButton.svelte';
 
@@ -62,7 +64,7 @@
 
     <section class="stage-card">
       <div class="stage" bind:clientWidth={stageW} bind:clientHeight={stageH}>
-        <GlassScene src="/assets/wallpapers/ridges.jpg" getPanes={panes} />
+        <GlassScene src={WP} getPanes={panes} />
         <!-- 玻璃上的 DOM 内容层（文字/图标浮在 GL 玻璃之上） -->
         {#if stageW}
           <div class="ov panel-ov" style:left="28px" style:top="28px" style:width="300px" style:height="168px">
@@ -91,7 +93,7 @@
     <section class="dom-card">
       <h3>参考配方 A/B · 同壁纸同引擎，只换「铬装」（左=当前 pill / 右=维护者参考：粗亮环+奶雾底+大软影）</h3>
       <div class="ref-stage">
-        <img class="ref-bg" src="/assets/wallpapers/ridges.jpg" alt="" draggable="false" />
+        <img class="ref-bg" src={WP} alt="" draggable="false" />
         <div class="refc ours" use:dskGlass={{ radius: 999, bevel: 100, refract: 30, disp: 0.3, frost: 0.4, glow: 0.9, tint: [1, 1, 1, 0.04] }}>
           <span class="ref-lab">当前</span>
         </div>

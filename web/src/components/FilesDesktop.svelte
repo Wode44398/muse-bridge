@@ -9,16 +9,14 @@
   // 仍走 bridge 服务端的只有三件需要服务端身份的事：发送给 AI、分享链接、解压（都仅 primary）。
   // 视觉沿用工作空间的 iOS 浅色 grouped 语言（蓝 #0088ff / bg #f2f2f7），密度按 PC 标准。
   import { onMount, tick, untrack } from 'svelte';
-  import { ui, compose, vertex as vsState, me, caps, session, agentOn, pluginOn } from '../lib/state.svelte.js';
+  import { ui, compose, studioInbox, me, caps, session, agentOn, screenOn, pluginOn } from '../lib/state.svelte.js';
   import { closePage } from '../lib/pageMorph.js';
   import { api, authHeaders } from '../lib/api.js';
   import { apiUrl } from '../lib/server.js';
   import { sendFile } from '../lib/uploads.svelte.js';
   import { openPreview as openPreviewRaw, cloudFileUrl, preview } from '../lib/preview.svelte.js';
   import { openSession, newConversation } from '../lib/chat.svelte.js';
-  // Gemini 的对话控制器属于功能扩展：经 services 按需加载（开着才加载），不静态 import。
-  import { mods, ensureModule } from '../modules/services.svelte.js';
-  import { getCachedSessions, getCachedVertexSessions } from '../lib/cache.js';
+  import { getCachedSessions } from '../lib/cache.js';
   import { titleFor } from '../lib/library.svelte.js';
   import { relTime } from '../lib/format.js';
   import {
@@ -47,7 +45,7 @@
   import { ovUrl } from '../lib/overlay.svelte.js';
 
   const BASE = import.meta.env.BASE_URL;
-  // 文件夹图标：公开版自带，私有 overlay 有同名原版就换成它
+  // 文件夹图标：原版资源
   const wsIcon = $derived(ovUrl('assets/icons/workspace.png'));
 
   // —— 形态与数据通道 ——
@@ -139,7 +137,7 @@
   let infoDlg = $state(null);
   let shareDlg = $state(null);
   let zipDlg = $state(null);            // 内置压缩选项 { rels, sub, name, format, level, formats, busy, note }
-  let aiDlg = $state(null);             // { item, view:'root'|'vertex'|'video'|'chat', chat }
+  let aiDlg = $state(null);             // { item, view:'root'|'studio'|'video'|'chat', chat }
   let busyLabel = $state('');
   let toastMsg = $state('');
   let dropOn = $state(null);            // null=没在拖 / ''=当前目录 / rel=某个文件夹
@@ -906,7 +904,7 @@
     if (!list.length) return;
     // 原生通道走系统回收站（可撤销），云端通道是真删——所以措辞与确认都不一样。
     // 英文按 GLOSSARY §1.6 让确认钮复述动词（Delete）；中文不传 okLabel，仍是原来的「确定」
-    if (!nativeFs && !(await uiConfirm(t('删除选中的 {n} 项？', { n: list.length }), { detail: t('云端工作空间的删除不可撤销。'), okLabel: isEn() ? t('删除') : undefined }))) return;
+    if (!nativeFs && !(await uiConfirm(t('删除选中的 {n} 项？', { n: list.length }), { detail: t('云端工作空间的删除不可撤销。'), okLabel: isEn() ? t('删除') : undefined, danger: true }))) return;
     busyLabel = nativeFs ? t('移到回收站…') : t('删除中…');
     let fail = 0;
     for (const rel of list) { try { await fsRemove(rel); } catch { fail++; } }
@@ -1222,8 +1220,8 @@
   // 文件类型决定能投给哪些模块，再与这个身份开着的 agent 取交集（服务端下发的 me.agents）。
   const aiCaps = $derived.by(() => {
     const c = fileAiCapabilities(aiDlg?.item, kindOf);
-    const g = agentOn('gemini');
-    return { ...c, claude: agentOn('claude'), gemini: c.gemini && g, video: c.video && g, image: c.image && g, audio: c.audio && g, music: c.music && g };
+    const g = screenOn('studio');
+    return { ...c, claude: agentOn('claude'), studio: g && (c.video || c.image || c.audio || c.music), video: c.video && g, image: c.image && g, audio: c.audio && g, music: c.music && g };
   });
   async function aiMaterial(it, direct = false) {
     const kind = it.isDir ? 'folder' : (kindOf(it.name) === 'img' ? 'image' : 'file');
@@ -1243,7 +1241,7 @@
     } catch { return null; }
   }
   function pickAI(target) {
-    if (target === 'claude' || target === 'gemini') { openChatPick(target); return; }
+    if (target === 'claude') { openChatPick(target); return; }
     const it = aiDlg?.item; aiDlg = null;
     if (it) sendToAI(it, target);
   }
@@ -1252,8 +1250,8 @@
     aiDlg = { ...aiDlg, view: 'chat', chat: { target, sessions: [], loading: true, q: '' } };
     const st = aiDlg.chat;
     await loadAiSessions(target, {
-      cached: (tg) => tg === 'claude' ? getCachedSessions() : getCachedVertexSessions(),
-      remote: (tg) => tg === 'claude' ? api.sessions() : api.vertexSessions(),
+      cached: () => getCachedSessions(),
+      remote: () => api.sessions(),
       current: () => aiDlg?.chat === st,
       onCached: (sessions) => { st.sessions = sessions; },
       onDone: (sessions) => { if (sessions) st.sessions = sessions; st.loading = false; },
@@ -1265,21 +1263,13 @@
     if (it && tg) sendToAI(it, tg, undefined, sel);
   }
   const chatTitle = (s) => tr(aiDlg?.chat?.target === 'claude' ? titleFor(s.id, s.title) : s.title) || t('（无标题）');   // 服务端占位标题（「（进行中…）」「(无标题)」）走 tr
-  const aiChatCur = $derived(aiDlg?.chat?.target === 'claude' ? session.id : aiDlg?.chat?.target === 'gemini' ? mods.gemini?.vchat.sessionId : null);
+  const aiChatCur = $derived(aiDlg?.chat?.target === 'claude' ? session.id : null);
   const aiChatFiltered = $derived.by(() => {
     const c = aiDlg?.chat;
     if (!c) return [];
     return filterAiSessions(c.sessions, c.q, chatTitle);
   });
-  function ensureVideoModelFor(slot) {
-    const def = caps.data?.veo?.defaults?.model || 'veo-3.1-fast-generate-001';
-    const m = vsState.videoModel || def;
-    const ic = caps.data?.veo?.imgCaps?.[m] || {};
-    const ok = slot === 'last' ? !!ic.last : (ic.ref || 0) > 0;
-    if (!ok) vsState.videoModel = def;
-  }
   async function sendToAI(it, target, slot, sess) {
-    if (target === 'gemini') await ensureModule(target);   // 对话控制器在扩展里，先确保加载
     await sendFileToAi(it, target, slot, sess, {
       kindOf,
       material: aiMaterial,
@@ -1292,18 +1282,8 @@
           load: openSession,
           attach: (attachment) => compose.attachments.push(attachment),
         },
-        gemini: {
-          current: () => mods.gemini?.vchat.sessionId,
-          newChat: (...a) => mods.gemini?.vnewChat(...a),
-          load: (...a) => mods.gemini?.vloadSession(...a),
-          attach: (attachment) => {
-            vsState.func = 'chat';
-            vsState.chatDraftAtts = [...(vsState.chatDraftAtts || []), attachment];
-          },
-        },
       },
-      mediaState: vsState,
-      ensureVideoModel: ensureVideoModelFor,
+      studio: { push: (x) => studioInbox.items.push(x) },
       navigate: (screen) => { ui.screen = screen; },
     });
   }
@@ -2183,53 +2163,46 @@
               <svg class="ai-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
             </button>
           {/if}
-          {#if aiCaps.gemini}
-            <button class="ai-opt" onclick={() => (aiDlg = { ...aiDlg, view: 'vertex' })}>
-              <span class="ai-ic"><img src="{BASE}assets/icons/gemini.svg" alt="" /></span>
-              <span class="ai-lb">Vertex<small>{t('Gemini 对话 / 生成视频·图片·语音·音乐')}</small></span>
+          {#if aiCaps.studio}
+            <button class="ai-opt" onclick={() => (aiDlg = { ...aiDlg, view: 'studio' })}>
+              <span class="ai-ic"><img src="{BASE}assets/icons/studio.svg" alt="" /></span>
+              <span class="ai-lb">Media Studio<small>{t('生成图像 / 视频 / 配音 / 音乐')}</small></span>
               <svg class="ai-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
             </button>
           {/if}
-        {:else if aiDlg.view === 'vertex'}
-          <h3><button class="ai-back" aria-label={t('返回')} onclick={() => (aiDlg = { ...aiDlg, view: 'root' })}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>{t('发送给 Vertex')}</h3>
-          {#if aiCaps.gemini}
-            <button class="ai-opt" onclick={() => pickAI('gemini')}>
-              <span class="ai-ic"><img src="{BASE}assets/icons/gemini.svg" alt="" /></span>
-              <span class="ai-lb">{t('Gemini 对话')}<small>{t('当附件提问')}</small></span>
-              <svg class="ai-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
-            </button>
-          {/if}
+        {:else if aiDlg.view === 'studio'}
+          <h3><button class="ai-back" aria-label={t('返回')} onclick={() => (aiDlg = { ...aiDlg, view: 'root' })}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>{t('发到 Media Studio')}</h3>
           {#if aiCaps.video}
             <button class="ai-opt" onclick={() => (aiCaps.mode === 'image' ? (aiDlg = { ...aiDlg, view: 'video' }) : pickAI('video'))}>
               <span class="ai-ic" style="background:#6d7cff"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.2l4.6 2.8L10 14.8z" fill="#fff" stroke="none"/></svg></span>
-              <span class="ai-lb">{t('视频生成')}<small>{aiCaps.mode === 'image' ? t('作为首帧 / 尾帧 / 偏好图') : t('作为提示词')}</small></span>
+              <span class="ai-lb">{t('视频')}<small>{aiCaps.mode === 'image' ? t('作为首帧 / 尾帧 / 参考图') : t('作为提示词')}</small></span>
             </button>
           {/if}
           {#if aiCaps.image}
             <button class="ai-opt" onclick={() => pickAI('image')}>
               <span class="ai-ic" style="background:#0088ff"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.5" cy="10" r="1.5" fill="#fff" stroke="none"/><path d="M4 16.5l5-4 4 3 3-2 4 3"/></svg></span>
-              <span class="ai-lb">{t('图片生成')}<small>{aiCaps.mode === 'image' ? t('作为改图素材') : t('作为提示词')}</small></span>
+              <span class="ai-lb">{t('图像')}<small>{aiCaps.mode === 'image' ? t('作为改图素材') : t('作为提示词')}</small></span>
             </button>
           {/if}
           {#if aiCaps.audio}
             <button class="ai-opt" onclick={() => pickAI('audio')}>
               <span class="ai-ic" style="background:#ff2d55"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round"><path d="M5 10v4M9 7.5v9M13 9v6M17 6v12M21 10v4"/></svg></span>
-              <span class="ai-lb">{t('语音合成')}<small>{t('作为朗读文本')}</small></span>
+              <span class="ai-lb">{t('配音')}<small>{t('作为朗读文本')}</small></span>
             </button>
           {/if}
           {#if aiCaps.music}
             <button class="ai-opt" onclick={() => pickAI('music')}>
               <span class="ai-ic" style="background:#ff8d28"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12"/><circle cx="6" cy="18" r="2.6" fill="#fff" stroke="none"/><circle cx="17" cy="16" r="2.6" fill="#fff" stroke="none"/></svg></span>
-              <span class="ai-lb">{t('音乐生成')}<small>{t('作为描述')}</small></span>
+              <span class="ai-lb">{t('音乐')}<small>{t('作为描述')}</small></span>
             </button>
           {/if}
         {:else if aiDlg.view === 'video'}
-          <h3><button class="ai-back" aria-label={t('返回')} onclick={() => (aiDlg = { ...aiDlg, view: 'vertex' })}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>{t('这张图用作')}</h3>
+          <h3><button class="ai-back" aria-label={t('返回')} onclick={() => (aiDlg = { ...aiDlg, view: 'studio' })}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>{t('这张图用作')}</h3>
           <button class="ai-opt" onclick={() => pickVideoSlot('first')}><span class="ai-ic" style="background:#6d7cff"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7.5 5.5v13" stroke-width="2.6"/></svg></span><span class="ai-lb">{t('首帧素材')}<small>{t('视频从这张图开始')}</small></span></button>
           <button class="ai-opt" onclick={() => pickVideoSlot('last')}><span class="ai-ic" style="background:#6d7cff"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M16.5 5.5v13" stroke-width="2.6"/></svg></span><span class="ai-lb">{t('尾帧素材')}<small>{t('视频结束于这张图')}</small></span></button>
-          <button class="ai-opt" onclick={() => pickVideoSlot('ref')}><span class="ai-ic" style="background:#6d7cff"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8.5v7M8.5 12h7"/></svg></span><span class="ai-lb">{t('偏好图')}<small>{t('带入主体 / 风格参考（Veo 3.1）')}</small></span></button>
+          <button class="ai-opt" onclick={() => pickVideoSlot('ref')}><span class="ai-ic" style="background:#6d7cff"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8.5v7M8.5 12h7"/></svg></span><span class="ai-lb">{t('参考图')}<small>{t('带入主体 / 风格')}</small></span></button>
         {:else if aiDlg.view === 'chat' && aiDlg.chat}
-          <h3><button class="ai-back" aria-label={t('返回')} onclick={() => (aiDlg = { ...aiDlg, view: aiDlg.chat.target === 'claude' ? 'root' : 'vertex', chat: null })}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>{t('发送到 {name} · 选择对话', { name: AI_NAMES[aiDlg.chat.target] })}</h3>
+          <h3><button class="ai-back" aria-label={t('返回')} onclick={() => (aiDlg = { ...aiDlg, view: 'root', chat: null })}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>{t('发送到 {name} · 选择对话', { name: AI_NAMES[aiDlg.chat.target] })}</h3>
           <div class="ai-search">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
             <input type="search" placeholder={t('搜索对话')} bind:value={aiDlg.chat.q} onkeydown={(e) => e.stopPropagation()} />

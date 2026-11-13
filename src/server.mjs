@@ -38,6 +38,8 @@ import { initStatus } from './runtime/status.mjs';
 import { initCtxUsage } from './runtime/ctx-usage.mjs';
 import { initOutboundProxy } from './runtime/net-proxy.mjs';
 import { initClaudeUpstream } from './runtime/claude-upstream.mjs';
+import { initModelHub, reconcileStudio } from './runtime/model-hub/registry.mjs';
+import { migrateLegacyConfigs } from './runtime/model-hub/legacy-migrate.mjs';
 import { initClaudeCli } from './runtime/claude-cli.mjs';
 import { registerClaudeCliRoutes } from './routes/claude-cli.mjs';
 import { lanIPs, registerAdminRoutes } from './routes/admin.mjs';
@@ -52,6 +54,8 @@ import { registerSessionRoutes } from './routes/sessions.mjs';
 import { registerClaudeArchiveRoutes } from './routes/claude-archive.mjs';
 import { registerOverviewRoutes } from './routes/overview.mjs';
 import { registerMediaFileRoutes } from './routes/media-file.mjs';
+import { registerGeminiRetiredRoutes } from './routes/gemini-retired.mjs';
+import { registerToolImageRoutes } from './routes/tool-image.mjs';
 import { registerStaticRoutes } from './routes/static.mjs';
 import { registerOverlayWeb, registerOverlayRoutes } from './runtime/overlay-web.mjs';
 import { registerFileRoutes } from './routes/files.mjs';
@@ -70,7 +74,11 @@ import { registerClaudeMemoryRoutes } from './routes/claude-memory.mjs';
 import { registerClaudeTaskRoutes } from './routes/claude-tasks.mjs';
 import { registerMcpOAuthRoutes } from './routes/mcp-oauth.mjs';
 import { registerSessionCollabRoutes } from './routes/session-collab.mjs';
+import { registerProjectModeRoutes } from './routes/project-mode.mjs';
 import { registerClaudeProviderRoutes } from './routes/claude-providers.mjs';
+import { registerModelHubRoutes } from './routes/model-hub.mjs';
+import { registerVertexCredentialRoutes } from './routes/vertex-credentials.mjs';
+import { registerDispatchRoutes } from './routes/dispatch.mjs';
 import { registerUiStateRoutes } from './routes/ui-state.mjs';
 import { registerDesktopHostRoutes } from './routes/desktop-host.mjs';
 import { registerHtmlSiteRoutes } from './runtime/html-site.mjs';
@@ -154,6 +162,8 @@ const inflightOrphans = initInflight(ROOT);
 await initOutboundProxy();
 // 号池「会话中无缝换号」的本机上游代理（开关开着才起）。见 runtime/claude-upstream.mjs。
 initClaudeUpstream();
+// 模型中心：本机模型网关 + Claude 与 dimensio 共用的模型服务（含 Vertex）。见 runtime/model-hub/registry.mjs。
+initModelHub().catch((e) => console.error('[model-hub] init failed:', e?.message || e));
 // Claude Code 运行组件：源码直跑用 SDK 自带的（行为同以前）；安装包不再内嵌，没有就在后台从官方源下到数据根
 // （出站代理已就绪，不等它下完）。见 runtime/claude-cli.mjs。
 initClaudeCli();
@@ -161,6 +171,10 @@ initClaudeCli();
 // 功能扩展（Vertex / Codex / dimensio）在挂路由、判 agent 开关之前加载完：
 // agent 能不能跑先看所属扩展在不在。没装 / 加载失败的扩展只是不可用，不影响核心。见 modules/registry.mjs。
 await loadModules();
+// 模型中心 ⇄ Media Studio 对账：要等扩展加载完才拿得到 Studio 的桥（补删 / 补推 Studio 不在时欠下的，孤儿托管服务取消托管）
+try { reconcileStudio(); } catch (e) { console.error('[model-hub] Media Studio 对账失败：', e?.message || e); }
+// 老配置（管理员的 Claude 自定义服务、Media Studio 的「地址 + Key」服务）一次性并进模型中心；dimensio 的在它的扩展加载时已经并过
+try { migrateLegacyConfigs(); } catch (e) { console.error('[model-hub] 老配置并进模型中心失败：', e?.message || e); }
 
 const { gen: adminGen, adminCredential, authOk, getCookie, bearerToken, queryToken, authCookie, clearAuthCookie, userCookie, clearUserCookie } = createAuth(TOKEN, NO_AUTH, { tokenHash: TOKEN_HASH, isAdminSession,
   // 与 identify 同口径：多用户关着时只认服务账号
@@ -271,11 +285,17 @@ registerClaudeTaskRoutes(router, { identify: identifySnap }); // GET /api/claude
 registerMcpOAuthRoutes(router, { identify });                 // /api/mcp-oauth/* — 远程连接器 OAuth 授权（回调路由不要求登录，只认进行中流程的 state）
 registerClaudeArchiveRoutes(router, { identify });               // POST /api/claude/archive + GET /api/claude/search — 会话归档与全文搜索（登录身份，快照访客不开放）
 registerSessionCollabRoutes(router, { identify });            // /api/claude/proposals、/proposal/{start,dismiss}、/peer-hold — 「Claude 发起新会话」卡片与跨会话消息确认
+registerProjectModeRoutes(router, { identify });              // /api/claude/project、/project/{resolve,memory} — 项目对话的概览（项目说明、暂停、已解决、项目记忆）
+registerVertexCredentialRoutes(router, { identify });        // /api/vertex/credentials* — 主机的 Google 云凭据（仅管理员；模型中心的 Vertex 与 Media Studio 共用）
+registerModelHubRoutes(router, { identify });                // /api/model-hub/* — 设置 › 模型中心（Claude 与 dimensio 共用的模型服务、API 池、Vertex，仅主机管理员）
 registerClaudeProviderRoutes(router, { identify });          // /api/claude/providers/* — 设置 › Claude › 模型服务（自定义 API，仅主机管理员）
+registerDispatchRoutes(router, { identify: identifySnap });   // /api/claude/dispatch/* — 设置 › Claude › 子 agent 调用策略（鉴权同 /api/claude/settings：快照访客只读，图谱数据仅管理员）
 registerUiStateRoutes(router, { identify: identifySnap });    // /api/ui/{state,answer} — 工作区人机协同上行（视图上报 + 截图/草稿应答）
 registerDesktopHostRoutes(router, { identify });               // /api/desktop/browser-host — 桌面壳注册原生浏览器宿主（服务端与壳同机时）
 
 registerMediaFileRoutes(router, { identify });                // GET /api/vertex/media — 已生成媒体的只读服务（核心：Vertex 没装时历史图照样显示）
+registerGeminiRetiredRoutes(router);                          // /api/vertex/session*、sessions — Gemini 对话 11-04 下线，统一 410
+registerToolImageRoutes(router, { identify: identifySnap }); // GET /api/tool-image — 工具结果里的图片（状态行缩略图条），鉴权同 /api/session
 registerAdminRoutes(router, { authOk, adminCredential, adminGen }); // /api/admin/*, /api/lan, /api/capabilities
 
 registerAppUpdateRoutes(router, { authOk, identify, lanIPs }); // /api/app/{version,download,hello,server-info} + /download/android（手机扫码下载 App）

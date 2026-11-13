@@ -4,7 +4,7 @@
   //   静态壁纸（多洛米蒂/上传图）→ GlassScene GL 引擎画 Dock 玻璃体（真折射）；
   //   动态底材（flux iframe / 空间视差 canvas）→ 每画完一帧同步拷给 FigmaGlassDock(live)；
   //   WebGPU 不可用或还没画出第一帧时 Dock 走 domGlass backdrop。
-  // 入口点击行为与手机 Home 同一套契约：登录门、noEnterAnim 直切、claude/vertex
+  // 入口点击行为与手机 Home 同一套契约：登录门、noEnterAnim 直切、claude/studio
   // 转场把 Dock 图标 rect 交给 ui.enterOrigin。壁纸机制（flux 调参轮询/交叉淡出）
   // 与手机端同源复刻，数据仍是 wp/fluxParams 单一真相。
   import { ui, me, prefs, fluxParams, fluxProps, screenOn } from '../../lib/state.svelte.js';
@@ -19,17 +19,17 @@
   import { tooltip } from '../kit/tooltip.js';
   import CommandPalette from './CommandPalette.svelte';
   import { t } from '../../lib/i18n.js';
-  import { ovUrl } from '../../lib/overlay.svelte.js';   // 入口图标：私有 overlay 有同名原版（如小人）就换成它
+  import { ovUrl } from '../../lib/overlay.svelte.js';   // Claude 入口的小人是原版资源；其余入口图标是自有素材
 
   const BASE = import.meta.env.BASE_URL;
 
   // —— 入口（与手机 Home 同一套语义：小人=任务状态指示器、ChatGPT 按权限隐藏）——
   const claudeMascot = $derived(ui.taskDone ? '举旗' : '正面站立');   // i18n-ignore 素材文件名
   const AGENTS = $derived([
-    { key: 'claude', label: 'Claude', img: `assets/mascot/claude-小人-${claudeMascot}.svg` },   // i18n-ignore 素材路径
-    { key: 'chatgpt', label: 'ChatGPT', img: `assets/icons/chatgpt-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
-    { key: 'harness', label: 'dimensio', img: `assets/icons/dimensio-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
-    { key: 'vertex', label: 'Vertex', img: 'assets/icons/gemini.svg' },
+    { key: 'claude', label: 'Claude', img: ovUrl(`assets/mascot/claude-小人-${claudeMascot}.svg`) },   // i18n-ignore 素材路径
+    { key: 'chatgpt', label: 'ChatGPT', img: `${BASE}assets/icons/chatgpt-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
+    { key: 'harness', label: 'dimensio', img: `${BASE}assets/icons/dimensio-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
+    { key: 'studio', label: 'Media Studio', img: `${BASE}assets/icons/studio-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
   // 只摆这个身份开着的 agent（服务端下发的 me.agents：全局开关 ∩ 按人授权）；服务端各路由另有真闸。
   ].filter((e) => screenOn(e.key)));
 
@@ -169,8 +169,8 @@
       return;
     }
     // 转场进行中不再开第二个（转场层已不吞点击，防连点的门在入口这边把）
-    if (ui.enterClaude || ui.enterVertex) return;
-    if (prefs.noEnterAnim && (key === 'claude' || key === 'vertex')) { ui.screen = key; return; }
+    if (ui.enterClaude || ui.enterStudio) return;
+    if (prefs.noEnterAnim && (key === 'claude' || key === 'studio')) { ui.screen = key; return; }
     const icon = ev?.currentTarget?.querySelector('.dico');
     const r = icon?.getBoundingClientRect();
     if (key === 'claude') {
@@ -182,10 +182,9 @@
       ui.enterClaude = true;
       return;
     }
-    if (key === 'vertex') {
+    if (key === 'studio') {
       ui.enterOrigin = r ? { x: r.left, y: r.top, w: r.width, h: r.height } : null;
-      ui.enterOriginTile = ui.enterOrigin;
-      ui.enterVertex = true;
+      ui.enterStudio = true;
       return;
     }
     ui.screen = key;
@@ -200,7 +199,7 @@
   {#key gpuEpoch}
   {#if curWp.dyn}
     {#if ui.booted}
-      <iframe class="wp" bind:this={wpEl} src={BASE + 'wallpaper/index.html?v=pow2'} title={t('背景')} scrolling="no" tabindex="-1" onload={onWpLoad}></iframe>
+      <iframe class="wp" bind:this={wpEl} src={BASE + 'wallpaper/drift.html?v=6'} title={t('背景')} scrolling="no" tabindex="-1" onload={onWpLoad}></iframe>
       {#if portWanted && dockRect}
         <!-- 流体壁纸：玻璃背景每帧从 iframe 里的 flux 画布同步拷取（flux 一直在画，不用向它要帧） -->
         <FigmaGlassDock bind:this={fgdLive} live rect={dockRect} edgeLines={figmaEdge} onready={(ok) => (portOn = ok)} onlost={onGpuLost} />
@@ -232,7 +231,7 @@
                 onpointerenter={() => (hov = i)} onclick={(ev) => openEntry(a.key, ev)} aria-label={a.label}>
           <!-- 转场期间 claude 那只交给转场层的同款副本演（蹲身/下潜），本尊让位免得两只重影 -->
           <img class="dico" class:handoff={a.key === 'claude' && ui.enterClaude && !!ui.enterBar}
-               src={ovUrl(a.img)} alt="" draggable="false" />
+               src={a.img} alt="" draggable="false" />
         </button>
       {/each}
       <span class="dsep"></span>

@@ -42,11 +42,11 @@ test("空闲时换型号：当场按新型号重建（对话保留、身份句�
   watchSession(session, (ev) => events.push(ev));
 
   const r = setSessionModel(session, { model: "deepseek-v4-pro" });
-  assert.deepEqual(r, { ok: true, provider: "openai", model: "deepseek-v4-pro", thinking: "off" }, "V4 Pro 没有 low 档，收到不高于它的 off");
+  assert.deepEqual(r, { ok: true, provider: "openai", model: "deepseek-v4-pro", thinking: "low" }, "V4 Pro 有 low 档，原样保留");
   const state = session.state!;
   assert.notEqual(state, before, "状态按新型号重建");
   assert.equal(state.adapter.model, "deepseek-v4-pro", "下一次请求就发给新型号");
-  assert.equal(state.budget.thinking, "off");
+  assert.equal(state.budget.thinking, "low");
   assert.equal(state.messages.length, messages + 1, "对话一条不少，末尾多一条换模型说明");
   const note = state.messages.at(-1)!;
   assert.equal(note.kind, "model-switch");
@@ -56,8 +56,8 @@ test("空闲时换型号：当场按新型号重建（对话保留、身份句�
   assert.match(state.system, /You are running as the "deepseek-v4-pro" model/, "问它是什么模型要答对");
   assert.doesNotMatch(state.system, /"deepseek-flash" model/);
   assert.equal(session.cfg?.model, "deepseek-v4-pro", "快照配置跟上，重开会话不回退");
-  assert.equal(session.cfg?.thinking, "off");
-  assert.ok(events.some((e) => e.e === "model" && e.model === "deepseek-v4-pro" && e.thinking === "off"));
+  assert.equal(session.cfg?.thinking, "low");
+  assert.ok(events.some((e) => e.e === "model" && e.model === "deepseek-v4-pro" && e.thinking === "low"));
   assert.equal(getConfig().model, "deepseek-flash", "会话级：不改全局");
 
   // 新状态照样能切档（回调挂回来了）、能接着跑
@@ -168,7 +168,7 @@ test("运行中换型号：这一轮不受影响，回 pending；下一轮开跑
   const before = session.state!;
   session.running = true; // 正在跑的那一轮（只看分支，不真跑）
   const r = setSessionModel(session, { model: "deepseek-v4-pro" });
-  assert.deepEqual(r, { ok: true, provider: "openai", model: "deepseek-v4-pro", thinking: "off", pending: true });
+  assert.deepEqual(r, { ok: true, provider: "openai", model: "deepseek-v4-pro", thinking: "low", pending: true });
   assert.equal(session.state, before, "跑着的这一轮不换状态");
   assert.equal(before.adapter.model, "fake");
   session.running = false;

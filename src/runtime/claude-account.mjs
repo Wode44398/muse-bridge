@@ -10,7 +10,11 @@
 // 一条对话可在切换后无缝续聊（A 号限流了切到 B 号接着聊同一个会话）。
 //
 // config.json 形状：
-//   claudeAccounts: [{ id, label, token }]
+//   claudeAccounts: [{ id, label, token, plan? }]
+//   plan：用户手动标的套餐（'pro' | 'max5x' | 'ultra'；缺省 / '' = 自动识别）。setup-token 只有 user:inference 权限，
+//   读不到 profile 里的 rate_limit_tier，响应头也分不出 Pro / Max 5x / Ultra（= 原 Max 20x），只能让用户标一下。
+//   login?：这个号的「完整登录」凭据（{ accessToken, refreshToken, expiresAt, scopes, email, orgUuid, … }，带 user:profile）。
+//   只给读账号级信息的功能用（重置卡，limit-resets.mjs）；跑对话仍用 token。换了 token 就清掉（可能已不是同一个订阅）。
 //   claudeActiveAccount: <id>
 // 迁移：若无 claudeAccounts 但有旧的 oauthToken，自动播种一个「默认账号」。
 
@@ -35,6 +39,10 @@ function persist() {
   raw.claudeActiveAccount = activeId;
   try { writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2)); } catch (e) { console.error('[claude-account] persist failed:', (e && e.message) || e); }
 }
+
+// 手动可标的套餐代号（status.mjs 的 PLAN_LABEL 同一套）。
+export const MANUAL_PLANS = ['pro', 'max5x', 'ultra'];
+const normPlan = (p) => { const v = String(p || '').trim().toLowerCase(); return MANUAL_PLANS.includes(v) ? v : ''; };
 
 function newId() { return 'a-' + randomBytes(4).toString('hex'); }
 
@@ -70,12 +78,25 @@ export function activeToken() { const a = getActiveAccount(); return a ? a.token
 export function listAccounts() {
   return accounts.map((a) => ({
     id: a.id, label: a.label, active: a.id === activeId,
-    hasToken: !!a.token, tokenTail: a.token ? a.token.slice(-6) : '',
+    hasToken: !!a.token, tokenTail: a.token ? a.token.slice(-6) : '', plan: normPlan(a.plan),
   }));
+}
+
+// 这个号的完整登录凭据（见文件头 login 字段）。服务端内部用，绝不回给前端。
+export function accountLogin(id) { const a = accounts.find((x) => x.id === id); return a && a.login && typeof a.login === 'object' ? { ...a.login } : null; }
+export function setAccountLogin(id, login) {
+  const a = accounts.find((x) => x.id === id);
+  if (!a) return { error: '无此账号' };
+  if (login && typeof login === 'object') a.login = { ...login }; else delete a.login;
+  persist();
+  return { ok: true };
 }
 
 // 服务端内部用（号池逐号用量，account-usage.mjs；配了 overlay 用量来源时交给它）：带完整 token，绝不直接回给前端。
 export function listAccountsWithTokens() { return accounts.map((a) => ({ id: a.id, token: a.token })); }
+
+// 用户手动标的套餐（'' = 自动识别）；status.mjs 解析套餐时最先看它。
+export function accountManualPlan(id) { const a = accounts.find((x) => x.id === id); return a ? normPlan(a.plan) : ''; }
 
 // token 属于哪个号（无缝换号时 CLI env 里固定的那个号：它直连官方的 OAuth 接口按这个号算）。
 export function accountIdForToken(tok) { const a = tok ? accounts.find((x) => x.token === tok) : null; return a ? a.id : ''; }
@@ -86,12 +107,12 @@ export function setActive(id) {
   return { ok: true, active: activeId };
 }
 
-export function addAccount({ label, token } = {}) {
+export function addAccount({ label, token, plan } = {}) {
   const t = String(token || '').trim();
   if (!t) return { error: 'token 不能为空（在该账号下跑 claude setup-token 获取）' };
   const l = String(label || '').trim() || ('账号 ' + (accounts.length + 1));
   const id = newId();
-  accounts.push({ id, label: l, token: t });
+  accounts.push({ id, label: l, token: t, ...(normPlan(plan) ? { plan: normPlan(plan) } : {}) });
   // S4：当前激活的号没有 token（向导里跳过了 Claude、播种出来的空「默认账号」），加了号却不激活，
   // Claude 照样没有认证——这时直接把新号设为激活号。
   // 但留空令牌的号 = 沿用本机登录态（~/.claude 凭据，见文件头的播种与 claudeEngineEnv）：本机真 claude login 过，
@@ -104,11 +125,13 @@ export function addAccount({ label, token } = {}) {
   return { ok: true, id, ...(activated ? { active: id } : {}) };
 }
 
-export function updateAccount(id, { label, token } = {}) {
+export function updateAccount(id, { label, token, plan } = {}) {
   const a = accounts.find((x) => x.id === id);
   if (!a) return { error: '无此账号' };
   if (typeof label === 'string' && label.trim()) a.label = label.trim();
-  if (typeof token === 'string' && token.trim()) a.token = token.trim();
+  if (typeof token === 'string' && token.trim() && token.trim() !== a.token) { a.token = token.trim(); delete a.login; }
+  // plan 传了才动（老前端不带这个字段，别把手动标的套餐冲掉）；'' / 'auto' = 改回自动识别。
+  if (typeof plan === 'string') { const v = normPlan(plan); if (v) a.plan = v; else delete a.plan; }
   persist();
   return { ok: true };
 }
@@ -154,6 +177,11 @@ export function apiKeyMode() {
   if (API_KEY_SOURCE === 'config') return activeToken() ? 'config-unused' : 'config';
   return API_KEY_SOURCE === 'desktop' ? 'desktop' : API_KEY_SOURCE === 'env' ? 'env' : '';
 }
+
+// Claude 工具子进程的默认环境（铺在最底下，服务进程或部署者自己设了就以他们的为准）。
+// PYTHONIOENCODING：Windows 上 Python 往管道写默认走 GBK，Bash 工具按 UTF-8 读，中文全成乱码（11-07 调试反馈：pandas 中文列名）。
+// 只管 stdin/stdout/stderr，不碰 open() 的默认编码，读 GBK 文件的老脚本不受影响；PowerShell 工具这边控制台本来就是 UTF-8，照样正常。
+export const TOOL_DEFAULT_ENV = Object.freeze({ PYTHONIOENCODING: 'utf-8' });
 
 // 号池「会话中无缝换号」的上游代理（claude-upstream.mjs 启动时注册；不反向 import，免得成环）。
 let upstreamHook = null;

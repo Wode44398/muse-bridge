@@ -59,6 +59,7 @@
     if (!st) return loading ? { tone: 'busy', text: t('正在检测…') } : { tone: 'mute', text: t('状态未知') };
     if (status === 'connected') return { tone: 'ok', text: tools.length ? t('已连接 · {n} 个工具', { n: tools.length }) : t('已连接') };
     if (status === 'needs-auth') return { tone: 'warn', text: t('需要登录') };
+    if (status === 'failed' && st.offline) return { tone: 'mute', text: t('本机服务未运行 · 启动后自动连上') };
     if (status === 'failed') return { tone: 'crit', text: t('连接失败') };
     if (status === 'pending') return { tone: 'busy', text: t('连接中…') };
     return { tone: 'mute', text: t('状态未知') };

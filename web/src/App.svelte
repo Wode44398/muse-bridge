@@ -42,6 +42,12 @@
   import SettingsDesktop from './desktop/settings/SettingsDesktop.svelte';
   import DesktopHome from './desktop/home/DesktopHome.svelte';
   import ServerAdmin from './components/admin/ServerAdmin.svelte';
+  import { hubUi } from './lib/modelHub.svelte.js';
+  // 模型中心的浮层（添加 / 服务详情 / 老编辑器）：第一次有浮层要开时才加载，之后常驻——开合与退场动画由它自己按 hubUi.sheet 管
+  let HubOverlays = $state(null);
+  $effect(() => {
+    if (hubUi.sheet && !HubOverlays) import('./components/modelhub/HubOverlays.svelte').then((m) => { HubOverlays = m.default; }).catch((e) => console.error('[model-hub] overlays failed to load:', e));
+  });
   import AgentsPage from './components/AgentsPage.svelte';
   import DesktopChrome from './desktop/chrome/DesktopChrome.svelte';
   import MediaViewer from './components/preview/MediaViewer.svelte';
@@ -54,6 +60,8 @@
   import { parsePairPayload } from './lib/pair.js';
   import LoginDialog from './components/LoginDialog.svelte';
   import Toast from './components/Toast.svelte';
+  import NoticeBanner from './components/NoticeBanner.svelte';
+  import { initNotices } from './lib/notices.svelte.js';
   import { t } from './lib/i18n.js';
   import { syncPluginUi } from './lib/pluginUi.svelte.js';   // 插件界面扩展（主页卡片、工作台标签、各处菜单、主题变量）
 
@@ -103,9 +111,9 @@
   // 分页 keep-alive 挂载闩：进过一次就保持挂载（休眠/唤醒切换，见下方 .keep）。boot 完成后错峰
   // 预挂载两个分页（各让一帧再排下一个），首次点入口的转场也全程丝滑——挂载
   // 成本在 idle 期已付清，转场揭幕只翻 display。
-  let mountClaude = $state(false), mountVertex = $state(false), mountChatGPT = $state(false);
+  let mountClaude = $state(false), mountStudio = $state(false), mountChatGPT = $state(false);
   $effect(() => { if (ui.screen === 'claude' || ui.enterClaude) mountClaude = true; });
-  $effect(() => { if (ui.screen === 'vertex' || ui.enterVertex) mountVertex = true; });
+  $effect(() => { if (ui.screen === 'studio' || ui.enterStudio) mountStudio = true; });
   $effect(() => { if (ui.screen === 'chatgpt') mountChatGPT = true; });
   // 工作区协同：上报用户所在页面（agent 的 workspace.view 用）。没登录不报（接口要鉴权）；登录后补报一次。
   $effect(() => { if (me.kind !== 'none') reportUi({ page: ui.screen }); });
@@ -117,7 +125,7 @@
     if (!ui.booted || needConfig) return;
     // 预挂载只挂这个身份开着的分页（没开的 agent 连挂载成本都不付）。
     const t1 = setTimeout(() => { if (screenOn('claude')) mountClaude = true; }, 1600);
-    const t2 = setTimeout(() => { if (screenOn('vertex')) mountVertex = true; }, 3400);
+    const t2 = setTimeout(() => { if (screenOn('studio')) mountStudio = true; }, 3400);
     warmThemeWallpapers();   // 另一套主题的壁纸空闲时先解码：第一次点 THE BRIDGE 也不用等图
     return () => { clearTimeout(t1); clearTimeout(t2); };
   });
@@ -131,6 +139,7 @@
   $effect(() => {
     if (!ui.booted || needConfig || me.kind === 'none') return;
     busStart();
+    initNotices();   // 会话消息通知（横幅 / 系统通知 / 铃声震动），只挂一次
     // ui.cmd：agent 经接口让用户的界面换页 / 打开会话 / 预览文件 / 弹提示（lib/agentUi.js）
     const off = busOn((ev) => {
       if (ev.type === 'agents.changed' || ev.type === 'me.changed' || ev.type === 'plugins.changed' || ev.type === 'plugins.market') refreshMe();
@@ -140,6 +149,12 @@
   });
   $effect(() => {
     const s = ui.screen;
+    // 2026-11-04 Gemini 分页下线：旧代码路径 / 旧客户端还可能把人送到 'vertex'（或 'gemini'）。
+    // 没有任何 agent 再认领这个页名，screenOn 会放行、落进 ComingSoon——这里改送 Media Studio（没开就回根页）。
+    if (s === 'vertex' || s === 'gemini') {
+      untrack(() => { ui.screen = screenOn('studio') ? 'studio' : rootScreen(); });
+      return;
+    }
     if (!ui.booted || s === 'home' || s === 'files') return;
     if (screenOn(s)) return;
     untrack(() => {
@@ -148,18 +163,18 @@
     });
   });
 
-  // 桌面 Dock / 命令面板仍用旧契约「置 ui.enterClaude / enterVertex + 起点 rect」要一次入场：
+  // 桌面 Dock / 命令面板仍用旧契约「置 ui.enterClaude / enterStudio + 起点 rect」要一次入场：
   // 这里接住，交给统一的转场引擎（入口长成分页），跑完把旗子放下。手机四宫格直接调 openPage。
   // 同一次微任务里执行：旧快照要到下一帧才拍，旗子引起的 DOM 变化（Dock 图标 handoff 隐藏）
   // 先被 enterBar=null 撤回，不会拍进去。
   $effect(() => {
-    const key = ui.enterClaude ? 'claude' : ui.enterVertex ? 'vertex' : null;
+    const key = ui.enterClaude ? 'claude' : ui.enterStudio ? 'studio' : null;
     if (!key) return;
     untrack(() => {
-      const from = (key === 'vertex' && ui.enterOriginTile) || ui.enterOrigin || null;
+      const from = ui.enterOrigin || null;
       const radius = ui.enterBar ? 12 : 30;
       ui.enterBar = null;
-      openPage(key, { from, radius }).finally(() => { ui.enterClaude = false; ui.enterVertex = false; });
+      openPage(key, { from, radius }).finally(() => { ui.enterClaude = false; ui.enterStudio = false; });
     });
   });
 
@@ -293,14 +308,14 @@
      ② 视觉正确性——液态玻璃的 SVG 滤镜（feImage 位移贴图）只能靠「保持挂载」复用已解码贴图。
         此前 files/antigravity 分支会卸载 Home，返回时重挂重建滤镜，真机上 feImage 解码赶不上
         backdrop 合成 → 折射断层撕裂且不自愈（claude/vertex 走 display 切换路径就没事）。
-     侧滑返回（claudeSliding/vertexSliding）时提前唤醒，露出底层主页。 -->
+     侧滑返回（claudeSliding/studioSliding）时提前唤醒，露出底层主页。 -->
 {#if !single}
-  <div style:display={ui.screen !== 'home' && !ui.claudeSliding && !ui.vertexSliding && !ui.homeWarm ? 'none' : 'contents'}>
+  <div style:display={ui.screen !== 'home' && !ui.claudeSliding && !ui.studioSliding && !ui.homeWarm ? 'none' : 'contents'}>
     <!-- 桌面壳走沉浸启动器（批4：Dock + Ctrl+K），手机/网页仍是四宫格 Home -->
     {#if isNativeDesktop()}<DesktopHome />{:else}<Home />{/if}
   </div>
 {/if}
-<!-- claude / chatgpt / vertex 分页 keep-alive：首次进入才挂载，之后【休眠】保留——
+<!-- claude / chatgpt / studio 分页 keep-alive：首次进入才挂载，之后【休眠】保留——
      聊天滚动位置/输入草稿随 DOM 一起保住。
      【2026-09-26】休眠从 display:none 改成 content-visibility:hidden + visibility:hidden + inert
      （app.css 的 .keep.dormant）：display:none 会把整页的样式与布局扔掉，每次进页都要重算——
@@ -316,9 +331,9 @@
     {#await loadPage.chatgpt() then m}<m.default />{/await}
   </div>
 {/if}
-{#if mountVertex && screenOn('vertex')}
-  <div class="keep" class:dormant={ui.screen !== 'vertex'} inert={ui.screen !== 'vertex'}>
-    {#await loadPage.vertex() then m}<m.default />{/await}
+{#if mountStudio && screenOn('studio')}
+  <div class="keep" class:dormant={ui.screen !== 'studio'} inert={ui.screen !== 'studio'}>
+    {#await loadPage.studio() then m}<m.default />{/await}
   </div>
 {/if}
 {#if ui.screen === 'files'}
@@ -358,7 +373,7 @@
   {:else}
     <ComingSoon name="dimensio" />
   {/if}
-{:else if ui.screen !== 'home' && ui.screen !== 'claude' && ui.screen !== 'chatgpt' && ui.screen !== 'vertex'}
+{:else if ui.screen !== 'home' && ui.screen !== 'claude' && ui.screen !== 'chatgpt' && ui.screen !== 'studio'}
   <ComingSoon name={ui.screen} />
 {/if}
 
@@ -413,6 +428,9 @@
 <!-- 服务端控制台（桌面服务端形态，设置页右上角进入；磨砂借下层设置页的罩） -->
 {#if ui.serverAdminOpen}<ServerAdmin />{/if}
 
+<!-- 模型中心的浮层：首页在 设置 › 模型中心；添加 / 服务详情 / 老编辑器是全局浮层（设置页、dimensio 的「模型服务」都经 lib/modelHub 唤起） -->
+{#if HubOverlays}<HubOverlays />{/if}
+
 <!-- 手机端「扫一扫」登录网页版：全屏取景/确认卡（账户卡入口，或系统相机扫到 ?pair= 直达） -->
 {#if ui.pairScan}<PairScan />{/if}
 
@@ -425,7 +443,10 @@
 <!-- 轻量 toast（lib/toast.svelte.js）：全程常驻，底部居中一条，不拦点击 -->
 <Toast />
 
-<!-- 统一沉浸式文件查看器（全程常驻，preview.open 时全屏接管；Vertex 与工作空间共用） -->
+<!-- 会话消息通知的前台横幅（lib/notices.svelte.js）：别的会话在问你 / 跑完了 / 出错了，从顶部滑下一张卡 -->
+<NoticeBanner />
+
+<!-- 统一沉浸式文件查看器（全程常驻，preview.open 时全屏接管；Media Studio 与工作空间共用） -->
 <MediaViewer />
 
 <!-- 全域拖拽的那一份「跟手卡片」：必须挂在这里（App 根、任何 transform 容器之外），

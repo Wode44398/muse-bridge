@@ -27,8 +27,12 @@
   import CardSlot from "./CardSlot.svelte";
   import ErrorCard from "./ErrorCard.svelte";
   import Notice from "./Notice.svelte";
+  import SessionCard from "./SessionCard.svelte";
   import ScreenshotCard from "./ScreenshotCard.svelte";
   import ActivityLine from "./ActivityLine.svelte";
+  // 对话内嵌交互图表（ShowWidget）：单独成一张图表卡、不上量线
+  import WidgetCard from "./WidgetCard.svelte";
+  import { isWidgetItem } from "../../lib/widget-tools.ts";
   import { usePane } from "../../lib/pane.ts";
   import { t } from "../../lib/i18n.ts";
 
@@ -198,7 +202,7 @@
   }
 
   // 量线：思考 / 工具 / 工具组 / 折叠行是线上的节点，相邻的两行接起来（活动行接在最后）
-  const onRail = (u: FeedUnit) => u.f || u.g || u.a || u.item.kind === "tool" || u.item.kind === "thinking";
+  const onRail = (u: FeedUnit) => u.f || u.g || u.a || (u.item.kind === "tool" && !isWidgetItem(u.item)) || u.item.kind === "thinking";
   const rails = $derived(units.map(onRail));
 
   // U6：「接着做」只挂在时间线最后一条的失败上
@@ -285,6 +289,8 @@
                 />
               {:else if item.kind === "thinking"}
                 <ThinkRow {item} {compact} {up} {down} />
+              {:else if item.kind === "tool" && isWidgetItem(item)}
+                <WidgetCard {item} />
               {:else if item.kind === "tool"}
                 <ToolRow {item} {compact} {up} {down} />
               {:else if (item.kind === "ask" || item.kind === "permission" || item.kind === "plan") && isPendingCard(item, pane.chat.running)}
@@ -300,6 +306,9 @@
                 <ErrorCard {item} last={item === lastItem} />
               {:else if item.kind === "notice"}
                 <Notice text={item.text} />
+              {:else if item.kind === "session"}
+                <!-- 会话协作：别的会话发来的话 / 父会话派的任务 / 子会话汇报 -->
+                <SessionCard text={item.text} />
               {:else if item.kind === "screenshot"}
                 <ScreenshotCard {item} />
               {/if}

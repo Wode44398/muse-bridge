@@ -207,3 +207,14 @@ test("C4 子 agent 的项目指令每次起的时候现读：会话中途改了 
   assert.match(JSON.stringify(adapter.inputs[0].system), /GUIDE-V1/);
   assert.match(JSON.stringify(adapter.inputs[1].system), /GUIDE-V2/);
 });
+
+test("调试模式：会话中途打开 → 片段带完整调试段；关掉 → 明说不再适用；建会话时就关着、一直关着 → 不说", () => {
+  const describe = (s: Parameters<typeof describeWorldChange>[0], v: string, was: string | undefined) => describeWorldChange(s, v, was);
+  const on = worldDelta({ debug: "bridge" }, {}, describe);
+  assert.ok(on && on.text.includes("DEBUG MODE IS ON") && on.text.includes("feedback.harness"));
+  assert.equal(on!.tokens.debug, "bridge");
+  const off = worldDelta({ debug: "" }, { debug: "bridge" }, describe);
+  assert.ok(off && off.text.includes("Debug mode is OFF"));
+  assert.equal(worldDelta({ debug: "" }, {}, describe), null);
+  assert.match(describeWorldChange("debug", "file", undefined), /harness-feedback/);
+});

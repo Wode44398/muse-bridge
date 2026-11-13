@@ -1,0 +1,73 @@
+// dimensio 英文界面文案 · hx-pr：审阅面板顶上的拉取请求卡、自动修复的提示条、PullRequest 工具行（键 = 中文原文，见 lib/i18n.ts）
+// 与 bridge 里 Claude 的 PR 卡同名的键沿用同一译法（web/src/i18n/en 里的 pr 相关条目）。
+export default {
+  // —— 卡片 ——
+  "拉取请求": "Pull request",
+  "刷新拉取请求": "Refresh pull request",
+  "在 GitHub 打开": "Open on GitHub",
+  "打开": "Open",
+  "草稿": "Draft",
+  "合并队列中": "In merge queue",
+  "已合并": "Merged",
+  "claude::已关闭": "Closed",
+  "已批准": "Approved",
+  "需修改": "Changes requested",
+  "待审查": "Review requested",
+  "有合并冲突": "Has merge conflicts",
+  "检查": "Checks",
+  "{n} 失败": "{n} failed",
+  "{n} 进行中": "{n} running",
+  "{n} 通过": "{n} passed",
+  "失败": "Failed",
+  "进行中": "In progress",
+  "通过": "Passed",
+  "已跳过": "Skipped",
+  "查看检查详情": "View check details",
+  "还没有检查": "No checks yet",
+  "找不到这个拉取请求": "Couldn’t find this pull request",
+  "自动修复": "Auto-fix",
+  "CI 失败、合并冲突或有新评审意见时叫醒这个会话去修": "Wake this session to fix CI failures, merge conflicts and new review comments",
+  "自动修复已暂停": "Auto-fix is paused",
+  "连续自动修复了 5 次都没有人发话，已暂停": "Paused after 5 auto-fixes in a row with no message from you",
+  "今天的自动修复次数用完了，已暂停": "Paused: today’s auto-fix limit is used up",
+  "没能切换自动修复：{error}": "Couldn’t switch Auto-fix: {error}",
+  "从会话移出": "Remove from session",
+  "从这个会话移出这个拉取请求？之后不再显示它的检查，也不再自动修复":
+    "Remove this pull request from the session? Its checks stop showing here and Auto-fix stops for it.",
+  "移出": "Remove",
+  "取消": "Cancel",
+  "移出失败：{error}": "Couldn’t remove: {error}",
+  "已从这个会话移出 #{n}": "Removed #{n} from this session",
+  "这个会话还没有绑定拉取请求。让 dimensio 建一个，或跟踪已有的":
+    "No pull request is linked to this session yet. Ask dimensio to open one, or track an existing one.",
+  "跟踪拉取请求": "Track pull request",
+  "拉取请求链接": "Pull request URL",
+  "跟踪": "Track",
+  "没能跟踪这个拉取请求": "Couldn’t track this pull request",
+  // —— gh 不可用（与 bridge 同一套）——
+  "未安装 GitHub CLI（gh）": "GitHub CLI (gh) isn’t installed.",
+  "请运行 gh auth login 登录": "Run gh auth login to authenticate.",
+  "触发 GitHub 限流，正在自动重试": "GitHub rate limit — retrying automatically.",
+  "无法连接 GitHub，请检查网络": "Can’t reach GitHub — check your connection.",
+  "请确认 gh 已安装并已登录": "Check that gh is installed and authenticated.",
+  // —— 自动修复叫醒的那一轮（时间线上的提示条）——
+  "CI 失败": "CI failed",
+  "合并冲突": "Merge conflicts",
+  "新评审意见": "New review comments",
+  "自动修复 · {pr}：{what}": "Auto-fix · {pr}: {what}",
+  "收到拉取请求事件（自动修复）": "Pull request event (Auto-fix)",
+  // —— 服务端回来的固定文案（bridge pr-monitor 的拒绝原因，tr 按原文翻）——
+  "这个会话的仓库没有 GitHub 远程，跟踪不了拉取请求": "This session’s repository has no GitHub remote, so pull requests can’t be tracked here",
+  "不是有效的拉取请求链接（形如 https://github.com/owner/repo/pull/123）": "Not a pull request URL (like https://github.com/owner/repo/pull/123)",
+  // —— 偏好项（harness/server/prefs/git.ts，bridge 设置页按注册表画）——
+  "自动修复拉取请求": "Auto-fix pull requests",
+  "会话建的拉取请求 CI 失败、出现冲突或有评审意见时，自动叫醒那个会话去处理（单个会话可在 PR 卡上另开关）":
+    "When a pull request a session opened fails CI, hits conflicts or gets review comments, wake that session to handle it (each session can override this on its PR card)",
+  "评审回复署名": "Review reply attribution",
+  "自动修复回复评审意见时，末尾带一行 dimensio 署名": "End Auto-fix replies to review comments with a dimensio attribution line",
+  "带 dimensio 署名": "Sign as dimensio",
+  "不署名": "No attribution",
+  "分支前缀": "Branch prefix",
+  "为拉取请求新开分支时的前缀，如 dimensio/<名字>（1–40 个字母、数字或 . _ -）":
+    "Prefix for new pull request branches, e.g. dimensio/<name> (1–40 letters, digits or . _ -)",
+};

@@ -113,6 +113,7 @@ agy-response.md
 agy-session.json
 cf-relay/.relay-key
 cf-relay/.wrangler/
+feedback-worker/.wrangler/
 cloudflared-bridge.yml.bak-*
 codex-history/
 codex-projects.json

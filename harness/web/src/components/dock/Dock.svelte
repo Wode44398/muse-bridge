@@ -31,6 +31,7 @@
   import ReviewPanel from "./ReviewPanel.svelte";
   import TermPanel from "./TermPanel.svelte";
   import BrowserPane from "./BrowserPane.svelte";
+  import { collab, wsHost } from "../../lib/workspace-collab.svelte.ts";
 
   // filesView：宿主（bridge）注入的文件视图——嵌入态复用 bridge 的完整工作空间页，dimensio 不自带文件浏览。
   // 契约：只在「文件」工具、ws 非空时渲染，包在 {#key ws} 与 .fembed（transform 圈定 fixed 定位）里。
@@ -50,12 +51,17 @@
     { key: "term", label: t("终端"), icon: "terminal", kbd: "Ctrl+`" },
     { key: "browser", label: t("浏览器"), icon: "globe", kbd: "Ctrl+Shift+B" },
     { key: "files", label: tc("dimensio", "文件"), icon: "folder", kbd: "Ctrl+Shift+E" },
+    { key: "memory", label: tc("dimensio", "记忆"), icon: "memory", kbd: "" },
   ];
   // 多用户服务端上没有命令行的账号（harness 租户实例报 tenant.shell=false）：不摆终端。
   // D5：服务端没有浏览器工具（这台机器没有可用的浏览器，app.info.tools 里没有 Browser）：不摆浏览器。
   const termOn = $derived(app.info?.tenant?.shell !== false);
   const browserOn = $derived(browserToolAvailable());
-  const TOOLS = $derived(ALL_TOOLS.filter((x) => (x.key !== "term" || termOn) && (x.key !== "browser" || browserOn)));
+  // 记忆：宿主（bridge）注入了记忆卡才摆（独立运行用设置里的「记忆管理」）
+  const memoryView = $derived(wsHost.h?.memoryView ?? null);
+  const TOOLS = $derived(
+    ALL_TOOLS.filter((x) => (x.key !== "term" || termOn) && (x.key !== "browser" || browserOn) && (x.key !== "memory" || !!memoryView)),
+  );
 
   // 面板作用域 = 当前工作空间（顶栏同一个字段）；chatId 给 API 层兜底
   const ws = $derived(app.config?.workspace ?? "");
@@ -87,6 +93,10 @@
   const live = $derived<Partial<Record<DockTool, boolean>>>({
     tasks: tasksLive && app.dockTool !== "tasks",
     browser: Boolean(app.browser) && app.dockTool !== "browser",
+    term: collab.termLive && app.dockTool !== "term", // agent 动过共享终端、还没去看
+  });
+  $effect(() => {
+    if (app.dockTool === "term" && collab.termLive) collab.termLive = false;
   });
 
   // 浏览器小点要诚实（§17-3）：app.browser 只在浏览器面板开着时才看得到浏览器退出（alive:false / 409）。
@@ -166,6 +176,8 @@
         <TermPanel {ws} {chatId} />
       {:else if app.dockTool === "browser" && browserOn}
         <BrowserPane />
+      {:else if app.dockTool === "memory" && memoryView}
+        <div class="fembed">{@render memoryView({ ws })}</div>
       {:else if filesView}
         <!-- transform 把宿主视图里的 fixed（根 / 浮层 / 菜单）圈在面板区 -->
         <div class="fembed">{@render filesView({ ws, chatId, onExit: closeDock, target: app.filesTarget })}</div>

@@ -1,6 +1,7 @@
 // 工作区人机协同 · 前端侧三件事：
 // ① 视图上报 reportUi(patch)：防抖 POST /api/ui/state——「用户此刻在看什么」（所在页面/
-//    dock 状态/文件面板路径/预览文件与页码编辑态），agent 的 mcp__workspace__ view 靠它。
+//    dock 状态/文件面板路径/预览文件与页码编辑态），agent 的 mcp__workspace__ view 靠它；
+//    主界面另有心跳 startUiBeat 与界面指令回执 uiAck（agentUi.js 用）。
 // ② wsx 指令入站 handleWsx(ev)：chat.svelte.js 的 SSE case 'wsx' 转来——agent 让文件面板
 //    刷新(fs)/导航(goto)、把文件推进用户预览(preview)、请求截图(capture)/草稿(draft)。
 //    gen 事件会被 /api/attach 重放：按 id 去重 + 60s 时效窗，旧指令不再执行（fs 刷新无害放行）。
@@ -24,13 +25,50 @@ const clientKind = () => {
 };
 
 // —— ① 视图上报（防抖合并；登录前/离线失败静默）——
+// 每次都带 visible（页面在不在前台）；beat=心跳，服务端只续「最近联系」、不算用户又在这一端操作了。
 const view = { page: '', dock: null, files: null, preview: null };
 let timer = 0;
+let reported = false;   // 至少报成功过一次（= 已登录）才开始心跳
+const pageVisible = () => { try { return !document.hidden; } catch { return true; } };
+function postView(beat) {
+  api.uiState({ clientId: cid, client: clientKind(), state: view, visible: pageVisible(), ...(beat ? { beat: true } : {}) })
+    .then(() => { reported = true; }, () => {});
+}
 export function reportUi(patch) {
   Object.assign(view, patch);
   clearTimeout(timer);
-  timer = setTimeout(() => { api.uiState({ clientId: cid, client: clientKind(), state: view }).catch(() => {}); }, 400);
+  timer = setTimeout(() => postView(false), 400);
+  for (const fn of viewSubs) { try { fn(); } catch {} }
 }
+
+// 心跳（只在挂了 App、能执行界面指令的主界面开，见 agentUi.js）：前台时每分钟一次，切后台时报一次
+// visible:false，回到前台按一次正常上报（用户回到了这一端）。没有它，界面开着不动一分半钟 ui.view 就显示
+// fresh=false，切到后台也看不出来。
+let beatOn = false;
+export function startUiBeat() {
+  if (beatOn || typeof document === 'undefined') return;
+  beatOn = true;
+  document.addEventListener('visibilitychange', () => {
+    if (!reported) return;
+    if (document.hidden) postView(true);
+    else { clearTimeout(timer); postView(false); }
+  });
+  setInterval(() => { if (reported && pageVisible()) postView(true); }, 60_000);
+}
+
+// 界面指令（ui.cmd）的回执：服务端 ui.open / ui.notify 在等它，没回执就照实报「未确认」。
+export function uiAck(id, result) {
+  if (!id) return;
+  api.uiAnswer(id, { ...result, client: cid, visible: pageVisible() }).catch(() => {});
+}
+
+// 同一份视图转给嵌在本页里的 dimensio（HarnessPage 经它的 setWorkspaceHost 接上）：它的 agent 读的是 harness 自己的
+// 上报，宿主这边看到什么（文件面板、预览、编辑态）照这份原样交过去，不另采一遍。
+const viewSubs = new Set();
+export function uiView() { return JSON.parse(JSON.stringify(view)); }
+export function onUiView(fn) { viewSubs.add(fn); return () => viewSubs.delete(fn); }
+// 编辑器里的当前全文（DocViewer 注册的草稿提供者）；没有打开的编辑器 = null
+export function currentDraft() { try { return draftProvider ? draftProvider() : null; } catch { return null; } }
 
 // —— ③ 提供者注册 ——
 const capProviders = new Set();          // 页内按类型截图（PdfView/ImageView 挂载时注册）

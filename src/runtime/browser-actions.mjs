@@ -13,8 +13,9 @@ import {
 
 export const BROWSER_ACTIONS = ['navigate', 'back', 'forward', 'reload', 'click', 'type', 'key', 'scroll', 'hover', 'long_press', 'drag', 'pinch', 'read_page', 'screenshot', 'eval', 'console', 'resize', 'tabs', 'tab_new', 'tab_select', 'tab_close', 'close', ...EXTRA_ACTIONS, 'wait_for', 'batch'];
 
-export const BROWSER_DESCRIPTION = `Drive a real browser scoped to this workspace (shared live with the user's 浏览器 side panel — they see every move as a live screencast).
-Actions: navigate(url) opens/starts the browser (acts on the CURRENT tab) and returns once the page has loaded and settled; back/forward/reload; read_page(filter?, query?, ref? = only that element's subtree, depth?) returns the accessibility tree with [refN] handles; click(ref | text | x,y; modifiers? "ctrl"/"shift"/…) / hover(ref | x,y); type(text, ref?/selector? to focus first); key("enter"|"ctrl+a"|…); scroll(dy?, dx? = horizontal, ref? | x,y) — scroll(ref) alone scrolls that element into view; screenshot() returns a PNG of the current viewport; eval(js) runs JS in the page and returns the value; console(lines?, query?, errors_only?) tails console/network errors; close().
+export const BROWSER_DESCRIPTION = `Drive a real browser scoped to this conversation (shared live with the user's 浏览器 side panel — they see every move as a live screencast).
+这个浏览器是【本对话独有】的：标签、前台标签、视口、console 只属于你，同一工作空间里同时开发的别的对话各有各的，互不干扰；网站登录态默认和它们共享（用户在面板里开了「隔离存储」时连 cookie / 存储也分开，关掉即清空）。别假设它是全新状态——你之前开的标签会留着，navigate 回执会标出不是默认桌面档的视口。
+Actions: navigate(url) opens/starts the browser (acts on the CURRENT tab) and returns once the page has loaded and settled; back/forward/reload; read_page(filter?, query?, ref? = only that element's subtree, depth?) returns the accessibility tree with [refN] handles; click(ref | text | x,y; modifiers? "ctrl"/"shift"/…) / hover(ref | x,y); type(text, ref?/selector? to focus first); key("enter"|"ctrl+a"|…); scroll(dy?, dx? = horizontal, ref? | x,y) — scroll(ref) alone scrolls that element into view; screenshot() returns a PNG of the current viewport; eval(js) runs JS in the page and returns the value; console(lines?, query?, errors_only?, filter?) tails console/network errors（默认只列当前页面这次加载以来的，filter:"all" 连之前的页面 / 标签一起列）; close().
 resize(preset mobile|tablet|desktop | width+height; landscape?, mobile?, scheme light|dark|auto?, dpr?) REALLY changes the page's CSS viewport (innerWidth, media queries, touch events + mobile UA when mobile) in every mode and reports the measured innerWidth×innerHeight back, pixel-exact — trust that line for responsive checks instead of guessing. It may be called before navigate (the browser starts on a blank page and keeps the viewport). Flags alone keep the size (e.g. resize(scheme:"dark")); dpr is kept unless you pass it (dpr:0 = back to default); resize() with no args just reports the current viewport. Presets: mobile 375×812 / tablet 768×1024 (touch) / desktop 1280×900; custom sizes 200–4000px.
 Gestures: long_press(ref | x,y; ms=hold, default 800) holds the finger/mouse down for real (touch mode: the browser's own gesture pipeline fires contextmenu and suppresses click, like a phone); drag(from ref | x,y → to_ref | to_x,to_y; ms=hold before moving) moves in small steps — touch mode sends touchmove, mouse mode handles HTML5 drag-and-drop (draggable / links / images) via real drag events; pinch(x?,y?, scale) two-finger zoom in touch mode (scale>1 spreads, <1 pinches).
 Prefer ref (from read_page / find) or text over coordinates. refs reset on every navigation/tab switch/snapshot.
@@ -52,9 +53,10 @@ export function browserParams(z) {
     dx: z.number().optional().describe('scroll 水平滚动量（px，正=向右）——横向轮播 / 宽表格'),
     depth: z.number().int().optional().describe('read_page：只展开到第几层（配合 ref 看局部）'),
     errors_only: z.boolean().optional().describe('console：只看错误 / 异常'),
-    filter: z.enum(['all', 'interactive']).optional(),
+    filter: z.enum(['all', 'interactive']).optional().describe('read_page：interactive=只列可交互元素；console：all=连之前的页面 / 标签留下的日志一起列'),
     query: z.string().optional().describe('read_page 结果按包含此串过滤；network 按 url 子串过滤；console 按消息内容过滤'),
     maxChars: z.number().int().optional(),
+    links: z.boolean().optional().describe('page_text：文末附正文里看得见的链接（文字 → 地址，去重）；配 query 只留文字或地址含该串的'),
     js: z.string().optional().describe('eval 要执行的 JS 表达式'),
     lines: z.number().int().optional().describe('console / network 返回最近几条（默认 30）'),
     preset: z.enum(['mobile', 'tablet', 'desktop']).optional().describe('resize 档位：mobile 375×812 / tablet 768×1024 / desktop 1280×900'),
@@ -101,11 +103,41 @@ function modifierBits(spec) {
   return bits;
 }
 
+// 同一工作空间的对话共用一个浏览器实例（池按 属主+工作空间 键控，侧栏面板也是它）：视口、标签、console
+// 都可能是别人留下的。不按对话隔离，只把「是谁动的」说清楚——11-07 一个对话 resize 成手机档，另一个对话
+// 接着 navigate 截到手机图、以为是桌面页面坏了；同一时段两个对话轮流导走同一个标签，谁都没察觉。
+const emuSig = (b) => `${b.viewport.width}x${b.viewport.height}|${b.emu?.mobile ? 1 : 0}|${b.emu?.scheme || 'auto'}|${b.dprExplicit ? b.emu?.dpr : ''}`;
+const DEFAULT_EMU = emuSig({ viewport: svc.VIEWPORT_PRESETS.desktop, emu: { mobile: false, scheme: 'auto' }, dprExplicit: false });
+function viewportNote(b, caller) {
+  if (b.webBridge || emuSig(b) === DEFAULT_EMU) return '';
+  const line = `${svc.viewportLine(b)}${b.dprExplicit ? ` · DPR ${b.emu.dpr}` : ''}`;
+  // emuBy 是最近一次 resize 记下的；之后又被面板或别处改过（签名对不上）就认不出是谁了
+  const by = b.emuBy?.sig === emuSig(b) ? b.emuBy.caller : '';
+  if (caller && by === caller) return `当前视口：${line}（你之前 resize 设的）`;
+  const who = caller && by ? '是同一工作空间的另一个对话设的，这个浏览器各对话共用' : '沿用了之前的设置——这个浏览器与同一工作空间的其他对话、浏览器面板共用';
+  return `⚠ 视口不是默认桌面档：${line}（${who}）；要桌面默认先 resize(preset:"desktop")。`;
+}
+// 记下这次是谁在用；一分钟内换过人就提醒一句。caller 认不出（Codex / 远程客户端 / Web Bridge）就不记不报。
+function sharedNote(b, caller) {
+  if (!b || !caller) return '';
+  const now = Date.now();
+  const { lastCaller: prev, lastCallerAt: at = 0 } = b;
+  b.lastCaller = caller; b.lastCallerAt = now;
+  if (!prev || prev === caller || now - at >= 60_000) return '';
+  return `\n另一个对话刚刚（${Math.max(1, Math.round((now - at) / 1000))} 秒前）也在操作这个浏览器，页面可能被它导走了——先确认当前页面再继续。`;
+}
+function appendNote(result, note) {
+  const last = note && [...result.content].reverse().find((c) => c.type === 'text');
+  if (last) last.text += note;
+  return result;
+}
+
 /**
  * opts（Claude 快照模式用；Codex / 远程客户端不传）：
  *  - urlDenied(url) → Promise<拒绝原因|null>：去处白名单，动作前后都验
  *  - snap：快照访客（关 eval、拒 upload）
  *  - roots：upload 允许的目录（null = 不限）
+ *  - caller：发起这次调用的对话（Claude 的 session id）；空 = 认不出，不做「别的对话动过」的提示
  * onActivity({action, url})：页面变化时通知前端拉起/刷新面板。
  */
 export async function runBrowserAction(ws, args = {}, onActivity = null, opts = {}) {
@@ -117,7 +149,10 @@ export async function runBrowserAction(ws, args = {}, onActivity = null, opts = 
 
 async function runOne(ws, args, onActivity, opts) {
   const action = String(args.action || '');
-  const { urlDenied = null, snap = false, roots = null } = opts;
+  const { urlDenied = null, snap = false, roots = null, caller = '' } = opts;
+  // pool：浏览器实例从哪来。缺省 = claude-browser.mjs（服务器上 / 客户端内置浏览器）；Web Bridge（用户自己的浏览器）
+  // 传它自己的池（runtime/web-bridge.mjs poolFor），接口同名：getBrowser / existingBrowser / touchBrowser / closeBrowser / viewerReport。
+  const pool = opts.pool || svc;
   const emit = (browser) => onActivity?.({ action, url: browser?.url || '' });
   const verify = args.verify !== false;
   // 快照：每次动作【之后】再验一遍当前 URL——点链接/页面自己跳转/重定向都可能把页面带到
@@ -139,7 +174,7 @@ async function runOne(ws, args, onActivity, opts) {
       const target = svc.normalizeUrl(args.url);
       if (!target) return error('navigate 需要 url');
       if (urlDenied) { const why = await urlDenied(target); if (why) return error(`拒绝打开 ${target}：${why}`); }
-      browser = await svc.getBrowser(ws);
+      browser = await pool.getBrowser(ws);
       dB = browser;
       const focusErr = await focusTab(browser, action, args.tab);
       if (focusErr) return error(focusErr);
@@ -153,21 +188,34 @@ async function runOne(ws, args, onActivity, opts) {
         : doc?.status >= 400 ? `\n⚠ 服务器返回 ${doc.status}` : '';
       const slow = nav.settled ? '' : '（页面还在持续变化——动画或轮询，已先返回）';
       // 以前这里恒说「用户侧浏览器面板正在直播这个页面」——面板没开也这么说，agent 就会对着没人看的页面请用户动手
-      const seen = await svc.viewerReport(browser);
-      result = text(`已打开 ${browser.url}${title ? `\ntitle: ${title}` : ''}\n用时 ${(nav.ms / 1000).toFixed(1)} 秒${slow}${warn}\n${seen.text}`);
+      const seen = await pool.viewerReport(browser);
+      const vp = viewportNote(browser, caller);
+      result = text(`已打开 ${browser.url}${title ? `\ntitle: ${title}` : ''}\n用时 ${(nav.ms / 1000).toFixed(1)} 秒${slow}${warn}${vp ? `\n${vp}` : ''}\n${seen.text}`);
     } else {
-      browser = svc.existingBrowser(ws);
+      browser = pool.existingBrowser(ws);
       let launchedNote = '';
       // 先定尺寸再开页面是最自然的顺序（以前这里直接报错，会话记录里撞过 20 次）：先起一个空白页，视口随实例保留到之后的 navigate
-      if (!browser && action === 'resize') {
-        browser = await svc.getBrowser(ws);
+      if (!browser && action === 'resize' && !pool.tabsNote) {
+        browser = await pool.getBrowser(ws);
         launchedNote = '\n（浏览器原本没开，已先开空白页；接着 navigate 会沿用这个视口）';
       }
       if (!browser) {
         if (action === 'close') return text('浏览器本就没在运行');
-        return error('浏览器还没启动——先 navigate 打开一个页面');
+        // 会话记录里反复撞的两种（10-20 ～ 11-01）：开新标签 = 想打开页面，直接当 navigate 做；列标签 = 问现状，如实答不报错
+        if (action === 'tab_new') {
+          const r = await runOne(ws, { ...args, action: 'navigate', url: args.url || 'about:blank' }, onActivity, opts);
+          const first = r.content?.find((c) => c.type === 'text');
+          // Web Bridge 走到这里不是浏览器没开，是会话标签组里还没有标签：照实说，别让 agent 告诉用户「浏览器被重启了」（11-07 会话 400f421e）
+          const how = pool.tabsNote ? '你在这个浏览器里原本没有标签，已在你的会话标签组里新开一个并打开（浏览器本来就开着，没有启动它）。'
+            : '浏览器原本没开，已启动并在它的第一个标签里打开（没有多开一个空标签）。';
+          if (first && !r.isError) first.text = `${how}\n${first.text}`;
+          return r;
+        }
+        const reapNote = pool.reapedNote ? pool.reapedNote(ws) : '';
+        if (action === 'tabs') return text(`浏览器没在运行，没有打开的标签${reapNote}。要用就 navigate(url) 打开。`);
+        return error(`浏览器还没启动——先 navigate 打开一个页面${reapNote}`);
       }
-      svc.touchBrowser(ws);
+      pool.touchBrowser(ws);
       dB = browser;
       const focusErr = await focusTab(browser, action, args.tab);
       if (focusErr) return error(focusErr);
@@ -389,21 +437,32 @@ async function runOne(ws, args, onActivity, opts) {
           return text((output.length > 8000 ? output.slice(0, 8000) + '\n…(truncated)' : output) + note);
         }
         case 'console': {
-          let all = b.consoleEntries();
+          // 缓冲是同工作空间各对话共用的：默认只列当前文档（这次加载以来）的，之前的页面 / 标签 / 别的对话留下的
+          // 只报个数（11-07 会话 9e77cfb8 把别人看过的 awwwards 报错当成自己页面的）；filter:"all" 才连它们一起列。
+          let all = b.consoleEntries({ all: true });
           if (args.errors_only) all = all.filter((entry) => /error|exception|assert/i.test(String(entry.type)));
           if (args.query) { const q = String(args.query).toLowerCase(); all = all.filter((entry) => String(entry.msg).toLowerCase().includes(q)); }
-          const entries = all.slice(-Math.max(1, Math.min(200, Number(args.lines) || 30)));
+          const mine = (entry) => entry.doc == null || entry.doc === b.docSeq;
+          const older = all.filter((entry) => !mine(entry)).length;
+          const wide = args.filter === 'all';
+          const entries = (wide ? all : all.filter(mine)).slice(-Math.max(1, Math.min(200, Number(args.lines) || 30)));
           const filtered = args.errors_only || args.query ? `（已按${[args.errors_only ? '只看错误' : '', args.query ? `「${args.query}」` : ''].filter(Boolean).join(' + ')}过滤）` : '';
-          return text(entries.length ? entries.map((entry) => `[${entry.type}] ${entry.msg}`).join('\n') + (filtered ? `\n${filtered}` : '') : `(console 为空${filtered})`);
+          const olderNote = older && !wide ? `（另有 ${older} 条来自之前的页面 / 标签，没列出；要看传 filter:"all"）` : '';
+          const notes = [filtered, olderNote].filter(Boolean).join('\n');
+          if (!entries.length) return text(`(当前页面的 console 为空${filtered})${olderNote ? `\n${olderNote}` : ''}`);
+          const line = (entry) => `[${entry.type}] ${entry.msg}${mine(entry) ? '' : `  ← 之前的页面${entry.url ? ` ${entry.url}` : ''}`}`;
+          return text(entries.map(line).join('\n') + (notes ? `\n${notes}` : ''));
         }
         case 'resize': {
+          if (b.webBridge) return error('这是用户自己的浏览器窗口，不改它的视口尺寸。测响应式布局 / 手机尺寸用内置浏览器或服务器上的浏览器工具。');
           let spec;
           try { spec = svc.resolveViewportSpec(args, b); } catch (e) { return error(String(e?.message || e)); }
           if (!spec) { b.measured = await b.measure(); return text(svc.describeViewport(b.viewportReport()) + launchedNote); }
           const r = await b.setViewport(spec.width, spec.height, spec); emit(b);
+          b.emuBy = { caller, sig: emuSig(b) };   // 之后别的对话 navigate 时据此说清视口是谁设的
           return text(svc.describeViewport(r) + '\n视口变了：要按坐标操作先重新 screenshot。' + launchedNote);
         }
-        case 'tabs': return text(`${await tabsList(b)}\n${(await svc.viewerReport(b)).text}`);
+        case 'tabs': return text(`${await tabsList(b)}${pool.tabsNote ? await pool.tabsNote(b) : ''}\n${(await pool.viewerReport(b)).text}`);
         case 'tab_new': {
           const target = args.url ? svc.normalizeUrl(args.url) : 'about:blank';
           if (urlDenied) { const why = await urlDenied(target); if (why) return error(`拒绝打开 ${target}：${why}`); }
@@ -424,10 +483,15 @@ async function runOne(ws, args, onActivity, opts) {
         }
         case 'tab_close': {
           const tab = resolveTab(b, args.tab); if (!tab) return error(`找不到标签 ${args.tab}——先 tabs() 看当前列表`);
+          if (b.adopted?.has(tab.id)) return error('这是用户分享给你的标签，不替他关；用完不用管它（close 只断开，标签留给用户）。');
           await b.closeTab(tab.id);
-          const alive = svc.existingBrowser(ws); return text(alive ? `已关闭该标签\n${await tabsList(alive)}` : '已关闭最后一个标签，浏览器随之退出');
+          const alive = pool.existingBrowser(ws);
+          // Web Bridge：关完的只是会话标签组，摘下的只是调试器，浏览器和扩展都还在线（以前一句「随之断开」被当成连接没了）
+          return text(alive ? `已关闭该标签\n${await tabsList(alive)}` : b.webBridge
+            ? '已关闭该标签——你在这个浏览器里的标签已经关完（会话标签组空了），调试器随之摘下；浏览器和 Web Bridge 扩展仍在线，要再用直接 navigate / tab_new，会在你的标签组里新开。'
+            : '已关闭最后一个标签，浏览器随之退出');
         }
-        case 'close': svc.closeBrowser(ws); return text('浏览器已关闭');
+        case 'close': { const said = await pool.closeBrowser(ws); return text(typeof said === 'string' ? said : '浏览器已关闭'); }
         case 'wait_for': {
           if (hasExpect(args.expect)) {
             const t0 = Date.now();
@@ -457,7 +521,7 @@ async function runOne(ws, args, onActivity, opts) {
     }
 
     // —— 通用收尾：expect → screenshot_after → 多标签角标 ——
-    const live = svc.existingBrowser(ws);
+    const live = pool.existingBrowser(ws);
     if (!result.isError && live && ACTING.has(action) && hasExpect(args.expect)) {
       const miss = await waitExpect(live, args.expect, { timeoutMs: args.expect_timeout_ms, changedNow });
       const last = [...result.content].reverse().find((c) => c.type === 'text');
@@ -480,9 +544,9 @@ async function runOne(ws, args, onActivity, opts) {
       const last = [...result.content].reverse().find((c) => c.type === 'text');
       if (last) last.text += tag;
     }
-    return withDialogNote(result, dB);
+    return withDialogNote(appendNote(result, sharedNote(dB, caller)), dB);
   } catch (e) {
-    return withDialogNote(error(`浏览器操作失败：${String(e?.message || e)}`), dB);
+    return withDialogNote(appendNote(error(`浏览器操作失败：${String(e?.message || e)}`), sharedNote(dB, caller)), dB);
   }
 }
 

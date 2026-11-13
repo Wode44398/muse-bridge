@@ -15,9 +15,14 @@
 //   notifyKind('done', …)                                       ← 任务完成（agentEnd 内部已按这个类型门控，一般不用直接调）
 // watching = 用户正看着这个会话（在 Claude 页、页面可见）→ 不弹；页面在前台也不弹（同 agentEnd：卡片 / 举旗足够）。
 // tag = 去重键（qid / 权限请求 id）：断线重连重放同一个事件不重复弹。返回是否真的弹了。
+//
+// 2026-11-07 起服务端推「会话消息通知」（lib/notices.svelte.js，按会话一条、带铃声震动）：服务端支持时
+// （noticesLive()）这里不再自己弹「完成 / 提问 / 权限」的系统通知，只管原生跟踪服务的启停、进度快照和主页举旗；
+// 跨会话消息「待你确认」不进服务端通知，调用方传 force:true 照旧走这里。
 import { ui } from './state.svelte.js';
 import { t } from './i18n.js';
 import { cs } from './claudeSettings.svelte.js';
+import { noticesLive } from './notices.svelte.js';
 
 let active = 0;       // JS 路径在跑的轮数（浏览器 Claude；原生 Claude 不计入）
 let lastProg = 0;     // JS 进度更新节流时间戳
@@ -25,7 +30,7 @@ let lastProg = 0;     // JS 进度更新节流时间戳
 const A = () => { try { return window.AndroidStore; } catch { return null; } };
 const nativeWatch = () => { const a = A(); return a && a.startAgentWatch ? a : null; };
 function notifOn() { try { return localStorage.getItem('bridge-notify') !== '0'; } catch { return true; } }
-const KIND_KEY = { permission: 'notifyPermission', question: 'notifyQuestion', done: 'notifyTaskComplete' };
+const KIND_KEY = { permission: 'notifyPermission', question: 'notifyQuestion', done: 'notifyTaskComplete', error: 'notifyError' };
 // 总开关开着、且这一类没被单独关掉
 function kindOn(kind) { const k = KIND_KEY[kind]; return notifOn() && (!k || cs.device?.[k] !== false); }
 const clip = (s, n = 80) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n);
@@ -35,8 +40,8 @@ export function agentStart(label) {
   // Claude + 原生前台服务：交给 Service（后台可靠）。通知关了就不启服务。
   if (label === 'Claude') {
     const a = nativeWatch();
-    // 原生服务的主要用途是后台弹「完成」：任务完成这一类关了就不起它
-    if (a) { if (kindOn('done')) { try { a.startAgentWatch(); } catch {} } return; }
+    // 原生服务在后台按会话弹「提问 / 完成 / 出错」：这几类全关了就不起它
+    if (a) { if (['done', 'error', 'question', 'permission'].some(kindOn)) { try { a.startAgentWatch(); } catch {} } return; }
   }
   active++;
   if (!notifOn()) return;
@@ -71,7 +76,8 @@ export function agentEnd(label, body, opts = {}) {
   if (active > 0) return;                                     // 还有别的轮在跑：先不弹完成
   if (watching) return;                                       // 正在看：举旗足够
   if (!document.hidden) return;                               // 前台但在别的页：举旗足够
-  if (!kindOn('done')) return;
+  if (noticesLive()) return;                                  // 服务端会话消息通知接手（按会话、带铃声）
+  if (!kindOn(opts.error ? 'error' : 'done')) return;
   const title = opts.error ? t('{label} · 出错', { label: label || 'Claude' }) : t('{label} · 完成', { label: label || 'Claude' });
   const text = clip(body) || (opts.error ? t('出错了') : t('回复已生成'));
   if (a && a.agentDone) { try { a.agentDone(title, text); return; } catch {} }
@@ -81,7 +87,8 @@ export function agentEnd(label, body, opts = {}) {
 
 // 分类型通知的统一入口（用法见文件头）。
 const shownTags = new Set();
-export function notifyKind(kind, { title = '', body = '', watching = false, tag = '' } = {}) {
+export function notifyKind(kind, { title = '', body = '', watching = false, tag = '', force = false } = {}) {
+  if (noticesLive() && !force) return false;                  // 服务端会话消息通知接手
   if (!kindOn(kind)) return false;
   if (watching) return false;
   if (typeof document !== 'undefined' && !document.hidden) return false;

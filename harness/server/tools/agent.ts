@@ -65,7 +65,7 @@ export const agentTool: Tool = {
         },
         model: {
           type: "string",
-          description: "Catalog model id to run this sub-agent on (e.g. a cheaper model for mechanical work). Omit to inherit this session's model.",
+          description: "Catalog model id to run this sub-agent on (e.g. a cheaper model for mechanical work), or auto:top|hard|normal|light to take that difficulty tier's pick. Omit to inherit this session's model.",
         },
         effort: {
           type: "string",

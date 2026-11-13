@@ -1,6 +1,7 @@
 <script module lang="ts">
   import * as api from "../../lib/api.ts";
   import { reloadChat, toast } from "../../lib/state.svelte.ts";
+  import { reportReview } from "../../lib/workspace-collab.svelte.ts";
   import { t, tc, tr, isEn, locale } from "../../lib/i18n.ts";
 
   // 找回 = 回滚到「撤销前现场」检查点（文件与对话一起回到撤销前那一刻）。挂在 8 秒的提示上，面板卸了也要能用，
@@ -44,6 +45,7 @@
   import Empty from "../ui/Empty.svelte";
   import Mark from "../brand/Mark.svelte";
   import DiffView from "./DiffView.svelte";
+  import PrCard from "./PrCard.svelte"; // 拉取请求卡（能力位 pr；没接上 bridge / 不是 GitHub 仓库时不出现）
 
   let { ws = "", chatId = "" }: { ws?: string; chatId?: string } = $props();
   const coarse = matchMedia("(pointer: coarse)").matches; // 触屏：顶条按钮放大到 40
@@ -73,6 +75,9 @@
   let sdataChat = $state(""); // sdata 是哪个会话的：换了会话，旧会话的清单不能拿来先顶着（上面的撤销会打到新会话头上）
   let open = $state<Record<string, OpenState>>({});
   let picked = $state<Scope | null>(null);
+  // 工作区协同：用户展开着看 diff 的文件（agent 的 Workspace(view) 看得到）
+  $effect(() => reportReview(Object.keys(open)));
+  $effect(() => () => reportReview([]));
   const sessionOk = $derived(Boolean(chatId) && sessionReviewAvailable());
   const scope = $derived<Scope>(sessionOk ? (picked ?? "session") : "git");
   const have = $derived(scope === "session" ? sdata !== null && sdataChat === chatId : data !== null);
@@ -338,6 +343,7 @@
   </div>
 
   <div class="scroll">
+    {#if chatId}<PrCard sid={chatId} />{/if}
     {#if loading && !have}
       <div class="state">
         <Mark size={20} live />

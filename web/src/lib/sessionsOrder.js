@@ -32,3 +32,19 @@ export function sortByMtime(list) {
     .sort((a, b) => ((Number(b.s.mtime) || 0) - (Number(a.s.mtime) || 0)) || (a.idx - b.idx))
     .map((x) => x.s);
 }
+
+// 新行按 mtime 插到该在的位置（列表恒倒序）：已经有这个 id 就原样返回。
+// 侧栏「新会话就地上榜」用——run.start 一到就插一行，不等 transcript 落盘后的整表重拉。
+export function insertByMtime(list, row) {
+  if (!row || !row.id || list.some((s) => s && s.id === row.id)) return list;
+  const m = Number(row.mtime) || 0;
+  let at = list.findIndex((s) => (Number(s && s.mtime) || 0) < m);
+  if (at < 0) at = list.length;
+  return [...list.slice(0, at), row, ...list.slice(at)];
+}
+
+// 新行的临时标题：第一条消息的第一行，截短（真标题随后的整表刷新带回来）。
+export function provisionalTitle(text) {
+  const line = String(text || '').split(/\r?\n/).map((x) => x.trim()).find(Boolean) || '';
+  return line.length > 80 ? line.slice(0, 80) + '…' : line;
+}

@@ -149,6 +149,7 @@ if (CODEX_BIN) process.env.CODEX_BIN = CODEX_BIN;
 export const VERTEX_ENV = Object.freeze({
   project: !!process.env.VERTEX_PROJECT, location: !!process.env.VERTEX_LOCATION,
   mediaLocation: !!process.env.VERTEX_MEDIA_LOCATION, apiKey: !!process.env.GEMINI_API_KEY,
+  openrouterKey: !!process.env.OPENROUTER_API_KEY,
 });
 export let VERTEX_PROJECT = process.env.VERTEX_PROJECT || config.vertexProject || '';
 export let VERTEX_LOCATION = process.env.VERTEX_LOCATION || config.vertexLocation || 'global';
@@ -157,10 +158,12 @@ export let VERTEX_LOCATION = process.env.VERTEX_LOCATION || config.vertexLocatio
 export let VERTEX_MEDIA_LOCATION = process.env.VERTEX_MEDIA_LOCATION || config.vertexMediaLocation || 'us-central1';
 // Gemini Developer API key (for models not on Vertex, e.g. lyria-3).
 export let GEMINI_API_KEY = process.env.GEMINI_API_KEY || config.geminiApiKey || '';
+// OpenRouter key：图像页的 GPT Image（caps.image.openrouter）走 OpenRouter /api/v1/images，不经 Google。
+export let OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || config.openrouterApiKey || '';
 
 // { project?, location?, mediaLocation?, apiKey? }：只改传了的项，写回 config.json（其余键原样保留）。
 // 被环境变量占着的项不写（写了也不生效，免得界面上看着改了其实没变）。
-const VERTEX_KEYS = { project: 'vertexProject', location: 'vertexLocation', mediaLocation: 'vertexMediaLocation', apiKey: 'geminiApiKey' };
+const VERTEX_KEYS = { project: 'vertexProject', location: 'vertexLocation', mediaLocation: 'vertexMediaLocation', apiKey: 'geminiApiKey', openrouterKey: 'openrouterApiKey' };
 export function setVertexConfig(v = {}) {
   let raw;
   try { raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf8').replace(/^﻿/, '')); } catch (e) { throw new Error('读不了 config.json：' + ((e && e.message) || e)); }
@@ -173,6 +176,7 @@ export function setVertexConfig(v = {}) {
   if (!VERTEX_ENV.location) VERTEX_LOCATION = config.vertexLocation || 'global';
   if (!VERTEX_ENV.mediaLocation) VERTEX_MEDIA_LOCATION = config.vertexMediaLocation || 'us-central1';
   if (!VERTEX_ENV.apiKey) GEMINI_API_KEY = config.geminiApiKey || '';
+  if (!VERTEX_ENV.openrouterKey) OPENROUTER_API_KEY = config.openrouterApiKey || '';
 }
 
 // 档 2「手机即远程文件系统」总开关。手机原生侧（SAF 文件桥）就绪前默认【关】——
@@ -187,10 +191,9 @@ export const PHONE_CONTROL = process.env.BRIDGE_PHONE_CONTROL === '1' || config.
 
 
 // Claude in Chrome：让 admin 的 Claude 驱动维护者本机已登录的 Edge（装了 Claude 扩展，经账号级
-// 云中继连接）。按部署形态定默认值（DEPLOY.claudeInChromeDefault）：Windows 上的「本机桌面」形态默认【开】
-// （服务端就装在自己电脑上，浏览器也在这台——维护者的主机 task-server.vbs、桌面安装包里的本机服务端）；
-// 无界面服务器与 Docker 默认【关】（VPS 上没有自己的浏览器，开着只会让每轮白带一个 --chrome；那时浏览器归设备），
-// 包括 install-windows.ps1 装的计划任务（scripts/server/win/bridge-service.mjs 托管，BRIDGE_SUPERVISED=windows）。
+// 云中继连接）。2026-11-02 起所有部署形态默认【关】（DEPLOY.claudeInChromeDefault）：bridge 里的 agent 操作用户自己的
+// 浏览器统一走 Web Bridge（扩展连用户电脑上的桌面客户端，设备浏览器工具带 browser 参数选浏览器，见 runtime/web-bridge.mjs）——
+// Claude / Codex / dimensio 同一条路、互不抢标签。这里只留给显式打开的人。
 // 仅 admin 注入（沙箱用户/Pro/快照一律不给——那是真实登录态）。
 // 显式开关：config.json 设 "claudeInChrome": true/false，或 env BRIDGE_CLAUDE_IN_CHROME=1/0。
 export const CLAUDE_IN_CHROME = process.env.BRIDGE_CLAUDE_IN_CHROME === '1' || (process.env.BRIDGE_CLAUDE_IN_CHROME !== '0'

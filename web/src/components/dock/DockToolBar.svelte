@@ -9,7 +9,7 @@
   import { session } from '../../lib/state.svelte.js';
   import { toggleRail, railVisible } from '../../lib/sessionRail.svelte.js';
   import { IS_CSNAP } from '../../lib/csnap.js';
-  import { dock, toggleDockView, closeDock, ensureDockMeta, dockToolOk, dockToolLabel, dockToolIcon, DOCK_TOOLS } from '../../lib/dock.svelte.js';
+  import { dock, toggleDockView, closeDock, ensureDockMeta, dockToolOk, dockToolLabel, dockToolIcon, DOCK_TOOLS, browserMountedNow } from '../../lib/dock.svelte.js';
   import { workbenchKeys } from '../../lib/pluginUi.svelte.js';
   import { bgHoldNow } from '../../lib/chat.svelte.js';
   import { dockIcon } from '../../lib/dockIcons.js';
@@ -27,9 +27,10 @@
   // ⋮ 里在内置三件之后跟插件的工作台标签（ctx.ui.workbench，'plg:<插件>:<id>'）
   const moreTools = $derived([...MORE, ...workbenchKeys()].filter(dockToolOk));
   const isOn = (k) => dock.open && dock.views.includes(k);
-  // agent 动了浏览器 / 终端、本轮挂着等后台任务，而对应卡片没开：那颗开关亮呼吸点
+  // 浏览器：状态灯——这个对话的浏览器里有标签（已挂载）就亮，卡片开着也亮；关掉最后一个标签 / 浏览器被关即灭。
+  // 终端动了手、本轮挂着等后台任务，而对应卡片没开：那颗开关亮呼吸点（点开即清）
   const bgLive = $derived(!!bgHoldNow());
-  const live = (k) => !isOn(k) && ((k === 'browser' && !!dock.browserLive) || (k === 'term' && dock.termLive) || (k === 'tasks' && bgLive));
+  const live = (k) => (k === 'browser' ? browserMountedNow() : !isOn(k) && ((k === 'term' && dock.termLive) || (k === 'tasks' && bgLive)));
   const moreLive = $derived(moreTools.some(live));
   const tip = (k) => (KBD[k] ? t('{label}（{kbd}）', { label: dockToolLabel(k), kbd: KBD[k] }) : dockToolLabel(k));
 
@@ -127,7 +128,7 @@
   @media (hover: hover) { .tb:hover { background: var(--hover-strong); color: var(--text); } }
   /* 开着的那几颗：实底 + 正文色（官方是一块高亮底；bridge 的朱色只给「正在发生」，这里用中性色） */
   .tb.on { background: color-mix(in srgb, var(--text) 15%, transparent); color: var(--text); }
-  /* agent 正在用浏览器且面板没开：呼吸绿点提示（点开即清） */
+  /* 呼吸绿点：浏览器 = 这个对话的浏览器已挂载（有标签）；终端 / 任务 = 有动静而卡片没开 */
   .live-dot { position: absolute; top: 3px; right: 4px; width: 6px; height: 6px; border-radius: 50%;
     background: var(--ok); animation: tbPulse 1.2s ease-in-out infinite; }
   @keyframes tbPulse { 50% { opacity: .35; } }
@@ -188,15 +189,15 @@
   .tbar.fg::before {
     content: ''; position: absolute; inset: -24px; z-index: -1; pointer-events: none;
     border-style: solid; border-width: 0 56px;
-    border-image: var(--ov-figma-glass-tb-bar36-dark, url(../../assets/figma-glass/tb-bar36-dark.png)) 0 168 fill / 0 56px / 0 stretch;
+    border-image: var(--ov-figma-glass-tb-bar36-dark) 0 168 fill / 0 56px / 0 stretch;
   }
-  :global(html[data-theme="light"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar36-light, url(../../assets/figma-glass/tb-bar36-light.png)); }
+  :global(html[data-theme="light"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar36-light); }
   @media (pointer: coarse) {
-    .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar40-dark, url(../../assets/figma-glass/tb-bar40-dark.png)); }
-    :global(html[data-theme="light"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar40-light, url(../../assets/figma-glass/tb-bar40-light.png)); }
+    .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar40-dark); }
+    :global(html[data-theme="light"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar40-light); }
   }
-  :global(html[data-wco="1"]) .tbar.fg::before, :global(html[data-wco-band="1"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar32-dark, url(../../assets/figma-glass/tb-bar32-dark.png)); }
-  :global(html[data-theme="light"][data-wco="1"]) .tbar.fg::before, :global(html[data-theme="light"][data-wco-band="1"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar32-light, url(../../assets/figma-glass/tb-bar32-light.png)); }
+  :global(html[data-wco="1"]) .tbar.fg::before, :global(html[data-wco-band="1"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar32-dark); }
+  :global(html[data-theme="light"][data-wco="1"]) .tbar.fg::before, :global(html[data-theme="light"][data-wco-band="1"]) .tbar.fg::before { border-image-source: var(--ov-figma-glass-tb-bar32-light); }
 
   /* —— 鼠标设备：扁平实底 —— 电脑上不需要玻璃，和页面同色的一块实底 + 一道细描边，
      不模糊、不透色；正文滚到底下时照样挡住，不会透出字来。 */

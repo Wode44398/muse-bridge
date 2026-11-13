@@ -13,6 +13,7 @@
     handleDockShortcut,
     openInSplit,
     openSession,
+    setHostOpenSettings,
     setHostPickWorkspace,
     suspendLiveStreams,
     type ArtifactItem,
@@ -20,6 +21,7 @@
   import { setThemeRoot } from "./lib/theme.ts";
   import { closeTopLayer, pushLayer } from "./lib/layers.ts";
   import { setArtifactHost } from "./lib/open-artifact.ts";
+  import { startWorkspaceCollab } from "./lib/workspace-collab.svelte.ts";
   import { fade, pop } from "./lib/motion.ts";
   import { edgeSwipe, haptic } from "./lib/touch.ts";
   import Icon from "./components/ui/Icon.svelte";
@@ -37,6 +39,8 @@
   import { dnd, dropTarget, type DragPayload, type DropPoint } from "./lib/dnd.svelte.ts";
   import { splitDropLabel, splitDropPlan, type Side } from "./lib/split.ts";
   import { t, tr } from "./lib/i18n.ts";
+  // 会话管理（稍后发送 / 输入建议 / 归档 / 通知偏好与在场）：随 App 挂载起停
+  import { startSessMgmt } from "./lib/sessmgmt.svelte.ts";
 
   // ── 宿主契约（bridge 的 HarnessPage 传进来；独立运行时全是默认值）──────────────────────────
   // embedded：作为 bridge 分页运行（主题作用域在本组件根、连接 / 系统栏归宿主、侧栏里有「主页」）
@@ -45,6 +49,7 @@
   // chatDrop：宿主的「把工作空间里的文件投给这个对话」落点 action，只挂在正文列 .main 上——
   //           这个节点的 class 只许静态写 + class: 指令（宿主会往上加 hx-dnd-on，动态 class={…} 会把它冲掉）
   // onExit：回宿主主页（侧栏「主页」行 + 返回键到底都走它）；宿主没有主页（单 agent 模式，dimensio 就是根页）传 null
+  // onOpenSettings：宿主接管「设置」（侧栏设置按钮、首页的缺 Key / 连不上提示）；不给就开自己的设置面板
   // sidebarFoot：宿主往侧栏底部（设置按钮上方，整宽、不加任何外框）放的内容；不给就什么都不多
   let {
     embedded = false,
@@ -54,6 +59,7 @@
     filesView = null,
     pickWorkspace = null,
     chatDrop = null,
+    onOpenSettings = null,
   }: {
     embedded?: boolean;
     onExit?: (() => void) | null;
@@ -64,11 +70,14 @@
     > | null;
     pickWorkspace?: null | (() => Promise<string>);
     chatDrop?: null | ((node: HTMLElement) => { destroy?: () => void } | void);
+    onOpenSettings?: null | (() => void);
   } = $props();
   const chatDropAction = (node: HTMLElement) => chatDrop?.(node) ?? undefined;
 
   // Q13：宿主的「打开产物」回调登记成全局的（诊断包导出这类 Feed 之外的地方也要交给宿主查看器）
   $effect(() => setArtifactHost(onOpenArtifact));
+  // 工作区协同：挂着的时候上报「用户在看什么」（agent 的 Workspace 工具读），卸载即停
+  onMount(startWorkspaceCollab);
   // 产物卡：有宿主文件视图就进右侧工作区读，没有（独立 8799）才回落查看器 / 新窗口
   $effect(() => {
     app.hasFilesView = !!filesView;
@@ -76,6 +85,10 @@
   $effect(() => {
     setHostPickWorkspace(pickWorkspace);
     return () => setHostPickWorkspace(null);
+  });
+  $effect(() => {
+    setHostOpenSettings(onOpenSettings);
+    return () => setHostOpenSettings(null);
   });
 
   // ── 布局 ────────────────────────────────────────────────────────────────────────────
@@ -376,6 +389,8 @@
     setThemeRoot(rootEl);
     boot();
   });
+
+  onMount(() => startSessMgmt()); // 会话管理（见上方导入处）
 
   onMount(() => {
     const onWide = (e: MediaQueryListEvent) => (wide = e.matches);

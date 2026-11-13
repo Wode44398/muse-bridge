@@ -4,7 +4,7 @@
   // 选模型 / 选档位不关菜单（可以先挑模型再挑档位）；两者都只写全局配置（POST /api/config，后发的赢）。
   // 自定义服务：目录里只有启用的对话型号（asr / tts 这类不进来）；型号多了（> 8）顶上出搜索框，id 带 vendor/ 前缀的（OpenRouter
   // 那种）按前缀分组；没有说明文字的型号给一行能力摘要「1M · 视觉 · 会思考」。
-  import { app, modelEfforts, modelSupportsFast, providerModels, setEffort, setFast, setModel, vendorId, vendorInfo, vendorSwitchNote } from "../../lib/state.svelte.ts";
+  import { app, findModel, modelEfforts, modelSupportsFast, providerModels, setEffort, setFast, setModel, vendorId, vendorInfo, vendorSwitchNote } from "../../lib/state.svelte.ts";
   import { haptic } from "../../lib/touch.ts";
   import Popover from "../ui/Popover.svelte";
   import MenuItem from "../ui/MenuItem.svelte";
@@ -24,7 +24,7 @@
 
   const models = $derived(app.info ? providerModels() : []);
   const efforts = $derived(app.info ? modelEfforts() : []);
-  const effortLabels = $derived<Record<string, string>>(models.find((m: any) => m.id === app.config?.model)?.effortLabels ?? {});
+  const effortLabels = $derived<Record<string, string>>(findModel(models, app.config?.model)?.effortLabels ?? {});
   // effortLabels 来自服务端 catalog：开关式档位写「关闭 / 开启」——那是开关的值（Off / On），不能走 tr() 的普通键（关闭 = Close）
   function effortText(label: string): string {
     if (label === "开启") return tc("开关", "开启"); // i18n-ignore（左边比对服务端数据）
@@ -94,7 +94,7 @@
     {#each groups as g (g.key)}
       {#if g.key}<div class="grp">{g.key}</div>{/if}
       {#each g.items as m (m.id)}
-        <MenuItem label={tr(shortLabel(m))} description={capsLine(m)} checked={m.id === app.config?.model} onclick={() => pickModel(m.id)} />
+        <MenuItem label={tr(shortLabel(m))} description={capsLine(m)} checked={m === findModel(models, app.config?.model)} onclick={() => pickModel(m.id)} />
       {/each}
     {:else}
       <p class="none">{t("没有匹配的型号")}</p>

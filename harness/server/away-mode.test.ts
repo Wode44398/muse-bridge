@@ -27,6 +27,7 @@ import { askUserQuestionTool } from "./tools/ask.ts";
 import { exitPlanModeTool } from "./tools/exitplanmode.ts";
 import { rememberTool } from "./tools/remember.ts";
 import { listMemories } from "./memory.ts";
+import { setPrefs } from "./prefs.ts";
 import type { ProviderAdapter } from "./providers/types.ts";
 import type { PermissionMode } from "./agent/permissions.ts";
 import type { Tool } from "./tools/types.ts";
@@ -173,6 +174,53 @@ test("离开模式下提交计划：不弹卡、保持 plan，本轮以计划作
   assert.equal(session.state!.permissionMode, "plan", "没有自动批准");
   assert.match(seen.join("\n"), /away/i);
   dropSession(session.id);
+});
+
+// 设置 › 对话 › 离开模式下的批准请求 = 默认同意：调用按「允许一次」放行、计划直接批准并切到自主执行（默认仍是不同意）
+test("离开模式 + 默认同意：命中 ask 规则直接放行，计划直接批准开工；「从不允许」照样拦", async () => {
+  await setPrefs({ awayDecision: "approve" });
+  try {
+    const session = createSession();
+    let deployed = 0;
+    const deploy: Tool = {
+      effect: "exec", concurrencySafe: false,
+      def: { name: "Deploy", description: "deploy", parameters: { type: "object", properties: {} } },
+      async run() {
+        deployed++;
+        return { ok: true, summary: "deployed", content: [{ t: "text", text: "deployed" }] };
+      },
+    };
+    attach(session, scripted({ id: "call_dep", name: "Deploy", args: {} }, []), [deploy], { ask: ["Deploy"] });
+    const events: Record<string, unknown>[] = [];
+    const run = startRun(session, "发版");
+    watchSession(session, (ev) => events.push(ev));
+    setSessionAway(session, true);
+    assert.equal(await settle(session, run.done, "permission_ask"), "done");
+    assert.equal(deployed, 1, "默认同意：放行执行");
+    assert.ok(!events.some((e) => e.e === "permission_ask"), "没弹卡");
+    dropSession(session.id);
+
+    const denied = createSession();
+    attach(denied, scripted({ id: "call_dep2", name: "Deploy", args: {} }, []), [deploy]);
+    denied.state!.permissionRules = { allow: [], ask: [], deny: ["Deploy"] };
+    const run2 = startRun(denied, "发版");
+    setSessionAway(denied, true);
+    assert.equal(await settle(denied, run2.done, "permission_ask"), "done");
+    assert.equal(deployed, 1, "「从不允许」不经过批准卡，照样拦");
+    dropSession(denied.id);
+
+    const plan = createSession();
+    const seen: string[] = [];
+    attach(plan, scripted({ id: "call_plan", name: "ExitPlanMode", args: { plan: "1. 改 A\n2. 跑测试" } }, seen), [exitPlanModeTool], { mode: "plan" });
+    const run3 = startRun(plan, "先出计划");
+    setSessionAway(plan, true);
+    assert.equal(await settle(plan, run3.done, "plan_ask"), "done");
+    assert.equal(plan.state!.permissionMode, "auto", "计划已批准、切到自主执行");
+    assert.match(seen.join("\n"), /auto-approved|APPROVED/);
+    dropSession(plan.id);
+  } finally {
+    await setPrefs({ awayDecision: null });
+  }
 });
 
 // #71（维护者 09-24 定）：无人值守那套先不做，照常默认有人在。以前「在场」按有没有客户端连着判，手机一熄屏

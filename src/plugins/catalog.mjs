@@ -138,13 +138,16 @@ export const BUILTIN_PLUGINS = [
   },
   {
     id: 'pr', name: '拉取请求', category: 'automation',
-    description: '会话绑定 GitHub PR：PR 卡、CI 状态、自动修复与代合并（需要本机登录了 gh），以及 Claude 的 pr 工具。',
+    description: '会话绑定 GitHub PR：PR 卡、CI 状态、自动修复与代合并（需要本机登录了 gh），以及 Claude 的 pr 工具与 dimensio 的 PullRequest 工具。',
     load: async () => {
       const { registerClaudePrRoutes } = await import('../routes/claude-pr.mjs');
+      const { registerAgentPrRoutes } = await import('../routes/agent-pr.mjs');
       const { initPrMonitor, stopPrMonitor } = await import('../runtime/pr-monitor.mjs');
       return {
         apply(ctx) {
           registerClaudePrRoutes(ctx.router, { identify: auth(ctx).identify });
+          // dimensio 的会话也走这一套（同机实例凭据，同一份台账与后台扫描）
+          registerAgentPrRoutes(ctx.router);
           // 后台扫描同理只在正式实例跑：台账与正式服共用，双开会把同一个会话叫醒两次。
           ctx.when('ready', () => {
             if (!runtime(ctx).production && process.env.BRIDGE_PR_MONITOR !== '1') return;
@@ -282,7 +285,7 @@ export const BUILTIN_PLUGINS = [
   },
   {
     id: 'edge', name: '主机的 Edge', category: 'agent-tools',
-    description: '让 Claude 操作这台电脑上管理员已登录的 Edge（Claude in Chrome 扩展）：后台、邮箱这类要登录态的网站。',
+    description: '官方 Claude in Chrome 扩展（经账号云中继，只有显式打开 claudeInChrome 才有）。操作用户自己的浏览器现在统一走 Web Bridge：设备浏览器工具带 browser 参数。',
     available: () => CLAUDE_IN_CHROME,
     load: gateOnly,
   },

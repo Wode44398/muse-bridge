@@ -14,6 +14,14 @@ export default {
   '关闭审阅': 'Close review panel',
   '关闭终端': 'Close terminal',
   '关闭浏览器': 'Close browser',
+  // 浏览器按对话：隔离存储开关（面板菜单 + 空态胶囊）
+  '隔离存储': 'Isolated storage',
+  '隔离存储：已开': 'Isolated storage: on',
+  '隔离存储：关': 'Isolated storage: off',
+  'cookie 与网站存储不和别的对话共享，关掉浏览器即清空；切换会关闭当前标签': 'Cookies and site data aren’t shared with other chats and are cleared when the browser closes. Switching closes the open tabs.',
+  'cookie 与网站存储不和别的对话共享，关掉浏览器即清空': 'Cookies and site data aren’t shared with other chats and are cleared when the browser closes.',
+  '已切到隔离存储，原来的标签已关闭；重新输入网址打开': 'Switched to isolated storage. Open tabs were closed — enter a URL to start again.',
+  '已切回共享登录态，原来的标签已关闭；重新输入网址打开': 'Switched back to shared sign-ins. Open tabs were closed — enter a URL to start again.',
   'claude::关闭文件': 'Close files panel',
   'claude::记忆': 'Memory',
   'claude::关闭记忆': 'Close memory panel',
@@ -27,6 +35,7 @@ export default {
   '放大铺满': 'Maximize',
   // 卡片拖出 app = 独立的卡片窗口
   'claude::放回工作台': 'Move back to workbench',
+  '最小化': 'Minimize',
   'claude::桌面客户端更新后才能把卡片拖成独立窗口': 'Update the desktop app to drag panels into their own window',
   'claude::先在主窗口登录 bridge，再把卡片拖出来。': 'Sign in to The Bridge in the main window, then drag the panel out again.',
   '关闭': 'Close',
@@ -42,19 +51,16 @@ export default {
   '收起全部面板': 'Hide all panels',
 
   // —— 任务视图（本轮挂起等后台任务）——
-  '本轮挂起中 · 等待 {n} 个后台命令': { one: 'Turn on hold · waiting for {n} background command', other: 'Turn on hold · waiting for {n} background commands' },
-  '本轮挂起中 · 等待 {n} 个子 agent': { one: 'Turn on hold · waiting for {n} subagent', other: 'Turn on hold · waiting for {n} subagents' },
-  '本轮挂起中 · 等待 {n} 个工作流': { one: 'Turn on hold · waiting for {n} workflow', other: 'Turn on hold · waiting for {n} workflows' },
-  '本轮挂起中 · 等待 {n} 个监视任务': { one: 'Turn on hold · waiting for {n} monitor', other: 'Turn on hold · waiting for {n} monitors' },
-  '本轮挂起中 · 等待 {n} 个后台任务': { one: 'Turn on hold · waiting for {n} background task', other: 'Turn on hold · waiting for {n} background tasks' },
-  '后台任务已完成，收尾中': 'Background tasks finished. Finishing up…',
-  '主回答已经写完，但后台任务还在跑。bridge 把这一轮挂着不收尾——收尾会连同后台任务一起结束；任务完成时 Claude 会自动接着这一轮汇报结果。':
-    'The main response is done, but background tasks are still running. The Bridge keeps this turn open because finishing it would also end the background tasks. When they finish, Claude continues this turn and reports the results.',
-  '后台任务刚刚结束，正在等 Claude 接着汇报。': 'Background tasks just finished. Waiting for Claude to report back.',
-  '最长再等 {n} 分钟，到点自动收尾（常驻服务不会把这一轮永远钉住）。': {
-    one: 'Finishes up automatically within {n} minute, so the service never holds a turn open forever.',
-    other: 'Finishes up automatically within {n} minutes, so the service never holds a turn open forever.',
-  },
+  '等待 {n} 个后台命令完成': { one: 'Waiting for {n} background command', other: 'Waiting for {n} background commands' },
+  '等待 {n} 个子 agent 完成': { one: 'Waiting for {n} subagent', other: 'Waiting for {n} subagents' },
+  '等待 {n} 个工作流完成': { one: 'Waiting for {n} workflow', other: 'Waiting for {n} workflows' },
+  '等待 {n} 个监视任务结束': { one: 'Waiting for {n} monitor', other: 'Waiting for {n} monitors' },
+  '等待 {n} 个后台任务完成': { one: 'Waiting for {n} background task', other: 'Waiting for {n} background tasks' },
+  '后台任务已完成': 'Background tasks finished',
+  '回答已写完，任务完成后 Claude 会接着汇报。提前结束等待会一并停止这些任务。':
+    'The response is done. Claude reports back when they finish. Stopping early ends them too.',
+  'Claude 正在接着汇报…': 'Claude is reporting back…',
+  '{n} 分钟后自动收尾': { one: 'Wraps up automatically in {n} minute', other: 'Wraps up automatically in {n} minutes' },
   '收尾中…': 'Finishing up…',
   '结束等待': 'Stop waiting',
   '返回任务列表': 'Back to tasks',

@@ -32,6 +32,12 @@ const KINDS: readonly [RegExp, string][] = [
   [/^\[Resumed\]/, "resume"], // M13：服务重启 / 进程死掉之后自动续跑那一轮的首条
   [/^\[Auto-resume stopped\]/, "resume-stopped"], // M13：连着被切断，不再自动续跑
   [/^\[Model switched\]/, "model-switch"], // 会话中途换了厂商 / 型号：从这里起是谁在答（别照抄前面别的模型的自我介绍）
+  [/^<task-notification>/, "task-notification"], // 后台任务通知（job-notify.ts）：后台命令跑完 / watch 命中的行
+  [/^<ci-monitor-event>/, "ci-event"], // 拉取请求自动修复：bridge 发来的 CI 失败 / 合并冲突 / 新评审意见（pr.ts，那一轮的首条）
+  // 会话协作（session-family.ts，信封格式对齐 bridge 里 Claude 的 src/runtime/session-family.mjs）：
+  [/^<session-message [^>]*kind="brief"/, "session-brief"], // 子会话的第一条：父会话派来的任务说明
+  [/^<session-message /, "session-message"], // 别的会话（父 / 子 / 兄弟，或 bridge 里的 Claude 会话）发来的话
+  [/^<side-sessions-event>/, "side-sessions-event"], // 子会话这一轮收工的汇报（唤醒父会话那一轮的首条）
 ];
 
 export function injectionKind(text: string): string | null {

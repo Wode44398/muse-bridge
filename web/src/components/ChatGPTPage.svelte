@@ -30,7 +30,7 @@
   // 界面语言也随地址带进去：克隆页自己读 localStorage 的 bridge-lang，但宿主用 ?lang= 临时覆盖时要跟着走
   const frameSrc = BASE + 'chatgpt/index.html?theme=' + (ui.theme === 'light' ? 'light' : 'dark') + '&lang=' + lang();
   let frameShown = $state(false);
-  // 这套页面不随公开版发布，由维护者部署的私有 overlay 提供（构建时拷进 chatgpt/，见 web/scripts/chatgpt-overlay.mjs）。
+  // 这套页面是原版资源（构建时从私有 overlay / 发行树 frontend-assets 拷进 chatgpt/，缺了构建失败，见 web/scripts/chatgpt-overlay.mjs）。
   // 先探一下：没有就不挂 iframe，给一句「此版本未包含」（管理员另看到原因与恢复办法）。认页面自己的样式表 clone.css 而不只看
   // 状态码——dev 服务器对不存在的路径会回落成 app 自己的 index.html（200）。网络抖动照旧挂 iframe，不误报。
   let frameMissing = $state(false);

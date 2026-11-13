@@ -43,8 +43,10 @@ export function modeDesc(m) {
 
 export const perm = $state({
   modes: {},        // sid -> { mode, pendingMode?, at }：会话实况
-  views: {},        // 's:'+sid | 'p:'+projectId -> GET 结果 { mode, source, modes, folderDefault, consent, folder?, pendingMode? }
-  draft: { choice: null },   // 新会话草稿里显式选的模式（null = 跟文件夹默认 / 设置默认）
+  views: {},        // 's:'+sid | 'p:'+projectId -> GET 结果 { mode, source, modes, folderDefault, consent, folder?, pendingMode?, shape? }
+  // 新会话草稿：choice = 显式选的模式（null = 跟文件夹默认 / 设置默认）；shape = 'project' 时这是一条项目对话，choice 就是讨论串权限
+  draft: { choice: null, shape: null },
+  shapes: {},       // sid -> 'project'：首条消息带着项目形态开出来的会话（视图跟上之前先认它）
   cards: {},        // sid -> [卡]
   menu: 0,          // Ctrl+Shift+M 打开模式菜单的信号（自增，芯片订阅）
 });
@@ -74,7 +76,23 @@ export function currentMode(sid = session.id) {
 }
 // 新会话首条消息随 /api/chat 带的模式：只带草稿里显式选的（没选 = 服务端按文件夹 / 设置默认自己解析，结果一样）
 export function draftPermissionMode() { return perm.draft.choice || null; }
-export function resetPermDraft() { perm.draft.choice = null; }
+export function resetPermDraft() { perm.draft.choice = null; perm.draft.shape = null; }
+
+// —— 项目模式（运行档位 › 项目，服务端 src/runtime/project-mode.mjs）——
+// 项目对话 = 协调者，只规划和派活；干活的是它开出来的讨论串（子会话）。形态只能在新对话里定（CLI 续聊按会话记录进出协调者模式）。
+// 项目对话自己的权限模式 = 讨论串权限：讨论串开出来时继承它。
+/** 新会话首条消息随 /api/chat 带的形态。 */
+export function draftShape() { return perm.draft.shape === 'project' ? 'project' : null; }
+export function setDraftShape(on) { perm.draft.shape = on ? 'project' : null; }
+/** 这个会话是不是项目对话：GET 视图带 shape；首条消息刚拿到会话 id 时视图可能还没跟上，草稿的形态先转记过来（adoptDraftShape）。 */
+export function isProjectView(sid = session.id) {
+  if (!sid) return perm.draft.shape === 'project';
+  return perm.shapes[sid] === 'project' || perm.views['s:' + sid]?.shape === 'project';
+}
+/** 新会话首轮拿到会话 id（chat 内核的 session 帧）：草稿是项目就记到这个会话上。 */
+export function adoptDraftShape(sid) {
+  if (sid && perm.draft.shape === 'project') perm.shapes[sid] = 'project';
+}
 
 export async function loadModeView(sid = session.id, projectId = session.projectId) {
   const q = sid ? 'session=' + encodeURIComponent(sid) : (projectId ? 'project=' + encodeURIComponent(projectId) : '');
@@ -91,7 +109,8 @@ export async function loadModeView(sid = session.id, projectId = session.project
  */
 export async function setMode(mode, { ack = false } = {}) {
   const sid = session.id;
-  const body = { mode, ...(sid ? { sessionId: sid } : { projectId: session.projectId || undefined }), ...(ack ? { ack: true } : {}) };
+  // 项目草稿里选的是讨论串权限：只是这条项目对话的，不记成文件夹默认（服务端见 project:true）
+  const body = { mode, ...(sid ? { sessionId: sid } : { projectId: session.projectId || undefined, ...(perm.draft.shape === 'project' ? { project: true } : {}) }), ...(ack ? { ack: true } : {}) };
   const prevLive = sid ? perm.modes[sid] : null;
   if (!sid) perm.draft.choice = mode;
   else if (mode !== 'bypassPermissions') perm.modes[sid] = { mode, at: Date.now() };   // 乐观；bypass 可能被延后，等回执

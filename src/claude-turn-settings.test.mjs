@@ -152,31 +152,103 @@ test('输出风格清单有变化才推 claude.settings 快照（已连着的前
   } finally { off(); }
 });
 
-test('子 agent 调度偏好：随设置存取、超长拒收；工作流关着不提示；第三方清单只在自定义 API 会话里当真能派', () => {
-  S.setClaudeSettings(admin, { subagentDispatch: '  简单任务用 mimo-v2.6-flash  ' });
-  assert.equal(T.turnSettings(admin, {}).dispatch, '简单任务用 mimo-v2.6-flash');
-  assert.equal(T.turnSettings(user, {}).dispatch, '');                       // 没有命令行的身份：工作流本就不开
-  assert.throws(() => S.setClaudeSettings(admin, { subagentDispatch: 'x'.repeat(2001) }));
+// 子 agent 调用策略文件的形状（runtime/dispatch-policy.mjs）：总开关、三种范围、是否用非 Claude、一套生效的策略（判定线 / 档位自定义 / 口述备注）
+const POL = (over = {}, st = {}) => ({
+  v: 1, enabled: true, scope: { workflow: true, subagent: true, session: false }, allowThirdParty: true, activeId: 's-00000000',
+  strategies: [{
+    id: 's-00000000', name: '默认', floors: { top: null, hard: null, normal: null, light: null },
+    overrides: { top: null, hard: null, normal: null, light: null }, note: '', ...st,
+  }],
+  rev: 0, ...over,
+});
+const SC = (workflow, subagent, session = false) => ({ workflow, subagent, session });
+
+test('调度偏好并入调用策略：不再是设置项，turnSettings 不再带 dispatch', () => {
+  assert.throws(() => S.setClaudeSettings(admin, { subagentDispatch: '简单任务用 mimo' }), /unknown setting/);
+  for (const c of [admin, user, snap]) assert.equal('dispatch' in T.turnSettings(c, {}), false);
+});
+
+test('总开关与生效范围：关着不提示、subRoute 的前提（workflow 范围）跟着关、start_session 的 auto 一句只在 session 范围开且有会话工具时补', () => {
+  const none = SC(false, false);
+  assert.deepEqual(T.dispatchScopes(null, true), none);
+  assert.deepEqual(T.dispatchScopes(POL({ enabled: false }), true), none);                  // 总开关关：claude.mjs 的 subRoute 要 .workflow，跟着为 null
+  assert.deepEqual(T.dispatchScopes(POL(), true), SC(true, true));
+  assert.deepEqual(T.dispatchScopes(POL(), false), SC(false, true));                        // 动态工作流没开：workflow 范围不算，普通子 agent 照管
+  assert.deepEqual(T.dispatchScopes(POL({ scope: SC(true, false, true) }), true), SC(true, false, true));
+  // start_session 的 auto:<档> 一句
+  assert.equal(T.sessionAutoNudge(T.dispatchScopes(POL(), true), true), '');                // session 范围默认关
+  const on = T.dispatchScopes(POL({ scope: SC(true, true, true) }), true);
+  assert.equal(T.sessionAutoNudge(on, false), '');                                          // 没有会话工具（快照、项目协调者）
+  assert.equal(T.sessionAutoNudge(on, true), '\n\n' + T.SESSION_AUTO_LINE);
+  assert.match(T.SESSION_AUTO_LINE, /^start_session 的 model 可以写 auto:top \/ auto:hard \/ auto:normal \/ auto:light（最难 \/ 难 \/ 常规 \/ 机械）/);
+  assert.equal(T.sessionAutoNudge(T.dispatchScopes(POL({ enabled: false, scope: SC(true, true, true) }), true), true), '');
+  // dispatchNudge：总开关关 / 没有策略 / 两个范围都不生效 / on=false → 空
+  const catalog = [{ name: 'mimo-v2.6-flash', label: 'MiMo', provider: '小米', contextWindow: 262144, vision: false, efforts: ['low', 'high'] }];
+  for (const ratings of [false, null]) {
+    R._setRatingsForTests(ratings);
+    try {
+      assert.equal(T.dispatchNudge({ on: true, policy: POL({ enabled: false }, { note: 'x' }), workflowOn: true, catalog, routed: true }), '');
+      assert.equal(T.dispatchNudge({ on: true, policy: null, workflowOn: true, catalog }), '');
+      assert.equal(T.dispatchNudge({ on: true, policy: POL({ scope: SC(true, false, true) }), workflowOn: false, catalog }), '');
+      assert.equal(T.dispatchNudge({ on: true, policy: POL({ scope: SC(false, false, true) }), workflowOn: true, catalog }), '');
+      assert.equal(T.dispatchNudge({ on: false, policy: POL(), workflowOn: true, catalog }), '');
+    } finally { R._setRatingsForTests(null); }
+  }
+});
+
+test('没有性价比快照：老写法（分档 + 全清单），按范围裁剪；第三方清单只在自定义 API 会话里当真能派；备注走口述偏好', () => {
   const catalog = [{ name: 'mimo-v2.6-flash', label: 'MiMo', provider: '小米', contextWindow: 262144, vision: false, efforts: ['low', 'high'] }];
   R._setRatingsForTests(false);   // 没有性价比快照：老写法（分档 + 全清单）
-  assert.equal(T.dispatchNudge({ on: false, text: 'x', catalog }), '');
-  const cus = T.dispatchNudge({ on: true, text: '简单任务用 mimo', custom: { main: 'big', small: 'tiny' }, catalog });
-  assert.match(cus, /effort/);
-  assert.match(cus, /- mimo-v2\.6-flash — MiMo（小米，上下文 262K，档位 low\/high）/);
-  assert.match(cus, /以这里为准\]\n简单任务用 mimo$/);
-  const off = T.dispatchNudge({ on: true, catalog });
-  assert.doesNotMatch(off, /- mimo/);
-  assert.match(off, /Claude 官方模型/);
-  // 官方订阅会话经上游代理转发第三方（routed）：列出清单，说明只有工作流 agent() 能写第三方名
-  const routed = T.dispatchNudge({ on: true, catalog, routed: true });
-  assert.match(routed, /- mimo-v2\.6-flash — MiMo/);
-  assert.match(routed, /Agent 工具的 model 只能填这几个别名/);
-  assert.doesNotMatch(routed, /最接近的 Claude 别名/);
-  // 有清单就交代 id / 显示名的分工：对用户只说显示名（10-30 录屏里分工表写成 custom:p-xxxx:… 原始 id）
-  for (const s of [cus, routed]) assert.match(s, /一律用显示名（如「MiMo」/);
-  assert.doesNotMatch(off, /一律用显示名/);
-  S.setClaudeSettings(admin, { subagentDispatch: null });
-  R._setRatingsForTests(null);    // 回到读真快照
+  try {
+    assert.equal(T.dispatchNudge({ on: false, policy: POL({}, { note: 'x' }), workflowOn: true, catalog }), '');
+    const cus = T.dispatchNudge({ on: true, policy: POL({}, { note: '简单任务用 mimo' }), workflowOn: true, custom: { main: 'big', small: 'tiny' }, catalog });
+    assert.match(cus, /effort/);
+    assert.match(cus, /- mimo-v2\.6-flash — MiMo（小米，上下文 262K，档位 low\/high）/);
+    assert.match(cus, /以这里为准\]\n简单任务用 mimo$/);
+    const off = T.dispatchNudge({ on: true, policy: POL(), workflowOn: true, catalog });
+    assert.doesNotMatch(off, /- mimo/);
+    assert.match(off, /Claude 官方模型/);
+    // 官方订阅会话经上游代理转发第三方（routed）：列出清单，说明只有工作流 agent() 能写第三方名
+    const routed = T.dispatchNudge({ on: true, policy: POL(), workflowOn: true, catalog, routed: true });
+    assert.match(routed, /- mimo-v2\.6-flash — MiMo/);
+    assert.match(routed, /Agent 工具的 model 只能填这几个别名/);
+    assert.doesNotMatch(routed, /最接近的 Claude 别名/);
+    // 有清单就交代 id / 显示名的分工：对用户只说显示名（10-30 录屏里分工表写成 custom:p-xxxx:… 原始 id）
+    for (const s of [cus, routed]) assert.match(s, /一律用显示名（如「MiMo」/);
+    assert.doesNotMatch(off, /一律用显示名/);
+    // 范围裁剪：只管工作流 → 只讲 agent()，不写「Agent 工具的 model 只能填别名」
+    const wf = T.dispatchNudge({ on: true, policy: POL({ scope: SC(true, false) }), workflowOn: true, catalog, routed: true });
+    assert.match(wf, /在动态工作流脚本里用 agent\(\) 派子 agent 时/);
+    assert.match(wf, /Agent 工具派的子 agent 不在这条要求里/);
+    assert.match(wf, /- mimo-v2\.6-flash — MiMo/);
+    assert.doesNotMatch(wf, /Agent 工具的 model 只能填/);
+    const wfCus = T.dispatchNudge({ on: true, policy: POL({ scope: SC(true, false) }), workflowOn: true, custom: { main: 'big', small: 'tiny' }, catalog });
+    assert.doesNotMatch(wfCus, /Agent 工具的 model 只能填/);
+    // 只管普通子 agent → 只讲 Agent 工具，不列第三方清单
+    const sub = T.dispatchNudge({ on: true, policy: POL({ scope: SC(false, true) }), workflowOn: true, catalog });
+    assert.match(sub, /用 Agent 工具派子 agent 时/);
+    assert.match(sub, /动态工作流脚本里的 agent\(\) 不在这条要求里/);
+    assert.doesNotMatch(sub, /- mimo|auto:/);
+    assert.match(sub, /派不了（Agent 工具的 model 只认 Claude 别名）/);
+    const subCus = T.dispatchNudge({ on: true, policy: POL({ scope: SC(false, true) }), workflowOn: true, custom: { main: 'big', small: 'tiny' }, catalog });
+    assert.match(subCus, /Agent 工具的 model 只能填别名：haiku = tiny/);
+    assert.doesNotMatch(subCus, /- mimo|agent\(prompt/);
+    // 动态工作流没开：只剩普通子 agent，也不提工作流
+    const noWf = T.dispatchNudge({ on: true, policy: POL(), workflowOn: false, catalog });
+    assert.match(noWf, /用 Agent 工具派子 agent 时/);
+    assert.doesNotMatch(noWf, /动态工作流/);
+    // 不调用非 Claude 模型：官方会话不列第三方、明说用户关了；自定义 API 会话只留 Claude 型号（这里一个都没有）
+    const noTp = T.dispatchNudge({ on: true, policy: POL({ allowThirdParty: false }), workflowOn: true, catalog, routed: true });
+    assert.doesNotMatch(noTp, /- mimo/);
+    assert.match(noTp, /用户设置了不调用非 Claude 模型/);
+    const noTpCus = T.dispatchNudge({ on: true, policy: POL({ allowThirdParty: false }), workflowOn: true, custom: { main: 'big', small: 'tiny' }, catalog });
+    assert.doesNotMatch(noTpCus, /- mimo/);
+    assert.match(noTpCus, /不调用非 Claude 模型，配置里没有 Claude 型号可派/);
+    const claudeCat = [...catalog, { name: 'custom:p-aaaaaa:claude-sonnet-5-5', label: 'Sonnet 中转', provider: '中转', contextWindow: 0, vision: true, efforts: [] }];
+    const noTpCus2 = T.dispatchNudge({ on: true, policy: POL({ allowThirdParty: false }), workflowOn: true, custom: { main: 'big', small: 'tiny' }, catalog: claudeCat });
+    assert.match(noTpCus2, /- custom:p-aaaaaa:claude-sonnet-5-5 — Sonnet 中转/);
+    assert.doesNotMatch(noTpCus2, /- mimo/);
+  } finally { R._setRatingsForTests(null); }   // 回到读真快照
 });
 
 test('有性价比快照：调度提示给四档阶梯（首选 + 备选、auto 写法），被胜出的与未评分的各一行', () => {
@@ -196,7 +268,8 @@ test('有性价比快照：调度提示给四档阶梯（首选 + 备选、auto 
       { name: 'mimo-v2.6-flash', label: 'MiMo Flash', provider: '小米', contextWindow: 262144, vision: false, efforts: ['off', 'on'] },
       { name: 'odd-model', label: 'Odd', provider: 'X', contextWindow: 0, vision: true, efforts: [] },
     ];
-    const routed = T.dispatchNudge({ on: true, catalog, routed: true, plan: 'max20', text: '偏好原文' });
+    const base = { on: true, policy: POL(), workflowOn: true, catalog };
+    const routed = T.dispatchNudge({ ...base, policy: POL({}, { note: '偏好原文' }), routed: true, plan: 'max20' });
     assert.match(routed, /2026-10-30 版/);
     assert.match(routed, /最难（[^）]+）→ auto:top = opus · max（Opus 5\.5，智力 58 · ¥1\.40 订阅等效）/);
     assert.match(routed, /难（[^）]+）→ auto:hard = opus · high/);
@@ -209,15 +282,45 @@ test('有性价比快照：调度提示给四档阶梯（首选 + 备选、auto 
     assert.match(routed, /以这里为准\]\n偏好原文$/);
     assert.doesNotMatch(routed, /^  - /m);                              // 不再列全清单
     // 官方会话没挂上转发：只有 Claude 别名，不教 auto 写法
-    const plain = T.dispatchNudge({ on: true, catalog, plan: 'max20' });
+    const plain = T.dispatchNudge({ ...base, plan: 'max20' });
     assert.doesNotMatch(plain, /auto:/);
     assert.doesNotMatch(plain, /mimo-v2\.6-flash · /);
     assert.match(plain, /派不了/);
     // 自定义 API 会话：全是 API 价，Agent 工具只设 effort
-    const cus = T.dispatchNudge({ on: true, catalog, custom: { main: 'big', small: 'tiny' } });
+    const cus = T.dispatchNudge({ ...base, custom: { main: 'big', small: 'tiny' } });
     assert.match(cus, /auto:light = mimo-v2\.6-flash（MiMo Flash，智力 27 · ¥0\.86/);
     assert.match(cus, /haiku = tiny，sonnet \/ opus = 主会话模型 big/);
     assert.doesNotMatch(cus, /订阅等效/);
+    // 范围裁剪：只管工作流 → 阶梯照给、auto 照教，不写「Agent 工具的 model 只能填别名」
+    const wf = T.dispatchNudge({ ...base, policy: POL({ scope: SC(true, false) }), routed: true, plan: 'max20' });
+    assert.match(wf, /auto:hard = opus · high/);
+    assert.match(wf, /备选 mimo-v2\.6-flash/);
+    assert.doesNotMatch(wf, /Agent 工具的 model 只能填/);
+    const wfCus = T.dispatchNudge({ ...base, policy: POL({ scope: SC(true, false) }), custom: { main: 'big', small: 'tiny' } });
+    assert.match(wfCus, /auto:light = mimo-v2\.6-flash/);
+    assert.doesNotMatch(wfCus, /Agent 工具的 model 只能填/);
+    // 只管普通子 agent → 只给 Agent 工具那套（Claude 别名），不写 auto:<档>、不给备选
+    const sub = T.dispatchNudge({ ...base, policy: POL({ scope: SC(false, true) }), routed: true, plan: 'max20' });
+    assert.match(sub, /用 Agent 工具派子 agent 时/);
+    assert.match(sub, /难（[^）]+）→ opus · high/);
+    assert.doesNotMatch(sub, /auto:/);
+    assert.doesNotMatch(sub, /备选/);
+    assert.match(sub, /Agent 工具的 model 写括号前的别名/);
+    // 判定线够不着 → 取最强的并标出；档位自定义 → 标「用户指定」（工作流阶梯与 Agent 工具那行都标）
+    const tuned = T.dispatchNudge({
+      ...base, routed: true, plan: 'max20',
+      policy: POL({}, { floors: { top: 90, hard: null, normal: null, light: null }, overrides: { top: null, hard: null, normal: null, light: { model: 'sonnet', effort: 'high' } } }),
+    });
+    assert.match(tuned, /auto:top = opus · max（[^）]+）（没有模型够得着这条线，取最强的）/);
+    assert.match(tuned, /auto:light = sonnet · high（[^）]+）（用户指定）/);
+    assert.match(tuned, /机械 sonnet \+ effort high（用户指定）/);
+    assert.doesNotMatch(tuned, /auto:hard = [^\n]*（用户指定）/);
+    // 不调用非 Claude 模型：阶梯里没有第三方（不给备选），明说用户关了
+    const noTp = T.dispatchNudge({ ...base, policy: POL({ allowThirdParty: false }), routed: true, plan: 'max20' });
+    assert.match(noTp, /auto:light = haiku · medium/);
+    assert.doesNotMatch(noTp, /mimo-v2\.6-flash/);
+    assert.match(noTp, /用户设置了不调用非 Claude 模型/);
+    assert.doesNotMatch(noTp, /odd-model/);
   } finally { R._setRatingsForTests(null); }
 });
 
@@ -240,4 +343,37 @@ test('工作流 agent 的档位从子 agent 转录的 api-request 行补', async
   assert.equal(out[2].effort, undefined);
   assert.equal(out[3].effort, undefined);
   assert.equal(annotateWorkflowEfforts(undefined, sub), undefined);
+});
+
+test('直播路径带缓存：读到的档位不再读盘，没读到的稍后重读', async () => {
+  const { annotateWorkflowEfforts } = await import('./runtime/tool-summary.mjs');
+  const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+  const sub = path.join(tmp, 'sess-live', 'subagents');
+  const wf = path.join(sub, 'workflows', 'wf_1');
+  mkdirSync(wf, { recursive: true });
+  const cache = new Map();
+  const prog = [{ type: 'workflow_agent', index: 0, agentId: 'b1', model: 'fable' }];
+  assert.equal(annotateWorkflowEfforts(prog, sub, null, cache)[0].effort, undefined);   // agent 还没发请求
+  writeFileSync(path.join(wf, 'agent-b1.jsonl'), JSON.stringify({ type: 'api-request', params: { model: 'claude-fable-5-2', output_config: { effort: 'xhigh' } } }) + '\n');
+  assert.equal(annotateWorkflowEfforts(prog, sub, null, cache)[0].effort, undefined);   // 刚落空过，这一帧不重读
+  cache.get('e:b1').at = 0;
+  assert.equal(annotateWorkflowEfforts(prog, sub, null, cache)[0].effort, 'xhigh');
+  rmSync(wf, { recursive: true, force: true });
+  assert.equal(annotateWorkflowEfforts(prog, sub, null, cache)[0].effort, 'xhigh');     // 命中后不再读盘
+});
+
+test('工作流 auto:<档> agent 补真实模型与档位（直播不读转录）', async () => {
+  const { annotateWorkflowEfforts } = await import('./runtime/tool-summary.mjs');
+  const asked = [];
+  const out = annotateWorkflowEfforts([
+    { type: 'workflow_agent', index: 0, agentId: 'a1', model: 'auto:hard', effort: 'medium' },
+    { type: 'workflow_agent', index: 1, agentId: 'a2', model: 'auto:hard' },
+    { type: 'workflow_agent', index: 2, agentId: 'a3', model: 'auto:light' },
+    { type: 'workflow_agent', index: 3, agentId: 'a4', model: 'sonnet' },
+  ], '', (name) => { asked.push(name); return name === 'auto:hard' ? { model: 'claude-opus-5-5', effort: 'high' } : null; });
+  assert.deepEqual([out[0].servedModel, out[0].effort], ['claude-opus-5-5', 'high']);   // CLI 发的 medium 不作数
+  assert.deepEqual([out[1].servedModel, out[1].effort], ['claude-opus-5-5', 'high']);
+  assert.equal(out[2].servedModel, undefined);
+  assert.equal(out[3].effort, undefined);
+  assert.deepEqual(asked, ['auto:hard', 'auto:light']);   // 每档只算一次
 });

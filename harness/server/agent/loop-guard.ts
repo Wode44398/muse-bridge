@@ -24,6 +24,26 @@ const REPEAT_STOP = 12;
 const SAME_ARGS_FAIL = { note: 2, stop: 5 };
 const SAME_TOOL_FAIL = { note: 3, stop: 8 };
 const CYCLE_STOP = 3; // 第几次发现周期时熔断
+const REPEAT_STOP_EVERY = 4; // 过了熔断线之后，每再重复这么多次再报一次
+const HISTORY = 24; // 周期检测看最近这么多个调用
+
+// 模型档案（agent/profile.ts）的 loop.guard 按家族调这几项；默认值就是上面的常量。提醒的措辞（第 3、5、8 次）不在其内。
+export interface GuardLimits {
+  repeatStop: number;
+  repeatStopEvery: number;
+  sameArgsFail: { note: number; stop: number };
+  sameToolFail: { note: number; stop: number };
+  cycleStop: number;
+  history: number;
+}
+export const GUARD_DEFAULTS: Readonly<GuardLimits> = Object.freeze({
+  repeatStop: REPEAT_STOP,
+  repeatStopEvery: REPEAT_STOP_EVERY,
+  sameArgsFail: Object.freeze({ ...SAME_ARGS_FAIL }),
+  sameToolFail: Object.freeze({ ...SAME_TOOL_FAIL }),
+  cycleStop: CYCLE_STOP,
+  history: HISTORY,
+});
 
 function normalize(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(normalize);
@@ -45,6 +65,11 @@ export class LoopGuard {
   private failStreak = { name: "", count: 0 };
   private cycleSeen = 0;
   private inCycle = false;
+  private readonly lim: GuardLimits;
+
+  constructor(lim: GuardLimits = GUARD_DEFAULTS) {
+    this.lim = lim;
+  }
 
   observe(name: string, args: Record<string, unknown>, ok: boolean): GuardVerdict {
     if (exempt(name, args)) return {};
@@ -56,7 +81,7 @@ export class LoopGuard {
     this.streak = this.streak.key === key ? { key, count: this.streak.count + 1 } : { key, count: 1 };
     const n = this.streak.count;
     if (REPEAT_NOTES[n]) notes.push(REPEAT_NOTES[n](name));
-    if (n >= REPEAT_STOP && (n - REPEAT_STOP) % 4 === 0) {
+    if (n >= this.lim.repeatStop && (n - this.lim.repeatStop) % this.lim.repeatStopEvery === 0) {
       stop = `the same ${name} call was repeated ${n} times in a row`;
       notes.push(`[Loop guard] ${n} identical calls in a row — this is a loop. Stop and report what is blocking you.`);
     }
@@ -68,18 +93,18 @@ export class LoopGuard {
     } else {
       const same = (this.failByKey.get(key) ?? 0) + 1;
       this.failByKey.set(key, same);
-      if (same === SAME_ARGS_FAIL.note) notes.push(`[Loop guard] This exact call has now failed ${same} times. Do not retry it unchanged — fix the cause first.`);
-      if (same >= SAME_ARGS_FAIL.stop) stop ??= `the same failing ${name} call was retried ${same} times`;
+      if (same === this.lim.sameArgsFail.note) notes.push(`[Loop guard] This exact call has now failed ${same} times. Do not retry it unchanged — fix the cause first.`);
+      if (same >= this.lim.sameArgsFail.stop) stop ??= `the same failing ${name} call was retried ${same} times`;
       this.failStreak = this.failStreak.name === name ? { name, count: this.failStreak.count + 1 } : { name, count: 1 };
       const streak = this.failStreak.count;
-      if (streak === SAME_TOOL_FAIL.note) notes.push(`[Loop guard] ${name} has failed ${streak} times in a row. Reconsider the approach before calling it again.`);
-      if (streak >= SAME_TOOL_FAIL.stop) stop ??= `${name} failed ${streak} times in a row`;
+      if (streak === this.lim.sameToolFail.note) notes.push(`[Loop guard] ${name} has failed ${streak} times in a row. Reconsider the approach before calling it again.`);
+      if (streak >= this.lim.sameToolFail.stop) stop ??= `${name} failed ${streak} times in a row`;
     }
 
     // 周期：最近 3p 个调用是同一段 p 个调用（至少两种）连着重复 3 遍
     this.history.push(key);
     this.names.push(name);
-    if (this.history.length > 24) {
+    if (this.history.length > this.lim.history) {
       this.history.shift();
       this.names.shift();
     }
@@ -89,7 +114,7 @@ export class LoopGuard {
       this.cycleSeen++;
       const seq = this.names.slice(-period).join(" → ");
       notes.push(`[Loop guard] You are repeating the same sequence of ${period} calls (${seq}) without progress. Break the cycle.`);
-      if (this.cycleSeen >= CYCLE_STOP) stop ??= `the same sequence of ${period} calls was repeated again and again`;
+      if (this.cycleSeen >= this.lim.cycleStop) stop ??= `the same sequence of ${period} calls was repeated again and again`;
     } else if (!period) {
       this.inCycle = false;
     }

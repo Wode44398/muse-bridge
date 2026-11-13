@@ -12,17 +12,14 @@ import { routineCapFor, billingUser, quotaBlock } from '../runtime/quota.mjs';
 import { permissionModesFor } from '../runtime/claude-settings.mjs';
 import { gitInvocation } from '../runtime/member-boundary.mjs';
 import { authorizeProjectPath } from '../project-paths.mjs';
-import { CLAUDE_MODELS, CLAUDE_EFFORTS, VERTEX_MODELS, VERTEX_THINK_LEVELS, ULTRACODE } from '../config/capabilities.mjs';
+import { CLAUDE_MODELS, CLAUDE_EFFORTS, ULTRACODE } from '../config/capabilities.mjs';
 
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 
-// Validate the engine selection against the per-agent whitelists; unknown values
-// fall through to undefined so the routine stores null = "server default".
+// Validate the engine selection against the whitelists; unknown values fall through to undefined so the
+// routine stores null = "server default". 引擎只剩 Claude（Gemini 2026-11-04 下线）。
 function engineFields(body) {
-  const agent = body.agent === 'vertex' ? 'vertex' : 'claude';
-  if (agent === 'vertex') {
-    return { agent, model: VERTEX_MODELS.has(body.model) ? body.model : undefined, effort: VERTEX_THINK_LEVELS.has(body.effort) ? body.effort : undefined, search: body.search === true };
-  }
+  const agent = 'claude';
   return { agent, model: CLAUDE_MODELS.has(body.model) ? body.model : undefined, effort: CLAUDE_EFFORTS.has(body.effort) ? body.effort : undefined, search: false };
 }
 
@@ -32,11 +29,6 @@ function codeFields(ctx, body, agent) {
   const out = {};
   if ('description' in body) out.description = body.description;
   if ('notify' in body) out.notify = body.notify === true;
-  if (agent === 'vertex') {
-    // Gemini 引擎没有工作文件夹这些概念：一律清空，免得切回 Claude 时带着看不见的旧设置
-    if ('agent' in body) Object.assign(out, { cwd: null, worktree: false, branch: null, permissionMode: null, fast: false, sessionMode: 'new' });
-    return out;
-  }
   if ('cwd' in body) {
     const raw = typeof body.cwd === 'string' ? body.cwd.trim() : '';
     out.cwd = raw ? authorizeProjectPath(ctx, raw) : null;
@@ -54,6 +46,11 @@ function codeFields(ctx, body, agent) {
   }
   if ('fast' in body) out.fast = body.fast === true;
   if ('sessionMode' in body) out.sessionMode = body.sessionMode === 'continue' ? 'continue' : 'new';
+  // 以项目对话运行（运行档位 › 项目）：协调者收到任务指令后自己派讨论串。要会话工具：管理员 / 有 shell 的身份
+  if ('shape' in body) {
+    if (body.shape === 'project' && !(ctx.kind === 'admin' || ctx.shell)) throw Object.assign(new Error('你的账号不能用项目对话'), { status: 400 });
+    out.shape = body.shape === 'project' ? 'project' : null;
+  }
   return out;
 }
 
@@ -66,11 +63,11 @@ function rejectUltracode(body, res) {
   return true;
 }
 
-// 定时任务的引擎（Claude / Gemini）对这个身份开着吗——全局开关 ∩ 按人授权，与聊天同口径。
+// 定时任务的引擎（只剩 Claude）对这个身份开着吗——全局开关 ∩ 按人授权，与聊天同口径。老客户端选 Gemini 引擎：410。
 function rejectAgent(ctx, body, res) {
-  const vertex = body.agent === 'vertex';
-  if (vertex ? ctx.allowGemini : ctx.allowClaude) return false;
-  json(res, 403, { ok: false, error: (vertex ? 'Gemini' : 'Claude') + ' 未启用，或你的账号没有使用权限' });
+  if (body.agent === 'vertex') { json(res, 410, { ok: false, error: 'Gemini 对话已下线，定时任务只能用 Claude 跑' }); return true; }
+  if (ctx.allowClaude) return false;
+  json(res, 403, { ok: false, error: 'Claude 未启用，或你的账号没有使用权限' });
   return true;
 }
 

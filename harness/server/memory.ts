@@ -48,8 +48,16 @@ export interface MemoryMeta {
   external?: boolean;
   rejectedAt?: string;
   rejectReason?: string;
+  // 离线整理（memory-dream.ts）：写下这条的会话（服务端填，模型填不了），整理时据它回看原始对话
+  sourceSession?: string;
+  // 离线整理的复核记录：什么时候看的、结论（证据支持 / 说不清 / 与记录矛盾）、一句理由。只在 reviewedAt ≥ updated 时算数
+  reviewedAt?: string;
+  reviewVerdict?: ReviewVerdict;
+  reviewNote?: string;
   issues: string[];
 }
+
+export type ReviewVerdict = "supported" | "unclear" | "contradicted";
 
 export interface MemoryRecord extends MemoryMeta {
   content: string;
@@ -77,12 +85,17 @@ interface StoredMemory {
   external?: boolean;
   rejectedAt?: string;
   rejectReason?: string;
+  sourceSession?: string;
+  reviewedAt?: string;
+  reviewVerdict?: ReviewVerdict;
+  reviewNote?: string;
   content: string;
 }
 
 // K2（#28）：写入来源——服务端按调用路径填，模型填不了（Remember 固定 model，界面 API 固定 user）。
+// dream = 离线整理改写 / 晋升的（memory-dream.ts）：晋升只在用户原话逐字核对过之后，见那里的说明。
 export interface MemoryOrigin {
-  writer: "model" | "user";
+  writer: "model" | "user" | "dream";
   attended?: boolean;
 }
 
@@ -107,6 +120,8 @@ export interface SaveMemoryOptions {
   lenient?: boolean;
   // K9（X55）：写这条的会话读过外部内容——模型写的想生效也先存成 proposed，等用户确认
   externalTaint?: boolean;
+  // 写下这条的会话 id（Remember 按工具上下文填）；覆盖时没给就沿用旧的
+  sourceSession?: string;
 }
 
 const SCHEMA_VERSION = 2;
@@ -123,6 +138,7 @@ const MEMORY_CONFIDENCE = new Set<MemoryConfidence>([
   "observed",
   "inferred",
 ]);
+const REVIEW_VERDICTS = new Set<ReviewVerdict>(["supported", "unclear", "contradicted"]);
 const TOPIC_RE = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 const COMMIT_RE = /^[0-9a-f]{7,64}$/i;
 
@@ -151,10 +167,34 @@ export const GLOBAL_TYPES: ReadonlySet<MemoryType> = new Set<MemoryType>(["user"
 // 生效的全局索引行合计上限（字符）：每个会话的提示词里都有它，得小
 export const GLOBAL_PROMPT_BUDGET = 2000;
 const GLOBAL_MAX_BODY = 1200;
-export const isGlobalMemory = (root: string): boolean => root === GLOBAL_MEMORY;
+
+// 评测隔离：DIMENSIO_GLOBAL_MEMORY_SCOPE=workspace 时全局层按会话的工作区各存一份（<记忆目录>/global-scoped/<工作区键>），
+// 同一臂里并发 / 重复的题互相看不见对方写的全局记忆。只给评测臂用（evals/ab/lib.ts 的 armEnv 默认打开）；不设或别的值
+// = 正式服行为：全局层只有 <记忆目录>/global 一份，所有工作区共用。
+// 分了工作区的全局层也是一个哨兵（GLOBAL_MEMORY + \0 + 工作区绝对路径），isGlobalMemory 认它，读写与生命周期函数原样复用。
+const SCOPED_GLOBAL_PREFIX = `${GLOBAL_MEMORY}\u0000`;
+export function globalMemoryScoped(): boolean {
+  return process.env.DIMENSIO_GLOBAL_MEMORY_SCOPE?.trim().toLowerCase() === "workspace";
+}
+// 这个工作区的会话该用的全局层：开关没开就是唯一那份 GLOBAL_MEMORY（与以前一字不差）
+export function globalMemoryFor(workspaceRoot: string | undefined): string {
+  if (workspaceRoot && isGlobalMemory(workspaceRoot)) return workspaceRoot; // 已经是全局层
+  if (!globalMemoryScoped() || !workspaceRoot) return GLOBAL_MEMORY;
+  return SCOPED_GLOBAL_PREFIX + path.resolve(workspaceRoot);
+}
+export const isGlobalMemory = (root: string): boolean => root === GLOBAL_MEMORY || root.startsWith(SCOPED_GLOBAL_PREFIX);
+
+// 一个工作区在记忆目录里的键：工作区层是 workspaces/<键>，分了工作区的全局层是 global-scoped/<键>。
+// 评测侧（不在 harness 进程里、MEMORY_DIR 不同）据此只看这次运行自己的那两份。
+export function memoryDirKey(workspaceRoot: string): string {
+  return workspaceKey(workspaceRoot);
+}
 
 export function memoryDir(workspaceRoot: string): string {
-  if (isGlobalMemory(workspaceRoot)) return path.join(memoryRoot(), "global");
+  if (workspaceRoot === GLOBAL_MEMORY) return path.join(memoryRoot(), "global");
+  if (workspaceRoot.startsWith(SCOPED_GLOBAL_PREFIX)) {
+    return path.join(memoryRoot(), "global-scoped", workspaceKey(workspaceRoot.slice(SCOPED_GLOBAL_PREFIX.length)));
+  }
   return path.join(memoryRoot(), "workspaces", workspaceKey(workspaceRoot));
 }
 
@@ -307,6 +347,10 @@ function parse(raw: string): StoredMemory {
     external: scalar(meta.external) === "true" || undefined,
     rejectedAt: scalar(meta.rejected_at) || undefined,
     rejectReason: scalar(meta.reject_reason) || undefined,
+    sourceSession: scalar(meta.source_session) || undefined,
+    reviewedAt: scalar(meta.reviewed_at) || undefined,
+    reviewVerdict: REVIEW_VERDICTS.has(scalar(meta.review_verdict) as ReviewVerdict) ? (scalar(meta.review_verdict) as ReviewVerdict) : undefined,
+    reviewNote: scalar(meta.review_note) || undefined,
     content,
   };
 }
@@ -452,6 +496,10 @@ function assess(workspaceRoot: string, id: string, p: StoredMemory): MemoryMeta 
     external: p.external,
     rejectedAt: p.rejectedAt,
     rejectReason: p.rejectReason,
+    sourceSession: p.sourceSession,
+    reviewedAt: p.reviewedAt,
+    reviewVerdict: p.reviewVerdict,
+    reviewNote: p.reviewNote,
     issues,
   };
 }
@@ -735,6 +783,7 @@ function validateForSave(workspaceRoot: string, opts: SaveMemoryOptions): { stor
       origin: opts.origin?.writer,
       attended: opts.origin?.attended,
       external: external || undefined,
+      sourceSession: opts.sourceSession?.trim() || undefined,
       content,
     },
     downgraded: problems.map(say),
@@ -767,6 +816,10 @@ function serialize(id: string, p: StoredMemory): string {
   if (p.external) lines.push("external: true");
   if (p.rejectedAt) lines.push(`rejected_at: ${JSON.stringify(p.rejectedAt)}`);
   if (p.rejectReason) lines.push(`reject_reason: ${JSON.stringify(p.rejectReason)}`);
+  if (p.sourceSession) lines.push(`source_session: ${JSON.stringify(p.sourceSession)}`);
+  if (p.reviewedAt) lines.push(`reviewed_at: ${JSON.stringify(p.reviewedAt)}`);
+  if (p.reviewVerdict) lines.push(`review_verdict: ${p.reviewVerdict}`);
+  if (p.reviewNote) lines.push(`review_note: ${JSON.stringify(p.reviewNote)}`);
   lines.push("metadata:", `  type: ${p.type}`, "---", "", p.content, "");
   return lines.join("\n");
 }
@@ -822,6 +875,9 @@ export function saveMemory(
     soften(`supersedes target is not an active memory with topic ${stored.topic}`, "drop supersedes", "supersedes");
   }
 
+  // 覆盖时没给来源会话就沿用旧的（界面里改一个字，不该让整理找不到原始对话）；旧的复核记录不沿用——内容变了，等于没复核过
+  if (!created && !stored.sourceSession) stored.sourceSession = readStored(workspaceRoot, id)?.sourceSession;
+
   // Write the replacement first. A crash can temporarily leave two active
   // files, but listMemories quarantines both as a conflict instead of silently
   // trusting the wrong one. The next successful call completes the transition.
@@ -865,6 +921,42 @@ export function retireMemory(workspaceRoot: string, id: string, origin?: MemoryO
   return true;
 }
 
+// ── 离线整理（memory-dream.ts）专用的两种写法 ──────────────────────────────────────────────
+// 复核记录：只改 reviewed_* 三项，不动 updated（内容没变；reviewedAt ≥ updated 就说明「这一版看过了」），不进 .history。
+export function annotateReview(
+  workspaceRoot: string,
+  id: string,
+  review: { at?: string; verdict: ReviewVerdict; note: string },
+): boolean {
+  const stored = readStored(workspaceRoot, id);
+  if (!stored) return false;
+  const at = review.at ?? new Date().toISOString();
+  // 刚被 saveMemory 写过（同一毫秒之内），复核时间不能早于它
+  stored.reviewedAt = stored.updated && stored.updated > at ? stored.updated : at;
+  stored.reviewVerdict = review.verdict;
+  stored.reviewNote = review.note.replace(/\s+/g, " ").trim().slice(0, MAX_DESCRIPTION) || undefined;
+  atomicWrite(fileFor(workspaceRoot, id), serialize(id, stored));
+  return true;
+}
+
+// 合并：重复条目并进另一条之后标成 superseded（不进提示、Recall 还看得到），旧版进 .history。
+// 生效的条目不走这里——那要 saveMemory 的 supersedes（同 topic 的显式替换）。
+export function supersedeMemory(workspaceRoot: string, id: string, by: string, note?: string): boolean {
+  const stored = readStored(workspaceRoot, id);
+  if (!stored || stored.status === "active" || stored.status === "rejected") return false;
+  archiveVersion(workspaceRoot, id, "superseded");
+  const now = new Date().toISOString();
+  stored.status = "superseded";
+  stored.supersededBy = by;
+  stored.updated = now;
+  stored.reviewedAt = now;
+  stored.reviewVerdict = "supported";
+  stored.reviewNote = note?.replace(/\s+/g, " ").trim().slice(0, MAX_DESCRIPTION) || `merged into ${by}`;
+  atomicWrite(fileFor(workspaceRoot, id), serialize(id, stored));
+  regenIndex(workspaceRoot);
+  return true;
+}
+
 // ── K4（G5）：记忆治理——用户在记忆面板里晋升、驳回、撤销驳回 ─────────────────────────────
 // 以前界面完全不调 /api/memory：模型存的 proposed 条目永远进不了提示，错的 active / verified 条目也没处驳回。
 // 这几个动作都是用户本人做的（origin user、在场），旧版照样进 .history。
@@ -897,9 +989,7 @@ export class MemoryBudgetError extends Error {
 }
 
 // 一条生效的全局索引行有多长（和进提示词的那一行一字不差）
-function activeLineLength(m: Pick<MemoryMeta, "id" | "type" | "topic" | "title" | "description">): number {
-  return formatIndexLine({ ...m, status: "active", confidence: "user_confirmed", issues: [], evidence: [] } as unknown as MemoryMeta).length + 1;
-}
+const activeLineLength = (m: Pick<MemoryMeta, "id" | "type" | "topic" | "title" | "description">): number => activeIndexLineLength(m);
 
 // 晋升 = 用户确认它：状态 active、可信度 user_confirmed，可以顺手改标题 / 描述 / 正文 / 到期时间。
 // 仍走 saveMemory 的全部校验（project / feedback 要有 Why 与 How to apply、锚点要存在、不能已过期……），
@@ -993,15 +1083,63 @@ function regenIndex(workspaceRoot: string): void {
   atomicWrite(path.join(ensureDir(workspaceRoot), "MEMORY.md"), lines.join("\n") + "\n");
 }
 
+// 工作区层生效索引行的合计上限（字符）。注入层要小：每个新对话都带着它，错的一条会进每一个会话，太长了模型反而不照着做。
+// 没超就与以前一字不差（不白白打断缓存前缀）；超了按被召回的次数、再按更新时间挑留下哪些，留下的仍按原来的次序。
+// 离线整理晋升前也按它算（workspaceBudgetLeft），满了就不晋升、留给用户。
+export const WORKSPACE_PROMPT_BUDGET = 4000;
+
+// usage.json 的计次（memory-usage.ts 写；那边 import 了本文件，这里直接读，免得互相 import）
+function usageCounts(workspaceRoot: string): Record<string, number> {
+  try {
+    const raw = JSON.parse(readFileSync(path.join(memoryDir(workspaceRoot), "usage.json"), "utf8")) as { notes?: Record<string, { n?: number }> };
+    return Object.fromEntries(Object.entries(raw?.notes ?? {}).map(([id, u]) => [id, Number(u?.n) || 0]));
+  } catch {
+    return {};
+  }
+}
+
+function keepWithinBudget(workspaceRoot: string, active: MemoryMeta[], budget: number): { kept: MemoryMeta[]; cut: number } {
+  const len = (m: MemoryMeta) => formatIndexLine(m).length + 1;
+  if (active.reduce((n, m) => n + len(m), 0) <= budget) return { kept: active, cut: 0 };
+  const uses = usageCounts(workspaceRoot);
+  const ranked = [...active].sort((a, b) => (uses[b.id] ?? 0) - (uses[a.id] ?? 0) || (b.updated || "").localeCompare(a.updated || ""));
+  const keep = new Set<string>();
+  let used = 0;
+  for (const m of ranked) {
+    if (used + len(m) > budget) continue;
+    keep.add(m.id);
+    used += len(m);
+  }
+  return { kept: active.filter((m) => keep.has(m.id)), cut: active.length - keep.size };
+}
+
+// 工作区层还剩多少字的注入预算（替换掉的那条不算）
+export function workspaceBudgetLeft(workspaceRoot: string, opts: { excluding?: string[] } = {}): number {
+  const skip = new Set(opts.excluding ?? []);
+  const used = listMemories(workspaceRoot)
+    .filter((m) => m.status === "active" && !skip.has(m.id))
+    .reduce((n, m) => n + formatIndexLine(m).length + 1, 0);
+  return WORKSPACE_PROMPT_BUDGET - used;
+}
+
+// 一条记忆生效后在索引里那一行的长度（预算用）
+export function activeIndexLineLength(m: Pick<MemoryMeta, "id" | "type" | "topic" | "title" | "description">, confidence: MemoryConfidence = "user_confirmed"): number {
+  return formatIndexLine({ ...m, status: "active", confidence, issues: [], evidence: [] } as unknown as MemoryMeta).length + 1;
+}
+
 // Only active, currently valid memories enter a fresh system prompt. Non-active
 // records stay discoverable through Recall, but cannot silently steer the model.
 export function renderMemoryForPrompt(workspaceRoot: string): string | undefined {
   const items = listMemories(workspaceRoot);
   if (items.length === 0) return undefined;
-  const active = items.filter((m) => m.status === "active");
+  const allActive = items.filter((m) => m.status === "active");
+  const { kept: active, cut } = isGlobalMemory(workspaceRoot) ? { kept: allActive, cut: 0 } : keepWithinBudget(workspaceRoot, allActive, WORKSPACE_PROMPT_BUDGET);
   const rejected = items.filter((m) => m.status === "rejected").length;
-  const hidden = items.length - active.length - rejected;
+  const hidden = items.length - allActive.length - rejected;
   const lines = active.map((m) => formatIndexLine(m));
+  if (cut > 0) {
+    lines.push(`- (${cut} more active notes are over this workspace's prompt budget and omitted — the least recalled ones; Recall lists them)`);
+  }
   if (hidden > 0) {
     lines.push(`- (${hidden} proposed/stale/superseded notes omitted; Recall without an id lists them for diagnosis)`);
   }
@@ -1013,10 +1151,10 @@ export function renderMemoryForPrompt(workspaceRoot: string): string | undefined
 }
 
 // K7：生效的全局索引行（有预算：超出的截掉并说一声——确认时已经把过关，这里是兜底，防手改文件）。
-// 全局层还没有目录时不为一次渲染去建它。
-export function renderGlobalMemoryForPrompt(): string | undefined {
-  if (!existsSync(memoryDir(GLOBAL_MEMORY))) return undefined;
-  const active = listMemories(GLOBAL_MEMORY).filter((m) => m.status === "active");
+// 全局层还没有目录时不为一次渲染去建它。globalRoot = 哪一份全局层（globalMemoryFor；不给就是唯一那份）。
+export function renderGlobalMemoryForPrompt(globalRoot: string = GLOBAL_MEMORY): string | undefined {
+  if (!existsSync(memoryDir(globalRoot))) return undefined;
+  const active = listMemories(globalRoot).filter((m) => m.status === "active");
   if (!active.length) return undefined;
   const lines: string[] = [];
   let used = 0;
@@ -1037,7 +1175,7 @@ export function renderGlobalMemoryForPrompt(): string | undefined {
 // 进提示词的整段记忆索引：没有生效的全局条目时与以前一字不差（不白白打断已有会话的缓存前缀）
 export function renderAllMemoryForPrompt(workspaceRoot: string): string | undefined {
   const local = renderMemoryForPrompt(workspaceRoot);
-  const global = renderGlobalMemoryForPrompt();
+  const global = renderGlobalMemoryForPrompt(globalMemoryFor(workspaceRoot));
   if (!global) return local;
   return `Global notes — about the user and this machine, they apply in every workspace (Recall ids with layer "global"):\n${global}` +
     (local ? `\n\nThis workspace:\n${local}` : "");

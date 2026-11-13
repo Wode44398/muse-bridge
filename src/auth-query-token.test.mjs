@@ -28,3 +28,11 @@ test('dimensio 其它接口不认 ?token=', () => {
   ]) assert.equal(authOk(get(url)), false, url);
   assert.equal(authOk(get(`/api/harness/api/sessions/abc/assets/${asset}?token=${MASTER}`, 'POST')), false);
 });
+
+// Claude 状态行缩略图条的 <img>（/api/tool-image?…&token=）：漏在白名单外时手机 apk 全是裂图（2026-11-03）。
+test('工具结果图片直链认 ?token=', () => {
+  const url = `/api/tool-image?sid=4ab9cd12-a0d2&t=toolu_01X&n=0&v=thumb&token=${MASTER}`;
+  assert.equal(queryToken(get(url)), MASTER);
+  assert.equal(authOk(get(url)), true);
+  assert.equal(authOk(get(url, 'POST')), false);
+});

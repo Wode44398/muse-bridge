@@ -4,7 +4,7 @@ import path from "node:path";
 import { resolveKey } from "./config.ts";
 import { projectKnowledgeDir, type ProjectKnowledge } from "./knowledge.ts";
 import { refreshProjectKnowledge } from "./knowledge-service.ts";
-import { GLOBAL_MEMORY, listMemories, memoryDir, readMemory, type MemoryStatus } from "./memory.ts";
+import { globalMemoryFor, listMemories, memoryDir, readMemory, type MemoryStatus } from "./memory.ts";
 import { listExternalNotes } from "./external-memory.ts";
 
 export type KnowledgeKind =
@@ -188,9 +188,11 @@ function knowledgeDocuments(root: string, knowledge: ProjectKnowledge, generated
       ));
     }
     // K7：全局层的条目一并检索（id 带 global: 前缀，Recall 按它去全局层读）；还没有全局层就不去建它
-    if (fs.existsSync(memoryDir(GLOBAL_MEMORY))) {
-      for (const meta of listMemories(GLOBAL_MEMORY)) {
-        const record = readMemory(GLOBAL_MEMORY, meta.id);
+    // 评测隔离开着时是这个工作区自己那份全局层（memory.ts globalMemoryFor），正式服就是唯一那份
+    const globalRoot = globalMemoryFor(root);
+    if (fs.existsSync(memoryDir(globalRoot))) {
+      for (const meta of listMemories(globalRoot)) {
+        const record = readMemory(globalRoot, meta.id);
         if (!record) continue;
         out.push(doc(
           "memory",

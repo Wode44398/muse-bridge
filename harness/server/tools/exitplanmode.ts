@@ -56,6 +56,14 @@ type PlanDecision = Awaited<ReturnType<NonNullable<ToolContext["submitPlan"]>>>;
 const withOutcome = (outcome: string, r: ToolRunResult): ToolRunResult => ({ ...r, outcome });
 
 function planResult(decision: PlanDecision): ToolRunResult {
+  if (decision.away && decision.approved) {
+    // 离开模式 + 设置为「默认同意」：按设置自动批准（不是用户亲手批的，最终回答里要说明）
+    return withOutcome("你不在，按设置自动批准，接着执行", ok(
+      "plan auto-approved (user away)",
+      "The user is away (away mode is on) and their settings approve plans automatically, so this plan is APPROVED and the session is now in normal execution mode. " +
+        "Carry the plan out now, in this same run, starting with the first step. In your final answer, mention that the plan was auto-approved while they were away.",
+    ));
+  }
   if (decision.away) {
     // P3：离开模式默认「保持 plan、结束本轮并留言」——自动批准不等于用户同意开工。
     return {

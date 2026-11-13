@@ -104,6 +104,41 @@ html[data-hx-standalone] #app {
   height: 100%;
 }
 
+/* ── 明暗换场（点标志，lib/motion.ts 的 themeReveal）─────────────────────────────────────
+   新画面从标志那一点以柔边圆波铺开；几何与时间在 JS 里用 WAAPI 驱动，这里关掉 UA 的交叉淡化、定好遮罩与原点。
+   html[data-hx-vt] 只在换场进行中存在；名字与 bridge 自己的 html[data-vt] 分开，两边互不串味。 */
+@property --hx-vt-r {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+html[data-hx-vt]::view-transition-old(root),
+html[data-hx-vt]::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+  transform-origin: var(--hx-vt-ox, 50%) var(--hx-vt-oy, 50%);
+}
+html[data-hx-vt]::view-transition-new(root) {
+  -webkit-mask-image: radial-gradient(circle at var(--hx-vt-ox) var(--hx-vt-oy), black calc(var(--hx-vt-r) - var(--hx-vt-f, 200px)), transparent var(--hx-vt-r));
+  mask-image: radial-gradient(circle at var(--hx-vt-ox) var(--hx-vt-oy), black calc(var(--hx-vt-r) - var(--hx-vt-f, 200px)), transparent var(--hx-vt-r));
+}
+/* 被点的标志单独成一层（themeReveal 换场期间给它 view-transition-name）：它翻面的每一帧只更新自己这一小块，
+   不再让整页的实时快照跟着重画。旧快照不要（它就在涟漪起点，一开场就该是新墨色），新的那层不做 UA 的位移与淡入。 */
+html[data-hx-vt]::view-transition-group(hx-vt-mark),
+html[data-hx-vt]::view-transition-new(hx-vt-mark) {
+  animation: none;
+}
+html[data-hx-vt]::view-transition-old(hx-vt-mark) {
+  display: none;
+}
+
+/* 换明暗的那一两帧全页关掉 CSS 过渡（lib/theme.ts 的 suppressTransitions）：一百多个元素同时淡变颜色是切换卡顿的大头 */
+html[data-hx-theme-swap] *,
+html[data-hx-theme-swap] *::before,
+html[data-hx-theme-swap] *::after {
+  transition: none !important;
+}
+
 /* ── 作用域重置 ─────────────────────────────────────────────────────────────────── */
 .hxroot button {
   font: inherit;

@@ -5,6 +5,7 @@ import type { AdapterConfig, Capabilities, ProviderAdapter } from "./types.ts";
 import { readSSE } from "./sse.ts";
 import { httpErrorEvent, streamErrorEvent } from "./classify.ts";
 import { observeWire } from "./wire-fingerprint.ts";
+import { fetchReconnect } from "../net-proxy.ts";
 import { modelLimits, modelSupportsFast, modelSupportsImages, providerMediaBudget } from "../catalog.ts";
 import { applyCustomThinking } from "../custom-tiers.ts";
 import { MK } from "../model-knowledge.ts";
@@ -15,6 +16,7 @@ export const FAST_MODE_BETA = "fast-mode-2026-02-01";
 // 全进程共享：额度是按 org 算的，一个会话撞上了，别的会话、子 agent 再试也是白撞。
 export const FAST_COOLDOWN_MS = 15 * 60_000;
 const FAST_LIMIT_RE = /fast mode/i;
+const FAST_REFUSED_RE = /fast[ _-]?mode|\bspeed\b/i;
 let fastCooldownUntil = 0;
 // 测试用：清掉退避
 export function resetFastCooldown(): void {
@@ -40,8 +42,18 @@ const THINKING_BUDGET: Record<string, number> = { low: 4_000, medium: 8_000, hig
 // (CLI 2.1.293 catalog: adaptive_thinking + rejects_disabled_thinking, effort default medium).
 function isAdaptive(model: string): boolean {
   return /claude-(opus-4-[78]|sonnet-4-6|sonnet-5|opus-4-6|haiku-([5-9]|\d{2}))/i.test(model) ||
-    // future-proof: any opus/sonnet at 4.7+ is adaptive.
-    (/claude-(opus|sonnet)/i.test(model) && !/haiku/i.test(model));
+    // future-proof: any opus/sonnet at 4.7+ is adaptive；Fable / Mythos 全系思考恒开（budget_tokens、disabled 都 400）。
+    (/claude-(opus|sonnet|fable|mythos)/i.test(model) && !/haiku/i.test(model));
+}
+
+// 前缀检查（preserved thinking）：思考块只对产出它时的 system / tools / 之前的消息有效，改了其中任何一处再回放就是
+// 400「Invalid `signature` in `thinking` block. The block is bound to a different conversation」，原样重试没用。
+// Fable 5.2 / Mythos 5.2 起对所有账号强制（5.1、Opus 5.5 只对 2026-08-31 之后建的账号）。dimensio 的历史不是只追加的
+// ——压缩、工具延迟加载、专章按需注入都会动前缀——所以对这些型号带 beta 头，让 API 丢掉对不上的思考块继续跑
+//（丢的块不计费，那一轮少了之前的推理）。只给强制检查的型号开：给别的型号带上等于主动加入检查，原本不丢的块也会丢。
+export const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01";
+export function enforcesPrefixCheck(model: string): boolean {
+  return /claude-(fable|mythos)-(5-([2-9]|\d{2})|[6-9]|\d{2})(?![\d.])/i.test(model);
 }
 
 // The unified ladder uses Anthropic's own effort names, so they pass through 1:1
@@ -74,15 +86,19 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
     mediaBudget: providerMediaBudget(cfg.provider, cfg.model),
   };
   const baseUrl = (cfg.baseUrl ?? DEFAULTS.baseUrl).replace(/\/$/, "");
+  // 上游是不是官方 Anthropic：直连看地址；经 bridge 模型中心网关的卡地址是 127.0.0.1，看卡上带的上游主机
+  const official = hostOf(baseUrl) === "api.anthropic.com" || custom?.upstreamHost === "api.anthropic.com";
   // 提示缓存 TTL：默认 5 分钟——主对话每轮带几万到十几万 token 的系统提示 + 工具定义 + 历史，用户隔 5 分钟没说话就整段重算。
   // 主会话（cfg.cacheTtl）走官方端点时给 1 小时（写入 2× 计价、读仍按命中价；对齐 bridge 里 Claude 的官方 API 服务）；
   // 子 agent 一轮里请求间隔只有几秒，5 分钟够用、不多付写入费；第三方兼容端点不一定认 ttl，不动。
   // 四个断点用同一个 TTL——官方要求长 TTL 的断点排在短的前面，统一了就不会撞。
   const cacheMark: CacheMark | null = !capabilities.cache
     ? null
-    : cfg.cacheTtl === "1h" && hostOf(baseUrl) === "api.anthropic.com"
+    : cfg.cacheTtl === "1h" && official
       ? { type: "ephemeral", ttl: "1h" }
       : { type: "ephemeral" };
+  // 空闲压缩按它倒推时机（只有 1 小时这一档值得赶：5 分钟的缓存，用户停一停就过期，压了也白压）
+  if (cacheMark) capabilities.cacheTtlMs = cacheMark.ttl === "1h" ? 3_600_000 : 300_000;
   // 地址带不带 /v1 都行（以前写死 `${base}/v1/messages`，以 /v1 结尾的自定义地址会拼出 /v1/v1）
   const url = MK.anthropicUrl(baseUrl, "/v1/messages");
 
@@ -94,17 +110,24 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
       const body = encode(turn, cfg.model, capabilities, cacheMark, custom);
       // fast mode：开关开着、型号支持、且不在退避期才发（不支持的型号带 speed 必 400）。speed 参数离了 beta 头也是 400。
       const fast = cfg.fast?.() === true && modelSupportsFast(cfg.provider, cfg.model) && Date.now() >= fastCooldownUntil;
+      // 前缀检查兜底（见 enforcesPrefixCheck）：只对官方端点开，第三方兼容端点不认这个字段
+      const bindDrop = enforcesPrefixCheck(cfg.model) && official;
+      const betas = (withFast: boolean) => [withFast ? FAST_MODE_BETA : "", bindDrop ? THINKING_BINDING_BETA : ""].filter(Boolean).join(",");
       const send = (withFast: boolean) => {
-        const payload = withFast ? { ...body, speed: "fast" } : body;
+        const payload: Record<string, unknown> = withFast ? { ...body, speed: "fast" } : { ...body };
+        if (bindDrop) {
+          const th = payload.thinking && typeof payload.thinking === "object" ? (payload.thinking as Record<string, unknown>) : { type: "adaptive" };
+          payload.thinking = { ...th, block_binding: { prefix_mismatch_behavior: "drop_block" } };
+        }
         observeWire(turn, "anthropic", payload);
-        return fetch(url, {
+        return fetchReconnect(url, {
           method: "POST",
           headers: {
             "content-type": "application/json",
             "anthropic-version": "2023-06-01",
             // 自定义服务：鉴权方式（x-api-key / Bearer / 无）和自定义请求头按服务设置
             ...(custom ? custom.headers : { "x-api-key": cfg.apiKey }),
-            ...(withFast ? { "anthropic-beta": FAST_MODE_BETA } : {}),
+            ...(betas(withFast) ? { "anthropic-beta": betas(withFast) } : {}),
           },
           body: JSON.stringify(payload),
           signal,
@@ -116,9 +139,10 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
       // fast mode 的额度与普通额度分开算（2026-10-14 实测：维护者这个 org 的 fast 额度是每分钟 0 input token，
       // 只有十来个 token 的小请求偶尔放过，真对话一律 429）。撞上 fast 自己的 429 就当场按普通速度重发，
       // 之后一段时间不再试 fast，并在对话里说一声——不让它掉进通用的限流重试，一直「被限流，N 秒后重试」不出字。
-      if (fast && res.status === 429) {
+      // 型号的 fast 被下线 / 账号没开通时是 400 / 403（正文带 fast mode 或 speed 字样）：同样退回普通速度，别让整轮失败。
+      if (fast && (res.status === 429 || res.status === 400 || res.status === 403)) {
         const raw = await safeText(res);
-        if (FAST_LIMIT_RE.test(raw)) {
+        if (res.status === 429 ? FAST_LIMIT_RE.test(raw) : FAST_REFUSED_RE.test(raw)) {
           fastCooldownUntil = Date.now() + FAST_COOLDOWN_MS;
           yield { e: "notice", code: "fast_fallback", cooldownMs: FAST_COOLDOWN_MS };
           res = await send(false);
@@ -294,7 +318,16 @@ function encode(turn: Turn, model: string, caps: Capabilities, cacheMark: CacheM
   const tools = encodeTools(turn, cacheMark);
 
   // 会话中途从别家换过来：别家的空消息（只剩思考）编码后是空 content，Anthropic 直接 400——跳过
-  const messages = normalizeToolIds(turn.messages).map(encodeMsg).filter((m) => m.content.length > 0);
+  // 不验签的第三方 Anthropic 兼容端点（自定义服务上的非 Claude 型号）：没有签名的思考照样回放——小米 /anthropic 的签名恒为空，
+  // 丢了等于每轮都把思考上下文扔掉。Claude 型号不管经官方还是中转，上游都验签，照旧丢。
+  // DeepSeek 另要求思考模式下带 tool_use 的轮必须有 thinking 块（缺了 400），没有的补一个空块（实测开 / 关思考都收）。
+  // 只对型号表认识、且实测过不验签的家族这么做（小米、DeepSeek、Kimi）；表里没有的型号（可能是别名不带 claude 的 Claude 中转）照旧丢。
+  const dsEntry = MK.tableEntry(model);
+  const lenient = Boolean(custom) && ["mimo", "deepseek", "kimi"].includes(dsEntry?.think ?? "");
+  const padEmpty = lenient && dsEntry?.think === "deepseek" && dsEntry.replay === true;
+  const messages = normalizeToolIds(turn.messages)
+    .map((m) => encodeMsg(m, lenient, padEmpty))
+    .filter((m) => m.content.length > 0);
   if (cacheMark) markMessageCache(messages, cacheMark);
 
   let body: Record<string, unknown> = {
@@ -362,8 +395,12 @@ function markMessageCache(messages: any[], cache: CacheMark) {
   }
 }
 
-function encodeMsg(m: Msg) {
-  return { role: m.role, content: m.content.map(encodeBlock).filter(Boolean) };
+function encodeMsg(m: Msg, lenient = false, padEmpty = false) {
+  const content = m.content.map((b) => encodeBlock(b, lenient)).filter(Boolean);
+  if (padEmpty && m.role === "assistant" && content.some((b: any) => b.type === "tool_use") && !content.some((b: any) => b.type === "thinking")) {
+    content.unshift({ type: "thinking", thinking: "", signature: "" });
+  }
+  return { role: m.role, content };
 }
 
 // Anthropic 的 tool_use id 只认 [a-zA-Z0-9_-] 且整个请求里不能重复；会话中途从别家换过来时，转录里是别家的 id
@@ -404,14 +441,16 @@ export function normalizeToolIds(messages: Msg[]): Msg[] {
   return changed ? out : messages;
 }
 
-function encodeBlock(b: Block): any {
+function encodeBlock(b: Block, lenient = false): any {
   switch (b.t) {
     case "text":
       // 空文本块 Anthropic 拒收（别家可能留下 content 为空串的回答）
       return b.text ? { type: "text", text: b.text } : null;
     case "thinking":
-      // 没有签名的思考来自别家（会话中途换过来的）：Anthropic 验签必拒，丢掉——别家的思考对 Claude 本来也不回放
-      return b.signature ? { type: "thinking", thinking: b.text, signature: b.signature } : null;
+      // 没有签名的思考来自别家（会话中途换过来的）：Anthropic 验签必拒，丢掉——别家的思考对 Claude 本来也不回放。
+      // 不验签的第三方端点（lenient）照发，签名给空串。
+      if (b.signature) return { type: "thinking", thinking: b.text, signature: b.signature };
+      return lenient && b.text ? { type: "thinking", thinking: b.text, signature: "" } : null;
     case "image":
       return { type: "image", source: imageSource(b) };
     case "tool_call":
@@ -421,7 +460,7 @@ function encodeBlock(b: Block): any {
         type: "tool_result",
         tool_use_id: b.id,
         is_error: !b.ok,
-        content: b.content.map(encodeBlock).filter(Boolean),
+        content: b.content.map((x) => encodeBlock(x)).filter(Boolean),
       };
   }
 }

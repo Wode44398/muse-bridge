@@ -5,7 +5,7 @@
 // 三个独立模块：sse.js（/api/chat 流式）、md.js（markdown）、app.css（令牌与字体）。
 import './lib/staleGuard.js';   // 构建漂移自愈：新部署后旧页面懒加载 404 → 自动刷新一次
 import './app.css';
-import './lib/overlay.svelte.js';   // 私有 overlay（原版字体 / 素材）：有就叠加，公开版什么都不做
+import './lib/overlay.svelte.js';   // 原版视觉资源（字体 / 素材 / 模块）的清单与取用口
 import { mount } from 'svelte';
 import { initI18n } from './lib/i18n.js';
 

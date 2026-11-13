@@ -1,11 +1,11 @@
 <script>
-  // antigravity / vertex / 工作空间 三个分页在新前端尚未重做的占位页。
+  // 还没有前端的分页（antigravity 等）的占位页。
   // 本轮主页四入口把 claude 接通；其余三个先落到这里，后续单独重做。
   import { ui } from '../lib/state.svelte.js';
   import { closePage } from '../lib/pageMorph.js';
   import { t } from '../lib/i18n.js';
   let { name } = $props();
-  const NAMES = { antigravity: 'Antigravity', vertex: 'Vertex', files: t('工作空间') };
+  const NAMES = { antigravity: 'Antigravity', files: t('工作空间') };
 </script>
 
 <div class="cs">

@@ -96,3 +96,14 @@ test('手动 /compact：「/compact」气泡 + 新一轮只有压缩行（与直
   assert.equal(c.compact.summary, SUMMARY);
   assert.equal(msgs[1].segments.length, 1, '压缩行不能挂回上一轮');
 }));
+
+test('斜杠命令开的会话：命令记录还原成「/命令 参数」用户气泡，展开正文（isMeta）不进气泡', () => withTranscript([
+  user('u1', null, '<command-message>myplug:review</command-message>\n<command-name>/myplug:review</command-name>\n<command-args>src/app.js 看看</command-args>'),
+  user('m1', 'u1', [{ type: 'text', text: 'Base directory for this skill: C:/x\n\n长长的命令正文' }], { isMeta: true }),
+  asst('a1', 'm1', [{ type: 'text', text: '看完了' }]),
+], async (file) => {
+  const msgs = await readSessionMessages(file);
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant']);
+  assert.equal(msgs[0].text, '/myplug:review src/app.js 看看');
+  assert.ok(!JSON.stringify(msgs).includes('长长的命令正文'));
+}));

@@ -34,6 +34,7 @@ import { busPublish } from '../runtime/bus.mjs';
 import * as claudeAccounts from '../runtime/claude-account.mjs';
 import * as accountUsage from '../runtime/account-usage.mjs';
 import * as accountRouter from '../runtime/account-router.mjs';
+import * as limitResets from '../runtime/limit-resets.mjs';
 import { pendingQuestions, permAnswerFields } from '../runtime/questions.mjs';
 import { getPolicy, setPolicy, registrationOpen } from '../runtime/policy.mjs';
 import { quotaState, quotaBlock, billingUser, snapMinterIds } from '../runtime/quota.mjs';
@@ -47,7 +48,8 @@ import { publicAccess, NO_PROBE } from '../runtime/public-access.mjs';
 import { serverUpdateInfo } from '../runtime/client-release.mjs';
 import { serverUpdateStatus, startServerUpdate } from '../runtime/server-update.mjs';
 import { apkInfo, lanCandidates } from './app-update.mjs';
-import { CLAUDE_MODELS, CLAUDE_EFFORTS, VERTEX_MODELS, VERTEX_THINK_LEVELS } from '../config/capabilities.mjs';
+import { CLAUDE_MODELS, CLAUDE_EFFORTS } from '../config/capabilities.mjs';
+import { GEMINI_RETIRED } from './gemini-retired.mjs';
 
 const ADMIN_PS1 = path.join(PROGRAM_ROOT, 'admin.ps1');
 // admin.ps1 只在 Windows 上能跑：Docker 镜像 / Linux 源码目录里也带着这个文件，以前据此以为「全功能」，
@@ -422,7 +424,7 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
   router.on('POST', '/api/admin/user/tier', userAction(async (b) => touched(b, await setAccountTier(String(b.name || ''), String(b.tier || ''), { ack: b.ack === true }))));
   // 停用 = 登录失效 + 设备挂起 + 在跑的轮中止；启用即恢复（runtime/account-lifecycle.mjs）。
   router.on('POST', '/api/admin/user/disable', userAction((b) => touched(b, setAccountDisabled(String(b.name || ''), b.disabled !== false))));
-  // 按人授权：agents = 统一 id 列表（claude/gemini/dimensio…）；snapshot = 能否铸公开聊天快照；
+  // 按人授权：agents = 统一 id 列表（claude/studio/dimensio…）；snapshot = 能否铸公开聊天快照；
   // service = 服务账号（主机关掉多用户后仍能登录，QQ 机器人这类）。
   router.on('POST', '/api/admin/user/agents', userAction((b) => touched(b, users.setAgents(String(b.name || ''), Array.isArray(b.agents) ? b.agents : []))));
   router.on('POST', '/api/admin/user/snapshot', userAction((b) => touched(b, users.setSnapshotGrant(String(b.name || ''), b.snapshot === true))));
@@ -477,12 +479,8 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
   // 在跑的轮：没允许看内容的成员，提问原文不给（只留 key / 会话 id / 时间这些元数据）
   const gensForAdmin = () => listGens().map((g) => (ownerAllows(g.key, 'view') ? g : { ...g, userText: '', hidden: true }));
   // 这段对话是不是从头到尾都是管理员代发的（找不到、读不了一律按「不是」，要「查看」才能接着聊）
-  async function proxyOnlySession(vertex, sid, ctx) {
+  async function proxyOnlySession(sid, ctx) {
     try {
-      if (vertex) {
-        const conv = getModule('vertex')?.loadConversation?.(sid, ctx.vertexHist);
-        return !!conv && proxyOnlyConversation(conv.messages);
-      }
       const p = sessionPaths(sid, ctx.cwd, ctx.configDir);
       if (!p || !existsSync(p.file)) return false;
       return proxyOnlyConversation(await readSessionMessages(p.file));
@@ -561,9 +559,20 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
   }));
   // 调整顺序（智能路由「回到首选号」按列表顺序定优先级）：delta=-1 上移 / 1 下移。
   router.on('POST', '/api/admin/claude-account/move', settingsAction((b) => claudeAccounts.moveAccount(String(b.id || ''), Number(b.delta) || 0)));
-  router.on('POST', '/api/admin/claude-account/add', settingsAction((b) => claudeAccounts.addAccount({ label: b.label, token: b.token })));
-  router.on('POST', '/api/admin/claude-account/update', settingsAction((b) => claudeAccounts.updateAccount(String(b.id || ''), { label: b.label, token: b.token })));
+  router.on('POST', '/api/admin/claude-account/add', settingsAction((b) => claudeAccounts.addAccount({ label: b.label, token: b.token, plan: b.plan })));
+  router.on('POST', '/api/admin/claude-account/update', settingsAction((b) => claudeAccounts.updateAccount(String(b.id || ''), { label: b.label, token: b.token, plan: b.plan })));
   router.on('POST', '/api/admin/claude-account/delete', settingsAction((b) => claudeAccounts.deleteAccount(String(b.id || ''))));
+  // 重置卡（Anthropic 偶尔发给订阅号的限额重置）：逐号查看、使用。实现在 overlay 钩子里（limit-resets.mjs），
+  // 没配 → available:false，界面不出现入口。读账号级信息要「完整登录」（setup-token 权限不够），login/* 就是给某个号做这次登录。
+  // ?force=1 强刷、?id=<号> 只查一个号。
+  router.on('GET', '/api/admin/claude-accounts/resets', async (req, res, url) => {
+    if (!settingsGate(req, res)) return;
+    J(res, await limitResets.resetsOverview({ force: url.searchParams.get('force') === '1', only: url.searchParams.get('id') || '' }));
+  });
+  router.on('POST', '/api/admin/claude-account/reset/use', settingsAction((b) => limitResets.useReset(String(b.id || ''), String(b.grantId || ''))));
+  router.on('POST', '/api/admin/claude-account/login/start', settingsAction((b) => limitResets.resetsLoginStart(String(b.id || ''))));
+  router.on('POST', '/api/admin/claude-account/login/finish', settingsAction((b) => limitResets.resetsLoginFinish(String(b.id || ''), String(b.code || ''))));
+  router.on('POST', '/api/admin/claude-account/login/clear', settingsAction((b) => limitResets.resetsLoginClear(String(b.id || ''))));
 
   // 聚合总览：服务/隧道 + 所有活跃 gen + routines 运行中 + 用户数。一个端点喂满总览面板。
   router.on('GET', '/api/admin/overview', async (req, res) => {
@@ -590,10 +599,12 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
     return { ok: true, stopped: live.length };
   }));
 
-  // 代任意用户续聊（claude / vertex）——contextFor 注入目标用户上下文，会话落到该用户目录
+  // 代任意用户续聊（claude；Gemini 对话已下线）——contextFor 注入目标用户上下文，会话落到该用户目录
   router.on('POST', '/api/admin/user/chat', async (req, res) => {
     if (!gate(req, res)) return;
     let b; try { b = JSON.parse(await readBody(req)); } catch { res.writeHead(400, { 'Content-Type': 'text/plain' }); res.end('bad json'); return; }
+    // Gemini 对话 2026-11-04 下线：老控制台还会带 agent:'vertex'，先于其它检查显式 410
+    if (b.agent === 'vertex') { res.writeHead(410, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: GEMINI_RETIRED })); return; }
     const name = users.normName(String(b.name || ''));
     const who = userIdentity(name, { allowDisabled: true });
     if (!who) { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('no such user'); return; }
@@ -605,27 +616,19 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
     if (!raw) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: '消息是空的' })); return; }
     const message = PROXY_PREFIX + raw;
     const sessionId = b.sessionId ? String(b.sessionId) : undefined;
-    const vertex = b.agent === 'vertex';
     // 代聊也守这个人的 agent 名单：代他用一个他本来用不了的 agent，会话就落进他目录里了。
-    if (vertex ? !ctx.allowGemini : !ctx.allowClaude) {
+    if (!ctx.allowClaude) {
       res.writeHead(403, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: '该用户没有这个 agent 的权限，或它未启用' })); return;
     }
-    const runVertexChat = vertex ? getModule('vertex')?.runVertexChat : null;
-    if (vertex && !runVertexChat) { res.writeHead(403, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Gemini 扩展没装' })); return; }
     // 接着代聊一段已有的对话：回复带着那段对话的上下文流回控制台，等于读了它——还要成员允许「查看」。
     // 例外是从头到尾都是管理员代发的会话（管理员自己代聊开的，成员没在里面说过话）：只开「协助」也能接着聊。
-    if (sessionId && !accessAllowed(name, 'view') && !(await proxyOnlySession(vertex, sessionId, ctx))) return consentDenied(res, 'view', 'continue');
-    // 额度（S2-6）：代聊的轮算被代的人的，开跑前先查——Gemini 与 Claude 同一道闸、同一个账本。
-    // Claude 的轮由 runClaudeChat 自己记（它里面还会再查一次）；Gemini 的在这里记，同 chat.mjs 扩展 agent 分支。
+    if (sessionId && !accessAllowed(name, 'view') && !(await proxyOnlySession(sessionId, ctx))) return consentDenied(res, 'view', 'continue');
+    // 额度（S2-6）：代聊的轮算被代的人的，开跑前先查；Claude 的轮由 runClaudeChat 自己记（它里面还会再查一次）。
     const billTo = billingUser(ctx);
     const block = billTo ? quotaBlock(billTo) : null;
     if (block) { writeSseHeaders(res); sseWrite(res, { type: 'error', kind: 'quota', title: block.title, message: block.message }); res.end(); return; }
-    audit(req, 'user/chat', { target: ctx.key, meta: { agent: vertex ? 'vertex' : 'claude', sessionId: sessionId || '' } });
-    logAccess(name, { action: 'chat', what: sessionId || '', detail: vertex ? 'Gemini' : 'Claude' });
-    if (vertex) {
-      if (billTo) { try { users.noteTurnStart(billTo); } catch {} }
-      return runVertexChat(req, res, { message, sessionId, vertexModel: VERTEX_MODELS.has(b.vertexModel) ? b.vertexModel : undefined, vertexSearch: b.vertexSearch === true, vertexThink: VERTEX_THINK_LEVELS.has(b.vertexThink) ? b.vertexThink : undefined, ctx });
-    }
+    audit(req, 'user/chat', { target: ctx.key, meta: { agent: 'claude', sessionId: sessionId || '' } });
+    logAccess(name, { action: 'chat', what: sessionId || '', detail: 'Claude' });
     const { runClaudeChat } = await import('../agents/claude.mjs');
     // 代聊按无人值守处理（permissionPolicy 'host'）：控制台没有审批卡，固定 default + 宿主放行（runtime/permissions.mjs）
     return runClaudeChat(req, res, { message, sessionId, model: CLAUDE_MODELS.has(b.model) ? b.model : undefined, effort: CLAUDE_EFFORTS.has(b.effort) ? b.effort : undefined, attachments: [], ctx, permissionPolicy: 'host', plain: true, origin: { kind: 'admin' } });   // plain：代聊页只渲染文本，不挂内嵌图表
@@ -686,20 +689,13 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
     if (!file || !serve) { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('not found'); return; }
     serve(req, res, file);
   });
-  router.on('GET', '/api/admin/user/vertex', async (req, res, url) => {
-    if (!gate(req, res)) return; const uc = userCtx(url); if (!uc) { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('no user'); return; }
-    let list = []; try { list = getModule('vertex')?.listConversations?.(uc.ctx.vertexHist) || []; } catch {}
-    viewed(req, uc, 'vertex');
-    J(res, { user: uc.name, sessions: list });
-  });
-  router.on('GET', '/api/admin/user/vertex-session', async (req, res, url) => {
-    if (!gate(req, res)) return; const uc = userCtx(url); if (!uc) { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('no user'); return; }
-    if (!accessAllowed(uc.name, 'view')) return consentDenied(res, 'view');
-    logAccess(uc.name, { action: 'view_gemini', what: url.searchParams.get('id') || '' });
-    viewed(req, uc, 'vertex-session', { sessionId: url.searchParams.get('id') || '' });
-    let data = null; try { data = getModule('vertex')?.loadConversation?.(url.searchParams.get('id') || '', uc.ctx.vertexHist) || null; } catch {}
-    J(res, data || { messages: [] });
-  });
+  // 成员的 Gemini 对话（2026-11-04 下线）：老控制台还会来查，410（磁盘上的旧对话不删，只是不再读）
+  for (const p of ['/api/admin/user/vertex', '/api/admin/user/vertex-session']) {
+    router.on('GET', p, (req, res) => {
+      if (!gate(req, res)) return;
+      res.writeHead(410, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: GEMINI_RETIRED }));
+    });
+  }
 
   // 下游客户端配对 / 中继管理原先在这里（直通同机中继的 /admin/*）。中继并进 bridge 之后，
   // 设备、审计、探查都走 routes/devices.mjs 的 /api/devices/*（控制台「设备」页）。

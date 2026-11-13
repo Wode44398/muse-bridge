@@ -272,12 +272,31 @@ export function agentServedModel(file) {
 const AUTO_RE = /^auto:/i;
 /**
  * 给 progress 里的 workflow_agent 补 effort（subagentsDir = <会话>/subagents）；读不到的原样，返回新数组。
- * auto:<档> 的 agent 改补 servedModel（实际落到的模型）——它的档位由 bridge 按阶梯定，转录里 CLI 发的那个不作数，不补。
+ * auto:<档> 的 agent 改补 servedModel（实际落到的模型）与 effort——它的档位由 bridge 按阶梯定，转录里 CLI 发的那个不作数；
+ * autoServed(name) → { model, effort } | null（model-ratings.autoServed，bridge 改写请求时记的落点）。
+ * 直播路径每个进度帧都会调：传 cache（一轮一个 Map）——读到的值记住不再读盘，没读到的（agent 刚起、还没发请求）
+ * 隔 MISS_RETRY_MS 才重读，免得每帧把每个 agent 的转录头读一遍。历史重建只调一次，不用传。
  */
-export function annotateWorkflowEfforts(progress, subagentsDir) {
-  if (!Array.isArray(progress) || !subagentsDir) return progress;
+const MISS_RETRY_MS = 3000;
+export function annotateWorkflowEfforts(progress, subagentsDir, autoServed, cache) {
+  if (!Array.isArray(progress) || (!subagentsDir && !autoServed)) return progress;
   let wfDirs = null;
+  const memo = (key, read) => {
+    if (!cache) return read();
+    const hit = cache.get(key);
+    if (hit && (hit.v || Date.now() - hit.at < MISS_RETRY_MS)) return hit.v;
+    const v = read();
+    cache.set(key, { v, at: Date.now() });
+    return v;
+  };
+  const tiers = new Map();
+  const tierOf = (name) => {
+    const k = name.toLowerCase();
+    if (!tiers.has(k)) { let r = null; try { r = autoServed ? autoServed(name) : null; } catch { /* 不补 */ } tiers.set(k, r); }
+    return tiers.get(k);
+  };
   const locate = (id) => {
+    if (!subagentsDir) return '';
     if (wfDirs === null) { try { wfDirs = readdirSync(path.join(subagentsDir, 'workflows')).slice(0, 500); } catch { wfDirs = []; } }
     for (const d of wfDirs) {
       const f = path.join(subagentsDir, 'workflows', d, 'agent-' + id + '.jsonl');
@@ -288,14 +307,15 @@ export function annotateWorkflowEfforts(progress, subagentsDir) {
   return progress.map((e) => {
     if (!e || e.type !== 'workflow_agent' || typeof e.agentId !== 'string' || !/^[\w-]{1,64}$/.test(e.agentId)) return e;
     if (AUTO_RE.test(String(e.model || ''))) {
-      if (e.servedModel) return e;
-      const f = locate(e.agentId);
-      const served = f ? agentServedModel(f) : '';
-      return served ? { ...e, servedModel: served } : e;
+      const hit = tierOf(String(e.model).trim());
+      let served = e.servedModel || '';
+      if (!served) served = memo('m:' + e.agentId, () => { const f = locate(e.agentId); return f ? agentServedModel(f) : ''; });
+      if (!served && hit) served = hit.model;
+      const effort = hit && hit.effort ? hit.effort : '';
+      return served || effort ? { ...e, ...(served ? { servedModel: served } : {}), ...(effort ? { effort } : {}) } : e;
     }
-    if (e.effort) return e;
-    const f = locate(e.agentId);
-    const effort = f ? agentEffortFromTranscript(f) : '';
+    if (!subagentsDir || e.effort) return e;
+    const effort = memo('e:' + e.agentId, () => { const f = locate(e.agentId); return f ? agentEffortFromTranscript(f) : ''; });
     return effort ? { ...e, effort } : e;
   });
 }

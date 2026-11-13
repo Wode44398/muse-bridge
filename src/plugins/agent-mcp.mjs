@@ -14,6 +14,7 @@ import { CLAUDE_SLOT, audienceOk, checkTool, shapeOf, withDefaults, toResult } f
 import { instanceCaller } from '../agent-api/instance-auth.mjs';
 import { readBody } from '../runtime/body.mjs';
 import { emitBridgeEvent, ownerOf } from './events.mjs';
+import { notePush } from '../runtime/push-notices.mjs';
 
 export const AGENT_MCP_PATH = '/agent/mcp/plugins';
 
@@ -100,10 +101,18 @@ export function registerAgentMcpRoute(router) {
     try { b = JSON.parse((await readBody(req, 64 * 1024)) || '{}'); } catch { return reply(400, { error: 'bad json' }); }
     if (!DIMENSIO_EVENTS.has(b?.event)) return reply(400, { error: 'unknown event' });
     const p = b.payload && typeof b.payload === 'object' ? b.payload : {};
+    // dimensio 要提醒人（在等批准 / 回答 / 审计划、一轮做完，按它自己的通知偏好）：落到这个实例主人名下的推送
+    //（手机 App 后台服务轮询的 pushes + 插件登记的通知渠道）。会话 id 是 dimensio 的，不当 Claude 会话 id 传
+    if (b.event === 'notify') {
+      const message = String(p.message || '').slice(0, 300);
+      if (!message.trim() || !who.ctx?.key) return reply(400, { error: 'empty notice' });
+      const item = notePush(who.ctx.key, { sessionId: null, message, title: String(p.title || 'dimensio').slice(0, 120), level: p.level === 'warn' ? 'warn' : 'info' });
+      return reply(200, { ok: Boolean(item) });
+    }
     emitBridgeEvent(b.event, { ...p, agent: 'dimensio', kind: typeof p.kind === 'string' ? p.kind : 'chat', owner: ownerOf(who.ctx) });
     reply(200, { ok: true });
   };
   return [router.on('POST', AGENT_MCP_PATH, handle), router.on('GET', AGENT_MCP_PATH, handle), router.on('DELETE', AGENT_MCP_PATH, handle),
     router.on('POST', '/agent/events', events)];
 }
-const DIMENSIO_EVENTS = new Set(['turn.start', 'turn.end']);
+const DIMENSIO_EVENTS = new Set(['turn.start', 'turn.end', 'notify']);

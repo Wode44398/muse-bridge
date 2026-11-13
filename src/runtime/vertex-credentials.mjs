@@ -6,7 +6,7 @@
 // 存在数据根 secrets/vertex-credentials.json（0600，不进任何成员的工作区；成员沙箱另有 member-boundary 挡）。
 //
 // 优先级：这里上传的 > 环境变量 GOOGLE_APPLICATION_CREDENTIALS > gcloud ADC（后两者由 google-auth-library 自己找）。
-// 换凭据即时生效：epoch 自增，Vertex 扩展里各处缓存的客户端按 epoch 重建（modules/vertex/server/google-clients.mjs）。
+// 换凭据即时生效：epoch 自增，Media Studio 里各处缓存的 Google 客户端按 epoch 重建（modules/studio/server/google-clients.mjs）。
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, renameSync } from 'node:fs';
 import path from 'node:path';

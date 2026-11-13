@@ -227,10 +227,14 @@
   // 一个服务最多存 300 个型号：勾多了就不让加、照实说（以前悄悄截掉后面的）
   const room = $derived(MAX_MODELS - draft.models.length);
   const overPick = $derived(pickedN > room);
+  // 「全选」跳过非对话模型；列表里的对话型号都勾上了就变成「取消全选」，连手动勾的非对话型号一起取消
+  const allPicked = $derived.by(() => {
+    const chat = candShown.filter((m) => m.kind !== "other");
+    return chat.length > 0 && chat.every((m) => picked[m.id]);
+  });
   function toggleAll() {
-    const chat = candShown.filter((m) => m.kind !== "other"); // 「全选」跳过非对话模型
-    const all = chat.every((m) => picked[m.id]);
-    for (const m of chat) picked[m.id] = !all;
+    if (allPicked) for (const m of candShown) picked[m.id] = false;
+    else for (const m of candShown) if (m.kind !== "other") picked[m.id] = true;
   }
   function addPicked() {
     if (overPick) return;
@@ -528,7 +532,7 @@
       <div class="cands" transition:collapse>
         <div class="cands-top">
           {#if candidates.length > 15}<TextField bind:value={candQ} size="sm" icon="search" label={t("搜索型号")} placeholder={t("搜索型号")} />{:else}<span class="muted">{t("接口列出了 {n} 个新型号", { n: candidates.length })}</span>{/if}
-          <Button size="sm" variant="ghost" onclick={toggleAll}>{t("全选")}</Button>
+          <Button size="sm" variant="ghost" onclick={toggleAll}>{allPicked ? t("取消全选") : t("全选")}</Button>
         </div>
         <div class="cands-list">
           {#each candShown as m (m.id)}

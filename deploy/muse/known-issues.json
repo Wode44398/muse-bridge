@@ -130,6 +130,19 @@
       "fixed_in": null,
       "notify": false,
       "issue": null
+    },
+    {
+      "id": "set-api-key-after-model-hub",
+      "title": "从 v0.7.0 起，让 Muse 跑 set-api-key 给 dimensio 配的 key 不再生效（模型中心接管了厂商 key）",
+      "title_en": "From v0.7.0, keys that Muse writes for dimensio with set-api-key no longer take effect (the Model Hub now manages provider keys)",
+      "symptom": "Muse 用 bootstrap.sh set-api-key 写了某家的 key，dimensio 里还是提示「先在模型中心添加 … 的服务」、报 No API key for provider，或者照旧用着旧 key。命令输出里有一句「这次写进 .env 的不会生效 / 不会替换」。",
+      "workaround": "key 在网页里填：管理员打开「设置 → 模型中心」，新加一家点「添加服务」，换 key 就打开那一家的服务、在「API Key」一栏点「更换」，再点「测试」。加之前让 Muse 跑 allow-sites <接口地址> 把审核卡弹出来。升级前写进去的 key 已经在第一次启动时自动搬进模型中心，不用重配。小米联网搜索专用的 MIMO_SEARCH_API_KEY 照旧用 set-api-key 写。",
+      "workaround_en": "Enter keys in the web app instead: as the admin, open Settings → Model Hub; to add a provider use Add provider, to change a key open that provider and use Replace in the API key list, then Test. Before adding, have Muse run allow-sites <API address> so the review card pops up. Keys written before the upgrade were moved into the Model Hub on first start, so they do not need to be set again. MIMO_SEARCH_API_KEY (Xiaomi web search only) is still set with set-api-key.",
+      "cause": "bridge 的模型中心成了配置模型的唯一入口：服务第一次启动时把 dimensio 自带适配厂商的 key 一次性搬进模型中心，之后管理员的 dimensio 只认模型中心里的 key，不再读 dimensio/.env 里的厂商 key。",
+      "since": "v0.7.0",
+      "fixed_in": null,
+      "notify": false,
+      "issue": null
     }
   ]
 }

@@ -292,6 +292,41 @@ export const closeCodexDock = () => codex.close();
 export const setCodexDockWs = (ws) => codex.setWs(ws);
 export const noteCodexAgentBrowser = (url) => codex.noteBrowser(url);
 
+// —— 浏览器按会话（2026-11-08）——
+// Claude 页的浏览器一个对话一份（服务端 runtime/claude-browser.mjs）：面板的每个请求都带上这个对话的 id。
+// Codex 侧（codexDock）和还没发出第一条消息的新对话不带，仍是整个工作空间共用那一份。
+export const browserSessionOf = (state) => (state === claudeState && !claudeState.snap ? (session.id || '') : '');
+
+// 挂载状态灯：这个对话的浏览器里有没有标签（工具开关上的绿灯只看它）。
+// 来源三个：切会话 / 总线重连时拉一次 /browser/state；总线 browser.mount 事件；面板直播流的 tabs 事件。
+const mountBySession = $state({});
+export function browserMountedNow() {
+  const id = browserSessionOf(claudeState);
+  return !!(id && mountBySession[id]);
+}
+export function noteBrowserMount(sessionId, mounted) {
+  if (!sessionId) return;
+  if (mounted) mountBySession[sessionId] = true;
+  else delete mountBySession[sessionId];
+}
+export async function refreshBrowserMount() {
+  const id = browserSessionOf(claudeState);
+  const ws = claudeState.ws;
+  if (!id || !ws) return;
+  try {
+    const r = await api.get(`/api/claude/browser/state?ws=${encodeURIComponent(ws)}&session=${encodeURIComponent(id)}`);
+    noteBrowserMount(id, !!(r?.alive && Array.isArray(r.tabs) && r.tabs.length));
+  } catch { /* 没有浏览器权限 / 离线：灯保持原样 */ }
+}
+// 切会话、切工作空间时拉一次（module 级 effect：顶栏 / 工具开关 / 工作台哪个先挂都行）
+$effect.root(() => {
+  $effect(() => {
+    void session.id; void claudeState.ws;
+    if (claudeState.snap) return;
+    refreshBrowserMount();   // 没有浏览器权限的身份服务端回 403，静默忽略
+  });
+});
+
 // —— fetch 版 SSE 读取器（EventSource 带不了 Authorization 头；沿用 sse.js 的帧解析思路）——
 // onEvent 收 JSON 对象；返回 abort 函数。断流不自动重连——重连策略由各面板自己定。
 export function readDockSse(path, onEvent, { onDead, onClose } = {}) {

@@ -9,6 +9,7 @@ import SnapPage from './components/SnapPage.svelte';
 // 桌面壳只靠 feature detect 激活；同一份 bundle 在网页与 Android 中不加任何类。
 if (window.BridgeDesktop) document.documentElement.dataset.desktop = '1';
 import './lib/nativeMenu.js';   // 桌面壳原生右键菜单（无桥=空操作）
+import './lib/mediaHeal.js';   // 全站媒体元素加载失败自愈（LAN→隧道 / 换 token / 重试），新写的 <img> 不用再各挂 onerror
 import './lib/scrollbars.js';   // Edge 同款滚动条：滚动或鼠标移到滚条上才显形，停下隐身
 
 // /w/<token> = 公开只读分享工作空间，挂轻量 SharePage（复用 FilesPanel + 预览查看器）；

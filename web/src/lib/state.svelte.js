@@ -6,7 +6,6 @@ import { presets } from './liquidGlass.js';
 import { lastPrefs } from './chatPrefs.js';
 import { IS_CSNAP } from './csnap.js';
 import { serverHosted } from './deployFlags.js';
-import { storedLocalImageSettings } from './localImageSettings.js';
 import { AGENT_IDS, screenAgents } from '../../../src/config/agents.mjs';
 import { pickRootScreen } from './rootScreen.js';
 
@@ -40,8 +39,9 @@ export const compose = $state({ attachments: [] });
 
 // View + theme.
 export const ui = $state({
+  hxOpenSession: null,    // 会话协作：要在 dimensio 页打开的会话 id（lib/sessionFamily.svelte.js 记，HarnessPage 接走）
   theme: (() => { try { return localStorage.getItem('bridge-theme') || 'dark'; } catch { return 'dark'; } })(), // 与 index.html 早绑定一致
-  screen: 'home',         // 顶层页面: 'home' | 'claude' | 'harness' | 'vertex' | 'files'（预载页是 App 的 booting 覆盖层，不在此）
+  screen: 'home',         // 顶层页面: 'home' | 'claude' | 'harness' | 'studio' | 'chatgpt' | 'files'（预载页是 App 的 booting 覆盖层，不在此）
   // 分页自报的窗口 chrome 配色（桌面壳 WCO 窗控 glyph 跟它走）：null = 跟全局 ui.theme。
   // dimensio 分页有自己的明暗档（跟系统/浅/深），bridge 主题是深色时它可能是浅底——
   // 窗控 glyph 若还按 bridge 主题刷成白色，就成了「右上角三颗钮与白底融为一体」。
@@ -56,8 +56,8 @@ export const ui = $state({
   pairScan: null,         // 手机端「扫一扫」登录网页版：null | { mode:'scan' } | { mode:'confirm', id, key }（系统相机扫到 ?pair= 直达确认卡）
   // 桌面 Dock / 命令面板要一次入场的旧契约旗子（App 接住后交给 lib/pageMorph.js，跑完放下）；手机四宫格直接调 openPage
   enterClaude: false,
-  enterVertex: false,
-  vertexSliding: false,   // vertex 左缘右滑跟手中（预测式返回，页面缩小露出身后主页）——唤醒被 display:none 的 Home
+  enterStudio: false,
+  studioSliding: false,   // Media Studio 左缘右滑跟手中（平板 / 桌面的预测式返回，页面缩小露出身后主页）——唤醒被 display:none 的 Home
   claudeSliding: false,   // claude 同上——只有此时才唤醒被 display:none 省掉的 Home
   homeWarm: false,        // 返回键收回分页前，先在分页底下把主页渲染好（lib/pageMorph.js 的 closePage），重活不压在转场头几帧
   settingsOpen: false,    // 设置页是否打开（从登录 pill 菜单 morph 扩展到全屏）
@@ -70,7 +70,6 @@ export const ui = $state({
   connMode: 'tunnel',     // 当前数据线路: 'tunnel'（隧道/同源）| 'lan'（局域网直连）——设置页展示用
   taskDone: false,        // 有任务完成且用户还没看（不在 claude 页前台时收到 done/error）——主页 claude 小人举旗，回 claude 页清除
   enterOrigin: null,      // 旧契约：被点入口的 rect {x,y,w,h}，作为转场起点（DesktopHome 写）
-  enterOriginTile: null,  // 旧契约：入口所在玻璃方块的 rect（有就优先用它当起点）
   enterBar: null,         // 桌面 Dock 栏 rect（旧契约，DesktopHome 仍会写；新转场引擎用它判断圆角后即清空）
   // 页面级转场（lib/pageMorph.js，View Transitions）进行中：'' | 'open' | 'close' | 'switch' | 'theme'。
   // 转场期间快照层盖在最上面、不吃点击；系统返回在这段时间里被吞掉（nav.js），不打断演出。
@@ -82,65 +81,20 @@ export const ui = $state({
   revealIcons: false,     // 明亮主题(B)图标是否浮现(原地透明度 0→1)；预载/转场视频后段触发，暗主题(A)不用此
 });
 
-// —— Vertex (Gemini) 分页状态 ——
-// Gemini 对话的系统提示词 / URL 上下文 / 代码执行 / 识图清晰度：模型菜单里改，持久化（老值不合法就回默认）。
-const CHAT_OPTS_KEY = 'bridge-vertex-chatopts';
-function storedChatOpts() {
-  const d = { chatSystem: '', chatUrl: false, chatCode: false, chatMediaRes: 'auto' };
-  try {
-    const j = JSON.parse(localStorage.getItem(CHAT_OPTS_KEY) || 'null');
-    if (j && typeof j === 'object') {
-      if (typeof j.chatSystem === 'string') d.chatSystem = j.chatSystem.slice(0, 8000);
-      d.chatUrl = j.chatUrl === true;
-      d.chatCode = j.chatCode === true;
-      if (['auto', 'low', 'medium', 'high'].includes(j.chatMediaRes)) d.chatMediaRes = j.chatMediaRes;
-    }
-  } catch {}
-  return d;
+// 发到 Media Studio 的一次性收件箱：核心的入口（工作空间「发到 Media Studio」、agent 的 ui.cmd）经它把正文 / 素材交给
+// Studio 页，Studio 挂载或变化时消费、用后清空。核心不 import studio 扩展的代码（见 AGENTS.md 功能扩展一节）。
+//   item: { page: 'image'|'video'|'voice'|'music', text?, input?: { role?, path?, upload?, url?, name, kind } }
+export const studioInbox = $state({ items: [] });
+export function sendToStudio(item) {
+  if (item) studioInbox.items.push(item);
+  ui.screen = 'studio';
 }
-
-// 当前模块(func) + 历史抽屉/模块菜单开关 + 各模块的模型与选项选择（null → 运行时取 caps 默认）。
-export const vertex = $state({
-  // Vertex 独立明暗（与全局 ui.theme 解耦，由分页顶栏日/月钮控制）；默认深色。
-  theme: (() => { try { return localStorage.getItem('bridge-vertex-theme') || 'dark'; } catch { return 'dark'; } })(),
-  func: 'chat',          // chat | image | video | voice | music
-  drawerOpen: false,     // 左上历史抽屉
-  funcMenuOpen: false,   // 右上模块菜单
-  // 对话（联网搜索默认开——Gemini 不带 grounding 容易过时/胡说，按需手动关）
-  chatModel: null, chatThink: null, chatSearch: true,
-  ...storedChatOpts(),
-  // 快速识图：图片降采样到 1600px 再喂模型（上传小、视觉 token 少、识图快）；关掉=发原图（慢但保细节，读小字用）。默认开。
-  fastVision: (() => { try { return localStorage.getItem('bridge-vertex-fastvision') !== '0'; } catch { return true; } })(),
-  // 图像
-  imageModel: null, imageAspect: 'auto', imageSize: null, imageThink: null, imageSearch: false, imageImgSearch: false,
-  ...storedLocalImageSettings(),
-  imageFormat: 'both',   // 输出格式: 'both'(图文) | 'image'(仅图) → responseModalities
-  imageTemp: 1, imageTopP: 0.95,   // Nano Banana 采样参数
-  imagePersonGen: '',    // 人物生成 ''(默认) | ALLOW_ALL | ALLOW_ADULT | ALLOW_NONE
-  // 视频。videoTask = 任务类型（t2v 文生 / i2v 图生 / interp 首尾插值 / ref 参考图）：
-  // 它决定露哪几个素材槽、生成前校验什么，后端也按它取舍图片。
-  videoModel: null, videoTask: 't2v', videoAspect: 'auto', videoResolution: '720p', videoDuration: 8, videoAudio: false,
-  videoNeg: '', videoEnhance: true, videoQuality: '',   // Veo 专属：负面提示词 / 提示词增强 / 画质
-  // 语音。voiceMulti = 多人对白模式（最多 2 人，各配一个音色）；voiceStyle = 风格指令前缀。
-  voiceModel: null, voice: null, voiceStyle: '', voiceMulti: false,
-  voiceSpeakers: [{ speaker: t('主持人'), voice: 'Kore' }, { speaker: t('嘉宾'), voice: 'Puck' }],
-  // 音乐
-  musicModel: null, musicNeg: '',
-  // 助手「配置但不自动开始」预填：把提示词放进来，对应面板挂载/变化时塞进输入框（用户点生成），用后清空。
-  // 工作空间「发送给 AI」复用：文本素材注入各媒体面板提示词栏（imageDraft/voiceDraft 新增），图片素材挂为源图（*SrcDraft）。
-  videoDraft: '', musicDraft: '', imageDraft: '', voiceDraft: '',
-  imageSrcDraft: null, videoSrcDraft: null,   // {path,url,name}：图片素材 → 图片/视频面板的 srcImage
-  // 工作空间「发送给 AI」→ Gemini 对话：待投递的附件，VertexPage 的对话 composer 挂载/变化时消费进 vAtts。
-  chatDraftAtts: [],
-  // 媒体生成「+」素材来源菜单 / 工作空间素材选择器的开关（VertexPage 系统返回 closer 要读，故放 vs）。
-  matMenu: false, matPicker: false,
-});
 
 // Capability catalog from /api/capabilities (models, efforts, media options).
 export const caps = $state({ loaded: false, data: null });
 
 // Who am I (/api/auth)：{ kind:'admin'|'user'|'none', user, tier, hosting, agents, features, canSnapshot, service, allow* }。
-// 客户端不分版本，显示哪些分页全看 agents（统一 id：claude/gemini/codex/dimensio，服务端已把全局开关与
+// 客户端不分版本，显示哪些分页全看 agents（统一 id：claude/studio/codex/dimensio，服务端已把全局开关与
 // 按人授权取过交集；没登录时是服务器全局开着的名单）。hosting = 'host' | 'server'（部署形态：自己的电脑 / 服务器，
 // 「电脑 / 服务器」措辞据此挑，见 hostIsServer；旧后端不给 = 'host'）；features = { multiUser,
 // register, remoteAdmin }。旧后端没有 agents 字段 → 按旧的 allow* 规则推（legacyAgents），新 apk 连旧服务器照常。
@@ -192,7 +146,7 @@ export function pluginOn(id) { return !me.pluginsOff.includes(id); }
 
 // 这个 agent 对当前身份开着吗（agents 未知 = 旧后端没登录 → 当作开着，界面同旧版）。
 export function agentOn(id) { return !Array.isArray(me.agents) || me.agents.includes(id); }
-// 某个顶层页面该不该出现：由撑着它的任一 agent 决定（vertex 页 = Gemini）。主页 / 工作空间恒在。
+// 某个顶层页面该不该出现：由撑着它的任一 agent 决定（studio 页 = Media Studio）。主页 / 工作空间恒在。
 export function screenOn(screen) {
   const ids = screenAgents(screen);
   return !ids.length || ids.some(agentOn);
@@ -214,7 +168,7 @@ export function singleMode() { return rootScreen() !== 'home'; }
 // session{swapped} / model_notice scope=session）后，Composer 的模型芯片据此标「本会话已切换到 X」。
 // suggestions：按会话记的输入建议 {text, at, dismissed?}——每轮定局后 CLI 预测的下一句（总线 suggestion /
 // hello 帧），输入框空着时当占位文字显示，Tab 填入（见 chat.svelte.js noteSuggestion）。
-export const status = $state({ limits: null, context: null, contexts: {}, usages: {}, efforts: {}, models: {}, suggestions: {}, commands: null, plan: null, updatedAt: 0, fast: null });
+export const status = $state({ limits: null, context: null, contexts: {}, usages: {}, efforts: {}, models: {}, suggestions: {}, commands: null, plan: null, noFiveHour: false, updatedAt: 0, fast: null });
 
 // 任务详情（Agent 子转录 / Workflow 阶段面板）2026-09-05 起住进右侧工作台的「任务」视图
 //（lib/dock.svelte.js 的 tasksFocus / tasksAgent），旧的底部抽屉 TaskSheet 与 taskSheet/wf 状态已删。
@@ -229,40 +183,52 @@ export const status = $state({ limits: null, context: null, contexts: {}, usages
 // 收到 refusal_answer / 本轮收尾 / 切会话 → 置 null。同一槽位里 prompt 优先于 notice 横条。
 export const refusalBand = $state({ notice: null, prompt: null });
 
-export function setTheme(theme) {
+// —— 全局明暗（2026-11-07 起统一）——
+// 分页主题 ui.theme（'dark'|'light'）与主页明暗系统 ui.glassMode（'A' 暗 flux / 'B' 明风景）是
+// 同一件事的两种叫法：任何一处切换（主页点 THE BRIDGE、分页里点 Claude 标志、设置页外观卡、跟随系统、
+// dimensio 设置里的外观）都经 setTheme / setHomeMode 两边一起写，不必退回主页才能切明暗。
+// 原「分页跟随主页明暗」开关因此删除（恒为跟随）。
+function writeTheme(theme) {
   ui.theme = theme;
   try { document.documentElement.setAttribute('data-theme', theme); } catch {}
   try { localStorage.setItem('bridge-theme', theme); } catch {}
 }
-export function toggleTheme() { setTheme(ui.theme === 'dark' ? 'light' : 'dark'); }
+function writeGlass(mode) {
+  if (ui.glassMode === mode) return;
+  ui.glassMode = mode;
+  try { localStorage.setItem('bridge-glass', mode); } catch {}
+  ui.revealIcons = mode === 'B';   // 明系统的图标浮现态（暗系统不用）
+}
+export function setTheme(theme) {
+  if (theme !== 'dark' && theme !== 'light') return;
+  writeTheme(theme);
+  writeGlass(theme === 'light' ? 'B' : 'A');
+}
+// 用户手动切明暗（任何页面的切换按钮、设置页外观卡、选壁纸槽）：同 iOS，手动一选就关掉「跟随系统明暗」，
+// 否则下一次系统深浅变化会把它拉回去。跟随系统自己、跨标签页同步走的是上面不关跟随的 setTheme。
+export function pickTheme(theme) {
+  if (theme !== 'dark' && theme !== 'light') return;
+  if (theme !== ui.theme && prefs.followSys) { prefs.followSys = false; savePrefs(); }
+  setTheme(theme);
+}
+export function toggleTheme() { pickTheme(ui.theme === 'dark' ? 'light' : 'dark'); }
 
-// Vertex 分页独立明暗切换（顶栏日/月钮）——只动 vertex.theme，不碰全局 ui.theme。
-export function toggleVertexTheme() {
-  vertex.theme = vertex.theme === 'dark' ? 'light' : 'dark';
-  try { localStorage.setItem('bridge-vertex-theme', vertex.theme); } catch {}
-}
-// 快速识图开关（Gemini 侧栏设置子栏）：开=图片降采样提速、关=发原图保细节。持久化。
-export function setVertexFastVision(on) {
-  vertex.fastVision = !!on;
-  try { localStorage.setItem('bridge-vertex-fastvision', on ? '1' : '0'); } catch {}
-}
-
-// 对话选项（系统提示词 / URL 上下文 / 代码执行 / 识图清晰度）改完落盘
-export function saveVertexChatOpts() {
-  const { chatSystem, chatUrl, chatCode, chatMediaRes } = vertex;
-  try { localStorage.setItem(CHAT_OPTS_KEY, JSON.stringify({ chatSystem, chatUrl, chatCode, chatMediaRes })); } catch {}
-}
+// 开机对齐：index/quick/solo.html 的早绑定脚本已按「跟随系统 → 主页那份 → 分页那份」算好并写回两个键，
+// 这里只兜底一次（老页面/测试脚本直接改 localStorage 的情况）
+(() => {
+  let g = null;
+  try { g = localStorage.getItem('bridge-glass'); } catch {}
+  const want = g === 'A' ? 'dark' : g === 'B' ? 'light' : ui.theme;
+  if (want !== ui.theme || !g) setTheme(want);
+})();
 
 // iOS 两套玻璃方案切换（点 THE BRIDGE）：'A' flux+透光毛玻璃 ↔ 'B' 多洛米蒂+WebGL 折射
-export function toggleGlassMode() {
-  ui.glassMode = ui.glassMode === 'A' ? 'B' : 'A';
-  try { localStorage.setItem('bridge-glass', ui.glassMode); } catch {}
-}
+export function toggleGlassMode() { setHomeMode(ui.glassMode === 'A' ? 'B' : 'A'); }
 
 // —— 偏好开关（设置页·通用/个性化）——
-// followSys: 跟随系统明暗（prefers-color-scheme 驱动主页明暗系统）
-// followPage: 分页跟随主页明暗（主页切明/暗时，claude 分页主题同步 light/dark）
-// noEnterAnim: 禁用系统转场动画（claude/vertex 入场全跳过，直切页面）
+// followSys: 跟随系统明暗（prefers-color-scheme 驱动全局明暗；手动切任何一处即关，见 pickTheme）
+// followPage: 已废（11-07 全局明暗统一后恒跟随），字段只为兼容老存档保留
+// noEnterAnim: 禁用系统转场动画（claude/studio 入场全跳过，直切页面）
 // fullResMedia: 原图加载（相册/漫画查看器直接拉原图、预载也按原图跑；默认关=1280 轻量档+缩放时升级）
 // worktree: 输入栏分支胶囊右半的 worktree 勾选框——勾着开新对话＝先切一个 git worktree 再跑（官方同款，默认关）
 // promptSuggest: 输入建议（Claude 每轮回复完预测下一句，输入框空着时显示，Tab 填入；默认开，与官方同）
@@ -284,23 +250,10 @@ export function savePrefs() {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify({ followSys: prefs.followSys, followPage: prefs.followPage, noEnterAnim: prefs.noEnterAnim, fullResMedia: prefs.fullResMedia, promptSuggest: prefs.promptSuggest, worktree: prefs.worktree, claudeMark: prefs.claudeMark, compactFrac: prefs.compactFrac })); } catch {}
 }
 
-// 某个明暗系统在这台设备上能不能用：iOS 不跑流光动态壁纸，暗系统只在选了静态壁纸时才有。
-// 判断要看壁纸槽，由 wallpaper.svelte.js 注册进来（它 import 本模块，反向 import 会成环）。
-let homeModeOk = () => true;
-export function setHomeModeGuard(fn) { homeModeOk = fn; }
-export function canUseHomeMode(mode) { return homeModeOk(mode); }
-
-// 静默设定主页明暗系统（壁纸预览/跟随系统用——不播 THE BRIDGE 的视频转场）。
-// followPage 开时联动分页主题。
+// 按主页明暗系统的叫法手动切（点 THE BRIDGE、设置页选壁纸槽）：全局明暗统一，等价于 pickTheme。
 export function setHomeMode(mode) {
   if (mode !== 'A' && mode !== 'B') return;
-  if (!homeModeOk(mode)) return;
-  if (ui.glassMode !== mode) {
-    ui.glassMode = mode;
-    try { localStorage.setItem('bridge-glass', mode); } catch {}
-    ui.revealIcons = mode === 'B';   // 明系统的图标浮现态（暗系统不用）
-  }
-  if (prefs.followPage) setTheme(mode === 'B' ? 'light' : 'dark');
+  pickTheme(mode === 'B' ? 'light' : 'dark');
 }
 
 // 跟随系统明暗：监听 prefers-color-scheme；开关打开瞬间也调一次（applyFollowSys）。
@@ -309,9 +262,7 @@ if (typeof window !== 'undefined' && window.matchMedia) {
   const mq = window.matchMedia('(prefers-color-scheme: dark)');
   const apply = () => {
     if (!prefs.followSys) return;
-    // 单 agent 模式没有主页：跟随系统直接驱动界面明暗（主页明暗系统与「分页跟随」在那里无从谈起）
-    if (singleMode()) { setTheme(mq.matches ? 'dark' : 'light'); return; }
-    setHomeMode(mq.matches ? 'A' : 'B');
+    setTheme(mq.matches ? 'dark' : 'light');
   };
   try { mq.addEventListener('change', apply); } catch {}
   _applyFollowSys = apply;
@@ -329,7 +280,7 @@ export function applyFollowSys() { _applyFollowSys(); }
 export const quality = $state({ ss: 1, blur: 0, glow: 0.23, refraction: 46, dispersion: 5, ramp: 1 });
 try { localStorage.removeItem('bridge-quality'); } catch {}   // 清掉旧版存的档位/滑块值
 
-// 主页四入口图标 + 右上登录胶囊 + claude/vertex 入场转场玻璃【共用】的液态玻璃材质内核：
+// 主页四入口图标 + 右上登录胶囊 + claude/studio 入场转场玻璃【共用】的液态玻璃材质内核：
 // bare=默认纯折射（去边光/高光/底色，暗壁纸下融入背景只留内容）；「光感」滑块 glow>0 时按强度
 // 加回立体边光+镜面高光（见 app.css .lg-bare），= 原登录胶囊那套打光。参数统一取上面的 quality
 // ——改一处全员同步。radius 各传各的（图标/转场 30 / 胶囊 22）；组件里用 $derived(bareGlass(r))。
@@ -339,51 +290,54 @@ export function bareGlass(radius = 30) {
     supersampling: quality.ss, blur: quality.blur };
 }
 
-// —— flux 流体壁纸（暗主题 glassMode A）的可调参数 ——
-// 暴露 Wallpaper Engine flux 壁纸的 user properties，做进设置页个性化栏（仅装载该壁纸=glassMode A 时显示）。
-// 改动由 Home.svelte 的 $effect 实时 `wallpaperPropertyListener.applyUserProperties` 套到 iframe。
-// 默认 = 维护者选定的「短点阵」（2026-10-23）：Orange set 预设（深蓝近黑 Poolside）的流体参数，线段缩成短点
-// （线段长 20、宽 4、缩放 1）；原预设是 viewscale 1.4 / linelength 273 / linewidth 11。范围/类型抄壁纸 project.json。
+// —— 流光壁纸（暗主题 glassMode A）的可调参数 ——
+// 引擎是 public/wallpaper/drift.js。2026-11-07 起画的是「正对屏幕的锐边点阵海面」：稀疏小点铺满全屏，被 32 道
+// 风浪谱 Gerstner 波推着动；点的亮度与颜色全场恒定，浪只靠点径表现（大尺度浪高的平滑 S 曲线：波谷针尖、浪脊最大）（11-03 版是旋度流场，像飓风；之后试过带月亮的透视夜海、
+// 只叠几道长浪的柔光珠版，维护者都否了：要垂直平面、不要月亮、点要锐边、浪要微缩且像海不像正弦）。键名沿用，含义：
+// gridspacing 点距、linelength 拖尾、linewidth 浪脊上最大的点径、speed 浪速、flowscale 浪长、turbulence 碎浪、glow 光晕（默认 0）。
+// 存 bridge-flux5（旧键是之前几版的值，点距/点径默认对不上，不迁移）。改动由 Home / DesktopHome 的 $effect
+// 实时 `wallpaperPropertyListener.applyUserProperties` 套到 iframe（接口与 flux 相同）。单位：间距/拖尾/大小是 css px。
 export const FLUX_DEFAULTS = {
-  colormode: 'Poolside', fps: 60, viewscale: 1, linelength: 20, linewidth: 4, gridspacing: 12,
-  viscosity: 5, velocitydissipation: 0.21, diffusioniterations: 3, pressureiterations: 19, fluidsize: 128,
+  colormode: 'Poolside', gridspacing: 18, linelength: 0, linewidth: 4.4, brightness: 1, glow: 0,
+  speed: 1, flowscale: 1, turbulence: 0.5, maxfps: 30,
 };
 export const FLUX_COLORMODES = [
   { id: 'Poolside', name: t('池畔') }, { id: 'Original', name: t('原版') },
   { id: 'Plasma', name: t('等离子') }, { id: 'Freedom', name: t('自由') },
 ];
-// label 中文显示；min/max/step 抄 project.json；step 缺省=1（整数滑块）；group:1 = 截图的「Simulation Parameters」组。
+// step 缺省=1（整数滑块）；group:1 = 「海浪」组。
 export const FLUX_SLIDERS = [
-  { key: 'fps', label: t('演化速度'), min: 1, max: 240 },
-  { key: 'viewscale', label: t('缩放'), min: 1, max: 5.5, step: 0.1 },
-  { key: 'linelength', label: t('线段长度'), min: 20, max: 3000 },
-  { key: 'linewidth', label: t('线段宽度'), min: 1, max: 60 },
-  { key: 'gridspacing', label: t('线条间距'), min: 1, max: 100 },
-  { key: 'viscosity', label: t('粘度'), min: 0.01, max: 200, step: 0.01, group: 1 },
-  { key: 'velocitydissipation', label: t('速度耗散'), min: 0, max: 5, step: 0.01, group: 1 },
-  { key: 'diffusioniterations', label: t('扩散迭代'), min: 0, max: 50, group: 1 },
-  { key: 'pressureiterations', label: t('压力迭代'), min: 0, max: 200, group: 1 },
-  // pow2：只能取 2 的幂，滑条按指数走（32/64/128/256/512 五档）。打包的 flux 流体尺寸不是 2 的幂时解算会炸，
-  // 整屏变成一格一格的放射乱线（96、112、160、192 实测都炸，32–512 的 2 的幂都正常）。
-  { key: 'fluidsize', label: t('流体尺寸'), min: 32, max: 512, pow2: true, group: 1 },
+  { key: 'gridspacing', label: t('点阵间距'), min: 8, max: 40 },
+  { key: 'linewidth', label: t('光点大小'), min: 1, max: 8, step: 0.1 },
+  { key: 'linelength', label: t('拖尾'), min: 0, max: 6, step: 0.1 },
+  { key: 'brightness', label: t('亮度'), min: 0.2, max: 2.5, step: 0.05 },
+  { key: 'glow', label: t('光晕'), min: 0, max: 1, step: 0.05 },
+  { key: 'speed', label: t('浪速'), min: 0, max: 3, step: 0.05, group: 1 },
+  { key: 'flowscale', label: t('浪长'), min: 0.4, max: 2.5, step: 0.05, group: 1 },
+  { key: 'turbulence', label: t('碎浪'), min: 0, max: 1, step: 0.05, group: 1 },
+  { key: 'maxfps', label: t('帧率上限'), min: 15, max: 60, group: 1 },
 ];
-export function fluxPow2(v) { return 2 ** Math.round(Math.log2(Math.min(512, Math.max(32, Number(v) || 128)))); }
 function loadFlux() {
-  // 读入时就把旧存的非 2 的幂流体尺寸归位（之前滑条是逐个整数，存下过 96 这类坏值）
-  try { const f = JSON.parse(storeGet('bridge-flux') || 'null'); if (f) return { ...FLUX_DEFAULTS, ...f, fluidsize: fluxPow2(f.fluidsize ?? FLUX_DEFAULTS.fluidsize) }; } catch {}
-  return { ...FLUX_DEFAULTS };
+  const out = { ...FLUX_DEFAULTS };
+  try {
+    const f = JSON.parse(storeGet('bridge-flux6') || 'null') || {};
+    if (FLUX_COLORMODES.some((c) => c.id === f.colormode)) out.colormode = f.colormode;
+    // 只收认识的键，并钳回滑条范围（防坏值把壁纸弄成全黑）
+    for (const s of FLUX_SLIDERS) {
+      const v = Number(f[s.key]);
+      if (Number.isFinite(v)) out[s.key] = Math.min(s.max, Math.max(s.min, v));
+    }
+  } catch {}
+  return out;
 }
 export const fluxParams = $state(loadFlux());
-// fluxParams → applyUserProperties 入参格式 {key:{value}}。「缩放」(viewscale) 只改流体在屏幕上的显示尺寸、
-// 模拟域固定，离 1–5.5 太远流体会缩到屏幕中间露黑边（2026-06-23 bug），这里钳住并顺带修正越界旧值。
-// 挂到 window 上：壁纸 iframe 在 flux 构造前就来取（wallpaper/index.html），免得先按引擎默认值建好再改。
+// fluxParams → applyUserProperties 入参格式 {key:{value}}。
+// 挂到 window 上：壁纸 iframe 构造时就来取（wallpaper/drift.js），第一帧就是对的参数。
 export function fluxProps() {
   const p = {};
   for (const k in fluxParams) p[k] = { value: fluxParams[k] };
-  if (p.viewscale) p.viewscale.value = Math.min(5.5, Math.max(1, fluxParams.viewscale));
-  if (p.fluidsize) p.fluidsize.value = fluxPow2(fluxParams.fluidsize);
   return p;
 }
 if (typeof window !== 'undefined') window.__fluxProps = fluxProps;
-export function saveFlux() { try { storeSet('bridge-flux', JSON.stringify({ ...fluxParams })); } catch {} }
+export function saveFlux() { try { storeSet('bridge-flux6', JSON.stringify({ ...fluxParams })); } catch {} }
 export function resetFlux() { Object.assign(fluxParams, FLUX_DEFAULTS); saveFlux(); }

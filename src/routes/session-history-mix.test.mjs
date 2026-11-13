@@ -14,7 +14,7 @@ process.env.BRIDGE_CLAUDE_IN_CHROME = '0';
 
 const { readSessionMessages } = await import('./sessions.mjs');
 const V = await import('../mcp/visualize.mjs');
-const { formatAnswer } = await import('../runtime/questions.mjs');
+const { formatAnswer, sdkAnswerInput, joinAnswerList, splitAnswerList } = await import('../runtime/questions.mjs');
 
 test('ask / plan / widget / PR 信封 / 跨会话信封 / 家族信封同处一份 transcript：段序与直播同形，互不吞', async () => {
   const file = path.join(tmp, 'mix.jsonl');
@@ -94,4 +94,72 @@ test('ask / plan / widget / PR 信封 / 跨会话信封 / 家族信封同处一�
   } finally {
     try { rmSync(file, { force: true }); } catch {}
   }
+});
+
+// 2026-11-08 起 bridge 作答走官方通道（allow + updatedInput.answers）：tool_result 不再是 is_error 的「答：」文本，
+// 答案在这条 user 记录顶层的 toolUseResult = { questions, answers, annotations? }。历史重建按它回填，与直播同形。
+test('提问卡走官方作答通道：sdkAnswerInput 拼的 answers / annotations 经 toolUseResult 回填（单选 + 备注、多选 + 带逗号项 + 自定义）', async () => {
+  const questions = [
+    { header: '范围', question: '先做哪部分？', multiSelect: false, options: [{ label: '前端', description: '' }, { label: '后端', description: '' }] },
+    { header: '平台', question: '要哪些平台？', multiSelect: true, options: [{ label: '安卓', description: '' }, { label: 'Windows, macOS', description: '' }, { label: 'iOS', description: '' }] },
+    { header: '其他', question: '还有要求吗？', multiSelect: false, options: [{ label: '没有', description: '' }] },
+  ];
+  const upd = sdkAnswerInput({ questions }, { answers: [
+    { selected: ['前端'], custom: '顺便把设置页也改了' },
+    { selected: ['安卓', 'Windows, macOS'], custom: '鸿蒙' },
+    { selected: [], custom: '下周一前' },
+  ] });
+  assert.ok(upd, '这份入参官方作答校验收得下');
+  assert.deepEqual(upd.questions, questions, '原有字段一个不改');
+  assert.equal(upd.answers['先做哪部分？'], '前端');
+  assert.deepEqual(upd.annotations, { '先做哪部分？': { notes: '顺便把设置页也改了' } });
+  assert.equal(upd.answers['要哪些平台？'], '安卓, "Windows, macOS", 鸿蒙');
+  assert.deepEqual(splitAnswerList(upd.answers['要哪些平台？']), ['安卓', 'Windows, macOS', '鸿蒙']);
+  assert.equal(upd.answers['还有要求吗？'], '下周一前');
+
+  const tmpDir = mkdtempSync(path.join(tmp, 'ask-allow-'));
+  const file = path.join(tmpDir, 'ask.jsonl');
+  const lines = [];
+  let n = 0, prev = null;
+  const push = (o) => { o.uuid = 'a' + (++n); o.parentUuid = prev; prev = o.uuid; o.timestamp = new Date(Date.UTC(2026, 10, 8, 9, 0, n)).toISOString(); lines.push(JSON.stringify(o)); };
+  push({ type: 'user', message: { role: 'user', content: '规划一下' } });
+  push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'askA', name: 'AskUserQuestion', input: { questions } }] } });
+  push({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'askA', content: 'User has answered your questions: "先做哪部分？"="前端" … You can now continue with the user\'s answers in mind.' }] },
+    toolUseResult: { questions, answers: upd.answers, annotations: upd.annotations },
+  });
+  push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '好的。' }] } });
+  writeFileSync(file, lines.join('\n') + '\n', 'utf8');
+  try {
+    const msgs = await readSessionMessages(file);
+    const ask = msgs[1].segments.find((x) => x.kind === 'ask');
+    assert.ok(ask, '提问卡还在');
+    assert.equal(ask.answered, true);
+    assert.equal(ask.cancelled, false);
+    assert.deepEqual(ask.items[0].selected, ['前端']);
+    assert.equal(ask.items[0].custom, '顺便把设置页也改了');
+    assert.deepEqual(ask.items[1].selected, ['安卓', 'Windows, macOS']);
+    assert.equal(ask.items[1].custom, '鸿蒙');
+    assert.deepEqual(ask.items[2].selected, []);
+    assert.equal(ask.items[2].custom, '下周一前');
+  } finally {
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('sdkAnswerInput 收不下的入参退回 deny：模型预填了保留字段、题面重复或为空', () => {
+  const q = (question) => ({ header: 'h', question, multiSelect: false, options: [{ label: 'A', description: '' }] });
+  const ans = { answers: [{ selected: ['A'] }, { selected: ['A'] }] };
+  assert.equal(sdkAnswerInput({ questions: [q('一？')], answers: {} }, ans), null);
+  assert.equal(sdkAnswerInput({ questions: [q('一？')], afkTimeoutMs: 1 }, ans), null);
+  assert.equal(sdkAnswerInput({ questions: [q('一？'), q('一？')] }, ans), null);
+  assert.equal(sdkAnswerInput({ questions: [q('')] }, ans), null);
+  assert.equal(sdkAnswerInput({ questions: [] }, ans), null);
+  // 没答的题不写键；带引号的项按 JSON 引起来，拆回原样
+  assert.deepEqual(sdkAnswerInput({ questions: [q('一？')] }, { answers: [{ selected: [] }] }).answers, {});
+  const s = joinAnswerList(['说 "好"', '普通']);
+  assert.equal(s, '"说 \\"好\\"", 普通');
+  assert.deepEqual(splitAnswerList(s), ['说 "好"', '普通']);
+  assert.equal(splitAnswerList('a, '), null);
 });

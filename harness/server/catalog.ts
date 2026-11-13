@@ -33,7 +33,9 @@
 //                         server default max) and k3-256k joined (256k, no video in);
 //                         k3's server default effort moved max→high. Only the K2.7
 //                         Highspeed id still lacks an effort ladder (field ignored,
-//                         no 400). The endpoint never validates reasoning_effort, so
+//                         no 400). 2026-11-07: k3.1-pro / k3.1-pro-highspeed (K3.1 Pro,
+//                         1M, image+video, low/high/max default high) joined; highspeed
+//                         bills 2x. The endpoint never validates reasoning_effort, so
 //                         the ladder is trusted from /models, not from a rejection.
 //                         All ingest image+video except k3-256k (image only). The old
 //                         open-platform kimi-k2/kimi-latest ids are EOL and 401 here.
@@ -42,16 +44,17 @@
 //                         模板只认 low/medium/xhigh，关思考是 enable_thinking:false。
 //                         实测（2026-09-01，llama-server b10729）：tool_calls 与
 //                         reasoning_content 的流式增量都符合 OpenAI 形状。
+//                         strata-* → Strata 引擎（8081）上的 Qwen3.8-Flash-Next 各量化变体，同一套 chat_template_kwargs。
 //
 // The frontend renders the chat-bar model menu + effort menu straight from this,
 // so the two stay in lockstep with the adapters.
 
 import type { ProviderId } from "./providers/types.ts";
-import { customProviderPlugin, getCustomProvider, hostOf, isCustomProviderId, isSharedProvider, listCustomProviders, type CustomModel, type CustomProvider } from "./custom-providers.ts";
+import { customProviderPlugin, getCustomProvider, hostBuiltin, hostManagesBuiltins, hostOf, isCustomProviderId, isSharedProvider, listCustomProviders, type CustomModel, type CustomProvider, type HostBuiltin } from "./custom-providers.ts";
 import { autoThinkSlots, slotView } from "./custom-tiers.ts";
 import { MK } from "./model-knowledge.ts";
 import { DEFAULT_MEDIA_BUDGET } from "./agent/media-budget.ts";
-import { localAiSettings, STRATA_MODEL, strataSettings } from "./localai.ts";
+import { LEGACY_STRATA_MODEL, LOCAL_MODEL_ALIASES, localAiSettings, strataSettings, strataVariantOf } from "./localai.ts";
 import type { ThinkingLevel } from "./agent/turn.ts";
 
 export interface ModelSpec {
@@ -86,6 +89,8 @@ export interface ModelSpec {
   alwaysThinks?: boolean;
   autoThinkAt?: ThinkingLevel[];
   group?: string;
+  // 改名前的旧 id（旧会话 / 保存的选择里还存着）：modelSpec 按旧 id 查得到这一条，前端拿它把旧会话的型号对上菜单里的这一项
+  aliases?: string[];
 }
 
 export interface ProviderSpec {
@@ -100,7 +105,10 @@ export interface ProviderSpec {
   // 只有自定义服务有：卡片副标题显示的主机名、协议；all = 服务里一共多少个型号（菜单只列启用的对话型号）
   // shared = 管理员实例上标了「共享给成员」；managed = 成员实例上这条是管理员共享过来的（不给地址，只能用不能改）
   // plugin = bridge 插件提供的（插件名；同时带 managed）
-  custom?: { host: string; protocol: string; all: number; shared?: boolean; managed?: boolean; plugin?: string };
+  // pluginId / ref / logo：bridge 插件提供的服务是谁给的、它那边的服务 id、品牌标的键（模型中心的服务据此跳回去改、画标）
+  custom?: { host: string; protocol: string; all: number; shared?: boolean; managed?: boolean; plugin?: string; pluginId?: string; ref?: string; logo?: string; hidden?: boolean };
+  // 自带适配的厂商由宿主的模型中心接管时：是它的哪个服务给的 Key（卡片上的铅笔据此跳回模型中心改）
+  hub?: { pluginId: string; ref?: string; name: string };
 }
 
 // Global effort ordering — used to clamp a chosen level to a model's supported set.
@@ -114,6 +122,13 @@ export const CATALOG: ProviderSpec[] = [
     // 用过的话切回这家继承上次的型号，见 config.ts preferredModel。
     defaultModel: "claude-opus-5-5",
     models: [
+      // Fable 5.2（2026-11-09）：Anthropic 当前最强档，$8/$40（cache read $0.20/M，fast $16/$80），1M 上下文、128k 输出、
+      // 知识截止 2026-06；adaptive thinking 恒开 + effort 五档（API 默认 high）；fast mode 支持（官方文档，Claude API）。
+      // 排在 Opus 5.5 后面、不当默认：贵一倍，官方也建议先用 Opus，高档位仍不够再上 Fable。
+      // 三条 API 约束适配器都要守（见 providers/anthropic.ts）：不能关思考、不能强制 tool_choice（本适配器从不发）、
+      // 前缀检查对所有账号强制——改过历史 / system / tools 后回放旧思考块会 400，适配器用 drop_block 兜底。
+      // 需要 30 天数据保留（ZDR 组织直接 400）。
+      { id: "claude-fable-5-2", label: "Fable 5.2", efforts: ["low", "medium", "high", "xhigh", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, fast: true, note: "最强 · 长程 agent" },
       // R1（#1）：ctx / maxOut 取自官方模型页（platform.claude.com/docs/en/models/*，2026-09-23 核对）：
       // 5 个 Opus/Sonnet 都是 1M 上下文、同步 Messages API 最多 128K 输出；Haiku 4.5 是 200K / 64K。
       // 以前适配器不读目录，一律 200k / 8192——Opus 5.5 一轮最多写 8192 token 就被截断。
@@ -128,7 +143,8 @@ export const CATALOG: ProviderSpec[] = [
       // Sonnet 5.5（2026-09-28）：Sonnet 档新版；effort 五档、默认 high；ctx / maxOut 沿用同档 Sonnet 4.6 取值，
       // 配上 Anthropic key 后用 Models API 核一遍。
       { id: "claude-sonnet-5-5", label: "Sonnet 5.5", efforts: ["low", "medium", "high", "xhigh", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "均衡 · 新一代 Sonnet" },
-      { id: "claude-opus-4-8", label: "Opus 4.8", efforts: ["low", "medium", "high", "xhigh", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, fast: true, note: "旗舰 · 自适应思考" },
+      // fast 已弃用、2026-11-30 移除（之后带 speed 直接报错）：不再标 fast
+      { id: "claude-opus-4-8", label: "Opus 4.8", efforts: ["low", "medium", "high", "xhigh", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "旗舰 · 自适应思考" },
       { id: "claude-opus-4-7", label: "Opus 4.7", efforts: ["low", "medium", "high", "xhigh", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "长程 agent · 高清视觉" },
       { id: "claude-sonnet-4-6", label: "Sonnet 4.6", efforts: ["low", "medium", "high", "max"], image: true, ctx: 1_000_000, maxOut: 128_000, note: "均衡" },
       // Haiku 5.5（2026-10-07）：$0.10/$0.50（prompt 超 10 万 token 起 $0.50/$2.50），1M 上下文（裸 id）、128k 输出，
@@ -147,7 +163,8 @@ export const CATALOG: ProviderSpec[] = [
       // （393217 即报 "valid range of max_tokens is [1, 393216]"）。session.ts
       // 的 budget 天花板仍会把实际请求夹到 65536——这里只记录真实能力。
       { id: "deepseek-flash", label: "V4.1 Flash", efforts: ["off", "low", "high", "max"], image: true, ctx: 1_000_000, maxOut: 393_216, note: "V4.1 · 原生视觉 · 1M ctx" },
-      { id: "deepseek-v4-pro", label: "V4 Pro（退役中）", efforts: ["off", "high", "max"], image: false, ctx: 1_000_000, maxOut: 393_216, note: "09-14 起转发至 V4.1 Flash" },
+      // V4 Pro 是现役型号（官方型号页单独计价；/models 报 low / high / max 三档，2026-11-13 实测 low 档真的变短）
+      { id: "deepseek-v4-pro", label: "V4 Pro", efforts: ["off", "low", "high", "max"], image: false, ctx: 1_000_000, maxOut: 393_216, note: "V4 Pro · 纯文本 · 1M ctx" },
     ],
   },
   {
@@ -195,10 +212,13 @@ export const CATALOG: ProviderSpec[] = [
     id: "kimi",
     name: "Kimi",
     baseUrl: "https://api.kimi.com/coding/v1",
-    defaultModel: "k3",
+    defaultModel: "k3.1-pro",
     models: [
       // 全系恒思考（无 off 档）。effort 阶梯/ctx/video 逐条以 /models 实测为准
       // （2026-09-11）：K2.8 Preview 顶着老 id kimi-for-coding 上线，长出三档并扩到 1M。
+      // （2026-11-07）：K3.1 Pro 上架订阅端点，1M、三档默认 high；highspeed 版按 2 倍用量计费。
+      { id: "k3.1-pro", label: "K3.1 Pro", efforts: ["low", "high", "max"], image: true, video: true, ctx: 1_048_576, maxOut: 65_536, note: "旗舰 · 1M ctx · 恒思考" },
+      { id: "k3.1-pro-highspeed", label: "K3.1 Pro Highspeed", efforts: ["low", "high", "max"], image: true, video: true, ctx: 1_048_576, maxOut: 65_536, note: "极速 · 2 倍用量" },
       { id: "k3", label: "K3", efforts: ["low", "high", "max"], image: true, video: true, ctx: 1_048_576, maxOut: 65_536, note: "旗舰 · 1M ctx · 恒思考" },
       { id: "k3-256k", label: "K3 256k", efforts: ["low", "high", "max"], image: true, video: false, ctx: 262_144, maxOut: 65_536, note: "旗舰 · 256k · 不吃视频" },
       { id: "kimi-for-coding", label: "K2.8 Preview", efforts: ["low", "high", "max"], image: true, video: true, ctx: 1_048_576, maxOut: 65_536, note: "编码特化 · 1M ctx · 预览" },
@@ -266,11 +286,16 @@ export const CATALOG: ProviderSpec[] = [
       // 默认值（启动脚本的 -c 131072 + mmproj），实际由「本机」面板的启动参数覆盖，见 withLocalSettings。
       { id: "qwen3.8-27b", label: "Qwen3.8 27B", efforts: ["off", "low", "medium", "xhigh"], defaultEffort: "xhigh", image: true, ctx: 131_072, maxOut: 32_768, note: "本机 · 离线可用 · 视觉" },
       // Strata 引擎（E:\Strata，端口 8081，适配器按型号换端点：localai.ts localModelBaseUrl）跑 Qwen3.8-Flash-Next
-      // 125B MoE（180B 总参 / 6B 激活）的官方 GSQ-RCO IQ3_S。id 沿用最初接入的 Orca 无审查版时起的 strata-orca（前端与旧会话都认它）。
-      // 2026-10-06 同机实测：难题 43/46 与 Qwen 27B 持平，长上下文读入快约 3 倍。用的是同一套 Qwen 模板：
-      // 档位同样只认 low / medium / xhigh + enable_thinking:false（serve/frontend.py EFFORT），chat_template_kwargs 照发。
-      // ctx / image 由面板里 Strata 的启动参数覆盖（默认 128k、识图关——官方版的识图模块没装）。
-      { id: "strata-orca", label: "Qwen3.8 Flash Next 125B", efforts: ["off", "low", "medium", "xhigh"], defaultEffort: "medium", image: false, ctx: 131_072, maxOut: 32_768, note: "本机 · 离线可用" },
+      // 125B MoE（180B 总参 / 6B 激活）。2026-11-07 起每个本机变体一个型号（localai.ts STRATA_VARIANTS），起哪个跟着会话型号走；
+      // 以前唯一的 id strata-orca 是官方 IQ3_S 的等价别名（LOCAL_MODEL_ALIASES，modelSpec 认它）。三个变体同一套 Qwen3.8 模板，
+      // 档位都经 Strata 自己的映射（serve/frontend.py EFFORT：low / medium / xhigh + enable_thinking:false，high / max 是 xhigh 的
+      // 别名），chat_template_kwargs 照发。默认 medium：Orca 版 xhigh 停不下来；官方 IQ3_S 与 NVFP4 xhigh 能收尾，但同题 medium
+      // 已够、快得多。ctx / image 由面板里 Strata 的启动参数覆盖（几个变体共用一份；默认 128k、识图关，三个变体都有识图模块）。
+      // NVFP4 那份 setup.py 配置写的是 128k、int8、KV 流式、识图开，与面板现行参数一致。
+      // 2026-10-06 同机实测：官方 IQ3_S 难题 43/46 与 Qwen 27B 持平，长上下文读入快约 3 倍；Orca 36/46。
+      { id: "strata-flash-iq3s", label: "Strata · 官方 IQ3_S", efforts: ["off", "low", "medium", "xhigh"], defaultEffort: "medium", image: false, ctx: 131_072, maxOut: 32_768, note: "本机 · 离线可用", aliases: [LEGACY_STRATA_MODEL] },
+      { id: "strata-orca-iq3xxs", label: "Strata · Orca 无审查 IQ3_XXS", efforts: ["off", "low", "medium", "xhigh"], defaultEffort: "medium", image: false, ctx: 131_072, maxOut: 32_768, note: "本机 · 离线可用 · 无审查" },
+      { id: "strata-flash-nvfp4", label: "Strata · NVIDIA NVFP4（QAD）", efforts: ["off", "low", "medium", "xhigh"], defaultEffort: "medium", image: false, ctx: 131_072, maxOut: 32_768, note: "本机 · 离线可用" },
     ],
   },
 ];
@@ -312,7 +337,9 @@ function customSpec(c: CustomProvider): ProviderSpec {
       protocol: c.protocol,
       all: c.models.length,
       ...(managed ? { managed: true } : c.shared ? { shared: true } : {}),
-      ...(plugin ? { plugin: plugin.name } : {}),
+      ...(plugin ? { plugin: plugin.name, pluginId: plugin.id, ...(plugin.sid ? { ref: plugin.sid } : {}), ...(plugin.logo ? { logo: plugin.logo } : {}) } : {}),
+      // 已经并进模型中心：目录里留着（老会话的型号名、档位照常查得到），面板与子 agent 候选不列
+      ...(c.hubRef && !managed ? { hidden: true } : {}),
     },
     models: shown.map((m) => customModelSpec(m, c.protocol)),
   };
@@ -320,15 +347,16 @@ function customSpec(c: CustomProvider): ProviderSpec {
 
 // 本机这家的上下文 / 视觉由「本机」面板里的启动参数决定（localai.ts）：报得比服务端 -c 大会在长会话里被截断，
 // 关了视觉（没挂 mmproj）还当能看图，图片会被 llama-server 整个拒掉——改走辅助视觉。
-// 两台引擎各跟各的设置（Qwen 27B ← E:\LLM\local-ai.json，Strata ← E:\Strata\local-ai.json）。
+// 两台引擎各跟各的设置（Qwen 27B ← E:\LLM\local-ai.json，Strata 的几个变体 ← E:\Strata\local-ai.json）。
 function withLocalSettings(s: ProviderSpec): ProviderSpec {
   if (s.id !== "local") return s;
   return {
     ...s,
     models: s.models.map((m) => {
-      if (m.id === STRATA_MODEL) {
+      if (strataVariantOf(m.id)) {
         const { ctx, vision } = strataSettings();
-        return { ...m, ctx, image: vision, note: vision ? "本机 · 离线可用 · 视觉" : m.note };
+        // 在变体自己的标注后面接「视觉」，别把 Orca 的「无审查」盖掉
+        return { ...m, ctx, image: vision, note: vision ? `${m.note} · 视觉` : m.note };
       }
       const { ctx, vision } = localAiSettings();
       return { ...m, ctx, image: vision, note: vision ? m.note : "本机 · 离线可用" };
@@ -336,10 +364,42 @@ function withLocalSettings(s: ProviderSpec): ProviderSpec {
   };
 }
 
+// 宿主的模型中心接管了这家自带厂商（custom-providers.ts hostBuiltin）：型号表照旧是这里逐个核对过的那份，
+// 模型中心里另勾的、表里没有的型号接在后面——档位阶梯照这家默认型号的（同一家的适配器按厂商发参数），上下文 / 输出 / 识图取模型中心给的。
+// menu = 给菜单看的：只列模型中心里勾给 dimensio 的那几个；否则是全表 + 另加的（旧会话里记着、后来取消勾选的型号仍查得到规格）。
+function withHostBinding(s: ProviderSpec, b: HostBuiltin | undefined, menu: boolean): ProviderSpec {
+  if (!b) return s;
+  const base = s.models.find((m) => m.id === s.defaultModel) ?? s.models[0];
+  const known = new Set(s.models.flatMap((m) => [m.id, ...(m.aliases ?? [])]));
+  const extras: ModelSpec[] = b.models
+    .filter((m) => !known.has(m.id))
+    .map((m) => ({
+      id: m.id,
+      label: m.label || m.id,
+      efforts: base.efforts,
+      ...(base.defaultEffort ? { defaultEffort: base.defaultEffort } : {}),
+      ...(base.effortLabels ? { effortLabels: base.effortLabels } : {}),
+      image: typeof m.vision === "boolean" ? m.vision : guessImages(m.id),
+      ...(m.contextWindow ? { ctx: m.contextWindow } : {}),
+      ...(m.maxOutput ? { maxOut: m.maxOutput } : {}),
+    }));
+  const picked = new Set(b.models.map((m) => m.id));
+  const shown = menu ? s.models.filter((m) => picked.has(m.id) || (m.aliases ?? []).some((a) => picked.has(a))) : s.models;
+  // 一个表里的都没勾、也没另加：别让这家变成空的，列全表
+  const models = shown.length || extras.length ? [...shown, ...extras] : s.models;
+  const dflt = models.some((m) => m.id === s.defaultModel) ? s.defaultModel : models.some((m) => m.id === b.defaultModel) ? b.defaultModel! : models[0].id;
+  return { ...s, defaultModel: dflt, models, hub: { pluginId: b.plugin.id, ...(b.plugin.sid ? { ref: b.plugin.sid } : {}), name: b.name } };
+}
+
 // 内置八家 + 用户加的自定义服务（按添加顺序）。凡是「这个 provider 存不存在 / 有哪些型号」都从这里查。
+// 宿主的模型中心接管了自带厂商时（管理员实例），只列它给了 Key 的那几家和本机；成员实例、老 bridge、独立运行照旧八家全列。
 export function allProviders(): ProviderSpec[] {
   const custom = listCustomProviders();
-  return [...CATALOG.map(withLocalSettings), ...custom.map(customSpec)];
+  const managed = hostManagesBuiltins();
+  const builtin = managed
+    ? CATALOG.filter((s) => s.id === "local" || hostBuiltin(s.id)).map((s) => withHostBinding(s, hostBuiltin(s.id), true))
+    : CATALOG;
+  return [...builtin.map(withLocalSettings), ...custom.map(customSpec)];
 }
 
 export function providerSpec(p: ProviderId): ProviderSpec {
@@ -347,7 +407,8 @@ export function providerSpec(p: ProviderId): ProviderSpec {
     const c = getCustomProvider(p);
     if (c) return customSpec(c);
   }
-  return withLocalSettings(CATALOG.find((s) => s.id === p) ?? CATALOG[0]);
+  const s = CATALOG.find((x) => x.id === p) ?? CATALOG[0];
+  return withLocalSettings(hostManagesBuiltins() ? withHostBinding(s, hostBuiltin(s.id), false) : s);
 }
 
 // R12：这家 provider 一次请求里历史图片的额度（目录没配的项取默认）。自定义服务按型号家族取（共用型号表：经第三方接的
@@ -361,8 +422,19 @@ export function providerMediaBudget(p: ProviderId, model?: string): { maxImages:
   };
 }
 
+// 改名 / 退役后仍要认的旧 id → 现在的 id（按厂商分；目前只有本机的 strata-orca → strata-flash-iq3s）
+const MODEL_ALIASES: Partial<Record<string, Readonly<Record<string, string>>>> = { local: LOCAL_MODEL_ALIASES };
+export function canonicalModelId(p: ProviderId, modelId: string): string {
+  return MODEL_ALIASES[p]?.[modelId] ?? modelId;
+}
+
+// 旧 id 查到的是新 id 那一条（id 字段是新的）：上下文、档位、端点全按它走，旧会话与 runtime-config 里存着的不用改写
 export function modelSpec(p: ProviderId, modelId: string): ModelSpec | undefined {
-  return providerSpec(p).models.find((m) => m.id === modelId);
+  const models = providerSpec(p).models;
+  const hit = models.find((m) => m.id === modelId);
+  if (hit) return hit;
+  const canon = canonicalModelId(p, modelId);
+  return canon === modelId ? undefined : models.find((m) => m.id === canon);
 }
 
 // One capability decision for the UI, main-agent context, Browser feedback and
@@ -433,6 +505,9 @@ export function clampEffort(
     const below = on.filter((e) => EFFORT_ORDER.indexOf(e) <= want);
     return below.length ? below[below.length - 1] : on[0];
   }
+  // 自定义服务上存着的 off、而这个型号没有 off 槽（必须思考、有默认档）：以前 off 槽的意思是「默认，什么都不发」，
+  // 回到它的默认档，别落到最低档把推理强度悄悄调低。
+  if (isCustomProviderId(p) && spec && level === "off" && spec.defaultEffort && efforts.includes(spec.defaultEffort)) return spec.defaultEffort;
   // 本机模板把 'high' 改写成 xhigh：旧会话 / 保存的选择 / 子 agent 覆盖里的 high 实际一直是 xhigh，
   // 照旧给 xhigh，别按「向下取」悄悄降成 medium。（旧的 max 向下取本来就落到 xhigh。）
   // Qwen3.8 不跟：旧的 high 是 thinking_budget 32k 封顶，升成不封顶的 xhigh 会悄悄放大账单，按常规向下取 medium。

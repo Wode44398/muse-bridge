@@ -5,10 +5,11 @@
 // and so we can turn a raw failure into a plain-Chinese notice ("5 小时额度已达
 // 上限" etc). Persisted so a freshly loaded page shows last-known immediately.
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { outboundHint } from './net-proxy.mjs';
-import { activeAccountId, activeToken, apiKeyMode } from './claude-account.mjs';
+import { activeAccountId, activeToken, apiKeyMode, accountManualPlan, listAccountsWithTokens } from './claude-account.mjs';
 
 let _statusPath = '';
 // Rate limits are per SUBSCRIPTION ACCOUNT (everyone shares the bridge's account pool),
@@ -17,20 +18,117 @@ let _statusPath = '';
 // 切到 B 号，弹层仍显示 A 号的 100%（usage-probe 还一直拿 A 号 token 刷）。
 // Context fill is PER-CONVERSATION, so it is kept per caller key (admin / u:<name>)
 // in `contexts` and never served to others.
-// plan：套餐名（SDK usage 的 subscription_type → "Max"/"Pro"…；OAuth token 路径下服务端常不给，留 null）。
-const byAccount = {}; // accountId -> { limits, updatedAt, plan }
+// plan：SDK usage 的 subscription_type（小写原文 'pro'/'max'/'ultra'…；OAuth token 路径下服务端常不给，留 null）。
+//   'max' 分不出 5x 与 20x，单凭它不定档。
+// tier：权威来源定出的套餐档（'pro' | 'max5x' | 'ultra'）——profile 接口的 rate_limit_tier，或同组织本机登录凭据
+//   （overlay 用量来源经 notePlanTier 写进来）。
+// topTier：响应头 upgrade-paths 出现过且不含 upgrade_plan = 已是最高档（Ultra）；这个头只在额度吃紧时才带，
+//   没带不算数（看到含 upgrade_plan 才复位）。
+// noFiveHour：这个号没有 5 小时限额（2026-11 起部分 Ultra 订阅只有周限额）——权威来源（响应头 / SDK usage）
+// 明确只给周桶、不给 5 小时桶时置位，同时删掉残留的 five_hour 读数；再看到 5 小时桶就复位。
+const byAccount = {}; // accountId -> { limits, updatedAt, plan, tier, topTier, noFiveHour }
 function slot(acct) {
   const id = acct || activeAccountId() || '_';
-  return byAccount[id] || (byAccount[id] = { limits: {}, updatedAt: 0, plan: null });
+  return byAccount[id] || (byAccount[id] = { limits: {}, updatedAt: 0, plan: null, tier: null, topTier: false, noFiveHour: false });
 }
+
+// 套餐代号 → 显示名。Ultra = 2026-11 起的新名字，原 Max 20x 一律叫 Ultra（不管有没有 5 小时限额）；
+// 'max' = 只知道是 Max、分不出 5x / 20x（SDK 只报了 subscription_type:'max'）。
+export const PLAN_LABEL = { pro: 'Pro', max5x: 'Max 5x', ultra: 'Ultra', max: 'Max', team: 'Team', enterprise: 'Enterprise' };
+const TIERS = new Set(['pro', 'max5x', 'ultra']);
+
+// 订阅类型 + rate_limit_tier（凭据文件 / profile 接口的原文）→ 套餐代号。认不出 = null。
+// 已知的 tier：default_claude_ai（Pro）、default_claude_max_5x、default_claude_max_20x。
+export function planFromTier(subscriptionType, rateLimitTier) {
+  const sub = String(subscriptionType || '').toLowerCase().replace(/^claude_/, '');
+  const tier = String(rateLimitTier || '').toLowerCase();
+  if (sub === 'ultra' || /max_20x|ultra/.test(tier)) return 'ultra';
+  if (/max_5x/.test(tier)) return 'max5x';
+  if (sub === 'pro' || (!sub && tier === 'default_claude_ai')) return 'pro';
+  return null;
+}
+
+// 本机 claude login 的凭据带着 subscriptionType + rateLimitTier（权威）。按 mtime 缓存，重新登录换号会跟着变。
+let loginCache = { mtime: -1, plan: null };
+export function loginPlan() {
+  const dir = String(process.env.CLAUDE_CONFIG_DIR || '').trim() || path.join(os.homedir(), '.claude');
+  const f = path.join(dir, '.credentials.json');
+  try {
+    const m = statSync(f).mtimeMs;
+    if (m !== loginCache.mtime) {
+      const o = JSON.parse(readFileSync(f, 'utf8')).claudeAiOauth || {};
+      loginCache = { mtime: m, plan: planFromTier(o.subscriptionType, o.rateLimitTier) };
+    }
+  } catch { loginCache = { mtime: -1, plan: null }; }
+  return loginCache.plan;
+}
+
+// 留空 token 的号 = 本机登录态（claude-account.mjs）：套餐直接看登录凭据。
+function usesLogin(id) { const a = listAccountsWithTokens().find((x) => x.id === id); return !!a && !a.token; }
+
+// 某个号的套餐代号（'pro' | 'max5x' | 'ultra' | 'max' | 'team' … | null），按可信度从高到低：
+//   ① 用户在号池里手动标的；② 本机登录态的号看登录凭据；③ 权威来源记下的 tier（profile / 同组织登录凭据）；
+//   ④ SDK 的 subscription_type（'max' 再看是不是最高档 / 没有 5 小时限额 → Ultra，否则只能说 Max）；
+//   ⑤ 只剩启发：没有 5 小时限额或 upgrade-paths 说已到顶 → Ultra。
+// 「有 Fable 周桶」不再算 Max 的证据：2026-11 起 Pro 也有体验 Fable 的活动，会带同一组 7d_oi 桶。
+export function resolvePlan(id) {
+  const manual = id ? accountManualPlan(id) : '';
+  if (manual) return manual;
+  if (id && usesLogin(id)) { const lp = loginPlan(); if (lp) return lp; }
+  const st = byAccount[id];
+  if (!st) return null;
+  if (st.tier && TIERS.has(st.tier)) return st.tier;
+  const top = st.noFiveHour || st.topTier;
+  const sub = String(st.plan || '').toLowerCase();
+  if (sub === 'max') return top ? 'ultra' : 'max';
+  if (sub) return sub;
+  return top ? 'ultra' : null;
+}
+const planLabel = (code) => (code ? (PLAN_LABEL[code] || (code[0].toUpperCase() + code.slice(1))) : null);
+
 export const statusState = {
   get limits() { return slot().limits; },
   get updatedAt() { return slot().updatedAt; },
-  get plan() { return slot().plan; },
+  get plan() { return planLabel(resolvePlan(activeAccountId() || '_')); },
+  get noFiveHour() { return !!slot().noFiveHour; },
 };
 // 指定账号的额度桶快照（智能路由判断「这个号还能不能用」）；没记录过 = 空对象。
 export function accountLimits(acct) { return (byAccount[acct] && byAccount[acct].limits) || {}; }
-export function accountPlan(acct) { return (byAccount[acct] && byAccount[acct].plan) || null; }
+// 套餐代号（小写，见 resolvePlan）；显示名用 PLAN_LABEL。
+export function accountPlan(acct) { return resolvePlan(acct); }
+
+// 权威来源定出的套餐档（overlay 用量来源：profile 接口 / 同组织的本机登录凭据）。null = 清掉。
+export function notePlanTier(acct, tier) {
+  const v = TIERS.has(tier) ? tier : null;
+  const st = slot(acct);
+  if (st.tier === v) return;
+  st.tier = v; persistStatus();
+}
+// 响应头 / rate_limit_event 的 upgrade-paths（'upgrade_plan,overage' 字符串或数组）：带了才判断。
+export function noteUpgradePaths(acct, paths) {
+  const list = Array.isArray(paths) ? paths : (typeof paths === 'string' && paths.trim() ? paths.split(',') : null);
+  if (!list) return;
+  const top = !list.map((x) => String(x).trim()).includes('upgrade_plan');
+  const st = slot(acct);
+  if (st.topTier !== top) { st.topTier = top; persistStatus(); }
+}
+export function accountNoFiveHour(acct) { return !!(byAccount[acct] && byAccount[acct].noFiveHour); }
+
+// 权威来源这次是否带了 5 小时桶：带了 → 复位；明确只有周桶 → 置位并清掉旧的 five_hour 读数。
+// 返回是否有变化（调用方负责落盘）。has7d 为假（这次啥都没拿到）时不动，免得一次失败把标记冲掉。
+function noteFiveHour(st, has5h, has7d) {
+  if (has5h) { if (st.noFiveHour) { st.noFiveHour = false; return true; } return false; }
+  if (!has7d) return false;
+  let changed = false;
+  if (!st.noFiveHour) { st.noFiveHour = true; changed = true; }
+  if (st.limits.five_hour) { delete st.limits.five_hour; changed = true; }
+  return changed;
+}
+// 响应头读数（无缝换号上游代理 / overlay 探头）用：这次头里有没有 5h / 7d 桶。
+export function noteFiveHourPresence(acct, has5h, has7d) {
+  const st = slot(acct);
+  if (noteFiveHour(st, !!has5h, !!has7d)) { st.updatedAt = Date.now(); persistStatus(); }
+}
 const contexts = new Map(); // caller key -> { used, total, pct, sessionId }
 let lastRejection = null; // { type, resetsAt } — most recent hard rejection
 let statusSaveTimer = null;
@@ -43,7 +141,8 @@ export function initStatus(root) {
     if (s && typeof s === 'object') {
       // 旧版顶层 limits 是各号混记的，分不清归属——直接丢，下一轮额度事件按号重新填。
       for (const [id, v] of Object.entries(s.accounts && typeof s.accounts === 'object' ? s.accounts : {})) {
-        if (v && typeof v === 'object') byAccount[id] = { limits: v.limits || {}, updatedAt: v.updatedAt || 0, plan: v.plan || null };
+        if (v && typeof v === 'object') byAccount[id] = { limits: v.limits || {}, updatedAt: v.updatedAt || 0, plan: v.plan ? String(v.plan).toLowerCase() : null,
+          tier: TIERS.has(v.tier) ? v.tier : null, topTier: !!v.topTier, noFiveHour: !!v.noFiveHour };
       }
       // contexts persisted as a key->ctx map; tolerate the legacy single `context` (admin's).
       const saved = (s.contexts && typeof s.contexts === 'object') ? s.contexts : (s.context ? { admin: s.context } : {});
@@ -102,7 +201,11 @@ export function applyRateLimit(info, acct) {
         ...(prev.label ? { label: prev.label } : {}),
       };
     }
+    // 没有 5 小时限额的号（部分 Ultra）：unifiedWindows 只有周桶。主导桶是 five_hour 的帧不算（那就是有）。
+    if (info.rateLimitType !== 'five_hour') noteFiveHour(st, !!uw.five_hour, !!uw.seven_day);
+    else noteFiveHour(st, true, true);
   }
+  if (info.upgradePaths) noteUpgradePaths(acct, info.upgradePaths);
   // 主导桶：事件顶层 status/resetsAt/utilization（老版本才有 utilization）；被拒 = 这桶已 100%。
   const prev = st.limits[info.rateLimitType] || {};
   const pct = info.status === 'rejected' ? 100
@@ -151,7 +254,6 @@ export function applyProbedLimits(buckets, acct) {
 // SDK 控制接口 usage_EXPERIMENTAL 的响应（= Claude Code /usage 的数据）：五小时/每周 + 按模型的
 // 每周桶（model_scoped，服务端给了才有——Fable/Opus/Sonnet 单桶就从这里来）+ 套餐类型。
 // 与响应头来源（applyProbedLimits）互补：同键覆盖、缺的保留。
-const PLAN_NAMES = { pro: 'Pro', max: 'Max', team: 'Team', enterprise: 'Enterprise' };
 export function applySdkUsage(u, acct) {
   if (!u || typeof u !== 'object') return false;
   const st = slot(acct);
@@ -169,8 +271,11 @@ export function applySdkUsage(u, acct) {
   }
   let changed = false;
   if (Object.keys(buckets).length) { applyProbedLimits(buckets, acct); changed = true; }
-  const sub = typeof u.subscription_type === 'string' ? u.subscription_type.toLowerCase() : '';
-  const plan = sub ? (PLAN_NAMES[sub] || (sub[0].toUpperCase() + sub.slice(1))) : null;
+  // five_hour 为 null / 利用率为 null 而周桶有数 = 这个号没有 5 小时限额（部分 Ultra）。
+  if (noteFiveHour(st, !!buckets.five_hour, !!buckets.seven_day)) { changed = true; persistStatus(); }
+  // 原文小写存（'max' 分不出 5x / 20x，由 resolvePlan 再结合别的线索定档）。
+  const sub = typeof u.subscription_type === 'string' ? u.subscription_type.trim().toLowerCase() : '';
+  const plan = sub || null;
   if (plan !== st.plan) { st.plan = plan; changed = true; persistStatus(); }
   return changed;
 }

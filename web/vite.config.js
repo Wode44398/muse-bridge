@@ -4,7 +4,7 @@ import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { bridgeModuleChunks } from './scripts/module-chunks.mjs';
 import { chatgptPage } from './scripts/chatgpt-overlay.mjs';
-import { overlayBundle } from './scripts/overlay-bundle.mjs';   // apk 出包时把私有 overlay 打进离线壳（公开版 / 没有 overlay 什么都不做）
+import { overlayBundle } from './scripts/overlay-bundle.mjs';   // 每次构建都把原版视觉资源打进产物的 _ov/（找不到就构建失败）
 
 // The Bridge — mobile web frontend.
 // Dev serves at the root (base '/') so the page loads at http://127.0.0.1:5173/.
@@ -30,8 +30,8 @@ const HARNESS_SRC = fileURLToPath(new URL('../harness/web/src', import.meta.url)
 const APK_OUT = process.env.BRIDGE_APK_OUT || '';
 
 // Codex 分页的界面（ChatGPT 页面）不在本仓库，由维护者的私有 overlay 提供（<overlay>/web/chatgpt/）：构建结束拷进
-// <outDir>/chatgpt 并给它引用的脚本 / 样式打内容哈希；dev 从 overlay 直接发 /chatgpt/*。没有 overlay 或公开版出包
-// （BRIDGE_EDITION=public）就不带，Codex 分页打开时提示「此版本未包含」。见 scripts/chatgpt-overlay.mjs。
+// <outDir>/chatgpt 并给它引用的脚本 / 样式打内容哈希；dev 从 overlay 直接发 /chatgpt/*。找不到页面就构建失败
+// （发行树取 frontend-assets 里的快照）。见 scripts/chatgpt-overlay.mjs。
 
 // 新旧构建的 hash 资产并存：生产 8787 上「构建即部署」，emptyOutDir 一清空，
 // 已打开的旧页面下一次懒加载（预览器/编辑器 chunk）就 404——桌面壳/手机端表现为

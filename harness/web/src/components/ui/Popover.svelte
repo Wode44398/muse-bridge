@@ -23,6 +23,7 @@
     role = "menu",
     label,
     flush = false,
+    tall = false,
   }: {
     anchor: HTMLElement | null | undefined;
     onclose: () => void;
@@ -35,6 +36,7 @@
     role?: "menu" | "dialog" | "listbox";
     label?: string;
     flush?: boolean;
+    tall?: boolean; // 内容多的面板（上下文面板）：桌面也给到 640 高（仍不超出视口）
   } = $props();
 
   let el: HTMLDivElement | undefined = $state();
@@ -134,6 +136,7 @@
   use:portal
   class="pop"
   class:flush
+  class:tall
   class:placed={pos.placed}
   style="left:{pos.left}px;top:{pos.top}px;min-width:min({minWidth}px, calc(100vw - 20px));max-width:min({maxWidth}px, calc(100vw - 20px));transform-origin:{pos.origin}"
   {role}
@@ -174,6 +177,9 @@
 
   .pop.placed {
     visibility: visible;
+  }
+  .tall {
+    max-height: min(640px, calc(100dvh - 24px));
   }
   .flush {
     padding: 0;

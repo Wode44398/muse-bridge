@@ -84,6 +84,12 @@ export function configFile(): string {
   return guard("运行配置文件", fromEnv("DIMENSIO_CONFIG_FILE") ?? path.resolve(dataHome(), "runtime-config.json"));
 }
 
+// 会话协作（session-family.ts）：父子会话台账与还没送达的会话消息（收件箱、发往 bridge 的外发箱）。放在运行配置同目录
+// （同 prefs.json），跟着数据目录走；不另设环境变量。
+export function sessionFamilyFile(): string {
+  return guard("会话协作台账", path.join(path.dirname(configFile()), "session-family.json"));
+}
+
 // 自定义模型服务（custom-providers.ts）：providers.json 是地址与备注，同目录的 connector-secrets.* 是加密的 API key。
 export function customProvidersDir(): string {
   return guard("自定义模型服务目录", fromEnv("DIMENSIO_CUSTOM_PROVIDERS_DIR") ?? path.resolve(dataHome(), "custom-providers"));

@@ -219,6 +219,19 @@ test("真 harness：同一条重发不起第二轮（409 duplicate_run）；带�
     assert.equal((await getJson(`/api/sessions/${receipt.sessionId}/status`)).running, true, "没被旧的停止误伤");
     assert.equal((await getJson(`/api/sessions/${receipt.sessionId}/status`)).runId, cid);
 
+    // 11-07：底座按上一轮切的客户端来附着直播——不许把这一轮的重放接给它（拼上去新一轮的用户消息就没了），409 让它重新对账
+    const staleAttach = await fetch(`${base}/api/sessions/${receipt.sessionId}/stream?runId=stale-run-0007`, { headers });
+    assert.equal(staleAttach.status, 409);
+    assert.equal(((await staleAttach.json()) as any).error, "run_mismatch");
+    const attachCtl = new AbortController();
+    const okAttach = await fetch(`${base}/api/sessions/${receipt.sessionId}/stream?runId=${cid}`, { headers, signal: attachCtl.signal });
+    assert.equal(okAttach.status, 200, "runId 对得上照常附着");
+    attachCtl.abort();
+    const legacyCtl = new AbortController();
+    const legacyAttach = await fetch(`${base}/api/sessions/${receipt.sessionId}/stream`, { headers, signal: legacyCtl.signal });
+    assert.equal(legacyAttach.status, 200, "不带 runId 的旧客户端照旧");
+    legacyCtl.abort();
+
     const stop = await post("/api/stop", { sessionId: receipt.sessionId, runId: cid });
     assert.equal(stop.status, 200);
     assert.equal(((await stop.json()) as any).turnAborted, true);

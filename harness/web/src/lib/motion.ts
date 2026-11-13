@@ -303,3 +303,72 @@ export function withViewTransition(fn: () => void) {
     fn();
   }
 }
+
+// 明暗换场（点标志切明暗，见 ThemeMark.svelte）：新的纸色从点下去的那枚标志以柔边圆波铺开——水面上的一圈涟漪。
+//   · 波前先快后慢：标志周围一瞬间就换了，最远的角落慢慢收完；
+//   · 新画面边铺边从 1.01 落定到 1、旧画面朝外推远 1%（再大，柔边里新旧两层文字会错开成重影），波前两侧一收一放；入夜时旧画面同时暗下去（黄昏）。
+// 与 bridge 主页的明暗换场（web/src/lib/pageMorph.js 的 morphTheme）同一种说法，伪元素样式在 app.css 的 html[data-hx-vt] 段。
+// 伪元素动画挂在 <html> 上、fill 停在终值：收场必须逐个撤掉，否则会串进 bridge 下一次转场的同名伪元素（old(root) 一直是暗的）。
+// 兜底：不支持 / 减弱动效 / 后台 / bridge 自己的转场正在跑（html[data-vt]）——直接换。
+const REVEAL_MS = 900;
+export function themeReveal(origin: Element | null, update: () => void | Promise<void>, toDark: boolean) {
+  type VT = { ready: Promise<void>; finished: Promise<void> };
+  const d = document as Document & { startViewTransition?: (cb: () => void | Promise<void>) => VT };
+  const root = document.documentElement;
+  const r = origin?.getBoundingClientRect();
+  if (!d.startViewTransition || reducedMotion() || document.hidden || root.dataset.vt || root.dataset.hxVt || !r) {
+    void update();
+    return;
+  }
+  const ox = r.left + r.width / 2;
+  const oy = r.top + r.height / 2;
+  const W = innerWidth;
+  const H = innerHeight;
+  const far = Math.max(Math.hypot(ox, oy), Math.hypot(W - ox, oy), Math.hypot(ox, H - oy), Math.hypot(W - ox, H - oy));
+  const feather = Math.round(Math.min(260, Math.max(120, far * 0.22)));
+  const vars: Record<string, string> = { "--hx-vt-ox": `${ox}px`, "--hx-vt-oy": `${oy}px`, "--hx-vt-f": `${feather}px` };
+  const anims: Animation[] = [];
+  // 标志单独成层：换场期间新画面是实时快照，标志翻面每一帧都会让整页重画进快照；单独命名后只更新它自己（app.css）
+  const mark = origin instanceof HTMLElement || origin instanceof SVGElement ? origin : null;
+  const cleanup = () => {
+    for (const a of anims.splice(0)) a.cancel();
+    delete root.dataset.hxVt;
+    for (const k of Object.keys(vars)) root.style.removeProperty(k);
+    if (mark) mark.style.viewTransitionName = "";
+    // 宿主（bridge）等换场落幕才同步自己的明暗：那边会唤醒隐藏主页的壁纸，放在换场中途就是一下顿挫
+    window.dispatchEvent(new Event("dimensio-theme-settled"));
+  };
+  root.dataset.hxVt = "theme";
+  for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+  if (mark) mark.style.viewTransitionName = "hx-vt-mark";
+  let vt: VT;
+  try {
+    vt = d.startViewTransition(update);
+  } catch {
+    cleanup();
+    void update();
+    return;
+  }
+  const easing = "cubic-bezier(.3,.55,.18,1)";
+  const anim = (pseudo: string, frames: Keyframe[], opts: KeyframeAnimationOptions) => {
+    try {
+      anims.push(root.animate(frames, { fill: "both", ...opts, pseudoElement: `::view-transition-${pseudo}` }));
+    } catch {
+      /* 不认伪元素动画的内核：退回 UA 的交叉淡化之前已经关了，这里就是硬切 */
+    }
+  };
+  vt.ready
+    .then(() => {
+      anim("new(root)", [{ "--hx-vt-r": "0px" }, { "--hx-vt-r": `${far + feather}px` }], { duration: REVEAL_MS, easing });
+      anim("new(root)", [{ transform: "scale(1.01)" }, { transform: "scale(1)" }], { duration: REVEAL_MS + 200, easing: "cubic-bezier(.16,1,.3,1)" });
+      anim(
+        "old(root)",
+        toDark
+          ? [{ transform: "scale(1)", filter: "brightness(1)" }, { transform: "scale(1.01)", filter: "brightness(.6)" }]
+          : [{ transform: "scale(1)" }, { transform: "scale(1.01)" }],
+        { duration: REVEAL_MS, easing },
+      );
+    })
+    .catch(() => {});
+  vt.finished.catch(() => {}).finally(cleanup);
+}

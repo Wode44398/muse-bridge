@@ -48,7 +48,7 @@ test.after(() => rmSync(tmp, { recursive: true, force: true }));
 
 test('装：排进待生效，重启后才加载；打包号不对 / 不认识的 id 拒装', () => {
   const good = makePackage('codex', { id: 'codex', version: '2026.10.18', buildId: 'b-123', entry: 'server/index.mjs' }, { nested: true });
-  const stale = makePackage('vertex', { id: 'vertex', version: 'old', buildId: 'b-OLD' });
+  const stale = makePackage('studio', { id: 'studio', version: 'old', buildId: 'b-OLD' });
   const alien = makePackage('nope', { id: 'nope', buildId: 'b-123' });
   const r1 = run(`
     out.install = await m.installModuleArchive(${JSON.stringify(good)});
@@ -93,11 +93,11 @@ test('卸：排待卸载标记，重启后才删；没装的报 404', () => {
 });
 
 test('打包号对不上的已装扩展：不加载，原因写进状态', () => {
-  const dir = path.join(dataRoot, 'modules', 'vertex');
+  const dir = path.join(dataRoot, 'modules', 'studio');
   mkdirSync(path.join(dir, 'server'), { recursive: true });
-  writeFileSync(path.join(dir, 'bridge-module.json'), JSON.stringify({ id: 'vertex', buildId: 'b-OLD' }));
+  writeFileSync(path.join(dir, 'bridge-module.json'), JSON.stringify({ id: 'studio', buildId: 'b-OLD' }));
   writeFileSync(path.join(dir, 'server', 'index.mjs'), 'export const runnable = () => true;\n');
-  const r = run(`out.st = m.modulesOverview().modules.find((x) => x.id === 'vertex');`);
+  const r = run(`out.st = m.modulesOverview().modules.find((x) => x.id === 'studio');`);
   assert.equal(r.st.loaded, false);
   assert.match(r.st.error, /版本不匹配/);
 });

@@ -9,23 +9,17 @@
 </script>
 
 <script>
-  // Claude 星标。
-  // 公开版：静止 = Claude 的服务标志（LobeHub 版，MIT，lib/claudeMark.js）；运行动画 = 自绘星标 + CSS 关键帧（StarMark）。
-  // 维护者的私有 overlay 带了原版竖向条带时（清单 data.marks.strips = { 名字: { file, frames, speed, loop } }，图在 overlay 的
-  // logo-animations/strips/<file>.svg），用 Web Animations API 逐帧播条带。条带当 CSS 遮罩用（底色 = currentColor），
-  // 不把取来的 SVG 塞进页面——离线壳跨源取到的东西只当图片用，不进 DOM。
-  // `color` 给颜色；`interactive`：点一下播一次彩蛋（overlay 是 tickle 条带，公开版是轻轻一扭），然后回到原状态。
-  // `onpress`：点击时额外回调（Claude 页拿它当明暗主题快捷切换；运行态点了也照样触发，只是不播彩蛋）。
+  // Claude 星标：原版竖向条带（清单 data.marks.strips = { 名字: { file, frames, speed, loop } }，
+  // 图在 logo-animations/strips/<file>.svg），用 Web Animations API 逐帧播；静止 = static 条带第 0 帧。
+  // 条带当 CSS 遮罩用（底色 = currentColor），不把取来的 SVG 塞进页面。
+  // `color` 给颜色；`interactive`：点一下播一次 tickle 彩蛋，然后回到原状态。
+  // `onpress(el)`：点击时额外回调，参数是标志按钮本身（Claude 页拿它当明暗换场的波心；运行态点了也照样触发，只是不播彩蛋）。
   // NB: the prop is `anim`, NOT `state` (which collides with the $state rune).
   import { ovData, ovUrl } from '../lib/overlay.svelte.js';
-  import { CLAUDE_MARK_PATH } from '../lib/claudeMark.js';
-  import StarMark from './StarMark.svelte';
 
   let { anim = 'static', size = 30, color = 'var(--coral)', interactive = false, onpress = null } = $props();
 
   const ANIM = $derived(ovData('marks')?.strips || null);
-  // 公开版的动作映射（见 StarMark 顶部）
-  const MODE = { entrance: 'enter', exit: 'exit', tickle: 'tickle', thinking: 'think', writing: 'work', waiting: 'wait', orbiting: 'tool', shimmer: 'wait' };
 
   function loadStrip(file) {
     if (!stripCache.has(file)) {
@@ -73,8 +67,8 @@
     if (once) { playing = true; player.onfinish = () => { playing = false; run(tbl, anim, false); }; }
   }
 
-  function tickle() {
-    onpress?.();
+  function tickle(e) {
+    onpress?.(e?.currentTarget ?? null);
     // 循环运行态（thinking/writing/orbiting/shimmer/waiting）不接彩蛋：状态动画不被点断。
     const tbl = ANIM;
     if (!tbl || !interactive || playing || (tbl[anim] && tbl[anim].loop)) return;
@@ -87,30 +81,9 @@
     if (!playing) run(tbl, a, false);
     return () => { if (player) player.cancel(); };
   });
-
-  // 公开版静止标志的彩蛋：点一下扭一扭
-  let wiggle = $state(false);
-  function poke() {
-    onpress?.();
-    if (!interactive || wiggle) return;
-    wiggle = true;
-    setTimeout(() => { wiggle = false; }, 620);
-  }
 </script>
 
-{#snippet mark()}
-  <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true" focusable="false"><path d={CLAUDE_MARK_PATH} /></svg>
-{/snippet}
-
-{#if !ANIM && anim === 'static'}
-  {#if interactive}
-    <button type="button" class="cmark" class:wiggle style="width:{size}px;height:{size}px;color:{color}" onclick={poke} aria-label="Claude">{@render mark()}</button>
-  {:else}
-    <span class="cmark" style="width:{size}px;height:{size}px;color:{color}" aria-hidden="true">{@render mark()}</span>
-  {/if}
-{:else if !ANIM}
-  <StarMark mode={MODE[anim] || 'static'} {size} {color} {interactive} {onpress} />
-{:else if interactive}
+{#if interactive}
   <button class="clogo interactive" style="width:{size}px;height:{size}px;color:{color}" onclick={tickle} aria-label="Claude">
     <span class="strip" bind:this={inner}></span>
   </button>
@@ -127,17 +100,4 @@
   .strip { display: block; width: 100%; height: 100%; background: currentColor; will-change: transform;
     -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: 100% 100%; mask-size: 100% 100%; }
   @media (max-resolution: 1.99dppx) { .clogo { clip-path: inset(.5px 0); } }
-
-  .cmark { display: inline-flex; align-items: center; justify-content: center; flex: none; line-height: 0; padding: 0; border: none; background: none; }
-  button.cmark { cursor: pointer; }
-  .cmark svg { display: block; fill: currentColor; }
-  @media (prefers-reduced-motion: no-preference) {
-    .cmark.wiggle svg { animation: cmark-wiggle .6s cubic-bezier(.36, .07, .19, .97); }
-  }
-  @keyframes cmark-wiggle {
-    0%, 100% { transform: rotate(0); }
-    20% { transform: rotate(-14deg) scale(1.04); }
-    45% { transform: rotate(10deg); }
-    70% { transform: rotate(-5deg); }
-  }
 </style>

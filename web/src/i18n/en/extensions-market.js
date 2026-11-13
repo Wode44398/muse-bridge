@@ -117,6 +117,7 @@ export default {
   '需要批准': 'Needs approval',
   '禁止': 'Blocked',
   '本地连接器 · 在对话里启动': 'Local connector · starts inside a chat',
+  '本机服务未运行 · 启动后自动连上': 'Local service isn’t running · connects once it starts',
   '正在准备授权…': 'Preparing sign-in…',
   '等待你在授权页完成登录': 'Waiting for you to finish signing in',
   '已连接 · {n} 个工具': { one: 'Connected · {n} tool', other: 'Connected · {n} tools' },

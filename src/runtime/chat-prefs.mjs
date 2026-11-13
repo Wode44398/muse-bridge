@@ -64,13 +64,17 @@ export function recordChatPrefs(ctx, sessionId, prefs) {
   const prevMode = prev?.permissionMode;
   //  · computer（会话连接的设备，setDeviceLink 写；新会话的第一轮可由请求带来）：同上，不进 last。
   const link = linkOf(prev?.computer) || linkOf(prefs?.computer);
-  const entry = { ...norm(prefs), ...(style ? { outputStyle: style } : {}), ...(prevMode ? { permissionMode: prevMode } : {}), ...(link ? { computer: link } : {}), at: Date.now() };
+  //  · shape（项目模式，runtime/project-mode.mjs）：只在新会话的第一次记录时由请求带来，之后一直保住；不进 last。
+  const shape = prev?.shape === 'project' || prefs?.shape === 'project' ? 'project' : null;
+  const entry = { ...norm(prefs), ...(style ? { outputStyle: style } : {}), ...(prevMode ? { permissionMode: prevMode } : {}), ...(link ? { computer: link } : {}), ...(shape ? { shape } : {}), at: Date.now() };
   data.sessions[sessionId] = entry;
   data.last = { ...lastOf(prefs), at: entry.at };
   const ids = Object.keys(data.sessions);
   if (ids.length > CAP) {
-    ids.sort((a, b) => (data.sessions[a]?.at || 0) - (data.sessions[b]?.at || 0));
-    for (const id of ids.slice(0, ids.length - CAP)) delete data.sessions[id];
+    // 项目对话的条目不淘汰：形态丢了，续聊就会拿普通会话的参数去跑一个协调者 transcript
+    const drop = ids.filter((id) => data.sessions[id]?.shape !== 'project');
+    drop.sort((a, b) => (data.sessions[a]?.at || 0) - (data.sessions[b]?.at || 0));
+    for (const id of drop.slice(0, ids.length - CAP)) delete data.sessions[id];
   }
   persist(file, data);
 }

@@ -16,7 +16,8 @@ export function handleBrowserMessage(session, data) {
       const target = params?.targetInfo;
       // 共享无头宿主里同一个人别的工作空间的标签也会报上来，只认自己的；自己页面 window.open / target=_blank
       // 开出来的（openerId 是自己的标签）收养进来，否则弹窗成了谁都看不见的游离标签。
-      if (target?.type === 'page' && target.targetId && session.sharedHost
+      // Web Bridge（用户的浏览器）同理：扩展把弹出来的标签放进会话自己的组，并带上 openerId
+      if (target?.type === 'page' && target.targetId && (session.sharedHost || session.webBridge)
           && target.openerId && session.ownedTargets.has(String(target.openerId))) {
         session.ownedTargets.add(String(target.targetId));
       }
@@ -75,6 +76,9 @@ export function handlePageMessage(session, data) {
       if (params?.frame && !params.frame.parentId) {
         session.mainFrameId = String(params.frame.id ?? '');
         session.navSeq = (session.navSeq || 0) + 1;
+        // 主框架换了文档（含刷新）：console 换纪元，旧页面的日志默认不再交给 agent（同 DevTools 不勾 Preserve log）。
+        // 页内跳转（navigatedWithinDocument，SPA 的 pushState）文档没换，不算。
+        session.docSeq = (session.docSeq || 0) + 1;
         session.url = params.frame.url;
         session.syncActiveTabUrl(session.url);
       }

@@ -18,15 +18,19 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { CONFIG_PATH, config, VERTEX_PROJECT, GEMINI_API_KEY } from '../config/index.mjs';
-import { AGENTS, AGENT_IDS, AGENT_BY_ID } from '../config/agents.mjs';
+import { AGENTS, AGENT_IDS, AGENT_BY_ID, RETIRED_AGENTS } from '../config/agents.mjs';
 import { busPublishAll } from './bus.mjs';
 import { agentModuleRunnable, getModule, moduleOfAgent, moduleOffered, moduleStatus } from '../modules/registry.mjs';
 import { vertexCredentials } from './vertex-credentials.mjs';
 
 // ── 开关 ────────────────────────────────────────────────────────────────────
+// 老开关里的 gemini（2026-11-04 Gemini 对话下线）：studio 没单独设过时按它来——关过 Gemini 的服务器，Media Studio 也先关着
 function normSwitches(raw) {
   const out = {};
-  if (raw && typeof raw === 'object') for (const id of AGENT_IDS) if (typeof raw[id] === 'boolean') out[id] = raw[id];
+  if (raw && typeof raw === 'object') {
+    for (const id of AGENT_IDS) if (typeof raw[id] === 'boolean') out[id] = raw[id];
+    for (const [old, now] of Object.entries(RETIRED_AGENTS)) if (typeof raw[old] === 'boolean' && !(now in out)) out[now] = raw[old];
+  }
   return out;
 }
 let switches = normSwitches(config.agents);
@@ -68,7 +72,10 @@ const AUTHED = {
     // 只认 claude login 的凭据：这个文件里也可能只有 MCP 服务的 OAuth 状态（mcpOAuth）
     return fileHasKey(path.join(cfgDir, '.credentials.json'), /"claudeAiOauth"/);
   },
-  gemini: () => {
+  // Media Studio：有能用的服务就算（扩展自报，含一键导入的 Vertex）；扩展老版本没这个导出时退回看主机的 Google 凭据 / Key。
+  studio: () => {
+    const fn = getModule('studio')?.studioAuthed;
+    if (typeof fn === 'function') return !!fn();
     if (GEMINI_API_KEY) return true;
     if (!VERTEX_PROJECT) return false;
     if (vertexCredentials()) return true;   // 设置页上传的凭据

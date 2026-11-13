@@ -72,8 +72,7 @@
     try { await navigator.clipboard.writeText(details); copied = true; setTimeout(() => { copied = false; }, 1400); } catch {}
   }
 
-  // 用量仪表图标：公开版用 Lucide 的 gauge（ISC，描边）；维护者的私有 overlay 在清单 data.glyphs.usageGauge 里带了
-  // 原版字形（{ viewBox, transform?, d }，填充轮廓）时换成原版。
+  // 用量仪表图标：原版字形（清单 data.glyphs.usageGauge：{ viewBox, transform?, d }，填充轮廓）
   const ovGauge = $derived.by(() => {
     const g = ovData('glyphs')?.usageGauge;
     return g && typeof g.d === 'string' && typeof g.viewBox === 'string' ? g : null;
@@ -84,8 +83,6 @@
   <div class="lc-head">
     {#if ovGauge}
       <svg class="lc-ic" viewBox={ovGauge.viewBox} aria-hidden="true"><path transform={ovGauge.transform || undefined} d={ovGauge.d} /></svg>
-    {:else}
-      <svg class="lc-ic lc-ic-line" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" /></svg>
     {/if}
     <span class="lc-title">{headline}</span>
   </div>
@@ -127,7 +124,6 @@
     margin: 6px 0; font-size: 14px; line-height: 20px; color: var(--text); overflow-wrap: anywhere; }
   .lc-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: color-mix(in srgb, var(--text) 5%, transparent); }
   .lc-ic { flex: none; width: 16px; height: 16px; fill: var(--crit); }
-  .lc-ic-line { fill: none; stroke: var(--crit); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .lc-title { min-width: 0; flex: 1; color: var(--text); }
   .lc-body { display: flex; flex-direction: column; gap: 10px; padding: 12px 12px 8px; }
   .lc-body:last-child { padding-bottom: 12px; }

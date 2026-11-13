@@ -86,7 +86,8 @@ export function registerAgentApiRoutes(router, { identify, adminGen }) {
     const p = url.pathname;
     const isAgent = p === '/agent' || p.startsWith('/agent/') || p === '/llms.txt';
     // 插件工具给 dimensio 的 MCP 端点与 dimensio 回合回报（plugins/agent-mcp.mjs）是核心的精确路由，自己鉴权，这里放过
-    if (!isAgent || p === '/agent/mcp/plugins' || p === '/agent/events') return;
+    // dimensio 会话协作（/agent/family/*，modules/dimensio/server/routes/family.mjs）同样是扩展自己鉴权的精确路由
+    if (!isAgent || p === '/agent/mcp/plugins' || p === '/agent/events' || p.startsWith('/agent/family/')) return;
     cors(res);
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return false; }
     if (req.method !== 'GET' && req.method !== 'POST') { sendJson(res, 405, errBody(new OpError('bad_args', '只收 GET / POST'))); return false; }

@@ -33,8 +33,9 @@ export default {
   '返回主页': 'Back to Home',
 
   // —— Claude 页顶栏 ——
-  // Claude 页顶栏菜单钮（官方 Open / Close sidebar，与 claude-chat 的「关闭侧栏」同值）；plain「收起侧栏」与 dimensio 侧栏同为 Collapse sidebar
+  // Claude 页侧栏开关（官方 Open / Close sidebar，与 claude-chat 的「关闭侧栏」同值）；plain「收起侧栏」与 dimensio 侧栏同为 Collapse sidebar
   'claude::收起侧栏': 'Close sidebar',
+  'claude::展开侧栏': 'Open sidebar',
   '收起侧栏': 'Collapse sidebar',
   '菜单': 'Menu',
   '切换明暗主题': 'Toggle light/dark theme',
@@ -99,7 +100,6 @@ export default {
   '下载失败：{reason}': 'Couldn’t download: {reason}',
   '写入失败': 'Couldn’t write the file',
   // —— 主页明暗（iOS 没有流光动态壁纸）——
-  '暗色主页需要先在设置 · 壁纸里选一张图片': 'To use the dark home screen, pick an image in Settings · Wallpaper first',
   '通知 语言 自启': 'notifications language startup',
   '设置 · 外观': 'Settings · Appearance',
   '明暗 深色 浅色 动画': 'appearance dark light animation',

@@ -143,7 +143,7 @@ export type AgentEvent =
   | { e: "plan_resolved"; id: string; approved: boolean; note?: string; handoff?: boolean; by?: DecidedBy }
   // The session's permission mode changed at runtime (plan approved → auto), so
   // every attached device can update its mode indicator.
-  | { e: "mode"; permissionMode: "auto" | "read-only" | "plan" }
+  | { e: "mode"; permissionMode: "auto" | "read-only" | "plan" | "bypass" }
   | {
       e: "tool_end";
       id: string;
@@ -188,6 +188,12 @@ export type AgentEvent =
   // The agent's shared browser moved somewhere — the frontend opens/updates the
   // live Browser pane (screencast) on this.
   | { e: "browser"; url: string; edge?: boolean } // edge = 动的是用户自己的 Edge/Chrome（经扩展），不是内置浏览器——前端别为它展开浏览器面板
+  // ── 工作区协同（tools/workspace.ts、tools/terminal.ts；前端在 web/src/lib/workspace-collab.svelte.ts）──
+  // preview = 把工作空间里的文件弹到用户眼前（path 相对工作空间）；draft = 请用户端交回编辑器里未保存的草稿（POST /api/ui/answer）。
+  // 重连会重放：前端按 id 去重、at 超过 60 秒的不执行；client = 只让这一端应答。
+  | { e: "workspace"; op: "preview" | "draft"; id: string; at: number; path?: string; ws?: string; client?: string }
+  // agent 动了工作区里那个共享终端：前台宽屏展开终端面板，否则标签上亮小点
+  | { e: "terminal"; action: string; at: number }
   // A headless screenshot of the preview, optionally with a multimodal model's
   // text verdict. Pushed by the Preview tool's screenshot action so the user can
   // see what the agent "looked at".
@@ -226,6 +232,10 @@ export type AgentEvent =
   | { e: "skill_loaded"; name: string; via: "slash"; pkg?: boolean }
   // 适配器层的提示，原样转给前端在时间线上写一行（见 StreamEvent 同名事件）
   | { e: "notice"; code: "fast_fallback"; cooldownMs: number }
+  // 会话协作（session-family.ts）：这一轮跑着时别的会话发来的消息已在回合边界注入（kind 同 Msg.kind；界面上画成会话消息卡）
+  | { e: "session_message"; kind: string; text: string }
+  // 会话协作：StartSession 开出了一个子会话（工具行据此直接链过去；child 是新会话 id，agent 是它在哪边）
+  | { e: "family_link"; parent: string; child: string; title: string; name: string; agent?: "dimensio" | "claude"; toolId?: string }
   // N45：这一轮开跑时自动召回了哪些（标题、类别、理由，不含正文）——挂在本轮用户消息下（界面上「召回 N 条」）
   | { e: "recall"; items: RecallRef[] }
   // ── Sub-agents / workflows (visibility into delegated work) ──────────────

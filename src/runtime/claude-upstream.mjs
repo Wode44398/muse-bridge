@@ -38,13 +38,14 @@ import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { plainDispatcher } from './net-proxy.mjs';
 import { activeAccountId, accountIdForToken, listAccountsWithTokens, setEngineUpstream } from './claude-account.mjs';
 import { isCustomModelId, resolveSubagentModel } from './claude-providers.mjs';
 import { isAutoModel, resolveAuto, applyAutoTarget } from './model-ratings.mjs';
 import { providersProxyBase, ownerOfRouteToken } from './claude-providers-proxy.mjs';
 import { seamlessActive, leaveIfBlocked, noteLimitHit, onRouterSettings } from './account-router.mjs';
 import { loginToken, bucket } from './account-usage.mjs';
-import { applyProbedLimits } from './status.mjs';
+import { applyProbedLimits, noteFiveHourPresence, noteUpgradePaths } from './status.mjs';
 
 const UPSTREAM = String(process.env.BRIDGE_CLAUDE_UPSTREAM || 'https://api.anthropic.com').replace(/\/+$/, '');
 const DEBUG = process.env.BRIDGE_UPSTREAM_DEBUG === '1';   // 逐请求打一行：用的哪个号、回了什么
@@ -75,6 +76,8 @@ function noteHeaders(headers, acct) {
   const out = {};
   for (const [abbr, name] of Object.entries(BUCKETS)) { const b = bucket(h, abbr); if (b) out[name] = b; }
   if (Object.keys(out).length) applyProbedLimits(out, acct);
+  noteFiveHourPresence(acct, !!out.five_hour, !!out.seven_day);   // 只有周桶 = 没有 5 小时限额（部分 Ultra）
+  noteUpgradePaths(acct, h('upgrade-paths'));   // 额度吃紧时才带：不含 upgrade_plan = 已是最高档（Ultra）
 }
 
 // 429 是不是「额度被拒」（换号有用），而不是瞬时限流（CLI 自己退避重试就行）。
@@ -190,7 +193,10 @@ async function handle(req, res, key) {
     else if (req.headers.authorization) headers.authorization = req.headers.authorization;   // 没登记 token：沿用 CLI 自己的凭证
     let up;
     try {
-      up = await fetch(UPSTREAM + path, { method: req.method, headers, body: body.length ? body : undefined, signal: ac.signal, redirect: 'manual' });
+      // 走不带保温的那一层出口：这个代理只转发 CLI 自己发出的请求，bridge 不另发（保温心跳是 bridge 自己发的请求，不能挂在这条路上）；
+      // 连接池的空闲保留照常生效。失败照旧回 502 让 CLI 自己重试。
+      const plain = plainDispatcher();
+      up = await fetch(UPSTREAM + path, { method: req.method, headers, body: body.length ? body : undefined, signal: ac.signal, redirect: 'manual', ...(plain ? { dispatcher: plain } : {}) });
     } catch (e) {
       if (!ac.signal.aborted) fail(res, 502, 'bridge 上游代理连不上 Anthropic：' + ((e && e.cause && e.cause.code) || (e && e.message) || e));
       return;

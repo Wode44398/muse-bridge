@@ -9,7 +9,6 @@ export const SHARE_TTLS = Object.freeze([
 
 export const AI_NAMES = Object.freeze({
   claude: 'Claude',
-  gemini: 'Gemini',
 });
 
 export function normalizeFileQuery(value) {
@@ -53,12 +52,11 @@ export function formatShareExpiry(value) {
 }
 
 export function fileAiCapabilities(item, kindOf) {
-  if (!item) return { gemini: false, video: false, image: false, audio: false, music: false, mode: null };
+  if (!item) return { video: false, image: false, audio: false, music: false, mode: null };
   const kind = item.isDir ? 'dir' : kindOf(item.name);
   const isImage = kind === 'img';
   const isText = kind === 'md' || kind === 'text';
   return {
-    gemini: true,
     video: isImage || isText,
     image: isImage || isText,
     audio: isText,
@@ -93,14 +91,18 @@ export async function loadAiSessions(target, {
   }
 }
 
+// 「发送给 AI」：对话类目标（Claude）挂进输入栏；媒体目标（video / image / audio / music）发到 Media Studio——
+// 打开对应创作页并带上素材（图片当改图素材或视频首尾帧 / 参考图，文本填进输入岛）。经 studio.push 交给
+// lib/state.svelte.js 的 studioInbox，核心不碰 studio 扩展的代码。
+const STUDIO_PAGE = { video: 'video', image: 'image', audio: 'voice', music: 'music' };
+
 export async function sendFileToAi(item, target, slot, selectedSession, {
   kindOf,
   material,
   readText,
   toast,
   chats,
-  mediaState,
-  ensureVideoModel,
+  studio,
   navigate,
 }) {
   const kind = item.isDir ? 'dir' : kindOf(item.name);
@@ -110,16 +112,17 @@ export async function sendFileToAi(item, target, slot, selectedSession, {
   const chat = chats[target];
   if (chat) {
     toast(t('正在准备…'));
-    const attachment = await material(item, target !== 'gemini');
+    const attachment = await material(item, true);
     if (!attachment) return;
     if (selectedSession === 'new') chat.newChat();
     else if (selectedSession && selectedSession !== chat.current()) await chat.load(selectedSession);
     chat.attach(attachment);
-    navigate(target === 'claude' ? 'claude' : 'vertex');
+    navigate(target);
     toast(t('已加到对话输入，去问它吧'));
     return;
   }
 
+  const page = STUDIO_PAGE[target];
   if (isImage && (target === 'video' || target === 'image')) {
     toast(t('正在准备…'));
     const attachment = await material(item);
@@ -127,43 +130,22 @@ export async function sendFileToAi(item, target, slot, selectedSession, {
       toast(t('准备失败'));
       return;
     }
-    const draft = { path: attachment.path, url: attachment.url, name: attachment.name };
-    if (target === 'video') {
-      const targetSlot = slot || 'first';
-      if (targetSlot === 'last' || targetSlot === 'ref') ensureVideoModel(targetSlot);
-      mediaState.func = 'video';
-      mediaState.videoSrcDraft = { ...draft, slot: targetSlot };
-    } else {
-      mediaState.func = 'image';
-      if (/^imagen/.test(mediaState.imageModel || '')) mediaState.imageModel = '';
-      mediaState.imageSrcDraft = draft;
-    }
-    navigate('vertex');
+    const role = target === 'video' ? (slot || 'first') : 'edit';
+    studio.push({ page, input: { role, upload: attachment.path, url: attachment.url, name: attachment.name, kind: 'image' } });
+    navigate('studio');
     toast(t('已挂为生成素材，可换模型/调参后点生成'));
     return;
   }
 
-  if (isText) {
+  if (isText && page) {
     toast(t('正在读取…'));
     const content = await readText(item);
     if (content == null) {
       toast(t('读取失败'));
       return;
     }
-    if (target === 'video') {
-      mediaState.func = 'video';
-      mediaState.videoDraft = content;
-    } else if (target === 'image') {
-      mediaState.func = 'image';
-      mediaState.imageDraft = content;
-    } else if (target === 'audio') {
-      mediaState.func = 'voice';
-      mediaState.voiceDraft = content;
-    } else if (target === 'music') {
-      mediaState.func = 'music';
-      mediaState.musicDraft = content;
-    }
-    navigate('vertex');
+    studio.push({ page, text: content });
+    navigate('studio');
     toast(t('内容已填入提示词栏'));
     return;
   }

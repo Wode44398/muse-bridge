@@ -28,7 +28,10 @@ function settingsView(s) {
     let options = Array.isArray(d.options) ? d.options : null;
     if (d.key === 'permissionMode') options = s.permissionModes || options;
     else if (d.options === 'dynamic' && d.key === 'outputStyle') options = s.outputStyles || null;
+    // 讨论串模型：订阅模型 + inherit（跟协调者）；自定义模型 custom:<服务>:<型号> 也收，见 chat.models
+    else if (d.key === 'projectThreadModel') options = ['inherit', ...CAPABILITIES.claude.models.map((m) => m.id)];
     const labelOf = (v) => {
+      if (d.key === 'projectThreadModel') return v === 'inherit' ? '跟协调者一样' : (CAPABILITIES.claude.models.find((m) => m.id === v) || {}).name || '';
       const i = Array.isArray(d.options) ? d.options.indexOf(v) : (d.key === 'outputStyle' ? BUILTIN_OUTPUT_STYLES.indexOf(v) : -1);
       return i >= 0 && d.optionLabels ? d.optionLabels[i] : '';
     };

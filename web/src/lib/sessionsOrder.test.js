@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { placeTouched, sortByMtime } from './sessionsOrder.js';
+import { placeTouched, sortByMtime, insertByMtime, provisionalTitle } from './sessionsOrder.js';
 
 const mk = (id, mtime) => ({ id, mtime, title: id });
 const ids = (l) => l.map((s) => s.id);
@@ -44,4 +44,20 @@ test('sortByMtime: stable descending; sorted input returns the same reference', 
   assert.equal(sortByMtime(sorted), sorted);
   const messy = [mk('c', 1), mk('a', 3), mk('b2', 2), mk('b1', 2)];
   assert.deepEqual(ids(sortByMtime(messy)), ['a', 'b2', 'b1', 'c']);   // equal mtimes keep input order
+});
+
+test('insertByMtime: a new row lands at its mtime position; a known id is a no-op (same reference)', () => {
+  const list = [mk('a', 300), mk('b', 200), mk('c', 100)];
+  assert.deepEqual(ids(insertByMtime(list, mk('n', 400))), ['n', 'a', 'b', 'c']);
+  assert.deepEqual(ids(insertByMtime(list, mk('n', 250))), ['a', 'n', 'b', 'c']);
+  assert.deepEqual(ids(insertByMtime(list, mk('n', 1))), ['a', 'b', 'c', 'n']);
+  assert.equal(insertByMtime(list, mk('b', 999)), list);
+  assert.equal(insertByMtime(list, null), list);
+  assert.deepEqual(ids(insertByMtime([], mk('n', 1))), ['n']);
+});
+
+test('provisionalTitle: first non-empty line, capped', () => {
+  assert.equal(provisionalTitle('\n  hello world \nsecond'), 'hello world');
+  assert.equal(provisionalTitle(''), '');
+  assert.equal(provisionalTitle('x'.repeat(200)).length, 81);
 });

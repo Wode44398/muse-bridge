@@ -4,3 +4,6 @@
 export * from './knowledge.mjs';
 export * from './diagnose.mjs';
 export * from './editor.mjs';
+export * from './ratings.mjs';
+export * from './modality.mjs';
+export * from './brands.mjs';

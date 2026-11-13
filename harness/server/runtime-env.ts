@@ -94,7 +94,7 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "LOCAL_BASE_URL", area: "本机模型", description: "本机 llama-server 地址", default: "目录里的地址" },
   { name: "LOCAL_START_SCRIPT", area: "本机模型", description: "「本机」胶囊启动模型用的脚本", default: "E:\\LLM\\start-qwen.bat" },
   { name: "LOCAL_AI_SETTINGS", area: "本机模型", description: "「本机」面板里的启动参数（上下文 / 缓存精度 / 视觉 / MTP）存放位置", default: "启动脚本同目录的 local-ai.json" },
-  { name: "STRATA_START_SCRIPT", area: "本机模型", description: "Strata（Qwen3.8 Flash Next 125B）的启动脚本", default: "E:\\Strata\\start-strata.bat" },
+  { name: "STRATA_START_SCRIPT", area: "本机模型", description: "Strata（Qwen3.8 Flash Next 125B，几个量化变体共用）的启动脚本；变体经 STRATA_VARIANT 交给它", default: "E:\\Strata\\start-strata.bat" },
   { name: "STRATA_BASE_URL", area: "本机模型", description: "Strata 服务地址（不带 /v1）", default: "http://127.0.0.1:8081" },
   { name: "STRATA_AI_SETTINGS", area: "本机模型", description: "Strata 的启动参数存放位置", default: "启动脚本同目录的 local-ai.json" },
 
@@ -107,6 +107,16 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "DIMENSIO_EXTERNAL_MEMORY", area: "知识与记忆", description: "K8 外部记忆库只读挂载：`<库目录>` 或 `<库目录>=><工作区>|<工作区>`，分号分隔；默认不挂" },
   { name: "DIMENSIO_MEMORY_EXTRACT", area: "知识与记忆", description: "瘦身 P0-1：run 之后的记忆沉淀；0 = 关（测试默认关，要测时设 1）", default: "开" },
   { name: "DIMENSIO_MEMORY_EXTRACT_TIMEOUT_MS", area: "超时与重试", description: "记忆沉淀那次旁路请求的时限（每次尝试）", default: "120000" },
+  { name: "DIMENSIO_MEMORY_DREAM", area: "知识与记忆", description: "空闲时的离线记忆整理（memory-dream.ts）；0 = 整个关（测试默认关）。设置里的「空闲时整理记忆」只关自动那部分", default: "开" },
+  {
+    name: "DIMENSIO_GLOBAL_MEMORY_SCOPE",
+    area: "知识与记忆",
+    description:
+      "全局层记忆的作用域：workspace = 按会话的工作区各存一份（<记忆目录>/global-scoped/<工作区键>，互相看不见；评测臂默认开，防同一臂各题各次串味）；" +
+      "不设或别的值 = 正式服行为，全局层只有 <记忆目录>/global 一份、所有工作区共用。开着时设置页记忆面板的「全局」只看当前工作空间那份",
+    default: "不设（共用一份）",
+  },
+  { name: "DIMENSIO_MEMORY_DREAM_MODEL", area: "知识与记忆", description: "离线记忆整理用的模型，写成 <厂商>/<型号>；不给就用该工作区最近一个会话的（评测用）" },
 
   // ── 联网搜索 ──
   { name: "WEBSEARCH_BACKENDS", area: "联网搜索", description: "钉死后端顺序（逗号分隔：zhipu / kimi / deepseek / qwen / gemini / anthropic / mimo / ddg）；不给就当前会话那家的原生搜索排第一，其余按可用的自动排" },
@@ -177,11 +187,9 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "BRIDGE_DEVICE_SECRET", area: "bridge 集成", description: "调内部设备接口时出示的凭据：管理员实例是主机密钥，用户实例是 bridge 按人铸的令牌（dvt1.…，只能操作他自己的电脑）", secret: true },
   { name: "BRIDGE_PLUGIN_API", area: "bridge 集成", description: "bridge 本机地址：「bridge 插件」连接器（插件给 dimensio 的工具，/agent/mcp/plugins）与回合回报（/agent/events）用；与设备开关无关" },
   { name: "BRIDGE_PLUGIN_SECRET", area: "bridge 集成", description: "连 bridge 插件端点时出示的同机实例凭据（同 BRIDGE_DEVICE_SECRET 的取法）", secret: true },
-  { name: "DIMENSIO_EDGE_EXTENSION_IDS", area: "bridge 集成", description: "额外认可的 Edge 扩展 ID（逗号分隔；自己打包的扩展 ID 与内置的不同时用）" },
 
   // ── 测试 ──
   { name: "DIMENSIO_TEST_ISOLATION", area: "测试", description: "测试进程标记（test-setup 设的）：数据全在临时目录、不自动续跑、不连 MCP" },
-  { name: "EDGE_SMOKE_OUT", area: "测试", description: "连 Edge 冒烟脚本的截图输出目录", default: "%TEMP%" },
   { name: "DIMENSIO_AUTO_RESUME", area: "测试", description: "测试里强制打开 M13 自动续跑" },
   { name: "NODE_TEST_CONTEXT", area: "测试", description: "node --test 自己设的；用来认出测试进程" },
 

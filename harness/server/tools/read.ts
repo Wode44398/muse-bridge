@@ -82,7 +82,7 @@ export const readTool: Tool = {
       } finally {
         await probe.close();
       }
-      const audioMime = sniffAudioMime(head);
+      const audioMime = sniffAudioMime(head, abs);
       if (audioMime) {
         if (!ctx.agentHearsAudio) return fail("audio needs native support", "This model takes no audio input. Switch to MiMo to hear the original audio.");
         if (stat.size > MAX_AUDIO_BYTES) return fail("audio too large", "Audio exceeds the 24 MB inline limit. Compress to MP3/FLAC or split into shorter clips before Read.");

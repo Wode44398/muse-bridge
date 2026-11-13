@@ -8,7 +8,6 @@ import {
   existingSharedBrowser,
   closeAllBrowserSessions,
   attachSharedBrowser,
-  attachEdgeBrowser,
   claimBrowser,
   releaseBrowser,
   noBrowserMessage,
@@ -38,7 +37,6 @@ import { describeImage, visionConfigured, visionModel } from "../vision.ts";
 import { controlPlanePortBlock, controlPlaneUrlBlock } from "../control-plane.ts";
 import { fileUrlBlock } from "../sandbox.ts";
 import { imageDimensions, screenshotEvent } from "../image-assets.ts";
-import { browserKindLabel, edgeHub, edgeLink, EDGE_EXTENSION_DIR } from "../edge-link.ts";
 import { tenantMode } from "../tenant.ts";
 import { browserAvailable } from "../headless.ts";
 import { redactOutput } from "../redact.ts";
@@ -136,7 +134,6 @@ function watchPopups(page: CdpSession, action: string): () => Promise<string> {
 
 // 用户此刻看不看得到这个浏览器（对齐 bridge 的 viewerReport）：要用户在里面动手（登录、过验证、确认）之前先确认他看得见。
 async function viewerReport(page: CdpSession): Promise<string> {
-  if (page.edge) return `This is the user's own ${browserKindLabel(page.edgeKind)} window — they see it on their screen.`;
   const list = page.viewerList();
   const native = list.filter((v) => v.kind === "native").length;
   const streams = list.filter((v) => v.kind === "stream").length;
@@ -276,7 +273,7 @@ export function modifierBits(spec: unknown): number | null {
 }
 
 const ACTIONS = [
-  "navigate", "attach", "edge", "back", "forward", "reload", "tabs", "tab_new", "tab_switch", "tab_close",
+  "navigate", "attach", "back", "forward", "reload", "tabs", "tab_new", "tab_switch", "tab_close",
   "click", "type", "key", "scroll", "hover", "long_press", "drag", "pinch", "set_value", "upload",
   "find", "page_text", "resize", "dprprobe", "console", "screenshot", "wait_for", "close", "batch",
 ];
@@ -286,7 +283,7 @@ const ACTING = new Set([
   "tab_new", "tab_switch", "set_value", "upload", "resize",
 ]);
 // 标签管理类动作自己处理 tab 参数；其余动作带了 tab = 先把那个标签切到前台
-const TAB_OPS = new Set(["tabs", "tab_new", "tab_switch", "tab_select", "tab_close", "close", "attach", "edge"]);
+const TAB_OPS = new Set(["tabs", "tab_new", "tab_switch", "tab_select", "tab_close", "close", "attach"]);
 
 const expectSchema = {
   type: "object" as const,
@@ -305,7 +302,7 @@ const expectSchema = {
 
 // 单步参数（batch 的每一步与顶层同一套）
 const STEP_PROPS = {
-  url: { type: "string" as const, description: "For navigate / tab_new / edge: full http(s)/file URL, or a \"/path\" on the running Preview server." },
+  url: { type: "string" as const, description: "For navigate / tab_new: full http(s)/file URL, or a \"/path\" on the running Preview server." },
   tab: {
     type: "string" as const,
     description:
@@ -313,13 +310,6 @@ const STEP_PROPS = {
   },
   port: { type: "integer" as const, description: "For attach: the app's DevTools port (its --remote-debugging-port value)." },
   target: { type: "string" as const, description: "For attach: pick the window whose title/URL contains this substring (when the app has several)." },
-  browser: {
-    type: "string" as const,
-    enum: ["edge", "chrome"],
-    description:
-      "For edge: WHICH of the user's own browsers to take over — \"edge\" (Microsoft Edge) or \"chrome\" (Google Chrome). " +
-      "Required when the extension is connected in both; follow the user's wording (\"my Chrome\" → chrome).",
-  },
   ref: {
     type: "integer" as const,
     description:
@@ -402,14 +392,8 @@ export const browserTool: Tool = {
       "Chromium-based app that exposes a DevTools port: an Electron desktop app or packaged exe launched with " +
       "--remote-debugging-port=<port>, or any headful Chrome. Pass `port`; optional target:\"substring\" picks " +
       "a window by title/URL when several exist. close then DETACHES without quitting the app.\n" +
-      "• edge — switch every browser tool to the USER'S OWN browser — Microsoft Edge or Google Chrome, picked with " +
-      "`browser` (through the dimensio extension): " +
-      "their real logged-in sessions, cookies and extensions. You only ever work in tabs of the \"dimensio\" tab group " +
-      "(the user drags tabs in to share them, out to take them back); optional `url` opens there. The user sees a glow " +
-      "and your pointer on that page and can stop you. Use it ONLY when the task needs the user's real browser (their " +
-      "accounts, a site they are logged into) or they ask for it — previews and verification stay on the built-in " +
-      "browser. There, before anything outward-facing or irreversible (send, post, submit, purchase, delete, change " +
-      "settings) AskUserQuestion first. close detaches and leaves the tabs open for the user.\n" +
+      "• The USER'S OWN logged-in Edge / Chrome is not this tool: use DeviceBrowser with browser:<id|name> (Web Bridge, " +
+      "on their computer) — DeviceBrowser(action:\"browsers\") lists the browsers connected there.\n" +
       "• click — click by `ref` (from ReadPage / find — most reliable), by visible `text`, or by `x`/`y` (pixels of the last screenshot). " +
       "Optional: button:\"right\", double:true, modifiers:\"ctrl\"|\"shift\"|…, force:true (click a covered ref anyway).\n" +
       "• type — focus a target (`ref` or CSS `selector`; omit to use current focus) and type `text` into it; the field is read back.\n" +
@@ -591,7 +575,7 @@ function lastText(r: ToolRunResult): { t: "text"; text: string } | undefined {
 }
 
 function browserEvent(page: CdpSession): AgentEvent {
-  return { e: "browser", url: page.url, ...(page.edge ? { edge: true } : {}) };
+  return { e: "browser", url: page.url };
 }
 
 // 动作后的比对结论拼进结果
@@ -614,15 +598,7 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
     const cur = existingSharedBrowser();
     if (!cur) return ok("browser already closed", "No browser was running.");
     const wasAttached = cur.attached;
-    const wasEdge = cur.edge;
-    const edgeName = browserKindLabel(cur.edgeKind);
     closeAllBrowserSessions();
-    if (wasEdge) {
-      return ok(
-        `detached from ${edgeName}`,
-        `Detached from the user's ${edgeName} — the dimensio tab group stays open for them. The next Browser/ReadPage/Eval/Network call uses the built-in browser again.`,
-      );
-    }
     return ok(
       wasAttached ? "detached" : "browser closed",
       wasAttached
@@ -632,9 +608,9 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
   }
 
   // 租户实例（多用户服务端上每个用户一个 harness，见 tenant.ts）：不许挂到本机任意调试端口（那可能是管理员的
-  // 浏览器 / 桌面壳），也不许接用户的 Edge（那是主机主人的真实登录态）。
-  if ((action === "attach" || action === "edge") && tenantMode()) {
-    return fail(`browser ${action}`, "Not available on this server: Browser(attach) and Browser(edge) are disabled for multi-user accounts. Use Browser(navigate) with the built-in headless browser instead.");
+  // 浏览器 / 桌面壳）。
+  if (action === "attach" && tenantMode()) {
+    return fail(`browser ${action}`, "Not available on this server: Browser(attach) is disabled for multi-user accounts. Use Browser(navigate) with the built-in headless browser instead.");
   }
 
   if (action === "attach") {
@@ -673,77 +649,8 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
   }
 
   if (action === "edge") {
-    // Edge 和 Chrome 可以同时连着扩展：`browser` 指定接哪一个；没指定且只连了一个就用它，两个都连着就让模型说清楚
-    const want = String(args.browser ?? "").trim().toLowerCase();
-    const live = edgeHub().connectedLinks();
-    const liveNames = live.map((l) => `${l.kind} (${l.label})`).join(", ");
-    const setup = (kind: string) => {
-      const scheme = kind === "chrome" ? "chrome://extensions" : "edge://extensions";
-      return (
-        `Tell the user how to set it up: in ${browserKindLabel(kind)} open ${scheme}, turn on Developer mode, "Load unpacked" and pick the folder ${EDGE_EXTENSION_DIR} ` +
-        "(already installed? click the extension's toolbar icon — it shows why it isn't connected). Then try again."
-      );
-    };
-    if (want && want !== "edge" && want !== "chrome") {
-      return fail("browser edge", `Unknown browser "${want}". Use browser:"edge" or browser:"chrome".`);
-    }
-    const link = want ? edgeLink(want) : live.length === 1 ? live[0] : null;
-    if (!want && live.length > 1) {
-      return fail(
-        "browser edge",
-        `The dimensio extension is connected in more than one of the user's browsers: ${liveNames}. ` +
-          'Pass browser:"edge" or browser:"chrome" — the one the user meant (ask them if it is unclear).',
-      );
-    }
-    if (!link?.connected) {
-      const name = browserKindLabel(want || "edge");
-      return fail(
-        "browser edge",
-        (want
-          ? `The user's ${name} is not connected: the dimensio extension there is not installed, not enabled, or cannot reach dimensio. `
-          : "None of the user's browsers is connected: the dimensio extension is not installed, not enabled, or cannot reach dimensio. ") +
-          (live.length ? `Connected right now: ${liveNames}. ` : "") +
-          setup(want || "edge"),
-      );
-    }
-    const raw = String(args.url ?? "").trim();
-    let url = "";
-    if (raw) {
-      try {
-        url = resolveUrl(raw, ctx.ownerId ?? "");
-      } catch (e) {
-        return fail("browser edge", (e as Error).message);
-      }
-      const blocked = controlPlaneUrlBlock(url) ?? fileUrlBlock(url, ctx.sandbox);
-      if (blocked) return fail("browser edge", blocked);
-    }
-    try {
-      const { session, created } = await attachEdgeBrowser(url || undefined, link.kind);
-      const name = browserKindLabel(link.kind);
-      const where = created
-        ? `opened a new tab in a "dimensio" tab group (the group was empty — if the user meant a page they already have open, ask them to drag that tab into the group)`
-        : `took over the "dimensio" tab group`;
-      const others = live.filter((l) => l !== link).map((l) => l.label);
-      return {
-        ok: true,
-        summary: `connected to ${name}`,
-        content: [
-          {
-            t: "text",
-            text:
-              `Connected to the user's ${name} (${link.label}) and ${where}. Current tab: ${await pageStamp(session)}\n\n` +
-              `${formatTabs(session)}\n\n` +
-              `ReadPage / Browser(navigate|click|type|key|scroll|screenshot|tabs|tab_new) / Eval / Network now act on the user's real, logged-in ${name}. ` +
-              (others.length ? `(Also connected but NOT in use: ${others.join(", ")}.) ` : "") +
-              "Stay inside this tab group, ask before outward-facing or irreversible actions, and Browser(close) when done (the tabs stay for the user). " +
-              "Call Browser(edge) once and wait for it — don't batch other browser calls in parallel with it.",
-          },
-        ],
-        events: [{ e: "browser", url: session.url, edge: true }],
-      };
-    } catch (e) {
-      return fail("browser edge", `Could not take over the ${browserKindLabel(link.kind)} tab group: ${(e as Error).message}`);
-    }
+    // 旧的 dimensio Edge 扩展已下线（老会话历史里还有这个调用）
+    return fail("browser edge", "Browser(edge) is gone. The user's own logged-in Edge / Chrome is driven with DeviceBrowser — DeviceBrowser(action:\"browsers\") lists the browsers connected through Web Bridge on their computer, then pass browser:<id|name> on every call.");
   }
 
   if (action === "console") {
@@ -801,7 +708,7 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
       page = await getSharedBrowser();
     } else {
       const existing = existingSharedBrowser();
-      if (!existing && action === "resize" && !noBrowserMessage().includes("ended")) {
+      if (!existing && action === "resize") {
         // 先定尺寸再开页面是最自然的顺序：先起一个空白页，视口随实例保留到之后的 navigate
         page = await getSharedBrowser();
         launchedNote = "\n(The browser was not running — started it on a blank page; the next navigate keeps this viewport.)";
@@ -1238,12 +1145,6 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
       );
     }
     case "resize": {
-      if (page.edge) {
-        return fail(
-          "browser resize",
-          "This is the user's own Edge window — emulating another viewport would distort what they are looking at. Do viewport/responsive testing in the built-in browser (Browser close, then navigate).",
-        );
-      }
       let w: number, h: number, mobile: boolean;
       const preset = args.preset ? String(args.preset) : "";
       if (preset && VIEWPORT_PRESETS[preset]) {
@@ -1273,9 +1174,6 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
       );
     }
     case "dprprobe": {
-      if (page.edge) {
-        return fail("browser dprprobe", "dprprobe reloads the page under emulation — not on the user's own Edge. Run it in the built-in browser.");
-      }
       const dpr = args.dpr != null ? Number(args.dpr) : 2;
       if (!(dpr > 1 && dpr <= 4)) {
         return fail("browser dprprobe", "dpr must be > 1 and ≤ 4 — the point is a ratio real displays use (1.25–3). DPR 1 proves nothing.");

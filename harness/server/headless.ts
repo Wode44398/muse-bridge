@@ -5,7 +5,6 @@ import path from "node:path";
 import { killTree } from "./tools/bash.ts";
 import { helperEnv } from "./helper-proc.ts";
 import { desktopHostInfo } from "./desktop-host.ts";
-import { edgeHub } from "./edge-link.ts";
 import { tenantMode } from "./tenant.ts";
 
 // Headless screenshot via a system Chromium browser's built-in one-shot
@@ -36,8 +35,8 @@ export function findBrowser(): string | undefined {
 
 // ── 这台机器上有没有浏览器可用（D5，移植自 Muse Bridge）────────────────────────────────────────────
 // Browser / ReadPage / Eval / Network 背后有三种后端：本机 Chromium 系浏览器（cdp.ts 拉起的无头浏览器）、桌面壳交来的
-// 浏览器宿主（desktop-host.ts，壳里的 WebContentsView）、用户自己的 Edge / Chrome 经 dimensio 扩展连进来（edge-link.ts，
-// Browser(edge)）。任何一个在就照常提供；一个都没有（例如没装浏览器的 Linux VPS）就不注册这四个工具，system 与 playbook
+// 浏览器宿主（desktop-host.ts，壳里的 WebContentsView）；extension（旧的 dimensio Edge 扩展）已下线，恒为 false——
+// 用户自己的浏览器改走 DeviceBrowser（Web Bridge）。任何一个在就照常提供；一个都没有（例如没装浏览器的 Linux VPS）就不注册这四个工具，system 与 playbook
 // 里的浏览器段也不写——否则模型会反复调 Browser、每次都「起不来」，白耗轮次。
 //
 // 判定时机：工具集与 system 在会话建起来时（新建 / 从盘上恢复 / 换型号重建，session.ts 的 buildState）现算一次，此后这个
@@ -88,7 +87,8 @@ function probeBrowser(): BrowserProbe {
     localBrowser,
     localFailed: localBrowser ? browserLaunchFailedRecently(localBrowser) : false,
     desktopHost: desktopHostInfo() !== null,
-    extension: !tenantMode() && edgeHub().connectedLinks().length > 0,
+    // 旧的 dimensio Edge 扩展已下线：用户的浏览器走 DeviceBrowser（Web Bridge，在他自己的电脑上），不算这台服务器的后端
+    extension: false,
   };
 }
 

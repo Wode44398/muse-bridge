@@ -5,7 +5,7 @@ import path from "node:path";
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { consoleDecoder } from "./console-decode.ts";
 import { fail, ok } from "./types.ts";
-import { insideReadOnlyRoot, pathAliasViolation, protectedStateViolation, readRootFor, readVerdict, realOrNearest } from "../sandbox.ts";
+import { insideReadOnlyRoot, pathAliasViolation, protectedStateViolation, readRootFor, readVerdict, realOrNearest, type SandboxAccess } from "../sandbox.ts";
 import { grantedSkillDirs, managedExtensionRoots } from "../extensions.ts";
 import { redactOutput } from "../redact.ts";
 import { desktopHostPorts } from "../desktop-host.ts";
@@ -42,6 +42,8 @@ interface OutBuf {
   spillTo?: () => OutputSpill | null;
   spill?: OutputSpill | null;
   savedAt?: string | null;
+  // 后台 job 的 watch：每段解码后的输出也交给它（按行匹配，见 startJob）
+  onText?: (s: string) => void;
 }
 
 // 有会话才落盘；落盘前按块过 Bash 的脱敏（与交给模型的同一层）
@@ -66,6 +68,13 @@ async function closeSpill(b: OutBuf): Promise<void> {
 
 function pushOut(b: OutBuf, s: string): void {
   b.total = (b.total ?? 0) + s.length;
+  if (b.onText) {
+    try {
+      b.onText(s);
+    } catch {
+      /* watch 出错不影响输出采集 */
+    }
+  }
   if (b.spill) b.spill.write(s);
   if (b.head.length < HEAD_MAX) {
     const need = HEAD_MAX - b.head.length;
@@ -281,24 +290,35 @@ export function hostKillViolation(command: string): string | null {
 
 // Bash 与 Preview(start) 共用的命令闸（S5、#67）：危险命令名单 → 宿主自保 → 工作区围栏与凭据判定。
 // 以前 Preview 的 start 命令一道都不过，是绕开全部 Bash 策略的旁路。
-export function commandPolicyViolation(command: string, root: string, access: "workspace" | "full", readRoots: string[] = []): string | null {
-  const denied = deniedCommand(command);
-  if (denied) return `Command blocked by safety deny-list: ${denied}.`;
+// 管理员 bypass 档（access="bypass"，非租户）：跳过安全命令黑名单、凭据扫描、工作区围栏；但仍保留
+// 两道底线——宿主自保（不许杀在跑的 bridge / dimensio 进程与端口）与 dimensio 自身会话库写保护，
+// 以及租户禁区（bypass 是管理员专用档，这里是额外兜底）。
+export function commandPolicyViolation(command: string, root: string, access: SandboxAccess, readRoots: string[] = []): string | null {
+  const bypass = access === "bypass" && !tenantMode();
+  if (!bypass) {
+    const denied = deniedCommand(command);
+    if (denied) return `Command blocked by safety deny-list: ${denied}.`;
+  }
   const hostKill = hostKillViolation(command);
   if (hostKill) return `Command blocked to protect the host: ${hostKill}`;
   // 租户模式的禁区字面兜底（引号拼接等抽不出候选路径的写法），见 tenant.ts。
   const deniedRoot = deniedRootLiteral(command, tenantMode() ? grantedSkillDirs() : []);
   if (deniedRoot) return `Command blocked by workspace policy: it references ${deniedRoot}, which belongs to the host or to another user.`;
+  if (bypass) {
+    // 完全 bypass：工作区围栏与凭据扫描全跳过，只保留 dimensio 自身状态（会话库 / 影子仓库）的写保护。
+    const state = protectedStateCommandViolation(command, root);
+    return state ? `Command blocked to protect dimensio's own state: ${state}` : null;
+  }
   // 访问范围锁（租户恒 workspace）：调用方传进来的 access 被谁改成 full 都不算数。
-  const scope = commandScopeViolation(command, root, accessLock() ?? access, readRoots);
+  const scope = commandScopeViolation(command, root, accessLock() ?? (access as "workspace" | "full"), readRoots);
   if (scope) return `Command blocked by workspace policy: ${scope}.`;
   return null;
 }
 
 // P13（X18）：被拒只是因为纯读命令读了工作区外——返回放行哪几个目录（只读）这条命令就能过；不是这种情况（别的拒绝理由、
 // 写、非纯读命令、整机模式）返回 null。放行后要真能过才算：逐个补上越界落点所在的目录再判一遍整套命令闸，最多 5 个。
-export function outsideReadDirs(command: string, root: string, access: "workspace" | "full", readRoots: string[] = []): string[] | null {
-  // 租户模式不问（批准的人就是用户自己），越界直接拒。
+export function outsideReadDirs(command: string, root: string, access: SandboxAccess, readRoots: string[] = []): string[] | null {
+  // 租户模式不问（批准的人就是用户自己），越界直接拒；整机 / bypass 本就不拦越界，没有「放行只读目录」可谈。
   if (access !== "workspace" || tenantMode()) return null;
   const dirs: string[] = [];
   let roots = [...readRoots];
@@ -1007,10 +1027,116 @@ interface BashJob {
   waiters: Set<() => void>;
   // 模型已经亲眼看到它的结局（poll/wait 拿到了结束状态，或是它自己 kill 的）——World State 不再把它当新消息报
   seenDone?: boolean;
+  // World State 的 jobs 节已经把它的结局写进过一次请求（模型看到过一句「jobN (exit 0)」）——收尾时不必再叫醒会话
+  announced?: boolean;
+  // watch：输出里匹配这条正则的行要通知模型（只给以 background:true 起的 job）
+  watch?: RegExp;
+}
+
+// 后台 job 的事件（job-notify.ts 订阅）：结束、watch 命中的行。只报有会话归属的 job（子 agent / 测试的不报）。
+export interface JobEndInfo {
+  id: string;
+  owner: string;
+  command: string;
+  status: string; // exit 0 / exit 1 / timed out / killed
+  ok: boolean;
+  byUser: boolean; // 用户在界面上停的（他自己知道，不用再告诉模型）
+  tail: string; // 输出末尾（已脱敏）
+}
+type JobListener = {
+  end?: (info: JobEndInfo) => void;
+  lines?: (job: { id: string; owner: string; command: string }, lines: string[]) => void;
+};
+const jobListeners = new Set<JobListener>();
+export function onBackgroundJobs(l: JobListener): () => void {
+  jobListeners.add(l);
+  return () => jobListeners.delete(l);
+}
+
+const JOB_TAIL_LINES = 20;
+function jobTail(b: OutBuf): string {
+  const text = redactSecrets(dropJavaPickup(b.tail || b.head)).replace(/\s+$/, "");
+  const lines = text.split("\n");
+  const tail = lines.slice(-JOB_TAIL_LINES).join("\n");
+  return tail.length > 3_000 ? `…${tail.slice(-3_000)}` : tail;
 }
 
 function wakeWaiters(job: BashJob): void {
   for (const wake of [...job.waiters]) wake();
+  if (!job.owner || !jobListeners.size) return;
+  const info: JobEndInfo = {
+    id: job.id,
+    owner: job.owner,
+    command: job.command,
+    status: job.timedOut ? "timed out" : job.exitCode === null ? "killed" : `exit ${job.exitCode}`,
+    ok: !job.timedOut && job.exitCode === 0,
+    byUser: Boolean(job.killed),
+    tail: jobTail(job.out),
+  };
+  for (const l of jobListeners) {
+    try {
+      l.end?.(info);
+    } catch {
+      /* 订阅方的问题 */
+    }
+  }
+}
+
+// 这个 job 此刻要不要叫醒会话：结局模型还没见过（没 poll / wait / kill 到，World State 也没报过）
+export function jobNeedsNotice(owner: string, id: string): boolean {
+  const j = findJob(id, owner);
+  return Boolean(j && j.done && !j.seenDone && !j.announced);
+}
+// 通知已经送进会话：当作模型看到了结局
+export function markJobNoticed(owner: string, id: string): void {
+  const j = findJob(id, owner);
+  if (j) j.seenDone = true;
+}
+
+// watch：按行切（半行留到下一段），命中的行交给订阅方；一个 job 最多报 WATCH_MAX_LINES 行，超了只报一次「后面不再报」
+const WATCH_MAX_LINES = 200;
+function attachWatch(job: BashJob): void {
+  const re = job.watch;
+  if (!re) return;
+  let carry = "";
+  let sent = 0;
+  job.out.onText = (s) => {
+    if (sent >= WATCH_MAX_LINES || !jobListeners.size) return;
+    const parts = (carry + s).split(/\r?\n/);
+    carry = parts.pop() ?? "";
+    if (carry.length > 4_000) carry = carry.slice(-4_000);
+    const hits: string[] = [];
+    for (const line of parts) {
+      re.lastIndex = 0;
+      if (!re.test(line)) continue;
+      const clean = redactSecrets(line).slice(0, 500);
+      hits.push(clean);
+      if (++sent >= WATCH_MAX_LINES) {
+        hits.push(`[watch: ${WATCH_MAX_LINES} matching lines reported — no more lines from this job will be reported; poll it for the rest]`);
+        break;
+      }
+    }
+    if (!hits.length) return;
+    for (const l of jobListeners) {
+      try {
+        l.lines?.({ id: job.id, owner: job.owner, command: job.command }, hits);
+      } catch {
+        /* 订阅方的问题 */
+      }
+    }
+  };
+}
+
+// watch 参数：一条正则（不分大小写）。编译不过就当场报给模型
+export function parseWatch(v: unknown): RegExp | string | null {
+  if (v === undefined || v === null || v === "") return null;
+  if (typeof v !== "string") return "watch must be a regular expression string";
+  if (v.length > 300) return "watch is too long (max 300 characters)";
+  try {
+    return new RegExp(v, "i");
+  } catch (e) {
+    return `watch is not a valid regular expression: ${(e as Error).message}`;
+  }
 }
 
 const jobs = new Map<string, BashJob>();
@@ -1078,6 +1204,7 @@ async function startJob(
   cwd: string,
   verify: boolean,
   owner: string,
+  watch?: RegExp,
 ): Promise<ToolRunResult> {
   const active = ownedJobs(owner).filter((j) => !j.done).length;
   if (active >= MAX_ACTIVE_JOBS) {
@@ -1106,9 +1233,11 @@ async function startJob(
     markKilled: () => {},
     verifyMode,
     waiters: new Set(),
+    ...(watch && owner ? { watch } : {}),
   };
   jobs.set(id, job);
   trackJob(job);
+  attachWatch(job);
 
   const stdoutPump = streamPump(job.out);
   const stderrPump = streamPump(job.out);
@@ -1190,6 +1319,11 @@ async function startJob(
           `Started background job ${id}: $ ${command}\n` +
           `It keeps running across turns (hard kill after ${Math.round(timeoutMs / 60_000)} min). ` +
           `Read its output with Bash(poll:"${id}"); stop it with Bash(kill:"${id}").` +
+          (owner && jobListeners.size
+            ? ` If it finishes after your turn has ended, you are continued automatically with its result — no need to stay ` +
+              `around polling; use Bash(wait:"${id}") only when you need the result before you can go on.` +
+              (job.watch ? " Output lines matching watch are delivered to you as they appear." : "")
+            : "") +
           (early ? `\nEarly output:\n${early}` : ""),
       },
     ],
@@ -1395,8 +1529,10 @@ export function liveJobCount(owner: string): number {
 // C4：这个会话已经结束的后台 job（World State 的 jobs 节）。只列结束了的——开跑是模型自己做的，结束它才不知道；
 // 不带耗时之类每轮都变的东西，只在又有 job 结束时才变。模型已经 poll / wait 到结局或自己 kill 的不算新消息，不列。
 export function finishedJobsSummary(owner: string): string {
-  return ownedJobs(owner)
-    .filter((j) => j.done && !j.seenDone)
+  const done = ownedJobs(owner).filter((j) => j.done && !j.seenDone);
+  // 这一节会跟着这次请求发出去：模型看到了「jobN (exit 0)」，收尾时 job-notify 不必再叫醒会话报同一件事
+  for (const j of done) j.announced = true;
+  return done
     .map((j) => `${j.id} (${j.timedOut ? "timed out" : j.exitCode === null ? "killed" : `exit ${j.exitCode}`})`)
     .join(", ");
 }
@@ -1483,6 +1619,13 @@ export const bashTool: Tool = {
           description:
             "Run as a background job: returns a job id immediately instead of blocking. For long finite commands, not servers.",
         },
+        watch: {
+          type: "string",
+          description:
+            "With background:true: a regular expression (case-insensitive). Each output line that matches is delivered to you as it " +
+            'appears (between your steps, or by continuing you after your turn has ended) — e.g. "error|failed|listening on". ' +
+            "Use it to react to a long job's progress without polling.",
+        },
         poll: { type: "string", description: "Job id to check: returns its accumulated output and status." },
         wait: {
           type: "string",
@@ -1548,12 +1691,15 @@ export const bashTool: Tool = {
       if (why) return unattributableFail(command, why);
     }
 
+    const watch = parseWatch(args.watch);
+    if (typeof watch === "string") return fail("bad watch", watch);
+    if (watch && !args.background) return fail("bad watch", "watch only works with background:true (a foreground command already returns all of its output).");
     if (args.background) {
       const bgTimeout = Math.min(
         BG_MAX_TIMEOUT_MS,
         Math.max(1000, Number(args.timeout ?? BG_DEFAULT_TIMEOUT_MS)),
       );
-      return startJob(command, bgTimeout, ctx.sandbox.root, args.verify === true, owner);
+      return startJob(command, bgTimeout, ctx.sandbox.root, args.verify === true, owner, watch ?? undefined);
     }
 
     const asked = Number(args.timeout ?? ctx.limits.bashTimeoutMs);

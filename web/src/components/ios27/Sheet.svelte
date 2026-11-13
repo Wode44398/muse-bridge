@@ -8,15 +8,12 @@
   import { getContext } from 'svelte';
   import GlassButton from './GlassButton.svelte';
   import Sym from './Sym.svelte';
+  import { liquidPress } from '../../lib/liquid/press.js';
   import { swipeDismiss } from '../../lib/motion.js';
-  import glassL_pub from '../../assets/ios27/sheet-light.png';
-  const glassL = $derived(ovUrl('ios27/sheet-light.png', glassL_pub));
-  import glassD_pub from '../../assets/ios27/sheet-dark.png';
-  const glassD = $derived(ovUrl('ios27/sheet-dark.png', glassD_pub));
-  import promL_pub from '../../assets/ios27/prom44-light.png';
-  const promL = $derived(ovUrl('ios27/prom44-light.png', promL_pub));
-  import promD_pub from '../../assets/ios27/prom44-dark.png';
-  const promD = $derived(ovUrl('ios27/prom44-dark.png', promD_pub));
+  const glassL = $derived(ovUrl('ios27/sheet-light.png'));
+  const glassD = $derived(ovUrl('ios27/sheet-dark.png'));
+  const promL = $derived(ovUrl('ios27/prom44-light.png'));
+  const promD = $derived(ovUrl('ios27/prom44-dark.png'));
 
   let { title = '', onclose, onconfirm = null, onback = null, confirmDisabled = false, confirmLabel = '', closeLabel = '', backLabel = '', children } = $props();
   const ios = getContext('ios27');
@@ -51,7 +48,7 @@
         {/if}
         <span class="sh-title">{title}</span>
         {#if onconfirm}
-          <button type="button" class="prom" class:ink style:--img={`url("${dark ? promD : promL}")`} aria-label={confirmLabel}
+          <button type="button" class="prom" class:ink use:liquidPress style:--img={`url("${dark ? promD : promL}")`} aria-label={confirmLabel}
             disabled={confirmDisabled} onclick={() => onconfirm?.()}><Sym name="checkmark" weight={500} size={17} /></button>
         {:else}
           <span class="sh-spacer" aria-hidden="true"></span>
@@ -75,6 +72,8 @@
     transition: transform 380ms cubic-bezier(.2, .95, .25, 1);
   }
   .sh.dark { box-shadow: 0 8px 40.6px rgba(0, 0, 0, .45); }
+  /* 宽屏（折叠屏展开 / 平板 / 电脑浏览器）：不再横贯全屏，收成居中 560 宽（iPad 表单页的宽度） */
+  @media (min-width: 700px) { .sh { left: max(6px, calc(50% - 280px)); right: max(6px, calc(50% - 280px)); } }
   .sh.dragging { transition: none; }
   .sh::before { content: ''; position: absolute; z-index: -1; inset: 0; pointer-events: none;
     border: 0 solid transparent; border-image: var(--glass) 240 fill / 80px / 16px stretch; }
@@ -91,10 +90,14 @@
     display: flex; align-items: center; justify-content: center; -webkit-tap-highlight-color: transparent;
     transition: transform 420ms cubic-bezier(.3, 1.5, .45, 1); }
   .prom::before { content: ''; position: absolute; z-index: -1; inset: -40px; background: var(--img) center / 124px 124px no-repeat; }
-  .prom:active:not(:disabled) { transform: scale(1.08); transition: transform 160ms cubic-bezier(.2, 0, 0, 1); }
+  .prom { border-radius: 22px; }
   .prom:disabled { opacity: .45; cursor: default; }
   .prom.ink { color: var(--i-on-accent, #fff); }
   .prom.ink::before { inset: 0; border-radius: 50%; background: var(--i-accent); }
   .sh-spacer { flex: none; width: 44px; }
-  .sh-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px max(16px, var(--sab, 0px)); }
+  /* 正文：底边跟着表单页的圆角裁（内容长时不再被一刀平切在屏幕底），底部留出手势条 + 一截滚动余量；
+     还能往下滚时底部 24px 渐隐，提示后面还有（滚到底时那一截是留白，不压内容）。 */
+  .sh-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px max(20px, calc(var(--sab, 0px) + 12px));
+    border-radius: 0 0 32px 32px;
+    -webkit-mask-image: linear-gradient(#000 calc(100% - 24px), transparent); mask-image: linear-gradient(#000 calc(100% - 24px), transparent); }
 </style>

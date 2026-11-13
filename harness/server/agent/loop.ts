@@ -6,9 +6,10 @@ import { RunInvariants } from "./turn-invariants.ts";
 import { compactNow, contextNeedsTrim, contextTokens, effectiveWindow, ensureContextFits } from "./context.ts";
 import { downsampleForModel } from "./media-budget.ts";
 import { messageKind } from "./injections.ts";
+import { deferredLoaded, notLoadedResult } from "./deferred-tools.ts";
 import { PLAYBOOK_KIND, playbookLoadedIn, playbookMessage, playbooksForCalls, playbooksForRequest, type Playbook } from "./playbooks.ts";
 import { loopStopText } from "./loop-guard.ts";
-import { cutAtLoop, isRunawayRepetition, LOOP_CUT_NOTICE } from "./repetition.ts";
+import { cutAtLoop, isRunawayRepetition, LOOP_CUT_NOTICE, type RepetitionLimits } from "./repetition.ts";
 import { connectErrorLabel, isConnectFailure, isLocalLoadingError, planWait, type NetWait, type WaitPlan } from "./netwait.ts";
 import { REPEAT_DENIAL_RULE, callSubject, decide, sessionRuleChoices, type Decision } from "./permissions.ts";
 import { normalizeToolArgs } from "./tool-input.ts";
@@ -99,7 +100,7 @@ export const VERIFY_UNDECLARED_NUDGE =
   "build now. If no meaningful executable check exists or the environment blocks it, call VerificationAudit " +
   "with a concrete reason.";
 
-const MAX_LENGTH_CONTINUES = 3;
+export const MAX_LENGTH_CONTINUES = 3;
 export const LENGTH_CONTINUE_NUDGE =
   "[Automated check] Your previous reply was cut off by the output-token limit mid-response. " +
   "Continue exactly where you stopped — do not repeat what you already wrote. " +
@@ -248,9 +249,10 @@ function consentText(outcome: ConsentOutcome, detail?: string): string {
 }
 
 // 同一个 run 里连续这么多次没被批准（用户拒绝 / 没人在场），就不再试了：收尾轮交代清楚，由人决定
-const DENIALS_BEFORE_STOP = 3;
-const DENIALS_STOP_TEXT =
-  `[Permissions] ${DENIALS_BEFORE_STOP} actions in a row were not approved. Stop here — do not retry them and do not try to ` +
+// （次数随模型档案 loop.denialsBeforeStop，默认就是这个常量）
+export const DENIALS_BEFORE_STOP = 3;
+const denialsStopText = (n: number): string =>
+  `[Permissions] ${n} actions in a row were not approved. Stop here — do not retry them and do not try to ` +
   "get the same effect another way. Write your final answer now: what you were trying to do, what was not done because " +
   "it was not approved, and what the user needs to decide. Further tool calls will NOT be executed.";
 
@@ -297,7 +299,7 @@ function ranSummary(ran: Map<string, number>): string {
 // 并注明原因；什么都没流出来时补一条只给模型看的边界。
 function closeCutTurn(state: AgentState, text: string, reason: string, internal: boolean): void {
   // R16：被打断时留下的半截已经是循环（严格档）——循环的部分不进转录，免得下一轮重放又把模型带回循环
-  if (isRunawayRepetition(text, true)) text = withLoopCut(text);
+  if (isRunawayRepetition(text, true, state.profile.loop.repetition)) text = withLoopCut(text, state.profile.loop.repetition);
   if (text.trim()) {
     state.appendAssistant({ text: `${text}\n\n[${reason}]`, thinkingText: "", calls: [] }, internal);
   } else {
@@ -306,8 +308,8 @@ function closeCutTurn(state: AgentState, text: string, reason: string, internal:
 }
 
 // R16：截到循环开始处，再补一句标记
-function withLoopCut(text: string): string {
-  const kept = cutAtLoop(text);
+function withLoopCut(text: string, lim: RepetitionLimits): string {
+  const kept = cutAtLoop(text, lim);
   return `${kept}${kept ? "\n\n" : ""}${LOOP_CUT_NOTICE}`;
 }
 
@@ -535,9 +537,15 @@ export async function* runAgent(
       }
       attachPlaybooks(state, playbooksForRequest(steer.text), "request");
     }
+    // 会话协作（session-family.ts）：这一轮跑着时别的会话发来的消息，同在这个回合边界注入（harness 消息，界面上是会话消息卡）
+    const familyMsgs = state.takeFamily();
+    for (const f of familyMsgs) {
+      state.appendUserBlocks([{ t: "text", text: f.text }], false, { origin: "harness", kind: f.kind });
+      yield { e: "session_message", kind: f.kind, text: f.text };
+    }
     // #78：审计前那句收尾答复是对插话之前的对话说的，插话一进来它就不再是最终答复。以前模型下一轮只交了
     // MemoryAudit，loop 就拿那句旧话收工——插话被注入了，却没人回应（Q1 的严格脚本化测试照出来的）。
-    if (steers.length) pendingPreAuditFinal = null;
+    if (steers.length || familyMsgs.length) pendingPreAuditFinal = null;
 
     // U3：到线了就先说一声再整理（整段压缩的摘要请求可能要几十秒，以前压完才有一条提示）
     if (contextNeedsTrim(state)) yield { e: "compact_start" };
@@ -594,7 +602,7 @@ export async function* runAgent(
     // we re-emit turn_start (frontend resets its per-turn cursor) and replay.
     // In-stream provider errors marked retriable (429 rate limit, 5xx
     // overloaded) ride the same retry loop for the same reason.
-    const MAX_ATTEMPTS = RETRY_ATTEMPTS;
+    const MAX_ATTEMPTS = state.profile.loop.retryAttempts;
     let streamThrew: unknown;
     let errRetriable = false;
     let errMessage = "";
@@ -742,7 +750,7 @@ export async function* runAgent(
           errKind = EMPTY_RESPONSE_KIND;
           errMessage = `${EMPTY_RESPONSE_KIND}: the model returned nothing (no text, no tool calls, no usage) — the stream most likely dropped`;
           errSummary = "模型什么都没回（多半是连接中途掉了），重发几次也没回来";
-          errRetriable = emptyRetries < EMPTY_RESPONSE_RETRIES;
+          errRetriable = emptyRetries < state.profile.loop.emptyResponseRetries;
           if (errRetriable) emptyRetries++;
         }
         // 本机 llama-server 加载期回 503：等它加载完，不算一次失败。
@@ -888,11 +896,11 @@ export async function* runAgent(
       // Auto-continue (bounded) instead of silently treating it as done.
       // Not when the budget is spent — the final summary may cut short, but
       // extending a run past its deadline is worse.
-      if (stop === "length" && !state.budgetExhausted && state.lengthContinues < MAX_LENGTH_CONTINUES) {
+      if (stop === "length" && !state.budgetExhausted && state.lengthContinues < state.profile.loop.lengthContinues) {
         // R16：续写之前先看正文——已经退化成循环（宽松档）就不续写：转录里截到循环开始处、补一句标记，这一轮收工
-        if (isRunawayRepetition(text)) {
+        if (isRunawayRepetition(text, false, state.profile.loop.repetition)) {
           const block = appendedAssistant?.content.find((b) => b.t === "text");
-          if (block && block.t === "text") block.text = withLoopCut(text);
+          if (block && block.t === "text") block.text = withLoopCut(text, state.profile.loop.repetition);
           yield { e: "text_delta", text: `\n\n${LOOP_CUT_NOTICE}` };
           yield { e: "done", stopReason: "end" };
           return;
@@ -908,7 +916,7 @@ export async function* runAgent(
         thinkingText.trim() &&
         !internalAuditTurn &&
         !state.budgetExhausted &&
-        state.answerNudges < MAX_ANSWER_NUDGES
+        state.answerNudges < state.profile.loop.maxAnswerNudges
       ) {
         state.answerNudges++;
         // 计数进会话 trace（诊断永不影响主链路：traceEvent 自己吞错）
@@ -920,7 +928,7 @@ export async function* runAgent(
         stop === "end" &&
         !internalAuditTurn &&
         !state.budgetExhausted &&
-        state.cutoffNudges < MAX_CUTOFF_NUDGES &&
+        state.cutoffNudges < state.profile.loop.maxCutoffNudges &&
         looksCutOff(text, state.todos.some((todo) => todo.status !== "completed"))
       ) {
         state.cutoffNudges++;
@@ -1023,7 +1031,7 @@ export async function* runAgent(
         const msg = state.loopGuardStopped
           ? "Not executed: the loop guard stopped this run. Give your final summary."
           : state.denialsStopped
-            ? `Not executed: ${DENIALS_BEFORE_STOP} actions in a row were not approved. Give your final answer.`
+            ? `Not executed: ${state.profile.loop.denialsBeforeStop} actions in a row were not approved. Give your final answer.`
             : "Not executed: the run's budget is exhausted. Give your final summary.";
         if (!isSilentTool(call.name)) {
           yield { e: "tool_start", id: call.id, name: call.name, args: call.args };
@@ -1075,7 +1083,7 @@ export async function* runAgent(
 
       let end = idx + 1;
       if (state.toolMap.get(calls[idx].name)?.concurrencySafe) {
-        while (end < calls.length && end - idx < MAX_PARALLEL_TOOLS && state.toolMap.get(calls[end].name)?.concurrencySafe) end++;
+        while (end < calls.length && end - idx < state.profile.loop.maxParallelTools && state.toolMap.get(calls[end].name)?.concurrencySafe) end++;
       }
       const batch = calls.slice(idx, end);
       idx = end;
@@ -1127,6 +1135,11 @@ export async function* runAgent(
                 `Unknown tool "${call.name}". Available tools: ${[...state.toolMap.keys()].join(", ")}.`,
               ),
             };
+          }
+          // 工具延迟加载（deferred-tools.ts）：说明还没加载就调了推迟的工具——这次不执行，回完整说明（记为已加载），模型照着重发
+          const deferred = state.ctx.deferredTools;
+          if (deferred?.has(call.name) && !deferredLoaded(state.messages, call.name, call.id)) {
+            return { call, denied: undefined, res: notLoadedResult(call.name, deferred) };
           }
           // P11（kimi K20）：出卡之前的规划阶段——注定失败的（硬拒的命令、编不过的工作流）不弹卡、直接回给模型；工具要求
           // 确认的（Workflow 启动）进统一权限闸；卡片上的执行事实优先用工具自己给的。抛错按「没有」处理。
@@ -1207,7 +1220,7 @@ export async function* runAgent(
                 // session (an allow rule that outranks the ask rule that fired).
                 if (verdict.decision === "session" && !decision.noSession) state.allowForSession(call.name, subject, verdict.rules);
                 decision = { effect: "allow", reason: "", rule: decision.rule };
-                decidedBy = "user";
+                decidedBy = verdict.away ? "away" : "user";
                 scope = verdict.decision === "session" && !initial.noSession ? "session" : "once";
               }
             }
@@ -1392,7 +1405,7 @@ export async function* runAgent(
         if (!block || block.t !== "tool_result") continue;
         const verdict = state.loopGuard.observe(call.name, call.args, block.ok);
         if (verdict.note) block.content = [...block.content, { t: "text", text: verdict.note }];
-        if (verdict.stop && !guardStop && state.ctx.humanAttended?.() === false) guardStop = verdict.stop;
+        if (verdict.stop && !guardStop && (state.profile.loop.stopWhenAttended || state.ctx.humanAttended?.() === false)) guardStop = verdict.stop;
       }
     }
 
@@ -1401,11 +1414,11 @@ export async function* runAgent(
       state.budgetExhausted = true;
       state.loopGuardStopped = true;
       state.appendUserBlocks([{ t: "text", text: loopStopText(guardStop) }], true, { origin: "harness", kind: "loop-guard" });
-    } else if (state.consecutiveDenials >= DENIALS_BEFORE_STOP && !state.budgetExhausted) {
+    } else if (state.consecutiveDenials >= state.profile.loop.denialsBeforeStop && !state.budgetExhausted) {
       // P6（N16）：连着几次都没被批准，再试下去只是换着花样碰同一堵墙——收尾轮交代清楚，由人决定
       state.budgetExhausted = true;
       state.denialsStopped = true;
-      state.appendUserBlocks([{ t: "text", text: DENIALS_STOP_TEXT }], true, { origin: "harness", kind: "permission-stop" });
+      state.appendUserBlocks([{ t: "text", text: denialsStopText(state.profile.loop.denialsBeforeStop) }], true, { origin: "harness", kind: "permission-stop" });
     }
     const auditOnly = calls.length > 0 && calls.every((call) => call.name === "MemoryAudit");
     if (pendingPreAuditFinal && auditOnly && state.memoryAuditCompleted) {
@@ -1564,7 +1577,7 @@ async function askOutsideRead(
       content: [{ t: "text", text: `${text}\n\nAsked the user to allow reading ${dirs.join(", ")} (read-only): not allowed — ${why}. Do without it, or ask the user to switch the project to full access.` }],
     };
   }
-  auditPermission(state, call, initial, { effect: "allow", reason: "" }, "user", verdict.decision === "session" ? "session" : "once");
+  auditPermission(state, call, initial, { effect: "allow", reason: "" }, verdict.away ? "away" : "user", verdict.decision === "session" ? "session" : "once");
   if (verdict.decision === "session") state.grantReadRoots(dirs);
   try {
     return await runWith(verdict.decision === "session" ? undefined : state.ctx.sandbox.withReadRoots(dirs));

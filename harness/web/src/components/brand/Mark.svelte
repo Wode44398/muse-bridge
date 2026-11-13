@@ -6,6 +6,7 @@
   //
   // intro：出场（首页 / 空态用）——整枚竖着旋入、一笔绕出整圆，线从圆心射出贯穿，再三笔一起顺时针转过 90° 落成月桥。
   // live：正在发生——月桥沉进水面、水面线独自转半圈、月桥重新升起。
+  // hover / press / flip（导出的方法）：可点的标志（ThemeMark）跟手浮起、按下收紧、点一下翻面切明暗。
   // 两段动作都由 lib/mark-motion.ts 逐帧驱动（弹簧、惯性、形变都在那里），这里只摆好分层：
   //   body 整枚（转、缩、淡入）⊃ ring 圆环（形变）⊃ arch 拱 / refl 倒影（各自沉浮）；line 水面线（现算轮廓）。
   // 静止时这些层都不带属性，画出来与 brand.ts 原样逐数相同。
@@ -65,6 +66,11 @@
     motion.setLive(live);
   });
   $effect(() => () => motion.destroy());
+
+  // 跟手与翻面（给可点的标志用，见 ThemeMark.svelte）：外面 bind:this 拿到实例后调
+  export const hover = (on: boolean, x = 0) => motion.hover(on, x);
+  export const press = (on: boolean) => motion.press(on);
+  export const flip = (onSwitch: () => void) => motion.flip(onSwitch);
 </script>
 
 <svg

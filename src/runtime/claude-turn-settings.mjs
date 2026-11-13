@@ -12,7 +12,8 @@
 import { getClaudeSettings, noteOutputStyles, outputStylesFor, claudeSettingsSnapshot } from './claude-settings.mjs';
 import { busPublish } from './bus.mjs';
 import { chatPrefsFor } from './chat-prefs.mjs';
-import { buildLadder, currentPlan, normKey } from './model-ratings.mjs';
+import { buildLadder, normKey } from './model-ratings.mjs';
+import { activeStrategy } from './dispatch-policy.mjs';
 
 // 回复语言 → CLI 的 language 设置（自由文本，CLI 拼成「Always respond in {language}…」系统提示段）。
 const LANGUAGE = { zh: 'Simplified Chinese', en: 'English' };
@@ -27,15 +28,15 @@ const NO_ATTRIBUTION = Object.freeze({ commit: '', pr: '', sessionUrl: false });
  *   compactFrac 老客户端请求体里的自动压缩点
  *   sessionId   续聊的会话 id（取会话级输出风格覆盖）
  *   outputStyle 这条请求随带的会话级输出风格（新会话在发出第一条前就选好了的）
- * 返回 { suggest, compactFrac, pauseOnFlag, sdk, autoContinue, dispatch }（autoContinue 只是开头那一刻的值；撞墙处用 autoContinueDefault 现读；
- * dispatch = 子 agent 调度偏好原文，拼系统提示见 dispatchNudge）。
+ * 返回 { suggest, compactFrac, pauseOnFlag, sdk, autoContinue, debug }（autoContinue 只是开头那一刻的值；撞墙处用 autoContinueDefault 现读）。
+ * 子 agent 调用策略不在这里：claude.mjs 直接读 policyFor(ctx)（dispatch-policy.mjs），拼系统提示见 dispatchNudge。
  *
  * 输入建议 / 自动压缩点以服务端设置为准；服务端是默认值（没人改过）时才看请求体——老 apk 本机关掉的建议、
  * 拖过的压缩点照旧生效，新前端带的就是服务端值，两边一致。
  */
 export function turnSettings(ctx, { suggest, compactFrac, sessionId, outputStyle } = {}) {
   const snap = !!(ctx && ctx.snap);
-  if (snap) return { suggest: false, compactFrac: undefined, pauseOnFlag: false, sdk: {}, autoContinue: false, dispatch: '' };
+  if (snap) return { suggest: false, compactFrac: undefined, pauseOnFlag: false, sdk: {}, autoContinue: false, debug: false };
   const v = getClaudeSettings(ctx);
   const sdk = {};
   // 输出风格：会话覆盖（菜单里给这个会话单选的，含「默认」）优先，否则全局默认；全局是默认就不写。
@@ -56,69 +57,130 @@ export function turnSettings(ctx, { suggest, compactFrac, sessionId, outputStyle
   sdk.switchModelsOnFlag = !pauseOnFlag;
   const sug = v.promptSuggestions === false ? false : !!suggest;
   const frac = typeof v.compactFrac === 'number' ? v.compactFrac : compactFrac;
-  const dispatch = ctx && (ctx.kind === 'admin' || ctx.shell) && typeof v.subagentDispatch === 'string' ? v.subagentDispatch.trim() : '';
-  return { suggest: sug, compactFrac: frac, pauseOnFlag, sdk, autoContinue: v.autoContinueOnLimit !== false, dispatch };
+  // 调试模式（注册表 admin:true）：只认主机管理员的非沙箱轮
+  const debug = !!(ctx && ctx.kind === 'admin' && !ctx.sandbox && v.debugMode === true);
+  return { suggest: sug, compactFrac: frac, pauseOnFlag, sdk, autoContinue: v.autoContinueOnLimit !== false, debug };
 }
 
-// —— 子 agent 调度（设置 › Claude › 对话 › 子 agent 调度偏好）——
+// —— 子 agent 调用策略（设置 › Claude › 对话 › 子 agent 调用策略；策略文件见 dispatch-policy.mjs）——
 // 官方 Agent 工具的 effort / model 参数写着「只在用户或 CLAUDE.md 这类指令明确要求时才设，别自己判断」，Workflow 的 agent() 也是
 // 「默认省略、继承主会话」——结果 Claude 派出去的子 agent 几乎全跟主会话同模型同档。这段系统提示就是那个「明确要求」：
 // 每个子 agent 按难度显式定档；自定义 API 会话再列出能派的第三方模型（代理按模型名跨服务转发，见 claude-providers-transform 的 pickTarget）。
+// 总开关关着 = 完全走 Claude Code 原生：不拼这段、不挂上游代理路由、start_session 不解析 auto:<档>。
+// 这段进 appendText → 进停放 CLI 的复用签名（warmSig）：改了策略，下一条消息冷起生效。
 const fmtCtx = (n) => (n >= 1e6 ? +(n / 1048576).toFixed(1) + 'M' : n >= 1000 ? Math.round(n / 1000) + 'K' : '');
 const MAX_CATALOG = 40;
 const NL = String.fromCharCode(10);
+// 第三方服务里的 Claude 型号（不调用非 Claude 模型时，自定义 API 会话的老写法清单只留这些）；与 model-ratings.mjs 同口径
+const CLAUDE_NAME_RE = /^(claude[-_.]|opus|sonnet|haiku|fable)/i;
+// 只剥 custom:<服务>: 前缀：型号 id 自己可以带冒号（Ollama 的 qwen3:32b）
+const bareName = (name) => { const s = String(name); return s.startsWith('custom:') ? s.split(':').slice(2).join(':') : s; };
 
 /**
- * 动态工作流开着的轮拼进系统提示的一段（关着回 ''）。
- *   on        这一轮开着动态工作流（设置项或 Ultracode）
- *   text      用户写的调度偏好（可空）
- *   custom    主会话是自定义 API 模型：{ main, small }（型号 id）；官方模型为 null
- *   catalog   subagentModelCatalog()：能派给子 agent 的第三方模型
- *   routed    官方订阅会话也经上游代理转发第三方模型（claude-upstream.mjs 的 /r/<令牌>）；false = 只提一句派不了
- *   plan      订阅档（'pro' | 'max20'，单测用；默认取当前激活号的）
- * 有性价比快照（model-ratings.mjs）时给四档阶梯：每档首选 + 备选、auto:<档> 写法；没有快照就是老的「分档 + 全清单」。
+ * 调用策略这一轮管哪几条路：{ workflow, subagent, session }；总开关关 / 没有策略 → 全 false。
+ *   policy      policyFor(ctx)
+ *   workflowOn  这一轮开着动态工作流（设置项或 Ultracode）；workflow 范围只在这种轮生效
+ * workflow = Workflow 脚本里的 agent()；subagent = Agent 工具派的子 agent；session = start_session 的 model 写 auto:<档>。
  */
-export function dispatchNudge({ on, text = '', custom = null, catalog = [], routed = false, plan } = {}) {
-  if (!on) return '';
-  const head = '[子 agent 调度] 派子 agent（Agent 工具、动态工作流脚本里的 agent()）时，按每个子任务的难度分别指定推理强度和模型，不要默认照搬主会话的模型和档位。'
-    + '这是用户的明确要求：Agent 工具 effort / model 参数说明里「只在被明确要求时才设」的条件已经满足，Workflow 的 opts.effort / opts.model 同理。';
+export function dispatchScopes(policy, workflowOn = false) {
+  const on = !!(policy && policy.enabled === true);
+  const s = (policy && policy.scope) || {};
+  return {
+    workflow: on && s.workflow !== false && !!workflowOn,
+    subagent: on && s.subagent !== false,
+    session: on && s.session === true,
+  };
+}
+
+/** start_session 的 auto:<档> 写法（scope.session 开着、这一轮有会话工具时拼在会话协作那段后面）。 */
+export const SESSION_AUTO_LINE = 'start_session 的 model 可以写 auto:top / auto:hard / auto:normal / auto:light（最难 / 难 / 常规 / 机械），由 bridge 按当前调用策略换成具体模型与推理强度；不写就沿用本会话的。';
+export function sessionAutoNudge(scopes, sessionsOn) {
+  return sessionsOn && scopes && scopes.session ? NL + NL + SESSION_AUTO_LINE : '';
+}
+
+// 头一句按范围写：两条路都管 = 原来的写法；只管一条就只提那一条，另一条明说照默认
+function headLine(sc, workflowOn) {
+  if (sc.workflow && sc.subagent) {
+    return '[子 agent 调度] 派子 agent（Agent 工具、动态工作流脚本里的 agent()）时，按每个子任务的难度分别指定推理强度和模型，不要默认照搬主会话的模型和档位。'
+      + '这是用户的明确要求：Agent 工具 effort / model 参数说明里「只在被明确要求时才设」的条件已经满足，Workflow 的 opts.effort / opts.model 同理。';
+  }
+  if (sc.workflow) {
+    return '[子 agent 调度] 在动态工作流脚本里用 agent() 派子 agent 时，按每个子任务的难度分别指定推理强度和模型，不要默认照搬主会话的模型和档位。'
+      + '这是用户的明确要求：Workflow 的 opts.effort / opts.model 要显式写，不要省略继承。Agent 工具派的子 agent 不在这条要求里，照 Claude Code 默认（不设 model / effort）。';
+  }
+  return '[子 agent 调度] 用 Agent 工具派子 agent 时，按每个子任务的难度分别指定推理强度和模型，不要默认照搬主会话的模型和档位。'
+    + '这是用户的明确要求：Agent 工具 effort / model 参数说明里「只在被明确要求时才设」的条件已经满足。'
+    + (workflowOn ? '动态工作流脚本里的 agent() 不在这条要求里，照 Claude Code 默认（省略 opts.model / opts.effort）。' : '');
+}
+
+/**
+ * 调用策略管着的轮拼进系统提示的一段（不管 → ''）。
+ *   on          这一轮可以拼（快照访客 → false）
+ *   policy      policyFor(ctx)：总开关、范围、是否调用非 Claude、生效的那套（判定线 / 档位自定义 / 口述备注）
+ *   custom      主会话是自定义 API 模型：{ main, small }（型号 id）；官方模型为 null
+ *   catalog     subagentModelCatalog()：能派给子 agent 的第三方模型
+ *   routed      官方订阅会话也经上游代理转发第三方模型（claude-upstream.mjs 的 /r/<令牌>）；false = 只提一句派不了
+ *   workflowOn  这一轮开着动态工作流（设置项或 Ultracode）
+ *   plan        订阅成本口径（单测用；默认 'pool' = 号池均值）
+ *   owner       会话身份 customOwner(ctx)（第三方服务按真实地址认 plan 价）
+ * 有性价比快照（model-ratings.mjs）时给四档阶梯：每档首选 + 备选、auto:<档> 写法；没有快照就是老的「分档 + 全清单」。
+ * 两种写法都按范围裁剪：只管工作流就只讲 agent()，只管普通子 agent 就只讲 Agent 工具。口述备注排最后，压过上面的一切。
+ */
+export function dispatchNudge({ on = true, policy = null, custom = null, catalog = [], routed = false, workflowOn = false, plan, owner } = {}) {
+  const sc = dispatchScopes(policy, workflowOn);
+  if (!on || (!sc.workflow && !sc.subagent)) return '';
+  const st = activeStrategy(policy);
+  const note = st && typeof st.note === 'string' ? st.note : '';
+  const atp = policy.allowThirdParty !== false;
+  const head = headLine(sc, workflowOn);
   // 有性价比快照、且至少一个能派的模型评上了分：给阶梯（model-ratings.mjs），不再让 Claude 自己从清单里比较
-  const ladder = buildLadder({ catalog, official: !custom, routed, plan: plan || currentPlan() });
-  if (ladder) return NL + ['', head, ...ladderLines(ladder, { custom, routed, catalog }), ...prefLines(text)].join(NL);
+  const ladder = buildLadder({ catalog, official: !custom, routed, plan: plan || 'pool', allowThirdParty: atp, owner: owner || undefined, strategy: st });
+  if (ladder) return NL + ['', head, ...ladderLines(ladder, { custom, routed, catalog, sc, atp }), ...prefLines(note)].join(NL);
   const lines = [
     '',
     head,
     '· 推理强度（effort：low / medium / high / xhigh / max）：检索、读文件、机械改动、格式整理 → low；常规实现、一般审查 → medium；'
       + '需要设计取舍、难排查的问题 → high；最难的裁决与最终验证 → xhigh；max 只在用户要求时用。',
   ];
-  const list = catalog.slice(0, MAX_CATALOG).map((m) => {
+  // 不调用非 Claude 模型：官方会话一个第三方都不列；自定义 API 会话只留服务里的 Claude 型号
+  const cat = atp ? catalog : custom ? catalog.filter((m) => CLAUDE_NAME_RE.test(bareName(m.name))) : [];
+  const list = sc.workflow ? cat.slice(0, MAX_CATALOG).map((m) => {
     const meta = [m.provider, fmtCtx(m.contextWindow) && '上下文 ' + fmtCtx(m.contextWindow), m.vision ? '看图' : '', m.efforts.length ? '档位 ' + m.efforts.join('/') : '不分档'].filter(Boolean).join('，');
     return `  - ${m.name} — ${m.label}（${meta}）`;
-  });
+  }) : [];
   // 破折号左边是写进 agent() 的 id、右边是显示名。不说明的话 Claude 给用户列分工表时照抄 custom:p-xxxx:… 原始 id（10-30 宣传片录屏实遇）。
   const naming = list.length
-    ? `  每行破折号左边是写进 agent() 的模型名，右边是显示名。跟用户说话、列分工表、汇报结果时一律用显示名（如「${catalog[0].label}」，Claude 模型说 Sonnet 5.5、Haiku 5.5 这样的名字），custom:<服务>:<型号> 这类 id 只写进代码，不要写给用户看。`
+    ? `  每行破折号左边是写进 agent() 的模型名，右边是显示名。跟用户说话、列分工表、汇报结果时一律用显示名（如「${cat[0].label}」，Claude 模型说 Sonnet 5.5、Haiku 5.5 这样的名字），custom:<服务>:<型号> 这类 id 只写进代码，不要写给用户看。`
     : '';
-  if (custom) {
+  const aliasCustom = custom ? `Agent 工具的 model 只能填别名：haiku = ${custom.small}，sonnet / opus = 主会话模型 ${custom.main}。` : '';
+  if (custom && sc.workflow) {
     lines.push('· 模型：动态工作流的 agent(prompt, { model }) 可以写下面任意一个模型名（照抄；重名的写 custom:<服务>:<型号>），请求会自动转到对应的服务；'
-      + `Agent 工具的 model 只能填别名：haiku = ${custom.small}，sonnet / opus = 主会话模型 ${custom.main}。effort 会自动换算成各模型自己的档位。`);
-    lines.push(...(list.length ? [...list, naming] : ['  （没有别的可用模型）']));
+      + (sc.subagent ? aliasCustom : '') + 'effort 会自动换算成各模型自己的档位。');
+    lines.push(...(list.length ? [...list, naming]
+      : [!atp && catalog.length ? '  （用户设置了不调用非 Claude 模型，配置里没有 Claude 型号可派）' : '  （没有别的可用模型）']));
+  } else if (custom) {
+    lines.push('· 模型：' + aliasCustom + 'effort 会自动换算成各模型自己的档位。');
   } else if (routed && list.length) {
-    lines.push('· 模型：Claude 的 haiku 快且便宜（检索、机械活），sonnet 做常规实现，opus 留给难题；Agent 工具的 model 只能填这几个别名。');
+    lines.push('· 模型：Claude 的 haiku 快且便宜（检索、机械活），sonnet 做常规实现，opus 留给难题' + (sc.subagent ? '；Agent 工具的 model 只能填这几个别名。' : '。'));
     lines.push('  动态工作流的 agent(prompt, { model }) 还可以写下面任意一个第三方模型名（照抄；重名的写 custom:<服务>:<型号>），请求会自动转到对应的服务，effort 自动换算成它自己的档位。'
       + '注意它的上下文窗口可能比主会话小，别给它塞超长的材料。');
     lines.push(...list, naming);
   } else {
     lines.push('· 模型：haiku 快且便宜（检索、机械活），sonnet 做常规实现，opus 留给难题。');
-    if (list.length) lines.push('  设置里配置的第三方模型只有主会话本身是第三方模型时才能派给子 agent；这一轮主会话是 Claude 官方模型，偏好里点名的第三方模型改用最接近的 Claude 别名。');
+    if (!atp && catalog.length) lines.push(OFF_THIRD_PARTY);
+    else if (catalog.length) lines.push(sc.workflow
+      ? '  设置里配置的第三方模型只有主会话本身是第三方模型时才能派给子 agent；这一轮主会话是 Claude 官方模型，偏好里点名的第三方模型改用最接近的 Claude 别名。'
+      : '  设置里配置的第三方模型派不了（Agent 工具的 model 只认 Claude 别名），偏好里点名的第三方模型改用最接近的 Claude 别名。');
   }
-  lines.push(...prefLines(text));
+  lines.push(...prefLines(note));
   return NL + lines.join(NL);
 }
 
+const OFF_THIRD_PARTY = '  用户设置了不调用非 Claude 模型：设置里配置的第三方模型不派给子 agent，偏好里点名的第三方模型改用最接近的 Claude 别名。';
+
 function prefLines(text) {
   const t = String(text || '').trim();
-  return t ? ['[用户的调度偏好，与上面的默认分档冲突时以这里为准]', t] : [];
+  return t ? ['[用户的调度偏好，与上面的默认分档、指定冲突时以这里为准]', t] : [];
 }
 
 // 阶梯的一格：「opus · xhigh（Opus 5.5，智力 57 · ¥0.86 订阅等效）」。只写限制（上下文小、不看图），能力不缺的不啰嗦。
@@ -131,34 +193,54 @@ function cell(c) {
   return `${c.write}${c.effort ? ' · ' + c.effort : ''}（${c.label}，${notes.join('，')}）`;
 }
 
-function ladderLines(L, { custom, routed, catalog }) {
-  const auto = !!custom || routed;   // auto:* 要经过 bridge 换名：自定义 API 会话恒走本机代理，官方会话要这一轮挂了上游代理
-  const out = [
-    `· 选型已按用户的模型性价比库（${L.generated} 版：智力指数 + 这个会话实际付费口径下的每任务成本）算好，不用自己比较——先判断子任务属于哪一档，再照写。`,
-    auto ? '  档位（适用）→ 写法 = 首选落点；备选' : '  档位（适用）→ 首选；备选',
-  ];
-  for (const t of L.tiers) {
-    const alt = t.alt ? `；备选 ${cell(t.alt)}` : '';
-    out.push(`  ${t.title}（${t.use}）→ ${auto ? `auto:${t.key} = ` : ''}${cell(t.pick)}${alt}`);
+// 一档落点后面的来源标记：档位自定义压过图谱的标「用户指定」；判定线谁都够不着、取了最强的标出来
+const tierMark = (t) => (t.source === 'override' ? '（用户指定）' : t.short ? '（没有模型够得着这条线，取最强的）' : '');
+
+function ladderLines(L, { custom, routed, catalog, sc, atp }) {
+  // auto:* 要经过 bridge 换名：自定义 API 会话恒走本机代理，官方会话要这一轮挂了上游代理；只有工作流范围开着才教这个写法
+  const auto = sc.workflow && (!!custom || routed);
+  const out = [];
+  // 阶梯行：工作流范围开着 = 按完整阶梯；只管普通子 agent 时，官方会话改列 Agent 工具那条路（只能写 Claude 别名）的四档，
+  // 自定义 API 会话不列（阶梯里的第三方模型 Agent 工具写不了，只按档位设 effort）
+  const rows = sc.workflow ? L.tiers : custom ? [] : L.agentTool;
+  if (rows.length) {
+    out.push(
+      `· 选型已按用户的模型性价比库（${L.generated} 版：智力指数 + 这个会话实际付费口径下的每任务成本）算好，不用自己比较——先判断子任务属于哪一档，再照写。`,
+      auto ? '  档位（适用）→ 写法 = 首选落点；备选' : sc.workflow ? '  档位（适用）→ 首选；备选' : '  档位（适用）→ 首选',
+    );
+    for (const t of rows) {
+      const alt = t.alt && sc.workflow ? `；备选 ${cell(t.alt)}` : '';
+      out.push(`  ${t.title}（${t.use}）→ ${auto ? `auto:${t.key} = ` : ''}${cell(t.pick)}${tierMark(t)}${alt}`);
+    }
+    if (auto) {
+      out.push('· 动态工作流 agent() 的 model 直接写 auto:<档>：bridge 在请求时换成该档首选的模型与档位（opts.effort 不用写，写了也以阶梯为准）。'
+        + '要用备选、或用户点名某个模型时，写它的模型名（括号前那段）并按它标的档位设 effort。');
+    } else if (sc.workflow && sc.subagent) {
+      out.push('· 动态工作流 agent() 与 Agent 工具都写括号前的别名，effort 按它标的档位设。');
+    } else if (sc.workflow) {
+      out.push('· 动态工作流 agent() 写括号前的别名，effort 按它标的档位设。');
+    } else {
+      out.push('· Agent 工具的 model 写括号前的别名，effort 按它标的档位设。');
+    }
   }
-  if (auto) {
-    out.push('· 动态工作流 agent() 的 model 直接写 auto:<档>：bridge 在请求时换成该档首选的模型与档位（opts.effort 不用写，写了也以阶梯为准）。'
-      + '要用备选、或用户点名某个模型时，写它的模型名（括号前那段）并按它标的档位设 effort。');
-  } else {
-    out.push('· 动态工作流 agent() 与 Agent 工具都写括号前的别名，effort 按它标的档位设。');
-  }
-  if (custom) {
-    out.push(`· Agent 工具的 model 只能填别名：haiku = ${custom.small}，sonnet / opus = 主会话模型 ${custom.main}——要按阶梯选模型就用动态工作流；`
+  if (sc.subagent && custom) {
+    out.push(`· Agent 工具的 model 只能填别名：haiku = ${custom.small}，sonnet / opus = 主会话模型 ${custom.main}${sc.workflow ? '——要按阶梯选模型就用动态工作流' : ''}；`
       + 'Agent 工具只按档位设 effort（最难 xhigh、难 high、常规 medium、机械 low）。effort 会自动换算成各模型自己的档位。');
-  } else if (auto && L.agentTool.length) {
-    out.push('· Agent 工具的 model 只能填别名：' + L.agentTool.map((t) => `${t.title} ${t.pick.write} + effort ${t.pick.effort}`).join('，') + '。');
+  } else if (sc.subagent && sc.workflow && auto && L.agentTool.length) {
+    out.push('· Agent 工具的 model 只能填别名：' + L.agentTool.map((t) => `${t.title} ${t.pick.write} + ${t.pick.effort ? 'effort ' + t.pick.effort : '不设 effort'}${t.source === 'override' ? '（用户指定）' : ''}`).join('，') + '。');
   }
-  if (!custom && !routed && catalog.length) out.push('  设置里配置的第三方模型这一轮派不了（主会话是 Claude 官方模型、没挂上转发），用户点名第三方模型时改用最接近的 Claude 别名。');
+  if (!custom && catalog.length) {
+    if (!atp) out.push(OFF_THIRD_PARTY);
+    else if (!routed) out.push(sc.workflow
+      ? '  设置里配置的第三方模型这一轮派不了（主会话是 Claude 官方模型、没挂上转发），用户点名第三方模型时改用最接近的 Claude 别名。'
+      : '  设置里配置的第三方模型派不了（Agent 工具的 model 只认 Claude 别名），用户点名第三方模型时改用最接近的 Claude 别名。');
+  }
+  if (!sc.workflow || !rows.length) return out;
   // 显示名和型号名只差大小写 / 标点的不重复写
   const named = (name, label) => (normKey(name) === normKey(label) ? name : `${name}（${label}）`);
   if (L.others.length) out.push('· 其余已配模型（被表里更便宜或更聪明的选项胜出，只在用户点名时用）：' + L.others.map((c) => named(c.write, c.label)).join('、'));
   if (L.unrated.length) out.push('· 未评分（库里没有数据，只在用户点名时用）：' + L.unrated.map((m) => named(m.name, m.label)).join('、'));
-  out.push('  写法 / 模型名只写进代码；跟用户说话、列分工表、汇报结果时一律用括号里的显示名（如「' + L.tiers[0].pick.label + '」）'
+  out.push('  写法 / 模型名只写进代码；跟用户说话、列分工表、汇报结果时一律用括号里的显示名（如「' + rows[0].pick.label + '」）'
     + (auto ? '，auto:<档> 说成「自动·难」这样' : '') + (catalog.length ? '，custom:<服务>:<型号> 这类 id 不要写给用户看' : '') + '。');
   return out;
 }

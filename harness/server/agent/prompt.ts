@@ -1,16 +1,22 @@
+import path from "node:path";
 import { lanAddress } from "../lan.ts";
+import { bridgeRootCandidates } from "../paths.ts";
+import { PR_SECTION } from "../pr-bridge.ts";
 import { projectDocsSection } from "../project-docs.ts";
 import { readOnlyRoots } from "../sandbox.ts";
 import type { WorldSection } from "./world-state.ts";
+import type { ModelProfile } from "./profile.ts";
+import { tenantShell } from "../tenant.ts";
 
 export interface PromptEnv {
   root: string;
   // 会话的权限模式。plan 会额外注入下面的 plan-mode 契约段（其余模式不注入，
-  // 免得白占提示词）。
-  permissionMode?: "auto" | "read-only" | "plan";
-  // Sandbox reach: "workspace" (paths outside root are blocked) or "full"
-  // (absolute paths anywhere are allowed, Claude-Code-style).
-  access?: "workspace" | "full";
+  // 免得白占提示词）。bypass = 管理员全权档，提示词里写明一切闸门都关了。
+  permissionMode?: "auto" | "read-only" | "plan" | "bypass";
+  // Sandbox reach: "workspace" (paths outside root are blocked), "full" (absolute
+  // paths anywhere are allowed, Claude-Code-style), or "bypass" (full reach AND the
+  // secret guard is off — driven by permissionMode "bypass").
+  access?: "workspace" | "full" | "bypass";
   shell: string;
   platform: string;
   provider: string;
@@ -41,6 +47,19 @@ export interface PromptEnv {
   date?: string;
   // BridgeManual / BridgeCall 注册了没有（bridge 拉起的实例才有，tools/bridgeapi.ts）：有才写下面的 bridge 段
   bridge?: boolean;
+  // PullRequest 注册了没有（bridge 拉起的主机实例才有，tools/pullrequest.ts）：有才写拉取请求那几句（正文 PR_SECTION 在 pr-bridge.ts）
+  pr?: boolean;
+  // 子 agent 选型（dispatch-ladder.ts dispatchSection 拼好的整段，空 = 不出）：建会话时定一次，同 managedSkills
+  dispatch?: string;
+  // 会话协作段（session-family.ts familyPromptSection 写好的整段；子会话另带「你是子会话」）。建会话时定下，与 GUIDE 同契约
+  collab?: string;
+  // 模型档案（agent/profile.ts）：按家族选提示词变体（profile.prompt.variant）与补丁（profile.prompt.patches）的挂点。
+  // P0 只收不用——任何档案下输出都与不给时逐字节相同（model-profile-golden.test.ts 锁着）。
+  profile?: ModelProfile;
+  // 调试模式（prefs/debug.ts）："bridge" = 经 BridgeCall feedback.harness 记反馈；"file" = 没有 bridge 工具，直接写文件夹；空 = 关
+  debug?: string;
+  // debug="file" 时反馈写到哪（bridge 根下的 harness-feedback/dimensio）
+  debugDir?: string;
 }
 
 const MEMORY_SECTION_MARKER = "\n\n## Memory index\n";
@@ -81,10 +100,39 @@ When the user asks how bridge works, where a feature is or whether it exists, or
 Media (images, speech, music, video via Google Vertex): BridgeCall media.* — listed only if the bridge admin enabled it for dimensio. When a task needs an asset (page illustration, narration, background music) generate it unasked, saveTo = a workspace path; video is slow and costly, only when clearly wanted.
 Bridge bugs — the user says something is broken / asks to report it, or you see bridge itself misbehave: (1) BridgeCall feedback.diagnose for the facts; with their description, screenshots or your own repro, decide whether it really is a bridge bug — a usage or config problem you just solve, no report. (2) If it is, AskUserQuestion: in a sentence or two the problem as you see it, what goes along (log excerpts / screenshots) and where it goes (diagnose's reporting.note). (3) Only after they agree, BridgeCall feedback.report (title; details = what happened, steps, expected, your diagnosis; evidence = only the relevant log lines) and pass on the returned note. Never put their conversation text, file contents, accounts or keys in a report.`;
 
+// 调试模式（对标 bridge 里 Claude 的「【调试模式】」一节，src/mcp/bridge-tools.mjs debugNudge）：开着时这一轮的首要产出是 harness 反馈。
+// 建会话时开着就写进 system；会话中途开关走 World State 的 debug 节（describeWorldChange）。
+export function debugFeedbackDir(): string {
+  const root = bridgeRootCandidates()[0];
+  return root ? path.join(root, "harness-feedback", "dimensio") : "";
+}
+
+export function debugSection(how: string, dir = debugFeedbackDir()): string {
+  const record =
+    how === "bridge"
+      ? `BridgeCall op "feedback.harness". Required args: kind, title, details — details is the write-up itself (what happened, why it is the harness's fault, the impact); evidence / suggestion do not replace it. Optional: tool, severity, task, evidence, workaround, suggestion, model. Example: {op:"feedback.harness", args:{kind:"bug", title:"…", details:"…", evidence:"…"}}. No need to ask the user first; it only writes a file. Then carry on.`
+      : `there is no BridgeCall here, so Write a markdown file to ${dir || "<bridge root>/harness-feedback/dimensio"}/<YYYY-MM-DD>/<HHMMSS>-<kind>-<short-title>.md (title, kind, severity, tool, what you were doing, the problem, evidence, how you worked around it, suggestion).`;
+  return `## DEBUG MODE IS ON (top priority)
+The user — the developer of this harness — turned on debug mode. The main purpose of this session is now to find what is wrong with the HARNESS and collect feedback to improve it; the task itself comes second. "The harness" is everything you are working through: the tools (built-in, Bridge*, MCP), the instructions in this system prompt, approvals and the path guard, world-state updates, sub-agents and workflows. Use it critically instead of silently adapting to it:
+1. Errors, wrong results, odd behaviour: stop and judge whether the harness / tool is at fault (misleading parameter docs, truncated or missing output, wrong path handling, timeouts, a guard blocking something legitimate, instructions that contradict reality…) rather than the task or your own misuse. If so, file kind "bug". If unsure, file it anyway and state your reasoning.
+2. Redundant or pointless design — extra steps, duplicated or conflicting instructions, a confirmation that costs a turn for nothing, context you are handed but never need: kind "redundant".
+3. A missing capability — a tool, parameter or piece of information that should exist and does not: kind "missing".
+4. Having to deliberately route around the harness to get the task done — switching tools, hand-building commands, guessing paths, trial and error: kind "workaround" (say exactly how you got around it). Works but awkward or confusing: kind "friction".
+How to file: ${record}
+Hard rule: the feedback IS the most important deliverable of this session. Do not be lazy, do not skip feedback to stay focused on finishing the project, and do not batch it up to reconstruct from memory at the end — file each issue the moment you hit it, one issue per entry, concrete enough for the developer to reproduce and fix (paste raw evidence). Several small entries beat one missed problem. Do not invent problems you did not hit. End your final answer with one line "Debug feedback this turn: N" listing the titles, or say why there were none.`;
+}
+
+// 工作区协同（Workspace / Terminal 两件工具）：用户说「这个文件 / 我终端里」时还没有任何工具调用可以触发 playbook，所以写在 system 里；
+// 只说何时用，用法在工具说明里（前缀预算）。没有命令行的租户没有 Terminal，那半句不写。
+export function screenSection(terminal: boolean): string {
+  return `## The user's screen
+The user works beside you in an app with a side panel (files, previews, review, terminal). When they say "this file", "what I'm looking at" or "change it here", call Workspace(view) first: it names the file they have open (absolute path) and flags unsaved edits — then Workspace(draft) before editing that file, so you never overwrite what they typed. Show finished documents with Workspace(preview, path).${terminal ? " Terminal is the very terminal they see: read it when they mention an error there instead of asking them to paste." : ""}`;
+}
+
 // 恢复会话时把 plan 段与当前模式对齐：不是 plan 就摘掉，是 plan 但原来没有就补上。
 export function refreshPlanSection(
   system: string,
-  mode: "auto" | "read-only" | "plan" | undefined,
+  mode: "auto" | "read-only" | "plan" | "bypass" | undefined,
   webSearch = false,
 ): string {
   let out = system;
@@ -108,7 +156,10 @@ export function refreshPlanSection(
 // 原始的 Environment 段在会话建立时就把 reach 写死了；用户在输入框旁把范围从
 // 「仅工作空间」切到「整机」（或切回）时，沙箱当场改判，但模型还得知道边界变了——
 // C4 起以 World State 片段告知（describeWorldChange），不再往 system 里摘换一段。
-function accessBody(access: "workspace" | "full"): string {
+function accessBody(access: "workspace" | "full" | "bypass"): string {
+  if (access === "bypass") {
+    return `Access scope is now BYPASS / FULL MACHINE (supersedes the Environment reach above): you may read, edit, and run anything anywhere on this machine using absolute paths, and the credential/secret guard is OFF — .env, .ssh, key files and the bridge config are readable. Checkpoints/rollback only cover the workspace. Nothing will stop an irreversible or outside-the-workspace action, so be deliberate.`;
+  }
   return access === "full"
     ? `Access scope is now FULL MACHINE (supersedes the Environment reach above): you may read, edit, and run things anywhere on this machine using absolute paths when the task points there. Keep project work and new files in the workspace; touch outside paths deliberately and say so. Checkpoints/rollback only cover the workspace. Credential stores (.env, .ssh, key files, …) stay blocked everywhere.`
     : `Access scope is now WORKSPACE ONLY (supersedes the Environment reach above): the path guard rejects every path outside the workspace, in tool arguments and command lines alike. Treat the workspace as the boundary rather than probing for what slips through.`;
@@ -127,10 +178,13 @@ export function describeWorldChange(section: WorldSection, value: string, was: s
       if (value === "read-only") {
         return `Permission mode: READ-ONLY${from}. Every write, and every command that changes anything, is blocked — only read. Only the user can switch it back.${planEnded}`;
       }
+      if (value === "bypass") {
+        return `Permission mode: BYPASS${from}. Every safety gate is off: all tool calls run with no approval card, permission rules (allow/deny/ask), risk review and control-plane protection do not apply, and the path + credential/secret guard are off (whole-machine reach, .env/.ssh/key files and the bridge config readable). This is the user's deliberate "full admin, no friction" level — act decisively, but be deliberate about irreversible and outside-the-workspace actions since nothing will stop them.${planEnded}`;
+      }
       return `Permission mode: AUTO${from}. You may edit files and run commands.${planEnded}`;
     }
     case "access":
-      return value === "full" || value === "workspace" ? accessBody(value) : `Access scope: ${value}.`;
+      return value === "full" || value === "workspace" || value === "bypass" ? accessBody(value) : `Access scope: ${value}.`;
     case "date":
       return `Today's date is now ${value} (local time).`;
     case "guide":
@@ -149,6 +203,10 @@ export function describeWorldChange(section: WorldSection, value: string, was: s
         : "Generated project knowledge: the workspace currently has no detected project facts.";
     case "memory":
       return value ? `Memory index, current (replaces the section in the system prompt):\n\n${value}` : "Memory index: no active notes right now.";
+    case "debug":
+      return value
+        ? debugSection(value)
+        : "Debug mode is OFF now — the DEBUG MODE instructions given earlier (in the system prompt or an earlier update) no longer apply; just do the task.";
     case "jobs":
       return `Background jobs of this session that have finished: ${value}. Poll a job for its output if you have not yet.`;
   }
@@ -198,8 +256,11 @@ export function refreshDynamicContext(
 // The discipline system prompt. Third-party models lack Claude Code's tuning,
 // so this is a hard requirement, not a nicety (§7.4).
 export function systemPrompt(env: PromptEnv): string {
-  const full = env.access === "full";
-  const reach = full
+  const bypass = env.permissionMode === "bypass" || env.access === "bypass";
+  const full = env.access === "full" || bypass;
+  const reach = bypass
+    ? `- BYPASS MODE IS ACTIVE — every safety gate is off (the user's deliberate "full admin, no friction" level): all tool calls run with no approval, permission rules and risk review do not apply, and you may read, edit, and run anything anywhere on this machine using absolute paths. The credential/secret guard is OFF too — .env files, .ssh, key files and the bridge config are readable. Checkpoints/rollback only cover the workspace. Nothing will stop a destructive or irreversible action, so be deliberate: prefer the workspace for project work, and think before touching outside paths, credentials, or system state.`
+    : full
     ? `- You may ALSO work outside the workspace using absolute paths — read, edit, and run things anywhere on this machine — when the user's task points there. Default to the workspace for project work and new files; only touch outside paths deliberately, and say so when you do. Checkpoints/rollback only cover the workspace, so be extra careful with destructive changes outside it. Credential stores (.env files, .ssh, key files, …) are blocked everywhere.`
     : `- Work inside this directory. The path guard rejects paths that leave it, in tool arguments and in command lines alike, and credential stores (.env, .ssh, key files, …) are blocked everywhere. It judges the paths you name — treat the workspace as the boundary rather than probing for what slips through. Scratch files a native program must also see go under $WORKSPACE_TMP.`;
   // Directories the user opened for reading are only useful if the model knows
@@ -265,6 +326,12 @@ You have a cross-session memory (Remember/Recall), isolated to this workspace �
   const sections: string[] = [];
 
   if (env.bridge) sections.push(BRIDGE_SECTION);
+  if (env.pr) sections.push(PR_SECTION);
+  sections.push(screenSection(tenantShell())); // 工作区协同
+  // 子 agent 选型阶梯（排在动态尾段之前：refreshDynamicContext 只换 knowledge / memory）
+  if (env.dispatch?.trim()) sections.push(env.dispatch.trim());
+  if (env.collab?.trim()) sections.push(env.collab.trim());
+  if (env.debug) sections.push(debugSection(env.debug, env.debugDir));
 
   const projectDocs = env.projectDocs?.trim();
   if (projectDocs) sections.push(projectDocsSection(projectDocs));

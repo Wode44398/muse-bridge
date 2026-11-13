@@ -70,7 +70,7 @@ test('号池用量与手机额度环全交给 overlay 用量来源，参数原�
   assert.deepEqual(probedInfo('a'), { plan: 'pro', error: null, at: 2 });
   assert.equal(await maybeRefreshLimits(), true);
   assert.deepEqual(calls.map((c) => c[0]), ['make', 'poolUsage', 'refreshAccounts', 'probedInfo', 'maybeRefreshLimits']);   // 只造一次
-  assert.deepEqual(calls[0][1], ['activeAccountId', 'activeToken', 'applyProbedLimits', 'bucket', 'listAccountsWithTokens', 'loginToken', 'oauthToken']);
+  assert.deepEqual(calls[0][1], ['accountPlan', 'activeAccountId', 'activeToken', 'applyProbedLimits', 'bucket', 'listAccountsWithTokens', 'loginPlan', 'loginToken', 'noteFiveHourPresence', 'notePlanTier', 'noteUpgradePaths', 'oauthToken', 'planFromTier']);
   assert.deepEqual(calls[1][1], { force: true });
   assert.deepEqual(calls[2].slice(1), [['a'], 1234]);
 });

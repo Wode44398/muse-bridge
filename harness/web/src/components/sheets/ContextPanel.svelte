@@ -1,5 +1,7 @@
 <script lang="ts">
-  // 上下文面板（顶栏的用量环点开；C8 / X42 / K43 / A3）：这段对话吃了多少上下文、前缀缓存冷没冷，和两个动作——
+  // 上下文面板（顶栏右上角那颗按钮点开；C8 / X42 / K43 / A3）。最上面是这个对话的运行设置（RunSettings：工作档位、
+  // 工作权限、运行环境——维护者 11-07 让它们全部离开输入框、聚到这里）；对话开始之后下面才有上下文这一段：
+  // 这段对话吃了多少上下文、前缀缓存冷没冷，和两个动作——
   // 立即压缩（较早的对话换成摘要，接着在这里聊）、带摘要开新会话（整段写成摘要带过去，原会话留着）。
   // O8（N39）：下面是这个对话的用量明细——主对话之外，子 agent、工作流里的 agent、压缩各花了多少（打开时现取一次）。
   // 两个动作单飞、运行中不可点；只有做成了才收起面板（没做成由 state 给提示、面板留着）。
@@ -10,19 +12,23 @@
   import Popover from "../ui/Popover.svelte";
   import Measure from "../ui/Measure.svelte";
   import Button from "../ui/Button.svelte";
+  import RunSettings from "./RunSettings.svelte";
   import { usePane } from "../../lib/pane.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
-  let { anchor, onclose }: { anchor: HTMLElement; onclose: () => void } = $props();
+  // onlocal：「本机模型」那一行——面板收起、顶栏按钮接着打开本机控制面板（弹层里不叠弹层：点在里层会被外层当成点在外面）
+  let { anchor, onclose, onlocal }: { anchor: HTMLElement; onclose: () => void; onlocal: () => void } = $props();
 
   // 窄屏（375 的手机）上别宽过视口：弹层只会把左边钳进来，右边会被顶出去
   const maxW = Math.max(260, Math.min(380, window.innerWidth - 20));
-  const minW = Math.min(300, maxW);
+  const minW = Math.min(320, maxW);
 
   const used = $derived(pane.chat.ctx.used);
   const limit = $derived(pane.chat.ctx.limit);
   const pct = $derived(limit ? Math.min(100, Math.round((used / limit) * 100)) : 0);
+  // 新对话（还没吃进任何上下文）只有运行设置
+  const hasCtx = $derived(used > 0 && limit > 0);
   const k = (n: number) => `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k`;
 
   // 缓存冷没冷：30 秒对一次钟
@@ -69,9 +75,12 @@
   }
 </script>
 
-<Popover {anchor} {onclose} prefer="down" align="end" minWidth={minW} maxWidth={maxW} role="dialog" label={t("上下文")}>
+<Popover {anchor} {onclose} prefer="down" align="end" minWidth={minW} maxWidth={maxW} tall role="dialog" label={t("上下文与运行设置")}>
   <div class="cx">
-    <section>
+    <RunSettings {onclose} {onlocal} />
+
+    {#if hasCtx}
+    <section class="ctx">
       <h4>{t("上下文")}</h4>
       <p class="used">
         <span class="k">{t("已用")}</span>
@@ -97,8 +106,9 @@
         </p>
       {/if}
     </section>
+    {/if}
 
-    {#if rows && rows.length}
+    {#if hasCtx && rows && rows.length}
       <section class="usage">
         <h4>{t("用量（这个对话）")}</h4>
         <div class="tbl" role="table" aria-label={t("用量（这个对话）")}>
@@ -148,6 +158,7 @@
     flex-direction: column;
     gap: 8px;
   }
+  .ctx,
   .usage {
     padding-top: 12px;
     border-top: 1px solid var(--border);

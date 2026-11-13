@@ -28,7 +28,7 @@ export const isOffTier = (id) => OFF_SET.has(String(id || ''));
 
 // —— 非对话模型：语音识别 / 合成、向量、重排、生图、审核……加进来默认不启用，也不进模型菜单 ——
 export const NON_CHAT_RE = /(?:^|[-_.\/:])(?:asr|tts|whisper|transcri\w*|speech|voice\w*|audio|embed\w*|rerank\w*|moderation|dall-e|imagen|image|sora|veo|ocr|realtime)(?=$|[-_.\/:\d])/i;
-export const VISION_RE = /(?:^|[-_.\/])(?:vl|vision|omni)(?:$|[-_.\/])|gpt-[45]|^o\d|glm-[\d.]+v|pixtral|llava|qvq/i;
+export const VISION_RE = /(?:^|[-_.\/])(?:vl|vision|omni)(?:$|[-_.\/])|gpt-[4-6]|^o\d|glm-[\d.]+v|pixtral|llava|qvq/i;
 
 /** 比对用的裸型号：去掉 vendor/ 前缀（含 Gemini 的 models/）、:free 之类的后缀和 [1m]。 */
 export function bareModelId(id) {
@@ -63,6 +63,25 @@ export function thinkingTemplate(key, protocol, opts = {}) {
   const gem = protocol === 'gemini';
   const d = (fallback = '') => opts.dflt || fallback;
   const generic = (always = false) => (oai ? think('effort', levels(['low', 'medium', 'high']), { field: 'reasoning_effort', always }) : null);
+  const effort = (ids, o = {}) => (oai ? think('effort', levels(ids), { field: 'reasoning_effort', ...o }) : null);
+  const NONE_OFF = T('off', '关闭', 'none');
+  // 线路 = OpenRouter：它只认自己的统一写法（顶层 reasoning_effort，关 = none；个别型号只有 reasoning.enabled），
+  // 厂商直连的 thinking.type / enable_thinking 会被静默忽略——菜单上显示「关闭」、模型照样思考照样计费（2026-11-13 实测）。
+  // 只覆盖直连写法在这条线路上不生效的家族；其余家族直连与 OpenRouter 同一种写法，走下面的模板。
+  if (oai && opts.route === 'openrouter') {
+    switch (key) {
+      case 'deepseek':        // none / low / high / max 都收，none 真关（推理 token 为 0）
+        return think('effort', [NONE_OFF, ...levels(['low', 'high', 'max'])], { field: 'reasoning_effort', dflt: d() });
+      case 'qwen38':
+        // Flash：不认 reasoning_effort，只有 reasoning.enabled 能关；Max：必须思考（发 none 是 400），档位 low / medium / xhigh 生效
+        if (/flash/.test(String(opts.id || ''))) return think('effort', [T('off', '关闭', { reasoning: { enabled: false } }), T('on', '开启', { reasoning: { enabled: true } })]);
+        return think('effort', levels(['low', 'medium', 'xhigh']), { field: 'reasoning_effort', dflt: d(), always: true });
+      case 'claude-adaptive': // low 到 max 五档都收（low 基本不想）
+        return think('effort', levels(['low', 'medium', 'high', 'xhigh', 'max']), { field: 'reasoning_effort', dflt: d('high') });
+      case 'claude-adaptive-46':
+        return think('effort', levels(['low', 'medium', 'high', 'max']), { field: 'reasoning_effort', dflt: d('high') });
+    }
+  }
   switch (key) {
     case 'claude-adaptive':   // 官方 Messages：thinking adaptive + output_config.effort，五档、默认 high（Opus / Haiku 5.5 默认 medium）
       return anth ? think('adaptive', levels(['low', 'medium', 'high', 'xhigh', 'max']), { dflt: d('high') }) : generic();
@@ -75,14 +94,17 @@ export function thinkingTemplate(key, protocol, opts = {}) {
     case 'mimo':              // 小米：不发参数也会思考；只能开 / 关（Anthropic 端点 thinking.type=disabled、OpenAI 端点 reasoning_effort=none）
       if (oai) return think('effort', [T('off', '关闭', 'none'), T('on', '开启', 'high')], { field: 'reasoning_effort', always: true });
       return anth ? think('effort', [OFF(), ON()], { always: true }) : null;
-    case 'deepseek':          // V4.1：thinking.type + reasoning_effort low / high / max
-      return oai ? think('effort', [OFF(), ...levels(['low', 'high', 'max'], (id) => ({ thinking: { type: 'enabled' }, reasoning_effort: id }))], { dflt: d() })
-        : thinkingTemplate('toggle', protocol);
-    case 'deepseek-v4':       // V4 Pro（退役中）：只有 high / max
-      return oai ? think('effort', [OFF(), ...levels(['high', 'max'], (id) => ({ thinking: { type: 'enabled' }, reasoning_effort: id }))], { dflt: d() })
-        : thinkingTemplate('toggle', protocol);
+    case 'deepseek':          // V4.1 Flash / V4 Pro：thinking.type + 档位 low / high / max（官方 /models 的 supported_levels，两个型号都是这三档）。
+      // OpenAI 端点档位写 reasoning_effort；官方 /anthropic 端点写 output_config.effort（2026-11-13 实测三档都收，乱写的值 422）
+      if (oai) return think('effort', [OFF(), ...levels(['low', 'high', 'max'], (id) => ({ thinking: { type: 'enabled' }, reasoning_effort: id }))], { dflt: d() });
+      return anth ? think('effort', [OFF(), ...levels(['low', 'high', 'max'], (id) => ({ thinking: { type: 'enabled' }, output_config: { effort: id } }))], { dflt: d() }) : null;
     case 'qwen38':            // Qwen3.8：enable_thinking + reasoning_effort low / medium / xhigh（high / max 是 xhigh 的别名）
       return oai ? think('effort', [T('off', '关闭', { enable_thinking: false }), ...levels(['low', 'medium', 'xhigh'], (id) => ({ enable_thinking: true, reasoning_effort: id }))], { dflt: d() }) : null;
+    case 'qwen38-open':       // 开源权重的 Qwen3.8（vLLM / SGLang / llama.cpp 这类 OpenAI 兼容服务）：开关与档位都是 chat template 的变量，
+      // 只认 chat_template_kwargs（vLLM 实测顶层 enable_thinking:false 不生效）。模板（Qwen3.8-Flash-Next-FP4-Local 的 chat_template.jinja）：
+      // enable_thinking 缺省 = 开；reasoning_effort 只收 xhigh（缺省）/ medium / low，别的值（含 high）raise_exception 整个请求被拒。
+      // 读的是 NVIDIA FP4 包里的模板，不是朋友机器 FP8 部署实际加载的那份（拿不到文件）；那台的开关与三档另用真机请求核对过
+      return oai ? think('effort', [T('off', '关闭', { chat_template_kwargs: { enable_thinking: false } }), ...levels(['low', 'medium', 'xhigh'], (id) => ({ chat_template_kwargs: { enable_thinking: true, reasoning_effort: id } }))], { dflt: d() }) : null;
     case 'qwen37':            // Qwen3.7：没有 reasoning_effort，只有 thinking_budget（8K / 16K / 32K，同 dimensio 适配器）
       return oai ? think('effort', [T('off', '关闭', { enable_thinking: false }), ...[['low', 8192], ['medium', 16384], ['high', 32768]].map(([id, n]) => T(id, LEVEL_NAMES[id], { enable_thinking: true, thinking_budget: n }))], { dflt: d() }) : null;
     case 'qwen-toggle':       // 更早的 Qwen3：enable_thinking 开 / 关
@@ -93,9 +115,11 @@ export function thinkingTemplate(key, protocol, opts = {}) {
     case 'glm52':             // GLM-5.2：thinking.type + reasoning_effort high / max
       return oai ? think('effort', [OFF(), ...levels(['high', 'max'], (id) => ({ thinking: { type: 'enabled' }, reasoning_effort: id }))], { dflt: d() })
         : thinkingTemplate('toggle', protocol);
-    case 'kimi':              // Kimi K3 / K2.8：恒思考，reasoning_effort low / high / max
+    case 'kimi':              // Kimi K3 / K2.8：恒思考，low / high / max。OpenAI 入口写 reasoning_effort；
+      // Anthropic 入口（官方给 Claude Code 的接法，api.kimi.com/coding）写 output_config.effort——2026-11-13 实测三档都收、low 档思考明显变短，
+      // thinking disabled 是 400（关不掉）
       if (oai) return think('effort', levels(['low', 'high', 'max']), { field: 'reasoning_effort', dflt: d(), always: true });
-      return anth ? NONE(true) : null;
+      return anth ? think('effort', levels(['low', 'high', 'max']), { field: 'output_config.effort', dflt: d(), always: true }) : null;
     case 'always':            // 恒思考、没有档位（Kimi K2.7 Highspeed：reasoning_effort 发了也被忽略）
       return NONE(true);
     case 'gemini3':           // Gemini 3 / 4：thinkingLevel low / medium / high，关不掉
@@ -108,13 +132,29 @@ export function thinkingTemplate(key, protocol, opts = {}) {
       return gem ? think('effort', [T('low', 'Low', gemBudget(512)), T('medium', 'Medium', gemBudget(-1)), T('high', 'High', gemBudget(24_576))], { dflt: d(), always: true }) : generic(true);
     case 'openai':            // GPT-5 / o 系列
       return generic();
+    case 'effort3':           // 通用三档 reasoning_effort（Mistral Large 4、Grok 4.5、gpt-oss）
+      return generic();
+    // 下面几族「必须思考」用「不提供关闭档」表达，不标 alwaysThinks：那个标记会让历史思考以 reasoning_content 回传，
+    // 这几家都不认（OpenRouter 静默丢弃，官方直连可能拒）。
+    case 'gpt6':              // GPT-6 Astra / 6.1 Sol / 各 Pro：low 到 max，必须思考（none 是 400），上游默认 medium
+      return effort(['low', 'medium', 'high', 'xhigh', 'max'], { dflt: d('medium') });
+    case 'gpt6-off':          // GPT-6.1 Terra / 6 Luna / 6 Sol / 5.6：多一个 none（真关，推理 token 为 0）
+      return oai ? think('effort', [NONE_OFF, ...levels(['low', 'medium', 'high', 'xhigh', 'max'])], { field: 'reasoning_effort', dflt: d('medium') }) : null;
+    case 'grok4':             // Grok 4.6 / 4.7：low 到 xhigh，必须思考，默认 high
+      return effort(['low', 'medium', 'high', 'xhigh'], { dflt: d('high') });
+    case 'muse':              // Muse Wonder / Spark / Ember：minimal 到 max 六档，必须思考（none 是 400）
+      return effort(['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], { dflt: d() });
+    case 'muse-open':         // 开放权重的 Muse Spark Open / Glimmer：low 到 xhigh
+      return effort(['low', 'medium', 'high', 'xhigh'], { dflt: d() });
+    case 'hy4':               // 混元 Hy4：none / low / high
+      return oai ? think('effort', [NONE_OFF, ...levels(['low', 'high'])], { field: 'reasoning_effort', dflt: d() }) : null;
     default: return null;
   }
 }
 
 // —— 已知型号表（按裸型号匹配，先具体后笼统）——
 // ctx / out：上下文 / 输出上限；vision / video / audio：能不能直接收图 / 视频 / 音频；think：思考模板；dflt：首次选中时的默认档；
-// media：一次请求里历史图片的额度（dimensio agent/media-budget.ts）。值以 dimensio catalog.ts（多数实测）为准，另补了中转常见的
+// media：一次请求里历史图片的额度（dimensio agent/media-budget.ts）；replay：OpenAI 协议下把历史思考回传为 reasoning_content（模板要求的家族）。值以 dimensio catalog.ts（多数实测）为准，另补了中转常见的
 // 去掉 claude- 前缀的别名（opus-5-5）。只写厂商公开信息：公开版导出会做泄漏扫描。
 const MIMO_MEDIA = Object.freeze({ maxImages: 2, keepRecent: 2 });   // 多图认不准最新那张：只让最近 2 张工具图入模
 const GEMINI_MEDIA = Object.freeze({ maxBytes: 14_000_000 });        // 内联数据连同文字整个请求不能超过 20 MB
@@ -128,10 +168,19 @@ const TABLE = [
   // 小米 MiMo V2.6（官方文档 1M 上下文、图 / 视频 / 音频输入；输出上限 131072 是 400 报错里读出来的；默认会思考）
   { re: /^mimo-v2\.6/, ctx: 1_000_000, out: 131_072, vision: true, video: true, audio: true, think: 'mimo', media: MIMO_MEDIA },
   { re: /^mimo-/, think: 'mimo', media: MIMO_MEDIA },
-  // DeepSeek V4.1 Flash（1M / 393216，原生看图但不收视频）；v4-flash 是它的临时别名；v4-pro 退役中
-  { re: /^deepseek-(?:v4-)?flash/, ctx: 1_000_000, out: 393_216, vision: true, think: 'deepseek' },
-  { re: /^deepseek-v4/, ctx: 1_000_000, out: 393_216, vision: false, think: 'deepseek-v4' },
+  // DeepSeek V4.1 Flash（1M / 393216，原生看图但不收视频）；v4-flash 是它的临时别名；聚合站写成 deepseek-v4.1-flash（可带日期后缀）。
+  // V4 Pro 是现役型号、不看图。replay：思考模式下带工具调用的历史轮必须带回思考（没有就带空的），否则 400——
+  // 服务端只恢复得了它自己在思考模式下发出的工具调用，会话中途开思考、从别家换过来的都恢复不了（2026-11-13 实测）。
+  { re: /^deepseek-(?:v4(?:[.-]\d+)?-)?flash/, ctx: 1_000_000, out: 393_216, vision: true, think: 'deepseek', replay: true },
+  { re: /^deepseek-v4/, ctx: 1_000_000, out: 393_216, vision: false, think: 'deepseek', replay: true },
+  // 兜底（老的 deepseek-chat / reasoner、第三方托管的蒸馏版）：不带 replay——R1 时代输入里带 reasoning_content 反而会被拒
   { re: /^deepseek-/, think: 'deepseek' },
+  // 开源权重的 Qwen3.8-Flash-Next（125B MoE；-fp8 / -awq / -gptq / -nvfp4 之类量化后缀，经 vLLM / SGLang / llama.cpp 自己部署）：
+  // 不是官方 DashScope 的 qwen3.8（官方只有 max / flash 两个 id），必须排在它前面。上下文 262144（模型训练上限，vLLM 的
+  // max_model_len 实测同值）；输出按 Qwen3 系模型卡的长输出建议 81920；看图取决于部署挂没挂视觉塔，/models 不报，保守按否
+  //（能看图的部署在服务设置里打开）；思考档走 chat_template_kwargs；replay：模板默认 preserve_thinking，历史思考要回传。
+  // 不带 DashScope 专属参数（enable_search 等）——自定义服务的适配器只发档位表里的东西。
+  { re: /^(?:qwen3\.8-)?flash-next(?:$|[-_.])/, ctx: 262_144, out: 81_920, vision: false, think: 'qwen38-open', dflt: 'medium', replay: true },
   // Qwen：3.8 全系原生多模态（图 + 视频），默认 medium（xhigh 不封顶，换档不能悄悄放大账单）
   { re: /^qwen3\.8/, ctx: 1_000_000, out: 131_072, vision: true, video: true, think: 'qwen38', dflt: 'medium' },
   { re: /^qwen3\.7-plus/, ctx: 1_000_000, out: 131_072, vision: true, think: 'qwen37' },
@@ -143,8 +192,12 @@ const TABLE = [
   { re: /^glm-5\.2/, ctx: 1_000_000, out: 131_072, vision: false, think: 'glm52' },
   { re: /^glm-5(?!\.)/, ctx: 200_000, out: 131_072, vision: false, think: 'toggle' },
   // Kimi（Kimi for Coding；/models 实测）：k3-256k 不吃视频
-  { re: /^k3-256k/, ctx: 262_144, out: 65_536, vision: true, think: 'kimi' },
-  { re: /^(?:k3|kimi-for-coding)(?!-highspeed)/, ctx: 1_048_576, out: 65_536, vision: true, video: true, think: 'kimi' },
+  // K3.1 Pro（2026-11-07 /models）：k3.1-pro 与 k3.1-pro-highspeed 都是 1M、图 + 视频、low / high / max——highspeed 有档位，
+  // 不能落到下面 K2.7 highspeed 的「没有档位」
+  // 聚合站写成 kimi-k3.1-pro（moonshotai/kimi-k3.1-pro）：同一个型号，认不出会被当成不思考、历史思考还会被剥掉
+  { re: /^(?:kimi-)?k3\.1-pro/, ctx: 1_048_576, out: 65_536, vision: true, video: true, think: 'kimi' },
+  { re: /^(?:kimi-)?k3-256k/, ctx: 262_144, out: 65_536, vision: true, think: 'kimi' },
+  { re: /^(?:(?:kimi-)?k3|kimi-for-coding)(?!-highspeed)/, ctx: 1_048_576, out: 65_536, vision: true, video: true, think: 'kimi' },
   { re: /^kimi-for-coding-highspeed/, ctx: 262_144, out: 65_536, vision: true, video: true, think: 'always' },
   // Gemini（1,048,576 / 65,536；Gemini 4 Argon 输出 32,768）
   { re: /^gemini-4/, ctx: 1_048_576, out: 32_768, vision: true, think: 'gemini3', media: GEMINI_MEDIA },
@@ -153,17 +206,48 @@ const TABLE = [
   { re: /^gemini-2\.5-pro/, ctx: 1_048_576, out: 65_536, vision: true, think: 'gemini25pro', media: GEMINI_MEDIA },
   { re: /^gemini-2\.5/, ctx: 1_048_576, out: 65_536, vision: true, think: 'gemini25', media: GEMINI_MEDIA },
   { re: /^gemini-2/, ctx: 1_048_576, out: 65_536, vision: true, media: GEMINI_MEDIA },
-  // OpenAI 推理模型
+  // OpenAI。gpt-oss 是开放权重（131K、纯文本、三档），排在前面别被 GPT 的规则吞掉。
+  // GPT-6（官方型号页 + OpenRouter 元数据，2026-11-13 逐个真打）：1,050,000 窗口、128K 输出、识图；
+  // 必须思考的：6.1 Sol、6.1 Sol Pro、6 Astra、6 Astra Pro、6.1 Terra Pro；其余（6.1 Terra、6 Luna、6 Sol 及其 Pro、5.6 系）可以关。
+  { re: /^gpt-oss/, ctx: 131_072, vision: false, think: 'effort3' },
+  { re: /^gpt-6[.-]1-sol|^gpt-6-astra|^gpt-astra-latest|^gpt-6[.-]1-terra-pro/, ctx: 1_050_000, out: 128_000, vision: true, think: 'gpt6' },
+  { re: /^gpt-6/, ctx: 1_050_000, out: 128_000, vision: true, think: 'gpt6-off' },
+  { re: /^gpt-5\.6/, vision: true, think: 'gpt6-off' },
   { re: /^(?:gpt-5|o\d)/, vision: true, think: 'openai' },
+  // xAI Grok（xAI 文档：4.6 / 4.7 四档、4.5 三档，都不能关）
+  { re: /^grok-4[.-][67]/, think: 'grok4' },
+  { re: /^grok-4[.-]5/, think: 'effort3', dflt: 'high' },
+  // Mistral Large 4：low / medium / high（OpenRouter 元数据写的 [high, none] 是错的，发 none 实测 400）
+  { re: /^mistral-large-4/, think: 'effort3' },
+  // Meta Muse（dev.meta.ai 文档 + OpenRouter 实测）。默认档跟上游默认一致（Ember max、Wonder / Spark medium），不改变现有行为。
+  { re: /^muse-glimmer/, ctx: 131_072, out: 16_384, vision: true, think: 'muse-open' },
+  { re: /^muse-spark-open/, vision: true, think: 'muse-open' },
+  { re: /^muse-ember/, ctx: 1_048_576, out: 524_288, vision: true, think: 'muse', dflt: 'max' },
+  { re: /^muse-(?:wonder|spark)/, ctx: 1_048_576, vision: true, think: 'muse', dflt: 'medium' },
+  // 腾讯混元
+  { re: /^(?:tencent-)?hy-?4/, ctx: 1_048_576, out: 65_536, vision: true, think: 'hy4' },
+  { re: /^(?:tencent-)?hy-?3/, ctx: 262_144, out: 128_000, vision: false },
 ];
+
+/** 服务地址（或主机名）→ 线路。目前只分出 OpenRouter：它对所有家族用自己的统一推理写法。 */
+export function routeOf(baseUrlOrHost) {
+  let h = String(baseUrlOrHost || '').toLowerCase();
+  try { if (/^[a-z]+:\/\//.test(h)) h = new URL(h).hostname; } catch { return ''; }
+  return h === 'openrouter.ai' || h.endsWith('.openrouter.ai') ? 'openrouter' : '';
+}
 
 /** 已知型号表里这一条（不认识回 null）。 */
 export function tableEntry(id) {
-  const bare = bareModelId(id);
+  // Claude 的版本号：聚合站与中转站常写成点号（claude-opus-4.8、anthropic/claude-sonnet-4.6），表里是官方的横线写法
+  const bare = bareModelId(id).replace(/^((?:claude-)?(?:opus|sonnet|haiku|fable)-\d+)\.(\d)/, '$1-$2');
   return TABLE.find((e) => e.re.test(bare)) || null;
 }
 
+/** 这个型号的历史思考要不要带回上游（OpenAI 协议写 reasoning_content，Anthropic 协议留着 thinking 块）。 */
+export const replaysThinking = (id) => tableEntry(id)?.replay === true;
+
 const posInt = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n) : null; };
+const EFFORT_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 /** /models 一项的元数据 → 能力（读不到的字段回 undefined）。 */
 export function fromApi(x) {
@@ -198,9 +282,25 @@ export function fromApi(x) {
   else if (typeof x.supports_reasoning === 'boolean') out.reasoning = x.supports_reasoning;
   else if (typeof x.thinking === 'boolean') out.reasoning = x.thinking;   // Gemini models.get
   // 接口直接给了档位（Kimi 的 think_efforts、Anthropic 的 capabilities.effort）
+  // Kimi 订阅端点现在给的是对象 { support, valid_efforts, default_effort }（早先是数组）
+  const kimiEff = x.think_efforts && typeof x.think_efforts === 'object' && !Array.isArray(x.think_efforts) ? x.think_efforts : null;
+  if (kimiEff && typeof kimiEff.default_effort === 'string') out.effortDefault = kimiEff.default_effort.toLowerCase();
   const effList = Array.isArray(x.think_efforts) ? x.think_efforts
+    : kimiEff && Array.isArray(kimiEff.valid_efforts) ? kimiEff.valid_efforts
     : caps.effort && typeof caps.effort === 'object' ? Object.keys(caps.effort).filter((k) => caps.effort[k] && caps.effort[k].supported !== false) : null;
   if (effList && effList.length) out.effortIds = effList.map(String).filter((s) => TIER_ID_RE.test(s)).slice(0, MAX_TIERS);
+  // OpenRouter：reasoning { supported_efforts, default_effort, mandatory }——档位按强度升序排，none 单独记成「能不能关」
+  const orr = x.reasoning && typeof x.reasoning === 'object' && Array.isArray(x.reasoning.supported_efforts) ? x.reasoning : null;
+  if (orr && !out.effortIds) {
+    const got = new Set(orr.supported_efforts.map((s) => String(s).toLowerCase()));
+    const ids = EFFORT_ORDER.filter((s) => got.has(s));
+    if (ids.length) {
+      out.effortIds = ids;
+      out.reasoning = true;
+      out.effortOff = got.has('none') && orr.mandatory !== true;
+      if (typeof orr.default_effort === 'string' && ids.includes(orr.default_effort.toLowerCase())) out.effortDefault = orr.default_effort.toLowerCase();
+    }
+  }
   if (x.supports_thinking_type === 'only') out.alwaysThinks = true;
   return out;
 }
@@ -225,7 +325,7 @@ export function labelOf(x, id) {
  * 回 { kind, contextWindow, maxOutput, vision, video, audio, thinking, efforts, effortField, effortDefault, alwaysThinks, source:{…} }。
  * defaults：什么都不知道时的上下文 / 输出兜底，按调用方的视角给（不给 = Claude CLI 的 200K / 32K）。
  */
-export function guessModel(id, { protocol = 'anthropic', api = null, defaults = null } = {}) {
+export function guessModel(id, { protocol = 'anthropic', api = null, defaults = null, route = '' } = {}) {
   const dCtx = (defaults && posInt(defaults.contextWindow)) || 200_000;
   const dOut = (defaults && posInt(defaults.maxOutput)) || 32_000;
   const a = api ? fromApi(api) : {};
@@ -244,11 +344,13 @@ export function guessModel(id, { protocol = 'anthropic', api = null, defaults = 
   // 视频 / 音频只认接口声明和型号表（猜错要吃 400，猜没有只退化成抽帧 / 转写）
   const video = a.video === true || !!(e && e.video);
   const audio = a.audio === true || !!(e && e.audio);
-  let th = e && e.think ? thinkingTemplate(e.think, protocol, { dflt: e.dflt }) : null;
+  let th = e && e.think ? thinkingTemplate(e.think, protocol, { dflt: e.dflt, route, id: bareModelId(id) }) : null;
   if (th) source.thinking = 'table';
   if (!th && a.effortIds && a.effortIds.length) {
     const field = protocol === 'openai' ? 'reasoning_effort' : protocol === 'gemini' ? 'generationConfig.thinkingConfig.thinkingLevel' : 'output_config.effort';
-    th = think('effort', levels(a.effortIds, protocol === 'gemini' ? (x) => x.toUpperCase() : (x) => x), { field, always: !!a.alwaysThinks });
+    const tiers = levels(a.effortIds, protocol === 'gemini' ? (x) => x.toUpperCase() : (x) => x);
+    th = think('effort', a.effortOff && protocol === 'openai' ? [T('off', '关闭', 'none'), ...tiers] : tiers,
+      { field, dflt: a.effortDefault && a.effortIds.includes(a.effortDefault) ? a.effortDefault : '', always: !!a.alwaysThinks });
     source.thinking = 'api';
   }
   if (!th && a.reasoning === true) {

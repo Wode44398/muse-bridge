@@ -15,7 +15,7 @@
 
 - 是 Muse 平台的安全机制：VM 上的程序第一次访问某个网站时，要用户批准一次。Muse Bridge 装好时已经把常用的网站（Claude 接口、搜索、反馈服务、GitHub 发布页（查新版本、插件市场）、npm 源（更新时装依赖）、配了 key 的模型厂商）挨个弹过一遍。
 - 选「允许一次」的，服务下次在后台访问这个网站时还会再弹；选「总是允许此站点」的，这个网站以后就不再问（包括它的子域名）。批错了可以在 Muse 的设置 → 权限里撤销。
-- 什么时候还会弹：新加一家模型 key、加自定义模型服务（Claude 页的自定义 API、dimensio 的自定义服务）、装连接器 / 插件、第一次给远程连接器授权、第一次拉取官方扩展市场（github.com）、agent 第一次访问某个新网站。提前用 `allow-sites <网站>` 放行最省事。
+- 什么时候还会弹：在模型中心新加一个服务（或成员加自己的服务）、装连接器 / 插件、第一次给远程连接器授权、第一次拉取官方扩展市场（github.com）、agent 第一次访问某个新网站。提前用 `allow-sites <网站>` 放行最省事。
 - **Figma、Stripe、Zapier 这几家连接器授权失败不是审核卡问题**：报「平台（Muse）不允许在这里登录这个服务」（`refresh_rejected`）是 Muse 的出口代理拦下了它们的换令牌请求，批卡、重试都没用。Figma 改用个人访问令牌，其它几家让 Muse Bridge 里的 Claude 按「API Key / 个人令牌 + 平台 `custom.*` 自定义连接器」现写一个（05-customize.md「在 Muse 上不能用 OAuth 登录的几家」）。
 - 你（Muse）看不到卡片，也替用户批不了；只能提醒他去批。
 
@@ -33,9 +33,10 @@
 
 ## dimensio 换了 key 不生效
 
-- 内置厂商的 key 有两个来源：Muse 用 `set-api-key` 写进服务器的，和用户在 dimensio 侧栏「设置」里填的。两种都存在磁盘上，重启不会丢。
-- **网页里存过的 key 优先**，而且界面上清不掉（留空 = 不改）。所以网页里填过一把错的 / 过期的 key 之后，再跑 `set-api-key` 也不起作用：让用户在 dimensio 的「设置」→「API Key」里把对的 key 再填一次、点保存。
-- 以后同一家只用一种方式配，首选 `set-api-key`（`../MUSE.md` 4.5）。
+- **管理员的 dimensio 只认「设置 → 模型中心」里的 key**。升级到带模型中心的版本后，以前的 key（Muse 用 `set-api-key` 写的、网页里填的）在第一次启动时已经搬进模型中心，每家一个服务；之后再跑 `set-api-key` 换 key **不会生效**（命令输出里会说明）。
+- 换 key：让用户在网页的 **「设置 → 模型中心」** 里打开那一家的服务，在「API Key」一栏点「更换」，再点「测试」确认通了（见 10-model-hub.md）。新加一家：在模型中心里「添加服务」，加之前让 Muse 跑 `allow-sites <接口地址>` 放行。
+- 换了还不行：看模型中心里这个服务是不是停用了、Key 是不是在冷却（会写原因，可以点「现在就再用」），或者模型没勾给 dimensio。
+- **成员**自己的 key 在 **「设置 → dimensio」** 的「API Key」里，自己填了就用自己的。
 
 ## 额度环的读数为什么慢
 
@@ -48,7 +49,7 @@
 ## 要花钱吗
 
 - Muse Bridge 本身免费开源。
-- Claude Code 用的是用户自己的 Claude 订阅（Pro / Max），额度按订阅算，所有登录的人共用这一份。Claude 页接的别家模型（自定义 API）按那家的价格计费：成员用自己的 Key 不占本站额度；用管理员「共享给成员」的服务，花的是管理员的 Key，计入成员的额度。
+- Claude Code 用的是用户自己的 Claude 订阅（Pro / Max），额度按订阅算，所有登录的人共用这一份。Claude 页接的别家模型（模型中心里的服务）按那家的价格计费：成员用自己的 Key 不占本站额度；用管理员「共享给成员」的服务，花的是管理员的 Key，计入成员的额度。
 - dimensio 用的是各家的 API key，按各家价格计费（dimensio 里不显示金额，去各家控制台看）。小米的联网搜索插件另外按次收费。
 - Muse 平台本身的费用以 Muse 为准。
 
@@ -105,7 +106,7 @@
 
 ## 能不能加别的 agent（Codex、Gemini CLI……）
 
-- Muse Bridge 的 agent 是 Claude Code 和 dimensio（不带 Codex、Gemini CLI）；另带一个默认关着的 Gemini · Vertex 扩展，管 Google 的图像 / 视频 / 语音 / 音乐生成，要自己的 Google 云凭据，见 09-vertex.md。想用别家模型：在 dimensio 里配那家的 key，或用「自定义服务」接 OpenAI / Anthropic / Gemini 接口；想在 **Claude 页** 里用 DeepSeek、Kimi、OpenRouter 这类模型，在「设置 → Claude → 自定义 API」里接（见 07-settings.md）。
+- Muse Bridge 的 agent 是 Claude Code 和 dimensio（不带 Codex、Gemini CLI；以前的 Gemini 对话分页已经下线）；另带一个默认关着的 Media Studio，做图像 / 视频 / 配音 / 音乐生成，模型和 Key 要自己接，见 09-media-studio.md。想用别家模型：管理员在 **「设置 → 模型中心」** 里加那家的服务（OpenAI / Anthropic / Gemini 接口都行），按模型勾给 Claude、dimensio 或两个都给（见 10-model-hub.md）。
 
 ## 能同时跑几个任务
 

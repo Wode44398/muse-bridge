@@ -5,6 +5,7 @@
 // Svelte 5 深代理的坑：往 $state 数组 push 字面量之后，要改就改数组里那个代理元素，别改字面量——pushItem 返回的就是它。
 import { toolMeta } from "./icons.ts";
 import { t, tr } from "./i18n.ts";
+import { TASK_NOTIFICATION_KIND, taskNoticeText } from "./task-notice.ts";
 import { discardStreamTurn, findSteerItem, resetStreamTurn, startStreamTurn } from "./stream-turn.ts";
 import type { AgentRun, AskItem, DecidedBy, GoalView, Item, PermissionItem, PlanItem, RecallRef, ToolItem, WorkflowRun } from "./timeline-types.ts";
 
@@ -749,6 +750,18 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
     case "skill_loaded":
       if (typeof ev.name === "string" && ev.name) pushItem(m, { kind: "notice", text: skillLoadedText(ev.name, ev.pkg === true) });
       break;
+    // 会话协作：这一轮跑着时别的会话发来的消息，已在两步之间注入——会话消息卡（不是用户气泡）
+    case "session_message":
+      // 后台任务通知（server/job-notify.ts）也走这条注入通道：它只是一行提示，不是会话消息卡
+      if (ev.kind === TASK_NOTIFICATION_KIND && typeof ev.text === "string") pushItem(m, { kind: "notice", text: taskNoticeText(ev.text) });
+      else if (typeof ev.text === "string" && ev.text) pushItem(m, { kind: "session", text: ev.text, turn: false });
+      break;
+    // 会话协作：StartSession 开出了一个会话——工具行据此链过去（侧栏的台账随列表重拉）
+    case "family_link": {
+      const ref = typeof ev.toolId === "string" ? m.toolRefs.get(ev.toolId) : undefined;
+      if (ref && typeof ev.child === "string") ref.family = { child: ev.child, title: String(ev.title ?? ""), agent: ev.agent === "claude" ? "claude" : "dimensio" };
+      break;
+    }
     // 适配器层的提示：fast mode 撞了自己的限流，这次已改按普通速度重发，之后一段时间不再试 fast
     case "notice":
       if (ev.code === "fast_fallback") {

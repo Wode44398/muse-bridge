@@ -10,7 +10,7 @@
   // 秒级时钟只在「卡片挂着且工作流还在跑」时 tick——官方 cD(running) 同款，页面隐藏时冻结。
   import { deriveWorkflow, agentState, agentDotStates, reasonFromSummary, toolTaskStatus, toolTaskTitle } from '../../lib/taskModel.js';
   import { fmtCompact, fmtDurPanel } from '../../lib/toolVerbs.js';
-  import { cp, ensureCustomModels, agentModelName, agentEffortName } from '../../lib/claudeProviders.svelte.js';
+  import { cp, ensureCustomModels, agentModelName, agentEffortName, agentAutoTier } from '../../lib/claudeProviders.svelte.js';
   import { glyph } from '../../lib/claudeIcons.js';
   import AgentDots from './AgentDots.svelte';
 
@@ -56,8 +56,8 @@
   $effect(() => { void tool; phaseOpen = {}; });
   const isOpen = (ph) => (ph.index in phaseOpen ? !!phaseOpen[ph.index] : (ph.counts.total > 0 && (running || agentCount <= 8)));
   // 第三方模型的友好名在模型清单里（hello 带来；没到就补拉一次）
-  $effect(() => { if (!cp.modelsReady && wf && wf.phases.some((p) => p.agents.some((a) => String(a.model || '').startsWith('custom:')))) ensureCustomModels(); });
-  const modelTitle = (a) => [agentModelName(a.model, a.servedModel), agentEffortName(a.effort), a.model].filter(Boolean).join(' · ');
+  $effect(() => { if (!cp.modelsReady && wf && wf.phases.some((p) => p.agents.some((a) => String(a.servedModel || a.model || '').startsWith('custom:')))) ensureCustomModels(); });
+  const modelTitle = (a) => [agentModelName(a.model, a.servedModel), agentEffortName(a.effort), agentAutoTier(a.model) || a.model].filter(Boolean).join(' · ');
   const toggle = (ph) => { phaseOpen[ph.index] = !isOpen(ph); };
   const dotOpts = () => (running ? { now } : undefined);
   // agent 行的 Time 列：running 且 progress 态且有 startedAt → 实时；否则 durationMs
@@ -130,7 +130,7 @@
               {:else}
                 <div class="ag-grid" role="table">
                   <span class="ag-h"><span class="ag-st"></span>Agent</span>
-                  <span class="ag-h">Model</span>
+                  <span class="ag-h ag-model-h">Model</span>
                   <span class="ag-h">Tokens</span>
                   <span class="ag-h r">Time</span>
                   {#each ph.agents as a (a.index)}
@@ -143,7 +143,11 @@
                       title={link ? (st === 'done' || st === 'error' || !running ? `View transcript: ${a.label}` : `View prompt & live transcript: ${a.label}`) : a.label}
                       onclick={() => pick(a)} onkeydown={(e) => onKey(e, a)}>
                       <span class="ag-st">{#if st === 'done'}<span class="gi xs" role="img" aria-label="Done">{glyph('Check')}</span>{/if}</span>
-                      <span class="ag-lbl">{a.label}</span>
+                      <span class="ag-nm">
+                        <span class="ag-lbl">{a.label}</span>
+                        <!-- 极窄（侧栏并排）时 Model 列收起，模型名改挂在 agent 名下第二行 -->
+                        {#if !a.error}<span class="ag-sub" title={modelTitle(a)}>{agentModelName(a.model, a.servedModel)}{#if a.effort}&nbsp;·&nbsp;{agentEffortName(a.effort)}{/if}</span>{/if}
+                      </span>
                     </span>
                     {#if a.error}
                       <!-- 官方 FD：后三列并成一格右对齐的红字 Error，聚焦/悬停靠 title 露全文 -->
@@ -261,7 +265,19 @@
     .ag-sep { display: none; }
     .ag-eff { display: block; }
   }
+  .ag-nm { display: flex; flex-direction: column; min-width: 0; }
+  .ag-sub { display: none; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 极窄（任务面板与文件等侧栏并排，表格内宽 < 四列最小宽之和）：Model 列被压成 0、表头叠进 Tokens——
+     收成三列 Agent / Tokens / Time，模型名挂到 agent 名下第二行 */
+  @container (max-width: 300px) {
+    .ag-grid { grid-template-columns: minmax(0, 1fr) max-content max-content; column-gap: 10px; }
+    .ag-model-h, .ag-model { display: none; }
+    .ag-name { align-items: flex-start; }
+    .ag-name .ag-st { height: 16px; }
+    .ag-sub { display: block; }
+  }
   .ag-err { grid-column: span 3; justify-self: end; color: var(--crit); cursor: default; outline: none; }
+  @container (max-width: 300px) { .ag-err { grid-column: span 2; } }
 
   .rd-result summary { font-size: 12.5px; color: var(--muted); cursor: pointer; }
   .rd-result pre { background: var(--userbubble); border: 1px solid var(--divider); border-radius: 10px; padding: 10px 12px; margin: 6px 0 0;

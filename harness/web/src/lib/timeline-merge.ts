@@ -33,6 +33,9 @@ export function itemFp(it: any): string {
       return `e|${it.text}`;
     case "notice":
       return `n|${it.text}`;
+    // 会话协作的消息卡：turn 是重建时推出来的（直播注入的那条一律 false），不算内容
+    case "session":
+      return `m|${it.text}`;
     case "screenshot":
       return `s|${it.url}|${it.asset ?? (it.dataUri ?? "").length}`;
     default:

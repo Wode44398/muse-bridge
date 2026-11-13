@@ -1,6 +1,8 @@
 // 设置页行首线稿图标（v5「墨与象牙」）：24 网格、1.6 描边、圆头圆角，同一套几何母题——
 // 圆角 2.2~2.8 的矩形、整圆、短横。只用 currentColor，不上色块：颜色只留给各 agent 自己的品牌标。
 // 取代原先的彩色 SF Symbol 方块（彩虹色 + 拼凑字形是「AI 味」的主要来源）。
+import { ovUrl } from './overlay.svelte.js';
+
 export const SI = {
   // 通用：两根推子
   general: '<path d="M4 8h8.5M17.5 8H20M4 16h2.5M11.5 16H20"/><circle cx="15" cy="8" r="2.5"/><circle cx="9" cy="16" r="2.5"/>',
@@ -26,6 +28,8 @@ export const SI = {
   orb: '<circle cx="12" cy="12" r="8"/><path d="M8.3 10.6a4.2 4.2 0 0 1 3.4-3"/>',
   // Agent 接入：一把钥匙（给别的 agent 的密钥）
   agentapi: '<circle cx="8" cy="12" r="3.6"/><path d="M11.6 12H20M16.6 12v3M19.6 12v2.2"/>',
+  // 模型中心：居中的枢纽环由三根辐条连向外围三枚小环（一处管理、分给各个 agent）；辐条两端都落在环的边上
+  modelhub: '<circle cx="12" cy="12.6" r="2.7"/><circle cx="12" cy="4.4" r="1.9"/><circle cx="5" cy="17.6" r="1.9"/><circle cx="19" cy="17.6" r="1.9"/><path d="M12 6.3v3.6M9.8 14.17 6.55 16.5M14.2 14.17l3.25 2.33"/>',
   // 提交反馈：对话气泡
   feedback: '<path d="M7 4.5h10a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3h-5.2l-4.3 3.3v-3.3H7a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3z"/><path d="M8.5 9.5h7M8.5 12.5h4"/>',
   // 软件更新：落入托盘的箭头
@@ -51,13 +55,17 @@ export const SI = {
   scan: '<path d="M4 8.5V7a3 3 0 0 1 3-3h1.5M15.5 4H17a3 3 0 0 1 3 3v1.5M20 15.5V17a3 3 0 0 1-3 3h-1.5M8.5 20H7a3 3 0 0 1-3-3v-1.5"/><path d="M7.5 12h9"/>',
 };
 
-// 各 agent 的品牌标（真标，不是自绘字形）：路径相对 BASE_URL；明暗两版的按界面明暗取
+// 各 agent 的品牌标（真标，不是自绘字形）的地址：Claude 的菊花是原版资源，其余是自有素材；明暗两版的按界面明暗取。
+// 在 $derived / 模板里调用（Claude 那张的地址跟着原版资源清单走）。
+const BASE = import.meta.env.BASE_URL;
 export function agentMark(id, dark) {
   switch (id) {
-    case 'claude': return 'assets/mascot/claude-菊花-静态.svg';   // i18n-ignore 素材路径
-    case 'gemini': return 'assets/icons/gemini.svg';
-    case 'codex': return `assets/icons/chatgpt-${dark ? 'light' : 'dark'}.svg`;
-    case 'dimensio': return `assets/icons/dimensio-${dark ? 'light' : 'dark'}.svg`;
+    case 'claude': return ovUrl('assets/mascot/claude-菊花-静态.svg');   // i18n-ignore 素材路径
+    case 'gemini': return BASE + 'assets/icons/gemini.svg';
+    // Media Studio（2026-11-04 起接替 Gemini 的位置）：画框里四个种类色节点由一条细线串起（标由 studio-frontend 画）
+    case 'studio': return `${BASE}assets/icons/studio-${dark ? 'light' : 'dark'}.svg`;
+    case 'codex': return `${BASE}assets/icons/chatgpt-${dark ? 'light' : 'dark'}.svg`;
+    case 'dimensio': return `${BASE}assets/icons/dimensio-${dark ? 'light' : 'dark'}.svg`;
     default: return '';
   }
 }

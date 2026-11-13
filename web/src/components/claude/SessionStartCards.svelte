@@ -13,7 +13,7 @@
   // 快照访客只看不点。界面文案无官方中文，按调研报告建议译法。
   import { untrack } from 'svelte';
   import ToolRow from './ToolRow.svelte';
-  import { collab, proposalForTool, loadProposals, answerOffer, startProposals, dismissProposal, sessionById, sessionTitle } from '../../lib/sessionFamily.svelte.js';
+  import { collab, proposalForTool, loadProposals, answerOffer, startProposals, dismissProposal, sessionById, sessionTitle, projectSession } from '../../lib/sessionFamily.svelte.js';
   import { openSession } from '../../lib/chat.svelte.js';
   import { session } from '../../lib/state.svelte.js';
   import { approvalWaiting } from '../../lib/permissions.svelte.js';
@@ -61,8 +61,11 @@
   const startedN = $derived(cards.filter((p) => p.status === 'started').length);
   const single = $derived(cards.length === 1 ? cards[0] : null);
   const offerPending = $derived(cards.find((p) => p.kind === 'offer' && p.status === 'pending' && p.qid) || null);
-  const head = $derived(cards.length > 1 ? t('{n} 个建议任务', { n: cards.length })
-    : single && single.kind === 'offer' && single.status === 'pending' ? t('单独开一个会话来做？') : t('新会话'));
+  // 项目对话（运行档位 › 项目）：开出来的是讨论串
+  const inProject = $derived(projectSession(session.id));
+  const head = $derived(cards.length > 1 ? (inProject ? t('{n} 条讨论串', { n: cards.length }) : t('{n} 个建议任务', { n: cards.length }))
+    : single && single.kind === 'offer' && single.status === 'pending' ? (inProject ? t('开一条讨论串来做？') : t('单独开一个会话来做？'))
+    : inProject ? t('讨论串') : t('新会话'));
 
   // >6 张只露前 5 张（官方）
   let more = $state(false);
@@ -233,12 +236,14 @@
           {:else if p.status === 'started'}
             <!-- 已开始：子会话一行，点开它；还在干活时可停止 -->
             {@const busy = working(p)}
+            <!-- 项目对话里是讨论串：状态按讨论串的三态说（等你 = 它那里有审批卡 / 提问在等） -->
+            {@const wait = inProject && !!sessionById(p.child)?.pending}
             <div class="ssc-line">
-              <button type="button" class="ssc-child" disabled={IS_CSNAP || !p.child} title={t('打开这个会话')} onclick={() => openSession(p.child)}>
-                <span class="dot" class:on={busy} aria-hidden="true"></span>
+              <button type="button" class="ssc-child" disabled={IS_CSNAP || !p.child} title={inProject ? t('打开这条讨论串') : t('打开这个会话')} onclick={() => openSession(p.child)}>
+                <span class="dot" class:on={busy && !wait} class:wait aria-hidden="true"></span>
                 <span class="ssc-title">{sessionTitle(p.child, p.title) || p.title || t('未命名任务')}</span>
               </button>
-              <span class="ssc-st">{busy ? t('正在干活') : t('已开始')}</span>
+              <span class="ssc-st" class:wait>{inProject ? (wait ? t('等你') : busy ? t('进行中') : t('空闲')) : busy ? t('正在干活') : t('已开始')}</span>
               {#if busy && !IS_CSNAP}
                 <button type="button" class="ghost sm" disabled={p.stopping} onclick={() => stopChild(p)}>{t('停止')}</button>
               {/if}
@@ -322,6 +327,9 @@
   .dot.on { background: var(--text); opacity: 1; animation: sscPulse 1.6s ease-in-out infinite; }
   @keyframes sscPulse { 50% { opacity: .35; } }
   @media (prefers-reduced-motion: reduce) { .dot.on { animation: none; } }
+  /* 讨论串在等你（项目对话）：琥珀点 + 琥珀字，同侧栏「等人」 */
+  .dot.wait { background: var(--warn); opacity: 1; }
+  .ssc-st.wait { color: var(--warn); }
   .ssc-more { display: flex; align-items: center; gap: 4px; padding: 8px 12px; border-top: 1px solid var(--divider); font-size: 13px; color: var(--serif); text-align: left; }
   @media (hover: hover) { .ssc-more:hover { color: var(--text); } }
   /* 弹层（官方 popover：完整任务说明 w-120 / 选项 w-114 / 不再询问菜单） */

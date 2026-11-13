@@ -43,6 +43,7 @@ interface Official {
 const claude5 = { field: "output_config.effort", accepts: ["low", "medium", "high", "xhigh", "max"], tiers: ["low", "medium", "high", "xhigh", "max"], off: null };
 const OFFICIAL: Record<string, Record<string, Official>> = {
   anthropic: {
+    "claude-fable-5-2": claude5,
     "claude-opus-5-5": claude5,
     "claude-opus-5": claude5,
     "claude-sonnet-5-5": claude5,
@@ -59,7 +60,7 @@ const OFFICIAL: Record<string, Record<string, Official>> = {
   openai: Object.fromEntries(["deepseek-flash", "deepseek-v4-pro"].map((id) => [id, {
     field: "reasoning_effort",
     accepts: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
-    tiers: id === "deepseek-flash" ? ["low", "high", "max"] : ["high", "max"], // v4-pro 留在单子里只为过渡，菜单只给 high/max
+    tiers: ["low", "high", "max"], // 两个型号的 /models supported_levels 都是这三档
     aliases: { minimal: "low", medium: "high", xhigh: "high", ultra: "max" },
     off: { "thinking.type": "disabled", reasoning_effort: undefined },
     onExtras: { "thinking.type": "enabled" },
@@ -103,10 +104,13 @@ const OFFICIAL: Record<string, Record<string, Official>> = {
     },
     "glm-5": { field: "thinking.type", accepts: ["enabled"], tiers: ["enabled"], off: { "thinking.type": "disabled" }, switchOnly: true },
   },
-  // ── Kimi Code：kimi.com/code/docs（2026-10-09）：k3 / k3-256k / kimi-for-coding 三档 low/high/max、关不掉；
+  // ── Kimi Code：kimi.com/code/docs（2026-10-09；k3.1-pro 系 11-07 /models 实测）：k3.1-pro / k3.1-pro-highspeed / k3 / k3-256k / kimi-for-coding 三档 low/high/max、关不掉；
   // highspeed 没有档位字段（「无需配置该字段」）。
+  // K3.1 Pro：api.kimi.com/coding/v1/models 实测（2026-11-07）——k3.1-pro 与 k3.1-pro-highspeed 都声明
+  // think_efforts.valid_efforts low/high/max（default_effort high）、supports_thinking_type only（关不掉）；
+  // 文档页 kimi.com/code/docs/en/kimi-code/models.html（2026-11-07 读）。
   kimi: {
-    ...Object.fromEntries(["k3", "k3-256k", "kimi-for-coding"].map((id) => [id, {
+    ...Object.fromEntries(["k3.1-pro", "k3.1-pro-highspeed", "k3", "k3-256k", "kimi-for-coding"].map((id) => [id, {
       field: "reasoning_effort", accepts: ["low", "high", "max"], tiers: ["low", "high", "max"], off: null,
     } satisfies Official])),
     "kimi-for-coding-highspeed": { field: "reasoning_effort", accepts: [], tiers: [], off: null },
@@ -129,7 +133,10 @@ const OFFICIAL: Record<string, Record<string, Official>> = {
     "gemini-2.5-flash": { field: "generationConfig.thinkingConfig.thinkingBudget", accepts: ["512", "-1", "24576"], tiers: ["512", "-1", "24576"], off: { "generationConfig.thinkingConfig.thinkingBudget": 0 } },
   },
   // ── 本机 llama.cpp：档位以 GGUF 里的 chat template 为准，local-effort-contract.test.ts 读模板本身对照；这里只核名实。
-  local: Object.fromEntries(["qwen3.8-27b", "strata-orca"].map((id) => [id, {
+  // Strata 三个变体（2026-11-07 拆型号）：E:\Strata 的启动配置（strata-flash.json / strata-orca.json / strata-nvfp4.json，
+  // make-strata-config.py 写）+ 各自打包里的 chat_template.jinja（同一份 Qwen3.8 模板：xhigh 缺省 / medium / low，
+  // enable_thinking:false 关）+ Strata 的 serve/frontend.py EFFORT 映射；local-effort-contract.test.ts 读这三样对照。
+  local: Object.fromEntries(["qwen3.8-27b", "strata-flash-iq3s", "strata-orca-iq3xxs", "strata-flash-nvfp4"].map((id) => [id, {
     field: "chat_template_kwargs.reasoning_effort", accepts: ["low", "medium", "xhigh"], tiers: ["low", "medium", "xhigh"],
     off: { "chat_template_kwargs.enable_thinking": false, "chat_template_kwargs.reasoning_effort": undefined },
   } satisfies Official])),

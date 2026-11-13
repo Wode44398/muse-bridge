@@ -51,6 +51,19 @@ test("deny outranks allow outranks ask, and unknown tools are denied", () => {
   assert.equal(decide("auto", "Bash", tools, { command: "ls" }).effect, "allow");
 });
 
+test("bypass allows everything a gate would otherwise stop, but still denies unknown tools", () => {
+  // 连用户自己写的 deny 规则、控制面文件保护、高危复核都不认——「跳过全部安全闸门」。
+  const r = rules({ deny: ["Bash(rm -rf:*)"], ask: ["Bash"] });
+  const rm = decide("bypass", "Bash", tools, { command: "rm -rf /" }, r);
+  assert.equal(rm.effect, "allow");
+  assert.equal(rm.source, "bypass");
+  assert.equal(decide("bypass", "Bash", tools, { command: "git push --force" }).effect, "allow");
+  // 控制面文件（指令文件）正常要 ask，bypass 下直接放行
+  assert.equal(decide("bypass", "Write", tools, { path: "guide.md", content: "x" }).effect, "allow");
+  // 不存在的工具仍然拒：bypass 不凭空造工具
+  assert.equal(decide("bypass", "NoSuchTool", tools, {}).effect, "deny");
+});
+
 test("read-only and plan block effectful tools; deny rules bite in every mode", () => {
   for (const mode of ["read-only", "plan"] as const) {
     assert.equal(decide(mode, "Bash", tools, { command: "npm test" }).effect, "deny", `${mode} 拒执行`);

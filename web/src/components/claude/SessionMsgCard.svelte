@@ -6,7 +6,8 @@
   //    那个会话不在 bridge 里，名字只显示不跳；原文信封不进插话气泡
   // 头部的会话名可点：跳到那个会话。快照访客只看不跳。
   import { openSession } from '../../lib/chat.svelte.js';
-  import { sessionTitle, briefSections, REL_LABEL } from '../../lib/sessionFamily.svelte.js';
+  import { sessionTitle, briefSections, REL_LABEL, openDimensioSession, projectSession } from '../../lib/sessionFamily.svelte.js';
+  import { session } from '../../lib/state.svelte.js';
   import { IS_CSNAP } from '../../lib/csnap.js';
   import { renderMarkdown } from '../../lib/md.js';   // 会话间的话基本是 Claude 写的，常带 markdown；md.js 内部 DOMPurify 清洗
   import { t } from '../../lib/i18n.js';
@@ -16,7 +17,13 @@
   const LONG = 600;
   let open = $state(false);
   const fromTitle = $derived(part.kind === 'message' ? (sessionTitle(part.from, part.title) || part.name || t('另一个会话')) : '');
-  const head = $derived(part.kind !== 'message' ? '' : part.brief
+  // 项目模式：讨论串里，父会话是协调者（「协调者派来的任务」）；项目对话里，子会话的汇报叫讨论串的汇报
+  const fromCoord = $derived(part.kind === 'message' && part.relation === 'parent' && projectSession(part.from));
+  const inProject = $derived(part.kind === 'event' && projectSession(session.id));
+  // 转成项目：项目对话首条消息前面那张「原会话」卡（relation="source"，routes/project-mode.mjs projectSourceNote）
+  const head = $derived(part.kind !== 'message' ? '' : part.relation === 'source' ? t('转自原会话') : fromCoord
+    ? (part.brief ? t('协调者派来的任务') : t('来自协调者'))
+    : part.brief
     ? t('{rel}派来的任务', { rel: t(REL_LABEL[part.relation] || REL_LABEL.linked) })
     : t('来自{rel}', { rel: t(REL_LABEL[part.relation] || REL_LABEL.linked) }));
   const sections = $derived(part.kind === 'message' && part.brief ? briefSections(part.body) : null);
@@ -27,7 +34,8 @@
     : t('来自另一个 Claude 会话'));
   const STATUS = { done: '这一轮已结束', failed: '这一轮出错了', stopped: '被停下' };
   let openNotes = $state({});
-  function go(id) { if (id && !IS_CSNAP) openSession(id); }
+  // 跨 agent（11-03）：信封带 agent="dimensio" 的是 dimensio 会话，去 dimensio 页打开
+  function go(id, agent) { if (!id || IS_CSNAP) return; if (agent === 'dimensio') openDimensioSession(id); else openSession(id); }
 </script>
 
 {#snippet linkIc()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M6 8.4v3.1a3 3 0 0 0 3 3h6.6"/><path d="M13.6 12l2.4 2.5-2.4 2.5"/></svg>{/snippet}
@@ -37,7 +45,8 @@
     <div class="smc-head">
       <span class="smc-ic">{@render linkIc()}</span>
       <span class="smc-kind">{head}</span>
-      <button class="smc-from" disabled={IS_CSNAP || !part.from} title={t('打开这个会话')} onclick={() => go(part.from)}>{fromTitle}</button>
+      <button class="smc-from" disabled={IS_CSNAP || !part.from} title={t('打开这个会话')} onclick={() => go(part.from, part.agent)}>{fromTitle}</button>
+      {#if part.agent === 'dimensio'}<span class="smc-agent">dimensio</span>{/if}
     </div>
     <div class="smc-body sel-text" class:clamp={long && !open}>
       {#if sections}
@@ -55,15 +64,18 @@
   <div class="smc">
     <div class="smc-head">
       <span class="smc-ic">{@render linkIc()}</span>
-      <span class="smc-kind">{part.notes.length > 1 ? t('{n} 个子会话的汇报', { n: part.notes.length }) : t('子会话的汇报')}</span>
+      <span class="smc-kind">{inProject
+        ? (part.notes.length > 1 ? t('{n} 条讨论串的汇报', { n: part.notes.length }) : t('讨论串的汇报'))
+        : part.notes.length > 1 ? t('{n} 个子会话的汇报', { n: part.notes.length }) : t('子会话的汇报')}</span>
     </div>
     <div class="smc-notes">
       {#each part.notes as n, i (n.from + i)}
         <div class="note">
           <div class="note-head">
             <span class="dot {n.status}" aria-hidden="true"></span>
-            <button class="note-title" disabled={IS_CSNAP || !n.from} title={t('打开这个会话')} onclick={() => go(n.from)}>{sessionTitle(n.from, n.title) || n.name || t('子会话')}</button>
-            <span class="note-st">{t(STATUS[n.status] || STATUS.done)}</span>
+            <button class="note-title" disabled={IS_CSNAP || !n.from} title={t('打开这个会话')} onclick={() => go(n.from, n.agent)}>{sessionTitle(n.from, n.title) || n.name || t('子会话')}</button>
+            {#if n.agent === 'dimensio'}<span class="smc-agent">dimensio</span>{/if}
+            <span class="note-st">{n.driver === 'user' ? t('你在讨论串里直接聊的') : t(STATUS[n.status] || STATUS.done)}</span>
           </div>
           {#if n.text}
             <div class="note-text smc-md sel-text" class:clamp={!openNotes[i] && n.text.length > 160}>{@html renderMarkdown(n.text)}</div>
@@ -91,6 +103,7 @@
 {#snippet peerIc()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7.5" width="12" height="11" rx="2.2"/><path d="M8.5 7.5V6.2a2.2 2.2 0 0 1 2.2-2.2h7.6a2.2 2.2 0 0 1 2.2 2.2v7.1a2.2 2.2 0 0 1-2.2 2.2h-2.8"/></svg>{/snippet}
 
 <style>
+  .smc-agent { flex: none; padding: 0 6px; border-radius: 999px; background: var(--userbubble); font-size: 11px; color: var(--muted); }
   .smc-peer { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text); font-weight: 500; }
   .smc { width: min(560px, 100%); box-sizing: border-box; background: var(--card); border: 1px solid var(--divider); border-radius: 14px; padding: 10px 13px 11px; text-align: left; animation: smcIn .28s cubic-bezier(.22,1,.36,1); }
   @keyframes smcIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }

@@ -1,8 +1,10 @@
-// Codex 页面与原版前端资源共用一套构建入口。
-// 发布树自带 frontend-assets/web，BRIDGE_EDITION=public 只读取该固定快照。
-// 私有构建仍优先使用 BRIDGE_OVERLAY_DIR / config.json 的 overlayDir。
+// Codex 页面与原版前端资源共用一套构建入口。前端只有一套视觉（原版），每次构建都要找到它：
+// 发布树自带 frontend-assets/web，BRIDGE_EDITION=public 只读取该固定快照；
+// 私有源码树依次找 BRIDGE_OVERLAY_DIR → 数据根 config.json 的 overlayDir → 主工作树 config.json 的 overlayDir
+// （测试服等 git worktree 的数据根在别处，和正式服共用同一份私有资源）→ frontend-assets。
 // 页面拷入 chatgpt/ 并对脚本和样式做内容哈希；离线包按扩展归属收集。
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -21,19 +23,37 @@ export function bundledVisualsDir(repo = REPO) {
 
 export function frontendOverlayDir(env = process.env, { repo = REPO } = {}) {
   // 发布构建只读发行树的已提交快照，不能混入本机另一份覆盖层。
-  return (!isPublicEdition(env) && overlayDir(env)) || bundledVisualsDir(repo);
+  return (!isPublicEdition(env) && overlayDir(env, { repo })) || bundledVisualsDir(repo);
 }
 
-export function overlayDir(env = process.env) {
-  const dataRoot = env.BRIDGE_DATA_ROOT ? path.resolve(env.BRIDGE_DATA_ROOT) : REPO;
-  const fromEnv = String(env.BRIDGE_OVERLAY_DIR || '').trim();
-  if (fromEnv) return path.resolve(dataRoot, fromEnv);
+function configOverlay(root) {
   try {
-    const raw = readFileSync(path.join(dataRoot, 'config.json'), 'utf8');
+    const raw = readFileSync(path.join(root, 'config.json'), 'utf8');
     const od = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw).overlayDir;
-    if (od) return path.resolve(dataRoot, String(od));
+    if (od) return path.resolve(root, String(od));
   } catch {}
   return null;
+}
+
+// repo 是某个 git worktree 时，主工作树的根目录；repo 自己就是主工作树 / 不在 git 里 → null
+export function mainWorktreeRoot(repo = REPO) {
+  try {
+    const common = execFileSync('git', ['-C', repo, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
+    if (!common || path.basename(common) !== '.git') return null;
+    const root = path.dirname(path.resolve(common));
+    return path.relative(root, path.resolve(repo)) === '' ? null : root;
+  } catch { return null; }
+}
+
+export function overlayDir(env = process.env, { repo = REPO } = {}) {
+  const dataRoot = env.BRIDGE_DATA_ROOT ? path.resolve(env.BRIDGE_DATA_ROOT) : repo;
+  const fromEnv = String(env.BRIDGE_OVERLAY_DIR || '').trim();
+  if (fromEnv) return path.resolve(dataRoot, fromEnv);
+  const own = configOverlay(dataRoot);
+  if (own) return own;
+  const main = mainWorktreeRoot(repo);
+  return main ? configOverlay(main) : null;
 }
 
 // overlay 里的 ChatGPT 页面；公开版出包、没有 overlay、或 overlay 里没有页面 → null
@@ -89,12 +109,8 @@ export function chatgptPage({ log = console.log } = {}) {
       if (!isBuild) return;
       if (!ov) {
         if (isPublicEdition()) throw new Error('发布构建缺少 frontend-assets 中的完整前端资源；请重新导出发布树');
-        // 源码里带着 Codex 扩展（维护者的私有仓 / 部署）却没接上 overlay：产物里就没有页面，Codex 分页只会提示「此版本未包含」
-        else if (existsSync(path.join(REPO, 'modules', 'codex', 'bridge-module.json'))) {
-          log('\n⚠ [chatgpt] 这份源码带 Codex 扩展，但没找到私有 overlay（环境变量 BRIDGE_OVERLAY_DIR，或数据根 config.json 的 overlayDir）：'
-            + '\n  产物里没有 Codex 分页的界面，打开 Codex 会显示「此版本未包含」。维护者的部署请先配好 overlay 再构建。\n');
-        } else log('[chatgpt] 没有私有 overlay：这次构建不带 Codex 分页的界面');
-        return;
+        throw new Error('[chatgpt] 没找到 Codex 分页的界面（私有 overlay 的 web/chatgpt/）：环境变量 BRIDGE_OVERLAY_DIR、'
+          + '数据根或主工作树 config.json 的 overlayDir 都没指到它。前端只有一套完整版，配好再构建');
       }
       const dir = path.join(outDir, 'chatgpt');
       // 点开头的（overlay 仓库里的 .gitattributes 之类）不进产物，同服务端 overlay-web 的规矩

@@ -1,10 +1,11 @@
 // Codex 分页的界面从私有 overlay 接进构建：overlay 位置的解析顺序、没有页面 / 公开版时视为没有、内容哈希改写。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { overlayDir, chatgptOverlay, stampChatgptDir } from './chatgpt-overlay.mjs';
+import { overlayDir, mainWorktreeRoot, chatgptOverlay, stampChatgptDir } from './chatgpt-overlay.mjs';
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'chatgpt-overlay-'));
 
@@ -34,6 +35,26 @@ test('overlay 位置：BRIDGE_OVERLAY_DIR 优先，其次数据根 config.json �
     writeFileSync(path.join(root, 'config.json'), JSON.stringify({ port: 1 }));
     assert.equal(overlayDir({ BRIDGE_DATA_ROOT: root }), null);
     assert.equal(overlayDir({ BRIDGE_DATA_ROOT: path.join(root, 'no-such-dir') }), null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('git worktree（测试服等）自己没配 overlayDir：沿用主工作树 config.json 的 overlayDir', () => {
+  const root = tmp();
+  try {
+    const main = path.join(root, 'main');
+    const wt = path.join(root, 'wt');
+    mkdirSync(main);
+    const git = (...a) => execFileSync('git', a, { cwd: main, stdio: 'pipe' });
+    git('init', '-q');
+    git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
+    git('worktree', 'add', '-q', '--detach', wt);
+    writeFileSync(path.join(main, 'config.json'), JSON.stringify({ overlayDir: '../private' }));
+    assert.equal(mainWorktreeRoot(wt), main);
+    assert.equal(mainWorktreeRoot(main), null, '主工作树自己');
+    assert.equal(overlayDir({}, { repo: wt }), path.join(root, 'private'), '相对路径按主工作树解析');
+    writeFileSync(path.join(wt, 'config.json'), JSON.stringify({ overlayDir: 'own' }));
+    assert.equal(overlayDir({}, { repo: wt }), path.join(wt, 'own'), 'worktree 自己配了就用自己的');
+    assert.equal(overlayDir({ BRIDGE_DATA_ROOT: path.join(root, 'data') }, { repo: wt }), path.join(root, 'private'), '数据根在别处也找主工作树');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

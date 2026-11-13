@@ -4,8 +4,9 @@
 // 会变的东西不写死，用占位符在返回时现填——模型表与参数从 config/capabilities.mjs、版本从 versions.mjs、
 // 接口参考从操作注册表（registry.mjs）。所以发版改模型、加操作都不用回来改手册；改了用户可见功能才要改对应章节。
 //
-// 占位符：{{version}} {{origin}} {{models}} {{vertex.params}} {{ops}} {{ops:<组>}} {{you}}
-// 查法：目录（manualToc）、整章（manualChapter）、按小节检索（manualSearch，关键词打分）。
+// 占位符：{{version}} {{origin}} {{models}} {{studio.params}}（老名 vertex.params 同义）{{ops}} {{ops:<组>}} {{you}}
+// 查法：目录（manualToc）、整章（manualChapter，topic 填操作名时回该操作的参数表）、按小节检索（manualSearch，关键词打分；
+// 查询里带操作名的，该操作的参数表直接从注册表取来置顶）、单个操作（manualOp）。
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -13,13 +14,13 @@ import { fileURLToPath } from 'node:url';
 import { APP_VERSION_NAME, APP_VERSION_CODE } from '../config/versions.mjs';
 import { CAPABILITIES } from '../config/capabilities.mjs';
 import { AGENT_BY_ID } from '../config/agents.mjs';
-import { allOps, allGroups, whyNot } from './registry.mjs';
+import { allOps, allGroups, getOp, whyNot } from './registry.mjs';
 import { pluginOn } from '../plugins/state.mjs';
 
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'manual');
 
 // 章节顺序；不在表里的 .md 排在后面（按文件名）。
-const ORDER = ['api', 'overview', 'claude', 'workspace', 'routines', 'vertex', 'codex', 'dimensio', 'devices', 'phone', 'settings', 'plugins', 'accounts', 'recipes', 'missing'];
+const ORDER = ['api', 'overview', 'claude', 'workspace', 'routines', 'studio', 'codex', 'dimensio', 'devices', 'phone', 'settings', 'plugins', 'accounts', 'recipes', 'missing'];
 
 // 插件带来的章节目录（ctx.manual(dir) 登记，插件停用时撤掉）。章 id 撞了核心章节的，核心优先。
 const extraDirs = new Map();   // dir → 插件 id
@@ -67,11 +68,11 @@ function modelsMd() {
     lines.push(`- **Claude**：${names(c.claude.models)}。默认 \`${c.claude.defaults?.model || ''}\`（不传 model 就用它）。思考强度：${(c.claude.efforts || []).map((e) => `${e.name}（\`${e.id}\`）`).join('、')}。另外每个身份（主机管理员与成员各一份）都可能在「模型服务」里接了自己的自定义模型，id 形如 \`custom:<服务>:<模型>\`，用 \`chat.models\` 列出。`);
   }
   if (c.codex) lines.push(`- **ChatGPT 分页（Codex）**：${names(c.codex.models)}。`);
-  if (c.vertex) lines.push(`- **Gemini 对话**：${names(c.vertex.models)}；思考档：${(c.vertex.thinkLevels || []).map((t) => t.name || t.id || t).join(' / ')}。`);
-  if (c.image) lines.push(`- **图像**：${names(c.image.models)}。`);
-  if (c.veo) lines.push(`- **视频**：${names(c.veo.models)}。`);
-  if (c.tts) lines.push(`- **语音**：${names(c.tts.models)}；音色 ${(c.tts.voices || []).length} 种。`);
-  if (c.music) lines.push(`- **音乐**：${names(c.music.models)}。`);
+  // Media Studio 的内置模型（裸 id）；各人在 Studio 里接的服务与模型用 GET /api/studio/catalog 看
+  if (c.image) lines.push(`- **图像**（Media Studio 内置）：${names(c.image.models)}。`);
+  if (c.veo) lines.push(`- **视频**（Media Studio 内置）：${names(c.veo.models)}。`);
+  if (c.tts) lines.push(`- **配音**（Media Studio 内置）：${names(c.tts.models)}；音色 ${(c.tts.voices || []).length} 种。`);
+  if (c.music) lines.push(`- **音乐**（Media Studio 内置）：${names(c.music.models)}。`);
   return lines.join('\n') + '\n\n（模型对某个身份是否可用还要看服务器装没装对应扩展、管理员给没给他开；以 `whoami` 返回的 agents 为准。）';
 }
 
@@ -81,7 +82,7 @@ const IMG_HINT = {
   'gemini-3.1-flash-image': '快，支持思考 + 联网 + 图搜；要真实世界的新事物时用',
   'gemini-3.1-flash-lite-image': '最省、只出 1K；图标与小装饰',
 };
-function vertexParamsMd() {
+function studioParamsMd() {
   const c = CAPABILITIES;
   if (!c.image) return '（这台服务器的能力表里没有媒体模型。）';
   const capsOf = (id) => {
@@ -113,6 +114,18 @@ function paramLine(k, s) {
   if (s.default !== undefined && s.default !== '') bits.push('默认 ' + JSON.stringify(s.default));
   return `  - \`${k}\`（${bits.join('；')}）${s.desc ? '：' + s.desc : ''}`;
 }
+// 一个操作的条目：标题行（权限标记、这个调用者能不能用）+ 说明、参数、返回、例；brief 只要标题行。
+function opEntryMd(ctx, op, brief = false) {
+  const why = ctx ? whyNot(ctx, op) : null;
+  const out = [`- **\`${op.name}\`** — ${op.title}${ACCESS_MARK[op.access] || ''}${op.slow ? '（可能较慢）' : ''}${why ? `　〔你现在用不了：${why}〕` : ''}`];
+  if (brief) return out.join('\n');
+  if (op.desc) out.push('  ' + op.desc);
+  const ps = Object.entries(op.params || {});
+  if (ps.length) { out.push('  参数：'); for (const [k, s] of ps) out.push(paramLine(k, s)); }
+  if (op.returns) out.push('  返回：' + op.returns);
+  if (op.example) out.push('  例：`' + JSON.stringify(op.example) + '`');
+  return out.join('\n');
+}
 function opsMd(ctx, group = null, { brief = false } = {}) {
   const groups = allGroups();
   const out = [];
@@ -121,20 +134,17 @@ function opsMd(ctx, group = null, { brief = false } = {}) {
     const ops = allOps().filter((op) => op.group === g.id);
     if (!ops.length) continue;
     if (!group) out.push(`### ${g.title}（${g.id}）${g.desc ? '\n' + g.desc : ''}`);
-    for (const op of ops) {
-      const why = ctx ? whyNot(ctx, op) : null;
-      const head = `- **\`${op.name}\`** — ${op.title}${ACCESS_MARK[op.access] || ''}${op.slow ? '（可能较慢）' : ''}${why ? `　〔你现在用不了：${why}〕` : ''}`;
-      if (brief) { out.push(head); continue; }
-      out.push(head);
-      if (op.desc) out.push('  ' + op.desc);
-      const ps = Object.entries(op.params || {});
-      if (ps.length) { out.push('  参数：'); for (const [k, s] of ps) out.push(paramLine(k, s)); }
-      if (op.returns) out.push('  返回：' + op.returns);
-      if (op.example) out.push('  例：`' + JSON.stringify(op.example) + '`');
-    }
+    for (const op of ops) out.push(opEntryMd(ctx, op, brief));
     out.push('');
   }
   return out.join('\n').trim();
+}
+// 单个操作的参数表（检索里按操作名置顶、topic 填操作名都回它）；没有这个操作回 null。
+export function manualOp(name, ctx) {
+  const op = getOp(String(name || '').trim());
+  if (!op) return null;
+  const g = allGroups().find((x) => x.id === op.group);
+  return `## 操作 \`${op.name}\`（${g ? g.title : op.group}）\n\n${opEntryMd(ctx, op)}${Object.keys(op.params || {}).length ? '' : '\n  参数：无'}`;
 }
 function youMd(ctx) {
   if (!ctx) return '（未登录：只能看手册。）';
@@ -148,7 +158,7 @@ function render(raw, ctx, origin) {
     if (key === 'version') return `v${APP_VERSION_NAME}（versionCode ${APP_VERSION_CODE}）`;
     if (key === 'origin') return origin || '（服务器地址）';
     if (key === 'models') return modelsMd();
-    if (key === 'vertex.params') return vertexParamsMd();
+    if (key === 'studio.params' || key === 'vertex.params') return studioParamsMd();
     if (key === 'ops') return opsMd(ctx);
     if (key === 'ops.brief') return opsMd(ctx, null, { brief: true });
     if (key.startsWith('ops:')) return opsMd(ctx, key.slice(4));
@@ -167,17 +177,32 @@ export function manualToc(ctx, origin) {
 }
 export function manualChapter(id, ctx, origin) {
   const c = load().find((x) => x.id === id);
-  return c ? { id: c.id, title: c.title, markdown: render(c.raw, ctx, origin) } : null;
+  if (c) return { id: c.id, title: c.title, markdown: render(c.raw, ctx, origin) };
+  // 不是章 id 而是操作名（topic=routines.create）：回该操作的参数表。章 id 与操作名撞了（overview）章优先。
+  const op = manualOp(id, ctx);
+  return op ? { id, title: '操作 ' + id, markdown: op } : null;
 }
 
+const SECTION_MAX = 6000;
 function sectionsOf(c, ctx, origin) {
   const md = render(c.raw, ctx, origin);
   const parts = md.split(/^(?=##\s)/m);
   const out = [];
+  const push = (title, text) => out.push({ chapter: c.id, chapterTitle: c.title, title, text });
   for (const p of parts) {
     const m = /^##\s+(.+)$/m.exec(p);
     if (!m) continue;   // 章首（# 标题与摘要）
-    out.push({ chapter: c.id, chapterTitle: c.title, title: m[1].trim(), text: p.trim() });
+    const title = m[1].trim(), text = p.trim();
+    // 超长的小节（api「全部操作」两万多字、plugins「改到核心」）按 ### 再切成「父标题 › 子标题」的小段，
+    // 各自打分、不被截断；前言（第一个 ### 之前有正文的话）沿用父标题。没有 ### 的照旧整节，靠下面的截断兜底。
+    const subs = text.length > SECTION_MAX ? text.split(/^(?=###\s)/m) : [];
+    if (subs.length < 2) { push(title, text); continue; }
+    const intro = subs.shift().trim();
+    if (intro.replace(/^##\s+.+$/m, '').trim()) push(title, intro);
+    for (const s of subs) {
+      const sub = /^###\s+(.+)$/m.exec(s)[1].trim();
+      push(`${title} › ${sub}`, `## ${title} › ${s.trim().replace(/^###\s+/, '')}`);
+    }
   }
   return out;
 }
@@ -202,6 +227,13 @@ export function manualSearch(q, ctx, origin, { limit = 5 } = {}) {
     return hit ? n * (hit / ts.length) ** 2 : 0;
   };
   const rank = (ts) => { const w = ts.map(idf); return all.map((s) => ({ s, n: score(s, ts, w) })).filter((x) => x.n > 0); };
+  // 查询里带操作名（routines.create、ui.open；整句就是 whoami 这类单字名也算）：该操作的参数表直接从注册表取来置顶，
+  // 不靠打分——操作名在手册里到处被提到，按关键词排上来的常是整组甚至别的章，参数表反而不在前头。
+  const opNames = new Set(query.match(/[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+/g) || []);
+  if (/^[a-z][a-z0-9_]*$/.test(query)) opNames.add(query);
+  const apiTitle = load().find((c) => c.id === 'api')?.title || '接口';
+  const pinned = [...opNames].filter((n) => getOp(n)).slice(0, limit)
+    .map((n) => ({ chapter: 'api', chapterTitle: apiTitle, section: '操作 ' + n, score: 999, markdown: manualOp(n, ctx) }));
   let ranked = rank(terms);
   if (!ranked.length && terms.length === 1 && /[一-鿿]/.test(query) && query.length > 2) {
     // 整句没命中：拆成相邻两字片段再打分（「怎么改壁纸」→ 改壁 / 壁纸），丢掉虚词片段
@@ -210,13 +242,13 @@ export function manualSearch(q, ctx, origin, { limit = 5 } = {}) {
     if (terms.length) ranked = rank(terms);
   }
   ranked.sort((a, b) => b.n - a.n);
-  return ranked.slice(0, limit).map(({ s, n }) => ({ chapter: s.chapter, chapterTitle: s.chapterTitle, section: s.title, score: Math.round(n * 10) / 10, markdown: s.text.length > 6000 ? s.text.slice(0, 6000) + '\n…（本节太长，整章见 manual topic=' + s.chapter + '）' : s.text }));
+  return [...pinned, ...ranked.slice(0, Math.max(0, limit - pinned.length)).map(({ s, n }) => ({ chapter: s.chapter, chapterTitle: s.chapterTitle, section: s.title, score: Math.round(n * 10) / 10, markdown: s.text.length > SECTION_MAX ? s.text.slice(0, SECTION_MAX) + '\n…（本节太长，整章见 manual topic=' + s.chapter + '）' : s.text }))];
 }
 
 export function tocMarkdown(ctx, origin) {
   const toc = manualToc(ctx, origin);
   const lines = ['# bridge 项目手册', '', '给 agent 查的 bridge 使用手册：界面在哪、功能怎么用、接口怎么调。', ''];
-  lines.push('查法：整章 `GET /agent/manual/<章 id>`；关键词检索 `GET /agent/manual?q=关键词`（返回最相关的几个小节）；工具里用 `manual` 操作（topic / q）。', '');
+  lines.push('查法：整章 `GET /agent/manual/<章 id>`；关键词检索 `GET /agent/manual?q=关键词`（返回最相关的几个小节；带操作名如 `q=routines.create` 时该操作的参数表排第一）；工具里用 `manual` 操作（topic / q）。', '');
   for (const c of toc) {
     lines.push(`## ${c.title}（\`${c.id}\`）`, c.summary, '');
     if (c.sections.length) lines.push('小节：' + c.sections.join(' · '), '');

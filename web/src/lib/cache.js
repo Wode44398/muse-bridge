@@ -157,13 +157,6 @@ export const getCachedMessages = (id) => get('msg:' + id);
 export const getCachedMessagesMeta = (id) => getMeta('msg:' + id);
 export const removeCachedMessages = (id) => remove('msg:' + id);
 
-// —— Vertex (Gemini)：会话列表 + 单会话消息（vchat.messages 渲染态快照）——
-export const cacheVertexSessions = (list) => put('vsessions', snap(list));
-export const getCachedVertexSessions = () => get('vsessions');
-export const cacheVertexMessages = (id, messages) => put('vmsg:' + id, snap(messages));
-export const getCachedVertexMessages = (id) => get('vmsg:' + id);
-export const getCachedVertexMessagesMeta = (id) => getMeta('vmsg:' + id);
-export const removeCachedVertexMessages = (id) => remove('vmsg:' + id);
 
 // 启动即预热 DB 连接：Android WebView 冷启的 indexedDB.open 可到几百 ms，提前开好，
 // 首次「拉抽屉读缓存」不吃这笔开销。模块顶层跑一次，失败静默（open 内部已 try）。

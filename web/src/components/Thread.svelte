@@ -2,7 +2,8 @@
   import { tick } from 'svelte';
   import { chat, answerQuestion, send, rewindToMessage, attImgFallback, openSession } from '../lib/chat.svelte.js';
   import { IS_CSNAP } from '../lib/csnap.js';
-  import { session, settings, prefs, ui, toggleTheme } from '../lib/state.svelte.js';
+  import { session, settings, prefs, ui } from '../lib/state.svelte.js';
+  import { switchPageTheme } from '../lib/homeTheme.js';
   import { mountDrag } from '../lib/capsule.js';
   import { renderMarkdown, streamBlocks } from '../lib/md.js';
   import { claudeFade } from '../lib/claudeFade.js';
@@ -28,7 +29,7 @@
   import ChatMediaImage from './claude/ChatMediaImage.svelte';
   import WidgetFrame from './claude/WidgetFrame.svelte';   // 对话内嵌交互图表（show_widget）
   import { getToken } from '../lib/api.js';
-  import { openPreview } from '../lib/preview.svelte.js';
+  import { openPreview, claudeArtifactUrl } from '../lib/preview.svelte.js';
   import { dragOut, attDragSrc } from '../lib/dragOut.js';
   import { hasNativeSaveAs, interceptSave, saveToDisk } from '../lib/save.js';
   import { onMdClick } from '../lib/linkNav.js';
@@ -80,7 +81,7 @@
       case 'model': return t('等待 Claude…');
       case 'tools': return t('运行工具中…');
       case 'compact': return t('压缩会话中…');
-      case 'ask': return t('等待你的回答…');
+      case 'ask': return t('需要你的输入');   // 官方 /code 页 Needs your input（Zj）：提问、审批卡、计划卡都算
       case 'retry': {
         const why = RETRY_KIND[h.kind] ? RETRY_KIND[h.kind]() : t('接口出错');
         return why + ' · ' + t('重试中（{a}/{m}）', { a: h.attempt, m: h.max });
@@ -283,8 +284,20 @@
       return true;
     }
     const sid = atts[0]?.sessionId || session.id || '';
-    if (sid && nt && nt !== '#') { openPreview({ origin: 'claude', id: sid, path: lk }); return true; }
+    if (sid && nt && nt !== '#') { locateLink(sid, lk); return true; }
     return false;
+  }
+  // 对不上附件卡的链接（扩展名不在交付表、或卡片数超限）：先问服务端它在工作空间里哪
+  // （/api/claude/artifact?locate=1，与卡片同一套 deliverNav）——能定位就和附件卡一样在右侧
+  // 工作区的文件页打开，不再一律全屏；定位不了（无 shell 又在根外 / 请求失败）才回落全屏查看器。
+  async function locateLink(sid, lk) {
+    let r = null;
+    try {
+      const res = await fetch(claudeArtifactUrl(sid, lk) + '&locate=1', { cache: 'no-store' });
+      if (res.ok) r = await res.json();
+    } catch {}
+    if (r && r.nav) { openDockFiles(r.nav); return; }
+    openPreview({ origin: 'claude', id: sid, path: (r && r.path) || lk });
   }
 
   // —— 检查点回滚（用户气泡上的 ↺）：点开就地二段确认，选「文件+对话 / 仅文件」——
@@ -424,7 +437,22 @@
                 <!-- 别的会话的消息插进了这一轮（session-family 投递时对方正在干活） -->
                 {#each parseSessionText(seg.text).parts as part, pi (pi)}<SessionMsgCard {part} />{/each}
               {:else}
-                <div class="bubble steer-b sel-text">{seg.text}{#if seg.files && seg.files.length}<span class="steer-files">{seg.files.map((f) => '@' + f).join(' ')}</span>{/if}</div>
+                <!-- 插话带的图片：与用户气泡同款缩略图（点开灯箱）；其余附件仍以 @名字 跟在正文后。
+                     旧服务端只给 files（名字），没有 atts 时照旧全按名字显示 -->
+                {@const sImgs = (seg.atts || []).filter((x) => x.kind === 'image' && x.url)}
+                {@const sNames = seg.atts ? seg.atts.filter((x) => !(x.kind === 'image' && x.url)).map((x) => x.name) : (seg.files || [])}
+                {#if sImgs.length}
+                  <div class="u-atts steer-atts">
+                    {#each sImgs as a}
+                      <button class="u-att u-img" class:single={sImgs.length === 1} aria-label={t('预览图片')} use:dragOut={() => attDragSrc(a)} onclick={() => openImage(sImgs, sImgs.indexOf(a))}>
+                        <img src={a.thumb || a.url} alt={a.name} loading="lazy" decoding="async" onerror={(e) => attImgFallback(e.currentTarget, a)} />
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+                {#if seg.text || sNames.length}
+                  <div class="bubble steer-b sel-text">{seg.text}{#if sNames.length}<span class="steer-files" class:solo={!seg.text}>{sNames.map((f) => '@' + f).join(' ')}</span>{/if}</div>
+                {/if}
               {/if}
               {#if seg.cancelled}<span class="steer-tag">{t('已撤回')}</span>
               {:else if !seg.read && m.status === 'streaming'}<span class="steer-tag">{t('插话 · 等 Claude 做完这一步就读')}</span>{/if}
@@ -549,7 +577,7 @@
 
         {#if i === chat.messages.length - 1}
           <div class="turn-foot">
-            <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'continue', sessionId: session.id, model: settings.model, effort: settings.effort }) }} in:fade|global={{ duration: 260 }}>{#if m.status === 'streaming' && prefs.claudeMark === 'sprite'}<ClaudeSpriteMark phase={spritePhase(m)} box={26} />{:else if m.status === 'streaming' && prefs.claudeMark !== 'classic'}{@const ma = markActivity(m)}<ClaudeWorkingMark activity={ma.activity} state={ma.state} size={24} box={26} />{:else}<ClaudeLogo anim={unconfirmed ? 'waiting' : starState(m)} size={26} interactive onpress={toggleTheme} />{/if}</span>
+            <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'continue', sessionId: session.id, model: settings.model, effort: settings.effort }) }} in:fade|global={{ duration: 260 }}>{#if m.status === 'streaming' && prefs.claudeMark === 'sprite'}<button class="markbtn" type="button" aria-label={t('切换明暗主题')} onclick={(e) => switchPageTheme(e.currentTarget)}><ClaudeSpriteMark phase={spritePhase(m)} box={26} /></button>{:else if m.status === 'streaming' && prefs.claudeMark !== 'classic'}{@const ma = markActivity(m)}<button class="markbtn" type="button" aria-label={t('切换明暗主题')} onclick={(e) => switchPageTheme(e.currentTarget)}><ClaudeWorkingMark activity={ma.activity} state={ma.state} size={24} box={26} /></button>{:else}<ClaudeLogo anim={unconfirmed ? 'waiting' : starState(m)} size={26} interactive onpress={switchPageTheme} />{/if}</span>
             {#if unconfirmed}
               <!-- 缓冲态（unconfirmed）：最后一轮的结局还没经服务端确认（切会话 / 回前台后，摆的是缓存或
                    transcript）——不摆完成态（复制/重试、静态星标），免得「其实在跑却显示已结束」。
@@ -633,6 +661,8 @@
   .steer { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; margin: 10px 0 12px; }
   .steer-b { max-width: min(85%, 560px); }
   .steer-files { display: block; margin-top: 4px; font-size: 13px; color: var(--muted); }
+  .steer-files.solo { margin-top: 0; }
+  .steer-atts { max-width: min(85%, 560px); }
   .steer-tag { font-size: 12px; color: var(--muted); padding-right: 4px; }
   .bubble { background: var(--userbubble); color: var(--text); border-radius: 14px; padding: 10px 15px; font-size: 15px; line-height: 1.5; max-width: 100%; word-break: break-word; white-space: pre-wrap; animation: popIn .28s cubic-bezier(.22,1,.36,1); }
   @keyframes popIn { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
@@ -785,6 +815,9 @@
 
   .turn-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
   .logo-fly { display: inline-flex; flex: none; }
+  /* 运行中的标记也能点着切明暗（以前只有静止的星标接了点击，跑着的时候点不动） */
+  .markbtn { all: unset; display: inline-flex; cursor: pointer; border-radius: 6px; -webkit-tap-highlight-color: transparent; }
+  .markbtn:focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
   .meta { color: var(--muted); font-size: 13px; }
   .meta.syncing { opacity: 0; animation: syncfade .25s ease-out .5s forwards; }
   @keyframes syncfade { to { opacity: 1; } }

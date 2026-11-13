@@ -6,11 +6,9 @@
 // 现在只做一件事：新主题从标题那一点以柔边圆波铺开，~1 秒，一个焦点（编排见 pageMorph.morphTheme）。
 // 粒子显影仍保留在冷启动预载的慢路径里（那里屏幕本来就得空等）。
 import { tick } from 'svelte';
-import { ui, setHomeMode, canUseHomeMode } from './state.svelte.js';
+import { ui, setHomeMode, toggleTheme } from './state.svelte.js';
 import { wp, wpDef } from './wallpaper.svelte.js';
-import { morphTheme, homeWallpaperReady } from './pageMorph.js';
-import { showToast } from './toast.svelte.js';
-import { t } from './i18n.js';
+import { morphTheme, morphPageTheme, homeWallpaperReady } from './pageMorph.js';
 
 // 目标壁纸先解码好：新画面拍快照那一刻图就得在，否则波前后面先是一片底色、图再「啪」地出现。
 const decoded = new Set();
@@ -29,8 +27,6 @@ function decodeWallpaper(mode) {
 export function switchHomeTheme(originEl) {
   if (ui.themeTransition || ui.morphing) return;
   const next = ui.glassMode === 'A' ? 'B' : 'A';
-  // iOS 没有流光：暗系统要先在设置里给它选一张静态壁纸，否则换场放完画面不变
-  if (!canUseHomeMode(next)) { showToast(t('暗色主页需要先在设置 · 壁纸里选一张图片')); return; }
   ui.themeTransition = { dir: next === 'B' ? 'AtoB' : 'BtoA', phase: 'reveal' };
   const apply = async () => { setHomeMode(next); await tick(); await homeWallpaperReady(400); };
   morphTheme(originEl, apply, { prepare: () => decodeWallpaper(next), toLight: next === 'B' })
@@ -43,4 +39,11 @@ export function warmThemeWallpapers() {
   const other = ui.glassMode === 'A' ? 'B' : 'A';
   const idle = window.requestIdleCallback || ((f) => setTimeout(f, 1200));
   idle(() => { decodeWallpaper(other).catch(() => {}); }, { timeout: 4000 });
+}
+
+// 分页里切明暗（Claude 页点标志、运行中点运行标记）：从被点的那颗标志起柔边圆波（pageMorph.morphPageTheme）。
+// 连点不拦：每一下都立刻换，上一段波直接落幕、新波从当前画面起。
+export function switchPageTheme(originEl) {
+  const toLight = ui.theme === 'dark';
+  return morphPageTheme(originEl, async () => { toggleTheme(); await tick(); }, { toLight }).catch(() => {});
 }

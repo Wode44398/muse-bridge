@@ -13,6 +13,8 @@
   import PreviewPill from "./PreviewPill.svelte";
   import GoalBar from "./GoalBar.svelte";
   import SteerTray from "./SteerTray.svelte";
+  import QueueTray from "./QueueTray.svelte"; // 会话管理：稍后发送的队列
+  import { queueOf } from "../../lib/sessmgmt.svelte.ts";
   import ColdHint from "./ColdHint.svelte";
   import CardDock from "../cards/CardDock.svelte";
   import { usePane } from "../../lib/pane.ts";
@@ -41,6 +43,9 @@
   {/if}
   {#if pane.chat.pendingSteers.length}
     <Slot><SteerTray /></Slot>
+  {/if}
+  {#if queueOf(pane.chat).length}
+    <Slot><QueueTray /></Slot>
   {/if}
   <div class="dock" use:smoothHeight>
     <div class="dockin" class:on={docked}>

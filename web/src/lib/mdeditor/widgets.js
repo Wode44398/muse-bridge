@@ -8,6 +8,7 @@ import katex from 'katex';
 import { escapeHtml, renderObsInline } from '../obsmd.js';
 import { ensureKatex } from '../md.js';
 import { t } from '../i18n.js';
+import { mediaFallbackUrl } from '../server.js';
 
 // —— KaTeX（渲染结果按公式缓存，上限 300 条）——
 const mathCache = new Map();
@@ -157,6 +158,8 @@ export class ImageWidget extends WidgetType {
     img.onload = () => view.requestMeasure();
     const alts = [...(this.alts || [])];
     img.onerror = () => {
+      const viaTunnel = mediaFallbackUrl(img.src);   // 走的局域网：先换隧道重试同一张（见 server.js）
+      if (viaTunnel !== img.src) { img.src = viaTunnel; return; }
       if (alts.length) { img.src = alts.shift(); return; }
       el.className += ' mde-img-broken'; box.remove(); el.textContent = '🖼 ' + (this.alt || t('加载失败')); view.requestMeasure();
     };

@@ -23,11 +23,27 @@
   import { chat, send } from '../lib/chat.svelte.js';
   import { relTime } from '../lib/format.js';
   import { ctxSummary, ctxLevel, fmtResetAt, fmtCompact } from '../lib/ctxUsage.js';
-  import { clampX } from '../lib/clampx.js';
   import ContextBreakdown from './ContextBreakdown.svelte';
   import { t, tr } from '../lib/i18n.js';
   // 自动压缩点 2026-10-20 起存服务端（设置 › Claude › 对话，按身份多设备同步）：读 cs.values.compactFrac，拖动写回设置
   import { cs as claudeCs, setClaudeSetting } from '../lib/claudeSettings.svelte.js';
+  // - 11-11 与权限模式芯片并成一颗：环色 = 当前权限模式（手动灰 / 接受编辑紫 / 计划青 / 自动橙 / 绕过权限红，
+  //   紫 / 青与 CLI 的 autoAccept / planMode 同色系），轨道是同色的淡色——新对话填充为 0 时也认得出档位；
+  //   填充仍是上下文占比（不再随 75% / 90% 变色，弹层里的条照旧变）。项目对话：环心一颗点；绕过权限待生效：轨道先泛红。
+  //   弹层由 PermissionModePicker 出（上半五档），这里的用量小节当片段递进去。
+  import PermissionModePicker from './claude/PermissionModePicker.svelte';
+  import { perm, currentMode, clampModeLocal, modeView, modeLabel, isProjectView } from '../lib/permissions.svelte.js';
+
+  const mode = $derived(currentMode() || clampModeLocal(claudeCs.values.permissionMode));
+  const proj = $derived(isProjectView(session.id));
+  const pending = $derived.by(() => {
+    if (!session.id) return null;
+    const live = perm.modes[session.id];
+    return live ? (live.pendingMode || null) : (modeView()?.pendingMode || null);
+  });
+  const modeTitle = $derived(proj ? t('项目对话：只规划和派活，讨论串去做') + ' · ' + t('讨论串用：{mode}', { mode: modeLabel(mode) })
+    : pending ? t('Claude 这一轮结束后开启绕过权限')
+    : t('权限模式：{mode}', { mode: modeLabel(mode) }) + (mode === 'auto' || mode === 'bypassPermissions' ? ' · ' + t('Claude 可以不经询问修改或删除文件') : ''));
 
   let open = $state(false);
   let expanded = $state(false);
@@ -163,17 +179,19 @@
 </script>
 
 <div class="qr-wrap">
-  <button class="qr-btn" bind:this={ringBtn} aria-label={[t('用量'), hasCtx ? 'Context ' + ctx.summary : '', planPeak != null ? 'Plan ' + planPeak + '%' : ''].filter(Boolean).join(' · ')} title={t('查看用量')} onclick={toggle}>
-    <svg viewBox="0 0 16 16" class="qr {level}" aria-hidden="true">
+  <button class="qr-btn" bind:this={ringBtn} aria-haspopup="menu" aria-expanded={open}
+    aria-label={[proj ? t('项目对话，讨论串用：{mode}', { mode: modeLabel(mode) }) : t('权限模式：{mode}', { mode: modeLabel(mode) }), t('用量'), hasCtx ? 'Context ' + ctx.summary : '', planPeak != null ? 'Plan ' + planPeak + '%' : ''].filter(Boolean).join(' · ')}
+    title={modeTitle + ' · ' + t('查看用量') + ' · Ctrl+Shift+M'} onclick={toggle}>
+    <svg viewBox="0 0 16 16" class="qr m-{mode}" class:pend={!!pending} aria-hidden="true">
       <circle cx="8" cy="8" r={R} class="track" />
       <circle cx="8" cy="8" r={R} class="arc" stroke-dasharray={C} stroke-dashoffset={C * (1 - Math.max(0, Math.min(100, pct)) / 100)} />
+      {#if proj}<circle cx="8" cy="8" r="2" class="core" />{/if}
     </svg>
   </button>
 
-  {#if open}
-    <button class="qb-backdrop" aria-label={t('关闭')} onclick={() => (open = false)}></button>
-    <!-- 左锚弹层：clampX 必须显式 anchor:'left'（见 clampx.js 顶部的坑） -->
-    <div class="qb-panel" class:down={dir === 'down'} use:clampX={{ anchor: 'left' }}>
+  <!-- 弹层：上半权限模式（PermissionModePicker 自己的行），下半是这里的用量小节 -->
+  <PermissionModePicker {open} {dir} ontoggle={toggle} onclose={() => (open = false)}>
+    {#snippet usage()}
       <!-- Context window：只认「正看的这个会话」自己的数据；greeting 空态不摆底噪。
            官方：有分布时计量条常显，展开（›）只是多出图例与小节；没分布只有粗填充时是一根 4px 条。 -->
       <div class="qb-sec">
@@ -221,6 +239,13 @@
         <div class="qb-h static"><span class="qb-k">Plan usage limits{planLabel}</span>{#if rows.length && status.updatedAt}<span class="qb-v">{relTime(status.updatedAt)}</span>{/if}</div>
         <div class="qb-body plan">
           {#if rows.length}
+            <!-- 没有 5 小时限额的号（部分 Ultra）：照官方位置摆一行「无限制」，免得以为数据丢了 -->
+            {#if status.noFiveHour && !rows.some((r) => r.key === 'five_hour')}
+              <div class="qb-row">
+                <span class="qb-lbl">{LABELS.five_hour}</span>
+                <span class="qb-v"><span class="qb-pct">{t('无限制')}</span></span>
+              </div>
+            {/if}
             {#each rows as r (r.key)}
               <div class="qb-row">
                 <span class="qb-lbl">{label(r)}{#if rowStale(r)}<span class="qb-old"> · {t('更新于 {time}', { time: relTime(rowStale(r)) })}</span>{/if}</span>
@@ -233,31 +258,30 @@
           {/if}
         </div>
       </div>
-    </div>
-  {/if}
+    {/snippet}
+  </PermissionModePicker>
 </div>
 
 <style>
-  .qr-wrap { position: relative; display: flex; }
+  /* 档位色板（弹层里各档图标也用，变量顺着 DOM 传给 PermissionModePicker） */
+  .qr-wrap { position: relative; display: flex;
+    --pm-default: var(--muted); --pm-acceptEdits: #a78bfa; --pm-plan: #4fb3a5; --pm-auto: #e8923a; --pm-bypassPermissions: #e5484d; }
+  :global(html[data-theme="light"]) .qr-wrap { --pm-acceptEdits: #7c5ce0; --pm-plan: #0f8a7e; --pm-auto: #d9781f; --pm-bypassPermissions: #d93a3f; }
   .qr-btn { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
   .qr-btn:active { background: var(--hover); }
   @media (hover: hover) { .qr-btn:hover { background: var(--hover); } }
   .qr { width: 16px; height: 16px; transform: rotate(-90deg); }
-  .qr .track { fill: none; stroke: var(--divider); stroke-width: 2; }
-  .qr .arc { fill: none; stroke: var(--coral); stroke-width: 2; stroke-linecap: round; transition: stroke-dashoffset .3s ease; }
-  .qr.warning .arc { stroke: var(--warn); }
-  .qr.critical .arc { stroke: var(--crit); }
+  .qr { --ring: var(--pm-default); }
+  .qr.m-acceptEdits { --ring: var(--pm-acceptEdits); }
+  .qr.m-plan { --ring: var(--pm-plan); }
+  .qr.m-auto { --ring: var(--pm-auto); }
+  .qr.m-bypassPermissions { --ring: var(--pm-bypassPermissions); }
+  .qr .track { fill: none; stroke: color-mix(in srgb, var(--ring) 38%, transparent); stroke-width: 2; transition: stroke .2s ease; }
+  .qr .arc { fill: none; stroke: var(--ring); stroke-width: 2; stroke-linecap: round; transition: stroke-dashoffset .3s ease, stroke .2s ease; }
+  .qr.pend .track { stroke: color-mix(in srgb, var(--pm-bypassPermissions) 50%, transparent); }
+  .qr .core { fill: var(--ring); }
 
-  .qb-backdrop { position: fixed; inset: 0; z-index: 60; }
-  /* 官方 Popup：w-360 / max-w calc(100vw-2rem) / padding none / 内层 py-sm；环在输入栏工具条
-     【左侧】，面板从左边缘展开（沿用 right:0 会整块推到屏幕外） */
-  .qb-panel {
-    position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 61;
-    width: min(360px, 100vw - 16px); padding: 8px 0;
-    max-height: min(640px, 80vh); overflow-y: auto; overscroll-behavior: contain;
-    background: var(--q-card); border-radius: 16px; box-shadow: var(--q-shadow);
-  }
-  .qb-panel.down { bottom: auto; top: calc(100% + 8px); }
+  /* 弹层外壳（定位 / 宽 360 / 圆角 / 遮罩）在 PermissionModePicker 的 .menu */
   .qb-sec { display: flex; flex-direction: column; }
   /* 官方行：px-lg(16) py-xs(4) min-h 20，footnote 12px */
   .qb-h { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 20px; padding: 4px 16px; text-align: left; border-radius: 6px; }

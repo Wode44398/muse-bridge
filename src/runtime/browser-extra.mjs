@@ -11,6 +11,7 @@
 //   目录内；快照访客在 MCP 层直接拒。
 import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { PAGE_TEXT_LINKS_MAX } from './cdp-page-text.mjs';
 
 export const EXTRA_ACTIONS = ['find', 'network', 'upload', 'set_value', 'page_text'];
 
@@ -18,7 +19,7 @@ export const EXTRA_DESC = `
 find(text) locates elements: every word must appear in the accessibility line (case-insensitive); returns up to 20 lines with fresh [refN] handles — cheaper than paging through read_page.
 network(query?, lines?) lists recent requests captured on this tab (method, status, mime, size, id; filter by url substring); network(id) returns that request's response body (JSON/text shown, binary summarized) — use it to inspect API calls and payloads instead of guessing.
 set_value(ref | selector, value) sets a form control directly — native <select> (option text or value; array for multi-select; its popup is invisible in screenshots and cannot be clicked), checkbox / radio (true/false), date / time / range / color / number / text inputs, textarea, contenteditable — firing input + change like a real edit; the result reads the control back.
-page_text(maxChars?) returns the readable text of the page (article / main first, else body) — far cheaper than read_page for reading articles, docs and long lists.
+page_text(maxChars?, links?, query?) returns the readable text of the page (article / main first, else body; reads through open shadow DOM) — far cheaper than read_page for reading articles, docs and long lists. links:true appends the visible links (text → URL; query filters them) instead of eval-ing querySelectorAll. Blocks that render only once scrolled into view (e.g. MDN's compatibility table) stay empty until you scroll there and wait.
 upload(files[], ref? | selector?) puts local files (absolute paths on the bridge machine, e.g. attachments under uploads/) into an <input type=file> (hidden inputs work too; default target = the first file input in the part of the page that is currently shown, ignoring inputs of hidden/background views — the result names the input it chose); then submit the form normally.
 Native alert / confirm / prompt dialogs are answered automatically so they never freeze the page: alert → OK, confirm / prompt → Cancel. Every dialog (including ones a page timer opens between your actions) is reported once, at the end of your next action's result; to accept a confirm, first eval window.confirm = () => true.`;
 
@@ -144,11 +145,24 @@ export async function browserSetValue(b, args = {}) {
 }
 
 // ── page_text ───────────────────────────────────────────────────────────
+// 正文抽取在 CdpSession.pageText（页面内脚本见 cdp-page-text.mjs）；这里只拼结果：展平了几块 shadow DOM、
+// 懒加载占位提示、links:true 的链接清单（给完整地址，navigate 直接能用）。
+function pageLinks(links, query) {
+  const q = String(query || '').trim();
+  if (!links.length) return `\n\n链接：（没有${q ? `文字或地址含「${q}」的` : '看得见的'}链接）`;
+  const head = `链接（${links.length} 个${q ? `，文字或地址含「${q}」` : ''}${links.length >= PAGE_TEXT_LINKS_MAX ? `，只列前 ${PAGE_TEXT_LINKS_MAX} 个——用 query 收窄` : ''}）：`;
+  return `\n\n${head}\n${links.map((l) => `- ${l.text ? `${l.text} → ` : ''}${l.href}`).join('\n')}`;
+}
+
 export async function browserPageText(b, args = {}) {
-  const r = await b.pageText(args.maxChars);
-  if (!r.text) return text(`url: ${b.url}\n（页面没有可读文字——可能全是图片 / canvas，或还没渲染完）`);
-  const more = r.truncated ? `\n… 共 ${r.total} 字，只给了前 ${r.text.length} 字（maxChars 可调大，或用 read_page(query) 找具体位置）` : '';
-  return text(`url: ${b.url}\ntitle: ${r.title}\n取自 <${r.from}>\n\n${r.text}${more}`);
+  const r = await b.pageText(args.maxChars, { links: !!args.links, query: args.query });
+  const lazy = r.lazy?.length
+    ? `\n（${r.lazy.map((t) => `<${t}>`).join('、')} 还没渲染出内容——多半要滚到可视区才加载：先 scroll 到那里、稍等再 page_text）` : '';
+  const links = Array.isArray(r.links) ? pageLinks(r.links, args.query) : '';
+  if (!r.text && !links) return text(`url: ${b.url}\n（页面没有可读文字——可能全是图片 / canvas，或还没渲染完）${lazy}`);
+  const shadow = r.shadow ? `（含 ${r.shadow} 个 shadow DOM 区块，已展平）` : '';
+  const more = r.truncated ? `\n… 共 ${r.total}${r.more ? '+' : ''} 字，只给了前 ${r.text.length} 字（maxChars 可调大，或用 read_page(query) 找具体位置）` : '';
+  return text(`url: ${b.url}\ntitle: ${r.title}\n取自 <${r.from}>${shadow}\n\n${r.text}${more}${lazy}${links}`);
 }
 
 // 统一入口：两条 MCP 通道的 switch 里 default 前各调一次。snap=快照访客（upload 拒）。

@@ -6,6 +6,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { PersistedSession } from "../../server/store.ts";
+import { filesUnder, finalAnswer, nodeTests, read, write } from "./task-kit.ts";
+import { HARD_TASKS } from "./tasks-hard.ts";
+import { HARD2_A_TASKS } from "./tasks-hard2-a.ts";
+import { HARD2_B_TASKS } from "./tasks-hard2-b.ts";
+import { HARD2_C_TASKS } from "./tasks-hard2-c.ts";
+
+export { finalAnswer, nodeTests } from "./task-kit.ts";
 
 export interface Verdict {
   pass: boolean;
@@ -13,8 +20,14 @@ export interface Verdict {
 }
 
 export interface CheckEnv {
+  // 这次运行自己的记忆视图（lib.ts runMemoryView）：布局同记忆目录——workspaces/<键>/ 是它工作区的那份、global/ 是它自己那份
+  // 全局层；别的题、别的重复写的都不在里面
   memoryDir: string;
 }
+
+// 模型档案 P0：分维度出分（报表按它分组）。老题按事故的性质归了类，见文件末尾 CLASSIC_DIMENSIONS。
+export const DIMENSIONS = ["编辑格式", "工具调用健壮性", "指令遵循", "长跨度多轮", "收尾完整性", "日常"] as const;
+export type Dimension = (typeof DIMENSIONS)[number];
 
 export interface AbTask {
   id: string;
@@ -23,8 +36,17 @@ export interface AbTask {
   prompt: string;
   maxTurns: number;
   deadlineMs: number;
+  // 模型档案 P0：维度、预期难度、判分规则（写给审 run 的人看）；suite = hard 的是有区分度的新题，A/B 两树模式默认不跑
+  dimension?: Dimension;
+  difficulty?: "易" | "中" | "难";
+  scoring?: string;
+  suite?: "classic" | "hard" | "hard2";
+  // 多轮：首条消息跑完、记录落定后，同一会话里依次再发这几条（第二条依赖第一条的结果）。maxTurns / deadlineMs 按每条消息算。
+  followups?: string[];
+  // 这道题要的权限规则（并进这一臂的全局规则；规则只针对本题现场的文件名，不影响别的题）
+  permissionRules?: { allow?: string[]; deny?: string[]; ask?: string[] };
   setup(dir: string): void;
-  // env.memoryDir：这一臂的记忆根（瘦身 P0-1 的「偏好记住了没有」要看它）
+  // env.memoryDir：这次运行自己的记忆视图（见 CheckEnv；瘦身 P0-1 的「偏好记住了没有」要看它）
   check(dir: string, rec: PersistedSession, env?: CheckEnv): Verdict;
   // 参考解，自检用（server/ab-eval.test.ts）：原样现场必须判不通过、做完参考解必须判通过——证明陷阱没有预先解开、
   // 判分也不是永远过不了。answer = 参考解的最终答复（只有看答复的任务需要）；calls = 参考解做过的（成功的）工具调用
@@ -39,42 +61,7 @@ export interface AbTask {
   needsSkills?: boolean;
 }
 
-const write = (dir: string, rel: string, text: string, encoding: BufferEncoding = "utf8") => {
-  const abs = path.join(dir, rel);
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, text, encoding);
-};
-const read = (dir: string, rel: string): string | null => {
-  try {
-    return fs.readFileSync(path.join(dir, rel), "utf8");
-  } catch {
-    return null;
-  }
-};
-
-// 在工作区里跑全部 node:test，作为「真的好了没有」的独立判据（不信模型自己说的）。
-export function nodeTests(dir: string): { ok: boolean; tests: number; failed: number } {
-  // 本进程若自己就跑在 node --test 里（自检），子进程会继承 NODE_TEST_CONTEXT、改用二进制协议汇报而不打印摘要行——去掉它。
-  const env = { ...process.env };
-  delete env.NODE_TEST_CONTEXT;
-  const r = spawnSync(process.execPath, ["--test"], { cwd: dir, encoding: "utf8", timeout: 60_000, env });
-  const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
-  const fail = /^ℹ fail (\d+)/m.exec(out);
-  const tests = /^ℹ tests (\d+)/m.exec(out);
-  return { ok: r.status === 0 && Number(tests?.[1] ?? 0) > 0, tests: Number(tests?.[1] ?? 0), failed: Number(fail?.[1] ?? 0) };
-}
-
-// 最终答复（最后一条有正文的 assistant 消息）
-export function finalAnswer(rec: PersistedSession): string {
-  for (let i = rec.messages.length - 1; i >= 0; i--) {
-    const m = rec.messages[i];
-    if (m.role !== "assistant") continue;
-    const text = m.content.flatMap((b) => (b.t === "text" ? [b.text] : [])).join("");
-    if (text.trim()) return text;
-  }
-  return "";
-}
-
+// write / read / nodeTests / finalAnswer / filesUnder 挪进了 task-kit.ts（新题共用），nodeTests 与 finalAnswer 照旧从这里导出。
 const pkg = JSON.stringify({ name: "ab-task", type: "module", scripts: { test: "node --test" } }, null, 2);
 
 export const TASKS: AbTask[] = [
@@ -220,27 +207,17 @@ export const TASKS: AbTask[] = [
     },
   },
   ...SLIM_TASKS(),
+  ...HARD_TASKS,
+  ...HARD2_A_TASKS,
+  ...HARD2_B_TASKS,
+  ...HARD2_C_TASKS,
 ];
 
 // ── 瘦身 P0（2026-10-07）：日常场景的流程税与按需注入 ─────────────────────────────
 // 前 6 个陷阱都是编码题，量不出「每条消息多一次审计」「专章搬走之后还管不管用」。这 6 个照正式服的日常形态补上：纯问答、
 // 看一眼工作区就答、文档整理（不该有验证门）、用户表达偏好（记忆还记不记得下来——P0-1 把审计挪到了 run 之后）、
 // 做个网页并用浏览器验证（网页专章改成按需注入——P0-3）、多步实现（待办提醒不落盘——P0-2）。
-function filesUnder(dir: string, skip = /^\.dimensio$/): string[] {
-  const out: string[] = [];
-  const walk = (rel: string) => {
-    for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
-      if (skip.test(e.name)) continue;
-      const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) walk(r);
-      else out.push(r);
-    }
-  };
-  if (fs.existsSync(dir)) walk("");
-  return out.sort();
-}
-
-// 这一臂的记忆根里有没有一条同时说到这些的笔记（工作区层或全局层都算；历史版本不算）
+// 这次运行的记忆视图里有没有一条同时说到这些的笔记（工作区层或它自己的全局层都算；历史版本不算）
 function memoryMentions(memoryDir: string | undefined, all: RegExp[]): boolean {
   if (!memoryDir) return false;
   return filesUnder(memoryDir, /^\.history$/)
@@ -458,3 +435,26 @@ export const SKILL_TASKS: AbTask[] = [
 ];
 
 export const taskById = (id: string): AbTask | undefined => TASKS.find((t) => t.id === id) ?? SKILL_TASKS.find((t) => t.id === id);
+
+// 模型档案 P0：老题归维度（按事故的性质），都算 classic 套题。新题（tasks-hard.ts）自己写着维度与难度。
+const CLASSIC_DIMENSIONS: Record<string, Dimension> = {
+  "edit-multi-match": "编辑格式",
+  "gbk-file": "编辑格式",
+  "large-output": "工具调用健壮性",
+  "patch-already-applied": "指令遵循",
+  "neighbor-tests": "收尾完整性",
+  "tail-evidence": "收尾完整性",
+  "web-counter": "收尾完整性",
+  "multi-step": "收尾完整性",
+};
+for (const t of [...TASKS, ...SKILL_TASKS]) {
+  t.suite ??= "classic";
+  t.dimension ??= CLASSIC_DIMENSIONS[t.id] ?? "日常";
+  t.difficulty ??= "易";
+}
+
+// 按套题挑题：classic = 老题（A/B 两树模式的默认），hard = 模型档案 P0 的难题，all = 两者（不含要技能夹具的 skill-*）
+export function tasksOfSuite(suite: string): AbTask[] {
+  if (suite === "all") return TASKS;
+  return TASKS.filter((t) => t.suite === suite);
+}

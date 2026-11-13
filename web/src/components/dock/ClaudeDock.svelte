@@ -7,7 +7,7 @@
   // 窄屏 = 移动端专属方案（dimensio 手机端同款）：底部 sheet（把手下拉/scrim 点击可关）
   //        + 常驻工具切换条（chip 直切五件套）。
   import { ui, session } from '../../lib/state.svelte.js';
-  import { dock, closeDock, closeDockView, toggleDockView, toggleDockMax, setDockMulti, openDock, ensureDockMeta, dockToolOk, dockSnapMode, dockCols, setDockCols, dockToolLabel, dockToolIcon } from '../../lib/dock.svelte.js';
+  import { dock, closeDock, closeDockView, toggleDockView, toggleDockMax, setDockMulti, openDock, ensureDockMeta, dockToolOk, dockSnapMode, dockCols, setDockCols, dockToolLabel, dockToolIcon, browserMountedNow, browserSessionOf } from '../../lib/dock.svelte.js';
   import { isPluginView, workbenchByKey, workbenchKeys } from '../../lib/pluginUi.svelte.js';
   import PluginWorkbench from './PluginWorkbench.svelte';   // 插件的工作台标签（ctx.ui.workbench）
   import { layout, pointer } from '../../lib/layout.svelte.js';
@@ -425,6 +425,10 @@
     };
     return () => ch.close();
   });
+  // 无边框卡片窗口的窗控（桌面壳 card-window-preload.cjs 注入；网页弹窗 / 老壳没有 → 不摆这三颗，用系统标题栏）
+  const winCtl = card && typeof window !== 'undefined' ? window.BridgeCardWindow || null : null;
+  let winMax = $state(false);
+  $effect(() => winCtl?.onMaximize?.((on) => { winMax = on; }));
   function dockBack() {
     try { const ch = new BroadcastChannel(DOCK_CHANNEL); ch.postMessage({ t: 'back', view: card, ws: dock.ws }); ch.close(); } catch {}
     setTimeout(() => window.close(), 40);
@@ -541,7 +545,7 @@
     {#key dock.ws}
       {#if view === 'review'}<ReviewPanel />
       {:else if view === 'term'}<TermPanel />
-      {:else if view === 'browser'}<BrowserPanel readonly={snapMode} />
+      {:else if view === 'browser'}{#key browserSessionOf(dock)}<BrowserPanel readonly={snapMode} />{/key}
       {:else if view === 'files'}
         {#if filesMount}
           {#key filesMount.key}
@@ -564,16 +568,22 @@
 {/snippet}
 
 {#if card}
-<!-- 卡片窗口：整扇窗就是这一张卡。顶上一条细标题行（哪个工作空间 + 放回工作台），其余全给面板 -->
-<div class="dock cardwin" bind:this={dockEl} aria-label={titleOf(card)}>
-  <header class="dk-win-head">
-    <span class="dk-win-ic">{@html dockToolIcon(card)}</span>
+<!-- 卡片窗口：整扇窗就是这一张卡。顶上是卡片原本那条标题行（标题 + 工作空间名 + 卡片同款圆钮），其余全给面板。
+     桌面壳里窗口无边框（frameless）：标题行就是窗口拖拽带（双击放大 / 还原），右侧圆钮管这扇窗本身。 -->
+<div class="dock cardwin" class:frameless={!!winCtl} bind:this={dockEl} aria-label={titleOf(card)}>
+  <header class="dk-card-head dk-win-head">
     <span class="dk-card-t">{titleOf(card)}</span>
     {#if wsName(dock.ws)}<span class="dk-win-ws" title={dock.ws}>{wsName(dock.ws)}</span>{/if}
-    <button class="dk-back" title={tc('claude', '放回工作台')} onclick={dockBack}>
+    <button class="dk-cbtn" aria-label={tc('claude', '放回工作台')} title={tc('claude', '放回工作台')} onclick={dockBack}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/><path d="M11.5 12H6.5m2.5-2.5L6.5 12 9 14.5"/></svg>
-      <span>{tc('claude', '放回工作台')}</span>
     </button>
+    {#if winCtl}
+      <button class="dk-cbtn" aria-label={t('最小化')} title={t('最小化')} onclick={() => winCtl.minimize()}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6.5 12h11"/></svg>
+      </button>
+      <button class="dk-cbtn" aria-label={winMax ? t('还原') : t('放大')} title={winMax ? t('还原') : t('放大铺满')} onclick={() => winCtl.toggleMaximize()}>{@html dockIcon(winMax ? 'shrink' : 'expand')}</button>
+      <button class="dk-cbtn" aria-label={t('关闭')} title={t('关闭')} onclick={() => winCtl.close()}>{@html dockIcon('close')}</button>
+    {/if}
   </header>
   {@render panelBody(card)}
 </div>
@@ -619,7 +629,7 @@
             <button class="chip" class:on={mView === m.key} onclick={() => pickTool(m.key)}>
               <span class="chip-ic">{@html dockToolIcon(m.key)}</span>
               {m.label}
-              {#if (m.key === 'browser' && dock.browserLive && mView !== 'browser') || (m.key === 'term' && dock.termLive && mView !== 'term') || (m.key === 'tasks' && bgLive && mView !== 'tasks')}<span class="dk-live"></span>{/if}
+              {#if (m.key === 'browser' && browserMountedNow()) || (m.key === 'term' && dock.termLive && mView !== 'term') || (m.key === 'tasks' && bgLive && mView !== 'tasks')}<span class="dk-live"></span>{/if}
             </button>
           {/each}
         </div>
@@ -675,10 +685,12 @@
   .dock.wide.gripping { animation: none; }
   .dock.gripping :global(iframe) { pointer-events: none; }
   @keyframes dockInW { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
-  /* 左缘拖拽把手：8px 命中区，悬停/拖动时亮出 2px 指示线；双击复位默认宽 */
+  /* 左缘拖拽把手：7px 命中区，悬停/拖动时亮出 2px 指示线；双击复位默认宽。
+     命中区整条落在工作台这一侧（左 6px 内边距 + 卡片 1px 边框），一点不伸进正文列：正文列的滚动条槽
+     （10px）就贴在这条接缝左边，以前 left:-4px 骑缝会盖住拇指右侧、点滑块变成拖宽度（11-08 维护者报）。 */
   /* no-drag：WCO 下工作台顶上那条标题栏带是窗口拖拽区，把手是 div 不在全局免拖名单里，不打洞的话顶端 40px 拖不动宽度 */
-  .dk-grip { position: absolute; left: -4px; top: 0; bottom: 0; width: 9px; cursor: col-resize; z-index: 5; touch-action: none; -webkit-app-region: no-drag; }
-  .dk-grip::after { content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background-color .15s ease; }
+  .dk-grip { position: absolute; left: 0; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 5; touch-action: none; -webkit-app-region: no-drag; }
+  .dk-grip::after { content: ''; position: absolute; left: 2px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background-color .15s ease; }
   @media (hover: hover) { .dk-grip:hover::after { background: color-mix(in srgb, var(--muted) 45%, transparent); } }
   .dock.gripping .dk-grip::after { background: var(--coral); }
 
@@ -712,15 +724,13 @@
   .dock.cardwin { --dk-card: #262625; --dk-line: rgba(255, 255, 255, .085);
     flex: 1; min-height: 0; background: var(--dk-card); --bg: var(--dk-card); }
   :global(html[data-theme="light"]) .dock.cardwin { --dk-card: #ffffff; --dk-line: rgba(0, 0, 0, .09); }
-  .dk-win-head { flex: none; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--dk-line); }
-  .dk-win-ic { width: 15px; height: 15px; display: flex; flex: none; color: var(--muted); }
-  .dk-win-ic :global(svg) { width: 100%; height: 100%; }
-  .dk-win-ws { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); }
-  .dk-back { margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 8px; border-radius: 7px;
-    font-size: 12.5px; color: var(--muted); }
-  .dk-back svg { width: 15px; height: 15px; }
-  .dk-back:active { background: var(--hover-strong); }
-  @media (hover: hover) { .dk-back:hover { background: var(--hover); color: var(--text); } }
+  /* 标题行就是卡片那条（.dk-card-head：38px、标题 13.5px、28px 圆钮），只多一个工作空间名；
+     无边框窗口里整条是窗口拖拽带，圆钮打洞 */
+  .dk-win-head { cursor: default; }
+  .dock.cardwin.frameless .dk-win-head { -webkit-app-region: drag; }
+  .dock.cardwin.frameless .dk-win-head .dk-cbtn { -webkit-app-region: no-drag; }
+  .dk-cbtn svg { width: 15px; height: 15px; }
+  .dk-win-ws { min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); }
   .dk-card-t { font-size: 13.5px; color: var(--serif); white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .dk-cbtn { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: var(--muted); flex: none; }
   .dk-cbtn:first-of-type { margin-left: auto; }

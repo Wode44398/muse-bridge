@@ -20,7 +20,7 @@
 <link rel="icon" href="%BASE_URL%icons/favicon-32.png" sizes="32x32" type="image/png" />
 <!-- Early theme binding: set data-theme before first paint so there's no flash.
      Default dark; light is a complete second theme (per design spec 2.1). -->
-<script>(function(){try{var t=localStorage.getItem('bridge-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
+<script>(function(){var t='dark';try{var L=localStorage,p=JSON.parse(L.getItem('bridge-prefs')||'null'),g=L.getItem('bridge-glass');if(p&&p.followSys&&window.matchMedia)t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';else t=g==='B'?'light':g==='A'?'dark':(L.getItem('bridge-theme')==='light'?'light':'dark');L.setItem('bridge-theme',t);L.setItem('bridge-glass',t==='light'?'B':'A');}catch(e){}document.documentElement.setAttribute('data-theme',t);})();</script>
 <!-- 开机底色：脚本还没跑起来、预载封面还没挂上之前，整页先是封面的底色（明=黑底白方块、暗=白底黑方块），
      不再先闪一帧分页的灰底。App 开机结束（ui.booted）时撤掉。 -->
 <style>html[data-booting]{background:#0a0a0a}html[data-booting="A"]{background:#fff}html[data-booting] body{background:transparent}</style>

@@ -1,0 +1,487 @@
+{
+ "models": [
+  {
+   "endpoint_id": "elevenlabs/tts/eleven-v4",
+   "metadata": {
+    "display_name": "Eleven v4",
+    "category": "text-to-speech",
+    "description": "Generate expressive speech with Eleven v4 from ElevenLabs. Control delivery with audio tags, voice stability, similarity settings, and IPA pronunciation.",
+    "status": "active",
+    "tags": [
+     "audio",
+     "text-to-speech",
+     "voiceover"
+    ],
+    "updated_at": "2026-10-02T19:10:00.967Z",
+    "is_favorited": null,
+    "thumbnail_url": "https://v3b.fal.media/files/b/0aac4241/SUZvoStueCW3Z6uEtzMiA.jpg",
+    "model_url": "https://fal.run/elevenlabs/tts/eleven-v4",
+    "license_type": "commercial",
+    "date": "2026-09-28T16:35:18.269Z",
+    "group": {
+     "key": "eleven-v4",
+     "label": "Eleven V4"
+    },
+    "highlighted": false,
+    "kind": "inference",
+    "stream_url": "https://fal.run/elevenlabs/tts/eleven-v4/stream",
+    "pinned": false
+   },
+   "retires_at": null,
+   "replacement": null,
+   "openapi": {
+    "openapi": "3.1.0",
+    "info": {
+     "title": "Queue OpenAPI for fal-ai/elevenlabs/tts/eleven-v4",
+     "version": "1.0.0",
+     "description": "The OpenAPI schema for the fal-ai/elevenlabs/tts/eleven-v4 queue.",
+     "x-fal-metadata": {
+      "endpointId": "fal-ai/elevenlabs/tts/eleven-v4",
+      "playgroundUrl": "https://fal.ai/models/fal-ai/elevenlabs/tts/eleven-v4",
+      "documentationUrl": "https://fal.ai/models/fal-ai/elevenlabs/tts/eleven-v4/api",
+      "about": "Eleven V4"
+     }
+    },
+    "components": {
+     "securitySchemes": {
+      "apiKeyAuth": {
+       "type": "apiKey",
+       "in": "header",
+       "name": "Authorization",
+       "description": "Fal Key"
+      }
+     },
+     "schemas": {
+      "QueueStatus": {
+       "type": "object",
+       "properties": {
+        "status": {
+         "type": "string",
+         "enum": [
+          "IN_QUEUE",
+          "IN_PROGRESS",
+          "COMPLETED"
+         ]
+        },
+        "request_id": {
+         "type": "string",
+         "description": "The request id."
+        },
+        "response_url": {
+         "type": "string",
+         "description": "The response url."
+        },
+        "status_url": {
+         "type": "string",
+         "description": "The status url."
+        },
+        "cancel_url": {
+         "type": "string",
+         "description": "The cancel url."
+        },
+        "logs": {
+         "type": "object",
+         "description": "The logs.",
+         "additionalProperties": true
+        },
+        "metrics": {
+         "type": "object",
+         "description": "The metrics.",
+         "additionalProperties": true
+        },
+        "queue_position": {
+         "type": "integer",
+         "description": "The queue position."
+        }
+       },
+       "required": [
+        "status",
+        "request_id"
+       ]
+      },
+      "ElevenlabsTtsElevenV4Input": {
+       "title": "TextToSpeechRequestV4",
+       "required": [
+        "text"
+       ],
+       "properties": {
+        "seed": {
+         "title": "Seed",
+         "anyOf": [
+          {
+           "maximum": 4294967295,
+           "type": "integer",
+           "minimum": 0
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Seed for best-effort reproducibility. Identical output is not guaranteed."
+        },
+        "voice": {
+         "title": "Voice",
+         "examples": [
+          "Aria",
+          "Roger",
+          "Sarah",
+          "Laura",
+          "Charlie",
+          "George",
+          "Callum",
+          "River",
+          "Liam",
+          "Charlotte",
+          "Alice",
+          "Matilda",
+          "Will",
+          "Jessica",
+          "Eric",
+          "Chris",
+          "Brian",
+          "Daniel",
+          "Lily",
+          "Bill"
+         ],
+         "type": "string",
+         "default": "Rachel",
+         "description": "The voice to use for speech generation"
+        },
+        "language_code": {
+         "title": "Language Code",
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Language code (ISO 639-1) for speech generation and text normalization."
+        },
+        "timestamps": {
+         "title": "Timestamps",
+         "type": "boolean",
+         "default": false,
+         "description": "Whether to return character-level timing information with the generated audio."
+        },
+        "similarity_boost": {
+         "maximum": 1,
+         "title": "Similarity Boost",
+         "description": "How closely the output follows the reference voice. Higher values increase similarity but may reduce naturalness.",
+         "type": "number",
+         "default": 0.75,
+         "minimum": 0
+        },
+        "output_format": {
+         "title": "Output Format",
+         "type": "string",
+         "enum": [
+          "mp3_22050_32",
+          "mp3_44100_32",
+          "mp3_44100_64",
+          "mp3_44100_96",
+          "mp3_44100_128",
+          "mp3_44100_192",
+          "pcm_8000",
+          "pcm_16000",
+          "pcm_22050",
+          "pcm_24000",
+          "pcm_44100",
+          "pcm_48000",
+          "ulaw_8000",
+          "alaw_8000",
+          "opus_48000_32",
+          "opus_48000_64",
+          "opus_48000_96",
+          "opus_48000_128",
+          "opus_48000_192"
+         ],
+         "default": "mp3_44100_128",
+         "description": "Output format of the generated audio. Formatted as codec_sample_rate_bitrate."
+        },
+        "stability": {
+         "maximum": 1,
+         "title": "Stability",
+         "description": "Voice stability. Lower values allow more expressive delivery; higher values make delivery more consistent.",
+         "type": "number",
+         "default": 0.5,
+         "minimum": 0
+        },
+        "text": {
+         "examples": [
+          "[excited] Hello! Welcome to Eleven v4."
+         ],
+         "title": "Text",
+         "minLength": 1,
+         "type": "string",
+         "maxLength": 5000,
+         "description": "The text to convert to speech. Supports audio tags such as [whispering] and IPA pronunciation enclosed in forward slashes."
+        },
+        "apply_text_normalization": {
+         "title": "Apply Text Normalization",
+         "type": "string",
+         "enum": [
+          "auto",
+          "on",
+          "off"
+         ],
+         "default": "auto",
+         "description": "Whether to normalize text such as numbers and dates before generation."
+        }
+       },
+       "x-fal-order-properties": [
+        "text",
+        "voice",
+        "stability",
+        "similarity_boost",
+        "seed",
+        "language_code",
+        "output_format",
+        "apply_text_normalization",
+        "timestamps"
+       ],
+       "type": "object"
+      },
+      "ElevenlabsTtsElevenV4Output": {
+       "title": "TTSOutput",
+       "required": [
+        "audio"
+       ],
+       "properties": {
+        "timestamps": {
+         "title": "Timestamps",
+         "anyOf": [
+          {
+           "items": {},
+           "type": "array"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Timestamps for each word in the generated speech. Only returned if `timestamps` is set to True in the request."
+        },
+        "audio": {
+         "examples": [
+          {
+           "url": "https://v3.fal.media/files/zebra/zJL_oRY8h5RWwjoK1w7tx_output.mp3"
+          }
+         ],
+         "$ref": "#/components/schemas/File",
+         "description": "The generated audio file"
+        }
+       },
+       "x-fal-order-properties": [
+        "audio",
+        "timestamps"
+       ],
+       "type": "object"
+      },
+      "File": {
+       "title": "File",
+       "required": [
+        "url"
+       ],
+       "properties": {
+        "url": {
+         "title": "Url",
+         "type": "string",
+         "description": "The URL where the file can be downloaded from."
+        },
+        "file_name": {
+         "examples": [
+          "z9RV14K95DvU.png"
+         ],
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "File Name",
+         "description": "The name of the file. It will be auto-generated if not provided."
+        },
+        "file_size": {
+         "examples": [
+          4404019
+         ],
+         "anyOf": [
+          {
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "File Size",
+         "description": "The size of the file in bytes."
+        },
+        "content_type": {
+         "examples": [
+          "image/png"
+         ],
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "title": "Content Type",
+         "description": "The mime type of the file."
+        }
+       },
+       "x-fal-order-properties": [
+        "url",
+        "content_type",
+        "file_name",
+        "file_size"
+       ],
+       "type": "object"
+      }
+     }
+    },
+    "paths": {
+     "/fal-ai/elevenlabs/tts/eleven-v4/requests/{request_id}/status": {
+      "get": {
+       "parameters": [
+        {
+         "name": "request_id",
+         "in": "path",
+         "required": true,
+         "schema": {
+          "type": "string",
+          "description": "Request ID"
+         }
+        },
+        {
+         "name": "logs",
+         "in": "query",
+         "required": false,
+         "schema": {
+          "type": "number",
+          "description": "Whether to include logs (`1`) in the response or not (`0`)."
+         }
+        }
+       ],
+       "responses": {
+        "200": {
+         "description": "The request status.",
+         "content": {
+          "application/json": {
+           "schema": {
+            "$ref": "#/components/schemas/QueueStatus"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "/fal-ai/elevenlabs/tts/eleven-v4/requests/{request_id}/cancel": {
+      "put": {
+       "parameters": [
+        {
+         "name": "request_id",
+         "in": "path",
+         "required": true,
+         "schema": {
+          "type": "string",
+          "description": "Request ID"
+         }
+        }
+       ],
+       "responses": {
+        "200": {
+         "description": "The request was cancelled.",
+         "content": {
+          "application/json": {
+           "schema": {
+            "type": "object",
+            "properties": {
+             "success": {
+              "type": "boolean",
+              "description": "Whether the request was cancelled successfully."
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "/fal-ai/elevenlabs/tts/eleven-v4": {
+      "post": {
+       "requestBody": {
+        "required": true,
+        "content": {
+         "application/json": {
+          "schema": {
+           "$ref": "#/components/schemas/ElevenlabsTtsElevenV4Input"
+          }
+         }
+        }
+       },
+       "responses": {
+        "200": {
+         "description": "The request status.",
+         "content": {
+          "application/json": {
+           "schema": {
+            "$ref": "#/components/schemas/QueueStatus"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "/fal-ai/elevenlabs/tts/eleven-v4/requests/{request_id}": {
+      "get": {
+       "parameters": [
+        {
+         "name": "request_id",
+         "in": "path",
+         "required": true,
+         "schema": {
+          "type": "string",
+          "description": "Request ID"
+         }
+        }
+       ],
+       "responses": {
+        "200": {
+         "description": "Result of the request.",
+         "content": {
+          "application/json": {
+           "schema": {
+            "$ref": "#/components/schemas/ElevenlabsTtsElevenV4Output"
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "servers": [
+     {
+      "url": "https://queue.fal.run"
+     }
+    ],
+    "security": [
+     {
+      "apiKeyAuth": []
+     }
+    ]
+   }
+  }
+ ],
+ "next_cursor": null,
+ "has_more": false
+}

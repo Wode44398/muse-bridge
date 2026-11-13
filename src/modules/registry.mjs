@@ -1,4 +1,4 @@
-// 功能扩展注册表：Vertex / Codex / dimensio 三个可选模块「装没装、加载没加载」的单一真相。
+// 功能扩展注册表：Media Studio / Codex / dimensio 几个可选模块「装没装、加载没加载」的单一真相。
 //
 // 基础版只有 Claude（核心自带）。其余 agent 各属一个功能扩展，按下面的顺序找：
 //   1. 仓库内置   <程序目录>/modules/<id>/         —— 维护者本机、Linux/Docker 部署：满配，行为不变
@@ -37,7 +37,8 @@ import { installCoreResolver } from './core-resolve.mjs';
 // 目录固定三项：id 即目录名；agents 是它撑起的 agent（config/agents.mjs 的统一 id）。
 // 不在目录里的（含数据目录里残留的旧扩展）一律不发现、不加载：扩展中心不列、离线包不认。
 export const MODULE_CATALOG = Object.freeze([
-  { id: 'vertex', label: 'Gemini · Vertex', agents: ['gemini'] },
+  // Media Studio（2026-11-04 接替 Vertex 扩展；Gemini 对话同日下线）：图像 / 视频 / 配音 / 音乐与给 Claude 的媒体工具。工具型页面，不能对话（agents.mjs tool:true）。
+  { id: 'studio', label: 'Media Studio', agents: ['studio'] },
   { id: 'codex', label: 'ChatGPT · Codex', agents: ['codex'] },
   { id: 'dimensio', label: 'dimensio', agents: ['dimensio'] },
 ]);
@@ -48,7 +49,10 @@ export const MANIFEST_NAME = 'bridge-module.json';
 export const BUILTIN_MODULES_DIR = path.join(PROGRAM_ROOT, 'modules');
 export const INSTALLED_MODULES_DIR = path.resolve(process.env.BRIDGE_MODULES_DIR || path.join(DATA_ROOT, 'modules'));
 
-const SKIP = new Set(String(process.env.BRIDGE_MODULES_SKIP || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
+// 退役的扩展 id → 接替它的（2026-11-04 vertex → studio）：部署里写的 BRIDGE_MODULES_SKIP / HIDE=vertex 照旧作用到接替者上
+const RETIRED_MODULES = { vertex: 'studio' };
+const idList = (v) => String(v || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).map((s) => RETIRED_MODULES[s] || s);
+const SKIP = new Set(idList(process.env.BRIDGE_MODULES_SKIP));
 const skipped = (id) => SKIP.has('all') || SKIP.has(id);
 const USE_BUILTIN = process.env.BRIDGE_MODULES_BUILTIN !== '0';
 
@@ -104,8 +108,8 @@ export function buildEdition() {
 }
 // 这一版提不提供某个扩展（扩展中心与 Agent 页据此隐去，别让人去找一个不存在的离线包）。装上了的（或排着待装的）一律照常列出。
 // Codex 与其他扩展一样随发行包提供；没有打包信息且源码也没带它的部署不列。
-// 发行版另有取舍时由部署声明：BRIDGE_MODULES_HIDE=vertex,codex（Muse Bridge 不带 Gemini / Codex）——没装的就不列。
-const HIDE = new Set(String(process.env.BRIDGE_MODULES_HIDE || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
+// 发行版另有取舍时由部署声明：BRIDGE_MODULES_HIDE=studio,codex（Muse Bridge 不带媒体 / Codex；老写法 vertex 等于 studio）——没装的就不列。
+const HIDE = new Set(idList(process.env.BRIDGE_MODULES_HIDE));
 export function moduleOffered(id) {
   if (HIDE.has(id) && !found[id]) return false;
   if (id !== 'codex') return true;
@@ -333,7 +337,7 @@ export function startModules(opts) {
   for (const r of loadedList()) if (typeof r.exports.startup === 'function') safe(r.id, 'startup', () => r.exports.startup(opts));
 }
 
-// POST /api/chat 的 agent 字段（vertex / codex）→ 处理函数；扩展没装就是 null。
+// POST /api/chat 的 agent 字段（codex）→ 处理函数；扩展没装就是 null。
 export function moduleChat(chatAgent) {
   for (const r of loadedList()) {
     const h = r.exports.chat && Object.hasOwn(r.exports.chat, chatAgent) ? r.exports.chat[chatAgent] : null;

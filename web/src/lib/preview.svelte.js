@@ -14,7 +14,7 @@
 
 import { untrack } from 'svelte';
 import { getToken } from './api.js';
-import { apiUrl, isOffline } from './server.js';
+import { apiUrl, mediaUrl, isOffline } from './server.js';
 import { localFileUrl, hasLocalThumb, localThumbUrl } from './localfs.js';
 import { prefs } from './state.svelte.js';
 import { serverOnThisMachine, nativeWorkspaceFileUrl, nativeLocLocalOnly } from './nativeDesktop.js';
@@ -46,8 +46,9 @@ export function kindOf(name = '') {
 // —— 媒体 URL（附 ?token：<img>/<video> 跨源带不了 Authorization 头，离线壳只能查询参数携带）——
 function tokenSuffix(sep) { const tok = getToken && getToken(); return tok ? sep + 'token=' + encodeURIComponent(tok) : ''; }
 
+// 媒体元素用 mediaUrl：在家局域网直连时，只有这台设备实测过媒体能经 LAN 加载才走 LAN（见 server.js）
 export function vertexMediaUrl(id, variant) {
-  return apiUrl('/api/vertex/media?id=' + encodeURIComponent(id) + (variant ? '&v=' + variant : '') + tokenSuffix('&'));
+  return mediaUrl('/api/vertex/media?id=' + encodeURIComponent(id) + (variant ? '&v=' + variant : '') + tokenSuffix('&'));
 }
 export function codexArtifactUrl(id, filePath, { dl = false, name = '' } = {}) {
   return apiUrl('/api/codex/artifact?path=' + encodeURIComponent(filePath)
@@ -67,7 +68,7 @@ export function harnessArtifactUrl(id, filePath, { dl = false } = {}) {
 }
 // http=true：强制走 bridge HTTP。要喂 WebGL/WebGPU 纹理的图（壁纸）必须用它——本地协议
 // bridge-workspace:// 对页面是跨源且不带 CORS 头，读进 GPU 会被安全策略拒绝（画布一片黑）。
-export function cloudFileUrl(rel, { dl = false, thumb = false, preview = false, mt = 0, ws = '', nativeLocation = '', http = false } = {}) {
+export function cloudFileUrl(rel, { dl = false, thumb = false, preview = false, media = false, mt = 0, ws = '', nativeLocation = '', http = false } = {}) {
   const name = String(rel).split('/').pop() || 'file';
   // 桌面客户端默认工作空间用受控本地协议直读：图片/PDF/音视频 Range/文本都不再
   // 绕 loopback HTTP。primary 的缩略图/衍生图/下载仍由 bridge 服务端处理（sharp 320
@@ -80,7 +81,9 @@ export function cloudFileUrl(rel, { dl = false, thumb = false, preview = false, 
   // thumb=320 列表图标档 / preview=1280 画廊轻量档（服务端 sharp 衍生，见 files.mjs THUMB_TIERS）。
   // mt=文件 mtime（服务端忽略）：文件被同名替换时 URL 变化，绕开浏览器对旧衍生图的 max-age 缓存。
   const variant = thumb ? '&thumb=1' : preview ? '&thumb=preview' : '';
-  return apiUrl('/api/file?path=' + encodeURIComponent(rel) + variant + (mt ? '&mt=' + Math.round(mt) : '') + (ws ? '&ws=' + encodeURIComponent(ws) : '') + (dl ? '&dl=1&name=' + encodeURIComponent(name) : '') + tokenSuffix('&'));
+  // 缩略图 / 预览档只给 <img> 用，走 mediaUrl（局域网直连时媒体可能走不了 LAN，见 server.js）；下载、读正文照旧走 apiUrl。
+  // media=原图但也是给 <img> 等媒体元素用（md 阅读态/编辑态的插图），同走 mediaUrl
+  return (thumb || preview || media ? mediaUrl : apiUrl)('/api/file?path=' + encodeURIComponent(rel) + variant + (mt ? '&mt=' + Math.round(mt) : '') + (ws ? '&ws=' + encodeURIComponent(ws) : '') + (dl ? '&dl=1&name=' + encodeURIComponent(name) : '') + tokenSuffix('&'));
 }
 // 服务端把 office 文档转成的 PDF（LibreOffice headless，后端缓存）。OfficeView 探测此端点；
 // 通了就用 PdfView 渲染（像素级还原），不通(没装/转换失败/离线)回落客户端 mammoth/SheetJS。

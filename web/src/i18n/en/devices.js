@@ -86,4 +86,10 @@ export default {
   '服务器地址 {origin}': 'Server address {origin}',
   '本机 设备 观察 操作 权限 档位 agent': 'computer device view control permission level agent',
   '端口 转发 dev server 预览 本机模型': 'port forward dev server preview local model',
+  '浏览器扩展 Web Bridge': 'Web Bridge browser extension',
+  '浏览器 扩展 插件 Edge Chrome 安装': 'browser extension plugin Edge Chrome install',
+  '已连接：{names}': 'Connected: {names}',
+  '装进你的 Edge / Chrome，Claude 就能用你已登录的网站': 'Add it to your Edge / Chrome so Claude can use the sites you’re signed in to',
+  '再装一个浏览器…': 'Add to another browser…',
+  '装到浏览器…': 'Add to browser…',
 };

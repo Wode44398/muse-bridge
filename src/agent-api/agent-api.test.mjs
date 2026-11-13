@@ -138,6 +138,39 @@ test('定时任务：建 / 改 / 删，Ultracode 被拒', async () => {
   assert.equal((await call('routines.list', {}, { key: k })).body.data.routines.length, 0);
 });
 
+test('定时任务的频率：接口层严格校验——不认识的字段 / type、越界的值都回 bad_args，不静默建成别的时间', async () => {
+  const k = users.createAgentKey(ADMIN_OWNER, { label: 'routines-schedule' }).token;
+  const create = (schedule) => call('routines.create', { prompt: '做点事', schedule }, { key: k });
+  const time = await create({ type: 'daily', time: '08:30' });
+  assert.equal(time.body.error.code, 'bad_args');
+  assert.match(time.body.error.message, /time/);
+  assert.match(time.body.error.hint, /"hour":9,"minute":0/, '提示里给出该类型的正确写法');
+  for (const s of [{ type: 'weekday', hour: 7 }, {}, { type: 'daily', hour: 25 }, { type: 'daily', minute: 70 }, { type: 'daily', hour: 8.5 },
+    { type: 'weekly', day: 3, hour: 7 }, { type: 'weekly', hour: 7 }, { type: 'weekly', days: [], hour: 7 }, { type: 'weekly', days: [7] },
+    { type: 'hourly', hour: 9, minute: 0 }, { type: 'manual', hour: 9 }, { type: 'once', at: '明天早上' }, { type: 'once' }, { type: 'cron' },
+    { type: 'once', at: '2026-12-01' }, { type: 'once', at: '2099-12' }]) {   // 只写日期：Date.parse 按 UTC 零点，会静默差几个小时
+    assert.equal((await create(s)).body.error?.code, 'bad_args', JSON.stringify(s));
+  }
+  assert.equal((await call('routines.list', {}, { key: k })).body.data.routines.length, 0, '报错的一条都没建');
+
+  // 合法的照旧：数字字符串可以，返回规范化后的 schedule；一次性可以写 ISO 时间串（不带时区按服务器时区）
+  const d = await create({ type: 'daily', hour: '8', minute: 30 });
+  assert.deepEqual(d.body.data.routine.schedule, { type: 'daily', hour: 8, minute: 30 });
+  const when = new Date(Date.now() + 2 * 86400_000); when.setSeconds(0, 0);
+  const pad = (n) => String(n).padStart(2, '0');
+  const iso = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}`;
+  const o = await create({ type: 'once', at: iso });
+  assert.deepEqual(o.body.data.routine.schedule, { type: 'once', at: when.getTime() });
+  // routines.list 读回来的 weekly（days + 老字段 weekday）原样传回 routines.update 能过
+  const w = await create({ type: 'weekly', days: [1, 3], hour: 7, minute: 5 });
+  const listed = (await call('routines.list', {}, { key: k })).body.data.routines.find((r) => r.id === w.body.data.routine.id);
+  assert.equal((await call('routines.update', { id: listed.id, schedule: listed.schedule }, { key: k })).body.ok, true);
+  // update 同样严格，报错时原来的频率不动
+  assert.equal((await call('routines.update', { id: d.body.data.routine.id, schedule: { type: 'daily', time: '09:00' } }, { key: k })).body.error.code, 'bad_args');
+  assert.deepEqual((await call('routines.list', {}, { key: k })).body.data.routines.find((r) => r.id === d.body.data.routine.id).schedule, { type: 'daily', hour: 8, minute: 30 });
+  for (const r of [d, o, w]) assert.equal((await call('routines.delete', { id: r.body.data.routine.id }, { key: k })).body.ok, true);
+});
+
 test('成员的密钥：只看得到自己的文件夹，没命令行就不能换根，看不到主机的密钥', async () => {
   await users.createUser('agentuser', 'pw-agentuser-123', 'user');
   const k = users.createAgentKey({ user: 'agentuser' }, { label: 'member' }).token;

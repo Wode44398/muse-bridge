@@ -11,6 +11,7 @@ import { visibleMessages } from "./agent/state.ts";
 import type { Msg } from "./agent/turn.ts";
 import { sessionsDir } from "./paths.ts";
 import { loadSession, type SessionMeta } from "./store.ts";
+import { getConfig } from "./config.ts";
 
 export interface SessionSearchHit {
   id: string;
@@ -156,4 +157,81 @@ export async function searchSessions(
     if (items.length >= limit) break;
   }
   return { items, scanned: entries.length };
+}
+
+// ── 离线整理（memory-dream.ts）与 Recall(layer:"sessions") 用：按工作区找会话、取一个会话的可见正文 ──────────────
+// 记忆系统的地基是原始对话：笔记写错了、过时了，要拿写它时的对话来核对。这里只给用户看得见的正文（同侧栏搜索），
+// 每条带角色；own = 用户本人打的字（不是注入、不是工具结果、不是附件转交）——晋升时逐字核对用户原话只认这一类。
+
+export interface TranscriptLine {
+  role: "user" | "assistant";
+  own: boolean;
+  text: string;
+}
+
+const samePath = (a: string, b: string): boolean => {
+  const na = path.resolve(a);
+  const nb = path.resolve(b);
+  return process.platform === "win32" ? na.toLowerCase() === nb.toLowerCase() : na === nb;
+};
+
+// 没记工作区的旧会话跑在当时的默认工作区——按现在的默认工作区算（与侧栏一致）
+export function sessionInWorkspace(meta: Pick<SessionMeta, "workspace">, root: string): boolean {
+  return samePath(meta.workspace || getConfig().workspace, root);
+}
+
+// 这个工作区的会话（最新的在前）；since = 只要这之后更新过的
+export async function workspaceSessions(root: string, opts: { since?: number; limit?: number } = {}): Promise<SessionMeta[]> {
+  let names: string[];
+  try {
+    names = await fs.readdir(sessionsDir());
+  } catch {
+    return [];
+  }
+  const out: SessionMeta[] = [];
+  for (const n of names) {
+    if (!n.endsWith(".json")) continue;
+    const e = await extract(n.slice(0, -".json".length), path.join(sessionsDir(), n));
+    if (!e || !sessionInWorkspace(e.meta, root)) continue;
+    if (opts.since !== undefined && e.meta.updatedAt <= opts.since) continue;
+    out.push(e.meta);
+  }
+  out.sort((a, b) => b.updatedAt - a.updatedAt);
+  return opts.limit ? out.slice(0, opts.limit) : out;
+}
+
+export async function sessionTranscript(id: string): Promise<{ meta: SessionMeta; lines: TranscriptLine[]; messages: Msg[] } | null> {
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(id)) return null;
+  const rec = await loadSession(id).catch(() => null);
+  if (!rec) return null;
+  const lines: TranscriptLine[] = [];
+  for (const m of visibleMessages(rec.messages)) {
+    if (m.role !== "user" && m.role !== "assistant") continue;
+    const text = visibleText(m).trim();
+    if (!text) continue;
+    const own = m.role === "user" && m.origin !== "harness" && !m.content.some((b) => b.t === "tool_result");
+    lines.push({ role: m.role, own, text });
+  }
+  return {
+    meta: {
+      id: rec.id,
+      title: rec.title,
+      createdAt: rec.createdAt,
+      updatedAt: rec.updatedAt,
+      messageCount: rec.messages.length,
+      provider: rec.config.provider,
+      model: rec.config.model,
+      workspace: rec.config.workspace,
+    },
+    lines,
+    messages: rec.messages,
+  };
+}
+
+// 用户原话核对：quote（空白归一、不分大小写）逐字出现在这个会话里用户本人说的某一条里
+export function quoteInUserLines(lines: readonly TranscriptLine[], quote: string): boolean {
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+  const q = norm(quote).replace(/^["'“”「」『』]+|["'“”「」『』]+$/g, "");
+  if (q.length < 6) return false;
+  return lines.some((l) => l.own && norm(l.text).includes(q));
 }

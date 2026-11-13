@@ -18,7 +18,14 @@ export function vendorText(text) {
   try { j = JSON.parse(text); } catch {}
   if (!j || typeof j !== 'object') return { json: false, msg: String(text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) };
   const e = j.error;
-  const msg = (e && (typeof e === 'string' ? e : e.message)) || j.message || j.msg || JSON.stringify(j);
+  let msg = (e && (typeof e === 'string' ? e : e.message)) || j.message || j.msg || JSON.stringify(j);
+  // OpenRouter 转发上游报错：外层只有一句「Provider returned error」，真正的原因在 error.metadata.raw（可能又是一层 JSON）
+  const raw = e && typeof e === 'object' && e.metadata && typeof e.metadata === 'object' ? e.metadata.raw : null;
+  if (typeof raw === 'string' && raw) {
+    let inner = raw;
+    try { const r = JSON.parse(raw); const im = r && typeof r === 'object' ? (r.error && typeof r.error === 'object' ? r.error.message : r.message ?? r.error) : null; if (typeof im === 'string' && im) inner = im; } catch {}
+    msg = String(msg) + '：' + inner.slice(0, 300);
+  }
   return { json: true, msg: String(msg).slice(0, 500) };
 }
 
@@ -80,6 +87,16 @@ export function looksNotChat(status, text) {
   return status === 400 && NOT_CHAT_RE.test(vendorText(text).msg || String(text || ''));
 }
 const NO_AUDIO_RE = /(?:input_audio|\baudio\b|音频)[^.\n]{0,40}(?:not (?:be )?(?:supported|allowed|accepted)|unsupported|不支持|不被支持)|(?:does ?n[o']t|not|不)\s*(?:support|accept|支持)[^.\n]{0,30}(?:\baudio\b|input_audio|音频)/i;
+/**
+ * 这条 429 其实是「余额不足 / 额度用完」而不是限流：智谱回 429 + 业务码 1113，OpenAI 回 429 + insufficient_quota。
+ * 重试没有用，线路也不该只冷却一分钟。
+ */
+const BILLING_429_RE = /"code"\s*:\s*"?1113"?|余额不足|欠费|请充值|insufficient[_ ]?(?:quota|balance|funds)|credit balance is too low|arrearage/i;
+export function looksBilling(status, text) {
+  // 只认强信号。「exceeded your current quota」不算：Gemini 的普通每分钟限流正文就是这句
+  return (status === 429 || status === 402) && BILLING_429_RE.test(String(text || '').slice(0, 2000));
+}
+
 /** 400、报文说「不收音频」（中转 / 型号不支持 input_audio）→ true。和 looksNotChat 分开：型号照样能对话，只是别带音频。 */
 export function looksNoAudio(status, text) {
   return status === 400 && NO_AUDIO_RE.test(vendorText(text).msg || String(text || ''));

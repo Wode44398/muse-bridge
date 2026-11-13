@@ -75,8 +75,8 @@ export default {
   '复制': 'Copy',
   '已用': 'Used',
   '未使用': 'Unused',
-  '普通（user）档没有命令行；能用哪些 agent 在「权限」里按人勾选（新账号默认 Claude + Gemini）。Codex 暂不支持多用户，只给管理员。邀请码一次性。':
-    'The Standard (user) tier has no shell. Choose which agents each person can use under “Manage” (new accounts get Claude + Gemini). Codex doesn’t support multiple users yet and is admin only. Invite codes are single-use.',
+  '普通（user）档没有命令行；能用哪些 agent 在「权限」里按人勾选（新账号默认 Claude + Media Studio）。Codex 暂不支持多用户，只给管理员。邀请码一次性。':
+    'The Standard (user) tier has no shell. Choose which agents each person can use under “Manage” (new accounts get Claude + Media Studio). Codex doesn’t support multiple users yet and is admin only. Invite codes are single-use.',
   '这台主机没开多用户：注册与邀请码关闭，只有管理员（访问令牌 / 扫码）和服务账号能登录。':
     'Multi-user mode is off on this host. Sign-ups and invite codes are disabled. Only admins (access token / QR code) and service accounts can sign in.',
   '关闭': 'Close',
@@ -119,6 +119,8 @@ export default {
   '5 小时': '5-hour',
   '每周': 'Weekly',
   'Pro 无此额度': 'Not on Pro',
+  '无限制': 'Unlimited',
+  '这个号没有 5 小时限额': 'No 5-hour limit on this account',
   '已达上限': 'Limit reached',
   'token 无效或已撤销': 'Token is invalid or revoked',
   'token 无权限': 'Token lacks permission',
@@ -137,6 +139,8 @@ export default {
   '如：主号 / 备用号': 'e.g. Main / Backup',
   '留空＝不改，当前 …{tail}': 'Leave blank to keep current (…{tail})',
   '留空＝用本机登录态': 'Leave blank to use this computer’s sign-in',
+  '套餐': 'Plan',
+  '套餐：setup-token 读不到订阅档位，自动识别分不清 Pro / Max 5x / Ultra 时手动标一下。': 'Plan: a setup-token can’t read the subscription tier. If auto-detect can’t tell Pro / Max 5x / Ultra apart, set it here.',
   '添加': 'Add',
   // 服务端自动起的账号名（SaAccounts 里 accLabel() 只对这两种名字翻译；「默认账号」与 server.js 同值）
   '默认账号': 'Default account',

@@ -104,7 +104,8 @@ export function accountBlock(id, model, { soft = seamlessActive() } = {}) {
   if (info && info.error && /无效|撤销/.test(info.error) && now - info.at < AUTH_COOLDOWN) {
     if (info.at + AUTH_COOLDOWN > until) { until = info.at + AUTH_COOLDOWN; type = 'auth'; }
   }
-  if (isFable(model) && planOf(id) === 'pro') return { until: Infinity, type: 'no_fable' };
+  // Pro 本来没有 Fable 额度；参加了体验 Fable 活动的 Pro 会带 Fable 周桶（seven_day_overage_included），那就照常用。
+  if (isFable(model) && planOf(id) === 'pro' && !accountLimits(id).seven_day_overage_included) return { until: Infinity, type: 'no_fable' };
   return until > now ? { until, type } : null;
 }
 
@@ -232,6 +233,21 @@ export async function noteLimitHit(acct, { kind = 'rate_limit', type = '', reset
     return best ? doSwitch(acct, best, kind === 'auth' ? 'auth' : (type || 'limit'), model) : null;
   })().finally(() => { routing = null; });
   try { return await routing; } catch (e) { console.error('[account-router] failover failed:', (e && e.message) || e); return null; }
+}
+
+// 号池里最早什么时候有号能接着跑这个模型（毫秒；0 = 路由关着 / 号不够两个 / 没有已知的恢复时刻）。
+// 撞墙且全员用尽时，自动续跑（limit-resume.mjs）按它排——等的是「最先恢复的那个号」，不是撞墙那个号自己的重置点：
+// 11-07 撞墙的号 14:30Z 才重置，另一个号 12:20Z 就恢复了，会话却一直等到 14:31（用户 12:30 手动「继续」立刻跑通）。
+// 只按真用满判（soft:false）——到点续跑时 routeBeforeQuery 允许退到「快满」的号。
+export function poolAvailableAt(model) {
+  if (!settings.enabled || listAccounts().length < 2) return 0;
+  let best = Infinity;
+  for (const a of listAccounts()) {
+    const b = accountBlock(a.id, model, { soft: false });
+    const at = b ? b.until : Date.now();
+    if (at < best) best = at;
+  }
+  return Number.isFinite(best) ? best : 0;
 }
 
 // 手动切到某号 = 管理员明确要用它：清掉路由给它记的冷却（额度桶里的满额记录照旧算）。

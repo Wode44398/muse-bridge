@@ -1,10 +1,11 @@
 <script lang="ts">
   // 输入框：一张浮起的卡，与对话列同宽同中线，钉在底部（离底 14px + 安全区；手机软键盘弹起时贴住键盘上沿）。
   //  · 卡里从上到下：回应卡片的说明 / 目标模式的选项 · 附件芯片 · 文本域 · 底行
-  //  · 底行：左 = ＋附件 · 档位胶囊（运行档位 / 访问范围 / 离开 / 目标，维护者 09-26 把目标并进来）· 本机模型胶囊；
-  //    右 = 型号胶囊（厂商小标 + 型号 + 思考档）· 发送键
+  //  · 底行：左 = ＋附件；右 = 型号胶囊（厂商小标 + 型号 + 思考档）· 发送键。
+  //    运行档位、访问范围、离开、目标、电脑、本机模型以前也是底行的胶囊，维护者 11-07 让它们全部离开输入框，
+  //    现在住在顶栏右上角那颗按钮点开的上下文面板里（shell/RunButton + sheets/RunSettings）
   //  · 卡的高度随内容平滑生长（smoothHeight；内容贴底——长高时从上沿露出来，底行和发送键原地不动）
-  //  · 菜单（型号 / 档位 / 本机）渲染在卡外（G3）；斜杠面板从卡的上沿浮出、与卡同宽
+  //  · 型号菜单渲染在卡外（G3）；斜杠面板从卡的上沿浮出、与卡同宽
   //  · 粘贴 / 拖放挂在 window 上（不用先点输入框），只在目标位于本应用 .hxroot 内时接管（嵌入 bridge 时不截胡宿主的输入框）
   //
   // 草稿跟着会话走（chat.draft，N42 / U4；分屏时两格各是各的）。停着一张卡时，草稿【开始写的那一刻】它就停着，发送就回应它
@@ -12,21 +13,17 @@
   //（正在打字就先不停新卡）。
   import { onMount, untrack } from "svelte";
   import {
-    accessMode,
     addSessionRef,
     app,
-    awayMode,
     builtinBlocked,
     canRefSessions,
     goalAvailable,
     loadCommands,
+    findModel,
     modelsOf,
-    permissionMode,
-    readRoots,
     runBuiltin,
     send,
     slashCommands,
-    toggleGoalDraft,
   } from "../../lib/state.svelte.ts";
   import { completion, paletteItems, parseBuiltin, slashQuery, type Builtin, type PaletteItem } from "../../lib/slash.ts";
   import { pendingCards, replyHint, replyPlaceholder, replyTarget } from "../../lib/card-dock.ts";
@@ -35,7 +32,6 @@
   import { haptic } from "../../lib/touch.ts";
   import { fade, smoothHeight } from "../../lib/motion.ts";
   import { dnd, dropTarget, type DragPayload } from "../../lib/dnd.svelte.ts";
-  import { modeChip } from "../../lib/mode-chip.ts";
   import { usePane } from "../../lib/pane.ts";
   import { t, tr } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
@@ -49,10 +45,9 @@
   import SlashPalette from "./SlashPalette.svelte";
   import DropOverlay from "./DropOverlay.svelte";
   import ModelMenu from "./ModelMenu.svelte";
-  import ModeMenu from "./ModeMenu.svelte";
-  import LocalAiChip from "./LocalAiChip.svelte";
-  import DeviceChip from "./DeviceChip.svelte";
-  import LocalAiMenu from "./LocalAiMenu.svelte";
+  // 会话管理：稍后发送（Ctrl / ⌘ + 回车）、Tab 输入建议（空输入框的灰字）
+  import ComposerExtras from "./ComposerExtras.svelte";
+  import { composerKey, suggestionFor } from "../../lib/sessmgmt.svelte.ts";
 
   // 分屏：这一格的会话（没分屏 = app.chat）。显示一律认它；动作走 state 里的函数（作用于 app.chat）——点进这一格、焦点
   // 落进这一格时它先成为 app.chat（ChatPane 捕获阶段挪焦点），所以两者此刻是同一个
@@ -63,18 +58,13 @@
 
   // ── 环境 ────────────────────────────────────────────────────────────────────────────────
   // 触屏：回车是换行、发送靠按钮（Q3：接上 / 拔掉键盘时跟着变，不再只在挂载时算一次）。
-  // compact：卡片窄（手机、或宽屏开着工作区）时底行只留图标。kb：手机软键盘弹起——卡贴住键盘上沿，不再垫底部安全区。
+  // kb：手机软键盘弹起——卡贴住键盘上沿，不再垫底部安全区。
   const coarseMq = matchMedia("(pointer: coarse)");
   let coarse = $state(coarseMq.matches);
-  let compact = $state(false);
   let kb = $state(false);
   onMount(() => {
     const onCoarse = (e: MediaQueryListEvent) => (coarse = e.matches);
     coarseMq.addEventListener("change", onCoarse);
-    const ro = new ResizeObserver(() => {
-      if (card) compact = card.clientWidth < 520;
-    });
-    if (card) ro.observe(card);
     // 软键盘：同一个物理朝向下见过的最大可视高度，比它矮了一截就当键盘弹着（resizes-content 下布局已经让出了键盘的位置）
     const vv = window.visualViewport;
     const tallest: Record<string, number> = {};
@@ -88,7 +78,6 @@
     vv?.addEventListener("resize", onViewport);
     return () => {
       coarseMq.removeEventListener("change", onCoarse);
-      ro.disconnect();
       vv?.removeEventListener("resize", onViewport);
     };
   });
@@ -129,20 +118,18 @@
     ta?.focus();
   }
 
-  // O7（K64）：目标模式——开着时发出去的这条就是目标（运行中、回应卡片时不给开）。开关在档位菜单里
-  const goalOk = $derived(goalAvailable() && !pane.chat.running && !target);
-  const goalOn = $derived(goalOk && Boolean(pane.chat.goalDraft?.on));
-  function toggleGoal() {
-    toggleGoalDraft();
-    haptic("light");
-  }
+  // O7（K64）：目标模式——开着时发出去的这条就是目标（运行中、回应卡片时不给开；与 lib/run-settings.ts 的 goalState 同一条）。
+  // 开关在上下文面板里
+  const goalOn = $derived(goalAvailable() && !pane.chat.running && !target && Boolean(pane.chat.goalDraft?.on));
 
   // 运行中也能发：发送 = 插话（附件不能插话——注入点只吃文字，运行中只看有没有字）
   const canSend = $derived(pane.chat.running ? hasText : hasText || pane.chat.attachments.length > 0 || pane.chat.refs.length > 0);
   const sendKind = $derived<"send" | "steer" | "reply">(target ? "reply" : pane.chat.running ? "steer" : "send");
 
+  // 会话管理：输入建议当占位灰字（停着卡的时候让位给回应提示）
+  const suggestion = $derived(dockedCard || hasText ? "" : suggestionFor(pane.chat));
   const placeholder = $derived(
-    dockedCard && !hasText
+    suggestion ? suggestion : dockedCard && !hasText
       ? replyPlaceholder(dockedCard)
       : goalOn
         ? t("写下要达成的目标——没达成会自动一轮轮接着做")
@@ -157,7 +144,7 @@
   // 全局配置跟着有焦点的那一格；分屏里没焦点的那一格显示它自己的快照（新对话没有快照，照旧按全局）
   const shownCfg = $derived(pane.focused || !pane.chat.cfg ? app.config : { ...app.config, ...pane.chat.cfg });
   const models = $derived(app.info ? modelsOf(shownCfg?.provider) : []);
-  const curModel = $derived(models.find((m: any) => m.id === shownCfg?.model));
+  const curModel = $derived(findModel(models, shownCfg?.model)); // 认目录别名：旧会话存着 strata-orca 也显示现行型号名
   const modelLabel = $derived<string>(tr(curModel?.label ?? shownCfg?.model ?? "…")); // 型号名来自服务端 catalog（个别带中文注）
   const thinking = $derived<string>(shownCfg?.thinking ?? "off");
   // effortLabels 是服务端 catalog 的数据（开关式档位写「开启」、自定义服务的档名），这里只拿来比对 / 按运行时文案翻译
@@ -181,40 +168,12 @@
   );
   const vid = $derived(shownCfg?.provider ?? "anthropic");
 
-  // 档位胶囊：非默认（只读 / 计划、仅工作空间、离开、本会话放行了工作区外的目录、这条是目标）才写出来、亮墨色（lib/mode-chip.ts）
-  const access = $derived(accessMode(pane.chat));
-  const chipState = $derived(
-    modeChip({
-      mode: permissionMode(pane.chat),
-      access,
-      roots: access === "workspace" ? readRoots(pane.chat).length : 0,
-      away: awayMode(pane.chat),
-      goal: goalOn,
-    }),
-  );
-  const modeText = $derived(chipState.text);
-  const modeAlt = $derived(chipState.alt);
-  const isLocal = $derived((pane.chat.cfg?.provider ?? app.config?.provider) === "local");
-
-  // ── 菜单（锚点 = 点开它的那颗胶囊；再点一次收起）─────────────────────────────────────────
+  // ── 型号菜单（锚点 = 型号胶囊；再点一次收起）──────────────────────────────────────────────
   let modelAnchor = $state<HTMLElement | null>(null);
-  let modeAnchor = $state<HTMLElement | null>(null);
-  let localAnchor = $state<HTMLElement | null>(null);
   function toggleModel(e: MouseEvent) {
     haptic("light");
     modelAnchor = modelAnchor ? null : (e.currentTarget as HTMLElement);
   }
-  function toggleMode(e: MouseEvent) {
-    haptic("light");
-    modeAnchor = modeAnchor ? null : (e.currentTarget as HTMLElement);
-  }
-  function toggleLocal(e: MouseEvent) {
-    localAnchor = localAnchor ? null : (e.currentTarget as HTMLElement);
-  }
-  // 换到别家（或切到别的会话）之后本机胶囊没了：它的面板别悬在一个已经不在的锚点上
-  $effect(() => {
-    if (!isLocal) localAnchor = null;
-  });
   function openAttach() {
     haptic("light");
     app.sheet = "attach";
@@ -317,6 +276,8 @@
       closeSlash();
       return;
     }
+    // 会话管理：Ctrl / ⌘ + 回车 = 稍后发送（运行中）；Tab 填入建议、Esc 收起建议
+    if (composerKey(e, pane.chat, composing)) return;
     // 桌面：回车发送、Shift+回车换行；触屏：回车就是换行
     if (e.key === "Enter" && !e.shiftKey && !coarse && !composing) {
       e.preventDefault();
@@ -428,7 +389,6 @@
 
 <svelte:window onpaste={onPaste} ondragenter={onDragEnter} ondragover={onDragOver} ondragleave={onDragLeave} ondragend={onDragEnd} ondrop={onDrop} />
 
-{#snippet modeLabel()}{modeText}{/snippet}
 {#snippet vendorMark()}<VendorLogo skin={vid} size={15} />{/snippet}
 {#snippet modelText()}
   <span class="mlab">
@@ -491,23 +451,6 @@
             {#if app.features.files}
               <span class="ctl"><IconButton icon="plus" label={t("添加文件")} size={32} iconSize={18} onclick={openAttach} /></span>
             {/if}
-            <span class="ctl">
-              <Chip
-                icon={chipState.icon}
-                tone={modeAlt ? "accent" : "plain"}
-                chevron
-                open={Boolean(modeAnchor)}
-                label={t("档位：{mode}", { mode: modeText })}
-                title={t("运行档位（自主执行 / 只读 / 先出计划）、访问范围（整机 / 仅工作空间）、离开模式与目标模式")}
-                children={compact ? undefined : modeLabel}
-                onclick={toggleMode}
-              />
-            </span>
-            {#if isLocal}
-              <span class="ctl"><LocalAiChip {compact} open={Boolean(localAnchor)} onclick={toggleLocal} /></span>
-            {/if}
-            <!-- 这个会话连哪台电脑（没登记设备 / 没接上 bridge 设备通道时整颗不出现，外层 span 是空的） -->
-            <span class="ctl"><DeviceChip {compact} /></span>
           </div>
           <div class="tail">
             {#if app.config}
@@ -524,6 +467,7 @@
                 />
               </span>
             {/if}
+            <ComposerExtras {hasText} {coarse} onfilled={() => ta?.focus()} />
             <SendButton
               kind={sendKind}
               disabled={!canSend || cooling}
@@ -545,12 +489,6 @@
 <!-- G3：菜单不渲染在卡片里（Popover 自己也会挪到 .hxroot 下） -->
 {#if modelAnchor}
   <ModelMenu anchor={modelAnchor} onclose={() => (modelAnchor = null)} />
-{/if}
-{#if modeAnchor}
-  <ModeMenu anchor={modeAnchor} onclose={() => (modeAnchor = null)} goal={goalOk ? { on: goalOn, toggle: toggleGoal } : null} />
-{/if}
-{#if localAnchor}
-  <LocalAiMenu anchor={localAnchor} onclose={() => (localAnchor = null)} />
 {/if}
 
 <style>
@@ -685,11 +623,7 @@
     flex: none;
     min-width: 0;
   }
-  /* 自己决定出不出现的胶囊（电脑）没渲染时，空壳不占底行的间距 */
-  .ctl:empty {
-    display: none;
-  }
-  /* 型号胶囊是底行唯一会让的：地方不够时型号名先省略（档位、目标这些状态优先） */
+  /* 型号胶囊是底行唯一会让的：地方不够时型号名先省略 */
   .mwrap {
     flex: 0 1 auto;
   }

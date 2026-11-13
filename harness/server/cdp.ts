@@ -15,22 +15,10 @@ import { controlPlaneUrlBlock } from "./control-plane.ts";
 import { desktopHostInfo, resolveCdpBase, type DesktopHost } from "./desktop-host.ts";
 import { killTree } from "./tools/bash.ts";
 import { registerResource } from "./resources.ts";
-import { browserKindLabel, edgeHub, edgeLink } from "./edge-link.ts";
 import { browserProfileDir, inTestProcess } from "./paths.ts";
-
-// Edge 扩展模式里页面 / 浏览器频道的「地址」：edge-link:<浏览器种类>:<频道>。openSocket 看到这个前缀就走扩展链路而不是真 WebSocket
-const EDGE_SCHEME = "edge-link:";
-
-function edgeUrl(kind: string, ch: string): string {
-  return `${EDGE_SCHEME}${kind}:${ch}`;
-}
+import { coreModule } from "./core-link.ts";
 
 function openSocket(url: string): WebSocket {
-  if (url.startsWith(EDGE_SCHEME)) {
-    const rest = url.slice(EDGE_SCHEME.length);
-    const i = rest.indexOf(":");
-    return edgeLink(rest.slice(0, i)).channel(rest.slice(i + 1)) as unknown as WebSocket;
-  }
   return new WebSocket(url);
 }
 
@@ -71,7 +59,7 @@ export interface NetEntry {
 const NO_BUILTIN_BROWSER_HINT =
   "Do not retry Browser(navigate) in this conversation: verify pages over HTTP with Bash + curl and Preview(action:\"logs\") instead, " +
   "and say in your final answer that the UI was not exercised in a real browser. " +
-  "Browser(action:\"edge\") still drives the user's own Edge/Chrome if its dimensio extension is connected.";
+  "DeviceBrowser(browser:…) still drives the user's own Edge/Chrome on their computer if Web Bridge is connected there.";
 
 const MAX_CONSOLE = 400;
 const MAX_NET = 400;
@@ -146,6 +134,28 @@ const SKIP_ROLES = new Set(["inlinetextbox", "linebreak"]);
 // "none"/"presentation" included: ignored wrapper containers carry role "none"
 // but their subtree is the whole page — dropping them empties the tree.
 const PROMOTE_ROLES = new Set(["generic", "genericcontainer", "group", "section", "div", "none", "presentation"]);
+
+// page_text 的页面内脚本与 bridge 浏览器工具共用（src/runtime/cdp-page-text.mjs：穿过 open shadow DOM 取字、
+// 折叠连续重复的长行）。用到时才经 core-link 取；取不到（离线包配了没有这个模块的旧 bridge）就退回原来的 innerText 一行脚本。
+type PageTextCore = { pageTextExpression(opts: { limit?: number }): string; foldRepeatedLines(text: string): string };
+let pageTextCore: PageTextCore | null | undefined;
+function loadPageTextCore(): PageTextCore | null {
+  if (pageTextCore === undefined) {
+    try {
+      pageTextCore = coreModule<PageTextCore>("runtime/cdp-page-text.mjs");
+    } catch {
+      pageTextCore = null;
+    }
+  }
+  return pageTextCore;
+}
+const PAGE_TEXT_PLAIN = `(()=>{const pick=document.querySelector('article')||document.querySelector('main,[role=main]')||document.body;const t=(pick?.innerText||'').replace(/\\n{3,}/g,'\\n\\n').trim();return{from:pick?(pick.tagName.toLowerCase()+(pick.id?'#'+pick.id:'')):'',title:document.title,text:t}})()`;
+
+// AX 节点的 url 属性（链接有；RootWebArea 是页面地址）
+function axUrl(node: any): string {
+  const p = (node?.properties ?? []).find((x: any) => x.name === "url");
+  return typeof p?.value?.value === "string" ? p.value.value : "";
+}
 
 const KEY_DEFS: Record<string, { key: string; code: string; keyCode: number; text?: string }> = {
   enter: { key: "Enter", code: "Enter", keyCode: 13, text: "\r" },
@@ -339,12 +349,6 @@ export class CdpSession {
   external = false;
   private desktopBroker = "";
   private ownedTargets = new Set<string>();
-  // Edge 扩展模式：驱动的是用户自己的 Edge（已登录的真浏览器）里 dimensio 标签组的标签页。
-  // 我们不拥有进程也不拥有标签：close 只断开，标签留给用户看结果。视口不做模拟（那是用户正在看的窗口）。
-  edge = false;
-  // 接的是哪一个浏览器的扩展链路（"edge" / "chrome"），见 edge-link.ts 的 EdgeHub
-  edgeKind = "";
-  private edgeUnsub: (() => void) | null = null;
   url = "";
   viewport = { width: 1280, height: 900 };
 
@@ -614,53 +618,6 @@ export class CdpSession {
     return { picked: `"${pick.title || "(untitled)"}" ${pick.url ?? ""}`.trim(), pages: pages.length };
   }
 
-  // 接到用户的 Edge / Chrome（经 harness/edge-extension）：标签组里有标签就接前台那个，没有就让扩展开组开一张。
-  async attachEdge(startUrl?: string, kind = "edge"): Promise<{ tabs: number; created: boolean }> {
-    const link = edgeLink(kind);
-    if (!link.connected) throw new Error(`the dimensio extension in ${link.label} is not connected`);
-    this.edge = true;
-    this.edgeKind = link.kind;
-    this.attached = true;
-    this.cdpBase = edgeUrl(link.kind, "");
-    // 扩展断开 = 这个会话死了（下一次调用拿到清楚的「未连接」，而不是 30 秒超时）
-    this.edgeUnsub = link.onLink((up) => {
-      if (!up) this.dead = true;
-    });
-    await this.connectBrowserSocket();
-    let pages = await this.listPages();
-    let created = false;
-    if (!pages.length) {
-      const r = await this.bsend("Target.createTarget", { url: startUrl || "about:blank" });
-      if (!r?.targetId) throw new Error("the Edge extension could not open a tab");
-      created = true;
-      pages = await this.listPages();
-    }
-    const pick = pages.find((p) => p.active) ?? pages[0];
-    if (!pick) throw new Error("the dimensio tab group in Edge has no tab");
-    this.activeTargetId = String(pick.id);
-    await this.connect(String(pick.webSocketDebuggerUrl));
-    this.url = String(pick.url ?? "");
-    await this.enableDomains();
-    this.seedTabs(pages);
-    await this.bsend("Target.activateTarget", { targetId: this.activeTargetId }).catch(() => {});
-    await this.readEdgeViewport();
-    if (startUrl && !created && startUrl !== "about:blank") await this.navigate(startUrl);
-    return { tabs: pages.length, created };
-  }
-
-  // 用户窗口的真实视口（我们不模拟尺寸，所以它就是 agent 截图 / 坐标的参照系）
-  private async readEdgeViewport(): Promise<void> {
-    try {
-      const v = await this.eval("({w:innerWidth,h:innerHeight})");
-      if (v?.w > 0 && v?.h > 0) {
-        this.viewport = { width: Math.round(v.w), height: Math.round(v.h) };
-        this.notifyViewport();
-      }
-    } catch {
-      /* 页面拒绝脚本：保留上一次的数 */
-    }
-  }
-
   // Chrome writes the actual debug port to <user-data-dir>/DevToolsActivePort.
   private async readDevToolsPort(timeoutMs = 15_000): Promise<number> {
     const file = path.join(this.profileDir, "DevToolsActivePort");
@@ -694,10 +651,6 @@ export class CdpSession {
   }
 
   private async listPages(): Promise<any[]> {
-    if (this.edge) {
-      const tabs = await edgeLink(this.edgeKind).listTabs();
-      return tabs.map((t) => ({ ...t, type: "page", webSocketDebuggerUrl: edgeUrl(this.edgeKind, t.id) }));
-    }
     const res = await fetch(`${this.cdpBase}/json/list`);
     const targets = (await res.json()) as any[];
     const pages = targets.filter(
@@ -730,12 +683,9 @@ export class CdpSession {
   private connectBrowserSocket(): Promise<void> {
     return new Promise((resolve, reject) => {
       (async () => {
-        let wsUrl = edgeUrl(this.edgeKind, "browser"); // Edge 扩展模拟的 Target 域
-        if (!this.edge) {
-          const res = await fetch(`${this.cdpBase}/json/version`);
-          const v = (await res.json()) as any;
-          wsUrl = v?.webSocketDebuggerUrl;
-        }
+        const res = await fetch(`${this.cdpBase}/json/version`);
+        const v = (await res.json()) as any;
+        const wsUrl = v?.webSocketDebuggerUrl;
         if (!wsUrl) throw new Error("browser exposes no browser-level debugger url");
         const ws = openSocket(wsUrl);
         this.browserWs = ws;
@@ -852,9 +802,6 @@ export class CdpSession {
     const next = this.tabs[0];
     if (next) {
       this.activateTab(next.id).catch(() => {});
-    } else if (this.edge) {
-      // 用户把组里最后一张标签关了 / 拖出组了：那是在收回授权，不要自己再开一张——断开
-      void this.close();
     } else {
       this.newTab().catch(() => {});
     }
@@ -933,13 +880,11 @@ export class CdpSession {
       this.lastFrame = null;
       await this.connect(String(target.webSocketDebuggerUrl));
       await this.enableDomains();
-      // Edge：那是用户的真窗口，不强加模拟视口——换过去以后按它的真实尺寸记
-      if (!this.edge) await this.setViewport(this.viewport.width, this.viewport.height).catch(() => {});
+      await this.setViewport(this.viewport.width, this.viewport.height).catch(() => {});
       this.activeTargetId = id;
       this.url = String(target.url ?? "");
       for (const t of this.tabs) t.active = t.id === id;
       await this.bsend("Target.activateTarget", { targetId: id }).catch(() => {});
-      if (this.edge) await this.readEdgeViewport();
       if (resume) {
         try {
           await this.startCast();
@@ -1512,6 +1457,23 @@ export class CdpSession {
     }
     const maxDepth = Number(opts.depth) > 0 ? Number(opts.depth) : Infinity;
 
+    // Link lines end with their address (same-origin as path only, no javascript:, capped at 120 chars)
+    // so the model can navigate without an extra Eval over querySelectorAll.
+    const pageRoot = nodes.find((n) => String(n.role?.value ?? "") === "RootWebArea" && axUrl(n)) ?? nodes.find((n) => !n.parentId);
+    let origin = "";
+    try { origin = new URL(axUrl(pageRoot)).origin; } catch { /* no page url on the root: write links in full */ }
+    const linkUrl = (node: any, name: string): string => {
+      const url = axUrl(node);
+      if (!url || /^javascript:/i.test(url)) return "";
+      let shown = url;
+      try {
+        const u = new URL(url);
+        if (origin && origin !== "null" && u.origin === origin) shown = u.pathname + u.search + u.hash;
+      } catch { /* not a parseable URL: keep as is */ }
+      if (shown === name || url === name) return "";
+      return ` → ${shown.length > 120 ? `${shown.slice(0, 119)}…` : shown}`;
+    };
+
     this.refs.clear();
     let refN = 0;
     const lines: string[] = [];
@@ -1553,7 +1515,8 @@ export class CdpSession {
       const displayRole = role === "statictext" ? "text" : role;
       // Drop a StaticText child that merely repeats its parent's name (the
       // dominant pattern under links/buttons/headings) — pure noise.
-      const line = `${"  ".repeat(depth)}- ${displayRole}${name ? ` "${name}"` : ""}${refTag}${value}${states.length ? ` (${states.join(", ")})` : ""}`;
+      const href = role === "link" ? linkUrl(node, name) : "";
+      const line = `${"  ".repeat(depth)}- ${displayRole}${name ? ` "${name}"` : ""}${refTag}${value}${states.length ? ` (${states.join(", ")})` : ""}${href}`;
       const isRefLine = refTag !== "";
       if (filter === "all" || isRefLine) {
         lines.push(filter === "interactive" ? line.trimStart() : line);
@@ -1907,13 +1870,17 @@ export class CdpSession {
   }
 
   // 页面正文：article / main / [role=main] 优先，退回 body——读文章、文档比 ReadPage 的无障碍树省得多。
-  async pageText(maxChars = 20_000): Promise<{ from: string; title: string; text: string; total: number; truncated: boolean }> {
-    const r = await this.eval(
-      `(()=>{const pick=document.querySelector('article')||document.querySelector('main,[role=main]')||document.body;const t=(pick?.innerText||'').replace(/\\n{3,}/g,'\\n\\n').trim();return{from:pick?(pick.tagName.toLowerCase()+(pick.id?'#'+pick.id:'')):'',title:document.title,text:t}})()`,
-    );
-    const text = String(r?.text || "");
+  // 正文里有 open shadow DOM 时按扁平树取字（Web Components 渲染的代码示例、日期不再丢）；连续重复的长行折成「行（×N）」。
+  async pageText(maxChars = 20_000): Promise<{ from: string; title: string; text: string; total: number; truncated: boolean; shadow: number }> {
     const cap = Math.max(1000, Math.min(100_000, Number(maxChars) || 20_000));
-    return { from: String(r?.from || ""), title: String(r?.title || ""), text: text.length > cap ? text.slice(0, cap) : text, total: text.length, truncated: text.length > cap };
+    const core = loadPageTextCore();
+    const r = await this.eval(core ? core.pageTextExpression({ limit: cap * 4 }) : PAGE_TEXT_PLAIN);
+    const raw = String(r?.text || "");
+    const text = core ? core.foldRepeatedLines(raw) : raw;
+    return {
+      from: String(r?.from || ""), title: String(r?.title || ""), text: text.length > cap ? text.slice(0, cap) : text,
+      total: text.length, truncated: text.length > cap || !!r?.more, shadow: Number(r?.shadow) || 0,
+    };
   }
 
   // 往 <input type=file> 塞本机文件（DOM.setFileInputFiles）：隐藏的 input 同样有效，Chrome 照常派发 input / change。
@@ -2080,7 +2047,6 @@ export class CdpSession {
   }
 
   private async applyTouch(mobile: boolean, phone: boolean): Promise<void> {
-    if (this.edge) return; // 用户自己的浏览器：不改它的输入与 UA
     this.emu = { mobile };
     await this.send("Emulation.setTouchEmulationEnabled", { enabled: mobile, maxTouchPoints: 5 }).catch(() => {});
     await this.send("Emulation.setEmitTouchEventsForMouse", { enabled: mobile, configuration: "mobile" }).catch(() => {});
@@ -2308,24 +2274,6 @@ export class CdpSession {
   // 根本没起来返回 null。
   private detach(): OwnedBrowser | null {
     this.dead = true;
-    if (this.edge) {
-      // 只断开：调试器从标签上摘掉（Edge 的「正在调试」提示条随之消失），标签和标签组留给用户。
-      this.edgeUnsub?.();
-      this.edgeUnsub = null;
-      for (const s of [this.ws, this.browserWs]) {
-        try {
-          s?.close();
-        } catch {
-          /* ignore */
-        }
-      }
-      this.ws = null;
-      this.browserWs = null;
-      this.tabs = [];
-      this.activeTargetId = "";
-      this.notifyTabs();
-      return null;
-    }
     if (this.external) {
       // 只关本会话拥有的 target，绝不能动 Electron 本体（里面还有 bridge UI 和别的会话）。
       const targets = [...this.ownedTargets];
@@ -2484,11 +2432,6 @@ export function readDevToolsPortFile(file: string, read: (f: string) => string =
   return Number.isInteger(p) && p > 0 && p < 65536 ? p : null;
 }
 
-// 上一个共享浏览器是用户的 Edge、它又断了（扩展断开、用户关掉了组里最后一张标签、点了停止）：不要悄悄换成无头浏览器——
-// agent 会以为自己还在用户的 Edge 里。明确报错，由它决定重连（Browser edge）还是回内置浏览器（Browser close）。
-// 值 = 断掉的是哪种浏览器（"edge" / "chrome"），"" = 没断
-let edgeLost = "";
-
 // 共享无头浏览器用持久配置档：用户在面板里登录过的站点，下一个会话照样是登录态（对齐 bridge 10-26 的无头持久登录）。
 // 只有共享浏览器用它——一个 user-data-dir 同时只能一个进程开，单独 new CdpSession().launch() 的（测试、截图）照旧用临时档。
 // 测试进程默认关（同一测试进程里会起好几个浏览器），DIMENSIO_BROWSER_PERSIST=1 才开。
@@ -2501,16 +2444,6 @@ export function persistBrowserProfile(): boolean {
 
 export async function getSharedBrowser(): Promise<CdpSession> {
   if (shared?.alive) return shared;
-  if (shared?.edge || edgeLost) {
-    edgeLost ||= shared?.edgeKind || "edge";
-    void shared?.close();
-    shared = null;
-    const name = browserKindLabel(edgeLost);
-    throw new Error(
-      `the connection to the user's ${name} ended (extension disconnected, the dimensio tab group was emptied, or the user pressed Stop). ` +
-        `Browser(action:"edge", browser:"${edgeLost}") reconnects; Browser(action:"close") goes back to the built-in browser.`,
-    );
-  }
   if (launching) return launching;
   void shared?.close();
   launching = (async () => {
@@ -2584,10 +2517,8 @@ export function claimBrowser(owner: string): string | null {
     claimOwner = "";
     claimTouchedAt = 0;
     claimRelease = null;
-    syncEdgeActivity();
     return true;
   });
-  syncEdgeActivity();
   return null;
 }
 
@@ -2598,7 +2529,6 @@ export function releaseBrowser(owner: string): void {
     const release = claimRelease;
     claimRelease = null;
     release?.();
-    syncEdgeActivity();
   }
 }
 
@@ -2629,57 +2559,16 @@ export async function attachSharedBrowser(
   }
 }
 
-// 把唯一的共享浏览器换成用户的 Edge / Chrome（经扩展，kind 选哪一个）。和 attach 同理：先关掉原来那个（自己拉起的无头浏览器照常收尾）。
-export async function attachEdgeBrowser(
-  startUrl?: string,
-  kind = "edge",
-): Promise<{ session: CdpSession; tabs: number; created: boolean }> {
-  void shared?.close();
-  shared = null;
-  launching = null;
-  const s = new CdpSession();
-  try {
-    const info = await s.attachEdge(startUrl, kind);
-    shared = s;
-    edgeLost = "";
-    syncEdgeActivity();
-    return { session: s, ...info };
-  } catch (e) {
-    void s.close();
-    throw e;
-  }
-}
-
-// 共享浏览器现在是哪一种：面板据此标出「你的 Edge」
-export function sharedBrowserMode(): "edge" | "desktop" | "attach" | "headless" | null {
+// 共享浏览器现在是哪一种（面板显示用）
+export function sharedBrowserMode(): "desktop" | "attach" | "headless" | null {
   const s = existingSharedBrowser();
   if (!s) return null;
-  return s.edge ? "edge" : s.external ? "desktop" : s.attached ? "attach" : "headless";
+  return s.external ? "desktop" : s.attached ? "attach" : "headless";
 }
 
-// ReadPage / Eval / Network / Browser 找不到活着的浏览器时说的话。原来一律「先 Browser(navigate)」——
-// 可上一个浏览器是用户的 Edge/Chrome、链路断了时，照做会拉起没有登录态的无头浏览器（10-20 实测 agent 被它带偏）。
+// ReadPage / Eval / Network / Browser 找不到活着的浏览器时说的话。
 export function noBrowserMessage(): string {
-  const kind = edgeLost || (shared?.edge && !shared.alive ? shared.edgeKind || "edge" : "");
-  if (!kind) return "No browser is running — Browser(navigate, url:…) first.";
-  const name = browserKindLabel(kind);
-  return (
-    `The connection to the user's ${name} ended (the extension disconnected, the dimensio tab group was emptied, or the user pressed Stop). ` +
-    `Browser(action:"edge", browser:"${kind}") reconnects to it. Do NOT Browser(navigate) to recover — that opens the built-in browser, which has none of the user's logins.`
-  );
-}
-
-// 共享浏览器挂在扩展上时，是哪一种浏览器（"edge" / "chrome"）；不在扩展模式 = ""。
-// includeDead：刚断的也算（用户在提示条上点「取消」时扩展先摘调试器、后报停止，那一刻会话已经死了）
-export function sharedEdgeKind(includeDead = false): string {
-  const s = includeDead ? shared : existingSharedBrowser();
-  return s?.edge ? s.edgeKind : "";
-}
-
-// 氛围灯的「整轮常亮」来源：有会话占着共享浏览器、而它挂在这条链路的浏览器上（另一个浏览器不跟着亮）
-function syncEdgeActivity(): void {
-  const on = Boolean(shared?.edge && shared.alive && browserClaimOwner());
-  for (const l of edgeHub().all()) l.setClaimActive(on && shared?.edgeKind === l.kind);
+  return "No browser is running — Browser(navigate, url:…) first.";
 }
 
 // exiting：进程退出处理器里调用（同步，等不了 close 的异步收尾）。
@@ -2687,16 +2576,9 @@ export function closeAllBrowserSessions(opts: { exiting?: boolean } = {}): void 
   if (opts.exiting) shared?.killNow();
   else void shared?.close();
   shared = null;
-  edgeLost = ""; // 明确关掉（Browser close / 面板）= 下一次用回内置浏览器
   claimOwner = "";
   claimTouchedAt = 0;
-  syncEdgeActivity();
 }
-
-// 占用过期（崩掉的轮没人来放）不会触发任何回调——隔一会儿对一次账，氛围灯不至于一直亮着
-setInterval(() => {
-  if (shared?.edge) syncEdgeActivity();
-}, 30_000).unref();
 
 function safeJson(v: unknown): string {
   try {

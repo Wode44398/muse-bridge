@@ -12,24 +12,27 @@ export default {
   "改为插话": "Steer instead",
   "输入消息": "Message",
   "添加文件": "Add files",
-  "档位：{mode}": "Mode: {mode}",
-  "运行档位（自主执行 / 只读 / 先出计划）、访问范围（整机 / 仅工作空间）、离开模式与目标模式":
-    "Mode (Auto / Read-only / Plan first), access (Full access / Workspace only), away mode, and goal mode",
   "模型与思考深度": "Model and effort",
   "回应卡片": "Respond to card",
   "插话": "Steer",
   "发送": "Send",
   "插话：它会在下一步读到这条": "Steer: the agent reads this at the next step",
 
-  // ── ModeMenu：运行档位 / 目标模式 / 访问范围 / 离开模式 ──
-  "运行档位、访问范围与目标": "Mode, access, and goal",
-  "运行档位": "Mode",
-  "自主执行": "Auto",
+  // ── 上下文面板里的运行设置（RunSettings / RunButton，11-07 起替代输入框上的档位 / 电脑 / 本机胶囊）──
+  "上下文与运行设置": "Context and run settings",
+  "运行设置": "Run settings",
+  "运行设置：{mode}": "Run settings: {mode}",
+  "运行设置：工作档位、工作权限与运行环境": "Run settings: mode, access, and environment",
+  "工作档位": "Mode",
+  "工作权限": "Access",
+  "运行环境": "Environment",
+  "本机模型": "Local model",
   "直接执行。规则可把个别高危调用改成每次问我。": "Runs without asking. Rules can set specific high-risk calls to Always ask.",
   "只读": "Read-only",
   "只放行读取类工具，写文件与执行命令一律拒绝。": "Allows only read tools. Writing files and running commands are always denied.",
-  "先出计划": "Plan first",
   "只读研究 → 提交计划 → 你批准后当场转自主并开工。": "Researches read-only → submits a plan → switches to Auto and starts once you approve.",
+  "所有工具调用直接执行、不弹卡，整机可读写，连密钥守卫都关掉。谨慎使用。":
+    "Every tool call runs with no approval card, the whole machine is readable and writable, and even the secret guard is off. Use with care.",
   "目标模式": "Goal mode",
   "开着：这条消息就是目标，没达成会自动一轮轮接着做；输入框上方可以给验证命令、定轮数。":
     "On. This message is the goal; the agent keeps going turn by turn until it’s met. Set a verify command and turn limit above the composer.",
@@ -46,6 +49,8 @@ export default {
   "离开模式": "Away mode",
   "开着：提问按合理默认继续并写明假设，要批准的调用直接拒，计划留着等你。发新消息自动关。":
     "On. Questions proceed with reasonable defaults and stated assumptions, calls that need approval are denied, and plans wait for you. Turns off when you send a new message.",
+  "开着：提问按合理默认继续并写明假设，要批准的调用直接放行，计划直接批准开工。发新消息自动关。":
+    "On. Questions proceed with reasonable defaults and stated assumptions, calls that need approval go ahead, and plans are approved and started. Turns off when you send a new message.",
   "出门前打开：这一轮不会卡在没人点的卡片上。": "Turn on before you step away so this turn doesn’t get stuck on cards no one answers.",
   "运行中也算数：下一步工具调用就按新档位 / 范围判定。": "Applies while running: the next tool call follows the new mode and access.",
 
@@ -59,8 +64,7 @@ export default {
   "当前任务转入后台继续跑；切换后开启新对话": "The current task keeps running in the background. Switching starts a new chat.",
   "切换后开启新对话，历史会话保留各自的服务归属": "Switching starts a new chat. Past sessions keep their own provider.",
 
-  // ── LocalAiChip / LocalAiMenu：本机模型 ──
-  "本机模型：{status}": "Local model: {status}",
+  // ── LocalAiMenu：本机模型 ──
   "本机模型服务状态（点开展开控制面板）": "Local model status (open for controls)",
   "本地 AI": "Local AI",
   "本地 AI · 本机": "Local AI · This computer",
@@ -147,6 +151,7 @@ export default {
   "实时预览": "Live preview",
   "Agent 浏览器": "Agent browser",
   "计划": "Plan",
+  "全权": "Bypass",
   "正在做：{task}": "In progress: {task}",
   "计划进度": "Progress",
   // —— 「本机」面板启动参数（main dc2cb63 合入后补）——
@@ -186,8 +191,8 @@ export default {
   "模型还没就绪，缺这些文件：": "The model isn’t ready yet. These files are missing:",
   "在 Strata 目录运行 SETUP.bat，装 Qwen 的 IQ3_S（约 80 GB），装好后再从这里启动。": "Run SETUP.bat in the Strata folder and install Qwen IQ3_S (about 80 GB). Then start it from here.",
   "补齐后再启动。": "Add them, then start it.",
-  "停止后释放显存与约 50 GB 内存；下次使用需重新加载。": "Stopping frees VRAM and about 50 GB of RAM. It’ll need to reload next time.",
-  "125B MoE：专家常驻内存约 50 GB，加载需 1–3 分钟，就绪后圆点变绿。会先停掉 Qwen 27B。": "125B MoE: about 50 GB of experts stay in RAM, and loading takes 1–3 min. The dot turns green when it’s ready. Qwen 27B is stopped first.",
+  "停止后释放显存与约 50–70 GB 内存；下次使用需重新加载。": "Stopping frees VRAM and about 50–70 GB of RAM. It’ll need to reload next time.",
+  "125B MoE：专家常驻内存约 50–70 GB（NVFP4 最多），加载需 1–3 分钟，就绪后圆点变绿。会先停掉 Qwen 27B。": "125B MoE: about 50–70 GB of experts stay in RAM (NVFP4 the most), and loading takes 1–3 min. The dot turns green when it’s ready. Qwen 27B is stopped first.",
   "K 保 8 位、V 降 4 位；这一档不支持 KV 流式，整份缓存留在显存。": "K stays 8-bit, V drops to 4-bit. KV streaming isn’t available with this option, so the whole cache stays in VRAM.",
   "4 位缓存，省一半；长文里的精确细节可能略差。": "4-bit cache, half the size. Exact details in long texts may suffer slightly.",
   "KV 流式": "KV streaming",
@@ -195,6 +200,21 @@ export default {
   "图片在显卡上编码，多占约 1 GB 显存": "Images are encoded on the GPU, using about 1 GB more VRAM",
   "MTP 投机解码是 Strata 常驻服务的必需项，始终开启。": "MTP speculative decoding is required by Strata’s server, so it’s always on.",
   "重启会中断正在进行的本机对话，并重新加载约 1–3 分钟。": "Restarting interrupts any local chat in progress and reloads for about 1–3 min.",
+  // Strata 的几个变体（每个变体是目录里的一个型号，会话选哪个起哪个）
+  "变体不符": "Wrong variant",
+  "变体": "Variant",
+  "在跑": "Running",
+  "官方 IQ3_S": "Official IQ3_S",
+  "Orca 无审查 IQ3_XXS": "Orca uncensored IQ3_XXS",
+  "NVIDIA NVFP4（QAD）": "NVIDIA NVFP4 (QAD)",
+  "Strata 正在跑「{running}」，这个会话选的是「{wanted}」。不切换的话这个会话的消息不会发出去。": "Strata is running “{running}”, but this chat uses “{wanted}”. Until you switch, this chat’s messages won’t be sent.",
+  "「{wanted}」还缺文件，暂时切换不了：": "“{wanted}” is missing files, so you can’t switch yet:",
+  "正在切换…": "Switching…",
+  "切换到「{wanted}」": "Switch to “{wanted}”",
+  "会停掉在跑的变体再加载约 1–3 分钟，期间本机对话会中断。": "Stops the running variant and loads for about 1–3 min. Local chats are interrupted meanwhile.",
+  "认不出在跑的是哪个变体（可能是手工用别的配置起的），发出去的请求按它答。": "Can’t tell which variant is running (it may have been started by hand with another config). Requests are answered by it.",
+  "在 Strata 目录运行 download-orca.bat 下载 Orca 版（约 86 GB），装好后再从这里启动。": "Run download-orca.bat in the Strata folder to get the Orca version (about 86 GB). Then start it from here.",
+  "在 Strata 目录运行 setup-qad.bat（NVIDIA NVFP4-QAD，下载约 102 GB 并在本机转换），装好后再从这里启动。": "Run setup-qad.bat in the Strata folder (NVIDIA NVFP4-QAD: about a 102 GB download, converted on this PC). Then start it from here.",
   // ── 电脑胶囊（这个会话连哪台电脑）──
   "不连电脑": "No computer",
   "设备已不在": "Device removed",
@@ -207,7 +227,6 @@ export default {
   "在线 · 已关闭 agent 操作": "Online · agent control off",
   "在线 · 老客户端": "Online · old client",
   "在线": "Online",
-  "电脑：{name}": "Computer: {name}",
   "这个会话连着你哪台电脑：dimensio 经它看屏幕、在你允许时操作": "Which of your computers this chat uses: dimensio sees its screen and, when you allow it, operates it",
   "这个会话连哪台电脑": "Computer for this chat",
   "自动": "Automatic",

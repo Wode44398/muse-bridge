@@ -3,6 +3,9 @@
 //   node evals/ab/run.ts --base <工作树A> --head <工作树B> --topic <主题> [--reps 3] [--model local/qwen3.8-27b]
 //                         [--tasks id1,id2] [--env-file <某臂读 key 的 .env>] [--ports 8851,8852] [--effort medium] [--max-minutes 240]
 //                         [--ext-file <技能夹具的 registry.json>]（C5：两臂都用这份技能目录；skill-* 任务必须给）
+//                         [--suite classic|hard|all]（模型档案 P0：不给 --tasks 时跑哪套题，默认 classic）
+//                         [--providers-dir <自定义服务目录副本>]（两臂都用；见 providers-copy.ts）
+// 同一棵树比多个型号 / 档案配置走 matrix.ts。
 //
 // 两棵工作树 = 同一个仓库的两个 git worktree（改动前 / 改动后），各自用自己的 harness。两臂轮流跑、不并行（单 GPU），
 // 每次重复交换先后。跑完一次就追加进 meta.jsonl，中断后同一条命令重跑会跳过已完成的；harness 起不来、接口报错这类
@@ -11,8 +14,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type Arm, appendMeta, InfraError, readMeta, report, runKey, runTask, startArm } from "./lib.ts";
-import { type AbTask, TASKS, taskById } from "./tasks.ts";
+import { type Arm, appendMeta, InfraError, readMeta, report, runKey, runTask, startArm, wantedEffort } from "./lib.ts";
+import { type AbTask, taskById, tasksOfSuite } from "./tasks.ts";
 
 const argv = process.argv.slice(2);
 const opt = (name: string, fallback?: string): string | undefined => {
@@ -28,10 +31,11 @@ if (!base || !head || !topic) {
 }
 const reps = Number(opt("reps", "3"));
 const [providerId, ...modelParts] = opt("model", "local/qwen3.8-27b")!.split("/");
-const effort = opt("effort"); // 不给就用这家型号的默认档（本机 Qwen 是 max = xhigh）
-const provider = { provider: providerId, model: modelParts.join("/"), ...(effort ? { thinking: effort } : {}) };
+const effort = opt("effort"); // 不给就用这家型号的默认档：起臂后照臂里的型号目录查好、显式设上（见 lib.ts wantedEffort）
+const provider: { provider: string; model: string; thinking?: string } = { provider: providerId, model: modelParts.join("/"), ...(effort ? { thinking: effort } : {}) };
 const picked = opt("tasks");
-const tasks: AbTask[] = picked ? picked.split(",").flatMap((id) => taskById(id.trim()) ?? []) : TASKS;
+// 模型档案 P0：不点名时跑一套题——默认 classic（老题，与以往收据同口径）；--suite hard / all 带上新难题
+const tasks: AbTask[] = picked ? picked.split(",").flatMap((id) => taskById(id.trim()) ?? []) : tasksOfSuite(opt("suite", "classic")!);
 // C5：技能任务要两臂都看到同一份技能目录（夹具由 evals/ab/skills-fixture.ts 照真注册表搭，脚本是桩）
 const extFile = opt("ext-file");
 if (tasks.some((t) => t.needsSkills) && !extFile) {
@@ -39,11 +43,13 @@ if (tasks.some((t) => t.needsSkills) && !extFile) {
   process.exit(2);
 }
 const extraEnv: Record<string, string> = extFile ? { BRIDGE_EXTENSIONS_FILE: path.resolve(extFile) } : {};
+const providersDir = opt("providers-dir");
+if (providersDir) extraEnv.DIMENSIO_CUSTOM_PROVIDERS_DIR = path.resolve(providersDir);
 const [portA, portB] = opt("ports", "8851,8852")!.split(",").map(Number);
 const date = new Date().toISOString().slice(0, 10);
 const work = path.join(os.tmpdir(), `dimensio-ab-${date}-${topic.replace(/[^\w.-]+/g, "_")}`);
 const metaFile = path.join(work, "meta.jsonl");
-const resultFile = path.join(import.meta.dirname, "results", `${date}-${topic}.md`);
+const resultFile = path.join(import.meta.dirname, "results", `${date}-${topic.replace(/[^\w.-]+/g, "_")}.md`);
 
 // 总时长上限：到点不再开新的 run（停在两次之间，原样重跑可续）；再过 20 分钟还没收场就硬收两臂、退出。
 const maxMinutes = Number(opt("max-minutes", "240"));
@@ -63,6 +69,11 @@ hardStop.unref();
 try {
   arms.push(await startArm({ name: "base", harnessDir: harnessOf(base), port: portA, root: path.join(work, "arm-base"), envFile: opt("env-file"), extraEnv }));
   arms.push(await startArm({ name: "head", harnessDir: harnessOf(head), port: portB, root: path.join(work, "arm-head"), envFile: opt("env-file"), extraEnv }));
+  // 档位：两臂必须同一档（各自照自己的型号目录查默认档，对不上就中止）；runTask 设完配置会再核对一遍
+  const want = await Promise.all(arms.map((a) => wantedEffort(a, provider.provider, provider.model, effort)));
+  if (want[0] !== want[1]) throw new Error(`两臂的默认档不同（base ${want[0]} / head ${want[1]}），用 --effort 点名一档再跑`);
+  provider.thinking = want[0];
+  console.log(`  思考档位：${provider.thinking}${effort ? "" : "（默认档）"}`);
   batch: for (let rep = 1; rep <= reps; rep++) {
     const order = rep % 2 ? arms : [...arms].reverse(); // 每次重复交换先后，抵消「先跑的那臂」的系统偏差
     for (const task of tasks) {
@@ -97,7 +108,8 @@ fs.writeFileSync(
   report(rows, {
     title: `A/B · ${topic}（${date}）`,
     arms: ["base", "head"],
-    note: `base = ${base}\nhead = ${head}\n模型 ${provider.provider}/${provider.model}（思考档位 ${effort ?? "默认"}），每格 ${reps} 次。n=3 只看方向；低于 100% 的格子逐 run 审过再下结论。` +
+    note: `base = ${base}\nhead = ${head}\n模型 ${provider.provider}/${provider.model}（思考档位 ${provider.thinking ?? [...new Set(rows.map((r) => r.effort ?? "未记录"))].join("/")}${effort ? "" : "，默认档"}），每格 ${reps} 次；` +
+      `访问范围两臂都是仅工作空间（模型档案 P0 起评测臂一律如此，更早的收据未必同口径）。n=3 只看方向；低于 100% 的格子逐 run 审过再下结论。` +
       (extFile ? `\n技能目录（两臂同一份）：${path.resolve(extFile)}` : ""),
   }),
 );

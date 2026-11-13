@@ -189,7 +189,7 @@ export function buildLineage(records) {
 // —— 后台增量扫描 ——
 
 const EMPTY = Object.freeze({ rootOf: new Map(), members: new Map(), titles: new Map(), titleSrc: new Map(), archived: new Map(), parentOf: new Map(), btw: new Set() });
-const state = { dir: undefined, cacheFile: undefined, files: null, snap: EMPTY, at: 0, running: null, probe: null, probeAt: 0 };
+const state = { dir: undefined, cacheFile: undefined, files: null, snap: EMPTY, at: 0, running: null, probe: null, probeAt: 0, scanned: false };
 
 // 后台扫完、侧栏要跟着变的时候通知一声（session-archive-auto.mjs 据此推总线 archive，侧栏整表重拉）：
 //   · 冷启动没有缓存（首次部署 / 缓存版本升级 / Desktop 数据目录变了）：首轮扫完前血缘是空的，列表里 Desktop 已归档的
@@ -298,14 +298,30 @@ export function desktopLineage({ dir, dirs, cacheFile, now = Date.now() } = {}) 
         if ((cold || archivedChanged) && lastCtx) for (const fn of changeListeners) { try { fn(lastCtx, { cold, archivedChanged }); } catch {} }
       })
       .catch(() => {})
-      .finally(() => { state.running = null; });
+      .finally(() => { state.running = null; state.scanned = true; });
   }
   return state.snap;
 }
 
+// desktop-mirror.mjs 用：至少完整扫过一轮（缓存里的结果可能缺最近 Desktop 新写的记录，不能凭它判断「Desktop 没有」）
+export function desktopLineageScanned() { return state.scanned; }
+
+// desktop-mirror.mjs 用：某个目录（某账号 / org）下的元数据记录认得的全部 cli id（含 clear / resume 之前的旧 id）
+export function desktopCliIdsUnder(dir) {
+  const out = new Set();
+  if (!state.files || !dir) return out;
+  const pre = path.resolve(dir) + path.sep;
+  for (const [p, c] of state.files) {
+    if (!p.startsWith(pre) || !c || !c.r) continue;
+    if (c.r.cli) out.add(c.r.cli);
+    for (const a of c.r.alt || []) out.add(a);
+  }
+  return out;
+}
+
 // 测试用：等当前这轮后台扫描结束
 export function desktopLineageSettled() { return state.running || Promise.resolve(); }
-export function resetDesktopLineage() { state.dir = undefined; state.files = null; state.snap = EMPTY; state.at = 0; state.running = null; state.probe = null; state.probeAt = 0; }
+export function resetDesktopLineage() { state.dir = undefined; state.files = null; state.snap = EMPTY; state.at = 0; state.running = null; state.probe = null; state.probeAt = 0; state.scanned = false; }
 
 // 哪些身份能看 Desktop 血缘：只有主机本人（admin），且 SDK 读写的是默认 ~/.claude
 //（测试服设了 CLAUDE_CONFIG_DIR，那边的会话不是 Desktop 写的那批）。

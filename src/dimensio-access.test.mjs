@@ -68,7 +68,7 @@ test('公开分享/快照身份永远进不去', () => {
   for (const ctx of [share, snap]) {
     assert.equal(ctx.allowCodex, false);
     assert.equal(ctx.allowDimensio, false);
-    assert.equal(ctx.allowGemini, false);
+    assert.equal(ctx.allowStudio, false);
     assert.equal(ctx.canSnapshot, false);
   }
   assert.equal(share.allowClaude, false, '只读分享不能跑 Claude');

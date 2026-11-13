@@ -37,6 +37,11 @@ let probing: Promise<boolean> | null = null;
 export interface ApiOverride {
   base: () => string;                    // 每次请求时求值（吃到宿主的路由自愈）
   headers: () => Record<string, string>; // 宿主鉴权（Bearer 等）
+  // <img>/<video>/下载直链用的基址：宿主局域网直连时 fetch 走 LAN 是通的，媒体元素经 LAN 却可能整批失败
+  //（手机 WebView 截图卡裂图，11-07）。宿主按实测决定媒体走不走 LAN；没给就同 base。
+  mediaBase?: () => string;
+  // 媒体加载失败时问宿主要备用地址（LAN → 隧道）；返回原值 = 没有备用线路。
+  mediaFallback?: (url: string) => string;
 }
 let override: ApiOverride | null = null;
 export function configureApi(o: ApiOverride | null) {
@@ -161,7 +166,20 @@ export function artifactUrl(sessionId: string, path: string, download = false): 
   const query = new URLSearchParams({ path });
   if (download) query.set("dl", "1");
   setResourceToken(query);
-  return `${apiBase()}/api/sessions/${encodeURIComponent(sessionId)}/artifact?${query}`;
+  return `${mediaApiBase()}/api/sessions/${encodeURIComponent(sessionId)}/artifact?${query}`;
+}
+
+// 浏览器直连资源（<img>/下载）的基址：嵌入时听宿主的媒体线路，否则同 apiBase。
+function mediaApiBase(): string {
+  return override?.mediaBase ? override.mediaBase() : apiBase();
+}
+// 媒体加载失败后的备用地址（宿主 LAN → 隧道）；没有备用线路返回原值。
+export function mediaFallbackUrl(url: string): string {
+  try {
+    return override?.mediaFallback ? override.mediaFallback(url) : url;
+  } catch {
+    return url;
+  }
 }
 
 // R12（二）：会话资产（截图等）的浏览器直连 URL——事件里只带资产 id，令牌同上镜像进查询串。
@@ -169,7 +187,7 @@ export function sessionAssetUrl(sessionId: string, asset: string): string {
   const query = new URLSearchParams();
   setResourceToken(query);
   const q = query.toString();
-  return `${apiBase()}/api/sessions/${encodeURIComponent(sessionId)}/assets/${encodeURIComponent(asset)}${q ? `?${q}` : ""}`;
+  return `${mediaApiBase()}/api/sessions/${encodeURIComponent(sessionId)}/assets/${encodeURIComponent(asset)}${q ? `?${q}` : ""}`;
 }
 
 // ── LAN 探活 / 学习（bridge 模式）────────────────────────────────────────────
@@ -435,8 +453,17 @@ export const deleteCustomProvider = (id: string) => j<{ ok: true; config: any }>
 
 // ── 本机模型状态与启停（底栏「本机」状态面板）：qwen = llama.cpp 27B，strata = Strata 125B ──────
 export type LocalEngine = "qwen" | "strata";
-export const STRATA_MODEL = "strata-orca"; // 目录里 Strata 那个型号（server/localai.ts 同名常量）
-export const engineOfModel = (model: string | undefined): LocalEngine => (model === STRATA_MODEL ? "strata" : "qwen");
+// Strata 的几个变体在目录里各是一个 strata-* 型号（server/localai.ts STRATA_VARIANTS）；strata-orca 是改名前的旧 id（= 官方 IQ3_S）
+export const LEGACY_STRATA_MODEL = "strata-orca";
+export const isStrataModel = (model: string | undefined): boolean => !!model && model.startsWith("strata-");
+export const engineOfModel = (model: string | undefined): LocalEngine => (isStrataModel(model) ? "strata" : "qwen");
+export type StrataVariant = "flash-iq3s" | "orca-iq3xxs" | "flash-nvfp4";
+export interface StrataVariantStatus {
+  id: StrataVariant;
+  model: string;
+  label: string;
+  missing?: string[];
+}
 export interface LocalAiStatus {
   engine?: LocalEngine; // 旧后端没有（= qwen）
   installed: boolean;
@@ -448,6 +475,10 @@ export interface LocalAiStatus {
   baseUrl: string;
   settings?: LocalAiSettings | StrataSettings; // 旧后端没有
   running?: { ctx: number; vision: boolean };
+  // 只有 Strata（旧后端没有）：variant = 这次问的，runningVariant = 在跑的（认不出 = null），variants = 每个变体缺不缺文件
+  variant?: StrataVariant;
+  runningVariant?: StrataVariant | null;
+  variants?: StrataVariantStatus[];
 }
 export type LocalKv = "q8_0" | "q8q4" | "q4_0";
 export interface LocalAiSettings {
@@ -469,12 +500,13 @@ export interface LocalGpuInfo {
   usedMiB?: number;
   self?: { dedicatedMiB: number; sharedMiB: number };
 }
-const eq = (e: LocalEngine) => `?engine=${e}`;
-export const localAiStatus = (e: LocalEngine = "qwen") => j<LocalAiStatus>(`/api/localai/status${eq(e)}`, { timeoutMs: 12000 });
-export const localAiStart = (e: LocalEngine = "qwen") => j<LocalAiStatus>(`/api/localai/start${eq(e)}`, POST());
-export const localAiStop = (e: LocalEngine = "qwen") => j<LocalAiStatus>(`/api/localai/stop${eq(e)}`, POST());
-export const localAiApply = (settings: LocalAiSettings | StrataSettings, e: LocalEngine = "qwen") =>
-  j<LocalAiStatus>(`/api/localai/settings${eq(e)}`, POST({ settings }));
+// model：Strata 问 / 起的是哪个变体（会话的型号；旧后端不认这个参数，照旧按它自己的那一个）
+const eq = (e: LocalEngine, model?: string) => `?engine=${e}${e === "strata" && model ? `&model=${encodeURIComponent(model)}` : ""}`;
+export const localAiStatus = (e: LocalEngine = "qwen", model?: string) => j<LocalAiStatus>(`/api/localai/status${eq(e, model)}`, { timeoutMs: 12000 });
+export const localAiStart = (e: LocalEngine = "qwen", model?: string) => j<LocalAiStatus>(`/api/localai/start${eq(e, model)}`, POST());
+export const localAiStop = (e: LocalEngine = "qwen", model?: string) => j<LocalAiStatus>(`/api/localai/stop${eq(e, model)}`, POST());
+export const localAiApply = (settings: LocalAiSettings | StrataSettings, e: LocalEngine = "qwen", model?: string) =>
+  j<LocalAiStatus>(`/api/localai/settings${eq(e, model)}`, POST({ settings }));
 export const localGpuInfo = (e: LocalEngine = "qwen") => j<LocalGpuInfo>(`/api/localai/gpu${eq(e)}`, { timeoutMs: 15000 });
 
 // ── 用户的电脑（输入框下方的设备芯片，能力位 devices）─────────────────────────
@@ -718,6 +750,9 @@ export const answerAsk = (
 
 // ── 项目（显示名 ↔ workspace 绝对路径）─────────────────────────────────────
 export const listProjects = () => j<any[]>("/api/projects");
+// 会话协作（server/family-routes.ts）：父子台账、未读、在干活的 Claude 子会话；一个会话的相关会话
+export const getFamily = () => j<import("./session-family.ts").FamilyState>("/api/family");
+export const getRelatedSessions = (id: string) => j<any>(`/api/family/related/${encodeURIComponent(id)}`);
 export const createProject = (name: string) => j("/api/projects", POST({ mode: "blank", name }));
 export const importProject = (path: string) => j("/api/projects", POST({ mode: "existing", path }));
 // 置顶 / 隐藏：身份是 workspace 绝对路径（隐式项目也能设），POST 而非 PATCH
@@ -789,14 +824,16 @@ export async function sessionStatus(id: string, timeoutMs?: number): Promise<Ses
 }
 
 // 直播镜像：附着到一个正在运行的会话（本机断线重连 / 另一台设备发起的），
-// 回放本轮已发生的事件后持续直播到本轮结束。409 = 会话没在跑。
+// 回放本轮已发生的事件后持续直播到本轮结束。409 = 会话没在跑，或在跑的已不是 runId 那一轮（底座切错了，重新对账）。
 export async function sessionStream(
   id: string,
   onEvent: (ev: any) => void,
   signal?: AbortSignal,
   onAlive?: () => void,
+  runId?: string | null,
 ): Promise<void> {
-  const res = await hfetch(withProto(`/api/sessions/${encodeURIComponent(id)}/stream`), { signal });
+  const q = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+  const res = await hfetch(withProto(`/api/sessions/${encodeURIComponent(id)}/stream${q}`), { signal });
   if (!res.ok || !res.body) {
     const err = new Error(`HTTP ${res.status}`) as Error & { status?: number };
     err.status = res.status;
@@ -843,6 +880,11 @@ export interface MemoryMeta {
   external?: boolean; // K9：写它的会话读过外部内容
   rejectedAt?: string;
   rejectReason?: string;
+  // 离线记忆整理（能力位 memory-dream）：写它的会话、整理时对照原对话的复核意见（reviewedAt 早于 updated 就不算数——内容改过了）
+  sourceSession?: string;
+  reviewedAt?: string;
+  reviewVerdict?: "supported" | "unclear" | "contradicted";
+  reviewNote?: string;
   issues: string[];
 }
 export interface MemoryNote extends MemoryMeta {
@@ -889,6 +931,40 @@ export interface MemoryOverview {
   emptyProjects: number;
 }
 export const memoryOverview = () => j<MemoryOverview>("/api/memory/overview");
+// 离线记忆整理（服务端能力位 "memory-dream"）：这一处上次整理的结果、还有多少没复核、现在整理（后台跑，做完再拉一次状态）
+export interface MemoryDreamSummary {
+  at: string;
+  trigger: "idle" | "manual";
+  model: string;
+  reviewed: number;
+  kept: number;
+  promoted: string[];
+  rewritten: string[];
+  merged: string[];
+  retired: string[];
+  created: string[];
+  notApplied: string[];
+  unparsed?: number; // 模型答了却取不出 JSON、跳过的批数
+  sessionsLooked: number;
+  tokens: { input: number; output: number };
+  ms: number;
+  aborted?: boolean;
+  error?: string;
+}
+export interface MemoryDreamStatus {
+  enabled: boolean;
+  running: boolean;
+  backlog: number;
+  state: { lastAttemptAt?: string; lastDreamAt?: string; last?: MemoryDreamSummary };
+}
+export const memoryDreamStatus = (ws: string) => j<MemoryDreamStatus>(`/api/memory/dream?${inWorkspace(ws)}`);
+// 不抛：409 = 已经有一次整理在跑（busy）
+export async function startMemoryDream(ws: string): Promise<{ ok: boolean; busy?: boolean; error?: string }> {
+  const res = await hfetch("/api/memory/dream", POST(wsBody(ws)));
+  if (res.ok) return { ok: true };
+  const body = await res.json().catch(() => ({}));
+  return { ok: false, busy: res.status === 409, error: String(body?.error ?? `HTTP ${res.status}`) };
+}
 // 晋升不抛：校验不过带回问题清单；同一个 topic 已有生效条目时带回冲突（界面给「替换它」，再带 supersedes 发一次）；
 // code "global_budget" = 全局层生效的条目合计超了上限（K7）
 export type PromoteResult = { ok: true } | { ok: false; error: string; code?: string; conflicts?: Array<{ id: string; title: string }> };
@@ -1263,3 +1339,52 @@ export async function dockTermStream(
   }
   await readSse(res, onEvent);
 }
+
+// ── 拉取请求（审阅面板顶上的 PR 卡，能力位 pr；数据在 bridge，见 server/pr.ts）────────────────────
+export interface PrCheck {
+  name: string;
+  bucket: "pass" | "fail" | "pending" | "skipping" | "cancel" | string;
+  url?: string;
+  workflow?: string;
+}
+export interface PrRow {
+  url: string;
+  repo: string;
+  number: number;
+  title: string;
+  state: "open" | "draft" | "queued" | "merged" | "closed" | string;
+  isDraft?: boolean;
+  head: string;
+  base: string;
+  own?: boolean;
+  autoFix: boolean;
+  error?: string;
+  checks: { total: number; passing: number; failing: number; pending: number; skipped: number; failingChecks?: string[] } | null;
+  checkList: PrCheck[];
+  reviewDecision?: string | null;
+  mergeable?: string;
+  mergeStateStatus?: string;
+}
+export interface PrView {
+  available: boolean;
+  reason?: string;
+  gh?: { ok: boolean; reason?: string; limited?: boolean };
+  git?: { git: boolean; branch?: string; github?: boolean; repo?: string; base?: string };
+  prs?: PrRow[];
+  monitor?: { autoFix: boolean; autoFixSet: boolean | null; autoFixDefault: boolean };
+  fix?: { paused: string; lastWakeAt: number; streak: number; wakes: number; lastError: string } | null;
+  pollMs?: number;
+}
+export const prView = (session: string, refresh = false) =>
+  j<PrView>(`/api/pr?session=${encodeURIComponent(session)}${refresh ? "&refresh=1" : ""}`, { timeoutMs: 30_000 });
+export const prOp = (session: string, op: "bind" | "unbind" | "monitor" | "refresh", args: { url?: string; autoFix?: boolean | null } = {}) =>
+  j<{ ok: boolean; result: any; view: PrView | null }>("/api/pr", { ...POST({ session, op, ...args }), timeoutMs: 30_000 });
+// ── 工作区协同（服务端能力位 workspace-collab）：「用户在看什么」上报、应答 agent 的草稿请求 ──────────────
+export const uiState = (body: { clientId: string; client: string; state: Record<string, unknown> }) =>
+  j("/api/ui/state", { ...POST(body), timeoutMs: 8000 });
+export const uiAnswer = (id: string, result: Record<string, unknown>) =>
+  j<{ ok: boolean }>("/api/ui/answer", { ...POST({ id, result }), timeoutMs: 15000 });
+// ── 会话管理（稍后发送 / 改名 / 归档 / 输入建议 / 通知在场）：接口调用写在 lib/sessmgmt.svelte.ts，这里只把底层请求借出去 ──
+export const sessJson = j;
+export const sessPost = POST;
+export const sessFetch = hfetch;

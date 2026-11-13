@@ -80,7 +80,60 @@ export function fmtDate(iso?: string): string {
 }
 
 export const originText = (m: MemoryMeta): string =>
-  m.origin === "user" ? t("你写的") : m.origin === "model" ? (m.attended === false ? t("模型写的（没人在场）") : t("模型写的")) : "";
+  m.origin === "user"
+    ? t("你写的")
+    : m.origin === "model"
+      ? m.attended === false ? t("模型写的（没人在场）") : t("模型写的")
+      : m.origin === "dream"
+        ? m.status === "active" ? t("整理时依你的原话生效") : m.declaredStatus === "stale" ? t("整理时退场") : t("整理时改过")
+        : "";
+
+// 离线整理的复核意见：只在「这一版看过」时算数（reviewedAt ≥ updated）
+export type ReviewVerdict = NonNullable<MemoryMeta["reviewVerdict"]>;
+export const REVIEW_TEXT: Record<ReviewVerdict, string> = {
+  supported: t("对照原对话：成立"),
+  unclear: t("对照原对话：说不清"),
+  contradicted: t("对照原对话：不成立"),
+};
+export function reviewOf(m: MemoryMeta): { verdict: ReviewVerdict; note: string; at: string } | null {
+  if (!m.reviewedAt || !m.reviewVerdict || m.reviewedAt < (m.updated || "")) return null;
+  return { verdict: m.reviewVerdict, note: m.reviewNote ?? "", at: m.reviewedAt };
+}
+// 「待确认」里整理过、对照原对话成立的：面板给一键全部确认
+export const confirmable = (m: MemoryMeta): boolean => m.declaredStatus === "proposed" && reviewOf(m)?.verdict === "supported" && !(m.issues ?? []).includes("injection-pattern");
+
+// 复核意见里服务端附的固定说明（memory-dream.ts，英文）→ 人话；模型写的那句理由原样留着（提示词要它用你说话的语言）
+const WHY_NOT: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
+  [/^quote not found in what the user typed$/, () => t("原对话里找不到你说过这句话")],
+  [/^no quote$/, () => t("没摘出你的原话")],
+  [/^this workspace's prompt budget is full$/, () => t("这个项目进提示的记忆已满")],
+  [/^another active note covers topic \S+ \((.+)\)$/, (m) => t("同一主题已有生效的「{ids}」", { ids: m[1] })],
+  [/^session \S+ was not among the conversations shown$/, () => t("引的不是这条记忆的原对话")],
+  [/^only preferences and working rules take effect on your words$/, () => t("凭原话直接生效的只有偏好与做法，项目和环境的事实留给你确认")],
+];
+const whyNot = (s: string): string => {
+  for (const [re, say] of WHY_NOT) {
+    const m = s.match(re);
+    if (m) return say(m);
+  }
+  return tr(s);
+};
+export function reviewNoteText(note: string): string {
+  let m = note.match(/^(.*) \(left as is: confirmed by the user — the dream only comments on it\)$/s);
+  if (m) return t("{reason}（你确认过的，整理只提意见、不改它）", { reason: m[1] });
+  m = note.match(/^(.*) \(left in place: its source conversation is only a guess\)$/s);
+  if (m) return t("{reason}（没退掉它：这条的原对话是按写入时间猜的，不算数）", { reason: m[1] });
+  m = note.match(/^(.*) \(not promoted: (.+)\)$/s);
+  if (m) return t("{reason}（没让它生效：{why}）", { reason: m[1], why: whyNot(m[2]) });
+  m = note.match(/^(.*) \(absorbed ([a-z0-9-, ]+)\)$/s);
+  if (m) return t("{reason}（把 {ids} 并了进来）", { reason: m[1], ids: m[2] });
+  m = note.match(/^merged into ([a-z0-9-]+): (.*)$/s);
+  if (m) return t("并进了「{id}」：{reason}", { id: m[1], reason: m[2] });
+  m = note.match(/^seen in (\d+) sessions(?: \(not promoted: (.+)\))?$/);
+  if (m) return m[2] ? t("在 {n} 个对话里都出现过（没让它生效：{why}）", { n: m[1], why: whyNot(m[2]) }) : t("在 {n} 个对话里都出现过", { n: m[1] });
+  if (note === "the dream gave no decision for this note") return t("整理时模型没给这条结论");
+  return note;
+}
 
 // ── 短日期与「多久以前」 ────────────────────────────────────────────────────────────
 const DAY = 86_400_000;

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
-import { buildPhoneControlTools, fmtObservation, fmtReadiness } from './phone-control-tools.mjs';
+import { buildPhoneControlTools, fmtObservation, fmtReadiness, fmtDeviceInfo } from './phone-control-tools.mjs';
 import { handleControlNext, handleControlResult, __resetForTest } from '../runtime/phone-control.mjs';
 
 const identify = () => ({ kind: 'admin' });
@@ -103,4 +103,88 @@ test('就绪自检文案：输入法没启用、锁屏会明确指出', () => {
   assert.match(s, /✗ Bridge 输入法没在系统里启用/);
   assert.match(s, /锁屏中/);
   assert.match(fmtReadiness(null), /版本较旧/);
+});
+
+test('电量 / 存储 / 网络：新 apk 回包显示一行，旧 apk 缺字段就不显示', () => {
+  const s = fmtReadiness({ a11y: true, screenshot: true, screenOn: true,
+    battery: { level: 83, charging: true, plugged: 'usb', saver: false, tempC: 31 },
+    storage: { totalBytes: 256e9, freeBytes: 112.4e9 },
+    network: { type: 'wifi', metered: true, validated: true } });
+  assert.match(s, /电量 83%（充电中·USB）/);
+  assert.match(s, /存储 剩余 112\/256 GB/);
+  assert.match(s, /网络 Wi-Fi（按流量计费）/);
+  assert.equal(fmtDeviceInfo({ a11y: true }), '');
+  assert.doesNotMatch(fmtReadiness({ a11y: true, screenshot: true }), /电量|存储|网络/);
+  assert.match(fmtDeviceInfo({ battery: { level: 100, full: true, tempC: 45 }, network: { type: 'none' } }), /电量 100%（已充满）（电池 45°C 偏热） · 网络 没联网/);
+  assert.match(fmtDeviceInfo({ network: { type: 'cellular', validated: false } }), /移动数据（连上了但上不了网）/);
+  assert.match(fmtDeviceInfo({ network: { type: 'wifi', vpn: true } }), /网络 Wi-Fi（经 VPN）$/);
+  assert.match(fmtDeviceInfo({ network: { type: 'vpn', vpn: true } }), /网络 VPN$/);
+});
+
+test('画面没变的措辞：带截图时提醒网页/画布不在清单里；像素变了要说清', () => {
+  assert.match(fmtObservation({ package: 'com.android.chrome', changed: false, screenshot: 'AAAA', elements: [] }), /元素清单和动作前一样，可能没生效（网页、画布、视频的内容不在清单里，以截图为准）/);
+  assert.match(fmtObservation({ package: 'com.android.chrome', changed: true, changedBy: 'pixels', screenshot: 'AAAA', elements: [] }), /元素清单没变，但截图内容变了/);
+});
+
+test('打开类动作：旧 apk 回包还停在原前台 → 补看到新前台为止；新 apk 自己等前台就不再先查', async () => {
+  __resetForTest();
+  const log = [];
+  let screens = 0;
+  const stop = fakePhone('open0001', 'Z Fold7', async (op) => {
+    if (op === 'status') return { a11y: true, foreground: 'com.bridge' };
+    if (op === 'open_url') return obs('com.bridge');
+    if (op === 'screen') return obs(++screens >= 2 ? 'com.android.chrome' : 'com.bridge');
+    return {};
+  }, log);
+  await new Promise((r) => setTimeout(r, 30));
+  const tools = buildPhoneControlTools('admin', null, undefined, 'sess-open');
+  const out = await byName(tools, 'phone_open_url').handler({ url: 'https://example.com' });
+  const t = textOf(out);
+  assert.deepEqual(log, ['open0001:status', 'open0001:open_url', 'open0001:screen', 'open0001:screen']);
+  assert.match(t, /已打开 https:\/\/example\.com/);
+  assert.match(t, /com\.android\.chrome/);
+  assert.doesNotMatch(t, /尚未到前台/);
+  stop(); await new Promise((r) => setTimeout(r, 250));
+
+  // 一直没换前台 → 补看 4 次后如实说明
+  __resetForTest(); log.length = 0;
+  const stop2 = fakePhone('open0002', 'Z Fold7', async (op) => (op === 'status' ? { foreground: 'com.bridge' } : obs('com.bridge')), log);
+  await new Promise((r) => setTimeout(r, 30));
+  const t2 = textOf(await byName(buildPhoneControlTools('admin', null, undefined, 'sess-open'), 'phone_open_settings').handler({ page: 'battery' }));
+  assert.equal(log.filter((x) => x.endsWith(':screen')).length, 4);
+  assert.match(t2, /⚠ 目标页面尚未到前台（前台还是 com\.bridge/);
+  assert.match(t2, /以截图为准/);
+  stop2(); await new Promise((r) => setTimeout(r, 250));
+
+  // 新 apk：回包带 foreground，第二次起不再先查 status、也不补看
+  __resetForTest(); log.length = 0;
+  const stop3 = fakePhone('open0003', 'Z Fold7', async (op) => (op === 'status' ? { foreground: 'com.bridge' } : { foreground: op !== 'share', waitMs: 6000, ...obs(op === 'share' ? 'com.bridge' : 'com.android.chrome') }), log);
+  await new Promise((r) => setTimeout(r, 30));
+  const tools3 = buildPhoneControlTools('admin', null, undefined, 'sess-open');
+  await byName(tools3, 'phone_open_url').handler({ url: 'https://a.com' });
+  const t3 = textOf(await byName(tools3, 'phone_share').handler({ text: 'hi', target: '微信' }));
+  assert.deepEqual(log, ['open0003:status', 'open0003:open_url', 'open0003:share']);
+  assert.match(t3, /⚠ 等了 6 秒前台还是 com\.bridge/);
+  stop3(); await new Promise((r) => setTimeout(r, 250));
+  __resetForTest();
+});
+
+test('两个会话抢同一台：后来的被拦并说出对方是谁，phone_devices 标出占用', async () => {
+  __resetForTest();
+  const log = [];
+  const stop = fakePhone('lease001', 'Z Fold7', async (op) => (op === 'status' ? { a11y: true } : obs('com.a')), log);
+  await new Promise((r) => setTimeout(r, 30));
+  const a = buildPhoneControlTools('admin', null, undefined, () => 'sessAAAA1111');
+  const b = buildPhoneControlTools('admin', null, undefined, () => 'sessBBBB2222');
+  const ta = await byName(a, 'phone_swipe').handler({ x1: 0.5, y1: 0.8, x2: 0.5, y2: 0.3 });
+  assert.doesNotMatch(textOf(ta), /另一个会话/);
+  const tb = await byName(b, 'phone_tap').handler({ by: 'coord', x: 0.5, y: 0.5 });
+  assert.match(textOf(tb), /正被另一个会话〈sessAAAA〉操控/);
+  const dv = textOf(await byName(b, 'phone_devices').handler({}));
+  assert.match(dv, /⚠ 正被另一个会话〈sessAAAA〉操控/);
+  const dvA = textOf(await byName(a, 'phone_devices').handler({}));
+  assert.doesNotMatch(dvA, /另一个会话/);
+  assert.equal(log.filter((x) => x.endsWith(':tap')).length, 0, '被拦的点按不该发到手机');
+  stop(); await new Promise((r) => setTimeout(r, 250));
+  __resetForTest();
 });

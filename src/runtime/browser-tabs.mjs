@@ -57,8 +57,8 @@ export function watchPopups(b, action) {
   return async () => {
     let fresh = b.tabs.filter((t) => !before.has(t.id));
     if (!fresh.length) {
-      // Target.targetCreated 可能比动作返回晚一拍到
-      await delay(120);
+      // Target.targetCreated 可能比动作返回晚一拍到（Web Bridge 要多绕扩展一圈：chrome.tabs 事件 → 回环 → 客户端）
+      await delay(b.webBridge ? 300 : 120);
       fresh = b.tabs.filter((t) => !before.has(t.id));
       if (!fresh.length) return '';
     }

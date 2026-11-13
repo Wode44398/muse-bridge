@@ -23,7 +23,9 @@ import { listForwards, createForward, removeForward } from '../runtime/device-fo
 import { deliverRoots, deliverAnywhere } from '../runtime/deliverables.mjs';
 import { withinRoot } from '../runtime/http-file.mjs';
 import { VAULT } from '../config/index.mjs';
-import { COORD_RULES, VERIFY_RULES, desktopContent, desktopResult, formatUia, formatWindows } from './desktop-format.mjs';
+import { COORD_RULES, VERIFY_RULES, DEVICE_BROWSER_DESC, BUILTIN_BROWSER, browserLines, desktopContent, desktopResult, desktopWaitMs, formatUia, formatWindows } from './desktop-format.mjs';
+import { BROWSER_ACTIONS, browserParams } from '../runtime/browser-actions.mjs';
+import { SAVE_TO_DESC, saveTarget, saveShots } from './save-shot.mjs';
 
 const txt = (text) => ({ content: [{ type: 'text', text: String(text) }] });
 const err = (e) => ({ content: [{ type: 'text', text: '设备操作失败：' + String(e?.message ?? e).slice(0, 600) }], isError: true });
@@ -48,8 +50,8 @@ const READ_MAX_LINES = 2000;
 const READ_MAX_CHARS = 200 * 1024;
 
 export const expectSchema = z.object({
-  window: z.string().optional().describe('应出现标题含这段文字的窗口'),
-  gone: z.string().optional().describe('标题含这段文字的窗口应消失'),
+  window: z.string().optional().describe('应出现标题、进程名或类名含这段文字的窗口（标题随系统语言变，英文系统是 Save As / Notepad）；type/key 带了 window 时只认那个程序的和这次新开的窗口'),
+  gone: z.string().optional().describe('标题、进程名或类名含这段文字的窗口应消失；type/key 带了 window 时只看那个程序的窗口'),
   focus: z.string().optional().describe('焦点控件的类型/名称/AutomationId 应含这段文字'),
   value: z.string().optional().describe('焦点输入框的内容应含这段文字（密码框不读）'),
   text: z.string().optional().describe('前台窗口的控件树里应出现这段文字（或某窗口标题含它）'),
@@ -77,6 +79,7 @@ const batchItem = z.object({
 
 const deviceArg = z.string().optional().describe('目标设备 id 或名字；省略 = 会话连接的那台（输入框下方的设备芯片），没连接且只有一台在线时用那台');
 
+
 const utc = (iso) => String(iso || '').slice(0, 16).replace('T', ' ') + ' UTC';
 
 const TIER_LABEL = { control: '可观察并操作', observe: '只允许观察', off: '已关闭', workspace: '只开了命令与文件（老客户端，未开桌面控制）' };
@@ -89,7 +92,7 @@ export function deviceNudge() {
     '凡是用户电脑上的事——看他的屏幕、点他的程序、读写他电脑上的文件、在他电脑上跑命令、用他已登录的浏览器——一律用 `mcp__device__*`。' +
     '\n用户说「我屏幕上 / 这台电脑 / 我这边 / 我手机里」这类指代本地的话时，先调 `devices` 看这条消息是从哪台客户端发来的（用户可能同时开着几台 Win 客户端和手机 App），再决定操作哪台；发送端与会话连接的设备不是同一台时，按用户指的那台用 device 参数指定，拿不准就问。' +
     '\n用法：`devices` 看有哪些设备（电脑与手机）、这条消息发自哪台、哪台连在本会话、各自在线与权限档；`inspect` 观察桌面（active_window → uia_tree 读控件，读不到再 screenshot），`act` 操作桌面（优先 uia_action 或 click+ref，坐标兜底）；' +
-    '`browser` 驱动设备上的浏览器（带用户的登录态，操作对用户实时可见）；`shell` 在设备上跑命令（Windows 是 PowerShell）；`files` 读写设备上的文件（glob 找文件、grep 搜内容、read 按行分段读），`files(action:"pull")` 把设备上的文件拷到服务器、`files(action:"push")` 把服务器上的产物拷到设备；' +
+    '`browser` 驱动设备上的浏览器（默认是客户端内置浏览器；要用用户自己已登录的 Edge / Chrome，先 `browser(action:"browsers")` 看有哪些，再每次带 browser 参数选它）；`shell` 在设备上跑命令（Windows 是 PowerShell）；`files` 读写设备上的文件（glob 找文件、grep 搜内容、read 按行分段读），`files(action:"pull")` 把设备上的文件拷到服务器、`files(action:"push")` 把服务器上的产物拷到设备；' +
     '`ports(action:"open", port)` 把设备上的本机端口（他电脑上跑着的 dev server、本机模型接口）接到服务器，给出服务器上能直接访问的地址。' +
     COORD_RULES + '\n提速：能预判的连续步骤用 `act(action:"batch")` 一次做完；单步可加 `screenshot_after:true`；等弹窗用 `inspect(action:"wait_for_window")`。' + VERIFY_RULES +
     '\n权限由设备自己硬拦：observe 档只能看，control 档才能点击、输入、跑命令、写文件。这是用户本人的真实电脑：严格只做被要求的事；发送消息、删除、下单、改安全设置、关闭含未保存内容的窗口等高风险动作，执行前必须用 AskUserQuestion 确认。' +
@@ -121,7 +124,7 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
   const desktop = async (d, action, args) => {
     if (tierOf(d) === 'workspace') throw new Error(`设备「${d.name}」没开桌面控制（老客户端只开了命令与文件）——请对方更新客户端，或在托盘里勾选「允许远程桌面控制」。`);
     const slow = action === 'screenshot' || action === 'zoom' || action === 'uia_tree' || action === 'launch' || args.screenshot_after;
-    const timeout = action === 'batch' || action === 'wait_for_window' ? 120_000 : slow ? 30_000 : 20_000;
+    const timeout = desktopWaitMs(action, args, action === 'batch' || action === 'wait_for_window' ? 120_000 : slow ? 30_000 : 20_000);
     try {
       return await send(d, 'desktop', { ...args, action, frameKey: frameKey() }, timeout);
     } catch (e) {
@@ -166,6 +169,7 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
           const out = ['这条消息发自：' + (origin ? originLabel(origin, lookup) : '未知（这一轮没有记到发送端）')];
 
           const linked = getLink();
+          const browsers = await listDeviceBrowsers(mine);
           out.push('', '电脑（Windows 桌面客户端，这组 device 工具操作的就是它们）：');
           if (!mine.length) out.push('  还没有登记任何电脑。要让我操作你的电脑：在那台电脑上装 bridge 桌面客户端、用同一个账号登录（登录即自动登记）。');
           for (const d of mine) {
@@ -178,6 +182,7 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
               d.id === linked ? '← 本会话连接的设备' : '',
               origin && origin.kind === 'desktop' && origin.id === d.id ? '← 这条消息发自这台' : '',
             ].filter(Boolean).join('  '));
+            if (d.online) out.push(...browserLines(browsers.get(d.id), d));
           }
           if (linked === 'none') out.push('  （这个会话设为不连接电脑。）');
 
@@ -252,14 +257,14 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
         file: z.string().optional().describe('launch 的 exe/文档/URL'),
         args: z.array(z.string()).optional().describe('launch 参数数组'),
         cwd: z.string().optional().describe('launch 工作目录'),
-        window: z.number().optional().describe('窗口 hwnd'),
+        window: z.number().optional().describe('窗口 hwnd（inspect 的 windows / active_window 给的）。focus_window/set_window/close_window 的目标；type/key 带上它会先确认并切到这个窗口，切不过去就不发——操作特定程序时建议总是带上'),
         x: z.number().optional().describe('最近一次 screenshot 图片里的像素；set_window 时是窗口新位置（屏幕坐标）'),
         y: z.number().optional(),
         ref: z.number().int().optional().describe('uia_action 的目标；click/double_click/right_click/move/scroll 传 ref 则作用在该控件中心（来自最近一次 uia_tree）'),
         w: z.number().optional().describe('set_window 宽'), h: z.number().optional().describe('set_window 高'),
         button: z.enum(['left', 'right', 'middle']).optional(),
         amount: z.number().optional().describe('scroll 滚轮格数；正=上，负=下'),
-        text: z.string().optional().describe('type 输入的字面文本，\\n 会按回车'),
+        text: z.string().optional().describe('type 输入的字面文本，\\n 会按回车、\\t 按 Tab。逐字发送，长文本较慢：几百字以上改用 uia_action set_value'),
         keys: z.string().optional().describe('key 组合键，如 Ctrl+S / Enter / Alt+F4 / Win+R'),
         uiaAction: z.enum(UIA_ACTIONS).optional().describe('uia_action: focus/invoke/set_value/select/toggle/expand/collapse/scroll_into_view'),
         value: z.string().optional().describe('uia_action=set_value 的值'),
@@ -278,33 +283,40 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
           const result = await desktop(d, a.action, args);
           // batch 中途停下时执行层也回 ok:false，但每一步的结果都在里面——交给 desktopResult 逐步排版标错，别吞成一句
           if (result && result.ok === false && !result.verify && a.action !== 'batch') return { content: [{ type: 'text', text: `${a.action} 未生效（窗口/元素可能已变化，重新读 windows 或 uia_tree）` }], isError: true };
-          if (['launch', 'set_window', 'close_window'].includes(a.action)) return txt(json(result));
-          if (result && (result.landed || result.chars != null || result.keys || result.screenshot || result.verify || a.action === 'batch')) return desktopResult(a.action, result);
+          if (['set_window', 'close_window'].includes(a.action)) return txt(json(result));
+          if (result && (result.landed || result.chars != null || result.keys || result.screenshot || result.verify || a.action === 'batch' || a.action === 'launch')) return desktopResult(a.action, result);
           return txt('已执行 ' + a.action + (result && result.window ? '：' + (result.window.title || result.window.hwnd) : ''));
         } catch (e) { return err(e); }
       }),
 
-    tool('browser',
-      '驱动设备上的浏览器（桌面客户端里的内置浏览器，带用户的登录态，操作对用户实时可见）。' +
-      'action: navigate/back/forward/reload/click/type/key/scroll/hover/read_page/screenshot/eval/console/resize/tabs/tab_new/tab_select/tab_close/close/find/network/upload/wait_for/batch，用法同服务器上的浏览器工具。',
+    tool('browser', DEVICE_BROWSER_DESC,
       {
         device: deviceArg,
-        action: z.string().describe('浏览器动作'),
-        url: z.string().optional(), ref: z.union([z.string(), z.number()]).optional(), text: z.string().optional(),
-        x: z.number().optional(), y: z.number().optional(), key: z.string().optional(),
-        dy: z.number().optional(), filter: z.string().optional(), query: z.string().optional(),
-        js: z.string().optional(), preset: z.string().optional(), width: z.number().optional(), height: z.number().optional(),
-        tab: z.union([z.string(), z.number()]).optional(), double: z.boolean().optional(), button: z.string().optional(),
-        selector: z.string().optional(), force: z.boolean().optional(), region: z.array(z.number()).optional(), ms: z.number().optional(),
-        expect: z.record(z.any()).optional(), expect_timeout_ms: z.number().optional(), verify: z.boolean().optional(),
-        screenshot_after: z.boolean().optional(), actions: z.array(z.record(z.any())).optional(),
+        browser: z.string().optional().describe('用哪个浏览器：不传 / "builtin" = 客户端内置浏览器；用户自己的浏览器填 browsers 列出的 id、名字或账号邮箱的一段（只连了一个时 "edge" / "chrome" 也行）。每次调用都要带'),
+        ...browserParams(z),
+        action: z.enum([...BROWSER_ACTIONS, 'browsers']).describe('浏览器动作；browsers = 列出这台电脑上能用的浏览器'),
+        files: z.array(z.string()).optional().describe('upload：那台电脑上的文件绝对路径（服务器上的文件先 files(action:"push") 拷过去）'),
+        save_to: z.string().optional().describe(SAVE_TO_DESC + '。存在服务器（bridge 这台）上，不是那台电脑上'),
       },
       async (a) => {
         try {
           const d = target(a.device);
-          const { device, ...args } = a;
+          const { device, save_to, ...args } = a;
+          // 截图从客户端回来后在服务器这头落盘；落点先验（沙箱身份只能落在自己的空间里），不合法就别白做动作
+          let saveTo = null;
+          const place = (p) => { try { return { path: serverPath(p) }; } catch (e) { return { error: String(e?.message || e) }; } };
+          if (save_to != null) {
+            saveTo = saveTarget(save_to, place);
+            if (saveTo.error) throw new Error(saveTo.error);
+          }
+          const wantsUser = !BUILTIN_BROWSER.test(String(a.browser ?? ''));
+          if (!caps(d).has('webbridge')) {
+            if (a.action === 'browsers') return txt(`设备「${d.name}」的客户端版本较旧，只有内置浏览器（不传 browser 就是它）；要用用户自己的 Edge / Chrome，请对方更新桌面客户端。`);
+            // 老客户端不认 browser 参数，会悄悄落到内置浏览器——宁可报错，别让 agent 以为在用户的浏览器里
+            if (wantsUser) throw new Error(`设备「${d.name}」的客户端版本较旧，还不支持操作用户自己的浏览器（Web Bridge）——请对方更新桌面客户端；眼下只能用内置浏览器（不传 browser）。`);
+          }
           const r = await send(d, 'browser', args, a.action === 'batch' || a.action === 'wait_for' ? 120_000 : 60_000);
-          if (r && r.mcp && Array.isArray(r.mcp.content)) return r.mcp;
+          if (r && r.mcp && Array.isArray(r.mcp.content)) return saveTo ? saveShots(r.mcp, saveTo, place) : r.mcp;
           return txt(typeof r === 'string' ? r : json(r));
         } catch (e) { return err(e); }
       }),
@@ -484,6 +496,15 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
       } while (offset < st.size);
     } finally { await fh.close(); }
     return `已从服务器拷到设备「${d.name}」：${a.path}（${st.size} 字节）`;
+  }
+
+  // 每台在线、支持 Web Bridge 的电脑上连着哪些浏览器（并行现查，单台最多等 4 秒）
+  async function listDeviceBrowsers(devices) {
+    const out = new Map();
+    await Promise.all(devices.filter((d) => d.online && caps(d).has('webbridge')).map(async (d) => {
+      try { out.set(d.id, await send(d, 'browsers', {}, 4000)); } catch (e) { out.set(d.id, { error: String(e?.message || e) }); }
+    }));
+    return out;
   }
 
   return createSdkMcpServer({ name: 'device', version: '1.0.0', tools });

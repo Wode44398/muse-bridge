@@ -18,7 +18,7 @@
 import { untrack } from 'svelte';
 import { session, compose, me } from './state.svelte.js';
 import { storeGet, storeSet } from './store.js';
-import { apiUrl } from './server.js';
+import { mediaUrl } from './server.js';
 import { getToken } from './api.js';
 import { IS_CSNAP, CSNAP_TOKEN } from './csnap.js';
 
@@ -30,7 +30,8 @@ const TEXT_MAX = 200_000;                 // 单份文字上限（防误粘超�
 const SAVE_MS = 350;                      // 打字防抖；切会话 / 页面隐藏时立即落盘
 const PARK_TTL = 30 * 60 * 1000;          // 切走时还在上传的附件，最多等它 30 分钟
 
-// 输入栏订阅：nonce 变 = 把 text 写进输入框（换会话 / 别的窗口改了同一会话的草稿）
+// 输入栏订阅：nonce 变 = 把 text 写进输入框（换会话 / 别的窗口改了同一会话的草稿）；
+// text 始终 = 当前会话此刻的草稿（打字时也跟着改），新挂载的输入栏按它初始化
 export const draftText = $state({ text: '', nonce: 0 });
 
 const ns = () => (IS_CSNAP ? 'csnap:' + CSNAP_TOKEN + ':' : (me.user || '') + ':');
@@ -61,9 +62,16 @@ function slim(list) {
   }
   return out;
 }
+// 给 <img> 用，必须走 mediaUrl：apiUrl 在家会走局域网，而 WebView 经 LAN 加载 <img> 会失败（切会话回来整张裂图）
 function rawUrl(file) {
   const t = getToken();
-  return apiUrl('/api/upload/raw?name=' + encodeURIComponent(file) + '&thumb=preview' + (t ? '&token=' + encodeURIComponent(t) : ''));
+  return mediaUrl('/api/upload/raw?name=' + encodeURIComponent(file) + '&thumb=preview' + (t ? '&token=' + encodeURIComponent(t) : ''));
+}
+// 输入栏图片附件的服务端缩略图（不是 uploads 副本返回 undefined）。Composer 挂在 data-fallback 上：
+// 本地 blob: 预览被回收 / 失效时，全局媒体自愈（lib/mediaHeal.js）换成它
+export function uploadThumbUrl(path) {
+  const f = (UPLOAD_FILE_RE.exec(path || '') || [])[1];
+  return f ? rawUrl(f) : undefined;
 }
 function revive(list) {
   return (list || []).map((a) => {
@@ -191,6 +199,10 @@ export function noteComposerText(text) {
   const t = String(text ?? '').replace(/ /g, ' ');
   if (t === curText) return;
   curText = t;
+  // 跟着改 draftText.text（不 bump nonce，在场的输入栏不回写）：之后才挂上的输入栏（新对话发出首条
+  // 后 hero → 聊天态那个）挂载时读的是它。只在 load 时赋值的话，它停在读档那一刻——改过再发出去，
+  // 新输入栏会把改之前的旧草稿灌回来。
+  draftText.text = t;
   markDirty();
 }
 

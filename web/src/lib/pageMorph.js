@@ -28,14 +28,14 @@ const HOME_PUSH = 1.08;      // 打开分页时主页朝入口推近的倍率（
 // 各分页的根盒（必须是真正产生盒子的元素：dimensio 的 .hxroot 是 display:contents，取它的 .shell）
 const ROOTS = {
   claude: '.claude-slide',
-  vertex: '.vertex-slide',
+  studio: '.studio-slide',
   chatgpt: '.chatgpt-page',
   harness: '.hxroot > .shell, .hx-placeholder',   // 入场期间是同色底板（HarnessPage 延后挂载）
   antigravity: '.hxroot > .shell, .hx-placeholder',
   files: '.fd-root:not(.embedded), .ws-root:not(.embedded)',
 };
 // 入口：手机四宫格里是 [data-entry=<key>] .tile；桌面 Dock 按 aria-label 找图标
-const DOCK_LABEL = { claude: 'Claude', chatgpt: 'ChatGPT', harness: 'dimensio', vertex: 'Vertex' };
+const DOCK_LABEL = { claude: 'Claude', chatgpt: 'ChatGPT', harness: 'dimensio', studio: 'Media Studio' };
 
 const html = () => document.documentElement;
 const vp = () => ({ W: innerWidth, H: innerHeight });
@@ -154,6 +154,7 @@ function cleanup(my, vars) {
   dropAnims();
   const root = html();
   delete root.dataset.vt;
+  delete root.dataset.vtPage;
   for (const k of Object.keys(vars)) root.style.removeProperty(k);
   clearNames();
   ui.morphing = '';
@@ -296,7 +297,7 @@ export async function closePage(key = ui.screen, { fromRect = null, fromRadius =
 // 收回转场的头 200ms，帧帧 25–58ms。先让主页在分页底下（分页不透明、整屏盖着，画面不变）渲染两帧再开转场：
 // 返回晚一两帧起步，动画本身不再卡。侧滑返回（claudeSliding）本来就提前露着主页，不用等；有封顶，慢机也不拖。
 function warmHome() {
-  if (ui.claudeSliding || ui.vertexSliding) return Promise.resolve();
+  if (ui.claudeSliding || ui.studioSliding) return Promise.resolve();
   ui.homeWarm = true;
   return new Promise((res) => {
     const t = setTimeout(res, 120);
@@ -411,6 +412,44 @@ function bloom(items) {
     } catch {}
   }
 }
+// —— 分页明暗换场（Claude 页点标志 / 运行标记）——
+// 以前分页里切明暗是「直接改 data-theme」，各元素按自己的 CSS 过渡各变各的：主列、侧栏、输入框、
+// 渐隐遮罩时长不一，中途整列发灰、输入框上沿一道硬边色带（11-08 维护者录屏）。现在同主页一套柔边圆波，
+// 但按文字密集页调过：
+//   · 波从被点的标志铺开，~0.9s，起步快收尾慢；
+//   · 羽化带收窄（文字页里羽化带就是新旧两层字叠在一起的地方，越宽重影越长）；
+//   · 缩放只给 1%（2% 以上柔边里的字会错位重影）；入夜时旧画面压暗，天亮不压；
+//   · 换场期间关掉页面里所有 CSS 过渡（app.css html[data-vt-page]）——新画面直接是终态，不再各变各的；
+//   · 被点的标志单独成层：它的彩蛋 / 运行动画每帧只重画自己，不拖着整页快照重绘。
+// 连点：新一次从当前状态起波，上一段直接落幕（run 自带）。
+const PAGE_REVEAL = { dur: 900, ease: [0.3, 0.55, 0.18, 1] };
+export function morphPageTheme(originEl, apply, { toLight = true } = {}) {
+  if (!canMorph()) { apply(); return Promise.resolve(); }
+  const { W, H } = vp();
+  const o = rectOf(originEl);
+  const ox = o ? o.x + o.w / 2 : W / 2, oy = o ? o.y + o.h / 2 : H / 2;
+  const far = Math.max(Math.hypot(ox, oy), Math.hypot(W - ox, oy), Math.hypot(ox, H - oy), Math.hypot(W - ox, H - oy));
+  const feather = Math.round(Math.min(170, Math.max(96, far * 0.14)));
+  const R = far + feather;
+  const mark = o && originEl instanceof Element ? originEl : null;
+  html().dataset.vtPage = '';
+  return run('theme', {
+    vars: { '--vt-ox': ox + 'px', '--vt-oy': oy + 'px', '--vt-f': feather + 'px' },
+    before: () => { if (mark) mark.style.viewTransitionName = 'bridge-theme-mark'; },
+    update: apply,
+    play: () => {
+      const D = PAGE_REVEAL.dur;
+      const easing = `cubic-bezier(${PAGE_REVEAL.ease.join(',')})`;
+      anim('new(root)', [{ '--vt-r': '0px' }, { '--vt-r': R + 'px' }], { duration: D, easing });
+      anim('new(root)', [{ transform: 'scale(1.01)' }, { transform: 'scale(1)' }], { duration: D + 200, easing: EASE.decel });
+      anim('old(root)', toLight
+        ? [{ transform: 'scale(1)' }, { transform: 'scale(1.01)' }]
+        : [{ transform: 'scale(1)', filter: 'brightness(1)' }, { transform: 'scale(1.01)', filter: 'brightness(.6)' }],
+      { duration: D, easing });
+    },
+  });
+}
+
 const homeIcons = () => [...document.querySelectorAll('.grid .entry .ico, .ditem .dico')]
   .map((el) => ({ el, r: rectOf(el) })).filter((o) => o.r && onScreen(o.r));
 

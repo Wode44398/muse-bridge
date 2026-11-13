@@ -77,10 +77,10 @@ test('设备组不给、媒体组默认不给：目录里标不可用，调用�
     const excluded = cat.ops.filter((o) => instanceExcluded(o.name));
     assert.ok(excluded.some((o) => o.name === 'devices.list') && !excluded.some((o) => o.name.startsWith('media.')));
     for (const o of excluded) assert.equal(o.available, false, o.name);
-    // 媒体组：管理员没在 设置 › Agent › Gemini 打开 dimensio 之前不可用，原因指到那里
+    // 媒体组：管理员没在 设置 › Media Studio 打开 dimensio 之前不可用，原因指到那里
     const img = cat.ops.find((o) => o.name === 'media.image');
     assert.equal(img.available, false);
-    assert.match(img.unavailableReason, /设置 › Agent › Gemini|不能生成媒体/);
+    assert.match(img.unavailableReason, /设置 › Media Studio|不能生成媒体/);
     assert.ok(cat.ops.find((o) => o.name === 'feedback.diagnose').available);
     const r = await call('devices.list', {}, tok);
     assert.equal(r.status, 403);
@@ -97,8 +97,8 @@ test('媒体组按实例放行：打开 dimensio 后它那一项不再被设置�
   const reasonOf = async (tok) => (await catalogOf(tok)).ops.find((o) => o.name === 'media.image').unavailableReason || '';
   assert.equal(setVertexSettings({ dimensioMedia: true }).ok, true);
   try {
-    // 测试环境里没装 Vertex 扩展 → 还是不可用，但原因换成了 agent 开关（设置这一关已经过了）
-    assert.doesNotMatch(await reasonOf(FRANK), /设置 › Agent › Gemini/);
+    // 测试环境里没装 Media Studio 扩展 → 还是不可用，但原因换成了 agent 开关（设置这一关已经过了）
+    assert.doesNotMatch(await reasonOf(FRANK), /设置 › Media Studio/);
     assert.match(await reasonOf(ensureHostSecret()), /不能生成媒体/);
     // 种类单独关：dimensio 开着也挡
     assert.equal(setVertexSettings({ agentImage: false }).ok, true);

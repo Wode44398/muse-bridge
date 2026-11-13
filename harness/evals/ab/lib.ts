@@ -6,12 +6,24 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { sseEvents } from "../../server/headless-client.ts";
+import { memoryDirKey } from "../../server/memory.ts";
 import { killProcessTree } from "../../server/proc-tree.ts";
 import { sessionStats } from "../../server/session-health.ts";
 import type { PersistedSession } from "../../server/store.ts";
+import { newTally, observe, type RunMetrics, runMetrics, type StreamTally } from "./metrics.ts";
+import { snapshotStyles, styleFlips } from "./eol.ts";
+import { recordSignals, type RecordSignals } from "./signals.ts";
 import type { AbTask } from "./tasks.ts";
 
 export class InfraError extends Error {}
+// 这一臂整个跑不了（key 无效 / 欠费 / 没 key）：再跑多少次都一样，矩阵收到就停掉这一臂、不入账
+export class ArmFatalError extends InfraError {}
+// provider 报错收场（key、额度、5xx、空回包、网关超时）不是模型的成绩：不入账，续跑时重来
+const FATAL_OUTCOME = /http_40[123]\b|API key 无效|欠费|额度用完|no API key|缺 ?Key|invalid_authentication|insufficient[_ ]?(quota|balance)/i;
+export function providerFailure(outcome: string): "fatal" | "transient" | null {
+  if (!outcome.startsWith("error:")) return null;
+  return FATAL_OUTCOME.test(outcome) ? "fatal" : "transient";
+}
 
 const TOKEN_HEADER = "x-dimensio-internal-token";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -36,18 +48,17 @@ export interface ArmOptions {
   extraEnv?: Record<string, string>;
 }
 
-export async function startArm({ name, harnessDir, port, root, envFile, extraEnv = {} }: ArmOptions): Promise<Arm> {
-  // 下面这些环境变量能把全部落盘位置改道进临时根，前提是这棵树有 Q8 的数据路径收口（server/paths.ts）。更早的代码
-  // 有的位置不认环境变量（设工作区就会写 runtime-config），拿它当一臂会写进真数据——直接拒绝。
-  if (!fs.existsSync(path.join(harnessDir, "server", "paths.ts"))) {
-    throw new Error(`${name}: ${harnessDir} 没有 server/paths.ts（Q8 之前的代码），落盘位置改道不全，不能拿来当评测的一臂`);
-  }
+// 评测臂里模型的命令（Bash 子进程）要看到的隔离变量：子进程环境是白名单（server/tools/bash.ts 的 CHILD_ENV_BASE），
+// 不在名单里的变量设了也到不了子进程，要经 DIMENSIO_CHILD_ENV_ALLOW 点名放行。
+export const CHILD_ISOLATION_VARS = ["npm_config_prefix", "npm_config_cache", "PIP_REQUIRE_VIRTUALENV", "PYTHONUSERBASE"] as const;
+
+// 这一臂 harness 进程的环境（纯函数，自检直接核对它）。所有落盘位置都在 root 下。
+export function armEnv({ port, root, envFile, extraEnv = {} }: Pick<ArmOptions, "port" | "root" | "envFile" | "extraEnv">, token: string): NodeJS.ProcessEnv {
   const dir = (sub: string) => {
     const p = path.join(root, sub);
     fs.mkdirSync(p, { recursive: true });
     return p;
   };
-  const token = randomBytes(24).toString("base64url");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: String(port),
@@ -63,8 +74,42 @@ export async function startArm({ name, harnessDir, port, root, envFile, extraEnv
     WORKSPACE_DIR: dir("workspace"),
     DIMENSIO_GLOBAL_GUIDE: path.join(root, "GUIDE.md"),
     HARNESS_ENV_FILE: envFile ?? path.join(root, "no.env"),
+    // 模型档案 P0：其余默认落在「数据目录」里的（浏览器配置档、自定义服务目录……）也进临时根；自定义服务要用真的，
+    // 由调用方把正式服目录的副本经 DIMENSIO_CUSTOM_PROVIDERS_DIR 传进来（extraEnv 优先）。
+    DIMENSIO_DATA_DIR: root,
+    DIMENSIO_BROWSER_PROFILE: path.join(root, "browser-profile"),
+    // （以前的用法是在 shell 里设好这个变量再跑，照样认）
+    DIMENSIO_CUSTOM_PROVIDERS_DIR: process.env.DIMENSIO_CUSTOM_PROVIDERS_DIR?.trim() || dir("custom-providers"),
+    // 子进程的家目录（HOME / APPDATA，npm -g 与 pip --user 的默认落点）和 $WORKSPACE_TMP 草稿目录：不改道就和 8799 共用
+    // %TEMP%/dimensio-child-home、%TEMP%/dimensio-scratch。草稿目录只能按臂分（变量是进程级的），同一臂并发的题仍共用这一个。
+    DIMENSIO_CHILD_HOME: dir("child-home"),
+    DIMENSIO_SCRATCH_DIR: dir("scratch"),
+    // 评测臂一律「仅工作空间」；再兜一层：npm 全局安装落进临时根、pip 不许装进系统 Python（真要装只能在虚拟环境里）
+    SANDBOX_ACCESS: "workspace",
+    npm_config_prefix: path.join(root, "npm-global"),
+    npm_config_cache: path.join(root, "npm-cache"),
+    PIP_REQUIRE_VIRTUALENV: "true",
+    PYTHONUSERBASE: path.join(root, "python-user"),
+    // 全局层记忆按工作区（= 每次运行的 runDir）各一份：同一臂并发 / 重复的题互相看不见对方写的全局记忆（server/memory.ts
+    // globalMemoryFor）。不认这个开关的老代码当一臂时全局层仍是共用的，见 runMemoryView。
+    DIMENSIO_GLOBAL_MEMORY_SCOPE: "workspace",
     ...extraEnv,
   };
+  // 放行名单与继承来的、调用方给的合并，不覆盖
+  const allow = new Set([process.env.DIMENSIO_CHILD_ENV_ALLOW, extraEnv.DIMENSIO_CHILD_ENV_ALLOW].flatMap((v) => (v ?? "").split(",")).map((n) => n.trim()).filter(Boolean));
+  for (const name of CHILD_ISOLATION_VARS) allow.add(name);
+  env.DIMENSIO_CHILD_ENV_ALLOW = [...allow].join(",");
+  return env;
+}
+
+export async function startArm({ name, harnessDir, port, root, envFile, extraEnv = {} }: ArmOptions): Promise<Arm> {
+  // 下面这些环境变量能把全部落盘位置改道进临时根，前提是这棵树有 Q8 的数据路径收口（server/paths.ts）。更早的代码
+  // 有的位置不认环境变量（设工作区就会写 runtime-config），拿它当一臂会写进真数据——直接拒绝。
+  if (!fs.existsSync(path.join(harnessDir, "server", "paths.ts"))) {
+    throw new Error(`${name}: ${harnessDir} 没有 server/paths.ts（Q8 之前的代码），落盘位置改道不全，不能拿来当评测的一臂`);
+  }
+  const token = randomBytes(24).toString("base64url");
+  const env = armEnv({ port, root, envFile, extraEnv }, token);
   const logFile = path.join(root, "server.log");
   const out = fs.openSync(logFile, "a");
   const child = spawn(process.execPath, ["server/index.ts"], { cwd: harnessDir, env, stdio: ["ignore", out, out], windowsHide: true });
@@ -120,6 +165,40 @@ export async function api(arm: Arm, method: string, route: string, body?: unknow
   return res;
 }
 
+// ── 思考档位：不写 @档位 时显式用这台型号的默认档 ─────────────────────────────
+// POST /api/config 点名了 model 时服务端不重算默认档（server/config.ts：只有没点名型号才 snap 到默认），档位会沿用起臂前
+// 的全局值、再收敛到这台型号支持的档——冒烟时型号目录写 medium，实际跑成了 low。所以评测侧自己照目录算默认档、显式传，
+// 设完再核对。规则与 server/catalog.ts 的 defaultEffort 一致：目录给的默认档 → high → low → 第一档；目录里没有这台型号按 ["off"]。
+interface CatalogModel {
+  id: string;
+  efforts?: string[];
+  defaultEffort?: string;
+  aliases?: string[]; // 目录别名（旧 id，如 strata-orca）
+}
+export function catalogDefaultEffort(catalog: { id: string; models?: CatalogModel[] }[], provider: string, model: string): string {
+  const models = catalog.find((p) => p.id === provider)?.models;
+  const spec = models?.find((m) => m.id === model) ?? models?.find((m) => m.aliases?.includes(model));
+  const efforts = spec?.efforts?.length ? spec.efforts : ["off"];
+  if (spec?.defaultEffort && efforts.includes(spec.defaultEffort)) return spec.defaultEffort;
+  if (efforts.includes("high")) return "high";
+  if (efforts.includes("low")) return "low";
+  return efforts[0];
+}
+
+// 这一臂要跑的档位：点名了就用点名的，没点名就经这一臂的 /api/info 查默认档（自定义服务的目录只有这一臂进程里有）
+export async function wantedEffort(arm: Arm, provider: string, model: string, named?: string): Promise<string> {
+  if (named) return named;
+  const info = (await (await api(arm, "GET", "/api/info")).json()) as { catalog?: { id: string; models?: CatalogModel[] }[] };
+  return catalogDefaultEffort(info.catalog ?? [], provider, model);
+}
+
+// 设完配置核对：provider / 型号 / 档位任何一项和期望不同就中止（宁可不跑，也不拿错的档位出收据）
+export function assertArmConfig(name: string, want: { provider: string; model: string; thinking: string }, got: { provider?: string; model?: string; thinking?: string }): void {
+  for (const key of ["provider", "model", "thinking"] as const) {
+    if (got[key] !== want[key]) throw new Error(`${name}：设完配置 ${key} 是 ${String(got[key])}，期望 ${want[key]}（档位不被这台型号支持，或型号不在目录里）——中止`);
+  }
+}
+
 interface RunStream {
   sessionId: string | null;
   tail: string;
@@ -129,13 +208,15 @@ interface RunStream {
 
 // 读 /api/run 的 SSE 直到收场；返回 sessionId、事件计数与最后一段正文（报表里给 <100% 的格子附末尾输出）。
 // M15（X35）：SSE 解析与 headless 客户端共用一份（server/headless-client.ts）
-async function readRun(res: Response): Promise<RunStream> {
+// 模型档案 P0：tally 给了就顺带记工具成败、错误类别、用量与收场原因（见 metrics.ts）
+async function readRun(res: Response, tally?: StreamTally): Promise<RunStream> {
   const run: RunStream = { sessionId: null, tail: "", outcome: "unknown", counts: {} };
   if (!res.body) return run;
   for await (const raw of sseEvents(res.body as unknown as AsyncIterable<Uint8Array>)) {
     const ev = raw as { e?: string; sessionId?: string; text?: string; message?: string };
     const kind = String(ev.e);
     run.counts[kind] = (run.counts[kind] ?? 0) + 1;
+    if (tally) observe(tally, raw as Record<string, unknown>);
     if (kind === "session") run.sessionId = ev.sessionId ?? null;
     else if (kind === "turn_start") run.tail = "";
     else if (kind === "text_delta") run.tail += ev.text ?? "";
@@ -208,7 +289,21 @@ export interface RunRow {
   lastVerification: string;
   tokens: number;
   wallMs: number;
+  // 模型档案 P0：只算各条消息的流（发出到收场）的时间；wallMs 还含每条之后等记录落定、等记忆沉淀（多轮题会偏大）
+  activeMs?: number;
   tail: string;
+  // 档位：这一次实际跑的思考档位（老账本没有）
+  effort?: string;
+  // 模型档案 P0（矩阵模式）：这一臂的型号、题目维度、细项指标；claimedDone = 模型自己收的工（正常收场、没撞预算），
+  // 和 pass 一起看就是「自称完成但判分失败」。老账本没有这几项。
+  provider?: string;
+  model?: string;
+  dimension?: string;
+  claimedDone?: boolean;
+  m?: RunMetrics;
+  // 模型档案阶段 1：适配信号（与转录回放同一口径，signals.ts）；eolFlips = 题目摆好的文件里换行风格 / BOM 被改掉的（eol.ts）
+  sig?: RecordSignals;
+  eolFlips?: string[];
 }
 
 export interface ProviderChoice {
@@ -219,46 +314,130 @@ export interface ProviderChoice {
   thinking?: string; // 思考档位；不给就用这家型号的默认档
 }
 
-// 跑一个任务的一次：现场摆进 runDir → 设工作区与 provider → 发消息 → 读会话记录打分。
-export async function runTask(arm: Arm, task: AbTask, { runDir, provider, rep = 1 }: { runDir: string; provider: ProviderChoice; rep?: number }): Promise<RunRow> {
-  fs.mkdirSync(runDir, { recursive: true });
-  task.setup(runDir);
-  await api(arm, "POST", "/api/config", { ...provider, workspace: runDir, permissionMode: "auto" });
-  const started = Date.now();
-  const res = await api(arm, "POST", "/api/run", { message: task.prompt, deadlineMs: task.deadlineMs, maxTurns: task.maxTurns });
-  // 流读到一半连接被重置（undici 报 TypeError: terminated）也是基础设施失败：这次不入账、原样重跑会补上。
-  // 以前它不是 InfraError，被 run.ts 当成未知错误抛出去，整批评测连同两个臂一起停了（09-24 R15 那批跑到 24/36 时）。
-  let run: RunStream;
+export interface RunOptions {
+  runDir: string;
+  provider: ProviderChoice;
+  rep?: number;
+  // 同一臂里并发跑多题：全局配置由调用方在起臂后设一次（provider / 型号 / 档位 / 权限规则），这里不再逐题 POST /api/config——
+  // 那是全局的，并发时会互相踩。工作区、访问范围、权限档逐会话经 /api/run 的配置快照（M11）带上。
+  concurrent?: boolean;
+}
+
+// 发一条消息并读完它的流；流读到一半连接被重置（undici 报 TypeError: terminated）也是基础设施失败：这次不入账、原样重跑会补上。
+// 以前它不是 InfraError，被 run.ts 当成未知错误抛出去，整批评测连同两个臂一起停了（09-24 R15 那批跑到 24/36 时）。
+async function sendMessage(arm: Arm, body: Record<string, unknown>, tally: StreamTally): Promise<RunStream> {
+  const res = await api(arm, "POST", "/api/run", body);
   try {
-    run = await readRun(res);
+    return await readRun(res, tally);
   } catch (e) {
     throw new InfraError(`${arm.name}: /api/run stream broke: ${(e as Error).message}`);
   }
+}
+
+// 判分用的记忆视图：只含这次运行自己写的记忆，布局同记忆目录——workspaces/<键>/（它工作区的那份）与 global/（它自己那份
+// 全局层，armEnv 打开的 DIMENSIO_GLOBAL_MEMORY_SCOPE 下在 global-scoped/<键>/）。以前判分扫整臂的记忆根，同一道「记住偏好」
+// 的题第 2 次重复会因为第 1 次写过而判过、别的题写的全局记忆也算数。
+// 臂是不认那个开关的老代码时全局层只有共用的 <记忆根>/global 一份，分不开——原样放进视图的 global-shared/（照旧会串）。
+// 拷一份而不是给原目录：判分在记录与记忆沉淀都落定之后，拷的就是终态；视图每次重建。
+export function runMemoryView(memoryRoot: string, runDir: string, viewsRoot: string): string {
+  const key = memoryDirKey(runDir);
+  const view = path.join(viewsRoot, key);
+  fs.rmSync(view, { recursive: true, force: true });
+  fs.mkdirSync(view, { recursive: true });
+  const parts: Array<[from: string, to: string]> = [
+    [path.join(memoryRoot, "workspaces", key), path.join(view, "workspaces", key)],
+    [path.join(memoryRoot, "global-scoped", key), path.join(view, "global")],
+    [path.join(memoryRoot, "global"), path.join(view, "global-shared")],
+  ];
+  for (const [from, to] of parts) if (fs.existsSync(from)) fs.cpSync(from, to, { recursive: true });
+  return view;
+}
+
+export function clearRunMemory(memoryRoot: string, runDir: string): void {
+  const key = memoryDirKey(runDir);
+  for (const dir of [path.join(memoryRoot, "workspaces", key), path.join(memoryRoot, "global-scoped", key)]) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// 跑一个任务的一次：现场摆进 runDir → 设工作区与 provider → 发消息（多轮题在同一会话里接着发）→ 读会话记录打分。
+export async function runTask(arm: Arm, task: AbTask, { runDir, provider, rep = 1, concurrent = false }: RunOptions): Promise<RunRow> {
+  fs.mkdirSync(runDir, { recursive: true });
+  // 同一个 runDir 重跑（基础设施失败后续跑）时，上一次留下的记忆不能算进这一次：清掉这个工作区的两份（工作区层与它的全局层）
+  clearRunMemory(path.join(arm.root, "memory"), runDir);
+  task.setup(runDir);
+  const styles = snapshotStyles(runDir);
+  if (!concurrent) {
+    const cfg = (await (
+      await api(arm, "POST", "/api/config", {
+        ...provider,
+        workspace: runDir,
+        access: "workspace",
+        permissionMode: "auto",
+        permissionRules: { allow: [], ask: [], ...task.permissionRules },
+      })
+    ).json()) as { provider?: string; model?: string; thinking?: string };
+    // 档位给了就核对（两树模式由 run.ts 先查好默认档再传进来）
+    if (provider.thinking) assertArmConfig(arm.name, { provider: provider.provider, model: provider.model, thinking: provider.thinking }, cfg);
+  }
+  // 新会话的配置快照：只带工作区 / 访问范围 / 权限档——带 provider 会把 baseUrl 重置成这家的默认地址（假 provider 就连不上了）
+  const snapshot = { workspace: runDir, access: "workspace", permissionMode: "auto" };
+  const budget = { deadlineMs: task.deadlineMs, maxTurns: task.maxTurns };
+  const tally = newTally();
+  const messages = [task.prompt, ...(task.followups ?? [])];
+  const started = Date.now();
+  let sessionId: string | null = null;
+  let run: RunStream | null = null;
+  let rec: PersistedSession | null = null;
+  let sent = 0;
+  let activeMs = 0;
+  for (const message of messages) {
+    const t0 = Date.now();
+    run = await sendMessage(arm, { message, ...budget, ...(sessionId ? { sessionId } : { config: snapshot }) }, tally);
+    activeMs += Date.now() - t0;
+    sent++;
+    if (!run.sessionId) throw new InfraError(`${arm.name}: /api/run never announced a session`);
+    sessionId = run.sessionId;
+    rec = await settledRecord(arm, sessionId);
+    // 瘦身 P0-1：收尾后的记忆沉淀在后台跑（状态接口报 memoryPending）——等它落定再读记录与记忆（老代码不报这个字段，不等）
+    if (await memorySettled(arm, sessionId)) rec = await settledRecord(arm, sessionId);
+    // 这一条就出错收场了（provider 报错、被中断）：后面依赖它的消息没意义，按这一条的结果判
+    if (run.outcome !== "done") break;
+  }
+  const failure = providerFailure(String(run!.outcome ?? ""));
+  if (failure === "fatal") throw new ArmFatalError(`${arm.name}: ${String(run!.outcome).slice(0, 200)}`);
+  if (failure === "transient") throw new InfraError(`${arm.name}: provider 报错收场（不算模型成绩）：${String(run!.outcome).slice(0, 160)}`);
   const wallMs = Date.now() - started;
-  if (!run.sessionId) throw new InfraError(`${arm.name}: /api/run never announced a session`);
-  let rec = await settledRecord(arm, run.sessionId);
-  // 瘦身 P0-1：收尾后的记忆沉淀在后台跑（状态接口报 memoryPending）——等它落定再读记录与记忆（老代码不报这个字段，不等）
-  if (await memorySettled(arm, run.sessionId)) rec = await settledRecord(arm, run.sessionId);
-  const verdict = task.check(runDir, rec, { memoryDir: path.join(arm.root, "memory") });
-  const s = sessionStats(rec).observed;
+  const verdict = task.check(runDir, rec!, { memoryDir: runMemoryView(path.join(arm.root, "memory"), runDir, path.join(arm.root, "check-memory")) });
+  const s = sessionStats(rec!).observed;
   const calls = Object.values(s.toolCalls).reduce((n, t) => n + t.calls, 0);
   const failed = Object.values(s.toolCalls).reduce((n, t) => n + t.failed, 0);
   const nudges = Object.entries(s.injections).filter(([k]) => k.endsWith("nudge")).reduce((n, [, v]) => n + v, 0);
+  const m = runMetrics(rec!, tally, sent);
   return {
     task: task.id,
     arm: arm.name,
     rep,
     pass: Boolean(verdict.pass),
     detail: verdict.detail ?? "",
-    outcome: run.outcome,
+    outcome: run!.outcome,
     turns: s.assistantTurns,
     toolCalls: calls,
     failedCalls: failed,
     nudges,
-    lastVerification: rec.gates?.lastVerification ?? "",
-    tokens: allTokens(rec, s.tokens.input + s.tokens.output),
+    lastVerification: rec!.gates?.lastVerification ?? "",
+    tokens: allTokens(rec!, s.tokens.input + s.tokens.output),
     wallMs,
-    tail: run.tail,
+    activeMs,
+    tail: run!.tail,
+    ...(provider.thinking ? { effort: provider.thinking } : {}),
+    provider: provider.provider,
+    model: provider.model,
+    dimension: task.dimension,
+    claimedDone: run!.outcome === "done" && sent === messages.length && !m.budgetExhausted && m.stopReason === "end",
+    m,
+    sig: recordSignals(rec!),
+    eolFlips: styleFlips(runDir, styles),
   };
 }
 

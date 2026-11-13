@@ -10,6 +10,11 @@
   // 点一篇 = 卡片里打开现成的 md 查看器（阅读 / 编辑 / 源码，保存走 /api/file/save 带冲突校验；
   // 记忆目录当 ws 根，所以 [[双链]] 照样能跳）。预览实例 host='memory'，被 .mm-pv 的 transform 圈在卡片里。
   // Claude 写了记忆（fs 事件落在目录里）或关掉预览后，静默重读一遍。
+  //
+  // 记忆来源可切：Claude（上面这套，md 文件）/ dimensio（结构化记忆，lib/dimensioMemory.js 映射成同一张图：根 = 项目，
+  // 第一层 = 待确认 / 被隔离 / 生效 / 已退场）。dimensio 的一条点开是 DimensioMemoryNote：确认 / 驳回 / 编辑都走 dimensio
+  // 自己的接口与治理规则，不直接改它的文件。agent = 初始来源（dimensio 分页的工作区里挂这张卡时给 'dimensio'）；
+  // theme = 嵌在 dimensio 里时跟它的明暗档（枝色亮度），不跟 bridge 全站主题。
   import { untrack } from 'svelte';
   import { api } from '../../lib/api.js';
   import { openPreview, closePreview, preview } from '../../lib/preview.svelte.js';
@@ -21,8 +26,32 @@
   import MemoryOutline from './MemoryOutline.svelte';
   import MemoryMap from './MemoryMap.svelte';
   import { t, tc, tr } from '../../lib/i18n.js';
+  import { screenOn } from '../../lib/state.svelte.js';
+  import { dimensioGraph, dimensioRoots, bucketFor } from '../../lib/dimensioMemory.js';
+  import { loadPage } from '../../modules/pages.js';   // DimensioMemoryNote 归 dimensio 扩展，经懒加载入口进来
 
-  let { ws = '' } = $props();
+  let { ws = '', agent = 'claude', theme = '' } = $props();
+
+  // —— 来源：Claude / dimensio（两边都对这个身份开着才给切）——
+  const canClaude = screenOn('claude');
+  const canDim = screenOn('harness');
+  let src = $state(agent === 'dimensio' && canDim ? 'dimensio' : canClaude ? 'claude' : canDim ? 'dimensio' : 'claude');
+  const isDim = $derived(src === 'dimensio');
+  let dnote = $state(null);      // 点开的那条 dimensio 记忆 { ws, id }
+  let dimRoots = null;
+  function setSrc(v) { menu = ''; if (v === src) return; src = v; pick = ''; data = null; roots = null; dimRoots = null; dnote = null; }
+  const LANE = () => ({ proposed: t('待确认'), held: t('被隔离'), active: t('生效'), retired: t('已退场') });
+  const TYPEL = () => ({ user: t('偏好'), feedback: t('做法'), project: t('项目'), reference: t('参考') });
+  async function loadDim() {
+    const ov = await api.get('/api/harness/api/memory/overview');
+    dimRoots = dimensioRoots(ov);
+    const b = pick ? (ov.buckets || []).find((x) => norm(x.ws) === norm(pick)) || null : bucketFor(ov, ws);
+    const name = !b ? '' : b.kind === 'global' ? t('全局记忆') : b.name || '';
+    return {
+      dir: b?.ws || pick || ws, base: b?.kind === 'global' ? '' : b?.ws || ws, source: 'dimensio', name,
+      exists: !!b?.items?.length, graph: b?.items?.length ? dimensioGraph(b.items, { root: name || tail(ws), lane: LANE(), type: TYPEL() }) : null,
+    };
+  }
 
   // —— 数据 ——
   let pick = $state('');         // '' = 跟当前会话的项目；否则 = 切换列表里点的那个记忆目录
@@ -35,7 +64,7 @@
     if (!quiet) { loading = true; err = ''; }
     try {
       const q = pick ? `dir=${encodeURIComponent(pick)}` : `ws=${encodeURIComponent(ws)}`;
-      const d = await api.get(`/api/claude/memory?${q}`);
+      const d = isDim ? await loadDim() : await api.get(`/api/claude/memory?${q}`);
       if (my !== seq) return;
       data = d; err = '';
     } catch (e) {
@@ -44,7 +73,7 @@
     }
     if (my === seq) loading = false;
   }
-  $effect(() => { pick; ws; untrack(() => load()); });
+  $effect(() => { pick; ws; src; untrack(() => load()); });
 
   const graph = $derived(data?.graph || null);
   const dir = $derived(data?.dir || '');
@@ -59,7 +88,7 @@
     if (s === fsSeen) return;
     fsSeen = s;
     const d = norm(untrack(() => dir));
-    if (!d || !norm(fsChange.path).startsWith(d + '/')) return;
+    if (untrack(() => isDim) || !d || !norm(fsChange.path).startsWith(d + '/')) return;
     clearTimeout(fsT);
     fsT = setTimeout(() => load(true), 600);
   });
@@ -69,6 +98,7 @@
   $effect(() => () => { clearTimeout(fsT); if (preview.open && preview.host === 'memory') closePreview(); });
   // 返回键先关卡片里的预览（预览层登记得最晚，压在逐层视图的「退一层」与工作台 sheet 之上）
   $effect(() => { if (pvOn) return pushBackLayer(closePreview); });
+  $effect(() => { if (dnote) return pushBackLayer(() => { dnote = null; }); });
   const pvRel = $derived.by(() => {
     if (!pvOn) return '';
     const cur = preview.items[preview.index];
@@ -81,6 +111,7 @@
   let roots = $state(null);
   const rootName = (r) => r.name || (r.quick ? t('临时对话') : r.key ? r.key.replace(/^([A-Za-z])--/, '$1:/').replace(/-/g, ' ').trim() : tail(r.dir));
   const projName = $derived.by(() => {
+    if (isDim) return data?.name || tail(pick || ws) || 'dimensio';
     if (pick) { const r = roots?.find((x) => norm(x.dir) === norm(pick)); return r ? rootName(r) : tail(tail(pick) === 'memory' ? pick.replace(/[\\/]memory[\\/]?$/i, '') : pick); }
     const base = data?.base || ws;
     if (/[\\/]\.bridge-quickchat[\\/]/i.test(base)) return t('临时对话');
@@ -109,6 +140,7 @@
   // —— 打开一篇（画廊顺序 = 导图顺序，查看器里能左右翻）——
   function openNote(n) {
     if (!n || n.kind !== 'file') return;
+    if (isDim) { dnote = { ws: dir, id: n.ref }; return; }
     const list = index.order;
     const i = Math.max(0, list.findIndex((x) => x.id === n.id));
     openPreview(list.map((x) => ({ origin: 'cloud', rel: x.ref, ws: dir, name: x.ref.split('/').pop(), mt: files[x.ref]?.mtime || 0 })), i, { host: 'memory' });
@@ -130,7 +162,10 @@
   async function openRoots() {
     menu = menu === 'roots' ? '' : 'roots';
     if (menu !== 'roots' || roots) return;
-    try { roots = (await api.get('/api/claude/memory/roots')).roots || []; }
+    try {
+      if (isDim) roots = dimRoots || dimensioRoots(await api.get('/api/harness/api/memory/overview'));
+      else roots = (await api.get('/api/claude/memory/roots')).roots || [];
+    }
     catch (e) { rootsErr = tr(e?.body?.error) || t('加载失败'); }
   }
   function choose(d) { menu = ''; if ((d || '') !== pick) { pick = d || ''; data = null; } }
@@ -155,7 +190,7 @@
   const rootIsFile = $derived(graph?.tree.kind === 'file');
 </script>
 
-<div class="mm" bind:this={rootEl}>
+<div class="mm" class:th-light={theme === 'light'} class:th-dark={theme === 'dark'} bind:this={rootEl}>
   <header class="mm-head" bind:this={headEl}>
     <button class="mm-name" class:on={menu === 'roots'} aria-haspopup="menu" aria-expanded={menu === 'roots'} title={dir} onclick={openRoots}>
       <span class="mm-name-t">{projName}</span>
@@ -182,17 +217,25 @@
 
     {#if menu === 'roots'}
       <div class="mm-menu left" role="menu">
+        {#if canClaude && canDim}
+          <div class="mm-menu-h">{t('记忆来自')}</div>
+          <div class="mm-src" role="radiogroup" aria-label={t('记忆来自')}>
+            <button role="radio" aria-checked={!isDim} class:on={!isDim} onclick={() => setSrc('claude')}>Claude</button>
+            <button role="radio" aria-checked={isDim} class:on={isDim} onclick={() => setSrc('dimensio')}>dimensio</button>
+          </div>
+          <div class="mm-sep"></div>
+        {/if}
         <div class="mm-menu-h">{tc('claude', '看哪个项目的记忆')}</div>
         <button class="mm-mi" role="menuitemradio" aria-checked={!pick} onclick={() => choose('')}>
           <span class="mm-mi-t">{tc('claude', '当前对话所在项目')}</span>
-          <span class="mm-mi-s">{tc('claude', '与 Claude Code 读写的是同一个目录')}</span>
+          <span class="mm-mi-s">{isDim ? t('dimensio 在这个项目里记下的（按项目隔离）') : tc('claude', '与 Claude Code 读写的是同一个目录')}</span>
           {#if !pick}<svg class="mm-ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>{/if}
         </button>
         <div class="mm-sep"></div>
         {#if roots}
           {#each roots as r (r.dir)}
             <button class="mm-mi" role="menuitemradio" aria-checked={norm(pick) === norm(r.dir)} title={r.dir} onclick={() => choose(r.dir)}>
-              <span class="mm-mi-t">{rootName(r)}</span>
+              <span class="mm-mi-t">{r.kind === 'global' ? t('全局记忆') : rootName(r)}</span>
               <span class="mm-mi-s">{#if r.project}{parentOf(r.project) + ' · '}{/if}{t('{n} 篇', { n: r.count })} · {relTime(r.mtime)}{r.source ? ' · ' + (SOURCE[r.source] || r.source) : ''}</span>
               {#if norm(pick) === norm(r.dir)}<svg class="mm-ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>{/if}
             </button>
@@ -216,7 +259,7 @@
           <button class="mm-mi row" role="menuitem" onclick={() => { menu = ''; openSearch(stats.dead ? 'dead' : 'loose'); }}>{tc('claude', '检查死链与未索引')}</button>
         {/if}
         <button class="mm-mi row" role="menuitem" onclick={() => { menu = ''; load(!!data); }}>{t('刷新')}</button>
-        {#if dir}
+        {#if dir && !isDim}
           <div class="mm-sep"></div>
           <button class="mm-mi" role="menuitem" onclick={copyDir}>
             <span class="mm-mi-t">{tc('claude', '复制记忆目录路径')}</span>
@@ -245,9 +288,14 @@
     {:else if data && !data.exists}
       <div class="mm-msg">
         <svg class="mm-glyph" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="13" cy="24" r="5"/><circle cx="36" cy="12" r="4"/><circle cx="36" cy="24" r="4"/><circle cx="36" cy="36" r="4" stroke-dasharray="2.5 3"/><path d="M18 24h14M17 21c5-1 7-9 15-9M17 27c5 1 7 9 15 9"/></svg>
-        <b>{tc('claude', '这个项目还没有 Claude 记忆')}</b>
-        <span>{tc('claude', 'Claude 记下第一条后，这里会自动出现')}</span>
-        <span class="mm-path">{data.dir}</span>
+        {#if isDim}
+          <b>{t('这个项目还没有 dimensio 记忆')}</b>
+          <span>{t('dimensio 记下第一条后，这里会出现')}</span>
+        {:else}
+          <b>{tc('claude', '这个项目还没有 Claude 记忆')}</b>
+          <span>{tc('claude', 'Claude 记下第一条后，这里会自动出现')}</span>
+          <span class="mm-path">{data.dir}</span>
+        {/if}
       </div>
     {/if}
   </div>
@@ -298,13 +346,20 @@
 
   <!-- 卡片内的预览实例：transform 把 MediaViewer 的 fixed 根圈进来 -->
   <div class="mm-pv" class:on={pvOn}><MediaViewer host="memory" /></div>
+  {#if dnote}
+    {#await loadPage.dimensioMemoryNote() then mod}
+      {@const DimensioMemoryNote = mod.default}
+      <div class="mm-dn"><DimensioMemoryNote ws={dnote.ws} id={dnote.id} onclose={() => { dnote = null; }} onchanged={() => load(true)} /></div>
+    {/await}
+  {/if}
 </div>
 
 <style>
   /* 枝色：OKLCH 同亮度同饱和度、只换色相，深浅主题各一组（见 lib/memoryTree.js HUES） */
   .mm { --mm-l: .76; --mm-c: .105; --mm-neutral: color-mix(in srgb, var(--muted) 75%, transparent);
     position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-  :global(html[data-theme="light"]) .mm { --mm-l: .57; --mm-c: .12; }
+  :global(html[data-theme="light"]) .mm, .mm.th-light { --mm-l: .57; --mm-c: .12; }
+  .mm.th-dark { --mm-l: .76; --mm-c: .105; }
 
   /* —— 顶栏：项目名（点开切换）+ 篇数；右边搜索、看法切换、⋯ —— */
   .mm-head { position: relative; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 8px 8px 6px; z-index: 20; }
@@ -392,4 +447,10 @@
   /* 预览：盖满整张卡（transform 造 containing block，查看器的 fixed 根被圈在这里） */
   .mm-pv { position: absolute; inset: 0; transform: translateZ(0); pointer-events: none; z-index: 50; }
   .mm-pv.on { pointer-events: auto; }
+  .mm-dn { position: absolute; inset: 0; z-index: 50; }
+  /* 来源切换：菜单里的第一节，两段 */
+  .mm-src { display: flex; gap: 2px; margin: 2px 6px 4px; padding: 2px; border-radius: 10px; background: color-mix(in srgb, var(--text) 6%, transparent); }
+  .mm-src button { flex: 1; height: 30px; border-radius: 8px; font-size: 13px; color: var(--muted); }
+  .mm-src button.on { color: var(--text); background: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, .14), inset 0 0 0 .5px var(--divider); }
+  @media (pointer: coarse) { .mm-src button { height: 36px; } }
 </style>

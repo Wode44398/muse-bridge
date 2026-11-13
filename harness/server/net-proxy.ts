@@ -33,6 +33,27 @@ import os from "node:os";
 import { Agent, DecoratorHandler, EnvHttpProxyAgent, ProxyAgent, setGlobalDispatcher, type Dispatcher } from "undici";
 import { currentTrace, SPAN_HEADER, TRACE_HEADER, type TraceContext } from "./trace.ts";
 import { traceEvent } from "./trace-log.ts";
+import { coreModule } from "./core-link.ts";
+
+// 模型上游的连接保温，和 bridge 服务进程共用一份实现（src/runtime/upstream-conn.mjs，里面有病根与实测数字）。
+type ConnCore = {
+  KEEPALIVE: { keepAliveTimeout: number; keepAliveMaxTimeout: number };
+  withWarm(base: Dispatcher): Dispatcher;
+  retireDispatcher(d: Dispatcher | null): void;
+  fetchReconnect(url: string | URL, init?: RequestInit): Promise<Response>;
+};
+const CONN = coreModule<ConnCore>("runtime/upstream-conn.mjs");
+/** fetch + 撞上死连接立刻原样重发一次（模型请求用）。 */
+export const fetchReconnect = CONN.fetchReconnect;
+
+let warmCurrent: Dispatcher | null = null;
+/** 换全局出口：连接池调大空闲保留 + 保温在里层（心跳不进 trace），trace 拦截在外层；旧出口收掉。 */
+function installGlobal(agent: Dispatcher): void {
+  const prev = warmCurrent;
+  warmCurrent = CONN.withWarm(agent);
+  setGlobalDispatcher(tracedDispatcher(warmCurrent));
+  CONN.retireDispatcher(prev);
+}
 
 const DEFAULT_PORTS = [7897, 7890, 7891, 10809, 1080, 8889];
 const PROBE_TIMEOUT = 400; // 本地端口，连不上就是没开——不用等
@@ -228,12 +249,12 @@ function applyProxy(url: string): void {
     process.env.https_proxy = url;
     process.env.NO_PROXY = noProxyList();
     process.env.no_proxy = process.env.NO_PROXY;
-    setGlobalDispatcher(tracedDispatcher(new EnvHttpProxyAgent()));
+    installGlobal(new EnvHttpProxyAgent(CONN.KEEPALIVE));
   } else {
     for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
       delete process.env[k];
     }
-    setGlobalDispatcher(tracedDispatcher(new Agent()));
+    installGlobal(new Agent(CONN.KEEPALIVE));
   }
 }
 
@@ -358,7 +379,7 @@ export async function initOutboundProxy(): Promise<ProxyState> {
     return state;
   }
   // Q12：探测出结论之前（以及探不出结论时）也挂上出站拦截——Node 默认的 fetch 本来就是直连，换成带拦截的直连等价
-  setGlobalDispatcher(tracedDispatcher(new Agent()));
+  installGlobal(new Agent(CONN.KEEPALIVE));
   await refresh();
   setInterval(() => {
     refreshOnce().catch(() => {});

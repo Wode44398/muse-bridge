@@ -46,6 +46,8 @@ export interface TableEntry {
   think?: string;
   dflt?: string;
   media?: Readonly<MediaBudget>;
+  // OpenAI 协议下把历史思考回传为 reasoning_content（chat template 默认保留思考的家族，如开源权重的 Qwen3.8-Flash-Next）
+  replay?: boolean;
 }
 
 export interface ApiCaps {
@@ -57,6 +59,8 @@ export interface ApiCaps {
   kind?: "other";
   reasoning?: boolean;
   effortIds?: string[];
+  effortOff?: boolean;
+  effortDefault?: string;
   alwaysThinks?: boolean;
 }
 
@@ -73,15 +77,18 @@ export const BUDGET_SCALE: Readonly<Record<string, number>>;
 
 export function bareModelId(id: unknown): string;
 export function guessKind(id: unknown, apiType?: unknown): "chat" | "other";
-export function thinkingTemplate(key: string, protocol: Protocol | string, opts?: { dflt?: string }): ThinkingShape | null;
+export function thinkingTemplate(key: string, protocol: Protocol | string, opts?: { dflt?: string; route?: string; id?: string }): ThinkingShape | null;
 export function tableEntry(id: unknown): TableEntry | null;
+export function replaysThinking(id: unknown): boolean;
+/** 服务地址（或主机名）→ 线路（目前只有 "openrouter"；其余回 ""）。 */
+export function routeOf(baseUrlOrHost: unknown): string;
 export function fromApi(x: unknown): ApiCaps;
 export function parseModelList(j: unknown): unknown[] | null;
 export function modelIdOf(x: unknown): string;
 export function labelOf(x: unknown, id: string): string;
 export function guessModel(
   id: string,
-  opts?: { protocol?: Protocol | string; api?: unknown; defaults?: { contextWindow?: number; maxOutput?: number } | null },
+  opts?: { protocol?: Protocol | string; api?: unknown; defaults?: { contextWindow?: number; maxOutput?: number } | null; route?: string },
 ): ModelCaps;
 
 export function fixKnownBaseUrl(protocol: string, baseUrl: string): string;

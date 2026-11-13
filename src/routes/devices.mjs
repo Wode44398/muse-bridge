@@ -233,7 +233,7 @@ export function registerDeviceRoutes(router, { identify, adminCredential = null,
   //   · 按人设备令牌（runtime/agent-device-token.mjs，注册用户的 dimensio 实例）→ 那个用户自己，只能操作他名下的设备，
   //     op 限于 Claude 设备工具用得到的那几样（桌面 / 浏览器 / 命令 / 文件）。
   // 目标解析同 Claude 的设备工具：device 参数 > 会话连接的设备（带了 session 时按 <by>:<会话 id> 查）> 恰好一台在线。
-  const SCOPED_OPS = /^(desktop|browser|shell|fs\.(read|write|list|glob|stat|mkdir|move|delete))$/;
+  const SCOPED_OPS = /^(desktop|browsers?|shell|fs\.(read|write|list|glob|stat|mkdir|move|delete))$/;
   const internalCtx = (req, res) => {
     if (isLocalDirect(req)) {
       if (hostSecretOk(req)) return { ctx: contextFor({ kind: 'admin', user: null }), scoped: false };

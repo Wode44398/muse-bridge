@@ -23,8 +23,8 @@ OUT = os.path.join(WP, "depth")
 os.makedirs(OUT, exist_ok=True)
 
 # id -> source image (matches WPLIB in web/src/lib/wallpaper.svelte.js; flux = dynamic, excluded).
-# 内置壁纸现为「层峦 + 流光」：层峦是程序化生成的，深度图由 gen-ridges.mjs 按图层精确写出，不走模型估计，
-# 所以这里是空的。以后加照片类内置壁纸时在这里和 SPATIAL_IDS 一并补。
+# 内置壁纸现为「多洛米蒂 + 流光」：多洛米蒂的深度图已随原版资源放在私有 overlay 的 web/wallpapers/depth/，
+# 所以这里是空的。以后加照片类内置壁纸时在这里和 SPATIAL_IDS 一并补（输出改指 overlay 的 web/wallpapers/depth/）。
 SRC = {
 }
 

@@ -14,6 +14,13 @@ import type { PermissionView, Tool } from "../tools/types.ts";
 //   plan       — like read-only, but the agent is told to research and then submit
 //                a plan (ExitPlanMode) for the user to approve; approving flips the
 //                session to auto and the same run continues
+//   bypass     — admin-only "no friction" level, Claude-Code bypassPermissions style:
+//                every tool call is allowed outright — no cards, no ask/deny/risk-review/
+//                irreversible/control-plane gate, no repeat-denial. The sandbox half
+//                (whole-machine reach + secret-guard off) is driven separately by the
+//                session, which maps permissionMode="bypass" to sandbox.access="bypass".
+//                Tenant/member instances can never reach it (config.ts + setSessionMode
+//                both refuse), so bypass can never be used to escape tenant isolation.
 //
 // Rules are string patterns matched against a tool call's PRIMARY subject (the
 // command for Bash, the path for file tools, the url for fetches):
@@ -30,11 +37,11 @@ import type { PermissionView, Tool } from "../tools/types.ts";
 // 即生效（`cd x && rm -rf y` 撞上 deny `rm -rf:*`）；allow 要求每条子命令都被覆盖（`git push:*` 不再连
 // `git push && rm -rf ~` 一起放行），带运行时的值、写文件的重定向或 sudo 的子命令只认一字不差的规则；
 // 整条命令与规则原文一字不差（「本会话都允许」写的就是这种）照旧放行。
-export type PermissionMode = "auto" | "read-only" | "plan";
+export type PermissionMode = "auto" | "read-only" | "plan" | "bypass";
 
 // 合法档位的单一真相：配置校验与会话内切档端点都从这里取，
 // 免得新增一档时漏改其中一处。顺序即 UI 里的排列顺序。
-export const PERMISSION_MODES: PermissionMode[] = ["auto", "read-only", "plan"];
+export const PERMISSION_MODES: PermissionMode[] = ["auto", "read-only", "plan", "bypass"];
 
 export function isPermissionMode(v: unknown): v is PermissionMode {
   return typeof v === "string" && (PERMISSION_MODES as string[]).includes(v);
@@ -97,6 +104,7 @@ export interface Decision {
 
 export type DecisionSource =
   | "unknown-tool"
+  | "bypass"
   | "deny-rule"
   | "deny-path"
   | "mode"
@@ -498,6 +506,11 @@ export function decide(
     // Unknown tools default to high-risk deny (§6.4), never allow.
     return { effect: "deny", reason: `unknown tool "${toolName}"`, source: "unknown-tool" };
   }
+  // bypass：管理员专用的全权档。放行一切——不弹卡、不认 allow/deny/ask 规则、高危复核、不可恢复确认、
+  // 控制面文件保护、本 run 的拒绝台账。沙箱那层（整机 + 跳过密钥守卫）由会话把 permissionMode=bypass
+  // 映射成 sandbox.access="bypass" 达成；这里只管工具调用判定。租户/成员实例永远进不到这一档
+  // （config.ts resolveConfig 与 session.ts setSessionMode 都拒），所以 bypass 不会被用来越过租户隔离。
+  if (mode === "bypass") return { effect: "allow", reason: "", source: "bypass" };
   const subject = callSubject(toolName, args);
   const view = tool.permissionView?.(args) ?? null;
   const writes = view?.writes ?? [];

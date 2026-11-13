@@ -55,6 +55,7 @@ function normalize(id, p) {
     context: p.context === 'fork' ? 'fork' : 'fresh',
     useWorktree: typeof p.useWorktree === 'boolean' ? p.useWorktree : null,
     model: p.model ? clip(p.model, 80) : '',
+    effort: p.effort ? clip(p.effort, 40) : '',   // 项目对话的协调者给讨论串单独定的推理强度
     name: p.name ? clip(p.name, 40) : '',
     branchName: p.branchName ? clip(p.branchName, 80) : '',
     project: p.project ? clip(p.project, 80) : '',   // 开到别的项目（项目 id；空 = 父会话所在的项目）

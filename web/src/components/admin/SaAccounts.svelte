@@ -4,6 +4,8 @@
   import { api } from '../../lib/api.js';
   import { sa, loadAccounts, saToast, saConfirm } from '../../lib/serverAdmin.svelte.js';
   import { t, tr } from '../../lib/i18n.js';
+  import { ags, loadResets, resetsLeft } from '../../lib/agentSettings.svelte.js';
+  import ClaudeResets from '../ClaudeResets.svelte';   // 重置卡面板（与两套设置页共用）
 
   $effect(() => { sa.tick; loadAccounts(); });
 
@@ -16,6 +18,9 @@
     usageBusy = false;
   }
   $effect(() => { sa.tick; loadUsage(); });
+  // 重置卡（服务端有这项能力才出现）：点行里的「重置卡」在这个号下面展开面板
+  $effect(() => { sa.tick; loadResets(); });
+  let resetsOpen = $state('');
   const resetIn = (ms) => {
     const d = (ms || 0) - Date.now();
     if (d <= 0) return '';
@@ -108,7 +113,7 @@
           </span>
           <span class="sa-row-tx">
             <span style="font-weight:650">{accLabel(a.label)}
-              {#if u?.plan === 'max'}<span class="sa-badge purple plan">Max</span>{:else if u?.plan === 'pro'}<span class="sa-badge blue plan">Pro</span>{/if}
+              {#if u?.plan === 'ultra'}<span class="sa-badge purple plan">Ultra</span>{:else if u?.plan === 'max5x'}<span class="sa-badge purple plan">Max 5x</span>{:else if u?.plan === 'max'}<span class="sa-badge purple plan">Max</span>{:else if u?.plan === 'pro'}<span class="sa-badge blue plan">Pro</span>{/if}
             </span>
             <small class="sa-mono">{a.hasToken ? '…' + (a.tokenTail || '') : t('用本机登录态（~/.claude）')}</small>
           </span>
@@ -119,6 +124,10 @@
             </span>
           {/if}
           {#if !a.active}<button class="sa-btn sm pri" onclick={() => activate(a)}>{t('切到此号')}</button>{/if}
+          {#if ags.resetsOk}
+            {@const n = resetsLeft(ags.resets[a.id])}
+            <button class="sa-btn sm" class:on={resetsOpen === a.id} onclick={() => { resetsOpen = resetsOpen === a.id ? '' : a.id; }}>{n > 0 ? t('重置卡 {n}', { n }) : t('重置卡')}</button>
+          {/if}
           <button class="sa-btn sm" onclick={() => openEdit(a)}>{t('编辑')}</button>
           {#if sa.accounts.length > 1}
             <button class="sa-btn sm dgr" onclick={() => del(a)}>{t('删除')}</button>
@@ -132,16 +141,18 @@
           {:else}
             {#each [['five_hour', t('5 小时')], ['seven_day', t('每周')], ['fable', 'Fable']] as [k, name] (k)}
               {@const b = u[k]}
+              {@const free = !b && k === 'five_hour' && u.no_five_hour}
               <div class="m">
                 <div class="m-h"><span>{name}</span>
-                  {#if b}<b class={tone(b)}>{b.pct}%</b>{:else}<span class="m-na">—</span>{/if}
+                  {#if b}<b class={tone(b)}>{b.pct}%</b>{:else}<span class="m-na">{free ? t('无限制') : '—'}</span>{/if}
                 </div>
                 <div class="m-bar"><i class={b ? tone(b) : ''} style="width:{b ? Math.min(100, b.pct) : 0}%"></i></div>
-                <small>{b ? (b.status === 'rejected' ? t('已达上限') + ' · ' : '') + resetIn(b.resetsAt) : (k === 'fable' && u.plan === 'pro' ? t('Pro 无此额度') : '')}</small>
+                <small>{b ? (b.status === 'rejected' ? t('已达上限') + ' · ' : '') + resetIn(b.resetsAt) : (k === 'fable' && u.plan === 'pro' ? t('Pro 无此额度') : free ? t('这个号没有 5 小时限额') : '')}</small>
               </div>
             {/each}
           {/if}
         </div>
+        {#if ags.resetsOk && resetsOpen === a.id}<div class="rc-wrap"><ClaudeResets account={a} skin="sa" /></div>{/if}
       {/each}
     </div>
     <div style="height:8px"></div>
@@ -242,6 +253,7 @@
   .rt-log-r .sa-mono { color: var(--sa-tx3); margin-right: 6px; }
   .rt-log-r small { color: var(--sa-tx3); margin-left: 6px; }
   .m-note.err { color: var(--sa-red); }
+  .rc-wrap { padding: 0 0 14px 86px; max-width: 560px; }
   :global(.sa-root) .em { color: var(--sa-tx); font-weight: 600; }
   /* 窄屏：徽章 + 账号名占一行、按钮换到下一行（中英文都要——加了套餐徽章后中文名也会被挤成竖排） */
   @media (max-width: 560px) {
@@ -249,7 +261,7 @@
     .sa-row.acct .sa-row-tx { flex-basis: calc(100% - 86px); }
     /* 徽章列不再占固定 74px：徽章贴着账号名，按钮整排换到下一行，与用量条同一左边 */
     .sa-row.acct > span:first-child { width: auto !important; }
-    .meters { padding-left: 0; gap: 10px; }
+    .meters { padding-left: 0; gap: 10px; } .rc-wrap { padding-left: 0; }
   }
 
   /* 英文「Switch to this account」按钮宽得多：窄屏上徽章 + 账号名占一行、按钮换到下一行（只在 :lang(en) 下，中文不变） */

@@ -19,7 +19,7 @@
 //                        desktop          server          docker
 //   给谁用（多用户）      只给我自己       只给我自己      只给我自己     ← BRIDGE_AUDIENCE=shared 或 features.multiUser:true 打开
 //   监听地址             0.0.0.0          127.0.0.1       0.0.0.0        ← BRIDGE_HOST 覆盖；容器对外由宿主端口映射（BRIDGE_BIND）决定
-//   Claude in Chrome     开（仅 Windows） 关              关             ← 那是本机已登录的浏览器，服务器上没有
+//   Claude in Chrome     关               关              关             ← 2026-11-02 起一律默认关：agent 操作用户浏览器统一走 Web Bridge
 //   保持唤醒的实现       Windows：SetThreadExecutionState；Linux：systemd-inhibit；容器里不做
 //   启动日志             简短             打印访问地址、令牌与配对的取法（无界面，只能看终端 / 日志）
 //
@@ -142,7 +142,9 @@ export function resolveDeployProfile({ env = process.env, platform = process.pla
     multiUserDefault: audienceDefault === 'shared',
     audienceDefault, audienceSource, audience,
     listenHost, listenSource,
-    claudeInChromeDefault: profile === 'desktop' && platform === 'win32',
+    // 2026-11-02 起默认关（以前 Windows 本机桌面形态默认开）：bridge 里所有 agent 操作用户自己的浏览器统一走 Web Bridge
+    //（设备浏览器工具的 browser 参数，src/runtime/web-bridge.mjs），不再另走官方扩展的云中继；config.claudeInChrome:true 仍可显式打开
+    claudeInChromeDefault: false,
     keepAwake,
     hosting,
     label: PROFILE_LABEL[profile],

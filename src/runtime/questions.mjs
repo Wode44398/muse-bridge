@@ -1,10 +1,12 @@
-// AskUserQuestion bridge between Claude's tool-call interception and the phone.
-// The model's AskUserQuestion tool is interactive; headless it auto-returns an
-// empty answer (the phone never sees the question). We intercept it in
-// canUseTool, push the question to the phone over SSE, wait for the phone to
-// POST its choice to /api/answer, then feed that choice back to the model as
-// the (denied) tool result — deny.message is the only channel that becomes the
-// tool_result content the model reads.
+// AskUserQuestion bridge between Claude's tool-call interception and the user's
+// screens (phone app / web / desktop / agent-api chat.answer). The model's
+// AskUserQuestion tool is interactive; headless it auto-returns an empty answer.
+// We intercept it in canUseTool, push the question over SSE, wait for a client to
+// POST its choice to /api/answer, then hand the choice back the official way:
+// allow + updatedInput { ...input, answers } (sdkAnswerInput below) — the CLI runs
+// the tool itself and the model gets a normal (non-error) tool_result
+// "Your questions have been answered: …". deny + formatAnswer is only the fallback
+// for inputs the CLI's card-answer admitter would refuse (and for cancel/timeout).
 
 import { readBody } from './body.mjs';
 import { contextFor } from './identity.mjs';
@@ -36,6 +38,7 @@ class SessionPending {
     let per = this.#m.get(sid);
     if (!per) { per = new Map(); this.#m.set(sid, per); }
     per.set(String(entry.qid || ''), entry);
+    for (const fn of setListeners) { try { fn(sid, entry); } catch {} }
     return this;
   }
   delete(sid, qid) {
@@ -61,6 +64,9 @@ class SessionPending {
   }
   hasFor(sid, key) { return this.list(sid).some((e) => visibleTo(e, key)); }
 }
+// 登记一张卡时的旁听者（notices.mjs：按会话出「在等你回答」通知）。登记口是函数，免得 questions.mjs 反向 import。
+const setListeners = new Set();
+export function onQuestionSet(fn) { if (typeof fn === 'function') setListeners.add(fn); return () => setListeners.delete(fn); }
 const visibleTo = (e, key) => (e && e.ownerKey ? e.ownerKey === key : key === 'admin');
 export const sessionQuestions = new SessionPending();
 
@@ -107,7 +113,8 @@ export function formatAnswer(questions, ans) {
     return '（用户取消了这次选择，没有作答。可以改用普通文字向用户提问，或根据已有信息继续。）';
   }
   const answers = (ans && Array.isArray(ans.answers)) ? ans.answers : [];
-  const lines = ['用户在手机上回答了你刚才的提问，选择如下：'];
+  // 答案可能来自手机、网页、桌面端或接口（chat.answer），表头不写来源
+  const lines = ['用户回答了你刚才的提问，选择如下：'];
   questions.forEach((q, i) => {
     const a = answers[i] || {};
     const picks = [];
@@ -118,6 +125,78 @@ export function formatAnswer(questions, ans) {
     lines.push('答：' + (picks.length ? picks.join('、') : '（未选）'));
   });
   return lines.join('\n');
+}
+
+// —— 官方作答通道（2026-11-08）——
+// canUseTool 回 { behavior:'allow', updatedInput:{ ...input, answers, annotations? } }：answers 以题面为键、值是字符串，
+// CLI 拿它跑工具本身，模型读到的是正常结果「Your questions have been answered: "题"="答"…」（以前走 deny，
+// 转录里是 is_error + permission-rule 拒绝，模型会当成提问失败）。转录 toolUseResult 带同一份 answers，历史回放按它回填。
+// 规则对齐 CLI 2.1.311 的 card-answer admitter（askUserQuestion 的 admitCardAnswer）：
+//   · 只许新增 answers / annotations，其余字段必须与原调用一致——所以原样展开 input；
+//     input 自己已带 answers / annotations / response / followUp / afkTimeoutMs 时它会拒（或语义不明），返回 null 退回 deny；
+//   · 单选取选中的 label，没选只写了自定义就取自定义；单选既选了又写了自定义 → 自定义进 annotations.notes；
+//   · 多选：选中项 + 自定义按 CLI 的 joinQuotedList 用 ', ' 拼（含 ', ' 或引号的项 JSON 引起来），全是选项时 CLI 判「已作答」；
+//   · 没作答的题不放进 answers（CLI 对它不出摘要）；题面为空 / 重复（官方 schema 也不收）→ null。
+const SDK_RESERVED = ['answers', 'annotations', 'response', 'followUp', 'afkTimeoutMs'];
+export function joinAnswerList(items) {
+  return items.map((s) => (s.includes(', ') || s.includes('"') ? JSON.stringify(s) : s)).join(', ');
+}
+// joinAnswerList 的逆（同 CLI parseQuotedList）；格式不对返回 null。
+export function splitAnswerList(str) {
+  const out = [];
+  let rest = String(str ?? '');
+  while (rest !== '') {
+    if (rest.startsWith('"')) {
+      let end = -1, esc = false;
+      for (let i = 1; i < rest.length; i++) {
+        if (esc) { esc = false; continue; }
+        if (rest[i] === '\\') { esc = true; continue; }
+        if (rest[i] === '"') { end = i; break; }
+      }
+      if (end < 0) return null;
+      let v;
+      try { v = JSON.parse(rest.slice(0, end + 1)); } catch { return null; }
+      if (typeof v !== 'string') return null;
+      out.push(v);
+      rest = rest.slice(end + 1);
+    } else {
+      const k = rest.indexOf(', ');
+      const seg = k < 0 ? rest : rest.slice(0, k);
+      if (seg.includes('"')) return null;
+      out.push(seg);
+      rest = k < 0 ? '' : rest.slice(k);
+    }
+    if (rest === '') break;
+    if (!rest.startsWith(', ')) return null;
+    rest = rest.slice(2);
+    if (rest === '') return null;
+  }
+  return out;
+}
+export function sdkAnswerInput(input, ans) {
+  if (!input || typeof input !== 'object' || !Array.isArray(input.questions) || !input.questions.length) return null;
+  if (SDK_RESERVED.some((k) => Object.hasOwn(input, k))) return null;
+  const list = (ans && Array.isArray(ans.answers)) ? ans.answers : [];
+  const seen = new Set();
+  const answers = {};
+  const notes = {};
+  for (let i = 0; i < input.questions.length; i++) {
+    const q = input.questions[i] || {};
+    const key = typeof q.question === 'string' ? q.question : '';
+    if (!key || seen.has(key)) return null;
+    seen.add(key);
+    const a = list[i] || {};
+    const picks = Array.isArray(a.selected) ? a.selected.filter((s) => typeof s === 'string' && s) : [];
+    const custom = a.custom ? String(a.custom).trim().slice(0, 8000) : '';   // admitter 的 notes 上限 8192
+    if (q.multiSelect) {
+      const items = custom ? [...picks, custom] : picks;
+      if (items.length) answers[key] = joinAnswerList(items);
+    } else if (picks.length) {
+      answers[key] = picks[0];
+      if (custom) notes[key] = { notes: custom };
+    } else if (custom) answers[key] = custom;
+  }
+  return { ...input, answers, ...(Object.keys(notes).length ? { annotations: notes } : {}) };
 }
 
 // 审批卡的答复字段（/api/answer 与管理台代答共用）：只截长、不判值——取值由等待方校验。

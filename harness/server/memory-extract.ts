@@ -153,52 +153,112 @@ export interface ExtractedNote {
   [key: string]: unknown;
 }
 
-// 从模型输出里取 {"notes":[…]}：容忍 ```json 围栏与前后的废话；取不出来返回 null（调用方重试一次）
-export function parseNotes(text: string): ExtractedNote[] | null {
+// 从模型输出里取 {"<key>":[…]}：容忍 ```json 围栏与前后的废话；取不出来返回 null（调用方重试一次）。
+// 给了 looksLike 时再兜一层（离线整理 eval 11-07 实测，弱一点的模型常这样）：外层包装漏了、几个对象用逗号并排、或者写到一半
+// 停了——把文本里每个括号配平、解析得了、长得像一条（looksLike）的对象捡出来（被别的捡到的对象包着的不算）。
+export function parseJsonList(text: string, key: string, looksLike?: (o: ExtractedNote) => boolean): ExtractedNote[] | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) return null;
   try {
-    const parsed = JSON.parse(text.slice(start, end + 1)) as { notes?: unknown };
-    if (!Array.isArray(parsed.notes)) return null;
-    return parsed.notes.filter((n): n is ExtractedNote => Boolean(n) && typeof n === "object" && !Array.isArray(n));
+    const parsed = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+    const list = parsed[key];
+    if (Array.isArray(list)) return list.filter((n): n is ExtractedNote => Boolean(n) && typeof n === "object" && !Array.isArray(n));
   } catch {
-    return null;
+    /* 往下兜 */
   }
+  return looksLike ? salvageObjects(text, looksLike) : null;
 }
+
+function salvageObjects(text: string, looksLike: (o: ExtractedNote) => boolean): ExtractedNote[] | null {
+  const spans: Array<[number, number]> = [];
+  const open: number[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") open.push(i);
+    else if (ch === "}" && open.length) spans.push([open.pop()!, i]);
+  }
+  // 外层的先挑（起点小、终点大），被挑中的对象包着的就不再要
+  spans.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const out: ExtractedNote[] = [];
+  let coveredTo = -1;
+  for (const [a, b] of spans) {
+    if (a <= coveredTo) continue;
+    try {
+      const o = JSON.parse(text.slice(a, b + 1)) as unknown;
+      if (o && typeof o === "object" && !Array.isArray(o) && looksLike(o as ExtractedNote)) {
+        out.push(o as ExtractedNote);
+        coveredTo = b;
+      }
+    } catch {
+      /* 这一段不是完整 JSON */
+    }
+  }
+  return out.length ? out : null;
+}
+
+export const parseNotes = (text: string): ExtractedNote[] | null => parseJsonList(text, "notes");
 
 const timeoutMs = (): number => Number(process.env.DIMENSIO_MEMORY_EXTRACT_TIMEOUT_MS) || 120_000;
 const ATTEMPTS = 2;
 
-async function ask(
-  adapter: ProviderAdapter,
-  prompt: string,
-  signal: AbortSignal | undefined,
-  onUsage?: (u: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }) => void,
-): Promise<ExtractedNote[]> {
+// 模型答了、但几次都取不出那份 JSON（与断网、超时、限流分开：离线整理遇到它只跳过这一批）
+export class UnparseableReply extends Error {
+  constructor(key: string, chars: number) {
+    super(`no parseable ${key} JSON (${chars} chars)`);
+  }
+}
+
+export type SideUsage = { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number };
+
+// 一次不带工具、关思考的旁路请求，要回 {"<key>":[…]}；解析不了重试一次。离线整理（memory-dream.ts）也用它。
+export async function askForJsonList(opts: {
+  adapter: ProviderAdapter;
+  system: string;
+  prompt: string;
+  key: string;
+  signal?: AbortSignal;
+  onUsage?: (u: SideUsage) => void;
+  maxOutputTokens?: number;
+  looksLike?: (o: ExtractedNote) => boolean; // 包装不对时从文本里捡对象（parseJsonList）
+  attempts?: number; // 解析不了总共试几次（默认 2）
+}): Promise<ExtractedNote[]> {
+  const { adapter, signal } = opts;
   for (let attempt = 1; ; attempt++) {
     const bounded = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs())]) : AbortSignal.timeout(timeoutMs());
     let out = "";
     const stream = adapter.stream(
       {
-        system: MEMORY_EXTRACT_SYSTEM,
-        messages: [{ role: "user", content: [{ t: "text", text: prompt }] }],
+        system: opts.system,
+        messages: [{ role: "user", content: [{ t: "text", text: opts.prompt }] }],
         tools: [],
-        budget: { maxOutputTokens: 2000, thinking: "off" },
+        budget: { maxOutputTokens: opts.maxOutputTokens ?? 2000, thinking: "off" },
       },
       bounded,
     );
     for await (const ev of stream) {
       if (ev.e === "text_delta") out += ev.text;
-      else if (ev.e === "usage") onUsage?.(ev);
+      else if (ev.e === "usage") opts.onUsage?.(ev);
       else if (ev.e === "error") throw new Error(ev.kind);
     }
     if (bounded.aborted) throw new Error(signal?.aborted ? "aborted" : "timed out");
-    const notes = parseNotes(out);
-    if (notes) return notes;
-    if (attempt >= ATTEMPTS) throw new Error(`no parseable notes JSON (${out.trim().length} chars)`);
+    const list = parseJsonList(out, opts.key, opts.looksLike);
+    if (list) return list;
+    if (attempt >= (opts.attempts ?? ATTEMPTS)) throw new UnparseableReply(opts.key, out.trim().length);
   }
 }
+
+const ask = (adapter: ProviderAdapter, prompt: string, signal: AbortSignal | undefined, onUsage?: (u: SideUsage) => void): Promise<ExtractedNote[]> =>
+  askForJsonList({ adapter, system: MEMORY_EXTRACT_SYSTEM, prompt, key: "notes", signal, onUsage });
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && Boolean(x.trim())) : []);
@@ -237,8 +297,8 @@ export interface FileResult {
 export interface FileOptions {
   adapter: ProviderAdapter;
   digest: RunDigest;
-  // Remember 要的上下文：沙箱（工作区根）、有没有人在场、查本会话工具调用（verified 证据）、读没读过外部内容
-  ctx: Pick<ToolContext, "sandbox" | "humanAttended" | "lookupToolCall" | "externalContent">;
+  // Remember 要的上下文：沙箱（工作区根）、有没有人在场、查本会话工具调用（verified 证据）、读没读过外部内容、会话 id（记成来源会话）
+  ctx: Pick<ToolContext, "sandbox" | "humanAttended" | "lookupToolCall" | "externalContent" | "ownerId">;
   signal?: AbortSignal;
   onUsage?: (u: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }) => void;
 }

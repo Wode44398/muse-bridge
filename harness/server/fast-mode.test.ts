@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Turn } from "./agent/turn.ts";
-import { createAnthropicAdapter, FAST_COOLDOWN_MS, FAST_MODE_BETA, resetFastCooldown } from "./providers/anthropic.ts";
+import { createAnthropicAdapter, enforcesPrefixCheck, FAST_COOLDOWN_MS, FAST_MODE_BETA, resetFastCooldown, THINKING_BINDING_BETA } from "./providers/anthropic.ts";
 import { modelSupportsFast } from "./catalog.ts";
 import { getConfig, resolveConfig } from "./config.ts";
 
@@ -19,7 +19,7 @@ const done = new Response(
   { status: 200, headers: { "content-type": "text/event-stream" } },
 );
 
-async function capture(model: string, fast?: () => boolean): Promise<{ body: any; headers: Record<string, string> }> {
+async function capture(model: string, fast?: () => boolean, baseUrl = "https://anthropic.test"): Promise<{ body: any; headers: Record<string, string> }> {
   resetFastCooldown();
   const originalFetch = globalThis.fetch;
   let seen: { body: any; headers: Record<string, string> } | undefined;
@@ -28,7 +28,7 @@ async function capture(model: string, fast?: () => boolean): Promise<{ body: any
     return done.clone();
   }) as typeof fetch;
   try {
-    const adapter = createAnthropicAdapter({ provider: "anthropic", apiKey: "FAKE-key", model, baseUrl: "https://anthropic.test", fast });
+    const adapter = createAnthropicAdapter({ provider: "anthropic", apiKey: "FAKE-key", model, baseUrl, fast });
     for await (const _ of adapter.stream(turn)) void _;
   } finally {
     globalThis.fetch = originalFetch;
@@ -64,8 +64,10 @@ test("开关现读：同一个适配器，关掉后下一次请求就不带", as
 });
 
 test("目录的 fast 表与 2026-10-14 实测一致", () => {
-  for (const m of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"]) assert.equal(modelSupportsFast("anthropic", m), true, m);
-  for (const m of ["claude-sonnet-5-5", "claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-5-5"]) assert.equal(modelSupportsFast("anthropic", m), false, m);
+  // Fable 5.2（2026-11-09）：官方文档写明 Claude API 支持 fast（$16/$80），没有 key 实测
+  // Opus 4.8 的 fast 已弃用、2026-11-30 移除（官方 fast-mode 页），不再标 fast
+  for (const m of ["claude-fable-5-2", "claude-opus-5-5", "claude-opus-5"]) assert.equal(modelSupportsFast("anthropic", m), true, m);
+  for (const m of ["claude-sonnet-5-5", "claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-5-5", "claude-opus-4-8"]) assert.equal(modelSupportsFast("anthropic", m), false, m);
   assert.equal(modelSupportsFast("kimi", "k3"), false);
 });
 
@@ -129,4 +131,34 @@ test("fast 开着但撞的是普通额度的 429：不降级、不退避，照�
   assert.equal(events.find((e) => e.e === "error")?.retriable, true);
   const next = await runSeq([]);
   assert.equal(next.sent[0].body.speed, "fast");
+});
+
+// ── Fable 5.2：思考恒开 + 前缀检查兜底 ─────────────────────────────────────────────────────
+test("Fable 5.2 走 adaptive + effort，不发 budget_tokens（发了必 400）", async () => {
+  const { body } = await capture("claude-fable-5-2");
+  assert.deepEqual(body.thinking, { type: "adaptive" });
+  assert.deepEqual(body.output_config, { effort: "medium" });
+});
+
+test("前缀检查强制的型号：只认 Fable / Mythos 5.2 及以后", () => {
+  for (const m of ["claude-fable-5-2", "claude-mythos-5-2", "claude-fable-5-3", "claude-fable-6", "claude-fable-5-2[1m]"]) assert.equal(enforcesPrefixCheck(m), true, m);
+  for (const m of ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "k3"]) assert.equal(enforcesPrefixCheck(m), false, m);
+});
+
+test("Fable 5.2 + 官方端点：带 drop_block 与 beta 头；和 fast 的 beta 头并在一起", async () => {
+  const plain = await capture("claude-fable-5-2", () => false, "https://api.anthropic.com");
+  assert.deepEqual(plain.body.thinking, { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } });
+  assert.equal(plain.headers["anthropic-beta"], THINKING_BINDING_BETA);
+  const fast = await capture("claude-fable-5-2", () => true, "https://api.anthropic.com");
+  assert.equal(fast.body.speed, "fast");
+  assert.equal(fast.headers["anthropic-beta"], `${FAST_MODE_BETA},${THINKING_BINDING_BETA}`);
+});
+
+test("前缀检查兜底不外溢：别的型号、非官方地址都不带", async () => {
+  const opus = await capture("claude-opus-5-5", () => false, "https://api.anthropic.com");
+  assert.deepEqual(opus.body.thinking, { type: "adaptive" });
+  assert.equal(opus.headers["anthropic-beta"], undefined);
+  const relay = await capture("claude-fable-5-2", () => false);
+  assert.deepEqual(relay.body.thinking, { type: "adaptive" });
+  assert.equal(relay.headers["anthropic-beta"], undefined);
 });

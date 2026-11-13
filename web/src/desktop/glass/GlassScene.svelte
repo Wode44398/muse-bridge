@@ -4,7 +4,7 @@
   // 菲涅尔边缘增亮、定向高光、RGB 色散、泊松磨砂、柔影、内侧发丝描边、去带噪。
   // 彻底绕开「同屏 backdrop-filter 数量」限制——玻璃件数量只受 draw call 约束。
   // 用法（批4 主页 / 画廊）：
-  //   <GlassScene src="/assets/wallpapers/ridges.jpg" getPanes={() => panes} />
+  //   <GlassScene src={wallpaperUrl} getPanes={() => panes} />
   //   panes: [{ x,y,w,h, radius,bevel,refract,disp,frost,glow,tint:[r,g,b,a] }]（canvas 内 css px）
   //   动态源传 source=<canvas|video>（每帧上传纹理）；玻璃上的文字/图标是普通 DOM，叠在本组件之上。
   import { onMount } from 'svelte';

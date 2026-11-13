@@ -4,9 +4,10 @@
 
 - 侧栏最底下的账户卡 → **「设置」**（Settings）；主页右上账户胶囊里也有 **「设置」**。
 - 网页和手机上，设置是一个整页的列表（像手机的「设置」App）：根页按分组列出各项，点一行从右边推入它的子页；左上角返回，手机上也可以从左边缘往右滑、按返回键，电脑上按 Esc。在根页再返回就关掉设置。网页版设置里没有搜索。
-- **dimensio 的设置不在这里**：在 dimensio 页侧栏最底下的「设置」里（见 03-dimensio.md）。这里的 dimensio 那一页只有管理员的启用开关。
-- Windows 桌面客户端里的设置长得不一样：左栏最上面是 **「搜索」**（Search）和账户，下面一列分区——**「通用」**、**「外观」**、**「快捷键」**（Keyboard shortcuts）；Claude、dimensio、**「Agent 接入」**；**「扩展」**、**「额度与注册」**、**「设备」**、**「壁纸」**；**「安卓 App」**；**「连接与更新」**（Connection & updates）、**「反馈」**（Feedback）。各分区的内容和下面网页版对应的那一页一样；网页版「关于」里的服务器地址、公网地址在客户端的「连接与更新」里。
-- 存在哪：「通用」「外观」「壁纸」**只存在当前这个浏览器 / 设备里**，换设备要重新设；「Claude」那一页的设置（除了标着 **「这台设备」**（This device）的几项）**存在服务端**，按账号保存、各设备一致。
+- **dimensio 的设置也在这里**：「Agent」分组里的 dimensio 一行就是它的全部设置；dimensio 页侧栏最底下的「设置」打开的也是这一页（逐项见 03-dimensio.md「dimensio 的设置」）。
+- 宽屏电脑上，设置页会分成左右两栏：左边是根页的列表，右边是点开的那一页。
+- Windows 桌面客户端里的设置长得不一样：左栏最上面是 **「搜索」**（Search）和账户，下面一列分区——**「通用」**、**「外观」**、**「快捷键」**（Keyboard shortcuts）；Claude、dimensio、Media Studio（打开了才有）、**「模型中心」**（Model Hub）、**「Agent 接入」**；**「扩展」**、**「额度与注册」**、**「设备」**、**「壁纸」**；**「安卓 App」**；**「连接与更新」**（Connection & updates）、**「反馈」**（Feedback）。各分区的内容和下面网页版对应的那一页一样；网页版「关于」里的服务器地址、公网地址在客户端的「连接与更新」里。
+- 存在哪：「通用」「外观」「壁纸」**只存在当前这个浏览器 / 设备里**，换设备要重新设；「Claude」「dimensio」「Media Studio」这几页的设置（除了标着 **「这台设备」**（This device）的几项）**存在服务端**，按账号保存、各设备一致；模型中心里的服务也存在服务端。
 
 ## 根页一览
 
@@ -15,7 +16,8 @@
 | 分组 | 行 | 谁能看到 |
 |---|---|---|
 | （最上面） | 账户卡：名字和身份，点进去是「账户」；没登录时写「登录」 | 所有人 |
-| **「Agent」**（Agents） | Claude、dimensio，每个 agent 一行、各自一页；打开了 Gemini · Vertex 扩展时多一行 Gemini（Google 云凭据在它那一页，见 09-vertex.md） | 管理员看到所有开着的 agent；成员只有 Claude |
+| **「Agent」**（Agents） | Claude、dimensio，每个 agent 一行、各自一页；打开了 Media Studio 时多一行 Media Studio（见下面「Media Studio」与 09-media-studio.md） | 管理员看到所有开着的 agent；成员看到自己能用的 |
+| 同上 | **「模型中心」**（Model Hub）：配模型服务的唯一入口，排在各个 agent 之后（见下面「模型中心」与 10-model-hub.md） | 管理员；能用 Claude 的成员（只有他自己的那一份） |
 | 同上 | **「Agent 接入」**（Agent access） | 登录的人 |
 | **「插件」**（Plugins） | **「安卓 App」**——英文界面下也写这几个中文字 | 登录的人 |
 | **「服务器」**（Server） | **「扩展」**（Extensions）、**「额度与注册」**（Quotas & sign-ups）（多人用时才有）、**「服务端控制台」**（Admin console） | 只有管理员 |
@@ -50,41 +52,44 @@
 | 分组 / 行 | 里面有什么 |
 |---|---|
 | 页头 | 「启用 Claude」 开关（只有管理员能改）；还没配认证时提示「在下面『订阅号池』里添加账号」 |
-| **「订阅号池」**（Subscription Pool）——只有管理员 | 服务器上的 Claude 订阅账号，每个号的 5 小时 / 每周用量，**「添加账号」**（Add Account）；点一个号进去能切换、编辑、调顺序、删除。见 06-users-admin.md「Claude 账号」 |
-| **「模型服务」**（Provider）→ **「自定义 API」**（Custom API） | 给 Claude 页接别家的模型，见下面「自定义 API」 |
+| **「订阅号池」**（Subscription Pool）——只有管理员 | 服务器上的 Claude 订阅账号，每个号的 5 小时 / 每周（和 Fable）用量、套餐标签（Pro / Max / Ultra），没有 5 小时限额的号那一栏写「无限制」；**「添加账号」**（Add Account）；点一个号进去能切换、编辑（含手动标套餐）、调顺序、删除。见 06-users-admin.md「Claude 账号」 |
 | **「撞上限额时」**（When you hit a usage limit） | **「限额重置后自动继续」**（Auto-continue when limits reset）：撞上 5 小时限额后，额度恢复时自动接着跑完这一轮，默认开；管理员还有 **「额度用尽自动换号」**（Switch accounts when a limit is reached） |
 | **「服务意外重启时」**（If the service restarts unexpectedly） | **「自动继续被中断的对话」**（Resume interrupted conversations）：服务中途崩溃、被结束或 VM 重启打断了正在跑的对话时，服务恢复后约 15 秒自动让 Claude 从中断的地方接着做，默认开，按账号各自设置。同一件事最多连着续 3 次；中断超过 12 小时、或你已经先发了消息就不续。关掉后只留一句「这一轮没跑完」，要你自己说「继续」（见 02-claude-code.md「Claude 在干活的时候」） |
 | **「新会话默认」**（New session defaults） | **「权限模式」**（Permission mode）（管理员默认「自动」，其他人默认「接受编辑」）、**「输出风格」**（Output style）；能跑命令的身份还有 **「用工作树」**（Use a worktree）（只管这台设备） |
-| **「对话」**（Chat） | **「输入建议」**（Prompt suggestions）、**「对话内交互图表」**（Inline visualizations）、**「动态工作流」**（Dynamic workflows）（关了用不了 Ultracode）和 **「子 agent 调度偏好」**（Subagent dispatch preferences）、**「思考动画」**（Thinking animation）（这台设备：**「新版 Claude Code」**（Claude Code (new)）、**「新版聊天页」**（Chat (new)）、**「经典星标」**（Classic spark）三选一）、**「消息被拦时自动换模型」**（Switch models when a message is flagged）、**「批准计划时可清空上下文」**（Offer to clear context when approving a plan）、**「Claude 提问无人回答时」**（When Claude’s question goes unanswered）（一直等 / 5 / 10（默认）/ 30 分钟后继续）、**「回复语言」**（Response language）（跟随对话 / 简体中文 / English）；在用量弹层里拖过自动压缩点的，这里多一行 **「自动压缩点」**（Auto-compact point）可以恢复默认 |
+| **「对话」**（Chat） | **「输入建议」**（Prompt suggestions）、**「对话内交互图表」**（Inline visualizations）、**「动态工作流」**（Dynamic workflows）（关了用不了 Ultracode）、**「子 agent 调用策略」**（Subagent dispatch policy）（行尾是总开关，点进去管生效范围、几套策略、四档用哪个模型、「调用非 Claude 模型」和口述备注，见 02-claude-code.md）、**「思考动画」**（Thinking animation）（这台设备：**「新版 Claude Code」**（Claude Code (new)）、**「新版聊天页」**（Chat (new)）、**「经典星标」**（Classic spark）三选一）、**「消息被拦时自动换模型」**（Switch models when a message is flagged）、**「批准计划时可清空上下文」**（Offer to clear context when approving a plan）、**「Claude 提问无人回答时」**（When Claude’s question goes unanswered）（一直等 / 5 / 10（默认）/ 30 分钟后继续）、**「回复语言」**（Response language）（跟随对话 / 简体中文 / English）；在用量弹层里拖过自动压缩点的，这里多一行 **「自动压缩点」**（Auto-compact point）可以恢复默认 |
 | **「会话协作」**（Session collaboration） | **「Claude 发起新会话」**（New sessions started by Claude）：先问我（默认）/ 直接开始 / 只在我要求时（能跑命令的身份才有）；管理员还有 **「其它会话发来的消息」**（Messages from other sessions） |
+| **「项目对话」**（Project conversation）——管理员和完全信任账号 | **「开讨论串前先问我」**（Ask before starting a thread），默认关；**「同时在跑的讨论串」**（Threads running at once），默认 4 条；**「每天最多新开讨论串」**（New threads per day），默认 100 条（所有项目合计）；**「讨论串模型」**、**「讨论串推理强度」**——默认跟协调者同一个模型、强度「高」；单个项目可以在项目概览里另选。项目对话怎么用见 02-claude-code.md「项目对话」 |
 | **「Git 与拉取请求」**（Git and pull requests）——能跑命令的身份 | **「分支前缀」**（Branch prefix）（默认 claude）、**「工作树起点」**（Worktree base）（当前分支 / 远端默认分支）、**「自动修复拉取请求」**（Auto-fix pull requests）、**「拉取请求合并或关闭后自动归档」**（Auto-archive after PR merge or close）、**「提交与拉取请求署名」**（Commit and PR attribution）。需要 VM 上 gh 已登录，见 02-claude-code.md「拉取请求」 |
 | **「会话管理」**（Session management） | **「归档不活跃的会话」**（Archive inactive sessions）：从不（默认）/ 1 / 2 / 7 / 14 / 30 天 |
-| **「通知」**（Notifications）（这台设备） | **「权限请求」**（Permission requests）、**「提问」**（Questions）、**「任务完成」**（Task complete）三项，**只管这台设备**；总开关在「通用」里，关着时这里写「通知总开关在『通用』里关着」 |
+| **「通知」**（Notifications）（这台设备） | **「权限请求」**（Permission requests）、**「提问」**（Questions）、**「任务完成」**（Task complete）、**「任务出错」**（Task errors）四项，默认都开，**只管这台设备**；总开关、提醒哪几类、横幅、声音在「通用 → 通知」里（见下面「通用」） |
 | **「扩展与记忆」**（Extensions and memory） | 管理员：**「技能」**、**「连接器」**、**「插件」**——打开「扩展」页的对应标签，见 05-customize.md——、**「定时任务」**（Routines）；注册账号只有 **「技能」**——他自己的技能，见 05-customize.md「成员自己的技能」——和 **「定时任务」** |
 | **「安全」**（Security）——只有管理员 | **「允许绕过权限模式」**（Allow bypass permissions mode）（默认关）、**「允许自动模式」**（Allow auto mode）（默认开），对这台服务器上所有人生效。打开绕过权限前会再确认一次 |
+| **「调试」**（Debug）——只有管理员 | **「调试模式」**（Debug mode），默认关：给想帮忙改进这个软件的人用，见 02-claude-code.md「调试模式」 |
 
 - 灰着的选项后面写着「在下方『安全』里开启」：先去「安全」打开对应开关。
 - 提示「这一项你改不了」= 你的身份没有这一项（管理员项）；「这个版本的服务端还不认这一项」= 服务端比页面旧，先更新。
 - 这台 Muse 上不显示「这台电脑」里的保持唤醒设置；「思考动画」已包含完整的三套样式。
+- **「自定义 API」这一行没有了**：给 Claude 接别家模型现在在 **「设置 → 模型中心」**，老的自定义 API 升级时已自动并过去（见下面「模型中心」）。
+- 号池里逐号的「重置卡」在这台 Muse 上没有（公开版不带这项），号的详情页里看不到它是正常的。
 
-### 自定义 API（给 Claude 页接别家模型）
+## 模型中心
 
-**「设置 → Claude → 自定义 API」**（Settings → Claude → Custom API）：给 **Claude 页**接别家的模型，和 dimensio 里的「模型服务」不是一回事。管理员和每个注册账号各有自己的一份，互相看不到；成员的只能连公网地址、最多 10 个，用自己的 Key、不占本站额度。管理员可以把自己的服务共享给成员（见下面「共享给成员」）。
+**「设置 → 模型中心」**（Settings → Model Hub）——「Agent」分组里排在各个 agent 之后的那一行：Claude、dimensio、Media Studio 用的模型服务（接口地址 + API Key）都在这里加，一个服务加一次，再按模型决定给谁用。以前「设置 → Claude」里的「自定义 API」、dimensio 自己的模型服务和厂商 Key、Media Studio 的媒体服务，升级后第一次启动都自动并了进来，老对话照常能接着聊。
 
-- 点进去是一个整页面板 **「Claude · 自定义 API」**，**「添加服务」**：从常用厂商预设开始（DeepSeek、Kimi、OpenRouter 等，预设只填好地址和协议），或 **「从头配置」** 接任意兼容端点。
-- 填 **「接口地址」**（Base URL）、**「接口协议」**（API protocol）——OpenAI 兼容端点由 Muse Bridge 把 Claude Code 的请求整体翻译过去；兼容 Anthropic Messages 的端点则原样转发——再填 API Key（加密存在服务器上，不回传浏览器），点 **「从服务拉取」** 拿模型列表，选要用的，保存。也可以 **「手动添加」** 模型 ID。**「检测连接」**（Check connection）能试出地址和协议对不对。
-- 编辑器里还能设 **「调用参数」**、兼容选项（第三方端点不认 Claude Code 的一些字段时调这里）、超时与重试，以及 **「测试与日志」**。这台 Muse 上请求一律经 Muse 的出站代理，编辑器里没有代理开关。
-- 加好的模型出现在 Claude 页模型菜单的「More models」里，按服务分组；每个服务可以单独停用、从菜单里隐藏。
-- **在 Muse 上要先放行这个网站**：加之前让 Muse 跑 `allow-sites <接口地址>`，用户在 Muse 里批这个地址的审核卡（选项见 `../MUSE.md` 2.0）；没放行的话请求会超时（`../MUSE.md` 第 6 节）。
-- **共享给成员**（Share with members）——多人模式下的管理员才有：编辑器「连接」那一页的开关。打开后，卡片上写着 **「已共享给成员」**（Shared with members）；成员的模型菜单「More models」里出现这个服务（组名后面写着 **「管理员共享」**（Shared by admin）），他们的自定义 API 面板底下多一组 **「管理员共享给你的服务」**（Providers shared with you by the admin）只读卡片。
-  - 用的是管理员的 API Key，**计入成员的额度**（按轮数；第三方模型的金额算不准，花费记 0）。
-  - 成员看不到接口地址和 Key，改不了、删不了、测不了；出错时提示「这是管理员共享的服务……请联系管理员」，报错里不带地址。
-  - 管理员关掉共享或停用这个服务后，成员那边立刻消失，正在用它的会话会报「已被删除或停用」，换个模型再发。
+- 管理员看到整台服务器的总览：添加服务、识别模型、勾给哪个 agent、多把 Key、测试、**「共享给成员」**（Share with members）、Vertex AI（Google 云凭据）。成员只有自己的 **「我的服务」**（My providers）和 **「管理员共享给你的服务」**（Providers shared with you by the admin）。
+- **在 Muse 上要先放行网站**：加服务之前让 Muse 跑 `allow-sites <接口地址>`，用户在 Muse 里批这个地址的审核卡（选项见 `../MUSE.md` 2.0）；没放行的话识别模型、测试和对话都会一直等到超时。服务上的「走出站代理」开关要保持打开。
+- 逐项说明、报错对照、迁移细节见 10-model-hub.md。
 
 ## dimensio
 
-- **「设置 → dimensio」**——「Agent」分组里，只有管理员看得到：只有 「启用 dimensio」 开关和认证状态（一家 key 都没配时有提示）。
-- dimensio 自己的设置（API Key、记忆、权限规则、工作空间、访问范围、外观、显示全部工作过程、诊断）在 dimensio 页侧栏最底下的「设置」里，见 03-dimensio.md「dimensio 的设置面板」。
+- **「设置 → dimensio」**——「Agent」分组里的 dimensio 一行；dimensio 页侧栏最底下的「设置」打开的也是这一页。管理员看到全部（页头有「启用 dimensio」开关）；被授权用 dimensio 的成员也有这一页，只出他自己能改的。
+- 里面按分组排：模型（新对话默认的型号和思考深度）、模型服务（管理员这里只有一行「模型中心」）/ API Key（成员自己的 key）、权限与安全、工作空间、记忆、对话、子 agent 调度、会话协作、工作区协同、Git 与拉取请求、会话管理、通知、调试、诊断。逐项见 03-dimensio.md「dimensio 的设置」。
+
+## Media Studio
+
+- **「设置 → Media Studio」**（Settings → Media Studio）——打开了 Media Studio 时「Agent」分组里多出的那一行，Media Studio 页右上角的齿轮打开的也是这里。
+- 管理员：页头的「启用 Media Studio」开关、媒体服务（跳到模型中心、Google 云凭据）、四种媒体各自的默认模型、作品存进工作空间的位置，以及「高级」里哪些 agent 能生成、能生成哪几种、视频最高分辨率、内容安全过滤。成员：自己的默认模型和存储，以及自己接的媒体服务。
+- 逐项见 09-media-studio.md「设置 → Media Studio」。
 
 ## Agent 接入
 
@@ -117,19 +122,28 @@
 
 | 设置 | 选项 | 默认 | 说明 |
 |---|---|---|---|
-| **「通知」**（Notifications） | 开 / 关 | 开 | 总开关：Claude 一轮跑完、等你批准、等你回答时提醒（正开着页面、正看着这个对话时不打扰）。每一类在「Claude → 通知」里单独开关。**网页不会主动向浏览器要通知权限**：收不到就到浏览器的网站设置里，把这个网址的通知改成允许 |
+| **「通知」**（Notifications） | 点进去一页 | 开 | 见下面「通知」 |
 | **「语言」**（Language） | 简体中文 / English | 跟浏览器语言 | 改了页面会重新加载；dimensio 用同一个设置 |
 | **「原图加载」**（Load full-resolution images） | 开 / 关 | 关 | 开了看图直接加载原图（最清楚但费流量）；关着时先看轻量图，放大再换原图 |
 
-dimensio 也会在等你批准、等你回答、交了计划、跑完时通知。
+### 通知
+
+**「设置 → 通用 → 通知」**（Settings → General → Notifications）：会话消息通知——**每个会话单独一条**，标题就是会话名；正看着的那个会话不提醒。Claude 和 dimensio 的会话都算。
+
+- **「接收通知」**（Allow notifications）：总开关，默认开。
+- **「提醒哪些事」**（Notify me about）：**「在等你回答」**（Waiting for your answer）、**「需要你批准」**（Needs your approval）、**「完成」**（Done）、**「出错」**（Failed）。
+- **「提醒方式」**（Alerts）：**「横幅」**（Banners）——页面开着、在看别处时滑出一张横幅；**「显示内容详情」**（Show previews）——关掉后通知只写「你有一条新消息」；**「声音」**（Sound）和 **「提示音」**（Notification sound），手机上还有 **「振动」**（Vibration）。
+- **网页里**：页面在后台时靠浏览器的系统通知，要先点 **「允许浏览器通知」**（Allow browser notifications）并在浏览器的弹窗里允许；写着「已被拒绝」时，到地址栏左边的网站设置里把通知改回允许。
+- **安卓 App 里**：通知进手机通知栏；**「后台保持接收」**（Stay connected in background）打开后，没有会话在跑时也常驻一条不响的通知，电脑上或定时任务发起的会话有动静也能马上提醒（多耗一点电）。
+- **「发一条测试通知」**（Send a test notification）：试一下能不能收到。
+- Claude 那边每一类还能在「设置 → Claude → 通知」里单独关（只管这台设备）；dimensio 那边在「设置 → dimensio」的「通知」里。
 
 ## 外观
 
 - **「明亮」**（Light）/ **「深色」**（Dark）两张卡片选一张，默认深色；手动选了就不再跟随系统。
 - **「跟随系统明暗」**（Match system appearance）：跟着手机 / 电脑的深浅色自动换。
-- **「分页跟随主页明暗」**（Pages match Home appearance）：有主页时才有，Claude 页等跟着主页的明暗走。
 - **「禁用系统转场动画」**（Turn off transitions）：关掉页面切换的动画。
-- 只管网页本身（主页、Claude 页、设置）；dimensio 页的明暗在 dimensio 自己的设置里。
+- 明暗是**全站统一**的：主页、Claude 页、dimensio 页、Media Studio、设置一起变（以前的「分页跟随主页明暗」和 dimensio 单独的明暗设置都没有了）。在 Claude 页单击星标、在 dimensio 页点月桥标志也能切，见 01-access.md「语言和主题」。
 
 ## 壁纸、流体壁纸
 

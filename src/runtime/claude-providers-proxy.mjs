@@ -23,15 +23,24 @@ import { Agent } from 'undici';
 import { HOST_OWNER, isMemberOwner, providerProxyForced, getProvider, findProvider, providerKey, resolveCustomModel, resolveSubagentModel, customModelId, customSupportsFast, fastCapableProvider, fastProbe, recordFastProbe } from './claude-providers.mjs';
 import { assertPublicUrl, publicDispatcher } from './public-net.mjs';
 import { applyModelMiddleware, hasModelMiddleware } from './model-services.mjs';
+import { KEEPALIVE, withWarm, fetchReconnect, textWithin } from './upstream-conn.mjs';
 import { emitBridgeEvent } from '../plugins/events.mjs';
 import { isAutoModel, resolveAuto, applyAutoTarget } from './model-ratings.mjs';
 import { applyParams, pickTarget, keepsBetas, isOfficial, toOpenAI, openAIReasoning, OpenAIStream, fromOpenAI, estimateTokens } from './claude-providers-transform.mjs';
 // 型号知识 / 报错解读 / 检测与探测的判读和 dimensio 的自定义服务共用（src/model-knowledge/）
-import { guessModel, siblingBaseUrls, anthropicUrl, openaiUrl, parseModelList, modelIdOf, labelOf, modelsUrlCandidates } from '../model-knowledge/knowledge.mjs';
-import { vendorText, classifyProbe as classify, pickDetect, parseLimit, parseEffortList, looksNotChat, mentionsModel, endpointHint, RED_PNG } from '../model-knowledge/diagnose.mjs';
+import { guessModel, routeOf, isOffTier, siblingBaseUrls, anthropicUrl, openaiUrl, parseModelList, modelIdOf, labelOf, modelsUrlCandidates } from '../model-knowledge/knowledge.mjs';
+import { vendorText, classifyProbe as classify, pickDetect, parseLimit, parseEffortList, looksNotChat, looksBilling, mentionsModel, endpointHint, RED_PNG } from '../model-knowledge/diagnose.mjs';
 export { parseLimit, parseEffortList };
 
-const DIRECT = new Agent({ connect: { timeout: 30_000 } });   // 「不走出站代理」的服务用它直连
+// 关不掉思考的型号：标了「不发参数也会思考」，或档位表里压根没有关闭档（GPT-6、Grok、Muse 这类必须思考的）——
+// 推理 token 算在输出上限里，只给 64 会整段被推理吃光、回一个空回复
+// 翻译回 Anthropic 口径的用量（input 不含缓存读写）→ 日志条目：inTok 是输入总量，缓存读写另报
+const logUsage = (u) => {
+  const r = (u && u.cache_read_input_tokens) || 0, w = (u && u.cache_creation_input_tokens) || 0;
+  return { inTok: ((u && u.input_tokens) || 0) + r + w, outTok: (u && u.output_tokens) || 0, ...(r ? { cacheRead: r } : {}), ...(w ? { cacheWrite: w } : {}) };
+};
+const thinksAnyway = (m) => !!m && (m.alwaysThinks || (Array.isArray(m.efforts) && m.efforts.length > 0 && !m.efforts.some((t) => isOffTier(t.id))));
+const DIRECT = withWarm(new Agent({ ...KEEPALIVE, connect: { timeout: 30_000 } }));   // 「不走出站代理」的服务用它直连
 const RETRY_STATUS = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
 const DROP_RES = new Set(['connection', 'keep-alive', 'transfer-encoding', 'content-encoding', 'content-length']);
 
@@ -93,7 +102,9 @@ export async function ensureFastProbes(provider) {
         body: JSON.stringify({ model: m.id, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }], speed: 'fast' }),
       });
       const text = await up.text().catch(() => '');
-      const verdict = up.ok ? true : up.status === 429 && /fast[ _-]?mode/i.test(text) ? true : up.status === 400 && SPEED_UNSUPPORTED.test(text) ? false : null;
+      // 200 还要看应答里实际跑的速度：Opus 4.6 带 speed 照样 200，但按标准速度跑（usage.speed 是 standard）
+      const ranFast = () => { try { const sp = JSON.parse(text)?.usage?.speed; return sp === undefined || sp === 'fast'; } catch { return true; } };
+      const verdict = up.ok ? ranFast() : up.status === 429 && /fast[ _-]?mode/i.test(text) ? true : up.status === 400 && SPEED_UNSUPPORTED.test(text) ? false : null;
       if (verdict === null) probeRetryAt.set(m.id, Date.now() + 10 * 60_000);
       else { noteProbe(m.id, verdict); n++; }
     } catch { probeRetryAt.set(m.id, Date.now() + 10 * 60_000); }
@@ -146,7 +157,14 @@ async function upstreamFetch(provider, url, init, signal) {
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(() => ac.abort(new Error('timeout')), (provider.timeoutSec || 600) * 1000);
     try {
-      const res = await fetch(url, { ...init, signal: ac.signal, redirect: 'manual', ...(dispatcher ? { dispatcher } : {}) });
+      let res = await fetchReconnect(url, { ...init, signal: ac.signal, redirect: 'manual', ...(dispatcher ? { dispatcher } : {}) });
+      // 429 里混着「余额不足」（智谱 1113、OpenAI insufficient_quota）：重试没用，直接交回去改写成人话
+      if (res.status === 429) {
+        const text = await textWithin(res);
+        clearTimeout(timer);
+        res = new Response(text, { status: res.status, statusText: res.statusText, headers: res.headers });
+        if (looksBilling(429, text)) return res;
+      }
       clearTimeout(timer);
       if (RETRY_STATUS.has(res.status) && i < tries - 1) {
         const ra = parseFloat(res.headers.get('retry-after') || '');
@@ -203,11 +221,17 @@ export function lentMessage(provider, message) {
  * 人话不以「模型服务「名字」」开头：聊天错误卡的标题已经带了服务名（claude.mjs customErrorCard），英文界面按整句模式
  * 翻译时两段都以它开头会互相吞（i18n/en/claude-providers.js 里的模式键）。
  */
-export function upstreamError(provider, url, status, text) {
+// model：这次请求的型号 id——聚合站的下架 / 没权限报错常常只念型号名、不带「model」字样（OpenRouter：「No endpoints found for <型号>」），
+// 不带它会被误判成「接口地址不对」。
+export function upstreamError(provider, url, status, text, model = '') {
   const v = vendorText(text);
-  const where = `POST ${url}`;
-  const fix = `去「设置 › Claude › 模型服务 › ${provider.name}」`;
-  if (status === 404 && !(v.json && mentionsModel(v.msg))) {
+  // 模型中心发布的服务：地址是本机网关（带随机键），既不是用户填的、也不该出现在报错里，改不了的地方也别指过去
+  const hub = !!provider.plugin;
+  const where = hub ? '上游' : `POST ${url}`;
+  const fix = hub ? `去「设置 › 模型中心 › ${provider.name}」` : `去「设置 › Claude › 模型服务 › ${provider.name}」`;
+  // 余额不足（含披着 429 的）：改成 400，CLI 不再按限流反复重试，错误卡上也说得清
+  if (looksBilling(status, text)) return { status: 400, type: 'invalid_request_error', message: `这把 API Key 余额不足或额度用完了（${status}）${v.msg ? '：' + v.msg : ''}。到服务商那边充值后再试。` };
+  if (status === 404 && !(v.json && mentionsModel(v.msg, model))) {
     const kind = provider.protocol === 'openai' ? 'OpenAI Chat Completions' : 'Anthropic Messages';
     const hint = endpointHint(provider.protocol, provider.baseUrl);
     return { status: 400, type: 'invalid_request_error', message: `接口地址不对：${where} 返回 404，这里不是 ${kind} 接口。${hint}${fix}改地址，或点「检测连接」一键识别。` };
@@ -349,7 +373,7 @@ async function handle(req, res) {
       if (!up) up = await send(useFast, provider);
       if (!up.ok) {
         const text = await up.text().catch(() => '');
-        const mapped = upstreamError(provider, upUrl, up.status, text);
+        const mapped = upstreamError(provider, upUrl, up.status, text, target.id);
         if (mapped) { fail(mapped.status, mapped.message, mapped.type); return; }
         note(provider, { ...logBase, status: up.status, ms: Date.now() - t0, error: text.slice(0, 300) });
         const h = {}; up.headers.forEach((v, k) => { if (!DROP_RES.has(k)) h[k] = v; });
@@ -393,7 +417,7 @@ async function handle(req, res) {
     const up = await upstreamFetch(provider, upUrl, { method: 'POST', headers, body: JSON.stringify(oai) }, ac.signal);
     if (!up.ok) {
       const text = await up.text().catch(() => '');
-      const mapped = upstreamError(provider, upUrl, up.status, text);
+      const mapped = upstreamError(provider, upUrl, up.status, text, target.id);
       if (mapped) { fail(mapped.status, mapped.message, mapped.type); return; }
       fail(up.status, `上游返回 ${up.status}：${vendorText(text).msg}`);
       return;
@@ -401,7 +425,7 @@ async function handle(req, res) {
     if (!oai.stream) {
       const j = await up.json();
       const msg = fromOpenAI(j, target.id);
-      note(provider, { ...logBase, status: 200, ms: Date.now() - t0, inTok: msg.usage.input_tokens, outTok: msg.usage.output_tokens });
+      note(provider, { ...logBase, status: 200, ms: Date.now() - t0, ...logUsage(msg.usage) });
       sendJson(res, 200, msg);
       return;
     }
@@ -426,7 +450,7 @@ async function handle(req, res) {
     }
     if (buf.trim()) flush(buf.trim());
     res.end(tr.end());
-    note(provider, { ...logBase, status: 200, ms: Date.now() - t0, firstMs, inTok: tr.usage.input_tokens, outTok: tr.usage.output_tokens });
+    note(provider, { ...logBase, status: 200, ms: Date.now() - t0, firstMs, ...logUsage(tr.usage) });
   } catch (e) {
     if (e && e.aborted) { note(provider, { ...logBase, status: 499, ms: Date.now() - t0, error: '客户端中止' }); return; }
     if (res.headersSent) {
@@ -538,7 +562,7 @@ export async function fetchRemoteModels(draft) {
   return r.list.map((x) => {
     const id = modelIdOf(x);
     if (!id) return null;
-    return { id, label: labelOf(x, id), ...guessModel(id, { protocol: p.protocol, api: x }) };
+    return { id, label: labelOf(x, id), ...guessModel(id, { protocol: p.protocol, api: x, route: routeOf(p.baseUrl) }) };
   }).filter(Boolean).slice(0, 1000);
 }
 
@@ -596,14 +620,14 @@ export async function testProvider({ id, owner, draft, model: modelId } = {}) {
   // 失败也记进「最近请求」（只记已存的服务），设置页的状态点和日志才说得清是哪一次坏的
   const failed = (status, error, effort = '') => { if (pid) note(provider, { model: model.id, effort, stream: false, status: status || 502, ms: Date.now() - t0, error: String(error).slice(0, 300), test: true }); return { ok: false, status, ms: Date.now() - t0, model: model.id, error }; };
   try {
-    const r = await callOnce(provider, { ...model, enabled: true }, key, { messages: [{ role: 'user', content: '只回复两个字母：OK' }], maxTokens: model.alwaysThinks ? 1024 : 64, tier: '', keepPolicy: true, timeoutSec: Math.min(provider.timeoutSec || 600, 120) });
+    const r = await callOnce(provider, { ...model, enabled: true }, key, { messages: [{ role: 'user', content: '只回复两个字母：OK' }], maxTokens: thinksAnyway(model) ? 1024 : 64, tier: '', keepPolicy: true, timeoutSec: Math.min(provider.timeoutSec || 600, 120) });
     if (!r.ok) {
-      const mapped = upstreamError(provider, r.url, r.status, r.text);
+      const mapped = upstreamError(provider, r.url, r.status, r.text, model.id);
       return failed(r.status, mapped ? mapped.message : r.text.slice(0, 800), r.effort || '');
     }
     const msg = r.msg;
     const res = { ok: true, status: 200, ms: Date.now() - t0, model: model.id, reply: replyOf(msg).slice(0, 200), thinking: thoughtOf(msg), usage: msg.usage || null };
-    if (pid) note(provider, { model: model.id, effort: r.effort || '', stream: false, status: 200, ms: res.ms, inTok: msg.usage?.input_tokens || 0, outTok: msg.usage?.output_tokens || 0, test: true });
+    if (pid) note(provider, { model: model.id, effort: r.effort || '', stream: false, status: 200, ms: res.ms, ...logUsage(msg.usage), test: true });
     return res;
   } catch (e) {
     return failed((e && e.status) || 0, (e && e.message) || String(e));

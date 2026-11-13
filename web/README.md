@@ -39,9 +39,10 @@ web/
     lib/chat.svelte.js    SSE → reactive message model; load/cache sessions
     lib/server.js         apiUrl(): online-shell relative vs offline-apk remote base
     lib/store.js          token/serverBase via Android SharedPreferences, localStorage fallback
-    assets/font/          Bridge Sans (Inter) / Bridge Serif (Lora) / Bridge Icons + Symbols (Lucide), woff2;
-                          licenses in public/licenses/. A private overlay can swap brand fonts at runtime
-                          (lib/overlay.svelte.js, src/runtime/overlay-web.mjs)
+    lib/overlay.svelte.js the original visual resources (brand fonts, mascot and marks, glass layers, animations,
+                          wallpaper): one set only, baked into every build under /app/_ov/ by
+                          scripts/overlay-bundle.mjs from the private overlay (or frontend-assets in a release tree);
+                          the build fails if they are missing
     lib/
       state.svelte.js     shared runes state (session, settings, ui, caps, me, status, taskSheet, refusalBand)
       api.js              REST client (auth/sessions/status/routines/answer…)
@@ -53,7 +54,7 @@ web/
     components/claude/    tool groups, Agent row/card, Workflow card + dots, TaskSheet,
                           ModelNotice (timeline card), RefusalBand (band above the composer)
   public/
-    assets/mascot/        claude 小人 站立/举旗/行走 (own drawings) + Claude mark (LobeHub, MIT)
+    assets/icons/         own agent icons (ChatGPT / dimensio / Media Studio …)
     licenses/             third-party font / icon / logo licenses (shipped with every build)
 ```
 
@@ -112,8 +113,8 @@ Locked with the owner. Visual reference: `…/bridge前端设计/claude页面设
 - **History status dot**: hollow = idle · 3-dot loop = working · blinking = asking · solid = done (unviewed).
 - **Drawer**: only New chat / History / Routines (full CRUD). Everything else removed.
 - **Inline images**: Claude-generated media (gen_media SSE) only; vault image browsing is the workspace tab (later).
-- **Markdown**: marked + DOMPurify. **Running mark**: StarMark (own SVG + CSS keyframes); a private overlay may
-  provide other animation players (ovModule).
+- **Markdown**: marked + DOMPurify. **Running mark**: the original animation players (clay / sprite / classic strips,
+  via ovModule / ovData).
 
 ## Effort levels (Claude page)
 

@@ -1,10 +1,12 @@
 <script lang="ts">
-  // 本机模型控制面板（LocalAiChip 呼出）：顶上切引擎（Qwen 27B = llama.cpp / Strata 125B），状态 / 进程 / 端点 + 一键启停，
+  // 本机模型控制面板（上下文面板里「本机模型」那一行呼出，锚在顶栏右上角的 RunButton 上）：顶上切引擎（Qwen 27B = llama.cpp / Strata 125B），状态 / 进程 / 端点 + 一键启停，
   // 下面是启动参数（Qwen：上下文 / KV 缓存精度 / 视觉 / MTP 投机解码 + 显存估算；Strata：上下文 / KV / 视觉 / KV 流式）。
-  // 两台共用一张卡，起一台服务端会先停另一台。参数改的是草稿，点「保存」才落到服务端；
+  // 两台共用一张卡，起一台服务端会先停另一台。Strata 另有几个变体（会话选哪个型号起哪个）：面板写明这个会话要的变体，
+  // 在跑的不是它时给出提示与「切换到该变体」（停掉按要的那个重起；不切的话这个会话的请求会被拒，不会静默发给别的模型）。
+  // 参数改的是草稿，点「保存」才落到服务端；
   // 服务在跑时按钮变「保存并重启」——不重启新参数不生效，目录里的上下文长度却已经变了，两边会对不上。
-  // 开着时胶囊的轮询收紧到 2 秒。旧后端没有这组接口（404）：面板照样能开，状态写「状态不可用」、不出参数区。
-  // 由 Composer 渲染在输入框卡片外面（Popover 自己也会挪到 .hxroot 下）。
+  // 开着时 RunButton 的轮询收紧到 2 秒。旧后端没有这组接口（404）：面板照样能开，状态写「状态不可用」、不出参数区。
+  // 由 RunButton 渲染（Popover 自己也会挪到 .hxroot 下）。
   import { onMount } from "svelte";
   import {
     localAiApply,
@@ -16,7 +18,18 @@
     type StrataKv,
     type StrataSettings,
   } from "../../lib/api.ts";
-  import { actLocalAi, lai, localAiState, localAiStateText, refreshLocalAi, refreshLocalGpu, setLocalEngine, vramVerdict } from "../../lib/localai.svelte.ts";
+  import {
+    actLocalAi,
+    lai,
+    localAiMismatch,
+    localAiState,
+    localAiStateText,
+    refreshLocalAi,
+    refreshLocalGpu,
+    setLocalEngine,
+    variantInfo,
+    vramVerdict,
+  } from "../../lib/localai.svelte.ts";
   import { reloadMeta } from "../../lib/state.svelte.ts";
   import Popover from "../ui/Popover.svelte";
   import MenuLabel from "../ui/MenuLabel.svelte";
@@ -36,6 +49,17 @@
   ];
   const engine = $derived(lai.engine);
   const isStrata = $derived(engine === "strata");
+  // Strata：这个会话要的变体、在跑的变体（认不出 = null）、两者对不上时在跑的那个
+  const wanted = $derived(isStrata ? variantInfo(lai.st?.variant) : undefined);
+  const runningV = $derived(isStrata && lai.st?.process ? variantInfo(lai.st?.runningVariant) : undefined);
+  const clash = $derived(isStrata ? localAiMismatch() : null);
+  const unknownRunning = $derived(isStrata && !!lai.st?.process && lai.st?.variants !== undefined && lai.st?.runningVariant === null);
+  // 缺文件时怎么补：各变体的安装方式不同（E:\Strata 下的脚本，见 server/localai.ts STRATA_VARIANTS）
+  const INSTALL_HINT: Record<string, string> = {
+    "flash-iq3s": t("在 Strata 目录运行 SETUP.bat，装 Qwen 的 IQ3_S（约 80 GB），装好后再从这里启动。"),
+    "orca-iq3xxs": t("在 Strata 目录运行 download-orca.bat 下载 Orca 版（约 86 GB），装好后再从这里启动。"),
+    "flash-nvfp4": t("在 Strata 目录运行 setup-qad.bat（NVIDIA NVFP4-QAD，下载约 102 GB 并在本机转换），装好后再从这里启动。"),
+  };
 
   const CTX_OPTS = [
     { value: "32768", label: "32k" },
@@ -119,7 +143,8 @@
     if (!draft) return;
     const d = { ...draft };
     const e = engine;
-    await actLocalAi(() => localAiApply(d, e));
+    const m = lai.model;
+    await actLocalAi(() => localAiApply(d, e, m));
     if (!lai.err) {
       draft = lai.st?.settings ? { ...lai.st.settings } : d;
       void reloadMeta(); // 目录里本机型号的上下文 / 识图跟着变
@@ -152,6 +177,12 @@
       <span class="k">{t("状态")}</span>
       <span class="v" class:on={phase === "on"} class:hx-shimmer={phase === "starting"}>{text}</span>
     </div>
+    {#if wanted}
+      <div class="kv"><span class="k">{t("变体")}</span><span class="v" title={wanted.model}>{tr(wanted.label)}</span></div>
+    {/if}
+    {#if runningV && runningV.id !== wanted?.id}
+      <div class="kv"><span class="k">{t("在跑")}</span><span class="v bad" title={runningV.model}>{tr(runningV.label)}</span></div>
+    {/if}
     {#if lai.st?.pid}
       <div class="kv"><span class="k">{t("进程")}</span><span class="v mono">PID {lai.st.pid}</span></div>
     {/if}
@@ -171,6 +202,26 @@
       <p class="err">{tr(lai.err)}</p>
     {/if}
 
+    {#if clash && wanted && lai.st?.installed}
+      <p class="warn">
+        {t("Strata 正在跑「{running}」，这个会话选的是「{wanted}」。不切换的话这个会话的消息不会发出去。", { running: tr(clash.label), wanted: tr(wanted.label) })}
+      </p>
+      {#if wanted.missing?.length}
+        <p class="warn">{t("「{wanted}」还缺文件，暂时切换不了：", { wanted: tr(wanted.label) })}</p>
+        <ul class="missing">
+          {#each wanted.missing as f (f)}<li class="mono" title={f}>{f}</li>{/each}
+        </ul>
+      {:else}
+        <div class="act">
+          <Button variant="accent" size="sm" full loading={lai.busy} onclick={() => actLocalAi(() => localAiStart(engine, lai.model ?? wanted.model))}>
+            {lai.busy ? t("正在切换…") : t("切换到「{wanted}」", { wanted: tr(wanted.label) })}
+          </Button>
+        </div>
+        <p class="hint">{t("会停掉在跑的变体再加载约 1–3 分钟，期间本机对话会中断。")}</p>
+      {/if}
+    {:else if unknownRunning}
+      <p class="hint">{t("认不出在跑的是哪个变体（可能是手工用别的配置起的），发出去的请求按它答。")}</p>
+    {/if}
     {#if lai.st && !lai.st.installed}
       <p class="hint">{t("这台机器上没有找到启动脚本，无法从这里控制。")}</p>
     {:else if lai.st?.missing?.length && !lai.st.process}
@@ -178,23 +229,23 @@
       <ul class="missing">
         {#each lai.st.missing as f (f)}<li class="mono" title={f}>{f}</li>{/each}
       </ul>
-      <p class="hint">{isStrata ? t("在 Strata 目录运行 SETUP.bat，装 Qwen 的 IQ3_S（约 80 GB），装好后再从这里启动。") : t("补齐后再启动。")}</p>
+      <p class="hint">{isStrata ? (INSTALL_HINT[lai.st.variant ?? "flash-iq3s"] ?? t("补齐后再启动。")) : t("补齐后再启动。")}</p>
     {:else if phase === "on"}
       <div class="act">
-        <Button variant="danger" size="sm" full loading={lai.busy} onclick={() => actLocalAi(() => localAiStop(engine))}>
+        <Button variant="danger" size="sm" full loading={lai.busy} onclick={() => actLocalAi(() => localAiStop(engine, lai.model))}>
           {lai.busy ? t("处理中…") : t("停止本地 AI")}
         </Button>
       </div>
-      <p class="hint">{isStrata ? t("停止后释放显存与约 50 GB 内存；下次使用需重新加载。") : t("停止后释放显存；下次使用需重新加载。")}</p>
+      <p class="hint">{isStrata ? t("停止后释放显存与约 50–70 GB 内存；下次使用需重新加载。") : t("停止后释放显存；下次使用需重新加载。")}</p>
     {:else}
       <div class="act">
-        <Button variant="accent" size="sm" full loading={lai.busy || phase === "starting"} onclick={() => actLocalAi(() => localAiStart(engine))}>
+        <Button variant="accent" size="sm" full loading={lai.busy || phase === "starting"} onclick={() => actLocalAi(() => localAiStart(engine, lai.model))}>
           {lai.busy || phase === "starting" ? t("正在启动…") : t("启动本地 AI")}
         </Button>
       </div>
       <p class="hint">
         {isStrata
-          ? t("125B MoE：专家常驻内存约 50 GB，加载需 1–3 分钟，就绪后圆点变绿。会先停掉 Qwen 27B。")
+          ? t("125B MoE：专家常驻内存约 50–70 GB（NVFP4 最多），加载需 1–3 分钟，就绪后圆点变绿。会先停掉 Qwen 27B。")
           : t("约 18GB 权重加载需 30–60 秒，就绪后圆点变绿。")}
       </p>
     {/if}

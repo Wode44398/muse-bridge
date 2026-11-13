@@ -48,7 +48,7 @@ import { agentStart, agentStream, agentEnd, notifyKind } from './notify.js';
 // 设置 › Claude（服务端按身份存、多设备同步）：输入建议 / 自动压缩点；本文件 chatParams 里有局部变量 cs，取别名
 import { cs as claudeCs } from './claudeSettings.svelte.js';
 import { pendingOutputStyle, markOutputStyleSent, adoptOutputStyleSent, absorbSessionOutputStyle } from './outputStyle.svelte.js';
-import { noteAgentBrowser, noteAgentTerm } from './dock.svelte.js';
+import { noteAgentBrowser, noteAgentTerm, noteBrowserMount, refreshBrowserMount } from './dock.svelte.js';
 import { handleWsx, reportUi } from './uiReport.js';
 import { noteFsChange } from './fsSync.svelte.js';
 import { storeGet, storeSet } from './store.js';
@@ -60,7 +60,7 @@ import { prefillComposer, composerHasDraft } from './composerBridge.svelte.js';
 import { promoteComposerDraft, syncComposerDraftKey } from './composerDrafts.svelte.js';
 import { mergeProgress, settleProgress, workflowNameFromInput, usageOf, normTaskStatus, taskRunning } from './taskModel.js';
 // 权限模式 / 逐次审批卡 / 计划审批卡（2026-10-20）：帧处理与状态都在 permissions.svelte.js，这里只转发
-import { onPermEvent, permOnAttach, permOnFinish, hasPendingApproval, draftPermissionMode, resetPermDraft, steerWhileWaiting } from './permissions.svelte.js';
+import { onPermEvent, permOnAttach, permOnFinish, hasPendingApproval, draftPermissionMode, draftShape, adoptDraftShape, setDraftShape, resetPermDraft, steerWhileWaiting } from './permissions.svelte.js';
 import { t as tt, tr } from './i18n.js';   // 本文件的 t 是工具行/任务局部变量，翻译函数取别名 tt
 import { noteFamilyLink, noteCollabEvent } from './sessionFamily.svelte.js';
 import { noteSessionArchived } from './sessionArchive.svelte.js';   // 单条加载带回的归档态（「此会话已归档」横条）
@@ -364,6 +364,8 @@ function makeTool(x) {
     ...(x.compact ? { compact: makeCompact(x.compact) } : {}),   // 上下文压缩条目（name=COMPACT_TOOL）
     task: x.task ? makeTask(x.task) : null,
     ...(card ? { card } : {}),   // 插件工具的结果卡片（render:'card'，lib/toolCard）
+    ...(x.images > 0 ? { images: Math.min(24, x.images | 0) } : {}),   // 结果里的图片张数（状态行缩略图条，图按 /api/tool-image 取）
+    ...(x.t0 ? { t0: x.t0 } : {}),   // 直播开始时刻（状态行行内计时；历史行没有）
   };
 }
 // 压缩条目的载荷：token 数给官方文案「Compacted session · saved N tokens」，summary = 压缩后注入的
@@ -436,7 +438,7 @@ function pushTool(m, x) {
   const join = last && last.kind === 'tools' && toolJoins(prev ? prev.name : '', x.name);
   if (!join) m.segments.push({ kind: 'tools', tools: [], open: false });
   const seg = m.segments[m.segments.length - 1];
-  seg.tools.push(makeTool(x));
+  seg.tools.push(makeTool({ t0: Date.now(), ...x }));
   const entry = seg.tools[seg.tools.length - 1];   // 取回 proxy（push 进 $state 后原字面量不再响应）
   if (entry.id) toolById.set(entry.id, entry);
   return entry;
@@ -455,7 +457,38 @@ function ensureTask(entry, seed) {
   return t;
 }
 function findTaskEntry(ev) {
-  return (ev.taskId && taskById.get(ev.taskId)) || (ev.toolUseId && (taskById.get(ev.toolUseId) || toolById.get(ev.toolUseId))) || null;
+  return (ev.taskId && taskById.get(ev.taskId)) || (ev.toolUseId && (taskById.get(ev.toolUseId) || toolById.get(ev.toolUseId)))
+    || adoptHistoryTask(ev.taskId, ev.toolUseId);
+}
+// 挂起接力后刷新 / 换设备：发起后台任务的工具行在前几轮，来自历史重建（toUiMessages），从没进过索引——
+// 当前这一轮的 task_* 帧会全部找不到主而丢掉（卡片停在 unknown → 显示 Completed、Phases 只剩 meta 占位）。
+// 索引里没有就按 taskId / tool_use id 从视图里反查一次，找到就补进索引。
+function adoptHistoryTask(taskId, toolUseId) {
+  if (!taskId && !toolUseId) return null;
+  for (let i = chat.messages.length - 1; i >= 0; i--) {
+    const msg = chat.messages[i];
+    if (!msg || msg.role !== 'assistant') continue;
+    for (const s of (msg.segments || [])) {
+      if (!s || s.kind !== 'tools') continue;
+      for (const tl of (s.tools || [])) {
+        if (!tl || !tl.task) continue;
+        if (!((taskId && tl.task.taskId === taskId) || (toolUseId && tl.id === toolUseId))) continue;
+        if (tl.task.taskId) taskById.set(tl.task.taskId, tl);
+        if (tl.id) taskById.set(tl.id, tl);   // 不进 toolById：那张表管「入段去重」，历史行塞进去会让重放的同 id 工具帧被当成已有行跳过
+        return tl;
+      }
+    }
+  }
+  return null;
+}
+// 服务端电平说它还活着（bg_hold 清单 / 新到的进度帧）：历史里的 unknown、或 normSeg 兜底收成的 stopped 拉回 running
+function reviveTask(t) {
+  if (!t) return;
+  if (t.status === 'unknown' || t.autoStopped) {
+    t.status = 'running';
+    t.endedAt = 0;
+    if (t.autoStopped) { t.autoStopped = false; if (t.summary === tt('进程结束时中止')) t.summary = ''; }
+  }
 }
 // 子 agent 转录条目（agent_msg）：连续文本并成一条、连续工具并成一组、思考只留占位。
 function appendAgentEntry(t, ev) {
@@ -643,7 +676,7 @@ function applyStatusEvent(ev) {
     case 'ctx_usage': if (ev.sessionId && ev.usage && ev.usage.max) status.usages[ev.sessionId] = ev.usage; return;
     // ultracode：这一轮 Ultracode 真开没开（undefined = 服务端没取到，按所选显示）；旧服务端的 level:'ultracode' 拆开
     case 'effort': if (ev.sessionId) status.efforts[ev.sessionId] = ev.level === 'ultracode' ? { level: 'xhigh', ultracode: true, at: Date.now() } : { level: ev.level || null, ...(typeof ev.ultracode === 'boolean' ? { ultracode: ev.ultracode } : {}), at: Date.now() }; return;
-    case 'limits': if (ev.limits) { status.limits = ev.limits; status.updatedAt = ev.updatedAt || Date.now(); } return;
+    case 'limits': if (ev.limits) { status.limits = ev.limits; status.updatedAt = ev.updatedAt || Date.now(); if ('noFiveHour' in ev) status.noFiveHour = !!ev.noFiveHour; } return;
     case 'perm_mode': onPermEvent(null, ev); return;
   }
 }
@@ -704,6 +737,7 @@ function computeHint(m, now) {
   if (m.retry) return { k: 'retry', ...m.retry };
   if (m.paused || m.offerQid || m.segments.some((s) => s.kind === 'ask' && !s.answered) || hasPendingApproval(m, session.id)) return { k: 'ask' };   // offerQid：「新会话 / 在这里做」卡在等
   if (m.bgHold) return null;   // 挂起等后台任务：右侧任务芯片已经说明在等什么
+  // 官方 /code 页 working line 按思考时长分档（rdt：15/30/45/60 秒）——注意不是聊天页那套每 8 秒轮换的动词
   const sec = Math.floor((now - m.startedAt) / 1000);
   const thinking = () => ({ k: 'think', n: sec >= 60 ? 4 : sec >= 45 ? 3 : sec >= 30 ? 2 : sec >= 15 ? 1 : 0 });
   if (m.thinkStart) return thinking();
@@ -762,8 +796,9 @@ function onEvent(m, ev) {
     case 'session':
       if (ev.sessionId) {
         // 新会话首轮：id 此刻才定下来——把发送时的选择器记忆补绑到这个会话上。
-        if (!session.id) { notePrefsNow(ev.sessionId); promoteComposerDraft(ev.sessionId); adoptOutputStyleSent(ev.sessionId); }   // 输入栏草稿跟着改名，不当成切会话；随第一条带的输出风格转记成会话覆盖
+        if (!session.id) { notePrefsNow(ev.sessionId); promoteComposerDraft(ev.sessionId); adoptOutputStyleSent(ev.sessionId); adoptDraftShape(ev.sessionId); }   // 输入栏草稿跟着改名，不当成切会话；随第一条带的输出风格转记成会话覆盖；项目草稿转记成项目对话
         session.id = ev.sessionId; rememberSession(ev.sessionId);
+        dropPendingNew(pendingNew.mine);   // id 到了：侧栏的占位换成真行
         if (ev.wt && ev.wt.cwd) sessionWt[ev.sessionId] = ev.wt;   // worktree 会话：工作台当场切过去
       }
       // fast 实况回执：开了开关也可能因冷却/额度没点亮（status.fast: null=未知/未开）。
@@ -797,7 +832,7 @@ function onEvent(m, ev) {
     // 只认流里的事件落段（单写者）——发起插话的 POST 只回 JSON，不碰消息列表。
     case 'steer':
       if (!m.segments.some((s) => s.kind === 'steer' && s.uuid && s.uuid === ev.uuid)) {
-        m.segments.push({ kind: 'steer', text: ev.text || '', files: Array.isArray(ev.files) ? ev.files : [], uuid: ev.uuid || '', read: false });
+        m.segments.push({ kind: 'steer', text: ev.text || '', files: Array.isArray(ev.files) ? ev.files : [], atts: toUiAttachments(ev.atts), uuid: ev.uuid || '', read: false });
       }
       break;
     case 'steer_state': {
@@ -848,6 +883,7 @@ function onEvent(m, ev) {
         t.status = ev.isError ? 'error' : 'done'; if (typeof ev.ms === 'number') t.ms = ev.ms;
         const card = cardOfTool(ev);   // 插件工具的结果卡片：服务端在 tool_done 带 card / content 时画出来
         if (card) t.card = card;
+        if (ev.images > 0) t.images = Math.min(24, ev.images | 0);
       }
       break;
     }
@@ -942,6 +978,7 @@ function onEvent(m, ev) {
       const entry = findTaskEntry(ev);
       if (!entry) break;
       const t = ensureTask(entry, { taskId: ev.taskId, status: 'running' });
+      reviveTask(t);
       if (ev.usage) t.usage = usageOf(ev.usage);
       if (ev.lastTool) t.lastTool = ev.lastTool;
       if (ev.summary) t.summary = ev.summary;
@@ -1017,9 +1054,12 @@ function onEvent(m, ev) {
       m.bgHold = { count: typeof ev.count === 'number' ? ev.count : (tasks.length || 1), tasks, deadline: ev.deadline || 0 };
       // 后台 shell 的命令行只有服务端 Stop hook 拿得到——合并进对应工具行的 task 记录，
       // 任务面板展开即可见（工具行自带的 description 常常只是一句话概括）。
+      // 清单里的任务就是还活着：工具行在前几轮（刷新后来自历史）时顺手找回并拉回 running，
+      // 卡片状态才与任务面板的 Running 分组一致，之后的进度帧也有主可落。
       for (const t of tasks) {
-        const entry = t && t.taskId ? taskById.get(t.taskId) : null;
+        const entry = t && t.taskId ? findTaskEntry({ taskId: t.taskId }) : null;
         if (!entry || !entry.task) continue;
+        reviveTask(entry.task);
         if (t.command && !entry.task.command) entry.task.command = t.command;
         if (t.kind && !entry.task.kind) entry.task.kind = t.kind;
       }
@@ -1146,6 +1186,7 @@ function finishTurn(m) {
     agentEnd('Claude', errored ? tt('出错：{error}', { error: tr(m.error || '') }) : (ft ? ft.md : ''), { error: errored, watching: ui.screen === 'claude' && !document.hidden });
   }
   rememberSession(session.id);
+  dropPendingNew(pendingNew.mine);   // 这一轮收了（含没拿到 id 就报错的）：占位不留
   session.busy = false;
   chat.reconnecting = false;
   chat.unverified = false;   // 终止事件 / 服务端确认没在跑 / 用户亲手停 / 明确报错——结局都是确定的
@@ -1180,6 +1221,37 @@ function errText(e) {
   return msg || tt('出错了');
 }
 
+// attach 帧说的那一轮，是不是屏上这条流式气泡所属的那一轮？
+// 气泡挂过直播就有 turnId（服务端那一轮的标识），直接比；本端亲手发出、还没重挂过的气泡没有 turnId，
+// 退而比「最后一条用户气泡的文字」与这一轮的 prompt——不一样就是别的轮（自动续跑句、排队消息、别的设备发的）。
+// 拿不准（旧服务端不带 turn、没有 prompt）一律当同一轮，维持原来的整轮重放去重。
+// 发送可能没落地的空气泡（__sendLost）碰上一轮【已完成】的重放 = 服务端只剩上一轮：不在这里拆，照旧处理。
+function isOtherTurn(m, ev) {
+  if (ev.turn && m.turnId) return ev.turn !== m.turnId;
+  if (!ev.userText) return false;
+  if (m.__sendLost && ev.done && !hasContent(m) && !m.thinking) return false;
+  for (let i = chat.messages.length - 1; i >= 0; i--) {
+    const u = chat.messages[i];
+    if (u.role === 'user') return (u.text || '') !== ev.userText;
+  }
+  return false;
+}
+
+// 封存一条已经不会再有下文的流式气泡（它那一轮在服务端已经没了）：有内容就原样留下、置 done；
+// 一个字都没流到的空壳直接撤掉。只收这条气泡自己的状态——计时、busy、通知归紧接着的新一轮管。
+function sealStaleTurn(m) {
+  flushText();
+  if (!hasContent(m) && !m.thinking) {
+    const i = chat.messages.indexOf(m);
+    if (i >= 0) chat.messages.splice(i, 1);
+    return;
+  }
+  m.bgHold = null; m.paused = false; m.wait = null; m.retry = null; m.compacting = false; m.hint = null;
+  permOnFinish(m, session.id);
+  m.status = 'done';
+  m.__notified = true;   // 它的结局由新一轮交代，别再单独弹「完成」通知
+}
+
 // ---- 直播流（唯一一条）---------------------------------------------------------
 // 事件应用：晚到的旧流事件靠 live === my 一票否决——内核换流后旧流彻底失声。
 function applyLiveEvent(my, ev) {
@@ -1188,13 +1260,28 @@ function applyLiveEvent(my, ev) {
   // 直播流本身就是服务端在说话：收到它的帧，视图的运行状态就有了着落
   if (chat.unverified && (!my.sessionId || my.sessionId === session.id)) { chat.unverified = false; trace('live-confirmed'); }
   let m = cur();
+  let sealed = false;
+  // attach 挂上来的是【另一轮】，而屏上那条气泡还在流式态（上一轮没来得及定局：服务重启后自动继续、
+  // 排队消息紧跟着开跑、别的设备顶掉了这一轮，再叠上网络卡）：把旧气泡按已流到的内容封存，
+  // 下面照「新一轮」另起气泡。以前直接把新一轮重放进旧气泡——已经显示的内容被清空、续跑那句也没有用户气泡，
+  // 要等这一轮结束和 transcript 对账后才回来（11-09 维护者报）。
+  if (ev.type === 'attach' && m && m.role === 'assistant' && m.status === 'streaming' && isOtherTurn(m, ev)) {
+    trace('attach-other-turn', ev.turn || 0);
+    sealStaleTurn(m);
+    m = cur();
+    sealed = true;
+  }
   if (!m || m.role !== 'assistant' || m.status !== 'streaming') {
     // 轮已定局后的尾巴事件（ctx_usage 等，见 STATUS_ONLY）：只改 status，绝不为它们再开一条气泡。
     if (STATUS_ONLY.has(ev.type)) { lastLiveAt = Date.now(); applyStatusEvent(ev); return; }
     // attach 整轮重放的开头：历史尾部若已带着这一轮（缓存快照/落盘竞态），先剪掉再由重放原样补回=净去重。
+    // 补回的用户气泡要带上附件：优先沿用被剪掉那条的（图已加载、带 path 供重试），没有就用服务端随 attach 帧给的。
+    // 以前只补文字——切到别的 app 再回来、重挂直播那一下，刚发的图就从气泡里消失了。
     if (ev.type === 'attach') {
-      trimTurnTail(ev.userText);
-      if (ev.userText) chat.messages.push({ role: 'user', text: ev.userText });
+      // 刚封存了上一轮：尾部那条用户气泡是上一轮的（哪怕文字碰巧一样），不剪
+      const old = sealed ? null : trimTurnTail(ev.userText);
+      const atts = old && old.length ? old : toUiAttachments(ev.userAtts);
+      if (ev.userText) chat.messages.push({ role: 'user', text: ev.userText, ...(atts.length ? { attachments: atts } : {}) });
     }
     m = newAssistant();
     session.busy = true;
@@ -1202,6 +1289,7 @@ function applyLiveEvent(my, ev) {
     agentStart('Claude');
     ui.view = 'chat';
   }
+  if (ev.type === 'attach' && ev.turn) m.turnId = ev.turn;   // 这条气泡属于哪一轮（见 isOtherTurn）
   onEvent(m, ev);
   if (isTerminal(ev)) {
     my.terminal = true;
@@ -1452,13 +1540,12 @@ async function doSync() {
   if (ep !== kernelEpoch) return;
   const runs = runsOf(a).filter((r) => r.sessionId);
   for (const id of [...mutedLive]) if (!runs.some((r) => r.sessionId === id)) mutedLive.delete(id);   // 已结束 → 解除静音
-  // 空态（greeting）：自动挂上最新的非胶囊轮（别处发起的直播镜像，老体验）。
-  // 其它 Claude 会话（Desktop / 终端）发来消息、停放的 CLI 接住开的轮（source 'peer'）也不挂：那不是谁在别处发起的对话，别把视图拽走。
+  // 空态（greeting / 切会话途中 session.id 还没落定）：什么都不挂。以前这里会自动挂上「最新在跑的一轮」
+  //（别处发起的直播镜像）——并行会话一多就成了抢视图：正在新对话里打字，别的会话互发消息开了一轮，页面就被拽过去；
+  // 新会话刚发出就切走，几秒后它的 run.start 到了又被拽回去（11-09 维护者报）。看哪个会话只由人点，
+  // 别处新开的轮在侧栏里亮起来就够了。
   if (!sid) {
     chat.unverified = false;            // 空态没有「这一轮」可言
-    if (session.busy || live) return;   // 新会话首轮正在发
-    const cand = runs.filter((r) => r.source !== 'capsule' && r.source !== 'peer' && !mutedLive.has(r.sessionId));
-    if (cand.length) await openRun(cand[cand.length - 1]);
     return;
   }
   const run = runs.find((r) => r.sessionId === sid);
@@ -1546,6 +1633,8 @@ if (typeof window !== 'undefined') {
     bus: (ev) => onBusEvent(ev),
     trace: () => _trace.map(([at, what, x]) => [new Date(at).toISOString().slice(11, 23), what, x]),
     // 生产构建剔除：feed 灌合成事件 / snapshot 取纯 JSON 供断言
+    // feedLive：把帧当成直播流上来的（走 applyLiveEvent 全路径，含 attach 的剪尾 / 换轮封存）
+    ...(import.meta.env.DEV ? { feedLive: (ev) => { if (!live) live = { sessionId: session.id || null, ctrl: new AbortController(), terminal: false, wdKilled: false }; applyLiveEvent(live, ev); } } : {}),
     ...(import.meta.env.DEV ? { feed: (ev) => feedSynthetic(ev), snapshot: () => JSON.parse(JSON.stringify(chat.messages)) } : {}),
     state: () => ({
       live: live ? { sessionId: live.sessionId, terminal: live.terminal } : null,
@@ -1601,6 +1690,7 @@ export function detachLive() {
   const m = cur();
   if (m && m.role === 'assistant' && m.status === 'streaming') m.status = 'done';  // 不留永久转圈
   if (liveId) mutedLive.add(liveId);
+  pendingNew.mine = null;              // 新会话 id 还没回来就切走：占位留在侧栏，等总线那一帧认领
   lastDetachAt = Date.now();
   session.busy = false;
   chat.reconnecting = false;
@@ -1623,6 +1713,28 @@ export async function openSession(id) {
   // 下完：以前要先等 /api/session 回来才探活，手机上那个请求一慢，菊花就跟着晚出来十秒。
   await loadSession(id, { sync: true });
   requestSync('open');                 // 正好有轮在跑 → 内核补挂直播续看（幂等，上面已探过也无害）
+}
+
+// ---- 新会话首轮的占位（id 还没回来）----------------------------------------------
+// 新会话的 id 要等 CLI 起好（init 帧）才有，冷启动要几秒；这段时间侧栏里本来没有它——刚发出去就切走的话，
+// 眼里就是「发出去的对话不见了」。发送那一刻先记一条占位（侧栏按它画一行），id 一到就换成真行：
+//   · 还看着它：本端 session 帧到 → 摘掉占位（ClaudePage 随即按 session.id 插真行）；
+//   · 已经切走：占位留着（mine 清空），等总线 run.start 的 fresh 帧按正文对上再摘（ClaudePage.onSync）；
+//   · 一直没等到（发送失败 / 断网）：60 秒自己消失。
+export const pendingNew = $state({ list: [], mine: null });   // list: [{ key, text, at, projectId }]
+let pendSeq = 0;
+function notePendingNew(text) {
+  if (session.id || IS_CSNAP) return;
+  const key = 'new:' + (++pendSeq);
+  pendingNew.list.push({ key, text, at: Date.now(), projectId: session.projectId || null });
+  pendingNew.mine = key;
+  setTimeout(() => dropPendingNew(key), 60_000);
+}
+export function dropPendingNew(key) {
+  if (!key) return;
+  const i = pendingNew.list.findIndex((p) => p.key === key);
+  if (i >= 0) pendingNew.list.splice(i, 1);
+  if (pendingNew.mine === key) pendingNew.mine = null;
 }
 
 // ---- public API --------------------------------------------------------------
@@ -1674,6 +1786,7 @@ function reallySend(t, atts, handoff = false) {
   killLive();
   chat.unverified = false;   // 本端亲手开的这一轮：流式态就是真相
   chat.messages.push({ role: 'user', text: t, attachments: sentAttachments(atts) });
+  notePendingNew(t);           // 新会话：侧栏先占一行，不等 id 回来
   refusalBand.notice = null;   // 新回合开始：上一轮的「已切换到 X」横条收起（官方同款）
   if (!handoff) refusalBand.prompt = null;   // 接力进同一 CLI 时那张 Paused 卡仍在等人
   session.busy = true;
@@ -1729,6 +1842,10 @@ function chatParams(t, atts) {
   if (!session.id && !IS_CSNAP && pendingOutputStyle()) params.outputStyle = pendingOutputStyle();
   // 权限模式：只有新会话带草稿里选的（续聊用会话自己的记忆，见 src/runtime/permissions.mjs）
   if (!session.id && !IS_CSNAP && draftPermissionMode()) params.permissionMode = draftPermissionMode();
+  // 项目模式：新对话草稿里选了「项目」——这条对话是协调者（预热也带上，起的就是协调者版 CLI）
+  if (!session.id && !IS_CSNAP && draftShape()) params.shape = 'project';
+  // 转成项目（convertToProject）：首条真消息带上原会话 id，服务端在前面附一张「原会话」卡；预热（没有正文）不带、也不消费
+  if (!session.id && t && fromSessionNext && draftShape()) { params.fromSession = fromSessionNext; fromSessionNext = null; }
   params.autoRetry = true;   // 声明：号池撞墙被自动换号时本端会自己重发（见 scheduleAutoRetry）
   if (atts.length) params.attachments = atts.map((a) => a.path).filter(Boolean);
   return params;
@@ -1874,6 +1991,20 @@ export function newConversation(projectId) {
   ui.view = 'greeting';
 }
 
+// 转成项目（档位菜单里普通对话的「转成项目」，运行档位 › 项目）：以这段对话为背景另开一个项目对话——
+// 同一个项目（工作空间）里新开、形态是项目，首条消息带 fromSession（服务端 routes/project-mode.mjs projectSourceNote）。
+// 原会话不动。返回 false = 这会儿开不了（还在跑 / 没有会话）。
+let fromSessionNext = null;
+export function convertToProject(srcSid, text) {
+  if (!srcSid || session.busy || IS_CSNAP) return false;
+  const pid = session.projectId;
+  newConversation(pid);
+  setDraftShape(true);
+  fromSessionNext = srcSid;
+  send(text, []);
+  return true;
+}
+
 // 历史附件（sessions.mjs 抽出的 {file,name} 或 {rel,name}）→ 前端消息附件 {name,kind,url}。
 // 图片取图：uploads 里的（{file}）走 /api/upload/raw；工作空间直发的（{rel}，「发送给 AI」零拷贝）
 // 走 /api/file。<img> 跨源带不了 Authorization，附 ?token=；见 auth.mjs 白名单。
@@ -1925,11 +2056,14 @@ function normSeg(s) {
     // 「任务」面板会永远挂着一条假的 Running（真在跑的那一轮由 /api/attach 重放重建，不走这里）。
     if (tool.task && taskRunning(tool.task.status)) {
       tool.task.status = 'stopped';
+      // 记下是兜底收的：挂起接力那轮还活着的话 bg_hold / 进度帧会把它拉回来（reviveTask）
+      tool.task.autoStopped = true;
       if (!tool.task.summary) tool.task.summary = tt('进程结束时中止');
     }
     return tool;
   }) };
   if (s.kind === 'notice') return { ...noticeFromEvent(s), at: s.at || 0 };
+  if (s.kind === 'steer' && Array.isArray(s.atts)) return { ...s, atts: toUiAttachments(s.atts) };   // 插话里的附件：同用户气泡的取图形态
   return s;
 }
 
@@ -2055,14 +2189,18 @@ export async function prefetchSessions(list) {
 // 失效、loadSession 网络失败回退到含本轮的缓存快照、加载与挂载间的竞态都会造成），不剪掉
 // 就会整轮问答显示两遍。只认「最后一个 user 气泡文本 = 本轮 prompt」这一种形态，命中则
 // 从它起剪到末尾——随后的重放原样补回，净效果就是去重。
+// 返回被剪掉那条用户气泡的附件（交给重放补回的气泡沿用；blob 预览不在这里释放）。
 function trimTurnTail(userText) {
-  if (!userText) return;
+  if (!userText) return null;
   for (let i = chat.messages.length - 1; i >= 0; i--) {
     const msg = chat.messages[i];
     if (msg.role !== 'user') continue;
-    if ((msg.text || '') === userText) chat.messages.splice(i);
-    return;
+    if ((msg.text || '') !== userText) return null;
+    const atts = msg.attachments || null;
+    chat.messages.splice(i);
+    return atts;
   }
+  return null;
 }
 
 // ---- 语义指纹（transcript merge 用）----------------------------------------------
@@ -2081,7 +2219,7 @@ function segFp(s) {
   if (!s) return null;
   switch (s.kind) {
     case 'text': return ['t', (s.md || '').trim()];
-    case 'tools': return ['k', (s.tools || []).map((t) => (t.id || ((t.name || '') + '|' + (t.summary || ''))) + (t.compact && t.compact.summary ? '#s' : ''))];
+    case 'tools': return ['k', (s.tools || []).map((t) => (t.id || ((t.name || '') + '|' + (t.summary || ''))) + (t.compact && t.compact.summary ? '#s' : '') + (t.images ? '#i' + t.images : ''))];
     case 'notice': return ['n', s.subtype || '', s.from || '', s.to || ''];
     case 'steer': return ['s', (s.text || '').trim()];
     case 'ask': return ['q', s.qid || '', !!s.answered, !!s.cancelled, (s.items || []).map((it) => (it.selected || []).join(',') + '|' + (it.custom || ''))];
@@ -2156,16 +2294,21 @@ export function onBusEvent(ev) {
   switch (ev.type) {
     case 'hello':
       if ('suggestions' in ev) syncSuggestions(ev.suggestions);
+      refreshBrowserMount();   // 断线期间浏览器可能被关 / 回收：重连时对一遍状态灯
       // hello 是【每次连上/重连】都发的，也是「你不在的这段时间发生了什么」唯一的交底。
       requestSync('hello');
       return;
     case 'suggestion':
       noteSuggestion(ev.sessionId, ev);
       return;
+    case 'browser.mount':
+      // 这个对话的浏览器有没有标签（工具开关上的状态灯），纯显示态，照事件直接记
+      noteBrowserMount(ev.sessionId, !!ev.mounted);
+      return;
     case 'run.start':
       if (ev.sessionId) delete status.suggestions[ev.sessionId];   // 新一轮开跑：上一条建议过时
       if (!ev.sessionId || mutedLive.has(ev.sessionId)) return;
-      if (session.id === ev.sessionId || (!session.id && ev.source !== 'capsule' && ev.source !== 'peer')) requestSync('run.start');
+      if (session.id === ev.sessionId) requestSync('run.start');   // 只跟正看着的会话；别的会话开跑不动视图（见 doSync 空态分支）
       return;
     case 'run.end':
       // 稍等：健康直播流的 done 事件通常几百 ms 内就到，先让它自己收尾（doSync 里还有
@@ -2381,9 +2524,7 @@ export async function restoreOnBoot() {
   // 上次看的会话正在跑（含胶囊轮——属于"回到原处"）→ 挂直播。
   const savedRun = saved ? runs.find((r) => r.sessionId === saved) : null;
   if (savedRun) { await openRun(savedRun); return; }
-  // 否则挂最新的非胶囊轮（别处发起的直播镜像）；胶囊轮不劫持启动恢复（它有原生 HUD），跨会话消息接住的轮（peer）同理。
-  const cand = runs.filter((r) => r.source !== 'capsule' && r.source !== 'peer');
-  if (cand.length) { await openRun(cand[cand.length - 1]); return; }
+  // 否则回到上次看的会话；别的会话正在跑也不挂过去（11-09：不再自动跳到「最新在跑的一轮」）。
   if (saved) {
     await loadSession(saved);
     requestSync('boot');   // 摆出来的是缓存/transcript（未确认）：开机探活那一下可能早于它落定，再核对一次

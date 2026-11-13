@@ -1,6 +1,6 @@
 # 插件（功能扩展）
 
-bridge 的功能都是插件：内置功能（定时任务、分享链接、设备、手机操控、内置浏览器、共享终端……）是默认开着的一组，Gemini / ChatGPT / dimensio 三个 agent 扩展也在同一张表里，第三方插件装进来和它们平起平坐。用户在「设置 › 扩展 › 功能扩展」里逐项开关、改配置、装插件；你用 `plugins.*` 操作做同样的事（只有服务器主机能用）。
+bridge 的功能都是插件：内置功能（定时任务、分享链接、设备、手机操控、内置浏览器、共享终端……）是默认开着的一组，Media Studio / ChatGPT / dimensio 三个扩展也在同一张表里，第三方插件装进来和它们平起平坐。用户在「设置 › 扩展 › 功能扩展」里逐项开关、改配置、装插件；你用 `plugins.*` 操作做同样的事（只有服务器主机能用）。
 
 ## 看状态、开关、改配置
 
@@ -227,7 +227,7 @@ ctx.manual('manual');   // 插件目录下 manual/*.md 并入 bridge 项目手�
 const svc = ctx.models.provide({
   id: 'default',                       // 插件内唯一（小写字母数字连字符），缺省 default
   name: 'Gemini 网页版',
-  protocol: 'anthropic',               // 或 'openai'
+  protocol: 'anthropic',               // 或 'openai'；'gemini'（generateContent 接口）只有 dimensio 认得，这种服务不会给 Claude
   baseUrl: 'http://127.0.0.1:8765',    // 插件是主机装的，本机地址也行
   apiKey: key, authStyle: 'bearer',    // 可选；没 key = 不鉴权（authStyle 缺省按协议）；headers: [{ name, value }]
   agents: ['claude', 'dimensio'],    // 给哪些 agent（缺省都给）
@@ -243,6 +243,9 @@ ctx.models.agents();                  // [{ id: 'claude', label, available }, { 
 ```
 
 - 模型的能力字段和档位表与「设置 › Claude › 模型服务」同一套：`efforts` 每档的 `value` 深合并进请求体（或写进 `effortField`）；dimensio 只有七级思考档，档位 id 用 off / minimal / low / medium / high / xhigh / max 最省事。
+- 每个模型可以单独定给谁：`models: [{ id: 'a', agents: ['claude'] }, { id: 'b', agents: ['dimensio'] }, { id: 'c' }]`——
+  取与服务级 `agents` 的交集（`protocol: 'gemini'` 照样去掉 claude），不写 = 跟服务级。某个 agent 下一个模型都不剩，那一侧整条服务不出现；
+  服务 id（Claude 的 `custom:p-<10 位>:<模型>`、dimensio 的服务卡）不因此改变，老会话照样认得。默认模型不给某一侧时，那一侧用剩下的第一个。
 - Claude 里会话模型是 `custom:p-<10 位>:<模型>`（随插件 id 与服务 id 固定，重启后老会话照样认得），走 bridge 的本机代理，不走出站代理；dimensio 里是一张「插件 · 名字」的服务卡。
   两边都**只能用、不能改**（改地址、Key、模型都在插件里），设置里的编辑器看不到它。
 - 端点要求鉴权就传 `apiKey`：只在内存和 dimensio 的自定义服务目录里（密钥守卫挡着），不进 Claude 的加密存储。
@@ -617,7 +620,7 @@ const f = bridge.form(el, { fields?, exclude?, sections?, onChange? });   // 在
 | public-access | 公网访问 | 托管 cloudflared 隧道（重启生效） |
 | agent-api | 给 agent 的接口 | /agent 接口、项目手册、Claude 的 bridge 工具 |
 | feedback | 反馈 | 设置里的反馈 |
-| routines | 定时任务 | 按时间表跑 Claude / Gemini |
+| routines | 定时任务 | 按时间表跑 Claude |
 | auto-archive | 自动归档 | 归档不活跃的会话 |
 | pr | 拉取请求 | PR 卡、CI、自动修复、Claude 的 pr 工具 |
 | keep-awake | 保持唤醒 | Claude 干活时电脑不睡（重启生效） |

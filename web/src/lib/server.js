@@ -90,15 +90,53 @@ function switchBase(next, why) {
 // withShare（/w/ 只读分享 ?st=）与 withCsnap（/c/ 聊天快照 ?ct=）互斥，各自非命中即原样返回。
 export function apiUrl(path) { return (lanAlive && lanBase ? lanBase : base) + withCsnap(withShare(path)); }
 
-// 资源元素（<img>/<video>）加载失败时调用。fetch/XHR 失败会经 noteNetFail() 自动从 LAN 回退
-// 到隧道并重试成功；但 <img>/<video> 的 src 是渲染时一次性算好的，加载失败既不会触发
-// noteNetFail、也没有重试——于是在家走 LAN 时一旦 LAN 对资源加载不通（明文/混合内容/AP 隔离等），
-// 媒体图会永久失败、点「重试」复用同一条死 LAN URL 仍失败。这里给媒体补上同款自愈：
-// 把 LAN 降级回隧道（连带后续兄弟元素一起切走），并把这条 LAN URL 重写成隧道/同源版返回供重试。
-// 返回值 === 入参时表示本就走的隧道/同源（非 LAN）——属真失败，调用方据此展示错误。
+// —— 媒体走哪条线（<img> / <video> / <audio> 的 src）——
+// 在家局域网直连时，页面里的 fetch 经 LAN 是通的，但媒体元素经 LAN 加载可能整批失败、请求根本到不了服务端
+// （9 月 Vertex 网格、11-04 Claude 缩略图、11-06 Media Studio「最近的图像」全是灰块，都是这样）。可能的机制不止一种：
+// 浏览器对被动混合内容（图 / 音视频）有自动升级成 https 的规则，LAN 只有明文 http 就会失败（局域网地址是域名时桌面
+// Chromium 实测 100% 复现）；各版本 WebView 对公网源 → 私网地址的限制也不尽相同。所以不猜机制，按这台设备的实测结果走：
+// 局域网可用后先用一张公开的小图（/app/icons/favicon-32.png，不带令牌）探一次「媒体能不能经 LAN 加载」，
+// 能才让媒体走 LAN；探出来之前、或者探不通，媒体走隧道 / 同源，API 照旧走 LAN（低延迟不受影响）。
+let lanMedia = null;          // null 没探过 / true 媒体可以走 LAN / false 不行（只对当前这个 lanBase）
+let lanMediaFor = '';
+let lanMediaProbing = false;
+function probeLanMedia() {
+  if (!lanAlive || !lanBase || lanMediaProbing || typeof Image === 'undefined') return;
+  if (lanMediaFor === lanBase && lanMedia !== null) return;
+  lanMediaProbing = true;
+  const target = lanBase;
+  const img = new Image();
+  let done = false;
+  const finish = (ok) => {
+    if (done) return;
+    done = true; lanMediaProbing = false; clearTimeout(t);
+    if (target !== lanBase) return;   // 期间换了局域网地址：作废
+    lanMediaFor = target; lanMedia = ok;
+    try { console.info('[address] 局域网媒体直连' + (ok ? '可用' : '不可用，媒体改走 ' + (base || '同源'))); } catch {}
+  };
+  const t = setTimeout(() => finish(false), 3000);
+  img.onload = () => finish(img.naturalWidth > 0);
+  img.onerror = () => finish(false);
+  img.src = target + '/app/icons/favicon-32.png?lanmedia=' + Date.now();
+}
+/** 当前媒体走 LAN 吗（设置页 / 诊断用） */
+export function lanMediaState() { return { lanMedia: lanMediaFor === lanBase ? lanMedia : null, lanAlive, lanBase }; }
+
+/** 媒体元素用的地址：同 apiUrl，但只有这台设备实测过「媒体经 LAN 能加载」才走 LAN，否则走隧道 / 同源。 */
+export function mediaUrl(path) {
+  const viaLan = lanAlive && lanBase && lanMediaFor === lanBase && lanMedia === true;
+  return (viaLan ? lanBase : base) + withCsnap(withShare(path));
+}
+
+// 资源元素（<img>/<video>/<audio>）加载失败时调用：这条是 LAN 地址就把它改写成隧道 / 同源版返回供重试，
+// 并记下「这台设备媒体走不了 LAN」，之后新渲染的媒体直接走隧道。只降级媒体，不动 API 的 LAN 直连
+// （以前这里调 noteNetFail 把整个 app 踢回隧道，8 秒后探活又切回 LAN，新渲染的图又失败，来回反复）。
+// 返回值 === 入参时表示本就走的隧道/同源（非 LAN）——属真失败，调用方据此重试或展示失败态。
 export function mediaFallbackUrl(url) {
-  noteNetFail();   // 正走 LAN 则失效切回隧道 + 8s 后重探（与 fetch 失败同款）
-  if (lanBase && typeof url === 'string' && url.startsWith(lanBase)) return base + url.slice(lanBase.length);
+  if (lanBase && typeof url === 'string' && url.startsWith(lanBase)) {
+    lanMediaFor = lanBase; lanMedia = false;
+    return base + url.slice(lanBase.length);
+  }
   return url;
 }
 
@@ -283,6 +321,8 @@ export function onConnModeChange(cb) { onMode = cb; try { cb && cb(connMode()); 
 function setLanAlive(v) {
   if (lanAlive === v) return;
   lanAlive = v;
+  // 每次（重新）连上 LAN 都重探一次媒体能不能走 LAN（换了 Wi-Fi / WebView 升级后结果可能不同）
+  if (v) { if (lanMediaFor === lanBase) lanMedia = null; probeLanMedia(); }
   try { onMode && onMode(connMode()); } catch {}
 }
 

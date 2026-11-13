@@ -113,77 +113,14 @@ export const CAPABILITIES = {
     // 2026-09-22 起 Opus 5.5（CLI 2.1.280 的 opus 别名同日切到它）。
     defaults: { model: 'claude-opus-5-5' },
   },
-  vertex: {
-    // Gemini-via-Vertex. Ids probe-verified on the project (225322445252), last
-    // full sweep 2026-09-02. Catalog listing ≠ callable (preview 转正后旧 -preview
-    // id 会 404，如 3.1-flash-lite-preview)——加模型前先真打一次 generateContent。
-    models: [
-      // Gemini 4 Argon（09-30 发布，首发只给 Fairwind；2026-10-13 目录里出现、global 真打 200，id 就叫
-      // gemini-4-argon，无 -preview）。thinkingLevel 家族：minimal 400、low/medium/high 收，thinkingBudget 400；
-      // 搜索/读网址/代码执行任意组合都收，识图低/中/高都生效；输出上限 32,768（3.x 的一半）。
-      // 名称不带「Gemini」：顶栏是「Gemini」+ 型号名两段拼的（v6.10 前写全名，顶栏成了「Gemini Gemini 4 Argon」）。
-      { id: 'gemini-4-argon', name: '4 Argon' },
-      // 3.8 Flash (2026-09-02)：发布当天 Vertex global 直接可用（GA，无 -preview
-      // 后缀）。距 3.7 Flash 仅三周，同价同速档（$0.75/$3.75 introductory 到 12-31，
-      // 之后 $1.50/$7.50），长在长程软工/agentic/多步推理。同批发布的
-      // gemini-3.8-flash-cyber 未上架：安全专用变体，只发给 Fairwind Program 的
-      // 可信防守方——本项目 probe 404，目录里也没有。
-      { id: 'gemini-3.8-flash', name: '3.8 Flash' },
-      // 3.7 Flash (2026-08-13)：编码/agent 大版本（DeepSWE 49→65.3），1M 上下文。
-      { id: 'gemini-3.7-flash', name: '3.7 Flash' },
-      { id: 'gemini-3.6-flash', name: '3.6 Flash' },
-      { id: 'gemini-3.5-flash', name: '3.5 Flash' },
-      { id: 'gemini-3.1-pro-preview', name: '3.1 Pro' },
-      { id: 'gemini-3-flash-preview', name: '3 Flash' },
-      // Lite 档取最新一代（3.5）；旧 3.1-flash-lite-preview 已 404（GA 改名回收）。
-      { id: 'gemini-3.5-flash-lite', name: '3.5 Flash Lite' },
-      { id: 'gemini-2.5-flash', name: '2.5 Flash' },
-      { id: 'gemini-2.5-pro', name: '2.5 Pro' },
-    ],
-    // Unified thinking level; vertex.mjs maps it per model family (Gemini 3 ->
-    // thinkingLevel, Gemini 2.5 -> thinkingBudget). 部分模型拒 'minimal'
-    // （见 noMinimal），后端 thinkingFor() 按同一张表静默夹到 low。
-    thinkLevels: [
-      { id: 'minimal', name: 'Minimal' },
-      { id: 'low', name: 'Low' },
-      { id: 'medium', name: 'Medium' },
-      { id: 'high', name: 'High' },
-    ],
-    // 不支持 minimal 的模型。前端按这张表把该档从菜单摘掉，后端 thinkingFor() 读同一张
-    // 表夹到 low（旧实现是 /pro/ 正则——**只按名字猜是错的**：2026-09-02 逐档真打
-    // 实测 3.8/3.7 Flash 同样报 400 `Thinking level is unsupported:
-    // THINKING_LEVEL_MINIMAL`，而 3.6 及更早的 Flash、3.5 Lite 都收 200。也就是说
-    // 3.7 上架以来「默认模型 + Minimal」一直是必 400 的组合，正则兜不住）。
-    // 加模型时这一档必须逐个真打，别按家族名推断。
-    noMinimal: ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.1-pro-preview', 'gemini-2.5-pro'],
-    // 对话工具与识图清晰度（2026-10-06 九款逐个真打）：systemInstruction / urlContext / codeExecution 全部 200；
-    // 3.x 三个工具与 googleSearch 任意组合都收。2.5 Flash / Pro 的 codeExecution 不能和 googleSearch / urlContext 同开
-    // （400「Multiple tools are supported only when they are all search tools」），urlContext + googleSearch 可以——
-    // 前端开代码执行时关掉另两个，后端再兜底（保留搜索类、丢代码执行）。代码执行会把 matplotlib 图表以 inlineData PNG 回传。
-    codeSolo: ['gemini-2.5-flash', 'gemini-2.5-pro'],
-    // mediaResolution：低 / 中 / 高都生效（一张 1024² 图 3.x = 262 / 535 / 1095 token，2.5 = 72 / 264 / 1296），
-    // 不传 ≈ 高；ULTRA_HIGH 在 generationConfig 层 400，不收。「自动」= 沿用快速识图（3.x 有图时用中档）。
-    mediaRes: [
-      { id: 'auto', name: '自动' }, { id: 'low', name: '低 · 最省' },
-      { id: 'medium', name: '中' }, { id: 'high', name: '高 · 看清小字' },
-    ],
-    systemMax: 8000,   // 系统提示词上限（字符）
-    defaults: { model: 'gemini-3.8-flash', think: 'medium' },
-    // The "功能" (modality) picker for the Vertex agent. Extensible.
-    funcs: [
-      { id: 'chat', name: '对话' },
-      { id: 'image', name: '图像' },
-      { id: 'video', name: '视频' },
-      { id: 'voice', name: '语音' },
-      { id: 'music', name: '音乐' },
-    ],
-  },
+  // Gemini 对话（vertex 块：对话模型、思考档、noMinimal、codeSolo、识图清晰度、系统提示词上限）2026-11-04 随 Gemini 对话下线删除；
+  // 当时的逐模型真打结论留在记忆 project_bridge_vertex_media 与 git 历史里。下面的媒体块归 Media Studio（modules/studio/server/cards/google.mjs 转写成模型卡）。
   veo: {
     // 视频生成（Veo + Gemini Omni 两家族，按 id 路由）。
     // - veo-3.1-*：Vertex us-central1 predictLongRunning（veo-3.0/2.0 已 404 下架，2026-08-27 探针）。
     // - gemini-omni-1.1-flash：Google 新一代对话式视频模型（2026-08 发布，原生带音轨、
     //   最短 3s、360p-4k），走 Gemini Developer API Interactions 端点（config.geminiApiKey，
-    //   modules/vertex/server/omni.mjs）——Vertex 侧 preview id 配额为 0 必 429，dev API 是实测可用通道。
+    //   modules/studio/server/adapters/omni.mjs）——Vertex 侧 preview id 配额为 0 必 429，dev API 是实测可用通道。
     //   旧款 gemini-omni-flash-preview 未上架：被 1.1 完全覆盖且不认分辨率参数（探针实测
     //   360p 请求照样出 720p），没有独立价值。
     models: [
@@ -235,7 +172,7 @@ export const CAPABILITIES = {
     },
     // 画质（Veo 专属，2026-08-29 探针实证：传 zzz 回「Invalid compression quality type」
     // ⇒ 该参数被真校验；枚举取 SDK VideoCompressionQuality）。Omni 无此旋钮。
-    qualities: [{ id: '', name: '默认' }, { id: 'OPTIMIZED', name: '标准 · 体积小' }, { id: 'LOSSLESS', name: '无损 · 体积大' }],
+    qualities: [{ id: '', name: '默认' }, { id: 'OPTIMIZED', name: '标准' }, { id: 'LOSSLESS', name: '无损' }],
     // Veo 专属三件（Omni 的 response_format 里都不存在，探针逐个 400「Unknown parameter」）：
     // 负面提示词 / 提示词增强 / 画质。前端按这张表显隐，后端按同一张表丢弃。
     veoOnly: ['veo-3.1-generate-001', 'veo-3.1-fast-generate-001', 'veo-3.1-lite-generate-001'],
@@ -273,8 +210,20 @@ export const CAPABILITIES = {
       { id: 'gemini-3.1-flash-image', name: 'Nano Banana Flash' },
       { id: 'gemini-3.1-flash-lite-image', name: 'Nano Banana Lite' },
       { id: 'gemini-2.5-flash-image', name: 'Nano Banana 2.5' },
+      // 2026-11-04 OpenAI GPT Image 2.5 Sunburst（精细档），经 OpenRouter /api/v1/images（不走 chat/completions，那边 404）。
+      // 真打：像素只认 size:'WxH'（resolution/'2K' 被忽略或 400），宽高须 16 的倍数、最长边 ≤3840、总像素 ≤3840×2160；
+      // 改图 = input_references（data URL，≤16 张）；无思考/搜索/采样参数。1K≈$0.006、4K 16:9 low≈$0.011。
+      // 2026-11-05 GPT Image 2.6 Sunburst：OpenAI 尚未公告、/api/v1/models 里也不列，但 OpenRouter /api/v1/images 已真打 200
+      // （openai/gpt-image-2.6 不带后缀 404；乱编的 9.9-sunburst 也 404，不是模糊匹配）。参数与 2.5 完全一致：
+      // 3840×2160 low 出满尺寸 ≈$0.047、1536×1024 medium ≈$0.034、1K max ≈$0.21；input_references 改图保构图。
+      { id: 'gpt-image-2.6-sunburst', name: 'GPT Image 2.6 Sunburst' },
+      { id: 'gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst' },
       { id: 'qwen-image-2.1-local', name: 'Qwen Image 2.1 · 本机' },
     ],
+    // 走 OpenRouter 的模型：本地 id → OpenRouter id（imagen.mjs 按此分流；前端据此换参数面板）
+    openrouter: { 'gpt-image-2.6-sunburst': 'openai/gpt-image-2.6-sunburst', 'gpt-image-2.5-sunburst': 'openai/gpt-image-2.5-sunburst' },
+    // GPT Image 的 quality（OpenRouter 枚举 auto/low/medium/high/xhigh/max），默认 high
+    qualities: [{ id: 'low', name: '低' }, { id: 'medium', name: '中' }, { id: 'high', name: '高' }, { id: 'xhigh', name: '超高' }, { id: 'max', name: '最高' }],
     // 「自动」= 不传 aspectRatio，让模型按内容自定比例（Nano Banana 文生图自选、改图贴合原图）；
     // media.mjs 见 'auto' 即省略该参数。Imagen 无自由比例，自动≈默认方图。
     // 2026-08-29 逐档真打（Vertex generateContent，lite@1K + pro 抽验）：除原有五档外
@@ -322,6 +271,8 @@ export const CAPABILITIES = {
       'gemini-3.1-flash-image': ['1K', '2K', '4K'],
       'gemini-3.1-flash-lite-image': ['1K'],
       'gemini-2.5-flash-image': ['1K', '2K', '4K'],
+      'gpt-image-2.6-sunburst': ['1K', '2K', '4K'],
+      'gpt-image-2.5-sunburst': ['1K', '2K', '4K'],
     },
   },
   tts: {
@@ -369,12 +320,15 @@ export const CAPABILITIES = {
       { id: 'lyria-3.5', name: 'Lyria 3.5', desc: '整首歌 · 可带人声与歌词' },
       { id: 'lyria-002', name: 'Lyria 2' },
       { id: 'lyria-3-clip-preview', name: 'Lyria 3' },
-      { id: 'lyria-3-pro-preview', name: 'Lyria 3 Pro · 最长3分钟' },
+      { id: 'lyria-3-pro-preview', name: 'Lyria 3 Pro' },
     ],
     // 负面提示词只有 lyria-002 这条 Vertex :predict 通道吃（instance.negative_prompt）；
     // lyria-3 走 Gemini Developer API 的 generateContent，只有一个 prompt，驱动层压根
     // 不看 negativePrompt——所以选 lyria-3 时前端要收起这一栏，别摆一个填了没用的框。
     negSupport: ['lyria-002'],
+    // 只收英文提示词的模型（studio 模型卡 inputs.promptLang；前端据此换英文灵感、拦下中文输入）：lyria-002 中文直接 400
+    // 「Unsupported language detected… supported languages: en」（2026-11-04 真打）。值是语言代码或代码数组。
+    promptLang: { 'lyria-002': 'en' },
     defaults: { model: 'lyria-002' },
   },
   codex: {
@@ -444,16 +398,6 @@ export const claudeDefaultEffort = (model, caps = CAPABILITIES) => {
   return (c.effortDefaults || {})[id] || 'high';
 };
 
-export const VERTEX_MODELS = idSet(CAPABILITIES.vertex.models);
-export const VERTEX_MODEL_DEFAULT = CAPABILITIES.vertex.defaults.model;
-// 拒 minimal 的模型（vertex.mjs 的 thinkingFor 夹紧用；前端摘菜单读的是 caps 里同一张表）。
-export const VERTEX_NO_MINIMAL = new Set(CAPABILITIES.vertex.noMinimal);
-// 代码执行不能和搜索类工具同开的模型（vertex.mjs 组工具时兜底丢掉代码执行）
-export const VERTEX_CODE_SOLO = new Set(CAPABILITIES.vertex.codeSolo);
-export const VERTEX_MEDIA_RES = idSet(CAPABILITIES.vertex.mediaRes);
-export const VERTEX_SYSTEM_MAX = CAPABILITIES.vertex.systemMax;
-export const VERTEX_THINK_LEVELS = idSet(CAPABILITIES.vertex.thinkLevels);
-export const VERTEX_THINK_DEFAULT = CAPABILITIES.vertex.defaults.think;
 
 export const VEO_MODELS = idSet(CAPABILITIES.veo.models);
 export const VEO_MODEL_DEFAULT = CAPABILITIES.veo.defaults.model;
@@ -492,6 +436,8 @@ export const IMG_THINK_SUPPORT = new Set(CAPABILITIES.image.thinkSupport);
 export const IMG_SEARCH_SUPPORT = new Set(CAPABILITIES.image.searchSupport);
 export const IMG_IMGSEARCH_SUPPORT = new Set(CAPABILITIES.image.imageSearchSupport);
 // 人物生成枚举（空串 = 不传）。Nano Banana 专属，Imagen 那条路不吃这个键。
+export const IMG_OPENROUTER = CAPABILITIES.image.openrouter || {};
+export const IMG_QUALITIES = idSet(CAPABILITIES.image.qualities || []);
 export const IMG_PERSON_GEN = new Set(CAPABILITIES.image.personGen.map((x) => x.id).filter(Boolean));
 // 按模型夹紧 imageSize：不支持的档位落到该模型能收的最大档（lite 只有 1K）。
 export const imgSizeClamp = (model, size) => {

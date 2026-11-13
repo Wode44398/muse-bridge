@@ -14,7 +14,8 @@ import { z } from 'zod';
 import { getCurrentGen, genEmit } from '../runtime/gen.mjs';
 
 import { runBrowserAction, browserParams, BROWSER_DESCRIPTION } from '../runtime/browser-actions.mjs';
-import { poolRef } from '../runtime/principal.mjs';
+import { poolRef, cleanSessionId } from '../runtime/principal.mjs';
+import { SAVE_TO_DESC, resolveSaveTo, saveTarget, saveShots } from './save-shot.mjs';
 
 
 // 快照模式追加的说明：访客那边是【只读直播】，只有你能开页面。
@@ -97,19 +98,34 @@ export async function snapUrlDenied(raw, ws) {
 }
 
 // roots：upload 允许取文件的目录（沙箱身份=其私有目录/媒体目录；admin 传 null 不限）。
-// owner：浏览器池的属主（principal.scopeOf(ctx)）；池按（属主, 工作空间）键控，与右侧面板同一把键。
+// owner：浏览器池的属主（principal.scopeOf(ctx)）；池按（属主, 工作空间, 会话）键控，与右侧面板同一把键。
+// getSession：这一轮所属对话的 id（gen.sessionId，新对话在 SDK init 后才有；拿不到就退回工作空间共用那份）。
+// 快照不分会话：快照桶本身就是一个对话独占的目录。
 // 动作本身全在 runtime/browser-actions.mjs（与 Codex / 远程客户端共用一套）；这里只管
 // 参数表、事件路由与快照缰绳。
-export const makeBrowserMcp = ({ getGen, ws, owner = '', snap = false, roots = null } = {}) => createSdkMcpServer({
+export const makeBrowserMcp = ({ getGen, ws, owner = '', snap = false, roots = null, getSession = null } = {}) => createSdkMcpServer({
   name: 'browser',
   version: '1.0.0',
   tools: [
-    tool('browser', BROWSER_DESCRIPTION + (snap ? SNAP_DESC : ''), browserParams(z), async (args) => {
+    // 快照（公开链接的访客在驱动）不落盘：schema 里干脆不出现 save_to
+    tool('browser', BROWSER_DESCRIPTION + (snap ? SNAP_DESC : ''), snap ? browserParams(z) : { ...browserParams(z), save_to: z.string().optional().describe(SAVE_TO_DESC) }, async ({ save_to, ...args }) => {
       const gen = (getGen && getGen()) || getCurrentGen();
       const onActivity = ({ action, url }) => { if (gen) genEmit(gen, { type: 'browser', url: url || '', action }); };
-      return runBrowserAction(poolRef(owner, ws), args, onActivity, snap
-        ? { urlDenied: (u) => snapUrlDenied(u, ws), snap: true, roots }
-        : { roots });
+      // save_to 先定落点再动手：路径不合法就别白做一遍动作；落盘前 saveShots 再按同一规则复核一次
+      let saveTo = null;
+      const place = (p) => resolveSaveTo(p, ws, roots);
+      if (save_to != null) {
+        if (snap) return { content: [{ type: 'text', text: '快照里不提供 save_to——截图只随结果返回。' }], isError: true };
+        saveTo = saveTarget(save_to, place);
+        if (saveTo.error) return { content: [{ type: 'text', text: saveTo.error }], isError: true };
+      }
+      // caller：同工作空间的对话共用这个浏览器，靠它说清「视口 / 页面是别的对话动的」（见 browser-actions viewportNote）
+      const caller = gen?.sessionId || '';
+      const sid = snap ? '' : cleanSessionId(caller || (getSession && getSession()) || '');
+      const r = await runBrowserAction(poolRef(owner, ws, sid), args, onActivity, snap
+        ? { urlDenied: (u) => snapUrlDenied(u, ws), snap: true, roots, caller }
+        : { roots, caller });
+      return saveTo ? saveShots(r, saveTo, roots ? place : null) : r;
     }),
   ],
 });

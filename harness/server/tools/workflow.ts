@@ -34,7 +34,7 @@ function readScriptPath(ctx: ToolContext, raw: string): { ok: true; script: stri
     return { ok: false, error: (e as Error).message };
   }
   if (!/\.(?:m?js)$/i.test(abs)) return { ok: false, error: "scriptPath must point to a .js or .mjs file (the drafts live in .dimensio/workflows/)." };
-  const blocked = readVerdict(abs, ctx.sandbox.root);
+  const blocked = readVerdict(abs, ctx.sandbox.root, { bypass: ctx.sandbox.bypassing });
   if (blocked) return { ok: false, error: blocked };
   try {
     return { ok: true, script: fs.readFileSync(abs, "utf8") };

@@ -486,3 +486,91 @@ test('project：子会话开到别的项目（cwd / 项目 id 进重放），父
   assert.match(text(await call(srv, 'start_session', { proposal_id: tid })), /已在自己的会话里开始/);
   assert.equal(replays.at(-1).family.projectId, proj.id);
 });
+
+test('项目对话：start_session 能给讨论串单独定档位（普通会话没有这个参数）；停下 / 标已解决 / 查 PR 只认自己开的讨论串', async () => {
+  setup('direct');
+  const srv = makeSessionsMcp({ getGen: () => gen, ctx, lastUserUuidFor: () => null, project: { policy: 'direct' } });
+  const keysOf = (x) => { const sh = x.instance._registeredTools.start_session.inputSchema; return Object.keys(sh.def?.shape || sh.shape || {}); };
+  assert.ok(keysOf(srv).includes('effort'));
+  for (const n of ['stop_session', 'mark_resolved', 'pr_status']) assert.ok(srv.instance._registeredTools[n], n);
+  const plain = setup('direct');
+  for (const n of ['stop_session', 'mark_resolved', 'pr_status']) assert.equal(plain.instance._registeredTools[n], undefined, n);
+  assert.ok(!keysOf(plain).includes('effort'));
+  // 定档位：直接开（offer 带完整说明）
+  const srv2 = makeSessionsMcp({ getGen: () => gen, ctx, lastUserUuidFor: () => null, project: { policy: 'direct' } });
+  const r = await call(srv2, 'start_session', { initiation: 'offer', title: '改个错别字', prompt: '修 login.svelte 的错别字', background: BG, effort: 'low', use_worktree: false });
+  assert.match(text(r), /已开出子会话/);
+  assert.equal(replays.at(-1).body.effort, 'low');
+  const kid = replays.at(-1).family.newSessionId;
+  // 乱写的档位不收（按项目设置走）
+  await call(srv2, 'start_session', { initiation: 'offer', title: '再改一个', prompt: 'p', background: BG, effort: 'high; rm -rf', use_worktree: false });
+  assert.notEqual(replays.at(-1).body.effort, 'high; rm -rf');
+  // 提议卡记下档位，点卡开时带上
+  const own = await call(makeSessionsMcp({ getGen: () => gen, ctx, lastUserUuidFor: () => null, project: { policy: 'ask' } }), 'start_session', { initiation: 'own_initiative', title: '顺手补测试', prompt: 'p', background: BG, effort: 'max', use_worktree: false });
+  const tid = text(own).match(/task_[0-9a-f]{8}/)[0];
+  assert.equal(P.getProposal(ctx, tid).effort, 'max');
+  // 停下：在跑的停掉，没在跑的照实说，别人的不认
+  const g = findGenBySession(ctx.key, kid);
+  g.abort = new AbortController();
+  assert.match(text(await call(srv2, 'stop_session', { to: kid })), /已停下/);
+  assert.equal(g.abort.signal.aborted, true);
+  g.done = true;
+  assert.match(text(await call(srv2, 'stop_session', { to: kid })), /没在跑/);
+  assert.equal((await call(srv2, 'stop_session', { to: 'bbbbbbbb-0000-4000-8000-00000000ffff' })).isError, true);
+  // 标已解决 / 重新打开；list_sessions 里看得到
+  assert.match(text(await call(srv2, 'mark_resolved', { to: kid })), /已解决/);
+  const { projectState } = await import('../runtime/project-mode.mjs');
+  assert.equal(projectState(ctx, PARENT).resolved[kid], true);
+  assert.match(text(await call(srv2, 'list_sessions', {})), /已标为已解决/);
+  await call(srv2, 'mark_resolved', { to: kid, resolved: false });
+  assert.equal(projectState(ctx, PARENT).resolved[kid], false);
+  // 查 PR：测试身份没有 gh，照实回「不可用 / 没绑定」，带上讨论串名
+  const pr = JSON.parse(text(await call(srv2, 'pr_status', { to: kid })));
+  assert.equal(pr.thread, '改个错别字');
+  assert.equal(pr.bound, false);
+});
+
+test('auto:<档>（发起新会话范围）：落到的档位没写 → 子会话清掉从父会话抄来的推理强度（本项目 / 别的项目都一样）；项目讨论串照 threadPrefs；只解析不记「最近一次实际落到」', async () => {
+  const { recordChatPrefs } = await import('../runtime/chat-prefs.mjs');
+  const D = await import('../runtime/dispatch-policy.mjs');
+  const R = await import('../runtime/model-ratings.mjs');
+  const { HOST_OWNER } = await import('../runtime/principal.mjs');
+  const CP = await import('../claude-projects.mjs');
+  const srv = setup('ask');
+  D._resetPolicyForTests();
+  recordChatPrefs(ctx, PARENT, { model: 'claude-opus-5-5', effort: 'max' });
+  D.updatePolicy(ctx, { scope: { session: true } });
+  D.notePolicyOwner(HOST_OWNER, ctx);
+  // 先按默认阶梯记一次「最近一次实际落到」（上游代理真换名时就是这么记的）
+  const first = R.resolveAuto('auto:light', HOST_OWNER, { official: true });
+  assert.ok(first && first.kind === 'claude' && first.effort, '默认阶梯的机械档该落到带档位的 Claude 模型');
+  const servedBefore = R.autoServed('auto:light', HOST_OWNER, { official: true });
+  D.saveStrategy(ctx, { id: 's-00000000', overrides: { light: { model: 'haiku', effort: '' } } });
+  const noEffort = (b) => { assert.match(b.model, /^claude-haiku-/); assert.equal(Object.hasOwn(b, 'effort'), false, `不该沿用父会话的 max：${b.effort}`); };
+  // 本项目里开（spawnChildNow）
+  await call(srv, 'start_session', { initiation: 'user_asked', title: '跑格式化', prompt: '把 a.js 格式化一下', background: BG, model: 'auto:light', use_worktree: false });
+  noEffort(replays.at(-1).body);
+  // 开到别的项目（spawnAway）
+  const other = mkdtempSync(path.join(tmpdir(), 'stools-auto-'));
+  const proj = CP.createProject(ctx.claudeProjects, ctx, { path: other });
+  await call(srv, 'start_session', { initiation: 'user_asked', title: '去别处格式化', prompt: 'p', background: BG, model: 'auto:light', project: proj.id });
+  assert.equal(replays.at(-1).family.projectId, proj.id);
+  noEffort(replays.at(-1).body);
+  // 开会话只解析、不覆盖子页上「最近一次实际落到」
+  assert.deepEqual(R.autoServed('auto:light', HOST_OWNER, { official: true }), servedBefore);
+  // 档位写了的照写；没用 auto 的照旧跟父会话
+  D.saveStrategy(ctx, { id: 's-00000000', overrides: { light: { model: 'haiku', effort: 'low' } } });
+  await call(srv, 'start_session', { initiation: 'user_asked', title: '再格式化', prompt: 'p', background: BG, model: 'auto:light', use_worktree: false });
+  assert.equal(replays.at(-1).body.effort, 'low');
+  await call(srv, 'start_session', { initiation: 'user_asked', title: '照常开', prompt: 'p', background: BG, use_worktree: false });
+  assert.equal(replays.at(-1).body.effort, 'max');
+  // 项目讨论串：档位归 threadPrefs（没另选 = high），清档不动它
+  D.saveStrategy(ctx, { id: 's-00000000', overrides: { light: { model: 'haiku', effort: '' } } });
+  const SID = 'aaaaaaaa-0000-4000-8000-0000000000aa';
+  recordChatPrefs(ctx, SID, { model: 'claude-opus-5-5', effort: 'low', shape: 'project' });
+  gen.sessionId = SID;
+  const coord = makeSessionsMcp({ getGen: () => gen, ctx, lastUserUuidFor: () => null, project: { policy: 'direct' } });
+  await call(coord, 'start_session', { initiation: 'user_asked', title: '讨论串', prompt: 'p', background: BG, model: 'auto:light', use_worktree: false });
+  assert.match(replays.at(-1).body.model, /^claude-haiku-/);
+  assert.equal(replays.at(-1).body.effort, 'high');
+});

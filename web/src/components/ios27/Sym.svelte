@@ -1,5 +1,5 @@
 <script>
-  // 设置页符号字形（lib/symbolTable.svelte.js：公开版是 Lucide 字形，私有 overlay 可换一套）。
+  // 设置页符号字形（lib/symbolTable.svelte.js：原版符号字形，来自 overlay 的 sfSymbols 模块）。
   // size = 字号（pt）：字形按 100pt 墨迹盒等比缩放，颜色跟 currentColor。
   import { symTable } from '../../lib/symbolTable.svelte.js';
   let { name, weight = 600, size = 17, class: cls = '', style = '' } = $props();

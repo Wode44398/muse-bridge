@@ -8,7 +8,7 @@
 <link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
 <link rel="icon" href="%BASE_URL%icons/favicon-32.png" sizes="32x32" type="image/png" />
 <!-- 单开一个对话（分屏的另一格 / 拖出的独立窗口，见 src/lib/solo.js）：与主页面同一个主题键，首帧不闪白 -->
-<script>(function(){try{var t=localStorage.getItem('bridge-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
+<script>(function(){var t='dark';try{var L=localStorage,p=JSON.parse(L.getItem('bridge-prefs')||'null'),g=L.getItem('bridge-glass');if(p&&p.followSys&&window.matchMedia)t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';else t=g==='B'?'light':g==='A'?'dark':(L.getItem('bridge-theme')==='light'?'light':'dark');L.setItem('bridge-theme',t);L.setItem('bridge-glass',t==='light'?'B':'A');}catch(e){}document.documentElement.setAttribute('data-theme',t);})();</script>
 </head>
 <body>
 <div id="app"></div>

@@ -1,11 +1,11 @@
-// 功能扩展（Gemini · Vertex / ChatGPT · Codex / dimensio）：看装没装、能不能从 GitHub 装，一键安装 / 更新。
+// 功能扩展（Media Studio / ChatGPT · Codex / dimensio）：看装没装、能不能从 GitHub 装，一键安装 / 更新。
 // 同扩展中心「功能扩展」页（routes/modules.mjs），业务在 modules/remote.mjs 与 modules/manage.mjs。只有服务器主机能用。
 
 import { defineGroup, defineOp, OpError } from '../registry.mjs';
 import { MODULE_CATALOG } from '../../modules/registry.mjs';
 import { modulesOverviewRemote, installFromRelease } from '../../modules/remote.mjs';
 
-defineGroup('modules', 'agent 扩展', 'Gemini · Vertex、ChatGPT · Codex、dimensio 三个可选 agent 模块（功能扩展页的「Agent」区）：查看状态，从 GitHub 发版一键安装 / 更新（重启服务端后生效）。内置功能与第三方插件见 plugins 组。');
+defineGroup('modules', 'agent 扩展', 'Media Studio、ChatGPT · Codex、dimensio 三个可选模块（功能扩展页的「Agent」区）：查看状态，从 GitHub 发版一键安装 / 更新（重启服务端后生效）。内置功能与第三方插件见 plugins 组。');
 
 const RESTART_HINT = '重启服务端后生效：设置 › 扩展 › 功能扩展 ›「立即重启」，或服务端控制台 › 服务控制';
 const CODE_OF = { 400: 'bad_args', 404: 'not_found', 409: 'conflict', 503: 'unavailable', 504: 'timeout' };
@@ -36,7 +36,7 @@ defineOp({
     + '装好后要重启服务端才生效（先问用户再重启）。先用 modules.list 看 remote.action 是不是 install / update，不是的话 reason 就是不能装的原因。',
   access: 'write', need: ['server.manage'], slow: true,
   params: { id: { type: 'string', required: true, enum: MODULE_CATALOG.map((m) => m.id), desc: '扩展 id' } },
-  example: { id: 'vertex' },
+  example: { id: 'studio' },
   handler: async (ctx, args) => {
     try {
       const r = await installFromRelease(args.id);

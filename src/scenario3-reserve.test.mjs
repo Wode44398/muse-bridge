@@ -125,6 +125,11 @@ test('浏览器池键：主机与只给路径的调用方键不变；成员带�
   assert.notEqual(_browserKey(poolRef(alice, ws)), legacy);
   // claude.mjs（agent 侧）传 owner = scopeOf(ctx)、dock（面板侧）传 poolRef(ctx, ws)：同一把键
   assert.equal(_browserKey(poolRef('u:alice', ws)), _browserKey(poolRef(alice, ws)));
+  // 浏览器按会话：带会话 id 的各是一份，不带的（Codex、新对话）仍是工作空间那份；终端不传会话，键不变
+  assert.notEqual(_browserKey(poolRef(admin, ws, 's1')), _browserKey(poolRef(admin, ws, 's2')));
+  assert.notEqual(_browserKey(poolRef(admin, ws, 's1')), legacy);
+  assert.equal(_browserKey(poolRef(admin, ws, '')), legacy);
+  assert.notEqual(_browserKey(poolRef(alice, ws, 's1')), _browserKey(poolRef(bob, ws, 's1')));
 });
 
 // 真 PTY 放进一次性的子进程里跑：node-pty 的句柄（Windows 上还有 conpty 的辅助进程）会把测试进程拖住不退出。
@@ -212,7 +217,7 @@ test('号池：认不出的字段（groups 等）读写一圈不丢；credential
   assert.deepEqual(credentialFor('u:alice', 'u:alice'), { accountId: 'a-2', token: '' });
   assert.deepEqual(credentialFor('admin', 'g:team-a'), credentialFor('u:bob', 'u:bob'), 'actor / scope 今天不参与选号');
   // 安全视图不带任何新字段
-  assert.deepEqual(Object.keys(claudeAccounts.listAccounts()[0]).sort(), ['active', 'hasToken', 'id', 'label', 'tokenTail']);
+  assert.deepEqual(Object.keys(claudeAccounts.listAccounts()[0]).sort(), ['active', 'hasToken', 'id', 'label', 'plan', 'tokenTail']);
   assert.deepEqual(accountGroups(one), ['team-a']);
   assert.deepEqual(accountGroups({ groups: ['ok', '../bad', '_x'] }), ['ok']);
   assert.deepEqual(accountGroups({}), []);
@@ -422,7 +427,7 @@ test('控制台查看他人数据：同意检查通过、真交出数据之后�
   await new Promise((r) => setTimeout(r, 50));
   const before = (await views()).length;
   assert.equal(await call('/api/admin/user/media?name=vera'), 403, '没允许看内容');
-  assert.equal(await call('/api/admin/user/vertex-session?name=vera&id=x'), 403);
+  assert.equal(await call('/api/admin/user/vertex-session?name=vera&id=x'), 410, 'Gemini 对话 11-04 下线：一律 410，也不记查看');
   await new Promise((r) => setTimeout(r, 50));
   assert.equal((await views()).length, before, '被拒的不记成查看');
   assert.equal(await call('/api/admin/user/routines?name=vera'), 200);
@@ -558,8 +563,8 @@ test('浏览器面板：state 带 desktop——主机的开在桌面壳里，成
   const { EventEmitter } = await import('node:events');
   const origLaunch = CdpSession.prototype.launch;
   const origClose = CdpSession.prototype.close;
-  // 不起真浏览器：让进壳的就当成开在壳里（external），其余是无头
-  CdpSession.prototype.launch = async function (url, opts = {}) { this.external = opts.desktop !== false; this.ws = { readyState: 1, close() {} }; };
+  // 不起真浏览器：让进壳的就当成开在壳里（external + desktopBroker），其余是无头（共享无头宿主同样 external，但没有 broker）
+  CdpSession.prototype.launch = async function (url, opts = {}) { this.external = true; if (opts.desktop !== false) this.desktopBroker = 'http://broker'; this.ws = { readyState: 1, close() {} }; };
   CdpSession.prototype.close = function () { this.dead = true; this.ws = null; };
   let who = { kind: 'admin' };
   const h = {};

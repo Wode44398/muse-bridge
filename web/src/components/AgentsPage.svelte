@@ -10,6 +10,7 @@
   import { api } from '../lib/api.js';
   import { sa, saPing } from '../lib/serverAdmin.svelte.js';
   import { t, tr, isEn } from '../lib/i18n.js';
+  import { uiConfirm } from '../lib/dialogs.js';
 
   let closing = $state(false);
   function close() {
@@ -41,7 +42,14 @@
     if (!a.runnable || busy) return;
     const next = !a.switch;
     // 关掉最后一个开着的 agent 之前问一句：全关之后所有人（包括你自己）都只剩主页。
-    if (!next && data.agents.filter((x) => x.enabled).length <= 1 && !confirm(t('这是最后一个开着的 agent，关掉后所有客户端都没有可用的分页。确定吗？'))) return;
+    // 走应用内弹窗（异步）：问的这段时间里可能已经有别的切换在跑，回来再看一眼 busy
+    if (!next && data.agents.filter((x) => x.enabled).length <= 1) {
+      const ok = await uiConfirm(t('关闭 {name}？', { name: a.label }), {
+        detail: t('这是最后一个开着的 agent，关掉后所有客户端都没有可用的分页。确定吗？'),
+        okLabel: t('关掉'), danger: true,
+      });
+      if (!ok || busy) return;
+    }
     busy = a.id;
     try {
       const r = await api.post('/api/agents', { id: a.id, enabled: next });

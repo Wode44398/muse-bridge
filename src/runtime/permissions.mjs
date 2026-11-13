@@ -33,6 +33,7 @@ import { clip, workflowNameFromInput } from './tool-summary.mjs';
 import * as claudeProjects from '../claude-projects.mjs';
 import { isQuickDir } from '../claude-quick.mjs';
 import { PERMISSION_MODES } from '../config/claude-settings.mjs';
+import { isProjectSession } from './project-mode.mjs';
 
 // ---- 模式解析 -------------------------------------------------------------------------
 
@@ -268,7 +269,8 @@ function alwaysScope(list) {
 // 终端 / 远程 PC / 本机桌面 / 主机管理员的 Edge 这类对外动手的照常审批（对照官方 Chrome 工具「Claude wants to … in Chrome」）。
 // pr（拉取请求状态 / 绑定 / 同步基线）与 visualize（纯展示；开着时另经 SDK allowedTools 直接放行）也在内——
 // 但 pr 里开长期授权的那两样（needsUserApproval：开自动合并、开 Auto-fix）照官方要用户逐次批准，见 tool-approvals.mjs。
-const OWN_MCP = new Set(['workspace', 'sessions', 'browser', 'media', 'phone', 'phoneControl', 'snapshot', 'pr', 'visualize']);
+// project（项目记忆，mcp/project-tools.mjs）只读写 bridge 自己的数据目录，同属这一类。
+const OWN_MCP = new Set(['workspace', 'sessions', 'browser', 'media', 'phone', 'phoneControl', 'snapshot', 'pr', 'visualize', 'project']);
 // 用户的电脑（mcp/device-tools.mjs）里只看不动的几样：列设备、看屏幕 / 读界面、设备自己那个独立分区的浏览器
 // （与服务器上的 browser 同一取舍）。动鼠标键盘、跑命令、读写文件照常审批——设备端另有档位与授权弹窗，两道都在。
 const OWN_DEVICE_TOOLS = new Set(['mcp__device__devices', 'mcp__device__inspect', 'mcp__device__browser']);
@@ -556,6 +558,8 @@ function viewFor(ctx, { sessionId, projectId }) {
   const pending = ctl ? pendingModeFor(ctx, sessionId, mode) : null;
   return {
     mode, source,
+    // 项目对话（runtime/project-mode.mjs）：芯片显示「项目」，菜单里五档改成「讨论串权限」——mode 就是讨论串开出来时继承的那档
+    ...(sessionId && isProjectSession(ctx, sessionId) ? { shape: 'project' } : {}),
     // 绕过权限选了、但这一轮还在跑——这一轮定局后生效（官方 kept pick）
     ...(pending ? { pendingMode: pending } : {}),
     modes: permissionModesFor(ctx),
@@ -605,7 +609,8 @@ export function registerPermissionRoutes(router, { identify }) {
     if (!sessionId) {
       // 新会话草稿：按文件夹记（plan 不记——它是「这一次先出计划」，不是这个文件夹的习惯；快照桶不记绕过权限）
       const fk = folderKeyFor(ctx, cwdFor(ctx, { projectId }));
-      if (mode !== 'plan' && !(fk === 'scratch:' && mode === 'bypassPermissions')) { l.folders[fk] = mode; saveLedger(ctx); }
+      // project:true = 项目草稿里选的讨论串权限（runtime/project-mode.mjs）：只属于那条项目对话、随首条消息带过去，不当文件夹的习惯记
+      if (mode !== 'plan' && b.project !== true && !(fk === 'scratch:' && mode === 'bypassPermissions')) { l.folders[fk] = mode; saveLedger(ctx); }
       return json(res, 200, { ok: true, applied: 'draft', ...viewFor(ctx, { projectId }) });
     }
     const ctl = controlFor(ctx.key, sessionId);

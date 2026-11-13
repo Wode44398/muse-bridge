@@ -12,11 +12,15 @@ import { MUT_INIT } from './cdp.mjs';
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// batch 一次最多随结果附几张图（截图 / screenshot_after）：免得一次塞爆上下文。超出的丢最早的，
+// 并在那一步的日志里写明（11-07 会话 6e9c6c42：4 张只回 3 张、日志照样全写成功，agent 把剩下的图对错了步骤）。
+export const BATCH_IMAGES = 4;
+
 export const VERIFY_DESC = `
 Coordinates: x,y are pixels of the most recent screenshot image (the tool converts to CSS pixels itself; screenshots are already scaled to ≤1568px on the long edge). A point outside that image is an error, not a silent miss. screenshot(region:[x,y,w,h]) returns a zoomed crop at device resolution for reading small details — it does NOT change the coordinate basis.
 Every click/type/key/scroll/hover reports what actually happened: which element sat under the pointer, and after the page settles — URL/title change, focus moves, the clicked control's state (checked/expanded/selected/value), DOM changes, scrolling, new network requests, plus the input's value read back after type. "⚠ 页面没有任何变化" means it most likely missed: look before continuing. A ref whose element is covered by an overlay is refused (pass force:true to click anyway). type without ref/selector fails if nothing editable is focused.
 expect:{text?, gone?, url?, selector?, focus?, value?, changed?} on any action waits (expect_timeout_ms, default 3000, max 15000) until all hold, else the action fails. wait_for(expect…) waits for a condition without doing anything; wait_for(ms) just sleeps. verify:false skips the checks (faster, blind).
-batch(actions:[{action,…}, …]) runs up to 20 steps in one call (same fields as single actions), stopping at the first failure. screenshot_after:true on any action appends a screenshot taken after the page settled.`;
+batch(actions:[{action,…}, …]) runs up to 20 steps in one call (same fields as single actions), stopping at the first failure. 一次 batch 最多附最后 ${BATCH_IMAGES} 张图，每张前面标着出自第几步；更早的不附，日志里那一步会注明——要全看就分批或单独 screenshot。screenshot_after:true on any action appends a screenshot taken after the page settled.`;
 
 // —— 页内助手：装一次，挂在 window.__bridgeV。所有探针都走它，避免每次塞一大段脚本 ——
 const HELPER = `(()=>{${MUT_INIT};
@@ -245,25 +249,37 @@ export async function waitExpect(b, e, { timeoutMs = 3000, changedNow = null } =
 // —— batch ——
 export const BATCH_MAX = 20;
 
-/** 逐步跑 runOne（单步执行器），遇错即停。图片只保留最后 3 张，免得一次塞爆上下文。 */
+/**
+ * 逐步跑 runOne（单步执行器），遇错即停。图片最多附最后 BATCH_IMAGES 张，每张前插一行「第 N 步」
+ * 标明出处；没附上的在那一步的日志行末注明，日志末尾再汇总一句——别让 agent 把剩下的图对错步骤。
+ */
 export async function runBatch(steps, runOne) {
   if (!Array.isArray(steps) || !steps.length) return { content: [{ type: 'text', text: 'batch 需要 actions（动作数组）' }], isError: true };
   if (steps.length > BATCH_MAX) return { content: [{ type: 'text', text: `batch 一次最多 ${BATCH_MAX} 步（给了 ${steps.length} 步）` }], isError: true };
   const lines = [];
-  const images = [];
+  const images = [];   // { at: 步骤下标, action, block }
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i] || {};
-    if (step.action === 'batch') return fail(`第 ${i + 1} 步：batch 不能嵌套`);
+    if (step.action === 'batch') return finish(`第 ${i + 1} 步：batch 不能嵌套`, true);
     const r = await runOne(step);
     const txt = (r?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
-    for (const c of r?.content || []) if (c.type === 'image') images.push(c);
+    for (const c of r?.content || []) if (c.type === 'image') images.push({ at: i, action: step.action, block: c });
     lines.push(`${i + 1}. ${step.action}${r?.isError ? ' ✗' : ''}：${txt.replace(/\n/g, '\n   ')}`);
     if (r?.isError) {
       const rest = steps.length - i - 1;
-      return { content: [...images.slice(-3), { type: 'text', text: lines.join('\n') + (rest ? `\n第 ${i + 1} 步失败，后面 ${rest} 步没有执行。` : '') }], isError: true };
+      return finish(rest ? `第 ${i + 1} 步失败，后面 ${rest} 步没有执行。` : '', true);
     }
   }
-  return { content: [...images.slice(-3), { type: 'text', text: lines.join('\n') }] };
+  return finish('', false);
 
-  function fail(t) { return { content: [{ type: 'text', text: [...lines, t].join('\n') }], isError: true }; }
+  function finish(tail, isError) {
+    const kept = images.slice(-BATCH_IMAGES);
+    const dropped = images.slice(0, images.length - kept.length);
+    const lost = [...new Set(dropped.map((d) => d.at))];
+    for (const at of lost) lines[at] += `\n   （这张图没有附上：一次 batch 最多附最后 ${BATCH_IMAGES} 张，要看请单独 screenshot 或分批）`;
+    const sum = lost.length ? `共 ${images.length} 张图，只附了最后 ${kept.length} 张（第 ${lost.map((at) => at + 1).join('、')} 步的没附）。` : '';
+    const content = kept.flatMap((k) => [{ type: 'text', text: `第 ${k.at + 1} 步（${k.action}）的截图：` }, k.block]);
+    content.push({ type: 'text', text: [lines.join('\n'), sum, tail].filter(Boolean).join('\n') });
+    return isError ? { content, isError: true } : { content };
+  }
 }

@@ -14,12 +14,20 @@
 
   let { item }: { item: ShotItem } = $props();
 
-  const src = $derived(item.dataUri || (item.asset && pane.chat.id ? api.sessionAssetUrl(pane.chat.id, item.asset) : ""));
+  const primary = $derived(item.dataUri || (item.asset && pane.chat.id ? api.sessionAssetUrl(pane.chat.id, item.asset) : ""));
+  // 嵌在 bridge 里走局域网时，媒体经 LAN 可能加载失败：失败一次就换宿主给的备用线路（隧道）重试
+  let retry = $state("");
+  const src = $derived(retry || primary);
+  function onError() {
+    if (retry) return;
+    const alt = api.mediaFallbackUrl(primary);
+    if (alt && alt !== primary) retry = alt;
+  }
 </script>
 
 <div class="shot">
   <button class="img" onclick={() => (app.lightbox = { src, caption: item.url })} use:press={{ scale: 0.995 }}>
-    <img {src} alt={t("页面截图 {url}", { url: item.url })} loading="lazy" />
+    <img {src} alt={t("页面截图 {url}", { url: item.url })} loading="lazy" onerror={onError} />
   </button>
   <div class="meta">
     <span class="url"><Icon name="camera" size={13} /><span class="u">{item.url}</span></span>

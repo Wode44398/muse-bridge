@@ -56,6 +56,7 @@ function noteHello(ev) {
     if (ev.suggestions) lastHello.suggestions = { ...ev.suggestions };   // 老服务端不带就别造一个空表（空表=清掉全部建议）
     // 自定义模型清单（只给管理员）：同源跟随页回放的 hello 也带上，芯片不用等 ensureCustomModels 补拉
     if (Array.isArray(ev.claudeModels)) lastHello.claudeModels = ev.claudeModels;
+    if (ev.noticesV) lastHello.noticesV = ev.noticesV;   // 服务端推会话消息通知（lib/notices.svelte.js）：跟随页也得知道
     return;
   }
   // 服务改了（总线整份推来）：快照里那份跟着换，免得之后才起来的跟随页回放到旧清单

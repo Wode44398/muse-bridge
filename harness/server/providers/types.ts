@@ -22,6 +22,8 @@ export interface Capabilities {
   compactAt?: number;
   // R12：一次请求里历史图片的额度（目录按 provider 配）；不给就用默认 20 张 / 24 MB。
   mediaBudget?: { maxImages: number; maxBytes: number; keepRecent?: number };
+  // 提示缓存这次能活多久（毫秒；空闲压缩按它倒推时机）。不给 = 不知道 / 没缓存
+  cacheTtlMs?: number;
 }
 
 export interface AdapterConfig {
@@ -49,6 +51,8 @@ export interface CustomWire {
   maxTokensField: "max_tokens" | "max_completion_tokens";
   promptCaching: boolean;
   replayReasoning: boolean;
+  // 请求实际发到的上游主机（模型中心的卡带它；自己填地址的服务是地址里的主机名）
+  upstreamHost?: string;
   noRedirect?: boolean; // 成员自己加的服务：不跟随重定向（公网地址 302 到内网一样能绕过地址把关，见 endpoint-guard.ts）
   // 这个型号的思考写法（档位表，形状同 src/model-knowledge）；注册表里没这个型号时没有，什么思考参数都不发
   model?: {

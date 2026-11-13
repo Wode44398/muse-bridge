@@ -42,7 +42,7 @@
     { kind: 'agent', key: 'claude', label: t('打开 Claude'), keys: 'claude cc' },
     { kind: 'agent', key: 'chatgpt', label: t('打开 ChatGPT'), keys: 'codex openai gpt' },
     { kind: 'agent', key: 'harness', label: t('打开 dimensio'), keys: 'dimensio harness hx' },
-    { kind: 'agent', key: 'vertex', label: t('打开 Vertex'), keys: t('gemini 图片 视频 音乐') },
+    { kind: 'agent', key: 'studio', label: t('打开 Media Studio'), keys: t('图像 视频 配音 音乐 生图 gemini vertex') },
     { kind: 'agent', key: 'files', label: t('打开工作空间'), keys: t('文件 files workspace') },
   ].filter((it) => screenOn(it.key)));
   const SETTING_ITEMS = [

@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { readBody } from '../runtime/body.mjs';
 import * as claudeProjects from '../claude-projects.mjs';
 import * as claudeQuick from '../claude-quick.mjs';
-import { collectDeliverables, deliverAnywhere, deliverRoots, isInside, resolveDeliverPath, streamArtifactFile, streamFolderZip, transcriptCwds } from '../runtime/deliverables.mjs';
+import { collectDeliverables, deliverAnywhere, deliverNav, deliverRoots, isInside, resolveDeliverPath, streamArtifactFile, streamFolderZip, transcriptCwds } from '../runtime/deliverables.mjs';
 import { isHtmlFile, respondHtmlSite } from '../runtime/html-site.mjs';
 import { sessionsDir, sanitizeName } from '../runtime/paths.mjs';
 import { getLiveGens, findGenBySession, bridgeSessions, routineSessions, pluginSessions } from '../runtime/gen.mjs';
@@ -21,34 +21,40 @@ import { findRewindAnchors, rewindClaudeFiles, pendingRewindAnchor, setPendingRe
 import { releaseWarmClaude } from '../agents/claude.mjs';
 import { chatPrefsFor, lastChatPrefs, dropChatPrefs, setChatPrefsOutputStyle } from '../runtime/chat-prefs.mjs';
 import { validSessionOutputStyle } from '../runtime/claude-turn-settings.mjs';
-import { sessionQuestions } from '../runtime/questions.mjs';
+import { sessionQuestions, splitAnswerList } from '../runtime/questions.mjs';
 import { getLibrary, applyLibraryOp, dropFromLibrary } from '../runtime/session-library.mjs';
 import { claudeSettingsSnapshot, setClaudeSettings, claudeSetting } from '../runtime/claude-settings.mjs';
 import { busPublish } from '../runtime/bus.mjs';
 import { lineageFor } from '../runtime/desktop-lineage.mjs';
 import { sessionOutputs } from '../runtime/session-outputs.mjs';
 import { sessionMcp } from '../runtime/session-mcp.mjs';
-import { familyMaps, forgetSession, linkedSessions } from '../runtime/session-family.mjs';
+import { familyMaps, forgetSession, linkedSessions, lastActiveOf, sessionFileOf } from '../runtime/session-family.mjs';
+import { sessionCostBaseline } from '../runtime/usage-ledger.mjs';
+import { projectState, threadResolved } from '../runtime/project-mode.mjs';
 // 会话列表的扫盘 / 标题链 / 归档态 / 全文搜索（2026-10-20，对齐官方 Desktop 的归档与搜索）
 import { listSessionFilesAsync, invalidateSessionFiles, peekSessionFile } from '../runtime/session-list.mjs';
 import { readJsonlLines, lineStr, lineObj, readTail } from '../runtime/session-jsonl.mjs';
 import { sendJson } from './static-compress.mjs';
 import { resolveTitles, resolveTitle, knownUntitled, scheduleTitleWarm } from '../runtime/session-titles.mjs';
 import { archiveView, dropStaleInactive, sessionArchiveFlag } from '../runtime/session-archive-auto.mjs';
+import { scheduleDesktopMirror, setMirrorResolvers } from '../runtime/desktop-mirror.mjs';
 import { forgetArchived, getArchiveState } from '../runtime/session-archive.mjs';
 import { sessionLineage, forgetDetached } from '../runtime/session-lineage.mjs';
 import { forgetActivity } from '../runtime/session-activity.mjs';
 import { searchSessions as searchSessionsCore, scheduleSearchWarm } from '../runtime/session-search.mjs';
 import { peerFromRecord, peerDisplay, hasPeerHold } from '../runtime/session-peers.mjs';
-import { forgetPrSession } from '../runtime/pr-monitor.mjs';
+import { forgetPrSession, prBrief } from '../runtime/pr-monitor.mjs';
 import { VAULT } from '../config/index.mjs';
 import { contextFor } from '../runtime/identity.mjs';
 import { classifyError, limitNotice } from '../runtime/status.mjs';
 import { planRecordFor } from '../runtime/permissions.mjs';   // 计划卡的结论 / 批准时选的目标模式（历史里的计划卡）
+import { countToolImages } from '../runtime/tool-images.mjs';   // 工具结果图片张数（状态行缩略图条）
+import { autoServed } from '../runtime/model-ratings.mjs';   // 工作流 auto:<档> agent 的真实模型与档位
+import { HOST_OWNER } from '../runtime/principal.mjs';
 // 工具行/任务卡规则与直播端（agents/claude.mjs）共用一份——直播与重开必须一致。
 import { toolShown, toolJoins, toolSummary, toolInputSubset, workflowNameFromInput, workflowMetaFromScript, parseTaskNotification, readWorkflowOutput, annotateWorkflowEfforts, clip, COMPACT_TOOL, compactMeta } from '../runtime/tool-summary.mjs';
 import { isVizTool, widgetSegFromToolUse, applyWidgetResult } from '../mcp/visualize.mjs';
-import { parseDeviceRefNote, basenameOf } from '../runtime/device-refs.mjs';
+import { splitAttachments, toClientAtt } from '../runtime/client-atts.mjs';
 
 function extractText(content) {
   if (typeof content === 'string') return content;
@@ -76,6 +82,39 @@ export function sessionFingerprint(file, sessionId, ctx) {
     JSON.stringify(chatPrefsFor(ctx, sessionId) || null),
   ];
   return createHash('sha1').update(parts.join('\x00')).digest('hex').slice(0, 16);
+}
+
+// Desktop 侧栏登记用的标题（desktop-mirror.mjs）：bridge 里改过名的优先，其次与列表同一口径
+async function mirrorTitleOf(ctx, f) {
+  const libT = (getLibrary(ctx).titles || {})[f.id];
+  if (libT) return libT;
+  if (!f.file) return '';
+  return (await resolveTitle(f, { fam: familyMaps(ctx).titles.get(f.id), desktop: undefined, readFirst: readSessionTitle, trim: trimTitle })).title;
+}
+setMirrorResolvers({
+  titleOf: (f) => mirrorTitleOf(f.ctx, f),
+  archivedOf: (ctx, f) => !!archiveView(ctx)(f.id, f.mtime, f.size),
+});
+// 不依赖有人打开 bridge 会话列表：服务起来后定时补登记一遍（11-06 实遇：重启后没人开列表，一条都没登记）。
+// 先 lineageFor 踢一轮 Desktop 扫描，扫完的下一拍 scheduleDesktopMirror 才放行。
+// 全量补登记的参数：普通会话登记；临时对话的会话行交去撤回（以前登记过的），它们存为工作空间后才登记
+const mirrorOpts = (ctx, extra = {}) => ({
+  filesFn: () => listSessionFilesAsync(ctx).then((r) => ({ files: r.files, retract: r.quickFiles })),
+  titleOf: (f) => mirrorTitleOf(ctx, f),
+  archivedOf: (() => { const av = archiveView(ctx); return (f) => !!av(f.id, f.mtime, f.size); })(),
+  ...extra,
+});
+function mirrorTick() {
+  try {
+    const ctx = contextFor({ kind: 'admin' });
+    lineageFor(ctx);
+    scheduleDesktopMirror(ctx, mirrorOpts(ctx));
+  } catch (e) { console.warn('[desktop-mirror] tick', e && e.message); }
+}
+if (!process.env.NODE_TEST_CONTEXT && process.env.BRIDGE_DESKTOP_MIRROR !== '0') {
+  setTimeout(mirrorTick, 30_000).unref();
+  setTimeout(mirrorTick, 90_000).unref();
+  setInterval(mirrorTick, 5 * 60_000).unref();
 }
 
 export function trimTitle(s) {
@@ -150,53 +189,18 @@ const SDK_NOISE = new Set([
 //    <command-name>/<command-message>/<command-args>、<local-command-*>、<system-reminder>。
 const INJECTED_TEXT_RE = /^\s*<(?:(?:task|agent|bash)-notification|command-name|command-message|command-args|local-command-|system-reminder)/;
 const isInjectedText = (t) => INJECTED_TEXT_RE.test(t);
+// 例外：用户自己敲的斜杠命令（/插件:命令 参数），CLI 落成 <command-message>/<command-name>/<command-args>
+// 一段非 meta 文本（展开后的正文另起一条 isMeta）。它就是用户这轮说的话——还原成「/命令 参数」当用户气泡，
+// 不然首条消息是斜杠命令的会话重开后开头一片空白。
+function slashCommandText(t) {
+  const name = ((String(t).match(/<command-name>([\s\S]*?)<\/command-name>/) || [])[1] || '').trim();
+  if (!name) return '';
+  const args = ((String(t).match(/<command-args>([\s\S]*?)<\/command-args>/) || [])[1] || '').trim();
+  return (name.startsWith('/') ? name : '/' + name) + (args ? ' ' + args : '');
+}
 
-// 用户带附件发送时，claude.mjs 把「[用户上传了以下附件…绝对路径]」注入进 prompt，会转写进 transcript。
-// 重开历史会话时：① 把这段注入文本从气泡里剥掉（否则漏出服务端绝对路径）② 抽出附件——存盘名 file
-// （Date.now()-原名）+ 去时间戳前缀的显示名 name + 完整路径 raw（供 toClientAtt 按来源分类，
-// 不直接出服务器）；前端据此走 /api/upload/raw 或 /api/file 把图片渲染回缩略图。
-const ATT_MARK = '[用户上传了以下附件';
-export function splitAttachments(text) {
-  const mi = text.indexOf(ATT_MARK);
-  if (mi < 0) return { text, attachments: [] };
-  const clean = text.slice(0, mi).replace(/\n+$/, '');
-  const attachments = [];
-  const re = /^-\s+(.+)$/gm;
-  let m;
-  while ((m = re.exec(text.slice(mi)))) {
-    // 行尾可能带 claude.mjs 加的标注（「  ← 文件夹」「  ← 引用的对话」），不属于路径
-    const raw = m[1].replace(/\s+←.*$/, '').trim();
-    // 用户电脑上的文件夹（只引用、没上传，runtime/device-refs.mjs）：路径是他电脑上的，名字不剥时间戳前缀
-    const dev = parseDeviceRefNote((/\s+←\s*(.*)$/.exec(m[1]) || [])[1]);
-    if (dev) {
-      const p = raw.replace(/^`(.*)`$/, '$1');   // 提示词里这条路径包着反引号
-      attachments.push({ file: basenameOf(p), name: basenameOf(p), raw: p, kind: 'folder', device: { id: dev.deviceId, name: dev.deviceName } });
-      continue;
-    }
-    const file = raw.split(/[\\/]/).pop() || '';
-    if (!file) continue;
-    const q = parseQuoteFile(file);
-    attachments.push(q ? { file, name: q.title, raw, kind: 'chat', quoteId: q.id } : { file, name: file.replace(/^\d+-/, ''), raw });
-  }
-  return { text: clean, attachments };
-}
-// 「引用对话」附件（侧栏把一条会话拖进另一个对话，见 POST /api/session/quote）：存盘名
-// <时间戳>-chatref-<会话 id>-<标题>.md。靠名字认出来，重开历史时气泡里画成对话卡而不是一份 .md。
-const QUOTE_FILE_RE = /^\d+-chatref-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})-(.*)\.md$/;
-export function parseQuoteFile(file) {
-  const m = QUOTE_FILE_RE.exec(String(file || ''));
-  return m ? { id: m[1], title: m[2] || '' } : null;
-}
-// 历史附件出口（绝对路径不出服务器）：uploads 里的 → {file}（前端走 /api/upload/raw）；
-// 工作空间直发的（「发送给 AI」零拷贝路径）→ {rel}（前端走 /api/file）；都不是 → 只留名字。
-function toClientAtt(a, ctx) {
-  if (a.device) return { name: a.name, kind: 'folder', device: a.device };   // 电脑上的路径不必回传，卡上只写名字与哪台电脑
-  const raw = a.raw || '';
-  const under = (dir) => dir && raw && path.resolve(raw).startsWith(path.resolve(dir) + path.sep);
-  if (under(ctx.uploads)) return a.kind === 'chat' ? { file: a.file, name: a.name, kind: 'chat', quoteId: a.quoteId } : { file: a.file, name: a.name };
-  if (under(ctx.cwd)) return { rel: path.relative(ctx.cwd, raw).split(path.sep).join('/'), name: a.file };
-  return { name: a.name };
-}
+// 附件清单的抽取与出口见 runtime/client-atts.mjs（直播插话共用）
+export { splitAttachments, parseQuoteFile } from '../runtime/client-atts.mjs';
 
 // —— transcript → 结构化消息重建（让「重开会话」看到的和「实时」一致）——
 // 关键：把一整轮（真·用户消息 + 后续所有 assistant/tool_result 条目）归为【一条】assistant 消息，
@@ -235,6 +239,31 @@ function applyAnswerText(seg, text) {
       else it.custom = p;
     }
   });
+}
+// 官方作答通道（allow + updatedInput.answers；bridge 2026-11-08 起也走它，官方 Desktop / 终端里答的一直是它）：
+// 这条 user 记录顶层的 toolUseResult = { questions, answers:{题面: 串}, annotations? }，按题面回填——单选是一个 label 或
+// 自定义文本，多选是 questions.mjs joinAnswerList 拼的串；annotations.notes（单选「选了又写了自定义」）也算自定义。
+// 读不到（旧转录、deny 退路、取消）再按 formatAnswer 的「答：」反解。
+function applyAnswerResult(seg, text, tur) {
+  if (!tur || typeof tur !== 'object' || !Array.isArray(tur.questions) || !tur.answers || typeof tur.answers !== 'object' || Array.isArray(tur.answers)) {
+    applyAnswerText(seg, text);
+    return;
+  }
+  seg.answered = true;
+  const notes = tur.annotations && typeof tur.annotations === 'object' ? tur.annotations : {};
+  for (const it of seg.items) {
+    const v = Object.hasOwn(tur.answers, it.question) ? tur.answers[it.question] : undefined;
+    const parts = typeof v !== 'string' || !v ? [] : it.multi ? (splitAnswerList(v) || v.split(', ')) : [v];
+    const extra = [];
+    for (const raw of parts) {
+      const p = String(raw).trim(); if (!p) continue;
+      if (it.options.some((o) => o.label === p)) { if (!it.selected.includes(p)) it.selected.push(p); }
+      else extra.push(p);
+    }
+    const n = Object.hasOwn(notes, it.question) && notes[it.question] ? notes[it.question].notes : '';
+    if (typeof n === 'string' && n.trim()) extra.push(n.trim());
+    if (extra.length) it.custom = extra.join('、');
+  }
 }
 // 空壳判定：notice（模型切换提示）与带 task 的工具行也算内容——「只剩一张切换卡」的轮不能被丢掉。
 const asmHasContent = (m) => m.segments.some((s) => (s.kind === 'text' && s.md.trim()) || (s.kind === 'tools' && s.tools.length) || s.kind === 'ask' || s.kind === 'plan' || s.kind === 'notice' || s.kind === 'media' || s.kind === 'widget');
@@ -287,7 +316,7 @@ const isAutoModeDenial = (text) => /^Permission for this action (was denied by t
 // 直播里图/视频/语音靠 gen_media_* 事件落成 media 段；以前 transcript 重建刻意不还原它，于是
 // 重开对话、或对账时这条消息有任何一处对不上（被服务端版整条替换）——图就整张没了。
 // transcript 里有还原所需的全部信息：tool_use 的 prompt + tool_result 里的绝对文件路径
-//（文件名就是媒体 id，见 modules/vertex/server/mcp/media-phone.mjs resultText）。
+//（文件名就是媒体 id，见 modules/studio/server/mcp/media-phone.mjs resultText）。
 // 段形状与直播 chat.svelte.js gen_media_start/gen_media 落成的完全一致。
 const MEDIA_TOOL_KIND = { generate_image: 'image', generate_video: 'video', generate_speech: 'audio', generate_music: 'music' };
 const MEDIA_ID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.[a-z0-9]{2,5}\b/i;
@@ -594,7 +623,8 @@ function makeHistoryParser(file, opts = {}) {
         const o = readWorkflowOutput(n.outputFile);
         if (o) {
           // 逐 agent 档位不在快照里，从子 agent 转录补（<会话>.jsonl 旁边的 <会话>/subagents）
-          if (o.progress) t.progress = annotateWorkflowEfforts(o.progress, file.replace(/\.jsonl$/i, '') + path.sep + 'subagents');
+          // auto:<档> 的落点按主人身份的阶梯补（历史缓存不分人；成员会话少，按主人算）
+          if (o.progress) t.progress = annotateWorkflowEfforts(o.progress, file.replace(/\.jsonl$/i, '') + path.sep + 'subagents', (name) => autoServed(name, HOST_OWNER));
           if (o.result != null) t.result = o.result;
           if (!t.usage && (o.tokens || o.toolCalls)) t.usage = { tokens: o.tokens, toolUses: o.toolCalls, ms: 0 };
         }
@@ -638,7 +668,7 @@ function makeHistoryParser(file, opts = {}) {
         if (!sp.text.trim() && !sp.attachments.length) return;
         flushManual(ts);
         const peerIn = peerFromRecord(o);   // 官方 Desktop / 终端会话插进来的：正文换成与直播同形的显示信封（带来源）
-        ensureAsm(ts).segments.push({ kind: 'steer', text: peerIn ? peerDisplay(peerIn) : sp.text, files: sp.attachments.map((x) => x.name).filter(Boolean), ...(a.source_uuid ? { uuid: a.source_uuid } : {}), read: true });
+        ensureAsm(ts).segments.push({ kind: 'steer', text: peerIn ? peerDisplay(peerIn) : sp.text, files: sp.attachments.map((x) => x.name).filter(Boolean), ...(sp.attachments.length ? { atts: sp.attachments } : {}), ...(a.source_uuid ? { uuid: a.source_uuid } : {}), read: true });
         textBreak = true;
         return;
       }
@@ -736,7 +766,7 @@ function makeHistoryParser(file, opts = {}) {
         for (const b of blocks) {
           if (b.type !== 'tool_result' || !b.tool_use_id) continue;
           if (askByTool.has(b.tool_use_id)) {
-            applyAnswerText(askByTool.get(b.tool_use_id), resultText(b));
+            applyAnswerResult(askByTool.get(b.tool_use_id), resultText(b), o.toolUseResult);
             askByTool.delete(b.tool_use_id);
             continue;
           }
@@ -761,6 +791,7 @@ function makeHistoryParser(file, opts = {}) {
           if (!entry) continue;
           entry.status = b.is_error ? 'error' : 'done';
           { const card = cardOf(b); if (card) entry.card = card; }   // 插件工具的结果卡片（同直播 tool_done 的 card）
+          { const n = countToolImages(b); if (n) entry.images = n; }   // 结果里的图片张数（状态行缩略图条；图本身按需从 transcript 现取）
           if (b.is_error) { const rt = resultText(b).trim(); if (isUserDenial(rt)) entry.denied = 'user'; else if (isAutoModeDenial(rt)) entry.denied = 'classifier'; }
           if (entry.task) applyToolResult(entry.task, b, o.toolUseResult);
           // 子 agent 出的图/视频：按 agentId（applyToolResult 刚回填）读它的子转录，就地展开成 media 段。
@@ -798,7 +829,8 @@ function makeHistoryParser(file, opts = {}) {
             return;
           }
         }
-        const text = blocks.filter((b) => b.type === 'text' && typeof b.text === 'string' && !isInjectedText(b.text)).map((b) => b.text).join('');
+        const text = blocks.filter((b) => b.type === 'text' && typeof b.text === 'string')
+          .map((b) => (isInjectedText(b.text) ? slashCommandText(b.text) : b.text)).join('');
         if (text && text.trim() && !SDK_NOISE.has(text.trim())) {
           flushManual(ts);
           asm = null;
@@ -928,7 +960,7 @@ function forgetHistory(file) {
 
 // 定位 transcript（/api/session、会话信息面板这类热路径）：先查会话列表的扫盘缓存（session-list.mjs，命中再异步确认文件
 // 还在），查不到才走 locateSessionPaths——它对每个项目目录同步 existsSync 一遍（几十个目录 ~20ms，会话信息面板还要再来一遍）。
-async function locateSession(ctx, id) {
+export async function locateSession(ctx, id) {
   id = String(id || '');
   if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return null;
   const hit = peekSessionFile(ctx, id);
@@ -1101,6 +1133,8 @@ export function registerSessionRoutes(router, { authOk, identify }) {
         const fm = familyMaps(ctx);
         return { famTitles: fm.titles, desktopTitles: lineageFor(ctx).titles, readFirst: readSessionTitle, trim: trimTitle };
       });
+      // 旧会话 / 漏掉的补登记进官方 Desktop 侧栏（desktop-mirror.mjs，节流 60s、只给主机本人；新会话在 claude.mjs 当场登记）
+      scheduleDesktopMirror(ctx, mirrorOpts(ctx));
     }
     // 一家子不被 60 条截断拆散：列进来的根带上它所有子会话，列进来的子会话也把根补上（只在活跃会话里补）。
     if (view === 'active' && !pageProject && lineage.size && files.length > limit) {
@@ -1161,6 +1195,8 @@ export function registerSessionRoutes(router, { authOk, identify }) {
       ...(lineage.has(f.id) ? { parentId: lineage.get(f.id) } : {}),
       // 直接父（bridge 派生的才有）：会话信息面板的「相关会话」卡、工具行的跳转用；parentId 是顶层祖先（侧栏只缩进一级）
       ...(fam.parentOf.has(f.id) ? { spawnedBy: fam.parentOf.get(f.id) } : {}),
+      // 项目对话（runtime/project-mode.mjs）：侧栏行换项目图标，它下面的子会话叫讨论串
+      ...(chatPrefsFor(ctx, f.id)?.shape === 'project' ? { shape: 'project' } : {}),
       title: titles.get(f.id)?.title || '',
       ...(f.arch ? { archived: true, archivedReason: f.arch.reason, ...(f.arch.at ? { archivedAt: f.arch.at } : {}) } : {}),
     }));
@@ -1274,6 +1310,8 @@ export function registerSessionRoutes(router, { authOk, identify }) {
       const hit = moved.find((m) => m.id === saved.project.id);
       if (hit) saved.project = { ...saved.project, path: hit.path };
     } catch (e) { console.warn('[quick] relocate on save failed:', e?.message || e); }
+    // 存成工作空间了：这时才把它的会话登记进官方 Desktop 侧栏（不等 60s 节流；没挪成的等挪完后定时那路补）
+    try { scheduleDesktopMirror(ctx, mirrorOpts(ctx, { force: true })); } catch {}
     projJson(res, () => ({ ok: true, ...saved }));
   });
   // 「继续保留」：给这只临时对话桶记一次活动，回收时钟从头算。{ id } → { id, expiresAt }
@@ -1394,6 +1432,22 @@ export function registerSessionRoutes(router, { authOk, identify }) {
     // 相关会话（session-family.mjs）：父 / 子 / 兄弟，带状态与各自最新汇报的开头
     let family = null;
     try { const f = await linkedSessions(ctx, id, { reports: true }); if (f.parent || f.children.length || f.siblings.length) family = f; } catch {}
+    // 项目对话：子会话就是讨论串，卡片按讨论串的状态点画（等你 = 有审批卡 / 提问在等）
+    if (family && chatPrefsFor(ctx, id)?.shape === 'project') {
+      // 概览按状态分组：resolved = 标过已解决（或空闲满 7 天），at = 最后改动时间（runtime/project-mode.mjs）
+      const st = projectState(ctx, id);
+      // 用量按讨论串拆分：transcript 里 CLI 记的累计 cost-state（按 API 价折算；订阅号只是参考值）
+      const costOf = async (sid, file) => { try { return file ? await sessionCostBaseline(file, sid) : 0; } catch { return 0; } };
+      const costs = await Promise.all(family.children.map((c) => costOf(c.id, sessionFileOf(ctx, c.id))));
+      const coordCost = await costOf(id, p.file);
+      family = { ...family, project: true, paused: st.paused, cost: { coordinator: coordCost, threads: costs.reduce((a, b) => a + b, 0) }, children: family.children.map((c, i) => {
+        const at = lastActiveOf(ctx, c.id);
+        // 讨论串绑定的 PR（待评审 / 合并中两组看它；合并了算已解决）
+        let pr = null;
+        try { pr = prBrief(ctx, c.id); } catch {}
+        return { ...c, at, cost: costs[i] || 0, ...(pr ? { pr } : {}), ...(sessionQuestions.hasFor(c.id, ctx.key) ? { waiting: true } : {}), ...(threadResolved(st, c.id, { lastAt: at, working: c.state === 'working', merged: !!pr && pr.state === 'merged' }) ? { resolved: true } : {}) };
+      }) };
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ outputs, mcp: sessionMcp(ctx.key, id), family }));
   });
@@ -1439,6 +1493,10 @@ export function registerSessionRoutes(router, { authOk, identify }) {
     const messages = all.slice(-80).map((m) => {
       if (m.role === 'user') return m.attachments ? { ...m, attachments: m.attachments.map((a) => toClientAtt(a, ctx)) } : m;
       const { cwds, ...rest } = m;
+      // 插话段里的附件同用户气泡一样出口（绝对路径不出服务器），前端据此画缩略图
+      if (rest.segments && rest.segments.some((s) => s.kind === 'steer' && s.atts)) {
+        rest.segments = rest.segments.map((s) => (s.kind === 'steer' && s.atts ? { ...s, atts: s.atts.map((x) => toClientAtt(x, ctx)) } : s));
+      }
       // 基准：该轮落盘的 cwd（最近的优先）→ 项目根；roots 不变，根守卫不放宽。
       const bases = [...(cwds || []).slice().reverse(), p.project.path];
       let atts = [];
@@ -1535,6 +1593,15 @@ export function registerSessionRoutes(router, { authOk, identify }) {
       if (!file && !path.isAbsolute(requested)) file = resolveDeliverPath(requested, [...await transcriptCwds(p.file), projRoot], roots);
       if (!file) throw Object.assign(new Error('not found'), { status: 404 });
       if (!deliverAnywhere(ctx) && !roots.some((root) => isInside(file, root))) throw Object.assign(new Error('forbidden'), { status: 403 });
+      // locate=1：正文链接对不上附件卡时，前端先问「这在工作空间里哪」——能定位就在右侧工作区的
+      // 文件页打开（与附件卡同一套 deliverNav），算不出（无 shell 又在根外）nav 为 null，前端才回落全屏。
+      if (url.searchParams.get('locate') === '1') {
+        const dir = statSync(file).isDirectory();
+        const where = deliverNav(dir ? file : path.dirname(file), { fileRoot: ctx.cwd, ws: projRoot, shell: !!ctx.shell });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ path: file, name: path.basename(file), kind: dir ? 'folder' : 'file', nav: where && !dir ? { ...where, open: path.basename(file) } : where }));
+        return;
+      }
       if (statSync(file).isDirectory()) {
         await streamFolderZip(req, res, file, { name: url.searchParams.get('name') || '' });
         return;

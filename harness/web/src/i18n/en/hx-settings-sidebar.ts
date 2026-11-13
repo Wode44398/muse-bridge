@@ -103,6 +103,10 @@ export default {
   "回到模型服务": "Back to providers",
   "编辑自定义服务": "Edit custom provider",
   "添加自定义服务": "Add custom provider",
+  "在模型中心管理全部模型服务": "Manage all model providers in Model Hub",
+  "模型中心": "Model Hub",
+  "添加服务": "Add provider",
+  "在模型中心里改「{name}」": "Edit “{name}” in Model Hub",
   "OpenAI 兼容接口": "OpenAI-compatible API",
   "兼容 OpenAI Chat Completions 的接口都能接：中转站、OpenRouter、自己部署的 vLLM / Ollama……":
     "Works with any API compatible with OpenAI Chat Completions: API relays, OpenRouter, self-hosted vLLM / Ollama, and more.",

@@ -172,7 +172,7 @@ async function verifyPw(pw, rec) {
 // service : 服务账号（QQ 机器人这类程序在用的账号）。主机形态关掉多用户后，只有服务账号还能登录。
 export function userGrants(rec) {
   return {
-    agents: Array.isArray(rec?.agents) ? normAgentList(rec.agents) : [...USER_DEFAULT_AGENTS],
+    agents: Array.isArray(rec?.agents) ? normAgentList(rec.agents) : [...USER_DEFAULT_AGENTS],   // 老名单里的 gemini 读出来就是 studio（normAgentList）
     snapshot: rec?.snapshot !== false,
     service: rec?.service === true,
   };

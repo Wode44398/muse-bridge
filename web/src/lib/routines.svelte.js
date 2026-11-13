@@ -7,6 +7,7 @@ import { api } from './api.js';
 import { busOn } from './bus.js';
 import { ui } from './state.svelte.js';
 import { notifyKind } from './notify.js';
+import { noticesLive } from './notices.svelte.js';
 import { showToast } from './toast.svelte.js';
 import { t } from './i18n.js';
 export * from './routineText.js';
@@ -36,6 +37,7 @@ busOn((ev) => {
   if (ev.type !== 'routine') return;
   if (ui.routinesOpen || rt.loaded) loadRoutines();
   if (ev.state !== 'end' || !ev.notify || ev.status === 'skipped') return;
+  if (noticesLive()) return;   // 服务端会话消息通知接手（lib/notices.svelte.js：横幅 / 系统通知 / 铃声）
   const ok = ev.status === 'ok';
   const title = ok ? t('定时任务「{name}」已完成', { name: ev.name || '' }) : t('定时任务「{name}」没有跑成', { name: ev.name || '' });
   // 页面在后台：系统通知（跟「任务完成」那类通知开关走）；在前台：页内提示

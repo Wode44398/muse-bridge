@@ -64,6 +64,33 @@ export function list(kind, dir = MEDIA) {
   return out.sort((a, b) => b.mtime - a.mtime);
 }
 
+// 全部侧车记录（Media Studio 的作品流用；新的在前）。kinds：只要这几种（不传 = 全部）。坏掉的侧车跳过。
+export function listRecords(dir = MEDIA, kinds = null) {
+  let names = [];
+  try { names = readdirSync(dir).filter((n) => n.endsWith('.json')); } catch {}
+  const out = [];
+  for (const n of names) {
+    try {
+      const rec = JSON.parse(readFileSync(path.join(dir, n), 'utf8'));
+      if (!rec || !ID_RE.test(String(rec.id || ''))) continue;
+      rec.kind = rec.kind || 'video';
+      if (kinds && !kinds.includes(rec.kind)) continue;
+      if (!rec.created) { try { rec.created = statSync(path.join(dir, n)).mtimeMs; } catch { rec.created = 0; } }
+      out.push(rec);
+    } catch {}
+  }
+  return out.sort((a, b) => b.created - a.created || (a.id < b.id ? 1 : -1));
+}
+
+// 补写侧车字段（Studio 记 wsPath 这类事后才有的信息）；id 不存在回 null。
+export function updateMeta(id, patch, dir = MEDIA) {
+  const rec = get(id, dir);
+  if (!rec) return null;
+  const next = { ...rec, ...patch, id: rec.id, ext: rec.ext };
+  writeJson(metaFile(id, dir), next);
+  return next;
+}
+
 export function remove(id, dir = MEDIA) {
   if (!ID_RE.test(id)) return false;
   const rec = get(id, dir);

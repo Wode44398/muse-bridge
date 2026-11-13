@@ -10,29 +10,107 @@
   //   3) onExit 回 bridge 主页（侧栏「主页」行 + 安卓返回键都走它）。单 agent 模式（lib/rootScreen.js：
   //      只开了 dimensio）这一页就是根——onExit 传 null（harness 据此不摆「主页」行、返回键到底交还宿主），
   //      侧栏底部挂账户行（sidebarFoot，与 Claude 页侧栏底部同一套 UserMenu），没登录不挂页面、给登录。
-  import { ui, me, singleMode } from '../lib/state.svelte.js';
+  import { ui, me, singleMode, prefs, savePrefs, pickTheme, applyFollowSys } from '../lib/state.svelte.js';
   import { closePage } from '../lib/pageMorph.js';
-  import { apiUrl } from '../lib/server.js';
-  import { authHeaders } from '../lib/api.js';
+  import { apiUrl, mediaUrl, mediaFallbackUrl } from '../lib/server.js';
+  import { api, authHeaders } from '../lib/api.js';
   import { openPreview } from '../lib/preview.svelte.js';
+  import { openSettingsFromChat } from '../lib/settingsNav.svelte.js';
   import { configureApi, uploadFile as hxUploadFile } from '@hx/lib/api.ts';
-  import { app as hxApp } from '@hx/lib/state.svelte.ts';
-  import { resolveMode, themeBg } from '@hx/lib/theme.ts';
+  import { app as hxApp, setAppearance as hxSetAppearance, openMemory as hxOpenMemory, openSession as hxOpenSession, reloadMeta as hxReloadMeta, newChat as hxNewChat, setModelHubHost } from '@hx/lib/state.svelte.ts';
+  import { hub, hubUi, loadHub, openModelHub, openHubSheet } from '../lib/modelHub.svelte.js';
+  import { adoptDimensioService } from '../lib/modelHubAdopt.js';   // hubUi.sheet：App 根上模型中心浮层的开合
+  import { ds } from '../lib/dimensioSettings.svelte.js';
+  import { openClaudeSession } from '../lib/sessionFamily.svelte.js';
+  import { resolveMode, themeBg, suppressTransitions as hxSuppressTransitions } from '@hx/lib/theme.ts';
   import HarnessApp from '@hx/App.svelte';
   import { drag, dropZone, dropToast } from '../lib/dragdrop.svelte.js';
   import { WS_FILE, dtHasWsFiles, wsDescriptorFrom } from '../lib/fileDrag.js';
   import HxFilesEmbed from './dock/HxFilesEmbed.svelte';
+  import MemoryPanel from './dock/MemoryPanel.svelte';
+  import { uiView, onUiView, currentDraft } from '../lib/uiReport.js';
+  import { setWorkspaceHost } from '@hx/lib/workspace-collab.svelte.ts';
   import ProjectPicker from './ProjectPicker.svelte';
   import UserMenu from './UserMenu.svelte';
   import { updateInfo } from '../lib/updateStore.svelte.js';
   import { hasNativePickDirectory, nativePickDirectory } from '../lib/nativeDesktop.js';
   import { t } from '../lib/i18n.js';
+  import { untrack } from 'svelte';
   import '@hx/app.css';
 
   configureApi({
     base: () => apiUrl('/api/harness'),
     headers: () => authHeaders(),
+    // 截图卡 / 产物直链这类 <img>/<a>：媒体线路按实测走（手机 WebView 经 LAN 加载图片会整批失败，11-07 截图卡裂图）
+    mediaBase: () => mediaUrl('/api/harness'),
+    mediaFallback: (url) => mediaFallbackUrl(url),
   });
+
+  // 6) 工作区协同：dimensio 的 agent 要知道「用户在看什么」。用户在 dimensio 工作区「文件」里（即 bridge 的工作空间页）
+  //    打开、编辑的文件，bridge 自己的视图上报（lib/uiReport.js）早已采到——原样交给 dimensio 的上报带上，不另采一遍；
+  //    草稿取编辑器里的当前全文，preview 用 bridge 的查看器打开；工作区多一个「记忆」工具，挂 bridge 的记忆卡看 dimensio 的记忆。
+  //    bridge 报的路径多半相对「身份文件根」（ws 为空），dimensio 那边不知道根在哪：按 dimensio 工作空间问一次 dock/meta
+  //    （工作空间相对文件根的前缀）反推出根的绝对路径，补成 ws 再交过去。
+  let fileRoot = '';
+  $effect(() => {
+    const w = hxApp.config?.workspace || '';
+    if (!w) return;
+    api.get('/api/claude/dock/meta?ws=' + encodeURIComponent(w)).then((m) => {
+      const norm = w.replace(/\\/g, '/').replace(/\/+$/, '');
+      const rel = m?.rel;
+      fileRoot = rel == null ? '' : !rel ? norm : norm.toLowerCase().endsWith('/' + rel.toLowerCase()) ? norm.slice(0, -rel.length - 1) : '';
+    }).catch(() => { fileRoot = ''; });
+  });
+  const ABS = /^([A-Za-z]:)?[\\/]/;
+  const rooted = (o, key) => (o && !o.ws && o.origin !== 'harness' && fileRoot && typeof o[key] === 'string' && !ABS.test(o[key]) ? { ...o, ws: fileRoot } : o);
+  setWorkspaceHost({
+    view: () => {
+      const v = uiView();
+      return { page: v.page || '', ...(v.files ? { files: rooted(v.files, 'path') } : {}), ...(v.preview ? { preview: rooted(v.preview, 'rel') } : {}) };
+    },
+    onView: onUiView,
+    draft: () => rooted(currentDraft(), 'rel'),
+    preview: (ws, rel) => openPreview({ origin: 'cloud', rel, ws }, 0, { host: 'app' }),
+    memoryView: hxMemory,
+  });
+  $effect(() => () => setWorkspaceHost(null));
+
+  // 全局明暗（11-07）：dimensio 自己的外观档（跟系统 / 浅 / 深）与 bridge 全局明暗双向同步。
+  // bridge → dimensio：跟随系统＝auto，否则取 ui.theme；dimensio 设置里改外观 → 回写 bridge
+  // （auto＝打开跟随系统，浅/深＝手动选，同时关掉跟随系统）。两条 effect 各自 untrack 对方，免得互相拉扯。
+  const bridgeAppearance = () => (prefs.followSys ? 'auto' : ui.theme === 'light' ? 'light' : 'dark');
+  $effect(() => {
+    const want = bridgeAppearance();
+    untrack(() => { if (hxApp.appearance !== want) hxSetAppearance(want); });
+  });
+  // 回写 bridge 时关掉全页 CSS 过渡（body、保活分页的颜色过渡同样会逐帧重绘）；点 dimensio 标志切明暗的换场进行中
+  // 先不写——bridge 一换明暗就会唤醒隐藏主页的壁纸（深色挂流光 iframe、跑启动脚本），放在换场中途就是一下顿挫——
+  // 等换场落幕（dimensio-theme-settled）再等一个空闲时机才写；分页卸载时还没写就立刻补上。
+  let syncHeld = false;
+  function syncBridge() {
+    syncHeld = false;
+    window.removeEventListener('dimensio-theme-settled', afterReveal);
+    const a = hxApp.appearance;
+    if (a === bridgeAppearance()) return;
+    hxSuppressTransitions();
+    if (a === 'auto') { prefs.followSys = true; savePrefs(); applyFollowSys(); }
+    else { if (prefs.followSys) { prefs.followSys = false; savePrefs(); } pickTheme(a); }
+  }
+  function afterReveal() {
+    window.removeEventListener('dimensio-theme-settled', afterReveal);
+    const idle = window.requestIdleCallback || ((f) => setTimeout(f, 1));
+    setTimeout(() => idle(() => { if (syncHeld) syncBridge(); }, { timeout: 1000 }), 250);
+  }
+  $effect(() => {
+    void hxApp.appearance;
+    untrack(() => {
+      if (syncHeld) return;
+      if (!document.documentElement.dataset.hxVt) return syncBridge();
+      syncHeld = true;
+      window.addEventListener('dimensio-theme-settled', afterReveal);
+    });
+  });
+  $effect(() => () => { if (syncHeld) syncBridge(); });
 
   // 桌面壳窗控配色跟 dimensio 自己的明暗档（跟系统 / 浅 / 深）走，而不是 bridge 主题：
   // 两者不一致时右上角三颗系统钮会与页面底色同色（白钮落白底），DesktopChrome 读
@@ -52,6 +130,28 @@
     };
   });
 
+  // 会话协作（Claude ⇄ dimensio，11-03）：
+  //  · Claude 页的会话消息卡 / 相关会话卡点了 dimensio 会话 → lib/sessionFamily.svelte.js 记进 ui.hxOpenSession 换到这一页，
+  //    dimensio 起好（booted）之后在这里打开它；
+  //  · dimensio 里点了 Claude 会话 → 它发 dimensio:open-session（harness/web/src/lib/session-family.svelte.ts），这里接住
+  //    （preventDefault = 有宿主接了）换到 Claude 页打开。
+  $effect(() => {
+    const id = ui.hxOpenSession;
+    if (!id || !hxApp.booted) return;
+    ui.hxOpenSession = null;
+    void hxOpenSession(id);
+  });
+  $effect(() => {
+    const onOpen = (e) => {
+      const d = (e && e.detail) || {};
+      if (d.agent !== 'claude' || !d.id) return;
+      e.preventDefault();
+      void openClaudeSession(String(d.id));
+    };
+    window.addEventListener('dimensio:open-session', onOpen);
+    return () => window.removeEventListener('dimensio:open-session', onOpen);
+  });
+
   // 入场期间延后挂载：dimensio 整个应用（HarnessApp）挂载一次 ~35ms，手机上 ≈140ms，压在入场转场
   // 拍新快照之前就是「点完先愣一下」。转场期间先摆一块与它同色的底板当这一页（快照拍的是它，
   // 卡片从入口长出来的就是这块底），落幕再挂真应用、内容淡入（.hxroot > .shell 的 hx-arrive）。
@@ -65,6 +165,72 @@
     return () => clearTimeout(tid);
   });
   const placeholderBg = $derived(themeBg(resolveMode(hxApp.appearance)));
+
+  // 6) 设置 › dimensio 点了「自定义模型服务 / 记忆 / 本机模型」：设置已关、切到了这一页，等真应用挂上、
+  //    目录与能力位到了（compat）再打开 dimensio 自己的那张面板，读完即清（lib/dimensioSettings.svelte.js）。
+  $effect(() => {
+    const it = ds.intent;
+    if (!it || !armed || !ready || !hxApp.compat) return;
+    const tid = setTimeout(() => untrack(() => {
+      if (ds.intent !== it) return;
+      ds.intent = null;
+      if (it === 'vendors') hxApp.vendorMenu = true;
+      else if (it.startsWith('vendor:')) { hxApp.vendorEditReq = it.slice(7); hxApp.vendorMenu = true; }
+      else if (it === 'memory') hxOpenMemory({});
+      else if (it === 'local:qwen' || it === 'local:strata') hxApp.localMenuReq = it.slice(6);
+    }), 0);
+    return () => clearTimeout(tid);
+  });
+  // 7) 模型中心：管理员在 dimensio 的「模型服务」里点「＋」/「在模型中心管理」→ 唤起 bridge 的模型中心（服务两边共用、能挂多把 Key）。
+  //    成员没有总览（hub.ok 为假）→ dimensio 照旧用自己的表单。
+  //    「＋」(start = 'add') 开的是 App 根上的全局浮层（hubUi.sheet）；不带参数 = 打开 设置 › 模型中心 这一分区——
+  //    openModelHub 内部走 openSettingsFromChat 而不是直接 openSettings：分屏格 / 独立窗口里没挂设置外壳，前者托宿主页开、
+  //    后者如实回 false，VendorSheet 据此不关自己（宿主接不住时别把用户晾在空白处）。只认明确的 true 才算接住。
+  loadHub();
+  //    模型服务只在模型中心里配：「＋」开添加页；卡片上的铅笔开它在模型中心里的那个服务（Vertex 开 Vertex 那页）；
+  //    dimensio 自己的老服务没有模型中心里的页面——交给模型中心（确认 → 照抄过去 → 删掉这边的），搬完打开新服务。
+  async function moveLegacy({ legacy, name, proto }) {
+    const using = hxApp.config?.provider === legacy;
+    const r = await adoptDimensioService({ id: legacy, name, proto });
+    if (!r) return;
+    await hxReloadMeta();
+    if (using) hxNewChat();   // 正在用的那家搬走了：默认已跟到新服务上，这边开一个新对话跟上（旧对话留在历史里）
+    if (r.service?.id) openHubSheet({ type: 'service', id: r.service.id });
+  }
+  setModelHubHost({
+    available: () => hub.ok && hub.v2,
+    open: (target) => {
+      if (target && typeof target === 'object') {
+        if (typeof target.service === 'string' && target.service) {
+          return openHubSheet(target.service.startsWith('vertex') ? { type: 'vertex' } : { type: 'service', id: target.service }) === true;
+        }
+        if (typeof target.legacy === 'string' && target.legacy) { void moveLegacy(target); return true; }
+        return false;
+      }
+      return openModelHub(target === 'add' ? 'add' : null) === true;
+    },
+  });
+  // 模型中心改完回到这一页就重拉目录，新加 / 改过的服务马上进菜单。两种「改完」：全局浮层（添加 / 服务详情）关掉——
+  // hubUi.sheet 由有变空；设置页关掉——模型中心首页住在设置里，设置开着时改的东西要等它关上才回到这一页。
+  let sheetWas = false;
+  let settingsWas = ui.settingsOpen;
+  $effect(() => {
+    const sheetNow = !!hubUi.sheet;
+    const settingsNow = !!ui.settingsOpen;
+    const closed = (sheetWas && !sheetNow) || (settingsWas && !settingsNow);
+    sheetWas = sheetNow;
+    settingsWas = settingsNow;
+    if (closed && armed && ready) untrack(() => { void hxReloadMeta(); });
+  });
+  // 设置页改过 dimensio 的配置（默认型号、权限、工作空间、key……）：这一页挂着就重拉一次目录与配置，
+  // 别让输入框还显示改之前的型号与档位。
+  let revSeen = ds.rev;
+  $effect(() => {
+    const r = ds.rev;
+    if (r === revSeen) return;
+    revSeen = r;
+    if (armed && ready) untrack(() => { void hxReloadMeta(); });
+  });
 
   // —— 单 agent 模式：这一页就是根 ——
   const single = $derived(singleMode());
@@ -189,6 +355,11 @@
   <HxFilesEmbed ws={p.ws} target={p.target} onExit={p.onExit} />
 {/snippet}
 
+<!-- 工作区「记忆」：bridge 的记忆卡，来源默认 dimensio；配色令牌换成 dimensio 的（跟它的明暗档） -->
+{#snippet hxMemory(p)}
+  <div class="hx-mem"><MemoryPanel ws={p.ws} agent="dimensio" theme={ui.pageChrome ? (ui.pageChrome.dark ? 'dark' : 'light') : ''} /></div>
+{/snippet}
+
 <!-- 单 agent 模式：harness 侧栏底部的账户行（Claude 页侧栏底部那一行同款；菜单里没有「主页」）。
      配色用 dimensio 自己的令牌（--text / --text2 / --text3 / --surface3），跟它的明暗档走。 -->
 {#snippet accountFoot()}
@@ -213,6 +384,7 @@
   {chatDrop}
   onExit={single ? null : () => closePage(ui.screen)}
   sidebarFoot={single ? accountFoot : null}
+  onOpenSettings={() => { if (!openSettingsFromChat('ag-dimensio')) hxApp.sheet = 'settings'; }}
   onOpenArtifact={(artifact, sessionId) => openPreview({
     origin: 'harness',
     id: sessionId,
@@ -266,6 +438,11 @@
   .hx-um.dark {
     --text: #f8f8f6; --st-muted: #97958c; --st-hover: rgba(255,255,255,.05); --st-hair: rgba(255,255,255,.07); --st-menu: #2c2c2a;
     --st-menu-shadow: 0 0 0 1px rgba(255,255,255,.09),0 8px 24px rgba(0,0,0,.45),0 2px 6px rgba(0,0,0,.3); }
+  /* 记忆卡：bridge 令牌映射到 dimensio 的（.hxroot 里），明暗跟 dimensio 走 */
+  .hx-mem { position: absolute; inset: 0; display: flex; flex-direction: column; padding-top: 10px;
+    --muted: var(--text3); --serif: var(--text2); --divider: var(--border); --dk-line: var(--border); --crit: var(--err);
+    --hover: color-mix(in srgb, var(--text) 5%, transparent); --hover-strong: color-mix(in srgb, var(--text) 9%, transparent);
+    --q-card: var(--surface); --q-shadow: 0 0 0 1px var(--border); }
   /* 真应用挂上来时内容淡入（接在入场转场的底板后面，不是凭空蹦出来） */
   :global(.hxroot > .shell.embedded) { animation: hx-arrive var(--mo-base) var(--ea-fade) both; }
   @keyframes -global-hx-arrive { from { opacity: 0; } }

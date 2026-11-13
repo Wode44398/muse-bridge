@@ -27,6 +27,7 @@ export const sa = $state({
   remote: false,         // 本次是远程管理（手机 / 网页 / 经隧道）进来的——停服务、停隧道、开机自启这类会切断自己的按钮不摆
   overview: null,        // /api/admin/overview
   limits: null,          // /api/status 的 limits（5h/7d 用量）
+  noFiveHour: false,     // 激活号没有 5 小时限额（部分 Ultra）
   gens: [],              // /api/admin/active 的活跃生成
   users: [], invites: [],
   agentStatus: [],       // /api/admin/users 附带的 agent 全局状态（按人勾选时把「全局已关 / 不支持多用户」置灰）
@@ -65,7 +66,7 @@ export async function loadOverview() {
   } catch { sa.ok = false; }
 }
 export async function loadLimits() {
-  try { const s = await api.get('/api/status'); sa.limits = s?.limits || null; } catch {}
+  try { const s = await api.get('/api/status'); sa.limits = s?.limits || null; sa.noFiveHour = !!s?.noFiveHour; } catch {}
 }
 export async function loadActive() {
   try { sa.gens = (await api.get('/api/admin/active'))?.gens || []; } catch {}

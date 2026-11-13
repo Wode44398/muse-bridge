@@ -13,6 +13,7 @@
 //              'device' 只存这台设备（localStorage，由前端自管；服务端不认这些键）
 //   type       'bool' | 'enum' | 'int' | 'string' | 'frac'
 //   options    enum/int 的合法值（'dynamic' = 运行期给出，如输出风格）
+//   valueRe    options 为 'dynamic' 时、运行期清单不在手边（读盘规范化）用的格式校验，缺省 /^[\w .()-]{1,80}$/
 //   default    缺省值（服务端只存与默认不同的显式值，便于「已改过 / 恢复默认」）
 //   admin      true = 只有管理员身份看得到、改得了
 //   shell      true = 只有能跑命令行的身份（ctx.shell）才有意义
@@ -26,11 +27,13 @@ export const CLAUDE_SETTING_GROUPS = Object.freeze([
   { id: 'defaults', label: '新会话默认' },
   { id: 'chat', label: '对话' },
   { id: 'collab', label: '会话协作' },
+  { id: 'project', label: '项目对话' },
   { id: 'git', label: 'Git 与拉取请求' },
   { id: 'sessions', label: '会话管理' },
   { id: 'notify', label: '通知' },
   { id: 'host', label: '这台电脑' },
   { id: 'safety', label: '安全' },
+  { id: 'debug', label: '调试' },
 ]);
 
 export const PERMISSION_MODES = Object.freeze(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
@@ -72,9 +75,8 @@ export const CLAUDE_SETTINGS = Object.freeze([
     label: '对话内交互图表', desc: '让 Claude 直接在对话里画图表、示意图和小工具' },
   { key: 'enableWorkflows', group: 'chat', scope: 'user', type: 'bool', default: true, shell: true,
     label: '动态工作流', desc: '复杂任务让 Claude 并行调度多个 agent。工作流会很快用掉额度' },
-  // 自由文本，拼进系统提示（claude-turn-settings.dispatchNudge）；空着也会提示 Claude 按任务难度给每个子 agent 定推理强度
-  { key: 'subagentDispatch', group: 'chat', scope: 'user', type: 'string', default: '', shell: true, dependsOn: 'enableWorkflows', maxLen: 2000, multiline: true,
-    label: '子 agent 调度偏好', desc: '派子 agent 时怎么挑模型和推理强度。空着时由 Claude 按任务难度自己定，不再照搬主会话' },
+  // 原「子 agent 调度偏好」（subagentDispatch）已并入「子 agent 调用策略」（runtime/dispatch-policy.mjs，旧值迁成默认那套的口述备注），
+  // 不再是设置项；老客户端写这个键按未知键处理
   { key: 'switchModelsOnFlag', group: 'chat', scope: 'user', type: 'bool', default: false,
     label: '消息被拦时自动换模型', desc: '关着时会话暂停，由你选「编辑提示词」还是「换模型继续」' },
   { key: 'planClearContext', group: 'chat', scope: 'user', type: 'bool', default: false,
@@ -97,6 +99,24 @@ export const CLAUDE_SETTINGS = Object.freeze([
     label: '其它会话发来的消息', desc: '同一台机器上别的 Claude 会话（官方 Claude Desktop、终端或这里的其它会话）发给这里的消息',
     optionLabels: ['跟随 Claude 默认', '直接接收', '暂存等我确认', '拒收'],
     optionDescs: ['会问你的模式下直接接收；绕过权限时、或对方的权限模式和这里不一致时，暂存等你确认', '一律直接接收，对方的话会马上开一轮', '一律暂存，等你点接收才投递', '一律拒收'] },
+
+  // —— 项目对话（运行档位 › 项目：协调者只派活，讨论串去做，runtime/project-mode.mjs）——
+  { key: 'projectAskFirst', group: 'project', scope: 'user', type: 'bool', default: false, shell: true,
+    label: '开讨论串前先问我', desc: '关着时协调者判断该开就直接开；打开后每条讨论串都先弹卡等你点' },
+  { key: 'projectMaxLive', group: 'project', scope: 'user', type: 'int', options: [1, 2, 3, 4, 6, 8], default: 4, shell: true,
+    label: '同时在跑的讨论串', desc: '一个项目里最多几条讨论串同时干活，多出来的要等前面的停下',
+    optionLabels: ['1 条', '2 条', '3 条', '4 条', '6 条', '8 条'] },
+  { key: 'projectDailyThreads', group: 'project', scope: 'user', type: 'int', options: [20, 50, 100, 200], default: 100, shell: true,
+    label: '每天最多新开讨论串', desc: '所有项目合计，防止协调者失控派活',
+    optionLabels: ['20 条', '50 条', '100 条', '200 条'] },
+  // 讨论串模型：'inherit' = 跟项目对话（协调者）同一个；其余是 Claude 模型 id 或自定义模型 custom:<服务>:<型号>（清单在前端按
+  // caps + 自定义模型拼，服务端 setClaudeSettings 再按白名单收）。单个项目在项目概览里另选的优先（runtime/project-mode.mjs threadPrefs）
+  { key: 'projectThreadModel', group: 'project', scope: 'user', type: 'enum', options: 'dynamic', default: 'inherit', shell: true,
+    valueRe: /^(inherit|[\w.[\]-]{1,80}|custom:p-[0-9a-f]{6,12}:.{1,120})$/,
+    label: '讨论串模型', desc: '新开讨论串用的模型；协调者自己用输入框里选的模型。单个项目可以在项目概览里另选' },
+  { key: 'projectThreadEffort', group: 'project', scope: 'user', type: 'enum', options: ['low', 'medium', 'high', 'xhigh', 'max'], default: 'high', shell: true,
+    label: '讨论串推理强度', desc: '新开讨论串用的档位；协调者自己用输入框里选的档位。单个项目可以在项目概览里另选',
+    optionLabels: ['低', '中', '高', '超高', '最高'] },
 
   // —— Git 与拉取请求 ——
   { key: 'branchPrefix', group: 'git', scope: 'user', type: 'string', default: 'claude', shell: true,
@@ -121,6 +141,8 @@ export const CLAUDE_SETTINGS = Object.freeze([
   { key: 'notifyPermission', group: 'notify', scope: 'device', type: 'bool', default: true, label: '权限请求' },
   { key: 'notifyQuestion', group: 'notify', scope: 'device', type: 'bool', default: true, label: '提问' },
   { key: 'notifyTaskComplete', group: 'notify', scope: 'device', type: 'bool', default: true, label: '任务完成' },
+  // 会话出错（额度用完、模型报错、进程中途退出…）：2026-11-07 随会话消息通知加
+  { key: 'notifyError', group: 'notify', scope: 'device', type: 'bool', default: true, label: '任务出错' },
 
   // —— 这台电脑（主机级，管理员）——
   { key: 'keepAwake', group: 'host', scope: 'host', type: 'bool', default: true, admin: true,
@@ -133,6 +155,9 @@ export const CLAUDE_SETTINGS = Object.freeze([
     label: '允许绕过权限模式' },
   { key: 'allowAutoMode', group: 'safety', scope: 'host', type: 'bool', default: true, admin: true,
     label: '允许自动模式' },
+  // —— 调试（改进 harness 用）：开着时系统提示要求 Claude 批判性使用工具，把 harness 的毛病记进服务端根目录 harness-feedback/（agent-api/ops/feedback.mjs feedback.harness）——
+  { key: 'debugMode', group: 'debug', scope: 'user', type: 'bool', default: false, admin: true,
+    label: '调试模式', desc: '让 Claude 批判性地使用 harness：工具报错先查是不是工具的锅，遇到冗余设计、缺的功能、不得不绕的路都记成反馈，存进服务端根目录的 harness-feedback 文件夹。用来改进 harness，开着时任务本身排第二' },
 ]);
 
 export const CLAUDE_SETTING_BY_KEY = Object.freeze(Object.fromEntries(CLAUDE_SETTINGS.map((s) => [s.key, s])));
@@ -203,7 +228,7 @@ export function normalizeClaudeSetting(key, value, { dynamicOptions } = {}) {
       const opts = s.options === 'dynamic' ? (dynamicOptions || null) : s.options;
       const v = String(value);
       if (opts && !opts.includes(v)) return { ok: false, error: 'not an allowed value' };
-      if (!opts && !/^[\w .()-]{1,80}$/.test(v)) return { ok: false, error: 'bad value' };
+      if (!opts && !(s.valueRe || /^[\w .()-]{1,80}$/).test(v)) return { ok: false, error: 'bad value' };
       return { ok: true, value: v };
     }
     case 'string': {

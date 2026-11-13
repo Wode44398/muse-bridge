@@ -1,6 +1,6 @@
 // 构建插件：把产物按「核心 / 各功能扩展」归属，写进 <outDir>/bridge-modules.json。
 //
-// 功能扩展（Vertex / Codex / dimensio）的前端都从一个【懒加载入口】进来（MODULE_ENTRIES）。
+// 功能扩展（Media Studio / Codex / dimensio）的前端都从一个【懒加载入口】进来（MODULE_ENTRIES）。
 // 归属规则只看 chunk 图：
 //   核心 = 从 html 入口出发、沿静态 / 动态 import 能走到、但【不穿过任何扩展入口】的 chunk；
 //   扩展 X = 从 X 的入口出发能走到、且不在核心里的 chunk（几个扩展共用的 chunk 各算一份）。
@@ -13,10 +13,11 @@
 import path from 'node:path';
 
 // 扩展的前端入口（相对 web/）。
+// studio 的 MediaProviderManager：模型中心（核心）经 loadPage.studioProviders 打开媒体服务面板（方案 §3.8）。
 export const MODULE_ENTRIES = {
-  vertex: ['src/components/VertexPage.svelte', 'src/modules/vertex/api.js'],
+  studio: ['src/components/studio/StudioPage.svelte', 'src/components/studio/settings/StudioSettings.svelte', 'src/components/studio/settings/MediaProviderManager.svelte'],
   codex: ['src/components/ChatGPTPage.svelte'],
-  dimensio: ['src/components/HarnessPage.svelte', '../harness/web/src/i18n/en/index.ts'],
+  dimensio: ['src/components/HarnessPage.svelte', '../harness/web/src/i18n/en/index.ts', 'src/components/dock/DimensioMemoryNote.svelte'],
 };
 
 // public/ 下原样拷贝、属于某个扩展的目录。
@@ -24,9 +25,9 @@ export const MODULE_PUBLIC_DIRS = { codex: ['chatgpt'] };
 
 // 判「扩展源码漏进核心」用的路径特征（相对 web/，正斜杠）。只用于报告，不影响归属。
 const MODULE_SOURCES = {
-  vertex: [/^src\/components\/(VertexPage|VImagePanel|VVideoPanel|VVoicePanel|VMusicPanel|VMaterialPicker|VAttachMenu|VParamDropdown|GeminiSparkle|LocalImageSettings|LocalImageDeployment)\.svelte$/, /^src\/components\/neo\//, /^src\/gemini\//, /^src\/lib\/(vertex\.svelte|vertexMedia\.svelte|neoUi|neoSheet)\.js$/, /^src\/modules\/vertex\//],
+  studio: [/^src\/components\/studio\//, /^src\/modules\/studio\//],
   codex: [/^src\/components\/ChatGPTPage\.svelte$/, /^src\/components\/dock\/CodexWorkspace\.svelte$/],
-  dimensio: [/^src\/components\/HarnessPage\.svelte$/, /^src\/components\/dock\/HxFilesEmbed\.svelte$/, /^\.\.\/harness\/web\/src\//],
+  dimensio: [/^src\/components\/HarnessPage\.svelte$/, /^src\/components\/dock\/HxFilesEmbed\.svelte$/, /^src\/components\/dock\/DimensioMemoryNote\.svelte$/, /^\.\.\/harness\/web\/src\//],
 };
 
 export function bridgeModuleChunks({ webRoot }) {

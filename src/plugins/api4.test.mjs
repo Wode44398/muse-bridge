@@ -230,6 +230,21 @@ test('MCP 端点：实例凭据才认；列出 dimensio 工具并能调用（只
   await kernel.setEnabled(id2, false);
 });
 
+test('dimensio 的 notify 事件落到实例主人名下的推送（手机 App 轮询的 pushes）；空正文拒、没凭据 401', async () => {
+  const { recentPushes } = await import('../runtime/push-notices.mjs');
+  const post = (body, tok) => fetch(base + '/agent/events', { method: 'POST', headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: JSON.stringify(body) });
+  assert.equal((await post({ event: 'notify', payload: { message: 'x' } })).status, 401);
+  const tok = ensureHostSecret();
+  assert.equal((await post({ event: 'notify', payload: { message: '  ' } }, tok)).status, 400);
+  const before = recentPushes('admin').length;
+  const r = await post({ event: 'notify', payload: { title: 'dimensio · 在等你批准', message: '「修登录」在等你批准（Bash）', sessionId: 'dim-1' } }, tok);
+  assert.equal(r.status, 200);
+  const list = recentPushes('admin');
+  assert.equal(list.length, before + 1);
+  assert.equal(list.at(-1).message, '「修登录」在等你批准（Bash）');
+  assert.equal(list.at(-1).sessionId, null, 'dimensio 的会话 id 不冒充 Claude 会话');
+});
+
 test('ctx.net：proxy / fetch 时限', async () => {
   let c;
   await addPlugin((ctx) => { c = ctx; });

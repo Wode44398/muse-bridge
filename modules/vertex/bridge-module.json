@@ -1,6 +1,0 @@
-{
-  "id": "vertex",
-  "label": "Gemini · Vertex",
-  "version": "dev",
-  "entry": "server/index.mjs"
-}

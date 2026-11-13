@@ -124,6 +124,44 @@ test("S4: full access still cannot Read the stores that exist on this machine, n
   assert.ok(readVerdict(path.join(home, ".claude", ".credentials.json"), ws));
 });
 
+test("bypass access (admin全权档): secret guard off, whole-machine reach", async () => {
+  const secret = put(home, ".ssh/id_ed25519", `-----BEGIN OPENSSH PRIVATE KEY-----\n${MARK}\n-----END OPENSSH PRIVATE KEY-----\n`);
+  const outside = put(tmp, "outside/notes.txt", "hello-outside-world");
+  const c: ToolContext = {
+    sandbox: new Sandbox(ws, "bypass"),
+    readFileState: new Map(),
+    setTodos: () => {},
+    limits: { bashTimeoutMs: 1000, bashMaxTimeoutMs: 1000 },
+    agentSeesImages: false,
+    ownerId: "bypass-test",
+  };
+  // 密钥守卫关掉：full 模式下拒读的私钥，bypass 下不再被闸拦（读得到，输出脱敏是另一层，与闸无关）
+  assert.equal((await run(readTool, { path: secret }, c)).ok, true, "bypass 下私钥不再被密钥守卫拦");
+  // 整机可达：工作区外的绝对路径照读
+  const o = await run(readTool, { path: outside }, c);
+  assert.equal(o.ok, true);
+  assert.ok(text(o).includes("hello-outside-world"));
+  // readVerdict 的 bypass 开关直接放行；sandbox.bypassing 在非租户实例为真
+  assert.equal(readVerdict(secret, ws, { bypass: true }), null);
+  assert.equal(new Sandbox(ws, "bypass").bypassing, true);
+});
+
+test("bypass access: 仍挡住租户禁区（保护同机其他用户），bypass 也绕不过", () => {
+  const otherUser = path.join(tmp, "another-user");
+  fs.mkdirSync(otherUser, { recursive: true });
+  const savedDeny = process.env.DIMENSIO_DENY_PATHS;
+  process.env.DIMENSIO_DENY_PATHS = otherUser;
+  try {
+    // bypass 的 readVerdict 先判租户禁区再放行其余：别人的目录照旧拒
+    assert.ok(readVerdict(path.join(otherUser, "secret.txt"), ws, { bypass: true }));
+    // 工作区内 / 普通路径照常放行
+    assert.equal(readVerdict(path.join(ws, "a.ts"), ws, { bypass: true }), null);
+  } finally {
+    if (savedDeny === undefined) delete process.env.DIMENSIO_DENY_PATHS;
+    else process.env.DIMENSIO_DENY_PATHS = savedDeny;
+  }
+});
+
 test("S4: Grep and Glob walks skip what Read refuses (probe: Grep used to print the workspace .env verbatim)", async () => {
   put(ws, ".env", `OPENAI_API_KEY=${MARK}\n`);
   put(ws, "deploy/.ssh/id_rsa", `${MARK}\n`);

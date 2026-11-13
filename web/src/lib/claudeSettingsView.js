@@ -4,6 +4,8 @@
 // 外壳只管排版：哪一项出现、叫什么、当前值怎么念、改了往哪写，都从这里拿，两处不会各写各的又写歪。
 import { cs, setClaudeSetting, setClaudeDeviceSetting, isClaudeSettingChanged } from './claudeSettings.svelte.js';
 import { outputStyleLabel, outputStyleDesc } from './outputStyle.svelte.js';
+import { caps } from './state.svelte.js';
+import { claudeModelChoices, isCustomModel } from './claudeProviders.svelte.js';
 import { t, tr } from './i18n.js';
 import { CLAUDE_SETTING_BY_KEY, BUILTIN_OUTPUT_STYLES, PERMISSION_MODES, PERMISSION_MODES_SANDBOX, claudeSettingVisible } from '../../../src/config/claude-settings.mjs';
 
@@ -44,7 +46,7 @@ export const desc = (key) => (S[key] && S[key].desc ? t(S[key].desc) : '');
 
 /**
  * 枚举 / 整数项的选项：[{ value, label, desc, disabled, note }]。
- * 输出风格：服务端报的可选清单（内置 + ~/.claude/output-styles 里的自定义）；权限模式：这个身份能选的
+ * 输出风格：服务端报的可选清单（内置 + ~/.claude/output-styles 里的自定义）；讨论串模型：跟协调者 + 输入框能选的模型；权限模式：这个身份能选的
  *（绕过 / 自动受「安全」组的主机开关管，关着时置灰并给一句状态，不是隐藏——开关在页面底下）。
  */
 export function options(key) {
@@ -56,6 +58,13 @@ export function options(key) {
     const cur = val(key);
     if (cur && !all.some((x) => x.toLowerCase() === String(cur).toLowerCase())) all.push(cur);   // 当前值已不在清单里：照列，免得看不出选的是什么
     return all.map((v) => ({ value: v, label: outputStyleLabel(v), desc: outputStyleDesc(v) }));
+  }
+  if (key === 'projectThreadModel') {
+    const list = [{ value: 'inherit', label: t('跟协调者一样'), desc: t('和项目对话用同一个模型') },
+      ...claudeModelChoices(caps.data).map((m) => ({ value: m.id, label: tr(m.name), desc: '' }))];
+    const cur = val(key);
+    if (cur && !list.some((o) => o.value === cur)) list.push({ value: cur, label: isCustomModel(cur) ? t('已停用的自定义模型') : cur, desc: '' });
+    return list;
   }
   if (key === 'permissionMode') {
     const base = cs.admin ? PERMISSION_MODES : PERMISSION_MODES_SANDBOX;

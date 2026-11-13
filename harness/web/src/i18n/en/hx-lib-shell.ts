@@ -2,6 +2,9 @@
 // 设备名、本机 AI、附件、复制、会话引用、应用壳（App / Hero / ChatPane / DragLayer / ProjectDialog / Sheet）
 //（键 = 中文原文，见 lib/i18n.ts）
 export default {
+  // ── components/brand/ThemeMark.svelte：点标志切明暗 ──
+  "切换到浅色": "Switch to light",
+  "切换到深色": "Switch to dark",
   // ── lib/icons.ts：工具动词（活动行、工具行共用）──
   "执行命令": "Run command",
   "读取文件": "Read file",
@@ -158,6 +161,7 @@ export default {
   "App 版本过旧，服务端已不再支持，请更新到最新版": "This app version is no longer supported by the server. Update to the latest version.",
   "服务端版本较旧，部分功能可能用不了，请更新服务端": "The server is out of date, so some features may not work. Update the server.",
   "先在设置里填 {name} 的 API Key": "Add your {name} API key in Settings first",
+  "先在模型中心添加 {name} 的服务": "Add a {name} provider in Model Hub first",
 
   // ── components/shell/ChatPane.svelte：分屏每一格的读屏名 ──
   "第 {n} 格：{title}": "Pane {n}: {title}",

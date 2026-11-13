@@ -113,3 +113,12 @@ test('未声明反馈去向：feedback.* 的说明与 note 逐字保持「bridge
   const s = await callOp(member, 'feedback.status', {}, env(member));
   assert.equal('destination' in s, false);
 });
+
+test('feedback.harness：标题里的 Windows 非法字符（含反斜杠）不会被当成目录', async () => {
+  const { saveHarnessFeedback } = await import('./ops/feedback.mjs');
+  const title = 'Bash 把 a\\b 吞成 a\b：<x>|"y"?*';
+  const file = saveHarnessFeedback({ agent: 'claude', args: { kind: 'bug', severity: 'low', title, details: 'd' } });
+  assert.ok(existsSync(file));
+  assert.ok(!/[\/:*?"<>|]/.test(path.basename(file)), path.basename(file));
+  assert.ok(readFileSync(file, 'utf8').startsWith('# ' + title));
+});

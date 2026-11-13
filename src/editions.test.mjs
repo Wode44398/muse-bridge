@@ -20,20 +20,23 @@ const users = await import('./users.mjs');
 const { SYSTEM_DIR } = await import('./config/index.mjs');
 const { withinDir, absPathViolation, sandboxViolation } = await import('./agents/claude.mjs');
 
-test('注册用户：没设过名单 = 默认 Claude + Gemini；显式名单照名单；空名单什么都没有', () => {
+test('注册用户：没设过名单 = 默认 Claude + Media Studio；显式名单照名单；空名单什么都没有', () => {
   const on = enabledAgents();
   const legacy = contextFor({ kind: 'user', user: 'a', tier: 'pro' });
-  assert.deepEqual(legacy.agents, on.filter((id) => id === 'claude' || id === 'gemini'));
+  assert.deepEqual(legacy.agents, on.filter((id) => id === 'claude' || id === 'studio'));
   const onlyClaude = contextFor({ kind: 'user', user: 'b', tier: 'pro', agents: ['claude'] });
   assert.deepEqual(onlyClaude.agents, on.filter((id) => id === 'claude'));
-  assert.equal(onlyClaude.allowGemini, false);
+  assert.equal(onlyClaude.allowStudio, false);
+  // Gemini 对话 2026-11-04 下线：老名单里的 gemini 读出来就是 studio
+  const old = contextFor({ kind: 'user', user: 'd', tier: 'pro', agents: ['claude', 'gemini'] });
+  assert.deepEqual(old.agents, on.filter((id) => id === 'claude' || id === 'studio'));
   const none = contextFor({ kind: 'user', user: 'c', tier: 'pro', agents: [] });
   assert.deepEqual(none.agents, []);
   assert.equal(none.allowClaude, false);
 });
 
 test('全局开关关掉一个 agent：管理员和用户都立刻拿不到', () => {
-  // 拿一个这棵树里真有的 agent 来关（发行版可能不带 Gemini 这类扩展，例如 Muse Bridge）
+  // 拿一个这棵树里真有的 agent 来关（发行版可能不带 Media Studio 这类扩展，例如 Muse Bridge）
   const id = enabledAgents().find((a) => a !== 'claude') || 'claude';
   const before = agentSwitches();
   try {
@@ -63,15 +66,17 @@ test('铸快照权限：管理员有；老账号（没写）保留；显式关�
   assert.equal(contextFor({ kind: 'user', user: 'a', tier: 'pro', snapshot: false }).canSnapshot, false);
 });
 
-test('新账号写显式默认：名单 = Claude + Gemini、不能铸快照；管理员可改', async () => {
+test('新账号写显式默认：名单 = Claude + Media Studio、不能铸快照；管理员可改', async () => {
   const r = await users.createUser('newbie', 'password123', 'user');
   assert.ok(r.ok);
   const g = users.userGrants(users.getUser('newbie'));
-  assert.deepEqual(g.agents, ['claude', 'gemini']);
+  assert.deepEqual(g.agents, ['claude', 'studio']);
   assert.equal(g.snapshot, false);
   assert.equal(g.service, false);
   users.setAgents('newbie', ['claude', 'bogus', 'claude']);
   assert.deepEqual(users.userGrants(users.getUser('newbie')).agents, ['claude']);
+  users.setAgents('newbie', ['gemini']);   // 老控制台勾的 gemini：落盘就写成 studio
+  assert.deepEqual(users.getUser('newbie').agents, ['studio']);
   users.setService('newbie', true);
   assert.equal(users.userGrants(users.getUser('newbie')).service, true);
 });

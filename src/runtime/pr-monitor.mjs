@@ -28,6 +28,11 @@
 //     两边都扫会对同一个会话各叫醒一次。台账写前对一下磁盘，别的进程写过就以磁盘为准、只盖这次改的会话。
 //
 // 只给主机本人（prCapable：admin、非沙箱、有 shell、非快照）——gh 令牌是这台电脑登录的 GitHub 账号。
+//
+// 别的 agent 的会话（2026-11-02，dimensio）：与 Claude 的会话共用这份台账、这一个后台扫描（不在 harness 里另造一份轮询 GitHub 的）。
+// 会话键 '<agent>:<会话 id>'（如 dimensio:<uuid>）；工作目录与那个 agent 的偏好（自动修复默认、署名）由它的实例每次调用时带来
+//（noteAgentSession），台账条目上记 agent / where / prefs 供重启后的扫描用；叫醒走那个 agent 登记的 deliver（registerPrAgent）。
+// 这类会话没有转录可扫、没有 bridge 建的 worktree、不参与 Claude 的归档 / 家族 / 排队 / 限额续跑 / 重放身份，那些分支一律跳过。
 import path from 'node:path';
 import { promises as fsp, statSync } from 'node:fs';
 import { readJson, writeJson, ID_RE } from '../jsonfile.mjs';
@@ -81,6 +86,43 @@ const err = (status, message, extra = {}) => Object.assign(new Error(message), {
 export const identityCtx = (ctx) => (ctx && ctx.homeRoot ? { ...ctx, cwd: ctx.homeRoot, homeRoot: undefined, worktree: undefined } : ctx);
 const K = (key, sid) => key + '|' + sid;
 export const prKeyOf = (r) => `${r.host}/${r.repo}#${r.number}`.toLowerCase();
+
+// —— 别的 agent 的会话（见文件头）——
+const AGENT_SID_RE = /^([a-z]{2,16}):([0-9a-fA-F-]{8,64})$/;
+/** 'dimensio:<uuid>' → 'dimensio'；Claude 会话 → ''。 */
+export const agentOfSid = (sid) => { const m = AGENT_SID_RE.exec(String(sid || '')); return m ? m[1] : ''; };
+const validSid = (sid) => ID_RE.test(String(sid || '')) || !!agentOfSid(sid);
+const agentDeliver = new Map();   // agent → async (ctx, 会话 id（不带前缀）, text) → { ok, busy?, gone?, reason? }
+/** 登记一个 agent 的叫醒口（src/routes/agent-pr.mjs 调）。 */
+export function registerPrAgent(agent, { deliver }) { if (typeof deliver === 'function') agentDeliver.set(agent, deliver); }
+const agentInfo = new Map();      // key|sid → { where:{path}, prefs:{autoFix, attribution} }（实例最近一次带来的）
+const normWhere = (w) => (w && typeof w.path === 'string' && path.isAbsolute(w.path) ? { path: w.path } : null);
+const normPrefs = (p) => (p && typeof p === 'object' ? { autoFix: p.autoFix === true, attribution: p.attribution !== false } : null);
+// 把实例带来的工作目录 / 偏好记到台账条目上（有条目才记；变了才算改动）
+function syncAgentSlot(ctx, sid, s) {
+  const a = agentOfSid(sid);
+  if (!a || !s) return false;
+  const info = agentInfo.get(K(ctx.key, sid));
+  let ch = false;
+  if (s.agent !== a) { s.agent = a; ch = true; }
+  if (info && info.where && JSON.stringify(info.where) !== JSON.stringify(s.where)) { s.where = info.where; ch = true; }
+  if (info && info.prefs && JSON.stringify(info.prefs) !== JSON.stringify(s.prefs)) { s.prefs = info.prefs; ch = true; }
+  return ch;
+}
+/**
+ * agent 实例每次调用时报一下这个会话的工作目录与偏好（src/routes/agent-pr.mjs）。
+ * cwd = 会话的工作区（绝对路径）；prefs = { autoFix（会话自己建的 PR 默认开自动修复）, attribution（评审回复带署名）}。
+ */
+export function noteAgentSession(ctx, sid, { cwd = '', prefs = null } = {}) {
+  if (!prCapable(ctx) || !agentOfSid(sid)) return;
+  ctx = identityCtx(ctx);
+  const k = K(ctx.key, sid);
+  const prev = agentInfo.get(k) || {};
+  agentInfo.set(k, { where: normWhere({ path: cwd }) || prev.where || null, prefs: normPrefs(prefs) || prev.prefs || null });
+  if (agentInfo.size > 1000) agentInfo.delete(agentInfo.keys().next().value);
+  const s = slot(ctx, sid, false);
+  if (s && syncAgentSlot(ctx, sid, s)) save(ctx, sid, s);
+}
 const today = () => new Date().toISOString().slice(0, 10);
 
 // —— 台账 ——
@@ -116,13 +158,15 @@ function normSlot(s) {
     fixAt: Number(s.fixAt) || 0,   // 最近一次明确打开 Auto-fix 的时刻（几个会话抢同一个 PR 时谁是主人）
     archivedFor: String(s.archivedFor || ''),
     at: Number(s.at) || Date.now(),
+    // 别的 agent 的会话（见文件头）：哪个 agent、工作目录、它的偏好
+    ...(s.agent ? { agent: String(s.agent), where: normWhere(s.where), prefs: normPrefs(s.prefs) } : {}),
   };
 }
 function readDisk(file) {
   const raw = readJson(file, {});
   const sessions = {};
   if (raw.sessions && typeof raw.sessions === 'object') {
-    for (const [sid, s] of Object.entries(raw.sessions)) if (ID_RE.test(sid) && s && typeof s === 'object') sessions[sid] = normSlot(s);
+    for (const [sid, s] of Object.entries(raw.sessions)) if (validSid(sid) && s && typeof s === 'object') sessions[sid] = normSlot(s);
   }
   return { rev: Number(raw.rev) || 0, sessions };
 }
@@ -163,7 +207,7 @@ function save(ctx, sid, s) {
 }
 function slot(ctx, sid, create) {
   const d = load(ctx);
-  if (!d.sessions[sid] && create) d.sessions[sid] = normSlot({});
+  if (!d.sessions[sid] && create) { d.sessions[sid] = normSlot({}); syncAgentSlot(ctx, sid, d.sessions[sid]); }
   return d.sessions[sid] || null;
 }
 const liveBindings = (s) => (s ? s.prs.filter((b) => !b.dismissed) : []);
@@ -193,12 +237,16 @@ export const replayFromReq = (req) => (req && req.headers ? cleanReplay({ header
 const lastReplay = new Map();   // key → cleanReplay
 
 // —— 设置 ——
+// 别的 agent 的会话用它的实例带来的那份偏好（s.prefs / agentInfo），Claude 会话读设置注册表
+const agentPrefs = (ctx, sid, s) => (s && s.prefs) || (agentInfo.get(K(ctx.key, sid)) || {}).prefs || null;
+const prefAutoFix = (ctx, s, sid = '') => ((s && s.agent) || agentOfSid(sid) ? !!(agentPrefs(ctx, sid, s) || {}).autoFix : !!claudeSetting(ctx, 'autoFixPullRequests'));
+const prefAttribution = (ctx, s, sid = '') => ((s && s.agent) || agentOfSid(sid) ? (agentPrefs(ctx, sid, s) || {}).attribution !== false : claudeSetting(ctx, 'attribution') !== 'none');
 // 这个会话想不想盯这个 PR（不管别的会话）。继承来的 PR 不能开（官方：只对这个会话做过的 PR 开放）。
 function autoFixWanted(ctx, s, b) {
   if (!s || !b || b.dismissed || TERMINAL.has(b.state) || b.source === 'inherited') return false;
   if (s.autoFix === true) return true;
   if (s.autoFix === false) return false;
-  return !!b.own && !!claudeSetting(ctx, 'autoFixPullRequests');   // 默认只管本会话自己建的 PR（官方 armOwnCreate）
+  return !!b.own && prefAutoFix(ctx, s);   // 默认只管本会话自己建的 PR（官方 armOwnCreate）
 }
 // 同一个 PR 绑在几个会话上、都想盯时只认一个主人（官方 revokeAutoFixFromPeers：同一次 CI 失败别把两个会话都叫醒、
 // 两边并发改同一个分支）：明确打开过的优先（最近打开的那个），其次本会话建的，再其次最早绑上的。
@@ -227,7 +275,8 @@ function revokeAutoFixFromPeers(ctx, sid, s) {
     publishSoon(ctx, osid);
   }
 }
-const autoArchiveFor = (ctx, s) => (s && (s.autoArchive === true || s.autoArchive === false) ? s.autoArchive : !!claudeSetting(ctx, 'autoArchiveOnPrClose'));
+// 别的 agent 的会话不在 bridge 这边归档（它们的会话列表在 agent 自己那里）
+const autoArchiveFor = (ctx, s) => (s && s.agent ? false : s && (s.autoArchive === true || s.autoArchive === false) ? s.autoArchive : !!claudeSetting(ctx, 'autoArchiveOnPrClose'));
 
 // —— PR 状态缓存 ——
 const prCache = new Map();   // key → { view, at }
@@ -255,6 +304,10 @@ function syncBinding(b, v) {
 
 // —— 会话工作目录 ——
 function sessionWhere(ctx, sid) {
+  if (agentOfSid(sid)) {
+    const w = (slot(ctx, sid, false) || {}).where || (agentInfo.get(K(ctx.key, sid)) || {}).where;
+    return w ? { path: w.path, worktree: false } : null;
+  }
   const p = claudeProjects.locateSessionProject(ctx.claudeProjects, ctx, sid);
   return p && p.path ? p : null;
 }
@@ -400,7 +453,7 @@ async function bindFromTranscript(ctx, sid, { ghOk = false, cwd = '' } = {}) {
  * 返回 { outcome:'bound'|'exists'|'restored'|'dismissed', binding }。
  */
 export function bindPr(ctx, sid, ref, { source = 'manual', own = false, replay = null, restore = false, quiet = false } = {}) {
-  if (!prCapable(ctx) || !ID_RE.test(String(sid || '')) || !ref) return { outcome: 'failed' };
+  if (!prCapable(ctx) || !validSid(sid) || !ref) return { outcome: 'failed' };
   const s = slot(ctx, sid, true);
   const k = prKeyOf(ref);
   let b = s.prs.find((x) => prKeyOf(x) === k);
@@ -420,7 +473,7 @@ export function bindPr(ctx, sid, ref, { source = 'manual', own = false, replay =
     outcome = 'bound';
   }
   // 重放身份：这次带来的优先；没有（新会话接管了预热的 CLI）就用这个身份最近一次真人发话的
-  const r = cleanReplay(replay) || (!s.replay ? lastReplay.get(ctx.key) || null : null);
+  const r = agentOfSid(sid) ? null : cleanReplay(replay) || (!s.replay ? lastReplay.get(ctx.key) || null : null);
   if (r) s.replay = r;
   s.at = Date.now();
   const changed = outcome !== 'exists' || ownUp;
@@ -451,16 +504,25 @@ export function unbindPr(ctx, sid, ref, { by = 'user' } = {}) {
 }
 
 export function boundPrs(ctx, sid) { return liveBindings(slot(ctx, sid, false)).map((b) => ({ ...b })); }
+/** 项目概览（routes/sessions.mjs）：这个会话最新绑定的那个 PR 的一句话状态——不读 GitHub，用台账里记的；landing = bridge 正代管着自动合并。没有返回 null。 */
+export function prBrief(ctx, sid) {
+  if (!prCapable(ctx) || !validSid(sid)) return null;
+  const s = slot(ctx, sid, false);
+  const live = liveBindings(s);
+  if (!live.length) return null;
+  const b = live[live.length - 1];
+  return { url: b.url, number: b.number, state: b.state || 'open', landing: !!(s.merge && s.merge[prKeyOf(b)]) };
+}
 
 /** 会话被删掉了（sessions.mjs /api/session/delete）：它的 PR 台账一并清掉，后台别再为它读 GitHub、唤醒注定失败的 CLI。 */
 export function forgetPrSession(ctx, sid) {
-  if (!prCapable(ctx) || !ID_RE.test(String(sid || ''))) return false;
+  if (!prCapable(ctx) || !validSid(sid)) return false;
   ctx = identityCtx(ctx);
   const d = load(ctx);
   const s = d.sessions[sid];
   if (!s) return false;
   s.gone = true;   // 手里还拿着它的异步流程（扫描到一半）写回时别把它挂回去
-  nextAt.delete(K(ctx.key, sid)); viewedAt.delete(K(ctx.key, sid)); heldLogged.delete(K(ctx.key, sid));
+  nextAt.delete(K(ctx.key, sid)); viewedAt.delete(K(ctx.key, sid)); heldLogged.delete(K(ctx.key, sid)); agentInfo.delete(K(ctx.key, sid));
   save(ctx, sid, null);
   return true;
 }
@@ -514,7 +576,8 @@ export async function prView(ctx, sid, { refresh = false, viewer = false } = {})
   const wtBase = cwd && where.worktree ? worktreeBase(ctx, cwd) : '';
   const [ghs, gi] = await Promise.all([gh.ghStatus(), cwd ? gitInfo(cwd, { fresh: refresh, base: wtBase }) : Promise.resolve({ git: false })]);
   let worked = [];
-  try { worked = await bindFromTranscript(ctx, sid, { ghOk: ghs.ok && !ghs.limited, cwd }); } catch {}
+  // 别的 agent 的会话没有 Claude 的转录（它自己在一轮结束时把认出的 PR 报上来，见 bindReported）
+  if (!agentOfSid(sid)) { try { worked = await bindFromTranscript(ctx, sid, { ghOk: ghs.ok && !ghs.limited, cwd }); } catch {} }
   const ownBranch = !!where && (!!where.worktree || worked.includes(gi.branch));
   if (ghs.ok && !ghs.limited && gi.git && gi.remote && gi.branch && !gi.onBase && ownBranch && !liveBindings(slot(ctx, sid, false)).length) await lookupBranch(ctx, sid, gi);
   const s = slot(ctx, sid, false);
@@ -541,8 +604,8 @@ export async function prView(ctx, sid, { refresh = false, viewer = false } = {})
     } : { git: false },
     prs,
     monitor: {
-      autoFix: prs.some((p) => p.autoFix), autoFixSet: set.autoFix ?? null, autoFixDefault: !!claudeSetting(ctx, 'autoFixPullRequests'),
-      autoArchive: autoArchiveFor(ctx, s), autoArchiveSet: set.autoArchive ?? null, autoArchiveDefault: !!claudeSetting(ctx, 'autoArchiveOnPrClose'),
+      autoFix: prs.some((p) => p.autoFix), autoFixSet: set.autoFix ?? null, autoFixDefault: prefAutoFix(ctx, s, sid),
+      autoArchive: autoArchiveFor(ctx, s), autoArchiveSet: set.autoArchive ?? null, autoArchiveDefault: agentOfSid(sid) ? false : !!claudeSetting(ctx, 'autoArchiveOnPrClose'),
     },
     fix: s ? { paused: s.fix.paused, lastWakeAt: s.fix.lastWakeAt, streak: s.fix.streak, wakes: s.fix.wakes, lastError: s.fix.lastError } : null,
     pollMs: pollHint(),
@@ -552,6 +615,7 @@ export async function prView(ctx, sid, { refresh = false, viewer = false } = {})
 // 总线推送（同一会话 300ms 内合并成一次）
 const pubTimers = new Map();
 function publishSoon(ctx, sid, extra = {}) {
+  if (agentOfSid(sid)) return;   // 别的 agent 的会话：bridge 的总线上没人看它（它的 PR 卡自己定时拉）
   const k = K(ctx.key, sid);
   const prev = pubTimers.get(k);
   if (prev) { clearTimeout(prev.t); Object.assign(extra, prev.extra, extra); }
@@ -609,7 +673,7 @@ async function syncBase(ctx, sid, { base, abort = false, fromTool = false } = {}
   const allowed = new Set();
   const pr = liveBindings(slot(ctx, sid, false)).find((b) => !TERMINAL.has(b.state) && b.base && (!b.head || b.head === gi.branch));
   if (pr) allowed.add(pr.base);
-  const wtBase = worktreeBase(ctx, cwd);
+  const wtBase = where.worktree ? worktreeBase(ctx, cwd) : '';
   if (wtBase && wtBase !== gi.branch) allowed.add(wtBase);
   if (gi.defaultBranch) allowed.add(gi.defaultBranch);
   const want = base ? String(base) : (pr ? pr.base : [...allowed][0]);
@@ -630,7 +694,7 @@ async function syncBase(ctx, sid, { base, abort = false, fromTool = false } = {}
  */
 export async function prOp(ctx, sid, op, args = {}, { replay = null, fromTool = false, fromCiTurn = false } = {}) {
   if (!prCapable(ctx)) throw err(403, '拉取请求功能只对这台电脑的主人开放');
-  if (!ID_RE.test(String(sid || ''))) throw err(400, 'bad session');
+  if (!validSid(sid)) throw err(400, 'bad session');
   rememberCtx(ctx);
   const s0 = slot(ctx, sid, false);
   const r0 = cleanReplay(replay);
@@ -845,6 +909,24 @@ export function makePrSniffer(ctx, getSid, replay) {
   };
 }
 
+/**
+ * 别的 agent 在一轮里认出的 PR（dimensio：助手正文里的 <pr-created>、gh pr create 的输出），实例在轮末报上来（src/routes/agent-pr.mjs）。
+ * 与流里认的同一条规矩：没经过核实，仓库得是本会话工作目录的远程（或这个身份已经在跟踪的仓库）才绑。返回 bindPr 的 outcome 或 'untrusted'。
+ */
+export async function bindReported(ctx, sid, url, { source = 'tag' } = {}) {
+  if (!prCapable(ctx) || !validSid(sid)) return { outcome: 'failed' };
+  ctx = identityCtx(ctx);
+  const ref = gh.parsePrUrl(url);
+  if (!ref) return { outcome: 'failed' };
+  const where = sessionWhere(ctx, sid);
+  if (!(await repoTrusted(ctx, where && where.path, ref))) {
+    console.log(`[pr] ${sid.slice(0, 18)} not binding ${ref.repo}#${ref.number} (${source}): not a remote of this checkout`);
+    return { outcome: 'untrusted' };
+  }
+  const r = bindPr(ctx, sid, ref, { source: source === 'gh' ? 'gh' : 'tag', own: true });
+  return { outcome: r.outcome };
+}
+
 // —— 后台扫描：Auto-fix / bridge 代合并 / 合并或关闭后自动归档 ——
 const ctxs = new Map();       // key → ctx（扫描要用的身份）
 const nextAt = new Map();     // key|sid → 下次检查时刻
@@ -871,7 +953,7 @@ function kick(ctx, sid) { nextAt.set(K(ctx.key, sid), 0); }
 
 // 已归档的会话（bridge 记的：手动 / 不活跃 / PR 关闭后）：官方归档即停掉会话、不再盯它的 PR——不叫醒（Auto-fix）、
 // 不再做关闭后自动归档的检查。用户批准过的 bridge 代合并照做（那是对 GitHub 的授权，不叫醒会话）。取消归档后照常恢复。
-const archivedNow = (ctx, sid) => { try { return localArchiveFlag(ctx, sid) === true; } catch { return false; } };
+const archivedNow = (ctx, sid) => { if (agentOfSid(sid)) return false; try { return localArchiveFlag(ctx, sid) === true; } catch { return false; } };
 
 function watched(ctx, sid, s) {
   const live = liveBindings(s);
@@ -905,7 +987,8 @@ async function sweep() {
 }
 
 // 会话的转录还在不在（被删掉 / 找不到了就不再为它读 GitHub、更不叫醒——resume 一个不存在的会话只会白起一个 CLI）
-const transcriptGone = (ctx, sid) => !claudeProjects.locateSessionPaths(ctx.claudeProjects, ctx, sid);
+// 别的 agent 的会话在叫醒时才知道还在不在（deliver 回 gone 就清掉台账，见 maybeAutoFix）
+const transcriptGone = (ctx, sid) => !agentOfSid(sid) && !claudeProjects.locateSessionPaths(ctx.claudeProjects, ctx, sid);
 
 async function checkSession(ctx, sid, s) {
   if (transcriptGone(ctx, sid)) { logHeld(ctx, sid, 'gone'); return; }
@@ -974,6 +1057,7 @@ async function maybeBridgeMerge(ctx, sid, s, b, v) {
 
 // 会话眼下「有人在用」：在跑 / 在等回答 / 有排队消息 / 等着限额续跑（自动唤醒与自动归档都要躲开）
 function sessionBusy(ctx, sid) {
+  if (agentOfSid(sid)) return '';   // 别的 agent 的会话在不在跑由它自己判（deliver 回 busy）
   if (liveTurn(ctx, sid)) return 'busy';
   if (sessionQuestions.has(sid)) return 'question';
   if (listQueue(ctx.key, sid).length) return 'queued';
@@ -1031,10 +1115,12 @@ function wakeGate(ctx, sid, s, v, del) {
   if (f.paused) return 'paused';
   if (f.streak >= MAX_STREAK) { f.paused = 'streak'; return 'paused'; }
   if (f.dayCount >= MAX_WAKES_PER_DAY) { f.paused = 'daily'; return 'paused'; }
-  if (!s.replay) return 'no_identity';
+  const agent = agentOfSid(sid);
+  if (agent && !agentDeliver.has(agent)) return 'no_agent';
+  if (!agent && !s.replay) return 'no_identity';   // 别的 agent 的会话不靠重放身份（deliver 直接推给它的实例）
   if (transcriptGone(ctx, sid)) return 'gone';
   // 会话正开在官方 Desktop / 终端的 CLI 里：chat 路由会以 held_elsewhere 拒绝 resume（两边同写一份转录会分叉），先别去敲
-  if (findExternalHolder(sid)) return 'held_elsewhere';
+  if (!agent && findExternalHolder(sid)) return 'held_elsewhere';
   const busy = sessionBusy(ctx, sid);
   if (busy) return busy;
   if (f.retryAt && Date.now() < f.retryAt) return 'backoff';
@@ -1066,6 +1152,14 @@ function wakeBody(ctx, sid, replay) {
 // 发出去：重放一条 /api/chat（身份 = 绑定时落盘的那份；family origin 'ci' 标记这是自动修复轮）。
 // noPreempt：会话这时已经有一轮在跑（闸门放行之后用户又发了话）就回 busy、不顶掉它（claude.mjs runClaudeChat），下次扫描再来。
 async function deliver(ctx, sid, s, text) {
+  const agent = agentOfSid(sid);
+  if (agent) {
+    // 别的 agent：推给它的实例（dimensio：modules/dimensio 的 deliverPrEvent），由它在那个会话里以 harness 片段开一轮
+    const fn = agentDeliver.get(agent);
+    if (!fn) return { ok: false, reason: `${agent} 没有接上` };
+    try { const r = await fn(ctx, sid.slice(agent.length + 1), text); return r && typeof r === 'object' ? r : { ok: false, reason: '没有回应' }; }
+    catch (e) { return { ok: false, reason: String(e && e.message || e) }; }
+  }
   let r;
   try {
     r = await replayChat({
@@ -1163,10 +1257,13 @@ async function maybeAutoFix(ctx, sid, s, b, v) {
   // 发之前再过一遍「有人在用」：闸门之后到这里可能隔了一次 fetch，用户这期间开了新一轮就别插进去
   const late = sessionBusy(ctx, sid);
   if (late) { await undoHost(); logHeld(ctx, sid, late, b); return { woke: false, dirty }; }
-  const text = composeCiEvent({ pr: v, failures, conflict, host, comments, overflow, attribution: claudeSetting(ctx, 'attribution') !== 'none' });
+  const agent = agentOfSid(sid);
+  const text = composeCiEvent({ pr: v, failures, conflict, host, comments, overflow, attribution: prefAttribution(ctx, s, sid), ...(agent ? { agent } : {}) });
   const r = await deliver(ctx, sid, s, text);
   if (!r.ok) {
     await undoHost();
+    // 别的 agent 那边说会话已经没了（删了）：台账一并清掉，不再为它读 GitHub
+    if (r.gone) { forgetPrSession(ctx, sid); console.log(`[pr] ${sid.slice(0, 18)} gone — forgotten`); return { woke: false, dirty: false }; }
     if (r.busy) { logHeld(ctx, sid, 'busy', b); return { woke: false, dirty }; }   // 刚好撞上用户开的新一轮：下次扫描再来，不算失败
     // 没送出去（身份失效 401、会话被 Desktop 占着 409……）：指数退避，别每分钟起一个注定失败的 CLI；
     // 也计入每天的上限（冲突路径每试一次都要在 worktree 里 fetch + merge + abort 一遍，不能一天试几十次）
@@ -1222,7 +1319,7 @@ export function stopPrMonitor() {
 export async function _sweepForTest(ctx, sid) { rememberCtx(ctx); const s = slot(ctx, sid, false); if (s) await checkSession(ctx, sid, s); return slot(ctx, sid, false); }
 export function _resetPrMonitor() {
   stores.clear(); prCache.clear(); prInflight.clear(); nextAt.clear(); ctxs.clear(); branchLookups.clear(); linkScans.clear(); linkScanning.clear();
-  viewedAt.clear(); heldLogged.clear(); lastReplay.clear(); transcriptSkip.clear();
+  viewedAt.clear(); heldLogged.clear(); lastReplay.clear(); transcriptSkip.clear(); agentInfo.clear();
   for (const p of pubTimers.values()) clearTimeout(p.t);
   pubTimers.clear();
   if (timer) { clearInterval(timer); timer = null; }

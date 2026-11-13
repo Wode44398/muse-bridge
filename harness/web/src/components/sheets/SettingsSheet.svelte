@@ -12,6 +12,7 @@
   import {
     app,
     diagnosticsAvailable,
+    hostBuiltins,
     exportDiagnostics,
     memoryOverviewAvailable,
     openMemory,
@@ -323,8 +324,8 @@
         </Row>
       </Group>
 
-      <!-- 管理员共享的服务：Key 由管理员管，成员这里不填 -->
-      {#if !vendor.managed}
+      <!-- 管理员共享的服务：Key 由管理员管，成员这里不填。宿主的模型中心接管了自带厂商时，Key 在模型中心里配，这里也不填 -->
+      {#if !vendor.managed && !(hostBuiltins() && !vendor.custom && app.config.provider !== "local")}
         <Section title={t("API Key")} footnote={t("Key 加密存在服务端，重启不丢，不回传浏览器。")}>
           <TextField
             type="password"

@@ -12,6 +12,8 @@
   import { untrack, tick } from 'svelte';
   import { dragOut, previewDragSrc } from '../../lib/dragOut.js';
   import { api } from '../../lib/api.js';
+  import { mediaFallbackUrl } from '../../lib/server.js';
+  import '../../lib/doctheme.css';   // --md-* 纸面配色令牌（亮象牙白 / 暗暖墨，跟随全站明暗；编辑态/Office/PDF 共用）
   import { localWrite, localWriteB64, hasLocalWrite, localList, localReadText, localFileUrl } from '../../lib/localfs.js';
   import { pushBackLayer } from '../../lib/nav.js';
   import { normalizeItem, cloudFileUrl, openPreview, preview } from '../../lib/preview.svelte.js';
@@ -25,6 +27,7 @@
   import { fsChange, fsMatches } from '../../lib/fsSync.svelte.js';
   import { IS_SHARE } from '../../lib/share.js';
   import { t, tr, locale } from '../../lib/i18n.js';
+  import { uiConfirm } from '../../lib/dialogs.js';
   import { interceptAppDownload } from '../../lib/save.js';
   import { guardSelection } from '../../lib/touchSelection.js';
   import { edgeAutoScroll } from '../../lib/touchAutoScroll.js';
@@ -468,18 +471,32 @@
     return () => clearTimeout(saveT);
   });
 
-  // md 可保存 → 离开时静默落盘（失败有草稿兜底）；只有不可自动保存时才弹确认
-  function guardDirty() {
-    if (!dirty) return true;
-    if (isMd && editable) { save(true); return true; }
-    return confirm(t('有未保存的修改，确定离开？（草稿会临时保留）'));
+  // md 可保存 → 离开时静默落盘（失败有草稿兜底）；只有不可自动保存时才弹确认。
+  // 确认走应用内弹窗（异步），所以改成「把离开后要做的事 go 交进来」：
+  //   干净 / 已自动保存 → 当场同步执行（返回键、点链接的手感不变）；
+  //   要问 → 等用户答完，且这期间还停在同一篇、查看器也没被关掉，才执行。
+  // 系统返回的层回调（popNote）因此仍是同步的：先把这次返回吃掉，再异步问。
+  let asking = false, gone = false;
+  $effect(() => () => { gone = true; });
+  function guardDirty(go) {
+    if (!dirty) { go(); return; }
+    if (isMd && editable) { save(true); go(); return; }
+    if (asking) return;   // 已经在问了（连点返回 / 连按返回键）：不排第二个同样的确认
+    asking = true;
+    const at = cur;
+    uiConfirm(t('有未保存的修改，确定离开？（草稿会临时保留）'), { okLabel: t('离开') })
+      .then((ok) => { if (ok && !gone && cur === at) go(); })
+      .finally(() => { asking = false; });
   }
   function back() {
-    if (!guardDirty()) return;
-    if (stack.length > 1) stack = stack.slice(0, -1);
-    else onClose?.();
+    guardDirty(() => {
+      if (stack.length > 1) stack = stack.slice(0, -1);
+      else onClose?.();
+    });
   }
-  function popNote() { if (stack.length > 1 && guardDirty()) stack = stack.slice(0, -1); }
+  function popNote() {
+    if (stack.length > 1) guardDirty(() => { if (stack.length > 1) stack = stack.slice(0, -1); });
+  }
   $effect(() => { if (stack.length > 1) return pushBackLayer(popNote); });   // 系统返回：先弹笔记栈，再轮到关查看器
 
   // —— md 双链数据（/api/file/mdlinks；按 rel 缓存，返回导航秒出，后台刷新）——
@@ -624,7 +641,8 @@
 
   // ![[嵌入]] / 相对资源 → 可加载 URL：mdlinks 已解析的路径优先，回落同目录拼接。
   // wiki=true（![[名字]]，按全库名字解析）且出链索引还在路上、名单里也没有 → ''（占位，见 linksPending）
-  const fileUrlOf = (st, rel) => (st.origin === 'cloud' ? cloudFileUrl(rel, { ws: st.ws, nativeLocation: st.nativeLocation }) : localFileUrl(rel));
+  // media：这些地址落在 <img> 上，局域网直连时要走 mediaUrl（手机 WebView 的 <img> 经 LAN 会整批裂图，见 server.js）
+  const fileUrlOf = (st, rel) => (st.origin === 'cloud' ? cloudFileUrl(rel, { ws: st.ws, nativeLocation: st.nativeLocation, media: true }) : localFileUrl(rel));
   const resolvedEmbed = (name) => {
     const k = String(name).toLowerCase();
     return links?.outgoing?.find((o) => o.path && o.name.toLowerCase() === k)?.path
@@ -647,7 +665,10 @@
   // 阅读态（与编辑态 callout 卡里的 HTML）：img 带 data-alt 的，加载失败换下一个备选（error 不冒泡，挂捕获）
   function embedFallback(e) {
     const img = e.target;
-    if (img?.tagName !== 'IMG' || !img.dataset?.alt) return;
+    if (img?.tagName !== 'IMG') return;
+    const viaTunnel = mediaFallbackUrl(img.src);   // 走的局域网：先换隧道重试同一张，不算失败
+    if (viaTunnel !== img.src) { img.src = viaTunnel; return; }
+    if (!img.dataset?.alt) return;
     const [next, ...rest] = img.dataset.alt.split('\n');
     if (rest.length) img.dataset.alt = rest.join('\n'); else img.removeAttribute('data-alt');
     if (EMBED_SRC_OK.test(next)) img.src = next;
@@ -810,15 +831,16 @@
   });
   // head：[[笔记#标题]] / 相对链接的 #片段——新笔记加载、渲染完后定位到该标题（验收 e2e-8）
   function openNote(rel, head = '') {
-    if (!guardDirty()) return;
-    // name 必须取 rel 的真实文件名（带扩展名）——normalize 按 name 推 kind，
-    // 反链/出链给的是去掉 .md 的展示名，直接用会被当成未知类型走占位页。
-    const base = { rel, name: rel.split('/').pop() };
-    const it = cur.saveTarget?.origin === 'local'
-      ? normalizeItem({ origin: 'local', ...base, text: localReadText(rel) })
-      : normalizeItem({ origin: 'cloud', ...base, ws: cur.saveTarget?.ws || '', nativeLocation: cur.saveTarget?.nativeLocation || '' });
-    stack = [...stack, it];
-    jumpHead = head ? { key: draftKeyOf(it), depth: stack.length, head } : null;
+    guardDirty(() => {
+      // name 必须取 rel 的真实文件名（带扩展名）——normalize 按 name 推 kind，
+      // 反链/出链给的是去掉 .md 的展示名，直接用会被当成未知类型走占位页。
+      const base = { rel, name: rel.split('/').pop() };
+      const it = cur.saveTarget?.origin === 'local'
+        ? normalizeItem({ origin: 'local', ...base, text: localReadText(rel) })
+        : normalizeItem({ origin: 'cloud', ...base, ws: cur.saveTarget?.ws || '', nativeLocation: cur.saveTarget?.nativeLocation || '' });
+      stack = [...stack, it];
+      jumpHead = head ? { key: draftKeyOf(it), depth: stack.length, head } : null;
+    });
   }
   // 跨笔记跳标题只消费一次（返回/重载这篇不再跳）；两态各自定位：阅读态滚 DOM 标题，编辑态交给 CM
   let jumpHead = null;
@@ -1330,30 +1352,21 @@
 </div>
 
 <style>
-  /* 配色令牌：与 mdeditor/editor.css 的 .mde 同名同值（阅读态/编辑态观感必须一致，改色两边一起改）。
-     Anthropic/Claude 象牙白暖调：纸面 #faf9f5、字 #141413、强调 Claude 珊瑚 #d97757。 */
+  /* 配色令牌 --md-* 在 lib/doctheme.css（与编辑态 .mde、Office、PDF 查看器共用一份，跟随全站明暗：
+     亮＝Claude 象牙白、暗＝claude.ai 深色暖墨）。本组件不写死纸面颜色，叠加深浅用 rgba(var(--md-ink), α)。 */
   .doc-root {
-    --md-bg: #faf9f5; --md-bg-2: #f3f1eb; --md-bg-3: #eae7df; --md-panel: #fffefb;
-    --md-line: #e7e4db; --md-line-2: #d6d2c6;
-    --md-fg: #141413; --md-fg-2: #5f5e59; --md-fg-3: #8a8983; --md-fg-4: #b4b2aa;
-    --md-accent: #d97757; --md-accent-deep: #b5532f; --md-accent-soft: rgba(217, 119, 87, .16); --md-accent-tint: rgba(217, 119, 87, .085);
-    --md-link: #2f6fbf; --md-mark: rgba(235, 196, 98, .42); --md-math: #3f7a5a; --md-danger: #c2472f;
-    --md-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    --md-shadow-sm: 0 8px 24px rgba(70, 56, 34, .14), 0 1px 4px rgba(70, 56, 34, .06), 0 0 0 .5px rgba(20, 20, 19, .07);
-    --md-ease: cubic-bezier(.2, .8, .2, 1);
     position: absolute; inset: 0; background: var(--md-bg); color: var(--md-fg); display: flex; flex-direction: column;
     padding-bottom: var(--kb, 0px);
-    color-scheme: light;   /* 纸面恒为象牙白：原生控件/滚动条按浅色画，不继承 app 深色主题的 :root 声明（同 editor.css .mde） */
   }
 
   /* —— 顶栏：返回圆钮 + 文件名/状态两行 + 模式切换。整条纸面灰阶，只有冲突用警示色 —— */
   .doc-head { flex: none; display: flex; align-items: center; gap: 10px; padding: max(var(--pv-pad-y, 8px), var(--sat)) 12px var(--pv-pad-y, 8px) 8px;
-    background: var(--md-bg); box-shadow: inset 0 -.5px 0 rgba(20, 20, 19, .12); }
+    background: var(--md-bg); box-shadow: inset 0 -.5px 0 rgba(var(--md-ink), .12); }
   .doc-back { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none;
-    color: var(--md-fg); background: rgba(20, 20, 19, .045); transition: background var(--mo-tap, 90ms), transform var(--mo-tap, 90ms); }
+    color: var(--md-fg); background: rgba(var(--md-ink), .05); transition: background var(--mo-tap, 90ms), transform var(--mo-tap, 90ms); }
   .doc-back svg { width: 19px; height: 19px; margin-left: -1px; }
-  @media (hover: hover) { .doc-back:hover { background: rgba(20, 20, 19, .075); } }
-  .doc-back:active { background: rgba(20, 20, 19, .1); transform: scale(.94); }
+  @media (hover: hover) { .doc-back:hover { background: rgba(var(--md-ink), .08); } }
+  .doc-back:active { background: rgba(var(--md-ink), .11); transform: scale(.94); }
   .doc-title-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 1px; }
   .doc-title { max-width: 100%; font-size: 15px; font-weight: 600; line-height: 1.25; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; letter-spacing: -.15px; }
   .doc-sub { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; padding: 0; border: 0; background: none;
@@ -1363,15 +1376,15 @@
   .doc-sub[data-kind='dirty'] { color: var(--md-fg-2); cursor: pointer; }
   .doc-sub[data-kind='warn'] { color: var(--md-danger); }
   .doc-sub-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--md-accent); flex: none; }
-  .doc-sub-spin { width: 9px; height: 9px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid rgba(20, 20, 19, .16); border-top-color: var(--md-fg-2);
+  .doc-sub-spin { width: 9px; height: 9px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid rgba(var(--md-ink), .16); border-top-color: var(--md-fg-2);
     flex: none; animation: docspin .7s linear infinite; }
   @keyframes docsub { from { opacity: 0; transform: translateY(2px); } }
 
-  /* 阅读/编辑/源码 三段切换：暖灰轨道 + 白色滑帽 */
+  /* 阅读/编辑/源码 三段切换：暖灰轨道 + 滑帽（亮白 / 暗里抬一级的暖灰） */
   /* 三段等宽（grid 1fr）：滑帽固定 1/3 宽，英文三段字长不一（Read/Edit/Source）时也对得齐 */
-  .doc-seg { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: rgba(20, 20, 19, .055); border-radius: 999px; padding: 2px; flex: none; }
-  .doc-seg-cap { position: absolute; top: 2px; left: 2px; width: calc(33.333% - 1.4px); height: calc(100% - 4px); background: #fff; border-radius: 999px;
-    box-shadow: 0 1px 2px rgba(70, 56, 34, .12), 0 2px 8px rgba(70, 56, 34, .06), 0 0 0 .5px rgba(20, 20, 19, .07); transition: transform var(--mo-quick, 200ms) var(--md-ease); }
+  .doc-seg { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: rgba(var(--md-ink), .06); border-radius: 999px; padding: 2px; flex: none; }
+  .doc-seg-cap { position: absolute; top: 2px; left: 2px; width: calc(33.333% - 1.4px); height: calc(100% - 4px); background: var(--md-thumb); border-radius: 999px;
+    box-shadow: var(--md-shadow-thumb); transition: transform var(--mo-quick, 200ms) var(--md-ease); }
   .doc-seg button { position: relative; z-index: 1; padding: 5px 12px; font-size: 12.5px; color: var(--md-fg-2); font-weight: 500; flex: 1 0 auto;
     border-radius: 999px; transition: color var(--mo-micro, 140ms); }
   .doc-seg button.on { color: var(--md-fg); font-weight: 600; }
@@ -1389,22 +1402,22 @@
 
   /* 顶栏下方的提示条（与磁盘冲突 / 草稿没自动恢复）：内嵌在版面里，不浮在正文上 */
   .doc-notice { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 9px 12px 9px 14px;
-    font-size: 13px; line-height: 1.45; color: var(--md-fg); background: var(--md-panel); box-shadow: inset 0 -.5px 0 rgba(20, 20, 19, .12);
+    font-size: 13px; line-height: 1.45; color: var(--md-fg); background: var(--md-panel); box-shadow: inset 0 -.5px 0 rgba(var(--md-ink), .12);
     animation: docsub .2s ease both; }
-  .doc-notice.warn { background: #fbf1ec; }
+  .doc-notice.warn { background: var(--md-warn-bg); }
   .doc-notice-ic { width: 17px; height: 17px; flex: none; color: var(--md-fg-3); }
   .doc-notice.warn .doc-notice-ic { color: var(--md-danger); }
   .doc-notice-t { flex: 1 1 180px; min-width: 0; }
   .doc-notice-acts { display: inline-flex; gap: 6px; margin-left: auto; }
-  .doc-notice-acts button { padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--md-fg); background: rgba(20, 20, 19, .06);
+  .doc-notice-acts button { padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--md-fg); background: rgba(var(--md-ink), .07);
     transition: background var(--mo-tap, 90ms); }
   .doc-notice-acts button.pri { color: var(--md-bg); background: var(--md-fg); }
-  .doc-notice-acts button:active { background: rgba(20, 20, 19, .12); }
-  .doc-notice-acts button.pri:active { background: #33332f; }
+  .doc-notice-acts button:active { background: rgba(var(--md-ink), .13); }
+  .doc-notice-acts button.pri:active { background: color-mix(in srgb, var(--md-fg) 80%, var(--md-bg)); }
 
   .doc-body { flex: 1; min-height: 0; position: relative; }
   .doc-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--md-fg-2); }
-  .doc-spin { width: 30px; height: 30px; border-radius: 50%; border: 3px solid rgba(20, 20, 19, .1); border-top-color: var(--md-accent); animation: docspin .8s linear infinite; }
+  .doc-spin { width: 30px; height: 30px; border-radius: 50%; border: 3px solid rgba(var(--md-ink), .1); border-top-color: var(--md-accent); animation: docspin .8s linear infinite; }
   @keyframes docspin { to { transform: rotate(360deg); } }
   /* 分块渲染进行中：文末小转圈（正文已可读可滚，不挡内容） */
   .doc-rendering { display: flex; justify-content: center; padding: 14px 0 6px; }
@@ -1414,7 +1427,7 @@
   .doc-dl { padding: 8px 20px; border-radius: 999px; background: var(--md-accent); color: #fff; font-size: 14px; }
 
   .doc-scroll { position: absolute; inset: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-  .doc-edit { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; border: 0; outline: none; background: var(--md-bg); color: var(--md-fg);
+  .doc-edit { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; border: 0; outline: none; background: var(--md-bg); color: var(--md-code-fg);
     padding: 16px; font-family: var(--md-mono); font-size: 14px; line-height: 1.7; -webkit-overflow-scrolling: touch; caret-color: var(--md-accent); }
 
   .doc-page { max-width: 760px; margin: 0 auto; padding: 14px 20px 60px; --ts-sel: var(--md-accent-soft); }   /* 触屏选区锁定时正文仍用这个高亮色（lib/touchSelection.js） */
@@ -1441,13 +1454,13 @@
   .doc-prop-v { flex: 1; min-width: 0; color: var(--md-fg); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; word-break: break-word; }
   .doc-prop-txt { white-space: pre-wrap; padding: 4px 6px; line-height: normal; }
   .doc-prop-empty { color: var(--md-fg-4); padding: 4px 6px; line-height: normal; }
-  .doc-prop-json { font-family: var(--md-mono); font-size: 12.5px; color: #bc5215; background: rgba(188, 82, 21, .08); border-radius: 5px; padding: 2px 7px; word-break: break-all; }
+  .doc-prop-json { font-family: var(--md-mono); font-size: 12.5px; color: var(--md-json); background: var(--md-json-bg); border-radius: 5px; padding: 2px 7px; word-break: break-all; }
   .doc-chip { background: var(--md-bg-2); border-radius: 999px; padding: 2px 10px; font-size: 13px; word-break: break-all; }
   .doc-chip-tag { color: var(--md-accent-deep); background: var(--md-accent-tint); }
   /* 只读勾选框自绘（原生 disabled 态是一坨灰）；编辑态 .mde-pv-bool 是同一副框，改一处两边一起改 */
   .doc-prop-v input[type="checkbox"] {
     appearance: none; -webkit-appearance: none; width: 16px; height: 16px; margin: 4px 6px; border-radius: 5px;   /* margin 同编辑态 .mde-pv-bool */
-    border: 1.6px solid var(--md-line-2); background: #fff; position: relative; opacity: 1;
+    border: 1.6px solid var(--md-line-2); background: var(--md-field); position: relative; opacity: 1;
   }
   .doc-prop-v input[type="checkbox"]:checked { background: var(--md-accent); border-color: var(--md-accent); }
   .doc-prop-v input[type="checkbox"]:checked::after {
@@ -1456,10 +1469,10 @@
   }
 
   /* 属性面板里 [[双链]] 值的链接样（正文里的 a.wk 在 lib/mdrender.css） */
-  .doc-props :global(a.wk) { color: var(--md-accent-deep); text-decoration: none; border-bottom: 1px solid rgba(181, 83, 47, .35); cursor: pointer; word-break: break-all; }
+  .doc-props :global(a.wk) { color: var(--md-accent-deep); text-decoration: none; border-bottom: 1px solid var(--md-wk-line); cursor: pointer; word-break: break-all; }
   .doc-props :global(a.wk:active) { background: var(--md-accent-tint); }
 
-  /* Markdown 预览排版（象牙白文档）——正文块/行内元素的规则在 lib/mdrender.css（随 obsmd 注入，
+  /* Markdown 预览排版——正文块/行内元素的规则在 lib/mdrender.css（随 obsmd 注入，
      与编辑态 callout 卡共用一份）；这里只留阅读态特有的：容器、文首对齐、围栏头。
      数值与 mdeditor/editor.css 的 Live Preview 保持一致，两个模式来回切时不该有观感落差
      （字号/行高/间距/块样式全对齐；字体统一走全局 --sans）*/
@@ -1506,7 +1519,7 @@
   .doc-bls { display: flex; flex-direction: column; gap: 8px; }
   .doc-bl { text-align: left; background: var(--md-panel); border: 1px solid var(--md-line); border-radius: 12px; padding: 9px 12px;
     transition: background var(--mo-micro, 140ms), border-color var(--mo-micro, 140ms); }
-  @media (hover: hover) { .doc-bl:hover { border-color: var(--md-line-2); background: #fff; } }
+  @media (hover: hover) { .doc-bl:hover { border-color: var(--md-line-2); background: var(--md-panel-hi); } }
   .doc-bl:active { background: var(--md-bg-2); }
   .doc-bl-name { font-size: 14px; font-weight: 600; color: var(--md-accent-deep); display: flex; align-items: center; gap: 6px; min-width: 0; }
   .doc-bl-n { flex: none; font-size: 11px; background: var(--md-accent-tint); color: var(--md-accent-deep); border-radius: 999px; padding: 0 6px; }
@@ -1514,12 +1527,12 @@
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .doc-bl-x :global(b) { color: var(--md-fg); background: var(--md-mark); font-weight: 600; border-radius: 2px; }
   .doc-outs { display: flex; flex-wrap: wrap; gap: 7px; }
-  .doc-out { font-size: 13px; color: var(--md-accent-deep); background: var(--md-accent-tint); border: 1px solid rgba(181, 83, 47, .18); border-radius: 999px; padding: 4px 12px;
+  .doc-out { font-size: 13px; color: var(--md-accent-deep); background: var(--md-accent-tint); border: 1px solid color-mix(in srgb, var(--md-accent-deep) 22%, transparent); border-radius: 999px; padding: 4px 12px;
     max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background var(--mo-micro, 140ms); }
   .doc-out:active { background: var(--md-accent-soft); }
   .doc-out.dead { color: var(--md-fg-3); background: var(--md-bg-2); border-color: var(--md-line); border-style: dashed; }
   .doc-stats { margin-top: 26px; padding: 10px 0 4px; text-align: center; font-size: 12px; color: var(--md-fg-4); }
 
-  .doc-restored { position: absolute; left: 50%; bottom: calc(16px + var(--kb, 0px)); transform: translateX(-50%); background: rgba(20, 20, 19, .86); color: #faf9f5; font-size: 12.5px; padding: 6px 14px; border-radius: 999px; pointer-events: none; box-shadow: var(--md-shadow-sm); white-space: nowrap; }
-  .doc-toast { position: absolute; left: 50%; bottom: calc(54px + var(--kb, 0px)); transform: translateX(-50%); background: rgba(20, 20, 19, .86); color: #faf9f5; font-size: 13px; padding: 8px 18px; border-radius: 999px; pointer-events: none; box-shadow: var(--md-shadow-sm); }
+  .doc-restored { position: absolute; left: 50%; bottom: calc(16px + var(--kb, 0px)); transform: translateX(-50%); background: var(--md-toast-bg); color: var(--md-toast-fg); font-size: 12.5px; padding: 6px 14px; border-radius: 999px; pointer-events: none; box-shadow: var(--md-shadow-sm); white-space: nowrap; }
+  .doc-toast { position: absolute; left: 50%; bottom: calc(54px + var(--kb, 0px)); transform: translateX(-50%); background: var(--md-toast-bg); color: var(--md-toast-fg); font-size: 13px; padding: 8px 18px; border-radius: 999px; pointer-events: none; box-shadow: var(--md-shadow-sm); }
 </style>

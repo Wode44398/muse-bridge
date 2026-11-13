@@ -20,6 +20,7 @@ import { messageKind, skillLoadedIn } from "./injections.ts";
 import { worldBaseline, worldDelta, worldTokens, type WorldSection, type WorldTokens, type WorldValues } from "./world-state.ts";
 import { DEFAULT_MEDIA_BUDGET, planRetirement, retiredText, type MediaItem } from "./media-budget.ts";
 import { LoopGuard } from "./loop-guard.ts";
+import { defaultProfile, profileProviderExtras, type ModelProfile } from "./profile.ts";
 
 // Image, video and audio share the asset/data/url shape, so they share one store.
 type MediaBlock = Extract<Block, { t: "image" } | { t: "video" } | { t: "audio" }>;
@@ -74,6 +75,9 @@ export interface AgentStateInit {
   // D5：这台机器有没有浏览器可用（主会话 = 建会话时 Browser 工具注册了没有；子 agent 自己没有 Browser，跟父会话）。
   // false = playbook 网页章给 curl 版、桌面 / 安卓章不给。不给 = 有（测试与旧调用方照旧）。
   browser?: boolean;
+  // 模型档案（agent/profile.ts）：按家族调的提示词 / 工具 / 请求 / loop 阈值。会话、子 agent 按实际型号解析好传进来；
+  // 不给 = 现状档案（测试与旧调用方照旧）。
+  profile?: ModelProfile;
 }
 
 export interface AssistantParts {
@@ -162,6 +166,13 @@ export class AgentState {
   private readonly resolveImageAsset?: (assetId: string) => string;
   private readonly storeImageAsset?: (block: MediaBlock) => MediaBlock;
   readonly compactionArchive?: CompactionArchive;
+  // 刚换到窗口更小的型号、上下文已经装不下：下一次压缩的摘要交给换之前的型号写（它装得下、也更清楚这段对话），
+  // 压完就清掉（对齐 Claude Code 2.1.301）。session.ts rebindModel 设。
+  switchSummarizer?: ProviderAdapter;
+  // 上面那个摘要器所属型号的档案（摘要旁路的思考 / 输出上限按它取）；没给就用本会话的
+  switchSummarizerProfile?: ModelProfile;
+  // 模型档案：loop 各处现读（重复熔断、追问次数、续写次数、并行上限……）。同一份 state 里不变，换型号换的是整份 state。
+  readonly profile: ModelProfile;
 
   messages: Msg[] = [];
   todos: TodoItem[] = [];
@@ -183,7 +194,26 @@ export class AgentState {
     return sid;
   }
   hasSteer(): boolean {
-    return this.steerQueue.length > 0;
+    return this.steerQueue.length > 0 || this.familyQueue.length > 0;
+  }
+  // 会话协作（session-family.ts）：别的会话发来的消息在这一轮跑着时排在这里，loop 在两步之间与插话一起注入——
+  // 注入成 harness 消息（kind 是 injections.ts 里的 session-message / side-sessions-event），不是「用户在运行中插话」。
+  // 这一轮收尾时还没注入的由 session-family.ts 收回收件箱，下一轮照样送到。
+  private familyQueue: { text: string; kind: string }[] = [];
+  queueFamily(text: string, kind: string): void {
+    if (text.trim()) this.familyQueue.push({ text, kind });
+  }
+  takeFamily(): { text: string; kind: string }[] {
+    if (!this.familyQueue.length) return [];
+    const out = this.familyQueue;
+    this.familyQueue = [];
+    return out;
+  }
+  // 只取某一类还没注入的（后台任务通知收尾时由 job-notify.ts 自己收回，不进会话协作的收件箱）
+  takeFamilyKind(kind: string): string[] {
+    const mine = this.familyQueue.filter((f) => f.kind === kind);
+    if (mine.length) this.familyQueue = this.familyQueue.filter((f) => f.kind !== kind);
+    return mine.map((f) => f.text);
   }
   // U2（X36 第二步）：还没注入的插话可以撤回——在队列里就拿掉（返回原话）；已经注入了（或根本没有）返回 null
   withdrawSteer(id: string): string | null {
@@ -329,7 +359,7 @@ export class AgentState {
   budgetNudged = false;
   budgetExhausted = false;
   // R15：分级重复熔断（每次新的用户消息重置）；loopGuardStopped = 这次的「收尾轮」是熔断触发的，不是预算
-  loopGuard = new LoopGuard();
+  loopGuard: LoopGuard; // 构造函数里按档案的阈值建
   loopGuardStopped = false;
   // P6（X17、N16）：本 run 的拒绝台账；连续几次没被批准（用户拒绝 / 没人在场）；到 3 次就收尾——denialsStopped
   // = 这次的收尾轮是连续拒绝触发的。都随每条新的用户消息清零。
@@ -374,6 +404,8 @@ export class AgentState {
     this.compactionArchive = init.compactionArchive;
     this.memoryAuditRequired = init.memoryAuditRequired ?? true;
     this.browser = init.browser !== false;
+    this.profile = init.profile ?? defaultProfile();
+    this.loopGuard = new LoopGuard(this.profile.loop.guard);
     this.memoryAuditCompleted = !this.memoryAuditRequired;
     this.preCompactAuditPassed = !this.memoryAuditRequired;
     // C5：Skill 同名不重复注入——正文此刻还在转录里（加载过、没被整段压缩掉）就只提示「上面已有」
@@ -436,11 +468,14 @@ export class AgentState {
     if (this.ephemeralTail) {
       messages = [...messages, { role: "user", origin: "harness", kind: "todo", content: [{ t: "text", text: this.ephemeralTail }] }];
     }
+    // 档案的 providerExtras 经 hints 并进请求体（三个适配器都合并）；空就不挂 hints，请求与接入档案前一样
+    const extras = profileProviderExtras(this.profile);
     return {
       system: this.system,
       messages,
       tools: this.tools,
       budget: this.budget,
+      ...(extras ? { hints: { providerExtras: extras } } : {}),
     };
   }
 
@@ -544,7 +579,7 @@ export class AgentState {
     this.lastReactiveCompactTurn = null;
     this.budgetNudged = false;
     this.budgetExhausted = false;
-    this.loopGuard = new LoopGuard();
+    this.loopGuard = new LoopGuard(this.profile.loop.guard);
     this.loopGuardStopped = false;
     this.deniedTargets = new DeniedTargets();
     this.consecutiveDenials = 0;
@@ -762,10 +797,14 @@ export class AgentState {
   }
 
   // O8：主循环之外的一次调用（压缩摘要……）只进账本，不进主对话的 totals（那是上下文与主对话用量）
-  recordSideUsage(task: UsageTask, u: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }): void {
+  recordSideUsage(
+    task: UsageTask,
+    u: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number },
+    by: { id: string; model: string } = this.adapter,
+  ): void {
     this.usageSink?.({
-      provider: this.adapter.id,
-      model: this.adapter.model,
+      provider: by.id,
+      model: by.model,
       task,
       input: u.inputTokens ?? 0,
       output: u.outputTokens ?? 0,

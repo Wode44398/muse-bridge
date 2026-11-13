@@ -22,6 +22,7 @@ import { busPublish } from '../runtime/bus.mjs';
 import { listProviders, createProvider, updateProvider, deleteProvider, customModelsView, getProvider, normalizeProvider, normalizeBaseUrl, presetsFor, customOwner, isMemberOwner, loadedOwners, providerProxyForced, sharedProvidersView, HOST_OWNER, MEMBER_MAX_PROVIDERS } from '../runtime/claude-providers.mjs';
 import { FEATURES } from '../config/index.mjs';
 import { assertPublicUrl } from '../runtime/public-net.mjs';
+import { onModelServicesChange } from '../runtime/model-services.mjs';
 import { fetchRemoteModels, guessModels, testProvider, detectProtocol, probeModel, providerLog, ensureFastProbes, onFastProbeChange } from '../runtime/claude-providers-proxy.mjs';
 
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
@@ -47,6 +48,14 @@ export function registerClaudeProviderRoutes(router, { identify }) {
   };
   // fast 探测结论按型号记、各家共用：变了就推给所有读过注册表的人，菜单里的开关跟着出现 / 消失
   onFastProbeChange(() => { for (const o of loadedOwners()) publishOne(o); });
+  // 插件 / 模型中心登记的服务变了（加减模型、改去向、停用）：Claude 的模型菜单现推一份，不用等重连。
+  // 合并 200ms 内的连续变化（模型中心一次保存可能先撤再登记好几条），主机变了顺带推给读过注册表的成员
+  let svcTimer = null;
+  onModelServicesChange(() => {
+    if (svcTimer) return;
+    svcTimer = setTimeout(() => { svcTimer = null; try { publish(HOST_OWNER); } catch (e) { console.error('[claude-providers] 推送模型菜单失败：', e?.message || e); } }, 200);
+    svcTimer.unref?.();
+  });
   const probeFast = (id, owner) => { const p = id && getProvider(id, owner); if (p) ensureFastProbes(p).catch(() => {}); };
   // 成员的接口地址只许是公网（草稿、保存都查；代理发请求时还会再查）
   const checkUrl = async (owner, url) => { if (isMemberOwner(owner) && url) await assertPublicUrl(normalizeBaseUrl(url)); };

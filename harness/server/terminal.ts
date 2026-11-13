@@ -123,6 +123,8 @@ export function ensureTerm(ws: string, cols?: unknown, rows?: unknown): Term {
     exited: false,
   };
   pty.onData((d) => {
+    // 有输出就算在用：agent 在共享终端里跑的长命令没人看着时，别被闲置回收掉
+    t.lastUsed = Date.now();
     t.chunks.push(d);
     t.bytes += Buffer.byteLength(d);
     // 整块丢弃可能把 ANSI 序列拦腰截断——xterm 对快照开头的少量乱码有容忍，可接受。
@@ -137,6 +139,11 @@ export function ensureTerm(ws: string, cols?: unknown, rows?: unknown): Term {
   });
   terms.set(key, t);
   return t;
+}
+
+// 只查不建：agent 读屏时用户没开过终端就说没有，不凭空起一个壳。
+export function getTermIfAny(ws: string): Term | null {
+  return terms.get(fold(ws)) ?? null;
 }
 
 export function writeTerm(ws: string, data: string): boolean {

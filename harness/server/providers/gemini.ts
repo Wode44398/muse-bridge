@@ -4,6 +4,7 @@ import type { AdapterConfig, Capabilities, ProviderAdapter } from "./types.ts";
 import { readSSE } from "./sse.ts";
 import { httpErrorEvent, streamErrorEvent } from "./classify.ts";
 import { observeWire } from "./wire-fingerprint.ts";
+import { fetchReconnect } from "../net-proxy.ts";
 import { modelLimits, modelSupportsImages, modelSupportsVideo, providerMediaBudget } from "../catalog.ts";
 import { applyCustomThinking } from "../custom-tiers.ts";
 import type { CustomWire } from "./types.ts";
@@ -82,7 +83,7 @@ export function createGeminiAdapter(cfg: AdapterConfig): ProviderAdapter {
 
       const url = `${baseUrl}/models/${encodeURIComponent(cfg.model)}:streamGenerateContent?alt=sse`;
       observeWire(turn, "gemini", body);
-      const res = await fetch(url, {
+      const res = await fetchReconnect(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -206,7 +207,10 @@ function encode(turn: Turn, model: string, caps: Capabilities, custom?: CustomWi
         functionDeclarations: turn.tools.map((t) => ({
           name: t.name,
           description: t.description,
-          parameters: sanitizeSchema(t.parameters),
+          // parametersJsonSchema 收完整的 JSON Schema；老的 parameters 字段是 OpenAPI 子集，MCP 工具常见的 const、type 数组、
+          // exclusiveMinimum、patternProperties 等关键字一个都不认——只要挂着的工具里有一个带这些，整个会话每次请求都 400
+          //（2026-11-13 在 Vertex 的 Gemini 4 Argon 上实测：同一份 schema 旧字段 400、新字段 200）。两个字段互斥，不能同发。
+          parametersJsonSchema: sanitizeSchema(t.parameters),
         })),
       },
     ];
@@ -304,14 +308,13 @@ function toolResultText(b: Extract<Block, { t: "tool_result" }>): string {
     .join("\n");
 }
 
-// Gemini's function-declaration schema is an OpenAPI subset and rejects a few
-// JSON-Schema-isms (notably $schema and additionalProperties). Strip them.
+// 工具 schema 走 parametersJsonSchema（完整 JSON Schema），只去掉 $schema 这个方言声明；additionalProperties 等一律原样保留。
 function sanitizeSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) return schema.map(sanitizeSchema);
   if (schema && typeof schema === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
-      if (k === "$schema" || k === "additionalProperties") continue;
+      if (k === "$schema") continue;
       out[k] = sanitizeSchema(v);
     }
     return out;

@@ -1,7 +1,7 @@
 <script>
-  // 桌面主页 Dock 的 WebGPU 玻璃体。渲染模块（FigmaGlassRenderer / NOTIFICATION_SCENE）不在公开仓：
-  // 维护者的私有 overlay 提供时（清单 modules.figmaGlass，见 lib/figmaHomeGlass.svelte.js 的 loadFigmaGlass）才走这条，
-  // 公开版拿不到模块 → onready(false)，父级照用自有的 GlassScene / domGlass 玻璃。
+  // 桌面主页 Dock 的 WebGPU 玻璃体。渲染模块（FigmaGlassRenderer / NOTIFICATION_SCENE）是原版资源
+  // （清单 modules.figmaGlass，见 lib/figmaHomeGlass.svelte.js 的 loadFigmaGlass）。
+  // 没有 WebGPU / 模块加载失败 → onready(false)，父级照用 GlassScene / domGlass 玻璃（硬件退路）。
   //
   // 几何：一张 WebGPU 画布盖住 Dock + 四周 margin（投影要 15 模糊 + 8 下移的余量），
   // 叠在壁纸画布之上、暗角遮罩之下；四边 16px 羽化，与底下的壁纸无缝相接。

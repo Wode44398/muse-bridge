@@ -319,10 +319,15 @@
   onMount(() => {
     const html = document.documentElement;
     html.classList.add('share-mode');
-    // 浏览器顶栏颜色跟页面底色（index.html 写死的是 App 的暗色）
+    // 浏览器顶栏颜色跟页面底色（index.html 写死的是 App 的暗色）。分享页跟系统明暗（访客没有 bridge 偏好），
+    // data-theme 也按系统写——预览查看器（md / Office / PDF / HTML）的配色看它，不写会和页面一明一暗
     const mq = matchMedia('(prefers-color-scheme: dark)');
     const themeMeta = document.querySelector('meta[name="theme-color"]');
-    const syncTheme = () => themeMeta?.setAttribute('content', mq.matches ? '#1a1a19' : '#f6f5f1');
+    const prevTheme = html.getAttribute('data-theme');
+    const syncTheme = () => {
+      themeMeta?.setAttribute('content', mq.matches ? '#1a1a19' : '#f6f5f1');
+      html.setAttribute('data-theme', mq.matches ? 'dark' : 'light');
+    };
     syncTheme(); mq.addEventListener?.('change', syncTheme);
     const onHash = () => { closeMenu(); const p = subFromHash(); if (phase === 'ready' && p !== sub) go(p); };
     const onKey = (e) => { if (e.key === 'Escape' && menu) { e.stopPropagation(); closeMenu(); } };
@@ -335,6 +340,7 @@
     return () => {
       html.classList.remove('share-mode');
       mq.removeEventListener?.('change', syncTheme);
+      if (prevTheme) html.setAttribute('data-theme', prevTheme);
       removeEventListener('hashchange', onHash);
       removeEventListener('popstate', onPop);
       removeEventListener('keydown', onKey, true);

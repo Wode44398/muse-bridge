@@ -8,6 +8,7 @@
   import { onMount, type Snippet } from "svelte";
   import {
     app,
+    openSettings,
     canRefSessions,
     canRenameProject,
     canReorderProjects,
@@ -41,8 +42,14 @@
   import MenuSep from "../ui/MenuSep.svelte";
   import Mark from "../brand/Mark.svelte";
   import Wordmark from "../brand/Wordmark.svelte";
+  import ThemeMark from "../brand/ThemeMark.svelte";
   import VendorLogo from "../brand/VendorLogo.svelte";
+  import FamilyList from "./FamilyList.svelte"; // 会话协作：子会话挂在父会话下
   import { isEn, locale, t, tc, tr } from "../../lib/i18n.ts";
+  // ── 会话管理（lib/sessmgmt.svelte.ts）：会话行的菜单（重命名 / 归档）与底部的「已归档」。本文件里的改动只有这几处，都标了「会话管理」──
+  import SessionMenu from "./SessionMenu.svelte";
+  import ArchivedSection from "./ArchivedSection.svelte";
+  import { canArchive, canRename } from "../../lib/sessmgmt.svelte.ts";
 
   let {
     docked = false,
@@ -74,6 +81,17 @@
   // 两步删除：armed = 已经点过一次、等第二次的那条（3 秒后自动撤销）；swiped = 手机上左滑开着的那条
   let armed = $state<string | null>(null);
   let swiped = $state<string | null>(null);
+  // 会话管理：会话行菜单（桌面右键、触屏左滑后的「更多」）
+  let sessMenu = $state<{ s: SessionMeta; anchor: HTMLElement } | null>(null);
+  const sessMenuOk = $derived(canArchive() || canRename());
+  function openSessMenu(s: SessionMeta, e: MouseEvent, viaCtx: boolean) {
+    if (!sessMenuOk || (viaCtx && !mouseCtx(e))) return;
+    e.preventDefault();
+    e.stopPropagation();
+    haptic("light");
+    swiped = null;
+    sessMenu = { s, anchor: e.currentTarget as HTMLElement };
+  }
   let armTimer = 0;
 
   function readCollapsed(): string[] {
@@ -485,7 +503,7 @@
     let active = false;
     let base = 0;
     let dx = 0;
-    const W = 72;
+    const W = sessMenuOk ? 144 : 72; // 会话管理：左滑露出「更多」+「删除」
     const down = (e: PointerEvent) => {
       if (e.pointerType === "mouse") return;
       pid = e.pointerId;
@@ -568,7 +586,10 @@
   {@const running = chatRunning(s.id) || (s.running && !app.chats.some((c) => c.id === s.id))}
   <div class="srow-wrap" class:revealing={swiped === s.id} class:lifting={dnd.on && dnd.sourceKey === `s:${s.id}`} data-row={s.id}>
     <button class="srow-del" tabindex="-1" aria-label={t("删除会话")} onclick={(e) => del(s.id, e)}>{t("删除")}</button>
+    {#if sessMenuOk}<button class="srow-more" tabindex="-1" aria-label={t("更多操作")} onclick={(e) => openSessMenu(s, e, false)}>{t("更多")}</button>{/if}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
+      oncontextmenu={(e) => openSessMenu(s, e, true)}
       class="srow"
       class:active={s.id === app.chat.id}
       class:inpane={s.id !== app.chat.id && app.panes.some((c) => c.id === s.id)}
@@ -598,7 +619,7 @@
 
 <nav class="sb" class:docked class:drawer={!docked} aria-label={t("项目与会话")}>
   <header class="band">
-    <span class="brand"><Mark size={19} /><Wordmark height={17} /></span>
+    <span class="brand"><ThemeMark size={19} /><Wordmark height={17} /></span>
     {#if docked}
       <IconButton icon="panel" label={t("收起侧栏")} size={32} onclick={() => onToggle?.()} />
     {:else}
@@ -743,11 +764,12 @@
           </div>
           {#if open}
             <div class="sessions" transition:collapse>
-              {#each sessionsFor(project) as s (s.id)}
-                <div in:rise={{ y: 4 }}>{@render sessionRow(s)}</div>
-              {:else}
-                <p class="pempty">{q ? t("没有匹配的对话") : project.exists ? t("暂无对话") : t("文件夹已不存在")}</p>
-              {/each}
+              <!-- 会话协作：FamilyList 按父子关系排（子会话缩进挂在父会话下），每一行仍是上面的 sessionRow -->
+              <FamilyList rows={sessionsFor(project)} row={sessionRow}>
+                {#snippet empty()}
+                  <p class="pempty">{q ? t("没有匹配的对话") : project.exists ? t("暂无对话") : t("文件夹已不存在")}</p>
+                {/snippet}
+              </FamilyList>
             </div>
           {/if}
         </section>
@@ -790,6 +812,9 @@
         </button>
       {/if}
 
+      <!-- 会话管理：已归档的对话 -->
+      <ArchivedSection {q} onpick={pick} />
+
       {#if hiddenProjects.length > 0}
         <div class="hidden">
           <button class="hidden-head" onclick={() => (showHidden = !showHidden)} aria-expanded={showHidden}>
@@ -817,7 +842,7 @@
     {#if sidebarFoot}
       <div class="foot-slot">{@render sidebarFoot()}</div>
     {/if}
-    <button class="nav" onclick={() => (app.sheet = "settings")}>
+    <button class="nav" onclick={openSettings}>
       <Icon name="gear" size={17} />
       <span class="nav-t">{t("设置")}</span>
       {#if app.config && !app.config.hasKey}<span class="warn-dot" title={t("还没填 API Key")}></span>{/if}
@@ -839,6 +864,10 @@
     <MenuSep />
     <MenuItem icon="eyeOff" label={t("隐藏项目")} description={t("只是不在侧栏显示，文件夹和历史对话都不会删除")} onclick={() => hideProject(target)} />
   </Popover>
+{/if}
+
+{#if sessMenu}
+  <SessionMenu session={sessMenu.s} anchor={sessMenu.anchor} onclose={() => (sessMenu = null)} />
 {/if}
 
 {#if quickMenu}
@@ -1195,6 +1224,22 @@
     visibility: hidden;
   }
   .srow-wrap.revealing .srow-del {
+    visibility: visible;
+  }
+  /* 会话管理：左滑露出的「更多」（在「删除」左边） */
+  .srow-more {
+    position: absolute;
+    top: 0;
+    right: 72px;
+    bottom: 0;
+    width: 72px;
+    background: var(--surface3);
+    color: var(--text);
+    font-size: var(--fs-md);
+    font-weight: 600;
+    visibility: hidden;
+  }
+  .srow-wrap.revealing .srow-more {
     visibility: visible;
   }
   .srow {

@@ -11,6 +11,9 @@ export default {
   'Git 与拉取请求': 'Git and pull requests',
   '会话管理': 'Session management',
   '扩展与记忆': 'Extensions and memory',
+  '调试': 'Debug',
+  '调试模式': 'Debug mode',
+  '让 Claude 批判性地使用 harness：工具报错先查是不是工具的锅，遇到冗余设计、缺的功能、不得不绕的路都记成反馈，存进服务端根目录的 harness-feedback 文件夹。用来改进 harness，开着时任务本身排第二': 'Make Claude use the harness critically: when a tool errors it first checks whether the tool is at fault, and it files redundant design, missing features and forced workarounds as feedback in the harness-feedback folder at the server root. Meant for improving the harness — the task itself comes second while it is on',
 
   // —— 注册表：标签 / 说明 / 选项（claudeSettingsView 运行时 t()，静态检查查不到，别删）——
   '撞上 5 小时限额时，等额度恢复后自动接着跑完这一轮': 'When you hit the 5-hour limit, Claude picks the turn back up once it resets',
@@ -104,6 +107,7 @@ export default {
   '权限请求': 'Permission requests',
   '提问': 'Questions',
   '任务完成': 'Task complete',
+  '任务出错': 'Task errors',
   'Claude 工作时保持唤醒': 'Keep computer awake while Claude works',
   '有会话在跑时不让电脑进入睡眠；屏幕照常关闭': 'Stops the computer from sleeping while a session is running. The screen still turns off.',
   '使用电池时也保持唤醒': 'Keep awake on battery power',
@@ -162,6 +166,7 @@ export default {
   '睡眠 唤醒 电池 keep awake sleep battery': 'keep awake sleep battery power',
   '绕过 权限 bypass permissions': 'bypass permissions',
   '自动模式 权限 auto mode': 'auto mode permissions',
+  '调试 反馈 harness debug feedback': 'debug harness feedback',
   '定时 计划任务 routines': 'routines schedule',
 
   // —— 输入栏加号菜单：回复语气（claude.ai 的 Use style）/ 会话级输出风格 ——

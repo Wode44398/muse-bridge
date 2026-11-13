@@ -77,8 +77,25 @@ function parseError(raw: unknown): Parsed {
   const e = (o.error && typeof o.error === "object" ? o.error : o) as Record<string, any>;
   const str = (x: unknown) => (x === undefined || x === null ? "" : String(x));
   const code = str(e.code ?? o.code ?? e.error_code);
-  const type = str(e.type ?? e.status ?? o.status ?? "");
-  const message = str(e.message ?? o.message ?? e.msg ?? (typeof o.error === "string" ? o.error : ""));
+  let type = str(e.type ?? e.status ?? o.status ?? "");
+  let message = str(e.message ?? o.message ?? e.msg ?? (typeof o.error === "string" ? o.error : ""));
+  // OpenRouter 转发上游报错：外层只有一句「Provider returned error」，真正的原因在 error.metadata.raw（可能又是一层 JSON）。
+  // 拼进来，超窗 / 欠费 / 鉴权才分得出来，界面上也才有人话。
+  const upstreamRaw = e.metadata && typeof e.metadata === "object" ? (e.metadata as Record<string, unknown>).raw : undefined;
+  if (typeof upstreamRaw === "string" && upstreamRaw) {
+    let inner = upstreamRaw;
+    try {
+      const j = JSON.parse(upstreamRaw);
+      const ie = j && typeof j === "object" ? (j.error && typeof j.error === "object" ? j.error.message : (j.message ?? j.error)) : undefined;
+      if (typeof ie === "string" && ie) inner = ie;
+      // 内层的类型也带出来（外层没有时）：Gemini 的每分钟限流正文写着「check your plan and billing details」，
+      // 要靠它的 RESOURCE_EXHAUSTED 走专门的规则，不然会被话术判成欠费——不重试，还会叫停整个工作流。
+      if (!type && j && typeof j === "object" && j.error && typeof j.error === "object") type = str(j.error.status ?? j.error.type);
+    } catch {
+      /* 不是 JSON：原文就是原因 */
+    }
+    message = `${message}：${inner.slice(0, 300)}`;
+  }
   const schema = Boolean(code || type || message) && !html;
   return { code, type: type === "error" ? "" : type, message, schema, html };
 }
@@ -132,7 +149,8 @@ const TYPE_CLASS: Record<string, ErrorClass> = {
 function upstreamOf(headers?: Headers): string | undefined {
   if (!headers) return undefined;
   const parts: string[] = [];
-  const rid = headers.get("request-id") ?? headers.get("x-request-id") ?? headers.get("x-req-id");
+  // DeepSeek 的关联 id 只在 x-ds-trace-id 里，Kimi 订阅端点只有 x-trace-id
+  const rid = headers.get("request-id") ?? headers.get("x-request-id") ?? headers.get("x-req-id") ?? headers.get("x-ds-trace-id") ?? headers.get("x-trace-id");
   if (rid) parts.push(`request-id=${rid}`);
   const ray = headers.get("cf-ray");
   if (ray) parts.push(`cf-ray=${ray}`);
@@ -152,7 +170,8 @@ function bySemantics(p: Parsed): ErrorClass | null {
   const text = `${p.code} ${p.type} ${p.message}`;
   if (CODE_CLASS[code]) return CODE_CLASS[code];
   // Gemini 的配额用完：按分钟的文案里也写着「check your plan and billing」，只有按天的才算欠费
-  if (type === "resource_exhausted") return /per ?day/i.test(text) ? "billing" : "rate_limit";
+  // 预付费余额用完也是 RESOURCE_EXHAUSTED（HTTP 402，「Your prepayment credits are depleted」）：等多久都没用
+  if (type === "resource_exhausted") return /per ?day|credits? (are |is )?(depleted|exhausted)|prepay/i.test(text) ? "billing" : "rate_limit";
   if (BILLING_RE.test(text)) return "billing"; // 先于类型：Anthropic 的欠费是 invalid_request_error + 话术
   if (TYPE_CLASS[type]) return TYPE_CLASS[type]; // provider 自己的错误类型比话术准（request_too_large 的文案也写着 exceeds the maximum）
   if (OVERFLOW_RE.test(p.message) || code === "context_length_exceeded") return "context_overflow";

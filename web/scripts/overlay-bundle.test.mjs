@@ -1,10 +1,10 @@
-// apk 出包时把私有 overlay 打进离线壳（overlay-bundle.mjs）：什么时候打、打进去什么、壳里写的标签与服务端一致。
+// 每次构建都把原版视觉资源打进产物（overlay-bundle.mjs）：取哪一份、打进去什么、壳里写的标签与服务端一致。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { apkOverlayWeb, bundleOverlay, bundleSkip } from './overlay-bundle.mjs';
+import { visualsWeb, bundleOverlay, bundleSkip } from './overlay-bundle.mjs';
 import { buildManifest, headTags } from '../../src/runtime/overlay-manifest.mjs';
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'ov-bundle-'));
@@ -25,27 +25,27 @@ function makeOverlay(root) {
   return web;
 }
 
-test('未带发行资源的源码树：私有 overlay 只用于私有 apk', () => {
+test('私有源码树：网页、apk 构建都打私有 overlay；找不到就是 null（构建失败）', () => {
   const root = tmp();
   try {
     const web = makeOverlay(root);
     const options = { repo: root };
-    assert.equal(apkOverlayWeb({ BRIDGE_OVERLAY_DIR: root }, options), null, '生产构建（没设 BRIDGE_APK_OUT）不打');
-    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_OVERLAY_DIR: root }, options), web);
-    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_OVERLAY_DIR: root, BRIDGE_EDITION: 'public' }, options), null, '不打外部 overlay');
-    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_DATA_ROOT: path.join(root, 'nope') }, options), null, '没有 overlay');
-    assert.equal(apkOverlayWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_OVERLAY_DIR: path.join(root, 'web') }, options), null, 'overlay 里没有 web/');
+    assert.equal(visualsWeb({ BRIDGE_OVERLAY_DIR: root }, options), web, '普通网页构建也打');
+    assert.equal(visualsWeb({ BRIDGE_APK_OUT: 'x', BRIDGE_OVERLAY_DIR: root }, options), web);
+    assert.equal(visualsWeb({ BRIDGE_OVERLAY_DIR: root, BRIDGE_EDITION: 'public' }, options), null, '公开版不取外部 overlay');
+    assert.equal(visualsWeb({ BRIDGE_DATA_ROOT: path.join(root, 'nope') }, options), null, '没有 overlay');
+    assert.equal(visualsWeb({ BRIDGE_OVERLAY_DIR: path.join(root, 'web') }, options), null, 'overlay 里没有 web/overlay.json');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('发行资源在普通网页与公开 apk 构建中都内置，且忽略本机私有覆盖层', () => {
+test('发行树：普通网页与公开 apk 构建都取 frontend-assets，且忽略本机私有覆盖层', () => {
   const repo = tmp();
   const unrelated = tmp();
   try {
     const web = makeOverlay(path.join(repo, 'frontend-assets'));
     makeOverlay(unrelated);
-    for (const env of [{}, { BRIDGE_EDITION: 'public' }, { BRIDGE_EDITION: 'public', BRIDGE_APK_OUT: 'apk', BRIDGE_OVERLAY_DIR: unrelated }]) {
-      assert.equal(apkOverlayWeb(env, { repo }), web);
+    for (const env of [{ BRIDGE_DATA_ROOT: repo }, { BRIDGE_EDITION: 'public' }, { BRIDGE_EDITION: 'public', BRIDGE_APK_OUT: 'apk', BRIDGE_OVERLAY_DIR: unrelated }]) {
+      assert.equal(visualsWeb(env, { repo }), web);
     }
   } finally { rmSync(repo, { recursive: true, force: true }); rmSync(unrelated, { recursive: true, force: true }); }
 });

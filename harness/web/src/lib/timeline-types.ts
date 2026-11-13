@@ -18,6 +18,8 @@ export interface ToolItem {
   workflow?: WorkflowRun;
   // R14（K37）：运行中的前台 Bash 的实时尾行（tool_progress 驱动，直播派生字段，不进合并指纹）；跑完清掉。
   progress?: { tail: string; elapsedMs: number; canBackground: boolean };
+  // 会话协作：StartSession 开出来的会话 / SendMessage、ReadSession 的对象（family_link 事件；历史从 tool_result.meta.family）
+  family?: { child?: string; target?: string; title?: string; agent?: string };
 }
 // 子 agent 内部的一步工具调用（比主时间线的 ToolItem 轻：只留看得懂的摘要）。
 export interface AgentStep {
@@ -206,4 +208,7 @@ export type Item =
   | { kind: "error"; text: string; detail?: string; cls?: string; ran?: number; retriable?: boolean }
   // R12（二）：asset = 会话资产 id（界面按 URL 取）；老事件 / 没有会话时才是 dataUri
   | { kind: "screenshot"; dataUri: string; asset?: string; url: string; verdict: string }
-  | { kind: "notice"; text: string };
+  | { kind: "notice"; text: string }
+  // 会话协作：别的会话发来的话 / 父会话派的任务 / 子会话汇报（text 是服务端拼的信封，卡片自己解析）；
+  // turn = 这条是一轮的开头（会话间唤醒开的那一轮），轮次折叠按它分界
+  | { kind: "session"; text: string; turn: boolean };

@@ -12,7 +12,7 @@
   import {
     devices, loadDevices, thisDeviceId, renameDevice, revokeDevice, deleteDevice, stopDevice,
     deviceStatusLine, forwards, loadForwards, addForward, dropForward, forwardShareUrl,
-    thisComputer, setThisComputerMode, stopThisComputer,
+    thisComputer, setThisComputerMode, stopThisComputer, installBrowserExtension,
   } from '../../lib/devices.svelte.js';
 
   let { fl = () => false } = $props();   // 设置搜索跳转后的高亮
@@ -86,6 +86,14 @@
     </DRow>
     {#if thisComputer.active}
       <DRow title={t('立即停止本轮操作')} danger chevron={false} onclick={stopThisComputer} />
+    {/if}
+    {#if thisComputer.canInstallExtension}
+      <DRow title={t('浏览器扩展 Web Bridge')} highlight={fl('dv-web-bridge')}
+        sub={thisComputer.browsers.length
+          ? t('已连接：{names}', { names: thisComputer.browsers.join('、') })
+          : t('装进你的 Edge / Chrome，Claude 就能用你已登录的网站')}>
+        {#snippet trailing()}<DButton size="sm" onclick={installBrowserExtension}>{thisComputer.browsers.length ? t('再装一个浏览器…') : t('装到浏览器…')}</DButton>{/snippet}
+      </DRow>
     {/if}
   </DGroup>
 {/if}

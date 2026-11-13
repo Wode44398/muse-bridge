@@ -10,15 +10,9 @@
 html[data-desktop="1"] button,
 html[data-desktop="1"] [role="button"] { cursor: pointer; }
 html[data-desktop="1"] .settings { backdrop-filter: blur(18px) saturate(1.08); }
-/* 服务端控制台 / 扩展中心盖在设置页之上，只画了 38% 的黑罩——手机端下面垫的是
-   毛玻璃 .settings 面板所以读得清；桌面端下面是不透明的逻辑板 .sd，底下的文字
-   会原样透上来跟控制台内容叠在一起（实测整页不可读）。桌面形态自带磨砂罩。 */
-html[data-desktop="1"] .sadm,
-html[data-desktop="1"] .extp {
-  background: rgba(9, 11, 16, .74);
-  -webkit-backdrop-filter: blur(26px) saturate(1.12);
-  backdrop-filter: blur(26px) saturate(1.12);
-}
+/* 服务端控制台（.sadm）不要在这里补底色：v2「墨与象牙」起它自己是不透明整页（var(--sa-bg)，跟明暗）。
+   以前这里给桌面形态压过一层 rgba(9,11,16,.74) 磨砂罩（v3 玻璃版遗留），优先级高过组件样式，
+   亮色主题下变成「亮卡片 + 暗灰底 + 深色字」整页看不清（2026-11-08 维护者报）。 */
 html[data-desktop="1"] .page,
 html[data-desktop="1"] .claude-page,
 html[data-desktop="1"] .vertex-page { contain: layout style paint; }
@@ -54,6 +48,21 @@ html[data-desktop="1"] * { -webkit-tap-highlight-color: transparent; }
   html[data-wco="1"] ::-webkit-scrollbar-thumb:horizontal { border-width: 5px 0 3px 0; }
   html[data-wco="1"] ::-webkit-scrollbar-thumb:horizontal:hover { border-width: 2px 0; }
 }
+/* —— Claude 分页滚动条 = 官方桌面 app 同款（2026-11-08 维护者要求，覆盖上面的 Edge 浮层款）——
+   官方 ion-dist 主 CSS 原文只有两条：`*{scrollbar-width:thin}` + `html,[data-theme]{scrollbar-color:
+   hsla(var(--border-300) / 35%) transparent}`，--border-300 在 v2 色板下暗色 = gray-100（52.5 11.76% 86.67%）、
+   亮色 = gray-810（60 1.69% 11.57%）；官方主进程不开任何滚动条特性开关，剩下全交给 Chromium 原生画。
+   Electron 43 实测：槽 10px 常显、拇指 6px 圆头（离右沿 ~3px）、两端各一枚小三角、悬停只变亮不加粗。
+   标准属性一出现 webkit 伪元素整体失效，所以本分页里上面那套（以及 scrollbars.js 的 data-sb）自动让位；
+   scrollbar-width 不继承，按官方挂到每个元素上，用 :where 压到零优先级——组件里写了 scrollbar-width:none
+   的隐藏滚动条照样生效。scrollbar-color 会继承，挂根上即可。
+   拉宽把手一律落在接缝【没有滚动条】的那一侧（侧栏把手见 ClaudePage .sb-handle、工作台把手见
+   ClaudeDock .dk-grip），贴窗口右沿的聊天滚动区在桌面壳下内缩躲开窗口拉伸热区（ClaudePage .scroll）。 */
+@media (pointer: fine) {
+  .claude-slide { --claude-sb-thumb: hsl(52.5 11.7647% 86.6667% / .35); scrollbar-color: var(--claude-sb-thumb) transparent; }
+  html[data-theme="light"] .claude-slide { --claude-sb-thumb: hsl(60 1.6949% 11.5686% / .35); }
+  :where(.claude-slide, .claude-slide *) { scrollbar-width: thin; }
+}
 
 /* —— WCO frameless（桌面壳 BRIDGE_WCO，批4.5 全站走查）——
    拖拽区按几何并集计算、与 z-index 无关：顶部 40px 带内残留的交互元素会被 drag 吞点击，
@@ -73,7 +82,7 @@ html[data-wco="1"] [contenteditable="true"] { -webkit-app-region: no-drag; }
    收成标题栏带里的一颗紧凑胶囊（高 32，与窗控按钮同一条中线）：原先 44px 高、top:2 会伸出 40px
    的窗控带，工作台展开后它压进面板第一行。现在工作台把自己那段第一行让出来当标题栏带
    （ClaudeDock.svelte），胶囊正好坐在带里、窗控左边。top 组件里是内联样式，须 !important 压过。
-   左上汉堡（medium 档才出）同步收成 32px，两端同一条基线。 */
+   左上汉堡（只剩手机档，窄窗时出）同步收成 32px，两端同一条基线。 */
 html[data-wco="1"] .claude-slide .fab.pill {
   position: fixed;
   right: calc(4px + var(--wco-right, 0px));
@@ -115,12 +124,10 @@ html[data-wco="1"] .v-dt-top { padding-right: calc(16px + var(--wco-right, 0px))
    由 App.svelte 的 --hx-hdr-r / --hx-pane-r 两个变量消费本文件下发的 --wco-right。
    顺带解掉 .top / .dock 与 ServerAdmin、桌面主页启动器的撞名风险。 */
 /* 服务端控制台 / 扩展中心（右上刷新/关闭钮距右缘仅 ~20px） */
-html[data-wco="1"] .sadm .main > .top,
-html[data-wco="1"] .extp .main > .top { padding-right: calc(4px + var(--wco-right, 0px)); }
+html[data-wco="1"] .sadm .main > .top { padding-right: calc(4px + var(--wco-right, 0px)); }
 /* 窄窗（≤880px 时 rail 横滑置顶）整体让出标题栏带 */
 @media (max-width: 880px) {
-  html[data-wco="1"] .sadm .frame,
-  html[data-wco="1"] .extp .frame { padding-top: calc(14px + var(--wco-h, 40px)); }
+  html[data-wco="1"] .sadm .frame { padding-top: calc(14px + var(--wco-h, 40px)); }
 }
 /* 沉浸查看器顶条 + 右上菜单 + 各文档查看器头部 */
 html[data-wco="1"] .mv-root .mv-top { padding-right: calc(10px + var(--wco-right, 0px)); }
@@ -138,14 +145,9 @@ html[data-wco="1"] .chatgpt-page .chat-frame {
   height: calc(100% - var(--wco-h, 40px));
 }
 
-/* 公开版自带的开源字体（assets/font，许可文本同目录；生成方式见 web/scripts/public-assets）：
-   Bridge Sans = Inter（OFL）、Bridge Serif = Lora 插值成可变字重后改名（OFL）、Bridge Icons = Lucide 图标（ISC）
-   放在界面原来用的私有区码位上（.ic / --icons 按码位取字形的写法不用改）。
-   品牌字体一律经下面 :root 的 --font-brand-sans / --font-brand-serif / --icons 引用，别在组件里写死家族名：
-   维护者的私有 overlay（src/runtime/overlay-web.mjs）只改这三个变量就能换回原版字体。 */
-@font-face{font-family:"Bridge Sans";src:url('./assets/font/bridge-sans-var.woff2') format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
-@font-face{font-family:"Bridge Serif";src:url('./assets/font/bridge-serif-var.woff2') format("woff2");font-weight:400 700;font-style:normal;font-display:swap}
-@font-face{font-family:"Bridge Icons";src:url('./assets/font/bridge-icons.woff2') format("woff2");font-weight:100 900;font-display:block}
+/* 品牌字体是原版字体（Anthropic Sans / Serif、Anthropicons），@font-face 在原版资源的 overlay.css 里
+   （构建时打进 /app/_ov/，壳首屏就挂上）。组件里一律经下面 :root 的 --font-brand-sans / --font-brand-serif / --icons 引用，
+   别写死家族名。 */
 
 :root{
   /* 系统栏安全边距：浏览器/iOS 走 env()；apk 由原生 edge-to-edge 注入真值
@@ -158,11 +160,11 @@ html[data-wco="1"] .chatgpt-page .chat-frame {
   --card-shadow:0 2px 16px rgba(0,0,0,.2),0 0 0 .5px rgba(226,225,218,.28);
   --q-card:rgba(40,40,38,.97); --q-rowsel:rgba(255,255,255,.06); --q-skipborder:rgba(255,255,255,.22);
   --q-shadow:0 2px 16px rgba(0,0,0,.3),0 0 0 .5px rgba(226,225,218,.2);
-  --font-brand-sans:"Bridge Sans";
-  --font-brand-serif:"Bridge Serif";
+  --font-brand-sans:"Anthropic Sans";
+  --font-brand-serif:"Anthropic Serif";
   --sans:var(--font-brand-sans),system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --serif-stack:var(--font-brand-serif),Georgia,"Times New Roman",Times,serif;
-  --icons:"Bridge Icons";
+  --icons:"Anthropicons-Variable";
   --ok:#5aa468; --warn:#d9a441; --crit:#d96a5a;
   --taskchip:#2f6fd6; --taskchip-fg:#ffffff;   /* 后台任务芯片（官方 /code 页「N running task」同款蓝） */
   --radius:16px;
@@ -248,6 +250,10 @@ html[data-vt="theme"]::view-transition-new(root) {
   -webkit-mask-image: radial-gradient(circle at var(--vt-ox) var(--vt-oy), #000 calc(var(--vt-r) - var(--vt-f, 200px)), transparent var(--vt-r));
   mask-image: radial-gradient(circle at var(--vt-ox) var(--vt-oy), #000 calc(var(--vt-r) - var(--vt-f, 200px)), transparent var(--vt-r));
 }
+/* 分页明暗换场（morphPageTheme）：页面里的 CSS 过渡全关——新画面直接是终态，颜色变化只交给圆波；
+   被点的标志单独成层，盖在两层画面之上（它就是波心） */
+html[data-vt-page] *, html[data-vt-page] *::before, html[data-vt-page] *::after { transition: none !important; }
+html[data-vt]::view-transition-group(bridge-theme-mark) { z-index: 3; }
 /* 开机揭幕：标题是共享元素（居中 → 左上），几何由 UA 两端插值，节奏换成同一条弹簧 */
 html[data-vt]::view-transition-group(bridge-brand) {
   animation-duration: var(--vt-dur, 600ms); animation-timing-function: var(--vt-ease, ease); z-index: 4;

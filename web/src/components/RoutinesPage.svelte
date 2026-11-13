@@ -9,7 +9,7 @@
   // 电脑（侧栏常驻）嵌在正文区、侧栏照旧可点（embedded）；手机是全屏页。数据：lib/routines.svelte.js。
   import { untrack } from 'svelte';
   import { uiConfirm } from '../lib/dialogs.js';
-  import { caps, ui, session, agentOn, hostIsServer } from '../lib/state.svelte.js';
+  import { caps, ui, session, agentOn, hostIsServer, pluginOn } from '../lib/state.svelte.js';
   import { api } from '../lib/api.js';
   import { registerCloser, pushBackLayer } from '../lib/nav.js';
   import { claudeDefaultModel } from '../lib/caps.js';
@@ -48,7 +48,7 @@
 
   const blank = () => ({
     name: '', description: '', prompt: '', agent: 'claude', model: null, effort: null, fast: false, search: false,
-    cwd: '', worktree: false, branch: '', permissionMode: '', sessionMode: 'new', notify: false,
+    cwd: '', worktree: false, branch: '', permissionMode: '', sessionMode: 'new', notify: false, shape: '',
     sched: { type: 'daily', hour: 9, minute: 0, days: [1], at: 0, cron: '0 9 * * 1-5' },
   });
   let f = $state(blank());
@@ -104,7 +104,11 @@
     return nameOf(vx ? caps.data?.vertex?.thinkLevels : caps.data?.claude?.efforts, r.effort || (vx ? caps.data?.vertex?.defaults?.think : 'high'));
   };
   const permDefault = $derived(clampModeLocal(cs.values?.permissionMode));
-  const permText = (m) => (m ? modeLabel(m) : t('设置默认（{mode}）', { mode: modeLabel(permDefault) }));
+  const permText0 = (m) => (m ? modeLabel(m) : t('设置默认（{mode}）', { mode: modeLabel(permDefault) }));
+  // 以项目对话运行（运行档位 › 项目，src/runtime/project-mode.mjs）：协调者收到指令后自己派讨论串；权限那一档就是讨论串权限。
+  // 要会话工具（插件开着、能跑命令的身份）
+  const projOk = $derived(pluginOn('session-tools') && cs.shell !== false);
+  const permText = (m, shape) => (shape === 'project' ? t('项目 · 讨论串用：{mode}', { mode: m ? modeLabel(m) : modeLabel(permDefault) }) : permText0(m));
   const permEff = $derived(f.permissionMode || permDefault);
   const asks = (m) => m === 'default' || m === 'acceptEdits';
 
@@ -169,10 +173,11 @@
     pop = null; editing = r.id; err = ''; curId = r.id;
     const s = r.schedule || {};
     f = {
-      name: r.name || '', description: r.description || '', prompt: r.prompt || '', agent: r.agent || 'claude',
+      // Gemini 引擎 11-04 下线：旧任务（agent:'vertex'，服务端已停用）打开编辑时改用 Claude，保存即恢复可跑
+      name: r.name || '', description: r.description || '', prompt: r.prompt || '', agent: r.agent === 'vertex' ? 'claude' : (r.agent || 'claude'),
       model: r.model, effort: r.effort, fast: !!r.fast, search: !!r.search,
       cwd: r.cwd || '', worktree: !!r.worktree, branch: r.branch || '', permissionMode: r.permissionMode || '',
-      sessionMode: r.sessionMode || 'new', notify: !!r.notify,
+      sessionMode: r.sessionMode || 'new', notify: !!r.notify, shape: r.shape === 'project' ? 'project' : '',
       sched: {
         type: s.type || 'daily', hour: s.hour ?? 9, minute: s.minute ?? 0,
         days: Array.isArray(s.days) ? [...s.days] : [s.weekday ?? 1], at: s.at || 0, cron: s.cron || '0 9 * * 1-5',
@@ -251,12 +256,6 @@
   function pick(fn) { fn(); pop = null; }
   const popRoutine = $derived(pop?.id ? rt.items.find((r) => r.id === pop.id) : null);
 
-  function setAgent(a) {
-    if (f.agent === a) return;
-    f.agent = a; f.model = null; f.effort = null; f.fast = false;
-    if (a !== 'vertex') f.search = false;
-    loadGit();
-  }
   function toggleDay(d) {
     const s = new Set(f.sched.days);
     if (s.has(d)) { if (s.size > 1) s.delete(d); } else s.add(d);
@@ -306,6 +305,7 @@
       ...(vx ? {} : {
         cwd: f.cwd || '', worktree: f.worktree && wtAvail, branch: f.worktree && wtAvail ? f.branch : '',
         permissionMode: f.permissionMode || '', fast: fastOk && f.fast, sessionMode: f.sessionMode,
+        ...(projOk ? { shape: f.shape === 'project' ? 'project' : null } : {}),
       }),
     };
     try {
@@ -347,7 +347,7 @@
   }
   async function del(r) {
     pop = null;
-    if (!(await uiConfirm(t('删除「{name}」？已经跑出来的会话会保留。', { name: r.name }), { okLabel: t('删除'), type: 'warning' }))) return;
+    if (!(await uiConfirm(t('删除「{name}」？已经跑出来的会话会保留。', { name: r.name }), { okLabel: t('删除'), type: 'warning', danger: true }))) return;
     const prev = rt.items;
     rt.items = rt.items.filter((x) => x.id !== r.id);
     if (curId === r.id) { view = 'list'; curId = null; }
@@ -415,7 +415,7 @@
         <textarea id="rt-prompt" class="ta" use:autosize bind:value={f.prompt} placeholder={t('看看过去 24 小时的提交：总结改了什么，指出有风险的写法或缺的测试，记下值得跟进的事。')}></textarea>
         <div class="tbar">
           {#if f.agent !== 'vertex'}
-            <button type="button" class="pill" class:set={!!f.permissionMode} onclick={(e) => openPop(e, 'perm', { w: 280 })}>{@render shieldIc()}<span class="pill-t">{permText(f.permissionMode)}</span></button>
+            <button type="button" class="pill" class:set={!!f.permissionMode} onclick={(e) => openPop(e, 'perm', { w: 280 })}>{@render shieldIc()}<span class="pill-t">{permText(f.permissionMode, f.shape)}</span></button>
           {/if}
           <span class="sp"></span>
           <button type="button" class="pill set" onclick={(e) => openPop(e, 'model', { end: true, w: 260 })}>{@render sparkIc()}<span class="pill-t">{f.agent === 'vertex' ? 'Gemini · ' : ''}{modelPill}</span></button>
@@ -470,17 +470,7 @@
     <div class="fld">
       <span class="lbl">{t('运行')}</span>
       <div class="rows">
-        {#if agentOn('gemini') || f.agent === 'vertex'}
-          <div class="r"><span class="r-k">{t('引擎')}<span class="r-sub">{f.agent === 'vertex' ? t('单轮问答，可联网搜索；不碰文件') : t('能读写文件、跑命令，和 Claude 页的会话一样')}</span></span>
-            <div class="seg sm">
-              <button type="button" class:on={f.agent === 'claude'} onclick={() => setAgent('claude')}>Claude</button>
-              <button type="button" class:on={f.agent === 'vertex'} onclick={() => setAgent('vertex')}>Gemini</button>
-            </div>
-          </div>
-        {/if}
-        {#if f.agent === 'vertex'}
-          <div class="r"><span class="r-k">{t('联网搜索')}</span>{@render sw(f.search, () => (f.search = !f.search), t('联网搜索'))}</div>
-        {:else}
+        {#if f.agent !== 'vertex'}
           <div class="r"><span class="r-k">{t('会话方式')}<span class="r-sub">{f.sessionMode === 'continue' ? t('每次都在同一个会话里接着往下聊，记得上回做过什么') : t('每次开一个干净的新会话')}</span></span>
             <div class="seg sm">
               <button type="button" class:on={f.sessionMode === 'new'} onclick={() => (f.sessionMode = 'new')}>{t('每次新会话')}</button>
@@ -586,7 +576,7 @@
                   {#if cardDesc(r)}<p class="t-desc">{cardDesc(r)}</p>{/if}
                   <div class="t-foot">
                     <span class="t-st"><span>{stateWord(r)}</span><span class="t-sch">{schedText(r.schedule)}</span></span>
-                    {#if r.agent === 'vertex'}<span class="t-proj">Gemini</span>
+                    {#if r.agent === 'vertex'}<span class="t-proj">{t('Gemini（已下线）')}</span>
                     {:else}<span class="t-proj" title={r.cwd || rt.home}>{@render folderIc()}<span>{r.cwd ? folderName(r.cwd) : t('默认工作空间')}</span></span>{/if}
                   </div>
                   <button class="t-more" aria-label={t('{name} 的更多操作', { name: r.name })} onclick={(e) => openPop(e, 'card', { id: r.id, end: true, w: 180 })}>{@render dots()}</button>
@@ -654,7 +644,7 @@
             {@render section(t('模型'), modelB)}
             {#if cur.agent !== 'vertex'}
               {#snippet permB()}
-                <p class="txt">{permText(cur.permissionMode)}<span class="fn">&nbsp;· {asks(cur.permissionMode || permDefault) ? t('要批准的操作会停下来等你') : modeDesc(cur.permissionMode || permDefault)}</span></p>
+                <p class="txt">{permText(cur.permissionMode, cur.shape)}<span class="fn">&nbsp;· {asks(cur.permissionMode || permDefault) ? t('要批准的操作会停下来等你') : modeDesc(cur.permissionMode || permDefault)}</span></p>
               {/snippet}
               {@render section(t('权限'), permB)}
               {#snippet sessB()}
@@ -763,6 +753,11 @@
       {:else if pop.key === 'perm'}
         <button class="mi chk" class:sel={!f.permissionMode} onclick={() => pick(() => (f.permissionMode = ''))}><span class="mi-t">{t('设置默认（{mode}）', { mode: modeLabel(permDefault) })}</span><span class="mi-d">{t('跟着 设置 › Claude 里的默认权限模式走')}</span></button>
         {#each rt.permissionModes as m}<button class="mi chk" class:sel={f.permissionMode === m} onclick={() => pick(() => (f.permissionMode = m))}><span class="mi-t">{modeLabel(m)}</span><span class="mi-d">{asks(m) ? t('{desc}；无人值守时会停下来等你', { desc: modeDesc(m) }) : modeDesc(m)}</span></button>{/each}
+        {#if projOk}
+          <!-- 以项目对话运行：和上面那档同时选（那档就是讨论串权限）；配「接着上次的会话」就是一个长期挂着的项目 -->
+          <div class="mi-sep"></div>
+          <button class="mi chk" class:sel={f.shape === 'project'} onclick={() => pick(() => (f.shape = f.shape === 'project' ? '' : 'project'))}><span class="mi-t">{t('以项目对话运行')}</span><span class="mi-d">{t('协调者收到指令后自己开讨论串去做；配「接着上次的会话」就是一个长期挂着的项目')}</span></button>
+        {/if}
       {:else if pop.key === 'model'}
         <div class="mi-h">{t('模型')}</div>
         {#each modelList as m}<button class="mi chk" class:sel={(f.model || defModel) === m.id} onclick={() => { f.model = m.id; if (f.effort && !effortList.some((e) => e.id === f.effort)) f.effort = null; }}><span class="mi-t">{tr(m.name)}</span></button>{/each}

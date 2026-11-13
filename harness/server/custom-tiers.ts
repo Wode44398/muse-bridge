@@ -28,6 +28,22 @@ export function applyCustomThinking<T extends Record<string, unknown>>(
 }
 
 /**
+ * 会话档是 off、而这个型号关不掉思考（档位表里没有真正的关闭档）时，它最低的那一档；有关闭档、没有档位表、或会话档不是 off 回 ''。
+ * 给旁路请求用（压缩摘要、记忆提取、辅助模型——它们固定用 off + 很小的输出上限）：在 GPT-6 Sol、Grok、Muse、OpenRouter 上的
+ * Qwen3.8 Max 这类必须思考的型号上，off 槽是「什么都不发」，上游按默认档（有的是 max）思考，推理 token 又算在输出上限里——
+ * 实测 1500 的上限整段被推理吃光、摘要正文为空，压缩于是失败。发最低档就正常了。
+ */
+export function floorTierWhenNoOff(model: (TieredModel & { efforts?: Tier[] }) | undefined, level: ThinkingLevel | undefined): string {
+  if (!model || (level ?? "off") !== "off") return "";
+  // 只管「不发参数也会思考」的：标了恒思考，或有默认档（= 上游默认就在思考）。没有默认档的通用三档型号不发参数多半不思考，别替它打开
+  if (!model.alwaysThinks && !model.effortDefault) return "";
+  const v = slotView(model);
+  if (typeof v.tierOf.off === "string") return "";
+  const lowest = v.efforts.find((s) => s !== "off" && typeof v.tierOf[s] === "string");
+  return lowest ? (v.tierOf[lowest] as string) : "";
+}
+
+/**
  * 恒思考（alwaysThinks）型号上，选着也照样思考的槽：这一档什么都不发（null 槽），或它的档位写不进请求（发送值为空）。
  * 真关得掉的关闭档（reasoning_effort=none、thinking.type=disabled……）不算——不管档名写成「关闭」「Off」还是「不思考」。
  * 不是恒思考的型号回 []。

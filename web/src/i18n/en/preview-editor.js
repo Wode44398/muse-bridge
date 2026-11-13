@@ -40,6 +40,7 @@ export default {
   'files::缩小': 'Zoom out',
   '图片加载失败': 'Couldn’t load image',
   'PDF 加载失败': 'Couldn’t load PDF',
+  '深色页面': 'Dark pages',
   '打开失败：{reason}': 'Couldn’t open: {reason}',
   '（空文档）': '(Empty document)',
   '空表格': 'Empty spreadsheet',

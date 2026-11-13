@@ -120,4 +120,4 @@
 ## 语言和主题
 
 - 界面语言：没设过时跟浏览器语言走（浏览器语言里有中文就是中文，否则英文）。手动改：**「设置 → 通用 → 语言」**（Settings → General → Language），选简体中文或 English，改完页面会重新加载。dimensio 用的是同一个语言设置。
-- 明暗：**「设置 → 外观」**（Settings → Appearance），选 **「明亮」**（Light）或 **「深色」**（Dark），或打开 **「跟随系统明暗」**（Match system appearance）；默认深色。在 Claude 页单击 Claude 的星标（新对话页标题旁、或对话最下面那颗）也能在深色和浅色之间快速切换（Claude 页右上角原来的明暗按钮去掉了）。dimensio 有自己单独的外观设置（见 03-dimensio.md）。
+- 明暗：**「设置 → 外观」**（Settings → Appearance），选 **「明亮」**（Light）或 **「深色」**（Dark），或打开 **「跟随系统明暗」**（Match system appearance）；默认深色。在 Claude 页单击 Claude 的星标（新对话页标题旁、或对话最下面那颗）也能在深色和浅色之间快速切换（Claude 页右上角原来的明暗按钮去掉了）；dimensio 页点月桥标志也一样。明暗是全站统一的：在哪里切，主页、Claude 页、dimensio 页、Media Studio、设置一起变，dimensio 不再有单独的明暗设置。

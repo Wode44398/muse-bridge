@@ -1,7 +1,7 @@
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { ok, fail } from "./types.ts";
 import {
-  GLOBAL_MEMORY,
+  globalMemoryFor,
   saveMemory,
   deleteMemory,
   hasMemorySection,
@@ -176,7 +176,7 @@ export const rememberTool: Tool = {
     const action = String(args.action ?? "save");
     // K7：全局层（关于用户与这台机器、每个工作区都适用的）；其余照旧是这个工作区的
     const global = args.layer === "global";
-    const root = global ? GLOBAL_MEMORY : _ctx.sandbox.root;
+    const root = global ? globalMemoryFor(_ctx.sandbox.root) : _ctx.sandbox.root;
     const panel = global ? "记忆面板的「全局」" : "项目记忆";
 
     // K2（#28）：来源由服务端填——这条路径永远是模型写的；有没有人在场看会话是否有客户端连着。
@@ -295,6 +295,7 @@ export const rememberTool: Tool = {
         origin,
         lenient: true, // K5：只影响生效资格的问题降级存成 proposed，不整条拒绝
         externalTaint: _ctx.externalContent?.() === true, // K9（X55）
+        sourceSession: _ctx.ownerId, // 离线整理据它回看写这条时的原始对话
       });
       const { id, created, status: savedStatus } = saved;
       failStreak.delete(_ctx);

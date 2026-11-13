@@ -1,15 +1,14 @@
 // Claude 分页（官方 /code 页复刻）组件用的图标。
 //
 // 官方 /code 页的图标是图标字体的私有区码位（组件 `<span data-cds="Icon">{String.fromCodePoint(cp)}</span>`）。
-// bridge 沿用同一套码位：公开版的图标字体是自带的「Bridge Icons」（Lucide 图标放在这些码位上，见
-// web/scripts/public-assets/build_fonts.py 的 ICONS），维护者的私有 overlay 可经 --icons 换回原版字体；
-// `.ic` 类即用 var(--icons)，所以组件里照旧优先用字体字形。新加码位要同时加进 build_fonts.py 的 ICONS。
+// bridge 沿用同一套码位，字体是原版图标字体 Anthropicons（--icons，原版资源）；`.ic` 类即用 var(--icons)，
+// 所以组件里优先用字体字形。
 //
 // 同时给出一套 16×16 描边 SVG path 作后备（需要 SVG 的场合，如 <svg> 里内联），viewBox 0 0 16 16，
 // stroke 绘制（fill:none）。
 //
-// 例外：原版图标字体【没有 U+E11C AgentsSimple】（公开版的 Bridge Icons 有，但 overlay 换回原版后
-// 会是空白）。AgentsSimple 一律走 iconSvg（AgentRow / TaskSheet 已如此），别用 glyph('AgentsSimple')。
+// 例外：原版图标字体【没有 U+E11C AgentsSimple】（会是空白）。AgentsSimple 一律走 iconSvg
+// （AgentRow / TaskSheet 已如此），别用 glyph('AgentsSimple')。
 //
 // 用法：
 //   <span class="ic" aria-hidden="true">{glyph('CaretRight')}</span>   ← 字体字形（推荐）

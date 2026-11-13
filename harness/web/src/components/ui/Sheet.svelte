@@ -93,7 +93,7 @@
   <!-- in: / out: 分开写：transition: 指令传给过渡函数的 direction 是 "both"，分不出进退场 -->
   <div
     bind:this={panel}
-    class="panel {size}"
+    class="panel sz-{size}"
     class:tall
     role="dialog"
     aria-modal="true"
@@ -167,13 +167,15 @@
     transition: none;
     touch-action: auto;
   }
-  .wide .panel.sm {
+  /* 尺寸类带 sz- 前缀：嵌进 bridge 时裸 .lg 会撞上宿主全局的液态玻璃类（.lg::after 斜向镜面高光），
+     裸 .md 会被正文 markdown 的 .hxroot .md p 清掉段落外边距 */
+  .wide .panel.sz-sm {
     width: min(420px, 100%);
   }
-  .wide .panel.lg {
+  .wide .panel.sz-lg {
     width: min(720px, 100%);
   }
-  .wide .panel.xl {
+  .wide .panel.sz-xl {
     width: min(880px, 100%);
   }
   .wide .panel.tall {

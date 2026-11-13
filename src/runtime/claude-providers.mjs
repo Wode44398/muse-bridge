@@ -44,6 +44,8 @@ import { HOST_OWNER, parseOwnerKey } from './principal.mjs';
 import { guessKind, tableEntry, thinkingTemplate, fixKnownBaseUrl, TIER_ID_RE, MAX_TIERS, OFF_TIER_IDS } from '../model-knowledge/knowledge.mjs';
 // 插件提供的模型服务（ctx.models.provide，2026-11-01）：勾了 claude 的并进主机（勾了 members 时连成员）能用的服务，见文末「插件提供的服务」
 import { modelServices, modelServicesRev, onModelServicesChange, serviceHash } from './model-services.mjs';
+// 模型中心发布的服务：子 agent 调用策略按它真实的上游地址认 plan（subagentServiceUrl）
+import { listHubServices, HUB_PLUGIN } from './model-hub/registry.mjs';
 
 export const PROVIDERS_DIR = path.join(ROOT, 'claude-providers');
 export { HOST_OWNER };
@@ -404,13 +406,24 @@ function pluginProviders() {
   const list = [], keys = new Map();
   for (const s of modelServices('claude')) {
     const id = 'p-' + serviceHash(s.plugin, s.sid, 10);
+    // 逐个先过一遍 Claude 自己的模型规则（id 字符集更严、上下文 / 输出上限有范围）：不合的只跳过它自己，
+    // 不然 normalizeProvider 一抛整条服务都没了（模型中心一个服务常有几十个模型，一个怪 id 不该连累全部）
+    const models = [], skipped = [];
+    for (const m of s.models) {
+      const mm = { enabled: true, kind: 'chat', ...m };
+      try { normalizeModel(mm, models.length, s.protocol); models.push(mm); } catch { skipped.push(m.id); }
+    }
+    if (skipped.length) console.error(`[claude-providers] 插件 ${s.plugin} 的模型服务「${s.name}」里 ${skipped.length} 个模型不合 Claude 的规则，已跳过：${skipped.slice(0, 5).join('、')}`);
+    if (!models.length) continue;
     try {
       const p = normalizeProvider({
         id, name: s.name, note: `插件 · ${s.pluginName}`, protocol: s.protocol, baseUrl: s.baseUrl, authStyle: s.authStyle, headers: s.headers,
-        timeoutSec: s.timeoutSec, retries: 1, models: s.models.map((m) => ({ enabled: true, kind: 'chat', ...m })), defaultModel: s.defaultModel,
+        timeoutSec: s.timeoutSec, retries: 1, models, defaultModel: s.defaultModel,
+        // 上游是官方 Anthropic（经模型中心网关）：按官方预设算，isOfficial 才认（1 小时缓存、metadata、fast）
+        ...(s.upstream === 'api.anthropic.com' && s.protocol === 'anthropic' ? { preset: 'anthropic' } : {}),
         compat: { useProxy: false, ...s.compat },
       });
-      list.push({ ...p, owner: HOST_OWNER, plugin: { id: s.plugin, name: s.pluginName }, members: s.members });
+      list.push({ ...p, owner: HOST_OWNER, plugin: { id: s.plugin, name: s.pluginName }, members: s.members, ...(s.upstream ? { upstream: s.upstream } : {}) });
       keys.set(id, s.apiKey);
     } catch (e) { console.error(`[claude-providers] 插件 ${s.plugin} 的模型服务「${s.name}」不可用：`, e?.message || e); }
   }
@@ -559,7 +572,10 @@ export function customEffortOk(modelId, e, owner) {
 // 还没探出来（刚加的服务、网络错）先按实测表：2026-10-23 真 key 逐个打，Opus 5.5 / 5 / 4.8 / 4.6 回 200；
 // Opus 4.7、Fable 5 / 5.1、Sonnet、Haiku 回 400。订阅号那条路（CLI settings.fastMode）的支持表在 capabilities.mjs，两边不一样。
 // Fable 5.2（2026-11-09）按官方文档支持 fast（$16/$80），先进表，真探测结果照旧盖过它。
-const API_FAST = new Set(['claude-fable-5-2', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-6']);
+// 2026-11-13：去掉 Opus 4.6（带 speed 也回 200，但官方写明按标准速度跑，usage.speed 是 standard——开关是假的）
+// 与 Opus 4.8（fast 已弃用，2026-11-30 移除，之后带 speed 直接报错）。
+const API_FAST = new Set(['claude-fable-5-2', 'claude-opus-5-5', 'claude-opus-5']);
+const FAST_NEVER = new Set(['claude-opus-4-8', 'claude-opus-4-6']);
 const FAST_HOSTS = new Set(['api.anthropic.com']);
 const isFirstPartyHost = (u) => { try { return FAST_HOSTS.has(new URL(u).hostname); } catch { return false; } };
 export function _fastHostForTests(h) { FAST_HOSTS.add(h); }
@@ -569,7 +585,12 @@ let fastProbes = null;   // 型号 id → { ok, at }（官方 API 上型号支�
 const probes = () => (fastProbes ||= (() => { const j = readJson(FAST_FILE, {}); return j && typeof j === 'object' && !Array.isArray(j) ? j : {}; })());
 const bareId = (id) => String(id).replace(/\[1m\]$/i, '');
 /** 这个服务能不能开 fast：Anthropic 协议 + 官方 api.anthropic.com。 */
-export const fastCapableProvider = (p) => !!(p && p.protocol === 'anthropic' && isFirstPartyHost(p.baseUrl));
+export const fastCapableProvider = (p) => !!(p && p.protocol === 'anthropic' && (isFirstPartyHost(p.baseUrl) || FAST_HOSTS.has(p.upstream)));
+/** 这个服务的请求实际发到哪台主机：模型中心发布的看它给的上游，自己填地址的看地址。 */
+export function upstreamHost(p) {
+  if (p && p.upstream) return p.upstream;
+  try { return new URL(p.baseUrl).hostname.toLowerCase(); } catch { return ''; }
+}
 /** 探测结果：true / false；null = 没探过或过期（该探了）。 */
 export function fastProbe(modelId) {
   const r = probes()[bareId(modelId)];
@@ -586,7 +607,7 @@ export function recordFastProbe(modelId, ok) {
 export function _resetFastProbesForTests(map = {}) { fastProbes = map; }
 /** 这个自定义模型能不能开 fast：官方 API 服务上、探测说支持（没探出来按实测表）。 */
 export function customSupportsFast(provider, model) {
-  if (!fastCapableProvider(provider) || !model) return false;
+  if (!fastCapableProvider(provider) || !model || FAST_NEVER.has(bareId(model.id))) return false;   // FAST_NEVER：落盘的旧探测结果（4.6 的「200 即支持」）也不认
   const probed = fastProbe(model.id);
   return probed ?? API_FAST.has(bareId(model.id));
 }
@@ -639,7 +660,7 @@ export function resolveSubagentModel(name, owner) {
   return hits.length === 1 ? hits[0] : null;
 }
 
-/** 可派给子 agent 的模型清单（系统提示里列给 Claude）：[{ name, label, provider, contextWindow, vision, efforts }]。 */
+/** 可派给子 agent 的模型清单（系统提示里列给 Claude）：[{ name, label, provider, contextWindow, vision, efforts, pid }]（pid = 服务 id）。 */
 export function subagentModelCatalog(owner) {
   const all = chatModels(owner);
   const count = new Map();
@@ -648,7 +669,37 @@ export function subagentModelCatalog(owner) {
     name: count.get(m.id.toLowerCase()) > 1 ? customModelId(p.id, m.id) : m.id,
     label: m.label || m.id, provider: p.name, contextWindow: m.contextWindow || 0, vision: !!m.vision,
     efforts: (m.efforts || []).map((t) => t.id),
+    pid: p.id,
   }));
+}
+
+// —— 子 agent 调用策略的成本口径（runtime/model-ratings.mjs）：服务的真实上游地址 ——
+// 第三方服务按真实地址认 plan（runtime/dispatch-chart.mjs 的 planOfBaseUrl）。模型中心发布的服务（插件 model-hub）在这里的 baseUrl
+// 是本机网关，要回模型中心取它自己的地址：各线路地址不一致时取第一条启用的线路（线路地址空 = 用服务的）。
+// 模型中心的服务视图要解密钥、读目录，按插件服务的 rev 缓存一份 id → 地址（模型中心每次改动都会重新发布，rev 跟着变）。
+let hubUrlCache = { rev: -1, map: null };
+function hubRealUrls() {
+  const r = modelServicesRev();
+  if (hubUrlCache.rev === r && hubUrlCache.map) return hubUrlCache.map;
+  const map = new Map();
+  try {
+    for (const h of listHubServices()) {
+      const line = (h.lines || []).find((l) => l && l.enabled !== false);
+      map.set(h.id, (line && line.baseUrl) || h.baseUrl || '');
+    }
+  } catch (e) { console.error('[claude-providers] 读不出模型中心的服务地址：', e?.message || e); }
+  hubUrlCache = { rev: r, map };
+  return map;
+}
+
+/** 服务 id → 它真实的上游地址（模型中心的服务回模型中心里填的地址）；找不到服务 / Vertex 这类没有固定地址的 → null。 */
+export function subagentServiceUrl(providerId, owner) {
+  if (typeof providerId !== 'string' || !providerId) return null;
+  const p = findProvider(providerId, ownerOf(owner));
+  if (!p) return null;
+  if (!p.plugin || p.plugin.id !== HUB_PLUGIN) return p.baseUrl || null;
+  const s = modelServices('claude').find((x) => x.plugin === HUB_PLUGIN && 'p-' + serviceHash(x.plugin, x.sid, 10) === p.id);
+  return (s && hubRealUrls().get(s.sid)) || null;   // Vertex（vertex-c / vertex-d）不在模型中心的服务列表里 → null
 }
 
 export function _resetProvidersForTests() { regs.clear(); }

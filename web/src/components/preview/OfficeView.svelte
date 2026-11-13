@@ -9,6 +9,7 @@
   import { recoverStaleChunk } from '../../lib/staleGuard.js';
   import { t, tr } from '../../lib/i18n.js';
   import { interceptAppDownload } from '../../lib/save.js';
+  import '../../lib/doctheme.css';
 
   let { item, onClose } = $props();
 
@@ -164,8 +165,9 @@
           {#each slides as sl, i (i)}
             <div class="of-slide">
               <div class="of-slide-no">{i + 1}</div>
-              {#each sl.imgs as src (src)}<img class="of-slide-img" {src} alt="" />{/each}
-              {#each sl.texts as tx (tx)}<p class="of-slide-txt sel-text">{tx}</p>{/each}
+              <!-- 不拿内容当 key：同一页里重复的文字（如两处「亿元」）/ 同一张图引用两次会让 keyed each 抛错，整页卡在「转换中」 -->
+              {#each sl.imgs as src}<img class="of-slide-img" {src} alt="" />{/each}
+              {#each sl.texts as tx}<p class="of-slide-txt sel-text">{tx}</p>{/each}
               {#if !sl.imgs.length && !sl.texts.length}<p class="of-slide-empty">{t('（此页无文本）')}</p>{/if}
             </div>
           {/each}
@@ -177,24 +179,31 @@
 {/if}
 
 <style>
-  .of-root { position: absolute; inset: 0; background: #fbfbfa; color: #1d1d1f; display: flex; flex-direction: column; }
-  .of-head { flex: none; display: flex; align-items: center; gap: 8px; padding: max(var(--pv-pad-y, 8px), var(--sat)) 10px var(--pv-pad-y, 8px); background: #fff; border-bottom: 1px solid #ececec; }
-  .of-btn { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #1d1d1f; flex: none; }
+  /* 配色走 lib/doctheme.css 的 --md-* 纸面令牌（亮象牙白 / 暗暖墨，跟随全站明暗；与 md 阅读器、PDF 同一套）。
+     客户端回落渲染出来的是重排过的 HTML（mammoth / SheetJS / 幻灯片文字），没有原文件配色可保，整页跟主题走。 */
+  .of-root { position: absolute; inset: 0; background: var(--md-bg); color: var(--md-fg); display: flex; flex-direction: column; }
+  .of-head { flex: none; display: flex; align-items: center; gap: 8px; padding: max(var(--pv-pad-y, 8px), var(--sat)) 10px var(--pv-pad-y, 8px);
+    background: var(--md-bg); box-shadow: inset 0 -.5px 0 rgba(var(--md-ink), .12); }
+  .of-btn { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--md-fg); flex: none;
+    transition: background var(--mo-tap, 90ms); }
   .of-btn svg { width: 21px; height: 21px; }
-  .of-btn:active { background: rgba(0,0,0,.06); }
+  @media (hover: hover) { .of-btn:hover { background: rgba(var(--md-ink), .06); } }
+  .of-btn:active { background: rgba(var(--md-ink), .1); }
   .of-title { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
-  .of-tabs { flex: none; display: flex; gap: 4px; overflow-x: auto; padding: 7px 10px; background: #fff; border-bottom: 1px solid #ececec; }
-  .of-tab { flex: none; padding: 5px 13px; border-radius: 999px; font-size: 13px; background: #f0f0f2; color: #57575c; }
-  .of-tab.on { background: var(--g-primary, #1a73e8); color: #fff; }
+  /* 工作表切换：暖灰胶囊，选中是墨色实心（同设置页「墨色单强调」） */
+  .of-tabs { flex: none; display: flex; gap: 4px; overflow-x: auto; padding: 7px 10px; background: var(--md-bg); box-shadow: inset 0 -.5px 0 rgba(var(--md-ink), .12); }
+  .of-tab { flex: none; padding: 5px 13px; border-radius: 999px; font-size: 13px; background: rgba(var(--md-ink), .06); color: var(--md-fg-2);
+    transition: background var(--mo-micro, 140ms), color var(--mo-micro, 140ms); }
+  .of-tab.on { background: var(--md-fg); color: var(--md-bg); font-weight: 600; }
 
   .of-body { flex: 1; min-height: 0; position: relative; }
-  .of-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #6b6b70; padding: 0 30px; text-align: center; }
-  .of-spin { width: 30px; height: 30px; border-radius: 50%; border: 3px solid rgba(0,0,0,.12); border-top-color: #1a73e8; animation: ofspin .8s linear infinite; }
+  .of-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--md-fg-2); padding: 0 30px; text-align: center; }
+  .of-spin { width: 30px; height: 30px; border-radius: 50%; border: 3px solid rgba(var(--md-ink), .1); border-top-color: var(--md-accent); animation: ofspin .8s linear infinite; }
   @keyframes ofspin { to { transform: rotate(360deg); } }
   .of-tip { font-size: 13px; }
-  .of-sub { font-size: 12px; color: #9a9aa0; max-width: 80vw; word-break: break-all; }
-  .of-err button, .of-dl { padding: 7px 20px; border-radius: 999px; background: #1a73e8; color: #fff; font-size: 14px; }
+  .of-sub { font-size: 12px; color: var(--md-fg-3); max-width: 80vw; word-break: break-all; }
+  .of-err button, .of-dl { padding: 7px 20px; border-radius: 999px; background: var(--md-accent); color: #fff; font-size: 14px; }
 
   .of-scroll { position: absolute; inset: 0; overflow: auto; -webkit-overflow-scrolling: touch; }
 
@@ -204,23 +213,26 @@
   .of-doc :global(h2) { font-size: 1.35em; font-weight: 700; margin: .7em 0 .4em; }
   .of-doc :global(h3) { font-size: 1.15em; font-weight: 650; margin: .6em 0 .35em; }
   .of-doc :global(p) { margin: .5em 0; }
+  .of-doc :global(a) { color: var(--md-link); }
   .of-doc :global(ul), .of-doc :global(ol) { margin: .5em 0; padding-left: 1.6em; }
   .of-doc :global(img) { max-width: 100%; height: auto; }
   .of-doc :global(table) { border-collapse: collapse; margin: .7em 0; width: 100%; }
-  .of-doc :global(td), .of-doc :global(th) { border: 1px solid #d8d8dc; padding: 6px 10px; font-size: .95em; }
+  .of-doc :global(td), .of-doc :global(th) { border: 1px solid var(--md-line-2); padding: 6px 10px; font-size: .95em; }
 
-  /* 表格（SheetJS HTML）*/
+  /* 表格（SheetJS HTML）。表头行吸顶：底色必须不透明（暗色的 --md-bg-2 是半透明叠加，单独用会透出下面滚过的行） */
   .of-sheetscroll { padding: 0; }
   .of-sheetscroll :global(table) { border-collapse: collapse; font-size: 13px; }
-  .of-sheetscroll :global(td), .of-sheetscroll :global(th) { border: 1px solid #e2e2e6; padding: 5px 10px; white-space: nowrap; min-width: 48px; }
-  .of-sheetscroll :global(tr:first-child td) { background: #f6f6f7; font-weight: 600; position: sticky; top: 0; }
+  .of-sheetscroll :global(td), .of-sheetscroll :global(th) { border: 1px solid var(--md-line); padding: 5px 10px; white-space: nowrap; min-width: 48px; }
+  .of-sheetscroll :global(tr:first-child td) { background: linear-gradient(var(--md-bg-2), var(--md-bg-2)), var(--md-bg); font-weight: 600; position: sticky; top: 0; }
 
-  /* PPT 近似 */
-  .of-slides { padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 16px; }
-  .of-slide { width: 100%; max-width: 720px; background: #fff; border: 1px solid #e6e6ea; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.06); padding: 22px 24px; position: relative; }
-  .of-slide-no { position: absolute; top: 10px; right: 14px; font-size: 12px; color: #b0b0b6; }
+  /* PPT 近似：幻灯片是台面上的卡片 */
+  .of-slides { padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 16px; background: var(--md-stage); }
+  .of-slide { width: 100%; max-width: 720px; background: var(--md-panel); border: 1px solid var(--md-line); border-radius: 10px; box-shadow: var(--md-shadow-thumb); padding: 22px 24px; position: relative; }
+  .of-slide-no { position: absolute; top: 10px; right: 14px; font-size: 12px; color: var(--md-fg-4); }
   .of-slide-img { max-width: 100%; border-radius: 6px; margin: 6px 0; display: block; }
+  /* 幻灯片原本多是白底，透明底的图（logo、深色线稿）是按白纸画的：暗主题下垫一块浅底板，不透明的照片看不出差别 */
+  :global(html:not([data-theme="light"])) .of-slide-img { background: #f4f3ee; }
   .of-slide-txt { font-size: 16px; line-height: 1.6; margin: 5px 0; }
-  .of-slide-empty { color: #b0b0b6; font-size: 14px; }
-  .of-approx { font-size: 12px; color: #9a9aa0; text-align: center; padding: 6px 20px 30px; }
+  .of-slide-empty { color: var(--md-fg-4); font-size: 14px; }
+  .of-approx { font-size: 12px; color: var(--md-fg-3); text-align: center; padding: 6px 20px 30px; }
 </style>

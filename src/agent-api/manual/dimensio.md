@@ -76,5 +76,5 @@ dimensio（agent id `dimensio`）是 bridge 自带的另一套 agent 工作台�
 
 - 需要自备模型厂商的 API Key（或本机模型）；没配 Key 无法对话。
 - 成员实例：访问范围锁死在自己的文件夹，没有本地 AI，没有命令行权限的成员也没有命令行与网页预览工具（操作自己电脑的设备工具照常有）。这是应用层护栏，不是系统级沙箱。
-- 不能用于定时触发（定时触发只有 Claude 与 Gemini 引擎）。
+- 不能用于定时触发（定时触发只有 Claude 引擎）。
 - dimensio 的会话不在 Claude 会话列表里，接口的会话类操作是否覆盖 dimensio 以 `overview` 返回的能力为准。

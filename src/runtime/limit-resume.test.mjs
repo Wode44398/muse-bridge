@@ -116,3 +116,43 @@ test('重放失败：不再自动重试，回到可手动重试', async () => {
   LR.noteTurnSettled(KEY, 'e1');
   assert.ok(existsSync(path.join(dir, 'claude-limit-resume.json')));
 });
+
+test('号池：撞墙时全员用尽，按最先恢复的那个号排续跑，而不是撞墙那个号自己的重置点', () => {
+  const resetsAt = Date.now() + 4 * 3600_000;     // 撞墙的号 4 小时后才重置
+  const poolFree = Date.now() + 1800_000;          // 另一个号半小时后恢复
+  const seen = [];
+  LR.setLimitResumePool((model) => { seen.push(model); return poolFree; });
+  try {
+    const st = LR.noteLimitTurn(KEY, 'p1', { type: 'five_hour', resetsAt, replay: replay(), model: 'opus' });
+    assert.equal(st.resetsAt, resetsAt, '卡片上的重置时刻仍是本号的');
+    assert.ok(st.fireAt >= poolFree + 90_000 + 2000 && st.fireAt <= poolFree + 90_000 + 8000, '续跑时刻跟号池最早可用走');
+    assert.equal(seen.at(-1), 'opus', '按本轮模型问号池');
+    // 号池比本号还晚（或不适用）→ 照旧按本号
+    LR.setLimitResumePool(() => resetsAt + 3600_000);
+    const st2 = LR.noteLimitTurn(KEY, 'p2', { type: 'five_hour', resetsAt, replay: replay() });
+    assert.ok(st2.fireAt >= resetsAt + 90_000 && st2.fireAt <= resetsAt + 90_000 + 8000);
+  } finally {
+    LR.setLimitResumePool(null);
+    LR.noteTurnStart(KEY, 'p1'); LR.noteTurnStart(KEY, 'p2');
+  }
+});
+
+test('号池：等待中别的号读到了更早的恢复时刻 → 醒来重看时提前；没到点不重放', async () => {
+  const resetsAt = Date.now() + 4 * 3600_000;
+  LR.setLimitResumePool(() => 0);
+  try {
+    const st = LR.noteLimitTurn(KEY, 'p3', { type: 'five_hour', resetsAt, replay: replay() });
+    assert.ok(st.fireAt >= resetsAt + 90_000);
+    const sooner = Date.now() + 600_000;
+    LR.setLimitResumePool(() => sooner);
+    replays.length = 0;
+    await LR._wakeForTest(KEY, 'p3');
+    assert.equal(replays.length, 0, '还没到点，不发');
+    const after = LR.getLimitResume(KEY, 'p3');
+    assert.equal(after.armed, true);
+    assert.ok(after.fireAt >= sooner + 90_000 && after.fireAt <= sooner + 90_000 + 8000, '提前到号池恢复后');
+  } finally {
+    LR.setLimitResumePool(null);
+    LR.noteTurnStart(KEY, 'p3');
+  }
+});

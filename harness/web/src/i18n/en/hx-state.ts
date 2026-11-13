@@ -169,4 +169,8 @@ export default {
   "改写之后又发过消息了，撤销不了（可以用检查点回滚）": "Messages were sent after the edit, so it can’t be undone. Rewind with a checkpoint instead.",
   "撤销失败：{reason}": "Couldn’t undo: {reason}",
   "已撤销改写": "Edit undone",
+  // ── lib/task-notice.ts：后台任务通知（server/job-notify.ts）──
+  "后台任务跑完了：{list}": "Background task finished: {list}",
+  "后台任务输出了在盯的内容：{list}": "Background task printed a watched line: {list}",
+  "后台任务通知": "Background task notice",
 };

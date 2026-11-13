@@ -39,6 +39,11 @@ test("audio magic distinguishes WAV/WebP, M4A/MP4 and MP3/AAC", () => {
   assert.equal(sniffAudioMime(Buffer.from("ID3xxx")), "audio/mpeg");
   assert.equal(sniffAudioMime(Buffer.from([0xff, 0xfb, 0x90, 0x64])), "audio/mpeg");
   assert.equal(sniffAudioMime(Buffer.from([0xff, 0xf1, 0x50, 0x80])), undefined);
+  // UTF-16LE text (BOM FF FE) is not MPEG-1 layer I audio unless the name says it is
+  const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Windows Registry Editor Version 5.00", "utf16le")]);
+  assert.equal(sniffAudioMime(utf16), undefined);
+  assert.equal(sniffAudioMime(utf16, "config/yunfan.reg"), undefined);
+  assert.equal(sniffAudioMime(Buffer.from([0xff, 0xfe, 0x90, 0x64]), "clip.mp3"), "audio/mpeg");
 });
 
 test("Read sends exact audio bytes as native feedback without unlocking text edits", async () => {

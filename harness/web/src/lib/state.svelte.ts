@@ -13,18 +13,24 @@
 
 import * as api from "./api.ts";
 import { t, tr } from "./i18n.ts";
-import { applyTheme, VENDORS, type Appearance } from "./theme.ts";
-import { withViewTransition } from "./motion.ts";
+import { tick } from "svelte";
+import { applyTheme, resolveMode, VENDORS, type Appearance } from "./theme.ts";
+import { brandLogoOf } from "./brand-logos.svelte.ts";
+import { themeReveal, withViewTransition } from "./motion.ts";
 import { haptic } from "./touch.ts";
 import { findSteerItem, resetStreamTurn } from "./stream-turn.ts";
 import { mergeTimeline } from "./timeline-merge.ts";
 import { insertAfter, permissionItemsFromMeta, planItemFromResult } from "./card-receipts.ts";
 import { toResume, toSuspend } from "./page-streams.ts";
 import * as tl from "./timeline-reducer.ts";
+import { onCollabEvent } from "./workspace-collab.svelte.ts";
 import { applySnapshot, noticeFor, type NotifyState, type StatusEvent } from "./notify-policy.ts";
 import { compat, type Compat } from "./protocol.ts";
 import { artifactHost } from "./open-artifact.ts";
+import { ciEventNotice } from "./pr-text.ts"; // 拉取请求自动修复那一轮首条的提示条
+import { TASK_NOTIFICATION_KIND, taskNoticeText } from "./task-notice.ts"; // 后台任务通知那一轮首条的提示条
 import type { Builtin } from "./slash.ts";
+import { refreshFamily } from "./session-family.svelte.ts"; // 会话协作：台账随会话列表一起重拉
 import { MAX_SESSION_REFS, sessionRefsFrom, withSessionRef } from "./session-refs.ts";
 import { paneLeft, placeInSplit, withFocusedReplaced, type Side } from "./split.ts";
 
@@ -171,12 +177,13 @@ const STREAM_FLUSH_MS = 90;
 const RESYNC_TIMEOUT_MS = 12_000;
 
 // ── 工作区 Dock（右侧五工具面板：任务/审阅/终端/浏览器/文件）────────────────
-export type DockTool = "tasks" | "review" | "term" | "browser" | "files";
+// memory = 宿主（bridge）注入的记忆卡，看 dimensio 的记忆（见 workspace-collab.svelte.ts 的 memoryView）
+export type DockTool = "tasks" | "review" | "term" | "browser" | "files" | "memory";
 const DOCK_TOOL_KEY = "harness.dockTool";
 function readDockTool(): DockTool {
   try {
     const v = localStorage.getItem(DOCK_TOOL_KEY);
-    if (v === "tasks" || v === "review" || v === "term" || v === "browser" || v === "files") return v;
+    if (v === "tasks" || v === "review" || v === "term" || v === "browser" || v === "files" || v === "memory") return v;
   } catch { /* ignore */ }
   return "browser";
 }
@@ -237,6 +244,10 @@ export const app = $state({
   projectsLoading: false,
 
   vendorMenu: false, // 厂商切换浮层（左上角 logo 节点呼出）
+  // 宿主（bridge 的模型中心）要直接打开某个自定义服务的编辑器：「模型服务」面板挂上后接住、置回 null
+  vendorEditReq: null as null | string,
+  // 宿主（bridge 设置页「本机模型」）要打开本机模型面板、看哪一台：有焦点的那格输入框接住后置回 null
+  localMenuReq: null as null | "qwen" | "strata",
   drawer: false,
   sheet: null as null | "settings" | "attach" | "checkpoints" | "setup" | "memory",
   // K4：记忆面板看的是哪个项目（项目菜单里点「项目记忆」时定）
@@ -524,7 +535,15 @@ function scheduleListRefresh(what: "sessions" | "projects" | "both") {
 
 let globalSnapshots = 0;
 
+// ── 会话管理（lib/sessmgmt.svelte.ts）的挂钩：它登记自己的全局事件处理（queue / suggestion / session_title，返回 true =
+// 已处理）与系统通知的分类开关（权限请求 / 提问 / 任务完成）。放成可登记的钩子而不是直接 import：那边要 import 这里的 app。
+export const sessHooks = {
+  global: [] as ((ev: any) => boolean)[],
+  notifyAllowed: (_kind: "permission" | "ask" | "plan" | "done") => true,
+};
+
 function onGlobalEvent(ev: any) {
+  for (const h of sessHooks.global) if (h(ev)) return;
   if (ev?.e === "snapshot") {
     const rows = (Array.isArray(ev.sessions) ? ev.sessions : []) as StatusEvent[];
     applySnapshot(notifyState, rows);
@@ -555,7 +574,8 @@ function onGlobalEvent(ev: any) {
   });
   if (!notice) return;
   if (notice.toast) toast(notice.toast);
-  if (notice.system) systemNotify(notice.system.title, notice.system.text);
+  // 会话管理：通知分类开关只管系统通知（应用内提示照旧）。有 waiting 的通知必然出自「新挂上的卡」那一支
+  if (notice.system && sessHooks.notifyAllowed(status.waiting ? status.waiting.kind : "done")) systemNotify(notice.system.title, notice.system.text);
 }
 
 function notifyEnabled(): boolean {
@@ -624,12 +644,50 @@ export function setFeedDetail(on: boolean) {
     /* 隐私模式等写不进去：本次会话照样生效 */
   }
 }
+// 嵌在 bridge 里时这个开关在 bridge 设置 › dimensio › 对话（同源、写同一个 localStorage 键）：
+// 那边改了发 harness-feed-detail 事件，这里即时跟上；别的标签页改了走 storage 事件
+if (typeof window !== "undefined") {
+  window.addEventListener("harness-feed-detail", (e) => {
+    app.feedDetail = Boolean((e as CustomEvent).detail);
+  });
+  window.addEventListener("storage", (e) => {
+    if (e.key === "harness.feedDetail") app.feedDetail = e.newValue === "1";
+  });
+}
+
+// 打开设置：嵌在 bridge 里时交给宿主（像 Claude 页一样跳 bridge 设置 › dimensio，那里是全集），
+// 独立运行（8799 直连 / Harness.apk）才开自己的设置面板（连接设置只有这里有）
+let hostSettings: null | (() => void) = null;
+export function setHostOpenSettings(fn: null | (() => void)) {
+  hostSettings = fn;
+}
+export function openSettings(): void {
+  if (hostSettings) hostSettings();
+  else app.sheet = "settings";
+}
 
 export function setAppearance(a: Appearance) {
   app.appearance = a;
   localStorage.setItem("harness.appearance", a);
   // 深浅切换整页交叉淡化（浏览器支持视图过渡时），不是一帧硬切
   withViewTransition(() => applyTheme(a));
+}
+
+// 点标志切明暗（ThemeMark）：按此刻实际的明暗取反、落成手动档（跟系统档也一样——同 bridge 点 Claude 标志，手动一切就关跟随）。
+// 新纸色从标志那一点涟漪般铺开（themeReveal）；状态在过渡的更新回调里才写，旧快照拍的是完整的旧画面
+// （嵌在 bridge 里时 HarnessPage 据 app.appearance 回写宿主明暗，也落在新画面里）。
+export function toggleAppearance(origin: Element | null) {
+  const next: Appearance = resolveMode(app.appearance) === "dark" ? "light" : "dark";
+  themeReveal(
+    origin,
+    async () => {
+      app.appearance = next;
+      localStorage.setItem("harness.appearance", next);
+      applyTheme(next);
+      await tick();
+    },
+    next === "dark",
+  );
 }
 
 // 系统深浅变化时（auto 档）即时跟随
@@ -648,6 +706,7 @@ export function toast(msg: string, action?: { label: string; run: () => void }) 
 
 // ── 事件归约（per-chat：后台会话的事件写进它自己的时间线）────────────────────
 function handleEvent(chat: Chat, ev: any) {
+  if (onCollabEvent(chat, ev)) return; // 工作区协同的事件（workspace / terminal）不进时间线
   tl.reduceTimeline(chat, ev, effectsFor(chat));
 }
 
@@ -1428,13 +1487,14 @@ async function patchConfigOptimistic(patch: Record<string, string>, failed: (rea
 // ── 运行档位（自主执行 / 只读 / 先出计划）──────────────────────────────────
 // 读：前台会话的快照值优先。已开跑的会话跑的是它自己的 cfg（服务端如此），
 // 全局值只是「下一条新对话」的默认，拿全局显示会在多会话间串档。
-export function permissionMode(chat: Chat = app.chat): "auto" | "read-only" | "plan" {
-  return chat.cfg?.permissionMode ?? app.config?.permissionMode ?? "auto";
+export type RunPermissionMode = "auto" | "read-only" | "plan" | "bypass";
+export function permissionMode(chat: Chat = app.chat): RunPermissionMode {
+  return (chat.cfg?.permissionMode ?? app.config?.permissionMode ?? "auto") as RunPermissionMode;
 }
 
 // 写：先点名当前会话（立刻生效，运行中也切得动——这正是「只读」这一档的用法：
 // 给正在跑的 agent 拉手刹），再把全局值写成同一档作为新对话的默认。
-export async function setPermissionMode(mode: "auto" | "read-only" | "plan") {
+export async function setPermissionMode(mode: RunPermissionMode) {
   if (mode === permissionMode()) return;
   const chat = app.chat;
   const prevChat = chat.cfg?.permissionMode;
@@ -1583,8 +1643,13 @@ export function providerModels(): any[] {
   const cat = app.info?.catalog as any[] | undefined;
   return cat?.find((p) => p.id === app.config?.provider)?.models ?? [];
 }
+// 按 id 找型号：改名前的旧 id（目录条目的 aliases，如本机的 strata-orca → strata-flash-iq3s）也对得上，旧会话照样有档位 / 型号名
+export function findModel(models: any[], id: string | undefined): any {
+  if (!id) return undefined;
+  return models.find((m) => m.id === id) ?? models.find((m) => Array.isArray(m.aliases) && m.aliases.includes(id));
+}
 export function modelEfforts(): string[] {
-  const m = providerModels().find((m) => m.id === app.config?.model);
+  const m = findModel(providerModels(), app.config?.model);
   return m?.efforts ?? ["off", "low", "high"];
 }
 export function modelsOf(providerId: string): any[] {
@@ -1601,6 +1666,8 @@ export interface VendorView {
   custom: boolean;
   managed?: boolean; // 成员实例：管理员共享过来的（只能用：没有铅笔、设置里不填 Key）
   shared?: boolean; // 管理员实例：已共享给成员
+  logo?: string; // 品牌标的键（brand-logos）：模型中心给的，或按接口主机名认出来的；没有就画首字
+  hub?: string; // bridge 的模型中心提供的：它那边的服务 id（卡片上的铅笔据此跳回模型中心改）
 }
 export const isCustomVendor = (id: string | null | undefined) => typeof id === "string" && id.startsWith("custom-");
 export function vendorInfo(id: string | null | undefined): VendorView {
@@ -1608,23 +1675,67 @@ export function vendorInfo(id: string | null | undefined): VendorView {
   if (isCustomVendor(key)) {
     const spec = (app.info?.catalog as any[] | undefined)?.find((p) => p.id === key);
     const managed = spec?.custom?.managed === true;
+    // bridge 的模型中心提供的（经插件供模型那条路进来，pluginId = model-hub）：副标题直接写「模型中心」
+    const hub = spec?.custom?.pluginId === "model-hub" ? String(spec.custom.ref ?? "") : "";
+    const logo = spec?.custom?.logo || brandLogoOf(spec?.custom?.host);
     return {
       id: key,
       name: spec?.name ?? t("自定义服务"),
       // bridge 插件提供的（custom.plugin = 插件名）也是只能用不能改，副标题写插件名
-      company: spec?.custom?.plugin ? `${t("插件")} · ${spec.custom.plugin}` : managed ? t("管理员共享") : (spec?.custom?.host ?? t("已删除")),
+      company: hub ? t("模型中心") : spec?.custom?.plugin ? `${t("插件")} · ${spec.custom.plugin}` : managed ? t("管理员共享") : (spec?.custom?.host ?? t("已删除")),
       custom: true,
       ...(managed ? { managed: true } : spec?.custom?.shared ? { shared: true } : {}),
+      ...(logo ? { logo } : {}),
+      ...(hub ? { hub } : {}),
     };
   }
   const v = VENDORS[key] ?? VENDORS.anthropic;
-  return { id: v.id, name: v.name, company: v.company, custom: false };
+  // 自带适配的厂商由宿主的模型中心接管时：是它的哪个服务给的 Key（卡片上的铅笔跳回那个服务）
+  const spec = (app.info?.catalog as any[] | undefined)?.find((p) => p.id === key);
+  const hub = spec?.hub?.pluginId === "model-hub" ? String(spec.hub.ref ?? "") : "";
+  return { id: v.id, name: v.name, company: v.company, custom: false, ...(hub ? { hub } : {}) };
+}
+// 宿主的模型中心接管了自带厂商（服务端 /api/info 的 hostBuiltins）：Key 只在模型中心里配，这边不再有填 Key 的地方，
+// 「模型服务」面板也只摆模型中心给了 Key 的那几家。
+export function hostBuiltins(): boolean {
+  return (app.info as any)?.hostBuiltins === true;
 }
 // 用户加的自定义服务，按添加顺序
 export function customVendors(): VendorView[] {
   const cat = (app.info?.catalog as any[] | undefined) ?? [];
-  return cat.filter((p) => isCustomVendor(p.id)).map((p) => vendorInfo(p.id));
+  // 已经并进宿主模型中心的老服务（custom.hidden）不列：模型中心那边有它的新卡，老会话照样认得它的名字
+  return cat.filter((p) => isCustomVendor(p.id) && !p.custom?.hidden).map((p) => vendorInfo(p.id));
 }
+// 宿主的模型中心（嵌在 bridge 里、当前身份是服务器管理员时才有）：模型服务只在那里配——「模型服务」面板的「＋」卡、
+// 卡片上的铅笔都唤起它，这张面板自己不再有表单。返回 false = 宿主没接住（独立运行、成员、老 bridge），照旧用自己的表单。
+//   "add"                 添加服务
+//   { service }           打开模型中心里的这个服务（卡片是模型中心提供的）
+//   { legacy, name, proto } dimensio 自己的老服务：交给模型中心（确认后照抄过去、删掉这边的）
+//   不传                   打开模型中心首页
+export type ModelHubTarget = "add" | { service: string } | { legacy: string; name: string; proto?: string };
+export interface ModelHubHost {
+  available: () => boolean; // 现在能不能唤起（只探不开）
+  open: (target?: ModelHubTarget) => boolean;
+}
+let hostModelHub: ModelHubHost | null = null;
+export function setModelHubHost(host: ModelHubHost | null): void {
+  hostModelHub = host;
+}
+export function hasHostModelHub(): boolean {
+  try {
+    return hostModelHub ? hostModelHub.available() === true : false;
+  } catch {
+    return false;
+  }
+}
+export function openHostModelHub(target?: ModelHubTarget): boolean {
+  try {
+    return hostModelHub && hostModelHub.available() ? hostModelHub.open(target) === true : false;
+  } catch {
+    return false;
+  }
+}
+
 // 「＋」卡：服务端支持就出现。成员实例（多用户服务端上的注册用户）要服务端有 custom-providers-shared——老服务端对成员一律 403，
 // 新的放开了（成员自己加的只能连公网地址）
 export function canAddCustomVendor(): boolean {
@@ -1648,6 +1759,7 @@ export async function refreshSessions() {
   app.sessionsLoading = true;
   try {
     const page = await api.listSessionsPage(0, SESSION_PAGE);
+    void refreshFamily(); // 会话协作：侧栏挂子会话要的父子台账
     app.sessions = page.items as SessionMeta[];
     app.sessionsTotal = page.total;
     // total 未知（反代吃掉了头）时以「这一页装满了」当作可能还有。
@@ -1805,6 +1917,10 @@ function harnessNotice(kind: string | undefined, text: string): string | null {
   // M13：服务重启 / 进程死掉之后自动续跑
   if (kind === "resume") return t("服务重启后自动接着做");
   if (kind === "resume-stopped") return t("连着几次被重启切断，没有再自动续跑——说「继续」接着做");
+  // 拉取请求自动修复：bridge 发来的 CI 失败 / 合并冲突 / 新评审意见（server/pr.ts）——一行提示
+  if (kind === "ci-event") return ciEventNotice(text);
+  // 后台任务通知（server/job-notify.ts）：后台命令跑完 / 盯着的输出出现了——一行提示
+  if (kind === TASK_NOTIFICATION_KIND) return taskNoticeText(text);
   return text.split("\n")[0] || null;
 }
 function steerText(msg: any, text: string): string {
@@ -1844,6 +1960,9 @@ function askSelectionsFromMeta(meta: any, questions: AskQuestion[]): Record<stri
   return selected;
 }
 
+// 会话协作的 harness 片段（server/agent/injections.ts）：画成会话消息卡，不是提示条
+const SESSION_KINDS = new Set(["session-brief", "session-message", "side-sessions-event"]);
+
 function rebuildTimeline(messages: any[]): Item[] {
   const items: Item[] = [];
   const tools = new Map<string, ToolItem>();
@@ -1870,6 +1989,7 @@ function rebuildTimeline(messages: any[]): Item[] {
             // Agent / Workflow 的结构化摘要（服务端 meta）→ 历史里也有卡片可展开
             if (b.meta?.subagent) ref.agent = agentRunFromMeta(b.meta.subagent);
             if (b.meta?.workflow) ref.workflow = workflowRunFromMeta(b.meta.workflow);
+            if (b.meta?.family && typeof b.meta.family === "object") ref.family = b.meta.family; // 会话协作：工具行链到的会话
             // #103：这次调用弹过的权限卡、计划卡的回执——刷新、换台设备打开也看得见批的哪一档、谁在哪台设备上定的
             const cards: Item[] = permissionItemsFromMeta(b.meta);
             const plan = ref.name === "ExitPlanMode" ? planItemFromResult(b.id, ref.args, b) : null;
@@ -1880,7 +2000,11 @@ function rebuildTimeline(messages: any[]): Item[] {
       }
       const raw = texts.join("\n").trim();
       const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
-      if (msg.origin === "harness") {
+      if (msg.origin === "harness" && SESSION_KINDS.has(msg.kind)) {
+        // 会话协作：会话信封画成卡片；上一条可见的是一轮的收尾（或这是第一条）= 这条开了新的一轮（会话间唤醒）
+        const prev = items[items.length - 1];
+        items.push({ kind: "session", text: raw, turn: !prev || (prev.kind === "text" && Boolean(prev.run)) || prev.kind === "notice" });
+      } else if (msg.origin === "harness") {
         const notice = harnessNotice(msg.kind, raw);
         if (notice) items.push({ kind: "notice", text: notice });
       } else {
@@ -1964,7 +2088,8 @@ function applyRecord(chat: Chat, rec: any, upTo?: number) {
   );
   reindexRefs(chat);
   chat.recFp = upTo === undefined ? (rec.fp ?? null) : null;
-  if (rec.running && typeof rec.runId === "string") chat.runId = rec.runId; // M2：附着到的是哪一轮
+  // M2：附着到的是哪一轮。没在跑 / 旧后端不给就清掉——附着直播会带着它去核对，留着上一轮的 id 会一直 409 打转
+  chat.runId = rec.running && typeof rec.runId === "string" ? rec.runId : null;
   resetStreamTurn(chat);
   chat.todos = rec.todos ?? [];
   chat.goal = rec.goal ?? null; // O7：目标续跑的状态
@@ -2188,10 +2313,11 @@ async function attachStream(chat: Chat, gen: number) {
       () => {
         if (gen === chat.liveGen) chat.lastByteAt = Date.now();
       },
+      chat.runId, // 底座是按这一轮切的（applyRecord 刚记下）：服务端此刻在跑的若已是下一轮，409 回来重新对账
     );
   } catch (e: any) {
-    // 同 send：主动收线已被世代挡掉；意外死亡（409 = 附着瞬间本轮刚好结束，
-    // 对账自然拉到终态）一律走恢复。
+    // 同 send：主动收线已被世代挡掉；意外死亡（409 = 附着瞬间本轮刚好结束，或已换成下一轮，
+    // 对账自然拉到终态 / 新一轮的底座）一律走恢复。
     if (gen !== chat.liveGen) return;
     scheduleResync(chat, gen, 0);
     return;
@@ -2577,6 +2703,10 @@ export function globalMemoryAvailable(): boolean {
 // K11：记忆总览（全局层 + 各项目 + 旧快照桶一次拿齐）；旧服务端没有这一位，面板退回「一个项目」的视图
 export function memoryOverviewAvailable(): boolean {
   return Boolean(app.compat?.caps?.includes("memory-overview"));
+}
+// 离线记忆整理（复核意见、「现在整理」）；旧服务端没有这一位，面板不露这一块
+export function memoryDreamAvailable(): boolean {
+  return Boolean(app.compat?.caps?.includes("memory-dream"));
 }
 // 打开记忆面板：for = 直接看某个项目（侧栏项目菜单、召回芯片）；不给 = 从设置进总览
 export function openMemory(opts: { for?: { path: string; name: string }; fromSettings?: boolean } = {}): void {

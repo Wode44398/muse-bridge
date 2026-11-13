@@ -21,14 +21,15 @@
 |---|---|
 | [onboarding.md](onboarding.md) | 入门讲解：几档讲解各自怎么带（5 分钟快速上手、Claude Code 深入、dimensio 深入、管理员、手机），以及更新后怎么演示新功能 |
 | [01-access.md](01-access.md) | 打开与登录：公网地址、管理员令牌、账号密码、注册、扫码登录、换了地址要重新登录、切换账号（一台设备留着几个账号的登录、添加账号）与退出、主页、安卓 App（下载、第一次连接、换地址、几台服务器来回切（账户卡里的「切换服务器」）、更新、旧版迁移）、iPhone、Windows 桌面客户端、语言和明暗 |
-| [02-claude-code.md](02-claude-code.md) | Claude Code 页：对话、项目（改名、归档全部）、临时对话、历史对话（搜索、归档）、模型和思考深度、权限模式与批准卡、排队发消息、附件（桌面客户端里电脑上的文件夹只引用不上传）、斜杠命令、限额卡、会话协作、拉取请求（PR）、子 agent 按难度档选模型、交互图表、工作台（终端 / 文件 / 任务 / 审阅）、worktree、引用对话、定时任务 |
-| [03-dimensio.md](03-dimensio.md) | dimensio 页：它自己的设置面板、选模型和厂商、加 key（网页里存的 key 优先）、自定义模型服务（按模型设思考档位）、Fast mode、联网搜索、项目和访问范围、权限规则、记忆、子 agent 和任务、产物文件 |
+| [02-claude-code.md](02-claude-code.md) | Claude Code 页：对话、项目（改名、归档全部）、临时对话、历史对话（搜索、归档）、模型和思考深度、权限模式（输入框左下角的圆环，和用量环合在一起）与批准卡、排队发消息、附件与图片预览、斜杠命令、会话消息通知、限额卡、会话协作（含和 dimensio 互相派活）、项目对话（协调者拆活、讨论串并行做、项目概览）、拉取请求（PR）、子 agent 调用策略（按难度档选模型）、交互图表、工作台（终端 / 文件 / 任务 / 审阅）、worktree、引用对话、定时任务、调试模式 |
+| [03-dimensio.md](03-dimensio.md) | dimensio 页：设置（都在「设置 → dimensio」）、选模型和厂商、配 key（管理员在模型中心、成员在自己的设置里）、Fast mode、联网搜索、项目和访问范围、权限规则、记忆（含空闲时整理）、子 agent 和任务、和 Claude 互开子会话、工作区协同、拉取请求、后台任务通知、空闲压缩、产物文件 |
 | [04-files.md](04-files.md) | 文件：工作空间在哪、上传下载、新建 Markdown、压缩、隐藏项、预览、Markdown 编辑、把文件发给 AI、分享链接（文件 / 文件夹；对话快照没有入口） |
 | [05-customize.md](05-customize.md) | 扩展（设置 › 扩展）：技能、连接器、插件（装、配置、按 agent 启用、我自用 / 全服统一）、远程连接器授权（OAuth）与控制面板（连接 / 断开连接 / 工具权限）、自备 OAuth 应用（Gmail、Zoom）、Muse 上不能 OAuth 登录的几家（Figma 个人访问令牌、refresh_rejected）、官方市场、功能扩展（内置功能开关，别动 Muse 关掉的几项；插件详情里的能力、用量、定时任务、插件日志） |
 | [06-users-admin.md](06-users-admin.md) | 多人使用与服务端控制台：邀请码、普通账号和完全信任账号的区别、单人 / 多人（控制台里只读，在 Muse 里说）、额度、管理员可见性（隐私）、给谁开 dimensio、Claude 账号（订阅号池）、服务控制、日志 |
-| [07-settings.md](07-settings.md) | 设置逐项说明：根页各分组、账户、Claude（含自定义 API）、dimensio、Agent 接入、安卓 App、扩展 / 额度与注册 / 服务端控制台、通用、外观、壁纸、设备（桌面客户端）、提交反馈、关于，以及桌面客户端里的设置 |
+| [07-settings.md](07-settings.md) | 设置逐项说明：根页各分组、账户、Claude（订阅号池、子 agent 调用策略、项目对话、调试）、dimensio、Media Studio、模型中心（入口，详见 10）、Agent 接入、安卓 App、扩展 / 额度与注册 / 服务端控制台、通用（通知）、外观、壁纸、设备（桌面客户端）、提交反馈、关于，以及桌面客户端里的设置 |
 | [08-faq.md](08-faq.md) | 常见问题与现象速查：一直转圈、审核卡、地址变了、费用、数据放在哪、安全、备份、限制 |
-| [09-vertex.md](09-vertex.md) | Gemini · Vertex 扩展（默认关着）：打开、上传 Google 云凭据、放行 Google 的网站、测试报错对照、让 Claude / dimensio / 外部 agent 生成媒体与「主动生成」、agent 能生成哪几种与视频分辨率上限、内容安全过滤、图像 / 视频 / 语音 / 音乐、给成员限次数、费用 |
+| [09-media-studio.md](09-media-studio.md) | Media Studio（默认关着，接替了以前的 Gemini · Vertex 扩展，Gemini 对话已下线）：打开、接模型（Vertex 的 Google 云凭据，或 OpenAI / OpenRouter / fal 等地址 + Key）、放行网站、测试报错对照、图像 / 视频 / 配音 / 音乐四个创作页、作品栏与拖放、任务托盘、让 Claude / dimensio / 外部 agent 生成与「主动生成」、能生成哪几种与视频分辨率上限、内容安全过滤、成员怎么用、从旧版升级、费用 |
+| [10-model-hub.md](10-model-hub.md) | 模型中心（设置 → 模型中心，配模型的唯一入口）：添加服务与识别模型、按模型给 Claude / dimensio / Media Studio、多把 Key 与冷却、测试、共享给成员、成员的「我的服务」、Vertex AI 对话模型、在 Muse 上先放行网站、从旧版的「自定义 API」/ dimensio 模型服务自动迁移 |
 
 ## 按问题找章节
 
@@ -39,29 +40,32 @@
 | 安卓 App、iPhone、手机上怎么用、Windows 桌面客户端 | 01-access.md；设置里的安卓 App 页：07-settings.md「安卓 App」 |
 | 跟 Claude 对话、项目、新对话、换模型、停止、附件、图片、终端、文件面板、改动审阅、worktree、定时任务、分享对话 | 02-claude-code.md |
 | 定时任务在哪个文件夹跑、每次切 worktree、手动 / 一次 / 每周几天 / cron、接着上次的会话、跑完通知、定时任务卡在「等你处理」 | 02-claude-code.md「定时任务」 |
-| 工作台卡片拖动排序、拖出成独立窗口、Claude 的「记忆」卡（思维导图 / 逐层）、单击星标切换明暗 | 02-claude-code.md「工作台」；明暗：01-access.md |
+| 工作台卡片拖动排序、拖出成独立窗口、Claude 的「记忆」卡（思维导图 / 逐层）、单击星标切换明暗（全站统一） | 02-claude-code.md「工作台」；明暗：01-access.md |
+| 一件大事拆给几个 Claude 并行做、项目对话、协调者、讨论串、项目概览 / 项目说明 / 项目记忆、暂停恢复、转成项目 | 02-claude-code.md「项目对话」；上限与默认值：07-settings.md「Claude」 |
+| 子 agent 用哪个模型、子 agent 调用策略（原「子 agent 调度偏好」）、不想派给别家模型 | 02-claude-code.md「后台任务和「本轮挂起」」里的子 agent 几段；逐项：07-settings.md「Claude」 |
+| 收不到通知、通知太多、每个会话一条通知、横幅、提示音、浏览器通知权限 | 02-claude-code.md「Claude 在干活的时候」里的「会话消息通知」；开关：07-settings.md「通用」 |
 | 插件能做什么（拦命令、自动批准、改写消息、加工具 / 模型 / 通知渠道 / 外部登录、主页卡片和菜单项） | 05-customize.md「功能扩展」 |
 | 临时对话（原「快照」）、30 天清理、存为工作空间、回收站 | 02-claude-code.md「临时对话」 |
 | 搜索对话、归档 / 取消归档 / 自动归档、收藏、重命名（跨设备同步） | 02-claude-code.md「历史对话」；自动归档设置：07-settings.md「Claude」 |
-| Claude 每一步问不问我、权限模式、批准卡、计划卡 | 02-claude-code.md「权限模式和批准」；默认模式：07-settings.md「Claude」 |
+| Claude 每一步问不问我、权限模式（找不到权限模式芯片了）、批准卡、计划卡 | 02-claude-code.md「权限模式和批准」；默认模式：07-settings.md「Claude」 |
 | Claude 回复时能不能继续发消息（插话 / 稍后发送队列）、草稿 | 02-claude-code.md「Claude 在干活的时候」 |
 | 服务 / VM 重启后对话自己接着跑、「这一轮被中断」、「正在同步状态…」 | 02-claude-code.md「Claude 在干活的时候」；开关：07-settings.md「Claude」 |
 | 撞上 5 小时限额、限额卡、自动继续、用量环不准 | 02-claude-code.md「用量」；08-faq.md |
 | Claude 另开子会话、会话之间发消息、相关会话、建议的任务 | 02-claude-code.md「会话协作」 |
 | 拉取请求（PR）、合并、自动修复、gh 没登录 | 02-claude-code.md「拉取请求」 |
 | 对话里的交互图表、新对话落地页的用量统计 | 02-claude-code.md |
-| Claude 页接 DeepSeek / Kimi / OpenRouter 等别家模型（自定义 API）、管理员把服务共享给成员、成员菜单里的「管理员共享」 | 07-settings.md「自定义 API」 |
+| 接 DeepSeek / Kimi / OpenRouter 等别家模型、「自定义 API」去哪了、一个服务给 Claude 和 dimensio 一起用、多把 Key 轮换、管理员把服务共享给成员、成员菜单里的「管理员共享」、升级后某个模型不见了 | 10-model-hub.md；Muse 要做的：先 `allow-sites <接口地址>`（`../MUSE.md` 4.5） |
 | Agent 密钥、让别的 agent / Muse 经 HTTP 操作 Muse Bridge、`/agent` | 07-settings.md「Agent 接入」；Muse 自己怎么用：`../MUSE.md` 4.8 |
 | 管理员能不能看我的对话、管理员可见性、访问记录 | 07-settings.md「账户」；06-users-admin.md |
-| Claude 显示没配认证、用量 / 额度 | 02-claude-code.md；配令牌：`../MUSE.md` 4.4 |
-| dimensio 怎么换模型、加 key、换了 key 不生效、加自定义服务（OpenAI 兼容）、把自定义服务共享给成员、联网搜索、记忆、权限、子 agent、dimensio 的设置在哪 | 03-dimensio.md；加 key：`../MUSE.md` 4.5；key 不生效：08-faq.md |
+| Claude 显示没配认证、用量 / 额度、订阅号池（套餐、没有 5 小时限额的号、自动换号） | 02-claude-code.md；号池：06-users-admin.md「Claude 账号」；配令牌：`../MUSE.md` 4.4 |
+| dimensio 怎么换模型、加 key、换了 key 不生效、加自定义服务（OpenAI 兼容）、把服务共享给成员、联网搜索、记忆、权限、子 agent、和 Claude 互开子会话、dimensio 的设置在哪 | 03-dimensio.md；加 key：10-model-hub.md 与 `../MUSE.md` 4.5；key 不生效：08-faq.md |
 | 文件在哪、上传下载、大小限制、预览、新建 / 编辑 Markdown、压缩文件夹、隐藏文件、分享链接、密码、过期 | 04-files.md |
 | 技能、连接器、插件、MCP、连接器要登录 / 授权（OAuth）、断开连接、工具权限（总是允许 / 需要批准 / 禁止）、Gmail / Zoom 要配 OAuth 应用（回调地址）、Figma 连不上 / Figma 个人访问令牌 / refresh_rejected / 「平台不允许在这里登录这个服务」、Stripe / Zapier 等被拦的连接器、给所有成员统一装（全服统一）、成员自己添加技能、功能扩展、插件市场（有更新只提示）跟官方插件目录的区别、插件日志 / 定时任务 / 用量 | 05-customize.md |
 | 给朋友开账号、邀请码（作废、7 天）、改登录名、删除并归档、完全信任（原 Pro）、额度、成员高消耗功能、单人 / 多人、谁能用什么、服务端控制台、重启服务、看日志 | 06-users-admin.md |
-| 某个设置项是干什么的、语言、明暗外观、壁纸、通知、设备和端口转发 | 07-settings.md |
+| 某个设置项是干什么的、语言、明暗外观、壁纸、通知、设备和端口转发、调试模式 | 07-settings.md |
 | 一直转圈 / 等待模型回复、审核卡片、地址变了、费用、隐私、数据放在哪、备份 | 08-faq.md |
 | 让 agent 打开网页、截图、操作浏览器（这台 VM 没有浏览器） | 08-faq.md |
-| 生成图片 / 视频 / 语音 / 音乐、Gemini、Vertex、Nano Banana、Veo、Google 云凭据、服务账号、「保存并测试」报错、gcloud | 09-vertex.md；Muse 要做的：`../MUSE.md` 4.9 |
-| Claude 老是自己配图 / 太费钱、不让 Claude 生成、让 dimensio 生成图片、关掉视频生成、限制视频分辨率、内容安全过滤、Gemini 回复「被内容安全过滤拦下了」 | 09-vertex.md「谁能生成、能生成什么、内容安全过滤」 |
+| 生成图片 / 视频 / 配音 / 音乐、Media Studio、Gemini 分页 / Gemini 对话去哪了、Vertex、Nano Banana、Veo、Google 云凭据、服务账号、「保存并测试」报错、gcloud、fal / Replicate / ElevenLabs 等媒体服务 | 09-media-studio.md；Muse 要做的：`../MUSE.md` 4.9 |
+| Claude 老是自己配图 / 太费钱、不让 Claude 生成、让 dimensio 生成图片、关掉视频生成、限制视频分辨率、内容安全过滤、生成被「内容安全过滤」拦下 | 09-media-studio.md「谁能生成、能生成什么、内容安全过滤」 |
 | 装、更新、回滚、换域名、自动更新、卸载、服务挂了 | `../MUSE.md`（第 2、5、6、7 节） |
 | 报 bug、提建议、自动上报、网页里的提交反馈、「问 Claude」、让 Claude 诊断上报、反馈会不会公开 | `../MUSE.md` 第 8 节；网页里的表单和 Claude 上报：07-settings.md「提交反馈」 |

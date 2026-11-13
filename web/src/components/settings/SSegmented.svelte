@@ -50,6 +50,8 @@
     font: inherit; font-size: 14px; color: var(--st-muted); transition: color .15s ease; }
   .opt.on { color: var(--text); }
   .opt.ic { width: 30px; padding: 0; }
+  /* 触屏：命中区铺满到槽边（段 30 高、槽 32） */
+  @media (pointer: coarse) { .opt::after { content: ''; position: absolute; inset: -1px; } }
   .opt:focus-visible { outline: 2px solid var(--st-accent); outline-offset: -2px; }
   @media (hover: hover) { .opt:not(.on):hover { color: var(--st-text2); } }
   .gl { font-family: var(--icons); font-size: 18px; font-weight: 433; line-height: 1; }

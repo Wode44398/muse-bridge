@@ -11,7 +11,6 @@
   import EffortPanel from './EffortPanel.svelte';
   import QuotaRing from './QuotaRing.svelte';
   import AddMenu from './AddMenu.svelte';
-  import PermissionModePicker from './claude/PermissionModePicker.svelte';   // 权限模式芯片（Ctrl+Shift+M）
   import { menuIcon } from '../lib/menuIcons.svelte.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { claudeDefaultModel, claudeEffortFallback } from '../lib/caps.js';
@@ -22,8 +21,9 @@
   import { fileToBase64, filesFromInput, removeAttachment, uploadAttachment } from '../lib/attachments.js';
   import { untrack } from 'svelte';
   import { draft, registerComposerReader } from '../lib/composerBridge.svelte.js';
-  import { draftText, noteComposerText, startComposerDrafts } from '../lib/composerDrafts.svelte.js';
+  import { draftText, noteComposerText, startComposerDrafts, uploadThumbUrl } from '../lib/composerDrafts.svelte.js';
   import { t } from '../lib/i18n.js';
+  import ImgLightbox from './ImgLightbox.svelte';
   import { cs as claudeCs } from '../lib/claudeSettings.svelte.js';   // 设置 › Claude › 对话 › 输入建议（服务端为准）
 
   let { placeholder = 'Type / for skills' } = $props();
@@ -244,6 +244,14 @@
   // addFiles 永远拿到空（选文件通路全灭，手机端唯一入口就是它；粘贴/拖拽传真数组不受影响）。
   async function onFiles(e) { await addFiles(filesFromInput(e)); }
   function removeAtt(a) { removeAttachment(compose.attachments, a); }
+  // 点输入栏里的图片缩略图：同消息里的图片一样开灯箱，可在已附的几张图之间左右切
+  let lb = $state({ open: false, items: [], index: 0 });
+  function openAttImage(a) {
+    const imgs = compose.attachments.filter((x) => x.kind === 'image' && x.url);
+    const i = imgs.indexOf(a);
+    if (i < 0) return;
+    lb = { open: true, items: imgs.map((x) => ({ url: x.url, name: x.name, path: x.path })), index: i };
+  }
   const uploading = $derived(compose.attachments.some((a) => a.pending));
 
   // —— 挂载文件夹（Claude Design 那种「挂上去，按需读」）——
@@ -489,7 +497,7 @@
       {#each compose.attachments as a, ai (a.path || 'pending-' + ai)}
         <div class="att" class:img={a.kind === 'image'} class:pending={a.pending} class:dir={a.kind === 'folder' || a.kind === 'chat'} use:dragOut={() => attDragSrc(a)}>
           {#if a.kind === 'image' && a.url}
-            <img src={a.url} alt={a.name} />
+            <button class="att-view" aria-label={t('预览图片')} onclick={() => openAttImage(a)}><img src={a.url} alt={a.name} data-fallback={a.local ? undefined : uploadThumbUrl(a.path)} /></button>
           {:else if a.kind === 'chat'}
             <!-- 引用对话（侧栏拖一条会话进来，lib/chatQuote.js）：对话气泡图标 + 标题 + 条数 -->
             <span class="att-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12.2c0 3.9-3.6 7-8 7-1.1 0-2.2-.2-3.1-.6L4.5 20l1.2-3.5C4.6 15.3 4 13.8 4 12.2c0-3.9 3.6-7 8-7s8 3.1 8 7z"/><path d="M8.6 11h6.8M8.6 14h4.2"/></svg></span>
@@ -546,10 +554,9 @@
           <svg viewBox="0 0 20 20" fill="currentColor"><path d={menuIcon('feather')} /></svg>
         </button>
       {/if}
-      <!-- 权限模式（手动 / 接受编辑 / 计划 / 自动 / 绕过权限）：快照访客固定手动，不给芯片 -->
-      {#if !IS_CSNAP}<PermissionModePicker />{/if}
-      <!-- 额度环放左侧空位：右侧只留「模型 / Effort / 发送」，窄屏（折叠屏分屏、小窗）
-           不会再被挤到把发送键顶出卡片 -->
+      <!-- 一颗环 = 权限模式 + 用量：环色是当前档位（手动灰 / 接受编辑紫 / 计划青 / 自动橙 / 绕过权限红），填充是上下文占比，
+           点开上半选模式、下半看用量（Ctrl+Shift+M）。快照访客固定手动，不给。放左侧空位：右侧只留「模型 / Effort / 发送」，
+           窄屏（折叠屏分屏、小窗）不会被挤到把发送键顶出卡片 -->
       {#if !IS_CSNAP}<QuotaRing />{/if}
     </div>
     <div class="right">
@@ -592,6 +599,7 @@
   <!-- webkitdirectory：选文件夹（触屏没有文件夹拖拽，这是手机端唯一入口） -->
   <input type="file" hidden bind:this={dirInput} onchange={onDirInput} webkitdirectory="" directory="" />
 </div>
+{#if lb.open}<ImgLightbox items={lb.items} index={lb.index} onClose={() => (lb = { open: false, items: [], index: 0 })} onIndex={(n) => (lb.index = n)} />{/if}
 
 <style>
   /* claude.ai 输入栏原件（ion-dist shared-14 容器 + CSS 的 shadow-composer / -hover / -focus 三态）：
@@ -628,6 +636,7 @@
   .att { position: relative; display: flex; align-items: center; height: 52px; border-radius: 12px; overflow: hidden; background: var(--hover); }
   .att.img { width: 52px; }
   .att img { width: 52px; height: 52px; object-fit: cover; display: block; }
+  .att-view { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; }
   .att-name { padding: 0 12px; font-size: 13px; color: var(--text); max-width: 170px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .att-x { position: absolute; top: 0; right: 0; width: 17px; height: 17px; border-radius: 50%; background: rgba(0,0,0,.6); color: #fff; font-size: 13px; line-height: 1; display: flex; align-items: center; justify-content: center; }
   /* 扩大触控命中区到 ~32px（视觉不变）——17px 的删除点手机上极难点中 */

@@ -73,6 +73,7 @@ export default {
   "搜索型号": "Search models",
   "接口列出了 {n} 个新型号": { one: "The endpoint lists 1 new model", other: "The endpoint lists {n} new models" },
   "全选": "Select all",
+  "取消全选": "Deselect all",
   "语音识别 / 合成、向量这类：默认不勾，加进来也不进模型菜单": "Speech recognition / synthesis, embeddings and the like: unchecked by default, and kept out of the model menu even if added",
   "非对话": "Non-chat",
   "视觉": "Vision",

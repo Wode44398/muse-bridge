@@ -33,6 +33,15 @@ Source of truth: human-readable Markdown under
   no semantic recall. Any attached request, preference, correction, or project
   context disables the exemption.
 - Memory is workspace-isolated and written atomically.
+- Every note records the session it was written in (`source_session`, filled
+  by the server from the tool context, kept when the note is overwritten
+  without one). It is the link back to the raw record that offline review
+  (section 4) checks the note against.
+- The workspace index that enters a fresh prompt has a character budget
+  (`WORKSPACE_PROMPT_BUDGET`, 4000; the global layer keeps its own 2000). Under
+  budget the rendering is byte-identical to before; over budget the most
+  recalled notes (then the most recently updated) are kept, in their original
+  order, with one line saying how many were left out.
 
 Use this layer only for information that cannot be reconstructed from files:
 design decisions and reasons, non-obvious reusable pitfalls, stable user
@@ -81,9 +90,63 @@ cleared by the next user message. If embeddings are unavailable or fail, the
 turn continues with deterministic retrieval. Pure social fast-path messages do
 not run this retrieval at all.
 
+## 4. Offline review ("dreaming")
+
+A note is a prediction made at write time: that it will matter again and that
+it is true. The after-run filing in section 1 only sees the run that just
+ended, and most of what it files waits as `proposed` for a human. On
+2026-11-06 the production store held 90 notes, 60 of them proposed (the oldest
+from July), duplicates under one topic, and almost none ever recalled.
+`server/memory-dream.ts` adds the step that looks back, following Anthropic's
+"The components of agent memory" (2026-11-06): transcripts are the ground truth
+notes are checked against.
+
+- **What it looks at**: per workspace, only notes whose current version was
+  never reviewed (`reviewed_at` < `updated`): proposed notes, quarantined
+  active notes, active notes the model made `verified` on its own, and groups
+  of notes sharing a topic (kept in one batch so they can be merged). Notes
+  that match injection patterns or look like credentials, rejected and retired
+  notes, user-confirmed active notes, and the global layer are skipped. At most
+  12 notes per pass, 4 per request.
+- **Evidence**: the note's source session (or, for older notes, the session
+  that was running when it was written, preferring one whose transcript holds
+  that `Remember` call): every message the user typed, the assistant text just
+  before the note was saved, and the last answer.
+- **Decisions**: keep / promote / rewrite / merge / retire, each with a verdict
+  (`supported | unclear | contradicted`) and one sentence, recorded on the note
+  as `reviewed_at`, `review_verdict`, `review_note`.
+- **Trust boundary**: a note becomes `active` only through promote, and only if
+  the quoted passage occurs verbatim (whitespace-normalised) in a message the
+  user typed in a session shown for that batch — not an injection, not a tool
+  result, not assistant text (`session-search.ts quoteInUserLines`). It is then
+  saved strictly (`origin: dream`, `user_confirmed`, the quote and session id
+  as evidence), subject to the usual validation, topic conflicts and the
+  workspace prompt budget. Anything else stays `proposed` with the verdict for
+  the user, who can confirm every "supported" note with one click in the
+  memory panel. User-confirmed notes are only commented on, never changed.
+  Rewrites go back to `proposed`; merged duplicates become `superseded`;
+  retired notes become `stale`; every change archives the old version.
+- **Across sessions**: when at least two sessions changed since the last pass,
+  their digests (user messages, failed tool calls, last answer) go to one more
+  request that looks for what recurs in two or more of them. Such a note must
+  cite two shown sessions and a topic not already used; it is proposed unless a
+  verified quote promotes it.
+- **When**: every conversation idle for 20 minutes, one workspace at a time, the
+  same workspace at most every 12 hours, and only when there is work. Starting
+  any run aborts the pass (finished batches stay; the rest is picked up next
+  time). The model is the one the workspace's latest session used. Settings →
+  "空闲时整理记忆" (`memoryDream`) turns the automatic pass off;
+  `DIMENSIO_MEMORY_DREAM=0` turns the feature off; `DIMENSIO_MEMORY_DREAM_MODEL`
+  pins a model (evaluation). State lives in `<memory root>/dream-state.json`.
+- **Evaluation**: `evals/memory-dream/run.ts` runs a pass over copies of a
+  memory store and its sessions and writes a count-only receipt.
+
 ## Agent and management interfaces
 
 - `Recall`: exact memory read, lifecycle catalogue, or filtered hybrid search.
+  `layer: "sessions"` searches this workspace's past conversations (the current
+  one excluded) and `id: "session:<id>"` reads one, framed as data; reading a
+  note shows its source session and its latest review.
 - `ProjectKnowledge`: summary, modules, tests, contracts, health, search,
   metrics, status, and forced refresh.
 - Guarded HTTP endpoints:
@@ -92,6 +155,10 @@ not run this retrieval at all.
     response — per bucket the note metadata, usage, prompt-index characters, and
     history events parsed from `.history/` file names. It never creates a memory
     directory; projects without notes are only counted.
+  - `GET /api/memory/dream` (capability `memory-dream`): whether the
+    automatic pass is on, whether one is running, how many notes await review,
+    and the last pass's counts; `POST /api/memory/dream` starts one now
+    (202, or 409 while another runs). Not for the global layer.
   - `GET /api/memory`, `GET /api/memory/:id`
   - `POST /api/memory/search`, `POST /api/memory/save`,
     `POST /api/memory/:id/delete`

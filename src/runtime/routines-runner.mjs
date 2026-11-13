@@ -12,7 +12,7 @@
 // 重放挂的 family origin 'routine' 是对象属性、客户端伪造不了；它让这一轮算「没人在场」（不替用户开会话）、
 // 系统提示末尾追加无人值守说明、不顶掉同会话正在跑的轮（noPreempt：「接着上次的会话」撞上你正在用它就跳过这次）。
 //
-// 非 Claude 引擎（Gemini）由所属功能扩展提供，仍是扩展自己的无头执行。
+// 引擎只剩 Claude：Gemini 引擎 2026-11-04 随 Gemini 对话下线，残留任务在 routines.mjs 读的时候就停用了（不删）。
 //
 // Multi-user: the scheduler iterates admin + every account user, each with its own routines.json.
 
@@ -20,13 +20,12 @@ import { emitBridgeEvent, ownerOf as eventOwner } from '../plugins/events.mjs';
 import { randomUUID } from 'node:crypto';
 import * as routines from '../routines.mjs';
 import { markRoutineSession, findGenBySession } from './gen.mjs';
-import { holdKeepAwake } from './keep-awake.mjs';   // Gemini 引擎不登记 gen 台账：跑的时候另计「在跑」，保持唤醒照样生效
-import { moduleRoutine } from '../modules/registry.mjs';
 import { billingUser, quotaBlock } from './quota.mjs';
 import { contextFor, userIdentity, REPLAY_AS_HEADER } from './identity.mjs';
 import { replayChat } from './claude-queue.mjs';
 import { sessionQuestions } from './questions.mjs';
 import { busPublish } from './bus.mjs';
+import { postNotice } from './notices.mjs';
 import * as claudeProjects from '../claude-projects.mjs';
 import { FEATURES } from '../config/index.mjs';
 import * as users from '../users.mjs';
@@ -51,7 +50,7 @@ function ownerContexts() {
 }
 
 // 这条定时任务用的 agent 此刻对它的主人还开着吗（全局开关 + 按人授权）。
-const routineAllowed = (ctx, r) => (r.agent === 'vertex' ? ctx.allowGemini : ctx.allowClaude);
+const routineAllowed = (ctx) => ctx.allowClaude;
 
 /** 正在跑的那几条：{ [routineId]: { sessionId, waiting } }（waiting = 会话停在审批卡 / 提问上等你）。 */
 export function liveRoutines(ids) {
@@ -77,12 +76,15 @@ export async function runRoutine(ctx, id, trigger = 'manual') {
     routines.startRun(ctx.dataDir, id, { trigger, status: 'skipped', preview: '上一次运行还没结束，这次跳过。', endedAt: Date.now() });
     return;
   }
-  if (!routineAllowed(ctx, r)) {
-    routines.startRun(ctx.dataDir, id, { trigger, status: 'error', preview: (r.agent === 'vertex' ? 'Gemini' : 'Claude') + ' 未启用或没有权限，这次没有运行。', endedAt: Date.now() });
+  if (r.agent === 'vertex') {   // 残留的 Gemini 引擎任务（立即运行也拦下）
+    routines.startRun(ctx.dataDir, id, { trigger, status: 'error', preview: routines.GEMINI_ROUTINE_NOTE, endedAt: Date.now() });
     return;
   }
-  // 额度（开源路线 S2-6）：先看一眼，用完了就记一条说清楚。Claude 引擎的记账在聊天路由里（与聊天同一道闸）；
-  // Gemini 引擎没有走聊天路由，这里记一轮。管理员不限。
+  if (!routineAllowed(ctx)) {
+    routines.startRun(ctx.dataDir, id, { trigger, status: 'error', preview: 'Claude 未启用或没有权限，这次没有运行。', endedAt: Date.now() });
+    return;
+  }
+  // 额度（开源路线 S2-6）：先看一眼，用完了就记一条说清楚。记账在聊天路由里（与聊天同一道闸）。管理员不限。
   const billTo = billingUser(ctx);
   if (billTo) {
     const block = quotaBlock(billTo);
@@ -90,7 +92,6 @@ export async function runRoutine(ctx, id, trigger = 'manual') {
       routines.startRun(ctx.dataDir, id, { trigger, status: 'error', preview: block.title + '：' + block.message + '这次没有运行。', endedAt: Date.now() });
       return;
     }
-    if (r.agent === 'vertex') { try { users.noteTurnStart(billTo); } catch {} }
   }
   routineRunning.add(id);
   const run = routines.startRun(ctx.dataDir, id, { trigger });
@@ -101,13 +102,11 @@ export async function runRoutine(ctx, id, trigger = 'manual') {
     busPublish(ctx.key, { type: 'routine', id, state: 'start', sessionId: sid });
   };
   let out = { sessionId: null, text: '', isError: false, stopped: false, skipped: false, cost: 0 };
-  const unhold = r.agent === 'vertex' ? holdKeepAwake() : null;
   try {
-    out = { ...out, ...((r.agent === 'vertex') ? await runModuleRoutine(ctx, r) : await runClaudeRoutine(ctx, r, onSession)) };
+    out = { ...out, ...(await runClaudeRoutine(ctx, r, onSession)) };
   } catch (err) {
     out = { ...out, text: String((err && err.message) || err), isError: true };
   } finally {
-    if (unhold) unhold();
     routineRunning.delete(id);
     live.delete(id);
     const status = out.skipped ? 'skipped' : out.stopped ? 'stopped' : out.isError ? 'error' : 'ok';
@@ -115,8 +114,12 @@ export async function runRoutine(ctx, id, trigger = 'manual') {
     if (run) routines.patchRun(ctx.dataDir, id, run.id, { status, endedAt: Date.now(), ...(out.sessionId ? { sessionId: out.sessionId } : {}), preview, ...(out.cost ? { cost: out.cost } : {}) });
     // 「接着上次的会话」：记住这次的会话，下次续它
     const cur = routines.get(ctx.dataDir, id);
-    if (cur && cur.sessionMode === 'continue' && out.sessionId && cur.agent !== 'vertex') routines.update(ctx.dataDir, id, { threadSessionId: out.sessionId });
+    if (cur && cur.sessionMode === 'continue' && out.sessionId) routines.update(ctx.dataDir, id, { threadSessionId: out.sessionId });
     busPublish(ctx.key, { type: 'routine', id, state: 'end', status, name: r.name, notify: !!(cur && cur.notify), sessionId: out.sessionId || null, preview: preview.slice(0, 120) });
+    // 会话消息通知（notices.mjs）：开了「通知我」的任务按会话单独一条（手机后台服务 / 网页横幅都读它）；被停掉 / 跳过的不报
+    if (cur && cur.notify && (status === 'ok' || status === 'error')) {
+      try { postNotice(ctx.key, { kind: status === 'ok' ? 'done' : 'error', sub: 'routine', sessionId: out.sessionId || null, title: r.name || '', body: preview.slice(0, 200) }); } catch {}
+    }
     // 插件订阅的 routine.run（plugins/events.mjs）
     emitBridgeEvent('routine.run', { id, name: r.name || '', agent: r.agent || 'claude', owner: eventOwner(ctx), ok: status === 'ok', status, trigger, sessionId: out.sessionId || null, preview: preview.slice(0, 500) });
     console.log(`[routine] "${r.name}" (${ctx.user || 'admin'}) [${r.agent || 'claude'}] ${trigger} -> ${status}${out.sessionId ? ' (' + out.sessionId + ')' : ''}`);
@@ -153,6 +156,7 @@ async function runClaudeRoutine(ctx, r, onSession) {
       ...(projectId ? { claudeProjectId: projectId } : {}),
       ...(r.worktree ? { worktree: true, ...(r.branch ? { worktreeFrom: r.branch } : {}) } : {}),
       ...(r.permissionMode ? { permissionMode: r.permissionMode } : {}),
+      ...(r.shape === 'project' ? { shape: 'project' } : {}),   // 以项目对话运行（续会话按会话自己记的形态）
     }),
     autoRetry: true,
   };
@@ -188,13 +192,6 @@ async function runClaudeRoutine(ctx, r, onSession) {
     stopped: !!stopped,
     cost: (done && Number(done.cost)) || 0,
   };
-}
-
-// 非 Claude 引擎（目前只有 Gemini）由所属功能扩展提供；扩展没装时 routineAllowed 已先拦下，这里兜底。
-async function runModuleRoutine(ctx, r) {
-  const engine = moduleRoutine(r.agent);
-  if (!engine) return { sessionId: null, text: '「' + r.agent + '」引擎所属的功能扩展没装，这次没有运行。', isError: true };
-  return engine(ctx, r);
 }
 
 export function tickRoutines() {

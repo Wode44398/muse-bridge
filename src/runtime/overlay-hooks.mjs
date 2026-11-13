@@ -9,6 +9,8 @@
 // 目前用到的钩子：
 //   claudeUsageProbe(core) → { poolUsage, refreshAccounts, probedInfo, maybeRefreshLimits }
 //     号池用量与手机额度环的另一个数据来源（调用方见 account-usage.mjs / usage-probe.mjs；core 是核心交给它的几个函数）
+//   claudeLimitResets(core) → { overview, use, loginStart, loginFinish, loginClear }
+//     订阅号的「重置卡」查看与使用（调用方与接口形状见 limit-resets.mjs）
 //   registerRoutes(router, ctx)   私有接口（见 overlay-web.mjs 的 registerOverlayRoutes）
 // overlay 目录下的 web/ 子目录（素材、字体、前端模块）由 overlay-web.mjs 单独处理，不经这里。
 //

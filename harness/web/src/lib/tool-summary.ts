@@ -15,6 +15,9 @@ export function argPreview(a: any): string {
   if (a.pattern) return String(a.pattern);
   if (a.url) return String(a.url);
   if (a.query) return String(a.query);
+  // 会话协作：StartSession 摆任务名；SendMessage / ReadSession 摆对象（与消息开头）
+  if (typeof a.initiation === "string" && typeof a.title === "string") return a.title;
+  if (typeof a.to === "string") return typeof a.message === "string" ? `${a.to} · ${a.message}` : a.to;
   if (a.prompt) return String(a.prompt);
   if (a.todos) return t("{n} 项", { n: a.todos.length });
   // 计划：摆第一条不是标题的正文（整份计划在卡片里）；提问：摆第一个问题

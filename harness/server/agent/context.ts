@@ -1,4 +1,4 @@
-import type { Block, Msg } from "./turn.ts";
+import type { Block, Budget, Msg } from "./turn.ts";
 import type { AgentState } from "./state.ts";
 import type { ProviderAdapter } from "../providers/types.ts";
 import { archiveChunks, deterministicNotes, prepareSummary, renderSummary, sampleTranscript } from "./compaction-shape.ts";
@@ -226,7 +226,7 @@ export async function handoffSummary(state: AgentState, fromTitle: string, signa
   const prepared = prepareSummary(all, userBudget);
   let notes: string;
   try {
-    notes = await summarize(state.adapter, state.materializeMessages(all), signal, (u) => state.recordSideUsage("compaction", u));
+    notes = await summarize(state.adapter, state.materializeMessages(all), signal, (u) => state.recordSideUsage("compaction", u), state.profile.side.summary);
   } catch (e) {
     if (signal?.aborted) throw e;
     notes = deterministicNotes((e as Error).message);
@@ -275,6 +275,8 @@ function microCompact(state: AgentState, minReclaim = 0): number {
     for (let j = 0; j < m.content.length; j++) {
       const b = m.content[j];
       if (b.t !== "tool_result" || protectedIds.has(b.id)) continue;
+      // 推迟工具的完整说明（deferred-tools.ts）：清掉了模型就照着骨架瞎填参数，还当自己「加载过」——不清
+      if (Array.isArray(b.meta?.loadedTools)) continue;
       if (blocksChars(b.content) <= MICRO_MIN_CHARS) continue;
       picks.push({ m, j });
       freed += blocksTokens(b.content) - textTokens(ELIDED_TEXT) - ELIDED_REF_TOKENS;
@@ -381,13 +383,22 @@ async function compact(state: AgentState, limit: number, signal?: AbortSignal): 
   // （15% 时压缩召回 eval 在一个用户消息很多的长会话上报了棘轮嫌疑：每次只腾出 12–16%；kimi / Codex 约 7–8%。）
   const userBudget = Math.min(20_000, Math.floor(limit * 0.08), Math.floor(estimateTokens("", middle) * 0.5));
   const prepared = prepareSummary(middle, userBudget);
-  let notes: string;
-  try {
-    notes = await summarize(state.adapter, state.materializeMessages(middle), signal, (u) => state.recordSideUsage("compaction", u));
-  } catch (e) {
-    if (signal?.aborted) throw e;
-    notes = deterministicNotes((e as Error).message);
+  // 刚换到窗口更小的型号：摘要交给换之前的那个写（装得下这段、缓存也还热）；它写不出来再退回现在的型号
+  const summarizers = state.switchSummarizer ? [state.switchSummarizer, state.adapter] : [state.adapter];
+  let notes = "";
+  let lastError = "";
+  for (const by of summarizers) {
+    // 摘要旁路的思考 / 输出上限按写摘要的那个型号的档案取
+    const side = (by === state.adapter ? state.profile : state.switchSummarizerProfile ?? state.profile).side.summary;
+    try {
+      notes = await summarize(by, state.materializeMessages(middle), signal, (u) => state.recordSideUsage("compaction", u, by), side);
+      break;
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      lastError = (e as Error).message;
+    }
   }
+  if (!notes) notes = deterministicNotes(lastError);
   // R10（二）：被压掉那段的原文归档，摘要末尾列出文件与读法。归档写不成就不列这次的（照样压，只是少一个回查点）。
   const chunks = state.compactionArchive ? archiveChunks(middle) : [];
   const files = chunks.length ? state.compactionArchive!.plan(chunks.length) : [];
@@ -413,9 +424,14 @@ async function compact(state: AgentState, limit: number, signal?: AbortSignal): 
       next = withSummary(prepared.archives);
     }
   }
+  // 空闲压缩（idle-compact.ts）：摘要与归档都是 await 出来的，这期间用户可能发了话（startRun 会先掐掉它）。提交前最后看一眼：
+  // 从这里到下面换掉 messages 全是同步的，不会有新消息插在中间被覆盖。
+  if (signal?.aborted) throw new Error("compaction aborted");
   // 瘦身 P0-1：被压掉那段干过什么，先记一份工具轨迹（收工不再有记忆审计，压缩前也不再停下来审一次——由 run 之后的沉淀看）
   state.compactedTrace = [...state.compactedTrace, ...traceLines(middle)].slice(-COMPACTED_TRACE_MAX);
   state.messages = next;
+  state.switchSummarizer = undefined;
+  state.switchSummarizerProfile = undefined;
   state.noteRewrite("compaction"); // Q4：压缩边界是唯一合法的全量重建点
   // C4（N09 第 3 步）：借这次全量重建把 system 也按当前的模式、GUIDE、项目知识……重建一遍（会话挂了 rebuildSystem 才做）
   state.rebuildSystemAfterCompaction();
@@ -432,7 +448,10 @@ function stripThinking(m: Msg): Msg {
 export const COMPACTION_SYSTEM =
   "You compress an agent transcript. Preserve concrete facts the agent will need to keep working: " +
   "files read and their key contents, decisions made, commands run and their results, current progress, " +
-  "and remaining work. Be specific (names, paths, values). Prefer 'read X, found Y' over quoting.";
+  "and remaining work. Be specific (names, paths, values). Prefer 'read X, found Y' over quoting. " +
+  "Keep what is finished apart from what is not: end with a 'Done (do not redo)' list — edits already applied, files created, " +
+  "commands that succeeded, commits, pushes, messages sent — and a 'Remaining' list of what is still open. " +
+  "Only list an action as done when its result appears in the transcript.";
 
 // #83：用户消息里以前只有转录本身、没有一句指令，关着思考的模型常把它当成待续写的数据——本机 Qwen 连跑 5 次有 2 次
 // 只回「.」或几十个字，压缩于是悄悄清空了上下文。现在转录包进 <transcript>、后面明说「现在写摘要」；输出短得离谱就
@@ -441,16 +460,20 @@ export const SUMMARY_INSTRUCTION = "Write the summary of the transcript above no
 const DEGENERATE_SUMMARY_CHARS = 200; // 输入超过 2000 字符时，摘要短于这个数就算没写
 const SUMMARY_ATTEMPTS = 2;
 const SUMMARY_INPUT_CHARS = 60_000; // 交给摘要器的转录上限；超了按条均匀采样
+// 摘要请求的思考与输出上限（模型档案 side.summary 的默认值）
+export const SUMMARY_BUDGET: Readonly<Required<Budget>> = Object.freeze({ maxOutputTokens: 1500, thinking: "off" });
 // R10：摘要请求的时限（到点就走确定性笔记）；DIMENSIO_SUMMARY_TIMEOUT_MS 给测试调短
 const summaryTimeoutMs = (): number => Number(process.env.DIMENSIO_SUMMARY_TIMEOUT_MS) || 180_000;
 
 // signal：run 的停止信号——用户点了停止，摘要请求不再发（#31）；另有自己的时限。
 // O8：onUsage = 这次摘要请求（每次尝试）的用量，给用量账本记一笔（任务 compaction）
+// side = 这次摘要的思考 / 输出上限（调用方从模型档案 side.summary 取；不给 = SUMMARY_BUDGET）
 export async function summarize(
   adapter: ProviderAdapter,
   middle: Msg[],
   signal?: AbortSignal,
   onUsage?: (u: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }) => void,
+  side: Required<Budget> = SUMMARY_BUDGET,
 ): Promise<string> {
   const transcript = sampleTranscript(middle.map(renderMsg), SUMMARY_INPUT_CHARS);
   for (let attempt = 1; ; attempt++) {
@@ -462,7 +485,7 @@ export async function summarize(
         system: COMPACTION_SYSTEM,
         messages: [{ role: "user", content: [{ t: "text", text: `<transcript>\n${transcript}\n</transcript>\n\n${SUMMARY_INSTRUCTION}` }] }],
         tools: [],
-        budget: { maxOutputTokens: 1500, thinking: "off" },
+        budget: { maxOutputTokens: side.maxOutputTokens, thinking: side.thinking },
       },
       bounded,
     );

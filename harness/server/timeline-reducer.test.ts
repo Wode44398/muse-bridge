@@ -93,6 +93,8 @@ function renderItem(item: Item): string {
       return `notice: "${oneLine(item.text)}"`;
     case "screenshot":
       return `screenshot: ${item.url}`;
+    case "session":
+      return `session${item.turn ? "(turn)" : ""}: "${oneLine(item.text)}"`;
   }
 }
 

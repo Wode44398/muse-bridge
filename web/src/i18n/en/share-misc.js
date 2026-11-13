@@ -79,7 +79,6 @@ export default {
   '播放': 'Play',
   '添加图片': 'Add image',
   '工作空间': 'Workspace',
-  '从云端文件里选图片': 'Pick an image from your cloud files',
   '手机存储': 'Phone storage',
   '从手机相册 / 文件选': 'Pick from photos or files',
   '选择素材图片': 'Choose source image',
@@ -101,14 +100,6 @@ export default {
   '约 30 秒配乐': 'About 30 sec per track',
   '新版预览': 'New version · Preview',
   '最长 3 分钟': 'Up to 3 min',
-
-  // —— 音乐灵感 chips（点一下填进提示词栏）——
-  '温柔钢琴独奏': 'Gentle solo piano',
-  '史诗管弦配乐': 'Epic orchestral score',
-  'Lo-fi 学习节拍': 'Lo-fi study beats',
-  '赛博朋克合成波': 'Cyberpunk synthwave',
-  '国风竹笛山水': 'Serene Chinese bamboo flute',
-  '慵懒爵士三重奏': 'Laid-back jazz trio',
 
   // —— 分享链接 / 发送给 AI（files-business.js）——
   '1小时': '1 hour',
@@ -156,24 +147,24 @@ export default {
   '主持人': 'Host',
   '嘉宾': 'Guest',
 
-  // —— flux 流体壁纸参数（state.svelte.js；配色沿用 Wallpaper Engine 原名）——
+  // —— 流光壁纸参数（state.svelte.js；配色沿用 Wallpaper Engine flux 的原名）——
   '池畔': 'Poolside',
   '原版': 'Original',
   '等离子': 'Plasma',
   '自由': 'Freedom',
-  '演化速度': 'Simulation speed',
-  '缩放': 'Zoom',
-  '线段长度': 'Line length',
-  '线段宽度': 'Line width',
-  '线条间距': 'Line spacing',
-  '粘度': 'Viscosity',
-  '速度耗散': 'Velocity dissipation',
-  '扩散迭代': 'Diffusion iterations',
-  '压力迭代': 'Pressure iterations',
-  '流体尺寸': 'Fluid size',
+  '点阵间距': 'Dot spacing',
+  '光点大小': 'Dot size',
+  '拖尾': 'Trail',
+  '亮度': 'Brightness',
+  '光晕': 'Glow',
+  '海浪': 'Waves',
+  '浪速': 'Wave speed',
+  '浪长': 'Wavelength',
+  '碎浪': 'Chop',
+  '帧率上限': 'Frame rate cap',
 
   // —— 壁纸库（wallpaper.svelte.js）——
-  '层峦': 'Ridges',
+  '多洛米蒂': 'Dolomites',
   '流光': 'Flux',
   '我的壁纸': 'My wallpaper',
 

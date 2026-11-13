@@ -9,12 +9,14 @@
 // sessionId 定位具体某轮，不带则回落最新一轮（旧客户端行为）。
 
 import { writeSseHeaders } from '../runtime/sse.mjs';
+import { liveUserAtts } from '../runtime/client-atts.mjs';
 import { getCurrentGen, getLiveGens, findGenBySession, genWrite, genSubscribe } from '../runtime/gen.mjs';
 import { interruptedRun, clearInterrupted, INTERRUPT_NOTE, RESUMING_NOTE } from '../runtime/inflight.mjs';
 import { busAttach } from '../runtime/bus.mjs';
 import { watchSessions } from '../runtime/session-watch.mjs';
 import { sessionQuestions } from '../runtime/questions.mjs';
 import { recentPushes } from '../runtime/push-notices.mjs';
+import { recentNotices } from '../runtime/notices.mjs';
 import { statusState, getContext, pruneStaleLimits } from '../runtime/status.mjs';
 import { getContextUsage, getEffort, getCommands } from '../runtime/ctx-usage.mjs';
 import { listSuggestions } from '../runtime/suggestions.mjs';
@@ -104,6 +106,9 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
       runs: live.map(runSnapshot),
       pushes: recentPushes(ctx.key),
       asks,
+      // 会话消息通知（runtime/notices.mjs）：新版手机后台服务只读这一路——按会话单独弹、带会话名，带 ageMs。
+      // 上面 pushes / asks / 顶层 active 留给旧 apk。
+      notices: recentNotices(ctx.key),
     }));
   });
 
@@ -140,7 +145,12 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
     // elapsedMs lets the phone re-anchor its "思考 Ns" timer to when the turn really
     // started server-side, so leaving + reopening the chat doesn't reset it to 0.
     // Sent as a duration (not an absolute ts) so phone/PC clock skew can't distort it.
-    genWrite(res, { type: 'attach', userText: gen.userText, sessionId: gen.sessionId, done: gen.done, elapsedMs: Math.max(0, Date.now() - (gen.startedAt || Date.now())) });
+    // userAtts：这一轮用户附的图/文件（与历史气泡同形）。否则前端重放时补回的用户气泡只剩文字——
+    // 手机切到别的 app 再回来、重挂直播那一下，刚发的图就从气泡里消失（直到这一轮结束对账才回来）。
+    const userAtts = liveUserAtts(gen.userAtts, ctx);
+    // turn = 这一轮（gen）的标识（开跑时刻，只当不透明 id 用）：前端据此认出「挂上来的已经是另一轮」——
+    // 上一轮的气泡还没定局时（服务重启后自动继续、排队消息紧跟着开跑），不能把新一轮重放进旧气泡里。
+    genWrite(res, { type: 'attach', turn: gen.startedAt || 0, userText: gen.userText, ...(userAtts.length ? { userAtts } : {}), sessionId: gen.sessionId, done: gen.done, elapsedMs: Math.max(0, Date.now() - (gen.startedAt || Date.now())) });
     for (const ev of gen.events) genWrite(res, ev);
     if (gen.done) { res.end(); return; }
     genSubscribe(gen, res); // live updates from here on (chat's heartbeat covers it)
@@ -180,6 +190,7 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
       // 服务器是不是正等着空闲重启 / 装更新（与 /api/app/server-info 的 restart 同一口径；没有挂起时为 null）
       restart: publicRestart(),
       serverVersion: APP_VERSION_NAME,
+      noticesV: 1,   // 这台服务端会推 {type:'notice'}（会话消息通知）：前端据此不再自己凑「完成 / 提问」通知
     });
     let closed = false;
     let offBus = () => {}, offWatch = () => {};
@@ -229,7 +240,8 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
     res.end(JSON.stringify({
       limits: statusState.limits || {}, context: getContext(ctx.key, sid), updatedAt: statusState.updatedAt || 0, net: outboundProxyStatus(),
       contextUsage: getContextUsage(ctx.key, sid), effort: getEffort(ctx.key, sid),
-      plan: statusState.plan || null,   // 套餐名（SDK usage 的 subscription_type，OAuth token 路径下常为空）
+      plan: statusState.plan || null,   // 套餐显示名（Pro / Max 5x / Ultra / Max，见 status.mjs resolvePlan）
+      noFiveHour: statusState.noFiveHour,   // 激活号没有 5 小时限额（部分 Ultra）：前端显示「无限制」而不是空条
     }));
   });
 

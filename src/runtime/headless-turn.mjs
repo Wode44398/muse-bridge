@@ -23,7 +23,7 @@ import { to1M, claudeEffortOptions, splitUltracode, claudeSupportsFast } from '.
 import { billingUser, memberRules } from './quota.mjs';
 import { makeCostMeter } from './usage-ledger.mjs';
 import { noteTurnUsage } from './audit-log.mjs';
-import { claudeEngineEnv, activeAccountId } from './claude-account.mjs';
+import { claudeEngineEnv, activeAccountId, TOOL_DEFAULT_ENV } from './claude-account.mjs';
 import { routeBeforeQuery, noteLimitHit, reasonText } from './account-router.mjs';
 import { isUpstreamEnv, lastServedAccount } from './claude-upstream.mjs';
 import { claudeExtensionsFor, sharedExtensionDirs } from '../extensions.mjs';
@@ -31,6 +31,7 @@ import { memberClaudePlugins, memberSkillRootIfAny } from '../member-skills.mjs'
 import { collectDeliverables, deliverAnywhere, deliverRoots } from './deliverables.mjs';
 import { addUsage } from '../users.mjs';
 import { PEER_OFF_ENV, PEER_OFF_SETTINGS } from './session-peers.mjs';   // 无人值守：跨会话通道关门
+import { makeKillGuardHook } from './kill-guard.mjs';
 
 const UNATTENDED_DENY = '（这一轮是无人值守运行，没有用户在线作答。请基于已有信息用最合理的判断继续完成任务，不要提问。）';
 
@@ -110,19 +111,23 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
       cwd: ctx.cwd,
       ...(o.resume ? { resume: o.resume } : {}),
       additionalDirectories: ctx.sandbox ? (ctx.kind === 'user' ? [...sharedExtensionDirs(), ...[memberSkillRootIfAny(ctx.user)].filter(Boolean)] : (ctx.readRoots || []).map((r) => r.root)) : [UPLOADS, MEDIA, ...(pOpts ? pOpts.additionalDirectories : [])],
-      // 功能扩展的工具（媒体）跟着 agent 开关走（ctx.allowGemini），与主聊天同口径。
+      // 功能扩展的工具（媒体）跟着 agent 开关走（ctx.allowStudio），与主聊天同口径。
       mcpServers: { ...moduleClaudeMcp(ctx), ...plug.mcpServers, ...ext.mcpServers, ...(o.mcpServers || {}) },
       ...(ext.plugins.length ? { plugins: ext.plugins } : {}),
       // snapshot:false 同 claude.mjs：SDK 0.3.267 起默认首轮录制复用，换模型后的身份 nudge 会被冻住。
       systemPrompt: { type: 'preset', preset: 'claude_code', snapshot: false, append: identityNudge(runModelBase) + (ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) + mediaNudge(ctx)) : (hostNudge(ctx) + mediaNudge(ctx))) + plug.prompt + (pOpts?.append.length ? '\n\n' + pOpts.append.join('\n\n') : '') + (o.append || '') },
       // 跨会话通道（Desktop / 终端会话互发）一律关：env 关总开关、settings 关入站闸（session-peers.mjs PEER_OFF_*）
-      env: { ...(engineEnv || process.env), ...PEER_OFF_ENV, ...(pOpts ? pOpts.env : {}) },
+      env: { ...TOOL_DEFAULT_ENV, ...(engineEnv || process.env), ...PEER_OFF_ENV, ...(pOpts ? pOpts.env : {}) },
       ...(pOpts && Object.keys(pOpts.agents).length ? { agents: pOpts.agents } : {}),
       ...(modelId ? { model: modelId } : {}),
       ...(effortOpts.effort ? { effort: effortOpts.effort } : {}),
       settings: JSON.stringify({ ...(pOpts ? pOpts.settings : {}), ...(effortOpts.settings || {}), ...PEER_OFF_SETTINGS, ...(o.fast && claudeSupportsFast(modelId || runModelBase) ? { fastMode: true } : {}) }),
       // 沙箱身份同样套硬边界（PreToolUse hook 含只读 + 无 shell disallow + 设置隔离）；插件钩子排在后面。
-      hooks: mergeHooks({ ...(ctx.sandbox ? { PreToolUse: [{ hooks: [makeSandboxPreToolUse(ctx)] }] } : {}), PostToolUse: [{ hooks: [toolEndHook] }] }, plug.hooks),
+      // 停进程闸全员挂（runtime/kill-guard.mjs）：无人值守、宿主一律放行，没有分类器把关，按端口 / 进程名停进程只能在这里拦。
+      hooks: mergeHooks({
+        PreToolUse: [...(ctx.sandbox ? [{ hooks: [makeSandboxPreToolUse(ctx)] }] : []), { matcher: 'Bash|PowerShell', hooks: [makeKillGuardHook()] }],
+        PostToolUse: [{ hooks: [toolEndHook] }],
+      }, plug.hooks),
       ...(ctx.sandbox ? { settingSources: [] } : {}),
       // 权限模式显式传 default（不传 = CLI 按服务端闸自己挑，可能静默变成 auto 分类器审批）+ 下面的宿主放行。
       // 没人能批计划：不给 EnterPlanMode（ExitPlanMode 万一来了也直接放行）。

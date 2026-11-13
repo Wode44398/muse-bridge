@@ -8,8 +8,8 @@
   //   拖动中档名跟随高亮、松手才提交；
   // - 档位点 3px、35ms 步进错峰；把手 16×19 r6 双模式色；
   // - Ultracode（10-30 起与档位独立，对齐桌面端 4.29 的 ultracodeSeparate）：拉条下面一行勾选，勾上 = 拉条充能——
-  //   填充段点亮能量层、档名 / 档位点 / 把手转紫，任意档位都行。维护者的私有 overlay 提供原版 WebGL 能量场
-  //   （ovModule('effortField')，爆发点跟着把手位置）；公开版是自写的 CSS 光带。prefers-reduced-motion 全静。
+  //   填充段点亮能量层、档名 / 档位点 / 把手转紫，任意档位都行。能量层是原版 WebGL 能量场
+  //   （ovModule('effortField')，爆发点跟着把手位置）。prefers-reduced-motion 全静。
   import { cubicOut } from 'svelte/easing';
   import { caps, settings } from '../lib/state.svelte.js';
   import { claudeEffortFallback, claudeDefaultModel } from '../lib/caps.js';
@@ -21,25 +21,36 @@
   import { t as tt } from '../lib/i18n.js';   // 本文件动画代码里 t 是插值进度变量，翻译函数取别名
   import { cs } from '../lib/claudeSettings.svelte.js';
   import { ovModule } from '../lib/overlay.svelte.js';
-  let { onClose, dir = 'up' } = $props();
+  // 受控模式（设置 › Claude › 子 agent 调用策略 的档位自定义，2026-11）：给了 onpick 就只回调、不读写全局 settings，
+  // 也不调 rememberCurrentPrefs。下面这些参数都不传时，输入栏里的行为与外观和原来完全一样。
+  //   value          当前档位 id（'' / 空 = 没指定，高亮这个模型的默认档）
+  //   onpick(id)     选了一档（自定义模型的「默认」项回 ''）
+  //   model          档位表按哪个模型取（claude-* 或 custom:…）；不给就按当前会话的模型
+  //   showUltracode  false = 不出 Ultracode 勾选（它改的是当前会话），也不加载能量场
+  //   anchor         触发按钮的视口矩形。给了就改用 fixed 定位贴着它展开（调用方把本组件挪到 body 上时用）
+  let { onClose, dir = 'up', value = undefined, onpick = null, model = undefined, showUltracode = true, anchor = null } = $props();
+  const controlled = $derived(typeof onpick === 'function');
 
   $effect(() => pushBackLayer(() => { onClose?.(); }));
 
   // 自定义 API 的模型（custom:<服务>:<模型>）：档位是它自己的表（设置 › Claude › 模型服务，含「默认」= 什么都不发）
   // 旧服务端的档位表末尾还挂着 {id:'ultracode'}（它曾是拉条末档）：滤掉，Ultracode 只走下面的勾选
-  const curModel = $derived(settings.model || claudeDefaultModel(caps.data));
+  const curModel = $derived((controlled && model) || settings.model || claudeDefaultModel(caps.data));
   const custom = $derived(isCustomModel(curModel));
   const efforts = $derived((custom ? effortChoices(curModel, caps.data) : (caps.data?.claude?.efforts || [])).filter((e) => e.id !== 'ultracode'));
   const N = $derived(efforts.length);
+  // 选中的档、以及「没选时按哪个模型取默认档」：受控时由调用方给，否则读当前会话
+  const selEffort = $derived(controlled ? (value || null) : settings.effort);
+  const fallbackModel = $derived(controlled ? (model || settings.model) : settings.model);
   const idx = $derived.by(() => {
     // 自定义模型：没选 = 默认档；默认档为空时列表头上那一项「默认」（id ''）就是它
-    const want = custom ? (settings.effort && efforts.some((e) => e.id === settings.effort) ? settings.effort : defaultEffortFor(curModel)) : (settings.effort || claudeEffortFallback(caps.data, settings.model));
+    const want = custom ? (selEffort && efforts.some((e) => e.id === selEffort) ? selEffort : defaultEffortFor(curModel)) : (selEffort || claudeEffortFallback(caps.data, fallbackModel));
     const i = efforts.findIndex((e) => e.id === want);
     return i < 0 ? Math.min(2, Math.max(0, N - 1)) : i;
   });
   // Ultracode 勾选：快照访客没有（服务端也不给）。设置 › Claude › 对话 › 动态工作流 关着 → 勾选置灰；
   // 已经勾着的会话不动、还能取消（服务端对 Ultracode 轮仍强制开工作流）。
-  const ucAvail = !IS_CSNAP;
+  const ucAvail = $derived(!IS_CSNAP && showUltracode);
   const ultraOff = $derived(cs.values.enableWorkflows === false);
   const ultra = $derived(ucAvail && !!settings.ultracode);
   const ucLocked = $derived(ultraOff && !ultra);
@@ -65,6 +76,8 @@
 
   function commit(i) {
     const e = efforts[i];
+    // 受控：只回调（和当前值一样就不回），不碰 settings
+    if (controlled) { if (e && (e.id || '') !== (value || '')) onpick(e.id || ''); hlIdx = null; return; }
     // 改即记，杀后台不丢；effortAt 让输入栏芯片知道「用户刚改过」——上一轮 Stop hook 回报的
     // 实际生效档位比这个时刻旧就不再盖住用户的新选择（下一轮跑完再更新）。
     // 自定义模型的「默认」项 id 为空 = 不选（null）
@@ -145,16 +158,16 @@
   function onKeyEsc(e) { if (e.key === 'Escape') { e.preventDefault(); onClose?.(); } }
 
   // —— Ultracode 能量层 ——
-  // 维护者的私有 overlay 带了原版 WebGL 能量场（modules/effort-field.js：mountEffortField(canvas) → { pressStart(pos), pressEnd(pos), destroy }）
-  // → 挂在 canvas 上，勾着 Ultracode 就常按（爆发点 = 把手所在档位）、取消勾选冷却；公开版（没有这个模块）→ 自写的 CSS 光带
-  //（.ef-charge，跟着 .charged 亮灭）。canvas 一直挂着（N > 1 就挂），勾选进出不重建 WebGL。
+  // 原版 WebGL 能量场（清单 modules.effortField：mountEffortField(canvas) → { pressStart(pos), pressEnd(pos), destroy }）
+  // 挂在 canvas 上，勾着 Ultracode 就常按（爆发点 = 把手所在档位）、取消勾选冷却。
+  // canvas 一直挂着（N > 1 就挂），勾选进出不重建 WebGL。
   const hasTrack = $derived(ucAvail && N > 1);
-  let fieldMod = $state(undefined);   // undefined = 还在取；null = 没有
+  let fieldMod = $state(null);
+  let fieldAsked = false;
   $effect(() => {
-    if (!hasTrack || fieldMod !== undefined) return;
-    let alive = true;
-    ovModule('effortField').then((m) => { if (alive) fieldMod = m && typeof m.mountEffortField === 'function' ? m : null; });
-    return () => { alive = false; };
+    if (!hasTrack || fieldAsked) return;
+    fieldAsked = true;
+    ovModule('effortField').then((m) => { if (m && typeof m.mountEffortField === 'function') fieldMod = m; });
   });
   let energyApi = $state.raw(null);   // { pressStart(k), pressEnd(k), destroy() }
   $effect(() => {
@@ -177,6 +190,22 @@
   });
   $effect(() => { const api = energyApi, k = pressPos; if (charged && api) { api.pressStart(k); return () => api.pressEnd(k); } });
 
+  // 贴着 anchor 的 fixed 定位（同 ModelPicker）：下方放得下就朝下，否则朝上。横向在这里直接按卡片的宽度夹进视口，
+  // 不靠 clampX 去量：调用方会把本组件挪到 body 上，而 action 跑的那一刻节点还在原来的祖先里——那个祖先带 transform 时
+  //（设置页的面板）fixed 是相对它算的，量出来的 left 不是视口坐标，面板会被多往左收一截、和触发的片对不上。
+  // anchor 给的本来就是视口坐标，卡片宽度是定值，算出来的位置和节点此刻挂在哪儿无关。
+  const CARD_W = 220, EDGE = 8;   // .ef 的 width（border-box）、离视口边的留白（同 clampX 的默认 pad）
+  const place = $derived.by(() => {
+    if (!anchor) return null;
+    const vh = window.innerHeight, vw = window.innerWidth, gap = 6;
+    const below = vh - anchor.bottom, above = anchor.top;
+    const down = below >= above || below >= 200;
+    const x = Math.max(EDGE, Math.min(Math.round(anchor.left), vw - EDGE - CARD_W));
+    return { down, x, y: Math.round(down ? anchor.bottom + gap : vh - anchor.top + gap) };
+  });
+  // 横向兜底（use:fit）：平时（输入栏）就是 clampX，和原来一样；给了 anchor 时位置已经在 place 里夹好，不挂
+  const fit = (node) => (anchor ? undefined : clampX(node));
+
   // —— help 悬浮层：200ms 延迟出、离开即收（官方 tooltip Root delay 200）——
   let helpOpen = $state(false);
   let helpT = 0;
@@ -190,9 +219,12 @@
     : 'Higher effort means more thorough responses, but takes longer and uses your limits faster.');
 </script>
 
-<button class="ef-backdrop" aria-label={tt('关闭')} onclick={() => onClose?.()}></button>
+<!-- 给了 anchor（挪到 body 上的那种用法）：遮罩不进 Tab 顺序，键盘走位由调用方的浮层管；输入栏里不带这个属性，和原来一样 -->
+<button class="ef-backdrop" aria-label={tt('关闭')} tabindex={anchor ? -1 : undefined} onclick={() => onClose?.()}></button>
 <!-- svelte-ignore a11y_interactive_supports_focus -->
-<div class="ef" class:down={dir === 'down'} role="dialog" aria-label="Effort" onkeydown={onKeyEsc} use:clampX>
+<div class="ef" class:down={!place && dir === 'down'} class:fixed={!!place} class:fup={!!place && !place.down} role="dialog" aria-label="Effort" onkeydown={onKeyEsc}
+  style:--ef-x={place ? place.x + 'px' : null} style:--ef-y={place ? place.y + 'px' : null}
+  use:fit>
   <div class="ef-head">
     <div class="ef-head-l">
       <h2 class="ef-title">Effort</h2>
@@ -223,7 +255,7 @@
         <span class="ef-fill" bind:this={fillEl}>
           {#if hasTrack}
             <span class="ef-energy-wrap" aria-hidden="true">
-              {#if fieldMod}<canvas class="ef-energy" bind:this={canvasEl}></canvas>{:else if fieldMod === null}<span class="ef-charge"></span>{/if}
+              {#if fieldMod}<canvas class="ef-energy" bind:this={canvasEl}></canvas>{/if}
             </span>
           {/if}
         </span>
@@ -330,6 +362,12 @@
     user-select: none; font-size: 13px; line-height: 18px; font-family: var(--sans);
   }
   .ef.down { bottom: auto; top: calc(100% + 8px); }
+  /* 受控模式给了 anchor：fixed 贴着触发按钮（坐标由脚本按视口算好、夹进视口后放在变量里） */
+  .ef.fixed { position: fixed; left: var(--ef-x); right: auto; top: var(--ef-y); bottom: auto; }
+  .ef.fixed.fup { top: auto; bottom: var(--ef-y); }
+  /* 这种用法下打开时焦点直接落在拉条上（键盘左右键就能调）：聚焦环只在键盘操作时亮，鼠标 / 触屏点开的不亮 */
+  .ef.fixed .ef-slider:focus-within .ef-focusring { opacity: 0; }
+  .ef.fixed .ef-slider:has(.ef-input:focus-visible) .ef-focusring { opacity: 1; }
 
   /* 标题行：gap 4（g3）；Effort t6、档名 t7、? t5→hover t7 */
   .ef-head { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 4px; }
@@ -376,17 +414,6 @@
   .ef-slider.charged .ef-energy-wrap { opacity: var(--ef-energy-op-max); }
   .ef { --ef-blend: normal; }
   :global(html:not([data-theme="light"])) .ef .ef-energy-wrap { mix-blend-mode: plus-lighter; }
-  /* 公开版充能光带（没有 overlay 的能量场时）：充能色渐变打底，一道高光从左往右扫；勾选进出 0.6s 淡入淡出 */
-  .ef-charge { position: absolute; inset: 0; opacity: 0; transition: opacity .6s ease;
-    background: linear-gradient(90deg, var(--ui-slider-fill-charged-end), var(--ui-slider-fill-charged-start)); }
-  .ef-charge::after { content: ''; position: absolute; inset: 0; background-repeat: no-repeat; background-size: 55% 100%;
-    background-image: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--ui-slider-energy-hot) 75%, transparent) 50%, transparent 80%);
-    background-position: -150% 0; }
-  .ef-slider.charged .ef-charge { opacity: 1; }
-  @media (prefers-reduced-motion: no-preference) {
-    .ef-slider.charged .ef-charge::after { animation: ef-sweep 2.4s cubic-bezier(.45, 0, .25, 1) infinite; }
-  }
-  @keyframes ef-sweep { from { background-position: -150% 0; } to { background-position: 250% 0; } }
   /* 能量场画布始终铺满整条轨道（100cqw，不随档位改尺寸、不重建帧缓冲），只露出填充那一段 */
   .ef-energy { position: absolute; left: 0; top: 0; width: 100cqw; height: 100%; pointer-events: none;
     color: var(--ui-slider-energy-hot); outline-color: var(--ui-slider-energy-cool);

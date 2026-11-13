@@ -21,9 +21,10 @@
     applyFollowSys, setTheme, fluxParams, saveFlux, resetFlux, FLUX_SLIDERS, FLUX_COLORMODES,
     me, applyMe, status, agentOn, rootScreen, pluginOn,
   } from '../../lib/state.svelte.js';
-  import { untrack } from 'svelte';
+  import { untrack, tick } from 'svelte';
   import { ags, loadAgents, setAgentOn, agentById, loadPool, loadUsage, setRouter, activateAccount, moveAccount, addAccount, updateAccount, deleteAccount,
-    accLabel, whyText, hhmm, poolResetIn, poolResetAt, usageTone, loadPolicy, savePolicy, apiKeyNote } from '../../lib/agentSettings.svelte.js';
+    accLabel, whyText, hhmm, poolResetIn, poolResetAt, usageTone, planPill, PLAN_CHOICES, loadPolicy, savePolicy, apiKeyNote, loadResets, resetsLeft } from '../../lib/agentSettings.svelte.js';
+  import ClaudeResets from '../../components/ClaudeResets.svelte';   // 号池「重置卡」弹窗（与手机设置的账号页共用）
   import { SI, agentMark } from '../../lib/settingsIcons.js';
   import {
     wp, wpDef, setWp, addUpload, deleteUpload, splitWpFiles, LIGHT_IDS, DARK_IDS,
@@ -52,11 +53,15 @@
   import ShortcutRecorder from './ShortcutRecorder.svelte';
   import DevicesSection from './DevicesSection.svelte';
   import AgentKeysSection from './AgentKeysSection.svelte';
+  import DimensioSection from './DimensioSection.svelte';   // 设置 › dimensio（数据面 lib/dimensioSettings.svelte.js，与手机共用）
+  import { ds, prefLabel, prefDesc } from '../../lib/dimensioSettings.svelte.js';
   import AdminAccessSection from './AdminAccessSection.svelte';
+  import NotifySection from './NotifySection.svelte';   // 设置 › 通用 › 通知（会话消息通知，数据面 lib/notices.svelte.js）
+  import { np } from '../../lib/notices.svelte.js';
   // Claude Code 运行组件的下载进度 / 失败重试（安装包不再内嵌，首启服务端去拿；就绪时不显示），与手机设置共用
   import ClaudeCliStatus from '../../components/ClaudeCliStatus.svelte';
-  import VertexCredentials from '../../components/VertexCredentials.svelte';
-  import { vx, VX, VERTEX_SETTING_GROUPS, loadVertexSettings, setVertexSetting, vxLabel, vxDesc, vxOptions, vxGroupLabel, vxGroupFoot, vxGroupKeys } from '../../lib/vertexSettings.svelte.js';
+  // 设置 › Media Studio 的正文归 studio 扩展（components/studio/settings/），只经懒加载入口取，不许静态 import（2026-11-04）
+  import { loadPage } from '../../modules/pages.js';
   import { serverOnThisMachine } from '../../lib/nativeDesktop.js';
   import { createServerUpdate } from '../../lib/serverUpdate.svelte.js';
   import Customize from '../../components/ext/Customize.svelte';
@@ -66,28 +71,39 @@
   import { filesFromInput, uploadAttachment } from '../../lib/attachments.js';
   import { t, tc, tr, lang, setLang, LANGS } from '../../lib/i18n.js';
   import { DISTRO, stripBrand, feedbackDest } from '../../lib/distro.js';
-  import { ovUrl, ovMarks } from '../../lib/overlay.svelte.js';
 
   import { settingsNav } from './settingsNav.svelte.js';
   import { extensionsNav } from '../../lib/extensionsNav.svelte.js';
   // 设置 › Claude（2026-10-20 对齐官方 Desktop「Settings → Claude Code」）：注册表 + 按身份存服务端；取值与文案两套外壳共用
   import { cs, loadClaudeSettings } from '../../lib/claudeSettings.svelte.js';
-  // 模型服务（自定义 API）：管理面板盖在设置上，两套设置外壳共用（components/claude/providers）
-  import ProviderManager from '../../components/claude/providers/ProviderManager.svelte';
-  import { cp, loadProviders, cpSummaryText, canUseCustomApi } from '../../lib/claudeProviders.svelte.js';
+  // 模型中心（2026-11-10 起是设置里的一个分区 'model-hub'，正文 components/modelhub/HubHome 懒加载）：管理员看 hub（/api/model-hub 总览），
+  // 能自定义 API 的成员看 cp（自己的 Claude 服务）；添加 / 服务详情这类浮层挂在 App 根上（hubUi.sheet），外壳只负责给它让 Esc
+  import { cp, loadProviders, canUseCustomApi } from '../../lib/claudeProviders.svelte.js';
+  import { hub, hubUi, loadHub, hubSummaryText, closeHubSheet } from '../../lib/modelHub.svelte.js';
   import { S as CS, val, visible, setVal, resetVal, changed, label as csLabel, desc as csDesc, options as csOptions, valueLabel, errText } from '../../lib/claudeSettingsView.js';
+  // 子 agent 调用策略子页的「离开前确认」登记处（不带依赖的小文件；子页正文与状态模块都是懒加载的，见下面 dpLoad）
+  import { dispatchLeaveGuard, dispatchHasUnsaved } from '../../components/claude/dispatch/leaveGuard.js';
   import { branchPrefixError } from '../../../../src/config/claude-settings.mjs';
   import { goto } from '../../lib/pageMorph.js';
   // ═══ 分区导航 ═══（外部直达 settingsNav.sec 优先；dev ?dsec=xxx 供 headless 逐区截图，
   // ?dme=admin|user|pro|none 预置登录态供账户区截图）
   // 两套外壳共用的分区名（lib/settingsNav 的 openSettings）映射到这里的分区。
   // 「关于与更新」落在「连接与更新」（版本、检查更新都在那一页），反馈落在「反馈」。
-  const SEC_ALIAS = { agents: 'ag-claude', claude: 'ag-claude', connection: 'connect', about: 'connect', feedback: 'help', localpc: 'devices', 'agent-api': 'agentapi' };
+  // Gemini 设置分区 11-04 删了（Gemini 对话下线），指向它的老入口一并落到 Media Studio
+  // 模型中心的老名字（独立面板时代的 cproviders、口头的 models / providers）都落到 'model-hub'
+  const SEC_ALIAS = { agents: 'ag-claude', claude: 'ag-claude', connection: 'connect', about: 'connect', feedback: 'help', localpc: 'devices', 'agent-api': 'agentapi',
+    'ag-studio': 'studio', media: 'studio', gemini: 'studio', 'ag-gemini': 'studio', vertex: 'studio',
+    modelhub: 'model-hub', models: 'model-hub', providers: 'model-hub', cproviders: 'model-hub',
+    dispatch: 'ag-claude#dispatch', 'cl-dispatch': 'ag-claude#dispatch' };
   // 单页模式（只开着一个 agent、没有主页）也用这一套（2026-10-21 起，原 claude.ai 风那套下线）：
-  // 壁纸、「分页跟随主页明暗」在那里没意义，藏掉；左上角也不叫「主页」。
+  // 壁纸在那里没意义，藏掉；左上角也不叫「主页」。
   const single = $derived(rootScreen() !== 'home');
   const sec0 = settingsNav.sec || (import.meta.env.DEV && new URLSearchParams(location.search).get('dsec')) || 'general';
-  let sec = $state(SEC_ALIAS[sec0] || sec0);
+  // 位置 = 分区，或「分区#子页」：Claude 分区里有就地展开的子页（clSub，眼下只有 'dispatch' = 子 agent 调用策略）。
+  // 子页不另起 sec：侧栏高亮、搜索过滤、「分区被收走就回通用」都按 sec 判，子页只是这个分区正文的另一副样子
+  const loc0 = SEC_ALIAS[sec0] || sec0;
+  let sec = $state(loc0.split('#')[0]);
+  let clSub = $state(loc0.split('#')[1] || '');
   settingsNav.sec = null;   // 消费一次即清
   if (import.meta.env.DEV) {
     const dm = new URLSearchParams(location.search).get('dme');
@@ -120,24 +136,44 @@
 
   // ═══ Agent：每个 agent 一个分区（ag-<id>），数据面与手机共用 lib/agentSettings.svelte.js ═══
   // 各接口都是 admin 门；非管理员全部 404/403 → 对应 ok 位为 false，那一节不出现。
-  loadAgents(); loadPool(); loadPolicy(); loadVertexSettings();
-  if (canUseCustomApi()) loadProviders();
-  let provOpen = $state(false);
-  // 摘要只数启用服务里启用的对话模型，关了「显示在模型列表」的另注「N 个已隐藏」（与 iOS 设置同一口径）
-  const provSummary = $derived(cpSummaryText() || t('接 DeepSeek、Kimi、OpenRouter、本机模型等兼容 API'));
+  loadAgents(); loadPool(); loadPolicy();
+  // 模型中心分区出不出现看 hub.ok || cp.ok：两边都是开设置页才拉。直达 model-hub（openSettings('model-hub')、搜索、别的入口）
+  // 时数据往往还在路上——mhSettled 落定之前别把它当「不认识的分区」退回通用页，落定了确实两边都没有才退
+  let mhSettled = $state(false);
+  Promise.allSettled([loadHub(), canUseCustomApi() ? loadProviders() : null]).then(() => { mhSettled = true; });
+  const mhOn = $derived(hub.ok || cp.ok || (me.kind === 'admin' && !!hub.err));
   // 「扩展 › 功能扩展」拨了开关（或别的设备改了）：App 经总线 agents.changed 刷 me.agents，这里跟着重拉，侧栏即时增减
   let agentsSeen = JSON.stringify(me.agents);
   $effect(() => { const k = JSON.stringify(me.agents); if (k !== agentsSeen) { agentsSeen = k; untrack(loadAgents); } });
   if (me.kind !== 'none') loadClaudeSettings();   // Claude 设置：总线会推，开设置页时再拉一次兜底
   const BASE = import.meta.env.BASE_URL;
   const dark = $derived(ui.theme !== 'light');
-  const markSrc = (id) => { const m = agentMark(id, dark); return m ? ovUrl(m) : ''; };   // 私有 overlay 有同名原版就换
+  const markSrc = (id) => agentMark(id, dark);
   const svgOf = (name, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${SI[name] || ''}</svg>`;
   // 管理员：服务器上全部 agent；其他人只有 Claude（对话偏好是本机的）
   // 在「扩展 › 功能扩展」里关掉的 agent 直接不列（维护者 10-21）；开着但这台机器跑不起来的仍列出、变灰，点进去看原因。
   // Claude 是核心、不在功能扩展里，关了也得留着入口才开得回来。
-  const agentRows = $derived((ags.agents?.agents?.length ? ags.agents.agents : agentOn('claude') || import.meta.env.DEV ? [{ id: 'claude', label: 'Claude', local: true }] : [])
-    .filter((a) => a.local || a.id === 'claude' || a.switch !== false));
+  // 成员拿不到 /api/agents：被授权用 dimensio 就有它的分区，里面只出他自己能改的（模型、key、规则、偏好……）
+  // 2026-11-04 Gemini 对话下线：Gemini 分区删掉，原来的位置由 Media Studio（分区 'studio'）接替。服务端的 AGENTS 里有 studio 时
+  // 按它的次序排；成员拿不到 /api/agents、或 dev fixture（localStorage bridge-studio-fixture=1）时补在 Claude 后面。
+  const studioDev = import.meta.env.DEV && (() => { try { return localStorage.getItem('bridge-studio-fixture') === '1'; } catch { return false; } })();
+  const studioOn = $derived(studioDev || (me.kind === 'admin' && !!agentById('studio')) || (Array.isArray(me.agents) && me.agents.includes('studio')));
+  const agentRows = $derived.by(() => {
+    const rows = (ags.agents?.agents?.length ? ags.agents.agents : agentOn('claude') || import.meta.env.DEV ? [{ id: 'claude', label: 'Claude', local: true }] : [])
+      .filter((a) => (a.local || a.id === 'claude' || a.switch !== false) && a.id !== 'gemini');
+    if (!ags.agents?.agents?.length && me.kind === 'user' && Array.isArray(me.agents) && me.agents.includes('dimensio')) rows.push({ id: 'dimensio', label: 'dimensio', local: true });
+    if (studioOn && !rows.some((a) => a.id === 'studio')) rows.splice(rows[0]?.id === 'claude' ? 1 : 0, 0, { id: 'studio', label: 'Media Studio', local: true });
+    return rows;
+  });
+  const studioIds = $derived((ags.agents?.agents || []).filter((a) => a.runnable).map((a) => a.id));
+  // 头图下面只在不正常时写一句状态，正常开着不写口号（同手机设置页）
+  function studioStatus(a) {
+    if (!a) return '';
+    if (!a.runnable) return tr(a.note) || t('这台机器上不可用');
+    if (!a.switch) return tc('开关', '关闭');
+    return '';
+  }
+  let stModal = $state(false);   // Studio 正文的浮层开着（Esc 交给它，外壳不抢）
   function agStatus(a) {
     if (!a || a.local) return '';
     if (!a.runnable) return tr(a.note) || t('这台机器上不可用');
@@ -147,9 +183,8 @@
   }
   const AG_AUTH_HINT = {
     claude: () => t('在下面「订阅号池」里添加账号。'),
-    gemini: () => t('在下面「Google 云凭据」里上传凭据 JSON。'),
     codex: () => t('在服务器上运行一次 codex login。'),
-    dimensio: () => t('在 dimensio 的 .env 里填一家模型厂商的 API key。'),
+    dimensio: () => t('在下面「API Key」里给一家厂商填 Key，或接一个自定义模型服务。'),
   };
   let agLast = $state(null);   // 关最后一个开着的 agent 前确认
   async function toggleAgent(a, next) {
@@ -158,20 +193,21 @@
     await setAgentOn(a, next);
   }
   // Claude 分区：进来才拉逐号用量（每号一次真探针，服务端 5 分钟缓存）
-  $effect(() => { if (sec === 'ag-claude' && ags.poolOk) untrack(() => loadUsage()); });
+  $effect(() => { if (sec === 'ag-claude' && ags.poolOk) untrack(() => { loadUsage(); loadResets(); }); });
   const routerOn = $derived(!!ags.router?.settings?.enabled);
   const acctById = (id) => ags.accounts.find((x) => x.id === id) || null;
   let acctForm = $state(null);   // null | { id?, label, token, isNew, hasToken, tokenTail, busy, err }
   let acctDel = $state(null);
-  function openAddAcct() { ags.err = ''; acctForm = { label: '', token: '', isNew: true, busy: false, err: '' }; }
-  function openEditAcct(a) { ags.err = ''; acctForm = { id: a.id, label: a.label, token: '', isNew: false, hasToken: a.hasToken, tokenTail: a.tokenTail, busy: false, err: '' }; }
+  let acctResets = $state(null);   // 正在看重置卡的那个号（弹窗）
+  function openAddAcct() { ags.err = ''; acctForm = { label: '', token: '', plan: '', isNew: true, busy: false, err: '' }; }
+  function openEditAcct(a) { ags.err = ''; acctForm = { id: a.id, label: a.label, token: '', plan: a.plan || '', isNew: false, hasToken: a.hasToken, tokenTail: a.tokenTail, busy: false, err: '' }; }
   async function saveAcctForm(e) {
     e?.preventDefault?.();
     const f = acctForm;
     if (!f || f.busy) return;
     if (f.isNew && !f.token.trim()) { f.err = t('token 不能为空'); return; }
     f.busy = true; f.err = '';
-    const done = f.isNew ? await addAccount(f.label, f.token) : await updateAccount(f.id, f.label, f.token);
+    const done = f.isNew ? await addAccount(f.label, f.token, f.plan) : await updateAccount(f.id, f.label, f.token, f.plan);
     if (done) acctForm = null; else { f.err = ags.err; ags.err = ''; f.busy = false; }
   }
   async function confirmAcctDel() { const a = acctDel; acctDel = null; if (a) await deleteAccount(a.id); }
@@ -193,7 +229,7 @@
   let logoutAsk = $state(false);
   // Claude 页「安全」组：允许绕过权限模式打开前确认（解释只放在确认框里）
   let bypassAsk = $state(false);
-  const anyModal = $derived(!!acctForm || !!acctDel || !!agLast || logoutAsk || bypassAsk);
+  const anyModal = $derived(!!acctForm || !!acctDel || !!acctResets || !!agLast || logoutAsk || bypassAsk);
 
   // ═══ 侧栏导航：线稿图标（ico）或品牌标（brand），没有色块 ═══
   const PERSON = '<svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="5.4" r="2.7" fill="currentColor"/><path d="M2.8 13.4c.7-2.6 2.8-4 5.2-4s4.5 1.4 5.2 4Z" fill="currentColor"/></svg>';
@@ -207,7 +243,9 @@
       ...(scCtl ? [{ key: 'shortcuts', label: t('快捷键'), ico: 'keys' }] : []),
     ],
     [
-      ...agentRows.map((a) => ({ key: 'ag-' + a.id, label: tr(a.label), brand: a.id, off: !a.local && !a.enabled })),
+      ...agentRows.map((a) => ({ key: a.id === 'studio' ? 'studio' : 'ag-' + a.id, label: tr(a.label), brand: a.id, off: !a.local && !a.enabled })),
+      // 模型中心紧跟各 agent：几个 agent 的模型都从这里来
+      ...(mhOn ? [{ key: 'model-hub', label: t('模型中心'), ico: 'modelhub' }] : []),
       ...((me.kind === 'admin' || me.kind === 'user') && pluginOn('agent-api') ? [{ key: 'agentapi', label: t('Agent 接入'), ico: 'agentapi' }] : []),
     ],
     [
@@ -222,19 +260,25 @@
       ...(pluginOn('feedback') ? [{ key: 'help', label: t('反馈'), ico: 'feedback' }] : []),
     ],
   ].filter((g) => g.length));
-  const SEC_TITLE = $derived(sec === 'account' ? t('账户')
+  const SEC_NAME = $derived(sec === 'account' ? t('账户')
+    : sec === 'model-hub' ? t('模型中心')   // 直达时侧栏这一项可能还没出来（数据在路上），标题别先闪成「设置」
     : (NAV_GROUPS.flat().find((n) => n.key === sec)?.label || t('设置')));
+  // 工具栏标题：在子页里是子页的名字（头图 / 返回头上仍写分区名 SEC_NAME）
+  const SEC_TITLE = $derived(dpSubOn ? t('子 agent 调用策略') : SEC_NAME);
 
   // ═══ 导航历史（macOS 系统设置的 ‹ › 操作逻辑）═══
-  let hist = $state([sec]);
+  // 历史里记的是位置（分区，或「分区#子页」）：进子页也算一步，工具栏 ‹ 从子页退回分区、› 再进去
+  const locOf = (s, sub) => (sub ? s + '#' + sub : s);
+  function setLoc(k) { const i = k.indexOf('#'); sec = i < 0 ? k : k.slice(0, i); clSub = i < 0 ? '' : k.slice(i + 1); }
+  let hist = $state([loc0]);
   let hi = $state(0);
-  function navigate(k) {
-    if (k === sec) return;
-    const next = [...hist.slice(0, hi + 1), k];
-    hist = next; hi = next.length - 1; sec = k;
-  }
-  function goBack() { if (hi > 0) { hi -= 1; sec = hist[hi]; } }
-  function goFwd() { if (hi < hist.length - 1) { hi += 1; sec = hist[hi]; } }
+  // 换位置都经这里：人在子页、正文有没保存的改动时先由它问一句（dpLeave），答应了才走
+  function moveTo(i, list = hist) { dpLeave(() => { hist = list; hi = i; setLoc(list[i]); }); }
+  function navigate(k) { if (k !== locOf(sec, clSub)) moveTo(hi + 1, [...hist.slice(0, hi + 1), k]); }
+  function goBack() { if (hi > 0) moveTo(hi - 1); }
+  function goFwd() { if (hi < hist.length - 1) moveTo(hi + 1); }
+  // 子页 → 回它所在的分区：上一步历史正好是这个分区就按「后退」走（› 还能再进来），搜索 / 外部直达进来的则推一条新的
+  function subUp() { if (hi > 0 && hist[hi - 1] === sec) goBack(); else navigate(sec); }
   // 开着时外部又直达某分区（openSettings('devices') 等）：直接换到那一页，读完即清（同 iOS 那套 Settings.svelte）。
   // 以前只在打开时消费一次：开着时写进来的 sec 不跳也不清，之后从直接置 ui.settingsOpen 的入口打开会跳到这个过时的分区
   $effect(() => {
@@ -243,11 +287,8 @@
     untrack(() => { settingsNav.sec = null; navigate(SEC_ALIAS[s] || s); });
   });
 
-  // 「思考动画」三套都是原版动画，只有维护者的私有 overlay 带着；公开版只有一颗自绘星标——overlay 带了两套以上才显示这一行
-  const markOpts = $derived.by(() => {
-    const av = ovMarks();
-    return [{ value: 'clay', label: t('新版 Claude Code') }, { value: 'sprite', label: t('新版聊天页') }, { value: 'classic', label: t('经典星标') }].filter((o) => av[o.value]);
-  });
+  // 「思考动画」三套原版动画
+  const markOpts = $derived([{ value: 'clay', label: t('新版 Claude Code') }, { value: 'sprite', label: t('新版聊天页') }, { value: 'classic', label: t('经典星标') }]);
   // ═══ 设置搜索：扁平索引 → 过滤 → 跳区 + 行闪烁 ═══
   const INDEX = $derived([
     // 搜索关键词（keys）也过 t()：英文界面换成英文关键词表，中英各自能搜到
@@ -256,13 +297,15 @@
     { sec: 'account', id: 'admin-access', label: t('管理员可见性'), keys: t('管理员 隐私 访问记录 查看 代聊 电脑') },   // 只有成员看得到（AdminAccessSection）
     { sec: 'general', id: 'lang', label: t('语言'), keys: t('界面语言 中文 英文 English language i18n') },
     { sec: 'general', id: 'notify', label: t('通知'), keys: t('任务完成 提醒 notification') },
+    { sec: 'general', id: 'notify-sound', label: t('通知声音'), keys: t('铃声 提示音 声音 sound ringtone') },
+    { sec: 'general', id: 'notify-banner', label: t('通知横幅'), keys: t('横幅 弹窗 banner') },
+    { sec: 'general', id: 'notify-preview', label: t('通知显示内容详情'), keys: t('预览 详情 隐私 preview') },
     { sec: 'general', id: 'autostart', label: t('开机自动启动'), keys: t('自启 静默 托盘 后台 startup login') },
     { sec: 'appearance', id: 'theme', label: t('外观'), keys: t('深色 浅色 自动 主题 跟随系统明暗') },
-    { sec: 'appearance', id: 'followpage', label: t('分页跟随主页明暗'), keys: t('主题 联动') },
     { sec: 'appearance', id: 'noanim', label: t('转场动画'), keys: t('入场 动效 禁用') },
     { sec: 'general', id: 'fullres', label: t('原图加载'), keys: t('画质 相册 流量') },
     { sec: 'ag-claude', id: 'suggest', label: t('输入建议'), keys: t('提示词 预测 下一句 Tab 补全') },
-    ...(markOpts.length > 1 ? [{ sec: 'ag-claude', id: 'thinkmark', label: t('思考动画'), keys: t('菊花 星标 动画 Claude Code 经典 加载') }] : []),
+    { sec: 'ag-claude', id: 'thinkmark', label: t('思考动画'), keys: t('菊花 星标 动画 Claude Code 经典 加载') },
     // Claude 设置（注册表项；key 用来按身份过滤：管理员项 / shell 项别人搜不到）。keys 带官方英文词
     { sec: 'ag-claude', id: 'climit', key: 'autoContinueOnLimit', label: t('限额重置后自动继续'), keys: t('限额 续跑 auto-continue usage limit') },
     { sec: 'ag-claude', id: 'crestart', key: 'autoResumeOnRestart', label: t('自动继续被中断的对话'), keys: t('重启 崩溃 中断 续跑 自动继续 restart crash resume interrupted') },
@@ -270,7 +313,8 @@
     { sec: 'ag-claude', id: 'cdef-style', key: 'outputStyle', label: t('输出风格'), keys: t('简洁 讲解 学习 主动 output style concise') },
     { sec: 'ag-claude', id: 'cviz', key: 'inlineVisualizations', label: t('对话内交互图表'), keys: t('图表 示意图 inline visualizations') },
     { sec: 'ag-claude', id: 'cwf', key: 'enableWorkflows', label: t('动态工作流'), keys: t('工作流 并行 Ultracode dynamic workflows') },
-    { sec: 'ag-claude', id: 'cdispatch', key: 'subagentDispatch', label: t('子 agent 调度偏好'), keys: t('子 agent 模型 推理强度 effort 工作流 subagent dispatch') },
+    // 子 agent 调用策略：Claude 分区里的就地子页（sub），点了直达子页
+    { sec: 'ag-claude', sub: 'dispatch', id: 'cdispatch', label: t('子 agent 调用策略'), keys: t('子 agent 模型 推理强度 effort 性价比 图谱 判定线 策略 档位 工作流 Ultracode 新会话 subagent dispatch policy') },
     { sec: 'ag-claude', id: 'cflag', key: 'switchModelsOnFlag', label: t('消息被拦时自动换模型'), keys: t('安全栅门 拒答 暂停 switch models flagged') },
     { sec: 'ag-claude', id: 'cplan', key: 'planClearContext', label: t('批准计划时可清空上下文'), keys: t('计划 清空上下文 plan clear context') },
     { sec: 'ag-claude', id: 'cqto', key: 'questionTimeout', label: t('Claude 提问无人回答时'), keys: t('提问 超时 question timeout') },
@@ -278,6 +322,11 @@
     { sec: 'ag-claude', id: 'ccompact', key: 'compactFrac', label: t('自动压缩点'), keys: t('压缩 上下文 auto compact') },
     { sec: 'ag-claude', id: 'cnewsess', key: 'newSessionPolicy', label: t('Claude 发起新会话'), keys: t('新会话 无关任务 unrelated task new session') },
     { sec: 'ag-claude', id: 'cinbound', key: 'crossSessionInbound', label: t('其它会话发来的消息'), keys: t('会话间消息 cross-session messages') },
+    { sec: 'ag-claude', id: 'cpask', key: 'projectAskFirst', label: t('开讨论串前先问我'), keys: t('项目 讨论串 协调者 project thread coordinator') },
+    { sec: 'ag-claude', id: 'cpmax', key: 'projectMaxLive', label: t('同时在跑的讨论串'), keys: t('项目 讨论串 并行 project threads parallel') },
+    { sec: 'ag-claude', id: 'cpdaily', key: 'projectDailyThreads', label: t('每天最多新开讨论串'), keys: t('项目 讨论串 上限 project threads limit') },
+    { sec: 'ag-claude', id: 'cpmodel', key: 'projectThreadModel', label: t('讨论串模型'), keys: t('项目 讨论串 模型 project thread model') },
+    { sec: 'ag-claude', id: 'cpeffort', key: 'projectThreadEffort', label: t('讨论串推理强度'), keys: t('项目 讨论串 推理强度 project thread effort') },
     { sec: 'ag-claude', id: 'cbranch', key: 'branchPrefix', label: t('分支前缀'), keys: t('分支 git branch prefix') },
     { sec: 'ag-claude', id: 'cwtbase', key: 'worktreeBaseRef', label: t('工作树起点'), keys: t('工作树 分支 worktree base') },
     { sec: 'ag-claude', id: 'cautofix', key: 'autoFixPullRequests', label: t('自动修复拉取请求'), keys: t('拉取请求 CI 评审 auto-fix pull requests PR') },
@@ -288,13 +337,50 @@
     { sec: 'ag-claude', id: 'cn-perm', key: 'notifyPermission', label: t('权限请求通知'), keys: t('通知 权限 notification permission requests') },
     { sec: 'ag-claude', id: 'cn-q', key: 'notifyQuestion', label: t('提问通知'), keys: t('通知 提问 notification questions') },
     { sec: 'ag-claude', id: 'cn-done', key: 'notifyTaskComplete', label: t('任务完成通知'), keys: t('通知 完成 notification task complete') },
+    { sec: 'ag-claude', id: 'cn-err', key: 'notifyError', label: t('任务出错通知'), keys: t('通知 出错 报错 notification error') },
     { sec: 'ag-claude', id: 'cawake', key: 'keepAwake', label: t('Claude 工作时保持唤醒'), keys: t('睡眠 唤醒 电池 keep awake sleep battery') },
     { sec: 'ag-claude', id: 'cbypass', key: 'allowBypass', label: t('允许绕过权限模式'), keys: t('绕过 权限 bypass permissions') },
     { sec: 'ag-claude', id: 'cauto', key: 'allowAutoMode', label: t('允许自动模式'), keys: t('自动模式 权限 auto mode') },
-    { sec: 'ag-claude', id: 'agents', label: t('Agent 开关'), keys: t('claude gemini vertex codex chatgpt dimensio 分页 启用 关闭 认证') },
+    { sec: 'ag-claude', id: 'cdebug', key: 'debugMode', label: t('调试模式'), keys: t('调试 反馈 harness debug feedback') },
+    { sec: 'ag-claude', id: 'agents', label: t('Agent 开关'), keys: t('claude codex chatgpt dimensio 分页 启用 关闭 认证') },
     { sec: 'ag-claude', id: 'pool', label: t('订阅号池'), keys: t('账号 切号 token 用量 Max Pro') },
-    { sec: 'ag-claude', id: 'cproviders', label: t('自定义 API'), keys: t('模型服务 第三方模型 接口地址 API Key OpenAI 兼容 DeepSeek Kimi GLM OpenRouter Ollama custom provider base url temperature 显示在模型列表 更多模型 More models 推理强度 档位 effort reasoning_effort 思考 检测连接 探测能力 小米 MiMo') },
     { sec: 'ag-claude', id: 'router', label: t('额度用尽自动换号'), keys: t('智能路由 换号') },
+    // 模型中心（独立分区）：Claude 的自定义服务、两边共用的服务与 API 池、Vertex；管理员有总览时 dimensio 的自定义服务、
+    // Studio 的媒体服务也并在这里管，它们原来那两条（dm-custom、st-providers）的关键词并进来、原条目不再出
+    { sec: 'model-hub', id: 'mh', label: t('模型中心'), keys: [
+      t('自定义 API 共用服务 API 池 Key 池 线路 Vertex 模型服务 第三方模型 接口地址 API Key OpenAI 兼容 DeepSeek Kimi GLM OpenRouter Ollama custom provider base url temperature 显示在模型列表 更多模型 More models 推理强度 档位 effort reasoning_effort 思考 检测连接 探测能力 小米 MiMo'),
+      t('模型中心 媒体服务 文本 图像 视频 配音 音乐 模型 Claude model hub'),
+      hub.ok ? t('dimensio 模型中心 自定义 API OpenAI 兼容 OpenRouter Ollama custom provider base url') : '',
+      hub.ok ? t('Media Studio 生图 视频 配音 音乐 自定义 API Key OpenAI fal Replicate ElevenLabs MiniMax 火山方舟 OpenRouter Gemini Vertex provider') : '',
+    ].join(' ') },
+    // dimensio（DimensioSection）：本机模型只给管理员；偏好注册表的项进过这一分区、拉到了才进索引
+    { sec: 'ag-dimensio', id: 'dm-provider', label: t('默认模型服务'), keys: t('dimensio 模型 厂商 provider DeepSeek Kimi GLM Qwen MiMo Gemini Claude') },
+    { sec: 'ag-dimensio', id: 'dm-model', label: t('默认型号'), keys: t('dimensio 型号 模型 model') },
+    { sec: 'ag-dimensio', id: 'dm-effort', label: t('思考深度'), keys: t('dimensio 思考 推理强度 effort thinking') },
+    { sec: 'ag-dimensio', id: 'dm-keys', label: t('各厂商 API Key'), keys: t('dimensio 密钥 key 厂商') },
+    { sec: 'ag-dimensio', id: 'dm-custom', label: t('自定义模型服务'), keys: t('dimensio 模型中心 自定义 API OpenAI 兼容 OpenRouter Ollama custom provider base url') },
+    ...(me.kind === 'admin' ? [{ sec: 'ag-dimensio', id: 'dm-local', label: t('本机模型'), keys: t('dimensio 本地 Qwen Strata llama.cpp 启动参数 上下文 显存 local') }] : []),
+    { sec: 'ag-dimensio', id: 'dm-mode', label: t('默认运行档位'), keys: t('dimensio 自主执行 只读 先出计划 权限 模式 mode') },
+    { sec: 'ag-dimensio', id: 'dm-access', label: t('访问范围'), keys: t('dimensio 整机 仅工作空间 沙箱 access') },
+    { sec: 'ag-dimensio', id: 'dm-ask', label: t('每次问我'), keys: t('dimensio 权限规则 询问 ask rule') },
+    { sec: 'ag-dimensio', id: 'dm-deny', label: t('从不允许'), keys: t('dimensio 权限规则 禁止 deny rule') },
+    { sec: 'ag-dimensio', id: 'dm-ws', label: t('工作空间'), keys: t('dimensio 工作区 文件夹 目录 workspace') },
+    { sec: 'ag-dimensio', id: 'dm-mem', label: t('记忆管理'), keys: t('dimensio 记忆 memory 召回') },
+    { sec: 'ag-dimensio', id: 'dm-feed', label: t('显示全部工作过程'), keys: t('dimensio 工作过程 工具调用 折叠 展开 详细') },
+    { sec: 'ag-dimensio', id: 'dm-diag', label: t('导出诊断包'), keys: t('dimensio 诊断 导出 日志 diagnostics') },
+    ...(ds.prefs?.items || []).map((p) => ({ sec: 'ag-dimensio', id: 'dp-' + p.key, label: prefLabel(p), keys: prefDesc(p) + ' dimensio' })),
+    // Media Studio（正文是懒加载的 studio 扩展；id 对应它里面的行，搜索跳过去闪一下）。Gemini 设置分区删了，搜 Gemini / Vertex 落到这里
+    { sec: 'studio', id: 'st-import', label: t('一键导入 Vertex'), keys: t('Gemini Vertex Google 云凭据 服务账号 API Key OpenRouter 本机图像模型 导入 import') },
+    { sec: 'studio', id: 'st-google', label: t('Google 云凭据'), keys: t('Gemini Vertex Google Cloud 凭据 服务账号 JSON 项目 区域 gcloud ADC credentials') },
+    { sec: 'studio', id: 'st-providers', label: t('媒体服务'), keys: t('Media Studio 生图 视频 配音 音乐 自定义 API Key OpenAI fal Replicate ElevenLabs MiniMax 火山方舟 OpenRouter Gemini Vertex provider') },
+    { sec: 'studio', id: 'st-def', label: t('默认模型'), keys: t('Media Studio 图像 视频 配音 音乐 模型 Nano Banana Veo Lyria Gemini default model') },
+    { sec: 'studio', id: 'st-autosave', label: t('自动存进工作空间'), keys: t('Media Studio 保存 作品 工作空间 auto save') },
+    { sec: 'studio', id: 'st-savedir', label: t('保存位置'), keys: t('Media Studio 保存 文件夹 目录 save folder') },
+    ...(me.kind === 'admin' ? [
+      { sec: 'studio', id: 'st-agents', label: t('允许的 agent'), keys: t('Claude dimensio Codex 媒体工具 生图 主动生成 Agent 接入 media tools') },
+      { sec: 'studio', id: 'st-kinds', label: t('允许的种类'), keys: t('图片 语音 音乐 视频 分辨率 4K 1080p') },
+      { sec: 'studio', id: 'st-safety', label: t('内容安全过滤'), keys: t('Gemini Google 安全 过滤 骚扰 仇恨 色情 危险 safety') },
+    ] : []),
     { sec: 'policy', id: 'policy', label: t('额度与注册'), keys: t('邀请码 注册 限额 时区') },
     { sec: 'extensions', id: 'ext-skill', label: t('技能'), keys: t('扩展 skill 指引包') },
     { sec: 'extensions', id: 'ext-connector', label: t('连接器'), keys: t('扩展 mcp connector 服务') },
@@ -307,7 +393,8 @@
     { sec: 'agentapi', id: 'ak-list', label: t('吊销密钥'), keys: t('agent 密钥 key token 吊销 revoke') },
     { sec: 'devices', id: 'dv-tier', label: t('Claude 能用这台电脑吗'), keys: t('本机 设备 观察 操作 权限 档位 agent') },
     { sec: 'devices', id: 'dv-forward', label: t('端口转发'), keys: t('端口 转发 dev server 预览 本机模型') },
-    { sec: 'wallpaper', id: 'flux', label: t('流体壁纸参数'), keys: t('flux 线条 颜色 粘度') },
+    { sec: 'devices', id: 'dv-web-bridge', label: t('浏览器扩展 Web Bridge'), keys: t('浏览器 扩展 插件 Edge Chrome 安装') },
+    { sec: 'wallpaper', id: 'flux', label: t('流体壁纸参数'), keys: t('flux 点阵 颜色 海浪') },
     { sec: 'wallpaper', id: 'wp-light', label: t('明亮壁纸'), keys: t('风景 白天 上传') },
     { sec: 'wallpaper', id: 'wp-dark', label: t('深色壁纸'), keys: t('flux 夜间 上传') },
     { sec: 'wallpaper', id: 'spatial', label: t('空间壁纸'), keys: t('景深 视差 3d') },
@@ -326,20 +413,28 @@
     { sec: 'help', id: 'feedback', label: t('提交反馈'), keys: t('问题 建议 截图') },
     { sec: 'help', id: 'fbup', label: t('把用户反馈同时发给 {to}', { to: fbDest.to }), keys: t('反馈 推送 开发者 汇总 关闭') },
   ].filter((e) => !e.sec.startsWith('ag-') || agentRows.some((a) => 'ag-' + a.id === e.sec))
+   .filter((e) => e.sec !== 'studio' || studioOn)
+   .filter((e) => e.sec !== 'model-hub' || mhOn)
+   .filter((e) => e.id !== 'dm-custom' || !hub.ok)
+   .filter((e) => e.id !== 'st-providers' || !(hub.ok && hub.v2 && !hub.studioErr))   // 有总览时这两样在模型中心管，并进了上面 mh 那条
    .filter((e) => e.id !== 'fbup' || (fbUp?.admin && fbUp.mode !== 'inbox' && !fbUp.reason))   // 跟反馈页上开关的出现条件一致
    .filter((e) => e.id !== 'admin-access' || me.kind === 'user')
    .filter((e) => e.sec !== 'extensions' || (extOk && (!extMember || e.id === 'ext-skill')))   // 成员只有技能
-   .filter((e) => !single || (e.sec !== 'wallpaper' && e.id !== 'followpage'))
+   .filter((e) => !single || (e.sec !== 'wallpaper'))
    .filter((e) => e.id !== 'auto-update' || hasSilentUpdate())
    .filter((e) => e.id !== 'server-update' || (me.kind === 'admin' && !(hasSilentUpdate() && serverOnThisMachine())))   // 跟「服务端更新」那一组的出现条件一致
    .filter((e) => e.id !== 'quitconfirm' || (spPrefs?.managed && typeof spPrefs.confirmQuit === 'boolean'))   // 跟「连接与更新」里那一行的出现条件一致
    .filter((e) => e.id !== 'keeponline' || (spPrefs?.managed && typeof spPrefs.keepOnline === 'boolean'))
    .filter((e) => e.id !== 'srvaccess' || (spPrefs?.managed && ssCtl))
    .filter((e) => !e.key || visible(e.key))
+   .filter((e) => e.id !== 'cdispatch' || dpShown)   // 跟「对话」组里那一行的出现条件一致
    .filter((e) => e.sec !== 'policy' || (ags.policyOk && ags.multiUser)));
   const SECNAME = $derived(Object.fromEntries([['account', t('账户')], ...NAV_GROUPS.flat().map((n) => [n.key, n.label])]));
-  // 选中的分区被收走（权限 / 扩展探针变化）时回到通用
-  $effect(() => { if (sec !== 'account' && NAV_GROUPS.length && !NAV_GROUPS.flat().some((n) => n.key === sec) && !sec.startsWith('ag-')) untrack(() => { sec = 'general'; }); });
+  // 选中的分区被收走（权限 / 扩展探针变化）时回到通用。模型中心例外一段时间：直达它时总览多半还没到，等两边都落定再判
+  $effect(() => {
+    if (sec === 'model-hub' && !mhSettled) return;
+    if (sec !== 'account' && NAV_GROUPS.length && !NAV_GROUPS.flat().some((n) => n.key === sec) && !sec.startsWith('ag-')) untrack(() => { sec = 'general'; clSub = ''; });
+  });
   const hits = $derived.by(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
@@ -348,7 +443,7 @@
   let flashTimer = 0;
   function jump(e) {
     if (e.id.startsWith('ext-')) { extensionsNav.type = e.id.slice(4); extKey++; }
-    navigate(e.sec); query = '';
+    navigate(locOf(e.sec, e.sub)); query = '';
     flash = e.id;
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => { flash = ''; }, 1600);
@@ -461,12 +556,8 @@
 
   // ═══ 通用 ═══
   const load = (k, def = false) => { try { const v = localStorage.getItem(k); return v == null ? def : v === '1'; } catch { return def; } };
-  let notifyOn = $state(load('bridge-notify', true));
-  function onNotify(v) {
-    notifyOn = v;
-    try { localStorage.setItem('bridge-notify', v ? '1' : '0'); } catch {}
-    try { agCtl?.setNotify?.(v); } catch {}   // 桌面壳系统通知总开关同步
-  }
+  // 通知总开关（bridge-notify）：与 通用 › 通知、手机设置页、notices.svelte.js 同一份
+  const notifyOn = $derived(np.on);   // 开关本身在 NotifySection（onMaster 顺带同步桌面壳的系统通知总开关）
   // 开机自启（壳注册表 Run 键 + --hidden 静默到托盘）：真相在主进程，进设置拉一次。
   // 附着形态/旧壳/开发模式没有这个桥或 supported=false，行自然隐藏。
   let autoStart = $state({ supported: false, enabled: false });
@@ -480,15 +571,13 @@
   }
 
   function onFollowSys(v) { prefs.followSys = v; savePrefs(); if (v) applyFollowSys(); }
-  // 外观三选一：手动选明暗＝关掉跟随系统；「分页跟随主页」开着时主页一起换
+  // 外观三选一：手动选明暗＝关掉跟随系统；明暗全局统一，主页与各分页一起换
   const themeNow = $derived(prefs.followSys ? 'auto' : ui.theme === 'light' ? 'light' : 'dark');
   function pickTheme(v) {
     if (v === 'auto') { onFollowSys(true); return; }
     if (prefs.followSys) { prefs.followSys = false; savePrefs(); }
     setTheme(v);
-    if (prefs.followPage) setHomeMode(v === 'light' ? 'B' : 'A');
   }
-  function onFollowPage(v) { prefs.followPage = v; savePrefs(); if (v) setTheme(ui.glassMode === 'B' ? 'light' : 'dark'); }
   function onNoAnim(v) { prefs.noEnterAnim = v; savePrefs(); }
   function onFullRes(v) { prefs.fullResMedia = v; savePrefs(); }
   function onClaudeMark(v) { prefs.claudeMark = v; savePrefs(); }
@@ -507,22 +596,73 @@
     if (bad) { prefixErr = tr(bad); return; }
     if (!(await setVal('branchPrefix', String(v || '').trim() || null))) { prefixErr = errText() || t('分支前缀没保存上，请重试'); cs.err = ''; }
   }
-  // 子 agent 调度偏好：多行文本，失焦保存（Ctrl/⌘+Enter 也存）；没在编辑时跟着服务端值走（别的设备改了这里同步）
-  let dspDraft = $state(''), dspFocus = $state(false), dspMsg = $state(''), dspErr = $state('');
-  $effect(() => { const v = val('subagentDispatch') || ''; if (!dspFocus) dspDraft = v; });
-  async function saveDispatch() {
-    const next = dspDraft.trim();
-    if (next === (val('subagentDispatch') || '')) return;
-    dspErr = ''; dspMsg = '';
-    if (await setVal('subagentDispatch', next || null)) { dspMsg = t('已保存'); setTimeout(() => { dspMsg = ''; }, 1800); }
-    else { dspErr = errText() || t('没保存上，请重试'); cs.err = ''; }
+  // —— 子 agent 调用策略（「对话」组里的一行 + 就地子页 clSub='dispatch'）——
+  // 入口行：标题 + 随状态变的副标题，右边一个总开关，点行其余部分进子页。能改策略的身份（管理员 / 能跑命令的）才有这一行。
+  // 状态模块 lib/dispatchPolicy.svelte.js 与子页正文 components/claude/dispatch/DispatchPolicy.svelte 都懒加载：
+  // 进 Claude 分区才取状态模块（副标题要读生效策略），点进子页才取正文——设置页首屏不带它们
+  const dpShown = $derived(cs.shell || cs.admin);
+  const dpSubOn = $derived(sec === 'ag-claude' && clSub === 'dispatch' && dpShown);
+  let dpm = $state.raw(null);      // 状态模块（{ dp, loadDispatch, setDispatch, … }）
+  const dp = $derived(dpm?.dp || null);
+  let dpImp = null;
+  function dpLoad() {
+    dpImp ||= import('../../lib/dispatchPolicy.svelte.js');
+    dpImp.then((m) => { dpm = m; return m.loadDispatch(); }).catch(() => { if (!dpm) dpImp = null; });   // 模块没取到：下次进来再试
   }
+  $effect(() => { if (sec === 'ag-claude' && dpShown) untrack(dpLoad); });
+  // 副标题只放状态。关：一句去向；开：生效策略名 · 开着的范围（一个都没勾也照实说）
+  const dpSub = $derived.by(() => {
+    const p = dp?.policy;
+    if (!p) return dp?.err ? t('调用策略没读出来，点进去重试') : '';
+    if (!p.enabled) return t('已关闭 · 走 Claude Code 原生调用');
+    const s = (p.strategies || []).find((x) => x.id === p.activeId) || p.strategies?.[0];
+    const on = [p.scope?.workflow && tc('调用范围', '工作流'), p.scope?.subagent && tc('调用范围', '普通子 agent'), p.scope?.session && tc('调用范围', '发起新会话')].filter(Boolean);
+    // 迁移时自动建的那套叫「默认」，英文界面跟着译；用户自己起的名字原样显示
+    const named = !!s?.name && s.name !== '默认';   // i18n-ignore 与存下来的名字比较
+    return (named ? s.name : t('默认')) + ' · ' + (on.length ? on.join(t('、')) : t('未选生效范围'));
+  });
+  // 总开关即点即存（状态模块乐观更新，失败回滚并抛）：没存上时这一行的副标题换成红字说一声，开关弹回去
+  let dpRowErr = $state(''), dpSwKey = $state(0), dpErrTimer = 0;
+  async function toggleDispatch(v) {
+    dpRowErr = '';
+    try { await dpm.setDispatch({ enabled: v }); }
+    catch (e) {
+      dpSwKey++;
+      dpRowErr = tr(e?.message || '') || t('没保存上，请重试');   // 状态模块抛的 Error.message 就是给人看的那句话
+      clearTimeout(dpErrTimer); dpErrTimer = setTimeout(() => { dpRowErr = ''; }, 4000);
+    }
+  }
+  // 子页正文：它自己的浮层开着时告诉外壳（dpModal，Esc 让给它）；有没保存的改动时，离开子页之前由它问「保存 / 放弃 / 继续编辑」——
+  // 正文挂着时把确认函数登记在 dispatch/leaveGuard.js（那个文件不带依赖，静态引它不会把正文的 chunk 带进来），
+  // 外壳每条离开子页的路（返回头、Esc、工具栏 ‹ ›、侧栏换分区、搜索跳走、关设置）都先过 dpLeave。没有改动就同步放行
+  let dpModal = $state(false), dpAsking = false;
+  $effect(() => { if (!dpSubOn) dpModal = false; });
+  function dpLeave(go) {
+    if (!dpSubOn || !dispatchHasUnsaved()) return go();
+    if (dpAsking) return;
+    dpAsking = true;
+    dispatchLeaveGuard().then((ok) => { dpAsking = false; if (ok) go(); });
+  }
+  // 进子页从顶上看起；从子页退回 Claude 分区时回到进去前滚到的那一行（进去是从页面中段的一行点的，回来不该被甩回顶上）。
+  // 用 $effect.pre：要在正文换掉之前记下滚动位置
+  let scrollEl = $state(null), clScrollY = 0, wasCl = false, wasSub = false;
+  $effect.pre(() => {
+    const on = dpSubOn, inCl = sec === 'ag-claude';
+    untrack(() => {
+      if (scrollEl) {
+        if (on && !wasSub) clScrollY = wasCl ? scrollEl.scrollTop : 0;   // 搜索 / 外部直达进来的没有「进去前的位置」
+        const y = on ? (wasSub ? -1 : 0) : inCl && wasSub ? clScrollY : -1;
+        if (y >= 0) tick().then(() => { if (scrollEl) scrollEl.scrollTop = y; });
+      }
+      wasCl = inCl && !on; wasSub = on;
+    });
+  });
   // 扩展与记忆：直达扩展分区的某个类型 / Claude 分页的定时任务
   function openExtType(type) { extensionsNav.type = type; extKey++; navigate('extensions'); }
   function openRoutinesPage() { ui.settingsOpen = false; goto('claude'); ui.routinesOpen = true; }
   // 枚举项的控件：短的用分段，其余下拉（宽度照官方：一般 160，无关任务 220）
   const SEGMENTED = new Set(['worktreeBaseRef', 'attribution']);
-  const SELECT_W = { newSessionPolicy: '220px', crossSessionInbound: '180px' };
+  const SELECT_W = { newSessionPolicy: '220px', crossSessionInbound: '180px', projectThreadModel: '180px' };
   // 权限模式下拉只列这个身份此刻能选的（绕过 / 自动受「安全」组的开关管）
   const csSelectOpts = (key) => csOptions(key).filter((o) => !o.disabled).map((o) => ({ value: o.value, label: o.label }));
 
@@ -872,12 +1012,19 @@
   appVersionLine().then((l) => { verLine = l; }).catch(() => {});
 
   // ═══ 关闭 ═══
-  function back() {
+  // home = 侧栏左上角那枚「主页 / 返回」钮：人在子页里也直接关设置，不先退一层（Esc 与系统返回才逐层退）
+  function back(home = false) {
     if (closing) return;
-    if (anyModal) { acctForm = null; acctDel = null; agLast = null; logoutAsk = false; bypassAsk = false; return; }
-    ui.homePop++;
-    closing = true;
-    setTimeout(() => { ui.settingsOpen = false; }, 170);
+    if (anyModal) { acctForm = null; acctDel = null; acctResets = null; agLast = null; logoutAsk = false; bypassAsk = false; return; }
+    // 模型中心的浮层（App 根上，盖在设置上）开着：它自己登记了返回层就轮不到这里；没登记（还在懒加载）时兜底先关它，别把底下的设置一起关掉
+    if (hubUi.sheet) { closeHubSheet(); return; }
+    // 就地子页（子 agent 调用策略）开着：先退回 Claude 分区
+    if (dpSubOn && home !== true) { subUp(); return; }
+    dpLeave(() => {
+      ui.homePop++;
+      closing = true;
+      setTimeout(() => { ui.settingsOpen = false; }, 170);
+    });
   }
   $effect(() => registerCloser('settings', back));
   // 快捷键清单的真相在主进程（注册成没成功只有它知道）：进设置拉一次，之后跟着它推。
@@ -886,7 +1033,19 @@
     return scCtl?.onState?.((s) => { if (s) scState = s; });
   });
   // 扩展面板有弹层 / 详情开着时它在捕获阶段先接了 Esc（defaultPrevented），这里就别再关整页
-  function onKey(e) { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); back(); } }
+  // 服务管理器这类浮层（模型中心的添加 / 服务详情、Media Studio 正文里的、调用策略子页里的模型 / 推理强度选择）自己接 Esc 逐层后退：
+  // 它们的监听挂得比这里晚、后触发，这里先让开
+  function onKey(e) {
+    if (e.key !== 'Escape' || e.defaultPrevented || hubUi.sheet || stModal || dpModal) return;
+    // 子页里正在文本框里写着字（口述备注、策略名）：输入法组字中不动；否则第一下只让它失焦，别一按就把人带出子页
+    if (dpSubOn) {
+      if (e.isComposing) return;
+      const a = document.activeElement;
+      if (a?.matches?.('textarea, input:not([type]), input[type="text"]') && String(a.value ?? '').trim()) { e.preventDefault(); a.blur(); return; }
+    }
+    e.preventDefault();
+    back();
+  }
 
   // WCO 几何早期恒 visible=false（批1 课）：保持响应式，几何到位自动重算。
   // 首行折进标题栏带（macOS 系统设置同款）：带内垂直居中（(带高-34)/2，34=--sd-hd），
@@ -937,13 +1096,13 @@
     </div>
   {/if}
 {/snippet}
-{#snippet meter(name, b)}
-  <span class="mm"><span class="mh">{name}<b class={b ? usageTone(b) : ''}>{b ? b.pct + '%' : '—'}</b></span><span class="mb"><i class={b ? usageTone(b) : ''} style:width="{b ? Math.min(100, b.pct) : 0}%"></i></span><span class="mr" title={b ? poolResetIn(b.resetsAt) : ''}>{b ? poolResetAt(b.resetsAt) : ''}</span></span>
+{#snippet meter(name, b, free = false)}
+  <span class="mm"><span class="mh">{name}<b class={b ? usageTone(b) : ''}>{b ? b.pct + '%' : free ? t('无限制') : '—'}</b></span><span class="mb"><i class={b ? usageTone(b) : ''} style:width="{b ? Math.min(100, b.pct) : 0}%"></i></span><span class="mr" title={b ? poolResetIn(b.resetsAt) : ''}>{b ? poolResetAt(b.resetsAt) : ''}</span></span>
 {/snippet}
 
 <div class="sd" class:closing class:light={!dark} style:--sd-band="{bandPad}px">
   <aside class="side">
-    <button class="back" onclick={back} title={single ? t('关闭 (Esc)') : t('返回主页 (Esc)')}>
+    <button class="back" onclick={() => back(true)} title={single ? t('关闭 (Esc)') : t('返回主页 (Esc)')}>
       <svg viewBox="0 0 10 16" width="7" height="12"><path d="M8.5 1 2 8l6.5 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       {single ? t('返回') : t('主页')}
     </button>
@@ -995,10 +1154,10 @@
           <svg viewBox="0 0 10 16" width="8" height="13"><path d="M1.5 1 8 8l-6.5 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
-      <div class="htitle" class:on={scrolled || !(sec === 'account' || sec === 'extensions' || sec === 'agentapi' || sec.startsWith('ag-'))}>{SEC_TITLE}</div>
+      <div class="htitle" class:on={scrolled || !(sec === 'account' || sec === 'extensions' || sec === 'agentapi' || sec === 'studio' || sec === 'model-hub' || sec.startsWith('ag-'))}>{SEC_TITLE}</div>
     </header>
 
-    <div class="scroll" class:plg={!!plgOf(sec)} onscroll={(e) => { scrolled = e.currentTarget.scrollTop > 2; }}>
+    <div class="scroll" class:plg={!!plgOf(sec)} bind:this={scrollEl} onscroll={(e) => { scrolled = e.currentTarget.scrollTop > 2; }}>
     {#if plgOf(sec)}
       {@const pp = plgOf(sec)}
       {#key pp.id}<div class="plg-host"><PluginFrame id={pp.id} page={pp.page} mode="panel" onBack={goBack} /></div>{/key}
@@ -1013,7 +1172,8 @@
         </div>
         <DGroup label={t('订阅额度')}>
           <div class="usage" class:hl-line={fl('usage')}>
-            {#each [[t('5 小时额度'), fiveH], [t('本周额度'), weekly]] as [name, v] (name)}
+            <!-- 没有 5 小时限额的号（部分 Ultra）不摆空的 5 小时条 -->
+            {#each [...(status.noFiveHour && fiveH == null ? [] : [[t('5 小时额度'), fiveH]]), [t('本周额度'), weekly]] as [name, v] (name)}
               <div class="u">
                 <span class="ul">{name}</span>
                 <span class="ubar">{#if v != null}<i style:width="{v}%" class:hot={v > 80}></i>{/if}</span>
@@ -1126,10 +1286,8 @@
           {#snippet trailing()}<DSegmented options={LANGS} value={lang()} onchange={setLang} />{/snippet}
         </DRow>
       </DGroup>
+      <NotifySection highlight={fl} onMaster={(v) => { try { agCtl?.setNotify?.(v); } catch {} }} />
       <DGroup label={t('系统')}>
-        <DRow title={t('通知')} highlight={fl('notify')}>
-          {#snippet trailing()}<DSwitch checked={notifyOn} onchange={onNotify} />{/snippet}
-        </DRow>
         {#if asCtl && autoStart.supported}
           <DRow title={t('开机自动启动')} highlight={fl('autostart')}>
             {#snippet trailing()}<DSwitch checked={autoStart.enabled} onchange={onAutoStart} />{/snippet}
@@ -1154,15 +1312,68 @@
         {/each}
       </div>
       <DGroup>
-        {#if !single}
-          <DRow title={t('分页跟随主页明暗')} highlight={fl('followpage')}>
-            {#snippet trailing()}<DSwitch checked={prefs.followPage} onchange={onFollowPage} />{/snippet}
-          </DRow>
-        {/if}
         <DRow title={t('禁用转场动画')} highlight={fl('noanim')}>
           {#snippet trailing()}<DSwitch checked={prefs.noEnterAnim} onchange={onNoAnim} />{/snippet}
         </DRow>
       </DGroup>
+
+    {:else if sec === 'studio'}
+      <!-- Media Studio（2026-11-04 接替 Gemini 分区）：头图 + 管理员的启用开关在这里画，正文是懒加载的 studio 扩展组件 -->
+      {@const a = agentById('studio')}
+      <div class="hero">
+        <span class="mark">{#if markSrc('studio')}<img src={markSrc('studio')} alt="" draggable="false" />{/if}</span>
+        <h2>Media Studio</h2>
+        {#if studioStatus(a)}<p>{studioStatus(a)}</p>{/if}
+      </div>
+      {#if a}
+        <DGroup>
+          <DRow title={t('启用 {name}', { name: 'Media Studio' })} highlight={fl('agents')}>
+            {#snippet trailing()}<DSwitch checked={a.switch && a.runnable} disabled={!a.runnable || ags.agentBusy === a.id} onchange={(v) => toggleAgent(a, v)} />{/snippet}
+          </DRow>
+        </DGroup>
+      {/if}
+      {#await loadPage.studioSettings() then m}
+        {@const StudioBody = m.default}
+        <StudioBody shell="desk" {dark} {fl} agentIds={studioIds.length ? studioIds : null} onModal={(v) => (stModal = v)} />
+      {:catch}
+        <p class="note">{t('Media Studio 的设置没加载出来：这台服务器可能没装 Media Studio 扩展。')}</p>
+      {/await}
+
+    {:else if sec === 'model-hub'}
+      <!-- 模型中心（2026-11-10 起是设置里的独立分区）：头图在这里画（副文只写状态），正文是懒加载的 components/modelhub/HubHome；
+           添加 / 服务详情是 App 根上的全局浮层，不在这一页里。正文比别的分区宽（.hubw 720，同 .cz 的做法）：服务行要并排摆
+           名字、给谁用、种类与线路状态，600 一挤就折行 -->
+      {@const sum = hubSummaryText()}
+      <div class="hero">
+        <span class="mark">{@html svgOf('modelhub', 1.4)}</span>
+        <h2>{t('模型中心')}</h2>
+        {#if sum}<p>{sum}</p>{/if}
+      </div>
+      <div class="hubw">
+        {#await import('../../components/modelhub/HubHome.svelte') then m}
+          <m.default shell="desk" />
+        {:catch}
+          <p class="note">{t('模型中心没加载出来：关掉设置再打开试试。')}</p>
+        {/await}
+      </div>
+
+    {:else if dpSubOn}
+      <!-- 子 agent 调用策略：Claude 分区里就地展开的子页（clSub='dispatch'），整块替换分区正文。返回头归外壳（回 Claude 分区），
+           正文是懒加载的 components/claude/dispatch/DispatchPolicy。内容列比标准的 600 宽（.subw ≤ 920）：性价比图和四档落点要并排摆得开 -->
+      <div class="subw">
+        <div class="subhd">
+          <button class="sub-back" onclick={subUp} title={t('返回 (Esc)')}>
+            <svg viewBox="0 0 10 16" width="7" height="12" aria-hidden="true"><path d="M8.5 1 2 8l6.5 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>{SEC_NAME}</span>
+          </button>
+          <h2>{t('子 agent 调用策略')}</h2>
+        </div>
+        {#await import('../../components/claude/dispatch/DispatchPolicy.svelte') then m}
+          <m.default shell="desk" onModal={(v) => { dpModal = !!v; }} />
+        {:catch}
+          <p class="note">{t('调用策略没加载出来：关掉设置再打开试试。')}</p>
+        {/await}
+      </div>
 
     {:else if sec.startsWith('ag-')}
       {@const id = sec.slice(3)}
@@ -1196,14 +1407,19 @@
                   <div class="pmain">
                     <div class="pname">
                       <b>{accLabel(acc.label)}</b>
-                      {#if u?.plan === 'max'}<span class="pill">Max</span>{:else if u?.plan === 'pro'}<span class="pill">Pro</span>{/if}
+                      {#if planPill(u?.plan)}<span class="pill">{planPill(u.plan)}</span>{/if}
                       {#if acc.active}<span class="cur">{t('使用中')}</span>{/if}
+                      <!-- 重置卡：服务端有这项能力才出现；读到有可用的卡就带上张数 -->
+                      {#if ags.resetsOk}
+                        {@const n = resetsLeft(ags.resets[acc.id])}
+                        <button class="rcchip" class:has={n > 0} onclick={() => { acctResets = acc; }}>{n > 0 ? t('重置卡 {n}', { n }) : t('重置卡')}</button>
+                      {/if}
                     </div>
                     <div class="mini">
                       {#if !u}<span class="mna">{ags.usageBusy ? t('读取用量…') : (acc.hasToken ? '…' + (acc.tokenTail || '') : t('用本机登录态（~/.claude）'))}</span>
                       {:else if u.error && !u.five_hour && !u.seven_day}<span class="mna bad">{tr(u.error)}</span>
                       {:else}
-                        {@render meter(t('5 小时'), u.five_hour)}
+                        {@render meter(t('5 小时'), u.five_hour, !!u.no_five_hour)}
                         {@render meter(t('每周'), u.seven_day)}
                         {@render meter('Fable', u.fable)}
                       {/if}
@@ -1227,13 +1443,6 @@
           </DGroup>
           {#if ags.err}<p class="err">{ags.err}</p>{/if}
 
-        {/if}
-
-        <!-- 模型服务（自定义 API，管理员与成员各一份）：紧跟号池——两者都是「模型从哪来」 -->
-        {#if cp.ok}
-          <DGroup label={t('模型服务')}>
-            <DRow title={t('自定义 API')} sub={provSummary} highlight={fl('cproviders')} onclick={() => (provOpen = true)} />
-          </DGroup>
         {/if}
 
         <!-- 撞上限额时：按身份的续跑默认 + 号池智能路由（管理员）；依赖项缩进紧跟主项 -->
@@ -1286,23 +1495,22 @@
           {@render crow('promptSuggestions', 'suggest')}
           {@render crow('inlineVisualizations', 'cviz')}
           {@render crow('enableWorkflows', 'cwf')}
-          {#if visible('subagentDispatch')}
-            <div class="drow cr ind dsp" class:hl={fl('cdispatch')}>
-              <span class="cr-tx">
-                <span class="cr-t">{csLabel('subagentDispatch')}{#if changed('subagentDispatch')}<i class="chg" title={t('已改过默认值')}></i>{/if}</span>
-                <span class="cr-s" class:bad={!!dspErr}>{dspErr || csDesc('subagentDispatch')}</span>
+          {#if dpShown}
+            <!-- 子 agent 调用策略：与「动态工作流」同级（普通子 agent 那个范围不靠它）。一行两块命中区——行按钮（标题 + 状态副标题）
+                 的命中区铺满整行、点了进子页；开关那一块压在它上面，四周留一圈不响应的边，点偏了既不进子页也不拨开关。
+                 关着时这一行不置灰：照样能点进去看 -->
+            <div class="drow cr dpr" class:hl={fl('cdispatch')} role="group" aria-label={t('子 agent 调用策略')}>
+              <button class="dpr-go" onclick={() => navigate('ag-claude#dispatch')}>
+                <span class="cr-t">{t('子 agent 调用策略')}</span>
+                <span class="cr-s" class:bad={!!dpRowErr}>{#if dpRowErr || dpSub}{dpRowErr || dpSub}{:else}&nbsp;{/if}</span>
+              </button>
+              <!-- 策略读到了才摆开关（位置先占着）：不然它会先以「关」露面、再滑到「开」。{#key}：没存上时让开关弹回原位 -->
+              <span class="dpr-sw">
+                {#if dp?.policy}{#key dpSwKey}<DSwitch checked={!!dp.policy.enabled} disabled={dp.canEdit === false} onchange={toggleDispatch} />{/key}{/if}
               </span>
-              <span class="cr-tr">
-                {#if dspMsg}<span class="dsp-ok">{dspMsg}</span>{/if}
-                {#if changed('subagentDispatch')}<button class="cr-reset" onclick={() => { dspErr = ''; dspDraft = ''; resetVal('subagentDispatch'); }}>{t('清空')}</button>{/if}
-              </span>
-              <div class="dsp-box">
-                <textarea rows="4" maxlength={CS.subagentDispatch.maxLen} bind:value={dspDraft}
-                  placeholder={t('例：简单任务（检索、读文件、批量改名）用 mimo-v2.6-flash；普通构建任务用 deepseek-v4.1-flash；难题和最终审查留给主模型。其余按实际情况判断，不局限于这几个。')}
-                  onfocus={() => { dspFocus = true; }} onblur={() => { dspFocus = false; saveDispatch(); }}
-                  onkeydown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.blur(); } }}></textarea>
-                <span class="dsp-n">{dspDraft.length} / {CS.subagentDispatch.maxLen}</span>
-              </div>
+              <svg class="dpr-chev" viewBox="0 0 6 10" width="6" height="10" aria-hidden="true">
+                <path d="M1 1l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
             </div>
           {/if}
           {@render crow('switchModelsOnFlag', 'cflag')}
@@ -1310,20 +1518,29 @@
           {@render crow('questionTimeout', 'cqto')}
           {@render crow('replyLanguage', 'clang')}
           {@render crow('compactFrac', 'ccompact')}
-          {#if markOpts.length > 1}
-            <div class="drow cr" class:hl={fl('thinkmark')}>
-              <span class="cr-tx"><span class="cr-t">{t('思考动画')}<span class="pill">{t('这台设备')}</span></span></span>
-              <span class="cr-tr">
-                <DSelect options={markOpts} value={prefs.claudeMark} onchange={onClaudeMark} width="170px" />
-              </span>
-            </div>
-          {/if}
+          <div class="drow cr" class:hl={fl('thinkmark')}>
+            <span class="cr-tx"><span class="cr-t">{t('思考动画')}<span class="pill">{t('这台设备')}</span></span></span>
+            <span class="cr-tr">
+              <DSelect options={markOpts} value={prefs.claudeMark} onchange={onClaudeMark} width="170px" />
+            </span>
+          </div>
         </DGroup>
 
         {#if visible('newSessionPolicy') || visible('crossSessionInbound')}
           <DGroup label={t('会话协作')}>
             {@render crow('newSessionPolicy', 'cnewsess')}
             {@render crow('crossSessionInbound', 'cinbound')}
+          </DGroup>
+        {/if}
+
+        <!-- 项目对话（运行档位 › 项目：协调者只派活、讨论串去做，src/runtime/project-mode.mjs） -->
+        {#if visible('projectAskFirst')}
+          <DGroup label={t('项目对话')}>
+            {@render crow('projectAskFirst', 'cpask')}
+            {@render crow('projectMaxLive', 'cpmax')}
+            {@render crow('projectDailyThreads', 'cpdaily')}
+            {@render crow('projectThreadModel', 'cpmodel')}
+            {@render crow('projectThreadEffort', 'cpeffort')}
           </DGroup>
         {/if}
 
@@ -1352,6 +1569,7 @@
           {@render crow('notifyPermission', 'cn-perm')}
           {@render crow('notifyQuestion', 'cn-q')}
           {@render crow('notifyTaskComplete', 'cn-done')}
+          {@render crow('notifyError', 'cn-err')}
         </DGroup>
 
         {#if cs.admin}
@@ -1377,38 +1595,22 @@
             {#key bypassAsk}{@render crow('allowBypass', 'cbypass')}{/key}
             {@render crow('allowAutoMode', 'cauto')}
           </DGroup>
+          <!-- 调试（改进 harness 用，v558 起注册表就有、外壳漏渲染）：只给主机管理员，说明放组脚 -->
+          {#if visible('debugMode')}
+            <DGroup label={t('调试')} foot={csDesc('debugMode')}>
+              {@render crow('debugMode', 'cdebug')}
+            </DGroup>
+          {/if}
         {/if}
         {#if clErr}<p class="err">{clErr}</p>{/if}
       {/if}
 
-      {#if id === 'gemini' && a?.runnable}
-        <VertexCredentials onchange={loadAgents} />
-        <!-- 「Google 云凭据」下面那几组（注册表 src/config/vertex-settings.mjs，与手机同一份） -->
-        {#if vx.loaded}
-          {@const ids = (ags.agents?.agents || []).filter((x) => x.runnable).map((x) => x.id)}
-          {#each VERTEX_SETTING_GROUPS as g (g.id)}
-            {@const keys = vxGroupKeys(g.id, ids)}
-            {#if keys.length}
-              <DGroup label={vxGroupLabel(g)} foot={vxGroupFoot(g)}>
-                {#each keys as key (key)}
-                  <DRow title={vxLabel(key)} sub={vxDesc(key)}>
-                    {#snippet trailing()}
-                      {#if VX[key].type === 'bool'}
-                        <DSwitch checked={!!vx.values[key]} disabled={vx.busy === key} onchange={(v) => setVertexSetting(key, v)} />
-                      {:else}
-                        <DSelect options={vxOptions(key)} value={vx.values[key]} disabled={vx.busy === key} onchange={(v) => setVertexSetting(key, v)} width="170px" />
-                      {/if}
-                    {/snippet}
-                  </DRow>
-                {/each}
-              </DGroup>
-            {/if}
-          {/each}
-          {#if vx.err}<p class="err">{vx.err}</p>{/if}
-        {/if}
+      {#if id === 'dimensio'}
+        <!-- 管理员：开关关着 / 这台机器跑不起来时不去打 harness（原因在头图下）；成员能看到这一分区就是有权限 -->
+        <DimensioSection {fl} enabled={!a || (a.switch && a.runnable)} openHub={() => navigate('model-hub')} />
       {/if}
 
-      {#if !a && id !== 'claude'}<p class="note">{t('只有管理员能改这里')}</p>{/if}
+      {#if !a && id !== 'claude' && id !== 'dimensio'}<p class="note">{t('只有管理员能改这里')}</p>{/if}
 
     {:else if sec === 'extensions'}
       {#key extKey}<Customize />{/key}
@@ -1692,12 +1894,24 @@
             <DField bind:value={acctForm.label} placeholder={t('如：主号 / 备用号')} width="100%" />
             <DField bind:value={acctForm.token} type="password" width="100%"
               placeholder={acctForm.isNew ? 'sk-ant-oat…' : (acctForm.hasToken ? t('留空＝不改，当前 …{tail}', { tail: acctForm.tokenTail || '' }) : t('留空＝用本机登录态'))} />
+            <div class="plan-pick">
+              <span>{t('套餐')}</span>
+              <DSegmented options={PLAN_CHOICES()} bind:value={acctForm.plan} />
+            </div>
+            <p class="hint">{t('套餐：setup-token 读不到订阅档位，自动识别分不清 Pro / Max 5x / Ultra 时手动标一下。')}</p>
             {#if acctForm.err}<p class="err">{acctForm.err}</p>{/if}
             <div class="dacts">
               <DButton variant="ghost" onclick={() => { acctForm = null; }}>{t('取消')}</DButton>
               <DButton variant="primary" type="submit" disabled={acctForm.busy}>{acctForm.isNew ? t('添加') : t('保存')}</DButton>
             </div>
           </form>
+        {:else if acctResets}
+          <h3>{t('重置卡 · {name}', { name: accLabel(acctResets.label) })}</h3>
+          <p>{t('Anthropic 偶尔发给订阅号的限额重置：用掉一张，对应限额的用量立即清零。')}</p>
+          <ClaudeResets account={acctResets} skin="dsk" />
+          <div class="dacts">
+            <DButton variant="ghost" onclick={() => { acctResets = null; }}>{t('关闭')}</DButton>
+          </div>
         {:else if acctDel}
           <h3>{t('删除账号 {name}？', { name: accLabel(acctDel.label) })}</h3>
           <p>{t('只从切换列表移除；若删的是当前账号，会自动切到另一个。')}</p>
@@ -1732,7 +1946,6 @@
   {/if}
 </div>
 
-{#if provOpen}<ProviderManager onClose={() => (provOpen = false)} />{/if}
 
 <style>
   /* ── v5「墨与象牙」令牌：就地覆盖 --dsk-*（kit 读它们），只在设置页生效 ──
@@ -1888,6 +2101,8 @@
   .scroll > :global(*) { max-width: 600px; margin-left: auto; margin-right: auto; }
   /* 扩展分区是官方「自定义」页的宽版式（两栏卡片网格），放宽内容列 */
   .scroll > :global(.cz) { max-width: 1080px; }
+  /* 模型中心的正文（HubHome）：服务行并排摆名字、给谁用、种类与线路状态，比 600 的标准列宽一档（同 .cz 的做法，只放宽这一列） */
+  .scroll > .hubw { max-width: 720px; }
   .scroll :global(section.grp) { margin-bottom: 26px; }
   .scroll :global(.gcard) { border-radius: 12px; box-shadow: inset 0 0 0 1px var(--dsk-line); }
   .scroll :global(.glabel) { font-weight: 500; color: var(--dsk-ink-3); }
@@ -1941,18 +2156,31 @@
   /* Claude 设置行（crow 片段）：与 DRow 同尺寸；标题旁改动点 / 本机胶囊，尾部「恢复默认」+ 控件；依赖项缩进 */
   .cr { display: flex; align-items: center; gap: var(--dsk-s3); width: 100%; position: relative; font-family: var(--dsk-font); color: var(--dsk-ink); }
   .cr.ind { padding-left: 34px; }
-  .cr.dsp { flex-wrap: wrap; align-items: flex-start; row-gap: 8px; padding-bottom: 12px; }
-  .dsp-box { position: relative; flex: 1 0 100%; }
-  .dsp-box textarea { display: block; width: 100%; box-sizing: border-box; min-height: 92px; max-height: 260px; resize: vertical;
-    padding: 8px 10px 22px; border: none; border-radius: var(--dsk-r-sm); background: var(--dsk-panel); box-shadow: 0 0 0 1px var(--dsk-line);
-    font-family: var(--dsk-font); font-size: var(--dsk-fs-ui); line-height: 1.5; color: var(--dsk-ink);
-    transition: box-shadow var(--dsk-t-fast) var(--dsk-ease), background var(--dsk-t-fast) var(--dsk-ease); }
-  .dsp-box textarea::placeholder { color: var(--dsk-ink-3); }
-  .dsp-box textarea:hover:not(:focus) { background: var(--dsk-panel-strong); }
-  .dsp-box textarea:focus { outline: none; box-shadow: var(--dsk-focus); background: var(--dsk-panel-strong); }
-  .dsp-n { position: absolute; right: 9px; bottom: 5px; font-size: 11px; color: var(--dsk-ink-3); font-variant-numeric: tabular-nums; pointer-events: none; }
-  .dsp-ok { font-size: var(--dsk-fs-sm); color: var(--dsk-ink-3); }
   .scroll :global(.gcard .drow.cr.ind::before) { left: 34px; }
+  /* 子 agent 调用策略入口行：行按钮（标题 + 状态副标题）用 ::after 把命中区铺满整行（.cr 是定位容器），悬停 / 按下 / 焦点的底色也画在这层上；
+     开关那一块是后来的定位元素、压在这层上面，四周的内边距是不响应的缓冲带。箭头不接事件，点它落在行按钮上 */
+  .dpr-go { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; padding: 0; text-align: left;
+    font-family: inherit; color: inherit; cursor: pointer; }
+  .dpr-go::after { content: ''; position: absolute; inset: 0; transition: background var(--dsk-t-fast) var(--dsk-ease); }
+  .dpr-go:hover::after { background: var(--dsk-hover); }
+  .dpr-go:active::after { background: var(--dsk-active); }
+  .dpr-go:focus-visible { outline: none; }
+  .dpr-go:focus-visible::after { box-shadow: inset var(--dsk-focus); }
+  .dpr-go .cr-s { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  :global(html[lang='en']) .dpr-go .cr-s { white-space: normal; }
+  .dpr-sw { position: relative; flex: none; display: inline-flex; align-items: center; box-sizing: content-box; min-width: 38px; min-height: 22px;
+    margin: -10px -4px -10px -12px; padding: 10px 4px 10px 12px; }
+  .dpr-chev { flex: none; color: var(--dsk-ink-3); }
+
+  /* 就地子页（子 agent 调用策略）：内容列放宽到 920（标准列 600 摆不开性价比图）；返回头 = 回所在分区的一枚轻按钮 + 衬线标题 */
+  .scroll > .subw { max-width: 920px; }
+  .subhd { margin: -4px 0 22px; }
+  .sub-back { display: inline-flex; align-items: center; gap: 7px; height: 28px; margin-left: -8px; padding: 0 10px 0 8px; border-radius: var(--dsk-r-sm);
+    font-family: inherit; font-size: var(--dsk-fs-ui); font-weight: 500; color: var(--dsk-ink-2);
+    transition: background var(--dsk-t-fast) var(--dsk-ease), color var(--dsk-t-fast) var(--dsk-ease); }
+  .sub-back:hover { background: var(--dsk-hover); color: var(--dsk-ink); }
+  .sub-back:focus-visible { outline: none; box-shadow: var(--dsk-focus); }
+  .subhd h2 { margin: 10px 0 0; font-family: var(--font-brand-serif), Georgia, "Songti SC", serif; font-size: 24px; line-height: 30px; font-weight: 500; letter-spacing: -.01em; }
   .cr-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .cr-t { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: var(--dsk-fs-body); line-height: 1.35; }
   .cr-s { font-size: var(--dsk-fs-sm); line-height: 1.35; color: var(--dsk-ink-3); }
@@ -1973,6 +2201,10 @@
   .pname b { font-size: var(--dsk-fs-body); font-weight: 500; }
   .pill { padding: 0 6px; border-radius: 5px; font-size: 10.5px; line-height: 17px; font-weight: 600; letter-spacing: .3px; color: var(--dsk-ink-2); box-shadow: inset 0 0 0 1px var(--dsk-line-strong); }
   .pill.red { color: var(--dsk-crit); box-shadow: none; background: color-mix(in srgb, var(--dsk-crit) 13%, transparent); }
+  .rcchip { padding: 0 7px; border-radius: 5px; font-size: 10.5px; line-height: 17px; font-weight: 600; letter-spacing: .3px; color: var(--dsk-ink-3); box-shadow: inset 0 0 0 1px var(--dsk-line);
+    font-variant-numeric: tabular-nums; transition: color var(--dsk-t-fast) ease, background var(--dsk-t-fast) ease; }
+  .rcchip.has { color: var(--dsk-ink); box-shadow: inset 0 0 0 1px var(--dsk-line-strong); }
+  .rcchip:hover { color: var(--dsk-ink); background: var(--dsk-hover); }
   .cur { display: inline-flex; align-items: center; gap: 5px; font-size: var(--dsk-fs-sm); color: var(--dsk-ink-2); }
   .cur::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--dsk-ok); }
   .mini { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 8px; max-width: 360px; }
@@ -2116,6 +2348,9 @@
   .dlg h3 { font-size: var(--dsk-fs-md); font-weight: 600; margin-bottom: 6px; }
   .dlg p { font-size: var(--dsk-fs-ui); line-height: 1.55; color: var(--dsk-ink-2); margin-bottom: 10px; }
   .dlg p.err { color: var(--dsk-crit); margin: 0; }
+  .dlg .plan-pick { display: flex; align-items: center; gap: var(--dsk-s2); font-size: var(--dsk-fs-ui); color: var(--dsk-ink-2); }
+  .dlg .plan-pick > span { flex: none; }
+  .dlg p.hint { font-size: var(--dsk-fs-sm, 12px); margin: 0; color: var(--dsk-ink-3, var(--dsk-ink-2)); }
   .dacts { display: flex; justify-content: flex-end; gap: var(--dsk-s2); margin-top: 10px; }
   @keyframes dlg-fade { from { opacity: 0; } }
   @keyframes dlg-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }

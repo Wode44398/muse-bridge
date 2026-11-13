@@ -135,18 +135,25 @@ export function fenceViolation(roots, check) {
 // ── 终端 / 无头浏览器池的键 ─────────────────────────────────────────────────
 // 池子按（属主, 工作空间）键控：两个人进了同一个目录（将来的共享空间），也接不到对方的 shell 和网站登录态。
 // 池函数的 ws 参数可以是路径（老调用方），也可以是 poolRef(ctx, 路径)。属主取 scope（数据归谁）。
-export function poolRef(ctxOrOwner, ws) {
+// session（可选）= 再细到某个对话：浏览器池按会话各开一份（同一工作空间的几个对话互不抢页面 / 视口）；
+// 终端不传，仍是整个工作空间共用一个 shell。
+export function poolRef(ctxOrOwner, ws, session = '') {
   const owner = typeof ctxOrOwner === 'string' ? ctxOrOwner : scopeOf(ctxOrOwner);
-  return { ws, owner };
+  return session ? { ws, owner, session: String(session) } : { ws, owner };
 }
 export const refPath = (ref) => (ref && typeof ref === 'object' ? ref.ws : ref);
 export const refOwner = (ref) => (ref && typeof ref === 'object' ? String(ref.owner || '') : '');
+export const refSession = (ref) => (ref && typeof ref === 'object' ? String(ref.session || '') : '');
+// 前端 / 工具传来的会话 id 只认这种形状（SDK 的 UUID 等）；别的一律当没给，退回整个工作空间那一份。
+export const cleanSessionId = (v) => { const s = String(v ?? ''); return /^[A-Za-z0-9_-]{1,80}$/.test(s) ? s : ''; };
 // fold = 池自己的路径规范化（resolve + Windows 小写）。主机身份与只给路径的老调用方（Codex 的浏览器通道等）
-// 仍是「只按路径」——主机这边的键与改动前逐字一致；其他身份加属主前缀（\0 不会出现在路径里）。
+// 仍是「只按路径」——主机这边的键与改动前逐字一致；其他身份加属主前缀（\0 不会出现在路径里）；带会话的再接 \1 + 会话 id。
 export function poolKey(ref, fold) {
   const key = fold(refPath(ref));
   const owner = refOwner(ref);
-  return !owner || owner === HOST_OWNER ? key : `${owner}\u0000${key}`;
+  const base = !owner || owner === HOST_OWNER ? key : `${owner}\u0000${key}`;
+  const session = refSession(ref);
+  return session ? `${base}\u0001${session}` : base;
 }
 
 // ── 会话引用与可见性 ────────────────────────────────────────────────────────

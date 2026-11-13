@@ -20,7 +20,8 @@ export default defineConfig({
     // 不能放开到仓库根：维护者那台数据根=程序根，config.json / connector-secrets.key 会被 /@fs/ 当静态文件发出去（pv- 预览链接绕过鉴权）。
     // allow 相对 vite root 解析，必须带 "."；deny 会整个替换 vite 默认值，所以默认那四条照抄再加凭据文件。
     fs: {
-      allow: [".", "../../src/model-knowledge"],
+      // 内嵌图表的渲染壳与 bridge 的 Claude 图表共用（src/lib/widget-shell.ts 相对引用），连同它的 DOMPurify
+      allow: [".", "../../src/model-knowledge", "../../web/src/lib/widgetShell.js", "../../web/src/lib/brandLogos.js", "../../web/node_modules/dompurify"],
       deny: [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/config.json*", "**/connector-secrets.*", "**/public-access.json"],
     },
     proxy: {

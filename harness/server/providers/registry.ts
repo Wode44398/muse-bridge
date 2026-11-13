@@ -7,6 +7,14 @@ import { getCustomProvider, isCustomProviderId, isSharedProvider, requestHeaders
 import { assertPublicEndpoint, privateEndpointsBlocked } from "../endpoint-guard.ts";
 
 // R2：每家的流都套同一层空闲超时（首字节 / 字节间，见 sse.ts guardStream）。
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 export function createAdapter(cfg: AdapterConfig): ProviderAdapter {
   return guardStream(createProviderAdapter(cfg));
 }
@@ -27,6 +35,7 @@ function createProviderAdapter(cfg: AdapterConfig): ProviderAdapter {
       maxTokensField: live.maxTokensField,
       promptCaching: live.promptCaching,
       replayReasoning: live.replayReasoning,
+      upstreamHost: live.upstream || hostnameOf(live.baseUrl),
       ...(guarded ? { noRedirect: true } : {}),
       ...(m
         ? { model: { thinking: m.thinking, efforts: m.efforts, effortField: m.effortField, effortDefault: m.effortDefault, alwaysThinks: m.alwaysThinks, maxOutput: m.maxOutput } }

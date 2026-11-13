@@ -85,6 +85,14 @@ import { killAllMcpSync, mcpReady, mcpStatus, syncConnectors } from "./mcp.ts";
 import { listDir, saveUpload } from "./files.ts";
 import { listDirs, makeDir } from "./fsnav.ts";
 import { accessLock, assertInTenant, disabledProviders, insideTenant, tenantInfo, tenantMode, tenantRoot, tenantShell } from "./tenant.ts";
+import { allPrefs, prefValue, setPrefs } from "./prefs.ts";
+import { registerPrRoutes } from "./pr.ts"; // 拉取请求（PR 卡、bridge 推来的自动修复事件）
+import { registerWorkspaceRoutes } from "./workspace-routes.ts"; // 工作区协同：视图上报 / 应答
+// 会话管理（稍后发送 / 改名与 AI 标题 / 归档 / 输入建议 / 通知）：接口与接线都在 sessmgmt/，这里只挂载与给列表加过滤
+import { archiveFilter, archiveViewOf, isArchived, mountSessionMgmt, notifyPrefs } from "./sessmgmt/index.ts";
+// 会话协作（子会话、会话间消息、与 bridge 里 Claude 会话互通）：接口在 family-routes.ts，运行时在 session-family.ts
+import { registerFamilyRoutes } from "./family-routes.ts";
+import { startFamily } from "./session-family.ts";
 import {
   createBlankProject,
   importProject,
@@ -104,7 +112,7 @@ import {
   quickSessionFilter,
 } from "./quick.ts";
 import { Sandbox } from "./sandbox.ts";
-import { getConfig, setConfig, hasKey, sessionConfigSnapshot, forgetProvider, type ConfigPatch } from "./config.ts";
+import { getConfig, setConfig, hasKey, sessionConfigSnapshot, forgetProvider, setProviderKey, type ConfigPatch } from "./config.ts";
 import { allProviders } from "./catalog.ts";
 import {
   addCustomProvider,
@@ -121,6 +129,7 @@ import {
   removeCustomProvider,
   testCustomProvider,
   updateCustomProvider,
+  hostManagesBuiltins,
 } from "./custom-providers.ts";
 import { shell, killAllJobs, listJobs, moveForegroundToBackground, stopJob } from "./tools/bash.ts";
 import { ALL_TOOLS, toolDefs } from "./tools/registry.ts";
@@ -137,6 +146,8 @@ import {
   MemoryTopicConflict,
   MemoryBudgetError,
   GLOBAL_MEMORY,
+  globalMemoryFor,
+  globalMemoryScoped,
   isGlobalMemory,
   promoteMemory,
   readMemory,
@@ -153,16 +164,13 @@ import { refreshProjectKnowledge, stopKnowledgeWorker } from "./knowledge-servic
 import { getSearchMetrics, searchUnifiedKnowledge, type KnowledgeKind } from "./knowledge-search.ts";
 import { stopService, stopAllServices, stopServicesFor, latestService, listServices } from "./services.ts";
 import {
-  attachEdgeBrowser,
   browserClaimOwner,
   closeAllBrowserSessions,
   existingSharedBrowser,
   getSharedBrowser,
   sharedBrowserMode,
-  sharedEdgeKind,
   VIEWPORT_PRESETS,
 } from "./cdp.ts";
-import { edgeHub, edgeLink, EDGE_EXTENSION_DIR } from "./edge-link.ts";
 import { reviewOverview, reviewDiff } from "./review.ts";
 import {
   ensureTerm,
@@ -181,11 +189,14 @@ import {
 } from "./api-auth.ts";
 import { inertFileHeaders } from "./inert-file.ts";
 import { randomBytes } from "node:crypto";
-import { cleanEngine, localAiApply, localAiStart, localAiStatus, localAiStop, localGpuInfo } from "./localai.ts";
+import { cleanEngine, cleanVariant, localAiApply, localAiStart, localAiStatus, localAiStop, localGpuInfo, strataVariantOf, type StrataVariant } from "./localai.ts";
 import { BUILD_INFO } from "./build-info.ts";
 import { protocolInfo } from "./protocol.ts";
 import { backlogGuard } from "./sse-backlog.ts";
 import { startLoopDelayMonitor } from "./loop-delay.ts";
+import { startJobNotify } from "./job-notify.ts";
+import { startIdleCompact } from "./idle-compact.ts";
+import { dreamCandidates, dreamRunning, memoryDreamEnabled, readDreamState, startDream, startMemoryDream } from "./memory-dream.ts";
 import { MAX_QUERY_CHARS, searchSessions } from "./session-search.ts";
 import { referenceDigests } from "./session-refs.ts";
 
@@ -265,7 +276,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   if (!tenantMode()) return next();
   const p = req.path;
-  if (p.startsWith("/api/localai/") || p.startsWith("/api/edge/") || p === "/api/browser/edge") {
+  if (p.startsWith("/api/localai/")) {
     res.status(403).json({ error: "not available for multi-user accounts on this server" });
     return;
   }
@@ -322,6 +333,8 @@ app.get("/api/info", (_req, res) => {
     // Which models each provider can call + the effort tiers each model exposes.
     // The chat-bar model/effort menus render straight from this.
     catalog,
+    // 宿主（bridge 的模型中心）接管了自带厂商：目录里只有它给了 Key 的那几家，界面上不再有填 Key 的地方
+    hostBuiltins: hostManagesBuiltins(),
     tenant: tenantInfo(),
     // S9：这个进程跑的是哪版代码（启动时的 HEAD / 是否有未提交改动 / 启动时间）。
     build: BUILD_INFO,
@@ -362,10 +375,14 @@ app.post("/api/devices/link", async (req, res) => {
   }
 });
 
+// ── 拉取请求（会话面板的 PR 卡 + bridge 推来的自动修复事件，见 pr.ts）──
+registerPrRoutes(app);
+
 app.get("/api/config", (_req, res) => {
   const cfg = getConfig();
   // accessLocked：访问范围被锁定（租户恒 workspace）——前端据此不摆「仅工作空间 / 整机」开关。
-  res.json({ ...cfg, hasKey: hasKey(cfg.provider), accessLocked: accessLock() });
+  // awayDecision：离开模式下批准请求的默认落定（偏好项），运行设置里离开模式那一行据此说清楚
+  res.json({ ...cfg, hasKey: hasKey(cfg.provider), accessLocked: accessLock(), awayDecision: prefValue<string>("awayDecision") });
 });
 
 // ── 自定义模型服务（「模型服务」面板里的「＋」卡；OpenAI / Anthropic / Gemini 协议，key 加密存） ─────────────
@@ -493,18 +510,21 @@ app.get("/api/net", (_req, res) => {
 
 // ── 本机模型（Qwen3.8-27B / Strata 125B）状态与启停 ─────────────────────────
 // composer 的「本机」状态面板用；start/stop 都是幂等的，返回操作后的实时状态。
-// ?engine=qwen|strata 选引擎，不带 = qwen（旧前端只认识这一台）。
+// ?engine=qwen|strata 选引擎，不带 = qwen（旧前端只认识这一台）。Strata 另认 ?model=<型号 id>（或 ?variant=<变体>）：问 / 起的是
+// 哪个变体；start 遇上在跑的是别的变体 = 切换（停掉按要的那个重起）。不带 = 在跑的那个，没在跑 = 默认变体。
+const variantOf = (q: Record<string, unknown>): StrataVariant | undefined =>
+  cleanVariant(q.variant) ?? (typeof q.model === "string" ? strataVariantOf(q.model)?.id : undefined);
 
 app.get("/api/localai/status", async (req, res) => {
-  res.json(await localAiStatus(cleanEngine(req.query.engine)));
+  res.json(await localAiStatus(cleanEngine(req.query.engine), variantOf(req.query)));
 });
 
 app.post("/api/localai/start", async (req, res) => {
-  res.json(await localAiStart(cleanEngine(req.query.engine)));
+  res.json(await localAiStart(cleanEngine(req.query.engine), variantOf(req.query)));
 });
 
 app.post("/api/localai/stop", async (req, res) => {
-  res.json(await localAiStop(cleanEngine(req.query.engine)));
+  res.json(await localAiStop(cleanEngine(req.query.engine), variantOf(req.query)));
 });
 
 // 启动参数（上下文 / KV 精度 / 视觉 / MTP 或 KV 流式）：保存；在跑就按新参数重启。gpu 给面板做显存估算。
@@ -513,8 +533,39 @@ app.get("/api/localai/gpu", async (req, res) => {
 });
 
 app.post("/api/localai/settings", async (req, res) => {
-  res.json(await localAiApply(req.body?.settings, cleanEngine(req.query.engine)));
+  res.json(await localAiApply(req.body?.settings, cleanEngine(req.query.engine), variantOf(req.query)));
 });
+
+// 偏好设置注册表（prefs.ts）：bridge 设置页「dimensio」分区按清单画表单。null = 恢复默认。
+app.get("/api/prefs", (_req, res) => {
+  res.json(allPrefs({ tenant: tenantMode() }));
+});
+app.post("/api/prefs", async (req, res) => {
+  try {
+    await setPrefs(req.body?.values, { tenant: tenantMode() });
+    res.json(allPrefs({ tenant: tenantMode() }));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+// 设置页「各厂商 API Key」：给某一家内置厂商存 key，不切换当前厂商（POST /api/config 带 apiKey 存给的是当前那家）。
+// 回各家「有没有 key」的新表（同 /api/info 的 providers）。
+app.post("/api/provider-keys", (req, res) => {
+  try {
+    setProviderKey(req.body?.provider, req.body?.apiKey);
+    const off = disabledProviders();
+    res.json({ ok: true, providers: Object.fromEntries(allProviders().filter((p) => !off.has(p.id)).map((p) => [p.id, hasKey(p.id)])) });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+// 工作区协同（Workspace 工具）：前端上报「用户在看什么」、应答草稿请求——路由与说明在 workspace-routes.ts
+registerWorkspaceRoutes(app);
+// ── 会话管理（sessmgmt/）：要挂在 /api/sessions/:id 之前 ──
+mountSessionMgmt(app);
+// 会话协作（family-routes.ts）
+registerFamilyRoutes(app);
 
 app.post("/api/config", (req, res) => {
   try {
@@ -538,14 +589,18 @@ app.post("/api/config", (req, res) => {
 // ?workspace= 或 body.workspace 给项目的绝对路径（必须是存在的目录）；不给就是全局工作区（老客户端行为不变）。
 async function memoryWorkspace(req: express.Request): Promise<string> {
   // K7：layer=global → 全局层（关于用户与这台机器、每个工作区都适用的记忆）
-  if (String(req.query.layer ?? req.body?.layer ?? "") === "global") return GLOBAL_MEMORY;
+  const global = String(req.query.layer ?? req.body?.layer ?? "") === "global";
+  // 正式服全局层只有一份，与工作区无关（不看 workspace 参数，行为同以前）
+  if (global && !globalMemoryScoped()) return GLOBAL_MEMORY;
+  // 评测隔离（DIMENSIO_GLOBAL_MEMORY_SCOPE=workspace）：全局层按工作区各一份——layer=global 再带 workspace 就是那个工作区的；
+  // 不带就降级成当前全局工作区（workspaceRoot()）那份，与记忆总览里的「全局」桶同一份
   const raw = String(req.query.workspace ?? req.body?.workspace ?? "").trim();
-  if (!raw) return workspaceRoot();
+  if (!raw) return global ? globalMemoryFor(workspaceRoot()) : workspaceRoot();
   if (!path.isAbsolute(raw)) throw new Error("workspace must be an absolute path");
   const st = await stat(raw).catch(() => null);
   if (!st?.isDirectory()) throw new Error(`workspace is not an existing directory: ${raw}`);
   assertInTenant(path.resolve(raw), "工作区");
-  return path.resolve(raw);
+  return global ? globalMemoryFor(path.resolve(raw)) : path.resolve(raw);
 }
 
 // 工作区解析失败 / 校验不过 → 400；晋升撞上同 topic 的生效条目 → 409 带冲突列表（界面给「替换它」）。
@@ -589,6 +644,30 @@ app.get("/api/memory/overview", async (_req, res) => {
     if (!res.headersSent) res.status(500).json({ error: (error as Error).message });
   }
 });
+
+// 离线记忆整理（memory-dream.ts）：这一处的整理状态（上次什么时候、结果、还有多少没复核）与「现在整理」。
+// 同样要注册在 /api/memory/:id 之前。
+app.get("/api/memory/dream", memoryRoute((_req, res, ws) => {
+  if (isGlobalMemory(ws)) {
+    res.json({ enabled: false, running: false, backlog: 0, state: {} });
+    return;
+  }
+  res.json({ enabled: memoryDreamEnabled(), running: dreamRunning(ws), backlog: dreamCandidates(ws).backlog, state: readDreamState(ws) });
+}));
+
+app.post("/api/memory/dream", memoryRoute((_req, res, ws) => {
+  if (isGlobalMemory(ws)) {
+    res.status(400).json({ error: "the global layer is never tidied automatically: global notes wait for you to confirm them" });
+    return;
+  }
+  const job = startDream(ws, "manual");
+  if (!job) {
+    res.status(409).json({ error: "a memory tidy-up is already running", code: "dream_busy" });
+    return;
+  }
+  void job.catch(() => {});
+  res.status(202).json({ started: true });
+}));
 
 app.get("/api/memory/:id", memoryRoute((req, res, ws) => {
   // K9：面板是给用户审的——命中注入特征的条目也要看得到全文，才能决定晋升还是驳回
@@ -1149,12 +1228,14 @@ const sessionBusy = (id: string): boolean => {
 // full count in X-Total-Count so a client can tell there are older ones. Without
 // this, everything past the 100th newest session was unreachable, period.
 app.get("/api/sessions", async (req, res) => {
+  const archiveView = archiveViewOf(req.query.archived);
   const page = await listSessionsPage({
     offset: Number(req.query.offset) || 0,
     limit: Number(req.query.limit) || undefined,
     // 快照对话：只留当前那条 + 还在跑 / 刚动过的（见 quickSessionFilter），且置顶保住第一页
     // （否则聊久了会被新会话挤出列表，侧栏那条快照就凭空消失了）。
-    filter: quickSessionFilter({ busy: sessionBusy }),
+    // 会话管理：默认不列已归档的；?archived=only 只列已归档、include 都列
+    filter: archiveFilter(archiveView, quickSessionFilter({ busy: sessionBusy })),
     pin: (m) => isQuickPath(m.workspace),
     live: liveSessionMetas(),
   });
@@ -1171,6 +1252,7 @@ app.get("/api/sessions", async (req, res) => {
         running: live?.running ?? false,
         // P8（X34）：在等你回答 / 批准 / 审计划——侧栏据此标「等你」
         waiting: live ? (waitingOf(live)?.kind ?? null) : null,
+        ...(archiveView !== "exclude" && isArchived(m.id) ? { archived: true } : {}),
       };
     }),
   );
@@ -1180,14 +1262,19 @@ app.get("/api/sessions", async (req, res) => {
 // 范围与列表一致（快照桶只露最新一条）；q 走查询串、截到 100 字。
 app.get("/api/sessions/search", async (req, res) => {
   const q = typeof req.query.q === "string" ? req.query.q.slice(0, MAX_QUERY_CHARS) : "";
-  const found = await searchSessions(q, { limit: Number(req.query.limit) || undefined, filter: quickSessionFilter({ busy: sessionBusy }) });
-  res.json({ items: found.items.map((h) => ({ ...h, workspace: h.workspace || workspaceRoot() })) });
+  // 会话管理：默认不搜已归档的；?archived=only / include 同列表
+  const archiveView = archiveViewOf(req.query.archived);
+  const found = await searchSessions(q, { limit: Number(req.query.limit) || undefined, filter: archiveFilter(archiveView, quickSessionFilter({ busy: sessionBusy })) });
+  res.json({
+    items: found.items.map((h) => ({ ...h, workspace: h.workspace || workspaceRoot(), ...(archiveView !== "exclude" && isArchived(h.id) ? { archived: true } : {}) })),
+  });
 });
 
 // P8（K35）：轻量「谁在跑、谁在等你」摘要。bridge apk 的原生通知服务轮询它——WebView 被冻结（锁屏、久在后台）
 // 时 JS 发不了通知，原生服务照样能发。只有终态事实：在等哪一类、哪个工具，不带命令 / 路径 / 模型原文。
 app.get("/api/pending", (_req, res) => {
-  res.json(pendingSummary());
+  // notify：通知三项偏好（会话管理），原生通知服务据此不弹关掉的那类
+  res.json({ ...pendingSummary(), notify: notifyPrefs() });
 });
 
 // P8（K30）：全局事件通道。先发一份快照（快照里已经在等的不算「新出现」，前端不为它们弹通知），之后每次会话状态
@@ -1566,6 +1653,14 @@ app.get("/api/sessions/:id/stream", (req, res) => {
   const session = getSession(String(req.params.id));
   if (!session?.running) {
     res.status(409).json({ error: "session is not running" });
+    return;
+  }
+  // 客户端的底座是按 runId 那一轮切的（先拉记录、再来附着）。两步之间那一轮收尾、下一轮开跑了（停掉马上又发一条，
+  // 大会话的记录经隧道要拉好几秒）——这里重放的是新一轮的事件，拼在旧底座上新一轮的用户消息就没了（11-07 维护者实测）。
+  // 对不上就 409，客户端照常对账、按新一轮重拉底座。不带 runId 的旧客户端照旧。
+  const want = typeof req.query.runId === "string" && req.query.runId ? req.query.runId : undefined;
+  if (want && session.runId !== want) {
+    res.status(409).json({ error: "run_mismatch", currentRunId: session.runId ?? null });
     return;
   }
   res.writeHead(200, {
@@ -2074,68 +2169,14 @@ app.post("/api/fs/mkdir", async (req, res) => {
 // least one viewer is subscribed; the browser itself is unaffected by viewers
 // coming and going (phone can disconnect mid-task, agent keeps working).
 
-// 扩展链路的状态：edge = 正在用的那个浏览器（没在用就取第一个连着的）的快照（老字段，形状不变）；
-// edges = Edge / Chrome 各自一条（同时装了扩展时两条都在）
-function edgeStatuses() {
-  const inUse = sharedEdgeKind();
-  const links = edgeHub().all();
-  const primary = (inUse && edgeLink(inUse)) || edgeHub().connectedLinks()[0] || edgeLink();
-  return {
-    edge: { ...primary.snapshot(), kind: primary.kind },
-    edges: links.map((l) => ({ ...l.snapshot(), kind: l.kind, inUse: l.kind === inUse })),
-  };
-}
-
 app.get("/api/browser/state", (_req, res) => {
   const page = existingSharedBrowser();
-  const st = edgeStatuses();
   res.json(
     page
-      ? { alive: true, url: page.url, viewport: page.viewport, tabs: page.tabs, mode: sharedBrowserMode(), ...st }
-      : { alive: false, tabs: [], mode: null, ...st },
+      ? { alive: true, url: page.url, viewport: page.viewport, tabs: page.tabs, mode: sharedBrowserMode() }
+      : { alive: false, tabs: [], mode: null },
   );
 });
-
-// ── 用户的 Edge / Chrome（harness/edge-extension）─────────────────────────────
-// 扩展是否连着、装在哪（面板/设置页据此给出「去 edge://extensions 加载解压缩的扩展」的指引）。
-app.get("/api/edge/status", (_req, res) => {
-  const st = edgeStatuses();
-  res.json({ ...st.edge, edges: st.edges, extensionDir: EDGE_EXTENSION_DIR, mode: sharedBrowserMode() });
-});
-
-// 面板上的「接到我的 Edge」：把共享浏览器换成 Edge（或 body.browser="chrome" 指定 Chrome）里 dimensio 标签组的标签页。
-app.post("/api/browser/edge", async (req, res) => {
-  const owner = browserClaimOwner();
-  if (owner) {
-    res.status(409).json({ error: "a session is driving the browser right now — switch after its run ends" });
-    return;
-  }
-  try {
-    const url = String(req.body?.url ?? "").trim();
-    const want = String(req.body?.browser ?? "").trim().toLowerCase();
-    const kind = want || edgeHub().connectedLinks()[0]?.kind || "edge";
-    const { session, tabs, created } = await attachEdgeBrowser(url || undefined, kind);
-    res.json({ ok: true, url: session.url, tabs: session.tabs, count: tabs, created, browser: kind });
-  } catch (e) {
-    res.status(400).json({ error: (e as Error).message });
-  }
-});
-
-// 用户在 Edge / Chrome 页面上点了「停止」、或在「正在调试此浏览器」提示条上点了「取消」：
-// 停掉正占着浏览器的那一轮（与会话里的停止按钮同一个出口），再断开。只认正被驱动的那个浏览器——
-// 另一个浏览器里点停止（那边本来就没被附着）不该停掉这边的任务。
-edgeHub().onStop = (why, kind) => {
-  if (sharedEdgeKind(true) !== kind) {
-    console.log(`[edge] stop from ${kind} ignored: the shared browser is not on it`);
-    return;
-  }
-  const owner = browserClaimOwner();
-  if (owner) {
-    const report = stopSession(owner);
-    console.log(`[edge] stopped session ${owner} from ${kind} (${why}): aborted=${report.turnAborted}`);
-  }
-  closeAllBrowserSessions();
-};
 
 app.get("/api/browser/stream", async (req, res) => {
   const page = existingSharedBrowser();
@@ -2473,6 +2514,30 @@ void primeLanAddress();
 // M12（N37）：事件循环延迟看门狗——主线程上有同步重活时留一行证据（以前全部会话一起卡住，哪里都看不出来）
 startLoopDelayMonitor();
 
+// 后台任务通知：后台命令跑完 / watch 命中而会话已收工时，开一轮把结果交给它（job-notify.ts）
+startJobNotify();
+// 空闲压缩：长对话空闲到 1 小时提示缓存快过期时先压一次（idle-compact.ts）
+startIdleCompact();
+// 离线记忆整理：所有会话都空闲一阵之后，按工作区把还没复核的记忆拿回写它时的原始对话核对（memory-dream.ts）。
+// 照看最近 30 天用过的工作区，新的在前。
+startMemoryDream({
+  busy: anySessionRunning,
+  workspaces: async () => {
+    const since = Date.now() - 30 * 86_400_000;
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const m of (await listSessions()).sort((a, b) => b.updatedAt - a.updatedAt)) {
+      if (m.updatedAt < since) break;
+      const ws = path.resolve(m.workspace || workspaceRoot());
+      const key = process.platform === "win32" ? ws.toLowerCase() : ws;
+      if (seen.has(key) || !insideTenant(ws)) continue;
+      seen.add(key);
+      out.push(ws);
+    }
+    return out;
+  },
+});
+
 // M5（K03）：owner 会话已不在的后台 job / dev server，5 分钟巡检一次收掉
 setInterval(() => void sweepOrphanResources(), 5 * 60_000).unref();
 
@@ -2500,13 +2565,15 @@ const httpServer = app.listen(PORT, HOST, () => {
   if (process.env.DIMENSIO_TEST_ISOLATION !== "1" || process.env.DIMENSIO_AUTO_RESUME === "1") {
     setTimeout(() => {
       resumeInterruptedRuns().catch((e) => console.error(`[resume] ${(e as Error).message}`));
+      // 会话协作：重启前没送达的会话消息该唤醒的唤醒、发往 bridge 的接着发（续跑先起来，被续的会话照常排队）
+      startFamily();
     }, 1500).unref();
   }
   // E1：MCP 连接器起来就开始连（新会话建基线时多半已经连好）
   if (process.env.DIMENSIO_TEST_ISOLATION !== "1") void syncConnectors();
 });
 
-// Edge 扩展的回环 WebSocket（/edge-link，只认固定扩展 ID 的 Origin，见 edge-link.ts）。harness 没有别的 WebSocket 端点。
-httpServer.on("upgrade", (req, socket) => {
-  if (!edgeHub().handleUpgrade(req, socket)) socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+// harness 没有 WebSocket 端点（旧的 Edge 扩展链路 /edge-link 已下线，用户的浏览器走 Web Bridge）
+httpServer.on("upgrade", (_req, socket) => {
+  socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
 });

@@ -1,5 +1,5 @@
 <script>
-  // 扩展中心 ·「功能扩展」：Vertex / Codex / dimensio 三个可选模块。
+  // 扩展中心 ·「功能扩展」：Media Studio / Codex / dimensio 三个可选模块。
   // 数据面 = /api/modules*（admin）。两种装法：从 GitHub 上和主程序同一版的发版一键安装 / 更新（/api/modules/install，
   // 进度经总线 modules.job 推、每项的 remote 说明能不能装或为什么不能），或上传随安装包附的离线 .zip。装、换、卸都排进
   // 待生效、重启 bridge 后生效（正在用的扩展目录不动——Codex 的 exe 跑着就删不掉）；开关 = 这个扩展撑着的 agent 的
@@ -16,7 +16,7 @@
 
   // 三个扩展的展示信息（顺序同服务端目录；状态以 /api/modules 为准）
   const INFO = {
-    vertex: { c: '#4285f4', desc: t('Gemini 分页与媒体生成（图像 / 视频 / 语音 / 音乐），以及 Claude 的媒体工具') },
+    studio: { c: '#1d1b18', desc: t('Media Studio 分页：图像 / 视频 / 配音 / 音乐，接自己的服务与 Key；以及 Claude 的媒体工具') },
     codex: { c: '#10a37f', desc: t('ChatGPT · Codex 分页（本机常驻 Codex，含 Codex 程序）') },
     dimensio: { c: '#ff9f0a', desc: t('dimensio 分页（独立的多模型 agent 底座）') },
   };

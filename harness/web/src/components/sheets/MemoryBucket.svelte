@@ -3,12 +3,24 @@
   // 从上往下：四个数（点一个只看这一类）→ 它们占了多少提示 → 共用一把时间尺的列表（每行右边是这条记忆的一生）
   // → 点一行就地展开全文与动作（确认 / 编辑 / 驳回 / 撤销驳回 / 删除，见 MemoryDetail）。
   // 数据由外面给（总览里的这一处，或旧服务端上 listMemory 的结果）；动作做完调 onchanged 让外面重拉。
-  import { onMount, untrack } from "svelte";
-  import { toast } from "../../lib/state.svelte.ts";
-  import { readMemoryNote, type MemoryBucket, type MemoryNote, type MemoryOverviewItem } from "../../lib/api.ts";
+  // 离线整理（能力位 memory-dream，全局层没有）：统计卡下面一行「上次整理…」+「现在整理」；整理过、对照原对话成立的待确认条目
+  // 给一键全部确认（逐条走晋升，校验不过的跳过、说一声）；每行的元信息里带复核意见。
+  import { onDestroy, onMount, untrack } from "svelte";
+  import { memoryDreamAvailable, toast } from "../../lib/state.svelte.ts";
+  import {
+    memoryDreamStatus,
+    promoteMemoryNote,
+    readMemoryNote,
+    startMemoryDream,
+    type MemoryBucket,
+    type MemoryDreamStatus,
+    type MemoryNote,
+    type MemoryOverviewItem,
+  } from "../../lib/api.ts";
   import { haptic } from "../../lib/touch.ts";
   import { collapse, rise, smoothHeight } from "../../lib/motion.ts";
   import { t, tr } from "../../lib/i18n.ts";
+  import Button from "../ui/Button.svelte";
   import Group from "../ui/Group.svelte";
   import Icon from "../ui/Icon.svelte";
   import Measure from "../ui/Measure.svelte";
@@ -18,7 +30,20 @@
   import MemoryStats from "./MemoryStats.svelte";
   import MemoryAxis from "./MemoryAxis.svelte";
   import MemoryLifeline from "./MemoryLifeline.svelte";
-  import { CONF_LABEL, fmtDate, issuesOf, LANE_TEXT, originText, STATUS_LABEL, TYPE_LABEL } from "./memory-text.ts";
+  import {
+    CONF_LABEL,
+    confirmable,
+    fmtDate,
+    fmtShortDate,
+    issuesOf,
+    LANE_TEXT,
+    originText,
+    REVIEW_TEXT,
+    reviewNoteText,
+    reviewOf,
+    STATUS_LABEL,
+    TYPE_LABEL,
+  } from "./memory-text.ts";
   import { byLane, countLanes, fmtCount, glyphOf, laneOf, LANES, lifeOf, spanOf, type Lane } from "./memory-viz.ts";
 
   let {
@@ -87,6 +112,99 @@
     await onchanged();
   }
 
+  // ── 离线整理 ──
+  const dreamOn = $derived(memoryDreamAvailable() && bucket.kind !== "global");
+  let dream = $state<MemoryDreamStatus | null>(null);
+  let dreaming = $state(false); // 点了「现在整理」或打开时它正在跑：每 3 秒看一次，做完重拉
+  let confirming = $state(false);
+  let alive = true;
+  onDestroy(() => (alive = false));
+  const ready = $derived(bucket.items.filter(confirmable));
+
+  async function loadDream(): Promise<void> {
+    try {
+      dream = await memoryDreamStatus(bucket.ws);
+    } catch {
+      dream = null; // 读不到就不显示这一行，不打扰
+    }
+  }
+
+  async function follow(): Promise<void> {
+    dreaming = true;
+    while (alive) {
+      await new Promise((r) => setTimeout(r, 3000));
+      if (!alive) return;
+      await loadDream();
+      if (!dream?.running) break;
+    }
+    dreaming = false;
+    const s = dream?.state.last;
+    if (s && !s.error && !s.aborted) {
+      const changed = s.promoted.length + s.rewritten.length + s.merged.length + s.retired.length + s.created.length;
+      toast(changed ? t("整理完了：复核 {n} 条，有 {m} 处改动", { n: s.reviewed, m: changed }) : t("整理完了：复核 {n} 条，没有要改的", { n: s.reviewed }));
+    }
+    await onchanged();
+  }
+
+  async function dreamNow(): Promise<void> {
+    haptic("light");
+    dreaming = true;
+    const r = await startMemoryDream(bucket.ws).catch((e) => ({ ok: false, busy: false, error: String(e?.message ?? e) }));
+    if (!r.ok) {
+      dreaming = false;
+      toast(r.busy ? t("已经有一次整理在跑，稍后再试") : t("没能开始整理：{reason}", { reason: tr(r.error ?? "") }));
+      return;
+    }
+    await follow();
+  }
+
+  // 上次整理那一句
+  const dreamLine = $derived.by(() => {
+    if (!dream) return "";
+    if (dreaming || dream.running) return t("正在对照原对话整理记忆…");
+    const s = dream.state.last;
+    if (!s) return dream.enabled ? t("还没整理过：空闲时会自动把没复核的记忆拿回原对话核对一遍。") : t("空闲时自动整理已在设置里关掉，可以手动整理。");
+    const when = fmtShortDate(s.at);
+    if (s.error) {
+      const why = /no API key/.test(s.error) ? t("这个项目最近一次对话用的模型没有 Key") : /no session/.test(s.error) ? t("这个项目还没有对话，不知道用哪个模型") : tr(s.error);
+      return t("上次整理（{when}）没做成：{why}", { when, why });
+    }
+    if (s.aborted) return t("上次整理（{when}）被新对话打断，下次空闲接着做。", { when });
+    const parts = [
+      s.promoted.length ? t("{n} 条转为生效", { n: s.promoted.length }) : "",
+      s.rewritten.length ? t("改写 {n}", { n: s.rewritten.length }) : "",
+      s.merged.length ? t("合并 {n}", { n: s.merged.length }) : "",
+      s.retired.length ? t("退场 {n}", { n: s.retired.length }) : "",
+      s.created.length ? t("新记 {n}", { n: s.created.length }) : "",
+      s.unparsed ? t("{n} 批没读懂模型的回答、下次再看", { n: s.unparsed }) : "",
+    ].filter(Boolean);
+    return parts.length
+      ? t("上次整理 {when}，复核 {n} 条：{parts}", { when, n: s.reviewed, parts: parts.join(t("、")) })
+      : t("上次整理 {when}，复核 {n} 条，没有要改的", { when, n: s.reviewed });
+  });
+
+  async function confirmAll(): Promise<void> {
+    confirming = true;
+    haptic("medium");
+    let done = 0;
+    let left = 0;
+    for (const m of ready) {
+      const r = await promoteMemoryNote(bucket.ws, m.id).catch(() => ({ ok: false }) as const);
+      if (r.ok) done++;
+      else left++;
+    }
+    confirming = false;
+    toast(left ? t("确认了 {n} 条；{m} 条还不能生效，点开它看差什么", { n: done, m: left }) : t("确认了 {n} 条，之后的对话会用上它们", { n: done }));
+    await onchanged();
+  }
+
+  onMount(() => {
+    if (!untrack(() => dreamOn)) return;
+    void loadDream().then(() => {
+      if (dream?.running) void follow();
+    });
+  });
+
   let root: HTMLElement | undefined = $state();
   onMount(() => {
     const first = untrack(() => openFirst && bucket.items.find((m) => m.id === openFirst));
@@ -108,6 +226,23 @@
     />
   {:else}
     <MemoryStats {counts} picked={lane} onpick={(l) => { lane = l; closeRow(); }} />
+
+    {#if dreamOn && dream}
+      <div class="dream">
+        <span class="dline">
+          {#if dreaming || dream.running}<Mark size={14} live />{/if}
+          <span class:hx-shimmer={dreaming || dream.running}>{dreamLine}</span>
+          {#if dream.backlog > 0 && !dreaming && !dream.running}<span class="left">{t("还有 {n} 条没复核", { n: dream.backlog })}</span>{/if}
+        </span>
+        <Button size="sm" variant="ghost" icon="sparkles" disabled={dreaming || dream.running} onclick={dreamNow}>{t("现在整理")}</Button>
+      </div>
+      {#if ready.length}
+        <div class="ready" in:rise={{ y: 4 }}>
+          <span>{t("{n} 条待确认的记忆对照原对话成立", { n: ready.length })}</span>
+          <Button size="sm" variant="secondary" icon="check" loading={confirming} disabled={confirming || dreaming} onclick={confirmAll}>{t("全部确认")}</Button>
+        </div>
+      {/if}
+    {/if}
 
     <!-- 进提示的字数只有总览数据里有（budget > 0 即是）；旧服务端上不写这一段，免得报个假的 0 -->
     {#if budget > 0}
@@ -142,6 +277,7 @@
           {@const open = openId === m.id}
           {@const warns = issuesOf(m).length}
           {@const life = lives.get(m.id)!}
+          {@const rv = reviewOf(m)}
           <div class="mem" class:open data-mem={m.id} in:rise|global={{ y: 6, delay: Math.min(i, 10) * 25 }} out:collapse>
             <button class="head" aria-expanded={open} onclick={() => toggle(m)}>
               <span class="main">
@@ -157,6 +293,10 @@
                   {#if originText(m)}
                     <span class="sep" aria-hidden="true">·</span>
                     <span>{originText(m)}</span>
+                  {/if}
+                  {#if rv}
+                    <span class="sep" aria-hidden="true">·</span>
+                    <span class="rv" class:ok={rv.verdict === "supported"} class:bad={rv.verdict === "contradicted"} title={reviewNoteText(rv.note)}>{REVIEW_TEXT[rv.verdict]}</span>
                   {/if}
                   {#if m.uses}
                     <span class="sep" aria-hidden="true">·</span>
@@ -203,6 +343,9 @@
     {#if bucket.items.some((m) => m.uses)}
       {t("「召回」是这条记忆的全文被拉进对话的次数（开跑时自动找来的，或模型点名读的）。")}
     {/if}
+    {#if dreamOn}
+      {t("空闲时 dimensio 会把没复核的记忆拿回写它的原对话核对：合并重复、改正或退掉错的；只有在原对话里找到你亲口说的那句话才让它生效，其余标上「对照原对话」的意见，留给你确认。")}
+    {/if}
   </p>
 </div>
 
@@ -210,6 +353,53 @@
   .bucket {
     /* 时间线那一列的宽：桌面在行的右侧，手机上挪到说明下面、与正文同宽 */
     --lane-w: 168px;
+  }
+
+  /* 离线整理：一行说明 + 右边一个按钮；跑着时说明走微光、前面一枚在动的标志 */
+  .dream {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: -8px 4px 14px;
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+    color: var(--text3);
+  }
+  .dline {
+    min-width: 0;
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 8px;
+  }
+  .dline .left {
+    color: var(--warn);
+    font-variant-numeric: tabular-nums;
+  }
+  .dream :global(button) {
+    flex: none;
+  }
+  .ready {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 18px;
+    padding: 10px 12px 10px 14px;
+    border-radius: var(--r-md);
+    font-size: var(--fs-md);
+    color: var(--text);
+    background: color-mix(in srgb, var(--ok) 9%, transparent);
+  }
+  .ready :global(button) {
+    flex: none;
+  }
+  .rv.ok {
+    color: var(--ok);
+  }
+  .rv.bad {
+    color: var(--err);
   }
 
   .print {

@@ -1,6 +1,6 @@
 # 定时触发（Routines）
 
-定时触发让 Claude（或 Gemini）按计划无人值守地执行一段指令；Claude 的每次运行就是一条普通会话，跑的时候能点进去看、跑完随时回看。这是核心功能，每个账号各有自己的一份定时任务。
+定时触发让 Claude 按计划无人值守地执行一段指令；Claude 的每次运行就是一条普通会话，跑的时候能点进去看、跑完随时回看。这是核心功能，每个账号各有自己的一份定时任务。
 
 ## 定时触发是什么
 
@@ -50,17 +50,17 @@
    - 分支 + Worktree 开关：文件夹是 git 仓库时才可用。打开 Worktree = 每次运行先从仓库切一个新分支和独立工作目录（`.claude/worktrees/` 下）再干活，你手上的检出不受影响；分支药丸选从哪个分支切（默认当前分支）。换文件夹会清空分支并关掉 Worktree。
 4. 权限：设置默认（跟设置 › Claude 的默认权限模式）/ 手动 / 接受编辑 / 计划 / 自动 / 绕过权限（后两个视身份与主机设置）。手动和接受编辑在无人值守时会停下来等你。
 5. 「频率」分段条：手动 / 一次 / 每小时 / 每天 / 工作日 / 每周 / 自定义，详见下一节。下面实时显示「下次运行：…」。
-6. 「运行」卡：引擎（Claude / Gemini，Gemini 扩展装了才有）；会话方式（每次新会话 / 接着上次——接着上次 = 每次在同一个会话里往下聊，模型记得上回做过什么；换了文件夹或 Worktree 开关会重新开）；Gemini 引擎是「联网搜索」开关；「跑完通知我」。
+6. 「运行」卡：会话方式（每次新会话 / 接着上次——接着上次 = 每次在同一个会话里往下聊，模型记得上回做过什么；换了文件夹或 Worktree 开关会重新开）；「跑完通知我」。
 7. 新建的任务默认启用；在详情页的状态开关或卡片菜单里暂停 / 启用。
 
 接口：`routines.create`、`routines.update`
 
 ## 定时触发的引擎与模型
 
-定时任务可选两种引擎，模型与思考强度从服务端能力表现取：{{models}}
+定时任务的引擎只有 Claude，模型与思考强度从服务端能力表现取：{{models}}
 
 - Claude（默认）：和 Claude 页的会话完全一样的工具、扩展、项目与权限规则。结果是一条 Claude 会话。
-- Gemini：属于 Gemini · Vertex 功能扩展，没装或对这个账号没开时不出现。单轮问答（可联网搜索），不碰文件，结果存进 Gemini 的对话历史；没有工作文件夹、权限、会话方式这些设置。
+- Gemini 引擎已随 Gemini 对话下线（2026-11-04）：以前建的 Gemini 任务读到时自动停用、卡片上写明原因，不删；编辑后重新启用就改用 Claude 跑。
 - 思考强度：Claude 不允许选 Ultracode（无人值守跑动态工作流、成本不可控），保存会被拒。
 - 引擎对账号的可用性每次运行时重新判断：创建后管理员关掉了这个 agent，到点不运行，运行记录写明原因。
 
@@ -92,7 +92,7 @@
 ## 定时任务的结果去哪看
 
 - 详情页的运行记录（最近 30 次：时间、触发方式、结果、摘要、耗时、会话）。
-- Claude 引擎的每次运行都是 Claude 页会话列表里的一条会话（标「定时任务」来源）；开了 Worktree 的会话在那个 worktree 里。Gemini 引擎的结果在 Vertex 分页 Gemini 对话的历史里。
+- Claude 引擎的每次运行都是 Claude 页会话列表里的一条会话（标「定时任务」来源）；开了 Worktree 的会话在那个 worktree 里。
 - 「跑完通知我」：每次运行结束，打开着的 bridge 页面会提醒（页面在后台时是系统通知，跟设置里「任务完成」那类通知开关走；在前台是页内提示）。
 - 管理员可在服务端控制台的「定时任务」页按用户只读查看每个人的任务；被查看的成员会收到访问记录。
 
@@ -111,8 +111,9 @@
 外部 agent 可以经接口完成与界面相同的操作，作用范围是调用身份自己的定时任务。
 
 - 查看：`routines.list` 返回全部任务（含工作文件夹、worktree、权限模式、会话方式、最近 5 次运行）和正在运行的任务 id。
-- 新建：`routines.create`，必填指令与频率；频率可用 daily / weekdays / weekly（days 数组）/ hourly / once（at 毫秒时间戳）/ manual / cron；可选 cwd（工作文件夹绝对路径）、worktree、branch、permissionMode、fast、sessionMode（new / continue）、notify、description、引擎与模型。
-- 修改：`routines.update`，只传要改的字段；改频率或启用状态会重算下次运行时间。
+- 新建：`routines.create`，必填指令与频率；频率可用 daily / weekdays / weekly（days 数组）/ hourly / once（at 毫秒时间戳）/ manual / cron；可选 cwd（工作文件夹绝对路径）、worktree、branch、permissionMode、fast、sessionMode（new / continue）、notify、description、引擎与模型。完整参数见 manual q=routines.create。
+- 频率（schedule）的精确形状：`{type:"daily",hour:9,minute:0}`、`{type:"weekdays",hour:8,minute:30}`、`{type:"weekly",days:[1,3],hour:8,minute:30}`（0=周日…6=周六）、`{type:"hourly",minute:15}`、`{type:"once",at:<毫秒时间戳或 "2026-12-01T09:00">}`、`{type:"manual"}`、`{type:"cron",cron:"0 9 * * 1-5"}`。hour 缺省 9、minute 缺省 0；没有 time 这类字段，不认识的字段、写错的 type、越界的值（hour:25）都直接报 bad_args。返回的 schedule 是规范化后的、nextRun 是下次运行时间，建好后核对一眼。
+- 修改：`routines.update`，只传要改的字段；改频率或启用状态会重算下次运行时间。schedule 要传就传完整的一份（整体替换），规则同上。
 - 立即运行：`routines.run`，异步，立刻返回；之后用 `routines.list` 看状态，用 `sessions.read` 读结果会话。
 - 删除：`routines.delete`。
 - 建议：替用户建任务前先确认频率与时间（服务端时区）和要在哪个文件夹里跑；指令里写清输出放哪个文件或以什么格式总结；想让它全程自己跑完，permissionMode 用 auto。

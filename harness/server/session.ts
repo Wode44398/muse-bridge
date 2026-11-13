@@ -1,4 +1,10 @@
 import { notifyBridge, lastAnswer, clipMessage } from "./bridge-events.ts";
+import { prAfterTurn } from "./pr-bridge.ts"; // 拉取请求：轮末认 PR、真人发话清零自动修复的连续计数
+// 会话协作（子会话 / 会话间消息）：本文件只在几处挂钩子（开跑、收尾、建 system、删会话），逻辑都在 session-family.ts
+import { familyPromptSection, familyRunEnd, familyRunStart, forgetFamilySession, type FamilyOrigin } from "./session-family.ts";
+import { jobNotifyRunEnd, jobNotifyRunStart } from "./job-notify.ts";
+import { cancelIdleCompact, idleCompactRunEnd } from "./idle-compact.ts";
+import { cancelMemoryDream } from "./memory-dream.ts";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import path from "node:path";
@@ -16,9 +22,10 @@ import { isPermissionMode, sessionAllowRule, type PermissionMode, type SessionAl
 import { recallIds, skillLoadedIn } from "./agent/injections.ts";
 import { runAgent, transcriptReadExternal } from "./agent/loop.ts";
 import { describeWorldChange, LEGACY_AUDIT_CONTRACT, refreshDynamicContext, refreshPlanSection, systemPrompt } from "./agent/prompt.ts";
+import { resolveProfile } from "./agent/profile.ts";
 import { worldTokens, type WorldTokens, type WorldValues } from "./agent/world-state.ts";
-import { Sandbox } from "./sandbox.ts";
-import { accessLock } from "./tenant.ts";
+import { Sandbox, type SandboxAccess } from "./sandbox.ts";
+import { accessLock, tenantMode } from "./tenant.ts";
 import { archiveDir, deleteSessionArchive, planArchive, writeArchive } from "./compaction-archive.ts";
 import { deleteSessionOutputs, outputsDir, persistOutput } from "./tools/result-store.ts";
 import type { ToolContext, FileState, AskQuestionSpec, AskResolution, AskResolvedAnswer, ApprovalPreview } from "./tools/types.ts";
@@ -45,7 +52,7 @@ import { resolveSlash, slashInjection, SLASH_SKILL_KIND, type SlashHit } from ".
 import { mcpTools, planMcpBaseline, sanitizeBaseline, type McpBaseline } from "./tools/mcp.ts";
 import type { GoalVerdict } from "./tools/types.ts";
 import { parseTodos } from "./tools/todo.ts";
-import { compactManually, handoffSummary } from "./agent/context.ts";
+import { BUFFER_TOKENS, compactManually, compactionWindow, contextTokens, handoffSummary } from "./agent/context.ts";
 import { clearRunMarker, listRunMarkers, ownerAlive, ownMarker, PROCESS_CREATED, readRunMarker, writeRunMarker } from "./run-markers.ts";
 import { processTable } from "./proc-tree.ts";
 import { createAdapter } from "./providers/registry.ts";
@@ -91,7 +98,9 @@ import {
 } from "./checkpoints.ts";
 import { disposeOwner, resourceOwners, type ResourceCounts } from "./resources.ts";
 import { deleteUploadDirs, uploadKeyOf } from "./files.ts";
-import type { AttachmentRef, Block, Msg, RecallRef, ThinkingLevel } from "./agent/turn.ts";
+import type { AttachmentRef, Block, Msg, RecallRef, ThinkingLevel, ToolDef } from "./agent/turn.ts";
+import { deferToolDefs, toolSearchTool, TOOL_SEARCH } from "./agent/deferred-tools.ts";
+import { prefValue } from "./prefs.ts";
 import type { RefDigest } from "./session-refs.ts";
 import {
   loadSessionImageBase64,
@@ -123,8 +132,9 @@ import { currentTrace, runInTrace, startTrace, type TraceContext } from "./trace
 import { deleteTraceLog, flushTraceLog, traceEvent } from "./trace-log.ts";
 import { deleteSessionDiagnostics } from "./diagnostics.ts";
 import { CodedError, ERROR_CODES } from "./errors.ts";
-import { getCustomProvider, isCustomProviderId } from "./custom-providers.ts";
+import { getCustomProvider, hostManagesBuiltins, isCustomProviderId } from "./custom-providers.ts";
 import { clampEffort, EFFORT_ORDER, modelSpec } from "./catalog.ts";
+import { dispatchSection } from "./agent/dispatch-ladder.ts"; // 子 agent 选型阶梯（系统提示一段）
 
 // M12：一轮开跑时给知识 worker 的新鲜度预算（小工作区通常几十毫秒就对完；大笔记库超时先用旧快照）
 const RUN_START_KNOWLEDGE_BUDGET_MS = 250;
@@ -269,6 +279,10 @@ export interface PlanVerdict {
 // 不全批）；计划保持未批准、本轮结束并留言。用户在这个会话发新消息或插话 = 人回来了，自动关。
 export function isAway(session: Session): boolean {
   return session.cfg?.away === true;
+}
+// 离开模式下要批准的卡默认怎么落定（偏好 awayDecision；默认 deny）
+export function awayApproves(): boolean {
+  return prefValue<string>("awayDecision") === "approve";
 }
 
 export function setSessionAway(session: Session, raw: unknown): { ok: boolean; error?: string } {
@@ -532,7 +546,8 @@ export function watchGlobal(fn: (ev: Record<string, unknown>) => void): () => vo
   return () => globalWatchers.delete(fn);
 }
 
-function emitGlobal(ev: Record<string, unknown>): void {
+// 会话管理（稍后发送的队列、输入建议、AI 标题）也经这条全局通道广播自己的事件，所以导出
+export function emitGlobal(ev: Record<string, unknown>): void {
   for (const fn of globalWatchers) {
     try {
       fn(ev);
@@ -789,6 +804,7 @@ export function deleteSession(id: string): Promise<{ deleted: boolean; stopped: 
     await deleteCheckpoints(id);
     await deleteTraceLog(id); // Q12：这个会话的运行事件日志
     clearRunMarker(id); // M13：删掉的会话不再自动续跑
+    forgetFamilySession(id); // 会话协作：它的父子关系一并清掉（它开的子会话升为顶层）、收件箱作废
     await deleteSessionDiagnostics(rec?.config?.workspace ?? workspaceRoot(), id); // Q13：这个会话导出过的诊断包
     if (rec) {
       const keys = [id, ...rec.messages.flatMap((m) => (m.attachments ?? []).map((a) => uploadKeyOf(a.path)).filter((k): k is string => Boolean(k)))];
@@ -846,14 +862,17 @@ function buildState(
   if (!apiKey) {
     throw new CodedError(
       ERROR_CODES.providerKeyMissing,
-      `No API key for provider "${cfg.provider}". Set it in the Settings panel or in .env.`,
+      // 宿主的模型中心接管了自带厂商：这家在模型中心里没有服务（删了 / 停用了 / 没勾给 dimensio）
+      hostManagesBuiltins() && !isCustomProviderId(cfg.provider)
+        ? `「${cfg.provider}」这家厂商现在没有可用的 Key：到「设置 › 模型中心」给它添加服务（或启用原来的），或者换一个模型服务。`
+        : `No API key for provider "${cfg.provider}". Set it in the Settings panel or in .env.`,
       400,
     );
   }
 
   const sandbox = new Sandbox(
     cfg.workspace ? path.resolve(cfg.workspace) : workspaceRoot(),
-    cfg.access ?? "workspace",
+    sandboxAccessFor(cfg),
   );
   // R10（二）/ R13：会话自己的压缩归档与落盘的大结果可读（只读，只放这个会话自己的两个目录）
   if (sessionId) sandbox.setExtraReadDirs([archiveDir(sessionId), outputsDir(sessionId)]);
@@ -871,6 +890,9 @@ function buildState(
     fast: fastMode,
     cacheTtl: "1h",
   });
+  // 模型档案（agent/profile.ts）：按这个会话的型号解析一次——提示词、工具、请求、loop 阈值都从它取。新建 / 从盘上恢复 /
+  // 换型号重建（rebindModel）都经这里，所以换型号就是重新解析。
+  const profile = resolveProfile(cfg.provider, cfg.model, { effort: cfg.thinking });
 
   // setTodos needs the state; wire it after construction via a holder.
   let stateRef: AgentState;
@@ -944,6 +966,12 @@ function buildState(
     defs = defs.filter((t) => t.name !== "MemoryAudit");
     tmap.delete("MemoryAudit");
   }
+  // 档案点名只下发哪些内置工具（P0 恒为 null = 不裁）。在浏览器判定之前裁，提示词与工具表说的是同一套
+  const subset = profile.tools.subset;
+  if (subset) {
+    defs = defs.filter((t) => subset.includes(t.name));
+    for (const name of [...tmap.keys()]) if (!subset.includes(name)) tmap.delete(name);
+  }
   // D5：浏览器工具（Browser / ReadPage / Eval / Network）跟着 headless.ts browserAvailable 进出注册表——在这里、建会话时
   // 定一次（新建 / 从盘上恢复 / 换型号重建都走 buildState），之后这个会话的工具清单与 system 不再跟着变（每轮改会打穿
   // 提示词缓存）。桌面壳宿主晚注册、扩展后连上、刚装好浏览器，下一个会话就有。
@@ -954,6 +982,17 @@ function buildState(
     defs = [...defs, t.def];
     tmap.set(t.def.name, t);
   }
+  // 工具延迟加载（agent/deferred-tools.ts）：不常用的长说明工具只发简介 + 参数骨架，ToolSearch 取完整说明（排在最后：
+  // 工具清单只往后追加）。执行与权限判定仍按 tmap 里的完整工具。建会话时定一次，之后不跟着偏好变。
+  let deferredTools: Map<string, ToolDef> | undefined;
+  if (prefValue<boolean>("deferTools") !== false) {
+    const r = deferToolDefs(defs, profile.tools.deferredFamilies);
+    if (r.deferred.size) {
+      defs = [...r.defs, toolSearchTool.def];
+      tmap.set(TOOL_SEARCH, toolSearchTool);
+      deferredTools = r.deferred;
+    }
+  }
 
   // C4（X12、N09）：World State 各节此刻的值（runStart 时连日期、项目知识、记忆一起）
   const worldValues = (runStart: boolean): WorldValues => ({
@@ -962,6 +1001,8 @@ function buildState(
     // C5：目录预算按这个模型的窗口算（×2%，封顶 1 万 token）
     skills: managedSkillsSection({ contextWindow: adapter.capabilities.contextWindow }) ?? "",
     jobs: sessionId ? finishedJobsSummary(sessionId) : "",
+    // 调试模式（prefs/debug.ts）：每轮现读，会话中途开关下一轮以 World State 片段告知；租户实例不出这一项
+    debug: process.env.DIMENSIO_TENANT !== "1" && prefValue<boolean>("debugMode") ? (tmap.has("BridgeCall") ? "bridge" : "file") : "",
     ...(runStart
       ? { date: localDate(), knowledge: knowledgeSummary(sandbox.root), memory: withExternalSummary(renderAllMemoryForPrompt(sandbox.root), sandbox.root) }
       : {}),
@@ -986,6 +1027,14 @@ function buildState(
       browser: hasBrowser,
       // bridge 拉起的实例才有 BridgeManual / BridgeCall：有才写 bridge 段（手册、操作、bug 诊断上报）
       bridge: tmap.has("BridgeCall"),
+      // 拉取请求（tools/pullrequest.ts）：bridge 拉起的主机实例才有
+      pr: tmap.has("PullRequest"),
+      // 子 agent 选型阶梯 + 调度偏好（agent/dispatch-ladder.ts）：有 Agent / Workflow 才写
+      dispatch: tmap.has("Agent") || tmap.has("Workflow") ? dispatchSection() : undefined,
+      // 会话协作：有 StartSession 才写这一段；子会话另带「你是子会话」（session-family.ts，建会话时定下）
+      collab: tmap.has("StartSession") ? familyPromptSection(sessionId) : undefined,
+      profile,
+      debug: world.debug || undefined,
     });
   let initialSystem: string;
   let initialWorld: WorldTokens;
@@ -1009,6 +1058,7 @@ function buildState(
     initialWorld = worldTokens({ mode: cfg.permissionMode, access: sandbox.access, ...world });
   }
 
+  if (deferredTools) ctx.deferredTools = deferredTools;
   stateRef = new AgentState({
     adapter,
     system: initialSystem,
@@ -1017,6 +1067,7 @@ function buildState(
     ctx,
     toolMap: tmap,
     browser: hasBrowser,
+    profile,
     permissionMode: cfg.permissionMode,
     permissionRules: cfg.permissionRules,
     // P1（#47）：规则每次判定现读全局配置（设置页新加的 deny/ask 对已开着的会话也立刻生效）；
@@ -1039,7 +1090,7 @@ function buildState(
       ? (block) => {
           const bytes = Buffer.from(block.data ?? "", "base64");
           if (block.t === "audio") {
-            const mime = sniffAudioMime(bytes);
+            const mime = sniffAudioMime(bytes, block.name);
             if (!mime) throw new Error("cannot persist an unsupported audio block");
             return storeSessionAudio(sessionId, bytes, mime, block.name, block.durationSeconds);
           }
@@ -1117,12 +1168,21 @@ export function revokeReadRoot(session: Session, dir: string): string[] {
   return [...session.state.readRoots];
 }
 
+// permissionMode="bypass"（管理员全权档）把沙箱推到 "bypass"（整机 + 跳过密钥守卫）；其余档照 cfg.access。
+// 切进 / 切出 bypass 时据此重算沙箱 access，所以离开 bypass 会回到用户原来的访问范围选择。
+function sandboxAccessFor(cfg: { permissionMode?: PermissionMode; access?: SandboxAccess } | null | undefined): SandboxAccess {
+  if (cfg?.permissionMode === "bypass") return "bypass";
+  return cfg?.access ?? "workspace";
+}
+
 // 模式变更的单一落点：plan 批准、用户在输入框旁手动切档，都收敛到这里。
 // 快照配置（重开会话不回退）+ 广播（所有附着设备的指示器同步）。
 // C4（X12）：不再就地改写 system 的 plan 段（以前每切一次整个前缀缓存作废）——模型在下一次请求前收到一条 World State
 // 片段：切进 plan 带上完整的 plan 契约，切出去明说「plan 段不再适用，动手」。权限判定每次调用现读模式，「拉手刹」照样当场生效。
 function applyModeChange(session: Session, mode: PermissionMode): void {
   if (session.cfg) session.cfg = { ...session.cfg, permissionMode: mode };
+  // bypass 是整机 + 跳过密钥守卫的沙箱档：切进 / 切出时当场重算沙箱 access（每次 resolve 现读，下一步工具调用就按新边界判）。
+  if (session.state) session.state.ctx.sandbox.access = sandboxAccessFor(session.cfg);
   fanout(session, { e: "mode", permissionMode: mode });
   schedulePersist(session);
 }
@@ -1132,6 +1192,8 @@ function applyModeChange(session: Session, mode: PermissionMode): void {
 // 在下一次请求前以 World State 片段送达（C4）。
 export function setSessionMode(session: Session, mode: unknown): { ok: boolean; error?: string } {
   if (!isPermissionMode(mode)) return { ok: false, error: "invalid mode" };
+  // bypass 是管理员专用的全权档：租户 / 成员实例不许切（否则成员可借它越过访问范围锁与密钥守卫）。
+  if (mode === "bypass" && tenantMode()) return { ok: false, error: "bypass mode is not available on this server" };
   if (!session.state) return { ok: false, error: "session has not started" };
   // 幂等重挂：state 的三个来源（initState / hydrate / executeRun）都挂过这个回调，
   // 这里再确保一次 —— 切档必须落地，不能取决于这条 state 是从哪条路径来的。
@@ -1151,12 +1213,16 @@ export function setSessionAccess(session: Session, access: unknown): { ok: boole
   // 访问范围锁（租户模式恒 workspace，见 tenant.ts）：这台 dimensio 上不许切。
   const lock = accessLock();
   if (lock && access !== lock) return { ok: false, error: `access is locked to "${lock}" on this server` };
-  if (session.cfg?.access === access && !session.state) return { ok: true };
+  // bypass 档期间沙箱恒为 "bypass"（整机 + 跳过密钥守卫）：下面记下用户的访问范围选择但不动沙箱，
+  // 等切出 bypass 时（setSessionMode→applyModeChange）才按它恢复。
+  const wantSandbox = sandboxAccessFor({ ...session.cfg, access });
+  // 幂等：快照值没变、沙箱也已是目标值 = 无实际变化，不重复广播。
+  const sandboxSame = !session.state || session.state.ctx.sandbox.access === wantSandbox;
+  if (session.cfg?.access === access && sandboxSame) return { ok: true };
   if (session.cfg) session.cfg = { ...session.cfg, access };
   if (session.state) {
-    if (session.state.ctx.sandbox.access === access) return { ok: true };
-    session.state.ctx.sandbox.access = access;
-    // C4：不再改写 system 的访问范围段——下一次请求前追加一条 World State 片段（沙箱每次 resolve 都现读，边界当场就挪了）
+    // 其余档照常当场改判（C4：沙箱每次 resolve 都现读，边界即刻生效）。
+    session.state.ctx.sandbox.access = wantSandbox;
   }
   fanout(session, { e: "access", access });
   schedulePersist(session);
@@ -1242,6 +1308,11 @@ function rebindModel(session: Session, from?: { provider: string; model: string 
   // 读过的文件照旧算读过（同一个工作区、文件没动，换型号不该逼它把刚读的文件再读一遍）
   for (const [file, seen] of old.ctx.readFileState) state.ctx.readFileState.set(file, seen);
   if (from) noteModelSwitch(state, from, cfg);
+  // 换到窗口更小的型号、现在的上下文它装不下：下一次（马上就会触发的）压缩，摘要交给换之前的型号写
+  if (old.adapter.capabilities.contextWindow > state.adapter.capabilities.contextWindow && contextTokens(state) >= compactionWindow(state) - BUFFER_TOKENS) {
+    state.switchSummarizer = old.switchSummarizer ?? old.adapter;
+    state.switchSummarizerProfile = old.switchSummarizer ? old.switchSummarizerProfile : old.profile;
+  }
   state.noteRewrite("model");
   wireSessionState(session, state);
   session.state = state;
@@ -2024,6 +2095,34 @@ export function compactSession(sessionId: string): Promise<HygieneResult> {
   });
 }
 
+// 空闲压缩（idle-compact.ts 定时调）：和「立即压缩」同一个压法，但不占住会话——用户这时发话照常开跑，startRun 先掐掉这次
+// 压缩（signal），压缩在提交前最后看一眼信号，没提交的不留痕迹。minTokens = 上下文至少这么大才压。
+export function compactIdleSession(sessionId: string, minTokens: number, signal: AbortSignal): Promise<HygieneResult> {
+  return lifecycle(sessionId, async () => {
+    if (signal.aborted) return { ok: false, code: "running", error: "aborted" };
+    const session = await getOrLoadSession(sessionId);
+    if (!session || session.discarded) return { ok: false, code: "not_found", error: "unknown session" };
+    if (session.running || rollingBack || rewinding.has(sessionId)) return { ok: false, code: "running", error: "busy" };
+    if (!session.state) session.state = initState(session);
+    const used = contextTokens(session.state);
+    if (used < minTokens) return { ok: false, code: "empty", error: `context ${used} below ${minTokens}` };
+    try {
+      const r = await compactManually(session.state, signal);
+      await writeRecord(session);
+      traceEvent(session.id, { e: "idle_compaction", before: r.before, after: r.after });
+      return { ok: true, ...r };
+    } catch (e) {
+      const msg = (e as Error).message;
+      return { ok: false, code: signal.aborted ? "running" : /nothing to compact|would not shrink/.test(msg) ? "empty" : "failed", error: msg };
+    }
+  });
+}
+
+// 这个会话现在走的提示缓存能活多久（毫秒）；没有缓存 / 不知道 = 0
+export function sessionCacheTtlMs(session: Session): number {
+  return session.state?.adapter.capabilities.cacheTtlMs ?? 0;
+}
+
 function spawnSibling(origin: Session, permissionMode: PermissionMode, title: string): Session {
   const c = origin.cfg;
   const base = getConfig();
@@ -2173,7 +2272,7 @@ function prepareUserInput(
     } finally {
       closeSync(fd);
     }
-    const audioMime = sniffAudioMime(header);
+    const audioMime = sniffAudioMime(header, abs);
     if (audioMime) {
       if (!state.ctx.agentHearsAudio) throw new Error("当前模型不支持原生音频，请切换到 MiMo 后重新发送。");
       if (stat.size > MAX_AUDIO_BYTES) throw new Error(`音频 ${label} 超过 24 MB，请压缩为 MP3/FLAC 或分段后发送。`);
@@ -2348,7 +2447,18 @@ export function startRun(
   // M13：服务重启 / 进程死掉之后的自动续跑——不重提原 prompt，首条是 harness 内部片段
   // O7：goal = 目标续跑的下一轮（首条是 harness 片段 kind goal-continue）
   // 引用会话：路由里先按请求的 refs 做好的摘要（读记录要 await，startRun 必须同步占住会话，所以在外面做）
-  opts: { resume?: { resumes: number; reason: "restart" | "crash" }; goal?: boolean; refs?: RefDigest[] } = {},
+  // 拉取请求自动修复（pr.ts）：bridge 发来的 <ci-monitor-event>——首条是 harness 片段（kind 由调用方给），不是用户的话
+  // 会话协作（session-family.ts）：head = 这一轮的首条不是用户打的字，而是 harness 片段（父会话派的任务、会话消息、子会话
+  // 汇报——信封见 injections.ts）；family = 这一轮是谁发起的（会话间唤醒 / 派生；不给就按真人 / 续跑算）
+  opts: {
+    resume?: { resumes: number; reason: "restart" | "crash" };
+    goal?: boolean;
+    refs?: RefDigest[];
+    event?: { text: string; kind: string; label: string };
+    // prelude = 分叉（fork）出来的子会话先接上父会话的对话副本，再跟这条首条
+    head?: { text: string; kind: string; title?: string; retrieval?: string; prelude?: Msg[] };
+    family?: FamilyOrigin;
+  } = {},
 ): RunHandle {
   if (session.running) {
     return { started: false, done: session.runPromise ?? Promise.resolve() };
@@ -2358,6 +2468,10 @@ export function startRun(
   // M11（K29）：回滚期间全局静默——回滚在 checkout 工作区，这时开跑的 agent 会在半截的文件上干活
   // U9：这个会话正在改写（对话要被换掉）——这一条也不起
   if (rollingBack || rewinding.has(session.id)) return { started: false, done: Promise.resolve(), rollingBack: true };
+  // 空闲压缩（idle-compact.ts）：要开跑了——撤掉定时器、掐掉正在压的（在动任何消息与状态之前）
+  cancelIdleCompact(session.id);
+  // 离线记忆整理（memory-dream.ts）：有人开跑就掐掉，别和这一轮抢模型（本机模型只有一个槽）
+  cancelMemoryDream();
 
   if (!session.state) {
     session.state = initState(session);
@@ -2403,6 +2517,24 @@ export function startRun(
     head.kind = GOAL_CONTINUE_KIND;
     checkpointLabel = `（目标第 ${session.goal.round - session.goal.roundBase} 轮）`;
     retrievalText = "";
+  } else if (opts.event) {
+    // ── 拉取请求自动修复（pr.ts）：首条是 bridge 发来的事件，按 harness 片段落盘（界面上是一行提示，不是用户气泡）──
+    session.state.addUserMessageBlocks([{ t: "text", text: opts.event.text }], "");
+    const head = session.state.messages[session.state.messages.length - 1];
+    head.origin = "harness";
+    head.kind = opts.event.kind;
+    checkpointLabel = opts.event.label;
+    retrievalText = "";
+  } else if (opts.head) {
+    // 会话协作：首条是 harness 片段（kind 见 injections.ts 的会话信封），界面上画成会话消息卡
+    if (opts.head.prelude?.length && !session.state.messages.length) session.state.messages.push(...opts.head.prelude);
+    session.state.addUserMessageBlocks([{ t: "text", text: opts.head.text }], opts.head.retrieval ?? "");
+    const head = session.state.messages[session.state.messages.length - 1];
+    head.origin = "harness";
+    head.kind = opts.head.kind;
+    if (!session.title && opts.head.title) session.title = opts.head.title.slice(0, 200);
+    checkpointLabel = opts.head.title ? opts.head.title.slice(0, 60) : "（会话间消息）";
+    retrievalText = opts.head.retrieval ?? "";
   } else {
     const prepared = prepareUserInput(session, message, attachmentPaths, opts.refs ?? []);
     session.state.addUserMessageBlocks(prepared.content, prepared.retrievalText, {
@@ -2426,6 +2558,11 @@ export function startRun(
     }
   }
   session.state.setRunBudget(budget);
+  // 会话协作：记下这一轮是谁发起的；真人发话时把攒着没送出去的会话消息附在这条后面（同一轮里一起读到）
+  const held = familyRunStart(session, opts.family ?? (opts.resume || opts.goal ? { kind: "auto" } : opts.head ? { kind: "inbox", from: [] } : { kind: "user" }));
+  if (held) session.state.appendUserBlocks([{ t: "text", text: held.text }], false, { origin: "harness", kind: held.kind });
+  // 后台任务通知（job-notify.ts）：用户本人发话时清零连续自动开轮，攒着的通知在第一步之前注入
+  jobNotifyRunStart(session, !opts.family && !opts.resume && !opts.goal && !opts.head && !opts.event);
 
   const abort = new AbortController();
   session.abort = abort;
@@ -2435,7 +2572,7 @@ export function startRun(
   // bridge 插件订阅的 turn.start（bridge-events.ts）：续跑 / 目标续轮也发，kind 标出来
   notifyBridge("turn.start", {
     sessionId: session.id, model: session.cfg?.model ?? "", provider: session.cfg?.provider ?? "",
-    kind: opts.resume ? "resume" : opts.goal ? "goal" : "chat", isNew: !(session.state?.messages.length), message: clipMessage(message),
+    kind: opts.resume ? "resume" : opts.goal ? "goal" : opts.event ? "event" : "chat", isNew: !(session.state?.messages.length), message: clipMessage(message),
   });
   // Pre-existing gap fixed: without this, tools never saw the abort signal —
   // stopping a session left running Bash children / fetches / walks alive.
@@ -2476,7 +2613,8 @@ export function startRun(
   session.runClock = { startedAt: Date.now(), pausedMs: 0, pausedSince: null };
   fanout(session, runClockEvent(session));
   // P3：用户在这个会话发了新消息 = 人回来了，离开模式自动关（放在 runLog 重置之后，附着的设备重放得到）。续跑不算人回来。
-  if (!opts.resume && !opts.goal && isAway(session)) setSessionAway(session, false);
+  if (!opts.resume && !opts.goal && !opts.event && isAway(session)) setSessionAway(session, false);
+  if (!opts.resume && !opts.goal && !opts.head && isAway(session)) setSessionAway(session, false);
   const done = runInTrace(trace, () => executeRun(session, preRec, checkpointLabel, retrievalText, abort, ownUserMsg));
   session.runPromise = done;
   return { started: true, done };
@@ -2702,6 +2840,17 @@ async function executeRun(
       durationMs: session.runClock ? Date.now() - session.runClock.startedAt : 0,
       result: lastAnswer(state.messages, runMsgStart), usedTools,
     });
+    // 拉取请求（pr-bridge.ts）：这一轮报出的 PR 链接交给 bridge 绑定；用户本人发起的轮清零自动修复的连续唤醒计数
+    prAfterTurn(session.id, session.cfg?.workspace ?? workspaceRoot(), state.messages, runMsgStart, ownUserMsg !== null);
+    // 后台任务通知：这一轮没注入的 watch 行收回来；模型最后一步之后才结束的 job 叫醒它（job-notify.ts）
+    jobNotifyRunEnd(session);
+    // 会话协作：子会话这一轮收工 → 给父会话汇报、该唤醒的唤醒；没送进模型的会话消息收回收件箱（session-family.ts）
+    familyRunEnd(session, {
+      outcome: outcome.kind,
+      by: outcome.kind === "aborted" ? outcome.by : undefined,
+      summary: outcome.kind === "error" ? outcome.summary : undefined,
+      result: lastAnswer(state.messages, runMsgStart),
+    });
     traceEvent(session.id, {
       e: "run_end",
       durationMs: session.runClock ? Date.now() - session.runClock.startedAt : undefined,
@@ -2710,6 +2859,8 @@ async function executeRun(
     });
     void flushTraceLog();
     await persistNow(session);
+    // 空闲压缩：按这个会话的缓存时长排一次（用户在缓存过期前回来就撤掉）
+    idleCompactRunEnd(session);
     if (memoryDigest) scheduleMemoryFiling(session, state, memoryDigest);
     if (ended) await ended;
     evictIdleSessions();
@@ -2746,6 +2897,7 @@ function scheduleMemoryFiling(session: Session, state: AgentState, digest: RunDi
       humanAttended: () => !isAway(session),
       lookupToolCall: state.ctx.lookupToolCall,
       externalContent: () => state.externalContentSeen,
+      ownerId: session.id,
     },
     onUsage: (u) => state.recordSideUsage("memory", u),
   }).then(
@@ -2941,7 +3093,9 @@ function registerPermission(
   if (req.sessionKey !== undefined && state?.isSessionAllowed(req.tool, req.sessionKey)) {
     return Promise.resolve({ decision: "session" });
   }
-  // P3：离开模式——没人能批准，立即拒绝并注明「未经批准」（安全偏向拒）。
+  // P3：离开模式——没人能批准。默认立即拒绝并注明「未经批准」（安全偏向拒）；
+  // 设置 › 对话 › 离开模式下的批准请求 = 默认同意时，按「允许一次」放行（away 标记照留，审计记为离开模式放行）。
+  if (isAway(session) && awayApproves()) return Promise.resolve({ decision: "once", away: true });
   if (isAway(session)) {
     return Promise.resolve({
       decision: "deny",
@@ -3051,7 +3205,12 @@ function registerPlan(
   plan: string,
   signal: AbortSignal,
 ): Promise<PlanVerdict> {
-  // P3：离开模式——计划保持未批准，本轮结束并留言（自动批准不等于用户同意开工）。
+  // P3：离开模式——默认计划保持未批准，本轮结束并留言（自动批准不等于用户同意开工）；
+  // 用户在设置里选了「默认同意」才直接批准：和点了批准一样切到自主执行、同一轮接着做。
+  if (isAway(session) && awayApproves()) {
+    session.state?.setPermissionMode("auto");
+    return Promise.resolve({ approved: true, away: true });
+  }
   if (isAway(session)) return Promise.resolve({ approved: false, note: "the user is away", unanswered: true, away: true });
   const id = randomUUID();
   const limit = interactionTimeout("plan");

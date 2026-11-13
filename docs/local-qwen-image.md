@@ -9,7 +9,7 @@ Vertex → 图片 → 模型菜单选 **Qwen Image 2.1 · 本机**，打开「�
 Windows、Python 3.12、支持 CUDA 13 的 NVIDIA 驱动：
 
 ```powershell
-powershell -File modules/vertex/local-image/install.ps1
+powershell -File modules/studio/local-image/install.ps1
 ```
 
 模型目录用 `install.ps1 -ModelHome <目录>` 指定（约 33.13 GB 权重 + 独立 venv，放在空间充足的数据盘上），
@@ -18,7 +18,7 @@ powershell -File modules/vertex/local-image/install.ps1
 下载脚本从官方 ModelScope 仓库逐文件核对大小和 SHA-256，成功后写 `.verified.json`。
 安装过程需要网络；运行时设置离线模式，模型读取本地文件。
 实现采用 [官方 QwenImage21Pipeline](https://github.com/QwenLM/Qwen-Image-2.1)，
-依赖版本固定在 `modules/vertex/local-image/requirements.txt`，权重遵循下载目录中的官方 LICENSE。
+依赖版本固定在 `modules/studio/local-image/requirements.txt`，权重遵循下载目录中的官方 LICENSE。
 
 Bridge 进程可用 `BRIDGE_LOCAL_IMAGE_HOME` 改目录、`BRIDGE_LOCAL_IMAGE_PORT` 改内部端口（默认 8190）。
 安装到其他目录后须同时设置 HOME；不要把模型/venv/key 放进 Git。
@@ -43,7 +43,7 @@ Bridge 进程可用 `BRIDGE_LOCAL_IMAGE_HOME` 改目录、`BRIDGE_LOCAL_IMAGE_PO
 ## 验证
 
 ```powershell
-node --import ./src/modules/register.mjs --test modules/vertex/server/local-image.test.mjs
+node --import ./src/modules/register.mjs --test modules/studio/server/adapters/local-image.test.mjs
 node web/scripts/i18n-check.mjs web/src/components/VImagePanel.svelte web/src/components/LocalImageSettings.svelte web/src/components/LocalImageDeployment.svelte web/src/lib/vertexMedia.svelte.js web/src/lib/localImageSettings.js --compile
 ```
 

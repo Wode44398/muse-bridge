@@ -36,7 +36,7 @@ export const globTool: Tool = {
     const hits: { rel: string; mtimeMs: number }[] = [];
     // S4（#37①）：递归遍历逐个过统一的凭据判定——以前 walk 不经 secret guard，
     // Read 拦得住的 .env、deploy/.ssh/id_rsa，一次 Grep 就原文吐出来。
-    const skip = (abs: string) => readVerdict(abs, ctx.sandbox.root) !== null;
+    const skip = (abs: string) => readVerdict(abs, ctx.sandbox.root, { bypass: ctx.sandbox.bypassing }) !== null;
     for await (const { abs } of walk(base, { skip })) {
       if (ctx.signal?.aborted) break;
       const rel = ctx.sandbox.rel(abs);

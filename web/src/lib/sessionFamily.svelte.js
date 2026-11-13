@@ -16,7 +16,8 @@
 import { api } from './api.js';
 import { busOn } from './bus.js';
 import { IS_CSNAP } from './csnap.js';
-import { session, ui } from './state.svelte.js';
+import { session, ui, screenOn } from './state.svelte.js';
+import { isProjectView } from './permissions.svelte.js';
 import { t } from './i18n.js';
 
 const ATTR_RE = /(\w[\w-]*)="([^"]*)"/g;
@@ -49,14 +50,15 @@ export function parseSessionText(text) {
   rest = rest.replace(/<session-hint>[\s\S]*?<\/session-hint>/g, '');
   rest = rest.replace(/<session-message\b([^>]*)>([\s\S]*?)<\/session-message>/g, (_, a, body) => {
     const x = attrs(a);
-    parts.push({ kind: 'message', from: x.from || '', name: x.name || '', title: x.title || '', relation: x.relation || 'linked', brief: x.kind === 'brief', body: body.trim() });
+    parts.push({ kind: 'message', from: x.from || '', agent: x.agent || '', name: x.name || '', title: x.title || '', relation: x.relation || 'linked', brief: x.kind === 'brief', body: body.trim() });
     return '';
   });
   rest = rest.replace(/<side-sessions-event>([\s\S]*?)<\/side-sessions-event>/g, (_, inner) => {
     const notes = [];
     inner.replace(/<note\b([^>]*)>([\s\S]*?)<\/note>/g, (__, a, body) => {
       const x = attrs(a);
-      notes.push({ from: x.from || '', name: x.name || '', title: x.title || '', status: x.status || 'done', text: body.trim() });
+      // driver="user"：项目里用户直接在讨论串里聊的那一轮（服务端安静汇报，等协调者下一轮开工时附上）
+      notes.push({ from: x.from || '', agent: x.agent || '', name: x.name || '', title: x.title || '', status: x.status || 'done', ...(x.driver === 'user' ? { driver: 'user' } : {}), text: body.trim() });
       return '';
     });
     parts.push({ kind: 'event', notes });
@@ -89,6 +91,8 @@ export function noteFamilyLink(ev) {
 
 const list = () => { try { return source() || []; } catch { return []; } };
 export function sessionById(id) { return id ? list().find((s) => s.id === id) || null : null; }
+/** 项目对话（运行档位 › 项目）：会话列表带 shape，当前会话再看权限视图 / 刚开出来时转记的草稿形态。它的子会话叫讨论串。 */
+export function projectSession(id) { return !!id && (sessionById(id)?.shape === 'project' || isProjectView(id)); }
 export function sessionTitle(id, fallback = '') {
   const s = sessionById(id);
   if (s && s.title) return s.title;
@@ -116,6 +120,30 @@ export function resolveSessionRef(currentId, to) {
   if (l) return l.child;
   if (v.length >= 8) { const p = all.find((s) => s.id.startsWith(v)); if (p) return p.id; }
   return '';
+}
+
+// —— 跨 agent（11-03，Claude ⇄ dimensio）——
+// 信封 / 相关会话卡上的会话可能在 dimensio 那边（agent="dimensio"）：记进 ui.hxOpenSession 再换到 dimensio 页，HarnessPage 等 dimensio
+// 起好之后打开它。反方向（dimensio 里点了 Claude 会话）由 HarnessPage 接 dimensio:open-session 事件，调下面的 openClaudeSession。
+export async function openDimensioSession(id) {
+  if (!id || IS_CSNAP) return;
+  if (!screenOn('harness')) { showToast(t('这个分页没有对你开放')); return; }
+  ui.hxOpenSession = id;
+  const { goto } = await import('./pageMorph.js');
+  await goto('harness');
+}
+export async function openClaudeSession(id) {
+  if (!id || IS_CSNAP) return;
+  if (!screenOn('claude')) { showToast(t('这个分页没有对你开放')); return; }
+  const { goto } = await import('./pageMorph.js');
+  await goto('claude');
+  const { openSession } = await import('./chat.svelte.js');
+  await openSession(id);
+}
+/** 打开相关会话：dimensio 的去 dimensio 页，其余在 Claude 页。 */
+export function openFamilySession(id, agent) {
+  if (agent === 'dimensio') return openDimensioSession(id);
+  return import('./chat.svelte.js').then((m) => m.openSession(id));
 }
 
 // 会话信息面板：同一棵树里的会话（来自 /api/claude/session-rail 的 family）
@@ -251,7 +279,7 @@ function noteHolds(sid, items) {
     const body = t('{name}（{src}）发来一条消息，等你确认', { name: x.name || t('未命名会话'), src: srcLabel(x) });
     if (sid !== session.id) showToast(body);
     // 人不在页面上（标签页藏着 / 窗口最小化）也得知道：走「Claude 提问」那一类系统通知，按消息去重；正看着这个会话时不弹
-    notifyKind('question', { body, watching: sid === session.id && ui.screen === 'claude' && !document.hidden, tag: 'peer:' + x.uuid });
+    notifyKind('question', { body, watching: sid === session.id && ui.screen === 'claude' && !document.hidden, tag: 'peer:' + x.uuid, force: true });
   }
 }
 

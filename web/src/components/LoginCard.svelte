@@ -31,10 +31,8 @@
   import { openSettings as openSettingsAt } from '../lib/settingsNav.svelte.js';
   import { t, tc, tr } from '../lib/i18n.js';
   import { ovUrl } from '../lib/overlay.svelte.js';
-  import glassL_pub from '../assets/ios27/alert-light.png';
-  import glassD_pub from '../assets/ios27/alert-dark.png';
-  const glassL = $derived(ovUrl('ios27/alert-light.png', glassL_pub));
-  const glassD = $derived(ovUrl('ios27/alert-dark.png', glassD_pub));
+  const glassL = $derived(ovUrl('ios27/alert-light.png'));
+  const glassD = $derived(ovUrl('ios27/alert-dark.png'));
 
   let mode = $state('login'); // 'login' | 'register' | 'token' | 'qr'(扫码登录：网页出码、手机扫)
   let username = $state(''), password = $state(''), password2 = $state(''), invite = $state(''), tok = $state('');
@@ -184,29 +182,29 @@
   $effect(() => { if (open && me.kind === 'user') fetchMyUsage().then((r) => { mine = r; }).catch(() => {}); });
   const lim = $derived(status.limits || {});
   const pctOf = (b) => (b && typeof b.pct === 'number' ? Math.max(0, Math.min(100, Math.round(b.pct))) : null);
-  const meters = $derived([{ label: t('5 小时额度'), pct: pctOf(lim.five_hour) }, { label: t('本周额度'), pct: pctOf(lim.seven_day) }]);
+  // 没有 5 小时限额的号（部分 Ultra）不摆空的 5 小时条
+  const meters = $derived([...(status.noFiveHour && !lim.five_hour ? [] : [{ label: t('5 小时额度'), pct: pctOf(lim.five_hour) }]), { label: t('本周额度'), pct: pctOf(lim.seven_day) }]);
   const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${SI[n] || ''}</svg>`;
   const onKey = (e, fn) => { if (e.key === 'Enter') fn(); };
 </script>
 
-<!-- 折射玻璃层（pill 玻璃质感；展开时放大淡出） -->
+<!-- 折射玻璃层（pill 玻璃质感）：原地不动，展开一开始就淡掉、收起最后才淡回——形变全程只有卡片本体一个形状。
+     以前它跟着放大到卡片尺寸，胶囊玻璃被横竖拉成 4×10 倍，在卡片里透出一团变形的圆角残影。 -->
 <div class="lc-fade i27ink" class:dark class:appeared={ui.booted}>
 {#if homeGlass.on}
   <!-- Figma 玻璃（与四个入口同一套，见 Home / FigmaGlass）；几何直接给，展开时的形变不影响取背景 -->
-  <div class="refract"
+  <div class="refract" class:open
     style:left="{pillLeft}px" style:top="{pillTop}px" style:width="{pillW}px" style:height="{PILL_H}px"
-    style:transform={open ? `translate(${dx}px,${dy}px) scale(${cardW / pillW},${effH / PILL_H})` : 'none'}
     style:opacity={open ? 0 : 1}
     aria-hidden="true"><FigmaGlass bg={homeGlass.bg} radius={PILL_H / 2} rect={{ x: pillLeft, y: pillTop, w: pillW, h: PILL_H }} /></div>
 {:else}
-  <div class="refract" use:liquidGlass={refractGlass}
+  <div class="refract" class:open use:liquidGlass={refractGlass}
     style:left="{pillLeft}px" style:top="{pillTop}px" style:width="{pillW}px" style:height="{PILL_H}px"
-    style:transform={open ? `translate(${dx}px,${dy}px) scale(${cardW / pillW},${effH / PILL_H})` : 'none'}
     style:opacity={open ? 0 : 1}
     aria-hidden="true"></div>
 {/if}
-<!-- pill 文字层（可点；展开时移中心淡出） -->
-<button class="plabel" bind:this={pillEl} style="{baseGeom} {plabelStyle}" onclick={toggle}>{pillLabel}</button>
+<!-- pill 文字层（可点；展开时移中心、一开始就淡掉，收起到位才淡回） -->
+<button class="plabel" class:open bind:this={pillEl} style="{baseGeom} {plabelStyle}" onclick={toggle}>{pillLabel}</button>
 
 {#if open}<button class="card-bd" transition:fade={{ duration: 220 }} onclick={close} aria-label={t('关闭')}></button>{/if}
 
@@ -216,7 +214,7 @@
 <!-- morph 卡片本体 -->
 <div class="card {open ? 'expanded' : 'pill'}" style={cardStyle} style:--glass={`url("${dark ? glassD : glassL}")`}>
   {#if open}
-    <div class="content" in:fade={{ duration: 240, delay: 170 }}>
+    <div class="content" in:fade={{ duration: 220, delay: 90 }} out:fade={{ duration: 120 }}>
       <div class="inner" use:measure>
         {#key me.kind === 'none' ? mode : 'user'}
         <div class="pane" in:fade={{ duration: 200 }}>
@@ -364,7 +362,7 @@
 
 <style>
   /* iOS 弹性缓动，与 demo2 一致 */
-  .refract, .plabel, .card { transition-timing-function: cubic-bezier(.32, .72, 0, 1); }
+  .plabel, .card { transition-timing-function: cubic-bezier(.32, .72, 0, 1); }
   /* 出场动画：随主页露出，整个登录胶囊（玻璃+文字+本体）一起淡入，略晚于入口图标。
      fixed 子元素靠外层 opacity group 一并淡入；外层占满视口、自身不拦事件（子元素各自接管）。 */
   .lc-fade { position: fixed; inset: 0; z-index: 30; pointer-events: none; opacity: 0; transition: opacity var(--mo-base) var(--ea-fade) var(--mo-quick);
@@ -374,17 +372,23 @@
 
   .refract {
     position: fixed; z-index: 31; pointer-events: none;
-    border-radius: 22px; transform-origin: center center;
-    transition-property: transform, opacity; transition-duration: .52s, .42s;
+    border-radius: 22px;
+    /* 交接：收起时等卡片缩回胶囊大小（.3s 起）再淡回；展开时 .1s 内让位给卡片 */
+    transition: opacity .14s linear .3s;
   }
+  /* open 类挂在层自己身上（不挂外层容器）：类名和透明度同一次更新落地。挂在外层时，遮罩淡出动画开场会强制算一次样式，
+     折射层透明度已变、外层类还没变，于是用了展开那条无延迟的过渡，收起一开始胶囊玻璃就淡回来了。 */
+  .refract.open { transition: opacity .1s linear; }
   .plabel {
     position: fixed; z-index: 32; pointer-events: auto;
     /* 块级 + 行高居中（而非 flex），让超长用户名能 ellipsis（pillW 封顶后的兜底） */
     display: block; line-height: 40px; text-align: center; padding: 0 14px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     color: #fff; font-size: 14px; font-weight: 600; letter-spacing: .02em; text-shadow: 0 1px 3px rgba(0,0,0,.35);
-    transform-origin: center center; transition-property: transform, opacity; transition-duration: .52s, .3s;
+    transform-origin: center center;
+    transition: transform .42s cubic-bezier(.4, 0, .2, 1), opacity .16s linear .3s;
   }
+  .plabel.open { transition: transform .52s cubic-bezier(.32, .72, 0, 1), opacity .1s linear; }
   /* 桌面：胶囊本身是个按钮，鼠标划过得亮一下（transform/opacity 归 morph 动画管，
      这里只碰文字发光，免得跟展开成卡片的那条 transition 打架） */
   @media (hover: hover) {
@@ -396,15 +400,16 @@
   .card-bd { position: fixed; inset: 0; z-index: 20; pointer-events: auto; border: 0; padding: 0; cursor: default; background: var(--i-dim); }
 
   /* 只过渡 transform / clip-path / opacity（+ 内容高度变化时的 top/height）。模糊半径不做动画：展开时立刻生效（此刻整层透明），
-     收起时等形变走完再撤（时长 0、延迟 .52s），不然淡出途中毛玻璃会一下子变清。
+     收起时等形变走完再撤（时长 0、延迟 .42s），不然淡出途中毛玻璃会一下子变清。
      材质同 ios27/Alert：::before 铺 kit 玻璃 9 宫图层（亮 #F6F6F6@73% / 暗 #1B1B1D@98%，边缘一圈高光），frost 16 → blur 6.53px。 */
+  /* 收起换一条尾巴短的曲线（.42s）：iOS 弹性曲线的长尾会让卡片缩到胶囊旁边时以「方块」停留近 0.2 秒再突变成胶囊 */
   .card {
     position: fixed; z-index: 30; pointer-events: none; overflow: hidden; opacity: 0; isolation: isolate;
     border-radius: 34px; color: var(--i-label);
-    transition: transform .52s cubic-bezier(.32, .72, 0, 1), clip-path .52s cubic-bezier(.32, .72, 0, 1),
-      top .52s cubic-bezier(.32, .72, 0, 1), height .52s cubic-bezier(.32, .72, 0, 1),
-      opacity .4s cubic-bezier(.45, 0, .55, 1),
-      backdrop-filter 0s linear .52s, -webkit-backdrop-filter 0s linear .52s;
+    transition: transform .42s cubic-bezier(.4, 0, .2, 1), clip-path .42s cubic-bezier(.4, 0, .2, 1),
+      top .42s cubic-bezier(.4, 0, .2, 1), height .42s cubic-bezier(.4, 0, .2, 1),
+      opacity .1s linear .32s,
+      backdrop-filter 0s linear .42s, -webkit-backdrop-filter 0s linear .42s;
   }
   .card::before { content: ''; position: absolute; z-index: -1; inset: 0; pointer-events: none;
     border: 0 solid transparent; border-image: var(--glass) 228 fill / 76px / 16px stretch; }
@@ -413,16 +418,17 @@
     backdrop-filter: blur(6.53px); -webkit-backdrop-filter: blur(6.53px);
     transition: transform .52s cubic-bezier(.32, .72, 0, 1), clip-path .52s cubic-bezier(.32, .72, 0, 1),
       top .52s cubic-bezier(.32, .72, 0, 1), height .52s cubic-bezier(.32, .72, 0, 1),
-      opacity .3s cubic-bezier(.32, .72, 0, 1),
+      opacity .1s linear,
       backdrop-filter 0s, -webkit-backdrop-filter 0s;
   }
   /* kit 警告框投影 0/8/48（σ=0.4227·r → 2σ=40.6），暗色加深 */
   .card-shadow {
     position: fixed; z-index: 29; pointer-events: none; opacity: 0;
     border-radius: 34px; box-shadow: 0 8px 40.6px rgba(0, 0, 0, .25); transform-origin: center center;
-    transition-property: transform, opacity, top, height; transition-duration: .52s;
-    transition-timing-function: cubic-bezier(.32, .72, 0, 1);
+    transition-property: transform, opacity, top, height; transition-duration: .42s;
+    transition-timing-function: cubic-bezier(.4, 0, .2, 1);
   }
+  .card-shadow.expanded { transition-duration: .52s; transition-timing-function: cubic-bezier(.32, .72, 0, 1); }
   .dark .card-shadow { box-shadow: 0 8px 40.6px rgba(0, 0, 0, .45); }
   .card-shadow.expanded { opacity: 1; }
 
@@ -479,7 +485,9 @@
   .bar i { display: block; height: 100%; min-width: 6px; border-radius: 3px; background: var(--i-accent);
     animation: lc-grow 700ms cubic-bezier(.2, .8, .2, 1) 260ms both; }
   .bar i.hot { background: var(--i-red); }
-  @keyframes lc-grow { from { clip-path: inset(0 100% 0 0 round 3px); } to { clip-path: inset(0 0 0 0 round 3px); } }
+  /* 用量条「长出来」＝填充从轨道左外侧滑进（轨道 overflow:hidden 裁掉），只动 transform。
+     别用 clip-path：WebView 不把它放进合成线程，整块 .content 层（手机上约 1200×1480 像素）会逐帧重新光栅化，展开就掉帧。 */
+  @keyframes lc-grow { from { transform: translateX(-100%); } to { transform: none; } }
   .quota { display: flex; flex-direction: column; gap: 6px; }
   .q { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; line-height: 19px; }
   .q span:last-child { color: var(--i-label2); text-align: right; font-variant-numeric: tabular-nums; }

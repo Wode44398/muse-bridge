@@ -17,6 +17,16 @@
 //   · 旧 apk 不带 → 用请求 UA 里的机型号（Dalvik/WebView UA 都有 "Android 16; SM-S9370 Build/"）当设备身份，
 //     两台不同型号的旧 apk 也能分开；机型号也拿不到才落到共用的 'legacy'。
 // 命令只进指定设备的队列，同设备才会互相顶长轮询。cmdId 的 in-flight 表按设备隔离，回传方身份天然校验。
+//
+// 【设备租约与编号归属（11-08）】同一台手机同时被几个会话（含子 agent）驱动时，命令按到达顺序交错执行，
+// 手机端的元素编号表又只有一份、谁读屏谁重编号——A 会话的「点 20」会点到 B 会话刚读出来的第 20 个元素上
+// （真机事故：计算器上算出 122、31）。现在：
+//   · 带 owner（= 会话 id）的动作类命令先拿这台设备的租约；租约在别人手里且没过期（对方还有命令在途，
+//     或最近 LEASE_TTL_MS 内有动作）就直接拒绝，报出对方会话。只读的 status/ping/screen 不抢租约。
+//   · 回包带 sig = 那次刷新了编号表，记下是谁刷的（obsOwner）。按编号点/长按/写字/滚动时，编号表不是自己
+//     刷的、或别人还有会刷新编号的命令排在前面，就拒绝并要求先 phone_screen——screen 虽豁免租约也点不乱。
+//   · 轮次结束 releaseLease 立即释放；急停清掉那台的租约。不带 owner 的调用保持旧行为。
+//   · 跨轮记住「这个会话上次操作的是哪台」（lastUsed）：接口代发、没有发起设备的轮，多台在线时沿用它。
 
 import { readBody } from './body.mjs';
 import { contextFor } from './identity.mjs';
@@ -29,8 +39,11 @@ import { notePhoneClient } from './client-origins.mjs';
 
 // genKey -> Map<deviceId, Device>
 //   Device = { id, name, model, android, appCode, legacy, ready, readyAt,
-//              queue, waiter, inflight, lastPoll, recentTs, lastSig, lastSigCount }
+//              queue, waiter, inflight, lastPoll, recentTs, lastSig, lastSigCount,
+//              lease: {owner,label,at}|null, obsOwner: 最近一次刷新编号表的 owner（'' = 不带 owner 的调用方）|null }
 const accounts = new Map();
+// genKey \0 owner -> { deviceId, at }：会话跨轮记住上次操作的设备
+const lastUsed = new Map();
 
 const RESULT_MAX_BYTES = 6 * 1024 * 1024;   // result body 上限（观察结果带截图 base64）
 const ONLINE_WINDOW_MS = 40_000;            // 最近一次长轮询在此窗口内 = 在线（长轮询挂 ~25s，留余量）
@@ -40,6 +53,31 @@ const MAX_WAIT_MS = 30_000;                 // 单次长轮询服务端最长挂
 const RATE_MAX = 90, RATE_WINDOW_MS = 60_000;
 const LOOP_MAX = 15;
 const LOOP_EXEMPT = new Set(['screen', 'wait', 'scroll', 'swipe', 'ping', 'status']);
+
+// 租约：最近一次动作后多久没动静就自动过期（太长会让用户自己开的两个会话互相干等）；只读命令不抢租约。
+const LEASE_TTL_MS = 90_000;
+const LEASE_EXEMPT = new Set(['status', 'ping', 'screen', 'wait']);
+// 跨轮沿用上次那台的有效期：过了就只在报错里提示，不再自动选。
+const LAST_USED_TTL_MS = 60 * 60_000;
+// 会刷新手机端编号表的命令：screen 必刷；动作类带回画面（observe≠none / 旧 PC 的 withScreen）时也刷。
+const OBSERVING_OPS = new Set(['tap', 'long_press', 'swipe', 'scroll', 'input', 'key', 'open_app', 'open_url', 'open_settings', 'share']);
+function renumbers(op, args) {
+  if (op === 'screen') return true;
+  if (!OBSERVING_OPS.has(op)) return false;
+  const a = args || {};
+  return a.observe != null ? a.observe !== 'none' : !!a.withScreen;
+}
+// 按编号操作的命令（编号只对最近一次画面有效）
+function usesIndex(op, args) {
+  const a = args || {};
+  if (op === 'tap' || op === 'long_press') return (a.by || 'index') === 'index';
+  if (op === 'input') return a.by === 'index';
+  if (op === 'scroll') return a.index != null && Number(a.index) >= 0;
+  return false;
+}
+const pendingCmds = (d) => [...d.inflight.values(), ...d.queue];
+const leaseLive = (d, lease) => !!lease && (Date.now() - lease.at < LEASE_TTL_MS || pendingCmds(d).some((c) => c.owner === lease.owner));
+const usedKey = (genKey, owner) => genKey + '\u0000' + owner;
 
 const AUDIT_FILE = path.join(ROOT, 'phone-control-audit.log');
 function clip(s, n = 300) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) + '…' : s; }
@@ -88,6 +126,7 @@ function dev(genKey, id) {
       id, name: '', model: id.startsWith('m:') ? id.slice(2) : '', android: '', appCode: 0, legacy: !id.startsWith('d:'),
       ready: null, readyAt: 0,
       queue: [], waiter: null, inflight: new Map(), lastPoll: 0, recentTs: [], lastSig: null, lastSigCount: 0,
+      lease: null, obsOwner: null,
     };
     a.set(id, d);
   }
@@ -146,7 +185,15 @@ export function listDevices(genKey, { includeOffline = false } = {}) {
       id: d.id, handle: deviceHandle(d), label: deviceLabel(d), name: d.name, model: d.model, android: d.android,
       appCode: d.appCode, legacy: d.legacy, online: isOnline(d), lastPoll: d.lastPoll,
       ready: d.ready, readyAgoMs: d.readyAt ? now - d.readyAt : null,
+      lease: leaseLive(d, d.lease) ? { owner: d.lease.owner, label: d.lease.label, agoMs: now - d.lease.at } : null,
     }));
+}
+/** 把租约 / 编号归属的拒绝说清楚：对方是谁、多久前动过，模型能转告用户。 */
+function leaseBusyText(d, lease) {
+  const ago = Math.max(0, Math.round((Date.now() - lease.at) / 1000));
+  const running = pendingCmds(d).some((c) => c.owner === lease.owner);
+  return '这台手机（' + deviceLabel(d) + '）正被另一个会话' + (lease.label ? '〈' + lease.label + '〉' : '') + '操控（'
+    + (running ? '它有命令正在执行' : ago + ' 秒前有动作') + '），为免互相点乱已拦下：别反复重试，等它做完、换一台，或问用户。';
 }
 function matchDevices(online, want) {
   const w = String(want || '').trim().toLowerCase();
@@ -161,23 +208,33 @@ function describeOnline(online) {
 }
 /**
  * 定下这次命令发给哪台手机。优先级：显式 want > 本轮已锁定的 sticky > 发起这轮对话的那台 origin >
- * 唯一在线的那台。多台在线又没法判断 → 报错并列出设备，让模型指定（拿不准就问用户）。
- * @returns {{device:object}|{error:string}}
+ * 这个会话（owner）上一小时内操作过的那台 > 唯一在线的那台。多台在线又没法判断 → 报错并列出设备，
+ * 让模型指定（拿不准就问用户）；会话以前用过某台的话在报错里提一句，但不替它选。
+ * @returns {{device:object, via:string}|{error:string}}
  */
-export function resolveDevice(genKey, { want, sticky, origin } = {}) {
+export function resolveDevice(genKey, { want, sticky, origin, owner } = {}) {
   const a = accounts.get(genKey);
   const online = a ? [...a.values()].filter(isOnline) : [];
   if (!online.length) return { error: '手机操控服务未连接——请在手机 app 的设置里开启「手机操控」（读屏/点按还需授予无障碍）。' };
   if (want) {
     const hits = matchDevices(online, want);
-    if (hits.length === 1) return { device: hits[0] };
+    if (hits.length === 1) return { device: hits[0], via: 'want' };
     if (!hits.length) return { error: '没找到在线的设备「' + want + '」。当前在线：' + describeOnline(online) };
     return { error: '「' + want + '」匹配到 ' + hits.length + ' 台，请用句柄指定：' + describeOnline(hits) };
   }
-  if (sticky) { const d = a.get(sticky); if (isOnline(d)) return { device: d }; }
-  if (origin) { const d = a.get(origin); if (isOnline(d)) return { device: d }; }
-  if (online.length === 1) return { device: online[0] };
-  return { error: '有 ' + online.length + ' 台手机开着操控：' + describeOnline(online) + '。请用 device 参数指定操作哪一台；不确定用户指的是哪台就先问用户。' };
+  if (sticky) { const d = a.get(sticky); if (isOnline(d)) return { device: d, via: 'sticky' }; }
+  if (origin) { const d = a.get(origin); if (isOnline(d)) return { device: d, via: 'origin' }; }
+  let hint = '';
+  const last = owner ? lastUsed.get(usedKey(genKey, owner)) : null;
+  if (last) {
+    const d = a.get(last.deviceId);
+    const fresh = Date.now() - last.at < LAST_USED_TTL_MS;
+    if (fresh && isOnline(d)) return { device: d, via: online.length === 1 ? 'only' : 'last' };
+    hint = '本会话上次操作的是' + (d ? '「' + deviceHandle(d) + '」' + deviceLabel(d) : last.deviceId)
+      + (isOnline(d) ? '（' + Math.round((Date.now() - last.at) / 60_000) + ' 分钟前）' : '（现在不在线）') + '。';
+  }
+  if (online.length === 1) return { device: online[0], via: 'only' };
+  return { error: '有 ' + online.length + ' 台手机开着操控：' + describeOnline(online) + '。' + hint + '请用 device 参数指定操作哪一台；不确定用户指的是哪台就先问用户。' };
 }
 
 // 设备控制服务是否在线：给了 deviceId 看那一台，否则账号下任一台在线即算。
@@ -220,22 +277,51 @@ function deliver(d) {
 
 /**
  * 向某账号的某台手机下发一条操控命令，等回传。
- * @param {object} o genKey / deviceId（缺省时按 resolveDevice 规则挑：唯一在线那台，多台则报错）/ op / args / timeoutMs
+ * @param {object} o genKey / deviceId（缺省时按 resolveDevice 规则挑：唯一在线那台，多台则报错）/ op / args / timeoutMs /
+ *   owner（发起方会话 id：拿租约、记编号归属；不给 = 旧行为）/ ownerLabel（租约被别人撞上时给对方看的会话描述）
  * @returns {Promise<any>} 手机回传 result（ok=false → reject 带 error）
  */
-export function requestPhoneControl({ genKey = 'admin', deviceId, op, args = {}, timeoutMs = 15_000 } = {}) {
+export function requestPhoneControl({ genKey = 'admin', deviceId, op, args = {}, timeoutMs = 15_000, owner, ownerLabel } = {}) {
   return new Promise((resolve, reject) => {
     let d;
     if (deviceId) {
       d = accounts.get(genKey)?.get(deviceId);
       if (!isOnline(d)) { reject(new Error('那台手机（' + (d ? deviceLabel(d) : deviceId) + '）的操控服务当前不在线——请在它的 app 设置里开启「手机操控」。')); return; }
     } else {
-      const r = resolveDevice(genKey, {});
+      const r = resolveDevice(genKey, { owner });
       if (r.error) { reject(new Error(r.error)); return; }
       d = r.device;
     }
+    const who = owner ? String(owner) : '';
+    if (who) {
+      // 租约：别的会话正在这台上动手 → 动作类命令直接拒（只读的 status/ping/screen 放行）
+      if (!LEASE_EXEMPT.has(op) && d.lease && d.lease.owner !== who && leaseLive(d, d.lease)) {
+        const msg = leaseBusyText(d, d.lease);
+        audit(genKey, d.id, op, args, false, msg, { owner: who, holder: d.lease.owner });
+        reject(new Error(msg)); return;
+      }
+      // 编号归属：编号表被别人的读屏刷过（或别人会刷新编号的命令还排在前面）→ 编号对不上了，拒
+      if (usesIndex(op, args)) {
+        const stale = d.obsOwner != null && d.obsOwner !== who;
+        const racing = pendingCmds(d).some((c) => c.owner !== who && renumbers(c.op, c.args));
+        if (stale || racing) {
+          const msg = '编号已被其他会话的读屏刷新' + (racing && !stale ? '（对方的读屏正排在你前面）' : '') + '，这个编号现在可能指向别的元素，已拦下——请先 phone_screen 看最新画面再按编号操作。';
+          audit(genKey, d.id, op, args, false, msg, { owner: who });
+          reject(new Error(msg)); return;
+        }
+      }
+    }
     const blocked = guard(d, op, args);
     if (blocked) { audit(genKey, d.id, op, args, false, blocked); reject(new Error(blocked)); return; }
+    if (who) {
+      if (!LEASE_EXEMPT.has(op)) d.lease = { owner: who, label: ownerLabel || (d.lease && d.lease.owner === who ? d.lease.label : ''), at: Date.now() };
+      else if (d.lease && d.lease.owner === who) d.lease.at = Date.now();
+      if (op !== 'status' && op !== 'ping') {
+        // 一个会话一条，常驻进程里会越攒越多：攒多了顺手清掉早已过期（只剩提示价值也过了一天）的
+        if (lastUsed.size > 500) for (const [k, v] of lastUsed) if (Date.now() - v.at > 24 * 60 * 60_000) lastUsed.delete(k);
+        lastUsed.set(usedKey(genKey, who), { deviceId: d.id, at: Date.now() });
+      }
+    }
     const cmdId = 'pc-' + randomBytes(6).toString('hex');
     let done = false;
     const t0 = Date.now();
@@ -243,12 +329,19 @@ export function requestPhoneControl({ genKey = 'admin', deviceId, op, args = {},
       clearTimeout(cmd.timer);
       d.inflight.delete(cmdId);
       const i = d.queue.indexOf(cmd); if (i >= 0) d.queue.splice(i, 1);
+      if (who && d.lease && d.lease.owner === who) d.lease.at = Date.now();   // 命令收尾也续租：「N 秒前有动作」从这里算
     };
     // 审计以【手机回传的结论】为准：输入等动作回读没对上（verified:false）的单独记下，不再一律记成功。
     const verdict = (r) => (r && typeof r === 'object' && r.verified === false ? { verified: false } : null);
     const cmd = {
-      cmdId, op, args,
-      resolve: (r) => { if (!done) { done = true; cleanup(); audit(genKey, d.id, op, args, true, null, { ms: Date.now() - t0, ...verdict(r) }); resolve(r); } },
+      cmdId, op, args, owner: who,
+      resolve: (r) => {
+        if (done) return;
+        done = true; cleanup();
+        if (r && typeof r === 'object' && typeof r.sig === 'string') d.obsOwner = who;   // 回包带 sig = 这次刷新了手机端编号表
+        audit(genKey, d.id, op, args, true, null, { ms: Date.now() - t0, ...verdict(r), ...(who ? { owner: who } : null) });
+        resolve(r);
+      },
       reject: (e) => { if (!done) { done = true; cleanup(); const msg = e instanceof Error ? e.message : String(e || '失败'); audit(genKey, d.id, op, args, false, msg, { ms: Date.now() - t0 }); reject(e instanceof Error ? e : new Error(msg)); } },
       timer: setTimeout(() => { if (!done) { done = true; cleanup(); audit(genKey, d.id, op, args, false, '超时', { ms: Date.now() - t0 }); reject(new Error('手机响应超时（' + op + '）')); } }, timeoutMs),
     };
@@ -267,6 +360,17 @@ export function abortAll(genKey, reason = '已中止', deviceId) {
     for (const cmd of d.queue.splice(0)) cmd.reject(new Error(reason));
     d.inflight.clear();
   }
+}
+
+/** 放掉某个会话持有的设备租约（轮次结束时调；genKey 缺省 = 所有账号）。返回放掉了几台。 */
+export function releaseLease(owner, genKey) {
+  if (!owner) return 0;
+  let n = 0;
+  for (const [k, a] of accounts) {
+    if (genKey && k !== genKey) continue;
+    for (const d of a.values()) if (d.lease && d.lease.owner === String(owner)) { d.lease = null; n++; }
+  }
+  return n;
 }
 
 function clampWait(req) {
@@ -366,6 +470,8 @@ export async function handleControlEvent(req, res, { identify }) {
   if (body && (body.type === 'estop' || body.type === 'stop')) {
     // 认不出是哪台（'legacy'）时宁可全停；认得出只停这一台，另一台上正在做的事不受牵连。
     abortAll(genKey, '用户在手机上点了急停（或关闭了操控）', deviceId === 'legacy' ? undefined : deviceId);
+    // 急停 = 用户收回这台手机：租约一并清掉（谁再要动它得重新拿）
+    for (const x of accounts.get(genKey)?.values() || []) if (deviceId === 'legacy' || x.id === deviceId) x.lease = null;
     const d = accounts.get(genKey)?.get(deviceId);
     if (d) { d.lastPoll = 0; if (d.waiter) { try { clearTimeout(d.waiter.timer); d.waiter.res.writeHead(204); d.waiter.res.end(); } catch {} d.waiter = null; } }
   }
@@ -382,4 +488,10 @@ export async function handleControlEvent(req, res, { identify }) {
 export function __resetForTest() {
   for (const a of accounts.values()) for (const d of a.values()) if (d.waiter) { try { clearTimeout(d.waiter.timer); } catch {} }
   accounts.clear();
+  lastUsed.clear();
+}
+// 测试钩子：把某账号的租约与「上次用的设备」往回拨 ms（测过期，不用真等）。
+export function __ageForTest(genKey, ms) {
+  for (const d of accounts.get(genKey)?.values() || []) if (d.lease) d.lease.at -= ms;
+  for (const [k, v] of lastUsed) if (k.startsWith(genKey + '\u0000')) v.at -= ms;
 }

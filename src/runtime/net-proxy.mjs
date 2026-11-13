@@ -44,6 +44,19 @@ import net from 'node:net';
 import os from 'node:os';
 import { readFileSync } from 'node:fs';
 import { EnvHttpProxyAgent, Agent, setGlobalDispatcher, ProxyAgent } from 'undici';
+import { KEEPALIVE, withWarm, retireDispatcher } from './upstream-conn.mjs';
+
+// 进程内 fetch 的全局出口：连接池调大空闲保留时间 + 模型上游保温（upstream-conn.mjs）。换出口时把旧的收掉。
+let currentGlobal = null, currentPlain = null;
+/** 当前出口不带保温的那一层（同一个连接池）：订阅号上游代理用它——那条路 bridge 不许另发自己的请求，心跳也算。 */
+export const plainDispatcher = () => currentPlain;
+function installGlobal(agent) {
+  const prev = currentGlobal;
+  currentPlain = agent;
+  currentGlobal = withWarm(agent);
+  setGlobalDispatcher(currentGlobal);
+  retireDispatcher(prev);
+}
 import { CONFIG_PATH } from '../config/index.mjs';
 
 const DEFAULT_PORTS = [7897, 7890, 7891, 10809, 1080, 8889];
@@ -155,10 +168,10 @@ function applyProxy(url) {
     process.env.https_proxy = url;
     process.env.NO_PROXY = noProxyList();
     process.env.no_proxy = process.env.NO_PROXY;
-    setGlobalDispatcher(new EnvHttpProxyAgent());
+    installGlobal(new EnvHttpProxyAgent(KEEPALIVE));
   } else {
     for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) delete process.env[k];
-    setGlobalDispatcher(new Agent());
+    installGlobal(new Agent(KEEPALIVE));
   }
 }
 
@@ -261,7 +274,7 @@ export async function initOutboundProxy() {
   if (preset) {
     state = { mode: 'manual', proxy: preset, checkedAt: Date.now(), reason: '沿用启动环境里已有的代理设置' };
     if (!process.env.NO_PROXY) { process.env.NO_PROXY = noProxyList(); process.env.no_proxy = process.env.NO_PROXY; }
-    setGlobalDispatcher(new EnvHttpProxyAgent());
+    installGlobal(new EnvHttpProxyAgent(KEEPALIVE));
     console.log('[net] 出站走代理 ' + preset + '（环境变量已指定，不自动探测）');
     return state;
   }

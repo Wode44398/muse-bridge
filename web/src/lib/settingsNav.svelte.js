@@ -11,6 +11,8 @@ export { settingsNav };
  * 打开设置，可直达分区。分区名两套外壳都认（各自映射到自己的页；外壳里没有的落首页）：
  *   general | appearance | account | about（关于与更新）| connection（服务器地址 / 线路）| devices（设备与端口转发）
  *   | claude（Claude 设置页；agents 同义）| feedback | phone（安卓手机操控）| shortcuts（桌面快捷键）| wallpaper | agentapi（Agent 接入）
+ *   | model-hub（模型中心；modelhub / models / providers / cproviders 同义。管理员与能自定义 API 的成员才有，
+ *     两边的数据都还没拉到时两套外壳先停在这一分区等，拉到了确实没有再退回首页）
  */
 export function openSettings(sec = null) {
   settingsNav.sec = sec;

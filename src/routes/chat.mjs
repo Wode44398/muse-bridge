@@ -19,6 +19,7 @@ import { isCustomModelId, customEffortOk, customOwner } from '../runtime/claude-
 // 官方型号 + 自定义 API 的 custom:<服务>:<模型>（存在与否、谁能用由 runClaudeChat 判，给人话报错）
 const claudeModelOk = (m) => CLAUDE_MODELS.has(m) || isCustomModelId(m);
 import { AGENT_BY_ID, agentOfChat } from '../config/agents.mjs';
+import { GEMINI_RETIRED } from './gemini-retired.mjs';
 import { moduleChat } from '../modules/registry.mjs';
 import { billingUser, quotaBlock } from '../runtime/quota.mjs';
 import { noteTurnStart } from '../users.mjs';
@@ -31,6 +32,7 @@ import { setQueueReplayer, fakeRequest, fakeResponse, listQueue, enqueue, enqueu
 import { touchSnap, SNAP_MAX_TURNS, snapAllowsFable } from './chat-snapshot.mjs';
 import { getLimitResume, setLimitAutoContinue } from '../runtime/limit-resume.mjs';
 import { FAMILY_REQ } from '../runtime/session-family.mjs';
+import { projectSourceNote } from './project-mode.mjs';
 import { registerPermissionRoutes } from '../runtime/permissions.mjs';
 import { supersedeOffer } from '../runtime/session-proposals.mjs';
 import { startTurnTiming, markTurn, handedTurn } from '../runtime/turn-timing.mjs';
@@ -215,7 +217,13 @@ export function registerChatRoutes(router, { authOk, identify }) {
       res.end(JSON.stringify({ error: 'Antigravity 已下线' }));
       return;
     }
-    // 功能扩展的 agent（vertex / antigravity / codex）：扩展没装 = 这个 agent 不可用，同样回 403。
+    // Gemini 对话 2026-11-04 下线：老 apk 仍可能发 agent:'vertex'，同样显式 410（中文说明老 apk 直接显示）。
+    if (parsed.agent === 'vertex' || parsed.agent === 'gemini') {
+      res.writeHead(410, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: GEMINI_RETIRED }));
+      return;
+    }
+    // 功能扩展的 agent（codex）：扩展没装 = 这个 agent 不可用，同样回 403。
     const extAgent = typeof parsed.agent === 'string' ? agentOfChat(parsed.agent) : null;   // 认不出的一律按 Claude（同旧行为）
     if (extAgent && extAgent !== 'claude') {
       const handler = moduleChat(parsed.agent);
@@ -263,6 +271,8 @@ export function registerChatRoutes(router, { authOk, identify }) {
       ...(!sessionId && typeof parsed.outputStyle === 'string' && /^[\w .()-]{1,80}$/.test(parsed.outputStyle) ? { outputStyle: parsed.outputStyle } : {}),
       // 新会话在输入框下方的设备芯片里选的设备（设备 id / 'none'）。同理只收新会话：续聊改设备走 /api/devices/link。
       ...(!sessionId && typeof parsed.computer === 'string' && /^(none|d-[0-9a-f]{6,24})$/.test(parsed.computer) ? { computer: parsed.computer } : {}),
+      // 项目模式（运行档位 › 项目，runtime/project-mode.mjs）：新会话草稿里选的形态。同理只收新会话——续聊按 chat-prefs 记的形态。
+      ...(!sessionId && parsed.shape === 'project' ? { shape: 'project' } : {}),
     };
     const CHAT_STYLES = new Set(['learning', 'concise', 'explanatory', 'formal']);
     const style = CHAT_STYLES.has(parsed.style) ? parsed.style : undefined; // normal/未知 → 无额外风格
@@ -282,6 +292,12 @@ export function registerChatRoutes(router, { authOk, identify }) {
     // 只认新会话：限额自动续跑 / 会话唤醒会把首条请求的 body 原样重放、只补上 sessionId，草稿里选的模式（比如计划）
     // 不能跟着它压过会话自己的记忆。
     const permissionMode = !isSnap && !sessionId && typeof parsed.permissionMode === 'string' ? parsed.permissionMode.slice(0, 40) : undefined;
+    // 项目对话（协调者）：新会话由请求带来，续聊由 runClaudeChat 按 chat-prefs 认。会话派生开出来的子会话不收（讨论串是普通会话）。
+    // 定时任务开的新会话也能是项目对话（routines-runner 的 family origin 'routine'）；别的会话间重放照旧不收
+    const fam0 = req[FAMILY_REQ] && req[FAMILY_REQ].origin;
+    const shape = !isSnap && !sessionId && parsed.shape === 'project' && (!fam0 || fam0.kind === 'routine') ? 'project' : undefined;
+    // 转成项目（普通对话档位菜单里的「转成项目」）：新项目对话以原会话为背景，首条消息前面附一张「原会话」卡（routes/project-mode.mjs）
+    const fromNote = shape && !prewarm && typeof parsed.fromSession === 'string' && /^[0-9a-fA-F-]{8,}$/.test(parsed.fromSession) ? await projectSourceNote(ctx, parsed.fromSession).catch(() => '') : '';
     // Claude 项目制（与 codex 同构，项目=工作空间路径=运行 cwd）：
     // 新会话按 claudeProjectId 选项目（缺省=「工作空间」默认项目，胶囊/旧客户端零改动）；
     // 续聊按 transcript 所在目录反查项目——会话的 cwd 一经建立不可改，忽略客户端传值。
@@ -396,14 +412,14 @@ export function registerChatRoutes(router, { authOk, identify }) {
     // homeRoot 保留身份原本的文件根（覆写前的 cwd）：产物文件夹卡要靠它算「在文件页里的位置」。
     // worktree 会话另带 worktree:{cwd,branch}——session 帧透给前端，工作台当场切到 worktree。
     const claudeCtx = claudeProject
-      ? { ...ctx, cwd: claudeProject.path, homeRoot: ctx.cwd, ...(claudeProject.worktree ? { worktree: { cwd: claudeProject.path, branch: claudeProject.worktree.branch, ...(claudeProject.worktree.name ? { name: claudeProject.worktree.name, root: claudeProject.worktree.root } : {}) } } : {}) }
+      ? { ...ctx, cwd: claudeProject.path, homeRoot: ctx.cwd, ...(claudeProject.id ? { projectId: claudeProject.id } : {}), ...(claudeProject.worktree ? { worktree: { cwd: claudeProject.path, branch: claudeProject.worktree.branch, ...(claudeProject.worktree.name ? { name: claudeProject.worktree.name, root: claudeProject.worktree.root } : {}) } } : {}) }
       : ctx;
     if (prewarm) {
       res.writeHead(202, { 'Content-Type': 'application/json' });
       res.end('{"ok":true}');
       runClaudeChat(req, null, {
         message: '', sessionId: undefined, model, effort, ultracode, fast, chatPrefs, attachments: [], style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
-        ctx: claudeCtx, prewarm: true, permissionMode,
+        ctx: claudeCtx, prewarm: true, permissionMode, shape,
       }).catch((e) => console.log('[claude] prewarm failed:', e && e.message));
       return;
     }
@@ -419,13 +435,13 @@ export function registerChatRoutes(router, { authOk, identify }) {
     };
     const restartResume = isSnap || !sessionId ? 0 : Math.max(0, Math.min(9, Number(parsed.restartResume) | 0));
     return runClaudeChat(req, res, {
-      message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
+      message: fromNote ? fromNote + '\n\n' + message : message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
       origin: isSnap ? null : chatOrigin(ctx, { headers: req.headers, body: parsed, url: req.url, family }),
       limitReplay, limitResume: (parsed.limitResume === true || restartResume > 0) && !isSnap, restartResume,
       globalMax: isSnap ? SNAP_MAX_TURNS : undefined,
       ctx: claudeCtx,
       family: isSnap ? null : family,
-      permissionMode,
+      permissionMode, shape,
     });
   }
 

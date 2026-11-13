@@ -14,10 +14,12 @@
 - **手机、电脑都能用**：打开网址就是完整的工作台，界面支持简体中文和 English，默认跟着浏览器语言。
 - **安卓 app**：就是 bridge 的安卓 App（同一个 apk）：在设置根页「插件」分组里的「安卓 App」下载，或者[直接下载 apk](https://github.com/Wode44398/muse-bridge/releases/latest/download/MuseBridge.apk)。界面打包在 App 里，网速慢也秒开，连上后显示 Muse Bridge 品牌（桌面图标名字仍是 The Bridge）；App 版本跟着所连服务器走，临时地址变了一般会自动跟过去，没跟上就在「设置 › 关于 › 服务器地址」里更换。
 - **Claude Code 完整体验**：由官方 Claude Agent SDK 驱动，支持工具调用、子 agent、工作流、上下文压缩和会话续接。右侧工作台有终端、文件、任务和改动审阅，设置页像手机的「设置」一样一层层点进去。另有权限模式与审批卡、计划卡，Claude 干活时可以插话或排队，会话搜索与归档，拉取请求跟踪，对话里直接画交互图表，撞上 5 小时限额后额度一恢复自动接着做。
-- **Claude Code 也能接别家模型**：在「设置 → Claude → 自定义 API」里添加 Anthropic / OpenAI 兼容的接口（DeepSeek、Kimi、OpenRouter 等），模型出现在模型菜单的「More models」里；管理员和每个成员各有自己的一份。
+- **一处配好所有模型（模型中心）**：在「设置 → 模型中心」里加一次服务（DeepSeek、Kimi、OpenRouter、Anthropic / OpenAI / Gemini 兼容接口等），自动识别有哪些模型，按模型勾给 Claude、dimensio 或 Media Studio；Claude 里的模型出现在模型菜单的「More models」里；管理员和每个成员各有自己的一份。
 - **能连 bridge 的 Windows 桌面客户端**：绑了自己的域名（固定地址）时有完整的桌面体验——标题栏、快问浮窗、把电脑登记成设备让 Claude 操作；临时地址下客户端只当网页窗口用。
 - **让 agent 来操作它**：「设置 → Agent 接入」可以生成密钥，别的 agent（包括部署它的 Muse）拿到后能读项目手册、经 HTTP 操作 Muse Bridge。
-- **dimensio 多模型工作台**：一家一把 key，随时切换模型；也能接任意 OpenAI 兼容的自定义服务。自带工作区、记忆和子 agent。
+- **dimensio 多模型工作台**：模型从模型中心来，随时切换模型；自带工作区、记忆和子 agent，能和 Claude 互开子会话。
+- **Media Studio（可选，默认关）**：图像、视频、配音、音乐四个创作页放在一起，模型和 Key 自己接（Google Vertex、OpenAI、OpenRouter、fal 等），作品能拖进对话或工作空间。
+- **Claude 的「项目对话」**：一件大事交给协调者拆开，几条讨论串并行去做，带项目概览、项目说明和项目记忆。
 - **各家原生联网搜索**：当前对话用哪家模型，就先用哪家自己的搜索，失败了自动换下一家，最后才退回 DuckDuckGo。
 - **VM 重启自动恢复**：Muse 的 VM 会不定期重启，看门狗在 60 秒内把服务拉起来；临时地址变了，Muse 会主动告诉你新地址。
 - **主动提醒更新**：有新版本时，Muse 会用一两句话告诉你更新了什么，问你要不要更新。更新会等没人在聊天时才切换，新版本起不来会自动退回。
@@ -72,9 +74,9 @@ Muse 会下载安装包、读安装指南，然后一次问你四个问题：
 | 智谱 GLM | `ZHIPU_API_KEY` | ✓ 自家搜索 |
 | 通义千问 | `QWEN_API_KEY` | ✓ 自家搜索 |
 | 小米 MiMo（按量付费或 Token Plan） | `MIMO_API_KEY` | 见下 |
-| 任意 OpenAI 兼容服务 | 在界面里点「＋」添加 | — |
+| 任意 OpenAI 兼容服务 | 在模型中心里添加 | — |
 
-key 可以让 Muse 帮你写进去（`set-api-key`），也可以在 dimensio 页侧栏底部的「设置」里自己填。同一家只用一种方式：网页里填过的 key 优先。
+这些厂商的 key 都在网页的「设置 → 模型中心」里填（加之前请 Muse 先放行这家的接口网站）；从旧版本升上来时，以前配过的 key 会自动搬进模型中心。
 
 **小米的联网搜索**是控制台「插件管理」里的一个插件，按次计费（约 ¥16 / 千次），钱从账户余额里扣，所以只有**按量付费**的 key 能用。如果你聊天用的是 Token Plan 订阅的 key（`tp-` 开头），可以再建一把按量付费的 key，单独配给搜索：`set-api-key MIMO_SEARCH_API_KEY <sk-…>`，聊天照旧用 Token Plan 的额度。不配也行，小米搜不了会自动换别家。
 

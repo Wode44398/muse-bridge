@@ -31,10 +31,8 @@
   import { ovUrl } from '../lib/overlay.svelte.js';
   import GlassButton from './ios27/GlassButton.svelte';
   import './ios27/ink.css';
-  import sheetD_pub from '../assets/ios27/sheet-dark.png';
-  const sheetD = $derived(ovUrl('ios27/sheet-dark.png', sheetD_pub));
-  import capD_pub from '../assets/ios27/cap44-dark.png';   // kit 暗色胶囊玻璃（镜头钮那条）
-  const capD = $derived(ovUrl('ios27/cap44-dark.png', capD_pub));
+  const sheetD = $derived(ovUrl('ios27/sheet-dark.png'));
+  const capD = $derived(ovUrl('ios27/cap44-dark.png'));
 
   setContext('ios27', { dark: true, ink: true });
   // 透明 1×1 GIF 当 poster：安卓 WebView 给还没出帧的 <video> 画一张默认海报（灰底 + 巨大的播放键，被 object-fit

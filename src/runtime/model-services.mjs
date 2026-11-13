@@ -11,17 +11,23 @@
 // spec（公共接口，见手册 plugins 章「给 agent 提供模型」，只做加法）：
 //   id          插件内唯一，缺省 'default'（小写字母数字连字符）
 //   name        显示名（≤40）
-//   protocol    'anthropic' | 'openai'
+//   protocol    'anthropic' | 'openai' | 'gemini'（gemini 只给 dimensio）
 //   baseUrl     端点根地址（http / https；插件是主机装的，本机地址也行）
 //   apiKey      可选；authStyle 'x-api-key' | 'bearer' | 'none'（缺省：有 key 按协议，没有 = none）；headers [{ name, value }]
 //   agents      ['claude', 'dimensio'] 的子集（缺省两个都给）
 //   members     true = 多用户服务端的成员也能用（缺省只给服务器主机）
-//   models      [{ id, label?, contextWindow?, maxOutput?, vision?, thinking?, efforts?: [{ id, name, value }], effortDefault?, alwaysThinks? }]
+//   models      [{ id, label?, agents?, contextWindow?, maxOutput?, vision?, thinking?, efforts?: [{ id, name, value }], effortDefault?, alwaysThinks? }]
+//               models[i].agents（2026-11-10 模型中心 v2）：这个模型给哪些 agent，取与服务级 agents 的交集（gemini 照样去掉 claude）；
+//               不传 = 跟服务级。某个 agent 下一个模型都没有时，那一侧整条服务不出现（modelServices(agent) 过滤）。
+//   native      可选（模型中心用）：{ vendor, key, baseUrl? }——这个服务就是 dimensio 自带专门适配的那家厂商（vendor = 它的厂商 id）。
+//               dimensio 扩展不把它登记成一张新卡，而是让那家厂商用这把 Key（和地址）；别的 agent 不看这个字段。
+//   logo        可选：品牌标的键（如 openrouter、deepseek-color），dimensio 的「模型服务」卡片据此画标
 //   defaultModel、timeoutSec、compat（Claude 代理的兼容开关：promptCaching / stripBetas / slimBody / stripThinkingHistory / replayReasoning）
 import { createHash } from 'node:crypto';
 
 export const MODEL_AGENTS = Object.freeze(['claude', 'dimensio']);
 const SID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const LOGO_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;   // 品牌标的键（web/src/lib/brandLogos.js 里的文件基名）
 const MODEL_ID_RE = /^[^\s\u0000-\u001f]{1,200}$/;
 
 const services = new Map();   // `${插件}/${sid}` → 规范化后的记录
@@ -38,8 +44,9 @@ function normalize(plugin, pluginName, spec) {
   const s = spec && typeof spec === 'object' ? spec : {};
   const sid = s.id == null ? 'default' : String(s.id);
   if (!SID_RE.test(sid)) throw bad(`模型服务 id「${sid}」不合法（小写字母、数字、连字符，≤32）`);
-  const protocol = s.protocol === 'openai' ? 'openai' : s.protocol === 'anthropic' || s.protocol == null ? 'anthropic' : null;
-  if (!protocol) throw bad('protocol 只能是 anthropic 或 openai');
+  // gemini（Gemini generateContent 接口）只有 dimensio 认得：Claude 的本机代理只会 Anthropic / OpenAI，这种服务不给 Claude
+  const protocol = s.protocol === 'openai' ? 'openai' : s.protocol === 'gemini' ? 'gemini' : s.protocol === 'anthropic' || s.protocol == null ? 'anthropic' : null;
+  if (!protocol) throw bad('protocol 只能是 anthropic、openai 或 gemini');
   let baseUrl = '';
   try {
     const u = new URL(String(s.baseUrl || ''));
@@ -47,27 +54,38 @@ function normalize(plugin, pluginName, spec) {
     baseUrl = u.toString().replace(/\/+$/, '');
   } catch { throw bad('baseUrl 要是 http(s) 地址'); }
   const apiKey = typeof s.apiKey === 'string' ? s.apiKey.trim().slice(0, 4000) : '';
-  const authStyle = ['x-api-key', 'bearer', 'none'].includes(s.authStyle) ? s.authStyle : apiKey ? (protocol === 'openai' ? 'bearer' : 'x-api-key') : 'none';
+  const authStyle = ['x-api-key', 'bearer', 'goog', 'none'].includes(s.authStyle) ? s.authStyle : apiKey ? (protocol === 'openai' ? 'bearer' : protocol === 'gemini' ? 'goog' : 'x-api-key') : 'none';
   const headers = (Array.isArray(s.headers) ? s.headers : [])
     .filter((h) => h && typeof h.name === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(h.name) && typeof h.value === 'string')
     .slice(0, 20).map((h) => ({ name: h.name, value: h.value.slice(0, 2000) }));
-  const agents = Array.isArray(s.agents) ? MODEL_AGENTS.filter((a) => s.agents.includes(a)) : [...MODEL_AGENTS];
+  const agents = (Array.isArray(s.agents) ? MODEL_AGENTS.filter((a) => s.agents.includes(a)) : [...MODEL_AGENTS]).filter((a) => protocol !== 'gemini' || a !== 'claude');
   const seen = new Set();
   const models = [];
   for (const m of Array.isArray(s.models) ? s.models : []) {
     const id = typeof m === 'string' ? m.trim() : typeof m?.id === 'string' ? m.id.trim() : '';
     if (!MODEL_ID_RE.test(id) || seen.has(id)) continue;
     seen.add(id);
-    models.push(typeof m === 'string' ? { id } : { ...m, id });
+    // 只有显式给了 agents 的模型才带这个字段：老插件不传时记录逐字段和以前一样（各 agent 读到的形状不变）
+    if (typeof m === 'string') models.push({ id });
+    else if (Array.isArray(m.agents)) models.push({ ...m, id, agents: agents.filter((a) => m.agents.includes(a)) });
+    else { const { agents: _drop, ...rest } = m; models.push({ ...rest, id }); }
     if (models.length >= 100) break;
   }
   if (!models.length) throw bad('models 至少要有一个模型');
   const defaultModel = models.some((m) => m.id === s.defaultModel) ? s.defaultModel : models[0].id;
+  const nv = s.native && typeof s.native === 'object' ? s.native : null;
+  const native = nv && typeof nv.vendor === 'string' && /^[a-z]{2,16}$/.test(nv.vendor) && typeof nv.key === 'string' && nv.key.trim() && agents.includes('dimensio')
+    ? { vendor: nv.vendor, key: nv.key.trim().slice(0, 4000), baseUrl: typeof nv.baseUrl === 'string' && /^https?:\/\//i.test(nv.baseUrl) ? nv.baseUrl.replace(/\/+$/, '').slice(0, 500) : '' }
+    : null;
   return {
     key: `${plugin}/${sid}`, plugin, pluginName: str(pluginName, 40) || plugin, sid,
     name: str(s.name, 40) || str(pluginName, 40) || plugin,
     protocol, baseUrl, apiKey, authStyle, headers, agents, members: s.members === true,
     models, defaultModel,
+    logo: typeof s.logo === 'string' && LOGO_RE.test(s.logo) ? s.logo : '',
+    ...(native ? { native } : {}),
+    // 请求实际发到的上游主机（模型中心给的；baseUrl 是本机网关时靠它认官方 Anthropic / OpenRouter）
+    ...(typeof s.upstream === 'string' && /^[a-z0-9.-]{1,253}$/.test(s.upstream) ? { upstream: s.upstream } : {}),
     timeoutSec: Number.isFinite(s.timeoutSec) ? Math.min(1800, Math.max(10, Math.round(s.timeoutSec))) : 600,
     compat: s.compat && typeof s.compat === 'object' ? { ...s.compat } : {},
   };
@@ -106,10 +124,23 @@ export function provideModelService(plugin, pluginName, spec) {
   };
 }
 
-/** 给某个 agent 的服务（agent 缺省 = 全部）。记录是只读快照，别改。 */
+/**
+ * 给某个 agent 的服务（agent 缺省 = 全部，原样返回）。记录是只读快照，别改。
+ * 带 agent 时按模型级 agents 再筛一遍：筛掉了模型的返回副本（defaultModel 落在被筛掉的模型上就改成剩下的第一个），
+ * 一个都不剩的整条不返回；一个都没筛掉的原样返回（老插件拿到的还是原来那条记录）。
+ */
 export function modelServices(agent) {
   const all = [...services.values()];
-  return agent ? all.filter((s) => s.agents.includes(agent)) : all;
+  if (!agent) return all;
+  const out = [];
+  for (const s of all) {
+    if (!s.agents.includes(agent)) continue;
+    const models = s.models.filter((m) => !Array.isArray(m.agents) || m.agents.includes(agent));
+    if (!models.length) continue;
+    if (models.length === s.models.length) { out.push(s); continue; }
+    out.push({ ...s, models, defaultModel: models.some((m) => m.id === s.defaultModel) ? s.defaultModel : models[0].id });
+  }
+  return out;
 }
 export const modelServicesRev = () => rev;
 /** 有服务登记 / 更新 / 撤掉时调 fn(rev)。返回取消订阅的函数。 */

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync } from "./atomic-write.ts";
-import { GLOBAL_MEMORY, memoryDir } from "./memory.ts";
+import { globalMemoryFor, memoryDir } from "./memory.ts";
 
 // K11：记忆用量——一条记忆的全文被拉进对话（开跑时的自动召回、Recall 按 id 读全文）的次数、第一次与最近一次。
 // 记忆面板据此回答「这条到底有没有被用上」：生效了几个月从没被召回的，多半该退场。
@@ -57,5 +57,5 @@ export function noteRecalledDocs(workspaceRoot: string, docIds: string[], at: Da
     (m[1] ? global : local).push(m[2]!);
   }
   if (local.length) noteMemoryUse(workspaceRoot, local, at);
-  if (global.length) noteMemoryUse(GLOBAL_MEMORY, global, at);
+  if (global.length) noteMemoryUse(globalMemoryFor(workspaceRoot), global, at);
 }

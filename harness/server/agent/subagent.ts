@@ -27,10 +27,12 @@ import { editTool } from "../tools/edit.ts";
 import { bashTool, shell } from "../tools/bash.ts";
 import { disabledTools } from "../tenant.ts";
 import { verificationAuditTool } from "../tools/verificationaudit.ts";
-import { allProviders, clampEffort, defaultModel } from "../catalog.ts";
+import { allProviders, clampEffort, defaultModel, modelSpec } from "../catalog.ts";
 import { providerEndpoint, resolveKey } from "../config.ts";
 import { coerceToSchema, formatSchemaErrors, validateSchema } from "./schema.ts";
 import type { UsageDelta } from "../usage-ledger.ts";
+import { routeSubAgentModel } from "./dispatch-ladder.ts";
+import { resolveProfile, type ModelProfile } from "./profile.ts";
 
 // A sub-agent is a fresh, bounded agent loop the main agent (or a Workflow
 // script) delegates one self-contained task to. The point is context economy:
@@ -65,8 +67,9 @@ const TIER_DEFAULTS: Record<SubAgentTier, { maxTurns: number; deadlineMs: number
 const MAX_TURNS_CAP = 200;
 const DEADLINE_CAP_MS = 2 * 60 * 60_000;
 const SUB_MAX_OUTPUT = 65_536;
-const SUBMIT_ATTEMPTS = 3; // first try + 2 retries
-const SUBMIT_NUDGES = 2;
+// 两项都是模型档案 loop.submitAttempts / loop.submitNudges 的默认值（agent/profile.ts）
+export const SUBMIT_ATTEMPTS = 3; // first try + 2 retries
+export const SUBMIT_NUDGES = 2;
 
 // O2（KM-1 第一步）：子 agent 撞上限流 / 上游过载——以前 loop 重试完就记失败，在 Workflow 里变成 null、被脚本的 filter(Boolean)
 // 静默吃掉（「审了 12 个模块」其实只审了 9 个）。现在不记失败：挂起、退避（3 秒起翻倍、封顶 60 秒，可被中止），然后在同一个
@@ -170,6 +173,7 @@ export interface SubAgentEnv {
 interface SubmitHolder {
   value: unknown;
   attempts: number;
+  maxAttempts: number; // 校验失败的总机会数（档案 loop.submitAttempts）
   exhausted: boolean;
   lastErrors: string;
 }
@@ -203,7 +207,7 @@ function makeSubmitTool(schema: JsonObjectSchema, holder: SubmitHolder): Tool {
       if (errors.length) {
         holder.attempts++;
         holder.lastErrors = formatSchemaErrors(errors);
-        const left = SUBMIT_ATTEMPTS - holder.attempts;
+        const left = holder.maxAttempts - holder.attempts;
         if (left <= 0) {
           holder.exhausted = true;
           return fail("result rejected", `Result rejected (no attempts left):\n${holder.lastErrors}`);
@@ -229,6 +233,8 @@ interface PromptEnv {
   extra?: string;
   // C6（G3）：从父会话继承的项目指令（AGENTS.md、GUIDE.md），框定与主会话一致
   inherited?: string;
+  // 模型档案（按路由后的目标型号解析）：提示词变体 / 补丁的挂点，P0 只收不用
+  profile?: ModelProfile;
 }
 
 function subSystemPrompt(env: PromptEnv): string {
@@ -272,7 +278,7 @@ ${deliverable}${inherited}${extra}`;
 }
 
 function providerForModel(model: string): ProviderId | undefined {
-  return allProviders().find((p) => p.models.some((m) => m.id === model))?.id;
+  return allProviders().find((p) => Boolean(modelSpec(p.id, model)))?.id;
 }
 
 interface Target {
@@ -360,12 +366,21 @@ export function makeSubAgentRunner(
 
     if (tier === "coder" && env.parentMode) {
       const mode = env.parentMode();
-      if (mode !== "auto") {
-        return bail(`coder sub-agents need the parent session in auto mode (it is in ${mode}); use tools:"research" or switch the session mode first`);
+      // bypass（管理员全权档）与 auto 一样可以派 coder；只读 / plan 不行。
+      if (mode !== "auto" && mode !== "bypass") {
+        return bail(`coder sub-agents need the parent session in auto or bypass mode (it is in ${mode}); use tools:"research" or switch the session mode first`);
       }
+    }
+    // 选型阶梯：model 写 auto:<档> 或「服务:型号」时先换成具体的 provider / 型号（auto 连档位一起，压过调用方写的 effort）
+    const routed = await routeSubAgentModel(req.model, { provider: env.provider, model: env.model });
+    if ("error" in routed) return bail(routed.error, req.model ?? env.model, req.provider ?? env.provider);
+    if (routed.model) {
+      req = { ...req, model: routed.model, provider: routed.provider, ...(routed.thinking ? { thinking: routed.thinking } : {}) };
     }
     const target = resolveTarget(env, req);
     if ("error" in target) return bail(target.error, req.model ?? env.model, req.provider ?? env.provider);
+    // 模型档案按实际答话的型号解析（auto:<档> / 「服务:型号」都已换成具体型号）——Workflow 的 agent() 也走这里
+    const profile = resolveProfile(target.provider, target.model, { effort: target.thinking });
 
     // A fresh adapter per child: adapters may carry per-session state, and
     // parallel children must never share streams.
@@ -378,7 +393,7 @@ export function makeSubAgentRunner(
     });
 
     const tools = tierTools(tier);
-    const holder: SubmitHolder = { value: undefined, attempts: 0, exhausted: false, lastErrors: "" };
+    const holder: SubmitHolder = { value: undefined, attempts: 0, maxAttempts: profile.loop.submitAttempts, exhausted: false, lastErrors: "" };
     if (req.schema) tools.push(makeSubmitTool(req.schema, holder));
     const toolMap = new Map<string, Tool>(tools.map((t) => [t.def.name, t]));
 
@@ -405,8 +420,17 @@ export function makeSubAgentRunner(
       snapshotFiles: env.snapshotFiles,
     };
 
+    // coder 子 agent 继承父会话的全权档：父会话在 bypass 时子 agent 也 bypass（它们共用 env.sandbox，
+    // 沙箱此刻就是 bypass——整机 + 跳过密钥守卫；判定层也得 bypass 才不会被卡片 / 规则挡住，而子 agent 身边没有人能点卡）。
+    const parentMode = env.parentMode?.() ?? "auto";
     const permissionMode: PermissionMode =
-      tier === "research" ? "read-only" : req.permissionMode === "read-only" ? "read-only" : "auto";
+      tier === "research"
+        ? "read-only"
+        : req.permissionMode === "read-only"
+          ? "read-only"
+          : parentMode === "bypass"
+            ? "bypass"
+            : "auto";
     const state = new AgentState({
       adapter,
       system: subSystemPrompt({
@@ -414,10 +438,11 @@ export function makeSubAgentRunner(
         platform: process.platform,
         tier,
         toolNames: tools.map((t) => t.def.name),
-        fullAccess: env.sandbox.access === "full",
+        fullAccess: env.sandbox.access !== "workspace",
         schema: Boolean(req.schema),
         extra: req.system,
         inherited: env.projectInstructions?.(),
+        profile,
       }),
       tools: tools.map((t) => t.def),
       budget: {
@@ -436,6 +461,7 @@ export function makeSubAgentRunner(
       // Remember/MemoryAudit tools. Do not run the main-agent lifecycle gate.
       memoryAuditRequired: false,
       browser: env.parentBrowser?.(),
+      profile,
     });
     ctx.completeVerificationAudit = (decision, reason) => state.completeVerificationAudit(decision, reason);
     // O8：子 agent 的用量记进父会话的账本
@@ -513,7 +539,7 @@ export function makeSubAgentRunner(
               selfAborted = true;
               ctrl.abort();
             } else if (holder.exhausted) {
-              error = `structured result rejected ${SUBMIT_ATTEMPTS} times; last problems:\n${holder.lastErrors}`;
+              error = `structured result rejected ${holder.maxAttempts} times; last problems:\n${holder.lastErrors}`;
               selfAborted = true;
               ctrl.abort();
             }
@@ -541,7 +567,7 @@ export function makeSubAgentRunner(
           error = "run budget exhausted before SubmitResult was called";
           break;
         }
-        if (nudges >= SUBMIT_NUDGES) {
+        if (nudges >= profile.loop.submitNudges) {
           error = "finished without calling SubmitResult";
           break;
         }

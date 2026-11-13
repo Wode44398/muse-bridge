@@ -419,6 +419,15 @@ export function toolVerb(tool) {
       return R('Read session', 'Reading session', 'Failed to read session', norm(input.to) || fallback, { sessionRef: { to: norm(input.to) } });
     case 'mcp__sessions__list_sessions':
       return R('Listed sessions', 'Listing sessions', 'Failed to list sessions');
+    // 项目对话（协调者）才有的三个：停下讨论串、标已解决 / 重新打开、查它的 PR
+    case 'mcp__sessions__stop_session':
+      return R('Stopped session', 'Stopping session', 'Failed to stop session', norm(input.to) || fallback, { sessionRef: { to: norm(input.to) } });
+    case 'mcp__sessions__mark_resolved':
+      return input.resolved === false
+        ? R('Reopened thread', 'Reopening thread', 'Failed to reopen thread', norm(input.to) || fallback, { sessionRef: { to: norm(input.to) } })
+        : R('Marked resolved', 'Marking resolved', 'Failed to mark resolved', norm(input.to) || fallback, { sessionRef: { to: norm(input.to) } });
+    case 'mcp__sessions__pr_status':
+      return R('Checked pull request', 'Checking pull request', 'Failed to check pull request', norm(input.to) || fallback, { sessionRef: { to: norm(input.to) } });
     // 用户的电脑（bridge 的 mcp/device-tools.mjs）：动词点明是在「你的电脑」上，不是服务器上
     case 'mcp__device__devices':
       return R('Checked computers', 'Checking computers', 'Failed to check computers', norm(input.use) || undefined);

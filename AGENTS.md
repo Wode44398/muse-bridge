@@ -32,7 +32,7 @@
 - `config.json` 的 `feedbackRelay`：bridge 的反馈推送发到 Muse 的反馈中继（`feedback-worker/`），带 `distro: "muse"`，中继转成本仓库的 Issue；
   推送开关 `feedbackUpstream` 不写（默认关，管理员在网页里自己开）；
 - 服务单元的环境变量：`BRIDGE_AUDIENCE_HINT`（控制台的多人开关只读，提示在 Muse 里说）、`BRIDGE_PROXY_FORCED`（模型服务一律走出站代理）、
-  `BRIDGE_MODULES_HIDE=codex`、第一次带上 Vertex 时写 `agents.gemini=false`（stamp `ops/vertex-offered`）、`DIMENSIO_BROWSER=off`、`BRIDGE_UPDATE_HINT`、小内存旋钮等；
+  `BRIDGE_MODULES_HIDE=codex`、第一次带上 Media Studio 时写 `agents.studio=false`（stamp `ops/vertex-offered`；早期写的 `agents.gemini` 服务端读的时候换成 studio）、`DIMENSIO_BROWSER=off`、`BRIDGE_UPDATE_HINT`、小内存旋钮等；
 - `plugins.json`：登记 Muse 插件，第一次对齐时关掉 VM 上用不了的内置功能（phone-control、phone-files、browser、edge、keep-awake）；
 - Muse 插件 `deploy/muse/plugin/`。
 
@@ -43,7 +43,8 @@
 - **改了界面（bridge 同步带来的也算），同一个提交里改 `deploy/muse/guide/` 对应的章节**；界面名字用 **「中文」**（English）写，
   `deploy/muse/test/guide.test.mjs` 会核对中文在前端源码里、英文在英文字典里（Muse 插件页的文案在 `deploy/muse/plugin/web/`，英文在页面脚本的 `EN` 对象里，也算），
   设置根页（`web/src/components/Settings.svelte`）的每个分组和每一行，设置那一章都要讲到。说明书只写这台 Muse 上真有的东西。
-- Muse 上的 agent 是 `claude` 与 `dimensio`；bridge 的 Gemini · Vertex 扩展带着但默认关（管理员在「功能扩展」里打开、设置页上传 Google 云凭据），Codex 不带。
+- Muse 上的 agent 是 `claude` 与 `dimensio`；bridge 的 Media Studio 扩展（`modules/studio/`，接替了 Gemini · Vertex，Gemini 对话已下线）带着但默认关（管理员在「功能扩展」里打开、在「设置 → 模型中心」接模型），Codex 不带。
+- 模型服务统一在 bridge 的模型中心（数据目录 `model-hub/`）。模型中心接管 dimensio 自带适配的厂商之后，管理员的 dimensio 不再读 `dimensio/.env` 里的厂商 key，所以 `bootstrap.sh set-api-key` 只对 `MIMO_SEARCH_API_KEY` 还起作用，其余会照实提示去网页模型中心里填；`allow-sites` 不带参数时会把模型中心里启用着的服务地址一并算进去。
 - 部署目标是 Linux 服务端形态，数据目录与程序目录分开（`BRIDGE_DATA_ROOT`）。
 - Muse VM 的限制（只能经 HTTP CONNECT 代理出站、`/etc` 重启不保留、没有浏览器沙箱、不能跑 Docker）都包在 `deploy/muse/bootstrap.sh` 里；
   通用修复去 bridge 本体做，不要写进 Muse 专用脚本。

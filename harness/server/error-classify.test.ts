@@ -43,6 +43,10 @@ const MATRIX: Case[] = [
   ["通义 限流", 429, `{"error":{"code":"Throttling.RateQuota","message":"Requests rate limit exceeded, please try again later."}}`, {}, "rate_limit"],
   // Gemini
   ["gemini 按分钟配额", 429, `{"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. Quota exceeded for metric: generate_content_free_tier_requests, limit: 10. Please retry in 12s.","status":"RESOURCE_EXHAUSTED"}}`, {}, "rate_limit"],
+  // OpenRouter 把 Google 的原文包在 metadata.raw 里：每分钟限流还是限流（按欠费算会不重试、还会叫停整个工作流）
+  ["OpenRouter 转发的 gemini 按分钟配额", 429, JSON.stringify({ error: { message: "Provider returned error", code: 429, metadata: { raw: JSON.stringify({ error: { code: 429, message: "You exceeded your current quota, please check your plan and billing details. Quota exceeded for metric: generate_content_free_tier_requests, limit: 10. Please retry in 12s.", status: "RESOURCE_EXHAUSTED" } }), provider_name: "Google AI Studio" } } }), {}, "rate_limit"],
+  ["OpenRouter 转发的 gemini 按天配额", 429, JSON.stringify({ error: { message: "Provider returned error", code: 429, metadata: { raw: JSON.stringify({ error: { code: 429, message: "Quota exceeded for quota metric 'Generate Content API requests per day'", status: "RESOURCE_EXHAUSTED" } }) } } }), {}, "billing"],
+  ["gemini 预付费余额用完", 402, `{"error":{"code":402,"message":"Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing. Learn more at https://ai.google.dev/gemini-api/docs/billing#prepay. ","status":"RESOURCE_EXHAUSTED"}}`, {}, "billing"],
   ["gemini 按天配额", 429, `{"error":{"code":429,"message":"Quota exceeded for quota metric 'Generate Content API requests per day'","status":"RESOURCE_EXHAUSTED"}}`, {}, "billing"],
   ["gemini 超窗", 400, `{"error":{"code":400,"message":"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).","status":"INVALID_ARGUMENT"}}`, {}, "context_overflow"],
   ["gemini 地区限制", 400, `{"error":{"code":400,"message":"User location is not supported for the API use.","status":"FAILED_PRECONDITION"}}`, {}, "egress_blocked"],

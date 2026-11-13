@@ -254,6 +254,14 @@
     if (view !== 'mine' && selItem?.type !== 'connector') return;
     if (Date.now() - connStAt > 30_000) untrack(() => loadConnSt());
   });
+  // 有连接失败的（多半是本机服务没开）：页面开着就每 15 秒复查一次，服务一起来状态自己变回已连接
+  const anyConnFailed = $derived(Object.values(connSt).some((s) => s && s.status === 'failed'));
+  $effect(() => {
+    if (member || !loaded || !anyConnFailed || curType !== 'connector') return;
+    if (view !== 'mine' && selItem?.type !== 'connector') return;
+    const tm = setInterval(() => { if (document.visibilityState === 'visible') loadConnSt(); }, 15_000);
+    return () => clearInterval(tm);
+  });
   // 扩展页发起的授权有了结局：把新状态写进来，再取一次服务端的（带「存没存令牌」）
   const seenFlows = new Set();
   $effect(() => {
@@ -300,6 +308,7 @@
     if (!s) return connStBusy ? { k: 'busy', text: '' } : { k: 'local', text: '—' };
     if (s.status === 'connected') return { k: 'ok', text: '' };
     if (s.status === 'needs-auth') return { k: 'auth', text: t('需要登录') };
+    if (s.status === 'failed' && s.offline) return { k: 'local', text: t('未运行') };
     if (s.status === 'failed') return { k: 'fail', text: t('连接失败') };
     if (s.status === 'pending') return { k: 'busy', text: '' };
     return { k: 'local', text: '—' };

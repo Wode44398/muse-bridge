@@ -4,7 +4,7 @@
 
 import path from 'node:path';
 import os from 'node:os';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, mkdirSync, existsSync, writeFileSync, appendFileSync } from 'node:fs';
 import { defineGroup, defineOp, OpError } from '../registry.mjs';
 import { APP_VERSION_NAME, APP_VERSION_CODE } from '../../config/versions.mjs';
 import { ROOT } from '../../config/index.mjs';
@@ -155,5 +155,75 @@ evidence 只放和这个 bug 相关的几行日志 / 报错原文。本机主机
         ? `已存进本机反馈库，并排进了发给 ${TO}的队列（发不出去会自动补发）。` + (DEST.public ? ' 这个去向是公开的：内容发出去后会被公开发布。' : '')
         : !args.share ? '按用户的意思只存进了本机反馈库。' : (DECLARED ? '已存进本机反馈库，没有发出去。原因：' : '已存进本机反馈库，没有发给开发者。原因：') + shareInfo(st, admin).note,
     };
+  },
+});
+
+// —— 调试模式反馈（设置 › Claude / dimensio › 调试 › 调试模式）——
+// 开着调试模式的会话把「harness 自己的毛病」记下来：工具报错是工具的锅、冗余 / 没必要的设计、缺的功能、不得不绕的路。
+// 只落本机、不经中继、不用跟用户确认（这正是管理员打开调试模式要的东西）；放在服务端根目录 harness-feedback/<agent>/<日期>/，
+// 每条一份 md，另在 harness-feedback/index.jsonl 追一行便于汇总。
+export const HARNESS_FEEDBACK_DIR = path.join(ROOT, 'harness-feedback');
+const HF_KINDS = { bug: '工具报错 / 行为不对', redundant: '冗余或没必要的设计', missing: '功能缺失', workaround: '不得不绕路', friction: '别扭难用' };
+// Windows 文件名的非法字符全换掉：漏了反斜杠时它会被当成目录分隔符（11-08 记「Bash 吞反斜杠」那条就因此 ENOENT 丢了）。
+const hfSlug = (s) => String(s || '').replace(/[\\/:*?"<>|\s\u0000-\u001f]+/g, '-').slice(0, 40).replace(/^[-.]+|[-.]+$/g, '') || 'note';
+
+export function saveHarnessFeedback({ agent, args, sessionId = '' }) {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const day = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const hms = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const dir = path.join(HARNESS_FEEDBACK_DIR, agent, day);
+  mkdirSync(dir, { recursive: true });
+  let file = path.join(dir, `${hms}-${args.kind}-${hfSlug(args.title)}.md`);
+  for (let i = 2; existsSync(file); i++) file = path.join(dir, `${hms}-${args.kind}-${hfSlug(args.title)}-${i}.md`);
+  const meta = [
+    `- 类型：${args.kind}（${HF_KINDS[args.kind]}）`,
+    `- 严重度：${args.severity}`,
+    `- agent：${agent}${args.model ? ' · ' + args.model : ''}`,
+    ...(args.tool ? [`- 涉及工具 / 环节：${args.tool}`] : []),
+    ...(sessionId || args.session ? [`- 会话：${sessionId || args.session}`] : []),
+    `- 时间：${now.toISOString()}`,
+  ];
+  const body = [
+    `# ${args.title.trim()}`, '', ...meta, '',
+    ...(args.task ? ['## 当时在做什么', args.task.trim(), ''] : []),
+    '## 问题说明', args.details.trim(), '',
+    ...(args.evidence ? ['## 证据（报错原文 / 调用参数 / 输出摘录）', '```', args.evidence.trim(), '```', ''] : []),
+    ...(args.workaround ? ['## 我是怎么绕过去的', args.workaround.trim(), ''] : []),
+    ...(args.suggestion ? ['## 改进建议', args.suggestion.trim(), ''] : []),
+  ].join('\n');
+  writeFileSync(file, body, 'utf8');
+  const rel = path.relative(HARNESS_FEEDBACK_DIR, file).split(path.sep).join('/');
+  appendFileSync(path.join(HARNESS_FEEDBACK_DIR, 'index.jsonl'), JSON.stringify({ at: now.toISOString(), agent, kind: args.kind, severity: args.severity, tool: args.tool || '', title: args.title.trim(), file: rel, session: sessionId || args.session || '' }) + '\n', 'utf8');
+  return file;
+}
+
+defineOp({
+  name: 'feedback.harness', title: '调试模式：记一条 harness 反馈',
+  access: 'write',
+  desc: `只在开着「调试模式」的会话里用：把 harness（你手上的工具、系统提示、bridge / dimensio 的机制）本身的毛病记进服务端根目录的反馈文件夹，供之后改进 harness。
+不发给任何人、不用先问用户；一个问题一条，发现就记，不要攒到最后。
+kind：bug=工具报错或行为不对且确是工具的锅；redundant=冗余 / 没必要的设计、多余的步骤或提示；missing=缺的功能；workaround=为了完成任务不得不故意绕；friction=能用但别扭（参数难懂、返回不够、说明误导）。
+details 写清现象与你判断是 harness 的锅（而不是任务本身 / 你自己用错）的理由；evidence 放报错原文、调用参数、关键输出；suggestion 写你希望 harness 怎么改。返回写好的文件路径。`,
+  params: {
+    kind: { type: 'string', required: true, enum: Object.keys(HF_KINDS), desc: 'bug | redundant | missing | workaround | friction' },
+    title: { type: 'string', required: true, max: 120, desc: '一句话标题，如「Edit 对 CRLF 文件匹配失败」' },
+    details: { type: 'string', required: true, max: 8000, desc: '问题说明：现象、触发方式、为什么认定是 harness 的问题、影响' },
+    tool: { type: 'string', max: 80, desc: '涉及的工具或环节，如 Edit、mcp__browser__browser、系统提示「交付文件」一节、权限审批' },
+    severity: { type: 'string', enum: ['low', 'medium', 'high'], default: 'medium', desc: 'high=挡住任务或给出错误结果；medium=多花了明显的功夫；low=小瑕疵' },
+    task: { type: 'string', max: 600, desc: '当时在做的事（一两句，别贴用户原文里的隐私）' },
+    evidence: { type: 'string', max: 6000, desc: '报错原文 / 调用参数 / 输出摘录' },
+    workaround: { type: 'string', max: 2000, desc: '你实际是怎么绕过去的（kind=workaround 时必写）' },
+    suggestion: { type: 'string', max: 3000, desc: '改进建议' },
+    model: { type: 'string', max: 80, desc: '你当前的模型名' },
+    session: { type: 'string', max: 80, desc: '会话 id（知道就填）' },
+  },
+  handler: async (ctx, args, env) => {
+    if (!isAdmin(ctx)) throw new OpError('forbidden', '调试模式反馈只给主机管理员');
+    const agent = env.instance === 'dimensio' ? 'dimensio' : 'claude';
+    let file;
+    try { file = saveHarnessFeedback({ agent, args, sessionId: env.sessionId || '' }); }
+    catch (e) { throw new OpError('failed', '写反馈文件失败：' + ((e && e.message) || e)); }
+    return { saved: true, file, note: '已记下。继续手头的任务，再遇到 harness 的问题照样随手记。' };
   },
 });

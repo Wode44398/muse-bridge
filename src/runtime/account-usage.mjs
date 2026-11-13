@@ -15,7 +15,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { OAUTH } from '../config/index.mjs';
 import { listAccountsWithTokens, activeAccountId, activeToken } from './claude-account.mjs';
-import { applyProbedLimits, accountLimits, accountPlan } from './status.mjs';
+import { applyProbedLimits, accountLimits, accountPlan, accountNoFiveHour, noteFiveHourPresence, notePlanTier, noteUpgradePaths, loginPlan, planFromTier } from './status.mjs';
 import { overlayHook } from './overlay-hooks.mjs';
 
 // 留空 token 的号 = 本机登录态（见 claude-account.mjs）。上游代理（claude-upstream.mjs）同用。
@@ -23,6 +23,15 @@ import { overlayHook } from './overlay-hooks.mjs';
 export function loginToken() {
   const dir = String(process.env.CLAUDE_CONFIG_DIR || '').trim() || path.join(os.homedir(), '.claude');
   try { return JSON.parse(readFileSync(path.join(dir, '.credentials.json'), 'utf8')).claudeAiOauth.accessToken || ''; } catch { return ''; }
+}
+
+// 本机登录凭据的令牌 + 到期时刻 + 权限范围（重置卡用，limit-resets.mjs）；没登录 → null。
+export function loginCredential() {
+  const dir = String(process.env.CLAUDE_CONFIG_DIR || '').trim() || path.join(os.homedir(), '.claude');
+  try {
+    const o = JSON.parse(readFileSync(path.join(dir, '.credentials.json'), 'utf8')).claudeAiOauth;
+    return o && o.accessToken ? { accessToken: String(o.accessToken), expiresAt: Number(o.expiresAt) || 0, scopes: Array.isArray(o.scopes) ? o.scopes.map(String) : null } : null;
+  } catch { return null; }
 }
 
 // h：取 anthropic-ratelimit-unified-<名> 头的函数；k：桶缩写（5h / 7d / 7d_oi …）。
@@ -41,7 +50,7 @@ export function overlayUsageProbe() {
   probe = null;
   if (typeof make === 'function') {
     try {
-      const core = { listAccountsWithTokens, activeAccountId, activeToken, applyProbedLimits, loginToken, bucket, oauthToken: () => OAUTH };
+      const core = { listAccountsWithTokens, activeAccountId, activeToken, applyProbedLimits, noteFiveHourPresence, accountPlan, notePlanTier, noteUpgradePaths, loginPlan, planFromTier, loginToken, bucket, oauthToken: () => OAUTH };
       probe = make(core) || null;
     } catch (e) { console.error('[account-usage] overlay 用量来源初始化失败：', (e && e.message) || e); probe = null; }
   }
@@ -72,10 +81,14 @@ function lastUse(id) {
   const out = { five_hour: pick('five_hour'), seven_day: pick('seven_day'), fable: pick('seven_day_overage_included') };
   const plan = String(accountPlan(id) || '').toLowerCase();
   const at = Math.max(0, ...Object.values(out).map((b) => (b && b.at) || 0));
-  return { ...out, plan: plan === 'max' || plan === 'pro' ? plan : null, error: null, at, source: 'last-use' };
+  const noFive = accountNoFiveHour(id);
+  return { ...out, ...(noFive ? { five_hour: null, no_five_hour: true } : {}), plan: PLANS.has(plan) ? plan : null, error: null, at, source: 'last-use' };
 }
+const PLANS = new Set(['pro', 'max5x', 'ultra', 'max']);
 
-// { [accountId]: { five_hour, seven_day, fable, plan:'max'|'pro'|null, error, at, source? } }
+// { [accountId]: { five_hour, seven_day, fable, plan:'pro'|'max5x'|'ultra'|'max'|null, no_five_hour?, error, at, source? } }
+// plan：'max' = 只知道是 Max、分不出 5x / 20x；Ultra = 原 Max 20x。
+// no_five_hour：这个号没有 5 小时限额（部分 Ultra 订阅），界面显示「无限制」而不是空条。
 export async function poolUsage({ force = false } = {}) {
   const p = overlayUsageProbe();
   if (p && typeof p.poolUsage === 'function') return p.poolUsage({ force });

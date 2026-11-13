@@ -42,6 +42,8 @@ if (process.env.DIMENSIO_TEST_ISOLATION !== "1") {
     STRATA_AI_SETTINGS: at("strata-ai.json"), // 同上（Strata 那台引擎）
     // 瘦身 P0-1：run 之后的记忆沉淀会多调一次模型——脚本化 provider 的测试默认不要它（要测的测试自己设 1 再还原）
     DIMENSIO_MEMORY_EXTRACT: "0",
+    // 离线记忆整理：测试直接调 dreamWorkspace，不要空闲定时器
+    DIMENSIO_MEMORY_DREAM: "0",
   });
   process.on("exit", () => {
     try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* windows 句柄占用就留给 test-global 的清扫 */ }

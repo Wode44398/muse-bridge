@@ -25,6 +25,28 @@ export async function snapshotAccessibility(send, refs, opts = {}) {
   }
   const maxDepth = Number(opts.depth) > 0 ? Number(opts.depth) : Infinity;
 
+  // 链接行尾带上地址（11-07 反馈 42 / 46：只有链接文字，要地址就得另跑 eval querySelectorAll）。
+  // 与页面同源的只写路径，免得每行重复域名；javascript: 不写；太长截到 120 字符。
+  const urlOf = (node) => {
+    const property = (node.properties ?? []).find((p) => p.name === 'url');
+    return typeof property?.value?.value === 'string' ? property.value.value : '';
+  };
+  const pageRoot = nodes.find((node) => String(node.role?.value ?? '') === 'RootWebArea' && urlOf(node))
+    ?? nodes.find((node) => !node.parentId);
+  let origin = '';
+  try { origin = new URL(urlOf(pageRoot ?? {})).origin; } catch { /* 根上没地址：链接照写完整地址 */ }
+  const linkUrl = (node, name) => {
+    const url = urlOf(node);
+    if (!url || /^javascript:/i.test(url)) return '';
+    let shown = url;
+    try {
+      const u = new URL(url);
+      if (origin && origin !== 'null' && u.origin === origin) shown = u.pathname + u.search + u.hash;
+    } catch { /* 不是合法地址就原样写 */ }
+    if (shown === name || url === name) return '';
+    return ` → ${shown.length > 120 ? `${shown.slice(0, 119)}…` : shown}`;
+  };
+
   refs.clear();
   let refN = 0;
   const lines = [];
@@ -68,7 +90,8 @@ export async function snapshotAccessibility(send, refs, opts = {}) {
     }
 
     const displayRole = role === 'statictext' ? 'text' : role;
-    const line = `${'  '.repeat(depth)}- ${displayRole}${name ? ` "${name}"` : ''}${refTag}${value}${states.length ? ` (${states.join(', ')})` : ''}`;
+    const href = role === 'link' ? linkUrl(node, name) : '';
+    const line = `${'  '.repeat(depth)}- ${displayRole}${name ? ` "${name}"` : ''}${refTag}${value}${states.length ? ` (${states.join(', ')})` : ''}${href}`;
     if (filter === 'all' || refTag) {
       lines.push(filter === 'interactive' ? line.trimStart() : line);
     }

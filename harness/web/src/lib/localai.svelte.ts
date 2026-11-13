@@ -1,14 +1,25 @@
-// 本机 AI 状态：胶囊（LocalAiChip）与面板（LocalAiMenu）共用。两台引擎（qwen = llama.cpp 跑 Qwen3.8-27B，
-// strata = Strata 跑 125B MoE）：lai.engine 是眼下看的那台——胶囊按当前型号定，面板顶上可以临时切去看另一台。
-// 拆成两个组件的原因：面板必须渲染在 composer 的 .box 之外——.box:focus-within 带
-// transform，会让 position:fixed 的弹层改以 .box 为参照，按视口坐标算出的位置直接飞出屏幕
-// （模型菜单 / 档位菜单也是因此挂在 </footer> 之后）。
-import { localAiStatus, localGpuInfo, type LocalAiSettings, type LocalAiStatus, type LocalEngine, type LocalGpuInfo, type LocalKv } from "./api.ts";
+// 本机 AI 状态：顶栏运行设置按钮（shell/RunButton：状态点与轮询）、上下文面板的「本机模型」行、控制面板（LocalAiMenu）共用。
+// 两台引擎（qwen = llama.cpp 跑 Qwen3.8-27B，strata = Strata 跑 125B MoE）：lai.engine 是眼下看的那台——按当前型号定，
+// 控制面板顶上可以临时切去看另一台。
+// Strata 有几个变体（目录里各是一个 strata-* 型号）：lai.model 是这个会话选的那个——状态按它问、启动按它起；
+// 在跑的不是它时（runningVariant ≠ variant）运行设置按钮与面板都要明说，适配器那边也会拒发（server/localai.ts）。
+import {
+  isStrataModel,
+  localAiStatus,
+  localGpuInfo,
+  type LocalAiSettings,
+  type LocalAiStatus,
+  type LocalEngine,
+  type LocalGpuInfo,
+  type LocalKv,
+  type StrataVariantStatus,
+} from "./api.ts";
 import { haptic } from "./touch.ts";
 import { t } from "./i18n.ts";
 
 export const lai = $state({
   engine: "qwen" as LocalEngine,
+  model: undefined as string | undefined, // 会话选的 Strata 型号（不是 Strata 型号 = undefined：服务端按在跑的 / 默认变体答）
   st: null as LocalAiStatus | null,
   gpu: null as LocalGpuInfo | null,
   err: "",
@@ -50,9 +61,10 @@ export function vramVerdict(s: LocalAiSettings): VramVerdict {
 
 export async function refreshLocalAi() {
   const engine = lai.engine;
+  const model = lai.model;
   try {
-    const st = await localAiStatus(engine);
-    if (engine !== lai.engine) return; // 请求在飞时切了引擎：这份是另一台的，丢掉
+    const st = await localAiStatus(engine, model);
+    if (engine !== lai.engine || model !== lai.model) return; // 请求在飞时切了引擎 / 型号：这份是别的，丢掉
     lai.st = st;
     lai.err = "";
   } catch (e) {
@@ -82,23 +94,42 @@ export function localAiState(): "on" | "starting" | "off" {
   return (lai.st?.state as "on" | "starting" | "off" | undefined) ?? "off";
 }
 
+// Strata 在跑的变体不是这个会话选的（认得出才算）：回在跑的那个，否则 null
+export function localAiMismatch(): StrataVariantStatus | null {
+  const st = lai.st;
+  if (!st?.process || !st.variant || !st.runningVariant || st.runningVariant === st.variant) return null;
+  return st.variants?.find((v) => v.id === st.runningVariant) ?? null;
+}
+export function variantInfo(id: string | null | undefined): StrataVariantStatus | undefined {
+  return id ? lai.st?.variants?.find((v) => v.id === id) : undefined;
+}
+
 export function localAiStateText(): string {
   const s = localAiState();
   return lai.err && !lai.st
     ? t("状态不可用")
-    : s === "on"
-      ? t("运行中")
-      : s === "starting"
-        ? t("加载中")
-        : t("未运行");
+    : localAiMismatch()
+      ? t("变体不符")
+      : s === "on"
+        ? t("运行中")
+        : s === "starting"
+          ? t("加载中")
+          : t("未运行");
 }
 
-// 换一台看：清掉上一台的状态与显存，免得面板先闪一下另一台的数字
-export function setLocalEngine(engine: LocalEngine) {
-  if (lai.engine === engine) return;
+// 换一台看：清掉上一台的状态与显存，免得面板先闪一下另一台的数字。model：会话的型号（Strata 那台按它问变体）。
+// 不带 model（面板顶上切引擎、宿主点名看某一台）= 会话没变，lai.model 原样留着：切去看 Qwen 再切回来，启动的仍是会话选的变体
+// （看 Qwen 时它不起作用，api.ts 的 eq() 只在 strata 那台带型号）。带了不是 Strata 的型号 = 会话用的就是 Qwen，才清掉。
+export function setLocalEngine(engine: LocalEngine, model?: string) {
+  const m = isStrataModel(model) ? model : model === undefined ? lai.model : undefined;
+  if (lai.engine === engine && lai.model === m) return;
+  const sameEngine = lai.engine === engine;
   lai.engine = engine;
-  lai.st = null;
-  lai.gpu = null;
+  lai.model = m;
+  if (!sameEngine) {
+    lai.st = null;
+    lai.gpu = null;
+  }
   lai.err = "";
   void refreshLocalAi();
 }

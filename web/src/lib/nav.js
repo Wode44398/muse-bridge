@@ -15,11 +15,11 @@
 //   瞬态层栈 pushBackLayer（灯箱/弹出菜单等「开着才挂载」的组件，后开先关）
 //   沉浸查看器 preview > 助手浮层 > 任务详情抽屉(TaskSheet) > 设置 > 登录 > 定时 > claude 抽屉
 //   dimensio 分页自带的层级（sheet / 抽屉 / 灯箱 / 预览，window.__harnessBack；它当根页时也要先关这些）
-//   非主页 screen（files/antigravity/vertex/claude 各自分派带动画的 closer）
+//   非主页 screen（files/antigravity/studio/claude 各自分派带动画的 closer）
 //   主页根 → false（原生退后台；浏览器原地不动）；单 agent 模式的根页（rootScreen）同理
 //
 // 关键好处：不改各组件现有的 UI 关闭逻辑（返回按钮/手势照旧直接关），只在这里集中拦系统返回。
-// 带关闭动画的层（设置页的「模糊→清晰」收场、claude/vertex 整页右滑出）由组件用 registerCloser
+// 带关闭动画的层（设置页的「模糊→清晰」收场、claude/studio 整页右滑出）由组件用 registerCloser
 // 注册其带动画的关闭函数；其余层直接置 false（关闭动画走各自 CSS/transition）。
 import { ui, rootScreen } from './state.svelte.js';
 import { preview, closePreview } from './preview.svelte.js';
@@ -44,7 +44,7 @@ export function pushBackLayer(fn) {
 // 关闭当前最顶层。返回 true=消费了这次返回；false=已在最底(主页)无层可关。顺序＝从最上层到最下层。
 function closeTopLayer() {
   // 页面转场 / 主题换场播放中：吞掉返回（<1s 的动画，不让侧滑把 app 切后台打断演出）。
-  if (ui.morphing || ui.enterClaude || ui.enterVertex || ui.themeTransition) return true;
+  if (ui.morphing || ui.enterClaude || ui.enterStudio || ui.themeTransition) return true;
   // 瞬态层（灯箱/弹出菜单）：最新打开的视为最顶，先关它。
   const top = layerStack[layerStack.length - 1];
   if (top) { try { top(); } catch {} return true; }
@@ -68,7 +68,7 @@ function closeTopLayer() {
     // 回主页一律走 closePage：这一页收回它在主页上的入口（lib/pageMorph.js）。
     if (ui.screen === 'files') { closers.files ? closers.files() : closePage('files'); return true; }
     if (hxPage) { closePage(ui.screen); return true; }   // 它自己的层（含 onExit）上面已经问过了
-    if (ui.screen === 'vertex') { closers.vertexSlide ? closers.vertexSlide() : closePage('vertex'); return true; }
+    if (ui.screen === 'studio') { closers.studio ? closers.studio() : closePage('studio'); return true; }
     if (ui.screen === 'claude') { closers.claudeSlide ? closers.claudeSlide() : closePage('claude'); return true; }
     closePage(ui.screen); return true;   // ChatGPT、ComingSoon 等占位分页
   }

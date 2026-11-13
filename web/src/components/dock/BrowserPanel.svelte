@@ -3,7 +3,7 @@
   // 设备三档 + 自定义视口/横竖屏/触屏/配色 + 竖屏手机框 + agent 指针回显），Claude 分页配色皮肤。
   // 与 agent 的 mcp__browser__browser 工具共享同一 CDP 实例——agent 操作实时同屏。
   import { api } from '../../lib/api.js';
-  import { dock, readDockSse } from '../../lib/dock.svelte.js';
+  import { dock, readDockSse, browserSessionOf, noteBrowserMount } from '../../lib/dock.svelte.js';
   import { isNativeDesktop, serverOnThisMachine, mountNativeBrowser, unmountNativeBrowser, onNativeOverlayChange, nativeOverlayActive, pushNativeOverlay } from '../../lib/nativeDesktop.js';
   import { apiUrl } from '../../lib/server.js';
   import { authHeaders } from '../../lib/api.js';
@@ -19,6 +19,12 @@
   const nativeBrowser = $derived(nativeCapable && !notInShell);
 
   const enc = encodeURIComponent;
+  // 浏览器一个对话一份：每个请求都带上这个对话的 id（Codex 侧 / 新对话没有，服务端退回整个工作空间共用那份）
+  const sid = $derived(browserSessionOf(dockState));
+  const sq = () => (sid ? `&session=${enc(sid)}` : '');
+  // 隔离存储（按会话）：cookie / 存储不和别的对话共享，关掉即清空
+  let isolated = $state(false);
+  let isoBusy = $state(false);
   // 与后端 VIEWPORT_PRESETS（单一真相）一致；仅凭帧尺寸即可点亮当前档。
   const DEVICES = [
     { key: 'desktop', w: 1280, h: 900, label: t('桌面') },
@@ -151,7 +157,7 @@
     const gen = ++streamGen;
     connecting = true;
     castSid = ''; decoding = false; pendingB64 = null;
-    stopSse = readDockSse(`/api/claude/browser/stream?ws=${enc(dockState.ws)}${nativeBrowser ? '&native=1' : '&ack=1'}`, (ev) => {
+    stopSse = readDockSse(`/api/claude/browser/stream?ws=${enc(dockState.ws)}${sq()}${nativeBrowser ? '&native=1' : '&ack=1'}`, (ev) => {
       if (gen !== streamGen) return;   // 已换了新流（见下面 state 的模式切换）：旧流同一块里剩下的事件不要了
       // 这份浏览器在不在本壳里与当前模式对不上：原生 ↔ 帧流换过来重连（native=1 的流服务端不推帧）
       if (ev.type === 'state' && nativeCapable && typeof ev.desktop === 'boolean' && notInShell === ev.desktop) {
@@ -169,6 +175,7 @@
         drawFrame(ev.data);
       } else if (ev.type === 'state') {
         dead = false; connecting = false;
+        if (typeof ev.isolated === 'boolean') isolated = ev.isolated;
         if (ev.viewport) { frameW = ev.viewport.width; frameH = ev.viewport.height; }
         takeReport(ev);
         if (ev.url) { url = ev.url; if (document.activeElement !== urlEl) urlInput = url; }
@@ -180,6 +187,7 @@
         if (nativeBrowser) applyViewport(ev.viewport);
       } else if (ev.type === 'tabs') {
         tabs = Array.isArray(ev.tabs) ? ev.tabs : [];
+        noteBrowserMount(sid, tabs.length > 0);   // 工具开关上的状态灯（总线断着时也跟得上）
         const act = tabs.find((tab) => tab.active);
         if (act && act.url && act.url !== 'about:blank' && document.activeElement !== urlEl) { url = act.url; urlInput = act.url; }
         syncNativeSurface();
@@ -202,7 +210,9 @@
 
   $effect(() => {
     if (!dockState.ws) return;
+    void sid;   // 切到别的对话 = 换一份浏览器：重挂流（工作台在 ClaudeDock 里也按会话重建，这里兜底）
     gone = false;
+    loadIsolated();
     stream();
     const ro = new ResizeObserver(() => {
       if (stageEl) { stageW = stageEl.clientWidth; stageH = stageEl.clientHeight; syncNativeSurface(); }
@@ -224,7 +234,7 @@
     try {
       // 在手机上从地址栏把浏览器拉起来：直接用手机档（同一台浏览器 agent 也在用，所以只在
       // 这一刻——浏览器还没开、是用户自己开的——才替他选，之后随他切）
-      const r = await api.post('/api/claude/browser/navigate', { ws: dockState.ws, url: u, ...(dead && coarse && narrowNav ? { preset: 'mobile' } : {}) });
+      const r = await api.post('/api/claude/browser/navigate', { ws: dockState.ws, session: sid, url: u, ...(dead && coarse && narrowNav ? { preset: 'mobile' } : {}) });
       if (r?.url) { url = r.url; urlInput = r.url; }
       dead = false;
       schedule(60);   // 实例刚拉起：立即挂流
@@ -250,14 +260,14 @@
   // 后退/前进/刷新也走地址栏底边那根加载细线
   const nav = (dir) => {
     navBusy = true;
-    return api.post('/api/claude/browser/navigate', { ws: dockState.ws, dir })
+    return api.post('/api/claude/browser/navigate', { ws: dockState.ws, session: sid, dir })
       .then((r) => { if (r?.url) { url = r.url; if (document.activeElement !== urlEl) urlInput = r.url; } })
       .catch(() => {})
       .finally(() => { navBusy = false; });
   };
   // 视口请求统一走 resize 路由（与 agent 的 browser(resize) 同一套参数）：
   // preset / width+height / landscape / mobile / scheme。响应 = viewportReport()。
-  const vpApply = (body) => api.post('/api/claude/browser/resize', { ws: dockState.ws, ...body })
+  const vpApply = (body) => api.post('/api/claude/browser/resize', { ws: dockState.ws, session: sid, ...body })
     .then((r) => { takeReport(r); if (nativeBrowser && r?.viewport) applyViewport(r.viewport); return r; })
     .catch(() => null);
   const setDevice = (key) => vpApply({ preset: key });
@@ -285,7 +295,7 @@
     let release = null;
     (async () => {
       try {
-        const r = await fetch(apiUrl(`/api/claude/browser/snapshot?ws=${enc(dockState.ws)}`), { headers: authHeaders(), credentials: 'same-origin', signal: AbortSignal.timeout(1500) });
+        const r = await fetch(apiUrl(`/api/claude/browser/snapshot?ws=${enc(dockState.ws)}${sq()}`), { headers: authHeaders(), credentials: 'same-origin', signal: AbortSignal.timeout(1500) });
         if (r.ok && !cancelled) {
           const bmp = await createImageBitmap(await r.blob());
           if (!cancelled && canvasEl) {
@@ -308,14 +318,41 @@
     if (!(w > 0 && h > 0)) return;
     vpApply({ width: w, height: h });
   }
+  async function loadIsolated() {
+    if (!sid || readonly) { isolated = false; return; }
+    const want = sid;
+    try {
+      const r = await api.get(`/api/claude/browser/state?ws=${enc(dockState.ws)}${sq()}`);
+      if (want === sid) isolated = !!r?.isolated;
+    } catch { /* 拿不到就当没开 */ }
+  }
+  // 切换隔离存储：模式变了服务端会关掉这个对话现有的浏览器，下次打开按新模式起
+  async function toggleIsolated() {
+    if (!sid || isoBusy) return;
+    isoBusy = true;
+    try {
+      const r = await api.post('/api/claude/browser/isolate', { ws: dockState.ws, session: sid, on: !isolated });
+      isolated = !!r?.isolated;
+      if (r?.restarted) {
+        releaseNative();
+        dead = true; frameW = 0; frameH = 0; agentPtr = null; url = ''; urlInput = ''; tabs = [];
+        noteBrowserMount(sid, false);
+        urlHint = isolated ? t('已切到隔离存储，原来的标签已关闭；重新输入网址打开') : t('已切回共享登录态，原来的标签已关闭；重新输入网址打开');
+        setTimeout(() => (urlHint = ''), 3200);
+      }
+    } catch (e) {
+      urlHint = tr(String(e?.body?.error || t('切换失败'))); setTimeout(() => (urlHint = ''), 2600);
+    } finally { isoBusy = false; }
+  }
   async function powerOff() {
-    await api.post('/api/claude/browser/close', { ws: dockState.ws }).catch(() => {});
+    await api.post('/api/claude/browser/close', { ws: dockState.ws, session: sid }).catch(() => {});
     releaseNative();
     dead = true; frameW = 0; frameH = 0; agentPtr = null; url = ''; urlInput = ''; tabs = [];
+    noteBrowserMount(sid, false);
   }
 
   // —— 标签条：点选切换 / × 关闭 / ＋ 新建（空白页并聚焦地址栏）——
-  const tabOp = (body) => (readonly ? null : api.post('/api/claude/browser/tab', { ws: dockState.ws, ...body }).catch(() => {}));
+  const tabOp = (body) => (readonly ? null : api.post('/api/claude/browser/tab', { ws: dockState.ws, session: sid, ...body }).catch(() => {}));
   const selectTab = (tab) => { if (!tab.active) tabOp({ op: 'select', id: tab.id }); };
   const closeTabX = (e, tab) => { e.stopPropagation(); tabOp({ op: 'close', id: tab.id }); };
   async function newTab() {
@@ -363,7 +400,7 @@
     inputBusy = true;
     while (inputQ.length) {
       const item = inputQ.shift();
-      const r = await api.post('/api/claude/browser/input', { ws: dockState.ws, ...item.body }).catch(() => null);
+      const r = await api.post('/api/claude/browser/input', { ws: dockState.ws, session: sid, ...item.body }).catch(() => null);
       item.resolve(r);
     }
     inputBusy = false;
@@ -666,6 +703,12 @@
             </button>
           {/if}
         {/if}
+        {#if sid}
+          <button class="vm-item" role="menuitemcheckbox" aria-checked={isolated} disabled={isoBusy} title={t('cookie 与网站存储不和别的对话共享，关掉浏览器即清空；切换会关闭当前标签')}
+            onclick={() => { menuOpen = false; toggleIsolated(); }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l7 2.8v5.2c0 4.4-2.9 7.9-7 9-4.1-1.1-7-4.6-7-9V6.3z"/>{#if isolated}<path d="M8.8 12.2l2.2 2.2 4.2-4.4"/>{/if}</svg>{isolated ? t('隔离存储：已开') : t('隔离存储')}
+          </button>
+        {/if}
         <button class="vm-item crit" onclick={() => { menuOpen = false; powerOff(); }}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v8M6.6 6.6a7.5 7.5 0 1 0 10.8 0"/></svg>{t('关闭浏览器')}
         </button>
@@ -682,6 +725,13 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5M12 3.5C9.6 5.8 8.4 8.6 8.4 12s1.2 6.2 3.6 8.5"/></svg>
         <div class="bw-t1">{readonly ? t('浏览器还没打开') : t('开始浏览')}</div>
         <div class="bw-t2">{connecting ? t('连接中…') : readonly ? t('Claude 打开网页时，画面会实时出现在这里') : t('在上方输入网址；Claude 使用浏览器时，画面也会出现在这里')}</div>
+        {#if sid && !readonly}
+          <!-- 打开之前就能选：这个对话要不要和别的对话分开 cookie / 存储 -->
+          <button class="bw-iso" class:on={isolated} disabled={isoBusy} aria-pressed={isolated}
+            title={t('cookie 与网站存储不和别的对话共享，关掉浏览器即清空')} onclick={toggleIsolated}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l7 2.8v5.2c0 4.4-2.9 7.9-7 9-4.1-1.1-7-4.6-7-9V6.3z"/>{#if isolated}<path d="M8.8 12.2l2.2 2.2 4.2-4.4"/>{/if}</svg>{isolated ? t('隔离存储：已开') : t('隔离存储：关')}
+          </button>
+        {/if}
       </div>
     {:else}
       <div class="cwrap" class:portrait class:ro={readonly} class:nat={nativeBrowser} class:frozen style="width:{fitDims.w}px;height:{fitDims.h}px">
@@ -832,6 +882,13 @@
   .vm-item:active { background: var(--hover); }
   @media (hover: hover) { .vm-item:hover { background: var(--hover); } }
   .vm-item.crit, .vm-item.crit svg { color: var(--crit); }
+  /* 空态里的隔离存储开关：小胶囊，开着时实底 */
+  .bw-iso { margin-top: 14px; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px 0 9px;
+    border-radius: 14px; font-size: 12.5px; color: var(--muted); border: 1px solid color-mix(in srgb, var(--text) 14%, transparent); }
+  .bw-empty .bw-iso svg { width: 15px; height: 15px; margin: 0; opacity: 1; }
+  .bw-iso.on { color: var(--text); background: color-mix(in srgb, var(--text) 10%, transparent); border-color: transparent; }
+  .bw-iso:disabled { opacity: .5; }
+  @media (hover: hover) { .bw-iso:hover { color: var(--text); background: var(--hover); } }
   .vm-sep + .vm-item { margin-top: -2px; }
 
   .bw-hint { flex: none; color: var(--crit); font-size: 12px; padding: 0 14px 6px; }

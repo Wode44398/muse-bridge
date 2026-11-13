@@ -1,0 +1,6 @@
+{
+  "id": "studio",
+  "label": "Media Studio",
+  "version": "dev",
+  "entry": "server/index.mjs"
+}

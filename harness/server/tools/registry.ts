@@ -26,7 +26,13 @@ import { projectKnowledgeTool } from "./projectknowledge.ts";
 import { skillTool } from "./skill.ts";
 import { deviceInspectTool, deviceActTool, deviceBrowserTool, deviceShellTool, deviceFilesTool, devicePortsTool } from "./localpc.ts";
 import { bridgeManualTool, bridgeCallTool } from "./bridgeapi.ts";
+import { pullRequestTool } from "./pullrequest.ts";
+import { widgetGuideTool, showWidgetTool } from "./visualize.ts";
+import { SESSION_TOOLS } from "./sessions.ts";
 import { disabledTools } from "../tenant.ts";
+// 工作区协同：看用户界面、共享终端
+import { workspaceTool } from "./workspace.ts";
+import { terminalTool } from "./terminal.ts";
 
 export const ALL_TOOLS: Tool[] = [
   readTool,
@@ -61,6 +67,14 @@ export const ALL_TOOLS: Tool[] = [
   devicePortsTool,
   bridgeManualTool,
   bridgeCallTool,
+  pullRequestTool, // 拉取请求：bridge 拉起的主机实例才有（追加在末尾：工具清单只追加不改序）
+  // 工作区协同（只往后追加：工具表是前缀的一部分）
+  workspaceTool,
+  terminalTool,
+  // 对话内嵌交互图表（偏好「对话内交互图表」关掉就不出现）；排在最后：前面的工具清单前缀不变
+  widgetGuideTool,
+  showWidgetTool,
+  ...SESSION_TOOLS, // 会话协作（StartSession / SendMessage / ListSessions / ReadSession）
 ];
 
 function enabledTools(): Tool[] {

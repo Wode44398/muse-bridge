@@ -12,8 +12,8 @@
 // 例外（2026-09-12）：云端 ↔ 云端（工作台里以项目目录为根的面板 ↔ 整页 vault 根页）两边都是
 // 服务端自己的盘，/api/files/move 带 fromWs 一次搬完——维护者视频里「拎着 SUMMER 项目的文件夹
 // 跳到工作空间页松手没反应」就是这条被一刀切拒掉了（还零反馈）。
-import { compose, vertex as vs } from './state.svelte.js';
-import { api } from './api.js';
+import { compose, studioInbox } from './state.svelte.js';
+import { api, authHeaders } from './api.js';
 import { cloudFileUrl } from './preview.svelte.js';
 import { dropToast } from './dragdrop.svelte.js';
 import { nativeLocLocalOnly } from './nativeDesktop.js';
@@ -78,19 +78,62 @@ export function folderDropZone({ key, name, ctx, rel, onDone, disabled = false, 
 
 // —— 落点②：某个 agent 的对话（挂进它的输入栏）——
 // 语义刻意不是「移动」而是「发送」：文件留在工作空间原地，只是这次对话多了一份附件。
-const AGENT_LABEL = { claude: 'Claude', gemini: 'Gemini' };
+const AGENT_LABEL = { claude: 'Claude' };
 
 function pushAttachment(target, att) {
   if (target === 'claude') compose.attachments.push(att);
-  else if (target === 'gemini') { vs.func = 'chat'; vs.chatDraftAtts = [...(vs.chatDraftAtts || []), att]; }
   else return false;
+  return true;
+}
+
+// —— 落点③：Media Studio（主页方块、工作空间「发到 Media Studio」）——
+// 按第一份文件的类型挑创作页与角色：图片 → 图像页「改这张图」（target 指定 video 时当首帧）、音频 → 配音页参考音频、
+// 文本 → 读出来填进输入岛。身份工作空间根里的文件走 path（零拷贝，过路径守卫）；别的作用域先备成 uploads 素材。
+// 交给 lib/state.svelte.js 的 studioInbox，由 Studio 页消费——核心不 import studio 扩展的代码。
+const STUDIO_EXT = {
+  image: /\.(png|jpe?g|webp|gif|bmp|heic)$/i,
+  audio: /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i,
+  text: /\.(txt|md|markdown|srt|lrc)$/i,
+};
+export const studioFileKind = (name) => Object.keys(STUDIO_EXT).find((k) => STUDIO_EXT[k].test(String(name || ''))) || null;
+
+export async function filesToStudio(payload, page = '') {
+  const it = payload?.items?.[0];
+  if (!it || it.isDir) return false;
+  const kind = studioFileKind(it.name);
+  if (!kind) { dropToast(t('Media Studio 用不上这类文件')); return false; }
+  const ws = payload.ctx?.ws || '';
+  const direct = payload.ctx?.origin === 'cloud' && !ws && !nativeLocLocalOnly(payload.ctx?.locationId);
+  if (kind === 'text') {
+    let text = null;
+    try {
+      if (payload.ctx?.origin === 'cloud') {
+        const res = await fetch(cloudFileUrl(it.rel, { ws, http: true }), { headers: authHeaders(), credentials: 'same-origin' });
+        if (res.ok) text = (await res.text()).slice(0, 30000);
+      }
+    } catch {}
+    if (text == null) { dropToast(t('读取失败')); return false; }
+    studioInbox.items.push({ page: page || 'voice', text });
+    return true;
+  }
+  const role = kind === 'audio' ? 'audio' : page === 'video' ? 'first' : 'edit';
+  const target = kind === 'audio' ? (page === 'music' ? 'music' : 'voice') : (page === 'video' ? 'video' : 'image');
+  let input;
+  if (direct) input = { role, path: it.rel, url: kind === 'image' ? cloudFileUrl(it.rel, { thumb: true }) : '', name: it.name, kind };
+  else {
+    dropToast(t('正在准备…'));
+    const att = (await payload.materials?.(false).catch(() => null))?.[0];
+    if (!att?.path) { dropToast(t('准备失败')); return false; }
+    input = { role, upload: att.path, url: att.url || '', name: it.name, kind };
+  }
+  studioInbox.items.push({ page: target, input });
   return true;
 }
 
 export async function attachToAgent(payload, target) {
   if (!payload?.materials) return false;
   dropToast(t('正在准备…'));
-  const atts = await payload.materials(target !== 'gemini');
+  const atts = await payload.materials(true);
   const want = payload.count || 1;
   if (!atts?.length) { dropToast(want > 1 ? t('准备失败') : (payload.isDir && payload.ctx?.origin === 'local' ? t('手机本地文件夹没有可发送的形态') : t('准备失败'))); return false; }
   let ok = 0;
@@ -139,11 +182,11 @@ export async function attachDescriptorToAgent(desc, target) {
     try {
       // 服务端不认识的原生位置（这台电脑 / 额外授权位置）：按 rel 去服务端取会取错，现读现传
       if (nativeLocLocalOnly(desc.locationId)) {
-        const att = await pcLocalMaterial({ rel, name, isDir: Boolean(desc.dirs?.[i]), locationId: desc.locationId, forClaude: target !== 'gemini' });
+        const att = await pcLocalMaterial({ rel, name, isDir: Boolean(desc.dirs?.[i]), locationId: desc.locationId, forClaude: true });
         if (pushAttachment(target, att)) ok++;
         continue;
       }
-      const up = await api.fileToUpload(rel, target === 'gemini', desc.ws || '');
+      const up = await api.fileToUpload(rel, false, desc.ws || '');
       const att = { path: up.path, name: up.name, kind: isImg ? 'image' : 'file', url: isImg ? cloudFileUrl(rel, { ws: desc.ws || '' }) : null };
       if (pushAttachment(target, att)) ok++;
     } catch {}

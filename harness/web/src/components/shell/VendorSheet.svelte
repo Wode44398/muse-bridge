@@ -9,15 +9,18 @@
   // 自定义卡右下角的铅笔进同一张表单（编辑 / 删除，删除两步确认）。内置几家的 API Key 仍在设置里填。
   // 多用户服务端：管理员在编辑器里把服务「共享给成员」，卡上型号数后面标「已共享」；成员那边这张卡副标题是「管理员共享」、
   // 没有铅笔（只能用，地址和 Key 都看不到）。成员也有「＋」卡，自己加的服务只能连公网地址。
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import * as api from "../../lib/api.ts";
   import {
     app,
     canAddCustomVendor,
+    hostBuiltins,
     customVendorV2,
     customVendors,
     modelsOf,
+    hasHostModelHub,
     newChat,
+    openHostModelHub,
     reloadMeta,
     switchVendor,
     toast,
@@ -45,7 +48,14 @@
   const cur = $derived(vendorId());
   let pending = $state<string | null>(null); // 正在切过去的那一家（服务端写配置那一下）
 
-  const builtins = $derived(VENDOR_ORDER.map((id) => ({ id, name: VENDORS[id].name, company: VENDORS[id].company })));
+  // 自带适配的厂商：宿主的模型中心接管以后只摆它给了 Key 的那几家（服务端目录里有的）和本机；否则照旧八家全摆
+  const builtins = $derived(
+    VENDOR_ORDER.filter((id) => !hostBuiltins() || ((app.info?.catalog as any[] | undefined) ?? []).some((p) => p.id === id)).map((id) => ({
+      id,
+      name: VENDORS[id].name,
+      company: VENDORS[id].company,
+    })),
+  );
   const customs = $derived(customVendors());
   const canAdd = $derived(canAddCustomVendor());
 
@@ -118,6 +128,35 @@
     void tick().then(() => {
       if (!v) nameEl?.focus({ preventScroll: true });
     });
+  }
+  // 嵌在 bridge 里且当前是管理员时，模型服务只在宿主的模型中心里配：「＋」卡开它的添加页，卡片上的铅笔开它对应的服务，
+  // 这张面板只管切换、不出表单。宿主没接住（独立运行、成员、老 bridge）才用这张面板自己的表单。
+  function addService() {
+    if (openHostModelHub("add")) onclose();
+    else void openForm(null);
+  }
+  // 铅笔：模型中心提供的卡 → 它在模型中心里的那个服务；dimensio 自己的老服务 → 交给模型中心（宿主那边先确认）
+  function editCard(v: VendorView) {
+    if (hubLink) {
+      const proto = String((app.info?.catalog as any[] | undefined)?.find((p) => p.id === v.id)?.custom?.protocol ?? "");
+      if (openHostModelHub(v.hub ? { service: v.hub } : { legacy: v.id, name: v.name, proto })) onclose();
+      return;
+    }
+    void openForm(v);
+  }
+  let hubLink = $state(false);
+  onMount(() => {
+    hubLink = hasHostModelHub();
+    // 老入口：宿主要直接打开某个 dimensio 自己的服务。模型中心接管以后不再从这里改，请求作废
+    const req = app.vendorEditReq;
+    if (req) {
+      app.vendorEditReq = null;
+      const v = customVendors().find((x) => x.id === req);
+      if (v && !v.managed && !hubLink) void openForm(v);
+    }
+  });
+  function openHub() {
+    if (openHostModelHub()) onclose();
   }
   function back() {
     if (saving || deleting || ctl.saving || ctl.deleting) return;
@@ -281,17 +320,20 @@
           disabled={Boolean(pending)}
           use:press={{ scale: 0.97 }}
           in:rise|global={{ y: 8, delay: 40 + (builtins.length + customs.length) * 35 }}
-          onclick={() => openForm(null)}
+          onclick={addService}
         >
           <span class="plus" aria-hidden="true"><Icon name="plus" size={20} stroke={1.8} /></span>
-          <span class="add-t">{t("添加自定义服务")}</span>
-          <span class="add-s">{v2 ? t("OpenAI / Anthropic / Gemini 接口") : t("OpenAI 兼容接口")}</span>
+          <span class="add-t">{hubLink ? t("添加服务") : t("添加自定义服务")}</span>
+          <span class="add-s">{hubLink ? t("模型中心") : v2 ? t("OpenAI / Anthropic / Gemini 接口") : t("OpenAI 兼容接口")}</span>
         </button>
       {/if}
     </div>
     <p class="note">
       {vendorSwitchNote(app.chat)}
     </p>
+    {#if hubLink}
+      <p class="hub"><button type="button" class="hublink" onclick={openHub}>{t("在模型中心管理全部模型服务")}</button></p>
+    {/if}
   {/if}
 </Sheet>
 
@@ -326,7 +368,8 @@
 
 {#snippet tile(id: string, title: string, sub: string, i: number, custom: boolean)}
   {@const n = modelsOf(id).length}
-  {@const view = custom ? vendorInfo(id) : null}
+  {@const info = vendorInfo(id)}
+  {@const view = custom || info.hub ? info : null}
   <!-- 「N 个模型」整句一个键（英文语序照样放得下），数字仍单独一段等宽：按 {n} 切成前后两截 -->
   {@const nModels = t("{n} 个模型", { count: n }).split("{n}")}
   <div class="cell" in:rise|global={{ y: 8, delay: 40 + i * 35 }}>
@@ -342,16 +385,17 @@
         {#if pending === id}<Mark size={28} live />{:else}<VendorLogo skin={id} size={28} />{/if}
       </span>
       <span class="name">{title}</span>
-      <span class="co" class:mono={custom && !view?.managed}>{sub}</span>
+      <span class="co" class:mono={custom && !view?.managed && !view?.hub}>{sub}</span>
       {#if n}<span class="models">{nModels[0]}<span class="num">{n}</span>{nModels[1] ?? ""}{#if view?.shared}<span class="shared">{" · "}{t("已共享")}</span>{/if}</span>{/if}
       {#if id === cur}
         <span class="check" aria-hidden="true"><Icon name="check" size={15} stroke={2.2} /></span>
         <span class="hx-sr">{t("当前")}</span>
       {/if}
     </button>
-    {#if custom && !view?.managed}
+    <!-- 铅笔：自己加的服务；有宿主的模型中心时，它提供的卡也有（跳回模型中心改）。别的插件给的、管理员共享的只能用 -->
+    {#if view && (hubLink ? Boolean(view.hub) || (view.custom && !view.managed) : view.custom && !view.managed)}
       <span class="edit">
-        <IconButton icon="edit" label={t("编辑「{name}」", { name: title })} size={30} iconSize={15} onclick={() => openForm({ id, name: title, company: sub, custom: true })} />
+        <IconButton icon="edit" label={hubLink ? t("在模型中心里改「{name}」", { name: title }) : t("编辑「{name}」", { name: title })} size={30} iconSize={15} onclick={() => editCard(view)} />
       </span>
     {/if}
   </div>
@@ -512,6 +556,28 @@
     line-height: 1.55;
     color: var(--text3);
     text-align: center;
+  }
+
+  .hub {
+    margin: 6px 4px 2px;
+    text-align: center;
+  }
+  .hublink {
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text2);
+    font: inherit;
+    font-size: var(--fs-sm);
+    text-decoration: underline;
+    text-decoration-color: var(--border2);
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+  .hublink:hover {
+    background: var(--accent-soft);
+    color: var(--text);
   }
 
   /* ── 表单 ── */

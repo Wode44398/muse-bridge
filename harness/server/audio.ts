@@ -12,12 +12,18 @@ export const AUDIO_EXT_BY_MIME: Record<SupportedAudioMime, string> = {
 export const MAX_AUDIO_BYTES = 24 * 1024 * 1024;
 export const MAX_AUDIO_TOTAL_BYTES = 32 * 1024 * 1024;
 
-export function sniffAudioMime(bytes: Uint8Array): SupportedAudioMime | undefined {
+// `name` (file name or path, when known) only matters for the container-less MPEG frame sync below.
+export function sniffAudioMime(bytes: Uint8Array, name?: string): SupportedAudioMime | undefined {
   const ascii = (a: number, b: number) => String.fromCharCode(...bytes.slice(a, b));
   if (bytes.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WAVE") return "audio/wav";
   if (ascii(0, 4) === "fLaC") return "audio/flac";
   if (ascii(0, 4) === "OggS") return "audio/ogg";
   if (ascii(0, 3) === "ID3") return "audio/mpeg";
+  // FF FE is the UTF-16LE byte-order mark, and it also parses as an MPEG-1 layer I frame header: every UTF-16LE
+  // text file (Windows .reg exports, PowerShell output, …) would be read as audio and sent to the model as MP3
+  // (MiMo rejects it with 400 "invalid audio format"). Layer I files are vanishingly rare, so FF FE only counts
+  // as audio when the name says so.
+  if (bytes[0] === 0xff && bytes[1] === 0xfe && !(name && looksLikeAudioPath(name))) return undefined;
   // MPEG audio frame header; reserved version/layer/rate values are invalid.
   // In particular ADTS AAC (layer=0) must not masquerade as MP3.
   if (bytes.length >= 4 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0 &&

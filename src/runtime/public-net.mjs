@@ -9,6 +9,7 @@
 import net from 'node:net';
 import dns from 'node:dns';
 import { Agent } from 'undici';
+import { KEEPALIVE, withWarm } from './upstream-conn.mjs';
 
 const blocked = new net.BlockList();
 for (const [a, p] of [
@@ -68,5 +69,5 @@ function guardedLookup(hostname, options, cb) {
 let agent = null;
 /** 直连且连接时再查一遍地址的 undici dispatcher（只用于成员的服务；IP 字面量地址不过 lookup，靠 assertPublicUrl 拦）。 */
 export function publicDispatcher() {
-  return (agent ||= new Agent({ connect: { timeout: 30_000, lookup: guardedLookup } }));
+  return (agent ||= withWarm(new Agent({ ...KEEPALIVE, connect: { timeout: 30_000, lookup: guardedLookup } })));
 }

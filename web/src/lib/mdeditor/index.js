@@ -20,6 +20,7 @@ import { attachments, insertFilesAt } from './attach.js';
 import { touchSelectGuard, keepNativeTouchSelection } from './touchGuard.js';
 import { edgeAutoScroll } from '../touchAutoScroll.js';
 import { t } from '../i18n.js';
+import '../doctheme.css';   // --md-* 配色令牌（编辑器也能脱离 DocViewer 单独挂，令牌得自带）
 import './editor.css';
 
 // opts:

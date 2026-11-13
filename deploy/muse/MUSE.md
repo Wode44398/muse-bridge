@@ -10,7 +10,7 @@
 - **Claude Code**：Anthropic 的编程 / 通用 agent，用用户自己的 Claude 订阅（Pro 或 Max）。
 - **dimensio**：一个可以接各家模型 API（Anthropic、OpenAI、Gemini、DeepSeek、Kimi、智谱、Qwen、MiMo…）的 agent 工作台，用用户自己的 API key。
 
-两个 agent 都能读写文件、跑命令、做项目；还可以给朋友开账号。另外带一个默认关着的 **Gemini · Vertex** 扩展（Google 的图像 / 视频 / 语音 / 音乐生成，要用户自己的 Google 云凭据，见 4.9）。
+两个 agent 都能读写文件、跑命令、做项目；还可以给朋友开账号。另外带一个默认关着的 **Media Studio**（图像 / 视频 / 配音 / 音乐生成，接替了以前的 Gemini · Vertex 扩展；模型和 Key 要用户自己接，见 4.9）。两个 agent 和 Media Studio 用的模型服务都在网页的「设置 → 模型中心」里统一配（见 4.5）。
 
 ## 0. 几条约束（先读完再动手）
 
@@ -74,8 +74,9 @@ Muse Bridge 会访问的网站和用途（`allow-sites` 不带参数时按当前
 | `github.com`、`release-assets.githubusercontent.com` | 下载发布包、看门狗每 6 小时查一次新版本、bridge 的插件市场 |
 | `registry.npmjs.org` | 安装和更新时下载 npm 依赖 |
 | `muse-bridge-feedback.huole8610.workers.dev` | Muse Bridge 项目自己的反馈中继（源码在仓库的 `feedback-worker/`），收问题报告并转成本项目的 GitHub Issue（第 8 节，用户同意了才发） |
-| 各家模型的接口网站（如 `api.deepseek.com`） | dimensio 配了哪家的 key 才有（4.5） |
+| 各家模型的接口网站（如 `api.deepseek.com`） | 模型中心里加了哪家的服务才有，以前写进 dimensio 的 key 对应的也算（4.5） |
 | 自定义模型服务的地址 | 用户自己加的才有（第 6 节） |
+| Google 的接口（`oauth2.googleapis.com`、`aiplatform.googleapis.com` 等 4 个） | 打开了 Media Studio，或上传了 Google 云凭据才有（4.9） |
 
 ### 2.1 下载并解压
 
@@ -189,23 +190,24 @@ Claude 需要用户自己的 Claude 订阅（Pro 或 Max）。令牌**只能在�
 
 配好之后，让他在 Claude 页发一句「你好，介绍一下你能做什么」，有回复就说明通了。
 
-### 4.5 配 dimensio 的模型 key（装了 dimensio 才需要）
-问他打算用哪一家（可以多家）。key 有两种配法，说明各自的特点、让他选：
+### 4.5 配模型服务和 key（dimensio、Claude 接别家模型、Media Studio）
+现在模型都在网页的 **「设置 → 模型中心」**（Settings → Model Hub）里配：一个服务（接口地址 + API key）加一次，再按模型勾给 dimensio、Claude 或 Media Studio。只有管理员有这一页的总览；成员只有他自己的那一份。问他打算用哪一家（可以多家），然后：
 
-- **他自己在网页里填**：dimensio 页侧栏底部「设置」的「API Key」（加密存盘，重启不丢），key 不经过聊天。
-- **发给你，你写进服务器**（每家一条命令）：key 会留在聊天记录里，写完提醒他删掉那条消息；好处是命令会顺带把这家接口网站的审核卡提前弹出来（见本节最后）。
+1. **先放行这家的接口网站**：告诉他马上会弹一张这个网站的审核卡、各选项的后果（见本节最后「网络审核」），他同意后跑 `bash /home/hatch/bridge-ops/bootstrap.sh allow-sites <接口地址>`（比如 `https://api.deepseek.com`）。
+2. **请他自己在网页里加**：**「设置 → 模型中心」** → **「添加服务」**（Add provider），上面一排快捷选择能直接填好常见厂商的地址；填 key、点 **「识别模型」**（Detect models），勾上要用的模型，选给谁用，保存。key 加密存在服务器上、不回传浏览器，**不经过聊天**。详细步骤和报错对照在 `guide/10-model-hub.md`。
+3. 让他在 dimensio 页（或 Claude 页的「More models」）选这个模型发一句话试试。
+
+`set-api-key` 这条命令还在，但**模型中心接管之后（升级到这个版本、或新装后第一次启动就接管了），它写的 key 对管理员的 dimensio 不再生效**——命令会照实告诉你「这次写进 .env 的不会生效 / 不会替换」，然后照样把这家的接口网站访问一次、弹出审核卡。所以别再用它代填 key；用户把 key 发给你了，告诉他 key 要在网页模型中心里填，并提醒他删掉聊天里那条消息。它认的名字（`ANTHROPIC_API_KEY`、`DEEPSEEK_API_KEY`（存成 `OPENAI_API_KEY`）、`GEMINI_API_KEY`、`KIMI_API_KEY`、`ZHIPU_API_KEY`、`QWEN_API_KEY`、`MIMO_API_KEY`、`MIMO_SEARCH_API_KEY`）里，**只有 `MIMO_SEARCH_API_KEY`（小米联网搜索专用，见下面「联网搜索」）照旧要用它写**。
 
 ```bash
-bash /home/hatch/bridge-ops/bootstrap.sh set-api-key ANTHROPIC_API_KEY <key>
+bash /home/hatch/bridge-ops/bootstrap.sh set-api-key MIMO_SEARCH_API_KEY <key>
 ```
 
-`set-api-key` 可用的名字：`ANTHROPIC_API_KEY`（Claude）、`DEEPSEEK_API_KEY`（DeepSeek；写进去会存成 `OPENAI_API_KEY`，dimensio 里叫 DeepSeek 的那一家读的就是它，所以两个名字等价）、`GEMINI_API_KEY`、`KIMI_API_KEY`（Kimi for Coding 订阅 key，`sk-kimi-` 开头）、`ZHIPU_API_KEY`、`QWEN_API_KEY`、`MIMO_API_KEY`（`tp-` 开头的 Token Plan key 也行）。
-
-两种方式别混用：网页里存过的 key 优先于 `set-api-key` 写的，而且界面上清不掉，所以同一家只用一种方式配；他在网页里填过的那家，换 key 也让他在网页里换。
+从旧版本升上来的：以前写进服务器的 key、网页里填的 key、Claude 的「自定义 API」、dimensio 自己的模型服务，第一次启动时都已自动搬进模型中心，用法不变；之后换 key 也在模型中心里换（`guide/10-model-hub.md`「从旧版本升级上来」）。
 
 **联网搜索**：dimensio 的联网搜索用的是所配厂商自带的搜索（同一把 key，不用另外申请）：当前对话用哪家，就先用哪家的；其余配了 key 的厂商依次备用，都没有时退回免费但不太稳的 DuckDuckGo。智谱、Kimi（`sk-kimi-` 订阅 key）、DeepSeek、通义、Gemini、Claude 配上 key 就能搜；**小米要多一步**：联网搜索是小米控制台「插件管理」里的「联网搜索」插件（按次计费，约 ¥16 / 千次，从账户余额扣），而且**只在按量付费的 key 上能用**。用户填的如果是 Token Plan 订阅的 key（`tp-` 开头），这把 key 搜不了（小米的 Token Plan 接口不开放插件，控制台开了也没用）：想用小米搜索，就让他在控制台再建一把按量付费的 API key，用 `set-api-key MIMO_SEARCH_API_KEY <那把 key>` 单独配给搜索，聊天照旧用 Token Plan。不配也行，小米搜不了会自动退回别家，搜索结果里会提醒。
 
-**网络审核（重要）**：这台 VM 访问外部网站要用户在 Muse 里批准，卡片是「允许 Muse 与 <网站> 分享信息？」。dimensio 在后台第一次调某家模型时如果弹这张卡、而用户不在场，对话会一直停在「等待模型回复」。所以 `set-api-key` 写完 key 会马上访问一次这家的接口网站，趁用户在场把卡片弹出来。跑这条命令之前先告诉用户：马上会弹一张这家接口网站的审核卡；选「允许一次」的话，以后 dimensio 在后台调这家时还会再弹，没人批就会卡住，选「总是允许此站点」就不再问（各选项见 2.0），由他决定。你看不到卡片，命令会停在那里等他批（最多 3 分钟）；输出里 ✓ 表示放行了。然后让他在 dimensio 页选对应的模型发一句话试试。
+**网络审核（重要）**：这台 VM 访问外部网站要用户在 Muse 里批准，卡片是「允许 Muse 与 <网站> 分享信息？」。模型中心识别模型、或 dimensio 在后台第一次调某家模型时如果弹这张卡、而用户不在场，就会一直停在那里（识别超时、对话停在「等待模型回复」）。所以加服务之前先跑 `allow-sites <接口地址>`，趁用户在场把卡片弹出来。跑之前先告诉用户：马上会弹一张这家接口网站的审核卡；选「允许一次」的话，以后 dimensio 在后台调这家时还会再弹，没人批就会卡住，选「总是允许此站点」就不再问（各选项见 2.0），由他决定。你看不到卡片，命令会停在那里等他批（最多 3 分钟）；输出里 ✓ 表示放行了。然后再让他去模型中心添加。
 
 ### 4.6 给朋友开账号（选了「多人用」才需要）
 在服务端控制台里发邀请码，朋友用邀请码注册；新账号默认只能用 Claude，要让他用 dimensio 得在控制台里给他勾上；「完全信任邀请码」给的账号带命令行、等同管理员，只发给完全信任的人。具体点哪里见 `guide/06-users-admin.md`。用户想从「只自己用」改成「多人用」（或者反过来），跑 `set-users multi` / `set-users solo`。
@@ -225,13 +227,16 @@ Muse Bridge 自带一套给 agent 用的 HTTP 接口（入口 `/agent`，项目�
 - **别把密钥写进长期记忆或任何笔记**（同第 0 节第 6 条），只放在环境变量或权限 600 的文件里；丢了就请用户吊销再生成一把。
 - 用户问「这个设置页是干什么的」，说明书见 `guide/07-settings.md`「Agent 接入」。
 
-### 4.9 Gemini · Vertex（图像 / 视频 / 语音 / 音乐，可选）
-装好时是关着的。用户想用 Google 的生图、生视频、配音、配乐时：
-1. 请他在网页里打开：**「设置 → 扩展 → 功能扩展」**，「Agent」区 Gemini · Vertex 卡上的开关（只有管理员能开）。
-2. 打开后马上跑一次 `bash $OPS/bootstrap.sh allow-sites`（不带参数：Gemini 开着时会带上 Google 的 4 个接口站点），先告诉他要弹几张 Google 的审核卡，并说明各选项的后果：生成是在后台跑的，只「允许一次」的话以后后台生成时还会再弹、没人批就会停在那里；「总是允许此站点」以后不再问。怎么选由他决定（选项见 2.0）。
-3. 请他准备凭据并在 **「设置 → Agent → Gemini」** 的「Google 云凭据」卡片里上传、点「保存并测试」。**凭据（服务账号 JSON、gcloud 的凭据文件）只在设置页上传，别让他贴给你、别经你的命令行写进 VM**——你会把对话内容留在记忆里。
-4. 费用在他自己的 Google Cloud 账单上。详细步骤、报错对照、在 Claude 里怎么用：`guide/09-vertex.md`。
-5. 同一页下面能管别的 agent：用户嫌 Claude 自己配图配乐费钱，请他关掉「需要素材时主动生成」；想让 dimensio 也能生成，打开「dimensio」；还能只许生成某几种、限视频分辨率、调内容安全过滤。这些是管理员在网页里改的开关，你别经命令行去改 config.json。
+### 4.9 Media Studio（图像 / 视频 / 配音 / 音乐，可选）
+Media Studio 接替了以前的 Gemini · Vertex 扩展（Gemini 对话已经下线）。装好时是关着的。用户想生图、生视频、配音、配乐时：
+1. 请他在网页里打开：**「设置 → 扩展 → 功能扩展」**，「Agent」区 Media Studio 卡上的开关（只有管理员能开）。
+2. 请他接模型，两条路可以都用，都在 **「设置 → 模型中心」**：
+   - **Google Vertex**（Nano Banana、Veo、Gemini TTS、Lyria）：在模型中心的 Vertex AI 卡上传凭据、点「保存并测试」。**凭据（服务账号 JSON、gcloud 的凭据文件）只在设置页上传，别让他贴给你、别经你的命令行写进 VM**——你会把对话内容留在记忆里。上传之前，跑一次 `bash $OPS/bootstrap.sh allow-sites`（不带参数：Media Studio 开着或上传了凭据时会带上 Google 的 4 个接口站点）。
+   - **别的媒体服务**（OpenAI 及兼容地址、OpenRouter、fal、Replicate、ElevenLabs、MiniMax、火山方舟等，地址 + key）：照 4.5 先 `allow-sites <接口地址>`，再请他在模型中心「添加服务」、把媒体模型勾给 Media Studio。有些服务把生成结果放在另一个域名上，第一次生成时可能再弹一张卡。
+   - 放行之前先告诉他要弹几张审核卡，并说明各选项的后果：生成是在后台跑的，只「允许一次」的话以后后台生成时还会再弹、没人批就会停在那里；「总是允许此站点」以后不再问。怎么选由他决定（选项见 2.0）。
+3. 费用在他自己的 Google Cloud 账单或各家服务的账户上。详细步骤、报错对照、四个创作页怎么用、在 Claude 里怎么用：`guide/09-media-studio.md`。
+4. **「设置 → Media Studio」** 里能管别的 agent：用户嫌 Claude 自己配图配乐费钱，请他关掉「需要素材时主动生成」；想让 dimensio 也能生成，打开「dimensio」；还能只许生成某几种、限视频分辨率、调内容安全过滤。这些是管理员在网页里改的开关，你别经命令行去改 config.json。
+5. 从旧版升上来的：原来的 Google 云凭据、项目和区域照旧生效；旧的 Gemini 对话不再显示（记录留在磁盘上，没删）。
 
 ## 5. 用自己的域名（固定地址）
 
@@ -259,8 +264,9 @@ Muse Bridge 自带一套给 agent 用的 HTTP 接口（入口 `/agent`，项目�
 | 「地址是多少」「打不开了」 | `status`，把**公网地址**和**状态**告诉他 |
 | 「令牌忘了」 | 先说明旧令牌和所有已登录的管理员设备都会失效，他同意后执行 `reset-token`，把新令牌交给他 |
 | 「换 Claude 令牌」 | 首选让他自己在控制台「Claude 账号」里改；否则 `set-claude-token <令牌>` |
-| 「给 dimensio 加 / 换 / 删一家模型的 key」 | `set-api-key <名字> <key>`（key 留空 = 删掉；写入时会弹这家接口网站的审核卡，先告诉用户，选项见 2.0） |
-| 「我要在 dimensio 里加一个自定义模型服务」（OpenAI 兼容地址） | 先问他接口地址，告诉他会弹这个地址的审核卡（选项见 2.0），跑 `allow-sites <地址>`，放行后**再**让他去 dimensio 模型胶囊菜单的「切换模型服务…」里点「添加自定义服务」——否则添加时会卡在「连接中」。要接到 Claude 页的，同样先放行，再让他在「设置 → Claude → 自定义 API」里加 |
+| 「给 dimensio 加 / 换 / 删一家模型的 key」「接一个别家的模型 / 中转站 / OpenRouter」「Claude 页想用 DeepSeek」「自定义 API 去哪了」 | 按 4.5：先问接口地址，告诉他会弹这个地址的审核卡（选项见 2.0），跑 `allow-sites <地址>`，放行后**再**让他去网页 **「设置 → 模型中心」** 里「添加服务」（换 key、删 key 也在那里：打开这个服务，在「API Key」一栏操作）——否则识别模型会卡到超时。别用 `set-api-key` 代填（模型中心接管后不生效，只有 `MIMO_SEARCH_API_KEY` 例外） |
+| 「生成图片 / 视频 / 配音 / 音乐」「Gemini 分页去哪了」 | 按 4.9：Media Studio 默认关，请管理员在「功能扩展」里打开并在模型中心接模型；Gemini 对话已下线，媒体生成都在 Media Studio |
+| 「让几个 Claude 一起做一件大事」「项目对话」 | 网页里的功能，不用跑命令：新对话里点输入框左下角的圆环勾「项目」再发（`guide/02-claude-code.md`「项目对话」）。提醒他几条讨论串同时跑，订阅额度消耗快，这台 VM 每人同时最多 3 个对话在跑 |
 | 「对话一直在等待模型回复」「模型没反应」 | 多半是有网站的审核卡没人批：让他看 Muse 里有没有待审核的卡片（输入框上方或右侧面板）；或者用户在场时跑 `allow-sites`（按现在的配置把要用的网站挨个访问一遍，卡片会再弹出来，选项见 2.0） |
 | 「我也想用 dimensio」「不要 dimensio 了」等 | `set-agents claude` / `set-agents dimensio` / `set-agents claude,dimensio`（要重新装依赖、构建，几分钟；跟 `install` 一样自己转后台，没等完就 `wait`；完了等没人在聊时自动切换） |
 | 「Figma（或别的远程连接器）连不上」「连接器要授权」「Claude 说没法完成授权」 | 先问清报错是什么。**报「平台（Muse）不允许在这里登录这个服务」/ `refresh_rejected`**（Figma、Stripe、Zapier 这几家）：是这台 VM 的出口代理拦了它们的换令牌请求，**别再让他反复点「授权」、批卡也没用**。Figma 走个人访问令牌：让他在扩展页连接器标签的「添加」菜单点「添加 Figma（个人访问令牌）」；令牌交给平台保管——经他同意后，你用 `credentials.request_api_access` 建一个 API Key 型自定义连接器（provider 填 `figma_pat`，登记名就是 `custom.figma_pat`；类型 api_key，网站 `api.figma.com`，placement `custom_header:X-Figma-Token`），卡片里的令牌让他自己填（在 Figma 的 Settings › Security › Personal access tokens 生成），别让他把令牌贴进聊天。这条路还没在真 Muse 上端到端验证过，用不了就请他报告问题（第 8 节）。Stripe、Zapier 等其它被拦的：不做现成的，让他直接跟 Muse Bridge 里的 Claude 说，按「API Key 或个人令牌 + 平台 `custom.*` 自定义连接器」的思路现写一个，`custom.*` 的登记同样由你经他同意后建。这两条走的都是平台自己的凭据机制（令牌由平台保管、程序只拿替身），**不要尝试绕过出口代理、换别的出口或让令牌进 VM**。**其它报错**（「需要登录」、跳回后一直转圈）：在 Muse Bridge 扩展页这个连接器的控制面板点「连接」，或对话里输入框上方提示的「授权」，登录同意后自动跳回；第一次可能弹对方网站的审核卡（选项见 2.0），也可以在他在场时先跑 `allow-sites <网站>`。显示「需要配置 OAuth 应用」（Gmail、Zoom）的：照面板里的步骤由管理员配，回调地址要是这台 Muse 的公网地址（`guide/05-customize.md`）。**任何情况都不要在 VM 上跑 `claude mcp login` 或 `claude setup-token`**（令牌端点对这台 VM 的出口 IP 会限流） |
@@ -321,7 +327,7 @@ bridge 服务被意外打断时（VM 被平台重启、看门狗重启了服务�
 | bridge 报 `status=217/USER`，或者找不到 bridge 用户 | VM 重启后，平台不会马上把 `/etc/passwd` 里的 bridge 账号写回来 | 什么都不用做：看门狗下一轮（1 分钟内）会按数据目录的属主把同一个账号补回来、拉起服务；`install` 也会自己补 |
 | bridge 报 `status=200/CHDIR` | `/home/hatch` 丢了 o+x 权限 | `heal.sh` 会自动补上 |
 | Claude 页提示「还没配置 Claude 认证」 | 还没配令牌 | 见 4.4 |
-| dimensio 发消息报没有可用的模型 / key | 还没填 key | 见 4.5 |
+| dimensio 发消息报没有可用的模型 / key | 模型中心里还没有这一家的服务，或模型没勾给 dimensio | 见 4.5 |
 | token 接口返回 429 `rate_limit_error` | 在 VM 上做了 OAuth 登录 | 别在 VM 上登录，改用 4.4 的方法；出口 IP 大约一小时后恢复 |
 | `update` 报 sha256 对不上 | 包没下载完整，或者发布者还在上传 | 过一会儿再跑；一直对不上就告诉用户 |
 | `update` 在装依赖或构建时失败 | 网络问题，或新版本本身有问题 | 旧版本照常在跑。原样重跑一次；还失败就把 `wait` 打出来的日志末尾给用户（完整日志在 `/home/hatch/bridge-ops/install-progress.log`） |
