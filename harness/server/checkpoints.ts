@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseSessionRecord, sessionsDir, saveSession, unsupportedVersionMessage, type PersistedSession } from "./store.ts";
@@ -7,6 +8,7 @@ import { knowledgeRoot, memoryRoot } from "./paths.ts";
 import { isSecretPath } from "./sandbox.ts";
 import { GIT_DIFF_NO_EXTERNAL, helperEnv, helperGitArgs } from "./helper-proc.ts";
 import { atomicWriteFile } from "./atomic-write.ts";
+import { killChildTree } from "./proc-tree.ts";
 import type { Msg } from "./agent/turn.ts";
 
 // Checkpoint/rollback: a SHADOW git repo (git-dir under SESSIONS_DIR, work-tree
@@ -38,12 +40,25 @@ export interface CheckpointMeta {
   // U9：拍的时候记录里有几条消息——「从这里改写」找「这条消息之前」那张检查点时先按它筛，不用把每份记录副本都读一遍。
   // 旧记录没有这个字段。
   msgs?: number;
+  // 只备份改过的文件（scope touched，见下）：拍这张时这个会话已经接管的文件。tree 里只有它们（不在 tree 里 = 那时不存在）；
+  // 之后才接管的文件，在这张检查点时的内容按「往后第一张接管了它的检查点」补齐（materialize）。整目录快照没有这个字段。
+  paths?: string[];
+  // 同上，结束快照 endTree 拍下时接管的文件
+  endPaths?: string[];
 }
 
 interface CheckpointIndex {
   v: 1;
   entries: CheckpointMeta[];
+  // 大工作区：这个会话的检查点只备份 agent 用编辑工具改过的文件（与 Claude Code 的做法一样），不拍整个目录。
+  // 一个会话一旦切到这一档就不再回去（旧的整目录快照仍然可用，比较时限定在接管的文件里）。
+  scope?: "touched";
+  // 这个会话接管过的文件（工作区相对路径，正斜杠）
+  tracked?: string[];
 }
+
+// takeCheckpoint 的返回：scopeStarted = 这个会话从这一张起只备份改过的文件（给界面写一行提示）
+export type TakenCheckpoint = CheckpointMeta & { scope: "full" | "touched"; scopeStarted?: boolean };
 
 const DIFF_CAP = 60_000;
 
@@ -102,19 +117,84 @@ function enqueue<T>(fn: () => Promise<T>): Promise<T> {
   return p;
 }
 
-function git(args: string[], work: string): Promise<{ code: number | null; out: string; err: string }> {
+// ── 索引文件：每个工作区一份「暂存索引」+ 一份公用的「草稿索引」 ─────────────────────────────────
+// 以前所有命令共用 shadow.git/index，每次拍快照先 `read-tree --empty` 再 `add -A`：索引里的 stat 缓存每次都被清空，
+// git 只能把整个工作区的每个文件重新读一遍、算一遍哈希。小项目无所谓，大目录就是几分钟——2026-11-13 在
+// D:\Notes（所有项目的集合目录）里，开跑前的这一步跑了 5 分钟还没完，模型请求一直没发出去，界面上「重连中」。
+// 现在：拍快照（stageSafeWorkspace）只用这个工作区自己的暂存索引，增量 `add -A`（只重读 stat 变了的文件）；
+// 回滚、预览、对比这些要把某张旧快照读进索引的操作，一律在草稿索引里做，不碰暂存索引的缓存。
+// 「换工作区不串索引」由「每个工作区一份」保证；「旧快照里的凭据 / 现在被忽略的文件不残留」由每次 add 之后的
+// 消毒（removeSecretsFromIndex、dropIgnoredFromIndex、excludeOversized）保证——这两条正是以前清空索引想要的效果。
+function stageIndexFor(work: string): string {
+  const key = process.platform === "win32" ? path.resolve(work).toLowerCase() : path.resolve(work);
+  return path.join(shadowDir(), "indexes", createHash("sha1").update(key).digest("hex").slice(0, 16));
+}
+function scratchIndex(): string {
+  return path.join(shadowDir(), "index-scratch");
+}
+
+// 跑超时被掐掉的 git 命令（见 stageBudgetMs）
+class GitTimeout extends Error {
+  constructor(args: string[], ms: number) {
+    super(`git ${args[0]} timed out after ${ms}ms`);
+    this.name = "GitTimeout";
+  }
+}
+const isGitTimeout = (e: unknown): e is GitTimeout => e instanceof Error && e.name === "GitTimeout";
+
+interface GitOpts {
+  // 这条命令用哪份索引（GIT_INDEX_FILE）；不给就用草稿索引
+  index?: string;
+  // 喂给标准输入的内容（update-index --stdin）
+  input?: string;
+  // 超时（毫秒）：到点收掉整棵进程树（Windows 上 `git` 是个包装进程，真干活的 git.exe 是它的子进程），删掉留下的
+  // 索引锁，抛 GitTimeout
+  timeoutMs?: number;
+}
+
+function git(args: string[], work: string, opts: GitOpts = {}): Promise<{ code: number | null; out: string; err: string }> {
+  const index = opts.index ?? scratchIndex();
   return new Promise((resolve, reject) => {
     const child = spawn("git", [...helperGitArgs(), `--git-dir=${shadowDir()}`, `--work-tree=${work}`, ...args], {
       cwd: work, // pathspec semantics: always run from inside the work tree
       windowsHide: true,
-      env: helperEnv(),
+      env: helperEnv({ GIT_INDEX_FILE: index }),
     });
     let out = "";
     let err = "";
+    let timedOut = false;
+    let settled = false;
+    let backstop: NodeJS.Timeout | null = null;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (backstop) clearTimeout(backstop);
+      fn();
+    };
+    const timer = opts.timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          killChildTree(child);
+          // 进程树收不干净、管道迟迟不关：最多再等 5 秒就当它结束了（锁留给下一次 ensureLockFree 清）
+          backstop = setTimeout(() => finish(() => reject(new GitTimeout(args, opts.timeoutMs!))), 5_000);
+          backstop.unref?.();
+        }, opts.timeoutMs)
+      : null;
+    timer?.unref?.();
     child.stdout.on("data", (b: Buffer) => (out += b.toString()));
     child.stderr.on("data", (b: Buffer) => (err += b.toString()));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, out: out.trim(), err: err.trim() }));
+    child.on("error", (e) => finish(() => reject(e)));
+    child.on("close", (code) => {
+      if (timedOut) {
+        void fs.rm(`${index}.lock`, { force: true }).catch(() => {});
+        finish(() => reject(new GitTimeout(args, opts.timeoutMs!)));
+        return;
+      }
+      finish(() => resolve({ code, out: out.trim(), err: err.trim() }));
+    });
+    if (opts.input !== undefined) child.stdin.end(opts.input);
+    else child.stdin.end();
   });
 }
 
@@ -142,8 +222,8 @@ function gitRepo(args: string[]): Promise<{ code: number | null; out: string; er
   });
 }
 
-async function gitOrThrow(args: string[], work: string): Promise<string> {
-  const r = await git(args, work);
+async function gitOrThrow(args: string[], work: string, opts: GitOpts = {}): Promise<string> {
+  const r = await git(args, work, opts);
   if (r.code !== 0) throw new Error(`git ${args[0]} failed (${r.code}): ${r.err || r.out}`);
   return r.out;
 }
@@ -268,6 +348,15 @@ async function ensureRepo(work: string): Promise<boolean> {
     // 传 --work-tree，所以运行时不受影响；但任何不带 --work-tree 的命令——包括我们自己
     // 要跑的 `git gc`——会直接 fatal 在那个死路径上。清掉它。
     await gitRepo(["config", "--unset", "core.worktree"]);
+    // 索引锁只可能是上一个进程被掐断时留下的（本进程内的影子 git 操作全部串行）——清掉，否则每条命令都报 index.lock exists。
+    // 旧版本共用的 shadow.git/index 不再使用，连锁一起删（大工作区的旧索引能有上百 MB）。
+    await fs.mkdir(path.join(d, "indexes"), { recursive: true });
+    for (const name of await fs.readdir(path.join(d, "indexes")).catch(() => [] as string[])) {
+      if (name.endsWith(".lock")) await fs.rm(path.join(d, "indexes", name), { force: true }).catch(() => {});
+    }
+    for (const name of ["index", "index.lock", "index-scratch", "index-scratch.lock"]) {
+      await fs.rm(path.join(d, name), { force: true }).catch(() => {});
+    }
     readyFor = shadowDir();
     return true;
   } catch (e) {
@@ -278,13 +367,24 @@ async function ensureRepo(work: string): Promise<boolean> {
 }
 
 // 索引消毒：凭据，以及旧版本拍进去的数据目录（见 isDataPath），都不写回、不显示、不算改动
-async function removeSecretsFromIndex(work: string): Promise<void> {
-  const staged = (await gitOrThrow(["ls-files", "-z"], work)).split("\0").filter(Boolean);
+async function removeSecretsFromIndex(work: string, index?: string): Promise<void> {
+  const staged = (await gitOrThrow(["ls-files", "-z"], work, { index })).split("\0").filter(Boolean);
   const drop = staged.filter((p) => isSecretPath(p) || isDataPath(p, work));
-  // 字面路径（不是 pathspec）；分批，免得 Windows 命令行超长——旧快照里的数据目录动辄几百个文件
-  for (let i = 0; i < drop.length; i += 100) {
-    await gitOrThrow(["--literal-pathspecs", "rm", "--cached", "-q", "--ignore-unmatch", "--", ...drop.slice(i, i + 100)], work);
+  await dropFromIndex(work, drop, index);
+}
+
+// 字面路径（不是 pathspec）；分批，免得 Windows 命令行超长——旧快照里的数据目录动辄几百个文件
+async function dropFromIndex(work: string, rels: readonly string[], index?: string): Promise<void> {
+  for (let i = 0; i < rels.length; i += 100) {
+    await gitOrThrow(["--literal-pathspecs", "rm", "--cached", "-q", "--ignore-unmatch", "--", ...rels.slice(i, i + 100)], work, { index });
   }
+}
+
+// 增量索引的消毒：已在索引里、现在却被忽略的文件（项目新加了 .gitignore 规则、超限名单新添了它）。以前每次从空索引
+// 重建，它们自然不在；现在索引是续用的，得显式摘掉——否则会被拍进快照、回滚时写回。
+async function dropIgnoredFromIndex(work: string, index: string): Promise<void> {
+  const ignored = (await gitOrThrow(["ls-files", "-z", "-c", "-i", "--exclude-standard"], work, { index })).split("\0").filter(Boolean);
+  await dropFromIndex(work, ignored, index);
 }
 
 // 超大文件既不该进快照，也【绝不能】只从索引里摘掉了事：rollback 的最后一步是
@@ -315,9 +415,9 @@ async function readOversized(): Promise<string[]> {
 
 // 已入索引的条目里挑出超限的：踢出索引 + 记进忽略名单 + 立刻写进 info/exclude，
 // 下一次 `git add -A` 就根本不会再碰它。
-async function excludeOversized(work: string): Promise<void> {
+async function excludeOversized(work: string, index: string): Promise<void> {
   const cap = maxBlobBytes();
-  const staged = (await gitOrThrow(["ls-files", "-z"], work)).split("\0").filter(Boolean);
+  const staged = (await gitOrThrow(["ls-files", "-z"], work, { index })).split("\0").filter(Boolean);
   const found: string[] = [];
   await Promise.all(
     staged.map(async (rel) => {
@@ -330,9 +430,12 @@ async function excludeOversized(work: string): Promise<void> {
     }),
   );
   if (!found.length) return;
-  for (const rel of found) {
-    await gitOrThrow(["rm", "--cached", "--ignore-unmatch", "--", rel], work);
-  }
+  await dropFromIndex(work, found, index);
+  await rememberOversized(work, found, cap);
+}
+
+// 超限文件记进忽略名单并立刻写进 info/exclude（excludeOversized 事后发现的、probeWorkspace 事先找到的都走这里）
+async function rememberOversized(work: string, found: readonly string[], cap: number): Promise<void> {
   const known = new Set(await readOversized());
   const before = known.size;
   for (const rel of found) known.add(rel);
@@ -345,12 +448,316 @@ async function excludeOversized(work: string): Promise<void> {
   }
 }
 
-async function stageSafeWorkspace(work: string): Promise<void> {
+// ── 两档快照：整目录（小工作区）/ 只备份改过的文件（大工作区） ─────────────────────────────────────
+// 整目录快照的好处是 Bash、脚本、人手改的文件也回滚得了；代价与工作区大小成正比。Claude Code 的做法是只在编辑工具改
+// 文件之前备份那一个文件——开跑前零成本，代价是 Bash 的改动回滚不了。两样都要：工作区小就整目录（增量、有超时），
+// 大了（文件数 / 体积超过阈值、列文件或拍快照超时）就让这个会话改走后一档（scope touched）。
+function envNum(name: string, fallback: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+// 拍一次整目录快照（add -A）最多等多久：超了就掐掉，这个工作区记成「太大」
+const stageBudgetMs = () => envNum("CHECKPOINT_STAGE_BUDGET_MS", 15_000);
+// 判断工作区大小（列文件 + 统计体积）最多等多久
+const probeBudgetMs = () => envNum("CHECKPOINT_PROBE_BUDGET_MS", 4_000);
+// 整目录快照的上限：超过这么多个文件、或这么大（不算超限的单个大文件，它们本来就不进快照）
+const fullMaxFiles = () => envNum("CHECKPOINT_FULL_MAX_FILES", 20_000);
+const fullMaxBytes = () => envNum("CHECKPOINT_FULL_MAX_MB", 1024) * 1024 * 1024;
+const PROBE_TTL_MS = 10 * 60 * 1000; // 判断结果用多久（工作区会长大）
+const LARGE_STICKY_MS = 60 * 60 * 1000; // 拍快照超时记下的「太大」用多久
+
+type ProbeHit = { at: number; ttl: number; large: boolean };
+const probes = new Map<string, ProbeHit>();
+const probeKey = (work: string) => `${shadowDir()}|${path.resolve(work)}`;
+
+function markLarge(work: string, reason: string): void {
+  probes.set(probeKey(work), { at: Date.now(), ttl: LARGE_STICKY_MS, large: true });
+  console.log(`[checkpoints] ${work}: ${reason}——这个工作区的会话改为只备份编辑工具改过的文件`);
+}
+
+// 这个工作区该不该只备份改过的文件。CHECKPOINT_MODE=full / touched 强制一档，默认 auto。
+async function workspaceIsLarge(work: string): Promise<boolean> {
+  const mode = process.env.CHECKPOINT_MODE;
+  if (mode === "full") return false;
+  if (mode === "touched") return true;
+  const key = probeKey(work);
+  const hit = probes.get(key);
+  if (hit && Date.now() - hit.at < hit.ttl) return hit.large;
+  const probe = await probeWorkspace(work);
+  probes.set(key, { at: Date.now(), ttl: PROBE_TTL_MS, large: probe.large });
+  if (probe.large) console.log(`[checkpoints] ${work}: ${probe.reason}——这个工作区的会话改为只备份编辑工具改过的文件`);
+  return probe.large;
+}
+
+// 用 git 自己列「会进快照的文件」（尊重各层 .gitignore、info/exclude，嵌套仓库只算一个条目、不进去），数到上限或超时
+// 就停；没超再逐个 stat 统计体积。超限的单个大文件顺手记进忽略名单——以前它们要先被 `add -A` 完整读一遍、写进
+// 影子仓库，再在事后被踢出去。
+async function probeWorkspace(work: string): Promise<{ large: boolean; reason: string }> {
   await syncExcludes(work);
+  const maxFiles = fullMaxFiles();
+  const budget = probeBudgetMs();
+  const t0 = Date.now();
+  const listed = await new Promise<{ files: string[]; over?: string }>((resolve) => {
+    const files: string[] = [];
+    let rest = "";
+    let done = false;
+    const child = spawn("git", [...helperGitArgs(), `--git-dir=${shadowDir()}`, `--work-tree=${work}`, "ls-files", "-o", "--exclude-standard", "-z"], {
+      cwd: work,
+      windowsHide: true,
+      // 不存在的索引 = 空索引：所有不被忽略的文件都算「未跟踪」列出来
+      env: helperEnv({ GIT_INDEX_FILE: path.join(shadowDir(), "index-probe-empty") }),
+    });
+    const end = (over?: string) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (over) killChildTree(child);
+      resolve({ files, ...(over ? { over } : {}) });
+    };
+    const timer = setTimeout(() => end(`列文件超过 ${budget}ms`), budget);
+    timer.unref?.();
+    child.stdout.on("data", (b: Buffer) => {
+      const parts = (rest + b.toString()).split("\0");
+      rest = parts.pop() ?? "";
+      for (const p of parts) if (p && !p.endsWith("/")) files.push(p);
+      if (files.length > maxFiles) end(`超过 ${maxFiles} 个文件`);
+    });
+    child.on("error", () => end());
+    child.on("close", () => {
+      if (rest && !rest.endsWith("/")) files.push(rest);
+      end();
+    });
+    child.stdin.end();
+  });
+  if (listed.over) return { large: true, reason: listed.over };
+  const cap = maxBlobBytes();
+  const maxBytes = fullMaxBytes();
+  let bytes = 0;
+  const oversized: string[] = [];
+  for (let i = 0; i < listed.files.length; i += 256) {
+    const chunk = listed.files.slice(i, i + 256);
+    const sizes = await Promise.all(chunk.map((rel) => fs.stat(path.join(work, rel)).then((st) => (st.isFile() ? st.size : 0), () => 0)));
+    sizes.forEach((size, k) => {
+      if (size > cap) oversized.push(chunk[k]);
+      else bytes += size;
+    });
+    if (bytes > maxBytes) return { large: true, reason: `超过 ${Math.round(maxBytes / 1024 / 1024)}MB` };
+    if (Date.now() - t0 > budget * 2) return { large: true, reason: "统计文件体积超时" };
+  }
+  if (oversized.length) await rememberOversized(work, oversized, cap);
+  return { large: false, reason: `${listed.files.length} 个文件、${Math.round(bytes / 1024 / 1024)}MB` };
+}
+
+// 整目录快照：增量 `add -A` 进这个工作区的暂存索引、消毒，返回快照树。超时（stageBudgetMs）掐掉、记下这个工作区
+// 「太大」，抛 GitTimeout——调用方决定是改走只备份改过的文件（开跑前的检查点），还是这次就不做了。
+async function stageSafeWorkspace(work: string): Promise<string> {
+  const index = stageIndexFor(work);
+  await syncExcludes(work);
+  const stageOnce = async (): Promise<string> => {
+    try {
+      await gitOrThrow(["add", "-A"], work, { index, timeoutMs: stageBudgetMs() });
+    } catch (e) {
+      if (isGitTimeout(e)) markLarge(work, `拍快照超过 ${stageBudgetMs()}ms`);
+      throw e;
+    }
+    await dropIgnoredFromIndex(work, index);
+    await removeSecretsFromIndex(work, index);
+    await excludeOversized(work, index);
+    return gitOrThrow(["write-tree"], work, { index });
+  };
+  try {
+    return await stageOnce();
+  } catch (e) {
+    if (isGitTimeout(e)) throw e;
+    // 续用的索引坏了（比如里面记的对象只有它引用、已被 gc 收走，write-tree 报 invalid object）：扔掉从头建一次
+    console.warn(`[checkpoints] ${work}: stage index unusable, rebuilding (${(e as Error).message})`);
+    await fs.rm(index, { force: true });
+    await fs.rm(`${index}.lock`, { force: true });
+    return stageOnce();
+  }
+}
+
+// ── 只备份改过的文件（scope touched） ──────────────────────────────────────────────────────────
+// 会话接管的文件集合 tracked：编辑工具（Write / Edit，含子 agent、Workflow 里的）第一次要改某个文件之前，先把它此刻的
+// 内容补进这一轮开跑时的检查点（noteBeforeWrite），再放行写入。每张检查点只存接管了的文件；更早的检查点里没有的那些，
+// 按「往后第一张接管了它的检查点」补齐（那之前这个会话没碰过它，内容就是它被接管时的样子——与 Claude Code 同一个近似：
+// 期间若被别人改过，看不出来）。回滚 / 审阅 / 对比都只在接管的文件里进行：Bash、脚本、人手的改动不在里面，回滚不动它们。
+
+// 这些不接管：与整目录快照同一套排除（可再生目录、镜像、凭据、数据目录、会话附件）
+const TOUCHED_SKIP_SEGMENTS = new Set([...IGNORE_DIRS, ".sdk", BRIDGE_DATA_SEG]);
+function touchable(rel: string, work: string): boolean {
+  if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel) || /^[A-Za-z]:/.test(rel)) return false;
+  if (rel.split("/").some((seg) => TOUCHED_SKIP_SEGMENTS.has(seg) || seg.endsWith(".egg-info"))) return false;
+  if (/^\.dimensio\/(uploads|diagnostics|workflows)\//.test(rel)) return false;
+  if (/\.(img|iso|vmdk|qcow2)$/i.test(rel)) return false;
+  return !isSecretPath(rel) && !isDataPath(rel, work);
+}
+
+// 接管的这些文件此刻的样子（草稿索引里拼出来；不存在的就不在树里）
+async function touchedTree(work: string, tracked: readonly string[]): Promise<string> {
   await gitOrThrow(["read-tree", "--empty"], work);
-  await gitOrThrow(["add", "-A"], work);
+  const list = tracked.filter((p) => touchable(p, work));
+  if (list.length) {
+    try {
+      await gitOrThrow(["update-index", "--add", "--remove", "-z", "--stdin"], work, { input: list.join("\0") + "\0" });
+    } catch {
+      // 某一条出了问题（文件变成了目录之类）：逐条加，出错的跳过
+      for (const p of list) await git(["update-index", "--add", "--remove", "-z", "--stdin"], work, { input: p + "\0" });
+    }
+  }
+  return gitOrThrow(["write-tree"], work);
+}
+
+// 一棵树里这些路径的条目（ls-tree 格式，NUL 结尾；update-index --index-info 直接收这个格式）
+async function treeEntries(tree: string, paths: readonly string[], work: string): Promise<string[]> {
+  const out: string[] = [];
+  for (let i = 0; i < paths.length; i += 100) {
+    const raw = await gitOrThrow(["--literal-pathspecs", "ls-tree", "-r", "-z", tree, "--", ...paths.slice(i, i + 100)], work);
+    out.push(...raw.split("\0").filter(Boolean));
+  }
+  return out;
+}
+
+// 以 base 为底（null = 从空树起），加上 / 覆盖这些条目，写出新树
+async function treeWith(base: string | null, entries: readonly string[], work: string): Promise<string> {
+  await gitOrThrow(["read-tree", base ?? "--empty"], work);
+  if (entries.length) await gitOrThrow(["update-index", "-z", "--index-info"], work, { input: entries.join("\0") + "\0" });
+  return gitOrThrow(["write-tree"], work);
+}
+
+const resolvedTrees = new Map<string, string>();
+const RESOLVED_TREES_MAX = 500;
+
+// 检查点各张树的统一取法：整目录快照的会话直接用存下的树；只备份改过的文件的会话，把每张树补齐 / 限定到接管的文件上，
+// 这样任意两张（以及「现在」）都在同一组文件上比，回滚、审阅、归属校验的那套树运算原样可用。调用方要在串行队列里用。
+interface TreeResolver {
+  touched: boolean;
+  start(pos: number): Promise<string>;
+  end(pos: number): Promise<string | undefined>;
+  now(): Promise<string>;
+}
+
+function resolverFor(idx: CheckpointIndex, work: string): TreeResolver {
+  if (idx.scope !== "touched") {
+    return {
+      touched: false,
+      start: async (pos) => idx.entries[pos].tree,
+      end: async (pos) => idx.entries[pos].endTree,
+      now: () => stageSafeWorkspace(work),
+    };
+  }
+  const tracked = [...new Set((idx.tracked ?? []).filter((p) => touchable(p, work)))].sort();
+  let nowTree: Promise<string> | null = null;
+  const now = () => (nowTree ??= touchedTree(work, tracked));
+  const memo = async (key: string, make: () => Promise<{ tree: string; cacheable: boolean }>): Promise<string> => {
+    const hit = resolvedTrees.get(key);
+    if (hit) return hit;
+    const { tree, cacheable } = await make();
+    if (cacheable) {
+      if (resolvedTrees.size >= RESOLVED_TREES_MAX) resolvedTrees.delete(resolvedTrees.keys().next().value!);
+      resolvedTrees.set(key, tree);
+    }
+    return tree;
+  };
+  const sig = createHash("sha1").update(JSON.stringify(tracked)).digest("hex");
+  // 整目录时代拍的树：只留接管的文件
+  const restrict = (tree: string) =>
+    memo(`r|${tree}|${sig}`, async () => ({ tree: await treeWith(null, await treeEntries(tree, tracked, work), work), cacheable: true }));
+  // 只存了 have 这些文件的树：其余接管的文件按「往后第一张接管了它的检查点」补齐；哪张都没有（不该发生）就取现在的样子，
+  // 等于「没动过」——回滚绝不会因此删掉一个文件
+  const fill = (tree: string, have: readonly string[], pos: number) => {
+    const haveSet = new Set(have);
+    const missing = tracked.filter((p) => !haveSet.has(p));
+    if (!missing.length) return Promise.resolve(tree);
+    const later = idx.entries.slice(pos + 1).map((e) => `${e.tree}:${e.paths?.length ?? -1}`);
+    return memo(`f|${tree}|${sig}|${have.length}|${createHash("sha1").update(later.join(",")).digest("hex")}`, async () => {
+      const bySource = new Map<string, string[]>();
+      const orphans: string[] = [];
+      for (const p of missing) {
+        const src = idx.entries.slice(pos + 1).find((e) => e.paths?.includes(p));
+        if (src) bySource.set(src.tree, [...(bySource.get(src.tree) ?? []), p]);
+        else orphans.push(p);
+      }
+      const add: string[] = [];
+      for (const [src, ps] of bySource) add.push(...(await treeEntries(src, ps, work)));
+      if (orphans.length) add.push(...(await treeEntries(await now(), orphans, work)));
+      return { tree: await treeWith(tree, add, work), cacheable: !orphans.length };
+    });
+  };
+  return {
+    touched: true,
+    start: async (pos) => {
+      const e = idx.entries[pos];
+      return e.paths ? fill(e.tree, e.paths, pos) : restrict(e.tree);
+    },
+    end: async (pos) => {
+      const e = idx.entries[pos];
+      if (!e.endTree) return undefined;
+      return e.endPaths ? fill(e.endTree, e.endPaths, pos) : restrict(e.endTree);
+    },
+    now,
+  };
+}
+
+// 编辑工具改文件之前调（会话层挂在 ctx.beforeFileWrite 上）：这个会话在只备份改过的文件这一档、又是第一次碰这个文件，
+// 就把它此刻的内容补进最新一张检查点（不存在的记作「那时没有」），之后回滚到这张会还原它 / 删掉它。永不抛：
+// 备份不成不拦写入。
+export function noteBeforeWrite(sessionId: string, work: string, abs: string): Promise<void> {
+  if (!enabled()) return Promise.resolve();
+  const rel = path.relative(path.resolve(work), path.resolve(abs)).split(path.sep).join("/");
+  if (!touchable(rel, work)) return Promise.resolve();
+  return enqueue(async () => {
+    const idx = await readIndex(sessionId);
+    if (idx.scope !== "touched") return;
+    const tracked = (idx.tracked ??= []);
+    if (tracked.includes(rel)) return;
+    const last = idx.entries[idx.entries.length - 1];
+    if (!last?.paths) return;
+    const st = await fs.stat(path.join(work, rel)).catch(() => null);
+    if (st && (!st.isFile() || st.size > maxBlobBytes())) return; // 目录、超限的大文件不接管
+    if (st) {
+      await gitOrThrow(["read-tree", last.tree], work);
+      await gitOrThrow(["update-index", "--add", "-z", "--stdin"], work, { input: rel + "\0" });
+      const tree = await gitOrThrow(["write-tree"], work);
+      if (tree !== last.tree) {
+        const hash = await gitOrThrow(["commit-tree", tree, "-p", last.hash, "-m", last.label || "checkpoint"], work);
+        await gitOrThrow(["update-ref", `refs/cp/${sessionId}/${last.n}`, hash], work);
+        last.tree = tree;
+        last.hash = hash;
+      }
+    }
+    last.paths = [...last.paths, rel];
+    tracked.push(rel);
+    await writeIndex(sessionId, idx);
+  }).catch((e) => {
+    console.error(`[checkpoints] ${sessionId}: backup before write failed for ${rel}: ${(e as Error).message}`);
+  });
+}
+
+// 把工作区里这些文件变成 target 树里的样子：树里有的写回，没有的删掉（连因此空了、树里本来也没有的上级目录）
+async function applyTreePaths(work: string, target: string, paths: readonly string[]): Promise<{ restored: string[]; removed: string[] }> {
+  await gitOrThrow(["read-tree", target], work);
   await removeSecretsFromIndex(work);
-  await excludeOversized(work);
+  const inTarget = new Set(nulNames(await gitOrThrow(["ls-files", "-z"], work)));
+  const restored = paths.filter((p) => inTarget.has(p));
+  const removed = paths.filter((p) => !inTarget.has(p));
+  // checkout-index 收的是字面路径（不是 pathspec）；分批，免得 Windows 命令行超长
+  for (let i = 0; i < restored.length; i += 100) {
+    await gitOrThrow(["checkout-index", "-f", "-u", "--", ...restored.slice(i, i + 100)], work);
+  }
+  const targetDirs = new Set<string>();
+  for (const p of inTarget) for (let d = path.posix.dirname(p); d && d !== "."; d = path.posix.dirname(d)) targetDirs.add(d);
+  for (const rel of removed) {
+    await fs.rm(path.join(work, rel), { force: true });
+    for (let d = path.posix.dirname(rel); d && d !== "." && !targetDirs.has(d); d = path.posix.dirname(d)) {
+      try {
+        await fs.rmdir(path.join(work, d)); // 只收空目录：不空、不存在就到此为止
+      } catch {
+        break;
+      }
+    }
+  }
+  return { restored, removed };
 }
 
 // ── index bookkeeping ─────────────────────────────────────────────────────────
@@ -397,21 +804,37 @@ export async function takeCheckpoint(
   rec: PersistedSession,
   work: string,
   label: string,
-): Promise<CheckpointMeta | null> {
+): Promise<TakenCheckpoint | null> {
   if (!(await ensureRepo(work))) return null;
   try {
     return await enqueue(async () => {
-      // The shadow repo is shared by sessions/workspaces. Build each snapshot
-      // from an empty index so a credential tracked by an older snapshot cannot
-      // survive merely because it is ignored now (and so workspace A never
-      // leaks index entries into workspace B).
-      await stageSafeWorkspace(work);
-      const tree = await gitOrThrow(["write-tree"], work);
-
       const idx = await readIndex(rec.id);
+      // 这个会话还在整目录这一档：工作区太大（事先判断出来，或这次拍快照超时被掐掉）就从这张起改走只备份改过的文件。
+      // 一个会话切过去就不再回来。
+      let scopeStarted = false;
+      let tree = "";
+      if (idx.scope !== "touched") {
+        if (await workspaceIsLarge(work)) scopeStarted = true;
+        else {
+          try {
+            tree = await stageSafeWorkspace(work);
+          } catch (e) {
+            if (!isGitTimeout(e)) throw e;
+            scopeStarted = true;
+          }
+        }
+        if (scopeStarted) {
+          idx.scope = "touched";
+          idx.tracked = [];
+        }
+      }
+      const touched = idx.scope === "touched";
+      const tracked = touched ? [...(idx.tracked ?? [])] : undefined;
+      if (touched) tree = await touchedTree(work, tracked!);
+
       const last = idx.entries[idx.entries.length - 1];
       let hash: string;
-      if (last && last.tree === tree) {
+      if (last && last.tree === tree && JSON.stringify(last.paths) === JSON.stringify(tracked)) {
         // Files unchanged since the last checkpoint (chat-only run): reuse the
         // commit, still record a new entry — the conversation state differs.
         hash = last.hash;
@@ -427,13 +850,21 @@ export async function takeCheckpoint(
       await gitOrThrow(["update-ref", `refs/cp/${rec.id}/${n}`, hash], work);
       await atomicWriteFile(recordFile(rec.id, n), JSON.stringify(rec)); // M6：会话损坏时靠它恢复，写一半不行
 
-      const meta: CheckpointMeta = { n, hash, tree, at: Date.now(), label: label.slice(0, 60), msgs: rec.messages.length };
+      const meta: CheckpointMeta = {
+        n,
+        hash,
+        tree,
+        at: Date.now(),
+        label: label.slice(0, 60),
+        msgs: rec.messages.length,
+        ...(tracked ? { paths: tracked } : {}),
+      };
       idx.entries.push(meta);
       await writeIndex(rec.id, idx);
       // 保留策略【游离】跑：不 await——一次全量 gc 可能要几十秒，绝不能让用户
       // 这一轮在这儿等。失败了也只是这次没清成，下一轮再来。
       void autoSweep(work);
-      return meta;
+      return { ...meta, scope: touched ? "touched" : "full", ...(scopeStarted ? { scopeStarted: true } : {}) };
     });
   } catch (e) {
     console.error(`[checkpoints] snapshot failed: ${(e as Error).message}`);
@@ -454,9 +885,10 @@ export async function takeFilesSnapshot(
   if (!(await ensureRepo(work))) return null;
   try {
     return await enqueue(async () => {
-      await stageSafeWorkspace(work);
-      const tree = await gitOrThrow(["write-tree"], work);
       const idx = await readIndex(sessionId);
+      // 只备份改过的文件这一档：快照只含接管的文件（最新一张检查点总是含全部接管的文件，两边比得上）
+      const tracked = idx.scope === "touched" ? [...(idx.tracked ?? [])] : undefined;
+      const tree = tracked ? await touchedTree(work, tracked) : await stageSafeWorkspace(work);
       const last = idx.entries[idx.entries.length - 1];
       if (last) {
         const fresh = await gitOrThrow(["diff-tree", "-r", "--name-only", "--no-renames", "--diff-filter=AMT", last.tree, tree], work);
@@ -467,7 +899,7 @@ export async function takeFilesSnapshot(
       const hash = await gitOrThrow(args, work);
       const n = (last?.n ?? 0) + 1;
       await gitOrThrow(["update-ref", `refs/cp/${sessionId}/${n}`, hash], work);
-      const meta: CheckpointMeta = { n, hash, tree, at: Date.now(), label: label.slice(0, 60), kind: "files", run };
+      const meta: CheckpointMeta = { n, hash, tree, at: Date.now(), label: label.slice(0, 60), kind: "files", run, ...(tracked ? { paths: tracked } : {}) };
       idx.entries.push(meta);
       await writeIndex(sessionId, idx);
       return meta;
@@ -506,6 +938,17 @@ export async function rollbackTo(
   }
 
   await enqueue(async () => {
+    // 只备份改过的文件这一档：只把接管的文件变回那张检查点的样子（树里有的写回、没有的删掉），别的一概不动——
+    // 那张树里本来就只有它们，绝不能照下面整目录的做法 clean 掉其余文件
+    const fresh = await readIndex(sessionId);
+    if (fresh.scope === "touched") {
+      const pos = fresh.entries.findIndex((e) => e.n === n);
+      if (pos < 0) throw new Error(`unknown checkpoint ${n} for session ${sessionId}`);
+      const r = resolverFor(fresh, work);
+      const target = await safeTreeOf(await r.start(pos), work);
+      await applyTreePaths(work, target, await treeDiff(target, await r.now(), work));
+      return;
+    }
     // index := target tree; materialize it; then everything on disk that the
     // target doesn't know is untracked → clean removes it (gitignored survives).
     // 数据目录必须先按这个工作区排除：它们靠「被忽略」才不被 clean 删掉
@@ -576,12 +1019,14 @@ export async function checkpointDiff(sessionId: string, n: number, work: string)
   return enqueue(async () => {
     // Sanitize both sides. In particular, do not reveal contents from a legacy
     // checkpoint that predates the secret exclusion policy.
-    await gitOrThrow(["read-tree", entry.hash], work);
-    await removeSecretsFromIndex(work);
-    const safeBaseTree = await gitOrThrow(["write-tree"], work);
-    await stageSafeWorkspace(work);
-    const stat = await gitOrThrow(["diff", ...GIT_DIFF_NO_EXTERNAL, "--stat", safeBaseTree], work);
-    const patch = await gitOrThrow(["diff", ...GIT_DIFF_NO_EXTERNAL, safeBaseTree], work);
+    const fresh = await readIndex(sessionId);
+    const pos = fresh.entries.findIndex((e) => e.n === n);
+    if (pos < 0) throw new Error(`unknown checkpoint ${n} for session ${sessionId}`);
+    const r = resolverFor(fresh, work);
+    const safeBaseTree = await safeTreeOf(await r.start(pos), work);
+    const now = await r.now();
+    const stat = await gitOrThrow(["diff", ...GIT_DIFF_NO_EXTERNAL, "--stat", safeBaseTree, now], work);
+    const patch = await gitOrThrow(["diff", ...GIT_DIFF_NO_EXTERNAL, safeBaseTree, now], work);
     const body = `${stat}\n\n${patch}`;
     return body.length > DIFF_CAP ? body.slice(0, DIFF_CAP) + "\n…[diff truncated]" : body;
   });
@@ -615,17 +1060,18 @@ async function treeDiff(a: string, b: string, work: string): Promise<string[]> {
 
 // 每个文件最后一次被这个对话改动之后应有的样子（那一段结束时的快照）：从第 from 张检查点数起。
 // 调用方要在检查点串行队列里调（排在收尾补的结束快照后面）。
-async function lastEndsFrom(idx: CheckpointIndex, from: number, now: string, work: string): Promise<Map<string, string>> {
-  const nextRunTree = (k: number) => idx.entries.slice(k + 1).find((e) => e.kind !== "files")?.tree;
+async function lastEndsFrom(idx: CheckpointIndex, r: TreeResolver, from: number, now: string, work: string): Promise<Map<string, string>> {
+  const nextRunPos = (k: number) => idx.entries.findIndex((e, i) => i > k && e.kind !== "files");
   const lastEnd = new Map<string, string>();
   for (let k = from; k < idx.entries.length; k++) {
     const entry = idx.entries[k];
     // N26：轮内快照这一段算到它所在那一轮收尾为止
-    const owner = entry.kind === "files" ? idx.entries.find((e) => e.n === entry.run) : entry;
+    const ownerPos = entry.kind === "files" ? idx.entries.findIndex((e) => e.n === entry.run) : k;
     // 没有结束快照的（这个版本之前的记录、中途崩掉的一轮）：退回用下一轮的检查点、最后一个就用现在——那段时间的
     // 改动都算这个对话的，与以前不做校验一样宽，不凭空冒出一堆假的「外部改动」
-    const end = owner?.endTree ?? nextRunTree(k) ?? now;
-    for (const p of await treeDiff(entry.tree, end, work)) lastEnd.set(p, end);
+    const next = nextRunPos(k);
+    const end = (ownerPos >= 0 ? await r.end(ownerPos) : undefined) ?? (next >= 0 ? await r.start(next) : undefined) ?? now;
+    for (const p of await treeDiff(await r.start(k), end, work)) lastEnd.set(p, end);
   }
   return lastEnd;
 }
@@ -653,12 +1099,16 @@ export function recordRunEnd(sessionId: string, work: string, n: number): Promis
   if (!enabled()) return Promise.resolve();
   return enqueue(async () => {
     if (!(await ensureRepo(work))) return;
-    await stageSafeWorkspace(work);
-    const tree = await gitOrThrow(["write-tree"], work);
     const idx = await readIndex(sessionId);
     const entry = idx.entries.find((e) => e.n === n);
     if (!entry) return;
-    entry.endTree = tree;
+    if (idx.scope === "touched") {
+      const tracked = [...(idx.tracked ?? [])];
+      entry.endTree = await touchedTree(work, tracked);
+      entry.endPaths = tracked;
+    } else {
+      entry.endTree = await stageSafeWorkspace(work);
+    }
     await writeIndex(sessionId, idx);
   }).catch((e) => {
     console.error(`[checkpoints] run-end snapshot failed: ${(e as Error).message}`);
@@ -679,14 +1129,12 @@ export async function rollbackPlan(sessionId: string, n: number, work: string): 
     const pos = idx.entries.findIndex((e) => e.n === n);
     if (pos < 0) throw new Error(`unknown checkpoint ${n} for session ${sessionId}`);
     // 目标一侧照回滚的做法消毒：旧快照里的凭据回滚不会写回，也就不算它要动的文件
-    await gitOrThrow(["read-tree", idx.entries[pos].hash], work);
-    await removeSecretsFromIndex(work);
-    const target = await gitOrThrow(["write-tree"], work);
-    await stageSafeWorkspace(work);
-    const now = await gitOrThrow(["write-tree"], work);
+    const r = resolverFor(idx, work);
+    const target = await safeTreeOf(await r.start(pos), work);
+    const now = await r.now();
     const changes = await treeDiff(target, now, work);
     if (!changes.length) return { changes, external: [] };
-    const external = await externalAmong(changes, await lastEndsFrom(idx, pos, now, work), now, work);
+    const external = await externalAmong(changes, await lastEndsFrom(idx, r, pos, now, work), now, work);
     return { changes, external: changes.filter((p) => external.has(p)) };
   });
 }
@@ -748,11 +1196,11 @@ export async function sessionChangeList(sessionId: string, work: string): Promis
     const idx = await readIndex(sessionId);
     const base = idx.entries[0];
     if (!base) return null;
-    const baseTree = await safeTreeOf(base.hash, work);
-    await stageSafeWorkspace(work);
-    const now = await gitOrThrow(["write-tree"], work);
+    const r = resolverFor(idx, work);
+    const baseTree = await safeTreeOf(await r.start(0), work);
+    const now = await r.now();
     const changed = await treeDiff(baseTree, now, work);
-    const lastEnd = await lastEndsFrom(idx, 0, now, work);
+    const lastEnd = await lastEndsFrom(idx, r, 0, now, work);
     const mine = changed.filter((p) => lastEnd.has(p));
     const external = await externalAmong(mine, lastEnd, now, work);
     const stats = await treeStats(baseTree, now, work);
@@ -775,11 +1223,12 @@ export async function sessionFileDiff(sessionId: string, work: string, rel: stri
   if (!reviewablePath(rel)) throw new Error(`not a reviewable path: ${rel}`);
   if (!(await ensureRepo(work))) return null;
   return enqueue(async () => {
-    const base = (await readIndex(sessionId)).entries[0];
-    if (!base) return null;
-    const baseTree = await safeTreeOf(base.hash, work);
-    await stageSafeWorkspace(work);
-    let diff = await gitOrThrow(["diff", ...GIT_DIFF_NO_EXTERNAL, "--cached", "--unified=3", "--no-renames", baseTree, "--", `:(literal)${rel}`], work);
+    const idx = await readIndex(sessionId);
+    if (!idx.entries[0]) return null;
+    const r = resolverFor(idx, work);
+    const baseTree = await safeTreeOf(await r.start(0), work);
+    const now = await r.now();
+    let diff = await gitOrThrow(["diff", ...GIT_DIFF_NO_EXTERNAL, "--unified=3", "--no-renames", baseTree, now, "--", `:(literal)${rel}`], work);
     let truncated = false;
     if (diff.length > FILE_DIFF_CAP) {
       diff = diff.slice(0, FILE_DIFF_CAP);
@@ -798,30 +1247,9 @@ export async function restoreFromBaseline(sessionId: string, work: string, paths
   if (bad.length) throw new Error(`not reviewable paths: ${bad.join(", ")}`);
   if (!(await ensureRepo(work))) throw new Error("checkpoints are disabled");
   return enqueue(async () => {
-    const base = (await readIndex(sessionId)).entries[0];
-    if (!base) throw new Error(`no checkpoints for session ${sessionId}`);
-    await gitOrThrow(["read-tree", base.hash], work);
-    await removeSecretsFromIndex(work);
-    const inBase = new Set(nulNames(await gitOrThrow(["ls-files", "-z"], work)));
-    const restored = paths.filter((p) => inBase.has(p));
-    const removed = paths.filter((p) => !inBase.has(p));
-    // checkout-index 收的是字面路径（不是 pathspec）；分批，免得 Windows 命令行超长
-    for (let i = 0; i < restored.length; i += 100) {
-      await gitOrThrow(["checkout-index", "-f", "-u", "--", ...restored.slice(i, i + 100)], work);
-    }
-    const baseDirs = new Set<string>();
-    for (const p of inBase) for (let d = path.posix.dirname(p); d && d !== "."; d = path.posix.dirname(d)) baseDirs.add(d);
-    for (const rel of removed) {
-      await fs.rm(path.join(work, rel), { force: true });
-      for (let d = path.posix.dirname(rel); d && d !== "." && !baseDirs.has(d); d = path.posix.dirname(d)) {
-        try {
-          await fs.rmdir(path.join(work, d)); // 只收空目录：不空、不存在就到此为止
-        } catch {
-          break;
-        }
-      }
-    }
-    return { restored, removed };
+    const idx = await readIndex(sessionId);
+    if (!idx.entries[0]) throw new Error(`no checkpoints for session ${sessionId}`);
+    return applyTreePaths(work, await resolverFor(idx, work).start(0), paths);
   });
 }
 
@@ -835,22 +1263,44 @@ export async function restoreFromBaseline(sessionId: string, work: string, paths
 export async function changedPathsSince(tree: string, work: string, opts: { skipNestedRepos?: boolean } = {}): Promise<string[]> {
   try {
     if (!(await ensureRepo(work))) return [];
+    return await enqueue(async () => changedBetween(tree, await stageSafeWorkspace(work), work, opts));
+  } catch (e) {
+    // Q14：验证门禁据此判「改过没有」——git 出错时照旧当没看到改动，但必须留一句（否则门禁悄悄变弱没人知道）
+    console.error(`[checkpoints] changed-paths check failed in ${work}: ${(e as Error).message}`);
+    return [];
+  }
+}
+
+async function changedBetween(tree: string, now: string, work: string, opts: { skipNestedRepos?: boolean }): Promise<string[]> {
+  // --raw -z：每条是 ":旧模式 新模式 旧sha 新sha 状态\0路径\0"
+  const parts = (await gitOrThrow(["diff-tree", "-r", "--raw", "-z", "--no-renames", tree, now], work)).split("\0");
+  const out: string[] = [];
+  for (let k = 0; k + 1 < parts.length; k += 2) {
+    const [oldMode, newMode] = parts[k].replace(/^:/, "").split(" ");
+    const p = parts[k + 1].trim();
+    // 旧版本拍进 tree 的数据目录：现在被排除了，diff 里显示成「删掉」，不是用户的改动
+    if (!p || isDataPath(p, work)) continue;
+    if (opts.skipNestedRepos && (oldMode === "160000" || newMode === "160000")) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+// 同上，从这个会话的第 n 张检查点量起（两档都对；只备份改过的文件这一档只看得到接管的文件——Bash 的改动它本来就不知道）
+export async function changedPathsSinceCheckpoint(
+  sessionId: string,
+  n: number,
+  work: string,
+  opts: { skipNestedRepos?: boolean } = {},
+): Promise<string[]> {
+  try {
+    if (!(await ensureRepo(work))) return [];
     return await enqueue(async () => {
-      await stageSafeWorkspace(work);
-      if (!opts.skipNestedRepos) {
-        const out = await gitOrThrow(["diff-index", "--cached", "--name-only", "-z", "--no-renames", tree], work);
-        return out.split("\0").map((p) => p.trim()).filter((p) => p && !isDataPath(p, work));
-      }
-      // --raw -z：每条是 ":旧模式 新模式 旧sha 新sha 状态\0路径\0"
-      const parts = (await gitOrThrow(["diff-index", "--cached", "--raw", "-z", "--no-renames", tree], work)).split("\0");
-      const out: string[] = [];
-      for (let k = 0; k + 1 < parts.length; k += 2) {
-        const [oldMode, newMode] = parts[k].replace(/^:/, "").split(" ");
-        const p = parts[k + 1].trim();
-        // 旧版本拍进 tree 的数据目录：现在被排除了，diff 里显示成「删掉」，不是用户的改动
-        if (p && oldMode !== "160000" && newMode !== "160000" && !isDataPath(p, work)) out.push(p);
-      }
-      return out;
+      const idx = await readIndex(sessionId);
+      const pos = idx.entries.findIndex((e) => e.n === n);
+      if (pos < 0) return [];
+      const r = resolverFor(idx, work);
+      return changedBetween(await r.start(pos), await r.now(), work, opts);
     });
   } catch (e) {
     // Q14：验证门禁据此判「改过没有」——git 出错时照旧当没看到改动，但必须留一句（否则门禁悄悄变弱没人知道）
@@ -866,14 +1316,14 @@ export async function latestCheckpointDiffStat(sessionId: string, work: string):
   try {
     if (!(await ensureRepo(work))) return "";
     // 从这一轮开跑时的检查点量（N26 的轮内快照不算「这一轮开始」）
-    const last = (await readIndex(sessionId)).entries.filter((e) => e.kind !== "files").at(-1);
-    if (!last) return "";
+    if (!(await readIndex(sessionId)).entries.some((e) => e.kind !== "files")) return "";
     return await enqueue(async () => {
-      await gitOrThrow(["read-tree", last.hash], work);
-      await removeSecretsFromIndex(work);
-      const base = await gitOrThrow(["write-tree"], work);
-      await stageSafeWorkspace(work);
-      const stat = await gitOrThrow(["diff", ...GIT_DIFF_NO_EXTERNAL, "--stat", base], work);
+      const idx = await readIndex(sessionId);
+      const pos = idx.entries.findLastIndex((e) => e.kind !== "files");
+      if (pos < 0) return "";
+      const r = resolverFor(idx, work);
+      const base = await safeTreeOf(await r.start(pos), work);
+      const stat = await gitOrThrow(["diff", ...GIT_DIFF_NO_EXTERNAL, "--stat", base, await r.now()], work);
       return stat.length > DIFFSTAT_CAP ? stat.slice(0, DIFFSTAT_CAP) + "\n…[diffstat truncated]" : stat;
     });
   } catch (e) {

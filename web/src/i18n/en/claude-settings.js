@@ -169,9 +169,8 @@ export default {
   '调试 反馈 harness debug feedback': 'debug harness feedback',
   '定时 计划任务 routines': 'routines schedule',
 
-  // —— 输入栏加号菜单：回复语气（claude.ai 的 Use style）/ 会话级输出风格 ——
-  '回复语气': 'Tone',
-  '回复语气已开启': 'Tone on',
+  // —— 输入栏加号菜单：会话级输出风格（11-13 起「回复语气」并入，只留输出风格）——
+  '输出风格：{name}': 'Output style: {name}',
   '只改这个会话，下一条消息起生效': 'Only this session, from your next message',
   '跟随默认（{name}）': 'Use default ({name})',
   '输出风格没改成，请重试': 'Couldn’t change the output style. Try again.',

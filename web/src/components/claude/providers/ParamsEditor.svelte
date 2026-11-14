@@ -105,7 +105,7 @@
   <!-- 额外请求体 -->
   <div class="row col">
     <div class="lab"><div class="nm">{t('额外请求体')}<code>JSON</code></div>
-      <div class="hint">{protocol === 'openai' ? t('深合并进每个请求；OpenAI 专属字段写在 "openai": {…} 里会原样并进翻译后的请求') : t('深合并进每个请求，最后生效，可覆盖上面任何一项')}</div></div>
+      <div class="hint">{protocol === 'openai' ? t('深合并进每个请求；OpenAI 专属字段写在 "openai": {…} 里会原样并进翻译后的请求') : protocol === 'gemini' ? t('Gemini 专属字段（如 safetySettings、generationConfig 里的项）写在 "gemini": {…} 里，原样深合并进翻译后的请求') : t('深合并进每个请求，最后生效，可覆盖上面任何一项')}</div></div>
     <textarea class="json" class:err={!!extraErr} rows="4" spellcheck="false" placeholder={'{ "metadata": { "user_id": "bridge" } }'}
       value={params.extraBody || ''} oninput={(e) => (params.extraBody = e.currentTarget.value)}></textarea>
     {#if extraErr}<div class="err-t">{extraErr}</div>{/if}

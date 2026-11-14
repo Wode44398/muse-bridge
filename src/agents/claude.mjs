@@ -15,8 +15,8 @@ import {
 } from '../runtime/gen.mjs';
 import { busPublish } from '../runtime/bus.mjs';
 import { beginInflight, endInflight } from '../runtime/inflight.mjs';
-import { applyRateLimit, applyContext, applySdkUsage, classifyError, limitNotice, statusState } from '../runtime/status.mjs';
-import { normalizeContextUsage, applyContextUsage, compactWindowFor, customCompactWindow, noteNativeWindow, normalizeEffortLevel, applyEffort, applyCommands, getCommands } from '../runtime/ctx-usage.mjs';
+import { applyRateLimit, applyContext, applyLiveContext, getContext, applySdkUsage, classifyError, limitNotice, statusState } from '../runtime/status.mjs';
+import { normalizeContextUsage, applyContextUsage, getContextUsage, nativeWindow, compactWindowFor, customCompactWindow, noteNativeWindow,normalizeEffortLevel, applyEffort, applyCommands, getCommands } from '../runtime/ctx-usage.mjs';
 import { setSuggestion, clearSuggestion, normalizeSuggestion } from '../runtime/suggestions.mjs';
 // SDK usage 控制接口（额度窗口/套餐）的节流时钟：进程级，10 分钟一次——那接口背后是
 // api/oauth/usage，直连实测很容易 429。
@@ -562,13 +562,6 @@ export function makeSandboxPreToolUse(ctx) {
   };
 }
 
-const STYLE_NUDGE = {
-  learning: '\n\n[回复风格 · Learning] 像耐心的老师：循序渐进地解释，多用类比和小例子，引导用户理解原理，而非只丢答案。',
-  concise: '\n\n[回复风格 · Concise] 极简作答：直击要点，能一句不两句，省略寒暄、铺垫和冗余解释。',
-  explanatory: '\n\n[回复风格 · Explanatory] 详尽解释：讲清原理、来龙去脉、背景与权衡，必要时展开例子。',
-  formal: '\n\n[回复风格 · Formal] 正式专业的书面语：严谨克制，避免口语、俚语和表情。',
-};
-
 const RESEARCH_NUDGE = '\n\n[深度研究模式] 本轮是一次深度研究任务，务必：① 先把问题拆成若干子问题/检索角度，简述研究计划；② 用 WebSearch / WebFetch 多轮联网检索，每个角度查多个独立来源、交叉核查，不要只凭记忆作答；③ 角度较多时用 Task 工具派多个子 agent 并行调研不同方向，再汇总；④ 最后给出结构化报告：分节小标题 + 关键结论，并就近为重要主张标注来源链接（markdown [标题](url)）。宁可多搜几轮、多读几个来源，也不要急于下结论。';
 
 // 原生图片块。此前图片只以【绝对路径】出现在提示词里，靠一句「图片也用 Read」推着模型
@@ -653,6 +646,13 @@ export function makeTurnInput(text, blocks, deferFirst = false) {
       if (released) return false;
       queue.push(userMsg(t, b, uuid, priority));
       if (wake) wake();
+      return true;
+    },
+    // 撤回插话的第一道：还排在这里、没写进 CLI 的 stdin 就直接摘掉（CLI 根本没见过它）。
+    withdraw(uuid) {
+      const i = queue.findIndex((m) => m.uuid === uuid);
+      if (i < 0) return false;
+      queue.splice(i, 1);
       return true;
     },
   };
@@ -795,7 +795,7 @@ function evictWarm(keep) {
   }
 }
 
-export async function runClaudeChat(req, res, { message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, origin, autoRetry, limitReplay, limitResume, restartResume = 0, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy, shape }) {
+export async function runClaudeChat(req, res, { message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, origin, autoRetry, limitReplay, limitResume, restartResume = 0, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy, shape }) {
   ctx = ctx || { kind: 'admin', sandbox: false, cwd: VAULT, configDir: null, key: 'admin' };
   const snap = ctx.snap || null;   // 聊天快照轮：专属 MCP/提示词/更紧的工具面
   // 新会话预热（见 SPARE_MS）：没有消息、没有 SSE 接收方，建好 query 停在第一轮之前等人接管。
@@ -968,8 +968,6 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   const effModel = custom ? custom.model.id : modelFor(model);   // 自定义模型：直接用服务里的真实型号；成员没开放 1M 时用裸 id
 
   // ---- 启动参数（一律在这里算好：既喂给 query，也拼成 warmSig 判断停放的 CLI 能不能接着用）----
-  // styleText（用户可控文本）拼在沙箱 nudge 之前——让沙箱铁律保持"最后说话"，
-  // 降低自定义风格对软约束的对抗力（硬边界在 canUseTool，不受提示词影响）。
   // 子 agent 调用策略（设置 › Claude › 对话 › 子 agent 调用策略，dispatch-policy.mjs）：总开关关着 = 完全走 Claude Code 原生——
   // 不拼调度提示、不挂上游代理路由、start_session 不解析 auto:<档>。开着时按范围：workflow = 动态工作流开着（设置项或 Ultracode）的轮里
   // Workflow 脚本的 agent()；subagent = Agent 工具（不要求动态工作流）；session = start_session 的 auto:<档>（会话那段补一句）。
@@ -1005,8 +1003,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   const appendText = projectShape
     // 协调者的工具只剩看、问、派活：浏览器 / 终端 / 手机 / 设备这些工具的说明一概不拼（说了它也调不到），
     // 子 agent 调度说明也不拼——讨论串和 worker 的模型、档位按项目设置（方案 D5）
-    ? (custom ? customIdentityNudge(custom) : identityNudge(model)) + (STYLE_NUDGE[style] || (styleText ? '\n\n[回复风格 · 自定义] ' + styleText : '')) + (ctx.sandbox ? USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) : hostNudge(ctx)) + sessionsPart + projectNudge({ askFirst: projPolicy === 'ask', context: projectContextFor(ctx, ownSid) }) + (pOpts?.append.length ? '\n\n' + pOpts.append.join('\n\n') : '') + (family && typeof family.nudge === 'string' ? family.nudge : '') + debugText
-    : (custom ? customIdentityNudge(custom) : identityNudge(model)) + (STYLE_NUDGE[style] || (styleText ? '\n\n[回复风格 · 自定义] ' + styleText : '')) + (snap ? SNAP_NUDGE : ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) + mediaNudge(ctx)) : (hostNudge(ctx) + mediaNudge(ctx) + HOST_TOOLS_NUDGE + (phoneFsOn ? HOST_PHONE_PULL_NUDGE : '') + HOST_PROC_NUDGE)) + (browserOn ? (snap ? BROWSER_SNAP_NUDGE : BROWSER_NUDGE) : '') + (chromeOn ? chromeNudge(chromeSplit ? CHROME_MCP_NAME : 'claude-in-chrome') : '') + (termOn ? TERMINAL_NUDGE : '') + (wsToolsOn ? WORKSPACE_NUDGE : '') + (bridgeOn ? BRIDGE_NUDGE : '') + (deviceOn ? deviceNudge() : '') + deliverNudge(!snap && !!mediaNudge(ctx)) + (phoneFsOn ? PHONE_NUDGE : '') + (phoneControlOn ? PHONE_CONTROL_NUDGE + playbookSummary() + playbookForMention(message) : '') + noPhoneNudge + (research ? RESEARCH_NUDGE : '') + sessionsPart + (prOn ? prNudge(ctx, ownSid) : '') + plug.prompt + (pOpts?.append.length ? '\n\n' + pOpts.append.join('\n\n') : '') + dispatchText + (family && typeof family.nudge === 'string' ? family.nudge : '') + debugText;
+    ? (custom ? customIdentityNudge(custom) : identityNudge(model)) + (ctx.sandbox ? USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) : hostNudge(ctx)) + sessionsPart + projectNudge({ askFirst: projPolicy === 'ask', context: projectContextFor(ctx, ownSid) }) + (pOpts?.append.length ? '\n\n' + pOpts.append.join('\n\n') : '') + (family && typeof family.nudge === 'string' ? family.nudge : '') + debugText
+    : (custom ? customIdentityNudge(custom) : identityNudge(model)) + (snap ? SNAP_NUDGE : ctx.sandbox ? (USER_NUDGE + (ctx.shell ? '' : REGULAR_NUDGE) + mediaNudge(ctx)) : (hostNudge(ctx) + mediaNudge(ctx) + HOST_TOOLS_NUDGE + (phoneFsOn ? HOST_PHONE_PULL_NUDGE : '') + HOST_PROC_NUDGE)) + (browserOn ? (snap ? BROWSER_SNAP_NUDGE : BROWSER_NUDGE) : '') + (chromeOn ? chromeNudge(chromeSplit ? CHROME_MCP_NAME : 'claude-in-chrome') : '') + (termOn ? TERMINAL_NUDGE : '') + (wsToolsOn ? WORKSPACE_NUDGE : '') + (bridgeOn ? BRIDGE_NUDGE : '') + (deviceOn ? deviceNudge() : '') + deliverNudge(!snap && !!mediaNudge(ctx)) + (phoneFsOn ? PHONE_NUDGE : '') + (phoneControlOn ? PHONE_CONTROL_NUDGE + playbookSummary() + playbookForMention(message) : '') + noPhoneNudge + (research ? RESEARCH_NUDGE : '') + sessionsPart + (prOn ? prNudge(ctx, ownSid) : '') + plug.prompt + (pOpts?.append.length ? '\n\n' + pOpts.append.join('\n\n') : '') + dispatchText + (family && typeof family.nudge === 'string' ? family.nudge : '') + debugText;
   // 号池智能路由（可选，默认关）：激活号已知用尽就先换号再开跑——必须在取 token / 算 warmSig 之前，
   // 换了号 token 变了，停放的旧 CLI 自然判 options changed 冷起。
   // 预热不换号：真消息来时若要换号，token 变了 warmSig 自然不一致、关掉冷起。
@@ -1475,6 +1473,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   let hookLevel = null;                              // ultracode 轮 Stop hook 回报的档位，等 settleEffort 定局
   let turnOut = 0, turnThink = 0; // running output / thinking token totals for the live thinking-status bar
   let lastMainUsage = null; // usage of the MAIN conversation's last API call (for real context fill)
+  let liveCtxUsed = 0;      // 上次发出的轮中实时填充（去重）
   // 按人记账的计价表：result 的 total_cost_usd 是 CLI 进程（续聊还含恢复的整段会话）的累计值，按「上一次」取差入账
   //（runtime/usage-ledger.mjs）。续聊时开跑前换成从 transcript 读出的起点，见下面 query 之前。
   let costMeter = makeCostMeter(0);
@@ -1553,6 +1552,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   const awaitingUser = new Set();
   // 插话进来的消息 uuid（见 gen.steer）——command_lifecycle 帧据此转成前端的 steer_state。
   const steerUuids = new Set();
+  // 用户本人插的话：uuid → { message, attachments, files, read }。撤回时把原文与附件路径交还给输入栏；
+  // CLI 报 started（已读进这一轮）后 read=true，从此不可撤回。跨会话 / PR 自动修复的插话不登记。
+  const steerItems = new Map();
   let interimResult = null;
   let runModel = model;       // 这个 CLI 进程眼下的模型（接力时用户换了模型 → setModel）
   let runPermMode = turnPerm.mode;   // 这个 CLI 进程眼下的权限模式（init / status 帧实况、会话中切换）
@@ -2108,9 +2110,44 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       if (sorigin) setTurnOrigin(sorigin, smsg);   // 插话也是一条用户消息：「这条消息发自」换成它的
       // atts：与历史重开同一套抽取与出口（runtime/client-atts.mjs），插话气泡据此画缩略图
       const atts = splitAttachments(next.prompt).attachments.map((a) => toClientAtt(a, ctx));
-      send({ type: 'steer', uuid, text: smsg, files: (satts || []).map((p) => path.basename(p)), atts, at: Date.now() });
+      if (sorigin) steerItems.set(uuid, { message: smsg || '', attachments: (satts || []).slice(), files: (satts || []).map((p) => path.basename(p)), read: false });
+      send({ type: 'steer', uuid, text: smsg, files: (satts || []).map((p) => path.basename(p)), atts, at: Date.now(), ...(sorigin ? { retractable: true } : {}) });
       console.log(`[claude] steer — message fed into the running turn at priority next (${uuid.slice(0, 8)})`);
       return uuid;
+    };
+
+    // 撤回插话：Claude 真读到之前它是「虚」的——还在 bridge 的发送队列里就直接摘掉；已写进 CLI、
+    // 还在 CLI 队列里等（command_lifecycle 只报过 queued）就经控制通道 cancel_async_message 撤回，
+    // CLI 回 cancelled:false = 已经出队读进这一轮了（判定在 CLI 那边原子完成，不会撤一半）。
+    // 成功：发 steer_state withdrawn（进重放缓冲，各设备的气泡一起消失），返回原文与附件交还输入栏。
+    let withdrawing = null;
+    const unsteer = async (uuid) => {
+      const it = steerItems.get(uuid);
+      if (!it) return { ok: false, reason: 'unknown' };
+      if (it.read) return { ok: false, reason: 'read' };
+      while (withdrawing) await withdrawing.catch(() => {});
+      if (!steerItems.has(uuid) || it.read) return { ok: false, reason: it.read ? 'read' : 'unknown' };
+      // 这一轮已经答完、读循环只在等它开的下一轮（interimResult）：CLI 马上就拿它开轮，撤回后
+      // 读循环会空等一个不会来的 result——这时按「已读」处理，不撤。
+      if (interimResult && awaitingUser.size <= 1) return { ok: false, reason: 'read' };
+      it.pending = true;
+      let done = turnInput.withdraw(uuid);
+      if (!done) {
+        const p = (async () => {
+          try { return (await Promise.race([q.cancelAsyncMessage(uuid), new Promise((r) => setTimeout(() => r(false), 5000))])) === true; }
+          catch (e) { console.log('[claude] cancelAsyncMessage failed:', e && e.message); return false; }
+        })();
+        withdrawing = p;
+        try { done = await p; } finally { withdrawing = null; }
+      }
+      it.pending = false;
+      if (!done) { it.read = true; return { ok: false, reason: 'read' }; }
+      steerItems.delete(uuid);
+      steerUuids.delete(uuid);
+      awaitingUser.delete(uuid);
+      send({ type: 'steer_state', uuid, state: 'withdrawn' });
+      console.log(`[claude] steer withdrawn before Claude read it (${uuid.slice(0, 8)})`);
+      return { ok: true, message: it.message, attachments: it.attachments, files: it.files };
     };
 
     // 挂在 gen 上的控制口（/api/stop、任务面板 ⏹、同会话新消息都按会话找到当前 gen 来调）。
@@ -2121,6 +2158,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       g.hardStop = hardStop;
       g.handoff = handoff;
       g.steer = steer;
+      g.unsteer = unsteer;
     }
     armGen(gen);
 
@@ -2643,7 +2681,11 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       } else if (msg.type === 'command_lifecycle') {
         // 插话消息的生命周期（queued → started → completed / cancelled）：started = CLI 已把它读进这一轮。
         if (msg.command_uuid && steerUuids.has(msg.command_uuid) && msg.state !== 'queued') {
-          send({ type: 'steer_state', uuid: msg.command_uuid, state: msg.state });
+          const si = steerItems.get(msg.command_uuid);
+          // 正在撤回的那条报 cancelled：是我们自己撤的，等 unsteer 发 withdrawn，不另发
+          const ours = !!(si && si.pending && msg.state === 'cancelled');
+          if (si && !ours) { if (msg.state === 'cancelled') steerItems.delete(msg.command_uuid); else si.read = true; }
+          if (!ours) send({ type: 'steer_state', uuid: msg.command_uuid, state: msg.state });
         } else if (peerAware && msg.state === 'started' && msg.command_uuid && !awaitingUser.has(msg.command_uuid) && !peerSeen.has(msg.command_uuid)) {
           echoPeer(msg.command_uuid);   // 可能是跨会话消息插进来了（session-peers.mjs）
         }
@@ -2763,7 +2805,21 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           // them. This replaces the result's top-level usage, which is CUMULATIVE across every
           // API round-trip in the turn (a multi-tool turn sums each round's cache read, so a
           // 200k window reported ~1.6M and pinned the bar at a bogus 100%).
-          if (msg.message && msg.message.usage) lastMainUsage = msg.message.usage;
+          if (msg.message && msg.message.usage) {
+            lastMainUsage = msg.message.usage;
+            // 轮中实时填充（status.mjs applyLiveContext）：窗口取本会话上一轮的真值 → 用量分布的 max →
+            // 自定义模型配置 → 按型号估；轮末 result 再用真窗口覆盖。同一次 API 调用拆成多帧时 used 不变，不重发。
+            const lsid = msg.session_id || '';
+            if (lsid) {
+              const total = getContext(ctx.key, lsid)?.total || getContextUsage(ctx.key, lsid)?.max
+                || (custom ? Number(custom.model.contextWindow) || 0 : 0) || nativeWindow(msg.message.model || modelFor(runModel));
+              const live = applyLiveContext(lsid, lastMainUsage, total, ctx.key);
+              if (live && live.used !== liveCtxUsed) {
+                liveCtxUsed = live.used;
+                send({ type: 'context', used: live.used, total: live.total, pct: live.pct, sessionId: live.sessionId, at: live.at });
+              }
+            }
+          }
           if (msg.error === 'authentication_failed') authFailed = true;
           if (msg.error === 'rate_limit') {
             const parts = msg.message && Array.isArray(msg.message.content) ? msg.message.content : [];
@@ -2866,7 +2922,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
         }
         const ctxInfo = applyContext(msg.modelUsage, msg.session_id, lastMainUsage || msg.usage, ctx.key);
         if (ctxInfo) {
-          send({ type: 'context', used: ctxInfo.used, total: ctxInfo.total, pct: ctxInfo.pct, sessionId: ctxInfo.sessionId });
+          send({ type: 'context', used: ctxInfo.used, total: ctxInfo.total, pct: ctxInfo.pct, sessionId: ctxInfo.sessionId, at: ctxInfo.at });
         }
         send({ type: 'limits', limits: statusState.limits, updatedAt: statusState.updatedAt, noFiveHour: statusState.noFiveHour });
         if (softStopping) {

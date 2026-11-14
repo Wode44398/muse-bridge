@@ -19,14 +19,16 @@
   import { tooltip } from '../kit/tooltip.js';
   import CommandPalette from './CommandPalette.svelte';
   import { t } from '../../lib/i18n.js';
-  import { ovUrl } from '../../lib/overlay.svelte.js';   // Claude 入口的小人是原版资源；其余入口图标是自有素材
+  // Claude 入口的小人是原版资源（web/src/visuals/）；其余入口图标是自有素材
+  import mascotStand from '../../visuals/assets/mascot/claude-小人-正面站立.svg';
+  import mascotFlag from '../../visuals/assets/mascot/claude-小人-举旗.svg';
 
   const BASE = import.meta.env.BASE_URL;
 
   // —— 入口（与手机 Home 同一套语义：小人=任务状态指示器、ChatGPT 按权限隐藏）——
-  const claudeMascot = $derived(ui.taskDone ? '举旗' : '正面站立');   // i18n-ignore 素材文件名
+  const claudeMascot = $derived(ui.taskDone ? mascotFlag : mascotStand);
   const AGENTS = $derived([
-    { key: 'claude', label: 'Claude', img: ovUrl(`assets/mascot/claude-小人-${claudeMascot}.svg`) },   // i18n-ignore 素材路径
+    { key: 'claude', label: 'Claude', img: claudeMascot },
     { key: 'chatgpt', label: 'ChatGPT', img: `${BASE}assets/icons/chatgpt-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
     { key: 'harness', label: 'dimensio', img: `${BASE}assets/icons/dimensio-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
     { key: 'studio', label: 'Media Studio', img: `${BASE}assets/icons/studio-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },

@@ -7,8 +7,8 @@
 
 ## 资源位置
 
-- 内置壁纸（多洛米蒂）的原图与深度图是原版资源：私有 overlay 的 `web/wallpapers/`（`dolomites.jpg`、`depth/dolomites.png`），
-  构建时随其它原版资源打进 `/app/_ov/`，前端经 `ovUrl()` 取。仓库里不放壁纸素材。
+- 内置壁纸（多洛米蒂）的原图与深度图是原版资源：`web/src/visuals/wallpapers/`（`dolomites.jpg`、`depth/dolomites.png`），
+  `web/src/lib/wallpaper.svelte.js` 直接 import，构建时由 vite 收进产物。
 
 ## 前端接线
 
@@ -25,5 +25,5 @@
 <DepthAnything-venv>\python.exe scripts\spatial-depth\gen_bridge_depth.py
 ```
 
-加新壁纸：把源图与生成的深度图放进私有 overlay 的 `web/wallpapers/`，在 `gen_bridge_depth.py` 的 `SRC` 和
+加新壁纸：把源图与生成的深度图放进 `web/src/visuals/wallpapers/`，在 `gen_bridge_depth.py` 的 `SRC` 和
 `wallpaper.svelte.js` 的 `SPATIAL_IDS` 各加一条，重跑本脚本。

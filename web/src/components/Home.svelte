@@ -16,7 +16,9 @@
   import FigmaGlass from './FigmaGlass.svelte';
   import { homeGlass } from '../lib/figmaHomeGlass.svelte.js';
   import { t } from '../lib/i18n.js';
-  import { ovUrl } from '../lib/overlay.svelte.js';   // Claude 入口的小人是原版资源；其余入口图标是自有素材
+  // Claude 入口的小人是原版资源（web/src/visuals/）；其余入口图标是自有素材
+  import mascotStand from '../visuals/assets/mascot/claude-小人-正面站立.svg';
+  import mascotFlag from '../visuals/assets/mascot/claude-小人-举旗.svg';
   import PluginHomeCards from './PluginHomeCards.svelte';   // 插件的主页卡片（ctx.ui.homeCard）：贴在底部的一排玻璃卡
   import { pluginUi } from '../lib/pluginUi.svelte.js';
 
@@ -24,9 +26,9 @@
 
   // claude 入口小人是状态指示器（这套素材当初就是为此预留的）：
   //   正面站立 = 默认；举旗 = 有任务完成还没看（ui.taskDone，回 claude 页清除）。
-  const claudeMascot = $derived(ui.taskDone ? '举旗' : '正面站立');   // i18n-ignore 素材文件名
+  const claudeMascot = $derived(ui.taskDone ? mascotFlag : mascotStand);
   const ENTRIES = $derived([
-    { key: 'claude',      label: 'Claude',      img: ovUrl(`assets/mascot/claude-小人-${claudeMascot}.svg`) },   // i18n-ignore 素材路径
+    { key: 'claude',      label: 'Claude',      img: claudeMascot },
     { key: 'chatgpt',     label: 'ChatGPT',     img: `${BASE}assets/icons/chatgpt-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
     { key: 'harness', label: 'dimensio', img: `${BASE}assets/icons/dimensio-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
     { key: 'studio',      label: 'Media Studio', img: `${BASE}assets/icons/studio-${ui.glassMode === 'B' ? 'dark' : 'light'}.svg` },
@@ -319,7 +321,7 @@
 
   <LoginCard />
 
-  <div class="grid" class:fade={ui.glassMode === 'B'} class:revealed={ui.revealIcons} class:lift bind:this={gridEl}>
+  <div class="grid" class:fade={ui.glassMode === 'B'} class:revealed={ui.revealIcons} class:lift class:trio={ENTRIES.length === 3} bind:this={gridEl}>
     {#each ENTRIES as e, i (e.key)}
       <button class="entry" data-entry={e.key} class:dnd-on={drag.overKey === 'home:' + e.key} style:--i={i} use:entryDrop={e} onclick={(ev) => openEntry(e, ev)} aria-label={e.label}>
         <!-- use:pressable —— 按下 90ms 干脆压下、松手弹簧回弹（见 lib/motion.js）。
@@ -369,7 +371,7 @@
     text-shadow: 0 1px 8px rgba(0,0,0,.4);
   }
 
-  /* 中央入口：四个时 2×2；普通账号隐藏 ChatGPT 后，第三个自动居中。 */
+  /* 中央入口：四个时 2×2（宽屏一行）；三个时一律一行（见下方 .trio）。 */
   .grid {
     position: fixed; left: 0; right: 0; top: 50%; transform: translateY(-50%); z-index: 5;
     display: grid; grid-template-columns: repeat(2, auto); justify-content: center; gap: 26px 22px; padding: 0 24px;
@@ -380,12 +382,20 @@
      暗主题(flux)logo 直接显示。触发见 Home $effect：明亮主页露出后才浮现，确保可见。 */
   /* 折叠屏展开 / 平板（≥700）：2×2 的方块簇在这么宽的屏上缩成中间一小坨，摊成一行更像
      大屏启动器。奇数个时的「末项跨列居中」规则要一并撤——一行摆得下就不需要它了。 */
+  /* 注意顺序：基础规则必须写在媒体查询【前面】——同优先级后写的赢，之前写反了，宽屏上
+     「末项跨列」撤不掉，三个图标时第三个被挤到第二行、还因空着第四列而偏心。 */
+  .entry { display: flex; flex-direction: column; align-items: center; gap: 11px; }
+  .entry:last-child:nth-child(odd) { grid-column: 1 / -1; justify-self: center; }
   @media (min-width: 700px) {
     .grid { grid-template-columns: repeat(4, auto); gap: 0 30px; }
     .entry:last-child:nth-child(odd) { grid-column: auto; justify-self: auto; }
   }
-  .entry { display: flex; flex-direction: column; align-items: center; gap: 11px; }
-  .entry:last-child:nth-child(odd) { grid-column: 1 / -1; justify-self: center; }
+  /* 恰好三个：任何宽度都摆成一行（2+1 金字塔在手机上像少了一块）。窄屏摆不下 3×124 时
+     方块按屏宽等比缩小，logo 跟着缩，间距也收一点。 */
+  .grid.trio { grid-template-columns: repeat(3, auto); gap: 0 var(--trio-gap); padding: 0 20px;
+               --trio-gap: clamp(14px, 4vw, 30px);
+               --tile: min(124px, calc((100vw - 40px - 2 * var(--trio-gap)) / 3)); }
+  .grid.trio .entry:last-child:nth-child(odd) { grid-column: auto; justify-self: auto; }
   .grid.fade .ico {
     opacity: 0;
     transition: opacity var(--mo-base) var(--ea-fade);
@@ -394,7 +404,7 @@
   .grid.fade.revealed .ico { opacity: 1; }
   /* transform 由 use:pressable 经 --press-s 驱动（按下 CSS 过渡、松手 JS 弹簧），
      故此处不再写 transition——写了会跟弹簧每帧打架，回弹变成一截一截的。 */
-  .tile { width: 124px; height: 124px; display: flex; align-items: center; justify-content: center;
+  .tile { width: var(--tile, 124px); height: var(--tile, 124px); display: flex; align-items: center; justify-content: center;
           transform: scale(var(--press-s, 1)); }
   /* 拎着文件悬停在入口上：方块微微鼓起 + 描一圈，说明「丢这儿就发给它」 */
   .entry.dnd-on .tile { transform: scale(1.06); transition: transform .14s ease; }
@@ -404,5 +414,5 @@
   /* 方案 A 极高透光毛玻璃：玻璃边框 + 高光（blur 由 liquidGlass 注入，很透，流体能透过来） */
   .tile.frost { border-radius: 30px; border: 1px solid rgba(255,255,255,.22);
     box-shadow: inset 0 1px 1px rgba(255,255,255,.32), inset 0 -2px 3px rgba(0,0,0,.12), 0 6px 18px rgba(0,0,0,.18); }
-  .ico { width: 62px; height: 62px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,.35)); }
+  .ico { width: calc(var(--tile, 124px) / 2); height: calc(var(--tile, 124px) / 2); object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,.35)); }
 </style>

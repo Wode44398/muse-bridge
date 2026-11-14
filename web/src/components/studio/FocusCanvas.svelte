@@ -3,7 +3,7 @@
   // 下面在作品栏收起时附上这一类最近的作品（作品栏开着就不重复摆）。什么都没有时是宋体展示句 + 线稿。
   // 版式同图像页：提示词气泡 → 作品落在纸上（圆角 12、细线、浮起投影）→ 一行 mono 元信息 + 操作。配音的正文本身是稿子，留在卡里。
   import { t, tc } from '../../lib/i18n.js';
-  import { openPreview } from '../../lib/preview.svelte.js';
+  import { openPreview, vertexAssetItem as vxItem } from '../../lib/preview.svelte.js';
   import { dragOut, canDragOut } from '../../lib/dragOut.js';
   import { studio, mediaSrc, assetDragSrc, openAsset, retryJob, currentModel, valuesOf } from '../../modules/studio/media.svelte.js';
   import { assetDrag } from '../../modules/studio/assetDrag.js';
@@ -27,7 +27,8 @@
   // 长提示词在气泡里先收成 6 行，点一下展开
   let open = $state(false);
   $effect(() => { asset?.id; open = false; });
-  function openVideo(a) { openPreview([{ origin: 'vertex', id: a.id, name: a.prompt || tc('名词', '生成视频'), kind: 'video' }], 0); }
+  // 提示词单独传（信息面板显示），下载名由查看器按「提示词前 40 字 + 存盘扩展名」生成
+  function openVideo(a) { openPreview([vxItem(a, a.prompt, tc('名词', '生成视频'), 'video')], 0); }
   const seedOf = (id) => { let h = 7; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) | 0; return h; };
   // 视频进行中的占位框按目标比例画
   const ratio = $derived.by(() => {

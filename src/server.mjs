@@ -57,7 +57,8 @@ import { registerMediaFileRoutes } from './routes/media-file.mjs';
 import { registerGeminiRetiredRoutes } from './routes/gemini-retired.mjs';
 import { registerToolImageRoutes } from './routes/tool-image.mjs';
 import { registerStaticRoutes } from './routes/static.mjs';
-import { registerOverlayWeb, registerOverlayRoutes } from './runtime/overlay-web.mjs';
+import { registerHtmlShell } from './runtime/html-shell.mjs';
+import { registerOverlayRoutes } from './runtime/overlay-hooks.mjs';
 import { registerFileRoutes } from './routes/files.mjs';
 import { resolveShareToken } from './routes/share-space.mjs';
 import { resolveSnapToken } from './routes/chat-snapshot.mjs';
@@ -259,7 +260,7 @@ if (NO_AUTH) {
 
 // Route registration order doesn't affect dispatch (paths are exact, not
 // prefix), but logical grouping helps grep.
-registerOverlayWeb(router);                                   // 私有 overlay 网页层：/app/_ov/*、/app/* 补缺、HTML 壳注入（必须在静态路由之前）
+registerHtmlShell(router);                                    // HTML 壳注入发行版声明（必须在静态路由之前）
 registerStaticRoutes(router);                                 // /, /index.html, /debug.html
 registerAuthRoutes(router, { adminCredential, adminGen, identify, getCookie, bearerToken, authCookie, clearAuthCookie, userCookie, clearUserCookie }); // /api/auth, /api/login, /api/register, /api/logout
 registerPairRoutes(router, { identify, adminGen, authCookie, userCookie, lanIPs, adminCredential, getCookie, bearerToken, clearAuthCookie, clearUserCookie }); // /api/pair/{new,wait,scan,approve,reject,claim} 扫码登录 + /api/pair/connect*、/api/pair/redeem 扫码配对（S1-2；票绑出示方那次登录、确认后替换原登录）
@@ -320,7 +321,7 @@ kernel.provide('runtime', Object.freeze({ production: PRODUCTION, prodInstance: 
 kernel.provide('httpServer', server);
 await bootPlugins({ register: registerAll });
 
-// 私有 overlay 的接口（钩子 registerRoutes，没有 overlay / 没有这个钩子就什么都不挂）。见 runtime/overlay-web.mjs。
+// 私有 overlay 的接口（钩子 registerRoutes，没有 overlay / 没有这个钩子就什么都不挂）。见 runtime/overlay-hooks.mjs。
 await registerOverlayRoutes(router, { authOk, identify });
 
 // 'ready'：路由都挂完、开始监听之前（各插件的后台任务、agent 扩展的预热在这里起）。

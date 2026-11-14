@@ -307,13 +307,27 @@ export function applyContext(modelUsage, sessionId, turnUsage, key = 'admin') {
   // conversation alone (verified: with 3 file-reading subagents, top-level=42k while
   // modelUsage summed 350k). Note the field casing differs: modelUsage is camelCase
   // (contextWindow), the raw turn usage is snake_case (input_tokens, …).
+  return recordFill(key, sessionId, turnUsage, total, true);
+}
+
+// 轮中实时填充（2026-11-13）：以前只有 result 帧才算填充，新会话第一轮跑着的时候右栏「上下文」卡和
+// 用量圆环一直是空的（窗口大小只在 result 的 modelUsage 里）。主线程每帧 assistant 的 usage 就是当下
+// 的填充，窗口由调用方给（本会话上一轮的真值 → 用量分布的 max → 模型原生窗口估计）；轮末 applyContext
+// 再用 result 的真窗口覆盖。只进内存与 per-key 槽，不每帧落盘（轮末那次会落）。
+export function applyLiveContext(sessionId, turnUsage, total, key = 'admin') {
+  if (!sessionId || !(total > 0)) return null;
+  return recordFill(key, sessionId, turnUsage, total, false);
+}
+
+function recordFill(key, sessionId, turnUsage, total, save) {
   const u = turnUsage || {};
   const used = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
   if (!used) return null;
   // Context fill is per-conversation, so tag it with its session. The client only
   // shows it for the conversation actually on screen (a new/other chat has its own
   // fill), unlike the account-wide rate limits which apply everywhere.
-  const ctx = { used, total, pct: Math.max(0, Math.min(100, Math.round(used / total * 100))), sessionId: sessionId || null };
+  // at：前端拿它和 getContextUsage 分布的 at 比新旧——轮中实时填充比上一轮的分布新时用填充。
+  const ctx = { used, total, pct: Math.max(0, Math.min(100, Math.round(used / total * 100))), sessionId: sessionId || null, at: Date.now() };
   contexts.set(key, ctx);
   // 多对话并发：并行轮各自收尾会互相覆盖 per-key 槽——再按会话记一份（仅内存，
   // 有界），/api/status?session= 能拿到「正看的这个会话」自己的填充。
@@ -322,8 +336,7 @@ export function applyContext(modelUsage, sessionId, turnUsage, key = 'admin') {
     sessionContexts.set(key + '|' + sessionId, ctx);
     while (sessionContexts.size > 200) sessionContexts.delete(sessionContexts.keys().next().value);
   }
-  slot().updatedAt = Date.now();
-  persistStatus();
+  if (save) { slot().updatedAt = Date.now(); persistStatus(); }
   return ctx;
 }
 

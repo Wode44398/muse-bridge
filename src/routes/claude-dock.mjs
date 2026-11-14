@@ -378,10 +378,9 @@ export function registerClaudeDockRoutes(router, { identify }) {
       term = { svc, t };
     } catch (e) { return fail(res, e); }
     writeSseHeaders(res);
-    sseWrite(res, { type: 'hello', cols: term.t.cols, rows: term.t.rows, exited: term.t.exited });
-    const snap = term.svc.snapshotTerm(term.t);
-    if (snap) sseWrite(res, { type: 'snapshot', d: snap });
-    term.svc.subscribeTerm(term.t, res);
+    sseWrite(res, { type: 'hello', cols: term.t.cols, rows: term.t.rows, exited: term.t.exited, ...(term.svc.PTY_COMPAT ? { pty: term.svc.PTY_COMPAT } : {}) });
+    // 快照（屏幕镜像按 PTY 当前行列序列化）+ 实时输出，衔接处不丢不重；面板按 hello 的行列重放快照
+    term.svc.attachTerm(term.t, res);
     const hb = startHeartbeat(res);
     req.on('close', () => clearInterval(hb));
   });

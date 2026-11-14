@@ -96,6 +96,12 @@ export const STORAGE_SHIM = '<script>(function(){function m(){var d=Object.creat
 // 插在页面样式之前：页面自己写了 ::-webkit-scrollbar / scrollbar-color 的照它的来。与前端 HtmlView 的 SB_SHIM 同一段。
 export const SCROLLBAR_SHIM = "<style>@media (pointer:fine){::-webkit-scrollbar{width:12px;height:12px;background:transparent}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}::-webkit-scrollbar-button{display:none}body::-webkit-scrollbar-track,body::-webkit-scrollbar-corner{background:var(--bsb-bg,transparent)}::-webkit-scrollbar-thumb{background-color:transparent;background-clip:padding-box;border:solid transparent;border-width:0 3px 0 5px;border-radius:999px;min-height:40px}::-webkit-scrollbar-thumb:horizontal{border-width:5px 0 3px 0;min-width:40px}[data-bsb]::-webkit-scrollbar-thumb{background-color:rgba(140,140,140,.72)}::-webkit-scrollbar-thumb:hover{border-width:0 2px;background-color:rgba(140,140,140,.9)}::-webkit-scrollbar-thumb:horizontal:hover{border-width:2px 0}}</style><script>(function(){if(!window.matchMedia||!matchMedia('(pointer: fine)').matches)return;var D=document,R=D.documentElement,T=new WeakMap(),H=null;function s(e){if(!e.hasAttribute('data-bsb'))e.setAttribute('data-bsb','');clearTimeout(T.get(e))}function l(e){clearTimeout(T.get(e));T.set(e,setTimeout(function(){if(e!==H)e.removeAttribute('data-bsb')},1000))}function o(c){return c&&c!=='transparent'&&!/^rgba\\(.*,\\s*0\\)$/.test(c)}function g(){var c=getComputedStyle(R).backgroundColor;if(!o(c)&&D.body)c=getComputedStyle(D.body).backgroundColor;if(!o(c)&&D.elementsFromPoint){var a=D.elementsFromPoint(R.clientWidth-2,innerHeight/2);for(var i=0;i<a.length&&!o(c);i++)c=getComputedStyle(a[i]).backgroundColor}if(!o(c))c='#fff';if(R.style.getPropertyValue('--bsb-bg')!==c)R.style.setProperty('--bsb-bg',c)}function q(){g();setTimeout(g,450)}D.addEventListener('DOMContentLoaded',function(){q();try{var m=new MutationObserver(q),f={attributes:true,attributeFilter:['class','style','data-theme']};m.observe(R,f);m.observe(D.body,f)}catch(_){}});addEventListener('load',q);D.addEventListener('scroll',function(v){var e=v.target===D?(D.body||R):v.target;if(!(e instanceof Element))return;s(e);if(e!==H)l(e)},{capture:true,passive:true});D.addEventListener('mousemove',function(v){var e=v.target,n=null;if(e instanceof Element){if((e===R||e===D.body)&&((v.clientX>=R.clientWidth&&innerWidth>R.clientWidth+1)||(v.clientY>=R.clientHeight&&innerHeight>R.clientHeight+1)))n=D.body||R;else if(e!==R&&((v.offsetX>=e.clientWidth&&e.offsetWidth>e.clientWidth+1&&e.scrollHeight>e.clientHeight)||(v.offsetY>=e.clientHeight&&e.offsetHeight>e.clientHeight+1&&e.scrollWidth>e.clientWidth)))n=e}if(n===H)return;if(H)l(H);H=n;if(H)s(H)},{passive:true})})();</script>";
 
+// 键盘中继：沙箱页拿到焦点后键盘事件落在 iframe 文档里、冒不到 bridge——Esc 关不掉查看器。页面没自己处理掉的 Esc
+// （冒泡到 window 且没 preventDefault、不在输入法组字中）postMessage 告诉父页；加载即报到一次（ready），
+// 父页（HtmlView）收到 ready 才把焦点交给页面。只用 postMessage，不需要 allow-same-origin，CSP sandbox 下照常跑。
+// 与前端 HtmlView 的 KEY_SHIM 同一段（srcdoc 回落路径用），html-site.test.mjs 逐字节比对。
+export const KEY_SHIM = '<script>(function(){try{parent.postMessage({__bridgeHv:"ready"},"*")}catch(_){}addEventListener("keydown",function(e){if(e.key==="Escape"&&!e.defaultPrevented&&!e.isComposing){try{parent.postMessage({__bridgeHv:"esc"},"*")}catch(_){}}})})();</script>';
+
 // 垫片要在页面任何脚本之前跑，又不能插到 <!doctype> 前面（会掉进怪异模式）：
 // 优先 <meta charset> 之后（浏览器只在前 1024 字节里找它，垫片不能把它挤出去）→ <head> 之后
 // → <html> 之后 → doctype 之后 → 文件开头。按 latin1 找位置、按字节拼接，不动原编码。
@@ -103,7 +109,7 @@ function injectShim(buf) {
   const head = buf.toString('latin1', 0, Math.min(buf.length, 64 * 1024));
   const m = /<meta\b[^>]*charset[^>]*>/i.exec(head.slice(0, 1024)) || /<head\b[^>]*>/i.exec(head) || /<html\b[^>]*>/i.exec(head) || /<!doctype[^>]*>/i.exec(head);
   const at = m ? m.index + m[0].length : (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? 3 : 0);
-  return Buffer.concat([buf.subarray(0, at), Buffer.from(STORAGE_SHIM + SCROLLBAR_SHIM), buf.subarray(at)]);
+  return Buffer.concat([buf.subarray(0, at), Buffer.from(STORAGE_SHIM + SCROLLBAR_SHIM + KEY_SHIM), buf.subarray(at)]);
 }
 
 function fail(res, status, msg) {

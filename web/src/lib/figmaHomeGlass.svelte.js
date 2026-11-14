@@ -1,5 +1,5 @@
 // 主页的 WebGPU 玻璃（四个入口方块 + 右上账户胶囊）：玻璃渲染模块是原版资源
-// （清单 modules.figmaGlass：FigmaGlassRenderer / NOTIFICATION_SCENE，与桌面主页 Dock 同一份），有 WebGPU 就走这条。
+// （visuals/modules/figma-glass/renderer.js：FigmaGlassRenderer / NOTIFICATION_SCENE，懒加载，与桌面主页 Dock 同一份），有 WebGPU 就走这条。
 // 没有 WebGPU / 设备丢失 / 渲染失败时 homeGlass.failed = true，主页与登录卡退回 SVG 折射 / WebGL / 毛玻璃（硬件退路）。
 // 这里只管两件事：所有玻璃块共用一个 WebGPU 设备（只有真走这条路才建）；
 // Home 与 LoginCard 之间共享「用不用、背景从哪来、挂没挂」。
@@ -7,13 +7,15 @@
 // bg 两种：
 //   { kind: 'image', url, box() }   静态壁纸：box() 给出壁纸 <img> 在视口里的矩形（cover 映射用）
 //   { kind: 'live', subscribe(fn), request?() }  空间视差 / 流光：每画完一帧同步回调 fn(canvas, box?)
-import { ovModule } from './overlay.svelte.js';
 
 export const homeGlass = $state({ on: false, failed: false, bg: null });
 
 /** 玻璃渲染模块（{ FigmaGlassRenderer, NOTIFICATION_SCENE }）；加载失败 → null。Dock 也用这个。 */
 export function loadFigmaGlass() {
-  return ovModule('figmaGlass').then((m) => (m && m.FigmaGlassRenderer && m.NOTIFICATION_SCENE ? m : null));
+  return import('../visuals/modules/figma-glass/renderer.js').catch((e) => {
+    console.error('[visuals] 玻璃渲染模块加载失败：', e?.message || e);
+    return null;
+  });
 }
 
 let pending = null;

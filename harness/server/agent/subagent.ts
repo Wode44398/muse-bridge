@@ -163,6 +163,8 @@ export interface SubAgentEnv {
   ownerId?: string;
   // N26：父会话这一轮的轮内快照口——子 agent 的破坏性命令前同样先拍（何时拍由子 agent 自己的 loop 判）
   snapshotFiles?: (label: string) => Promise<void>;
+  // 同理：父会话这一轮的「改前备份」口（大工作区只备份改过的文件）——子 agent 的 Write / Edit 同样先备份
+  beforeFileWrite?: (abs: string) => Promise<void>;
   // C6（G3）：继承的项目指令（AGENTS.md、GUIDE.md 两段，已框定好），拼进子 agent 的 system prompt。
   // C4：每起一个子 agent 现读——会话中途改了 GUIDE / AGENTS.md，之后起的子 agent 拿到的是新的
   projectInstructions?: () => string | undefined;
@@ -418,6 +420,7 @@ export function makeSubAgentRunner(
       signal: ctrl.signal,
       ownerId: env.ownerId,
       snapshotFiles: env.snapshotFiles,
+      beforeFileWrite: env.beforeFileWrite,
     };
 
     // coder 子 agent 继承父会话的全权档：父会话在 bypass 时子 agent 也 bypass（它们共用 env.sandbox，

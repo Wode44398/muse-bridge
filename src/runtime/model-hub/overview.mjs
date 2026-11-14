@@ -74,6 +74,8 @@ export function hubOverview() {
   const doneClaude = migratedOf('claude');
   return {
     v: 2,
+    // Claude 的本机代理会翻译 Gemini 原生协议（2026-11-13）：前端据此放开「Gemini 协议的服务给 Claude」；老服务端没有这一项
+    claudeGemini: true,
     // dimensio 自带适配的厂商已经交给模型中心（它们是普通的模型中心服务了）：前端不再单列「dimensio 内置厂商」
     dimensioNative: hubFlag('dimensioNative'),
     vertex: vertexView(),

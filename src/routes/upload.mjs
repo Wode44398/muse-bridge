@@ -12,6 +12,7 @@ import { readBody } from '../runtime/body.mjs';
 import { sanitizeName, sweepStaleParts } from '../runtime/paths.mjs';
 import { contextFor } from '../runtime/identity.mjs';
 import { imageThumb, THUMB_EXT, THUMB_TIERS } from './file-preview.mjs';
+import { streamFile, mimeType } from '../runtime/http-file.mjs';
 
 const MAX_UPLOAD = 2_000_000_000; // 2 GB
 function validUploadId(s) { return /^[a-zA-Z0-9]{6,40}$/.test(s); }
@@ -64,6 +65,10 @@ export function registerUploadRoutes(router, { authOk, identify }) {
   // 聊天气泡里的图此前一律拉原图，uploads 里实际躺着 15.8MB 的截图和 7MB 的手机照片，
   // 手机翻旧会话时既费流量又爆内存。缩略图不可用（无 sharp / 格式不支持）时自动回落原图，
   // 故前端可以无条件带上 thumb=，不必判断服务端能力。
+  //
+  // 原文件走 streamFile：带 Range（聊天里上传的视频 / 音频要能拖进度、PDF 按需取块），
+  // dl=1 时 Content-Disposition: attachment，文件名去掉存盘时的时间戳前缀。
+  // 类型：图片 / pdf / txt / md 用 RAW_CT；其余按扩展名 safe 映射（html/svg/js 这类会执行的一律当纯文本回）。
   router.on('GET', '/api/upload/raw', async (req, res, url) => {
     const ctx = ctxOf(req);
     if (!ctx) { res.writeHead(401, { 'Content-Type': 'text/plain' }); res.end('unauthorized'); return; }
@@ -84,9 +89,18 @@ export function registerUploadRoutes(router, { authOk, identify }) {
         }
       } catch {}
     }
-    let size = 0; try { size = statSync(file).size; } catch {}
-    res.writeHead(200, { 'Content-Type': RAW_CT[ext] || 'application/octet-stream', 'Content-Length': size, 'Cache-Control': 'private, max-age=31536000, immutable' });
-    pipeline(createReadStream(file), res, () => {});
+    const dl = url.searchParams.get('dl') === '1';
+    try {
+      streamFile(req, res, file, {
+        contentType: RAW_CT[ext] || mimeType(name, { safe: true }),
+        cacheControl: 'private, max-age=31536000, immutable',
+        downloadName: name.replace(/^\d{10,}-/, '') || name,
+        download: dl,
+        headers: { 'X-Content-Type-Options': 'nosniff' },
+      });
+    } catch {
+      if (!res.headersSent) { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('not found'); }
+    }
   });
 
   // 「挂载文件夹」第一步：铸一个属于本次挂载的根目录（uploads/<时间戳>-<文件夹名>），

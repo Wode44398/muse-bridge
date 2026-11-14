@@ -9,7 +9,7 @@
   // 拖着的时候不挂 left/top 过渡（否则跟手有拖影）。
   import { drag, dndToast } from '../lib/dragdrop.svelte.js';
   import { tr } from '../lib/i18n.js';
-  import { ovUrl } from '../lib/overlay.svelte.js';
+  import wsIcon from '../visuals/assets/icons/workspace.png';
 
   const BASE = import.meta.env.BASE_URL;
 </script>
@@ -24,7 +24,7 @@
         {#if drag.thumb}
           <img src={drag.thumb} alt="" draggable="false" />
         {:else if drag.isDir}
-          <img src={ovUrl('assets/icons/workspace.png')} alt="" draggable="false" />
+          <img src={wsIcon} alt="" draggable="false" />
         {:else if drag.iconHtml}
           {@html drag.iconHtml}
         {:else}

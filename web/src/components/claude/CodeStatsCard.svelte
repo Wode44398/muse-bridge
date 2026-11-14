@@ -92,6 +92,12 @@
     if (n >= 1e3) { const v = Number((n / 1e3).toFixed(1)); return v >= 1e3 ? trim((n / 1e6).toFixed(1)) + 'M' : trim(v.toFixed(1)) + 'k'; }
     return String(n);
   }
+  // 「输入」= 未命中缓存 + 缓存读取 + 缓存写入（Claude Code 每轮重送整段上下文，九成以上走缓存，只看 inputTokens 会小几个数量级）
+  function usageWithTotals(u) {
+    const fresh = u.inputTokens || 0, read = u.cacheReadInputTokens || 0, write = u.cacheCreationInputTokens || 0;
+    const input = fresh + read + write;
+    return { fresh, read, write, input, output: u.outputTokens || 0, cachePct: input ? Math.floor(((read + write) / input) * 100) : 0 };
+  }
   const modelColor = (i) => `hsl(${HUE} 70% ${Math.min(88, 58 + i * 7)}%)`;
 
   const stats = $derived(store.stats);
@@ -110,9 +116,22 @@
     const chartDays = s.dailyModelTokens.filter((d) => inRange(d.date));
     const per = new Map();
     for (const d of chartDays) for (const [m, n] of Object.entries(d.tokensByModel)) per.set(m, (per.get(m) || 0) + n);
+    // 「输入 / 输出」跟着范围走：按天的分项（dailyModelUsage）汇总；「全部」用 modelUsage（含 stats-cache 底数里没有分项的老日子）。
+    // 旧服务端没有 dailyModelUsage 时退回 modelUsage。
+    const usageOf = new Map();
+    if (from && s.dailyModelUsage) {
+      for (const d of s.dailyModelUsage) {
+        if (!inRange(d.date)) continue;
+        for (const [m, u] of Object.entries(d.usageByModel)) {
+          const acc = usageOf.get(m) || { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+          for (const f of Object.keys(acc)) acc[f] += u[f] || 0;
+          usageOf.set(m, acc);
+        }
+      }
+    }
     const all = [...per.entries()].map(([model, tokens]) => ({
       model, tokens,
-      usage: s.modelUsage[model] || { inputTokens: 0, outputTokens: 0 },
+      usage: usageWithTotals((from && s.dailyModelUsage ? usageOf.get(model) : s.modelUsage[model]) || {}),
     })).sort((a, b) => b.tokens - a.tokens);
     const total = all.reduce((a, m) => a + m.tokens, 0);
     const modelTotals = all.filter((m) => m.tokens >= total * 5e-4);
@@ -137,7 +156,8 @@
   // 官方 CW：截至本周六的 26 周，每列一周（周日在上）；颜色按当天消息数 / 最大值分四档
   const heat = $derived.by(() => {
     if (!stats) return [];
-    const counts = new Map(stats.dailyActivity.map((d) => [d.date, d.messageCount || 0]));
+    const rows = new Map(stats.dailyActivity.map((d) => [d.date, d]));
+    const tokens = new Map(stats.dailyModelTokens.map((d) => [d.date, Object.values(d.tokensByModel).reduce((a, n) => a + n, 0)]));
     const end = parseKey(today);
     end.setDate(end.getDate() + (6 - end.getDay()));
     const start = new Date(end);
@@ -147,9 +167,10 @@
     for (let i = 0; i < HEAT_DAYS; i++) {
       const d = new Date(start); d.setDate(start.getDate() + i);
       const k = keyOf(d);
-      const c = counts.get(k) ?? 0;
+      const row = rows.get(k);
+      const c = row?.messageCount || 0;
       max = Math.max(max, c);
-      cells.push({ date: k, count: c, future: k > today });
+      cells.push({ date: k, count: c, row, tokens: tokens.get(k) || 0, future: k > today });
     }
     for (const c of cells) {
       const r = max === 0 ? 0 : c.count / max;
@@ -159,6 +180,16 @@
     for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
     return weeks;
   });
+
+  // 热力格提示：「118 条消息 · 2,903 次回复 · 848.7M token」；stats-cache 底数里的老日子没有分项，只给总条数
+  function heatText(c) {
+    const r = c.row;
+    const parts = r && r.userMessageCount != null
+      ? [tc('用量卡', '{n} 条消息', { n: nf.format(r.userMessageCount) }), t('{n} 次回复', { n: nf.format(r.replyCount || 0) })]
+      : [tc('用量卡', '{n} 条消息', { n: nf.format(c.count) })];
+    if (c.tokens > 0) parts.push(t('{tokens} token', { tokens: fd(c.tokens) }));
+    return parts.join(' · ');
+  }
 
   const book = $derived.by(() => {
     if (!ranged) return null;
@@ -257,7 +288,7 @@
                 {:else}
                   <!-- svelte-ignore a11y_no_static_element_interactions -->
                   <div class="cell" style:background-color={c.color}
-                    onpointerenter={(e) => showTip(e, { kind: 'heat', text: `${dayLabel(c.date)} — ${nf.format(c.count)}` })}></div>
+                    onpointerenter={(e) => showTip(e, { kind: 'heat', text: `${dayLabel(c.date)} — ${heatText(c)}` })}></div>
                 {/if}
               {/each}
             </div>
@@ -293,10 +324,11 @@
         </div>
         <div class="rows">
           {#each modelRows as m, i (m.model)}
-            <div class="mrow">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="mrow" onpointerenter={(e) => showTip(e, { kind: 'model', model: m.model, usage: m.usage })} onpointerleave={hideTip}>
               <span class="sw" style:background-color={modelColor(i)} aria-hidden="true"></span>
               <span class="mn">{modelLabel(m.model)}</span>
-              <span class="mio">{t('{inTokens} 输入 · {outTokens} 输出', { inTokens: fd(m.usage.inputTokens || 0), outTokens: fd(m.usage.outputTokens || 0) })}</span>
+              <span class="mio">{t('{inTokens} 输入 · {outTokens} 输出', { inTokens: fd(m.usage.input), outTokens: fd(m.usage.output) })}</span>
               <span class="pct">{((m.tokens / (ranged.total || 1)) * 100).toFixed(1)}%</span>
             </div>
           {/each}
@@ -337,6 +369,14 @@
   <div class="cs-tip" style:left="{tip.x}px" style:top="{tip.y}px" role="tooltip">
     {#if tip.content.kind === 'heat'}
       {tip.content.text}
+    {:else if tip.content.kind === 'model'}
+      {@const u = tip.content.usage}
+      <span class="tt-day">{modelLabel(tip.content.model)}</span>
+      <span class="tt-row">{t('输入 {tokens}（缓存 {pct}%）', { tokens: fd(u.input), pct: u.cachePct })}</span>
+      <span class="tt-row tt-sub">{t('未缓存 {tokens}', { tokens: fd(u.fresh) })}</span>
+      <span class="tt-row tt-sub">{t('缓存读取 {tokens}', { tokens: fd(u.read) })}</span>
+      <span class="tt-row tt-sub">{t('缓存写入 {tokens}', { tokens: fd(u.write) })}</span>
+      <span class="tt-row">{t('输出 {tokens}', { tokens: fd(u.output) })}</span>
     {:else}
       <span class="tt-day">{dayLabel(tip.content.day.date)}</span>
       {#each tip.content.day.segments as sg (sg.model)}
@@ -437,11 +477,12 @@
 
   .cs-tip {
     position: fixed; z-index: 1000; transform: translate(-50%, calc(-100% - 6px)); pointer-events: none;
-    display: flex; flex-direction: column; gap: 3px; max-width: 260px; padding: 5px 8px; border-radius: 6px;
+    display: flex; flex-direction: column; gap: 3px; max-width: 360px; padding: 5px 8px; border-radius: 6px;
     background: var(--q-card); box-shadow: var(--q-shadow); color: var(--text);
     font-family: var(--sans); font-size: 13px; line-height: 17px; white-space: nowrap; font-variant-numeric: tabular-nums;
   }
   .tt-day { font-weight: 600; }
   .tt-row { display: flex; align-items: center; gap: 4px; }
+  .tt-sub { padding-left: 10px; color: var(--muted); }
   .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 </style>

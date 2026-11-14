@@ -136,6 +136,23 @@ export function registerChatRoutes(router, { authOk, identify }) {
     return reply(400, { error: 'unknown op' });
   });
 
+  // —— 撤回插话：Claude 读到之前把它从这一轮里抽回来，原文与附件交还输入栏（agents/claude.mjs 的 gen.unsteer）——
+  router.on('POST', '/api/claude/unsteer', async (req, res) => {
+    const id = identify(req);
+    if (id.kind === 'none' || id.kind === 'share') { res.writeHead(401, { 'Content-Type': 'text/plain' }); res.end('unauthorized'); return; }
+    const ctx = contextFor(id);
+    let b; try { b = JSON.parse(await readBody(req)); } catch { res.writeHead(400); res.end('bad json'); return; }
+    const reply = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    const sid = String(b.session || '');
+    const uuid = String(b.uuid || '');
+    if (!/^[0-9a-fA-F-]{8,}$/.test(sid) || !/^[0-9a-fA-F-]{8,}$/.test(uuid)) return reply(400, { error: 'bad request' });
+    const live = findGenBySession(ctx.key, sid);
+    if (!live || typeof live.unsteer !== 'function') return reply(409, { ok: false, reason: 'read', error: 'Claude 已经读到这条了' });
+    const r = await live.unsteer(uuid);
+    if (!r.ok) return reply(409, { ok: false, reason: r.reason, error: r.reason === 'unknown' ? '这条插话撤不回了' : 'Claude 已经读到这条了' });
+    return reply(200, r);
+  });
+
   // —— 5 小时限额「重置后自动继续」（limit-resume.mjs）：卡片读状态 / 勾选框开关 ——
   router.on('GET', '/api/claude/limit-resume', (req, res, url) => {
     const id = identify(req);
@@ -274,11 +291,6 @@ export function registerChatRoutes(router, { authOk, identify }) {
       // 项目模式（运行档位 › 项目，runtime/project-mode.mjs）：新会话草稿里选的形态。同理只收新会话——续聊按 chat-prefs 记的形态。
       ...(!sessionId && parsed.shape === 'project' ? { shape: 'project' } : {}),
     };
-    const CHAT_STYLES = new Set(['learning', 'concise', 'explanatory', 'formal']);
-    const style = CHAT_STYLES.has(parsed.style) ? parsed.style : undefined; // normal/未知 → 无额外风格
-    // 自定义风格：前端把用户自建风格的指令文本随请求带上（仅在未命中预设时生效）。
-    // 只进自己会话的 systemPrompt append，无注入面；限长防滥用。
-    const styleText = !style && typeof parsed.styleText === 'string' ? parsed.styleText.trim().slice(0, 4000) : '';
     const research = parsed.research === true; // 深度研究模式
     // 输入建议（官方 prompt suggestion）：新前端开着开关才带 suggest:true——老 apk 不带就不生成，
     // 免得白挂进程、白花额度去算一条没人看得见的建议。快照访客不给。
@@ -418,7 +430,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
       res.writeHead(202, { 'Content-Type': 'application/json' });
       res.end('{"ok":true}');
       runClaudeChat(req, null, {
-        message: '', sessionId: undefined, model, effort, ultracode, fast, chatPrefs, attachments: [], style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
+        message: '', sessionId: undefined, model, effort, ultracode, fast, chatPrefs, attachments: [], research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
         ctx: claudeCtx, prewarm: true, permissionMode, shape,
       }).catch((e) => console.log('[claude] prewarm failed:', e && e.message));
       return;
@@ -435,7 +447,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
     };
     const restartResume = isSnap || !sessionId ? 0 : Math.max(0, Math.min(9, Number(parsed.restartResume) | 0));
     return runClaudeChat(req, res, {
-      message: fromNote ? fromNote + '\n\n' + message : message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, style, styleText, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
+      message: fromNote ? fromNote + '\n\n' + message : message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
       origin: isSnap ? null : chatOrigin(ctx, { headers: req.headers, body: parsed, url: req.url, family }),
       limitReplay, limitResume: (parsed.limitResume === true || restartResume > 0) && !isSnap, restartResume,
       globalMax: isSnap ? SNAP_MAX_TURNS : undefined,

@@ -129,13 +129,7 @@ html[data-wco="1"] .sadm .main > .top { padding-right: calc(4px + var(--wco-righ
 @media (max-width: 880px) {
   html[data-wco="1"] .sadm .frame { padding-top: calc(14px + var(--wco-h, 40px)); }
 }
-/* 沉浸查看器顶条 + 右上菜单 + 各文档查看器头部 */
-html[data-wco="1"] .mv-root .mv-top { padding-right: calc(10px + var(--wco-right, 0px)); }
-html[data-wco="1"] .mv-root .mv-menu { right: calc(10px + var(--wco-right, 0px)); }
-html[data-wco="1"] .doc-head,
-html[data-wco="1"] .pdf-head,
-html[data-wco="1"] .of-head,
-html[data-wco="1"] .hv-bar { padding-right: calc(10px + var(--wco-right, 0px)); }
+/* 沉浸查看器的窗控避让在 components/preview/kit/viewer.css（.vw-bar），旧查看器的 .mv-top / .doc-head 等类已不存在 */
 /* ChatGPT 分页是同源 iframe：主框架的拖拽区吞不掉也罩不住子文档（app-region 只收集主框架），
    整体下推一个标题栏带最稳——顶带留给拖拽，clone 顶栏与窗控互不打扰 */
 /* 顶带底色不在这里硬写：写死 #212121 既跟 clone 的暗色面 #171717 差一截（顶部一条
@@ -145,8 +139,8 @@ html[data-wco="1"] .chatgpt-page .chat-frame {
   height: calc(100% - var(--wco-h, 40px));
 }
 
-/* 品牌字体是原版字体（Anthropic Sans / Serif、Anthropicons），@font-face 在原版资源的 overlay.css 里
-   （构建时打进 /app/_ov/，壳首屏就挂上）。组件里一律经下面 :root 的 --font-brand-sans / --font-brand-serif / --icons 引用，
+/* 品牌字体是原版字体（Anthropic Sans / Serif、Anthropicons），@font-face 在 visuals/fonts.css
+   （三个入口直接 import，vite 收进产物）。组件里一律经下面 :root 的 --font-brand-sans / --font-brand-serif / --icons 引用，
    别写死家族名。 */
 
 :root{
@@ -278,6 +272,21 @@ html[data-theme="light"]{
   --st-thumb:#ffffff; --st-accent:#2a78d6; --st-menu:#ffffff; --st-backdrop:rgba(0,0,0,.35);
   --st-primary:#0b0b0b; --st-primary-ink:#ffffff;
   --st-menu-shadow:0 0 0 1px rgba(11,11,11,.1),0 8px 24px rgba(0,0,0,.12),0 2px 6px rgba(0,0,0,.08);
+}
+
+/* Claude 分页的底色层次（官方桌面端 5.11492 新配色 fizzy-lake 取样）：中性灰、不带暖调；
+   正文页 = surface-1，侧栏 = fizzy-lake sidebar，输入卡 = surface-3。暗色正文比侧栏深一档，
+   亮色正文纯白、侧栏 #fafafa。挂在 .claude-slide / .solo-root 上，侧栏里把 --bg 换成 --side-bg。 */
+.cc-tone{
+  --bg:#191919; --side-bg:#1f1f1f; --card:#1f1f1f;
+  --text:#ededed; --serif:#c2c2c2; --muted:#959595;
+  --avatar-bg:#4a4a4a; --hover:rgba(255,255,255,.075);
+  --q-card:rgba(44,44,44,.97);
+}
+html[data-theme="light"] .cc-tone{
+  --bg:#ffffff; --side-bg:#fafafa; --card:#ffffff;
+  --text:#1a1a1a; --serif:#383838; --muted:#797979;
+  --userbubble:#efefef; --avatar-bg:#d9d9d9; --q-rowsel:#f4f4f4;
 }
 
 /* Anthropicons 动态图标（claude.ai 同款）：字体自带 ANIM/ANM2 变体轴（0–100 字形形变，

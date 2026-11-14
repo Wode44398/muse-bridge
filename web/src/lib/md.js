@@ -4,6 +4,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { mdState } from './mdState.svelte.js';
 import { t as tt, lang } from './i18n.js';   // 本文件循环变量多叫 t（表格/列表节点），翻译函数用别名
+import { repairTail } from './mdStream.js';
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -252,6 +253,24 @@ export function renderMarkdown(src) {
   const out = renderUncached(src);
   mdCache.set(key, out);
   if (mdCache.size > MD_CACHE_MAX) mdCache.delete(mdCache.keys().next().value);
+  return out;
+}
+
+// —— 流式末块渲染（Thread 正在吐字的最后一块）——
+// 先过 mdStream.repairTail 修补写头（半截表格 / 围栏 / 强调 / 链接先扣住或补齐，见该文件），再渲染。
+// 不进上面的主缓存：流式中途每批一个新字符串、只用一次，塞进去会把历史消息的渲染结果挤掉；
+// 只留几条小缓存，挡住「同一字符串因别的依赖变动被模板重算」那几次。
+// 代码块末尾 marked 自带一个隐形换行：每来一个字它就被往后挤一位，吐字引擎按可见字序号显形，
+// 这一位会让新字跳过渐入直接实体——去掉它（<pre> 末尾单个换行本来就不占行，视觉无差别）。
+const streamCache = new Map();
+export function renderStreamingMarkdown(src) {
+  if (!src) return '';
+  const key = mdState.epoch + '\u0001' + lang() + '\u0001' + src;
+  const hit = streamCache.get(key);
+  if (hit !== undefined) return hit;
+  const out = renderUncached(repairTail(src)).replace(/\n<\/code><\/pre>/g, '</code></pre>');
+  streamCache.set(key, out);
+  if (streamCache.size > 6) streamCache.delete(streamCache.keys().next().value);
   return out;
 }
 

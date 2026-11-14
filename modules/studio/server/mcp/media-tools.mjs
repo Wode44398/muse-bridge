@@ -264,7 +264,9 @@ export function buildMediaTools({ flavor = 'phone', adapter, defaults = null }) 
       adapter.emit({ type: 'gen_media_start', id, kind: evKind(kind) });
       try {
         const r = await gen(kind, args, p, id);
-        adapter.emit({ type: 'gen_media', id: r.id, kind: evKind(kind), prompt: promptOf(args) });
+        // ext：存盘扩展名（前端下载名按它补，Nano Banana 2.1 出 jpg、语音出 wav）
+        const ext = (/\.([a-z0-9]{2,5})$/i.exec(String(r.file || '')) || [])[1];
+        adapter.emit({ type: 'gen_media', id: r.id, kind: evKind(kind), prompt: promptOf(args), ...(ext ? { ext: ext.toLowerCase() } : {}) });
         const info = { ...p, model: r.model || p.model, prompt: promptOf(args), file: r.file, id: r.id };
         // 图片：回执报实际像素，不只回显请求档位。有真正下发的参数就按它的尺寸档（卡不收 imageSize 就没有，不报也不判）查降档
         if (r.width > 0 && r.height > 0) {

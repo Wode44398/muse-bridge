@@ -10,18 +10,15 @@
   //   dim      false = 不画自己的遮罩、根节点不拦指针（DialogHost 整串弹窗共用一层遮罩，不逐条闪）
   //   closing  true = 播退场（淡出 + 微缩），期间不接指针
   //   actions[i].act  原样写到按钮的 data-act 上，宿主据此找按钮做键盘焦点
-  import { ov, ovHas, ovUrl } from '../../lib/overlay.svelte.js';
   import { getContext } from 'svelte';
   import { liquidPress } from '../../lib/liquid/press.js';
-  const glassL = $derived(ovUrl('ios27/alert-light.png'));
-  const glassD = $derived(ovUrl('ios27/alert-dark.png'));
+  import glassL from '../../visuals/ios27/alert-light.png';
+  import glassD from '../../visuals/ios27/alert-dark.png';
 
   let { title = '', message = '', detail = '', error = '', actions = [], dim = true, closing = false, onclose, children } = $props();
   const ios = getContext('ios27');
   const dark = $derived(!!ios?.dark);
   const side = $derived(actions.length === 2);
-  // 清单已就位却没有这张玻璃切图（精简构建 / 资源包不全）：换实心底，不然框是透明的、字压在页面上看不清
-  const solid = $derived(ov.ready && !ovHas(dark ? 'ios27/alert-dark.png' : 'ios27/alert-light.png'));
   const uid = $props.id();
 
   // 防触摸「补发 click」误触：开关在 pointerup 里就把警告框渲染出来，同一次点按随后补发的兼容 click 会在新 DOM 上
@@ -34,7 +31,7 @@
 
 <div class="al-root" class:nodim={!dim} class:closing role="presentation" onpointerdowncapture={(e) => { downInside = true; downOnDim = e.target instanceof Element && e.target.classList.contains('al-dim'); }}>
   {#if dim}<button class="al-dim" type="button" tabindex="-1" aria-label={title} onclick={dimClick}></button>{/if}
-  <div class="al" class:dark class:solid role="alertdialog" aria-modal="true" aria-label={title} aria-describedby={detail ? `${uid}-d` : undefined} style:--glass={`url("${dark ? glassD : glassL}")`}>
+  <div class="al" class:dark role="alertdialog" aria-modal="true" aria-label={title} aria-describedby={detail ? `${uid}-d` : undefined} style:--glass={`url("${dark ? glassD : glassL}")`}>
     <div class="al-tm">
       {#if title}<h3>{title}</h3>{/if}
       {#if message}<p>{message}</p>{/if}
@@ -73,9 +70,6 @@
   .al::before { content: ''; position: absolute; z-index: -1; inset: 0; pointer-events: none;
     border: 0 solid transparent; border-image: var(--glass) 228 fill / 76px / 16px stretch; }
   /* 缺玻璃切图时的实心底（明暗各一）：接近玻璃在压暗页面上的平均色 */
-  .al.solid { background: rgba(250, 249, 246, .94); }
-  .al.solid.dark { background: rgba(30, 29, 27, .95); }
-  .al.solid::before { display: none; }
   /* 退场：内容先走（淡出 + 微缩，accel），遮罩同步淡出；keyframes 只写 from，末态跟随这里的底值 */
   .al-root.closing, .al-root.closing .al { pointer-events: none; }
   .al-root.closing .al { opacity: 0; transform: scale(.96); }

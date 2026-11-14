@@ -4,6 +4,7 @@ import { statSync } from 'node:fs';
 import { requireReadCtx } from '../runtime/identity.mjs';
 import { safeJoin } from '../runtime/http-file.mjs';
 import { bad, scopeCtx } from './file-core.mjs';
+import { FF_INPUT_GUARD } from './file-media.mjs';
 
 const STREAM_VIDEO_EXT = new Set(['mp4', 'mov', 'webm', 'mkv', 'avi', 'm4v', '3gp']);
 const STREAM_MAX_CONC = 2;
@@ -61,7 +62,7 @@ function ffprobeMeta(file) {
       '-v', 'error',
       '-show_entries', 'stream=codec_type,codec_name,profile,level,width,height:format=duration,bit_rate',
       '-of', 'json',
-      file,
+      ...FF_INPUT_GUARD, file,
     ], { windowsHide: true });
     let output = '';
     let errorOutput = '';
@@ -115,7 +116,9 @@ export async function handleStream(req, res, url, identify) {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, max-age=3600' });
       res.end(JSON.stringify(metadata));
     } catch (error) {
-      bad(res, 500, 'probe failed: ' + String(error?.message || error).slice(0, 120));
+      // 细节（stderr 里有服务器绝对路径）只进日志，客户端只拿通用错误码
+      console.warn('[file-video] probe_failed', String(error?.message || error).slice(0, 300));
+      bad(res, 500, 'probe_failed');
     }
     return;
   }
@@ -132,7 +135,7 @@ export async function handleStream(req, res, url, identify) {
     args = [
       '-hide_banner', '-loglevel', 'error',
       ...(time > 0.1 ? ['-ss', String(time)] : []),
-      '-i', file,
+      ...FF_INPUT_GUARD, '-i', file,
       '-map', '0:v:0', '-map', '0:a:0?', '-sn',
       '-c:v', 'copy',
       '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
@@ -148,7 +151,7 @@ export async function handleStream(req, res, url, identify) {
       '-hide_banner', '-loglevel', 'error',
       '-hwaccel', 'auto',
       ...(time > 0.1 ? ['-ss', String(time)] : []),
-      '-i', file,
+      ...FF_INPUT_GUARD, '-i', file,
       '-map', '0:v:0', '-map', '0:a:0?', '-sn',
       '-vf', "scale=w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
       '-pix_fmt', 'yuv420p',
@@ -189,7 +192,10 @@ export async function handleStream(req, res, url, identify) {
     if (started && !done) { try { res.end(); } catch {} }
   });
   const fail = () => {
-    if (!started && !res.headersSent) bad(res, 500, 'transcode failed: ' + errorOutput.trim().slice(0, 160));
+    if (!started && !res.headersSent) {
+      if (errorOutput.trim()) console.warn('[file-video] transcode_failed', errorOutput.trim().slice(0, 300));
+      bad(res, 500, 'transcode_failed');
+    }
     finish();
   };
   child.on('error', fail);

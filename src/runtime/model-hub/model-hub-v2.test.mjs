@@ -197,12 +197,12 @@ test('v1 → v2：内存升级、只备份一次原件；原来的型号一律�
   const cat = R.catalogView('h-0000aaaa').models;
   assert.deepEqual(cat.map((m) => [m.id, m.kind, m.source]),
     [['gpt-x', 'text', 'manual'], ['gpt-image-1', 'text', 'manual'], ['whisper-1', 'text', 'manual'], ['tiny-ctx', 'text', 'manual']]);
-  assert.deepEqual(b.models[0].agents, ['dimensio']);   // Gemini 协议去掉 claude
+  assert.deepEqual(b.models[0].agents, both);   // Gemini 协议也能给 Claude（本机代理翻译成 generateContent）
   assert.deepEqual(c.models[0].agents, ['claude']);
   assert.ok('agents' in JSON.parse(readFileSync(path.join(dir, 'services.json'), 'utf8')).services[0], '只读不写：升级只在内存里，下次保存才落 v2');
   // 发布：每个 agent 只看到给它的服务；老中转发布出去的型号和 v1 时一样
   R.refreshHub();
-  assert.ok(pubOf('h-0000aaaa', 'claude') && pubOf('h-0000cccc', 'claude') && !pubOf('h-0000bbbb', 'claude'));
+  assert.ok(pubOf('h-0000aaaa', 'claude') && pubOf('h-0000cccc', 'claude') && pubOf('h-0000bbbb', 'claude'));
   assert.ok(pubOf('h-0000aaaa', 'dimensio') && pubOf('h-0000bbbb', 'dimensio') && !pubOf('h-0000cccc', 'dimensio'));
   assert.deepEqual(pubOf('h-0000aaaa', 'claude').models.map((m) => m.id), ['gpt-x', 'gpt-image-1', 'whisper-1']);
   assert.deepEqual(pubOf('h-0000aaaa', 'dimensio').models.map((m) => m.id), ['gpt-x', 'gpt-image-1', 'whisper-1', 'tiny-ctx']);
@@ -357,10 +357,11 @@ test('assign：交叉校验（400 + 人话），一条不对整批不生效', ()
   // 给 dimensio 没问题（Claude 的规则只管 Claude）
   const r = R.assignHubModels(X.id, [{ id: 'bad?id', agents: ['dimensio'] }]);
   assert.deepEqual(r.service.models.find((m) => m.id === 'bad?id').agents, ['dimensio']);
-  // Gemini 协议的服务不能给 Claude
-  const g = R.createHubFromDetect({ baseUrl: UP + '/v1beta', kind: 'gemini', key: 'g', catalog: [{ id: 'gemini-4-argon', kind: 'text' }], assign: [] }).service;
-  assert.throws(() => R.assignHubModels(g.id, [{ id: 'gemini-4-argon', agents: ['claude', 'dimensio'] }]), /Gemini 协议的服务不能给 Claude/);
-  assert.deepEqual(R.assignHubModels(g.id, [{ id: 'gemini-4-argon', agents: ['dimensio'] }]).service.agents, ['dimensio']);
+  // Gemini 协议的服务也能给 Claude（本机代理翻译成 generateContent），Claude 的其它规则照管
+  const g = R.createHubFromDetect({ baseUrl: UP + '/v1beta', kind: 'gemini', key: 'g', catalog: [{ id: 'gemini-4-argon', kind: 'text' }, { id: 'gemini?bad', kind: 'text' }], assign: [] }).service;
+  assert.deepEqual(R.assignHubModels(g.id, [{ id: 'gemini-4-argon', agents: ['claude', 'dimensio'] }]).service.agents, ['claude', 'dimensio']);
+  assert.deepEqual(pubOf(g.id, 'claude').models.map((m) => m.id), ['gemini-4-argon']);
+  assert.throws(() => R.assignHubModels(g.id, [{ id: 'gemini?bad', agents: ['claude'] }]), (e) => e.status === 400 && /Claude 不认/.test(e.message));
   R.deleteHubV2(g.id);
   // 没有 Studio 桥：媒体去向不可用
   L._setStudioBridgeForTests(null);

@@ -13,8 +13,7 @@
 // 缓存键带上账号邮箱与私钥指纹，换了账号就重建。中继模式下不认服务自带的账号（凭据在家里主机那头）。
 
 import { createHash } from 'node:crypto';
-import { GoogleGenAI } from '@google/genai';
-import { GoogleAuth, OAuth2Client } from 'google-auth-library';
+import { googleAuthLib, googleGenAILib } from './google-deps.mjs';
 import { vertexCredentials, vertexCredsEpoch } from './vertex-credentials.mjs';
 
 const VERTEX_RELAY = String(process.env.BRIDGE_VERTEX_RELAY || '').replace(/\/+$/, '');
@@ -25,7 +24,7 @@ const SCOPES = ['https://www.googleapis.com/auth/cloud-platform'];
 export const viaRelay = { vertex: !!VERTEX_RELAY, gemini: !!GEMINI_RELAY };
 
 function relayAuthClient() {
-  const c = new OAuth2Client();
+  const c = new (googleAuthLib().OAuth2Client)();
   c.setCredentials({ access_token: RELAY_TOKEN, expiry_date: Date.now() + 3650 * 86400_000 });
   return c;
 }
@@ -34,9 +33,9 @@ function relayAuthClient() {
 export function vertexGenAI({ project, location, credentials: own }) {
   if (!VERTEX_RELAY) {
     const credentials = own || vertexCredentials();
-    return new GoogleGenAI({ vertexai: true, project, location, ...(credentials ? { googleAuthOptions: { credentials, scopes: SCOPES } } : {}) });
+    return new (googleGenAILib().GoogleGenAI)({ vertexai: true, project, location, ...(credentials ? { googleAuthOptions: { credentials, scopes: SCOPES } } : {}) });
   }
-  return new GoogleGenAI({
+  return new (googleGenAILib().GoogleGenAI)({
     vertexai: true, project, location,
     googleAuthOptions: { authClient: relayAuthClient() },
     httpOptions: { baseUrl: `${VERTEX_RELAY}/${location}/` },
@@ -50,8 +49,8 @@ export const vertexClientKey = (project, location, credentials) => project + '@'
 
 // Gemini Developer API（API key）客户端。
 export function geminiGenAI(apiKey) {
-  if (!GEMINI_RELAY) return new GoogleGenAI({ apiKey });
-  return new GoogleGenAI({ apiKey: apiKey || RELAY_TOKEN, httpOptions: { baseUrl: GEMINI_RELAY + '/' } });
+  if (!GEMINI_RELAY) return new (googleGenAILib().GoogleGenAI)({ apiKey });
+  return new (googleGenAILib().GoogleGenAI)({ apiKey: apiKey || RELAY_TOKEN, httpOptions: { baseUrl: GEMINI_RELAY + '/' } });
 }
 
 // 直调 Vertex REST（Lyria :predict）的地址与令牌。path 不带开头斜杠，如 'v1/projects/…:predict'。
@@ -66,14 +65,14 @@ export async function vertexAccessToken(own) {
   if (own && own.client_email) {
     const tag = credsTag(own);
     let c = ownClients.get(tag);
-    if (!c) { c = await new GoogleAuth({ scopes: SCOPES, credentials: own }).getClient(); ownClients.set(tag, c); }
+    if (!c) { c = await new (googleAuthLib().GoogleAuth)({ scopes: SCOPES, credentials: own }).getClient(); ownClients.set(tag, c); }
     const t = await c.getAccessToken();
     return t && t.token;
   }
   if (!adcClient || adcEpoch !== vertexCredsEpoch()) {
     const credentials = vertexCredentials();
     adcEpoch = vertexCredsEpoch();
-    adcClient = await new GoogleAuth({ scopes: SCOPES, ...(credentials ? { credentials } : {}) }).getClient();
+    adcClient = await new (googleAuthLib().GoogleAuth)({ scopes: SCOPES, ...(credentials ? { credentials } : {}) }).getClient();
   }
   const t = await adcClient.getAccessToken();
   return t && t.token;

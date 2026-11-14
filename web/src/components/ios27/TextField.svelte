@@ -2,8 +2,7 @@
   // iOS 27 文本框组（kit 警告框里的「Text Field」）：组圆角 26（Figma 平滑 60%，9 宫遮罩）、行高 52、左右 16；
   // 字 17/20 Medium；底：亮 Fills/Secondary LINEAR_BURN、暗 Fills/Tertiary LINEAR_DODGE（在玻璃底上折成等效半透色）。
   // multiline 时是文本区（反馈用）。
-  import { ovUrl } from '../../lib/overlay.svelte.js';
-  const sq26 = $derived(ovUrl('ios27/squircle26.svg'));
+  import sq26 from '../../visuals/ios27/squircle26.svg';
   let { value = $bindable(''), placeholder = '', multiline = false, rows = 5, inputmode = undefined, autofocus = false, oninput, ...rest } = $props();
   let el = $state();
   $effect(() => { if (autofocus && el) setTimeout(() => { try { el.focus(); } catch {} }, 280); });

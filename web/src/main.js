@@ -1,7 +1,8 @@
 import './lib/devDesktopMock.js';   // 必须最先：dev ?fdmock 伪装桌面壳（prod 构建为空模块）
 import './lib/staleGuard.js';       // 构建漂移自愈：新部署后旧页面懒加载 404 → 自动刷新一次
 import './app.css';
-import './lib/overlay.svelte.js';   // 原版视觉资源（字体 / 素材 / 模块）的清单与取用口
+import './visuals/fonts.css';   // 原版字体（web/src/visuals/，vite 收进产物）
+import './visuals/glass.css';   // 玻璃图层的 url 变量 --ov-*
 import { initI18n } from './lib/i18n.js';
 
 // 界面语言先定、英文字典先到，再加载整个 app（app-main.js）——所有业务模块都在字典就绪后才求值，

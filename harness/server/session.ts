@@ -85,7 +85,8 @@ import {
   rollbackTo,
   deleteCheckpoints,
   latestCheckpointDiffStat,
-  changedPathsSince,
+  changedPathsSinceCheckpoint,
+  noteBeforeWrite,
   recordRunEnd,
   rollbackPlan,
   takeFilesSnapshot,
@@ -932,6 +933,7 @@ function buildState(
     ownerId: sessionId,
     // N26：子 agent 的破坏性命令同样先拍轮内快照（接父会话这一轮挂上的口；没在跑就什么都不做）
     snapshotFiles: (label) => stateRef?.ctx.snapshotFiles?.(label) ?? Promise.resolve(),
+    beforeFileWrite: (abs) => stateRef?.ctx.beforeFileWrite?.(abs) ?? Promise.resolve(),
     // C6（G3）：子 agent / Workflow worker 继承项目指令（AGENTS.md 与 GUIDE.md）——以前几十个并行的 coder 都不知道项目的硬规矩
     projectInstructions: () => inheritedInstructions(readProjectDocs(sandbox.root), readGuide(sandbox.root)),
     // O8：子 agent / 工作流里的 agent 的用量也记进这个会话的账本
@@ -1759,7 +1761,7 @@ export function rewindSession(sessionId: string, target: { ordinal: number; text
       if (!pre) return { ok: false, code: "unavailable", error: "could not snapshot the conversation first, so nothing was rewound (it would not be undoable)" };
       const kept = current.messages.slice(0, cut);
       const turn = await turnCheckpointFor(sessionId, kept, [PRE_ROLLBACK_LABEL, PRE_REWIND_LABEL, PRE_RESTORE_LABEL]);
-      const changed = turn ? await changedPathsSince(turn.tree, ws) : null;
+      const changed = turn ? await changedPathsSinceCheckpoint(sessionId, turn.n, ws) : null;
       const messages = changed && !changed.length ? kept : [...kept, rewindNote(changed)];
       const next: PersistedSession = { ...current, messages, todos: todosIn(kept), updatedAt: Date.now() };
       dropSession(sessionId);
@@ -2676,9 +2678,12 @@ async function executeRun(
       const ws = session.cfg?.workspace ?? workspaceRoot();
       const cp = await takeCheckpoint(preRec, ws, checkpointLabel);
       // V5（#20）：验证门禁的「改过没有」补上这一轮开跑以来的影子 git 差异
-      if (cp) state.changedSinceRunStart = () => changedPathsSince(cp.tree, ws, { skipNestedRepos: true });
+      if (cp) state.changedSinceRunStart = () => changedPathsSinceCheckpoint(session.id, cp.n, ws, { skipNestedRepos: true });
       if (cp) {
         runCheckpoint = { n: cp.n, ws };
+        // 大工作区（检查点只备份改过的文件）：Write / Edit 改文件前先把它补进这张检查点；这个会话头一回切到这一档时说一声
+        if (cp.scope === "touched") state.ctx.beforeFileWrite = (abs) => noteBeforeWrite(session.id, ws, abs);
+        if (cp.scopeStarted) fanout(session, { e: "notice", code: "checkpoint_touched" });
         // N26（HT3）：破坏性命令前的轮内快照（只有文件，回滚到它只还原文件）；这张开跑检查点就是「上一张」
         state.ctx.snapshotFiles = (label) => takeFilesSnapshot(session.id, ws, label, cp.n).then(() => undefined);
         state.snappedAtSeq = state.workSeq;
@@ -2791,6 +2796,7 @@ async function executeRun(
     state.ctx.requestPermission = undefined;
     state.changedSinceRunStart = undefined;
     state.ctx.snapshotFiles = undefined;
+    state.ctx.beforeFileWrite = undefined;
     state.ctx.submitPlan = undefined;
     state.ctx.emit = undefined;
     state.onModeChange = undefined;

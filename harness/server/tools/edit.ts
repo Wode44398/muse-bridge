@@ -159,6 +159,7 @@ export const editTool: Tool = {
     const result = eol === "\r\n" ? resultLF.replace(/\n/g, "\r\n") : resultLF;
 
     try {
+      await ctx.beforeFileWrite?.(abs).catch(() => {}); // 大工作区：改之前先备份这个文件（检查点只存改过的文件）
       await writeUserFile(abs, result); // U5：临时文件 + rename，写到一半出事原文件还在
       const stat = await fs.stat(abs);
       const totalLines = result.split(/\r?\n/).length;

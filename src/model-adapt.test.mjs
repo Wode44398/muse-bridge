@@ -101,6 +101,7 @@ test('余额不足披着 429 的皮：智谱 1113、OpenAI insufficient_quota �
   assert.equal(looksBilling(429, '{"error":{"code":"1113","message":"余额不足或无可用资源包,请充值。"}}'), true);
   assert.equal(looksBilling(429, '{"error":{"message":"You exceeded your current quota","type":"insufficient_quota"}}'), true);
   assert.equal(looksBilling(402, '{"error":{"message":"Insufficient Balance"}}'), true);
+  assert.equal(looksBilling(402, '{"error":{"code":402,"message":"Your prepayment credits are depleted. Please go to AI Studio","status":"RESOURCE_EXHAUSTED"}}'), true);
   assert.equal(looksBilling(429, '{"error":{"code":"1302","message":"您当前使用该 API 的并发数过高"}}'), false);
   assert.equal(looksBilling(429, '{"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}'), false);
   assert.equal(looksBilling(400, '余额不足'), false);

@@ -1,7 +1,8 @@
 <script lang="ts">
-  // 页面截图：图点开进应用灯箱（App 里：关闭钮 / 点图 / 返回键都能关）；下面一行地址 + 验证结论。
+  // 页面截图：图点开 = 本会话的图片画廊（嵌在 bridge 里走统一查看器，独立运行退回应用灯箱）；下面一行地址 + 验证结论。
   // R12：事件里只带会话资产 id，src 按 URL 取（令牌镜像进查询串）；老事件才是 dataUri。
-  import { app, type Item } from "../../lib/state.svelte.ts";
+  import type { Item } from "../../lib/state.svelte.ts";
+  import { openChatMedia } from "../../lib/open-media.ts";
   import * as api from "../../lib/api.ts";
   import { press } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
@@ -26,7 +27,7 @@
 </script>
 
 <div class="shot">
-  <button class="img" onclick={() => (app.lightbox = { src, caption: item.url })} use:press={{ scale: 0.995 }}>
+  <button class="img" onclick={(e) => openChatMedia(pane.chat, item, e.currentTarget.querySelector("img"), src)} use:press={{ scale: 0.995 }}>
     <img {src} alt={t("页面截图 {url}", { url: item.url })} loading="lazy" onerror={onError} />
   </button>
   <div class="meta">

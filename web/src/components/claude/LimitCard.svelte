@@ -9,7 +9,7 @@
   import { session } from '../../lib/state.svelte.js';
   import { limitResume, fetchLimitResume, setLimitAutoContinue } from '../../lib/chat.svelte.js';
   import { t, tc, isEn, locale } from '../../lib/i18n.js';
-  import { ovData } from '../../lib/overlay.svelte.js';
+  import { GLYPHS } from '../../visuals/data.js';
 
   let { m, last = false, sid = '', onRetry } = $props();
 
@@ -72,11 +72,8 @@
     try { await navigator.clipboard.writeText(details); copied = true; setTimeout(() => { copied = false; }, 1400); } catch {}
   }
 
-  // 用量仪表图标：原版字形（清单 data.glyphs.usageGauge：{ viewBox, transform?, d }，填充轮廓）
-  const ovGauge = $derived.by(() => {
-    const g = ovData('glyphs')?.usageGauge;
-    return g && typeof g.d === 'string' && typeof g.viewBox === 'string' ? g : null;
-  });
+  // 用量仪表图标：原版字形（visuals/data.js 的 GLYPHS.usageGauge：{ viewBox, transform?, d }，填充轮廓）
+  const ovGauge = GLYPHS.usageGauge;
 </script>
 
 <div class="lc sel-text" data-limit={lim.type || 'unknown'}>

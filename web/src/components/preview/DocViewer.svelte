@@ -2,7 +2,10 @@
   // 文档查看/编辑器（亮色文档 surface，自带头部，盖在 MediaViewer 暗壳之上）。
   // Markdown 走 Obsidian 式三态：阅读（obsmd 渲染）｜编辑（Live Preview，CM6 懒加载，
   // 光标进块显源码、表格 Excel 式常驻编辑）｜源码（同一 CM 实例关装饰）。
-  // 纯文本/代码仍是 textarea 源码编辑。保存写回云端(/api/file/save)或手机本地(SAF localWrite)。
+  // 纯文本/代码走 CodeView（CM6 只读查看：行号、语法高亮、查找 Ctrl+F、跳行 Ctrl+G、换行 Alt+Z、
+  // 字号缩放；编辑从工具/菜单进）；CSV/TSV 默认 TableView 表格；JSON 默认格式化、可切原文；日志级别着色。
+  // 字节读进来自己解码（BOM → UTF-8 → GB18030/Big5/Shift_JIS 打分），副标题标编码、菜单可改编码重开；
+  // 大文件只读前 N MB（标「仅显示前 xx」、不可编辑）。保存写回云端(/api/file/save)或手机本地(SAF localWrite)。
   //   · Obsidian 风笔记补全：frontmatter「笔记属性」面板、[[双链]]/相对 md 链接查看器内跳转
   //     （导航栈，返回逐级回退）、#标签 / ==高亮== / callout、底部「反向链接 / 出链」面板
   //     （/api/file/mdlinks，云端）+ 词数统计
@@ -10,13 +13,12 @@
   //     （磁盘期间被别处改过：先三方合并，合不上以磁盘为准、横幅让用户选）
   //   · 键盘避让（padding-bottom: --kb）；返回自动落盘（不可保存时才弹确认）
   import { untrack, tick } from 'svelte';
-  import { dragOut, previewDragSrc } from '../../lib/dragOut.js';
   import { api } from '../../lib/api.js';
   import { mediaFallbackUrl } from '../../lib/server.js';
   import '../../lib/doctheme.css';   // --md-* 纸面配色令牌（亮象牙白 / 暗暖墨，跟随全站明暗；编辑态/Office/PDF 共用）
   import { localWrite, localWriteB64, hasLocalWrite, localList, localReadText, localFileUrl } from '../../lib/localfs.js';
   import { pushBackLayer } from '../../lib/nav.js';
-  import { normalizeItem, cloudFileUrl, openPreview, preview } from '../../lib/preview.svelte.js';
+  import { normalizeItem, cloudFileUrl, previewPush } from '../../lib/preview.svelte.js';
   import { nativeWorkspaceWriteText, isNativeDesktop, desktopOpenExternal, nativePathForFile, nativeLocLocalOnly } from '../../lib/nativeDesktop.js';
   import { parseNote, renderObsMarkdown, renderPropWikilinks, noteStats, escapeHtml, escapeRegex, propKind, PROP_ICONS, MD_EXT_RE, scanFootnotes, renderFootnoteSection, lexObsBlocks, EMBED_SRC_OK } from '../../lib/obsmd.js';
   import { findSafeCut } from '../../lib/md.js';
@@ -26,21 +28,64 @@
   import { registerDraft } from '../../lib/uiReport.js';
   import { fsChange, fsMatches } from '../../lib/fsSync.svelte.js';
   import { IS_SHARE } from '../../lib/share.js';
-  import { t, tr, locale } from '../../lib/i18n.js';
+  import { t, tc, tr, locale } from '../../lib/i18n.js';
   import { uiConfirm } from '../../lib/dialogs.js';
-  import { interceptAppDownload } from '../../lib/save.js';
   import { guardSelection } from '../../lib/touchSelection.js';
   import { edgeAutoScroll } from '../../lib/touchAutoScroll.js';
+  import { previewViewAs } from '../../lib/preview.svelte.js';
+  import { useViewer, isEditable } from './kit/context.js';
+  import ViewerState from './kit/ViewerState.svelte';
+  import VIcon from './kit/VIcon.svelte';
+  import { fmtBytes } from './kit/actions.js';
+  import CodeView from './CodeView.svelte';
+  import TableView from './TableView.svelte';
+  import FindBar from './paged/FindBar.svelte';
+  import { readCapped, capFor, SAVE_MAX } from '../../lib/codeview/readtext.js';
+  import { detectEncoding, decodeBytes, encLabel, isUtf8, eolOf, ENCODINGS, looksText } from '../../lib/codeview/encoding.js';
+  import { looksLikeLog } from '../../lib/codeview/textutil.js';
+  import { looksMinified, formatJsonAsync } from '../../lib/codeview/jsonfmt.js';
+  import { siblingDesc, artifactRef } from '../../lib/docres.js';
+  import { langOf, iconKindOf, kindOf } from '../../lib/fileKinds.js';
 
-  let { item, onClose } = $props();
+  // 纯文本 / 代码 / 日志 / JSON / CSV（非 md）走 CodeView（CM6 只读视图，编辑入口在顶栏工具与 ⋮ 菜单里，
+  // 默认不是可写 textarea）；CSV / TSV 默认表格（TableView），可切原文。读取按字节、带上限（lib/codeview/readtext.js），
+  // 编码自动识别（BOM → 严格 UTF-8 → GB18030 / Big5 / Shift_JIS 打分），副标题显示编码、⋮ 里可手动换编码重新解码；
+  // 截断显示的、超过保存上限的、服务端不认的扩展名一律只读（以前截断后再保存会把文件截短）。
+
+  // 顶栏、toast、加载 / 错误 / 不支持态交给统一查看器外框（kit/context.js）：这里向外框声明标题（栈顶那篇）、
+  // 副标题（保存状态 / 所在文件夹）、栏内自定义区（阅读 / 编辑 / 源码三段 + 文本文件的保存钮）与返回拦截
+  // （先退笔记栈、未保存先确认）。编辑器内核不动。
+  let { item } = $props();
+  const viewer = useViewer();
 
   // —— 双链导航栈：栈顶=当前文档；[[链接]]/反链点击 push、返回 pop（安卓返回同步接管）——
   let stack = $state([item]);
   const cur = $derived(stack[stack.length - 1]);
   const isMd = $derived(cur.kind === 'markdown');
-  const isText = $derived(cur.kind === 'text' || isMd);
+  const isDelim = $derived(/^(csv|tsv)$/i.test(cur.ext || ''));
+  // 没扩展名 / 不认识的文件：先嗅前 4KB（sniff.v：'text' 像文本 | 'bin' 二进制 | 'forced' 用户点了「以文本方式打开」）
+  let sniff = $state(null);
+  const sniffKind = $derived(sniff?.key === draftKeyOf(cur) ? sniff.v : '');
+  const isText = $derived(cur.kind === 'text' || isMd || isDelim || sniffKind === 'text' || sniffKind === 'forced');
+  // 当前文档的读取结果：截断（只显示前 N MB）、原始编码与换行、文件字节数
+  let trunc = $state(null);        // null | { shown, total }
+  let encInfo = $state(null);      // { key, encoding, bom, eol }
+  let byteLen = $state(0);
+  const curEnc = $derived(encInfo?.key === draftKeyOf(cur) ? encInfo : null);
   // 公开分享页（/w/）是只读身份：写接口对 share 一律 401，编辑入口直接不给。
-  const editable = $derived(!IS_SHARE && !!cur.saveTarget && (cur.saveTarget.origin !== 'local' || hasLocalWrite()));
+  // 截断显示的（存回去会把文件截短）、超过服务端保存上限的、二进制硬按文本打开的不给编辑；
+  // 云端走 /api/file/save 的还得是服务端认的文本扩展名（点文件、无扩展名的它回 415，入口不给就不会存到一半才报错）
+  const editable = $derived(!IS_SHARE && !!cur.saveTarget && (cur.saveTarget.origin !== 'local' || hasLocalWrite())
+    && !trunc && !(byteLen > SAVE_MAX) && sniffKind !== 'forced' && srvSavable(cur));
+  const SRV_TEXT_EXT = new Set('txt md markdown json csv tsv log js mjs cjs ts jsx tsx css scss html htm xml svg yml yaml py rb go rs sh bat ps1 ini toml conf env sql vue c h cpp cc hpp java kt swift php lua r tex rst gitignore'.split(' '));
+  function srvSavable(c) {
+    const st = c.saveTarget;
+    if (!st || st.origin !== 'cloud' || st.nativeLocation) return true;   // 手机本地 / 电脑客户端本机写不经服务端
+    const n = String(st.rel || c.name || '').split('/').pop(), i = n.lastIndexOf('.');   // 同 path.extname：点文件没有扩展名
+    return i > 0 && SRV_TEXT_EXT.has(n.slice(i + 1).toLowerCase());
+  }
+  // 非 UTF-8 的文件不自动保存（保存要转成 UTF-8，得用户点头）：md 的停笔自动存、离开静默存都按「不可自动保存」走
+  const mdAuto = $derived(isMd && editable && isUtf8(curEnc?.encoding));
 
   // —— 未保存草稿（按文件键存内存，跨重开恢复）——
   // 值是 { text, base }：base=这份草稿基于的磁盘原文。重开时磁盘若已不是 base（期间 Claude/其他端改过），
@@ -53,8 +98,22 @@
   const draftKey = $derived(draftKeyOf(cur));
 
   let content = $state(''), original = $state('');
-  // md：'preview'(阅读) | 'live'(编辑=Live Preview) | 'source'(源码)；文本文件：'edit'(textarea)
+  // md：'preview'(阅读) | 'live'(编辑=Live Preview) | 'source'(源码)；文本文件：'view'(只读查看) | 'edit'(编辑)
   let mode = $state('preview');
+  // —— 文本文件（非 md）的查看状态 ——
+  let cv = $state(null), tv = $state(null);   // CodeView / TableView 实例
+  let wrap = $state(false);                   // 自动换行：按类别（纯文本 / 代码 / 日志 / JSON）记在本机
+  let wrapCat = '', wrapKept = null;          // wrapKept：本机记着的（或按类别默认的）那个值，用户真切换了才回写
+  let isLog = $state(false);
+  let jsonPretty = $state(null);              // { key, src, text }：压成一行的 JSON 默认格式化显示（src＝格式化的是哪份原文）
+  let jsonRaw = $state(false);                // 看原文
+  let tableRaw = $state(false);               // CSV / TSV 看原文
+  let rawBytes = null, rawFor = '';           // 读到的原始字节（手动换编码时重新解码；非响应式）
+  const ENCS = (window.__bridgeDocEnc ||= new Map());   // 文件键 → { encoding, bom, eol }：保存按原编码 / BOM 写回
+  const lang = $derived(langOf(cur.name));
+  const showTable = $derived(isDelim && !tableRaw && mode !== 'edit');
+  const jsonCan = $derived(jsonPretty?.key === draftKeyOf(cur) && jsonPretty.src === content);   // 改过 / 换过编码就作废，显示当前正文
+  const shown = $derived(mode !== 'edit' && jsonCan && !jsonRaw ? jsonPretty.text : content);
   let loading = $state(true), loadError = $state(false);
   let restored = $state(false);   // false | 'draft'（原样恢复草稿）| 'merged'（草稿与磁盘新修改已合并）
   let stale = $state(null);       // 当前文档的冲突草稿 { key, text }（横幅：恢复草稿 / 丢弃）
@@ -62,7 +121,6 @@
   // 三方合并合不上 → { key, theirs }；横幅让用户选「保留我的 / 用最新版」，期间自动保存暂停
   let conflict = $state(null);
   let justSaved = $state(false), savedT = null;   // 刚保存完：顶栏副标题短暂显示「已保存」
-  let toast = $state('');
   const dirty = $derived(content !== original);
 
   // —— 工作区协同：编辑态上抛（agent 的 workspace.view 看得到模式与未保存标记）+
@@ -84,12 +142,22 @@
       : justSaved ? { kind: 'ok', text: t('已保存') }
       : !editable ? { kind: 'ro', text: t('只读') }
       : folder ? { kind: 'path', text: folder } : null);
+  // 编码 / 换行跟在状态后面（同 VS Code 状态栏）：电脑上文本文件常显；md 绝大多数是 UTF-8，只在不是的时候才显。
+  // 触屏顶栏窄（标题 + 三个工具），只在真不是 UTF-8（GB18030 / Big5 / Shift_JIS…）时占位，BOM / CRLF 看菜单里的「编码」
+  const encText = $derived.by(() => {
+    const e = curEnc;
+    if (!isText || loading || !e) return '';
+    if (viewer.touch) return isUtf8(e.encoding) ? '' : encLabel(e.encoding, false);
+    const plain = isUtf8(e.encoding) && !e.bom;
+    if (isMd && plain) return '';
+    return encLabel(e.encoding, e.bom) + (e.eol === '\r\n' ? ' · CRLF' : '');
+  });
 
   const MD_MODES = ['preview', 'live', 'source'];
   const lastMdMode = () => (MD_MODES.includes(window.__bridgeMdMode) ? window.__bridgeMdMode : 'preview');
   function setMdMode(m) {
     if (m === mode) return;
-    if (m === 'preview' && mode !== 'preview' && dirty && isMd && editable) save(true);   // 切回阅读即落盘
+    if (m === 'preview' && mode !== 'preview' && dirty && mdAuto) save(true);   // 切回阅读即落盘
     grabScroll();            // 换模式不回到顶部：先记下进度，新模式渲染完按比例落回原处
     pendingScroll = true;
     mode = m;
@@ -104,6 +172,10 @@
   // 视口外的高度是估算值，纯比例会偏出几屏。停在文首时只记「顶部」，另一态也回顶（两态首屏各排各的）。
   let docScrollEl = $state(null);
   let anchor = null, pendingScroll = false;
+  // 从附件层返回（previewPop 后本组件按原条目重建）：按离开时记下的锚点落回原处
+  const RESUME = (window.__pvDocResume ||= new Map());
+  // svelte-ignore state_referenced_locally
+  { const r = RESUME.get(item?.key); if (r) { RESUME.delete(item.key); anchor = r; pendingScroll = true; } }
   const anchorDy = (h) => Math.min(120, Math.round((h || 0) * 0.2));
   const nlz = (s) => s.replace(/\r\n?/g, '\n');   // CM 文档的换行一律是 \n：两边偏移都按归一后的文本算
 
@@ -185,49 +257,117 @@
     applyScroll();
   });
 
-  let toastT = null;
-  function showToast(m) { toast = m; clearTimeout(toastT); toastT = setTimeout(() => (toast = ''), 1800); }
+  // 提示统一走外框的 toast 出口（文档皮肤胶囊、底栏上沿往上 12px）
+  function showToast(m) { viewer.toast(m, { ms: 1800 }); }
 
   let seq = 0;   // 竞态闸：快速连点双链时只认最后一次加载
   let loadCtrl = null;   // 在途加载的中止柄：换文档/卸载时掐掉，不陪葬
   async function load() {
     const my = ++seq, c = cur, dk = draftKeyOf(c);
     loading = true; loadError = false; restored = false; stale = null; conflict = null;
-    mode = c.kind === 'markdown' ? (MD_MODES.includes(c.startMode) ? c.startMode : lastMdMode()) : 'edit';
+    trunc = null; jsonRaw = false; tableRaw = false; rawBytes = null; rawFor = '';
+    mode = c.kind === 'markdown' ? (MD_MODES.includes(c.startMode) ? c.startMode : lastMdMode()) : 'view';
     loadLinks(c);
-    if (!(c.kind === 'text' || c.kind === 'markdown')) { loading = false; return; }
+    const forced = sniff?.key === dk && (sniff.v === 'text' || sniff.v === 'forced');
+    const textish = c.kind === 'text' || c.kind === 'markdown' || /^(csv|tsv)$/i.test(c.ext || '') || forced;
+    // 不认识的文件（无扩展名、未知扩展名）：嗅前 4KB，像文本就按文本开，否则「无法预览」+ 以文本方式打开
+    const probe = !textish && c.kind === 'other' && !!c.url && iconKindOf(c.name) === 'file';
+    if (!textish && !probe) { loading = false; return; }
+    // 首包 12s 超时——切后台回来的半开 socket 会让 fetch 永挂（转圈永远转的元凶，
+    // 同聊天流 07-30 看门狗的病根）；头到了正文另给 120s 兜底，超时/断网走「重试」错误态（见 readCapped）
+    loadCtrl?.abort();
+    const ctrl = (loadCtrl = new AbortController());
     try {
-      let text;
+      if (probe) {
+        const head = await readCapped(c.url, { cap: 4096, size: c.size, signal: ctrl.signal });
+        if (my !== seq) return;
+        const v = looksText(head.bytes) ? 'text' : 'bin';
+        sniff = { key: dk, v };
+        if (v === 'bin') { loading = false; return; }
+      }
+      const cap = capFor(viewer.touch);
+      let text = null, det = { encoding: 'utf-8', bom: false }, bytes = null, total = Number.isFinite(c.size) ? c.size : null, truncated = false;
       if (c.text != null) {                                     // 本地：调用方已读
         text = c.text;
         // 栈里的 text 是压栈那一刻读的：跳走期间存过就旧了（返回再拿它当原文，下次自动保存会把刚存的盖回去）。能现读就现读
         if (c.saveTarget?.origin === 'local') { const fresh = localReadText(c.saveTarget.rel); if (fresh || !text) text = fresh; }
-      } else {
+        // 本地读接口按 UTF-8 解：解出替换符（GBK 老文件）且有字节地址可取 → 改按字节读、识别编码
+        if (text && text.includes('\uFFFD') && c.url) text = null;
+        else {
+          text = text || '';
+          if (text.charCodeAt(0) === 0xfeff) { text = text.slice(1); det = { encoding: 'utf-8', bom: true }; }
+          if (text.length > cap) { text = text.slice(0, cap); truncated = true; }
+        }
+      }
+      if (text == null) {
         // 这篇还有写请求在途（跳走马上回来 / 关掉马上重开）：先等它落盘再读，否则读到写入之前的旧文（最多等 8s）
         const q = SAVEQ.get(dk);
         if (q) await Promise.race([q, new Promise((r) => setTimeout(r, 8000))]);
         if (my !== seq) return;
-        // 首包 12s 超时——切后台回来的半开 socket 会让 fetch 永挂（转圈永远转的元凶，
-        // 同聊天流 07-30 看门狗的病根）；头到了正文另给 120s 兜底，超时/断网走「重试」错误态。
-        loadCtrl?.abort();
-        const ctrl = (loadCtrl = new AbortController());
-        let timer = setTimeout(() => ctrl.abort(), 12000);
-        try {
-          // no-store：/api/file 回的是 Cache-Control: max-age=30，而保存走另一个 URL（POST /api/file/save）不会让它失效——
-          // 30s 内跳回/重开会读到浏览器缓存里的旧稿，接着一编辑，自动保存就把刚存好的内容盖回去（验收 e2e-1）
-          const r = await fetch(c.url, { cache: 'no-store', credentials: 'same-origin', signal: ctrl.signal });
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          clearTimeout(timer);
-          timer = setTimeout(() => ctrl.abort(), 120000);
-          text = await r.text();
-        } finally { clearTimeout(timer); }
+        // 按字节读、带上限：超过上限只取前 cap（流式读够就掐断，几十 MB 的日志不整个拉进内存）
+        const r = await readCapped(c.url, { cap, size: c.size, signal: ctrl.signal });
+        if (my !== seq) return;
+        bytes = r.bytes; total = r.total; truncated = r.truncated;
+        det = detectEncoding(bytes);
+        text = decodeBytes(bytes, det.encoding, { partial: truncated });
       }
       if (my !== seq) return;
+      rawBytes = bytes; rawFor = dk;
+      const e = { key: dk, encoding: det.encoding, bom: det.bom, eol: eolOf(text) };
+      ENCS.set(dk, { encoding: e.encoding, bom: e.bom, eol: e.eol });
+      encInfo = e;
+      byteLen = total ?? bytes?.length ?? text.length;
+      trunc = truncated ? { shown: bytes?.length ?? cap, total } : null;
+      if (c.kind !== 'markdown') prepText(c, dk, text, truncated);
       original = text;
       linkSigs.set(linksKeyOf(c), linkSigOf(text));   // 这次拉的出链索引对应的就是这份磁盘原文
-      content = restoreDraft(c, dk, text);
+      content = truncated ? text : restoreDraft(c, dk, text);   // 截断的只读：不恢复草稿（草稿是整篇的，拿它盖会出事）
       loading = false;
     } catch { if (my === seq) { loadError = true; loading = false; } }
+  }
+  // 文本文件的查看偏好：日志识别、换行按类别取本机记忆（纯文本默认换行，代码 / 日志 / JSON 默认不换）、
+  // 压成一行的 JSON 后台格式化（失败 = 带注释 / 截断的，按原文显示）
+  function prepText(c, dk, text, truncated) {
+    const lg = langOf(c.name);
+    isLog = !lg && !/^(csv|tsv)$/i.test(c.ext || '') && looksLikeLog(text, c.name);
+    wrapCat = isLog ? 'log' : lg === 'json' ? 'json' : lg ? 'code' : 'text';
+    let w = null;
+    try { w = localStorage.getItem('pv.wrap.' + wrapCat); } catch {}
+    wrap = wrapKept = w == null ? wrapCat === 'text' : w === '1';
+    if (jsonPretty?.key !== dk) jsonPretty = null;
+    if (lg === 'json' && !truncated && looksMinified(text)) {
+      const sig = loadCtrl?.signal;
+      formatJsonAsync(text, { signal: sig }).then((s) => {
+        if (s && s !== text && draftKeyOf(cur) === dk && !sig?.aborted) jsonPretty = { key: dk, src: text, text: s };
+      }).catch(() => {});
+    }
+  }
+  // 只在用户切过之后回写（打开时读出来的 / 默认值不落盘：没动过就别替用户记一个默认）
+  $effect(() => { const w = wrap; if (wrapCat && w !== wrapKept) { wrapKept = w; try { localStorage.setItem('pv.wrap.' + wrapCat, w ? '1' : '0'); } catch {} } });
+
+  // 「以文本方式打开」：二进制 / 不认识的类型硬按文本解（只读）
+  function forceText() { sniff = { key: draftKeyOf(cur), v: 'forced' }; load(); }
+
+  // 手动换编码重新解码（VS Code「通过编码重新打开」）：有没存的修改先不让换（换了就丢）
+  async function reopenAs(encName) {
+    if (dirty) { showToast(t('有未保存的修改，先保存再换编码')); return; }
+    const c = cur, dk = draftKeyOf(c);
+    let bytes = rawFor === dk ? rawBytes : null;
+    if (!bytes) {
+      if (!c.url) return;
+      try { bytes = (await readCapped(c.url, { cap: capFor(viewer.touch), size: c.size })).bytes; }
+      catch { showToast(t('读取失败')); return; }
+      if (draftKeyOf(cur) !== dk || dirty) return;
+      rawBytes = bytes; rawFor = dk;
+    }
+    const text = decodeBytes(bytes, encName, { partial: !!trunc });
+    const det = detectEncoding(bytes.subarray(0, 4));
+    const e = { key: dk, encoding: encName, bom: det.bom && det.encoding === encName, eol: eolOf(text) };
+    ENCS.set(dk, { encoding: e.encoding, bom: e.bom, eol: e.eol });
+    encInfo = e;
+    original = text;
+    applyText(text, true);
+    if (c.kind !== 'markdown') prepText(c, dk, text, !!trunc);
   }
   // 挂载/换文档（含双链跳转）即加载。只跟 cur：load → loadLinks 同步读了 links、拉回来又写它，
   // 不隔开的话云端 md 第一次打开会被出链索引的回包再触发一整遍加载（正文重拉、阅读/编辑态被复位）
@@ -283,11 +423,10 @@
   let fsT = null, pendingFs = false;
   async function refreshFromDisk() {
     const my = ++seq, c = cur, key = draftKeyOf(c);
-    if (c.text != null || !c.url) return;   // 本地 SAF 文件不是 agent 改的对象
+    if (c.text != null || !c.url || trunc) return;   // 本地 SAF 文件不是 agent 改的对象；截断显示的大文件不跟（每次事件重拉几 MB）
     try {
-      const r = await fetch(c.url, { cache: 'no-store', credentials: 'same-origin' });
-      if (!r.ok) return;
-      const text = await r.text();
+      const text = await readDisk(c);
+      if (text == null) return;
       if (my !== seq || loading) return;
       if (saving) { pendingFs = true; return; }
       if (conflict?.key === key) { if (text !== conflict.theirs) conflict = { key, theirs: text }; return; }
@@ -344,22 +483,36 @@
   // 由 saveDoc 走三方合并，不覆盖。云端交给服务端比指纹（409）；电脑客户端本地文件壳没有读接口，
   // 拿加载时那个地址现读一次；手机本地 SAF 现读比对（后两者读写之间有极小窗口，够用）
   function conflictErr(current) { const e = new Error('conflict'); e.conflict = true; e.current = current; return e; }
+  const noBom = (s) => (s && s.charCodeAt(0) === 0xfeff ? s.slice(1) : s);
+  // 现读磁盘全文（跟盘 / 写前校验）：按这篇加载时识别的编码解（GBK 文件拿 r.text() 读出来是乱码，会被当成「别处改过」）
+  async function readDisk(c) {
+    const e = ENCS.get(draftKeyOf(c));
+    const r = await fetch(c.url, { cache: 'no-store', credentials: 'same-origin' });
+    if (!r.ok) return null;
+    if (!e || isUtf8(e.encoding)) return noBom(await r.text());
+    return decodeBytes(new Uint8Array(await r.arrayBuffer()), e.encoding);
+  }
   async function writeDoc(c, text, base) {
     const st = c.saveTarget, guard = typeof base === 'string';
+    // 编码：一律写 UTF-8。原文带 UTF-8 BOM 的补回 BOM（指纹仍按去掉 BOM 的算，同服务端）；
+    // 非 UTF-8 的必须先经 save() 里用户确认转码（确认后这里记成 UTF-8）——兜底：没确认的不写，免得静默改了编码
+    const enc = ENCS.get(draftKeyOf(c));
+    if (enc && !isUtf8(enc.encoding)) throw new Error(t('需要先确认转成 UTF-8'));
+    const out = enc?.bom ? '\uFEFF' + text : text;
     if (st.origin === 'cloud' && st.nativeLocation) {
       if (guard && c.url) {
         let cur = null;
-        try { const r = await fetch(c.url, { cache: 'no-store', credentials: 'same-origin' }); if (r.ok) cur = await r.text(); } catch {}
+        try { cur = await readDisk(c); } catch {}
         if (cur != null && cur !== base) throw conflictErr(cur);
       }
-      return nativeWorkspaceWriteText(st.rel, text, st.nativeLocation);
+      return nativeWorkspaceWriteText(st.rel, out, st.nativeLocation);
     }
     if (st.origin === 'cloud') {
-      try { return await api.saveFileGuarded(st.rel, text, st.ws, guard ? textHash(base) : undefined); }
+      try { return await api.saveFileGuarded(st.rel, out, st.ws, guard ? textHash(base) : undefined); }
       catch (e) { if (e?.status === 409 && typeof e.body?.current === 'string') throw conflictErr(e.body.current); throw e; }
     }
-    if (guard) { const cur = localReadText(st.rel); if (cur && cur !== base) throw conflictErr(cur); }
-    const r = localWrite(st.rel, text);
+    if (guard) { const cur = noBom(localReadText(st.rel)); if (cur && cur !== base) throw conflictErr(cur); }
+    const r = localWrite(st.rel, out);
     if (!r || r.error) throw new Error(r && r.error || t('写入失败'));
   }
   function queueWrite(key, c, text, base) {
@@ -371,8 +524,26 @@
   }
 
   function save(quiet = false) {
+    cv?.flush();   // CodeView 大文档的改动是防抖回调的：存之前把最后一拍拿回来
     if (!editable || content === original || conflict) return;
-    return saveDoc(topItem(), content, quiet, original);
+    const c = topItem(), key = draftKeyOf(c), enc = ENCS.get(key);
+    if (enc && !isUtf8(enc.encoding)) {
+      // 原文不是 UTF-8（GBK / Big5 / UTF-16…）：保存只能写 UTF-8，先说清楚再存；自动 / 静默保存不替用户做这个决定
+      if (quiet || asking) return;
+      const text = content;
+      asking = true;
+      return uiConfirm(t('这个文件是 {enc} 编码，保存后会转成 UTF-8（其他只认 {enc} 的程序可能读成乱码）。', { enc: encLabel(enc.encoding) }), { okLabel: t('转成 UTF-8 并保存') })
+        .then((ok) => {
+          if (!ok || !alive || draftKeyOf(topItem()) !== key) return;
+          const e = { encoding: 'utf-8', bom: false, eol: enc.eol };
+          ENCS.set(key, e);
+          encInfo = { key, ...e };
+          // 不带写前校验：磁盘上是旧编码的字节，服务端按 UTF-8 算的指纹必然对不上；用户已明确确认覆盖
+          return saveDoc(c, text, false, undefined);
+        })
+        .finally(() => { asking = false; });
+    }
+    return saveDoc(c, content, quiet, original);
   }
   // base：这次写入基于的磁盘原文（当前文档=original；补存草稿=草稿记的 base）
   async function saveDoc(c, text, quiet, base) {
@@ -459,13 +630,13 @@
     if (content === original || !editable || conflict) return;
     clearTimeout(saveT);
     if (saveFails > 0) { if (saveFails < 3) saveT = setTimeout(() => save(true), 3000); return; }
-    if (again || (isMd && mode !== 'preview')) saveT = setTimeout(() => save(true), again ? 0 : 1200);
+    if (again || (mdAuto && mode !== 'preview')) saveT = setTimeout(() => save(true), again ? 0 : 1200);
   }
 
   // md 编辑态：停笔 1.2s 自动落盘（Obsidian 无保存键心智）；文本文件仍手动保存
   $effect(() => {
     content;
-    if (loading || !isMd || !editable || mode === 'preview' || !dirty || conflict) return;
+    if (loading || !mdAuto || mode === 'preview' || !dirty || conflict) return;
     clearTimeout(saveT);
     saveT = setTimeout(() => save(true), 1200);
     return () => clearTimeout(saveT);
@@ -480,7 +651,7 @@
   $effect(() => () => { gone = true; });
   function guardDirty(go) {
     if (!dirty) { go(); return; }
-    if (isMd && editable) { save(true); go(); return; }
+    if (mdAuto) { save(true); go(); return; }
     if (asking) return;   // 已经在问了（连点返回 / 连按返回键）：不排第二个同样的确认
     asking = true;
     const at = cur;
@@ -488,16 +659,232 @@
       .then((ok) => { if (ok && !gone && cur === at) go(); })
       .finally(() => { asking = false; });
   }
+  // 外框的关闭钮 / Esc 先问这里：true = 自己消费了（未保存且用户取消、或退回上一篇笔记），false = 交给外框关查看器
   function back() {
-    guardDirty(() => {
+    if (leaving) return false;                     // 已经问过并确认离开：放行给外框关
+    cv?.flush();                                   // 代码编辑器的最后一笔（防抖还没回写 content）先收进来再判脏
+    if (!dirty || mdAuto) {            // 干净 / 可静默落盘：同步决定，手感不变
+      if (dirty) save(true);
+      if (stack.length > 1) { stack = stack.slice(0, -1); return true; }
+      return false;
+    }
+    guardDirty(() => {                             // 要问：先吃掉这次关闭，答「离开」后再退一篇或关查看器
       if (stack.length > 1) stack = stack.slice(0, -1);
-      else onClose?.();
+      else { leaving = true; viewer.close(); }
     });
+    return true;
   }
+  let leaving = false;
   function popNote() {
     if (stack.length > 1) guardDirty(() => { if (stack.length > 1) stack = stack.slice(0, -1); });
   }
   $effect(() => { if (stack.length > 1) return pushBackLayer(popNote); });   // 系统返回：先弹笔记栈，再轮到关查看器
+
+  // —— 文本文件（非 md）：查看 ⇄ 编辑。默认只读查看（CodeView），编辑入口在顶栏工具与 ⋮ 菜单 ——
+  const textDoc = $derived(isText && !isMd && !loading && !loadError);
+  function setTextMode(m) {
+    if (m === mode || isMd) return;
+    if (m === 'edit' && !editable) return;
+    cv?.flush();
+    mode = m;
+  }
+  const toggleEdit = () => setTextMode(mode === 'edit' ? 'view' : 'edit');
+  // —— md 阅读态：查找（Ctrl+F）+ 键盘滚动 ——
+  // 查找：共用 FindBar + CSS 自定义高亮（::highlight），不改 DOM、不打断选区，与 Word 快速预览同一做法；
+  //   不支持的内核退化成选中当前命中。正文分块渲染 / 双链索引到货重渲时按原查询重扫（保住当前第几个）。
+  // 滚动：焦点在 .doc-scroll 里（打开时给它、点正文也会落到它上面）由浏览器原生滚；焦点在顶栏 / 外框上时
+  //   这里代滚一下并把焦点交回滚动区，之后的键又回到原生滚动。
+  const HL = typeof CSS !== 'undefined' && !!CSS.highlights && typeof Highlight !== 'undefined';
+  let fOpen = $state(false), fQuery = $state(''), fCur = $state(0), fTotal = $state(0), fCase = $state(false);
+  let findBar = $state(null);
+  let fHits = [];
+  const F_MAX = 5000;
+  function clearHl() { if (HL) { CSS.highlights.delete('md-hit'); CSS.highlights.delete('md-cur'); } }
+  function mdSearch(q, keep = false) {
+    const was = fCur;
+    clearHl();
+    fHits = []; fCur = 0; fTotal = 0;
+    if (!q || !pageEl || !docScrollEl) return;
+    const needle = fCase ? q : q.toLowerCase();
+    const walker = document.createTreeWalker(pageEl, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => {
+        const p = n.parentElement;
+        if (!p || p.closest('.doc-tailhost, .doc-rendering, style, script')) return NodeFilter.FILTER_REJECT;
+        return p.getClientRects().length ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;   // 折叠着的块里的字不算
+      },
+    });
+    for (let n = walker.nextNode(); n && fHits.length < F_MAX; n = walker.nextNode()) {
+      const raw = n.data;
+      // 不区分大小写：整段转小写再找；大小写折叠改了长度的极少数字符（İ 之类）就按原文、原样的查询词找，免得区间错位
+      const low = fCase ? raw : raw.toLowerCase();
+      const fold = !fCase && low.length === raw.length;
+      const s = fold ? low : raw;
+      const nd = fCase || fold ? needle : q;
+      for (let i = s.indexOf(nd); i >= 0 && fHits.length < F_MAX; i = s.indexOf(nd, i + nd.length)) {
+        const r = document.createRange();
+        r.setStart(n, i); r.setEnd(n, i + nd.length);
+        fHits.push(r);
+      }
+    }
+    fTotal = fHits.length;
+    if (!fHits.length) return;
+    if (keep && was) { fCur = Math.min(was, fHits.length); paintHits(); return; }
+    // 从当前看到的位置往后找第一个
+    const top = docScrollEl.getBoundingClientRect().top;
+    const k = fHits.findIndex((r) => r.getBoundingClientRect().bottom >= top);
+    fCur = (k < 0 ? 0 : k) + 1;
+    paintHits(); revealHit();
+  }
+  function paintHits() {
+    const c = fHits[fCur - 1];
+    if (HL) {
+      CSS.highlights.set('md-hit', new Highlight(...fHits));
+      if (c) { const one = new Highlight(c); one.priority = 1; CSS.highlights.set('md-cur', one); }
+    } else if (c) {
+      try { const sel = getSelection(); sel.removeAllRanges(); sel.addRange(c); } catch {}
+    }
+  }
+  function revealHit() {
+    const c = fHits[fCur - 1];
+    if (!c || !docScrollEl) return;
+    const r = c.getBoundingClientRect(), sr = docScrollEl.getBoundingClientRect();
+    const topGap = viewer.touch ? 16 : 64;   // 电脑查找卡浮在右上角，命中别藏在它下面
+    if (r.top < sr.top + topGap || r.bottom > sr.bottom - 40) docScrollEl.scrollTop += r.top - sr.top - Math.round(sr.height / 3);
+  }
+  function mdStep(dir) {
+    if (!fHits.length) return;
+    fCur = ((fCur - 1 + dir + fHits.length) % fHits.length) + 1;
+    paintHits(); revealHit();
+  }
+  function mdCase(on) { fCase = on; mdSearch(fQuery); }
+  function openMdFind() {
+    if (isMd && mode !== 'preview') return;
+    if (fOpen) { findBar?.focus(); return; }
+    fOpen = true;
+  }
+  function closeMdFind() {
+    // 焦点还在查找条里就交回正文滚动区（查找条一卸载焦点会掉到 body，Tab 从头走、键盘滚不动）
+    const a = document.activeElement;
+    if (fOpen && docScrollEl && (!a || a === document.body || a.closest?.('.fb'))) try { docScrollEl.focus({ preventScroll: true }); } catch {}
+    fOpen = false; fQuery = ''; fHits = []; fCur = 0; fTotal = 0; clearHl();
+  }
+  // 换篇 / 切到编辑或源码：收起查找
+  $effect(() => { cur.key; mode; untrack(() => { if (fOpen) closeMdFind(); }); });
+  // 正文换了（分块续渲、双链索引到货重渲）：按原查询重扫，区间才不会指向已被替换掉的节点
+  $effect(() => { mdBlocks; if (untrack(() => fOpen && fQuery)) tick().then(() => { if (fOpen && fQuery) mdSearch(fQuery, true); }); });
+  $effect(() => () => clearHl());
+  // 电脑：md 打开（或从编辑切回阅读）后把焦点给滚动区，方向键 / 空格 / PgDn 直接能滚；焦点已在别的控件上就不抢
+  $effect(() => {
+    if (!isMd || mode !== 'preview' || loading || loadError || !docScrollEl || viewer.touch || viewer.active === false) return;
+    const el = docScrollEl;
+    tick().then(() => {
+      const a = document.activeElement, root = viewer.root?.();
+      if (el.isConnected && (!a || a === document.body || a === root)) try { el.focus({ preventScroll: true }); } catch {}
+    });
+  });
+  function mdKeys(e) {
+    if (mode !== 'preview' || !docScrollEl) return false;
+    const k = e.key, mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.altKey && !e.shiftKey && e.code === 'KeyF') { openMdFind(); return true; }
+    if (fOpen && (k === 'F3' || (mod && !e.altKey && e.code === 'KeyG'))) { if (fQuery) mdStep(e.shiftKey ? -1 : 1); else findBar?.focus(); return true; }
+    if (k === 'Escape' && fOpen) { closeMdFind(); return true; }
+    if (mod || e.altKey || isEditable(e.target)) return false;
+    if (docScrollEl.contains(e.target)) return false;   // 焦点在滚动区里：浏览器原生滚（含平滑与连按加速）
+    const el = docScrollEl, page = Math.max(40, el.clientHeight - 48);
+    let dy = null, to = null;
+    switch (k) {
+      case 'ArrowDown': dy = 48; break;
+      case 'ArrowUp': dy = -48; break;
+      case 'PageDown': dy = page; break;
+      case 'PageUp': dy = -page; break;
+      case ' ': if (e.target?.closest?.('button, a, [role="button"]')) return false; dy = e.shiftKey ? -page : page; break;
+      case 'Home': to = 0; break;
+      case 'End': to = el.scrollHeight; break;
+      default: return false;
+    }
+    if (to != null) el.scrollTo({ top: to }); else el.scrollBy({ top: dy });
+    try { el.focus({ preventScroll: true }); } catch {}
+    return true;
+  }
+
+  // 查看器键盘：Ctrl+S 存；表格态交给 TableView、代码态交给 CodeView（查找 / 跳行 / 换行 / 字号）；编辑中 Esc 先退回查看
+  function docKeys(e) {
+    if (loading || loadError || !isText || e.isComposing) return false;
+    if (isMd) return mdKeys(e);
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.altKey && !e.shiftKey && e.code === 'KeyS') { if (editable && dirty) save(); return true; }
+    if (showTable ? tv?.handleKey(e) : cv?.handleKey(e)) return true;
+    if (e.key === 'Escape' && mode === 'edit') { setTextMode('view'); return true; }
+    return false;
+  }
+  function docTools() {
+    if (isMd && mode === 'preview' && !loading && !loadError && !viewer.touch) return [{ id: 'find', icon: 'search', label: t('查找'), kbd: 'Ctrl+F', active: fOpen, onClick: openMdFind }];
+    if (!textDoc) return [];
+    const edit = editable ? { id: 'edit', icon: 'edit', label: mode === 'edit' ? t('完成编辑') : t('编辑'), active: mode === 'edit', onClick: toggleEdit } : null;
+    if (showTable) {
+      return [
+        { id: 'raw', icon: 'code', label: t('查看原文'), onClick: () => (tableRaw = true) },
+        { id: 'find', icon: 'search', label: t('筛选行'), kbd: 'Ctrl+F', onClick: () => tv?.openFind() },
+        edit,
+      ].filter(Boolean);
+    }
+    const out = [];
+    if (isDelim && mode !== 'edit') out.push({ id: 'table', icon: 'table', label: t('表格视图'), onClick: () => (tableRaw = false) });
+    else if (!viewer.touch) out.push({ id: 'wrap', icon: 'wrap', label: t('自动换行'), kbd: 'Alt+Z', active: wrap, onClick: () => (wrap = !wrap) });
+    out.push({ id: 'find', icon: 'search', label: t('查找'), kbd: 'Ctrl+F', onClick: () => cv?.openFind() });
+    if (edit) out.push(edit);
+    return out.slice(0, 3);
+  }
+  function docMenu() {
+    const out = [];
+    if (item.origKind === 'image') out.push({ id: 'asImage', label: t('查看图片'), icon: 'image', onSelect: () => previewViewAs('image') });
+    if (!isText || loading || loadError) return out;
+    if (isMd && mode === 'preview') out.push({ id: 'find', label: t('查找…'), icon: 'search', kbd: 'Ctrl+F', onSelect: openMdFind });
+    if (!isMd) {
+      if (editable) out.push({ id: 'edit', label: mode === 'edit' ? t('完成编辑') : t('编辑'), icon: 'edit', onSelect: toggleEdit });
+      if (showTable) {
+        out.push({ id: 'find', label: t('筛选行…'), icon: 'search', kbd: 'Ctrl+F', onSelect: () => tv?.openFind() });
+        out.push({ id: 'goto', label: t('跳到行…'), icon: 'gotoLine', kbd: 'Ctrl+G', onSelect: () => tv?.openGoto() });
+        out.push({ id: 'raw', label: t('查看原文'), icon: 'code', onSelect: () => (tableRaw = true) });
+      } else {
+        out.push({ id: 'find', label: t('查找…'), icon: 'search', kbd: 'Ctrl+F', onSelect: () => cv?.openFind() });
+        out.push({ id: 'goto', label: t('跳到行…'), icon: 'gotoLine', kbd: 'Ctrl+G', onSelect: () => cv?.openGoto() });
+        out.push({ id: 'wrap', label: t('自动换行'), icon: 'wrap', kbd: 'Alt+Z', checked: wrap, keepOpen: true, onSelect: () => (wrap = !wrap) });
+        out.push({ id: 'fs', label: t('字号'), icon: 'textSize', submenu: { title: t('字号'), items: () => [
+          { id: 'fsUp', label: tc('字号', '放大'), icon: 'zoomIn', kbd: 'Ctrl+=', keepOpen: true, onSelect: () => cv?.zoom(1) },
+          { id: 'fsDown', label: tc('字号', '缩小'), icon: 'zoomOut', kbd: 'Ctrl+-', keepOpen: true, onSelect: () => cv?.zoom(-1) },
+          { id: 'fsReset', label: t('默认大小'), kbd: 'Ctrl+0', onSelect: () => cv?.zoomReset() },
+        ] } });
+        if (isDelim && mode !== 'edit') out.push({ id: 'table', label: t('表格视图'), icon: 'table', onSelect: () => (tableRaw = false) });
+        if (jsonCan && mode !== 'edit') out.push({ id: 'json', label: jsonRaw ? t('格式化显示') : t('查看原文'), icon: 'code', onSelect: () => (jsonRaw = !jsonRaw) });
+      }
+    }
+    if (out.length) out.push({ sep: true });
+    const ce = curEnc;
+    out.push({ id: 'enc', label: t('编码'), icon: 'encoding', detail: ce ? encLabel(ce.encoding, ce.bom) : '', submenu: { title: t('通过编码重新打开'), items: () =>
+      ENCODINGS.map((x) => ({ id: 'enc:' + x.value, label: x.label, checked: curEnc?.encoding === x.value, onSelect: () => reopenAs(x.value) })) } });
+    out.push({ id: 'copyAll', label: t('复制全文'), icon: 'copy', onSelect: () => { cv?.flush(); copyText(content).then((ok) => showToast(ok ? t('已复制') : t('复制失败'))); } });
+    return out;
+  }
+
+  // —— 向外框声明顶栏 ——
+  $effect(() => viewer.declare({
+    title: () => cur.name,
+    dragItem: () => cur,
+    subtitle: '',                 // 不要外框默认的画廊计数（副标题是保存状态 / 文件夹，见 subHead）
+    subtitleSnippet: subHead,
+    barEnd: barEndSnip,
+    onBack: back,
+    tools: docTools,
+    menu: docMenu,
+    keys: docKeys,
+  }));
+  // 恢复 / 合并了草稿：常驻一条提示，直到保存或换篇（原 .doc-restored）
+  $effect(() => {
+    if (!restored || stale || conflict) return;
+    const h = viewer.toast(restored === 'merged' ? t('已把未保存的草稿与别处的新修改合并') : t('已恢复未保存草稿'), { ms: 0 });
+    return () => h.close();
+  });
 
   // —— md 双链数据（/api/file/mdlinks；按 rel 缓存，返回导航秒出，后台刷新）——
   const LINKS_CACHE = (window.__bridgeMdLinks ||= new Map());
@@ -648,12 +1035,19 @@
     return links?.outgoing?.find((o) => o.path && o.name.toLowerCase() === k)?.path
       || findInNames(namesNow, name)?.path || null;   // 编辑时新插的 ![[附件]]：出链还没重算，先认补全名单
   };
+  // 改写出去的 URL → 工作区相对路径：阅读态里 [附件](x.pdf) 的 href 已换成可加载 URL，点它时据此认回原文件，
+  // 压一层进查看器（不让浏览器直接跳到裸 URL——网页版会离开 bridge，桌面壳会丢给系统浏览器）
+  const embedBack = new Map();
   function embedUrl(name, wiki = false) {
     const st = cur.saveTarget;
-    if (!st) return null;
+    // Claude / Codex / dimensio 产物（没有 saveTarget）：按这篇在本机的路径解析同目录资源，走各家产物接口（lib/docres.js）
+    if (!st) { const d = siblingDesc(cur, name); return d ? normalizeItem(d).url : null; }
     const rel = resolvedEmbed(name);
     if (!rel && wiki && linksPending) return '';
-    return fileUrlOf(st, rel || joinRel(dirOf(st.rel), name));
+    const r = rel || joinRel(dirOf(st.rel), name);
+    const u = fileUrlOf(st, r);
+    if (u) { embedBack.set(u, r); if (embedBack.size > 400) embedBack.delete(embedBack.keys().next().value); }
+    return u;
   }
   // 主地址只是猜的（索引和名单里都没有：额外授权位置、手机本地、索引失败）时的备选：<笔记目录>/attachments/<名字>
   //（bridge 插图的落盘处，同 saveAttachment）。阅读态/编辑态的图加载失败时按序换上
@@ -763,6 +1157,11 @@
   let mdBlocks = $state([]);        // 已出炉的 HTML 块
   let mdRendering = $state(false);  // 队列里还有块（文末出细转圈）
   let renderJob = 0;
+  // 同一篇重渲（双链索引晚到 / 后台刷新）：旧 DOM 留到新块全部渲完再一次换上，不先截短成半篇；
+  // 换的那一刻手指 / 鼠标正按在正文上（或刚抬起 350ms 内）就再等等——点下去的链接被换掉，这一下 click 会落空
+  let mdBody = null;
+  let mdPress = 0;
+  const mdPressing = () => performance.now() < mdPress;
   function splitTopBlocks(text) {
     const parts = [];
     let rest = text;
@@ -780,6 +1179,8 @@
     const body = isMd && mode === 'preview' && !loading && !loadError ? (note?.body ?? '') : null;
     links; linksPending;
     const job = ++renderJob;
+    const same = body != null && body === mdBody && untrack(() => mdBlocks.length > 0);
+    mdBody = body;
     if (body == null) { mdBlocks = []; mdRendering = false; return; }
     const parts = splitTopBlocks(body);
     // 脚注定义预扫全文：引用和定义常不在同一块，各块共用这一个上下文 → 编号全篇一致，
@@ -798,10 +1199,16 @@
       if (job !== renderJob) return;
       const t0 = performance.now();
       while (acc.length < parts.length && performance.now() - t0 < 12) acc.push(renderObsMarkdown(parts[acc.length], { embedUrl, embedAlts, footnotes }));
-      if (acc.length < parts.length) { mdBlocks = [...acc]; mdRendering = true; schedule(); return; }
+      if (acc.length < parts.length) { if (!same) { mdBlocks = [...acc]; mdRendering = true; } schedule(); return; }
       const notes = renderFootnoteSection(footnotes, { embedUrl, embedAlts });
-      mdBlocks = notes ? [...acc, notes] : [...acc];
-      mdRendering = false;
+      const blocks = notes ? [...acc, notes] : [...acc];
+      const commit = () => {
+        if (job !== renderJob) return;
+        if (same && mdPressing()) { setTimeout(commit, 120); return; }
+        mdBlocks = blocks;
+        mdRendering = false;
+      };
+      commit();
     };
     step();
     return () => { renderJob++; };   // 卸载/换文档：掐断分帧链
@@ -823,6 +1230,21 @@
   // 触屏长选区护栏：拖选择柄时固定端滚出屏幕会被浏览器误命中到文首/左侧聊天（选区溢出全文），
   // 活动端拖出正文会跨进别的面板——见 lib/touchSelection.js；拖到上下边缘自动滚动见 touchAutoScroll.js
   let pageEl = $state(null);
+  $effect(() => {
+    const el = pageEl;
+    if (!el) return;
+    const down = () => { mdPress = Infinity; };
+    const up = () => { if (mdPress === Infinity) mdPress = performance.now() + 350; };
+    el.addEventListener('pointerdown', down, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+    return () => {
+      mdPress = 0;
+      el.removeEventListener('pointerdown', down, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+    };
+  });
   $effect(() => {
     if (!pageEl) return;
     const offGuard = guardSelection(pageEl, { scroller: () => docScrollEl, allEl: () => mdEl });
@@ -898,6 +1320,8 @@
       return;
     }
     if (cur.saveTarget?.origin === 'local') return resolveLocalWiki(name, head);
+    // 产物 md 没有全库索引：[[名字]] 按同目录的「名字.md」开
+    if (!cur.saveTarget && artifactRef(cur)) return openRelNote(MD_EXT_RE.test(name) ? name : name + '.md', head);
     showToast(links ? t('未找到笔记「{name}」', { name }) : t('链接索引加载中…'));
   }
   function resolveLocalWiki(name, head = '') {
@@ -977,7 +1401,53 @@
     setTimeout(() => dest.classList.remove('fn-flash'), 1300);
   }
 
+  // —— 阅读态勾任务（Obsidian 阅读视图同款）：可自动保存的笔记才放开勾选框，点了改源码里那一处 [ ] / [x] 并落盘 ——
+  // 勾选框与源码按出现顺序一一对应（跳过 frontmatter 与代码围栏）；数目对不上（嵌入、HTML 里手写的框）就不动，提示去编辑态
+  $effect(() => {
+    mdBlocks;
+    const el = mdEl, on = mdAuto;
+    if (!el) return;
+    tick().then(() => { for (const cb of el.querySelectorAll('input.task-cb')) cb.disabled = !on; });
+  });
+  const TASK_RE = /^((?:[ \t]*>)*[ \t]*(?:[-*+]|\d+[.)])[ \t]+)\[([ xX])\](?=[ \t])/;
+  function taskMarks(text) {
+    const out = [];
+    const fm = /^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(text);
+    let i = fm ? fm[0].length : 0, fence = '';
+    while (i < text.length) {
+      let j = text.indexOf('\n', i);
+      if (j < 0) j = text.length;
+      const line = text.slice(i, j);
+      const f = /^(?:[ \t]*>)*[ \t]*(`{3,}|~{3,})/.exec(line);
+      if (fence) { if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = ''; }
+      else if (f) fence = f[1];
+      else { const m = TASK_RE.exec(line); if (m) out.push({ pos: i + m[1].length + 1, on: m[2] !== ' ' }); }
+      i = j + 1;
+    }
+    return out;
+  }
+  // 点中的勾选框：直接点在框上；触屏再放宽到框四周 14px（框 17px，命中 ≥44px）
+  function taskCbAt(e) {
+    if (!mdAuto || !mdEl) return null;
+    const tg = e.target;
+    if (tg?.matches?.('input.task-cb')) return tg;
+    if (!viewer.touch) return null;
+    const cb = tg?.closest?.('li.task-list-item')?.querySelector(':scope > .task-body input.task-cb');
+    if (!cb) return null;
+    const r = cb.getBoundingClientRect();
+    return e.clientX >= r.left - 14 && e.clientX <= r.right + 14 && e.clientY >= r.top - 14 && e.clientY <= r.bottom + 14 ? cb : null;
+  }
+  function toggleTask(cb, was) {
+    const all = [...mdEl.querySelectorAll('input.task-cb')], idx = all.indexOf(cb);
+    const marks = taskMarks(content), m = marks[idx];
+    if (idx < 0 || marks.length !== all.length || !m || m.on !== was) { showToast(t('这一项没法在阅读态勾选，请到编辑态修改')); return; }
+    content = content.slice(0, m.pos) + (m.on ? ' ' : 'x') + content.slice(m.pos + 1);
+    save(true);
+  }
+
   function mdClick(e) {
+    const tcb = taskCbAt(e);
+    if (tcb) { e.preventDefault(); e.stopPropagation(); toggleTask(tcb, tcb === e.target ? !tcb.checked : tcb.checked); return; }
     const cp = e.target.closest('.doc-fence-copy');
     if (cp) {
       e.stopPropagation();
@@ -997,14 +1467,53 @@
       resolveWiki(name, head);
       return;
     }
+    // 相对附件链接：obsmd 已把 href 改写成可加载地址、原文记在 data-rel——点开走应用内查看器，不让浏览器整页跳到裸文件
+    const dataRel = a.getAttribute('data-rel');
+    if (dataRel) { e.preventDefault(); openRelFile(dataRel); return; }
     const href = a.getAttribute('href') || '';
-    if (!href || /^(https?:|mailto:|data:|blob:|tel:)/i.test(href) || href.startsWith('/')) return;   // 外链/已改写的站内 URL 放行
+    const att = href && embedBack.get(href);   // 改写过的相对附件链接：认回原文件，压一层打开
+    if (att && !MD_EXT_RE.test(att)) { e.preventDefault(); openAttachment(att); return; }
+    if (!href || /^([a-z][a-z0-9+.-]*:|\/)/i.test(href)) return;   // 外链 / 站内 URL / 其他协议放行
     if (href.startsWith('#')) { e.preventDefault(); let h = href.slice(1); try { h = decodeURIComponent(h); } catch {} scrollToHeading(h); return; }
+    e.preventDefault();   // 余下都是相对路径：一律查看器内接管
     const [p, h] = splitHref(href);
-    if (MD_EXT_RE.test(p)) {
-      e.preventDefault();
-      openNote(joinRel(dirOf(cur.saveTarget?.rel || ''), p), h);
-    }
+    if (!p) return;
+    if (MD_EXT_RE.test(p)) openRelNote(p, h);
+    else openRelFile(p);
+  }
+
+  // —— 相对链接（[另一篇](b.md)、[日志](logs/a.log)、[附件](../x.pdf)）：按这篇所在目录解析 ——
+  // 工作空间 / 手机本地按 saveTarget；Claude / Codex / dimensio 产物（没有 saveTarget）按产物接口（lib/docres.js）
+  function relDescOf(p) {
+    const st = cur.saveTarget;
+    if (!st) return siblingDesc(cur, p);
+    const hit = links?.outgoing?.find((o) => o.path && o.name.toLowerCase() === String(p).toLowerCase());
+    const rel = hit ? hit.path : joinRel(dirOf(st.rel), p);
+    if (!rel) return null;
+    const name = rel.split('/').pop();
+    return st.origin === 'local' ? { origin: 'local', rel, name } : { origin: 'cloud', rel, name, ws: st.ws || '', nativeLocation: st.nativeLocation || '' };
+  }
+  function pushDoc(d, head = '') {
+    guardDirty(() => {
+      const it = normalizeItem(d.origin === 'local' ? { ...d, text: localReadText(d.rel) } : d);
+      stack = [...stack, it];
+      jumpHead = head ? { key: draftKeyOf(it), depth: stack.length, head } : null;
+    });
+  }
+  function openRelNote(p, head = '') {
+    if (cur.saveTarget) { openNote(joinRel(dirOf(cur.saveTarget.rel), p), head); return; }
+    const d = siblingDesc(cur, p);
+    if (d) pushDoc(d, head);
+    else showToast(t('无法打开这个链接'));
+  }
+  // 文本类（代码 / 日志 / CSV…）压进本查看器的栈（返回回到这篇）；其余（图 / PDF / 音视频 / 网页…）
+  // 在统一查看器里压一层打开（openAttachDesc），返回落回这篇笔记的原位置
+  function openRelFile(p) {
+    const d = relDescOf(p);
+    if (!d) { showToast(t('无法打开这个链接')); return; }
+    const k = kindOf(d.name);
+    if (k === 'text' || k === 'markdown' || /\.(csv|tsv)$/i.test(d.name)) pushDoc(d);
+    else openAttachDesc(d);
   }
 
   // —— Live Preview / 源码编辑器（CM6，懒加载 chunk；同一实例双模切换）——
@@ -1022,21 +1531,27 @@
   }
   // 笔记里的附件（图/PDF/音视频…）：进应用内统一查看器（沿用当前宿主：全屏或 dock 内嵌），
   // 不再 window.open 裸 URL——桌面壳里那会打开系统浏览器（bridge-workspace:// 则被静默吞掉）。
+  // 压一层（previewPush）而不是替换整个画廊：关掉附件回到这篇笔记的原位置（返回键 / 左上返回 / Esc 同）。
   function openAttachment(rel) {
     const st = cur.saveTarget || {};
-    const desc = st.origin === 'local'
+    openAttachDesc(st.origin === 'local'
       ? { origin: 'local', rel, name: rel.split('/').pop() }
-      : { origin: 'cloud', rel, name: rel.split('/').pop(), ws: st.ws || '', nativeLocation: st.nativeLocation || '' };
-    openPreview(desc, 0, { host: preview.host });
+      : { origin: 'cloud', rel, name: rel.split('/').pop(), ws: st.ws || '', nativeLocation: st.nativeLocation || '' });
+  }
+  // 描述符版（relDescOf / siblingDesc 算好的，含产物 md 的同目录资源）：先记下阅读进度，返回时按它落位
+  function openAttachDesc(desc) {
+    if (!desc) return;
+    grabScroll();
+    if (anchor && cur?.key) RESUME.set(cur.key, anchor);
+    previewPush(desc, 0, { resume: $state.snapshot(cur) });
   }
 
   function openRelHref(href) {
     const [p, h] = splitHref(href);
     if (!p) { if (h && !editor?.scrollToHeading(h)) showToast(t('找不到标题「{name}」', { name: h })); return; }   // [x](#标题)：本文内跳
-    if (MD_EXT_RE.test(p)) { openNote(joinRel(dirOf(cur.saveTarget?.rel || ''), p), h); return; }
     if (/^(https?:|mailto:|tel:)/i.test(p)) { openExt(p); return; }
-    const hit = links?.outgoing?.find((o) => o.path && o.name.toLowerCase() === p.toLowerCase());
-    openAttachment(hit ? hit.path : joinRel(dirOf(cur.saveTarget?.rel || ''), p));
+    if (MD_EXT_RE.test(p)) { openRelNote(p, h); return; }
+    openRelFile(p);
   }
 
   $effect(() => {
@@ -1173,8 +1688,12 @@
     // 关查看器（没有浮层可收时的 Esc、安卓返回都直接卸载组件，绕过 guardDirty）：停笔不到 1.2s、
     // 自动保存还没触发的内容当场补存，不能只留在内存草稿里
     // （卸载后别读派生量 editable：直接按当前文档的保存目标判断）
+    // 代码编辑器（CodeView）大文档的改动有 200ms 防抖：先收最后一笔（它这时还没卸载——本 effect 建得比模板早，先拆）；
+    // 非 UTF-8 的文件不静默存（保存会转码，要用户点头），留在草稿里
+    try { cv?.flush(); } catch {}
     const c = topItem(), st = c?.saveTarget;
-    if (st && !IS_SHARE && content !== original && !conflict && (st.origin !== 'local' || hasLocalWrite())) saveDoc(c, content, true, original);
+    if (st && !IS_SHARE && content !== original && !conflict && (st.origin !== 'local' || hasLocalWrite())
+      && isUtf8(ENCS.get(draftKeyOf(c))?.encoding)) saveDoc(c, content, true, original);
     alive = false; destroyEditor(); loadCtrl?.abort(); clearTimeout(linksT); clearTimeout(statsT); flushEdWaiters();
   });   // 组件卸载兜底：编辑器销毁 + 在途加载掐断（在途的写照常发完，见 saveDoc）
 
@@ -1189,42 +1708,43 @@
   }
 </script>
 
-<div class="doc-root">
-  <header class="doc-head">
-    <button class="doc-back" aria-label={t('返回')} onclick={back}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
-    </button>
-    <div class="doc-title-wrap">
-      <span class="doc-title" use:dragOut={() => previewDragSrc(cur)}>{cur.name}</span>
-      {#if status}
-        {#key status.kind}
-          {#if status.kind === 'dirty'}
-            <!-- 未保存：点一下立刻存（md 也会在停笔 1.2s 后自动存） -->
-            <button class="doc-sub" data-kind="dirty" onclick={() => save()}><i class="doc-sub-dot"></i><span class="doc-sub-t">{status.text}</span></button>
-          {:else}
-            <span class="doc-sub" data-kind={status.kind}>
-              {#if status.kind === 'busy'}<i class="doc-sub-spin"></i>
-              {:else if status.kind === 'ok'}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
-              {:else if status.kind === 'warn'}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8.5v4.5M12 16.5h.01"/><circle cx="12" cy="12" r="9"/></svg>
-              {/if}<span class="doc-sub-t">{status.text}</span>
-            </span>
-          {/if}
-        {/key}
+<!-- 顶栏副标题（交给外框顶栏渲染）：保存状态优先，平时显示所在文件夹 -->
+{#snippet subHead()}
+  {#if status}
+    {#key status.kind}
+      {#if status.kind === 'dirty'}
+        <!-- 未保存：点一下立刻存（md 也会在停笔 1.2s 后自动存） -->
+        <button class="doc-sub" data-kind="dirty" onclick={() => save()}><i class="doc-sub-dot"></i><span class="doc-sub-t">{status.text}</span></button>
+      {:else}
+        <span class="doc-sub" data-kind={status.kind}>
+          {#if status.kind === 'busy'}<i class="vw-spin doc-sub-spin"></i>
+          {:else if status.kind === 'ok'}<VIcon name="check" size={12} stroke={2.4} />
+          {:else if status.kind === 'warn'}<VIcon name="error" size={12} stroke={2} />
+          {/if}<span class="doc-sub-t">{status.text}</span>
+        </span>
       {/if}
+    {/key}
+  {/if}
+  {#if encText}<span class="doc-sub doc-sub-enc" class:solo={!status}>{encText}</span>{/if}
+{/snippet}
+
+<!-- 顶栏自定义区（交给外框）：md 的阅读 / 编辑 / 源码三段；纯文本有改动时的保存钮 -->
+{#snippet barEndSnip()}
+  {#if isMd}
+    <div class="doc-seg">
+      <span class="doc-seg-cap" style:transform="translateX({mode === 'live' ? '100%' : mode === 'source' ? '200%' : '0'})"></span>
+      <button class:on={mode === 'preview'} onclick={() => setMdMode('preview')}>{t('阅读')}</button>
+      <button class:on={mode === 'live'} onclick={() => setMdMode('live')}>{t('编辑')}</button>
+      <button class:on={mode === 'source'} onclick={() => setMdMode('source')}>{t('源码')}</button>
     </div>
-    {#if isMd}
-      <div class="doc-seg">
-        <span class="doc-seg-cap" style:transform="translateX({mode === 'live' ? '100%' : mode === 'source' ? '200%' : '0'})"></span>
-        <button class:on={mode === 'preview'} onclick={() => setMdMode('preview')}>{t('阅读')}</button>
-        <button class:on={mode === 'live'} onclick={() => setMdMode('live')}>{t('编辑')}</button>
-        <button class:on={mode === 'source'} onclick={() => setMdMode('source')}>{t('源码')}</button>
-      </div>
-    {/if}
-    {#if editable && isText && !isMd && dirty && !conflict}
-      <!-- 纯文本文件不自动保存：有改动时给一个文字按钮（md 自动保存，不需要） -->
-      <button class="doc-savebtn" disabled={saving} onclick={() => save()}>{t('保存')}</button>
-    {/if}
-  </header>
+  {/if}
+  {#if editable && isText && !isMd && dirty && !conflict}
+    <!-- 纯文本文件不自动保存：有改动时给一个文字按钮（md 自动保存，不需要） -->
+    <button class="doc-savebtn" disabled={saving} onclick={() => save()}>{t('保存')}</button>
+  {/if}
+{/snippet}
+
+<div class="doc-root">
   {#if conflict}
     <div class="doc-notice warn" role="alert">
       <svg class="doc-notice-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8.5v4.5M12 16.5h.01"/><circle cx="12" cy="12" r="9"/></svg>
@@ -1243,23 +1763,42 @@
         <button onclick={dropStale}>{t('丢弃')}</button>
       </span>
     </div>
+  {:else if trunc && !loading}
+    <div class="doc-notice" role="status">
+      <span class="doc-notice-ic"><VIcon name="info" size={17} /></span>
+      <span class="doc-notice-t">{trunc.total ? t('文件较大，仅显示前 {shown}（共 {total}），不可编辑', { shown: fmtBytes(trunc.shown), total: fmtBytes(trunc.total) }) : t('仅显示前 {shown}，不可编辑', { shown: fmtBytes(trunc.shown) })}</span>
+      {#if viewer.canDownload()}
+        <span class="doc-notice-acts"><button onclick={() => viewer.download()}>{t('下载完整文件')}</button></span>
+      {/if}
+    </div>
   {/if}
 
+  {#if isMd && mode === 'preview' && viewer.touch}
+    <FindBar bind:this={findBar} open={fOpen} bind:query={fQuery} current={fCur} total={fTotal} caseSensitive={fCase} touch
+      onquery={(q) => mdSearch(q)} onstep={mdStep} oncase={mdCase} onclose={closeMdFind} />
+  {/if}
   <div class="doc-body">
+    {#if isMd && mode === 'preview' && !viewer.touch}
+      <FindBar bind:this={findBar} open={fOpen} bind:query={fQuery} current={fCur} total={fTotal} caseSensitive={fCase}
+        onquery={(q) => mdSearch(q)} onstep={mdStep} oncase={mdCase} onclose={closeMdFind} />
+    {/if}
     {#if loading}
-      <div class="doc-center"><span class="doc-spin"></span></div>
+      <ViewerState kind="loading" />
     {:else if loadError}
-      <div class="doc-center doc-err"><p>{t('加载失败')}</p><button onclick={load}>{t('重试')}</button></div>
+      <ViewerState kind="error" icon="page" title={t('加载失败')} onRetry={load} />
     {:else if !isText}
-      <div class="doc-center"><p class="doc-ph-name">{cur.name}</p><p>{t('该类型预览即将到来')}</p>{#if cur.downloadHref}<a class="doc-dl" href={cur.downloadHref} download={cur.name} onclick={(e) => interceptAppDownload(e, { url: cur.downloadHref, name: cur.name })}>{t('下载查看')}</a>{/if}</div>
+      <!-- 没有内嵌查看器的类型：文件名 + 下载（外框 ⋮ 里还有打开方式 / 分享 / 文件信息） -->
+      <!-- 嗅过是二进制的（无扩展名 / 不认识的）：「无法预览」+ 下载 + 以文本方式打开（只读硬解） -->
+      <ViewerState kind="unsupported" title={sniffKind === 'bin' ? t('无法预览') : ''} detail={cur.name}
+        actions={cur.url ? [{ label: t('以文本方式打开'), onClick: forceText }] : []} />
     {:else if isMd && mode === 'preview'}
-      <div class="doc-scroll" bind:this={docScrollEl}>
+      <div class="doc-scroll" bind:this={docScrollEl} tabindex="-1">
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
         <div class="doc-page" bind:this={pageEl} onclick={mdClick} ondragover={readDragOver} ondrop={readDrop} onpaste={readPaste}>
           {#if note?.props?.length}
             <section class="doc-props" class:gap={/^[ \t]*\r?\n/.test(note.body)}>
               <button class="doc-props-h" onclick={(e) => { e.stopPropagation(); propsOpen = !propsOpen; }}>
-                <svg class="doc-chev" class:closed={!propsOpen} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
+                <VIcon name="chev" size={14} class={propsOpen ? 'doc-chev' : 'doc-chev closed'} />
                 {t('笔记属性')}<span class="doc-props-n">{note.props.length}</span>
               </button>
               {#if propsOpen}
@@ -1290,7 +1829,7 @@
           {/if}
 
           <div class="doc-md sel-text" bind:this={mdEl}>{#each mdBlocks as b}{@html b}{/each}</div>
-          {#if mdRendering}<div class="doc-rendering"><span class="doc-spin"></span></div>{/if}
+          {#if mdRendering}<div class="doc-rendering"><span class="vw-spin" style:--s="20px"></span></div>{/if}
 
           <!-- 尾栏落位点：阅读态把共用的 .doc-tail 收编到这儿（编辑态则由 CM 文末 widget 收编） -->
           <div class="doc-tailhost" bind:this={tailHost}></div>
@@ -1300,9 +1839,15 @@
       <!-- 编辑（Live Preview）/ 源码：CM6 编辑器，懒加载；容器常驻由 effect 填充。
            格式工具全在编辑器自带的选中浮条 + 右键菜单里（mdeditor/menu.js），无底部工具栏 -->
       <div class="doc-cm" bind:this={edEl}></div>
+    {:else if showTable}
+      <!-- CSV / TSV：表格（冻结表头 + 行列虚拟滚动），⋮ / 顶栏可切原文 -->
+      {#key draftKey}<TableView bind:this={tv} text={content} name={cur.name} />{/key}
     {:else}
-      <textarea class="doc-edit" bind:value={content} spellcheck="false" autocapitalize="off" autocomplete="off"
-        placeholder={editable ? '' : t('（只读）')} readonly={!editable}></textarea>
+      <!-- 纯文本 / 代码 / 日志 / JSON：CM6 只读查看（行号、高亮、查找、跳行、换行、字号），编辑 = 同一实例放开只读 -->
+      {#key draftKey}
+        <CodeView bind:this={cv} text={shown} name={cur.name} {lang} editing={mode === 'edit'} bind:wrap log={isLog}
+          eol={curEnc?.eol || '\n'} onchange={(s) => (content = s)} />
+      {/key}
     {/if}
   </div>
 
@@ -1316,7 +1861,7 @@
         <section class="doc-links">
           {#if links?.backlinks?.length}
             <div class="doc-lk-h">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1.5 1.5"/><path d="M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1.5-1.5"/></svg>
+              <VIcon name="link" size={14} />
               {t('反向链接')}<span class="doc-lk-n">{blCount}</span>
             </div>
             <div class="doc-bls">
@@ -1330,12 +1875,12 @@
           {/if}
           {#if outLinks.length}
             <div class="doc-lk-h">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M9 7h8v8"/></svg>
+              <VIcon name="external" size={14} />
               {t('出链')}<span class="doc-lk-n">{outLinks.length}</span>
             </div>
             <div class="doc-outs">
               {#each outLinks as o (o.name)}
-                <button class="doc-out" class:dead={!o.path} onclick={(e) => { e.stopPropagation(); resolveWiki(o.name); }}>{o.name}</button>
+                <button class="doc-out" class:dead={!o.path} onclick={(e) => { e.stopPropagation(); resolveWiki(o.name); }}><span class="doc-out-t">{o.name}</span></button>
               {/each}
             </div>
           {/if}
@@ -1347,8 +1892,6 @@
     {/if}
   </div>
 
-  {#if restored && !stale && !conflict}<div class="doc-restored">{restored === 'merged' ? t('已把未保存的草稿与别处的新修改合并') : t('已恢复未保存草稿')}</div>{/if}
-  {#if toast}<div class="doc-toast">{toast}</div>{/if}
 </div>
 
 <style>
@@ -1359,25 +1902,18 @@
     padding-bottom: var(--kb, 0px);
   }
 
-  /* —— 顶栏：返回圆钮 + 文件名/状态两行 + 模式切换。整条纸面灰阶，只有冲突用警示色 —— */
-  .doc-head { flex: none; display: flex; align-items: center; gap: 10px; padding: max(var(--pv-pad-y, 8px), var(--sat)) 12px var(--pv-pad-y, 8px) 8px;
-    background: var(--md-bg); box-shadow: inset 0 -.5px 0 rgba(var(--md-ink), .12); }
-  .doc-back { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none;
-    color: var(--md-fg); background: rgba(var(--md-ink), .05); transition: background var(--mo-tap, 90ms), transform var(--mo-tap, 90ms); }
-  .doc-back svg { width: 19px; height: 19px; margin-left: -1px; }
-  @media (hover: hover) { .doc-back:hover { background: rgba(var(--md-ink), .08); } }
-  .doc-back:active { background: rgba(var(--md-ink), .11); transform: scale(.94); }
-  .doc-title-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 1px; }
-  .doc-title { max-width: 100%; font-size: 15px; font-weight: 600; line-height: 1.25; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; letter-spacing: -.15px; }
+  /* —— 顶栏由外框（kit ViewerBar）画；这里只剩交给它渲染的副标题（保存状态）与自定义区（三段 / 保存钮）。
+     这些元素写在本组件的 snippet 里，作用域样式照样生效。整条纸面灰阶，只有冲突用警示色 —— */
   .doc-sub { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; padding: 0; border: 0; background: none;
-    font: inherit; font-size: 11.5px; line-height: 1.3; color: var(--md-fg-3); letter-spacing: .1px; text-align: left; animation: docsub .18s ease both; }
-  .doc-sub svg { width: 12px; height: 12px; flex: none; }
+    font: inherit; font-size: 12px; line-height: 1.3; color: var(--md-fg-3); letter-spacing: .1px; text-align: left; animation: docsub var(--mo-quick) var(--ea-decel) both; }
   .doc-sub-t { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .doc-sub[data-kind='dirty'] { color: var(--md-fg-2); cursor: pointer; }
   .doc-sub[data-kind='warn'] { color: var(--md-danger); }
   .doc-sub-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--md-accent); flex: none; }
-  .doc-sub-spin { width: 9px; height: 9px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid rgba(var(--md-ink), .16); border-top-color: var(--md-fg-2);
-    flex: none; animation: docspin .7s linear infinite; }
+  .doc-sub-spin { --s: 10px; }
+  /* 编码 / 换行（何时显示见 encText）：跟在保存状态后面，用中点隔开；单独出现时不带点；窄了先省略自己 */
+  .doc-sub-enc { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  .doc-sub-enc:not(.solo)::before { content: '·'; margin-right: 5px; }
   @keyframes docsub { from { opacity: 0; transform: translateY(2px); } }
 
   /* 阅读/编辑/源码 三段切换：暖灰轨道 + 滑帽（亮白 / 暗里抬一级的暖灰） */
@@ -1390,6 +1926,9 @@
   .doc-seg button.on { color: var(--md-fg); font-weight: 600; }
   /* 英文（html[lang=en]，lib/i18n.js 设置）：等宽三段按最长的 Source 撑宽，收窄左右内边距给文件名腾位（窄屏/工作台侧栏）；中文不动 */
   :global(html[lang='en']) .doc-seg button { padding-left: 8px; padding-right: 8px; }
+  /* 触屏：段按钮视觉 30 高（轨道 34）、13px 字，命中区上下各扩 7px 到 44（外框顶栏 52 高，扩出去也还在栏内） */
+  :global(.vw-touch) .doc-seg button { padding-top: 7px; padding-bottom: 7px; font-size: 13px; line-height: 16px; }
+  :global(.vw-touch) .doc-seg button::after { content: ''; position: absolute; left: 0; right: 0; top: -7px; bottom: -7px; }
 
   /* CM6 编辑器容器（内部样式在 mdeditor/editor.css，全局注入防 Svelte 剪枝） */
   .doc-cm { position: absolute; inset: 0; }
@@ -1414,21 +1953,24 @@
   .doc-notice-acts button.pri { color: var(--md-bg); background: var(--md-fg); }
   .doc-notice-acts button:active { background: rgba(var(--md-ink), .13); }
   .doc-notice-acts button.pri:active { background: color-mix(in srgb, var(--md-fg) 80%, var(--md-bg)); }
+  /* 触屏：提示条按钮视觉 28 高，命中区上下各扩 8px 到 44 */
+  :global(.vw-touch) .doc-notice-acts button { position: relative; }
+  :global(.vw-touch) .doc-notice-acts button::after { content: ''; position: absolute; left: -3px; right: -3px; top: -10px; bottom: -10px; }
 
   .doc-body { flex: 1; min-height: 0; position: relative; }
-  .doc-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--md-fg-2); }
-  .doc-spin { width: 30px; height: 30px; border-radius: 50%; border: 3px solid rgba(var(--md-ink), .1); border-top-color: var(--md-accent); animation: docspin .8s linear infinite; }
-  @keyframes docspin { to { transform: rotate(360deg); } }
-  /* 分块渲染进行中：文末小转圈（正文已可读可滚，不挡内容） */
+  /* 分块渲染进行中：文末小转圈（kit .vw-spin；正文已可读可滚，不挡内容） */
   .doc-rendering { display: flex; justify-content: center; padding: 14px 0 6px; }
-  .doc-rendering .doc-spin { width: 20px; height: 20px; border-width: 2.5px; }
-  .doc-err button { padding: 7px 20px; border-radius: 999px; background: var(--md-accent); color: #fff; font-size: 14px; }
-  .doc-ph-name { font-weight: 600; color: var(--md-fg); }
-  .doc-dl { padding: 8px 20px; border-radius: 999px; background: var(--md-accent); color: #fff; font-size: 14px; }
 
   .doc-scroll { position: absolute; inset: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-  .doc-edit { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; border: 0; outline: none; background: var(--md-bg); color: var(--md-code-fg);
-    padding: 16px; font-family: var(--md-mono); font-size: 14px; line-height: 1.7; -webkit-overflow-scrolling: touch; caret-color: var(--md-accent); }
+  /* 滚动区可聚焦（tabindex=-1，键盘滚动用），整页不画焦点环 */
+  .doc-scroll:focus, .doc-scroll:focus-visible { outline: none; }
+  /* 触屏：脚注上标与脚注里的「↩」只有十来像素宽，用隐形 ::after 扩命中区（↩ 独占一处扩到 44；上标夹在正文里，扩到约 32，不压上下行） */
+  :global(.vw-touch) .doc-md :global(a.fn-back), :global(.vw-touch) .doc-md :global(sup.fn-ref a) { position: relative; }
+  :global(.vw-touch) .doc-md :global(a.fn-back::after) { content: ''; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
+  :global(.vw-touch) .doc-md :global(sup.fn-ref a::after) { content: ''; position: absolute; left: 50%; top: 50%; width: 30px; height: 32px; transform: translate(-50%, -50%); }
+  /* 查找命中：::highlight 只认少数属性，变量取不到原元素上的值，写死两档（暖黄 / 珊瑚，与 PDF、Word 快速预览一致） */
+  :global(::highlight(md-hit)) { background-color: rgba(235, 196, 98, .45); color: inherit; }
+  :global(::highlight(md-cur)) { background-color: rgba(217, 119, 87, .55); color: inherit; }
 
   .doc-page { max-width: 760px; margin: 0 auto; padding: 14px 20px 60px; --ts-sel: var(--md-accent-soft); }   /* 触屏选区锁定时正文仍用这个高亮色（lib/touchSelection.js） */
 
@@ -1442,8 +1984,11 @@
   .doc-props.gap { margin-bottom: 33.52px; }
   .doc-props-h { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--md-fg-3); font-weight: 550; padding: 6px 4px 6px 0; transition: color var(--mo-micro, 140ms); }
   .doc-props-h:active { color: var(--md-fg-2); }
-  .doc-chev { width: 14px; height: 14px; transition: transform .18s var(--md-ease); transform: rotate(90deg); }
-  .doc-chev.closed { transform: rotate(0deg); }
+  /* 触屏：「笔记属性」标题视觉约 30 高，命中区上下扩到 44、左右各多 8px（不改版面几何，切模式不跳） */
+  .doc-props-h { position: relative; }
+  :global(.vw-touch) .doc-props-h::after { content: ''; position: absolute; left: -8px; right: -8px; top: -9px; bottom: -9px; }
+  .doc-props-h :global(.doc-chev) { transition: transform var(--mo-quick, 200ms) var(--md-ease); transform: rotate(90deg); }
+  .doc-props-h :global(.doc-chev.closed) { transform: rotate(0deg); }
   .doc-props-n { margin-left: 2px; font-size: 11.5px; background: var(--md-bg-2); color: var(--md-fg-3); padding: 1px 7px; border-radius: 999px; }
   .doc-props-tbl { display: flex; flex-direction: column; gap: 1px; }
   /* 键名/值的文字盒照编辑态输入框：同字号、4px 6px 内边距、line-height normal（input 的默认），行高才一致 */
@@ -1506,6 +2051,11 @@
   .doc-md :global(.doc-fence-copy) { margin-left: auto; border: 1px solid var(--md-line); background: var(--md-panel); color: var(--md-fg-2); font-size: 11.5px; padding: 2px 10px; border-radius: 999px;
     transition: background var(--mo-micro, 140ms), color var(--mo-micro, 140ms); }
   .doc-md :global(.doc-fence-copy:active) { background: var(--md-bg-3); }
+  /* 触屏：代码块「复制」视觉 20 高，命中区上下各扩 12px、左右 8px 到 44（扩出的部分落在代码块头的留白上） */
+  :global(.vw-touch) .doc-md :global(.doc-fence-copy) { position: relative; }
+  :global(.vw-touch) .doc-md :global(.doc-fence-copy)::after { content: ''; position: absolute; left: -8px; right: -8px; top: -14px; bottom: -14px; }
+  /* 阅读态可勾选的任务框（自动保存开着才可点，见 toggleTask） */
+  .doc-md :global(input.task-cb:not(:disabled)) { cursor: pointer; }
   /* ![[图]] 地址还在解析（出链索引在路上）：淡色占位块，同编辑态 .mde-img-pending */
   .doc-md :global(img.wk-pending) { display: inline-block; height: 96px; max-width: 100%; border-radius: 8px; background: var(--md-bg-2); vertical-align: bottom; }
   .doc-md :global(img.wk-pending:not([width])) { width: 160px; }   /* 写了尺寸（![[x|305]]）就按它的宽占位 */
@@ -1514,7 +2064,7 @@
   .doc-tail[hidden] { display: none; }
   .doc-links { margin-top: 34px; border-top: 1px solid var(--md-line); padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
   .doc-lk-h { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--md-fg-3); font-weight: 550; margin: 8px 0 2px; }
-  .doc-lk-h svg { width: 14px; height: 14px; }
+  .doc-lk-h :global(.vw-ic) { color: var(--md-fg-3); }
   .doc-lk-n { font-size: 11.5px; background: var(--md-bg-2); color: var(--md-fg-3); padding: 1px 7px; border-radius: 999px; }
   .doc-bls { display: flex; flex-direction: column; gap: 8px; }
   .doc-bl { text-align: left; background: var(--md-panel); border: 1px solid var(--md-line); border-radius: 12px; padding: 9px 12px;
@@ -1528,11 +2078,13 @@
   .doc-bl-x :global(b) { color: var(--md-fg); background: var(--md-mark); font-weight: 600; border-radius: 2px; }
   .doc-outs { display: flex; flex-wrap: wrap; gap: 7px; }
   .doc-out { font-size: 13px; color: var(--md-accent-deep); background: var(--md-accent-tint); border: 1px solid color-mix(in srgb, var(--md-accent-deep) 22%, transparent); border-radius: 999px; padding: 4px 12px;
-    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background var(--mo-micro, 140ms); }
+    position: relative; display: inline-flex; max-width: 100%; transition: background var(--mo-micro, 140ms); }
+  .doc-out-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .doc-out:active { background: var(--md-accent-soft); }
+  /* 触屏：胶囊 34 高 + 上下各 5 的隐形命中区 = 44（绝对定位按内边距盒算、不含 1px 边框，所以偏移写 6）；行距 10，相邻两行的命中区不叠 */
+  :global(.vw-touch) .doc-outs { gap: 10px 8px; }
+  :global(.vw-touch) .doc-out { padding: 6px 14px; min-height: 34px; align-items: center; }
+  :global(.vw-touch) .doc-out::after { content: ''; position: absolute; left: -5px; right: -5px; top: -6px; bottom: -6px; }
   .doc-out.dead { color: var(--md-fg-3); background: var(--md-bg-2); border-color: var(--md-line); border-style: dashed; }
-  .doc-stats { margin-top: 26px; padding: 10px 0 4px; text-align: center; font-size: 12px; color: var(--md-fg-4); }
-
-  .doc-restored { position: absolute; left: 50%; bottom: calc(16px + var(--kb, 0px)); transform: translateX(-50%); background: var(--md-toast-bg); color: var(--md-toast-fg); font-size: 12.5px; padding: 6px 14px; border-radius: 999px; pointer-events: none; box-shadow: var(--md-shadow-sm); white-space: nowrap; }
-  .doc-toast { position: absolute; left: 50%; bottom: calc(54px + var(--kb, 0px)); transform: translateX(-50%); background: var(--md-toast-bg); color: var(--md-toast-fg); font-size: 13px; padding: 8px 18px; border-radius: 999px; pointer-events: none; box-shadow: var(--md-shadow-sm); }
+  .doc-stats { margin-top: 26px; padding: 10px 0 4px; text-align: center; font-size: 12px; color: var(--md-fg-3); }
 </style>

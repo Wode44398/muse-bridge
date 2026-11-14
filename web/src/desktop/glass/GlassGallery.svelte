@@ -7,8 +7,7 @@
   import GlassScene from './GlassScene.svelte';
   import { dskGlass } from './domGlass.js';
   import { GLASS } from './material.js';
-  import { ovUrl } from '../../lib/overlay.svelte.js';
-  const WP = ovUrl('wallpapers/dolomites.jpg');
+  import WP from '../../visuals/wallpapers/dolomites.jpg';
   import DSlider from '../kit/DSlider.svelte';
   import DButton from '../kit/DButton.svelte';
 

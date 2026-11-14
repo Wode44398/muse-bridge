@@ -224,7 +224,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="solo-root" class:pane={IS_PANE} class:row={sideDock && dock.open && !overlay} use:measureW
+<div class="solo-root cc-tone" class:pane={IS_PANE} class:row={sideDock && dock.open && !overlay} use:measureW
   onpointerdowncapture={claimFocus} onfocusincapture={claimFocus}>
   {#if state === 'ready' && SOLO_CARD}
     <ClaudeDock wide card={SOLO_CARD} />

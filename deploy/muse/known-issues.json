@@ -143,6 +143,19 @@
       "fixed_in": null,
       "notify": false,
       "issue": null
+    },
+    {
+      "id": "office-legacy-needs-libreoffice",
+      "title": "doc / ppt / rtf / odt / odp 预览提示「服务端没有安装 LibreOffice」，docx / pptx 的排版和原文件有出入",
+      "title_en": "Previewing doc / ppt / rtf / odt / odp files says LibreOffice isn’t installed on the server, and docx / pptx previews don’t match the original layout exactly",
+      "symptom": "在工作空间里点开 .doc、.ppt、.rtf、.odt、.odp 文件，查看器显示「服务端没有安装 LibreOffice」；.docx、.pptx 能打开，但 Word 页面下方写着「快速预览：由浏览器直接排版，字体、分页与原文件可能不同。」，PPT 的字体、位置和原文件略有差别。Excel 不受影响。",
+      "workaround": "这是 Muse Bridge 的默认安装没带 LibreOffice，不是故障。可以下载文件用本机的 Office / WPS 打开，或者另存成 docx / pptx 再传上来。要在网页里看旧格式或原版式：经用户同意后，让 Muse 在 VM 上装 LibreOffice（apt-get install -y --no-install-recommends libreoffice-writer libreoffice-impress，几百 MB），装完重启一次服务（systemctl restart bridge，或在网页「服务控制」里点「空闲时重启」）。只重新打开文件不够，界面上「装好后重新打开即可」这句在重启之前不成立。",
+      "workaround_en": "This is because the default Muse Bridge install doesn’t include LibreOffice; it isn’t a fault. Download the file and open it in Office / WPS on your own computer, or save it as docx / pptx and upload it again. To view old formats or the original layout in the browser, with the user’s consent have Muse install LibreOffice on the VM (apt-get install -y --no-install-recommends libreoffice-writer libreoffice-impress, a few hundred MB), then restart the service once (systemctl restart bridge, or Restart when idle on the Service page in the web app). Just reopening the file is not enough: the on-screen hint to reopen after installing only holds after the restart.",
+      "cause": "新版查看器的 Word / PowerPoint 先请服务端用 LibreOffice 转成 PDF；Muse 的安装脚本没有装 LibreOffice（体积大、经代理下载慢），所以 docx / pptx 回落到浏览器排版的快速预览，doc / ppt / rtf / odt / odp 浏览器画不了。服务端在第一次检查后会记住「没有 LibreOffice」，所以装好后要重启服务。",
+      "since": "v0.8.0",
+      "fixed_in": null,
+      "notify": false,
+      "issue": null
     }
   ]
 }

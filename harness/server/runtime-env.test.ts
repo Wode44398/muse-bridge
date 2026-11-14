@@ -30,7 +30,7 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
-const READ_PATTERNS = [/process\.env\.([A-Z][A-Z0-9_]*)/g, /\b(?:fromEnv|envMs)\(\s*"([A-Z][A-Z0-9_]*)"/g];
+const READ_PATTERNS = [/process\.env\.([A-Z][A-Z0-9_]*)/g, /\b(?:fromEnv|envMs|envNum)\(\s*"([A-Z][A-Z0-9_]*)"/g];
 
 export function envReads(root = SERVER): Map<string, string> {
   const seen = new Map<string, string>(); // 变量名 → 第一次出现的文件

@@ -192,8 +192,13 @@ interface SavedConfig {
   permissionRules?: PermissionRules;
   access?: SandboxAccess;
   fast?: boolean;
+  // 设置页选的工作空间（11-13 起落盘：以前只在内存，harness 一重启就回默认工作区）。没存 = 默认
+  workspace?: string;
   // 每家上次用的型号 / 深度（切回这家时继承，维护者 10-11：「一切换 claude 就默认 sonnet4.6」）
   models?: ModelPrefs;
+  // 盘上选着的是模型中心的服务、读配置时它还没出现（见 loadSavedChoice）
+  pending?: { provider: string; model?: string; thinking?: string };
+  pendingModels?: Record<string, { model: string; thinking?: string }>;
 }
 
 type ModelPrefs = Record<string, { model: string; thinking: ThinkingLevel }>;
@@ -247,6 +252,14 @@ function loadSavedChoice(): SavedConfig | null {
     out.thinking = EFFORT_ORDER.includes(raw?.thinking)
       ? clampEffort(provider, model, raw.thinking)
       : defaultEffort(provider, model);
+  } else if (typeof raw?.provider === "string" && isCustomProviderId(raw.provider) && !disabledProviders().has(raw.provider)) {
+    // 11-13：bridge 启动时先把 plugin-providers.json 写成空表（插件还没起来），dimensio 这时读配置就认不出模型中心的服务，
+    // 以前直接退回 anthropic（没 Key、菜单里也没有），设置页「模型服务」一栏成了空的。现在记成待认领，等那家出现再换回去（settlePending）。
+    out.pending = {
+      provider: raw.provider,
+      ...(typeof raw.model === "string" ? { model: raw.model } : {}),
+      ...(typeof raw.thinking === "string" ? { thinking: raw.thinking } : {}),
+    };
   }
   // bypass 只在管理员实例认：租户实例即便盘上存着 bypass（配置被搬运等）也退回默认 auto。
   if (PERMISSION_MODES.includes(raw?.permissionMode) && !(raw.permissionMode === "bypass" && tenantMode())) {
@@ -255,8 +268,32 @@ function loadSavedChoice(): SavedConfig | null {
   if (raw?.permissionRules && typeof raw.permissionRules === "object") out.permissionRules = cleanRules(raw.permissionRules);
   if (raw?.access === "workspace" || raw?.access === "full") out.access = raw.access;
   if (typeof raw?.fast === "boolean") out.fast = raw.fast;
+  if (typeof raw?.workspace === "string" && raw.workspace.trim()) {
+    // 文件夹被删了 / 租户越界：静默回默认（绝不因此起不来）
+    try {
+      const abs = path.resolve(raw.workspace.trim());
+      if (statSync(abs).isDirectory()) {
+        assertInTenant(abs, "工作区");
+        out.workspace = abs;
+      }
+    } catch {
+      /* 回默认工作区 */
+    }
+  }
   out.models = cleanPrefs(raw?.models);
+  out.pendingModels = pendingPrefs(raw?.models);
   if (out.provider && out.model) out.models[out.provider] = { model: out.model, thinking: out.thinking! };
+  return out;
+}
+
+// 同上：模型中心的服务此刻还没出现，它们「上次用的型号」先原样留着（写盘照带，出现后再并进 modelPrefs）
+function pendingPrefs(v: unknown): Record<string, { model: string; thinking?: string }> {
+  const out: Record<string, { model: string; thinking?: string }> = {};
+  if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+  for (const [p, pref] of Object.entries(v as Record<string, any>)) {
+    if (!isCustomProviderId(p) || knownProvider(p) || typeof pref?.model !== "string") continue;
+    out[p] = { model: pref.model, ...(typeof pref.thinking === "string" ? { thinking: pref.thinking } : {}) };
+  }
   return out;
 }
 
@@ -288,16 +325,20 @@ export function configWritesSettled(): Promise<void> {
 // 不被抹掉）；盘上的文件坏了，先原样改名留证（.corrupt-<时间>）再写新的，绝不直接盖掉。API key 与
 // baseUrl 从不写进这里（key 在加密存储，baseUrl 来自环境变量 / 目录）。
 function persistChoice(): void {
+  // 还在等模型中心那家出现：盘上那份选择原样留着，别被启动时的兜底厂商盖掉
+  const pc = pendingChoice;
   const mine = {
     v: 1,
-    provider: config.provider,
-    model: config.model,
-    thinking: config.thinking,
+    provider: pc ? pc.provider : config.provider,
+    model: pc ? pc.model : config.model,
+    thinking: pc ? pc.thinking : config.thinking,
     permissionMode: config.permissionMode,
     permissionRules: config.permissionRules,
     access: config.access,
     fast: config.fast,
-    models: modelPrefs,
+    // 就是默认工作区就不记（undefined 盖掉盘上的旧值、序列化时整项去掉）：默认位置以后改了跟着走
+    workspace: config.workspace === defaultWorkspace() ? undefined : config.workspace,
+    models: { ...pendingModels, ...modelPrefs },
   };
   const file = choiceFile();
   persistQueue = persistQueue
@@ -324,11 +365,37 @@ let config: RuntimeConfig = {
   permissionMode: saved?.permissionMode ?? "auto",
   permissionRules: saved?.permissionRules ?? { allow: [], deny: [], ask: [] },
   thinking: saved?.thinking ?? clampEffort(initP, initDefaults.model, "off"),
-  workspace: defaultWorkspace(),
+  workspace: saved?.workspace ?? defaultWorkspace(),
   access: accessLock() ?? saved?.access ?? defaultAccess(),
   fast: saved?.fast ?? false,
 };
 const modelPrefs: ModelPrefs = saved?.models ?? {};
+let pendingChoice: SavedConfig["pending"] | null = saved?.pending ?? null;
+const pendingModels: Record<string, { model: string; thinking?: string }> = saved?.pendingModels ?? {};
+
+// 模型中心的服务晚于配置出现（启动时 plugin-providers.json 先是空表）：一出现就把盘上的选择换回来。
+// getConfig / setConfig 进门先调；用户在此之前亲手换了厂商就作罢（setConfig 清掉 pendingChoice）。不写盘——盘上本来就是这份。
+function settlePending(): void {
+  for (const [p, pref] of Object.entries(pendingModels)) {
+    if (!knownProvider(p)) continue;
+    delete pendingModels[p];
+    if (modelPrefs[p] || !modelSpec(p as ProviderId, pref.model)) continue;
+    const th = EFFORT_ORDER.includes(pref.thinking as ThinkingLevel) ? (pref.thinking as ThinkingLevel) : defaultEffort(p as ProviderId, pref.model);
+    modelPrefs[p] = { model: pref.model, thinking: clampEffort(p as ProviderId, pref.model, th) };
+  }
+  if (!pendingChoice) return;
+  const known = knownProvider(pendingChoice.provider);
+  if (!known) return;
+  const pc = pendingChoice;
+  pendingChoice = null;
+  const d = providerDefaults(known);
+  const model = pc.model && modelSpec(known, pc.model) ? pc.model : d.model;
+  const thinking = EFFORT_ORDER.includes(pc.thinking as ThinkingLevel)
+    ? clampEffort(known, model, pc.thinking as ThinkingLevel)
+    : defaultEffort(known, model);
+  config = { ...config, provider: known, model, thinking, baseUrl: d.baseUrl };
+  modelPrefs[known] = { model, thinking };
+}
 
 // 切到某家而没点名型号时用的型号：这家上次用的（仍在目录里）优先，没有才是厂商默认
 function preferredModel(p: ProviderId): { model: string; thinking: ThinkingLevel } | null {
@@ -337,6 +404,7 @@ function preferredModel(p: ProviderId): { model: string; thinking: ThinkingLevel
 }
 
 export function getConfig(): RuntimeConfig {
+  settlePending();
   // 成员实例：选着的是管理员共享的服务，管理员取消了共享（或删了）——退回默认厂商，别停在一个成员自己修不了的服务上
   //（setConfig 收尾会再调一次这里，那时已经换掉了，不会再进来）
   if (tenantMode() && isCustomProviderId(config.provider) && !getCustomProvider(config.provider)) forgetProvider(config.provider);
@@ -481,6 +549,7 @@ export function sessionConfigSnapshot(raw: unknown): RuntimeConfig {
 }
 
 export function setConfig(patch: ConfigPatch): RuntimeConfig {
+  settlePending();
   const { apiKey, ...rest } = patch;
   if (typeof apiKey === "string" && apiKey.trim() && isSharedProvider(rest.provider ?? config.provider)) {
     throw new Error("这是管理员共享的服务，只有管理员能修改");
@@ -489,6 +558,8 @@ export function setConfig(patch: ConfigPatch): RuntimeConfig {
     throw new Error("这家厂商的 Key 在模型中心里管理：到「设置 › 模型中心」添加或修改它的服务");
   }
   config = resolveConfig(config, rest, { ownKey: typeof apiKey === "string" && Boolean(apiKey.trim()) });
+  // 亲手换了厂商：盘上那份待认领的选择作废
+  if (rest.provider !== undefined) pendingChoice = null;
   if (typeof apiKey === "string" && apiKey.trim()) {
     // 一律落加密存储（重启还在）。内置几家以前只在内存，harness 一重启就丢
     if (isCustomProviderId(config.provider)) setCustomProviderKey(config.provider, apiKey.trim());

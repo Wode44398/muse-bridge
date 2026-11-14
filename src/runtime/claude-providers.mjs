@@ -70,8 +70,9 @@ function dirOf(owner) {
   return path.join(PROVIDERS_DIR, 'users', id);
 }
 
-export const PROTOCOLS = ['anthropic', 'openai'];
-export const AUTH_STYLES = ['x-api-key', 'bearer', 'none'];
+// gemini = Google 原生 generateContent（2026-11-13 起代理整体翻译，见 claude-providers-gemini.mjs）；goog = x-goog-api-key 头
+export const PROTOCOLS = ['anthropic', 'openai', 'gemini'];
+export const AUTH_STYLES = ['x-api-key', 'bearer', 'goog', 'none'];
 export const THINKING_KINDS = ['none', 'budget', 'adaptive', 'effort'];
 // 服务级「思考」策略：auto 跟随会话里选的档位（没选用默认档）；off 一律用「关闭」档（没有就不发）；on 没选时用默认档、没默认用最高档。
 export const THINKING_MODES = ['auto', 'off', 'on'];
@@ -85,7 +86,7 @@ const MODEL_ID_RE = /^[\w.:\/@+-]{1,200}$/;
 const HEADER_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 const FIELD_RE = /^[A-Za-z_][\w-]{0,40}(?:\.[A-Za-z_][\w-]{0,40}){0,4}$/;
 // 鉴权与逐跳头由代理自己管，自定义头不许覆盖它们。
-const RESERVED_HEADERS = new Set(['host', 'content-length', 'connection', 'transfer-encoding', 'x-api-key', 'authorization', 'anthropic-version', 'content-type', 'accept-encoding']);
+const RESERVED_HEADERS = new Set(['host', 'content-length', 'connection', 'transfer-encoding', 'x-api-key', 'x-goog-api-key', 'authorization', 'anthropic-version', 'content-type', 'accept-encoding']);
 
 // 常用厂商预设：只给地址、协议、鉴权方式和兼容默认值；型号一律以「拉取模型列表」为准（各家改得勤）。
 // modelsUrl：Anthropic 端点下没有 /v1/models 的厂商，拉模型列表改去这里（小米、DeepSeek 一类）。
@@ -101,6 +102,7 @@ export const PRESETS = Object.freeze([
   { id: 'mimo-plan', name: '小米 MiMo Token Plan', note: '套餐', protocol: 'anthropic', baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic', authStyle: 'x-api-key' },
   { id: 'openrouter', name: 'OpenRouter', protocol: 'openai', baseUrl: 'https://openrouter.ai/api/v1', authStyle: 'bearer' },
   { id: 'siliconflow', name: '硅基流动', protocol: 'openai', baseUrl: 'https://api.siliconflow.cn/v1', authStyle: 'bearer' },
+  { id: 'gemini', name: 'Google Gemini', note: 'AI Studio 的 Key', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', authStyle: 'goog' },
   { id: 'openai', name: 'OpenAI', protocol: 'openai', baseUrl: 'https://api.openai.com/v1', authStyle: 'bearer', compat: { maxTokensField: 'max_completion_tokens' } },
   { id: 'local', name: '本机模型', note: 'Ollama / llama.cpp / LM Studio', protocol: 'openai', baseUrl: 'http://127.0.0.1:11434/v1', authStyle: 'none', compat: { useProxy: false } },
 ]);
@@ -320,7 +322,7 @@ export function normalizeProvider(input, prev = null) {
     shared: p.shared === true,
     protocol,
     baseUrl: normalizeBaseUrl(p.baseUrl),
-    authStyle: oneOf(p.authStyle, AUTH_STYLES, protocol === 'openai' ? 'bearer' : 'x-api-key'),
+    authStyle: oneOf(p.authStyle, AUTH_STYLES, protocol === 'openai' ? 'bearer' : protocol === 'gemini' ? 'goog' : 'x-api-key'),
     headers: normalizeHeaders(p.headers),
     timeoutSec: int(p.timeoutSec, 10, 1800, '超时') ?? 600,
     retries: int(p.retries, 0, 5, '重试次数') ?? 2,

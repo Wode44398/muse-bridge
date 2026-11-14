@@ -1,49 +1,28 @@
 <script>
-  // Composer 加号菜单（claude.ai 原版子集）：Add files or photos / Research / Use style。
+  // Composer 加号菜单（claude.ai 原版子集）：Add files or photos / 挂载文件夹 / Research / 输出风格。
   // 图标见 lib/menuIcons.svelte.js（原版字形），viewBox 20、fill currentColor。
-  // Use style 含自定义风格：本设备 localStorage（lib/styles.svelte.js），编辑表单内嵌第三视图。
-  // 2026-10-20：claude.ai 式「Use style」中文改叫「回复语气」（英文 Tone），免得和 Claude Code 的「输出风格」混淆，功能不变；
-  // 新增「输出风格 ›」：给【这个会话】单独选 Claude Code 输出风格（官方会话菜单 Output style 同款，lib/outputStyle）。
+  // 2026-11-13：「回复语气」（claude.ai 的 Use style）与「输出风格」合并——只留输出风格（给【这个会话】单选 Claude Code
+  // 输出风格，官方会话菜单 Output style 同款，lib/outputStyle），占回复语气原来的位置、沿用它的羽毛图标与子菜单行样式。
   import { settings } from '../lib/state.svelte.js';
-  import { customStyles, addStyle, updateStyle, removeStyle } from '../lib/styles.svelte.js';
   import { menuIcon } from '../lib/menuIcons.svelte.js';
   import { pushBackLayer } from '../lib/nav.js';
   import { IS_CSNAP } from '../lib/csnap.js';
-  import { t, tc } from '../lib/i18n.js';
+  import { t } from '../lib/i18n.js';
   import { cs } from '../lib/claudeSettings.svelte.js';
   import { ostyle, outputStyleLabel, outputStyleDesc, outputStyleOptions, currentOutputStyle, loadSessionOutputStyle, setSessionOutputStyle } from '../lib/outputStyle.svelte.js';
   import { uiIcon } from '../lib/pluginUi.svelte.js';
   // pluginActions：插件登记的「＋」菜单项（ctx.ui.composerAction，lib/pluginUi）；按下交给 onPluginAction（Composer 带上输入框文字去调插件）
-  let { onClose, onPickFiles, onPickPhotos, onPickFolder, dir = 'up', pluginActions = [], onPluginAction = null } = $props();
+  // startView：工具条上的输出风格芯片点开时直接进子菜单
+  let { onClose, onPickFiles, onPickPhotos, onPickFolder, dir = 'up', pluginActions = [], onPluginAction = null, startView = 'main' } = $props();
 
-  let view = $state('main'); // 'main' | 'style' | 'edit' | 'ostyle'
+  let view = $state(startView === 'ostyle' && !IS_CSNAP ? 'ostyle' : 'main'); // 'main' | 'ostyle'
 
-  // 安卓系统返回沿内部视图逐级退（编辑→风格→主菜单→关闭）；卸载自动出栈。
+  // 安卓系统返回沿内部视图逐级退（风格→主菜单→关闭）；卸载自动出栈。
   $effect(() => pushBackLayer(() => {
-    if (view === 'edit') { view = 'style'; return; }
-    if (view === 'style' || view === 'ostyle') { view = 'main'; return; }
+    if (view === 'ostyle') { view = 'main'; return; }
     onClose?.();
   }));
-  const STYLES = [
-    { id: 'normal', name: 'Normal' },
-    { id: 'learning', name: 'Learning' },
-    { id: 'concise', name: 'Concise' },
-    { id: 'explanatory', name: 'Explanatory' },
-    { id: 'formal', name: 'Formal' },
-  ];
-  const curStyle = $derived(settings.style || 'normal');
-  const curName = $derived(
-    (STYLES.find((s) => s.id === curStyle) || customStyles.list.find((s) => s.id === curStyle) || STYLES[0]).name
-  );
-
-  // 编辑表单状态：editingId=null 表示新建。
-  let editingId = $state(null);
-  let editName = $state('');
-  let editText = $state('');
-  let confirmDel = $state(false);
-
   const close = () => onClose && onClose();
-  function pickStyle(id) { settings.style = id; close(); }
   function files() { close(); onPickFiles && onPickFiles(); }
   function photos() { close(); onPickPhotos && onPickPhotos(); }
   function folder() { close(); onPickFolder && onPickFolder(); }
@@ -60,27 +39,6 @@
   if (!IS_CSNAP && currentOutputStyle() === undefined) loadSessionOutputStyle();
   async function pickOStyle(v) { if (await setSessionOutputStyle(v)) close(); }
 
-  function openEdit(s) {
-    editingId = s ? s.id : null;
-    editName = s ? s.name : '';
-    editText = s ? s.text : '';
-    confirmDel = false;
-    view = 'edit';
-  }
-  function saveEdit() {
-    const name = editName.trim() || t('未命名风格');
-    const text = editText.trim();
-    if (!text) return;
-    if (editingId) updateStyle(editingId, name, text);
-    else settings.style = addStyle(name, text);   // 新建即选用
-    view = 'style';
-  }
-  function delEdit() {
-    if (!confirmDel) { confirmDel = true; return; }
-    if (settings.style === editingId) settings.style = 'normal';
-    removeStyle(editingId);
-    view = 'style';
-  }
 </script>
 
 <button class="am-backdrop" aria-label={t('关闭')} onclick={close}></button>
@@ -111,14 +69,8 @@
         <span class="am-name">Research</span>
         {#if settings.research}<span class="am-check">✓</span>{/if}
       </button>
-    {/if}
-    <button class="am-row" onclick={() => (view = 'style')}>
-      <svg class="am-ic" viewBox="0 0 20 20" fill="currentColor"><path d={menuIcon('feather')} /></svg>
-      <span class="am-name">{t('回复语气')}</span><span class="am-right">{curName} ›</span>
-    </button>
-    {#if !IS_CSNAP}
       <button class="am-row" onclick={openOStyle}>
-        <svg class="am-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6.5h14M5 12h9M5 17.5h11"/></svg>
+        <svg class="am-ic" viewBox="0 0 20 20" fill="currentColor"><path d={menuIcon('feather')} /></svg>
         <span class="am-name">{t('输出风格')}</span><span class="am-right">{oStyleName} ›</span>
       </button>
     {/if}
@@ -135,58 +87,19 @@
     <button class="am-back" onclick={() => (view = 'main')}>{t('‹ 返回')}</button>
     <p class="am-note">{t('只改这个会话，下一条消息起生效')}</p>
     <button class="am-row" disabled={ostyle.busy} onclick={() => pickOStyle(null)}>
+      <svg class="am-ic" viewBox="0 0 20 20" fill="currentColor"><path d={menuIcon('feather')} /></svg>
       <span class="am-name">{t('跟随默认（{name}）', { name: outputStyleLabel(defOStyle) })}</span>
       {#if curOStyle == null}<span class="am-check">✓</span>{/if}
     </button>
     <div class="am-div"></div>
     {#each oStyleList as v (v)}
       <button class="am-row two" disabled={ostyle.busy} onclick={() => pickOStyle(v)}>
+        <svg class="am-ic" viewBox="0 0 20 20" fill="currentColor"><path d={menuIcon('feather')} /></svg>
         <span class="am-tx"><span class="am-name">{outputStyleLabel(v)}</span>{#if outputStyleDesc(v)}<span class="am-sub">{outputStyleDesc(v)}</span>{/if}</span>
         {#if curOStyle != null && curOStyle.toLowerCase() === v.toLowerCase()}<span class="am-check">✓</span>{/if}
       </button>
     {/each}
     {#if ostyle.err}<p class="am-note err">{ostyle.err}</p>{/if}
-  {:else if view === 'style'}
-    <button class="am-back" onclick={() => (view = 'main')}>{t('‹ 返回')}</button>
-    {#each STYLES as s}
-      <button class="am-row" onclick={() => pickStyle(s.id)}>
-        <svg class="am-ic" viewBox="0 0 20 20" fill="currentColor"><path d={menuIcon('feather')} /></svg>
-        <span class="am-name">{s.name}</span>
-        {#if s.id === curStyle}<span class="am-check">✓</span>{/if}
-      </button>
-    {/each}
-    {#if customStyles.list.length}
-      <div class="am-div"></div>
-      {#each customStyles.list as s (s.id)}
-        <div class="am-row split">
-          <button class="am-pickarea" onclick={() => pickStyle(s.id)}>
-            <svg class="am-ic" viewBox="0 0 20 20" fill="currentColor"><path d={menuIcon('feather')} /></svg>
-            <span class="am-name">{s.name}</span>
-            {#if s.id === curStyle}<span class="am-check">✓</span>{/if}
-          </button>
-          <button class="am-editbtn" aria-label={t('编辑 {name}', { name: s.name })} onclick={() => openEdit(s)}>
-            <svg viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>
-          </button>
-        </div>
-      {/each}
-    {/if}
-    <div class="am-div"></div>
-    <button class="am-row" onclick={() => openEdit(null)}>
-      <svg class="am-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
-      <span class="am-name">Create &amp; edit styles</span>
-    </button>
-  {:else}
-    <button class="am-back" onclick={() => (view = 'style')}>{t('‹ 返回')}</button>
-    <div class="am-form">
-      <input class="am-input" type="text" placeholder={t('风格名称（如：翻译腔）')} bind:value={editName} maxlength="20" />
-      <textarea class="am-ta" placeholder={t('风格指令，例如：所有回复都用文言文，并在结尾附一句白话总结。')} bind:value={editText} maxlength="4000" rows="5"></textarea>
-      <div class="am-form-btns">
-        {#if editingId}
-          <button class="am-del" class:arm={confirmDel} onclick={delEdit}>{confirmDel ? tc('claude', '确认删除') : t('删除')}</button>
-        {/if}
-        <button class="am-save" disabled={!editText.trim()} onclick={saveEdit}>{editingId ? t('保存') : t('创建并使用')}</button>
-      </div>
-    </div>
   {/if}
 </div>
 
@@ -201,12 +114,6 @@
   .am.down { bottom: auto; top: calc(100% + 8px); }
   .am-row { width: 100%; display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 11px; text-align: left; }
   .am-row:active { background: var(--hover); }
-  .am-row.split { padding: 0; gap: 0; }
-  .am-pickarea { flex: 1; display: flex; align-items: center; gap: 11px; padding: 10px 0 10px 12px; border-radius: 11px 0 0 11px; text-align: left; min-width: 0; }
-  .am-pickarea:active { background: var(--hover); }
-  .am-editbtn { flex: none; width: 38px; align-self: stretch; display: flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 0 11px 11px 0; }
-  .am-editbtn:active { background: var(--hover); color: var(--text); }
-  .am-editbtn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .am-ic { width: 20px; height: 20px; color: var(--serif); flex: none; }
   .am-name { font-size: 15px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .am-right { margin-left: auto; font-size: 13px; color: var(--muted); }
@@ -223,21 +130,8 @@
   .am-row:disabled { opacity: .55; }
   .am-tx { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .am-sub { font-size: 12.5px; line-height: 17px; color: var(--muted); white-space: normal; }
+  .am-row.two .am-ic { margin-top: 1px; }
   .am-row.two .am-check { align-self: center; }
   .am-note { margin: 0; padding: 2px 12px 6px; font-size: 12.5px; line-height: 17px; color: var(--muted); }
   .am-note.err { color: var(--crit, #c43c3c); padding-top: 6px; }
-  /* 自定义风格编辑表单（菜单内嵌） */
-  .am-form { display: flex; flex-direction: column; gap: 8px; padding: 4px 8px 8px; width: 280px; max-width: 100%; }
-  .am-input, .am-ta {
-    width: 100%; padding: 9px 11px; border-radius: 10px; font-size: 14px;
-    background: var(--hover); color: var(--text); border: 1px solid var(--divider);
-  }
-  .am-ta { resize: vertical; min-height: 96px; line-height: 1.5; font-family: inherit; }
-  .am-input:focus, .am-ta:focus { outline: none; border-color: var(--serif); }
-  .am-form-btns { display: flex; gap: 8px; justify-content: flex-end; }
-  /* 主按钮与发送键/提交回答同款：黑底反白（亮暗主题自适应），不再是突兀的橙色 */
-  .am-save { padding: 8px 16px; border-radius: 10px; background: var(--text); color: var(--bg); font-size: 14px; font-weight: 600; }
-  .am-save:disabled { opacity: .45; }
-  .am-del { padding: 8px 14px; border-radius: 10px; color: var(--muted); font-size: 14px; border: 1px solid var(--divider); }
-  .am-del.arm { color: #fff; background: #c43c3c; border-color: #c43c3c; }
 </style>

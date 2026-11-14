@@ -11,14 +11,15 @@ import { ui } from './state.svelte.js';
 import { api } from './api.js';
 import { cloudFileUrl } from './preview.svelte.js';
 import { t } from './i18n.js';
-import { ovUrl } from './overlay.svelte.js';
+import dolomitesJpg from '../visuals/wallpapers/dolomites.jpg';
+import dolomitesDepth from '../visuals/wallpapers/depth/dolomites.png';
 
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
 // 内置库（名称/分系来自设计稿《壁纸设置 v2》；流光=flux 流体引擎本体，缩略用渐变示意）
 export const WPLIB = {
-  // 明亮系：多洛米蒂（原版资源，原图与深度图都在 /app/_ov/wallpapers/）
-  dolomites: { name: t('多洛米蒂'), src: 'wallpapers/dolomites.jpg', depth: 'wallpapers/depth/dolomites.png', sys: 'light' },
+  // 明亮系：多洛米蒂（原版资源，原图与深度图都在 web/src/visuals/wallpapers/，vite 收进产物）
+  dolomites: { name: t('多洛米蒂'), src: dolomitesJpg, depth: dolomitesDepth, sys: 'light' },
   // 深色系
   flux:      { name: t('流光'), dyn: true, sys: 'dark',
     css: 'radial-gradient(60% 50% at 70% 28%, rgba(48,116,249,.55), rgba(48,116,249,0) 62%), radial-gradient(70% 60% at 24% 76%, rgba(113,137,255,.38), rgba(113,137,255,0) 66%), radial-gradient(40% 35% at 42% 50%, rgba(20,60,140,.4), rgba(20,60,140,0) 70%), linear-gradient(160deg, #0c1322 0%, #05070d 100%)' },
@@ -105,7 +106,7 @@ export function wpDef(id) {
   if (up) return { name: up.name, url: up.url };
   const w = hasOwn(WPLIB, id) ? WPLIB[id] : null;
   if (!w) return WPLIB.flux;
-  return { ...w, url: w.src ? ovUrl(w.src) : null };
+  return { ...w, url: w.src || null };
 }
 
 // 选定某系统的壁纸（persist；Home 响应 wp[slot] 自动换壁纸）。设置页只列能用的，选了就是它。
@@ -169,7 +170,7 @@ export function wpHasDepth(id) {
   return !!(up && up.hasDepth);
 }
 export function wpDepthUrl(id) {
-  if (BUILTIN.spatial.includes(id)) return ovUrl(WPLIB[id].depth);
+  if (BUILTIN.spatial.includes(id)) return WPLIB[id].depth;
   const up = uploadItem(id);
   return up && up.hasDepth ? up.depthUrl : null;
 }

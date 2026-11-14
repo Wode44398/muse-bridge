@@ -18,7 +18,7 @@ export const CONTEXT_PREFS: PrefSpec[] = [
     key: "idleCompact",
     type: "bool",
     default: true,
-    group: "chat",
+    group: "context",
     label: "空闲时赶在缓存过期前压缩",
     desc: "用 Anthropic 官方接口的长对话空闲约 54 分钟、1 小时提示缓存快过期时，先把上下文压缩一次，回来接着聊不用按原价重写整段缓存",
     en: {
@@ -32,7 +32,7 @@ export const CONTEXT_PREFS: PrefSpec[] = [
     default: 120_000,
     min: 30_000,
     max: 1_000_000,
-    group: "chat",
+    group: "context",
     label: "空闲压缩的起点（token）",
     desc: "上下文至少这么大才做空闲压缩",
     en: { label: "Idle compaction threshold (tokens)", desc: "Only conversations with at least this much context are compacted while idle." },
@@ -41,7 +41,7 @@ export const CONTEXT_PREFS: PrefSpec[] = [
     key: "memoryDream",
     type: "bool",
     default: true,
-    group: "chat",
+    group: "memory",
     label: "空闲时整理记忆",
     desc: "所有对话都停了 20 分钟以上时，dimensio 把还没复核的记忆拿回写它时的原始对话核对一遍：合并重复、改正、退掉错的；只有找得到你亲口说过的原话才让它生效，其余留在记忆面板里等你确认。同一个项目半天最多一次，用的是这个项目最近一次对话的模型",
     en: {
@@ -53,7 +53,7 @@ export const CONTEXT_PREFS: PrefSpec[] = [
     key: "deferTools",
     type: "bool",
     default: true,
-    group: "chat",
+    group: "context",
     label: "不常用的工具按需加载说明",
     desc: "浏览器、操作电脑、bridge、拉取请求、工作区协同这些工具平时只带一句简介，dimensio 第一次要用时再取完整说明，每轮请求省下约一万 token；只对新会话生效",
     en: {

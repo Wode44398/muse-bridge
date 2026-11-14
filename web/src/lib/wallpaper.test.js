@@ -1,6 +1,6 @@
 // 壁纸数据层（wallpaper.svelte.js）：内置壁纸（多洛米蒂为原版资源）、默认、下架壁纸 / 上传壁纸的回退。
-// 做法同 devices.state.test.js：用 svelte 编译器把真的 wallpaper.svelte.js 和 overlay.svelte.js 编成客户端模块，
-// 其余依赖换成桩。每个场景写进一个新的临时目录再 import（模块顶层读 localStorage / window.__OVERLAY__，要新实例）。
+// 做法同 devices.state.test.js：用 svelte 编译器把真的 wallpaper.svelte.js 编成客户端模块，其余依赖换成桩；
+// 原版图片的 import（vite 给出地址）换成固定地址。每个场景写进一个新的临时目录再 import（模块顶层读 localStorage，要新实例）。
 // 跑法（web 目录）：node --test src/lib/wallpaper.test.js
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,7 +24,13 @@ const fixImports = (code) => code.replace(/from\s+['"](svelte(?:\/[\w/-]+)?)['"]
 const { compileModule } = await import(pathToFileURL(join(svelteRoot, 'src', 'compiler', 'index.js')).href);
 const compile = (file) => fixImports(compileModule(readFileSync(join(here, file), 'utf8'), { filename: file, generate: 'client' }).js.code)
   .replace(/import\.meta\.env\.BASE_URL/g, "'/app/'");
-const MODS = { 'wallpaper.svelte.js': compile('wallpaper.svelte.js'), 'overlay.svelte.js': compile('overlay.svelte.js') };
+// vite 把 import 进来的图片换成产物里带哈希的地址；这里换成固定地址
+const IMG = { 'wallpapers/dolomites.jpg': '/app/assets/dolomites-H1.jpg', 'wallpapers/depth/dolomites.png': '/app/assets/dolomites-H2.png' };
+const stubImages = (code) => code.replace(/import\s+(\w+)\s+from\s+['"]\.\.\/visuals\/([^'"]+)['"];?/g, (m, name, rel) => {
+  if (!IMG[rel]) throw new Error('测试没给这张原版图片配地址：' + rel);
+  return `const ${name} = ${JSON.stringify(IMG[rel])};`;
+});
+const MODS = { 'wallpaper.svelte.js': stubImages(compile('wallpaper.svelte.js')) };
 
 const STUBS = {
   'state.svelte.js': `export const ui = { glassMode: 'B' };`,
@@ -37,14 +43,8 @@ const STUBS = {
 };
 
 const LS = 'bridge-wallpaper';
-const VER = 'abc123';
-// 构建打进壳里的清单（overlay-bundle.mjs）
-const MANIFEST = {
-  v: 1, name: 'bridge-private', base: '/app/_ov/', ver: VER, css: [], vars: {}, modules: {},
-  files: ['overlay.json', 'wallpapers/dolomites.jpg', 'wallpapers/depth/dolomites.png'], data: {},
-};
-const OV_IMG = `/app/_ov/wallpapers/dolomites.jpg?v=${VER}`;
-const OV_DEPTH = `/app/_ov/wallpapers/depth/dolomites.png?v=${VER}`;
+const OV_IMG = IMG['wallpapers/dolomites.jpg'];
+const OV_DEPTH = IMG['wallpapers/depth/dolomites.png'];
 
 const flush = () => new Promise((r) => setTimeout(r, 30));
 const sel = (o) => JSON.stringify(o);
@@ -58,7 +58,7 @@ let seq = 0;
 async function boot({ storage = {}, list } = {}) {
   const store = memStore(storage);
   globalThis.localStorage = store;
-  globalThis.window = { addEventListener() {}, removeEventListener() {}, __OVERLAY__: MANIFEST };
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
   globalThis.__wp = { list: list || (async () => ({ items: [] })) };
   const dir = mkdtempSync(join(tmpdir(), `wallpaper-test-${++seq}-`));
   writeFileSync(join(dir, 'package.json'), '{"type":"module"}');

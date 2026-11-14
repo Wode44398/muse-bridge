@@ -4,16 +4,15 @@
   // 玻璃层同 Alert：页面压暗底色（Overlays/Default 亮 20% / 暗 48%）两锚点解出的图层 + 9 宫；大投影交给 box-shadow。
   // （kit 底部圆角 58 跟 iPhone 屏幕圆角同心；安卓机屏幕圆角各不同，统一取 38——渲染器的玻璃只支持四角同径。）
   // 不传 onconfirm 就不出 ✓（纯选择型的表单页，点行即生效）；传 onback 时左钮换成 ‹ 返回上一层（多级选择）。
-  import { ovUrl } from '../../lib/overlay.svelte.js';
   import { getContext } from 'svelte';
   import GlassButton from './GlassButton.svelte';
   import Sym from './Sym.svelte';
   import { liquidPress } from '../../lib/liquid/press.js';
   import { swipeDismiss } from '../../lib/motion.js';
-  const glassL = $derived(ovUrl('ios27/sheet-light.png'));
-  const glassD = $derived(ovUrl('ios27/sheet-dark.png'));
-  const promL = $derived(ovUrl('ios27/prom44-light.png'));
-  const promD = $derived(ovUrl('ios27/prom44-dark.png'));
+  import glassL from '../../visuals/ios27/sheet-light.png';
+  import glassD from '../../visuals/ios27/sheet-dark.png';
+  import promL from '../../visuals/ios27/prom44-light.png';
+  import promD from '../../visuals/ios27/prom44-dark.png';
 
   let { title = '', onclose, onconfirm = null, onback = null, confirmDisabled = false, confirmLabel = '', closeLabel = '', backLabel = '', children } = $props();
   const ios = getContext('ios27');

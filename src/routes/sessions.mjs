@@ -319,7 +319,7 @@ const isAutoModeDenial = (text) => /^Permission for this action (was denied by t
 //（文件名就是媒体 id，见 modules/studio/server/mcp/media-phone.mjs resultText）。
 // 段形状与直播 chat.svelte.js gen_media_start/gen_media 落成的完全一致。
 const MEDIA_TOOL_KIND = { generate_image: 'image', generate_video: 'video', generate_speech: 'audio', generate_music: 'music' };
-const MEDIA_ID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.[a-z0-9]{2,5}\b/i;
+const MEDIA_ID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([a-z0-9]{2,5})\b/i;
 function mediaToolKind(name) {
   const m = /^mcp__media__(generate_[a-z]+)$/.exec(String(name || ''));
   return m ? MEDIA_TOOL_KIND[m[1]] || null : null;
@@ -329,8 +329,9 @@ function mediaSegFromResult(kind, input, b) {
   const prompt = String((input && (input.prompt || input.text)) || '');
   const base = { kind: 'media', id: '', mediaKind: kind, status: 'ready', elapsed: 0, error: null, prompt, dataUrl: null };
   if (b.is_error) return { ...base, status: 'error', error: text.replace(/^[^：:\n]{0,12}失败[：:]\s*/, '').trim() || '生成失败' };
-  const id = (MEDIA_ID_RE.exec(text) || [])[1];
-  return id ? { ...base, id } : null;
+  // ext：前端据此给下载名补对扩展名（Nano Banana 2.1 出 jpg、语音出 wav，不能一律猜 png / mp3）
+  const [, id, ext] = MEDIA_ID_RE.exec(text) || [];
+  return id ? { ...base, id, ext: ext.toLowerCase() } : null;
 }
 // 子 agent 生成的媒体：直播时 gen_media 事件推进的是主对话那一轮（截图里一整排课件配图就是
 // 子 agent 出的），但工具调用只落在 <会话>/subagents/agent-<id>.jsonl。按出现顺序收集。

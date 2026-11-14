@@ -189,6 +189,9 @@ export const api = {
     const http = () => req('GET', '/api/files?path=' + encodeURIComponent(path || '') + wsQuery(ws) + q, null, opts);
     return !ws && !q && hasNativeWorkspace() ? nativeWorkspaceList(path).catch(http) : http();
   },
+  // 列表的二次补充元数据：{ items: { 名字: { w, h, dur, n } }, pending }（图片宽高 / 音视频时长 / 文件夹项目数）；
+  // pending > 0 表示服务端还在算，隔一会儿再要一次
+  filesMeta: (path, ws) => req('GET', '/api/files/meta?path=' + encodeURIComponent(path || '') + wsQuery(ws)),
   mkdir: (path, name, ws) => req('POST', '/api/files/mkdir', wsBody({ path, name }, ws)),
   // 新建文本文件（只建不覆盖：同名已存在 → 409 'exists'）
   newFile: (path, name, ws, content = '') => req('POST', '/api/files/newfile', wsBody({ path, name, content }, ws)),

@@ -1,7 +1,7 @@
 // 设置页行首线稿图标（v5「墨与象牙」）：24 网格、1.6 描边、圆头圆角，同一套几何母题——
 // 圆角 2.2~2.8 的矩形、整圆、短横。只用 currentColor，不上色块：颜色只留给各 agent 自己的品牌标。
 // 取代原先的彩色 SF Symbol 方块（彩虹色 + 拼凑字形是「AI 味」的主要来源）。
-import { ovUrl } from './overlay.svelte.js';
+import claudeFlower from '../visuals/assets/mascot/claude-菊花-静态.svg';
 
 export const SI = {
   // 通用：两根推子
@@ -60,7 +60,7 @@ export const SI = {
 const BASE = import.meta.env.BASE_URL;
 export function agentMark(id, dark) {
   switch (id) {
-    case 'claude': return ovUrl('assets/mascot/claude-菊花-静态.svg');   // i18n-ignore 素材路径
+    case 'claude': return claudeFlower;
     case 'gemini': return BASE + 'assets/icons/gemini.svg';
     // Media Studio（2026-11-04 起接替 Gemini 的位置）：画框里四个种类色节点由一条细线串起（标由 studio-frontend 画）
     case 'studio': return `${BASE}assets/icons/studio-${dark ? 'light' : 'dark'}.svg`;

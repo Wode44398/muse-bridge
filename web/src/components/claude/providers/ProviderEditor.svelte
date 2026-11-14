@@ -19,6 +19,8 @@
 
   let { source, onClose, onSaved, onDeleted, dirtyOut = $bindable(false) } = $props();
 
+  // 各协议默认的鉴权方式（同服务端 normalizeProvider）
+  const DEFAULT_AUTH = { anthropic: 'x-api-key', openai: 'bearer', gemini: 'goog' };
   const EMPTY_PARAMS = () => ({ maxTokens: null, temperature: null, topP: null, topK: null, thinking: null, thinkingBudget: null, stop: [], extraBody: '' });
   // 模型的完整形状（老服务端回来的缺字段也补齐：没有档位表的按「不思考」显示，保存时服务端照老规则换算）
   const fullModel = (m) => ({
@@ -32,7 +34,7 @@
     return {
       id: p.id || '', name: p.name || '', note: p.note || '', preset: p.preset || '', enabled: p.enabled !== false, showInPicker: p.showInPicker !== false,
       shared: p.shared === true,   // 共享给成员（多用户服务器的管理员才有开关，cp.canShare）
-      protocol: p.protocol || 'anthropic', baseUrl: p.baseUrl || '', authStyle: p.authStyle || (p.protocol === 'openai' ? 'bearer' : 'x-api-key'),
+      protocol: p.protocol || 'anthropic', baseUrl: p.baseUrl || '', authStyle: p.authStyle || DEFAULT_AUTH[p.protocol] || 'x-api-key',
       headers: Array.isArray(p.headers) ? p.headers : [], timeoutSec: p.timeoutSec ?? 600, retries: p.retries ?? 2,
       models: (p.models || []).map(fullModel),
       defaultModel: p.defaultModel || '', fastModel: p.fastModel || '',
@@ -71,22 +73,22 @@
   const endpoint = $derived.by(() => {
     const b = cleanBase;
     if (!b) return '';
+    if (draft.protocol === 'gemini') return `${b}/models/${draft.defaultModel || '{model}'}:streamGenerateContent?alt=sse`;
     return draft.protocol === 'openai' ? b + '/chat/completions' : (/\/v1$/.test(b) ? b + '/messages' : b + '/v1/messages');
   });
   // 地址和协议可能对不上的情形，规则同 dimensio 编辑器（共享模块 protocolMismatch）。sure = 说得准：实测过的站
   // （小米：…/v1 只有 OpenAI 兼容接口，按 Anthropic 协议必 404）或路径本身说明了协议（…/anthropic 配 OpenAI 协议）。
   // Anthropic 协议 + 别的站的 …/v1 不断言：new-api / one-api 一类中转的 …/v1/messages 本来就是 Anthropic 接口（Claude Code
   // 经中转最常见的配法），只给「可能」的温和提示、建议点「检测连接」；检测实测当前这组 404 了，才给一键改。
-  // bridge 只有 Anthropic / OpenAI 两种协议：共享规则里指向 Gemini 的那两条不适用。
-  const mismatch = $derived.by(() => {
-    const m = protocolMismatch(draft.protocol, cleanBase);
-    return m && (m.to === 'openai' || m.to === 'anthropic') ? m : null;
-  });
+  // 2026-11-13 起 bridge 也翻译 Gemini 原生协议：共享规则里 Google 地址 ⇄ Gemini / OpenAI 兼容入口那两条也适用。
+  const mismatch = $derived(protocolMismatch(draft.protocol, cleanBase));
   function setProtocol(v) {
     const changedProto = v !== draft.protocol;
     draft.protocol = v;
-    if (v === 'openai' && draft.authStyle === 'x-api-key') draft.authStyle = 'bearer';
-    if (v === 'anthropic' && draft.authStyle === 'bearer' && !draft.id) draft.authStyle = 'x-api-key';
+    if (v === 'openai' && (draft.authStyle === 'x-api-key' || draft.authStyle === 'goog')) draft.authStyle = 'bearer';
+    if (v === 'anthropic' && (draft.authStyle === 'goog' || (draft.authStyle === 'bearer' && !draft.id))) draft.authStyle = 'x-api-key';
+    // Google 的 Key 用 x-goog-api-key；经中转（Bearer）的保留
+    if (v === 'gemini' && draft.authStyle === 'x-api-key') draft.authStyle = 'goog';
     if (changedProto) retier(v);
   }
   // 档位的写法按协议不同（小米：Anthropic 端点 thinking.type disabled / enabled，OpenAI 端点 reasoning_effort none / high）：
@@ -114,8 +116,9 @@
       m.source = { ...(m.source || {}), thinking: g.source?.thinking || 'guess' };
     }
   }
-  const PROTO_OPTS = [{ value: 'anthropic', label: 'Anthropic Messages' }, { value: 'openai', label: 'OpenAI Chat' }];
-  const AUTH_OPTS = [{ value: 'x-api-key', label: 'x-api-key' }, { value: 'bearer', label: 'Bearer' }, { value: 'none', label: () => t('不需要') }];
+  const PROTO_OPTS = [{ value: 'anthropic', label: 'Anthropic Messages' }, { value: 'openai', label: 'OpenAI Chat' }, { value: 'gemini', label: 'Gemini' }];
+  const PROTO_SHORT = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini' };
+  const AUTH_OPTS = [{ value: 'x-api-key', label: 'x-api-key' }, { value: 'bearer', label: 'Bearer' }, { value: 'goog', label: 'x-goog-api-key' }, { value: 'none', label: () => t('不需要') }];
   // 只关心连接的草稿（拉模型 / 检测连接 / 探测用）：带上编辑中的 Key
   const connDraft = (withModels = false) => ({
     protocol: draft.protocol, baseUrl: draft.baseUrl, authStyle: draft.authStyle, headers: $state.snapshot(draft.headers), compat: $state.snapshot(draft.compat), name: draft.name,
@@ -357,14 +360,16 @@
         </div>
         <div class="fld"><span class="fl">{t('接口协议')}</span>
           <SSegmented options={PROTO_OPTS} value={draft.protocol} onchange={setProtocol} label={t('接口协议')} />
-          <span class="fh">{draft.protocol === 'openai' ? t('OpenAI 兼容端点：bridge 把 Claude Code 的请求整体翻译过去（含工具调用与流式）') : t('兼容 Anthropic Messages 的端点：请求原样转发，只改写参数')}</span>
+          <span class="fh">{draft.protocol === 'openai' ? t('OpenAI 兼容端点：bridge 把 Claude Code 的请求整体翻译过去（含工具调用与流式）')
+            : draft.protocol === 'gemini' ? t('Google Gemini 原生接口（generateContent）：bridge 整体翻译过去，含工具调用、流式、思考摘要与思维签名')
+              : t('兼容 Anthropic Messages 的端点：请求原样转发，只改写参数')}</span>
         </div>
         {#if retierNote}
           <div class="note warn">{t('换了协议：{names} 的推理强度档位是按原协议写的（手动设的或探测出来的），不会自动换。建议展开这些模型点「探测能力」，或在档位里用「一键填入」重设。', { names: retierNote })}
             <div class="nbtns"><button type="button" class="btn sm ghost" onclick={() => (retierNote = '')}>{t('知道了')}</button></div></div>
         {/if}
         <label class="fld"><span class="fl">{t('接口地址')}</span>
-          <input class="in mono" spellcheck="false" placeholder={draft.protocol === 'openai' ? 'https://api.example.com/v1' : 'https://api.example.com/anthropic'} bind:value={draft.baseUrl} />
+          <input class="in mono" spellcheck="false" placeholder={draft.protocol === 'openai' ? 'https://api.example.com/v1' : draft.protocol === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta' : 'https://api.example.com/anthropic'} bind:value={draft.baseUrl} />
           {#if endpoint}<span class="fh">{t('实际请求')} <code>{endpoint}</code></span>{/if}
         </label>
         {#if mismatch && !mismatchFix}
@@ -372,18 +377,20 @@
           <div class="note">{t('有的服务 …/v1 下只有 OpenAI 兼容接口（按 Anthropic 协议请求会 404）；中转站的 …/v1 多半两种都有。不确定就点「检测连接」。')}</div>
         {:else if mismatch}
           <div class="note warn">
-            <div>{mismatch.to === 'anthropic' ? t('以 /anthropic 结尾的多半是 Anthropic 兼容地址，按 OpenAI 协议请求会 404。')
+            <div>{mismatch.to === 'gemini' ? t('Google 的这个地址是 Gemini 原生接口，按 OpenAI 协议请求会 404：改用 Gemini 协议，或把地址改成 …/v1beta/openai。')
+              : mismatch.to === 'openai' && draft.protocol === 'gemini' ? t('以 /openai 结尾的是 Google 的 OpenAI 兼容入口，按 Gemini 协议请求会 404。')
+              : mismatch.to === 'anthropic' ? t('以 /anthropic 结尾的多半是 Anthropic 兼容地址，按 OpenAI 协议请求会 404。')
               : mismatch.sure ? t('这个站的 …/v1 只有 OpenAI 兼容接口，按 Anthropic 协议请求会 404（发消息时报「模型有问题」）。')
               : t('检测连接实测这个地址按 Anthropic 协议请求返回 404：改用 OpenAI 协议，或改用同站的 …/anthropic 地址。')}</div>
             <div class="nbtns">
-              <button type="button" class="btn sm" onclick={() => setProtocol(mismatch.to)}>{mismatch.to === 'openai' ? t('改用 OpenAI 协议') : t('改用 Anthropic 协议')}</button>
+              <button type="button" class="btn sm" onclick={() => setProtocol(mismatch.to)}>{mismatch.to === 'openai' ? t('改用 OpenAI 协议') : mismatch.to === 'gemini' ? t('改用 Gemini 协议') : t('改用 Anthropic 协议')}</button>
               {#if mismatch.alt !== cleanBase}<button type="button" class="btn sm" onclick={() => (draft.baseUrl = mismatch.alt)}>{t('改成 {url}', { url: mismatch.alt.replace(/^https?:\/\//, '') })}</button>{/if}
             </div>
           </div>
         {/if}
         <div class="detect">
           <button type="button" class="btn sm" disabled={detecting || !cleanBase} onclick={runDetect}>{#if detecting}<span class="spin"></span>{/if}{t('检测连接')}</button>
-          <span class="fh">{t('用这把 Key 在这个地址和同站的兄弟地址上，两种协议各真打一次，看哪个组合能通')}</span>
+          <span class="fh">{t('用这把 Key 在这个地址和同站的兄弟地址上，每种协议各真打一次，看哪个组合能通')}</span>
         </div>
         {#if detect}
           {#if detect.error}<div class="note warn">{tr(detect.error)}</div>
@@ -391,13 +398,13 @@
             <div class="dres">
               {#if detect.ok}<div class="dline ok">{t('当前配置能通')}{#if detect.model}<span class="muted"> · {detect.model}</span>{/if}</div>
               {:else if detect.suggest}
-                <div class="dline">{t('当前配置不通；建议改成')} <b>{detect.suggest.protocol === 'openai' ? 'OpenAI' : 'Anthropic'}</b> · <code>{detect.suggest.baseUrl}</code>
+                <div class="dline">{t('当前配置不通；建议改成')} <b>{PROTO_SHORT[detect.suggest.protocol] || detect.suggest.protocol}</b> · <code>{detect.suggest.baseUrl}</code>
                   <button type="button" class="btn sm primary" onclick={() => applySuggest(detect.suggest)}>{t('一键应用')}</button></div>
               {:else}<div class="dline bad">{t('没有找到能通的组合：检查地址、Key 和网络')}</div>{/if}
               <details><summary>{t('每个组合的结果')}</summary>
                 {#each detect.results as r, i (i)}
                   <div class="drow"><span class="st" class:ok={r.result === 'ok'} class:bad={r.result === 'missing' || r.result === 'network'}>{RESULT_TEXT[r.result]?.() || r.result}</span>
-                    <span class="mono">{r.protocol === 'openai' ? 'OpenAI' : 'Anthropic'} · {r.url}</span>
+                    <span class="mono">{PROTO_SHORT[r.protocol] || r.protocol} · {r.url}</span>
                     <!-- 只给能用的组合（同服务端 usable 口径：通了 / 接口在只是模型名或 Key 的问题），当前这组不用给 -->
                     {#if (r.result === 'ok' || r.result === 'model' || r.result === 'auth') && !(r.protocol === draft.protocol && r.baseUrl === cleanBase)}<button type="button" class="btn sm ghost" onclick={() => applySuggest(r)}>{t('用这个')}</button>{/if}
                     {#if r.message && r.result !== 'ok'}<span class="lerr" title={r.message}>{r.message}</span>{/if}</div>

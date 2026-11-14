@@ -98,6 +98,8 @@
   // dimensio 自带适配的哪一家（服务端按地址认；'' = 不是）
   const native = $derived(svc ? svc.native || '' : det?.native || '');
   const studioOn = $derived(hub.studio !== null);
+  // 老服务端的 Claude 不认 Gemini 原生协议（新服务端总览带 claudeGemini）
+  const noGemini = $derived(proto === 'gemini' && !hub.claudeGemini);
   const dimOn = $derived(hub.dimensio !== null);
   const lastAt = $derived(Math.max(sid ? svc?.detectedAt || 0 : 0, catAt));
   // 401 / 403 时总览拿不到（hub.ok 假、hub.err 空）也落到这里，不会一直「正在读取…」
@@ -133,8 +135,8 @@
       else if (k !== 'text') {
         if (!studioOn) why = t('这台服务器没装 Media Studio');
         else if (!media || !(media.kinds || []).includes(k)) why = t('Media Studio 接不了这个服务的{kind}模型', { kind: tr(KIND_NAME[k]) });
-      } else if (!dimOn && (proto === 'gemini' || block)) {
-        why = [proto === 'gemini' ? t('Gemini 接口不支持') : blockText(block), t('dimensio 未开启')].join(t('、'));
+      } else if (!dimOn && (noGemini || block)) {
+        why = [noGemini ? t('Gemini 接口不支持') : blockText(block), t('dimensio 未开启')].join(t('、'));
       }
     }
     // 搜索按关键字包含：id、显示名、模型厂（原名 + 当前语言的名字 + 键）
@@ -215,7 +217,7 @@
   }
   // 去向整体用不了的原因（与勾了哪些行无关）
   const destOff = $derived({
-    claude: proto === 'gemini' ? t('Gemini 协议的服务不能给 Claude') : '',
+    claude: noGemini ? t('Gemini 协议的服务不能给 Claude') : '',
     dimensio: dimOn ? '' : t('dimensio 未开启'),
     studio: !studioOn ? t('这台服务器没装 Media Studio')
       : !media || !(media.kinds || []).includes(kind) ? t('Media Studio 接不了这个服务的{kind}模型', { kind: tr(KIND_NAME[kind]) }) : '',

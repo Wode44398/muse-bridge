@@ -9,7 +9,7 @@
   // - 档位点 3px、35ms 步进错峰；把手 16×19 r6 双模式色；
   // - Ultracode（10-30 起与档位独立，对齐桌面端 4.29 的 ultracodeSeparate）：拉条下面一行勾选，勾上 = 拉条充能——
   //   填充段点亮能量层、档名 / 档位点 / 把手转紫，任意档位都行。能量层是原版 WebGL 能量场
-  //   （ovModule('effortField')，爆发点跟着把手位置）。prefers-reduced-motion 全静。
+  //   （visuals/modules/effort-field.js，懒加载；爆发点跟着把手位置）。prefers-reduced-motion 全静。
   import { cubicOut } from 'svelte/easing';
   import { caps, settings } from '../lib/state.svelte.js';
   import { claudeEffortFallback, claudeDefaultModel } from '../lib/caps.js';
@@ -20,7 +20,6 @@
   import { IS_CSNAP } from '../lib/csnap.js';
   import { t as tt } from '../lib/i18n.js';   // 本文件动画代码里 t 是插值进度变量，翻译函数取别名
   import { cs } from '../lib/claudeSettings.svelte.js';
-  import { ovModule } from '../lib/overlay.svelte.js';
   // 受控模式（设置 › Claude › 子 agent 调用策略 的档位自定义，2026-11）：给了 onpick 就只回调、不读写全局 settings，
   // 也不调 rememberCurrentPrefs。下面这些参数都不传时，输入栏里的行为与外观和原来完全一样。
   //   value          当前档位 id（'' / 空 = 没指定，高亮这个模型的默认档）
@@ -167,14 +166,14 @@
   $effect(() => {
     if (!hasTrack || fieldAsked) return;
     fieldAsked = true;
-    ovModule('effortField').then((m) => { if (m && typeof m.mountEffortField === 'function') fieldMod = m; });
+    import('../visuals/modules/effort-field.js').then((m) => { fieldMod = m; });
   });
   let energyApi = $state.raw(null);   // { pressStart(k), pressEnd(k), destroy() }
   $effect(() => {
     const cnv = canvasEl, m = fieldMod;
     if (!cnv || !hasTrack || !m) return;
     let api = null;
-    try { api = m.mountEffortField(cnv); } catch (e) { console.warn('[overlay] effortField 挂载失败：', e?.message || e); }   // i18n-ignore 只进控制台
+    try { api = m.mountEffortField(cnv); } catch (e) { console.warn('[visuals] effortField 挂载失败：', e?.message || e); }   // i18n-ignore 只进控制台
     if (!api) return;
     energyApi = api;
     return () => { energyApi = null; try { api.destroy?.(); } catch {} };

@@ -2,14 +2,15 @@
 // 前端协议与服务器上的终端（claude-term.mjs）一致：SSE hello / snapshot / data / exit，外加
 // offline / online 两个事件——设备掉线不等于终端结束，重新连上后 shell 还在，补一份快照接着用。
 //
-// 一台设备一个终端（设备侧 key 'main'），只给设备主人用。服务端留一份滚回缓冲，
-// 多个页面同时看、断线重连都从这里重放；设备那边也留一份（服务端重启后再开同一个 key，
-// 设备补快照，shell 不重开）。
+// 一台设备一个终端（设备侧 key 'main'），只给设备主人用。服务端留一份屏幕镜像（term-mirror.mjs，
+// 同 claude-term.mjs；不可用时退回原始字节缓冲），多个页面同时看、断线重连都从这里出快照；
+// 设备那边也留一份（服务端重启后再开同一个 key，设备补快照，shell 不重开）。
 
 import { sseWrite } from './sse.mjs';
 import { deviceDispatch } from './devices.mjs';
 import { deviceEvents, isDeviceOnline } from './device-control.mjs';
 import { deviceAudit } from './device-audit.mjs';
+import { createMirror, conptyCompat } from './term-mirror.mjs';
 
 const KEY = 'main';
 const BUF_CAP = 400 * 1024;      // 滚回缓冲上限（字符）
@@ -30,6 +31,8 @@ function broadcast(t, ev) {
 
 function append(t, d) {
   if (!d) return;
+  for (const p of t.pending) p.q.push(d);
+  if (t.mirror) { t.mirror.write(d); return; }
   t.chunks.push(d);
   t.bytes += d.length;
   // 整块丢弃可能把 ANSI 序列拦腰截断——xterm 对快照开头的少量乱码有容忍，同 claude-term.mjs。
@@ -41,10 +44,19 @@ function onChunk(t, c) {
   t.lastUsed = Date.now();
   if (c.type === 'snapshot') {
     // 设备那边的 shell 还活着（服务端重启过 / 设备掉线后重连）：以设备的缓冲为准
-    t.chunks = c.d ? [String(c.d)] : [];
-    t.bytes = c.d ? String(c.d).length : 0;
+    const d = c.d ? String(c.d) : '';
+    if (t.mirror) {
+      // ESC c（完全复位）+ 设备的缓冲，走镜像同一条有序写队列——即时 reset() 会和还没解析完的输出乱序。
+      // 正在接入的面板收到的也是这一串：切点之后整屏重来
+      const re = '\x1bc' + d;
+      t.mirror.write(re);
+      for (const p of t.pending) p.q.push(re);
+    } else {
+      t.chunks = d ? [d] : [];
+      t.bytes = d.length;
+    }
     if (t.state !== 'live') { t.state = 'live'; broadcast(t, { type: 'online' }); }
-    broadcast(t, { type: 'snapshot', d: t.chunks.join('') });
+    broadcast(t, { type: 'snapshot', d });
     return;
   }
   if (c.type === 'data') {
@@ -98,8 +110,9 @@ deviceEvents.on('online', (deviceId) => {
   if (t && t.state !== 'exited') open(t);
 });
 
-/** 取或开某台设备的终端。ctx 必须是设备主人（路由层已核过归属）。 */
-export function ensureDeviceTerm(ctx, deviceId, { cols, rows } = {}) {
+/** 取或开某台设备的终端。ctx 必须是设备主人（路由层已核过归属）。
+    os = 设备上报的系统串（`Windows_NT 10.0.26200`）：Windows 设备的 PTY 是 ConPTY，镜像要开兼容（见 term-mirror.mjs）。 */
+export function ensureDeviceTerm(ctx, deviceId, { cols, rows, os = '' } = {}) {
   let t = terms.get(deviceId);
   if (t && t.state !== 'exited') {
     if (t.state === 'offline' && isDeviceOnline(deviceId)) open(t);
@@ -107,8 +120,10 @@ export function ensureDeviceTerm(ctx, deviceId, { cols, rows } = {}) {
   }
   t = {
     deviceId, ctx, state: 'opening', gen: 0, error: '', exitCode: null,
-    cols: clampC(cols), rows: clampR(rows), chunks: [], bytes: 0, subs: new Set(), lastUsed: Date.now(),
+    cols: clampC(cols), rows: clampR(rows), chunks: [], bytes: 0, subs: new Set(), pending: new Set(), lastUsed: Date.now(),
   };
+  t.pty = conptyCompat(os);
+  t.mirror = createMirror(t.cols, t.rows, { windowsPty: t.pty });
   terms.set(deviceId, t);
   deviceAudit({ ev: 'term_open', device: deviceId, by: ctx.key });
   open(t);
@@ -120,7 +135,33 @@ export function deviceTerm(deviceId) {
 }
 
 export function snapshotDeviceTerm(t) {
+  if (t.mirror && !t.mirror.dead) { try { return t.mirror.serialize(); } catch { /* 退回原始缓冲 */ } }
   return t.chunks.join('');
+}
+
+// 面板接入：快照 + 实时输出，衔接处不丢不重（做法同 claude-term.mjs 的 attachTerm）。
+export function attachDeviceTerm(t, res) {
+  if (!t.mirror || t.mirror.dead) {
+    const snap = t.chunks.join('');
+    if (snap) sseWrite(res, { type: 'snapshot', d: snap });
+    if (t.state === 'offline') sseWrite(res, { type: 'offline' });
+    subscribeDeviceTerm(t, res);
+    return;
+  }
+  const p = { q: [], res, done: false };
+  t.pending.add(p);
+  res.on('close', () => { p.done = true; t.pending.delete(p); });
+  t.mirror.at(() => {
+    t.pending.delete(p);
+    if (p.done || res.destroyed || res.writableEnded) return;
+    let snap = '';
+    try { snap = t.mirror.serialize(); } catch { snap = ''; }
+    if (snap) sseWrite(res, { type: 'snapshot', d: snap });
+    for (const d of p.q) sseWrite(res, { type: 'data', d });
+    if (t.state === 'offline') sseWrite(res, { type: 'offline' });
+    else if (t.state === 'exited') sseWrite(res, { type: 'exit', code: t.exitCode, ...(t.error ? { error: t.error } : {}) });
+    subscribeDeviceTerm(t, res);
+  });
 }
 
 export function subscribeDeviceTerm(t, res) {
@@ -149,6 +190,7 @@ export function resizeDeviceTerm(deviceId, cols, rows) {
   if (!t) return false;
   t.cols = clampC(cols);
   t.rows = clampR(rows);
+  t.mirror?.resize(t.cols, t.rows);
   if (t.state === 'live') quick(t, 'pty.resize', { cols: t.cols, rows: t.rows }).catch(() => {});
   return true;
 }
@@ -162,6 +204,9 @@ export async function killDeviceTerm(deviceId) {
   try { t.ac?.abort(); } catch {}   // 在途的 pty.open 一并撤掉（半开连接上的那条不会再有人来收）
   t.state = 'exited';
   broadcast(t, { type: 'exit', code: -1 });
+  for (const p of t.pending) { p.done = true; sseWrite(p.res, { type: 'exit', code: -1 }); }
+  t.pending.clear();
+  t.mirror?.dispose();
   if (isDeviceOnline(deviceId)) {
     try { await quick(t, 'pty.kill', {}); } catch { /* 设备那边已经没了 */ }
   }

@@ -11,13 +11,13 @@
 // spec（公共接口，见手册 plugins 章「给 agent 提供模型」，只做加法）：
 //   id          插件内唯一，缺省 'default'（小写字母数字连字符）
 //   name        显示名（≤40）
-//   protocol    'anthropic' | 'openai' | 'gemini'（gemini 只给 dimensio）
+//   protocol    'anthropic' | 'openai' | 'gemini'（gemini = Google 原生 generateContent；2026-11-13 起 Claude 的本机代理也会翻译它）
 //   baseUrl     端点根地址（http / https；插件是主机装的，本机地址也行）
-//   apiKey      可选；authStyle 'x-api-key' | 'bearer' | 'none'（缺省：有 key 按协议，没有 = none）；headers [{ name, value }]
+//   apiKey      可选；authStyle 'x-api-key' | 'bearer' | 'goog' | 'none'（缺省：有 key 按协议，没有 = none）；headers [{ name, value }]
 //   agents      ['claude', 'dimensio'] 的子集（缺省两个都给）
 //   members     true = 多用户服务端的成员也能用（缺省只给服务器主机）
 //   models      [{ id, label?, agents?, contextWindow?, maxOutput?, vision?, thinking?, efforts?: [{ id, name, value }], effortDefault?, alwaysThinks? }]
-//               models[i].agents（2026-11-10 模型中心 v2）：这个模型给哪些 agent，取与服务级 agents 的交集（gemini 照样去掉 claude）；
+//               models[i].agents（2026-11-10 模型中心 v2）：这个模型给哪些 agent，取与服务级 agents 的交集；
 //               不传 = 跟服务级。某个 agent 下一个模型都没有时，那一侧整条服务不出现（modelServices(agent) 过滤）。
 //   native      可选（模型中心用）：{ vendor, key, baseUrl? }——这个服务就是 dimensio 自带专门适配的那家厂商（vendor = 它的厂商 id）。
 //               dimensio 扩展不把它登记成一张新卡，而是让那家厂商用这把 Key（和地址）；别的 agent 不看这个字段。
@@ -44,7 +44,6 @@ function normalize(plugin, pluginName, spec) {
   const s = spec && typeof spec === 'object' ? spec : {};
   const sid = s.id == null ? 'default' : String(s.id);
   if (!SID_RE.test(sid)) throw bad(`模型服务 id「${sid}」不合法（小写字母、数字、连字符，≤32）`);
-  // gemini（Gemini generateContent 接口）只有 dimensio 认得：Claude 的本机代理只会 Anthropic / OpenAI，这种服务不给 Claude
   const protocol = s.protocol === 'openai' ? 'openai' : s.protocol === 'gemini' ? 'gemini' : s.protocol === 'anthropic' || s.protocol == null ? 'anthropic' : null;
   if (!protocol) throw bad('protocol 只能是 anthropic、openai 或 gemini');
   let baseUrl = '';
@@ -58,7 +57,7 @@ function normalize(plugin, pluginName, spec) {
   const headers = (Array.isArray(s.headers) ? s.headers : [])
     .filter((h) => h && typeof h.name === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(h.name) && typeof h.value === 'string')
     .slice(0, 20).map((h) => ({ name: h.name, value: h.value.slice(0, 2000) }));
-  const agents = (Array.isArray(s.agents) ? MODEL_AGENTS.filter((a) => s.agents.includes(a)) : [...MODEL_AGENTS]).filter((a) => protocol !== 'gemini' || a !== 'claude');
+  const agents = (Array.isArray(s.agents) ? MODEL_AGENTS.filter((a) => s.agents.includes(a)) : [...MODEL_AGENTS]);
   const seen = new Set();
   const models = [];
   for (const m of Array.isArray(s.models) ? s.models : []) {

@@ -22,7 +22,10 @@
   import { closeTopLayer, layerCount } from '../../modules/studio/layers.js';
   import { icon, MARK } from '../../modules/studio/icons.js';
   import { motionStyle, springEasing, SPRING } from '../../modules/studio/motion.js';
-  import { ovUrl } from '../../lib/overlay.svelte.js';
+  import alertLight from '../../visuals/ios27/alert-light.png';
+  import alertDark from '../../visuals/ios27/alert-dark.png';
+  import sheetLight from '../../visuals/ios27/sheet-light.png';
+  import sheetDark from '../../visuals/ios27/sheet-dark.png';
   // 浮起来的层（菜单 / 浮层 / 手机 Sheet / 弹窗）用 bridge 的苹果材质（ios27 Liquid Glass 烘焙切图，与设置页、文件面板的菜单同一张）——
   // 维护者 11-06：「菜单之类的可以用苹果材质，没必要改扁平材质」。底下的纸（作品栏、画布、参数坞、输入框）仍是纸墨。
   import { slotDropFor } from '../../modules/studio/drag.js';
@@ -43,8 +46,8 @@
   const MOTION = motionStyle();
 
   const dark = $derived(ui.theme === 'dark');
-  const glassVars = $derived(`;--sd-glass-pop:url("${dark ? ovUrl('ios27/alert-dark.png') : ovUrl('ios27/alert-light.png')}");`
-    + `--sd-glass-sheet:url("${dark ? ovUrl('ios27/sheet-dark.png') : ovUrl('ios27/sheet-light.png')}");`);
+  const glassVars = $derived(`;--sd-glass-pop:url("${dark ? alertDark : alertLight}");`
+    + `--sd-glass-sheet:url("${dark ? sheetDark : sheetLight}");`);
   const compact = $derived(layout.compact);
   const expanded = $derived(layout.expanded);
   // 作品栏此刻是不是一根侧列（占宽度）：桌面常驻开着 / 平板推入了；手机是抽屉

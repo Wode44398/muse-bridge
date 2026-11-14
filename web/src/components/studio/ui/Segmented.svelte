@@ -30,7 +30,7 @@
     placedOnce = true;
   }
   // 选项文字变了也要重量（换模型时常是同样 3 项、同一个选中值、尺寸也不变，ResizeObserver 不会响）
-  $effect(() => { void target; void options.map((o) => o.label).join(''); measure(); });
+  $effect(() => { void target; void options.map((o) => o.label).join('\u0001'); measure(); });
   $effect(() => {
     if (!track) return;
     const ro = new ResizeObserver(() => { const a = placedOnce; placedOnce = false; measure(); placedOnce = a || ind.shown; });

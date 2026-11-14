@@ -226,6 +226,8 @@ export function moveWorkspaceFile(root, srcRel, destRel) {
 // 虚拟盘第一次列目录要现拉元数据），同步 readdir/stat 会把单线程的服务整个钉住——所有对话的
 // SSE 一起停摆。stat 走 libuv 线程池并行；stat 不动的项（pagefile.sys 之类被系统锁着的）照旧略过。
 const DENIED = new Set(['EPERM', 'EACCES']);
+// 自然排序（「图2」在「图10」前、不分大小写），与前端 files-business.js 的 makeFileComparator 同一规则
+const LIST_COLLATOR = new Intl.Collator('zh', { numeric: true, sensitivity: 'base' });
 export async function handleList(req, res, url, identify) {
   let ctx = requireReadCtx(identify, req, res);
   if (!ctx) return;
@@ -264,7 +266,7 @@ export async function handleList(req, res, url, identify) {
       const child = stats[index];
       if (child) items.push({ name: entry.name, isDir: child.isDirectory(), size: child.size, mtime: child.mtimeMs });
     });
-    items.sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name, 'zh'));
+    items.sort((a, b) => Number(b.isDir) - Number(a.isDir) || LIST_COLLATOR.compare(a.name, b.name));
     okJson(res, { path: here, items, truncated, total: visible.length });
   } catch {
     if (!res.headersSent) bad(res, 500, 'read error');

@@ -4,7 +4,7 @@
   // 提示词气泡（surface2、圆角 18、靠右）→ 作品直接落在纸上（圆角 12、细线、浮起投影），下面一行 mono 元信息 + 操作；
   // 进行中是与目标比例同形的纸框 + 慢慢掠过的高光，中间一粒朱点 + mono 计时，底部朱色量度条。
   import { t, tc, tr } from '../../../lib/i18n.js';
-  import { openPreview } from '../../../lib/preview.svelte.js';
+  import { openPreview, vertexAssetItem as vxItem } from '../../../lib/preview.svelte.js';
   import { dragOut, canDragOut } from '../../../lib/dragOut.js';
   import { studio, mediaSrc, assetDragSrc, newImageThread, openAsset, currentModel, valuesOf, retryJob } from '../../../modules/studio/media.svelte.js';
   import { assetDrag } from '../../../modules/studio/assetDrag.js';
@@ -33,7 +33,8 @@
   });
 
   function openTurnImage(id) {
-    const imgs = v.turns.flatMap((x) => (x.assets || []).map((a) => ({ origin: 'vertex', id: a.id, name: x.prompt || tc('名词', '生成图像'), kind: 'image' })));
+    // 提示词单独传（信息面板显示），下载名由查看器按「提示词前 40 字 + 存盘扩展名」生成；没有提示词才用类型名
+    const imgs = v.turns.flatMap((x) => (x.assets || []).map((a) => vxItem(a, x.prompt || a.prompt, tc('名词', '生成图像'), 'image')));
     openPreview(imgs, Math.max(0, imgs.findIndex((x) => x.id === id)));
   }
   let canvasEl = $state();

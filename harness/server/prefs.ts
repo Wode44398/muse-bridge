@@ -36,9 +36,12 @@ export interface PrefSpec {
   en?: { label: string; desc?: string; options?: Record<string, string> };
 }
 
-export type PrefGroup = "chat" | "collab" | "dispatch" | "workspace" | "git" | "sessions" | "notify" | "debug";
+export type PrefGroup = "chat" | "context" | "memory" | "collab" | "dispatch" | "workspace" | "git" | "sessions" | "notify" | "debug";
 export const PREF_GROUPS: { id: PrefGroup; label: string; en: string }[] = [
   { id: "chat", label: "对话", en: "Chat" },
+  // 11-13：压缩、工具按需加载原先都挤在「对话」里；「记忆」组由设置页并进「记忆管理」那一组里显示
+  { id: "context", label: "上下文与成本", en: "Context and cost" },
+  { id: "memory", label: "记忆", en: "Memory" },
   { id: "dispatch", label: "子 agent 调度", en: "Subagent dispatch" },
   { id: "collab", label: "会话协作", en: "Session collaboration" },
   { id: "workspace", label: "工作区协同", en: "Workspace awareness" },

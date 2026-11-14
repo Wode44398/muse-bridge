@@ -13,6 +13,8 @@
 
 // 档位怎么写进请求（budget / adaptive / effort）、深合并、点分路径写值都在共用的型号知识模块里（dimensio 的自定义服务同一份）。
 import { deepMerge, setPath, tierOf, writeTier, applyTier, OFF_TIER_IDS, tableEntry, replaysThinking, routeOf, bareModelId } from '../model-knowledge/knowledge.mjs';
+// Gemini 原生协议的翻译在 claude-providers-gemini.mjs；这里只认它装思维签名的思考块
+import { SIG_PREFIX as GEMINI_SIG } from './claude-providers-gemini.mjs';
 export { deepMerge, setPath };
 // 「关闭」档的常见名字：服务策略「始终关」找它，「始终开」跳过它
 const OFF_TIERS = new Set(OFF_TIER_IDS);
@@ -173,9 +175,11 @@ export function applyParams(body, provider, model, effort) {
     if (!target.vision) b.messages = dropImages(b.messages);
     // 只在模型确实不会思考时剥历史思考块（「不思考」只是不发参数；小米这类不发参数也会想，剥了反而丢上下文）
     if (c.stripThinkingHistory || (target.thinking === 'none' && !target.alwaysThinks)) {
+      // Gemini 协议：装着思维签名的思考块要留着（toGemini 回放时只取签名、不发思考正文）
+      const keep = (x) => provider.protocol === 'gemini' && x.type === 'thinking' && typeof x.signature === 'string' && x.signature.startsWith(GEMINI_SIG);
       b.messages = b.messages.map((m) => {
         if (m.role !== 'assistant' || !Array.isArray(m.content)) return m;
-        const content = stripBlocks(m.content, (x) => x && (x.type === 'thinking' || x.type === 'redacted_thinking'));
+        const content = stripBlocks(m.content, (x) => x && (x.type === 'thinking' || x.type === 'redacted_thinking') && !keep(x));
         return { ...m, content: content.length ? content : [{ type: 'text', text: '…' }] };
       });
     }
@@ -191,12 +195,12 @@ export function applyParams(body, provider, model, effort) {
   }
   // DeepSeek 的 /anthropic：思考模式下（不发 thinking 也算开）带 tool_use 的历史轮必须有 thinking 块，否则 400。它自己发出的轮
   // 带着签名、CLI 会原样回传；缺的是会话中途开思考、从别家换过来、或上面刚被剥掉的轮——补一个空块（实测开 / 关思考都收）。
-  if (provider.protocol !== 'openai' && Array.isArray(b.messages) && padsThinking(target.id)) b.messages = padThinkingBlocks(b.messages);
+  if (provider.protocol === 'anthropic' && Array.isArray(b.messages) && padsThinking(target.id)) b.messages = padThinkingBlocks(b.messages);
   if (!c.promptCaching) { b = dropCacheControl(b); }
   if (c.slimBody) {
     for (const k of SLIM_FIELDS) delete b[k];
-    // 官方的服务端工具（web_search_2025… 等带 type 的）第三方跑不了
-    if (Array.isArray(b.tools)) b.tools = b.tools.filter((t) => !t || !t.type || t.type === 'custom');
+    // 官方的服务端工具（web_search_2025… 等带 type 的）第三方跑不了；Gemini 协议的联网搜索例外（toGemini 换成 Google 搜索）
+    if (Array.isArray(b.tools)) b.tools = b.tools.filter((t) => !t || !t.type || t.type === 'custom' || (provider.protocol === 'gemini' && /^web_search/.test(t.type)));
     if (Array.isArray(b.tools) && !b.tools.length) { delete b.tools; delete b.tool_choice; }
   }
   if (!keepsBetas(provider)) for (const k of BETA_FIELDS) delete b[k];
@@ -207,8 +211,8 @@ export function applyParams(body, provider, model, effort) {
   if (official) delete b.speed;
   if (!official) delete b.metadata;
   // 档位：budget / adaptive 是 Anthropic 形状（预算 < max_tokens，不够就往上抬、不超模型上限；budget 方式的关闭档不开思考）；
-  // effort 方式在 Anthropic 协议这里写，OpenAI 协议翻译后再写（openAIReasoning）
-  if (tierId && (target.thinking !== 'effort' || provider.protocol !== 'openai')) {
+  // effort 方式在 Anthropic 协议这里写，OpenAI / Gemini 协议翻译后再写（openAIReasoning / toGemini）
+  if (tierId && (target.thinking !== 'effort' || provider.protocol === 'anthropic')) {
     b = applyTier(b, target, tierId, { protocol: 'anthropic', cap, baseBudget: p.thinkingBudget || 16_000 });
   }
   if (room && b.max_tokens > room) {

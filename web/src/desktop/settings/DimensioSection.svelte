@@ -28,11 +28,14 @@
     prefGroups, prefItems, prefGroupLabel, prefLabel, prefDesc, prefOptions, prefChanged, setPref, parsePrefNumber,
     sessionTitle, exportDiag, versionLine, openInDimensio,
     feed, setFeedDetail, FEED_DESC,
+    curSpec, extOk, mcpLine, skillLine,
   } from '../../lib/dimensioSettings.svelte.js';
+  import { me } from '../../lib/state.svelte.js';
 
   // fl：设置搜索跳转后的高亮；enabled：管理员视角下 dimensio 开着且跑得起来（成员能看到这一分区就是有权限，恒 true）；
   // openHub：「模型中心」行点了去哪——外壳传自己的换分区（带 ‹ › 历史），没传走通用的直达分区
-  let { fl = () => false, enabled = true, openHub = () => openSettings('model-hub') } = $props();
+  // openExt(type)：「连接器 / 技能」行点了去扩展页的哪一类（外壳传自己的换分区）
+  let { fl = () => false, enabled = true, openHub = () => openSettings('model-hub'), openExt = () => openSettings('extensions') } = $props();
 
   // 进分区（或刚被打开）才拉：拉 /api/harness 会把没在跑的 harness 拉起来
   $effect(() => { if (enabled) untrack(() => loadDimensio({ quiet: true })); });
@@ -55,7 +58,7 @@
   }
 
   // —— 规则：每组一个添加框 ——
-  let ruleDraft = $state({ ask: '', deny: '' });
+  let ruleDraft = $state({ allow: '', ask: '', deny: '' });
   async function addRule(kind, e) {
     e?.preventDefault?.();
     if (await addRules(kind, ruleDraft[kind])) ruleDraft[kind] = '';
@@ -152,9 +155,9 @@
   <p class="note">{t('读取中…')}</p>
 {:else}
   <!-- 模型：新会话的默认（对话里随时可在输入框的型号胶囊改） -->
-  <DGroup label={t('模型')} foot={t('新对话默认用这里的模型；对话里随时可以在输入框的型号胶囊改。')}>
+  <DGroup label={t('模型')} foot={keyVendors().length ? t('新对话默认用这里的模型；对话里随时可以在输入框的型号胶囊改。') : t('新对话默认用这里的模型；对话里随时可以在输入框的型号胶囊改。能用的模型都在模型中心里添加和修改。')}>
     <div class="drow cr" class:hl={fl('dm-provider')}>
-      <span class="cr-tx"><span class="cr-t">{t('模型服务')}</span>{@render bad('provider')}</span>
+      <span class="cr-tx"><span class="cr-t">{t('模型服务')}</span>{#if errOf('provider')}{@render bad('provider')}{:else if !curSpec()}<span class="cr-s bad">{t('选着的服务现在用不了（没有 Key 或已被删除），请重新选一个')}</span>{/if}</span>
       <span class="cr-tr"><DSelect options={vendorOpts} value={cfg.provider} disabled={ds.busy === 'provider'} onchange={setProvider} width="220px" /></span>
     </div>
     {#if modelOptions().length}
@@ -175,10 +178,17 @@
         <span class="cr-tr"><DSwitch checked={cfg.fast === true} disabled={ds.busy === 'fast'} onchange={setFast} /></span>
       </div>
     {/if}
+    {#if !keyVendors().length}{@render hubRow()}{/if}
   </DGroup>
 
-  <!-- 各厂商 API Key + 自定义服务入口（编辑器在 dimensio 的模型服务面板里，这里只放摘要） -->
-  <DGroup label={keyVendors().length ? t('API Key') : t('模型服务')} foot={keyVendors().length ? t('Key 加密存在服务端，重启不丢，不回传浏览器。') : t('dimensio 能用的模型都在模型中心里添加和修改。')}>
+  {#snippet hubRow()}
+    <!-- 管理员有模型中心总览：自定义服务都在 设置 › 模型中心 管（就在本设置页里换分区）；成员 / 老服务端照旧去 dimensio 自己的面板 -->
+    <DRow title={hub.ok ? t('模型中心') : t('自定义模型服务')} sub={hub.ok ? hubSummaryText() : customSummary()} highlight={fl('dm-custom')} onclick={() => { if (hub.ok) openHub(); else openInDimensio('vendors'); }} />
+  {/snippet}
+
+  <!-- 各厂商 API Key + 自定义服务入口（老服务端：自带厂商的 Key 还在 dimensio 自己手里时才有这一组） -->
+  {#if keyVendors().length}
+  <DGroup label={t('API Key')} foot={t('Key 加密存在服务端，重启不丢，不回传浏览器。')}>
     {#each keyVendors() as v, i (v.id)}
       <div class="drow cr" class:hl={i === 0 && fl('dm-keys')}>
         <span class="cr-tx">
@@ -199,9 +209,9 @@
         </span>
       </div>
     {/each}
-    <!-- 管理员有模型中心总览：自定义服务都在 设置 › 模型中心 管（就在本设置页里换分区）；成员 / 老服务端照旧去 dimensio 自己的面板 -->
-    <DRow title={hub.ok ? t('模型中心') : t('自定义模型服务')} sub={hub.ok ? hubSummaryText() : customSummary()} highlight={fl('dm-custom')} onclick={() => { if (hub.ok) openHub(); else openInDimensio('vendors'); }} />
+    {@render hubRow()}
   </DGroup>
+  {/if}
 
   {#if localOk()}
     <DGroup label={t('本机模型')} foot={t('启动参数（上下文、缓存精度、识图……）与启停在 dimensio 的本机模型面板里改。')}>
@@ -229,6 +239,7 @@
     </div>
   </DGroup>
 
+  {@render rules('allow', t('总是允许'), t('添加规则，如 Bash(npm test:*)'), t('命中的调用不再弹卡：高危复核、撤不回操作的确认和「每次问我」都放行；「从不允许」与只读 / 先出计划档照样优先。'))}
   {@render rules('ask', t('每次问我'), t('添加规则，如 Bash(git push:*)'), '')}
   {@render rules('deny', t('从不允许'), t('添加规则，如 Bash(rm -rf:*)'), t('规则匹配命令或路径的前缀，是防误操作的软闸，不是安全沙箱。保存后所有会话下一次调用就按新规则判，重启也不丢。'))}
 
@@ -247,6 +258,18 @@
       <DRow title={t('记忆管理')} sub={memLine()} highlight={fl('dm-mem')} onclick={() => openInDimensio('memory')}>
         {#snippet trailing()}{#if ds.mem?.waiting}<span class="pill">{t('{n} 条待处理', { n: ds.mem.waiting })}</span>{/if}{/snippet}
       </DRow>
+      {#each prefItems('memory') as p (p.key)}{@render prow(p)}{/each}
+    </DGroup>
+  {/if}
+
+  {#if extOk()}
+    <DGroup label={t('连接器与技能')} foot={t('在「扩展」里给 dimensio 勾选或添加；改了新对话生效。')}>
+      {#if me.kind === 'admin' && ds.mcp !== null}
+        <DRow title={t('MCP 连接器')} sub={mcpLine()} highlight={fl('dm-mcp')} onclick={() => openExt('connector')} />
+      {/if}
+      {#if ds.skills !== null}
+        <DRow title={t('技能')} sub={skillLine()} highlight={fl('dm-skills')} onclick={() => openExt('skill')} />
+      {/if}
     </DGroup>
   {/if}
 

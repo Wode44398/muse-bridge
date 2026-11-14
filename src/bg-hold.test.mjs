@@ -51,3 +51,20 @@ test('makeTurnInput：首条之后挂住，push 逐条送出，release 后结束
   assert.equal((await tail).done, true);
   assert.equal(ti.push('太晚了', [], 'u-4'), false);
 });
+
+test('makeTurnInput.withdraw：还没写进 CLI 的插话能摘掉，已送出的摘不到', async () => {
+  const { makeTurnInput } = await import('./agents/claude.mjs');
+  const ti = makeTurnInput('第一条', []);
+  const it = ti.stream[Symbol.asyncIterator]();
+  assert.equal((await it.next()).value.message.content[0].text, '第一条');
+  ti.push('插话甲', [], 'u-a', 'next');
+  ti.push('插话乙', [], 'u-b', 'next');
+  assert.equal(ti.withdraw('u-a'), true);          // 还在队列里：摘掉
+  assert.equal(ti.withdraw('u-a'), false);         // 摘过了
+  const nx = (await it.next()).value;
+  assert.equal(nx.uuid, 'u-b');
+  assert.equal(nx.priority, 'next');
+  assert.equal(ti.withdraw('u-b'), false);         // 已经送给 CLI：这一道摘不到（交给 cancelAsyncMessage）
+  ti.release();
+  assert.equal((await it.next()).done, true);
+});

@@ -5,7 +5,9 @@
   // U9：动作（复制、从这里改写）挂在气泡左侧、贴底，不占版面，不会让下面的内容跳。电脑悬停整行就亮；手机点一下气泡亮 /
   // 再点收（正在选字时不算点）。藏起来时只是透明 + 不接指针，照样在 Tab 顺序里——键盘聚焦到就亮（spec-A ⚠3：旧版用
   // visibility:hidden 藏，键盘根本到不了）。
-  import { openSession, rewindAvailable, toast, type Item } from "../../lib/state.svelte.ts";
+  import { openSession, rewindAvailable, toast, type AttachmentItem, type Item } from "../../lib/state.svelte.ts";
+  import * as api from "../../lib/api.ts";
+  import { openChatMedia } from "../../lib/open-media.ts";
   import type { IconName } from "../../lib/icons.ts";
   import { fade, press } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
@@ -39,6 +41,19 @@
   }
   const attIcon = (k: string): IconName => (k === "audio" ? "audio" : k === "image" ? "camera" : k === "folder" ? "folder" : "file");
   const attName = (p: string) => p.replace(/\/$/, "").split("/").pop() ?? p;
+  // 附件：图片画成小缩略图、点开进本会话画廊；其它文件（pdf / 文档 / 音视频）点开进查看器；文件夹只是标注。
+  // 读法同工作区文件（dock 接口按本会话的工作区解析 .dimensio/uploads/… 路径）。缩略图加载失败就退回文件芯片。
+  const imgAtts = $derived((item.attachments ?? []).filter((a) => a.kind === "image"));
+  const fileAtts = $derived((item.attachments ?? []).filter((a) => a.kind !== "image"));
+  let broken = $state<string[]>([]);
+  const thumbSrc = (a: AttachmentItem) => api.dockFileUrl(pane.chat.id ? { chatId: pane.chat.id } : {}, a.path);
+  function onThumbError(a: AttachmentItem) {
+    if (!broken.includes(a.path)) broken = [...broken, a.path];
+  }
+  function openAtt(e: MouseEvent, a: AttachmentItem, el?: Element | null) {
+    e.stopPropagation();
+    openChatMedia(pane.chat, a, el ?? (e.currentTarget as Element));
+  }
   // 引用的对话（把会话块拖进输入框发出的）：点一下打开那个对话；气泡本身的点按手势不跟着触发
   function openRef(e: MouseEvent, id: string) {
     e.stopPropagation();
@@ -54,10 +69,31 @@
     <!-- 气泡本身只是触屏的「点一下亮动作」手势；动作按钮本身键盘可达 -->
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="bubble" onpointerdown={(e) => (lastPointer = e.pointerType)} onclick={onBubbleClick}>
-      {#if item.attachments?.length}
+      {#if imgAtts.length}
+        <div class="atts thumbs">
+          {#each imgAtts as a (a.path)}
+            {#if broken.includes(a.path)}
+              <button class="att open" title={t("预览 {name}", { name: attName(a.path) })} onclick={(e) => openAtt(e, a)}>
+                <Icon name="camera" size={13} /><span class="an">{attName(a.path)}</span>
+              </button>
+            {:else}
+              <button class="thumb" class:solo={imgAtts.length === 1} aria-label={t("预览 {name}", { name: attName(a.path) })} title={attName(a.path)} onclick={(e) => openAtt(e, a, e.currentTarget.querySelector("img"))}>
+                <img src={thumbSrc(a)} alt="" loading="lazy" decoding="async" draggable="false" onerror={() => onThumbError(a)} />
+              </button>
+            {/if}
+          {/each}
+        </div>
+      {/if}
+      {#if fileAtts.length}
         <div class="atts">
-          {#each item.attachments as a (a.path)}
-            <span class="att" title={a.path}><Icon name={attIcon(a.kind)} size={13} /><span class="an">{attName(a.path)}</span></span>
+          {#each fileAtts as a (a.path)}
+            {#if a.kind === "folder"}
+              <span class="att" title={a.path}><Icon name={attIcon(a.kind)} size={13} /><span class="an">{attName(a.path)}</span></span>
+            {:else}
+              <button class="att open" title={t("预览 {name}", { name: attName(a.path) })} onclick={(e) => openAtt(e, a)}>
+                <Icon name={attIcon(a.kind)} size={13} /><span class="an">{attName(a.path)}</span>
+              </button>
+            {/if}
           {/each}
         </div>
       {/if}
@@ -163,20 +199,65 @@
     font-size: var(--fs-xs);
     line-height: 1.5;
   }
-  /* 引用的对话：可以点开；标题用正文字体 */
+  /* 引用的对话 / 可预览的文件附件：可以点开（引用的标题用正文字体） */
   .ref {
     font-family: var(--font-ui);
+  }
+  .ref,
+  .open {
     color: inherit;
     cursor: pointer;
     transition: background-color var(--t-fast) var(--ease);
   }
-  .ref:active {
+  .ref:active,
+  .open:active {
     background: color-mix(in srgb, currentColor 16%, transparent);
   }
   @media (hover: hover) {
-    .ref:hover {
+    .ref:hover,
+    .open:hover {
       background: color-mix(in srgb, currentColor 14%, transparent);
     }
+  }
+  /* 图片附件：小方缩略图（只有一张时放大成 120 高、按原比例）；点开进查看器 */
+  .thumbs {
+    gap: 6px;
+  }
+  .thumb {
+    display: block;
+    width: 64px;
+    height: 64px;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 10px;
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    cursor: zoom-in;
+    -webkit-touch-callout: none;
+    transition: opacity var(--t-fast) var(--ease);
+  }
+  .thumb.solo {
+    width: auto;
+    min-width: 64px;
+    max-width: 200px;
+    height: 120px;
+  }
+  .thumb img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+  }
+  .thumb.solo img {
+    width: auto;
+    max-width: 200px;
+  }
+  .thumb:active {
+    opacity: 0.86;
+  }
+  .thumb:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
   .an {
     min-width: 0;

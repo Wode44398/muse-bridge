@@ -5,10 +5,10 @@
   // 原版逐字照搬：CSS 铬装 + 它的 SVG 滤镜（feImage base64 位移图 + objectBoundingBox
   // 2% 模糊 + SMIL 悬停鼓包），滤镜从原版页里现抽现注
   // （backdrop-filter:url(#id) 只认同文档滤镜，外链 SVG 无效）。
-  // 原版页不在公开仓：在维护者私有 overlay 的 web/lg-ref/index.html（ovUrl 取；dev 下经 vite 代理 /app/_ov 到后端）。
-  // 没有 overlay 时左边不出，只提示。
+  // 原版页是开发用拷贝：web/dev/lg-ref/index.html，只在 vite dev 下按原文读进来（产品构建不带它，公开导出也剔掉）；
+  // 拿不到时左边不出，只提示。
   import { onMount } from 'svelte';
-  import { overlayReady, ovHas, ovUrl } from '../../lib/overlay.svelte.js';
+  const LG_REF = import.meta.env.DEV ? import.meta.glob('../../../dev/lg-ref/index.html', { query: '?raw', import: 'default' }) : {};
   import '../tokens.css';
   import { dskGlass } from './domGlass.js';
 
@@ -37,12 +37,8 @@
   let refErr = $state('');
   let filterHost = null;
   onMount(() => {
-    overlayReady()
-      .then(() => {
-        if (!ovHas('lg-ref/index.html')) throw new Error('no overlay');
-        return fetch(ovUrl('lg-ref/index.html'));
-      })
-      .then((r) => r.text())
+    const load = Object.values(LG_REF)[0];
+    (load ? load() : Promise.reject(new Error('no lg-ref')))
       .then((txt) => {
         const m = txt.match(/<svg[\s\S]*?<\/svg>/);
         if (!m) { refErr = 'lg-ref 里没找到 <svg> 滤镜'; return; }
@@ -52,7 +48,7 @@
         document.body.appendChild(filterHost);
         refReady = true;
       })
-      .catch(() => { refErr = '原版拷贝没就位：私有 overlay 的 web/lg-ref/index.html（后端要配 overlayDir 或 BRIDGE_OVERLAY_DIR）'; });
+      .catch(() => { refErr = '原版拷贝没就位：web/dev/lg-ref/index.html（只在 vite dev 下可用）'; });
     return () => filterHost?.remove();
   });
 </script>

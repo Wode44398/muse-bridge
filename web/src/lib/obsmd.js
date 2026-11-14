@@ -461,6 +461,7 @@ function transformDoc(root) {
     const clean = href.split('#')[0];
     if (MD_EXT_RE.test(clean)) continue;   // 相对 md 链接留给 DocViewer 点击接管（站内跳转）
     let t = clean; try { t = decodeURIComponent(clean); } catch {}
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(t)) a.setAttribute('data-rel', t);   // 原始相对路径：DocViewer 点击时按它在查看器里打开（预览），不让整页跳到裸文件
     const u = _embedUrl(t);
     if (u) a.setAttribute('href', u);
   }

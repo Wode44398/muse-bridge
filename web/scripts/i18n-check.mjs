@@ -32,6 +32,8 @@ const WEB_SRC = join(ROOT, 'web', 'src');
 const HX_SRC = join(ROOT, 'harness', 'web', 'src');
 const WEB_DICT = join(WEB_SRC, 'i18n', 'en');
 const HX_DICT = join(HX_SRC, 'i18n', 'en');
+// 原版视觉资源（字体、图层、动画播放器、玻璃渲染等第三方原件，不是界面文案；压缩代码里的 t()/T() 不是翻译函数）
+const WEB_VISUALS = join(WEB_SRC, 'visuals');
 
 const args = process.argv.slice(2);
 const flag = (f) => args.includes(f);
@@ -48,7 +50,7 @@ function walkDir(d, out) {
     const p = join(d, name);
     const st = statSync(p);
     if (st.isDirectory()) {
-      if (p === WEB_DICT || p === HX_DICT) continue;
+      if (p === WEB_DICT || p === HX_DICT || p === WEB_VISUALS) continue;
       walkDir(p, out);
     } else if (EXT.has(extname(name)) && !/\.d\.ts$/.test(name) && !/\.test\.(js|ts|mjs)$/.test(name)) out.push(p);
   }

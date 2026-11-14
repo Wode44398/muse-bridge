@@ -1,0 +1,50 @@
+/* 玻璃图层（iOS 27 UI Kit / Figma 玻璃的烘焙图，web/src/visuals/ios27/、figma-glass/）的 url 变量：
+   每张图一个 --ov-<目录>-<文件名>（如 figma-glass/tb-orb44-dark.png → --ov-figma-glass-tb-orb44-dark），组件 CSS 写 var(--ov-…)。
+   三个入口直接 import，vite 把图收进产物（带内容哈希）。新加图层时在这里补一行。 */
+:root:root {
+  --ov-ios27-alert-dark: url("./ios27/alert-dark.png");
+  --ov-ios27-alert-light: url("./ios27/alert-light.png");
+  --ov-ios27-cap44-dark: url("./ios27/cap44-dark.png");
+  --ov-ios27-cap44-light: url("./ios27/cap44-light.png");
+  --ov-ios27-nav44-dark: url("./ios27/nav44-dark.png");
+  --ov-ios27-nav44-light: url("./ios27/nav44-light.png");
+  --ov-ios27-nav62-dark: url("./ios27/nav62-dark.png");
+  --ov-ios27-nav62-light: url("./ios27/nav62-light.png");
+  --ov-ios27-prom44-dark: url("./ios27/prom44-dark.png");
+  --ov-ios27-prom44-light: url("./ios27/prom44-light.png");
+  --ov-ios27-sheet-dark: url("./ios27/sheet-dark.png");
+  --ov-ios27-sheet-light: url("./ios27/sheet-light.png");
+  --ov-ios27-slider-pressed-dark: url("./ios27/slider-pressed-dark.png");
+  --ov-ios27-slider-pressed-light: url("./ios27/slider-pressed-light.png");
+  --ov-ios27-squircle26: url("./ios27/squircle26.svg");
+  --ov-ios27-stage44-light: url("./ios27/stage44-light.png");
+  --ov-ios27-stagecap44-light: url("./ios27/stagecap44-light.png");
+  --ov-ios27-stagepanel-light: url("./ios27/stagepanel-light.png");
+  --ov-ios27-stageprom44: url("./ios27/stageprom44.png");
+  --ov-ios27-tab62-dark: url("./ios27/tab62-dark.png");
+  --ov-ios27-tab62-light: url("./ios27/tab62-light.png");
+  --ov-ios27-toggle-off-pressed-dark: url("./ios27/toggle-off-pressed-dark.png");
+  --ov-ios27-toggle-off-pressed-light: url("./ios27/toggle-off-pressed-light.png");
+  --ov-ios27-toggle-on-pressed-dark: url("./ios27/toggle-on-pressed-dark.png");
+  --ov-ios27-toggle-on-pressed-light: url("./ios27/toggle-on-pressed-light.png");
+  --ov-figma-glass-fp-cap48-dark: url("./figma-glass/fp-cap48-dark.png");
+  --ov-figma-glass-fp-cap48-light: url("./figma-glass/fp-cap48-light.png");
+  --ov-figma-glass-fp-orb48-dark: url("./figma-glass/fp-orb48-dark.png");
+  --ov-figma-glass-fp-orb48-light: url("./figma-glass/fp-orb48-light.png");
+  --ov-figma-glass-tb-bar32-dark: url("./figma-glass/tb-bar32-dark.png");
+  --ov-figma-glass-tb-bar32-light: url("./figma-glass/tb-bar32-light.png");
+  --ov-figma-glass-tb-bar36-dark: url("./figma-glass/tb-bar36-dark.png");
+  --ov-figma-glass-tb-bar36-light: url("./figma-glass/tb-bar36-light.png");
+  --ov-figma-glass-tb-bar40-dark: url("./figma-glass/tb-bar40-dark.png");
+  --ov-figma-glass-tb-bar40-light: url("./figma-glass/tb-bar40-light.png");
+  --ov-figma-glass-tb-cap44-dark: url("./figma-glass/tb-cap44-dark.png");
+  --ov-figma-glass-tb-cap44-light: url("./figma-glass/tb-cap44-light.png");
+  --ov-figma-glass-tb-orb32-dark: url("./figma-glass/tb-orb32-dark.png");
+  --ov-figma-glass-tb-orb32-light: url("./figma-glass/tb-orb32-light.png");
+  --ov-figma-glass-tb-orb36-dark: url("./figma-glass/tb-orb36-dark.png");
+  --ov-figma-glass-tb-orb36-light: url("./figma-glass/tb-orb36-light.png");
+  --ov-figma-glass-tb-orb40-dark: url("./figma-glass/tb-orb40-dark.png");
+  --ov-figma-glass-tb-orb40-light: url("./figma-glass/tb-orb40-light.png");
+  --ov-figma-glass-tb-orb44-dark: url("./figma-glass/tb-orb44-dark.png");
+  --ov-figma-glass-tb-orb44-light: url("./figma-glass/tb-orb44-light.png");
+}

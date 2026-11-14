@@ -15,15 +15,17 @@
   // `color` 给颜色；`interactive`：点一下播一次 tickle 彩蛋，然后回到原状态。
   // `onpress(el)`：点击时额外回调，参数是标志按钮本身（Claude 页拿它当明暗换场的波心；运行态点了也照样触发，只是不播彩蛋）。
   // NB: the prop is `anim`, NOT `state` (which collides with the $state rune).
-  import { ovData, ovUrl } from '../lib/overlay.svelte.js';
+  import { MARKS } from '../visuals/data.js';
+  // 条带动画原件（visuals/logo-animations/strips/<file>.svg），vite 收进产物
+  const STRIPS = import.meta.glob('../visuals/logo-animations/strips/*.svg', { eager: true, query: '?url', import: 'default' });
 
   let { anim = 'static', size = 30, color = 'var(--coral)', interactive = false, onpress = null } = $props();
 
-  const ANIM = $derived(ovData('marks')?.strips || null);
+  const ANIM = MARKS.strips;
 
   function loadStrip(file) {
     if (!stripCache.has(file)) {
-      stripCache.set(file, fetch(ovUrl(`logo-animations/strips/${file}.svg`))
+      stripCache.set(file, fetch(STRIPS[`../visuals/logo-animations/strips/${file}.svg`])
         .then((r) => (r.ok ? r.text() : ''))
         .then((txt) => {
           const vb = /viewBox="\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)\s*"/.exec(txt);

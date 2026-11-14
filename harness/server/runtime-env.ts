@@ -174,6 +174,16 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "CHECKPOINTS", area: "检查点", description: "off = 不拍影子 git 检查点", default: "开" },
   { name: "CHECKPOINT_MAX_FILE_MB", area: "检查点", description: "检查点收录的单文件大小上限（MB）" },
   { name: "CHECKPOINT_MAX_SESSIONS", area: "检查点", description: "保留检查点的会话数上限" },
+  {
+    name: "CHECKPOINT_MODE",
+    area: "检查点",
+    description: "auto = 按工作区大小分档；full = 一律整目录快照（超时仍会切档）；touched = 一律只备份编辑工具改过的文件",
+    default: "auto",
+  },
+  { name: "CHECKPOINT_FULL_MAX_FILES", area: "检查点", description: "整目录快照的文件数上限，超了这个工作区的会话改为只备份改过的文件", default: "20000" },
+  { name: "CHECKPOINT_FULL_MAX_MB", area: "检查点", description: "整目录快照的体积上限（MB，不含超限的单个大文件）", default: "1024" },
+  { name: "CHECKPOINT_STAGE_BUDGET_MS", area: "检查点", description: "一次整目录快照（git add -A）最多等多久，超时掐掉并改档", default: "15000" },
+  { name: "CHECKPOINT_PROBE_BUDGET_MS", area: "检查点", description: "判断工作区大小（列文件 + 统计体积）最多等多久，超时按大工作区算", default: "4000" },
 
   // ── bridge 集成 ──
   { name: "BRIDGE_PORT", area: "bridge 集成", description: "托管 harness 的 bridge 端口（控制面端口之一）" },

@@ -1,0 +1,130 @@
+/* PDF.js 查看器层（PDFViewer / PDFPageView / 文本层 / 链接层）的最小样式，作用域收在 .pdf-root 里。
+   出处：pdfjs-dist/web/pdf_viewer.css（Apache-2.0，© Mozilla Foundation），只摘了我们用到的几段并改成平铺写法：
+   原文件 6300 多行，带 .dialog / .toggle-button / [data-main-rotation] 这类全局选择器，整份引进来会污染全站。
+   用不到的（批注编辑器、表单控件、XFA、侧栏、打印、高对比度）一律不搬；改了的地方注释里写明。 */
+
+/* —— 查看器容器：页面宽高由 PDF.js 按 --scale-factor 写进行内样式 —— */
+.pdf-root .pdfViewer { --scale-factor: 1; --page-bg-color: unset; }
+.pdf-root .pdfViewer .page {
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  direction: ltr;
+  width: 816px;
+  height: 1056px;
+  position: relative;
+  overflow: visible;
+  border: none;
+  background-clip: content-box;
+  background-color: var(--page-bg-color, #fff);
+}
+/* removePageBorders：页间距原版是 10px，我们按端调（见 PdfView） */
+.pdf-root .pdfViewer.removePageBorders .page { margin: 0 auto var(--pdf-gap, 10px); }
+.pdf-root .pdfViewer .dummyPage { position: relative; width: 0; height: var(--viewer-container-height); }
+.pdf-root .pdfViewer.singlePageView { display: inline-block; }
+.pdf-root .pdfViewer.singlePageView .page { margin: 0; border: none; }
+
+/* 双页（spread）与横向 / 环绕滚动 */
+.pdf-root .pdfViewer:is(.scrollHorizontal, .scrollWrapped),
+.pdf-root .spread { margin-inline: 3.5px; text-align: center; }
+.pdf-root .pdfViewer.scrollHorizontal,
+.pdf-root .spread { white-space: nowrap; }
+.pdf-root .pdfViewer.removePageBorders,
+.pdf-root .pdfViewer:is(.scrollHorizontal, .scrollWrapped) .spread { margin-inline: 0; }
+.pdf-root .spread :is(.page, .dummyPage),
+.pdf-root .pdfViewer:is(.scrollHorizontal, .scrollWrapped) :is(.page, .spread) { display: inline-block; vertical-align: middle; }
+.pdf-root .pdfViewer.removePageBorders .spread .page,
+.pdf-root .pdfViewer.removePageBorders:is(.scrollHorizontal, .scrollWrapped) .page { margin-inline: calc(var(--pdf-gap, 10px) / 2); }
+
+/* —— 画布 —— */
+.pdf-root .pdfViewer .canvasWrapper { overflow: hidden; width: 100%; height: 100%; }
+.pdf-root .pdfViewer .canvasWrapper canvas {
+  position: absolute; top: 0; left: 0; margin: 0; display: block; width: 100%; height: 100%; contain: content;
+}
+/* 细节画布（放大到像素上限以外时只补画可见区域）：原版 pixelated，这里保持 */
+.pdf-root .pdfViewer .canvasWrapper canvas.detailView { image-rendering: pixelated; }
+.pdf-root .pdfViewer .canvasWrapper canvas .structTree { contain: strict; }
+
+/* 旋转：文本层 / 链接层按 data-main-rotation 转回与画布一致（原版是全局选择器） */
+.pdf-root .textLayer[data-main-rotation="90"], .pdf-root .annotationLayer[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+.pdf-root .textLayer[data-main-rotation="180"], .pdf-root .annotationLayer[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+.pdf-root .textLayer[data-main-rotation="270"], .pdf-root .annotationLayer[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
+
+/* —— 文本层：透明字形叠在画布上，只为选中、复制、搜索高亮 —— */
+.pdf-root .textLayer {
+  color-scheme: only light;
+  position: absolute; text-align: initial; inset: 0; overflow: clip; opacity: 1;
+  line-height: 1; letter-spacing: normal; word-spacing: normal;
+  -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none;
+  transform-origin: 0 0; caret-color: CanvasText; z-index: 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.pdf-root .textLayer.highlighting { touch-action: none; }
+.pdf-root .textLayer :is(span, br) {
+  color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%;
+  -webkit-user-select: text; user-select: text;
+}
+.pdf-root .textLayer > :not(.markedContent),
+.pdf-root .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.pdf-root .textLayer .markedContent { display: contents; }
+.pdf-root .textLayer span[role="img"] { -webkit-user-select: none; user-select: none; cursor: default; }
+/* 搜索高亮：全部命中一层暖黄（同 md 阅读器的 --md-mark），当前命中加深并描一圈墨线。原版是紫 / 绿 */
+.pdf-root .textLayer .highlight {
+  margin: -1px; padding: 1px; border-radius: 3px;
+  background-color: rgba(245, 190, 60, .38);
+}
+.pdf-root .textLayer .highlight.appended { position: initial; }
+.pdf-root .textLayer .highlight.begin { border-radius: 3px 0 0 3px; }
+.pdf-root .textLayer .highlight.end { border-radius: 0 3px 3px 0; }
+.pdf-root .textLayer .highlight.middle { border-radius: 0; }
+.pdf-root .textLayer .highlight.selected {
+  background-color: rgba(240, 130, 30, .55); box-shadow: 0 0 0 1px rgba(150, 70, 0, .55); scroll-margin-top: 50px;
+}
+/* 选区：原版是系统强调色半透明；这里取文档珊瑚，字仍透明（底下是画布） */
+.pdf-root .textLayer ::selection { background: rgba(217, 119, 87, .32); color: transparent; }
+.pdf-root .textLayer br::selection { background: transparent; }
+.pdf-root .textLayer .endOfContent {
+  display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default;
+  -webkit-user-select: none; user-select: none;
+}
+.pdf-root .textLayer.selecting .endOfContent { top: 0; }
+
+/* —— 链接层：只用到链接（内部跳转 / 外链）；表单控件不渲染（annotationMode = ENABLE） —— */
+.pdf-root .annotationLayer {
+  color-scheme: only light;
+  position: absolute; top: 0; left: 0; pointer-events: none; transform-origin: 0 0;
+}
+.pdf-root .annotationLayer[data-main-rotation="90"] .norotate { transform: rotate(270deg) translateX(-100%); }
+.pdf-root .annotationLayer[data-main-rotation="180"] .norotate { transform: rotate(180deg) translate(-100%, -100%); }
+.pdf-root .annotationLayer[data-main-rotation="270"] .norotate { transform: rotate(90deg) translateY(-100%); }
+.pdf-root .annotationLayer.disabled section { pointer-events: none; }
+.pdf-root .annotationLayer .annotationContent { position: absolute; width: 100%; height: 100%; pointer-events: none; }
+.pdf-root .annotationLayer section {
+  position: absolute; text-align: initial; pointer-events: auto; box-sizing: border-box; transform-origin: 0 0;
+  -webkit-user-select: none; user-select: none;
+}
+.pdf-root .annotationLayer section:has(div.annotationContent) canvas.annotationContent { display: none; }
+.pdf-root .annotationLayer section .overlaidText { position: absolute; top: 0; left: 0; width: 0; height: 0; display: inline-block; overflow: hidden; }
+.pdf-root .textLayer.selecting ~ .annotationLayer section { pointer-events: none; }
+.pdf-root .annotationLayer :is(.linkAnnotation, .buttonWidgetAnnotation.pushButton) > a {
+  position: absolute; font-size: 1em; top: 0; left: 0; width: 100%; height: 100%;
+}
+/* 链接悬停：原版是 20% 亮黄块；这里淡一层墨色，和文档皮肤的悬停一致 */
+.pdf-root .annotationLayer :is(.linkAnnotation, .buttonWidgetAnnotation.pushButton):not(.hasBorder) > a:hover { background-color: rgba(20, 20, 19, .07); }
+.pdf-root .annotationLayer .linkAnnotation.hasBorder:hover { background-color: rgba(20, 20, 19, .07); }
+.pdf-root .annotationLayer .hasBorder { background-size: 100% 100%; }
+/* 键盘焦点：页内链接画一圈细环（同 .vw-btn 的 1.5px 中性色），不用全站 2px 珊瑚框；文字层不是 Tab 停靠点（PdfView 改了 tabIndex），兜底也不画框 */
+.pdf-root .annotationLayer :is(.linkAnnotation, .buttonWidgetAnnotation.pushButton) > a:focus-visible { outline: 1.5px solid var(--md-fg-3); outline-offset: 1px; border-radius: 2px; }
+.pdf-root .textLayer:focus, .pdf-root .textLayer:focus-visible { outline: none; }
+/* 弹出批注（便笺）不做：隐藏，免得没样式的气泡压在页面上 */
+.pdf-root .annotationLayer .popupAnnotation { display: none; }

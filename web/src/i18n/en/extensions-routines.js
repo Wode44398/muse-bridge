@@ -321,6 +321,12 @@ export default {
   '把文件夹拖进底栏，任务就在它里面运行': 'Drag a folder to the bar below — the routine runs inside it',
   '放弃没保存的修改？': 'Discard unsaved changes?',
   '填一个名称': 'Enter a name',
+  // 11-13 表单重排
+  '选填': 'Optional',
+  '模型：{name}': 'Model: {name}',
+  '思考强度：{name}': 'Effort: {name}',
+  '选择时间': 'Pick a time',
+  '运行时间': 'Run time',
   '写上指令': 'Add instructions',
   '频率写法不对': 'Enter a valid schedule',
   '一次性运行要选一个以后的时间': 'Pick a future time for a one-time run',

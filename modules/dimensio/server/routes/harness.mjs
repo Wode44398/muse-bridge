@@ -31,7 +31,7 @@ import { devicesEnabled } from '@bridge/core/runtime/devices.mjs';
 import { ensureHostSecret } from '@bridge/core/runtime/host-secret.mjs';
 import { mintAgentDeviceToken } from '@bridge/core/runtime/agent-device-token.mjs';
 import { ensureHarnessUp, killTreeAndWait, stopHarnessGracefully } from '../runtime/harness-watchdog.mjs';
-import { harnessDataEnv, harnessEnvFile, harnessItemPath, planHarnessData, prepareHarnessData, trashedHarnessDirs } from '../runtime/harness-data.mjs';
+import { harnessDataEnv, readEnvFile, harnessEnvFile, harnessItemPath, planHarnessData, prepareHarnessData, trashedHarnessDirs } from '../runtime/harness-data.mjs';
 import { harnessDir } from '../harness-dir.mjs';
 import { CORE_REGISTER_URL } from '@bridge/core/modules/core-resolve.mjs';
 import { agentEnabled } from '@bridge/core/runtime/agent-status.mjs';
@@ -71,6 +71,14 @@ const ADMIN_DATA_READY = prepareHarnessData({
 const currentAdminEnvFile = () => adminPrepared?.fallbacks?.HARNESS_ENV_FILE || ADMIN_ENV_FILE;
 // 管理员实例的数据位置环境（进程环境 + 数据目录 / 迁移定下的项），同下方 admin 的 env。
 const adminDataEnv = () => ({ ...process.env, ...harnessDataEnv({ dataDir: ADMIN_DATA.dataDir, prepared: adminPrepared, envFile: ADMIN_ENV_FILE }) });
+// 默认工作区兜底（11-13）：数据根就是程序目录（维护者正式服、源码直接跑）时不迁移，没人给 WORKSPACE_DIR，harness 以前落在
+// <harness>/workspace——源码仓库里，新对话的产物（apk、视频、报告）全堆进仓库。没指定就同迁移那条路：用 bridge 工作空间。
+// 进程环境 / .env 里写了的照旧说了算（spawn 时给的值会压过 .env，所以 .env 写了就不给）。
+const adminWorkspaceDefault = (env) => {
+  if (String(env.WORKSPACE_DIR ?? '').trim()) return {};
+  if (String(readEnvFile(currentAdminEnvFile()).WORKSPACE_DIR ?? '').trim()) return {};
+  return VAULT ? { WORKSPACE_DIR: VAULT } : {};
+};
 // 管理员那份自定义服务目录：成员实例只读它，用管理员标了「共享给成员」的服务（harness/server/custom-providers.ts）。
 export const adminCustomProvidersDir = () => harnessItemPath('custom-providers', { env: adminDataEnv(), envFile: currentAdminEnvFile(), harnessDir: HARNESS_DIR });
 // 可经环境变量覆盖：并行 worktree 各跑一份 bridge，就得各带一个 harness，不能共抢 8799。
@@ -257,6 +265,7 @@ const admin = new HarnessInstance({
     // 数据目录（S2）：只在 harness 是扩展自带的时候给；harness 各项自己的变量（含 .env 里写的）仍然优先。
     // 另加迁移定下的默认工作区（.env 里写了就不加）与本次没复制成、先指回原件的项，见 harness-data.mjs harnessDataEnv。
     ...adminDataEnv(),
+    ...adminWorkspaceDefault(adminDataEnv()),
     // 自定义服务编辑器里出「共享给成员」开关：成员实例经 DIMENSIO_SHARED_PROVIDERS_DIR 读到标了共享的那几条（见 tenantEnv）。
     DIMENSIO_PROVIDER_SHARING: '1',
     PORT: String(HARNESS_PORT),

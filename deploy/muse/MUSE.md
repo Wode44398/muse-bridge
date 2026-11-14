@@ -281,6 +281,7 @@ Media Studio 接替了以前的 Gemini · Vertex 扩展（Gemini 对话已经下
 | 「现在就切到新版本」（新版本已装好，在等空闲） | 先说明会打断正在进行的对话（记录不会丢），他同意后执行 `switch-now` |
 | 「退回旧版本」「更新后有问题」 | `rollback`（立即重启到上一个版本） |
 | 「开 / 关自动更新」 | `auto-update on` / `auto-update off` |
+| 「doc / ppt 打不开」「提示服务端没有安装 LibreOffice」「Word / PPT 的排版和原文件不一样」 | 先说明这是安装选择、不是故障：Muse Bridge 默认不装 LibreOffice，Excel 照常显示，docx / pptx 用浏览器排版的快速预览（字体、分页可能有出入），doc / ppt / rtf / odt / odp 要 LibreOffice 才能在网页里看（`guide/04-files.md`「Office 文件的说明」）；下载后用本机的 Office / WPS 打开也行。他想装再装：先告诉他要下载几百 MB、要一段时间，同意后跑 `apt-get install -y --no-install-recommends libreoffice-writer libreoffice-impress`（要 root，和 `install` 一样；apt 被占着就等一会儿再跑，卡在镜像上见第 7 节）。装完**要重启一次服务**才认得出来：先确认没人在跑对话再 `systemctl restart bridge`，或者请管理员在网页「服务控制」页点「空闲时重启」（`guide/06-users-admin.md`）。之后 Word / PPT 第一次打开会先转换、显示转换进度。VM 重启后装的包一般还在；万一又提示没有安装，就再装一次、再重启服务 |
 | 「怎么用 X」「X 在哪里」「能不能 X」 | 先读 `guide/INDEX.md` 和对应章节再回答（4.2） |
 | 「带我熟悉一下」「我是新手」 | 问他要哪一档，按 `guide/onboarding.md` 带（4.1） |
 | 「这是不是已知问题」，或者用户说的现象你没把握 | `known-issues`（影响当前版本的已知问题：现象、绕过办法、哪个版本修好了）；`known-issues --all` 看全部 |

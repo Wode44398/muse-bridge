@@ -4,19 +4,29 @@
   //   列表 = 两列卡片网格（标题 + 三行描述 + 「状态 · 频率」，悬停出 ⋯ 菜单），页头 搜索 / 筛选 / 排序 / 新建下拉；
   //   详情 = 左（描述 / 状态 / 文件夹 / 重复 / 模型 / 权限…）右（可折叠指令 / 运行记录）两列；
   //   表单 = 名称 / 描述 / 指令框（框内工具条：权限、模型；位置条：文件夹、分支、Worktree）/ 频率分段条。
-  // 官方这页本来就带工作文件夹这些 Code 设置；bridge 另加：Gemini 引擎、思考强度与 Fast、一次性 / 自定义 cron、
+  // 官方这页本来就带工作文件夹这些 Code 设置；bridge 另加：思考强度与 Fast、一次性 / 自定义 cron、
   // 会话方式（每次新会话 / 接着上次）、跑完通知、运行记录里的结果摘要。
   // 电脑（侧栏常驻）嵌在正文区、侧栏照旧可点（embedded）；手机是全屏页。数据：lib/routines.svelte.js。
+  // 11-13 表单重排（维护者：太粗糙、模型菜单被遮挡、十字星图标莫名其妙）：
+  //   · 指令框照输入栏的语言——模型 / 思考强度是两枚素文本芯片，点开就是输入栏那两个浮层（ModelPicker / EffortPanel
+  //     受控模式，只列官方模型：服务端只认白名单）；其余芯片去掉虚线框，改成悬停浮底的图标 + 文字；
+  //   · 所有下拉挪到 body 上、按触发点上下剩余的空间限高（以前固定 420，展开在屏幕下半截就探出屏幕底）；
+  //   · 时间显示成 24 小时的按钮、点开系统时间选择器；频率分段条铺满一行，选中项是浮起的滑块；
+  //   · 底部动作条常驻（整页 / 编辑对话框都是），保存不了时点「创建」直接说缺什么、跳到那一栏。
   import { untrack } from 'svelte';
   import { uiConfirm } from '../lib/dialogs.js';
   import { caps, ui, session, agentOn, hostIsServer, pluginOn } from '../lib/state.svelte.js';
   import { api } from '../lib/api.js';
   import { registerCloser, pushBackLayer } from '../lib/nav.js';
-  import { claudeDefaultModel } from '../lib/caps.js';
+  import { claudeDefaultModel, claudeEffortFallback } from '../lib/caps.js';
+  import { isCustomModel } from '../lib/claudeProviders.svelte.js';
+  import { portal, escLayer, layerFocus } from './claude/dispatch/dpDom.js';
+  import ModelPicker from './ModelPicker.svelte';
+  import EffortPanel from './EffortPanel.svelte';
   import { cs } from '../lib/claudeSettings.svelte.js';
   import { modeLabel, modeDesc, clampModeLocal } from '../lib/permissions.svelte.js';
   import { hasNativePickDirectory, nativePickDirectory } from '../lib/nativeDesktop.js';
-  import { rt, loadRoutines, schedText, whenText, durText, folderName, tzLabel, wdName } from '../lib/routines.svelte.js';
+  import { rt, loadRoutines, schedText, whenText, durText, folderName, tzLabel, wdName, hm } from '../lib/routines.svelte.js';
   import { computeNextRun } from '../../../src/routine-schedule.mjs';
   import { parseCron } from '../../../src/cron.mjs';
   import ProjectPicker from './ProjectPicker.svelte';
@@ -38,13 +48,17 @@
   let fStatus = $state('all');        // 筛选·状态：all | on | off
   let sort = $state('next');          // next | name | recent（官方默认 Next run）
   let showDone = $state(false);       // 显示已完成的一次性任务（官方 Include completed）
-  let pop = $state(null);             // 打开着的下拉：{ key, x, y, w, up, id? }
+  let pop = $state(null);             // 打开着的下拉：{ key, x, y, w, h, up, id? }
+  let mlay = $state(null);            // 模型 / 思考强度浮层：{ kind: 'model' | 'effort', rect }
+  let tried = $state(false);          // 点过一次保存：之后才把缺的栏标出来
   let pickOpen = $state(false);       // 远程端的文件夹选择器
   let projects = $state([]);          // 工作文件夹候选（Claude 项目）
   let git = $state(null);             // 选中文件夹的 git 信息 { git, branch, branches, worktreeOk }
   let showAllPrompt = $state(false);
   let pageW = $state(1000);
   const wide = $derived(pageW >= 760);
+  // 鼠标设备才自动聚焦名称栏：手机上一进来就弹软键盘，半个表单被挡住
+  const finePointer = typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches;
 
   const blank = () => ({
     name: '', description: '', prompt: '', agent: 'claude', model: null, effort: null, fast: false, search: false,
@@ -86,14 +100,20 @@
 
   // ---- 能力表 → 选项 ----
   const nameOf = (list, id) => tr((list || []).find((x) => x.id === id)?.name || id || '');
-  const modelList = $derived(f.agent === 'vertex' ? (caps.data?.vertex?.models || []) : (caps.data?.claude?.models || []));
-  const effortList = $derived(f.agent === 'vertex'
-    ? (caps.data?.vertex?.thinkLevels || []).filter((lv) => !(/pro/.test(f.model || '') && lv.id === 'minimal'))
-    : (caps.data?.claude?.efforts || []).filter((e) => e.id !== 'ultracode'));
-  const defModel = $derived(f.agent === 'vertex' ? caps.data?.vertex?.defaults?.model : claudeDefaultModel(caps.data));
-  const defEffort = $derived(f.agent === 'vertex' ? caps.data?.vertex?.defaults?.think : 'high');
-  const fastOk = $derived(f.agent !== 'vertex' && (caps.data?.claude?.fast || []).includes(f.model || defModel));
-  const modelPill = $derived(`${nameOf(modelList, f.model || defModel)} · ${nameOf(effortList, f.effort || defEffort)}${fastOk && f.fast ? ' · Fast' : ''}`);
+  // 引擎只剩 Claude（Gemini 11-04 下线，旧任务打开编辑时已改成 Claude）。没选思考强度 = 这个模型的 API 默认档
+  //（Opus 5.5 是 Medium，其余 High；同输入栏芯片），以前这里写死 High，和实际跑的不一致。
+  const effortList = $derived((caps.data?.claude?.efforts || []).filter((e) => e.id !== 'ultracode'));
+  const defModel = $derived(claudeDefaultModel(caps.data));
+  const curModel = $derived(f.model || defModel);
+  const defEffort = $derived(claudeEffortFallback(caps.data, curModel));
+  const fastOk = $derived((caps.data?.claude?.fast || []).includes(curModel));
+  const modelLabel = $derived(nameOf(caps.data?.claude?.models, curModel));
+  const effortLabel = $derived(nameOf(effortList, f.effort || defEffort));
+  const officialOnly = (m) => !isCustomModel(m.id);   // 定时任务只存官方模型（服务端按白名单收，自定义 API 的会被丢回默认）
+  function pickModel(id) {
+    f.model = id;
+    if (f.effort && !effortList.some((e) => e.id === f.effort)) f.effort = null;
+  }
   const engineText = (r) => {
     const vx = r.agent === 'vertex';
     const fallback = vx ? (caps.data?.vertex?.defaults?.model || '') : claudeDefaultModel(caps.data);
@@ -101,7 +121,8 @@
   };
   const effortText = (r) => {
     const vx = r.agent === 'vertex';
-    return nameOf(vx ? caps.data?.vertex?.thinkLevels : caps.data?.claude?.efforts, r.effort || (vx ? caps.data?.vertex?.defaults?.think : 'high'));
+    return nameOf(vx ? caps.data?.vertex?.thinkLevels : caps.data?.claude?.efforts,
+      r.effort || (vx ? caps.data?.vertex?.defaults?.think : claudeEffortFallback(caps.data, r.model || claudeDefaultModel(caps.data))));
   };
   const permDefault = $derived(clampModeLocal(cs.values?.permissionMode));
   const permText0 = (m) => (m ? modeLabel(m) : t('设置默认（{mode}）', { mode: modeLabel(permDefault) }));
@@ -144,7 +165,7 @@
     : f.sched.type === 'once' && !(f.sched.at > Date.now()) ? t('一次性运行要选一个以后的时间') : '');
 
   // ---- 打开 / 关闭 ----
-  $effect(() => { if (ui.routinesOpen) untrack(() => { view = 'list'; dlg = false; curId = null; pop = null; opErr = ''; loadRoutines(); }); });
+  $effect(() => { if (ui.routinesOpen) untrack(() => { view = 'list'; dlg = false; curId = null; pop = null; mlay = null; opErr = ''; loadRoutines(); }); });
   // 有任务在跑时轮询（等你处理 / 收尾的状态跟着变；总线事件是主路径，这里兜底）
   $effect(() => {
     if (!ui.routinesOpen || !rt.running.length) return;
@@ -156,6 +177,7 @@
   $effect(() => { const sid = session.id; if (sid !== lastSid) { lastSid = sid; if (embedded) untrack(() => { if (ui.routinesOpen) ui.routinesOpen = false; }); } });
   // 系统返回逐级退：下拉 → 文件夹选择器 → 表单 / 对话框 → 详情 → 关整页
   $effect(() => registerCloser('routines', () => {
+    if (mlay) { mlay = null; return; }
     if (pop) { pop = null; return; }
     if (pickOpen) { pickOpen = false; return; }
     if (dlg || view === 'form') { leaveForm(); return; }
@@ -166,11 +188,11 @@
   function openDetail(r) { pop = null; curId = r.id; showAllPrompt = false; opErr = ''; view = 'detail'; }
 
   function openNew() {
-    pop = null; editing = null; err = ''; f = blank(); formBack = view === 'detail' ? 'detail' : 'list';
+    pop = null; mlay = null; tried = false; editing = null; err = ''; f = blank(); formBack = view === 'detail' ? 'detail' : 'list';
     view = 'form'; dlg = false; afterFormOpen();
   }
   function openEdit(r) {
-    pop = null; editing = r.id; err = ''; curId = r.id;
+    pop = null; mlay = null; tried = false; editing = r.id; err = ''; curId = r.id;
     const s = r.schedule || {};
     f = {
       // Gemini 引擎 11-04 下线：旧任务（agent:'vertex'，服务端已停用）打开编辑时改用 Claude，保存即恢复可跑
@@ -195,7 +217,7 @@
   async function leaveForm() {
     if (busy) return;
     if (dirty() && !(await uiConfirm(t('放弃没保存的修改？'), { okLabel: t('放弃'), type: 'warning' }))) return;
-    pop = null;
+    pop = null; mlay = null;
     if (dlg) dlg = false; else view = formBack;
   }
   // 「让 Claude 帮我建」（官方 Create with Claude）：开一个新对话、预填一句，Claude 用 bridge 的 routines.create 建
@@ -242,17 +264,47 @@
   const wtAvail = $derived(!!git?.git && git.worktreeOk !== false);
 
   // ---- 下拉（单例弹层；锚在触发按钮上下，放不下就翻面；align end = 右对齐）----
+  // 弹层挪到 body 上（use:portal）：电脑上本页嵌在正文区，祖先的裁切 / transform 圈不住它。
+  // 高度收进触发点这一侧剩下的空间（留出底部安全区）——以前固定 420，在屏幕下半截往下展开就探出屏幕底。
+  const EDGE = 12;
   function openPop(e, key, { id = null, end = false, side = 'bottom', w = 220 } = {}) {
     e.stopPropagation();
+    mlay = null;
     if (pop?.key === key && pop?.id === id) { pop = null; return; }
     const b = e.currentTarget.getBoundingClientRect();
-    const roomBelow = window.innerHeight - b.bottom, roomAbove = b.top;
-    const up = side === 'top' ? roomAbove > 220 || roomAbove > roomBelow : roomBelow < 280 && roomAbove > roomBelow;
-    const width = Math.max(w, end ? 0 : b.width);
+    const vh = window.innerHeight;
+    const roomBelow = vh - b.bottom - EDGE - 4, roomAbove = b.top - EDGE - 4;
+    const up = side === 'top' ? roomAbove > 220 || roomAbove > roomBelow : roomBelow < 300 && roomAbove > roomBelow;
+    const width = Math.min(Math.max(w, end ? 0 : b.width), window.innerWidth - 16);
     const x = end ? b.right - width : b.left;
-    pop = { key, id, x: Math.max(8, Math.min(x, window.innerWidth - width - 8)), y: up ? window.innerHeight - b.top + 4 : b.bottom + 4, w: width, up };
+    pop = { key, id, x: Math.max(8, Math.min(x, window.innerWidth - width - 8)), y: up ? vh - b.top + 4 : b.bottom + 4, w: width, up,
+      h: Math.max(120, Math.min(440, Math.floor(up ? roomAbove : roomBelow))) };
   }
+  // 模型 / 思考强度：就是输入栏那两个浮层（受控模式，fixed 贴着芯片展开、高度自己按剩余空间收）
+  function openLayer(e, kind) {
+    e.stopPropagation();
+    pop = null;
+    if (mlay?.kind === kind) { mlay = null; return; }
+    const el = e.currentTarget;
+    mlay = { kind, el, rect: rectOf(el) };
+  }
+  const rectOf = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; };
+  // 关掉浮层后焦点回到触发的芯片上（浮层挪到了 body 末尾，不还回去键盘用户就迷路了）
+  function closeLayer() { const el = mlay?.el; mlay = null; if (el?.isConnected) try { el.focus({ preventScroll: true }); } catch {} }
   $effect(() => { if (pop) return pushBackLayer(() => { pop = null; }); });
+  $effect(() => (pop ? escLayer(() => { pop = null; }) : undefined));
+  $effect(() => (mlay ? escLayer(closeLayer) : undefined));
+  // 窗口尺寸变了（手机转屏、软键盘弹出）：普通下拉按旧坐标会错位，直接收起；模型 / 思考强度浮层按芯片现在的位置重新贴
+  //（模型菜单里有搜索框，手机上点它弹出软键盘也算一次 resize，收起就没法搜了）
+  $effect(() => {
+    if (!pop && !mlay) return;
+    const onResize = () => {
+      pop = null;
+      if (mlay) { if (mlay.el?.isConnected) mlay = { ...mlay, rect: rectOf(mlay.el) }; else mlay = null; }
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  });
   function pick(fn) { fn(); pop = null; }
   const popRoutine = $derived(pop?.id ? rt.items.find((r) => r.id === pop.id) : null);
 
@@ -270,6 +322,14 @@
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
   });
   function onAt(e) { const v = e.target.value; f.sched.at = v ? new Date(v).getTime() : 0; }
+  // 时间 / 日期按钮：显示自己排的字（24 小时制、口语日期），系统选择器由盖在按钮上的透明 input 弹——
+  // 触屏点它本来就会弹；鼠标点只会聚焦到某一段，这里补一句 showPicker() 把下拉打开
+  function nativePick(e) {
+    if (!matchMedia('(pointer: fine)').matches) return;
+    try { e.currentTarget.showPicker?.(); } catch {}
+  }
+  const minuteStr = $derived(String(f.sched.minute).padStart(2, '0'));
+  const atText = $derived(f.sched.at ? whenText(f.sched.at) : t('选择时间'));
   function setFreq(ty) {
     // 从自定义切回来时尽量沿用 cron 里的钟点（官方同款）
     if (f.sched.type === 'cron' && ty !== 'cron') {
@@ -293,9 +353,16 @@
   }
 
   // ---- 保存 ----
+  // 保存不了：点「创建 / 保存」时说清缺什么，并把焦点带到那一栏（按钮不置灰，手机上没有悬停提示可看）
+  function focusBlocked() {
+    const id = !f.name.trim() ? 'rt-name' : !f.prompt.trim() ? 'rt-prompt' : f.sched.type === 'cron' ? 'rt-cron' : '';
+    const el = id && document.getElementById(id);
+    if (el) { el.focus({ preventScroll: true }); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+  }
   async function save(e) {
     e?.preventDefault?.();
-    if (blocked || busy) return;
+    if (busy) return;
+    if (blocked) { tried = true; focusBlocked(); return; }
     busy = true; err = '';
     const vx = f.agent === 'vertex';
     const body = {
@@ -378,7 +445,9 @@
 {#snippet folderIc()}<svg class="ic12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg>{/snippet}
 {#snippet branchIc()}<svg class="ic12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="5.5" r="1.5"/><path d="M4.5 5v6M11.5 7c0 2.5-2 3-5.5 4"/></svg>{/snippet}
 {#snippet shieldIc()}<svg class="ic12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"><path d="M8 2 3 4v4c0 3 2.2 5.2 5 6 2.8-.8 5-3 5-6V4z"/></svg>{/snippet}
-{#snippet sparkIc()}<svg class="ic12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"><path d="M8 2.5 9.3 6.7 13.5 8 9.3 9.3 8 13.5 6.7 9.3 2.5 8l4.2-1.3z"/></svg>{/snippet}
+{#snippet caret()}<svg class="caret-s" viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 1.25 5 4.75l3.5-3.5"/></svg>{/snippet}
+{#snippet infoIc()}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.6M8 5.2v.1" stroke-linecap="round"/></svg>{/snippet}
+{#snippet calIc()}<svg class="ic14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="10" rx="2"/><path d="M2.5 6.5h11M5.5 2v3M10.5 2v3"/></svg>{/snippet}
 {#snippet play()}<svg viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.5v9l7.5-4.5z"/></svg>{/snippet}
 {#snippet editIc()}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 3.2a1.4 1.4 0 0 1 2 2L6 11.7l-2.7.7.7-2.7z"/></svg>{/snippet}
 {#snippet trashIc()}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.2c.05.7.6 1.3 1.3 1.3h3.2c.7 0 1.25-.6 1.3-1.3l.6-8.2"/></svg>{/snippet}
@@ -394,104 +463,118 @@
 {/snippet}
 
 {#snippet formBody()}
-  <!-- 官方经典布局：名称 / 描述 / 指令框（工具条 + 位置条）/ 频率；bridge 加一张「运行」卡（会话方式、跑完通知） -->
-  <form class="form" onsubmit={save}>
-    <div class="banner">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.6M8 5.2v.1" stroke-linecap="round"/></svg>
-      <span>{hostIsServer() ? t('定时任务在服务器上运行，服务器在线就会按时跑；你的手机和电脑不用开着。') : t('定时任务在这台电脑上运行，只在它开机联网时跑。')}</span>
-    </div>
-    <label class="fld">
-      <span class="lbl">{t('名称')}<span class="req"> *</span></span>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input class="inp" bind:value={f.name} maxlength="120" placeholder={t('每日代码回顾')} autofocus={!editing} />
-    </label>
-    <label class="fld">
-      <span class="lbl">{t('描述')}</span>
-      <input class="inp" bind:value={f.description} maxlength="300" placeholder={t('回看昨天的提交，标出值得注意的地方')} />
-    </label>
+  <!-- 名称 / 描述 / 指令框（输入栏同款：上面工具条放权限与模型、下面位置条放文件夹与 Worktree）/ 频率 / 运行。
+       动作条在 formFoot：整页时常驻在底部，编辑对话框里贴在卡片底。 -->
+  <form id="rt-form" class="form" onsubmit={save} novalidate>
+    <p class="hint">{@render infoIc()}<span>{hostIsServer() ? t('定时任务在服务器上运行，服务器在线就会按时跑；你的手机和电脑不用开着。') : t('定时任务在这台电脑上运行，只在它开机联网时跑。')}</span></p>
+
     <div class="fld">
-      <label class="lbl" for="rt-prompt">{t('指令')}</label>
-      <div class="ibox">
-        <textarea id="rt-prompt" class="ta" use:autosize bind:value={f.prompt} placeholder={t('看看过去 24 小时的提交：总结改了什么，指出有风险的写法或缺的测试，记下值得跟进的事。')}></textarea>
-        <div class="tbar">
-          {#if f.agent !== 'vertex'}
-            <button type="button" class="pill" class:set={!!f.permissionMode} onclick={(e) => openPop(e, 'perm', { w: 280 })}>{@render shieldIc()}<span class="pill-t">{permText(f.permissionMode, f.shape)}</span></button>
-          {/if}
-          <span class="sp"></span>
-          <button type="button" class="pill set" onclick={(e) => openPop(e, 'model', { end: true, w: 260 })}>{@render sparkIc()}<span class="pill-t">{f.agent === 'vertex' ? 'Gemini · ' : ''}{modelPill}</span></button>
-        </div>
-        {#if f.agent !== 'vertex'}
-          <div class="locbar">
-            <button type="button" class="pill" class:set={!!f.cwd} class:mono={!!f.cwd} title={f.cwd || rt.home} onclick={(e) => openPop(e, 'folder', { side: 'top', w: 300 })}>{@render folderIc()}<span class="pill-t">{cwdLabel}</span></button>
-            {#if git?.git}
-              <button type="button" class="pill mono" class:set={!!f.branch} disabled={!f.worktree} title={f.worktree ? '' : t('打开 Worktree 后可以选从哪个分支切')} onclick={(e) => openPop(e, 'branch', { side: 'top', w: 220 })}>{@render branchIc()}<span class="pill-t">{f.branch || t('当前分支')}</span></button>
-            {/if}
-            <span class="sp"></span>
-            <span class="wt" class:dim={!wtAvail} title={!git ? '' : !git.git ? t('这个文件夹不是 git 仓库') : git.worktreeOk === false ? t('这个文件夹本身就是一个 worktree') : t('每次运行先切一个新分支和工作目录，改动不碰你手上的检出')}>
-              {@render sw(f.worktree && wtAvail, () => (f.worktree = !f.worktree), 'Worktree', !wtAvail)}<span>Worktree</span>
-            </span>
-          </div>
-        {/if}
-      </div>
-      {#if f.agent !== 'vertex' && asks(permEff)}<span class="note">{t('「{mode}」模式下遇到要你批准的操作会停下来等，会话里亮「待回答」；想全程自己跑完，选「自动」。', { mode: modeLabel(permEff) })}</span>{/if}
+      <label class="lbl" for="rt-name">{t('名称')}</label>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input id="rt-name" class="inp" class:invalid={tried && !f.name.trim()} bind:value={f.name} maxlength="120" autocomplete="off"
+        placeholder={t('每日代码回顾')} autofocus={!editing && finePointer} />
+    </div>
+    <div class="fld">
+      <label class="lbl" for="rt-desc">{t('描述')}<span class="opt">{t('选填')}</span></label>
+      <input id="rt-desc" class="inp" bind:value={f.description} maxlength="300" autocomplete="off" placeholder={t('回看昨天的提交，标出值得注意的地方')} />
     </div>
 
     <div class="fld">
-      <span class="lbl">{t('频率')}</span>
-      <div class="seg" role="group" aria-label={t('频率')}>
-        {#each FREQS as [id, lbl]}<button type="button" class:on={f.sched.type === id} aria-pressed={f.sched.type === id} onclick={() => setFreq(id)}>{lbl()}</button>{/each}
+      <label class="lbl" for="rt-prompt">{t('指令')}</label>
+      <div class="ibox" class:invalid={tried && !!f.name.trim() && !f.prompt.trim()}>
+        <textarea id="rt-prompt" class="ta" use:autosize bind:value={f.prompt} placeholder={t('看看过去 24 小时的提交：总结改了什么，指出有风险的写法或缺的测试，记下值得跟进的事。')}></textarea>
+        <div class="tbar">
+          <button type="button" class="fchip" class:set={!!f.permissionMode || f.shape === 'project'} aria-haspopup="menu" aria-expanded={pop?.key === 'perm'}
+            onclick={(e) => openPop(e, 'perm', { w: 300 })}>{@render shieldIc()}<span class="chip-t">{permText(f.permissionMode, f.shape)}</span>{@render caret()}</button>
+          <span class="sp"></span>
+          <!-- 模型 / 思考强度：输入栏那两枚素文本芯片，点开是同一个模型菜单和拉条面板 -->
+          <button type="button" class="mchip" aria-haspopup="menu" aria-expanded={mlay?.kind === 'model'} aria-label={t('模型：{name}', { name: modelLabel })}
+            onclick={(e) => openLayer(e, 'model')}><span class="chip-t">{modelLabel}</span>{#if fastOk && f.fast}<span class="mchip-fast">&nbsp;· Fast</span>{/if}</button>
+          <button type="button" class="mchip lvl" aria-haspopup="dialog" aria-expanded={mlay?.kind === 'effort'} aria-label={t('思考强度：{name}', { name: effortLabel })}
+            onclick={(e) => openLayer(e, 'effort')}><span class="chip-t">{effortLabel}</span></button>
+        </div>
+        <div class="locbar">
+          <button type="button" class="fchip" class:set={!!f.cwd} title={f.cwd || rt.home} aria-haspopup="menu" aria-expanded={pop?.key === 'folder'}
+            onclick={(e) => openPop(e, 'folder', { side: 'top', w: 300 })}>{@render folderIc()}<span class="chip-t">{cwdLabel}</span>{@render caret()}</button>
+          {#if git?.git}
+            <button type="button" class="fchip" class:set={!!f.branch} disabled={!f.worktree} aria-haspopup="menu" aria-expanded={pop?.key === 'branch'}
+              title={f.worktree ? '' : t('打开 Worktree 后可以选从哪个分支切')}
+              onclick={(e) => openPop(e, 'branch', { side: 'top', w: 240 })}>{@render branchIc()}<span class="chip-t mono">{f.branch || t('当前分支')}</span>{@render caret()}</button>
+          {/if}
+          <span class="sp"></span>
+          <label class="wt" class:dim={!wtAvail} title={!git ? '' : !git.git ? t('这个文件夹不是 git 仓库') : git.worktreeOk === false ? t('这个文件夹本身就是一个 worktree') : t('每次运行先切一个新分支和工作目录，改动不碰你手上的检出')}>
+            <span>Worktree</span>{@render sw(f.worktree && wtAvail, () => (f.worktree = !f.worktree), 'Worktree', !wtAvail)}
+          </label>
+        </div>
       </div>
-      {#if ['daily', 'weekdays', 'weekly'].includes(f.sched.type)}
-        {#if f.sched.type === 'weekly'}
-          <div class="when">
-            <span>{t('星期')}</span>
-            <span class="days">{#each WEEK as d}<button type="button" class="day" class:on={f.sched.days.includes(d)} aria-pressed={f.sched.days.includes(d)} onclick={() => toggleDay(d)}>{wdName(d, isEn() ? 'short' : 'narrow')}</button>{/each}</span>
-          </div>
-        {/if}
-        <div class="when"><span>{t('时间')}</span><input class="inp time" type="time" value={timeStr} onchange={onTime} /></div>
-      {:else if f.sched.type === 'hourly'}
-        <div class="when"><span>{t('每小时的第')}</span><input class="inp num" type="number" min="0" max="59" value={f.sched.minute} onchange={onMinute} /><span>{t('分钟')}</span></div>
-      {:else if f.sched.type === 'once'}
-        <div class="when"><span>{t('在')}</span><input class="inp dt" type="datetime-local" value={atStr} onchange={onAt} /></div>
-      {:else if f.sched.type === 'cron'}
-        <label class="cronf">
-          <span class="sub">{t('cron 表达式')}</span>
-          <input class="inp mono" dir="ltr" bind:value={f.sched.cron} placeholder="0 9 * * *" spellcheck="false" autocapitalize="off" />
-          {#if cronErr}<span class="bad">{cronErr}</span>{:else}<span class="sub">{t('5 段：分 时 日 月 周，只认数字（周日写 0），最多每小时一次。')}</span>{/if}
-        </label>
+      {#if asks(permEff)}<p class="note">{t('「{mode}」模式下遇到要你批准的操作会停下来等，会话里亮「待回答」；想全程自己跑完，选「自动」。', { mode: modeLabel(permEff) })}</p>{/if}
+    </div>
+
+    <div class="fld">
+      <span class="lbl" id="rt-freq">{t('频率')}</span>
+      <div class="seg full" role="radiogroup" aria-labelledby="rt-freq">
+        {#each FREQS as [id, lbl]}<button type="button" role="radio" class:on={f.sched.type === id} aria-checked={f.sched.type === id} onclick={() => setFreq(id)}>{lbl()}</button>{/each}
+      </div>
+      {#if f.sched.type !== 'manual'}
+        <div class="when">
+          {#if f.sched.type === 'weekly'}
+            <div class="days" role="group" aria-label={t('星期')}>
+              {#each WEEK as d}<button type="button" class="day" class:on={f.sched.days.includes(d)} aria-pressed={f.sched.days.includes(d)} onclick={() => toggleDay(d)}>{wdName(d, isEn() ? 'short' : 'narrow')}</button>{/each}
+            </div>
+          {/if}
+          {#if ['daily', 'weekdays', 'weekly'].includes(f.sched.type)}
+            <span class="tpick">{@render clock()}<span class="tpick-v">{hm(f.sched.hour, f.sched.minute)}</span>{@render caret()}
+              <input type="time" aria-label={t('时间')} value={timeStr} onchange={onTime} onclick={nativePick} /></span>
+          {:else if f.sched.type === 'hourly'}
+            <span class="when-t">{t('每小时的第')}</span>
+            <input class="inp num" type="number" inputmode="numeric" min="0" max="59" value={minuteStr} onchange={onMinute} aria-label={t('分钟')} />
+            <span class="when-t">{t('分钟')}</span>
+          {:else if f.sched.type === 'once'}
+            <span class="tpick">{@render calIc()}<span class="tpick-v">{atText}</span>{@render caret()}
+              <input type="datetime-local" aria-label={t('运行时间')} value={atStr} onchange={onAt} onclick={nativePick} /></span>
+          {:else if f.sched.type === 'cron'}
+            <input id="rt-cron" class="inp mono cron" class:invalid={!!cronErr} dir="ltr" bind:value={f.sched.cron} placeholder="0 9 * * *"
+              spellcheck="false" autocapitalize="off" autocomplete="off" aria-label={t('cron 表达式')} />
+          {/if}
+        </div>
       {/if}
-      <p class="note">
+      <p class="note" class:bad={!!cronErr}>
         {#if f.sched.type === 'manual'}{t('不按时间自动跑，只在你点「立即运行」时跑。')}
-        {:else if nextPreview}{t('下次运行：{when}', { when: nextPreview })} · {t('时间按服务器时区（{tz}）', { tz: tzLabel(rt.tz) })}
+        {:else if cronErr}{cronErr}
+        {:else if nextPreview}<span class="nx">{t('下次运行：{when}', { when: nextPreview })}</span> · <span class="nw">{t('时间按服务器时区（{tz}）', { tz: tzLabel(rt.tz) })}</span>
         {:else if f.sched.type === 'once'}{t('选一个以后的时间。')}{/if}
       </p>
+      {#if f.sched.type === 'cron' && !cronErr}<p class="note">{t('5 段：分 时 日 月 周，只认数字（周日写 0），最多每小时一次。')}</p>{/if}
     </div>
 
     <div class="fld">
       <span class="lbl">{t('运行')}</span>
       <div class="rows">
-        {#if f.agent !== 'vertex'}
-          <div class="r"><span class="r-k">{t('会话方式')}<span class="r-sub">{f.sessionMode === 'continue' ? t('每次都在同一个会话里接着往下聊，记得上回做过什么') : t('每次开一个干净的新会话')}</span></span>
-            <div class="seg sm">
-              <button type="button" class:on={f.sessionMode === 'new'} onclick={() => (f.sessionMode = 'new')}>{t('每次新会话')}</button>
-              <button type="button" class:on={f.sessionMode === 'continue'} onclick={() => (f.sessionMode = 'continue')}>{t('接着上次')}</button>
-            </div>
+        <div class="r"><span class="r-k">{t('会话方式')}<span class="r-sub">{f.sessionMode === 'continue' ? t('每次都在同一个会话里接着往下聊，记得上回做过什么') : t('每次开一个干净的新会话')}</span></span>
+          <div class="seg sm" role="radiogroup" aria-label={t('会话方式')}>
+            <button type="button" role="radio" class:on={f.sessionMode === 'new'} aria-checked={f.sessionMode === 'new'} onclick={() => (f.sessionMode = 'new')}>{t('每次新会话')}</button>
+            <button type="button" role="radio" class:on={f.sessionMode === 'continue'} aria-checked={f.sessionMode === 'continue'} onclick={() => (f.sessionMode = 'continue')}>{t('接着上次')}</button>
           </div>
-        {/if}
+        </div>
         <div class="r"><span class="r-k">{t('跑完通知我')}<span class="r-sub">{t('每次运行结束，在打开着的 bridge 里提醒你结果')}</span></span>{@render sw(f.notify, () => (f.notify = !f.notify), t('跑完通知我'))}</div>
       </div>
-    </div>
-
-    {#if err}<div class="err">{err}</div>{/if}
-    <div class="foot">
-      <button type="button" class="btn ghost" disabled={busy} onclick={leaveForm}>{t('取消')}</button>
-      <button type="submit" class="btn primary" disabled={!!blocked || busy} title={blocked}>{busy ? t('保存中…') : (editing ? t('保存') : t('创建'))}</button>
     </div>
   </form>
 {/snippet}
 
+{#snippet formFoot()}
+  {@const msg = err || (tried ? blocked : '')}
+  <div class="foot">
+    {#if msg}<p class="foot-msg" role="alert">{msg}</p>{/if}
+    <div class="foot-btns">
+      <button type="button" class="btn ghost" disabled={busy} onclick={leaveForm}>{t('取消')}</button>
+      <button type="submit" form="rt-form" class="btn primary" class:dim={!!blocked} disabled={busy}>{busy ? t('保存中…') : (editing ? t('保存') : t('创建'))}</button>
+    </div>
+  </div>
+{/snippet}
+
 {#if ui.routinesOpen}
-<section class="rt" class:embedded class:wide bind:clientWidth={pageW}>
+<section class="rt" class:embedded class:wide class:en={isEn()} bind:clientWidth={pageW}>
   {#if view === 'list'}
     <!-- ═══ 列表页 ═══ -->
     <div class="scroll">
@@ -589,12 +672,13 @@
     </div>
 
   {:else if (view === 'detail') && cur}
-    <!-- ═══ 详情页 ═══ -->
+    <!-- ═══ 详情页：大标题 + 描述 + 状态行；设置收进一张键值卡；右栏（窄屏在下）指令与运行记录 ═══ -->
     {@const lv = liveOf(cur)}
     {@const mAt = missedAt(cur)}
+    {@const vx = cur.agent === 'vertex'}
     <header class="bar">
       <button class="ibtn" aria-label={t('返回')} onclick={() => (view = 'list')}>{@render backIc()}</button>
-      <span class="bar-t">{cur.name || t('未命名任务')}</span>
+      <span class="sp"></span>
       <div class="bar-acts">
         <button class="ibtn" aria-label={t('编辑')} title={t('编辑')} onclick={() => openEdit(cur)}>{@render editIc()}</button>
         <button class="ibtn" aria-label={t('删除')} title={t('删除')} onclick={() => del(cur)}>{@render trashIc()}</button>
@@ -617,54 +701,47 @@
             <button class="btn ghost sm" onclick={() => openSessionId(lv.sessionId)}>{t('打开会话')}</button>
           </div>
         {/if}
+        <div class="dhead">
+          <h1 class="dtitle">{cur.name || t('未命名任务')}</h1>
+          {#if cur.description}<p class="dlead">{cur.description}</p>{/if}
+          <div class="status">
+            {#if cur.schedule?.type !== 'manual' && !isDone(cur)}{@render sw(cur.enabled !== false, () => toggleEnabled(cur), cur.enabled === false ? t('启用定时任务') : t('暂停定时任务'))}{/if}
+            <span class="badge" class:off={cur.enabled === false}>{#if cur.enabled !== false && !isDone(cur)}<svg class="ok-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="m5.5 8.2 1.7 1.7 3.3-3.6"/></svg>{/if}{isDone(cur) ? t('已运行') : stateWord(cur)}</span>
+            {#if mAt}<span class="fn warn-t">{t('错过了 {when}（服务器当时没在运行）', { when: whenText(mAt) })}</span>
+            {:else if cur.enabled !== false && cur.nextRun}<span class="fn">{cur.schedule?.type === 'once' ? t('运行于：{when}', { when: whenText(cur.nextRun) }) : t('下次运行：{when}', { when: whenText(cur.nextRun) })}</span>{/if}
+          </div>
+        </div>
         <div class="dgrid">
           <div class="dcol">
-            {#if cur.description}{#snippet descB()}<p class="txt">{cur.description}</p>{/snippet}{@render section(t('描述'), descB)}{/if}
-            {#snippet statusB()}
-              <div class="status">
-                {#if cur.schedule?.type !== 'manual' && !isDone(cur)}{@render sw(cur.enabled !== false, () => toggleEnabled(cur), cur.enabled === false ? t('启用定时任务') : t('暂停定时任务'))}{/if}
-                <span class="badge">{#if cur.enabled !== false && !isDone(cur)}<svg class="ok-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="m5.5 8.2 1.7 1.7 3.3-3.6"/></svg>{/if}{isDone(cur) ? t('已运行') : stateWord(cur)}</span>
-                {#if mAt}<span class="fn warn-t">{t('错过了 {when}（服务器当时没在运行）', { when: whenText(mAt) })}</span>
-                {:else if cur.enabled !== false && cur.nextRun}<span class="fn">{cur.schedule?.type === 'once' ? t('运行于：{when}', { when: whenText(cur.nextRun) }) : t('下次运行：{when}', { when: whenText(cur.nextRun) })}</span>{/if}
-              </div>
-            {/snippet}
-            {@render section(t('状态'), statusB)}
-            {#if cur.agent !== 'vertex'}
-              {#snippet folderB()}
-                <div class="chips">
-                  <span class="chip" title={cur.cwd || rt.home}>{@render folderIc()}<span class="mono">{cur.cwd ? folderName(cur.cwd) : t('默认工作空间')}</span></span>
-                  {#if cur.worktree}<span class="chip">{@render branchIc()}<span>{cur.branch ? t('每次从 {b} 切 worktree', { b: cur.branch }) : t('每次切新 worktree')}</span></span>{/if}
-                </div>
-              {/snippet}
-              {@render section(t('文件夹'), folderB)}
-            {/if}
-            {#snippet repB()}<p class="txt">{schedText(cur.schedule)}{#if cur.schedule?.type !== 'manual'}<span class="fn">&nbsp;· {tzLabel(rt.tz)}</span>{/if}</p>{/snippet}
-            {@render section(t('重复'), repB)}
-            {#snippet modelB()}<p class="txt">{engineText(cur)} · {effortText(cur)}{#if cur.fast} · Fast{/if}{#if cur.agent === 'vertex' && cur.search} · {t('联网搜索')}{/if}</p>{/snippet}
-            {@render section(t('模型'), modelB)}
-            {#if cur.agent !== 'vertex'}
-              {#snippet permB()}
-                <p class="txt">{permText(cur.permissionMode, cur.shape)}<span class="fn">&nbsp;· {asks(cur.permissionMode || permDefault) ? t('要批准的操作会停下来等你') : modeDesc(cur.permissionMode || permDefault)}</span></p>
-              {/snippet}
-              {@render section(t('权限'), permB)}
-              {#snippet sessB()}
-                <p class="txt">{cur.sessionMode === 'continue' ? t('接着上次的会话') : t('每次新会话')}{#if cur.sessionMode === 'continue' && cur.threadSessionId} · <button class="link" onclick={() => openSessionId(cur.threadSessionId)}>{t('打开那个会话')}</button>{/if}</p>
-              {/snippet}
-              {@render section(t('会话方式'), sessB)}
-            {/if}
-            {#snippet notiB()}<p class="txt">{cur.notify ? t('每次跑完通知我') : t('不通知')}</p>{/snippet}
-            {@render section(t('通知'), notiB)}
+            <dl class="kv">
+              <div class="kv-r"><dt>{t('重复')}</dt><dd><span>{schedText(cur.schedule)}</span>{#if cur.schedule?.type !== 'manual'}<span class="kv-sub">{t('时间按服务器时区（{tz}）', { tz: tzLabel(rt.tz) })}</span>{/if}</dd></div>
+              <div class="kv-r"><dt>{t('模型')}</dt><dd><span>{vx ? engineText(cur) : nameOf(caps.data?.claude?.models, cur.model || defModel)} · {effortText(cur)}{#if cur.fast} · Fast{/if}</span></dd></div>
+              {#if !vx}
+                <div class="kv-r"><dt>{t('权限')}</dt><dd><span>{permText(cur.permissionMode, cur.shape)}</span><span class="kv-sub">{asks(cur.permissionMode || permDefault) ? t('要批准的操作会停下来等你') : modeDesc(cur.permissionMode || permDefault)}</span></dd></div>
+                <div class="kv-r"><dt>{t('文件夹')}</dt><dd>
+                  <span class="kv-ic" title={cur.cwd || rt.home}>{@render folderIc()}<span class:mono={!!cur.cwd}>{cur.cwd ? folderName(cur.cwd) : t('默认工作空间')}</span></span>
+                  {#if cur.worktree}<span class="kv-sub kv-ic">{@render branchIc()}<span>{cur.branch ? t('每次从 {b} 切 worktree', { b: cur.branch }) : t('每次切新 worktree')}</span></span>{/if}
+                </dd></div>
+                <div class="kv-r"><dt>{t('会话方式')}</dt><dd>
+                  <span>{cur.sessionMode === 'continue' ? t('接着上次的会话') : t('每次新会话')}</span>
+                  {#if cur.sessionMode === 'continue' && cur.threadSessionId}<button class="link kv-sub" onclick={() => openSessionId(cur.threadSessionId)}>{t('打开那个会话')}</button>{/if}
+                </dd></div>
+              {/if}
+              <div class="kv-r"><dt>{t('通知')}</dt><dd><span>{cur.notify ? t('每次跑完通知我') : t('不通知')}</span></dd></div>
+            </dl>
           </div>
           <div class="dcol">
             {#snippet instrB()}
               {@const long = (cur.prompt || '').split('\n').length > 3 || (cur.prompt || '').length > 270}
-              <div class="instr" class:clamp={long && !showAllPrompt}>{cur.prompt}</div>
-              {#if long}<button class="btn ghost xs" onclick={() => (showAllPrompt = !showAllPrompt)}>{showAllPrompt ? t('收起') : t('显示全部')}<span class="caret" class:up={showAllPrompt}>{@render chev()}</span></button>{/if}
+              <div class="instr-box">
+                <div class="instr" class:clamp={long && !showAllPrompt}>{cur.prompt}</div>
+                {#if long}<button class="btn ghost xs" onclick={() => (showAllPrompt = !showAllPrompt)}>{showAllPrompt ? t('收起') : t('显示全部')}<span class="caret" class:up={showAllPrompt}>{@render chev()}</span></button>{/if}
+              </div>
             {/snippet}
             {@render section(t('指令'), instrB)}
             {#snippet histB()}
               {#if !(cur.runs || []).length}
-                <p class="fn">{cur.lastRun ? t('上次运行：{when}（更早的记录没有保存）', { when: whenText(cur.lastRun) }) : t('还没有运行过。')}</p>
+                <p class="fn empty-runs">{cur.lastRun ? t('上次运行：{when}（更早的记录没有保存）', { when: whenText(cur.lastRun) }) : t('还没有运行过。')}</p>
               {:else}
                 <div class="hist">
                   {#each cur.runs as run (run.id)}
@@ -699,6 +776,7 @@
       {#if embedded}<div class="bar-acts"><button class="ibtn" aria-label={t('关闭')} title={t('关闭')} onclick={close}>{@render closeIc()}</button></div>{/if}
     </header>
     <div class="scroll"><div class="fwrap">{@render formBody()}</div></div>
+    <div class="fbar"><div class="fbar-in">{@render formFoot()}</div></div>
   {/if}
 
   {#if dlg}
@@ -707,15 +785,30 @@
       <div class="dlg" role="dialog" aria-modal="true" aria-label={t('编辑定时任务')}>
         <div class="dlg-h"><span>{t('编辑定时任务')}</span><button class="ibtn" aria-label={t('关闭')} onclick={leaveForm}>{@render closeIc()}</button></div>
         <div class="dlg-b">{@render formBody()}</div>
+        <div class="dlg-f">{@render formFoot()}</div>
       </div>
     </div>
   {/if}
 
-  <!-- 单例下拉 -->
+  <!-- 模型 / 思考强度：输入栏那两个浮层的受控模式，挪到 body 上贴着芯片展开 -->
+  {#if mlay}
+    <div class="rt-layer" use:portal use:layerFocus>
+      {#if mlay.kind === 'model'}
+        <ModelPicker anchor={mlay.rect} value={curModel} onpick={pickModel} onClose={closeLayer} filter={officialOnly}
+          fast={f.fast} onfast={(v) => (f.fast = v)} />
+      {:else}
+        <EffortPanel anchor={mlay.rect} model={curModel} value={f.effort || ''} onpick={(id) => (f.effort = id || null)} onClose={closeLayer}
+          showUltracode={false} />
+      {/if}
+    </div>
+  {/if}
+
+  <!-- 单例下拉（挪到 body 上；高度收进触发点这一侧的剩余空间） -->
   {#if pop}
+    <div class="rt-layer" use:portal>
     <button class="pop-bd" aria-label={t('关闭')} tabindex="-1" onclick={() => (pop = null)}></button>
-    <div class="pop" role="menu" style:left={pop.x + 'px'} style:min-width={pop.w + 'px'}
-      style:top={pop.up ? 'auto' : pop.y + 'px'} style:bottom={pop.up ? pop.y + 'px' : 'auto'}>
+    <div class="pop" role="menu" style:left={pop.x + 'px'} style:min-width={pop.w + 'px'} style:max-height={pop.h + 'px'}
+      style:top={pop.up ? 'auto' : pop.y + 'px'} style:bottom={pop.up ? pop.y + 'px' : 'auto'} class:up={pop.up}>
       {#if pop.key === 'new'}
         <button class="mi" onclick={createWithClaude}><span class="mi-t">{t('让 Claude 帮我建')}</span><span class="mi-d">{t('开一个新对话，说说想定时做什么')}</span></button>
         <button class="mi" onclick={() => pick(openNew)}><span class="mi-t">{t('手动设置')}</span><span class="mi-d">{t('自己填名称、指令和频率')}</span></button>
@@ -758,17 +851,8 @@
           <div class="mi-sep"></div>
           <button class="mi chk" class:sel={f.shape === 'project'} onclick={() => pick(() => (f.shape = f.shape === 'project' ? '' : 'project'))}><span class="mi-t">{t('以项目对话运行')}</span><span class="mi-d">{t('协调者收到指令后自己开讨论串去做；配「接着上次的会话」就是一个长期挂着的项目')}</span></button>
         {/if}
-      {:else if pop.key === 'model'}
-        <div class="mi-h">{t('模型')}</div>
-        {#each modelList as m}<button class="mi chk" class:sel={(f.model || defModel) === m.id} onclick={() => { f.model = m.id; if (f.effort && !effortList.some((e) => e.id === f.effort)) f.effort = null; }}><span class="mi-t">{tr(m.name)}</span></button>{/each}
-        <div class="mi-sep"></div>
-        <div class="mi-h">{t('思考强度')}</div>
-        {#each effortList as e}<button class="mi chk" class:sel={(f.effort || defEffort) === e.id} onclick={() => (f.effort = e.id)}><span class="mi-t">{tr(e.name)}</span></button>{/each}
-        {#if fastOk}
-          <div class="mi-sep"></div>
-          <div class="mi-row"><span class="mi-t">Fast<span class="mi-d">{t('更快出结果，按更高单价计费')}</span></span>{@render sw(f.fast, () => (f.fast = !f.fast), 'Fast')}</div>
-        {/if}
       {/if}
+    </div>
     </div>
   {/if}
 </section>
@@ -829,8 +913,8 @@
   .search .x :global(svg) { width: 12px; height: 12px; }
   .content { padding-top: 4px; padding-bottom: 32px; }
 
-  /* 横幅（官方 Banner neutral：py12 px16 rounded-card、surface-1 + 1px 环） */
-  .banner { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-radius: 12px; background: var(--st-surface); box-shadow: inset 0 0 0 1px var(--st-line); margin-bottom: 24px; color: var(--text); }
+  /* 横幅：平铺浅底、无描边（提示卡只靠底色层次区分，不加边框 / 彩条；11-13 从官方 Banner 的描边卡改过来） */
+  .banner { display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 14px; border-radius: 10px; background: var(--st-hover); margin-bottom: 24px; color: var(--st-text2, var(--serif)); font-size: 13px; line-height: 18px; }
   .banner > :global(svg) { width: 16px; height: 16px; flex: none; color: var(--st-text2, var(--serif)); }
   .banner > span:not(.spin) { flex: 1; min-width: 0; }
   .banner.warn { background: rgba(217,119,6,.10); box-shadow: inset 0 0 0 1px rgba(217,119,6,.28); color: #b45309; }
@@ -855,8 +939,8 @@
   @media (hover: hover) { .empty-ic:hover :global(.hh) { rotate: 30deg; } .empty-ic:hover :global(.mh) { rotate: 390deg; } }
 
   /* ── 卡片网格（官方：1 列，md 起 2 列；gap 12 → 24） ── */
-  .grid { list-style: none; margin: 0 0 12px; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: 1fr; gap: 12px; }
-  .wide .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-bottom: 24px; }
+  .grid { list-style: none; margin: 0 0 12px; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .wide .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 24px; margin-bottom: 24px; }   /* 两列时同排等高；单列（手机）按内容高，免得短卡底下空一截 */
   .grid > li { height: 100%; }
   .tcard { position: relative; height: 100%; display: flex; flex-direction: column; gap: 8px; padding: 16px; border-radius: 12px; background: var(--st-surface); box-shadow: inset 0 0 0 1px var(--st-line); transition: background .15s, transform .12s; }
   .tcard:hover { background: color-mix(in srgb, var(--st-surface) 94%, var(--text)); }
@@ -896,27 +980,44 @@
   .bar-acts { display: flex; align-items: center; gap: 4px; flex: none; }
   .bar-acts .btn { margin-left: 4px; }
 
-  /* ── 详情（官方 pt48、gap16，md 起两列 1 : 1.4） ── */
-  .dwrap { max-width: 1120px; margin: 0 auto; padding: 32px 16px 32px; display: flex; flex-direction: column; gap: 16px; }
-  .wide .dwrap { padding: 48px 32px 32px; }
+  /* ── 详情：标题区 + 两列（宽处 1 : 1.4，窄处上下叠） ── */
+  .dwrap { max-width: 1120px; margin: 0 auto; padding: 20px 16px 40px; display: flex; flex-direction: column; gap: 20px; }
+  .wide .dwrap { padding: 40px 32px 40px; gap: 28px; }
   .dwrap > .banner, .dwrap > .err { margin: 0; }
-  .dgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; }
-  .wide .dgrid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 40px; }
+  .dhead { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .dtitle { margin: 0; font-family: var(--font-brand-serif, var(--serif-stack, Georgia, serif)); font-size: 24px; line-height: 32px; font-weight: 500; letter-spacing: -.01em; overflow-wrap: anywhere; }
+  .dlead { margin: 0; color: var(--st-text2, var(--serif)); overflow-wrap: anywhere; }
+  .dhead .status { margin-top: 6px; }
+  .dgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .wide .dgrid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 32px; align-items: start; }
   .dcol { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
   .sec { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-  .sec-h { font-size: 14px; font-weight: 400; color: var(--muted); margin: 0; }
-  .txt { margin: 0; overflow-wrap: anywhere; }
+  .sec-h { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--st-text2, var(--serif)); margin: 0; }
   .fn { font-size: 13px; line-height: 17px; color: var(--muted); }
   .warn-t { color: #c2410c; }
-  .status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  :global(html.dark) .warn-t, :global([data-theme="dark"]) .warn-t { color: #f0a06b; }
+  .status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .badge { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--st-hover); font-size: 12.5px; font-weight: 500; }
+  .badge.off { color: var(--muted); }
   .ok-ic { width: 13px; height: 13px; color: #16a34a; }
-  .chips { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
-  .chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 6px; border-radius: 5px; background: var(--st-hover); font-size: 13px; line-height: 17px; }
-  .chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .link { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
-  .instr { color: var(--st-text2, var(--serif)); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
-  .instr.clamp { max-height: 3lh; overflow: hidden; mask-image: linear-gradient(#000 45%, transparent); -webkit-mask-image: linear-gradient(#000 45%, transparent); }
+  /* 设置一览：一张卡、行间细线、左列标签右列值（值的补充说明是灰色第二行） */
+  .kv { margin: 0; border-radius: 12px; background: var(--st-surface); box-shadow: inset 0 0 0 1px var(--st-line); }
+  .kv-r { display: grid; grid-template-columns: 5em minmax(0, 1fr); column-gap: 16px; padding: 12px 16px; align-items: baseline; }
+  .rt.en .kv-r { grid-template-columns: 7.5em minmax(0, 1fr); }
+  .kv-r + .kv-r { border-top: 1px solid var(--st-hair, var(--divider)); }
+  .kv dt { font-size: 13px; color: var(--muted); }
+  .kv dd { margin: 0; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; overflow-wrap: anywhere; }
+  .kv-sub { font-size: 12.5px; line-height: 17px; color: var(--muted); }
+  .kv-ic { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; }
+  .kv-ic > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kv-ic :global(.ic12) { color: var(--muted); }
+  .link { color: var(--text); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); }
+  .link.kv-sub { color: var(--st-text2, var(--serif)); }
+  .instr-box { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 12px; background: var(--st-hover); }
+  .instr { color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; line-height: 22px; }
+  .instr.clamp { max-height: 4lh; overflow: hidden; mask-image: linear-gradient(#000 55%, transparent); -webkit-mask-image: linear-gradient(#000 55%, transparent); }
+  .instr-box .btn.xs { margin-left: -8px; }
+  .empty-runs { margin: 0; padding: 12px 14px; border-radius: 12px; box-shadow: inset 0 0 0 1px var(--st-hair, var(--divider)); }
   .hist { display: flex; flex-direction: column; gap: 4px; }
   .h-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 8px; background: var(--st-hover); text-align: left; min-width: 0; }
   .h-row:hover:not(:disabled) { background: var(--st-sel, var(--hover-strong)); }
@@ -943,82 +1044,134 @@
   .sw.on .knob { transform: translateX(12px); background: var(--st-primary-ink); }
   .sw:disabled { opacity: .4; }
 
-  /* ── 表单（新建整页 max 720、gap 32；官方经典布局字段间 28） ── */
-  .fwrap { max-width: 720px; margin: 0 auto; padding: 32px 16px 32px; }
-  .wide .fwrap { padding: 48px 24px 32px; }
-  .form { display: flex; flex-direction: column; gap: 28px; }
-  .form .banner { margin: 0; }
-  .fld { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-  .lbl { color: var(--muted); }
-  .req { color: var(--crit, #d96a5a); }
-  .inp { width: 100%; height: 32px; padding: 0 10px; border-radius: 8px; border: 0; background: var(--st-surface); box-shadow: inset 0 0 0 1px var(--st-line); font: inherit; color: var(--text); outline: none; }
+  /* ── 表单（整页 max 680，字段间 24） ── */
+  .fwrap { max-width: 680px; margin: 0 auto; padding: 24px 16px 32px; }
+  .wide .fwrap { padding: 40px 24px 40px; }
+  .form { display: flex; flex-direction: column; gap: 24px; }
+  /* 运行位置提示：平铺浅底、无描边——提示卡只靠底色层次区分，不加边框、不加彩条 */
+  .hint { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--st-hover);
+    color: var(--st-text2, var(--serif)); font-size: 13px; line-height: 18px; }
+  .hint > :global(svg) { width: 15px; height: 15px; flex: none; margin-top: 1.5px; color: var(--muted); }
+  .fld { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .lbl { display: flex; align-items: baseline; gap: 6px; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--st-text2, var(--serif)); }
+  .opt { font-weight: 400; color: var(--muted); }
+  .inp { width: 100%; height: 38px; padding: 0 12px; border-radius: 10px; border: 0; background: var(--st-surface); box-shadow: inset 0 0 0 1px var(--st-line);
+    font: inherit; font-size: 14px; color: var(--text); outline: none; transition: box-shadow .15s; }
+  .inp::placeholder, .ta::placeholder { color: var(--muted); opacity: .75; }
   .inp:focus { box-shadow: inset 0 0 0 1px var(--st-text2, var(--serif)), 0 0 0 3px var(--st-hover); }
-  .inp.time { width: 140px; } .inp.num { width: 76px; } .inp.dt { width: 230px; max-width: 100%; }
-  /* 指令框：fill-secondary + 环，聚焦出焦点环；下面挂工具条与位置条 */
-  .ibox { display: flex; flex-direction: column; border-radius: 8px; background: var(--st-surface); box-shadow: inset 0 0 0 1px var(--st-line); overflow: hidden; transition: box-shadow .15s; }
-  .ibox:focus-within { box-shadow: inset 0 0 0 1px var(--st-text2, var(--serif)), 0 0 0 3px var(--st-hover); }
-  .ta { display: block; width: 100%; min-height: 120px; max-height: 300px; resize: none; overflow-y: auto; background: none; border: 0; outline: 0; font: inherit; color: var(--text); padding: 8px 12px; }
-  .tbar { display: flex; align-items: center; gap: 3px; padding: 0 8px 8px; min-width: 0; }
-  .locbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 5px 8px; background: var(--st-hover); min-width: 0; }
-  /* 药丸选择器（官方 Xe：虚线描边小芯片，13px，muted，悬停变主色） */
-  .pill { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; padding: 2px 6px; border-radius: 5px; border: 1px dashed var(--st-line); font-size: 13px; line-height: 17px; color: var(--muted); }
-  .pill:hover:not(:disabled) { color: var(--text); background: var(--st-hover); }
-  .pill.set { color: var(--st-text2, var(--serif)); }
-  .pill:disabled { opacity: .45; }
-  .pill-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .wt { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
-  .wt.dim { opacity: .6; }
-  .note { margin: 0; font-size: 13px; line-height: 17px; color: var(--muted); }
-  /* 频率分段条（官方 Kt：alpha-1 底、p2、选中 alpha-2） */
-  .seg { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 2px; border-radius: 8px; background: var(--st-hover); align-self: flex-start; max-width: 100%; }
-  .seg button { padding: 3px 8px; border-radius: 5px; font-size: 13px; line-height: 17px; color: var(--muted); white-space: nowrap; }
-  .seg button:hover { color: var(--text); background: var(--st-sel, var(--hover-strong)); }
-  .seg button.on { color: var(--text); background: var(--st-sel, var(--hover-strong)); }
+  .inp.num { width: 64px; padding: 0 6px; text-align: center; font-variant-numeric: tabular-nums; }
+  .inp.cron { max-width: 280px; letter-spacing: .04em; }
+  /* 指令框：输入栏的卡片语言——圆角 14、淡描边 + 软投影，聚焦时描边加深；下面挂工具条与位置条 */
+  .ibox { display: flex; flex-direction: column; border-radius: 14px; background: var(--st-surface); overflow: hidden;
+    box-shadow: inset 0 0 0 1px var(--st-line), 0 4px 20px rgba(0,0,0,.035); transition: box-shadow .15s; }
+  .ibox:focus-within { box-shadow: inset 0 0 0 1px var(--st-text2, var(--serif)), 0 4px 20px rgba(0,0,0,.075); }
+  .inp.invalid, .ibox.invalid { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--crit, #d96a5a) 75%, transparent); }
+  .ta { display: block; width: 100%; min-height: 120px; max-height: 300px; resize: none; overflow-y: auto; background: none; border: 0; outline: 0;
+    font: inherit; font-size: 14.5px; line-height: 22px; color: var(--text); padding: 12px 14px 6px; }
+  .tbar { display: flex; align-items: center; gap: 2px; padding: 2px 6px 6px; min-width: 0; }
+  .locbar { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 6px; min-height: 40px; min-width: 0;
+    background: var(--st-hover); border-top: 1px solid var(--st-hair, var(--divider)); }
+  /* 芯片：图标 + 文字 + 小箭头。平时无底无框，悬停 / 按下 / 展开时浮出浅底（以前是虚线框，看着像没做完） */
+  .fchip { display: inline-flex; align-items: center; gap: 6px; height: 30px; max-width: 100%; min-width: 0; padding: 0 8px; border-radius: 8px;
+    font-size: 13px; color: var(--muted); transition: background .15s, color .15s; }
+  .fchip :global(.ic12) { width: 14px; height: 14px; }
+  .fchip.set { color: var(--st-text2, var(--serif)); }
+  .fchip[aria-expanded="true"], .fchip:active:not(:disabled) { background: var(--st-sel); color: var(--text); }
+  @media (hover: hover) { .fchip:hover:not(:disabled) { background: var(--st-sel); color: var(--text); } }
+  .fchip:disabled { opacity: .45; }
+  .chip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .caret-s { width: 9px; height: 6px; flex: none; opacity: .55; }
+  /* 模型 / 思考强度：输入栏同款素文本芯片（模型正文色、强度灰），不配图标 */
+  .mchip { display: inline-flex; align-items: center; height: 30px; min-width: 0; padding: 0 8px; border-radius: 8px; font-size: 13.5px;
+    color: var(--text); white-space: nowrap; transition: background .15s; }
+  .mchip.lvl { color: var(--muted); flex-shrink: 3; }
+  .mchip-fast { color: var(--muted); }
+  .mchip[aria-expanded="true"], .mchip:active { background: var(--st-sel); }
+  @media (hover: hover) { .mchip:hover { background: var(--st-sel); } }
+  .wt { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 6px 0 8px; font-size: 13px; color: var(--muted); cursor: pointer; }
+  .wt.dim { opacity: .55; cursor: default; }
+  .note { margin: 0; font-size: 13px; line-height: 18px; color: var(--muted); }
+  .note.bad { color: var(--crit, #d96a5a); }
+  .nx { color: var(--st-text2, var(--serif)); }
+  .nw { white-space: nowrap; }
+  /* 分段条：浅底槽 + 浮起的滑块。频率那条铺满一行，放不下就横着滑、不折行 */
+  .seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--st-seg, var(--st-hover)); align-self: flex-start; max-width: 100%;
+    overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .seg::-webkit-scrollbar { display: none; }
+  /* 频率：七格按字宽分、余下的宽度均摊，铺满一行（中文 375 宽放得下，再窄就横着滑）；
+     英文词长，窄屏排成两行四列（不能等宽硬塞，三个字的格子会被截成「每…」） */
+  .seg.full { display: flex; align-self: stretch; }
+  .seg.full button { flex: 1 1 auto; padding: 0 4px; }
+  .rt.en:not(.wide) .seg.full { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .seg button { height: 30px; padding: 0 12px; border-radius: 7px; font-size: 13px; color: var(--muted); white-space: nowrap; transition: background .15s, color .15s, box-shadow .15s; }
+  @media (hover: hover) { .seg button:hover:not(.on) { color: var(--text); } }
+  .seg button.on { color: var(--text); background: var(--st-thumb, var(--st-surface)); box-shadow: 0 1px 2px rgba(0,0,0,.2), 0 0 0 .5px rgba(0,0,0,.08); }
   .seg.sm { align-self: center; flex: none; }
-  .when { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--st-text2, var(--serif)); margin-top: 6px; }
-  .days { display: inline-flex; gap: 3px; flex-wrap: wrap; }
-  .day { min-width: 30px; height: 28px; padding: 0 6px; border-radius: 6px; font-size: 13px; color: var(--muted); box-shadow: inset 0 0 0 1px var(--st-line); }
-  .day:hover { color: var(--text); }
+  .seg.sm button { height: 26px; padding: 0 10px; }
+  .when { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .when-t { color: var(--st-text2, var(--serif)); }
+  .days { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; }
+  .day { min-width: 36px; height: 36px; padding: 0 8px; border-radius: 18px; font-size: 13px; color: var(--st-text2, var(--serif));
+    background: var(--st-surface); box-shadow: inset 0 0 0 1px var(--st-line); transition: background .15s, color .15s; }
+  @media (hover: hover) { .day:hover:not(.on) { color: var(--text); background: color-mix(in srgb, var(--st-surface) 92%, var(--text)); } }
   .day.on { background: var(--st-primary); color: var(--st-primary-ink); box-shadow: none; }
-  .cronf { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
-  .sub { font-size: 13px; line-height: 17px; color: var(--muted); }
-  .bad { font-size: 13px; line-height: 17px; color: var(--crit, #d96a5a); }
-  /* 「运行」卡（官方 unified 卡片行风格：px16 py14，相邻行细线） */
+  /* 时间 / 日期：输入框外观的按钮，显示 24 小时制（中文）与口语日期；系统选择器由盖在上面的透明 input 弹 */
+  .tpick { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: 10px;
+    background: var(--st-surface); box-shadow: inset 0 0 0 1px var(--st-line); color: var(--text); transition: box-shadow .15s, background .15s; }
+  @media (hover: hover) { .tpick:hover { background: color-mix(in srgb, var(--st-surface) 94%, var(--text)); } }
+  .tpick:focus-within { box-shadow: inset 0 0 0 1px var(--st-text2, var(--serif)), 0 0 0 3px var(--st-hover); }
+  .tpick :global(.clock), .tpick :global(.ic14) { width: 15px; height: 15px; flex: none; color: var(--muted); }
+  .tpick-v { font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tpick input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; font-size: 16px; color-scheme: light dark; }
+  .tpick input::-webkit-calendar-picker-indicator { position: absolute; inset: 0; width: auto; height: auto; margin: 0; opacity: 0; cursor: pointer; }
+  /* 「运行」卡：行间细线 */
   .rows { border-radius: 12px; box-shadow: inset 0 0 0 1px var(--st-line); background: var(--st-surface); }
-  .r { display: flex; align-items: center; gap: 12px; padding: 12px 16px; min-height: 52px; }
+  .r { display: flex; align-items: center; gap: 12px; padding: 12px 14px 12px 16px; min-height: 56px; }
   .r + .r { border-top: 1px solid var(--st-hair, var(--divider)); }
   .r-k { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .r-sub { font-size: 13px; line-height: 17px; color: var(--muted); }
-  .form .err { margin: 0; }
-  .foot { display: flex; justify-content: flex-end; gap: 6px; }
-  .rt:not(.wide) .foot .btn { flex: 1; height: 40px; }
+  .r-sub { font-size: 12.5px; line-height: 17px; color: var(--muted); }
+  /* 动作条：整页时常驻底部（细线 + 页底色），宽处与表单同宽、按钮靠右；手机两键平分。
+     保存不了时按钮不置灰（手机上没有悬停提示），点了在左边说缺什么、焦点跳到那一栏 */
+  .fbar { flex: none; border-top: 1px solid var(--st-hair, var(--divider)); background: var(--bg); padding: 10px 16px calc(10px + var(--sab, 0px)); }
+  .wide .fbar { padding-left: 24px; padding-right: 24px; }
+  .fbar-in { max-width: 632px; margin: 0 auto; }
+  .foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .foot-msg { flex: 1 1 0; min-width: 0; margin: 0; font-size: 13px; line-height: 18px; color: var(--crit, #d96a5a); }
+  .foot-btns { display: flex; gap: 8px; margin-left: auto; }
+  .rt:not(.wide) .foot-msg { flex-basis: 100%; }
+  .rt:not(.wide) .foot-btns { flex: 1; }
+  .rt:not(.wide) .foot-btns .btn { flex: 1; height: 40px; }
+  .btn.primary.dim, .btn.primary.dim:hover:not(:disabled) { opacity: .5; }
 
-  /* ── 编辑对话框（640，居中，不全屏；内容自己滚） ── */
+  /* ── 编辑对话框（640，居中，不全屏；内容自己滚，动作条贴底） ── */
   .dlg-bd { position: absolute; inset: 0; z-index: 60; background: var(--st-backdrop, rgba(0,0,0,.45)); display: flex; align-items: center; justify-content: center; padding: 24px 16px; animation: fadeIn .15s ease; }
   @keyframes fadeIn { from { opacity: 0; } }
   .dlg { width: 640px; max-width: calc(100% - 32px); max-height: 100%; display: flex; flex-direction: column; border-radius: 16px; background: var(--bg); box-shadow: var(--st-menu-shadow, var(--q-shadow)); animation: dlgIn .2s var(--ea-out, ease); }
   @keyframes dlgIn { from { opacity: 0; transform: translateY(8px) scale(.98); } }
   .dlg-h { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 8px 24px; font-size: 16px; font-weight: 500; }
-  .dlg-b { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 24px 20px; }
-  .dlg-b .banner { display: none; }
+  .dlg-b { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 24px 24px; }
+  .dlg-b .hint { display: none; }
+  .dlg-f { flex: none; padding: 12px 24px 16px; border-top: 1px solid var(--st-hair, var(--divider)); }
 
-  /* ── 下拉 ── */
-  .pop-bd { position: fixed; inset: 0; z-index: 90; cursor: default; }
-  .pop { position: fixed; z-index: 91; max-width: min(380px, calc(100vw - 16px)); max-height: min(420px, 60vh); overflow-y: auto; padding: 4px;
-    border-radius: 10px; background: var(--st-menu, var(--q-card)); box-shadow: var(--st-menu-shadow, var(--q-shadow)); animation: popIn .14s var(--ea-out, ease); }
+  /* ── 下拉（挪到 body 上：整屏透明层 + 弹层；字号行高不再从本页继承，这里补上） ── */
+  .rt-layer { position: fixed; inset: 0; z-index: 1000; font-size: 14px; line-height: 20px; color: var(--text); }
+  .pop-bd { position: absolute; inset: 0; cursor: default; }
+  .pop { position: fixed; max-width: min(380px, calc(100vw - 16px)); overflow-y: auto; overscroll-behavior: contain; padding: 4px;
+    border-radius: 12px; background: var(--st-menu, var(--q-card)); box-shadow: var(--st-menu-shadow, var(--q-shadow)); animation: popIn .14s var(--ea-out, ease); transform-origin: top; }
+  .pop.up { transform-origin: bottom; animation-name: popUp; }
   @keyframes popIn { from { opacity: 0; transform: translateY(-3px) scale(.98); } }
-  .mi { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 10px; border-radius: 6px; text-align: left; position: relative; }
-  .mi.chk { padding-left: 28px; }
-  .mi:hover:not(:disabled) { background: var(--st-hover); }
+  @keyframes popUp { from { opacity: 0; transform: translateY(3px) scale(.98); } }
+  .mi { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 10px; border-radius: 8px; text-align: left; position: relative; }
+  .mi.chk { padding-left: 30px; }
+  .mi:active:not(:disabled) { background: var(--st-hover); }
+  @media (hover: hover) { .mi:hover:not(:disabled) { background: var(--st-hover); } }
   .mi:disabled { opacity: .45; }
-  .mi.sel::before { content: ''; position: absolute; left: 10px; top: 13px; width: 9px; height: 5px; border: solid currentColor; border-width: 0 0 1.5px 1.5px; transform: rotate(-45deg); }
+  .mi.sel::before { content: ''; position: absolute; left: 11px; top: 13px; width: 9px; height: 5px; border: solid currentColor; border-width: 0 0 1.5px 1.5px; transform: rotate(-45deg); }
   .mi-t { font-size: 14px; color: var(--text); display: flex; flex-direction: column; }
   .mi-d { font-size: 12.5px; line-height: 16px; color: var(--muted); }
   .mi-d.mono { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-  .mi-n { position: absolute; right: 10px; top: 7px; font-size: 12.5px; color: var(--muted); }
+  .mi-n { position: absolute; right: 10px; top: 8px; font-size: 12.5px; color: var(--muted); }
   .mi-h { font-size: 12px; color: var(--muted); padding: 6px 10px 2px; }
-  .mi-row { display: flex; align-items: center; gap: 12px; padding: 6px 10px; }
-  .mi-row .mi-t { flex: 1; }
   .mi-empty { padding: 6px 10px; font-size: 13px; color: var(--muted); }
   .mi.danger .mi-t { color: var(--crit, #d96a5a); }
   .mi-sep { height: 1px; background: var(--st-hair, var(--divider)); margin: 4px 6px; }
