@@ -39,9 +39,9 @@ web/
     lib/chat.svelte.js    SSE → reactive message model; load/cache sessions
     lib/server.js         apiUrl(): online-shell relative vs offline-apk remote base
     lib/store.js          token/serverBase via Android SharedPreferences, localStorage fallback
-    lib/overlay.svelte.js the original visual resources (brand fonts, mascot and marks, glass layers, animations,
-                          wallpaper): one set only, baked into every build under /app/_ov/ by
-                          scripts/overlay-bundle.mjs from the private overlay (or frontend-assets in a release tree);
+    visuals/              the original visual resources (brand fonts, mascot and marks, glass layers, animations,
+                          wallpaper, glass renderers): one set only, imported directly by the components so Vite
+                          bundles them with content hashes; the Codex page lives in public/chatgpt/;
                           the build fails if they are missing
     lib/
       state.svelte.js     shared runes state (session, settings, ui, caps, me, status, taskSheet, refusalBand)
@@ -114,7 +114,7 @@ Locked with the owner. Visual reference: `…/bridge前端设计/claude页面设
 - **Drawer**: only New chat / History / Routines (full CRUD). Everything else removed.
 - **Inline images**: Claude-generated media (gen_media SSE) only; vault image browsing is the workspace tab (later).
 - **Markdown**: marked + DOMPurify. **Running mark**: the original animation players (clay / sprite / classic strips,
-  via ovModule / ovData).
+  lazy-loaded from src/visuals/modules/, frame tables in src/visuals/data.js).
 
 ## Effort levels (Claude page)
 

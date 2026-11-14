@@ -28,11 +28,10 @@
   import { isOffline } from '../lib/server.js';
   import { t, tr, locale, isEn } from '../lib/i18n.js';
   import { SI } from '../lib/settingsIcons.js';
-  import { ovUrl } from '../lib/overlay.svelte.js';
   import GlassButton from './ios27/GlassButton.svelte';
   import './ios27/ink.css';
-  const sheetD = $derived(ovUrl('ios27/sheet-dark.png'));
-  const capD = $derived(ovUrl('ios27/cap44-dark.png'));
+  import sheetD from '../visuals/ios27/sheet-dark.png';
+  import capD from '../visuals/ios27/cap44-dark.png';
 
   setContext('ios27', { dark: true, ink: true });
   // 透明 1×1 GIF 当 poster：安卓 WebView 给还没出帧的 <video> 画一张默认海报（灰底 + 巨大的播放键，被 object-fit

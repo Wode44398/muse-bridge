@@ -11,23 +11,40 @@
   // cookie / 接口；挂载响应头还带同款 CSP sandbox（顶层直开也一样隔离）。不透明源里
   // localStorage 一碰就抛错，服务端注入了内存垫片；srcdoc 这条在这里补同一段。
   //
-  // 外观：一条贴着应用主题的细工具栏（暗/亮两套），不再是压在深色界面上的大白条；
-  // 加载用工具栏底边的细进度线，页面就绪前舞台留主题底色，不闪白。
+  // 外观：顶栏交给外框（主工具 = 刷新 / 全屏 / 在浏览器中打开，下载在 ⋮ 通用项里），错误态用 kit ViewerState；
+  // 颜色读 doctheme 的 --md-*（.hv 已在作用域里），和 md / PDF 来回切不跳色。加载用舞台顶边的细进度线，
+  // 页面就绪前舞台留主题底色，不闪白。
+  //
+  // 焦点与 Esc：沙箱页拿到焦点后，键盘事件都落在 iframe 文档里、冒不到外框——Esc 关不掉查看器。
+  // 解法：页里注入一段 Esc 中继（KEY_SHIM，postMessage 给父页，不需要 allow-same-origin），中继报到（ready）
+  // 之后才把焦点交给页面（课件 / PPT 的方向键开箱即用）；没报到的（老服务端的站点挂载还没注入中继）就不自动抢焦点，
+  // 用户点进页面之前 Esc 照常关查看器。服务端 KEY_SHIM（src/runtime/html-site.mjs）注入同一段，两条路一致。
+  //
+  // 源码：主工具「源码」（Ctrl+U，浏览器「查看网页源代码」同键）切到只读代码视图（CodeView，与文本预览同一套：
+  // 高亮、查找、跳到行、换行、字号）。页面 iframe 不卸载、只藏起来——切回去不重载、页面状态还在。
+  // 源码按字节读、按「BOM → 页面声明的 charset → 自动识别」解码，GBK 老页面不乱码；超过上限只显示前 N MB 并明说。
   import { onMount, tick } from 'svelte';
   import { t, tr } from '../../lib/i18n.js';
-  import { interceptSave, saveLabel } from '../../lib/save.js';
-  import { nativeWorkspaceSaveAs } from '../../lib/nativeDesktop.js';
-  const { item, onClose } = $props();
+  import { useViewer } from './kit/context.js';
+  import ViewerState from './kit/ViewerState.svelte';
+  import CodeView from './CodeView.svelte';
+  import { fmtBytes } from './kit/actions.js';
+  import { readCapped, capFor } from '../../lib/codeview/readtext.js';
+  import { detectHtmlEncoding, decodeBytes } from '../../lib/codeview/encoding.js';
+  const { item } = $props();
+  const viewer = useViewer();
 
   const SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-forms allow-pointer-lock allow-downloads allow-presentation';
   // 与服务端 STORAGE_SHIM 同一段（srcdoc 回落路径用）
   const SHIM = '<script>(function(){function m(){var d=Object.create(null);return{getItem:function(k){k=String(k);return k in d?d[k]:null},setItem:function(k,v){d[String(k)]=String(v)},removeItem:function(k){delete d[String(k)]},clear:function(){for(var k in d)delete d[k]},key:function(i){var a=Object.keys(d);return i<a.length?a[i]:null},get length(){return Object.keys(d).length}}}["localStorage","sessionStorage"].forEach(function(n){try{window[n].length}catch(e){try{Object.defineProperty(window,n,{value:m(),configurable:true})}catch(_){}}});try{document.cookie}catch(e){var c="";try{Object.defineProperty(document,"cookie",{get:function(){return c},set:function(){},configurable:true})}catch(_){}}})();<\/script>';
   // 与服务端 SCROLLBAR_SHIM 同一段：沙箱页里换上 Edge 同款滚动条（平时隐身、滚动才浮出细线）
   const SB_SHIM = "<style>@media (pointer:fine){::-webkit-scrollbar{width:12px;height:12px;background:transparent}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}::-webkit-scrollbar-button{display:none}body::-webkit-scrollbar-track,body::-webkit-scrollbar-corner{background:var(--bsb-bg,transparent)}::-webkit-scrollbar-thumb{background-color:transparent;background-clip:padding-box;border:solid transparent;border-width:0 3px 0 5px;border-radius:999px;min-height:40px}::-webkit-scrollbar-thumb:horizontal{border-width:5px 0 3px 0;min-width:40px}[data-bsb]::-webkit-scrollbar-thumb{background-color:rgba(140,140,140,.72)}::-webkit-scrollbar-thumb:hover{border-width:0 2px;background-color:rgba(140,140,140,.9)}::-webkit-scrollbar-thumb:horizontal:hover{border-width:2px 0}}</style><script>(function(){if(!window.matchMedia||!matchMedia('(pointer: fine)').matches)return;var D=document,R=D.documentElement,T=new WeakMap(),H=null;function s(e){if(!e.hasAttribute('data-bsb'))e.setAttribute('data-bsb','');clearTimeout(T.get(e))}function l(e){clearTimeout(T.get(e));T.set(e,setTimeout(function(){if(e!==H)e.removeAttribute('data-bsb')},1000))}function o(c){return c&&c!=='transparent'&&!/^rgba\\(.*,\\s*0\\)$/.test(c)}function g(){var c=getComputedStyle(R).backgroundColor;if(!o(c)&&D.body)c=getComputedStyle(D.body).backgroundColor;if(!o(c)&&D.elementsFromPoint){var a=D.elementsFromPoint(R.clientWidth-2,innerHeight/2);for(var i=0;i<a.length&&!o(c);i++)c=getComputedStyle(a[i]).backgroundColor}if(!o(c))c='#fff';if(R.style.getPropertyValue('--bsb-bg')!==c)R.style.setProperty('--bsb-bg',c)}function q(){g();setTimeout(g,450)}D.addEventListener('DOMContentLoaded',function(){q();try{var m=new MutationObserver(q),f={attributes:true,attributeFilter:['class','style','data-theme']};m.observe(R,f);m.observe(D.body,f)}catch(_){}});addEventListener('load',q);D.addEventListener('scroll',function(v){var e=v.target===D?(D.body||R):v.target;if(!(e instanceof Element))return;s(e);if(e!==H)l(e)},{capture:true,passive:true});D.addEventListener('mousemove',function(v){var e=v.target,n=null;if(e instanceof Element){if((e===R||e===D.body)&&((v.clientX>=R.clientWidth&&innerWidth>R.clientWidth+1)||(v.clientY>=R.clientHeight&&innerHeight>R.clientHeight+1)))n=D.body||R;else if(e!==R&&((v.offsetX>=e.clientWidth&&e.offsetWidth>e.clientWidth+1&&e.scrollHeight>e.clientHeight)||(v.offsetY>=e.clientHeight&&e.offsetHeight>e.clientHeight+1&&e.scrollWidth>e.clientWidth)))n=e}if(n===H)return;if(H)l(H);H=n;if(H)s(H)},{passive:true})})();<\/script>";
+  // Esc 中继：页面没自己处理掉的 Esc（冒泡到 window 且没 preventDefault）告诉父页；加载即报到一次
+  const KEY_SHIM = '<script>(function(){try{parent.postMessage({__bridgeHv:"ready"},"*")}catch(_){}addEventListener("keydown",function(e){if(e.key==="Escape"&&!e.defaultPrevented&&!e.isComposing){try{parent.postMessage({__bridgeHv:"esc"},"*")}catch(_){}}})})();<\/script>';
   function withShim(html) {
     const m = /<meta\b[^>]*charset[^>]*>/i.exec(html.slice(0, 1024)) || /<head\b[^>]*>/i.exec(html) || /<html\b[^>]*>/i.exec(html) || /<!doctype[^>]*>/i.exec(html);
     const at = m ? m.index + m[0].length : 0;
-    return html.slice(0, at) + SHIM + SB_SHIM + html.slice(at);
+    return html.slice(0, at) + SHIM + SB_SHIM + KEY_SHIM + html.slice(at);
   }
 
   let src = $state('');        // 挂载模式：iframe src
@@ -72,14 +89,54 @@
   }
   // 页面 load 要等全部图片/音视频，素材多的课件能拖好几秒——先让首屏露出来，进度线继续走。
   function armReveal() { revealTimer = setTimeout(() => { ready = true; }, 1200); }
+  let relayOk = false;         // 页里的 Esc 中继报到了：焦点可以交给页面
+  // 键盘翻页类页面（课件 / PPT）开箱即用：焦点交给页面，方向键/空格直接到它手里——前提是 Esc 能中继出来、页面已载完、没在看源码
+  function focusPage() { if (relayOk && loaded && !source) { try { frame?.focus(); } catch {} } }
   function onFrameLoad() {
     clearTimeout(revealTimer);
     ready = true; loaded = true;
-    // 键盘翻页类页面（课件 / PPT）开箱即用：焦点交给页面，方向键/空格直接到它手里
-    try { frame?.focus(); } catch {}
+    focusPage();
+  }
+  function onMessage(e) {
+    if (!frame || e.source !== frame.contentWindow) return;
+    const k = e.data?.__bridgeHv;
+    if (k === 'ready') { relayOk = true; focusPage(); }   // 中继比 load 晚到（极少）：这时再交焦点
+    else if (k === 'esc') { if (document.fullscreenElement) return; viewer.requestClose(); }
+  }
+
+  // —— 源码视图 ——
+  let source = $state(false);
+  let srcText = $state(null), srcErr = $state(''), srcTrunc = $state(null);   // srcTrunc: { shown, total }
+  // 自动换行：记在本机（同 DocViewer 的 pv.wrap.<类别>）；没记过时触屏默认开——手机上压成一行的页面不换行就只能横着划
+  let wrap = $state((() => { try { const w = localStorage.getItem('pv.wrap.html'); if (w != null) return w === '1'; } catch {} return viewer.touch; })());
+  let wrapSeen = false;   // 首轮是读出来的初值，不回写（没动过就别替用户记一个默认）
+  $effect(() => { const w = wrap; if (!wrapSeen) { wrapSeen = true; return; } try { localStorage.setItem('pv.wrap.html', w ? '1' : '0'); } catch {} });
+  let cv = $state(null);
+  let srcCtl = null;
+  async function loadSource() {
+    srcErr = ''; srcText = null; srcTrunc = null;
+    srcCtl?.abort();
+    const ctl = srcCtl = new AbortController();
+    try {
+      if (item.text != null) { srcText = item.text; return; }
+      const r = await readCapped(item.url, { cap: capFor(viewer.touch), size: item.size, signal: ctl.signal });
+      if (ctl.signal.aborted) return;
+      const det = detectHtmlEncoding(r.bytes);
+      srcText = decodeBytes(r.bytes, det.encoding, { partial: r.truncated });
+      srcTrunc = r.truncated ? { shown: r.bytes.length, total: r.total } : null;
+    } catch (e) { if (!ctl.signal.aborted) srcErr = String(e?.message || e); }
+  }
+  async function toggleSource() {
+    source = !source;
+    if (source) {
+      if (srcText == null && !srcErr) loadSource();
+      else { await tick(); cv?.focus(); }
+    } else { await tick(); focusPage(); }
   }
 
   async function reload() {
+    if (source) { srcText = null; loadSource(); return; }   // 源码视图里刷新＝重读源码
+    relayOk = false;
     if (srcdoc != null && item.text == null) { srcdoc = null; await resolve(); }
     else { ready = false; loaded = false; armReveal(); }
     gen++;
@@ -104,67 +161,69 @@
   }
   function onFsChange() { full = !!document.fullscreenElement && document.fullscreenElement === stage; }
 
-  async function saveNative() { await nativeWorkspaceSaveAs(item.saveTarget.rel, item.nativeLocation); }
+  const openExternal = () => { if (src) window.open(src, '_blank', 'noopener,noreferrer'); };
+  const srcReady = $derived(source && srcText != null && !!cv);
+  // 主工具 ≤3：页面态 = 源码 / 刷新 / 全屏（无全屏能力时换成「在浏览器中打开」）；源码态 = 源码（按下）/ 自动换行 / 查找。
+  // 其余进 ⋮：在浏览器中打开、源码态的跳到行。
+  $effect(() => viewer.declare({
+    tools: () => [
+      { id: 'source', icon: 'code', label: source ? t('查看页面') : t('源码'), kbd: 'Ctrl+U', active: source, onClick: toggleSource },
+      ...(source ? [
+        { id: 'wrap', icon: 'wrap', label: t('自动换行'), kbd: 'Alt+Z', active: wrap, onClick: () => { wrap = !wrap; }, disabled: !srcReady },
+        { id: 'find', icon: 'search', label: t('查找'), kbd: 'Ctrl+F', onClick: () => cv?.openFind(), disabled: !srcReady },
+      ] : [
+        { id: 'refresh', icon: 'refresh', label: t('刷新'), kbd: 'F5', onClick: reload, disabled: !!err },
+        canFull ? { id: 'full', icon: full ? 'exitFullscreen' : 'fullscreen', label: full ? t('退出全屏') : t('全屏'), onClick: toggleFull, disabled: !!err }
+          : src && { id: 'external', icon: 'external', label: t('在浏览器中打开'), href: src },
+      ]),
+    ].filter(Boolean),
+    menu: () => [
+      source && srcReady && { label: t('跳到行…'), icon: 'gotoLine', kbd: 'Ctrl+G', onSelect: () => cv?.openGoto() },
+      source && { label: t('刷新'), icon: 'refresh', kbd: 'F5', onSelect: reload },
+      src && canFull && { label: t('在浏览器中打开'), icon: 'external', onSelect: openExternal },
+    ].filter(Boolean),
+    keys: (e) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && !e.shiftKey && !e.altKey && (e.key === 'u' || e.key === 'U')) { toggleSource(); return true; }
+      if (e.key === 'F5' && !mod && !e.shiftKey) { reload(); return true; }
+      if (source && cv && cv.handleKey(e)) return true;
+      return false;
+    },
+  }));
 
   onMount(() => {
     resolve();
     document.addEventListener('fullscreenchange', onFsChange);
     document.addEventListener('securitypolicyviolation', onCspViolation);
+    window.addEventListener('message', onMessage);
     return () => {
       clearTimeout(revealTimer);
+      srcCtl?.abort();
       document.removeEventListener('fullscreenchange', onFsChange);
       document.removeEventListener('securitypolicyviolation', onCspViolation);
+      window.removeEventListener('message', onMessage);
     };
   });
 </script>
-
 <div class="hv">
-  <header class="hv-bar">
-    <button class="hv-btn" aria-label={t('返回')} title={t('返回')} onclick={onClose}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5" /></svg>
-    </button>
-    <div class="hv-title" title={item.name}>
-      <svg class="hv-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.25" /><path d="M3.75 12h16.5M12 3.75c2.3 2.4 3.4 5.15 3.4 8.25S14.3 17.85 12 20.25C9.7 17.85 8.6 15.1 8.6 12S9.7 6.15 12 3.75Z" /></svg>
-      <span class="hv-name">{item.name}</span>
-    </div>
-    <div class="hv-tools">
-      <button class="hv-btn" aria-label={t('刷新')} title={t('刷新')} onclick={reload} disabled={!!err}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19.25 12a7.25 7.25 0 1 1-2.12-5.13" /><path d="M19.5 4.75v3.75h-3.75" /></svg>
-      </button>
-      {#if canFull}
-        <button class="hv-btn" aria-label={full ? t('退出全屏') : t('全屏')} title={full ? t('退出全屏') : t('全屏')} onclick={toggleFull} disabled={!!err}>
-          {#if full}
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4.75V9.5H4.75M14.5 4.75V9.5h4.75M9.5 19.25V14.5H4.75M14.5 19.25V14.5h4.75" /></svg>
-          {:else}
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.75 9.25v-4.5h4.5M19.25 9.25v-4.5h-4.5M4.75 14.75v4.5h4.5M19.25 14.75v4.5h-4.5" /></svg>
-          {/if}
-        </button>
-      {/if}
-      {#if src}
-        <a class="hv-btn" href={src} target="_blank" rel="noopener noreferrer" aria-label={t('在浏览器中打开')} title={t('在浏览器中打开')}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.75 4.75h5.5v5.5M19 5l-8 8" /><path d="M17.25 13.75v4a1.5 1.5 0 0 1-1.5 1.5h-9.5a1.5 1.5 0 0 1-1.5-1.5v-9.5a1.5 1.5 0 0 1 1.5-1.5h4" /></svg>
-        </a>
-      {/if}
-      {#if item.nativeLocation && item.saveTarget?.rel}
-        <button class="hv-btn" aria-label={t('另存为…')} title={t('另存为…')} onclick={saveNative}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.75v10.5M7.75 11 12 15.25 16.25 11" /><path d="M5 19.25h14" /></svg>
-        </button>
-      {:else if item.downloadHref}
-        <a class="hv-btn" href={item.downloadHref} download={item.name} aria-label={saveLabel(t('下载'))} title={saveLabel(t('下载'))} onclick={(e) => interceptSave(e, { url: item.downloadHref, name: item.name, path: item.absPath || '' })}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.75v10.5M7.75 11 12 15.25 16.25 11" /><path d="M5 19.25h14" /></svg>
-        </a>
+  <div class="hv-progress" class:on={!source && !loaded && !err}></div>
+  {#if source}
+    <div class="hv-src" data-pv-source>
+      {#if srcErr}
+        <ViewerState kind="error" icon="code" title={t('打开失败：{reason}', { reason: tr(srcErr) })} onRetry={loadSource} />
+      {:else if srcText == null}
+        <ViewerState kind="loading" />
+      {:else}
+        {#if srcTrunc}
+          <div class="hv-note" role="status">{srcTrunc.total ? t('仅显示前 {n}（共 {total}）', { n: fmtBytes(srcTrunc.shown), total: fmtBytes(srcTrunc.total) }) : t('仅显示前 {n}', { n: fmtBytes(srcTrunc.shown) })}</div>
+        {/if}
+        <div class="hv-code"><CodeView bind:this={cv} text={srcText} name={item.name} lang="html" bind:wrap /></div>
       {/if}
     </div>
-    <div class="hv-progress" class:on={!loaded && !err}></div>
-  </header>
-
-  <div class="hv-stage" bind:this={stage}>
+  {/if}
+  <div class="hv-stage" class:hv-off={source} bind:this={stage} inert={source || null}>
     {#if err}
-      <div class="hv-msg">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.25" /><path d="M12 8v4.75M12 15.9v.1" /></svg>
-        <div class="hv-msg-t">{t('打开失败：{reason}', { reason: tr(err) })}</div>
-        <button class="hv-retry" onclick={resolve}>{t('重试')}</button>
-      </div>
+      <ViewerState kind="error" icon="globe" title={t('打开失败：{reason}', { reason: tr(err) })} onRetry={resolve} />
     {:else if src || srcdoc != null}
       {#key gen}
         {#if src}
@@ -174,65 +233,32 @@
         {/if}
       {/key}
     {/if}
+    <!-- 页面露出来之前：统一的加载态（延迟 300ms 才出转圈，快的页面不闪）；露出后只剩顶边细进度线等剩余资源 -->
+    {#if !ready && !err}<ViewerState kind="loading" />{/if}
   </div>
 </div>
 
 <style>
-  /* 主题令牌：bridge 暗色为默认，亮色挂 html[data-theme="light"]。与应用外框同一块色，
-     查看器像应用里的一页，而不是一张压上来的白纸。 */
-  .hv {
-    --hv-bar: #1c1c1b; --hv-line: rgba(255, 255, 255, .07); --hv-fg: rgba(250, 249, 245, .93);
-    --hv-dim: rgba(250, 249, 245, .5); --hv-hover: rgba(255, 255, 255, .075); --hv-press: rgba(255, 255, 255, .12);
-    --hv-stage: #151514; --hv-run: rgba(250, 249, 245, .55);
-    position: fixed; inset: 0; z-index: 1; display: flex; flex-direction: column;
-    background: var(--hv-stage); color: var(--hv-fg);
-  }
-  :global(html[data-theme="light"]) .hv {
-    --hv-bar: #faf9f5; --hv-line: rgba(31, 30, 29, .09); --hv-fg: #1f1e1d;
-    --hv-dim: rgba(31, 30, 29, .5); --hv-hover: rgba(31, 30, 29, .055); --hv-press: rgba(31, 30, 29, .1);
-    --hv-stage: #f0eee8; --hv-run: rgba(31, 30, 29, .45);
-  }
+  /* 配色走 lib/doctheme.css 的 --md-*（.hv 在其作用域里，暗 / 亮两套与 md、PDF 同值）。 */
+  .hv { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--md-stage); color: var(--md-fg); }
 
-  /* 顶栏让开系统状态栏（--sat，apk 原生注入），与 DocViewer/PdfView/OfficeView 同一规矩。
-     --pv-bar-h：宿主可调（手机工作台 sheet 里收得更矮）。 */
-  .hv-bar {
-    position: relative; flex: none; box-sizing: border-box;
-    height: calc(var(--pv-bar-h, 44px) + var(--sat, 0px)); padding: var(--sat, 0px) 6px 0;
-    display: flex; align-items: center; gap: 2px;
-    background: var(--hv-bar); box-shadow: inset 0 -1px 0 var(--hv-line);
-  }
-  .hv-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 0 6px 0 2px; }
-  .hv-glyph { width: 15px; height: 15px; flex: none; color: var(--hv-dim); }
-  .hv-name { min-width: 0; font-size: 13.5px; font-weight: 550; letter-spacing: .005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .hv-tools { flex: none; display: flex; align-items: center; gap: 1px; }
-  .hv-btn {
-    width: 32px; height: 32px; flex: none; display: grid; place-items: center; padding: 0;
-    border: 0; border-radius: 8px; background: none; color: var(--hv-dim);
-    cursor: pointer; text-decoration: none; transition: background-color .12s, color .12s;
-  }
-  .hv-btn:first-child { color: var(--hv-fg); }
-  .hv-btn:hover { background: var(--hv-hover); color: var(--hv-fg); }
-  .hv-btn:active { background: var(--hv-press); }
-  .hv-btn:disabled { opacity: .35; pointer-events: none; }
-  .hv-btn:focus-visible { outline: 1.5px solid var(--hv-run); outline-offset: -1.5px; }
-  .hv-btn svg { width: 18px; height: 18px; }
-
-  /* 加载进度：工具栏底边一根细线来回走，载完淡出 */
-  .hv-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; overflow: hidden; opacity: 0; transition: opacity .3s; pointer-events: none; }
+  /* 加载进度：舞台顶边一根细线来回走（紧贴顶栏下沿），载完淡出 */
+  .hv-progress { position: absolute; z-index: 2; left: 0; right: 0; top: 0; height: 2px; overflow: hidden; opacity: 0; pointer-events: none;
+    transition: opacity var(--mo-base) var(--ea-fade); }
   .hv-progress.on { opacity: 1; }
-  .hv-progress::before { content: ''; position: absolute; top: 0; bottom: 0; width: 32%; border-radius: 2px; background: var(--hv-run); animation: hv-run 1.15s cubic-bezier(.45, 0, .25, 1) infinite; }
+  .hv-progress::before { content: ''; position: absolute; top: 0; bottom: 0; width: 32%; border-radius: 2px; background: var(--md-fg-3);
+    animation: hv-run 1.15s var(--ea-std) infinite; }
   @keyframes hv-run { from { transform: translateX(-100%); } to { transform: translateX(320%); } }
   @media (prefers-reduced-motion: reduce) { .hv-progress::before { animation-duration: 2.4s; } }
 
-  .hv-stage { flex: 1; position: relative; min-height: 0; background: var(--hv-stage); }
+  .hv-stage { flex: 1; position: relative; min-height: 0; background: var(--md-stage); }
   /* 网页默认画布是白的：iframe 自己铺白，但就绪前隐身，避免深色界面上先闪一下白 */
-  .hv-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; opacity: 0; transition: opacity .16s ease-out; }
+  .hv-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; opacity: 0; transition: opacity var(--mo-quick) var(--ea-fade); }
   .hv-frame.ready { opacity: 1; }
   .hv-stage:fullscreen { background: #000; }
-
-  .hv-msg { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; color: var(--hv-dim); }
-  .hv-msg svg { width: 28px; height: 28px; }
-  .hv-msg-t { max-width: 420px; font-size: 13.5px; line-height: 1.5; }
-  .hv-retry { margin-top: 4px; height: 30px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--hv-hover); color: var(--hv-fg); font: inherit; font-size: 13px; cursor: pointer; }
-  .hv-retry:hover { background: var(--hv-press); }
+  /* 源码态：页面 iframe 留着（不重载、状态不丢），只是不可见不可交互 */
+  .hv-stage.hv-off { visibility: hidden; }
+  .hv-src { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; background: var(--md-bg); }
+  .hv-code { flex: 1; position: relative; min-height: 0; }
+  .hv-note { flex: none; padding: 8px 16px; font-size: 12.5px; line-height: 18px; color: var(--md-fg-2); background: var(--md-bg-2, var(--md-stage)); border-bottom: 1px solid var(--md-line); }
 </style>

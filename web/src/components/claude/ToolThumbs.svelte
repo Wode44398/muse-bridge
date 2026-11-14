@@ -3,8 +3,9 @@
   //   · 一排 24px 高的小图，最多 3 张，多出来的在前面写「+N」；窄屏只留最后一张、写 +N-1；
   //   · 运行中始终跟随最新几张（列表本身按时间追加，取尾巴即可）；
   //   · 悬停 150ms 弹预览卡（大图 + 那一步的标题 + 「n / 共 m」），触屏没有悬停；
-  //   · 点开全屏灯箱，在本组所有图片之间翻页。
-  import ImgLightbox from '../ImgLightbox.svelte';
+  //   · 点开 = 统一查看器里的会话画廊（本会话所有图片按出现顺序，从这张开始翻）；
+  //     子 agent 面板里的截图不在主会话消息里，找不到时就在本组截图之间翻。
+  import { openChatImage, toolKey, toolDescriptor } from '../../lib/chatGallery.js';
   import { mediaFallbackUrl } from '../../lib/server.js';
   import { t } from '../../lib/i18n.js';
 
@@ -15,15 +16,16 @@
   const hidden = $derived(Math.max(0, shots.length - shown.length));
   const offset = $derived(shots.length - shown.length);
 
-  let lb = $state({ open: false, index: 0 });
   let hover = $state(-1);   // 悬停中的图在 shots 里的下标
   let timer = 0;
   function enter(i) { clearTimeout(timer); timer = setTimeout(() => (hover = i), 150); }
   function leave() { clearTimeout(timer); hover = -1; }
-  function open(e, i) { e.stopPropagation(); leave(); lb = { open: true, index: i }; }
+  function open(e, i) {
+    e.stopPropagation();
+    leave();
+    openChatImage(toolKey(shots[i]), e.currentTarget, { items: shots.map(toolDescriptor), index: i });
+  }
   $effect(() => () => clearTimeout(timer));
-  // 灯箱挂到 body：缩略图条在消息流里，祖先有 transform / contain（屏幕外跳过渲染），fixed 定位会被困住
-  function portal(node) { document.body.appendChild(node); return { destroy() { node.remove(); } }; }
   // 加载失败自愈（同 ChatMediaImage）：手机在家走局域网直连时 <img> 会整排裂图——fetch 失败会自动降回隧道，
   // <img> 的地址却是渲染时算死的。① 局域网地址 → 隧道 ② 已是隧道就隔 1.5s 带 &r=1 再试一次（瞬时抖动）。
   function onImgError(e) {
@@ -56,7 +58,6 @@
     {/each}
   </span>
 {/if}
-{#if lb.open}<div use:portal><ImgLightbox items={shots} index={lb.index} onClose={() => (lb = { open: false, index: 0 })} onIndex={(n) => (lb.index = n)} /></div>{/if}
 
 <style>
   .thumbs { display: inline-flex; align-items: center; gap: 4px; flex: none; }

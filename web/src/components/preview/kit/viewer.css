@@ -1,0 +1,268 @@
+/* 查看器视觉语言（外框 + 七个子查看器共用的唯一一份）。由 MediaViewer.svelte（ViewerShell）引入，全局生效、类名一律 vw- 前缀。
+   ───────────────────────────────────────────────────────────────────────────
+   明暗：媒体（图片 / 视频 / 音频）恒暗，根挂 .vw-media；文档（md / PDF / Office / 代码 / HTML）随主题，根挂 .vw-doc，
+         读 lib/doctheme.css 的 --md-*（.vw-doc 已在 doctheme 的作用域里）。只留一个强调色：媒体是白、文档是 --md-accent。
+   端：  根挂 .vw-fine（鼠标 / 触控板）或 .vw-touch（手指），判断出自 lib/layout.svelte.js 的 pointer.fine。
+         电脑按钮 32、图标 18、方角 8；触屏按钮视觉 40、命中 44、图标 22、圆形。
+   动效：只用 app.css 的 --mo-* / --ea-*；浮层进出纯 CSS 动画；不动 clip-path / width / height / left / top；
+         压在视频或会动画面上的东西一律半透明实底，不用 backdrop-filter。
+   子查看器内部的样式写在各自组件里，但颜色请读下面的 --vw-* 变量，按钮 / 滑轨 / 胶囊 / 状态直接用这里的类。 */
+
+/* —— 皮肤变量 —— */
+.vw-root {
+  --vw-bh: 44px; --vw-btn: 32px; --vw-ic: 18px; --vw-btn-r: 8px;
+  --vw-top: max(var(--pv-pad-y, 0px), var(--sat, 0px));
+  --vw-bar-h: calc(var(--pv-bar-h, var(--vw-bh)) + var(--vw-top));
+  /* 焦点环：唯一一份令牌，和全局 :focus-visible（app.css）同色同粗；按钮、格子、标签、滑杆都用它 */
+  --vw-focus: var(--coral, #d97757);
+}
+.vw-root.vw-touch { --vw-bh: 52px; --vw-btn: 40px; --vw-ic: 22px; --vw-btn-r: 50%; }
+.vw-media, .vw-root [data-tone="media"] {
+  --vw-bg: #0a0a0c; --vw-fg: #fff; --vw-fg-2: rgba(255, 255, 255, .72); --vw-fg-3: rgba(255, 255, 255, .5);
+  --vw-hover: rgba(255, 255, 255, .12); --vw-press: rgba(255, 255, 255, .18); --vw-line: rgba(255, 255, 255, .12);
+  --vw-accent: #fff; --vw-pri-bg: #fff; --vw-pri-fg: #111113; --vw-sec-bg: rgba(255, 255, 255, .14);
+  --vw-pill-bg: rgba(0, 0, 0, .62); --vw-pill-fg: #fff; --vw-pill-shadow: none;
+  --vw-pop-bg: #262628; --vw-pop-hover: rgba(255, 255, 255, .08); --vw-pop-fg: #f2f2f2; --vw-pop-fg-3: rgba(255, 255, 255, .5);
+  --vw-pop-shadow: 0 0 0 1px rgba(255, 255, 255, .09), 0 8px 24px rgba(0, 0, 0, .5), 0 2px 6px rgba(0, 0, 0, .3);
+  --vw-danger: #ff7a66;
+  --vw-spin-fg: rgba(255, 255, 255, .9); --vw-spin-bg: rgba(255, 255, 255, .2);
+  --vw-rail: rgba(255, 255, 255, .24); --vw-buf: rgba(255, 255, 255, .4); --vw-fill: #fff; --vw-knob: #fff;
+  --vw-float-bg: rgba(26, 26, 28, .9); --vw-drawer-bg: #161618;
+}
+.vw-doc, .vw-root [data-tone="doc"] {
+  --vw-bg: var(--md-bg); --vw-fg: var(--md-fg); --vw-fg-2: var(--md-fg-2); --vw-fg-3: var(--md-fg-3);
+  --vw-hover: rgba(var(--md-ink), .06); --vw-press: rgba(var(--md-ink), .1); --vw-line: rgba(var(--md-ink), .12);
+  --vw-accent: var(--md-accent); --vw-pri-bg: var(--md-fg); --vw-pri-fg: var(--md-bg); --vw-sec-bg: rgba(var(--md-ink), .07);
+  --vw-pill-bg: var(--md-toast-bg); --vw-pill-fg: var(--md-toast-fg); --vw-pill-shadow: var(--md-shadow-sm);
+  --vw-pop-bg: var(--st-menu, var(--md-panel)); --vw-pop-hover: var(--st-hover, rgba(var(--md-ink), .05)); --vw-pop-fg: var(--md-fg); --vw-pop-fg-3: var(--md-fg-3);
+  --vw-pop-shadow: var(--st-menu-shadow, var(--md-shadow-sm));
+  --vw-danger: var(--md-danger);
+  --vw-spin-fg: var(--md-fg-2); --vw-spin-bg: rgba(var(--md-ink), .1);
+  --vw-rail: rgba(var(--md-ink), .14); --vw-buf: rgba(var(--md-ink), .22); --vw-fill: var(--md-accent); --vw-knob: var(--md-accent);
+  --vw-float-bg: var(--md-panel); --vw-drawer-bg: var(--md-panel);
+}
+
+/* —— 根 / 背景 / 舞台 —— */
+.vw-root { position: fixed; inset: 0; z-index: 300; color: var(--vw-fg); outline: none; animation: vw-in var(--mo-base) var(--ea-fade); }
+.vw-root.vw-closing { animation: vw-out var(--mo-quick) var(--ea-accel) forwards; pointer-events: none; }
+@keyframes vw-in { from { opacity: 0; } }
+@keyframes vw-out { to { opacity: 0; transform: scale(.98); } }
+.vw-backdrop { position: absolute; inset: 0; background: var(--vw-bg); }
+.vw-frame { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.vw-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; transform-origin: center; }
+.vw-media .vw-stage { position: absolute; inset: 0; will-change: transform; }
+.vw-page { position: absolute; inset: 0; }
+.vw-media .vw-page { animation: vw-page-in var(--mo-quick) var(--ea-decel); }
+@keyframes vw-page-in { from { opacity: 0; } }
+/* 图片画廊（滑轨）：同一页内翻张不重建，进页也不淡入——相邻张早已解码在槽里，淡入只会多出半透明帧 */
+.vw-media .vw-page.vw-page-still { animation: none; }
+/* 从缩略图放大打开（子查看器 flipIn）：根不做整体淡入，只让背景 / 顶栏 / 底栏 / 浮条淡入，图片自己飞出来 */
+.vw-root.vw-flip-in { animation: none; }
+.vw-flip-in .vw-backdrop, .vw-flip-in .vw-bar, .vw-flip-in .vw-bottom, .vw-flip-in .vw-float { animation: vw-fade-in var(--mo-base) var(--ea-fade); }
+/* 缩回缩略图原位关闭（子查看器 closeAnim 返回 Promise）：根不淡出，背景与 chrome 淡出，图片自己飞回去 */
+.vw-root.vw-flip-out, .vw-root.vw-closing.vw-flip-out { animation: none; pointer-events: none; }
+.vw-flip-out .vw-backdrop, .vw-flip-out .vw-bar, .vw-flip-out .vw-bottom, .vw-flip-out .vw-float, .vw-flip-out .vw-arrow { animation: vw-fade-out var(--mo-quick) var(--ea-fade) forwards; }
+@keyframes vw-fade-out { to { opacity: 0; } }
+.vw-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* —— 顶栏 —— */
+.vw-bar {
+  position: relative; z-index: 5; flex: none; box-sizing: border-box;
+  display: flex; align-items: center; gap: 4px;
+  height: var(--vw-bar-h); padding: var(--vw-top) 8px 0;
+  transition: opacity var(--mo-quick) var(--ea-fade);
+}
+.vw-touch .vw-bar { gap: 4px; padding-left: 4px; padding-right: 6px; }
+.vw-doc .vw-bar { background: var(--md-bg); box-shadow: inset 0 -.5px 0 rgba(var(--md-ink), .12); }
+.vw-bar.vw-bar-overlay { position: absolute; top: 0; left: 0; right: 0; }
+/* 媒体：黑渐变压底（至少 120px、比顶栏多铺 24px，45% 黑起、缓降到 0），白字带一点阴影，白底亮图上也读得清 */
+.vw-media .vw-bar-overlay::before { content: ''; position: absolute; z-index: -1; left: 0; right: 0; top: 0; height: max(120px, calc(100% + 24px)); pointer-events: none;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, .45), rgba(0, 0, 0, .26) 45%, rgba(0, 0, 0, 0)); }
+.vw-media .vw-bar .vw-title, .vw-media .vw-bar .vw-sub { text-shadow: 0 1px 3px rgba(0, 0, 0, .4); }
+.vw-bar.vw-hide, .vw-bottom.vw-hide, .vw-float.vw-hide { opacity: 0; pointer-events: none; }
+.vw-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; padding: 0 6px 0 4px; }
+.vw-title { min-width: 0; font-size: 15px; font-weight: 600; line-height: 1.25; letter-spacing: -.1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vw-sub { min-width: 0; display: flex; align-items: center; gap: 5px; font-size: 12px; line-height: 1.3; color: var(--vw-fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vw-media .vw-sub { color: rgba(255, 255, 255, .7); }
+.vw-bar-end { flex: none; display: flex; align-items: center; gap: 6px; padding-right: 2px; }
+.vw-bar-nav { flex: none; display: flex; align-items: center; gap: 0; padding-right: 2px; }
+html[data-wco="1"] .vw-bar { padding-right: calc(8px + var(--wco-right, 0px)); }
+
+/* —— 按钮 —— */
+.vw-btn {
+  position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: var(--vw-btn); height: var(--vw-btn); padding: 0; border: 0; border-radius: var(--vw-btn-r);
+  background: none; color: inherit; font: inherit; cursor: pointer; text-decoration: none; -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--mo-tap) var(--ea-out), color var(--mo-micro) var(--ea-out), opacity var(--mo-micro) var(--ea-out);
+}
+.vw-btn .vw-ic { --s: var(--vw-ic); }
+.vw-btn:active { background: var(--vw-press); }
+@media (hover: hover) { .vw-btn:hover { background: var(--vw-hover); } }
+.vw-btn:disabled, .vw-btn[aria-disabled="true"] { opacity: .35; pointer-events: none; }
+/* 禁用但要出提示的（浮条「已是最小」这类）：aria-disabled + .vw-dis，悬停照常出 tip，点按由组件自己拦 */
+.vw-btn.vw-dis[aria-disabled="true"] { pointer-events: auto; cursor: default; }
+@media (hover: hover) { .vw-btn.vw-dis[aria-disabled="true"]:hover { background: none; } }
+.vw-btn.vw-dis[aria-disabled="true"]:active { background: none; }
+.vw-btn.on { color: var(--vw-accent); }
+/* 弹层开着时它的触发钮（⋮、倍速…）：只压一层底色，不上强调色（强调色留给「开关已开」） */
+.vw-btn.open { background: var(--vw-hover); }
+.vw-doc .vw-btn.on { background: rgba(var(--md-ink), .07); }
+.vw-btn:focus-visible, .vw-arrow:focus-visible, .vw-toast-act:focus-visible { outline: 2px solid var(--vw-focus); outline-offset: 1px; }
+/* 触屏命中区扩到 44（视觉 40，相邻按钮 ≥4 间距） */
+.vw-touch .vw-btn::after { content: ''; position: absolute; inset: -2px; border-radius: 50%; }
+/* 文字按钮（保存这类）：不撑方块 */
+.vw-btn.vw-txt { width: auto; padding: 0 10px; font-size: 14px; font-weight: 600; border-radius: 999px; }
+.vw-ic { --s: 20px; flex: none; display: inline-flex; width: var(--s); height: var(--s); }
+.vw-ic svg { width: 100%; height: 100%; display: block; }
+
+/* —— 胶囊按钮（状态页 / 提示里的主次按钮）—— */
+.vw-pbtn { height: 36px; padding: 0 18px; border: 0; border-radius: 999px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  background: var(--vw-sec-bg); color: var(--vw-fg); transition: opacity var(--mo-tap) var(--ea-out), transform var(--mo-tap) var(--ea-out); }
+.vw-pbtn.pri { background: var(--vw-pri-bg); color: var(--vw-pri-fg); }
+/* 触屏：视觉 40、命中区上下再扩 2px 到 44（电脑保持 36） */
+.vw-touch .vw-pbtn { position: relative; height: 40px; padding: 0 20px; }
+.vw-touch .vw-pbtn::after { content: ''; position: absolute; inset: -2px 0; }
+.vw-pbtn:active { opacity: .8; transform: scale(.97); }
+@media (hover: hover) { .vw-pbtn:hover { opacity: .9; } }
+
+/* —— 转圈：28px、2.5px 线宽；尺寸用 --s 调 —— */
+.vw-spin { --s: 28px; display: block; flex: none; width: var(--s); height: var(--s); box-sizing: border-box; border-radius: 50%;
+  border: max(1.5px, calc(var(--s) * .09)) solid var(--vw-spin-bg); border-top-color: var(--vw-spin-fg);
+  animation: vw-spin .8s linear infinite, vw-fade-in var(--mo-quick) var(--ea-fade) both; }
+@keyframes vw-spin { to { transform: rotate(360deg); } }
+@keyframes vw-fade-in { from { opacity: 0; } }
+
+/* —— 加载 / 错误 / 不支持 —— */
+.vw-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; color: var(--vw-fg-2); }
+.vw-state-overlay { position: absolute; inset: 0; z-index: 2; }
+.vw-state-loading { pointer-events: none; }
+.vw-state .vw-state-ic { --s: 28px; color: var(--vw-fg-3); }
+.vw-state-t { margin: 2px 0 0; font-size: 14px; font-weight: 600; color: var(--vw-fg); }
+.vw-state-d { margin: 0; max-width: 340px; font-size: 12.5px; line-height: 1.5; color: var(--vw-fg-2); word-break: break-word; }
+.vw-state-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 6px; pointer-events: auto; }
+.vw-state-acts:empty { display: none; }
+
+/* —— 提示 / toast 胶囊 —— */
+.vw-pill { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; font-size: 13px; line-height: 1.35;
+  background: var(--vw-pill-bg); color: var(--vw-pill-fg); box-shadow: var(--vw-pill-shadow); white-space: nowrap; }
+.vw-toasts { position: absolute; z-index: 8; left: 50%; transform: translateX(-50%);
+  bottom: calc(max(var(--vw-bottom, 0px), var(--kb, 0px), var(--sab, 0px)) + 12px);
+  display: flex; flex-direction: column-reverse; align-items: center; gap: 8px; pointer-events: none; max-width: min(88vw, 460px); }
+.vw-toast { max-width: 100%; white-space: normal; text-align: center; animation: vw-pill-in var(--mo-quick) var(--ea-decel) both; }
+.vw-toast.leaving { animation: vw-pill-out var(--mo-quick) var(--ea-accel) forwards; }
+.vw-toast.err { color: #f0a494; }
+.vw-doc .vw-toast.err { color: #f6b3a3; }
+.vw-toast-act { pointer-events: auto; margin-left: 2px; padding: 2px 10px; border: 0; border-radius: 999px; font: inherit; font-size: 12.5px; font-weight: 600;
+  color: inherit; background: rgba(255, 255, 255, .16); cursor: pointer; }
+@keyframes vw-pill-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes vw-pill-out { to { opacity: 0; transform: translateY(4px); } }
+
+/* —— 滑轨（进度 / 音量 / 缩放）——
+   命中区：元素高 20（电脑）/ 44（触屏），轨道 5px 画在正中、平时 scaleY(.6)=3px，悬停 / 拖动 scaleY(1)=5px */
+.vw-track { position: relative; height: 20px; display: flex; align-items: center; cursor: pointer; touch-action: none; outline: none; -webkit-tap-highlight-color: transparent; }
+.vw-touch .vw-track { height: 44px; }
+.vw-track.off { opacity: .4; pointer-events: none; }
+.vw-track-rail { position: absolute; left: 0; right: 0; top: 50%; height: 5px; margin-top: -2.5px; border-radius: 3px; overflow: hidden;
+  background: var(--vw-rail); transform: scaleY(.6); transition: transform var(--mo-micro) var(--ea-out); }
+.vw-track-buf, .vw-track-fill { position: absolute; inset: 0; transform-origin: left center; }
+.vw-track-buf { background: var(--vw-buf); }
+.vw-track-fill { background: var(--vw-fill); }
+.vw-track-pos { position: absolute; left: 0; top: 50%; width: 100%; height: 0; pointer-events: none; }
+.vw-track-knob { position: absolute; left: -8px; top: -8px; width: 16px; height: 16px; border-radius: 50%; background: var(--vw-knob);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .35); transform: scale(.75); transition: transform var(--mo-micro) var(--ea-out); }
+.vw-track.live .vw-track-rail, .vw-track:focus-visible .vw-track-rail { transform: none; }
+.vw-track.live .vw-track-knob { transform: none; }
+@media (hover: hover) { .vw-track:hover .vw-track-rail { transform: none; } .vw-track:hover .vw-track-knob { transform: none; } }
+.vw-track:focus-visible .vw-track-knob { transform: none; box-shadow: 0 0 0 2px var(--vw-focus), 0 1px 4px rgba(0, 0, 0, .35); }
+.vw-bubble { position: absolute; bottom: 14px; left: 0; transform: translateX(-50%); padding: 4px 10px; font-size: 13px; font-variant-numeric: tabular-nums; pointer-events: none; }
+.vw-touch .vw-bubble { bottom: 26px; }
+/* 章节缝（marks）与带缩略帧的气泡（tip 片段在上、时间胶囊在下，整块按实测宽度夹边） */
+.vw-track-gap { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--vw-gap, rgba(0, 0, 0, .6)); }
+.vw-tipbox { position: absolute; bottom: 14px; left: 0; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
+.vw-touch .vw-tipbox { bottom: 26px; }
+.vw-tiptext { padding: 4px 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* —— 底栏：媒体压在画面上（上渐变），文档实底一行 —— */
+.vw-bottom { position: relative; z-index: 5; flex: none; transition: opacity var(--mo-quick) var(--ea-fade); }
+.vw-media .vw-bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: 30px 12px max(10px, var(--sab, 0px));
+  background: linear-gradient(to top, rgba(0, 0, 0, .66), rgba(0, 0, 0, 0)); }
+.vw-doc .vw-bottom { background: var(--md-bg); box-shadow: inset 0 .5px 0 rgba(var(--md-ink), .12); padding: 4px 8px max(4px, var(--sab, 0px)); }
+
+/* —— 电脑端居中浮动工具条（缩放组 / 旋转 / 适应；PDF 页码）—— */
+.vw-float { position: absolute; z-index: 5; left: 50%; bottom: calc(var(--vw-bottom, 0px) + 16px); transform: translateX(-50%);
+  display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 12px; background: var(--vw-float-bg);
+  box-shadow: 0 0 0 1px var(--vw-line), 0 6px 20px rgba(0, 0, 0, .28); transition: opacity var(--mo-quick) var(--ea-fade); }
+.vw-float-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--vw-line); flex: none; }
+.vw-float-txt { min-width: 52px; padding: 0 4px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--vw-fg-2); }
+
+/* —— 画廊左右箭头（电脑；鼠标一动淡入、静止淡出）—— */
+.vw-arrow { position: absolute; z-index: 4; top: 50%; width: 44px; height: 44px; margin-top: -22px; border: 0; border-radius: 50%; padding: 0;
+  display: flex; align-items: center; justify-content: center; color: #fff; background: rgba(0, 0, 0, .42); cursor: pointer;
+  opacity: 0; pointer-events: none; transition: opacity var(--mo-quick) var(--ea-fade), background-color var(--mo-tap) var(--ea-out); }
+.vw-arrow .vw-ic { --s: 22px; }
+.vw-arrow.left { left: 12px; } .vw-arrow.right { right: 12px; }
+.vw-arrow.on, .vw-arrow:focus-visible { opacity: 1; pointer-events: auto; }
+/* 信息抽屉开着（电脑）：右箭头挪到抽屉左边缘，不被盖住 */
+.vw-info-open .vw-arrow.right { right: calc(min(340px, 86%) + 12px); }
+@media (hover: hover) { .vw-arrow:hover { background: rgba(0, 0, 0, .62); } }
+
+/* —— 电脑扁平弹层（菜单）：r12、内距 4、行 32、14px、图标 18 —— */
+.vw-pop-back { position: absolute; inset: 0; z-index: 10; }
+.vw-pop { position: absolute; left: 0; top: 0; z-index: 11; min-width: 208px; max-width: 320px; max-height: calc(100% - 16px); overflow-y: auto;
+  box-sizing: border-box; padding: 4px; border-radius: 12px; background: var(--vw-pop-bg); color: var(--vw-pop-fg); box-shadow: var(--vw-pop-shadow);
+  font-family: var(--sans); font-size: 14px; outline: none; visibility: hidden; scrollbar-width: thin; }
+.vw-pop.placed { visibility: visible; animation: vw-pop-in var(--mo-quick) var(--ea-decel) both; }
+@keyframes vw-pop-in { from { opacity: 0; scale: .96; } }
+.vw-pop-in { animation: vw-fade-in var(--mo-micro) var(--ea-fade) both; }
+.vw-pop-it { width: 100%; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 0; border-radius: 8px; box-sizing: border-box;
+  background: none; color: inherit; font: inherit; font-size: 14px; text-align: left; cursor: pointer; outline: none; white-space: nowrap; }
+.vw-pop-it:focus-visible, .vw-pop-it:active { background: var(--vw-pop-hover); }
+@media (hover: hover) { .vw-pop-it:hover { background: var(--vw-pop-hover); } }
+.vw-pop-it:disabled { opacity: .4; cursor: default; }
+.vw-pop-it.danger { color: var(--vw-danger); }
+.vw-pop-it .vw-ic { --s: 18px; }
+.vw-pop-l { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vw-pop-it:has(.vw-pop-2) { height: auto; min-height: 32px; padding-top: 6px; padding-bottom: 6px; }
+.vw-pop-2 { display: flex; flex-direction: column; gap: 1px; white-space: normal; }
+.vw-pop-2 small { font-size: 12px; line-height: 15px; color: var(--vw-pop-fg-3); }
+.vw-pop-detail { flex: none; color: var(--vw-pop-fg-3); font-size: 13px; }
+.vw-pop-kbd { flex: none; color: var(--vw-pop-fg-3); font: inherit; font-size: 12px; letter-spacing: .2px; }
+.vw-pop-ck { flex: none; width: 16px; display: inline-flex; }
+.vw-pop-ck .vw-ic { --s: 16px; }
+.vw-pop .vw-pop-chev { --s: 14px; color: var(--vw-pop-fg-3); }
+.vw-pop-head { font-weight: 600; }
+.vw-pop-head .vw-ic { --s: 16px; }
+.vw-pop-h { padding: 6px 10px 2px; font-size: 12px; line-height: 16px; color: var(--vw-pop-fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vw-pop-sep { height: 1px; margin: 4px 6px; background: var(--vw-line); }
+
+/* 触屏 ⋯ / 齿轮菜单（ios27 MorphMenu）：行高 40 → 44，满足触屏命中区 */
+.vw-root.vw-touch .mm-it { min-height: 44px; }
+
+/* —— 按钮提示（kit/tooltip.js）—— */
+.vw-tip { position: absolute; left: 0; top: 0; z-index: 12; pointer-events: none; display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border-radius: 6px; font-size: 12px; line-height: 16px; white-space: nowrap;
+  background: rgba(24, 24, 26, .96); color: #f4f4f4; box-shadow: 0 0 0 .5px rgba(255, 255, 255, .1), 0 4px 12px rgba(0, 0, 0, .3);
+  opacity: 0; transition: opacity var(--mo-micro) var(--ea-fade); }
+.vw-tip.on { opacity: 1; }
+.vw-tip kbd { font: inherit; opacity: .62; }
+
+/* —— 文件信息：电脑右侧抽屉 / 触屏 Sheet 共用列表 —— */
+.vw-drawer { position: absolute; z-index: 9; top: var(--vw-bar-h); right: 0; bottom: 0; width: min(340px, 86%); display: flex; flex-direction: column;
+  background: var(--vw-drawer-bg); color: var(--vw-fg); box-shadow: -1px 0 0 var(--vw-line), -12px 0 32px rgba(0, 0, 0, .18); outline: none;
+  animation: vw-drawer-in var(--mo-base) var(--ea-decel) both; }
+@keyframes vw-drawer-in { from { opacity: 0; transform: translateX(16px); } }
+.vw-drawer-h { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 4px 16px; font-size: 14px; font-weight: 600; }
+.vw-drawer-b { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 16px 20px; }
+.vw-info { margin: 0; display: flex; flex-direction: column; }
+.vw-info-row { display: grid; grid-template-columns: 76px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--vw-line, var(--i-sep)); }
+.vw-info-row:last-child { border-bottom: 0; }
+.vw-info dt { font-size: 13px; color: var(--vw-fg-3, var(--i-label2)); }
+.vw-info dd { margin: 0; min-width: 0; }
+.vw-info-v { display: block; width: 100%; padding: 0; border: 0; background: none; color: var(--vw-fg, var(--i-label)); font: inherit; font-size: 13px; line-height: 1.45;
+  text-align: left; overflow-wrap: anywhere; cursor: copy; -webkit-user-select: text; user-select: text; }
+.vw-info dd.mono .vw-info-v { font-family: var(--md-mono, ui-monospace, Menlo, Consolas, monospace); font-size: 12.5px; }
+.vw-touch .vw-info-row { grid-template-columns: 84px 1fr; padding: 11px 4px; }
+.vw-touch .vw-info dt, .vw-touch .vw-info-v { font-size: 15px; }
+.vw-touch .vw-info dt { color: var(--i-label2); }
+.vw-touch .vw-info-v { color: var(--i-label); }
+.vw-touch .vw-info-row { border-bottom-color: var(--i-sep); }

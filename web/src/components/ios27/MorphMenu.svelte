@@ -20,6 +20,8 @@
   //       长按 <MorphMenu {open} point={{ x: e.clientX, y: e.clientY }} ... />（anchor 为空就按 point）。
   //   菜单一直挂着（open 只管展开 / 收起，收起动画才放得完）；按钮 / 按压点在展开那一刻取定，收起途中照旧显示收起前那一份
   //   items / title（调用方关菜单时把状态清空也没关系）。items：{ label, symbol?, icon?, tint?, destructive?, disabled?, detail?, checked?, onclick } 或 { sep: true }。
+  //   header（可选 snippet）：条目上方的一块自定义头（如长按文件菜单顶上的缩略图 + 名称），不参与按住滑选；
+  //   同 items 一样在收起途中保留展开时那一份，调用方让它读一份关菜单时不清空的状态即可。
   // 挂的位置：放在一个本身有不透明底色、包住页面内容的容器里（如 .ws-root），中间别隔会建层叠上下文的父级——
   //   玻璃（backdrop-filter）和装饰（mix-blend）平铺在同一层，玻璃才采得到底下的页面（Chromium 合成面规则，见 glass.js）。
   import { getContext, onMount, untrack } from 'svelte';
@@ -29,7 +31,7 @@
   import { LIQUID, MorphGlass, sdfOf, cssShadow } from '../../lib/liquid/glass.js';
   import { haptic } from '../../lib/dragdrop.svelte.js';
 
-  let { open = false, anchor = null, point = null, neighbors = [], onfuse, items = [], title = '', width = 250, onclose, children } = $props();
+  let { open = false, anchor = null, point = null, neighbors = [], onfuse, items = [], title = '', header = null, width = 250, onclose, children } = $props();
   const ios = getContext('ios27');
   const dark = $derived(!!ios?.dark);
 
@@ -40,9 +42,9 @@
   let sel = $state(-1);        // 高亮的行
 
   // 收起途中显示收起前那一份（调用方关菜单时常把状态清成 null，items 随之变空）
-  let keep = { items: [], title: '' };
+  let keep = { items: [], title: '', header: null };
   const view = $derived.by(() => {
-    if (open || !shown) keep = { items, title };
+    if (open || !shown) keep = { items, title, header };
     return keep;
   });
 
@@ -348,7 +350,10 @@
     const stretchAt = (ex, ey) => `translate(${(Ox - ex + stx).toFixed(3)}px, ${(Oy - ey + sty).toFixed(3)}px) scale(${Sx.toFixed(5)}, ${Sy.toFixed(5)}) translate(${(ex - Ox).toFixed(3)}px, ${(ey - Oy).toFixed(3)}px)`;
     const place = (n, x, y, w, h) => { const s = n.style; s.left = x + 'px'; s.top = y + 'px'; s.width = w + 'px'; s.height = h + 'px'; s.transform = stretchAt(x, y); };
     root.style.visibility = anyGlass ? '' : 'hidden';
-    if (ctl.handedOff) barrierEl.style.visibility = 'visible';   // 交接后玻璃藏了，挡板照挡到收完
+    // 交接后玻璃藏了，挡板照挡到水滴都滴回原位；只剩按钮自己「弹一下」的余量时就放行——
+    // 否则菜单看着已经没了，还有大半秒的点按被它吞掉（选完「多选」紧接着点文件，头一下没反应）
+    const released = ctl.handedOff && ctl.nb.every((n) => n.mode === 'rest');
+    if (ctl.handedOff) barrierEl.style.visibility = released ? '' : 'visible';
     shadowEl.style.visibility = clipEl.style.visibility = bodyOn ? '' : 'hidden';   // 交接后只剩滴回去的水滴
     // 玻璃
     if (ctl.morph) {
@@ -390,7 +395,7 @@
     // 命中：展开到 0.8 之后菜单才接手势，0.3 之后点外面关；收起途中挡板一直挡着——
     // 点按钮本身收起时，抬手那下的 click 落在挡板上，不会又落回按钮把菜单重新打开
     clipEl.style.pointerEvents = c < .8 || closing ? 'none' : 'auto';
-    barrierEl.style.pointerEvents = closing || c > .3 ? 'auto' : 'none';
+    barrierEl.style.pointerEvents = (closing && !released) || (!closing && c > .3) ? 'auto' : 'none';
     // 真按钮：展开前 20% 淡出；收起时隐藏到交接，交接后被「撞」一下
     const tb = trig(ctl.anchor);
     if (tb) {
@@ -527,6 +532,7 @@
       {#if children}
         {@render children()}
       {:else}
+        {#if view.header}{@render view.header()}{/if}
         {#if view.title}<div class="mm-title">{view.title}</div>{/if}
         {#each view.items as it, i (it.sep ? 'sep' + i : it.label + '\x1f' + i)}
           {#if it.sep}

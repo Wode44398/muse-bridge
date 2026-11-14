@@ -142,7 +142,7 @@ test('模型级 agents：a 只给 Claude、b 只给 dimensio、c 两边；两侧
   stop();
 });
 
-test('模型级 agents：某一侧一个不剩就整条不出现；坏值清洗；gemini 去掉 claude；跟服务级取交集', () => {
+test('模型级 agents：某一侧一个不剩就整条不出现；坏值清洗；gemini 与其它协议同规则；跟服务级取交集', () => {
   S._resetModelServicesForTests();
   const h = S.provideModelService('hub', '模型中心', spec({ id: 'only-d', models: [{ id: 'x', agents: ['dimensio'] }, { id: 'y', agents: ['dimensio', 'studio', 7, 'claude-x'] }] }));
   assert.equal(S.modelServices('claude').length, 0, 'Claude 一侧没有模型：整条不出现');
@@ -155,12 +155,12 @@ test('模型级 agents：某一侧一个不剩就整条不出现；坏值清洗�
   assert.deepEqual(S.modelServices()[0].models[0].agents, ['dimensio']);
   assert.equal(S.modelServices('claude').length, 0);
 
-  // gemini 协议：模型上的 claude 也去掉
+  // gemini 协议：和其它协议一样，模型上的 claude 照常保留、Claude 侧能看到
   const g = S.provideModelService('hub', '模型中心', spec({ id: 'gem', protocol: 'gemini', models: [{ id: 'g1', agents: ['claude', 'dimensio'] }, { id: 'g2', agents: ['claude'] }] }));
   const gem = S.modelServices().find((s) => s.sid === 'gem');
-  assert.deepEqual(gem.models.map((m) => m.agents), [['dimensio'], []]);
+  assert.deepEqual(gem.models.map((m) => m.agents), [['claude', 'dimensio'], ['claude']]);
   assert.deepEqual(S.modelServices('dimensio').find((s) => s.sid === 'gem').models.map((m) => m.id), ['g1']);
-  assert.equal(S.modelServices('claude').some((s) => s.sid === 'gem'), false);
+  assert.deepEqual(S.modelServices('claude').find((s) => s.sid === 'gem').models.map((m) => m.id), ['g1', 'g2']);
   g.dispose(); h.dispose();
 });
 

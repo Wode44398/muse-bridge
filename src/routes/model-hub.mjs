@@ -12,7 +12,7 @@
 //   POST /api/model-hub/delete   {id}            → { ok, warnings }
 //   POST /api/model-hub/adopt    {from: 'claude' | 'dimensio' | 'studio', id} → { ok, service, warnings }
 //        claude / dimensio：地址、协议、型号、Key 照抄成一个模型中心服务（一条线路），全部模型去向 = 两边能给的
-//        （Gemini 协议、id 或上下文窗口不合 Claude 规则的只给 dimensio）；Claude 的原服务从模型菜单里隐藏（不停用：记着它的老会话照常能跑）。
+//        （id 或上下文窗口不合 Claude 规则的只给 dimensio）；Claude 的原服务从模型菜单里隐藏（不停用：记着它的老会话照常能跑）。
 //        studio：原地收编（Studio 服务 id 不变，打上托管标；启停、共享照抄，停用 / 备选的模型只进目录）。
 //   GET  /api/model-hub/builtins                → { ok, builtins: [{ id, name, dialect: 'vertex'|'local', enabled, shared, models:[{ id, label, kind, enabled }] }] | null }
 //   POST /api/model-hub/builtin  {id, enabled?, shared?, models?: { 模型 id: bool }} → { ok, builtin }   Studio 的内置媒体服务（Vertex / 本机）

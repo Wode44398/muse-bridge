@@ -30,9 +30,8 @@
   import { activeProfile, listProfiles, canSwitchServers } from '../lib/serverProfiles.js';
   import { openSettings as openSettingsAt } from '../lib/settingsNav.svelte.js';
   import { t, tc, tr } from '../lib/i18n.js';
-  import { ovUrl } from '../lib/overlay.svelte.js';
-  const glassL = $derived(ovUrl('ios27/alert-light.png'));
-  const glassD = $derived(ovUrl('ios27/alert-dark.png'));
+  import glassL from '../visuals/ios27/alert-light.png';
+  import glassD from '../visuals/ios27/alert-dark.png';
 
   let mode = $state('login'); // 'login' | 'register' | 'token' | 'qr'(扫码登录：网页出码、手机扫)
   let username = $state(''), password = $state(''), password2 = $state(''), invite = $state(''), tok = $state('');

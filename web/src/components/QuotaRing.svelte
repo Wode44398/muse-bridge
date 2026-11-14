@@ -112,8 +112,9 @@
   const ctxRow = $derived(session.id
     ? (status.contexts[session.id] || (status.context && status.context.sessionId === session.id ? status.context : null))
     : null);
+  // 轮中实时填充（每次 API 调用后到）比上一轮的精确分布新 → 环按填充画；轮末 ctx_usage 到了又换回分布。
   const ctx = $derived.by(() => {
-    if (usage) return ctxSummary(usage.total, usage.max);
+    if (usage && !(ctxRow && ctxRow.at && ctxRow.at > (usage.at || 0))) return ctxSummary(usage.total, usage.max);
     if (ctxRow) return ctxSummary(ctxRow.used, ctxRow.total);
     return null;
   });

@@ -119,7 +119,7 @@ test('Claude 与 Studio 的老服务：启动时自动并进来；同一个服�
   // Studio：Gemini 与模型中心的「Gemini」同主机、同 Key、共享一致 → 并进去（Studio 那边托管到它名下，id 不变）
   const g = R.getHubService(gem.id);
   assert.deepEqual(g.models.map((m) => [m.id, m.kind, m.agents]),
-    [['gemini-x', 'text', ['dimensio']], ['imagen-4', 'image', ['studio']], ['tts-g', 'voice', ['studio']]]);
+    [['gemini-x', 'text', ['claude', 'dimensio']], ['imagen-4', 'image', ['studio']], ['tts-g', 'voice', ['studio']]]);   // 文本型号照默认两边都给（Gemini 协议也能给 Claude）
   assert.equal(g.media.providerId, 'p-11112222');
   assert.ok(R.catalogView(gem.id).models.some((m) => m.id === 'veo-old'), '备选的进目录');
   assert.ok(calls.some((c) => c[0] === 'adopt' && c[1] === 'p-11112222' && c[2] === gem.id));

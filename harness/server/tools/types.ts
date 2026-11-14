@@ -163,6 +163,9 @@ export interface ToolContext {
   // N26（HT3）：给工作区拍一张只有文件的轮内快照（label 显示在回滚面板）。会话层按 run 挂上、子 agent 经 env 接同一个口；
   // 和上一张一样（没有新内容要护）就不记。何时拍由 loop 判（破坏性命令前、这个 agent 上一张之后写过东西）。永不抛。
   snapshotFiles?: (label: string) => Promise<void>;
+  // 大工作区的检查点只备份编辑工具改过的文件（checkpoints.ts 的 scope touched）：Write / Edit 改一个文件之前先调它，
+  // 会话层把这个文件此刻的内容补进这一轮的检查点。会话层按 run 挂上、子 agent 经 env 接同一个口；永不抛。
+  beforeFileWrite?: (abs: string) => Promise<void>;
   completeMemoryAudit?: (
     decision: "updated" | "none",
     reason: string,

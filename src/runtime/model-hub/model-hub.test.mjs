@@ -80,12 +80,13 @@ test('发布：两个 agent 都拿到指向网关的服务；型号能力 = 用�
   assert.ok(S.modelServices().some((x) => x.sid === s.id));
 });
 
-test('Gemini 协议的服务只给 dimensio', () => {
+test('Gemini 协议的服务可以同时给 Claude 和 dimensio', () => {
   const s = R.createHubService(svcInput({ name: 'G', kind: 'gemini', baseUrl: UP + '/v1beta', agents: ['claude', 'dimensio'], models: ['gemini-4-argon'], lines: [{ key: 'g-1' }] }));
-  assert.deepEqual(s.agents, ['dimensio']);
+  assert.deepEqual(s.agents, ['claude', 'dimensio']);
   const pub = S.modelServices().find((x) => x.sid === s.id);
   assert.equal(pub.protocol, 'gemini');
-  assert.deepEqual(pub.agents, ['dimensio']);
+  assert.deepEqual(pub.agents, ['claude', 'dimensio']);
+  assert.ok(S.modelServices('claude').some((x) => x.sid === s.id), 'Claude 侧能看到');
   assert.ok(pub.models[0].efforts.length >= 3);   // 思考档位来自知识层
   R.deleteHubService(s.id);
   assert.ok(!S.modelServices().some((x) => x.sid === s.id));

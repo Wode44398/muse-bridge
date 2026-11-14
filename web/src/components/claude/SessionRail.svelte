@@ -110,12 +110,12 @@
   const branch = $derived(dock.meta?.git ? (dock.meta.branch || '') : '');
   const isWt = $derived(!!dock.meta?.worktree);
 
-  // —— 上下文（与用量圆环同一份：status.usages 优先，旧 status.contexts 兜底）——
+  // —— 上下文（与用量圆环同一份：status.usages 精确分布优先；轮中实时填充 status.contexts 比它新时用填充）——
   const ctx = $derived.by(() => {
     if (!sid) return null;
     const u = status.usages[sid];
-    if (u) return { ...ctxSummary(u.total, u.max), used: u.total, max: u.max };
     const c = status.contexts[sid] || (status.context && status.context.sessionId === sid ? status.context : null);
+    if (u && !(c && c.at && c.at > (u.at || 0))) return { ...ctxSummary(u.total, u.max), used: u.total, max: u.max };
     return c ? { ...ctxSummary(c.used, c.total), used: c.used, max: c.total } : null;
   });
   const ctxPct = $derived(ctx && ctx.pct != null ? ctx.pct : null);
@@ -495,7 +495,7 @@
                   <button class="rbtn" disabled={session.busy || compacting || ui.offline} onclick={() => send('/compact', [])}>{compacting ? t('压缩中…') : t('压缩')}</button>
                 </div>
               {:else}
-                <div class="rr"><span class="rr-dim">{t('这个会话还没有上下文用量数据，发一条消息后就有')}</span></div>
+                <div class="rr"><span class="rr-dim">{session.busy ? t('等第一次模型回复后显示上下文用量') : t('这个会话还没有上下文用量数据，发一条消息后就有')}</span></div>
               {/if}
             </div>
           {/if}

@@ -535,9 +535,9 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
   });
   // 逐号用量（5 小时 / 每周 / Fable 周限额）：来自 Claude Code 真实请求带回的额度信息，闲置的号是上次使用时的数据
   // （source:'last-use'）；配了 overlay 的用量来源就交给它（见 account-usage.mjs）。?force=1 强刷。
-  router.on('GET', '/api/admin/claude-accounts/usage', async (req, res) => {
+  router.on('GET', '/api/admin/claude-accounts/usage', async (req, res, url) => {
     if (!settingsGate(req, res)) return;
-    const force = /[?&]force=1/.test(req.url || '');
+    const force = url.searchParams.get('force') === '1';
     J(res, { usage: await accountUsage.poolUsage({ force }) });
   });
   // 号池智能路由（可选，默认关）：开关 + 各号是否被判不可用 + 最近的自动切换。

@@ -7,6 +7,8 @@
 //   localRoots() -> [{id,name,mode}]（新 apk）/ removeLocalRoot(id) / hasLocalRoot() / localRootName()
 //   localList(rel) -> {items:[{name,isDir,size,mtime}]}（rel='' 时项带 {label,root:true,mode}）
 //   localReadText(rel) / localReadB64(rel) / localWrite(rel,content,b64) / clearLocalRoot()（清全部）
+//   新 apk（hasLocalPreview）：localStat / localExif / localSaveToGallery / localSetWallpaper / canReveal+localReveal /
+//   hasPip+enterPip+setPipAuto / keepScreenOn；异步的经 window.__bridgeLocalDone(token, json) 回。
 //
 // 只在离线 apk WebView 内可用。dev / 在线壳 / 旧 apk 没有这些方法 → hasLocalFs()=false，
 // 前端本地 tab 显示「需在手机 App 内使用」。dev 可注入 window.AndroidStore mock 测前端逻辑。
@@ -69,6 +71,8 @@ export function removeLocalRoot(id) {
 export function localList(rel) {
   try { const r = JSON.parse(S().localList(rel || '')); return r.items || []; } catch { return []; }
 }
+/** 原生 localReadText 只读文件前这么多字节（MainActivity.localReadText）：更大的文件读回来是截断的 */
+export const LOCAL_TEXT_MAX = 2 * 1024 * 1024;
 export function localReadText(rel) { try { return S().localReadText(rel) || ''; } catch { return ''; } }
 export function localReadB64(rel) { try { return S().localReadB64(rel) || ''; } catch { return ''; } }
 export function hasLocalWrite() { const s = S(); return !!(s && typeof s.localWrite === 'function'); }
@@ -126,14 +130,97 @@ export function openWith(url, rel, name, isLocal) {
 // 本地文件原生流式 URL（B6）：指向离线壳的 /__localfile?rel=...，由 MainActivity.serveLocalFile
 // 以带 Range 的方式响应（视频可拖动、PDF.js/office 客户端 fetch 正常），不把整段读进 JS 内存（大视频会爆）。
 // 仅离线 apk 壳内可用（同源 appassets）；dev/在线壳本地 tab 不可用、不会调到。
-export function localFileUrl(rel) {
-  return '/__localfile?rel=' + encodeURIComponent(rel || '');
+// v：可选版本串（建议 localVer(size, mtime)）。原生侧忽略它，只用来让 URL 随文件变——
+// 原生对原图与各档都给 max-age=86400，而 WebResourceResponse 回不了 304，外部改图后只有换 URL 才能失效。
+const vq = (v) => (v ? '&v=' + encodeURIComponent(String(v)) : '');
+/** 版本串：列表项里现成的 size / mtime 拼成 "<size>-<mtime>"；两样都没有返回 ''（URL 不带 v）。 */
+export function localVer(size, mtime) { return size == null && mtime == null ? '' : `${size ?? ''}-${mtime ?? ''}`; }
+export function localFileUrl(rel, v) {
+  return '/__localfile?rel=' + encodeURIComponent(rel || '') + vq(v);
 }
 
 // 本地媒体缩略图 URL（新 apk）：原生生成 320px JPEG（SAF getDocumentThumbnail 优先，兜底
 // 自解码/视频抽帧，磁盘缓存），失败 404 由前端 onerror 兜底。探测 hasLocalThumb 再用。
 export function hasLocalThumb() { const s = S(); return !!(s && typeof s.hasLocalThumb === 'function'); }
-export function localThumbUrl(rel) { return localFileUrl(rel) + '&thumb=1'; }
+export function localThumbUrl(rel, v) { return localFileUrl(rel) + '&thumb=1' + vq(v); }
+
+// —— 新 apk（hasLocalPreview）：衍生档、元数据、存相册 / 设壁纸 / 文件管理器、画中画 ——
+// 旧 apk 没这些方法 → has* 全 false：查看器保持老逻辑（画廊直接拉原图）、菜单不出对应项。
+/** 原生衍生档 + HEIC 转 JPEG + 缓存头 + rel→docId 解析缓存都在（MainActivity.hasLocalPreview）。 */
+export function hasLocalPreview() { try { return S()?.hasLocalPreview?.() === true; } catch { return false; } }
+/** 衍生档：'1' 320（列表图标 / blur 底）| 'grid' 512 | 'preview' 长边 1600（画廊主图）| 'poster' 1080（视频海报）
+ *  | 'max' ≤16.7MP（「原图加载」关着时放大的第一级；只有显式要才出——原图 URL 本身一律回原字节，不静默降档） */
+export function localTierUrl(rel, tier, v) { return localFileUrl(rel) + '&thumb=' + encodeURIComponent(tier || '1') + vq(v); }
+/** HEIC/HEIF 原图：WebView 解不了，原生（Android 9+ ImageDecoder）按原分辨率转成 JPEG 再给（不封顶）。 */
+export function localJpegUrl(rel, v) { return localFileUrl(rel) + '&as=jpeg' + vq(v); }
+/** 原图区域块（新 apk，MainActivity.hasLocalRegion）：放大超过 max 档时按可见区拉原图块（BitmapRegionDecoder + 磁盘缓存）。
+ *  URL = localFileUrl(rel) + '&region=x,y,w,h&w=目标宽'（显示方向 / EXIF 转正后的原图像素，目标宽 ≤w、≤2048，见 ImageView）。
+ *  旧 apk 没这个方法 → false，查看器停在 max 档。 */
+export function hasLocalRegion() { try { return S()?.hasLocalRegion?.() === true; } catch { return false; } }
+
+// 异步原生调用：原生干完回 window.__bridgeLocalDone(token, json)（json 是对象）；超时按失败算
+const waiting = new Map();
+let seq = 0;
+function onLocalDone(token, v) { const f = waiting.get(token); if (f) { waiting.delete(token); f(v); } }
+function nativeAsync(fn, args, ms) {
+  const s = S();
+  if (!s || typeof s[fn] !== 'function') return Promise.resolve({ ok: false, error: t('需更新 App 后使用') });
+  return new Promise((res) => {
+    const token = fn + ':' + (++seq);
+    const timer = setTimeout(() => { waiting.delete(token); res({ ok: false, error: t('操作超时') }); }, ms);
+    waiting.set(token, (v) => { clearTimeout(timer); res(v && typeof v === 'object' ? v : { ok: false }); });
+    window.__bridgeLocalDone = onLocalDone;
+    try { s[fn](...args, token); }
+    catch (e) { clearTimeout(timer); waiting.delete(token); res({ ok: false, error: String(e?.message ?? e) }); }
+  });
+}
+
+/** 单文件元数据（同步，走原生解析缓存、一次 query）：{name,size,mtime,mime}；取不到 null。 */
+export function hasLocalStat() { const s = S(); return !!(s && typeof s.localStat === 'function'); }
+export function localStat(rel) {
+  try { const r = JSON.parse(S().localStat(rel)); return r && r.ok ? r : null; } catch { return null; }
+}
+/** 媒体信息：{w,h,taken,camera,exposure,place,duration}（字段可缺；地点只到城市）。取不到 null。 */
+export function hasLocalExif() { const s = S(); return !!(s && typeof s.localExif === 'function'); }
+export async function localExif(rel) { const r = await nativeAsync('localExif', [rel], 8000); return r && r.ok ? r : null; }
+
+// 分享 / 打开方式的本地便捷版（同名原生 shareFile / openWith 的 isLocal 路径）
+const baseName = (rel) => String(rel || '').split('/').pop();
+export function localShare(rel, name) { return shareFile('', rel, name || baseName(rel), true); }
+export function localOpenWith(rel, name) { return openWith('', rel, name || baseName(rel), true); }
+
+/** 存到相册（图片 → Pictures/Bridge，视频 → Movies/Bridge）：{ok,album} | {error}。Android 9 及以下会先弹存储权限。 */
+export function hasSaveToGallery() { const s = S(); return !!(s && typeof s.localSaveToGallery === 'function'); }
+export async function localSaveToGallery(rel) {
+  const r = await nativeAsync('localSaveToGallery', [rel], 120000);
+  return r.ok ? { ok: true, album: r.album || '' } : { error: r.error || t('操作失败') };
+}
+/** 设为壁纸：拉起系统壁纸裁剪页（失败原生自己 toast）。 */
+export function hasSetWallpaper() { const s = S(); return !!(s && typeof s.localSetWallpaper === 'function'); }
+export function localSetWallpaper(rel) { try { S().localSetWallpaper(rel); return true; } catch { return false; } }
+/** 在文件管理器中显示：各家 ROM 支持不一，原生 canReveal 探一次（结果不会变，记住）。 */
+let revealOk = null;
+export function hasReveal() {
+  if (revealOk == null) { try { const s = S(); revealOk = !!(s && typeof s.canReveal === 'function' && s.canReveal()); } catch { revealOk = false; } }
+  return revealOk;
+}
+export function localReveal(rel) { try { return !!S().localReveal(rel); } catch { return false; } }
+
+// 画中画 / 常亮：进出 PiP 原生派发 window 事件 bridge-pip {detail:{active, closed?}}（closed=小窗被关掉）。
+// 这里顺手给 <html> 挂 .bridge-pip、记 window.__bridgePip，小窗里要藏的界面可直接按它判断。
+export function hasPip() { try { return S()?.hasPip?.() === true; } catch { return false; } }
+export function enterPip(w, h) { try { return !!S().enterPip(Math.round(w) || 16, Math.round(h) || 9); } catch { return false; } }
+/** 播放中开、暂停 / 关查看器时关：开着时按 Home 离开自动进小窗 */
+export function setPipAuto(on, w, h) { try { S()?.setPipAuto?.(!!on, Math.round(w) || 0, Math.round(h) || 0); } catch {} }
+export function keepScreenOn(on) { try { S()?.keepScreenOn?.(!!on); } catch {} }
+if (typeof window !== 'undefined' && !window.__bridgePipHook) {
+  window.__bridgePipHook = true;
+  window.addEventListener('bridge-pip', (e) => {
+    const on = !!e?.detail?.active;
+    window.__bridgePip = on;
+    try { document.documentElement.classList.toggle('bridge-pip', on); } catch {}
+  });
+}
 
 // 图片预览：把 base64 拼成 data URL（按扩展名给 mime）。
 const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml', heic: 'image/heic' };

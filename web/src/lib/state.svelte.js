@@ -30,7 +30,6 @@ export const settings = $state({
   ultracode: false,
   fast: !!(_lp && _lp.fast),       // fast mode（Opus 5/4.8/4.7；加速输出、消耗额外用量）
 
-  style: 'normal',   // Use style: normal/learning/concise/explanatory/formal
   research: false,   // Research 深度研究模式（注入研究指令，放开多轮 WebSearch/Task）
 });
 

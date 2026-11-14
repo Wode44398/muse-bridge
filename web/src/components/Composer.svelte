@@ -2,7 +2,7 @@
   import { uiAlert } from '../lib/dialogs.js';
   import { dragOut, attDragSrc } from '../lib/dragOut.js';
   import { session, settings, caps, compose, status, prefs, ui } from '../lib/state.svelte.js';
-  import { send, stop, bgHoldNow, steer, queueSend, queuedItems, editLastQueued, prewarmNewChat, chat, requestSync } from '../lib/chat.svelte.js';
+  import { send, stop, bgHoldNow, steer, queueSend, queuedItems, editLastQueued, retractableSteers, retractLastSteer, prewarmNewChat, chat, requestSync } from '../lib/chat.svelte.js';
   import SlashMenu from './SlashMenu.svelte';
   import { loadCommands, filterCommands } from '../lib/slashCommands.js';
   import { pluginUi, filterPluginCommands, matchPluginAction, runPluginUi } from '../lib/pluginUi.svelte.js';   // 插件的「/」命令与「＋」菜单项（ctx.ui.*）
@@ -23,14 +23,16 @@
   import { draft, registerComposerReader } from '../lib/composerBridge.svelte.js';
   import { draftText, noteComposerText, startComposerDrafts, uploadThumbUrl } from '../lib/composerDrafts.svelte.js';
   import { t } from '../lib/i18n.js';
-  import ImgLightbox from './ImgLightbox.svelte';
+  import { openPreview } from '../lib/preview.svelte.js';
+  import { rectOf, openChatItem } from '../lib/chatGallery.js';
+  import { currentOutputStyle, outputStyleLabel } from '../lib/outputStyle.svelte.js';   // 输出风格芯片（占原「回复语气」芯片的位置）
   import { cs as claudeCs } from '../lib/claudeSettings.svelte.js';   // 设置 › Claude › 对话 › 输入建议（服务端为准）
 
   let { placeholder = 'Type / for skills' } = $props();
   let field = $state();
   let pickerOpen = $state(false), modelBtn = $state(), pickerDir = $state('up');
   let effortOpen = $state(false), effortBtn = $state(), effortDir = $state('up');
-  let menuOpen = $state(false), plusBtn = $state(), menuDir = $state('up');
+  let menuOpen = $state(false), plusBtn = $state(), menuDir = $state('up'), menuStart = $state('main');
   let fileInput = $state();
   let photoInput = $state();
   let dirInput = $state();
@@ -78,7 +80,11 @@
     if (!effortOpen && effortBtn) { const r = effortBtn.getBoundingClientRect(); effortDir = (window.innerHeight - r.bottom) >= r.top ? 'down' : 'up'; }
     effortOpen = !effortOpen;
   }
-  function toggleMenu() {
+  // 这个会话实际生效的输出风格（会话覆盖 → 设置里的默认）；不是「默认」就在工具条亮羽毛芯片
+  const effOStyle = $derived(currentOutputStyle() || claudeCs.values.outputStyle || 'default');
+  const oStyleOn = $derived(!IS_CSNAP && String(effOStyle).toLowerCase() !== 'default');
+  function toggleMenu(start = 'main') {
+    menuStart = typeof start === 'string' ? start : 'main';
     if (!menuOpen && plusBtn) { const r = plusBtn.getBoundingClientRect(); menuDir = (window.innerHeight - r.bottom) >= r.top ? 'down' : 'up'; }
     menuOpen = !menuOpen;
   }
@@ -244,13 +250,21 @@
   // addFiles 永远拿到空（选文件通路全灭，手机端唯一入口就是它；粘贴/拖拽传真数组不受影响）。
   async function onFiles(e) { await addFiles(filesFromInput(e)); }
   function removeAtt(a) { removeAttachment(compose.attachments, a); }
-  // 点输入栏里的图片缩略图：同消息里的图片一样开灯箱，可在已附的几张图之间左右切
-  let lb = $state({ open: false, items: [], index: 0 });
-  function openAttImage(a) {
+  // 点输入栏里的图片缩略图：统一查看器，在已附的几张图之间左右切（还没发出去，不进会话画廊）。
+  // 用本地 blob: 预览地址，零网络；量缩略图位置给开场动画。
+  function openAttImage(a, el) {
     const imgs = compose.attachments.filter((x) => x.kind === 'image' && x.url);
     const i = imgs.indexOf(a);
     if (i < 0) return;
-    lb = { open: true, items: imgs.map((x) => ({ url: x.url, name: x.name, path: x.path })), index: i };
+    const r = rectOf(el);
+    openPreview(imgs.map((x, j) => ({ origin: 'url', key: 'cmp:' + (x.path || x.url), url: x.url, name: x.name, kind: 'image', ...(j === i && r ? { originRect: r } : {}) })), i);
+  }
+  // 已传上去的文件附件（pdf / 文档 / 音视频…）点名字预览 uploads 里的原件；本机引用、上传中的不给点
+  const UPLOAD_FILE_RE = /[\\/]uploads[\\/]([^\\/]+)$/;
+  function composeDesc(a) {
+    if (a.pending || a.local || !a.path) return null;
+    const file = (UPLOAD_FILE_RE.exec(a.path) || [])[1];
+    return file ? { origin: 'upload', key: 'att:' + file, file, name: a.name } : null;
   }
   const uploading = $derived(compose.attachments.some((a) => a.pending));
 
@@ -454,6 +468,10 @@
     if (e.key === 'ArrowUp' && empty && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && queuedItems(session.id).length) {
       e.preventDefault(); editLastQueued(); return;
     }
+    // 没有排队消息时，↑ / 工作中 Esc 撤回最后一条 Claude 还没读到的插话（它还是虚的）
+    if ((e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey || e.key === 'Escape' && session.busy) && empty && !queuedItems(session.id).length && retractableSteers().length) {
+      e.preventDefault(); retractLastSteer(); return;
+    }
     // 工作中按 Esc：先把最后一条排队消息召回输入框（官方 onEscapeRecall）
     if (e.key === 'Escape' && empty && session.busy && queuedItems(session.id).length) { e.preventDefault(); editLastQueued(); }
   }
@@ -497,7 +515,7 @@
       {#each compose.attachments as a, ai (a.path || 'pending-' + ai)}
         <div class="att" class:img={a.kind === 'image'} class:pending={a.pending} class:dir={a.kind === 'folder' || a.kind === 'chat'} use:dragOut={() => attDragSrc(a)}>
           {#if a.kind === 'image' && a.url}
-            <button class="att-view" aria-label={t('预览图片')} onclick={() => openAttImage(a)}><img src={a.url} alt={a.name} data-fallback={a.local ? undefined : uploadThumbUrl(a.path)} /></button>
+            <button class="att-view" aria-label={t('预览图片')} onclick={(e) => openAttImage(a, e.currentTarget)}><img src={a.url} alt={a.name} data-fallback={a.local ? undefined : uploadThumbUrl(a.path)} /></button>
           {:else if a.kind === 'chat'}
             <!-- 引用对话（侧栏拖一条会话进来，lib/chatQuote.js）：对话气泡图标 + 标题 + 条数 -->
             <span class="att-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12.2c0 3.9-3.6 7-8 7-1.1 0-2.2-.2-3.1-.6L4.5 20l1.2-3.5C4.6 15.3 4 13.8 4 12.2c0-3.9 3.6-7 8-7s8 3.1 8 7z"/><path d="M8.6 11h6.8M8.6 14h4.2"/></svg></span>
@@ -517,7 +535,9 @@
               {/if}
             </span>
           {:else}
-            <span class="att-name">{a.name}</span>
+            {@const desc = composeDesc(a)}
+            {#if desc}<button class="att-name att-open" title={t('预览 {name}', { name: a.name })} onclick={(e) => openChatItem(desc, e.currentTarget)}>{a.name}</button>
+            {:else}<span class="att-name">{a.name}</span>{/if}
           {/if}
           {#if a.pending && a.kind !== 'folder' && a.kind !== 'chat'}<span class="att-spin"></span>{/if}
           <button class="att-x" aria-label={t('移除')} onclick={() => removeAtt(a)}>×</button>
@@ -541,7 +561,7 @@
         <button class="tbtn plus" bind:this={plusBtn} aria-label={t('附件与功能')} onclick={toggleMenu}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
-        {#if menuOpen}<AddMenu dir={menuDir} onClose={() => (menuOpen = false)} onPickFiles={pickFiles} onPickPhotos={pickPhotos} onPickFolder={pickFolder}
+        {#if menuOpen}<AddMenu dir={menuDir} onClose={() => (menuOpen = false)} onPickFiles={pickFiles} onPickPhotos={pickPhotos} onPickFolder={pickFolder} startView={menuStart}
           pluginActions={IS_CSNAP ? [] : pluginUi.composerActions} onPluginAction={runComposerAction} />{/if}
       </div>
       {#if settings.research}
@@ -549,8 +569,8 @@
           <svg viewBox="0 0 20 20" fill="currentColor"><path d={menuIcon('research')} /></svg>
         </button>
       {/if}
-      {#if settings.style !== 'normal'}
-        <button class="chip" aria-label={t('回复语气已开启')} onclick={toggleMenu}>
+      {#if oStyleOn}
+        <button class="chip" aria-label={t('输出风格：{name}', { name: outputStyleLabel(effOStyle) })} title={t('输出风格：{name}', { name: outputStyleLabel(effOStyle) })} onclick={() => toggleMenu('ostyle')}>
           <svg viewBox="0 0 20 20" fill="currentColor"><path d={menuIcon('feather')} /></svg>
         </button>
       {/if}
@@ -599,7 +619,6 @@
   <!-- webkitdirectory：选文件夹（触屏没有文件夹拖拽，这是手机端唯一入口） -->
   <input type="file" hidden bind:this={dirInput} onchange={onDirInput} webkitdirectory="" directory="" />
 </div>
-{#if lb.open}<ImgLightbox items={lb.items} index={lb.index} onClose={() => (lb = { open: false, items: [], index: 0 })} onIndex={(n) => (lb.index = n)} />{/if}
 
 <style>
   /* claude.ai 输入栏原件（ion-dist shared-14 容器 + CSS 的 shadow-composer / -hover / -focus 三态）：
@@ -638,6 +657,7 @@
   .att img { width: 52px; height: 52px; object-fit: cover; display: block; }
   .att-view { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; }
   .att-name { padding: 0 12px; font-size: 13px; color: var(--text); max-width: 170px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .att-open { align-self: stretch; border: 0; background: none; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
   .att-x { position: absolute; top: 0; right: 0; width: 17px; height: 17px; border-radius: 50%; background: rgba(0,0,0,.6); color: #fff; font-size: 13px; line-height: 1; display: flex; align-items: center; justify-content: center; }
   /* 扩大触控命中区到 ~32px（视觉不变）——17px 的删除点手机上极难点中 */
   .att-x::before { content: ''; position: absolute; inset: -8px; }

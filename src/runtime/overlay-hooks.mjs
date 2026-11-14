@@ -11,8 +11,8 @@
 //     号池用量与手机额度环的另一个数据来源（调用方见 account-usage.mjs / usage-probe.mjs；core 是核心交给它的几个函数）
 //   claudeLimitResets(core) → { overview, use, loginStart, loginFinish, loginClear }
 //     订阅号的「重置卡」查看与使用（调用方与接口形状见 limit-resets.mjs）
-//   registerRoutes(router, ctx)   私有接口（见 overlay-web.mjs 的 registerOverlayRoutes）
-// overlay 目录下的 web/ 子目录（素材、字体、前端模块）由 overlay-web.mjs 单独处理，不经这里。
+//   registerRoutes(router, ctx)   私有接口（见下面的 registerOverlayRoutes）
+// overlay 只放服务端钩子（与部署方自己的凭据）。前端视觉资源都在主仓库 web/src/visuals/，随前端构建走，不经 overlay。
 //
 // 加载在本模块求值时完成（顶层 await）：import 了本模块的代码拿到的一定是加载完的结果。overlay 坏了只记日志，核心照常起。
 // 钩子文件别 import 核心模块（会和这里的顶层 await 绕成环）：要用核心的东西，由调用方当参数交给它（见上面的 core）。
@@ -71,6 +71,17 @@ await load();
 
 // 取钩子；没有 overlay / 没有这个钩子 → null。
 export function overlayHook(name) { return Object.hasOwn(hooks, name) ? hooks[name] : null; }
+
+// overlay 的私有接口：钩子 registerRoutes(router, ctx) 存在就调一次（核心路由与扩展路由挂完之后）。
+// 坏了只记日志，不拖垮核心。
+export async function registerOverlayRoutes(router, ctx = {}) {
+  const fn = overlayHook('registerRoutes');
+  if (typeof fn !== 'function') return false;
+  try { await fn(router, ctx); return true; } catch (e) {
+    console.error('[overlay] registerRoutes 钩子出错：', (e && e.message) || e);
+    return false;
+  }
+}
 
 // 诊断用（控制台 / 测试）：加载了哪些文件、各自给了哪些钩子、哪些失败了。
 export function overlayStatus() {

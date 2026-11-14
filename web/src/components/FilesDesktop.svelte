@@ -14,7 +14,7 @@
   import { api, authHeaders } from '../lib/api.js';
   import { apiUrl } from '../lib/server.js';
   import { sendFile } from '../lib/uploads.svelte.js';
-  import { openPreview as openPreviewRaw, cloudFileUrl, preview } from '../lib/preview.svelte.js';
+  import { openPreview as openPreviewRaw, cloudFileUrl, preview, closePreview, previewRemove, previewReplace, previewNext, previewPrev } from '../lib/preview.svelte.js';
   import { openSession, newConversation } from '../lib/chat.svelte.js';
   import { getCachedSessions } from '../lib/cache.js';
   import { titleFor } from '../lib/library.svelte.js';
@@ -24,6 +24,7 @@
     loadAiSessions, normalizeFileQuery, sendFileToAi, shareClipboardText,
     shareRequest, shareResult,
     untitledMdName, COMPRESS_FORMATS, COMPRESS_LEVELS, loadCompressFormats, compressDefaultName, runCompress,
+    makeFileComparator,
   } from '../lib/files-business.js';
   import {
     nativeWorkspaceList, nativeWorkspaceRelease, onNativeWorkspaceChanged, nativeWorkspaceLocations, nativeWorkspaceAddLocation,
@@ -42,11 +43,14 @@
   import { WS_DT } from '../lib/fileDrag.js';
   import { pcLocalMaterial, pcLocalText } from '../lib/pcLocal.js';
   import { t, tc, tr, locale, isEn } from '../lib/i18n.js';
-  import { ovUrl } from '../lib/overlay.svelte.js';
+  import { kindOf as fkKind, iconKindOf, extOf, officeCat } from '../lib/fileKinds.js';
+  import { fmtDur, loadSortPref, saveSortPref, buildSequence, rectOf, typeIconSvg, uiIconSvg, extBadge, nameHtml, watchMeta, cloudThumbable } from '../lib/fileGrid.js';
+  import { askRename } from '../lib/renamePrompt.js';
+  import { tip } from './preview/kit/tooltip.js';
 
   const BASE = import.meta.env.BASE_URL;
   // 文件夹图标：原版资源
-  const wsIcon = $derived(ovUrl('assets/icons/workspace.png'));
+  import wsIcon from '../visuals/assets/icons/workspace.png';
 
   // —— 形态与数据通道 ——
   // 本组件原本是「桌面壳独占 + 原生 IPC」的整页工作空间。为了让【工作台侧栏】在电脑上也用上
@@ -94,7 +98,7 @@
   const wsRoot = $derived(!nativeFs && curLoc?.kind === 'cloud' ? curLoc.root : '');
   const scopedTo = (url, root) => (root ? url + (url.includes('?') ? '&' : '?') + 'ws=' + encodeURIComponent(root) : url);
   // 内嵌时预览留在侧栏（host='dock'），独立分页仍是全屏——影子包装，调用点零改动。
-  const openPreview = (items, idx) => openPreviewRaw(items, idx, { host: previewHost || (embedded ? 'dock' : 'app') });
+  const openPreview = (items, idx, opts = {}) => openPreviewRaw(items, idx, { host: previewHost || (embedded ? 'dock' : 'app'), ...opts });
 
   // 本组件从头到尾拿 rel（根相对路径）当每一项的【主键】：选中、剪贴板、重命名、拖拽、
   // data-rel 全靠它。原生 IPC 每项自带 rel，云端 /api/files 只给 name（+ 搜索结果的 parent），
@@ -148,18 +152,33 @@
   let sortKey = $state('name');         // name | mtime | size | type
   let sortDir = $state(1);              // 1 升 / -1 降
   let view = $state('list');            // list | grid
+  // 图标视图的图标边长档（Ctrl+滚轮 / 状态栏滑杆逐档切；最小档再往小就回列表）
+  const ICON_SIZES = [64, 96, 128, 176, 240];
+  let iconSize = $state(96);
+  let peekOn = $state(false);           // 右侧预览窗格（Alt+P，默认关）
   let sortOpen = $state(false);
   let addOpen = $state(false);
   let hist = { back: [], fwd: [] };     // 导航历史（不需要响应式渲染，仅按钮禁用态用计数）
   let histN = $state({ back: 0, fwd: 0 });
 
-  try {
-    const saved = JSON.parse(localStorage.getItem('bridge.fd.prefs') || '{}');
-    if (saved.view === 'grid' || saved.view === 'list') view = saved.view;
-    if (['name', 'mtime', 'size', 'type'].includes(saved.sortKey)) sortKey = saved.sortKey;
-    if (saved.sortDir === -1) sortDir = -1;
-  } catch {}
-  function savePrefs() { try { localStorage.setItem('bridge.fd.prefs', JSON.stringify({ view, sortKey, sortDir })); } catch {} }
+  {
+    // 排序与手机版共用一份（bridge.files.sort，规则同 makeFileComparator）；没记过时沿用本页旧偏好
+    const old = { key: 'name', dir: 1 };
+    try {
+      const saved = JSON.parse(localStorage.getItem('bridge.fd.prefs') || '{}');
+      if (saved.view === 'grid' || saved.view === 'list') view = saved.view;
+      if (['name', 'mtime', 'size', 'type'].includes(saved.sortKey)) old.key = saved.sortKey;
+      if (saved.sortDir === -1) old.dir = -1;
+      if (ICON_SIZES.includes(saved.iconSize)) iconSize = saved.iconSize;
+      if (saved.peek === true) peekOn = true;
+    } catch {}
+    const s = loadSortPref(old);
+    sortKey = s.key; sortDir = s.dir;
+  }
+  function savePrefs() {
+    try { localStorage.setItem('bridge.fd.prefs', JSON.stringify({ view, sortKey, sortDir, iconSize, peek: peekOn })); } catch {}
+    saveSortPref({ key: sortKey, dir: sortDir });
+  }
 
   // 「最近」是本机索引（每个原生位置一份）：人在云端临时位置里点它，落到 primary 的最近。
   const canRecent = $derived(nativeOk && hasNativeWorkspaceRecent());
@@ -470,20 +489,13 @@
   let recentSort = $state({ key: 'mtime', dir: -1 });
   const effSort = $derived(mode === 'recent' && !searching ? recentSort : { key: sortKey, dir: sortDir });
   const listSource = $derived(searching ? searchItems : mode === 'recent' ? recentItems : items);
-  const rows = $derived.by(() => {
-    const arr = [...listSource];
-    const dirCmp = (a, b) => Number(b.isDir) - Number(a.isDir);
-    const key = effSort.key, dir = effSort.dir;
-    const sizeKey = (it) => (it.isDir ? (dirSizeOf(it)?.size ?? -1) : it.size || 0);
-    const cmp = (a, b) => {
-      if (key === 'mtime') return ((a.mtime || 0) - (b.mtime || 0)) * dir;
-      if (key === 'size') return (sizeKey(a) - sizeKey(b)) * dir;
-      if (key === 'type') return String(extOf(a.name)).localeCompare(String(extOf(b.name))) * dir || a.name.localeCompare(b.name, locale());
-      return a.name.localeCompare(b.name, locale()) * dir;
-    };
-    arr.sort((a, b) => dirCmp(a, b) || cmp(a, b));
-    return arr;
-  });
+  // 比较器与手机版、服务端列表顺序同一套（files-business.js makeFileComparator）：名称自然序（file2 < file10），
+  // 类型按「图标大类.扩展名」，文件夹大小没算出来的排在算出来的后面、不随方向翻转。
+  const rows = $derived.by(() => [...listSource].sort(makeFileComparator({
+    key: effSort.key, dir: effSort.dir, locale: locale(),
+    typeOf: (it) => iconKindOf(it.name) + '.' + extOf(it.name),
+    dirSize: (it) => dirSizeOf(it)?.size ?? null,
+  })));
   const showParentCol = $derived(searching || mode === 'recent');
   const cutSet = $derived(clipboard?.mode === 'cut' && clipboard.locationId === locationId ? new Set(clipboard.rels) : new Set());
   const canPaste = $derived(Boolean(clipboard && clipboard.locationId === locationId && inBrowse));
@@ -762,16 +774,22 @@
     }, { rootMargin: '160px' });
     return () => { io?.disconnect(); io = null; };
   });
-  const thumbSize = () => (view === 'grid' ? 160 : 48);
+  // 列表 48；图标视图按图标边长 × 设备像素比取 160 / 320 / 512 三档（云端 512 走 640 的 grid 档）
+  const thumbSize = () => {
+    if (view !== 'grid') return 48;
+    const px = iconSize * Math.min(3, globalThis.devicePixelRatio || 1);
+    return px <= 160 ? 160 : px <= 320 ? 320 : 512;
+  };
   const thumbKey = (rel) => rel + '@' + thumbSize();
   async function loadThumb(p) {
     const key = thumbKey(p.rel);
     if (p.isDir || thumbs[key] !== undefined) return;
     thumbs[key] = '';   // 占位防重复请求
-    // 云端只有图片有服务端衍生缩略图（sharp）；其余类型留给矢量占位图标，
-    // 别去请求一个必然 404 的地址。
+    // 云端：图片与视频两档都有服务端缩略图；图标视图另有 PDF / Office 首页、音频封面（失败 404，见 thumbBad 退回线稿图标）。
+    // 其余类型别去请求一个必然 404 的地址。
     if (!nativeFs) {
-      if (kindOf(p.name || p.rel) === 'img') thumbs[key] = cloudFileUrl(p.rel, { thumb: true, mt: p.mtime, ws: wsRoot });
+      const grid = view === 'grid';
+      if (cloudThumbable(p.name || p.rel, grid)) thumbs[key] = cloudFileUrl(p.rel, { thumb: !grid || thumbSize() < 512, grid: grid && thumbSize() >= 512, mt: p.mtime, ws: wsRoot });
       return;
     }
     try {
@@ -785,7 +803,9 @@
   }
   // 视图切换（list 48px ↔ grid 160px 两档缓存独立）后，给当前列表按新尺寸补一轮。
   // untrack：hydrateEager 内部读写 thumbs，不能让它成为本效果的依赖（否则每张图回来都重跑）。
-  $effect(() => { view; const list = listSource; untrack(() => hydrateEager(list)); });
+  $effect(() => { view; iconSize; const list = listSource; untrack(() => hydrateEager(list)); });
+  // 缩略图加载失败（云端 404 / 解码失败）：这一档记成空串，格子退回类型线稿图标，也不再重试
+  function thumbBad(rel) { thumbs[thumbKey(rel)] = ''; }
   function thumbWatch(node, p) {
     node.__fd = p;
     const arm = () => { if (io && !p.isDir && thumbs[thumbKey(p.rel)] === undefined) io.observe(node); };
@@ -830,22 +850,15 @@
   }
 
   // —— 打开 ——
-  const OFFICE_EXTS = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf'];
+  // 双击不直接运行的可执行类型（右键仍可显式「用默认应用打开」）——这是安全名单，不是类型词表
   const EXEC_EXTS = ['exe', 'msi', 'bat', 'cmd', 'com', 'scr', 'lnk'];
-  const extOf = (name) => (String(name).split('.').pop() || '').toLowerCase();
-  // 文件管理器词表（与 FilesPanel 同款：img/mov/audio/pdf/zip/md/html/text/doc）。
-  // 注意 preview.svelte.js 的 kindOf 是另一套预览路由词表（image/video/markdown/other），不能混用。
+  // 列表里沿用的短类型码（类型列文案 / 发送给 AI 的能力判断 / 解压入口）：判定全部来自 lib/fileKinds.js 单一词表，与 FilesPanel 同一份映射
+  const KIND_CODE = { image: 'img', video: 'mov', audio: 'audio', pdf: 'pdf', markdown: 'md', html: 'html', text: 'text' };
   function kindOf(name) {
-    const e = extOf(name);
-    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'heic'].includes(e)) return 'img';
-    if (['mp4', 'mov', 'webm', 'mkv', 'avi', 'm4v'].includes(e)) return 'mov';
-    if (['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg'].includes(e)) return 'audio';
-    if (e === 'pdf') return 'pdf';
-    if (['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz'].includes(e)) return 'zip';
-    if (['md', 'markdown'].includes(e)) return 'md';
-    if (['html', 'htm'].includes(e)) return 'html';
-    if (['txt', 'js', 'ts', 'json', 'css', 'mjs', 'svelte', 'py', 'sh', 'yml', 'yaml', 'log'].includes(e)) return 'text';
-    return 'doc';
+    const k = KIND_CODE[fkKind(name)];
+    if (k) return k;
+    const ik = iconKindOf(name);
+    return ik === 'zip' ? 'zip' : extOf(name) === 'apk' ? 'apk' : 'doc';
   }
   // 额外位置（loc-* / 各盘）里打开的文件，绝对路径要是落在 primary（库）根内，就换算成 primary 的 rel：
   // md 双链 / 出链 / 反链 / 插图、服务端转 PDF、视频流都只认 primary（＝服务端的身份文件根），
@@ -861,20 +874,170 @@
     const pr = primaryRelOf(it.rel);
     return { origin: 'cloud', rel: pr ?? it.rel, name: it.name, kind, mt: it.mtime, ws: wsRoot, nativeLocation: nativeFs ? (pr != null ? 'primary' : locationId) : '' };
   };
+  // —— 打开：同文件夹的图片与视频按列表顺序组成一个画廊，文档组成前后翻页序列，音频自成一组（lib/fileGrid.js buildSequence）——
+  // 描述带上大小 / 修改时间 / 宽高 / 时长（查看器先按比例占好位、信息面板直接有数），图片视频再带格子在屏上的矩形（从它放大进入、关时缩回）。
+  let openMap = null;          // 查看器里每一项的 key → 列表里的那一项（查看器里改名 / 删除、关闭后定位都靠它）
+  let lastRel = '';            // 查看器里最后看的那一项
+  let quickLook = false;       // 空格打开的快速查看：空格 / Esc 关，四个方向键都切换
+  const baseKey = (k) => String(k || '').replace(/#view:[^#]*$/, '');
+  const srcOf = (it) => (it?.key && (openMap?.get(it.key) || openMap?.get(baseKey(it.key)))) || null;
+  function cellEls() {
+    const m = new Map();
+    for (const el of rowsEl?.querySelectorAll('[data-rel]') || []) m.set(el.dataset.rel, el);
+    return m;
+  }
+  function descOf(f, els) {
+    const k = fkKind(f.name);
+    const d = { ...srcItem(f, k), size: f.size, mt: f.mtime };
+    const m = metaOf(f);
+    if (m?.w > 0 && m?.h > 0) { d.width = m.w; d.height = m.h; }
+    if (m?.dur > 0) d.duration = m.dur;
+    if (k === 'image' || k === 'video') {
+      const el = els?.get(f.rel);
+      const r = rectOf(el?.querySelector('.ric-img, .tic-img') || el?.querySelector('.ric, .tic'), rowsEl);
+      if (r) d.originRect = r;
+      const th = thumbs[thumbKey(f.rel)];
+      if (th) d.thumbUrl = th;
+    }
+    return d;
+  }
+  function startPreview(seq, index, quick = false) {
+    openPreview(seq.map((f) => descOf(f, cellEls())), index, { actions: viewerActs() });
+    if (!preview.open) return;
+    openMap = new Map(preview.items.map((x, i) => [x.key, seq[i]]));
+    lastRel = seq[index]?.rel || '';
+    quickLook = quick;
+  }
+  // 空格快速查看（Finder 式）：选了多个就在选中的里面翻，只选一个就在整个文件夹的文件里翻（含没有内嵌查看器的，给信息卡）
+  function quickLookSel() {
+    const sel = selectedRows().filter((f) => !f.isDir);
+    const cur = sel.find((f) => f.rel === anchorRel) || sel[0];
+    if (!cur) return;
+    const { seq, index } = buildSequence(sel.length > 1 ? sel : rows, cur, { groupOf: () => 'all', same: (a, b) => a.rel === b.rel });
+    startPreview(seq, index, true);
+  }
+  // 应用级弹窗（改名框 / 确认框，挂在 body 上）结算后焦点可能掉到 BODY（打开它的元素在等待期间被重绘掉了）：
+  // 还给打开前的元素；它不在了就给查看器根，查看器没开就给当前行 / 列表。弹窗退场动画约 220ms，前后各补一次。
+  function refocusAfterDialog(ret) {
+    const fix = () => {
+      const a = document.activeElement;
+      if (a && a !== document.body && a !== document.documentElement) return;
+      const vw = preview.open ? document.querySelector('.vw-root') : null;
+      const el = ret?.isConnected && ret !== document.body ? ret : vw || (anchorRel ? cellEls().get(anchorRel) : null) || rowsEl;
+      try { el?.focus({ preventScroll: true }); } catch {}
+    };
+    setTimeout(fix, 0);
+    setTimeout(fix, 280);
+  }
+  // 查看器里的提示出在查看器自己的 toast 层（本页的 toast 在 z 300 的查看器下面，看不见）
+  const sayIn = (vctx, m, kind = 'err') => (vctx?.toast ? vctx.toast(m, { kind, ms: 3200 }) : toast(m));
+  // 改名框的明暗跟着所在的查看器走：媒体（图 / 视频 / 音频）恒暗，文档类跟随本页明暗（与删除确认框一致）
+  const renameDark = (it) => (['image', 'video', 'audio'].includes(it?.kind) ? true : undefined);
+  // 查看器顶栏 / 菜单里的动作（kit/actions.js）：发送给 AI 先关查看器再弹本页的对话框；改名用挂在 body 上的应用级改名框
+  // （本页的弹层在 .fd-root 的层叠上下文里，压不过 z-index 300 的查看器）；删除先确认，删掉后停在下一项、删空就关。
+  // 第二个参数是查看器给的 { toast }（失败提示出在查看器里）。
+  function viewerActs() {
+    const a = {};
+    if (serverOps || pcFs) a.sendAi = (it) => {
+      const f = srcOf(it);
+      if (!f) return;
+      closePreview();
+      openAi(f);
+    };
+    a.rename = async (it, vctx) => {
+      const f = srcOf(it);
+      if (!f) return;
+      const ret = document.activeElement;
+      const name = (await askRename(f.name, { touch: false, dark: renameDark(it) }))?.trim();
+      refocusAfterDialog(ret);
+      if (!name || name === f.name) return;
+      try { await fsRename(f.rel, name); } catch (e) { sayIn(vctx, t('重命名失败：{reason}', { reason: tr(e.message || '') })); return; }
+      const parent = parentOf(f.rel);
+      const nf = { ...f, name, rel: (parent ? parent + '/' : '') + name };
+      const i = preview.items.findIndex((x) => x.key === it.key);
+      if (i >= 0 && openMap) {
+        openMap.delete(baseKey(it.key));
+        previewReplace(i, descOf(nf, null));
+        openMap.set(preview.items[i].key, nf);
+      }
+      lastRel = nf.rel;
+      refresh();
+    };
+    a.trash = async (it, vctx) => {
+      const f = srcOf(it);
+      if (!f) return;
+      const ask = nativeFs ? t('移到回收站「{name}」？', { name: f.name }) : t('删除「{name}」？', { name: f.name });
+      const okLabel = isEn() ? (nativeFs ? t('移到回收站') : t('删除')) : undefined;
+      const ret = document.activeElement;
+      const ok = await uiConfirm(ask, { detail: nativeFs ? '' : t('云端工作空间的删除不可撤销。'), okLabel, danger: true });
+      refocusAfterDialog(ret);
+      if (!ok) return;
+      try { await fsRemove(f.rel); } catch (e) { sayIn(vctx, t('删除失败：{reason}', { reason: tr(e.message || '') })); return; }
+      sizesTouched([f.rel]);
+      const i = preview.items.findIndex((x) => x.key === it.key);
+      openMap?.delete(baseKey(it.key));
+      if (i >= 0) previewRemove(i);
+      refresh();
+    };
+    return a;
+  }
+  // 关掉查看器：选中最后看的那一项，不在可视区就把列表滚过去（只滚本页列表，不牵动外层宿主），再短暂描一圈蓝——人知道刚才看到哪儿了
+  let flashRel = $state('');
+  let flashTimer = 0;
+  $effect(() => {
+    const open = preview.open, cur = preview.items[preview.index];
+    untrack(() => {
+      if (!openMap) return;
+      if (open) { const f = srcOf(cur); if (f) lastRel = f.rel; return; }
+      openMap = null; quickLook = false;
+      if (lastRel) revealAfterClose(lastRel);
+    });
+  });
+  async function revealAfterClose(rel) {
+    if (!rows.some((r) => r.rel === rel)) return;
+    selected = new Set([rel]); anchorRel = rel;
+    await tick();
+    const el = cellEls().get(rel);
+    if (el && rowsEl) {
+      const box = rowsEl.getBoundingClientRect(), r = el.getBoundingClientRect();
+      if (r.top < box.top + 4) rowsEl.scrollTop -= box.top + 8 - r.top;
+      else if (r.bottom > box.bottom - 4) rowsEl.scrollTop += r.bottom - box.bottom + 8;
+    }
+    flashRel = rel;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => (flashRel = ''), 1400);
+  }
+  // 快速查看的键：挂 window 捕获阶段，先于查看器自己的键盘处理（它在冒泡阶段）。空格＝Esc（走查看器的关闭动画）；
+  // 四个方向键都切换上一项 / 下一项（视频里左右不再是快进快退——快速查看是翻看，不是播放）。
+  onMount(() => {
+    const onQuickKey = (e) => {
+      if (!quickLook || !preview.open || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
+      // 只读的代码视图（CodeView 的 cm-content：电脑上为了能放光标选字仍是 contenteditable，但带 aria-readonly）不算输入框——
+      // 速览打开时焦点会落进去，不放行的话空格关不掉、方向键也换不了项（Quick Look 无论预览什么，空格都能关）
+      const fld = e.target?.closest?.('input, textarea, select, [contenteditable]');
+      if (fld && !(fld.closest('.cm-editor') && (fld.getAttribute('contenteditable') === 'false' || fld.getAttribute('aria-readonly') === 'true'))) return;
+      if (e.key === ' ') {
+        e.preventDefault(); e.stopImmediatePropagation();
+        if (!e.repeat) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
+        return;
+      }
+      const d = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+      if (!d || preview.items.length < 2) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (d > 0) previewNext(); else previewPrev();
+    };
+    window.addEventListener('keydown', onQuickKey, true);
+    return () => { window.removeEventListener('keydown', onQuickKey, true); clearTimeout(flashTimer); };
+  });
+
   function openItem(it) {
     if (it.isDir) { enterDir(it.rel); return; }
-    const k = kindOf(it.name), ext = extOf(it.name);
-    if (k === 'img') {
-      const imgs = rows.filter((f) => !f.isDir && kindOf(f.name) === 'img');
-      const idx = Math.max(0, imgs.findIndex((f) => f.rel === it.rel));
-      openPreview(imgs.map((f) => srcItem(f, 'image')), idx);
+    const ext = extOf(it.name);
+    if (fkKind(it.name) !== 'other') {
+      const { seq, index } = buildSequence(rows, it, { same: (a, b) => a.rel === b.rel });
+      startPreview(seq, index);
       return;
     }
-    if (k === 'mov' || k === 'audio') { openPreview([srcItem(it, k === 'mov' ? 'video' : 'audio')], 0); return; }
-    if (k === 'md' || k === 'text') { openPreview([{ ...srcItem(it, k === 'md' ? 'markdown' : 'text') }], 0); return; }
-    if (k === 'html') { openPreview([srcItem(it, 'html')], 0); return; }
-    if (k === 'pdf') { openPreview([srcItem(it, 'pdf')], 0); return; }
-    if (OFFICE_EXTS.includes(ext)) { openPreview([srcItem(it, 'office')], 0); return; }
     // 可执行文件不因双击直接运行（右键仍可显式「用默认应用打开」）；其余类型交系统关联。
     if (EXEC_EXTS.includes(ext)) {
       if (!nativeFs) { doDownload(it); return; }
@@ -904,7 +1067,12 @@
     if (!list.length) return;
     // 原生通道走系统回收站（可撤销），云端通道是真删——所以措辞与确认都不一样。
     // 英文按 GLOSSARY §1.6 让确认钮复述动词（Delete）；中文不传 okLabel，仍是原来的「确定」
-    if (!nativeFs && !(await uiConfirm(t('删除选中的 {n} 项？', { n: list.length }), { detail: t('云端工作空间的删除不可撤销。'), okLabel: isEn() ? t('删除') : undefined, danger: true }))) return;
+    if (!nativeFs) {
+      const ret = document.activeElement;
+      const ok = await uiConfirm(t('删除选中的 {n} 项？', { n: list.length }), { detail: t('云端工作空间的删除不可撤销。'), okLabel: isEn() ? t('删除') : undefined, danger: true });
+      refocusAfterDialog(ret);
+      if (!ok) return;
+    }
     busyLabel = nativeFs ? t('移到回收站…') : t('删除中…');
     let fail = 0;
     for (const rel of list) { try { await fsRemove(rel); } catch { fail++; } }
@@ -913,6 +1081,8 @@
     selected = new Set(); anchorRel = '';
     toast(fail ? t('{n} 项删除失败', { n: fail }) : (nativeFs ? t('已把 {n} 项移到回收站', { n: list.length }) : t('已删除 {n} 项', { n: list.length })));
     await refresh();
+    // 删掉的行连同焦点一起没了：焦点留在列表上，方向键 / 快捷键接着能用（内嵌态靠焦点判作用域）
+    if (!document.activeElement || document.activeElement === document.body) try { rowsEl?.focus({ preventScroll: true }); } catch {}
   }
   function startRename(it) {
     selected = new Set([it.rel]); anchorRel = it.rel;
@@ -1300,21 +1470,79 @@
     const vw = box?.width || window.innerWidth, vh = box?.height || window.innerHeight;
     const cx = e.clientX - ox, cy = e.clientY - oy;
     // 英文菜单项更长（“Move 3 items to Recycle Bin  Del”），贴右缘夹取按更宽的估值算，免得菜单右侧被裁
-    const W = isEn() ? 264 : 236, H = entries.filter((x) => !x.sep).length * 30 + entries.filter((x) => x.sep).length * 9 + 12;
+    const W = isEn() ? 264 : 236, H = entries.filter((x) => !x.sep).length * 32 + entries.filter((x) => x.sep).length * 9 + 10;
     const x = Math.min(Math.max(8, cx), Math.max(8, vw - W - 8));
     const y = cy + H > vh - 10 ? Math.max(8, cy - H) : cy;
-    menu = { x, y, entries };
+    // 记下打开前的焦点（通常是右键的那一行），关菜单时还回去
+    const a = document.activeElement;
+    const ret = a?.closest?.('.ctx') ? menu?.ret : a;
+    menu = { x, y, entries, ret };
+    // 焦点移到第一个可用项：↑↓ 直接能选（鼠标打开时 :focus-visible 不亮，看不出焦点在哪）
+    tick().then(() => { try { rootEl?.querySelector('.ctx .ctx-mi:not(:disabled)')?.focus({ preventScroll: true }); } catch {} });
+  }
+  function closeMenu(restore = false) {
+    const ret = menu?.ret;
+    menu = null;
+    if (!restore) return;
+    const el = ret?.isConnected && ret !== document.body ? ret : (anchorRel ? cellEls().get(anchorRel) : null) || rowsEl;
+    try { el?.focus({ preventScroll: true }); } catch {}
   }
   function menuRun(entry) {
-    menu = null;
+    closeMenu(true);
     if (!entry.disabled) entry.act?.();
+  }
+  // 菜单开着时在别处再右键：关掉旧菜单，在落点下面的元素上重放一次 contextmenu——落在行上就在那一行弹、
+  // 落在空白处弹空白菜单、落在地址栏弹地址菜单（资源管理器同款）；落点没有菜单就只关掉并还焦点
+  async function reMenu(e) {
+    e.preventDefault();
+    const x = e.clientX, y = e.clientY;
+    const ret = menu?.ret;
+    menu = null;
+    await tick();
+    const hit = document.elementFromPoint(x, y);
+    if (hit && rootEl?.contains(hit)) hit.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2 }));
+    if (!menu) try { (ret?.isConnected && ret !== document.body ? ret : rowsEl)?.focus({ preventScroll: true }); } catch {}
+  }
+  // 右键菜单的键盘：↑↓ / Home / End 在可用项间移动（跳过分隔线与禁用项）、首字母跳转，Enter / 空格由按钮自己执行，
+  // Esc / Tab 关闭并把焦点还给打开前的行。挂原生监听并截住冒泡：window 上的列表快捷键（方向键换选中、Delete、空格速览）别跟着动
+  function ctxNav(node) {
+    const onKey = (e) => {
+      e.stopPropagation();
+      const items = [...node.querySelectorAll('.ctx-mi:not(:disabled)')];
+      const i = items.indexOf(document.activeElement);
+      const k = e.key;
+      if (k === 'ArrowDown' || k === 'ArrowUp' || k === 'Home' || k === 'End') {
+        e.preventDefault();
+        if (!items.length) return;
+        const n = k === 'Home' ? 0 : k === 'End' ? items.length - 1
+          : k === 'ArrowDown' ? (i + 1) % items.length : (i <= 0 ? items.length - 1 : i - 1);
+        items[n].focus({ preventScroll: true });
+      } else if (k === 'Escape' || k === 'Tab') {
+        e.preventDefault();
+        closeMenu(true);
+      } else if (k === 'Enter' || k === ' ') {
+        if (i < 0) e.preventDefault();
+      } else if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        const ch = k.toLocaleLowerCase();
+        const order = [...items.slice(i + 1), ...items.slice(0, i + 1)];
+        order.find((b) => (b.querySelector('.ctx-lb')?.textContent || '').trim().toLocaleLowerCase().startsWith(ch))?.focus({ preventScroll: true });
+      } else if (k === 'ContextMenu' || (k === 'F10' && e.shiftKey)) e.preventDefault();
+    };
+    node.addEventListener('keydown', onKey);
+    return { destroy() { node.removeEventListener('keydown', onKey); } };
+  }
+  // 鼠标划过即把焦点给那一项（同系统菜单：之后按 ↑↓ 从这一项接着走）
+  function ctxHover(e) {
+    const b = e.currentTarget;
+    if (e.pointerType === 'mouse' && !b.disabled && document.activeElement !== b) try { b.focus({ preventScroll: true }); } catch {}
   }
   function openItemMenu(e, it) {
     if (renaming) commitRename();
     if (!selected.has(it.rel)) { selected = new Set([it.rel]); anchorRel = it.rel; }
     const multi = selected.size > 1;
     const k = kindOf(it.name);
-    const previewable = it.isDir || ['img', 'mov', 'audio', 'md', 'text', 'html', 'pdf'].includes(k) || OFFICE_EXTS.includes(extOf(it.name));
+    const previewable = it.isDir || fkKind(it.name) !== 'other';
     const entries = [];
     if (!multi) {
       // 不可预览类型（zip/exe/未知）不出「预览」——它们的打开动作就是下面的默认应用/定位。
@@ -1511,7 +1739,7 @@
     if (!kbdMine()) return;
     const inField = e.target.closest?.('input, textarea, [contenteditable]');
     if (e.key === 'Escape') {
-      if (menu) { menu = null; return; }
+      if (menu) { closeMenu(true); return; }
       if (sortOpen || addOpen || crumbPop || locPop) { sortOpen = false; addOpen = false; crumbPop = false; locPop = false; return; }
       if (aiDlg) { aiDlg = null; return; }
       if (shareDlg) { if (!shareDlg.busy) shareDlg = null; return; }
@@ -1523,8 +1751,24 @@
       if (selected.size) { selected = new Set(); anchorRel = ''; }
       return;
     }
+    // 菜单开着、焦点却不在菜单里（极少见：被别的脚本挪走）：方向键把焦点送回菜单，其余键不动列表
+    if (menu) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const its = rootEl?.querySelectorAll('.ctx .ctx-mi:not(:disabled)') || [];
+        try { its[e.key === 'ArrowDown' ? 0 : its.length - 1]?.focus({ preventScroll: true }); } catch {}
+      }
+      return;
+    }
     if (inField || anyDialog) return;
     const ctrl = e.ctrlKey || e.metaKey;
+    // 图标大小：焦点在列表区时 Ctrl+= / Ctrl+− 逐档换（与 Ctrl+滚轮同一条路：列表 ⇄ 64 ⇄ … ⇄ 240），拦掉浏览器缩放
+    if (ctrl && !e.altKey && rowsEl?.contains(document.activeElement)
+      && (e.key === '=' || e.key === '+' || e.key === '-' || e.key === '_' || e.code === 'NumpadAdd' || e.code === 'NumpadSubtract')) {
+      e.preventDefault();
+      stepIconSize(e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract' ? -1 : 1);
+      return;
+    }
     if (ctrl && e.key.toLowerCase() === 'a') { e.preventDefault(); selectAll(); return; }
     if (ctrl && e.key.toLowerCase() === 'c') { e.preventDefault(); setClipboard('copy'); return; }
     if (ctrl && e.key.toLowerCase() === 'x') { e.preventDefault(); setClipboard('cut'); return; }
@@ -1538,12 +1782,16 @@
     if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack(); return; }
     if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goFwd(); return; }
     if (e.key === 'Enter') { e.preventDefault(); const it = selectedRows()[0]; if (it) openItem(it); return; }
+    // 空格：快速查看（键入定位途中的空格仍算名字的一部分）
+    if (e.key === ' ' && !ctrl && !e.altKey && !(typeBuf && Date.now() - typeAt < 700)) { e.preventDefault(); if (!e.repeat) quickLookSel(); return; }
+    if (e.altKey && !ctrl && e.code === 'KeyP') { e.preventDefault(); if (peekFits) togglePeek(); return; }
     if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
       if (!rows.length) return;
       e.preventDefault();
       let step = 1;
       if (view === 'grid') {
-        const cols = Math.max(1, Math.floor((rowsEl?.clientWidth || 800) / 120));
+        // 列数按实际排出来的网格算（图标档变了列宽就变）
+        const cols = Math.max(1, (getComputedStyle(rowsEl).gridTemplateColumns || '').split(' ').filter(Boolean).length);
         step = (e.key === 'ArrowDown' || e.key === 'ArrowUp') ? cols : 1;
       }
       const dir2 = (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? step : -step;
@@ -1579,7 +1827,50 @@
     sortOpen = false;
     savePrefs();
   }
-  function setView(v) { view = v; savePrefs(); }
+  // 列表 ⇄ 图标是两套 {#each}：切换会把拿着焦点的那一行连同焦点一起销毁（焦点掉到 BODY，方向键、
+  // 接着按的 Ctrl+= 都失去作用域，后者还会变成整页缩放）。焦点原本在列表区里的，切完还给同一项在新视图里的格子，
+  // 找不到就给列表本身
+  function setView(v) {
+    const a = document.activeElement;
+    const rel = rowsEl?.contains(a) ? (a?.dataset?.rel || anchorRel || '') : null;
+    view = v; savePrefs();
+    if (rel == null) return;
+    tick().then(() => {
+      const cur = document.activeElement;
+      if (cur && cur !== document.body && cur !== document.documentElement && cur.isConnected) return;
+      try { ((rel ? cellEls().get(rel) : null) || rowsEl)?.focus({ preventScroll: true }); } catch {}
+    });
+  }
+  function setIconSize(px) { if (ICON_SIZES.includes(px) && px !== iconSize) { iconSize = px; savePrefs(); } }
+  // 逐档：列表 ⇄ 最小图标 ⇄ … ⇄ 最大图标（Explorer 的 Ctrl+滚轮同一条路）
+  function stepIconSize(d) {
+    if (view !== 'grid') { if (d > 0) { iconSize = ICON_SIZES[0]; setView('grid'); } return; }
+    const i = ICON_SIZES.indexOf(iconSize) + d;
+    if (i < 0) { setView('list'); return; }
+    if (i < ICON_SIZES.length) setIconSize(ICON_SIZES[i]);
+  }
+  // Ctrl+滚轮（触控板捏合也是 ctrl+wheel）：攒够一格再换档，免得一次捏合连跳好几档；顺手拦掉页面缩放
+  $effect(() => {
+    const el = rowsEl;
+    if (!el) return;
+    let acc = 0, accT = 0;
+    const onWheel = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || preview.open) return;
+      e.preventDefault();
+      clearTimeout(accT); accT = setTimeout(() => (acc = 0), 220);
+      acc += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+      if (Math.abs(acc) < 60) return;
+      const d = acc < 0 ? 1 : -1;
+      acc = 0;
+      untrack(() => stepIconSize(d));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => { el.removeEventListener('wheel', onWheel); clearTimeout(accT); };
+  });
+  function togglePeek() { peekOn = !peekOn; savePrefs(); }
+  // 预览窗格只在宽处出（侧栏 + 列表 + 300 的窗格放得下），窄了自动让位、开关也收起
+  const peekFits = $derived(tbW > 900);
+  const peekShown = $derived(peekOn && peekFits);
 
   // —— 展示 helpers ——
   function fmtSize(n) {
@@ -1615,33 +1906,79 @@
     img: (ext) => t('{ext} 图片', { ext }),
     mov: (ext) => t('{ext} 视频', { ext }),
     audio: (ext) => t('{ext} 音频', { ext }),
-    pdf: (ext) => t('{ext} PDF 文稿', { ext }),
+    pdf: () => t('PDF 文稿'),
     zip: (ext) => t('{ext} 压缩归档', { ext }),
     md: (ext) => (isEn() ? t('Markdown 文件') : `${ext} Markdown`),   // 中文仍是「MD Markdown」；英文「MD Markdown」读着像重复，改用 Windows 口吻的类型名（110px 类型列放得下）
     text: (ext) => t('{ext} 文本', { ext }),
     html: (ext) => t('{ext} 网页', { ext }),
     apk: (ext) => t('{ext} 安装包', { ext }),
   };
+  // Office 三类按 Windows / Finder 的口吻叫「Word 文稿」「Excel 表格」「PPT 演示文稿」；OpenDocument / RTF 不是微软格式，前面挂扩展名
+  const MS_OFFICE = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx']);
+  const OFFICE_LABEL = {
+    word: (ms, ext) => (ms ? t('Word 文稿') : t('{ext} 文稿', { ext })),
+    sheet: (ms, ext) => (ms ? t('Excel 表格') : t('{ext} 表格', { ext })),
+    slides: (ms, ext) => (ms ? t('PPT 演示文稿') : t('{ext} 演示文稿', { ext })),
+  };
   function typeLabel(it) {
     if (it.isDir) return t('文件夹');
     const ext = extOf(it.name);
     if (!ext) return t('文件');
+    const oc = officeCat(it.name);
+    if (oc && OFFICE_LABEL[oc]) return OFFICE_LABEL[oc](MS_OFFICE.has(ext), ext.toUpperCase());
     const lb = KIND_LABEL[kindOf(it.name)];
     return lb ? lb(ext.toUpperCase()) : t('{ext} 文件', { ext: ext.toUpperCase() });
   }
-  // iOS 文件 app 风类型图标（缩略图/系统图标到位前的占位）
-  const TYPE_COLOR = { pdf: '#ff3b30', img: '#32ade6', mov: '#5856d6', audio: '#ff2d55', zip: '#ff9500', md: '#8e8e93', text: '#8e8e93', apk: '#34c759', html: '#ff8d28', doc: '#007aff' };
-  function fileIcon(name) {
-    const k = kindOf(name);
-    const c = TYPE_COLOR[k] || '#007aff';
-    const label = name.includes('.') ? (name.split('.').pop() || '').toUpperCase().slice(0, 4) : '';
-    return `<svg viewBox="0 0 28 34" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M3 4a3 3 0 0 1 3-3h11.5L25 8.5V30a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V4Z" fill="#fff" stroke="#d6d6da" stroke-width="1"/>
-      <path d="M17.5 1 25 8.5h-5.5A2 2 0 0 1 17.5 6.5V1Z" fill="#e6e6ea"/>
-      <rect x="3" y="20.5" width="22" height="9.5" rx="2.6" fill="${c}"/>
-      ${label ? `<text x="14" y="27.4" font-size="6" font-weight="700" letter-spacing="-.2" fill="#fff" text-anchor="middle" font-family="'Segoe UI',sans-serif">${label}</text>` : ''}
-    </svg>`;
+  // 类型图标（缩略图 / 系统图标到位前的占位）：与查看器同一家线稿（lib/fileGrid.js），颜色跟文字走，不按类型上色
+  const fileIcon = (name) => typeIconSvg(name);
+  // 补充元数据（/api/files/meta：图片宽高、视频时长、文件夹项目数）——服务端摸得到这个目录时才有（srvRoot）；换目录清空
+  let meta = $state({});
+  let metaKey = '';
+  const metaOn = $derived(inBrowse && serverOps && !loading && items.length > 0);
+  $effect(() => {
+    const on = metaOn, p = path, root = srvRoot, key = locationId + '\x1f' + (root ?? '') + '\x1f' + p;
+    return untrack(() => {
+      if (key !== metaKey) { metaKey = key; meta = {}; }
+      if (!on) return;
+      return watchMeta(() => api.filesMeta(p, root), (m) => { if (metaKey === key) meta = { ...meta, ...m }; });
+    });
+  });
+  const metaOf = (it) => (inBrowse && it && parentOf(it.rel) === path ? meta[it.name] || null : null);
+  const durOf = (it) => { const d = metaOf(it)?.dur; return d > 0 ? fmtDur(d) : ''; };
+  // 图标视图名字下面那行（图标够大才出）：文件夹＝项目数，图片＝像素尺寸，其余＝大小
+  function tileSub(it) {
+    if (iconSize < 128) return '';
+    const m = metaOf(it);
+    if (it.isDir) return m?.n != null ? t('{n} 项', { n: m.n }) : '';
+    if (m?.w > 0 && m?.h > 0) return `${m.w} × ${m.h}`;
+    return fmtSize(it.size);
   }
+  // —— 预览窗格：选中一项给大图 + 信息，选多项给件数与总大小，没选给当前文件夹 ——
+  const peekRel = $derived(peekShown && selected.size === 1 ? [...selected][0] : '');
+  const peekItem = $derived(peekRel ? rows.find((r) => r.rel === peekRel) || null : null);
+  let peekThumb = $state({ rel: '', url: '' });
+  let peekSeq = 0;
+  $effect(() => {
+    const rel = peekRel;
+    untrack(() => {
+      const my = ++peekSeq;
+      const it = rel ? rows.find((r) => r.rel === rel) : null;
+      if (!it || it.isDir) { if (peekThumb.rel || peekThumb.url) peekThumb = { rel: '', url: '' }; return; }
+      peekThumb = { rel, url: '' };
+      if (!nativeFs) {
+        if (cloudThumbable(it.name, true)) peekThumb = { rel, url: cloudFileUrl(rel, { grid: true, mt: it.mtime, ws: wsRoot }) };
+        return;
+      }
+      nativeWorkspaceThumbnail(rel, 512, locationId).then((r) => { if (my === peekSeq && r?.dataUrl) peekThumb = { rel, url: r.dataUrl }; }).catch(() => {});
+    });
+  });
+  // 系统给的是类型图标而不是真缩略图（Windows 对没有缩略图的类型回落成 32/48 的小方块）：不放大成一团糊，退回线稿图标
+  function peekLoaded(e) {
+    const im = e.currentTarget;
+    if (im.naturalWidth <= 64 && im.naturalHeight <= 64) peekThumb = { rel: peekThumb.rel, url: '' };
+  }
+  const peekSel = $derived(peekShown && selected.size > 1 ? rows.filter((r) => selected.has(r.rel)) : null);
+  const peekSelSize = $derived(peekSel ? peekSel.reduce((s, r) => s + (r.isDir ? 0 : r.size || 0), 0) : 0);
   const statusText = $derived.by(() => {
     const parts = [t('{n} 项', { n: rows.length })];
     if (selected.size) parts.push(t('已选 {n} 项', { n: selected.size }));
@@ -1681,7 +2018,7 @@
     <!-- 位置下拉：只在位置栏因窄列收起时露出（见样式表 .tb-drop.locs），窄侧栏里一样能换盘 -->
     {#if showSide && addrEdit === null}
       <div class="tb-drop locs">
-        <button class="tb-btn" title={tc('explorer', '位置')} aria-label={tc('explorer', '位置')} onclick={() => { locPop = !locPop; crumbPop = false; sortOpen = false; addOpen = false; }}>
+        <button class="tb-btn" aria-label={tc('explorer', '位置')} use:tip={tc('explorer', '位置')} onclick={() => { locPop = !locPop; crumbPop = false; sortOpen = false; addOpen = false; }}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="6.5" width="17" height="11" rx="2.6"/><path d="M7.2 13.6h.01M10.6 13.6h6.2"/></svg>
         </button>
         {#if locPop}
@@ -1716,7 +2053,7 @@
     {/if}
     {#if crumbHide > 0 && addrEdit === null && !(mode === 'recent' && !searching)}
       <div class="tb-drop crumb-more" data-flip="cmore">
-        <button class="tb-btn ell" title={t('被收起的上级目录')} aria-label={t('展开上级目录')} onclick={() => { crumbPop = !crumbPop; locPop = false; sortOpen = false; addOpen = false; }}>
+        <button class="tb-btn ell" aria-label={t('展开上级目录')} use:tip={t('展开上级目录')} onclick={() => { crumbPop = !crumbPop; locPop = false; sortOpen = false; addOpen = false; }}>
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.5" cy="12" r="1.9"/></svg>
         </button>
         {#if crumbPop}
@@ -1773,7 +2110,7 @@
   <div class="fd-toolbar" bind:this={toolbarEl}>
     <div class="fd-tb" class:t1={tbTier >= 1} class:t2={tbTier >= 2} class:t3={tbTier >= 3} class:t4={tbTier >= 4} bind:this={tbEl}>
       {#if !hostChrome}
-        <button class="tb-btn" data-flip="home" title={embedded ? t('返回工作台') : t('返回主页')} onclick={goHome} aria-label={embedded ? t('返回工作台') : t('返回主页')}>
+        <button class="tb-btn" data-flip="home" use:tip={embedded ? t('返回工作台') : t('返回主页')} onclick={goHome}>
           {#if embedded}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
           {:else}
@@ -1783,16 +2120,16 @@
       {/if}
       {#if tbTier < 2}
         {#if !hostChrome}<span class="tb-gap"></span>{/if}
-        <button class="tb-btn" data-flip="back" title={t('后退（Alt+←）')} aria-label={t('后退')} disabled={!histN.back} onclick={goBack}>
+        <button class="tb-btn" data-flip="back" aria-label={t('后退')} use:tip={{ label: t('后退'), kbd: 'Alt+←' }} disabled={!histN.back} onclick={goBack}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
         </button>
       {/if}
       {#if tbTier < 1}
-        <button class="tb-btn" data-flip="fwd" title={t('前进（Alt+→）')} aria-label={t('前进')} disabled={!histN.fwd} onclick={goFwd}>
+        <button class="tb-btn" data-flip="fwd" aria-label={t('前进')} use:tip={{ label: t('前进'), kbd: 'Alt+→' }} disabled={!histN.fwd} onclick={goFwd}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg>
         </button>
       {/if}
-      <button class="tb-btn" data-flip="up" title={t('上一级（Backspace）')} aria-label={t('上一级')} disabled={!canUp} onclick={goUp}>
+      <button class="tb-btn" data-flip="up" aria-label={t('上一级')} use:tip={{ label: t('上一级'), kbd: 'Backspace' }} disabled={!canUp} onclick={goUp}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 18V7"/><path d="m7 11 5-5 5 5"/></svg>
       </button>
 
@@ -1809,15 +2146,18 @@
 
       {#if tbTier < 2}
         <div class="tb-seg" data-flip="seg" role="group" aria-label={t('视图')}>
-          <button class="seg" data-flip="view-list" class:on={view === 'list'} title={tc('explorer', '列表视图')} aria-label={tc('explorer', '列表视图')} onclick={() => setView('list')}>
+          <button class="seg" data-flip="view-list" class:on={view === 'list'} aria-pressed={view === 'list'} aria-label={tc('explorer', '列表视图')} use:tip={tc('explorer', '列表视图')} onclick={() => setView('list')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M8.5 6.5H20M8.5 12H20M8.5 17.5H20"/><path d="M4.2 6.5h.01M4.2 12h.01M4.2 17.5h.01" stroke-width="2.6"/></svg>
           </button>
-          <button class="seg" data-flip="view-grid" class:on={view === 'grid'} title={tc('explorer', '图标视图')} aria-label={tc('explorer', '图标视图')} onclick={() => setView('grid')}>
+          <button class="seg" data-flip="view-grid" class:on={view === 'grid'} aria-pressed={view === 'grid'} aria-label={tc('explorer', '图标视图')} use:tip={tc('explorer', '图标视图')} onclick={() => setView('grid')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.6"/></svg>
           </button>
         </div>
+        {#if peekFits}
+          <button class="tb-btn peek" data-flip="peek" class:on={peekOn} aria-pressed={peekOn} use:tip={{ label: t('预览窗格'), kbd: 'Alt+P' }} onclick={togglePeek}>{@html uiIconSvg('pane', 1.8)}</button>
+        {/if}
       {:else}
-        <button class="tb-btn" data-flip={view === 'list' ? 'view-list' : 'view-grid'} title={view === 'list' ? tc('explorer', '切换为图标视图') : tc('explorer', '切换为列表视图')} aria-label={t('切换视图')} onclick={toggleView}>
+        <button class="tb-btn" data-flip={view === 'list' ? 'view-list' : 'view-grid'} use:tip={view === 'list' ? tc('explorer', '切换为图标视图') : tc('explorer', '切换为列表视图')} onclick={toggleView}>
           {#if view === 'list'}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M8.5 6.5H20M8.5 12H20M8.5 17.5H20"/><path d="M4.2 6.5h.01M4.2 12h.01M4.2 17.5h.01" stroke-width="2.6"/></svg>
           {:else}
@@ -1828,7 +2168,7 @@
 
       {#if tbTier < 3}
         <div class="tb-drop sort" data-flip="sort">
-          <button class="tb-btn" title={t('排序')} aria-label={t('排序')} onclick={() => { sortOpen = !sortOpen; addOpen = false; crumbPop = false; }}>
+          <button class="tb-btn" aria-label={t('排序')} use:tip={t('排序')} onclick={() => { sortOpen = !sortOpen; addOpen = false; crumbPop = false; }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5v14M7 19l-3-3M7 19l3-3"/><path d="M17 19V5M17 5l-3 3M17 5l3 3"/></svg>
           </button>
           {#if sortOpen}
@@ -1839,7 +2179,7 @@
       {/if}
 
       <div class="tb-drop add" data-flip="add">
-        <button class="tb-btn" title={t('新建 / 导入')} aria-label={t('新建或导入')} onclick={() => { addOpen = !addOpen; sortOpen = false; crumbPop = false; }}>
+        <button class="tb-btn" aria-label={t('新建或导入')} use:tip={t('新建 / 导入')} onclick={() => { addOpen = !addOpen; sortOpen = false; crumbPop = false; }}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
         {#if addOpen}
@@ -1936,9 +2276,11 @@
         </div>
       {/if}
 
-      <!-- tabindex=-1：内嵌态的全局快捷键靠「焦点是否在本面板内」判作用域，点一下列表即取得焦点 -->
-      <div class="fd-rows" class:grid={view === 'grid'} class:dropin={dropOn === ''}
-        bind:this={rowsEl} role="presentation" tabindex="-1"
+      <!-- 列表整块是一个 Tab 停靠点（同资源管理器：Tab 进来，方向键在行间移动选中）；内嵌态的全局快捷键靠「焦点是否在本面板内」判作用域，
+           点一下列表即取得焦点。键盘焦点的提示画在锚点行上（data-anchor），不给整块画框 -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div class="fd-rows" class:grid={view === 'grid'} class:dropin={dropOn === ''} style:--tile={view === 'grid' ? iconSize + 'px' : null}
+        bind:this={rowsEl} role="presentation" tabindex="0"
         onpointerdown={paneDown} oncontextmenu={openBlankMenu}
         ondragover={dragOverPane} ondragleave={dragLeavePane} ondrop={onDrop}>
         {#if listBusy && !rows.length}
@@ -1951,8 +2293,8 @@
           </div>
         {:else if view === 'list'}
           {#each rows as it (it.rel)}
-            <div class="row" data-rel={it.rel} role="button" tabindex="-1"
-              class:sel={selected.has(it.rel)} class:cut={cutSet.has(it.rel)} class:dropin={dropOn === it.rel}
+            <div class="row" data-rel={it.rel} data-anchor={it.rel === anchorRel || undefined} role="button" tabindex="-1"
+              class:sel={selected.has(it.rel)} class:cut={cutSet.has(it.rel)} class:dropin={dropOn === it.rel} class:flash={flashRel === it.rel}
               draggable="true"
               ondragstart={(e) => rowDragStart(e, it)} ondragend={rowDragEnd}
               ondragover={(e) => dragOverDir(e, it)} ondrop={onDrop}
@@ -1963,7 +2305,7 @@
                   {#if it.isDir}
                     <img class="ric-dir" src={wsIcon} alt="" draggable="false" />
                   {:else if thumbs[thumbKey(it.rel)]}
-                    <img class="ric-img" src={thumbs[thumbKey(it.rel)]} alt="" draggable="false" />
+                    <img class="ric-img" src={thumbs[thumbKey(it.rel)]} alt="" draggable="false" decoding="async" onerror={() => thumbBad(it.rel)} />
                   {:else}
                     <span class="ric-ph">{@html fileIcon(it.name)}</span>
                   {/if}
@@ -1990,8 +2332,8 @@
           {/each}
         {:else}
           {#each rows as it (it.rel)}
-            <div class="tile" data-rel={it.rel} role="button" tabindex="-1"
-              class:sel={selected.has(it.rel)} class:cut={cutSet.has(it.rel)} class:dropin={dropOn === it.rel}
+            <div class="tile" data-rel={it.rel} data-anchor={it.rel === anchorRel || undefined} role="button" tabindex="-1"
+              class:sel={selected.has(it.rel)} class:cut={cutSet.has(it.rel)} class:dropin={dropOn === it.rel} class:flash={flashRel === it.rel}
               draggable="true"
               ondragstart={(e) => rowDragStart(e, it)} ondragend={rowDragEnd}
               ondragover={(e) => dragOverDir(e, it)} ondrop={onDrop}
@@ -2001,9 +2343,12 @@
                 {#if it.isDir}
                   <img class="tic-dir" src={wsIcon} alt="" draggable="false" />
                 {:else if thumbs[thumbKey(it.rel)]}
-                  <img class="tic-img" src={thumbs[thumbKey(it.rel)]} alt="" draggable="false" />
+                  <span class="tic-media">
+                    <img class="tic-img" src={thumbs[thumbKey(it.rel)]} alt="" draggable="false" decoding="async" onerror={() => thumbBad(it.rel)} />
+                    {#if durOf(it)}<b class="tic-dur">{durOf(it)}</b>{/if}
+                  </span>
                 {:else}
-                  <span class="tic-ph">{@html fileIcon(it.name)}</span>
+                  <span class="tic-ph">{@html fileIcon(it.name)}{#if extBadge(it.name)}<b class="tic-ext">{extBadge(it.name)}</b>{/if}</span>
                 {/if}
               </span>
               {#if renaming?.rel === it.rel}
@@ -2012,7 +2357,8 @@
                   onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') commitRename(); else if (e.key === 'Escape') renaming = null; }}
                   onblur={commitRename} onclick={(e) => e.stopPropagation()} ondblclick={(e) => e.stopPropagation()} />
               {:else}
-                <span class="tnm" title={it.name}>{it.name}</span>
+                <span class="tnm" title={it.name}>{@html nameHtml(it.name)}</span>
+                {#if tileSub(it)}<span class="tsub">{tileSub(it)}</span>{/if}
               {/if}
             </div>
           {/each}
@@ -2024,19 +2370,63 @@
         <span class="st-fill"></span>
         {#if busyLabel}<span class="st-busy"><span class="spin sm"></span>{busyLabel}</span>{/if}
         {#if listBusy && rows.length}<span class="st-busy"><span class="spin sm"></span></span>{/if}
+        {#if view === 'grid'}
+          <input class="st-zoom" type="range" min="0" max={ICON_SIZES.length - 1} step="1" value={ICON_SIZES.indexOf(iconSize)}
+            oninput={(e) => setIconSize(ICON_SIZES[Number(e.currentTarget.value)])} use:tip={{ label: t('图标大小'), kbd: t('Ctrl+= / Ctrl+− / Ctrl+滚轮') }} />
+        {/if}
       </div>
     </div>
+
+    {#if peekShown}
+      <aside class="fd-peek" aria-label={t('预览窗格')}>
+        {#if peekItem}
+          <div class="pk-hero" data-rel-peek={peekItem.rel}>
+            {#if peekItem.isDir}
+              <img class="pk-dir" src={wsIcon} alt="" draggable="false" />
+            {:else if peekThumb.rel === peekItem.rel && peekThumb.url}
+              <img class="pk-img" src={peekThumb.url} alt="" draggable="false" decoding="async" onload={peekLoaded} onerror={() => (peekThumb = { rel: peekItem.rel, url: '' })} />
+              {#if durOf(peekItem)}<b class="tic-dur">{durOf(peekItem)}</b>{/if}
+            {:else}
+              <span class="pk-ic">{@html fileIcon(peekItem.name)}</span>
+            {/if}
+          </div>
+          <div class="pk-name" title={peekItem.name}>{peekItem.name}</div>
+          <dl class="pk-rows">
+            <dt>{t('种类')}</dt><dd>{typeLabel(peekItem)}</dd>
+            <dt>{t('大小')}</dt><dd>{peekItem.isDir ? dirSizeLabel(peekItem) : fmtSize(peekItem.size)}</dd>
+            {#if metaOf(peekItem)?.w > 0}<dt>{t('分辨率')}</dt><dd>{metaOf(peekItem).w} × {metaOf(peekItem).h}</dd>{/if}
+            {#if durOf(peekItem)}<dt>{t('时长')}</dt><dd>{durOf(peekItem)}</dd>{/if}
+            {#if peekItem.isDir && metaOf(peekItem)?.n != null}<dt>{t('内容')}</dt><dd>{t('{n} 项', { n: metaOf(peekItem).n })}</dd>{/if}
+            <dt>{t('修改时间')}</dt><dd>{fmtFull(peekItem.mtime)}</dd>
+            {#if showParentCol}<dt>{t('位置')}</dt><dd>{peekItem.parent || rootLabel}</dd>{/if}
+          </dl>
+          <div class="pk-acts">
+            {#if peekItem.isDir}
+              <button class="pk-btn" onclick={() => openItem(peekItem)}>{t('打开')}</button>
+            {:else}
+              <button class="pk-btn" use:tip={{ label: t('快速查看'), kbd: t('空格') }} onclick={() => { const it = peekItem; selected = new Set([it.rel]); anchorRel = it.rel; quickLookSel(); }}>{t('预览')}</button>
+            {/if}
+          </div>
+        {:else if peekSel}
+          <div class="pk-hero"><span class="pk-ic">{@html typeIconSvg('', { isDir: false })}</span></div>
+          <div class="pk-name">{t('已选 {n} 项', { n: peekSel.length })}</div>
+          <dl class="pk-rows"><dt>{t('大小')}</dt><dd>{fmtSize(peekSelSize)}</dd></dl>
+        {:else}
+          <div class="pk-empty">{t('选中一个文件即可在这里预览')}</div>
+        {/if}
+      </aside>
+    {/if}
   </div>
 
   <!-- 右键菜单 -->
   {#if menu}
-    <button class="menu-scrim" aria-label={t('关闭')} onclick={() => (menu = null)} oncontextmenu={(e) => { e.preventDefault(); menu = null; }}></button>
-    <div class="ctx" style="left:{menu.x}px; top:{menu.y}px">
+    <button class="menu-scrim" aria-label={t('关闭')} tabindex="-1" onclick={() => closeMenu(true)} oncontextmenu={reMenu}></button>
+    <div class="ctx" role="menu" tabindex="-1" style="left:{menu.x}px; top:{menu.y}px" use:ctxNav>
       {#each menu.entries as en, i (i)}
         {#if en.sep}
-          <div class="ctx-sep"></div>
+          <div class="ctx-sep" role="separator"></div>
         {:else}
-          <button class="ctx-mi" class:danger={en.danger} class:accent={en.accent} class:bold={en.bold} disabled={en.disabled} onclick={() => menuRun(en)}>
+          <button class="ctx-mi" role="menuitem" tabindex="-1" class:danger={en.danger} class:accent={en.accent} class:bold={en.bold} disabled={en.disabled} onpointermove={ctxHover} onclick={() => menuRun(en)}>
             <span class="ctx-lb">{en.label}</span>
             {#if en.hint}<span class="ctx-hint">{en.hint}</span>{/if}
           </button>
@@ -2241,14 +2631,17 @@
   /* 桌面工作空间：跟随全站明暗（data-theme），Explorer 级密度；宿主有自己的明暗档时（dimensio）
      经 theme 属性强制 .th-light / .th-dark，与旁边的对话区保持同一档。
      暗色是默认（与 :root 一致：data-theme 缺省即暗）——Claude 底 #1f1f1e 上的 iOS 暗色语言；
-     浅色沿用工作空间家族的 iOS 浅色语言（蓝 #0071e3、#f2f2f7）。所有颜色只走下列令牌，别再就地写死。 */
+     浅色沿用工作空间家族的 iOS 浅色语言（#f2f2f7）。所有颜色只走下列令牌，别再就地写死。
+     强调色只有一个：Claude 珊瑚（与全局焦点环 --coral、查看器 --md-accent 同源）。令牌名沿用 --blue（几十处在用），值已是珊瑚；
+     浅色下文字用深一档（#b5532f，白底 ≥4.5:1），选中底色用珊瑚低透明度 --blue-sel。 */
   .fd-root {
-    --blue: #4f9dff; --blue-soft: rgba(79, 157, 255, .16); --red: #ff6961;
+    --blue: #d97757; --blue-soft: rgba(217, 119, 87, .18); --blue-sel: rgba(217, 119, 87, .2); --blue-line: rgba(217, 119, 87, .55); --red: #ff6961;
     --bg: #1f1f1e; --panel: #262625; --bar: rgba(31, 31, 30, .94); --side-bg: rgba(35, 35, 34, .7);
     --ink: #ececea; --ink2: rgba(235, 235, 240, .62); --ink3: rgba(235, 235, 240, .4);
     --sep: rgba(255, 255, 255, .09); --hover: rgba(255, 255, 255, .07); --row-alt: rgba(255, 255, 255, .03);
     --seg-bg: rgba(255, 255, 255, .08); --field-bg: #1b1b1a; --pop-bg: rgba(44, 44, 42, .98); --dlg-bg: #2a2a29;
     --mask: rgba(0, 0, 0, .5); --pop-shadow: 0 10px 34px rgba(0, 0, 0, .55); --ctx-shadow: 0 12px 44px rgba(0, 0, 0, .6);
+    --pop-hover: rgba(255, 255, 255, .08);
     /* 右上避让：整页形态只让系统窗控；内嵌形态听宿主的 --dock-avoid-r（Claude 工作台不给：它在桌面壳下
        把首行让给窗控当标题栏带、子树 --wco-right 归零，故内嵌时恒为 0） */
     --fd-avoid-r: var(--wco-right, 0px);
@@ -2262,12 +2655,13 @@
     container-type: inline-size;
   }
   :global(html[data-theme='light']) .fd-root:not(.th-dark), .fd-root.th-light {
-    --blue: #0071e3; --blue-soft: rgba(0, 113, 227, .1); --red: #ff383c;
+    --blue: #b5532f; --blue-soft: rgba(217, 119, 87, .12); --blue-sel: rgba(217, 119, 87, .16); --blue-line: rgba(181, 83, 47, .5); --red: #ff383c;
     --bg: #f2f2f7; --panel: #fff; --bar: rgba(248, 248, 250, .92); --side-bg: rgba(242, 242, 246, .8);
     --ink: #1d1d1f; --ink2: rgba(60, 60, 67, .62); --ink3: rgba(60, 60, 67, .4);
     --sep: rgba(60, 60, 67, .1); --hover: rgba(120, 120, 128, .09); --row-alt: rgba(120, 120, 128, .045);
     --seg-bg: rgba(120, 120, 128, .1); --field-bg: #fff; --pop-bg: rgba(252, 252, 253, .97); --dlg-bg: #fbfbfd;
     --mask: rgba(20, 20, 24, .3); --pop-shadow: 0 10px 34px rgba(0, 0, 0, .16); --ctx-shadow: 0 12px 44px rgba(0, 0, 0, .2);
+    --pop-hover: rgba(120, 120, 128, .12);
     color-scheme: light;
   }
   /* 内嵌形态（工作台侧栏）：让开状态栏、密度略收、去掉整页才需要的留白；
@@ -2282,7 +2676,9 @@
   /* 窄列自适应（@container 分档）统一放在本 <style> 末尾——@container 不加特异性，
      写在前面会被后文同名规则按源顺序盖掉（首版就是这么失效的）。 */
   .hidden-input { display: none; }
-  .fd-rows:focus { outline: none; }   /* tabindex=-1 只为拿焦点判快捷键作用域，不该画焦点框 */
+  .fd-rows:focus { outline: none; }   /* 整块不画焦点框：键盘焦点画在锚点行上；还没有锚点时才给整块描一圈内框 */
+  .fd-rows:focus-visible [data-anchor] { box-shadow: inset 0 0 0 1.5px var(--blue); }
+  .fd-rows:focus-visible:not(:has([data-anchor])) { box-shadow: inset 0 0 0 2px var(--blue-line); }
 
   /* —— 工具栏 —— */
   .fd-toolbar { position: relative; box-sizing: border-box; flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; padding-right: calc(10px + var(--fd-avoid-r)); background: var(--bar); border-bottom: 1px solid var(--sep); }
@@ -2301,14 +2697,14 @@
   /* 内层不收缩：外层量 scrollWidth 才量得出溢出（折叠判据）；FLIP 时它承担反向缩放，段落文字不变形 */
   .fd-crumbs-in { display: flex; align-items: center; gap: 1px; flex: 0 0 auto; max-width: 100%; }
   .fd-crumbs.squeeze .fd-crumbs-in { flex: 0 1 auto; min-width: 0; }
-  .crumb { flex: 0 0 auto; border: 0; background: none; padding: 3px 7px; border-radius: 6px; font-size: 13px; color: var(--ink2); cursor: pointer; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crumb { flex: 0 0 auto; height: 28px; line-height: 28px; min-width: 28px; border: 0; background: none; padding: 0 8px; border-radius: 6px; font-size: 13px; color: var(--ink2); cursor: pointer; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .crumb:hover { background: var(--hover); color: var(--ink); }
   .crumb.cur { color: var(--ink); font-weight: 600; cursor: default; }
   /* 头部全收进「…」了还放不下：这时才让当前目录那段省略号（先折叠、后压缩） */
   .fd-crumbs.squeeze .crumb.cur { flex: 0 1 auto; min-width: 56px; }
   .crumb.cur:hover { background: none; }
   .crumb.dropin { background: var(--blue-soft); color: var(--blue); outline: 1.5px solid var(--blue); }
-  .crumb-sep { width: 13px; height: 13px; color: var(--ink3); flex: 0 0 auto; }
+  .crumb-sep { width: 13px; height: 13px; color: var(--ink2); flex: 0 0 auto; }
   .crumb-more { display: flex; align-items: center; margin-left: 4px; }
   /* 位置栏之上的上级段（含它的位置没添加）：只显示、不可点 */
   .crumb.off { color: var(--ink3); cursor: default; }
@@ -2324,19 +2720,17 @@
   .locs-pop .pop-mi { gap: 8px; }
   .locs-pop .pop-mi.on { color: var(--blue); font-weight: 600; }
   .pm-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pop-mi:hover:not(:disabled) .side-ic { color: #fff; }
   .tb-btn.ell { width: 26px; height: 26px; border-radius: 7px; color: var(--ink2); }
   .tb-btn.ell svg { width: 15px; height: 15px; }
   .pop.left { left: 0; right: auto; }
-  .pop-cap { padding: 5px 9px 2px; font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ink3); }
+  .pop-cap { padding: 5px 9px 2px; font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ink2); }
   .pm-ic { width: 14px; height: 14px; flex: 0 0 auto; color: var(--ink2); margin-right: 4px; }
-  .pop-mi:hover:not(:disabled) .pm-ic { color: #fff; }
   .crumb-note { margin-left: 8px; font-size: 12px; color: var(--blue); background: var(--blue-soft); padding: 2px 8px; border-radius: 20px; }
   .fd-search { flex: 0 0 auto; display: flex; align-items: center; width: 200px; height: 32px; padding: 0 9px; background: var(--panel); border: 1px solid var(--sep); border-radius: 9px; overflow: hidden; transition: border-color .15s; }
   .fd-search-in { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; height: 100%; }
   /* 宽度变化（聚焦展开 / mini 档）全走 FLIP，不写 transition */
-  .fd-search.focus { width: 260px; border-color: rgba(0, 113, 227, .5); }
-  .fd-search.active { border-color: rgba(0, 113, 227, .5); }
+  .fd-search.focus { width: 260px; border-color: var(--blue-line); }
+  .fd-search.active { border-color: var(--blue-line); }
   .fd-search svg { width: 14px; height: 14px; color: var(--ink3); flex: 0 0 auto; }
   .fd-search input { flex: 1; min-width: 0; border: 0; background: none; outline: none; font-size: 13px; color: var(--ink); transition: opacity .16s ease; }
   .fd-search .sx { display: grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 50%; background: rgba(120, 120, 128, .18); color: var(--ink2); cursor: pointer; padding: 0; }
@@ -2353,9 +2747,9 @@
   .seg.on { background: var(--panel); color: var(--blue); box-shadow: 0 1px 2px rgba(0, 0, 0, .1); }
   .tb-drop { position: relative; }
   .pop-scrim { position: fixed; inset: 0; z-index: 60; border: 0; background: transparent; cursor: default; }
-  .pop { position: absolute; top: 36px; right: 0; z-index: 61; min-width: 168px; padding: 5px; background: var(--pop-bg); border: 1px solid var(--sep); border-radius: 11px; box-shadow: var(--pop-shadow); }
-  .pop-mi { display: flex; align-items: center; gap: 4px; width: 100%; padding: 6px 9px; border: 0; border-radius: 7px; background: none; text-align: left; font-size: 13px; color: var(--ink); cursor: pointer; }
-  .pop-mi:hover:not(:disabled) { background: var(--blue); color: #fff; }
+  .pop { position: absolute; top: 36px; right: 0; z-index: 61; min-width: 168px; padding: 4px; background: var(--pop-bg); border: 1px solid var(--sep); border-radius: 12px; box-shadow: var(--pop-shadow); }
+  .pop-mi { display: flex; align-items: center; gap: 4px; width: 100%; min-height: 32px; padding: 0 10px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 14px; color: var(--ink); cursor: pointer; }
+  .pop-mi:hover:not(:disabled) { background: var(--pop-hover); }
   .pop-mi:disabled { color: var(--ink3); cursor: default; }
   .pop-sep { height: 1px; margin: 4px 8px; background: var(--sep); }
   .pm-check { width: 16px; flex: 0 0 auto; font-size: 12px; }
@@ -2368,10 +2762,10 @@
   .fd-side { flex: 0 0 208px; display: flex; flex-direction: column; align-items: flex-end; min-width: 0; background: var(--side-bg); border-right: 1px solid var(--sep); overflow: hidden auto;
     transition: flex-basis var(--mo-base) var(--ea-std), border-right-width var(--mo-base) var(--ea-std); }
   .fd-side-in { flex: 1 0 auto; width: 208px; box-sizing: border-box; display: flex; flex-direction: column; padding: 8px 8px 10px; }
-  .side-sec { padding: 10px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ink3); }
+  .side-sec { padding: 10px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ink2); }
   .side-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 13px; color: var(--ink); cursor: pointer; }
   .side-row:hover { background: var(--hover); }
-  .side-row.on { background: rgba(0, 113, 227, .13); color: var(--blue); font-weight: 600; }
+  .side-row.on { background: var(--blue-soft); color: var(--blue); font-weight: 600; }
   .side-row.add { color: var(--ink2); }
   .side-ic { width: 16px; height: 16px; flex: 0 0 auto; color: var(--ink2); }
   .side-row.on .side-ic { color: var(--blue); }
@@ -2401,7 +2795,7 @@
   .row { display: flex; align-items: center; padding: 0 6px; height: 30px; border-radius: 7px; cursor: default; }
   .row:nth-child(even):not(.sel) { background: var(--row-alt); }
   .row:hover:not(.sel) { background: var(--hover); }
-  .row.sel { background: rgba(0, 113, 227, .16); }
+  .row.sel { background: var(--blue-sel); }
   .row.cut, .tile.cut { opacity: .5; }
   .row.dropin, .tile.dropin { outline: 2px solid var(--blue); outline-offset: -2px; background: var(--blue-soft); }
   .cell { min-width: 0; }
@@ -2414,30 +2808,65 @@
   .ric { position: relative; width: 20px; height: 20px; flex: 0 0 auto; display: grid; place-items: center; }
   .ric-dir { width: 20px; height: 20px; object-fit: contain; }
   .ric-img { width: 20px; height: 20px; object-fit: cover; border-radius: 4px; }
-  .ric-ph { width: 15px; height: 18px; display: block; }
+  .ric-ph { width: 18px; height: 18px; display: block; color: var(--ink2); }
   .ric-ph :global(svg) { width: 100%; height: 100%; display: block; }
   .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .lk { flex: 0 0 auto; margin-left: 2px; padding: 1px 6px; border-radius: 20px; background: rgba(120, 120, 128, .14); font-size: 10px; color: var(--ink2); }
   .rn-input { flex: 1; min-width: 60px; height: 24px; padding: 0 6px; border: 1.5px solid var(--blue); border-radius: 6px; background: var(--field-bg); font: inherit; font-size: 13px; color: var(--ink); outline: none; user-select: text; }
 
   /* 图标视图 */
-  .fd-rows.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); align-content: start; gap: 2px; padding: 10px; }
-  .tile { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 10px 6px 8px; border-radius: 10px; cursor: default; }
+  /* 图标边长 --tile 由图标档给（64 / 96 / 128 / 176 / 240），列宽跟着它走；换档是一帧切换，不做宽高动画 */
+  .fd-rows.grid { --tile: 96px; display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--tile) + 30px), 1fr)); align-content: start; gap: 2px; padding: 10px; }
+  .tile { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 10px 6px 8px; border-radius: 10px; cursor: default; content-visibility: auto; contain-intrinsic-size: auto calc(var(--tile) + 64px); }
   .tile:hover:not(.sel) { background: var(--hover); }
-  .tile.sel { background: rgba(0, 113, 227, .16); }
-  .tic { width: 62px; height: 62px; display: grid; place-items: center; }
-  .tic-dir { width: 58px; height: 58px; object-fit: contain; }
-  .tic-img { max-width: 62px; max-height: 62px; border-radius: 7px; box-shadow: 0 1px 4px rgba(0, 0, 0, .14); }
-  .tic-ph { width: 44px; height: 54px; display: block; }
-  .tic-ph :global(svg) { width: 100%; height: 100%; display: block; }
-  .tnm { max-width: 100%; font-size: 12px; line-height: 1.3; text-align: center; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
+  .tile.sel { background: var(--blue-sel); }
+  .tic { width: var(--tile); height: var(--tile); display: grid; place-items: center; }
+  .tic-dir { width: 94%; height: 94%; object-fit: contain; }
+  /* 缩略图按原比例放进方框（桌面文件管理器的习惯），时长角标贴着图本身的右下角 */
+  .tic-media { position: relative; display: block; max-width: 100%; max-height: 100%; line-height: 0; }
+  .tic-img { display: block; max-width: var(--tile); max-height: var(--tile); border-radius: 6px; box-shadow: 0 0 0 .5px var(--sep), 0 1px 4px rgba(0, 0, 0, .14); }
+  .tic-dur { position: absolute; right: 4px; bottom: 4px; padding: 1px 5px; border-radius: 4px; background: rgba(0, 0, 0, .58); color: #fff; font-size: 10.5px; font-weight: 600; line-height: 15px; font-variant-numeric: tabular-nums; pointer-events: none; }
+  .tic-ph { display: flex; flex-direction: column; align-items: center; gap: calc(var(--tile) * .05); color: var(--ink2); }
+  .tic-ph :global(svg) { width: calc(var(--tile) * .5); height: calc(var(--tile) * .5); display: block; }
+  .tic-ext { font-size: 10px; font-weight: 600; letter-spacing: .03em; line-height: 1; color: var(--ink3); }
+  .tnm { max-width: 100%; font-size: 12px; line-height: 1.3; text-align: center; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+  .tsub { margin-top: -3px; max-width: 100%; font-size: 11px; line-height: 1.3; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  /* 关掉查看器后描一圈蓝：刚才看到的是哪一项（选中底色照旧，不被动画盖掉） */
+  .row.flash, .tile.flash { animation: fd-flash 1.3s var(--ea-fade); }
+  @keyframes fd-flash { 0%, 55% { box-shadow: inset 0 0 0 2px var(--blue); } 100% { box-shadow: inset 0 0 0 2px transparent; } }
   .tile-rn { width: 100%; text-align: center; }
 
   /* 状态栏 */
   .fd-status { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; height: 26px; padding: 0 14px; border-top: 1px solid var(--sep); background: var(--bar); font-size: 11.5px; color: var(--ink2); }
   .st-fill { flex: 1; }
   .st-busy { display: flex; align-items: center; gap: 6px; color: var(--blue); }
-  .spin { width: 14px; height: 14px; border: 2px solid rgba(0, 113, 227, .25); border-top-color: var(--blue); border-radius: 50%; animation: fd-spin .8s linear infinite; }
+  .st-zoom { width: 96px; height: 18px; margin: 0; accent-color: var(--blue); cursor: pointer; }
+  .tb-btn.on { background: var(--seg-bg); color: var(--blue); }
+  .tb-btn.peek :global(svg) { width: 17px; height: 17px; display: block; }
+
+  /* 预览窗格（Explorer 的 Alt+P）：固定 300 宽，出现时淡入 + 轻推，不做宽度动画 */
+  .fd-peek { flex: 0 0 300px; min-width: 0; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; padding: 16px; border-left: 1px solid var(--sep); background: var(--panel); overflow-y: auto; animation: fd-peek-in var(--mo-base) var(--ea-std); }
+  @keyframes fd-peek-in { from { opacity: 0; transform: translateX(10px); } }
+  .pk-hero { position: relative; aspect-ratio: 4 / 3; border-radius: 10px; background: var(--row-alt); box-shadow: inset 0 0 0 1px var(--sep); display: grid; place-items: center; overflow: hidden; }
+  .pk-img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .pk-dir { width: 46%; height: 46%; object-fit: contain; }
+  .pk-ic { color: var(--ink2); }
+  .pk-ic :global(svg) { width: 64px; height: 64px; display: block; }
+  .pk-name { font-size: 14px; font-weight: 600; line-height: 1.35; word-break: break-all; }
+  .pk-rows { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 12px; line-height: 1.4; }
+  .pk-rows dt { color: var(--ink2); }
+  .pk-rows dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .pk-acts { display: flex; gap: 8px; }
+  .pk-btn { height: 32px; padding: 0 16px; border: 1px solid var(--sep); border-radius: 8px; background: var(--seg-bg); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+  .pk-btn:hover { background: var(--hover); }
+  .pk-empty { margin: auto 0; text-align: center; font-size: 12.5px; color: var(--ink3); }
+  /* 按钮提示（kit/tooltip.js）在查看器外挂到 body：要压过本页（z 40）与内嵌宿主 */
+  :global(body > .vw-tip) { z-index: 3600; }
+  @media (prefers-reduced-motion: reduce) {
+    .fd-peek { animation: none; }
+    .row.flash, .tile.flash { animation: none; box-shadow: inset 0 0 0 2px var(--blue); }
+  }
+  .spin { width: 14px; height: 14px; border: 2px solid var(--blue-soft); border-top-color: var(--blue); border-radius: 50%; animation: fd-spin .8s linear infinite; }
   .spin.sm { width: 11px; height: 11px; border-width: 1.5px; }
   @keyframes fd-spin { to { transform: rotate(360deg); } }
 
@@ -2449,23 +2878,21 @@
 
   /* 右键菜单 */
   .menu-scrim { position: fixed; inset: 0; z-index: 80; border: 0; background: transparent; cursor: default; padding: 0; }
-  .ctx { position: fixed; z-index: 81; min-width: 236px; padding: 5px; background: var(--pop-bg); border: 1px solid var(--sep); border-radius: 11px; box-shadow: var(--ctx-shadow); animation: fd-pop .12s ease; }
-  @keyframes fd-pop { from { opacity: 0; transform: scale(.97); } }
-  .ctx-mi { display: flex; align-items: center; width: 100%; padding: 6px 10px; border: 0; border-radius: 7px; background: none; text-align: left; font-size: 13px; color: var(--ink); cursor: pointer; }
-  .ctx-mi:hover:not(:disabled) { background: var(--blue); color: #fff; }
-  .ctx-mi:hover:not(:disabled) .ctx-hint { color: rgba(255, 255, 255, .75); }
+  .ctx { position: fixed; z-index: 81; min-width: 236px; padding: 4px; background: var(--pop-bg); border: 1px solid var(--sep); border-radius: 12px; box-shadow: var(--ctx-shadow); animation: fd-pop var(--mo-quick, .2s) var(--ea-decel, ease-out) both; outline: none; }
+  @keyframes fd-pop { from { opacity: 0; transform: scale(.96); } }
+  .ctx-mi { display: flex; align-items: center; width: 100%; height: 32px; padding: 0 10px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 14px; color: var(--ink); cursor: pointer; outline: none; white-space: nowrap; }
+  /* 键盘焦点 = 高亮行（菜单里不画外圈）；鼠标划过同一种浅底 */
+  .ctx-mi:focus-visible, .ctx-mi:hover:not(:disabled) { background: var(--pop-hover); }
   .ctx-mi:disabled { color: var(--ink3); cursor: default; }
   .ctx-mi.danger { color: var(--red); }
-  .ctx-mi.danger:hover:not(:disabled) { background: var(--red); color: #fff; }
   .ctx-mi.accent { color: var(--blue); font-weight: 600; }
-  .ctx-mi.accent:hover:not(:disabled) { color: #fff; }
   .ctx-mi.bold { font-weight: 600; }
-  .ctx-lb { flex: 1; }
-  .ctx-hint { margin-left: 18px; font-size: 11px; color: var(--ink3); }
-  .ctx-sep { height: 1px; margin: 4px 9px; background: var(--sep); }
+  .ctx-lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .ctx-hint { margin-left: 18px; font-size: 12px; color: var(--ink2); }
+  .ctx-sep { height: 1px; margin: 4px 6px; background: var(--sep); }
 
   /* 框选 */
-  .marquee { position: fixed; z-index: 70; border: 1px solid rgba(0, 113, 227, .8); background: rgba(0, 113, 227, .12); pointer-events: none; }
+  .marquee { position: fixed; z-index: 70; border: 1px solid var(--blue-line); background: var(--blue-soft); pointer-events: none; }
 
   /* 弹窗 */
   .dlg-mask { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: var(--mask); animation: fd-fade .14s ease; }
@@ -2508,7 +2935,7 @@
   .sh-ttl { display: flex; gap: 6px; margin-top: 8px; }
   .sh-ttl button { flex: 1; padding: 7px 0; border: 1px solid var(--sep); border-radius: 8px; background: var(--field-bg); font-size: 12.5px; color: var(--ink); cursor: pointer; }
   .sh-ttl button.on { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); font-weight: 600; }
-  .sh-url { display: block; width: 100%; margin: 6px 0 4px; padding: 10px; border: 1px dashed rgba(0, 113, 227, .5); border-radius: 9px; background: var(--blue-soft); font-size: 12.5px; color: var(--blue); word-break: break-all; text-align: left; cursor: pointer; user-select: text; }
+  .sh-url { display: block; width: 100%; margin: 6px 0 4px; padding: 10px; border: 1px dashed var(--blue-line); border-radius: 9px; background: var(--blue-soft); font-size: 12.5px; color: var(--blue); word-break: break-all; text-align: left; cursor: pointer; user-select: text; }
   .sh-meta { margin: 2px 0 0; font-size: 12px; color: var(--ink2); }
   .zp-lb { margin: 12px 0 0; font-size: 12px; font-weight: 600; color: var(--ink2); }
   .zp-name { display: flex; align-items: center; gap: 6px; }

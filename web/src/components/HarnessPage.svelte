@@ -392,6 +392,15 @@
     name: artifact.name,
     kind: artifact.kind,
   })}
+  onOpenMedia={(items, index, rect) => openPreview(items.map((x, i) => ({
+    // 截图 / 用户附件：地址 harness 已算好（令牌在查询串里）；kind 'file' 交给扩展名词表判（pdf / 文档 / 文本…）
+    origin: 'url',
+    key: 'hx:' + x.key,
+    url: x.src,
+    name: x.name,
+    kind: x.kind === 'file' ? undefined : x.kind,
+    ...(i === index && rect ? { originRect: rect } : {}),
+  })), index, { host: 'app' })}
 />
 {:else}
   <div class="hx-placeholder" style:background={placeholderBg}>

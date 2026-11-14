@@ -1,12 +1,15 @@
 // Claude 分页右侧栏的终端服务：一个工作空间一个 PTY（PowerShell，cwd=工作空间），
-// 断开重连不丢现场（滚回缓冲 + SSE 快照重放）。node-pty 经 createRequire 惰性加载——
+// 断开重连不丢现场（SSE 快照重放）。node-pty 经 createRequire 惰性加载——
 // 桌面 Electron 的 node 环境编不出原生模块，谁用谁加载。
+// 快照来自每个 PTY 常驻的屏幕镜像（term-mirror.mjs：headless xterm 跟着输出与尺寸实时结算），
+// 不再是一摞跨越多种尺寸的原始字节；镜像不可用时退回原始字节缓冲。
 
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { sseWrite } from './sse.mjs';
 import { poolKey, refPath, refOwner, HOST_OWNER } from './principal.mjs';
 import { terminalEnv } from './member-boundary.mjs';
+import { createMirror, hostPtyCompat } from './term-mirror.mjs';
 
 const require = createRequire(import.meta.url);
 let ptyLib = null;
@@ -29,6 +32,9 @@ const ownerOfRef = (ref) => { const o = refOwner(ref); return o && o !== HOST_OW
 
 const terms = new Map(); // key((属主 +) folded ws) -> term
 
+// ConPTY 兼容信息（Windows 上才有）：镜像用它，hello 里也发给面板（两边的 xterm 设置必须一致）
+export const PTY_COMPAT = hostPtyCompat();
+
 function shellSpec() {
   if (process.platform === 'win32') return { file: 'powershell.exe', args: ['-NoLogo'] };
   return { file: process.env.SHELL || 'bash', args: [] };
@@ -40,7 +46,7 @@ export function ensureTerm(ref, cols, rows) {
   const key = keyOf(ref);
   let t = terms.get(key);
   if (t && !t.exited) return t;
-  if (t) terms.delete(key);
+  if (t) dropTerm(t);   // 已退出的旧壳：连同镜像、还在等快照的面板一起收掉
   // 上限保护：先踢无人观看里最久没动静的。
   if (terms.size >= MAX_TERMS) {
     let oldest = null;
@@ -52,19 +58,25 @@ export function ensureTerm(ref, cols, rows) {
   const c = clampC(cols), r = clampR(rows);
   // 成员工作区（属主不是主机身份，或路径在用户根 / 快照桶下）的终端：按名字剔掉凭据与 bridge 内部变量（runtime/member-boundary.mjs）
   const pty = loadPty().spawn(file, args, { name: 'xterm-256color', cols: c, rows: r, cwd: ws, env: terminalEnv(ws, process.env, { owner: refOwner(ref) }) });
-  t = { ws, key, owner: ownerOfRef(ref), pty, chunks: [], bytes: 0, subs: new Set(), taps: new Set(), lastUsed: Date.now(), cols: c, rows: r, exited: false };
+  // pending：正在接入的面板（attachTerm 切快照那一刻之后的输出先攒在这里，快照发完再补）
+  t = { ws, key, owner: ownerOfRef(ref), pty, mirror: createMirror(c, r, { windowsPty: PTY_COMPAT }), chunks: [], bytes: 0, subs: new Set(), taps: new Set(), pending: new Set(), lastUsed: Date.now(), cols: c, rows: r, exited: false, exitCode: null };
   pty.onData((d) => {
     // 有产出也算活着——agent 起的长跑任务（编译/下载）没人订阅也不该被 reaper 半路收走。
     t.lastUsed = Date.now();
-    t.chunks.push(d);
-    t.bytes += Buffer.byteLength(d);
-    // 整块丢弃可能把 ANSI 序列拦腰截断——xterm 对快照开头的少量乱码有容忍，可接受。
-    while (t.bytes > BUF_CAP && t.chunks.length > 1) t.bytes -= Buffer.byteLength(t.chunks.shift());
+    if (t.mirror) t.mirror.write(d);
+    else {
+      t.chunks.push(d);
+      t.bytes += Buffer.byteLength(d);
+      // 整块丢弃可能把 ANSI 序列拦腰截断——xterm 对快照开头的少量乱码有容忍，可接受。
+      while (t.bytes > BUF_CAP && t.chunks.length > 1) t.bytes -= Buffer.byteLength(t.chunks.shift());
+    }
+    for (const p of t.pending) p.q.push(d);
     for (const res of t.subs) sseWrite(res, { type: 'data', d });
     for (const fn of t.taps) { try { fn(d); } catch { /* tap 不许拖垮输出泵 */ } }
   });
   pty.onExit(({ exitCode }) => {
     t.exited = true;
+    t.exitCode = exitCode;
     for (const res of t.subs) sseWrite(res, { type: 'exit', code: exitCode });
     for (const fn of t.taps) { try { fn(null, exitCode); } catch { /* 同上 */ } }
   });
@@ -90,6 +102,7 @@ export function resizeTerm(ws, cols, rows) {
   t.cols = clampC(cols);
   t.rows = clampR(rows);
   try { t.pty.resize(t.cols, t.rows); } catch { /* 竞态：刚退出 */ }
+  t.mirror?.resize(t.cols, t.rows);
   return true;
 }
 
@@ -105,10 +118,14 @@ function dropTerm(t, { end = false } = {}) {
   if (terms.get(t.key) === t) terms.delete(t.key);
   try { t.pty.kill(); } catch { /* already gone */ }
   for (const res of t.subs) sseWrite(res, { type: 'exit', code: -1 });
+  // 还在等快照切点的面板：镜像要收了，直接告诉它结束
+  for (const p of t.pending) { p.done = true; sseWrite(p.res, { type: 'exit', code: -1 }); if (end) { try { p.res.end(); } catch { /* 已断 */ } } }
+  t.pending.clear();
   if (end) {
     for (const res of t.subs) { try { res.end(); } catch { /* 已断 */ } }
     t.subs.clear();
   }
+  t.mirror?.dispose();
   return true;
 }
 
@@ -122,8 +139,36 @@ export function killTermsOf(owner) {
   return n;
 }
 
+// 同步快照（agent 读屏用）：镜像里已结算的部分。镜像解析是异步的，刚到的最后几毫秒输出可能还没算进来——
+// 读屏都是等输出安静下来才读，够用；面板接入要求不丢不重，走下面的 attachTerm。
 export function snapshotTerm(t) {
+  if (t.mirror && !t.mirror.dead) { try { return t.mirror.serialize(); } catch { /* 退回原始缓冲 */ } }
   return t.chunks.join('');
+}
+
+// 面板接入：发快照，再订阅实时输出，中间一个字节不丢也不重。
+// 镜像在「此刻之前到的输出全部结算完」那一点上切快照（mirror.at）；切点之后到的输出先攒进 pending，
+// 快照发完紧接着补发，然后才转成普通订阅。
+export function attachTerm(t, res) {
+  if (!t.mirror || t.mirror.dead) {
+    const snap = t.chunks.join('');
+    if (snap) sseWrite(res, { type: 'snapshot', d: snap });
+    subscribeTerm(t, res);
+    return;
+  }
+  const p = { q: [], res, done: false };
+  t.pending.add(p);
+  res.on('close', () => { p.done = true; t.pending.delete(p); });
+  t.mirror.at(() => {
+    t.pending.delete(p);
+    if (p.done || res.destroyed || res.writableEnded) return;
+    let snap = '';
+    try { snap = t.mirror.serialize(); } catch { snap = ''; }
+    if (snap) sseWrite(res, { type: 'snapshot', d: snap });
+    for (const d of p.q) sseWrite(res, { type: 'data', d });
+    if (t.exited) sseWrite(res, { type: 'exit', code: t.exitCode ?? -1 });
+    subscribeTerm(t, res);
+  });
 }
 
 export function subscribeTerm(t, res) {

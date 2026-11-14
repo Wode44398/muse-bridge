@@ -12,7 +12,7 @@
 //                config 里没声明时，官方安装包的构建期渠道可以带一份（bridge-build.json 的 feedbackDest，打包脚本在写官方中继时
 //                一并写入：The Bridge 的公开 GitHub Issue），见下面 channelFeedback。
 // 前端经 HTML 壳里注入的 window.__DISTRO__ 读（启动前就要知道：i18n 在任何请求之前定死），见 web/src/lib/distro.js；
-// 注入点与 overlay 同一处（runtime/overlay-web.mjs，覆盖 /、/app/*.html、/w/、/c/ 全部 HTML 壳）。
+// 注入点在 runtime/html-shell.mjs（覆盖 /、/app/*.html、/w/、/c/ 全部 HTML 壳）。
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { config } from './index.mjs';

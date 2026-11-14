@@ -232,6 +232,8 @@ export type AgentEvent =
   | { e: "skill_loaded"; name: string; via: "slash"; pkg?: boolean }
   // 适配器层的提示，原样转给前端在时间线上写一行（见 StreamEvent 同名事件）
   | { e: "notice"; code: "fast_fallback"; cooldownMs: number }
+  // 会话层的提示：工作区太大，这个会话的检查点从这一轮起只备份编辑工具改过的文件（Bash 的改动回滚不了）
+  | { e: "notice"; code: "checkpoint_touched" }
   // 会话协作（session-family.ts）：这一轮跑着时别的会话发来的消息已在回合边界注入（kind 同 Msg.kind；界面上画成会话消息卡）
   | { e: "session_message"; kind: string; text: string }
   // 会话协作：StartSession 开出了一个子会话（工具行据此直接链过去；child 是新会话 id，agent 是它在哪边）

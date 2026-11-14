@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { createRouter } from './router.mjs';
-import { mountHtmlSite, registerHtmlSiteRoutes, SCROLLBAR_SHIM } from './html-site.mjs';
+import { mountHtmlSite, registerHtmlSiteRoutes, SCROLLBAR_SHIM, KEY_SHIM } from './html-site.mjs';
 
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), 'hv-'));
@@ -41,6 +41,10 @@ test('挂载根=HTML 所在目录；相对资源可取、目录外不可取', as
       // 垫片紧跟 <meta charset>，在页面脚本之前
       assert.ok(html.indexOf('localStorage') > html.indexOf('<meta charset="utf-8">'));
       assert.ok(html.indexOf('localStorage') < html.indexOf('src="app.js"'));
+      // 键盘中继也在：紧跟垫片、在页面脚本之前，且只用 postMessage（沙箱不给 allow-same-origin 也能跑）
+      const k = html.indexOf('__bridgeHv:"esc"');
+      assert.ok(k > html.indexOf('<meta charset="utf-8">') && k < html.indexOf('src="app.js"'));
+      assert.equal(html.split(KEY_SHIM).length, 2);
       const js = await fetch(base + url.replace('index.html', 'app.js'));
       assert.equal(js.status, 200);
       assert.match(js.headers.get('content-type'), /javascript/);
@@ -77,4 +81,15 @@ test('HtmlView 的 SB_SHIM 与服务端 SCROLLBAR_SHIM 逐字节一致', () => {
   assert.ok(m, '找不到 SB_SHIM');
   assert.equal(JSON.parse(m[1]), SCROLLBAR_SHIM);   // JSON 认 \/ 转义；多转义一层（<\\/script>）就对不上
   assert.equal(SCROLLBAR_SHIM.match(/<\/script>/g).length, 1);
+});
+
+// Esc 中继同理：前端 srcdoc 回落路径的 KEY_SHIM 与服务端注入的必须逐字节一致（父页按同一份消息格式收）
+test('HtmlView 的 KEY_SHIM 与服务端 KEY_SHIM 逐字节一致', () => {
+  const svelte = readFileSync(new URL('../../web/src/components/preview/HtmlView.svelte', import.meta.url), 'utf8');
+  const m = /const KEY_SHIM = '(.*)';\r?\n/.exec(svelte);
+  assert.ok(m, '找不到 KEY_SHIM');
+  assert.equal(m[1].replaceAll('<\\/', '</'), KEY_SHIM);
+  assert.equal(KEY_SHIM.match(/<\/script>/g).length, 1);
+  assert.match(KEY_SHIM, /postMessage\(\{__bridgeHv:"ready"\}/);
+  assert.match(KEY_SHIM, /postMessage\(\{__bridgeHv:"esc"\}/);
 });

@@ -27,6 +27,7 @@
   import FilesPanel from './components/FilesPanel.svelte';
   import FilesDesktop from './components/FilesDesktop.svelte';
   import { isNativeDesktop, hasNativeWorkspaceOps } from './lib/nativeDesktop.js';
+  import { pointer, layout } from './lib/layout.svelte.js';
   // Gemini / Codex / dimensio 的页面属于功能扩展：一律懒加载（modules/pages.js），基础版主包里没有它们。
   import { loadPage } from './modules/pages.js';
   import BrandTitle from './components/BrandTitle.svelte';
@@ -337,8 +338,9 @@
   </div>
 {/if}
 {#if ui.screen === 'files'}
-  <!-- 桌面壳（Electron）独占的原生工作空间：Explorer 级信息密度 + 右键/键盘/拖拽；
-       网页 / 安卓 / 手机浏览器仍走手机版 FilesPanel。
+  <!-- 电脑版工作空间 FilesDesktop：Explorer 级信息密度 + 右键/键盘/拖拽。桌面壳（Electron）恒走它；
+       网页上「精确指针（鼠标 / 触控板）且窗口够宽（≥1024）」也走它（云端通道，判据同工作台侧栏 WorkspaceEmbed：
+       宽 + 指针精度缺一不可——折叠屏展开、平板宽度够但仍是手指）；安卓 / 手机 / 触屏仍走手机版 FilesPanel。
        dev `?fdmock=panel` 强制走 FilesPanel（它在桌面壳里同样带 desktopNative 跑：
        Claude 工作台的「文件」工具、Codex 侧边工作区都是这条路），prod 里整个条件被
        import.meta.env.DEV 消掉。 -->
@@ -359,7 +361,7 @@
       </aside>
       <div style="position:absolute;right:10px;top:10px;width:92px;height:44px;border-radius:22px;background:rgba(32,32,30,.42);backdrop-filter:blur(18px) saturate(1.5);pointer-events:none"></div>
     </div>
-  {:else if isNativeDesktop() && hasNativeWorkspaceOps() && !(import.meta.env.DEV && typeof window !== 'undefined' && window.__FD_MOCK_PANEL)}
+  {:else if ((isNativeDesktop() && hasNativeWorkspaceOps()) || (pointer.fine && layout.w >= 1024)) && !(import.meta.env.DEV && typeof window !== 'undefined' && window.__FD_MOCK_PANEL)}
     <FilesDesktop />
   {:else}
     <!-- 位置（工作空间 / 主目录 / 各盘符）由 FilesPanel 自己管：顶栏位置胶囊 -->

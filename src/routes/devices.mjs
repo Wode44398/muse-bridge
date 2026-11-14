@@ -24,7 +24,7 @@ import {
 import { deviceAudit, readDeviceAudit } from '../runtime/device-audit.mjs';
 import { deviceDispatch, devicesEnabled, publicDevice, ownDevices, resolveDevice, onServerMachine } from '../runtime/devices.mjs';
 import {
-  ensureDeviceTerm, deviceTerm, snapshotDeviceTerm, subscribeDeviceTerm, writeDeviceTerm, resizeDeviceTerm, killDeviceTerm,
+  ensureDeviceTerm, deviceTerm, attachDeviceTerm, writeDeviceTerm, resizeDeviceTerm, killDeviceTerm,
 } from '../runtime/device-term.mjs';
 import { listForwards, createForward, removeForward, dropForwardsOfDevice } from '../runtime/device-forward.mjs';
 import { clientReleaseFor, clientReleaseForAsync, streamClientFile, clientModuleFile } from '../runtime/client-release.mjs';
@@ -548,13 +548,11 @@ export function registerDeviceRoutes(router, { identify, adminCredential = null,
     if (!online && !deviceTerm(d.id)) return json(res, 409, { error: `「${d.name}」当前离线（桌面客户端没开，或档位是「关闭」）` });
     const caps = (deviceRuntime(d.id).info || {}).caps || [];
     if (online && !caps.includes('pty')) return json(res, 409, { error: `「${d.name}」上的客户端还不支持终端——更新客户端后再试` });
-    const t = ensureDeviceTerm(ctx, d.id, { cols: url.searchParams.get('cols'), rows: url.searchParams.get('rows') });
+    const t = ensureDeviceTerm(ctx, d.id, { cols: url.searchParams.get('cols'), rows: url.searchParams.get('rows'), os: (deviceRuntime(d.id).info || {}).os || '' });
     writeSseHeaders(res);
-    sseWrite(res, { type: 'hello', cols: t.cols, rows: t.rows, exited: false, state: t.state, device: { id: d.id, name: d.name } });
-    const snap = snapshotDeviceTerm(t);
-    if (snap) sseWrite(res, { type: 'snapshot', d: snap });
-    if (t.state === 'offline') sseWrite(res, { type: 'offline' });
-    subscribeDeviceTerm(t, res);
+    sseWrite(res, { type: 'hello', cols: t.cols, rows: t.rows, exited: false, state: t.state, device: { id: d.id, name: d.name }, ...(t.pty ? { pty: t.pty } : {}) });
+    // 快照（服务端屏幕镜像）+ 实时输出，衔接处不丢不重；掉线 / 已结束的状态随后补一条
+    attachDeviceTerm(t, res);
     const hb = startHeartbeat(res);
     req.on('close', () => clearInterval(hb));
   });

@@ -43,7 +43,6 @@ import { toolJoins, COMPACT_TOOL, isCompactTool } from './toolVerbs.js';
 import { claudeDefaultModel } from './caps.js';
 import { retractSegments } from './retract.js';
 import { cacheMessages, getCachedMessages, getCachedMessagesMeta } from './cache.js';
-import { getStyle } from './styles.svelte.js';
 import { agentStart, agentStream, agentEnd, notifyKind } from './notify.js';
 // 设置 › Claude（服务端按身份存、多设备同步）：输入建议 / 自动压缩点；本文件 chatParams 里有局部变量 cs，取别名
 import { cs as claudeCs } from './claudeSettings.svelte.js';
@@ -167,7 +166,8 @@ function unsettled() {
 // 缓存/失败回退时都能换成服务端副本（/api/upload/raw），和重开会话时历史给的是同一条。
 const UPLOAD_FILE_RE = /[\\/]uploads[\\/]([^\\/]+)$/;
 const sentAttachments = (list) => (list || []).map((a) => {
-  const file = a.kind === 'image' && !a.local && a.path ? (UPLOAD_FILE_RE.exec(a.path) || [])[1] : null;
+  // 任何类型都记（不只图片）：pdf / office / 代码附件点开预览也要能从 uploads 取回原文件
+  const file = !a.local && a.path ? (UPLOAD_FILE_RE.exec(a.path) || [])[1] : null;
   return {
     path: a.path || null,
     name: a.name,
@@ -668,7 +668,7 @@ const STATUS_ONLY = new Set(['context', 'ctx_usage', 'effort', 'limits', 'perm_m
 function applyStatusEvent(ev) {
   switch (ev.type) {
     case 'context': {
-      const c = { used: ev.used, total: ev.total, pct: ev.pct, sessionId: ev.sessionId };
+      const c = { used: ev.used, total: ev.total, pct: ev.pct, sessionId: ev.sessionId, at: ev.at || Date.now() };   // 轮中每次 API 调用后都会来（11-13 起）
       status.context = c;
       if (ev.sessionId) status.contexts[ev.sessionId] = c;   // 多对话并发：按会话各记各的填充
       return;
@@ -832,10 +832,13 @@ function onEvent(m, ev) {
     // 只认流里的事件落段（单写者）——发起插话的 POST 只回 JSON，不碰消息列表。
     case 'steer':
       if (!m.segments.some((s) => s.kind === 'steer' && s.uuid && s.uuid === ev.uuid)) {
-        m.segments.push({ kind: 'steer', text: ev.text || '', files: Array.isArray(ev.files) ? ev.files : [], atts: toUiAttachments(ev.atts), uuid: ev.uuid || '', read: false });
+        m.segments.push({ kind: 'steer', text: ev.text || '', files: Array.isArray(ev.files) ? ev.files : [], atts: toUiAttachments(ev.atts), uuid: ev.uuid || '', read: false, retractable: !!ev.retractable });
       }
       break;
     case 'steer_state': {
+      // withdrawn = 用户在 Claude 读到之前撤回了（/api/claude/unsteer）：它本来就是虚的，整段拿掉——
+      // 各设备都收得到这一帧（进重放缓冲），气泡一起消失；原文只回到撤回的那台输入栏。
+      if (ev.state === 'withdrawn') { const i = m.segments.findIndex((s) => s.kind === 'steer' && s.uuid === ev.uuid); if (i >= 0) m.segments.splice(i, 1); break; }
       const sg = m.segments.find((s) => s.kind === 'steer' && s.uuid === ev.uuid);
       if (sg) { if (ev.state === 'cancelled') sg.cancelled = true; else sg.read = true; }
       break;
@@ -1072,7 +1075,7 @@ function onEvent(m, ev) {
       break;
     case 'gen_media_progress': { const s = findMedia(m, ev.id); if (s) s.elapsed = ev.elapsed || 0; break; }
     // dataUrl：图片用内嵌 data: URI 直送（Claude 发截图走这条，绕开离线壳跨源 <img> 取图坏掉的问题）。
-    case 'gen_media': { const s = findMedia(m, ev.id); if (s) { s.status = 'ready'; s.prompt = ev.prompt || ''; if (ev.dataUrl) s.dataUrl = ev.dataUrl; } break; }
+    case 'gen_media': { const s = findMedia(m, ev.id); if (s) { s.status = 'ready'; s.prompt = ev.prompt || ''; if (ev.dataUrl) s.dataUrl = ev.dataUrl; if (ev.ext) s.ext = ev.ext; } break; }
     case 'gen_media_error': { const s = findMedia(m, ev.id); if (s) { s.status = 'error'; s.error = ev.message || tt('生成失败'); } break; }
     case 'widget_start': case 'widget_delta': case 'widget': case 'widget_done': applyWidgetEvent(m, ev); break;
     case 'done': {
@@ -1828,11 +1831,6 @@ function chatParams(t, atts) {
   // Ultracode 与档位独立（10-30）；快照访客没有它（服务端也会拦），不带
   if (settings.ultracode && !IS_CSNAP) params.ultracode = true;
   if (settings.fast) params.fast = true;
-  if (settings.style && settings.style !== 'normal') {
-    params.style = settings.style;
-    const cs = getStyle(settings.style);          // 自定义风格：附上指令文本（预设则后端按 id 注入）
-    if (cs && cs.text) params.styleText = cs.text;
-  }
   if (settings.research) params.research = true;
   // 输入建议：开关开着才让服务端生成（定局后 CLI 预测下一句）。自 2026-10-20 起两项都以服务端设置为准
   //（claudeCs），这里照带只为与老服务端兼容；新服务端改过的值盖过请求体。
@@ -2008,7 +2006,7 @@ export function convertToProject(srcSid, text) {
 // 历史附件（sessions.mjs 抽出的 {file,name} 或 {rel,name}）→ 前端消息附件 {name,kind,url}。
 // 图片取图：uploads 里的（{file}）走 /api/upload/raw；工作空间直发的（{rel}，「发送给 AI」零拷贝）
 // 走 /api/file。<img> 跨源带不了 Authorization，附 ?token=；见 auth.mjs 白名单。
-// 非图片只留名字（当文件卡显示，不预览）。
+// 非图片也留着 file / rel：文件卡点开走统一查看器（pdf / office / md / 代码…），取原文件同一条路。
 const IMG_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif', 'avif', 'svg'];
 function uploadRawUrl(file, thumb) {
   const t = getToken();
@@ -2033,7 +2031,7 @@ function toUiAttachments(list) {
     if (a.kind === 'chat') return { name, kind: 'chat', url: null, quoteId: a.quoteId || null };   // 引用对话（sessions.mjs 按存盘名认出）
     if (a.kind === 'folder') return { name, kind: 'folder', url: null, ...(a.device ? { device: a.device } : {}) };   // 电脑上的文件夹（只引用没上传）
     const isImg = IMG_EXT.includes((name.split('.').pop() || '').toLowerCase());
-    if (!isImg) return { name, kind: 'file', url: null };
+    if (!isImg) return { name, kind: 'file', url: null, ...(a.file ? { file: a.file } : {}), ...(a.rel ? { rel: a.rel } : {}) };
     const src = a.rel ? wsFileUrl : (a.file ? uploadRawUrl : null);
     const key = a.rel || a.file;
     return {
@@ -2041,6 +2039,7 @@ function toUiAttachments(list) {
       kind: 'image',
       url: src ? src(key) : null,
       thumb: src ? src(key, 'preview') : null,
+      ...(a.file ? { file: a.file } : {}), ...(a.rel ? { rel: a.rel } : {}),
     };
   });
 }
@@ -2411,11 +2410,6 @@ function steerParams(t, atts, priority) {
   if (eff) params.effort = eff;
   if (settings.ultracode && !IS_CSNAP) params.ultracode = true;
   if (settings.fast) params.fast = true;
-  if (settings.style && settings.style !== 'normal') {
-    params.style = settings.style;
-    const cs = getStyle(settings.style);
-    if (cs && cs.text) params.styleText = cs.text;
-  }
   if (settings.research) params.research = true;
   if (claudeCs.values.promptSuggestions !== false && !IS_CSNAP) params.suggest = true;
   if (claudeCs.values.compactFrac && !IS_CSNAP) params.compactFrac = claudeCs.values.compactFrac;
@@ -2494,6 +2488,12 @@ export async function editQueued(id) {
   const it = r && r.item;
   if (!it) return false;
   prefillComposer(it.text || '');
+  restoreAttachments(it.attachments, it.files);
+  return true;
+}
+// 放回输入框的附件（排队消息「编辑」与撤回插话共用）：按路径回暂存区，已在的不重复放
+function restoreAttachments(paths, files) {
+  const it = { attachments: paths, files };
   (it.attachments || []).forEach((p, i) => {
     if (compose.attachments.some((x) => x.path === p)) return;
     // 引用电脑上的文件夹：放回成文件夹卡（原始文件不在了，不能再改为上传）
@@ -2505,11 +2505,52 @@ export async function editQueued(id) {
     }
     compose.attachments.push({ path: p, name: (it.files && it.files[i]) || String(p).split(/[\\/]/).pop(), kind: 'file', url: null, pending: false, local: true });
   });
-  return true;
 }
 export function editLastQueued() {
   const list = queuedItems();
   return list.length ? editQueued(list[list.length - 1].id) : Promise.resolve(false);
+}
+
+// —— 撤回插话 ——
+// 插话在 Claude 真读到之前是「虚」的（气泡虚线、半透明）：点「撤回」/ 输入框空着按 ↑ 或工作中按 Esc，
+// 服务端把它从这一轮里抽回（还没写进 CLI 就摘掉，已在 CLI 队列里就 cancel_async_message），
+// 原文与附件回到输入栏。CLI 抢先读到了就撤不回，气泡转实。气泡的消失由流里的 steer_state withdrawn 负责（单写者）。
+const retracting = new Set();
+function lastAssistant() {
+  for (let i = chat.messages.length - 1; i >= 0; i--) if (chat.messages[i].role === 'assistant') return chat.messages[i];
+  return null;
+}
+// 当前这一轮里还能撤回的插话（从新到旧）
+export function retractableSteers() {
+  const m = lastAssistant();
+  if (!m || m.status !== 'streaming') return [];
+  return m.segments.filter((s) => s.kind === 'steer' && s.retractable && !s.read && !s.cancelled).reverse();
+}
+export async function retractSteer(uuid) {
+  const sid = session.id;
+  if (!sid || !uuid || retracting.has(uuid)) return false;
+  if (composerHasDraft()) { queueState.error = tt('输入框里已有草稿，先发送或清空再撤回插话'); return false; }
+  const seg = lastAssistant()?.segments.find((s) => s.kind === 'steer' && s.uuid === uuid);
+  retracting.add(uuid);
+  if (seg) seg.retracting = true;
+  let r = null;
+  try { r = await api.post('/api/claude/unsteer', { session: sid, uuid }); }
+  catch (e) { r = (e && e.body) || { ok: false }; }
+  finally { retracting.delete(uuid); if (seg) seg.retracting = false; }
+  if (!r || !r.ok) {
+    if (seg && r && r.reason) seg.read = true;   // CLI 抢先读到了 / 服务端已不认这条：气泡转实，不再给撤回
+    queueState.error = r && r.reason === 'read' ? tt('Claude 已经读到这条了') : r && r.reason ? tt('这条插话撤不回了') : tt('撤回没成功，请重试');
+    return false;
+  }
+  if (session.id === sid) {
+    prefillComposer(r.message || '');
+    restoreAttachments(r.attachments, r.files);
+  }
+  return true;
+}
+export function retractLastSteer() {
+  const s = retractableSteers()[0];
+  return s ? retractSteer(s.uuid) : Promise.resolve(false);
 }
 
 // 兼容旧接线名（ClaudePage 兜底轮询 / SnapPage 镜像轮询 / 回前台对账）——全部等价于 requestSync。

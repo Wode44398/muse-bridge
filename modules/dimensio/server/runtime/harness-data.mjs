@@ -98,7 +98,7 @@ export function harnessEnvFile({ dataDir, harnessDir, env = process.env }) {
   return path.join(dataDir || harnessDir, '.env');
 }
 
-function readEnvFile(file) {
+export function readEnvFile(file) {
   if (!file) return {};
   try { return parseEnv(readFileSync(file, 'utf8')); } catch { return {}; }
 }

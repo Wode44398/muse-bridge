@@ -22,8 +22,12 @@
   //   filter(m)      只留返回真的模型（m 是 caps 的官方模型或 cp.models 的条目）
   //   anchor         触发按钮的视口矩形（getBoundingClientRect）。给了就改用 fixed 定位贴着它展开——
   //                  调用方把本组件挪到 body 上时用（设置页的面板带 transform / 滚动裁切，absolute 弹层出不来）
-  let { onClose, dir = 'up', value = undefined, onpick = null, showFast = true, includeHidden = false, filter = null, anchor = null } = $props();
+  //   fast / onfast  受控的 Fast 开关（定时任务表单：Fast 存在任务里，不是当前会话的）。给了 onfast 才生效，
+  //                  不给就和原来一样读写当前会话的 settings.fast
+  let { onClose, dir = 'up', value = undefined, onpick = null, showFast = true, includeHidden = false, filter = null, anchor = null, fast = undefined, onfast = null } = $props();
   const controlled = $derived(typeof onpick === 'function');
+  const fastCtl = $derived(typeof onfast === 'function');
+  const fastVal = $derived(fastCtl ? !!fast : settings.fast);
 
   let view = $state('main');
   let q = $state('');
@@ -123,7 +127,7 @@
     rememberCurrentPrefs();
     onClose && onClose();
   }
-  function toggleFast() { settings.fast = !settings.fast; rememberCurrentPrefs(); }
+  function toggleFast() { if (fastCtl) { onfast(!fast); return; } settings.fast = !settings.fast; rememberCurrentPrefs(); }
 </script>
 
 {#snippet check()}<svg class="mp-check" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10.5l3.5 3.5 7.5-8"/></svg>{/snippet}
@@ -165,9 +169,9 @@
     {#if fastOk}
       <div class="mp-div"></div>
       <div class="mp-label">Fast mode</div>
-      <button class="mp-row" role="menuitemcheckbox" aria-checked={settings.fast} onclick={toggleFast}>
+      <button class="mp-row" role="menuitemcheckbox" aria-checked={fastVal} onclick={toggleFast}>
         <span class="mp-name">Enable fast mode</span>
-        <span class="mp-switch" class:on={settings.fast} aria-hidden="true"><span class="mp-knob"></span></span>
+        <span class="mp-switch" class:on={fastVal} aria-hidden="true"><span class="mp-knob"></span></span>
       </button>
     {/if}
   {:else if subGroup}

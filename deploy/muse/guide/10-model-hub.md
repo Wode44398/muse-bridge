@@ -50,7 +50,7 @@ Claude 订阅（Pro / Max）不在这里配：订阅账号在「设置 → Claud
 
 几条限制，界面上会写明原因（行尾 **「暂不支持」**（Not supported），或操作条上一句话）：
 
-- Gemini 接口的服务给不了 Claude，只能给 dimensio；模型 ID 里有 Claude 不认的字符、上下文窗口不到 4096 的也给不了 Claude。
+- Gemini 接口的服务也能给 Claude（服务器把 Claude 的请求转成 Gemini 的原生接口，Claude 的联网搜索换成 Gemini 自带的 Google 搜索）。模型 ID 里有 Claude 不认的字符、上下文窗口不到 4096 的给不了 Claude。
 - 向量、识别一类的模型不能添加。
 - 媒体模型只能给 Media Studio，而且要这台服务器开着 Media Studio、它接得了这个服务的这一类模型（见 09-media-studio.md）；文本模型不能给 Media Studio。
 - 上限：最多 40 个服务，每个服务最多 100 个文本模型、30 把 Key。

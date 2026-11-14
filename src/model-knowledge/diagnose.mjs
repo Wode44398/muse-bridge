@@ -91,7 +91,7 @@ const NO_AUDIO_RE = /(?:input_audio|\baudio\b|音频)[^.\n]{0,40}(?:not (?:be )?
  * 这条 429 其实是「余额不足 / 额度用完」而不是限流：智谱回 429 + 业务码 1113，OpenAI 回 429 + insufficient_quota。
  * 重试没有用，线路也不该只冷却一分钟。
  */
-const BILLING_429_RE = /"code"\s*:\s*"?1113"?|余额不足|欠费|请充值|insufficient[_ ]?(?:quota|balance|funds)|credit balance is too low|arrearage/i;
+const BILLING_429_RE = /"code"\s*:\s*"?1113"?|余额不足|欠费|请充值|insufficient[_ ]?(?:quota|balance|funds)|credit balance is too low|credits are depleted|arrearage/i;   // credits are depleted：Gemini AI Studio 预付额度用完（402，2026-11-13）
 export function looksBilling(status, text) {
   // 只认强信号。「exceeded your current quota」不算：Gemini 的普通每分钟限流正文就是这句
   return (status === 429 || status === 402) && BILLING_429_RE.test(String(text || '').slice(0, 2000));

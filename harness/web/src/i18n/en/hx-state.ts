@@ -71,6 +71,7 @@ export default {
   // ── 时间线提示条 ──
   "上下文已压缩": "Context compacted",
   "Fast mode 被限流，已改用普通速度，{minutes} 分钟内不再尝试": "Fast mode is rate-limited — switched to normal speed; won’t retry fast for {minutes} min",
+  "项目较大，检查点只备份编辑工具改过的文件，命令行做的改动无法回滚": "Large project — checkpoints only back up files changed by the edit tools; changes made by shell commands can’t be rolled back",
   "服务重启打断了这一轮": "A service restart interrupted this turn",
   "已停止": "Stopped",
   "已载入技能": "Skill loaded",

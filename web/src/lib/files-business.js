@@ -51,11 +51,15 @@ export function formatShareExpiry(value) {
   return new Intl.DateTimeFormat(locale(), { month: 'short', day: 'numeric', ...hm }).format(new Date(value));
 }
 
+// kindOf 可以给旧码（img / md / text）也可以给 fileKinds 的码（image / md / markdown / text / code）
+const isImageKind = (k) => k === 'img' || k === 'image';
+const isTextKind = (k) => k === 'md' || k === 'markdown' || k === 'text' || k === 'code';
+
 export function fileAiCapabilities(item, kindOf) {
   if (!item) return { video: false, image: false, audio: false, music: false, mode: null };
   const kind = item.isDir ? 'dir' : kindOf(item.name);
-  const isImage = kind === 'img';
-  const isText = kind === 'md' || kind === 'text';
+  const isImage = isImageKind(kind);
+  const isText = isTextKind(kind);
   return {
     video: isImage || isText,
     image: isImage || isText,
@@ -106,8 +110,8 @@ export async function sendFileToAi(item, target, slot, selectedSession, {
   navigate,
 }) {
   const kind = item.isDir ? 'dir' : kindOf(item.name);
-  const isImage = kind === 'img';
-  const isText = kind === 'md' || kind === 'text';
+  const isImage = isImageKind(kind);
+  const isText = isTextKind(kind);
 
   const chat = chats[target];
   if (chat) {
@@ -207,4 +211,62 @@ export async function runCompress(api, rels, opts, ws, { onTick = null, signal =
     if (st.state === 'error') throw new Error(st.error || t('压缩失败'));
     onTick?.(st);
   }
+}
+
+// —— 排序（手机 FilesPanel / 电脑 FilesDesktop / 服务端列表同一套规则，画廊顺序与列表一致）——
+// 文件夹恒置顶（不随升降序翻转，同 Finder / 资源管理器）；名称用自然排序（「图2」排在「图10」前，
+// 不分大小写）；其余键相同时回落按名称升序，保证顺序稳定、两端一致。
+export const SORT_KEYS = Object.freeze(['name', 'mtime', 'size', 'type']);
+// 新选一个键时的缺省方向：名称 / 类型升序，时间 / 大小降序（最新、最大的在前，同 Finder）
+export const SORT_DEFAULT_DIR = Object.freeze({ name: 1, mtime: -1, size: -1, type: 1 });
+const collators = new Map();
+export function nameCollator(loc) {
+  const key = loc || '';
+  let c = collators.get(key);
+  if (!c) {
+    try { c = new Intl.Collator(loc || undefined, { numeric: true, sensitivity: 'base' }); }
+    catch { c = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }); }
+    collators.set(key, c);
+  }
+  return c;
+}
+export function normalizeSort(value, fallback = { key: 'name', dir: 1 }) {
+  const key = SORT_KEYS.includes(value?.key) ? value.key : fallback.key;
+  const dir = value?.dir === -1 || value?.dir === 1 ? value.dir : (SORT_KEYS.includes(value?.key) ? SORT_DEFAULT_DIR[key] : fallback.dir);
+  return { key, dir };
+}
+// 点同一个键＝反向；换键＝该键的缺省方向
+export function nextSort(cur, key) {
+  if (!SORT_KEYS.includes(key)) return normalizeSort(cur);
+  return cur?.key === key ? { key, dir: cur.dir === 1 ? -1 : 1 } : { key, dir: SORT_DEFAULT_DIR[key] };
+}
+// typeOf(item) → 类型排序键（缺省＝扩展名）；dirSize(item) → 文件夹大小（有的话参与大小排序）
+export function makeFileComparator({ key = 'name', dir = 1, locale: loc, typeOf, dirSize } = {}) {
+  const col = nameCollator(loc);
+  const byName = (a, b) => col.compare(String(a?.name ?? ''), String(b?.name ?? '')) || (String(a?.name) < String(b?.name) ? -1 : String(a?.name) > String(b?.name) ? 1 : 0);
+  const extKey = (it) => {
+    const s = String(it?.name || '');
+    const i = s.lastIndexOf('.');
+    return i > 0 ? s.slice(i + 1).toLowerCase() : '';
+  };
+  const typeKey = typeOf || extKey;
+  const sizeOf = (it) => (it?.isDir ? (dirSize ? dirSize(it) : null) : it?.size);
+  return (a, b) => {
+    const da = a?.isDir ? 1 : 0, db = b?.isDir ? 1 : 0;
+    if (da !== db) return db - da;
+    let r = 0;
+    if (key === 'mtime') r = (Number(a?.mtime) || 0) - (Number(b?.mtime) || 0);
+    else if (key === 'size') {
+      const sa = sizeOf(a), sb = sizeOf(b);
+      // 没有大小的（文件夹没算过）排在有大小的后面，不随方向翻转
+      if (sa == null || sb == null) r = sa == null && sb == null ? 0 : (sa == null ? 1 : -1) * dir;
+      else r = sa - sb;
+    } else if (key === 'type') r = col.compare(String(typeKey(a) || ''), String(typeKey(b) || ''));
+    else r = byName(a, b);
+    if (r) return r * dir;
+    return byName(a, b);
+  };
+}
+export function sortFiles(list, opts) {
+  return [...(list || [])].sort(makeFileComparator(opts));
 }

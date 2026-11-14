@@ -4,21 +4,20 @@
 
 <script>
   // Claude 运行标记（设置「思考动画」的默认档 clay）。
-  // 播放器与素材、帧表都是原版资源（清单 modules.clayMark、data.marks.clay），挂上逐帧播；
+  // 播放器与素材、帧表都是原版资源（visuals/modules/clay-mark.js 懒加载、visuals/data.js 的 MARKS.clay），挂上逐帧播；
   // 模块到之前先放一颗陶土色圆点（和播放器起步那颗一样）。
   // 接口：activity: default|think|search|read|code|write|compose；state: working|blocked|tile
   import { untrack } from 'svelte';
-  import { ovData, ovModule } from '../lib/overlay.svelte.js';
+  import { MARKS } from '../visuals/data.js';
 
   let { activity = 'default', state: markState = 'working', paused = false, size = 20, box = size, standalone = false } = $props();
 
-  const pack = $derived(ovData('marks')?.clay || null);
+  const pack = MARKS.clay;
   let mod = $state(clayMod || null);
   $effect(() => {
     if (mod) return;
     let alive = true;
-    ovModule('clayMark').then((m) => {
-      if (!(m && typeof m.ClayMark === 'function')) return;
+    import('../visuals/modules/clay-mark.js').then((m) => {
       clayMod = m;
       if (alive) mod = m;
     });
@@ -32,7 +31,7 @@
     if (!m || !el || !p) return;
     try {
       player = new m.ClayMark(el, { pack: p, size: s, box: b, ...untrack(() => ({ standalone, activity, state: markState, paused })) });
-    } catch (e) { console.error('[overlay] clayMark 挂载失败：', e?.message || e); return; }   // i18n-ignore 只进控制台
+    } catch (e) { console.error('[visuals] clayMark 挂载失败：', e?.message || e); return; }   // i18n-ignore 只进控制台
     return () => { player?.destroy(); player = null; };
   });
   $effect(() => { const a = activity, st = markState, pz = paused; player?.set({ activity: a, state: st, paused: pz }); });

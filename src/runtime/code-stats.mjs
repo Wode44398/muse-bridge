@@ -6,6 +6,9 @@
 //
 // 设计要点：
 // - 按天聚合消息数 / 会话数 / 工具调用数，按模型聚合 token；日期与小时一律按进程本地时区。
+// - 口径（2026-11-13 起，和官方逐行累加不同）：一次回复在转录里按内容块拆成几行、每行带同一份 usage，
+//   按 message.id 去重（同 id 各字段取最大）；「消息」= 用户真发的消息（不含工具结果、isMeta、压缩摘要）
+//   + 去重后的回复，两者分别记 userMessageCount / replyCount。跨文件的重复（分叉会话）约 1%，不管。
 // - 三层缓存：
 //   1. 结果缓存：同一配置目录 5 分钟内直接复用上次的载荷对象；
 //   2. 进行中合并：同一配置目录同时只算一次，后来的调用（含 force）拿同一个 Promise；
@@ -29,7 +32,7 @@ const MAX_LINE_UNITS = 16777216;         // 单行超过 16 Mi 个 UTF-16 码元
 const MIN_SEED_VERSION = 5;              // 底数里 dailyModelTokens 的口径版本下限
 const SEED_NAME = 'stats-cache.json';
 const MEMO_NAME = 'code-stats-cache.json';
-const MEMO_VERSION = 1;
+const MEMO_VERSION = 2;                  // 2：回复去重 + 用户消息/回复分计
 const SUBAGENT_SEGMENT = `${path.sep}subagents${path.sep}`;
 const IO_CONCURRENCY = 16;               // 同时 stat / 读取的文件数上限
 const SYNTHETIC_MODEL = '<synthetic>';
@@ -193,15 +196,44 @@ async function forEachLine(file, onLine) {
 }
 
 // —— 单文件汇总 ——
-// 结果 { firstTs, days: { 日期: { messageCount, toolCallCount, usageByModel: { 模型: 四项 } } } }，
+// 结果 { firstTs, days: { 日期: { messageCount, userMessageCount, replyCount, toolCallCount, usageByModel: { 模型: 四项 } } } }，
 // 没有任何计数记录时为 null。模型名可能是 __proto__ 之类，所以累加时一律用 Map，输出时再转对象。
 
 const zeroUsage = () => ({ inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 });
 
+// 用户行里只有工具结果、或是系统注入的元消息 / 压缩摘要：不算「用户发的消息」
+function isTypedUserMessage(rec) {
+  if (rec.isMeta || rec.isCompactSummary) return false;
+  const content = rec.message?.content;
+  if (Array.isArray(content) && content.length && content.every((part) => part && part.type === 'tool_result')) return false;
+  return true;
+}
+
 async function summarizeTranscript(file, keepSidechain) {
   const days = new Map();
+  const replies = new Map();     // message.id -> { day, model, usage }：同一回复的多行只记一次，各字段取最大
   let firstTs;
   let counted = false;
+
+  const dayOf = (key) => {
+    let day = days.get(key);
+    if (!day) {
+      day = { userMessageCount: 0, replyCount: 0, toolCallCount: 0, usage: new Map() };
+      days.set(key, day);
+    }
+    return day;
+  };
+  const addUsage = (day, model, u) => {
+    let acc = day.usage.get(model);
+    if (!acc) {
+      acc = zeroUsage();
+      day.usage.set(model, acc);
+    }
+    acc.inputTokens += u.inputTokens;
+    acc.outputTokens += u.outputTokens;
+    acc.cacheReadInputTokens += u.cacheReadInputTokens;
+    acc.cacheCreationInputTokens += u.cacheCreationInputTokens;
+  };
 
   await forEachLine(file, (text) => {
     let rec;
@@ -224,40 +256,51 @@ async function summarizeTranscript(file, keepSidechain) {
       firstTs = ts;
     }
     const key = dayKeyOf(when);
-    let day = days.get(key);
-    if (!day) {
-      day = { messageCount: 0, toolCallCount: 0, usage: new Map() };
-      days.set(key, day);
+    const day = dayOf(key);
+    if (rec.type !== 'assistant') {
+      if (isTypedUserMessage(rec)) day.userMessageCount += 1;
+      return;
     }
-    day.messageCount += 1;
-    if (rec.type !== 'assistant') return;
 
     const msg = rec.message;
     const content = msg?.content;
     if (Array.isArray(content)) {
       for (const part of content) if (part && part.type === 'tool_use') day.toolCallCount += 1;
     }
-    const usage = msg?.usage;
-    if (!usage) return;
-    const model = msg.model ?? 'unknown';
+    const model = msg?.model ?? 'unknown';
     if (model === SYNTHETIC_MODEL) return;
-    const name = String(model);
-    let acc = day.usage.get(name);
-    if (!acc) {
-      acc = zeroUsage();
-      day.usage.set(name, acc);
+    const usage = msg?.usage;
+    const u = {
+      inputTokens: usage?.input_tokens ?? 0,
+      outputTokens: usage?.output_tokens ?? 0,
+      cacheReadInputTokens: usage?.cache_read_input_tokens ?? 0,
+      cacheCreationInputTokens: usage?.cache_creation_input_tokens ?? 0,
+    };
+    const id = msg?.id;
+    if (id == null) {
+      day.replyCount += 1;
+      if (usage) addUsage(day, String(model), u);
+      return;
     }
-    acc.inputTokens += usage.input_tokens ?? 0;
-    acc.outputTokens += usage.output_tokens ?? 0;
-    acc.cacheReadInputTokens += usage.cache_read_input_tokens ?? 0;
-    acc.cacheCreationInputTokens += usage.cache_creation_input_tokens ?? 0;
+    const seen = replies.get(id);
+    if (!seen) {
+      day.replyCount += 1;
+      replies.set(id, { key, model: String(model), usage: usage ? u : null });
+      return;
+    }
+    if (!usage) return;
+    if (!seen.usage) { seen.usage = u; return; }
+    for (const f of Object.keys(u)) if (u[f] > seen.usage[f]) seen.usage[f] = u[f];
   });
 
   if (!counted) return null;
+  for (const r of replies.values()) if (r.usage) addUsage(dayOf(r.key), r.model, r.usage);
   const out = {};
   for (const [key, day] of days) {
     out[key] = {
-      messageCount: day.messageCount,
+      messageCount: day.userMessageCount + day.replyCount,
+      userMessageCount: day.userMessageCount,
+      replyCount: day.replyCount,
       toolCallCount: day.toolCallCount,
       usageByModel: Object.fromEntries(day.usage),
     };
@@ -354,6 +397,7 @@ function newTally(seed, from) {
     from,
     rows: new Map(),           // 日期 -> 每日行
     dayTokens: new Map(),      // 日期 -> Map(模型 -> token 和)
+    dayUsage: new Map(),       // 日期 -> Map(模型 -> 四项)：给前端按范围汇总「输入 / 输出」（底数里的日子没有）
     usage: new Map(),          // 模型 -> 四项
     hours: new Map(),          // 小时 -> 次数（Map 的插入顺序就是登记顺序）
     totalSessions: 0,
@@ -388,7 +432,7 @@ function newTally(seed, from) {
 function rowFor(tally, date) {
   let row = tally.rows.get(date);
   if (!row) {
-    row = { date, messageCount: 0, sessionCount: 0, toolCallCount: 0 };
+    row = { date, messageCount: 0, userMessageCount: 0, replyCount: 0, sessionCount: 0, toolCallCount: 0 };
     tally.rows.set(date, row);
   }
   return row;
@@ -405,6 +449,20 @@ function addModelUsage(tally, date, usageByModel) {
     acc.outputTokens += u.outputTokens;
     acc.cacheReadInputTokens += u.cacheReadInputTokens;
     acc.cacheCreationInputTokens += u.cacheCreationInputTokens;
+    let dayModels = tally.dayUsage.get(date);
+    if (!dayModels) {
+      dayModels = new Map();
+      tally.dayUsage.set(date, dayModels);
+    }
+    let dayAcc = dayModels.get(model);
+    if (!dayAcc) {
+      dayAcc = zeroUsage();
+      dayModels.set(model, dayAcc);
+    }
+    dayAcc.inputTokens += u.inputTokens;
+    dayAcc.outputTokens += u.outputTokens;
+    dayAcc.cacheReadInputTokens += u.cacheReadInputTokens;
+    dayAcc.cacheCreationInputTokens += u.cacheCreationInputTokens;
     const total = u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens;
     if (total > 0) {
       let perModel = tally.dayTokens.get(date);
@@ -433,6 +491,8 @@ function addMainSummary(tally, sum) {
     if (date < tally.from) continue;
     const row = rowFor(tally, date);
     row.messageCount += day.messageCount;
+    row.userMessageCount = (row.userMessageCount ?? 0) + (day.userMessageCount ?? 0);
+    row.replyCount = (row.replyCount ?? 0) + (day.replyCount ?? 0);
     tally.totalMessages += day.messageCount;
     row.toolCallCount += day.toolCallCount;
     addModelUsage(tally, date, day.usageByModel);
@@ -486,6 +546,9 @@ function buildPayload(tally) {
   const dailyModelTokens = [...tally.dayTokens]
     .map(([date, perModel]) => ({ date, tokensByModel: Object.fromEntries(perModel) }))
     .sort(byDate);
+  const dailyModelUsage = [...tally.dayUsage]
+    .map(([date, perModel]) => ({ date, usageByModel: Object.fromEntries(perModel) }))
+    .sort(byDate);
   return {
     totalSessions: tally.totalSessions,
     totalMessages: tally.totalMessages,
@@ -496,6 +559,7 @@ function buildPayload(tally) {
     streaks: streaksOf(dailyActivity.map((row) => row.date)),
     dailyActivity,
     dailyModelTokens,
+    dailyModelUsage,
     modelUsage: Object.fromEntries(tally.usage),
   };
 }

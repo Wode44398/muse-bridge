@@ -1,6 +1,7 @@
 /* 文档纸面配色令牌（--md-*）——全部文档类查看器共用的唯一一份：
    md 阅读态（DocViewer .doc-root）、md 编辑态（mdeditor .mde，也能脱离 DocViewer 单独挂）、
-   Office 查看器（.of-root）、PDF 查看器（.pdf-root）。以前 DocViewer 与 editor.css 各写一份同名同值，
+   Office 查看器（.of-root）、PDF 查看器（.pdf-root）、HTML 查看器（.hv），以及统一查看器外框的文档皮肤（.vw-doc，
+   顶栏 / 底栏 / 菜单 / 状态读这里的令牌）。以前 DocViewer 与 editor.css 各写一份同名同值，
    Office/PDF 又是另一套写死的白；现在改色只改这里。
 
    跟随全站明暗：亮色挂 html[data-theme="light"]，其余（含未设置）一律暗——与 app.css 同口径。
@@ -15,7 +16,7 @@
 
    --md-ink：叠加用的墨色三元组（rgba(var(--md-ink), α) 画发丝线/按下/悬停），亮=近黑、暗=近白。 */
 
-:is(.doc-root, .mde, .of-root, .pdf-root) {
+:is(.doc-root, .mde, .of-root, .pdf-root, .vw-doc, .hv) {
   --md-bg: #faf9f5;            /* 纸面 */
   --md-bg-2: #f3f1eb;          /* 沉底：代码块 / 表头 / 胶囊 / 悬停 */
   --md-bg-3: #eae7df;          /* 再深一级：按下态 */
@@ -56,14 +57,14 @@
   --md-shadow: 0 14px 40px rgba(70, 56, 34, .16), 0 2px 8px rgba(70, 56, 34, .07), 0 0 0 .5px rgba(20, 20, 19, .07);
   --md-shadow-sm: 0 8px 24px rgba(70, 56, 34, .14), 0 1px 4px rgba(70, 56, 34, .06), 0 0 0 .5px rgba(20, 20, 19, .07);
   --md-shadow-thumb: 0 1px 2px rgba(70, 56, 34, .12), 0 2px 8px rgba(70, 56, 34, .06), 0 0 0 .5px rgba(20, 20, 19, .07);
-  --md-ease: cubic-bezier(.2, .8, .2, 1);
+  --md-ease: var(--ea-std, cubic-bezier(.2, 0, 0, 1));   /* 运动令牌只有一份（app.css --ea-*）：这里只是别名 */
   --md-ease-pop: cubic-bezier(.2, .9, .3, 1.12);
   /* 原生控件（属性面板的日期框/日历图标、滚动条、勾选框）按纸面明暗画——app.css 在 :root 上声明的
      color-scheme 是 app 外框的，不在这里截住，暗纸上会画出亮日历图标、亮纸上会画出黑块勾选框 */
   color-scheme: light;
 }
 
-html:not([data-theme="light"]) :is(.doc-root, .mde, .of-root, .pdf-root) {
+html:not([data-theme="light"]) :is(.doc-root, .mde, .of-root, .pdf-root, .vw-doc, .hv) {
   --md-bg: #262624;
   --md-bg-2: rgba(255, 255, 255, .055);
   --md-bg-3: rgba(255, 255, 255, .09);

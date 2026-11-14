@@ -3,8 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { bridgeModuleChunks } from './scripts/module-chunks.mjs';
-import { chatgptPage } from './scripts/chatgpt-overlay.mjs';
-import { overlayBundle } from './scripts/overlay-bundle.mjs';   // 每次构建都把原版视觉资源打进产物的 _ov/（找不到就构建失败）
+import { chatgptPage } from './scripts/chatgpt-page.mjs';
+import { pdfjsAssets } from './scripts/pdfjs-assets.mjs';
 
 // The Bridge — mobile web frontend.
 // Dev serves at the root (base '/') so the page loads at http://127.0.0.1:5173/.
@@ -29,9 +29,9 @@ const HARNESS_SRC = fileURLToPath(new URL('../harness/web/src', import.meta.url)
 // 28.8MB，干净构建只有 14.6MB。改道后出包完全不碰 public/app。
 const APK_OUT = process.env.BRIDGE_APK_OUT || '';
 
-// Codex 分页的界面（ChatGPT 页面）不在本仓库，由维护者的私有 overlay 提供（<overlay>/web/chatgpt/）：构建结束拷进
-// <outDir>/chatgpt 并给它引用的脚本 / 样式打内容哈希；dev 从 overlay 直接发 /chatgpt/*。找不到页面就构建失败
-// （发行树取 frontend-assets 里的快照）。见 scripts/chatgpt-overlay.mjs。
+// 原版视觉资源（字体、玻璃图层、运行动画、壁纸、玻璃渲染等模块）在 src/visuals/，组件直接 import，vite 收进产物、带内容哈希。
+// Codex 分页的界面（ChatGPT 页面）在 public/chatgpt/，随 public 拷进 <outDir>/chatgpt，构建结束给它引用的脚本 / 样式
+// 打内容哈希，缺了页面就构建失败（scripts/chatgpt-page.mjs）。
 
 // 新旧构建的 hash 资产并存：生产 8787 上「构建即部署」，emptyOutDir 一清空，
 // 已打开的旧页面下一次懒加载（预览器/编辑器 chunk）就 404——桌面壳/手机端表现为
@@ -61,7 +61,8 @@ function pruneOldAssets(days = 7) {
 
 export default defineConfig(({ command }) => ({
   // bridgeModuleChunks：产物按「核心 / 各功能扩展」归属写进 bridge-modules.json（模块化打包与验收用）
-  plugins: [svelte(), chatgptPage(), overlayBundle(), pruneOldAssets(), bridgeModuleChunks({ webRoot: fileURLToPath(new URL('.', import.meta.url)) })],
+  // pdfjsAssets：PDF.js 的 cmaps / 标准字体 / wasm / icc 随包带上（离线 apk 中文 PDF 不丢字），见 scripts/pdfjs-assets.mjs
+  plugins: [svelte(), chatgptPage(), pruneOldAssets(), pdfjsAssets({ webRoot: fileURLToPath(new URL('.', import.meta.url)) }), bridgeModuleChunks({ webRoot: fileURLToPath(new URL('.', import.meta.url)) })],
   base: command === 'build' ? '/app/' : '/',
   resolve: {
     alias: { '@hx': HARNESS_SRC },
@@ -104,8 +105,6 @@ export default defineConfig(({ command }) => ({
     proxy: {
       '/api': { target: API, changeOrigin: true },
       '/healthz': { target: API, changeOrigin: true },
-      // 私有 overlay（清单、原版字体与素材、运行时模块）：dev 页没有服务端注入，前端去这里取清单
-      '/app/_ov': { target: API, changeOrigin: true },
     },
   },
 }));

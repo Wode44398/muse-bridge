@@ -85,3 +85,9 @@ test('交给用量来源的 core 函数可用', () => {
   core.applyProbedLimits({ five_hour: core.bucket(h, '5h') }, 'a');
   assert.equal(accountLimits('a').five_hour.pct, 25);
 });
+
+test('registerOverlayRoutes：overlay 里没有 registerRoutes 钩子时什么都不挂', async () => {
+  const { registerOverlayRoutes } = await import('./overlay-hooks.mjs');
+  const { createRouter } = await import('./router.mjs');
+  assert.equal(await registerOverlayRoutes(createRouter(), {}), false);
+});

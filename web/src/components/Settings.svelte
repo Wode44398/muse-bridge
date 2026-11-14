@@ -86,6 +86,7 @@
     prefGroups, prefItems, prefGroupLabel, prefLabel, prefDesc, prefOptions, prefChanged, prefValueLabel, setPref, parsePrefNumber,
     sessionTitle, exportDiag, versionLine, openInDimensio,
     feed, setFeedDetail, FEED_DESC,
+    curVendorLabel, extOk as dmExtOk, mcpLine, skillLine,
   } from '../lib/dimensioSettings.svelte.js';
   import { goto } from '../lib/pageMorph.js';
   import Sym from './ios27/Sym.svelte';
@@ -107,11 +108,10 @@
   import { LiquidTabs } from '../lib/liquid/tabs.js';
   import TextField from './ios27/TextField.svelte';
   import { SI, agentMark } from '../lib/settingsIcons.js';
-  // 玻璃图层 / 平滑圆角遮罩：原版资源（lib/overlay.svelte.js）
-  import { ovUrl } from '../lib/overlay.svelte.js';
-  const sq26 = $derived(ovUrl('ios27/squircle26.svg'));
-  const stagePanelGlass = $derived(ovUrl('ios27/stagepanel-light.png'));
-  const stageCapGlass = $derived(ovUrl('ios27/stagecap44-light.png'));
+  // 玻璃图层 / 平滑圆角遮罩：原版资源（web/src/visuals/）
+  import sq26 from '../visuals/ios27/squircle26.svg';
+  import stagePanelGlass from '../visuals/ios27/stagepanel-light.png';
+  import stageCapGlass from '../visuals/ios27/stagecap44-light.png';
 
   // 应用图标：满版方图（apple-touch-icon），iOS 图标形状由平滑圆角遮罩给
   const BASE = import.meta.env.BASE_URL;
@@ -254,7 +254,7 @@
   // 单选项推入 dm:<项> / dp:<偏好键> 子页；要敲字的（key、路径、数字 / 文本偏好）走一个警告框 + 文本框（dmEdit）。
   // 进这一页才拉（会把没在跑的 harness 拉起来）；管理员视角下开关关着 / 跑不起来时不拉。
   const DM_TITLE = { provider: () => t('模型服务'), model: () => t('型号'), effort: () => t('思考深度'), mode: () => t('默认运行档位'),
-    access: () => t('访问范围'), ask: () => t('每次问我'), deny: () => t('从不允许'), diag: () => t('导出诊断包') };
+    access: () => t('访问范围'), allow: () => t('总是允许'), ask: () => t('每次问我'), deny: () => t('从不允许'), diag: () => t('导出诊断包') };
   const dimEnabled = $derived.by(() => { const a = agentById('dimensio'); return !a || (a.switch && a.runnable); });
   const dimOpen = $derived(stack.includes('ag-dimensio'));
   $effect(() => { if (dimOpen && dimEnabled) untrack(() => loadDimensio({ quiet: true })); });
@@ -1964,7 +1964,7 @@
     {@render ghead(t('模型'))}
     <div class="ig">
       <button class="r" type="button" onclick={() => push('dm:provider')}>
-        <span class="r-main"><span class="r-tx">{t('模型服务')}</span><span class="r-d">{vendorName(curSpec())}</span>{@render chev()}</span>
+        <span class="r-main"><span class="r-tx">{t('模型服务')}</span><span class="r-d" class:warn={!curSpec()}>{curVendorLabel()}</span>{@render chev()}</span>
       </button>
       {#if modelOptions().length}
         <button class="r" type="button" onclick={() => push('dm:model')}>
@@ -1982,11 +1982,21 @@
             <Toggle checked={ds.config.fast === true} disabled={ds.busy === 'fast'} onchange={() => setFast(!ds.config.fast)} label="Fast mode" /></span>
         </div>
       {/if}
+      {#if !keyVendors().length}{@render dmHubRow()}{/if}
     </div>
     {@render dmErr('fast')}
-    {@render gfoot(t('新对话默认用这里的模型；对话里随时可以在输入框的型号胶囊改。'))}
+    {@render gfoot(keyVendors().length ? t('新对话默认用这里的模型；对话里随时可以在输入框的型号胶囊改。') : t('新对话默认用这里的模型；对话里随时可以在输入框的型号胶囊改。能用的模型都在模型中心里添加和修改。'))}
 
-    {@render ghead(keyVendors().length ? t('API Key') : t('模型服务'))}
+    {#snippet dmHubRow()}
+      <!-- 有模型中心（管理员）：自定义服务都归那一页管，点了推入设置里的「模型中心」（双栏时换右侧分区）；
+           没有时才照旧去 dimensio 自己的供应商页 -->
+      <button class="r" type="button" onclick={() => { if (hub.ok) go('model-hub'); else openInDimensio('vendors'); }}>
+        <span class="r-main"><span class="r-tx">{hub.ok ? t('模型中心') : t('自定义模型服务')}<span class="r-sub">{hub.ok ? hubSummaryText() : customSummary()}</span></span>{@render chev()}</span>
+      </button>
+    {/snippet}
+
+    {#if keyVendors().length}
+    {@render ghead(t('API Key'))}
     <div class="ig">
       {#each keyVendors() as v (v.id)}
         <button class="r" type="button" disabled={!canSetKey(v.id)} onclick={() => openKeyEdit(v)}>
@@ -1994,14 +2004,11 @@
             <span class="r-d" class:warn={!v.hasKey}>{v.hasKey ? t('已配 Key') : t('缺 Key')}</span>{#if canSetKey(v.id)}{@render chev()}{/if}</span>
         </button>
       {/each}
-      <!-- 有模型中心（管理员）：自定义服务都归那一页管，点了推入设置里的「模型中心」（双栏时换右侧分区）；
-           没有时才照旧去 dimensio 自己的供应商页 -->
-      <button class="r" type="button" onclick={() => { if (hub.ok) go('model-hub'); else openInDimensio('vendors'); }}>
-        <span class="r-main"><span class="r-tx">{hub.ok ? t('模型中心') : t('自定义模型服务')}<span class="r-sub">{hub.ok ? hubSummaryText() : customSummary()}</span></span>{@render chev()}</span>
-      </button>
+      {@render dmHubRow()}
     </div>
     {#each keyVendors() as v (v.id)}{@render dmErr('key:' + v.id)}{/each}
-    {@render gfoot(keyVendors().length ? t('Key 加密存在服务端，重启不丢，不回传浏览器。') : t('dimensio 能用的模型都在模型中心里添加和修改。'))}
+    {@render gfoot(t('Key 加密存在服务端，重启不丢，不回传浏览器。'))}
+    {/if}
 
     {#if localOk()}
       {@render ghead(t('本机模型'))}
@@ -2027,6 +2034,9 @@
           <span class="r-main"><span class="r-tx">{t('访问范围')}</span><span class="r-d">{ACCESS().find((m) => m.value === ds.config.access)?.label || ds.config.access}</span>{@render chev()}</span>
         </button>
       {/if}
+      <button class="r" type="button" onclick={() => { dmRule = ''; push('dm:allow'); }}>
+        <span class="r-main"><span class="r-tx">{t('总是允许')}</span><span class="r-d num">{rulesOf('allow').length || ''}</span>{@render chev()}</span>
+      </button>
       <button class="r" type="button" onclick={() => { dmRule = ''; push('dm:ask'); }}>
         <span class="r-main"><span class="r-tx">{t('每次问我')}</span><span class="r-d num">{rulesOf('ask').length || ''}</span>{@render chev()}</span>
       </button>
@@ -2045,13 +2055,46 @@
     {@render dmErr('workspace')}
     {@render gfoot(t('新对话从这个文件夹开始，已经开着的对话不受影响。'))}
 
+    {#snippet dmPrefRow(p)}
+      {#if p.type === 'bool'}
+        <div class="r">
+          <span class="r-main"><span class="r-tx"><span class="r-lbl">{prefLabel(p)}{#if prefChanged(p)}{@render cDot('')}{/if}</span>{#if prefDesc(p)}<span class="r-sub">{prefDesc(p)}</span>{/if}</span>
+            <Toggle checked={!!p.value} onchange={() => setPref(p.key, !p.value)} label={prefLabel(p)} /></span>
+        </div>
+      {:else}
+        <button class="r" type="button" onclick={() => (p.type === 'enum' ? push('dp:' + p.key) : openPrefEdit(p))}>
+          <span class="r-main"><span class="r-tx"><span class="r-lbl">{prefLabel(p)}{#if prefChanged(p)}{@render cDot('')}{/if}</span>{#if prefDesc(p)}<span class="r-sub">{prefDesc(p)}</span>{/if}</span>
+            <span class="r-d">{p.type === 'text' ? '' : prefValueLabel(p)}</span>{@render chev()}</span>
+        </button>
+      {/if}
+    {/snippet}
+
     {#if memoryOk()}
       {@render ghead(t('记忆'))}
       <div class="ig">
         <button class="r" type="button" onclick={() => openInDimensio('memory')}>
           <span class="r-main"><span class="r-tx">{t('记忆管理')}<span class="r-sub">{memLine()}</span></span>{#if ds.mem?.waiting}<span class="pill">{t('{n} 条待处理', { n: ds.mem.waiting })}</span>{/if}{@render chev()}</span>
         </button>
+        {#each prefItems('memory') as p (p.key)}{@render dmPrefRow(p)}{/each}
       </div>
+      {#each prefItems('memory') as p (p.key)}{@render dmErr('pref:' + p.key)}{/each}
+    {/if}
+
+    {#if dmExtOk()}
+      {@render ghead(t('连接器与技能'))}
+      <div class="ig">
+        {#if me.kind === 'admin' && ds.mcp !== null}
+          <button class="r" type="button" onclick={() => openExtType('connector')}>
+            <span class="r-main"><span class="r-tx">{t('MCP 连接器')}<span class="r-sub">{mcpLine()}</span></span>{@render chev()}</span>
+          </button>
+        {/if}
+        {#if ds.skills !== null}
+          <button class="r" type="button" onclick={() => openExtType('skill')}>
+            <span class="r-main"><span class="r-tx">{t('技能')}<span class="r-sub">{skillLine()}</span></span>{@render chev()}</span>
+          </button>
+        {/if}
+      </div>
+      {@render gfoot(t('在「扩展」里给 dimensio 勾选或添加；改了新对话生效。'))}
     {/if}
 
     {#each prefGroups() as g (g.id)}
@@ -2063,19 +2106,7 @@
               <Toggle checked={feed.detail} onchange={() => setFeedDetail(!feed.detail)} label={t('显示全部工作过程')} /></span>
           </div>
         {/if}
-        {#each prefItems(g.id) as p (p.key)}
-          {#if p.type === 'bool'}
-            <div class="r">
-              <span class="r-main"><span class="r-tx"><span class="r-lbl">{prefLabel(p)}{#if prefChanged(p)}{@render cDot('')}{/if}</span>{#if prefDesc(p)}<span class="r-sub">{prefDesc(p)}</span>{/if}</span>
-                <Toggle checked={!!p.value} onchange={() => setPref(p.key, !p.value)} label={prefLabel(p)} /></span>
-            </div>
-          {:else}
-            <button class="r" type="button" onclick={() => (p.type === 'enum' ? push('dp:' + p.key) : openPrefEdit(p))}>
-              <span class="r-main"><span class="r-tx"><span class="r-lbl">{prefLabel(p)}{#if prefChanged(p)}{@render cDot('')}{/if}</span>{#if prefDesc(p)}<span class="r-sub">{prefDesc(p)}</span>{/if}</span>
-                <span class="r-d">{p.type === 'text' ? '' : prefValueLabel(p)}</span>{@render chev()}</span>
-            </button>
-          {/if}
-        {/each}
+        {#each prefItems(g.id) as p (p.key)}{@render dmPrefRow(p)}{/each}
       </div>
       {#each prefItems(g.id) as p (p.key)}{@render dmErr('pref:' + p.key)}{/each}
     {/each}
@@ -2113,7 +2144,7 @@
   {:else if sub === 'effort'}{@render dmChoice(effortOptions(), ds.config.thinking, setThinking, 'thinking')}
   {:else if sub === 'mode'}{@render dmChoice(MODES(), ds.config.permissionMode, setMode, 'mode')}
   {:else if sub === 'access'}{@render dmChoice(ACCESS(), ds.config.access, setAccess, 'access')}
-  {:else if sub === 'ask' || sub === 'deny'}
+  {:else if sub === 'allow' || sub === 'ask' || sub === 'deny'}
     {#if rulesOf(sub).length}
       <div class="ig">
         {#each rulesOf(sub) as r (r)}
@@ -2124,11 +2155,12 @@
     {/if}
     {@render ghead(t('添加规则'))}
     <div class="ig">
-      <div class="r"><span class="r-main"><input class="dv-in" bind:value={dmRule} placeholder={sub === 'ask' ? t('添加规则，如 Bash(git push:*)') : t('添加规则，如 Bash(rm -rf:*)')}
+      <div class="r"><span class="r-main"><input class="dv-in" bind:value={dmRule} placeholder={sub === 'allow' ? t('添加规则，如 Bash(npm test:*)') : sub === 'ask' ? t('添加规则，如 Bash(git push:*)') : t('添加规则，如 Bash(rm -rf:*)')}
         autocapitalize="off" autocorrect="off" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter' && !e.isComposing) addDmRule(sub); }} /></span></div>
       <button class="r" type="button" disabled={!dmRule.trim() || ds.busy === 'rules:' + sub} onclick={() => addDmRule(sub)}><span class="r-main center"><span class="r-tx accent">{t('添加')}</span></span></button>
     </div>
     {@render dmErr('rules:' + sub)}
+    {#if sub === 'allow'}{@render gfoot(t('命中的调用不再弹卡：高危复核、撤不回操作的确认和「每次问我」都放行；「从不允许」与只读 / 先出计划档照样优先。'))}{/if}
     {@render gfoot(t('规则匹配命令或路径的前缀，是防误操作的软闸，不是安全沙箱。保存后所有会话下一次调用就按新规则判，重启也不丢。'))}
   {:else if sub === 'diag'}
     <div class="ig">

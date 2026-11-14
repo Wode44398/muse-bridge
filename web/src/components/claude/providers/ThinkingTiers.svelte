@@ -36,7 +36,7 @@
     { value: 'adaptive', label: t('自适应') },
     { value: 'effort', label: t('档位') },
   ]);
-  const defaultField = $derived(protocol === 'openai' ? 'reasoning_effort' : 'output_config.effort');
+  const defaultField = $derived(protocol === 'openai' ? 'reasoning_effort' : protocol === 'gemini' ? 'generationConfig.thinkingConfig.thinkingLevel' : 'output_config.effort');
   const modeHint = $derived(
     model.thinking === 'budget' ? t('Anthropic 式 thinking.budget_tokens：发送值写预算 token 数，留空按「调用参数」里的思考预算基准换算')
       : model.thinking === 'adaptive' ? t('thinking.type = adaptive：发送值写 output_config.effort（如 high），留空只开自适应')
@@ -50,6 +50,7 @@
     { k: 'anth5', label: () => t('Anthropic 五档'), set: { thinking: 'adaptive', effortField: '', efforts: ['low', 'medium', 'high', 'xhigh', 'max'].map((x) => tier(x, x === 'xhigh' ? 'Extra' : x[0].toUpperCase() + x.slice(1), x)) } },
     { k: 'toggle', label: () => t('开 / 关'), set: { thinking: 'effort', effortField: '', efforts: [tier('off', t('关闭'), { thinking: { type: 'disabled' } }), tier('on', t('开启'), { thinking: { type: 'enabled' } })] } },
     { k: 'enable', label: () => 'enable_thinking', set: { thinking: 'effort', effortField: 'enable_thinking', efforts: [tier('off', t('关闭'), false), tier('on', t('开启'), true)] } },
+    { k: 'gem', label: () => 'Gemini thinkingLevel', set: { thinking: 'effort', effortField: 'generationConfig.thinkingConfig.thinkingLevel', efforts: [tier('low', 'Low', 'LOW'), tier('medium', 'Medium', 'MEDIUM'), tier('high', 'High', 'HIGH')] } },
     { k: 'or', label: () => 'OpenRouter reasoning', set: { thinking: 'effort', effortField: 'reasoning.effort', efforts: [tier('low', 'Low', 'low'), tier('medium', 'Medium', 'medium'), tier('high', 'High', 'high')] } },
   ];
   const clone = (list) => JSON.parse(JSON.stringify(list));
@@ -69,7 +70,7 @@
     // 切到一种方式但还没有档位：给个起步的表
     if (v === 'budget' && !model.efforts.length) model.efforts = ['low', 'medium', 'high'].map((x) => tier(x, x[0].toUpperCase() + x.slice(1)));
     if (v === 'adaptive' && !model.efforts.length) model.efforts = [tier('adaptive', t('自适应'))];
-    if (v === 'effort' && !model.efforts.length) model.efforts = clone(PRESETS[protocol === 'openai' ? 0 : 2].set.efforts);
+    if (v === 'effort' && !model.efforts.length) model.efforts = clone(PRESETS.find((p) => p.k === (protocol === 'openai' ? 'oai3' : protocol === 'gemini' ? 'gem' : 'toggle')).set.efforts);
     if (!model.efforts.some((x) => x.id === model.effortDefault)) model.effortDefault = '';
   }
 

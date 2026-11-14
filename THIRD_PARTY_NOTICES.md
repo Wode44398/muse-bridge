@@ -68,4 +68,4 @@ library（MIT，许可全文见该文件头）。Claude Agent SDK 与 Claude Cod
 
 ## Distribution visual assets
 
-Packaged releases also contain the full frontend visual snapshot under `frontend-assets/` and desktop `visuals/`: fonts, activity animations, glass textures and renderers, wallpaper and the Codex page. These third-party resources retain their original ownership and are not relicensed under the project Apache-2.0 license. `scripts/public/visual-assets.json` records the exact shipped file hashes and source snapshot. It is a build inventory, not a license grant.
+The source tree and packaged releases also contain the full frontend visual resources under `web/src/visuals/`, `web/public/chatgpt/` and the desktop's `client/desktop/visuals/`: fonts, activity animations, glass textures and renderers, wallpaper and the Codex page. These third-party resources retain their original ownership and are not relicensed under the project Apache-2.0 license. `scripts/public/visual-assets.json` records the exact shipped file hashes and source snapshot. It is a build inventory, not a license grant.

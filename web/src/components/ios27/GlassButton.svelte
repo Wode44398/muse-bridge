@@ -9,18 +9,17 @@
   // 按压手感 = Kyant0 LiquidButton + InteractiveHighlight（lib/liquid/press.js）：按下 spring(0.5, 300) 放大 1 + 4/高；
   // 手指拖动时朝手指方向 tanh 跟随、沿拖动方向拉长；按住时白 8% 平铺 + 白 15% 径向光斑（Plus 混合）。
   // el（bindable）：按钮元素，液滴菜单（MorphMenu）从它长出来；渐隐 / 撞一下的接口登记在 lib/liquid/core.js 的 triggers 里。
-  import { ovUrl } from '../../lib/overlay.svelte.js';
   import { getContext, onMount } from 'svelte';
   import Sym from './Sym.svelte';
   import { triggers } from '../../lib/liquid/core.js';
   import { liquidPress, pressOf } from '../../lib/liquid/press.js';
-  const navL = $derived(ovUrl('ios27/nav44-light.png'));
-  const navD = $derived(ovUrl('ios27/nav44-dark.png'));
-  const capL = $derived(ovUrl('ios27/cap44-light.png'));
-  const capD = $derived(ovUrl('ios27/cap44-dark.png'));
-  const stg = $derived(ovUrl('ios27/stage44-light.png'));
-  const stgCap = $derived(ovUrl('ios27/stagecap44-light.png'));
-  const promCap = $derived(ovUrl('ios27/stageprom44.png'));
+  import navL from '../../visuals/ios27/nav44-light.png';
+  import navD from '../../visuals/ios27/nav44-dark.png';
+  import capL from '../../visuals/ios27/cap44-light.png';
+  import capD from '../../visuals/ios27/cap44-dark.png';
+  import stg from '../../visuals/ios27/stage44-light.png';
+  import stgCap from '../../visuals/ios27/stagecap44-light.png';
+  import promCap from '../../visuals/ios27/stageprom44.png';
 
   let { symbol = '', weight = 600, label = '', variant = 'nav', prominent = false, onclick, aria = '', tint = '', disabled = false, round = false, el = $bindable(), children } = $props();
   const ios = getContext('ios27');

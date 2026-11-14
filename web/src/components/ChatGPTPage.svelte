@@ -30,7 +30,7 @@
   // 界面语言也随地址带进去：克隆页自己读 localStorage 的 bridge-lang，但宿主用 ?lang= 临时覆盖时要跟着走
   const frameSrc = BASE + 'chatgpt/index.html?theme=' + (ui.theme === 'light' ? 'light' : 'dark') + '&lang=' + lang();
   let frameShown = $state(false);
-  // 这套页面是原版资源（构建时从私有 overlay / 发行树 frontend-assets 拷进 chatgpt/，缺了构建失败，见 web/scripts/chatgpt-overlay.mjs）。
+  // 这套页面是原版资源（web/public/chatgpt/，构建时随 public 拷进产物的 chatgpt/ 并打内容哈希，缺了构建失败，见 web/scripts/chatgpt-page.mjs）。
   // 先探一下：没有就不挂 iframe，给一句「此版本未包含」（管理员另看到原因与恢复办法）。认页面自己的样式表 clone.css 而不只看
   // 状态码——dev 服务器对不存在的路径会回落成 app 自己的 index.html（200）。网络抖动照旧挂 iframe，不误报。
   let frameMissing = $state(false);
@@ -565,7 +565,7 @@
       <div class="missing" role="status">
         <b>{t('此版本未包含 ChatGPT 页面')}</b>
         {#if me.kind === 'admin'}
-          <p>{t('这次前端构建没有接上私有 overlay（环境变量 BRIDGE_OVERLAY_DIR，或数据根 config.json 的 overlayDir）。配好后重新构建前端即可恢复。')}</p>
+          <p>{t('这份前端产物里没有 Codex 分页的界面（源码在 web/public/chatgpt/）。重新构建前端即可恢复。')}</p>
         {:else}
           <p>{t('这个部署没有附带 Codex 分页的界面。')}</p>
         {/if}

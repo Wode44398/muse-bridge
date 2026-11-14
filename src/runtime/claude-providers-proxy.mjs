@@ -4,8 +4,8 @@
 // 路径里带着「这一轮用哪个服务、哪个模型、哪一档思考」——它们本来就进停放复用签名（换了就冷起），
 // 放进地址里就不用另设旁路。每个请求现读注册表：改参数、换 Key、换地址都立即对下一个请求生效。
 //
-//   /v1/messages              改写参数 → Anthropic 协议原样流式转发；OpenAI 协议整体翻译（含流式）
-//   /v1/messages/count_tokens Anthropic 协议转发，失败或 OpenAI 协议就粗估
+//   /v1/messages              改写参数 → Anthropic 协议原样流式转发；OpenAI / Gemini 原生协议整体翻译（含流式；Gemini 的见 claude-providers-gemini.mjs）
+//   /v1/messages/count_tokens Anthropic 协议转发，失败或别的协议就粗估
 //   /v1/models                回本服务配置的模型
 //
 // 只在还没开始往回写时重试（429 / 5xx / 网络错）；CLI 断开就掐掉上游请求，别在后台继续烧钱。
@@ -27,9 +27,10 @@ import { KEEPALIVE, withWarm, fetchReconnect, textWithin } from './upstream-conn
 import { emitBridgeEvent } from '../plugins/events.mjs';
 import { isAutoModel, resolveAuto, applyAutoTarget } from './model-ratings.mjs';
 import { applyParams, pickTarget, keepsBetas, isOfficial, toOpenAI, openAIReasoning, OpenAIStream, fromOpenAI, estimateTokens } from './claude-providers-transform.mjs';
+import { toGemini, fromGemini, GeminiStream, wantsSearch } from './claude-providers-gemini.mjs';
 // 型号知识 / 报错解读 / 检测与探测的判读和 dimensio 的自定义服务共用（src/model-knowledge/）
-import { guessModel, routeOf, isOffTier, siblingBaseUrls, anthropicUrl, openaiUrl, parseModelList, modelIdOf, labelOf, modelsUrlCandidates } from '../model-knowledge/knowledge.mjs';
-import { vendorText, classifyProbe as classify, pickDetect, parseLimit, parseEffortList, looksNotChat, looksBilling, mentionsModel, endpointHint, RED_PNG } from '../model-knowledge/diagnose.mjs';
+import { guessModel, routeOf, isOffTier, siblingBaseUrls, anthropicUrl, openaiUrl, geminiUrl, parseModelList, modelIdOf, labelOf, modelsUrlCandidates } from '../model-knowledge/knowledge.mjs';
+import { vendorText, classifyProbe as classify, pickDetect, parseLimit, parseEffortList, looksNotChat, looksBilling, mentionsModel, endpointHint, protocolName, RED_PNG } from '../model-knowledge/diagnose.mjs';
 export { parseLimit, parseEffortList };
 
 // 关不掉思考的型号：标了「不发参数也会思考」，或档位表里压根没有关闭档（GPT-6、Grok、Muse 这类必须思考的）——
@@ -128,7 +129,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function authHeaders(provider, key) {
   if (!key || provider.authStyle === 'none') return {};
-  return provider.authStyle === 'bearer' ? { authorization: 'Bearer ' + key } : { 'x-api-key': key };
+  return provider.authStyle === 'bearer' ? { authorization: 'Bearer ' + key } : provider.authStyle === 'goog' ? { 'x-goog-api-key': key } : { 'x-api-key': key };
 }
 function customHeaders(provider) {
   const h = {};
@@ -232,7 +233,7 @@ export function upstreamError(provider, url, status, text, model = '') {
   // 余额不足（含披着 429 的）：改成 400，CLI 不再按限流反复重试，错误卡上也说得清
   if (looksBilling(status, text)) return { status: 400, type: 'invalid_request_error', message: `这把 API Key 余额不足或额度用完了（${status}）${v.msg ? '：' + v.msg : ''}。到服务商那边充值后再试。` };
   if (status === 404 && !(v.json && mentionsModel(v.msg, model))) {
-    const kind = provider.protocol === 'openai' ? 'OpenAI Chat Completions' : 'Anthropic Messages';
+    const kind = protocolName(provider.protocol);
     const hint = endpointHint(provider.protocol, provider.baseUrl);
     return { status: 400, type: 'invalid_request_error', message: `接口地址不对：${where} 返回 404，这里不是 ${kind} 接口。${hint}${fix}改地址，或点「检测连接」一键识别。` };
   }
@@ -406,15 +407,22 @@ async function handle(req, res) {
       return;
     }
 
-    // —— OpenAI 协议：整体翻译 ——
-    const oai = openAIReasoning(toOpenAI(out, provider, target), target, eff);
-    // 额外请求体在 Anthropic 形状上合并过了；OpenAI 专属字段（如 reasoning、provider）也该能写进来——
-    // 约定：额外请求体里的 openai 子对象原样并进翻译后的请求。
-    const extraOai = out.openai && typeof out.openai === 'object' ? out.openai : null;
-    if (extraOai) Object.assign(oai, extraOai);
+    // —— OpenAI / Gemini 协议：整体翻译 ——
+    const gem = provider.protocol === 'gemini';
+    let upBody, upUrl;
+    if (gem) {
+      // 档位、额外请求体里的 gemini 子对象都在 toGemini 里落
+      upBody = toGemini(out, provider, target, eff);
+      upUrl = geminiUrl(provider.baseUrl, target.id, !!out.stream);    } else {
+      upBody = openAIReasoning(toOpenAI(out, provider, target), target, eff);
+      // 额外请求体在 Anthropic 形状上合并过了；OpenAI 专属字段（如 reasoning、provider）也该能写进来——
+      // 约定：额外请求体里的 openai 子对象原样并进翻译后的请求。
+      const extraOai = out.openai && typeof out.openai === 'object' ? out.openai : null;
+      if (extraOai) Object.assign(upBody, extraOai);
+      upUrl = openaiUrl(provider.baseUrl, '/chat/completions');
+    }
     const headers = { 'content-type': 'application/json', ...customHeaders(provider), ...authHeaders(provider, apiKey) };
-    const upUrl = openaiUrl(provider.baseUrl, '/chat/completions');
-    const up = await upstreamFetch(provider, upUrl, { method: 'POST', headers, body: JSON.stringify(oai) }, ac.signal);
+    const up = await upstreamFetch(provider, upUrl, { method: 'POST', headers, body: JSON.stringify(upBody) }, ac.signal);
     if (!up.ok) {
       const text = await up.text().catch(() => '');
       const mapped = upstreamError(provider, upUrl, up.status, text, target.id);
@@ -422,15 +430,15 @@ async function handle(req, res) {
       fail(up.status, `上游返回 ${up.status}：${vendorText(text).msg}`);
       return;
     }
-    if (!oai.stream) {
+    if (!out.stream) {
       const j = await up.json();
-      const msg = fromOpenAI(j, target.id);
+      const msg = gem ? fromGemini(j, target.id, { search: wantsSearch(out) }) : fromOpenAI(j, target.id);
       note(provider, { ...logBase, status: 200, ms: Date.now() - t0, ...logUsage(msg.usage) });
       sendJson(res, 200, msg);
       return;
     }
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-    const tr = new OpenAIStream(target.id);
+    const tr = gem ? new GeminiStream(target.id, { search: wantsSearch(out) }) : new OpenAIStream(target.id);
     const dec = new TextDecoder();
     let buf = '', firstMs = 0;
     const flush = (line) => {
@@ -545,10 +553,10 @@ async function getModelsAt(p, url, headers) {
 export async function fetchRemoteModels(draft) {
   const key = keyOf(draft);
   const p = quick(draft);
-  const isA = p.protocol !== 'openai';
+  const isA = p.protocol === 'anthropic';
   const base = String(p.baseUrl || '').replace(/\/+$/, '');
-  // 主地址 + 备选地址（…/anthropic → …/v1、…/models、根下的 /v1/models；共用模块 modelsUrlCandidates）
-  const [primary, ...alts] = modelsUrlCandidates(isA ? 'anthropic' : 'openai', base);
+  // 主地址 + 备选地址（…/anthropic → …/v1、…/models、根下的 /v1/models；Gemini 只有 …/models?pageSize=1000；共用模块 modelsUrlCandidates）
+  const [primary, ...alts] = modelsUrlCandidates(p.protocol === 'gemini' ? 'gemini' : isA ? 'anthropic' : 'openai', base);
   const headers = { ...(isA ? { 'anthropic-version': '2023-06-01' } : {}), ...customHeaders(p), ...authHeaders(p, key) };
   let r = await getModelsAt(p, primary, headers);
   if (!r.ok && (r.status === 404 || r.status === 405 || !r.status || /JSON|格式/.test(r.text))) {
@@ -562,6 +570,8 @@ export async function fetchRemoteModels(draft) {
   return r.list.map((x) => {
     const id = modelIdOf(x);
     if (!id) return null;
+    // Gemini 的列表连向量、生图一起给，带着能做什么：不能 generateContent 的不列
+    if (x && Array.isArray(x.supportedGenerationMethods) && !x.supportedGenerationMethods.includes('generateContent')) return null;
     return { id, label: labelOf(x, id), ...guessModel(id, { protocol: p.protocol, api: x, route: routeOf(p.baseUrl) }) };
   }).filter(Boolean).slice(0, 1000);
 }
@@ -583,7 +593,10 @@ async function callOnce(provider, model, key, { messages, maxTokens = 256, tier 
   if (body.thinking && body.thinking.budget_tokens && body.thinking.budget_tokens >= maxTokens) body.max_tokens = body.thinking.budget_tokens + 256;
   const t0 = Date.now();
   let url, init;
-  if (provider.protocol === 'openai') {
+  if (provider.protocol === 'gemini') {
+    url = geminiUrl(provider.baseUrl, m.id, false);
+    init = { method: 'POST', headers: { 'content-type': 'application/json', ...customHeaders(provider), ...authHeaders(provider, key) }, body: JSON.stringify(toGemini({ ...body, stream: false }, prov, m, effort)) };
+  } else if (provider.protocol === 'openai') {
     const oai = openAIReasoning(toOpenAI({ ...body, stream: false }, prov, m), m, effort);
     if (body.openai && typeof body.openai === 'object') Object.assign(oai, body.openai);
     if (oaiPatch) Object.assign(oai, oaiPatch);
@@ -597,7 +610,7 @@ async function callOnce(provider, model, key, { messages, maxTokens = 256, tier 
   const text = await up.text().catch(() => '');
   let json = null; try { json = JSON.parse(text); } catch {}
   let msg = null;
-  if (up.ok && json) msg = provider.protocol === 'openai' ? fromOpenAI(json, m.id) : json;
+  if (up.ok && json) msg = provider.protocol === 'openai' ? fromOpenAI(json, m.id) : provider.protocol === 'gemini' ? fromGemini(json, m.id) : json;
   return { status: up.status, ok: up.ok && !!json, json, text, url, ms: Date.now() - t0, msg, effort };
 }
 const replyOf = (msg) => ((msg && msg.content) || []).filter((b) => b && b.type === 'text').map((b) => b.text).join('').trim();
@@ -649,12 +662,17 @@ export async function detectProtocol(draft) {
   const bases = siblingBaseUrls(draft.baseUrl).slice(0, 5);
   const tries = [];
   for (const b of bases) for (const protocol of ['anthropic', 'openai']) tries.push({ protocol, baseUrl: b });
+  // Gemini 原生接口：Google 的地址（…/v1beta）或者当前就选的 Gemini，才多试这一种
+  const trimSlash = (s) => String(s || '').replace(/\/+$/, '');
+  const googleish = (b) => { try { return /(^|\.)googleapis\.com$/.test(new URL(b).hostname) || /\/v1beta$/.test(b); } catch { return false; } };
+  for (const b of bases) if (draft.protocol === 'gemini' ? trimSlash(b) === trimSlash(draft.baseUrl) : googleish(b) && !/\/openai$/.test(b)) tries.push({ protocol: 'gemini', baseUrl: b });
   const results = await Promise.all(tries.map(async (t) => {
-    const authStyle = draft.authStyle === 'none' ? 'none' : t.protocol === draft.protocol ? draft.authStyle : t.protocol === 'openai' ? 'bearer' : 'x-api-key';
+    const authStyle = draft.authStyle === 'none' ? 'none' : t.protocol === draft.protocol ? draft.authStyle : t.protocol === 'openai' ? 'bearer' : t.protocol === 'gemini' ? 'goog' : 'x-api-key';
     const p = quick({ ...draft, ...t, authStyle }, 15);
     const isA = t.protocol === 'anthropic';
-    const url = isA ? anthropicUrl(t.baseUrl, '/v1/messages') : openaiUrl(t.baseUrl, '/chat/completions');
-    const body = { model: probeModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] };
+    const gem = t.protocol === 'gemini';
+    const url = gem ? geminiUrl(t.baseUrl, probeModel, false) : isA ? anthropicUrl(t.baseUrl, '/v1/messages') : openaiUrl(t.baseUrl, '/chat/completions');
+    const body = gem ? { contents: [{ role: 'user', parts: [{ text: 'hi' }] }], generationConfig: { maxOutputTokens: 1 } } : { model: probeModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] };
     const headers = { 'content-type': 'application/json', ...(isA ? { 'anthropic-version': '2023-06-01' } : {}), ...customHeaders(p), ...authHeaders(p, key) };
     const t0 = Date.now();
     try {

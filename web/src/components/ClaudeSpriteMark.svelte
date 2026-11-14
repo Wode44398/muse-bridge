@@ -1,8 +1,7 @@
 <script>
   // Claude 运行标记的「sprite」档（设置「运行标记」三选一之一）。phase：pending（等首字）| working（干活中）| blocked（等你操作）
-  // 播放模块与素材是原版资源（清单 modules.spriteMark：SpritePlayer / preloadSprite）；模块到之前先放一颗圆点。
+  // 播放模块与素材是原版资源（visuals/modules/sprite-mark.js：SpritePlayer / preloadSprite，懒加载）；模块到之前先放一颗圆点。
   import { onMount, untrack } from 'svelte';
-  import { ovModule } from '../lib/overlay.svelte.js';
 
   let { phase = 'pending', box = 20 } = $props();
   let host = $state(null);
@@ -11,7 +10,7 @@
 
   onMount(() => {
     let alive = true;
-    ovModule('spriteMark').then((m) => { if (alive && m && typeof m.SpritePlayer === 'function') mod = m; });
+    import('../visuals/modules/sprite-mark.js').then((m) => { if (alive) mod = m; });
     return () => { alive = false; player?.destroy(); player = null; };
   });
 

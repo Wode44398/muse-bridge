@@ -503,6 +503,10 @@
   // 文件卡和其它卡一样恒带标题行（放大 / 关闭）：从前工作空间页挂上后标题行让位、收起靠页面自己的 ‹，
   // 只有这一张卡长得不一样、不好上手。现在页面的 ‹ / ↑ 只管上一级（WorkspaceEmbed 传 hostChrome）。
   const exitFiles = () => (wide ? closeDockView('files') : closeDock());
+  // 文件卡挂的是触屏那套 FilesPanel（判据同 WorkspaceEmbed：侧列里只有精确指针且非访客才换 FilesDesktop）时，
+  // 标题行浮到页面上：不再是一条比页面亮一档的硬顶栏、底下再贴一排液态玻璃钮。整张卡是同一块底，
+  // 标题行透明，内容滚上来时由页面自己的滚动边缘效果（渐隐模糊）一并衬在标题行和玻璃钮底下。
+  const filesFloat = $derived(!!filesMount && (!pointer.fine || snapMode));
 
   let sheetHandle = $state();
   let sheetScrim = $state();
@@ -598,7 +602,7 @@
     {#if emptyBox}<div class="dk-slot empty" style={emptyBox}></div>{/if}
     {#if slotBox}<div class="dk-slot" style={slotBox}></div>{/if}
     {#each cards as c (c.v)}
-      <section class="dk-card" class:hid={!c.box} class:lifted={sort?.v === c.v} class:tearing={sort?.v === c.v && sort.out}
+      <section class="dk-card" class:hid={!c.box} class:flt={c.v === 'files' && filesFloat} class:lifted={sort?.v === c.v} class:tearing={sort?.v === c.v && sort.out}
         style={c.box} aria-label={titleOf(c.v)} use:cardRef={c.v}>
         <!-- 标题行 = 拖拽把手：拖动排顺序，拖出 app 成独立窗口；双击放大 / 还原 -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -705,6 +709,10 @@
   @keyframes dkCardIn { from { opacity: 0; transform: translateY(6px); } }
   .dk-card-head { flex: none; display: flex; align-items: center; gap: 2px; height: 38px; padding: 0 5px 0 13px; touch-action: none; user-select: none; }
   .dk-card-head.grab { cursor: grab; }
+  /* 浮动标题行（见 filesFloat）：叠在内嵌页之上、不占流；内嵌页拿它当「状态栏」——--sat 设成标题行高，
+     FilesPanel 的顶栏钮 / 滚动边缘 / 菜单锚点、预览头都按 --sat 让位，滚动内容从标题行底下穿过 */
+  .dk-card.flt > .dk-card-head { position: absolute; top: 0; left: 0; right: 0; z-index: 3; }
+  .dk-card.flt .dk-embed { --sat: 38px; }
   /* 拖动排序：拿起的那张浮在最上、投影加深，跟着指针走（inline transform 每帧改，不加过渡）；
      落点是一圈虚线框，随排布滑到新格子；拖出窗口时半透明，示意「松手就成独立窗口」 */
   .dk-card.lifted { z-index: 6; animation: none; box-shadow: 0 22px 54px rgba(0, 0, 0, .42), 0 4px 14px rgba(0, 0, 0, .22);

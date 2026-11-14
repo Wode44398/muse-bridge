@@ -253,4 +253,20 @@ export default {
   '「{path}」不在已添加的位置里，可在左侧「添加位置…」里授权': '“{path}” isn’t in any added location. Use Add location… on the left to grant access.',
   '「{path}」不在可访问的位置里': '“{path}” isn’t in a location you can access',
   '添加这台电脑上的文件夹…': 'Add a folder on this computer…',
+  // —— 图标档 / 预览窗格 / 快速查看 ——
+  '预览窗格': 'Preview pane',
+  '图标大小': 'Icon size',
+  'Ctrl+滚轮': 'Ctrl+Scroll',
+  '内容': 'Contents',
+  '快速查看': 'Quick Look',
+  '空格': 'Space',
+  '选中一个文件即可在这里预览': 'Select a file to preview it here',
+  'Ctrl+= / Ctrl+− / Ctrl+滚轮': 'Ctrl+= / Ctrl+− / Ctrl+Scroll',
+  // —— 类型列：Office 文件按类别 ——
+  'Word 文稿': 'Word document',
+  '{ext} 文稿': '{ext} document',
+  'Excel 表格': 'Excel spreadsheet',
+  '{ext} 表格': '{ext} spreadsheet',
+  'PPT 演示文稿': 'PowerPoint presentation',
+  '{ext} 演示文稿': '{ext} presentation',
 };

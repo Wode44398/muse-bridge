@@ -16,31 +16,20 @@
   import { DISTRO } from '../lib/distro.js';
   import { openPreview, closePreview, preview, cloudFileUrl } from '../lib/preview.svelte.js';
   import { t, tc, locale, isEn } from '../lib/i18n.js';
+  import { kindOf as fkKind, iconKindOf, extOf as fkExt } from '../lib/fileKinds.js';
+  import { buildSequence } from '../lib/fileGrid.js';
 
-  // —— 文件分类（本页自用：决定图标、缩略图、点开方式）——
-  const EXT = {
-    image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif', 'avif', 'svg'],
-    video: ['mp4', 'mov', 'webm', 'mkv', 'avi', 'm4v', '3gp'],
-    audio: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'amr'],
-    pdf: ['pdf'],
-    doc: ['doc', 'docx', 'odt', 'rtf', 'pages'],
-    sheet: ['xls', 'xlsx', 'ods', 'csv', 'numbers'],
-    slide: ['ppt', 'pptx', 'odp', 'key'],
-    md: ['md', 'markdown', 'mdown', 'mkd'],
-    html: ['html', 'htm'],
-    zip: ['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz'],
-    code: ['js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'json', 'css', 'scss', 'py', 'sh', 'ps1', 'bat', 'yml', 'yaml', 'toml', 'ini', 'xml', 'sql', 'c', 'h', 'cpp', 'java', 'kt', 'go', 'rs', 'rb', 'php', 'lua', 'swift', 'vue', 'svelte'],
-    text: ['txt', 'log', 'tex', 'rst', 'conf', 'env'],
-  };
-  const extOf = (n) => (n.includes('.') ? n.split('.').pop().toLowerCase() : '');
+  // —— 文件分类：图标 / 缩略图 / 点开方式全部来自单一词表 lib/fileKinds.js（与文件管理器、查看器同一份）——
+  // 图标分类：本页只画得出下面 GLYPH 里那几类，其余（字体 / 电子书 / 设计稿 / 安装包）落通用文件图标
   function kindOf(it) {
     if (it.isDir) return 'dir';
-    const e = extOf(it.name);
-    for (const k in EXT) if (EXT[k].includes(e)) return k;
-    return 'file';
+    const k = iconKindOf(it.name);
+    return GLYPH[k] ? k : 'file';
   }
-  // 预览查看器认的 kind（preview.svelte.js 词表）；null = 没有内嵌预览，点开直接下载。
-  const VIEW = { image: 'image', video: 'video', audio: 'audio', pdf: 'pdf', doc: 'office', sheet: 'office', slide: 'office', md: 'markdown', html: 'html', code: 'text', text: 'text' };
+  // 预览查看器认的 kind；null = 没有内嵌预览，点开直接下载
+  // 苹果 iWork（Pages / Numbers / Keynote）：fileKinds 判为 other，点开提示并直接下载
+  const NO_VIEW_EXT = new Set(['pages', 'numbers', 'key']);
+  const viewOf = (it) => { if (it.isDir) return null; const k = fkKind(it.name); return k === 'other' ? null : k; };
   const KIND_LABEL = { dir: t('文件夹'), image: t('图片'), video: t('视频'), audio: t('音频'), pdf: 'PDF', doc: t('文档'), sheet: tc('files', '表格'), slide: t('演示文稿'), md: 'Markdown', html: t('网页'), zip: tc('files', '压缩包'), code: t('代码'), text: t('文本'), file: t('文件') };
 
   // 类型图标：浅色底 + 同色描边字形（24 视框）。颜色走 --k 变量，暗色下同样可读。
@@ -199,17 +188,16 @@
   const goUp = () => setHash(segs.slice(0, -1).join('/'));
 
   // —— 打开 / 预览 ——
-  const srcItem = (it, kind) => ({ origin: 'cloud', rel: relOf(it), name: it.name, kind, mt: it.mtime });
+  const srcItem = (it) => ({ origin: 'cloud', rel: relOf(it), name: it.name, kind: viewOf(it), mt: it.mtime, size: it.size });
+  // 同文件夹的图片与视频按列表顺序组成一个画廊，文档组成前后翻页序列（与文件管理器同一规则，lib/fileGrid.js）
   function open(it) {
     if (it.isDir) { openDir(it); return; }
-    const k = kindOf(it), v = VIEW[k];
-    if (!v) { download(it); return; }
-    if (v === 'image') {
-      const imgs = files.filter((f) => kindOf(f) === 'image');
-      openPreview(imgs.map((f) => srcItem(f, 'image')), Math.max(0, imgs.indexOf(it)), { host: 'app' });
-      return;
+    if (!viewOf(it)) {
+      if (NO_VIEW_EXT.has(fkExt(it.name))) toast(t('这种文件无法在线预览，已开始下载'));
+      download(it); return;
     }
-    openPreview([srcItem(it, v)], 0, { host: 'app' });
+    const { seq, index } = buildSequence(files, it, { same: (a, b) => a.name === b.name });
+    openPreview(seq.map(srcItem), index, { host: 'app' });
   }
 
   // —— 下载：fetch 流式读进度 → 底部下载条；大文件交给浏览器原生下载（Blob 攒不动）——
@@ -298,7 +286,7 @@
   });
   const menuPos = $derived.by(() => {
     if (!menu) return '';
-    const h = (menu.it.isDir || !VIEW[kindOf(menu.it)] ? 1 : 2) * 40 + 50;
+    const h = (menu.it.isDir || !viewOf(menu.it) ? 1 : 2) * 40 + 50;
     const left = Math.max(8, Math.min(menu.x, innerWidth - MENU_W - 8));
     const top = menu.y + h > innerHeight - 8 ? Math.max(8, menu.y - h) : menu.y;
     return `left:${left}px;top:${top}px;width:${MENU_W}px`;
@@ -483,7 +471,7 @@
     {#if menu.it.isDir}
       <button role="menuitem" onclick={() => menuAct('open')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h3.4l2 2.2H18a2.5 2.5 0 0 1 2.5 2.5v7.3A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17z"/></svg>{t('打开')}</button>
     {:else}
-      {#if VIEW[kindOf(menu.it)]}
+      {#if viewOf(menu.it)}
         <button role="menuitem" onclick={() => menuAct('open')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg>{t('预览')}</button>
       {/if}
       <button role="menuitem" onclick={() => menuAct('dl')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19.5h14"/></svg>{t('下载')}<span class="ctx-sz">{fmtSize(menu.it.size)}</span></button>

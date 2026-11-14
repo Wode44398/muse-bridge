@@ -16,7 +16,7 @@
 //           studio?: { id: Studio 托管服务的 id, dialect }, studioDirty?: true（媒体部分有改动没同步成：Studio 回来后补推）}
 // v1 → v2：读到 v:1 时在内存里升级（v1 只有文本这一条路：原来填的型号一律按文本、去向 = 原服务级 agents——升级不改变已经发布出去的集合），
 // 第一次升级时把原文件备份成 services.v1.bak.json；下次保存时写 v:2。服务级 agents 不再存，视图里给并集。
-// 校验（契约 §5.4）：文本 → {claude, dimensio}（Gemini 协议去掉 claude；给 claude 的 id 要合 Claude 的规则、上下文窗口至少 4096）；
+// 校验（契约 §5.4）：文本 → {claude, dimensio}（给 claude 的 id 要合 Claude 的规则、上下文窗口至少 4096）；
 // 媒体 → {studio} 且种类在这个服务的媒体接口能做的范围内；other（向量、识别一类）不可添加。Vertex 这次不动：仍是服务级 agents。
 // Studio 的桥要等扩展加载完才有：启动时 server.mjs 在 loadModules 之后调 reconcileStudio() 对一次账（补删、补推、孤儿托管服务取消托管）。
 import { randomBytes } from 'node:crypto';
@@ -187,7 +187,7 @@ function upgradeV1(s0) {
       const o = typeof m === 'string' ? { id: m } : m && typeof m === 'object' ? m : {};
       // v1 只有文本这一条路：原来填的型号一律按文本、去向 = 原服务级 agents——升级前后发布出去的集合不变
       // （名字像生图 / 配音的也照旧：OpenRouter 上 gemini-*-image 这类本来就走对话接口，老会话还记着它；
-      // 真是纯媒体的，用户在目录里改种类再加到 Media Studio）。去向照常过校验：Gemini 协议、Claude 的 id / 上下文规则不合的静默去掉 claude
+      // 真是纯媒体的，用户在目录里改种类再加到 Media Studio）。去向照常过校验：Claude 的 id / 上下文规则不合的静默去掉 claude
       return { ...o, kind: 'text', agents };
     }),
     kind,
@@ -229,9 +229,8 @@ function setKeys(changes) {   // [[服务, 线路, key | '' = 删]]
 }
 
 // —— 规范化 ——
-function normalizeAgents(v, kind, dflt) {   // 只给 Vertex 用（服务级去向）
-  const list = Array.isArray(v) ? MODEL_AGENTS.filter((a) => v.includes(a)) : dflt;
-  return kind === 'gemini' ? list.filter((a) => a !== 'claude') : list;
+function normalizeAgents(v, dflt) {   // 只给 Vertex 用（服务级去向）
+  return Array.isArray(v) ? MODEL_AGENTS.filter((a) => v.includes(a)) : dflt;
 }
 function modelIds(v) {   // Vertex 的型号只存 id
   const seen = new Set(), out = [];
@@ -260,7 +259,7 @@ function normalizeVertex(v, prev) {
   const models = Array.isArray(v.models) ? modelIds(v.models) : p.models;
   return {
     enabled: typeof v.enabled === 'boolean' ? v.enabled : p.enabled,
-    agents: normalizeAgents(v.agents, 'vertex', p.agents),
+    agents: normalizeAgents(v.agents, p.agents),
     members: typeof v.members === 'boolean' ? v.members : p.members,
     models: models.length ? models : [...VERTEX_DEFAULT_MODELS],
     location: /^[a-z0-9-]{0,40}$/.test(String(v.location ?? '')) ? String(v.location ?? p.location) : p.location,
@@ -276,7 +275,6 @@ function agentProblem(id, kind, a, protocol, mediaKinds, ctx) {
   if (!ALL_AGENTS.includes(a)) return `不认识的去向「${String(a).slice(0, 20)}」`;
   if (kind === 'text') {
     if (a === 'studio') return '文本模型不能添加到 Media Studio';
-    if (a === 'claude' && protocol === 'gemini') return 'Gemini 协议的服务不能给 Claude';
     if (a === 'claude' && !CLAUDE_ID_RE.test(id)) return `「${short(id)}」里有 Claude 不认的字符（只能是字母、数字和 _ . : / @ + -），不能给 Claude`;
     if (a === 'claude' && ctx && ctx < CLAUDE_MIN_CTX) return `「${short(id)}」的上下文窗口只有 ${ctx}，Claude 至少要 ${CLAUDE_MIN_CTX}，不能给 Claude`;
     return '';
@@ -447,8 +445,9 @@ function desiredSpecs() {
   const d = load(), out = new Map();
   if (d.vertex.enabled && vertexConfigured()) {
     const models = d.vertex.models.map((id) => ({ id }));
-    // Claude 走 OpenAI 兼容接口（网关代存思维签名），dimensio 走原生 Gemini 接口——同一个服务登记成两条
-    for (const [suffix, agent, proto] of [['c', 'claude', 'openai'], ['d', 'dimensio', 'gemini']]) {
+    // 两边都走原生 Gemini 接口（2026-11-13 起 Claude 的本机代理会翻译它；此前 Claude 走 OpenAI 兼容接口、网关代存思维签名）。
+    // 仍登记成两条：Claude 侧的服务 id（p-<vertex-c 的哈希>）老会话还记着，不能变
+    for (const [suffix, agent, proto] of [['c', 'claude', 'gemini'], ['d', 'dimensio', 'gemini']]) {
       if (!d.vertex.agents.includes(agent)) continue;
       out.set(`${VERTEX_ID}-${suffix}`, {
         id: `${VERTEX_ID}-${suffix}`, name: 'Vertex', protocol: proto, baseUrl: gatewayUrl(VERTEX_ID, proto), authStyle: 'none',
@@ -618,7 +617,7 @@ function keepInCatalog(sid, cat, list) {
 /**
  * 老前端（离线 apk 里内置的旧编辑器）的 update 带着服务级 agents 与型号清单（型号不带种类）：翻译成 assign，只动文本模型
  * （媒体模型不碰：老编辑器回传的条目没有种类，不能拿来覆盖）→ { models: 新的已添加清单, fresh: [新加的] } | null（没变化）。
- *   · 清单里没有的文本模型 = 移除；清单里新出现的按文本加，去向 = 给的 agents（Gemini 协议 / Claude 的规则不合的去掉 claude，一个都不剩才 400）；
+ *   · 清单里没有的文本模型 = 移除；清单里新出现的按文本加，去向 = 给的 agents（Claude 的规则不合的去掉 claude，一个都不剩才 400）；
  *   · 服务级 agents 比原来的并集少了的，从每个文本模型上去掉；多了的，给每个文本模型加上（同样按规则去掉给不了的）；
  *   · 老编辑器里改过的显示名 / 上下文 / 识图跟着改。
  * 最后过 applyAssign 同一套校验：不合法整次 400，什么都不改。
@@ -1063,7 +1062,7 @@ export function findTwinService({ baseUrl, key = '', kind = '', members = false,
 
 /**
  * 把一批文本型号并进已有的服务（老服务和它其实是同一个）→ ServiceView。
- * 已经在的型号补上两边能给的去向（Gemini 协议、id / 上下文不合 Claude 规则的只给 dimensio）；没有的新加，去向同上。
+ * 已经在的型号补上两边能给的去向（id / 上下文不合 Claude 规则的只给 dimensio）；没有的新加，去向同上。
  * parked（原来停用着的）只进目录。超了文本模型上限等校验错误原样抛（调用方改为另建一个服务）。
  */
 export function absorbTextModels(id, models, { parked = [], defaultModel } = {}) {

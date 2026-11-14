@@ -15,6 +15,8 @@ import {
 } from './file-core.mjs';
 import { handleFile, handleOfficePdf } from './file-preview.mjs';
 import { handleStream } from './file-video.mjs';
+import { handleMediaMeta, handleStoryboard, handleMediaCover, handleMediaPeaks } from './file-media.mjs';
+import { handleFilesMeta } from './file-meta.mjs';
 import {
   handleCompress, handleCompressStatus, handleExtract, handleMdLinks, handleMdNames, handleRelPaths,
 } from './file-derived.mjs';
@@ -47,4 +49,11 @@ export function registerFileRoutes(router, { identify }) {
   router.on('POST', '/api/files/compress', (req, res) => handleCompress(req, res, identify));
   router.on('GET', '/api/files/compress', (req, res, url) => handleCompressStatus(req, res, url, identify));
   router.on('POST', '/api/files/relpaths', (req, res) => handleRelPaths(req, res, identify));
+  // 音视频播放器衍生物（元数据/章节/字幕清单、storyboard 雪碧图、内嵌封面、波形），见 file-media.mjs
+  router.on('GET', '/api/file/media-meta', (req, res, url) => handleMediaMeta(req, res, url, identify));
+  router.on('GET', '/api/file/storyboard', (req, res, url) => handleStoryboard(req, res, url, identify));
+  router.on('GET', '/api/file/media-cover', (req, res, url) => handleMediaCover(req, res, url, identify));
+  router.on('GET', '/api/file/media-peaks', (req, res, url) => handleMediaPeaks(req, res, url, identify));
+  // 列表的二次补充元数据（图片宽高、视频时长、文件夹项目数），见 file-meta.mjs
+  router.on('GET', '/api/files/meta', (req, res, url) => handleFilesMeta(req, res, url, identify));
 }

@@ -491,7 +491,41 @@
     scrollEl.scrollTop = scrollEl.scrollHeight;
     pendingBottom = false;
   }
-  function onScroll() { if (scrollEl) atBottom = scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 120; }
+  // —— 流式增长时平滑跟底 ——
+  // 正文是逐字淡入的（lib/claudeFade.js），视口却每批「咔」地跳一行很出戏：内容增长（不是新消息）时
+  // 改成每帧把视口往底部缓动（τ≈90ms，一行高的增长约 0.2s 滑到位；落差特别大直接到底）。
+  // 用户一往上滚（scrollTop 变小、且不是内容变短被夹的）立刻放手；跟底途中自己造成的滚动事件
+  // 不重算 atBottom——大段内容一次到达时落差可能瞬间超过 120px，重算会把跟底误判成「用户离开了底部」。
+  let followRaf = 0, followT = 0, lastTop = 0;
+  const calmScroll = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function followBottom() {
+    if (followRaf || !scrollEl) return;
+    followT = performance.now();
+    followRaf = requestAnimationFrame(stepFollow);
+  }
+  function stepFollow(now) {
+    followRaf = 0;
+    const el = scrollEl;
+    if (!el || !atBottom || !el.clientHeight) return;
+    const gap = el.scrollHeight - el.clientHeight - el.scrollTop;
+    if (gap <= 1) return;
+    const dt = Math.min(64, Math.max(1, now - followT));
+    followT = now;
+    let d = gap > 1600 || calmScroll() ? gap : gap * (1 - Math.exp(-dt / 90));
+    if (d < 1) d = Math.min(gap, 1);
+    el.scrollTop += d;
+    lastTop = el.scrollTop;
+    followRaf = requestAnimationFrame(stepFollow);
+  }
+  function onScroll() {
+    if (!scrollEl) return;
+    const top = scrollEl.scrollTop, gap = scrollEl.scrollHeight - scrollEl.clientHeight - top;
+    if (top < lastTop - 2 && gap > 2) {                 // 用户往上滚：立刻放手
+      atBottom = false;
+      if (followRaf) { cancelAnimationFrame(followRaf); followRaf = 0; }
+    } else if (!followRaf || gap < 120) atBottom = gap < 120;
+    lastTop = top;
+  }
   $effect(() => {
     const arr = chat.messages;
     const n = arr.length;
@@ -503,7 +537,8 @@
     const newMsg = n > lastCount || swapped; lastCount = n;
     // 新消息落地那一帧布局还可能再动一下（Thread 给上一轮加 skip、图片/字体补量）；
     // 只滚一次会按半成品高度落底。补第二帧，与下面「露出后补两帧」同理。
-    if (scrollEl && (newMsg || atBottom)) requestAnimationFrame(() => { toBottom(); if (newMsg) requestAnimationFrame(toBottom); });
+    if (scrollEl && newMsg) requestAnimationFrame(() => { toBottom(); requestAnimationFrame(toBottom); });
+    else if (scrollEl && atBottom) followBottom();     // 同一条消息在长：缓动跟底
   });
   // 分页露出（首次进 claude / 转场揭幕）→ 把隐藏期欠下的那脚滚底补上。只补欠账，
   // 用户自己滚过再回来的位置不动。**必须同步落地**：入场转场揭幕后紧接着就要量
@@ -1747,7 +1782,7 @@
 
 <!-- transform / clip-path 只在左缘右滑跟手期间有值（预测式返回：缩小 + 圆角）；平时为空，
      入场 / 返回的动画都在转场快照上做，本页 DOM 不动。 -->
-<div class="claude-slide" class:sliding bind:this={slideEl} style:transform={peek.transform}
+<div class="claude-slide cc-tone" class:sliding bind:this={slideEl} style:transform={peek.transform}
      style:clip-path={peek.clip} use:edgeSwipe>
 <!-- .wide 管的是【横向分栏】本身（侧栏/工作台都靠它成为左右列），不等于「侧栏常驻」：
      medium 档侧栏让位给工作台时 pinned=false，但仍必须是 row，否则工作台会掉到正文下面。 -->
@@ -2410,6 +2445,8 @@
 
   .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; visibility: hidden; transition: opacity .25s ease, visibility .25s; z-index: 40; }
   .scrim.open { opacity: 1; visibility: visible; }
+  /* 侧栏比正文区高一档（官方 fizzy-lake）：栏内凡是垫 --bg 的（字标行、账户卡、渐隐）一起换成侧栏色 */
+  .drawer { --bg: var(--side-bg); }
   .drawer { position: fixed; top: 0; left: 0; bottom: 0; width: 80vw; max-width: 320px; background: var(--bg); border-right: 1px solid var(--divider); transform: translateX(-100%); visibility: hidden; transition: transform .26s cubic-bezier(.22,1,.36,1), background-color .25s ease, visibility 0s linear .26s; z-index: 50; display: flex; flex-direction: column; padding: 10px 8px; padding-top: max(10px, var(--sat)); overflow-y: auto; }
   /* 关闭态 visibility:hidden —— 侧滑返回时 .claude-slide 的 transform 会把屏外的 drawer 推进屏内，
      隐藏掉就不会"先展开侧边栏"；visibility 用 .26s 延迟，保证关闭滑出动画本身可见、滑完才隐藏。 */

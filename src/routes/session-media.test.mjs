@@ -58,6 +58,8 @@ test('主对话生成的图与失败卡还原成 media 段，子 agent 的图从
     ['image', 'ready', ID2, 'brushed steel'],
   ]);
   assert.equal(segs[1].error, '{"error":{"code":429}}');
+  // 存盘扩展名随段带给前端（下载名补扩展名用）
+  assert.deepEqual([segs[0].ext, segs[2].ext], ['png', 'png']);
   // 媒体工具不该再冒成工具行
   const toolNames = msgs.flatMap((m) => m.segments || []).filter((s) => s.kind === 'tools').flatMap((s) => s.tools.map((t) => t.name));
   assert.ok(!toolNames.some((n) => n.startsWith('mcp__media__')));

@@ -360,13 +360,16 @@
     { sec: 'ag-dimensio', id: 'dm-keys', label: t('各厂商 API Key'), keys: t('dimensio 密钥 key 厂商') },
     { sec: 'ag-dimensio', id: 'dm-custom', label: t('自定义模型服务'), keys: t('dimensio 模型中心 自定义 API OpenAI 兼容 OpenRouter Ollama custom provider base url') },
     ...(me.kind === 'admin' ? [{ sec: 'ag-dimensio', id: 'dm-local', label: t('本机模型'), keys: t('dimensio 本地 Qwen Strata llama.cpp 启动参数 上下文 显存 local') }] : []),
-    { sec: 'ag-dimensio', id: 'dm-mode', label: t('默认运行档位'), keys: t('dimensio 自主执行 只读 先出计划 权限 模式 mode') },
+    { sec: 'ag-dimensio', id: 'dm-mode', label: t('默认运行档位'), keys: t('dimensio 自主执行 只读 先出计划 全权 权限 模式 mode bypass') },
     { sec: 'ag-dimensio', id: 'dm-access', label: t('访问范围'), keys: t('dimensio 整机 仅工作空间 沙箱 access') },
+    { sec: 'ag-dimensio', id: 'dm-allow', label: t('总是允许'), keys: t('dimensio 权限规则 允许 放行 allow rule') },
     { sec: 'ag-dimensio', id: 'dm-ask', label: t('每次问我'), keys: t('dimensio 权限规则 询问 ask rule') },
     { sec: 'ag-dimensio', id: 'dm-deny', label: t('从不允许'), keys: t('dimensio 权限规则 禁止 deny rule') },
     { sec: 'ag-dimensio', id: 'dm-ws', label: t('工作空间'), keys: t('dimensio 工作区 文件夹 目录 workspace') },
     { sec: 'ag-dimensio', id: 'dm-mem', label: t('记忆管理'), keys: t('dimensio 记忆 memory 召回') },
     { sec: 'ag-dimensio', id: 'dm-feed', label: t('显示全部工作过程'), keys: t('dimensio 工作过程 工具调用 折叠 展开 详细') },
+    ...(me.kind === 'admin' ? [{ sec: 'ag-dimensio', id: 'dm-mcp', label: t('dimensio 的 MCP 连接器'), keys: t('dimensio mcp 连接器 connector 工具 server') }] : []),
+    { sec: 'ag-dimensio', id: 'dm-skills', label: t('dimensio 的技能'), keys: t('dimensio 技能 skill 命令 command') },
     { sec: 'ag-dimensio', id: 'dm-diag', label: t('导出诊断包'), keys: t('dimensio 诊断 导出 日志 diagnostics') },
     ...(ds.prefs?.items || []).map((p) => ({ sec: 'ag-dimensio', id: 'dp-' + p.key, label: prefLabel(p), keys: prefDesc(p) + ' dimensio' })),
     // Media Studio（正文是懒加载的 studio 扩展；id 对应它里面的行，搜索跳过去闪一下）。Gemini 设置分区删了，搜 Gemini / Vertex 落到这里
@@ -1607,7 +1610,7 @@
 
       {#if id === 'dimensio'}
         <!-- 管理员：开关关着 / 这台机器跑不起来时不去打 harness（原因在头图下）；成员能看到这一分区就是有权限 -->
-        <DimensioSection {fl} enabled={!a || (a.switch && a.runnable)} openHub={() => navigate('model-hub')} />
+        <DimensioSection {fl} enabled={!a || (a.switch && a.runnable)} openHub={() => navigate('model-hub')} openExt={openExtType} />
       {/if}
 
       {#if !a && id !== 'claude' && id !== 'dimensio'}<p class="note">{t('只有管理员能改这里')}</p>{/if}

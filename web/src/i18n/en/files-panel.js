@@ -302,4 +302,12 @@ export default {
   '电脑文件夹': 'Folder on this computer',
   '这些是这台电脑上你授权 The Bridge 访问的文件夹：在本机直接浏览、预览，文件不经过服务器。可随时增删。': 'These are the folders on this computer you’ve given The Bridge access to. They’re browsed and previewed right here, and the files never go through the server. Add or remove them anytime.',
   '这台电脑上的文件夹只能引用给 Claude': 'Folders on this computer can only be referenced in Claude',
+
+
+  // —— 显示方式 / 排序（顶栏「…」）——
+  '显示方式': 'View Options',
+  '图标': 'Icons',
+  '大图标': 'Large Icons',
+  '修改日期': 'Date Modified',
+  '名称里不能有斜杠': 'Names can’t contain slashes',
 };

@@ -26,6 +26,8 @@ export const ds = $state({
   mem: null,          // { active, waiting, places } | null
   local: {},          // { qwen?: status, strata?: status }
   sessions: [],       // 最近的对话（导出诊断包用）
+  mcp: null,          // [{ name, status, tools, error? }] | null：勾给 dimensio 的 MCP 连接器（/api/mcp）
+  skills: null,       // 技能个数 | null（/api/commands）
   busy: '',           // 正在写的那一项（tag）
   err: '',            // 最近一次写失败的人话
   errAt: '',          // 失败的是哪一项（tag），外壳把报错摆在那一组下面
@@ -65,7 +67,7 @@ export async function loadDimensio({ quiet = false } = {}) {
     return;
   }
   // 其余各取各的：哪一样失败只是那一组不出
-  loadPrefs(); loadMemoryLine(); loadSessions(); loadLocal();
+  loadPrefs(); loadMemoryLine(); loadSessions(); loadLocal(); loadExtLine();
 }
 
 // —— 写配置：序号守卫（连着改两项，后发的赢）；失败把服务端原话摆出来 ——
@@ -104,6 +106,8 @@ export function vendorName(p) {
 export const catalog = () => (Array.isArray(ds.info?.catalog) ? ds.info.catalog : []);
 export const providerSpec = (id) => catalog().find((p) => p.id === id) || null;
 export const curSpec = () => providerSpec(ds.config?.provider);
+/** 默认服务那一栏的显示：选着的那家不在目录里了（模型中心删了它、没给 Key）就明说，别留一栏空白。 */
+export const curVendorLabel = () => (curSpec() ? vendorName(curSpec()) : ds.config?.provider ? t('不可用，请重新选择') : '');
 export const curModel = () => curSpec()?.models?.find((m) => m.id === ds.config?.model) || null;
 export const hasKeyFor = (id) => !!ds.info?.providers?.[id];
 
@@ -174,10 +178,15 @@ export function customSummary() {
 }
 
 // —— 权限与安全 ——
+// 全权档（bypass）只给管理员实例：成员实例（租户 / 访问范围被锁）连这一档都不列，同 dimensio 自己的运行设置
+export const canBypass = () => me.kind === 'admin' && !isTenant() && !ds.config?.accessLocked;
 export const MODES = () => [
   { value: 'auto', label: t('自主执行'), desc: t('直接执行。规则可把个别高危调用改成每次问我。') },
   { value: 'read-only', label: t('只读'), desc: t('只放行读取类工具，写文件与执行命令一律拒绝。') },
   { value: 'plan', label: t('先出计划'), desc: t('只读研究 → 提交计划 → 你批准后当场转自主并开工。') },
+  ...(canBypass() || ds.config?.permissionMode === 'bypass'
+    ? [{ value: 'bypass', label: t('全权'), desc: t('所有工具调用直接执行、不弹卡，整机可读写，连密钥守卫都关掉。谨慎使用。') }]
+    : []),
 ];
 export const ACCESS = () => [
   { value: 'full', label: t('整机可访问'), desc: t('可用绝对路径读写工作空间以外的文件（密钥文件始终封锁）。') },
@@ -208,7 +217,8 @@ export async function loadPrefs() {
   try { ds.prefs = await api.get(H + '/prefs'); } catch { ds.prefs = null; }
 }
 const en = () => isEn();
-export const prefGroups = () => (ds.prefs?.groups || []).filter((g) => (ds.prefs?.items || []).some((p) => p.group === g.id));
+// 「记忆」组的偏好并进上面「记忆管理」那一组显示（memoryOk 时），这里不再单出一组
+export const prefGroups = () => (ds.prefs?.groups || []).filter((g) => (ds.prefs?.items || []).some((p) => p.group === g.id) && !(g.id === 'memory' && memoryOk()));
 export const prefItems = (gid) => (ds.prefs?.items || []).filter((p) => p.group === gid);
 export const prefGroupLabel = (g) => (en() && g.en ? g.en : tr(g.label));
 export const prefLabel = (p) => (en() && p.en?.label ? p.en.label : tr(p.label));
@@ -264,7 +274,9 @@ export async function loadMemoryLine() {
     const items = (ov?.buckets || []).flatMap((b) => b.items || []);
     let active = 0, waiting = 0;
     for (const m of items) { const l = lane(m); if (l === 'active') active++; else if (l === 'proposed' || l === 'held') waiting++; }
-    ds.mem = { active, waiting, places: (ov?.buckets || []).length };
+    // 「分布在几处」只数真有生效记忆的地方（以前连空的、只有待处理的位置都算上，出过「26 条生效，分布在 28 处」）
+    const places = (ov?.buckets || []).filter((b) => (b.items || []).some((m) => lane(m) === 'active')).length;
+    ds.mem = { active, waiting, places };
   } catch { ds.mem = null; }
 }
 export const memoryOk = () => hasCap('memory');
@@ -274,6 +286,26 @@ export function memLine() {
   if (!m.active && !m.waiting) return t('还没有记忆');
   return m.places > 1 ? t('{n} 条生效，分布在 {places} 处', { n: m.active, places: m.places }) : t('{n} 条生效', { n: m.active });
 }
+
+// —— 连接器与技能：都在 bridge「扩展」页里勾给 dimensio，这里只摆现状、点了去扩展页 ——
+export async function loadExtLine() {
+  const [mcp, cmds] = await Promise.all([
+    hasCap('mcp') ? api.get(H + '/mcp').catch(() => null) : null,
+    hasCap('commands') ? api.get(H + '/commands').catch(() => null) : null,
+  ]);
+  ds.mcp = Array.isArray(mcp?.connectors) ? mcp.connectors : null;
+  ds.skills = Array.isArray(cmds?.skills) ? cmds.skills.length : null;
+}
+export const extOk = () => ds.mcp !== null || ds.skills !== null;
+export function mcpLine() {
+  const list = ds.mcp || [];
+  if (!list.length) return t('还没有勾给 dimensio 的连接器');
+  const bad = list.filter((c) => c.status === 'failed').length;
+  const tools = list.reduce((n, c) => n + (Number(c.tools) || 0), 0);
+  const head = t('{n} 个连接器，共 {tools} 个工具', { n: list.length, tools });
+  return bad ? head + ' · ' + t('{n} 个连不上', { n: bad }) : head;
+}
+export const skillLine = () => (ds.skills ? t('{n} 个技能', { n: ds.skills }) : t('还没有勾给 dimensio 的技能'));
 
 // —— 本机模型（管理员、目录里有「本机」这家；租户实例没有）——
 export const LOCAL_ENGINES = [{ id: 'qwen', name: 'Qwen 27B' }, { id: 'strata', name: 'Strata 125B' }];

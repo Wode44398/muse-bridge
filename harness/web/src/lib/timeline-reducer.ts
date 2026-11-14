@@ -767,6 +767,9 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       if (ev.code === "fast_fallback") {
         const minutes = Math.max(1, Math.round((Number(ev.cooldownMs) || 0) / 60_000));
         pushItem(m, { kind: "notice", text: t("Fast mode 被限流，已改用普通速度，{minutes} 分钟内不再尝试", { minutes }) });
+      } else if (ev.code === "checkpoint_touched") {
+        // 会话层：工作区太大，检查点从这一轮起只备份编辑工具改过的文件
+        pushItem(m, { kind: "notice", text: t("项目较大，检查点只备份编辑工具改过的文件，命令行做的改动无法回滚") });
       }
       break;
     // N45：这一轮开跑时自动召回了哪些——挂到本轮那条用户消息下（从后往前第一条不是插话的用户气泡；镜像端的底座也含这一条）

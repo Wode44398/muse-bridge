@@ -56,7 +56,9 @@ export function createRouter() {
         await r.handler(req, res, url);
       } catch (e) {
         console.error('route error:', e);
-        if (!res.writableEnded) { res.writeHead(500, { 'Content-Type': 'text/plain' }); res.end('internal error'); }
+        // 头已发出（处理到一半出错 / 客户端中途断开）就不能再写 500：再 writeHead 会抛 ERR_HTTP_HEADERS_SENT 成为 unhandledRejection
+        if (res.headersSent) { if (!res.writableEnded) res.destroy(); }
+        else if (!res.writableEnded) { res.writeHead(500, { 'Content-Type': 'text/plain' }); res.end('internal error'); }
       }
     },
   };

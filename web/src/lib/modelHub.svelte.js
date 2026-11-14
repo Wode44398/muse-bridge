@@ -24,6 +24,7 @@ export const hub = $state({
   dimensio: null,   // 只在 dimensio 的自定义服务；null = 这台服务器没开 dimensio
   studio: null,     // Studio 自己的服务（StudioView）；null = 没装 studio 扩展。managed 的属于某个模型中心服务，首页不单列
   plugins: [],      // 插件提供的
+  claudeGemini: false, // 服务端的 Claude 认得 Gemini 原生协议（v7.82 起）；老服务端 = false，Gemini 协议的服务照旧不给 Claude
   builtins: null,   // Studio 的内置媒体服务（Vertex / 本机）：[{ id, name, dialect, enabled, shared, models:[{ id, label, kind, enabled }] }]；null = 没开 Studio / 老服务端
 });
 
@@ -51,13 +52,13 @@ export const hubLegacy = () => hub.ok && !hub.v2;
 /**
  * 首页「改为共用」之后模型给谁——确认框按它措辞，必须和后端 adopt（src/routes/model-hub.mjs）实际做的一致：
  *   'both'    Claude / dimensio 的服务照抄成模型中心服务，文本模型两边都给
- *   'origin'  照抄过去仍只有原来那一边能选：Gemini 接口的服务给不了 Claude；这台服务器没开 dimensio（hub.dimensio 为 null）
+ *   'origin'  照抄过去仍只有原来那一边能选：Gemini 接口的服务给不了 Claude（老服务端）；这台服务器没开 dimensio（hub.dimensio 为 null）
  *   'studio'  Studio 的服务原地托管，媒体模型不动
  * from：'claude' | 'dimensio' | 'studio'；proto：原服务的接口协议（只有 dimensio 的服务可能是 gemini）。
  */
 export function adoptReach(from, proto = '') {
   if (from === 'studio') return 'studio';
-  if (from === 'dimensio') return proto === 'gemini' ? 'origin' : 'both';
+  if (from === 'dimensio') return proto === 'gemini' && !hub.claudeGemini ? 'origin' : 'both';
   return hub.dimensio ? 'both' : 'origin';
 }
 
@@ -108,6 +109,7 @@ function adopt(r) {
   hub.studio = Array.isArray(r.studio) ? r.studio : null;
   hub.plugins = Array.isArray(r.plugins) ? r.plugins : [];
   hub.builtins = Array.isArray(r.builtins) ? r.builtins : null;
+  hub.claudeGemini = r.claudeGemini === true;
   // v2 的总览带 v: 2；'studio' in r 是给没带 v 的 v2 留的口子（它总会序列化 studio 键，没装扩展也是 null）。
   // 老服务端（v1）两样都没有
   hub.v2 = r.v >= 2 || 'studio' in r;

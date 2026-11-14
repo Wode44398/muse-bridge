@@ -5,9 +5,10 @@
 //
 // 两种协议：
 //   gemini   /models/<型号>:<方法>          → https://aiplatform.googleapis.com/v1/projects/<项目>/locations/<区>/publishers/google/models/<型号>:<方法>
-//            请求体与 Developer API 同形，原样转发（dimensio 的 Gemini 适配器自己带思维签名）。
+//            请求体与 Developer API 同形，原样转发（dimensio 的 Gemini 适配器、Claude 本机代理的 Gemini 翻译都自己带思维签名）。
+//            2026-11-13 起 Claude 也走这条（claude-providers-gemini.mjs）。
 //   openai   /chat/completions            → …/v1/projects/<项目>/locations/<区>/endpoints/openapi/chat/completions（型号前补 google/）
-//            Claude 的本机代理把 Anthropic 请求翻成 OpenAI 格式后打到这里。
+//            11-13 之前 Claude 的本机代理把 Anthropic 请求翻成 OpenAI 格式后打到这里；现在没人用，留着给插件与老配置。
 //
 // 思维签名（实测 2026-11-10，gemini-4-carbon）：OpenAI 兼容端点回的 tool_calls 带 extra_content.google.thought_signature，
 // 下一轮回放这条调用时不带它 → 400「Function call is missing a thought_signature」。翻译层不认识 extra_content，带不回来，
@@ -15,7 +16,7 @@
 // 填官方给的占位值 skip_thought_signature_validator——每一轮只需要第一条调用带签名，但都带上也没事。
 //
 // 凭据：设置页上传的那份（runtime/vertex-credentials.mjs）> GOOGLE_APPLICATION_CREDENTIALS > gcloud ADC，同 Media Studio。
-import { GoogleAuth } from 'google-auth-library';
+import { googleAuthLib } from '../google-deps.mjs';
 import { vertexCredentials, vertexCredsEpoch } from '../vertex-credentials.mjs';
 import { VERTEX_PROJECT, VERTEX_LOCATION } from '../../config/index.mjs';
 import { fetchReconnect } from '../upstream-conn.mjs';
@@ -29,7 +30,7 @@ async function accessToken() {
   if (!client || clientEpoch !== vertexCredsEpoch()) {
     const credentials = vertexCredentials();
     clientEpoch = vertexCredsEpoch();
-    client = await new GoogleAuth({ scopes: SCOPES, ...(credentials ? { credentials } : {}) }).getClient();
+    client = await new (googleAuthLib().GoogleAuth)({ scopes: SCOPES, ...(credentials ? { credentials } : {}) }).getClient();
   }
   const t = await client.getAccessToken();
   if (!t?.token) throw Object.assign(new Error('拿不到 Google 云凭据的令牌：到 设置 › Media Studio 里上传 Vertex 凭据'), { status: 401 });

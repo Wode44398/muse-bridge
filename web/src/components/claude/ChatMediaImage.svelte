@@ -6,13 +6,15 @@
   // 一次性算好的，不会自愈（见 lib/server.js mediaFallbackUrl）；其余是隧道/网络的瞬时抖动。
   // 这里按顺序自救：① 局域网地址 → 隧道 ② 带新参数重试（按当前 token / 线路现算地址），
   // 第二次起换原图、绕开 1280 衍生图 ③ 全失败才露一张「加载失败 · 重试」的小卡，不再是破图。
-  // 点图 = 全屏查看器（缩放 / 下载，查看器自带同一套线路自愈）。
+  // 点图 = 统一查看器里的会话画廊（本会话所有图片按出现顺序，从这张开始翻；缩放 / 下载 / 复制，
+  // 查看器自带同一套线路自愈）。内嵌 data: 的手机截图也能点开。
   import { apiUrl, mediaFallbackUrl } from '../../lib/server.js';
   import { getToken } from '../../lib/api.js';
-  import { openPreview } from '../../lib/preview.svelte.js';
+  import { openChatImage, mediaKey, mediaDescriptor } from '../../lib/chatGallery.js';
   import { t } from '../../lib/i18n.js';
 
-  const { id = '', dataUrl = null, prompt = '' } = $props();
+  // ext：存盘扩展名（服务端随媒体段带来），下载名「提示词 + 扩展名」用
+  const { id = '', dataUrl = null, prompt = '', ext = '' } = $props();
 
   // v='preview' = 1280px 衍生图（4K 原图 ~20MB 会拖垮手机）；r = 重试序号，只为换一个 URL 绕开失败缓存
   const urlFor = (v, r) => apiUrl('/api/vertex/media?id=' + encodeURIComponent(id) + (v ? '&v=' + v : '') + (r ? '&r=' + r : '') + (getToken() ? '&token=' + encodeURIComponent(getToken()) : ''));
@@ -40,8 +42,10 @@
     failed = false;
     src = urlFor('preview', Date.now());
   }
-  function open() {
-    if (id) openPreview([{ origin: 'vertex', id, kind: 'image' }], 0);
+  function open(e) {
+    if (!id && !dataUrl) return;
+    const seg = { id, dataUrl, prompt, ext, mediaKind: 'image' };
+    openChatImage(mediaKey(seg), e.currentTarget, { items: [mediaDescriptor(seg)], index: 0 });
   }
   $effect(() => () => clearTimeout(timer));
 </script>
@@ -54,7 +58,7 @@
   </button>
 {:else}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-  <img class="cmi" {src} alt={prompt} loading="lazy" decoding="async" onerror={onError} onclick={open} class:zoom={!!id} />
+  <img class="cmi" {src} alt={prompt} loading="lazy" decoding="async" onerror={onError} onclick={open} class:zoom={!!(id || dataUrl)} />
 {/if}
 
 <style>

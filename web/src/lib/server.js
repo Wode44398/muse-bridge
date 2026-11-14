@@ -155,9 +155,21 @@ export function mediaImgFallback(e) {
   if (next !== img.src) img.src = next;
 }
 
+// 仅 dev：让无头验证能走手机「本地」分页的预览路径（web/scripts/preview-qa 的本地桩注入 AndroidStore 并打开它）。
+// 打开方式：地址带 ?offlinemock，或页面脚本执行前置 window.__BRIDGE_DEV_OFFLINE__ = true。
+// 生产构建里 import.meta.env.DEV 被替换成 false，整段连同判断一起摇掉；node 单测里没有 import.meta.env，按关处理。
+const DEV_OFFLINE_MOCK = (() => { try { return !!import.meta.env.DEV; } catch { return false; } })();
+let devOfflineCached = null;
+function devOfflineMock() {
+  if (devOfflineCached != null) return devOfflineCached;
+  try { devOfflineCached = window.__BRIDGE_DEV_OFFLINE__ === true || new URLSearchParams(location.search).has('offlinemock'); }
+  catch { devOfflineCached = false; }
+  return devOfflineCached;
+}
 // 运行在打包进 apk 的离线壳里？（自定义 appassets 源）。离线壳必须配置 serverBase
 // 才能连数据；在线壳同源、无需配置。
 export function isOffline() {
+  if (DEV_OFFLINE_MOCK && devOfflineMock()) return true;
   try { return location.hostname === 'appassets.androidplatform.net'; } catch { return false; }
 }
 

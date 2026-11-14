@@ -1,11 +1,11 @@
 <script>
   import { tick } from 'svelte';
-  import { chat, answerQuestion, send, rewindToMessage, attImgFallback, openSession } from '../lib/chat.svelte.js';
+  import { chat, answerQuestion, send, rewindToMessage, attImgFallback, openSession, retractSteer } from '../lib/chat.svelte.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { session, settings, prefs, ui } from '../lib/state.svelte.js';
   import { switchPageTheme } from '../lib/homeTheme.js';
   import { mountDrag } from '../lib/capsule.js';
-  import { renderMarkdown, streamBlocks } from '../lib/md.js';
+  import { renderMarkdown, renderStreamingMarkdown, streamBlocks } from '../lib/md.js';
   import { claudeFade } from '../lib/claudeFade.js';
   import { fmtElapsed, fmtTokens } from '../lib/format.js';
   import { fade } from 'svelte/transition';
@@ -13,7 +13,6 @@
   import ClaudeWorkingMark from './ClaudeWorkingMark.svelte';
   import ClaudeSpriteMark from './ClaudeSpriteMark.svelte';
   import { markActivity, spritePhase } from '../lib/workingMark.js';
-  import ImgLightbox from './ImgLightbox.svelte';
   // 工具调用分组（含 Agent 行 / Workflow 卡，点开 TaskSheet）与模型切换/安全栅门卡——
   // 官方 /code 页同款，见 impl-contract §5（组件目录 claude/）。
   import ToolGroup from './claude/ToolGroup.svelte';
@@ -25,11 +24,12 @@
   // 拉取请求：/create-pr 提示词与 Auto-fix 的 CI 事件在转录里的样子（pr.svelte.js）
   import PrMsgCard from './claude/PrMsgCard.svelte';
   import { prEnvelope } from '../lib/pr.svelte.js';
-  import { apiUrl, mediaImgFallback } from '../lib/server.js';
   import ChatMediaImage from './claude/ChatMediaImage.svelte';
+  import ChatMediaVideo from './claude/ChatMediaVideo.svelte';   // 生成视频：海报卡，点开进查看器即播
+  import ChatMediaAudio from './claude/ChatMediaAudio.svelte';   // 生成音乐 / 语音：迷你播放条，可展开到查看器
+  import { openChatImage, openChatItem, attKey, attDescriptor, artKey, isArtImage, rectOf } from '../lib/chatGallery.js';
   import WidgetFrame from './claude/WidgetFrame.svelte';   // 对话内嵌交互图表（show_widget）
-  import { getToken } from '../lib/api.js';
-  import { openPreview, claudeArtifactUrl } from '../lib/preview.svelte.js';
+  import { openPreview, claudeArtifactUrl, cleanFileStem } from '../lib/preview.svelte.js';
   import { dragOut, attDragSrc } from '../lib/dragOut.js';
   import { hasNativeSaveAs, interceptSave, saveToDisk } from '../lib/save.js';
   import { onMdClick } from '../lib/linkNav.js';
@@ -143,10 +143,6 @@
     if (sc) sc.scrollTop = t0 + (sc.scrollHeight - h0);   // 视口锚定：展开不跳动
   }
 
-  // 离线壳跨源时 <img>/<video> 标签无法加 Authorization 头、也不带 cookie，
-  // 故附 ?token=（后端 authOk 认它）。在线同源 base='' 且可走 cookie，附上无害。
-  // v='preview'：图像走 1280px 衍生图（4K 原图 ~20MB 会拖垮手机），视频/音频原样。
-  const mediaUrl = (id, v) => apiUrl('/api/vertex/media?id=' + encodeURIComponent(id) + (v ? '&v=' + v : '') + (getToken() ? '&token=' + encodeURIComponent(getToken()) : ''));
   // 媒体卡的进度 / 失败整句（种类词嵌在句中，英文语序不同，按种类各给一句）
   const mediaIng = (k, elapsed) => (k === 'image' ? t('生成图片中{elapsed}…', { elapsed }) : k === 'video' ? t('生成视频中{elapsed}…', { elapsed }) : k === 'music' ? t('生成音乐中{elapsed}…', { elapsed }) : t('生成语音中{elapsed}…', { elapsed }));
   const mediaErr = (k, error) => (k === 'image' ? t('图片生成失败：{error}', { error }) : k === 'video' ? t('视频生成失败：{error}', { error }) : k === 'music' ? t('音乐生成失败：{error}', { error }) : t('语音生成失败：{error}', { error }));
@@ -250,7 +246,12 @@
   }
   // 文件产物：有工作台定位（nav={ws,rel,open}）→ 右侧工作区打开（文件页落到父目录并
   // 自动弹出该文件的面板内预览）；算不出定位（无 shell 又在根外）→ 回落全屏沉浸查看器。
-  const openAtt = (a) => (a.nav && a.nav.open ? openDockFiles(a.nav) : openPreview({ origin: 'claude', id: a.sessionId, path: a.path, name: a.name }));
+  // 交付的图片且没有工作台定位：进会话画廊（和对话里其它图一起翻），找不到才单张打开。
+  function openAtt(a, el) {
+    if (a.nav && a.nav.open) { openDockFiles(a.nav); return; }
+    if (isArtImage(a) && openChatImage(artKey(a), el)) return;
+    openPreview({ origin: 'claude', id: a.sessionId, path: a.path, name: a.name });
+  }
   // 文件夹产物：点卡＝在右侧工作台的【工作空间视图】里打开这个目录（里面的文件逐个点开就能读），
   // 而不是整包 zip 下载——下载还在卡右边那颗按钮上。服务端算不出定位（无 shell 又在文件根外）
   // 时 nav 为空，回落成老行为（整卡即下载）。
@@ -287,6 +288,45 @@
     if (sid && nt && nt !== '#') { locateLink(sid, lk); return true; }
     return false;
   }
+  // 正文里的 markdown 图片（![](…)）：点图进查看器，同一段回答里能直接显示的图排成一组从点的那张翻起。
+  // 图本身包在链接里的（[![](…)](…)）让给链接；相对路径的图在页面里本来就显示不出来，按产物链接去解析。
+  const MD_IMG_EXT = /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i;
+  // 名字：地址最后一段带图片扩展名就用它；本应用的取文件接口（…/raw?name= / ?path= / ?file=）看查询参数；都没有用 alt
+  function mdImageName(img, src) {
+    let u = null;
+    try { u = new URL(src, location.href); } catch {}
+    const tail = (s) => { try { return decodeURIComponent(String(s || '')).split(/[\\/]/).pop() || ''; } catch { return ''; } };
+    const cands = u && u.protocol !== 'data:' ? [u.pathname, u.searchParams.get('name'), u.searchParams.get('path'), u.searchParams.get('file')] : [];
+    for (const c of cands) {
+      const base = tail(c).replace(/^\d{10,}-/, '');   // 上传存盘名带的时间戳前缀
+      if (MD_IMG_EXT.test(base)) return cleanFileStem(base, 80);
+    }
+    return (cleanFileStem(img.getAttribute('alt') || '', 60) || t('图片')) + '.png';
+  }
+  function onAnswerClick(e, m) {
+    const img = e.target?.closest?.('img');
+    if (img && !img.closest('a[href]') && e.currentTarget.contains(img)) {
+      const raw = img.getAttribute('src') || '';
+      const shown = img.complete && img.naturalWidth > 0;
+      // 已经显示出来的图（外链 / data: / 同源地址）直接进查看器；没显示出来的路径式地址（相对路径、本机盘符路径）当产物链接解析
+      if (shown && (/^(https?:|data:image\/|blob:)/i.test(raw) || raw.startsWith('/'))) {
+        e.preventDefault();
+        const imgs = [...e.currentTarget.querySelectorAll('img')]
+          .filter((x) => !x.closest('a[href]') && x.naturalWidth && /^(https?:|data:image\/|blob:|\/)/i.test(x.getAttribute('src') || ''));
+        const at = Math.max(0, imgs.indexOf(img));
+        const items = imgs.map((x, j) => {
+          const url = x.currentSrc || x.src;
+          const d = { key: 'mdimg:' + j + ':' + url.slice(0, 200), origin: 'url', kind: 'image', url, name: mdImageName(x, url) };
+          const r = j === at ? rectOf(x) : null;
+          return r ? { ...d, originRect: r } : d;
+        });
+        openPreview(items, at);
+        return;
+      }
+      if (!shown && raw && (!/^[a-z][a-z0-9+.-]*:/i.test(raw) || /^[a-z]:[\\/]/i.test(raw))) { e.preventDefault(); resolveAnswerLink(m, raw); return; }
+    }
+    onMdClick(e, (lk) => resolveAnswerLink(m, lk));
+  }
   // 对不上附件卡的链接（扩展名不在交付表、或卡片数超限）：先问服务端它在工作空间里哪
   // （/api/claude/artifact?locate=1，与卡片同一套 deliverNav）——能定位就和附件卡一样在右侧
   // 工作区的文件页打开，不再一律全屏；定位不了（无 shell 又在根外 / 请求失败）才回落全屏查看器。
@@ -318,15 +358,12 @@
     }
   }
 
-  // —— 用户消息里的图片附件 → 点开全屏灯箱（只在图片之间翻页，跳过文件附件）——
-  let lb = $state({ open: false, items: [], index: 0 });
-  function openImage(atts, clickedIdx) {
-    const imgs = (atts || []).filter((a) => a.kind === 'image' && a.url);
-    if (!imgs.length) return;
-    const start = Math.max(0, imgs.indexOf((atts || [])[clickedIdx]));
-    lb = { open: true, items: imgs, index: start };
+  // —— 用户消息 / 插话里的附件 → 统一查看器 ——
+  // 图片：进本会话画廊（所有图片按出现顺序，从点的这张开始翻；量缩略图位置给开场动画）。
+  // 其它文件：单独打开（pdf / 文档 / 音视频都有对应查看器；打不开的类型查看器会给下载）。
+  function openUserImage(a, el) {
+    if (!openChatImage(attKey(a), el)) openChatItem(attDescriptor(a), el);
   }
-  function closeLb() { lb = { open: false, items: [], index: 0 }; }
 </script>
 
 <div class="thread">
@@ -343,11 +380,11 @@
           {#if m.attachments && m.attachments.length}
             {@const imgCount = m.attachments.filter((x) => x.kind === 'image' && x.url).length}
             <div class="u-atts">
-              {#each m.attachments as a, ai}
+              {#each m.attachments as a}
                 {#if a.kind === 'image' && a.url}
                   <!-- 气泡里挂缩略图（a.thumb），原图只在点开灯箱时才拉；直播刚发出的那条
                        没有 thumb（用的是本地 blob:），回落 a.url 不受影响。 -->
-                  <button class="u-att u-img" class:single={imgCount === 1} aria-label={t('预览图片')} use:dragOut={() => attDragSrc(a)} onclick={() => openImage(m.attachments, ai)}>
+                  <button class="u-att u-img" class:single={imgCount === 1} aria-label={t('预览图片')} use:dragOut={() => attDragSrc(a)} onclick={(e) => openUserImage(a, e.currentTarget)}>
                     <img src={a.thumb || a.url} alt={a.name} loading="lazy" decoding="async" onerror={(e) => attImgFallback(e.currentTarget, a)} />
                   </button>
                 {:else if a.kind === 'chat'}
@@ -369,10 +406,12 @@
                     </span>
                   </div>
                 {:else}
-                  <div class="u-att u-file" use:dragOut={() => attDragSrc(a)}>
+                  <!-- 文件附件：点开 = 统一查看器（上传的走 uploads 原件；没留下来源的旧消息只剩名字，按钮置灰） -->
+                  {@const desc = IS_CSNAP ? null : attDescriptor(a)}
+                  <button class="u-att u-file u-open" disabled={!desc} title={desc ? t('预览 {name}', { name: a.name }) : a.name} use:dragOut={() => attDragSrc(a)} onclick={(e) => openChatItem(desc, e.currentTarget)}>
                     <span class="u-file-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/></svg></span>
                     <span class="u-file-name">{a.name}</span>
-                  </div>
+                  </button>
                 {/if}
               {/each}
             </div>
@@ -421,8 +460,10 @@
 
         {#each m.segments as seg}
           {#if seg.kind === 'text'}
+            <!-- 吐字：claudeFade 先排版后显形（见 lib/claudeFade.js）；流式期间末块走 renderStreamingMarkdown
+                 （mdStream.repairTail 修补写头：表头随首行一起出、数据行整行到齐、半截语法先扣住），收轮后按原文。 -->
             <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-            {#if seg.md.trim()}<div class="answer sel-text" use:claudeFade={{ md: seg.md, live: m.status === 'streaming' }} onclick={(e) => onMdClick(e, (raw) => resolveAnswerLink(m, raw))}>{#each streamBlocks(seg, seg.md) as blk}{@html renderMarkdown(blk)}{/each}</div>{/if}
+            {#if seg.md.trim()}{@const live = m.status === 'streaming'}{@const blocks = streamBlocks(seg, seg.md)}<div class="answer sel-text" use:claudeFade={{ key: seg, live }} onclick={(e) => onAnswerClick(e, m)}>{#each blocks as blk, bi}{@html live && bi === blocks.length - 1 ? renderStreamingMarkdown(blk) : renderMarkdown(blk)}{/each}</div>{/if}
           {:else if seg.kind === 'tools'}
             <!-- 工具调用分组：单个普通工具直接一行；多个/含 Agent·Workflow 折叠头 + 展开卡。
                  live 只在本轮流式中为真——组件据此决定流光/计时与「settled」汇总文案。 -->
@@ -432,19 +473,20 @@
             <ModelNotice {seg} />
           {:else if seg.kind === 'steer'}
             <!-- 插话（Claude 工作中按回车）：夹在这一轮回答流里的用户气泡，靠右；CLI 读到之前标「等待读取」 -->
-            <div class="steer">
+            {@const steerVirtual = !seg.read && !seg.cancelled && m.status === 'streaming'}
+            <div class="steer" class:virtual={steerVirtual}>
               {#if hasSessionEnvelope(seg.text)}
                 <!-- 别的会话的消息插进了这一轮（session-family 投递时对方正在干活） -->
                 {#each parseSessionText(seg.text).parts as part, pi (pi)}<SessionMsgCard {part} />{/each}
               {:else}
-                <!-- 插话带的图片：与用户气泡同款缩略图（点开灯箱）；其余附件仍以 @名字 跟在正文后。
+                <!-- 插话带的图片：与用户气泡同款缩略图（点开进会话画廊）；其余附件仍以 @名字 跟在正文后。
                      旧服务端只给 files（名字），没有 atts 时照旧全按名字显示 -->
                 {@const sImgs = (seg.atts || []).filter((x) => x.kind === 'image' && x.url)}
                 {@const sNames = seg.atts ? seg.atts.filter((x) => !(x.kind === 'image' && x.url)).map((x) => x.name) : (seg.files || [])}
                 {#if sImgs.length}
                   <div class="u-atts steer-atts">
                     {#each sImgs as a}
-                      <button class="u-att u-img" class:single={sImgs.length === 1} aria-label={t('预览图片')} use:dragOut={() => attDragSrc(a)} onclick={() => openImage(sImgs, sImgs.indexOf(a))}>
+                      <button class="u-att u-img" class:single={sImgs.length === 1} aria-label={t('预览图片')} use:dragOut={() => attDragSrc(a)} onclick={(e) => openUserImage(a, e.currentTarget)}>
                         <img src={a.thumb || a.url} alt={a.name} loading="lazy" decoding="async" onerror={(e) => attImgFallback(e.currentTarget, a)} />
                       </button>
                     {/each}
@@ -455,7 +497,10 @@
                 {/if}
               {/if}
               {#if seg.cancelled}<span class="steer-tag">{t('已撤回')}</span>
-              {:else if !seg.read && m.status === 'streaming'}<span class="steer-tag">{t('插话 · 等 Claude 做完这一步就读')}</span>{/if}
+              {:else if steerVirtual}
+                <!-- Claude 读到之前这条是「虚」的：可撤回到输入栏（↑ / 工作中 Esc 同效） -->
+                <span class="steer-tag">{t('插话 · 等 Claude 做完这一步就读')}{#if seg.retractable}<button class="steer-undo" disabled={seg.retracting} onclick={() => retractSteer(seg.uuid)} title={t('撤回到输入栏（↑ 或 Esc）')}>{seg.retracting ? t('撤回中…') : t('撤回')}</button>{/if}</span>
+              {/if}
             </div>
           {:else if seg.kind === 'media'}
             <div class="media">
@@ -466,11 +511,12 @@
               {:else if seg.mediaKind === 'image'}
                 <!-- dataUrl 优先（Claude 发的截图内嵌 data: URI，零网络/零跨源，必显示）；否则走媒体库 URL，
                      加载失败自救（局域网→隧道、重试、换原图），见 ChatMediaImage -->
-                <ChatMediaImage id={seg.id} dataUrl={seg.dataUrl} prompt={seg.prompt} />
+                {#key seg.id}<ChatMediaImage id={seg.id} dataUrl={seg.dataUrl} prompt={seg.prompt} ext={seg.ext || ''} />{/key}
               {:else if seg.mediaKind === 'video'}
-                <video class="media-video" src={mediaUrl(seg.id) + '#t=0.1'} controls preload="metadata" playsinline onerror={mediaImgFallback}></video>
+                <!-- 段列表无 key（对账替换会复用组件），按 id 重建，别把上一条的海报 / 播放状态带给下一条 -->
+                {#key seg.id}<ChatMediaVideo {seg} />{/key}
               {:else}
-                <audio class="media-audio" src={mediaUrl(seg.id)} controls preload="metadata" onerror={mediaImgFallback}></audio>
+                {#key seg.id}<ChatMediaAudio {seg} />{/key}
               {/if}
             </div>
           {:else if seg.kind === 'plan'}
@@ -522,7 +568,7 @@
                 {:else if a.kind === 'folder'}
                   <a class="att-hit" href={a.downloadUrl} aria-label={a.name} onclick={(e) => interceptSave(e, { url: a.downloadUrl, name: a.name + '.zip' })}></a>
                 {:else}
-                  <button class="att-hit" aria-label={a.name} onclick={() => openAtt(a)}></button>
+                  <button class="att-hit" aria-label={a.name} onclick={(e) => openAtt(a, e.currentTarget)}></button>
                 {/if}
                 <div class="att-cell">
                   <div class="att-well">
@@ -602,7 +648,6 @@
 </div>
 
 {#if pmenu}<PluginMenu anchor={pmenu.anchor} items={pmenu.items} onPick={pickMsgAction} onClose={() => (pmenu = null)} />{/if}
-{#if lb.open}<ImgLightbox items={lb.items} index={lb.index} onClose={closeLb} onIndex={(n) => (lb.index = n)} />{/if}
 
 <style>
   /* 顶部空出 悬浮按钮区（--sat + 10 顶距 + 44 按钮 + 8 间隙）——对话从按钮下方开始，
@@ -653,9 +698,10 @@
   .u-file-ic { width: 22px; height: 22px; flex: none; color: var(--serif); }
   .u-file-ic svg { width: 100%; height: 100%; }
   .u-file-name { font-size: 13.5px; color: var(--text); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .u-chat { text-align: left; font: inherit; cursor: pointer; }
-  .u-chat:disabled { cursor: default; }
-  @media (hover: hover) { .u-chat:not(:disabled):hover { background: var(--hover); } }
+  .u-chat, .u-open { text-align: left; font: inherit; cursor: pointer; }
+  .u-chat:disabled, .u-open:disabled { cursor: default; }
+  @media (hover: hover) { .u-chat:not(:disabled):hover, .u-open:not(:disabled):hover { background: var(--hover); } }
+  .u-open:not(:disabled):active { background: var(--hover); }
   .u-chat-col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .u-chat-sub { font-size: 11.5px; color: var(--muted); }
   .steer { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; margin: 10px 0 12px; }
@@ -663,7 +709,14 @@
   .steer-files { display: block; margin-top: 4px; font-size: 13px; color: var(--muted); }
   .steer-files.solo { margin-top: 0; }
   .steer-atts { max-width: min(85%, 560px); }
-  .steer-tag { font-size: 12px; color: var(--muted); padding-right: 4px; }
+  .steer-tag { font-size: 12px; color: var(--muted); padding-right: 4px; display: inline-flex; align-items: center; gap: 8px; }
+  /* 虚态：Claude 还没读到——底色退成透明、虚线描边、文字略淡；读到后过渡成实心气泡 */
+  .steer .steer-b { transition: background-color .25s, border-color .25s, color .25s; border: 1px solid transparent; }
+  .steer.virtual .steer-b { background: transparent; border: 1px dashed color-mix(in srgb, var(--muted) 55%, transparent); color: color-mix(in srgb, var(--text) 72%, transparent); }
+  .steer.virtual .steer-atts { opacity: .6; }
+  .steer-undo { font: inherit; font-size: 12px; color: var(--text); background: none; border: 0; padding: 2px 4px; margin: -2px -4px; border-radius: 6px; cursor: pointer; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); text-underline-offset: 3px; }
+  .steer-undo:hover { background: color-mix(in srgb, var(--muted) 14%, transparent); }
+  .steer-undo:disabled { color: var(--muted); cursor: default; text-decoration: none; }
   .bubble { background: var(--userbubble); color: var(--text); border-radius: 14px; padding: 10px 15px; font-size: 15px; line-height: 1.5; max-width: 100%; word-break: break-word; white-space: pre-wrap; animation: popIn .28s cubic-bezier(.22,1,.36,1); }
   @keyframes popIn { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
   .turn-assistant { margin: 6px 0 22px; }
@@ -678,8 +731,6 @@
   .media { margin: 8px 0 12px; }
   .media-load { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; padding: 6px 0; }
   .media-err { color: var(--err, #d98a6a); font-size: 14px; padding: 6px 0; }
-  .media-video { max-width: 100%; border-radius: 12px; display: block; }
-  .media-audio { width: 100%; margin-top: 4px; }
 
   /* —— 助手产物附件卡：claude.ai 官网 100% 同款（2026-07-17 Edge 真站逐值提取）——
      卡：radius 8 / border .5px（基 15% 描边，hover 30%）/ hover 底=bg-000 50%，300ms 标准缓动。
@@ -769,19 +820,25 @@
   .answer :global(:not(pre) > code) { background: var(--hover); padding: 1px 5px; border-radius: 5px; }
   .answer :global(a) { color: var(--coral); }
   .answer :global(img) { max-width: 100%; border-radius: 10px; }
+  .answer :global(img:not(a img)) { cursor: zoom-in; }
+  /* 引用与分隔线：此前没有样式、被全局重置成零外边距——引用看着就是普通段落，分隔线贴着下一段。 */
+  .answer :global(blockquote) { margin: 0 0 12px; padding: 0 0 0 14px; border-left: 3px solid color-mix(in srgb, var(--text) 18%, transparent); color: var(--serif, var(--text)); }
+  .answer :global(hr) { border: 0; border-top: 1px solid var(--divider); margin: 20px 0; }
   /* 表格的横向溢出交给外层 .md-tablewrap 滚动壳（lib/md.js 套、app.css 定样式），
      这里只管观感。别在这里给 table 加 display:block —— 那样列宽会被 max-width 压回去，
      十几列的表会被挤成一列一个字。 */
-  .answer :global(table) { border-collapse: collapse; font-size: 14px; margin: 0; }
-  .answer :global(th), .answer :global(td) { border: 1px solid var(--divider); padding: 6px 10px; }
+  /* 分离边框 + 每格只画右 / 下边（首行补上边、首列补左边）：观感与 collapse 的 1px 网格一致，但每条格线
+     归属到一个单元格——吐字时还没轮到的单元格隐形，它的格线也跟着隐形、随第一个字淡入。collapse 模型的
+     格线由表格统一绘制，单元格透明了线还在，会先冒出一整行空格子。 */
+  .answer :global(table) { border-collapse: separate; border-spacing: 0; font-size: 14px; margin: 0; }
+  .answer :global(th), .answer :global(td) { border: 0 solid var(--divider); border-width: 0 1px 1px 0; padding: 6px 10px; }
+  .answer :global(tr > :first-child) { border-left-width: 1px; }
+  .answer :global(table > :first-child > tr:first-child > *) { border-top-width: 1px; }
 
-  /* 流式「吐字渐入」——复刻 claude.ai 官网：新到达文本 opacity 0→1、0.4s linear（见 lib/claudeFade.js）。
-     .c-in 由 action 动态生成（不在模板里），故用 :global；keyframes 加 -global- 前缀免被 Svelte 改名。
-     inline + 纯 opacity，不改文本流；负 animation-delay 让淡入跨全量重渲染连续、不回跳（对齐官网 linear）。 */
-  .answer :global(.c-in) { animation: cIn .4s linear both; }
-  @keyframes -global-cIn { from { opacity: 0; } to { opacity: 1; } }
-  /* 无障碍：跟随系统「减弱动态效果」，直接实体显示（对齐官网 data-reduce-motion 降级）。 */
-  @media (prefers-reduced-motion: reduce) { .answer :global(.c-in) { animation: none; } }
+  /* 流式吐字（lib/claudeFade.js）：先排版后显形。还没轮到的字与盒子（单元格 / 列表项 / 代码卡…）挂 .c-wait
+     隐形占位；淡入中的字由引擎逐帧直接写 inline opacity（0→1、0.4s 线性，对齐官网时长），这里不需要动画。
+     「减弱动态效果」在引擎里判，直接实体显示。 */
+  .answer :global(.c-wait) { opacity: 0; }
 
   .err-box { background: #2a1c14; border: 1px solid #5c3522; color: var(--err, #d98a6a); border-radius: 12px; padding: 10px 14px; font-size: 14px; }
 
