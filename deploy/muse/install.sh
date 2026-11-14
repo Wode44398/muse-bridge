@@ -141,6 +141,9 @@ as_svc() { runuser -u "$SVC_USER" -- env HOME="$DATA/home" ${PROXY_LINES:+$(prin
 say "装 npm 依赖、构建前端（第一次要几分钟）"
 cd "$REPO"
 as_svc npm ci --omit=dev --no-audit --no-fund
+# bridge 前端依赖要最先装：dimensio 的界面直接引用 bridge 前端的共享模块（web/src/lib/widgetShell.js 等），
+# 这些模块的依赖（dompurify 等）从 web/node_modules 解析——没装就先编 dimensio，会报 failed to resolve import "dompurify"
+as_svc npm --prefix web ci --no-audit --no-fund
 # 前端会把 dimensio 的界面源码一起编进去，所以它的前端依赖总是要装；运行依赖只在选了 dimensio 时装
 as_svc npm --prefix harness/web ci --no-audit --no-fund
 if [ "$WANT_DIMENSIO" = 1 ]; then
@@ -152,7 +155,6 @@ fi
 # 没选 dimensio：bridge 把这个扩展当没装（它的「能跑」判定不看 node_modules）
 MODULES_SKIP_LINE=""
 [ "$WANT_DIMENSIO" = 1 ] || MODULES_SKIP_LINE="Environment=BRIDGE_MODULES_SKIP=dimensio"
-as_svc npm --prefix web ci --no-audit --no-fund
 as_svc npm --prefix web run build
 
 # ── 4. 配置与访问令牌 ──────────────────────────────────────────────────────────
