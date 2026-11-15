@@ -31,7 +31,8 @@ dimensio 是一个能接各家模型 API 的 agent 工作台：用户自己的 A
 | **「权限与安全」**（Permissions and security） | **「默认运行档位」**（Default mode）——自主执行 / 只读 / 先出计划三选一、**「访问范围」**（Access）、**「每次问我」**（Always ask）、**「从不允许」**（Never allow）两张规则表（见「权限规则」）。成员的访问范围写着「这台服务器把访问范围锁定了，改不了。」 |
 | **「工作空间」**（Workspace） | 新对话没选项目时在哪个文件夹干活；点了选文件夹。已经开着的对话不受影响 |
 | **「记忆」**（Memory） | **「记忆管理」**（Manage memory）：回到 dimensio 页打开记忆面板（见「记忆」），有待处理的会标出条数 |
-| **「对话」**（Chat） | **「显示全部工作过程」**（Show full work process）——只存在这台设备上，默认关；**「输入建议」**（Prompt suggestions）；「AI 起标题」（AI titles）；「离开模式下的批准请求」（Approval requests in away mode）——默认不同意（默认）/ 默认同意；「后台任务跑完自动接着做」（Continue when a background task finishes）；「空闲时赶在缓存过期前压缩」（Compact idle conversations before the cache expires）和它的起点；「空闲时整理记忆」（Tidy up memory while idle）；「不常用的工具按需加载说明」（Load instructions for rarely used tools on demand）；「对话内交互图表」（Inline interactive charts）。这些开关默认都开着 |
+| **「对话」**（Chat） | **「显示全部工作过程」**（Show full work process）——只存在这台设备上，默认关；**「输入建议」**（Prompt suggestions）；「AI 起标题」（AI titles）；「离开模式下的批准请求」（Approval requests in away mode）——默认不同意（默认）/ 默认同意；「后台任务跑完自动接着做」（Continue when a background task finishes）；「对话内交互图表」（Inline interactive charts）。这些开关默认都开着 |
+| **「上下文与成本」**（Context and cost） | **「提示缓存快过期时」**（When the prompt cache is about to expire）——不提示 / 只提示（默认）/ 自动压缩，以及自动压缩从多大的对话开始做（默认 12 万 token）；「不常用的工具按需加载说明」（Load instructions for rarely used tools on demand），默认开。「空闲时整理记忆」（Tidy up memory while idle）在「记忆」那一组里 |
 | **「子 agent 调度」**（Subagent dispatch） | **「按难度选型阶梯」**（Difficulty-based model ladder）、「子 agent 调度偏好」（Sub-agent dispatch preferences）——见「子 agent、工作流、任务」 |
 | **「会话协作」**（Session collaboration） | 「dimensio 发起新会话」（When dimensio starts new sessions）——先问我（默认）/ 直接开始 / 只在我要求时；**「其它会话发来的消息」**（Messages from other sessions）——直接接收（默认）/ 先存着 / 拒收；「会话之间连续自动续的上限」（Limit on automatic back-and-forth between sessions）——默认 6 轮 |
 | **「工作区协同」**（Workspace awareness） | 「让 agent 看到我正在看的文件」（Let the agent see the file I'm viewing）、「允许 agent 读取未保存的草稿」（Allow the agent to read unsaved drafts），默认都开；「agent 使用共享终端」（Agent use of the shared terminal）——可以读屏和打字（默认）/ 只能读屏 / 不允许 |
@@ -221,9 +222,8 @@ dimensio 是一个能接各家模型 API 的 agent 工作台：用户自己的 A
 
 - 右上角的用量环：上下文用了多少（显示的上限是自动压缩的触发点，不是模型的全部窗口）。超过 82% 变色。
 - 点开用量环，运行设置下面是 **「上下文」**（Context）一段：**「立即压缩」**（Compact now）、**「带摘要开新会话」**（New session with summary）——都要调一次模型，慢的模型可能要一两分钟。再下面是这个对话按任务分的 token 用量表（没有金额）。新对话还没聊时只有运行设置。
-- 长对话隔了一阵子再发消息时，输入框上方可能提示缓存已经凉了，建议压缩或开新会话；不管它也能继续。
-- **空闲压缩**：用 Anthropic 官方接口聊得很长的对话，空闲快一小时、提示缓存快过期时，会先自动压缩一次，回来接着聊更省钱。开关和起点（默认上下文 12 万 token 以上才做）在 **「设置 → dimensio」** 的「对话」里。
-- **不常用的工具按需加载**：拉取请求、工作区协同这类不常用的工具平时只带一句简介，它第一次要用时再取完整说明，每次请求更省。也在「对话」里，只对新对话生效。
+- **提示缓存过期**：长对话隔了一阵子再发消息，下一条要按全价重读整段对话。缓存多久过期按模型算（Anthropic 官方订阅是 1 小时，其他按各家文档；在模型中心每个模型行尾能改，见 10-model-hub.md）。**「设置 → dimensio」** 的「上下文与成本」里 **「提示缓存快过期时」** 三选一：**「不提示」**；**「只提示」**（默认）——过期后输入框上方提醒，建议压缩或开新会话，不管它也能继续；**「自动压缩」**——上下文超过起点（默认 12 万 token）的对话在缓存过期前先自动压缩一次，回来接着聊更省钱。以前打开过「空闲时赶在缓存过期前压缩」的，升级后自动是「自动压缩」。
+- **不常用的工具按需加载**：拉取请求、工作区协同这类不常用的工具平时只带一句简介，它第一次要用时再取完整说明，每次请求更省。在「上下文与成本」里，只对新对话生效。
 
 ## 联网搜索
 

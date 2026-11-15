@@ -66,6 +66,8 @@
 | 一直转圈 / 等待模型回复、审核卡片、地址变了、费用、隐私、数据放在哪、备份 | 08-faq.md |
 | 让 agent 打开网页、截图、操作浏览器（这台 VM 没有浏览器） | 08-faq.md |
 | 生成图片 / 视频 / 配音 / 音乐、Media Studio、Gemini 分页 / Gemini 对话去哪了、Vertex、Nano Banana、Veo、Google 云凭据、服务账号、「保存并测试」报错、gcloud、fal / Replicate / ElevenLabs 等媒体服务 | 09-media-studio.md；Muse 要做的：`../MUSE.md` 4.9 |
+| 图片尺寸 / 分辨率 / 宽高怎么设、自定义尺寸、没有比例选项、尺寸标红发不出去、改图保持原图大小、视频时长选不了（1080P、参考图） | 09-media-studio.md「用起来」 |
+| 提示缓存、缓存过期 / 缓存冷了、用量环上的小点、自动压缩、模型的调用配置（上下文窗口、输出上限、思考档位、temperature）、服务的高级设置（超时、重试、请求头）、删掉手动添加的模型 | 10-model-hub.md；Claude：02-claude-code.md「用量环」；dimensio：03-dimensio.md「上下文、压缩、用量」 |
 | Claude 老是自己配图 / 太费钱、不让 Claude 生成、让 dimensio 生成图片、关掉视频生成、限制视频分辨率、内容安全过滤、生成被「内容安全过滤」拦下 | 09-media-studio.md「谁能生成、能生成什么、内容安全过滤」 |
 | 装、更新、回滚、换域名、自动更新、卸载、服务挂了 | `../MUSE.md`（第 2、5、6、7 节） |
 | 报 bug、提建议、自动上报、网页里的提交反馈、「问 Claude」、让 Claude 诊断上报、反馈会不会公开 | `../MUSE.md` 第 8 节；网页里的表单和 Claude 上报：07-settings.md「提交反馈」 |

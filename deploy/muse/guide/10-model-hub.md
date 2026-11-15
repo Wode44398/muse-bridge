@@ -48,6 +48,13 @@ Claude 订阅（Pro / Max）不在这里配：订阅账号在「设置 → Claud
 4. 勾上要用的模型，底部升起操作条：左边「已选 N」，右边 **「添加到」**（Add to）后面是去向——文本模型是 Claude 和 dimensio，媒体模型是 Media Studio——点亮要给的，再点 **「保存」**（Save）。第一次保存就把服务建好了，页面不关，可以换一栏接着加。
 5. 已添加的模型排在各栏最前，行尾有它去了哪儿的小图标。想撤掉：勾上它、把去向取消点亮、保存。
 
+已添加的**文本模型**行尾还有两个小按钮，各管各的，点了不会勾选这一行：
+
+- **提示缓存时长**：这个模型的提示缓存多久过期——订阅号的 Claude 是 1 小时，其他按各家官方文档的默认值，文档没写的就不猜。点开能改成 5 分钟到 1 天，或 **「不缓存（不提示）」**（No cache (don’t notify)）。缓存快过期时怎么办在 Claude 和 dimensio 的设置里各有一项「提示缓存快过期时」（见 07-settings.md、03-dimensio.md）。
+- **「调用配置」**（Call settings）：细调这个模型怎么被调用——**「上下文窗口」**（Context window）、**「输出上限」**（Max output）、**「识图」**（Vision）、**「提示缓存」**（Prompt caching）、**「思考方式与档位」**（Thinking mode and tiers），以及 temperature、top_p、停止序列、额外请求体这些 **「调用参数」**（Request parameters）。Claude 和 dimensio 都按它来；改过的按钮上写 **「已自定义」**（Customized），弹层底部 **「全部恢复自动」**（Reset all to auto）一键改回。
+
+手动添加的模型 ID 行上标着 **「手动」**（Manual），行尾有删除按钮，不要了直接删。某一类模型一个都没识别出来时（比如接口没列出视频模型），那一栏也能点进去手动添加；被错分到「文本」里的视频模型，在视频栏里填同一个 ID 就改过来了。
+
 几条限制，界面上会写明原因（行尾 **「暂不支持」**（Not supported），或操作条上一句话）：
 
 - Gemini 接口的服务也能给 Claude（服务器把 Claude 的请求转成 Gemini 的原生接口，Claude 的联网搜索换成 Gemini 自带的 Google 搜索）。模型 ID 里有 Claude 不认的字符、上下文窗口不到 4096 的给不了 Claude。
@@ -88,6 +95,7 @@ Anthropic、DeepSeek、Qwen（阿里云百炼）、智谱 GLM、Kimi（订阅端
 - **「测试」** 用这把 Key 真发一次很小的请求，通了显示「通了，N 毫秒」，不通写原因。要先添加过至少一个文本模型才能测。
 - **「走出站代理」**（Use outbound proxy）、**「启用这个服务」**（Enable this provider）、**「共享给成员」**（Share with members）——最后这个只在多人模式下才有——三个开关。
 - 改完点 **「保存连接」**（Save connection）；**「重新识别」**（Detect again）重拉一遍模型清单（新出的模型这样才看得到）。
+- **「高级设置」**（Advanced settings）：兼容项（提示缓存、精简请求等，默认自动）、**「超时」**（Timeout）、**「失败重试」**（Retries）、**「鉴权方式」**（Authentication）和 **「自定义请求头」**（Custom headers）。一般不用动，接某些中转站报格式错误时再来调；**「兼容项全部恢复自动」**（Reset compatibility to auto）改回默认。
 - **「删除服务」**（Delete provider）：确认后，它已经添加到各处的模型一并移除，不能撤销；正在用它的对话要换模型。
 
 ### 一把 Key 不行了会怎样
