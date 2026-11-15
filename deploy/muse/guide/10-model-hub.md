@@ -133,6 +133,12 @@ Anthropic、DeepSeek、Qwen（阿里云百炼）、智谱 GLM、Kimi（订阅端
 - **「启用」**（Enable）开关；多人模式下还有 **「共享给成员」**（Share with members）——打开后成员也能选这些型号，费用记在服务器这个 Google 云项目上，默认关。
 - **「提供给」**（Available to）：勾 Claude、dimensio。
 - **「型号」**（Model）：勾要列出的 Gemini 型号；列表里没有的，在下面的输入框填型号 ID 回车添加。
+- **「检测」**（Detect）——「型号」标题右边的按钮，凭据配好后才能点：去 Google 那边查现在有哪些 Gemini 对话模型，并逐个确认在这个项目里能不能调用（只是确认、不生成，不收费），十几秒出结果。
+  - 新查到的型号出现在列表里，名字后标 **「新」**（New），预览型号标 **「预览版」**（Preview）；**不会自动勾上**，要用就勾上再点「保存」，之后 Claude 和 dimensio 里就能选。
+  - 已经勾着、但现在调不通的型号标 **「调不通」**（Unreachable）——多半是这个项目没开通、没权限或型号下线了；只做标记，不会替你取消勾选。
+  - 同一次也会查 Vertex 上的图像、视频、配音、音乐模型（开着 Media Studio 时），新出的放进下面「媒体模型」，默认关着。
+  - 查完按钮下面写一句结论（「新发现 N 个对话模型」「没有新模型」，或出错的原因），之后显示上次检测的时间。
+  - 在 Muse 上它访问的是 Google 的 `us-central1-aiplatform.googleapis.com` 和对话所在区域的接口，用默认区域时都在 `allow-sites` 放行的那几个站点里；一直不出结果、报连不上时，先看 Muse 里有没有没批的审核卡。
 - **「媒体模型」**（Media models）——开着 Media Studio 时才有：Vertex 上的图像、视频、配音、音乐模型在这里逐个开关，打开的出现在 Media Studio 里。还没有这一组时，点 **「加上 Vertex 的媒体模型」**（Add Vertex media models）。
 - 改完点底部 **「保存」**（Save）。加好后 Claude 页在「More models」的 Vertex 一组里选。
 

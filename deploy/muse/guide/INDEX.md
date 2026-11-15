@@ -28,8 +28,8 @@
 | [06-users-admin.md](06-users-admin.md) | 多人使用与服务端控制台：邀请码、普通账号和完全信任账号的区别、单人 / 多人（控制台里只读，在 Muse 里说）、额度、管理员可见性（隐私）、给谁开 dimensio、Claude 账号（订阅号池）、服务控制、日志 |
 | [07-settings.md](07-settings.md) | 设置逐项说明：根页各分组、账户、Claude（订阅号池、子 agent 调用策略、项目对话、调试）、dimensio、Media Studio、模型中心（入口，详见 10）、Agent 接入、安卓 App、扩展 / 额度与注册 / 服务端控制台、通用（通知）、外观、壁纸、设备（桌面客户端）、提交反馈、关于，以及桌面客户端里的设置 |
 | [08-faq.md](08-faq.md) | 常见问题与现象速查：一直转圈、审核卡、地址变了、费用、数据放在哪、安全、备份、限制 |
-| [09-media-studio.md](09-media-studio.md) | Media Studio（默认关着，接替了以前的 Gemini · Vertex 扩展，Gemini 对话已下线）：打开、接模型（Vertex 的 Google 云凭据，或 OpenAI / OpenRouter / fal 等地址 + Key）、放行网站、测试报错对照、图像 / 视频 / 配音 / 音乐四个创作页、作品栏与拖放、任务托盘、让 Claude / dimensio / 外部 agent 生成与「主动生成」、能生成哪几种与视频分辨率上限、内容安全过滤、成员怎么用、从旧版升级、费用 |
-| [10-model-hub.md](10-model-hub.md) | 模型中心（设置 → 模型中心，配模型的唯一入口）：添加服务与识别模型、按模型给 Claude / dimensio / Media Studio、多把 Key 与冷却、测试、共享给成员、成员的「我的服务」、Vertex AI 对话模型、在 Muse 上先放行网站、从旧版的「自定义 API」/ dimensio 模型服务自动迁移 |
+| [09-media-studio.md](09-media-studio.md) | Media Studio（默认关着，接替了以前的 Gemini · Vertex 扩展，Gemini 对话已下线）：打开、接模型（Vertex 的 Google 云凭据，或 OpenAI / OpenRouter / fal 等地址 + Key）、放行网站、测试报错对照、图像 / 视频 / 配音 / 音乐四个创作页、参数怎么调（值芯片、参数面板、恢复默认、记在本机）、各模型的设置、中转服务拒收的选项、作品栏与拖放、任务托盘、让 Claude / dimensio / 外部 agent 生成与「主动生成」、能生成哪几种与视频分辨率上限、内容安全过滤、成员怎么用、从旧版升级、费用 |
+| [10-model-hub.md](10-model-hub.md) | 模型中心（设置 → 模型中心，配模型的唯一入口）：添加服务与识别模型、按模型给 Claude / dimensio / Media Studio、多把 Key 与冷却、测试、共享给成员、成员的「我的服务」、Vertex AI 对话模型与「检测」新型号、在 Muse 上先放行网站、从旧版的「自定义 API」/ dimensio 模型服务自动迁移 |
 
 ## 按问题找章节
 
@@ -67,6 +67,8 @@
 | 让 agent 打开网页、截图、操作浏览器（这台 VM 没有浏览器） | 08-faq.md |
 | 生成图片 / 视频 / 配音 / 音乐、Media Studio、Gemini 分页 / Gemini 对话去哪了、Vertex、Nano Banana、Veo、Google 云凭据、服务账号、「保存并测试」报错、gcloud、fal / Replicate / ElevenLabs 等媒体服务 | 09-media-studio.md；Muse 要做的：`../MUSE.md` 4.9 |
 | 图片尺寸 / 分辨率 / 宽高怎么设、自定义尺寸、没有比例选项、尺寸标红发不出去、改图保持原图大小、视频时长选不了（1080P、参考图） | 09-media-studio.md「用起来」 |
+| Media Studio 参数在哪调、输入框下面的小标签、恢复默认、参数刷新后还在不在、一次出多张、GIF 动图、种子、配音语言 / 双人对白、发送键是灰的（要先给首帧）、「这个服务不收…」、选项上有删除线 | 09-media-studio.md「用起来」 |
+| Vertex 有新 Gemini 型号怎么加、「检测」按钮、型号标「新」/「调不通」 | 10-model-hub.md「Vertex AI」 |
 | 提示缓存、缓存过期 / 缓存冷了、用量环上的小点、自动压缩、模型的调用配置（上下文窗口、输出上限、思考档位、temperature）、服务的高级设置（超时、重试、请求头）、删掉手动添加的模型 | 10-model-hub.md；Claude：02-claude-code.md「用量环」；dimensio：03-dimensio.md「上下文、压缩、用量」 |
 | Claude 老是自己配图 / 太费钱、不让 Claude 生成、让 dimensio 生成图片、关掉视频生成、限制视频分辨率、内容安全过滤、生成被「内容安全过滤」拦下 | 09-media-studio.md「谁能生成、能生成什么、内容安全过滤」 |
 | 装、更新、回滚、换域名、自动更新、卸载、服务挂了 | `../MUSE.md`（第 2、5、6、7 节） |
