@@ -24,14 +24,16 @@ export function formatOf(spec) {
 export const textPx = (s) => [...String(s ?? '')].reduce((n, c) => n + (c.charCodeAt(0) > 0x2e80 ? 12 : /[0-9A-Z]/.test(c) ? 7 : c === ' ' ? 3.5 : 6.3), 0);
 
 /**
- * 每个参数用哪种控件：
- *   seg     ≤4 项的短枚举（右栏宽度放得下才用）· aspect 比例小形状格 · select 选择钮 + 菜单（项多 / 标签长；>12 项菜单带搜索）
- *   steps   小范围整数（张数这类 1–4）→ 分段 · slider 有上下限的数值 · number 没上下限的数值 · switch 开关 · seed 种子
- *   voice   音色 · text 单行 · textarea 多行（提示类长文本）· json 原始参数（放到最末「原始参数」组）
- *   size    尺寸（方案 §10）：档位 / 预设菜单 +「自定义」宽 × 高（没有档位的只有宽 × 高）
+ * 每个参数用哪种控件（方案 §11：选项尽量直接摆出来，一步点到，不再「点选择钮 → 再弹一层菜单」）：
+ *   seg     ≤4 项的短枚举（右栏宽度放得下才用）· pills 选项直接摆成一排排小块（≤10 项、每项不太长；标签在上、选项在下）
+ *   aspect  比例小形状格 · select 选择钮 + 菜单（只留给项多 / 标签长的；>12 项菜单带搜索）
+ *   steps   小范围整数（1–4 这类）→ 分段 · stepper 张数这类整数（− 3 +）· slider 有上下限的数值（滑条 + 可直接改的数字框）
+ *   number  没上下限的数值 · switch 开关 · seed 种子 · voice 音色 · text 单行 · textarea 多行 · json 原始参数
+ *   size    尺寸（方案 §10 / §11）：自动 / 原图 + 比例 × 档位格 + 一直在的宽 × 高
  * @param labelOf (opt) → 显示文字（界面先过 tr()）
  * @param room 右侧控件列大约多宽（px）：参数坞里实测约 142，各端用同一个数，控件不随设备变
  */
+export const PILLS_MAX = 10;
 export function controlOf(spec, opts = [], { labelOf = (o) => String(o.label ?? o.value), room = 140 } = {}) {
   switch (spec?.type) {
     case 'size': return 'size';
@@ -45,16 +47,17 @@ export function controlOf(spec, opts = [], { labelOf = (o) => String(o.label ?? 
       const step = spec.step || 1;
       const n = Math.round((spec.max - spec.min) / step) + 1;
       if (Number.isInteger(step) && n >= 2 && n <= 5 && formatOf(spec) !== 'duration') return 'steps';
+      if (formatOf(spec) === 'count' && Number.isInteger(step) && n <= 64) return 'stepper';
       return 'slider';
     }
     case 'enum': {
       if (formatOf(spec) === 'aspect' && opts.some((o) => isRatio(o.value))) return 'aspect';
       if (!opts.length) return 'select';
       // 分段：最多 4 项，按字宽估每项（textPx + 左右内距 16，槽内距 6）总宽放得下；估错了还有实测兜底（Segmented onoverflow）
-      if (opts.length <= 4) {
-        const w = opts.reduce((s, o) => s + textPx(labelOf(o)) + 16, 6);
-        if (w <= room) return 'seg';
-      }
+      const ws = opts.map((o) => textPx(labelOf(o)));
+      if (opts.length <= 4 && ws.reduce((s, w) => s + w + 16, 6) <= room) return 'seg';
+      // 小块：≤10 项、单项不超过半行、总共不超过三行左右（每行约 260）——再多再长才收进菜单
+      if (opts.length <= PILLS_MAX && Math.max(...ws) <= 132 && ws.reduce((s, w) => s + w + 28, 0) <= 780) return 'pills';
       return 'select';
     }
     default: return 'text';
@@ -141,39 +144,41 @@ export function humanValue(o, words = {}) {
   return s;
 }
 
-const UNIT = { s: 's', px: 'px', '%': '%' };
+const UNIT = { s: 's', px: 'px', '%': '%', ms: 'ms' };
 /** 数值的显示（mono）：按 step 的小数位，带单位 */
 export function fmtNumber(spec, v) {
   if (v == null || v === '' || !Number.isFinite(Number(v))) return '';
   const n = Number(v);
   const dp = spec?.step && spec.step < 1 ? (String(spec.step).split('.')[1]?.length || 2) : 0;
   const s = dp ? n.toFixed(dp) : String(Math.round(n * 1000) / 1000);
-  const u = UNIT[spec?.unit] || (formatOf(spec) === 'duration' ? 's' : '');
+  const u = UNIT[spec?.unit] || spec?.unit || (formatOf(spec) === 'duration' ? 's' : '');
   return u ? (u === '%' ? s + '%' : s + ' ' + u) : s;
 }
 
-/** 输入框底行的「值芯片」：只出值（「16:9」「2K」「high」），参数名只在浮层里出现；
- *  不适合上芯片的（种子、文本、json、没上下限的数值）回 null。labelOf 给枚举项的显示文字。 */
-export const selfExplaining = (spec) => !!formatOf(spec);
+/** 输入框底行的「值芯片」（方案 §11）：基本参数**每一项都出**，默认值也出（以前默认项不占芯片，结果「画质 高」在、「尺寸」不在，看不出规律）。
+ *  回显示的值文字；不适合上芯片的（种子、文本、json、没上下限的数值、没选的音色）回 null；开关回 ''（芯片只写名字，开没开看样式）。
+ *  labelOf 给枚举项的显示文字。 */
 export function chipValue(spec, v, { labelOf = (o) => String(o.label ?? o.value), modelId = '', values = {} } = {}) {
   switch (spec?.type) {
     case 'size': {
       if (isCustomSize(v)) { const s = parseSize(v); return s ? sizeText(s) : null; }
       const o = optionsOf(spec, modelId, values).find((x) => x.value === v) || (spec.options || []).find((x) => x.value === v);
-      if (!o || o.value === '' || o.value === 'auto') return null;   // 「默认，不传」「自动」不占芯片（同其它默认项）
-      return labelOf(o);
+      return o ? labelOf(o) : null;
     }
     case 'enum': {
       const o = optionsOf(spec, modelId, values).find((x) => x.value === v) || (spec.options || []).find((x) => x.value === v);
-      if (!o) return null;
-      if (o.value === '' && formatOf(spec) !== 'aspect') return null;   // 「默认，不传」不占芯片
-      return labelOf(o);
+      return o ? labelOf(o) : null;
     }
     case 'number':
-      if (spec.min == null || spec.max == null) return null;
+      if (spec.min == null || spec.max == null || v == null) return null;   // 没设置的数值不占芯片
       return formatOf(spec) === 'count' ? '×' + fmtNumber({ ...spec, unit: '' }, v) : fmtNumber(spec, v);   // 张数：「×2」，光一个「2」看不出是什么
-    case 'bool': return v ? '' : null;       // 开着才出（只写名字），关着不占位
+    case 'bool': return '';
     case 'voice': return v ? String(v) : null;
     default: return null;
   }
 }
+/** 值自己说得清是什么（「16:9」「2K」「1080p」「8 秒」「×2」「2048×1152」）：芯片只写值；说不清的（「自动」「默认」「高」）前面带淡色参数名 */
+export const selfExplaining = (spec, text = '') => !!formatOf(spec) && /\d/.test(String(text));
+
+/** 一个参数现在是不是改过（和默认值不一样） */
+export const isChanged = (v, d) => JSON.stringify(v ?? null) !== JSON.stringify(d ?? null);

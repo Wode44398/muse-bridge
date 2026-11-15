@@ -135,3 +135,23 @@ test('本机上传素材只发 uploads 相对名（服务器回的绝对路径�
   assert.equal(uploadRel(''), '');
   assert.equal(uploadRel(null), '');
 });
+
+// —— 方案 §11：「未设置就不传」——
+test('没默认值的数值是「未设置」、不发；种子随机不发；没默认值又没碰过的开关不发', () => {
+  const specs = [
+    { key: 'speed', type: 'number', min: 0.25, max: 4 },
+    { key: 'steps', type: 'number', min: 1, max: 80, default: 28 },
+    { key: 'seed', type: 'seed', min: 0, max: 4294967295 },
+    { key: 'seedLocal', type: 'seed', min: -1, default: -1 },
+    { key: 'upsample', type: 'bool' },
+    { key: 'audio', type: 'bool', default: false },
+  ];
+  const v = resolveValues(specs, {}, 'm');
+  assert.equal(v.speed, undefined, '以前回落到下限 0.25，发出去就是 0.25 倍速');
+  assert.equal(v.steps, 28);
+  assert.deepEqual(payloadParams(specs, v, {}), { steps: 28, seedLocal: -1, audio: false });
+  const d = { speed: 1.5, seed: 42, upsample: false };
+  assert.deepEqual(payloadParams(specs, resolveValues(specs, d, 'm'), d), { speed: 1.5, steps: 28, seed: 42, seedLocal: -1, upsample: false, audio: false });
+  // 不给 draft（老调用）：开关照旧都发
+  assert.equal(payloadParams(specs, v).upsample, false);
+});

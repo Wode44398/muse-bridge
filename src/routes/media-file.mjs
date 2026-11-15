@@ -15,6 +15,16 @@ import { mimeType, streamFile } from '../runtime/http-file.mjs';
 
 const RANGE_EXT = new Set(['mp4', 'wav', 'mp3']);
 
+// SVG 作品（GPT Image 2.6 / Recraft vector 生成的）是上游给的不可信文本，按 image/svg+xml 从 bridge 同源直出时，
+// 直接打开链接里面的脚本会在 bridge 源执行：一律加沙箱 CSP（不许脚本、不许外连，只留内联样式与 data: 图）+ nosniff。
+// <img> 里照常显示（CSP 只管把它当文档打开的情形）。
+export const SVG_SAFE_HEADERS = Object.freeze({
+  'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+  'X-Content-Type-Options': 'nosniff',
+});
+/** 直出媒体库文件时要额外带的响应头（目前只有 svg）。 */
+export const mediaSafetyHeaders = (file) => (path.extname(String(file || '')).slice(1).toLowerCase() === 'svg' ? { ...SVG_SAFE_HEADERS } : {});
+
 // 把已定位的媒体文件流式发出（图片整发；视频/音频带 Range 206）。供普通端点与 admin 跨用户端点共用。
 // 一律走 stream.pipeline：裸 pipe 在读流出错（文件被删/IO 错）时没人接 error 事件会
 // 崩掉整个进程；客户端中断（拖视频进度条）也不会销毁源流、泄漏 fd。
@@ -24,6 +34,7 @@ export function serveMediaFile(req, res, file) {
     contentType: mimeType(file),
     cacheControl: 'private, max-age=86400',
     range: RANGE_EXT.has(ext),
+    headers: mediaSafetyHeaders(file),
   });
 }
 

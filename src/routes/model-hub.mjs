@@ -21,16 +21,18 @@
 //   GET  /api/model-hub/builtins                → { ok, builtins: [{ id, name, dialect: 'vertex'|'local', enabled, shared, models:[{ id, label, kind, enabled }] }] | null }
 //   POST /api/model-hub/builtin  {id, enabled?, shared?, models?: { 模型 id: bool }} → { ok, builtin }   Studio 的内置媒体服务（Vertex / 本机）
 //   POST /api/model-hub/builtin/import              → { ok, items }   加上 Vertex / 本机的媒体服务（Studio 一键导入）
+//   POST /api/model-hub/vertex/detect               → { ok, vertex, chatError?, media: [{ id, ok, error?, added, gone }], builtins }
+//        检测 Vertex：对话模型拉目录 + 在对话区零成本探活（countTokens），媒体模型让 Studio 立即巡检它的 Vertex 内置服务；都不动勾选
 //   保留：POST /vertex、/line/reset、/models（从一条线路拉模型 id 列表）、/test。
 // 出错一律 { error: 人话 } + 状态码（400 输入不对、404 没有这个、413 太大、502 / 504 上游连不上 / 超时）。任何响应都不带 Key。
 import { readBody } from '../runtime/body.mjs';
 import {
   createHubService, createHubFromDetect, assignHubModels, setHubModelCache, updateHubV2, deleteHubV2, updateVertex, resetHubLine, lineContext,
-  detectHub, catalogView, catalogAddModel, catalogRemoveModel, setHubModelAdvanced, markMigrated,
+  detectHub, catalogView, catalogAddModel, catalogRemoveModel, setHubModelAdvanced, markMigrated, detectVertex, vertexView,
 } from '../runtime/model-hub/registry.mjs';
 import { adoptClaudeProvider, adoptTextService, adoptStudioProvider, migrateLegacyConfigs } from '../runtime/model-hub/legacy-migrate.mjs';
 import { getModule } from '../modules/registry.mjs';
-import { studioList, studioBuiltins, setStudioBuiltin } from '../runtime/model-hub/studio-link.mjs';
+import { studioList, studioBuiltins, setStudioBuiltin, syncStudioBuiltin } from '../runtime/model-hub/studio-link.mjs';
 import { hubOverview, exportDimensioProvider } from '../runtime/model-hub/overview.mjs';
 import { fetchLineModels, testLine } from '../runtime/model-hub/probe.mjs';
 
@@ -97,6 +99,19 @@ export function registerModelHubRoutes(router, { identify }) {
   post('/api/model-hub/update', (b) => updateHubV2(id(b), b.patch || {}));
   post('/api/model-hub/delete', (b) => deleteHubV2(id(b)));
   post('/api/model-hub/vertex', (b) => ({ vertex: updateVertex(b) }));
+  post('/api/model-hub/vertex/detect', async () => {
+    if (!vertexView().configured) throw fail('还没配 Vertex 项目：先填项目 ID 并保存凭据');
+    const vx = (studioBuiltins() || []).filter((b) => b.dialect === 'vertex');
+    const [chat, ...media] = await Promise.allSettled([
+      detectVertex(),
+      ...vx.map((b) => syncStudioBuiltin(b.id).then((r) => r && { id: b.id, ok: r.ok, ...(r.error ? { error: r.error } : {}), added: r.added, gone: r.gone })),
+    ]);
+    return {
+      vertex: vertexView(), ...(chat.status === 'rejected' ? { chatError: String(chat.reason?.message || chat.reason).slice(0, 300) } : {}),
+      media: media.map((m, i) => (m.status === 'fulfilled' ? m.value : { id: vx[i].id, ok: false, error: String(m.reason?.message || m.reason).slice(0, 300), added: [], gone: [] })).filter(Boolean),
+      builtins: studioBuiltins(),
+    };
+  });
   post('/api/model-hub/line/reset', (b) => {
     const service = resetHubLine(id(b), String(b.lineId || ''));
     if (!service) throw fail('没有这个服务', 404);

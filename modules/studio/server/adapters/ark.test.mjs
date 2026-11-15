@@ -40,10 +40,12 @@ const ctxFor = (events, over = {}) => ({
   ...over,
 });
 
-// 和真实管线一样：先按卡的 ParamSpec 规范化参数；没有内置卡的模型用通用卡
+// 和真实管线（jobs.mjs）一样：先规范化参数（卡有自定义 normalize 就走它，否则按 ParamSpec），素材条件按素材角色算；没有内置卡的模型用通用卡
+const flagsOf = (inputs) => ({ $edit: inputs.some((x) => x.role === 'edit'), $first: inputs.some((x) => x.role === 'first'), $last: inputs.some((x) => x.role === 'last'), $ref: inputs.some((x) => x.role === 'ref') });
+const norm = (card, raw = {}, flags = {}) => (card.normalize ? card.normalize(raw, flags) : applySpecs(card.params, raw, flags));
 function reqFor(kind, model, { prompt = '', raw = {}, inputs = [], thread = null } = {}) {
   const card = CARDS[model] || genericCard('ark', kind);
-  return { kind, model, card: card.id, prompt, negative: '', params: applySpecs(card.params, raw), inputs, thread };
+  return { kind, model, card: card.id, prompt, negative: '', params: norm(card, raw, flagsOf(inputs)), inputs, thread };
 }
 
 test('内置卡登记到 ark 方言，参数规范化后符合界面预期', () => {
@@ -51,13 +53,14 @@ test('内置卡登记到 ark 方言，参数规范化后符合界面预期', () 
     assert.ok(card.kind === 'image' || card.kind === 'video', id);
     assert.equal(dialectCards('ark', id)?.kind, card.kind, id);
   }
-  assert.deepEqual(applySpecs(CARDS['doubao-seedance-2-5-260628'].params, {}),
-    { aspectRatio: 'adaptive', resolution: '720p', durationSeconds: -1, generateAudio: true, watermark: false });
-  assert.deepEqual(applySpecs(CARDS['doubao-seedream-5-0-pro-260628'].params, {}),
-    { size: '2K', outputFormat: 'jpeg', watermark: true, promptMode: 'standard' });
-  // 不在选项里的时长取最近的合法档（99 → 12，通用 ParamSpec 规范化对全数字档位就近取）；种子、固定镜头照常
-  assert.deepEqual(applySpecs(CARDS['doubao-seedance-1-0-pro-250528'].params, { durationSeconds: 99, seed: 42, cameraFixed: true }),
-    { aspectRatio: '16:9', resolution: '1080p', durationSeconds: 12, cameraFixed: true, seed: 42, watermark: false });
+  // 2026-11-15：时长改成任意整数 + 「模型定时长」开关（默认开 = 发 -1，和以前默认 -1 一致）；新开关 / 枚举的默认都是文档默认（不进请求体）
+  assert.deepEqual(norm(CARDS['doubao-seedance-2-5-260628'], {}),
+    { aspectRatio: 'adaptive', resolution: '720p', autoDuration: true, generateAudio: true, watermark: false, priority: 0, outputFormat: 'mp4', omniReferenceTaskType: 'auto' });
+  assert.deepEqual(norm(CARDS['doubao-seedream-5-0-pro-260628'], {}),
+    { size: '2K', outputFormat: 'jpeg', background: 'opaque', watermark: true, promptMode: 'standard' });
+  // 时长夹进 2–12（99 → 12）；比例默认不传（以前固定 16:9，会盖掉图生视频的 adaptive 默认）；种子、固定镜头照常
+  assert.deepEqual(norm(CARDS['doubao-seedance-1-0-pro-250528'], { durationSeconds: 99, seed: 42, cameraFixed: true }),
+    { resolution: '1080p', useFrames: false, durationSeconds: 12, cameraFixed: true, seed: 42, watermark: false, serviceTier: 'default' });
 });
 
 test('test() 先查任务列表（只读 GET，分页 1 条）：200 即 Key 有效，不发任何生成请求', async () => {
@@ -337,7 +340,7 @@ test('Seedance 1.0 pro：种子和固定镜头发出去，没有 generate_audio'
     assert.equal(b.camera_fixed, true);
     assert.equal(b.resolution, '1080p');
     assert.equal(b.duration, 5);
-    assert.equal(b.ratio, '16:9');
+    assert.equal('ratio' in b, false);   // 2026-11-15：比例默认不传，交给服务端（图生视频默认 adaptive）
     assert.equal('generate_audio' in b, false);
     assert.equal(b.content[1].role, 'first_frame');
   } finally { f.restore(); }
@@ -358,5 +361,122 @@ test('未知视频模型走通用卡：比例和时长映射，额外参数和 p
     assert.equal(b.resolution, '1080p');
     assert.equal(b.service_tier, 'flex');
     assert.equal(b.content[1].role, 'first_frame');
+  } finally { f.restore(); }
+});
+
+// —— 2026-11-15：参数补全 ——
+const stop = () => installFetch(() => json({ error: { message: 'stop' } }, 400));
+const img = (role, d = 'x', mime = 'image/png') => ({ role, data: Buffer.from(d), mime, name: `${role}.png` });
+
+test('Seedance 时长：区间内任意整数；默认「模型定时长」发 -1；旧写法 -1 / 只给时长照旧；2.5 有首帧时只能自适应', { timeout: 10_000 }, async () => {
+  const c25 = CARDS['doubao-seedance-2-5-260628'], c20 = CARDS['doubao-seedance-2-0-260128'];
+  assert.equal(norm(c25, { durationSeconds: 7 }).durationSeconds, 7);
+  assert.equal(norm(c25, { durationSeconds: 40 }).durationSeconds, 30);
+  assert.equal(norm(c20, { durationSeconds: 40 }).durationSeconds, 15);
+  assert.deepEqual([norm(c25, { durationSeconds: -1 }).autoDuration, norm(c25, { durationSeconds: -1 }).durationSeconds], [true, undefined]);
+  assert.equal(norm(c25, { autoDuration: true, durationSeconds: 9 }).durationSeconds, undefined);
+  assert.equal(norm(c25, { aspectRatio: '16:9' }, { $first: true }).aspectRatio, 'adaptive');
+  assert.equal(norm(c20, { aspectRatio: '16:9' }, { $first: true }).aspectRatio, '16:9');
+  const f = stop();
+  try {
+    await assert.rejects(arkAdapter.run(reqFor('video', 'doubao-seedance-2-5-260628', { prompt: 'x' }), provider(), ctxFor([])), /stop/);
+    assert.equal(f.calls[0].body.duration, -1);
+    await assert.rejects(arkAdapter.run(reqFor('video', 'doubao-seedance-2-0-260128', { prompt: 'x', raw: { durationSeconds: 11 } }), provider(), ctxFor([])), /stop/);
+    assert.equal(f.calls[1].body.duration, 11);
+  } finally { f.restore(); }
+});
+
+test('Seedance 新字段：默认都不进请求体；返回尾帧 / 联网 / 优先级 / 样片（强制 480p）/ MOV / 参考任务类型照发', { timeout: 10_000 }, async () => {
+  const f = stop();
+  try {
+    await assert.rejects(arkAdapter.run(reqFor('video', 'doubao-seedance-2-5-260628', { prompt: 'x' }), provider(), ctxFor([])), /stop/);
+    for (const k of ['return_last_frame', 'tools', 'priority', 'draft', 'output_format', 'omni_reference_task_type', 'service_tier', 'frames']) assert.equal(k in f.calls[0].body, false, k);
+    await assert.rejects(arkAdapter.run(reqFor('video', 'doubao-seedance-2-5-260628', { prompt: 'x', raw: {
+      resolution: '1080p', returnLastFrame: true, webSearch: true, priority: 6, draft: true, outputFormat: 'mov', omniReferenceTaskType: 'extend',
+    } }), provider(), ctxFor([])), /stop/);
+    const b = f.calls[1].body;
+    assert.equal(b.return_last_frame, true);
+    assert.deepEqual(b.tools, [{ type: 'web_search' }]);
+    assert.equal(b.priority, 6);
+    assert.equal(b.draft, true);
+    assert.equal(b.resolution, '480p');
+    assert.equal(b.output_format, 'mov');
+    assert.equal(b.omni_reference_task_type, 'extend');
+    // 2.0 没有 2.5 专有的三项
+    const keys = CARDS['doubao-seedance-2-0-260128'].params.map((s) => s.key);
+    assert.ok(!['draft', 'outputFormat', 'omniReferenceTaskType'].some((k) => keys.includes(k)));
+  } finally { f.restore(); }
+});
+
+test('Seedance 1.0 pro：按帧数发 frames（落到 25+4n）不发 duration；离线档发 service_tier', { timeout: 10_000 }, async () => {
+  const f = stop();
+  try {
+    await assert.rejects(arkAdapter.run(reqFor('video', 'doubao-seedance-1-0-pro-250528', { prompt: 'x', raw: { frames: 100, serviceTier: 'flex' } }), provider(), ctxFor([])), /stop/);
+    const b = f.calls[0].body;
+    assert.equal(b.frames, 101);
+    assert.equal('duration' in b, false);
+    assert.equal(b.service_tier, 'flex');
+  } finally { f.restore(); }
+});
+
+test('返回尾帧：成功后多一个图片产出（meta.kind image、role lastFrame）；查询结果没给尾帧地址时只有视频', { timeout: 10_000 }, async () => {
+  for (const withFrame of [true, false]) {
+    const f = installFetch((c) => {
+      if (c.method === 'POST') return json({ id: 'cgt-lf' });
+      if (c.url.endsWith('/cgt-lf')) return json({ id: 'cgt-lf', status: 'succeeded', content: { video_url: 'https://tos.example.com/v.mp4', ...(withFrame ? { last_frame_url: 'https://tos.example.com/last.jpg' } : {}) } });
+      if (c.url.endsWith('v.mp4')) return bin(Buffer.from('MP4'), 'video/mp4');
+      return bin(Buffer.from('JPG'), 'image/jpeg');
+    });
+    try {
+      const out = await arkAdapter.run(reqFor('video', 'doubao-seedance-2-0-260128', { prompt: 'x', raw: { returnLastFrame: true } }), provider(), ctxFor([]));
+      assert.equal(out.assets.length, withFrame ? 2 : 1);
+      assert.equal(out.assets[0].mime, 'video/mp4');
+      if (withFrame) {
+        assert.deepEqual(out.assets[1].bytes, Buffer.from('JPG'));
+        assert.equal(out.assets[1].mime, 'image/jpeg');
+        assert.equal(out.assets[1].meta.role, 'lastFrame');
+        assert.equal(out.assets[1].meta.kind, 'image');
+      }
+    } finally { f.restore(); }
+  }
+});
+
+test('参考视频 / 参考音频 → video_url / audio_url 项；和首帧混用、2.0 只给音频都直接 400（不发请求）', { timeout: 10_000 }, async () => {
+  const c25 = CARDS['doubao-seedance-2-5-260628'], c20 = CARDS['doubao-seedance-2-0-260128'];
+  assert.deepEqual([c25.inputs.video.max, c25.inputs.audio.max, c20.inputs.video.max, c20.inputs.audio.max], [10, 10, 3, 3]);
+  const video = { role: 'video', data: Buffer.from('v'), mime: 'video/mp4', name: 'v.mp4' };
+  const audio = { role: 'audio', data: Buffer.from('a'), mime: 'audio/mpeg', name: 'a.mp3' };
+  const f = stop();
+  try {
+    await assert.rejects(arkAdapter.run(reqFor('video', 'doubao-seedance-2-0-260128', { prompt: '@Video1 的动作', inputs: [img('ref'), video, audio] }), provider(), ctxFor([])), /stop/);
+    const content = f.calls[0].body.content;
+    assert.deepEqual(content.slice(1).map((x) => [x.type, x.role]), [['image_url', 'reference_image'], ['video_url', 'reference_video'], ['audio_url', 'reference_audio']]);
+    assert.equal(content[2].video_url.url, dataUrl(Buffer.from('v'), 'video/mp4'));
+    assert.equal(content[3].audio_url.url, dataUrl(Buffer.from('a'), 'audio/mpeg'));
+    // 2.5 可以只给音频
+    await assert.rejects(arkAdapter.run(reqFor('video', 'doubao-seedance-2-5-260628', { prompt: 'x', inputs: [audio] }), provider(), ctxFor([])), /stop/);
+    const n = f.calls.length;
+    await assert.rejects(arkAdapter.run(reqFor('video', 'doubao-seedance-2-0-260128', { prompt: 'x', inputs: [audio] }), provider(), ctxFor([])), (e) => e.status === 400 && /单独/.test(e.message));
+    await assert.rejects(arkAdapter.run(reqFor('video', 'doubao-seedance-2-5-260628', { prompt: 'x', inputs: [img('first'), video] }), provider(), ctxFor([])), (e) => e.status === 400 && /混用/.test(e.message));
+    assert.equal(f.calls.length, n);
+  } finally { f.restore(); }
+});
+
+
+test('Seedream 背景：等于默认不发（5.0 = 不透明、5.5 = 自动）；5.5 卡默认 PNG、没有提示词快速档', async () => {
+  const c55 = CARDS['doubao-seedream-5-5-261028'];
+  assert.equal(dialectCards('ark', 'doubao-seedream-5-5-261028')?.kind, 'image');
+  assert.deepEqual(norm(c55, {}), { size: '2K', outputFormat: 'png', background: 'auto', watermark: true });
+  const flashBg = CARDS['doubao-seedream-5-0-flash-260915'].params.find((s) => s.key === 'background').options.map((o) => o.value);
+  assert.deepEqual(flashBg, ['opaque', 'transparent']);
+  const f = installFetch(() => json({ data: [{ b64_json: PNG.toString('base64'), output_format: 'png' }] }));
+  try {
+    const run = (model, raw) => arkAdapter.run(reqFor('image', model, { prompt: 'x', raw }), provider(), ctxFor([]));
+    await run('doubao-seedream-5-0-flash-260915', {});
+    await run('doubao-seedream-5-0-flash-260915', { background: 'transparent' });
+    await run('doubao-seedream-5-5-261028', {});
+    await run('doubao-seedream-5-5-261028', { background: 'opaque' });
+    assert.deepEqual(f.calls.map((c) => c.body.background), [undefined, 'transparent', undefined, 'opaque']);
+    assert.equal(f.calls[2].body.output_format, 'png');
   } finally { f.restore(); }
 });

@@ -9,13 +9,15 @@
 //   completed / failed / cancelled / expired；没有进度字段）→ GET /videos/{id}/content?index=N 取 mp4（要带 Key）。
 //   官方没有取消接口：提交即 uncancelable。首尾帧 frame_images:[{ type:'image_url', image_url:{url}, frame_type }]；
 //   参考图 / 视频 / 音频进 input_references（{ type:'image_url'|'video_url'|'audio_url', … }）。
-//   服务商专属参数（provider.options.<服务商>）不做成参数，要用就写进「原始参数」。
+//   服务商专属参数（provider.options.<服务商>）：查证过 slug 的 Veo（google-vertex，多嵌一层 parameters）/ Seedance（seed）做成参数
+//   （schema.mjs VIDEO_PASS，执行时 applyPassthrough 挪位置）；其余厂商不做成参数，要用就写进「原始参数」。
+// GPT Image 内置卡（2026-11-15）：张数 / 格式（gif）/ 压缩 / 帧数 / 每帧时长 / 背景照发，审核与构图规划进 provider.options.openai；data[] 每张都收。
 
 import { generateOpenRouterImage } from './openrouter-image.mjs';
 import { http, authHeaders, joinUrl, poll, isTransient, longWaitMs, dataUrl, sleepMs, AdapterError } from './http.mjs';
-import { wireBody } from '../discovery/schema.mjs';
+import { wireBody, applyPassthrough } from '../discovery/schema.mjs';
 import { originalSize, parseSize } from '../cards/size.mjs';
-import { FLEX_RULE } from './openai.mjs';
+import { FLEX_RULE, IMAGE_MIME } from './openai.mjs';
 
 const VIDEO_POLL_MS = 8000;
 const DONE = 'completed';
@@ -71,10 +73,12 @@ export const openrouterAdapter = {
     }
     const r = await generateOpenRouterImage({
       model: req.model, prompt: req.prompt, refs, aspectRatio: p.aspectRatio, imageSize: p.imageSize, quality: p.quality, size,
+      count: p.count, outputFormat: p.outputFormat, outputCompression: p.outputCompression, frameCount: p.frameCount, frameDurationMs: p.frameDurationMs,
+      background: p.background, moderation: p.moderation, complexity: p.complexity,
       signal: ctx.signal, apiKey: ctx.secret.key, baseUrl: provider.baseUrl, headers: provider.headers,
       extra: { ...(provider.params || {}), ...(p.extra || {}) }, timeoutMs: (provider.timeoutSec || 300) * 1000, dispatcher: ctx.dispatcher,
     });
-    return { assets: [{ bytes: r.bytes, mime: r.mime, ...(meta ? { meta } : {}) }] };
+    return { assets: r.images.map((x) => ({ bytes: x.bytes, mime: x.mime, ...(meta ? { meta } : {}) })) };
   },
 };
 
@@ -87,13 +91,19 @@ async function runSchemaImage(req, provider, ctx) {
     ...wireBody(req.card.wire, p, { ...req, prompt: req.prompt || '生成一张图片' }, imgPart),
     ...(provider.params || {}), ...(p.extra || {}),
   };
+  // 透传参数挪进 provider.options.<服务商>、没得选的固定字段（如 Recraft vector 的 output_format:'svg'）补上
+  applyPassthrough(body, req.card.wire, req);
+  // output_compression 只对 jpeg / webp（其它格式 OpenAI 会拒）
+  if (body.output_compression !== undefined && body.output_format && !['jpeg', 'webp'].includes(body.output_format)) delete body.output_compression;
   if (Array.isArray(body.input_references)) body.input_references = body.input_references.slice(-16);
   const j = await http(joinUrl(provider.baseUrl, 'images'), {
     method: 'POST', headers: authHeaders(provider, ctx.secret.key, { 'X-Title': 'bridge' }), body,
     timeoutMs: (provider.timeoutSec || 300) * 1000, signal: ctx.signal, dispatcher: ctx.dispatcher, label: 'OpenRouter',
   });
+  // mime：优先 media_type；没给按请求的格式兜底（gif / svg 不能被当成 png 存）
+  const fallback = IMAGE_MIME[body.output_format] || 'image/png';
   const assets = (Array.isArray(j?.data) ? j.data : []).filter((d) => d && d.b64_json)
-    .map((d) => ({ bytes: Buffer.from(d.b64_json, 'base64'), mime: d.media_type || 'image/png' }));
+    .map((d) => ({ bytes: Buffer.from(d.b64_json, 'base64'), mime: typeof d.media_type === 'string' && d.media_type ? d.media_type : fallback }));
   if (!assets.length) throw new AdapterError('OpenRouter 没有返回图片', { detail: JSON.stringify(j ?? null).slice(0, 300) });
   return { assets };
 }
@@ -130,6 +140,8 @@ async function runVideo(req, provider, ctx) {
   const timeoutMs = (provider.timeoutSec || 600) * 1000;
   const { signal, dispatcher } = ctx;
   const body = { ...videoBody(req), ...(provider.params || {}), ...(req.params?.extra || {}) };
+  // 查证过 slug 的服务商参数（Veo 的 personGeneration / negativePrompt…、Seedance 的 watermark）挪进 provider.options.<服务商>
+  applyPassthrough(body, req.card?.wire, req);
   const sub = await http(joinUrl(base, 'videos'), { method: 'POST', headers, body, timeoutMs: 120_000, signal, dispatcher, label: 'OpenRouter 视频提交' });
   if (!sub || !sub.id) throw new AdapterError('OpenRouter 没有返回任务编号', { detail: JSON.stringify(sub ?? null).slice(0, 300) });
   ctx.submitted?.();   // 已受理：没有取消接口，之后取消只能放弃等待（仍可能计费），也不再自动重试

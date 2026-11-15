@@ -651,12 +651,12 @@ export function noteTurnStart(user) {
 // 对话轮以外按次计的用量（开源路线 S2-6，runtime/quota.mjs）：'media' 图片 / 语音 / 音乐，'video' 视频。只进分天桶。
 // 老台账的分天桶里可能还有已下线的 'assist'（旧版全局助手）计数：不再读也不再写，随分天桶到期自然清掉。
 const EVENT_KINDS = new Set(['media', 'video']);
-export function noteUsageEvent(user, kind) {
+export function noteUsageEvent(user, kind, times = 1) {
   const n = usageKey(user); if (!n || !EVENT_KINDS.has(kind)) return;
   const u = readJson(USAGE, {});
   const r = own(u, n) || { tokens: 0, calls: 0, costUsd: 0 };
   const d = dayBucket(r, dayKey());
-  d[kind] = (d[kind] || 0) + 1;
+  d[kind] = (d[kind] || 0) + Math.max(1, Math.min(100, Math.floor(Number(times)) || 1));
   pruneDays(r.days);
   u[n] = r; writeJson(USAGE, u);
 }

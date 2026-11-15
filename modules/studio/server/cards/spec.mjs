@@ -42,14 +42,19 @@ export function whenOk(spec, vals) {
 }
 
 const MAX_JSON = 8000;
-/** 解析 json 类参数：对象原样、字符串按 JSON 解析；坏值抛 400。 */
-export function parseJsonParam(v, label = '额外参数') {
+/**
+ * 解析 json 类参数：对象 / 数组原样、字符串按 JSON 解析；坏值抛 400。
+ * array:true（spec.array，schema 卡的对象数组 multi_prompt / elements）只收数组，否则只收对象。
+ */
+export function parseJsonParam(v, label = '额外参数', { array = false } = {}) {
   if (v === undefined || v === null || v === '') return undefined;
   let o = v;
   if (typeof v === 'string') { try { o = JSON.parse(v); } catch (e) { throw Object.assign(new Error(`${label}不是合法 JSON：${(e && e.message) || ''}`), { status: 400 }); } }
-  if (!o || typeof o !== 'object' || Array.isArray(o)) throw Object.assign(new Error(`${label}要是 JSON 对象（{…}）`), { status: 400 });
+  if (array) { if (!Array.isArray(o)) throw Object.assign(new Error(`${label}要是 JSON 数组（[…]）`), { status: 400 }); }
+  else if (!o || typeof o !== 'object' || Array.isArray(o)) throw Object.assign(new Error(`${label}要是 JSON 对象（{…}）`), { status: 400 });
   if (JSON.stringify(o).length > MAX_JSON) throw Object.assign(new Error(`${label}太长（上限 ${MAX_JSON} 字符）`), { status: 400 });
-  for (const k of Object.keys(o)) if (k === '__proto__' || k === 'constructor' || k === 'prototype') throw Object.assign(new Error(`${label}里有不允许的键 ${k}`), { status: 400 });
+  const bad = (x) => x && typeof x === 'object' && !Array.isArray(x) && Object.keys(x).find((k) => k === '__proto__' || k === 'constructor' || k === 'prototype');
+  for (const x of array ? o : [o]) { const k = bad(x); if (k) throw Object.assign(new Error(`${label}里有不允许的键 ${k}`), { status: 400 }); }
   return o;
 }
 
@@ -61,7 +66,7 @@ export function parseJsonParam(v, label = '额外参数') {
 const ALIASES = {
   aspectRatio: ['aspect_ratio', 'ratio'],
   durationSeconds: ['duration', 'seconds', 'duration_seconds'],
-  voice: ['voice_id', 'voiceId'],
+  voice: ['voice_id', 'voiceId', 'voice_setting.voice_id'],
   imageSize: ['image_size', 'size'],
 };
 export function aliasParams(specs, raw) {
@@ -117,12 +122,14 @@ export function applySpecs(specs, raw = {}, ctx = {}) {
       case 'number': case 'seed': {
         const n = Number(v);
         if (!Number.isFinite(n)) continue;
+        // 种子的「随机」（-1）= 没给：卡上明说收 -1 的（本机 Qwen）除外。以前被下限 0 夹成 0，等于每次同一个种子
+        if (s.type === 'seed' && n === -1 && !(s.min <= -1)) continue;
         v = Math.min(s.max ?? Infinity, Math.max(s.min ?? -Infinity, s.type === 'seed' || s.integer ? Math.round(n) : n));
         break;
       }
       case 'bool': if (typeof v !== 'boolean') continue; break;
       case 'text': case 'voice': v = String(v).slice(0, s.max || 4000); break;
-      case 'json': v = parseJsonParam(v, s.label); if (!v) continue; break;
+      case 'json': v = parseJsonParam(v, s.label, { array: !!s.array }); if (!v || (Array.isArray(v) && !v.length)) continue; break;
       default: continue;
     }
     if (v === '' && s.type === 'enum') continue;   // '' = 「默认」档：不传
@@ -134,20 +141,56 @@ export function applySpecs(specs, raw = {}, ctx = {}) {
 }
 
 // —— 通用卡：拉取来的、手填的未知模型（方言 × 种类）——前端照这些参数渲染，extra 原样透传进请求体 ——
+// 2026-11-15 参数补全：按种类补「几乎所有上游都认」的参数，全部默认不传（枚举带「默认」档、数字不给默认值），不认这些字段的上游不会 400。
+// 各方言对通用键的翻译不同：只给这个方言的适配器现在能映射的键（GENERIC_KEYS），界面上能调的都真进请求体。
 const ASPECTS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'];
+const DEF = { value: '', label: '默认' };
+const GENERIC_KEYS = {
+  openai: { image: ['count', 'quality', 'format', 'compression', 'background', 'size'], speech: ['speed', 'audioFormat', 'instructions'] },
+  openrouter: { image: ['count', 'quality', 'format', 'compression', 'background', 'size'], video: ['resolution', 'seed'] },
+  fal: { image: ['count', 'quality', 'format', 'compression', 'background', 'size', 'seed', 'negative'], video: ['resolution', 'seed', 'negative'], speech: ['speed'], music: ['seed', 'negative'] },
+  replicate: { image: ['count', 'format', 'size', 'seed', 'negative'], video: ['resolution', 'seed', 'negative'], speech: ['speed'], music: ['seed', 'negative'] },
+  ark: { image: ['format', 'size'], video: ['resolution', 'seed'] },
+  minimax: { speech: ['speed', 'audioFormat'] },
+  elevenlabs: { speech: ['speed'], music: ['seed'] },
+};
+const SPEED_RANGE = { minimax: [0.5, 2], elevenlabs: [0.7, 1.2] };
+const AUDIO_FORMATS = { openai: ['mp3', 'opus', 'aac', 'flac', 'wav', 'pcm'], minimax: ['mp3', 'flac', 'wav'] };
+const QUALITY_OPTS = [DEF, { value: 'auto', label: '自动' }, { value: 'low', label: '低' }, { value: 'medium', label: '中' }, { value: 'high', label: '高' }, { value: 'standard', label: '标准' }, { value: 'hd', label: '高清' }];
+const BG_OPTS = [DEF, { value: 'auto', label: '自动' }, { value: 'transparent', label: '透明' }, { value: 'opaque', label: '不透明' }];
+
 export function genericCard(dialect, kind, { async = kind === 'video' || kind === 'music', extraParams = [] } = {}) {
+  const has = new Set(GENERIC_KEYS[dialect]?.[kind] || []);
   const params = [];
-  if (kind === 'image') params.push(P.enum('aspectRatio', '比例', opts(['auto', ...ASPECTS].map((v) => ({ value: v, label: v === 'auto' ? '自动' : v }))), { default: 'auto' }));
+  if (kind === 'image') {
+    // 填了尺寸就不再发比例（同 OpenRouter 图像 schema 卡：显式尺寸和比例会冲突）
+    params.push(P.enum('aspectRatio', '比例', opts(['auto', ...ASPECTS].map((v) => ({ value: v, label: v === 'auto' ? '自动' : v }))), { default: 'auto', ...(has.has('size') ? { when: { size: '' } } : {}) }));
+    if (has.has('count')) params.push(P.num('count', '张数', 1, 10, { group: 'basic', step: 1, integer: true, format: 'count' }));
+    if (has.has('size')) params.push(P.size('size', '尺寸', [{ ...DEF }], { group: 'advanced', default: '', custom: { width: { min: 16 }, height: { min: 16 }, exact: false }, encode: 'x' }));
+    if (has.has('quality')) params.push(P.enum('quality', '画质', QUALITY_OPTS.map((o) => ({ ...o })), { group: 'advanced', default: '' }));
+    if (has.has('format')) params.push(P.enum('outputFormat', '格式', [{ ...DEF }, ...opts(['png', 'jpeg', 'webp'])], { group: 'advanced', default: '' }));
+    if (has.has('format') && has.has('compression')) params.push(P.num('outputCompression', '压缩质量', 0, 100, { step: 1, integer: true, unit: '%', when: { outputFormat: ['jpeg', 'webp'] } }));
+    if (has.has('background')) params.push(P.enum('background', '背景', BG_OPTS.map((o) => ({ ...o })), { group: 'advanced', default: '' }));
+  }
   if (kind === 'video') {
     params.push(P.enum('aspectRatio', '比例', opts([{ value: 'auto', label: '自动' }, { value: '16:9', label: '16:9 横' }, { value: '9:16', label: '9:16 竖' }]), { default: 'auto' }));
     params.push(P.num('durationSeconds', '时长（秒）', 1, 60, { group: 'basic', step: 1, integer: true }));
+    if (has.has('resolution')) params.push(P.enum('resolution', '分辨率', [{ ...DEF }, ...opts(['480p', '720p', '1080p'])], { default: '', format: 'resolution' }));
   }
-  if (kind === 'speech') params.push(P.voice('voice', '音色'));
+  if (kind === 'speech') {
+    params.push(P.voice('voice', '音色'));
+    const [lo, hi] = SPEED_RANGE[dialect] || [0.25, 4];
+    if (has.has('speed')) params.push(P.num('speed', '语速', lo, hi, { group: 'basic', step: 0.05 }));
+    if (has.has('audioFormat')) params.push(P.enum('format', '格式', [{ ...DEF }, ...opts(AUDIO_FORMATS[dialect] || ['mp3', 'wav'])], { group: 'advanced', default: '' }));
+    if (has.has('instructions')) params.push(P.text('instructions', '语气说明', { max: 4096, multiline: true }));
+  }
   if (kind === 'music') params.push(P.num('durationSeconds', '时长（秒）', 5, 600, { step: 1, integer: true }));
+  if (has.has('seed')) params.push(P.seed());
   params.push(...extraParams, P.json());
+  const images = kind === 'image' || kind === 'video' ? { images: { max: kind === 'image' ? 4 : 1, roles: kind === 'image' ? ['edit', 'ref'] : ['first'] } } : {};
   return {
     id: `generic:${dialect}:${kind}`, kind, async, generic: true,
-    inputs: { text: true, ...(kind === 'image' || kind === 'video' ? { images: { max: kind === 'image' ? 4 : 1, roles: kind === 'image' ? ['edit', 'ref'] : ['first'] } } : {}) },
+    inputs: { text: true, ...images, ...(has.has('negative') ? { negative: true } : {}) },
     params,
   };
 }

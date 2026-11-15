@@ -25,7 +25,7 @@
 import { http, authHeaders, joinUrl, download, poll, dataUrl, AdapterError, isTransient, longWaitMs } from './http.mjs';
 import { P, genericCard } from '../cards/spec.mjs';
 import { registerDialectCards } from '../cards/dialects.mjs';
-import { wireBody } from '../discovery/schema.mjs';
+import { wireBody, wireExtraBody, mergeBodies } from '../discovery/schema.mjs';
 
 const FAL_QUEUE = 'https://queue.fal.run';        // 默认提交地址（预设里也是这个）
 const FAL_API = 'https://api.fal.ai/v1';          // 平台接口（模型列表、价格）固定在这里，不随服务地址走
@@ -48,6 +48,10 @@ const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => String(a + i
 const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length)));
 const need = (ok, msg) => { if (!ok) throw new AdapterError(msg); };
 const sameOrigin = (u, base) => { try { return typeof u === 'string' && new URL(u).origin === new URL(base).origin; } catch { return false; } };
+// 2026-11-15 参数补全：新加的参数界面默认 = 上游默认，等于默认时不发（老请求体一字不变，也不替上游做主）
+const nd = (v, d) => (v === d ? undefined : v);
+const safetyParam = () => P.bool('enableSafetyChecker', '安全检查', { default: true, desc: '关掉要账号有授权，没授权照样检查' });
+const negDefault = (s) => ({ negativeDefault: s });
 
 // —— 图像卡公共件 ——
 const FLUX_SIZES = choices(['square_hd', 'square', 'portrait_4_3', 'portrait_16_9', 'landscape_4_3', 'landscape_16_9'],
@@ -60,13 +64,44 @@ const nanoParams = () => [
   P.num('numImages', '张数', 1, 4, { step: 1, integer: true, default: 1, group: 'basic' }),
   P.enum('outputFormat', '格式', choices(['png', 'jpeg', 'webp']), { group: 'advanced', default: 'png' }),
   P.bool('enableWebSearch', '联网搜索', { default: false, desc: '真实世界的人物、地标、品牌更准' }),
+  // 以下 2026-11-15 照 openapi 补（两份 schema 一致）；等于上游默认的不发
+  P.bool('enableImageSearch', '图片搜索', { default: false, desc: '先搜网页图片当参考' }),
+  P.enum('safetyTolerance', '安全容忍度', choices(['1', '2', '3', '4', '5', '6']), { group: 'advanced', default: '4', desc: '1 最严，6 最宽' }),
+  P.enum('thinkingLevel', '思考', [{ value: '', label: '默认' }, ...choices(['minimal', 'high'], { minimal: '少', high: '多' })], { group: 'advanced', default: '' }),
+  P.bool('includeThoughts', '思考摘要', { default: false }),
+  P.bool('limitGenerations', '只出一张', { default: true, desc: '每轮只出一张，忽略提示词里要几张的说法' }),
+  P.num('temperature', '温度', 0, 2, { step: 0.05, desc: '不填按上游默认 1' }),
+  P.num('topP', 'Top P', 0, 1, { step: 0.01, desc: '不填按上游默认 0.95' }),
+  P.num('maxOutputTokens', '最大输出', 1, 32768, { step: 1, integer: true }),
+  P.text('systemPrompt', '系统提示词', { max: 8000, multiline: true }),
   P.seed(),
   P.json(),
 ];
-const nanoFields = (p) => ({ aspect_ratio: p.aspectRatio, resolution: p.resolution, num_images: p.numImages, output_format: p.outputFormat, enable_web_search: p.enableWebSearch, seed: p.seed });
+const nanoFields = (p) => ({
+  aspect_ratio: p.aspectRatio, resolution: p.resolution, num_images: p.numImages, output_format: p.outputFormat, enable_web_search: p.enableWebSearch, seed: p.seed,
+  enable_image_search: nd(p.enableImageSearch, false), safety_tolerance: nd(p.safetyTolerance, '4'), thinking_level: p.thinkingLevel,
+  include_thoughts: nd(p.includeThoughts, false), limit_generations: nd(p.limitGenerations, true),
+  temperature: p.temperature, top_p: p.topP, max_output_tokens: p.maxOutputTokens, system_prompt: p.systemPrompt,
+});
 
 // 视频卡公共件：时长是字符串枚举（Kling 3–15 秒、Seedance 4–12 秒）
 const durParam = (list, def) => P.enum('durationSeconds', '时长', secChoices(list), { default: def });
+// Kling v3 Pro（文生 / 图生共用，2026-11-15 照 openapi 补）：分镜、镜头类型、安全检查；schema 的默认负面词带出来当占位
+const KLING_NEG = 'blur, distort, and low quality';
+const klingMore = () => [
+  P.enum('shotType', '镜头类型', choices(['customize', 'intelligent'], { customize: '按分镜', intelligent: '智能' }), { group: 'advanced', default: 'customize', desc: '智能 = 模型自己分镜头' }),
+  P.json('multiPrompt', '分镜', { array: true, desc: 'JSON 数组，如 [{ "prompt": "", "duration": "5" }]；填了分镜就不发正文（两者只能二选一）' }),
+  safetyParam(),
+];
+// MiniMax 语音的 language_boost（fal openapi 2026-11-15 的枚举）
+const MINIMAX_LANG_BOOST = ['auto', 'Chinese', 'Chinese,Yue', 'English', 'Arabic', 'Russian', 'Spanish', 'French', 'Portuguese', 'German', 'Turkish', 'Dutch', 'Ukrainian',
+  'Vietnamese', 'Indonesian', 'Japanese', 'Italian', 'Korean', 'Thai', 'Polish', 'Romanian', 'Greek', 'Czech', 'Finnish', 'Hindi', 'Bulgarian', 'Danish', 'Hebrew',
+  'Malay', 'Slovak', 'Swedish', 'Croatian', 'Hungarian', 'Norwegian', 'Slovenian', 'Catalan', 'Nynorsk', 'Afrikaans'];
+// 填了分镜就不发 prompt（openapi：prompt 与 multi_prompt 只能给一个）
+const klingFields = (p, r) => ({
+  prompt: p.multiPrompt ? undefined : r.prompt, multi_prompt: p.multiPrompt,
+  shot_type: nd(p.shotType, 'customize'), enable_safety_checker: nd(p.enableSafetyChecker, true),
+});
 
 // —— 模型卡（卡 id = fal 模型 id）：params 给前端渲染；wire(p, r) 把规范化后的参数译成该模型的请求字段
 //    r = { prompt, negative, refs（改图参考的 data URI 列表）, first / last（首尾帧 data URI 或 ''） } ——
@@ -82,10 +117,13 @@ export const CARDS = {
       P.num('steps', '推理步数', 1, 50, { step: 1, integer: true, default: 28 }),
       P.num('guidanceScale', '引导强度', 1, 20, { step: 0.5, default: 3.5 }),
       P.enum('outputFormat', '格式', choices(['jpeg', 'png']), { group: 'advanced', default: 'jpeg' }),
+      P.enum('acceleration', '加速', choices(['none', 'regular', 'high'], { none: '不加速', regular: '常规', high: '高' }), { group: 'advanced', default: 'none', desc: '越快画质可能越差' }),
+      safetyParam(),
       P.seed(),
       P.json(),
     ],
-    wire: (p, r) => clean({ prompt: r.prompt, image_size: p.imageSize, num_images: p.numImages, num_inference_steps: p.steps, guidance_scale: p.guidanceScale, output_format: p.outputFormat, seed: p.seed }),
+    wire: (p, r) => clean({ prompt: r.prompt, image_size: p.imageSize, num_images: p.numImages, num_inference_steps: p.steps, guidance_scale: p.guidanceScale, output_format: p.outputFormat, seed: p.seed,
+      acceleration: nd(p.acceleration, 'none'), enable_safety_checker: nd(p.enableSafetyChecker, true) }),
   },
   'fal-ai/nano-banana-2': {
     kind: 'image', label: 'Nano Banana 2', desc: '文生图，分辨率最高 4K；支持联网搜索', async: false,
@@ -94,46 +132,50 @@ export const CARDS = {
     wire: (p, r) => clean({ prompt: r.prompt, ...nanoFields(p) }),
   },
   'fal-ai/nano-banana-2/edit': {
-    kind: 'image', label: 'Nano Banana 2 · 改图', desc: '按参考图改；没有素材时用续改链上的上一张', async: false,
-    // 文档未写明 image_urls 的张数上限，先按 4 张封顶
-    inputs: { text: true, images: { max: 4, roles: ['edit', 'ref'] }, multiTurn: false },
-    params: nanoParams(),
+    kind: 'image', label: 'Nano Banana 2 · 改图', desc: '按参考图改；没有素材时用续改链上的上一张；也收一段视频 / 音频 / PDF 当上下文', async: false,
+    // 文档未写明 image_urls 的张数上限，先按 4 张封顶；video_url / audio_url / pdf_url 各一个（openapi：各 15MB 以内）
+    inputs: { text: true, images: { max: 4, roles: ['edit', 'ref'] }, video: { max: 1 }, audio: { max: 1 }, multiTurn: false },
+    params: [...nanoParams().slice(0, -1), P.text('pdfUrl', 'PDF', { max: 2000, desc: 'PDF 地址（http(s) 或 data URL），当上下文' }), P.json()],
     wire: (p, r) => {
-      need(r.refs.length, '改图要先给一张参考图（没有素材时，续改链上的上一张也行）');
-      return clean({ prompt: r.prompt, image_urls: r.refs, ...nanoFields(p) });
+      // openapi：有视频 / 音频 / PDF 时 image_urls 可以不给
+      need(r.refs.length || r.video || r.audio || p.pdfUrl, '改图要先给一张参考图（没有素材时，续改链上的上一张也行）');
+      return clean({ prompt: r.prompt, image_urls: r.refs, ...nanoFields(p), video_url: r.video, audio_url: r.audio, pdf_url: p.pdfUrl });
     },
   },
 
   // —— 视频 ——
   'fal-ai/kling-video/v3/pro/text-to-video': {
-    kind: 'video', label: 'Kling v3 Pro · 文生视频', desc: '3–15 秒，可同步生成音频', async: true,
-    inputs: { text: true, negative: true },
+    kind: 'video', label: 'Kling v3 Pro · 文生视频', desc: '3–15 秒，可同步生成音频；可写分镜', async: true,
+    inputs: { text: true, negative: true, ...negDefault(KLING_NEG) },
     params: [
       P.enum('aspectRatio', '比例', choices(['16:9', '9:16', '1:1'], { '16:9': '16:9 横', '9:16': '9:16 竖', '1:1': '1:1' }), { default: '16:9' }),
       durParam(range(3, 15), '5'),
       P.bool('generateAudio', '生成音频', { group: 'basic', default: true }),
       P.num('cfgScale', '提示遵循度', 0, 1, { step: 0.05, default: 0.5 }),
+      ...klingMore(),
       P.json(),
     ],
-    wire: (p, r) => clean({ prompt: r.prompt, aspect_ratio: p.aspectRatio, duration: p.durationSeconds, generate_audio: p.generateAudio, cfg_scale: p.cfgScale, negative_prompt: r.negative }),
+    wire: (p, r) => clean({ ...klingFields(p, r), aspect_ratio: p.aspectRatio, duration: p.durationSeconds, generate_audio: p.generateAudio, cfg_scale: p.cfgScale, negative_prompt: r.negative }),
   },
   'fal-ai/kling-video/v3/pro/image-to-video': {
     kind: 'video', label: 'Kling v3 Pro · 图生视频', desc: '首帧必填，可加尾帧；首帧至少 300×300，宽高比 0.4–2.5（文档）', async: true,
-    inputs: { text: true, images: { max: 2, roles: ['first', 'last'] }, negative: true },
+    inputs: { text: true, images: { max: 2, roles: ['first', 'last'] }, negative: true, ...negDefault(KLING_NEG) },
     params: [
       durParam(range(3, 15), '5'),
       P.bool('generateAudio', '生成音频', { group: 'basic', default: true }),
       P.num('cfgScale', '提示遵循度', 0, 1, { step: 0.05, default: 0.5 }),
+      ...klingMore(),
+      P.json('elements', '主体', { array: true, desc: 'JSON 数组，如 [{ "frontal_image_url": "", "reference_image_urls": [""] }]；也可以是 [{ "video_url": "" }]。提示词里用 @Element1 指代' }),
       P.json(),
     ],
     // 首帧字段名是 start_image_url（不是 image_url），尾帧 end_image_url
     wire: (p, r) => {
       need(r.first, '图生视频要先给首帧图片');
-      return clean({ prompt: r.prompt, start_image_url: r.first, end_image_url: r.last, duration: p.durationSeconds, generate_audio: p.generateAudio, cfg_scale: p.cfgScale, negative_prompt: r.negative });
+      return clean({ ...klingFields(p, r), start_image_url: r.first, end_image_url: r.last, duration: p.durationSeconds, generate_audio: p.generateAudio, cfg_scale: p.cfgScale, negative_prompt: r.negative, elements: p.elements });
     },
   },
   'fal-ai/bytedance/seedance/v1.5/pro/text-to-video': {
-    kind: 'video', label: 'Seedance 1.5 Pro · 文生视频', desc: '4–12 秒，可选音频与固定镜头', async: true,
+    kind: 'video', label: 'Seedance 1.5 Pro · 文生视频', desc: '已弃用（fal 标 deprecated，建议换新模型）；4–12 秒，可选音频与固定镜头', async: true,
     inputs: { text: true },
     params: [
       P.enum('aspectRatio', '比例', choices(['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', 'auto'], { auto: '自动' }), { default: '16:9' }),
@@ -141,10 +183,12 @@ export const CARDS = {
       durParam(range(4, 12), '5'),
       P.bool('generateAudio', '生成音频', { group: 'basic', default: true }),
       P.bool('cameraFixed', '固定镜头', { default: false }),
+      safetyParam(),
       P.seed(),
       P.json(),
     ],
-    wire: (p, r) => clean({ prompt: r.prompt, aspect_ratio: p.aspectRatio, resolution: p.resolution, duration: p.durationSeconds, camera_fixed: p.cameraFixed, generate_audio: p.generateAudio, seed: p.seed }),
+    wire: (p, r) => clean({ prompt: r.prompt, aspect_ratio: p.aspectRatio, resolution: p.resolution, duration: p.durationSeconds, camera_fixed: p.cameraFixed, generate_audio: p.generateAudio, seed: p.seed,
+      enable_safety_checker: nd(p.enableSafetyChecker, true) }),
   },
 
   // —— 配音 ——
@@ -160,15 +204,37 @@ export const CARDS = {
       P.enum('emotion', '情绪', [{ value: '', label: '默认' }, ...choices(['happy', 'sad', 'angry', 'fearful', 'disgusted', 'surprised', 'neutral'],
         { happy: '开心', sad: '悲伤', angry: '愤怒', fearful: '害怕', disgusted: '厌恶', surprised: '惊讶', neutral: '平静' })], { group: 'advanced', default: '' }),
       P.enum('audioFormat', '格式', choices(['mp3', 'flac']), { group: 'advanced', default: 'mp3' }),   // pcm 不给：裸 PCM 没有采样率信息，包 WAV 会变调
+      // 以下 2026-11-15 照 openapi 补：可选整组（音频设置的采样率 / 码率 / 声道、声音调整、响度均衡）不碰就不发
+      P.enum('languageBoost', '语种增强', [{ value: '', label: '默认' }, ...choices(MINIMAX_LANG_BOOST, { auto: '自动' })], { group: 'advanced', default: '' }),
+      P.bool('englishNormalization', '英文规范化', { default: false, desc: '数字、日期按英文读法念' }),
+      P.enum('sampleRate', '采样率', [{ value: '', label: '默认' }, ...choices([8000, 16000, 22050, 24000, 32000, 44100])], { group: 'advanced', default: '' }),
+      P.enum('bitrate', '码率', [{ value: '', label: '默认' }, ...choices([32000, 64000, 128000, 256000])], { group: 'advanced', default: '', when: { audioFormat: 'mp3' } }),
+      P.enum('channel', '声道', [{ value: '', label: '默认' }, { value: 1, label: '单声道' }, { value: 2, label: '立体声' }], { group: 'advanced', default: '' }),
+      P.num('modifyPitch', '明暗', -100, 100, { step: 1, integer: true, default: 0, desc: '负 = 低沉，正 = 明亮' }),
+      P.num('modifyIntensity', '力度', -100, 100, { step: 1, integer: true, default: 0, desc: '负 = 刚劲，正 = 轻柔' }),
+      P.num('modifyTimbre', '质感', -100, 100, { step: 1, integer: true, default: 0, desc: '负 = 浑厚，正 = 清脆' }),
+      P.enum('loudnessNorm', '响度均衡', [{ value: '', label: '默认' }, { value: true, label: '开' }, { value: false, label: '关' }], { group: 'advanced', default: '' }),
+      P.num('targetLoudness', '目标响度', -70, -10, { step: 0.5, desc: 'LUFS，上游默认 -18' }),
+      P.num('targetPeak', '峰值上限', -3, 0, { step: 0.1, desc: 'dB，上游默认 -0.5' }),
+      P.num('targetRange', '响度范围', 0, 20, { step: 0.5, desc: 'LU，上游默认 8' }),
+      P.json('pronunciationDict', '发音词典', { desc: 'JSON 对象，如 { "tone_list": ["燕少飞/(yan4)(shao3)(fei1)"] }' }),
+      safetyParam(),
       P.json(),
     ],
     // 文档：output_format 默认 hex（内联十六进制，体积大），这里固定要 URL，结果走 download
-    wire: (p, r) => ({
-      prompt: r.prompt,
-      output_format: 'url',
-      voice_setting: clean({ voice_id: p.voice, speed: p.speed, vol: p.vol, pitch: p.pitch, emotion: p.emotion }),
-      audio_setting: clean({ format: p.audioFormat }),
-    }),
+    wire: (p, r) => {
+      const vm = clean({ pitch: nd(p.modifyPitch, 0), intensity: nd(p.modifyIntensity, 0), timbre: nd(p.modifyTimbre, 0) });
+      const norm = clean({ enabled: p.loudnessNorm, target_loudness: p.targetLoudness, target_peak: p.targetPeak, target_range: p.targetRange });
+      return {
+        prompt: r.prompt,
+        output_format: 'url',
+        voice_setting: clean({ voice_id: p.voice, speed: p.speed, vol: p.vol, pitch: p.pitch, emotion: p.emotion, english_normalization: nd(p.englishNormalization, false) }),
+        audio_setting: clean({ format: p.audioFormat, sample_rate: p.sampleRate, bitrate: p.bitrate, channel: p.channel }),
+        ...clean({ language_boost: p.languageBoost, pronunciation_dict: p.pronunciationDict, enable_safety_checker: nd(p.enableSafetyChecker, true) }),
+        ...(Object.keys(vm).length ? { voice_modify: vm } : {}),
+        ...(Object.keys(norm).length ? { normalization_setting: norm } : {}),
+      };
+    },
   },
   'fal-ai/elevenlabs/tts/turbo-v2.5': {
     kind: 'speech', label: 'ElevenLabs TTS Turbo v2.5', desc: '稳定度、相似度、风格可调；音色名按 ElevenLabs 预置音色填', async: false,
@@ -181,10 +247,16 @@ export const CARDS = {
       P.num('style', '风格强度', 0, 1, { step: 0.05, default: 0 }),
       P.enum('applyTextNormalization', '文本规范化', choices(['auto', 'on', 'off'], { auto: '自动', on: '开', off: '关' }), { group: 'advanced', default: 'auto' }),
       P.text('languageCode', '语言代码', { max: 8, desc: 'ISO 639-1，如 zh、en；留空按文本自动判断' }),
+      // 以下 2026-11-15 照 openapi 补
+      P.text('previousText', '前文', { max: 4000, multiline: true, desc: '分段拼接时上一段的文字，衔接更自然' }),
+      P.text('nextText', '后文', { max: 4000, multiline: true, desc: '分段拼接时下一段的文字' }),
+      P.bool('timestamps', '时间戳', { default: false, desc: '返回逐词时间信息' }),
+      safetyParam(),
       P.json(),
     ],
     // 这个模型的正文字段叫 text（不是 prompt）
-    wire: (p, r) => clean({ text: r.prompt, voice: p.voice, speed: p.speed, stability: p.stability, similarity_boost: p.similarityBoost, style: p.style, apply_text_normalization: p.applyTextNormalization, language_code: p.languageCode }),
+    wire: (p, r) => clean({ text: r.prompt, voice: p.voice, speed: p.speed, stability: p.stability, similarity_boost: p.similarityBoost, style: p.style, apply_text_normalization: p.applyTextNormalization, language_code: p.languageCode,
+      previous_text: p.previousText, next_text: p.nextText, timestamps: nd(p.timestamps, false), enable_safety_checker: nd(p.enableSafetyChecker, true) }),
   },
 
   // —— 音乐 ——
@@ -195,16 +267,17 @@ export const CARDS = {
       P.num('durationSeconds', '时长（秒）', 1, 190, { step: 1, integer: true, default: 190, group: 'basic' }),
       P.num('steps', '推理步数', 4, 8, { step: 1, integer: true, default: 8 }),
       P.num('guidanceScale', '引导强度', 1, 25, { step: 0.5, default: 1 }),
+      safetyParam(),
       P.seed(),
       P.json(),
     ],
-    wire: (p, r) => clean({ prompt: r.prompt, seconds_total: p.durationSeconds, num_inference_steps: p.steps, guidance_scale: p.guidanceScale, seed: p.seed }),
+    wire: (p, r) => clean({ prompt: r.prompt, seconds_total: p.durationSeconds, num_inference_steps: p.steps, guidance_scale: p.guidanceScale, seed: p.seed, enable_safety_checker: nd(p.enableSafetyChecker, true) }),
   },
   'fal-ai/lyria2': {
     kind: 'music', label: 'Lyria 2', desc: '文生音乐；支持负面提示词', async: true,
-    inputs: { text: true, negative: true, promptLang: 'en' },   // 同一个模型（Lyria 2）只认英文提示词（Vertex 上 11-04 真打；fal 上未真打）
-    params: [P.seed(), P.json()],
-    wire: (p, r) => clean({ prompt: r.prompt, negative_prompt: r.negative, seed: p.seed }),
+    inputs: { text: true, negative: true, promptLang: 'en', ...negDefault('low quality') },   // 同一个模型（Lyria 2）只认英文提示词（Vertex 上 11-04 真打；fal 上未真打）
+    params: [safetyParam(), P.seed(), P.json()],
+    wire: (p, r) => clean({ prompt: r.prompt, negative_prompt: r.negative, seed: p.seed, enable_safety_checker: nd(p.enableSafetyChecker, true) }),
   },
   'fal-ai/minimax-music/v2.6': {
     kind: 'music', label: 'MiniMax Music 2.6', desc: '文生音乐，可写歌词或出纯音乐；提示词至少 10 个字符（文档）', async: true,
@@ -214,20 +287,40 @@ export const CARDS = {
       P.text('lyrics', '歌词', { max: 3500, group: 'basic', desc: '换行分段，可用 [Verse]、[Chorus] 等段落标签；留空且非纯音乐时自动写词' }),
       P.bool('lyricsOptimizer', '自动写词', { default: false, desc: '歌词留空时按提示词写一版' }),
       P.enum('format', '格式', choices(['mp3', 'wav']), { group: 'advanced', default: 'mp3' }),
+      // 2026-11-15 照 openapi 补：采样率 / 码率（等于上游默认 44100 / 256000 时不发）、安全检查
+      P.enum('sampleRate', '采样率', choices([16000, 24000, 32000, 44100]), { group: 'advanced', default: 44100 }),
+      P.enum('bitrate', '码率', choices([32000, 64000, 128000, 256000]), { group: 'advanced', default: 256000, when: { format: 'mp3' } }),
+      safetyParam(),
       P.json(),
     ],
     wire: (p, r) => {
       const lyrics = p.lyrics || '';
       const auto = !!p.lyricsOptimizer || (!p.instrumental && !lyrics);   // 没歌词又不是纯音乐：让它自己写词
-      return clean({ prompt: r.prompt, is_instrumental: p.instrumental, lyrics: lyrics || undefined, lyrics_optimizer: auto ? true : undefined, audio_setting: clean({ format: p.format }) });
+      return clean({ prompt: r.prompt, is_instrumental: p.instrumental, lyrics: lyrics || undefined, lyrics_optimizer: auto ? true : undefined,
+        audio_setting: clean({ format: p.format, sample_rate: nd(p.sampleRate, 44100), bitrate: nd(p.bitrate, 256000) }), enable_safety_checker: nd(p.enableSafetyChecker, true) });
     },
   },
 };
 registerDialectCards('fal', CARDS);
 
-// 未知模型（拉取来的、手填的）用的通用映射：prompt / 比例 / 时长 / 音色 / 参考图 → 最常见的字段名，extra 另外原样合并
+// 未知模型（拉取来的、手填的）用的通用映射：prompt / 比例 / 时长 / 音色 / 参考图 → 最常见的字段名，extra 另外原样合并。
+// 通用卡的其余键（2026-11-15：张数、格式、压缩、画质、背景、尺寸、种子、分辨率、语速…）：常见的按 fal 惯用字段名发，认不出的按 snake_case 原样透传
+const GENERIC_DONE = new Set(['aspectRatio', 'durationSeconds', 'voice', 'extra']);
+const GENERIC_FIELD = { count: 'num_images', outputFormat: 'output_format', outputCompression: 'output_compression' };
+const snake = (k) => String(k).replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+function genericRest(p) {
+  const out = {};
+  for (const [k, v] of Object.entries(p || {})) {
+    if (GENERIC_DONE.has(k) || v === undefined || v === null || v === '') continue;
+    // 自由宽高 → fal 的 image_size 对象（{ width, height }，fal 图像模型通用写法）
+    if (k === 'size') { if (v && typeof v === 'object' && v.width && v.height) out.image_size = { width: v.width, height: v.height }; continue; }
+    out[GENERIC_FIELD[k] || snake(k)] = v;
+  }
+  return out;
+}
 function genericWire(kind) {
   return (p, r) => clean({
+    ...genericRest(p),
     prompt: r.prompt,
     ...(kind === 'speech' ? { text: r.prompt } : {}),   // 配音模型正文字段两种叫法都见过，两个都带（多余键多数被忽略）
     ...(p.aspectRatio && p.aspectRatio !== 'auto' ? { aspect_ratio: p.aspectRatio } : {}),
@@ -735,13 +828,17 @@ export const falAdapter = {
     const pick = (role) => (takesImages ? (req.inputs || []).find((x) => x.role === role) : undefined);
     const first = pick('first');
     const lastFrame = pick('last');
-    const r = { prompt: req.prompt || '', negative: req.negative || '', refs, first: first ? dataOf(first) : '', last: lastFrame ? dataOf(lastFrame) : '' };
+    // 参考视频 / 音频（卡上 inputs.video / audio 声明了才收；Nano Banana 2 改图把它们当上下文）
+    const media = (role) => { const x = card.inputs?.[role] ? (req.inputs || []).find((i) => i.role === role) : null; return x ? dataOf(x) : ''; };
+    const r = { prompt: req.prompt || '', negative: req.negative || '', refs, first: first ? dataOf(first) : '', last: lastFrame ? dataOf(lastFrame) : '', video: media('video'), audio: media('audio') };
 
     // 请求体：卡映射出的字段 → 服务级额外（provider.params）→ 逐次额外（extra，最后合并、压过前面）。
     // schema 卡（§9.3 自动识别）的 wire 是对象：参数键就是 schema 字段名，素材按 wire 塞回原字段（data URI）
-    const fields = card.wire && typeof card.wire === 'object'
+    let fields = card.wire && typeof card.wire === 'object'
       ? wireBody(card.wire, p, req, dataOf)
       : (card.wire || genericWire(req.kind))(p, r);
+    // 内置卡 + schema 合并卡（cards/merge.mjs）：schema 多出来的参数 / 素材，内置卡的 wire 函数不认，按 wireExtra 补进去（同名嵌套对象并一层）
+    if (card.wireExtra) fields = mergeBodies(fields, wireExtraBody(card.wireExtra, p, req, dataOf));
     const body = { ...fields, ...(provider.params || {}), ...(p.extra || {}) };
 
     const sub = await http(joinUrl(base, model), { method: 'POST', headers, body, timeoutMs, signal, dispatcher, label: 'fal 提交' });

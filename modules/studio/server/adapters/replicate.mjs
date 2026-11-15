@@ -35,9 +35,10 @@
 //   · 输出文件的鉴权：只把鉴权头发给 replicate.delivery 与服务自己的域名，模型返回的外链拿不到 Key。
 
 import { http, authHeaders, joinUrl, download, guessMime, dataUrl, poll, AdapterError } from './http.mjs';
-import { P, opts, genericCard } from '../cards/spec.mjs';
+import { P, opts, genericCard, applySpecs } from '../cards/spec.mjs';
 import { encodeSizeParams } from '../cards/size.mjs';
 import { registerDialectCards, dialectCards } from '../cards/dialects.mjs';
+import { setPath } from '../discovery/schema.mjs';
 
 const DEFAULT_TIMEOUT_SEC = 600;
 const POLL_MS = 4000;
@@ -141,12 +142,19 @@ function buildInput(req, card) {
   const body = {};
   // 尺寸参数（方案 §10）：自由宽高按卡上的 encode 编码（拆成 width + height 等），auto 不传
   const sized = generic ? (req.params || {}) : encodeSizeParams(card.params, req.params || {}, req).params;
+  // 卡上要求「JSON 当字符串发」的参数（Kling 的 multi_prompt：schema 是字符串形式的 JSON 数组）
+  const asString = new Set((card.params || []).filter((s) => s.type === 'json' && s.stringify).map((s) => s.key));
   for (const [k, v] of Object.entries(sized)) {
     if (k === 'extra' || v === undefined || v === null) continue;
-    if (!generic) body[k] = v;
+    if (!generic) setPath(body, k, asString.has(k) && typeof v !== 'string' ? JSON.stringify(v) : v);   // 点路径键（schema 卡拍平的嵌套对象）装回嵌套对象
     else if (k === 'aspectRatio') { if (v !== 'auto') body.aspect_ratio = v; }   // 通用卡的「自动」不是 Replicate 的值，不传
     else if (k === 'durationSeconds') body.duration = v;
-    else body[k] = v;
+    // 通用卡的其余键（2026-11-15）：张数 → num_outputs、格式 → output_format、自由宽高 → width + height（Replicate 最常见的写法）；
+    // 其余按 snake_case 原样（seed / resolution / speed / voice 本来就是）
+    else if (k === 'count') body.num_outputs = v;
+    else if (k === 'outputFormat') { if (v !== '') body.output_format = v; }
+    else if (k === 'size') { if (v && typeof v === 'object' && v.width && v.height) { body.width = v.width; body.height = v.height; } }
+    else if (v !== '') body[String(k).replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()] = v;
   }
   // 正文：卡上指定的字段（语音 text、MiniMax 音乐 lyrics）；没指定就是 prompt
   const textField = generic ? (req.kind === 'speech' ? 'text' : 'prompt') : (wire.text || 'prompt');
@@ -377,11 +385,35 @@ function minimaxSpeechParams() {
     P.enum('audio_format', '格式', opts(['mp3', 'wav', 'flac']), { default: 'mp3' }),   // pcm 不给：裸 PCM 没有采样率信息，包 WAV 会变调
     P.enum('sample_rate', '采样率', opts([8000, 16000, 22050, 24000, 32000, 44100]), { default: 32000 }),
     P.enum('bitrate', '码率（仅 mp3）', opts([32000, 64000, 128000, 256000]), { default: 128000 }),
-    P.text('language_boost', '语种提示', { default: 'None', desc: 'None / Automatic / Chinese / English 等' }),
+    // 2026-11-15：schema 里是枚举（原来做成了自由文本），默认 None 不变
+    P.enum('language_boost', '语种提示', [{ value: 'None', label: '不指定' }, { value: 'Automatic', label: '自动' }, ...opts(MINIMAX_LANG_BOOST)], { default: 'None' }),
     P.bool('english_normalization', '英文数字朗读优化', { default: false }),
+    // 以下 2026-11-15 照 schema 补；默认不传（上游默认单声道、不出字幕）
+    P.enum('channel', '声道', [{ value: '', label: '默认' }, { value: 'mono', label: '单声道' }, { value: 'stereo', label: '立体声' }], { default: '' }),
+    P.bool('subtitle_enable', '字幕', { desc: '另外返回带句子时间戳的字幕文件' }),
     P.json(),
   ];
 }
+// Replicate MiniMax 语音的 language_boost 枚举（schema 2026-11-15，None / Automatic 另列）
+const MINIMAX_LANG_BOOST = ['Chinese', 'Chinese,Yue', 'Cantonese', 'English', 'Arabic', 'Russian', 'Spanish', 'French', 'Portuguese', 'German', 'Turkish', 'Dutch',
+  'Ukrainian', 'Vietnamese', 'Indonesian', 'Japanese', 'Italian', 'Korean', 'Thai', 'Polish', 'Romanian', 'Greek', 'Czech', 'Finnish', 'Hindi', 'Bulgarian', 'Danish',
+  'Hebrew', 'Malay', 'Persian', 'Slovak', 'Swedish', 'Croatian', 'Filipino', 'Hungarian', 'Norwegian', 'Slovenian', 'Catalan', 'Nynorsk', 'Tamil', 'Afrikaans'];
+// Gemini 3.1 Flash TTS 的 language_code 枚举（schema 2026-11-15）
+const GEMINI_TTS_LANGS = ['af-ZA', 'am-ET', 'ar-001', 'ar-EG', 'az-AZ', 'be-BY', 'bg-BG', 'bn-BD', 'ca-ES', 'ceb-PH', 'cmn-CN', 'cmn-tw', 'cs-CZ', 'da-DK', 'de-DE', 'el-GR',
+  'en-AU', 'en-GB', 'en-IN', 'en-US', 'es-419', 'es-ES', 'es-MX', 'et-EE', 'eu-ES', 'fa-IR', 'fi-FI', 'fil-PH', 'fr-CA', 'fr-FR', 'gl-ES', 'gu-IN', 'he-IL', 'hi-IN',
+  'hr-HR', 'ht-HT', 'hu-HU', 'hy-AM', 'id-ID', 'is-IS', 'it-IT', 'ja-JP', 'jv-JV', 'ka-GE', 'kn-IN', 'ko-KR', 'kok-IN', 'la-VA', 'lb-LU', 'lo-LA', 'lt-LT', 'lv-LV',
+  'mai-IN', 'mg-MG', 'mk-MK', 'ml-IN', 'mn-MN', 'mr-IN', 'ms-MY', 'my-MM', 'nb-NO', 'ne-NP', 'nl-NL', 'nn-NO', 'or-IN', 'pa-IN', 'pl-PL', 'ps-AF', 'pt-BR', 'pt-PT',
+  'ro-RO', 'ru-RU', 'sd-IN', 'si-LK', 'sk-SK', 'sl-SI', 'sq-AL', 'sr-RS', 'sv-SE', 'sw-KE', 'ta-IN', 'te-IN', 'th-TH', 'tr-TR', 'uk-UA', 'ur-PK', 'vi-VN'];
+const LANG_NAME = { 'cmn-CN': '普通话', 'cmn-tw': '台湾国语', 'en-US': '英语（美）', 'en-GB': '英语（英）', 'ja-JP': '日语', 'ko-KR': '韩语', 'fr-FR': '法语', 'de-DE': '德语', 'es-ES': '西班牙语', 'ru-RU': '俄语' };
+
+// MiniMax Music 2.5：audio_format 是已弃用别名（schema：output_format 优先），卡上改用 output_format；旧预设 / 旧调用里的 audio_format 照收
+const MUSIC25_PARAMS = [
+  P.text('lyrics', '歌词', { group: 'basic', max: 3000, desc: '用 [Verse] [Chorus] 等标签分段' }),
+  P.enum('output_format', '格式', opts(['mp3', 'wav']), { default: 'mp3' }),
+  P.enum('bitrate', '码率', opts([32000, 64000, 128000, 256000]), { default: 256000 }),
+  P.enum('sample_rate', '采样率', opts([16000, 24000, 32000, 44100]), { default: 44100 }),
+  P.json(),
+];
 
 export const CARDS = {
   // —— 图像 ——
@@ -472,6 +504,8 @@ export const CARDS = {
       P.num('duration', '时长（秒）', 3, 15, { group: 'basic', step: 1, integer: true, default: 5 }),
       P.enum('mode', '画质档', [{ value: 'standard', label: '标准 720p' }, { value: 'pro', label: '专业 1080p' }, { value: '4k', label: '4K' }], { default: 'pro' }),
       P.bool('generate_audio', '生成音频', { group: 'basic', default: false }),
+      // schema 里是字符串形式的 JSON 数组：界面按数组填，请求时转成字符串（buildInput 认 stringify）
+      P.json('multi_prompt', '分镜', { array: true, stringify: true, desc: 'JSON 数组，如 [{ "prompt": "", "duration": 5 }]；最多 6 段，每段至少 1 秒，加起来等于总时长' }),
       P.json(),
     ],
   },
@@ -487,9 +521,12 @@ export const CARDS = {
     ],
   },
   'bytedance/seedance-2.0': {
-    kind: 'video', label: 'Seedance 2.0', desc: '首尾帧，或最多 9 张参考图（参考图与首尾帧不能同用）；可带音频', async: true,
-    inputs: { text: true, images: { max: 9, roles: ['first', 'last', 'ref'] } },
-    wire: { images: { first: { field: 'image' }, last: { field: 'last_frame_image' }, ref: { field: 'reference_images', list: true } } },
+    kind: 'video', label: 'Seedance 2.0', desc: '首尾帧，或最多 9 张参考图（参考图与首尾帧不能同用）；另收最多 3 段参考视频、3 段参考音频（各合计 15 秒内，音频要配参考图或视频）', async: true,
+    inputs: { text: true, images: { max: 9, roles: ['first', 'last', 'ref'] }, video: { max: 3 }, audio: { max: 3 } },
+    wire: {
+      images: { first: { field: 'image' }, last: { field: 'last_frame_image' }, ref: { field: 'reference_images', list: true } },
+      video: { field: 'reference_videos', list: true }, audio: { field: 'reference_audios', list: true },
+    },
     params: [
       P.enum('aspect_ratio', '比例', opts(['16:9', '4:3', '1:1', '3:4', '9:16', '21:9', '9:21', 'adaptive']), { group: 'basic', default: '16:9', desc: 'adaptive 由模型按素材选' }),
       P.num('duration', '时长（秒）', -1, 15, { group: 'basic', step: 1, integer: true, default: 5, desc: '-1 = 模型自己定时长' }),
@@ -517,7 +554,8 @@ export const CARDS = {
     params: [
       P.voice('voice', '音色', { default: 'Kore', options: GEMINI_VOICES.map((v) => ({ value: v, label: v })) }),
       P.text('prompt', '风格说明', { group: 'basic', default: 'Say the following.', max: 1000, desc: '怎么念（语气、语速、情绪），用自然语言写' }),
-      P.text('language_code', '语言代码', { default: 'en-US', desc: 'BCP-47，如 cmn-CN、ja-JP、en-US' }),
+      // 2026-11-15：schema 里是枚举（原来做成了自由文本），默认 en-US 不变
+      P.enum('language_code', '语言', GEMINI_TTS_LANGS.map((v) => ({ value: v, label: LANG_NAME[v] ? `${LANG_NAME[v]} ${v}` : v })), { default: 'en-US' }),
       P.json(),
     ],
   },
@@ -527,13 +565,12 @@ export const CARDS = {
     // 正文 = 风格描述（与别家音乐模型、Claude 的 generate_music 同口径）；歌词另填，不填就是纯音乐 / 模型自拟（契约复核 11-04）
     kind: 'music', label: 'MiniMax Music 2.5', desc: '整首歌（可带人声）。正文写曲风、情绪、场景；要唱的词填「歌词」（用 [Verse] [Chorus] 等标签分段）', async: true,
     inputs: { text: true }, wire: { text: 'prompt' },
-    params: [
-      P.text('lyrics', '歌词', { group: 'basic', max: 3000, desc: '用 [Verse] [Chorus] 等标签分段' }),
-      P.enum('audio_format', '格式', opts(['mp3', 'wav']), { default: 'mp3' }),
-      P.enum('bitrate', '码率', opts([32000, 64000, 128000, 256000]), { default: 256000 }),
-      P.enum('sample_rate', '采样率', opts([16000, 24000, 32000, 44100]), { default: 44100 }),
-      P.json(),
-    ],
+    params: MUSIC25_PARAMS,
+    normalize(raw = {}, ctx = {}) {
+      const r = { ...(raw || {}) };
+      if ((r.output_format === undefined || r.output_format === null || r.output_format === '') && r.audio_format != null) r.output_format = r.audio_format;
+      return applySpecs(MUSIC25_PARAMS, r, ctx);
+    },
   },
   'google/lyria-2': {
     kind: 'music', label: 'Lyria 2', desc: 'Google 文本生成音乐，48kHz 立体声（不能指定时长）', async: true,

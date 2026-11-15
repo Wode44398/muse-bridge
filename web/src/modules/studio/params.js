@@ -51,7 +51,9 @@ function defaultOf(spec, modelId, values) {
   if (has(spec, 'default')) return spec.default;
   if (spec.type === 'bool') return false;
   if (spec.type === 'seed') return -1;
-  if (spec.type === 'number') return spec.min ?? 0;
+  // 没写默认值的数值 = 「未设置」（不传，走上游自己的默认）。以前回落到下限：界面显示的是下限、发出去的也是下限
+  // （语速 0.25、稳定度 0、时长 3 秒…），参数一多就是一堆没人选过的极端值（方案 §11）
+  if (spec.type === 'number') return undefined;
   if (spec.type === 'json') return '';
   return '';
 }
@@ -89,17 +91,24 @@ export function resolveValues(specs, draft = {}, modelId = '', ctx = {}) {
   return out;
 }
 
-/** 发给后端的 params：只含此刻可见的参数；json 类型解析成对象（解析不了的不发，界面会标红） */
-export function payloadParams(specs, values) {
+/** 发给后端的 params：只含此刻可见的参数；json 类型解析成对象（解析不了的不发，界面会标红）。
+ *  「未设置」的不发（方案 §11）：没默认值又没填的数值；种子的「随机」（-1，除非卡上明说收 -1）；
+ *  卡上没写默认值、用户也没碰过的开关（draft 里没有这个键——给了 draft 才判断，上游默认可能是开，别替它发 false）。 */
+export function payloadParams(specs, values, draft = null) {
   const out = {};
   for (const spec of specs || []) {
     if (!visibleSpec(spec, values)) continue;
     let v = values[spec.key];
+    if (v === undefined || v === null) continue;
+    if (spec.type === 'seed' && v === -1 && !(spec.min <= -1)) continue;
+    if (spec.type === 'bool' && draft && !has(spec, 'default') && !has(draft, spec.key)) continue;
     if ((spec.type === 'enum' || spec.type === 'size') && v === '') continue;   // 后端约定：value '' 的选项＝「默认，不传」
     if (spec.type === 'size' && isCustomSize(v)) v = { width: v.width, height: v.height };
     if (spec.type === 'json') {
       if (typeof v !== 'string' || !v.trim()) continue;
       try { v = JSON.parse(v); } catch { continue; }
+      // 写错了形状的不发（界面那一行已经标红）：array 的要数组，其余要对象
+      if (spec.array ? !Array.isArray(v) : (!v || typeof v !== 'object' || Array.isArray(v))) continue;
     }
     if (spec.type === 'text' && typeof v === 'string' && !v.trim()) continue;
     out[spec.key] = v;
@@ -118,10 +127,14 @@ export function paramIssues(specs, values) {
   return out;
 }
 
-/** json 参数的校验（界面失焦时调）：'' = 好的 */
-export function jsonError(text) {
+/** json 参数的校验（界面失焦时调）：'' = 好的；'syntax' 不是合法 JSON；'object' 要写成对象；'array' 要写成数组（spec.array 的参数：分镜、主体、LoRA 这类列表） */
+export function jsonError(text, array = false) {
   if (typeof text !== 'string' || !text.trim()) return '';
-  try { const v = JSON.parse(text); return v && typeof v === 'object' && !Array.isArray(v) ? '' : 'object'; } catch { return 'syntax'; }
+  try {
+    const v = JSON.parse(text);
+    if (array) return Array.isArray(v) ? '' : 'array';
+    return v && typeof v === 'object' && !Array.isArray(v) ? '' : 'object';
+  } catch { return 'syntax'; }
 }
 
 /** chips 上显示的值文字 */

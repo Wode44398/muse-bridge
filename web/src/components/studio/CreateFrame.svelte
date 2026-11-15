@@ -1,7 +1,8 @@
 <script>
   // 四个创作页共用的骨架（v3，方案 §9.2）：画布（各页给）→ 落点托盘 → 输入框（dimensio Composer）。
-  // 输入框底行是 dimensio 的 Chip：＋ · 模型芯片 ⌄ · 基本参数的值芯片（「16:9」「2K」「high」，值为主，参数名只在浮层里出现）
-  // · 最后一枚「参数」打开全部；值芯片放不下就整枚藏起来（不切半截字）。
+  // 输入框底行是 dimensio 的 Chip：＋ · 模型芯片 ⌄ · 基本参数的值芯片 · 最后一枚「参数」打开全部；值芯片放不下就整枚藏起来（不切半截字）。
+  // 值芯片（方案 §11）：基本参数**每一项都有**，默认值也写出来（以前默认项不占芯片，「画质 高」在、「尺寸」不在，看不出规律）；
+  // 值自己说得清的只写值（「16:9」「2K」「×2」），说不清的前面带淡色参数名（「尺寸 自动」「画质 高」）；开关芯片点一下就切，不弹浮层。
   // 宽屏参数坞开着时（wide），全部参数挂进外壳的坞里（toDock），输入框里只留模型芯片——同屏信息只出一次。
   // 参数只按目录的 ParamSpec 渲染（ParamsList）。素材：＋（按模型 inputs 选角色 → 工作空间 / 本机）、拖放（DropTray）、粘贴。
   import { untrack } from 'svelte';
@@ -11,9 +12,9 @@
   import { pasteFiles } from '../../lib/dropPaste.js';
   import { dtHasWsFiles, wsDescriptorFrom } from '../../lib/fileDrag.js';
   import { studio, currentModel, valuesOf, setParam, submit, removeInput, swapFrames, clearParent, roleName, roleTag } from '../../modules/studio/media.svelte.js';
-  import { basicSpecs, imageRoles, inputRoles, promptLangs, textFitsLangs, optionsOf } from '../../modules/studio/params.js';
-  import { sizeIssues } from '../../modules/studio/size.js';
-  import { chipValue, controlOf, formatOf, selfExplaining } from '../../modules/studio/render.js';
+  import { imageRoles, inputRoles, promptLangs, textFitsLangs, optionsOf, resolveValues } from '../../modules/studio/params.js';
+  import { sizeIssues, sizeGrid, gridMatch } from '../../modules/studio/size.js';
+  import { chipValue, controlOf, formatOf, selfExplaining, paramGroups, isChanged } from '../../modules/studio/render.js';
   import { paramLabel, optText, sourceText } from '../../modules/studio/words.js';
   import { paramSource } from '../../modules/studio/picker.js';
   import { providerLogo } from '../../lib/providerLogos.js';
@@ -42,7 +43,9 @@
   const draft = $derived(studio.drafts[page]);
   const model = $derived(currentModel(page));
   const values = $derived(valuesOf(page, model));
-  const chipSpecs = $derived(basicSpecs(model?.params || [], values));
+  // 芯片 = 面板里「基本」那一组，顺序也跟面板一样（比例 → 尺寸 → 画质 → 时长 → 张数…）
+  const paramSets = $derived(paramGroups(model?.params || [], values));
+  const chipSpecs = $derived(paramSets.find((g) => g.id === 'basic')?.specs || []);
   const hasParams = $derived(!!(model?.params?.length || model?.inputs?.negative));
 
   let field = $state(), hasText = $state(false);
@@ -66,7 +69,9 @@
   const langs = $derived(promptLangs(model));
   const langBad = $derived(!!langs && hasText && !textFitsLangs(curText, langs));
   const langHint = $derived(!langBad ? '' : langs.length === 1 && langs[0] === 'en' ? t('这个模型只认英文提示词') : t('这个模型只认这些语言的提示词：{langs}', { langs: langs.join(' / ') }));
-  const hint = $derived(err || (bad.length ? t('当前模型不接收{role}', { role: roleName(bad[0].role) }) : '') || langHint || studio.notice);
+  // 必填素材（卡上 inputs.images.required：只做图生视频的模型要先给首帧）：没给就不让发，底下写一句
+  const needRole = $derived((model?.inputs?.images?.required || []).find((r) => !draft.inputs.some((x) => x.role === r)) || '');
+  const hint = $derived(err || (bad.length ? t('当前模型不接收{role}', { role: roleName(bad[0].role) }) : '') || langHint || (needRole ? t('这个模型要先给{role}', { role: roleName(needRole) }) : '') || studio.notice);
   const warn = $derived(!!err || !!bad.length || langBad);
   const textOk = $derived((hasText || !needText(draft)) && !langBad);
   $effect(() => { model?.key; untrack(() => { err = ''; }); });
@@ -80,7 +85,7 @@
   });
 
   async function gen() {
-    if (sending || pending || bad.length) return;
+    if (sending || pending || bad.length || needRole) return;
     const txt = (field?.textContent || '').trim();
     if (needText(draft) && !txt) return;
     if (langs && !textFitsLangs(txt, langs)) return;
@@ -97,6 +102,7 @@
     const fit = () => {
       const kids = [...node.children];
       for (const c of kids) c.hidden = false;
+      if (node.classList.contains('wrap')) return;   // 手机：折行，全都摆出来
       const all = kids[kids.length - 1];
       const vals = kids.slice(0, -1);
       const right = () => node.getBoundingClientRect().right + 0.5;
@@ -109,14 +115,26 @@
   }
   const optLabel = optText;
   const chipName = paramLabel;
-  // 值芯片：值为主；值自己说得清的（比例 / 分辨率 / 尺寸 / 时长 / 张数）只写值，别的前面带一个淡色参数名（「画质 高」）
+  // 值芯片：每个基本参数一枚。值自己说得清的（「16:9」「2K」「8 秒」「×2」「2048×1152」）只写值，别的前面带一个淡色参数名（「尺寸 自动」「画质 高」）
   const chipOf = (spec) => {
     const v = chipValue(spec, values[spec.key], { labelOf: optLabel, modelId: model?.id, values });
     if (v == null) return null;
-    if (v === '') return { name: '', text: chipName(spec) };   // bool 开着只写名字
-    return { name: selfExplaining(spec) || spec.type === 'voice' ? '' : chipName(spec), text: v };
+    if (spec.type === 'bool') return { name: '', text: chipName(spec), toggle: true, on: !!values[spec.key] };
+    // 张数 / 条数：带名字（「张数 2」），光一个「×2」猜不出是什么
+    if (formatOf(spec) === 'count') return { name: chipName(spec), text: String(v).replace(/^×/, '') };
+    // 尺寸落在比例 × 档位格上：写「16:9 · 2K」，不写一串像素（自己打的数才写像素）
+    if (spec.type === 'size') {
+      const grid = sizeGrid(spec);
+      const m = grid ? gridMatch(spec, values[spec.key], grid) : null;
+      if (m?.ratio) return { name: '', text: m.ratio + (grid.tiers.length > 1 && m.tier ? ' · ' + m.tier : '') };
+    }
+    return { name: selfExplaining(spec, v) || spec.type === 'voice' ? '' : chipName(spec), text: v };
   };
   const chips = $derived(chipSpecs.map((s) => ({ spec: s, ...(chipOf(s) || {}) })).filter((c) => c.text != null));
+  // 「参数」上的小数字：芯片上看不到的那些（「更多」组 + 负面提示词 + 没上芯片的基本项）里改过几项
+  const defaults = $derived(resolveValues(model?.params || [], {}, model?.id || '', { edit: values.$edit, first: values.$first, last: values.$last, ref: values.$ref }));
+  const hiddenChanged = $derived(paramSets.flatMap((g) => g.specs).filter((s) => !chips.some((c) => c.spec.key === s.key) && isChanged(values[s.key], defaults[s.key])).length
+    + (model?.inputs?.negative && draft.negative ? 1 : 0));
   const logo = $derived(model?.provider ? providerLogo(model.provider) : '');
   const src = $derived(paramSource(model));
   const srcText = $derived(sourceText(src, labelForId, true));
@@ -124,6 +142,7 @@
   let cpBox = $state();
   const cpAnchor = () => cpBox?.querySelector('.cp') || null;
   function openChip(e, spec) {
+    if (spec.type === 'bool') { setParam(page, spec.key, !values[spec.key]); return; }   // 开关：点一下就切
     if (spec.type === 'voice') { voiceSpec = spec; return; }
     const el = e.currentTarget;
     one = one?.spec?.key === spec.key ? null : { spec, anchor: el };
@@ -202,8 +221,9 @@
   <div class="cf-dock" use:dockZone>
     <div class="cf-col" bind:this={cpBox}>
       <DropTray {page} {model} html5={h5} onhtml5drop={(e, role) => h5Drop(e, role)} />
-      <Composer bind:field bind:hasText busy={sending} disabled={!textOk || pending || !!bad.length || !model}
-        {placeholder} sendLabel={pending ? t('素材还在上传') : sendLabel} {enterSends} {tall} onsend={gen} ontext={(s) => (curText = s)}>
+      <Composer bind:field bind:hasText busy={sending} disabled={!textOk || pending || !!bad.length || !!needRole || !model}
+        {placeholder} sendLabel={pending ? t('素材还在上传') : sendLabel} {enterSends} {tall} onsend={gen} ontext={(s) => (curText = s)}
+        subOn={layout.compact && !wide && hasParams}>
         {#snippet atts()}
           {#if draft.inputs.length || draft.parent}
             <!-- 素材条：一行横滑（素材多了不把输入框撑高）；角色写在素材块下面，不压在图上 -->
@@ -236,6 +256,7 @@
             </div>
           {/if}
         {/snippet}
+        {#snippet sub()}{@render chipBar()}{/snippet}
         {#snippet tools()}
           {#if canAttach}
             <button class="cp-ib" aria-label={t('添加素材')} title={t('添加素材')} onclick={openPlus}>{@html icon('plus')}</button>
@@ -247,24 +268,34 @@
             <span class="chip-tx">{model ? tr(model.label || model.id) : t('没有模型')}</span>
             <span class="chev">{@html icon('down')}</span>
           </button>
-          {#if !wide && hasParams}
-            <div class="cp-chips" use:fitChips>
-              {#each chips as c (c.spec.key)}
-                <button class="chip cp-val" class:open={one?.spec?.key === c.spec.key} class:bad={c.spec.type === 'size' && sizeIssues(c.spec, values[c.spec.key]).length > 0} title={chipName(c.spec)} onclick={(e) => openChip(e, c.spec)} data-chip={c.spec.key}>
-                  {#if c.spec.type === 'bool'}{@html icon('check')}{:else if formatOf(c.spec) === 'aspect' && /^\d/.test(String(values[c.spec.key]))}<span class="cp-asp" aria-hidden="true">{@html aspectBox(values[c.spec.key], 12)}</span>{:else if formatOf(c.spec) === 'aspect'}<span class="cp-asp" aria-hidden="true"><span class="cp-asp-auto"></span></span>{/if}
-                  {#if c.name}<i>{c.name}</i>{/if}<span class="chip-tx">{c.text}</span>
-                </button>
-              {/each}
-              <button class="chip cp-all" class:open={!!allOpen} aria-haspopup="dialog" aria-expanded={!!allOpen} aria-label={t('参数')} onclick={(e) => { allTrig = e.currentTarget; allOpen = allOpen ? null : cpAnchor(); }}>
-                {@html icon('sliders')}<span class="chip-tx">{t('参数')}</span>
-              </button>
-            </div>
-          {/if}
+          {#if !wide && hasParams && !layout.compact}{@render chipBar()}{/if}
+          <!-- 手机：「参数」跟在模型芯片后面（只留图标），值芯片在正文下面单独一行 -->
+          {#if !wide && hasParams && layout.compact}{@render allBtn()}{/if}
         {/snippet}
       </Composer>
       {#if hint}<div class="cf-hint" class:warn>{#if warn}{@html icon('warn')}{/if}<span>{hint}</span></div>{/if}
     </div>
   </div>
+
+  <!-- 值芯片 + 「参数」：电脑 / 平板排在底行模型芯片后面；手机底行放不下（模型名一长就全被挤掉），单独占正文下面一行 -->
+  {#snippet allBtn()}
+              <button class="chip cp-all" class:open={!!allOpen} aria-haspopup="dialog" aria-expanded={!!allOpen} aria-label={t('参数')} onclick={(e) => { allTrig = e.currentTarget; allOpen = allOpen ? null : cpAnchor(); }}>
+                {@html icon('sliders')}<span class="chip-tx">{t('参数')}</span>{#if hiddenChanged}<span class="cp-all-n" aria-label={t('已改 {n}', { n: hiddenChanged })}>{hiddenChanged}</span>{/if}
+              </button>
+  {/snippet}
+  {#snippet chipBar()}
+            <div class="cp-chips" class:wrap={layout.compact} use:fitChips>
+              {#each chips as c (c.spec.key)}
+                <button class="chip cp-val" class:tog={c.toggle} class:open={one?.spec?.key === c.spec.key} class:bad={c.spec.type === 'size' && sizeIssues(c.spec, values[c.spec.key]).length > 0}
+                  aria-pressed={c.toggle ? c.on : null} title={chipName(c.spec)} onclick={(e) => openChip(e, c.spec)} data-chip={c.spec.key}>
+                  {#if c.toggle}{#if c.on}{@html icon('check')}{:else}<span class="cp-tog-off" aria-hidden="true"></span>{/if}
+                  {:else if formatOf(c.spec) === 'aspect' && /^\d/.test(String(values[c.spec.key]))}<span class="cp-asp" aria-hidden="true">{@html aspectBox(values[c.spec.key], 12)}</span>{/if}
+                  {#if c.name}<i>{c.name}</i>{/if}<span class="chip-tx">{c.text}</span>
+                </button>
+              {/each}
+              {#if !layout.compact}{@render allBtn()}{/if}
+            </div>
+  {/snippet}
 
   {#if wide}
     <div class="sd-dock-pane" class:on={active} use:toDock>

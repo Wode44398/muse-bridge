@@ -291,6 +291,114 @@ test('模型卡：种类合法，末尾是 extra（json），登记进方言表�
   }
 });
 
+// 同 jobs.mjs：卡有自定义 normalize（配音卡：数组型 JSON 的混音）就走它
+const norm = (card, raw, flags = {}) => (card.normalize ? card.normalize(raw, flags) : applySpecs(card.params, raw, flags));
+const videoRoutes = (id = 'TV') => [
+  [(r) => r.method === 'POST', J({ task_id: id, base_resp: OK })],
+  [(r) => r.url.includes('/query/video_generation'), J({ task_id: id, status: 'Success', file_id: 'F' + id, base_resp: OK })],
+  [(r) => r.url.includes('/files/retrieve?'), J({ file: { download_url: `https://cdn.example.com/${id}.mp4` }, base_resp: OK })],
+  [(r) => r.url === `https://cdn.example.com/${id}.mp4`, () => new Response(Buffer.from('MP4'), { headers: { 'content-type': 'video/mp4' } })],
+];
+
+test('Hailuo 02：首尾帧 → first_frame_image + last_frame_image（不发快速预处理）；512P 只在有首帧、没尾帧时可选', async () => {
+  const card = CARDS['MiniMax-Hailuo-02'];
+  assert.deepEqual(card.inputs.images.roles, ['first', 'last']);
+  // 512P：文生视频不可选（回落默认 768P）、图生视频可选、首尾帧不可选
+  assert.equal(applySpecs(card.params, { resolution: '512P' }).resolution, '768P');
+  assert.equal(applySpecs(card.params, { resolution: '512P' }, { $first: true }).resolution, '512P');
+  assert.equal(applySpecs(card.params, { resolution: '512P' }, { $first: true, $last: true }).resolution, '768P');
+  const m = mockFetch(videoRoutes('FL'));
+  try {
+    const last = { ...frame('LAST', 'image/jpeg'), role: 'last' };
+    const req = { ...reqOf(card, 'MiniMax-Hailuo-02', {}, { prompt: '花开', inputs: [frame(), last] }) };
+    req.params = applySpecs(card.params, { durationSeconds: 10 }, { $first: true, $last: true });
+    await minimaxAdapter.run(req, PROVIDER, ctxOf());
+    const b = m.calls[0].body;
+    assert.equal(b.first_frame_image, `data:image/png;base64,${Buffer.from('PNG').toString('base64')}`);
+    assert.equal(b.last_frame_image, `data:image/jpeg;base64,${Buffer.from('LAST').toString('base64')}`);
+    assert.equal(b.resolution, '768P');
+    assert.equal(b.duration, 10);
+    assert.equal('fast_pretreatment' in b, false);
+  } finally { m.restore(); }
+});
+
+test('尾帧只给 02；2.3 Fast 没首帧直接 400；首尾帧写成 512P 也拦下（都不发请求）', async () => {
+  const m = mockFetch([]);
+  const last = { ...frame(), role: 'last' };
+  try {
+    await assert.rejects(minimaxAdapter.run(reqOf(CARDS['MiniMax-Hailuo-2.3'], 'MiniMax-Hailuo-2.3', {}, { prompt: 'x', inputs: [frame(), last] }), PROVIDER, ctxOf()), (e) => e.status === 400 && /尾帧/.test(e.message));
+    const fast = CARDS['MiniMax-Hailuo-2.3-Fast'];
+    assert.deepEqual(fast.inputs.images.required, ['first']);
+    await assert.rejects(minimaxAdapter.run(reqOf(fast, 'MiniMax-Hailuo-2.3-Fast', {}, { prompt: '只有文字' }), PROVIDER, ctxOf()), (e) => e.status === 400 && /首帧/.test(e.message));
+    // 卡是通用卡（手填）时按模型 id 认
+    await assert.rejects(minimaxAdapter.run(reqOf(genericCard('minimax', 'video'), 'MiniMax-Hailuo-2.3-Fast', {}, { prompt: 'x' }), PROVIDER, ctxOf()), (e) => e.status === 400);
+    const r512 = reqOf(CARDS['MiniMax-Hailuo-02'], 'MiniMax-Hailuo-02', { extra: { resolution: '512P' } }, { prompt: 'x', inputs: [frame(), last] });
+    await assert.rejects(minimaxAdapter.run(r512, PROVIDER, ctxOf()), (e) => e.status === 400 && /512P/.test(e.message));
+    assert.equal(m.calls.length, 0);
+  } finally { m.restore(); }
+});
+
+test('配音新字段：声道、文本规范化、读公式、读音（按行拆）、声音效果（全 0 不发）、混音（voice_id 留空）', async () => {
+  const m = mockFetch([[(r) => r.url === `${BASE}/t2a_v2`, J({ data: { audio: hex('A'), status: 2 }, base_resp: OK })]]);
+  try {
+    const card = CARDS['speech-2.8-hd'];
+    await minimaxAdapter.run({ ...reqOf(card, 'speech-2.8-hd', {}, { prompt: '公式 $$x^2$$' }), params: norm(card, {
+      channel: 2, textNormalizationMode: 'quality', latexRead: true, pronunciation: '处理/(chu3)(li3)\n\n  危险/dangerous  ',
+      vmPitch: 20, vmIntensity: 0, vmTimbre: -10, soundEffects: 'robotic', languageBoost: 'Persian',
+    }) }, PROVIDER, ctxOf());
+    const b = m.calls[0].body;
+    assert.deepEqual(b.audio_setting, { format: 'mp3', sample_rate: 32000, bitrate: 128000, channel: 2 });
+    assert.equal(b.voice_setting.latex_read, true);
+    assert.equal(b.text_normalization_mode, 'quality');
+    assert.deepEqual(b.pronunciation_dict, { tone: ['处理/(chu3)(li3)', '危险/dangerous'] });
+    assert.deepEqual(b.voice_modify, { pitch: 20, timbre: -10, sound_effects: 'robotic' });
+    assert.equal(b.language_boost, 'Persian');
+    // 默认值：声音效果全 0、没选音效 → 不发；声道 1；混音时 voice_id 留空
+    await minimaxAdapter.run({ ...reqOf(card, 'speech-2.8-hd', {}, { prompt: 'x' }), params: norm(card, {
+      timbreWeights: JSON.stringify([{ voice_id: 'female-yujie', weight: 70 }, { voice_id: 'male-qn-badao', weight: 30 }]),
+    }) }, PROVIDER, ctxOf());
+    const b2 = m.calls[1].body;
+    assert.equal('voice_modify' in b2, false);
+    assert.equal(b2.audio_setting.channel, 1);
+    assert.equal(b2.voice_setting.voice_id, '');
+    assert.deepEqual(b2.timbre_weights, [{ voice_id: 'female-yujie', weight: 70 }, { voice_id: 'male-qn-badao', weight: 30 }]);
+    for (const k of ['text_normalization_mode', 'pronunciation_dict', 'language_boost']) assert.equal(k in b2, false, k);
+  } finally { m.restore(); }
+});
+
+test('配音卡：格式含 pcm / opus；PCM 时不给声道、wav 以外的格式不给声音效果；语种增强 41 个；音量下限 0.01；混音坏值 400', () => {
+  const card = CARDS['speech-2.6-hd'];
+  const spec = (k) => card.params.find((s) => s.key === k);
+  assert.deepEqual(spec('format').options.map((o) => o.value), ['mp3', 'wav', 'flac', 'opus', 'pcm']);
+  assert.equal(spec('languageBoost').options.length, 42);   // 「不指定」+ 41
+  assert.ok(spec('languageBoost').options.every((o) => o.value === '' || /[一-龥]/.test(o.label)));
+  assert.equal(spec('vol').min, 0.01);
+  assert.equal(norm(card, { format: 'pcm', channel: 2 }).channel, undefined);
+  assert.equal(norm(card, { format: 'opus', vmPitch: 10 }).vmPitch, undefined);
+  assert.equal(norm(card, { format: 'flac', vmPitch: 10 }).vmPitch, 10);
+  for (const v of ['{"voice_id":"a"}', '[{"voice_id":"a","weight":0}]', '[{"weight":5}]', JSON.stringify(Array.from({ length: 5 }, (_, i) => ({ voice_id: 'v' + i, weight: 10 })))]) {
+    assert.throws(() => norm(card, { timbreWeights: v }), (e) => e instanceof AdapterError && e.status === 400, v);
+  }
+});
+
+test('音乐：自动写词可关（关了又没歌词 → 400）；格式含 pcm；纯音乐没写提示词 → 400（都不发请求）', async () => {
+  const card = CARDS['music-3.0'];
+  assert.deepEqual(card.params.find((s) => s.key === 'format').options.map((o) => o.value), ['mp3', 'wav', 'pcm']);
+  const m = mockFetch([]);
+  try {
+    await assert.rejects(minimaxAdapter.run(reqOf(card, 'music-3.0', { lyricsOptimizer: false }, { prompt: '民谣' }), PROVIDER, ctxOf()), (e) => e.status === 400 && /歌词/.test(e.message));
+    await assert.rejects(minimaxAdapter.run(reqOf(card, 'music-3.0', { instrumental: true }, { prompt: '  ' }), PROVIDER, ctxOf()), (e) => e.status === 400 && /纯音乐/.test(e.message));
+    assert.equal(m.calls.length, 0);
+  } finally { m.restore(); }
+  const m2 = mockFetch([[(r) => r.url === `${BASE}/music_generation`, J({ data: { audio: hex('M'), status: 2 }, base_resp: OK })]]);
+  try {
+    // 写了歌词：不发 lyrics_optimizer（只在歌词留空时有意义）
+    await minimaxAdapter.run(reqOf(card, 'music-3.0', { lyrics: '[Verse]\n你好', format: 'pcm' }, { prompt: '民谣' }), PROVIDER, ctxOf());
+    assert.equal('lyrics_optimizer' in m2.calls[0].body, false);
+    assert.deepEqual(m2.calls[0].body.audio_setting, { format: 'pcm', sample_rate: 44100 });
+  } finally { m2.restore(); }
+});
+
 test('run：没 Key、不做的种类直接抛（不发请求）', async () => {
   const m = mockFetch([]);
   try {

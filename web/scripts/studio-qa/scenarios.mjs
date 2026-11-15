@@ -179,9 +179,9 @@ S({ id: 'v3-params-pop', title: '桌面收起参数坞后点「参数」：贴�
 S({ id: 'v3-picker', title: '模型选择器：样例目录（服务分组、聚合服务按厂商、新模型朱点、参数来源、搜索框）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); await __qa.v3('image', 'grok-imagine'); await __qa.click('.sd-page.on .cp-model'); await __qa.sleep(600);`, cleanup: V3_END });
 S({ id: 'v3-picker-search', title: '模型选择器搜「flux」（连备选一起搜）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); await __qa.v3('image'); await __qa.click('.sd-page.on .cp-model'); await __qa.sleep(500);
   const q = document.querySelector('.studio-root .mp-q input'); if (q) { q.value = 'flux'; q.dispatchEvent(new Event('input', { bubbles: true })); } await __qa.sleep(350);`, cleanup: V3_END });
-S({ id: 'v3-picker-video', title: '视频模型选择器（直连 + 聚合 + 通用卡 + 继承卡）', run: `await __qa.reset({ assets: __qa.history(), page: 'video' }); ${SIDE_CLOSE} await __qa.go('video'); await __qa.v3('video', 'omni-1.2'); await __qa.click('.sd-page.on .cp-model'); await __qa.sleep(600);`, cleanup: V3_END });
+S({ id: 'v3-picker-video', title: '视频模型选择器（直连 + 聚合 + 通用卡 + 继承卡）', run: `await __qa.reset({ assets: __qa.history(), page: 'video' }); ${SIDE_CLOSE} await __qa.go('video'); await __qa.v3('video', 'omni-1.3'); await __qa.click('.sd-page.on .cp-model'); await __qa.sleep(600);`, cleanup: V3_END });
 S({ id: 'v3-schema-image', title: 'OpenRouter schema 卡（14 项比例）参数', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); await __qa.v3('image', 'grok-imagine'); ${OPEN_PARAMS}`, cleanup: V3_END });
-S({ id: 'v3-family', title: '继承 + 精修卡（Omni 1.2：时长 3–15）', run: `await __qa.reset({ assets: __qa.history(), page: 'video' }); ${SIDE_CLOSE} await __qa.go('video'); await __qa.v3('video', 'omni-1.2'); ${OPEN_PARAMS}`, cleanup: V3_END });
+S({ id: 'v3-family', title: '继承 + 精修卡（样例里造的 Omni 1.3：沿用 1.2、时长 3–20）', run: `await __qa.reset({ assets: __qa.history(), page: 'video' }); ${SIDE_CLOSE} await __qa.go('video'); await __qa.v3('video', 'omni-1.3'); ${OPEN_PARAMS}`, cleanup: V3_END });
 S({ id: 'v3-seedance', title: 'Seedance 参考生视频：参考图 + 参考视频 + 参考音频素材', run: `await __qa.reset({ assets: __qa.history(), page: 'video' }); ${SIDE_CLOSE} await __qa.go('video'); await __qa.v3('video', 'seedance');
   const v = __qa.m.studio.assets.find((a) => a.kind === 'video');
   __qa.m.addInput('video', { role: 'ref', url: __qa.svg('r'), name: 'ref.png', kind: 'image', path: 'r.png' });
@@ -195,12 +195,27 @@ S({ id: 'v3-generic', title: '通用卡（只有原始参数）', run: `await __
 const SIZE_END = `__qa.restoreCatalog(); __qa.m.studio.drafts.image.params = {}; __qa.m.studio.drafts.image.inputs = [];`;
 const SIZE_EDIT = `await __qa.sleep(300); __qa.m.addInput('image', { role: 'edit', url: __qa.svg('原图', 1920, 1080), name: 'IMG_20261115_0930.jpg', kind: 'image', upload: 'x.jpg', w: 1920, h: 1080 }); await __qa.sleep(600);`;
 // 机器忙时参数面板偶尔没打开（点「参数」时布局还在因挂素材变化）：等不到尺寸行就再开一次
-const SIZE_MENU = `{ const q = '.studio-root .pl-r[data-param="size"] .pl-sel';
-  try { await __qa.until(() => __qa.find(q), 6000, q); } catch { ${OPEN_PARAMS} }
-  await __qa.click(q); await __qa.sleep(450); }`;
+const SIZE_ROW = `{ const q = '.studio-root .pl-r[data-param="size"] .pl-asp';
+  try { await __qa.until(() => __qa.find(q), 6000, q); } catch { ${OPEN_PARAMS} } }`;
+// 方案 §11：尺寸不再有菜单——比例形状 × 档位直接点（这里点 16:9，再点 2K）
+const SIZE_PICK = `${SIZE_ROW} { const row = __qa.find('.studio-root .pl-r[data-param="size"]');
+  [...row.querySelectorAll('.pl-ac')].find((b) => /16:9/.test(b.textContent))?.click(); await __qa.sleep(200);
+  [...row.querySelectorAll('.seg button')].find((b) => /2K/.test(b.textContent))?.click(); await __qa.sleep(350); }`;
 S({ id: 'size-flex', title: '自由尺寸模型的参数（尺寸 = 自动，没有比例）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex'); await __qa.sleep(300); ${OPEN_PARAMS}`, cleanup: SIZE_END });
-S({ id: 'size-menu', title: '尺寸菜单：自动 / 预设（行尾比例）/ 自定义', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex'); await __qa.sleep(300); ${OPEN_PARAMS} ${SIZE_MENU}`, cleanup: SIZE_END });
-S({ id: 'size-original-menu', title: '挂了改图素材：尺寸默认「原图」，菜单里有原图', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex'); ${SIZE_EDIT} ${OPEN_PARAMS} ${SIZE_MENU}`, cleanup: SIZE_END });
+S({ id: 'size-menu', title: '尺寸：点比例 16:9 × 2K（换算成 2048×1152，行上出「恢复默认」）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex'); await __qa.sleep(300); ${OPEN_PARAMS} ${SIZE_PICK}`, cleanup: SIZE_END });
+S({ id: 'size-original-menu', title: '挂了改图素材：尺寸默认「原图」（小块上写实际像素）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex'); ${SIZE_EDIT} ${OPEN_PARAMS} ${SIZE_ROW}`, cleanup: SIZE_END });
+// —— 方案 §11：参数一步到位 ——
+S({ id: 'p11-gif', title: '格式选 GIF：帧数 / 每帧时长跟着出现，透明背景不可选', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex'); __qa.m.studio.drafts.image.params = { outputFormat: 'gif', count: 3, quality: 'low' }; await __qa.sleep(300); ${OPEN_PARAMS} ${SCROLL_END}`, cleanup: SIZE_END });
+S({ id: 'p11-jpeg-end', title: '格式选 JPEG：压缩质量滑条 + 数字框；滚到底（全部恢复默认）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex', { width: 2048, height: 1152 }); Object.assign(__qa.m.studio.drafts.image.params, { outputFormat: 'jpeg', outputCompression: 80, moderation: 'low', complexity: 'medium' }); await __qa.sleep(300); ${OPEN_PARAMS} ${SCROLL_END}`, cleanup: SIZE_END });
+S({ id: 'p11-chips', title: '底行芯片：每个基本参数一枚（默认值也写）+ 「参数」上的改动数（桌面先收起参数坞）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} __qa.m.studio.side.dock = false; await __qa.go('image'); __qa.sizeModel('flex'); __qa.m.studio.drafts.image.params = { moderation: 'low', complexity: 'high' }; await __qa.sleep(400);`, cleanup: SIZE_END });
+S({ id: 'p11-chips-video', title: '视频底行芯片：开关芯片开着（点一下就切）', run: `await __qa.reset({ assets: __qa.history(), page: 'video' }); ${SIDE_CLOSE} __qa.m.studio.side.dock = false; await __qa.go('video'); __qa.m.studio.drafts.video.params = { generateAudio: true }; await __qa.sleep(400);`, cleanup: `__qa.m.studio.drafts.video.params = {};` });
+S({ id: 'p11-voice', title: '配音参数：风格候选词小块', run: `await __qa.reset({ assets: __qa.history(), page: 'voice' }); ${SIDE_CLOSE} await __qa.go('voice'); ${OPEN_PARAMS}` });
+S({ id: 'p11-multi', title: '一轮出 4 张：并排成格', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image');
+  const imgs = __qa.m.studio.assets.filter((a) => a.kind === 'image').slice(0, 4);
+  __qa.m.studio.views.image = { thread: 't-multi', turns: [{ jobId: null, prompt: '四张不同构图的雪山日出，一次出齐', state: 'done', assets: imgs, error: '', srcUrl: '' }] }; await __qa.sleep(500);`, cleanup: `__qa.m.studio.views.image = { thread: null, turns: [] };` });
+S({ id: 'p11-multi-6', title: '一轮出 6 张：桌面三列', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image');
+  const imgs = __qa.m.studio.assets.filter((a) => a.kind === 'image').slice(0, 6);
+  __qa.m.studio.views.image = { thread: 't-multi', turns: [{ jobId: null, prompt: '六张', state: 'done', assets: imgs, error: '', srcUrl: '' }] }; await __qa.sleep(500);`, cleanup: `__qa.m.studio.views.image = { thread: null, turns: [] };` });
 S({ id: 'size-custom', title: '自定义宽 × 高（合规）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex', { width: 2048, height: 1152 }); await __qa.sleep(300); ${OPEN_PARAMS}`, cleanup: SIZE_END });
 S({ id: 'size-custom-bad', title: '自定义宽 × 高不合规：两框描红 + 一行红字', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex', { width: 3999, height: 1001 }); await __qa.sleep(300); ${OPEN_PARAMS}`, cleanup: SIZE_END });
 S({ id: 'size-chips', title: '值芯片：自定义尺寸（桌面先收起参数坞）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} __qa.m.studio.side.dock = false; await __qa.go('image'); __qa.sizeModel('flex', { width: 3840, height: 2160 }); await __qa.sleep(400);`, cleanup: SIZE_END });

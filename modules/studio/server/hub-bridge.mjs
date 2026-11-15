@@ -386,4 +386,21 @@ export function setBuiltin(id, patch = {}) {
   return builtinView(getProvider(p.id, HOST_OWNER) || p);
 }
 
-export const hub = Object.freeze({ list, dialectFor, detect, upsert, adopt, release, remove, builtins, setBuiltin });
+/**
+ * 立即巡检一个内置媒体服务（模型中心 Vertex 卡的「检测」，2026-11-15）→ { ok, error?, added: [{ id, label, kind }], gone: [id], view }。
+ * 同设置页的「立即检查」：判过不可用的重探一次；新发现的进备选（关着），由用户在卡上打开。
+ */
+export async function syncBuiltin(id) {
+  const p = getProvider(String(id ?? ''), HOST_OWNER);
+  if (!p || !BUILTIN_DIALECTS.has(p.dialect) || isManaged(p)) throw bad('没有这个内置媒体服务', 404);
+  const st = await syncProvider(HOST_OWNER, p.id, { reason: 'manual' });
+  const fresh = getProvider(p.id, HOST_OWNER) || p;
+  const byId = new Map((fresh.models || []).map((m) => [m.id, m]));
+  return {
+    ok: !!st?.ok, ...(st?.error ? { error: st.error } : {}),
+    added: (st?.added || []).map((x) => byId.get(x)).filter(Boolean).map((m) => ({ id: m.id, label: m.label || m.id, kind: m.kind })),
+    gone: st?.gone || [], view: builtinView(fresh),
+  };
+}
+
+export const hub = Object.freeze({ list, dialectFor, detect, upsert, adopt, release, remove, builtins, setBuiltin, syncBuiltin });

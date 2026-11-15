@@ -20,7 +20,7 @@ import { getProvider, usableProviders, patchModels, touchProviders, providerSecr
 import { DIALECT_KINDS } from '../presets.mjs';
 import { getSyncState, setSyncState, putSchemas, getSchema, setReference, referenceStale } from './store.mjs';
 import { SOURCES, SCHEMA_DIALECTS, fetchModelSchema, fetchOpenRouterCatalog, fetchOpenRouterImageEndpoints, OPENROUTER_PUBLIC } from './sources.mjs';
-import { imagePriceHint } from './schema.mjs';
+import { imagePriceHint, imageEndpointInfo } from './schema.mjs';
 
 export const AGGREGATORS = new Set(['openrouter', 'replicate', 'fal']);
 export const STALE_MS = 6 * 3600_000;
@@ -139,20 +139,29 @@ const safeHost = (u) => { try { return new URL(u).hostname; } catch { return '';
 async function fillSchemas(owner, p, ctx, { fetchSchema, fetchEndpoints }) {
   const main = p.models.filter((m) => m.enabled && !m.shelf && !m.gone && m.source !== 'builtin');
   if (SCHEMA_DIALECTS.has(p.dialect)) {
-    const todo = main.slice(0, MAX_SCHEMA_FETCH);
+    // Replicate / fal 的内置模型也拉 schema（2026-11-15）：内置卡以它为主、schema 多出来的字段追加进去（cards/merge.mjs）
+    const todo = p.models.filter((m) => m.enabled && !m.shelf && !m.gone).slice(0, MAX_SCHEMA_FETCH);
     const got = {};
     await pool(todo, 3, async (m) => { const s = await fetchSchema(p, m, ctx); if (s) got[m.id] = s; });
     if (Object.keys(got).length) putSchemas(owner, p.id, got);
   }
   if (p.dialect === 'openrouter') {
-    const todo = main.filter((m) => m.kind === 'image' && getSchema(owner, p.id, m.id) && !getSchema(owner, p.id, m.id).priceHint).slice(0, MAX_PRICE_FETCH);
+    // endpoints 接口一次拿到单价与服务商透传参数（slug + allowed_passthrough_parameters）：缺哪个都补取
+    const todo = main.filter((m) => m.kind === 'image' && needEndpoints(getSchema(owner, p.id, m.id))).slice(0, MAX_PRICE_FETCH);
     const got = {};
     await pool(todo, 3, async (m) => {
-      const hint = imagePriceHint(await fetchEndpoints(p, m.id, ctx));
-      if (hint) got[m.id] = { ...getSchema(owner, p.id, m.id), priceHint: hint };
+      const e = withEndpoints(getSchema(owner, p.id, m.id), await fetchEndpoints(p, m.id, ctx));
+      if (e) got[m.id] = e;
     });
     if (Object.keys(got).length) putSchemas(owner, p.id, got);
   }
+}
+const needEndpoints = (s) => !!s && s.src === 'openrouter-image' && (!s.priceHint || !s.endpoints);
+// 缓存条目 + endpoints 数组 → 补上 priceHint / endpoints 的新条目；拿不到（null）回 null
+function withEndpoints(cur, eps) {
+  if (!cur || !Array.isArray(eps)) return null;
+  const hint = imagePriceHint(eps);
+  return { ...cur, ...(hint ? { priceHint: hint } : {}), endpoints: imageEndpointInfo(eps) };
 }
 async function pool(list, n, fn) {
   let i = 0;
@@ -165,10 +174,10 @@ export async function ensureSchema(owner, provider, entry) {
   const cur = getSchema(provider.owner || owner, provider.id, entry.id);
   const ctx = { secret: providerSecret(provider), dispatcher: isMemberOwner(provider.owner) ? publicDispatcher() : undefined, signal: AbortSignal.timeout(20_000) };
   if (provider.dialect === 'openrouter') {
-    if (!cur || cur.priceHint || entry.kind !== 'image') return false;
-    const hint = imagePriceHint(await fetchOpenRouterImageEndpoints(provider, entry.id, ctx));
-    if (hint) putSchemas(provider.owner, provider.id, { [entry.id]: { ...cur, priceHint: hint } });
-    return !!hint;
+    if (entry.kind !== 'image' || !needEndpoints(cur)) return false;
+    const e = withEndpoints(cur, await fetchOpenRouterImageEndpoints(provider, entry.id, ctx));
+    if (e) putSchemas(provider.owner, provider.id, { [entry.id]: e });
+    return !!e;
   }
   if (cur) return false;
   const s = await fetchModelSchema(provider, entry, ctx);

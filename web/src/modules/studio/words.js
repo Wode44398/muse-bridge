@@ -12,7 +12,7 @@ export function valueWords() {
   if (cache) return cache;
   cache = {
     '': t('默认'), default: t('默认'), auto: t('自动'), none: t('无'), off: t('关'), on: t('开'), true: t('开'), false: t('关'),
-    low: t('低'), medium: t('中'), mid: t('中'), high: t('高'), ultra: t('超高'), max: t('最高'), min: t('最低'),
+    low: t('低'), medium: t('中'), mid: t('中'), high: t('高'), xhigh: t('超高'), ultra: t('超高'), max: t('最高'), min: t('最低'),
     standard: t('标准'), hd: t('高清'), fast: t('快速'), balanced: t('均衡'), quality: t('质量优先'), speed: t('速度优先'),
     transparent: t('透明'), opaque: t('不透明'), portrait: t('竖屏'), landscape: t('横屏'), square: t('方形'), natural: t('自然'), vivid: t('鲜艳'),
     custom: t('自定义'), match_input_image: t('跟随原图'), match_input: t('跟随原图'),

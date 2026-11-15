@@ -123,6 +123,10 @@ export const CAPABILITIES = {
     //   modules/studio/server/adapters/omni.mjs）——Vertex 侧 preview id 配额为 0 必 429，dev API 是实测可用通道。
     //   旧款 gemini-omni-flash-preview 未上架：被 1.1 完全覆盖且不认分辨率参数（探针实测
     //   360p 请求照样出 720p），没有独立价值。
+    // - gemini-omni-1.2-flash（2026-11-05）：时长 3–15 秒、参考图最多 6 张（每个角色 ≤3 张、最多 2 个角色）；首尾帧插值只能 3–10 秒。
+    //   官方文档：2026-12-03 起发给 1.1 的请求自动转到 1.2、按 1.2 计费（aistudio.google.com/docs/omni）。
+    //   它**不进上面的 models 清单**：那张清单是 Claude 媒体工具 / 旧接口的白名单（VEO_MODELS），加进去会改变它们的行为；
+    //   Media Studio 的内置卡在 modules/studio/server/cards/google.mjs 里单独列它，下面各张按模型的表照样有它的一行。
     models: [
       { id: 'veo-3.1-fast-generate-001', name: '3.1 Fast' },
       { id: 'veo-3.1-generate-001', name: '3.1' },
@@ -149,13 +153,19 @@ export const CAPABILITIES = {
       'veo-3.1-fast-generate-001': [4, 6, 8],
       'veo-3.1-lite-generate-001': [4, 6, 8],
       'gemini-omni-1.1-flash': [3, 4, 5, 6, 7, 8, 9, 10],
+      'gemini-omni-1.2-flash': [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     },
+    // 首尾帧插值时长上限（Omni：给了首帧 + 尾帧只能 3–10 秒，超了 API 直接 invalid argument——aistudio.google.com/docs/omni §limitations）
+    interpMaxDur: { 'gemini-omni-1.1-flash': 10, 'gemini-omni-1.2-flash': 10 },
     // SDK docs say 720p/1080p only, but 4k is accepted on this project (verified).
     // 360p 仅 Omni（低价预览档）。
     resolutions: [{ id: '360p', name: '360p' }, { id: '720p', name: '720p' }, { id: '1080p', name: '1080p' }, { id: '4k', name: '4K' }],
     audio: [{ id: true, name: '带音频' }, { id: false, name: '无音频' }],
-    // 任务类型：**不是 API 字段**——两家都靠"喂进去什么素材"分流（Omni 的 response_format
-    // 只认 type/resolution/aspect_ratio/duration/delivery，探针逐个试过没有 task 键）。
+    // 任务类型：我们按「喂进去什么素材」定（adapters/google.mjs videoTask），不让用户选。
+    // 上游其实有显式字段（2026-11-15 查文档更正旧注释「不是 API 字段」）：Veo 是 parameters.task（textToVideo / imageToVideo /
+    // referenceToVideo / edit / extend / upscale，不给就按输入推断），Omni 是 generation_config.video_config.task（text_to_video /
+    // image_to_video / reference_to_video / edit / extend）——旧探针试的是 response_format 里，那里确实没有。Omni 的适配器在
+    // 首尾帧 / 参考图两种任务下显式带上 task（两张图分不清是首尾帧还是参考图）。
     // 摆出来是因为素材槽的含义随任务变，选错了要么白给钱要么报错：前端据此决定露哪几个槽、
     // 生成前校验必需素材，后端据此丢弃与任务无关的图（免得 Veo 收到尾帧却按 t2v 跑）。
     tasks: [
@@ -168,7 +178,9 @@ export const CAPABILITIES = {
       'veo-3.1-generate-001': ['t2v', 'i2v', 'interp', 'ref'],
       'veo-3.1-fast-generate-001': ['t2v', 'i2v', 'interp', 'ref'],
       'veo-3.1-lite-generate-001': ['t2v', 'i2v', 'interp'],   // 官方模型页：参考图 Not supported（2026-11-15 查）
-      'gemini-omni-1.1-flash': ['t2v', 'i2v'],
+      // Omni 两款都支持首尾帧插值（文档 + OpenRouter 目录 supported_frame_images 都列 first / last）；参考图文档只写了 1.2（最多 6 张）
+      'gemini-omni-1.1-flash': ['t2v', 'i2v', 'interp'],
+      'gemini-omni-1.2-flash': ['t2v', 'i2v', 'interp', 'ref'],
     },
     // 画质（Veo 专属，2026-08-29 探针实证：传 zzz 回「Invalid compression quality type」
     // ⇒ 该参数被真校验；枚举取 SDK VideoCompressionQuality）。Omni 无此旋钮。
@@ -183,17 +195,25 @@ export const CAPABILITIES = {
       'veo-3.1-fast-generate-001': ['720p', '1080p', '4k'],
       'veo-3.1-lite-generate-001': ['720p', '1080p', '4k'],
       'gemini-omni-1.1-flash': ['360p', '720p', '1080p', '4k'],
+      'gemini-omni-1.2-flash': ['360p', '720p', '1080p', '4k'],
     },
     // 图像输入能力（按模型）：首帧所有模型都支持(image-to-video)；veo-3.1 还支持
-    // 尾帧(首尾插值)+最多 3 张参考图(asset)；Omni 目前只接首帧（尾帧/参考图待其 API 开放）。
+    // 尾帧(首尾插值)+最多 3 张参考图(asset)；Omni 两款都接首尾帧，1.2 另收最多 6 张参考图（2026-11-15 按文档补上）。
     imgCaps: {
       'veo-3.1-generate-001': { last: true, ref: 3 },
       'veo-3.1-fast-generate-001': { last: true, ref: 3 },
       'veo-3.1-lite-generate-001': { last: true, ref: 0 },   // 官方模型页：参考图 Not supported（2026-11-15 查）
-      'gemini-omni-1.1-flash': { last: false, ref: 0 },
+      'gemini-omni-1.1-flash': { last: true, ref: 0 },
+      'gemini-omni-1.2-flash': { last: true, ref: 6 },
     },
     // 音频恒开的模型（Omni 原生带音轨，没有开关）——前端据此隐藏「生成音频」toggle。
-    audioFixed: ['gemini-omni-1.1-flash'],
+    audioFixed: ['gemini-omni-1.1-flash', 'gemini-omni-1.2-flash'],
+    // Veo 人物生成（parameters.personGeneration；Vertex 默认 allow_adult）。空串 = 不传。allow_all 各文档写法不一（allowAll / allow_all），
+    // 能不能用未证实，先不给（VideoGenerationModelParams 参考页 + 文生视频页，2026-11-15 查）。
+    personGen: [{ id: '', name: '默认' }, { id: 'allow_adult', name: '仅成人' }, { id: 'dont_allow', name: '不生成人物' }],
+    // 首帧图与画面比例不一致时怎么适配（parameters.resizeMode，只对图生视频有效；Vertex 默认 pad）。值用 SDK 枚举（PAD / CROP）——
+    // REST 文档写小写 pad / crop，SDK 原样透传，大小写哪个被认待真打。
+    resizeModes: [{ id: '', name: '默认' }, { id: 'PAD', name: '补边' }, { id: 'CROP', name: '裁切' }],
   },
   image: {
     // 全 Nano Banana（Gemini 原生图像，多轮续改、最高 4K），走 generateContent on 'global'。
@@ -248,7 +268,36 @@ export const CAPABILITIES = {
       { id: 'ALLOW_ADULT', name: '仅成人' }, { id: 'ALLOW_NONE', name: '不生成人物' },
     ],
     // Image-gen thinking: only minimal/high (NOT the full 4-level chat scale).
+    // 这张表是 Claude 媒体工具（thinking 参数的白名单）与 agent 手册在用，别改；模型卡按型号的档位见下面 thinkLevelsBy。
     thinkLevels: [{ id: 'minimal', name: 'Minimal' }, { id: 'high', name: 'High' }],
+    // 模型卡用的按型号思考档（aistudio.google.com/docs/image-generation §thinking-levels，2026-11-15 查）：
+    // 2.1 = minimal / medium / high（默认 medium）；3.1 Flash、Lite = minimal / high（默认 minimal）；Pro 恒思考不可调、2.5 不思考。
+    thinkLevelsBy: {
+      'gemini-nano-banana-2.1': ['minimal', 'medium', 'high'],
+      'gemini-3.1-flash-image': ['minimal', 'high'],
+      'gemini-3.1-flash-lite-image': ['minimal', 'high'],
+    },
+    thinkLevelNames: { minimal: '最少', medium: '中', high: '高' },
+    // 模型卡用的超宽 / 超长比例（4:1 / 1:4 / 8:1 / 1:8）放行表。上面 aspects 里的 `only`（只 2.1）是 Claude 媒体工具与旧接口在用，
+    // 别改（工具默认模型就是 3.1 Flash，改了会让它传的 4:1 从「按自动处理」变成真出超宽图）。文档：2.1 与 3.1 Flash 两条通道都支持；
+    // Lite 页面自相矛盾（说 14 种却只列 10 种）、Pro 只有 Vertex 页列了，都没放行（未证实）。
+    wideAspectModels: ['gemini-nano-banana-2.1', 'gemini-3.1-flash-image'],
+    // 模型卡用的尺寸档：比 sizeSupport 多一个 512（只 3.1 Flash，两条通道的文档都列了；写作 '512'，不带 K）。
+    // sizeSupport / sizes 是 Claude 媒体工具在用的（IMAGE_SIZES 白名单与 imgSizeClamp），别往里加。
+    cardSizeSupport: { 'gemini-3.1-flash-image': ['512', '1K', '2K', '4K'] },
+    // 参考图张数（改图 + 参考图合计）：2.1 / 3.1 Flash / Pro / Lite 都是 14，2.5 是 3（各模型页 Maximum images per prompt）。
+    refMax: { 'gemini-2.5-flash-image': 3 },
+    refMaxDefault: 14,
+    // Vertex 上支持人物生成（imageConfig.personGeneration / prominentPeople）的模型：2.5 的 Vertex 模型页写 Person generation: Not supported。
+    personGenSupport: ['gemini-3-pro-image', 'gemini-nano-banana-2.1', 'gemini-3.1-flash-image', 'gemini-3.1-flash-lite-image'],
+    // 不收 generationConfig.seed 的模型：Vertex 的 2.1 模型页写「seed / topK / logprobs / temperature / topP 不支持，传了报错」。
+    // （temperature / topP 线上一直 200，先不动；seed 按文档不给。）其余型号是通用字段，对出图有没有效果未证实。
+    noSeed: ['gemini-nano-banana-2.1'],
+    // 输出格式（只 Vertex：imageConfig.imageOutputOptions.mimeType / compressionQuality，SDK 写法 outputMimeType / outputCompressionQuality；
+    // dev API 不认，SDK 在客户端直接抛错）。取值域文档没写，按 SDK 注释「compression quality 只对 image/jpeg」给 PNG / JPEG + 0–100。
+    outputMimes: [{ id: '', name: '默认' }, { id: 'image/png', name: 'PNG' }, { id: 'image/jpeg', name: 'JPEG' }],
+    // 名人（只 Vertex：imageConfig.prominentPeople；和 personGeneration 同给时以后者为准；不给 = 允许）
+    prominentPeople: [{ id: '', name: '默认' }, { id: 'ALLOW_PROMINENT_PEOPLE', name: '允许' }, { id: 'BLOCK_PROMINENT_PEOPLE', name: '不生成' }],
     defaults: { model: 'gemini-3-pro-image' },
     // Per-model advanced caps — VERIFIED ON VERTEX 2026-08-27 (Vertex ≠ AI Studio docs).
     //   3-pro-image:            thinking NO (400), web search YES, image search NO (400), 1K/2K/4K
@@ -280,6 +329,29 @@ export const CAPABILITIES = {
       { id: 'gemini-2.5-flash-tts', name: 'Flash TTS' },
       { id: 'gemini-3.1-flash-tts-preview', name: '3.1 Flash TTS' },
       { id: 'gemini-2.5-pro-tts', name: 'Pro TTS' },
+      // 3.8 两款（2026-11 GA）：text 只当逐字稿，风格与说话人改走 parts[].speechMetadata（写在正文前面会被念出来）；
+      // 非流式默认直接回带 RIFF 头的 WAV（3.1 / 2.5 回裸 PCM）。aistudio.google.com/docs/speech-generation、Vertex TTS 总览页。
+      { id: 'gemini-3.8-flash-tts', name: '3.8 Flash TTS' },
+      { id: 'gemini-3.8-flash-lite-tts', name: '3.8 Flash-Lite TTS' },
+    ],
+    // 走 speechMetadata 新写法的型号：id 以这个前缀开头（继承来的 3.8.x 也算；判断见 ttsMetaStyle）
+    metaStylePrefix: 'gemini-3.8-',
+    // gemini 方言（Gemini Developer API）上同一模型的 id：2.5 两款在 dev API 上带 -preview（fixtures/gemini-models.json）
+    devIds: { 'gemini-2.5-flash-tts': 'gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-tts': 'gemini-2.5-pro-preview-tts' },
+    // speechConfig.languageCode 的合法值（Gemini API GenerationConfig 参考页列的 30 个，2026-11-15 查）。'' = 自动判断（不传）。
+    // 旧探针说它「连 zz-ZZ 都收、看不出效果」；Cloud TTS 文档拿它控口音（en-in），效果待真打。
+    languages: [
+      { id: '', name: '自动' },
+      { id: 'cmn-CN', name: '普通话' }, { id: 'en-US', name: '英语（美国）' }, { id: 'en-GB', name: '英语（英国）' },
+      { id: 'en-AU', name: '英语（澳大利亚）' }, { id: 'en-IN', name: '英语（印度）' }, { id: 'ja-JP', name: '日语' },
+      { id: 'ko-KR', name: '韩语' }, { id: 'fr-FR', name: '法语（法国）' }, { id: 'fr-CA', name: '法语（加拿大）' },
+      { id: 'de-DE', name: '德语' }, { id: 'es-ES', name: '西班牙语（西班牙）' }, { id: 'es-US', name: '西班牙语（美国）' },
+      { id: 'pt-BR', name: '葡萄牙语（巴西）' }, { id: 'it-IT', name: '意大利语' }, { id: 'ru-RU', name: '俄语' },
+      { id: 'ar-XA', name: '阿拉伯语' }, { id: 'hi-IN', name: '印地语' }, { id: 'bn-IN', name: '孟加拉语' },
+      { id: 'gu-IN', name: '古吉拉特语' }, { id: 'kn-IN', name: '卡纳达语' }, { id: 'ml-IN', name: '马拉雅拉姆语' },
+      { id: 'mr-IN', name: '马拉地语' }, { id: 'ta-IN', name: '泰米尔语' }, { id: 'te-IN', name: '泰卢固语' },
+      { id: 'id-ID', name: '印尼语' }, { id: 'nl-NL', name: '荷兰语' }, { id: 'pl-PL', name: '波兰语' },
+      { id: 'th-TH', name: '泰语' }, { id: 'tr-TR', name: '土耳其语' }, { id: 'vi-VN', name: '越南语' },
     ],
     // 全部 30 个官方预置音色——2026-08-29 在 gemini-3.1-flash-tts-preview 上逐个真打，
     // 30/30 返回 200（2.5 两款只是撞了每分钟配额 429，不是拒绝，故三款共用同一张表）。
@@ -301,9 +373,9 @@ export const CAPABILITIES = {
     // 2026-08-29 真打 200（3.1-flash-tts / 2.5-pro-tts；2.5-flash 那次是配额 429）。
     // 文本里用「名字：台词」分行，名字要和这里的 speaker 名对上。
     maxSpeakers: 2,
-    // 风格指令：Gemini TTS 靠自然语言控风格（官方就是这么用的），我们把它拼在正文前面
-    // 送进同一个 prompt。**注意**：speechConfig.languageCode 探针过——连 'zz-ZZ' 都收 200，
-    // 即完全不校验、也看不出效果，属于"设了等于没设"，故不做成设置项（语言靠文本自动判定）。
+    // 风格指令：Gemini TTS 靠自然语言控风格（官方就是这么用的）。2.5 / 3.1 我们把它拼在正文前面送进同一个 prompt；
+    // 3.8 起 text 只当逐字稿（前缀会被念出来），风格改放 speechMetadata.style（见 metaStylePrefix）。
+    // speechConfig.languageCode：旧探针说连 'zz-ZZ' 都收 200、看不出效果；2026-11-15 起照文档做成可选项（上面 languages，默认自动不传）。
     styles: [
       { id: '', name: '默认' }, { id: '用轻松愉快的语气说：', name: '轻松' }, { id: '用沉稳严肃的语气说：', name: '严肃' },
       { id: '用温柔平缓的语气说：', name: '温柔' }, { id: '用激动兴奋的语气说：', name: '激动' },
@@ -329,6 +401,12 @@ export const CAPABILITIES = {
     // 只收英文提示词的模型（studio 模型卡 inputs.promptLang；前端据此换英文灵感、拦下中文输入）：lyria-002 中文直接 400
     // 「Unsupported language detected… supported languages: en」（2026-11-04 真打）。值是语言代码或代码数组。
     promptLang: { 'lyria-002': 'en' },
+    // lyria-002 一次最多几条（Vertex 模型页 Maximum number of clips per prompt: 4；parameters.sample_count，和 instances[].seed 互斥）
+    maxCount: { 'lyria-002': 4 },
+    // 能选输出格式的（generationConfig.responseFormat.audio.mimeType = AUDIO_WAV；文档只写了 3.5 能出 WAV，默认 MP3）
+    wavSupport: ['lyria-3.5'],
+    // 收图片当灵感的（文档：3.5 最多 10 张；Clip / Pro 的模型页也写 Text and Image，没接——未证实张数）
+    imageMax: { 'lyria-3.5': 10 },
     defaults: { model: 'lyria-002' },
   },
   codex: {
@@ -422,6 +500,10 @@ export const veoTaskOk = (model, task) => veoTaskSupport(model).includes(task);
 const VEO_ONLY = new Set(CAPABILITIES.veo.veoOnly);
 export const veoOnlyParams = (model) => VEO_ONLY.has(model);
 export const VEO_QUALITIES = idSet(CAPABILITIES.veo.qualities);
+export const VEO_PERSON_GEN = new Set(CAPABILITIES.veo.personGen.map((x) => x.id).filter(Boolean));
+export const VEO_RESIZE_MODES = new Set(CAPABILITIES.veo.resizeModes.map((x) => x.id).filter(Boolean));
+// 首尾帧插值的时长上限（没有 = 不限）
+export const veoInterpMaxDur = (model) => CAPABILITIES.veo.interpMaxDur[model];
 
 export const IMAGE_MODELS = idSet(CAPABILITIES.image.models);
 export const IMAGE_MODEL_DEFAULT = CAPABILITIES.image.defaults.model;
@@ -446,16 +528,45 @@ export const imgSizeClamp = (model, size) => {
   return sup.includes(size) ? size : sup[sup.length - 1];
 };
 
+// —— 模型卡专用（Claude 媒体工具不用这几张：它们的取值域比工具的宽，见 image 块里的注释）——
+export const IMG_CARD_SIZES = new Set(['512', ...CAPABILITIES.image.sizes.map((x) => x.id)]);
+export const imgCardSizes = (model) => CAPABILITIES.image.cardSizeSupport[model] || CAPABILITIES.image.sizeSupport[model] || ['1K', '2K', '4K'];
+// 模型卡的尺寸夹紧：512 只给收它的型号，别的型号收到 512 落到它最小的一档（不能像工具那样落到最大档——4K 贵得多）；其余同 imgSizeClamp
+export const imgCardSizeClamp = (model, size) => {
+  if (!size || !IMG_CARD_SIZES.has(size)) return undefined;
+  const sup = imgCardSizes(model);
+  if (size === '512') return sup.includes('512') ? '512' : sup[0];
+  return imgSizeClamp(model, size);
+};
+const IMG_WIDE = new Set(CAPABILITIES.image.wideAspectModels);
+const IMG_WIDE_ASPECTS = new Set(CAPABILITIES.image.aspects.filter((a) => a.only).map((a) => a.id));
+export const imgCardAspectOk = (model, aspect) => IMAGE_ASPECTS.has(aspect) && (!IMG_WIDE_ASPECTS.has(aspect) || IMG_WIDE.has(model));
+export const imgCardAspectFor = (model, aspect) => (imgCardAspectOk(model, aspect) ? aspect : 'auto');
+export const imgThinkLevelsFor = (model) => CAPABILITIES.image.thinkLevelsBy[model] || (IMG_THINK_SUPPORT.has(model) ? ids(CAPABILITIES.image.thinkLevels) : []);
+export const imgRefMax = (model) => CAPABILITIES.image.refMax[model] ?? CAPABILITIES.image.refMaxDefault;
+const IMG_PERSON_OK = new Set(CAPABILITIES.image.personGenSupport);
+export const imgPersonGenOk = (model) => IMG_PERSON_OK.has(model);
+const IMG_NO_SEED = new Set(CAPABILITIES.image.noSeed);
+export const imgSeedOk = (model) => !IMG_NO_SEED.has(model);
+export const IMG_OUTPUT_MIMES = new Set(CAPABILITIES.image.outputMimes.map((x) => x.id).filter(Boolean));
+export const IMG_PROMINENT = new Set(CAPABILITIES.image.prominentPeople.map((x) => x.id).filter(Boolean));
+
 export const TTS_MODELS = idSet(CAPABILITIES.tts.models);
 export const TTS_MODEL_DEFAULT = CAPABILITIES.tts.defaults.model;
 export const TTS_VOICES = idSet(CAPABILITIES.tts.voices);
 export const TTS_VOICE_DEFAULT = CAPABILITIES.tts.defaults.voice;
 export const TTS_MAX_SPEAKERS = CAPABILITIES.tts.maxSpeakers;
+// 3.8 起风格 / 说话人走 speechMetadata（text 只当逐字稿）
+export const ttsMetaStyle = (model) => String(model || '').startsWith(CAPABILITIES.tts.metaStylePrefix);
+export const TTS_LANGUAGES = new Set(CAPABILITIES.tts.languages.map((x) => x.id).filter(Boolean));
 
 export const MUSIC_MODELS = idSet(CAPABILITIES.music.models);
 export const MUSIC_MODEL_DEFAULT = CAPABILITIES.music.defaults.model;
 const MUSIC_NEG = new Set(CAPABILITIES.music.negSupport);
 export const musicNegSupport = (model) => MUSIC_NEG.has(model);
+export const musicMaxCount = (model) => CAPABILITIES.music.maxCount[model] || 1;
+export const musicWavOk = (model) => CAPABILITIES.music.wavSupport.includes(model);
+export const musicImageMax = (model) => CAPABILITIES.music.imageMax[model] || 0;
 
 // Codex: model + model-specific effort validation for the ChatGPT picker.
 export const CODEX_MODELS = idSet(CAPABILITIES.codex.models);

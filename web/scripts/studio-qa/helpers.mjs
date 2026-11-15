@@ -110,6 +110,7 @@ window.__qa = {
     document.querySelectorAll('.sst-layer').forEach(() => {});
     studio.drawer = false;
     studio.notice = '';
+    studio.advOpen = false;   // 「更多」展开过会记住（方案 §11）：每个状态从收起开始
     studio.jobs = [];
     for (const p of ['image', 'video', 'voice', 'music']) {
       studio.drafts[p] = { model: '', params: {}, inputs: [], parent: null, negative: '' };
@@ -208,9 +209,16 @@ window.__qa = {
     ] : [
       { key: 'size', label: '尺寸', type: 'size', group: 'basic', format: 'size', default: 'auto', editDefault: 'original', custom: FLEX, encode: 'x',
         options: [{ value: 'auto', label: '自动' }, { value: 'original', label: '原图', only: { $edit: true } }, px(1024, 1024, '1:1'), px(1536, 1024, '3:2'), px(1024, 1536, '2:3'), px(2048, 2048, '1:1'), px(2048, 1152, '16:9'), px(1152, 2048, '9:16'), px(3840, 2160, '16:9'), px(2160, 3840, '9:16')] },
-      { key: 'quality', label: '画质', type: 'enum', group: 'basic', default: 'auto', options: ['auto', 'low', 'medium', 'high'].map((v) => ({ value: v, label: v })) },
-      { key: 'count', label: '张数', type: 'number', group: 'basic', format: 'count', min: 1, max: 4, step: 1, default: 1 },
-      { key: 'background', label: '背景', type: 'enum', group: 'advanced', default: 'auto', options: ['auto', 'opaque', 'transparent'].map((v) => ({ value: v, label: v })) },
+      // 方案 §11：GPT Image 2.6 该有的全套（张数 1–10、格式含 gif、gif 帧数 / 帧时长、压缩率、背景、审核、构图规划）
+      { key: 'quality', label: '画质', type: 'enum', group: 'basic', default: 'high', options: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'].map((v) => ({ value: v, label: v })) },
+      { key: 'count', label: '张数', type: 'number', group: 'basic', format: 'count', min: 1, max: 10, step: 1, integer: true, default: 1 },
+      { key: 'outputFormat', label: '格式', type: 'enum', group: 'basic', default: 'png', options: [{ value: 'png', label: 'PNG' }, { value: 'jpeg', label: 'JPEG' }, { value: 'webp', label: 'WebP' }, { value: 'gif', label: 'GIF' }] },
+      { key: 'outputCompression', label: '压缩质量', type: 'number', group: 'advanced', min: 0, max: 100, step: 1, integer: true, unit: '%', default: 100, when: { outputFormat: ['jpeg', 'webp'] } },
+      { key: 'frameCount', label: '帧数', type: 'number', group: 'advanced', min: 2, max: 16, step: 1, integer: true, default: 9, when: { outputFormat: 'gif' } },
+      { key: 'frameDurationMs', label: '每帧时长', type: 'number', group: 'advanced', min: 20, max: 2000, step: 10, integer: true, unit: 'ms', default: 200, when: { outputFormat: 'gif' } },
+      { key: 'background', label: '背景', type: 'enum', group: 'advanced', default: 'auto', options: [{ value: 'auto', label: '自动' }, { value: 'opaque', label: '不透明' }, { value: 'transparent', label: '透明', only: { outputFormat: ['png', 'webp'] } }] },
+      { key: 'moderation', label: '审核', type: 'enum', group: 'advanced', default: 'auto', options: [{ value: 'auto', label: '自动' }, { value: 'low', label: '宽松' }] },
+      { key: 'complexity', label: '规划强度', type: 'enum', group: 'advanced', default: '', options: [{ value: '', label: '默认' }, { value: 'low', label: '低' }, { value: 'medium', label: '中' }, { value: 'high', label: '高' }] },
       { key: 'extra', label: '额外参数', type: 'json', group: 'advanced' },
     ];
     const c = this.m.studio.catalog;

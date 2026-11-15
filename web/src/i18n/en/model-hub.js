@@ -80,6 +80,19 @@ export default {
   '别的 Vertex 型号 ID，回车添加': 'Another Vertex model ID, press Enter to add',
   '型号 ID': 'Model ID',
   '没保存上': 'Couldn’t save',
+  // 检测（2026-11-15）：拉 Vertex 目录、零成本探活，新发现的列进来不自动勾
+  '检测': 'Detect',
+  '检测失败': 'Detection failed',
+  '新': 'New',
+  '预览版': 'Preview',
+  '调不通': 'Unreachable',
+  '没有新模型': 'No new models',
+  '，': ', ',
+  '新发现 {n} 个对话模型': { one: 'Found {n} new chat model', other: 'Found {n} new chat models' },
+  '新发现 {n} 个媒体模型': { one: '{n} new media model', other: '{n} new media models' },
+  '对话模型：{e}': 'Chat models: {e}',
+  '媒体模型：{e}': 'Media models: {e}',
+  '上次检测 {t}': 'Last detected {t}',
 
   // —— 老配置统一并进模型中心（2026-11-13）：首页待交接的行、Vertex 的媒体模型、本机图像模型卡（HubBuiltin / BuiltinModels）——
   '待交给模型中心': 'Not in Model Hub yet',

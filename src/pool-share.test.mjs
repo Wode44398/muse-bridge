@@ -94,6 +94,21 @@ test('媒体：成员没开放就拦；开放后按每天次数限；视频单�
   assert.equal(quota.admitUsage(ctxOf('mona', { actor: 'admin' }), 'video'), null, '管理员代操作不拦不记');
 });
 
+test('媒体按张数计：一次要 n 张就记 n 次；剩的不够这次用就整单拦（不记），说清还剩几次', async () => {
+  await users.createUser('nina', 'password123', 'user');
+  policy.setPolicy({ member: { media: true, video: true }, quota: { dayMedia: 5, dayVideo: 1 } });
+  const nina = ctxOf('nina');
+  assert.equal(quota.admitUsage(nina, 'media', 3), null);
+  assert.equal(quota.quotaState('nina').today.media, 3);
+  const b = quota.admitUsage(nina, 'media', 3);
+  assert.equal(b.title, '今天的额度不够这次用');
+  assert.match(b.message, /这次要用 3 次，今天还剩 2 次/);
+  assert.equal(quota.quotaState('nina').today.media, 3, '拦下的不记');
+  assert.equal(quota.admitUsage(nina, 'media', 2), null);
+  assert.equal(quota.admitUsage(nina, 'media').title, '今天的额度用完了', '不给 n 照旧按 1 次');
+  assert.equal(quota.admitUsage(nina, 'media', 0).title, '今天的额度用完了', '坏的 n 当 1');
+});
+
 test('服务账号不吃默认额度，单独设了才算；已下线的 dayAssist 老键读时忽略、不再拦', () => {
   policy.setPolicy({ quota: { dayAssist: 1, dayTurns: 1 } });
   assert.deepEqual(policy.getPolicy().quota, { dayTurns: 1 });

@@ -90,7 +90,8 @@ test('OpenRouter 图像描述 → 参数：键即请求字段、比例 / 分辨�
   assert.deepEqual(b.inputs.images, { max: 4, roles: ['edit', 'ref'] });
   // GPT Image 2.6：有 auto 就默认 auto；画质、背景、格式、压缩率（%）都在
   const g = schema.fromOpenRouterImage(orImage('openai/gpt-image-2.6-flare'));
-  assert.deepEqual(keys(g.params), ['aspect_ratio', 'quality', 'n', 'background', 'output_format', 'output_compression', 'extra']);
+  // 2026-11-15：格式排到背景前（透明选项按格式收窄）；目录里有 gif → 补帧数 / 每帧时长
+  assert.deepEqual(keys(g.params), ['aspect_ratio', 'quality', 'n', 'output_format', 'output_compression', 'frame_count', 'frame_duration_ms', 'background', 'extra']);
   assert.equal(spec(g.params, 'aspect_ratio').default, 'auto');
   assert.equal(spec(g.params, 'output_compression').unit, '%');
   assert.equal(spec(g.params, 'quality').options.find((o) => o.value === 'xhigh').label, '超高');
@@ -148,7 +149,8 @@ test('fal 视频 schema：首尾帧 → inputs 角色、负面提示词 → inpu
   assert.equal(kb.wire.negative, 'negative_prompt');
   const dur = spec(kb.params, 'duration');
   assert.deepEqual([dur.format, dur.default, dur.options.find((o) => o.value === '12').label], ['duration', '5', '12 秒']);
-  assert.ok(spec(kb.params, 'extra').desc.includes('elements'), '复杂字段收进原始参数的说明');
+  // 2026-11-15：对象数组（elements / multi_prompt）不再丢进「原始参数」说明，做成 json 数组参数（见下面「参数补全」的测试）
+  assert.deepEqual([spec(kb.params, 'elements').type, spec(kb.params, 'elements').array], ['json', true]);
   const sd = sources.falSchemaOf(fx('fal-seedance-2.5-reference.json').models[0]);
   const sb = schema.fromJsonSchema('video', sd.input, sd.defs);
   assert.deepEqual(sb.inputs.video, { max: 10 });
@@ -203,9 +205,10 @@ test('同族继承：按去掉版本号的族名找最近的内置卡', () => {
   assert.equal(family.versionOf('lyria-002'), 2);
   assert.equal(family.versionOf('veo-3.1-fast-generate-001'), 3.1);
   const pick = (id, kind, dialect) => family.pickParent(id, googleCandidates(kind), { dialect })?.id;
-  assert.equal(pick('gemini-omni-1.2-flash', 'video', 'gemini'), 'gemini-omni-1.1-flash');
-  assert.equal(pick('gemini-3.8-flash-tts', 'speech', 'gemini'), 'gemini-3.1-flash-tts-preview');
-  assert.equal(pick('gemini-3.8-flash-lite-tts', 'speech', 'vertex'), 'gemini-3.1-flash-tts-preview');
+  // 方案 §11：Omni 1.2、3.8 Flash TTS / Lite TTS 已经是内置卡；继承留给它们之后才出来的型号
+  assert.equal(pick('gemini-omni-1.3-flash', 'video', 'gemini'), 'gemini-omni-1.2-flash');
+  assert.equal(pick('gemini-4.0-flash-tts', 'speech', 'gemini'), 'gemini-3.8-flash-tts');
+  assert.equal(pick('gemini-4.0-flash-lite-tts', 'speech', 'vertex'), 'gemini-3.8-flash-lite-tts');
   assert.equal(pick('gemini-2.5-flash-preview-tts', 'speech', 'gemini'), 'gemini-2.5-flash-tts');
   assert.equal(pick('veo-3.2-fast-generate-001', 'video', 'vertex'), 'veo-3.1-fast-generate-001');
   assert.equal(pick('lyria-4', 'music', 'gemini'), 'lyria-3.5');
@@ -216,36 +219,51 @@ const gem = P.createProvider({ preset: 'gemini', dialect: 'gemini', name: 'Gemin
   models: [{ id: 'gemini-omni-1.1-flash', kind: 'video', source: 'builtin' }, { id: 'gemini-nano-banana-2.1', kind: 'image', source: 'builtin' }] }, 'admin');
 const gp = () => P.getProvider(gem.id, 'admin');
 
-test('Omni 1.2：继承 1.1 的卡 + 参照库精修，时长 3–15、规范化按新取值域夹；没参照库时就是 1.1 的取值域', () => {
-  const entry = { id: 'gemini-omni-1.2-flash', label: 'Gemini Omni 1.2 Flash', kind: 'video', enabled: true, source: 'remote' };
+test('Omni 1.2 是内置卡（时长 3–15、首尾帧 + 6 张参考图）；它之后的型号继承它 + 参照库精修，没参照库时就是 1.2 的取值域', () => {
+  // 方案 §11：1.2 进了内置卡（2026-11-06 时还靠继承 1.1 + 精修）
+  const c12 = cardFor(gp(), { id: 'gemini-omni-1.2-flash', label: 'Gemini Omni 1.2 Flash', kind: 'video', enabled: true, source: 'remote' });
+  assert.deepEqual([c12.paramSource, c12.inheritsFrom, c12.refinedBy], [undefined, undefined, undefined]);
+  assert.deepEqual(values(spec(c12.params, 'durationSeconds')), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+  assert.deepEqual(c12.inputs.images, { max: 6, roles: ['first', 'last', 'ref'] });
+  assert.deepEqual(c12.normalize({ durationSeconds: 12, resolution: '360p' }), { aspectRatio: 'auto', resolution: '360p', durationSeconds: 12, generateAudio: false });
+  assert.equal(c12.normalize({ durationSeconds: 40 }).durationSeconds, 15);
+  assert.equal(c12.normalize({ durationSeconds: 1 }).durationSeconds, 3);
+  assert.equal(c12.normalize({ durationSeconds: 14 }, { $last: true }).durationSeconds, 10, '首尾帧插值最长 10 秒');
+  // 继承 + 精修：拿一个还不存在的 1.3 来测（参照库里给它一份放宽到 20 秒的取值域）
+  const entry = { id: 'gemini-omni-1.3-flash', label: 'Gemini Omni 1.3 Flash', kind: 'video', enabled: true, source: 'remote' };
   store.setReference({ images: [], videos: [] }, { persist: false });
   const plain = cardFor(gp(), entry);
-  assert.deepEqual([plain.paramSource, plain.inheritsFrom, plain.refinedBy], ['family', 'gemini-omni-1.1-flash', undefined]);
-  assert.deepEqual(values(spec(plain.params, 'durationSeconds')), [3, 4, 5, 6, 7, 8, 9, 10]);
-  store.setReference({ images: OR_IMAGES, videos: OR_VIDEOS }, { persist: false });
+  assert.deepEqual([plain.paramSource, plain.inheritsFrom, plain.refinedBy], ['family', 'gemini-omni-1.2-flash', undefined]);
+  assert.deepEqual(values(spec(plain.params, 'durationSeconds')), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+  const ref12 = OR_VIDEOS.find((m) => m.id === 'google/gemini-omni-1.2-flash');
+  store.setReference({ images: OR_IMAGES, videos: [...OR_VIDEOS, { ...ref12, id: 'google/gemini-omni-1.3-flash', supported_durations: Array.from({ length: 18 }, (_, i) => i + 3) }] }, { persist: false });
   const c = cardFor(gp(), entry);
-  assert.deepEqual([c.paramSource, c.inheritsFrom, c.refinedBy, c.label, c.desc], ['family', 'gemini-omni-1.1-flash', 'openrouter', 'Gemini Omni 1.2 Flash', undefined]);
-  assert.deepEqual(values(spec(c.params, 'durationSeconds')), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+  assert.deepEqual([c.paramSource, c.inheritsFrom, c.refinedBy, c.label, c.desc], ['family', 'gemini-omni-1.2-flash', 'openrouter', 'Gemini Omni 1.3 Flash', undefined]);
+  assert.deepEqual(values(spec(c.params, 'durationSeconds')), Array.from({ length: 18 }, (_, i) => i + 3));
   assert.deepEqual(values(spec(c.params, 'resolution')), ['360p', '720p', '1080p', '4k'], '沿用卡上的写法（4k）');
   assert.deepEqual(values(spec(c.params, 'aspectRatio')), ['auto', '16:9', '9:16']);
-  assert.deepEqual(c.inputs.images.roles, ['first'], '尾帧：驱动没接，参照库说收也不加');
-  assert.deepEqual(c.normalize({ durationSeconds: 12, resolution: '360p' }), { aspectRatio: 'auto', resolution: '360p', durationSeconds: 12, generateAudio: false });
-  assert.equal(c.normalize({ durationSeconds: 40 }).durationSeconds, 15);
+  assert.deepEqual(c.normalize({ durationSeconds: 18, resolution: '360p' }), { aspectRatio: 'auto', resolution: '360p', durationSeconds: 18, generateAudio: false });
+  assert.equal(c.normalize({ durationSeconds: 40 }).durationSeconds, 20);
   assert.equal(c.normalize({ durationSeconds: 1 }).durationSeconds, 3);
+  store.setReference({ images: OR_IMAGES, videos: OR_VIDEOS }, { persist: false });
   // 父卡一字不变
-  const parent = googleCard('gemini', 'gemini-omni-1.1-flash');
-  assert.deepEqual(values(spec(parent.params, 'durationSeconds')), [3, 4, 5, 6, 7, 8, 9, 10]);
-  assert.equal(parent.normalize({ durationSeconds: 12 }).durationSeconds, 10);
-  assert.equal(cardFor(gp(), { id: 'gemini-omni-1.1-flash', kind: 'video' }), parent, '内置卡照旧是同一张');
+  assert.deepEqual(values(spec(c12.params, 'durationSeconds')), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+  const o11 = googleCard('gemini', 'gemini-omni-1.1-flash');
+  assert.deepEqual(values(spec(o11.params, 'durationSeconds')), [3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.equal(o11.normalize({ durationSeconds: 12 }).durationSeconds, 10);
+  assert.equal(cardFor(gp(), { id: 'gemini-omni-1.1-flash', kind: 'video' }), o11, '内置卡照旧是同一张');
 });
 
-test('gemini 方言认 Vertex 清单里的 Nano Banana / TTS（内置卡，不带人物生成）；3.8 Flash TTS 走继承', () => {
+test('gemini 方言认 Vertex 清单里的 Nano Banana / TTS（内置卡，不带人物生成）；3.8 Flash TTS 是内置卡，再往后的走继承', () => {
   const pro = cardFor(gp(), { id: 'gemini-3-pro-image', kind: 'image' });
   assert.equal(catalogMod.resolvedModel(gp(), { id: 'gemini-3-pro-image', kind: 'image' }).paramSource, 'card');
   assert.equal(spec(pro.params, 'personGeneration'), undefined);
   assert.ok(spec(cardFor({ dialect: 'vertex', id: 'p-ffffff01', models: [] }, { id: 'gemini-3-pro-image', kind: 'image' }).params, 'personGeneration'), 'vertex 方言照旧有');
-  const tts = cardFor(gp(), { id: 'gemini-3.8-flash-tts', label: 'Gemini 3.8 Flash TTS', kind: 'speech' });
-  assert.deepEqual([tts.paramSource, tts.inheritsFrom], ['family', 'gemini-3.1-flash-tts-preview']);
+  const t38 = cardFor(gp(), { id: 'gemini-3.8-flash-tts', label: 'Gemini 3.8 Flash TTS', kind: 'speech' });
+  assert.deepEqual([t38.paramSource, t38.inheritsFrom], [undefined, undefined]);
+  assert.deepEqual(t38.normalize({ voice: 'Puck' }), { voice: 'Puck', style: '' });
+  const tts = cardFor(gp(), { id: 'gemini-4.0-flash-tts', label: 'Gemini 4.0 Flash TTS', kind: 'speech' });
+  assert.deepEqual([tts.paramSource, tts.inheritsFrom], ['family', 'gemini-3.8-flash-tts']);
   assert.equal(spec(tts.params, 'voice').options.length, 30);
   assert.deepEqual(tts.normalize({ voice: 'Puck' }), { voice: 'Puck', style: '' });
 });
@@ -294,8 +312,10 @@ test('聚合服务：第一次巡检建底（全进备选）、之后新出现�
   const gpt = g.models.find((m) => m.id === 'openai/gpt-image-2.6-sunburst');
   assert.deepEqual([gpt.paramSource, gpt.vendor, gpt.isNew], ['card', 'openai', undefined]);
   // 自由尺寸（方案 §10）：一个 size（自动 / 原图 / 预设 / 自定义宽高），不再有比例
-  assert.deepEqual(gpt.params.map((s) => [s.key, s.type, s.default]), [['size', 'size', 'auto'], ['quality', 'enum', 'high']]);
-  assert.deepEqual(gpt.params.map((s) => s.format), ['size', undefined], '内置卡只补渲染提示');
+  // 2026-11-15 参数补全：张数 / 格式（目录里 2.6 有 gif → 帧数与每帧时长）/ 压缩 / 背景 / 审核 / 构图规划
+  assert.deepEqual(gpt.params.map((s) => [s.key, s.type, s.default]), [['size', 'size', 'auto'], ['quality', 'enum', 'high'], ['count', 'number', 1], ['outputFormat', 'enum', 'png'],
+    ['outputCompression', 'number', 100], ['frameCount', 'number', 9], ['frameDurationMs', 'number', 200], ['background', 'enum', 'auto'], ['moderation', 'enum', 'auto'], ['complexity', 'enum', ''], ['extra', 'json', undefined]]);
+  assert.deepEqual(gpt.params.slice(0, 3).map((s) => s.format), ['size', undefined, 'count'], '内置卡只补渲染提示');
   assert.equal(gpt.params[0].editDefault, 'original');
   const vg = cat.kinds.video.groups.find((x) => x.provider.id === or.id);
   assert.equal(vg.models.length, 0);
@@ -321,9 +341,9 @@ test('直连服务：发现的媒体模型直接启用（不进备选）；上�
   assert.equal(p.models.find((m) => m.id === 'gemini-omni-1.1-flash').source, 'builtin');
   const cat = catalogMod.catalog('admin');
   const m = cat.kinds.video.groups.find((x) => x.provider.id === gem.id).models.find((x) => x.id === 'gemini-omni-1.2-flash');
-  assert.deepEqual([m.paramSource, m.inheritsFrom, m.refinedBy, m.isNew], ['family', 'gemini-omni-1.1-flash', 'openrouter', true]);
+  assert.deepEqual([m.paramSource, m.inheritsFrom, m.refinedBy, m.isNew], ['card', undefined, undefined, true]);   // 1.2 / 3.8 TTS 已是内置卡（方案 §11）
   const sp = cat.kinds.speech.groups.find((x) => x.provider.id === gem.id);
-  assert.ok(sp.models.some((x) => x.id === 'gemini-3.8-flash-tts' && x.paramSource === 'family'));
+  assert.ok(sp.models.some((x) => x.id === 'gemini-3.8-flash-tts' && x.paramSource === 'card'));
   const before = JSON.stringify(gp().models);
   const bad = await disc.syncProvider('admin', gem.id, { sources: { gemini: async () => { throw new Error('Gemini API 401：API Key 无效'); } }, ...noFetch });
   assert.deepEqual([bad.ok, bad.error], [false, 'Gemini API 401：API Key 无效']);
@@ -419,4 +439,19 @@ test('标签与渲染提示：对照表 → title → 可读键名；内置卡�
   const same = { key: 'temperature', type: 'number', min: 0, max: 2 };
   assert.equal(decorateSpec(same), same, '没有可补的就原样返回');
   assert.deepEqual(applySpecs([spec(schema.fromOpenRouterVideo(orVideo('google/veo-3.1-lite')).params, 'duration')], { durationSeconds: 7 }), { duration: 6 }, '通用名 durationSeconds 搬到 duration，取最近档');
+});
+
+test('巡检补 schema（2026-11-15）：fal / Replicate 的内置模型也拉 schema（内置卡与 schema 合并要用）；备选、下架、关掉的照旧不拉', async () => {
+  const fal = P.createProvider({ preset: 'fal', dialect: 'fal', name: 'fal 补 schema', baseUrl: 'https://queue.fal.run', apiKey: 'fal-test-not-real', models: [
+    { id: 'fal-ai/flux/dev', kind: 'image', source: 'builtin' },
+    { id: 'acme/manual-x', kind: 'image', source: 'manual' },
+    { id: 'acme/off-x', kind: 'image', source: 'manual', enabled: false },
+  ] }, 'admin');
+  const asked = [];
+  const s = sources.falSchemaOf(fx('fal-flux-dev.json').models[0]);
+  const fetchSchema = async (p, m) => { asked.push(m.id); return { src: 'jsonschema', kind: m.kind, data: { input: s.input, defs: s.defs } }; };
+  const st = await disc.syncProvider('admin', fal.id, { sources: { fal: async () => ({ models: [], complete: false }) }, fetchSchema, fetchEndpoints: async () => null });
+  assert.equal(st.ok, true);
+  assert.deepEqual(asked.sort(), ['acme/manual-x', 'fal-ai/flux/dev']);
+  assert.equal(store.getSchema('admin', fal.id, 'fal-ai/flux/dev')?.src, 'jsonschema');
 });

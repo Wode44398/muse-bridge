@@ -21,7 +21,11 @@ const disc = await import('./index.mjs');
 const { catalog, resolvedModel } = await import('../catalog.mjs');
 
 const OR_IMAGES = fx('openrouter-images-models.json').data, OR_VIDEOS = fx('openrouter-videos-models.json').data;
-store.setReference({ images: OR_IMAGES, videos: OR_VIDEOS }, { persist: false });
+// 方案 §11 起 Omni 1.2 / 3.8 TTS 都是内置卡：样例里另造一个还不存在的 Omni 1.3（Gemini 目录 + 参照库各加一条，时长放宽到 20 秒），
+// 留着「继承 + 参照库精修」这种卡给前端看（参数来源行「沿用 X」）
+const REF12 = OR_VIDEOS.find((m) => m.id === 'google/gemini-omni-1.2-flash');
+const OR_VIDEOS_REF = [...OR_VIDEOS, { ...REF12, id: 'google/gemini-omni-1.3-flash', name: 'Google: Gemini Omni 1.3 Flash', supported_durations: Array.from({ length: 18 }, (_, i) => i + 3) }];
+store.setReference({ images: OR_IMAGES, videos: OR_VIDEOS_REF }, { persist: false });
 const noFetch = { fetchSchema: async () => null, fetchEndpoints: async () => null };
 
 // Vertex（导入来的内置模型）+ Gemini API（巡检出 Omni 1.2 / 3.8 TTS 等）+ OpenRouter（建底后又出现 krea/k3-edit）+ fal（主列表里三个带 schema 的）
@@ -30,7 +34,7 @@ P.createProvider({ preset: 'vertex', dialect: 'vertex', name: 'Google Vertex AI'
 ] }, 'admin');
 const gem = P.createProvider({ preset: 'gemini', dialect: 'gemini', name: 'Gemini API', baseUrl: 'https://generativelanguage.googleapis.com', apiKey: 'sample',
   models: [{ id: 'gemini-nano-banana-2.1', kind: 'image', source: 'builtin' }, { id: 'gemini-omni-1.1-flash', kind: 'video', source: 'builtin' }, { id: 'lyria-3.5', kind: 'music', source: 'builtin' }] }, 'admin');
-await disc.syncProvider('admin', gem.id, { sources: { gemini: async () => ({ models: sources.parseGeminiModels(fx('gemini-models.json').models), complete: true }) }, ...noFetch });
+await disc.syncProvider('admin', gem.id, { sources: { gemini: async () => ({ models: sources.parseGeminiModels([...fx('gemini-models.json').models, { ...fx('gemini-models.json').models.find((m) => m.name === 'models/gemini-omni-1.2-flash'), name: 'models/gemini-omni-1.3-flash', displayName: 'Gemini Omni 1.3 Flash', description: 'Gemini Omni 1.3 Flash' }]), complete: true }) }, ...noFetch });
 
 const or = P.createProvider({ preset: 'openrouter', dialect: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sample',
   models: [{ id: 'openai/gpt-image-2.6-sunburst', kind: 'image', source: 'builtin', label: 'GPT Image 2.6 Sunburst' }] }, 'admin');

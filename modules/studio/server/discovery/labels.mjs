@@ -28,7 +28,27 @@ export const LABELS = Object.freeze({
   shot_type: '镜头类型', draft: '草稿', go_fast: '快速模式', lora_scale: 'LoRA 强度', raw: '原始模式', mode: '模式', task: '任务',
   apply_text_normalization: '文本规范化', timestamps: '时间戳', upscale_factor: '放大倍数', creativity: '创意度',
   person_generation: '人物生成', thinking_level: '思考', instructions: '说明', lyrics: '歌词', genre: '曲风', bpm: '节拍',
+  // 2026-11-15 参数补全：嵌套对象拍平后的子字段（voice_setting.voice_id 按子字段名查）、对象数组、常见开关
+  channel: '声道', english_normalization: '英文规范化', language_boost: '语种增强', intensity: '力度', timbre: '质感', enabled: '启用',
+  target_loudness: '目标响度', target_peak: '峰值上限', target_range: '响度范围',
+  voice_setting: '音色设置', audio_setting: '音频设置', voice_modify: '声音调整', normalization_setting: '响度均衡', pronunciation_dict: '发音词典',
+  multi_prompt: '分镜', elements: '主体', loras: 'LoRA', camera_control: '运镜控制', acceleration: '加速',
+  include_thoughts: '思考摘要', max_output_tokens: '最大输出', system_prompt: '系统提示词', limit_generations: '只出一张',
+  enable_image_search: '图片搜索', enable_web_search: '联网搜索', google_search: '联网搜索', image_search: '图片搜索',
+  previous_text: '前文', next_text: '后文', subtitle_enable: '字幕', pdf_url: 'PDF', history: '历史对话', context: '上下文',
+  // 同名子字段撞标签时按「父.子」单列（MiniMax 的 voice_modify.pitch 和 voice_setting.pitch 都叫音调）
+  'voice_modify.pitch': '明暗', 'normalization_setting.enabled': '响度均衡',
 });
+
+// 某些键的枚举值另有叫法（声道 1 / 2）
+const KEY_VALUE_LABELS = {
+  channel: { 1: '单声道', 2: '立体声', mono: '单声道', stereo: '立体声' },
+};
+/** 这个键的枚举值标签表（没有回 undefined）；点路径键按最后一段查。 */
+export function keyValueLabels(key) {
+  const k = normKey(key);
+  return KEY_VALUE_LABELS[k] || KEY_VALUE_LABELS[k.split('.').pop()];
+}
 
 // 枚举值 → 中文（只收语义明确的通用值；比例 / 分辨率这类本身就是标签）
 const VALUE_LABELS = {
@@ -37,6 +57,8 @@ const VALUE_LABELS = {
   transparent: '透明', opaque: '不透明',
   square_hd: '方形 · 高清', square: '方形', portrait_4_3: '竖版 4:3', portrait_16_9: '竖版 16:9', landscape_4_3: '横版 4:3', landscape_16_9: '横版 16:9',
   intelligent: '智能', customize: '自定义',
+  minimal: '最少', regular: '常规', mono: '单声道', stereo: '立体声',
+  happy: '开心', sad: '悲伤', angry: '愤怒', fearful: '害怕', disgusted: '厌恶', surprised: '惊讶', neutral: '平静', calm: '沉稳',
 };
 
 /** 键名 → 统一形态（驼峰、连字符都折成小写下划线）。 */
@@ -48,13 +70,14 @@ export function readableKey(k) {
   return s ? s[0].toUpperCase() + s.slice(1) : String(k || '');
 }
 
-/** 参数标签：对照表 → schema title → 可读键名。 */
+/** 参数标签：对照表 → schema title → 可读键名。点路径键（嵌套对象拍平的 voice_setting.voice_id）先查整键，再按最后一段查。 */
 export function labelFor(key, title) {
-  const hit = LABELS[normKey(key)];
+  const nk = normKey(key);
+  const hit = LABELS[nk] || (nk.includes('.') ? LABELS[nk.split('.').pop()] : undefined);
   if (hit) return hit;
   const t = String(title || '').trim();
   if (t && t.length <= 40) return t;
-  return readableKey(key);
+  return readableKey(nk.includes('.') ? nk.split('.').pop() : key);
 }
 
 export function valueLabel(v, format) {

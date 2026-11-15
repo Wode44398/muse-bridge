@@ -13,7 +13,7 @@
 // 关键事实：
 //  · 图像：POST {base}/images/generations（JSON）；有参考图（或续改链上一张）时 POST {base}/images/edits（multipart，文档 curl 例子用 image[]）。
 //    结果 data[].b64_json。GPT 图像模型只回 b64_json、不认 response_format；dall-e 系列可回 b64_json 或 url（两种都接）。
-//    尺寸：GPT 图像模型三档 1024x1024 / 1536x1024 / 1024x1536（另有 auto）。gpt-image-2、gpt-image-2.5-sunburst / -flare（含 2026-09-08 快照）
+//    尺寸：GPT 图像模型三档 1024x1024 / 1536x1024 / 1024x1536（另有 auto）。gpt-image-2、gpt-image-2.5 / 2.6 sunburst / flare（含日期快照）
 //    可自定义 WIDTHxHEIGHT：两边都是 16 的倍数，长宽比 1:3–3:1，上限 3840x2160，超过 2560x1440 属实验性。
 //    透明背景：background=transparent 只认 png / webp 输出；gpt-image-2 的透明背景是预览功能（文档写明）。
 //  · 配音：POST {base}/audio/speech（JSON），响应就是音频字节（文档只写 application/octet-stream，所以 mime 按 response_format 定）。
@@ -25,16 +25,21 @@
 //      这里不收视频卡（手填 id 走通用卡）；kinds 仍含 video，与 presets.mjs 的 DIALECT_KINDS 一致。
 //  · 下线 / 弃用（决定收不收卡）：gpt-image-1 于 2026-10-23 下线，不收；dall-e-2 / dall-e-3 于 2026-05-12 下线，不收
 //    （run 里保留它们的尺寸映射，只为兼容服务）；gpt-image-1.5 / gpt-image-1-mini 2026-12-01 下线，不收（手填走通用卡）；
-//    tts-1 / tts-1-hd / gpt-4o-mini-tts 2027-01-06 下线，收卡，说明里标弃用。
+//    tts-1 / tts-1-hd / gpt-4o-mini-tts 2027-01-06 下线，收卡，说明里标弃用；gpt-image-2 已弃用（2027-02-10 下线），收卡，说明里标弃用。
 //  · 文档未写明，这里的处理：
 //    - 音频 mime：文档只给格式名。opus 按 Ogg/Opus 处理（audio/ogg）；pcm 按文档说的 24kHz 16 位有符号小端、无文件头处理，meta 带采样率。
 //    - 视频 content 的 Content-Type 文档未写，固定按 video/mp4。
 //    - 图像 edits 文档里 image[] 与 image 两种写法都出现，统一用 image[]（文档 curl 例子即如此）。
 //    - tts-1 / tts-1-hd 文档只说「九个音色」、没列名单：音色不做限制，不认的由服务方 400 原话回报。
 //    - chatgpt-image-latest 的尺寸与画质文档未写：按固定三档处理。
-//    - gpt-image-2.6-sunburst / -flare：指南与模型页提到（images 端点标 Supported，无弃用标记），但 API 参考的 model 枚举里没有它们。
-//      2026-11-05 经 OpenRouter 真打 2.6 Sunburst：自定义 WxH 照收、约束同 2.5（16 倍数、≤3840、最低 655360 像素），所以收卡按自由尺寸处理；
-//      画质只给通用四档（xhigh / max 文档只写了 2.5）。
+//    - gpt-image-2.6-sunburst / -flare：2026-11-15 起已在 API 参考的 model 枚举里；自由尺寸约束同 2.5（FLEX_RULE）。
+//  · 生成参数（2026-11-15 查证，generations 与 edits 共用）：n 1–10（svg 必须 1）；quality low/medium/high/auto，2.5 与 2.6 另有 xhigh / max
+//    （gpt-image-2 没有）；background auto/opaque/transparent（transparent 只认 png / webp）；output_format png/webp/jpeg，2.6 另有 gif、svg；
+//    output_compression 0–100 只对 jpeg / webp；moderation auto/low（所有模型）；complexity low/medium/high（只 2.6，不传按 high）；
+//    gif 专属 frame_count 2–16（默认 9）、frame_duration_ms 20–2000（默认 200，取整到 10）。
+//    gif：两个端点都行，data[i].b64_json 解码就是整个 GIF；size 是每帧尺寸。svg：只走 generations、n=1、不收 output_compression、
+//    不能当编辑输入，b64_json 解码是 UTF-8 的 SVG 文本。
+//  · 配音另有快照 gpt-4o-mini-tts-2025-12-15；voice 也可以是自定义音色对象 { id: 'voice_…' }（这里 voice_ 开头的字符串自动包成对象）。
 //  · 尺寸（2026-11-15，方案 §10）：自由尺寸的模型卡不再有「比例」，只有一个 size 参数——自动 / 原图（有「改这张图」时默认）/ 常用预设 /
 //    自定义宽高；约束按 2026-11-15 指南：两边 16 的倍数、长宽比 1:3–3:1、边长 ≤3840、总像素 655,360–8,294,400（>2560x1440 属实验）。
 //    「原图」= 主改图素材（或续改链上一张）的像素按约束适配后的 WxH（文档的 auto 只是「模型自选」，不跟原图，所以要显式发 size）。
@@ -57,7 +62,7 @@ const SIZE_FLEX = { '1:1': '1024x1024', '16:9': '1536x864', '4:3': '1280x960', '
 const SIZE_DALLE3 = { '1:1': '1024x1024', '16:9': '1792x1024', '4:3': '1792x1024', '3:2': '1792x1024', '9:16': '1024x1792', '3:4': '1024x1792', '2:3': '1024x1792' };
 const FLEX_MODEL = /^gpt-image-2(\.[56]-(sunburst|flare))?(-\d{4}-\d{2}-\d{2})?$/;   // gpt-image-2 与 2.5 / 2.6 sunburst / flare（含日期快照）
 const VIDEO_SIZE = { '16:9': '1280x720', '9:16': '720x1280' };   // 取文档可选值里的这两个；auto / 没给：不传，服务端默认 720x1280
-const IMAGE_MIME = { png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp' };
+export const IMAGE_MIME = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', svg: 'image/svg+xml' };
 const AUDIO_MIME = { mp3: 'audio/mpeg', opus: 'audio/ogg', aac: 'audio/aac', flac: 'audio/flac', wav: 'audio/wav', pcm: 'audio/L16' };
 
 const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== ''));
@@ -112,17 +117,25 @@ async function runImage(req, provider, ctx) {
   const p = req.params || {};
   const refs = refsOf(req);
   const sz = requestSize(req);
+  const fmt = p.outputFormat;
+  if (fmt === 'svg' && refs.length) throw new AdapterError('SVG 只能文生图：有参考图（或在续改）时换成 PNG / WebP / JPEG', { status: 400 });
   const fields = mergeBody(clean({
     model: req.model,
     prompt: req.prompt,
-    n: p.count,
+    n: fmt === 'svg' ? 1 : p.count,
     size: sz.size,
     quality: p.quality,
     background: p.background,
-    output_format: p.outputFormat,
-    output_compression: p.outputCompression,
+    output_format: fmt,
+    output_compression: fmt === 'jpeg' || fmt === 'webp' ? p.outputCompression : undefined,   // 只对 jpeg / webp（文档）
+    frame_count: fmt === 'gif' ? p.frameCount : undefined,
+    frame_duration_ms: fmt === 'gif' ? p.frameDurationMs : undefined,
+    moderation: p.moderation && p.moderation !== 'auto' ? p.moderation : undefined,   // 默认 auto：不传（兼容服务未必认这个字段）
+    complexity: p.complexity || undefined,
     response_format: isDalle(req.model) ? 'b64_json' : undefined,   // GPT 图像模型不认这个字段（文档），只回 b64_json
   }), provider, p);
+  // svg：n 必须 1、不收 output_compression（extra / 服务级额外请求体也不许改回去）
+  if (fields.output_format === 'svg') { fields.n = 1; delete fields.output_compression; }
   const common = { headers: authHeaders(provider, key), timeoutMs: timeoutOf(provider), signal: ctx.signal, dispatcher: ctx.dispatcher, label: who(provider) };
   let j;
   if (refs.length) {
@@ -134,11 +147,11 @@ async function runImage(req, provider, ctx) {
     j = await http(joinUrl(base, 'images/generations'), { ...common, method: 'POST', body: fields });
   }
   // 结果：b64_json 直接解码；url 另外下载（不带 Key：那是服务方给的公网链接，不该把 Key 发出去）
-  const fmt = j?.output_format || fields.output_format || 'png';
+  const outFmt = j?.output_format || fields.output_format || 'png';
   const assets = [];
   for (const it of Array.isArray(j?.data) ? j.data : []) {
     const meta = clean({ size: j.size, revisedPrompt: it?.revised_prompt, ...(sz.meta || {}) });
-    if (it?.b64_json) assets.push({ bytes: Buffer.from(it.b64_json, 'base64'), mime: IMAGE_MIME[fmt] || 'image/png', meta });
+    if (it?.b64_json) assets.push({ bytes: Buffer.from(it.b64_json, 'base64'), mime: IMAGE_MIME[outFmt] || 'image/png', meta });
     else if (it?.url) {
       const d = await download(it.url, { timeoutMs: timeoutOf(provider), signal: ctx.signal, dispatcher: ctx.dispatcher, label: '下载结果图' });
       assets.push({ bytes: d.bytes, mime: d.mime, meta });
@@ -154,10 +167,12 @@ async function runSpeech(req, provider, ctx) {
   const base = needBase(provider);
   const p = req.params || {};
   const fmt = p.format || 'mp3';
+  const voice = p.voice || DEFAULT_VOICE;
   const body = mergeBody(clean({
     model: req.model,
     input: req.prompt,
-    voice: p.voice || DEFAULT_VOICE,
+    // 自定义音色（voice_ 开头的 id）要发成对象 { id }（文档）；内置音色照旧是名字
+    voice: typeof voice === 'string' && /^voice_[\w-]+$/.test(voice.trim()) ? { id: voice.trim() } : voice,
     response_format: fmt,
     speed: p.speed,
     instructions: p.instructions,
@@ -217,9 +232,38 @@ async function runVideo(req, provider, ctx) {
 // —— 模型卡：只收官方文档里当前还能用的常见模型（下线的见文件头）；其它 id 手填，走通用卡 ——
 const ASPECT_OPTS = [{ value: 'auto', label: '自动' }, ...['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'].map((v) => ({ value: v, label: v }))];
 const Q_GPT = [{ value: 'auto', label: '自动' }, { value: 'low', label: '低' }, { value: 'medium', label: '中' }, { value: 'high', label: '高' }];
-const Q_25 = [...Q_GPT, { value: 'xhigh', label: 'xhigh' }, { value: 'max', label: 'max' }];   // 文档：xhigh / max 只 2.5 sunburst / flare 有
-const BG_OPTS = [{ value: 'auto', label: '自动' }, { value: 'opaque', label: '不透明' }, { value: 'transparent', label: '透明' }];
-const IMG_FMT_OPTS = [{ value: 'png', label: 'PNG' }, { value: 'jpeg', label: 'JPEG' }, { value: 'webp', label: 'WebP' }];
+export const Q_XHIGH = [{ value: 'xhigh', label: '超高' }, { value: 'max', label: '最高' }];
+const Q_25 = [...Q_GPT, ...Q_XHIGH];   // 文档：xhigh / max 只 2.5 / 2.6 有，gpt-image-2 没有
+// 透明背景只认 png / webp 输出（文档）
+export const BG_TRANSPARENT = { value: 'transparent', label: '透明', only: { outputFormat: ['png', 'webp'] } };
+const BG_OPTS = [{ value: 'auto', label: '自动' }, { value: 'opaque', label: '不透明' }, BG_TRANSPARENT];
+export const FMT_LABEL = { png: 'PNG', jpeg: 'JPEG', webp: 'WebP', gif: 'GIF', svg: 'SVG' };
+const fmtOpt = (v) => ({ value: v, label: FMT_LABEL[v] || String(v).toUpperCase() });
+const GPT26_FORMATS = ['png', 'jpeg', 'webp', 'gif', 'svg'];   // 2.6 另有 gif、svg（文档）
+// svg 只走 generations：有改图对象 / 参考图（会走 edits）时不可选
+export const SVG_ONLY = Object.freeze({ $edit: false, $ref: false });
+export const MODERATION_OPTS = [{ value: 'auto', label: '自动' }, { value: 'low', label: '宽松' }];
+export const COMPLEXITY_OPTS = [{ value: '', label: '默认' }, { value: 'low', label: '低' }, { value: 'medium', label: '中' }, { value: 'high', label: '高' }];
+
+/**
+ * GPT Image 的格式与动图参数（OpenAI 兼容与 OpenRouter 的内置卡共用，键名一致，方便跨服务复用参数）：
+ * 回 { format, compression, frameCount, frameDurationMs }。formats = 可选格式（svg 自动带 SVG_ONLY 条件）。
+ */
+export function gptFormatSpecs(formats) {
+  const options = formats.map((v) => (v === 'svg' ? { ...fmtOpt(v), only: SVG_ONLY } : fmtOpt(v)));
+  const lossy = formats.filter((v) => v === 'jpeg' || v === 'webp');
+  return {
+    format: P.enum('outputFormat', '格式', options, { default: formats.includes('png') ? 'png' : formats[0] }),
+    compression: lossy.length ? P.num('outputCompression', '压缩质量', 0, 100, { step: 1, integer: true, unit: '%', default: 100, when: { outputFormat: lossy } }) : null,
+    frameCount: formats.includes('gif') ? P.num('frameCount', '帧数', 2, 16, { step: 1, integer: true, default: 9, when: { outputFormat: 'gif' } }) : null,
+    frameDurationMs: formats.includes('gif') ? P.num('frameDurationMs', '每帧时长', 20, 2000, { step: 10, integer: true, unit: 'ms', default: 200, when: { outputFormat: 'gif' } }) : null,
+  };
+}
+/** 每帧时长取整到 10 ms（上游同样取整；先取整，界面回显与实际一致）。就地改，回同一个对象。 */
+export function roundFrameMs(out) {
+  if (typeof out?.frameDurationMs === 'number') out.frameDurationMs = Math.min(2000, Math.max(20, Math.round(out.frameDurationMs / 10) * 10));
+  return out;
+}
 const AUDIO_FMT_OPTS = [{ value: 'mp3', label: 'MP3' }, { value: 'opus', label: 'Opus' }, { value: 'aac', label: 'AAC' }, { value: 'flac', label: 'FLAC' }, { value: 'wav', label: 'WAV' }, { value: 'pcm', label: 'PCM（裸数据，24kHz）' }];
 
 // 自由尺寸（方案 §10）：两边 16 的倍数、长宽比 1:3–3:1、边长 ≤3840、总像素 655,360–8,294,400（2026-11-15 指南）
@@ -244,22 +288,27 @@ function legacySize(raw) {
   return s ? { ...raw, size: s } : raw;
 }
 
-function imageCard(model, label, desc, quality, { flex = false } = {}) {
+// 参数顺序：基本组 尺寸 / 画质 / 张数 / 格式；高级组成对的挨着（压缩质量跟格式、帧数与每帧时长、背景、审核、构图规划）
+function imageCard(model, label, desc, quality, { flex = false, formats = ['png', 'jpeg', 'webp'], complexity = false } = {}) {
+  const f = gptFormatSpecs(formats);
   const params = [
     ...(flex ? [flexSizeSpec()] : [P.enum('aspectRatio', '比例', ASPECT_OPTS, { default: 'auto' })]),
     P.enum('quality', '画质', quality, { default: 'auto' }),
-    P.num('count', '张数', 1, 4, { step: 1, integer: true, default: 1, group: 'basic' }),
+    // svg 只能出一张：选了 svg 就不给张数（不传 = 1）
+    P.num('count', '张数', 1, 10, { step: 1, integer: true, default: 1, group: 'basic', format: 'count', ...(formats.includes('svg') ? { when: { outputFormat: formats.filter((v) => v !== 'svg') } } : {}) }),
+    f.format,
+    ...[f.compression, f.frameCount, f.frameDurationMs].filter(Boolean),
     P.enum('background', '背景', BG_OPTS, { group: 'advanced', default: 'auto' }),
-    P.enum('outputFormat', '输出格式', IMG_FMT_OPTS, { group: 'advanced', default: 'png' }),
-    P.num('outputCompression', '压缩质量', 0, 100, { step: 1, integer: true, default: 100, when: { outputFormat: ['jpeg', 'webp'] } }),
+    P.enum('moderation', '审核', MODERATION_OPTS, { group: 'advanced', default: 'auto', desc: '宽松 = 放宽内容过滤' }),
+    ...(complexity ? [P.enum('complexity', '规划强度', COMPLEXITY_OPTS, { group: 'advanced', default: '', desc: '复杂画面先规划构图；不选按高' })] : []),
     P.json(),
   ];
   return {
     id: `openai:${model}`, kind: 'image', async: false, label, desc,
     inputs: { text: true, images: { max: 16, roles: ['edit', 'ref'] }, multiTurn: false },
     params,
-    // 自由尺寸卡：旧写法的比例 + 档位先换成宽高，再按 ParamSpec 规范化（坏的自定义宽高 400）
-    ...(flex ? { normalize: (raw = {}, ctx = {}) => applySpecs(params, legacySize(raw), ctx) } : {}),
+    // 自由尺寸卡：旧写法的比例 + 档位先换成宽高，再按 ParamSpec 规范化（坏的自定义宽高 400）；每帧时长取整到 10 ms
+    normalize: (raw = {}, ctx = {}) => roundFrameMs(applySpecs(params, flex ? legacySize(raw) : raw, ctx)),
   };
 }
 
@@ -268,7 +317,7 @@ function speechCard(model, label, desc, { instructions = false } = {}) {
     id: `openai:${model}`, kind: 'speech', async: false, label, desc,
     inputs: { text: true },
     params: [
-      P.voice('voice', '音色', { default: DEFAULT_VOICE, options: VOICES.map((v) => ({ value: v.id, label: v.label })) }),
+      P.voice('voice', '音色', { default: DEFAULT_VOICE, options: VOICES.map((v) => ({ value: v.id, label: v.label })), desc: '也可填自定义音色 id（voice_ 开头）' }),
       ...(instructions ? [P.text('instructions', '语气说明', { group: 'basic', max: 4096, desc: '自然语言描述语气、情绪、语速等（只 gpt-4o-mini-tts 认）' })] : []),
       P.num('speed', '语速', 0.25, 4, { step: 0.05, default: 1 }),
       P.enum('format', '格式', AUDIO_FMT_OPTS, { group: 'advanced', default: 'mp3' }),
@@ -280,10 +329,11 @@ function speechCard(model, label, desc, { instructions = false } = {}) {
 export const CARDS = {
   'gpt-image-2.5-sunburst': imageCard('gpt-image-2.5-sunburst', 'GPT Image 2.5 Sunburst', '官方定位：图像生成与编辑最强的一档，偏精准编辑。可自定义宽高，画质可到 xhigh / max。', Q_25, { flex: true }),
   'gpt-image-2.5-flare': imageCard('gpt-image-2.5-flare', 'GPT Image 2.5 Flare', '官方定位：快速、日常出图，质量稳定。可自定义宽高，画质可到 xhigh / max。', Q_25, { flex: true }),
-  'gpt-image-2.6-sunburst': imageCard('gpt-image-2.6-sunburst', 'GPT Image 2.6 Sunburst', '可自定义宽高（经 OpenRouter 实测，约束同 2.5）。', Q_GPT, { flex: true }),
-  'gpt-image-2.6-flare': imageCard('gpt-image-2.6-flare', 'GPT Image 2.6 Flare', '可自定义宽高（约束按 2.5 处理）。', Q_GPT, { flex: true }),
-  'gpt-image-2': imageCard('gpt-image-2', 'GPT Image 2', '可自定义宽高；透明背景是预览功能（文档写明）。', Q_GPT, { flex: true }),
+  'gpt-image-2.6-sunburst': imageCard('gpt-image-2.6-sunburst', 'GPT Image 2.6 Sunburst', '可自定义宽高，画质可到 xhigh / max；能出 GIF 动图与 SVG 矢量图。', Q_25, { flex: true, formats: GPT26_FORMATS, complexity: true }),
+  'gpt-image-2.6-flare': imageCard('gpt-image-2.6-flare', 'GPT Image 2.6 Flare', '快速出图；可自定义宽高，画质可到 xhigh / max；能出 GIF 动图与 SVG 矢量图。', Q_25, { flex: true, formats: GPT26_FORMATS, complexity: true }),
+  'gpt-image-2': imageCard('gpt-image-2', 'GPT Image 2', '官方标为弃用，2027-02-10 下线。可自定义宽高；透明背景是预览功能。', Q_GPT, { flex: true }),
   'gpt-4o-mini-tts': speechCard('gpt-4o-mini-tts', 'GPT-4o mini TTS', '官方标为弃用，2027-01-06 下线。可用语气说明控制语气。', { instructions: true }),
+  'gpt-4o-mini-tts-2025-12-15': speechCard('gpt-4o-mini-tts-2025-12-15', 'GPT-4o mini TTS（2025-12-15）', 'gpt-4o-mini-tts 的固定快照。可用语气说明控制语气。', { instructions: true }),
   'tts-1': speechCard('tts-1', 'TTS-1', '官方标为弃用，2027-01-06 下线。不支持语气说明。'),
   'tts-1-hd': speechCard('tts-1-hd', 'TTS-1 HD', '官方标为弃用，2027-01-06 下线。不支持语气说明。'),
 };

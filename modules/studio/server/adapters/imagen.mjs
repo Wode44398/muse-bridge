@@ -85,17 +85,28 @@ export function pickImagePart(parts) {
 
 // 多轮对话式图像编辑（Nano Banana）：传入完整 contents 历史（user 文字 + model 图 + thoughtSignature），
 // 模型带视觉上下文续改，返回新图 + 它的 thoughtSignature（下一轮需带回）。仅 Nano Banana（generateContent）。
-export async function generateChat({ model, contents, aspectRatio, imageSize, thinkingLevel, useSearch, useImageSearch, personGeneration, temperature, topP, outputFormat, project, location, credentials, devKey, forceDev, signal }) {
+export async function generateChat({ model, contents, aspectRatio, imageSize, thinkingLevel, useSearch, useImageSearch, personGeneration, temperature, topP, outputFormat, seed, outputMimeType, compressionQuality, prominentPeople, project, location, credentials, devKey, forceDev, signal }) {
   const { ai, dev } = pickClient({ model, imageSize, project, location, credentials, devKey, forceDev });
   const imageConfig = {};
   if (aspectRatio) imageConfig.aspectRatio = aspectRatio;
   if (imageSize) imageConfig.imageSize = imageSize;
   // 人物生成：ALLOW_ALL / ALLOW_ADULT / ALLOW_NONE（Vertex ImageConfig 自己的枚举，
   // 与 Imagen 的 PersonGeneration 不是一套——传 DONT_ALLOW 会 400）。
+  // 下面四项都只 Vertex 认：dev API 上 SDK 在客户端直接抛「only supported in Gemini Enterprise Agent Platform mode」，走 dev 通道一律丢掉。
   if (personGeneration && !dev) imageConfig.personGeneration = personGeneration;
+  // 名人：ALLOW_PROMINENT_PEOPLE / BLOCK_PROMINENT_PEOPLE（SDK 原样写进 imageConfig.prominentPeople）
+  if (prominentPeople && !dev) imageConfig.prominentPeople = prominentPeople;
+  // 输出格式：SDK 把 outputMimeType / outputCompressionQuality 映射成 imageConfig.imageOutputOptions.{mimeType, compressionQuality}
+  // （node_modules/@google/genai imageConfigToVertex）。取值 image/png | image/jpeg、质量 0–100 是按 SDK 注释推的，待真打。
+  if (outputMimeType && !dev) {
+    imageConfig.outputMimeType = outputMimeType;
+    if (outputMimeType === 'image/jpeg' && typeof compressionQuality === 'number') imageConfig.outputCompressionQuality = compressionQuality;
+  }
   const config = { responseModalities: outputFormat === 'image' ? ['IMAGE'] : ['TEXT', 'IMAGE'], imageConfig };
   if (typeof temperature === 'number') config.temperature = temperature;
   if (typeof topP === 'number') config.topP = topP;
+  // 种子：generationConfig.seed（通用字段，int32）；2.1 不收（卡上已不给），对出图有没有效果待真打
+  if (typeof seed === 'number') config.seed = seed;
   if (thinkingLevel) config.thinkingConfig = { thinkingLevel };
   // Image Search implies web search (it's a searchType under googleSearch).
   if (useImageSearch) config.tools = [{ googleSearch: { searchTypes: { webSearch: {}, imageSearch: {} } } }];

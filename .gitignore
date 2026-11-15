@@ -28,6 +28,7 @@ chat-snapshots.json
 claude-chat-prefs.json
 claude-projects.json
 desktop-lineage-cache.json
+/phone-clients.json
 desktop-lineage-cache.json.tmp
 claude-quick.json
 quickchat/

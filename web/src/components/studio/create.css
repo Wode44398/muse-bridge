@@ -61,9 +61,19 @@
 .studio-root.dark .cp-logo { filter: grayscale(1) brightness(1.8); }
 .studio-root .cp-logo svg, .studio-root .cp-logo img { width: 100%; height: 100%; }
 .studio-root .cp-all { color: var(--sd-text2); }
+/* 开关芯片（方案 §11）：点一下就切，不再弹浮层。关着 = 淡字 + 空心小圈；开着 = 墨字 + 勾 */
+.studio-root .cp-val.tog[aria-pressed="false"] { color: var(--sd-text3); }
+.studio-root .cp-tog-off { width: 9px; height: 9px; margin: 0 2px; border-radius: 50%; box-shadow: inset 0 0 0 1.2px currentColor; opacity: .8; }
+/* 「参数」上的小数字：芯片上看不到的那些参数里改过几项 */
+.studio-root .cp-all-n { min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; display: inline-grid; place-items: center; background: var(--sd-text); color: var(--sd-bg); font-family: var(--sd-font-mono); font-size: 10px; font-weight: 500; line-height: 1; }
 .studio-root .pv .pl.flat .pl-panel { padding-right: 6px; }
-.studio-root.compact .cp-all .chip-tx { display: none; }
-.studio-root.compact .cp-all { width: 32px; padding: 0; justify-content: center; }
+/* 手机：芯片单独一行（正文和底行之间），整行宽；放不下的照旧整枚藏 */
+.studio-root .cp-sub { display: flex; min-width: 0; margin: 2px 0 6px; }
+.studio-root .cp-sub .cp-chips { gap: 4px; flex-wrap: wrap; overflow: visible; }   /* 一行放不下就折到第二行：当前设置要一眼看全，不整枚藏掉 */
+/* 手机底行的「参数」：跟在模型芯片后面，只留图标（改动数照挂） */
+.studio-root.compact .cp-tools > .cp-all { flex: none; min-width: 32px; padding: 0 8px; justify-content: center; background: var(--sd-hover); }
+.studio-root.compact .cp-tools > .cp-all .chip-tx { display: none; }
+.studio-root.compact .cp-tools > .cp-all > svg { width: 15px; height: 15px; }
 /* 发送钮：墨色圆钮（dimensio primary）；不可发 .3；在发 = 一粒朱点在纸底上 */
 .studio-root .cp-send {
   position: relative; flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
@@ -139,19 +149,70 @@
 .studio-root .pl-r[data-ctl=switch] { grid-template-columns: minmax(0, 1fr) auto; }
 .studio-root .pl-r[data-ctl=select], .studio-root .pl-r[data-ctl=voice], .studio-root .pl-r[data-ctl=size]:not(.blk) { grid-template-columns: minmax(76px, 1fr) minmax(0, max-content); }
 /* 尺寸的自定义宽 × 高（方案 §10）：整行宽、在选择钮下面；不合规时两个框描红、下面一行红字 */
-.studio-root .pl-wh { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; }
-.studio-root .pl-wh .pl-in { flex: 1 1 0; min-width: 0; max-width: 120px; text-align: right; }
+.studio-root .pl-wh { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; }
+.studio-root .pl-wh .pl-in { flex: 1 1 0; min-width: 0; text-align: center; }
+.studio-root .pl-r[data-ctl=size].blk { gap: 8px; }
+.studio-root .pl-r[data-ctl=size].blk > .seg { width: 100%; }
+.studio-root .pl-r[data-ctl=size] .pl-asp { grid-template-columns: repeat(auto-fill, minmax(47px, 1fr)); }   /* 参数坞里 5 列：自动 + 8 个比例排成 5 + 4，不剩孤格 */
 .studio-root .pl-x { flex: none; font-size: var(--sd-fs-md); color: var(--sd-text3); }
 .studio-root .pl-wh .pl-in.bad { box-shadow: 0 0 0 1px var(--sd-err); }
 /* 值芯片点开的单项浮层（标题已经写了「尺寸」、行标签藏着）：选择钮靠左，不在右边孤零零一个 */
 .studio-root .pl.only .pl-r[data-ctl=size] .pl-c { justify-content: flex-start; }
-.studio-root .pl.only .pl-wh { justify-content: flex-start; }
 /* 自定义尺寸不合规：值芯片也描红（收起参数时一眼看得出） */
 .studio-root .cp-val.bad { box-shadow: inset 0 0 0 1px var(--sd-err); color: var(--sd-err); }
 .studio-root .pl-wh-err { grid-column: 1 / -1; }
 .studio-root .pl-r.focus { animation: sdFocusRow 1.6s var(--sd-ease); }
 @keyframes sdFocusRow { 0%, 40% { box-shadow: 0 0 0 4px var(--sd-accent-soft); background: var(--sd-accent-soft); } 100% { box-shadow: 0 0 0 4px transparent; background: transparent; } }
-.studio-root .pl-lh { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 22px; }
+.studio-root .pl-lh { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 24px; }
+/* 标签 + 改过才有的「恢复默认」（方案 §11）：一枚 20px 的小回转箭头，紧跟在标签后面 */
+.studio-root .pl-lw { min-width: 0; display: flex; align-items: center; gap: 4px; }
+.studio-root .pl-rst { position: relative; flex: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; color: var(--sd-text3); transition: background-color var(--sd-t-fast) var(--sd-ease), color var(--sd-t-fast) var(--sd-ease); }
+.studio-root .pl-rst svg { width: 13px; height: 13px; stroke-width: 1.8; }
+@media (hover: hover) { .studio-root .pl-rst:hover { background: var(--sd-press); color: var(--sd-text); } }
+.studio-root .pl-rst:active { background: var(--sd-press); }
+@media (pointer: coarse) { .studio-root .pl-rst::after { content: ''; position: absolute; inset: -7px; } }
+.studio-root .pl.only .pl-lw { display: none; }
+.studio-root .pl.only .pl-lh:has(.pl-nv) { justify-content: flex-end; }
+.studio-root .pl.only .pl-lh:not(:has(.pl-nv)) { display: none; }
+/* 小块排：选项直接摆出来（标签在上、选项在下），点一下就是它；选中 = 白纸 + 墨色细圈（同比例格） */
+.studio-root .pl-pills { display: flex; flex-wrap: wrap; gap: 5px; }
+.studio-root .pl-pill {
+  position: relative; min-width: 0; max-width: 100%; min-height: 30px; padding: 0 10px; border-radius: 9px; display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--sd-fs-md); color: var(--sd-text2); background: var(--sd-hover);
+  transition: background-color var(--sd-t-fast) var(--sd-ease), color var(--sd-t-fast) var(--sd-ease), box-shadow var(--sd-t-fast) var(--sd-ease);
+}
+.studio-root .pl-pill > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-root .pl-pill .mono { font-family: var(--sd-font-mono); font-size: var(--sd-fs-sm); font-variant-numeric: tabular-nums; }
+.studio-root .pl-pill small { flex: none; font-family: var(--sd-font-mono); font-size: var(--sd-fs-xs); color: var(--sd-text3); }
+@media (hover: hover) { .studio-root .pl-pill:hover:not(.on) { background: var(--sd-press); color: var(--sd-text); } }
+.studio-root .pl-pill { background: var(--sd-press); }
+.studio-root .pl-pill.on { background: var(--sd-surface); color: var(--sd-text); box-shadow: 0 0 0 1px var(--sd-border), 0 1px 3px color-mix(in srgb, var(--sd-text) 8%, transparent); font-weight: 500; }
+.studio-root.dark .pl-pill.on { background: color-mix(in srgb, var(--sd-text) 13%, var(--sd-surface2)); box-shadow: 0 0 0 1px var(--sd-border2), 0 1px 3px rgba(0, 0, 0, .35); }
+.studio-root .pl-pill.on small { color: var(--sd-text2); }
+/* 这个服务上次拒收过的取值：淡下去 + 删除线（照样能点） */
+.studio-root .pl-pill.rej > span { text-decoration: line-through; text-decoration-color: var(--sd-text3); color: var(--sd-text3); }
+.studio-root .op.rej .op-tx { text-decoration: line-through; text-decoration-color: var(--sd-text3); color: var(--sd-text3); }
+@media (pointer: coarse) { .studio-root .pl-pill { min-height: 34px; padding: 0 13px; } }
+/* 滑条行右上角的数字框：可以直接打数（回车 / 失焦落值） */
+.studio-root .pl-nv { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 7px; border-radius: 7px; background: var(--sd-surface); box-shadow: 0 0 0 1px var(--sd-border); transition: box-shadow var(--sd-t-fast) var(--sd-ease); }
+.studio-root .sh .pl-nv, .studio-root .pv .pl-nv { background: var(--sd-bg); }
+.studio-root .pl-nv:focus-within { box-shadow: 0 0 0 1px var(--sd-border2), 0 0 0 3px var(--sd-accent-soft); }
+.studio-root .pl-nv input.pl-in { width: 46px; height: 24px; padding: 0; text-align: right; border-radius: 0; background: none; box-shadow: none; }
+.studio-root .pl-nv input.pl-in:focus { box-shadow: none; }
+/* 张数这类：− 3 + */
+.studio-root .pl-step { gap: 2px; }
+.studio-root .pl-step .pl-in { width: 46px; height: 28px; padding: 0 4px; text-align: center; }
+.studio-root .pl-step .sd-ib { width: 28px; height: 28px; border-radius: 8px; background: var(--sd-hover); }
+.studio-root .pl-step .sd-ib svg { width: 15px; height: 15px; }
+.studio-root .pl-step .sd-ib:disabled { opacity: .35; }
+@media (pointer: coarse) { .studio-root .pl-step { gap: 4px; } .studio-root .pl-step .sd-ib { width: 34px; height: 34px; } .studio-root .pl-step .pl-in { height: 34px; width: 50px; } }
+.studio-root .pl-r[data-ctl=stepper] { grid-template-columns: minmax(0, 1fr) auto; }
+/* 面板末尾：全部恢复默认（有改动才出现） */
+.studio-root .pl-foot { display: flex; justify-content: flex-end; padding: 10px 0 2px; }
+.studio-root .pl-rall { height: 28px; padding: 0 10px 0 8px; border-radius: 8px; display: inline-flex; align-items: center; gap: 5px; font-size: var(--sd-fs-sm); color: var(--sd-text2); transition: background-color var(--sd-t-fast) var(--sd-ease), color var(--sd-t-fast) var(--sd-ease); }
+.studio-root .pl-rall svg { width: 14px; height: 14px; stroke-width: 1.8; }
+@media (hover: hover) { .studio-root .pl-rall:hover { background: var(--sd-press); color: var(--sd-text); } }
+@media (pointer: coarse) { .studio-root .pl-rall { position: relative; height: 34px; padding: 0 12px 0 10px; } .studio-root .pl-rall::after { content: ''; position: absolute; inset: -4px 0; } }
 .studio-root .pl-l {
   min-width: 0; font-size: var(--sd-fs-md); line-height: 1.35; color: var(--sd-text2);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default;
@@ -202,6 +263,9 @@
 /* 细滑条：1px 轨 + 墨色走过的一段 + 14px 白纸旋钮（墨色细圈） */
 .studio-root .pl-range { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; margin: 0; background: transparent; cursor: pointer; }
 .studio-root .pl-range:focus-visible { outline: none; }
+/* 没设置的数值（卡上没默认值、用户也没填）：旋钮淡着停在最左，一拖就有值；数字框里写「默认」 */
+.studio-root .pl-range.unset::-webkit-slider-thumb { box-shadow: 0 0 0 1.5px var(--sd-border2); }
+.studio-root .pl-range.unset::-moz-range-thumb { border-color: var(--sd-border2); }
 .studio-root .pl-range::-webkit-slider-runnable-track { height: 2px; border-radius: 1px; background: linear-gradient(90deg, var(--sd-accent) var(--pct, 0%), var(--sd-border2) var(--pct, 0%)); }
 .studio-root .pl-range::-moz-range-track { height: 2px; border-radius: 1px; background: var(--sd-border2); }
 .studio-root .pl-range::-moz-range-progress { height: 2px; background: var(--sd-accent); }
@@ -319,6 +383,18 @@
 .studio-root .art { margin: 0 0 22px; display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
 .studio-root .ch-img { position: relative; max-width: 100%; border-radius: 12px; overflow: hidden; cursor: zoom-in; background: var(--sd-surface2); box-shadow: 0 0 0 1px var(--sd-border), var(--sd-shadow-1); }
 .studio-root .ch-img img { display: block; max-width: 100%; max-height: 62vh; width: auto; height: auto; }
+/* 一次出多张：两列格（五张以上、画布够宽时三列）；每张照旧带自己的元信息和操作 */
+.studio-root .ch-out { display: contents; }
+.studio-root .ch-out.multi { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 12px; align-items: start; margin-bottom: 10px; }
+.studio-root .ch-out.multi .art { margin-bottom: 8px; align-items: stretch; }
+.studio-root .ch-out.multi .ch-img img { width: 100%; max-height: 46vh; object-fit: contain; }
+.studio-root .ch-out.multi .ch-txt { grid-column: 1 / -1; }
+/* 多张格里每格窄：元信息（型号 · 尺寸 · 用时，整批都一样）不挤在格子里，操作只留图标、靠右 */
+.studio-root .ch-out.multi .art-meta { display: none; }
+.studio-root .ch-out.multi .art-foot { justify-content: flex-end; }
+.studio-root .ch-out.multi .art-b.tx { width: 30px; padding: 0; justify-content: center; }
+.studio-root .ch-out.multi .art-b.tx span { display: none; }
+.studio-root.expanded .ch-out.multi.many { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .studio-root .ch-txt { margin: -10px 0 18px; font-size: var(--sd-fs-md); line-height: 1.6; color: var(--sd-text2); }
 /* 作品下面一行：mono 元信息 + 操作（桌面悬停浮现，触屏常显） */
 .studio-root .art-foot { align-self: stretch; display: flex; align-items: center; gap: 8px; min-height: 30px; margin-top: 6px; padding: 0 2px; }

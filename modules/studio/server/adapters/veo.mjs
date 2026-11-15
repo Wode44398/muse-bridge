@@ -23,12 +23,19 @@ function client(project, location, credentials) {
 export async function generate({
   prompt, image, lastFrame, referenceImages, model,
   aspectRatio, durationSeconds, resolution, generateAudio, negativePrompt, numberOfVideos = 1,
-  enhancePrompt, compressionQuality,
+  enhancePrompt, compressionQuality, seed, personGeneration, resizeMode,
   project, location, credentials, onProgress, onSubmit, signal, pollMs = 8000, timeoutMs = 600000,
 }) {
   const ai = client(project, location, credentials);
   const config = {};
+  // 条数：parameters.sampleCount（1–4，Vertex 文档）
   if (numberOfVideos) config.numberOfVideos = numberOfVideos;
+  // 种子：parameters.seed（uint32；开着提示词增强时不保证可复现；多条时每条用不同的种子）
+  if (typeof seed === 'number') config.seed = seed;
+  // 人物生成：parameters.personGeneration（allow_adult / dont_allow，Vertex 默认 allow_adult）
+  if (personGeneration) config.personGeneration = personGeneration;
+  // 首帧适配：parameters.resizeMode（只图生视频；SDK 枚举 PAD / CROP，REST 文档写小写——大小写待真打）
+  if (resizeMode) config.resizeMode = resizeMode;
   if (aspectRatio) config.aspectRatio = aspectRatio;
   if (durationSeconds) config.durationSeconds = Number(durationSeconds);
   if (resolution) config.resolution = resolution;

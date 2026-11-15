@@ -26,7 +26,8 @@ import { NO_BASEURL, KINDS } from './presets.mjs';
 import { assetKindOf, autoSave, publicAsset } from './assets.mjs';
 import { imageDims } from './adapters/openrouter-image.mjs';
 import { logCall } from './log.mjs';
-import { markUsed } from './discovery/store.mjs';
+import { markUsed, noteRejected, clearRejected } from './discovery/store.mjs';
+import { detectRejected, rejectedLine } from './cards/rejected.mjs';
 
 const bad = (msg, status = 400) => Object.assign(new Error(msg), { status });
 const MAX_RECENT = 50;
@@ -34,6 +35,7 @@ const MAX_ACTIVE = 8;
 const MAX_INPUTS = 16;
 const MAX_INPUT_BYTES = 60_000_000;
 const ROLES = ['edit', 'ref', 'first', 'last', 'audio', 'video'];
+const IMAGE_ROLES = new Set(['edit', 'ref', 'first', 'last']);
 const FINAL = new Set(['done', 'error', 'canceled']);
 
 // —— 存储（按 owner）——
@@ -179,6 +181,7 @@ function resolveInput(ctx, x) {
 // —— 输出 → 扩展名；裸 PCM 包成 WAV ——
 function extOf(mime) {
   const m = String(mime || '').toLowerCase();
+  if (m.includes('svg')) return 'svg';   // image/svg+xml：别落到兜底的 png
   if (m.includes('jpeg') || m.includes('jpg')) return 'jpg';
   if (m.includes('png')) return 'png';
   if (m.includes('webp')) return 'webp';
@@ -213,6 +216,43 @@ function normalizeOutput(o, kind) {
   if (!ext) ext = { image: 'png', video: 'mp4', speech: 'mp3', music: 'mp3' }[kind];
   return { bytes, mime, ext };
 }
+// 作品宽高：PNG / JPEG / WebP 读文件头；GIF 读逻辑屏幕宽高（字节 6–9 小端）；SVG 读根元素的 width / height，没有就用 viewBox（读不到不记）
+export function outputDims(bytes, ext) {
+  if (!bytes || !bytes.length) return null;
+  if (ext === 'gif' || bytes.toString('ascii', 0, 6) === 'GIF89a' || bytes.toString('ascii', 0, 6) === 'GIF87a') {
+    if (bytes.length >= 10 && bytes.toString('ascii', 0, 3) === 'GIF') {
+      const w = bytes.readUInt16LE(6), h = bytes.readUInt16LE(8);
+      return w > 0 && h > 0 ? [w, h] : null;
+    }
+    return null;
+  }
+  if (ext === 'svg') return svgDims(bytes);
+  return imageDims(bytes);
+}
+const SVG_LEN = /^\s*(\d+(?:\.\d+)?)\s*(px)?\s*$/i;   // 只认无单位 / px（%、em 这类没法换成像素）
+export function svgDims(bytes) {
+  try {
+    const head = bytes.subarray(0, 65536).toString('utf8');
+    const m = /<svg\b[^>]*>/i.exec(head);
+    if (!m) return null;
+    const attr = (name) => { const a = new RegExp(`\\s${name}\\s*=\\s*(["'])(.*?)\\1`, 'i').exec(m[0]); return a ? a[2] : null; };
+    const num = (s) => { const x = s != null ? SVG_LEN.exec(s) : null; return x ? Number(x[1]) : null; };
+    let w = num(attr('width')), h = num(attr('height'));
+    if (!(w > 0 && h > 0)) {
+      const vb = String(attr('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+      if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) {
+        // 只给了一边：按 viewBox 的比例补另一边
+        if (w > 0) h = w * vb[3] / vb[2];
+        else if (h > 0) w = h * vb[2] / vb[3];
+        else { w = vb[2]; h = vb[3]; }
+      }
+    }
+    if (!(w > 0 && h > 0)) return null;
+    const W = Math.round(w), H = Math.round(h);
+    return W > 0 && H > 0 && W <= 100000 && H <= 100000 ? [W, H] : null;
+  } catch { return null; }
+}
+
 // WAV 时长（秒）：读头里的字节率
 function wavSeconds(buf) {
   try { if (buf.toString('ascii', 0, 4) === 'RIFF') { const rate = buf.readUInt32LE(28); return rate ? Math.round(((buf.length - 44) / rate) * 10) / 10 : 0; } } catch {}
@@ -243,6 +283,15 @@ function companionGeminiKey(provider) {
 export function inputFlagsOf(inputs = [], thread = null) {
   const has = (r) => inputs.some((x) => x.role === r);
   return { $edit: has('edit') || (!!thread && !has('ref')), $first: has('first'), $last: has('last'), $ref: has('ref') };
+}
+// 这次要出几件（额度按它计）：卡上的张数参数（format:'count'，或 n / count / num_images 这类键）规范化后的值，没有就是 1
+const COUNT_KEY = /^(n|count|num_images|numImages|num_outputs|number_of_images|numberOfImages|batch_size|sample_count|sampleCount|num_videos)$/;
+export function unitsOf(card, params = {}) {
+  const spec = (card?.params || []).find((s) => s && (s.type === 'number' || s.type === 'enum') && (s.format === 'count' || COUNT_KEY.test(String(s.key))) && params[s.key] != null);
+  if (!spec) return 1;
+  const n = Math.floor(Number(params[spec.key]));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(n, Number.isFinite(spec.max) && spec.max >= 1 ? spec.max : 16);
 }
 export function applyEditDefaults(card, raw, { inputs = [], thread = null } = {}) {
   const editing = inputFlagsOf(inputs, thread).$edit;
@@ -278,6 +327,8 @@ export function startJob(ctx, body, opts = {}) {
   if (inputs.reduce((n, x) => n + x.size, 0) > MAX_INPUT_BYTES) throw bad('素材加起来太大（上限 60 MB）');
   const allowed = new Set([...(card.inputs?.images?.roles || []), ...(card.inputs?.audio ? ['audio'] : []), ...(card.inputs?.video ? ['video'] : [])]);
   for (const x of inputs) if (!allowed.has(x.role)) throw bad(`这个模型不收「${x.role}」素材`);
+  // SVG 是矢量文本，上游的改图 / 参考图只收位图
+  if (inputs.some((x) => IMAGE_ROLES.has(x.role) && /\.svg$/i.test(x.file))) throw bad('SVG 不能当改图对象或参考图：先导出成 PNG 再用');
   // 参考视频 / 音频（Seedance 这类）：按卡上的 max
   for (const r of ['video', 'audio']) {
     const lim = card.inputs?.[r]?.max;
@@ -302,9 +353,9 @@ export function startJob(ctx, body, opts = {}) {
   const thread = typeof body.thread === 'string' && ID_RE.test(body.thread) ? body.thread : null;
   const parent = typeof body.parent === 'string' && ID_RE.test(body.parent) ? body.parent : null;
 
-  // 额度：花的是管理员的钱（共享服务 / 主机服务）才计成员额度
+  // 额度：花的是管理员的钱（共享服务 / 主机服务）才计成员额度；按这次要出的张数 / 条数计（一次 10 张就是 10 次）
   if (opts.quota !== false && ctx.kind === 'user' && provider.owner !== owner) {
-    const block = admitUsage(ctx, kind === 'video' ? 'video' : 'media');
+    const block = admitUsage(ctx, kind === 'video' ? 'video' : 'media', unitsOf(card, params));
     if (block) throw Object.assign(bad(block.message, 429), { title: block.title });
   }
 
@@ -385,7 +436,8 @@ async function execute(job, ctx, { provider, entry, card, inputs, opts }) {
     assets.forEach((a, i) => {
       const o = normalizeOutput(a, job.kind);
       const id = (opts.presetIds && opts.presetIds[i]) || media.newId();   // 旧接口 SSE 的 start 先报了作品 id
-      const dims = job.kind === 'image' ? imageDims(o.bytes) : null;
+      // 图片产出都量宽高（视频任务的尾帧图也是一张图，方案 §11）
+      const dims = job.kind === 'image' || ['png', 'jpg', 'webp', 'gif', 'svg'].includes(o.ext) ? outputDims(o.bytes, o.ext) : null;
       const parents = [...new Set([job.parent, ...job.inputs.map((x) => x.asset)].filter(Boolean))];
       const meta = {
         kind: assetKindOf(job.kind), prompt: job.prompt, model: entry.id, provider: provider.id, providerName: provider.name, dialect: provider.dialect,
@@ -405,12 +457,24 @@ async function execute(job, ctx, { provider, entry, card, inputs, opts }) {
     job.result = saved;
     job.state = 'done'; job.progress = 1; job.finishedAt = Date.now(); job.elapsed = Math.round((job.finishedAt - t0) / 1000); job.eta = 0;
     logCall(provider, { kind: job.kind, model: entry.id, status: 'ok', ms: job.finishedAt - t0 });
+    // 以前被这个服务拒收过的取值这次成了：解除标记（方案 §11.4）
+    try { if (clearRejected(provider.owner, provider.id, entry.id, job.params)) busPublish(job.owner, { type: 'studio.catalog' }); } catch {}
     emit(job);
   } catch (e) {
     if (job.state === 'canceled') return;
     const aborted = job.ac.signal.aborted;
     job.state = aborted ? 'canceled' : 'error';
     job.error = aborted ? null : (provider.owner === job.owner ? errText(e) : scrub(errText(e)));
+    // 上游点名拒收了某个取值（中转站不认 svg / gif 这类）：记下来，报错头一行写成人话，目录里那一项标出来
+    if (!aborted) {
+      try {
+        const rj = detectRejected(card, job.params, e);
+        if (rj) {
+          job.error = rejectedLine(rj) + '\n' + job.error;
+          if (noteRejected(provider.owner, provider.id, entry.id, rj.key, rj.value)) busPublish(job.owner, { type: 'studio.catalog' });
+        }
+      } catch {}
+    }
     job.finishedAt = Date.now(); job.elapsed = Math.round((job.finishedAt - t0) / 1000);
     logCall(provider, { kind: job.kind, model: entry.id, status: aborted ? 'canceled' : 'error', ms: job.finishedAt - t0, error: aborted ? undefined : errText(e) });
     emit(job);
@@ -420,18 +484,23 @@ async function execute(job, ctx, { provider, entry, card, inputs, opts }) {
 }
 
 // 续改链：显式 turns（旧 image-chat）或按 thread 从媒体库还原（同 loadImageChat 的分组），每轮带图字节与 thoughtSignature。
-function loadThread(ctx, thread, turns) {
+const THREAD_MIME = { jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', png: 'image/png' };
+export function loadThread(ctx, thread, turns) {
   let list = Array.isArray(turns) ? turns : null;
   if (!list && thread) list = media.loadImageChat(thread, ctx.media)?.turns || [];
   if (!list || !list.length) return null;
   const out = [];
-  for (const t of list.slice(-6)) {
+  const recent = list.slice(-6);
+  for (const [i, t] of recent.entries()) {
     const id = String(t.imageId || '');
     const rec = media.get(id, ctx.media);
     const f = media.fileFor(id, ctx.media);
     if (!rec || !f) continue;
     const ex = path.extname(f).slice(1).toLowerCase();
-    out.push({ userText: String(t.userText || ''), imageId: id, data: readFileSync(f), mime: ex === 'jpg' ? 'image/jpeg' : (ex === 'webp' ? 'image/webp' : 'image/png'), signature: rec.signature || '' });
+    // SVG 不能当改图输入（上游只收位图）：链上最近一张是 SVG 就整条不带（这次按文生图出，结果照样进这条链）——
+    // 拿更早的位图顶上会变成「改了前一张」，比不带更糟；中间夹着的 SVG 跳过
+    if (ex === 'svg') { if (i === recent.length - 1) return null; continue; }
+    out.push({ userText: String(t.userText || ''), imageId: id, data: readFileSync(f), mime: THREAD_MIME[ex] || 'image/png', signature: rec.signature || '' });
   }
   return out.length ? { turns: out } : null;
 }

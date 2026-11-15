@@ -47,9 +47,9 @@ async function withFetch(handler, fn) {
 }
 const reply = (status, body) => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
-test('桥接对象从扩展入口命名导出，九个方法齐全', () => {
+test('桥接对象从扩展入口命名导出，十个方法齐全', () => {
   assert.equal(hub, H.hub);
-  assert.deepEqual(Object.keys(hub).sort(), ['adopt', 'builtins', 'detect', 'dialectFor', 'list', 'release', 'remove', 'setBuiltin', 'upsert']);
+  assert.deepEqual(Object.keys(hub).sort(), ['adopt', 'builtins', 'detect', 'dialectFor', 'list', 'release', 'remove', 'setBuiltin', 'syncBuiltin', 'upsert']);
   assert.ok(Object.isFrozen(hub));
 });
 

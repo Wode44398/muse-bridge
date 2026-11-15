@@ -57,7 +57,10 @@ async function discoverOpenRouter(p, ctx) {
   return { ...parseOpenRouter(cat.images, cat.videos), schemasReplace: true, complete: true, catalog: cat };
 }
 
-/** 图像模型的单价（endpoints 接口，按服务商列 pricing）。拿不到回 null。 */
+/**
+ * 图像模型的端点（endpoints 接口，按服务商列 pricing、provider_slug、allowed_passthrough_parameters）。拿不到回 null。
+ * 巡检据此存单价提示与透传信息（discovery/index.mjs withEndpoints → schema 缓存的 priceHint / endpoints）。
+ */
 export async function fetchOpenRouterImageEndpoints(p, id, ctx) {
   if (!/^[\w.-]+\/[\w.:-]+$/.test(id)) return null;
   try {

@@ -133,7 +133,8 @@ const KIND = {
  * 某个账号现在能不能再用一次（kind：'media' | 'video'）。不能 → { title, message }；能 → null。
  * 成员功能开关关着（媒体 / 视频）也在这里拦。
  */
-export function usageBlock(name, kind) {
+// n：这次要用几次（Media Studio 一次出多张图按张数计）；默认 1，行为同以前。
+export function usageBlock(name, kind, n = 1) {
   const def = KIND[kind];
   if (!def || !name) return null;
   if (def.feature && !memberFeaturesFor(name)[def.feature]) {
@@ -142,26 +143,30 @@ export function usageBlock(name, kind) {
   const { limits: l, today } = quotaState(name);
   const cap = l[def.key];
   const used = today[kind] || 0;
+  const want = Math.max(1, Math.floor(Number(n)) || 1);
   if (cap && used >= cap) {
     return { title: '今天的额度用完了', message: `今天已经用了 ${used} ${def.unit}${def.label}，每天上限 ${cap} ${def.unit}，明天 0 点恢复。${TAIL}` };
+  }
+  if (cap && used + want > cap) {
+    return { title: '今天的额度不够这次用', message: `这次要用 ${want} ${def.unit}，今天还剩 ${cap - used} ${def.unit}${def.label}（每天上限 ${cap} ${def.unit}）。少要几张，或明天 0 点恢复后再试。${TAIL}` };
   }
   return null;
 }
 
-/** 开始用就记一次（同轮数「开跑即记」：并行发几次也绕不过去）。 */
-export function noteUsage(name, kind) {
+/** 开始用就记（同轮数「开跑即记」：并行发几次也绕不过去）。n = 记几次。 */
+export function noteUsage(name, kind, n = 1) {
   if (!name || !KIND[kind]) return;
-  try { noteUsageEvent(name, kind); } catch {}
+  try { noteUsageEvent(name, kind, n); } catch {}
 }
 
 /**
- * 一步到位：按身份查额度并记一次。返回 null = 放行（已记账）；{ title, message } = 拦下。
+ * 一步到位：按身份查额度并记 n 次（默认 1）。返回 null = 放行（已记账）；{ title, message } = 拦下。
  * 管理员、快照（媒体对快照本来就不开放）、管理员代操作一律放行不记。
  */
-export function admitUsage(ctx, kind) {
+export function admitUsage(ctx, kind, n = 1) {
   if (!ctx || ctx.kind !== 'user' || !ctx.user || ctx.actor === 'admin') return null;
-  const b = usageBlock(ctx.user, kind);
+  const b = usageBlock(ctx.user, kind, n);
   if (b) return b;
-  noteUsage(ctx.user, kind);
+  noteUsage(ctx.user, kind, n);
   return null;
 }

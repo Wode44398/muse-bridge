@@ -4,7 +4,8 @@
   // 令牌（--st-*）由 HubOverlays 的浮层外框定义；长相照 HubVertex 的型号列表（.mlist / .mrow）。
   import { t } from '../../lib/i18n.js';
 
-  let { models = [], on = $bindable({}), label = '' } = $props();
+  // fresh：刚检测出来的模型 id（标「新」）
+  let { models = [], on = $bindable({}), label = '', fresh = [] } = $props();
 
   const KIND_ORDER = ['image', 'video', 'voice', 'music'];
   // 种类名必须是字面量 t('…')：i18n 检查按字面量收词
@@ -20,7 +21,7 @@
       {#each g.list as m (m.id)}
         <button type="button" class="mrow" class:on={!!on[m.id]} aria-pressed={!!on[m.id]} onclick={() => flip(m.id)}>
           <span class="box"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>
-          <span class="m-tx"><span class="m-n">{m.label || m.id}</span>{#if m.label && m.label !== m.id}<span class="m-id">{m.id}</span>{/if}</span>
+          <span class="m-tx"><span class="m-n">{m.label || m.id}{#if fresh.includes(m.id)}<span class="tag">{t('新')}</span>{/if}</span>{#if m.label && m.label !== m.id}<span class="m-id">{m.id}</span>{/if}</span>
         </button>
       {/each}
     </div>
@@ -32,6 +33,7 @@
 <style>
   .fl { display: flex; align-items: baseline; gap: 8px; margin: 0 0 7px 2px; font-size: 12.5px; font-weight: 600; color: var(--st-text2); }
   .n { font-weight: 500; color: var(--st-muted); font-variant-numeric: tabular-nums; }
+  .tag { display: inline-block; margin-left: 8px; padding: 0 6px; border-radius: 5px; background: var(--st-seg); font-size: 11px; font-weight: 500; line-height: 18px; color: var(--st-text2); vertical-align: 1px; }
   .none { margin: 0 2px; font-size: 13px; color: var(--st-muted); }
   .mlist { border: 1px solid var(--st-line); border-radius: 14px; overflow: hidden; background: var(--st-surface); }
   .mrow { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 14px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }

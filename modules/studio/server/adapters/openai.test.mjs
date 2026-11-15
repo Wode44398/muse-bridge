@@ -293,3 +293,77 @@ test('未知模型走通用卡也能跑：卡上参数映射进请求体，extra
     assert.equal(vid.size, '720x1280');
   });
 });
+
+// —— 2026-11-15 参数补全：张数到 10、2.6 的 gif / svg 与构图规划、审核、透明背景跟格式联动 ——
+const keysOf = (card) => card.params.map((s) => s.key);
+const specOf = (card, k) => card.params.find((s) => s.key === k);
+test('图像卡参数清单：2.6 有 gif / svg / 构图规划、画质到 max；2.5 无 gif / svg；gpt-image-2 标弃用、画质只到 high', () => {
+  const c26 = CARDS['gpt-image-2.6-sunburst'];
+  assert.deepEqual(keysOf(c26), ['size', 'quality', 'count', 'outputFormat', 'outputCompression', 'frameCount', 'frameDurationMs', 'background', 'moderation', 'complexity', 'extra']);
+  assert.deepEqual(specOf(c26, 'quality').options.map((o) => o.value), ['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepEqual(specOf(c26, 'outputFormat').options.map((o) => o.value), ['png', 'jpeg', 'webp', 'gif', 'svg']);
+  assert.deepEqual(specOf(c26, 'outputFormat').options.find((o) => o.value === 'svg').only, { $edit: false, $ref: false });
+  assert.deepEqual([specOf(c26, 'count').max, specOf(c26, 'count').format, specOf(c26, 'count').group], [10, 'count', 'basic']);
+  assert.equal(specOf(c26, 'outputFormat').group, 'basic');
+  assert.deepEqual(specOf(c26, 'background').options.find((o) => o.value === 'transparent').only, { outputFormat: ['png', 'webp'] });
+  assert.deepEqual(keysOf(CARDS['gpt-image-2.5-flare']), ['size', 'quality', 'count', 'outputFormat', 'outputCompression', 'background', 'moderation', 'extra']);
+  assert.deepEqual(specOf(CARDS['gpt-image-2.5-flare'], 'outputFormat').options.map((o) => o.value), ['png', 'jpeg', 'webp']);
+  const g2 = CARDS['gpt-image-2'];
+  assert.match(g2.desc, /弃用.*2027-02-10/);
+  assert.deepEqual(specOf(g2, 'quality').options.map((o) => o.value), ['auto', 'low', 'medium', 'high']);
+  assert.equal(specOf(g2, 'complexity'), undefined);
+  assert.ok(CARDS['gpt-4o-mini-tts-2025-12-15'].params.some((s) => s.key === 'instructions'));
+});
+
+test('图像卡规范化：svg 有改图对象 / 参考图时不可选（回落 png）、svg 时不给张数；压缩只 jpeg / webp；透明只 png / webp；每帧时长取整到 10', () => {
+  const c = CARDS['gpt-image-2.6-flare'];
+  const n = (raw, ctx) => c.normalize(raw, ctx);
+  assert.deepEqual(n({ size: 'auto' }), { size: 'auto', quality: 'auto', count: 1, outputFormat: 'png', background: 'auto', moderation: 'auto' });
+  const svg = n({ outputFormat: 'svg', count: 4, outputCompression: 50 });
+  assert.equal(svg.outputFormat, 'svg');
+  assert.equal('count' in svg, false, 'svg 只能一张');
+  assert.equal('outputCompression' in svg, false);
+  assert.equal(n({ outputFormat: 'svg' }, { $edit: true }).outputFormat, 'png', '有改图对象：svg 不成立');
+  assert.equal(n({ outputFormat: 'svg' }, { $ref: true }).outputFormat, 'png');
+  const gif = n({ outputFormat: 'gif', frameCount: 30, frameDurationMs: 333, count: 12 });
+  assert.deepEqual([gif.frameCount, gif.frameDurationMs, gif.count], [16, 330, 10]);
+  assert.equal(n({ outputFormat: 'jpeg', outputCompression: 60 }).outputCompression, 60);
+  assert.equal('frameCount' in n({ outputFormat: 'png' }), false);
+  assert.equal(n({ outputFormat: 'jpeg', background: 'transparent' }).background, 'auto', 'jpeg 不能透明');
+  assert.equal(n({ outputFormat: 'webp', background: 'transparent' }).background, 'transparent');
+  assert.equal(n({ moderation: 'low', complexity: 'medium' }).complexity, 'medium');
+  assert.equal(n({ moderation: 'low' }).moderation, 'low');
+});
+
+test('图像请求体：gif 带帧数 / 每帧时长；svg 强制 n=1、不发压缩；审核默认不发、宽松才发；构图规划照发；gif / svg 的 mime 对', async () => {
+  const gifBytes = Buffer.from('GIF89a....');
+  await withFetch(() => jsonRes({ data: [{ b64_json: gifBytes.toString('base64') }, { b64_json: gifBytes.toString('base64') }] }), async (calls) => {
+    const r = await openaiAdapter.run(IMG_REQ({ model: 'gpt-image-2.6-sunburst', params: { size: 'auto', quality: 'high', count: 2, outputFormat: 'gif', outputCompression: 80, frameCount: 6, frameDurationMs: 120, background: 'auto', moderation: 'auto', complexity: 'low' } }), PROVIDER(), CTX());
+    assert.deepEqual(bodyOf(calls[0]), { model: 'gpt-image-2.6-sunburst', prompt: '一只猫', n: 2, quality: 'high', background: 'auto', output_format: 'gif', frame_count: 6, frame_duration_ms: 120, complexity: 'low' });
+    assert.deepEqual(r.assets.map((a) => a.mime), ['image/gif', 'image/gif']);
+  });
+  await withFetch(() => jsonRes({ data: [{ b64_json: Buffer.from('<svg/>').toString('base64') }] }), async (calls) => {
+    const r = await openaiAdapter.run(IMG_REQ({ model: 'gpt-image-2.6-sunburst', params: { outputFormat: 'svg', count: 3, outputCompression: 50, moderation: 'low', extra: { n: 4, output_compression: 10 } } }), PROVIDER(), CTX());
+    const b = bodyOf(calls[0]);
+    assert.deepEqual([b.n, 'output_compression' in b, b.moderation, b.output_format], [1, false, 'low', 'svg']);
+    assert.equal(r.assets[0].mime, 'image/svg+xml');
+  });
+  await withFetch(() => { throw new Error('不应发请求'); }, async () => {
+    await assert.rejects(openaiAdapter.run(IMG_REQ({ model: 'gpt-image-2.6-sunburst', params: { outputFormat: 'svg' }, inputs: [{ role: 'edit', data: Buffer.from('A'), mime: 'image/png' }] }), PROVIDER(), CTX()), (e) => e.status === 400 && /SVG/.test(e.message));
+  });
+  // 压缩只对 jpeg / webp：png 时不发
+  await withFetch(() => jsonRes({ data: [{ b64_json: 'AA==' }] }), async (calls) => {
+    await openaiAdapter.run(IMG_REQ({ params: { outputFormat: 'png', outputCompression: 50 } }), PROVIDER(), CTX());
+    assert.equal('output_compression' in bodyOf(calls[0]), false);
+  });
+});
+
+test('配音：voice_ 开头的自定义音色 id 发成 { id } 对象；内置音色照旧是名字', async () => {
+  await withFetch(() => binRes(Buffer.from('MP3')), async (calls) => {
+    await openaiAdapter.run({ kind: 'speech', model: 'gpt-4o-mini-tts-2025-12-15', prompt: '你好', params: { voice: 'voice_abc123' }, inputs: [], thread: null }, PROVIDER(), CTX());
+    await openaiAdapter.run({ kind: 'speech', model: 'gpt-4o-mini-tts', prompt: '你好', params: { voice: 'marin' }, inputs: [], thread: null }, PROVIDER(), CTX());
+    assert.deepEqual(bodyOf(calls[0]).voice, { id: 'voice_abc123' });
+    assert.equal(bodyOf(calls[0]).model, 'gpt-4o-mini-tts-2025-12-15');
+    assert.equal(bodyOf(calls[1]).voice, 'marin');
+  });
+});

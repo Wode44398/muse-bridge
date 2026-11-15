@@ -31,7 +31,7 @@
 <div bind:this={listEl} role={inListbox ? 'presentation' : 'listbox'}>
   {#each shown as o (String(o.value))}
     {@const hp = q ? hitParts(labelOf(o), q) : null}
-    <button class="op" class:on={o.value === value} role="option" aria-selected={o.value === value} onclick={() => onpick?.(o.value)}>
+    <button class="op" class:on={o.value === value} class:rej={o.rejected} role="option" aria-selected={o.value === value} title={o.rejected ? t('这个服务上次拒收了它') : null} onclick={() => onpick?.(o.value)}>
       <span class="op-tx"><b><span>{#if hp}{hp[0]}<mark class="op-hit">{hp[1]}</mark>{hp[2]}{:else}{labelOf(o)}{/if}</span></b></span>
       {#if o.hint}<span class="op-hint">{tr(String(o.hint))}</span>{/if}
       <span class="op-ck">{@html icon('check')}</span>

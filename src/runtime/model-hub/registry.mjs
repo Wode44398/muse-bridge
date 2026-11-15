@@ -30,7 +30,7 @@ import { provideModelService, MODEL_AGENTS } from '../model-services.mjs';
 import { guessModel, routeOf, providerOf, vendorOf, MODALITIES, cacheTtl, cacheTtlNote, normalizeCacheTtl } from '../../model-knowledge/index.mjs';
 import { ensureGateway, gatewayUrl, setServiceResolver, registerUpstream } from './gateway.mjs';
 import { makePoolHandler, lineState, forgetService, clearCooldown, defaultAuthStyle, BAD_KEY_RE, BAD_KEY_MSG } from './pool.mjs';
-import { handleVertex, vertexConfigured, VERTEX_KNOWN_MODELS, VERTEX_DEFAULT_MODELS } from './vertex.mjs';
+import { handleVertex, vertexConfigured, detectVertexChat, VERTEX_KNOWN_MODELS, VERTEX_DEFAULT_MODELS } from './vertex.mjs';
 import {
   setCatalogRoot, readCatalog, writeCatalog, mergeCatalog, addCatalogModel, removeCatalogModel, removeCatalog, catalogMeta, cleanCatalogModel, CATALOG_MAX,
   _resetCatalogCacheForTests,
@@ -102,6 +102,7 @@ function load() {
     pendingStudioRemovals: cleanPending(raw?.pendingStudioRemovals),
     flags: cleanFlags(raw?.flags),
     migrated: cleanMigrated(raw?.migrated),
+    vertexDetect: cleanVertexDetect(raw?.vertexDetect),
     // 只在内存：services.json 在却读不出（坏了）/ 有服务没读出来——对账时这些服务的 Studio 托管服务别当孤儿取消托管
     suspect: existsSync(file()) && !Array.isArray(raw?.services), unreadable,
   };
@@ -117,6 +118,7 @@ function save() {
     ...(pending.length ? { pendingStudioRemovals: pending } : {}),
     ...(Object.keys(flags).length ? { flags } : {}),
     ...(Object.keys(migrated).length ? { migrated } : {}),
+    ...(data.vertexDetect ? { vertexDetect: data.vertexDetect } : {}),
   }, 2);
 }
 
@@ -148,6 +150,14 @@ export function markMigrated(src, id, to) {
 }
 // 一次性事项的记号（做过就不再做）。dimensioNative = dimensio 自带适配的那几家厂商已经交给模型中心（见 dimensio-native.mjs）。
 const FLAG_NAMES = ['dimensioNative'];
+// Vertex 检测的结果（detectVertex）：{ at, location, error?, models: [{ id, label, stage, listed, ok, firstSeen }] }。没检测过 = null
+function cleanVertexDetect(v) {
+  if (!v || typeof v !== 'object' || !Number.isFinite(v.at)) return null;
+  const models = (Array.isArray(v.models) ? v.models : []).filter((m) => m && typeof m.id === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(m.id)).slice(0, 300)
+    .map((m) => ({ id: m.id, label: String(m.label || m.id).slice(0, 80), stage: String(m.stage || '').slice(0, 30), listed: m.listed !== false,
+      ok: typeof m.ok === 'boolean' ? m.ok : null, firstSeen: Number.isFinite(m.firstSeen) ? m.firstSeen : v.at }));
+  return { at: v.at, location: String(v.location || ''), ...(v.error ? { error: String(v.error).slice(0, 300) } : {}), models };
+}
 function cleanFlags(v) {
   const out = {};
   for (const k of FLAG_NAMES) if (v && typeof v === 'object' && v[k] === true) out[k] = true;
@@ -493,7 +503,8 @@ const brandLogoOf = (baseUrl) => { try { return providerOf(baseUrl)?.logo || '';
 function desiredSpecs() {
   const d = load(), out = new Map();
   if (d.vertex.enabled && vertexConfigured()) {
-    const models = d.vertex.models.map((id) => ({ id }));
+    const found = new Map((d.vertexDetect?.models || []).map((m) => [m.id, m.label]));
+    const models = d.vertex.models.map((id) => (found.has(id) ? { id, label: found.get(id) } : { id }));
     // 两边都走原生 Gemini 接口（2026-11-13 起 Claude 的本机代理会翻译它；此前 Claude 走 OpenAI 兼容接口、网关代存思维签名）。
     // 仍登记成两条：Claude 侧的服务 id（p-<vertex-c 的哈希>）老会话还记着，不能变
     for (const [suffix, agent, proto] of [['c', 'claude', 'gemini'], ['d', 'dimensio', 'gemini']]) {
@@ -922,8 +933,45 @@ export function setHubModelAdvanced(id, modelId, { over, params, cacheTtl } = {}
 export function listHubServices() { const sec = secrets(); return load().services.map((s) => serviceView(s, sec)); }
 export function getHubService(id) { const s = load().services.find((x) => x.id === id); return s ? serviceView(s) : null; }
 export function vertexView() {
-  const v = load().vertex;
-  return { ...v, configured: vertexConfigured(), known: VERTEX_KNOWN_MODELS.map((m) => ({ id: m.id, label: m.label })), published: handles.has(`${VERTEX_ID}-c`) || handles.has(`${VERTEX_ID}-d`) };
+  const d = load(), v = d.vertex, det = d.vertexDetect;
+  const builtin = new Set(VERTEX_KNOWN_MODELS.map((m) => m.id));
+  // 可勾的型号 = 内置表 + 检测出来能调的；status：检测过的型号能不能调（ok / bad，说不准的不写）；isNew：最近一次检测才第一次见到
+  const known = VERTEX_KNOWN_MODELS.map((m) => ({ id: m.id, label: m.label }));
+  // 新发现的按型号从新到旧排（gemini-4-… 在 gemini-3.8-… 前面）
+  const found = (det?.models || []).filter((m) => !builtin.has(m.id) && m.ok === true && m.listed)
+    .sort((a, b) => b.id.localeCompare(a.id, 'en', { numeric: true }));
+  for (const m of found) {
+    known.push({ id: m.id, label: m.label, found: true, ...(/preview|experimental/i.test(m.stage + ' ' + m.id) ? { preview: true } : {}), ...(m.firstSeen === det.at ? { isNew: true } : {}) });
+  }
+  const status = {};
+  for (const m of det?.models || []) if (m.ok !== null) status[m.id] = m.ok ? 'ok' : 'bad';
+  return {
+    ...v, configured: vertexConfigured(), known, status,
+    detect: det ? { at: det.at, location: det.location, ...(det.error ? { error: det.error } : {}), found: known.filter((k) => k.found).length } : null,
+    published: handles.has(`${VERTEX_ID}-c`) || handles.has(`${VERTEX_ID}-d`),
+  };
+}
+
+/** 检测 Vertex 上的对话模型（零成本探活）→ vertexView。只记结果、不动勾选；失败时记下原因（保留上次的型号结果）再抛。 */
+let vertexDetecting = null;
+export function detectVertex() {
+  if (vertexDetecting) return vertexDetecting;
+  vertexDetecting = (async () => {
+    const d = load(), prev = d.vertexDetect;
+    const seen = new Map((prev?.models || []).map((m) => [m.id, m.firstSeen]));
+    try {
+      const r = await detectVertexChat({ extra: [...VERTEX_KNOWN_MODELS.map((m) => m.id), ...d.vertex.models] });
+      // 以前没见过的都标新（第一次检测也一样：相对原来的内置表，它们就是新出现在列表里的）
+      d.vertexDetect = cleanVertexDetect({ ...r, models: r.models.map((m) => ({ ...m, firstSeen: seen.get(m.id) ?? r.at })) });
+      save(); changed();
+      return vertexView();
+    } catch (e) {
+      d.vertexDetect = cleanVertexDetect({ ...(prev || { models: [] }), at: Date.now(), location: prev?.location || '', error: e?.message || String(e) });
+      save(); notify();
+      throw e;
+    } finally { vertexDetecting = null; }
+  })();
+  return vertexDetecting;
 }
 
 /**

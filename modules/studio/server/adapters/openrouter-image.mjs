@@ -3,7 +3,7 @@
 //  - 像素只认 size:'WxH'——resolution 被忽略（默认出 1536×864），size:'2K' 直接 400；
 //    宽高须是 16 的倍数、最长边 ≤3840、总像素 ≤3840×2160（3840² 报 pixel budget）。显式 size 时不再带 aspect_ratio（会冲突）。
 //  - 改图 / 续改：input_references=[{type:'image_url',image_url:{url:dataURL}}]（≤16 张），实测保构图只改指定处。
-//  - 返回 data[0].b64_json + media_type；output_format 可 png/jpeg/webp。没有思考/搜索/采样/人物生成参数。
+//  - 返回 data[].b64_json + media_type（2026-11-15 起每张都收）；没有思考/搜索/采样/人物生成参数。
 // 进程内 fetch 走 net-proxy 设的全局 dispatcher，出站代理不用另管（成员自己的服务由调用方传 publicDispatcher）。
 // 2026-11-04 起是 Media Studio openrouter 方言的驱动：Key、地址、模型 id 都由服务传进来，不再读全局配置。
 import { IMG_OPENROUTER, IMG_QUALITIES } from '@bridge/core/config/capabilities.mjs';
@@ -56,26 +56,61 @@ export function imageDims(buf) {
   return null;
 }
 
+// 2026-11-15 查证的 /api/v1/images 字段（GPT Image）：n 1–10（上限，服务商可少回）、output_format png/jpeg/webp（2.6 另有 gif）、
+// background、output_compression（只 jpeg / webp，其它格式 OpenAI 会拒）、frame_count 2–16 / frame_duration_ms 20–2000（gif）；
+// moderation / complexity 是 OpenAI 端点的透传参数，写在 provider.options.openai 下（不认的键静默丢弃）。
+// gif 时显式 size 可能超雪碧图预算被拒：gif 且尺寸「自动」不传 size，让上游自己定帧尺寸。
+const FMT_MIME = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', svg: 'image/svg+xml' };
+const QUALITY_OK = (q) => q === 'auto' || IMG_QUALITIES.has(q);
+const intIn = (v, lo, hi) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : undefined; };
+
 /**
  * size：显式像素 'WxH'（自由尺寸卡）；null = 自动（不传）；undefined = 旧写法（按 aspectRatio + imageSize 算）。
  * @param {{ model: string, prompt: string, refs?: {data: string, mimeType: string}[], aspectRatio?: string, imageSize?: string, size?: string|null, quality?: string, signal?: AbortSignal,
+ *   count?: number, outputFormat?: string, outputCompression?: number, frameCount?: number, frameDurationMs?: number, background?: string,
+ *   moderation?: string, complexity?: string,
  *   apiKey: string, baseUrl?: string, headers?: object, extra?: object, timeoutMs?: number, dispatcher?: object }} o
  *   model = OpenRouter 的模型 id（如 openai/gpt-image-2.5-sunburst；旧本地 id 按 IMG_OPENROUTER 换算）
- * @returns {Promise<{ bytes: Buffer, mime: string }>}
+ * @returns {Promise<{ images: { bytes: Buffer, mime: string }[] }>} data[] 里每张都收（n>1 时服务商可能少回）
  */
-export async function generateOpenRouterImage({ model, prompt, refs = [], aspectRatio, imageSize, quality, size: sizeIn, signal, apiKey, baseUrl = 'https://openrouter.ai/api/v1', headers = {}, extra, timeoutMs = 300_000, dispatcher }) {
-  if (!apiKey) throw new Error('这个 OpenRouter 服务还没填 API Key');
-  const body = { model: IMG_OPENROUTER[model] || model, prompt: prompt || '生成一张图片', n: 1, quality: IMG_QUALITIES.has(quality) ? quality : 'high', ...(extra || {}) };
+export function openRouterImageBody({ model, prompt, refs = [], aspectRatio, imageSize, quality, size: sizeIn, count, outputFormat, outputCompression, frameCount, frameDurationMs, background, moderation, complexity, extra }) {
+  const fmt = typeof outputFormat === 'string' && FMT_MIME[outputFormat] ? outputFormat : undefined;
+  const gif = fmt === 'gif';
+  const body = { model: IMG_OPENROUTER[model] || model, prompt: prompt || '生成一张图片', n: intIn(count, 1, 10) || 1, quality: QUALITY_OK(quality) ? quality : 'high' };
+  if (fmt) body.output_format = fmt;
+  if (fmt === 'jpeg' || fmt === 'webp') { const c = intIn(outputCompression, 0, 100); if (c !== undefined) body.output_compression = c; }
+  if (gif) {
+    const fc = intIn(frameCount, 2, 16); if (fc !== undefined) body.frame_count = fc;
+    const fd = intIn(frameDurationMs, 20, 2000); if (fd !== undefined) body.frame_duration_ms = Math.min(2000, Math.max(20, Math.round(fd / 10) * 10));
+  }
+  if (typeof background === 'string' && background && background !== 'auto') body.background = background;
+  const pass = {};
+  if (typeof moderation === 'string' && moderation && moderation !== 'auto') pass.moderation = moderation;
+  if (typeof complexity === 'string' && complexity) pass.complexity = complexity;
+  Object.assign(body, extra || {});
+  // 透传参数并进 provider.options.openai；extra 里同名的键优先（用户手写的原始参数说了算）
+  if (Object.keys(pass).length) {
+    const pv = body.provider && typeof body.provider === 'object' ? body.provider : {};
+    const po = pv.options && typeof pv.options === 'object' ? pv.options : {};
+    body.provider = { ...pv, options: { ...po, openai: { ...pass, ...(po.openai && typeof po.openai === 'object' ? po.openai : {}) } } };
+  }
   // size 显式给了（自由尺寸卡）：字符串原样发、null = 自动（不传）；没给走旧写法——
-  // 比例：显式比例照算；「自动」有参考图就跟参考图，没图就不传 size（模型自选，约 1.5K）
+  // 比例：显式比例照算；「自动」有参考图就跟参考图（gif 除外：让上游定帧尺寸），没图就不传 size（模型自选，约 1.5K）
   if (sizeIn !== undefined) {
     if (sizeIn) body.size = sizeIn;
   } else {
     let ratio = aspectRatio && aspectRatio !== 'auto' ? aspectRatio : null;
-    if (!ratio && refs.length) ratio = imageDims(Buffer.from(refs[refs.length - 1].data, 'base64'));
+    if (!ratio && refs.length && !gif) ratio = imageDims(Buffer.from(refs[refs.length - 1].data, 'base64'));
     const size = ratio ? sizeFor(imageSize || '2K', ratio) : undefined;
     if (size) body.size = size;
   }
+  return body;
+}
+
+export async function generateOpenRouterImage(o) {
+  const { refs = [], signal, apiKey, baseUrl = 'https://openrouter.ai/api/v1', headers = {}, timeoutMs = 300_000, dispatcher } = o;
+  if (!apiKey) throw new Error('这个 OpenRouter 服务还没填 API Key');
+  const body = openRouterImageBody(o);
   if (refs.length) body.input_references = refs.slice(-16).map((r) => ({ type: 'image_url', image_url: { url: `data:${r.mimeType || 'image/png'};base64,${r.data}` } }));
 
   const ac = new AbortController();
@@ -92,12 +127,14 @@ export async function generateOpenRouterImage({ model, prompt, refs = [], aspect
     });
     const text = await res.text();
     let j; try { j = JSON.parse(text); } catch { j = null; }
-    if (!res.ok || !j?.data?.[0]?.b64_json) {
+    const data = Array.isArray(j?.data) ? j.data.filter((d) => d && typeof d.b64_json === 'string' && d.b64_json) : [];
+    if (!res.ok || !data.length) {
       const msg = j?.error?.message || (typeof j?.error === 'string' ? j.error : '') || text.slice(0, 300);
       throw Object.assign(new Error(`OpenRouter ${res.status}：${msg || '没有返回图片'}`), { status: res.status });
     }
-    const d = j.data[0];
-    return { bytes: Buffer.from(d.b64_json, 'base64'), mime: d.media_type || 'image/png' };
+    // mime：优先 media_type；没给按请求的格式兜底（gif / svg 不能被当成 png 存）
+    const fallback = FMT_MIME[body.output_format] || 'image/png';
+    return { images: data.map((d) => ({ bytes: Buffer.from(d.b64_json, 'base64'), mime: typeof d.media_type === 'string' && d.media_type ? d.media_type : fallback })) };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener?.('abort', onAbort);

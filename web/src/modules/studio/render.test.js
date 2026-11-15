@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { formatOf, controlOf, aspectSplit, paramGroups, fmtNumber, chipValue, searchOptions, needsSearch, cleanLabel, humanValue, hitParts } from './render.js';
+import { formatOf, controlOf, aspectSplit, paramGroups, fmtNumber, chipValue, selfExplaining, isChanged, searchOptions, needsSearch, cleanLabel, humanValue, hitParts } from './render.js';
 import { pickerGroups, modelCount, paramSource, isFresh, vendorName, splitGroup, shelfHits } from './picker.js';
 
 const lab = (o) => String(o.label ?? o.value);
@@ -15,10 +15,16 @@ test('渲染提示只看 format；没写 format 时只认「选项几乎全是�
   assert.equal(formatOf({ key: 'x', type: 'enum', options: [{ value: '1:1' }] }), '');   // 一个比值不算
 });
 
-test('控件挑选：短枚举分段、长 / 多选项菜单、比例格、小范围整数分段、滑条、多行文本', () => {
+test('控件挑选：短枚举分段、十项以内直接摆成小块、再多 / 太长才进菜单、比例格、小范围整数分段、张数加减、滑条、多行文本', () => {
   assert.equal(controlOf({ type: 'enum' }, [{ value: 'low' }, { value: 'high' }], { labelOf: lab, room: 130 }), 'seg');
-  assert.equal(controlOf({ type: 'enum' }, [{ value: 'a very long option label' }, { value: 'b' }], { labelOf: lab, room: 130 }), 'select');
-  assert.equal(controlOf({ type: 'enum' }, Array.from({ length: 5 }, (_, i) => ({ value: 'v' + i })), { labelOf: lab }), 'select');
+  // 方案 §11：选项直接摆出来，一步点到——分段放不下的、5–10 项的都是小块排，不再弹菜单
+  assert.equal(controlOf({ type: 'enum' }, [{ value: 'a fairly long label' }, { value: 'b' }], { labelOf: lab, room: 130 }), 'pills');
+  assert.equal(controlOf({ type: 'enum' }, Array.from({ length: 5 }, (_, i) => ({ value: 'v' + i })), { labelOf: lab }), 'pills');
+  assert.equal(controlOf({ type: 'enum' }, Array.from({ length: 10 }, (_, i) => ({ value: 'opt' + i })), { labelOf: lab }), 'pills');
+  assert.equal(controlOf({ type: 'enum' }, Array.from({ length: 11 }, (_, i) => ({ value: 'v' + i })), { labelOf: lab }), 'select');
+  assert.equal(controlOf({ type: 'enum' }, [{ value: 'an option label that is far too long to sit in a pill' }, { value: 'b' }], { labelOf: lab }), 'select');
+  assert.equal(controlOf({ type: 'number', min: 1, max: 10, step: 1, format: 'count' }), 'stepper');
+  assert.equal(controlOf({ type: 'number', min: 2, max: 16, step: 1 }), 'slider');
   assert.equal(controlOf({ type: 'enum', format: 'aspect' }, [{ value: 'auto' }, { value: '16:9' }], { labelOf: lab }), 'aspect');
   assert.equal(controlOf({ type: 'number', min: 1, max: 4, step: 1 }), 'steps');
   assert.equal(controlOf({ type: 'number', min: 4, max: 8, step: 1, format: 'duration' }), 'slider');   // 时长不做分段
@@ -62,14 +68,24 @@ test('翻译层：括号说明从参数名里去掉；接口原值整理成人�
   assert.equal(humanValue({ value: 'reference', label: '参考' }), '参考');   // 后端给了不同的 label 就用它
 });
 
-test('数值显示带单位与小数位；值芯片只出值（默认项、关着的开关、种子不占芯片）', () => {
+test('数值显示带单位与小数位；值芯片每个基本参数都出（默认值也出），种子 / 文本不上芯片', () => {
   assert.equal(fmtNumber({ step: 0.05 }, 1), '1.00');
   assert.equal(fmtNumber({ step: 1, unit: 's' }, 8), '8 s');
   assert.equal(fmtNumber({ step: 1, unit: '%' }, 90), '90%');
   assert.equal(chipValue({ type: 'enum', options: [{ value: '16:9', label: '16:9' }] }, '16:9'), '16:9');
-  assert.equal(chipValue({ type: 'enum', options: [{ value: '', label: '默认' }] }, ''), null);
-  assert.equal(chipValue({ type: 'bool' }, false), null);
+  assert.equal(fmtNumber({ step: 10, unit: 'ms' }, 200), '200 ms');
+  // 方案 §11：默认值也占芯片（以前默认项不出，「画质 高」在、「尺寸」不在，看不出规律）
+  assert.equal(chipValue({ type: 'enum', options: [{ value: '', label: '默认' }] }, ''), '默认');
+  assert.equal(chipValue({ type: 'bool' }, false), '');   // 开关：芯片只写名字，开没开看样式
   assert.equal(chipValue({ type: 'bool' }, true), '');
+  // 值自己说得清的只写值，说不清的前面带参数名
+  assert.equal(selfExplaining({ type: 'enum', format: 'aspect' }, '16:9'), true);
+  assert.equal(selfExplaining({ type: 'enum', format: 'aspect' }, '自动'), false);
+  assert.equal(selfExplaining({ type: 'size', format: 'size' }, '2048×1152'), true);
+  assert.equal(selfExplaining({ type: 'enum' }, '高'), false);
+  assert.equal(isChanged({ width: 1, height: 2 }, { width: 1, height: 2 }), false);
+  assert.equal(isChanged('auto', { width: 1, height: 2 }), true);
+  assert.equal(isChanged(undefined, null), false);
   assert.equal(chipValue({ type: 'seed' }, 42), null);
   assert.equal(chipValue({ type: 'number', format: 'count', min: 1, max: 4, step: 1 }, 2), '×2');
 });
@@ -103,7 +119,7 @@ test('选择器：主列表不含备选；聚合服务按厂商分小组；搜�
 
 test('参数来源行与新模型朱点（本机选过就不再冒）', () => {
   const vids = SAMPLE.kinds.video.groups.flatMap((g) => g.models);
-  const omni = vids.find((m) => /omni-1\.2/.test(m.id));
+  const omni = vids.find((m) => /omni-1\.3/.test(m.id));   // 样例里造的下一代（1.2 已是内置卡，方案 §11）：继承 1.2 + 参照库精修
   assert.deepEqual(paramSource(omni), { kind: 'family', from: omni.inheritsFrom });
   assert.equal(paramSource(vids.find((m) => m.paramSource === 'schema')).kind, 'schema');
   assert.equal(paramSource(vids.find((m) => m.paramSource === 'generic')).kind, 'generic');
@@ -119,7 +135,7 @@ test('样例里每个参数都挑得出控件（任意 schema 都渲染得了）
   let n = 0;
   for (const m of all) for (const p of m.params || []) {
     const c = controlOf(p, p.options || [], { labelOf: lab, room: 128 });
-    assert.ok(['seg', 'aspect', 'select', 'steps', 'slider', 'number', 'switch', 'seed', 'voice', 'text', 'textarea', 'json'].includes(c), m.id + ' ' + p.key);
+    assert.ok(['seg', 'pills', 'aspect', 'select', 'steps', 'stepper', 'slider', 'number', 'switch', 'seed', 'voice', 'text', 'textarea', 'json', 'size'].includes(c), m.id + ' ' + p.key);
     n++;
   }
   assert.ok(n > 50);

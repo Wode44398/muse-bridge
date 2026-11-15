@@ -8,6 +8,11 @@ const POLICY = /safety|polic(y|ies)|guideline|violat|blocked|prohibit|sensitive|
 export function errBrief(raw) {
   const s = String(raw || '').trim();
   if (!s) return { head: t('生成失败'), detail: '', policy: false };
+  // 上游点名拒收了某个取值（方案 §11.4）：服务端把人话放在头一行，原话在后面
+  const rj = /^这个服务不收「([^」\n]+)」\n?/.exec(s);
+  if (rj) return { head: t('这个服务不收「{what}」', { what: rj[1].split('：').map((x) => tr(x)).join('：') }), detail: s.slice(rj[0].length).trim(), policy: false };
+  // OpenRouter 转述的服务商拒绝（403 + Terms Of Service）：不是提示词被拦，是这个账号 / 线路被服务商拒了，换提示词没用
+  if (/terms of service/i.test(s) && /(^|\D)403(\D|$)/.test(s)) return { head: t('服务商拒绝了这个账号或线路'), detail: s, policy: false };
   const policy = POLICY.test(s);
   const m = s.match(/(?:^|\D)([45]\d\d)(?=\D|$)/);
   const code = m ? Number(m[1]) : 0;

@@ -2767,7 +2767,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
           if (shown) {
             ledger.addTool();
             if (id) { toolStarts.set(id, Date.now()); taskGuard.mainTools.add(id); }
-            send({ type: 'tool', id, name: n, index: ev.index });
+            send({ type: 'tool', id, name: n, index: ev.index, at: Date.now() });   // at：开始时刻，重放时前端按它续算行内计时
           }
         } else if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
           const t = ev.delta.text || '';

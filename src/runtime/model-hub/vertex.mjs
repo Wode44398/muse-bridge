@@ -132,3 +132,95 @@ export const VERTEX_KNOWN_MODELS = Object.freeze([
   { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', contextWindow: 1_048_576, maxOutput: 65_536, vision: true },
 ]);
 export const VERTEX_DEFAULT_MODELS = Object.freeze(['gemini-4-carbon', 'gemini-4-argon']);
+
+// —— 检测（2026-11-15）：Vertex 目录里有哪些对话模型、在对话区能不能调 ——
+// 目录列出 ≠ 能调用（记忆 project_bridge_vertex_media：preview 转正后旧 id 会被回收、有的型号只在个别区），所以每个候选都在对话区
+// 真打一次 countTokens——不生成、不计费。200 / 400（请求被校验 = 模型在）/ 429（限流）算能调，404 / 403 算调不通，别的说不准（null）。
+// 只收对话模型：图像、配音、视频、音乐、向量、实时、电脑操作这些不是给 Claude / dimensio 聊天用的（媒体那几类由 Media Studio 自己巡检）。
+const CHAT_EXCLUDE = /(image|nano-banana|tts|omni|embedding|native-audio|live|realtime|bidi|transcribe|robotics|computer-use|antigravity|deep-research|cyber|customtools|translate|learnlm)/;
+/** 目录里的一个 id 是不是值得列出来的对话模型（1.x、2.0 这些老款不收）。 */
+export const isVertexChatId = (id) => /^gemini-\d/.test(id) && !/^gemini-(1\.|2\.0)/.test(id) && !CHAT_EXCLUDE.test(id);
+
+/** gemini-3.8-flash-lite-preview-09-2026 → Gemini 3.8 Flash Lite（预览版另有标签，名字里不带） */
+export function prettyVertexId(id) {
+  return String(id || '').replace(/-\d{2}-\d{4}$/, '').replace(/-\d{3}$/, '').replace(/-preview$/, '').split('-').filter(Boolean)
+    .map((w) => (/^\d/.test(w) ? w : w[0].toUpperCase() + w.slice(1))).join(' ');
+}
+
+/** publisherModels → 对话候选 [{ id, stage }]；同一个模型有正式版就不收它的 preview 版。纯函数（单测用）。 */
+export function parseVertexChatCatalog(list) {
+  const out = new Map();
+  for (const m of Array.isArray(list) ? list : []) {
+    const id = String(m?.name || '').split('/').pop();
+    if (!id || !isVertexChatId(id) || out.has(id)) continue;
+    out.set(id, { id, stage: String(m?.launchStage || '') });
+  }
+  return [...out.values()].filter((m) => {
+    if (!/preview/.test(m.id)) return true;
+    const ga = m.id.replace(/-preview(-\d{2}-\d{4})?$/, '');
+    return ga === m.id || !out.has(ga);
+  });
+}
+
+/** 探针结论：true 能调 / false 调不通 / null 说不准。 */
+export function vertexProbeVerdict(status) {
+  if (status === 200 || status === 400 || status === 429) return true;
+  if (status === 404 || status === 403) return false;
+  return null;
+}
+
+async function listPublisherModels(token, signal) {
+  const all = [];
+  let page = '';
+  for (let i = 0; i < 5; i++) {
+    // 目录接口不分区；走 us-central1 的域名（Studio 的巡检同款，global 域名上这个 v1beta1 接口不稳）
+    const url = `https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models?listAllVersions=false&pageSize=300${page ? '&pageToken=' + encodeURIComponent(page) : ''}`;
+    const r = await fetchReconnect(url, { headers: { authorization: 'Bearer ' + token, 'x-goog-user-project': VERTEX_PROJECT }, signal });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      let msg = '';
+      try { msg = JSON.parse(t)?.error?.message || ''; } catch {}
+      throw Object.assign(new Error(`拉不到 Vertex 模型目录（HTTP ${r.status}）${msg ? '：' + msg.slice(0, 200) : ''}`), { status: 502 });
+    }
+    const j = await r.json().catch(() => null);
+    all.push(...(Array.isArray(j?.publisherModels) ? j.publisherModels : []));
+    page = j?.nextPageToken || '';
+    if (!page) break;
+  }
+  return all;
+}
+
+async function probeChat(id, root, token, signal) {
+  try {
+    const r = await fetchReconnect(`${root}/publishers/google/models/${encodeURIComponent(id)}:countTokens`, {
+      method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'ping' }] }] }), signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+    });
+    await r.body?.cancel?.().catch(() => {});
+    return vertexProbeVerdict(r.status);
+  } catch { return null; }
+}
+
+/**
+ * 检测 → { at, location, models: [{ id, label, stage, listed, ok }] }。
+ * extra：目录里没有、但也要探一下的型号（内置表里的、用户已经勾上的）。整体 90 秒封顶；目录拉不到就抛（人话）。
+ */
+export async function detectVertexChat({ extra = [] } = {}) {
+  if (!VERTEX_PROJECT) throw Object.assign(new Error('还没配 Vertex 项目：先填项目 ID 并保存凭据'), { status: 400 });
+  const signal = AbortSignal.timeout(90_000);
+  const token = await accessToken();
+  const listed = parseVertexChatCatalog(await listPublisherModels(token, signal));
+  const loc = VERTEX_LOCATION || 'global';
+  const root = `${host(loc)}/v1/projects/${encodeURIComponent(VERTEX_PROJECT)}/locations/${encodeURIComponent(loc)}`;
+  const byId = new Map(listed.map((m) => [m.id, { ...m, listed: true }]));
+  for (const id of extra) if (typeof id === 'string' && id && !byId.has(id)) byId.set(id, { id, stage: '', listed: false });
+  const items = [...byId.values()];
+  let i = 0;
+  const worker = async () => { while (i < items.length) { const m = items[i++]; m.ok = await probeChat(m.id, root, token, signal); } };
+  await Promise.all(Array.from({ length: Math.min(4, items.length) }, worker));
+  const known = new Map(VERTEX_KNOWN_MODELS.map((k) => [k.id, k.label]));
+  return {
+    at: Date.now(), location: loc,
+    models: items.map((m) => ({ id: m.id, label: known.get(m.id) || prettyVertexId(m.id), stage: m.stage, listed: m.listed, ok: m.ok ?? null })),
+  };
+}

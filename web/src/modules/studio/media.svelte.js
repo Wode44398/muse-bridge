@@ -15,6 +15,26 @@ import { paramLabel, sizeIssueText } from './words.js';
 
 const newDraft = () => ({ model: '', params: {}, inputs: [], parent: null, negative: '' });
 const LS_SIDE = 'studio-side';
+// 每页选的模型、调过的参数、负面提示词记在本机（方案 §11：以前刷新 / 重开就全回默认）。素材和血缘不记（文件可能已经不在了）
+const LS_DRAFTS = 'studio-drafts';
+const DRAFT_PAGES = ['image', 'video', 'voice', 'music'];
+function readDrafts() {
+  const out = Object.fromEntries(DRAFT_PAGES.map((p) => [p, newDraft()]));
+  try {
+    const o = JSON.parse(localStorage.getItem(LS_DRAFTS) || '{}');
+    for (const p of DRAFT_PAGES) {
+      const d = o?.[p];
+      if (!d || typeof d !== 'object') continue;
+      if (typeof d.model === 'string') out[p].model = d.model;
+      if (d.params && typeof d.params === 'object' && !Array.isArray(d.params)) out[p].params = d.params;
+      if (typeof d.negative === 'string') out[p].negative = d.negative.slice(0, 4000);
+    }
+  } catch {}
+  return out;
+}
+// 「更多」那一组展开过就一直展开（本机记住）
+const LS_ADV = 'studio-adv-open';
+function readAdv() { try { return localStorage.getItem(LS_ADV) === '1'; } catch { return false; } }
 
 // 作品栏宽：dimensio 侧栏 272，可拖 240–400；dock＝参数坞（宽屏才有）开没开
 function readSide() {
@@ -29,7 +49,8 @@ export const studio = $state({
   page: 'image',
   catalog: null, catalogErr: '', catalogLoading: false,
   saveDir: 'Media Studio',
-  drafts: { image: newDraft(), video: newDraft(), voice: newDraft(), music: newDraft() },
+  drafts: readDrafts(),
+  advOpen: readAdv(),        // 参数面板的「更多」展开着（参数多的模型才会收起）
   // 画布：图像是当前续改链（turns），其余三页是「正在看的那一件」（任务或作品）
   views: { image: { thread: null, turns: [] }, video: { focus: null }, voice: { focus: null }, music: { focus: null } },
   jobs: [],
@@ -48,6 +69,22 @@ export const studio = $state({
   seen: readSeen(),          // 本机选过的新模型 key（不再冒朱点）
 });
 
+let draftTimer = 0;
+/** 把四页的模型 / 参数 / 负面提示词存到本机（防抖 300ms；打字、拖滑条时不逐下写盘） */
+export function saveDrafts() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => {
+    try {
+      const o = {};
+      for (const p of DRAFT_PAGES) { const d = studio.drafts[p]; o[p] = { model: d.model, params: d.params, negative: d.negative }; }
+      localStorage.setItem(LS_DRAFTS, JSON.stringify(o));
+    } catch {}
+  }, 300);
+}
+export function setAdvOpen(on) {
+  studio.advOpen = !!on;
+  try { localStorage.setItem(LS_ADV, on ? '1' : '0'); } catch {}
+}
 export function saveSide() {
   try { localStorage.setItem(LS_SIDE, JSON.stringify({ width: studio.side.width, pinned: studio.side.pinned, tab: studio.side.tab, dock: studio.side.dock })); } catch {}
 }
@@ -152,6 +189,7 @@ export function currentModel(page) {
 }
 export function setModel(page, key) {
   studio.drafts[page].model = key;
+  saveDrafts();
 }
 /** 手里有没有要改的图（尺寸的「原图」档只在这时出现、并成为默认）：有「改这张图」素材；或图像续改链上已有图、
  *  这次没给参考图（同服务端 applyEditDefaults：续改拿链上最后一张当改图对象） */
@@ -178,7 +216,16 @@ export function valuesOf(page, model = currentModel(page)) {
   const has = (r) => ins.some((x) => x.role === r);
   return resolveValues(model?.params || [], studio.drafts[page].params, model?.id || '', { edit: editingNow(page), first: has('first'), last: has('last'), ref: has('ref') });
 }
-export function setParam(page, key, value) { studio.drafts[page].params[key] = value; }
+export function setParam(page, key, value) { studio.drafts[page].params[key] = value; saveDrafts(); }
+/** 这一项回默认（把草稿里的值拿掉，resolveValues 自己回落到卡上的默认） */
+export function resetParam(page, key) { delete studio.drafts[page].params[key]; saveDrafts(); }
+/** 当前模型的参数全部回默认（别的模型独有的键留着，切回去还在）；负面提示词一起清 */
+export function resetParams(page, model = currentModel(page)) {
+  const d = studio.drafts[page];
+  for (const s of model?.params || []) delete d.params[s.key];
+  if (model?.inputs?.negative) d.negative = '';
+  saveDrafts();
+}
 
 // —— 素材（输入岛里挂着的）——
 let seq = 0;
@@ -334,7 +381,7 @@ export async function submit(page, text) {
   // 自定义尺寸不合规（倍数 / 边长 / 比例 / 像素）：发出去也是 400，先拦下，那一行已经标红
   const bad = paramIssues(model.params || [], values)[0];
   if (bad) return { ok: false, error: t('{param}：{issue}', { param: paramLabel(bad.spec), issue: sizeIssueText(bad.issues[0]) }) };
-  const params = payloadParams(model.params || [], values);
+  const params = payloadParams(model.params || [], values, d.params);
   const body = {
     kind: catKind(page), key: model.key, prompt: (text || '').trim(), params,
     inputs: d.inputs.map((x) => {
@@ -481,6 +528,7 @@ export function reuseParams(a) {
   if (m) d.model = m.key;
   d.params = { ...(a.params || {}) };
   if (typeof a.negative === 'string' && a.negative) d.negative = a.negative;
+  saveDrafts();
   if (a.prompt) studio.pendingText = { page, text: a.prompt };
   return true;
 }

@@ -1,7 +1,7 @@
 // 尺寸参数（方案 §10）的前端纯逻辑：取值 / 默认（改图默认原图）/ 校验 / 值芯片，以及和服务端规则逐例对拍。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSize, sizeProblems, sizeIssues, customStart, isCustomSize } from './size.js';
+import { parseSize, sizeProblems, sizeIssues, customStart, isCustomSize, sizeFromRatio, sizeGrid, gridMatch, pickRatio, pickTier, nearestTier } from './size.js';
 import { resolveValues, payloadParams, paramIssues, visibleSpec } from './params.js';
 import { controlOf, chipValue } from './render.js';
 import * as server from '../../../../modules/studio/server/cards/size.mjs';
@@ -59,9 +59,9 @@ test('「默认，不传」不发；被 when 藏起来的不查也不发', () =>
   assert.deepEqual(paramIssues([ar, gated], resolveValues([ar, gated], {}, 'm')), [], '藏着的默认值不合规也不拦');
 });
 
-test('控件与值芯片：size 用自己的控件；自动 / 默认不占芯片，原图、档位、宽高照写', () => {
+test('控件与值芯片：size 用自己的控件；自动、原图、档位、宽高都写在芯片上', () => {
   assert.equal(controlOf(SIZE), 'size');
-  assert.equal(chipValue(SIZE, 'auto', { labelOf: lab, values: {} }), null);
+  assert.equal(chipValue(SIZE, 'auto', { labelOf: lab, values: {} }), '自动');
   assert.equal(chipValue(SIZE, 'original', { labelOf: lab, values: { $edit: true } }), '原图');
   assert.equal(chipValue(SIZE, '2048x1152', { labelOf: lab, values: {} }), '2048×1152');
   assert.equal(chipValue(SIZE, { width: 1600, height: 900 }, { labelOf: lab, values: {} }), '1600×900');
@@ -98,4 +98,49 @@ test('原图适配：前端 fitSize 与服务端逐例一致；出错的边单�
   }
   assert.deepEqual([...badSides(sizeProblems(FLEX, { width: 4096, height: 1024 }))].sort(), ['height', 'width'], '宽超限 + 比例超 3:1：两条都算');
   assert.deepEqual([...badSides(sizeProblems(FLEX, { width: 3999, height: 1600 }))], ['width'], '只有宽超限且不是 16 倍数');
+});
+
+// —— 方案 §11：比例 × 档位（不让人自己算 16 的倍数）——
+test('比例 × 档位：换算出来的宽高一律合规；格子里能认出当前是哪一格', () => {
+  const grid = sizeGrid(SIZE);
+  assert.deepEqual(grid.ratios, ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9']);
+  assert.deepEqual(grid.tiers.map((t) => t.id), ['1K', '2K', '4K']);
+  for (const t of grid.tiers) for (const r of grid.ratios) {
+    const s = sizeFromRatio(FLEX, r, t.edge);
+    assert.deepEqual(sizeProblems(FLEX, s), [], `${r} ${t.id} → ${s.width}x${s.height}`);
+    assert.deepEqual(gridMatch(SIZE, s, grid), { ratio: r, tier: t.id }, `${r} ${t.id}`);
+  }
+  assert.deepEqual(sizeFromRatio(FLEX, '16:9', 2048), { width: 2048, height: 1152 });
+  assert.deepEqual(sizeFromRatio(FLEX, '16:9', 4096), { width: 3840, height: 2160 }, '4K 夹到上限');
+  assert.deepEqual(sizeFromRatio(FLEX, '1:1', 1024), { width: 1024, height: 1024 });
+  const k1 = sizeFromRatio(FLEX, '16:9', 1024);
+  assert.ok(k1.width * k1.height >= 655360 && k1.width % 16 === 0 && k1.height % 16 === 0, '1K 的 16:9 不够最低像素：整体放大到合规');
+  assert.equal(sizeFromRatio(FLEX, '4:1', 1024), null, '规则不许的比例不出');
+  // 预设字符串也认得出是哪一格
+  assert.deepEqual(gridMatch(SIZE, '2048x1152', grid), { ratio: '16:9', tier: '2K' });
+  assert.deepEqual(gridMatch(SIZE, 'auto', grid), { ratio: null, tier: null });
+  assert.deepEqual(gridMatch(SIZE, { width: 1600, height: 912 }, grid), { ratio: null, tier: null }, '自己打的数不在格子上');
+});
+
+test('比例 × 档位：点比例沿用当前档位，点档位沿用当前比例；自动 / 原图时各用第一档 / 方图', () => {
+  const grid = sizeGrid(SIZE);
+  assert.deepEqual(pickRatio(SIZE, 'auto', '16:9', grid), sizeFromRatio(FLEX, '16:9', 1024));
+  assert.deepEqual(pickRatio(SIZE, { width: 2048, height: 2048 }, '16:9', grid), { width: 2048, height: 1152 });
+  assert.deepEqual(pickTier(SIZE, { width: 2048, height: 1152 }, '4K', grid), { width: 3840, height: 2160 });
+  assert.deepEqual(pickTier(SIZE, 'auto', '2K', grid), { width: 2048, height: 2048 });
+  // 自己打的宽高：换档保持它的实际比例
+  const t = pickTier(SIZE, { width: 1600, height: 800 }, '2K', grid);
+  assert.ok(Math.abs(t.width / t.height - 2) < 0.03 && Math.max(t.width, t.height) === 2048);
+  assert.equal(nearestTier(grid, { width: 1536, height: 1024 }).id, '2K');
+  assert.equal(nearestTier(grid, null).id, '1K');
+});
+
+test('比例 × 档位：上限低的模型去掉够不着的档；成套命名预设的模型不摆格子；没有自由宽高的不摆', () => {
+  const small = { ...SIZE, options: [], custom: { width: { min: 256, max: 1440, multipleOf: 32 }, height: { min: 256, max: 1440, multipleOf: 32 }, exact: true } };
+  assert.deepEqual(sizeGrid(small).tiers.map((t) => t.id), ['1K', '2K'], '2K 实际是 1440（上限），4K 和它一样、去掉');
+  const seedream = { ...SIZE, options: [], custom: { width: { min: 16 }, height: { min: 16 }, aspect: { min: 1 / 16, max: 16 }, pixels: { min: 921600, max: 4624220 }, exact: false } };
+  assert.deepEqual(sizeGrid(seedream).tiers.map((t) => t.id), ['1K', '2K']);
+  const named = { ...SIZE, options: [{ value: 'square_hd', label: 'Square HD' }, { value: 'landscape_16_9', label: 'Landscape 16:9' }] };
+  assert.equal(sizeGrid(named), null);
+  assert.equal(sizeGrid({ ...SIZE, custom: undefined }), null);
 });

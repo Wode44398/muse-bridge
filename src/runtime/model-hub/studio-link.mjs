@@ -178,6 +178,13 @@ export function setStudioBuiltin(id, patch) {
   return bridge.setBuiltin(id, patch);
 }
 
+/** 立即巡检一个内置媒体服务 → { ok, error?, added, gone, view }；没有桥 / 老桥 = null。 */
+export async function syncStudioBuiltin(id) {
+  const bridge = studioBridge();
+  if (!bridge || typeof bridge.syncBuiltin !== 'function') return null;
+  return bridge.syncBuiltin(id);
+}
+
 /** 地址按 Studio 认成哪种方言（不联网）；没有桥 = null。 */
 export function studioDialectFor(baseUrl) {
   const bridge = studioBridge();

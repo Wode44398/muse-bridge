@@ -30,16 +30,18 @@ function mockFetch(handler) {
 }
 const audio = (bytes, type = 'audio/mpeg') => new Response(bytes, { status: 200, headers: { 'content-type': type } });
 const jsonRes = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
-// 按卡的 ParamSpec 规范化（没有自定义 normalize 的卡，线上 jobs 走的就是这一条）
-const paramsOf = (card, raw) => applySpecs(card.params, raw);
+// 同 jobs.mjs：卡有自定义 normalize 就走它（配音 / 音乐卡都有：数组 JSON、种子 -1、音色设置开关），否则按 ParamSpec 规范化
+const paramsOf = (card, raw, flags = {}) => (card.normalize ? card.normalize(raw, flags) : applySpecs(card.params, raw, flags));
 const req = (kind, model, card, params, prompt = 'hi') => ({ kind, model, card, prompt, params, negative: '', inputs: [], thread: null });
 
 test('配音：URL 带 voice 与 output_format；POST；xi-api-key 头；卡上参数映射成下划线字段，音色设置只带用户设的；秒级短请求不标 submitted（限流可重试）', async () => {
   const m = mockFetch(() => audio(Buffer.from('ID3fake')));
   const c = ctx();
   try {
-    const card = CARDS.eleven_multilingual_v2;
-    const out = await A.run(req('speech', 'eleven_multilingual_v2', card, paramsOf(card, {
+    // 2026-11-15：multilingual_v2 不认 language_code（openapi），这条改用 Flash v2.5；
+    // 给了音色设置的数值就算「自定义」，自定义时各项都发（没给的取文档默认：style 0、speed 1）
+    const card = CARDS.eleven_flash_v2_5;
+    const out = await A.run(req('speech', 'eleven_flash_v2_5', card, paramsOf(card, {
       voice: 'VOICE_A', outputFormat: 'mp3_44100_192', stability: 0.3, similarityBoost: 0.8, useSpeakerBoost: true, languageCode: 'zh', seed: 7, applyTextNormalization: 'on',
     }), '你好，世界'), provider(), c);
     assert.equal(m.calls.length, 1);
@@ -48,8 +50,8 @@ test('配音：URL 带 voice 与 output_format；POST；xi-api-key 头；卡上�
     assert.equal(r.url, 'https://api.elevenlabs.io/v1/text-to-speech/VOICE_A?output_format=mp3_44100_192');
     assert.equal(r.headers['xi-api-key'], 'k');
     assert.deepEqual(r.body, {
-      text: '你好，世界', model_id: 'eleven_multilingual_v2',
-      voice_settings: { stability: 0.3, similarity_boost: 0.8, use_speaker_boost: true },
+      text: '你好，世界', model_id: 'eleven_flash_v2_5',
+      voice_settings: { stability: 0.3, similarity_boost: 0.8, style: 0, speed: 1, use_speaker_boost: true },
       language_code: 'zh', seed: 7, apply_text_normalization: 'on',
     });
     assert.ok(Buffer.isBuffer(out.assets[0].bytes));
@@ -239,7 +241,7 @@ test('通用卡：未知的配音模型照样能跑（prompt → text，extra �
 
 test('模型卡：登记进方言表；种类对；每张卡末尾是 extra（json）；默认值符合文档，音色设置和文本规范化不带默认', () => {
   assert.deepEqual(dialectBuiltinModels('elevenlabs').map((x) => x.id).sort(),
-    ['eleven_flash_v2_5', 'eleven_multilingual_v2', 'eleven_v4', 'eleven_v4_turbo', 'music_v2', 'music_v2_5']);
+    ['eleven_flash_v2_5', 'eleven_multilingual_v2', 'eleven_v3', 'eleven_v4', 'eleven_v4_turbo', 'music_v2', 'music_v2_5']);
   for (const [id, card] of Object.entries(CARDS)) {
     assert.ok(['speech', 'music'].includes(card.kind), id);
     assert.equal(card.params.at(-1).key, 'extra', id);
@@ -253,6 +255,93 @@ test('模型卡：登记进方言表；种类对；每张卡末尾是 extra（js
   const mus = paramsOf(CARDS.music_v2, {});
   assert.equal(mus.outputFormat, 'auto');
   assert.equal(mus.forceInstrumental, false);
+});
+
+test('按型号出音色设置：v4 只有稳定度 / 相似度 / 克隆强度；v3 没有语速 / 相似度 / 说话人增强；multilingual_v2 没有语言代码', () => {
+  const keys = (id) => CARDS[id].params.map((s) => s.key);
+  for (const id of ['eleven_v4', 'eleven_v4_turbo']) {
+    assert.ok(['stability', 'similarityBoost', 'cloneStrength'].every((k) => keys(id).includes(k)), id);
+    assert.ok(['style', 'speed', 'useSpeakerBoost'].every((k) => !keys(id).includes(k)), id);
+  }
+  assert.ok(['speed', 'similarityBoost', 'useSpeakerBoost', 'cloneStrength'].every((k) => !keys('eleven_v3').includes(k)));
+  assert.ok(keys('eleven_v3').includes('style'));
+  assert.ok(!keys('eleven_multilingual_v2').includes('languageCode'));
+  assert.ok(keys('eleven_flash_v2_5').includes('languageCode'));
+  // 不认的键丢掉：给 v4 传语速也不会发
+  assert.equal(paramsOf(CARDS.eleven_v4, { speed: 1.1 }).speed, undefined);
+});
+
+test('音色设置开关：默认用音色自带（不发 voice_settings）；选自定义发各项（默认＝文档默认）', async () => {
+  assert.equal(paramsOf(CARDS.eleven_v4, { voiceSettings: '' }).stability, undefined);
+  const m = mockFetch(() => audio(Buffer.from('x')));
+  try {
+    const card = CARDS.eleven_v4;
+    await A.run(req('speech', 'eleven_v4', card, paramsOf(card, { voiceSettings: 'custom', cloneStrength: 0.4 })), provider(), ctx());
+    assert.deepEqual(m.calls[0].body.voice_settings, { stability: 0.5, similarity_boost: 0.75, clone_strength: 0.4 });
+  } finally { m.restore(); }
+});
+
+test('配音新字段：前后文、发音词典、专业克隆快速版、音效（等于默认且没填 id 不发）；种子 -1 当没给', async () => {
+  const m = mockFetch(() => audio(Buffer.from('x')));
+  try {
+    const card = CARDS.eleven_v4;
+    await A.run(req('speech', 'eleven_v4', card, paramsOf(card, {
+      seed: -1, previousText: '上一句。', nextText: '下一句。', usePvcAsIvc: true,
+      pronunciationDictionaryLocators: JSON.stringify([{ pronunciation_dictionary_id: 'D1', version_id: 'V1' }, { pronunciation_dictionary_id: 'D2' }]),
+      effectEnvironment: 'hall', effectPan: 0.5,
+    })), provider(), ctx());
+    assert.deepEqual(m.calls[0].body, {
+      text: 'hi', model_id: 'eleven_v4', previous_text: '上一句。', next_text: '下一句。', use_pvc_as_ivc: true,
+      pronunciation_dictionary_locators: [{ pronunciation_dictionary_id: 'D1', version_id: 'V1' }, { pronunciation_dictionary_id: 'D2' }],
+      audio_effects: { distance: 0, environment_id: 'hall', send_level: 1, pan: 0.5 },
+    });
+    // 音效全是默认值、没填 id：整组不发
+    await A.run(req('speech', 'eleven_v4', card, paramsOf(card, { effectDistance: 0, effectSendLevel: 1, effectPan: 0 })), provider(), ctx());
+    assert.equal('audio_effects' in m.calls[1].body, false);
+    assert.equal('seed' in m.calls[1].body, false);
+  } finally { m.restore(); }
+});
+
+test('发音词典：不是列表、超过 3 个、缺 id 都是 400；输出 PCM 时音效整组隐藏', () => {
+  const card = CARDS.eleven_flash_v2_5;
+  for (const v of ['{"a":1}', JSON.stringify([1, 2, 3, 4].map((i) => ({ pronunciation_dictionary_id: 'D' + i }))), '[{}]', 'not json']) {
+    assert.throws(() => paramsOf(card, { pronunciationDictionaryLocators: v }), (e) => e instanceof AdapterError && e.status === 400, v);
+  }
+  assert.equal(paramsOf(card, { pronunciationDictionaryLocators: '[]' }).pronunciationDictionaryLocators, undefined);
+  const pcm = paramsOf(card, { outputFormat: 'pcm_24000', effectEnvironment: 'hall', effectPan: 1 });
+  assert.equal(pcm.effectEnvironment, undefined);
+  assert.equal(pcm.effectPan, undefined);
+});
+
+test('输出格式：完整枚举（不含 ulaw / alaw），套餐限制写在 hint；opus 的 mime 是 audio/ogg', async () => {
+  const opts = CARDS.eleven_v4.params.find((s) => s.key === 'outputFormat').options;
+  assert.equal(opts.length, 26);
+  assert.ok(!opts.some((o) => /^(ulaw|alaw)_/.test(o.value)));
+  assert.equal(opts.find((o) => o.value === 'mp3_44100_192').hint, 'Creator');
+  assert.equal(opts.find((o) => o.value === 'pcm_44100').hint, 'Pro');
+  assert.equal(CARDS.music_v2.params.find((s) => s.key === 'outputFormat').options.length, 24);
+  const m = mockFetch(() => audio(Buffer.from('OggS'), 'application/octet-stream'));
+  try {
+    const out = await A.run(req('speech', 'eleven_v4', CARDS.eleven_v4, paramsOf(CARDS.eleven_v4, { outputFormat: 'opus_48000_128' })), provider(), ctx());
+    assert.equal(out.assets[0].mime, 'audio/ogg');
+    assert.ok(m.calls[0].url.endsWith('?output_format=opus_48000_128'));
+  } finally { m.restore(); }
+});
+
+test('音乐：默认「模型定时长」不发时长；分段计划参数给了就不发提示词，种子只配分段计划；C2PA 只在 mp3；精调 / 局部重写照发', async () => {
+  const m = mockFetch(() => audio(Buffer.from('x')));
+  try {
+    const card = CARDS.music_v2_5;
+    await A.run(req('music', 'music_v2_5', card, paramsOf(card, { seed: 5 }), '城市夜景'), provider(), ctx());
+    assert.deepEqual(m.calls[0].body, { prompt: '城市夜景', force_instrumental: false, model_id: 'music_v2_5' });
+    const plan = { chunks: [{ text: '[Verse]', duration_ms: 15000, positive_styles: ['pop'] }] };
+    await A.run(req('music', 'music_v2_5', card, paramsOf(card, {
+      compositionPlan: plan, seed: 5, durationSeconds: 60, signWithC2pa: true, storeForInpainting: true, finetuneId: 'ft_1',
+    }), '会被去掉'), provider(), ctx());
+    assert.deepEqual(m.calls[1].body, { model_id: 'music_v2_5', composition_plan: plan, sign_with_c2pa: true, store_for_inpainting: true, finetune_id: 'ft_1', seed: 5 });
+    assert.equal(paramsOf(card, { outputFormat: 'pcm_44100', signWithC2pa: true }).signWithC2pa, undefined);
+    assert.equal(paramsOf(card, { autoDuration: true, durationSeconds: 60 }).durationSeconds, undefined);
+  } finally { m.restore(); }
 });
 
 test('只做配音和音乐：其他种类直接报错', async () => {

@@ -132,7 +132,11 @@ test('维护者报的问题：OpenAI 兼容服务里的 gpt-image-2.6-sunburst-c
 test('固定尺寸的老模型和未知模型不受影响：仍是比例 → 固定三档', () => {
   const generic = cardFor(OAI, { id: 'some-image-model', kind: 'image', enabled: true, source: 'manual' });
   assert.ok(generic.params.some((s) => s.key === 'aspectRatio'));
-  assert.ok(!generic.params.some((s) => s.type === 'size'));
+  // 方案 §11：通用卡多了一个默认不传的尺寸（自定义宽高、不设像素上限）；填了它比例就不发
+  const gsize = generic.params.find((s) => s.type === 'size');
+  assert.equal(gsize.default, '');
+  assert.deepEqual(generic.params.find((s) => s.key === 'aspectRatio').when, { size: '' });
+  assert.deepEqual(generic.normalize ? generic.normalize({}) : { aspectRatio: 'auto' }, { aspectRatio: 'auto' }, '什么都不填：照旧只有比例 auto');
   for (const id of ['gpt-image-2', 'gpt-image-2.5-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2.6-sunburst']) {
     assert.ok(OPENAI[id].params.some((s) => s.type === 'size'), id);
     assert.ok(!OPENAI[id].params.some((s) => s.key === 'aspectRatio'), id);
@@ -173,7 +177,8 @@ test('OpenRouter 的 GPT Image：新写法发 size（自动不传、原图按原
   const prov = { id: 'p-or000001', owner: 'admin', dialect: 'openrouter', name: 'OpenRouter', baseUrl: 'https://or.example.test/api/v1', authStyle: 'bearer', headers: {}, params: {}, models: [] };
   const entry = { id: 'openai/gpt-image-2.6-sunburst', kind: 'image', enabled: true, source: 'builtin' };
   const card = cardFor(prov, entry);
-  assert.deepEqual(card.params.map((s) => s.key), ['size', 'quality']);
+  // 2026-11-15：参数补全（张数 / 格式 / 压缩 / gif 帧 / 背景 / 审核 / 构图规划），尺寸与画质仍在最前
+  assert.deepEqual(card.params.map((s) => s.key), ['size', 'quality', 'count', 'outputFormat', 'outputCompression', 'frameCount', 'frameDurationMs', 'background', 'moderation', 'complexity', 'extra']);
   await withFetch(ok, async (calls) => {
     const run = (params, inputs = []) => openrouterAdapter.run({ kind: 'image', model: entry.id, card, prompt: 'x', params: card.normalize(params), inputs, thread: null }, prov, CTX);
     const edit = [{ role: 'edit', data: png(1536, 1024), mime: 'image/png' }];

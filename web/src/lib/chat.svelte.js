@@ -866,7 +866,7 @@ function onEvent(m, ev) {
       let known = ev.id ? toolById.get(ev.id) : null;
       if (known && !(m.segments || []).some((s) => s && s.kind === 'tools' && (s.tools || []).includes(known))) known = null;
       if (known) { if (ev.name) known.name = ev.name; if (typeof ev.index === 'number') known.index = ev.index; }
-      else pushTool(m, { id: ev.id, name: ev.name, index: ev.index });
+      else pushTool(m, { id: ev.id, name: ev.name, index: ev.index, ...(ev.at > 0 ? { t0: ev.at } : {}) });   // 切回会话重放时 t0 取服务端开始时刻，别从 0 秒重算
       break;
     }
     case 'tool_args': {

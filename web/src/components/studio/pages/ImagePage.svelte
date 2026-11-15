@@ -8,6 +8,7 @@
   import { dragOut, canDragOut } from '../../../lib/dragOut.js';
   import { studio, mediaSrc, assetDragSrc, openAsset, currentModel, valuesOf, retryJob } from '../../../modules/studio/media.svelte.js';
   import { assetDrag } from '../../../modules/studio/assetDrag.js';
+  import { parseSize } from '../../../modules/studio/size.js';
   import CreateFrame from '../CreateFrame.svelte';
   import Empty from '../ui/Empty.svelte';
   import Img from '../ui/Img.svelte';
@@ -28,6 +29,8 @@
   const ratio = $derived.by(() => {
     const vals = valuesOf('image', model);
     for (const k of Object.keys(vals)) { const m = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(String(vals[k] || '')); if (m) return `${m[1]} / ${m[2]}`; }
+    // 自由尺寸的模型没有比例参数：进行中的占位框按尺寸值的宽高（比例 × 档位格点出来的、预设、自定义都是宽高）
+    for (const s of model?.params || []) { if (s.type === 'size') { const d = parseSize(vals[s.key]); if (d) return `${d.width} / ${d.height}`; } }
     return '4 / 3';
   });
 
@@ -76,6 +79,8 @@
             <div class="ch-user"><div class="ch-bubble sel-text">{#if turn.srcUrl}<span class="ch-srcw"><Img class="ch-src" src={turn.srcUrl} alt="" /></span>{/if}<span>{turn.prompt}</span></div></div>
           {/if}
           {#if turn.assets?.length}
+            <!-- 一次出多张（张数 > 1）：并排成格，不再一张一张往下摞 -->
+            <div class="ch-out" class:multi={turn.assets.length > 1} class:many={turn.assets.length > 4}>
             {#each turn.assets as a (a.id)}
               <figure class="art">
                 <div class="ch-img" data-asset={a.id} role="button" tabindex="0" aria-label={turn.prompt || tc('名词', '生成图像')}
@@ -88,6 +93,7 @@
               </figure>
               {#if a.text}<div class="ch-txt sel-text">{tr(a.text)}</div>{/if}
             {/each}
+            </div>
           {:else if turn.state === 'queued' || turn.state === 'running'}
             <BusyFrame job={jobOf(turn.jobId)} state={turn.state} {ratio} modelLabel={model?.label || ''} />
           {:else if turn.state === 'error'}

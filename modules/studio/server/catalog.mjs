@@ -12,7 +12,8 @@ import { KINDS, DIALECT_KINDS } from './presets.mjs';
 import { cardFor, paramSourceOf } from './cards/index.mjs';
 import { decorateSpec } from './discovery/labels.mjs';
 import { vendorOf } from './discovery/sources.mjs';
-import { usedModel, discoveryRev } from './discovery/store.mjs';
+import { usedModel, discoveryRev, rejectedFor } from './discovery/store.mjs';
+import { markRejected } from './cards/rejected.mjs';
 import { googleDialectOf } from './cards/google.mjs';
 import { LOCAL_IMAGE_MODEL } from './adapters/local-image.mjs';
 
@@ -37,7 +38,8 @@ export function isNewModel(provider, entry, owner, now = Date.now()) {
 export function resolvedModel(provider, entry, owner) {
   const card = cardFor(provider, entry);
   const d = entry.defaults || {};
-  const params = card.params.map((s) => decorateSpec(s.key in d ? { ...s, default: d[s.key] } : s));
+  // 上游拒收过的取值标上 rejected（方案 §11.4：中转站认不认 svg / gif 没有接口能问，被拒一次就记住）
+  const params = markRejected(card.params.map((s) => decorateSpec(s.key in d ? { ...s, default: d[s.key] } : s)), rejectedFor(provider.owner, provider.id, entry.id));
   const vendor = vendorFor(provider, entry);
   return {
     key: modelKey(provider.id, entry.id), id: entry.id,

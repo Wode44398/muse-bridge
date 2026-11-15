@@ -184,9 +184,14 @@ export function removeImageChat(key, dir = MEDIA) {
 // 背景：4K PNG 单张 ~20MB，历史网格 28 张 = 手机瞬间拉 ~500MB，WebView 直接全员碎图。
 // 两档：thumb=320px(webp q70, ~10-30KB, 网格用) / preview=1280px(webp q80, ~100-400KB, 对话流大图用)。
 // sharp 懒 import；任何失败返回 null → 调用方回退原图（行为退化为现状，不致命）。
-// gif 跳过（缩略会丢动画）；并发请求同一张图用 in-flight Map 去重；tmp+rename 原子落盘。
+// gif 跳过（缩略会丢动画，?v=thumb 回退原图）；并发请求同一张图用 in-flight Map 去重；tmp+rename 原子落盘。
+// svg（上游生成的不可信文本）也栅格化成 webp：从内存喂给 sharp（没有基准路径，librsvg 不去读旁边的文件），
+// 限输入像素与超时、文件过大不做；失败回 null → 调用方回退原图（原图直出带沙箱 CSP，见 routes/media-file.mjs）。
 const DERIVED = { thumb: { suffix: '.thumb.webp', size: 320, q: 70 }, preview: { suffix: '.prev.webp', size: 1280, q: 80 } };
-const DERIVABLE = new Set(['png', 'jpg', 'jpeg', 'webp']);
+const DERIVABLE = new Set(['png', 'jpg', 'jpeg', 'webp', 'svg']);
+const SVG_MAX_BYTES = 8 * 1024 * 1024;
+const SVG_MAX_PIXELS = 64 * 1024 * 1024;   // 栅格化的输入像素上限（sharp limitInputPixels）
+const SVG_TIMEOUT_S = 15;
 // 视频：ffmpeg 抽一帧 → sharp 出两档海报图。手机 WebView 的 <video preload=metadata>
 // 网格会撞解码器数量上限（多元素抢解码器 → 白块/碎图），网格必须用 <img> 海报。
 const VIDEO_DERIVABLE = new Set(['mp4', 'webm']);
@@ -227,10 +232,16 @@ export async function derivedFor(id, dir = MEDIA, variant) {
         await extractFrame(src, frameTmp);
         input = frameTmp;
       }
+      const isSvg = ext === 'svg';
+      if (isSvg) {
+        if (statSync(src).size > SVG_MAX_BYTES) throw new Error('svg too large');
+        input = readFileSync(src);
+      }
       const makeOne = async (s) => {
         const o = path.join(dir, id + s.suffix);
         if (existsSync(o)) return;
-        await sharp(input).rotate()
+        const img = isSvg ? sharp(input, { limitInputPixels: SVG_MAX_PIXELS }).timeout({ seconds: SVG_TIMEOUT_S }) : sharp(input).rotate();
+        await img
           .resize(s.size, s.size, { fit: 'inside', withoutEnlargement: true })
           .webp({ quality: s.q })
           .toFile(o + '.tmp');

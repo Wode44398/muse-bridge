@@ -7,7 +7,7 @@
   import AgentStack from './AgentStack.svelte';
   import VertexCredentials from './VertexCredentials.svelte';
   import BuiltinModels from './BuiltinModels.svelte';
-  import { hub, hubPost, loadHub } from '../../lib/modelHub.svelte.js';
+  import { hub, hubPost, hubAsk, loadHub } from '../../lib/modelHub.svelte.js';
   import { cp, loadProviders, canUseCustomApi } from '../../lib/claudeProviders.svelte.js';
   import { showToast } from '../../lib/toast.svelte.js';
   import { t } from '../../lib/i18n.js';
@@ -24,18 +24,58 @@
   let agents = $state([...v0.agents]);
   let models = $state([...v0.models]);
   // Vertex 上的图像 / 视频 / 配音 / 音乐模型：数据在 Media Studio 的 vertex 服务里（同一份 Google 云凭据），这里直接开关（2026-11-13 统一入口）
-  const media = (hub.builtins || []).filter((b) => b.dialect === 'vertex');
-  let mediaOn = $state(Object.fromEntries(media.map((b) => [b.id, Object.fromEntries((b.models || []).map((m) => [m.id, m.enabled !== false]))])));
+  // 检测完 Studio 那边可能多出模型（进备选、关着）：清单跟着总览走，开关表只补新出现的 id，不动已经拨过的
+  const media = $derived((hub.builtins || []).filter((b) => b.dialect === 'vertex'));
+  const onMap = (b) => Object.fromEntries((b.models || []).map((m) => [m.id, m.enabled !== false]));
+  const media0 = (hub.builtins || []).filter((b) => b.dialect === 'vertex');
+  let mediaOn = $state(Object.fromEntries(media0.map((b) => [b.id, onMap(b)])));
+  let mediaBase = $state(Object.fromEntries(media0.map((b) => [b.id, onMap(b)])));
   let newModel = $state('');
   let saving = $state(false);
   let err = $state('');
 
   const snap = () => JSON.stringify({ enabled, members, agents: [...agents].sort(), models, mediaOn });
   let base = $state(snap());
-  const mediaBase = JSON.stringify(mediaOn);
   $effect(() => { dirtyOut = snap() !== base; });
 
-  const known = $derived(v0.known || []);
+  // 可勾的型号 = 内置表 + 检测出来能调的（服务端算好）；跟着总览走，检测完不用关了重开
+  const known = $derived(hub.vertex?.known || v0.known || []);
+  const status = $derived(hub.vertex?.status || {});
+  const det = $derived(hub.vertex?.detect || null);
+
+  // —— 检测：对话模型拉目录 + 零成本探活；媒体模型让 Media Studio 立即巡检。都只记结果、不动勾选 ——
+  let detecting = $state(false);
+  let detMsg = $state('');      // 这次检测的结论（一句）
+  let detErr = $state('');
+  let freshMedia = $state([]);  // 这次检测新出现的媒体模型 id（标「新」）
+  async function detect() {
+    if (detecting || !configured) return;
+    detecting = true; detMsg = ''; detErr = '';
+    try {
+      const r = await hubAsk('vertex/detect', {});
+      const wasDirty = dirtyOut;
+      await loadHub(true);
+      // 新出现的媒体模型补进开关表（两边都补：不算未保存改动）
+      for (const b of r.builtins || []) {
+        if (b.dialect !== 'vertex') continue;
+        const fresh = onMap(b);
+        mediaOn[b.id] = { ...fresh, ...(mediaOn[b.id] || {}) };
+        mediaBase[b.id] = { ...fresh, ...(mediaBase[b.id] || {}) };
+      }
+      if (!wasDirty) base = snap();
+      const chatNew = (r.vertex?.known || []).filter((k) => k.isNew).length;
+      const mediaNew = (r.media || []).reduce((n, m) => n + (m.added || []).length, 0);
+      freshMedia = (r.media || []).flatMap((m) => (m.added || []).map((x) => x.id));
+      const errs = [r.chatError && t('对话模型：{e}', { e: r.chatError }), ...(r.media || []).filter((m) => !m.ok && m.error).map((m) => t('媒体模型：{e}', { e: m.error }))].filter(Boolean);
+      detErr = errs.join('\n');
+      if (!r.chatError || mediaNew) {
+        const parts = [chatNew && t('新发现 {n} 个对话模型', { n: chatNew }), mediaNew && t('新发现 {n} 个媒体模型', { n: mediaNew })].filter(Boolean);
+        detMsg = parts.length ? parts.join(t('，')) : t('没有新模型');
+      }
+    } catch (e) { detErr = e.message || t('检测失败'); }
+    detecting = false;
+  }
+  const when = (at) => new Date(at).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   const extra = $derived(models.filter((id) => !known.some((k) => k.id === id)));
   const toggleAgent = (a) => { agents = agents.includes(a) ? agents.filter((x) => x !== a) : [...agents, a]; };
   const toggleModel = (id) => { models = models.includes(id) ? models.filter((x) => x !== id) : [...models, id]; };
@@ -65,7 +105,7 @@
     try {
       await hubPost('vertex', { enabled, agents, models, ...(cp.canShare ? { members } : {}) });
       // 媒体模型有改动才写 Studio 那边（共享给成员两边一个开关）
-      const before = JSON.parse(mediaBase);
+      const before = mediaBase;
       for (const b of media) {
         const changedMedia = JSON.stringify(mediaOn[b.id]) !== JSON.stringify(before[b.id]);
         const sharedDiff = cp.canShare && (b.shared === true) !== members;
@@ -113,21 +153,37 @@
   </section>
 
   <section>
-    <div class="fl">{t('型号')}</div>
+    <div class="fl fl-row">
+      <span>{t('型号')}</span>
+      <!-- 检测：拉 Vertex 目录、逐个零成本探活（对话 + 媒体），新发现的列进来但不自动勾上 -->
+      <button type="button" class="dbtn" class:busy={detecting} disabled={detecting || !configured} onclick={detect}>
+        <svg class:spin={detecting} viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v2.6h-2.6"/></svg>
+        {detecting ? t('检测中…') : t('检测')}
+      </button>
+    </div>
     <div class="mlist">
       {#each known as k (k.id)}
         <button type="button" class="mrow" class:on={models.includes(k.id)} aria-pressed={models.includes(k.id)} onclick={() => toggleModel(k.id)}>
           <span class="box"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>
-          <span class="m-tx"><span class="m-n">{k.label}</span><span class="m-id">{k.id}</span></span>
+          <span class="m-tx">
+            <span class="m-n">{k.label}{#if k.isNew}<span class="tag">{t('新')}</span>{/if}{#if k.preview}<span class="tag">{t('预览版')}</span>{/if}{#if status[k.id] === 'bad'}<span class="tag bad">{t('调不通')}</span>{/if}</span>
+            <span class="m-id">{k.id}</span>
+          </span>
         </button>
       {/each}
       {#each extra as id (id)}
         <button type="button" class="mrow on" aria-pressed="true" onclick={() => toggleModel(id)}>
           <span class="box"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>
-          <span class="m-tx"><span class="m-n">{id}</span></span>
+          <span class="m-tx"><span class="m-n">{id}{#if status[id] === 'bad'}<span class="tag bad">{t('调不通')}</span>{/if}</span></span>
         </button>
       {/each}
     </div>
+    {#if detMsg || detErr || det}
+      <div class="dstat" aria-live="polite">
+        {#if detMsg}<span>{detMsg}</span>{:else if det && !detErr}<span>{t('上次检测 {t}', { t: when(det.at) })}</span>{/if}
+        {#if detErr}<span class="derr">{detErr}</span>{:else if !detMsg && det?.error}<span class="derr">{det.error}</span>{/if}
+      </div>
+    {/if}
     <form class="addm" onsubmit={(e) => { e.preventDefault(); addModel(); }}>
       <input class="in mono" bind:value={newModel} placeholder={t('别的 Vertex 型号 ID，回车添加')} spellcheck="false" autocapitalize="off" aria-label={t('型号 ID')} />
     </form>
@@ -144,7 +200,7 @@
   {#each media as b (b.id)}
     <!-- 媒体模型给 Media Studio（图像 / 视频 / 配音 / 音乐），按种类分组 -->
     <div class="mhead">{t('媒体模型')}<span class="mhint">{t('打开的模型会出现在 Media Studio 里')}</span></div>
-    <BuiltinModels models={b.models || []} bind:on={mediaOn[b.id]} />
+    <BuiltinModels models={b.models || []} bind:on={mediaOn[b.id]} fresh={freshMedia} />
   {/each}
 </div>
 
@@ -190,6 +246,21 @@
   .m-n { font-size: 14px; font-weight: 500; }
   .m-id { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px; color: var(--st-muted); }
   .addm { margin-top: 10px; }
+  .fl-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: -6px; }
+  /* 检测：标签行右端的轻按钮（不抢「保存」的主次） */
+  .dbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; margin-right: -4px; border: 0; border-radius: 8px; background: transparent; color: var(--text);
+    font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; transition: background-color var(--mo-micro, 140ms) var(--ea-fade, ease), opacity var(--mo-micro, 140ms) var(--ea-fade, ease); }
+  .dbtn svg { width: 14px; height: 14px; flex: none; }
+  @media (hover: hover) { .dbtn:hover:not(:disabled) { background: var(--st-hover); } }
+  .dbtn:disabled { color: var(--st-muted); cursor: default; }
+  .dbtn.busy:disabled { color: var(--text); opacity: .72; }
+  .dbtn:focus-visible { outline: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--text) 35%, transparent); }
+  .spin { animation: vx-spin 0.9s linear infinite; }
+  @keyframes vx-spin { to { transform: rotate(360deg); } }
+  .tag { display: inline-block; margin-left: 8px; padding: 0 6px; border-radius: 5px; background: var(--st-seg); font-size: 11px; font-weight: 500; line-height: 18px; color: var(--st-text2); vertical-align: 1px; }
+  .tag.bad { color: var(--pm-red); }
+  .dstat { display: flex; flex-direction: column; gap: 2px; margin: 8px 2px 0; font-size: 12.5px; line-height: 1.5; color: var(--st-muted); }
+  .derr { color: var(--pm-red); white-space: pre-line; overflow-wrap: anywhere; }
   .mhead { display: flex; flex-direction: column; gap: 2px; margin: 6px 2px -10px; font-size: 14px; font-weight: 600; color: var(--text); }
   .mhint { font-size: 12.5px; font-weight: 400; color: var(--st-muted); }
   .mimp { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
@@ -235,9 +306,13 @@
     .mrow { min-height: 56px; padding: 8px 16px; }
     .mrow:active { background: var(--pm-press); }
     .mrow + .mrow::before { left: 46px; }
+    .fl-row { margin-top: -8px; }
+    .dbtn { height: 36px; padding: 0 12px; font-size: 14px; border-radius: 10px; }
+    .dstat { margin: 8px 4px 0; font-size: 13px; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .btn, .chk, .box { transition: none; }
+    .btn, .chk, .box, .dbtn { transition: none; }
+    .spin { animation-duration: 2.4s; }
     .btn:active:not(:disabled), .chk:active { transform: none; }
   }
 </style>

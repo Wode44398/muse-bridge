@@ -108,7 +108,11 @@ test('Google 模型卡：参数矩阵与 capabilities 一致，规范化与旧�
   assert.equal(n.imageSize, undefined, '没给 / 不认的尺寸不传');
   for (const id of caps.CAPABILITIES.image.models.map((x) => x.id).filter((x) => x.startsWith('gemini-'))) {
     const c = googleCard('vertex', id);
-    for (const a of caps.CAPABILITIES.image.aspects.map((x) => x.id)) assert.equal(c.normalize({ aspectRatio: a }).aspectRatio, caps.imgAspectFor(id, a));
+    // 2026-11-15：卡的超宽比例放行表另起一份（imgCardAspectFor，多放行 3.1 Flash）；Claude 工具那份 imgAspectFor 不动（工具先夹成 auto 再交给卡）
+    for (const a of caps.CAPABILITIES.image.aspects.map((x) => x.id)) {
+      assert.equal(c.normalize({ aspectRatio: a }).aspectRatio, caps.imgCardAspectFor(id, a));
+      assert.equal(c.normalize({ aspectRatio: caps.imgAspectFor(id, a) }).aspectRatio, caps.imgAspectFor(id, a), '工具夹过的值卡照收');
+    }
     for (const s of ['1K', '2K', '4K', 'x', undefined]) assert.equal(c.normalize({ imageSize: s }).imageSize, caps.imgSizeClamp(id, caps.IMAGE_SIZES.has(s) ? s : undefined));
   }
   // 视频：时长取最近档、分辨率落 720p 或最高、Veo 专属三件 Omni 一律不传

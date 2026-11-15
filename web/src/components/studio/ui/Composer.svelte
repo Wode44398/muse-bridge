@@ -14,6 +14,7 @@
     enterSends = true,
     tall = false,
     atts = null, tools = null,
+    sub = null, subOn = false,   // 正文和底行之间的一行（手机上的参数芯片：底行放不下，单独占一行）；subOn 才出
     ontext = null,   // (正文) → 每次输入后回调（宿主据此做语言等内容检查）
   } = $props();
   const touchUI = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
@@ -24,13 +25,14 @@
     if (send) { e.preventDefault(); if (!disabled && !busy) onsend?.(); }
   }
   // 整卡点哪儿都能聚焦正文（同 dimensio 的 cursor:text），点到按钮上除外
-  function focusField(e) { if (!e.target.closest('button, a, [contenteditable], .cp-atts, input')) field?.focus(); }
+  function focusField(e) { if (!e.target.closest('button, a, [contenteditable], .cp-atts, .cp-sub, input')) field?.focus(); }
 </script>
 
 <div class="cp" role="presentation" onclick={focusField}>
   {#if atts}{@render atts()}{/if}
   <div class="cp-field" class:tall bind:this={field} contenteditable="true" role="textbox" tabindex="0" aria-multiline="true" aria-label={placeholder}
     data-ph={placeholder} oninput={onInput} onkeydown={onKey} onpaste={pastePlainText}></div>
+  {#if sub && subOn}<div class="cp-sub">{@render sub()}</div>{/if}
   <div class="cp-bar">
     <div class="cp-tools">{#if tools}{@render tools()}{/if}</div>
     <button class="cp-send" class:busy disabled={disabled || busy} aria-label={sendLabel || t('生成')} title={sendLabel || t('生成')} onclick={() => onsend?.()}>

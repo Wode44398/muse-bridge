@@ -13,6 +13,7 @@ import { sanitizeName, sweepStaleParts } from '../runtime/paths.mjs';
 import { contextFor } from '../runtime/identity.mjs';
 import { imageThumb, THUMB_EXT, THUMB_TIERS } from './file-preview.mjs';
 import { streamFile, mimeType } from '../runtime/http-file.mjs';
+import { mediaSafetyHeaders } from './media-file.mjs';
 
 const MAX_UPLOAD = 2_000_000_000; // 2 GB
 function validUploadId(s) { return /^[a-zA-Z0-9]{6,40}$/.test(s); }
@@ -96,7 +97,8 @@ export function registerUploadRoutes(router, { authOk, identify }) {
         cacheControl: 'private, max-age=31536000, immutable',
         downloadName: name.replace(/^\d{10,}-/, '') || name,
         download: dl,
-        headers: { 'X-Content-Type-Options': 'nosniff' },
+        // 上传目录里的 svg 也是 image/svg+xml 直出：直接打开链接时里面的脚本会在 bridge 源执行——同媒体库，带上 CSP sandbox（<img> 照常显示）
+        headers: { 'X-Content-Type-Options': 'nosniff', ...mediaSafetyHeaders(file) },
       });
     } catch {
       if (!res.headersSent) { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('not found'); }

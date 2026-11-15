@@ -246,6 +246,8 @@
   box-shadow: 0 1px 3px color-mix(in srgb, var(--sd-text) 22%, transparent); transition: transform var(--sd-t-spring-pop, 500ms) var(--sd-spring-pop, var(--sd-ease-out)); }
 .studio-root.dark .sw-k { background: var(--sd-text2); }   /* 关着时深槽上要看得见钮 */
 .studio-root.dark .sw.on .sw-k { background: var(--sd-on-accent); }
+/* 触屏 Sheet 的暗色分组卡片就是 surface3：关着的槽和卡片同色、只剩一粒钮——给槽描一圈细线 */
+.studio-root.dark .sh .sw:not(.on) { box-shadow: inset 0 0 0 1px var(--sd-border2); }
 .studio-root .sw.on .sw-k { transform: translateX(16px); }
 .studio-root .sw:disabled { opacity: .4; }
 @media (pointer: coarse) { .studio-root .sw::after { content: ''; position: absolute; inset: -9px -4px; } }
