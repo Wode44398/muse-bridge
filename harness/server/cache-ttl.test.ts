@@ -69,3 +69,15 @@ test("第三方兼容地址：不带 ttl（不一定认）", async () => {
   assert.equal(m.length, 4);
   for (const c of m) assert.deepEqual(c, { type: "ephemeral" });
 });
+
+// 11-14：createAdapter 统一算 capabilities.cacheTtlMs（空闲压缩与「缓存冷了」提示按它）——见 providers/registry.ts applyCacheTtl
+test("缓存寿命：官方 Claude 主会话 1 小时、子 agent 5 分钟；OpenAI 新型号 30 分钟；文档没写的厂商与本机模型不知道", async () => {
+  const { createAdapter } = await import("./providers/registry.ts");
+  const ttl = (cfg: Partial<AdapterConfig>) => createAdapter({ apiKey: "FAKE-key", ...cfg } as AdapterConfig).capabilities.cacheTtlMs ?? 0;
+  assert.equal(ttl({ provider: "anthropic", model: "claude-opus-5-5", cacheTtl: "1h" }), 3_600_000);
+  assert.equal(ttl({ provider: "anthropic", model: "claude-opus-5-5" }), 300_000);
+  assert.equal(ttl({ provider: "openai", model: "gpt-6-astra" }), 1_800_000);
+  assert.equal(ttl({ provider: "zhipu", model: "glm-5.3" }), 0);
+  assert.equal(ttl({ provider: "kimi", model: "k3.1-pro" }), 300_000);
+  assert.equal(ttl({ provider: "local", model: "qwen3.8-flash-next-fp8" }), 0);
+});

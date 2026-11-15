@@ -7,7 +7,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { bashTool, killJobsFor, liveJobCount } from "./tools/bash.ts";
-import { claimBrowser, releaseBrowser, browserClaimOwner } from "./cdp.ts";
+import { closeAllBrowserSessions, closeBrowser, existingBrowser, getBrowser } from "./cdp.ts";
+import { withFakeBrowsers } from "./test-harness/fake-browser.ts";
 import { isPureSocialTurn } from "./agent/state.ts";
 import { Sandbox } from "./sandbox.ts";
 import type { ToolContext } from "./tools/types.ts";
@@ -86,28 +87,25 @@ test("stopping a session reaps only its own jobs", async () => {
   }
 });
 
-test("the shared browser is claimed by one session at a time", () => {
-  try {
-    assert.equal(claimBrowser("session-A"), null, "first claim is granted");
-    assert.equal(browserClaimOwner(), "session-A");
-    assert.equal(claimBrowser("session-A"), null, "the owner may re-enter");
+// 11-14：以前全进程一个浏览器、一次只许一个会话用（第二个会话被拒）；现在按会话各开一份，谁也不拒谁。
+test("every session gets its own browser: nobody is refused, the owner (and its sub-agents) re-enter the same one", async () => {
+  await withFakeBrowsers(async (launched) => {
+    try {
+      const a = await getBrowser("session-A");
+      const b = await getBrowser("session-B");
+      assert.notEqual(a, b, "a second session gets its own browser, not a refusal and not A's page");
+      assert.equal(await getBrowser("session-A"), a, "the owner may re-enter (sub-agents carry the parent's ownerId)");
+      assert.equal(launched.length, 2);
+      assert.equal(existingBrowser(""), undefined, "the unowned default browser is a separate one and was never started");
 
-    const denied = claimBrowser("session-B");
-    assert.ok(denied, "a second session is refused, not silently handed the page");
-    assert.match(denied!, /another active session/);
-
-    // Unowned callers (sub-agents, tests, UI paths) are never blocked.
-    assert.equal(claimBrowser(""), null);
-
-    releaseBrowser("session-B"); // not the owner — must not release
-    assert.equal(browserClaimOwner(), "session-A");
-    releaseBrowser("session-A");
-    assert.equal(browserClaimOwner(), "");
-    assert.equal(claimBrowser("session-B"), null, "released → next session may claim");
-  } finally {
-    releaseBrowser("session-A");
-    releaseBrowser("session-B");
-  }
+      await closeBrowser("session-A");
+      assert.equal(existingBrowser("session-A"), undefined);
+      assert.equal(existingBrowser("session-B"), b, "closing A's browser leaves B's alone");
+      assert.notEqual(await getBrowser("session-A"), a, "after close, A gets a fresh one");
+    } finally {
+      closeAllBrowserSessions();
+    }
+  });
 });
 
 test("bare acknowledgements skip the memory-audit gate, real content does not", () => {

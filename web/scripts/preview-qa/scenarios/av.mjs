@@ -77,13 +77,22 @@ async function hoverShot(ctx, name) {
   } catch {}
 }
 
-// 视频画面上叠了 backdrop-filter 的元素（规范：视频上方不许毛玻璃）
+// 视频画面上叠了 backdrop-filter 的元素（规范：视频上方不许毛玻璃——唯一的例外是触屏中央三钮的液态玻璃底，
+// 它只在按钮露着时挂，见 GLASS_LIVE）
 const BD_OVER_VIDEO = `(() => { const r = __pvqa.root(); const v = r && r.querySelector('video'); if (!v) return [];
   const vr = v.getBoundingClientRect(); const out = [];
-  for (const el of r.querySelectorAll('*')) { const s = getComputedStyle(el); const bf = s.backdropFilter || s.webkitBackdropFilter; if (!bf || bf === 'none') continue;
+  for (const el of r.querySelectorAll('*')) { if (el.classList.contains('lq-glass') || el.classList.contains('vp-cbtn')) continue;
+    const s = getComputedStyle(el); const bf = s.backdropFilter || s.webkitBackdropFilter; if (!bf || bf === 'none') continue;
     const b = el.getBoundingClientRect(); if (b.width < 1 || b.height < 1 || __pvqa.effOpacity(el) < 0.05) continue;
     if (b.right > vr.left && b.left < vr.right && b.bottom > vr.top && b.top < vr.bottom) out.push((el.className && typeof el.className === 'string' ? el.className.split(/\\s+/).filter((c) => !/^svelte-/.test(c)).slice(0, 2).join('.') : el.tagName) + ' ' + bf); }
   return out.slice(0, 6); })()`;
+
+// 中央三钮的玻璃底：还在参与合成的（display 不是 none、带 backdrop-filter）有几块、按钮下面各有没有垫着一块
+const GLASS_LIVE = `(() => { const r = __pvqa.root(); if (!r) return null;
+  const live = [...r.querySelectorAll('.lq-glass, .vp-cbtn')].filter((el) => { const s = getComputedStyle(el); const bf = s.backdropFilter || s.webkitBackdropFilter; return s.display !== 'none' && bf && bf !== 'none'; });
+  const btns = [...r.querySelectorAll('.vp-cbtn')].map((b) => b.getBoundingClientRect());
+  const under = btns.filter((b) => live.some((g) => { const q = g.getBoundingClientRect(); return Math.abs(q.left - b.left) < 2 && Math.abs(q.top - b.top) < 2 && Math.abs(q.width - b.width) < 2; })).length;
+  return { live: live.length, btns: btns.length, under, svg: live.some((el) => (getComputedStyle(el).backdropFilter || '').includes('url(')) }; })()`;
 
 // 原始触摸（场景里要在手势中途取值：长按中读倍速、拖动中看气泡）
 const tp = (x, y) => [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }];
@@ -175,6 +184,20 @@ export default [
           return { text: t ? t.textContent.trim() : null, storyboard: sb }; })()`);
         ctx.metric('railTip', tip);
         ctx.assert('进度轨悬停出时间气泡', !!tip.text, tip.text);
+        // 按住拖动：不松手画面就跟到拖到的位置（30 秒的片，轨道 80% 处 = 24 秒），松手停在那儿（拖之前是暂停的，松手仍暂停）
+        const mouse = (type, x, y, buttons) => ctx.pg.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1 });
+        const rx = (q) => rail.x - rail.w / 2 + rail.w * q;
+        await mouse('mousePressed', rx(0.5), rail.y, 1);
+        for (let i = 1; i <= 6; i++) { await mouse('mouseMoved', rx(0.5 + 0.05 * i), rail.y, 1); await ctx.sleep(40); }
+        await ctx.sleep(500);
+        const mid = await st(ctx);
+        await hoverShot(ctx, 'rail-drag');
+        await mouse('mouseReleased', rx(0.8), rail.y, 0);
+        await ctx.sleep(500);
+        const end = await st(ctx);
+        ctx.metric('railDrag', { midT: mid.t, endT: end.t, endPaused: end.paused });
+        ctx.assert('拖进度轨没松手画面已到 80% 处（实时出帧）', near(mid.t, (mid.dur || 30) * 0.8, 1.5), mid.t);
+        ctx.assert('松手停在拖到的位置、仍是暂停', near(end.t, (end.dur || 30) * 0.8, 1.5) && end.paused, { t: end.t, paused: end.paused });
         ctx.assert('悬停气泡带 storyboard 缩略帧', tip.storyboard, tip.storyboard, { level: 'goal' });
         await hoverShot(ctx, 'rail-hover');
       }
@@ -228,9 +251,9 @@ export default [
       await check('home', 'Home → 0', (x) => near(x.t, 0));
       await check('l', 'L → +10s', (x) => near(x.t, 10));
       await check('j', 'J → −10s', (x) => near(x.t, 0));
-      await check('arrowright', '→ → +5s', (x) => near(x.t, 5));
-      await check('arrowright', '→ 再 +5s', (x) => near(x.t, 10));
-      await check('arrowleft', '← → −5s', (x) => near(x.t, 5));
+      await check('arrowright', '→ → +10s', (x) => near(x.t, 10));
+      await check('arrowright', '→ 再 +10s', (x) => near(x.t, 20));
+      await check('arrowleft', '← → −10s', (x) => near(x.t, 10));
       await check('5', '5 → 50%', (x) => near(x.t, dur * 0.5));
       await check('0', '0 → 开头', (x) => near(x.t, 0));
       await check('9', '9 → 90%', (x) => near(x.t, dur * 0.9));
@@ -340,23 +363,59 @@ export default [
       ctx.assert('松手 → 复原 1×', lpEnd.rate === 1, lpEnd.rate);
       ctx.assert('长按松手不算轻点（仍在播放）', lpEnd.paused === false, lpEnd.paused);
 
-      // 横向拖动 seek：40% 屏宽 ≈ 0.4 × min(时长, 90s) = +12s，中途出大气泡
+      // 横向拖动 seek：40% 屏宽 ≈ 0.4 × min(时长, 90s) = +12s，中途出时间胶囊；不等松手，画面已经跟到拖到的位置
       await pauseAt(ctx, 5);
       await ctx.sleep(400);
       const x0 = w * 0.3, x1 = w * 0.7, ys = h * 0.3;
       await touchStart(ctx, x0, ys);
       for (let i = 1; i <= 12; i++) { await touchMove(ctx, x0 + ((x1 - x0) * i) / 12, ys); await ctx.sleep(25); }
-      await ctx.sleep(150);
+      await ctx.sleep(450);
       const bubble = await ctx.eval(`(() => { const txt = __pvqa.root().innerText || ''; const m = /\\+(\\d+:\\d\\d)/.exec(txt); return m ? m[1] : null; })()`);
+      const live = await st(ctx);
       await ctx.shot('seek-bubble');
       await touchEnd(ctx);
       await ctx.sleep(500);
       s = await st(ctx);
-      ctx.metric('dragSeek', { bubble, t: s.t });
+      ctx.metric('dragSeek', { bubble, liveT: live.t, t: s.t });
       ctx.assert('拖动中出 seek 气泡（+偏移）', !!bubble, bubble);
+      ctx.assert('没松手画面已经跟到拖到的位置（实时出帧）', near(live.t, 17, 1.5), live.t);
       ctx.assert('横向拖动 40% 宽 → 约 +12s', near(s.t, 17, 1.5), s.t);
+
+      // 进度轨拖动：按住不放，画面同样实时跟随；拖之前在播的，松手后接着播
+      await ctx.g.tap(w / 2, h * 0.3); await ctx.sleep(300);   // 唤出控件
+      await gesturePlay(ctx); await ctx.sleep(500);
+      const rail = await ctx.eval(`(() => { const sl = __pvqa.root().querySelector('[role=slider][aria-label="进度"]'); if (!sl) return null; const b = sl.getBoundingClientRect(); return { x: b.left, y: b.top + b.height / 2, w: b.width }; })()`);
+      if (rail) {
+        await ctx.g.tap(w / 2, h * 0.3); await ctx.sleep(250);
+        const shown = (await st(ctx)).chrome > 0.9;
+        if (!shown) { await ctx.g.tap(w / 2, h * 0.3); await ctx.sleep(250); }
+        await touchStart(ctx, rail.x + rail.w * 0.2, rail.y);
+        for (let i = 1; i <= 10; i++) { await touchMove(ctx, rail.x + rail.w * (0.2 + 0.05 * i), rail.y); await ctx.sleep(30); }
+        await ctx.sleep(450);
+        const mid = await st(ctx);
+        await ctx.shot('rail-drag');
+        await touchEnd(ctx);
+        await ctx.sleep(700);
+        const end = await st(ctx);
+        ctx.metric('railDrag', { midT: mid.t, midPaused: mid.paused, endT: end.t, endPaused: end.paused });
+        ctx.assert('拖进度轨没松手画面已到 70% 处', near(mid.t, (mid.dur || 30) * 0.7, 2), mid.t);
+        ctx.assert('松手后接着播（拖之前在播）', end.paused === false, end.paused);
+      } else ctx.assert('找到进度轨', false, rail);
+
+      // 液态玻璃三钮：露着时每个按钮下面垫着一块玻璃；播放中控件收起后一块滤镜都不留（display:none，不占合成）
+      await ctx.eval(`(() => { __pvqa.root().querySelector('video').pause(); return true; })()`);
+      await ctx.sleep(600);
+      const g1 = await ctx.eval(GLASS_LIVE);
+      await ctx.shot('glass-cluster');
+      ctx.metric('glass', g1);
+      ctx.assert('暂停时三钮露着、各垫一块玻璃', g1 && g1.btns === 3 && g1.under === 3, g1);
+      ctx.assert('玻璃是折射材质（SVG backdrop）', !!g1?.svg, g1, { level: 'goal' });
+      await gesturePlay(ctx);
+      await ctx.sleep(3900);
+      const g2 = await ctx.eval(GLASS_LIVE);
+      ctx.assert('播放中控件收起后不留玻璃滤镜', g2 && g2.live === 0, g2);
       const bd = await ctx.eval(BD_OVER_VIDEO);
-      ctx.assert('视频上方没有 backdrop-filter', !bd.length, bd);
+      ctx.assert('视频上方没有别的 backdrop-filter', !bd.length, bd);
     },
     async cleanup(ctx) { await clearAv(ctx); },
   },

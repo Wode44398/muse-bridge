@@ -17,6 +17,7 @@ export interface FamilyLinkView {
   agent?: "claude";
   parentAgent?: "claude";
   projectName?: string;
+  thread?: boolean; // 项目对话开出来的讨论串
 }
 export interface FamilyState {
   links: Record<string, FamilyLinkView>;
@@ -110,7 +111,7 @@ export function nestSessions<T extends { id: string }>(rows: T[], fam: FamilySta
 }
 
 // ── 工具行链到的会话 ──────────────────────────────────────────────────────────
-const SESSION_TOOLS = new Set(["StartSession", "SendMessage", "ReadSession"]);
+const SESSION_TOOLS = new Set(["StartSession", "SendMessage", "ReadSession", "StopSession", "MarkResolved"]);
 export function isSessionTool(name: string): boolean {
   return SESSION_TOOLS.has(name);
 }

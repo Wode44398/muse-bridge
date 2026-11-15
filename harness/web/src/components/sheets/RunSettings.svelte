@@ -1,5 +1,7 @@
 <script lang="ts">
-  // 上下文面板里的运行设置（维护者 11-07：这些设置全部离开输入框，聚到右上角的上下文面板里）。三段：
+  // 上下文面板里的运行设置（维护者 11-07：这些设置全部离开输入框，聚到右上角的上下文面板里）。最上面是对话形态
+  //（新对话发第一条之前可选「项目」：这条对话当协调者、干活的是它开的讨论串，server/project-mode.ts；建起来之后不变，
+  //  项目对话里只留一句说明），然后三段：
   //  · 工作档位：自主 / 只读 / 计划 / 全权（全权只给管理员——租户实例 accessLocked 时不列），下面两个开关：
   //    目标模式（这条消息当目标；运行中、正在回应卡片时没有）、离开模式（会话建立后才有）
   //  · 工作权限：整机 / 仅工作空间（整机是默认，维护者 09-26）；本会话放行的工作区外只读目录列在下面、可收回。
@@ -13,9 +15,11 @@
     awayMode,
     dropReadRoot,
     permissionMode,
+    projectModeAvailable,
     readRoots,
     setAccessMode,
     setAwayMode,
+    setChatShape,
     setPermissionMode,
     toggleGoalDraft,
     type AccessMode,
@@ -47,6 +51,20 @@
     bypass: t("所有工具调用直接执行、不弹卡，整机可读写，连密钥守卫都关掉。谨慎使用。"),
   };
   const current = $derived(permissionMode(pane.chat));
+
+  // ── 对话形态（项目对话）──────────────────────────────────────────────────────────────────
+  type ShapeVal = "chat" | "project";
+  const SHAPES: { value: ShapeVal; label: string; icon: "message" | "layers" }[] = [
+    { value: "chat", icon: "message", label: t("普通对话") },
+    { value: "project", icon: "layers", label: t("项目") },
+  ];
+  const isProject = $derived(pane.chat.shape === "project");
+  const shapeVal = $derived<ShapeVal>(isProject ? "project" : "chat");
+  const shapeOk = $derived(projectModeAvailable() && (!pane.chat.id || isProject));
+  function pickShape(v: ShapeVal) {
+    haptic("light");
+    setChatShape(pane.chat, v === "project" ? "project" : "");
+  }
   // 全权档（bypass）仅管理员可用：多用户服务端的租户实例（accessLocked）里连这一档都不列出来
   const canBypass = $derived(!app.config?.accessLocked);
   const modeOpts = $derived(
@@ -140,8 +158,24 @@
 </script>
 
 <div class="rs">
+  {#if shapeOk}
+    <section>
+      <h4>{t("对话形态")}</h4>
+      {#if !pane.chat.id}
+        <Segmented full size="sm" options={SHAPES} value={shapeVal} onchange={pickShape} label={t("对话形态")} />
+        <p class="note">
+          {isProject
+            ? t("这条对话当协调者：只看、只派活，干活的是它开出来的讨论串，你能点开讨论串直接聊。形态在发第一条消息时定下，之后不变。")
+            : t("dimensio 在这条对话里自己动手。选「项目」就改成协调者 + 讨论串。")}
+        </p>
+      {:else}
+        <p class="note">{t("项目对话：这条对话是协调者，只看、只派活；下面的工作档位给它开出来的讨论串。")}</p>
+      {/if}
+    </section>
+  {/if}
+
   <section>
-    <h4>{t("工作档位")}</h4>
+    <h4>{isProject ? t("讨论串的工作档位") : t("工作档位")}</h4>
     <Segmented full size="sm" options={modeOpts} value={current} onchange={pickMode} label={t("工作档位")} />
     <p class="note" class:warn={current === "bypass"}>{NOTE[current]}</p>
     {#if goal.ok}

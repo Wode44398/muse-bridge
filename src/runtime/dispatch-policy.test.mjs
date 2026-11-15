@@ -341,3 +341,81 @@ test('sanitizeStrategy / activeStrategy：预览用的宽松规范化不抛；�
   assert.equal(D.activeStrategy(null), null);
   assert.deepEqual(D.TIER_KEYS, ['top', 'hard', 'normal', 'light']);
 });
+
+// —— 作用域（2026-11-14）：dimensio 那份 ——
+const dimFile = (ctx) => path.join(ctx.dataDir, 'dispatch-policy.dimensio.json');
+
+test('作用域：dimensio 那份单独一个文件、带 follow（默认 true），与 Claude 那份互不影响；不认识的作用域 400', () => {
+  D._resetPolicyForTests();
+  const ctx = admin();
+  const p = D.policyFor(ctx, { scope: 'dimensio' });
+  assert.deepEqual([p.enabled, p.follow, p.allowThirdParty, p.rev, p.activeId], [true, true, true, 0, 's-00000000']);
+  assert.equal(D.policyFor(ctx).follow, undefined, 'Claude 那份没有 follow');
+  const seen = [];
+  const off = D.onPolicyChange((c, q, scope) => seen.push([scope, q.rev]));
+  try {
+    const q = D.updatePolicy(ctx, { follow: false, scope: { session: true }, enabled: false }, { scope: 'dimensio' });
+    assert.deepEqual([q.follow, q.scope.session, q.enabled, q.rev], [false, true, false, 1]);
+    assert.ok(existsSync(dimFile(ctx)));
+    assert.equal(existsSync(fileOf(ctx)), false, 'Claude 那份没落盘');
+    assert.deepEqual([D.policyFor(ctx).enabled, D.policyFor(ctx).rev], [true, 0]);
+    assert.deepEqual(seen, [['dimensio', 1]]);
+  } finally { off(); }
+  // Claude 那份不认 follow；作用域写错 400
+  assert.throws(() => D.updatePolicy(ctx, { follow: true }), status(400, /只能改 enabled \/ scope \/ allowThirdParty \/ activeId/));
+  assert.throws(() => D.updatePolicy(ctx, { follow: 'yes' }, { scope: 'dimensio' }), status(400, /follow 要是 true \/ false/));
+  assert.throws(() => D.policyFor(ctx, { scope: 'codex' }), status(400, /作用域/));
+  assert.equal(D.policyScope(undefined), 'claude');
+  // 按 mtime 重读一样认 follow
+  D._resetPolicyForTests();
+  assert.equal(D.policyFor(ctx, { scope: 'dimensio' }).follow, false);
+});
+
+test('作用域：dimensio 那份的档位自定义写「厂商:型号」，Claude 的写法不收；策略的新建 / 删除各管各的', () => {
+  D._resetPolicyForTests();
+  const ctx = admin();
+  const r = D.saveStrategy(ctx, { name: 'dim 省钱', overrides: { light: { model: 'zhipu:glm-5.3-flash', effort: '' }, top: { model: 'custom-1a2b3c4d:qwen3:32b', effort: 'max' } } }, { scope: 'dimensio' });
+  assert.deepEqual(r.strategy.overrides.light, { model: 'zhipu:glm-5.3-flash', effort: '' });
+  assert.deepEqual(r.strategy.overrides.top, { model: 'custom-1a2b3c4d:qwen3:32b', effort: 'max' }, '型号 id 自己带冒号也认');
+  assert.throws(() => D.saveStrategy(ctx, { id: r.strategy.id, overrides: { hard: { model: 'opus', effort: '' } } }, { scope: 'dimensio' }), status(400, /dimensio 写 <厂商 id>:<型号>/));
+  assert.throws(() => D.saveStrategy(ctx, { name: 'x', overrides: { hard: { model: 'zhipu:glm-5.3-flash', effort: '' } } }), status(400, /Claude 写 opus/));
+  assert.equal(D.policyFor(ctx).strategies.length, 1, 'Claude 那份没多出一套');
+  assert.equal(D.policyFor(ctx, { scope: 'dimensio' }).strategies.length, 2);
+  // 存盘里混进 Claude 写法：宽松规范化丢掉那一档，不抛
+  const disk = JSON.parse(readFileSync(dimFile(ctx), 'utf8'));
+  disk.strategies[1].overrides.normal = { model: 'sonnet', effort: 'high' };
+  writeFileSync(dimFile(ctx), JSON.stringify(disk));
+  utimesSync(dimFile(ctx), new Date(), new Date(Date.now() + 5000));
+  assert.equal(D.policyFor(ctx, { scope: 'dimensio' }).strategies[1].overrides.normal, null);
+  assert.deepEqual(D.sanitizeStrategy({ overrides: { normal: { model: 'kimi:k3', effort: 'max' } } }, { scope: 'dimensio' }).overrides.normal, { model: 'kimi:k3', effort: 'max' });
+  const p = D.deleteStrategy(ctx, r.strategy.id, { scope: 'dimensio' });
+  assert.equal(p.strategies.length, 1);
+});
+
+test('作用域：没权限的身份读到的 dimensio 只读默认是开着、跟随 Claude（改造前 dimensio 的默认），写 403', () => {
+  D._resetPolicyForTests();
+  const m = member(dir(), false);
+  const p = D.policyFor(m, { scope: 'dimensio' });
+  assert.deepEqual([p.enabled, p.follow], [true, true]);
+  assert.equal(D.policyFor(m).enabled, false, 'Claude 那份照旧关着');
+  assert.throws(() => D.updatePolicy(m, { follow: false }, { scope: 'dimensio' }), status(403));
+});
+
+test('旧 dimensio 偏好迁移：文件不存在时才迁；备注非空 → 自己那套 + follow:false；阶梯关 → 总开关关；都是默认值不落盘', () => {
+  D._resetPolicyForTests();
+  const a = admin();
+  assert.equal(D.migrateDimensioLegacy(a, { ladder: true, note: '' }), false);
+  assert.equal(D.dimensioPolicyStored(a), false);
+  assert.equal(D.migrateDimensioLegacy(a, { ladder: false, note: '  简单检索用 MiMo  ' }), true);
+  const p = D.policyFor(a, { scope: 'dimensio' });
+  assert.deepEqual([p.enabled, p.follow, p.rev, p.strategies[0].note], [false, false, 1, '简单检索用 MiMo']);
+  // 已经有文件了：再来不动
+  assert.equal(D.migrateDimensioLegacy(a, { ladder: true, note: '新的' }), false);
+  assert.equal(D.policyFor(a, { scope: 'dimensio' }).strategies[0].note, '简单检索用 MiMo');
+  // 只有阶梯关：总开关关、仍跟随
+  const b = admin();
+  assert.equal(D.migrateDimensioLegacy(b, { ladder: false, note: '' }), true);
+  assert.deepEqual([D.policyFor(b, { scope: 'dimensio' }).enabled, D.policyFor(b, { scope: 'dimensio' }).follow], [false, true]);
+  // 没权限的身份不迁
+  assert.equal(D.migrateDimensioLegacy(member(dir(), false), { ladder: false, note: 'x' }), false);
+});

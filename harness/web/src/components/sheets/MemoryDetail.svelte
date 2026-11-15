@@ -507,7 +507,7 @@
     margin-left: auto;
   }
   /* 手机：主动作整行放最上面，次要动作排在它下面 */
-  @media (max-width: 699px) {
+  @media (max-width: 599px), (max-width: 699px) and (max-device-aspect-ratio: 699/1000) {
     .acts:not(.end) {
       flex-direction: column-reverse;
       align-items: stretch;

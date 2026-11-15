@@ -7,6 +7,7 @@ import { observeWire } from "./wire-fingerprint.ts";
 import { fetchReconnect } from "../net-proxy.ts";
 import { modelLimits, modelSupportsImages, modelSupportsVideo, providerMediaBudget } from "../catalog.ts";
 import { applyCustomThinking } from "../custom-tiers.ts";
+import { applyCustomParams } from "../custom-params.ts";
 import type { CustomWire } from "./types.ts";
 
 // Google Gemini via the AI-Studio REST endpoint (generativelanguage.googleapis.com,
@@ -236,7 +237,8 @@ function encode(turn: Turn, model: string, caps: Capabilities, custom?: CustomWi
   const level = turn.budget.thinking ?? "off";
   if (custom) {
     // 自定义服务：按型号的档位表写 generationConfig.thinkingConfig（共用 applyTier），不按型号名猜
-    const out = applyCustomThinking(body, custom.model, level, { protocol: "gemini" });
+    // 模型中心里给这个型号设的调用参数：写进 generationConfig，额外请求体里的 "gemini": {…} 最后深合并
+    const out = applyCustomParams(applyCustomThinking(body, custom.model, level, { protocol: "gemini" }), custom.model?.params, "gemini", caps.maxOutputTokens);
     if (turn.hints?.providerExtras) Object.assign(out, turn.hints.providerExtras);
     return out;
   }

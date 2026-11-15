@@ -5,10 +5,13 @@
   //   · 点图上一个候选点 → 小菜单「设为 最难 / 难 / 常规 / 机械 的指定模型」，开在那个点旁边（PlanChart 的 onpick 带着点的视口坐标）。
   //   · 整张卡是拖放区：拖 HTML 进来描一圈虚线，松手导入；「导入文件」「获取最新」只有管理员看得到。
   //     导入 / 获取进行中：卡顶一条来回走的细线 + 按钮上的转圈；失败的原因留在图下方那一行，下次操作时清掉。
+  //   · store = 哪一份调用策略（Claude / dimensio，见 lib/dispatchPolicy 的 createDispatchStore）：全图点表、图谱操作、显示名都走它。
+  //     tpEditable 单管「调用非 Claude 模型」能不能拨（dimensio 跟随 Claude 的策略时判定线只读，这个开关仍是它自己的）。
   import PlanChart from './PlanChart.svelte';
   import DpSwitch from './DpSwitch.svelte';
   import DpMenu from './DpMenu.svelte';
-  import { dp, loadAllPoints, importChartFile, fetchChartOnline, clearChart, TIER_META, TIER_COLORS, modelName } from '../../../lib/dispatchPolicy.svelte.js';
+  import { claudeDispatch, TIER_META, TIER_COLORS } from '../../../lib/dispatchPolicy.svelte.js';
+  import { untrack } from 'svelte';
   import { ui } from '../../../lib/state.svelte.js';
   import { uiConfirm } from '../../../lib/dialogs.js';
   import { showToast } from '../../../lib/toast.svelte.js';
@@ -19,7 +22,13 @@
   let {
     shell = 'desk', candidates = [], tiers = [], canEdit = false, allowTP = true, chart = null, floorsEdited = false,
     onfloor, onreset, onresetall, onassign, ontp, onModal = () => {},
+    store = claudeDispatch, tpEditable = null, emptyHint = '',
   } = $props();
+  // 哪一份调用策略（不给 = Claude 那份）：一个子页只认一份，挂上就不换
+  const S = untrack(() => store);
+  const { dp, loadAllPoints, importChartFile, fetchChartOnline, clearChart, modelName } = S;
+  // 「调用非 Claude 模型」能不能拨：不给 = 跟着 canEdit（dimensio 跟随 Claude 的策略时，这个开关仍是 dimensio 自己的、照样能拨）
+  const tpOk = $derived(tpEditable ?? canEdit);
 
   const canImport = $derived(!!dp.canImport);
   const busy = $derived(dp.chartBusy);
@@ -113,7 +122,7 @@
     menu = { at, cand: c };
   }
   // 推理强度的叫法和四档落点的片同一个来源（dpLabels.effortLabel：拉条面板那张档位表）
-  const menuTitle = $derived(menu ? `${menu.cand.label || modelName(menu.cand.model)} · ${effortLabel(menu.cand.model, menu.cand.effort)}` : '');
+  const menuTitle = $derived(menu ? `${menu.cand.label || modelName(menu.cand.model)} · ${effortLabel(menu.cand.model, menu.cand.effort, S)}` : '');
   const menuItems = $derived.by(() => {
     if (!menu) return [];
     const c = menu.cand, colors = TIER_COLORS[ui.theme !== 'light' ? 'dark' : 'light'];
@@ -130,7 +139,7 @@
   <div class="cc-tools">
     <div class="cc-opt">
       <span class="cc-opt-t">{t('调用非 Claude 模型')}</span>
-      <DpSwitch {shell} checked={allowTP} disabled={!canEdit} label={t('调用非 Claude 模型')} onchange={(v) => ontp?.(v)} />
+      <DpSwitch {shell} checked={allowTP} disabled={!tpOk} label={t('调用非 Claude 模型')} onchange={(v) => ontp?.(v)} />
     </div>
     <div class="cc-opt">
       <span class="cc-opt-t">{t('显示全图')}{#if dp.pointsLoading}<span class="dp-spin" aria-hidden="true"></span>{/if}</span>
@@ -146,7 +155,7 @@
   <div class="cc-chart" class:busy={!!busy} bind:this={chartEl}>
     {#if busy}<span class="cc-prog" role="progressbar" aria-label={busy === 'fetch' ? t('正在获取…') : busy === 'import' ? t('正在导入…') : t('正在恢复…')}></span>{/if}
     <PlanChart {candidates} {tiers} allPoints={showAll ? dp.points : null} showAll={showAll && !!dp.points} editable={canEdit}
-      emptyHint={canImport ? '' : t('管理员导入「订阅 plan 性价比图」之后，这里会画出能派的模型和四条判定线。')}
+      emptyHint={emptyHint || (canImport ? '' : t('管理员导入「订阅 plan 性价比图」之后，这里会画出能派的模型和四条判定线。'))} store={S}
       {onfloor} {onreset} onpick={canEdit ? pickPoint : null} />
   </div>
 

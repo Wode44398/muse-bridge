@@ -19,7 +19,7 @@ import { inertFileHeaders } from "./inert-file.ts";
 import { protocolInfo } from "./protocol.ts";
 import { browserTool } from "./tools/browser.ts";
 import { webfetchTool } from "./tools/webfetch.ts";
-import { existingSharedBrowser, releaseBrowser } from "./cdp.ts";
+import { closeBrowser, liveBrowserCount } from "./cdp.ts";
 import { killTree } from "./tools/bash.ts";
 import { Sandbox } from "./sandbox.ts";
 import type { ToolContext, ToolRunResult } from "./tools/types.ts";
@@ -150,9 +150,9 @@ test("S1: Browser refuses control-plane navigate / tab_new / attach without laun
       assert.equal(r.ok, false, JSON.stringify(args));
       assert.match(text(r), /control plane/, JSON.stringify(args));
     }
-    assert.ok(!existingSharedBrowser(), "a refused navigation must not have launched the shared browser");
+    assert.equal(liveBrowserCount(), 0, "a refused navigation must not have launched any browser");
   } finally {
-    releaseBrowser("s1-test");
+    await closeBrowser("s1-test");
   }
 });
 

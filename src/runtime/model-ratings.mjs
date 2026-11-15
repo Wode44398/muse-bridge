@@ -35,6 +35,8 @@ import { accountPlan } from './status.mjs';
 import { activeAccountId, listAccounts } from './claude-account.mjs';
 import { guessModel } from '../model-knowledge/index.mjs';
 import { normKey, familyOf, bestByEffort, loadRatings as indexRatings, RATING_LEVELS as LEVELS } from '../model-knowledge/ratings.mjs';
+// 判定线与取舍和 dimensio 的阶梯共用一份（model-knowledge/ladder.mjs）：默认线、首选 / 备选 / 最强、档位自定义借格
+import { defaultFloors, floorOf, pickAtFloor, cheapestAltCell as cheapestAlt, strongestCell as strongest, nearestEffortCell, LADDER_FRACS } from '../model-knowledge/ladder.mjs';
 import { importedRatings, chartMeta, planOfBaseUrl, planCost } from './dispatch-chart.mjs';
 import { policyFor, policyOfOwner, activeStrategy, sanitizeStrategy, canEditPolicy, TIER_KEYS } from './dispatch-policy.mjs';
 
@@ -51,14 +53,13 @@ export const CLAUDE_SUBS = [
 ];
 const SUB_ALIASES = new Set(CLAUDE_SUBS.map((c) => c.alias));
 
-// 四档：key 是 auto:<key>；frac = 默认线占「可派模型里最高智力指数」的比例（top 档的默认线 = 最高分 −1.5）
+// 四档：key 是 auto:<key>；frac = 默认线占「可派模型里最高智力指数」的比例（top 档的默认线 = 最高分 −1.5），数值在共用的 ladder.mjs
 export const TIERS = [
   { key: 'top', title: '最难', use: '最难的裁决、最终验证' },
-  { key: 'hard', title: '难', use: '设计取舍、难排查的问题', frac: 0.88 },
-  { key: 'normal', title: '常规', use: '常规实现、一般审查', frac: 0.6 },
-  { key: 'light', title: '机械', use: '检索、读文件、机械改动、格式整理', frac: 0.4 },
+  { key: 'hard', title: '难', use: '设计取舍、难排查的问题', frac: LADDER_FRACS.hard },
+  { key: 'normal', title: '常规', use: '常规实现、一般审查', frac: LADDER_FRACS.normal },
+  { key: 'light', title: '机械', use: '检索、读文件、机械改动、格式整理', frac: LADDER_FRACS.light },
 ];
-const TOP_SLACK = 1.5;
 export const AUTO_RE = /^auto:(top|hard|normal|light)$/i;
 export const isAutoModel = (s) => typeof s === 'string' && AUTO_RE.test(s.trim());
 
@@ -207,38 +208,14 @@ export function candidates({ catalog = [], official = false, routed = false, pla
   return { list: out, unrated };
 }
 
-// 首选：成本最低；同价取智力分低的（更贴近判定线——够用就行，把更强的留给更高一档）
-const cheapest = (xs) => xs.reduce((a, b) => (!a || b.cost < a.cost || (b.cost === a.cost && b.ii < a.ii) ? b : a), null);
-// 备选：成本最低；同价取智力分高的（备选是首选出问题时顶上的，同价就要更稳的那个；与改造前一致）
-const cheapestAlt = (xs) => xs.reduce((a, b) => (!a || b.cost < a.cost || (b.cost === a.cost && b.ii > a.ii) ? b : a), null);
-// 最强：智力分最高；同分取便宜的
-const strongest = (xs) => xs.reduce((a, b) => (!a || b.ii > a.ii || (b.ii === a.ii && b.cost < a.cost) ? b : a), null);
-
-// 判定线保留一位小数：往上取（智力分本身是一位小数，上取后「≥ 线」的结果和不取整完全一样）
-const ceil1 = (x) => Math.ceil(x * 10 - 1e-6) / 10;
+// 首选（成本最低、同价取更贴近判定线的）、备选（同价取更稳的）、最强、默认线：共用的 model-knowledge/ladder.mjs
 /** 默认线：{ top, hard, normal, light }——top = 候选里最高智力分 − 1.5，其余 = 最高分 × frac（一位小数）；候选为空 → 全 0。 */
-export function defaultFloors(list) {
-  const top = list && list.length ? Math.max(...list.map((c) => c.ii)) : 0;
-  return Object.fromEntries(TIERS.map((t) => [t.key, Math.max(0, ceil1(t.frac ? top * t.frac : top - TOP_SLACK))]));
-}
+export { defaultFloors };
 
 // 档位自定义 → 候选里的那一格：模型 + 档位都对上 = 那一格；档位对不上但模型在 = 按最接近的档合成一格（ii / cost 借那一档，标 est）；
 // 模型不在候选里（被过滤 / 已删除 / 不调用非 Claude）→ null
 function overrideCell(list, ov) {
-  const same = list.filter((c) => c.model === ov.model);
-  if (!same.length) return null;
-  const e = String(ov.effort || '');
-  const exact = same.find((c) => c.effort === e);
-  if (exact) return exact;
-  const want = LEVELS.indexOf(e === '' ? 'high' : e === 'minimal' ? 'low' : e);   // 不指定 = 按 high 估（Claude 与多数厂商的默认档）
-  const ranked = same.filter((c) => LEVELS.includes(c.effort));
-  let near;
-  if (want < 0 || !ranked.length) near = strongest(same);
-  else {
-    const d = (c) => Math.abs(LEVELS.indexOf(c.effort) - want);
-    near = ranked.reduce((a, b) => (d(b) < d(a) || (d(b) === d(a) && b.ii > a.ii) ? b : a));
-  }
-  return { ...near, effort: e, est: true };
+  return nearestEffortCell(list.filter((c) => c.model === ov.model), ov.effort);
 }
 
 /**
@@ -252,11 +229,10 @@ export function ladderOf(list, { floors, overrides } = {}) {
   const def = defaultFloors(list);
   return TIERS.map((t) => {
     const fd = def[t.key];
-    const fv = floors ? floors[t.key] : null;
-    const floor = typeof fv === 'number' && Number.isFinite(fv) ? fv : fd;
-    const ok = list.filter((c) => c.ii >= floor);
-    let pick = cheapest(ok), short = false;
-    if (!pick) { pick = strongest(list); short = true; }
+    const floor = floorOf(floors, t.key, fd);
+    const at = pickAtFloor(list, floor);
+    const ok = at.ok;
+    let pick = at.pick, short = at.short;
     let source = 'chart', overrideSkipped = false;
     const ov = overrides && overrides[t.key];
     if (ov && typeof ov.model === 'string' && ov.model) {

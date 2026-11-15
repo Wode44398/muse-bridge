@@ -12,6 +12,8 @@ import { sessionsDir } from "./store.ts";
 export type SupportedImageMime = "image/png" | "image/jpeg" | "image/webp";
 
 export const MAX_IMAGE_ATTACHMENTS = 10;
+// 一条消息能挂的附件路径总数（与前端一次拖入的上限一致）；只有前 MAX_IMAGE_ATTACHMENTS 张图原样入模。
+export const MAX_ATTACHMENT_REFS = 300;
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MAX_IMAGE_TOTAL_BYTES = 16 * 1024 * 1024;
 

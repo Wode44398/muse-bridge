@@ -374,7 +374,8 @@ export function makeSubAgentRunner(
       }
     }
     // 选型阶梯：model 写 auto:<档> 或「服务:型号」时先换成具体的 provider / 型号（auto 连档位一起，压过调用方写的 effort）
-    const routed = await routeSubAgentModel(req.model, { provider: env.provider, model: env.model });
+    // via：Workflow 的 agent() 带 workflowId，Agent 工具不带——调用策略按这条路看生效范围
+    const routed = await routeSubAgentModel(req.model, { provider: env.provider, model: env.model }, undefined, { via: req.workflowId ? "workflow" : "agent" });
     if ("error" in routed) return bail(routed.error, req.model ?? env.model, req.provider ?? env.provider);
     if (routed.model) {
       req = { ...req, model: routed.model, provider: routed.provider, ...(routed.thinking ? { thinking: routed.thinking } : {}) };

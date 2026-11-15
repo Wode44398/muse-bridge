@@ -6,6 +6,8 @@
 // 就注销这一条）；出口只说 disposeOwner(owner, reason, kinds)：按登记的逆序拆，返回每类真正拆掉了几个（停止会话的
 // 回执照旧如实报告）。拆的时候先注销再调 dispose——dispose 里再去注销自己是空操作；某一条拆失败只记一行，不挡后面的。
 // PTY 终端按工作区归属，不进会话账本。
+// browser = 会话自己的那份浏览器（cdp.ts getBrowser，11-14 起按会话各开一份；以前是全进程唯一浏览器的占用）：活过轮结束、
+// 活过停止，只有删除（reason "delete"）与巡检（"orphan"）收它——dispose 按 reason 决定要不要连隔离存储开关一起忘掉。
 
 export type ResourceKind = "job" | "service" | "browser";
 export const RESOURCE_KINDS: readonly ResourceKind[] = ["job", "service", "browser"];

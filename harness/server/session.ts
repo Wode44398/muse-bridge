@@ -2,6 +2,10 @@ import { notifyBridge, lastAnswer, clipMessage } from "./bridge-events.ts";
 import { prAfterTurn } from "./pr-bridge.ts"; // 拉取请求：轮末认 PR、真人发话清零自动修复的连续计数
 // 会话协作（子会话 / 会话间消息）：本文件只在几处挂钩子（开跑、收尾、建 system、删会话），逻辑都在 session-family.ts
 import { familyPromptSection, familyRunEnd, familyRunStart, forgetFamilySession, type FamilyOrigin } from "./session-family.ts";
+// 项目对话（协调者 + 讨论串）：形态、台账、提示词段；协调者的工具表与项目记忆工具
+import { coordinatorRoleSection, forgetProjectSession, projectContextText, projectIdFor, registerProjectSession, type SessionShape } from "./project-mode.ts";
+import { coordinatorToolTable, threadMemoryTools } from "./tools/project.ts";
+import { COORDINATOR_SESSION_TOOLS } from "./tools/sessions.ts";
 import { jobNotifyRunEnd, jobNotifyRunStart } from "./job-notify.ts";
 import { cancelIdleCompact, idleCompactRunEnd } from "./idle-compact.ts";
 import { cancelMemoryDream } from "./memory-dream.ts";
@@ -19,7 +23,7 @@ import {
   visibleMessages,
 } from "./agent/state.ts";
 import { isPermissionMode, sessionAllowRule, type PermissionMode, type SessionAllow } from "./agent/permissions.ts";
-import { recallIds, skillLoadedIn } from "./agent/injections.ts";
+import { recallIds, ROUTINE_KIND, skillLoadedIn } from "./agent/injections.ts";
 import { runAgent, transcriptReadExternal } from "./agent/loop.ts";
 import { describeWorldChange, LEGACY_AUDIT_CONTRACT, refreshDynamicContext, refreshPlanSection, systemPrompt } from "./agent/prompt.ts";
 import { resolveProfile } from "./agent/profile.ts";
@@ -106,6 +110,7 @@ import type { RefDigest } from "./session-refs.ts";
 import {
   loadSessionImageBase64,
   looksLikeImagePath,
+  MAX_ATTACHMENT_REFS,
   MAX_IMAGE_ATTACHMENTS,
   MAX_IMAGE_BYTES,
   MAX_IMAGE_TOTAL_BYTES,
@@ -159,6 +164,8 @@ export interface Session {
   cfg: PersistedConfig | null;
   // M11（N33）：还没开跑的新会话由发起端带来的配置快照；第一次开跑时（initState）变成 cfg，之后不再用
   initialConfig?: RuntimeConfig;
+  // 项目对话（project-mode.ts）：新会话由发起端定的形态；第一次开跑时（initState）记进 cfg.shape，之后不再变
+  initialShape?: SessionShape;
   // 运行中换了型号 / 思考深度：cfg 已是新的，会话状态等下一轮开跑前再按它重建（setSessionModel）
   modelRebindPending?: boolean;
   modelRebindFrom?: { provider: string; model: string };
@@ -400,7 +407,8 @@ export function readGuide(root: string): string | undefined {
 
 // M11（N33）：initial = 发起端显式带来的配置快照（界面上显示的那一份，已按设置页同一套规则校验过）。不给才读全局——
 // 全局值是「最后一个切前台的设备」写的，手机刚切的项目 / 访问范围 / 运行档位以前会串进电脑上新建的对话。
-export function createSession(initial?: RuntimeConfig): Session {
+// shape = 会话形态（project-mode.ts），只有新会话能带。
+export function createSession(initial?: RuntimeConfig, opts: { shape?: SessionShape } = {}): Session {
   const s: Session = {
     id: randomUUID(),
     state: null,
@@ -412,6 +420,7 @@ export function createSession(initial?: RuntimeConfig): Session {
     title: "",
     cfg: null,
     initialConfig: initial,
+    ...(opts.shape ? { initialShape: opts.shape } : {}),
     persistTimer: null,
     watchers: new Set(),
     runLog: [],
@@ -468,6 +477,7 @@ export function liveSessionMetas(): SessionMeta[] {
       provider: s.cfg.provider,
       model: s.cfg.model,
       workspace: s.cfg.workspace,
+      ...(s.cfg.shape === "project" ? { shape: "project" as const } : {}),
     });
   }
   return out;
@@ -674,8 +684,9 @@ export function stopSession(id: string, runId?: string): StopReport {
   if (s?.abort) s.abort.abort();
   // Background jobs deliberately outlive a turn, but "stop this session" is the
   // user asking for the work to end — reap them and the session's dev servers.
-  // M5（K03）：出口只说「这个会话的都收掉」，账本按登记的逆序拆（job、dev server、浏览器占用），回执照账本的计数报
-  const reaped = disposeOwner(id, "stop");
+  // M5（K03）：出口只说「这个会话的都收掉」，账本按登记的逆序拆（job、dev server），回执照账本的计数报。
+  // 会话自己的浏览器（cdp.ts getBrowser）不收：停下之后用户还要看 agent 停在了哪一页；删除会话时才收（deleteSession）。
+  const reaped = disposeOwner(id, "stop", ["job", "service"]);
   const jobsKilled = reaped.job;
   const servicesStopped = reaped.service;
   return {
@@ -789,10 +800,11 @@ export function rollbackInProgress(): string | null {
 
 // M5（#13）：删除会话要回收它名下的一切。以前两个删除入口只 dropSession + 删文件：后台 Bash job
 // 照跑 30 分钟到 2 小时、Preview dev server 永不停，owner 已经没了，UI 也停不掉。先 stopSession
-// （中止在跑的轮、杀 job、停服务、放浏览器），再忘掉内存状态、删盘上的记录、图片与检查点。
+// （中止在跑的轮、杀 job、停服务），再关掉它的浏览器（标签、隔离存储开关），再忘掉内存状态、删盘上的记录、图片与检查点。
 export function deleteSession(id: string): Promise<{ deleted: boolean; stopped: StopReport }> {
   return lifecycle(id, async () => {
     const stopped = stopSession(id);
+    disposeOwner(id, "delete", ["browser"]);
     // U4（K08）：记录删了就不知道它的工作区和附件目录了——先记下
     const live = sessions.get(id);
     const rec = (live ? sessionRecord(live) : null) ?? (await loadSession(id).catch(() => null));
@@ -806,6 +818,7 @@ export function deleteSession(id: string): Promise<{ deleted: boolean; stopped: 
     await deleteTraceLog(id); // Q12：这个会话的运行事件日志
     clearRunMarker(id); // M13：删掉的会话不再自动续跑
     forgetFamilySession(id); // 会话协作：它的父子关系一并清掉（它开的子会话升为顶层）、收件箱作废
+    forgetProjectSession(id); // 项目对话：台账与项目记忆一并删掉（讨论串被删只清它的「已解决」标记）
     await deleteSessionDiagnostics(rec?.config?.workspace ?? workspaceRoot(), id); // Q13：这个会话导出过的诊断包
     if (rec) {
       const keys = [id, ...rec.messages.flatMap((m) => (m.attachments ?? []).map((a) => uploadKeyOf(a.path)).filter((k): k is string => Boolean(k)))];
@@ -902,7 +915,7 @@ function buildState(
     sandbox,
     readFileState,
     // Tags this session's long-lived process resources (background jobs, preview
-    // services, the shared browser claim) so concurrent sessions stay separated.
+    // services, its own browser) so concurrent sessions stay separated.
     ownerId: sessionId,
     setTodos: (items) => {
       if (stateRef) stateRef.todos = items;
@@ -974,15 +987,36 @@ function buildState(
     defs = defs.filter((t) => subset.includes(t.name));
     for (const name of [...tmap.keys()]) if (!subset.includes(name)) tmap.delete(name);
   }
+  // 项目对话（project-mode.ts）：协调者只拿只读的看 / 查 / 问 / 计划 + 会话工具 + 项目记忆 + 只读 Bash（在浏览器判定之前裁：
+  // 协调者没有浏览器工具，提示词也不写那几句）；讨论串照常的工具表，后面追加项目记忆三件（MCP 之后、延迟加载之前）。
+  // 建会话时定一次：形态在新会话第一轮就定下，讨论串的标记在它开出来时就在台账里。
+  const coordinator = cfg.shape === "project";
+  const projectId = coordinator ? (sessionId ?? null) : projectIdFor(sessionId);
+  if (coordinator) {
+    const trimmed = coordinatorToolTable(tmap, COORDINATOR_SESSION_TOOLS);
+    tmap.clear();
+    for (const [name, tool] of trimmed) tmap.set(name, tool);
+    defs = [...trimmed.values()].map((t) => t.def);
+  }
   // D5：浏览器工具（Browser / ReadPage / Eval / Network）跟着 headless.ts browserAvailable 进出注册表——在这里、建会话时
   // 定一次（新建 / 从盘上恢复 / 换型号重建都走 buildState），之后这个会话的工具清单与 system 不再跟着变（每轮改会打穿
   // 提示词缓存）。桌面壳宿主晚注册、扩展后连上、刚装好浏览器，下一个会话就有。
   const hasBrowser = tmap.has("Browser");
-  // E1（G6）：基线里的 MCP 工具（直连的逐个；工具多的连接器走 McpDescribe / McpCall 网关）
-  for (const t of mcpTools(mcp)) {
-    if (tmap.has(t.def.name)) continue;
-    defs = [...defs, t.def];
-    tmap.set(t.def.name, t);
+  // E1（G6）：基线里的 MCP 工具（直连的逐个；工具多的连接器走 McpDescribe / McpCall 网关）。协调者不接 MCP（连接器能写东西）
+  if (!coordinator) {
+    for (const t of mcpTools(mcp)) {
+      if (tmap.has(t.def.name)) continue;
+      defs = [...defs, t.def];
+      tmap.set(t.def.name, t);
+    }
+  }
+  // 讨论串：项目记忆三件
+  if (projectId && !coordinator) {
+    for (const t of threadMemoryTools()) {
+      if (tmap.has(t.def.name)) continue;
+      defs = [...defs, t.def];
+      tmap.set(t.def.name, t);
+    }
   }
   // 工具延迟加载（agent/deferred-tools.ts）：不常用的长说明工具只发简介 + 参数骨架，ToolSearch 取完整说明（排在最后：
   // 工具清单只往后追加）。执行与权限判定仍按 tmap 里的完整工具。建会话时定一次，之后不跟着偏好变。
@@ -997,16 +1031,23 @@ function buildState(
   }
 
   // C4（X12、N09）：World State 各节此刻的值（runStart 时连日期、项目知识、记忆一起）
+  // 协调者没有 Skill / Remember / Recall：技能目录与记忆索引不进它的 system，也不发它们的更新片段；
+  // 项目对话与讨论串多一节 project（项目说明 + 项目记忆索引，一轮开跑时对一次）
   const worldValues = (runStart: boolean): WorldValues => ({
     guide: readGuide(sandbox.root) ?? "",
     projectDocs: readProjectDocs(sandbox.root) ?? "",
     // C5：目录预算按这个模型的窗口算（×2%，封顶 1 万 token）
-    skills: managedSkillsSection({ contextWindow: adapter.capabilities.contextWindow }) ?? "",
+    ...(coordinator ? {} : { skills: managedSkillsSection({ contextWindow: adapter.capabilities.contextWindow }) ?? "" }),
     jobs: sessionId ? finishedJobsSummary(sessionId) : "",
     // 调试模式（prefs/debug.ts）：每轮现读，会话中途开关下一轮以 World State 片段告知；租户实例不出这一项
     debug: process.env.DIMENSIO_TENANT !== "1" && prefValue<boolean>("debugMode") ? (tmap.has("BridgeCall") ? "bridge" : "file") : "",
     ...(runStart
-      ? { date: localDate(), knowledge: knowledgeSummary(sandbox.root), memory: withExternalSummary(renderAllMemoryForPrompt(sandbox.root), sandbox.root) }
+      ? {
+          date: localDate(),
+          knowledge: knowledgeSummary(sandbox.root),
+          ...(coordinator ? {} : { memory: withExternalSummary(renderAllMemoryForPrompt(sandbox.root), sandbox.root) }),
+          ...(projectId ? { project: projectContextText(projectId) } : {}),
+        }
       : {}),
   });
   const buildSystem = (mode: PermissionMode, world: WorldValues): string =>
@@ -1031,10 +1072,17 @@ function buildState(
       bridge: tmap.has("BridgeCall"),
       // 拉取请求（tools/pullrequest.ts）：bridge 拉起的主机实例才有
       pr: tmap.has("PullRequest"),
-      // 子 agent 选型阶梯 + 调度偏好（agent/dispatch-ladder.ts）：有 Agent / Workflow 才写
-      dispatch: tmap.has("Agent") || tmap.has("Workflow") ? dispatchSection() : undefined,
-      // 会话协作：有 StartSession 才写这一段；子会话另带「你是子会话」（session-family.ts，建会话时定下）
-      collab: tmap.has("StartSession") ? familyPromptSection(sessionId) : undefined,
+      // 子 agent 选型阶梯 + 调度偏好（agent/dispatch-ladder.ts）：有 Agent / Workflow / StartSession 才写；
+      // bridge 的子 agent 调用策略管着时按它的总开关与生效范围裁剪（只讲这个会话真有的那几样工具）
+      dispatch:
+        tmap.has("Agent") || tmap.has("Workflow") || tmap.has("StartSession")
+          ? dispatchSection({ tools: { agent: tmap.has("Agent"), workflow: tmap.has("Workflow"), session: tmap.has("StartSession") } })
+          : undefined,
+      // 会话协作：有 StartSession 才写这一段；子会话另带「你是子会话」（session-family.ts，建会话时定下）。协调者的协作规矩在它的角色段里
+      collab: tmap.has("StartSession") && !coordinator ? familyPromptSection(sessionId) : undefined,
+      // 项目对话：协调者整段换成协调者版（project-mode.ts 的角色段）；协调者与讨论串都带项目说明 + 项目记忆索引
+      coordinator: coordinator ? coordinatorRoleSection() : undefined,
+      project: world.project || undefined,
       profile,
       debug: world.debug || undefined,
     });
@@ -1114,7 +1162,7 @@ function buildState(
   // C4：World State 注册表
   stateRef.systemWorld = initialWorld;
   stateRef.worldSource = worldValues;
-  stateRef.worldDescribe = (section, value, was) => describeWorldChange(section, value, was, hasWebSearch);
+  stateRef.worldDescribe = (section, value, was) => describeWorldChange(section, value, was, hasWebSearch, coordinator);
   stateRef.rebuildSystem = () => {
     const world = worldValues(true);
     return { system: buildSystem(stateRef.permissionMode, world), world };
@@ -1142,7 +1190,11 @@ function initState(session: Session): AgentState {
     permissionRules: g.permissionRules,
     workspace: g.workspace,
     access: g.access,
+    ...(session.initialShape ? { shape: session.initialShape } : {}),
   };
+  // 项目对话：形态定下来，登记进项目台账（之后不加载会话记录也认得出它）
+  if (session.initialShape === "project") registerProjectSession(session.id);
+  session.initialShape = undefined;
   // E1：此刻连上的 MCP 连接器拍成这个会话的基线（没有就是 null）
   session.mcp = planMcpBaseline();
   const state = buildState(session.cfg, undefined, session.id, undefined, session.mcp);
@@ -2234,8 +2286,9 @@ function prepareUserInput(
 ): PreparedUserInput {
   const state = session.state!;
   const unique = [...new Set(attachmentPaths.map((value) => String(value).trim()).filter(Boolean))];
-  if (unique.length > MAX_IMAGE_ATTACHMENTS) {
-    throw new Error(`too many attachments (maximum ${MAX_IMAGE_ATTACHMENTS} per message)`);
+  // 上限管的是「一条消息挂多少个路径」；原生入模的图另有 MAX_IMAGE_ATTACHMENTS，超出的图照样按路径交给模型。
+  if (unique.length > MAX_ATTACHMENT_REFS) {
+    throw new Error(`too many attachments (maximum ${MAX_ATTACHMENT_REFS} per message)`);
   }
 
   const attachments: AttachmentRef[] = [];
@@ -2245,6 +2298,13 @@ function prepareUserInput(
     mime: NonNullable<ReturnType<typeof sniffImageMime>>;
   }> = [];
   const readable: AttachmentRef[] = [];
+  // 型号收不了原生媒体（不支持音频 / 格式不认 / 超过内联上限）时不拒发：文件照样作为工作区路径交给模型，
+  // 附一句为什么没原样发、可以怎么处理（ffmpeg 转码、ffprobe 看元数据……）。11-14 维护者：「至少也能把文件本身给模型发过去」。
+  const notes = new Map<string, string>();
+  const fallback = (ref: AttachmentRef, note: string) => {
+    readable.push(ref);
+    notes.set(ref.path, note);
+  };
   const videoCandidates: Array<{ label: string; abs: string; mime: SupportedVideoMime; size: number }> = [];
   const audioCandidates: Array<{ label: string; abs: string; mime: SupportedAudioMime }> = [];
   let totalAudioBytes = 0;
@@ -2274,17 +2334,32 @@ function prepareUserInput(
     } finally {
       closeSync(fd);
     }
+    const mb = (n: number) => `${Math.floor(n / 1024 / 1024)} MB`;
     const audioMime = sniffAudioMime(header, abs);
     if (audioMime) {
-      if (!state.ctx.agentHearsAudio) throw new Error("当前模型不支持原生音频，请切换到 MiMo 后重新发送。");
-      if (stat.size > MAX_AUDIO_BYTES) throw new Error(`音频 ${label} 超过 24 MB，请压缩为 MP3/FLAC 或分段后发送。`);
+      const ref: AttachmentRef = { path: label, kind: "audio" };
+      attachments.push(ref);
+      const why = !state.ctx.agentHearsAudio
+        ? "the current model takes no audio input"
+        : stat.size > MAX_AUDIO_BYTES
+          ? `it is larger than the ${mb(MAX_AUDIO_BYTES)} inline audio limit`
+          : totalAudioBytes + stat.size > MAX_AUDIO_TOTAL_BYTES
+            ? `the audio in this message exceeds the ${mb(MAX_AUDIO_TOTAL_BYTES)} inline total`
+            : "";
+      if (why) {
+        fallback(ref, `audio, not sent as sound because ${why} — inspect it with ffprobe/ffmpeg via Bash (metadata, transcoding, splitting, transcription tools if installed)`);
+        continue;
+      }
       totalAudioBytes += stat.size;
-      if (totalAudioBytes > MAX_AUDIO_TOTAL_BYTES) throw new Error("本条消息的音频总计超过 32 MB，请分批发送。");
       audioCandidates.push({ label, abs, mime: audioMime });
-      attachments.push({ path: label, kind: "audio" });
       continue;
     }
-    if (looksLikeAudioPath(label)) throw new Error(`unsupported or invalid audio: ${label} (use MP3, WAV, FLAC, M4A, or OGG)`);
+    if (looksLikeAudioPath(label)) {
+      const ref: AttachmentRef = { path: label, kind: "audio" };
+      attachments.push(ref);
+      fallback(ref, "audio in a format that cannot be sent natively (only MP3/WAV/FLAC/M4A/OGG) — use ffprobe/ffmpeg via Bash, e.g. convert to MP3 and Read that");
+      continue;
+    }
     const mime = sniffImageMime(header);
     if (!mime) {
       const videoMime = sniffVideoMime(header);
@@ -2295,10 +2370,16 @@ function prepareUserInput(
         continue;
       }
       if (looksLikeImagePath(label)) {
-        throw new Error(`unsupported or invalid image format: ${label} (use PNG, JPEG, or WebP)`);
+        const ref: AttachmentRef = { path: label, kind: "file" };
+        attachments.push(ref);
+        fallback(ref, "image in a format Read cannot show (only PNG/JPEG/WebP) — convert it via Bash first (e.g. ffmpeg -i in out.png, or magick) and Read the PNG");
+        continue;
       }
       if (looksLikeVideoPath(label)) {
-        throw new Error(`unsupported video container: ${label} (use MP4, WebM, or MOV)`);
+        const ref: AttachmentRef = { path: label, kind: "video" };
+        attachments.push(ref);
+        fallback(ref, "video in a container that cannot be sent natively (only MP4/WebM/MOV) — remux/convert with ffmpeg via Bash, then Read the MP4 to sample frames");
+        continue;
       }
       const ref: AttachmentRef = { path: label, kind: "file" };
       attachments.push(ref);
@@ -2312,13 +2393,18 @@ function prepareUserInput(
       readable.push(ref);
       continue;
     }
-    if (stat.size > MAX_IMAGE_BYTES) {
-      throw new Error(`image ${label} exceeds the ${MAX_IMAGE_BYTES / 1024 / 1024} MB per-image limit`);
+    const imageWhy = imageCandidates.length >= MAX_IMAGE_ATTACHMENTS
+      ? `only the first ${MAX_IMAGE_ATTACHMENTS} images of a message are attached inline`
+      : stat.size > MAX_IMAGE_BYTES
+        ? `it is larger than the ${mb(MAX_IMAGE_BYTES)} inline image limit`
+        : totalImageBytes + stat.size > MAX_IMAGE_TOTAL_BYTES
+          ? `the images in this message exceed the ${mb(MAX_IMAGE_TOTAL_BYTES)} inline total`
+          : "";
+    if (imageWhy) {
+      fallback(ref, `image, not attached inline because ${imageWhy} — Read it if you need to see it (downscale it via Bash first if Read reports it too large)`);
+      continue;
     }
     totalImageBytes += stat.size;
-    if (totalImageBytes > MAX_IMAGE_TOTAL_BYTES) {
-      throw new Error(`attached images exceed the ${MAX_IMAGE_TOTAL_BYTES / 1024 / 1024} MB total limit`);
-    }
     const bytes = readFileSync(abs);
     imageCandidates.push({ label, bytes, mime });
   }
@@ -2380,8 +2466,12 @@ function prepareUserInput(
   }
   content.push(...videoBlocks, ...audioBlocks);
   if (readable.length) {
-    const lines = readable.map((ref) => `- ${ref.path}${ref.kind === "image" ? " (image)" : ref.kind === "video" ? " (video — Read it to sample frames)" : ""}`);
-    const imageInstruction = readable.some((ref) => ref.kind === "image")
+    const lines = readable.map((ref) => {
+      const note = notes.get(ref.path);
+      if (note) return `- ${ref.path} (${note})`;
+      return `- ${ref.path}${ref.kind === "image" ? " (image)" : ref.kind === "video" ? " (video — Read it to sample frames)" : ""}`;
+    });
+    const imageInstruction = readable.some((ref) => ref.kind === "image" && !notes.has(ref.path))
       ? " The current main model is text-only; call Read on image paths to use the configured auxiliary vision channel."
       : "";
     content.push({
@@ -2452,6 +2542,8 @@ export function startRun(
   // 拉取请求自动修复（pr.ts）：bridge 发来的 <ci-monitor-event>——首条是 harness 片段（kind 由调用方给），不是用户的话
   // 会话协作（session-family.ts）：head = 这一轮的首条不是用户打的字，而是 harness 片段（父会话派的任务、会话消息、子会话
   // 汇报——信封见 injections.ts）；family = 这一轮是谁发起的（会话间唤醒 / 派生；不给就按真人 / 续跑算）
+  // 定时任务（routine-runs.ts，bridge 的 Routines）：message 是用户自己写在任务里的指令（照常落成用户消息），routine.text 是紧跟
+  // 其后的一条 harness 片段（kind routine，写明「定时触发、无人值守」）；调用方另给 family（auto：不算真人发话）
   opts: {
     resume?: { resumes: number; reason: "restart" | "crash" };
     goal?: boolean;
@@ -2460,6 +2552,7 @@ export function startRun(
     // prelude = 分叉（fork）出来的子会话先接上父会话的对话副本，再跟这条首条
     head?: { text: string; kind: string; title?: string; retrieval?: string; prelude?: Msg[] };
     family?: FamilyOrigin;
+    routine?: { text: string };
   } = {},
 ): RunHandle {
   if (session.running) {
@@ -2558,6 +2651,8 @@ export function startRun(
       session.goal = { ...session.goal, round: 1, updatedAt: Date.now() };
       session.state.appendUserBlocks([{ t: "text", text: goalStartText(session.goal) }], false, { origin: "harness", kind: GOAL_START_KIND });
     }
+    // 定时任务：指令后面跟一条「定时触发、无人值守」的说明（界面上是一行提示，见 web 的 harnessNotice）
+    if (opts.routine?.text) session.state.appendUserBlocks([{ t: "text", text: opts.routine.text }], false, { origin: "harness", kind: ROUTINE_KIND });
   }
   session.state.setRunBudget(budget);
   // 会话协作：记下这一轮是谁发起的；真人发话时把攒着没送出去的会话消息附在这条后面（同一轮里一起读到）
@@ -2574,7 +2669,7 @@ export function startRun(
   // bridge 插件订阅的 turn.start（bridge-events.ts）：续跑 / 目标续轮也发，kind 标出来
   notifyBridge("turn.start", {
     sessionId: session.id, model: session.cfg?.model ?? "", provider: session.cfg?.provider ?? "",
-    kind: opts.resume ? "resume" : opts.goal ? "goal" : opts.event ? "event" : "chat", isNew: !(session.state?.messages.length), message: clipMessage(message),
+    kind: opts.resume ? "resume" : opts.goal ? "goal" : opts.event ? "event" : opts.routine ? "routine" : "chat", isNew: !(session.state?.messages.length), message: clipMessage(message),
   });
   // Pre-existing gap fixed: without this, tools never saw the abort signal —
   // stopping a session left running Bash children / fetches / walks alive.
@@ -2615,8 +2710,9 @@ export function startRun(
   session.runClock = { startedAt: Date.now(), pausedMs: 0, pausedSince: null };
   fanout(session, runClockEvent(session));
   // P3：用户在这个会话发了新消息 = 人回来了，离开模式自动关（放在 runLog 重置之后，附着的设备重放得到）。续跑不算人回来。
-  if (!opts.resume && !opts.goal && !opts.event && isAway(session)) setSessionAway(session, false);
-  if (!opts.resume && !opts.goal && !opts.head && isAway(session)) setSessionAway(session, false);
+  // 定时任务那一轮也不算人回来（它是到点自己跑的）
+  if (!opts.resume && !opts.goal && !opts.event && !opts.routine && isAway(session)) setSessionAway(session, false);
+  if (!opts.resume && !opts.goal && !opts.head && !opts.routine && isAway(session)) setSessionAway(session, false);
   const done = runInTrace(trace, () => executeRun(session, preRec, checkpointLabel, retrievalText, abort, ownUserMsg));
   session.runPromise = done;
   return { started: true, done };
@@ -2833,10 +2929,10 @@ async function executeRun(
       session.runLog = session.runLog.slice(-RUN_LOG_RETAIN);
     }
     session.runLogTruncated = false;
-    // Long-lived process resources this run claimed. The browser claim MUST come
-    // back or the next session is refused; background jobs deliberately outlive
-    // the turn, so they are left alone here (stopSession/DELETE reap them).
-    disposeOwner(session.id, "run-end", ["browser"]); // M5：轮结束只放浏览器占用（后台 job、dev server 本来就活过这一轮）
+    // Long-lived process resources (background jobs, dev servers, this session's own
+    // browser tabs) deliberately outlive the turn, so nothing is reaped here: the next
+    // turn picks the same page up, and stopSession / DELETE reap what they own.
+    // （以前这里要放掉全进程唯一那个浏览器的占用，否则下一个会话被拒；现在每个会话各有一份，没有占用可放。）
     // Q12：收尾一行（整轮耗时、是不是被停的），然后把这一轮排着的行写下去
     // bridge 插件订阅的 turn.end（bridge-events.ts）
     notifyBridge("turn.end", {

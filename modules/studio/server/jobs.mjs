@@ -237,6 +237,23 @@ function companionGeminiKey(provider) {
  *         turns（旧 image-chat 显式带的续改轮次 [{ userText, imageId }]）, quota（默认 true）, extraMeta（并进侧车）}
  * 回 { job: 公开形状, done: Promise<公开形状> }。参数 / 素材 / 额度不过关直接抛（带 status）。
  */
+// 尺寸参数的「改图默认」（方案 §10）：本次没给这个参数、手里有「改这张图」素材（或在续改链里接着改）时，用卡上的 editDefault（一般是原图）。
+// 显式给了旧写法的比例 / 档位（Claude 媒体工具、旧接口）的不套——那是调用方自己定的尺寸。
+// 素材条件（$edit / $first / $last / $ref，见 cards/spec.mjs）：选项 only / 参数 when 据此收窄。$edit = 有「改这张图」，或在续改链里且没给参考图
+export function inputFlagsOf(inputs = [], thread = null) {
+  const has = (r) => inputs.some((x) => x.role === r);
+  return { $edit: has('edit') || (!!thread && !has('ref')), $first: has('first'), $last: has('last'), $ref: has('ref') };
+}
+export function applyEditDefaults(card, raw, { inputs = [], thread = null } = {}) {
+  const editing = inputFlagsOf(inputs, thread).$edit;
+  if (!editing) return raw;
+  if (raw.imageSize != null || (raw.aspectRatio && raw.aspectRatio !== 'auto')) return raw;
+  for (const s of card?.params || []) {
+    if (s.type === 'size' && s.editDefault && (raw[s.key] === undefined || raw[s.key] === null || raw[s.key] === '')) raw[s.key] = s.editDefault;
+  }
+  return raw;
+}
+
 export function startJob(ctx, body, opts = {}) {
   const owner = studioOwner(ctx);
   if (!owner) throw bad('这个身份不能用 Media Studio', 403);
@@ -277,7 +294,10 @@ export function startJob(ctx, body, opts = {}) {
 
   // 参数：模型条目的默认值垫底 → 按卡规范化（Google 系照抄旧路由的夹紧，其余按 ParamSpec）
   const rawParams = { ...(entry.defaults || {}), ...(body.params && typeof body.params === 'object' ? body.params : {}) };
-  const params = card.normalize ? card.normalize(rawParams) : applySpecs(card.params, rawParams);
+  const thread0 = typeof body.thread === 'string' && ID_RE.test(body.thread) ? body.thread : null;
+  applyEditDefaults(card, rawParams, { inputs, thread: kind === 'image' ? thread0 : null });
+  const flags = inputFlagsOf(inputs, kind === 'image' ? thread0 : null);
+  const params = card.normalize ? card.normalize(rawParams, flags) : applySpecs(card.params, rawParams, flags);
   const negative = card.negative ? card.negative(body.negative) : (typeof body.negative === 'string' ? body.negative.trim().slice(0, 2000) : '');
   const thread = typeof body.thread === 'string' && ID_RE.test(body.thread) ? body.thread : null;
   const parent = typeof body.parent === 'string' && ID_RE.test(body.parent) ? body.parent : null;

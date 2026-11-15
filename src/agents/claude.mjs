@@ -66,6 +66,8 @@ import { makeKillGuardHook } from '../runtime/kill-guard.mjs';
 import { makeBridgeMcp, BRIDGE_NUDGE, debugNudge } from '../mcp/bridge-tools.mjs';
 import { HARNESS_FEEDBACK_DIR } from '../agent-api/ops/feedback.mjs';
 import { familyLink, familyTurnStart, familyTurnEnded, rememberReplay, familyPeerTurn } from '../runtime/session-family.mjs';
+import { claudeCacheTtl, cancelClaudeIdleCompact, scheduleClaudeIdleCompact } from '../runtime/claude-cache.mjs';
+import { getClaudeSettings } from '../runtime/claude-settings.mjs';
 // 与官方 Claude Desktop / 终端会话互发（CLI 自带跨会话通道；只给主机管理员）：env 开关、入站闸、停放 CLI 接住对方消息开的轮
 import { peersOn, peerEngineEnv, peerInbound, waitPeerRecord, peerDisplay, notePeerHold, dropPeerGate, registerPeerGate, unregisterPeerGate } from '../runtime/session-peers.mjs';
 // 对话内嵌交互图表（官方 visualize：read_me + show_widget）：MCP、提示、直播增量帧都在这个模块里
@@ -840,7 +842,9 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   if (custom) noteNativeWindow(custom.model.id, custom.model.contextWindow);   // 用量面板按配置的真实窗口画
   // 5 小时限额「重置后自动继续」：这个会话又开跑了——人自己发的就作废等着的那次续跑（limit-resume.mjs）。
   // Auto-fix 唤醒轮（family origin 'ci'，pr-monitor.mjs）同样不算「人接手」。
-  if (!isSpare && sessionId && !snap) noteLimitTurnStart(ctx.key, sessionId, { auto: !!limitResume || !!(family && family.origin && family.origin.kind === 'ci') });
+  if (!isSpare && sessionId && !snap) noteLimitTurnStart(ctx.key, sessionId, { auto: !!limitResume || !!(family && family.origin && (family.origin.kind === 'ci' || family.origin.kind === 'idle-compact')) });
+  // 提示缓存快过期时的自动压缩（runtime/claude-cache.mjs）：这个会话又开跑了，撤掉上一轮收尾时排的定时器
+  if (!isSpare && sessionId && !snap) cancelClaudeIdleCompact(ctx.key, sessionId);
   // 会话派生与会话间消息（session-family.mjs）：family = 这一轮是服务端替别的会话发起的（派生 / 投递 / 唤醒）。
   // 真人发起的轮：把「连续自动续」清零、记下身份（以后唤醒这个会话要用），攒着没送出去的会话消息附在这条后面。
   // 新会话（派生的子会话）的 id 是预先定好的（SDK sessionId 选项），父子关系在它开跑前就已登记。
@@ -1201,7 +1205,7 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
   });
   let gen = newGen(message, source, ownSid, attachments);
   gen.family = family;   // 会话间发起的轮（session-family.mjs）：收尾时据此给父会话送汇报
-  gen.autoTurn = !!limitResume || !!(family && family.origin && family.origin.kind === 'routine');   // 额度重置后的自动续跑 / 定时任务：没人在场，sessions MCP 不替用户开会话（session-tools.mjs）
+  gen.autoTurn = !!limitResume || !!(family && family.origin && (family.origin.kind === 'routine' || family.origin.kind === 'idle-compact'));   // 额度重置后的自动续跑 / 定时任务：没人在场，sessions MCP 不替用户开会话（session-tools.mjs）
   // 全服上限：快照访客（c:）一个通道；注册用户（u:）合计一个通道（策略 maxUserTurns，0 = 不限）。管理员不设。
   const userCap = ctx.kind === 'user' ? getPolicy().maxUserTurns : 0;
   // 预热的占位「轮」不占并发槽、不登记——真消息接管时 warmTake 才为新一轮占位。
@@ -1597,6 +1601,13 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
     if (gen.sessionId) noteRunEnd(ctx.key, gen.sessionId);
     // 会话派生：子会话这一轮是父会话发起的 → 汇报进父会话收件箱，该唤醒谁就唤醒谁（session-family.mjs）
     if (gen.sessionId && !snap) { try { familyTurnEnded(ctx, gen); } catch (e) { console.log('[family] turn-end hook failed:', e && e.message); } }
+    // 设置「提示缓存快过期时 = 自动压缩」：按这个会话的缓存寿命排一次空闲压缩（runtime/claude-cache.mjs；新一轮开跑就撤）
+    if (gen.sessionId && !snap) {
+      try {
+        const ttlMin = getContextUsage(ctx.key, gen.sessionId)?.cacheTtlMin ?? claudeCacheTtl(runModel || model, cpOwner).minutes;
+        scheduleClaudeIdleCompact({ key: ctx.key, sid: gen.sessionId, mode: getClaudeSettings(ctx).cacheExpiry, replay: limitReplay, ttlMin, ctx });
+      } catch (e) { console.log('[idle-compact] schedule failed:', e && e.message); }
+    }
     // 定时任务：这一轮的结局（done / error / interrupted 都在 gen.events 里）交回运行器记进运行记录
     if (gen.family && typeof gen.family.onEnd === 'function') { try { gen.family.onEnd(gen); } catch (e) { console.log('[routine] turn-end hook failed:', e && e.message); } }
     if (settleGen) settleGen();
@@ -2173,6 +2184,8 @@ export async function runClaudeChat(req, res, { message, sessionId, model, effor
       const apply = (raw) => {
         const usage = normalizeContextUsage(raw, effModel || model || '');
         if (!usage) return;
+        // 提示缓存多久变冷（分钟；null = 没有会过期的缓存）：用量环的「缓存冷了」小点与空闲压缩都按它算（runtime/claude-cache.mjs）
+        try { usage.cacheTtlMin = claudeCacheTtl(runModel || model, cpOwner).minutes; } catch {}
         applyContextUsage(ctx.key, sid, usage);
         send({ type: 'ctx_usage', sessionId: sid, usage });
       };

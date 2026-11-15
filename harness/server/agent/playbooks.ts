@@ -82,7 +82,7 @@ export const PLAYBOOKS: readonly Playbook[] = [
     userTrigger: /electron|桌面(?:应用|程序|端|软件|版|app)|desktop\s+app|\.exe\b|安装包|可执行(?:文件|程序)/i,
     callTrigger: (call) => /\belectron\b/i.test(bashCommand(call)) || ELECTRON_CODE_RE.test(writtenText(call)),
     body: `1. Launch the app as a background job with a DevTools port: Bash(command:"npx electron . --remote-debugging-port=9223", background:true). A GUI app is the one exception to the no-servers-via-Bash rule — it serves no web port for Preview to wait on.
-2. Browser(action:"attach", port:9223) — the shared browser now drives the app's real window. From here everything works exactly like the web-app loop: ReadPage for structure and [refN] handles, Browser(click/type/key), Eval(js, verify:true) for DOM assertions, Network for its HTTP traffic, Browser(action:"screenshot") to look at it, Browser(action:"console") for renderer errors.
+2. Browser(action:"attach", port:9223) — this conversation's browser tools now drive the app's real window. From here everything works exactly like the web-app loop: ReadPage for structure and [refN] handles, Browser(click/type/key), Eval(js, verify:true) for DOM assertions, Network for its HTTP traffic, Browser(action:"screenshot") to look at it, Browser(action:"console") for renderer errors.
 3. Exercise the real flow end-to-end and fix-and-repeat — exact checks first, screenshots on top.
 4. Finish: Browser(close) to detach, then Bash(kill:"<job id>") to quit the app. If the user asked for a clickable app, package it (e.g. npx electron-builder) and verify the packaged build too: launch the built exe with --remote-debugging-port and attach again.`,
   },

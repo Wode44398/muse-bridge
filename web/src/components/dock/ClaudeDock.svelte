@@ -531,6 +531,11 @@
   // 手机 sheet 里正开着文件预览：进「阅读形态」——sheet 升到顶（只让出状态栏）、chip 条收起、
   // 预览头收成 44px。这时要的是看文件，工具切换点返回退出预览就回来了。
   const sheetPv = $derived(!wide && preview.open && (preview.host === 'dock' || preview.host === 'memory'));
+  // 手机 sheet 里挂着工作空间页：把手 + chip 条照折叠屏文件卡（filesFloat）那样浮到页面上，整张 sheet 是同一块底。
+  // 内嵌页拿这条带的实高当状态栏（--sat）：顶栏钮、滚动边缘、菜单锚点、预览头都按它让位，内容从 chip 条底下穿过。
+  // （sheet 里恒挂 FilesPanel——WorkspaceEmbed 只在侧列 + 精确指针时才换 FilesDesktop，所以不用再看指针。）
+  const sheetFlt = $derived(!wide && mView === 'files' && !!filesMount);
+  let gripH = $state(0);
 </script>
 
 {#snippet panelBody(view)}
@@ -622,8 +627,8 @@
 <!-- 移动端：底部 sheet（dimensio 手机端同款交互）——scrim 点击关、把手下拉关、chip 直切工具 -->
 <div class="sheetwrap">
   <button class="sheet-scrim" bind:this={sheetScrim} aria-label={t('关闭工作台')} onclick={closeDock}></button>
-  <div class="dock sheet" class:pv={sheetPv} use:dragSheet={{ onClose: closeDock, handle: () => sheetHandle ?? null, scrim: () => sheetScrim ?? null }}>
-    <div class="grip-zone" bind:this={sheetHandle}>
+  <div class="dock sheet" class:pv={sheetPv} class:flt={sheetFlt} style:--dk-grip-h={gripH ? `${gripH}px` : null} use:dragSheet={{ onClose: closeDock, handle: () => sheetHandle ?? null, scrim: () => sheetScrim ?? null }}>
+    <div class="grip-zone" bind:this={sheetHandle} bind:clientHeight={gripH}>
       <span class="grip"></span>
       <!-- 收起钮钉在右上角、不随 chip 横滑：窄屏五个 chip 放不下时它曾被挤出屏外，
            哪个工具（包括文件）的收起都在同一个固定位置 -->
@@ -769,6 +774,10 @@
   .dock.sheet.pv { height: calc(100dvh - var(--sat) - 6px); --pv-pad-y: 4px; --pv-bar-h: 44px; }
   .dock.sheet.pv .dk-chiprow { display: none; }
   .grip-zone { flex: none; touch-action: none; }
+  /* 浮动把手带（见 sheetFlt）：叠在内嵌页之上、不占流；内嵌页的 --sat = 这条带的实高
+     （阅读形态 chip 条收起、带变矮，--sat 跟着变）。量到之前先按常态高度兜底。 */
+  .dock.sheet.flt > .grip-zone { position: absolute; top: 0; left: 0; right: 0; z-index: 3; }
+  .dock.sheet.flt > .dk-embed { --sat: var(--dk-grip-h, 62px); }
   .grip { display: block; width: 38px; height: 4.5px; border-radius: 3px; background: var(--divider); margin: 8px auto 2px; }
   .dock.sheet.pv .grip { margin: 6px auto 5px; }
 

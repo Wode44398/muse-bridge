@@ -31,6 +31,10 @@
 //   bar*          顶栏形态：'auto'（缺省：媒体压在画面上、文档实底）| 'overlay' | 'solid' | 'none'
 //   autoHide*     沉浸自动隐藏：true 时鼠标静止 / 触屏无操作 2.6s 后顶栏、底栏、浮条一起淡出（视频播放中）
 //   arrows*       外框是否接管 ←/→ 与左右箭头翻画廊（缺省 true；子查看器在 keys 里先吃掉也行）
+//   arrowKbd*     左右箭头 / 顶栏上一个下一个的提示里写哪两个键（缺省 ['←', '→']；视频是 ['PgUp', 'PgDn']）
+//   seekKeys      true = 混排画廊里 ←/→/Home/End 不交给画廊翻页，留给这一页自己的 keys（视频 ±10 秒）
+//   soloBottom    true = 混排画廊里底栏只出这一页自己的，不在下面叠画廊的缩略图条（视频）
+//   barNav*       为真 = 顶栏出「上一个 / 下一个」（媒体皮肤缺省不出：图片靠滑动；触屏视频横滑是拖进度，所以要）
 //   keys          (e: KeyboardEvent) => boolean：先于外框默认键处理；返回 true = 已处理（外框 preventDefault）
 //   dragItem*     顶栏标题拖出去时代表的条目（缺省 = 当前条目；DocViewer 笔记栈里换篇时给栈顶那篇）
 //   onBack        () => boolean：关闭钮 / Esc 先问它；返回 true = 自己消费了（DocViewer 先退笔记栈、未保存先确认）

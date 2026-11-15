@@ -21,7 +21,7 @@ import { readTool } from "./tools/read.ts";
 import { writeTool } from "./tools/write.ts";
 import { editTool } from "./tools/edit.ts";
 import { browserTool } from "./tools/browser.ts";
-import { existingSharedBrowser, releaseBrowser } from "./cdp.ts";
+import { closeBrowser, liveBrowserCount } from "./cdp.ts";
 import type { ToolContext } from "./tools/types.ts";
 
 const MARK = "DUMMY-SECRET-7f3a";
@@ -239,9 +239,9 @@ test("S4: Browser file:// goes through the same gate as Read (probe-browser-file
   try {
     const r = await run(browserTool, { action: "navigate", url: pathToFileURL(key).href }, ctx("full"));
     assert.equal(r.ok, false);
-    assert.ok(!existingSharedBrowser(), "a refused file:// navigation must not launch the shared browser");
+    assert.equal(liveBrowserCount(), 0, "a refused file:// navigation must not launch any browser");
   } finally {
-    releaseBrowser("s4-test");
+    await closeBrowser("s4-test");
   }
 });
 

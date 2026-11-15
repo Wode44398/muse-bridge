@@ -8,7 +8,7 @@ export type SupportedAudioMime = "audio/mpeg" | "audio/wav" | "audio/flac" | "au
 export const AUDIO_EXT_BY_MIME: Record<SupportedAudioMime, string> = {
   "audio/mpeg": "mp3", "audio/wav": "wav", "audio/flac": "flac", "audio/mp4": "m4a", "audio/ogg": "ogg",
 };
-// Below MiMo's 50 MB base64/file ceiling and the local 30 MB upload limit.
+// Below MiMo's 50 MB base64/file ceiling. Larger audio still reaches the model, as a file path (see prepareUserInput).
 export const MAX_AUDIO_BYTES = 24 * 1024 * 1024;
 export const MAX_AUDIO_TOTAL_BYTES = 32 * 1024 * 1024;
 

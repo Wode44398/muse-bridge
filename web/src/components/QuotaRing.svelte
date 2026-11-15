@@ -175,6 +175,22 @@
     send('/compact', []);   // 显式空附件：不吞输入框里暂存的附件
   }
 
+  // 提示缓存冷了（设置 › Claude › 对话 ›「提示缓存快过期时」，11-14）：这个会话空闲过了缓存寿命（服务端随用量记录给
+  // usage.cacheTtlMin，按模型算；订阅号 1 小时）→ 环右上角一颗反色小点（暗色主题用亮色、亮色主题用暗色，即前景色），
+  // 弹层里写一句为什么。「不提示」不出；「自动压缩」也出（没压成、或对话太短不值得压时，提醒照样有用）。
+  // 对话部分（Messages 类别）不到 2 万 token 的不提示：重读的几乎都是系统提示，便宜。
+  let nowTick = $state(Date.now());
+  onMount(() => { const iv = setInterval(() => { nowTick = Date.now(); }, 30_000); return () => clearInterval(iv); });
+  const cacheMode = $derived(claudeCs.values.cacheExpiry || 'hint');
+  const msgTok = (u) => Number((u?.categories || []).find((c) => /^messages$/i.test(String(c.name || '')))?.tokens) || 0;
+  const coldMin = $derived.by(() => {
+    if (IS_CSNAP || cacheMode === 'off' || !session.id || session.busy || compacting || !usage) return null;
+    const ttl = Number(usage.cacheTtlMin) || 0;
+    if (!ttl || !usage.at || msgTok(usage) < 20_000) return null;
+    const idle = Math.floor((nowTick - usage.at) / 60_000);
+    return idle >= ttl ? idle : null;
+  });
+
   // 官方 eI：size 16 → r 7、周长 2πr、描边 2。
   const R = 7, C = 2 * Math.PI * R;
 </script>
@@ -182,12 +198,13 @@
 <div class="qr-wrap">
   <button class="qr-btn" bind:this={ringBtn} aria-haspopup="menu" aria-expanded={open}
     aria-label={[proj ? t('项目对话，讨论串用：{mode}', { mode: modeLabel(mode) }) : t('权限模式：{mode}', { mode: modeLabel(mode) }), t('用量'), hasCtx ? 'Context ' + ctx.summary : '', planPeak != null ? 'Plan ' + planPeak + '%' : ''].filter(Boolean).join(' · ')}
-    title={modeTitle + ' · ' + t('查看用量') + ' · Ctrl+Shift+M'} onclick={toggle}>
+    title={modeTitle + ' · ' + t('查看用量') + (coldMin != null ? ' · ' + t('提示缓存大概已经过期') : '') + ' · Ctrl+Shift+M'} onclick={toggle}>
     <svg viewBox="0 0 16 16" class="qr m-{mode}" class:pend={!!pending} aria-hidden="true">
       <circle cx="8" cy="8" r={R} class="track" />
       <circle cx="8" cy="8" r={R} class="arc" stroke-dasharray={C} stroke-dashoffset={C * (1 - Math.max(0, Math.min(100, pct)) / 100)} />
       {#if proj}<circle cx="8" cy="8" r="2" class="core" />{/if}
     </svg>
+    {#if coldMin != null}<span class="qr-cold" aria-hidden="true"></span>{/if}
   </button>
 
   <!-- 弹层：上半权限模式（PermissionModePicker 自己的行），下半是这里的用量小节 -->
@@ -232,7 +249,9 @@
             </span>
           </div>
         {/if}
-        {#if stale}<div class="qb-note">{t('更新于 {time} · 发消息后刷新', { time: relTime(stale) })}</div>{/if}
+        {#if coldMin != null}
+          <div class="qb-note">{t('空闲 {min} 分钟，提示缓存大概已经过期：下一条会按全价重读整段对话', { min: coldMin })}</div>
+        {:else if stale}<div class="qb-note">{t('更新于 {time} · 发消息后刷新', { time: relTime(stale) })}</div>{/if}
       </div>
       <div class="qb-div"></div>
       <!-- 官方「Plan usage limits · Max (20x)」+ 每桶：名字 / 重置时刻 + 百分比 / 4px 条 -->
@@ -281,6 +300,12 @@
   .qr .arc { fill: none; stroke: var(--ring); stroke-width: 2; stroke-linecap: round; transition: stroke-dashoffset .3s ease, stroke .2s ease; }
   .qr.pend .track { stroke: color-mix(in srgb, var(--pm-bypassPermissions) 50%, transparent); }
   .qr .core { fill: var(--ring); }
+  /* 缓存冷了的小点：前景色（暗色主题是亮色、亮色主题是暗色），外圈一道底色把它从环上「抠」出来；出现时轻轻弹一下 */
+  .qr-btn { position: relative; }
+  .qr-cold { position: absolute; top: 8.5px; right: 9.5px; width: 6px; height: 6px; border-radius: 50%; background: var(--text);
+    box-shadow: 0 0 0 1.5px var(--bg); pointer-events: none; animation: qr-cold-in var(--mo-quick, .2s) var(--ea-decel, ease-out) both; }
+  @keyframes qr-cold-in { from { transform: scale(.2); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .qr-cold { animation: none; } }
 
   /* 弹层外壳（定位 / 宽 360 / 圆角 / 遮罩）在 PermissionModePicker 的 .menu */
   .qb-sec { display: flex; flex-direction: column; }

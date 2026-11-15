@@ -135,6 +135,13 @@ export function addCatalogModel(sid, model, { protocol = 'openai' } = {}) {
   return entry;
 }
 
+/** 删掉目录里的一条（手动添加的，registry.catalogRemoveModel 先查过来源）。没有这条 = 什么都不做。 */
+export function removeCatalogModel(sid, id) {
+  const cur = readCatalog(sid);
+  if (!cur.models.some((m) => m.id === id)) return cur;
+  return writeCatalog(sid, { at: cur.at, models: cur.models.filter((m) => m.id !== id), media: cur.media });
+}
+
 /** 删服务时一起删目录。 */
 export function removeCatalog(sid) {
   cache.delete(sid);

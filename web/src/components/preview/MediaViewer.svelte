@@ -86,6 +86,8 @@
     }
     return null;
   });
+  // 被盖住的那份画廊声明的底栏（缩略图条）：盖在上面的页声明了 soloBottom（视频）就不叠
+  const underBottom = $derived(decl.soloBottom ? null : under?.bottom || null);
   // 页面挂载键：缺省 = 条目 key（换条目整页重建，各查看器按「一页一个条目」写就行）；
   // 当前页挂着 follow 声明时，换到同 kind 的条目保持原页不重建（item 照常经 props 换新）
   let pageMem = { key: '', kind: '' };
@@ -343,8 +345,9 @@
     // 信息抽屉开着：只拦 Esc（收抽屉），其余键照常交给查看器——开着信息也能翻页、空格播放（Windows 照片 / Quick Look）
     if (infoOpen && e.key === 'Escape') { e.preventDefault(); infoOpen = false; return; }
     const mod = e.ctrlKey || e.metaKey;
-    // 混排画廊的视频页：←/→/Home/End 仍是画廊翻页（快进快退用 J / L，进度条聚焦时方向键照常拖进度）
-    if (under && !mod && !e.altKey && !e.shiftKey && /^(ArrowLeft|ArrowRight|Home|End)$/.test(e.key)
+    // 混排画廊里盖在画廊之上的页：←/→/Home/End 仍是画廊翻页——除非那一页声明了 seekKeys（视频：←/→ 是 ±10 秒、
+    // Home / End 是回开头 / 到结尾，换文件用 PgUp / PgDn）
+    if (under && !decl.seekKeys && !mod && !e.altKey && !e.shiftKey && /^(ArrowLeft|ArrowRight|Home|End)$/.test(e.key)
       && !isEditable(e.target) && !e.target?.closest?.('[role="slider"], [role="menu"]')) {
       if (typeof under.keys === 'function' && under.keys(e)) { e.preventDefault(); return; }
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); if (e.key === 'ArrowLeft' ? canPrev : canNext) go(e.key === 'ArrowLeft' ? -1 : 1); return; }
@@ -491,7 +494,7 @@
       {#if barMode !== 'none'}
         <ViewerBar item={val(decl.dragItem) || cur} {title} {subtitle} subtitleSnippet={decl.subtitleSnippet} barEnd={decl.barEnd}
           tools={val(decl.tools) || []} touch={!fine} overlay={overlayBar} hidden={!chromeOn || dragP > 0.02}
-          nav={!isMedia && many ? { canPrev, canNext, onPrev: () => go(-1), onNext: () => go(1) } : null}
+          nav={(!isMedia || val(decl.barNav)) && many ? { canPrev, canNext, onPrev: () => go(-1), onNext: () => go(1), kbd: val(decl.arrowKbd) } : null}
           menuOpen={menu.open && menu.anchor === moreEl} onMore={onMore} bind:moreEl bind:closeEl onClose={requestClose} stacked={previewLayers.depth > 0} onhold={onBarHold} />
       {/if}
 
@@ -520,12 +523,13 @@
         {/key}
       </div>
 
-      {#if decl.bottom || under?.bottom}
-        <!-- 混排画廊的视频页：播放条在上、画廊缩略图条在下，叠成一份底栏（Windows 照片的胶片条也一直在） -->
+      {#if decl.bottom || underBottom}
+        <!-- 混排画廊里盖在画廊之上的页：自己的底栏在上、画廊缩略图条在下，叠成一份底栏；
+             声明了 soloBottom 的（视频：进度条下面不再垫一排缩略图）只出自己的 -->
         <div class="vw-bottom" class:vw-hide={!chromeOn} bind:this={bottomEl} style:opacity={dragP > 0 ? 1 - dragP : null}
           onpointerenter={(e) => e.pointerType === 'mouse' && onBarHold(true)} onpointerleave={(e) => e.pointerType === 'mouse' && onBarHold(false)} role="presentation">
           {#if decl.bottom}{@render decl.bottom()}{/if}
-          {#if under?.bottom}{@render under.bottom()}{/if}
+          {#if underBottom}{@render underBottom()}{/if}
         </div>
       {/if}
     </div>
@@ -536,8 +540,8 @@
 
     <!-- 电脑：画廊左右箭头（鼠标一动淡入；手机靠滑动） -->
     {#if isMedia && fine && many && val(decl.arrows) !== false}
-      {#if canPrev}<button type="button" class="vw-arrow left" class:on={mouseRecent && chromeOn && !dragP} onclick={() => go(-1)} use:tip={{ label: t('上一个'), kbd: (val((under || decl).arrowKbd) || ['←'])[0] }}><VIcon name="prev" /></button>{/if}
-      {#if canNext}<button type="button" class="vw-arrow right" class:on={mouseRecent && chromeOn && !dragP} onclick={() => go(1)} use:tip={{ label: t('下一个'), kbd: (val((under || decl).arrowKbd) || [0, '→'])[1] }}><VIcon name="next" /></button>{/if}
+      {#if canPrev}<button type="button" class="vw-arrow left" class:on={mouseRecent && chromeOn && !dragP} onclick={() => go(-1)} use:tip={{ label: t('上一个'), kbd: (val(decl.arrowKbd) || val(under?.arrowKbd) || ['←'])[0] }}><VIcon name="prev" /></button>{/if}
+      {#if canNext}<button type="button" class="vw-arrow right" class:on={mouseRecent && chromeOn && !dragP} onclick={() => go(1)} use:tip={{ label: t('下一个'), kbd: (val(decl.arrowKbd) || val(under?.arrowKbd) || [0, '→'])[1] }}><VIcon name="next" /></button>{/if}
     {/if}
 
     <ViewerToast list={toasts} />

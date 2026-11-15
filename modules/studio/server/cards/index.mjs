@@ -4,7 +4,7 @@
 // → 该方言该种类的通用卡（带 extra 透传）。
 
 import { googleCard, googleBuild, googleCandidates } from './google.mjs';
-import { genericCard, P, opts } from './spec.mjs';
+import { genericCard, P, opts, applySpecs } from './spec.mjs';
 import { CAPABILITIES, IMG_QUALITIES } from '@bridge/core/config/capabilities.mjs';
 import { dialectCards, dialectCardList } from './dialects.mjs';
 import { getSchema, discoveryRev, referenceModel } from '../discovery/store.mjs';
@@ -12,6 +12,7 @@ import { fromJsonSchema, fromOpenRouterImage, fromOpenRouterVideo } from '../dis
 import { pickParent, inheritCard, refineGoogleCard } from '../discovery/family.mjs';
 // 各方言适配器导入时登记自己的常见模型卡（registerDialectCards）：先确保它们都导进来了
 import '../adapters/index.mjs';
+import { flexSizeSpec } from '../adapters/openai.mjs';
 
 const C = CAPABILITIES;
 
@@ -20,21 +21,23 @@ const GPT_IMAGE = {
   'openai/gpt-image-2.6-sunburst': { label: 'GPT Image 2.6 Sunburst', priceHint: '1.5K medium ≈ $0.034，4K 16:9 low ≈ $0.047' },
   'openai/gpt-image-2.5-sunburst': { label: 'GPT Image 2.5 Sunburst', priceHint: 'low 2K ≈ $0.005，4K 16:9 low ≈ $0.011' },
 };
+// 2026-11-15（方案 §10）：界面上是自由尺寸——一个 size 参数（自动 / 原图 / 预设 / 自定义宽高），不再有比例；
+// 旧写法 aspectRatio + imageSize（Claude 媒体工具、旧接口）照收、行为不变（按比例 + 档位算，媒体工具据 imageSize 查降档）。
 function gptImageCard(id) {
   const aspects = C.image.aspects.filter((a) => !a.only);
+  const size = flexSizeSpec();
+  const quality = P.enum('quality', '画质', C.image.qualities.map((q) => ({ value: q.id, label: q.name })), { default: 'high' });
   return {
     id: `openrouter:${id}`, kind: 'image', async: false, label: GPT_IMAGE[id].label,
     desc: '构图、文字与指令遵循精细；没有多轮上下文，续改拿上一张当参考',
     inputs: { text: true, images: { max: 16, roles: ['edit', 'ref'] }, multiTurn: false },
-    params: [
-      P.enum('aspectRatio', '比例', aspects.map((a) => ({ value: a.id, label: a.name })), { default: 'auto' }),
-      P.enum('imageSize', '尺寸', opts(['1K', '2K', '4K']), { default: '2K' }),
-      P.enum('quality', '画质', C.image.qualities.map((q) => ({ value: q.id, label: q.name })), { default: 'high' }),
-    ],
+    params: [size, quality],
     priceHint: GPT_IMAGE[id].priceHint,
-    normalize(raw = {}) {
+    normalize(raw = {}, ctx = {}) {
+      const q = IMG_QUALITIES.has(raw.quality) ? raw.quality : undefined;
+      if (raw.size !== undefined && raw.size !== '') return { ...applySpecs([size], { size: raw.size }, ctx), quality: q };
       const asp = aspects.some((a) => a.id === raw.aspectRatio) ? raw.aspectRatio : 'auto';
-      return { aspectRatio: asp, imageSize: ['1K', '2K', '4K'].includes(raw.imageSize) ? raw.imageSize : undefined, quality: IMG_QUALITIES.has(raw.quality) ? raw.quality : undefined };
+      return { aspectRatio: asp, imageSize: ['1K', '2K', '4K'].includes(raw.imageSize) ? raw.imageSize : undefined, quality: q };
     },
   };
 }

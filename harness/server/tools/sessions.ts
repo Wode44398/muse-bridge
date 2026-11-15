@@ -15,18 +15,24 @@ import {
   AUTO_MAX,
   autoStartCount,
   bridgeFamilyAvailable,
+  coordinatorMaySpawn,
   familyLink,
   nobodyHere,
   noteAutoStart,
   projectChoices,
   readReport,
   relatedSessions,
+  resolveTarget,
   sendMessage,
   spawnChild,
   spawnLimit,
+  stopThread,
   type SpawnArgs,
   type SpawnResult,
 } from "../session-family.ts";
+import { isProjectSession, projectState, updateProject } from "../project-mode.ts";
+import { noteListChanged } from "../session.ts";
+import { EFFORT_ORDER } from "../catalog.ts";
 
 const MIN_BACKGROUND = 80; // fresh 的 background 下限（官方同款）
 const MAX_BRIEF = 32_000;
@@ -275,11 +281,14 @@ export const listSessionsTool: Tool = {
     const sid = sessionIdOf(ctx);
     if (!sid) return fail("no session", "Only a main conversation has related sessions.");
     const f = await relatedSessions(sid, { reports: true });
+    // 项目对话：讨论串带「已标为已解决」（MarkResolved）
+    const resolved = isProjectSession(sid) ? projectState(sid).resolved : {};
+    const mark = (s: (typeof f.rows)[number]) => (s.relation === "child" && resolved[s.id] === true ? ", marked resolved" : "");
     const line = (s: (typeof f.rows)[number]) =>
-      `- [${s.relation}${s.agent === "claude" ? ", Claude" : ""}] ${s.title || "(untitled)"} — id: ${s.id}${s.name ? `, name: ${s.name}` : ""}, ${STATE_TXT[s.state] ?? s.state}${s.report ? `\n  latest reply starts: ${s.report.replace(/\s+/g, " ").slice(0, 300)}` : ""}`;
+      `- [${s.relation}${s.agent === "claude" ? ", Claude" : ""}] ${s.title || "(untitled)"} — id: ${s.id}${s.name ? `, name: ${s.name}` : ""}, ${STATE_TXT[s.state] ?? s.state}${mark(s)}${s.report ? `\n  latest reply starts: ${s.report.replace(/\s+/g, " ").slice(0, 300)}` : ""}`;
     const head = f.self ? `You are a child session (name: ${f.self.name}). ` : "";
     const body = f.rows.length ? `${head}Related sessions:\n${f.rows.map(line).join("\n")}` : `${head}No related sessions (no parent, and none started from here yet).`;
-    const projs = await projectChoices();
+    const projs = isProjectSession(sid) ? [] : await projectChoices(); // 协调者的讨论串都在这个目录里，不列别的项目
     const ptail = projs.length > 1 ? `\nThe user's projects (StartSession project = name or id):\n${projs.map((p) => `- ${p.name} — id: ${p.id}, ${p.path}`).join("\n")}` : "";
     return { ok: true, summary: "related sessions", outcome: `${f.rows.length} 个相关会话`, content: [{ t: "text", text: body + ptail }] };
   },
@@ -317,3 +326,133 @@ export const readSessionTool: Tool = {
 };
 
 export const SESSION_TOOLS: Tool[] = [startSessionTool, sendMessageTool, listSessionsTool, readSessionTool];
+
+// ── 项目对话（协调者）专用：开讨论串、停讨论串、标已解决（project-mode.ts；coordinatorToolTable 换进协调者的工具表）──
+// 协调者的 StartSession 不问卡：项目里用户已经同意由协调者直接开（对齐 bridge 项目设置默认的「直接开」）；讨论串都在这个目录里，
+// 不开到别的项目、不开 Claude 会话、不分叉（讨论串只看任务说明）。这三件不碰工作区，按 read 判——项目对话自己的权限档是
+// 「讨论串的权限」，不该拦住协调者派活。
+const COORD_START_DESC = `Start a thread: a separate session that does one piece of this project's work while you stay with the user. It is a real session the user can open from the sidebar (nested under this project), watch, talk to and stop. It works in this same folder with this conversation's permission mode, and starts right away — the user already agreed that you start threads here.
+When it ends a turn and none of your other threads is still working, you are continued with a <side-sessions-event> quoting the first 400 characters of its latest reply — never poll or wait for it: tell the user in a sentence that it is handed off and end your turn (or carry on).
+- prompt: the brief — the goal, the files or area, what "done" looks like, what must not be touched (file paths and identifiers in backticks).
+- background (at least ${MIN_BACKGROUND} characters): the overall goal, decisions and constraints so far — the thread cannot see this conversation.
+- effort: optional reasoning effort for this thread (low / medium / high / xhigh / max): low for mechanical work, high for hard problems; omit to inherit.
+- model: optional model id of the same provider; only when the user asks for one.
+Later instructions go to the existing thread through SendMessage, never a new thread for the same work.`;
+
+function coordStartSchema(): JsonObjectSchema {
+  return {
+    type: "object",
+    properties: {
+      title: { type: "string", description: "Under 60 characters; names the thread. Shown in the sidebar and the project overview." },
+      prompt: { type: "string", description: "The brief: the goal, the files or area, what done looks like, what must not be touched." },
+      background: { type: "string", description: `At least ${MIN_BACKGROUND} characters: overall goal, decisions and constraints so far — for someone who has not seen this conversation.` },
+      effort: { type: "string", enum: EFFORT_ORDER.filter((e) => e !== "off" && e !== "minimal"), description: "Optional reasoning effort for this thread. Omit to inherit." },
+      model: { type: "string", description: "Optional model id (same provider) for this thread. Omit to inherit." },
+      name: { type: "string", description: 'Optional short handle ([a-z0-9-], ≤24), e.g. "api-tests". Derived from the title when omitted.' },
+    },
+    required: ["title", "prompt", "background"],
+    additionalProperties: false,
+  } as JsonObjectSchema;
+}
+
+export const coordinatorStartSessionTool: Tool = {
+  effect: "read",
+  concurrencySafe: false,
+  // getter：EFFORT_ORDER 来自 catalog.ts，模块成环时顶层还拿不到（同上面 initiationText 的做法）
+  get def() {
+    return { name: "StartSession", description: COORD_START_DESC, parameters: coordStartSchema() };
+  },
+  async run(args, ctx) {
+    const sid = sessionIdOf(ctx);
+    if (!sid) return fail("no session", "Only the project conversation itself can start threads.");
+    const a = parseArgs({ ...args, context: "fresh", agent: "dimensio", project: undefined });
+    const effort = String(args.effort ?? "").trim();
+    if (effort) {
+      if (!(EFFORT_ORDER as string[]).includes(effort)) return fail("bad effort", `effort must be one of ${EFFORT_ORDER.join(", ")} (or omitted).`);
+      a.effort = effort;
+    }
+    if (!a.title) return fail("title required", "title is required: a thread name under 60 characters.");
+    const e = briefError(a);
+    if (e) return fail("brief incomplete", e);
+    if (!coordinatorMaySpawn(sid)) {
+      return fail("not started", "Not started: this turn was not started by the user here or by one of your threads' reports (it is another session's message or an automatic continuation). Mention it to the user instead; they can ask for it.");
+    }
+    const lim = spawnLimit(sid);
+    if (lim) return fail("limit reached", `Cannot start a thread: ${lim.reason}.`);
+    return start(ctx, sid, a);
+  },
+};
+
+const ownThread = (sid: string, to: unknown): { id: string; title: string } | { err: string } => {
+  const id = resolveTarget(sid, String(to ?? "").trim());
+  const link = id ? familyLink(id) : null;
+  if (!id || !link || link.parent !== sid) return { err: `No thread "${String(to ?? "")}" of this project — use ListSessions for the ids and names of the threads you started.` };
+  return { id, title: link.title || id.slice(0, 8) };
+};
+
+export const stopSessionTool: Tool = {
+  effect: "read",
+  concurrencySafe: false,
+  def: {
+    name: "StopSession",
+    description:
+      'Stop the current turn of one of your threads — it went off track, or the user asked to stop it. What it already changed stays in the folder; SendMessage it later to continue. Its background commands and dev servers stop too. "to" = the thread\'s id or name from ListSessions.',
+    parameters: {
+      type: "object",
+      properties: { to: { type: "string", description: "Thread id or name from ListSessions." } },
+      required: ["to"],
+      additionalProperties: false,
+    },
+  },
+  async run(args, ctx) {
+    const sid = sessionIdOf(ctx);
+    if (!sid) return fail("no session", "Only the project conversation can stop its threads.");
+    const r = stopThread(sid, String(args.to ?? "").trim());
+    if (!r.ok) return fail("not stopped", r.reason);
+    if (!r.wasRunning) return { ok: true, summary: `not running: ${r.title}`, outcome: "没在跑", content: [{ t: "text", text: `The thread "${r.title}" is not running right now — nothing to stop.` }], meta: { family: { target: r.id } } };
+    return {
+      ok: true,
+      summary: `stopped: ${r.title}`,
+      outcome: `已停下讨论串「${r.title}」`,
+      content: [{ t: "text", text: `Stopped the current turn of the thread "${r.title}". What it changed so far stays in the folder; to have it continue, SendMessage it.` }],
+      meta: { family: { target: r.id } },
+    };
+  },
+};
+
+export const markResolvedTool: Tool = {
+  effect: "read",
+  concurrencySafe: false,
+  def: {
+    name: "MarkResolved",
+    description:
+      'Mark one of your threads resolved (its work is done and needs no follow-up), or reopen it with resolved:false. Resolved threads move to the Resolved group of the project overview. "to" = the thread\'s id or name from ListSessions.',
+    parameters: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Thread id or name from ListSessions." },
+        resolved: { type: "boolean", description: "true (default) = resolved; false = reopen." },
+      },
+      required: ["to"],
+      additionalProperties: false,
+    },
+  },
+  async run(args, ctx) {
+    const sid = sessionIdOf(ctx);
+    if (!sid || !isProjectSession(sid)) return fail("not a project", "Only a project conversation has threads to resolve.");
+    const t = ownThread(sid, args.to);
+    if ("err" in t) return fail("not found", t.err);
+    const value = args.resolved !== false;
+    updateProject(sid, { resolve: { id: t.id, value } });
+    noteListChanged("sessions"); // 项目概览跟着重拉
+    return {
+      ok: true,
+      summary: `${value ? "resolved" : "reopened"}: ${t.title}`,
+      outcome: value ? `已把「${t.title}」标为已解决` : `已重新打开「${t.title}」`,
+      content: [{ t: "text", text: value ? `Marked "${t.title}" resolved; the project overview lists it under Resolved.` : `Reopened "${t.title}".` }],
+      meta: { family: { target: t.id } },
+    };
+  },
+};
+
+export const COORDINATOR_SESSION_TOOLS: Tool[] = [coordinatorStartSessionTool, stopSessionTool, markResolvedTool];

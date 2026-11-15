@@ -1,6 +1,6 @@
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { ok, fail } from "./types.ts";
-import { existingSharedBrowser, claimBrowser, noBrowserMessage } from "../cdp.ts";
+import { existingBrowser, noBrowserMessage } from "../cdp.ts";
 import { fileUrlBlock } from "../sandbox.ts";
 import { redactOutput } from "../redact.ts";
 import { WEB_CONTENT_NOTE } from "./untrusted.ts";
@@ -13,7 +13,7 @@ import { browserAvailable } from "../headless.ts";
 
 export const readPageTool: Tool = {
   effect: "read",
-  concurrencySafe: false, // reassigns the shared browser's ref table
+  concurrencySafe: false, // reassigns this conversation's browser ref table
   enabled: browserAvailable, // 与 Browser 同进同退
   def: {
     name: "ReadPage",
@@ -53,9 +53,7 @@ export const readPageTool: Tool = {
     },
   },
   async run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
-    const denied = claimBrowser(ctx.ownerId ?? "");
-    if (denied) return fail("readpage", denied);
-    const page = existingSharedBrowser();
+    const page = existingBrowser(ctx.ownerId ?? ""); // 这个会话自己的浏览器（cdp.ts getBrowser）
     if (!page) return fail("readpage", noBrowserMessage());
     // S4（#37②）：当前页是 file:// 且过不了与 Read 同一道闸（点链接、脚本跳转绕过了导航检查）→ 不读。
     const fileBlock = fileUrlBlock(page.url, ctx.sandbox);

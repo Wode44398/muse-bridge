@@ -27,10 +27,13 @@
     try { a = anchor.getBoundingClientRect(); } catch { a = { left: 20, right: 40, top: 20, bottom: 40, width: 20, height: 20 }; }
     const vw = innerWidth, vh = innerHeight;
     const w = el.offsetWidth;
+    // 安全区（apk 写在根元素上的 --sat / --sab）：竖直方向的边距至少让开它
+    const cs = getComputedStyle(document.documentElement);
+    const T = Math.max(M, parseFloat(cs.getPropertyValue('--sat')) || 0), B = Math.max(M, parseFloat(cs.getPropertyValue('--sab')) || 0);
     // 内容的自然高度：里面滚动区的 scrollHeight 补回来（否则被上一次的 maxH 夹住，算不出该往哪边开）
     const sc = el.querySelector('.pv-scroll');
     const natural = sc ? el.offsetHeight - sc.clientHeight + sc.scrollHeight : el.scrollHeight;
-    const cap = Math.min(maxHeight || 9999, vh - 2 * M);
+    const cap = Math.min(maxHeight || 9999, vh - T - B);
     const h = Math.min(natural, cap);
     let left = align === 'end' ? a.right - w : align === 'center' ? a.left + a.width / 2 - w / 2 : a.left;
     left = Math.max(M, Math.min(left, vw - M - w));
@@ -38,13 +41,13 @@
     const av = avoid && avoid.getBoundingClientRect ? avoid.getBoundingClientRect() : avoid;
     const topEdge = av ? Math.min(av.top, a.top) : a.top;
     const botEdge = av ? Math.max(av.bottom, a.bottom) : a.bottom;
-    const roomUp = topEdge - offset - M, roomDown = vh - M - botEdge - offset;
+    const roomUp = topEdge - offset - T, roomDown = vh - B - botEdge - offset;
     let up = prefer === 'up' ? !(roomUp < h && roomDown > roomUp) : roomDown < h && roomUp > roomDown;
     const room = up ? roomUp : roomDown;
     const maxH = Math.max(120, Math.min(cap, room));
     const hh = Math.min(h, maxH);
     let top = up ? topEdge - offset - hh : botEdge + offset;
-    top = Math.max(M, Math.min(top, vh - M - hh));
+    top = Math.max(T, Math.min(top, vh - B - hh));
     const ox = align === 'end' ? 'right' : align === 'center' ? 'center' : 'left';
     pos = { left: Math.round(left), top: Math.round(top), origin: `${up ? 'bottom' : 'top'} ${ox}`, placed: true, maxH: Math.round(maxH) };
   }

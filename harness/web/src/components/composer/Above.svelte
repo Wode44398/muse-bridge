@@ -21,7 +21,7 @@
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
-  // 工作区浏览器是全局的一个（跟着有焦点的那一格）：分屏时只在有焦点的那格给入口；这一格自己的预览照常给
+  // 工作区浏览器跟着有焦点的那一格（显示那个会话自己的浏览器，app.browser 只代表它）：分屏时只在有焦点的那格给入口；这一格自己的预览照常给
   // D5：这台机器没有浏览器（服务端没注册 Browser）时胶囊没处可开，不摆
   const pillVisible = $derived(Boolean(pane.chat.preview || (pane.focused && app.browser)) && !app.dockOpen && browserToolAvailable());
   const stripVisible = $derived(pane.chat.todos.length > 0 || pillVisible);
@@ -88,7 +88,7 @@
   .dockin.on {
     padding-bottom: 8px;
   }
-  @media (max-width: 699px) {
+  @media (max-width: 599px), (max-width: 699px) and (max-device-aspect-ratio: 699/1000) {
     .above {
       padding: 0 12px;
     }

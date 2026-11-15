@@ -12,13 +12,14 @@
 import { createHash } from "node:crypto";
 import type { Msg } from "./turn.ts";
 
-export type WorldSection = "mode" | "access" | "date" | "guide" | "projectDocs" | "skills" | "knowledge" | "memory" | "jobs" | "debug";
+export type WorldSection = "mode" | "access" | "date" | "guide" | "projectDocs" | "skills" | "knowledge" | "memory" | "jobs" | "debug" | "project";
 export type WorldValues = Partial<Record<WorldSection, string>>;
 export type WorldTokens = Partial<Record<WorldSection, string>>;
 
 // 每轮都看的节；其余（日期、项目知识、记忆）只在一轮开跑时看——它们在一轮里要么不变，要么是模型自己改的
 export const TURN_SECTIONS: readonly WorldSection[] = ["mode", "access", "guide", "projectDocs", "skills", "jobs", "debug"];
-export const RUN_START_SECTIONS: readonly WorldSection[] = ["date", "knowledge", "memory"];
+// project = 项目对话与讨论串的项目说明 + 项目记忆索引（project-mode.ts；普通会话不给这一节）
+export const RUN_START_SECTIONS: readonly WorldSection[] = ["date", "knowledge", "memory", "project"];
 
 const SHORT: ReadonlySet<WorldSection> = new Set(["mode", "access", "date", "jobs", "debug"]);
 const SHORT_MAX = 64; // 短节的值超过这个长度（结束的 job 攒多了）也改记哈希，别让令牌把会话文件撑大

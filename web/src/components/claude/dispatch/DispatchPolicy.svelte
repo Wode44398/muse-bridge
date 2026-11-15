@@ -19,6 +19,10 @@
   // 浮层（模型菜单、推理强度面板、小菜单）都挪到 body 上（手机设置页的面板带 transform，fixed 浮层出不来）；
   // 开着时经 onModal 告诉外壳。
   //
+  // 作用域（store）：同一份正文也是 设置 › dimensio › 子 agent 调用策略。dimensio 那份多一个「策略来源」：跟随 Claude 的策略（缺省）时
+  //   只读地摆出 Claude 生效的那一套在 dimensio 候选上的落点（备注也是那一套的），给一个去 Claude 子页的入口；单独一套时和 Claude 一样整套可改。
+  //   dimensio 没有「主对话」口径分段；档位自定义的型号写法是 <厂商>:<型号>，落点表里用小菜单选（TierTable 的 dimensio 分支）。
+  //
   // 名字：策略名给人看的地方（策略签、保存条、确认框、提示条、复制出来的名字）一律过 dpLabels.strategyLabel——迁移出来的那一套
   //   存的名字是「默认」，界面上跟着语言走，和外壳入口副标题一致；存盘、比较还用原名。
   // 防连点：新建 / 复制在途时再点不理（落定后的一小会儿也不理，双击的第二下常落在这儿）；连点别的策略签只问一轮「要保存吗」，
@@ -32,8 +36,9 @@
   import TierTable from './TierTable.svelte';
   import ChartCard from './ChartCard.svelte';
   import NoteCard from './NoteCard.svelte';
-  import { dp, loadDispatch, setDispatch, saveStrategy, deleteStrategy, previewStrategy, setBasis, tierColorVars } from '../../../lib/dispatchPolicy.svelte.js';
+  import { claudeDispatch, tierColorVars } from '../../../lib/dispatchPolicy.svelte.js';
   import { cp, ensureCustomModels } from '../../../lib/claudeProviders.svelte.js';
+  import { openSettings } from '../../../lib/settingsNav.svelte.js';
   import { caps, ui } from '../../../lib/state.svelte.js';
   import { splitClaudeModels, loadCaps } from '../../../lib/caps.js';
   import { uiConfirm, uiAlert } from '../../../lib/dialogs.js';
@@ -48,7 +53,14 @@
   import { strategyLabel } from './dpLabels.js';
   import { clampFloor, roundFloor } from '../../../lib/dispatchChartMath.js';
 
-  let { shell = 'desk', onModal = () => {} } = $props();
+  // store：哪一份调用策略（lib/dispatchPolicy 的 createDispatchStore；不给 = Claude 那份）。挂上就不换：外壳换作用域时整个重挂。
+  let { shell = 'desk', onModal = () => {}, store = claudeDispatch } = $props();
+  const S = untrack(() => store);
+  const { dp, loadDispatch, setDispatch, saveStrategy, deleteStrategy, previewStrategy, setBasis } = S;
+  // dimensio 那份（设置 › dimensio › 子 agent 调用策略）：总开关下面多一个「跟随 Claude 的策略 / dimensio 单独一套」；
+  //   跟随时生效的那一套取 Claude 那边生效的那套（判定线、档位自定义、口述备注），这里只读地摆出它按 dimensio 能用的模型算出的落点，
+  //   改要去 Claude 的子页；单独时下面是和 Claude 一样的整套编辑器。范围三项换成 dimensio 的说法，没有「主对话」口径分段。
+  const dim = S.scope === 'dimensio';
   const desk = $derived(shell !== 'ios');
   const dark = $derived(ui.theme !== 'light');   // 两套外壳的明暗都跟 ui.theme
 
@@ -59,6 +71,10 @@
   const enabled = $derived(policy?.enabled !== false);
   const allowTP = $derived(policy?.allowThirdParty !== false);
   const canEdit = $derived(!!dp.canEdit);
+  // dimensio：跟随 Claude 的策略（缺省就是跟随）。这时下面的落点 / 图 / 备注只读，「调用非 Claude 模型」仍是 dimensio 自己的、照样能拨
+  const follow = $derived(dim && policy?.follow !== false);
+  const canEditBody = $derived(canEdit && !follow);
+  const claudeSide = $derived(dim ? dp.claude || null : null);   // Claude 那边生效的那一套 { activeId, name, … }
   const primary = $derived(splitClaudeModels(caps.data).primary);   // 四个有别名的 Claude 模型（opus / sonnet / haiku / fable）
 
   // —— 当前查看的那一套 ——
@@ -96,7 +112,7 @@
     });
   });
   const diff = $derived(draftDiff(draft, base));
-  const dirty = $derived(canEdit && !!draft.id && diff.any);
+  const dirty = $derived(canEditBody && !!draft.id && diff.any);
   const rawName = $derived(draft.name || base.name);       // 存下来 / 草稿里的原名：给策略栏比较、回传用
   const shownName = $derived(strategyLabel(rawName));      // 给人看的写法：保存条、确认框、提示条
 
@@ -105,7 +121,7 @@
   const pvSig = $derived(JSON.stringify([draft.id, draft.floors, draft.overrides, allowTP, dp.basis,
     dp.preview?.chart?.generated ?? '', dp.preview?.chart?.at ?? '', dp.preview?.chart?.source ?? '']));
   // 看的就是生效的那一套、落点相关的没改过：GET 带回来的预览就是它
-  const useGlobal = $derived(!!draft.id && draft.id === activeId && !diff.floors && !diff.overrides);
+  const useGlobal = $derived(follow || (!!draft.id && draft.id === activeId && !diff.floors && !diff.overrides));
   let pvLocal = $state.raw(null);   // { sig, data }
   $effect(() => {
     const sig = pvSig;
@@ -130,8 +146,18 @@
       ? (pvFresh.tiers || []).filter((x) => x && x.pick)
       : estimateTiers(pvAny?.tiers, candidates, draft);
     return src.map((x) => {
-      const mine = draft.floors[x.key];
       const floorDefault = Number.isFinite(x.floorDefault) ? x.floorDefault : x.floor;
+      if (follow) {
+        // 跟随 Claude 的策略：没有草稿，一切照服务端按 Claude 那一套算出来的（判定线、哪档是指定的、哪档的指定在 dimensio 里用不了）
+        const ov = claudeSide?.overrides?.[x.key] || null;
+        return {
+          key: x.key, floor: x.floor, floorDefault, adjusted: x.floor !== floorDefault,
+          pick: x.pick, source: x.source === 'override' ? 'override' : 'chart', short: !!x.short,
+          hasOverride: x.source === 'override' || !!x.overrideSkipped, overrideSkipped: !!x.overrideSkipped,
+          override: ov && ov.model ? ov : null, agentTool: null,
+        };
+      }
+      const mine = draft.floors[x.key];
       return {
         key: x.key, floor: mine != null ? mine : floorDefault, floorDefault, adjusted: mine != null,
         pick: x.pick, source: x.source === 'override' ? 'override' : 'chart', short: !!x.short,
@@ -154,7 +180,7 @@
 
   // —— 改草稿 ——
   function onFloor(key, value, info) {
-    if (!canEdit || !TIER_KEYS.includes(key) || !Number.isFinite(value)) return;
+    if (!canEditBody || !TIER_KEYS.includes(key) || !Number.isFinite(value)) return;
     dragging = !(info && info.final);
     // 四条线保持 最难 ≥ 难 ≥ 常规 ≥ 机械（图里拖不过去，这里再兜一道：服务端保存时不满足会拒）
     const now = {};
@@ -163,10 +189,10 @@
     const def = tiers.find((x) => x.key === key)?.floorDefault;
     draft.floors[key] = Number.isFinite(def) && v === roundFloor(def) ? null : v;   // 拖回默认线上 = 没调过
   }
-  function onReset(key) { if (canEdit && TIER_KEYS.includes(key)) { dragging = false; draft.floors[key] = null; } }
-  function resetFloors() { if (!canEdit) return; dragging = false; for (const k of TIER_KEYS) draft.floors[k] = null; }
+  function onReset(key) { if (canEditBody && TIER_KEYS.includes(key)) { dragging = false; draft.floors[key] = null; } }
+  function resetFloors() { if (!canEditBody) return; dragging = false; for (const k of TIER_KEYS) draft.floors[k] = null; }
   function setOverride(key, ov) {
-    if (!canEdit || !TIER_KEYS.includes(key)) return;
+    if (!canEditBody || !TIER_KEYS.includes(key)) return;
     draft.overrides[key] = ov && ov.model ? { model: ov.model, effort: ov.effort || '' } : null;
   }
 
@@ -258,7 +284,7 @@
   let creating = $state(false);
   const createOnce = singleFlight({ cool: 400 });
   function create(mode) {
-    if (!canEdit || strategies.length >= STRATEGY_MAX) return undefined;
+    if (!canEditBody || strategies.length >= STRATEGY_MAX) return undefined;
     return createOnce(async () => {
       creating = true;
       try { await doCreate(mode); } finally { creating = false; }
@@ -288,14 +314,14 @@
   // 有别的改动 → 跟它们一起留在保存条里。存失败时名字留在草稿里，保存条会升起来、带着报错。
   async function rename(name) {
     const n = clipName(name);
-    if (!canEdit || !n || n === draft.name) return;
+    if (!canEditBody || !n || n === draft.name) return;
     const others = diff.floors || diff.overrides || diff.note;
     draft.name = n;
     if (!others) await save();
   }
   async function remove() {
     const s = viewed;
-    if (!canEdit || !s || s.id === activeId) return;
+    if (!canEditBody || !s || s.id === activeId) return;
     const name = strategyLabel(s.name);
     const ok = await uiConfirm(t('删除策略「{name}」？', { name }), { detail: t('删除后不能恢复。'), okLabel: t('删除'), danger: true });
     if (!ok) return;
@@ -308,15 +334,46 @@
     }
   }
 
-  // —— 口径（主对话是 Claude 订阅还是自定义 API）：没有任何自定义模型时不出现 ——
-  const hasCustom = $derived(cp.models.length > 0);
+  // —— 口径（主对话是 Claude 订阅还是自定义 API）：没有任何自定义模型时不出现；dimensio 那份没有这一说 ——
+  const hasCustom = $derived(!dim && cp.models.length > 0);
   const BASIS = [{ value: 'official', label: t('Claude 订阅') }, { value: 'custom', label: t('自定义 API') }];
   async function pickBasis(v) {
     if (v === dp.basis) return;
     try { await setBasis(v); } catch (e) { showToast(failText(e, t('读不到这个口径的落点')), 'err'); }
   }
   // 自定义模型全删了而口径还停在「自定义 API」：分段不出现了，自己退回订阅口径
-  $effect(() => { if (dp.loaded && cp.modelsReady && !hasCustom && dp.basis === 'custom') setBasis('official').catch(() => {}); });
+  $effect(() => { if (!dim && dp.loaded && cp.modelsReady && !hasCustom && dp.basis === 'custom') setBasis('official').catch(() => {}); });
+
+  // —— dimensio：跟随 Claude 的策略 / 单独一套（即点即存） ——
+  // 从「单独」切到「跟随」之前，当前这一套没保存的改动先有个说法（保存 / 放弃），不然它们在跟随的这段时间里看不见、切回来又冒出来
+  const SOURCE = [{ value: 'follow', label: t('跟随 Claude 的策略') }, { value: 'own', label: t('dimensio 单独一套') }];
+  let sourceBusy = $state(false);
+  async function pickSource(v) {
+    const want = v === 'follow';
+    if (!dim || !canEdit || want === follow || sourceBusy) return;
+    sourceBusy = true;
+    try {
+      if (want && !(await settleUnsaved())) return;
+      await setDispatch({ follow: want });
+    } catch (e) { showToast(failText(e, t('没改成')), 'err'); }
+    finally { sourceBusy = false; }
+  }
+  // Claude 那边生效的那一套叫什么（迁移出来的「默认」跟着界面语言走）
+  const claudeName = $derived(claudeSide ? strategyLabel(claudeSide.name || '') : '');
+  // 去 Claude 的子 agent 调用策略子页改：两套外壳都认 openSettings('dispatch')（桌面落到 Claude 分区的就地子页，手机推到 cl-dispatch）
+  const goClaude = () => openSettings('dispatch');
+  // 生效范围三枚片的 dimensio 说法
+  const DIM_SCOPE = [
+    { key: 'workflow', name: t('工作流'), sub: t('Workflow 工具脚本里的 agent()') },
+    { key: 'subagent', name: t('普通子 agent'), sub: t('对话里用 Agent 工具派出的') },
+    { key: 'session', name: t('发起新会话'), sub: t('StartSession 的模型可以写 auto:<档>') },
+  ];
+  // 落点算不出来时（harness 没起来等）四档表与图里的那句话
+  // 预览在、但四档是空的（这台 dimensio 眼下没有评上分的可用型号）：另一句
+  const noPreview = $derived(!dim ? ''
+    : !dp.preview ? tr(dp.previewError || '') || t('dimensio 暂时算不出落点，稍后再来看')
+    : !(dp.preview.tiers || []).length ? t('dimensio 此刻没有评上分的可用模型，四档暂时排不出落点')
+    : '');
 
   // —— 浮层登记（外壳据此让出 Esc / 手势） ——
   const modals = $state({ bar: false, tier: false, chart: false });
@@ -327,7 +384,7 @@
   onMount(() => {
     // 以前进来过：手里的先用着，后台再拉一次（候选模型、号池的变化不走总线，靠这一次跟上）
     loadDispatch({ force: dp.loaded }).catch(() => {});
-    ensureCustomModels();
+    if (!dim) ensureCustomModels();
     // 能力表（Claude 的模型清单与推理强度档位）平时由 App 启动时装好。设置页被单独挂起来的时候（桌面设置的单页验收 ?dsettings）
     // 没人装：别名认不出菜单里的模型，推理强度片退化成点不开的文字、叫法也退回通用的那套。这里补一次，装过了就不动。
     if (!caps.data) loadCaps().then((d) => { if (d && !caps.data) { caps.data = d; caps.loaded = true; } }).catch(() => {});
@@ -385,8 +442,28 @@
           <span class="dp-master-t">{t('按策略调用')}</span>
           <DpSwitch {shell} checked={enabled} disabled={!canEdit} label={t('按策略调用')} onchange={(v) => patch({ enabled: v })} />
         </div>
+        {#if dim}
+          <!-- dimensio：生效的那一套从哪来。跟随 = 取 Claude 那边生效的那套（这里只读），单独 = 下面 dimensio 自己的几套 -->
+          <div class="dp-src">
+            <span class="dp-src-t">{t('策略来源')}</span>
+            <span class="dp-src-seg">
+              {#if desk}
+                <DSegmented options={SOURCE} value={follow ? 'follow' : 'own'} disabled={!canEdit || sourceBusy} onchange={pickSource} />
+              {:else}
+                <Segmented options={SOURCE} value={follow ? 'follow' : 'own'} size="small" disabled={!canEdit || sourceBusy} label={t('策略来源')} onchange={pickSource} />
+              {/if}
+            </span>
+          </div>
+          {#if follow}
+            <p class="dp-state dp-follow">
+              <span>{claudeName ? t('正在跟随 Claude 的「{name}」：判定线、档位自定义和口述备注都取那一套，落点按 dimensio 此刻能用的模型算。', { name: claudeName })
+                : t('正在跟随 Claude 生效的那一套策略：落点按 dimensio 此刻能用的模型算。')}</span>
+              {#if claudeSide}<button type="button" class="dp-btn ghost dp-follow-go" onclick={goClaude}>{t('去 Claude 里改')}</button>{/if}
+            </p>
+          {/if}
+        {/if}
         {#if !enabled}
-          <p class="dp-state">{t('已关闭：子 agent 的模型与推理强度完全由 Claude Code 原生决定')}</p>
+          <p class="dp-state">{dim ? t('已关闭：子 agent 沿用本会话的模型与思考深度') : t('已关闭：子 agent 的模型与推理强度完全由 Claude Code 原生决定')}</p>
         {/if}
         {#if !canEdit}
           <p class="dp-state">{t('当前身份只能查看，不能修改调用策略')}</p>
@@ -398,16 +475,18 @@
       <!-- ② 生效范围 -->
       <section class="dp-sec">
         <h3 class="dp-label">{t('生效范围')}</h3>
-        <ScopeCard scope={policy?.scope || {}} {enabled} disabled={!canEdit} onchange={(k, v) => patch({ scope: { [k]: v } })} />
+        <ScopeCard scope={policy?.scope || {}} {enabled} disabled={!canEdit} items={dim ? DIM_SCOPE : null} onchange={(k, v) => patch({ scope: { [k]: v } })} />
       </section>
 
-      <!-- ③ 策略栏 -->
-      <section class="dp-sec dp-sec-bar">
-        <h3 class="dp-label">{t('策略')}</h3>
-        <StrategyBar {shell} {strategies} {activeId} viewId={curId} name={rawName} {canEdit} busy={creating} {renameId} {renameTick}
-          onview={view} oncreate={create} onactivate={activate} onrename={rename} ondelete={remove}
-          onModal={(v) => { modals.bar = v; }} />
-      </section>
+      <!-- ③ 策略栏（dimensio 跟随 Claude 的策略时没有自己的几套可选，不出） -->
+      {#if !follow}
+        <section class="dp-sec dp-sec-bar">
+          <h3 class="dp-label">{t('策略')}</h3>
+          <StrategyBar {shell} {strategies} {activeId} viewId={curId} name={rawName} canEdit={canEditBody} busy={creating} {renameId} {renameTick}
+            onview={view} oncreate={create} onactivate={activate} onrename={rename} ondelete={remove}
+            onModal={(v) => { modals.bar = v; }} />
+        </section>
+      {/if}
 
       <div class="dp-body" bind:this={bodyEl}>
         <!-- ④ 四档落点 -->
@@ -425,27 +504,30 @@
               </span>
             {/if}
           </div>
-          <TierTable {shell} {tiers} {candidates} {unrated} {primary} {canEdit} {allowTP} pending={!pvFresh}
+          <TierTable {shell} {tiers} {candidates} {unrated} {primary} canEdit={canEditBody} {allowTP} pending={!pvFresh}
+            store={S} {follow} overrideName={claudeDispatch.modelName} emptyText={noPreview}
             onoverride={setOverride} onModal={(v) => { modals.tier = v; }} />
         </section>
 
         <!-- ⑤ 性价比图 -->
         <section class="dp-sec">
           <h3 class="dp-label">{t('性价比图')}</h3>
-          <ChartCard {shell} {candidates} tiers={chartTiers} {canEdit} {allowTP} chart={pvAny?.chart || dp.preview?.chart || null}
-            floorsEdited={hasFloorEdits(draft)}
+          <ChartCard {shell} {candidates} tiers={chartTiers} canEdit={canEditBody} tpEditable={canEdit} {allowTP} chart={pvAny?.chart || dp.preview?.chart || null}
+            floorsEdited={!follow && hasFloorEdits(draft)} store={S} emptyHint={noPreview}
             onfloor={onFloor} onreset={onReset} onresetall={resetFloors} onassign={(key, c) => setOverride(key, { model: c.model, effort: c.effort || '' })}
             ontp={(v) => patch({ allowThirdParty: v })} onModal={(v) => { modals.chart = v; }} />
         </section>
 
-        <!-- ⑥ 口述备注 -->
-        <section class="dp-sec">
-          <div class="dp-label dp-label-row">
-            <h3 class="dp-label-t">{t('口述备注')}</h3>
-            <span class="dp-label-side">{t('优先级最高，与上面冲突时以这里为准')}</span>
-          </div>
-          <NoteCard value={draft.note} disabled={!canEdit} oninput={(v) => { draft.note = v; }} />
-        </section>
+        <!-- ⑥ 口述备注（dimensio 跟随时是 Claude 那一套的备注，只读；服务端没给就不出） -->
+        {#if !follow || typeof claudeSide?.note === 'string'}
+          <section class="dp-sec">
+            <div class="dp-label dp-label-row">
+              <h3 class="dp-label-t">{t('口述备注')}</h3>
+              <span class="dp-label-side">{t('优先级最高，与上面冲突时以这里为准')}</span>
+            </div>
+            <NoteCard value={follow ? claudeSide.note : draft.note} disabled={!canEditBody} oninput={(v) => { draft.note = v; }} />
+          </section>
+        {/if}
       </div>
 
       <!-- ⑦ 优先级：后面的压过前面的 -->
@@ -554,6 +636,27 @@
   .ios .dp-master-t { font-weight: 400; letter-spacing: -.1px; }
   .dp-state { position: relative; margin: 0; padding: 10px var(--dp-px) 11px; font-size: var(--dp-fs-s); line-height: 1.5; color: var(--dp-ink2); }
   .dp-state::before { content: ''; position: absolute; left: var(--dp-px); right: var(--dp-px); top: 0; height: 1px; background: var(--dp-line); }
+
+  /* —— dimensio：策略来源（跟随 Claude / 单独一套）一行 + 跟随时的说明与去处。行间同一条发丝线 —— */
+  .dp-src { position: relative; display: flex; align-items: center; gap: 12px; padding: 0 var(--dp-px); }
+  .desk .dp-src { min-height: 46px; }
+  .ios .dp-src { min-height: 54px; }
+  .dp-src::before { content: ''; position: absolute; left: var(--dp-px); right: var(--dp-px); top: 0; height: 1px; background: var(--dp-line); }
+  .dp-src-t { flex: 1; min-width: 0; font-size: var(--dp-fs); }
+  .dp-src-seg { flex: none; display: inline-flex; }
+  .desk .dp-src-seg { min-width: 268px; }
+  .desk .dp-src-seg :global(.seg) { flex: 1; }
+  /* 不写死宽度：两格按较长的那个选项撑开（写死 252 时中文选中态加粗就截成省略号，英文更长） */
+  .ios .dp-src-seg { min-width: 252px; }
+  .ios .dp-src-seg :global(.seg) { flex: 1; }
+  /* 窄处：说明退到上一行、分段铺满 */
+  @container dp (max-width: 479px) {
+    .dp-src { flex-wrap: wrap; row-gap: 8px; padding-top: 10px; padding-bottom: 10px; }
+    .dp-src-seg, .desk .dp-src-seg, .ios .dp-src-seg { flex: 1 0 100%; min-width: 0; width: auto; }
+  }
+  .dp-follow { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; }
+  .dp-follow > span { flex: 1 1 240px; min-width: 0; }
+  .dp-follow :global(.dp-follow-go) { margin: -4px -6px -4px auto; }
 
   /* 总开关关着：下面照常能看能改，整体降一档对比 */
   .dp-dim { transition: opacity var(--mo-base, 280ms) var(--ea-fade, ease); }

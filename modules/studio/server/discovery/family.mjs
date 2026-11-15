@@ -132,9 +132,9 @@ export function refineGoogleCard(card, ref) {
     refined: true,
     card: {
       ...card, params, inputs, refinedBy: 'openrouter',
-      normalize(raw = {}) {
-        const base = baseNormalize ? baseNormalize(raw) : applySpecs(card.params, raw);
-        const fix = applySpecs(refinedSpecs, raw);
+      normalize(raw = {}, ctx = {}) {
+        const base = baseNormalize ? baseNormalize(raw, ctx) : applySpecs(card.params, raw, ctx);
+        const fix = applySpecs(refinedSpecs, raw, ctx);
         for (const s of refinedSpecs) {
           if (s.key in fix) base[s.key] = fix[s.key];
           else if (s.key in base && !s.options.some((o) => o.value === base[s.key])) delete base[s.key];

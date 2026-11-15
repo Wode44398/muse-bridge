@@ -125,7 +125,9 @@ test('fal JSON Schema → 参数：预设枚举（anyOf 里的 enum）、步数 
   const b = schema.fromJsonSchema('image', s.input, s.defs);
   assert.equal(b.wire.text, 'prompt');
   const size = spec(b.params, 'image_size');
-  assert.deepEqual([size.label, size.format, size.group, size.default], ['尺寸', 'resolution', 'basic', 'landscape_4_3']);
+  // 「预设名 | { width, height }」联合类型 → 尺寸参数：预设照列，对象分支 = 自定义宽高（ImageSize：1–14142，原样发对象）
+  assert.deepEqual([size.label, size.type, size.format, size.group, size.default, size.encode], ['尺寸', 'size', 'size', 'basic', 'landscape_4_3', 'object']);
+  assert.deepEqual(size.custom, { width: { min: 1, max: 14142 }, height: { min: 1, max: 14142 }, exact: true });
   assert.equal(size.options.find((o) => o.value === 'square_hd').label, '方形 · 高清');
   const steps = spec(b.params, 'num_inference_steps');
   assert.deepEqual([steps.label, steps.min, steps.max, steps.integer, steps.step, steps.default], ['采样步数', 1, 50, true, 1, 28]);
@@ -291,8 +293,10 @@ test('聚合服务：第一次巡检建底（全进备选）、之后新出现�
   assert.ok(!g.models.some((m) => m.id === 'meta/muse-image') && !g.shelf.some((m) => m.id === 'meta/muse-image'));
   const gpt = g.models.find((m) => m.id === 'openai/gpt-image-2.6-sunburst');
   assert.deepEqual([gpt.paramSource, gpt.vendor, gpt.isNew], ['card', 'openai', undefined]);
-  assert.deepEqual(gpt.params.map((s) => [s.key, s.type, s.default]), [['aspectRatio', 'enum', 'auto'], ['imageSize', 'enum', '2K'], ['quality', 'enum', 'high']]);
-  assert.deepEqual(gpt.params.map((s) => s.format), ['aspect', 'resolution', undefined], '内置卡只补渲染提示');
+  // 自由尺寸（方案 §10）：一个 size（自动 / 原图 / 预设 / 自定义宽高），不再有比例
+  assert.deepEqual(gpt.params.map((s) => [s.key, s.type, s.default]), [['size', 'size', 'auto'], ['quality', 'enum', 'high']]);
+  assert.deepEqual(gpt.params.map((s) => s.format), ['size', undefined], '内置卡只补渲染提示');
+  assert.equal(gpt.params[0].editDefault, 'original');
   const vg = cat.kinds.video.groups.find((x) => x.provider.id === or.id);
   assert.equal(vg.models.length, 0);
   assert.equal(vg.shelf.length, OR_VIDEOS.length);

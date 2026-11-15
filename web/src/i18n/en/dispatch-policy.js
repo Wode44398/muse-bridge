@@ -185,4 +185,37 @@ export default {
   '检索、读文件、机械改动、格式整理': 'Search, file reads, mechanical edits, and formatting',
   '策略还没有读出来': 'The policy hasn’t loaded yet',
   '没有选中文件': 'No file selected',
+
+  // —— dimensio 那份调用策略（设置 › dimensio › 子 agent 调用策略；入口行在 DimensioSection.svelte / Settings.svelte 的 dimensio 页，
+  //     子页同一份 DispatchPolicy.svelte，副标题在 lib/dimensioSettings.svelte.js）——
+  '子 agent 调度': 'Subagent dispatch',
+  '派子 agent 时按难度选模型与思考深度：可以跟随 Claude 的调用策略，也可以给 dimensio 单独定一套。':
+    'Pick the model and thinking depth for each subagent by difficulty: follow Claude’s dispatch policy, or give dimensio its own.',
+  '已关闭 · 子 agent 沿用本会话的模型': 'Off · subagents use this session’s model',
+  '跟随 Claude · {name}': 'Following Claude · {name}',
+  '跟随 Claude 的策略': 'Follow Claude’s policy',
+  '单独一套 · {name}': 'Own policy · {name}',
+  'dimensio 单独一套': 'Separate for dimensio',
+  '策略来源': 'Policy source',
+  '正在跟随 Claude 的「{name}」：判定线、档位自定义和口述备注都取那一套，落点按 dimensio 此刻能用的模型算。':
+    'Following Claude’s “{name}”: threshold lines, tier overrides, and notes all come from it, and tier picks use the models dimensio can use right now.',
+  '正在跟随 Claude 生效的那一套策略：落点按 dimensio 此刻能用的模型算。':
+    'Following Claude’s active strategy: tier picks use the models dimensio can use right now.',
+  '去 Claude 里改': 'Edit in Claude',
+  '已关闭：子 agent 沿用本会话的模型与思考深度': 'Off: subagents use this session’s model and thinking depth.',
+  '工作流': 'Workflows',
+  'Workflow 工具脚本里的 agent()': 'agent() calls in Workflow tool scripts',
+  'StartSession 的模型可以写 auto:<档>': 'StartSession can take auto:<tier> as the model.',
+  'dimensio 暂时算不出落点，稍后再来看': 'dimensio can’t work out tier picks right now. Check back later.',
+  'dimensio 此刻没有评上分的可用模型，四档暂时排不出落点': 'dimensio has no rated models available right now, so there are no tier picks yet.',
+  'Claude 那边指定的 {model} 在 dimensio 里用不了，先按图谱走': 'The {model} assigned in Claude’s policy isn’t available in dimensio, so the chart applies instead.',
+  'Claude 那边指定的模型在 dimensio 里用不了，先按图谱走': 'The model assigned in Claude’s policy isn’t available in dimensio, so the chart applies instead.',
+  '{tier}档的模型': '{tier} tier model',
+  '{tier}档的推理强度': '{tier} tier reasoning effort',
+  '本机，不计费': 'Local, no charge',
+  '{name}，智力分 {ii}，本机，不计费': '{name}, intelligence score {ii}, local, no charge',
+  '本机模型不计费，贴着左边画，横向位置不代表成本': 'Local models are free: drawn along the left edge, so the horizontal position doesn’t mean cost.',
+  'dimensio 的子 agent 调用策略': 'dimensio subagent dispatch policy',
+  'dimensio 子 agent 模型 思考深度 effort 性价比 判定线 策略 档位 跟随 Claude 工作流 StartSession dispatch policy':
+    'dimensio subagent model thinking depth effort value threshold line policy strategy tier follow Claude workflow StartSession dispatch',
 };

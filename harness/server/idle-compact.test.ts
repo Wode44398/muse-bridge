@@ -19,6 +19,7 @@ import { setPrefs } from "./prefs.ts";
 const roots: string[] = [];
 const sessions: Session[] = [];
 const stopIdle = startIdleCompact();
+await setPrefs({ cacheExpiry: "compact" }); // 默认只提示：这里测的是「自动压缩」档
 after(() => {
   stopIdle();
   for (const s of sessions) dropSession(s.id);
@@ -52,8 +53,10 @@ function longHistory(turns = 12): Msg[] {
 
 const summaryOf = (s: Session) => s.state!.messages.find((m) => messageKind(m) === "compaction-summary");
 
-test("定时：缓存 1 小时的会话收尾后排在 54 分钟；5 分钟缓存 / 没缓存的不排；开新一轮就撤掉", (t) => {
+test("定时：1 小时缓存排在 54 分钟、5 分钟缓存排在 3 分 45 秒；短于 3 分钟 / 没缓存的不排；开新一轮就撤掉", (t) => {
   assert.equal(idleDelay(3_600_000), 54 * 60_000);
+  assert.equal(idleDelay(300_000), 225_000);
+  assert.equal(idleDelay(600_000), 450_000);
   const hour = setup(scripted(t, { capabilities: { cacheTtlMs: 3_600_000 } }));
   idleCompactRunEnd(hour);
   assert.ok(_idleTimers.has(hour.id));
@@ -61,7 +64,11 @@ test("定时：缓存 1 小时的会话收尾后排在 54 分钟；5 分钟缓�
   assert.ok(!_idleTimers.has(hour.id));
   const five = setup(scripted(t, { capabilities: { cacheTtlMs: 300_000 } }));
   idleCompactRunEnd(five);
-  assert.ok(!_idleTimers.has(five.id));
+  assert.ok(_idleTimers.has(five.id));
+  cancelIdleCompact(five.id);
+  const tiny = setup(scripted(t, { capabilities: { cacheTtlMs: 120_000 } }));
+  idleCompactRunEnd(tiny);
+  assert.ok(!_idleTimers.has(tiny.id));
   const none = setup(scripted(t));
   idleCompactRunEnd(none);
   assert.ok(!_idleTimers.has(none.id));

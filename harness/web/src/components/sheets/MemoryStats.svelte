@@ -120,7 +120,7 @@
     white-space: nowrap;
   }
   /* 手机：两列两行，横线补上行与行的分隔 */
-  @media (max-width: 699px) {
+  @media (max-width: 599px), (max-width: 699px) and (max-device-aspect-ratio: 699/1000) {
     .stats {
       grid-template-columns: repeat(2, minmax(0, 1fr));
       row-gap: 2px;

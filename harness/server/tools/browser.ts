@@ -4,12 +4,11 @@ import type { AgentEvent } from "../agent/events.ts";
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { ok, fail } from "./types.ts";
 import {
-  getSharedBrowser,
-  existingSharedBrowser,
-  closeAllBrowserSessions,
-  attachSharedBrowser,
-  claimBrowser,
-  releaseBrowser,
+  getBrowser,
+  existingBrowser,
+  closeBrowser,
+  attachBrowser,
+  browserIsolated,
   noBrowserMessage,
   VIEWPORT_PRESETS,
   SETTLE_MAX_MS,
@@ -42,8 +41,9 @@ import { browserAvailable } from "../headless.ts";
 import { redactOutput } from "../redact.ts";
 import { WEB_CONTENT_NOTE } from "./untrusted.ts";
 
-// The Browser tool: drive the shared headless browser — navigate (any URL,
-// including apps started with Preview), click/type/scroll/hover, emulate
+// The Browser tool: drive THIS conversation's browser (cdp.ts getBrowser: one per
+// session — its own tabs inside one shared headless browser process) — navigate
+// (any URL, including apps started with Preview), click/type/scroll/hover, emulate
 // viewports, read the browser-side console, and screenshot the CURRENT state.
 // Page reading lives in ReadPage, JS evaluation in Eval, request auditing in
 // Network — all four operate on this same browser, so state persists.
@@ -151,7 +151,8 @@ async function viewerReport(page: CdpSession): Promise<string> {
     : "";
   return (
     `${unseen}Nobody is watching the Browser panel: the user cannot see this browser and does not know what you do in it. ` +
-    "Before asking them to act in it (sign in, solve a verification, confirm), ask them to open the browser card in dimensio's workspace panel; " +
+    "Before asking them to act in it (sign in, solve a verification, confirm), ask them to open the browser card in dimensio's workspace panel " +
+    "while this conversation is the one on screen (each conversation's panel shows its own browser); " +
     "always say in your reply what you found or did there."
   );
 }
@@ -376,9 +377,12 @@ export const browserTool: Tool = {
   def: {
     name: "Browser",
     description:
-      "Drive a real (headless) browser. ONE shared browser persists across calls — the page you navigated " +
-      "to, clicked, and typed into stays put; ReadPage/Eval/Network operate on this same page. The user watches it live in " +
-      "dimensio's Browser panel and can take over. Sign-ins made in the built-in browser persist across sessions and belong to " +
+      "Drive a real (headless) browser. This conversation has its OWN browser that persists across calls — the page you " +
+      "navigated to, clicked, and typed into stays put; ReadPage/Eval/Network operate on this same page. Other conversations " +
+      "running at the same time have their own tabs and viewport, so they never move your page (sub-agents you start share " +
+      "yours). Do not assume it is fresh: tabs you opened earlier in this conversation are still there. The user watches it live in " +
+      "dimensio's Browser panel and can take over. Site sign-ins are shared with the user's other conversations unless they " +
+      "turned on isolated storage for this one; sign-ins in the built-in browser persist across sessions and belong to " +
       "the user: never sign out or change their credentials. Actions:\n" +
       "• navigate — go to a full http(s)/file URL, or a \"/path\" on the running Preview server; returns once the page has loaded and settled, and says whether the user can see the browser right now. Also: back | forward | reload.\n" +
       "• tabs — list open tabs (1-based index + title + URL; → marks the current one) and whether the user is watching.\n" +
@@ -387,8 +391,8 @@ export const browserTool: Tool = {
       "• tab_switch — make another tab current (`tab`: 1-based index or targetId). Use it to work across pages — " +
       "e.g. a reference site in one tab and your own app in another, switching to compare. Any other action also takes `tab` " +
       "(switches first). When a click opens a popup / target=_blank link, the tool switches to the new tab and says so.\n" +
-      "• tab_close — close a tab (`tab`, default = current). Closing the LAST tab shuts the whole browser down.\n" +
-      "• attach — retarget every browser tool (this one plus ReadPage/Eval/Network) at an ALREADY-RUNNING " +
+      "• tab_close — close a tab (`tab`, default = current). Closing the LAST tab closes this conversation's browser.\n" +
+      "• attach — retarget this conversation's browser tools (this one plus ReadPage/Eval/Network) at an ALREADY-RUNNING " +
       "Chromium-based app that exposes a DevTools port: an Electron desktop app or packaged exe launched with " +
       "--remote-debugging-port=<port>, or any headful Chrome. Pass `port`; optional target:\"substring\" picks " +
       "a window by title/URL when several exist. close then DETACHES without quitting the app.\n" +
@@ -427,7 +431,7 @@ export const browserTool: Tool = {
       "or a rectangle with clip:{x,y,width,height}. A full-viewport screenshot becomes the coordinate basis for x,y. If you can see images it is handed back to you to " +
       "judge; otherwise ask a specific `question` and a vision model returns a text verdict.\n" +
       "• wait_for — wait for expect:{…} to hold (or just ms) without acting.\n" +
-      "• close — shut the browser down (a later action relaunches it fresh).\n" +
+      "• close — close this conversation's browser (all its tabs; a later action opens it again on a blank page).\n" +
       VERIFY_DESC +
       "\nTypical loop: navigate → ReadPage / find → click/type (by ref) with expect → Eval to assert DOM state → screenshot to " +
       "verify visually. Prefer Eval/ReadPage assertions over screenshots for functional checks — cheaper and exact.",
@@ -455,10 +459,7 @@ export const browserTool: Tool = {
   },
   async run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
     const action = String(args.action ?? "").trim();
-    // One session drives the browser at a time (see claimBrowser).
-    const owner = ctx.ownerId ?? "";
-    const denied = claimBrowser(owner);
-    if (denied) return fail(`browser ${action || "?"}`, denied);
+    // 每个会话自己的浏览器（cdp.ts getBrowser，按 ctx.ownerId）：几个会话并发用浏览器不再互相拒绝
     if (action === "batch") return runBatch(args.actions, ctx);
     return runStep(args, ctx);
   },
@@ -531,7 +532,7 @@ async function runStep(args: Record<string, unknown>, ctx: ToolContext): Promise
   } catch (e) {
     result = fail(`browser ${action}`, `${action} failed: ${(e as Error).message}`);
   }
-  const live = existingSharedBrowser();
+  const live = existingBrowser(ctx.ownerId ?? "");
   try {
     if (result.ok && live && ACTING.has(action) && hasExpect(args.expect)) {
       const miss = await waitExpect(live, args.expect, { timeoutMs: Number(args.expect_timeout_ms) || 3000, changedNow });
@@ -594,16 +595,15 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
   const verify = args.verify !== false;
 
   if (action === "close") {
-    releaseBrowser(owner);
-    const cur = existingSharedBrowser();
-    if (!cur) return ok("browser already closed", "No browser was running.");
+    const cur = existingBrowser(owner);
+    if (!cur) return ok("browser already closed", "This conversation had no browser open.");
     const wasAttached = cur.attached;
-    closeAllBrowserSessions();
+    void closeBrowser(owner); // 状态当场清掉，标签与宿主的收尾在后台跑
     return ok(
       wasAttached ? "detached" : "browser closed",
       wasAttached
         ? "Detached from the app — the app itself keeps running. The next Browser/ReadPage/Eval/Network call targets a fresh headless browser."
-        : "Browser closed. Any Browser/ReadPage/Eval/Network call will relaunch it fresh.",
+        : "Closed this conversation's browser (all its tabs). Any Browser/ReadPage/Eval/Network call will open it again fresh.",
     );
   }
 
@@ -623,7 +623,7 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
     if (blocked) return fail("browser attach", blocked);
     try {
       const filter = typeof args.target === "string" && args.target.trim() ? args.target.trim() : undefined;
-      const { session, picked, pages } = await attachSharedBrowser(port, filter);
+      const { session, picked, pages } = await attachBrowser(owner, port, filter);
       const multi = pages > 1 ? ` (${pages} page targets — pass target:"<title/url substring>" to pick another)` : "";
       return {
         ok: true,
@@ -633,7 +633,7 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
             t: "text",
             text:
               `Attached to ${picked} via DevTools port ${port}${multi}.\n` +
-              `ReadPage / Browser(click|type|key|scroll|hover|screenshot|console) / Eval / Network now drive this app window. ` +
+              `In this conversation, ReadPage / Browser(click|type|key|scroll|hover|screenshot|console) / Eval / Network now drive this app window. ` +
               `Browser(close) detaches without quitting the app.`,
           },
         ],
@@ -654,7 +654,7 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
   }
 
   if (action === "console") {
-    const page = existingSharedBrowser();
+    const page = existingBrowser(owner);
     if (!page) return fail("browser console", noBrowserMessage());
     const n = Math.max(1, Math.min(400, Number(args.lines ?? 100)));
     let all = page.consoleEntries();
@@ -670,7 +670,7 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
   }
 
   if (action === "wait_for") {
-    const page = existingSharedBrowser();
+    const page = existingBrowser(owner);
     if (!page) return fail("browser wait_for", noBrowserMessage());
     if (hasExpect(args.expect)) {
       const t0 = Date.now();
@@ -701,16 +701,16 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
 
   // Everything below needs a live browser (navigate / tab_new create one; resize may start a blank page first).
   let page: CdpSession;
-  const wasDead = !existingSharedBrowser();
+  const wasDead = !existingBrowser(owner);
   let launchedNote = "";
   try {
     if (action === "navigate" || action === "tab_new") {
-      page = await getSharedBrowser();
+      page = await getBrowser(owner);
     } else {
-      const existing = existingSharedBrowser();
+      const existing = existingBrowser(owner);
       if (!existing && action === "resize") {
         // 先定尺寸再开页面是最自然的顺序：先起一个空白页，视口随实例保留到之后的 navigate
-        page = await getSharedBrowser();
+        page = await getBrowser(owner);
         launchedNote = "\n(The browser was not running — started it on a blank page; the next navigate keeps this viewport.)";
       } else if (!existing) {
         return fail(`browser ${action}`, noBrowserMessage());
@@ -740,6 +740,9 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
       const doc = [...page.networkEntries()].reverse().find((e) => e.t >= t0 && e.resourceType === "Document");
       const warn = nav.errorText ? `\n⚠ Load failed: ${nav.errorText}` : doc?.status && doc.status >= 400 ? `\n⚠ The server answered ${doc.status}` : "";
       const slow = nav.settled ? "" : " — the page is still changing (animation / polling), returned early";
+      const iso = wasDead && browserIsolated(owner)
+        ? "\n(Isolated storage is on for this conversation: an empty profile — no sign-ins from the user's other conversations, and it is wiped when closed.)"
+        : "";
       return {
         ok: !nav.errorText,
         summary: `→ ${url}`,
@@ -747,7 +750,7 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
           {
             t: "text",
             text:
-              `Browser is now at ${await pageStamp(page)} (${(nav.ms / 1000).toFixed(1)} s${slow}).${warn}\n${await viewerReport(page)}\n` +
+              `Browser is now at ${await pageStamp(page)} (${(nav.ms / 1000).toFixed(1)} s${slow}).${warn}${iso}\n${await viewerReport(page)}\n` +
               "Next: ReadPage (or find) to see the page structure and get clickable [refN] handles.",
           },
         ],
@@ -835,10 +838,10 @@ async function act(action: string, args: Record<string, unknown>, ctx: ToolConte
       }
       const closing = page.tabs.find((t) => t.id === id);
       await page.closeTab(id);
-      if (!existingSharedBrowser()) {
+      if (!existingBrowser(owner)) {
         return ok(
           "tab closed — browser shut down",
-          `Closed "${closing?.title || closing?.url || id}" — that was the LAST tab, so the whole browser closed (like closing a browser window). Any Browser action relaunches it fresh.`,
+          `Closed "${closing?.title || closing?.url || id}" — that was the LAST tab, so this conversation's browser closed (like closing a browser window). Any Browser action opens it again fresh.`,
         );
       }
       return {

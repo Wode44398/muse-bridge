@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import os from "node:os";
 import test from "node:test";
-import { getSharedBrowser } from "./cdp.ts";
+import { getBrowser } from "./cdp.ts";
 import { findBrowser } from "./headless.ts";
 import { evalTool } from "./tools/evaljs.ts";
 import { Sandbox } from "./sandbox.ts";
@@ -27,7 +27,7 @@ const ctx: ToolContext = {
 };
 
 test("Eval 真的 await：返回 Promise 的表达式、顶层 await、对象、异常；verify 的三种结局", { skip, timeout: 120_000 }, async () => {
-  const s = await getSharedBrowser();
+  const s = await getBrowser();
   try {
     await s.navigate("data:text/html,<title>v4</title><p id=x>hi</p>");
     // 修前这两条拿回的是 {}

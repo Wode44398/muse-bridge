@@ -5,13 +5,15 @@
   import { t } from '../../../lib/i18n.js';
 
   // scope: { workflow, subagent, session }；onchange(key, on)
-  let { scope = {}, enabled = true, disabled = false, onchange } = $props();
+  // items：三枚片各叫什么（不给 = Claude 的说法；dimensio 那份调用策略传它自己的：Workflow 工具、Agent 工具、StartSession）
+  let { scope = {}, enabled = true, disabled = false, items = null, onchange } = $props();
 
-  const ITEMS = [
+  const CLAUDE_ITEMS = [
     { key: 'workflow', name: t('工作流 / Ultracode'), sub: t('工作流脚本里派出的 agent') },
     { key: 'subagent', name: t('普通子 agent'), sub: t('对话里用 Agent 工具派出的') },
     { key: 'session', name: t('发起新会话'), sub: t('新会话的模型可以按档位选') },
   ];
+  const ITEMS = $derived(items || CLAUDE_ITEMS);
   const noneOn = $derived(enabled && !ITEMS.some((x) => scope?.[x.key]));
 
   function toggle(e, it) {

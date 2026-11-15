@@ -2427,7 +2427,7 @@
      手机上（带子只 28px）就是一道亮缝（维护者 09-11 第三张截图）。带子下沿压到卡片上沿下方 2px，
      被卡片（z-index 更高）盖住，实底与卡片无缝相接。 */
   .scroll > .scroll-fade-strip-bottom { --scroll-fade-size: var(--sf-bottom); bottom: calc(var(--composer-card-top, var(--composer-h, 84px)) - var(--composer-h, 84px) - 10px); }
-  @media (max-width: 699px) { .scroll { --sf-top: 18px; --sf-lead: 0px; --sf-bottom: 28px; } }
+  @media (max-width: 599px), (max-width: 699px) and (max-device-aspect-ratio: 699/1000) { .scroll { --sf-top: 18px; --sf-lead: 0px; --sf-bottom: 28px; } }
   /* 桌面壳 WCO：Electron 在窗口内沿留 5px 拉伸热区（系统层命中、先于页面），工作台收起时正文滚动区
      贴着窗口右沿，官方款原生滚动条（槽 10px、拇指离右沿 ~3px）有一半拇指落进热区、一按变成拖窗口。
      原生滚动条画在边框内侧，右边垫 4px 透明边框整条推进来，拇指离窗口右沿 ≥7px。--sb-w 量的是

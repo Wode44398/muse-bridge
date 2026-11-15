@@ -19,6 +19,8 @@
   //   onreset(key)                     双击一条线（或它的手柄）、手柄上按 Delete = 这条恢复默认
   //   onpick(candidate, { x, y })      点一个候选点（x, y = 这个点在视口里的位置，给调用方摆菜单）；触屏是「先点出提示，再点一下」
   //   emptyHint   空态第二行的引导（不给用默认那句）
+  //   store       哪一份调用策略（lib/dispatchPolicy 的 createDispatchStore；不给 = Claude 那份）：点的显示名、推理强度的叫法从它取。
+  //               dimensio 那份的候选里有本机模型（basis 'local'，成本 0）：同样贴左缘画，提示里写「本机，不计费」
   //   width       给定就不自己量宽度（测试 / 截图用）
   //
   // 受控：线画在哪只认 tiers 里的 floor，拖动中才用自己手上的值；落点的环同理——拖动中先按同一条规则在本地算，
@@ -39,7 +41,7 @@
   import { t, tr } from '../../../lib/i18n.js';
   import { DUR, SPRING, spring, bezier, reduced } from '../../../lib/motion.js';
   import { haptic } from '../../../lib/dragdrop.svelte.js';
-  import { TIER_META, modelName, effortName } from '../../../lib/dispatchPolicy.svelte.js';
+  import { TIER_META, claudeDispatch } from '../../../lib/dispatchPolicy.svelte.js';
   import {
     isNarrow, chartHeight, plotBox, extentOf, domainFrom, sameDomain, lerpDomain, xOf, yOf, scoreAt, scorePerPx,
     yTicks, xTicks, thinTicks, fmtTick, fmtCost, fmtScore, clampFloor, snapFloor, stepFloor,
@@ -49,7 +51,7 @@
 
   let {
     candidates = [], tiers = [], allPoints = null, showAll = false, editable = false,
-    onfloor = null, onreset = null, onpick = null, emptyHint = '', width = 0,
+    onfloor = null, onreset = null, onpick = null, emptyHint = '', width = 0, store = claudeDispatch,
   } = $props();
   const uid = $props.id();
 
@@ -255,8 +257,8 @@
     if (row && row.pick && pickId(row.pick.model, row.pick.effort) === h.pick) untrack(() => { hold = null; });
   });
   const pointName = (c) => {
-    const name = c.label || modelName(c.model);
-    return c.effort ? name + ' · ' + effortName(c.model, c.effort) : name;
+    const name = c.label || store.modelName(c.model);
+    return c.effort ? name + ' · ' + store.effortName(c.model, c.effort) : name;
   };
   // 每档落在哪个点（dots 的下标，−1 = 没处画）。拖线的每一步都会重算，但只要结果没变就还是同一个数组——
   // 环、档名签、标注避让、点的叠放次序都挂在它后面
@@ -405,7 +407,7 @@
   let armed = $state(-1);         // 触屏：已经点出提示的那个点，再点它一下才算「选它」
   let lastType = $state('');      // 最近一次按下是鼠标还是手指
   let swallowUntil = 0;
-  const BASIS = { sub: () => t('订阅均值'), plan: () => t('plan 均值'), api: () => t('API 价') };
+  const BASIS = { sub: () => t('订阅均值'), plan: () => t('plan 均值'), api: () => t('API 价'), local: () => t('本机，不计费') };
   const basisName = (b) => (BASIS[b] ? BASIS[b]() : '');
   const rowEffort = (e) => (e === '非推理' ? 'off' : e === '默认' || !e ? '' : String(e));   // i18n-ignore 图谱数据里的原值
   const tip = $derived.by(() => {
@@ -415,7 +417,7 @@
       if (!d) return null;
       const mine = marks.find((g) => g.k === hover.k), on = mine ? mine.tiers : [];
       return {
-        x: d.x, y: d.y, slot: d.slot, kind: d.kind, hollow: d.hollow, free: d.free, title: pointName(d.c), sub: d.c.provider ? tr(d.c.provider) : '',
+        x: d.x, y: d.y, slot: d.slot, kind: d.kind, hollow: d.hollow, free: d.free, local: d.free && d.c.basis === 'local', title: pointName(d.c), sub: d.c.provider ? tr(d.c.provider) : '',
         ii: d.ii, cost: d.cost, basis: basisName(d.c.basis), est: !!d.c.est,
         tiers: on.filter((x) => !x.name).map((x) => x.meta.title),
         lent: on.filter((x) => x.name).map((x) => ({ tier: x.meta.title, name: x.name })),   // 借这个点套环的那几档
@@ -428,7 +430,7 @@
     const eff = rowEffort(effort), vendor = vmeta.get(vk);
     return {
       x: p.x, y: p.y, slot: vendorSlot(vk), kind: shapeKind(vk, vendor), hollow: src === 'api', free: false,
-      title: eff ? family + ' · ' + effortName('', eff) : String(family || ''),
+      title: eff ? family + ' · ' + claudeDispatch.effortName('', eff) : String(family || ''),
       sub: [vendor && vendor.name ? tr(vendor.name) : '', src === 'api' ? '' : tr(String(plan || ''))].filter(Boolean).join(' · '),
       ii: Number(score), cost: Number(cost), basis: src === 'api' ? t('API 价') : t('这个 plan 的价'), est: false, tiers: [], lent: [], hint: false,
     };
@@ -508,7 +510,9 @@
   const dotFocus = (k) => { tabK = k; kb = true; hover = { k }; };
   const dotBlur = (k) => { if (kb && hover && hover.k === k) { hover = null; kb = false; } };
   const dotLabel = (d) => (d.free
-    ? t('{name}，智力分 {ii}，没有价格数据', { name: pointName(d.c), ii: fmtScore(d.ii) })
+    ? (d.c.basis === 'local'
+      ? t('{name}，智力分 {ii}，本机，不计费', { name: pointName(d.c), ii: fmtScore(d.ii) })
+      : t('{name}，智力分 {ii}，没有价格数据', { name: pointName(d.c), ii: fmtScore(d.ii) }))
     : t('{name}，智力分 {ii}，每任务成本 {cost}，{basis}', { name: pointName(d.c), ii: fmtScore(d.ii), cost: fmtCost(d.cost), basis: basisName(d.c.basis) }));
 
   // —— 拖判定线 ——
@@ -774,13 +778,14 @@
           {#if tip.sub}<div class="tt-s">{tip.sub}</div>{/if}
           <dl>
             <div><dt>{t('智力分')}</dt><dd>{fmtScore(tip.ii)}</dd></div>
-            <div><dt>{t('每任务成本')}</dt><dd class:soft={tip.free}>{tip.free ? t('没有价格数据') : fmtCost(tip.cost)}</dd></div>
+            <div><dt>{t('每任务成本')}</dt><dd class:soft={tip.free}>{tip.local ? t('本机，不计费') : tip.free ? t('没有价格数据') : fmtCost(tip.cost)}</dd></div>
             {#if tip.basis && !tip.free}<div><dt>{t('计费口径')}</dt><dd class="soft">{tip.basis}</dd></div>{/if}
           </dl>
           {#if tip.tiers.length}<div class="tt-n">{t('现在是 {tiers} 档的落点', { tiers: tip.tiers.join(' / ') })}</div>{/if}
           {#each tip.lent as x (x.tier)}<div class="tt-n">{t('「{tier}」指定的 {name} 没有实测分数，借用这个点的分数与成本', x)}</div>{/each}
           {#if tip.est}<div class="tt-n">{t('这一档没有实测分数，按相邻档位估的')}</div>{/if}
-          {#if tip.free}<div class="tt-n">{t('图谱里没有它的价格，贴着左边画，横向位置不代表成本')}</div>{/if}
+          {#if tip.local}<div class="tt-n">{t('本机模型不计费，贴着左边画，横向位置不代表成本')}</div>
+          {:else if tip.free}<div class="tt-n">{t('图谱里没有它的价格，贴着左边画，横向位置不代表成本')}</div>{/if}
           {#if tip.hint}<div class="tt-n">{t('再点一下这个点，把它指定给某一档')}</div>{/if}
         </div>
       {/if}

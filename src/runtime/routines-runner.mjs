@@ -12,7 +12,15 @@
 // 重放挂的 family origin 'routine' 是对象属性、客户端伪造不了；它让这一轮算「没人在场」（不替用户开会话）、
 // 系统提示末尾追加无人值守说明、不顶掉同会话正在跑的轮（noPreempt：「接着上次的会话」撞上你正在用它就跳过这次）。
 //
-// 引擎只剩 Claude：Gemini 引擎 2026-11-04 随 Gemini 对话下线，残留任务在 routines.mjs 读的时候就停用了（不删）。
+// dimensio 引擎（11-14）：到点经 dimensio 扩展导出的 familyCall（会话协作同一条通道：带进程内令牌直连【任务属主自己的】
+// harness 实例——管理员 → 主实例，成员 → 他的租户实例，按 ctx.key 选；没起来就拉起，x-dimensio-family-call 头只有 bridge 服务端
+// 发得出）调 harness 的 /api/family/routine：开一个新会话（或续上次那个）起一轮，回 { id, runId }；再用 routine-status 长轮询等结局。
+//   · 任务的厂商 / 型号 / 思考深度 / 运行档位 / 工作文件夹交给 dimensio，按它设置页同一套规则校验（成员实例的工作区锁在他自己的
+//     文件夹里、全权档不收）；认不了就记进这次运行的结果；
+//   · 要人批的卡照常停下来等（会话亮「待处理」，GET /api/routines 的 live.waiting 跟着走）；跑完的通知、失败记录与 Claude 一致；
+//   · 运行记录带 agent:'dimensio'，界面据此跳到 dimensio 页的那个会话。
+//
+// Gemini 引擎 2026-11-04 随 Gemini 对话下线，残留任务在 routines.mjs 读的时候就停用了（不删）。
 //
 // Multi-user: the scheduler iterates admin + every account user, each with its own routines.json.
 
@@ -28,6 +36,7 @@ import { busPublish } from './bus.mjs';
 import { postNotice } from './notices.mjs';
 import * as claudeProjects from '../claude-projects.mjs';
 import { FEATURES } from '../config/index.mjs';
+import { getModule } from '../modules/registry.mjs';
 import * as users from '../users.mjs';
 
 const ROUTINE_NUDGE = '\n\n【运行环境：这是一个定时自动触发的任务，无人值守、当前没有用户在线实时查看或作答。请完整、自主地把任务做完；需要决策时按最合理的默认判断推进，不要中途停下来提问等待。做完后用简洁要点给出结果，方便用户事后在历史里回看。】';
@@ -49,16 +58,37 @@ function ownerContexts() {
   return ctxs;
 }
 
-// 这条定时任务用的 agent 此刻对它的主人还开着吗（全局开关 + 按人授权）。
-const routineAllowed = (ctx) => ctx.allowClaude;
+// —— dimensio：经扩展的 familyCall 直连属主自己的 harness 实例（测试用 _setRoutineDimCall 顶替这一层）——
+let dimCallOverride = null;
+export function _setRoutineDimCall(fn) { dimCallOverride = fn; }
+const familyCallFn = () => (dimCallOverride || getModule('dimensio')?.familyCall);
+/** 这个身份能不能用 dimensio 跑定时任务：按人授权（ctx.allowDimensio 已含全局开关）+ dimensio 扩展装着、导出了 familyCall。 */
+export function dimensioRoutineOk(ctx) {
+  return !!(ctx && ctx.allowDimensio) && typeof familyCallFn() === 'function';
+}
+const dimCall = (ctx, op, body, timeoutMs) => {
+  const call = familyCallFn();
+  if (typeof call !== 'function') return Promise.reject(new Error('dimensio 扩展没装或没启用'));
+  return call(ctx, op, body, timeoutMs);
+};
+const DIM_START_MS = 90_000;     // 开会话：harness 没起来先拉起（最多二十来秒），新会话还要对一遍 MCP 连接器
+const DIM_WAIT_MS = 20_000;      // routine-status 长轮询：dimensio 那边在跑就最多等这么久再答
+const DIM_MISS_MAX = 30;         // 连着这么多次问不到（dimensio 在重启 / 卡住）才放弃：约 10 分钟以上
+let dimRetryMs = 20_000;         // 问不到时隔多久再问
+export function _setRoutineDimTiming({ retryMs } = {}) { if (retryMs != null) dimRetryMs = retryMs; }
 
-/** 正在跑的那几条：{ [routineId]: { sessionId, waiting } }（waiting = 会话停在审批卡 / 提问上等你）。 */
+// 这条定时任务用的 agent 此刻对它的主人还开着吗（全局开关 + 按人授权）。
+const routineAllowed = (ctx, r) => (r.agent === 'dimensio' ? dimensioRoutineOk(ctx) : ctx.allowClaude);
+
+/** 正在跑的那几条：{ [routineId]: { sessionId, waiting, agent? } }（waiting = 会话停在审批卡 / 提问上等你）。 */
 export function liveRoutines(ids) {
   const out = {};
   for (const id of ids) {
     const l = live.get(id);
     if (!l) continue;
-    out[id] = { sessionId: l.sessionId || null, waiting: !!(l.sessionId && sessionQuestions.has(l.sessionId)) };
+    // dimensio 的「在等人」由长轮询带回来（l.waiting）；Claude 的看提问 / 审批台账
+    const waiting = l.agent === 'dimensio' ? !!l.waiting : !!(l.sessionId && sessionQuestions.has(l.sessionId));
+    out[id] = { sessionId: l.sessionId || null, waiting, ...(l.agent === 'dimensio' ? { agent: 'dimensio' } : {}) };
   }
   return out;
 }
@@ -80,12 +110,15 @@ export async function runRoutine(ctx, id, trigger = 'manual') {
     routines.startRun(ctx.dataDir, id, { trigger, status: 'error', preview: routines.GEMINI_ROUTINE_NOTE, endedAt: Date.now() });
     return;
   }
-  if (!routineAllowed(ctx)) {
-    routines.startRun(ctx.dataDir, id, { trigger, status: 'error', preview: 'Claude 未启用或没有权限，这次没有运行。', endedAt: Date.now() });
+  const dim = r.agent === 'dimensio';
+  if (!routineAllowed(ctx, r)) {
+    const why = dim ? 'dimensio 未启用或没有权限，这次没有运行。' : 'Claude 未启用或没有权限，这次没有运行。';
+    routines.startRun(ctx.dataDir, id, { trigger, status: 'error', preview: why, endedAt: Date.now(), ...(dim ? { agent: 'dimensio' } : {}) });
     return;
   }
   // 额度（开源路线 S2-6）：先看一眼，用完了就记一条说清楚。记账在聊天路由里（与聊天同一道闸）。管理员不限。
-  const billTo = billingUser(ctx);
+  // dimensio 的对话不记这本账（反代也不拦），它的定时任务同样不拦。
+  const billTo = dim ? null : billingUser(ctx);
   if (billTo) {
     const block = quotaBlock(billTo);
     if (block) {
@@ -94,16 +127,23 @@ export async function runRoutine(ctx, id, trigger = 'manual') {
     }
   }
   routineRunning.add(id);
-  const run = routines.startRun(ctx.dataDir, id, { trigger });
-  live.set(id, { sessionId: null, runId: run && run.id });
+  const run = routines.startRun(ctx.dataDir, id, { trigger, ...(dim ? { agent: 'dimensio' } : {}) });
+  live.set(id, { sessionId: null, runId: run && run.id, ...(dim ? { agent: 'dimensio', waiting: false } : {}) });
   const onSession = (sid) => {
     const l = live.get(id); if (l) l.sessionId = sid;
     if (run) routines.patchRun(ctx.dataDir, id, run.id, { sessionId: sid });
-    busPublish(ctx.key, { type: 'routine', id, state: 'start', sessionId: sid });
+    busPublish(ctx.key, { type: 'routine', id, state: 'start', sessionId: sid, ...(dim ? { agent: 'dimensio' } : {}) });
+  };
+  // dimensio 的会话停在审批卡 / 提问上等人（或等完了接着跑）：界面的「等你处理」跟着变
+  const onWaiting = (w) => {
+    const l = live.get(id);
+    if (!l || l.waiting === w) return;
+    l.waiting = w;
+    busPublish(ctx.key, { type: 'routine', id, state: w ? 'waiting' : 'start', sessionId: l.sessionId, agent: 'dimensio' });
   };
   let out = { sessionId: null, text: '', isError: false, stopped: false, skipped: false, cost: 0 };
   try {
-    out = { ...out, ...(await runClaudeRoutine(ctx, r, onSession)) };
+    out = { ...out, ...(await (dim ? runDimensioRoutine(ctx, r, onSession, onWaiting) : runClaudeRoutine(ctx, r, onSession))) };
   } catch (err) {
     out = { ...out, text: String((err && err.message) || err), isError: true };
   } finally {
@@ -112,13 +152,15 @@ export async function runRoutine(ctx, id, trigger = 'manual') {
     const status = out.skipped ? 'skipped' : out.stopped ? 'stopped' : out.isError ? 'error' : 'ok';
     const preview = clipPreview(out.text);
     if (run) routines.patchRun(ctx.dataDir, id, run.id, { status, endedAt: Date.now(), ...(out.sessionId ? { sessionId: out.sessionId } : {}), preview, ...(out.cost ? { cost: out.cost } : {}) });
-    // 「接着上次的会话」：记住这次的会话，下次续它
+    // 「接着上次的会话」：记住这次的会话，下次续它（这期间任务被改成了另一个引擎，就别把这个会话记成那边的）
     const cur = routines.get(ctx.dataDir, id);
-    if (cur && cur.sessionMode === 'continue' && out.sessionId) routines.update(ctx.dataDir, id, { threadSessionId: out.sessionId });
-    busPublish(ctx.key, { type: 'routine', id, state: 'end', status, name: r.name, notify: !!(cur && cur.notify), sessionId: out.sessionId || null, preview: preview.slice(0, 120) });
-    // 会话消息通知（notices.mjs）：开了「通知我」的任务按会话单独一条（手机后台服务 / 网页横幅都读它）；被停掉 / 跳过的不报
+    if (cur && cur.sessionMode === 'continue' && out.sessionId && (cur.agent === 'dimensio') === dim) routines.update(ctx.dataDir, id, { threadSessionId: out.sessionId });
+    busPublish(ctx.key, { type: 'routine', id, state: 'end', status, name: r.name, notify: !!(cur && cur.notify), sessionId: out.sessionId || null, preview: preview.slice(0, 120), ...(dim ? { agent: 'dimensio' } : {}) });
+    // 会话消息通知（notices.mjs）：开了「通知我」的任务按会话单独一条（手机后台服务 / 网页横幅都读它）；被停掉 / 跳过的不报。
+    // dimensio 的会话不带会话 id：通知的点开目标按 Claude 会话打开（手机原生通知也是），带了会打开一个不存在的 Claude 会话——
+    // 不带就落到定时任务页，运行记录里再点进 dimensio 的那个会话
     if (cur && cur.notify && (status === 'ok' || status === 'error')) {
-      try { postNotice(ctx.key, { kind: status === 'ok' ? 'done' : 'error', sub: 'routine', sessionId: out.sessionId || null, title: r.name || '', body: preview.slice(0, 200) }); } catch {}
+      try { postNotice(ctx.key, { kind: status === 'ok' ? 'done' : 'error', sub: 'routine', sessionId: dim ? null : (out.sessionId || null), title: r.name || '', body: preview.slice(0, 200) }); } catch {}
     }
     // 插件订阅的 routine.run（plugins/events.mjs）
     emitBridgeEvent('routine.run', { id, name: r.name || '', agent: r.agent || 'claude', owner: eventOwner(ctx), ok: status === 'ok', status, trigger, sessionId: out.sessionId || null, preview: preview.slice(0, 500) });
@@ -192,6 +234,59 @@ async function runClaudeRoutine(ctx, r, onSession) {
     stopped: !!stopped,
     cost: (done && Number(done.cost)) || 0,
   };
+}
+
+// dimensio 引擎（见文件头）：开 / 续会话起一轮，长轮询等结局。返回 { sessionId, text, isError, stopped, skipped }。
+async function runDimensioRoutine(ctx, r, onSession, onWaiting) {
+  let cont = r.sessionMode === 'continue' && r.threadSessionId ? r.threadSessionId : null;
+  const config = {
+    ...(r.provider ? { provider: r.provider } : {}),
+    ...(r.provider && r.model ? { model: r.model } : {}),
+    ...(r.effort ? { thinking: r.effort } : {}),
+    ...(r.permissionMode ? { permissionMode: r.permissionMode } : {}),
+    ...(r.cwd && !cont ? { workspace: r.cwd } : {}),   // 续会话时工作区由会话自己定
+  };
+  const start = (sessionId, cfg) => dimCall(ctx, 'routine', { ...(sessionId ? { sessionId } : {}), title: r.name || '', prompt: r.prompt || '（这条任务没有写指令）', config: cfg }, DIM_START_MS);
+  let st;
+  try {
+    st = await start(cont, config);
+    // 接着用的那个会话被删了：这次改开一个新会话（跑完记成新的「接着用」），工作区按任务里选的
+    if (st && st.ok === false && st.code === 'gone' && cont) {
+      cont = null;
+      st = await start(null, r.cwd ? { ...config, workspace: r.cwd } : config);
+    }
+  } catch (e) { return { sessionId: cont, text: 'dimensio 没能开跑：' + ((e && e.message) || e), isError: true }; }
+  if (!st || st.ok !== true || !st.id || !st.runId) {
+    // 「接着上次的会话」撞上那个会话正在跑（你正在用它）：不顶掉，这次跳过（同 Claude）
+    if (st && st.code === 'busy' && cont) return { sessionId: cont, text: '接着用的那个会话正在进行中，这次没有打断它。', skipped: true };
+    const why = (st && st.error) || 'dimensio 没开成';
+    return { sessionId: cont, text: st && st.code === 'config' ? `dimensio 不认这条任务的设置：${why}。请编辑任务重新选型号 / 档位 / 文件夹。` : why, isError: true };
+  }
+  const sid = String(st.id), runId = String(st.runId);
+  onSession(sid);
+  // 等结局：dimensio 那边在跑就挂着最多 DIM_WAIT_MS 再答；问不到（重启、卡住）隔一会儿再问，连着问不到太多次才放弃
+  let misses = 0, lastErr = '';
+  for (;;) {
+    let s = null;
+    try { s = await dimCall(ctx, 'routine-status', { id: sid, runId, waitMs: DIM_WAIT_MS }, DIM_WAIT_MS + 15_000); }
+    catch (e) { lastErr = String((e && e.message) || e); }
+    if (s && s.ok === true) {
+      misses = 0;
+      if (s.running) { onWaiting(!!s.waiting); continue; }
+      onWaiting(false);
+      const text = String(s.text || '');
+      if (s.outcome === 'done') return { sessionId: sid, text };
+      if (s.outcome === 'aborted') {
+        return { sessionId: sid, stopped: true, text: s.by === 'restart' ? 'dimensio 重启，这次运行被中断；重启后它会自动接着做，点进会话看。' : (text || '已停止') };
+      }
+      if (s.outcome === 'unknown') return { sessionId: sid, stopped: true, text: 'dimensio 中途重启过，这次运行的结局没记下；会话可能已由重启续跑做完，点进去看。' };
+      return { sessionId: sid, text: text || 'dimensio 这一轮出错了', isError: true };
+    }
+    if (s && s.ok === false && s.code === 'gone') return { sessionId: sid, text: 'dimensio 里的这个会话已经不在了。', isError: true };
+    if (s && s.ok === false) lastErr = s.error || lastErr;
+    if (++misses >= DIM_MISS_MAX) return { sessionId: sid, text: `一直问不到 dimensio 这次运行的结果（${lastErr || '没有回应'}），不再等了；点进会话看它跑到哪了。`, isError: true };
+    await new Promise((res) => setTimeout(res, dimRetryMs));
+  }
 }
 
 export function tickRoutines() {

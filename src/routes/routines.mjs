@@ -6,8 +6,9 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { readBody } from '../runtime/body.mjs';
 import * as routines from '../routines.mjs';
-import { runRoutine, routineRunning, liveRoutines } from '../runtime/routines-runner.mjs';
+import { runRoutine, routineRunning, liveRoutines, dimensioRoutineOk } from '../runtime/routines-runner.mjs';
 import { requireCtx } from '../runtime/identity.mjs';
+import { can } from '../runtime/principal.mjs';
 import { routineCapFor, billingUser, quotaBlock } from '../runtime/quota.mjs';
 import { permissionModesFor } from '../runtime/claude-settings.mjs';
 import { gitInvocation } from '../runtime/member-boundary.mjs';
@@ -16,43 +17,68 @@ import { CLAUDE_MODELS, CLAUDE_EFFORTS, ULTRACODE } from '../config/capabilities
 
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 
-// Validate the engine selection against the whitelists; unknown values fall through to undefined so the
-// routine stores null = "server default". 引擎只剩 Claude（Gemini 2026-11-04 下线）。
-function engineFields(body) {
-  const agent = 'claude';
-  return { agent, model: CLAUDE_MODELS.has(body.model) ? body.model : undefined, effort: CLAUDE_EFFORTS.has(body.effort) ? body.effort : undefined, search: false };
+// —— dimensio 引擎（11-14）——
+// 运行档位与 harness config.ts 的 PERMISSION_MODES 同一套；全权档 bypass 整机可读写、关掉密钥守卫——只给主机身份
+//（成员的定时任务跑在他自己的租户实例上，dimensio 那边本来也不收这一档）。
+const DIM_MODES = ['auto', 'read-only', 'plan', 'bypass'];
+export const dimModesFor = (ctx) => DIM_MODES.filter((m) => m !== 'bypass' || can(ctx, 'fs.anyPath'));
+// 思考深度（harness catalog.ts EFFORT_ORDER）；厂商 / 型号 id 的目录在 dimensio 那边（含自定义服务），这里只查形状——
+// 认不认由 dimensio 开会话时按设置页同一套规则判，认不了就记进这次运行的结果。
+const DIM_EFFORTS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+const DIM_ID_RE = /^[^\s\u0000-\u001f\u007f]{1,200}$/;
+const dimId = (v) => (typeof v === 'string' && DIM_ID_RE.test(v.trim()) ? v.trim() : undefined);
+
+// 请求里的引擎：vertex 单列出来好回 410，其余不认识的都当 Claude（老客户端不带）
+const engineIn = (v) => (v === 'vertex' ? 'vertex' : v === 'dimensio' ? 'dimensio' : 'claude');
+
+// Validate the engine selection; unknown values fall through to undefined so the routine stores null = "default".
+// agent 没在请求里时沿用任务现在的引擎（cur）——只改 model 的请求不能把 dimensio 任务翻回 Claude；厂商没给也沿用现在的。
+function engineFields(body, cur = null) {
+  const curDim = !!cur && cur.agent === 'dimensio';
+  const agent = 'agent' in body ? engineIn(body.agent) : (curDim ? 'dimensio' : 'claude');
+  if (agent === 'dimensio') {
+    const provider = 'provider' in body ? dimId(body.provider) : (curDim ? cur.provider || undefined : undefined);
+    // 型号跟着厂商走：没选厂商 = 用 dimensio 设置里的默认（型号也是那家的默认）
+    return { agent, provider, model: provider ? dimId(body.model) : undefined, effort: DIM_EFFORTS.has(body.effort) ? body.effort : undefined, search: false };
+  }
+  return { agent: 'claude', provider: undefined, model: CLAUDE_MODELS.has(body.model) ? body.model : undefined, effort: CLAUDE_EFFORTS.has(body.effort) ? body.effort : undefined, search: false };
 }
 
-// Code 侧设置（只对 Claude 引擎有意义）：工作文件夹过路径授权（成员只能选自己空间内的）、权限模式夹到这个身份能选的。
+// Code 侧设置：工作文件夹过路径授权（成员只能选自己空间内的）、权限模式夹到这个身份在这个引擎上能选的。
+// worktree / 分支 / Fast / 项目对话只对 Claude 有意义，dimensio 的任务不收（存着也不用）。
 // 只校验传了的字段；返回要写进去的字段，或抛 { status, message }。
 function codeFields(ctx, body, agent) {
   const out = {};
+  const dim = agent === 'dimensio';
   if ('description' in body) out.description = body.description;
   if ('notify' in body) out.notify = body.notify === true;
   if ('cwd' in body) {
     const raw = typeof body.cwd === 'string' ? body.cwd.trim() : '';
     out.cwd = raw ? authorizeProjectPath(ctx, raw) : null;
   }
-  if ('worktree' in body) out.worktree = body.worktree === true;
-  if ('branch' in body) {
+  if ('worktree' in body && !dim) out.worktree = body.worktree === true;
+  if ('branch' in body && !dim) {
     const b = typeof body.branch === 'string' ? body.branch.trim() : '';
     if (b && (b.startsWith('-') || /[\s~^:?*[\\]/.test(b))) throw Object.assign(new Error('分支名不合法'), { status: 400 });
     out.branch = b || null;
   }
   if ('permissionMode' in body) {
     const m = body.permissionMode ? String(body.permissionMode) : '';
-    if (m && !permissionModesFor(ctx).includes(m)) throw Object.assign(new Error('你的账号不能选这个权限模式'), { status: 400 });
+    if (m && dim && !dimModesFor(ctx).includes(m)) throw Object.assign(new Error('你的账号不能选这个运行档位'), { status: 400 });
+    if (m && !dim && !permissionModesFor(ctx).includes(m)) throw Object.assign(new Error('你的账号不能选这个权限模式'), { status: 400 });
     out.permissionMode = m || null;
   }
-  if ('fast' in body) out.fast = body.fast === true;
+  if ('fast' in body && !dim) out.fast = body.fast === true;
   if ('sessionMode' in body) out.sessionMode = body.sessionMode === 'continue' ? 'continue' : 'new';
   // 以项目对话运行（运行档位 › 项目）：协调者收到任务指令后自己派讨论串。要会话工具：管理员 / 有 shell 的身份
-  if ('shape' in body) {
+  if ('shape' in body && !dim) {
     if (body.shape === 'project' && !(ctx.kind === 'admin' || ctx.shell)) throw Object.assign(new Error('你的账号不能用项目对话'), { status: 400 });
     out.shape = body.shape === 'project' ? 'project' : null;
   }
   return out;
 }
+
+export const _routineFields = { engineFields, codeFields };   // 测试用（dimensio 的身份在测试里拉不起扩展，路由的正向分支直接测这两个）
 
 // Ultracode（xhigh + 常驻动态工作流）不给无人值守的定时任务：Workflow 会派一群子 agent，成本没有上限、
 // 也没人在看；保存时就拒绝（runner 侧 claudeEffortOptions 仍兜底翻译旧数据，不会把非法值塞给 SDK）。
@@ -63,9 +89,14 @@ function rejectUltracode(body, res) {
   return true;
 }
 
-// 定时任务的引擎（只剩 Claude）对这个身份开着吗——全局开关 ∩ 按人授权，与聊天同口径。老客户端选 Gemini 引擎：410。
-function rejectAgent(ctx, body, res) {
-  if (body.agent === 'vertex') { json(res, 410, { ok: false, error: 'Gemini 对话已下线，定时任务只能用 Claude 跑' }); return true; }
+// 定时任务选的引擎对这个身份开着吗——全局开关 ∩ 按人授权，与聊天同口径（dimensio 另要扩展装着）。老客户端选 Gemini 引擎：410。
+function rejectAgent(ctx, agent, res) {
+  if (agent === 'vertex') { json(res, 410, { ok: false, error: 'Gemini 对话已下线，定时任务只能用 Claude 或 dimensio 跑' }); return true; }
+  if (agent === 'dimensio') {
+    if (dimensioRoutineOk(ctx)) return false;
+    json(res, 403, { ok: false, error: 'dimensio 未启用，或你的账号没有使用权限' });
+    return true;
+  }
   if (ctx.allowClaude) return false;
   json(res, 403, { ok: false, error: 'Claude 未启用，或你的账号没有使用权限' });
   return true;
@@ -112,10 +143,14 @@ export function registerRoutineRoutes(router, { authOk, identify }) {
   router.on('GET', '/api/routines', (req, res) => {
     const ctx = requireCtx(identify, req, res); if (!ctx) return;
     const running = [...routineRunning];
+    const dimOk = dimensioRoutineOk(ctx);
     json(res, 200, {
       routines: routines.list(ctx.dataDir), running, live: liveRoutines(running),
       // 表单要的环境：默认工作空间（没选文件夹时跑在哪）、这个身份能选的权限模式、服务器时区
       home: ctx.cwd, permissionModes: ctx.allowClaude ? permissionModesFor(ctx) : [], tz: serverTz(),
+      // 能选的引擎；dimensio 的运行档位（全权档只给主机身份）。dimensio 的型号目录前端经 /api/harness/api/info 现取
+      engines: [...(ctx.allowClaude ? ['claude'] : []), ...(dimOk ? ['dimensio'] : [])],
+      dimModes: dimOk ? dimModesFor(ctx) : [],
     });
   });
 
@@ -149,7 +184,7 @@ export function registerRoutineRoutes(router, { authOk, identify }) {
     const prompt = String(body.prompt || '').trim();
     if (!prompt) { json(res, 400, { ok: false, error: '指令不能为空' }); return; }
     if (rejectUltracode(body, res)) return;
-    if (rejectAgent(ctx, body, res)) return;
+    if (rejectAgent(ctx, engineIn(body.agent), res)) return;
     if (body.enabled !== false && rejectRoutineCap(ctx, res)) return;
     const eng = engineFields(body);
     let schedule, code;
@@ -166,11 +201,11 @@ export function registerRoutineRoutes(router, { authOk, identify }) {
     const cur = routines.get(ctx.dataDir, id);
     if (!cur) { json(res, 404, { ok: false, error: 'not found' }); return; }
     if (rejectUltracode(body, res)) return;
-    if ('agent' in body && rejectAgent(ctx, body, res)) return;
+    if ('agent' in body && rejectAgent(ctx, engineIn(body.agent), res)) return;
     if (body.enabled === true && !cur.enabled && rejectRoutineCap(ctx, res, id)) return;
     const patch = {};
     for (const k of ['name', 'prompt', 'enabled']) if (k in body) patch[k] = body[k];
-    if ('agent' in body || 'model' in body || 'effort' in body || 'search' in body) Object.assign(patch, engineFields(body));
+    if ('agent' in body || 'provider' in body || 'model' in body || 'effort' in body || 'search' in body) Object.assign(patch, engineFields(body, cur));
     try {
       if ('schedule' in body) patch.schedule = checkSchedule(body.schedule);
       Object.assign(patch, codeFields(ctx, body, patch.agent || cur.agent));
@@ -200,8 +235,9 @@ export function registerRoutineRoutes(router, { authOk, identify }) {
     const id = String(body.id || '');
     if (!routines.get(ctx.dataDir, id)) { json(res, 404, { ok: false, error: 'not found' }); return; }
     if (routineRunning.has(id)) { json(res, 200, { ok: true, already: true }); return; }
-    // 「立即运行」同样走额度闸（runRoutine 里还会再查一次），超了当场说清楚
-    const owner = billingUser(ctx);
+    // 「立即运行」同样走额度闸（runRoutine 里还会再查一次），超了当场说清楚。额度是 Claude 聊天那道闸（记账在聊天路由里）；
+    // dimensio 的对话 bridge 不记这本账（反代也不拦），它的定时任务同样不拦
+    const owner = routines.get(ctx.dataDir, id).agent === 'dimensio' ? null : billingUser(ctx);
     const block = owner ? quotaBlock(owner) : null;
     if (block) { json(res, 429, { ok: false, error: block.message, title: block.title }); return; }
     runRoutine(ctx, id, 'manual'); // fire-and-forget; progress/status visible via GET /api/routines

@@ -73,29 +73,88 @@ function loadSharp(): Promise<Sharp | null> {
   return sharpLoad;
 }
 
-// 工具图进转录之前：长边超过 MAX_EDGE 或体积过大就缩小（不放大），PNG 缩完仍大就转 JPEG；fullRes 的原样放过。
-// 解不开的图（格式不认、数据坏）原样放过——宁可多发，不丢。返回的块不再带 fullRes。
-export async function downsampleForModel(block: Block): Promise<Block> {
+// 工具图进转录之前：长边超过 MAX_EDGE 或体积过大就缩小（不放大），PNG 缩完仍大就转 JPEG；fullRes 的不缩。
+// maxImageBytes = 当前模型的单张上限（解码后字节）：「体积过大」的线取它与 KEEP_BYTES 中小的那个，缩完仍超就继续压
+// （fullRes 也一样——超了上限原图根本发不出去）。解不开的图（格式不认、数据坏）原样放过——宁可多发，不丢；
+// 真超了上限的，发请求前 state.fitImagesToLimit 还会再兜一次。返回的块不再带 fullRes。
+export async function downsampleForModel(block: Block, maxImageBytes?: number): Promise<Block> {
   if (block.t !== "image") return block;
   const { fullRes, ...rest } = block;
-  if (fullRes || !rest.data) return rest;
+  if (!rest.data) return rest;
+  const limit = maxImageBytes && maxImageBytes > 0 ? maxImageBytes : Infinity;
+  if (fullRes) {
+    if (Buffer.byteLength(rest.data, "base64") <= limit) return rest;
+    const fitted = await fitImageBytes(Buffer.from(rest.data, "base64"), limit);
+    return fitted ? { ...rest, mime: fitted.mime, data: fitted.data.toString("base64") } : rest;
+  }
   const sharp = await loadSharp();
   if (!sharp) return rest;
+  const keep = Math.min(KEEP_BYTES, limit);
   try {
     const input = Buffer.from(rest.data, "base64");
     const meta = await sharp(input).metadata();
     const w = meta.width ?? 0;
     const h = meta.height ?? 0;
-    if (!w || !h || (Math.max(w, h) <= MAX_EDGE && input.length <= KEEP_BYTES)) return rest;
+    if (!w || !h || (Math.max(w, h) <= MAX_EDGE && input.length <= keep)) return rest;
     const resized = sharp(input).resize({ width: MAX_EDGE, height: MAX_EDGE, fit: "inside", withoutEnlargement: true });
     let out = rest.mime === "image/png" ? await resized.clone().png().toBuffer() : null;
     let mime = "image/png";
-    if (!out || out.length > KEEP_BYTES) {
+    if (!out || out.length > keep) {
       out = await resized.flatten({ background: "#ffffff" }).jpeg({ quality: 85 }).toBuffer();
       mime = "image/jpeg";
+    }
+    if (out.length > limit) {
+      const fitted = await fitImageBytes(out, limit);
+      if (fitted) return { ...rest, mime: fitted.mime, data: fitted.data.toString("base64") };
     }
     return { ...rest, mime, data: out.toString("base64") };
   } catch {
     return rest;
   }
+}
+
+// 把一张图压到 maxBytes（解码后字节）以内：先 JPEG 降质量（85 → 70 → 55），还超就每次把长边缩到 3/4 再试，长边低于
+// 256px 还压不下来就放弃。不放大、不超过 MAX_EDGE。sharp 不在、图解不开、压不下来都回 null（调用方退役这张图或原样放过）。
+const FIT_QUALITIES = [85, 70, 55] as const;
+const FIT_MIN_EDGE = 256;
+export async function fitImageBytes(input: Buffer, maxBytes: number): Promise<{ data: Buffer; mime: "image/jpeg" } | null> {
+  if (!(maxBytes > 0)) return null;
+  const sharp = await loadSharp();
+  if (!sharp) return null;
+  try {
+    const meta = await sharp(input).metadata();
+    let edge = Math.min(MAX_EDGE, Math.max(meta.width ?? 0, meta.height ?? 0));
+    if (!edge) return null;
+    while (edge >= FIT_MIN_EDGE) {
+      const resized = sharp(input).resize({ width: edge, height: edge, fit: "inside", withoutEnlargement: true }).flatten({ background: "#ffffff" });
+      for (const quality of FIT_QUALITIES) {
+        const out = await resized.clone().jpeg({ quality }).toBuffer();
+        if (out.length <= maxBytes) return { data: out, mime: "image/jpeg" };
+      }
+      edge = Math.floor(edge * 0.75);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// 「这张图太大」的报错里读出上限（字节）：OpenAI 系「rejects images larger than 1048576 bytes」、Anthropic「image exceeds
+// 5 MB maximum: 5300000 bytes > 5242880 bytes」。读不出来回 null。
+export function parseImageByteLimit(text: string): number | null {
+  const num = (s: string) => Number(s.replace(/,/g, ""));
+  const bytes =
+    /(?:larger than|exceeds?(?: the)?|more than|maximum(?: of| is)?|limit(?: of| is)?|max(?:imum)? size(?: of| is)?)\s*(\d[\d,]*)\s*bytes/i.exec(text) ??
+    /bytes\s*>\s*(\d[\d,]*)\s*bytes/i.exec(text) ??
+    />\s*(\d[\d,]*)\s*bytes/i.exec(text);
+  if (bytes) {
+    const n = num(bytes[1]);
+    if (n > 0) return n;
+  }
+  const mb = /(\d+(?:\.\d+)?)\s*(MiB|MB)\s*(?:maximum|max|limit)/i.exec(text) ?? /(?:maximum|max|limit)(?: of| is)?\s*(\d+(?:\.\d+)?)\s*(MiB|MB)/i.exec(text);
+  if (mb) {
+    const n = Number(mb[1]) * (mb[2].toLowerCase() === "mib" ? 1_048_576 : 1_000_000);
+    if (n > 0) return Math.floor(n);
+  }
+  return null;
 }

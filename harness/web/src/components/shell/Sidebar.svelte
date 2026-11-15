@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { WIDE_MQ } from "../../lib/breakpoints.ts";
   // 侧栏：项目与会话。项目的身份是工作空间绝对路径（Windows 不分大小写），显示名 = 文件夹名。
   // 桌面（docked）常驻左栏；手机 / 宽屏临时拉出时住在抽屉里（选了会话就收）。
   //
@@ -272,7 +273,7 @@
 
   // ── 会话块：长按（鼠标按住拖）拎起来——拖进输入框 = 引用那个对话（能力位 "session-refs"）；宽屏拖进正文区 = 分屏
   // 手机上抽屉挡着输入框：一拎起来就收抽屉（拖拽不因拖源卸载而断，见 lib/dnd）
-  const wideMq = matchMedia("(min-width: 700px)");
+  const wideMq = matchMedia(WIDE_MQ);
   let wideNow = $state(wideMq.matches);
   onMount(() => {
     const on = (e: MediaQueryListEvent) => (wideNow = e.matches);

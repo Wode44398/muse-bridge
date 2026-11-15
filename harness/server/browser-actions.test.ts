@@ -169,7 +169,7 @@ test("浏览器动作结果确认 / expect / batch / 表单 / 上传 / 对话框
     x = await B({ action: "find", text: "Do nothing" });
     const noop = refOf(x.t, "Do nothing");
     await B({ action: "wait_for", ms: 10 });
-    const s = (await import("./cdp.ts")).existingSharedBrowser()!;
+    const s = (await import("./cdp.ts")).existingBrowser()!;
     await s.eval("document.body.appendChild(Object.assign(document.createElement('div'),{id:'ov'})).style.cssText='position:fixed;inset:0;z-index:10;background:rgba(0,0,0,.3)';1");
     x = await B({ action: "click", ref: noop });
     assert.equal(x.r.ok, false);

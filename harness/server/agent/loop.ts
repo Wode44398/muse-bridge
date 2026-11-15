@@ -4,7 +4,7 @@ import { toolResult } from "./turn.ts";
 import { mayHaveSideEffects, type AgentState } from "./state.ts";
 import { RunInvariants } from "./turn-invariants.ts";
 import { compactNow, contextNeedsTrim, contextTokens, effectiveWindow, ensureContextFits } from "./context.ts";
-import { downsampleForModel } from "./media-budget.ts";
+import { downsampleForModel, parseImageByteLimit } from "./media-budget.ts";
 import { messageKind } from "./injections.ts";
 import { deferredLoaded, notLoadedResult } from "./deferred-tools.ts";
 import { PLAYBOOK_KIND, playbookLoadedIn, playbookMessage, playbooksForCalls, playbooksForRequest, type Playbook } from "./playbooks.ts";
@@ -550,7 +550,7 @@ export async function* runAgent(
     // U3：到线了就先说一声再整理（整段压缩的摘要请求可能要几十秒，以前压完才有一条提示）
     if (contextNeedsTrim(state)) yield { e: "compact_start" };
     const fit = await ensureContextFits(state, signal);
-    yield { e: "context", usedTokens: fit.used, limitTokens: fit.limit, compacted: fit.compacted };
+    yield { e: "context", usedTokens: fit.used, limitTokens: fit.limit, compacted: fit.compacted, cacheTtlMs: state.adapter.capabilities.cacheTtlMs ?? 0 };
     // C4：模式、访问范围、GUIDE、技能……变了就追加一条内部片段（system 在会话里不再改写）；压缩之后算，基线跟着重建的 system 走
     state.injectWorldDelta(worldRunStart);
     worldRunStart = false;
@@ -613,6 +613,7 @@ export async function* runAgent(
     let errSummary = ""; // U6：分类器给的一句人话（上屏）
     let errCompress = false;
     let reactiveThisTurn = false; // R7：这一轮已经为超窗压过一次
+    let imageFitThisTurn = false; // 这一轮已经为「单张图太大」压过一次图
     // R3（#39）：第二本账。零字节的连接失败（和本机模型加载中）不消耗 MAX_ATTEMPTS，等网络 / 模型回来。
     let netWait: NetWait | null = null;
     let waitedForNetwork = false;
@@ -671,6 +672,8 @@ export async function* runAgent(
       let sawEvent = false;
       let waitPlan: WaitPlan | null = null;
       try {
+        // 单张图超了模型上限的（目录配的、或上一次报错里读出来的）先压小再拼请求——不然同一张图每次重发都被拒
+        await state.fitImagesToLimit();
         const turn = state.toTurn();
         // R9：输入 + 输出上限不能超过窗口（Anthropic、llama.cpp 等会直接拒）——离窗口边缘不远时，按剩下的地方夹住这一次的
         // 输出上限（留一点估算误差，至少给 1024）。本机 qwen 在 98K–118K 之间正是这个区间：还没到主动压缩线，请求已被拒。
@@ -763,7 +766,7 @@ export async function* runAgent(
             reactiveThisTurn = true;
             state.lastReactiveCompactTurn = state.runTurns;
             if (await compactNow(state, signal)) {
-              yield { e: "context", usedTokens: state.lastContextTokens, limitTokens: fit.limit, compacted: true };
+              yield { e: "context", usedTokens: state.lastContextTokens, limitTokens: fit.limit, compacted: true, cacheTtlMs: state.adapter.capabilities.cacheTtlMs ?? 0 };
               attempt--; // 压完重发这一次，不算重试
               continue;
             }
@@ -775,6 +778,26 @@ export async function* runAgent(
           }
           // U6：分类器那句是「先压缩再试」——这里已经压过了
           errSummary = "上下文超出了模型窗口，压缩之后仍然放不下：带摘要开一个新会话接着做";
+        }
+        // 单张图超了上限：从报错里读出上限（读不出就按最大那张的一半），把超的图压小改写进转录后重发（每轮一次，不算重试）。
+        // 压完还超、或者根本没有可压的图，就照常报错。
+        if (errored && errClass === "image_too_large" && !text && !calls.length) {
+          if (!imageFitThisTurn) {
+            imageFitThisTurn = true;
+            const parsed = parseImageByteLimit(errMessage);
+            const largest = state.largestImageBytes();
+            if (parsed) state.learnImageLimit(parsed);
+            else if (largest) state.learnImageLimit(Math.floor(largest / 2), false);
+            if (largest && (await state.fitImagesToLimit())) {
+              attempt--; // 压完重发这一次，不算重试
+              continue;
+            }
+          }
+          // 分类器那句是「会压小后自动重发」——这里已经压过了，连同报错正文开头那句一起换掉
+          const said = errSummary;
+          errSummary = "有张图超过了模型的单张上限，压小之后仍然被拒：换一个能收大图的模型，或删掉那张图后再试";
+          if (said && errMessage.startsWith(said)) errMessage = errSummary + errMessage.slice(said.length);
+          errRetriable = false;
         }
         if (errored && local && !text && !calls.length && isLocalLoadingError(errKind)) {
           waitPlan = await planWait(true, netWait, state.deadlineAt, errMessage.slice(0, 120));
@@ -1510,7 +1533,7 @@ export async function* runAgent(
     if (feedback.length) {
       state.appendUserBlocks([
         { t: "text", text: "Attachment(s) from the previous tool call:" },
-        ...(await Promise.all(feedback.map(downsampleForModel))),
+        ...(await Promise.all(feedback.map((block) => downsampleForModel(block, state.imageByteLimit())))),
       ], false, { origin: "harness", kind: "tool-attachments" });
     }
     // C5（K57）：技能正文不放 tool_result（微压缩只清旧工具输出），紧随其后作为一条 harness 消息

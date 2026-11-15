@@ -84,7 +84,7 @@ export const readTool: Tool = {
       }
       const audioMime = sniffAudioMime(head, abs);
       if (audioMime) {
-        if (!ctx.agentHearsAudio) return fail("audio needs native support", "This model takes no audio input. Switch to MiMo to hear the original audio.");
+        if (!ctx.agentHearsAudio) return fail("audio needs native support", `This model takes no audio input, so the sound cannot be attached. The file is still at ${ctx.sandbox.rel(abs)} — inspect or process it via Bash (ffprobe for metadata, ffmpeg to convert/split, a local transcriber if one is installed), or tell the user to switch to an audio-capable model (e.g. MiMo) to hear it.`);
         if (stat.size > MAX_AUDIO_BYTES) return fail("audio too large", "Audio exceeds the 24 MB inline limit. Compress to MP3/FLAC or split into shorter clips before Read.");
         const rel = ctx.sandbox.rel(abs);
         return {

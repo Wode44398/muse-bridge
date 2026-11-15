@@ -1,6 +1,6 @@
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { ok, fail } from "./types.ts";
-import { existingSharedBrowser, claimBrowser, noBrowserMessage } from "../cdp.ts";
+import { existingBrowser, noBrowserMessage } from "../cdp.ts";
 import { fileUrlBlock } from "../sandbox.ts";
 import { redactOutput } from "../redact.ts";
 import { browserAvailable } from "../headless.ts";
@@ -61,9 +61,7 @@ export const evalTool: Tool = {
   async run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
     const js = String(args.js ?? "").trim();
     if (!js) return fail("eval", "Eval requires `js`.");
-    const denied = claimBrowser(ctx.ownerId ?? "");
-    if (denied) return fail("eval", denied);
-    const page = existingSharedBrowser();
+    const page = existingBrowser(ctx.ownerId ?? ""); // 这个会话自己的浏览器（cdp.ts getBrowser）
     if (!page) return fail("eval", noBrowserMessage());
     // S4（#37②）：当前页是 file:// 且过不了与 Read 同一道闸（点链接、脚本跳转绕过了导航检查）→ 不读。
     const fileBlock = fileUrlBlock(page.url, ctx.sandbox);

@@ -129,6 +129,7 @@ const M = await build('hs.svelte.js', componentModule('HubService.svelte', [
   'sid', 'svc', 'phase', 'kind', 'd', 'cat', 'rows', 'rowsKind', 'pinN', 'picked', 'detecting', 'saving', 'stale',
   'dests', 'changes', 'canSave', 'barNote', 'connOpen', 'connMoved', 'notes', 'listErr', 'listRetry', 'detErr', 'saveErr',
   'detect', 'redetectAny', 'save', 'onConnSaved', 'pick', 'toggleDest', 'pickKind', 'onAll',
+  'counts', 'manualKinds', 'manualOk', 'addManual', 'delManual', 'openAdv', 'advFor', 'advModel',
 ], ['connRef', 'sheet']));
 const Conn = await build('conn.svelte.js', componentModule('HsConn.svelte', [
   'ed', 'edDirty', 'dirty', 'err', 'busy', 'save', 'redetect', 'revert', 'onKeyPaste', 'onKeyInput',
@@ -593,4 +594,88 @@ test('共享给成员：写 members；只有多用户服务器的管理员（cp.
     assert.equal(calls[0][2].patch.members, true);
     assert.equal(api.ed.members, true);
   } finally { stop(); Cp.cp.canShare = false; }
+});
+
+test('手动添加：识别出 0 个视频模型，视频栏照样进得去、能手动加；被识别成文本的视频模型能改到视频栏', async () => {
+  const calls = fresh();
+  const SORA = { id: 'openai/sora-2', label: '', kind: 'text', vendor: 'openai', source: 'api' };   // 识别分错了类
+  const media = { dialect: 'openai', kinds: ['image', 'video', 'voice'] };
+  HS.ask = async (p, b) => { calls.push(['ask', p, b]); if (p === 'detect') return { ...DET([A, SORA]), media }; throw new Error('unexpected ' + p); };
+  const { api, stop } = M.mount({ sheet: { type: 'service', add: true }, onClose() {} });
+  try {
+    api.d.url = 'https://openrouter.ai/api/v1';
+    api.d.key = 'sk-test-12345678';
+    await api.detect();
+    await settle();
+    assert.equal(api.counts.video.all, 0);
+    assert.deepEqual(api.manualKinds, ['text', 'image', 'video', 'voice'], '音乐这个方言做不了：不开');
+    api.pickKind('video');
+    await settle();
+    assert.equal(api.kind, 'video');
+    assert.equal(api.manualOk, true);
+    assert.equal(await api.addManual('veo-3.1-generate'), '');
+    await settle();
+    assert.deepEqual(api.rows.map((r) => r.id), ['veo-3.1-generate']);
+    assert.equal(api.picked.has('veo-3.1-generate'), true, '加进来的顺手勾上');
+    // 文本栏里还没添加给谁的：按眼前这一栏改过来
+    assert.equal(await api.addManual(SORA.id), '');
+    await settle();
+    assert.deepEqual(api.rows.map((r) => r.id).sort(), ['openai/sora-2', 'veo-3.1-generate']);
+    assert.equal(api.counts.text.all, 1);
+    // 同一栏里已有的：照旧拦下
+    assert.equal(await api.addManual('veo-3.1-generate'), '已在列表里');
+  } finally { stop(); }
+});
+
+test('手动添加：没装 Media Studio / 接口做不了媒体时，只有文本栏能手动加', async () => {
+  const calls = fresh();
+  Hub.hub.studio = null;
+  const { api, stop } = await openDraft(calls, [A]);
+  try {
+    assert.deepEqual(api.manualKinds, ['text']);
+  } finally { stop(); Hub.hub.studio = []; }
+});
+
+test('手动添加的：行上标「手动」能删——草稿只删本地；已有服务先确认（添加过的写明会撤掉）再删；识别出来的不给删', async () => {
+  let calls = fresh();
+  let m = await openDraft(calls, [A]);
+  try {
+    assert.equal(await m.api.addManual('my/manual-1'), '');
+    await settle();
+    const r = m.api.rows.find((x) => x.id === 'my/manual-1');
+    assert.equal(r.manual, true);
+    assert.equal(m.api.rows.find((x) => x.id === A.id).manual, false);
+    await m.api.delManual('my/manual-1');
+    await settle();
+    assert.ok(!m.api.rows.some((x) => x.id === 'my/manual-1'));
+    assert.equal(m.api.picked.has('my/manual-1'), false);
+  } finally { m.stop(); }
+
+  calls = fresh();
+  const MAN = { id: 'my/manual-2', label: '', kind: 'text', vendor: '', source: 'manual' };
+  const added = { id: MAN.id, kind: 'text', agents: ['claude'], auto: { contextWindow: 200000 }, custom: true, over: { contextWindow: 64000 } };
+  m = await openService(calls, [added], [A, MAN]);
+  try {
+    const r = m.api.rows.find((x) => x.id === MAN.id);
+    assert.equal(r.manual, true);
+    assert.equal(r.custom, true, '改过调用配置的行带标记');
+    assert.equal(r.adv, true);
+    assert.equal(r.ctx, '64K', '上下文按改过的值显示');
+    let asked = null;
+    HS.confirm = async (msg, o) => { asked = [msg, o]; return false; };
+    await m.api.delManual(MAN.id);
+    assert.ok(asked && /Claude/.test(asked[1].detail), '添加过的：确认里写明会从哪里撤掉');
+    assert.equal(calls.filter((c) => c[0] === 'post').length, 0, '取消了就不发');
+    HS.confirm = async () => true;
+    HS.post = async (p, b) => { calls.push(['post', p, b]); Hub.hub.services = [service([])]; return { service: service([]), warnings: [] }; };
+    await m.api.delManual(MAN.id);
+    await settle();
+    assert.deepEqual(calls.filter((c) => c[0] === 'post').map((c) => [c[1], c[2].model]), [['catalog/remove', MAN.id]]);
+    assert.ok(!m.api.rows.some((x) => x.id === MAN.id));
+    await m.api.delManual(A.id);
+    assert.equal(calls.filter((c) => c[0] === 'post').length, 1, '识别出来的不删');
+    // 调用配置：只有已添加的文本模型开得了
+    m.api.openAdv(A.id);
+    assert.equal(m.api.advFor, '');
+  } finally { m.stop(); }
 });

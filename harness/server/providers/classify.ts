@@ -18,6 +18,7 @@ export type ErrorClass =
   | "billing" // 欠费、额度用完——等多久都没用
   | "context_overflow" // 超出模型窗口
   | "request_too_large" // 请求体过大（多半是图片或很长的工具结果）
+  | "image_too_large" // 单张图超了模型的上限（OpenAI 系「rejects images larger than N bytes」）：压小那张图再发
   | "timeout" // 上游 / 网关超时
   | "server" // 其余 5xx
   | "bad_request" // 其余 4xx：请求本身有问题，重试没用
@@ -41,6 +42,7 @@ const SUMMARY: Record<ErrorClass, string> = {
   billing: "账户欠费或额度用完：充值或换一个模型后再试（重试没用）",
   context_overflow: "上下文超出了模型窗口：先压缩再试",
   request_too_large: "请求体过大（多半是图片或很长的工具结果）：先压缩再试",
+  image_too_large: "有张图超过了模型的单张上限：会把图压小后自动重发",
   timeout: "上游或网关超时：会稍后自动重试",
   server: "provider 服务端出错：会稍后自动重试",
   bad_request: "请求被拒绝（参数或模型名不对）：重试没用",
@@ -163,12 +165,17 @@ function done(cls: ErrorClass, upstream?: string): Classified {
   return { class: cls, retriable: RETRIABLE.has(cls), compress: COMPRESS.has(cls), summary: SUMMARY[cls], ...(upstream ? { upstream } : {}) };
 }
 
+// 单张图太大：OpenAI 系「model "gpt-6-astra" rejects images larger than 1048576 bytes」、Anthropic「image exceeds 5 MB maximum」、
+// 「Image size exceeds the limit」之类。整个请求体过大（413 / request_too_large）不算——那个走压缩上下文。
+const IMAGE_TOO_LARGE_RE = /\bimages?\b[^.\n]{0,60}?(?:larger than|exceeds?|too large|too big|over the (?:size )?limit)|(?:图片|图像)[^。\n]{0,20}(?:过大|太大|超过|超出)/i;
+
 // 业务码 / 类型 / 话术能定的先定（不看状态码）；定不了返回 null
 function bySemantics(p: Parsed): ErrorClass | null {
   const code = p.code.toLowerCase();
   const type = p.type.toLowerCase();
   const text = `${p.code} ${p.type} ${p.message}`;
   if (CODE_CLASS[code]) return CODE_CLASS[code];
+  if (IMAGE_TOO_LARGE_RE.test(p.message) && type !== "request_too_large") return "image_too_large";
   // Gemini 的配额用完：按分钟的文案里也写着「check your plan and billing」，只有按天的才算欠费
   // 预付费余额用完也是 RESOURCE_EXHAUSTED（HTTP 402，「Your prepayment credits are depleted」）：等多久都没用
   if (type === "resource_exhausted") return /per ?day|credits? (are |is )?(depleted|exhausted)|prepay/i.test(text) ? "billing" : "rate_limit";

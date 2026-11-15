@@ -54,7 +54,7 @@
   import DevicesSection from './DevicesSection.svelte';
   import AgentKeysSection from './AgentKeysSection.svelte';
   import DimensioSection from './DimensioSection.svelte';   // 设置 › dimensio（数据面 lib/dimensioSettings.svelte.js，与手机共用）
-  import { ds, prefLabel, prefDesc } from '../../lib/dimensioSettings.svelte.js';
+  import { ds, prefLabel, prefDesc, visiblePrefItems, dimReady } from '../../lib/dimensioSettings.svelte.js';
   import AdminAccessSection from './AdminAccessSection.svelte';
   import NotifySection from './NotifySection.svelte';   // 设置 › 通用 › 通知（会话消息通知，数据面 lib/notices.svelte.js）
   import { np } from '../../lib/notices.svelte.js';
@@ -94,12 +94,12 @@
   const SEC_ALIAS = { agents: 'ag-claude', claude: 'ag-claude', connection: 'connect', about: 'connect', feedback: 'help', localpc: 'devices', 'agent-api': 'agentapi',
     'ag-studio': 'studio', media: 'studio', gemini: 'studio', 'ag-gemini': 'studio', vertex: 'studio',
     modelhub: 'model-hub', models: 'model-hub', providers: 'model-hub', cproviders: 'model-hub',
-    dispatch: 'ag-claude#dispatch', 'cl-dispatch': 'ag-claude#dispatch' };
+    dispatch: 'ag-claude#dispatch', 'cl-dispatch': 'ag-claude#dispatch', 'dm-dispatch': 'ag-dimensio#dispatch', 'dimensio-dispatch': 'ag-dimensio#dispatch' };
   // 单页模式（只开着一个 agent、没有主页）也用这一套（2026-10-21 起，原 claude.ai 风那套下线）：
   // 壁纸在那里没意义，藏掉；左上角也不叫「主页」。
   const single = $derived(rootScreen() !== 'home');
   const sec0 = settingsNav.sec || (import.meta.env.DEV && new URLSearchParams(location.search).get('dsec')) || 'general';
-  // 位置 = 分区，或「分区#子页」：Claude 分区里有就地展开的子页（clSub，眼下只有 'dispatch' = 子 agent 调用策略）。
+  // 位置 = 分区，或「分区#子页」：Claude 与 dimensio 分区里有就地展开的子页（clSub，眼下只有 'dispatch' = 子 agent 调用策略，两边各一份）。
   // 子页不另起 sec：侧栏高亮、搜索过滤、「分区被收走就回通用」都按 sec 判，子页只是这个分区正文的另一副样子
   const loc0 = SEC_ALIAS[sec0] || sec0;
   let sec = $state(loc0.split('#')[0]);
@@ -264,7 +264,7 @@
     : sec === 'model-hub' ? t('模型中心')   // 直达时侧栏这一项可能还没出来（数据在路上），标题别先闪成「设置」
     : (NAV_GROUPS.flat().find((n) => n.key === sec)?.label || t('设置')));
   // 工具栏标题：在子页里是子页的名字（头图 / 返回头上仍写分区名 SEC_NAME）
-  const SEC_TITLE = $derived(dpSubOn ? t('子 agent 调用策略') : SEC_NAME);
+  const SEC_TITLE = $derived(subOn ? t('子 agent 调用策略') : SEC_NAME);
 
   // ═══ 导航历史（macOS 系统设置的 ‹ › 操作逻辑）═══
   // 历史里记的是位置（分区，或「分区#子页」）：进子页也算一步，工具栏 ‹ 从子页退回分区、› 再进去
@@ -319,6 +319,7 @@
     { sec: 'ag-claude', id: 'cplan', key: 'planClearContext', label: t('批准计划时可清空上下文'), keys: t('计划 清空上下文 plan clear context') },
     { sec: 'ag-claude', id: 'cqto', key: 'questionTimeout', label: t('Claude 提问无人回答时'), keys: t('提问 超时 question timeout') },
     { sec: 'ag-claude', id: 'clang', key: 'replyLanguage', label: t('回复语言'), keys: t('语言 中文 英文 language') },
+    { sec: 'ag-claude', id: 'ccache', key: 'cacheExpiry', label: t('提示缓存快过期时'), keys: t('提示缓存 缓存 过期 冷 压缩 prompt cache expire') },
     { sec: 'ag-claude', id: 'ccompact', key: 'compactFrac', label: t('自动压缩点'), keys: t('压缩 上下文 auto compact') },
     { sec: 'ag-claude', id: 'cnewsess', key: 'newSessionPolicy', label: t('Claude 发起新会话'), keys: t('新会话 无关任务 unrelated task new session') },
     { sec: 'ag-claude', id: 'cinbound', key: 'crossSessionInbound', label: t('其它会话发来的消息'), keys: t('会话间消息 cross-session messages') },
@@ -371,7 +372,9 @@
     ...(me.kind === 'admin' ? [{ sec: 'ag-dimensio', id: 'dm-mcp', label: t('dimensio 的 MCP 连接器'), keys: t('dimensio mcp 连接器 connector 工具 server') }] : []),
     { sec: 'ag-dimensio', id: 'dm-skills', label: t('dimensio 的技能'), keys: t('dimensio 技能 skill 命令 command') },
     { sec: 'ag-dimensio', id: 'dm-diag', label: t('导出诊断包'), keys: t('dimensio 诊断 导出 日志 diagnostics') },
-    ...(ds.prefs?.items || []).map((p) => ({ sec: 'ag-dimensio', id: 'dp-' + p.key, label: prefLabel(p), keys: prefDesc(p) + ' dimensio' })),
+    ...visiblePrefItems().map((p) => ({ sec: 'ag-dimensio', id: 'dp-' + p.key, label: prefLabel(p), keys: prefDesc(p) + ' dimensio' })),
+    // dimensio 的子 agent 调用策略：就地子页 ag-dimensio#dispatch（读到了 dimensio 的设置才有那一行）
+    { sec: 'ag-dimensio', sub: 'dispatch', id: 'ddispatch', label: t('dimensio 的子 agent 调用策略'), keys: t('dimensio 子 agent 模型 思考深度 effort 性价比 判定线 策略 档位 跟随 Claude 工作流 StartSession dispatch policy') },
     // Media Studio（正文是懒加载的 studio 扩展；id 对应它里面的行，搜索跳过去闪一下）。Gemini 设置分区删了，搜 Gemini / Vertex 落到这里
     { sec: 'studio', id: 'st-import', label: t('一键导入 Vertex'), keys: t('Gemini Vertex Google 云凭据 服务账号 API Key OpenRouter 本机图像模型 导入 import') },
     { sec: 'studio', id: 'st-google', label: t('Google 云凭据'), keys: t('Gemini Vertex Google Cloud 凭据 服务账号 JSON 项目 区域 gcloud ADC credentials') },
@@ -431,6 +434,7 @@
    .filter((e) => e.id !== 'srvaccess' || (spPrefs?.managed && ssCtl))
    .filter((e) => !e.key || visible(e.key))
    .filter((e) => e.id !== 'cdispatch' || dpShown)   // 跟「对话」组里那一行的出现条件一致
+   .filter((e) => e.id !== 'ddispatch' || dimReady())   // 跟 dimensio 分区里那一行的出现条件一致
    .filter((e) => e.sec !== 'policy' || (ags.policyOk && ags.multiUser)));
   const SECNAME = $derived(Object.fromEntries([['account', t('账户')], ...NAV_GROUPS.flat().map((n) => [n.key, n.label])]));
   // 选中的分区被收走（权限 / 扩展探针变化）时回到通用。模型中心例外一段时间：直达它时总览多半还没到，等两边都落定再判
@@ -605,6 +609,9 @@
   // 进 Claude 分区才取状态模块（副标题要读生效策略），点进子页才取正文——设置页首屏不带它们
   const dpShown = $derived(cs.shell || cs.admin);
   const dpSubOn = $derived(sec === 'ag-claude' && clSub === 'dispatch' && dpShown);
+  // dimensio 那份调用策略的就地子页（DimensioSection 里那一行点进来，ag-dimensio#dispatch）：同一份正文，传 dimensio 的状态
+  const dmSubOn = $derived(sec === 'ag-dimensio' && clSub === 'dispatch');
+  const subOn = $derived(dpSubOn || dmSubOn);
   let dpm = $state.raw(null);      // 状态模块（{ dp, loadDispatch, setDispatch, … }）
   const dp = $derived(dpm?.dp || null);
   let dpImp = null;
@@ -639,9 +646,9 @@
   // 正文挂着时把确认函数登记在 dispatch/leaveGuard.js（那个文件不带依赖，静态引它不会把正文的 chunk 带进来），
   // 外壳每条离开子页的路（返回头、Esc、工具栏 ‹ ›、侧栏换分区、搜索跳走、关设置）都先过 dpLeave。没有改动就同步放行
   let dpModal = $state(false), dpAsking = false;
-  $effect(() => { if (!dpSubOn) dpModal = false; });
+  $effect(() => { if (!subOn) dpModal = false; });
   function dpLeave(go) {
-    if (!dpSubOn || !dispatchHasUnsaved()) return go();
+    if (!subOn || !dispatchHasUnsaved()) return go();
     if (dpAsking) return;
     dpAsking = true;
     dispatchLeaveGuard().then((ok) => { dpAsking = false; if (ok) go(); });
@@ -650,7 +657,7 @@
   // 用 $effect.pre：要在正文换掉之前记下滚动位置
   let scrollEl = $state(null), clScrollY = 0, wasCl = false, wasSub = false;
   $effect.pre(() => {
-    const on = dpSubOn, inCl = sec === 'ag-claude';
+    const on = subOn, inCl = sec === 'ag-claude' || sec === 'ag-dimensio';
     untrack(() => {
       if (scrollEl) {
         if (on && !wasSub) clScrollY = wasCl ? scrollEl.scrollTop : 0;   // 搜索 / 外部直达进来的没有「进去前的位置」
@@ -1022,7 +1029,7 @@
     // 模型中心的浮层（App 根上，盖在设置上）开着：它自己登记了返回层就轮不到这里；没登记（还在懒加载）时兜底先关它，别把底下的设置一起关掉
     if (hubUi.sheet) { closeHubSheet(); return; }
     // 就地子页（子 agent 调用策略）开着：先退回 Claude 分区
-    if (dpSubOn && home !== true) { subUp(); return; }
+    if (subOn && home !== true) { subUp(); return; }
     dpLeave(() => {
       ui.homePop++;
       closing = true;
@@ -1041,7 +1048,7 @@
   function onKey(e) {
     if (e.key !== 'Escape' || e.defaultPrevented || hubUi.sheet || stModal || dpModal) return;
     // 子页里正在文本框里写着字（口述备注、策略名）：输入法组字中不动；否则第一下只让它失焦，别一按就把人带出子页
-    if (dpSubOn) {
+    if (subOn) {
       if (e.isComposing) return;
       const a = document.activeElement;
       if (a?.matches?.('textarea, input:not([type]), input[type="text"]') && String(a.value ?? '').trim()) { e.preventDefault(); a.blur(); return; }
@@ -1360,9 +1367,10 @@
         {/await}
       </div>
 
-    {:else if dpSubOn}
-      <!-- 子 agent 调用策略：Claude 分区里就地展开的子页（clSub='dispatch'），整块替换分区正文。返回头归外壳（回 Claude 分区），
-           正文是懒加载的 components/claude/dispatch/DispatchPolicy。内容列比标准的 600 宽（.subw ≤ 920）：性价比图和四档落点要并排摆得开 -->
+    {:else if subOn}
+      <!-- 子 agent 调用策略：Claude / dimensio 分区里就地展开的子页（clSub='dispatch'），整块替换分区正文。返回头归外壳（回所在分区），
+           正文是懒加载的 components/claude/dispatch/DispatchPolicy（dimensio 分区里传 dimensio 那份状态；两边切换时整个重挂）。
+           内容列比标准的 600 宽（.subw ≤ 920）：性价比图和四档落点要并排摆得开 -->
       <div class="subw">
         <div class="subhd">
           <button class="sub-back" onclick={subUp} title={t('返回 (Esc)')}>
@@ -1371,11 +1379,13 @@
           </button>
           <h2>{t('子 agent 调用策略')}</h2>
         </div>
-        {#await import('../../components/claude/dispatch/DispatchPolicy.svelte') then m}
-          <m.default shell="desk" onModal={(v) => { dpModal = !!v; }} />
-        {:catch}
-          <p class="note">{t('调用策略没加载出来：关掉设置再打开试试。')}</p>
-        {/await}
+        {#key dmSubOn}
+          {#await Promise.all([import('../../components/claude/dispatch/DispatchPolicy.svelte'), import('../../lib/dispatchPolicy.svelte.js')]) then [m, st]}
+            <m.default shell="desk" store={dmSubOn ? st.dimDispatch : st.claudeDispatch} onModal={(v) => { dpModal = !!v; }} />
+          {:catch}
+            <p class="note">{t('调用策略没加载出来：关掉设置再打开试试。')}</p>
+          {/await}
+        {/key}
       </div>
 
     {:else if sec.startsWith('ag-')}
@@ -1520,6 +1530,7 @@
           {@render crow('planClearContext', 'cplan')}
           {@render crow('questionTimeout', 'cqto')}
           {@render crow('replyLanguage', 'clang')}
+          {@render crow('cacheExpiry', 'ccache')}
           {@render crow('compactFrac', 'ccompact')}
           <div class="drow cr" class:hl={fl('thinkmark')}>
             <span class="cr-tx"><span class="cr-t">{t('思考动画')}<span class="pill">{t('这台设备')}</span></span></span>
@@ -1610,7 +1621,7 @@
 
       {#if id === 'dimensio'}
         <!-- 管理员：开关关着 / 这台机器跑不起来时不去打 harness（原因在头图下）；成员能看到这一分区就是有权限 -->
-        <DimensioSection {fl} enabled={!a || (a.switch && a.runnable)} openHub={() => navigate('model-hub')} openExt={openExtType} />
+        <DimensioSection {fl} enabled={!a || (a.switch && a.runnable)} openHub={() => navigate('model-hub')} openExt={openExtType} openDispatch={() => navigate('ag-dimensio#dispatch')} />
       {/if}
 
       {#if !a && id !== 'claude' && id !== 'dimensio'}<p class="note">{t('只有管理员能改这里')}</p>{/if}

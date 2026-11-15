@@ -8,6 +8,10 @@
 //   POST /api/model-hub/create   {name?, baseUrl, kind, authStyle?, headers?, useProxy?, key, catalog, assign, media?} → { ok, service, warnings }
 //        （老形状 {…服务, lines, models, agents} 也收：老前端、脚本照常能用）
 //   POST /api/model-hub/assign   {id, changes:[{id, agents}]} → { ok, service, warnings }   agents = 这个模型去向的全集，[] = 移除
+//   POST /api/model-hub/model    {id, model, cacheTtl} → { ok, service }   一个文本模型的提示缓存时长（分钟；0 = 不缓存 / 不提示；null = 自动）
+//   POST /api/model-hub/model/advanced {id, model, over?, params?, cacheTtl?} → { ok, service }   高级调用配置（形状见 runtime/model-hub/advanced.mjs；null = 恢复自动）
+//   POST /api/model-hub/catalog/remove {id, model} → { ok, service, warnings }   删掉一个手动添加的模型（已添加的先撤掉去向）
+//        服务视图里每个文本模型带 cacheTtl?（用户填的）与 cacheAuto: { minutes|null, source }（自动值）
 //   POST /api/model-hub/update   {id, patch}     → { ok, service, warnings }   patch.lines 给了就整表替换（没带 key 的线路沿用存着的）；模型走 assign
 //   POST /api/model-hub/delete   {id}            → { ok, warnings }
 //   POST /api/model-hub/adopt    {from: 'claude' | 'dimensio' | 'studio', id} → { ok, service, warnings }
@@ -21,8 +25,8 @@
 // 出错一律 { error: 人话 } + 状态码（400 输入不对、404 没有这个、413 太大、502 / 504 上游连不上 / 超时）。任何响应都不带 Key。
 import { readBody } from '../runtime/body.mjs';
 import {
-  createHubService, createHubFromDetect, assignHubModels, updateHubV2, deleteHubV2, updateVertex, resetHubLine, lineContext,
-  detectHub, catalogView, catalogAddModel, markMigrated,
+  createHubService, createHubFromDetect, assignHubModels, setHubModelCache, updateHubV2, deleteHubV2, updateVertex, resetHubLine, lineContext,
+  detectHub, catalogView, catalogAddModel, catalogRemoveModel, setHubModelAdvanced, markMigrated,
 } from '../runtime/model-hub/registry.mjs';
 import { adoptClaudeProvider, adoptTextService, adoptStudioProvider, migrateLegacyConfigs } from '../runtime/model-hub/legacy-migrate.mjs';
 import { getModule } from '../modules/registry.mjs';
@@ -87,6 +91,9 @@ export function registerModelHubRoutes(router, { identify }) {
     return { service: createHubService(b), warnings: [] };
   }, 2048 * KB);
   post('/api/model-hub/assign', (b) => assignHubModels(id(b), b.changes));
+  post('/api/model-hub/model', (b) => setHubModelCache(id(b), String(b.model || ''), b.cacheTtl));
+  post('/api/model-hub/model/advanced', (b) => setHubModelAdvanced(id(b), String(b.model || ''), { over: b.over, params: b.params, cacheTtl: b.cacheTtl }));
+  post('/api/model-hub/catalog/remove', (b) => catalogRemoveModel(id(b), String(b.model || '')));
   post('/api/model-hub/update', (b) => updateHubV2(id(b), b.patch || {}));
   post('/api/model-hub/delete', (b) => deleteHubV2(id(b)));
   post('/api/model-hub/vertex', (b) => ({ vertex: updateVertex(b) }));

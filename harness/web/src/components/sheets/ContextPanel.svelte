@@ -5,7 +5,8 @@
   // 立即压缩（较早的对话换成摘要，接着在这里聊）、带摘要开新会话（整段写成摘要带过去，原会话留着）。
   // O8（N39）：下面是这个对话的用量明细——主对话之外，子 agent、工作流里的 agent、压缩各花了多少（打开时现取一次）。
   // 两个动作单飞、运行中不可点；只有做成了才收起面板（没做成由 state 给提示、面板留着）。
-  import { cacheColdMinutes, compactNow, handoffWithSummary, hygieneAvailable, usageLedgerAvailable } from "../../lib/state.svelte.ts";
+  // 项目对话（server/project-mode.ts）：运行设置下面是项目概览（ProjectOverview：讨论串、项目说明、项目记忆）。
+  import { cacheColdMinutes, compactNow, handoffWithSummary, hygieneAvailable, projectModeAvailable, usageLedgerAvailable } from "../../lib/state.svelte.ts";
   import { sessionUsage, type UsageRow } from "../../lib/api.ts";
   import { haptic } from "../../lib/touch.ts";
   import { t, tc } from "../../lib/i18n.ts";
@@ -13,6 +14,7 @@
   import Measure from "../ui/Measure.svelte";
   import Button from "../ui/Button.svelte";
   import RunSettings from "./RunSettings.svelte";
+  import ProjectOverview from "./ProjectOverview.svelte";
   import { usePane } from "../../lib/pane.ts";
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
@@ -78,6 +80,10 @@
 <Popover {anchor} {onclose} prefer="down" align="end" minWidth={minW} maxWidth={maxW} tall role="dialog" label={t("上下文与运行设置")}>
   <div class="cx">
     <RunSettings {onclose} {onlocal} />
+
+    {#if pane.chat.id && pane.chat.shape === "project" && projectModeAvailable()}
+      <ProjectOverview sid={pane.chat.id} {onclose} />
+    {/if}
 
     {#if hasCtx}
     <section class="ctx">

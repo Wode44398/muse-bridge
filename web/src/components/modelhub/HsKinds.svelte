@@ -1,6 +1,7 @@
 <script>
   // 种类分栏：文本 / 图像 / 视频 / 配音 / 音乐。宽屏一条分段控件（滑块按实测段位滑动），窄屏一行横滑胶囊（两端渐隐）。
-  // 数量为 0 的段置灰不可点；有已添加的显示「已添加 / 总数」，没有就只给总数。
+  // 数量为 0 的段置灰不可点——除非这一类能手动添加模型 ID（open 里有它）：识别漏了某一类（比如一个视频模型都没列出来），
+  // 得能点进那一栏去手动加。有已添加的显示「已添加 / 总数」，没有就只给总数。
   import { tick } from 'svelte';
   import HsSeg from './HsSeg.svelte';
   import { KIND_ICON } from './kindIcons.js';
@@ -9,10 +10,14 @@
   import { reduced } from '../../lib/motion.js';
   import { t, tr } from '../../lib/i18n.js';
 
-  // counts: { text: { all, added }, … }；controls：分栏控制的列表 id（aria-controls）
-  let { kind, counts = {}, onpick, narrow = false, controls = '' } = $props();
+  // counts: { text: { all, added }, … }；open：空着也能点进去的种类（能手动添加的）；controls：分栏控制的列表 id（aria-controls）
+  // whyOf：{ 种类: 为什么点不进去 }（置灰的段悬停看原因）
+  let { kind, counts = {}, open = [], whyOf = {}, onpick, narrow = false, controls = '' } = $props();
 
-  const opts = $derived(KINDS.map((k) => ({ value: k, disabled: !(counts[k]?.all > 0) && k !== kind })));
+  const opts = $derived(KINDS.map((k) => {
+    const disabled = !(counts[k]?.all > 0) && k !== kind && !open.includes(k);
+    return { value: k, disabled, title: disabled ? whyOf[k] || '' : '' };
+  }));
   const nameOf = (k) => tr(KIND_NAME[k]);
 
   let pills = $state();
@@ -63,7 +68,7 @@
     {#each KINDS as k, i (k)}
       {@const on = k === kind}
       <button type="button" class="pill" class:on role="tab" aria-selected={on} aria-controls={controls || undefined}
-        tabindex={on ? 0 : -1} disabled={opts[i].disabled} onclick={() => { if (!on) onpick?.(k); }} onkeydown={(e) => pillKey(e, i)}>
+        tabindex={on ? 0 : -1} disabled={opts[i].disabled} title={opts[i].title || undefined} onclick={() => { if (!on) onpick?.(k); }} onkeydown={(e) => pillKey(e, i)}>
         <span class="kic" aria-hidden="true">{@html KIND_ICON[k]}</span>
         <span class="nm">{nameOf(k)}</span>
         {@render num(k, on)}

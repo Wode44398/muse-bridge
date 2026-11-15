@@ -12,7 +12,8 @@
 //     pendingStudioRemovals?: [服务 id]（删服务时 Studio 不在 / 报错、还没删掉的托管服务：Studio 回来后对账时补删）}
 //   服务：{ id: 'h-<8 位>', name, kind（文本接口协议）, baseUrl, authStyle, headers, members（共享给成员，Studio 一侧同步成 shared）,
 //           enabled, strategy, useProxy, timeoutSec, lines: [{ id, label, baseUrl（空 = 用服务的）, enabled }], defaultModel, createdAt, detectedAt?,
-//           models: [{ id, label?, kind, agents, contextWindow?, maxOutput?, vision? }]（只存「已添加」的：没有去向 = 没添加）,
+//           models: [{ id, label?, kind, agents, contextWindow?, maxOutput?, vision?, cacheTtl?, over?, params? }]（只存「已添加」的：没有去向 = 没添加）,
+//           compat?（兼容项覆盖）, retries?（失败重试次数）——over / params / compat 的形状见 advanced.mjs（2026-11-15 高级调用配置）,
 //           studio?: { id: Studio 托管服务的 id, dialect }, studioDirty?: true（媒体部分有改动没同步成：Studio 回来后补推）}
 // v1 → v2：读到 v:1 时在内存里升级（v1 只有文本这一条路：原来填的型号一律按文本、去向 = 原服务级 agents——升级不改变已经发布出去的集合），
 // 第一次升级时把原文件备份成 services.v1.bak.json；下次保存时写 v:2。服务级 agents 不再存，视图里给并集。
@@ -26,12 +27,12 @@ import { DATA_ROOT } from '../paths.mjs';
 import { readJson, writeJson } from '../../jsonfile.mjs';
 import { readSecrets, writeSecrets } from '../../extension-secrets.mjs';
 import { provideModelService, MODEL_AGENTS } from '../model-services.mjs';
-import { guessModel, routeOf, providerOf, vendorOf, MODALITIES } from '../../model-knowledge/index.mjs';
+import { guessModel, routeOf, providerOf, vendorOf, MODALITIES, cacheTtl, cacheTtlNote, normalizeCacheTtl } from '../../model-knowledge/index.mjs';
 import { ensureGateway, gatewayUrl, setServiceResolver, registerUpstream } from './gateway.mjs';
 import { makePoolHandler, lineState, forgetService, clearCooldown, defaultAuthStyle, BAD_KEY_RE, BAD_KEY_MSG } from './pool.mjs';
 import { handleVertex, vertexConfigured, VERTEX_KNOWN_MODELS, VERTEX_DEFAULT_MODELS } from './vertex.mjs';
 import {
-  setCatalogRoot, readCatalog, writeCatalog, mergeCatalog, addCatalogModel, removeCatalog, catalogMeta, cleanCatalogModel, CATALOG_MAX,
+  setCatalogRoot, readCatalog, writeCatalog, mergeCatalog, addCatalogModel, removeCatalogModel, removeCatalog, catalogMeta, cleanCatalogModel, CATALOG_MAX,
   _resetCatalogCacheForTests,
 } from './catalog.mjs';
 import {
@@ -40,6 +41,7 @@ import {
 } from './studio-link.mjs';
 import { detectModels } from './detect.mjs';
 import { NATIVE_VENDOR_IDS, nativeVendor, nativeVendorOf, nativeEndpoint } from '../../model-knowledge/dimensio-native.mjs';
+import { cleanOver, cleanParams, cleanCompat, autoCompat, isCustomized } from './advanced.mjs';
 
 export const HUB_PLUGIN = 'model-hub';
 export const HUB_NAME = '模型中心';
@@ -58,7 +60,7 @@ const TEXT_AGENTS = MODEL_AGENTS;
 const ALL_AGENTS = [...MODEL_AGENTS, 'studio'];   // 视图里去向的顺序固定：claude → dimensio → studio
 const KIND_NAME = { text: '文本', image: '图像', video: '视频', voice: '配音', music: '音乐' };
 // update 收的字段（模型与去向只走 assign：一个入口校验、一个入口同步 Studio）
-const UPDATE_FIELDS = ['name', 'baseUrl', 'enabled', 'strategy', 'useProxy', 'timeoutSec', 'headers', 'lines', 'members', 'authStyle', 'defaultModel'];
+const UPDATE_FIELDS = ['name', 'baseUrl', 'enabled', 'strategy', 'useProxy', 'timeoutSec', 'headers', 'lines', 'members', 'authStyle', 'defaultModel', 'compat', 'retries'];
 // 改了这些要同步给 Studio 的托管服务（名字、地址、Key、启停、请求头、鉴权、共享给成员）
 const STUDIO_FIELDS = ['name', 'baseUrl', 'enabled', 'headers', 'lines', 'authStyle', 'members'];
 
@@ -69,6 +71,8 @@ const newId = (p) => p + randomBytes(4).toString('hex');
 const posInt = (v, lo, hi) => (Number.isFinite(v) && v >= lo && v <= hi ? Math.round(v) : undefined);
 const hostOf = (u) => { try { return new URL(u).host; } catch { return ''; } };
 const short = (id) => String(id).slice(0, 60);
+// 生效的上下文窗口：用户在高级设置里改过的优先（Claude 至少要 4096 也按它判）
+const ctxOf = (m) => m?.over?.contextWindow || m?.contextWindow;
 
 let dirOverride = '';
 const dir = () => dirOverride || path.join(DATA_ROOT, 'model-hub');
@@ -322,13 +326,19 @@ function normalizeModels(v, protocol, { strict = false, dflt = TEXT_AGENTS } = {
     const c = media ? {} : caps(o);
     const explicit = Array.isArray(o.agents);
     // 上下文窗口不够 Claude 用的：明确给了 claude 且 strict 报 400，否则（读盘、v1 升级、老接口的默认去向）静默去掉 claude
-    const agents = cleanAgents(id, kind, explicit ? o.agents : dflt, protocol, { strict: strict && explicit, ctx: c.contextWindow });
+    // 高级调用配置（只有文本模型有）：读盘时坏值静默丢掉
+    const over = media ? undefined : cleanOver(o.over);
+    const params = media ? undefined : cleanParams(o.params);
+    const agents = cleanAgents(id, kind, explicit ? o.agents : dflt, protocol, { strict: strict && explicit, ctx: over?.contextWindow || c.contextWindow });
     if (!agents.length) continue;
     if (media ? nMedia >= MAX_MEDIA : nText >= MAX_TEXT) { if (strict) throw bad(media ? `媒体模型最多 ${MAX_MEDIA} 个` : `文本模型最多 ${MAX_TEXT} 个`); continue; }
     if (media) nMedia += 1; else nText += 1;
     seen.add(id);
     const label = str(o.label, 80);
-    out.push({ id, ...(label && label !== id ? { label } : {}), kind, agents, ...c });
+    // 提示缓存时长（分钟，用户在模型中心填的；0 = 不缓存 / 不提示；没有 = 按知识层自动）。不放进 caps：caps 也用来读目录条目
+    const ttl = media ? undefined : normalizeCacheTtl(o.cacheTtl);
+    out.push({ id, ...(label && label !== id ? { label } : {}), kind, agents, ...c, ...(ttl !== undefined ? { cacheTtl: ttl } : {}),
+      ...(over ? { over } : {}), ...(params ? { params } : {}) });
   }
   return out;
 }
@@ -345,6 +355,18 @@ function newServiceId() {
   let id;
   do id = newId('h-'); while (taken.has(id));
   return id;
+}
+
+function serviceAdv(s, prev, lenient) {
+  const compat = s.compat === null ? undefined : s.compat !== undefined ? cleanCompat(s.compat, { strict: !lenient }) : prev?.compat;
+  let retries = prev?.retries;
+  if (s.retries === null) retries = undefined;
+  else if (s.retries !== undefined) {
+    const n = Number(s.retries);
+    if (Number.isInteger(n) && n >= 0 && n <= 5) retries = n;
+    else if (!lenient) throw bad('失败重试要是 0–5 之间的整数');
+  }
+  return { ...(compat ? { compat } : {}), ...(retries !== undefined ? { retries } : {}) };
 }
 
 // 读盘（lenient）时线路没有 key 字段；用户提交的线路可带 key（新 Key）——收在 normalizeService 的返回值之外（pendingKeys）。
@@ -391,7 +413,9 @@ function normalizeService(input, prev, { lenient = false, strictModels = true, i
     strategy: s.strategy === 'round-robin' || s.strategy === 'failover' ? s.strategy : prev?.strategy || 'failover',
     useProxy: typeof s.useProxy === 'boolean' ? s.useProxy : prev?.useProxy !== false,
     timeoutSec: posInt(s.timeoutSec, 10, 1800) || prev?.timeoutSec || 600,
-    models, defaultModel: pickDefault(models, s.defaultModel ?? prev?.defaultModel), lines,
+    models,
+    // 兼容项与重试（高级设置）：给了 null = 恢复自动；没给 = 沿用
+    ...serviceAdv(s, prev, lenient), defaultModel: pickDefault(models, s.defaultModel ?? prev?.defaultModel), lines,
     createdAt: prev?.createdAt || (lenient && Number.isFinite(s.createdAt) ? s.createdAt : Date.now()),
     ...(detectedAt ? { detectedAt } : {}),
     ...(native ? { native } : {}),
@@ -402,19 +426,44 @@ function normalizeService(input, prev, { lenient = false, strictModels = true, i
   return out;
 }
 
-// —— 给 agent 的型号规格：用户填的优先，没填的按型号知识层（思考档位只来自知识层）——
-function modelSpec(m, protocol, route = '') {
+// —— 给 agent 的型号规格：识别 / 目录填的优先，没填的按型号知识层；高级设置里的覆盖（m.over / m.params）压在最上面 ——
+// auto：不看覆盖的那一份（界面在「自动」后面写出来）
+function autoSpec(m, protocol, route = '') {
   const known = VERTEX_KNOWN_MODELS.find((k) => k.id === m.id);
   const g = guessModel(m.id, { protocol, route });
-  const think = g.thinking && g.thinking !== 'none' && g.efforts?.length
-    ? { thinking: g.thinking, efforts: g.efforts, effortField: g.effortField, effortDefault: g.effortDefault, alwaysThinks: g.alwaysThinks }
-    : {};
+  const thinks = g.thinking && g.thinking !== 'none' && g.efforts?.length;
   return {
-    id: m.id, label: m.label || known?.label || m.id,
     contextWindow: m.contextWindow || known?.contextWindow || g.contextWindow,
     maxOutput: saneMaxOutput(m, g) || known?.maxOutput || g.maxOutput,
     vision: typeof m.vision === 'boolean' ? m.vision : known?.vision ?? g.vision,
+    thinking: thinks ? g.thinking : 'none',
+    efforts: thinks ? g.efforts : [],
+    effortField: thinks ? g.effortField || '' : '',
+    effortDefault: thinks ? g.effortDefault || '' : '',
+    alwaysThinks: !!g.alwaysThinks,
+  };
+}
+function modelSpec(m, protocol, route = '') {
+  const known = VERTEX_KNOWN_MODELS.find((k) => k.id === m.id);
+  const a = autoSpec(m, protocol, route), o = m.over || {};
+  // 思考写法：用户整块覆盖的（含「不思考」）照发；自动且知识层认得它会思考才发（同以前：「总会思考」跟着思考写法一起给）
+  const th = o.think || (a.thinking !== 'none' ? a : null);
+  const think = th && th.thinking !== 'none'
+    ? { thinking: th.thinking, efforts: th.efforts, effortField: th.effortField, effortDefault: th.effortDefault, alwaysThinks: a.alwaysThinks }
+    : o.think ? { thinking: 'none', efforts: [] } : {};
+  if (typeof o.alwaysThinks === 'boolean') think.alwaysThinks = o.alwaysThinks;
+  const contextWindow = o.contextWindow || a.contextWindow;
+  return {
+    id: m.id, label: m.label || known?.label || m.id,
+    contextWindow,
+    // 用户改小了窗口：自动的输出上限跟着夹到窗口以内（没改窗口时照旧，不动已经发布出去的规格）
+    maxOutput: o.maxOutput || (o.contextWindow ? Math.min(a.maxOutput, contextWindow) : a.maxOutput),
+    vision: typeof o.vision === 'boolean' ? o.vision : a.vision,
     ...think,
+    // 只传用户填的；自动值由两边各自按自己的请求算（官方 Anthropic 主会话要 1 小时，见 model-knowledge/cache-ttl.mjs）
+    ...(m.cacheTtl !== undefined ? { cacheTtl: m.cacheTtl } : {}),
+    // 调用参数（形状同 Claude 外接服务的模型级 params）：Claude 的代理与 dimensio 的适配器各自认
+    ...(m.params ? { params: { ...m.params } } : {}),
   };
 }
 
@@ -471,13 +520,14 @@ function desiredSpecs() {
     }
     const upstream = upstreamHostOf(s);
     const route = routeOf(upstream);
-    // 上游就是官方 Anthropic：和官方预设一样开提示缓存、不精简请求体、转发 beta 头
+    // 上游就是官方 Anthropic：和官方预设一样开提示缓存、不精简请求体、转发 beta 头；用户在高级设置里改过的压在上面
     const official = s.kind === 'anthropic' && upstream === 'api.anthropic.com';
+    const compat = { ...(official ? { promptCaching: true, slimBody: false, stripBetas: false } : {}), ...(s.compat || {}) };
     // 服务级 agents = 各模型去向的并集（model-services 按它取交集）；模型级 agents 决定每个 agent 看到哪几个
     out.set(s.id, {
       // 这两个键每次都给全：已登记的服务是把新规格合并到旧规格上，不给就会留着旧值（改了地址、加了混挂线路之后还按官方处理）
       upstream,
-      compat: official ? { promptCaching: true, slimBody: false, stripBetas: false } : {},
+      compat, retries: s.retries ?? null,
       id: s.id, name: s.name, protocol: s.kind, baseUrl: gatewayUrl(s.id, s.kind), authStyle: 'none',
       agents: TEXT_AGENTS.filter((a) => texts.some((m) => m.agents.includes(a))), members: s.members,
       models: texts.map((m) => ({ ...modelSpec(m, s.kind, route), agents: [...m.agents] })),   // 不带 kind：Claude 的 normalizeModel 不认它
@@ -567,10 +617,10 @@ function applyAssign(s, changes, catOf, catMedia) {
     const kind = cat && cat.kind !== 'other' ? cat.kind : old ? old.kind : 'other';
     if (kind === 'other') throw bad(`「${short(id)}」是向量 / 识别一类的模型，不能添加`);
     // 上下文窗口：已添加的按它自己记的，新加的按目录（Claude 至少要 4096）
-    const ctx = kind === 'text' ? (old ? old.contextWindow : caps(cat).contextWindow) : undefined;
+    const ctx = kind === 'text' ? (old ? ctxOf(old) : caps(cat).contextWindow) : undefined;
     const agents = cleanAgents(id, kind, c.agents.map(String), s.kind, { strict: true, mediaKinds, ctx });
     const base = old ? { ...old } : { id, ...(cat.label && cat.label !== id ? { label: cat.label } : {}), ...(kind === 'text' ? caps(cat) : {}) };
-    if (kind !== 'text') { delete base.contextWindow; delete base.maxOutput; delete base.vision; }
+    if (kind !== 'text') { delete base.contextWindow; delete base.maxOutput; delete base.vision; delete base.over; delete base.params; delete base.cacheTtl; }
     cur.set(id, { ...base, kind, agents });
   }
   const out = [...cur.values()];
@@ -651,7 +701,7 @@ function legacyModels(s, p, cat) {
     if (m.kind !== 'text') continue;
     if (given && !given.has(m.id)) { changes.push({ id: m.id, agents: [] }); continue; }
     const next = TEXT_AGENTS.filter((a) => (m.agents.includes(a) && !drop.includes(a)) || add.includes(a));
-    changes.push({ id: m.id, agents: cleanAgents(m.id, 'text', next, s.kind, { strict: false, ctx: m.contextWindow }) });
+    changes.push({ id: m.id, agents: cleanAgents(m.id, 'text', next, s.kind, { strict: false, ctx: ctxOf(m) }) });
   }
   for (const [id, o] of given || []) {
     if (base.some((m) => m.id === id)) continue;
@@ -777,20 +827,98 @@ function serviceView(s, sec = secrets()) {
   const brand = providerOf(s.baseUrl);
   let media = null;
   try { media = mediaInfo(s, meta.media, k); } catch (e) { console.error('[model-hub] 媒体接口信息算不出来：', e?.message || e); }
+  const upstream = upstreamHostOf(s), route = routeOf(upstream);
+  const official = s.kind === 'anthropic' && upstream === 'api.anthropic.com';
   return {
     id: s.id, name: s.name, kind: s.kind, baseUrl: s.baseUrl, host: hostOf(s.baseUrl),
+    // 高级设置：兼容项（compat 是用户改过的那几项，compatAuto 是不改时的值）、失败重试（retries 没有 = 1）
+    compat: s.compat || {}, compatAuto: autoCompat({ official }), retries: s.retries ?? null,
     brand: brand ? { key: brand.key, name: brand.name, logo: brand.logo } : null,
     authStyle: s.authStyle, headers: s.headers, enabled: s.enabled, members: s.members, strategy: s.strategy, useProxy: s.useProxy, timeoutSec: s.timeoutSec,
     lines: s.lines.map((l) => { const key = k(s.id, l.id); return { ...l, hasKey: !!key, keyTail: tail(key), state: lineState(s.id, l.id) }; }),
-    models: s.models.map((m) => ({ ...m, agents: [...m.agents], vendor: vendorOf(m.id) || '' })),
+    models: s.models.map((m) => ({ ...m, agents: [...m.agents], vendor: vendorOf(m.id) || '', ...(m.kind === 'text' ? textExtras(s, m, route) : {}) })),
     counts,
     agents: ALL_AGENTS.filter((a) => s.models.some((m) => m.agents.includes(a))),
     defaultModel: s.defaultModel, createdAt: s.createdAt,
     detectedAt: s.detectedAt || 0, catalogSize: meta.size, media,
     native: s.native || '',
+    // dimensio 那边走自带适配直连这家（不登记成卡）：高级设置里只有上下文 / 输出上限 / 识图 / 缓存对 dimensio 生效
+    dimNative: !!s.native && hubFlag('dimensioNative') && load().services.find((x) => x.native === s.native && x.enabled)?.id === s.id,
     published: handles.has(s.id),
   };
 }
+// 文本模型视图里多给的：提示缓存自动值、高级设置的自动值（auto）与生效值（eff）、改没改过（custom）
+function textExtras(s, m, route) {
+  const eff = modelSpec(m, s.kind, route);
+  return {
+    cacheAuto: autoCache(s, m.id),
+    auto: autoSpec(m, s.kind, route),
+    eff: {
+      contextWindow: eff.contextWindow, maxOutput: eff.maxOutput, vision: eff.vision, alwaysThinks: !!eff.alwaysThinks,
+      thinking: eff.thinking || 'none', efforts: eff.efforts || [], effortField: eff.effortField || '', effortDefault: eff.effortDefault || '',
+    },
+    custom: isCustomized(m),
+  };
+}
+// 文本模型的提示缓存自动值（界面在「自动」后面写出来）：上游是官方 Anthropic 且开着提示缓存 → 两边都要 1 小时；其余按上游主机 / 型号认厂商
+function autoCache(s, modelId) {
+  const upstream = upstreamHostOf(s);
+  const official = s.kind === 'anthropic' && upstream === 'api.anthropic.com';
+  const opts = { host: upstream, requestMinutes: official ? 60 : undefined };
+  const r = cacheTtl(modelId, opts);
+  return { minutes: r.minutes, source: r.source, note: cacheTtlNote(modelId, opts) };
+}
+
+/** 改一个文本模型的提示缓存时长（POST /model）。cacheTtl：分钟，0 = 不缓存 / 不提示，null = 自动。→ { service } */
+export function setHubModelCache(id, modelId, value) {
+  const s = findService(id);
+  const m = s.models.find((x) => x.id === modelId);
+  if (!m) throw Object.assign(new Error('这个服务里没有这个模型'), { status: 404 });
+  if (m.kind !== 'text') throw bad('只有文本模型有提示缓存');
+  if (value === null || value === undefined) delete m.cacheTtl;
+  else {
+    const v = normalizeCacheTtl(value);
+    if (v === undefined) throw bad('缓存时长要是 0 到 1440 分钟');
+    m.cacheTtl = v;
+  }
+  save(); publish(); notify();
+  return { service: serviceView(s) };
+}
+
+/**
+ * 改一个文本模型的高级调用配置（POST /model/advanced）→ { service }。
+ * over / params 给了就整块替换（null = 恢复自动）；没给的不动。cacheTtl 同 setHubModelCache（给了才改）。
+ * 上下文窗口改到 4096 以下而这个模型给着 Claude：400（Claude 用不了，先在去向里去掉 Claude）。
+ */
+export function setHubModelAdvanced(id, modelId, { over, params, cacheTtl } = {}) {
+  const s = findService(id);
+  const m = s.models.find((x) => x.id === modelId);
+  if (!m) throw Object.assign(new Error('这个服务里没有这个模型'), { status: 404 });
+  if (m.kind !== 'text') throw bad('只有文本模型有高级调用配置');
+  const next = { ...m };
+  if (over !== undefined) {
+    const o = over === null ? undefined : cleanOver(over, { strict: true });
+    if (o) next.over = o; else delete next.over;
+  }
+  if (params !== undefined) {
+    const p = params === null ? undefined : cleanParams(params, { strict: true });
+    if (p) next.params = p; else delete next.params;
+  }
+  if (cacheTtl !== undefined) {
+    if (cacheTtl === null) delete next.cacheTtl;
+    else {
+      const v = normalizeCacheTtl(cacheTtl);
+      if (v === undefined) throw bad('缓存时长要是 0 到 1440 分钟');
+      next.cacheTtl = v;
+    }
+  }
+  if (next.agents.includes('claude') && ctxOf(next) < CLAUDE_MIN_CTX) throw bad('上下文窗口不到 4096，Claude 用不了');
+  Object.keys(m).forEach((k) => delete m[k]);
+  Object.assign(m, next);
+  save(); publish(); notify();
+  return { service: serviceView(s) };
+}
+
 export function listHubServices() { const sec = secrets(); return load().services.map((s) => serviceView(s, sec)); }
 export function getHubService(id) { const s = load().services.find((x) => x.id === id); return s ? serviceView(s) : null; }
 export function vertexView() {
@@ -1078,7 +1206,7 @@ export function absorbTextModels(id, models, { parked = [], defaultModel } = {})
     const label = str(m0.label, 80);
     given.set(idm, { id: idm, ...(label && label !== idm ? { label } : {}), kind: 'text', ...caps(m0) });
     const want = [...new Set([...(old?.agents || []), ...TEXT_AGENTS])];
-    const agents = cleanAgents(idm, 'text', want, s.kind, { strict: false, ctx: old ? old.contextWindow : caps(m0).contextWindow });
+    const agents = cleanAgents(idm, 'text', want, s.kind, { strict: false, ctx: old ? ctxOf(old) : caps(m0).contextWindow });
     if (agents.length) changes.push({ id: idm, agents });
   }
   const catMap = new Map(cat.models.map((m) => [m.id, m]));
@@ -1146,6 +1274,25 @@ export function catalogAddModel(id, model) {
   const m = addCatalogModel(s.id, model, { protocol: s.kind });
   notify();
   return { model: m };
+}
+
+/**
+ * 删掉一个手动添加的模型（契约 POST /catalog/remove）→ { service }：只认目录里 source 为 manual 的（识别出来的下次识别还会回来，删了没意义），
+ * 以及已添加却不在目录里的（老配置迁来的，视图里也标着手动）。已添加的先撤掉全部去向（媒体模型照常同步 Studio），再删目录项。
+ */
+export function catalogRemoveModel(id, modelId) {
+  const s = findService(id);
+  const mid = str(modelId, 200);
+  const c = readCatalog(s.id);
+  const entry = c.models.find((m) => m.id === mid);
+  const added = s.models.some((m) => m.id === mid);
+  if (entry ? entry.source !== 'manual' : !added) throw bad(entry ? '只能删除手动添加的模型' : '目录里没有这个模型');
+  let warnings = [];
+  if (added) warnings = assignHubModels(s.id, [{ id: mid, agents: [] }]).warnings || [];
+  // 撤去向时 assign 会把不在目录里的当手动项留进目录：这里一律删掉
+  removeCatalogModel(s.id, mid);
+  notify();
+  return { service: serviceView(findService(id)), warnings };
 }
 
 export function resetHubLine(id, lineId) { clearCooldown(id, lineId); return getHubService(id); }

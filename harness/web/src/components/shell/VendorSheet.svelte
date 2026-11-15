@@ -408,7 +408,7 @@
     grid-auto-rows: 1fr; /* 「＋」卡独占一行时也和别的卡一样高 */
     gap: 10px;
   }
-  @media (min-width: 700px) {
+  @media (min-width: 700px), (min-width: 600px) and (min-device-aspect-ratio: 7/10) {
     .tiles {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }

@@ -191,6 +191,22 @@ S({ id: 'v3-seedance', title: 'Seedance 参考生视频：参考图 + 参考视�
 S({ id: 'v3-seedance-params', title: 'Seedance 参数（时长长枚举、任务、草稿）滚到底', run: `await __qa.reset({ assets: __qa.history(), page: 'video' }); ${SIDE_CLOSE} await __qa.go('video'); await __qa.v3('video', 'seedance'); ${OPEN_PARAMS} ${SCROLL_END}`, cleanup: V3_END });
 S({ id: 'v3-tts', title: 'fal ElevenLabs v4：输出格式 19 项、音色 21 项', run: `await __qa.reset({ assets: __qa.history(), page: 'voice' }); ${SIDE_CLOSE} await __qa.go('voice'); await __qa.v3('voice', 'eleven-v4'); ${OPEN_PARAMS}`, cleanup: V3_END });
 S({ id: 'v3-generic', title: '通用卡（只有原始参数）', run: `await __qa.reset({ assets: __qa.history(), page: 'video' }); ${SIDE_CLOSE} await __qa.go('video'); await __qa.v3('video', 'unknown-video'); ${OPEN_PARAMS}`, cleanup: V3_END });
+// —— 尺寸参数（方案 §10，2026-11-15）：自由尺寸（没有比例）、预设菜单 +「自定义」、宽 × 高、不合规标红、原图（挂了改图素材）、值芯片、拆字段卡 ——
+const SIZE_END = `__qa.restoreCatalog(); __qa.m.studio.drafts.image.params = {}; __qa.m.studio.drafts.image.inputs = [];`;
+const SIZE_EDIT = `await __qa.sleep(300); __qa.m.addInput('image', { role: 'edit', url: __qa.svg('原图', 1920, 1080), name: 'IMG_20261115_0930.jpg', kind: 'image', upload: 'x.jpg', w: 1920, h: 1080 }); await __qa.sleep(600);`;
+// 机器忙时参数面板偶尔没打开（点「参数」时布局还在因挂素材变化）：等不到尺寸行就再开一次
+const SIZE_MENU = `{ const q = '.studio-root .pl-r[data-param="size"] .pl-sel';
+  try { await __qa.until(() => __qa.find(q), 6000, q); } catch { ${OPEN_PARAMS} }
+  await __qa.click(q); await __qa.sleep(450); }`;
+S({ id: 'size-flex', title: '自由尺寸模型的参数（尺寸 = 自动，没有比例）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex'); await __qa.sleep(300); ${OPEN_PARAMS}`, cleanup: SIZE_END });
+S({ id: 'size-menu', title: '尺寸菜单：自动 / 预设（行尾比例）/ 自定义', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex'); await __qa.sleep(300); ${OPEN_PARAMS} ${SIZE_MENU}`, cleanup: SIZE_END });
+S({ id: 'size-original-menu', title: '挂了改图素材：尺寸默认「原图」，菜单里有原图', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex'); ${SIZE_EDIT} ${OPEN_PARAMS} ${SIZE_MENU}`, cleanup: SIZE_END });
+S({ id: 'size-custom', title: '自定义宽 × 高（合规）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex', { width: 2048, height: 1152 }); await __qa.sleep(300); ${OPEN_PARAMS}`, cleanup: SIZE_END });
+S({ id: 'size-custom-bad', title: '自定义宽 × 高不合规：两框描红 + 一行红字', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('flex', { width: 3999, height: 1001 }); await __qa.sleep(300); ${OPEN_PARAMS}`, cleanup: SIZE_END });
+S({ id: 'size-chips', title: '值芯片：自定义尺寸（桌面先收起参数坞）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} __qa.m.studio.side.dock = false; await __qa.go('image'); __qa.sizeModel('flex', { width: 3840, height: 2160 }); await __qa.sleep(400);`, cleanup: SIZE_END });
+S({ id: 'size-chip-pop', title: '点尺寸芯片：单项浮层里的尺寸行 + 宽 × 高（桌面先收起参数坞）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} __qa.m.studio.side.dock = false; await __qa.go('image'); __qa.sizeModel('flex', { width: 1600, height: 896 }); await __qa.sleep(400);
+  const chip = [...document.querySelectorAll('.sd-page.on .cp-chips > *')].find((x) => /1600/.test(x.textContent)); if (chip) { chip.click(); await __qa.sleep(550); }`, cleanup: SIZE_END });
+S({ id: 'size-split', title: '拆字段卡：比例选 custom 才出宽 × 高（没有档位）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); __qa.sizeModel('split'); await __qa.sleep(300); ${OPEN_PARAMS}`, cleanup: SIZE_END });
 S({ id: 'v3-shelf-picked', title: '选了一个备选模型（按需取回完整卡）', run: `await __qa.reset({ assets: __qa.history() }); ${SIDE_CLOSE} await __qa.go('image'); await __qa.v3('image');
   const g = __qa.m.studio.catalog.kinds.image.groups.find((x) => (x.shelf || []).length); const sm = g.shelf[0];
   __qa.m.studio.resolved = { [sm.key]: { ...sm, shelf: undefined, inputs: { text: true }, paramSource: 'schema', params: g.models.find((m) => (m.params || []).length > 3)?.params || [] } };

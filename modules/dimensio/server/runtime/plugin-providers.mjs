@@ -20,6 +20,8 @@ export function toHarnessProvider(s) {
     ...(Number.isFinite(m.contextWindow) ? { contextWindow: m.contextWindow } : {}),
     ...(Number.isFinite(m.maxOutput) ? { maxOutput: m.maxOutput } : {}),
     ...(typeof m.vision === 'boolean' ? { vision: m.vision } : {}),
+    ...(Number.isFinite(m.cacheTtl) ? { cacheTtl: m.cacheTtl } : {}),   // 用户在模型中心填的提示缓存时长（分钟）
+    ...(m.params && typeof m.params === 'object' ? { params: m.params } : {}),   // 模型中心的高级调用配置：温度、停止序列、额外请求体…
     ...(Array.isArray(m.efforts) && m.efforts.length
       ? { thinking: m.thinking || 'effort', efforts: m.efforts, effortField: m.effortField || '', effortDefault: m.effortDefault || '', alwaysThinks: m.alwaysThinks === true }
       : typeof m.thinking === 'string' ? { thinking: m.thinking } : {}),
@@ -43,6 +45,17 @@ export function toHarnessProvider(s) {
     ...(s.upstream ? { upstream: s.upstream } : {}),
     // 上游是官方 Anthropic：提示缓存照开（harness 没说就按地址主机名判，网关地址会判成关）
     ...(s.upstream === 'api.anthropic.com' && s.protocol === 'anthropic' ? { promptCaching: true } : {}),
+    // 模型中心高级设置里改过的兼容项（dimensio 认这三项）：压在上面的自动值上
+    ...harnessCompat(s.compat),
+  };
+}
+
+function harnessCompat(c) {
+  if (!c || typeof c !== 'object') return {};
+  return {
+    ...(typeof c.promptCaching === 'boolean' ? { promptCaching: c.promptCaching } : {}),
+    ...(typeof c.replayReasoning === 'boolean' ? { replayReasoning: c.replayReasoning } : {}),
+    ...(c.maxTokensField === 'max_tokens' || c.maxTokensField === 'max_completion_tokens' ? { maxTokensField: c.maxTokensField } : {}),
   };
 }
 
@@ -65,6 +78,7 @@ export function splitNative(services) {
         ...(Number.isFinite(m.contextWindow) ? { contextWindow: m.contextWindow } : {}),
         ...(Number.isFinite(m.maxOutput) ? { maxOutput: m.maxOutput } : {}),
         ...(typeof m.vision === 'boolean' ? { vision: m.vision } : {}),
+        ...(Number.isFinite(m.cacheTtl) ? { cacheTtl: m.cacheTtl } : {}),
       })),
       ...(s.members ? { shared: true } : {}),
     };

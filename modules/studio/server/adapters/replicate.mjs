@@ -36,6 +36,7 @@
 
 import { http, authHeaders, joinUrl, download, guessMime, dataUrl, poll, AdapterError } from './http.mjs';
 import { P, opts, genericCard } from '../cards/spec.mjs';
+import { encodeSizeParams } from '../cards/size.mjs';
 import { registerDialectCards, dialectCards } from '../cards/dialects.mjs';
 
 const DEFAULT_TIMEOUT_SEC = 600;
@@ -138,7 +139,9 @@ function buildInput(req, card) {
   const generic = !!card.generic;
   const wire = card.wire || {};
   const body = {};
-  for (const [k, v] of Object.entries(req.params || {})) {
+  // 尺寸参数（方案 §10）：自由宽高按卡上的 encode 编码（拆成 width + height 等），auto 不传
+  const sized = generic ? (req.params || {}) : encodeSizeParams(card.params, req.params || {}, req).params;
+  for (const [k, v] of Object.entries(sized)) {
     if (k === 'extra' || v === undefined || v === null) continue;
     if (!generic) body[k] = v;
     else if (k === 'aspectRatio') { if (v !== 'auto') body.aspect_ratio = v; }   // 通用卡的「自动」不是 Replicate 的值，不传
@@ -404,8 +407,10 @@ export const CARDS = {
     wire: { images: { edit: { field: 'input_images', list: true }, ref: { field: 'input_images', list: true } } },
     params: [
       P.enum('aspect_ratio', '比例', opts(['1:1', '16:9', '3:2', '2:3', '4:5', '5:4', '9:16', '3:4', '4:3', 'match_input_image', 'custom']), { group: 'basic', default: '1:1', desc: 'match_input_image 跟随第一张参考图' }),
-      P.num('width', '宽', 256, 2048, { step: 16, integer: true, when: { aspect_ratio: 'custom' }, desc: '16 的倍数（不是会自动取整）' }),
-      P.num('height', '高', 256, 2048, { step: 16, integer: true, when: { aspect_ratio: 'custom' }, desc: '16 的倍数（不是会自动取整）' }),
+      // 自定义比例时的宽高（256–2048、16 的倍数，不是会被上游取整）：一个尺寸参数，请求时拆回 width / height
+      P.size('width_height', '尺寸', [], { default: { width: 1024, height: 1024 }, when: { aspect_ratio: 'custom' },
+        custom: { width: { min: 256, max: 2048, multipleOf: 16 }, height: { min: 256, max: 2048, multipleOf: 16 }, exact: false },
+        encode: 'split', fields: { width: 'width', height: 'height' } }),
       P.enum('resolution', '分辨率（百万像素）', opts(['match_input_image', '0.5 MP', '1 MP', '2 MP', '4 MP']), { group: 'basic', default: '1 MP', desc: '2 MP 以内推荐；custom 比例下不生效' }),
       P.enum('output_format', '格式', opts(['webp', 'jpg', 'png']), { default: 'webp' }),
       P.num('output_quality', '质量', 0, 100, { step: 1, integer: true, default: 80 }),

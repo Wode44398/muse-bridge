@@ -1,7 +1,7 @@
 <script>
   // 小菜单（新建策略、把图上的点设为某档的指定模型）：挪到 body 上的 fixed 浮层，贴着一个点或一个矩形展开。
   // 外观跟输入栏的模型菜单是一家（同一组全局令牌 --q-card / --q-shadow / --text / --muted），不依赖设置外壳的令牌。
-  // items: [{ label, sub?, color?（档色小方块：要给具体色值，这里读不到子页根上的 --dp-t-*）, disabled?, onclick }]；
+  // items: [{ label, sub?, color?（档色小方块：要给具体色值，这里读不到子页根上的 --dp-t-*）, disabled?, checked?（单选菜单的当前项：行尾一个勾）, onclick }]；
   // at: { x, y } 或 { rect }（视口坐标）。
   import { pushBackLayer } from '../../../lib/nav.js';
   import { portal, escLayer, fitPopover } from './dpDom.js';
@@ -40,10 +40,12 @@
   <div class="dpm" role="menu" tabindex="-1" bind:this={menu} use:fitPopover={at} onkeydown={key}>
     {#if title}<div class="dpm-title">{title}</div>{/if}
     {#each items as it, i (i)}
-      <button type="button" class="dpm-row" role="menuitem" disabled={it.disabled} onclick={() => run(it)}>
+      <button type="button" class="dpm-row" role={it.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked={it.checked === undefined ? undefined : !!it.checked}
+        disabled={it.disabled} onclick={() => run(it)}>
         {#if it.color}<span class="dpm-sw" style:background={it.color} aria-hidden="true"></span>{/if}
         <span class="dpm-name">{it.label}</span>
         {#if it.sub}<span class="dpm-sub">{it.sub}</span>{/if}
+        {#if it.checked !== undefined}<span class="dpm-ck" class:on={it.checked} aria-hidden="true"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.2 5 8.6l4.5-5"/></svg></span>{/if}
       </button>
     {/each}
   </div>
@@ -70,6 +72,9 @@
   .dpm-sw { flex: none; width: 9px; height: 9px; border-radius: 2.5px; }
   .dpm-name { flex: 1; min-width: 0; font-size: 13.5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .dpm-sub { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .dpm-ck { flex: none; width: 12px; height: 12px; display: grid; place-items: center; color: var(--text); visibility: hidden; }
+  .dpm-ck.on { visibility: visible; }
+  .dpm-ck svg { width: 12px; height: 12px; }
   /* 触屏：行高放到 40、字号 15（手指点得准） */
   @media (pointer: coarse) { .dpm-row { min-height: 40px; } .dpm-name { font-size: 15px; } .dpm-sub { font-size: 13px; } }
   @media (prefers-reduced-motion: reduce) { .dpm { animation: none; } }

@@ -6,9 +6,8 @@
   import { t, tc, tr } from '../../../lib/i18n.js';
   import { openPreview, vertexAssetItem as vxItem } from '../../../lib/preview.svelte.js';
   import { dragOut, canDragOut } from '../../../lib/dragOut.js';
-  import { studio, mediaSrc, assetDragSrc, newImageThread, openAsset, currentModel, valuesOf, retryJob } from '../../../modules/studio/media.svelte.js';
+  import { studio, mediaSrc, assetDragSrc, openAsset, currentModel, valuesOf, retryJob } from '../../../modules/studio/media.svelte.js';
   import { assetDrag } from '../../../modules/studio/assetDrag.js';
-  import { icon } from '../../../modules/studio/icons.js';
   import CreateFrame from '../CreateFrame.svelte';
   import Empty from '../ui/Empty.svelte';
   import Img from '../ui/Img.svelte';
@@ -69,10 +68,8 @@
         </div>
       {/if}
     {:else}
-      <div class="ch-head">
-        <span class="mono">{rounds > 1 ? t('续改 {n} 轮', { n: rounds }) : ''}</span>
-        <button class="tbtn" onclick={newImageThread}>{@html icon('plus')}{t('新的一张')}</button>
-      </div>
+      <!-- 「新的一张」在外壳顶栏右侧（和任务 / 参数 / 设置并排），滚到哪都点得到；这里只留轮数 -->
+      {#if rounds > 1}<div class="ch-head"><span class="mono">{t('续改 {n} 轮', { n: rounds })}</span></div>{/if}
       <div class="ch-list">
         {#each v.turns as turn, i (i)}
           {#if turn.prompt || turn.srcUrl}

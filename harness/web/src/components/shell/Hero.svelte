@@ -128,7 +128,7 @@
       background: color-mix(in srgb, var(--err) 14%, transparent);
     }
   }
-  @media (max-width: 699px) {
+  @media (max-width: 599px), (max-width: 699px) and (max-device-aspect-ratio: 699/1000) {
     .hero {
       padding-bottom: 4vh;
     }

@@ -96,7 +96,8 @@ export interface TimelineModel {
   running: boolean;
   activity: string;
   usage: { inTok: number; outTok: number };
-  ctx: { used: number; limit: number };
+  // cacheTtlMs：服务端算好的提示缓存寿命（0 = 没有会过期的缓存；undefined = 老服务端没给，前端按厂商兜底）
+  ctx: { used: number; limit: number; cacheTtlMs?: number };
   preview: { url: string; serviceId: string; publicUrl?: string } | null;
   cfg: any;
   away: boolean;
@@ -814,7 +815,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       if (m.preview?.serviceId === ev.serviceId) m.preview = null;
       break;
     case "browser":
-      // agent 的浏览器动了 —— 共享浏览器是全局单例，数据全局记；面板自动展开只给前台。
+      // agent 的浏览器动了 —— 记不记由 setBrowser 定（按会话各开一份时只记前台会话的）；面板自动展开只给前台。
       // edge = 动的是用户自己的 Edge / Chrome（经扩展）：用户就在那个窗口里看着，再把内置浏览器面板拉出来只是挡视线（10-20 维护者报的 bug）
       fx.setBrowser(ev.url);
       if (fx.foreground && !ev.edge) fx.openBrowserPane();
@@ -826,7 +827,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
       m.usage = { inTok: ev.totalInputTokens, outTok: ev.totalOutputTokens };
       break;
     case "context":
-      m.ctx = { used: ev.usedTokens, limit: ev.limitTokens };
+      m.ctx = { used: ev.usedTokens, limit: ev.limitTokens, cacheTtlMs: typeof ev.cacheTtlMs === "number" ? ev.cacheTtlMs : m.ctx?.cacheTtlMs };
       if (ev.compacted) pushItem(m, { kind: "notice", text: t("上下文已压缩") });
       if (m.running && m.activity === ACTIVITY_COMPACTING) m.activity = t("思考中"); // U3：整理完了
       // R3：连接失败时服务端在等网络 / 本机模型加载，不是卡死；停止键照常有效。

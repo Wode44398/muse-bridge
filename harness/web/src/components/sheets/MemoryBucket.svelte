@@ -595,7 +595,7 @@
   }
 
   /* 手机：时间线挪到说明下面，与正文同宽；尺也只占正文那一列 */
-  @media (max-width: 699px) {
+  @media (max-width: 599px), (max-width: 699px) and (max-device-aspect-ratio: 699/1000) {
     .axisrow,
     .head {
       grid-template-columns: minmax(0, 1fr) 16px;

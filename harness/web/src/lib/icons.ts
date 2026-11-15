@@ -173,6 +173,12 @@ export const TOOL_META: Record<string, { icon: IconName; verb: string }> = {
   SendMessage: { icon: "send", verb: t("给会话发消息") },
   ListSessions: { icon: "listIcon", verb: t("查看相关会话") },
   ReadSession: { icon: "read", verb: t("读会话回复") },
+  // 项目对话（server/tools/sessions.ts 的协调者三件、server/tools/project.ts 的项目记忆）
+  StopSession: { icon: "stop", verb: t("停下讨论串") },
+  MarkResolved: { icon: "checkCircle", verb: t("标为已解决") },
+  ProjectMemoryRead: { icon: "memory", verb: t("读项目记忆") },
+  ProjectMemoryWrite: { icon: "memory", verb: t("写项目记忆") },
+  ProjectMemoryDelete: { icon: "memory", verb: t("删项目记忆") },
 };
 export const toolMeta = (name: string): { icon: IconName; verb: string } => {
   const hit = TOOL_META[name];

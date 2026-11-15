@@ -3,7 +3,7 @@
 import { defineGroup, defineOp, OpError } from '../registry.mjs';
 import { internalRequest, routeError } from '../internal.mjs';
 
-defineGroup('routines', '定时任务', '到点让 Claude 无人值守跑的任务。');
+defineGroup('routines', '定时任务', '到点让 Claude 无人值守跑的任务（列表里也有在定时任务页里建的 dimensio 任务，engine 标着）。');
 
 const SCHEDULE_DESC = '{ type, …该类型的字段 }：daily（每天，hour + minute）| weekdays（工作日，hour + minute）| weekly（每周，days: [0=周日…6=周六] + hour + minute）| hourly（每小时，只有 minute）| once（一次性，at: 毫秒时间戳或 ISO 时间串，不带时区按服务器时区）| manual（只手动运行，没有别的字段）| cron（cron: 5 段表达式「分 时 日 月 周」，最多每小时一次）。hour 0-23 缺省 9，minute 0-59 缺省 0，按服务器所在时区；不认识的字段、越界的值直接报错。例：{"type":"daily","hour":9,"minute":0}、{"type":"weekly","days":[1,3],"hour":8,"minute":30}、{"type":"once","at":"2026-12-01T09:00"}、{"type":"cron","cron":"0 9 * * 1-5"}';
 // 各类型认的字段与例子。weekday 是老数据的单个星期几（读回来的 weekly 也带着它），照收不宣传。
@@ -74,8 +74,10 @@ const engineBody = (args) => ({
   ...(args.model !== undefined ? { model: args.model } : {}),
   ...(args.effort !== undefined ? { effort: args.effort } : {}),
 });
+// engine：claude / dimensio（dimensio 的任务在定时任务页里建；结果会话在 dimensio 那边，sessions.read 读不到）
 const view = (r) => ({
-  id: r.id, name: r.name, prompt: r.prompt, engine: 'claude',
+  id: r.id, name: r.name, prompt: r.prompt, engine: r.agent === 'dimensio' ? 'dimensio' : 'claude',
+  ...(r.agent === 'dimensio' && r.provider ? { provider: r.provider } : {}),
   ...(r.model ? { model: r.model } : {}), ...(r.effort ? { effort: r.effort } : {}),
   ...(r.retired === 'gemini' ? { retired: 'Gemini 引擎已下线，这条已停用；改用 Claude 要先编辑它' } : {}),
   ...(r.description ? { description: r.description } : {}),

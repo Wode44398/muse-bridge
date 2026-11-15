@@ -665,7 +665,7 @@
     }
   }
 
-  @media (max-width: 699px) {
+  @media (max-width: 599px), (max-width: 699px) and (max-device-aspect-ratio: 699/1000) {
     .composer {
       padding-left: 12px;
       padding-right: 12px;

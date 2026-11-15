@@ -12,7 +12,8 @@
   //     底部居中浮条 + 缩略图条；+ - 0 1 R Shift+R ← → Home End F 快捷键；双击 / F 全屏；翻页瞬切（Windows 照片）
   //   · FLIP：描述符带 originRect 时从缩略图放大打开、缩回原位关闭；缩略图不在屏上就缩小淡出
   //   · 预载器：当前页出图后才开拉，并发 2，向后 3 张、向前 2 张；挤出窗口的取消并忘掉（decode() 只发不等）
-  //   · 混排里的视频页：滑轨里是海报 + 播放钮占位，停稳在该页才挂 VideoPlayer，切走即卸载
+  //   · 混排里的视频页：滑轨里是海报 + 播放钮占位，停稳在该页才挂 VideoPlayer，切走即卸载；
+  //     播放器挂上后手势全归它（横滑是拖进度），电脑上它的底栏也不叠缩略图条
   // 坐标：视图 { s, x, y } 以舞台中心为原点——s=1 即适应框，x/y 是适应框中心的位移（CSS 像素）。
   import { untrack, onMount, tick } from 'svelte';
   import ImageView, { firstSrc } from './ImageView.svelte';
@@ -264,9 +265,9 @@
     const g = gesture, horiz = Math.abs(dx) > Math.abs(dy);
     if (railMoving()) g.mode = 'page';
     else if (g.vid) {
-      // 视频页：只在「起手就横滑」且不在全屏时接管翻页；其余交给 VideoPlayer 自己（点按显隐 / 双击跳转 / 长按 2x / 下滑关闭）
-      const fs = !!document.fullscreenElement || !!rootEl.querySelector('[data-vp-fs]');
-      g.mode = horiz && performance.now() - g.t0 < 450 && !fs ? 'page' : 'none';
+      // 视频页：手势全归 VideoPlayer（点按显隐 / 双击跳转 / 长按 2x / 横滑拖进度 / 下滑关闭），画廊不接管；
+      // 换文件走顶栏的上一个 / 下一个
+      g.mode = 'none';
     } else if (zoomed && isImg) g.mode = 'pan';
     else if (horiz) g.mode = 'page';
     else g.mode = 'dismiss';

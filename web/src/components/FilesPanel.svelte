@@ -2167,7 +2167,7 @@
   <button class="hid-tg" onclick={toggleHidden}>{showHidden ? t('收起隐藏项') : t('显示隐藏项')}<small>{hidTotal}</small></button>
 {/snippet}
 
-<div class="ws-root" class:narrow={rootW < 350} class:wpick={wsPick} class:embedded={embeddedUi} class:chrome={hostChrome} class:th-light={theme === 'light'} class:th-dark={theme === 'dark'} class:ios-dark={iosDark} class:modal={!!(menu || addOpen || locMenu || crumbMenu || transferOpen || renameTarget || mkOpen || mdOpen || zipDlg || shareDlg || rootMenu || pcLocMenu || addSheet || aiPick || picker || infoItem || preview || viewMenu)} style:--sq={`url("${sq26}")`} bind:this={rootEl} bind:clientWidth={rootW} ondragover={dragOverRoot} ondragleave={dragLeaveRoot} ondrop={onDropUpload} role="presentation">
+<div class="ws-root" class:narrow={rootW < 388} class:wpick={wsPick} class:embedded={embeddedUi} class:chrome={hostChrome} class:th-light={theme === 'light'} class:th-dark={theme === 'dark'} class:ios-dark={iosDark} class:modal={!!(menu || addOpen || locMenu || crumbMenu || transferOpen || renameTarget || mkOpen || mdOpen || zipDlg || shareDlg || rootMenu || pcLocMenu || addSheet || aiPick || picker || infoItem || preview || viewMenu)} style:--sq={`url("${sq26}")`} bind:this={rootEl} bind:clientWidth={rootW} ondragover={dragOverRoot} ondragleave={dragLeaveRoot} ondrop={onDropUpload} role="presentation">
   <!-- 从桌面拖文件/文件夹进来：整块提示；拖在某个文件夹格子上时改说传进那个文件夹 -->
   {#if dropOn !== null}
     <div class="dropveil">
@@ -2953,10 +2953,13 @@
   .lp-ic :global(svg) { width: 18px; height: 18px; }
   .lp-nm { min-width: 0; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; line-height: 22px; font-weight: 600; letter-spacing: -.43px; }
   .lp-chev { flex: none; display: inline-flex; opacity: .5; margin-left: -1px; }
-  /* 320 档（小屏安卓 / 窄 sheet）：顶栏四枚放不下——胶囊收掉字形、钮间距收到 8 */
+  /* 窄档（rootW < 388：360 主流安卓 / 375 iPhone / 窄 sheet）：顶栏六枚（‹ 胶囊 ＋ 传输 …）宽档最少要 387px，
+     放不下时「…」被切出右缘——胶囊收掉字形、钮间距收到 8（360 实测右缘正好落在 344） */
   .ws-root.narrow .topbtns { gap: 8px; }
   .ws-root.narrow .lp-ic { display: none; }
   .ws-root.narrow .lp-nm { max-width: 5.5em; }
+  /* 再窄（320 档）收字形也不够：胶囊本身让出宽度，位置名省略（GlassButton 默认 flex:none） */
+  .ws-root.narrow .topbtns > :global(.gb.cap) { flex: 0 1 auto; min-width: 0; }
 
   /* 分组标题右侧的「隐藏项」开关：15pt 蓝字 + 次级色计数 */
   .sechead.has-act { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

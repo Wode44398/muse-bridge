@@ -90,6 +90,16 @@ export function sessionFamilyFile(): string {
   return guard("会话协作台账", path.join(path.dirname(configFile()), "session-family.json"));
 }
 
+// 项目对话（project-mode.ts）：每条项目对话的项目说明与讨论串「已解决」标记；项目记忆每个项目对话一个子目录。
+// 同会话协作台账，放在运行配置同目录、跟着数据目录走；不另设环境变量。
+export function projectModeFile(): string {
+  return guard("项目对话台账", path.join(path.dirname(configFile()), "project-mode.json"));
+}
+
+export function projectMemoryRoot(): string {
+  return guard("项目记忆目录", path.join(path.dirname(configFile()), "project-memory"));
+}
+
 // 自定义模型服务（custom-providers.ts）：providers.json 是地址与备注，同目录的 connector-secrets.* 是加密的 API key。
 export function customProvidersDir(): string {
   return guard("自定义模型服务目录", fromEnv("DIMENSIO_CUSTOM_PROVIDERS_DIR") ?? path.resolve(dataHome(), "custom-providers"));
@@ -120,9 +130,15 @@ export function projectsRoot(): string {
   return guard("项目根目录", fromEnv("PROJECTS_ROOT") ?? path.join(os.homedir(), "Dimensio Projects"));
 }
 
-// 共享浏览器的持久配置档（登录态跨会话保留，cdp.ts getSharedBrowser）。租户实例的数据目录各自独立，配置档也就各是各的。
+// 共享无头浏览器的持久配置档（登录态跨会话保留，cdp.ts 的共享宿主）。租户实例的数据目录各自独立，配置档也就各是各的。
 export function browserProfileDir(): string {
   return guard("浏览器配置档", fromEnv("DIMENSIO_BROWSER_PROFILE") ?? path.resolve(dataHome(), "browser-profile"));
+}
+
+// 哪些会话开了浏览器「隔离存储」（cdp.ts setBrowserIsolated，会话 id 列表）。放在运行配置同目录（同 prefs.json），
+// 跟着数据目录走；不另设环境变量。
+export function browserIsolationFile(): string {
+  return guard("浏览器隔离存储开关", path.join(path.dirname(configFile()), "browser-isolated.json"));
 }
 
 // 启动时的默认工作区；配置里 `workspace: ""` 就回到它。

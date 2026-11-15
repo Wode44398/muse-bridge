@@ -137,7 +137,18 @@
 .studio-root .pl-r.blk { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 0 6px; }
 /* 开关、选择钮按内容定宽：标签吃剩下的宽度，不死守 40%（「Prompt upsam…」右边空着一大截也被切，复核 11-06） */
 .studio-root .pl-r[data-ctl=switch] { grid-template-columns: minmax(0, 1fr) auto; }
-.studio-root .pl-r[data-ctl=select], .studio-root .pl-r[data-ctl=voice] { grid-template-columns: minmax(76px, 1fr) minmax(0, max-content); }
+.studio-root .pl-r[data-ctl=select], .studio-root .pl-r[data-ctl=voice], .studio-root .pl-r[data-ctl=size]:not(.blk) { grid-template-columns: minmax(76px, 1fr) minmax(0, max-content); }
+/* 尺寸的自定义宽 × 高（方案 §10）：整行宽、在选择钮下面；不合规时两个框描红、下面一行红字 */
+.studio-root .pl-wh { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.studio-root .pl-wh .pl-in { flex: 1 1 0; min-width: 0; max-width: 120px; text-align: right; }
+.studio-root .pl-x { flex: none; font-size: var(--sd-fs-md); color: var(--sd-text3); }
+.studio-root .pl-wh .pl-in.bad { box-shadow: 0 0 0 1px var(--sd-err); }
+/* 值芯片点开的单项浮层（标题已经写了「尺寸」、行标签藏着）：选择钮靠左，不在右边孤零零一个 */
+.studio-root .pl.only .pl-r[data-ctl=size] .pl-c { justify-content: flex-start; }
+.studio-root .pl.only .pl-wh { justify-content: flex-start; }
+/* 自定义尺寸不合规：值芯片也描红（收起参数时一眼看得出） */
+.studio-root .cp-val.bad { box-shadow: inset 0 0 0 1px var(--sd-err); color: var(--sd-err); }
+.studio-root .pl-wh-err { grid-column: 1 / -1; }
 .studio-root .pl-r.focus { animation: sdFocusRow 1.6s var(--sd-ease); }
 @keyframes sdFocusRow { 0%, 40% { box-shadow: 0 0 0 4px var(--sd-accent-soft); background: var(--sd-accent-soft); } 100% { box-shadow: 0 0 0 4px transparent; background: transparent; } }
 .studio-root .pl-lh { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 22px; }

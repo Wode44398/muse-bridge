@@ -101,7 +101,8 @@ export interface ProviderSpec {
   models: ModelSpec[];
   // R12：一次请求里历史图片的额度（张数、base64 字节）。超了才按批退役最老的工具图（agent/media-budget.ts）；
   // 不配走默认 20 张 / 24 MB。keepRecent = 最近几张工具图永不退（默认 3）。
-  media?: { maxImages?: number; maxBytes?: number; keepRecent?: number };
+  // maxImageBytes = 单张图的上限（解码后的字节），超了在发请求前压到这以内
+  media?: { maxImages?: number; maxBytes?: number; keepRecent?: number; maxImageBytes?: number };
   // 只有自定义服务有：卡片副标题显示的主机名、协议；all = 服务里一共多少个型号（菜单只列启用的对话型号）
   // shared = 管理员实例上标了「共享给成员」；managed = 成员实例上这条是管理员共享过来的（不给地址，只能用不能改）
   // plugin = bridge 插件提供的（插件名；同时带 managed）
@@ -413,12 +414,15 @@ export function providerSpec(p: ProviderId): ProviderSpec {
 
 // R12：这家 provider 一次请求里历史图片的额度（目录没配的项取默认）。自定义服务按型号家族取（共用型号表：经第三方接的
 // 小米同样只让最近 2 张工具图入模）。
-export function providerMediaBudget(p: ProviderId, model?: string): { maxImages: number; maxBytes: number; keepRecent?: number } {
+export function providerMediaBudget(p: ProviderId, model?: string): { maxImages: number; maxBytes: number; keepRecent?: number; maxImageBytes?: number } {
   const media = isCustomProviderId(p) ? (model ? MK.tableEntry(model)?.media : undefined) : CATALOG.find((s) => s.id === p)?.media;
+  const maxImageBytes = media?.maxImageBytes ?? (model ? MK.tableEntry(model)?.media?.maxImageBytes : undefined);
   return {
     maxImages: media?.maxImages ?? DEFAULT_MEDIA_BUDGET.maxImages,
     maxBytes: media?.maxBytes ?? DEFAULT_MEDIA_BUDGET.maxBytes,
     ...(media?.keepRecent !== undefined ? { keepRecent: media.keepRecent } : {}),
+    // 单张上限是型号自己的事（同一个 GPT-6 经哪家接都一样）：目录没配就按型号表
+    ...(maxImageBytes !== undefined ? { maxImageBytes } : {}),
   };
 }
 

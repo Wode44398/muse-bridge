@@ -3,12 +3,21 @@
 // 起因：折叠屏展开态实测 ~752×835 CSS px（大内屏 dpr 3），卡在 1024 之下，
 // 于是整台大屏仍按手机版渲染：侧栏是抽屉、工作台是底部 sheet，浪费了一半横向空间。
 // 现在分三档：
-//   compact  < 700   真手机（含折叠屏【折叠态】外屏）
-//   medium   700–1099 折叠屏展开 / 小平板 —— 侧栏与工作台都能以【侧列】形态存在，
+//   compact  < 700   真手机（含折叠屏【折叠态】外屏）；近方屏放宽见下
+//   medium   700–1099（近方屏 600 起） 折叠屏展开 / 小平板 —— 侧栏与工作台都能以【侧列】形态存在，
 //                    但塞不下两根：谁在场由 side-yield 规则决定（见下）
 //   expanded ≥ 1100  桌面/大平板 —— 侧栏常驻 + 工作台并排，同时在场
 //
 // 1100 而非 1024：1024 上两栏并排后正文只剩 ~370px，比 medium 单栏还挤。
+//
+// 【近方屏放宽】有的折叠屏展开后 CSS 宽度不到 700：系统缩放（三星「屏幕缩放」/「显示大小」）
+// 调大一档 dpr 就到 3.3+，Z Fold 内屏 2256px 只剩 ~650；OPPO Find N 系内屏 1792px 出厂就 ~683。
+// 所以 600–699 这一段再看【屏幕】宽高比：≥ 0.7（近方形）= 折叠屏内屏，也算 medium。
+// 用 screen 而不是 innerHeight：安卓 adjustResize 弹键盘会把 innerHeight 压矮，
+// 竖屏 7 寸平板（600×960）一打字就会被误判成近方屏、布局来回跳。screen 不受键盘影响，
+// 比值又与单位无关（个别老 WebView 的 screen 报物理像素也不要紧）。
+// 普通手机竖屏 CSS 宽最多 ~480，碰不到 600；分屏半边 ~300 也碰不到。
+// CSS 里要同口径的断点用 SIDE_MQ / NARROW_MQ（device-aspect-ratio 就是 screen 宽高比）。
 // 竖屏平板（如 iPad 768×1024）落在 medium，行为与折叠屏展开一致。
 //
 // 用法：`import { layout } from './layout.svelte.js'` 后直接读 layout.side / layout.expanded，
@@ -16,10 +25,28 @@
 
 const MEDIUM_MIN = 700;
 const EXPANDED_MIN = 1100;
+const SQUARE_MIN = 600;      // 近方屏放宽的宽度下限
+const SQUARE_RATIO = 0.7;    // 屏幕 宽/高 ≥ 0.7 算近方屏
+
+// 与 isSide() 同口径的媒体查询（给 matchMedia / CSS 用；CSS 里只能照抄字面量）。
+export const SIDE_MQ = '(min-width: 700px), (min-width: 600px) and (min-device-aspect-ratio: 7/10)';
+export const NARROW_MQ = '(max-width: 599px), (max-width: 699px) and (max-device-aspect-ratio: 699/1000)';
+
+function squareScreen() {
+  try {
+    const sw = window.screen?.width, sh = window.screen?.height;
+    return !!(sw && sh) && sw / sh >= SQUARE_RATIO;
+  } catch { return false; }
+}
+
+export function isSide(w) {
+  return w >= MEDIUM_MIN || (w >= SQUARE_MIN && squareScreen());
+}
 
 function read() {
-  if (typeof window === 'undefined') return { w: 390, h: 844 };
-  return { w: window.innerWidth || 390, h: window.innerHeight || 844 };
+  if (typeof window === 'undefined') return { w: 390, h: 844, side: false };
+  const w = window.innerWidth || 390;
+  return { w, h: window.innerHeight || 844, side: isSide(w) };
 }
 
 const init = read();
@@ -29,22 +56,22 @@ export const layout = $state({
   h: init.h,
   // 派生位一并存进对象（而不是 $derived 导出）：$derived 只能在组件/effect 作用域里创建，
   // 这里是模块顶层。改一处 sync() 全站同步，读起来也直白。
-  compact: init.w < MEDIUM_MIN,
-  medium: init.w >= MEDIUM_MIN && init.w < EXPANDED_MIN,
+  compact: !init.side,
+  medium: init.side && init.w < EXPANDED_MIN,
   expanded: init.w >= EXPANDED_MIN,
   // side = 能不能用「侧列」形态摆侧栏/工作台（medium 与 expanded 都能）。
   // 各分页判断「工作台是侧列还是底部 sheet」用它，别再用 expanded。
-  side: init.w >= MEDIUM_MIN,
+  side: init.side,
 });
 
 function sync() {
-  const { w, h } = read();
+  const { w, h, side } = read();
   layout.w = w;
   layout.h = h;
-  layout.compact = w < MEDIUM_MIN;
-  layout.medium = w >= MEDIUM_MIN && w < EXPANDED_MIN;
+  layout.compact = !side;
+  layout.medium = side && w < EXPANDED_MIN;
   layout.expanded = w >= EXPANDED_MIN;
-  layout.side = w >= MEDIUM_MIN;
+  layout.side = side;
 }
 
 if (typeof window !== 'undefined') {

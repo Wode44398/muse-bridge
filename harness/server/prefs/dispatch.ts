@@ -1,5 +1,8 @@
 // 子 agent 按难度选型与内嵌图表的偏好项（登记格式见 ../prefs.ts）。
 // 三项都只在建会话时读（写进系统提示 / 工具清单），改了对之后新建或重新打开的对话生效，进行中的对话不变（前缀缓存）。
+// 前两项（2026-11-14 起）只在取不到 bridge 的「子 agent 调用策略」时生效（独立运行、bridge 太旧）：被 bridge 拉起时由
+// bridge 设置 › dimensio › 子 agent 调用策略 说了算（agent/dispatch-policy.ts），这两项的旧值在 bridge 那份第一次落盘时迁过去，
+// bridge 的设置页也不再列它们。
 import type { PrefSpec } from "../prefs.ts";
 
 export const DISPATCH_PREFS: PrefSpec[] = [
@@ -11,7 +14,8 @@ export const DISPATCH_PREFS: PrefSpec[] = [
     label: "按难度选型阶梯",
     desc:
       "派子 agent 时，按模型性价比数据把这台 dimensio 此刻能用的模型排成「最难 / 难 / 常规 / 机械」四档首选与备选，写进系统提示；" +
-      "Agent 工具与工作流脚本可以直接写 auto:top / auto:hard / auto:normal / auto:light。关掉后只保留下面的调度偏好。",
+      "Agent 工具与工作流脚本可以直接写 auto:top / auto:hard / auto:normal / auto:light。关掉后只保留下面的调度偏好。" +
+      "由 bridge 拉起时以 bridge 设置里的「子 agent 调用策略」为准。",
   },
   {
     key: "subagentDispatch",
@@ -19,7 +23,7 @@ export const DISPATCH_PREFS: PrefSpec[] = [
     default: "",
     group: "dispatch",
     label: "子 agent 调度偏好",
-    desc: "写给 agent 的话，例如「简单检索用 MiMo V2.6 Flash，审查一律用 Opus」。拼进系统提示，与默认分档冲突时以这里为准。",
+    desc: "写给 agent 的话，例如「简单检索用 MiMo V2.6 Flash，审查一律用 Opus」。拼进系统提示，与默认分档冲突时以这里为准。由 bridge 拉起时以 bridge 设置里「子 agent 调用策略」的口述备注为准。",
     maxLen: 2000,
   },
   {

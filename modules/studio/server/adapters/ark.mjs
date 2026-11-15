@@ -35,6 +35,7 @@
 
 import { http, authHeaders, joinUrl, download, poll, dataUrl, guessMime, AdapterError } from './http.mjs';
 import { P, opts } from '../cards/spec.mjs';
+import { originalSize, parseSize } from '../cards/size.mjs';
 import { registerDialectCards } from '../cards/dialects.mjs';
 
 const BASE = 'https://ark.cn-beijing.volces.com/api/v3';
@@ -58,9 +59,12 @@ const secOpts = (list, auto) => opts([...(auto ? [{ value: -1, label: '自动（
 // —— 图像：Seedream 5.0 pro / flash（同步）——
 // 文档：档位 1K / 1.5K / 2K，默认 2K；比例写进提示词（文档未写明各档位对应的像素，这里不把比例映射成档位）；
 // pro 多一个提示词优化档（fast 仅 pro 支持）；最多 10 张参考图
+// 2026-11-15（方案 §10）：size 是档位（1K / 1.5K / 2K）或自由 WxH，二者不可混用；像素在 921600–4624220、宽高比 1/16–16（文档）
+export const SEEDREAM5_RULE = Object.freeze({ width: { min: 1 }, height: { min: 1 }, aspect: { min: 1 / 16, max: 16 }, pixels: { min: 921600, max: 4624220 }, exact: true });
 function seedreamCard(label, { pro = false, desc }) {
   const params = [
-    P.enum('size', '尺寸', opts([{ value: '1K', label: '1K' }, { value: '1.5K', label: '1.5K' }, { value: '2K', label: '2K' }]), { default: '2K', desc: '档位；比例写进提示词' }),
+    P.size('size', '尺寸', [{ value: 'original', label: '原图', only: { $edit: true } }, ...opts([{ value: '1K', label: '1K' }, { value: '1.5K', label: '1.5K' }, { value: '2K', label: '2K' }])],
+      { default: '2K', editDefault: 'original', custom: SEEDREAM5_RULE, encode: 'x', desc: '档位时比例写进提示词；要定比例就用自定义宽高' }),
     P.enum('outputFormat', '输出格式', opts([{ value: 'jpeg', label: 'JPEG' }, { value: 'png', label: 'PNG' }]), { group: 'advanced', default: 'jpeg' }),
     P.bool('watermark', '水印', { default: true, desc: '官方默认在右下角加「AI 生成」标' }),
   ];
@@ -150,8 +154,16 @@ async function runImage(req, provider, ctx) {
   // b64_json 省一次下载；url 只保留 24 小时
   const body = { model: req.model, prompt: req.prompt, response_format: 'b64_json' };
   if (refs.length) body.image = refs.length === 1 ? toDataUri(refs[0]) : refs.map(toDataUri);
-  // 尺寸：卡上的档位优先；通用卡的比例换成像素
-  const size = p.size || (p.aspectRatio && p.aspectRatio !== 'auto' ? PIXEL_SIZE[p.aspectRatio] : undefined);
+  // 尺寸：卡上的 size 优先（档位原样、自由宽高 → WxH、原图 → 原图像素适配进像素区间）；通用卡的比例换成像素
+  let size = p.size;
+  if (size === 'original') {
+    const o = originalSize(SEEDREAM5_RULE, { ...req, inputs: refs.map((x) => ({ ...x, role: x.role || 'edit' })) });
+    size = o ? `${o.width}x${o.height}` : undefined;
+  } else if (size && typeof size === 'object') {
+    const s = parseSize(size);
+    size = s ? `${s.width}x${s.height}` : undefined;
+  }
+  if (!size && p.aspectRatio && p.aspectRatio !== 'auto') size = PIXEL_SIZE[p.aspectRatio];
   if (size) body.size = size;
   if (p.outputFormat) body.output_format = p.outputFormat;
   if (p.watermark !== undefined) body.watermark = p.watermark;

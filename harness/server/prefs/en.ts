@@ -41,11 +41,11 @@ export const PREFS_EN: Record<string, NonNullable<PrefSpec["en"]>> = {
   // 子 agent 调度与图表（dispatch.ts）
   subagentLadder: {
     label: "Difficulty-based model ladder",
-    desc: "When dispatching sub-agents, rank the models this dimensio can use right now into top / hard / normal / light tiers (first choice and fallback) from the model value data, and put them in the system prompt; the Agent tool and workflow scripts can write auto:top / auto:hard / auto:normal / auto:light. Turn off to keep only the dispatch preferences below.",
+    desc: "When dispatching sub-agents, rank the models this dimensio can use right now into top / hard / normal / light tiers (first choice and fallback) from the model value data, and put them in the system prompt; the Agent tool and workflow scripts can write auto:top / auto:hard / auto:normal / auto:light. Turn off to keep only the dispatch preferences below. When started by bridge, the \"Subagent dispatch policy\" in bridge settings takes over.",
   },
   subagentDispatch: {
     label: "Sub-agent dispatch preferences",
-    desc: "Notes for the agent, e.g. \"use MiMo V2.6 Flash for simple lookups, always use Opus for reviews\". Added to the system prompt; overrides the default tiers when they conflict.",
+    desc: "Notes for the agent, e.g. \"use MiMo V2.6 Flash for simple lookups, always use Opus for reviews\". Added to the system prompt; overrides the default tiers when they conflict. When started by bridge, the notes in the \"Subagent dispatch policy\" in bridge settings take over.",
   },
   inlineVisualizations: {
     label: "Inline interactive charts",

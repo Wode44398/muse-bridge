@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { WIDE_MQ } from "../../lib/breakpoints.ts";
   // 顶栏（减法）：左 = 当前项目 / 对话标题（手机上它就是侧栏抽屉的入口；桌面侧栏收起时前面多一颗展开钮）；
   // 右 = 后台在跑的对话数 · 上下文用量环（也是运行设置的入口，RunButton）· 回滚 · 工作区开关。
   // 不放返回 / 新对话键（维护者定过：返回在侧栏「主页」，新对话在侧栏）。
@@ -22,7 +23,7 @@
   }: { onMenu: () => void; menuVisible?: boolean; showDock?: boolean; onclose?: (() => void) | null } = $props();
   const pane = usePane();
 
-  const wideMq = matchMedia("(min-width: 700px)");
+  const wideMq = matchMedia(WIDE_MQ);
   let wide = $state(wideMq.matches);
   $effect(() => {
     const on = (e: MediaQueryListEvent) => (wide = e.matches);

@@ -19,7 +19,7 @@ function declared(file) {
   return names;
 }
 
-for (const base of ['knowledge', 'diagnose', 'editor', 'ratings', 'index']) {
+for (const base of ['knowledge', 'diagnose', 'editor', 'ratings', 'ladder', 'cache-ttl', 'index']) {
   test(`${base}.d.mts 声明的导出与运行时一致`, async () => {
     const mod = await import(`./${base}.mjs`);
     const runtime = Object.keys(mod).sort();

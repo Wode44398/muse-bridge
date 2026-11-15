@@ -188,6 +188,13 @@ export default {
     "Your app is running. Open it with “Preview” at the top right, or enter a URL above.",
   "在上方输入地址开始浏览，或等 agent 使用浏览器时自动出现":
     "Enter a URL above to start browsing, or wait for an agent to use the browser.",
+  "隔离存储": "Isolated storage",
+  "隔离": "Isolated",
+  "隔离存储：这个对话的登录态与网站数据不和别的对话共用，关掉浏览器即清空":
+    "Isolated storage: this chat’s sign-ins and site data aren’t shared with other chats and are cleared when the browser closes",
+  "这个对话的登录态与网站数据单独存放，关掉浏览器即清空": "This chat keeps its own sign-ins and site data, cleared when the browser closes",
+  "开启后，这个对话不和别的对话共用登录态与网站数据": "When on, this chat doesn’t share sign-ins or site data with other chats",
+  "隔离存储没有切换成功": "Couldn’t switch isolated storage",
   "连接直播中…": "Connecting to live view…",
 
   // —— 终端 ——

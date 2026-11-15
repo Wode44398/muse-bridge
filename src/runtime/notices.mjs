@@ -124,6 +124,8 @@ export function noticeRunEnd(ctx, gen) {
   // 悬浮胶囊的轮：人就盯着胶囊；定时任务：routines-runner 按任务自己的「通知我」开关单独发
   if (gen.source === 'capsule') return;
   if (gen.family && gen.family.origin && gen.family.origin.kind === 'routine') return;
+  // 提示缓存快过期前服务端替用户发的 /compact（runtime/claude-cache.mjs）：没人在等它，不发完成通知
+  if (gen.family && gen.family.origin && gen.family.origin.kind === 'idle-compact') return;
   const o = turnOutcome(gen);
   if (o.kind !== 'done' && o.kind !== 'error') return;
   postNotice(ctx.key, { kind: o.kind, sub: o.sub || '', sessionId: gen.sessionId, body: o.body || '' });

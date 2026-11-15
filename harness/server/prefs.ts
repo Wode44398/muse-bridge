@@ -63,7 +63,14 @@ let values: Record<string, unknown> = load();
 function load(): Record<string, unknown> {
   try {
     const raw = JSON.parse(readFileSync(prefsFile(), "utf8"));
-    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    // 11-14：「空闲时赶在缓存过期前压缩」开关并进「提示缓存快过期时」三选一（默认只提示）——明确开着的记成「自动压缩」，
+    // 关着的「只提示」（以前关了压缩、提示照出）
+    if ("idleCompact" in raw) {
+      if (raw.cacheExpiry === undefined) raw.cacheExpiry = raw.idleCompact === true ? "compact" : "hint";
+      delete raw.idleCompact;
+    }
+    return raw;
   } catch {
     return {};
   }

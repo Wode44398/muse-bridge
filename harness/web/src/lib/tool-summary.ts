@@ -16,7 +16,9 @@ export function argPreview(a: any): string {
   if (a.url) return String(a.url);
   if (a.query) return String(a.query);
   // 会话协作：StartSession 摆任务名；SendMessage / ReadSession 摆对象（与消息开头）
-  if (typeof a.initiation === "string" && typeof a.title === "string") return a.title;
+  if ((typeof a.initiation === "string" || typeof a.background === "string") && typeof a.title === "string") return a.title; // 协调者版不带 initiation
+  // 项目记忆：摆篇名
+  if (typeof a.name === "string" && /\.md$/i.test(a.name)) return a.name;
   if (typeof a.to === "string") return typeof a.message === "string" ? `${a.to} · ${a.message}` : a.to;
   if (a.prompt) return String(a.prompt);
   if (a.todos) return t("{n} 项", { n: a.todos.length });
@@ -52,6 +54,7 @@ const CATEGORY: Record<string, Cat> = {
   Recall: "recall", ProjectKnowledge: "recall", Remember: "remember", MemoryAudit: "remember",
   Skill: "skill", McpDescribe: "mcp", McpCall: "mcp",
   AskUserQuestion: "ask", ExitPlanMode: "plan", UpdateGoal: "goal",
+  ProjectMemoryRead: "recall", ProjectMemoryWrite: "remember", ProjectMemoryDelete: "remember",
 };
 // 按文件路径去重计数的类目（同一个文件读三遍算一个）
 const FILE_CATS = new Set<Cat>(["read", "write", "edit"]);

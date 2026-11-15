@@ -62,6 +62,8 @@ writeFileSync(join(dir, 'lib', 'dispatchPolicy.svelte.js'), [
   "  { key: 'normal', title: '常规', short: '常', color: 'var(--dp-t-normal)' }, { key: 'light', title: '机械', short: '机', color: 'var(--dp-t-light)' },",
   '];',
   "export const modelName = (m) => String(m || ''); export const effortName = (m, e) => (e ? String(e) : '默认');",
+  // 显示名从传入的那份调用策略取（不传 = Claude 那份）
+  "export const claudeDispatch = { scope: 'claude', modelName, effortName };",
 ].join('\n'));
 // 纯函数用真的，每个函数外面包一层计数：数得出哪些派生量被重算了
 const mathFile = join(webRoot, 'src', 'lib', 'dispatchChartMath.js');

@@ -16,7 +16,10 @@
   import HsTools from './HsTools.svelte';
   import HsList from './HsList.svelte';
   import HsBar from './HsBar.svelte';
-  import { G, svg, AGENT_ORDER, ordAgents, claudeBlock, planAssign, pinFirst, normUrl, urlOk, hostOf, isLocal, keyTail, tailText, fmtCtx } from './HsKit.js';
+  import HsModelAdv from './HsModelAdv.svelte';
+  import HsServiceAdv from './HsServiceAdv.svelte';
+  import DpMenu from '../claude/dispatch/DpMenu.svelte';
+  import { G, svg, AGENT_ORDER, ordAgents, claudeBlock, planAssign, pinFirst, normUrl, urlOk, hostOf, isLocal, keyTail, tailText, fmtCtx, fmtCacheMin, CACHE_STEPS } from './HsKit.js';
   import { hub, hubPost, hubAsk, hubGet, loadHub, KINDS, KIND_NAME, AGENT_NAME, PROTO_NAME } from '../../lib/modelHub.svelte.js';
   import { providerOf, vendorOf, vendorInfo } from '../../../../src/model-knowledge/brands.mjs';
   import { pushBackLayer } from '../../lib/nav.js';
@@ -124,7 +127,8 @@
     const vLogo = vi?.logo || '';
     const agents = ordAgents(a?.agents || []);
     const label = m.label || a?.label || '';
-    const ctxN = tab === 'text' ? Number(m.contextWindow || a?.contextWindow) || 0 : 0;
+    // 上下文：高级设置里改过的优先（行上显示的、Claude 收不收都按生效值）
+    const ctxN = tab === 'text' ? Number(a?.over?.contextWindow || m.contextWindow || a?.contextWindow) || 0 : 0;
     const ctx = ctxN ? fmtCtx(ctxN) : '';
     // Claude 收不收这一行（'' 收 | 'id' 模型 ID 不合 | 'ctx' 上下文窗口不到 4096）：与服务端同一组规则，去向片和保存都看它
     const block = k === 'text' ? claudeBlock(id, ctxN) : '';
@@ -141,9 +145,90 @@
     }
     // 搜索按关键字包含：id、显示名、模型厂（原名 + 当前语言的名字 + 键）
     const hay = [id, label, vName, vName ? tr(vName) : '', vKey].join(' ').toLowerCase();
-    return { id, label, kind: k, tab, vKey, vName, vLogo, agents, ctx, block, can: !why, why, hay };
+    // 提示缓存（11-14）：已添加的文本模型才有（服务视图带 cacheTtl? 用户填的 / cacheAuto 自动值）。行上一个小按钮写当前生效的时长
+    const cache = a && tab === 'text' && a.cacheAuto ? cacheView(a) : null;
+    // 高级调用配置（11-15）：已添加的文本模型才有入口；改过的（能力 / 思考写法 / 调用参数）行上标出来
+    const adv = !!(sid && a && tab === 'text' && a.auto);
+    const custom = !!a?.custom;
+    // 手动添加的（目录里 source = manual，或已添加却不在目录里的老配置）：标出来、能删
+    const manual = m.source === 'manual';
+    return { id, label, kind: k, tab, vKey, vName, vLogo, agents, ctx, block, can: !why, why, hay, cache, adv, custom, manual };
   }
   const blockText = (b) => (b === 'ctx' ? t('上下文窗口不到 4096，Claude 用不了') : t('模型 ID 不合 Claude 格式'));
+
+  // —— 提示缓存时长（缓存冷了的提示、过期前自动压缩都按它；设置里各自选「不提示 / 只提示 / 自动压缩」）——
+  // 显示：用户填了 → 那个数（0 =「不缓存」）；自动 → 自动值（不知道 =「缓存 ?」，说明里写为什么）
+  function cacheView(a) {
+    const auto = a.cacheAuto || {};
+    const user = Number.isFinite(a.cacheTtl) ? a.cacheTtl : null;
+    const eff = user !== null ? user : auto.minutes;
+    const text = eff ? fmtCacheMin(eff) : user === 0 ? t('不缓存') : '?';
+    const why = auto.note ? tr(auto.note) : '';
+    const title = user !== null
+      ? t('提示缓存：{v}（手动设置）', { v: eff ? fmtCacheMin(eff) : t('不缓存') })
+      : t('提示缓存：{v}（自动）', { v: auto.minutes ? fmtCacheMin(auto.minutes) : t('不知道') }) + (why ? ' · ' + why : '');
+    return { user, auto: auto.minutes ?? null, text, title, set: user !== null };
+  }
+  let cacheMenu = $state(null);   // { at: { rect }, id, title, items }
+  function openCache(id, rect) {
+    const r = rows.find((x) => x.id === id);
+    if (!r?.cache || !sid) return;
+    const c = r.cache;
+    const pick = (v) => () => setCache(id, v);
+    cacheMenu = {
+      at: { rect }, id,
+      title: t('{model} 的提示缓存', { model: r.label || r.id }),
+      items: [
+        { label: t('自动'), sub: c.auto ? fmtCacheMin(c.auto) : t('不知道'), checked: !c.set, onclick: pick(null) },
+        ...CACHE_STEPS.map((m) => ({ label: fmtCacheMin(m), checked: c.set && c.user === m, onclick: pick(m) })),
+        { label: t('不缓存（不提示）'), checked: c.set && c.user === 0, onclick: pick(0) },
+      ],
+    };
+  }
+  async function setCache(model, v) {
+    const g = gen;
+    try {
+      const r = await hubPost('model', { id: sid, model, cacheTtl: v });
+      if (g === gen && r.service) fresh = { svc: r.service, base: hub.services };
+    } catch (e) {
+      if (g === gen) showToast(tr(e.message), 'err');
+    }
+  }
+
+  // —— 高级调用配置（模型）与高级设置（服务）——
+  let advFor = $state('');        // 开着高级调用配置的模型 id
+  let svcAdvOpen = $state(false);
+  const advModel = $derived(advFor && sid ? (svc?.models || []).find((m) => m.id === advFor) || null : null);
+  function openAdv(id) { if (sid && svc && (svc.models || []).some((m) => m.id === id)) { cacheMenu = null; advFor = id; } }
+  function onAdvSaved(service) { if (service) fresh = { svc: service, base: hub.services }; }
+
+  // —— 删掉手动添加的模型 ——
+  async function delManual(id) {
+    const r = rowsAll.find((x) => x.id === id);
+    if (!r || !r.manual) return;
+    const g = gen;
+    if (!sid) {   // 草稿：目录只在这边
+      cat = cat.filter((x) => x && x.id !== id);
+      picked.delete(id);
+      return;
+    }
+    const names = r.agents.map((a) => AGENT_NAME[a] || a).join(t('、'));
+    const ok = await uiConfirm(t('删除手动添加的「{model}」？', { model: r.label || r.id }), {
+      danger: true, okLabel: t('删除'),
+      detail: r.agents.length ? t('它已经添加给 {list}，会一并撤掉。', { list: names }) : '',
+    });
+    if (!ok || g !== gen) return;
+    try {
+      const res = await hubPost('catalog/remove', { id: sid, model: id });
+      if (g !== gen) return;
+      if (res.service) fresh = { svc: res.service, base: hub.services };
+      cat = cat.filter((x) => x && x.id !== id);
+      picked.delete(id);
+      for (const w of res.warnings || []) showToast(tr(w), 'warn');
+    } catch (e) {
+      if (g === gen) showToast(tr(e.message), 'err');
+    }
+  }
 
   const added = $derived.by(() => {
     const m = new Map();
@@ -267,7 +352,13 @@
     const isText = (x) => x && (x.kind || 'text') === 'text';
     return ((svc?.models || []).find(isText) || cat.find(isText))?.id || '';
   });
-  const manualOk = $derived(kind === 'text' || (!!media && studioOn && (media.kinds || []).includes(kind)));
+  // 能手动添加模型 ID 的种类：文本总能加；媒体类要 Media Studio 接得了这个服务的这一类。
+  // 这几栏就算识别出 0 个也能点进去（识别漏了视频之类，得有地方手动补）
+  const manualKinds = $derived(KINDS.filter((k) => k === 'text' || (!!media && studioOn && (media.kinds || []).includes(k))));
+  const manualOk = $derived(manualKinds.includes(kind));
+  // 媒体栏点不进去（没识别到、也不能手动加）的原因：和行上「暂不支持」同一套说法
+  const kindWhy = $derived(Object.fromEntries(KINDS.filter((k) => k !== 'text').map((k) => [k,
+    !studioOn ? t('这台服务器没装 Media Studio') : t('Media Studio 接不了这个服务的{kind}模型', { kind: tr(KIND_NAME[k]) })])));
   const canConn = $derived(phase === 'models' && !(sid && !svc));
   const logo = $derived(svc?.brand?.logo || (!sid ? prov?.logo || '' : ''));
   const logoName = $derived(svc?.brand?.name || prov?.name || '');
@@ -472,7 +563,8 @@
     if (!id) return t('要填模型 ID');
     if (/\s/.test(id)) return t('模型 ID 不能有空白');
     const hit = rowsAll.find((r) => r.id === id);
-    if (hit) return hit.tab === kind ? t('已在列表里') : t('已在「{kind}」里', { kind: tr(KIND_NAME[hit.tab]) });
+    // 在别的栏里、还没添加给谁：多半是识别分错了类（视频模型被当成文本），按眼前这一栏改过来（服务端以用户给的种类为准）
+    if (hit && (hit.tab === kind || hit.agents.length)) return hit.tab === kind ? t('已在列表里') : t('已在「{kind}」里', { kind: tr(KIND_NAME[hit.tab]) });
     const g = gen, k = kind;
     let m;
     if (sid) {
@@ -835,7 +927,8 @@
           <div class="connin">
             <div class="connpad">
               <HsConn bind:this={connRef} mode={sid ? 'service' : 'draft'} bind:d {svc} {narrow} {detecting} {detErr} {stale} catAt={lastAt} {now}
-                ondetect={detect} onsaved={onConnSaved} ondelete={del} {testModel} bind:dirty={connDirty} {connErr} locked={saving} />
+                ondetect={detect} onsaved={onConnSaved} ondelete={del} {testModel} bind:dirty={connDirty} {connErr} locked={saving}
+                onadvanced={sid ? () => { svcAdvOpen = true; } : undefined} />
             </div>
           </div>
         </div>
@@ -848,7 +941,7 @@
           {/if}
           <div class="anchor" bind:this={anchorEl}></div>
           <div class="stick" bind:offsetHeight={stickH}>
-            <HsKinds {kind} {counts} onpick={pickKind} {narrow} controls="hs-list" />
+            <HsKinds {kind} {counts} open={manualKinds} whyOf={kindWhy} onpick={pickKind} {narrow} controls="hs-list" />
             {#if !narrow}{@render tools()}{/if}
           </div>
           {#if narrow}{@render tools()}{/if}
@@ -862,13 +955,20 @@
             </div>
           {/if}
           <HsList {rows} {picked} onpick={pick} busy={listBusy} {filtered} onclearfilters={clearFilters} {revealKey} {narrow}
-            listId="hs-list" label={tr(KIND_NAME[kind])} onmanual={addManual} {manualOk} {pinN} />
+            listId="hs-list" label={tr(KIND_NAME[kind])} onmanual={addManual} {manualOk} {pinN} oncache={openCache} onadv={openAdv} ondel={delManual} />
+          {#if cacheMenu}<DpMenu at={cacheMenu.at} title={cacheMenu.title} items={cacheMenu.items} onClose={() => (cacheMenu = null)} />{/if}
           <!-- 操作条升起时给列表底部让出同样高的空间：最后几行能滚到操作条上面 -->
           <div class="barpad" style:height="{barUp ? barH : 0}px"></div>
         </div>
       {/if}
     </div>
 
+    {#if advModel && svc}
+      <HsModelAdv {svc} model={advModel} {narrow} onclosed={() => { advFor = ''; }} onsaved={onAdvSaved} />
+    {/if}
+    {#if svcAdvOpen && svc}
+      <HsServiceAdv {svc} {narrow} onclosed={() => { svcAdvOpen = false; }} onsaved={(service, warnings) => onConnSaved(service, warnings, { quiet: true })} />
+    {/if}
     {#if canConn}
       <HsBar up={barUp} n={selRows.length} {dests} {canSave} {saving} err={saveErr} note={barNote}
         ontoggle={toggleDest} onclear={() => { picked.clear(); saveErr = ''; }} onsave={save} {narrow} bind:barh={barH} />

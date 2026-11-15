@@ -12,6 +12,7 @@
 //   images?: { <角色>: { field, list } }, video?: { field, list }, audio?: { field, list } }——和 replicate 卡的 wire 同形。
 
 import { P } from '../cards/spec.mjs';
+import { encodeSizeParams } from '../cards/size.mjs';
 import { labelFor, valueLabel, formatFor, unitFor, normKey } from './labels.mjs';
 
 const MAX_PARAMS = 40;
@@ -84,6 +85,63 @@ const niceStep = (min, max, integer) => {
   const p = 10 ** Math.floor(Math.log10(raw));
   return Number((Math.round(raw / p) * p).toPrecision(2));
 };
+
+// —— 尺寸（方案 §10）——
+// 数值字段的范围 → 尺寸规则的一边（exclusiveMinimum 0 = 至少 1）
+function sideRule(v) {
+  const r = {};
+  if (Number.isFinite(v?.minimum)) r.min = v.minimum;
+  else if (Number.isFinite(v?.exclusiveMinimum)) r.min = Math.floor(v.exclusiveMinimum) + 1;
+  if (Number.isFinite(v?.maximum)) r.max = v.maximum;
+  else if (Number.isFinite(v?.exclusiveMaximum)) r.max = Math.ceil(v.exclusiveMaximum) - 1;
+  if (Number.isFinite(v?.multipleOf) && v.multipleOf > 1) r.multipleOf = v.multipleOf;
+  return r;
+}
+const isNum = (v) => v && (typeOf(v) === 'integer' || typeOf(v) === 'number');
+
+/**
+ * 「预设枚举 | { width, height } 对象」的联合类型（fal 的 image_size）→ 尺寸参数：预设照列、对象分支变成自定义宽高（原样发对象）。
+ * 认不出联合（没有带 width / height 的对象分支）回 null。
+ */
+export function sizeUnionSpec(key, node, defs, { required = false } = {}) {
+  const alt = node?.anyOf || node?.oneOf;
+  if (!Array.isArray(alt)) return null;
+  const branches = alt.map((x) => deref(x, defs));
+  const obj = branches.find((b) => b && b.properties && isNum(deref(b.properties.width, defs)) && isNum(deref(b.properties.height, defs)));
+  if (!obj) return null;
+  const en = branches.find((b) => Array.isArray(b?.enum));
+  const vals = (en?.enum || []).filter((x) => typeof x === 'string');
+  const options = vals.map((x) => ({ value: x, label: valueLabel(x, 'resolution') }));
+  const dflt = typeof node.default === 'string' && vals.includes(node.default) ? node.default : (typeof en?.default === 'string' && vals.includes(en.default) ? en.default : undefined);
+  if (dflt === undefined && !required) options.unshift({ value: '', label: '默认' });
+  const ow = deref(obj.properties.width, defs), oh = deref(obj.properties.height, defs);
+  const desc = typeof node.description === 'string' ? node.description.replace(/\s+/g, ' ').trim().slice(0, 300) : undefined;
+  return P.size(key, labelFor(key, node.title), options, {
+    group: 'advanced', ...(desc ? { desc } : {}),
+    custom: { width: sideRule(ow), height: sideRule(oh), exact: true }, encode: 'object',
+    default: dflt ?? (options[0]?.value ?? { width: Number(ow.default) || 1024, height: Number(oh.default) || 1024 }),
+  });
+}
+
+/**
+ * 顶层独立的 width / height 两个数（Replicate 常见）→ 一个尺寸参数（键 width_height，请求时拆回两个字段）。
+ * 有 aspect_ratio 枚举且含 'custom' 时，只在选了 custom 时出现（Replicate FLUX 的写法）；否则多一档「默认」（不传）。
+ */
+export function splitSizeSpec(props, defs, required) {
+  const w = deref(props.width, defs), h = deref(props.height, defs);
+  if (!isNum(w) || !isNum(h)) return null;
+  const ar = deref(props.aspect_ratio || props.aspectRatio, defs);
+  const arKey = props.aspect_ratio ? 'aspect_ratio' : props.aspectRatio ? 'aspectRatio' : null;
+  const gated = arKey && Array.isArray(ar?.enum) && ar.enum.includes('custom');
+  const need = required.has('width') || required.has('height');
+  const obj = { width: Number.isFinite(w.default) ? w.default : 1024, height: Number.isFinite(h.default) ? h.default : 1024 };
+  const options = gated || need ? [] : [{ value: '', label: '默认' }];
+  return P.size('width_height', '尺寸', options, {
+    group: 'advanced', custom: { width: sideRule(w), height: sideRule(h), exact: true },
+    encode: 'split', fields: { width: 'width', height: 'height' },
+    default: options.length ? '' : obj, ...(gated ? { when: { [arKey]: 'custom' } } : {}),
+  });
+}
 
 /**
  * 一个 JSON Schema 属性 → ParamSpec（不是参数的回 null）。
@@ -175,8 +233,13 @@ export function fromJsonSchema(kind, schema, defs = {}) {
   const skipped = [];
   const textKey = (TEXT_FIELDS[kind] || ['prompt']).find((k) => k in props);
   if (textKey) wire.text = textKey;
+  // 尺寸：独立的 width / height 合成一个尺寸参数（排在 width 原来的位置）
+  const split = kind === 'image' || kind === 'video' ? splitSizeSpec(props, defs, required) : null;
   for (const key of keys) {
     if (key === textKey) continue;
+    if (split && (key === 'width' || key === 'height')) { if (key === 'width' || !keys.includes('width')) params.push(split); continue; }
+    const union = sizeUnionSpec(key, props[key], defs, { required: required.has(key) });
+    if (union) { params.push(union); continue; }
     const v = deref(props[key], defs);
     const k = normKey(key);
     if (SKIP_KEYS.test(k)) continue;
@@ -218,7 +281,9 @@ export function fromOpenRouterImage(m) {
     if (key === 'input_references') continue;
     if (key === 'seed') { params.push(P.seed()); continue; }
     if (key === 'size' && d.type === 'boolean') {
-      params.push(P.text('size', '尺寸', { format: 'size', max: 16, desc: '像素宽×高，如 2048x1152（填了就不按比例与分辨率算）' }));
+      // 目录的 boolean 只说明「可能收这个字段」（端点并集），不给像素约束：给自定义宽高、不设上限，交给上游校验；
+      // 填了自定义就不再发比例 / 分辨率（同 GPT Image 驱动：显式 size 和 aspect_ratio 会冲突）
+      params.push(P.size('size', '尺寸', [{ value: '', label: '默认' }], { group: 'advanced', default: '', custom: { width: { min: 16 }, height: { min: 16 }, exact: false }, encode: 'x' }));
       continue;
     }
     if (d.type === 'enum' && Array.isArray(d.values) && d.values.length) {
@@ -237,6 +302,9 @@ export function fromOpenRouterImage(m) {
       continue;
     }
     if (d.type === 'boolean') params.push(P.bool(key, labelFor(key)));
+  }
+  if (params.some((s) => s.type === 'size' && s.key === 'size')) {
+    for (const s of params) if (s.key === 'aspect_ratio' || s.key === 'resolution') s.when = { ...(s.when || {}), size: '' };
   }
   const refMax = sp.input_references?.type === 'range' ? Number(sp.input_references.max) || 0 : ((m?.architecture?.input_modalities || []).includes('image') ? 1 : 0);
   const inputs = { text: true, ...(refMax > 0 ? { images: { max: refMax, roles: ['edit', 'ref'] } } : {}), multiTurn: false };
@@ -313,6 +381,8 @@ export function imagePriceHint(endpoints) {
  */
 export function wireBody(wire, params, req, uri) {
   const body = {};
+  // 尺寸参数按卡上的 encode 编码（自由宽高 → 'WxH' / 对象 / 拆成 width + height；auto 不传；原图换成适配后的宽高）
+  params = encodeSizeParams(req?.card?.params, params || {}, req).params;
   for (const [k, v] of Object.entries(params || {})) {
     if (k === 'extra' || v === undefined || v === null || v === '') continue;
     body[k] = v;

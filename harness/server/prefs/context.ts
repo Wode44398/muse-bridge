@@ -15,15 +15,23 @@ export const CONTEXT_PREFS: PrefSpec[] = [
     },
   },
   {
-    key: "idleCompact",
-    type: "bool",
-    default: true,
+    // 11-14 起取代原来的开关 idleCompact（老设置读进来：明确开着的记成「自动压缩」、关着的「只提示」，见 prefs.ts load）
+    key: "cacheExpiry",
+    type: "enum",
+    // 默认只提示：5 分钟缓存的模型上自动压缩会在用户停下来不到 4 分钟时就动手，得用户自己选
+    default: "hint",
     group: "context",
-    label: "空闲时赶在缓存过期前压缩",
-    desc: "用 Anthropic 官方接口的长对话空闲约 54 分钟、1 小时提示缓存快过期时，先把上下文压缩一次，回来接着聊不用按原价重写整段缓存",
+    label: "提示缓存快过期时",
+    desc: "缓存多久过期按模型算，可在模型中心里改。只提示：过期后在输入框上方提醒；自动压缩：长对话在过期前先压缩一次",
+    options: [
+      { value: "off", label: "不提示" },
+      { value: "hint", label: "只提示" },
+      { value: "compact", label: "自动压缩" },
+    ],
     en: {
-      label: "Compact idle conversations before the cache expires",
-      desc: "When a long conversation on the official Anthropic API has been idle for about 54 minutes and its one-hour prompt cache is about to expire, compact it first so coming back does not rewrite the whole cache at full price.",
+      label: "When the prompt cache is about to expire",
+      desc: "Cache lifetime depends on the model and can be changed in the Model hub. Notify only: a note appears above the composer once it expires. Compact automatically: long conversations are compacted just before it expires.",
+      options: { off: "Don't notify", hint: "Notify only", compact: "Compact automatically" },
     },
   },
   {
@@ -33,9 +41,9 @@ export const CONTEXT_PREFS: PrefSpec[] = [
     min: 30_000,
     max: 1_000_000,
     group: "context",
-    label: "空闲压缩的起点（token）",
-    desc: "上下文至少这么大才做空闲压缩",
-    en: { label: "Idle compaction threshold (tokens)", desc: "Only conversations with at least this much context are compacted while idle." },
+    label: "自动压缩的起点（token）",
+    desc: "上下文至少这么大，缓存快过期时才自动压缩",
+    en: { label: "Automatic compaction threshold (tokens)", desc: "Only conversations with at least this much context are compacted before the cache expires." },
   },
   {
     key: "memoryDream",

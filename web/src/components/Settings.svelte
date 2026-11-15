@@ -86,7 +86,7 @@
     prefGroups, prefItems, prefGroupLabel, prefLabel, prefDesc, prefOptions, prefChanged, prefValueLabel, setPref, parsePrefNumber,
     sessionTitle, exportDiag, versionLine, openInDimensio,
     feed, setFeedDetail, FEED_DESC,
-    curVendorLabel, extOk as dmExtOk, mcpLine, skillLine,
+    curVendorLabel, extOk as dmExtOk, mcpLine, skillLine, dimDispatchLine,
   } from '../lib/dimensioSettings.svelte.js';
   import { goto } from '../lib/pageMorph.js';
   import Sym from './ios27/Sym.svelte';
@@ -159,7 +159,7 @@
   // Claude 页只放常用组（撞上限额时 / 服务意外重启时 / 新会话默认 / 对话 / 会话协作 / 安全），Git 与拉取请求、会话管理、通知、这台电脑、
   // 扩展与记忆折成推入行；枚举项推入单选子页（cl-<键>，每项一行说明）。输入建议、自动压缩点 10-20 起存服务端。
   // 「自动压缩点」在对话页用量弹层上拖；这里只给一个恢复默认（CLI 自定）的出口
-  const CL_CHOICE = { 'cl-perm': 'permissionMode', 'cl-style': 'outputStyle', 'cl-qto': 'questionTimeout', 'cl-lang': 'replyLanguage',
+  const CL_CHOICE = { 'cl-perm': 'permissionMode', 'cl-style': 'outputStyle', 'cl-qto': 'questionTimeout', 'cl-lang': 'replyLanguage', 'cl-cache': 'cacheExpiry',
     'cl-newsess': 'newSessionPolicy', 'cl-inbound': 'crossSessionInbound', 'cl-base': 'worktreeBaseRef', 'cl-attrib': 'attribution', 'cl-archive': 'autoArchiveDays',
     'cl-pmax': 'projectMaxLive', 'cl-pdaily': 'projectDailyThreads', 'cl-pmodel': 'projectThreadModel', 'cl-peffort': 'projectThreadEffort' };
   const CL_GROUP = { 'cl-git': () => t('Git 与拉取请求'), 'cl-sessions': () => t('会话管理'), 'cl-notify': () => t('通知'), 'cl-host': () => t('这台电脑'), 'cl-ext': () => t('扩展与记忆') };
@@ -230,6 +230,26 @@
     dpAsking = true;
     dispatchLeaveGuard().then((ok) => { dpAsking = false; if (ok) go(); });
   }
+  // 调用策略的两个推入页：Claude 那份（Claude 页里）与 dimensio 那份（dimensio 页里，'dm-dispatch'）。正文是同一个组件，离开守卫、
+  // 浮层登记、左缘右滑的避让都共用这一套（同一时刻栈里只会有其中一页）
+  const DISPATCH_PAGES = ['cl-dispatch', 'dm-dispatch'];
+  // dimensio 页那一行：副标题读 dimensio 那份状态（dimDispatch），状态模块同上懒加载；dimensio 读到了设置才有这一行
+  const ddp = $derived(dpm?.dimDispatch.dp || null);
+  function ddpLoad() {
+    dpImp ||= import('../lib/dispatchPolicy.svelte.js');
+    dpImp.then((m) => { dpm = m; return m.dimDispatch.loadDispatch(); }).catch(() => { if (!dpm) dpImp = null; });
+  }
+  const ddpSub = $derived(ddp ? dimDispatchLine(ddp) : '');
+  let ddpRowErr = $state(''), ddpErrTimer = 0;
+  async function toggleDimDispatch() {
+    if (!dpm || !ddp?.policy) return;
+    ddpRowErr = '';
+    try { await dpm.dimDispatch.setDispatch({ enabled: !ddp.policy.enabled }); }
+    catch (e) {
+      ddpRowErr = tr(e?.message || '') || t('没保存上，请重试');
+      clearTimeout(ddpErrTimer); ddpErrTimer = setTimeout(() => { ddpRowErr = ''; }, 4000);
+    }
+  }
   // 拖性价比图的判定线期间不接左缘右滑返回：手柄就贴在屏幕左缘那 40px 里。PlanChart 拖动开始 / 结束时派发 dp-drag（detail = true / false）。
   // 另起一个标志，不借 sliding——那个会给整页加 .previewing、把分组卡变透明。松手时兜底复位（正文中途被卸掉也不会卡在「拖动中」）
   let dpDrag = false;
@@ -244,7 +264,7 @@
   // 光靠 dp-drag 不够：组件里的 onpointerdown 走 Svelte 的事件委托，比右滑手势挂在外壳上的原生监听晚触发，按下那一刻标志还没立起来。
   // 手柄声明了 touch-action:none（契约 §4.3），按在这样的元素上就认定是它的手势
   function dpOwnsTouch(e) {
-    if (stack[stack.length - 1] !== 'cl-dispatch') return false;
+    if (!DISPATCH_PAGES.includes(stack[stack.length - 1])) return false;
     for (let n = e?.target; n && n.nodeType === 1 && !n.classList.contains('settings'); n = n.parentElement) {
       if (getComputedStyle(n).touchAction === 'none') return true;
     }
@@ -258,6 +278,8 @@
   const dimEnabled = $derived.by(() => { const a = agentById('dimensio'); return !a || (a.switch && a.runnable); });
   const dimOpen = $derived(stack.includes('ag-dimensio'));
   $effect(() => { if (dimOpen && dimEnabled) untrack(() => loadDimensio({ quiet: true })); });
+  // dimensio 读到了设置才取它那份调用策略（入口行的副标题要读）
+  $effect(() => { if (dimOpen && dimEnabled && dimReady()) untrack(ddpLoad); });
   let dmEdit = $state(null);   // null | { kind:'key'|'ws'|'num'|'text', id?, title, message, value, password?, multiline?, placeholder?, busy, err }
   let dmPicking = $state(false);
   function openKeyEdit(v) {
@@ -1052,7 +1074,7 @@
     wallpaper: () => t('壁纸'), flux: () => t('流体壁纸'), agentapi: () => t('Agent 接入'), 'model-hub': () => t('模型中心'),
     phone: () => t('手机操控'), devices: () => t('设备'), 'fwd-new': () => t('新的转发'), about: () => t('关于'), history: () => t('版本历史'),
     account: () => (me.kind === 'none' ? t('登录') : t('账户')), policy: () => t('额度与注册'), extensions: () => t('扩展'),
-    studio: () => 'Media Studio', 'cl-dispatch': () => t('子 agent 调用策略'),
+    studio: () => 'Media Studio', 'cl-dispatch': () => t('子 agent 调用策略'), 'dm-dispatch': () => t('子 agent 调用策略'),
     ...CL_GROUP,
     ...Object.fromEntries(Object.entries(CL_CHOICE).map(([pid, key]) => [pid, () => csLabel(key)])),
   };
@@ -1084,6 +1106,8 @@
     if (s === 'claude' || s === 'agents' || s === 'ag-claude') return ['root', 'ag-claude'];
     // 子 agent 调用策略：Claude 页里推入的一页（没有这一行的身份落在 Claude 页）
     if (s === 'dispatch' || s === 'cl-dispatch') return cs.shell || cs.admin ? ['root', 'ag-claude', 'cl-dispatch'] : ['root', 'ag-claude'];
+    // dimensio 那份调用策略：dimensio 页里推入的一页
+    if (s === 'dm-dispatch' || s === 'dimensio-dispatch') return ['root', 'ag-dimensio', 'dm-dispatch'];
     // Media Studio；Gemini 设置页 11-04 删了，指向它的老入口（gemini / vertex）一并落到这里
     if (s === 'studio' || s === 'ag-studio' || s === 'media' || s === 'gemini' || s === 'ag-gemini' || s === 'vertex') return studioOn ? ['root', 'studio'] : ['root'];
     if (s.startsWith('ag-')) return ['root', s];
@@ -1200,7 +1224,9 @@
   // Claude 页一露面（点进来、外部直达）就取调用策略：入口行的副标题要读它。子页不在栈里了，它报过的浮层状态一并清掉
   const clOpen = $derived(stack.includes('ag-claude'));
   $effect(() => { if (clOpen && dpShown) untrack(dpLoad); });
-  const dpOpen = $derived(stack.includes('cl-dispatch'));
+  // 栈里是哪一份调用策略的子页：'cl-dispatch'（Claude）/ 'dm-dispatch'（dimensio）/ ''。两份不会同时在栈里（从 dimensio 那页去 Claude 那页走的是直达，整栈换掉）
+  const dpPage = $derived(DISPATCH_PAGES.find((p) => stack.includes(p)) || '');
+  const dpOpen = $derived(!!dpPage);
   $effect(() => { if (!dpOpen) dpModal = false; });
   // 子页正文不挂在页面里。单栏 / 双栏一切换（视口跨过 700：手机转屏、折叠屏开合、拉窗口），页面是整组重挂的（见上面跟 split 走的
   // 那个 effect）；正文要是跟着重挂，没保存的草稿和正在看的那一套都回到服务端那份，它还会把这当成「没问就离开了」、补弹一次
@@ -1734,6 +1760,7 @@
     {@render cToggle('planClearContext')}
     {@render cPush('questionTimeout', 'cl-qto')}
     {@render cPush('replyLanguage', 'cl-lang')}
+    {@render cPush('cacheExpiry', 'cl-cache')}
     {#if changed('compactFrac')}
       <button class="r" type="button" onclick={() => resetVal('compactFrac')}>
         <span class="r-main"><span class="r-tx"><span class="r-lbl">{csLabel('compactFrac')}{@render cDot('compactFrac')}</span></span><span class="r-d num">{valueLabel('compactFrac')}</span><span class="r-d accent">{t('恢复默认')}</span></span>
@@ -2021,6 +2048,22 @@
       </div>
       {@render gfoot(t('启动参数（上下文、缓存精度、识图……）与启停在 dimensio 的本机模型面板里改。'))}
     {/if}
+
+    <!-- 子 agent 调用策略（dimensio 那份）：同 Claude 页「对话」组里那一行——行按钮铺满整行、点了推入 'dm-dispatch'；开关压在上面 -->
+    {@render ghead(t('子 agent 调度'))}
+    <div class="ig">
+      <div class="r dpr" role="group" aria-label={t('子 agent 调用策略')}>
+        <span class="r-main">
+          <button class="dpr-go" type="button" onclick={() => push('dm-dispatch')}>
+            <span class="r-tx">{t('子 agent 调用策略')}<span class="r-sub" class:err={!!ddpRowErr}>{#if ddpRowErr || ddpSub}{ddpRowErr || ddpSub}{:else}&nbsp;{/if}</span></span>
+          </button>
+          <!-- 策略读到了才摆开关（位置先占着）：不然它会先以「关」露面、再滑到「开」 -->
+          <span class="dpr-sw">{#if ddp?.policy}<Toggle checked={!!ddp.policy.enabled} disabled={ddp.canEdit === false} onchange={toggleDimDispatch} label={t('按策略调用')} />{/if}</span>
+          {@render chev()}
+        </span>
+      </div>
+    </div>
+    {@render gfoot(t('派子 agent 时按难度选模型与思考深度：可以跟随 Claude 的调用策略，也可以给 dimensio 单独定一套。'))}
 
     {@render ghead(t('权限与安全'))}
     <div class="ig">
@@ -3112,7 +3155,7 @@
     {:else}<p class="plg-gone">{t('这个插件面板不在了（插件被关掉或卸载了）')}</p>{/if}
   {:else if pid === 'studio' || pid.startsWith('st:')}{@render pStudio(pid)}
   {:else if pid === 'ag-claude'}{@render pClaude()}
-  {:else if pid === 'cl-dispatch'}{@render pDispatch()}
+  {:else if DISPATCH_PAGES.includes(pid)}{@render pDispatch()}
   {:else if pid.startsWith('ag-')}{@render pAgent(pid.slice(3))}
   {:else if pid.startsWith('dm:')}{@render pDmSub(pid.slice(3))}
   {:else if pid.startsWith('dp:')}{@render pDpChoice(pid.slice(3))}
@@ -3129,7 +3172,7 @@
   {@const base = split ? 1 : 0}
   {@const top = nav || i === depth - 1}
   {@const under = !nav && i >= base && i === depth - 2}
-  <section class="pg" class:top class:under class:hidden={!top && !under} class:wide={pid === 'cl-dispatch'}
+  <section class="pg" class:top class:under class:hidden={!top && !under} class:wide={DISPATCH_PAGES.includes(pid)}
     style:transform={!nav && top && i > base ? `translate3d(${navX}px,0,0)` : under ? `translate3d(${-0.3 * (panelW - navX) * (navX < panelW ? 1 : 0)}px,0,0)` : null}
     style:--dim={under ? 0.1 * (1 - navX / Math.max(1, panelW)) : 0}
     aria-hidden={!top}>
@@ -3164,13 +3207,16 @@
     <!-- 子 agent 调用策略子页的正文：挂在上面两种布局的分支之外，栈里有这一页就一直是同一个实例（单栏 / 双栏切换不重挂）；
          落座到那一页的空位（pDispatch 的 .dp-slot）里显示。它的浮层开着时经 onModal 告诉外壳（dpModal） -->
     {#if dpOpen}
-      <div class="dp-host" bind:this={dpHost}>
-        {#await import('./claude/dispatch/DispatchPolicy.svelte') then m}
-          <m.default shell="ios" onModal={(v) => { dpModal = !!v; }} />
-        {:catch}
-          {@render gfoot(t('调用策略没加载出来：关掉设置再打开试试。'))}
-        {/await}
-      </div>
+      <!-- 哪一份调用策略跟着那一页走（dm-dispatch = dimensio 那份）；换了就整个重挂 -->
+      {#key dpPage}
+        <div class="dp-host" bind:this={dpHost}>
+          {#await Promise.all([import('./claude/dispatch/DispatchPolicy.svelte'), import('../lib/dispatchPolicy.svelte.js')]) then [m, st]}
+            <m.default shell="ios" store={dpPage === 'dm-dispatch' ? st.dimDispatch : st.claudeDispatch} onModal={(v) => { dpModal = !!v; }} />
+          {:catch}
+            {@render gfoot(t('调用策略没加载出来：关掉设置再打开试试。'))}
+          {/await}
+        </div>
+      {/key}
     {/if}
   </div>
 

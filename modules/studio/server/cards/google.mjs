@@ -98,7 +98,8 @@ function videoCard(model) {
   const params = [
     P.enum('aspectRatio', '比例', C.veo.aspects.map((a) => ({ value: a.id, label: a.name })), { default: 'auto' }),
     P.enum('resolution', '分辨率', res.map((r) => ({ value: r, label: r === '4k' ? '4K' : r })), { default: res.includes('720p') ? '720p' : res[res.length - 1] }),
-    P.enum('durationSeconds', '时长', veoDurSupport(model).map((d) => ({ value: d, label: d + ' 秒' })), { default: veoDurClamp(model, C.veo.defaults.duration) }),
+    // 参考图生成视频只支持 8 秒（Veo 3.1 模型页）：有参考图时其余档不成立
+    P.enum('durationSeconds', '时长', veoDurSupport(model).map((d) => ({ value: d, label: d + ' 秒', ...(caps.ref && d !== 8 ? { only: { $ref: false } } : {}) })), { default: veoDurClamp(model, C.veo.defaults.duration) }),
   ];
   if (!AUDIO_FIXED.has(model)) params.push(P.bool('generateAudio', '生成音频', { group: 'basic', default: false }));
   if (veoOnly) {
@@ -114,14 +115,15 @@ function videoCard(model) {
     inputs: { text: true, images: { max: Math.max(1, caps.ref || 0), roles }, negative: veoOnly },
     params,
     // 任务类型不是 API 字段，按给的素材定（适配器里）；这里只夹参数
-    normalize(raw = {}) {
+    normalize(raw = {}, ctx = {}) {
       let resolution = VEO_RESOLUTIONS.has(raw.resolution) ? raw.resolution : '720p';
+      const dur = caps.ref && ctx.$ref ? 8 : veoDurClamp(model, raw.durationSeconds);
       const allowed = veoResSupport(model);
       if (!allowed.includes(resolution)) resolution = allowed.includes('720p') ? '720p' : allowed[allowed.length - 1];
       return strip({
         aspectRatio: VEO_ASPECTS.has(raw.aspectRatio) ? raw.aspectRatio : 'auto',
         resolution,
-        durationSeconds: veoDurClamp(model, raw.durationSeconds),
+        durationSeconds: dur,
         generateAudio: raw.generateAudio === true,
         enhancePrompt: veoOnly && raw.enhancePrompt === false ? false : undefined,
         compressionQuality: (veoOnly && VEO_QUALITIES.has(raw.compressionQuality) && raw.compressionQuality) || undefined,

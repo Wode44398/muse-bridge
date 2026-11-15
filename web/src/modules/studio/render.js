@@ -5,6 +5,7 @@
 //   ParamSpec 增量：unit?: 's'|'px'|'%' · desc?（不上正文，悬停 / 长按标签才出）· format?: 'aspect'|'resolution'|'duration'|'size'|'count'
 //                   · options[].hint?（菜单里行尾的一小段，比如价格档）
 import { optionsOf, visibleSpec } from './params.js';
+import { parseSize, isCustomSize, sizeText } from './size.js';
 
 const RATIO = /^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/;
 export const isRatio = (v) => RATIO.test(String(v ?? ''));
@@ -27,11 +28,13 @@ export const textPx = (s) => [...String(s ?? '')].reduce((n, c) => n + (c.charCo
  *   seg     ≤4 项的短枚举（右栏宽度放得下才用）· aspect 比例小形状格 · select 选择钮 + 菜单（项多 / 标签长；>12 项菜单带搜索）
  *   steps   小范围整数（张数这类 1–4）→ 分段 · slider 有上下限的数值 · number 没上下限的数值 · switch 开关 · seed 种子
  *   voice   音色 · text 单行 · textarea 多行（提示类长文本）· json 原始参数（放到最末「原始参数」组）
+ *   size    尺寸（方案 §10）：档位 / 预设菜单 +「自定义」宽 × 高（没有档位的只有宽 × 高）
  * @param labelOf (opt) → 显示文字（界面先过 tr()）
  * @param room 右侧控件列大约多宽（px）：参数坞里实测约 142，各端用同一个数，控件不随设备变
  */
 export function controlOf(spec, opts = [], { labelOf = (o) => String(o.label ?? o.value), room = 140 } = {}) {
   switch (spec?.type) {
+    case 'size': return 'size';
     case 'bool': return 'switch';
     case 'seed': return 'seed';
     case 'voice': return 'voice';
@@ -154,6 +157,12 @@ export function fmtNumber(spec, v) {
 export const selfExplaining = (spec) => !!formatOf(spec);
 export function chipValue(spec, v, { labelOf = (o) => String(o.label ?? o.value), modelId = '', values = {} } = {}) {
   switch (spec?.type) {
+    case 'size': {
+      if (isCustomSize(v)) { const s = parseSize(v); return s ? sizeText(s) : null; }
+      const o = optionsOf(spec, modelId, values).find((x) => x.value === v) || (spec.options || []).find((x) => x.value === v);
+      if (!o || o.value === '' || o.value === 'auto') return null;   // 「默认，不传」「自动」不占芯片（同其它默认项）
+      return labelOf(o);
+    }
     case 'enum': {
       const o = optionsOf(spec, modelId, values).find((x) => x.value === v) || (spec.options || []).find((x) => x.value === v);
       if (!o) return null;

@@ -1,4 +1,4 @@
-// Routines: scheduled, unattended Claude runs. Persistence + next-run math only;
+// Routines: scheduled, unattended Claude / dimensio runs. Persistence + next-run math only;
 // the scheduler loop + execution live in runtime/routines-runner.mjs.
 //
 // Multi-user: every function takes the OWNER's data dir (admin -> ROOT; user ->
@@ -14,6 +14,10 @@ import { normSchedule, computeNextRun } from './routine-schedule.mjs';
 export { normSchedule, computeNextRun };
 
 const SESSION_MODES = new Set(['new', 'continue']);
+// 引擎：claude（重放 /api/chat）| dimensio（11-14 起，经 dimensio 扩展的 familyCall 在属主自己的 dimensio 实例里开会话跑，
+// 见 runtime/routines-runner.mjs）。vertex 是 11-04 下线的 Gemini 残留，读到时停用。
+export const ENGINES = new Set(['claude', 'dimensio']);
+const engineOf = (v) => (v === 'dimensio' ? 'dimensio' : 'claude');
 export const RUNS_KEPT = 30;   // 每条任务留最近多少次运行记录
 const fileIn = (dir) => path.join(dir, 'routines.json');
 
@@ -40,7 +44,8 @@ function persist(dir, list) {
   writeJson(fileIn(dir), list, 2); // atomic; ensures dir; pretty-printed
 }
 
-// 引擎之外的设置（Claude 才用得上的 Code 侧字段）。路由层已按身份校验过 cwd / 权限模式，这里只管形状。
+// 引擎之外的设置（Code 侧字段；worktree / branch / fast / shape 只有 Claude 用，dimensio 用 cwd、权限模式（= 它的运行档位）、
+// 会话方式、通知）。路由层已按身份与引擎校验过 cwd / 权限模式，这里只管形状。
 function settingsFields(input, base = {}) {
   const out = {};
   if ('description' in input) out.description = String(input.description || '').trim().slice(0, 300);
@@ -61,18 +66,21 @@ export function list(dir) { return load(dir); }
 export function get(dir, id) { return load(dir).find((r) => r.id === id) || null; }
 
 export function create(dir, input = {}) {
-  const { name, prompt, schedule, enabled = true, agent, model, effort, search } = input;
+  const { name, prompt, schedule, enabled = true, agent, provider, model, effort, search } = input;
   const items = load(dir);
   const sched = normSchedule(schedule);
   const on = enabled !== false;
+  const eng = engineOf(agent);
   const r = {
     id: randomUUID(),
     name: String(name || '').trim().slice(0, 120) || '未命名任务',
     description: '',
     prompt: String(prompt || ''),
-    // Engine: 只剩 Claude（Gemini 引擎 2026-11-04 随 Gemini 对话下线）。model/effort are validated
-    // against the whitelists in the route; null here means "use the server default".
-    agent: 'claude',
+    // Engine: Claude 或 dimensio（Gemini 引擎 2026-11-04 随 Gemini 对话下线）。model/effort are validated
+    // in the route (Claude 按白名单；dimensio 只查形状，型号认不认由 dimensio 开会话时判); null = 用默认。
+    // provider：dimensio 的厂商 id（Claude 恒 null）；effort 在 dimensio 那边是思考深度（thinking）。
+    agent: eng,
+    provider: eng === 'dimensio' && provider ? String(provider) : null,
     model: model ? String(model) : null,
     effort: effort ? String(effort) : null,
     search: !!search,
@@ -104,8 +112,22 @@ export function update(dir, id, patch = {}) {
   if (patch.prompt != null) r.prompt = String(patch.prompt);
   if (patch.schedule != null) r.schedule = normSchedule(patch.schedule);
   if (patch.enabled != null) r.enabled = !!patch.enabled;
-  // 引擎只剩 Claude：残留的 Gemini 任务被编辑时（改引擎 / 重新启用）一并转成 Claude，停用标记去掉
-  if (patch.agent != null || (patch.enabled === true && r.agent === 'vertex')) { r.agent = 'claude'; delete r.retired; }
+  // 残留的 Gemini 任务被编辑时（改引擎 / 重新启用）一并转成 Claude（或改选的 dimensio），停用标记去掉
+  if (patch.agent != null || (patch.enabled === true && r.agent === 'vertex')) {
+    const next = engineOf(patch.agent);
+    if (next !== r.agent) {
+      // 换了引擎：会话 id 是各引擎自己的——接着用的那个会话作废；只对另一个引擎有意义的设置清掉
+      //（权限模式两边的取值不同：这次没一起给就回到默认）
+      r.threadSessionId = null;
+      if (!('permissionMode' in patch)) r.permissionMode = null;
+      if (next === 'dimensio') Object.assign(r, { worktree: false, branch: null, fast: false, shape: null });
+      else r.provider = null;
+    }
+    r.agent = next;
+    delete r.retired;
+  }
+  // dimensio 换了厂商 / 型号：接着用的会话照样续（开跑时在那个会话里换，与输入框换型号同一条路），不作废
+  if ('provider' in patch) r.provider = r.agent === 'dimensio' && patch.provider ? String(patch.provider) : null;
   if ('model' in patch) r.model = patch.model ? String(patch.model) : null;
   if ('effort' in patch) r.effort = patch.effort ? String(patch.effort) : null;
   if (patch.search != null) r.search = !!patch.search;
@@ -131,7 +153,8 @@ export function duplicate(dir, id) {
 
 // ---- 运行记录 ----
 // run = { id, at, trigger: 'schedule' | 'manual', status: 'running' | 'ok' | 'error' | 'stopped' | 'skipped',
-//         sessionId?, preview?, endedAt?, cost? }。最新的在前，留 RUNS_KEPT 条。
+//         sessionId?, preview?, endedAt?, cost?, agent? }。最新的在前，留 RUNS_KEPT 条。
+// agent：'dimensio' = 这次的会话在 dimensio 那边（界面据此深链到 dimensio 页；任务后来换了引擎，旧记录照样打开得对）。
 export function startRun(dir, id, run) {
   const items = load(dir);
   const r = items.find((x) => x.id === id);

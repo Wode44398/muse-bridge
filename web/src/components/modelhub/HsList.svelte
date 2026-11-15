@@ -3,6 +3,7 @@
   // 目录可能几百上千条：行用 content-visibility 跳过屏外渲染；事件全挂在列表根上（委托），不给每行挂监听；
   // 键盘焦点用 aria-activedescendant 指在行上（行本身不进 Tab 序列），↑↓ / Home / End 移动、空格 / 回车勾选。
   // 已添加的行名字用重字（其余常规字重），几百行里一眼能挑出来；pinN > 0 时前 pinN 行是置顶的已添加段，段后画一道分隔。
+  // 行尾的小按钮（11-15）：提示缓存时长、调用配置（改过的写「已自定义」、用正文色）；手动添加的模型标「手动」、带删除。
   import { untrack } from 'svelte';
   import BrandLogo from './BrandLogo.svelte';
   import AgentStack from './AgentStack.svelte';
@@ -13,7 +14,7 @@
   let {
     rows = [], picked, onpick, busy = false, filtered = false, onclearfilters,
     revealKey = '', narrow = false, listId = 'hs-list', label = '',
-    onmanual, manualOk = true, pinN = 0,
+    onmanual, manualOk = true, pinN = 0, oncache, onadv, ondel,
   } = $props();
 
   let box = $state();
@@ -65,6 +66,17 @@
     bump(el);
   }
   function click(e) {
+    // 行里的小按钮（缓存时长 / 调用配置 / 删除手动添加的）：各开各的，不勾选这一行
+    const cb = e.target.closest?.('.cache, .adv, .del');
+    if (cb && box?.contains(cb)) {
+      const i = Number(cb.closest('[data-i]')?.dataset.i);
+      const r = rows[i];
+      if (!r) return;
+      if (cb.classList.contains('cache')) oncache?.(r.id, cb.getBoundingClientRect());
+      else if (cb.classList.contains('adv')) onadv?.(r.id);
+      else ondel?.(r.id);
+      return;
+    }
     const hit = rowAt(e);
     if (!hit) return;
     fi = hit.i;
@@ -151,9 +163,18 @@
         <span class="nm" class:mono={same} title={same ? r.id : r.label}>{same ? r.id : r.label}</span>
         <span class="sub">
           {#if !same}<span class="id" title={r.id}>{r.id}</span>{/if}
-          {#if r.ctx}<span class="ctx" title={t('上下文')}>{r.ctx}</span>{/if}
+          {#if r.ctx || r.manual}<span class="ctx">{#if r.manual}<span class="mt" title={t('手动添加的模型 ID（接口没列出它）')}>{t('手动')}</span>{/if}{#if r.ctx}<span title={t('上下文')}>{r.ctx}</span>{/if}</span>{/if}
+          {#if (r.cache && oncache) || (r.adv && onadv)}<span class="rb">
+            {#if r.cache && oncache}<button type="button" class="cache" class:set={r.cache.set} title={r.cache.title} aria-label={r.cache.title} tabindex="-1">
+              <svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.6" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.4V6l1.7 1.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>{r.cache.text}</button>{/if}
+            {#if r.adv && onadv}<button type="button" class="adv" class:set={r.custom} tabindex="-1"
+              title={r.custom ? t('调用配置：已自定义（上下文、思考写法或调用参数改过）') : t('调用配置：上下文、输出上限、思考写法、温度等')}
+              aria-label={r.custom ? t('调用配置（已自定义）') : t('调用配置')}>
+              <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1.5 3.5h5M9.5 3.5h1M1.5 8.5h1.5M6 8.5h4.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="3.5" r="1.4" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="4.5" cy="8.5" r="1.4" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>{#if r.custom}{t('已自定义')}{/if}</button>{/if}
+          </span>{/if}
         </span>
       </span>
+      {#if r.manual && ondel}<button type="button" class="del" tabindex="-1" title={t('删除这个手动添加的模型')} aria-label={t('删除这个手动添加的模型')}>{@html svg(G.trash)}</button>{/if}
       {#if !r.can}<span class="na-t" title={r.why || undefined}>{t('暂不支持')}</span>{/if}
       <span class="ags"><AgentStack agents={r.agents} size={16} /></span>
     </div>
@@ -172,6 +193,8 @@
     {#if filtered}
       <span>{t('没有匹配的模型')}</span>
       <button type="button" class="tbtn" onclick={() => onclearfilters?.()}>{t('清除筛选')}</button>
+    {:else if manualOk}
+      <span>{t('这一类没有识别到模型，可以在下面手动添加模型 ID')}</span>
     {:else}
       <span>{t('没有识别到模型')}</span>
     {/if}
@@ -235,6 +258,28 @@
   .id { min-width: 0; font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace; font-size: 12.5px; color: var(--st-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ctx { grid-column: 3; justify-self: end; font-size: 12px; color: var(--st-muted); font-variant-numeric: tabular-nums; }
+  /* 行尾小按钮一组（提示缓存时长、调用配置）：低调的线稿 + 字，改过的用正文色；落在上下文后面一列 */
+  .tx:has(.rb) { grid-template-columns: minmax(0, 44%) minmax(0, 1fr) auto auto; }
+  .rb { grid-column: 4; justify-self: end; display: inline-flex; align-items: center; gap: 2px; margin: -3px 0; }
+  .cache, .adv { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border: 0; border-radius: 6px;
+    background: transparent; color: var(--st-muted); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer;
+    transition: background-color var(--mo-micro) var(--ea-fade), color var(--mo-micro) var(--ea-fade); }
+  .cache svg, .adv svg { width: 12px; height: 12px; flex: none; }
+  .cache.set { color: var(--text); }
+  /* 改过调用配置：正文色的「已自定义」+ 一层底色，几百行里一眼能看见 */
+  .adv.set { color: var(--text); background: var(--st-seg); font-weight: 500; }
+  @media (hover: hover) { .cache:hover, .adv:hover { background: var(--st-hover); color: var(--text); } .adv.set:hover { background: var(--st-sel); } }
+  .cache:active, .adv:active { background: var(--pm-press); }
+  /* 「手动」：上下文前面一枚描边小字（不抢已添加的重字） */
+  .ctx { display: inline-flex; align-items: center; gap: 8px; }
+  .mt { height: 16px; padding: 0 5px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--st-line); font-size: 10.5px; line-height: 16px; color: var(--st-muted); letter-spacing: .02em; }
+  /* 删除手动添加的：行尾去向图标前一颗垃圾桶，悬停整行时才显出来（触屏常显、调淡） */
+  .del { flex: none; display: grid; place-items: center; width: 26px; height: 26px; margin: -4px 0; padding: 0; border: 0; border-radius: 7px; background: transparent;
+    color: var(--st-muted); cursor: pointer; opacity: 0; transition: opacity var(--mo-micro) var(--ea-fade), background-color var(--mo-micro) var(--ea-fade), color var(--mo-micro) var(--ea-fade); }
+  .del :global(svg) { width: 15px; height: 15px; }
+  .row:hover .del, .row.fo .del { opacity: 1; }
+  @media (hover: hover) { .del:hover { background: var(--st-hover); color: var(--pm-red); } }
+  @media (hover: none) { .del { opacity: .7; } }
   .na-t { flex: none; font-size: 12px; color: var(--st-muted); white-space: nowrap; }
   /* 留足两枚叠放图标的宽度（20 + 20 − 压叠 3.2）：行尾图标多少不一，前面的上下文列照样对齐 */
   .ags { flex: none; display: flex; justify-content: flex-end; min-width: 37px; }
@@ -252,6 +297,9 @@
   /* ID 撑满第二行，上下文落在行尾（各行同一条右边线） */
   .narrow .id { flex: 1 1 0; font-size: 12.5px; }
   .narrow .ctx { flex: none; }
+  .narrow .rb { flex: none; margin: -4px -6px -4px 0; }
+  .narrow .cache, .narrow .adv { height: 26px; font-size: 12.5px; }
+  .narrow .del { width: 36px; height: 36px; margin: -8px -4px; opacity: .7; }
 
   /* 骨架：微光是伪元素的 translateX，不动 background-position（合成器上跑，几十行也不卡） */
   .row.sk { cursor: default; overflow: hidden; }

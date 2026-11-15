@@ -123,7 +123,8 @@ export function modelOptions() {
   return (curSpec()?.models || []).map((m) => ({ value: m.id, label: tr(m.label || m.id), desc: m.note ? tr(m.note) : '' }));
 }
 // 目录里开关式档位写「关闭 / 开启」——那是开关的值，不能走 tr() 的普通键（关闭 = Close），同 dimensio 型号菜单
-function effortText(label) {
+// （定时任务页选 dimensio 思考深度也用它，lib/routines.svelte.js）
+export function effortText(label) {
   if (label === '开启') return tc('开关', '开启');   // i18n-ignore（左边比对服务端数据）
   if (label === '关闭') return tc('开关', '关闭');   // i18n-ignore（左边比对服务端数据）
   return tr(label);
@@ -217,9 +218,32 @@ export async function loadPrefs() {
   try { ds.prefs = await api.get(H + '/prefs'); } catch { ds.prefs = null; }
 }
 const en = () => isEn();
-// 「记忆」组的偏好并进上面「记忆管理」那一组显示（memoryOk 时），这里不再单出一组
-export const prefGroups = () => (ds.prefs?.groups || []).filter((g) => (ds.prefs?.items || []).some((p) => p.group === g.id) && !(g.id === 'memory' && memoryOk()));
-export const prefItems = (gid) => (ds.prefs?.items || []).filter((p) => p.group === gid);
+// 「子 agent 调用策略」（下面 dimDispatchLine 那一行进的子页，11-14）取代了这两项：harness 的注册表里可能还登记着，设置页不再渲染
+const SUPERSEDED_PREFS = new Set(['subagentLadder', 'subagentDispatch']);
+/** 设置页要渲染的偏好项（已被别的入口取代的不算）。桌面设置的搜索索引也用它。 */
+export const visiblePrefItems = () => (ds.prefs?.items || []).filter((p) => !SUPERSEDED_PREFS.has(p.key));
+// 「记忆」组的偏好并进上面「记忆管理」那一组显示（memoryOk 时），这里不再单出一组；组里的项都藏掉了整组不出
+export const prefGroups = () => (ds.prefs?.groups || []).filter((g) => visiblePrefItems().some((p) => p.group === g.id) && !(g.id === 'memory' && memoryOk()));
+export const prefItems = (gid) => visiblePrefItems().filter((p) => p.group === gid);
+
+// —— 子 agent 调用策略（dimensio 那份）入口行的副标题：两套外壳共用 ——
+// d = dimDispatch.dp（lib/dispatchPolicy.svelte.js；状态模块由外壳懒加载后传进来）。副标题只放状态：
+// 关 → 一句去向；开 → 跟随 Claude 的哪一套 / 单独一套里生效的那套；三个范围一个都没勾也照实说。
+const DEFAULT_STRATEGY = '默认';   // i18n-ignore 与存下来的名字比较（迁移时自动建的那一套）
+const strategyName = (name) => (!name || name === DEFAULT_STRATEGY ? t('默认') : name);
+export function dimDispatchLine(d) {
+  const p = d?.policy;
+  if (!p) return d?.err ? t('调用策略没读出来，点进去重试') : '';
+  if (!p.enabled) return t('已关闭 · 子 agent 沿用本会话的模型');
+  let head;
+  if (p.follow !== false) head = d.claude ? t('跟随 Claude · {name}', { name: strategyName(d.claude.name) }) : t('跟随 Claude 的策略');
+  else {
+    const s = (p.strategies || []).find((x) => x.id === p.activeId) || p.strategies?.[0];
+    head = t('单独一套 · {name}', { name: strategyName(s?.name) });
+  }
+  const anyScope = !!(p.scope?.workflow || p.scope?.subagent || p.scope?.session);
+  return anyScope ? head : head + ' · ' + t('未选生效范围');
+}
 export const prefGroupLabel = (g) => (en() && g.en ? g.en : tr(g.label));
 export const prefLabel = (p) => (en() && p.en?.label ? p.en.label : tr(p.label));
 export const prefDesc = (p) => (!p.desc ? '' : en() && p.en?.desc ? p.en.desc : tr(p.desc));

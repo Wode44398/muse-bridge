@@ -1,4 +1,6 @@
 // M5 账本（K03、#13）：会话资源账本。
+// 11-14：浏览器从「全进程唯一浏览器的占用」改成「会话自己的那份浏览器」（cdp.ts getBrowser）——活过轮结束、活过停止，
+// 删除与巡检才收（这里的浏览器用 test-harness/fake-browser.ts 的假浏览器，不起真进程）。
 //
 // 修前：bash 后台 job、Preview dev server、共享浏览器的占用各有一张登记表、各有回收函数，停止 / 删除 / 轮结束 / 关停
 // 各自记得调哪几个（删除会话漏收过 job 和 dev server）；owner 会话已经不在的 dev server 没有任何出口会再收，一直跑到
@@ -10,7 +12,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
-import { browserClaimOwner, claimBrowser, releaseBrowser } from "./cdp.ts";
+import { closeAllBrowserSessions, existingBrowser, getBrowser } from "./cdp.ts";
+import { withFakeBrowsers } from "./test-harness/fake-browser.ts";
 import { disposeOwner, registerResource, resourcesOf } from "./resources.ts";
 import { Sandbox } from "./sandbox.ts";
 import { liveServiceCount, startService } from "./services.ts";
@@ -63,7 +66,7 @@ test("M5 账本：按登记的逆序拆、只拆点名的那几类、按类报�
     releaseS1(); // s1 被单独停掉了
 
     assert.deepEqual(disposeOwner("m5-unit", "run-end", ["browser"]), { job: 0, service: 0, browser: 1 });
-    assert.deepEqual(order, ["b1"], "轮结束只放浏览器占用");
+    assert.deepEqual(order, ["b1"], "只拆点名的那一类");
     assert.deepEqual(disposeOwner("m5-unit", "stop"), { job: 1, service: 0, browser: 0 });
     assert.deepEqual(order, ["b1", "j2", "j1"], "逆序拆；单独停掉的 s1 不再拆；s2 拆失败只记一行");
     assert.equal(logged.length, 1);
@@ -74,32 +77,34 @@ test("M5 账本：按登记的逆序拆、只拆点名的那几类、按类报�
   }
 });
 
-test("M5 停止会话：账本收掉它的后台 job、dev server 与浏览器占用，回执按账本报数；别的会话一概不动", { timeout: 60_000 }, async () => {
+test("M5 停止会话：账本收掉它的后台 job、dev server，回执按账本报数；会话自己的浏览器留着（用户还要看页面）；别的会话一概不动", { timeout: 60_000 }, async () => {
   const root = temp();
   const session = createSession();
   const other = "m5-ledger-other";
-  try {
-    assert.ok((await bashTool.run({ command: SLEEP, background: true }, ctxFor(session.id, root))).ok);
-    assert.ok((await bashTool.run({ command: SLEEP, background: true }, ctxFor(other, root))).ok);
-    const port = await freePort();
-    await startService({ command: serverCmd(port), port, cwd: root, owner: session.id });
-    assert.equal(claimBrowser(session.id), null);
-    assert.deepEqual(resourcesOf(session.id).map((r) => r.kind), ["job", "service", "browser"], "三类资源都登记进了账本");
+  await withFakeBrowsers(async () => {
+    try {
+      assert.ok((await bashTool.run({ command: SLEEP, background: true }, ctxFor(session.id, root))).ok);
+      assert.ok((await bashTool.run({ command: SLEEP, background: true }, ctxFor(other, root))).ok);
+      const port = await freePort();
+      await startService({ command: serverCmd(port), port, cwd: root, owner: session.id });
+      const browser = await getBrowser(session.id);
+      assert.deepEqual(resourcesOf(session.id).map((r) => r.kind), ["job", "service", "browser"], "三类资源都登记进了账本");
 
-    const report = stopSession(session.id);
-    assert.equal(report.jobsKilled, 1);
-    assert.equal(report.servicesStopped, 1);
-    assert.equal(liveJobCount(session.id), 0);
-    assert.equal(liveServiceCount(session.id), 0);
-    assert.equal(browserClaimOwner(), "");
-    assert.deepEqual(resourcesOf(session.id), []);
-    assert.equal(liveJobCount(other), 1, "别的会话的 job 不许误杀");
-  } finally {
-    killJobsFor(other);
-    stopSession(session.id);
-    releaseBrowser(session.id);
-    dropSession(session.id);
-  }
+      const report = stopSession(session.id);
+      assert.equal(report.jobsKilled, 1);
+      assert.equal(report.servicesStopped, 1);
+      assert.equal(liveJobCount(session.id), 0);
+      assert.equal(liveServiceCount(session.id), 0);
+      assert.equal(existingBrowser(session.id), browser, "停止不关会话的浏览器");
+      assert.deepEqual(resourcesOf(session.id).map((r) => r.kind), ["browser"], "账上只剩浏览器那一条（删除时收）");
+      assert.equal(liveJobCount(other), 1, "别的会话的 job 不许误杀");
+    } finally {
+      killJobsFor(other);
+      stopSession(session.id);
+      closeAllBrowserSessions();
+      dropSession(session.id);
+    }
+  });
 });
 
 test("M5 巡检：owner 会话已经不在（内存和盘上都没有）的后台 job 与 dev server 收掉；还在的会话一概不动", { timeout: 60_000 }, async () => {
@@ -124,18 +129,22 @@ test("M5 巡检：owner 会话已经不在（内存和盘上都没有）的后�
   }
 });
 
-test("M5 轮结束只放浏览器占用：后台 job 本来就活过这一轮", { timeout: 30_000 }, async () => {
-  const root = temp();
-  const owner = "m5-ledger-run-end";
-  try {
-    assert.ok((await bashTool.run({ command: SLEEP, background: true }, ctxFor(owner, root))).ok);
-    assert.equal(claimBrowser(owner), null);
-    disposeOwner(owner, "run-end", ["browser"]);
-    assert.equal(browserClaimOwner(), "");
-    assert.equal(liveJobCount(owner), 1);
-    assert.deepEqual(resourcesOf(owner).map((r) => r.kind), ["job"]);
-  } finally {
-    killJobsFor(owner);
-    releaseBrowser(owner);
-  }
+test("M5 巡检：owner 会话已经不在的浏览器也收掉（它的标签关掉、账上不剩）；还在的会话的浏览器不动", { timeout: 30_000 }, async () => {
+  const gone = "m5-ledger-gone-browser";
+  const alive = createSession();
+  await withFakeBrowsers(async () => {
+    try {
+      await getBrowser(gone);
+      const kept = await getBrowser(alive.id);
+      const reaped = sweepOrphanResources();
+      assert.equal(reaped.browser, 1, "owner 已不在的那份浏览器收掉了");
+      assert.equal(existingBrowser(gone), undefined);
+      assert.deepEqual(resourcesOf(gone), []);
+      assert.equal(existingBrowser(alive.id), kept, "还在的会话（在内存里）的浏览器不许收");
+    } finally {
+      closeAllBrowserSessions();
+      stopSession(alive.id);
+      dropSession(alive.id);
+    }
+  });
 });

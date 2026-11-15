@@ -1,5 +1,8 @@
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Transform, type Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { Sandbox } from "./sandbox.ts";
 
 // Workspace file access for the UI's attach feature: list directories for the
@@ -76,10 +79,14 @@ async function freeName(abs: string): Promise<string> {
   throw new Error(`too many files named ${stem}${ext}`);
 }
 
+// 单个上传文件的上限。以前是 express.raw 整块读进内存、30 MB 封顶——录音、视频、压缩包一拖就「上传失败」；
+// 现在边收边写盘（先写临时名，收完再改名，断了不留半截文件），上限只防把磁盘写爆。
+export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024;
+
 export async function saveUpload(
   sandbox: Sandbox,
   rel: string,
-  body: Buffer,
+  body: Buffer | Readable,
 ): Promise<{ path: string; size: number }> {
   let abs = sandbox.resolve(rel, { forWrite: true });
   const existing = await fs.stat(abs).catch(() => null);
@@ -92,8 +99,28 @@ export async function saveUpload(
     abs = await freeName(abs); // 同名不覆盖：report.pdf → report-1.pdf
   }
   await fs.mkdir(path.dirname(abs), { recursive: true });
-  await fs.writeFile(abs, body);
-  return { path: sandbox.rel(abs), size: body.length };
+  if (Buffer.isBuffer(body)) {
+    await fs.writeFile(abs, body);
+    return { path: sandbox.rel(abs), size: body.length };
+  }
+  const tmp = path.join(path.dirname(abs), `.${path.basename(abs)}.${process.pid}-${Date.now()}.part`);
+  let size = 0;
+  const count = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      size += chunk.length;
+      if (size > MAX_UPLOAD_BYTES) cb(new Error(`file exceeds the ${MAX_UPLOAD_BYTES / 1024 / 1024 / 1024} GB upload limit`));
+      else cb(null, chunk);
+    },
+  });
+  try {
+    await pipeline(body, count, createWriteStream(tmp));
+    if (sessionScoped) abs = await freeName(abs); // 收的时间可能很长，改名前再避一次同名
+    await fs.rename(tmp, abs);
+  } catch (e) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw e;
+  }
+  return { path: sandbox.rel(abs), size };
 }
 
 // 删会话时回收它的附件目录：会话自己的那个，加上转录里引用到的（新会话第一条消息的附件在草稿 id 目录里）。

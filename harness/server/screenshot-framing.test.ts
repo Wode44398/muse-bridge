@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import os from "node:os";
 import test from "node:test";
-import { getSharedBrowser } from "./cdp.ts";
+import { getBrowser } from "./cdp.ts";
 import { findBrowser } from "./headless.ts";
 import { imageDimensions } from "./image-assets.ts";
 import { Sandbox } from "./sandbox.ts";
@@ -56,7 +56,7 @@ async function shoot(args: Record<string, unknown>) {
 }
 
 test("U5 截图只截一块：selector / ref / clip；视口外的元素先滚进来；找不到的元素说清楚", { skip, timeout: 120_000 }, async () => {
-  const s = await getSharedBrowser();
+  const s = await getBrowser();
   try {
     await s.navigate(PAGE);
     const box = await shoot({ selector: "#box" });
@@ -96,7 +96,7 @@ test("U5 截图只截一块：selector / ref / clip；视口外的元素先滚�
 });
 
 test("U5 截图默认等动画跑完；waitMs:0 立刻截（就要半截那一帧）", { skip, timeout: 120_000 }, async () => {
-  const s = await getSharedBrowser();
+  const s = await getBrowser();
   try {
     await s.navigate(PAGE);
     // 整个视口截（不依赖取景），看 #box 里的一点 (100, 70)

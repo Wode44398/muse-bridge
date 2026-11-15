@@ -173,6 +173,8 @@ export type AgentEvent =
       usedTokens: number;
       limitTokens: number;
       compacted: boolean;
+      // 这个会话的提示缓存多久变冷（毫秒；没有 = 不知道 / 不会过期）：前端「缓存冷了」提示按它算（11-14）
+      cacheTtlMs?: number;
       retry?: number;
       retryInMs?: number;
       retryClass?: string;
@@ -185,7 +187,7 @@ export type AgentEvent =
   // open directly; absent when PV_PUBLIC_DOMAIN isn't configured.
   | { e: "preview"; url: string; frameUrl: string; port: number; serviceId: string; publicUrl?: string }
   | { e: "preview_closed"; serviceId: string }
-  // The agent's shared browser moved somewhere — the frontend opens/updates the
+  // This session's browser moved somewhere — the frontend opens/updates the
   // live Browser pane (screencast) on this.
   | { e: "browser"; url: string; edge?: boolean } // edge = 动的是用户自己的 Edge/Chrome（经扩展），不是内置浏览器——前端别为它展开浏览器面板
   // ── 工作区协同（tools/workspace.ts、tools/terminal.ts；前端在 web/src/lib/workspace-collab.svelte.ts）──

@@ -205,6 +205,8 @@ export default {
   '查看用量': 'View usage',
   '发一条消息后显示上下文用量': 'Send a message to see context usage',
   '更新于 {time} · 发消息后刷新': 'Updated {time} · Refreshes when you send a message',
+  '提示缓存大概已经过期': 'The prompt cache has probably expired',
+  '空闲 {min} 分钟，提示缓存大概已经过期：下一条会按全价重读整段对话': 'Idle for {min} min, so the prompt cache has probably expired: the next message re-reads the whole conversation at full price',
   '更新于 {time}': 'Updated {time}',
   '暂无额度数据': 'Usage unavailable',
   '压缩会话': 'Compact session',

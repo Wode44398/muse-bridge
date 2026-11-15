@@ -91,7 +91,7 @@ test("audio token estimate follows duration and never counts base64 characters",
   assert.equal(estimateTokens("", messages), 625 + 64);
 });
 
-test("attachment runs persist audio and reject unsupported models or excessive batches before sending", async () => {
+test("attachment runs persist audio, and hand audio the model cannot take over as a file path instead of refusing", async () => {
   const session = createSession();
   const ctx = context();
   let received: Turn | undefined;
@@ -104,20 +104,32 @@ test("attachment runs persist audio and reject unsupported models or excessive b
   session.cfg = { provider: "mimo", model: adapter.model, thinking: "off", permissionMode: "auto", workspace: root, access: "workspace" };
   const checkpoint = process.env.CHECKPOINTS; process.env.CHECKPOINTS = "off";
   try {
+    // 11-14：型号不收音频 / 超过内联上限时不再拒发——文件按工作区路径交给模型，附上原因
+    const textOf = () => (received?.messages.at(-1)?.content ?? []).map(b => (b.t === "text" ? b.text : `[${b.t}]`)).join("\n");
+    const hasAudio = () => (received?.messages.at(-1)?.content ?? []).some(b => b.t === "audio");
     ctx.agentHearsAudio = false;
-    assert.throws(() => startRun(session, "", undefined, ["voice.wav"]), /不支持原生音频/);
+    await startRun(session, "Listen", { maxTurns: 1 }, ["voice.wav"]).done;
+    assert.equal(hasAudio(), false);
+    assert.match(textOf(), /- voice\.wav \(audio, not sent as sound because the current model takes no audio input/);
     ctx.agentHearsAudio = true;
-    assert.throws(() => startRun(session, "", undefined, ["large.wav"]), /24 MB/);
+    await startRun(session, "Listen", { maxTurns: 1 }, ["large.wav"]).done;
+    assert.equal(hasAudio(), false);
+    assert.match(textOf(), /large\.wav \(audio, not sent as sound because it is larger than the 24 MB/);
     for (const name of ["batch1.wav", "batch2.wav"]) {
       const file = path.join(root, name); fs.writeFileSync(file, wav); fs.truncateSync(file, 17 * 1024 * 1024);
     }
-    assert.throws(() => startRun(session, "", undefined, ["batch1.wav", "batch2.wav"]), /32 MB/);
-    assert.equal(session.state.messages.length, 0);
+    await startRun(session, "Listen", { maxTurns: 1 }, ["batch1.wav", "batch2.wav"]).done;
+    assert.equal((received?.messages.at(-1)?.content ?? []).filter(b => b.t === "audio").length, 1);
+    assert.match(textOf(), /batch2\.wav \(audio, not sent as sound because the audio in this message exceeds the 32 MB/);
+    fs.writeFileSync(path.join(root, "voice.wma"), Buffer.from("not really an asf container"));
+    await startRun(session, "Listen", { maxTurns: 1 }, ["voice.wma"]).done;
+    assert.match(textOf(), /voice\.wma \(audio in a format that cannot be sent natively/);
     await startRun(session, "Listen", { maxTurns: 1 }, ["voice.wav"]).done;
-    assert.ok(received?.messages[0].content.some(b => b.t === "audio" && b.data === wav.toString("base64")));
+    assert.ok(received?.messages.at(-1)?.content.some(b => b.t === "audio" && b.data === wav.toString("base64")));
     const saved = await loadSession(session.id);
-    assert.deepEqual(saved?.messages[0].attachments, [{ path: "voice.wav", kind: "audio" }]);
-    assert.ok(saved?.messages[0].content.some(b => b.t === "audio" && b.asset && !b.data));
+    const last = saved?.messages.filter(m => m.role === "user").at(-1);
+    assert.deepEqual(last?.attachments, [{ path: "voice.wav", kind: "audio" }]);
+    assert.ok(last?.content.some(b => b.t === "audio" && b.asset && !b.data));
   } finally {
     if (checkpoint === undefined) delete process.env.CHECKPOINTS; else process.env.CHECKPOINTS = checkpoint;
     dropSession(session.id); await deleteSessionFile(session.id); await deleteSessionAssets(session.id);

@@ -4,6 +4,7 @@
 import { accessMode, app, awayMode, goalAvailable, permissionMode, readRoots, type Chat } from "./state.svelte.ts";
 import { pendingCards, replyTarget } from "./card-dock.ts";
 import { modeChip } from "./mode-chip.ts";
+import { t } from "./i18n.ts";
 
 // 目标模式：开着时输入框里这条就是目标。运行中、草稿正在回应一张卡时不给开（与输入框里的判断同一条）
 export function goalState(chat: Chat): { ok: boolean; on: boolean } {
@@ -14,15 +15,19 @@ export function goalState(chat: Chat): { ok: boolean; on: boolean } {
 }
 
 // 按钮上的摘要：只读 / 计划 / 全权、仅工作空间、离开、目标——都是默认时 alt = false，按钮只剩用量环
+// 项目对话（新对话选了「项目」也算）：摘要前面写「项目」并亮起，档位是默认时只写「项目」、图标用「项目」那枚（layers）——
+// 默认档的盾牌图标平时根本不露面，单独亮出来像是档位被改过
 export function runChip(chat: Chat) {
   const access = accessMode(chat);
-  return modeChip({
+  const chip = modeChip({
     mode: permissionMode(chat),
     access,
     roots: access === "workspace" ? readRoots(chat).length : 0,
     away: awayMode(chat),
     goal: goalState(chat).on,
   });
+  if (chat.shape !== "project") return chip;
+  return { ...chip, text: [t("项目"), chip.alt ? chip.text : ""].filter(Boolean).join(" · "), alt: true, icon: chip.alt ? chip.icon : "layers" };
 }
 
 // 这一格的服务是不是本机模型（是才有「本机模型」那一行和按钮上的状态点）

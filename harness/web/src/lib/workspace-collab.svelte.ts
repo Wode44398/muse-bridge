@@ -1,3 +1,4 @@
+import { WIDE_MQ } from "./breakpoints.ts";
 // 工作区协同 · 前端这一半（服务端 Workspace / Terminal 工具的另一头）：
 // ① 视图上报：「用户此刻在看什么」防抖 POST /api/ui/state——前台会话与工作空间、工作区开没开 / 开着哪个工具、
 //    审阅里展开的文件、浏览器地址；嵌在 bridge 里时再拼上宿主的视图（bridge 的文件面板与预览：路径、PDF 页码、
@@ -170,7 +171,7 @@ async function answerDraft(ev: any): Promise<void> {
 export function onCollabEvent(chat: Chat, ev: any): boolean {
   if (ev?.e === "terminal") {
     if (!fresh(ev) || chat !== app.chat) return true;
-    const wide = typeof matchMedia === "function" && matchMedia("(min-width: 700px)").matches;
+    const wide = typeof matchMedia === "function" && matchMedia(WIDE_MQ).matches;
     // 工作区关着、宽屏：直接展开终端；开着别的工具：不抢，只亮小点
     if (wide && !app.dockOpen && mounted) openDock("term");
     else if (!(app.dockOpen && app.dockTool === "term")) collab.termLive = true;

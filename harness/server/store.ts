@@ -42,6 +42,8 @@ export interface PersistedConfig {
   access?: SandboxAccess;
   // P13（X18）：用户在卡片上「本会话把这个目录设为只读」的工作区外目录（绝对路径）。老版本读到会忽略
   readRoots?: string[];
+  // 会话形态（project-mode.ts）："project" = 项目对话（协调者）；没有 = 普通对话。只在新会话第一轮定，之后不变。老版本读到会忽略
+  shape?: "project";
 }
 
 // M7（D1）：会话记录的当前版本与迁移链（规矩见 record-version.ts）。提版本 = 这里 +1、在迁移链末尾追加一步、
@@ -106,6 +108,8 @@ export interface SessionMeta {
   provider: string;
   model: string;
   workspace?: string;
+  // 项目对话（侧栏据此画项目字形）
+  shape?: "project";
   // M6：会话文件损坏且没有可恢复的检查点副本——列表里留一条，不再静默消失。
   corrupt?: boolean;
   // M7：更新版本的 dimensio 写的会话——只读（不能继续、不能回滚），标题前也注明了。
@@ -414,6 +418,7 @@ async function listAllSessionMetas(): Promise<SessionMeta[]> {
       provider: rec.config.provider,
       model: rec.config.model,
       workspace: rec.config.workspace,
+      ...(rec.config.shape === "project" ? { shape: "project" as const } : {}),
     });
   }
   // 之前就隔离了、又一直没恢复的：同一个 id 没有正常文件时，每次列表都照样显示。

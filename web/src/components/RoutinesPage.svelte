@@ -7,6 +7,9 @@
   // 官方这页本来就带工作文件夹这些 Code 设置；bridge 另加：思考强度与 Fast、一次性 / 自定义 cron、
   // 会话方式（每次新会话 / 接着上次）、跑完通知、运行记录里的结果摘要。
   // 电脑（侧栏常驻）嵌在正文区、侧栏照旧可点（embedded）；手机是全屏页。数据：lib/routines.svelte.js。
+  // 11-14 引擎可选 Claude / dimensio（身份两个都开着才出选择）：选 dimensio 时模型芯片列 dimensio 的厂商与型号（它自己的目录，
+  // 含自定义服务）、思考强度是那个型号的深度档、权限芯片换成 dimensio 的运行档位（全权只给主机身份）；worktree / 分支 / Fast /
+  // 项目对话是 Claude 才有的，不出现。运行记录里 dimensio 的会话点开跳到 dimensio 页。
   // 11-13 表单重排（维护者：太粗糙、模型菜单被遮挡、十字星图标莫名其妙）：
   //   · 指令框照输入栏的语言——模型 / 思考强度是两枚素文本芯片，点开就是输入栏那两个浮层（ModelPicker / EffortPanel
   //     受控模式，只列官方模型：服务端只认白名单）；其余芯片去掉虚线框，改成悬停浮底的图标 + 文字；
@@ -26,7 +29,9 @@
   import { cs } from '../lib/claudeSettings.svelte.js';
   import { modeLabel, modeDesc, clampModeLocal } from '../lib/permissions.svelte.js';
   import { hasNativePickDirectory, nativePickDirectory } from '../lib/nativeDesktop.js';
-  import { rt, loadRoutines, schedText, whenText, durText, folderName, tzLabel, wdName, hm } from '../lib/routines.svelte.js';
+  import { rt, loadRoutines, schedText, whenText, durText, folderName, tzLabel, wdName, hm,
+    loadDimCatalog, dimProviders, dimModelText, dimEfforts, dimDefaultEffort, dimModeLabel, dimModeDesc, openRoutineSession } from '../lib/routines.svelte.js';
+  import { vendorName } from '../lib/dimensioSettings.svelte.js';
   import { computeNextRun } from '../../../src/routine-schedule.mjs';
   import { parseCron } from '../../../src/cron.mjs';
   import ProjectPicker from './ProjectPicker.svelte';
@@ -60,8 +65,9 @@
   // 鼠标设备才自动聚焦名称栏：手机上一进来就弹软键盘，半个表单被挡住
   const finePointer = typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches;
 
+  // 新建默认用 Claude；这个身份只开了 dimensio 就用 dimensio
   const blank = () => ({
-    name: '', description: '', prompt: '', agent: 'claude', model: null, effort: null, fast: false, search: false,
+    name: '', description: '', prompt: '', agent: rt.engines.includes('claude') || !rt.engines.length ? 'claude' : rt.engines[0], provider: null, model: null, effort: null, fast: false, search: false,
     cwd: '', worktree: false, branch: '', permissionMode: '', sessionMode: 'new', notify: false, shape: '',
     sched: { type: 'daily', hour: 9, minute: 0, days: [1], at: 0, cron: '0 9 * * 1-5' },
   });
@@ -133,6 +139,38 @@
   const permEff = $derived(f.permissionMode || permDefault);
   const asks = (m) => m === 'default' || m === 'acceptEdits';
 
+  // ---- dimensio 引擎：型号目录 / 默认设置来自 dimensio 自己（rt.dim，选了才拉）----
+  const isDim = $derived(f.agent === 'dimensio');
+  const dimCfg = $derived(rt.dim.config);
+  // 没选型号 = dimensio 设置里的默认型号（显示它的名字，同 Claude 那边显示默认型号）；目录还没拉到就写「dimensio 默认」
+  const dimModelOf = (provider, model) => (provider ? dimModelText(provider, model) : dimCfg ? dimModelText(dimCfg.provider, dimCfg.model) : t('dimensio 默认'));
+  const dimEffortOf = (provider, model, effort) => {
+    const lv = effort || dimDefaultEffort(provider, model);
+    return dimEfforts(provider, model).find((e) => e.id === lv)?.name || lv || t('默认');
+  };
+  const dimPermText = (m) => (m ? dimModeLabel(m) : t('设置默认（{mode}）', { mode: dimModeLabel(dimCfg?.permissionMode || 'auto') }));
+  const dimPermEff = $derived(f.permissionMode || dimCfg?.permissionMode || 'auto');
+  const dimEffortList = $derived(isDim ? dimEfforts(f.provider, f.model) : []);
+  // 指令框里那三枚芯片的字：按引擎取
+  const chipModel = $derived(isDim ? dimModelOf(f.provider, f.model) : modelLabel);
+  const chipEffort = $derived(isDim ? dimEffortOf(f.provider, f.model, f.effort) : effortLabel);
+  const chipPerm = $derived(isDim ? dimPermText(f.permissionMode) : permText(f.permissionMode, f.shape));
+  function pickDimModel(provider, model) {
+    f.provider = provider || null; f.model = provider ? model : null;
+    // 各家深度档不一样：新型号没有原来那档就回到默认
+    if (f.effort && !dimEfforts(f.provider, f.model).some((e) => e.id === f.effort)) f.effort = null;
+  }
+  // 引擎：身份两个都开着才出选择（编辑一条引擎已经关掉了的旧任务时，也把它现在的引擎列上，免得看不出是哪个）
+  const engineChoices = $derived(rt.engines.includes(f.agent) ? rt.engines : [...rt.engines, f.agent]);
+  function setEngine(a) {
+    if (a === f.agent) return;
+    // 换引擎：型号、深度、权限两边的取值不通用，回到默认；worktree / 分支 / Fast / 项目对话是 Claude 才有的
+    Object.assign(f, { agent: a, provider: null, model: null, effort: null, permissionMode: '', fast: false, worktree: false, branch: '', shape: '' });
+    mlay = null;
+    if (a === 'dimensio') loadDimCatalog(); else loadGit();
+  }
+  const dimLoading = $derived(rt.dim.phase === 'loading' || rt.dim.phase === 'idle');
+
   const FREQS = [
     ['manual', () => t('手动')], ['once', () => t('一次')], ['hourly', () => t('每小时')], ['daily', () => t('每天')],
     ['weekdays', () => t('工作日')], ['weekly', () => t('每周')], ['cron', () => t('自定义')],
@@ -185,7 +223,7 @@
     ui.routinesOpen = false;
   }));
   function close() { ui.routinesOpen = false; }
-  function openDetail(r) { pop = null; curId = r.id; showAllPrompt = false; opErr = ''; view = 'detail'; }
+  function openDetail(r) { pop = null; curId = r.id; showAllPrompt = false; opErr = ''; view = 'detail'; if (r.agent === 'dimensio') loadDimCatalog(); }
 
   function openNew() {
     pop = null; mlay = null; tried = false; editing = null; err = ''; f = blank(); formBack = view === 'detail' ? 'detail' : 'list';
@@ -197,7 +235,7 @@
     f = {
       // Gemini 引擎 11-04 下线：旧任务（agent:'vertex'，服务端已停用）打开编辑时改用 Claude，保存即恢复可跑
       name: r.name || '', description: r.description || '', prompt: r.prompt || '', agent: r.agent === 'vertex' ? 'claude' : (r.agent || 'claude'),
-      model: r.model, effort: r.effort, fast: !!r.fast, search: !!r.search,
+      provider: r.agent === 'dimensio' ? r.provider || null : null, model: r.model, effort: r.effort, fast: !!r.fast, search: !!r.search,
       cwd: r.cwd || '', worktree: !!r.worktree, branch: r.branch || '', permissionMode: r.permissionMode || '',
       sessionMode: r.sessionMode || 'new', notify: !!r.notify, shape: r.shape === 'project' ? 'project' : '',
       sched: {
@@ -211,6 +249,7 @@
   }
   async function afterFormOpen() {
     snap = JSON.stringify(f);
+    if (f.agent === 'dimensio') loadDimCatalog();
     loadGit();
     try { const d = await api.claudeProjects(); projects = (d.projects || []).filter((p) => !p.quick && !p.def); } catch {}
   }
@@ -233,7 +272,7 @@
   let gitSeq = 0;
   async function loadGit() {
     git = null;
-    if (f.agent === 'vertex') return;
+    if (f.agent !== 'claude') return;   // 分支 / worktree 只有 Claude 用
     const seq = ++gitSeq;
     try { const d = await api.routineGit(f.cwd || rt.home); if (seq === gitSeq) git = d; } catch { if (seq === gitSeq) git = { git: false }; }
   }
@@ -254,8 +293,10 @@
   const folderOpts = $derived.by(() => {
     const seen = new Set();
     const key = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase();
-    const out = [{ id: '', label: t('默认工作空间'), desc: rt.home }];
-    seen.add(key(rt.home));
+    // 默认工作空间：Claude = 身份的默认工作空间；dimensio = 它设置里的工作空间（拉到了的话）
+    const home = isDim && dimCfg?.workspace ? dimCfg.workspace : rt.home;
+    const out = [{ id: '', label: t('默认工作空间'), desc: home }];
+    seen.add(key(home));
     for (const p of projects) { if (seen.has(key(p.path))) continue; seen.add(key(p.path)); out.push({ id: p.path, label: tr(p.name) || folderName(p.path), desc: p.path }); }
     if (f.cwd && !seen.has(key(f.cwd))) out.push({ id: f.cwd, label: folderName(f.cwd), desc: f.cwd });
     return out;
@@ -365,16 +406,22 @@
     if (blocked) { tried = true; focusBlocked(); return; }
     busy = true; err = '';
     const vx = f.agent === 'vertex';
-    const body = {
+    const base = {
       name: f.name.trim(), description: f.description.trim(), prompt: f.prompt.trim(),
       agent: f.agent, model: f.model || null, effort: f.effort || null, search: vx && f.search,
       schedule: schedOut(), notify: f.notify,
-      ...(vx ? {} : {
-        cwd: f.cwd || '', worktree: f.worktree && wtAvail, branch: f.worktree && wtAvail ? f.branch : '',
-        permissionMode: f.permissionMode || '', fast: fastOk && f.fast, sessionMode: f.sessionMode,
-        ...(projOk ? { shape: f.shape === 'project' ? 'project' : null } : {}),
-      }),
     };
+    // dimensio：厂商 + 型号（没选 = 它设置里的默认）、深度、运行档位、文件夹、会话方式；Claude 那几项（worktree / Fast / 项目对话）不带
+    const body = isDim
+      ? { ...base, provider: f.provider || null, model: f.provider ? f.model || null : null, cwd: f.cwd || '', permissionMode: f.permissionMode || '', sessionMode: f.sessionMode }
+      : {
+        ...base,
+        ...(vx ? {} : {
+          cwd: f.cwd || '', worktree: f.worktree && wtAvail, branch: f.worktree && wtAvail ? f.branch : '',
+          permissionMode: f.permissionMode || '', fast: fastOk && f.fast, sessionMode: f.sessionMode,
+          ...(projOk ? { shape: f.shape === 'project' ? 'project' : null } : {}),
+        }),
+      };
     try {
       const res = editing ? await api.updateRoutine({ id: editing, ...body }) : await api.createRoutine(body);
       await loadRoutines();
@@ -421,12 +468,12 @@
     try { const res = await api.deleteRoutine(r.id); if (res && res.ok === false) throw 0; }
     catch { rt.items = prev; opErr = t('删除失败：{reason}', { reason: offline() }); }
   }
-  async function openSessionId(id) {
-    if (!id) return;
-    ui.routinesOpen = false;
-    const { openSession } = await import('../lib/chat.svelte.js');
-    openSession(String(id));
-  }
+  // 会话在哪个引擎那边：运行记录 / 在跑的那次自己带着 agent（任务后来换了引擎，旧记录照样打开得对）
+  const openSessionId = (id, agent) => openRoutineSession(id, agent);
+  const lastSessionAgent = (r) => {
+    const run = (r.runs || []).find((x) => x.sessionId && x.sessionId === r.lastSessionId);
+    return run ? run.agent || 'claude' : r.agent;
+  };
 
   // 运行记录：状态 → 图标与右侧标签
   const runKind = (run, r) => (run.status === 'running' && liveOf(r)?.waiting ? 'wait' : run.status);
@@ -479,35 +526,50 @@
       <input id="rt-desc" class="inp" bind:value={f.description} maxlength="300" autocomplete="off" placeholder={t('回看昨天的提交，标出值得注意的地方')} />
     </div>
 
+    {#if engineChoices.length > 1}
+      <!-- 引擎：Claude / dimensio（品牌名不翻译） -->
+      <div class="fld">
+        <span class="lbl" id="rt-eng">{t('引擎')}</span>
+        <div class="seg" role="radiogroup" aria-labelledby="rt-eng">
+          {#each engineChoices as a (a)}<button type="button" role="radio" class:on={f.agent === a} aria-checked={f.agent === a} onclick={() => setEngine(a)}>{a === 'dimensio' ? 'dimensio' : 'Claude'}</button>{/each}
+        </div>
+      </div>
+    {/if}
+
     <div class="fld">
       <label class="lbl" for="rt-prompt">{t('指令')}</label>
       <div class="ibox" class:invalid={tried && !!f.name.trim() && !f.prompt.trim()}>
         <textarea id="rt-prompt" class="ta" use:autosize bind:value={f.prompt} placeholder={t('看看过去 24 小时的提交：总结改了什么，指出有风险的写法或缺的测试，记下值得跟进的事。')}></textarea>
         <div class="tbar">
-          <button type="button" class="fchip" class:set={!!f.permissionMode || f.shape === 'project'} aria-haspopup="menu" aria-expanded={pop?.key === 'perm'}
-            onclick={(e) => openPop(e, 'perm', { w: 300 })}>{@render shieldIc()}<span class="chip-t">{permText(f.permissionMode, f.shape)}</span>{@render caret()}</button>
+          <button type="button" class="fchip" class:set={!!f.permissionMode || (!isDim && f.shape === 'project')} aria-haspopup="menu" aria-expanded={pop?.key === 'perm'}
+            onclick={(e) => openPop(e, 'perm', { w: 300 })}>{@render shieldIc()}<span class="chip-t">{chipPerm}</span>{@render caret()}</button>
           <span class="sp"></span>
-          <!-- 模型 / 思考强度：输入栏那两枚素文本芯片，点开是同一个模型菜单和拉条面板 -->
-          <button type="button" class="mchip" aria-haspopup="menu" aria-expanded={mlay?.kind === 'model'} aria-label={t('模型：{name}', { name: modelLabel })}
-            onclick={(e) => openLayer(e, 'model')}><span class="chip-t">{modelLabel}</span>{#if fastOk && f.fast}<span class="mchip-fast">&nbsp;· Fast</span>{/if}</button>
-          <button type="button" class="mchip lvl" aria-haspopup="dialog" aria-expanded={mlay?.kind === 'effort'} aria-label={t('思考强度：{name}', { name: effortLabel })}
-            onclick={(e) => openLayer(e, 'effort')}><span class="chip-t">{effortLabel}</span></button>
+          <!-- 模型 / 思考强度：Claude 是输入栏那两枚素文本芯片（点开同一个模型菜单和拉条面板）；dimensio 是它自己目录里的厂商与型号、那个型号的深度档 -->
+          <button type="button" class="mchip" aria-haspopup="menu" aria-expanded={isDim ? pop?.key === 'dmodel' : mlay?.kind === 'model'} aria-label={t('模型：{name}', { name: chipModel })}
+            onclick={(e) => (isDim ? openPop(e, 'dmodel', { end: true, w: 280 }) : openLayer(e, 'model'))}><span class="chip-t">{chipModel}</span>{#if !isDim && fastOk && f.fast}<span class="mchip-fast">&nbsp;· Fast</span>{/if}</button>
+          <button type="button" class="mchip lvl" class:keep={isDim} aria-haspopup={isDim ? 'menu' : 'dialog'} aria-expanded={isDim ? pop?.key === 'deffort' : mlay?.kind === 'effort'} aria-label={t('思考强度：{name}', { name: chipEffort })}
+            onclick={(e) => (isDim ? openPop(e, 'deffort', { end: true, w: 200 }) : openLayer(e, 'effort'))}><span class="chip-t">{chipEffort}</span></button>
         </div>
         <div class="locbar">
-          <button type="button" class="fchip" class:set={!!f.cwd} title={f.cwd || rt.home} aria-haspopup="menu" aria-expanded={pop?.key === 'folder'}
+          <button type="button" class="fchip" class:set={!!f.cwd} title={f.cwd || (isDim && dimCfg?.workspace) || rt.home} aria-haspopup="menu" aria-expanded={pop?.key === 'folder'}
             onclick={(e) => openPop(e, 'folder', { side: 'top', w: 300 })}>{@render folderIc()}<span class="chip-t">{cwdLabel}</span>{@render caret()}</button>
-          {#if git?.git}
+          {#if git?.git && !isDim}
             <button type="button" class="fchip" class:set={!!f.branch} disabled={!f.worktree} aria-haspopup="menu" aria-expanded={pop?.key === 'branch'}
               title={f.worktree ? '' : t('打开 Worktree 后可以选从哪个分支切')}
               onclick={(e) => openPop(e, 'branch', { side: 'top', w: 240 })}>{@render branchIc()}<span class="chip-t mono">{f.branch || t('当前分支')}</span>{@render caret()}</button>
           {/if}
           <span class="sp"></span>
-          <label class="wt" class:dim={!wtAvail} title={!git ? '' : !git.git ? t('这个文件夹不是 git 仓库') : git.worktreeOk === false ? t('这个文件夹本身就是一个 worktree') : t('每次运行先切一个新分支和工作目录，改动不碰你手上的检出')}>
-            <span>Worktree</span>{@render sw(f.worktree && wtAvail, () => (f.worktree = !f.worktree), 'Worktree', !wtAvail)}
-          </label>
+          {#if !isDim}
+            <label class="wt" class:dim={!wtAvail} title={!git ? '' : !git.git ? t('这个文件夹不是 git 仓库') : git.worktreeOk === false ? t('这个文件夹本身就是一个 worktree') : t('每次运行先切一个新分支和工作目录，改动不碰你手上的检出')}>
+              <span>Worktree</span>{@render sw(f.worktree && wtAvail, () => (f.worktree = !f.worktree), 'Worktree', !wtAvail)}
+            </label>
+          {/if}
         </div>
       </div>
-      {#if asks(permEff)}<p class="note">{t('「{mode}」模式下遇到要你批准的操作会停下来等，会话里亮「待回答」；想全程自己跑完，选「自动」。', { mode: modeLabel(permEff) })}</p>{/if}
+      {#if isDim}
+        {#if rt.dim.phase === 'down'}<p class="note bad">{t('dimensio 的型号没读出来：{reason}', { reason: rt.dim.why })} <button type="button" class="link" onclick={() => loadDimCatalog({ force: true })}>{t('重试')}</button></p>{/if}
+        {#if dimPermEff === 'plan'}<p class="note">{t('「{mode}」档会停在计划上等你批准，会话里亮「待处理」；想全程自己跑完，选「{auto}」。', { mode: dimModeLabel('plan'), auto: dimModeLabel('auto') })}</p>{/if}
+      {:else if asks(permEff)}<p class="note">{t('「{mode}」模式下遇到要你批准的操作会停下来等，会话里亮「待回答」；想全程自己跑完，选「自动」。', { mode: modeLabel(permEff) })}</p>{/if}
     </div>
 
     <div class="fld">
@@ -658,7 +720,7 @@
                   </div>
                   {#if cardDesc(r)}<p class="t-desc">{cardDesc(r)}</p>{/if}
                   <div class="t-foot">
-                    <span class="t-st"><span>{stateWord(r)}</span><span class="t-sch">{schedText(r.schedule)}</span></span>
+                    <span class="t-st"><span>{stateWord(r)}</span><span class="t-sch">{schedText(r.schedule)}</span>{#if r.agent === 'dimensio'}<span class="t-sch t-eng">dimensio</span>{/if}</span>
                     {#if r.agent === 'vertex'}<span class="t-proj">{t('Gemini（已下线）')}</span>
                     {:else}<span class="t-proj" title={r.cwd || rt.home}>{@render folderIc()}<span>{r.cwd ? folderName(r.cwd) : t('默认工作空间')}</span></span>{/if}
                   </div>
@@ -676,6 +738,7 @@
     {@const lv = liveOf(cur)}
     {@const mAt = missedAt(cur)}
     {@const vx = cur.agent === 'vertex'}
+    {@const dm = cur.agent === 'dimensio'}
     <header class="bar">
       <button class="ibtn" aria-label={t('返回')} onclick={() => (view = 'list')}>{@render backIc()}</button>
       <span class="sp"></span>
@@ -693,12 +756,12 @@
         {#if lv?.waiting}
           <div class="banner warn">
             <span>{t('这次运行停在一个需要你批准或回答的地方。')}</span>
-            <button class="btn ghost sm" onclick={() => openSessionId(lv.sessionId)}>{t('去处理')}</button>
+            <button class="btn ghost sm" onclick={() => openSessionId(lv.sessionId, lv.agent)}>{t('去处理')}</button>
           </div>
         {:else if running(cur) && lv?.sessionId}
           <div class="banner">
             <span class="spin"></span><span>{t('正在运行。')}</span>
-            <button class="btn ghost sm" onclick={() => openSessionId(lv.sessionId)}>{t('打开会话')}</button>
+            <button class="btn ghost sm" onclick={() => openSessionId(lv.sessionId, lv.agent)}>{t('打开会话')}</button>
           </div>
         {/if}
         <div class="dhead">
@@ -715,16 +778,23 @@
           <div class="dcol">
             <dl class="kv">
               <div class="kv-r"><dt>{t('重复')}</dt><dd><span>{schedText(cur.schedule)}</span>{#if cur.schedule?.type !== 'manual'}<span class="kv-sub">{t('时间按服务器时区（{tz}）', { tz: tzLabel(rt.tz) })}</span>{/if}</dd></div>
-              <div class="kv-r"><dt>{t('模型')}</dt><dd><span>{vx ? engineText(cur) : nameOf(caps.data?.claude?.models, cur.model || defModel)} · {effortText(cur)}{#if cur.fast} · Fast{/if}</span></dd></div>
+              {#if dm || rt.engines.length > 1}<div class="kv-r"><dt>{t('引擎')}</dt><dd><span>{dm ? 'dimensio' : vx ? 'Gemini' : 'Claude'}</span></dd></div>{/if}
+              {#if dm}
+                <!-- dimensio：型号 · 深度（目录没拉到时只写「dimensio 默认」）；运行档位 -->
+                <div class="kv-r"><dt>{t('模型')}</dt><dd><span>{dimModelOf(cur.provider, cur.model)}{#if rt.dim.phase === 'ready' || cur.effort}{' · ' + dimEffortOf(cur.provider, cur.model, cur.effort)}{/if}</span></dd></div>
+                <div class="kv-r"><dt>{t('权限')}</dt><dd><span>{dimPermText(cur.permissionMode)}</span><span class="kv-sub">{(cur.permissionMode || dimCfg?.permissionMode) === 'plan' ? t('会停在计划上等你批准') : dimModeDesc(cur.permissionMode || dimCfg?.permissionMode || 'auto')}</span></dd></div>
+              {:else}
+                <div class="kv-r"><dt>{t('模型')}</dt><dd><span>{vx ? engineText(cur) : nameOf(caps.data?.claude?.models, cur.model || defModel)} · {effortText(cur)}{#if cur.fast}{' · Fast'}{/if}</span></dd></div>
+              {/if}
               {#if !vx}
-                <div class="kv-r"><dt>{t('权限')}</dt><dd><span>{permText(cur.permissionMode, cur.shape)}</span><span class="kv-sub">{asks(cur.permissionMode || permDefault) ? t('要批准的操作会停下来等你') : modeDesc(cur.permissionMode || permDefault)}</span></dd></div>
+                {#if !dm}<div class="kv-r"><dt>{t('权限')}</dt><dd><span>{permText(cur.permissionMode, cur.shape)}</span><span class="kv-sub">{asks(cur.permissionMode || permDefault) ? t('要批准的操作会停下来等你') : modeDesc(cur.permissionMode || permDefault)}</span></dd></div>{/if}
                 <div class="kv-r"><dt>{t('文件夹')}</dt><dd>
                   <span class="kv-ic" title={cur.cwd || rt.home}>{@render folderIc()}<span class:mono={!!cur.cwd}>{cur.cwd ? folderName(cur.cwd) : t('默认工作空间')}</span></span>
                   {#if cur.worktree}<span class="kv-sub kv-ic">{@render branchIc()}<span>{cur.branch ? t('每次从 {b} 切 worktree', { b: cur.branch }) : t('每次切新 worktree')}</span></span>{/if}
                 </dd></div>
                 <div class="kv-r"><dt>{t('会话方式')}</dt><dd>
                   <span>{cur.sessionMode === 'continue' ? t('接着上次的会话') : t('每次新会话')}</span>
-                  {#if cur.sessionMode === 'continue' && cur.threadSessionId}<button class="link kv-sub" onclick={() => openSessionId(cur.threadSessionId)}>{t('打开那个会话')}</button>{/if}
+                  {#if cur.sessionMode === 'continue' && cur.threadSessionId}<button class="link kv-sub" onclick={() => openSessionId(cur.threadSessionId, cur.agent)}>{t('打开那个会话')}</button>{/if}
                 </dd></div>
               {/if}
               <div class="kv-r"><dt>{t('通知')}</dt><dd><span>{cur.notify ? t('每次跑完通知我') : t('不通知')}</span></dd></div>
@@ -746,7 +816,7 @@
                 <div class="hist">
                   {#each cur.runs as run (run.id)}
                     {@const k = runKind(run, cur)}
-                    <button class="h-row" disabled={!run.sessionId} title={run.preview ? tr(run.preview) : ''} onclick={() => openSessionId(run.sessionId)}>
+                    <button class="h-row" disabled={!run.sessionId} title={run.preview ? tr(run.preview) : ''} onclick={() => openSessionId(run.sessionId, run.agent)}>
                       <span class="h-ic {k}">
                         {#if k === 'running'}<span class="spin"></span>
                         {:else if k === 'error'}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="m6 6 4 4M10 6l-4 4"/></svg>
@@ -832,7 +902,7 @@
         <button class="mi danger" onclick={() => del(r)}><span class="mi-t">{t('删除')}</span></button>
       {:else if pop.key === 'more' && cur}
         <button class="mi" onclick={() => duplicate(cur)}><span class="mi-t">{t('复制')}</span></button>
-        {#if cur.lastSessionId}<button class="mi" onclick={() => { pop = null; openSessionId(cur.lastSessionId); }}><span class="mi-t">{t('打开最近一次的会话')}</span></button>{/if}
+        {#if cur.lastSessionId}<button class="mi" onclick={() => { pop = null; openSessionId(cur.lastSessionId, lastSessionAgent(cur)); }}><span class="mi-t">{t('打开最近一次的会话')}</span></button>{/if}
       {:else if pop.key === 'folder'}
         {#each folderOpts as o (o.id)}
           <button class="mi chk" class:sel={f.cwd === o.id} onclick={() => pick(() => setCwd(o.id))}><span class="mi-t">{o.label}</span><span class="mi-d mono">{o.desc}</span></button>
@@ -843,6 +913,31 @@
         <button class="mi chk" class:sel={!f.branch} onclick={() => pick(() => (f.branch = ''))}><span class="mi-t">{t('当前分支')}</span><span class="mi-d mono">{git.branch || 'HEAD'}</span></button>
         {#each git.branches || [] as b}<button class="mi chk" class:sel={f.branch === b} onclick={() => pick(() => (f.branch = b))}><span class="mi-t mono">{b}</span></button>{/each}
         {#if !(git.branches || []).length}<div class="mi-empty">{t('没有分支')}</div>{/if}
+      {:else if pop.key === 'perm' && isDim}
+        <!-- dimensio 的运行档位（全权只给主机身份，rt.dimModes 由服务端按身份裁好） -->
+        <button class="mi chk" class:sel={!f.permissionMode} onclick={() => pick(() => (f.permissionMode = ''))}><span class="mi-t">{dimPermText('')}</span><span class="mi-d">{t('跟着 设置 › dimensio 里的默认运行档位走')}</span></button>
+        {#each rt.dimModes as m}<button class="mi chk" class:sel={f.permissionMode === m} onclick={() => pick(() => (f.permissionMode = m))}><span class="mi-t">{dimModeLabel(m)}</span><span class="mi-d">{m === 'plan' ? t('{desc}无人值守时会停在计划上等你批准。', { desc: dimModeDesc(m) }) : dimModeDesc(m)}</span></button>{/each}
+      {:else if pop.key === 'dmodel'}
+        <!-- dimensio 的厂商与型号（它自己的目录，含自定义服务；只列能用的） -->
+        <button class="mi chk" class:sel={!f.provider} onclick={() => pick(() => pickDimModel(null, null))}><span class="mi-t">{t('设置默认（{mode}）', { mode: dimCfg ? dimModelText(dimCfg.provider, dimCfg.model) : 'dimensio' })}</span><span class="mi-d">{t('跟着 设置 › dimensio 里的默认型号走')}</span></button>
+        {#if rt.dim.phase === 'ready'}
+          {#each dimProviders() as p (p.id)}
+            <div class="mi-sep"></div>
+            <div class="mi-h">{vendorName(p)}</div>
+            {#each p.models as m (m.id)}
+              <button class="mi chk" class:sel={f.provider === p.id && f.model === m.id} onclick={() => pick(() => pickDimModel(p.id, m.id))}><span class="mi-t">{tr(m.label || m.id)}</span>{#if m.note}<span class="mi-d">{tr(m.note)}</span>{/if}</button>
+            {/each}
+          {/each}
+        {:else if rt.dim.phase === 'down'}
+          <div class="mi-empty">{rt.dim.why}</div>
+          <button class="mi" onclick={() => loadDimCatalog({ force: true })}><span class="mi-t">{t('重试')}</span></button>
+        {:else}
+          <div class="mi-empty">{t('正在读取 dimensio 的型号…')}</div>
+        {/if}
+      {:else if pop.key === 'deffort'}
+        <button class="mi chk" class:sel={!f.effort} onclick={() => pick(() => (f.effort = null))}><span class="mi-t">{t('默认（{name}）', { name: dimEffortOf(f.provider, f.model, null) })}</span></button>
+        {#each dimEffortList as e (e.id)}<button class="mi chk" class:sel={f.effort === e.id} onclick={() => pick(() => (f.effort = e.id))}><span class="mi-t">{e.name}</span></button>{/each}
+        {#if !dimEffortList.length}<div class="mi-empty">{dimLoading ? t('正在读取 dimensio 的型号…') : t('这个型号没有可选的思考深度')}</div>{/if}
       {:else if pop.key === 'perm'}
         <button class="mi chk" class:sel={!f.permissionMode} onclick={() => pick(() => (f.permissionMode = ''))}><span class="mi-t">{t('设置默认（{mode}）', { mode: modeLabel(permDefault) })}</span><span class="mi-d">{t('跟着 设置 › Claude 里的默认权限模式走')}</span></button>
         {#each rt.permissionModes as m}<button class="mi chk" class:sel={f.permissionMode === m} onclick={() => pick(() => (f.permissionMode = m))}><span class="mi-t">{modeLabel(m)}</span><span class="mi-d">{asks(m) ? t('{desc}；无人值守时会停下来等你', { desc: modeDesc(m) }) : modeDesc(m)}</span></button>{/each}
@@ -961,6 +1056,7 @@
   .t-st > span:first-child { flex: none; }
   .t-sch { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .t-sch::before { content: '·'; margin-right: 8px; }
+  .t-sch.t-eng { flex: none; }   /* 引擎名短，别被频率挤成省略号 */
   .t-proj { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 45%; flex: none; }
   .t-proj > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .t-more { position: absolute; top: 12px; right: 12px; width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: var(--st-text2, var(--serif)); opacity: 0; transition: opacity .15s; z-index: 1; }
@@ -1085,6 +1181,8 @@
   .mchip { display: inline-flex; align-items: center; height: 30px; min-width: 0; padding: 0 8px; border-radius: 8px; font-size: 13.5px;
     color: var(--text); white-space: nowrap; transition: background .15s; }
   .mchip.lvl { color: var(--muted); flex-shrink: 3; }
+  /* dimensio 的深度只有 off / low / high / max 几个字母，窄屏挤不下时让权限与型号芯片去省略，深度不缩（以前 375 宽下缩成「o.」） */
+  .mchip.lvl.keep { flex-shrink: 0; }
   .mchip-fast { color: var(--muted); }
   .mchip[aria-expanded="true"], .mchip:active { background: var(--st-sel); }
   @media (hover: hover) { .mchip:hover { background: var(--st-sel); } }

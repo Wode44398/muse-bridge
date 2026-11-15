@@ -5,6 +5,7 @@
 // 原样上屏像接口文档（复核 11-06 两轮：Prompt upsampling / Safety tolerance、mp3_44100_128）。
 import { t, tc, tr } from '../../lib/i18n.js';
 import { cleanLabel, humanValue } from './render.js';
+import { ratioText } from './size.js';
 
 let cache = null;
 export function valueWords() {
@@ -14,6 +15,7 @@ export function valueWords() {
     low: t('低'), medium: t('中'), mid: t('中'), high: t('高'), ultra: t('超高'), max: t('最高'), min: t('最低'),
     standard: t('标准'), hd: t('高清'), fast: t('快速'), balanced: t('均衡'), quality: t('质量优先'), speed: t('速度优先'),
     transparent: t('透明'), opaque: t('不透明'), portrait: t('竖屏'), landscape: t('横屏'), square: t('方形'), natural: t('自然'), vivid: t('鲜艳'),
+    custom: t('自定义'), match_input_image: t('跟随原图'), match_input: t('跟随原图'),
   };
   return cache;
 }
@@ -84,4 +86,20 @@ export function sourceText(src, labelFor = (id) => id, head = false) {
   if (src.kind === 'schema') return head ? t('接口自报') : '';
   if (src.kind === 'family') return t('沿用 {model}', { model: labelFor(src.from) });
   return t('通用参数');
+}
+
+// 自定义尺寸不合规的那一句（size.js 的 sizeIssues 给的问题码 → 人话；数字原样）
+const num = (n) => Number(n).toLocaleString('en-US');
+export function sizeIssueText(p) {
+  if (!p) return '';
+  const side = p.side === 'height' ? tc('尺寸', '高') : tc('尺寸', '宽');
+  switch (p.code) {
+    case 'min': return t('{side}不能小于 {n}', { side, n: p.n });
+    case 'max': return t('{side}不能大于 {n}', { side, n: p.n });
+    case 'multiple': return t('宽和高都要是 {n} 的倍数', { n: p.n });
+    case 'aspect': return t('宽高比要在 {min} 到 {max} 之间', { min: ratioText(p.min), max: ratioText(p.max) });
+    case 'pixels': return p.max == null ? t('总像素不能少于 {min}', { min: num(p.min) }) : p.min == null ? t('总像素不能超过 {max}', { max: num(p.max) }) : t('总像素要在 {min} 到 {max} 之间', { min: num(p.min), max: num(p.max) });
+    case 'custom': return t('这个模型不收自定义尺寸');
+    default: return t('宽和高要填正整数');
+  }
 }

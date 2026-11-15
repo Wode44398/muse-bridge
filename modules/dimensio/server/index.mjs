@@ -19,6 +19,8 @@ export { harnessEndpoints, drainHarnesses } from './routes/harness.mjs';
 export { deliverPrEvent } from './routes/harness.mjs';
 // 会话协作（Claude ⇄ dimensio）：核心 runtime/session-family.mjs 经 getModule('dimensio').familyCall 往 dimensio 会话开会话、发消息。
 export { familyCall } from './routes/harness.mjs';
+// 子 agent 调用策略（设置 › dimensio）：核心 routes/dispatch.mjs 经 getModule('dimensio') 要四档落点、旧偏好，策略变了通知在跑的实例。
+export { dispatchPreview, dispatchLegacy, dispatchChanged } from './routes/harness.mjs';
 // S2：管理员实例实际用的 .env 与数据目录（harness 是扩展自带的时候在 <数据根>/dimensio）。核心判「dimensio 配没配 key」
 // （runtime/agent-status.mjs）应当看 harnessEnvFile()，而不是 <harness 目录>/.env。
 export { adminEnvFile as harnessEnvFile, adminDataDir as harnessDataDir } from './routes/harness.mjs';

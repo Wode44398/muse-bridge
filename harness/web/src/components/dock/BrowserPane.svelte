@@ -3,8 +3,10 @@
   // 同步模型：接口响应里就带最新列表（本地立即生效），直播流的 tabs 事件随后全量对账（多端同步）；
   // 旧后端没有这三个路由：切换静默失败，新建 / 关闭给提示。关掉最后一个标签 = 浏览器整个退出，面板留空态，
   // 地址栏或 ＋ 可以重新拉起。收起工作区的钮在工作区顶带上，这里不再重复一个。
+  // 服务端按会话各开一份浏览器：这里看的、点的都是前台会话那份（sid）；切会话整块按 sid 重挂，直播流换到新会话的浏览器。
   import { app, toast } from "../../lib/state.svelte.ts";
   import * as api from "../../lib/api.ts";
+  import { browserScope } from "../../lib/browser-mount.svelte.ts";
   import { haptic } from "../../lib/touch.ts";
   import { t } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
@@ -13,6 +15,7 @@
 
   const coarse = matchMedia("(pointer: coarse)").matches; // 触屏：＋ 放大
   let tabBusy = $state(false);
+  const sid = $derived(browserScope());
 
   const host = (u: string) => {
     try {
@@ -28,7 +31,7 @@
     if (tabBusy || !tb || tb.active) return;
     tabBusy = true;
     try {
-      const r = await api.browserTabActivate(id);
+      const r = await api.browserTabActivate(sid, id);
       app.browserTabs = r.tabs;
     } catch {
       /* 旧后端 / 标签刚没了：直播流会对账 */
@@ -41,7 +44,7 @@
     tabBusy = true;
     haptic("light");
     try {
-      const r = await api.browserTabNew();
+      const r = await api.browserTabNew(sid);
       app.browserTabs = r.tabs;
     } catch {
       toast(t("新建标签页失败")); // 走 toast()：以前直接写 app.toast，没有定时收起、还可能带着上一条的动作钮（§17-4）
@@ -54,7 +57,7 @@
     tabBusy = true;
     haptic("light");
     try {
-      const r = await api.browserTabClose(id);
+      const r = await api.browserTabClose(sid, id);
       app.browserTabs = r.tabs;
     } catch {
       toast(t("关闭标签页失败"));
@@ -111,7 +114,9 @@
     {/if}
     <IconButton icon="plus" label={t("新标签页")} size={coarse ? 40 : 30} iconSize={16} onclick={newTab} />
   </div>
-  <BrowserView />
+  {#key sid}
+    <BrowserView {sid} />
+  {/key}
 </div>
 
 <style>

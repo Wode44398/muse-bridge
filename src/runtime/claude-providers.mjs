@@ -420,7 +420,7 @@ function pluginProviders() {
     try {
       const p = normalizeProvider({
         id, name: s.name, note: `插件 · ${s.pluginName}`, protocol: s.protocol, baseUrl: s.baseUrl, authStyle: s.authStyle, headers: s.headers,
-        timeoutSec: s.timeoutSec, retries: 1, models, defaultModel: s.defaultModel,
+        timeoutSec: s.timeoutSec, retries: s.retries ?? 1, models, defaultModel: s.defaultModel,
         // 上游是官方 Anthropic（经模型中心网关）：按官方预设算，isOfficial 才认（1 小时缓存、metadata、fast）
         ...(s.upstream === 'api.anthropic.com' && s.protocol === 'anthropic' ? { preset: 'anthropic' } : {}),
         compat: { useProxy: false, ...s.compat },

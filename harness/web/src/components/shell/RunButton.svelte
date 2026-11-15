@@ -13,6 +13,7 @@
   import { lai, localAiMismatch, localAiState, refreshLocalAi, setLocalEngine } from "../../lib/localai.svelte.ts";
   import { engineOfModel } from "../../lib/api.ts";
   import { isLocalProvider, runChip } from "../../lib/run-settings.ts";
+  import { MODE_LABEL } from "../../lib/mode-chip.ts";
   import { haptic } from "../../lib/touch.ts";
   import { pop } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
@@ -39,9 +40,10 @@
   const C = 2 * Math.PI * R;
 
   // ── 运行设置摘要 ─────────────────────────────────────────────────────────────────────────
-  // 摘要沿用 mode-chip 的写法；自主是默认，按钮上不再写「自主 ·」打头
+  // 摘要沿用 mode-chip 的写法；自主是默认，按钮上不再写「自主」。按词去掉而不是去掉第一段：项目对话的摘要以「项目」打头
+  //（run-settings.ts runChip），去第一段会把「项目」去掉、留下「自主」
   const chip = $derived(runChip(pane.chat));
-  const summary = $derived(permissionMode(pane.chat) === "auto" ? chip.text.split(" · ").slice(1).join(" · ") : chip.text);
+  const summary = $derived(permissionMode(pane.chat) === "auto" ? chip.text.split(" · ").filter((p) => p !== MODE_LABEL.auto).join(" · ") : chip.text);
   const isLocal = $derived(isLocalProvider(pane.chat));
   const laiPhase = $derived(localAiState());
   const laiClash = $derived(localAiMismatch() !== null);

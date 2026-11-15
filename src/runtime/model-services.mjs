@@ -16,13 +16,16 @@
 //   apiKey      可选；authStyle 'x-api-key' | 'bearer' | 'goog' | 'none'（缺省：有 key 按协议，没有 = none）；headers [{ name, value }]
 //   agents      ['claude', 'dimensio'] 的子集（缺省两个都给）
 //   members     true = 多用户服务端的成员也能用（缺省只给服务器主机）
-//   models      [{ id, label?, agents?, contextWindow?, maxOutput?, vision?, thinking?, efforts?: [{ id, name, value }], effortDefault?, alwaysThinks? }]
+//   models      [{ id, label?, agents?, contextWindow?, maxOutput?, vision?, thinking?, efforts?: [{ id, name, value }], effortDefault?, alwaysThinks?, cacheTtl? }]
+//               models[i].cacheTtl（2026-11-14）：提示缓存多久变冷（分钟；0 = 不缓存 / 不提示）。不给 = 各 agent 按 model-knowledge/cache-ttl.mjs 自己算
 //               models[i].agents（2026-11-10 模型中心 v2）：这个模型给哪些 agent，取与服务级 agents 的交集；
 //               不传 = 跟服务级。某个 agent 下一个模型都没有时，那一侧整条服务不出现（modelServices(agent) 过滤）。
 //   native      可选（模型中心用）：{ vendor, key, baseUrl? }——这个服务就是 dimensio 自带专门适配的那家厂商（vendor = 它的厂商 id）。
 //               dimensio 扩展不把它登记成一张新卡，而是让那家厂商用这把 Key（和地址）；别的 agent 不看这个字段。
 //   logo        可选：品牌标的键（如 openrouter、deepseek-color），dimensio 的「模型服务」卡片据此画标
-//   defaultModel、timeoutSec、compat（Claude 代理的兼容开关：promptCaching / stripBetas / slimBody / stripThinkingHistory / replayReasoning）
+//   defaultModel、timeoutSec、retries?（失败重试 0–5）、compat（Claude 代理的兼容开关：promptCaching / stripBetas / slimBody / stripThinkingHistory / replayReasoning / maxTokensField；
+//               dimensio 认其中的 promptCaching / replayReasoning / maxTokensField）
+//   models[i].params（2026-11-15）：调用参数 { maxTokens, temperature, topP, topK, thinking, thinkingBudget, stop, extraBody }，形状同 Claude 外接服务的模型级 params
 import { createHash } from 'node:crypto';
 
 export const MODEL_AGENTS = Object.freeze(['claude', 'dimensio']);
@@ -86,6 +89,8 @@ function normalize(plugin, pluginName, spec) {
     // 请求实际发到的上游主机（模型中心给的；baseUrl 是本机网关时靠它认官方 Anthropic / OpenRouter）
     ...(typeof s.upstream === 'string' && /^[a-z0-9.-]{1,253}$/.test(s.upstream) ? { upstream: s.upstream } : {}),
     timeoutSec: Number.isFinite(s.timeoutSec) ? Math.min(1800, Math.max(10, Math.round(s.timeoutSec))) : 600,
+    // 失败重试次数（0–5；模型中心的高级设置给的）。不给 = 各 agent 自己的默认
+    ...(Number.isInteger(s.retries) && s.retries >= 0 && s.retries <= 5 ? { retries: s.retries } : {}),
     compat: s.compat && typeof s.compat === 'object' ? { ...s.compat } : {},
   };
 }

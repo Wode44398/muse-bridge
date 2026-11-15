@@ -14,6 +14,8 @@
 import { generateOpenRouterImage } from './openrouter-image.mjs';
 import { http, authHeaders, joinUrl, poll, isTransient, longWaitMs, dataUrl, sleepMs, AdapterError } from './http.mjs';
 import { wireBody } from '../discovery/schema.mjs';
+import { originalSize, parseSize } from '../cards/size.mjs';
+import { FLEX_RULE } from './openai.mjs';
 
 const VIDEO_POLL_MS = 8000;
 const DONE = 'completed';
@@ -55,12 +57,24 @@ export const openrouterAdapter = {
       const last = req.thread.turns[req.thread.turns.length - 1];
       refs = [{ data: last.data.toString('base64'), mimeType: last.mime }];
     }
+    // 新写法（自由尺寸卡的 size）：auto = 不传（模型自选）、original = 原图适配后的宽高、预设 / 自定义 = WxH；没有 size 走旧写法（比例 + 档位）
+    let size, meta;
+    if (p.size !== undefined && p.size !== '') {
+      size = null;
+      if (p.size === 'original') {
+        const o = originalSize(FLEX_RULE, req);
+        if (o) { size = `${o.width}x${o.height}`; if (o.adapted) meta = { sizeAdapted: { from: `${o.from.width}x${o.from.height}`, to: size } }; }
+      } else if (p.size !== 'auto') {
+        const s = parseSize(p.size);
+        size = s ? `${s.width}x${s.height}` : null;
+      }
+    }
     const r = await generateOpenRouterImage({
-      model: req.model, prompt: req.prompt, refs, aspectRatio: p.aspectRatio, imageSize: p.imageSize, quality: p.quality,
+      model: req.model, prompt: req.prompt, refs, aspectRatio: p.aspectRatio, imageSize: p.imageSize, quality: p.quality, size,
       signal: ctx.signal, apiKey: ctx.secret.key, baseUrl: provider.baseUrl, headers: provider.headers,
       extra: { ...(provider.params || {}), ...(p.extra || {}) }, timeoutMs: (provider.timeoutSec || 300) * 1000, dispatcher: ctx.dispatcher,
     });
-    return { assets: [{ bytes: r.bytes, mime: r.mime }] };
+    return { assets: [{ bytes: r.bytes, mime: r.mime, ...(meta ? { meta } : {}) }] };
   },
 };
 

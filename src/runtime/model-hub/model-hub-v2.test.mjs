@@ -340,6 +340,116 @@ test('按识别结果建服务：每个模型自己的去向，发布时各 agen
   assert.throws(() => R.createHubFromDetect({ baseUrl: UP + '/v1', kind: 'openai', key: 'x', catalog: [], assign: [{ id: 'nope', agents: ['claude'] }] }), /目录里没有/);
 });
 
+test('提示缓存时长（11-14）：自动值随服务视图下发；手动填的进发布规格、两边都看得到；null 回到自动', () => {
+  const m0 = X.models.find((m) => m.id === 'gpt-x');
+  assert.equal(m0.cacheTtl, undefined);
+  assert.ok(m0.cacheAuto && 'minutes' in m0.cacheAuto, '文本模型带自动值');
+  let v = R.setHubModelCache(X.id, 'gpt-x', 15).service;
+  assert.equal(v.models.find((m) => m.id === 'gpt-x').cacheTtl, 15);
+  assert.equal(pubOf(X.id, 'claude').models.find((m) => m.id === 'gpt-x').cacheTtl, 15);
+  assert.equal(pubOf(X.id, 'dimensio').models.find((m) => m.id === 'gpt-x').cacheTtl, 15);
+  v = R.setHubModelCache(X.id, 'gpt-x', 0).service;
+  assert.equal(v.models.find((m) => m.id === 'gpt-x').cacheTtl, 0);
+  // 改去向不丢手填的值
+  R.assignHubModels(X.id, [{ id: 'gpt-x', agents: ['claude', 'dimensio'] }]);
+  assert.equal(R.getHubService(X.id).models.find((m) => m.id === 'gpt-x').cacheTtl, 0);
+  v = R.setHubModelCache(X.id, 'gpt-x', null).service;
+  assert.equal(v.models.find((m) => m.id === 'gpt-x').cacheTtl, undefined);
+  assert.ok(!('cacheTtl' in pubOf(X.id, 'claude').models.find((m) => m.id === 'gpt-x')));
+  assert.throws(() => R.setHubModelCache(X.id, 'gpt-x', -1), /0 到 1440/);
+  assert.throws(() => R.setHubModelCache(X.id, 'nope', 5), /没有这个模型/);
+});
+
+test('高级调用配置（11-15）：能力 / 思考写法 / 调用参数按模型覆盖，进两边的发布规格；兼容项与重试按服务；null 回到自动', () => {
+  const claudeOf = () => P.findProvider('p-' + S.serviceHash(R.HUB_PLUGIN, X.id, 10), P.HOST_OWNER);
+  const m0 = R.getHubService(X.id).models.find((m) => m.id === 'gpt-x');
+  assert.equal(m0.custom, false);
+  assert.ok(m0.auto && m0.eff && m0.auto.contextWindow > 0, '视图带自动值与生效值');
+  const think = { thinking: 'effort', effortField: 'reasoning.effort', effortDefault: 'hi', efforts: [{ id: 'lo', name: 'Lo', value: 'low' }, { id: 'hi', name: 'Hi', value: 'high' }] };
+  let v = R.setHubModelAdvanced(X.id, 'gpt-x', {
+    over: { contextWindow: 64000, maxOutput: 8000, vision: false, alwaysThinks: true, think },
+    params: { temperature: 0.3, topP: 0.9, topK: 40, stop: ['END', 'END', ''], thinking: 'on', thinkingBudget: 4096, maxTokens: 2000, extraBody: '{"seed":7}' },
+  }).service;
+  const vm = v.models.find((m) => m.id === 'gpt-x');
+  assert.equal(vm.custom, true);
+  assert.equal(vm.eff.contextWindow, 64000);
+  assert.equal(vm.eff.thinking, 'effort');
+  assert.deepEqual(vm.params.stop, ['END'], '停止序列去重、去空');
+  // 发布规格：两边都拿到覆盖后的能力与调用参数
+  for (const agent of ['claude', 'dimensio']) {
+    const pm = pubOf(X.id, agent).models.find((m) => m.id === 'gpt-x');
+    assert.equal(pm.contextWindow, 64000, agent);
+    assert.equal(pm.maxOutput, 8000, agent);
+    assert.equal(pm.vision, false, agent);
+    assert.equal(pm.alwaysThinks, true, agent);
+    assert.equal(pm.effortField, 'reasoning.effort', agent);
+    assert.equal(pm.effortDefault, 'hi', agent);
+    assert.equal(pm.params.temperature, 0.3, agent);
+  }
+  // Claude 自己的规则也收（模型级 params 原样进它的服务）
+  const cm = claudeOf().models.find((m) => m.id === 'gpt-x');
+  assert.equal(cm.params.temperature, 0.3);
+  assert.equal(cm.params.extraBody, '{"seed":7}');
+  assert.equal(cm.thinking, 'effort');
+  assert.equal(cm.efforts.length, 2);
+  // 磁盘上只存设了的键
+  const disk = diskOf(X.id).models.find((m) => m.id === 'gpt-x');
+  assert.deepEqual(Object.keys(disk.params).sort(), ['extraBody', 'maxTokens', 'stop', 'temperature', 'thinking', 'thinkingBudget', 'topK', 'topP']);
+  // 「不思考」整块覆盖：两边都不发档位
+  R.setHubModelAdvanced(X.id, 'gpt-x', { over: { think: { thinking: 'none' } } });
+  assert.equal(pubOf(X.id, 'claude').models.find((m) => m.id === 'gpt-x').thinking, 'none');
+  assert.equal(claudeOf().models.find((m) => m.id === 'gpt-x').efforts.length, 0);
+  // 校验：坏值整次 400、什么都不改
+  const before = JSON.stringify(R.getHubService(X.id).models.find((m) => m.id === 'gpt-x'));
+  assert.throws(() => R.setHubModelAdvanced(X.id, 'gpt-x', { params: { temperature: 3 } }), /temperature/);
+  assert.throws(() => R.setHubModelAdvanced(X.id, 'gpt-x', { params: { extraBody: '[1]' } }), /JSON 对象/);
+  assert.throws(() => R.setHubModelAdvanced(X.id, 'gpt-x', { over: { maxOutput: 9000, contextWindow: 8000 } }), /不能大于/);
+  assert.throws(() => R.setHubModelAdvanced(X.id, 'gpt-x', { over: { think: { thinking: 'effort', efforts: [{ id: 'A B' }] } } }), /档位 ID/);
+  assert.throws(() => R.setHubModelAdvanced(X.id, 'gpt-x', { over: { contextWindow: 2048 } }), /4096/, '给着 Claude 时窗口不能小于 4096');
+  assert.equal(JSON.stringify(R.getHubService(X.id).models.find((m) => m.id === 'gpt-x')), before);
+  // 改去向不丢高级配置；null 回到自动
+  R.assignHubModels(X.id, [{ id: 'gpt-x', agents: ['claude', 'dimensio'] }]);
+  assert.equal(R.getHubService(X.id).models.find((m) => m.id === 'gpt-x').params.temperature, 0.3);
+  v = R.setHubModelAdvanced(X.id, 'gpt-x', { over: null, params: null }).service;
+  const back = v.models.find((m) => m.id === 'gpt-x');
+  assert.equal(back.custom, false);
+  assert.ok(!('params' in pubOf(X.id, 'claude').models.find((m) => m.id === 'gpt-x')));
+  assert.equal(pubOf(X.id, 'claude').models.find((m) => m.id === 'gpt-x').contextWindow, back.auto.contextWindow);
+
+  // 服务级：兼容项与重试
+  const s0 = R.getHubService(X.id);
+  assert.equal(s0.compatAuto.slimBody, true, '非官方上游：默认精简请求');
+  assert.deepEqual(s0.compat, {});
+  R.updateHubV2(X.id, { compat: { slimBody: false, replayReasoning: true, maxTokensField: 'max_completion_tokens' }, retries: 3 });
+  assert.deepEqual(pubOf(X.id, 'claude').compat, { slimBody: false, replayReasoning: true, maxTokensField: 'max_completion_tokens' });
+  assert.equal(pubOf(X.id, 'claude').retries, 3);
+  const cp = claudeOf();
+  assert.equal(cp.compat.slimBody, false);
+  assert.equal(cp.compat.replayReasoning, true);
+  assert.equal(cp.compat.maxTokensField, 'max_completion_tokens');
+  assert.equal(cp.retries, 3);
+  assert.throws(() => R.updateHubV2(X.id, { retries: 9 }), /0–5/);
+  assert.throws(() => R.updateHubV2(X.id, { compat: { maxTokensField: 'x' } }), /max_tokens/);
+  R.updateHubV2(X.id, { compat: null, retries: null });
+  assert.deepEqual(pubOf(X.id, 'claude').compat, {});
+  assert.equal(claudeOf().retries, 1);
+});
+
+test('手动添加的模型能删：没添加的只删目录项；已添加的先撤掉去向；识别出来的不让删', () => {
+  R.catalogAddModel(X.id, { id: 'manual-del-1', kind: 'text' });
+  R.catalogAddModel(X.id, { id: 'manual-del-2', kind: 'text' });
+  R.assignHubModels(X.id, [{ id: 'manual-del-2', agents: ['dimensio'] }]);
+  assert.ok(pubOf(X.id, 'dimensio').models.some((m) => m.id === 'manual-del-2'));
+  R.catalogRemoveModel(X.id, 'manual-del-1');
+  assert.ok(!R.catalogView(X.id).models.some((m) => m.id === 'manual-del-1'));
+  const r = R.catalogRemoveModel(X.id, 'manual-del-2');
+  assert.ok(!r.service.models.some((m) => m.id === 'manual-del-2'), '去向一起撤掉');
+  assert.ok(!R.catalogView(X.id).models.some((m) => m.id === 'manual-del-2'), '不会被当手动项留回目录');
+  assert.ok(!pubOf(X.id, 'dimensio')?.models.some((m) => m.id === 'manual-del-2'));
+  assert.throws(() => R.catalogRemoveModel(X.id, 'gpt-x'), /只能删除手动添加/);
+  assert.throws(() => R.catalogRemoveModel(X.id, 'nope-zz'), /没有这个模型/);
+});
+
 test('assign：交叉校验（400 + 人话），一条不对整批不生效', () => {
   const bad = (changes, re) => assert.throws(() => R.assignHubModels(X.id, changes), (e) => e.status === 400 && re.test(e.message));
   bad([{ id: 'gpt-x', agents: ['studio'] }], /文本模型不能添加到 Media Studio/);

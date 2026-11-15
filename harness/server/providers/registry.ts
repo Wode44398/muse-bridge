@@ -3,7 +3,8 @@ import { createAnthropicAdapter } from "./anthropic.ts";
 import { createOpenAIAdapter } from "./openai.ts";
 import { createGeminiAdapter } from "./gemini.ts";
 import { guardStream } from "./sse.ts";
-import { getCustomProvider, isCustomProviderId, isSharedProvider, requestHeaders } from "../custom-providers.ts";
+import { getCustomProvider, hostBuiltin, isCustomProviderId, isSharedProvider, requestHeaders } from "../custom-providers.ts";
+import { MK } from "../model-knowledge.ts";
 import { assertPublicEndpoint, privateEndpointsBlocked } from "../endpoint-guard.ts";
 
 // R2：每家的流都套同一层空闲超时（首字节 / 字节间，见 sse.ts guardStream）。
@@ -16,7 +17,41 @@ function hostnameOf(url: string): string {
 }
 
 export function createAdapter(cfg: AdapterConfig): ProviderAdapter {
-  return guardStream(createProviderAdapter(cfg));
+  const adapter = createProviderAdapter(cfg);
+  try {
+    applyCacheTtl(adapter, cfg);
+  } catch {
+    /* 算不出就当不知道：不提示、不赶着压缩 */
+  }
+  return guardStream(adapter);
+}
+
+// 内置厂商没填地址时请求发到哪（认厂商用；地址改过的看地址）
+const BUILTIN_HOST: Record<string, string> = {
+  anthropic: "api.anthropic.com",
+  openai: "api.openai.com",
+  gemini: "generativelanguage.googleapis.com",
+  qwen: "dashscope.aliyuncs.com",
+  zhipu: "open.bigmodel.cn",
+  kimi: "api.kimi.com",
+  mimo: "api.xiaomimimo.com",
+  local: "127.0.0.1",
+};
+
+// 提示缓存多久变冷（capabilities.cacheTtlMs，空闲压缩和「缓存冷了」提示都按它）：用户在模型中心填的 > 这次请求自己要的
+//（Anthropic 适配器发 ttl:"1h" 时是 1 小时）> 按上游主机 / 型号认厂商（model-knowledge/cache-ttl.mjs）。0 / 不填 = 不知道或不会过期。
+function applyCacheTtl(adapter: ProviderAdapter, cfg: AdapterConfig): void {
+  const caps = adapter.capabilities;
+  const live = isCustomProviderId(cfg.provider) ? getCustomProvider(cfg.provider) : null;
+  const user = live ? live.models.find((x) => x.id === cfg.model)?.cacheTtl : hostBuiltin(cfg.provider)?.models.find((x) => x.id === cfg.model)?.cacheTtl;
+  const anthropicWire = live ? live.protocol === "anthropic" : cfg.provider === "anthropic";
+  // Claude 型号只在请求带 cache_control 时才缓存：适配器没打缓存标记（第三方端点关着「提示缓存」）就是没有缓存。
+  // 别家的 Anthropic 兼容端点（DeepSeek、Kimi、小米……）自己自动缓存，照厂商算
+  if (user === undefined && anthropicWire && !caps.cacheTtlMs && MK.vendorOf(cfg.model) === "anthropic") return;
+  const host = live ? live.upstream || hostnameOf(live.baseUrl) : cfg.baseUrl ? hostnameOf(cfg.baseUrl) : BUILTIN_HOST[cfg.provider] || "";
+  const ms = MK.cacheTtlMs(cfg.model, { host, user, requestMinutes: caps.cacheTtlMs === 3_600_000 ? 60 : undefined });
+  if (ms > 0) caps.cacheTtlMs = ms;
+  else delete caps.cacheTtlMs;
 }
 
 function createProviderAdapter(cfg: AdapterConfig): ProviderAdapter {
@@ -38,7 +73,7 @@ function createProviderAdapter(cfg: AdapterConfig): ProviderAdapter {
       upstreamHost: live.upstream || hostnameOf(live.baseUrl),
       ...(guarded ? { noRedirect: true } : {}),
       ...(m
-        ? { model: { thinking: m.thinking, efforts: m.efforts, effortField: m.effortField, effortDefault: m.effortDefault, alwaysThinks: m.alwaysThinks, maxOutput: m.maxOutput } }
+        ? { model: { thinking: m.thinking, efforts: m.efforts, effortField: m.effortField, effortDefault: m.effortDefault, alwaysThinks: m.alwaysThinks, maxOutput: m.maxOutput, ...(m.params ? { params: m.params } : {}) } }
         : {}),
     };
     const c: AdapterConfig = { ...cfg, baseUrl: live.baseUrl, custom };

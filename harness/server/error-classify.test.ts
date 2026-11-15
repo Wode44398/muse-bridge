@@ -27,6 +27,8 @@ const MATRIX: Case[] = [
   ["openai 400 超窗", 400, `{"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.","type":"invalid_request_error","code":"context_length_exceeded"}}`, {}, "context_overflow"],
   ["openai 401", 401, `{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}`, {}, "auth"],
   ["openai 404 模型不存在", 404, `{"error":{"message":"The model 'gpt-9' does not exist","type":"invalid_request_error","code":"model_not_found"}}`, {}, "bad_request"],
+  ["openai 400 单张图太大", 400, `{"error":{"message":"model \\"gpt-6-astra\\" rejects images larger than 1048576 bytes (got 1372413 bytes)","type":"invalid_request_error"}}`, {}, "image_too_large"],
+  ["anthropic 400 单张图太大", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"messages.0.content.1.image.source.base64: image exceeds 5 MB maximum: 5300000 bytes > 5242880 bytes"}}`, {}, "image_too_large"],
   // DeepSeek
   ["deepseek 402 欠费", 402, `{"error":{"message":"Insufficient Balance","type":"unknown_error"}}`, {}, "billing"],
   ["deepseek 503 繁忙", 503, `{"error":{"message":"Server is busy, please try again later","type":"server_error"}}`, {}, "upstream_busy"],

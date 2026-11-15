@@ -670,23 +670,32 @@ export default [
       ctx.assert('停稳在视频页才挂播放器', mounted, await ctx.eval(`({ index: __ig.idx(), video: document.querySelectorAll('.ig video').length })`));
       await ctx.sleep(800);
       await ctx.shot('video-page');
-      // 从视频页横滑走（视频线：播放器作画廊页时把水平滑交给画廊）；电脑：混排画廊里 ←/→ 始终翻页（Windows 照片 / Google 相册），
-      // 视频页的快退 / 快进在画廊里用 J / L
-      if (ctx.touch) await ctx.g.swipe({ x: w * 0.8, y: h * 0.4 }, { x: w * 0.2, y: h * 0.4 }, { ms: 160, steps: 8 });
+      // 视频页上横滑 / ←→ 是拖进度，不翻页（触屏换文件走顶栏的上一个 / 下一个，电脑用 PgUp / PgDn）
+      await ctx.waitFor(`(() => { const v = document.querySelector('.ig video'); return v && v.readyState >= 2 && v.duration > 0 ? true : null; })()`, 8000, '视频可播').catch(() => {});
+      const t0 = await ctx.eval(`document.querySelector('.ig video')?.currentTime ?? -1`);
+      if (ctx.touch) await ctx.g.swipe({ x: w * 0.25, y: h * 0.4 }, { x: w * 0.75, y: h * 0.4 }, { ms: 220, steps: 10 });
       else await ctx.g.key('arrowright');
       await ctx.sleep(900);
+      const stay = await ctx.eval(`({ index: __ig.idx(), t: document.querySelector('.ig video')?.currentTime ?? -1, strip: !!document.querySelector('.vw-bottom .ig-strip'), bar: !!document.querySelector('.vw-bottom .vp-bar') })`);
+      ctx.assert('视频页上横滑 / → 不翻页', stay.index === vi, stay);
+      ctx.assert('视频页上横滑 / → 是往后拖进度', stay.t > t0 + 0.8, { t0, t: stay.t });
+      ctx.assert('视频页底栏只有播放条（进度条下面不叠缩略图条）', stay.bar && !stay.strip, stay);
+      if (ctx.touch) {
+        const nx = await ctx.eval(`(() => { const b = __pvqa.root().querySelector('.vw-bar-nav button[aria-label="下一个"], .vw-bar-nav button:last-child'); if (!b || b.disabled) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+        ctx.assert('触屏视频页顶栏有「下一个」', !!nx, nx);
+        if (nx) await ctx.g.tap(nx.x, nx.y);
+      } else await ctx.g.key('pagedown');
+      await ctx.sleep(900);
       const after = await ctx.eval(`({ index: __ig.idx(), video: document.querySelectorAll('.ig video').length })`);
-      ctx.assert('从视频页翻走', after.index === vi + 1, after, { level: ctx.touch ? 'goal' : 'must' });
+      ctx.assert('从视频页换到下一项', after.index === vi + 1, after);
       if (after.index === vi + 1) ctx.assert('切走即卸载播放器', after.video === 0, after);
       if (!ctx.touch && after.index === vi + 1) {
-        // 电脑：PgUp / PgDn 在所有类型里都是「换文件」（视频页学会的 PgDn 到图片页照样管用）；视频页底栏 = 播放条 + 缩略图条
+        // 电脑：PgUp / PgDn 在所有类型里都是「换文件」（视频页学会的 PgDn 到图片页照样管用）；图片页照旧有缩略图条
+        const imgStrip = await ctx.eval(`!!document.querySelector('.vw-bottom .ig-strip')`);
+        ctx.assert('图片页仍有缩略图条', imgStrip, imgStrip);
         await ctx.g.key('pageup');
-        const pu = await ctx.waitFor(`__ig.idx() === ${vi} && !!document.querySelector('.vw-bottom .vp-bar') ? { index: __ig.idx(), strip: !!document.querySelector('.vw-bottom .ig-strip') } : null`, 5000, 'PgUp 回到视频页').catch(() => null);
+        const pu = await ctx.waitFor(`__ig.idx() === ${vi} && !!document.querySelector('.vw-bottom .vp-bar') ? { index: __ig.idx() } : null`, 5000, 'PgUp 回到视频页').catch(() => null);
         ctx.assert('图片页 PgUp 换到上一项（视频页）', pu?.index === vi, pu);
-        ctx.assert('混排视频页留着缩略图条（和播放条叠放）', !!pu?.strip, pu);
-        await ctx.g.key('pagedown');
-        const pd = await ctx.waitFor(`__ig.idx() === ${vi + 1}`, 5000, 'PgDn 翻走').then(() => true, () => false);
-        ctx.assert('视频页 PgDn 换到下一项', pd, await ctx.eval(`__ig.idx()`));
       }
     },
   },

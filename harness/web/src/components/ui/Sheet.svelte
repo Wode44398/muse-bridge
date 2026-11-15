@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { WIDE_MQ } from "../../lib/breakpoints.ts";
   // 面板：手机（<700px）= 底部抽屉，把手 / 标题行可以往下拖着关（按位移或甩的速度判定），弹簧滑入；
   //       桌面 = 居中对话框，轻微浮起 + 放大进场。
   // 共同：遮罩点一下关、Esc / 返回键关（浮层栈）、挂载期间让桌面壳原生浏览器视图退下、正文单独滚动、
@@ -39,7 +40,7 @@
     actions?: Snippet;
   } = $props();
 
-  const mq = matchMedia("(min-width: 700px)");
+  const mq = matchMedia(WIDE_MQ);
   let wide = $state(mq.matches);
   let panel: HTMLDivElement | undefined = $state();
   let head: HTMLDivElement | undefined = $state();

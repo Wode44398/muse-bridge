@@ -34,6 +34,12 @@ function fakeRes() {
   return res;
 }
 
+test('familyCall：定时任务的 routine / routine-status 在操作白名单里；没开 dimensio 的身份照样拦', async () => {
+  const { familyCall } = await import('./harness.mjs');
+  await assert.rejects(familyCall({ allowDimensio: true }, 'nope', {}), /unknown family op/);
+  for (const op of ['routine', 'routine-status']) await assert.rejects(familyCall({ allowDimensio: false }, op, {}), /dimensio 没开/);
+});
+
 test('/agent/family/*：没带凭据 401，带了不认识的凭据也不放行', async () => {
   const r1 = fakeRes();
   await handleFamily('send', fakeReq({}), r1);

@@ -227,3 +227,152 @@ test('全图点表：整份原样放着，不进 dp 的深层代理（两千多�
   assert.equal(await D.loadAllPoints({ force: true }), null);
   assert.equal(dp.points, null);
 });
+
+// —— dimensio 那份（dimDispatch）：请求都带作用域、不带口径；跟随 / 单独两种模式的切换；总线事件对两份状态的重拉规则 ——
+const { handlers } = await import(pathToFileURL(join(dir, 'lib', 'bus.js')).href);
+const dimD = D.dimDispatch;
+const ddp = dimD.dp;
+const scopeIn = (u) => new URL(u, 'http://x').searchParams.get('scope');
+const dimPolicy = (rev, more = {}) => ({ ...policy(rev), follow: true, ...more });
+const dimPreview = () => ({ basis: 'dimensio', tiers: [], candidates: [{ model: 'zhipu:glm-5.3-flash', label: 'GLM-5.3 Flash', effort: 'high', ii: 41.8, cost: 1.9, basis: 'api' }], unrated: [{ model: 'custom-1a2b3c4d:qwen3:32b', label: '', provider: '本机 Ollama' }], poolPlans: [], chart: BUILTIN });
+/** 两份都答的假服务端：dimensio 的 GET 认 scope 查询串；harnessDown = 落点算不出来（preview:null + previewError）。 */
+function bothServer() {
+  const s = { rev: 1, dimRev: 1, follow: true, harnessDown: false, post: async () => ({ ok: true }) };
+  globalThis.__dpApi = {
+    get: async (u) => {
+      if (scopeIn(u) === 'dimensio') {
+        return {
+          ok: true, scope: 'dimensio', policy: dimPolicy(s.dimRev, { follow: s.follow }), canEdit: true, canImport: true,
+          claude: { activeId: 's-1', name: '省钱', enabled: true, rev: s.rev },
+          ...(s.harnessDown ? { preview: null, previewError: 'dimensio 服务没起来' } : { preview: dimPreview() }),
+        };
+      }
+      return { ok: true, policy: policy(s.rev), preview: preview(basisIn(u) || 'official'), canEdit: true, canImport: true };
+    },
+    post: (u, b) => s.post(u, b),
+  };
+  return s;
+}
+async function freshBoth() {
+  D._resetDispatchForTests();
+  dimD._reset();
+  calls.length = 0;
+  const s = bothServer();
+  await D.loadDispatch();
+  await dimD.loadDispatch();
+  return s;
+}
+const dimGets = () => calls.filter((c) => c[0] === 'GET' && scopeIn(c[1]) === 'dimensio');
+const claudeGets = () => calls.filter((c) => c[0] === 'GET' && c[1].startsWith('/api/claude/dispatch?') && scopeIn(c[1]) !== 'dimensio');
+
+test('dimensio：读取带 scope=dimensio、不带 basis；策略、Claude 那边生效的那一套、落点一起收下；模型显示名从它自己的预览里取', async () => {
+  await freshBoth();
+  const g = dimGets();
+  assert.equal(g.length, 1);
+  assert.equal(basisIn(g[0][1]), null, 'dimensio 没有口径一说');
+  assert.equal(ddp.loaded, true);
+  assert.equal(ddp.policy.follow, true);
+  assert.equal(ddp.claude.name, '省钱');
+  assert.equal(ddp.preview.basis, 'dimensio');
+  assert.equal(ddp.basis, 'dimensio');
+  assert.notEqual(ddp, dp, '两份状态各是各的');
+  assert.equal(dp.preview.basis, 'official', 'Claude 那份照旧');
+  assert.equal(dimD.modelName('zhipu:glm-5.3-flash'), 'GLM-5.3 Flash');
+  assert.equal(dimD.modelName('custom-1a2b3c4d:qwen3:32b'), 'qwen3:32b', '预览里没有显示名：只写型号段（型号 id 自己带冒号也不拆）');
+  assert.equal(dimD.modelName('kimi:k3'), 'k3');
+  assert.equal(dimD.effortName('zhipu:glm-5.3-flash', ''), '默认');
+  assert.equal(dimD.effortName('zhipu:glm-5.3-flash', 'off'), '不思考');
+});
+
+test('dimensio：写请求的体里都带 scope:dimensio、不带 basis（即点即存、存 / 删策略、实时预览、图谱操作）', async () => {
+  const s = await freshBoth();
+  const posts = [];
+  s.post = async (u, b) => {
+    posts.push([u, b]);
+    if (u.endsWith('/update')) { s.dimRev++; return { ok: true, policy: dimPolicy(s.dimRev, { scope: { workflow: true, subagent: true, session: true } }), preview: dimPreview() }; }
+    if (u.endsWith('/strategy/save')) { s.dimRev++; return { ok: true, policy: dimPolicy(s.dimRev), strategy: { id: 's-1', name: '默认' }, preview: dimPreview() }; }
+    if (u.endsWith('/strategy/delete')) { s.dimRev++; return { ok: true, policy: dimPolicy(s.dimRev), preview: dimPreview() }; }
+    if (u.endsWith('/preview')) return { ok: true, preview: dimPreview() };
+    if (u.endsWith('/chart/fetch')) return { ok: true, chart: BUILTIN, preview: dimPreview() };
+    return { ok: true };
+  };
+  await dimD.setDispatch({ scope: { session: true } });
+  await dimD.saveStrategy({ id: 's-1', note: '审查用最强的' });
+  await dimD.deleteStrategy('s-2');
+  const p = await dimD.previewStrategy({ id: 's-1', floors: {} }, { allowThirdParty: false });
+  assert.equal(p.basis, 'dimensio');
+  await dimD.fetchChartOnline();
+  assert.deepEqual(posts.map(([u]) => u.replace('/api/claude/dispatch', '')), ['/update', '/strategy/save', '/strategy/delete', '/preview', '/chart/fetch']);
+  for (const [u, b] of posts) {
+    assert.equal(b.scope, 'dimensio', u + ' 带作用域');
+    assert.equal('basis' in b, false, u + ' 不带口径');
+  }
+  assert.deepEqual(posts[0][1], { patch: { scope: { session: true } }, scope: 'dimensio' });
+  assert.equal(posts[3][1].allowThirdParty, false);
+  // Claude 那份的写请求照旧不带作用域
+  s.post = async (u, b) => { posts.push([u, b]); s.rev++; return { ok: true, policy: policy(s.rev), preview: preview('official') }; };
+  await D.setDispatch({ enabled: false });
+  assert.deepEqual(posts.at(-1)[1], { patch: { enabled: false } });
+  await dimD.setBasis('custom');
+  assert.equal(ddp.basis, 'dimensio', 'dimensio 那份没有口径可换');
+});
+
+test('dimensio：跟随 ⇄ 单独即点即存——界面先变；失败撤回这一次并抛；成功后按服务端那份', async () => {
+  const s = await freshBoth();
+  const gate = deferred();
+  s.post = async (u, b) => {
+    await gate.promise;
+    if (b.patch.follow === false && s.fail) throw httpErr(500, '没写进磁盘');
+    s.dimRev++; s.follow = b.patch.follow;
+    return { ok: true, policy: dimPolicy(s.dimRev, { follow: s.follow }), preview: dimPreview() };
+  };
+  // 失败：先变成「单独」，应答回来撤回「跟随」
+  s.fail = true;
+  const going = dimD.setDispatch({ follow: false });
+  await sleep(0);
+  assert.equal(ddp.policy.follow, false, '界面先变');
+  gate.resolve();
+  await assert.rejects(going, /没写进磁盘/);
+  assert.equal(ddp.policy.follow, true, '撤回了');
+  assert.equal(dp.policy.follow, undefined, 'Claude 那份不受影响');
+  // 成功
+  s.fail = false;
+  await dimD.setDispatch({ follow: false });
+  assert.equal(ddp.policy.follow, false);
+  assert.equal(ddp.policy.rev, 2);
+  await dimD.setDispatch({ follow: true });
+  assert.equal(ddp.policy.follow, true);
+  assert.equal(ddp.policy.rev, 3);
+});
+
+test('dimensio：落点算不出来（preview:null + previewError）→ 清掉手上的落点、记下原因；好了以后再读就回来', async () => {
+  const s = await freshBoth();
+  assert.ok(ddp.preview);
+  s.harnessDown = true;
+  assert.equal(await dimD.loadDispatch({ force: true }), true, '策略照样读到了');
+  assert.equal(ddp.preview, null);
+  assert.equal(ddp.previewError, 'dimensio 服务没起来');
+  assert.equal(ddp.policy.follow, true);
+  s.harnessDown = false;
+  await dimD.loadDispatch({ force: true });
+  assert.equal(ddp.preview.basis, 'dimensio');
+  assert.equal(ddp.previewError, '');
+});
+
+test('总线：Claude 那份只认自己的（scope 缺省 / claude）与图谱变更；dimensio 那份全认（跟随模式依赖 Claude 那边）', async () => {
+  await freshBoth();
+  const emit = async (ev) => {
+    const c0 = claudeGets().length, d0 = dimGets().length;
+    for (const h of handlers) h(ev);
+    await sleep(0);
+    return [claudeGets().length - c0, dimGets().length - d0];
+  };
+  assert.deepEqual(await emit({ type: 'claude.dispatch', rev: 2, scope: 'dimensio' }), [0, 1], 'dimensio 的改动：只有 dimensio 那份重拉');
+  assert.deepEqual(await emit({ type: 'claude.dispatch', rev: 3, scope: 'claude' }), [1, 1], 'Claude 的改动：两份都重拉');
+  assert.deepEqual(await emit({ type: 'claude.dispatch', rev: 4 }), [1, 1], '老服务端不带 scope：当作 Claude 的');
+  assert.deepEqual(await emit({ type: 'claude.dispatch', chart: true }), [1, 1], '图谱换了：两份都重拉');
+  assert.deepEqual(await emit({ type: 'claude.settings' }), [0, 0], '别的事件不管');
+  // 没人看过 dimensio 那页：不拉
+  dimD._reset();
+  assert.deepEqual(await emit({ type: 'claude.dispatch', rev: 5, scope: 'dimensio' }), [0, 0]);
+});

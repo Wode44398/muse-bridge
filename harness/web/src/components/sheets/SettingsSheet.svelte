@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { WIDE_MQ } from "../../lib/breakpoints.ts";
   // 设置：API Key / 权限规则 / 工作空间 / 访问范围 / 外观 / 连接（安卓壳、带着连接的独立页）/ 诊断。
   // 型号、思考档与运行档位都在输入框旁就地选，这里不重复（档位是每轮可能动的东西，规则是配一次的东西）。
   //
@@ -297,7 +298,7 @@
   const sha = $derived(build?.codeSha ? `${String(build.codeSha).slice(0, 7)}${build.dirty ? "*" : ""}` : "");
   const proto = $derived(app.compat?.server ?? 0);
 
-  const mq = matchMedia("(min-width: 700px)");
+  const mq = matchMedia(WIDE_MQ);
   let wide = $state(mq.matches);
   $effect(() => {
     const on = (e: MediaQueryListEvent) => (wide = e.matches);

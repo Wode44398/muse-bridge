@@ -1,6 +1,6 @@
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { ok, fail } from "./types.ts";
-import { existingSharedBrowser, claimBrowser, noBrowserMessage } from "../cdp.ts";
+import { existingBrowser, noBrowserMessage } from "../cdp.ts";
 import { browserAvailable } from "../headless.ts";
 
 // Network: audit the Browser page's actual HTTP traffic — every request the
@@ -63,9 +63,7 @@ export const networkTool: Tool = {
     },
   },
   async run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
-    const denied = claimBrowser(ctx.ownerId ?? "");
-    if (denied) return fail("network", denied);
-    const page = existingSharedBrowser();
+    const page = existingBrowser(ctx.ownerId ?? ""); // 这个会话自己的浏览器（cdp.ts getBrowser）
     if (!page) return fail("network", noBrowserMessage());
     const action = String(args.action ?? "list").trim() || "list";
 

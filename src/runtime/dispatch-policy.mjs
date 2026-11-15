@@ -16,6 +16,17 @@
 // 迁移：文件不存在时现造一份默认（一套「默认」，备注取这个身份旧设置 subagentDispatch 的值——直接读盘上的 claude-settings.json，
 // 那个键已从设置注册表里删掉，下一次写设置就没了）。旧备注非空时第一次读就落盘，免得被设置写回冲掉；为空的只在内存里造，第一次写才落盘。
 // resolveAuto（model-ratings.mjs）只拿得到 owner 键（customOwner(ctx)），所以 claude.mjs 每轮用 notePolicyOwner 登记 owner → 身份。
+//
+// 作用域（2026-11-14）：同一套读写与校验按作用域各存一份，导出的函数都多一个 { scope }（缺省 'claude'，行为与之前完全一样）：
+//   claude    <dataDir>/dispatch-policy.json            Claude 的子 agent（上面说的那份）
+//   dimensio  <dataDir>/dispatch-policy.dimensio.json   dimensio 的子 agent（设置 › dimensio › 子 agent 调用策略）。多一个 follow：
+//             true（默认）= 生效的那一套策略（判定线 / 档位自定义 / 口述备注）跟随 Claude 那份的 activeId 那套；false = 用自己 strategies 里的。
+//             总开关、生效范围、要不要非 Claude 模型永远是 dimensio 自己的。生效范围的三项对 dimensio：workflow = Workflow 工具脚本里的
+//             agent()，subagent = Agent 工具，session = StartSession 的 model 写 auto:<档>。档位自定义的 model 写 dimensio 的
+//             「厂商 id:型号」（zhipu:glm-5.3-flash、custom-1a2b3c4d:qwen3:32b）。没权限的身份读到的只读默认是 enabled:true、follow:true
+//             （= 改造前 dimensio 的默认：按默认阶梯派）。旧的 dimensio 偏好（按难度选型阶梯开关、子 agent 调度偏好文本）经
+//             migrateDimensioLegacy 迁进来：文件还不存在、而旧偏好不是默认值时落盘一份（备注非空 → follow:false，原样保住改造前的行为）。
+//   dimensio 实际用哪一套由 runtime/dispatch-dimensio.mjs 解析（Claude 写法的档位自定义映射成 dimensio 认得的写法）。
 
 import { statSync } from 'node:fs';
 import path from 'node:path';
@@ -30,15 +41,28 @@ export const MAX_STRATEGIES = 12;
 export const NAME_MAX = 24;
 export const NOTE_MAX = 2000;
 export const DEFAULT_SCOPE = Object.freeze({ workflow: true, subagent: true, session: false });
-const FILE = 'dispatch-policy.json';
+/** 策略文件的作用域：claude = Claude 的子 agent；dimensio = dimensio 的子 agent。 */
+export const POLICY_SCOPES = Object.freeze(['claude', 'dimensio']);
+const FILES = Object.freeze({ claude: 'dispatch-policy.json', dimensio: 'dispatch-policy.dimensio.json' });
 const LEGACY_FILE = 'claude-settings.json';
 const DEFAULT_ID = 's-00000000';   // 迁移出来的那套固定 id：没落盘时每次现造也是同一个 id，界面按 id 改得上
 const DEFAULT_NAME = '默认';
 const ID_RE = /^s-[0-9a-f]{8}$/;
 const CLAUDE_ALIASES = Object.freeze(['opus', 'sonnet', 'haiku', 'fable']);
 const CUSTOM_MODEL_RE = /^custom:p-[0-9a-f]{6,12}:\S.*$/;
+// dimensio 的「厂商 id:型号」：自带厂商是 2–20 个小写字母（含本机 local），自定义服务是 custom-<8 位>；型号 id 自己可以带冒号
+const DIM_MODEL_RE = /^(?:[a-z]{2,20}|custom-[a-f0-9]{8}):[^\s\u0000-\u001f]+$/;
 const MODEL_MAX = 300;
 const POLICY_KEYS = ['enabled', 'scope', 'allowThirdParty', 'activeId'];
+const DIM_POLICY_KEYS = [...POLICY_KEYS, 'follow'];
+
+/** 作用域参数 → 'claude' | 'dimensio'；不给 = claude，给了别的抛 400。 */
+export function policyScope(v) {
+  if (v === undefined || v === null || v === '') return 'claude';
+  if (typeof v === 'string' && POLICY_SCOPES.includes(v)) return v;
+  throw Object.assign(new Error(`没有「${String(v).slice(0, 20)}」这个作用域（只有 claude / dimensio）`), { status: 400 });
+}
+const modelOk = (model, scope) => (scope === 'dimensio' ? DIM_MODEL_RE.test(model) : CLAUDE_ALIASES.includes(model) || CUSTOM_MODEL_RE.test(model));
 
 const fail = (msg, status = 400) => Object.assign(new Error(msg), { status });
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -53,22 +77,26 @@ export function canEditPolicy(ctx) {
   return !!(ctx && ctx.dataDir && !ctx.snap && ctx.kind !== 'share' && (ctx.kind === 'admin' || ctx.shell === true));
 }
 
-const fileOf = (ctx) => path.resolve(ctx.dataDir, FILE);
+const fileOf = (ctx, scope = 'claude') => path.resolve(ctx.dataDir, FILES[scope]);
 const nullTiers = () => Object.fromEntries(TIER_KEYS.map((k) => [k, null]));
 
 function blankStrategy(id, name, note, now) {
   return { id, name, floors: nullTiers(), overrides: nullTiers(), note, createdAt: now, updatedAt: now };
 }
 
-function defaultPolicy(note = '', now = Date.now()) {
+// dimensio 那份多一个 follow（放在 enabled 后面，给人看的时候和总开关挨着）
+function defaultPolicy(note = '', now = Date.now(), scope = 'claude') {
   return {
-    v: 1, enabled: true, scope: { ...DEFAULT_SCOPE }, allowThirdParty: true, activeId: DEFAULT_ID,
+    v: 1, enabled: true, ...(scope === 'dimensio' ? { follow: true } : {}), scope: { ...DEFAULT_SCOPE }, allowThirdParty: true, activeId: DEFAULT_ID,
     strategies: [blankStrategy(DEFAULT_ID, DEFAULT_NAME, note, now)], rev: 0,
   };
 }
 
-// 没权限的身份拿到的只读默认：总开关关着（调度完全走 Claude Code 原生）
-function readOnlyPolicy() { return { ...defaultPolicy('', 0), enabled: false }; }
+// 没权限的身份拿到的只读默认：Claude 那份总开关关着（调度完全走 Claude Code 原生）；
+// dimensio 那份开着、跟随 Claude（= 改造前 dimensio 的默认：按默认阶梯派，这些身份本来就改不了它）
+function readOnlyPolicy(scope = 'claude') {
+  return scope === 'dimensio' ? defaultPolicy('', 0, 'dimensio') : { ...defaultPolicy('', 0), enabled: false };
+}
 
 // 旧设置「子 agent 调度偏好」（subagentDispatch）的原值：直接读盘，不经设置注册表（那个键已经删了）
 function legacyNote(ctx) {
@@ -81,21 +109,21 @@ function legacyNote(ctx) {
 // 存盘内容：宽松（坏的字段回默认，不抛）；写入的补丁：严格（不合规抛 400，见下面的 parse*）
 
 function looseFloor(v) { return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100 ? round1(v) : null; }
-function looseOverride(v) {
+function looseOverride(v, scope = 'claude') {
   if (!isObj(v) || typeof v.model !== 'string') return null;
   const model = v.model.trim();
-  if (!model || model.length > MODEL_MAX || !(CLAUDE_ALIASES.includes(model) || CUSTOM_MODEL_RE.test(model))) return null;
+  if (!model || model.length > MODEL_MAX || !modelOk(model, scope)) return null;
   const effort = typeof v.effort === 'string' ? v.effort.trim() : '';
   return { model, effort: effort === '' || TIER_ID_RE.test(effort) ? effort : '' };
 }
 
-/** 一套策略的宽松规范化（坏字段回默认、不抛）：存盘内容和不落盘的实时预览用。id 缺了 / 不合规 → 'draft'。 */
-export function sanitizeStrategy(s) {
+/** 一套策略的宽松规范化（坏字段回默认、不抛）：存盘内容和不落盘的实时预览用。id 缺了 / 不合规 → 'draft'。scope 定档位自定义认哪种写法。 */
+export function sanitizeStrategy(s, { scope = 'claude' } = {}) {
   const x = isObj(s) ? s : {};
   const floors = nullTiers(), overrides = nullTiers();
   for (const k of TIER_KEYS) {
     floors[k] = looseFloor(isObj(x.floors) ? x.floors[k] : null);
-    overrides[k] = looseOverride(isObj(x.overrides) ? x.overrides[k] : null);
+    overrides[k] = looseOverride(isObj(x.overrides) ? x.overrides[k] : null, scope);
   }
   const name = clip(cleanName(x.name), NAME_MAX);
   return {
@@ -107,21 +135,22 @@ export function sanitizeStrategy(s) {
   };
 }
 
-function normalizePolicy(j) {
+function normalizePolicy(j, scope = 'claude') {
   if (!isObj(j) || !Array.isArray(j.strategies)) return null;
   const strategies = [], seen = new Set();
   for (const raw of j.strategies) {
     if (!isObj(raw) || typeof raw.id !== 'string' || !ID_RE.test(raw.id) || seen.has(raw.id)) continue;
     seen.add(raw.id);
-    strategies.push(sanitizeStrategy(raw));
+    strategies.push(sanitizeStrategy(raw, { scope }));
     if (strategies.length >= MAX_STRATEGIES) break;
   }
   if (!strategies.length) return null;
   const sc = isObj(j.scope) ? j.scope : {};
-  const scope = {};
-  for (const k of Object.keys(DEFAULT_SCOPE)) scope[k] = typeof sc[k] === 'boolean' ? sc[k] : DEFAULT_SCOPE[k];
+  const sc2 = {};
+  for (const k of Object.keys(DEFAULT_SCOPE)) sc2[k] = typeof sc[k] === 'boolean' ? sc[k] : DEFAULT_SCOPE[k];
   return {
-    v: 1, enabled: j.enabled !== false, scope, allowThirdParty: j.allowThirdParty !== false,
+    v: 1, enabled: j.enabled !== false, ...(scope === 'dimensio' ? { follow: j.follow !== false } : {}), scope: sc2,
+    allowThirdParty: j.allowThirdParty !== false,
     activeId: strategies.some((s) => s.id === j.activeId) ? j.activeId : strategies[0].id,
     strategies, rev: Number.isInteger(j.rev) && j.rev >= 0 ? j.rev : 0,
   };
@@ -141,15 +170,16 @@ function persist(file, policy) {
   cache.set(file, { mtime: mtimeOf(file), policy });
 }
 
-function load(ctx) {
-  const file = fileOf(ctx);
+function load(ctx, scope = 'claude') {
+  const file = fileOf(ctx, scope);
   const mt = mtimeOf(file);
   const hit = cache.get(file);
   if (hit && hit.mtime === mt) return hit.policy;
-  let policy = mt >= 0 ? normalizePolicy(readJson(file, null)) : null;
+  let policy = mt >= 0 ? normalizePolicy(readJson(file, null), scope) : null;
   if (!policy) {
     if (mt >= 0) console.error('[dispatch-policy] 策略文件读不出来，先用默认（下次保存会覆盖它）：', file);
-    policy = defaultPolicy(legacyNote(ctx));
+    // 旧设置的迁移只有 Claude 那份从盘上读；dimensio 的旧偏好在 harness 手里，由 migrateDimensioLegacy 送进来
+    policy = defaultPolicy(scope === 'claude' ? legacyNote(ctx) : '', Date.now(), scope);
     if (mt < 0 && policy.strategies[0].note) {
       try { persist(file, policy); return policy; }
       catch (e) { console.error('[dispatch-policy] 旧的子 agent 调度偏好迁不进策略文件：', e?.message || e); }
@@ -159,9 +189,39 @@ function load(ctx) {
   return policy;
 }
 
-/** 规范化后的策略文件（含迁移）；没权限的 / 快照访客 / 没有 dataDir → 一份 enabled:false 的只读默认。回副本，随便改。 */
-export function policyFor(ctx) {
-  return structuredClone(canEditPolicy(ctx) ? load(ctx) : readOnlyPolicy());
+/**
+ * 规范化后的策略文件（含迁移）；没权限的 / 快照访客 / 没有 dataDir → 只读默认（Claude 那份 enabled:false，dimensio 那份见 readOnlyPolicy）。
+ * 回副本，随便改。scope 缺省 = claude。
+ */
+export function policyFor(ctx, { scope = 'claude' } = {}) {
+  const sc = policyScope(scope);
+  return structuredClone(canEditPolicy(ctx) ? load(ctx, sc) : readOnlyPolicy(sc));
+}
+
+/** 这个身份的 dimensio 那份有没有落过盘（没落过 = 现造的默认，旧偏好还能迁进来）。 */
+export function dimensioPolicyStored(ctx) {
+  return !!(ctx && ctx.dataDir) && mtimeOf(fileOf(ctx, 'dimensio')) >= 0;
+}
+
+/**
+ * 把 harness 送来的旧 dimensio 偏好迁进 dimensio 那份（只在文件还不存在、这个身份能改策略时做一次）：
+ *   legacy = { ladder: 按难度选型阶梯开关, note: 子 agent 调度偏好文本 }
+ *   ladder:false → enabled:false；note 非空 → 默认那套的备注 + follow:false（改造前 dimensio 用的就是默认线 + 自己这段话）。
+ * 两样都是默认值就什么都不写（现造的默认就是它）。回 true = 落了盘。写盘失败只记日志（下次再迁）。
+ */
+export function migrateDimensioLegacy(ctx, legacy) {
+  if (!canEditPolicy(ctx) || !isObj(legacy) || dimensioPolicyStored(ctx)) return false;
+  const note = typeof legacy.note === 'string' ? clip(cleanText(legacy.note).trim(), NOTE_MAX) : '';
+  const off = legacy.ladder === false;
+  if (!note && !off) return false;
+  const p = defaultPolicy(note, Date.now(), 'dimensio');
+  if (off) p.enabled = false;
+  if (note) p.follow = false;
+  p.rev = 1;
+  try { persist(fileOf(ctx, 'dimensio'), p); }
+  catch (e) { console.error('[dispatch-policy] 旧的 dimensio 调度偏好迁不进策略文件：', e?.message || e); return false; }
+  emit(ctx, p, 'dimensio');
+  return true;
 }
 
 /** 生效的那套（activeId 对不上时取第一套）；没有 → null。 */
@@ -186,11 +246,11 @@ export function policyOfOwner(owner) {
 
 // —— 变更通知 ——
 const listeners = new Set();
-/** 写成功后调 fn(ctx, policy)（路由用它往总线推 claude.dispatch）。返回取消订阅的函数。 */
+/** 写成功后调 fn(ctx, policy, scope)（路由用它往总线推 claude.dispatch）。返回取消订阅的函数。 */
 export function onPolicyChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
-function emit(ctx, policy) {
+function emit(ctx, policy, scope = 'claude') {
   for (const fn of listeners) {
-    try { fn(ctx, structuredClone(policy)); } catch (e) { console.error('[dispatch-policy] listener:', e?.message || e); }
+    try { fn(ctx, structuredClone(policy), scope); } catch (e) { console.error('[dispatch-policy] listener:', e?.message || e); }
   }
 }
 
@@ -198,15 +258,15 @@ function requireEdit(ctx) {
   if (!canEditPolicy(ctx)) throw fail('这个身份不能修改子 agent 调用策略', 403);
 }
 // 在当前文件的副本上改，mutate 回 false = 没变化（不写、不加 rev）
-function commit(ctx, mutate) {
+function commit(ctx, mutate, scope = 'claude') {
   requireEdit(ctx);
-  const file = fileOf(ctx);
-  const next = structuredClone(load(ctx));
+  const file = fileOf(ctx, scope);
+  const next = structuredClone(load(ctx, scope));
   const r = mutate(next);
-  if (r === false) return { policy: structuredClone(load(ctx)), changed: false, extra: undefined };
+  if (r === false) return { policy: structuredClone(load(ctx, scope)), changed: false, extra: undefined };
   next.rev += 1;
   persist(file, next);
-  emit(ctx, next);
+  emit(ctx, next, scope);
   return { policy: structuredClone(next), changed: true, extra: r };
 }
 
@@ -216,13 +276,15 @@ function parseFloor(k, v) {
   if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 100) throw fail(`「${k}」档的判定线要是 0–100 之间的数（或 null = 默认线）`);
   return round1(v);
 }
-function parseOverride(k, v) {
+function parseOverride(k, v, scope = 'claude') {
   if (v === null) return null;
   if (!isObj(v)) throw fail(`「${k}」档的自定义要是 { model, effort } 或 null`);
   const model = typeof v.model === 'string' ? v.model.trim() : '';
   if (!model) return null;
-  if (model.length > MODEL_MAX || !(CLAUDE_ALIASES.includes(model) || CUSTOM_MODEL_RE.test(model))) {
-    throw fail(`「${k}」档指定的模型「${clip(model, 60)}」写法不对：Claude 写 opus / sonnet / haiku / fable，第三方写 custom:<服务 id>:<型号>`);
+  if (model.length > MODEL_MAX || !modelOk(model, scope)) {
+    throw fail(scope === 'dimensio'
+      ? `「${k}」档指定的模型「${clip(model, 60)}」写法不对：dimensio 写 <厂商 id>:<型号>，如 zhipu:glm-5.3-flash`
+      : `「${k}」档指定的模型「${clip(model, 60)}」写法不对：Claude 写 opus / sonnet / haiku / fable，第三方写 custom:<服务 id>:<型号>`);
   }
   if (v.effort != null && typeof v.effort !== 'string') throw fail(`「${k}」档的推理强度要是字符串（'' = 不指定）`);
   const effort = typeof v.effort === 'string' ? v.effort.trim() : '';
@@ -265,11 +327,14 @@ function parseNote(v) {
 const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /** 改总开关 / 范围 / 是否用非 Claude / 切换生效策略：patch = { enabled?, scope?:{…部分}, allowThirdParty?, activeId? } → 新策略文件。 */
-export function updatePolicy(ctx, patch) {
+export function updatePolicy(ctx, patch, { scope = 'claude' } = {}) {
+  const sc = policyScope(scope);
   requireEdit(ctx);
   if (!isObj(patch)) throw fail('patch 要是对象');
-  for (const k of Object.keys(patch)) if (!POLICY_KEYS.includes(k)) throw fail(`不认识的字段「${clip(k, 30)}」（只能改 enabled / scope / allowThirdParty / activeId）`);
+  const keys = sc === 'dimensio' ? DIM_POLICY_KEYS : POLICY_KEYS;
+  for (const k of Object.keys(patch)) if (!keys.includes(k)) throw fail(`不认识的字段「${clip(k, 30)}」（只能改 ${keys.join(' / ')}）`);
   if (patch.enabled !== undefined && typeof patch.enabled !== 'boolean') throw fail('enabled 要是 true / false');
+  if (patch.follow !== undefined && typeof patch.follow !== 'boolean') throw fail('follow 要是 true / false');
   if (patch.allowThirdParty !== undefined && typeof patch.allowThirdParty !== 'boolean') throw fail('allowThirdParty 要是 true / false');
   if (patch.scope !== undefined) {
     if (!isObj(patch.scope)) throw fail('scope 要是对象：{ workflow?, subagent?, session? }');
@@ -283,6 +348,7 @@ export function updatePolicy(ctx, patch) {
   return commit(ctx, (p) => {
     const before = JSON.stringify(p);
     if (patch.enabled !== undefined) p.enabled = patch.enabled;
+    if (patch.follow !== undefined) p.follow = patch.follow;
     if (patch.allowThirdParty !== undefined) p.allowThirdParty = patch.allowThirdParty;
     if (patch.scope) for (const k of Object.keys(DEFAULT_SCOPE)) if (Object.hasOwn(patch.scope, k)) p.scope[k] = patch.scope[k];
     if (patch.activeId !== undefined) {
@@ -290,7 +356,7 @@ export function updatePolicy(ctx, patch) {
       p.activeId = patch.activeId;
     }
     return JSON.stringify(p) !== before;
-  }).policy;
+  }, sc).policy;
 }
 
 /**
@@ -299,7 +365,8 @@ export function updatePolicy(ctx, patch) {
  *   没有 = 新建：以 copyOf（第三个参数或 s.copyOf）那套为底复制，没给就从空白开始；名字没给 → 「<原名> 副本」/「新策略」。
  * 判定线合并后要满足 top ≥ hard ≥ normal ≥ light，不满足抛 400。
  */
-export function saveStrategy(ctx, s, { copyOf } = {}) {
+export function saveStrategy(ctx, s, { copyOf, scope = 'claude' } = {}) {
+  const sc = policyScope(scope);
   requireEdit(ctx);
   if (!isObj(s)) throw fail('strategy 要是对象');
   const src = copyOf ?? s.copyOf;
@@ -330,7 +397,7 @@ export function saveStrategy(ctx, s, { copyOf } = {}) {
       ...cur,
       name: s.name !== undefined ? parseName(s.name) : cur.name,
       floors: mergeTiers(cur.floors, s.floors, '判定线 floors', parseFloor),
-      overrides: mergeTiers(cur.overrides, s.overrides, '档位自定义 overrides', parseOverride),
+      overrides: mergeTiers(cur.overrides, s.overrides, '档位自定义 overrides', (k, v) => parseOverride(k, v, sc)),
       note: s.note !== undefined ? parseNote(s.note) : cur.note,
     };
     checkFloors(next.floors);
@@ -340,13 +407,14 @@ export function saveStrategy(ctx, s, { copyOf } = {}) {
     if (created) p.strategies.push(next);
     else p.strategies[p.strategies.indexOf(cur)] = next;
     return { id: next.id };
-  });
+  }, sc);
   const id = r.extra ? r.extra.id : s.id;
   return { policy: r.policy, strategy: r.policy.strategies.find((x) => x.id === id) || null };
 }
 
 /** 删一套（生效中的不能删，先切换）→ 新策略文件。 */
-export function deleteStrategy(ctx, id) {
+export function deleteStrategy(ctx, id, { scope = 'claude' } = {}) {
+  const sc = policyScope(scope);
   requireEdit(ctx);
   if (typeof id !== 'string' || !id) throw fail('要删的策略 id 没给');
   return commit(ctx, (p) => {
@@ -356,7 +424,7 @@ export function deleteStrategy(ctx, id) {
     if (p.strategies.length <= 1) throw fail('至少要留一套策略');
     p.strategies.splice(i, 1);
     return true;
-  }).policy;
+  }, sc).policy;
 }
 
 export function _resetPolicyForTests() { cache.clear(); owners.clear(); }

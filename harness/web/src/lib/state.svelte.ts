@@ -1,3 +1,4 @@
+import { WIDE_MQ } from "./breakpoints.ts";
 // 全局状态（Svelte 5 runes store）+ 所有动作。组件只读状态、调动作，不直接碰 API。
 //
 // dimensio 版：单一工作页，无 launcher / 厂商整页层。厂商切换 = 页内浮层
@@ -89,7 +90,7 @@ export class Chat {
   goal = $state<GoalView | null>(null);
   goalDraft = $state<{ on: boolean; verify: string; maxRounds: number } | null>(null);
   usage = $state({ inTok: 0, outTok: 0 });
-  ctx = $state({ used: 0, limit: 0 });
+  ctx = $state<{ used: number; limit: number; cacheTtlMs?: number }>({ used: 0, limit: 0 });
   attachments = $state<string[]>([]);
   // 引用会话：输入框里还没发出去的「引用」芯片（把会话块拖进输入框）
   refs = $state<SessionRefView[]>([]);
@@ -158,6 +159,8 @@ export class Chat {
   away = $state(false);
   // P13：本会话放行的工作区外只读目录（同理单独一个字段）
   readRoots = $state<string[]>([]);
+  // 项目对话（server/project-mode.ts）：新对话发第一条之前可以选「项目」形态，之后跟着会话记录走、不再变
+  shape = $state<"" | "project">("");
   // U2（X36 第二步）：还没送达的插话（输入框上方的待送达托盘）
   pendingSteers = $state<tl.PendingSteer[]>([]);
   lastSeenAt = Date.now(); // LRU 淘汰用（终态缓存按最近浏览排序）
@@ -210,7 +213,8 @@ export const app = $state({
   // 发送、档位、工作区、回滚都跟着有焦点的那一格走（点哪一格、焦点落进哪一格，哪一格就是 app.chat）。
   panes: [] as Chat[],
 
-  // Agent 浏览器（服务端共享 headless Chrome 的 screencast 直播）—— 全局单例
+  // Agent 浏览器（服务端 headless Chrome 的 screencast 直播）：前台会话的那份（服务端按会话各开一份，
+  // lib/browser-mount.svelte.ts 切会话时对账）；null = 这个会话的浏览器里没有标签
   browser: null as { url: string } | null,
   // 工作区 Dock：右侧面板开关 + 当前工具（工具选择持久化，重开记住上次）
   dockOpen: false,
@@ -231,7 +235,7 @@ export const app = $state({
   // 宿主是否接管了「选工作空间文件夹」（bridge 嵌入态有：桌面壳唤起系统原生选择器，
   // 网页/手机开工作空间文件管理器+底部拖入栏）。独立 8799 没有 → 回落自带目录对话框。
   hasHostPicker: false,
-  // 共享浏览器的标签列表（stream 的 tabs 事件驱动；空 = 浏览器没跑）
+  // 前台会话浏览器的标签列表（stream 的 tabs 事件驱动；空 = 这个会话的浏览器没开）
   browserTabs: [] as { id: string; url: string; title: string; active: boolean }[],
 
   sessions: [] as SessionMeta[],
@@ -411,7 +415,7 @@ function effectsFor(chat: Chat): tl.TimelineEffects {
     // 分栏形态（≥700，与 App 的布局门槛同一条线）才自动展开浏览器面板；手机只亮胶囊。用户这一轮亲手关过就不再弹
     openBrowserPane: () => {
       if (browserAutoMuted) return;
-      if (matchMedia("(min-width: 700px)").matches) openDock("browser");
+      if (matchMedia(WIDE_MQ).matches) openDock("browser");
     },
     setGlobal: (patch) => {
       if (app.config) app.config = { ...app.config, ...(patch as any) };
@@ -420,6 +424,9 @@ function effectsFor(chat: Chat): tl.TimelineEffects {
       app.refill = text;
     },
     setBrowser: (url) => {
+      // 服务端按会话各开一份浏览器（能力位 browser-session）：app.browser 只代表前台会话的那份（lib/browser-mount.svelte.ts），
+      // 后台会话的浏览器动了不该点亮前台的灯。旧后端全进程一个浏览器，照旧全局记。
+      if (chat !== app.chat && app.compat?.caps?.includes("browser-session")) return;
       app.browser = { url };
     },
   };
@@ -934,7 +941,7 @@ export async function send(raw: string, cardTarget?: string | null) {
         message: msg,
         attachments: paths,
         clientRunId,
-        ...(chat.id ? {} : { config: displayedConfig() }),
+        ...(chat.id ? {} : { config: displayedConfig(), ...(chat.shape === "project" && projectModeAvailable() ? { shape: "project" as const } : {}) }),
         ...(goal ? { goal } : {}),
         ...(refs.length ? { refs: refs.map((r) => r.id) } : {}),
       },
@@ -1919,6 +1926,11 @@ function harnessNotice(kind: string | undefined, text: string): string | null {
   if (kind === "resume-stopped") return t("连着几次被重启切断，没有再自动续跑——说「继续」接着做");
   // 拉取请求自动修复：bridge 发来的 CI 失败 / 合并冲突 / 新评审意见（server/pr.ts）——一行提示
   if (kind === "ci-event") return ciEventNotice(text);
+  // 定时任务（server/routine-runs.ts）：bridge 的定时任务到点自动发起的这一轮——指令是上面那条用户消息，这里一行提示
+  if (kind === "routine") {
+    const m = /^\[Scheduled task\] "([^"\n]*)"/.exec(text);
+    return m && m[1] && m[1] !== "untitled" ? t("定时任务「{name}」到点自动运行 · 无人值守", { name: m[1] }) : t("定时任务到点自动运行 · 无人值守");
+  }
   // 后台任务通知（server/job-notify.ts）：后台命令跑完 / 盯着的输出出现了——一行提示
   if (kind === TASK_NOTIFICATION_KIND) return taskNoticeText(text);
   return text.split("\n")[0] || null;
@@ -2100,6 +2112,7 @@ function applyRecord(chat: Chat, rec: any, upTo?: number) {
   chat.title = rec.title ?? chat.title;
   chat.cfg = rec.config ?? chat.cfg;
   chat.away = rec.config?.away === true; // P3
+  chat.shape = rec.config?.shape === "project" ? "project" : ""; // 项目对话
   chat.readRoots = Array.isArray(rec.config?.readRoots) ? rec.config.readRoots.filter((d: unknown) => typeof d === "string") : []; // P13
 }
 
@@ -2539,8 +2552,9 @@ export function hygieneAvailable(): boolean {
   return Boolean(app.compat?.caps?.includes("hygiene"));
 }
 
-// 前缀缓存大概多久变冷（分钟，按厂商默认的缓存寿命）。本机 llama.cpp 与 DeepSeek（硬盘缓存）留得久，不提示；没列的按 5 分钟
-const CACHE_TTL_MIN: Record<string, number | null> = { anthropic: 5, openai: 10, gemini: 5, kimi: 5, zhipu: 5, deepseek: null, local: null };
+// 前缀缓存多久变冷：服务端随 context 事件给（ctx.cacheTtlMs，按模型算、模型中心可改；0 = 没有会过期的缓存）。
+// 老服务端没给时按厂商默认兜底。本机 llama.cpp 与 DeepSeek（硬盘缓存）留得久，不提示；没列的按 5 分钟
+const CACHE_TTL_MIN: Record<string, number | null> = { anthropic: 5, openai: 5, gemini: 5, kimi: 5, zhipu: 5, deepseek: null, local: null };
 
 // 这段对话上一次跟模型打交道是什么时候（本机时钟优先；刚打开的老会话退回用列表里的 updatedAt）
 function lastActivityAt(c: Chat): number {
@@ -2548,17 +2562,36 @@ function lastActivityAt(c: Chat): number {
   return Math.max(c.lastRunEndAt || 0, meta?.updatedAt || 0);
 }
 
-// 前缀缓存大概已经冷了：返回冷了几分钟；还热 / 不适用（没会话、在跑、本机模型……）返回 null。c：分屏时是哪一格的会话
+// 偏好「提示缓存快过期时」（off 不提示 / hint 只提示 / compact 自动压缩，后两档都提示）：随 /api/config 下发；老服务端没有 = 提示
+export function cacheExpiryMode(): string {
+  const m = (app.config as any)?.cacheExpiry;
+  return m === "off" || m === "hint" || m === "compact" ? m : "hint";
+}
+
+// 前缀缓存大概已经冷了：返回冷了几分钟；还热 / 不适用（没会话、在跑、没有会过期的缓存、设置成不提示……）返回 null。c：分屏时是哪一格的会话
 export function cacheColdMinutes(now: number, c: Chat = app.chat): number | null {
-  if (!c.id || c.running || !c.ctx.used) return null;
-  const provider = String(c.cfg?.provider ?? app.config?.provider ?? "");
-  const ttl = provider in CACHE_TTL_MIN ? CACHE_TTL_MIN[provider] : 5;
+  if (!c.id || c.running || !c.ctx.used || cacheExpiryMode() === "off") return null;
+  let ttl: number | null;
+  if (typeof c.ctx.cacheTtlMs === "number") ttl = c.ctx.cacheTtlMs > 0 ? c.ctx.cacheTtlMs / 60_000 : null;
+  else {
+    const provider = String(c.cfg?.provider ?? app.config?.provider ?? "");
+    ttl = provider in CACHE_TTL_MIN ? CACHE_TTL_MIN[provider] : 5;
+  }
   if (ttl == null) return null;
   const last = lastActivityAt(c);
   if (!last) return null;
   const minutes = Math.floor((now - last) / 60_000);
   return minutes >= ttl ? minutes : null;
 }
+
+// 回前台时顺手拿一次偏好（在 bridge 设置页改了「提示缓存快过期时」，切回来就生效）
+async function refreshCacheExpiry() {
+  try {
+    const cfg: any = await api.getConfig();
+    if (app.config && cfg && typeof cfg.cacheExpiry === "string" && (app.config as any).cacheExpiry !== cfg.cacheExpiry) app.config = { ...app.config, cacheExpiry: cfg.cacheExpiry } as any;
+  } catch { /* 下次再说 */ }
+}
+if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => { if (!document.hidden) void refreshCacheExpiry(); });
 
 const kTok = (n?: number) => (n ? `${(n / 1000).toFixed(1)}k` : "?");
 
@@ -2622,6 +2655,16 @@ export function rewindAvailable(): boolean {
 // ── O8（N39）：用量账本（上下文弹层里的「用量」）───────────────────────────────────────────────
 export function usageLedgerAvailable(): boolean {
   return Boolean(app.compat?.caps?.includes("usage-ledger"));
+}
+
+// 项目对话（server/project-mode.ts）：服务端有这一位，新对话才能选「项目」形态、项目对话里才有项目概览
+export function projectModeAvailable(): boolean {
+  return Boolean(app.compat?.caps?.includes("project-mode"));
+}
+// 新对话（还没发出第一条）选形态；已经建起来的会话形态不变
+export function setChatShape(chat: Chat, shape: "" | "project"): void {
+  if (chat.id || chat.running) return;
+  chat.shape = shape;
 }
 
 // ── E3（G7）：斜杠命令（/ 面板的技能清单；技能展开在服务端，内置命令见 runBuiltin）─────────────────────

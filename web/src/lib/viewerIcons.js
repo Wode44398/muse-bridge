@@ -5,7 +5,9 @@
 // 用法：
 //   组件里   <VIcon name="download" />（components/preview/kit/VIcon.svelte）
 //   字符串   viewerSvg('download')  → 完整 <svg> 字符串（ios27 MorphMenu 的 items[].icon 用 {@html} 渲染）
-// 实心字形（播放 / 暂停 / 重播里的三角）放在 FILL 集合里，按 fill 画、不描边。
+// 实心字形（播放 / 暂停 / 快进）放在 FILL 集合里，按 fill 画、不描边。
+// 播放器那一族（喇叭、上一个 / 下一个、齿轮、快退快进的箭头）是「实心块 + 线」混画：实心块自带 fill="currentColor" 与 1.2 的细描边
+//（只为把尖角磨圆），线条部分跟着外层描边粗细走——播放器底栏把描边提到 2，和实心的播放 / 暂停一样重。
 
 export const VI = {
   // —— 外框 ——
@@ -51,8 +53,8 @@ export const VI = {
   actual: '<rect x="3.75" y="5.25" width="16.5" height="13.5" rx="2.6"/><path d="M8.25 10.25 9.5 9.5v5M14.5 10.25l1.25-.75v5"/><path d="M12 10.6h.01M12 13.9h.01" stroke-width="2.1"/>',
   rotate: '<rect x="4.5" y="9.5" width="10" height="10" rx="2.2"/><path d="M10 4.5h3.5a6 6 0 0 1 6 6V12"/><path d="M17.25 9.75 19.5 12l2.25-2.25"/>',
   rotateLeft: '<rect x="9.5" y="9.5" width="10" height="10" rx="2.2"/><path d="M14 4.5h-3.5a6 6 0 0 0-6 6V12"/><path d="M6.75 9.75 4.5 12 2.25 9.75"/>',
-  fullscreen: '<path d="M4.75 9.25v-4.5h4.5M19.25 9.25v-4.5h-4.5M4.75 14.75v4.5h4.5M19.25 14.75v4.5h-4.5"/>',
-  exitFullscreen: '<path d="M9.25 4.75v4.5h-4.5M14.75 4.75v4.5h4.5M9.25 19.25v-4.5h-4.5M14.75 19.25v-4.5h4.5"/>',
+  fullscreen: '<path d="M4.5 9.25v-2.5A2.25 2.25 0 0 1 6.75 4.5h2.5M14.75 4.5h2.5a2.25 2.25 0 0 1 2.25 2.25v2.5M19.5 14.75v2.5a2.25 2.25 0 0 1-2.25 2.25h-2.5M9.25 19.5h-2.5a2.25 2.25 0 0 1-2.25-2.25v-2.5"/>',
+  exitFullscreen: '<path d="M9.25 4.5V7a2.25 2.25 0 0 1-2.25 2.25H4.5M19.5 9.25H17A2.25 2.25 0 0 1 14.75 7V4.5M14.75 19.5V17A2.25 2.25 0 0 1 17 14.75h2.5M4.5 14.75H7A2.25 2.25 0 0 1 9.25 17v2.5"/>',
   page: '<path d="M7 3.75h6.6l4.65 4.65V18a2.25 2.25 0 0 1-2.25 2.25H7A2.25 2.25 0 0 1 4.75 18V6A2.25 2.25 0 0 1 7 3.75Z"/><path d="M13.5 3.9V8.5h4.6"/>',
   twoPage: '<rect x="3.5" y="5" width="7.75" height="14" rx="1.8"/><rect x="12.75" y="5" width="7.75" height="14" rx="1.8"/>',
   thumbs: '<rect x="4" y="4" width="6.75" height="6.75" rx="1.8"/><rect x="13.25" y="4" width="6.75" height="6.75" rx="1.8"/><rect x="4" y="13.25" width="6.75" height="6.75" rx="1.8"/><rect x="13.25" y="13.25" width="6.75" height="6.75" rx="1.8"/>',
@@ -73,28 +75,28 @@ export const VI = {
   lines: '<path d="M5 7h14M5 12h14M5 17h9"/>',
 
   // —— 音视频 ——
-  volumeOff: '<path d="M11 5.5 7 9H4.75v6H7l4 3.5z"/>',
-  volumeLow: '<path d="M11 5.5 7 9H4.75v6H7l4 3.5z"/><path d="M15 9.2a4 4 0 0 1 0 5.6"/>',
-  volumeHigh: '<path d="M11 5.5 7 9H4.75v6H7l4 3.5z"/><path d="M15 9.2a4 4 0 0 1 0 5.6M17.6 6.6a7.6 7.6 0 0 1 0 10.8"/>',
-  mute: '<path d="M11 5.5 7 9H4.75v6H7l4 3.5z"/><path d="m15.5 9.5 5 5M20.5 9.5l-5 5"/>',
-  settings: '<path d="M12.22 2.75h-.44a1.9 1.9 0 0 0-1.9 1.9v.17a1.9 1.9 0 0 1-.95 1.64l-.41.24a1.9 1.9 0 0 1-1.9 0l-.14-.08a1.9 1.9 0 0 0-2.6.7l-.21.36a1.9 1.9 0 0 0 .7 2.6l.14.09a1.9 1.9 0 0 1 .95 1.63v.49a1.9 1.9 0 0 1-.95 1.65l-.14.08a1.9 1.9 0 0 0-.7 2.6l.21.36a1.9 1.9 0 0 0 2.6.7l.14-.08a1.9 1.9 0 0 1 1.9 0l.41.24a1.9 1.9 0 0 1 .95 1.64v.17a1.9 1.9 0 0 0 1.9 1.9h.44a1.9 1.9 0 0 0 1.9-1.9v-.17a1.9 1.9 0 0 1 .95-1.64l.41-.24a1.9 1.9 0 0 1 1.9 0l.14.08a1.9 1.9 0 0 0 2.6-.7l.21-.37a1.9 1.9 0 0 0-.7-2.6l-.14-.08a1.9 1.9 0 0 1-.95-1.65v-.48a1.9 1.9 0 0 1 .95-1.65l.14-.08a1.9 1.9 0 0 0 .7-2.6l-.21-.36a1.9 1.9 0 0 0-2.6-.7l-.14.08a1.9 1.9 0 0 1-1.9 0l-.41-.24a1.9 1.9 0 0 1-.95-1.64v-.17a1.9 1.9 0 0 0-1.9-1.9z"/><circle cx="12" cy="12" r="2.8"/>',
+  volumeOff: '<path fill="currentColor" stroke-width="1.2" d="M11.2 6 7.3 9.4H5.1v5.2h2.2l3.9 3.4z"/>',
+  volumeLow: '<path fill="currentColor" stroke-width="1.2" d="M11.2 6 7.3 9.4H5.1v5.2h2.2l3.9 3.4z"/><path d="M15 9.2a4 4 0 0 1 0 5.6"/>',
+  volumeHigh: '<path fill="currentColor" stroke-width="1.2" d="M11.2 6 7.3 9.4H5.1v5.2h2.2l3.9 3.4z"/><path d="M15 9.2a4 4 0 0 1 0 5.6M17.6 6.6a7.6 7.6 0 0 1 0 10.8"/>',
+  mute: '<path fill="currentColor" stroke-width="1.2" d="M11.2 6 7.3 9.4H5.1v5.2h2.2l3.9 3.4z"/><path d="m15.5 9.5 5 5M20.5 9.5l-5 5"/>',
+  settings: '<path fill="currentColor" stroke-width="1.2" fill-rule="evenodd" d="M10.31 5.21 10.69 2.79h2.62l.38 2.42 1.92.79 1.97-1.44 1.86 1.86L18 8.39l.79 1.92 2.42.38v2.62l-2.42.38-.79 1.92 1.44 1.97-1.86 1.86L15.61 18l-1.92.79-.38 2.42h-2.62l-.38-2.42L8.39 18l-1.97 1.44-1.86-1.86L6 15.61l-.79-1.92-2.42-.38v-2.62l2.42-.38L6 8.39 4.56 6.42l1.86-1.86L8.39 6zM12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"/>',
   speed: '<path d="M4.6 16.5a8 8 0 1 1 14.8 0"/><path d="m12 13.5 3.8-3.8"/><circle cx="12" cy="13.5" r="1.3" fill="currentColor" stroke="none"/>',
   quality: '<path d="M4 8h8.5M17.5 8H20M4 16h2.5M11.5 16H20"/><circle cx="15" cy="8" r="2.5"/><circle cx="9" cy="16" r="2.5"/>',
   loop: '<path d="M17 3.75 19.75 6.5 17 9.25"/><path d="M4.25 11.5V10a3.5 3.5 0 0 1 3.5-3.5h12"/><path d="M7 20.25 4.25 17.5 7 14.75"/><path d="M19.75 12.5V14a3.5 3.5 0 0 1-3.5 3.5h-12"/>',
-  subtitles: '<rect x="3.75" y="5.25" width="16.5" height="13.5" rx="2.6"/><path d="M7.5 12.5h3.5M13.5 12.5h3M7.5 15.5h6M16 15.5h.5"/>',
-  pip: '<rect x="3.75" y="5.25" width="16.5" height="13.5" rx="2.6"/><rect x="12" y="11.5" width="5.75" height="4.75" rx="1.2"/>',
-  skipBack10: '<path d="M4.75 12a7.25 7.25 0 1 0 2.12-5.13"/><path d="M4.5 4.75v3.75h3.75"/><path d="M9.25 10.4 10.4 9.6v5.2"/><rect x="12.4" y="9.6" width="3.3" height="5.2" rx="1.65"/>',
-  skipFwd10: '<path d="M19.25 12a7.25 7.25 0 1 1-2.12-5.13"/><path d="M19.5 4.75v3.75h-3.75"/><path d="M8.3 10.4 9.45 9.6v5.2"/><rect x="11.45" y="9.6" width="3.3" height="5.2" rx="1.65"/>',
-  skipBack15: '<path d="M4.75 12a7.25 7.25 0 1 0 2.12-5.13"/><path d="M4.5 4.75v3.75h3.75"/><path d="M9.25 10.4 10.4 9.6v5.2"/><path d="M15.7 9.6h-2.85l-.3 2.3a1.9 1.9 0 0 1 1.05-.3 1.6 1.6 0 0 1 0 3.2c-.55 0-1.05-.25-1.35-.65"/>',
-  skipFwd15: '<path d="M19.25 12a7.25 7.25 0 1 1-2.12-5.13"/><path d="M19.5 4.75v3.75h-3.75"/><path d="M8.3 10.4 9.45 9.6v5.2"/><path d="M14.75 9.6h-2.85l-.3 2.3a1.9 1.9 0 0 1 1.05-.3 1.6 1.6 0 0 1 0 3.2c-.55 0-1.05-.25-1.35-.65"/>',
+  subtitles: '<rect x="3.5" y="5.25" width="17" height="13.5" rx="2.8"/><path d="M7.25 12.25h3M12.75 12.25h4M7.25 15.25h5.5M15.25 15.25h1.5"/>',
+  pip: '<rect x="3.5" y="5.25" width="17" height="13.5" rx="2.8"/><rect fill="currentColor" stroke-width="1" x="11.6" y="11.4" width="6.2" height="4.6" rx="1"/>',
+  skipBack10: '<path d="M12 5.5a7.4 7.4 0 1 1-6.06 3.16"/><path fill="currentColor" stroke-width="1.2" d="M12.3 2.9v5.2L8.7 5.5z"/><path stroke-width="1.5" d="M9.2 11.3l1.45-.95v5.3"/><rect stroke-width="1.5" x="12.25" y="10.35" width="3.3" height="5.3" rx="1.65"/>',
+  skipFwd10: '<path d="M12 5.5a7.4 7.4 0 1 0 6.06 3.16"/><path fill="currentColor" stroke-width="1.2" d="M11.7 2.9v5.2l3.6-2.6z"/><path stroke-width="1.5" d="M9.2 11.3l1.45-.95v5.3"/><rect stroke-width="1.5" x="12.25" y="10.35" width="3.3" height="5.3" rx="1.65"/>',
+  skipBack15: '<path d="M12 5.5a7.4 7.4 0 1 1-6.06 3.16"/><path fill="currentColor" stroke-width="1.2" d="M12.3 2.9v5.2L8.7 5.5z"/><path stroke-width="1.5" d="M8.9 11.3l1.45-.95v5.3"/><path stroke-width="1.5" d="M15.6 10.35h-2.75l-.3 2.2a1.9 1.9 0 0 1 1.1-.3 1.7 1.7 0 0 1 0 3.4c-.6 0-1.1-.25-1.4-.65"/>',
+  skipFwd15: '<path d="M12 5.5a7.4 7.4 0 1 0 6.06 3.16"/><path fill="currentColor" stroke-width="1.2" d="M11.7 2.9v5.2l3.6-2.6z"/><path stroke-width="1.5" d="M8.9 11.3l1.45-.95v5.3"/><path stroke-width="1.5" d="M15.6 10.35h-2.75l-.3 2.2a1.9 1.9 0 0 1 1.1-.3 1.7 1.7 0 0 1 0 3.4c-.6 0-1.1-.25-1.4-.65"/>',
   brightness: '<circle cx="12" cy="12" r="3.6"/><path d="M12 3.5v1.8M12 18.7v1.8M3.5 12h1.8M18.7 12h1.8M5.99 5.99l1.27 1.27M16.74 16.74l1.27 1.27M5.99 18.01l1.27-1.27M16.74 7.26l1.27-1.27"/>',
   unlock: '<rect x="5" y="10.5" width="14" height="9.75" rx="2.4"/><path d="M8.25 10.5V8a3.75 3.75 0 0 1 7.3-1.2"/>',
-  prevTrack: '<path d="M6.5 6v12"/><path d="M18 6.6v10.8a.6.6 0 0 1-.92.5L9.5 12.5a.6.6 0 0 1 0-1L17.08 6.1a.6.6 0 0 1 .92.5Z"/>',
-  nextTrack: '<path d="M17.5 6v12"/><path d="M6 6.6v10.8a.6.6 0 0 0 .92.5l7.58-5.4a.6.6 0 0 0 0-1L6.92 6.1A.6.6 0 0 0 6 6.6Z"/>',
+  prevTrack: '<path stroke-width="2.2" d="M6.4 6.2v11.6"/><path fill="currentColor" stroke-width="1.2" d="M17.8 6.6v10.8L9.9 12z"/>',
+  nextTrack: '<path stroke-width="2.2" d="M17.6 6.2v11.6"/><path fill="currentColor" stroke-width="1.2" d="M6.2 6.6v10.8l7.9-5.4z"/>',
   fastForward: '<path d="M4.5 6.6v10.8a.6.6 0 0 0 .95.5l6.3-5.4a.6.6 0 0 0 0-1l-6.3-5.4a.6.6 0 0 0-.95.5Z"/><path d="M12.5 6.6v10.8a.6.6 0 0 0 .95.5l6.3-5.4a.6.6 0 0 0 0-1l-6.3-5.4a.6.6 0 0 0-.95.5Z"/>',
   play: '<path d="M8 5.6v12.8a1 1 0 0 0 1.52.85l10.2-6.4a1 1 0 0 0 0-1.7L9.52 4.75A1 1 0 0 0 8 5.6Z"/>',
   pause: '<rect x="6.5" y="5" width="3.8" height="14" rx="1.3"/><rect x="13.7" y="5" width="3.8" height="14" rx="1.3"/>',
-  replay: '<path d="M4.75 12a7.25 7.25 0 1 0 2.12-5.13"/><path d="M4.5 4.75v3.75h3.75"/><path d="M10.4 9.3v5.4l4.5-2.7z" fill="currentColor"/>',
+  replay: '<path d="M12 5.5a7.4 7.4 0 1 1-6.06 3.16"/><path fill="currentColor" stroke-width="1.2" d="M12.3 2.9v5.2L8.7 5.5z"/>',
 
   // —— 状态 / 类型 ——
   error: '<circle cx="12" cy="12" r="8.25"/><path d="M12 7.75v5"/><path d="M12 16.1h.01" stroke-width="2.3"/>',

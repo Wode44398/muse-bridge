@@ -10,7 +10,8 @@ import { getToken } from '../../lib/api.js';
 import { t, tc, tr } from '../../lib/i18n.js';
 import { studioApi, onFixtureEvent } from './api.js';
 import { PAGES, catKind, pageOf, splitKey, uploadRel } from './kinds.js';
-import { resolveValues, payloadParams, roleState } from './params.js';
+import { resolveValues, payloadParams, roleState, paramIssues } from './params.js';
+import { paramLabel, sizeIssueText } from './words.js';
 
 const newDraft = () => ({ model: '', params: {}, inputs: [], parent: null, negative: '' });
 const LS_SIDE = 'studio-side';
@@ -152,9 +153,30 @@ export function currentModel(page) {
 export function setModel(page, key) {
   studio.drafts[page].model = key;
 }
+/** 手里有没有要改的图（尺寸的「原图」档只在这时出现、并成为默认）：有「改这张图」素材；或图像续改链上已有图、
+ *  这次没给参考图（同服务端 applyEditDefaults：续改拿链上最后一张当改图对象） */
+export function editingNow(page) {
+  const d = studio.drafts[page];
+  if (d.inputs.some((x) => x.role === 'edit')) return true;
+  if (page !== 'image' || d.inputs.some((x) => x.role === 'ref')) return false;
+  const v = studio.views.image;
+  return !!v.thread || v.turns.some((x) => x.assets?.length);
+}
+/** 「原图」是多大：「改这张图」素材的宽高（作品 / 本机文件知道；工作空间文件只有缩略图，不知道就回 null），
+ *  否则图像续改链上最后一张（同服务端：续改拿它当改图对象）。null = 不知道（界面只写「原图」，不编数字） */
+export function originalDims(page) {
+  const d = studio.drafts[page];
+  const ed = d.inputs.find((x) => x.role === 'edit');
+  if (ed) return ed.w > 0 && ed.h > 0 ? { width: ed.w, height: ed.h } : null;
+  if (page !== 'image' || d.inputs.some((x) => x.role === 'ref')) return null;
+  const last = [...studio.views.image.turns].reverse().find((x) => x.assets?.length)?.assets.at(-1);
+  return last?.w > 0 && last?.h > 0 ? { width: last.w, height: last.h } : null;
+}
 /** 这一页参数的有效取值（ParamSpec 结算后） */
 export function valuesOf(page, model = currentModel(page)) {
-  return resolveValues(model?.params || [], studio.drafts[page].params, model?.id || '');
+  const ins = studio.drafts[page].inputs;
+  const has = (r) => ins.some((x) => x.role === r);
+  return resolveValues(model?.params || [], studio.drafts[page].params, model?.id || '', { edit: editingNow(page), first: has('first'), last: has('last'), ref: has('ref') });
 }
 export function setParam(page, key, value) { studio.drafts[page].params[key] = value; }
 
@@ -163,6 +185,11 @@ let seq = 0;
 /** input: { role, asset?, path?, upload?, url, name, kind, pending?, fromAsset? } */
 export function addInput(page, input) {
   const d = studio.drafts[page];
+  // 作品素材：带上作品宽高（尺寸「原图」显示实际像素用）；本机文件由 drag.js 读出后补
+  if (input.asset && !(input.w > 0)) {
+    const a = studio.assets.find((x) => x.id === input.asset);
+    if (a?.w > 0 && a?.h > 0) input = { ...input, w: a.w, h: a.h };
+  }
   const single = input.role === 'first' || input.role === 'last' || input.role === 'edit';
   if (single) d.inputs = d.inputs.filter((x) => x.role !== input.role);
   d.inputs.push({ id: 'in' + ++seq, pending: false, ...input });
@@ -304,6 +331,9 @@ export async function submit(page, text) {
   const d = studio.drafts[page];
   if (d.inputs.some((x) => x.pending)) return { ok: false, error: t('素材还在上传') };
   const values = valuesOf(page, model);
+  // 自定义尺寸不合规（倍数 / 边长 / 比例 / 像素）：发出去也是 400，先拦下，那一行已经标红
+  const bad = paramIssues(model.params || [], values)[0];
+  if (bad) return { ok: false, error: t('{param}：{issue}', { param: paramLabel(bad.spec), issue: sizeIssueText(bad.issues[0]) }) };
   const params = payloadParams(model.params || [], values);
   const body = {
     kind: catKind(page), key: model.key, prompt: (text || '').trim(), params,

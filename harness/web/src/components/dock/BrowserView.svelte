@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Agent 浏览器直播：服务端那一个共享 headless Chrome 的画面 + 输入回传。用户与 agent 看的是同一个浏览器——
+  // Agent 浏览器直播：这个会话在服务端 headless Chrome 里那份浏览器的画面 + 输入回传。用户与 agent 看的是同一个浏览器——
   // agent 的操作实时可见，用户也能伸手进去点 / 滚 / 打字（坐标按画布显示比例映射回页面 CSS 像素）。
   //
   //  · 常驻直播循环：断了（服务重启、浏览器关掉）1.2 秒后自己重连；浏览器没在跑（409 / alive:false）2.5 秒一探。
@@ -10,16 +10,22 @@
   //  · 输入：点击、右键、45ms 悬停、50ms 合并的滚轮、按键 / 文字映射、粘贴；触屏单指拖动 = 滚动（跟手 1:1，§17-7）。
   //    点在画面之外的留边上不转发（以前会把越界坐标打进页面）；Shift 组合的具名键照样带上（Shift+Tab 以前变成 Tab）；
   //    映射不了的键不吞（交还给外壳，F 键之类以前被 preventDefault 吃掉）。
+  //  · 服务端按会话各开一份浏览器：sid = 这块面板对着的会话（父级切会话时按 sid 整块重挂）。空态里给这个会话的
+  //    「隔离存储」开关（登录态与网站数据不和别的对话共用、关掉即清空；切换会关掉它现有的标签），开着时地址栏标一个「隔离」。
   import { untrack } from "svelte";
-  import { app, handleDockShortcut } from "../../lib/state.svelte.ts";
+  import { app, handleDockShortcut, toast } from "../../lib/state.svelte.ts";
   import * as api from "../../lib/api.ts";
+  import { browserMount, browserSessionSupported } from "../../lib/browser-mount.svelte.ts";
   import { nativeShellBrowser, mountShellBrowser, unmountShellBrowser, onNativeOverlayChange, nativeOverlayActive } from "../../lib/nativeShell.ts";
   import { press } from "../../lib/motion.ts";
   import { t } from "../../lib/i18n.ts";
   import Icon from "../ui/Icon.svelte";
   import IconButton from "../ui/IconButton.svelte";
   import Empty from "../ui/Empty.svelte";
+  import Switch from "../ui/Switch.svelte";
   import Mark from "../brand/Mark.svelte";
+
+  let { sid = "" }: { sid?: string } = $props();
 
   // 触屏：导航按钮放大（一行要放下后退 / 前进 / 地址 / 视口 / 预览，36 是这一行放得下的最大值）
   const coarse = matchMedia("(pointer: coarse)").matches;
@@ -100,7 +106,7 @@
     if (devBusy || !live) return;
     devBusy = true;
     try {
-      const r = await api.browserResize({ preset });
+      const r = await api.browserResize(sid, { preset });
       applyViewport(r.viewport);
     } catch {
       /* 浏览器刚关掉之类，画面流自会反映 */
@@ -159,6 +165,7 @@
   }
 
   function onStreamEvent(ev: any) {
+    if (destroyed) return; // 换了会话：上一个会话的流晚到的事件别写进全局的标签 / 地址
     if (ev.e === "frame") {
       if (nativeBrowser) return;
       drawFrame(ev.data, ev.w, ev.h);
@@ -217,7 +224,7 @@
     while (!destroyed) {
       abortCtl = new AbortController();
       try {
-        await api.browserStream(onStreamEvent, abortCtl.signal, nativeBrowser);
+        await api.browserStream(sid, onStreamEvent, abortCtl.signal, nativeBrowser);
       } catch (e: any) {
         if (destroyed || (e?.name === "AbortError" && !softAbort)) break;
         if (e?.status === 409) {
@@ -295,7 +302,7 @@
     return { x: Math.round(fx * frameW), y: Math.round(fy * frameH) };
   }
 
-  const fire = (body: Record<string, unknown>) => api.browserInput(body).catch(() => {});
+  const fire = (body: Record<string, unknown>) => api.browserInput(sid, body).catch(() => {});
 
   let suppressClick = false; // 触屏拖动滚动完不再补一次点击
   function onClick(e: MouseEvent) {
@@ -430,7 +437,7 @@
     if (navBusy) return;
     navBusy = true;
     try {
-      const r = await api.browserNavigate(body);
+      const r = await api.browserNavigate(sid, body);
       if (r.url) {
         urlInput = r.url;
         setBrowserUrl(r.url);
@@ -463,6 +470,22 @@
       return false;
     }
   });
+  // 隔离存储（按会话）：只有已经有会话 id 的对话能开（新对话发出第一条消息之后）
+  const isoAvailable = $derived(browserSessionSupported() && sid !== "");
+  const isolated = $derived(isoAvailable && browserMount.sid === sid && browserMount.isolated);
+  let isoBusy = $state(false);
+  async function setIsolated(on: boolean) {
+    if (isoBusy || !isoAvailable) return;
+    isoBusy = true;
+    try {
+      const r = await api.browserIsolate(sid, on);
+      if (browserMount.sid === sid) browserMount.isolated = r.isolated;
+    } catch {
+      toast(t("隔离存储没有切换成功"));
+    }
+    isoBusy = false;
+  }
+
   function openPreview() {
     if (app.chat.preview) void nav({ url: app.chat.preview.url });
   }
@@ -486,6 +509,9 @@
     <IconButton icon="arrowR" label={t("前进")} size={coarse ? 36 : 30} iconSize={16} onclick={() => go("forward")} />
     <label class="url">
       <span class="ldot" class:on={live}></span>
+      {#if isolated}
+        <span class="isotag" title={t("隔离存储：这个对话的登录态与网站数据不和别的对话共用，关掉浏览器即清空")}>{t("隔离")}</span>
+      {/if}
       <input
         type="text"
         spellcheck="false"
@@ -572,7 +598,19 @@
           icon="globe"
           title={t("浏览器还没有启动")}
           text={app.chat.preview ? t("应用正在运行 —— 点右上「预览」直接打开，或在上方输入地址浏览") : t("在上方输入地址开始浏览，或等 agent 使用浏览器时自动出现")}
-        />
+        >
+          {#if isoAvailable}
+            <!-- 画面区会把按键 / 点击转发进远端页面：开关这一行的事件不往上冒（空格切开关不被当成往页面里打字） -->
+            <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+            <div class="iso" onkeydown={(e) => e.stopPropagation()} onclick={(e) => e.stopPropagation()} onpointerdown={(e) => e.stopPropagation()}>
+              <div class="iso-t">
+                <span class="iso-n">{t("隔离存储")}</span>
+                <span class="iso-d">{isolated ? t("这个对话的登录态与网站数据单独存放，关掉浏览器即清空") : t("开启后，这个对话不和别的对话共用登录态与网站数据")}</span>
+              </div>
+              <Switch checked={isolated} disabled={isoBusy} label={t("隔离存储")} onchange={setIsolated} />
+            </div>
+          {/if}
+        </Empty>
       </div>
     {:else if !live && !frameW}
       <div class="over">
@@ -685,6 +723,47 @@
   .ldot.on {
     background: var(--live);
     animation: hx-breathe 2.4s var(--ease-in-out) infinite;
+  }
+  /* 隔离存储开着：地址栏里一枚安静的小标记（不上色，只是一圈细线） */
+  .isotag {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: var(--r-pill);
+    box-shadow: inset 0 0 0 1px var(--border2);
+    color: var(--text3);
+    font-size: var(--fs-xs);
+    line-height: 16px;
+    cursor: default;
+  }
+  /* 空态里的隔离存储开关：一行，左字右开关，与空态同宽 */
+  .iso {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    max-width: 320px;
+    padding: 12px 14px;
+    border-radius: var(--r-md);
+    background: var(--surface);
+    box-shadow: 0 0 0 1px var(--border);
+    text-align: left;
+  }
+  .iso-t {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .iso-n {
+    color: var(--text);
+    font-size: var(--fs-md);
+    font-weight: 500;
+  }
+  .iso-d {
+    color: var(--text3);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-ui);
   }
 
   /* 视口档位：三枚图标，当前档浮起一块（agent resize 之后按画面尺寸自己点亮） */

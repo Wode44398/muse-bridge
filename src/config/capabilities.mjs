@@ -167,7 +167,7 @@ export const CAPABILITIES = {
     taskSupport: {
       'veo-3.1-generate-001': ['t2v', 'i2v', 'interp', 'ref'],
       'veo-3.1-fast-generate-001': ['t2v', 'i2v', 'interp', 'ref'],
-      'veo-3.1-lite-generate-001': ['t2v', 'i2v', 'interp', 'ref'],
+      'veo-3.1-lite-generate-001': ['t2v', 'i2v', 'interp'],   // 官方模型页：参考图 Not supported（2026-11-15 查）
       'gemini-omni-1.1-flash': ['t2v', 'i2v'],
     },
     // 画质（Veo 专属，2026-08-29 探针实证：传 zzz 回「Invalid compression quality type」
@@ -189,7 +189,7 @@ export const CAPABILITIES = {
     imgCaps: {
       'veo-3.1-generate-001': { last: true, ref: 3 },
       'veo-3.1-fast-generate-001': { last: true, ref: 3 },
-      'veo-3.1-lite-generate-001': { last: true, ref: 3 },
+      'veo-3.1-lite-generate-001': { last: true, ref: 0 },   // 官方模型页：参考图 Not supported（2026-11-15 查）
       'gemini-omni-1.1-flash': { last: false, ref: 0 },
     },
     // 音频恒开的模型（Omni 原生带音轨，没有开关）——前端据此隐藏「生成音频」toggle。

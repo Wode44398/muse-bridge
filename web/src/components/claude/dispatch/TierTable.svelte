@@ -6,41 +6,60 @@
   //   · 宽处是一张对齐的表（带表头）；窄处（手机、窄窗口）每档叠成两三行：档名 + 数字 / 两枚片 + 来源 / 说明。
   // 浮层挪到 body 上、按片的位置 fixed 展开；开着时经 onModal 告诉外壳，Esc 只关浮层。
   //   键盘：打开时焦点进浮层、Tab 圈在里面、菜单里方向键走行（dpDom.layerFocus），关掉后焦点回到那枚片上。
+  //   dimensio 那份调用策略（store.scope = 'dimensio'）不用这两个浮层，改用 DpMenu 小菜单（见下面 dimMenu）。
   //   窗口尺寸变了（手机上点菜单里的搜索框、软键盘弹出也算一次）不收起，按片现在的位置重新贴。
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import ModelPicker from '../../ModelPicker.svelte';
   import EffortPanel from '../../EffortPanel.svelte';
+  import DpMenu from './DpMenu.svelte';
   import { caps } from '../../../lib/state.svelte.js';
   import { effortsFor } from '../../../lib/claudeProviders.svelte.js';
-  import { tierMeta, modelName } from '../../../lib/dispatchPolicy.svelte.js';
+  import { tierMeta, claudeDispatch } from '../../../lib/dispatchPolicy.svelte.js';
   import { fmtCost, fmtScore } from '../../../lib/dispatchChartMath.js';
   import { t, tc } from '../../../lib/i18n.js';
   import { portal, escLayer, layerFocus } from './dpDom.js';
   import { isCustom, toCanonical, toPickerId, keepEffort, anchorRect } from './dpUtil.js';
   import { effortTable, effortLabel } from './dpLabels.js';
 
+  // store：哪一份调用策略（不给 = Claude 那份）。dimensio 那份的模型是 <厂商>:<型号>，不是 Claude 的模型菜单能认的：
+  //   模型片 / 推理强度片点开的是一个小菜单（DpMenu），只列预览候选里有的型号、以及这个型号在候选里有的档（外加「默认」= 不指定）。
+  // follow：dimensio 跟随 Claude 的策略（只读）——指定没生效的那一档，说的是「Claude 那边指定的模型在 dimensio 里用不了」；
+  //   overrideName 给那边写法（opus / custom:…）的模型起名字。emptyText：排不出落点时的那句话（不给用默认的）。
   let {
     shell = 'desk', tiers = [], candidates = [], unrated = [], primary = [], canEdit = false, allowTP = true, pending = false,
-    onoverride, onModal = () => {},
+    onoverride, onModal = () => {}, store = claudeDispatch, follow = false, overrideName = null, emptyText = '',
   } = $props();
+  const S = untrack(() => store);
+  const dim = S.scope !== 'claude';
+  const modelName = S.modelName;
 
   // 模型菜单里能选的：候选里有的（按规范写法对）
   const candModels = $derived(new Set(candidates.map((c) => c.model)));
   const modelFilter = (m) => candModels.has(toCanonical(m.id, primary));
   // 点开拉条面板能选的档：面板按模型菜单里的 id 取档位表，认不出 id（别名对不上现在的主列表）就没得选
   const effortList = (pid) => (pid ? effortTable(pid) : []);
-  const BASIS = { sub: t('订阅均值'), plan: t('plan 均值'), api: t('API 价') };
+  // dimensio：一个型号能选的档 = 候选里它有的那几档（按思考档的先后排），头上一项「默认」（'' = 用型号默认）
+  const DIM_ORDER = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+  function dimEfforts(model) {
+    const set = new Set(candidates.filter((c) => c.model === model && c.effort).map((c) => c.effort));
+    return ['', ...[...set].sort((a, b) => DIM_ORDER.indexOf(a) - DIM_ORDER.indexOf(b))];
+  }
+  const BASIS = { sub: t('订阅均值'), plan: t('plan 均值'), api: t('API 价'), local: t('本机，不计费') };
 
   const rows = $derived(tiers.map((x) => {
     const meta = tierMeta(x.key) || { title: x.key, use: '', color: 'currentColor' };
-    const pid = toPickerId(x.pick.model, primary);
+    const pid = dim ? x.pick.model : toPickerId(x.pick.model, primary);
     const model = x.pick.label || modelName(x.pick.model);
-    // 推理强度的叫法：片上、行下「普通子 agent」那一句都走 dpLabels.effortLabel（和拉条面板同一张档位表）
-    const effort = effortLabel(x.pick.model, x.pick.effort);
+    // 推理强度的叫法：片上、行下「普通子 agent」那一句都走 dpLabels.effortLabel（和拉条面板同一张档位表；dimensio 用它自己的叫法）
+    const effort = effortLabel(x.pick.model, x.pick.effort, S);
     const notes = [];
-    if (x.overrideSkipped && x.override) {
+    if (follow && x.overrideSkipped) {
+      notes.push(x.override
+        ? t('Claude 那边指定的 {model} 在 dimensio 里用不了，先按图谱走', { model: (overrideName || modelName)(x.override.model) })
+        : t('Claude 那边指定的模型在 dimensio 里用不了，先按图谱走'));
+    } else if (x.overrideSkipped && x.override) {
       const name = modelName(x.override.model);
-      notes.push(isCustom(x.override.model) && !allowTP
+      notes.push(!dim && isCustom(x.override.model) && !allowTP
         ? t('已关闭「调用非 Claude 模型」，指定的 {model} 暂不生效，先按图谱走', { model: name })
         : t('指定的 {model} 现在不在可选的模型里，先按图谱走', { model: name }));
     }
@@ -48,7 +67,7 @@
     if (x.pick.est) notes.push(t('这个推理强度没有评分，智力分和成本按相近的档估'));
     if (x.agentTool && !pending) {
       notes.push(t('普通子 agent：{model} · {effort}', {
-        model: x.agentTool.label || modelName(x.agentTool.model), effort: effortLabel(x.agentTool.model, x.agentTool.effort),
+        model: x.agentTool.label || modelName(x.agentTool.model), effort: effortLabel(x.agentTool.model, x.agentTool.effort, S),
       }));
     }
     const basis = BASIS[x.pick.basis] || '';
@@ -57,7 +76,7 @@
       ...x, meta, pid, model, effort, notes, ii, cost,
       tip: basis ? t('智力分 {ii}，每任务 {cost}（{basis}）', { ii, cost, basis }) : t('智力分 {ii}，每任务 {cost}', { ii, cost }),
       canModel: canEdit && candModels.size > 0,
-      canEffort: canEdit && effortList(pid).length > 1,
+      canEffort: canEdit && (dim ? dimEfforts(x.pick.model).length > 1 : effortList(pid).length > 1),
     };
   }));
 
@@ -66,7 +85,8 @@
   const popRow = $derived(pop ? rows.find((r) => r.key === pop.key) || null : null);
   const popOpen = $derived(!!pop);
   $effect(() => { onModal(popOpen); });
-  $effect(() => (popOpen ? escLayer(closePop) : undefined));
+  // dimensio 的小菜单（DpMenu）自己接 Esc 与返回键
+  $effect(() => (popOpen && !dim ? escLayer(closePop) : undefined));
   // 锚点 = 片的视口矩形，收进视口里（片落到软键盘底下时，浮层贴着视口底边朝上开，不跟着摆到看不见的地方）
   const anchorOf = (el) => anchorRect(el.getBoundingClientRect(), window.innerWidth, window.innerHeight);
   $effect(() => {
@@ -93,6 +113,36 @@
     pop = null;
     tick().then(() => { try { el?.focus({ preventScroll: true }); } catch {} });
   }
+  // dimensio 的两个小菜单：型号按候选去重（排在前面的是候选里先出现的），档位见 dimEfforts；正在用的那项标「当前」
+  const dimMenu = $derived.by(() => {
+    if (!dim || !pop || !popRow) return null;
+    const key = pop.key, cur = popRow.pick;
+    if (pop.kind === 'model') {
+      const seen = new Map();
+      for (const c of candidates) if (c && c.model && !seen.has(c.model)) seen.set(c.model, c);
+      return {
+        title: t('{tier}档的模型', { tier: popRow.meta.title }),
+        items: [...seen.values()].map((c) => ({
+          label: c.label || modelName(c.model), sub: c.model === cur.model ? t('当前') : c.provider || '',
+          onclick: () => dimPickModel(key, c.model),
+        })),
+      };
+    }
+    return {
+      title: t('{tier}档的推理强度', { tier: popRow.meta.title }),
+      items: dimEfforts(cur.model).map((e) => ({
+        label: S.effortName(cur.model, e), sub: e === (cur.effort || '') && popRow.hasOverride ? t('当前') : '',
+        onclick: () => pickEffort(key, e),
+      })),
+    };
+  });
+  function dimPickModel(key, model) {
+    const row = rows.find((r) => r.key === key);
+    if (!row || !model) return;
+    // 换了型号：原来那档在新型号的候选里没有就清空（= 用它的默认）
+    const keep = dimEfforts(model).includes(row.pick.effort || '') ? row.pick.effort || '' : '';
+    onoverride?.(key, { model, effort: keep });
+  }
   function pickModel(key, id) {
     const row = rows.find((r) => r.key === key);
     const model = toCanonical(id, primary);
@@ -111,7 +161,7 @@
 
 <div class="dp-card tt" class:desk={shell !== 'ios'} class:ios={shell === 'ios'}>
   {#if !rows.length}
-    <p class="tt-empty">{t('还没有性价比数据，四档暂时排不出落点')}</p>
+    <p class="tt-empty">{emptyText || t('还没有性价比数据，四档暂时排不出落点')}</p>
   {:else}
     <div class="tt-head" aria-hidden="true">
       <span>{t('档位')}</span>
@@ -178,7 +228,9 @@
   <p class="tt-foot" title={unrated.map((u) => u.label || modelName(u.model)).join(' · ')}>{t('{n} 个已配置的模型没有评分，不参与选型', { n: unrated.length })}</p>
 {/if}
 
-{#if pop && popRow}
+{#if dimMenu}
+  <DpMenu at={{ rect: pop.rect }} title={dimMenu.title} items={dimMenu.items} onClose={closePop} />
+{:else if pop && popRow && !dim}
   <div class="tt-layer" use:portal use:layerFocus>
     {#if pop.kind === 'model'}
       <ModelPicker anchor={pop.rect} value={popRow.pid} onpick={(id) => pickModel(pop.key, id)} onClose={closePop}

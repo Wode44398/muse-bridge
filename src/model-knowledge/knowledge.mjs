@@ -158,6 +158,8 @@ export function thinkingTemplate(key, protocol, opts = {}) {
 // 去掉 claude- 前缀的别名（opus-5-5）。只写厂商公开信息：公开版导出会做泄漏扫描。
 const MIMO_MEDIA = Object.freeze({ maxImages: 2, keepRecent: 2 });   // 多图认不准最新那张：只让最近 2 张工具图入模
 const GEMINI_MEDIA = Object.freeze({ maxBytes: 14_000_000 });        // 内联数据连同文字整个请求不能超过 20 MB
+// GPT-6 单张图不能超过 1 MiB（解码后的字节）：「model "gpt-6-astra" rejects images larger than 1048576 bytes」（2026-11-14 用户反馈）
+const GPT6_MEDIA = Object.freeze({ maxImageBytes: 1_048_576 });
 const TABLE = [
   // Claude：5.x、Opus 4.7+ 是 1M / 128K + adaptive 五档；Opus / Sonnet 4.6 没有 xhigh；Haiku 4.5 及更老是 200K + budget
   { re: /^(?:claude-)?haiku-4-5/, ctx: 200_000, out: 64_000, vision: true, think: 'claude-budget' },
@@ -210,8 +212,8 @@ const TABLE = [
   // GPT-6（官方型号页 + OpenRouter 元数据，2026-11-13 逐个真打）：1,050,000 窗口、128K 输出、识图；
   // 必须思考的：6.1 Sol、6.1 Sol Pro、6 Astra、6 Astra Pro、6.1 Terra Pro；其余（6.1 Terra、6 Luna、6 Sol 及其 Pro、5.6 系）可以关。
   { re: /^gpt-oss/, ctx: 131_072, vision: false, think: 'effort3' },
-  { re: /^gpt-6[.-]1-sol|^gpt-6-astra|^gpt-astra-latest|^gpt-6[.-]1-terra-pro/, ctx: 1_050_000, out: 128_000, vision: true, think: 'gpt6' },
-  { re: /^gpt-6/, ctx: 1_050_000, out: 128_000, vision: true, think: 'gpt6-off' },
+  { re: /^gpt-6[.-]1-sol|^gpt-6-astra|^gpt-astra-latest|^gpt-6[.-]1-terra-pro/, ctx: 1_050_000, out: 128_000, vision: true, think: 'gpt6', media: GPT6_MEDIA },
+  { re: /^gpt-6/, ctx: 1_050_000, out: 128_000, vision: true, think: 'gpt6-off', media: GPT6_MEDIA },
   { re: /^gpt-5\.6/, vision: true, think: 'gpt6-off' },
   { re: /^(?:gpt-5|o\d)/, vision: true, think: 'openai' },
   // xAI Grok（xAI 文档：4.6 / 4.7 四档、4.5 三档，都不能关）

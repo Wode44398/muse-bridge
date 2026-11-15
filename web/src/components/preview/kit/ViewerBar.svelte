@@ -13,7 +13,7 @@
   let {
     item = null, title = '', subtitle = '', subtitleSnippet = null, barEnd = null,
     tools = [], touch = false, overlay = false, hidden = false,
-    nav = null,               // 文档皮肤的画廊翻页：{ canPrev, canNext, onPrev, onNext }
+    nav = null,               // 画廊翻页（文档皮肤；触屏视频——横滑让给拖进度）：{ canPrev, canNext, onPrev, onNext, kbd?: [上一个, 下一个] }
     hasMenu = true, menuOpen = false, onMore = null, moreEl = $bindable(null),
     onClose = null, closeEl = $bindable(null),
     stacked = false,          // 层叠打开（笔记里点的附件）：关闭钮的语义是「返回上一层」，桌面也画返回箭头
@@ -41,8 +41,8 @@
   {#if barEnd}<div class="vw-bar-end">{@render barEnd()}</div>{/if}
   {#if nav}
     <div class="vw-bar-nav">
-      <button type="button" class="vw-btn" disabled={!nav.canPrev} onclick={nav.onPrev} use:tip={{ label: t('上一个'), kbd: '←' }}><VIcon name="prev" /></button>
-      <button type="button" class="vw-btn" disabled={!nav.canNext} onclick={nav.onNext} use:tip={{ label: t('下一个'), kbd: '→' }}><VIcon name="next" /></button>
+      <button type="button" class="vw-btn" disabled={!nav.canPrev} onclick={nav.onPrev} use:tip={{ label: t('上一个'), kbd: nav.kbd?.[0] || '←' }}><VIcon name="prev" /></button>
+      <button type="button" class="vw-btn" disabled={!nav.canNext} onclick={nav.onNext} use:tip={{ label: t('下一个'), kbd: nav.kbd?.[1] || '→' }}><VIcon name="next" /></button>
     </div>
   {/if}
   {#each visTools as tl (tl.id || tl.icon)}

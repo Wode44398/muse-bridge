@@ -12,6 +12,7 @@
   import { dtHasWsFiles, wsDescriptorFrom } from '../../lib/fileDrag.js';
   import { studio, currentModel, valuesOf, setParam, submit, removeInput, swapFrames, clearParent, roleName, roleTag } from '../../modules/studio/media.svelte.js';
   import { basicSpecs, imageRoles, inputRoles, promptLangs, textFitsLangs, optionsOf } from '../../modules/studio/params.js';
+  import { sizeIssues } from '../../modules/studio/size.js';
   import { chipValue, controlOf, formatOf, selfExplaining } from '../../modules/studio/render.js';
   import { paramLabel, optText, sourceText } from '../../modules/studio/words.js';
   import { paramSource } from '../../modules/studio/picker.js';
@@ -249,7 +250,7 @@
           {#if !wide && hasParams}
             <div class="cp-chips" use:fitChips>
               {#each chips as c (c.spec.key)}
-                <button class="chip cp-val" class:open={one?.spec?.key === c.spec.key} title={chipName(c.spec)} onclick={(e) => openChip(e, c.spec)} data-chip={c.spec.key}>
+                <button class="chip cp-val" class:open={one?.spec?.key === c.spec.key} class:bad={c.spec.type === 'size' && sizeIssues(c.spec, values[c.spec.key]).length > 0} title={chipName(c.spec)} onclick={(e) => openChip(e, c.spec)} data-chip={c.spec.key}>
                   {#if c.spec.type === 'bool'}{@html icon('check')}{:else if formatOf(c.spec) === 'aspect' && /^\d/.test(String(values[c.spec.key]))}<span class="cp-asp" aria-hidden="true">{@html aspectBox(values[c.spec.key], 12)}</span>{:else if formatOf(c.spec) === 'aspect'}<span class="cp-asp" aria-hidden="true"><span class="cp-asp-auto"></span></span>{/if}
                   {#if c.name}<i>{c.name}</i>{/if}<span class="chip-tx">{c.text}</span>
                 </button>

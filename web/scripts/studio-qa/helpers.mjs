@@ -194,6 +194,37 @@ window.__qa = {
     this.m.studio.drafts.image.model = key;
     return key;
   },
+  // 尺寸参数（方案 §10）：variant 'flex' = GPT Image 自由尺寸（自动 / 原图 / 预设 / 自定义，没有比例）；
+  // 'split' = Replicate 式「比例选 custom 才出宽 × 高」（没有档位，只有两个输入框）。挂进图像第一组并选中
+  sizeModel(variant = 'flex', size) {
+    const FLEX = { width: { min: 16, max: 3840, multipleOf: 16 }, height: { min: 16, max: 3840, multipleOf: 16 }, aspect: { min: 1 / 3, max: 3 }, pixels: { min: 655360, max: 8294400 }, exact: true };
+    const px = (w, h, hint) => ({ value: w + 'x' + h, label: w + '×' + h, hint });
+    const params = variant === 'split' ? [
+      { key: 'aspect_ratio', label: '比例', type: 'enum', group: 'basic', format: 'aspect', default: 'custom', options: ['1:1', '16:9', '3:2', '2:3', '9:16', 'match_input_image', 'custom'].map((v) => ({ value: v, label: v })) },
+      { key: 'width_height', label: '尺寸', type: 'size', group: 'basic', format: 'size', options: [], default: { width: 1024, height: 1024 }, when: { aspect_ratio: 'custom' },
+        custom: { width: { min: 256, max: 2048, multipleOf: 16 }, height: { min: 256, max: 2048, multipleOf: 16 }, exact: false }, encode: 'split', fields: { width: 'width', height: 'height' } },
+      { key: 'output_format', label: '格式', type: 'enum', group: 'advanced', default: 'webp', options: ['webp', 'jpg', 'png'].map((v) => ({ value: v, label: v })) },
+      { key: 'extra', label: '原始参数', type: 'json', group: 'advanced' },
+    ] : [
+      { key: 'size', label: '尺寸', type: 'size', group: 'basic', format: 'size', default: 'auto', editDefault: 'original', custom: FLEX, encode: 'x',
+        options: [{ value: 'auto', label: '自动' }, { value: 'original', label: '原图', only: { $edit: true } }, px(1024, 1024, '1:1'), px(1536, 1024, '3:2'), px(1024, 1536, '2:3'), px(2048, 2048, '1:1'), px(2048, 1152, '16:9'), px(1152, 2048, '9:16'), px(3840, 2160, '16:9'), px(2160, 3840, '9:16')] },
+      { key: 'quality', label: '画质', type: 'enum', group: 'basic', default: 'auto', options: ['auto', 'low', 'medium', 'high'].map((v) => ({ value: v, label: v })) },
+      { key: 'count', label: '张数', type: 'number', group: 'basic', format: 'count', min: 1, max: 4, step: 1, default: 1 },
+      { key: 'background', label: '背景', type: 'enum', group: 'advanced', default: 'auto', options: ['auto', 'opaque', 'transparent'].map((v) => ({ value: v, label: v })) },
+      { key: 'extra', label: '额外参数', type: 'json', group: 'advanced' },
+    ];
+    const c = this.m.studio.catalog;
+    if (!this.__cat) this.__cat = JSON.stringify(c);
+    const g = c.kinds.image.groups[0];
+    const key = g.provider.id + '/qa/size-' + variant;
+    const label = variant === 'split' ? 'FLUX.2 [pro]' : 'gpt-image-2.6-sunburst-c';
+    g.models = [{ key, id: 'qa/size-' + variant, label, kind: 'image', async: false, paramSource: variant === 'split' ? 'card' : 'family', ...(variant === 'split' ? {} : { inheritsFrom: 'gpt-image-2.6-sunburst' }),
+      inputs: { text: true, images: { max: 16, roles: ['edit', 'ref'] } }, params }, ...g.models.filter((x) => x.key !== key)];
+    this.m.studio.catalog = { ...c };
+    this.m.studio.drafts.image.model = key;
+    this.m.studio.drafts.image.params = size !== undefined ? { [variant === 'split' ? 'width_height' : 'size']: size } : {};
+    return key;
+  },
   restoreCatalog() { if (this.__cat) { this.m.studio.catalog = JSON.parse(this.__cat); this.__cat = null; } this.m.studio.resolved = {}; },
 };
 `;

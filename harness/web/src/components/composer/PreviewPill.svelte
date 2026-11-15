@@ -1,6 +1,6 @@
 <script lang="ts">
   // 实时预览 / Agent 浏览器入口胶囊：和计划条同住输入框上方的那一行（以前是悬浮层，会盖在计划条上）。
-  // 有在跑的 dev server = 绿点「实时预览」，点开工作区浏览器并把应用直接拉进共享浏览器；否则 = 「Agent 浏览器」。
+  // 有在跑的 dev server = 绿点「实时预览」，点开工作区浏览器并把应用直接拉进这个会话的浏览器；否则 = 「Agent 浏览器」。
   // 工作区开着时不显示（Above 管显隐）。
   import { openDock } from "../../lib/state.svelte.ts";
   import * as api from "../../lib/api.ts";
@@ -15,7 +15,8 @@
   function open() {
     haptic("light");
     openDock("browser");
-    if (pane.chat.preview) api.browserNavigate({ url: pane.chat.preview.url }).catch(() => {});
+    // 这一格会话自己的浏览器（服务端按会话各开一份）
+    if (pane.chat.preview) api.browserNavigate(pane.chat.id ?? "", { url: pane.chat.preview.url }).catch(() => {});
   }
 </script>
 

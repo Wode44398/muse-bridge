@@ -136,6 +136,12 @@ export async function dropOsFile(page, role, file) {
   const cap = kind === 'video' ? 100_000_000 : 20_000_000;
   if (file.size > cap) { dropToast(kind === 'video' ? t('文件超过 100MB') : t('文件超过 20MB')); return false; }
   const live = addInput(page, { role, url: kind === 'image' ? URL.createObjectURL(file) : '', name: file.name, kind, pending: true });
+  // 图片宽高（尺寸「原图」显示实际像素用）：本地解码，不等上传
+  if (kind === 'image' && live.url) {
+    const img = new Image();
+    img.onload = () => { const cur = studio.drafts[page].inputs.find((x) => x.id === live.id); if (cur && img.naturalWidth > 0) { cur.w = img.naturalWidth; cur.h = img.naturalHeight; } };
+    img.src = live.url;
+  }
   try {
     const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = rej; r.readAsDataURL(file); });
     const r = await api.upload(file.name, b64);

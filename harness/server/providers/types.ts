@@ -1,6 +1,7 @@
 import type { Turn } from "../agent/turn.ts";
 import type { StreamEvent } from "../agent/events.ts";
 import type { Tier } from "../model-knowledge.ts";
+import type { CustomParams } from "../custom-params.ts";
 
 export type BuiltinProviderId = "anthropic" | "openai" | "qwen" | "zhipu" | "kimi" | "mimo" | "gemini" | "local";
 // custom-<hex>：用户在「模型服务」里自己加的第三方接口（OpenAI / Anthropic / Gemini 协议，server/custom-providers.ts）
@@ -21,7 +22,8 @@ export interface Capabilities {
   // R11：按成本压缩的触发线（token）。目录按型号配；不配时窗口 ≥ 512K 的模型默认 256K（见 agent/context.ts）。
   compactAt?: number;
   // R12：一次请求里历史图片的额度（目录按 provider 配）；不给就用默认 20 张 / 24 MB。
-  mediaBudget?: { maxImages: number; maxBytes: number; keepRecent?: number };
+  // maxImageBytes：单张图的上限（解码后的字节），发请求前把超的压到这以内（agent/state.ts fitImagesToLimit）
+  mediaBudget?: { maxImages: number; maxBytes: number; keepRecent?: number; maxImageBytes?: number };
   // 提示缓存这次能活多久（毫秒；空闲压缩按它倒推时机）。不给 = 不知道 / 没缓存
   cacheTtlMs?: number;
 }
@@ -62,6 +64,8 @@ export interface CustomWire {
     effortDefault: string;
     alwaysThinks: boolean;
     maxOutput: number;
+    // 模型中心的高级调用配置（custom-params.ts）：只有在 bridge 模型中心设过的型号才有
+    params?: CustomParams;
   };
 }
 

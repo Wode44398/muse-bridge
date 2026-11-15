@@ -34,6 +34,8 @@ export interface MediaBudget {
   maxImages?: number;
   maxBytes?: number;
   keepRecent?: number;
+  // 单张图的上限（解码后的字节）：超了就在发请求前压到这以内（dimensio agent/media-budget.ts 的 fitImageBytes）
+  maxImageBytes?: number;
 }
 
 export interface TableEntry {

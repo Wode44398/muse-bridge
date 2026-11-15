@@ -341,6 +341,7 @@ export function openPreview(rawItems, index = 0, opts = {}) {
   if (!list.length) return;
   preview.items = list;
   preview.index = Math.max(0, Math.min(index, list.length - 1));
+  liftFrom = ''; openNow = true;
   preview.host = opts.host || 'app';
   preview.actions = opts.actions || null;
   preview.open = true;
@@ -348,7 +349,45 @@ export function openPreview(rawItems, index = 0, opts = {}) {
   dropLayers();
   reportPreview();
 }
-export function closePreview() { dropLayers(); preview.open = false; preview.items = []; preview.index = 0; preview.host = 'app'; preview.detail = null; preview.actions = null; reportPreview(); }
+export function closePreview() { dropLayers(); liftFrom = ''; openNow = false; preview.open = false; preview.items = []; preview.index = 0; preview.host = 'app'; preview.detail = null; preview.actions = null; reportPreview(); }
+
+// —— 内嵌宿主的预览临时「抬」到 App 级全屏实例（触屏视频全屏用），退出再放回原宿主 ——
+// 为什么要抬：内嵌实例被宿主的 transform 圈在面板里，铺不满屏；手机上工作台是底部 sheet，转成横屏后宽度过了
+// 侧列断点，sheet 整个重建成侧列，里面的播放器跟着销毁（销毁时又把方向还回去——「转过去又转回来」）。
+// App 级实例挂在 App 末尾，不受分页布局重排影响。
+let liftFrom = '';
+// 预览此刻是否开着（普通变量，不是响应式状态）：组件销毁回调里读 preview.open 拿到的是变更前的旧值
+//（Svelte 在 teardown 里回放旧值），要在销毁时分清「查看器关了」还是「只是换了宿主 / 重排」就问这个
+let openNow = false;
+export const previewIsOpen = () => openNow;
+/** 当前预览交给 App 级实例；返回 true = 换了宿主（调用方所在的那一页随即卸载，由新实例接力） */
+export function previewLift() {
+  if (!preview.open || preview.host === 'app') return false;
+  liftFrom = preview.host;
+  preview.host = 'app';
+  reportPreview();
+  return true;
+}
+export const previewLifted = () => !!liftFrom;
+/** 放回原宿主。settle = 屏幕正要转回去：等转屏那一下 resize 过了（工作台已经排回原来的形态）再放，最多等 700ms */
+export function previewDrop(settle = false) {
+  const from = liftFrom;
+  if (!from) return;
+  let done = false, timer = 0;
+  const fin = () => {
+    if (done) return;
+    done = true; clearTimeout(timer);
+    window.removeEventListener('resize', onResize);
+    if (liftFrom !== from || !preview.open) return;   // 等的这会儿关掉了 / 又开了别的预览
+    liftFrom = '';
+    preview.host = from;
+    reportPreview();
+  };
+  const onResize = () => { clearTimeout(timer); timer = setTimeout(fin, 80); };
+  if (!settle) { fin(); return; }
+  window.addEventListener('resize', onResize);
+  timer = setTimeout(fin, 700);
+}
 
 // 换一种方式看当前条目（svg 图 ↔ 源码；以后 html 渲染 ↔ 源码也走这里）。key 跟着变，外框按新 kind 重新路由；
 // 再换回原分类时 key 还原，草稿 / 缓存这类按 key 记的东西不串。

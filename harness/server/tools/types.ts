@@ -61,10 +61,11 @@ export interface ToolContext {
   };
   signal?: AbortSignal;
   // Which session this context belongs to. Process-wide resources that outlive a
-  // turn (background Bash jobs, Preview services, the shared browser) are tagged
+  // turn (background Bash jobs, Preview services, the session's own browser) are tagged
   // with it so one session can never poll/kill/hijack another's — with several
   // devices driving concurrent sessions, an unscoped id is a cross-session
-  // control channel. Absent for sub-agents/tests: those get the unowned pool.
+  // control channel. Sub-agents carry their parent session's id (they share its
+  // jobs / browser); absent for tests: those get the unowned pool.
   ownerId?: string;
   // Config knobs surfaced from the session (timeouts, limits, ...).
   limits: { bashTimeoutMs: number; bashMaxTimeoutMs: number };

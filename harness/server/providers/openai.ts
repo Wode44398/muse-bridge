@@ -11,6 +11,7 @@ import { modelLimits, modelSpec, modelSupportsImages, modelSupportsVideo, modelS
 import { localModelBaseUrl, strataVariantMismatch, strataVariantOf } from "../localai.ts";
 import { applyCustomThinking, floorTierWhenNoOff } from "../custom-tiers.ts";
 import { MK } from "../model-knowledge.ts";
+import { applyCustomParams } from "../custom-params.ts";
 
 // 必须思考的型号上，旁路请求在输出上限之外多给的推理余量（实测最低档的推理用量在一百到几百 token）
 const SIDE_REASONING_HEADROOM = 2048;
@@ -99,6 +100,8 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
         if (MK.routeOf(custom.upstreamHost) === "openrouter" && /^(?:claude-|opus-|sonnet-|haiku-|fable-)/.test(MK.bareModelId(cfg.model))) {
           body.cache_control = { type: "ephemeral" };
         }
+        // 模型中心里给这个型号设的调用参数（温度、停止序列、额外请求体里的 "openai": {…}）：改输出上限字段名之前写
+        body = applyCustomParams(body, custom.model?.params, "openai", capabilities.maxOutputTokens);
         if (custom.maxTokensField === "max_completion_tokens" && body.max_tokens !== undefined) {
           body.max_completion_tokens = body.max_tokens;
           delete body.max_tokens;

@@ -151,6 +151,9 @@
 .studio-root .sd-cbar .sd-brand { flex: none; padding-left: 4px; }
 /* 四个创作页的分段：桌面居中在中栏栏头；手机贴顶单独一行 */
 .studio-root .sd-tabs { position: absolute; left: 50%; bottom: 5px; transform: translateX(-50%); z-index: 1; }
+/* 中栏窄、左右按钮多时居中会压到按钮（StudioPage 量出来挂 .tight）：改排在两组之间 */
+.studio-root .sd-cbar.tight .sd-tabs { position: relative; left: auto; bottom: auto; transform: none; flex: none; margin: 0 auto; }
+.studio-root .sd-cbar.tight .sd-cbar-r { margin-left: 0; }
 .studio-root .sd-tabs .seg-tx { display: inline-flex; align-items: center; gap: 6px; }
 .studio-root .sd-segrow { flex: none; padding: 0 12px 8px; }
 .studio-root .sd-stage { flex: 1; min-height: 0; position: relative; overflow: hidden; }

@@ -2,7 +2,7 @@
  "note": "model-profile-golden.test.ts 生成；sha256（网卡地址与临时目录已抹成占位）",
  "items": {
   "*": {
-   "tools.main": "0eeb0a8482eea604bd995110ad51db39fffa976a0c5f905bf0d087dc67a6c918",
+   "tools.main": "30150d4dce9f83470c0e977da65a367e33f73848aa640448913180bc3ea08446",
    "tools.deferred": "9e44928e633765b148ba1d0b70749368e479af2d0201446552cbca8aa0f15d42",
    "tools.deferredNames": "Browser,ReadPage,Eval,Network,DeviceInspect,DeviceAct,DeviceBrowser,DeviceShell,DeviceFiles,DevicePorts,BridgeManual,BridgeCall,PullRequest,Workspace,Terminal",
    "summary": "bffd057d81f4a920a95334cdf05668eea63bcca3c08b1785e93702d37777776e"

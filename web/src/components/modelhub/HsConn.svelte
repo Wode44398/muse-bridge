@@ -19,10 +19,12 @@
   import { t, tc, tr } from '../../lib/i18n.js';
 
   // locked：外面正在保存模型去向——这期间不许识别（识别结果会和刚落库的目录对不上）
+  // onadvanced：已有服务才给，打开「高级设置」（兼容项、超时、重试、鉴权、请求头；HsServiceAdv）
   let {
     mode = 'first', d = $bindable(), svc = null, narrow = false,
     detecting = false, detErr = '', detWarn = [], stale = false, catAt = 0, now = Date.now(),
     ondetect, onsaved, ondelete, testModel = '', dirty = $bindable(false), connErr = '', locked = false,
+    onadvanced = undefined,
   } = $props();
 
   // 「共享给成员」只有多用户服务器的管理员有（cp.canShare，随 Claude 服务的配置下发）：还没拉过就拉一次
@@ -392,6 +394,9 @@
       <button type="button" class="btn" class:busy={detecting} disabled={detecting || locked || busy === 'save'} onclick={redetect}>
         {#if detecting}<span class="spin" aria-hidden="true"></span>{t('识别中')}{:else}{@html svg(G.refresh)}{t('重新识别')}{/if}
       </button>
+      {#if onadvanced}
+        <button type="button" class="btn" onclick={() => onadvanced?.()} title={t('兼容项、超时、重试、鉴权方式、自定义请求头')}>{@html svg(G.tune)}{t('高级设置')}</button>
+      {/if}
       <!-- 「上次识别」宽屏在列表头上就有，这里不重复；窄屏的列表头放不下它，留在这里 -->
       {#if narrow && when}<span class="hint">{t('上次识别 {when}', { when })}</span>{/if}
       <span class="spx"></span>

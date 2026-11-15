@@ -371,7 +371,7 @@
       --row-h: 36px;
     }
   }
-  @media (max-width: 699px) {
+  @media (max-width: 599px), (max-width: 699px) and (max-device-aspect-ratio: 699/1000) {
     .col {
       padding: 16px 16px 24px;
     }

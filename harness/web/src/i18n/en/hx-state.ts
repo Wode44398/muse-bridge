@@ -93,6 +93,8 @@ export default {
   "在审阅面板撤销了文件改动": "Reverted file changes in the review panel",
   "接续自上一个会话（开头是它的摘要）": "Continued from a previous session (starts with its summary)",
   "服务重启后自动接着做": "Resumed automatically after a service restart",
+  "定时任务「{name}」到点自动运行 · 无人值守": "Scheduled task “{name}” ran on schedule · Unattended",
+  "定时任务到点自动运行 · 无人值守": "Scheduled task ran on schedule · Unattended",
   "连着几次被重启切断，没有再自动续跑——说「继续」接着做": "Interrupted by several restarts in a row, so it didn’t resume automatically. Say “continue” to pick up where it left off.",
   "问题 {n}": "Question {n}",
   // 历史里没拿到结果的工具行摘要（数据保持中文供 tasks.ts 判「已停止」，显示处经 tr() 查这里）

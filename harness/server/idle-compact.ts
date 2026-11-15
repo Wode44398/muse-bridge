@@ -1,18 +1,19 @@
 // 空闲压缩（对齐 Claude Code 2.1.299）：长对话空闲到提示缓存快过期时先压一次——用户回来接着聊，重写的是压完的那段，
 // 不是整段原样（官方 1 小时缓存的写入按 2 倍计价，20 万 token 的对话重写一次就是好几美元）。
-// 只对缓存能活 1 小时的会话做（Anthropic 官方端点的主会话）：5 分钟的缓存，用户停一停就过期，赶不上也不值得赶。
-// 每轮收尾排一个定时器（缓存过期前 6 分钟），用户再发话就撤掉；压的时候不占住会话——这时发话照常开跑，压缩被掐掉、不留痕迹。
+// 11-14 起按偏好「提示缓存快过期时」（cacheExpiry）：只有选「自动压缩」才做；缓存多久过期按模型算（适配器的 capabilities.cacheTtlMs，
+// 来自 model-knowledge/cache-ttl.mjs 与模型中心里用户填的），不再只认 Anthropic 官方的 1 小时——5 分钟的缓存在 3 分 45 秒左右动手。
+// 每轮收尾排一个定时器，用户再发话就撤掉；压的时候不占住会话——这时发话照常开跑，压缩被掐掉、不留痕迹。
 import { compactIdleSession, getSession, sessionCacheTtlMs, type Session } from "./session.ts";
 import { prefValue } from "./prefs.ts";
 
-const LEAD_MS = 6 * 60_000; // 比缓存过期早这么久动手（摘要请求本身要几十秒）
-const MIN_TTL_MS = 30 * 60_000; // 缓存短于这个的不做
+const LEAD_MS = 6 * 60_000; // 长缓存：比过期早这么久动手（摘要请求本身要几十秒）
+const MIN_TTL_MS = 3 * 60_000; // 缓存短于这个的不做（来不及）
 
 const timers = new Map<string, NodeJS.Timeout>();
 const running = new Map<string, AbortController>();
 let started = false;
 
-const enabled = () => started && prefValue<boolean>("idleCompact") !== false;
+const enabled = () => started && prefValue<string>("cacheExpiry") === "compact";
 
 /** 服务启动时挂上（index.ts）。测试按需调。 */
 export function startIdleCompact(): () => void {
@@ -55,7 +56,8 @@ export function idleCompactRunEnd(session: Session, now = Date.now()): void {
   timers.set(session.id, t);
 }
 
-export const idleDelay = (ttlMs: number): number => Math.max(60_000, ttlMs - LEAD_MS);
+// 什么时候动手：长缓存提前 6 分钟；短缓存在过了四分之三时（5 分钟 → 3 分 45 秒，10 分钟 → 7 分 30 秒），给摘要请求留够余量
+export const idleDelay = (ttlMs: number): number => Math.max(60_000, Math.max(ttlMs - LEAD_MS, Math.round(ttlMs * 0.75)));
 
 async function fire(sessionId: string, endedAt: number): Promise<void> {
   if (!enabled()) return;

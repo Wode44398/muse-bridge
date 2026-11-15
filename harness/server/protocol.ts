@@ -66,6 +66,9 @@ export const CAPABILITIES = [
   // 拉取请求（会话面板的 PR 卡）：GET /api/pr?session=&refresh=1（bridge 的 PR 视图，available:false = 没接上 bridge / 成员实例）、
   // POST /api/pr {session, op: bind | unbind | monitor | refresh, url?, autoFix?}；自动修复叫醒的那一轮首条是 harness 片段 kind ci-event
   "pr",
+  // 定时任务（bridge 的 Routines 用 dimensio 跑，routine-runs.ts）：POST /api/family/routine {sessionId?, title, prompt, config?} →
+  // {id, runId}、POST /api/family/routine-status {id, runId, waitMs?}（只收 bridge 服务端发的）；那一轮指令后跟 harness 片段 kind routine
+  "routines",
   // 工作区协同：POST /api/ui/state（「用户在看什么」上报）、POST /api/ui/answer（应答 agent 的草稿请求）；事件 workspace / terminal
   "workspace-collab",
   // ── 会话管理（server/sessmgmt/）──
@@ -79,6 +82,13 @@ export const CAPABILITIES = [
   "prompt-suggestions",
   // 通知偏好与在场：GET /api/sessmgmt/state、POST /api/sessmgmt/presence；/api/pending 带 notify
   "notify-prefs",
+  // 工作区浏览器按会话各开一份：/api/browser/* 认 sessionId（GET 查询串 / POST 请求体；空串 = 不属于任何会话的默认那份，
+  // 完全不带 = 最近用过的那份）；GET /api/browser/state 带 mounted / tabs / isolated；POST /api/browser/isolate {sessionId, on}
+  // （隔离存储，切换会关掉这个会话现有的标签）；全局事件 browser_mount {sessionId, mounted, tabs, isolated}
+  "browser-session",
+  // 项目对话（project-mode.ts）：/api/run 新会话认 shape:"project"（协调者 + 讨论串）；会话配置与列表元数据带 shape；
+  // GET/POST /api/project/:id（概览：讨论串、项目说明、项目记忆）、POST …/resolve {thread, resolved}、GET/POST …/memory
+  "project-mode",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];

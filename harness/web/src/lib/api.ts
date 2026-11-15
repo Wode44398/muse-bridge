@@ -1058,36 +1058,51 @@ export const stopPreviews = (serviceId?: string) =>
   j("/api/preview/stop", POST(serviceId ? { serviceId } : {})).catch(() => {});
 
 // ── Agent 浏览器（screencast 直播 + 输入回传）────────────────────────────────
+// 按会话各开一份（服务端能力位 browser-session）：每个请求都带 sid = 这个会话的 id（"" = 还没有会话 id 的新对话，用默认那份）。
+// GET 走查询串、POST 进请求体——不加自定义请求头（离线 apk 跨源访问 bridge，预检只放行 Content-Type / Authorization）。
+// 旧后端不认 sessionId，原样忽略（那时全进程只有一个浏览器）。
 export interface BrowserTab {
   id: string;
   url: string;
   title: string;
   active: boolean;
 }
-export const browserState = () =>
-  j<{ alive: boolean; url?: string; viewport?: { width: number; height: number }; tabs?: BrowserTab[] }>("/api/browser/state");
-export const browserNavigate = (body: { url?: string; dir?: "back" | "forward" }) =>
-  j<{ ok: boolean; url: string }>("/api/browser/navigate", POST(body));
-export const browserInput = (body: Record<string, unknown>) =>
-  j<{ ok: boolean; url: string }>("/api/browser/input", POST(body));
-export const browserResize = (body: { preset?: "mobile" | "tablet" | "desktop"; width?: number; height?: number }) =>
-  j<{ ok: boolean; viewport: { width: number; height: number } }>("/api/browser/resize", POST(body));
-// 标签页：＋新建（浏览器没跑时会顺手拉起）、点选切换、×关闭（最后一个=关整个浏览器）
-export const browserTabNew = (url?: string) =>
-  j<{ ok: boolean; tabs: BrowserTab[]; url: string }>("/api/browser/tabs/new", POST(url ? { url } : {}));
-export const browserTabActivate = (id: string) =>
-  j<{ ok: boolean; tabs: BrowserTab[]; url: string }>("/api/browser/tabs/activate", POST({ id }));
-export const browserTabClose = (id: string) =>
-  j<{ ok: boolean; tabs: BrowserTab[]; alive: boolean }>("/api/browser/tabs/close", POST({ id }));
+export interface BrowserStateInfo {
+  alive: boolean;
+  url?: string;
+  viewport?: { width: number; height: number };
+  tabs?: BrowserTab[];
+  mounted?: boolean; // 这个会话的浏览器里有标签（挂载状态灯）；旧后端没有
+  isolated?: boolean; // 这个会话开着隔离存储；旧后端没有
+}
+const sidQuery = (sid: string) => `sessionId=${encodeURIComponent(sid)}`;
+export const browserState = (sid: string) => j<BrowserStateInfo>(`/api/browser/state?${sidQuery(sid)}`);
+export const browserNavigate = (sid: string, body: { url?: string; dir?: "back" | "forward" }) =>
+  j<{ ok: boolean; url: string }>("/api/browser/navigate", POST({ ...body, sessionId: sid }));
+export const browserInput = (sid: string, body: Record<string, unknown>) =>
+  j<{ ok: boolean; url: string }>("/api/browser/input", POST({ ...body, sessionId: sid }));
+export const browserResize = (sid: string, body: { preset?: "mobile" | "tablet" | "desktop"; width?: number; height?: number }) =>
+  j<{ ok: boolean; viewport: { width: number; height: number } }>("/api/browser/resize", POST({ ...body, sessionId: sid }));
+// 标签页：＋新建（浏览器没跑时会顺手拉起）、点选切换、×关闭（最后一个=关掉这个会话的浏览器）
+export const browserTabNew = (sid: string, url?: string) =>
+  j<{ ok: boolean; tabs: BrowserTab[]; url: string }>("/api/browser/tabs/new", POST(url ? { url, sessionId: sid } : { sessionId: sid }));
+export const browserTabActivate = (sid: string, id: string) =>
+  j<{ ok: boolean; tabs: BrowserTab[]; url: string }>("/api/browser/tabs/activate", POST({ id, sessionId: sid }));
+export const browserTabClose = (sid: string, id: string) =>
+  j<{ ok: boolean; tabs: BrowserTab[]; alive: boolean }>("/api/browser/tabs/close", POST({ id, sessionId: sid }));
+// 隔离存储（按会话）：开 / 关都会关掉这个会话现有的标签（restarted = 关掉了正在用的浏览器）
+export const browserIsolate = (sid: string, on: boolean) =>
+  j<{ ok: boolean; isolated: boolean; restarted: boolean }>("/api/browser/isolate", POST({ sessionId: sid, on }));
 
 // 帧流（SSE over fetch，同 runStream 的读法；面板可见时才订阅，关了就断）。
 // native=1：桌面壳原生视图观众——后端不发 frame，只发 state/tabs/pointer。
 export async function browserStream(
+  sid: string,
   onEvent: (ev: any) => void,
   signal?: AbortSignal,
   native = false,
 ): Promise<void> {
-  const res = await hfetch(`/api/browser/stream${native ? "?native=1" : ""}`, { signal });
+  const res = await hfetch(`/api/browser/stream?${sidQuery(sid)}${native ? "&native=1" : ""}`, { signal });
   if (!res.ok || !res.body) {
     const err = new Error(`HTTP ${res.status}`) as Error & { status?: number };
     err.status = res.status;
@@ -1139,6 +1154,8 @@ export interface RunBody {
   goal?: { verify?: string; maxRounds?: number; maxMinutes?: number };
   // 引用会话：被引用对话的 id（服务端能力位有 "session-refs" 才发）
   refs?: string[];
+  // 项目对话：新会话以项目形态建（服务端能力位有 "project-mode" 才发；只在第一条消息里有意义）
+  shape?: "project";
 }
 
 // O8（N39）：这个会话的用量账本（厂商 × 型号 × 任务；服务端能力位有 "usage-ledger" 才有）
@@ -1153,6 +1170,31 @@ export interface UsageRow {
   calls: number;
 }
 export const sessionUsage = (id: string) => j<{ rows: UsageRow[] }>(`/api/sessions/${encodeURIComponent(id)}/usage`);
+
+// 项目对话的概览（server/project-routes.ts；服务端能力位有 "project-mode" 才有）
+export interface ProjectThread {
+  id: string;
+  name: string;
+  title: string;
+  agent: "dimensio" | "claude";
+  state: "working" | "idle";
+  waiting: boolean; // 挂着等用户点的卡（提问 / 权限 / 计划）
+  resolved: boolean;
+  report: string; // 最新回复的开头
+  at: number;
+}
+export interface ProjectView {
+  instructions: string;
+  instructionsMax: number;
+  threads: ProjectThread[];
+  memory: { name: string; size: number; at: number }[];
+  limits: { maxThreads: number; maxLive: number };
+}
+const projectPath = (id: string, tail = "") => `/api/project/${encodeURIComponent(id)}${tail}`;
+export const getProject = (id: string) => j<ProjectView>(projectPath(id));
+export const saveProjectInstructions = (id: string, instructions: string) => j<ProjectView>(projectPath(id), POST({ instructions }));
+export const resolveProjectThread = (id: string, thread: string, resolved: boolean) => j<{ ok: boolean; resolved: boolean }>(projectPath(id, "/resolve"), POST({ thread, resolved }));
+export const readProjectMemory = (id: string, name: string) => j<{ name: string; content: string }>(projectPath(id, `/memory?name=${encodeURIComponent(name)}`));
 
 // E3（G7）：输入框 / 面板的技能清单（服务端能力位有 "commands" 才有；内置命令在前端 lib/slash.ts）
 export interface CommandList {

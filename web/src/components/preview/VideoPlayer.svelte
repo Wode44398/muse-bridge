@@ -1,6 +1,35 @@
 <script module>
+  import { previewLift, previewDrop, previewIsOpen } from '../../lib/preview.svelte.js';
   // 当前持有「自动进画中画」开关的播放器实例（见 setPipAuto 那段 $effect）
   let pipAutoOwner = null;
+  // 跨实例接力（同一个文件的播放器被重建时接着放，不从头来、不弹「继续播放」）：
+  // 触屏全屏要把内嵌宿主的预览抬到 App 级实例、退出再放回去；转屏 / 折叠屏开合让工作台从 sheet 重排成侧列——
+  // 这几种情况下旧实例销毁、新实例马上挂上。旧实例销毁时留下 { key, t, paused, at }，新实例 4 秒内认领。
+  let relay = null;
+  // 全屏接力：{ at, vw, vh }。旧实例请求全屏后把预览抬走（自己随即销毁），新实例挂上后凭它进全屏
+  let fsCarry = null;
+  // 全屏保留：全屏里换到下一个视频（播完自动下一个、顶栏上一个 / 下一个）时旧实例销毁、新实例随后才挂上——
+  // 全屏（横屏 + 沉浸 / 浏览器全屏）先不退，留给新实例认领；1.5 秒没人认领（下一项不是视频）就照常退出
+  let fsKeep = null;   // { mode, timer }
+  // 退出全屏的系统侧动作（与实例无关）：方向交还系统、退浏览器全屏；从内嵌宿主抬上来的预览放回原窗口
+  function fsLeaveSystem(mode) {
+    const wasLand = window.innerWidth > window.innerHeight;
+    try { const A = window.AndroidStore; if (typeof A?.setOrientation === 'function') A.setOrientation('auto'); } catch {}
+    if (mode === 'web') { try { if (document.fullscreenElement) document.exitFullscreen(); } catch {} }
+    try { screen.orientation?.unlock?.(); } catch {}
+    previewDrop(wasLand && mode !== 'pseudo');   // 横着的：等屏幕转回去、工作台排回原样再放
+  }
+  function fsHold(mode) {
+    clearTimeout(fsKeep?.timer);
+    fsKeep = { mode, timer: setTimeout(() => { fsKeep = null; fsLeaveSystem(mode); }, 1500) };
+  }
+  function fsTake() {
+    const k = fsKeep;
+    if (!k) return '';
+    clearTimeout(k.timer); fsKeep = null;
+    if (k.mode === 'web' && !document.fullscreenElement) { fsLeaveSystem(k.mode); return ''; }
+    return k.mode;
+  }
 </script>
 
 <script>
@@ -19,17 +48,19 @@
   // 电脑：鼠标一动唤出控件、静止 2.5s 连光标一起藏；单击播放/暂停（中央图标闪一下）、双击全屏；
   //   底栏两行：进度轨（悬停加粗、悬停气泡带 storyboard 缩略帧与章节名、缓冲段、章节缝）+
   //   左「播放 / 下一个 / 音量（悬停展开）/ 时间（点按切剩余）」右「字幕 / 设置齿轮 / 画中画 / 全屏」；
-  //   快捷键 Space/K J/L ←/→ ↑/↓ M F I C 0-9 Home/End , . < >，按键后顶部出状态气泡；翻画廊用 PgUp/PgDn。
-  // 手机：轻点显隐（3s 自动藏）、中央 ±10s 与大播放钮；双击左右三分之一 ±10s（连击累计 + 半月 ripple）；
-  //   长按 2 倍速；横向拖动 seek（大气泡带缩略帧）；全屏里左半亮度、右半音量、中间下滑退出全屏；
-  //   非全屏上滑进全屏、下滑关闭；全屏方向跟视频宽高比；可锁屏。画廊里横滑翻页（不拖进度）。
+  //   快捷键 Space/K J/L ←/→（±10s）↑/↓ M F I C 0-9 Home/End , . < >，按键后顶部出状态气泡；翻画廊用 PgUp/PgDn。
+  // 手机：轻点显隐（3s 自动藏）、中央 ±10s 与大播放钮（液态玻璃）；双击左右三分之一 ±10s（连击累计 + 半月 ripple）；
+  //   长按 2 倍速；横向拖动 = 拖进度（画面实时跟着走，顶部出时间胶囊）；全屏里左半亮度、右半音量、中间下滑退出全屏；
+  //   非全屏上滑进全屏、下滑关闭；全屏方向跟视频宽高比；可锁屏。画廊里换文件用顶栏的上一个 / 下一个（横滑一律是拖进度）。
+  // 拖进度（进度轨 / 横滑）：不等松手，画面跟着拖到的位置实时出帧（liveSeek：上一次 seek 落定才发下一次，缓冲外的限频），
+  //   拖的时候先悄悄暂停、松手续播。
   // 两端共有：按文件续播（≥30s 出「从 x:xx 继续」）、音量/静音/倍速全局记忆、播完重播 + 5s 下一个倒计时、
   //   画中画、媒体会话（锁屏/耳机线控）、同名 .vtt/.srt 字幕、亮屏锁、延迟转圈、错误态重试。
   //
   // 外框契约：底栏交给外框底栏槽 bottom，显隐走 viewer.chrome（播放中 autoHide，暂停 / 拖进度保持显示）；
   // 下滑关闭走 viewer.dragProgress / viewer.close；设置菜单走 viewer.openMenu（触屏 ios27、电脑扁平）。
-  // 嵌在别人的滑轨里（父节点不是外框的 .vw-page，如混排画廊）时：横滑交还宿主（不吃事件，画廊只在起手横滑时接管）；
-  // 下滑关闭仍归播放器——跟画廊图片页同一套手感（跟手位移 + 缩小、松手按距离 / 甩速判定，外框 dragLift:false 不缩舞台，
+  // 嵌在别人的滑轨里（父节点不是外框的 .vw-page，如混排画廊）时：手势全归播放器（宿主对视频页不接管任何滑动）；
+  // 下滑关闭——跟画廊图片页同一套手感（跟手位移 + 缩小、松手按距离 / 甩速判定，外框 dragLift:false 不缩舞台，
   // 视觉由播放器自己做）；轻点 / 双击 / 长按 / 全屏手势也归播放器；宿主用 active 告诉它是不是当前页（非当前页不加载、不声明）。
   import { onMount, onDestroy, untrack, tick } from 'svelte';
   import { resolveSrc, hasBlob } from '../../lib/mediaCache.js';
@@ -44,13 +75,14 @@
     loadAvPrefs, saveAvPrefs, stepRate, decodeSubtitle, wheelStep,
   } from '../../lib/avUtil.js';
   import { claimSession, screenAwake } from '../../lib/avSession.js';
-  import { animate, DUR, EASE, velocityTracker, spring, SPRING } from '../../lib/motion.js';
+  import { velocityTracker, spring, SPRING } from '../../lib/motion.js';
   import { saveLabel } from '../../lib/save.js';
   import { useViewer, isEditable } from './kit/context.js';
   import ViewerState from './kit/ViewerState.svelte';
   import ViewerSlider from './kit/ViewerSlider.svelte';
   import VIcon from './kit/VIcon.svelte';
   import { tip } from './kit/tooltip.js';
+  import { clusterGlass } from './kit/clusterGlass.js';
 
   let { item, active = true } = $props();
   const viewer = useViewer();
@@ -272,7 +304,7 @@
     applyRate();
     if (!resumeChecked) { resumeChecked = true; offerResume(); }
   }
-  function onLoadedData() { armPoster(true); kickMeta(); }
+  function onLoadedData() { armPoster(true); kickMeta(); liveDone(); }
   function onDur() { if (step !== 'orig-src') return; const d = videoEl?.duration; if (isFinite(d) && d > 0) { metaDur = d; if (videoEl.currentTime > d) { try { videoEl.currentTime = 0; } catch {} } } }
   let lastPos = 0, lastSave = 0;
   function onTime() {
@@ -292,6 +324,7 @@
   }
   function onWaiting() {
     loading = true;
+    if (scrubbing) return;   // 拖进度时的等待是自己跳出来的，不算「网络喂不动」
     // 原画反复喂不动（弱网 vs 大码率）→ 提示切流畅。缓存 blob 源不算。
     if (qualityNow === 'orig' && playing && item.streamUrl && !srcIsBlob) {
       stallCount++;
@@ -307,6 +340,7 @@
     armHide();
   }
   function onPause() {
+    if (scrubHeld) return;   // 拖进度时悄悄停的：播放态不变，松手就续播
     playing = false; sess?.playing(false);
     saveResume();
     if (!ended) showControls();
@@ -327,7 +361,7 @@
     failStep(step);
   }
   function onSeeking() { seeking = true; }
-  function onSeeked() { seeking = false; onProgress(); }
+  function onSeeked() { seeking = false; onProgress(); liveDone(); }
   let seeking = $state(false);
   function onVolume() { if (!videoEl) return; volume = Math.round(videoEl.volume * 100) / 100; muted = videoEl.muted; }
 
@@ -351,11 +385,48 @@
   const seekBy = (d) => seekTo(effCur + d);
   function frameStep(dir) { if (!videoEl || !videoEl.paused) return; seekTo(effCur + dir / fps); }
 
-  // —— 进度条拖动（kit ViewerSlider：拖动中出时间气泡，松手才真 seek；电脑悬停出悬停位置的时间与缩略帧）——
-  function scrubStart(v) { scrubbing = true; scrubT = v; wantStoryboard(); }
-  function scrubInput(v) { scrubT = v; }
-  function scrubEnd(v) { scrubbing = false; seekTo(v); armHide(); }
-  // 指针拖完滑块把焦点还给查看器根（不是 blur 到 BODY：那样出了外框的 Tab 圈）：之后 ←/→ 是 ±5s、空格是播放 / 暂停
+  // —— 拖进度（进度轨 / 触屏横滑共用）：不用等松手，画面跟着拖到的位置实时出帧 ——
+  // 拖之前在播的先悄悄暂停（播放态显示不变，免得每跳一下漏一小段声音），松手续播。
+  // 实时 seek 的节奏：上一次落定（seeked / 换源后的 loadeddata）才发下一次，中间拖过的位置直接丢掉只留最新的；
+  // 目标在缓冲里的几乎是瞬时的，缓冲外的要重开流（服务端起一次 ffmpeg），至少隔 450ms。
+  let scrubHeld = false;
+  let liveT = -1, liveBusy = false, liveAt = 0, liveTimer = null, liveGuard = null;
+  function inBuffer(sec) {
+    if (step === 'orig-src') return true;   // 直连原文件：内核自己按 Range 取，随便跳
+    const x = step === 'smooth-src' ? sec - tOff : sec;
+    try { const b = videoEl.buffered; for (let i = 0; i < b.length; i++) if (x >= b.start(i) && x < b.end(i) - 0.3) return true; } catch {}
+    return false;
+  }
+  function liveSeek(sec) { liveT = sec; livePump(); }
+  function livePump() {
+    clearTimeout(liveTimer);
+    if (dead || liveBusy || liveT < 0 || !scrubbing || !videoEl) return;
+    const wait = liveAt + (inBuffer(liveT) ? 30 : 450) - performance.now();
+    if (wait > 0) { liveTimer = setTimeout(livePump, wait); return; }
+    const sec = liveT; liveT = -1;
+    if (Math.abs(sec - effCur) < 0.04) return;
+    liveBusy = true; liveAt = performance.now();
+    seekTo(sec);
+    clearTimeout(liveGuard); liveGuard = setTimeout(liveDone, 2500);   // 落定事件一直不来（网断了）也放行
+  }
+  function liveDone() { if (!liveBusy) return; clearTimeout(liveGuard); liveBusy = false; livePump(); }
+  function liveReset() { clearTimeout(liveTimer); clearTimeout(liveGuard); liveT = -1; liveBusy = false; }
+  function scrubStart(v) {
+    scrubbing = true; scrubT = v; wantStoryboard();
+    const el = videoEl;
+    if (el && !el.paused && !ended) { scrubHeld = true; try { el.pause(); } catch {} }
+  }
+  function scrubInput(v) { scrubT = v; liveSeek(v); }
+  function scrubEnd(v) {
+    liveReset(); scrubbing = false;
+    const go = scrubHeld;
+    scrubHeld = false;
+    // 续播的：别正好落在片尾（暂停着跳到片尾不触发 ended，再 play() 会从头放）——留 0.25s 让它自己播完
+    seekTo(go && effDur > 1 ? Math.min(v, effDur - 0.25) : v);
+    if (go && !userPaused) videoEl?.play().catch(() => showControls());
+    armHide();
+  }
+  // 指针拖完滑块把焦点还给查看器根（不是 blur 到 BODY：那样出了外框的 Tab 圈）：之后 ←/→ 是 ±10s、空格是播放 / 暂停
   // （键盘 Tab 上去的不受影响：onend 只在指针松手时回调）
   function blurSlider() {
     if (touch) return;
@@ -372,13 +443,13 @@
     if (r && r !== btn) { try { r.focus({ preventScroll: true }); } catch {} }
     if (document.activeElement === btn) btn.blur();
   }
-  // 聚焦在进度轨上时的方向键：与全局同步长（←/→ ±5s、Shift 加倍），↑/↓ 仍是音量——滑块自己按 1/20 时长走太碎
+  // 聚焦在进度轨上时的方向键：与全局同步长（←/→ ±10s、Shift ±30s），↑/↓ 仍是音量——滑块自己按 1/20 时长走太碎
   function railKey(e) {
     if (e.ctrlKey || e.metaKey || e.altKey || !effDur) return;
     const k = e.key;
     if (k === 'ArrowLeft' || k === 'ArrowRight') {
       e.preventDefault(); e.stopPropagation();
-      doSkip(k === 'ArrowRight' ? 'r' : 'l', e.shiftKey ? 10 : 5); armHide();
+      doSkip(k === 'ArrowRight' ? 'r' : 'l', e.shiftKey ? 30 : 10); armHide();
     } else if ((k === 'ArrowUp' || k === 'ArrowDown') && hasAudio) {
       e.preventDefault(); e.stopPropagation();
       setVolume((muted ? 0 : volume) + (k === 'ArrowUp' ? 0.05 : -0.05));
@@ -523,17 +594,24 @@
   }
   const hasTip = $derived(!!sb || chapters.length > 0);
 
-  // —— 全屏：'web' Fullscreen API（整个查看器根进全屏，方向锁跟视频宽高比）| 'native' apk 原生转横屏沉浸 |
-  //    'pseudo' 拿不到真全屏（apk 竖片 / 浏览器拒绝）时的页内全屏态（手势与锁屏照样可用）——
+  // —— 全屏：'web' Fullscreen API（整个查看器根进全屏，方向锁跟视频宽高比）| 'native' apk 原生沉浸（横片转横屏、竖片只藏系统栏）|
+  //    'pseudo' 拿不到真全屏（浏览器拒绝）时的页内全屏态（手势与锁屏照样可用）——
+  // 触屏上内嵌宿主（工作台 sheet / 侧列）里的预览铺不满屏，而且转成横屏后工作台会整个重排、把播放器连带销毁：
+  // 先把预览抬到 App 级实例（previewLift），这一页随即卸载，新实例凭 fsCarry 进全屏；退出时 fsLeaveSystem 再放回原窗口
   let fsMode = $state('');
   const fsOn = $derived(!!fsMode);
   let fsReq = false;
   const nativeOrient = () => typeof AS()?.setOrientation === 'function';
   function enterFs() {
+    if (touch && viewer.inShell && viewer.host !== 'app') {
+      fsCarry = { at: Date.now(), vw, vh };
+      if (previewLift()) return;
+      fsCarry = null;
+    }
     const land = !(vh > vw);   // 尺寸未知按横片
     if (nativeOrient()) {
       try { AS().setOrientation(land ? 'landscape' : 'portrait'); } catch {}
-      fsMode = land ? 'native' : 'pseudo';
+      fsMode = 'native';
       return;
     }
     const el = viewer.root?.() || wrap;   // 整个查看器进全屏：顶栏 / 底栏 / 菜单都还在
@@ -552,14 +630,12 @@
     const m = fsMode;
     fsMode = ''; fsReq = false; locked = false;
     resetBright();
-    if (nativeOrient() && m) { try { AS().setOrientation('auto'); } catch {} }
-    if (m === 'web' && document.fullscreenElement) { try { document.exitFullscreen(); } catch {} }
-    try { screen.orientation?.unlock?.(); } catch {}
+    if (m) fsLeaveSystem(m);
   }
   function toggleFs() { if (fsOn) exitFs(); else enterFs(); showControls(); }
   function onFsChange() {
     if (document.fullscreenElement) { if (fsReq) fsMode = 'web'; return; }
-    if (fsMode === 'web') { fsMode = ''; fsReq = false; locked = false; resetBright(); try { screen.orientation?.unlock?.(); } catch {} }
+    if (fsMode === 'web') exitFs();
   }
 
   // —— 亮度（全屏左半竖滑）：apk 原生 setBrightness 优先，否则 CSS 滤镜压暗画面 ——
@@ -708,8 +784,8 @@
       case ' ': case 'k': case 'K': { const go = videoEl.paused || ended; togglePlay(); flash(go ? 'play' : 'pause'); return true; }
       case 'j': case 'J': doSkip('l', 10); return true;
       case 'l': case 'L': doSkip('r', 10); return true;
-      case 'ArrowLeft': doSkip('l', 5); armHide(); return true;
-      case 'ArrowRight': doSkip('r', 5); armHide(); return true;
+      case 'ArrowLeft': doSkip('l', e.shiftKey ? 30 : 10); armHide(); return true;
+      case 'ArrowRight': doSkip('r', e.shiftKey ? 30 : 10); armHide(); return true;
       case 'ArrowUp': case 'ArrowDown': {
         if (!hasAudio) return true;
         setVolume((muted ? 0 : volume) + (k === 'ArrowUp' ? 0.05 : -0.05));
@@ -750,6 +826,9 @@
       autoHide: () => (playing && !scrubbing && !ended) || locked || pipNative,
       autoHideMs: () => (touch ? 3000 : 2500),
       arrowKbd: ['PgUp', 'PgDn'],
+      seekKeys: true,                    // ←/→/Home/End 归播放器（±10s / 回开头 / 到结尾），混排画廊里也一样；换文件用 PgUp / PgDn
+      soloBottom: true,                  // 底栏只放播放条：混排画廊的缩略图条不叠在进度条下面
+      barNav: () => touch,               // 触屏横滑是拖进度，换文件走顶栏的上一个 / 下一个
       keys: onKeys,
       onBack,
       bottom: err || lk ? null : bar,   // 出错 / 锁屏时撤掉底栏
@@ -795,14 +874,24 @@
   $effect(() => { awake.set(playing && active); });
 
   // 只在当前页时加载；离开当前页暂停
-  $effect(() => { if (active && videoEl && !loaded) untrack(() => { loaded = true; load(); }); });
+  $effect(() => {
+    if (!(active && videoEl && !loaded)) return;
+    untrack(() => {
+      loaded = true;
+      // 接力：刚销毁的上一个实例放的也是这个文件（抬到全屏 / 放回窗口 / 转屏重排）→ 从它停下的地方接着来
+      const r = relay && relay.key === rkey() && Date.now() - relay.at < 4000 ? relay : null;
+      relay = null;
+      if (r) { resumeChecked = true; userPaused = r.paused; if (r.t > 0.3) cur = r.t; }
+      load(r ? r.t : 0);
+    });
+  });
   $effect(() => { if (!active) untrack(() => { cancelCd(); try { if (videoEl && !videoEl.paused) videoEl.pause(); } catch {} }); });
 
   // src 就绪后尝试自动播放（失败=移动端策略，留暂停态+控件，用户点播放）
   $effect(() => {
     const s = src, v = videoEl;
     if (!s || !v || !active) return;
-    untrack(() => { if (userPaused || ended) return; v.play().catch(() => { showControls(); }); });
+    untrack(() => { if (userPaused || ended || scrubHeld) return; v.play().catch(() => { showControls(); }); });
   });
 
   // —— 电脑：单击播放 / 暂停，双击全屏 ——
@@ -817,17 +906,16 @@
 
   // —— 触屏手势 ——
   // 抬手 / 移动挂在 window 上按 pointerId 过滤：宿主滑轨抢了捕获也照样收得到；只有归自己的手势才 setPointerCapture。
-  let wrap = $state(), pager = $state(), stage = $state();
-  let selfPage = $state(true);        // 外框 .vw-page 直接挂着 → 自己做横滑翻页；嵌在别人的滑轨里 → 横滑交还宿主
+  let wrap = $state(), stage = $state();
+  let selfPage = $state(true);        // 外框 .vw-page 直接挂着；false = 嵌在别人的滑轨里（混排画廊）：下滑关闭的跟手缩小自己演
   let g = null;
   let lastTap = { t: 0, x: 0, side: '' };
   // 下滑关闭跟手：{ x, y, k }。外框自己的页（selfPage）只位移，缩小与圆角交给外框舞台（dragProgress）；
   // 混排画廊里外框不缩舞台（dragLift:false）→ 照画廊图片页同款：跟手平移 + 按下滑距离缩到 0.6，播放器自己做
   let drag = $state(null), dragP = 0, dragAnim = null;
-  let peek = $state(false);
   let seekUi = $state(null);          // { t, d }：横向拖动 seek 的大气泡
   let levelUi = $state(null), levelT = null;   // { kind:'bright'|'vol', v }
-  const vt = velocityTracker(100), vty = velocityTracker(100);   // 横向（翻页 / seek）与竖向（下滑关闭）甩速
+  const vty = velocityTracker(100);   // 竖向（下滑关闭）甩速
 
   function sideOf(x) { const r = wrap.getBoundingClientRect(); const q = (x - r.left) / (r.width || 1); return q < 1 / 3 ? 'l' : q > 2 / 3 ? 'r' : 'c'; }
   function startLp() {
@@ -853,7 +941,6 @@
     if (e.target?.closest?.('button, a, [role="slider"]')) return;
     const r = wrap.getBoundingClientRect();
     g = { id: e.pointerId, x0: e.clientX, y0: e.clientY, mode: 'maybe', W: r.width || 1, H: r.height || 1, q0: (e.clientX - r.left) / (r.width || 1), from: 0, rel: null };
-    vt.reset(); vt.add(e.clientX, e.timeStamp);
     vty.reset(); vty.add(e.clientY, e.timeStamp);
     if (dragAnim) { dragAnim.cancel(); dragAnim = null; drag = null; dragP = 0; viewer.dragProgress(0); }
     listen(true);
@@ -866,19 +953,16 @@
   function gMove(e) {
     if (!g || e.pointerId !== g.id) return;
     const dx = e.clientX - g.x0, dy = e.clientY - g.y0;
-    vt.add(e.clientX, e.timeStamp); vty.add(e.clientY, e.timeStamp);
+    vty.add(e.clientY, e.timeStamp);
     if (g.mode === 'lp' || g.mode === 'pass') return;
     if (g.mode === 'maybe') {
       if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
       clearTimeout(lpT);
       if (locked) { g.mode = 'pass'; return; }
       if (Math.abs(dx) > Math.abs(dy)) {
-        if (viewer.count > 1 && !fsOn) {
-          if (!selfPage) { g.mode = 'pass'; return; }
-          own('page'); peek = true;
-        } else if (effDur > 0) {
-          own('seek'); g.from = effCur; g.rel = viewer.chrome.hold(); scrubbing = true; scrubT = g.from; wantStoryboard();
-        } else { g.mode = 'pass'; return; }
+        // 横滑 = 拖进度（画廊里也是：换文件走顶栏的上一个 / 下一个）
+        if (effDur > 0) { own('seek'); g.from = effCur; g.rel = viewer.chrome.hold(); scrubStart(g.from); }
+        else { g.mode = 'pass'; return; }
       } else if (fsOn) {
         if (g.q0 < 1 / 3) { own('bright'); g.from = bright; }
         else if (g.q0 > 2 / 3) { own('vol'); g.from = muted ? 0 : volume; }
@@ -888,16 +972,10 @@
       else own('fsup');
     }
     switch (g.mode) {
-      case 'page': {
-        const can = dx < 0 ? viewer.canNext : viewer.canPrev;
-        const x = can ? dx : dx * 0.3;
-        if (pager) pager.style.transform = `translate3d(${x}px,0,0)`;
-        break;
-      }
       case 'seek': {
-        const span = Math.min(effDur, 90);
+        const span = Math.min(effDur, 90);   // 滑过整个屏宽 = 90 秒（短片 = 全长）
         const tt = Math.max(0, Math.min(effDur, g.from + (dx / g.W) * span));
-        seekUi = { t: tt, d: tt - g.from }; scrubT = tt;
+        seekUi = { t: tt, d: tt - g.from }; scrubInput(tt);
         break;
       }
       case 'bright': setBright(g.from - dy / (g.H * 0.7)); showLevel('bright', bright); break;
@@ -940,11 +1018,10 @@
     endLp();
     switch (s.mode) {
       case 'maybe': tap(e); return;
-      case 'page': settlePage(dx, vt.get(), s.W); return;
       case 'seek': {
         const tt = seekUi ? seekUi.t : s.from;
-        seekUi = null; scrubbing = false; s.rel?.();
-        seekTo(tt);
+        seekUi = null; s.rel?.();
+        scrubEnd(tt);
         return;
       }
       case 'bright': hideLevel(); return;
@@ -959,9 +1036,8 @@
     if (!g || e.pointerId !== g.id) return;
     const s = g; g = null; listen(false);
     endLp();
-    if (s.mode === 'seek') { seekUi = null; scrubbing = false; s.rel?.(); }
+    if (s.mode === 'seek') { seekUi = null; s.rel?.(); scrubEnd(s.from); }   // 手势被系统收走：回到拖之前的位置
     else if (s.mode === 'dismiss') settleDrag();
-    else if (s.mode === 'page') settlePage(0, 0, s.W);
     else if (s.mode === 'bright' || s.mode === 'vol') hideLevel();
   }
 
@@ -977,35 +1053,15 @@
     viewer.chrome.toggle();
   }
 
-  // 横滑翻页：过 22% 宽或甩速 > 600px/s 就翻（WAAPI 滑走再换条目），否则弹回
-  function settlePage(dx, v, W) {
-    const el = pager;
-    const dir = dx < 0 ? 1 : -1;
-    const can = dir > 0 ? viewer.canNext : viewer.canPrev;
-    const go = can && dx !== 0 && (Math.abs(dx) > W * 0.22 || (Math.abs(v) > 600 && Math.sign(v) === Math.sign(dx)));
-    const from = can ? dx : dx * 0.3;
-    if (!el) { peek = false; if (go) (dir > 0 ? viewer.next() : viewer.prev()); return; }
-    el.style.transform = '';
-    if (go) {
-      const a = animate(el, [{ transform: `translate3d(${from}px,0,0)` }, { transform: `translate3d(${-dir * (W + 16)}px,0,0)` }], { d: DUR.base, e: EASE.out });
-      const fin = () => { if (dead) return; dir > 0 ? viewer.next() : viewer.prev(); };
-      if (a) a.finished.then(fin, fin); else fin();
-    } else {
-      const a = animate(el, [{ transform: `translate3d(${from}px,0,0)` }, { transform: 'translate3d(0,0,0)' }], { d: DUR.quick, e: EASE.out });
-      const fin = () => { try { a?.cancel(); } catch {} peek = false; };
-      if (a) a.finished.then(fin, fin); else fin();
-    }
-  }
-  function peekBg(it) {
-    if (!it) return null;
-    let u = null;
-    if (it.kind === 'image') u = it.thumbUrl || it.previewUrl || it.dataUrl || it.url;
-    else if (it.kind === 'video' && it.poster && it.poster !== it.url) u = it.poster;
-    return u ? `url("${u}")` : null;
-  }
-
   onMount(() => {
     selfPage = !viewer.inShell || !!wrap?.parentElement?.classList.contains('vw-page');
+    // 全屏接力：上一个实例留下的全屏（全屏里换了视频）直接认领；或者它刚把预览从内嵌宿主抬上来、等这边进全屏
+    if (active) {
+      const kept = fsTake(), c = fsCarry;
+      fsCarry = null;
+      if (kept) { fsMode = kept; fsReq = kept === 'web'; }
+      else if (c && Date.now() - c.at < 3000) { if (!vw && c.vw) { vw = c.vw; vh = c.vh; } enterFs(); }
+    }
     const onVis = () => { if (document.visibilityState === 'hidden') saveResume(); };
     document.addEventListener('fullscreenchange', onFsChange);
     document.addEventListener('visibilitychange', onVis);
@@ -1027,12 +1083,23 @@
   });
   onDestroy(() => {
     saveResume();
+    // 接力：留下停在哪、是不是用户自己暂停的（新实例 4 秒内认领，见 load 那段 $effect）。
+    // 只在预览还开着时留（换宿主 / 重排；认领时再核对是不是同一个文件）；关掉查看器再重开不算接力，照常出「从 x:xx 继续」。
+    // 销毁回调里读响应式状态拿到的是变更前的旧值，所以问 previewIsOpen()（普通变量）
+    const open = previewIsOpen();
+    relay = open && (started || effCur > 0.3) && !ended && !errored ? { key: rkey(), t: effCur, paused: userPaused, at: Date.now() } : null;
     dead = true;
+    liveReset();
     if (g) { g = null; listen(false); }
     dragAnim?.cancel(); dragAnim = null;
     clearTimeout(lpT); clearTimeout(skipTimer); clearTimeout(stallT); clearTimeout(osdT); clearTimeout(flashT);
     clearTimeout(resumeT); clearTimeout(lockT); clearTimeout(levelT); clearTimeout(volT); clearTimeout(metaT); clearTimeout(posterT); clearInterval(cdT);
-    if (fsMode) exitFs(); else resetBright();
+    if (fsMode) {
+      // 全屏里换到另一个视频（查看器还开着）：全屏留给随后挂上的新实例认领，1.5 秒没人认领（下一项不是视频）再退；
+      // 查看器关了就当场退出
+      const m = fsMode;
+      if (open) { fsMode = ''; resetBright(); fsHold(m); } else exitFs();
+    } else resetBright();
     awake.set(false);
     try { if (document.pictureInPictureElement === videoEl) document.exitPictureInPicture(); } catch {}
     killPump();
@@ -1043,6 +1110,8 @@
   const timeText = $derived(remain && effDur ? '−' + fmtTime(Math.max(0, effDur - shownT)) : fmtTime(shownT));
   const nocur = $derived(!touch && playing && !controls && !scrubbing);
   const clusterOn = $derived(controls || !started);
+  // 触屏中央三钮露不露（玻璃底只在露着时挂滤镜，见 kit/clusterGlass.js）；查看器正在关（整体淡出）时先撤玻璃
+  const clusterVis = $derived(clusterOn && !scrubbing && !ended && !lp2x && !seekUi && !locked && !pipNative);
 </script>
 
 <!-- 进度轨悬停 / 拖动气泡上方：storyboard 缩略帧 + 章节名 -->
@@ -1139,21 +1208,9 @@
 
 <div class="vp-wrap" class:touch class:nocur class:lift={!!drag && !selfPage} class:pipn={pipNative} bind:this={wrap}
   style:transform={drag ? (selfPage ? `translate3d(0,${drag.y}px,0)` : `translate3d(${drag.x}px,${drag.y}px,0) scale(${drag.k})`) : null}>
-  <div class="vp-pager" bind:this={pager}>
-    {#if peek}
-      {#each [-1, 1] as d (d)}
-        {@const it = viewer.itemAt(viewer.index + d)}
-        {#if it}
-          <div class="vp-peek" class:prev={d < 0} style:background-image={peekBg(it)}>
-            {#if !peekBg(it)}<VIcon name={it.kind === 'audio' ? 'audio' : it.kind === 'video' ? 'video' : 'file'} size={40} />{/if}
-          </div>
-        {/if}
-      {/each}
-    {/if}
-
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div class="vp-stage" bind:this={stage} role="presentation" onpointerdown={stageDown} onclick={stageClick}
-      style:touch-action={selfPage || fsOn ? 'none' : 'pan-x'}>
+      style:touch-action="none">
       <!-- data-noheal：播放器有自己的回退链（runStep），全局 mediaHeal 别再并行改 src。出错时也一直挂着，重试才有元素可用 -->
       <!-- svelte-ignore a11y_media_has_caption -->
       <video bind:this={videoEl} class="vp-video" src={src || undefined} poster={posterShown || undefined} data-noheal
@@ -1218,13 +1275,11 @@
         {#key flashUi.id}<div class="vp-flash"><VIcon name={flashUi.icon} size={30} /></div>{/key}
       {/if}
 
-      <!-- 横向拖动 seek：大气泡 = 缩略帧 + 目标时间 + 偏移 -->
+      <!-- 横向拖动 seek：画面实时跟着走，顶部一枚胶囊报目标时间与偏移 -->
       {#if seekUi}
-        <div class="vp-seek">
-          {#if sb}<span class="vp-sbf" style={sbStyle(seekUi.t, 1.5)}></span>{/if}
-          <span class="vp-seek-t">{fmtTime(seekUi.t)}<em> / {fmtTime(effDur)}</em></span>
-          <span class="vp-seek-d">{seekUi.d >= 0 ? '+' : '−'}{fmtTime(Math.abs(seekUi.d))}</span>
-        </div>
+        <div class="vp-top still"><span class="vw-pill vp-seek">
+          <b>{fmtTime(seekUi.t)}</b><em>/ {fmtTime(effDur)}</em><i>{seekUi.d >= 0 ? '+' : '−'}{fmtTime(Math.abs(seekUi.d))}</i>
+        </span></div>
       {/if}
 
       <!-- 卡顿提示：切流畅 -->
@@ -1259,13 +1314,14 @@
       {/if}
 
       <!-- 触屏：中央 −10 / 播放暂停 / +10（随控件显隐） -->
-      {#if touch && !errored && !ended && !lp2x && !seekUi && !locked && !pipNative}
-        <div class="vp-cluster" class:hide={!clusterOn || scrubbing}>
-          <button type="button" class="vp-cbtn" onclick={() => doSkip('l')} aria-label={t('快退 10 秒')} tabindex={clusterOn ? 0 : -1}><VIcon name="skipBack10" size={28} /></button>
-          <button type="button" class="vp-cbtn main" class:busy={showSpin} onclick={togglePlay} aria-label={playing ? t('暂停') : t('播放')} tabindex={clusterOn ? 0 : -1}>
+      {#if touch && !errored}
+        <!-- 玻璃底是舞台里的兄弟节点（clusterGlass 插在这层前面、按按钮的盒子摆），按钮自己只画图标 -->
+        <div class="vp-cluster" class:hide={!clusterVis} use:clusterGlass={{ on: clusterVis && !viewer.closing }}>
+          <button type="button" class="vp-cbtn" data-glass onclick={() => doSkip('l')} aria-label={t('快退 10 秒')} tabindex={clusterVis ? 0 : -1}><VIcon name="skipBack10" size={30} stroke={1.9} /></button>
+          <button type="button" class="vp-cbtn main" data-glass class:busy={showSpin} onclick={togglePlay} aria-label={playing ? t('暂停') : t('播放')} tabindex={clusterVis ? 0 : -1}>
             <VIcon name={playing ? 'pause' : 'play'} size={34} />
           </button>
-          <button type="button" class="vp-cbtn" onclick={() => doSkip('r')} aria-label={t('快进 10 秒')} tabindex={clusterOn ? 0 : -1}><VIcon name="skipFwd10" size={28} /></button>
+          <button type="button" class="vp-cbtn" data-glass onclick={() => doSkip('r')} aria-label={t('快进 10 秒')} tabindex={clusterVis ? 0 : -1}><VIcon name="skipFwd10" size={30} stroke={1.9} /></button>
         </div>
       {/if}
 
@@ -1273,7 +1329,6 @@
       {#if locked && lockUi}
         <div class="vp-lock"><button type="button" class="vw-pill vp-pillbtn" onclick={unlock}><VIcon name="unlock" size={18} />{t('点按解锁')}</button></div>
       {/if}
-    </div>
   </div>
 </div>
 
@@ -1282,14 +1337,8 @@
   /* 混排画廊里下滑缩小：黑底与画面外的黑边透明，只剩画面本身跟手（同画廊里的图片） */
   .vp-wrap.lift, .vp-wrap.lift .vp-video { background: transparent; }
   .vp-wrap.nocur, .vp-wrap.nocur * { cursor: none; }
-  .vp-pager { position: absolute; inset: 0; }
   .vp-stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
   .vp-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-
-  /* 横滑翻页时左右邻居的占位（海报 / 缩略图） */
-  .vp-peek { position: absolute; top: 0; bottom: 0; width: 100%; left: calc(100% + 16px); background: #000 center / contain no-repeat;
-    display: flex; align-items: center; justify-content: center; color: rgba(255, 255, 255, .4); }
-  .vp-peek.prev { left: calc(-100% - 16px); }
 
   /* 错误态铺满只为居中：自身不吃指针（出错时照样能下滑关闭 / 翻页），只有按钮接手 */
   .vp-err { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; background: #000; }
@@ -1325,16 +1374,21 @@
   .vp-next-c { font-size: 14px; color: rgba(255, 255, 255, .78); font-variant-numeric: tabular-nums; }
   .vp-next-a { display: flex; gap: 10px; margin-top: 10px; }
 
-  /* 触屏中央三钮 */
-  .vp-cluster { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: clamp(28px, 12cqw, 64px);
-    pointer-events: none; transition: opacity var(--mo-quick) var(--ea-fade); }
-  .vp-cluster.hide { opacity: 0; }
+  /* 触屏中央三钮：液态玻璃（kit/clusterGlass.js 把玻璃底铺在舞台里、按钮正下方；生效时容器带 .glass，按钮自己不画底）。
+     显隐只动每个按钮自己的不透明度——容器（玻璃的祖先）一带 opacity，玻璃就采不到画面、变成黑块。
+     不支持 SVG backdrop 的内核（iOS / Firefox）走退路：按钮自己一层磨砂 + 细高光边 */
+  .vp-cluster { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: clamp(28px, 12cqw, 64px); pointer-events: none; }
   .vp-cluster:not(.hide) .vp-cbtn { pointer-events: auto; }
-  .vp-cbtn { width: 52px; height: 52px; border: 0; padding: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-    background: rgba(0, 0, 0, .42); color: #fff; transition: transform var(--mo-tap) var(--ea-out), background-color var(--mo-tap) var(--ea-out); }
-  .vp-cbtn.main { width: 68px; height: 68px; background: rgba(0, 0, 0, .5); }
+  .vp-cbtn { position: relative; width: 52px; height: 52px; border: 0; padding: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    color: #fff; background: rgba(22, 22, 24, .38); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .22), inset 0 1px 0 rgba(255, 255, 255, .18);
+    -webkit-backdrop-filter: blur(14px) saturate(1.5); backdrop-filter: blur(14px) saturate(1.5); -webkit-tap-highlight-color: transparent;
+    transition: opacity var(--mo-quick) var(--ea-fade), transform 240ms cubic-bezier(.2, .8, .2, 1); }
+  .vp-cbtn.main { width: 68px; height: 68px; }
+  .vp-cbtn :global(.vw-ic) { filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .28)); }
+  .vp-cluster:global(.glass) .vp-cbtn { background: none; box-shadow: 0 6px 22px rgba(0, 0, 0, .16); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .vp-cluster.hide .vp-cbtn { opacity: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .vp-cbtn.busy :global(.vw-ic) { opacity: 0; }
-  .vp-cbtn:active { transform: scale(.94); background: rgba(0, 0, 0, .62); }
+  .vp-cbtn:active { transform: scale(1.08); }
 
   /* 中央闪烁 */
   .vp-flash { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; border-radius: 50%;
@@ -1366,12 +1420,12 @@
   .vp-level-bar i { position: absolute; inset: 0; background: #fff; transform-origin: left center; }
   @keyframes vpPillIn { from { opacity: 0; scale: .92; } }
 
-  /* —— 横向拖动 seek 大气泡 —— */
-  .vp-seek { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 8px;
-    pointer-events: none; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .6); }
-  .vp-seek-t { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .vp-seek-t em { font-style: normal; font-weight: 500; color: rgba(255, 255, 255, .6); font-size: 16px; }
-  .vp-seek-d { font-size: 13px; color: rgba(255, 255, 255, .75); font-variant-numeric: tabular-nums; }
+  /* —— 横向拖动 seek：顶部时间胶囊（目标时间 / 总长 + 偏移）—— */
+  .vp-top.still { animation: none; }
+  .vp-seek { padding: 9px 16px; gap: 6px; font-variant-numeric: tabular-nums; }
+  .vp-seek b { font-size: 16px; }
+  .vp-seek em { font-style: normal; color: rgba(255, 255, 255, .6); font-size: 13px; }
+  .vp-seek i { font-style: normal; margin-left: 6px; padding-left: 10px; border-left: 1px solid rgba(255, 255, 255, .22); color: rgba(255, 255, 255, .86); font-size: 13px; }
   .vp-sbf { display: block; flex: none; border-radius: 8px; background-color: #111; background-repeat: no-repeat; box-shadow: 0 0 0 1px rgba(255, 255, 255, .16); }
 
   /* —— 底栏上沿：卡顿提示（居中）/ 续播（左） —— */
@@ -1390,7 +1444,14 @@
   /* —— 底栏内容（容器、渐变、显隐由外框 .vw-bottom 给）—— */
   .vp-bar { display: flex; flex-direction: column; padding-inline: env(safe-area-inset-left, 0px) env(safe-area-inset-right, 0px); }
   .vp-row { display: flex; align-items: center; gap: 2px; min-width: 0; }
-  .vp-bar.fine .vp-row { gap: 4px; margin-top: 2px; }
+  /* 播放器这一族图标是「实心块 + 线」：线条描边提到 2，和实心的播放 / 暂停一样重（自带 stroke-width 的细节不受影响）。
+     电脑：按钮 40、图标 24（外框通用的 32 / 18 压在大画面上太小太细）；触屏图标 24 */
+  .vp-bar :global(.vw-btn .vw-ic) { --s: 24px; }
+  .vp-bar :global(.vw-btn .vw-ic svg) { stroke-width: 2; }
+  .vp-bar :global(.vw-btn .vw-ic) { filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, .35)); }
+  .vp-bar.fine { padding-inline: 4px; }
+  .vp-bar.fine .vp-row { gap: 2px; margin-top: 4px; }
+  .vp-bar.fine :global(.vw-btn) { width: 40px; height: 40px; border-radius: 10px; }
   .vp-sp { flex: 1; min-width: 4px; }
   .vp-bar :global(.vp-rail) { margin: 0 2px; }
   .vp-railk { display: contents; }
@@ -1402,7 +1463,7 @@
   .vp-bar :global(.vp-chap) { font-size: 12px; font-weight: 600; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .7); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .vp-time { display: inline-flex; align-items: center; gap: 0; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: none; cursor: pointer;
-    color: #fff; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; text-shadow: 0 1px 2px rgba(0, 0, 0, .5); white-space: nowrap; min-width: 0; }
+    color: #fff; font: inherit; font-size: 14px; font-variant-numeric: tabular-nums; text-shadow: 0 1px 2px rgba(0, 0, 0, .5); white-space: nowrap; min-width: 0; }
   .vp-time em { font-style: normal; color: rgba(255, 255, 255, .6); margin-left: 3px; }
   .vp-tchap { margin-left: 8px; color: rgba(255, 255, 255, .85); overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
   @media (hover: hover) { .vp-time:hover { background: var(--vw-hover); } }
@@ -1424,4 +1485,5 @@
     transform: scaleX(0); transition: transform var(--mo-micro) var(--ea-std); }
   .vp-cc.cc-on i { transform: scaleX(1); }
   :global(.vw-touch) .vp-cc i { bottom: 6px; }
+  .vp-bar.fine .vp-cc i { bottom: 5px; width: 16px; margin-left: -8px; }
 </style>

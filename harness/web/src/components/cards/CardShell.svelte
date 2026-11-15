@@ -207,7 +207,7 @@
     color: var(--text3);
   }
 
-  @media (max-width: 699px) {
+  @media (max-width: 599px), (max-width: 699px) and (max-device-aspect-ratio: 699/1000) {
     .live .head {
       padding: 13px 14px 8px;
     }

@@ -18,7 +18,7 @@ import { repairToolPairing } from "./pairing.ts";
 import { PrefixAudit, type RewriteKind } from "./prefix-audit.ts";
 import { messageKind, skillLoadedIn } from "./injections.ts";
 import { worldBaseline, worldDelta, worldTokens, type WorldSection, type WorldTokens, type WorldValues } from "./world-state.ts";
-import { DEFAULT_MEDIA_BUDGET, planRetirement, retiredText, type MediaItem } from "./media-budget.ts";
+import { DEFAULT_MEDIA_BUDGET, fitImageBytes, planRetirement, retiredText, type MediaItem } from "./media-budget.ts";
 import { LoopGuard } from "./loop-guard.ts";
 import { defaultProfile, profileProviderExtras, type ModelProfile } from "./profile.ts";
 
@@ -477,6 +477,98 @@ export class AgentState {
       budget: this.budget,
       ...(extras ? { hints: { providerExtras: extras } } : {}),
     };
+  }
+
+  // 单张图的上限（解码后字节）：目录 / 型号表配的，与这个会话里从「图太大」报错里读出来的（按型号记，换了型号不串），取小的。
+  // 读出来的那个不知道上游按原始字节还是 base64 算，留 26% 余量（base64 = 原始 × 4/3）。
+  private readonly learnedImageLimits = new Map<string, number>();
+  private readonly imageSizeCache = new Map<string, number>();
+
+  learnImageLimit(bytes: number, fromError = true): void {
+    const key = `${this.adapter.id}/${this.adapter.model}`;
+    const limit = Math.floor(fromError ? bytes * 0.74 : bytes);
+    const prev = this.learnedImageLimits.get(key);
+    if (limit > 0 && (prev === undefined || limit < prev)) this.learnedImageLimits.set(key, limit);
+  }
+
+  imageByteLimit(): number | undefined {
+    const configured = this.adapter.capabilities.mediaBudget?.maxImageBytes;
+    const learned = this.learnedImageLimits.get(`${this.adapter.id}/${this.adapter.model}`);
+    const limits = [configured, learned].filter((n): n is number => typeof n === "number" && n > 0);
+    return limits.length ? Math.min(...limits) : undefined;
+  }
+
+  // 最大那张图有多大（解码后字节；退役的不算）——报错里读不出上限时，按它的一半学一个上限
+  largestImageBytes(): number {
+    let max = 0;
+    this.forEachImage((block) => {
+      max = Math.max(max, this.imageBytes(block) ?? 0);
+    });
+    return max;
+  }
+
+  private forEachImage(visit: (block: Extract<Block, { t: "image" }>) => void): void {
+    const walk = (block: Block) => {
+      if (block.t === "image" && !block.retired) visit(block);
+      else if (block.t === "tool_result") block.content.forEach(walk);
+    };
+    for (const message of this.messages) message.content.forEach(walk);
+  }
+
+  private imageBytes(block: Extract<Block, { t: "image" }>): number | undefined {
+    if (block.data) return Buffer.byteLength(block.data, "base64");
+    if (!block.asset || block.url || !this.resolveImageAsset) return undefined;
+    let n = this.imageSizeCache.get(block.asset);
+    if (n === undefined) {
+      try {
+        n = Buffer.byteLength(this.resolveImageAsset(block.asset), "base64");
+      } catch {
+        return undefined; // 资产丢了：materialize 那边自己会报
+      }
+      this.imageSizeCache.set(block.asset, n);
+    }
+    return n;
+  }
+
+  // 发请求之前：转录里（含工具结果里嵌的）超过单张上限的图，压到上限以内、改写进转录（存成新资产，之后每次请求字节都一样）；
+  // 压不下来的退役成一句文字。这样已经卡在「图太大」上的会话，点「接着做」也能接着跑。没有上限就什么都不做。
+  // 返回改了几张。
+  async fitImagesToLimit(): Promise<number> {
+    const limit = this.imageByteLimit();
+    if (!limit) return 0;
+    const over: Extract<Block, { t: "image" }>[] = [];
+    this.forEachImage((block) => {
+      const n = this.imageBytes(block);
+      if (n !== undefined && n > limit) over.push(block);
+    });
+    if (!over.length) return 0;
+    for (const block of over) {
+      let fitted: Awaited<ReturnType<typeof fitImageBytes>> = null;
+      try {
+        const b64 = block.data ?? this.resolveImageAsset!(block.asset!);
+        fitted = await fitImageBytes(Buffer.from(b64, "base64"), limit);
+      } catch {
+        fitted = null;
+      }
+      if (!fitted) {
+        console.warn(`[media] image ${block.name ?? block.asset ?? "(inline)"} is over the ${limit}-byte limit of ${this.adapter.model} and could not be shrunk; retiring it`);
+        block.retired = true;
+        continue;
+      }
+      let next: Block = { t: "image", mime: fitted.mime, data: fitted.data.toString("base64"), ...(block.name ? { name: block.name } : {}) };
+      try {
+        next = this.externalizeBlocks([next])[0];
+      } catch {
+        /* 存不下资产就内联着 */
+      }
+      delete block.data;
+      delete block.asset;
+      delete block.url;
+      delete block.fullRes;
+      Object.assign(block, next);
+    }
+    this.noteRewrite("media-retire");
+    return over.length;
   }
 
   // Resolve immutable session image references only at the provider boundary.

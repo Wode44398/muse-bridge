@@ -30,6 +30,7 @@ import { atomicWriteFileSync } from "./atomic-write.ts";
 import { coreUrl } from "./core-link.ts";
 import { assertPublicEndpoint } from "./endpoint-guard.ts";
 import { MK, type Source, type Tier, type TierValue } from "./model-knowledge.ts";
+import { cleanCustomParams, type CustomParams } from "./custom-params.ts";
 import { customProvidersDir, sharedProvidersDir } from "./paths.ts";
 import { tenantMode } from "./tenant.ts";
 import { slotView, tierForLevel } from "./custom-tiers.ts";
@@ -54,6 +55,10 @@ export interface CustomModel {
   effortField: string;
   effortDefault: string;
   alwaysThinks: boolean; // 不发参数也会思考：OpenAI 协议回传 reasoning_content
+  // 提示缓存多久变冷（分钟；0 = 不缓存 / 不提示）。只有用户在 bridge 模型中心填过才有；没有 = 按 model-knowledge/cache-ttl.mjs 自动
+  cacheTtl?: number;
+  // 调用参数（温度、停止序列、额外请求体…，custom-params.ts）。只有 bridge 模型中心的高级调用配置设过才有
+  params?: CustomParams;
   source: Partial<Record<"contextWindow" | "maxOutput" | "vision" | "thinking", Source>>;
 }
 
@@ -242,6 +247,7 @@ function normalizeModel(raw: unknown, i: number, protocol: CustomProtocol, stric
     effortField = "";
     effortDefault = "";
   }
+  const params = cleanCustomParams((m as { params?: unknown }).params);
   // dimensio 只有七级思考档：放不进槽的档位以前静默丢掉（菜单里选不到、也永远发不出去）——用户提交的照实拒
   if (strict && thinking !== "none") {
     const lost = slotView({ thinking, efforts, effortDefault, alwaysThinks }).dropped;
@@ -262,6 +268,8 @@ function normalizeModel(raw: unknown, i: number, protocol: CustomProtocol, stric
     effortField,
     effortDefault,
     alwaysThinks,
+    ...(MK.normalizeCacheTtl(m!.cacheTtl) !== undefined ? { cacheTtl: MK.normalizeCacheTtl(m!.cacheTtl) } : {}),
+    ...(params ? { params } : {}),
     source,
   };
 }
@@ -395,7 +403,7 @@ export interface HostBuiltin {
   name: string;
   defaultModel?: string;
   plugin: PluginInfo;
-  models: { id: string; label: string; contextWindow?: number; maxOutput?: number; vision?: boolean }[];
+  models: { id: string; label: string; contextWindow?: number; maxOutput?: number; vision?: boolean; cacheTtl?: number }[];
   shared?: boolean;
 }
 function cleanBuiltins(raw: unknown): Map<string, HostBuiltin> | null {
@@ -418,6 +426,7 @@ function cleanBuiltins(raw: unknown): Map<string, HostBuiltin> | null {
         ...(Number.isFinite(m.contextWindow) && m.contextWindow > 0 ? { contextWindow: Math.round(m.contextWindow) } : {}),
         ...(Number.isFinite(m.maxOutput) && m.maxOutput > 0 ? { maxOutput: Math.round(m.maxOutput) } : {}),
         ...(typeof m.vision === "boolean" ? { vision: m.vision } : {}),
+        ...(MK.normalizeCacheTtl(m.cacheTtl) !== undefined ? { cacheTtl: MK.normalizeCacheTtl(m.cacheTtl) } : {}),
       });
       if (models.length >= MAX_MODELS) break;
     }

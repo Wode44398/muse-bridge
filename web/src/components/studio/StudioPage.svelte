@@ -16,7 +16,7 @@
   import { openSettings } from '../../lib/settingsNav.svelte.js';
   import { drag, dropZone } from '../../lib/dragdrop.svelte.js';
   import { t } from '../../lib/i18n.js';
-  import { studio, startStudio, onJobDone, isActive, saveSide, mediaSrc, takeInbox } from '../../modules/studio/media.svelte.js';
+  import { studio, startStudio, onJobDone, isActive, saveSide, mediaSrc, takeInbox, newImageThread } from '../../modules/studio/media.svelte.js';
   import { usingFixture } from '../../modules/studio/api.js';
   import { PAGES, visual, pageOf } from '../../modules/studio/kinds.js';
   import { closeTopLayer, layerCount } from '../../modules/studio/layers.js';
@@ -62,6 +62,18 @@
   const dockAvail = $derived(!compact && workW >= 980);
   const dockOn = $derived(dockAvail && studio.side.dock);
   function toggleDock() { studio.side.dock = !studio.side.dock; saveSide(); }
+  // 栏头的分段平时绝对居中；左右两组按钮多了（如图像页的「新的一张」）、中栏又窄时会压上去——
+  // 放不下居中就改排在两组之间（tight），宁可不居中也不重叠
+  // 内边距也要算：桌面壳下右内边距里含系统窗控的让位（app.css），比左边宽得多
+  let cbarEl = $state();
+  let cbarW = $state(0), cbarLW = $state(0), cbarRW = $state(0), tabsW = $state(0);
+  const cbarPad = $derived.by(() => {
+    void cbarW;
+    if (!cbarEl) return [8, 8];
+    const cs = getComputedStyle(cbarEl);
+    return [parseFloat(cs.paddingLeft) || 0, parseFloat(cs.paddingRight) || 0];
+  });
+  const tabsTight = $derived(!!tabsW && cbarW / 2 - tabsW / 2 < Math.max(cbarPad[0] + cbarLW, cbarPad[1] + cbarRW) + 8);
 
   // —— 创作页 keep-alive：首次进入才挂载，之后休眠保留（草稿、滚动、播放器都在）——
   let mounted = $state({ [studio.page]: true });
@@ -269,8 +281,8 @@
 
     <div class="sd-work" bind:clientWidth={workW}>
       <section class="sd-center">
-        <header class="sd-band sd-cbar">
-          <div class="sd-cbar-l">
+        <header class="sd-band sd-cbar" class:tight={tabsTight} bind:clientWidth={cbarW} bind:this={cbarEl}>
+          <div class="sd-cbar-l" bind:clientWidth={cbarLW}>
             {#if !railVisible || compact}
               <button class="sd-ib" aria-label={t('返回')} onclick={back}>{@html icon('back')}</button>
               <button class="sd-ib sd-rail-btn" aria-label={t('打开作品栏')} aria-expanded={railVisible} onclick={toggleRail}>
@@ -281,12 +293,15 @@
             {#if compact}{@render brand()}{/if}
           </div>
           {#if !compact}
-            <div class="sd-tabs">
+            <div class="sd-tabs" bind:clientWidth={tabsW}>
               <Segmented options={tabs} value={studio.page} onchange={go} label={t('创作页')} item={tabDrop}
                 overKey={drag.on ? drag.overKey : ''} keyOf={(p) => 'studio-seg:' + p} onkeydown={tabKey} />
             </div>
           {/if}
-          <div class="sd-cbar-r">
+          <div class="sd-cbar-r" bind:clientWidth={cbarRW}>
+            {#if studio.page === 'image' && studio.views.image.turns.length}
+              <button class="sd-ib" aria-label={t('新的一张')} title={t('新的一张')} onclick={newImageThread}>{@html icon('compose')}</button>
+            {/if}
             <button class="sd-ib sd-cap" class:live={activeJobs.length > 0} class:seen={!activeJobs.length && studio.unseen > 0} bind:this={capsuleEl}
               aria-label={activeJobs.length ? t('{n} 个任务进行中', { n: activeJobs.length }) : t('任务')} aria-expanded={trayOpen} onclick={toggleTray}>
               <!-- 在跑的朱已经在分段（哪一页）和作品栏（哪一件）上，任务钮只写个数（同一件任务三处红，复核 11-06 第二轮） -->

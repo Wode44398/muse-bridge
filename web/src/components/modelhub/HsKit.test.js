@@ -191,3 +191,55 @@ test('sameSet：顺序无关', () => {
   assert.equal(sameSet(['claude'], ['claude', 'dimensio']), false);
   assert.equal(sameSet([], []), true);
 });
+
+// —— 高级调用配置（11-15）——
+import { advDraft, advPayload, advProblem, svcAdvDraft, svcAdvPayload, svcAdvProblem } from './HsKit.js';
+
+test('advDraft / advPayload：没改过 = 全 null；改过的原样往返；自定义思考写法带上「总会思考」', () => {
+  const auto = { contextWindow: 200000, maxOutput: 32000, vision: true, thinking: 'effort', efforts: [{ id: 'low', name: 'Low', value: 'low' }], effortField: '', effortDefault: 'low', alwaysThinks: false };
+  const plain = { id: 'm', auto, agents: ['claude'] };
+  assert.deepEqual(advPayload(advDraft(plain)), { over: null, params: null, cacheTtl: null });
+  const m = { ...plain, cacheTtl: 30,
+    over: { contextWindow: 64000, vision: false, alwaysThinks: true, think: { thinking: 'budget', efforts: [{ id: 'hi', name: 'Hi', value: 8000 }], effortField: '', effortDefault: 'hi' } },
+    params: { temperature: 0.2, stop: ['END'], thinking: 'off', extraBody: '{"a":1}' } };
+  const p = advPayload(advDraft(m));
+  assert.deepEqual(p.over, { contextWindow: 64000, vision: false, alwaysThinks: true, think: { thinking: 'budget', efforts: [{ id: 'hi', name: 'Hi', value: 8000 }], effortField: '', effortDefault: 'hi' } });
+  assert.deepEqual(p.params, { temperature: 0.2, thinking: 'off', stop: ['END'], extraBody: '{"a":1}' });
+  assert.equal(p.cacheTtl, 30);
+  // 从自动切到自定义：起点抄自动的那份
+  const d = advDraft(plain);
+  d.thinkMode = 'custom';
+  assert.deepEqual(advPayload(d).over.think, { thinking: 'effort', efforts: [{ id: 'low', name: 'Low', value: 'low' }], effortField: '', effortDefault: 'low' });
+  d.think.thinking = 'none';
+  assert.deepEqual(advPayload(d).over.think, { thinking: 'none' });
+});
+
+test('advProblem：范围、Claude 的 4096、输出不大于窗口、档位、额外请求体', () => {
+  const d = advDraft({ id: 'm', auto: {}, agents: ['claude'] });
+  assert.equal(advProblem(d), '');
+  assert.match(advProblem({ ...d, ctx: 2048 }, { toClaude: true }), /4096/);
+  assert.equal(advProblem({ ...d, ctx: 2048 }, { toClaude: false }), '');
+  assert.match(advProblem({ ...d, ctx: 8000, out: 9000 }), /不能大于/);
+  assert.match(advProblem({ ...d, params: { ...d.params, extraBody: '[1]' } }), /JSON 对象/);
+  assert.match(advProblem({ ...d, params: { ...d.params, extraBody: '{' } }), /合法 JSON/);
+  assert.match(advProblem({ ...d, thinkMode: 'custom', think: { ...d.think, thinking: 'effort', efforts: [] } }), /至少要有一个档位/);
+  assert.equal(advProblem({ ...d, thinkMode: 'custom', think: { ...d.think, thinking: 'effort', efforts: [{ id: 'x' }] } }, { tierProblem: () => '坏档位' }), '坏档位');
+});
+
+test('svcAdv：兼容项三态、超时留空 = 600、重试留空 = 自动；请求头校验', () => {
+  const s = { compat: { slimBody: false }, timeoutSec: 600, retries: null, authStyle: 'bearer', headers: [{ name: 'X-A', value: '1' }] };
+  const d = svcAdvDraft(s);
+  assert.equal(d.compat.slimBody, 'off');
+  assert.equal(d.compat.promptCaching, 'auto');
+  assert.deepEqual(svcAdvPayload(d), { compat: { slimBody: false }, retries: null, timeoutSec: 600, authStyle: 'bearer', headers: [{ name: 'X-A', value: '1' }] });
+  d.compat.slimBody = 'auto'; d.field = 'max_completion_tokens'; d.retries = 3; d.timeout = 120;
+  assert.deepEqual(svcAdvPayload(d).compat, { maxTokensField: 'max_completion_tokens' });
+  assert.equal(svcAdvPayload(d).retries, 3);
+  assert.equal(svcAdvPayload(d).timeoutSec, 120);
+  assert.equal(svcAdvProblem(d), '');
+  assert.match(svcAdvProblem({ ...d, headers: [{ name: 'Authorization', value: 'x' }] }), /bridge 自己管/);
+  assert.match(svcAdvProblem({ ...d, headers: [{ name: 'bad name', value: 'x' }] }), /不合法/);
+  assert.match(svcAdvProblem({ ...d, headers: [{ name: 'X-A', value: '' }, { name: 'x-a', value: '' }] }), /重复/);
+  assert.match(svcAdvProblem({ ...d, retries: 9 }), /0–5/);
+  assert.equal(svcAdvProblem({ ...d, headers: [{ name: ' ', value: '' }] }), '', '空行不算');
+});

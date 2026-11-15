@@ -76,7 +76,8 @@ export const CARDS = {
     kind: 'image', label: 'FLUX.1 [dev]', desc: '文生图，可调步数、引导强度和尺寸', async: false,
     inputs: { text: true, multiTurn: false },
     params: [
-      P.enum('imageSize', '尺寸', FLUX_SIZES, { default: 'landscape_4_3' }),
+      // fal 的 image_size = 预设名 | { width, height }（openapi 的 ImageSize：宽高 1–14142），自定义宽高原样发对象
+      P.size('imageSize', '尺寸', FLUX_SIZES, { default: 'landscape_4_3', custom: { width: { min: 1, max: 14142 }, height: { min: 1, max: 14142 }, exact: true }, encode: 'object' }),
       P.num('numImages', '张数', 1, 4, { step: 1, integer: true, default: 1, group: 'basic' }),
       P.num('steps', '推理步数', 1, 50, { step: 1, integer: true, default: 28 }),
       P.num('guidanceScale', '引导强度', 1, 20, { step: 0.5, default: 3.5 }),

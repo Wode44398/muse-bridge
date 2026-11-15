@@ -112,6 +112,10 @@ html[data-wco="1"] .claude-slide .fab.round {
   top: calc((var(--wco-h, 40px) - 32px) / 2) !important;
   width: 32px; height: 32px; font-size: 18px;
 }
+/* Media Studio：哪一栏真的贴着窗口右缘，就由那一栏让出系统窗控。
+   参数坞收起后右缘回到中栏，不能只给参数坞栏头补右内边距。 */
+html[data-wco="1"] .studio-root:not(.dock-on) .sd-cbar { padding-right: calc(8px + var(--wco-right, 0px)); }
+html[data-wco="1"] .studio-root.dock-on .sd-dock-hd { padding-right: calc(8px + var(--wco-right, 0px)); }
 /* Vertex：手机态顶栏 flex（右组 margin-left:auto）/ 桌面态右上功能钮 */
 html[data-wco="1"] .v-header { padding-right: calc(8px + var(--wco-right, 0px)); }
 html[data-wco="1"] .v-dt-top { padding-right: calc(16px + var(--wco-right, 0px)); }

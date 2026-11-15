@@ -532,7 +532,8 @@ export function upstreamRequest(reqHeaders, url, token = ADMIN_TOKEN) {
 //（instanceFor 按 ctx.key 选），实例没起就拉起来——消息要送到。x-dimensio-family-call 只有这里发得出：反代转发浏览器请求时
 // 剥掉它（STRIP_HEADERS），所以浏览器里的页面冒充不了「Claude 会话发来的消息」。
 const FAMILY_CALL_HEADER = 'x-dimensio-family-call';
-const FAMILY_OPS = new Set(['spawn', 'deliver', 'state', 'info']);
+// routine / routine-status：定时任务用 dimensio 跑（核心 runtime/routines-runner.mjs；harness 那边是 routine-runs.ts）——同一把令牌、同一个头
+const FAMILY_OPS = new Set(['spawn', 'deliver', 'state', 'info', 'routine', 'routine-status']);
 export async function familyCall(ctx, op, body, timeoutMs = 30_000) {
   if (!FAMILY_OPS.has(op)) throw new Error('unknown family op: ' + op);
   if (!agentEnabled('dimensio') || !ctx || !ctx.allowDimensio) throw new Error('dimensio 没开，或这个账号没有 dimensio');
@@ -544,6 +545,42 @@ export async function familyCall(ctx, op, body, timeoutMs = 30_000) {
   const r = await inst.request('POST', '/api/family/' + op, body ?? {}, { timeoutMs, headers: { [FAMILY_CALL_HEADER]: '1' } });
   if (!r.json || typeof r.json !== 'object') throw new Error(`dimensio 没答（${r.status ? 'HTTP ' + r.status : '连不上'}）`);
   return r.json;   // { ok, ... }：拒收 / 关系不对是 4xx + { ok:false, error }
+}
+
+// —— 子 agent 调用策略（设置 › dimensio › 子 agent 调用策略，核心 routes/dispatch.mjs 经 getModule('dimensio') 调）——
+// 策略存在核心（runtime/dispatch-policy.mjs 的 dimensio 作用域），但候选与成本只有实例知道（哪些厂商有 Key、本机引擎起没起）：
+// 设置页要的四档落点由这个身份的实例按传过来的策略现算（harness/server/dispatch-routes.ts）。实例没起就拉起来（同进 dimensio 设置分区）。
+async function readyInstance(ctx) {
+  if (!agentEnabled('dimensio')) throw new Error('dimensio 没开');
+  // 只给管理员与有 dimensio 的成员：快照访客等别的身份在 instanceFor 里会落到管理员实例上，不能借它看到管理员能用的型号
+  if (!ctx || ctx.snap || (ctx.kind !== 'admin' && ctx.kind !== 'user')) throw new Error('这个身份用不了 dimensio');
+  if (ctx.kind === 'user' && !ctx.allowDimensio) throw new Error('这个账号没有 dimensio 的使用权限');
+  const inst = await instanceFor(ctx);
+  if (!inst) throw new Error(`同时在用 dimensio 的人太多了（上限 ${TENANT_MAX}），稍后再试`);
+  if (inst === admin && !adminDataSettled) throw new Error('dimensio 正在把旧数据复制到新的数据目录，稍后再试');
+  if (!(await inst.ensure())) throw new Error('dimensio 没起来');
+  inst.lastUsed = Date.now();
+  return inst;
+}
+/** 按给的策略（可携写法，runtime/dispatch-dimensio.mjs）算四档落点 → { tiers, candidates, unrated }。失败抛（人话）。 */
+export async function dispatchPreview(ctx, body) {
+  const inst = await readyInstance(ctx);
+  const r = await inst.request('POST', '/api/dispatch/preview', body ?? {}, { timeoutMs: 10_000 });
+  if (!r.ok || !r.json || !r.json.preview) throw new Error((r.json && r.json.error) || (r.status === 404 ? 'dimensio 版本太旧，算不了落点' : `dimensio 没答（${r.status ? 'HTTP ' + r.status : '连不上'}）`));
+  return r.json.preview;
+}
+/** 实例里旧的调度偏好 → { ladder, note }（迁进核心的 dimensio 那份用）。 */
+export async function dispatchLegacy(ctx) {
+  const inst = await readyInstance(ctx);
+  const r = await inst.request('GET', '/api/dispatch/legacy', undefined, { timeoutMs: 5_000 });
+  if (!r.ok || !r.json) throw new Error('dimensio 没答');
+  return r.json;
+}
+/** 策略变了：叫这个身份在跑的实例丢掉缓存，下一个会话按新的（没在跑的不拉起，它起来时自己会取）。 */
+export function dispatchChanged(ctx) {
+  const inst = !ctx ? null : ctx.kind === 'user' ? tenants.get(ctx.key) : ctx.kind === 'admin' ? admin : null;
+  if (!inst || !inst.alive()) return;
+  inst.request('POST', '/api/dispatch/refresh', {}, { timeoutMs: 3_000 }).catch(() => {});
 }
 
 // 2026-10-22：两个嵌入页（deepseek / zhipu）已删除，连同它们的免鉴权放行（STATIC_UI_RE）——

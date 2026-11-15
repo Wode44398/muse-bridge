@@ -65,6 +65,7 @@ import {
   pendingSummary,
   waitingOf,
   watchGlobal,
+  emitGlobal,
   noteListChanged,
   workspaceRoot,
   type Session,
@@ -82,7 +83,7 @@ import { newGoal } from "./goal.ts";
 import { ledgerRows, sanitizeLedger } from "./usage-ledger.ts";
 import { commandList } from "./commands.ts";
 import { killAllMcpSync, mcpReady, mcpStatus, syncConnectors } from "./mcp.ts";
-import { listDir, saveUpload } from "./files.ts";
+import { listDir, MAX_UPLOAD_BYTES, saveUpload } from "./files.ts";
 import { listDirs, makeDir } from "./fsnav.ts";
 import { accessLock, assertInTenant, disabledProviders, insideTenant, tenantInfo, tenantMode, tenantRoot, tenantShell } from "./tenant.ts";
 import { allPrefs, prefValue, setPrefs } from "./prefs.ts";
@@ -92,6 +93,9 @@ import { registerWorkspaceRoutes } from "./workspace-routes.ts"; // 工作区协
 import { archiveFilter, archiveViewOf, isArchived, mountSessionMgmt, notifyPrefs } from "./sessmgmt/index.ts";
 // 会话协作（子会话、会话间消息、与 bridge 里 Claude 会话互通）：接口在 family-routes.ts，运行时在 session-family.ts
 import { registerFamilyRoutes } from "./family-routes.ts";
+import { registerProjectRoutes } from "./project-routes.ts";
+import { registerDispatchRoutes } from "./dispatch-routes.ts";
+import { refreshDispatchPolicy } from "./agent/dispatch-policy.ts";
 import { startFamily } from "./session-family.ts";
 import {
   createBlankProject,
@@ -164,11 +168,14 @@ import { refreshProjectKnowledge, stopKnowledgeWorker } from "./knowledge-servic
 import { getSearchMetrics, searchUnifiedKnowledge, type KnowledgeKind } from "./knowledge-search.ts";
 import { stopService, stopAllServices, stopServicesFor, latestService, listServices } from "./services.ts";
 import {
-  browserClaimOwner,
+  browserMode,
+  browserMount,
   closeAllBrowserSessions,
-  existingSharedBrowser,
-  getSharedBrowser,
-  sharedBrowserMode,
+  existingBrowser,
+  getBrowser,
+  onBrowserMount,
+  recentBrowserOwner,
+  setBrowserIsolated,
   VIEWPORT_PRESETS,
 } from "./cdp.ts";
 import { reviewOverview, reviewDiff } from "./review.ts";
@@ -382,7 +389,8 @@ app.get("/api/config", (_req, res) => {
   const cfg = getConfig();
   // accessLocked：访问范围被锁定（租户恒 workspace）——前端据此不摆「仅工作空间 / 整机」开关。
   // awayDecision：离开模式下批准请求的默认落定（偏好项），运行设置里离开模式那一行据此说清楚
-  res.json({ ...cfg, hasKey: hasKey(cfg.provider), accessLocked: accessLock(), awayDecision: prefValue<string>("awayDecision") });
+  // cacheExpiry：偏好「提示缓存快过期时」（off / hint / compact）——前端据此决定出不出「缓存冷了」提示
+  res.json({ ...cfg, hasKey: hasKey(cfg.provider), accessLocked: accessLock(), awayDecision: prefValue<string>("awayDecision"), cacheExpiry: prefValue<string>("cacheExpiry") });
 });
 
 // ── 自定义模型服务（「模型服务」面板里的「＋」卡；OpenAI / Anthropic / Gemini 协议，key 加密存） ─────────────
@@ -566,6 +574,10 @@ registerWorkspaceRoutes(app);
 mountSessionMgmt(app);
 // 会话协作（family-routes.ts）
 registerFamilyRoutes(app);
+// 项目对话的概览（project-routes.ts）
+registerProjectRoutes(app);
+// 子 agent 调用策略（dispatch-routes.ts）：bridge 设置页的四档落点、旧偏好迁移、策略变更通知
+registerDispatchRoutes(app);
 
 app.post("/api/config", (req, res) => {
   try {
@@ -884,10 +896,13 @@ app.post("/api/run", async (req, res) => {
     await mcpReady(3_000);
   }
 
+  // 项目对话（project-mode.ts）：形态只认新会话第一轮带来的 shape:"project"；续聊时带了也不管（形态定下来就不变）
+  const shape = !sessionId && req.body?.shape === "project" ? ("project" as const) : undefined;
+
   // A sessionId not in memory is resumed from disk (survives server restarts).
   let session;
   try {
-    session = sessionId ? await getOrLoadSession(String(sessionId)) : createSession(initial);
+    session = sessionId ? await getOrLoadSession(String(sessionId)) : createSession(initial, { shape });
   } catch (e) {
     // e.g. the persisted provider's API key is no longer configured（Q14：带码的按自己的状态码与稳定码回）
     sendError(res, e);
@@ -1897,15 +1912,19 @@ app.get("/api/files", async (req, res) => {
 // uploads preserve structure via webkitRelativePath.
 app.post(
   "/api/files/upload",
-  express.raw({ type: () => true, limit: "30mb" }),
   async (req, res) => {
     const rel = String(req.query.path ?? "").trim();
     if (!rel) {
       res.status(400).json({ error: "path query parameter is required" });
       return;
     }
+    if (Number(req.headers["content-length"] ?? 0) > MAX_UPLOAD_BYTES) {
+      res.status(413).json({ error: `file exceeds the ${MAX_UPLOAD_BYTES / 1024 / 1024 / 1024} GB upload limit` });
+      return;
+    }
     try {
-      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      // 请求体直接流进落点（不再 express.raw 整块进内存、30 MB 封顶）
+      const body = req;
       // U4（K08）：落在这个会话的工作区（以前一律是全局工作区——和会话的工作区未必是同一个，附件会找不到）；
       // 新对话还没有会话 id 时照旧用全局（发送时的配置快照也是它）
       const sessionId = String(req.query.sessionId ?? "").trim();
@@ -2163,23 +2182,57 @@ app.post("/api/fs/mkdir", async (req, res) => {
   }
 });
 
-// ── Live Browser pane (screencast of the agent's shared browser) ────────────
+// ── Live Browser pane (screencast of a conversation's browser) ──────────────
 // The user's window into — and hands on — the SAME browser the agent drives.
+// 11-14 起按会话各开一份（cdp.ts getBrowser）：每个路由都认 sessionId（GET 查询串 / POST 请求体——前端不加自定义请求头），
+// 看的、点的、导航的都是那个会话的浏览器；空串 = 不属于任何会话的默认那份（还没发出第一条消息的新对话）。
+// 完全不带 sessionId 的旧前端（离线 apk 里的老包）拿最近用过的那一份——与以前「面板看的就是 agent 正在用的浏览器」一致。
 // All routes GET/POST only (bridge proxy CORS). SSE frames flow only while at
 // least one viewer is subscribed; the browser itself is unaffected by viewers
 // coming and going (phone can disconnect mid-task, agent keeps working).
 
-app.get("/api/browser/state", (_req, res) => {
-  const page = existingSharedBrowser();
+// 会话 id 只认这种形状（会话 id 是 UUID）；别的一律当没给，退回默认那份
+const cleanBrowserOwner = (v: unknown): string => {
+  const s = String(v ?? "");
+  return /^[A-Za-z0-9_-]{1,80}$/.test(s) ? s : "";
+};
+function browserOwnerOf(req: express.Request): string {
+  const q = (req.query as Record<string, unknown>)?.sessionId;
+  const raw = q !== undefined ? q : (req.body as Record<string, unknown> | undefined)?.sessionId;
+  return raw === undefined ? recentBrowserOwner() : cleanBrowserOwner(raw);
+}
+
+// 挂载状态灯：会话的浏览器从「没有标签」变「有标签」（或反过来）、隔离开关变了，就经全局事件通道广播 browser_mount
+onBrowserMount((ev) => emitGlobal({ ...ev, at: Date.now() }));
+
+app.get("/api/browser/state", (req, res) => {
+  const owner = browserOwnerOf(req);
+  const page = existingBrowser(owner);
+  // mounted = 这个会话的浏览器里有标签（挂载状态灯）；isolated = 这个会话开着隔离存储
+  const { mounted, isolated } = browserMount(owner);
   res.json(
     page
-      ? { alive: true, url: page.url, viewport: page.viewport, tabs: page.tabs, mode: sharedBrowserMode() }
-      : { alive: false, tabs: [], mode: null },
+      ? { alive: true, url: page.url, viewport: page.viewport, tabs: page.tabs, mode: browserMode(owner), mounted, isolated }
+      : { alive: false, tabs: [], mode: null, mounted, isolated },
   );
 });
 
+// 隔离存储（按会话）：开 / 关都会关掉这个会话现有的浏览器标签，下次打开按新模式起。只有会话有（默认那份不能开）。
+app.post("/api/browser/isolate", async (req, res) => {
+  const owner = cleanBrowserOwner(req.body?.sessionId);
+  if (!owner) {
+    res.status(400).json({ error: "sessionId is required — isolated storage is per conversation" });
+    return;
+  }
+  try {
+    res.json({ ok: true, ...(await setBrowserIsolated(owner, req.body?.on === true)) });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
 app.get("/api/browser/stream", async (req, res) => {
-  const page = existingSharedBrowser();
+  const page = existingBrowser(browserOwnerOf(req));
   if (!page) {
     res.status(409).json({ error: "browser not running" });
     return;
@@ -2201,8 +2254,8 @@ app.get("/api/browser/stream", async (req, res) => {
   const unView = page.addViewer(native ? "native" : "stream");
   // Pointer echo: viewers see where the agent (or another device) points/clicks.
   const unsubPtr = page.subscribePointer((p) => send({ e: "pointer", ...p }));
-  // Tab strip: every viewer mirrors the shared browser's tabs live; an empty
-  // list means the last tab was closed and the browser is gone entirely.
+  // Tab strip: every viewer mirrors this conversation's browser tabs live; an empty
+  // list means the last tab was closed and this conversation's browser is gone.
   const unsubTabs = page.subscribeTabs((tabs) => {
     send({ e: "tabs", tabs });
     if (!tabs.length) send({ e: "state", alive: false });
@@ -2236,10 +2289,10 @@ app.get("/api/browser/stream", async (req, res) => {
   });
 });
 
-// Forward the user's pointer/keyboard into the shared browser (they share the
+// Forward the user's pointer/keyboard into that conversation's browser (they share the
 // page with the agent — same state, two pairs of hands).
 app.post("/api/browser/input", async (req, res) => {
-  const page = existingSharedBrowser();
+  const page = existingBrowser(browserOwnerOf(req));
   if (!page) {
     res.status(409).json({ error: "browser not running" });
     return;
@@ -2279,10 +2332,10 @@ app.post("/api/browser/input", async (req, res) => {
 });
 
 // Viewport switch from the pane's device buttons — the SAME setViewport the
-// agent's Browser(resize) uses, so user and agent stay on one shared page and
+// agent's Browser(resize) uses, so user and agent stay on one page and
 // the pane's highlight follows whoever resized last (via frame dimensions).
 app.post("/api/browser/resize", async (req, res) => {
-  const page = existingSharedBrowser();
+  const page = existingBrowser(browserOwnerOf(req));
   if (!page) {
     res.status(409).json({ error: "browser not running" });
     return;
@@ -2304,13 +2357,14 @@ app.post("/api/browser/resize", async (req, res) => {
 });
 
 // ── 标签页（面板 tabstrip 的 × / ＋ / 切换）──────────────────────────────────
-// 与 agent 共享同一个浏览器：新建/关闭/切换立刻广播给所有观看者（stream 的
+// 与 agent 共用这个会话的浏览器：新建/关闭/切换立刻广播给所有观看者（stream 的
 // tabs 事件），agent 的后续操作始终落在前台标签上。
 
 app.post("/api/browser/tabs/new", async (req, res) => {
   try {
-    const existed = Boolean(existingSharedBrowser());
-    const page = await getSharedBrowser(); // 未运行则拉起 —— ＋也是启动入口
+    const owner = browserOwnerOf(req);
+    const existed = Boolean(existingBrowser(owner));
+    const page = await getBrowser(owner); // 未运行则拉起 —— ＋也是启动入口
     let url = String(req.body?.url ?? "").trim();
     if (url && !/^(https?:\/\/|about:)/i.test(url)) {
       url = (/^(localhost|127\.|192\.168\.|10\.)/.test(url) ? "http://" : "https://") + url;
@@ -2328,7 +2382,7 @@ app.post("/api/browser/tabs/new", async (req, res) => {
 });
 
 app.post("/api/browser/tabs/activate", async (req, res) => {
-  const page = existingSharedBrowser();
+  const page = existingBrowser(browserOwnerOf(req));
   if (!page) {
     res.status(409).json({ error: "browser not running" });
     return;
@@ -2347,7 +2401,8 @@ app.post("/api/browser/tabs/activate", async (req, res) => {
 });
 
 app.post("/api/browser/tabs/close", async (req, res) => {
-  const page = existingSharedBrowser();
+  const owner = browserOwnerOf(req);
+  const page = existingBrowser(owner);
   if (!page) {
     res.status(409).json({ error: "browser not running" });
     return;
@@ -2359,8 +2414,8 @@ app.post("/api/browser/tabs/close", async (req, res) => {
   }
   try {
     await page.closeTab(id);
-    // 关的是最后一个标签时整个浏览器随之退出（= 真实浏览器关窗口）。
-    const alive = Boolean(existingSharedBrowser());
+    // 关的是最后一个标签时这个会话的浏览器随之关闭（= 真实浏览器关窗口）。
+    const alive = Boolean(existingBrowser(owner));
     res.json({ ok: true, tabs: alive ? page.tabs : [], alive });
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
@@ -2370,10 +2425,11 @@ app.post("/api/browser/tabs/close", async (req, res) => {
 // User-driven navigation from the pane's address bar (launches the browser if
 // needed — the pane is usable before the agent ever touches it).
 app.post("/api/browser/navigate", async (req, res) => {
+  const owner = browserOwnerOf(req);
   const dir = String(req.body?.dir ?? "");
   try {
     if (dir === "back" || dir === "forward") {
-      const page = existingSharedBrowser();
+      const page = existingBrowser(owner);
       if (!page) {
         res.status(409).json({ error: "browser not running" });
         return;
@@ -2388,7 +2444,8 @@ app.post("/api/browser/navigate", async (req, res) => {
       return;
     }
     if (url.startsWith("/")) {
-      const s = latestService();
+      // 相对路径：这个会话最近起的 Preview 服务（没有会话 = 进程里最近的那个，与以前一致）
+      const s = (owner && latestService(owner)) || latestService();
       if (!s) {
         res.status(400).json({ error: "path given but no preview server is running" });
         return;
@@ -2397,7 +2454,7 @@ app.post("/api/browser/navigate", async (req, res) => {
     } else if (!/^https?:\/\//i.test(url)) {
       url = (/^(localhost|127\.|192\.168\.|10\.)/.test(url) ? "http://" : "https://") + url;
     }
-    const page = await getSharedBrowser();
+    const page = await getBrowser(owner);
     await page.navigate(url);
     res.json({ ok: true, url: page.url });
   } catch (e) {
@@ -2560,6 +2617,8 @@ const httpServer = app.listen(PORT, HOST, () => {
     console.log(`  vite dev UI     http://localhost:5178/${hash}`);
     console.log(`  API clients     header ${INTERNAL_TOKEN_HEADER}: <token>  (GET resources: ?${QUERY_TOKEN_PARAM}=<token>)\n`);
   }
+  // 子 agent 调用策略：起来就向 bridge 取一次（新会话的系统提示是同步拼的，只读缓存；不是 bridge 拉起的什么都不做）
+  void refreshDispatchPolicy();
   // M13：上一个进程被重启切断 / 直接死掉时在跑的轮，起来之后自动接着做（稍等一下，让 bridge 先连上来）。
   // 测试里拉起的 harness 不做（各测试文件共用一个会话目录，别的进程被切断的轮不该在这儿续；要测就显式开 DIMENSIO_AUTO_RESUME）
   if (process.env.DIMENSIO_TEST_ISOLATION !== "1" || process.env.DIMENSIO_AUTO_RESUME === "1") {

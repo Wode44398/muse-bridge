@@ -29,3 +29,23 @@ test("prefs：不认识的键、非对象整批拒绝", async () => {
   await assert.rejects(async () => setPrefs([1]), /对象/);
   assert.ok(Array.isArray(allPrefs().items));
 });
+
+test("prefs：老开关 idleCompact 读进来并进 cacheExpiry（开着 → 自动压缩，关着 → 只提示，已选过的不动）", async () => {
+  const { writeFileSync, readFileSync, existsSync } = await import("node:fs");
+  const path = await import("node:path");
+  const { configFile } = await import("./paths.ts");
+  const { reloadPrefs } = await import("./prefs.ts");
+  const file = path.join(path.dirname(configFile()), "prefs.json");
+  const before = existsSync(file) ? readFileSync(file, "utf8") : null;
+  try {
+    for (const [raw, want] of [[{ idleCompact: true }, "compact"], [{ idleCompact: false }, "hint"], [{ idleCompact: true, cacheExpiry: "off" }, "off"]] as const) {
+      writeFileSync(file, JSON.stringify(raw));
+      reloadPrefs();
+      assert.equal(prefValue("cacheExpiry"), want);
+    }
+  } finally {
+    if (before === null) writeFileSync(file, "{}");
+    else writeFileSync(file, before);
+    reloadPrefs();
+  }
+});

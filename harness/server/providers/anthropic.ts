@@ -8,6 +8,7 @@ import { observeWire } from "./wire-fingerprint.ts";
 import { fetchReconnect } from "../net-proxy.ts";
 import { modelLimits, modelSupportsFast, modelSupportsImages, providerMediaBudget } from "../catalog.ts";
 import { applyCustomThinking } from "../custom-tiers.ts";
+import { applyCustomParams } from "../custom-params.ts";
 import { MK } from "../model-knowledge.ts";
 import type { CustomWire } from "./types.ts";
 
@@ -340,6 +341,8 @@ function encode(turn: Turn, model: string, caps: Capabilities, cacheMark: CacheM
   if (tools.length) body.tools = tools;
   if (custom) {
     body = applyCustomThinking(body, custom.model, level, { protocol: "anthropic", cap: caps.maxOutputTokens });
+    // 模型中心里给这个型号设的调用参数（温度、停止序列、额外请求体…）：最后写，用户说了算
+    body = applyCustomParams(body, custom.model?.params, "anthropic", caps.maxOutputTokens);
   } else if (adaptive) {
     // Opus 4.7+/Sonnet 4.6: adaptive thinking + effort. budget_tokens would 400.
     // Even at "off" we keep adaptive on (the model self-gates) but pin effort low.

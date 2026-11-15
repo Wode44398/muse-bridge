@@ -1,10 +1,13 @@
 // ParamSpec（§3.2）的纯逻辑：显隐、取值、换模型时的清洗、发给后端的参数表。界面只按这里的结果渲染。
 //
-//   ParamSpec { key, label, type: enum|number|bool|text|voice|seed|json, group: basic|advanced,
+//   ParamSpec { key, label, type: enum|number|bool|text|voice|seed|json|size, group: basic|advanced,
 //               options?: [{ value, label, only?, note? }], min?, max?, step?, default?, when?: { k: 值或值数组 } }
+//   type:'size'（方案 §10）：值是字符串档或自由宽高 { width, height }；custom 规则、editDefault 见 size.js。
 //
 // `only` 在选项上两种写法都认：模型 id 数组（这个选项只对这些模型成立，旧 capabilities 的 aspects.only 转写过来就是这样），
-// 或条件表（同 `when`，看别的参数此刻的值）。
+// 或条件表（同 `when`，看别的参数此刻的值）。条件表里的 `$edit / $first / $last / $ref` 不是参数，是素材条件（见 resolveValues），
+// 服务端 cards/spec.mjs 的 applySpecs 认同一套（海螺 1080P 没有 10 秒、Veo 有参考图只能 8 秒、尺寸的「原图」只在有要改的图时出现）。
+import { parseSize, sizeIssues, isCustomSize } from './size.js';
 
 const has = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k);
 
@@ -32,6 +35,14 @@ export const optionsOf = (spec, modelId, values) => (spec?.options || []).filter
 export const visibleSpec = (spec, values) => match(spec?.when, values);
 
 function defaultOf(spec, modelId, values) {
+  if (spec.type === 'size') {
+    const opts = optionsOf(spec, modelId, values);
+    // 有要改的图：先用卡上的「改图默认」（一般是原图）
+    if (values.$edit && spec.editDefault != null && opts.some((o) => o.value === spec.editDefault)) return spec.editDefault;
+    if (typeof spec.default === 'string' && opts.some((o) => o.value === spec.default)) return spec.default;
+    if (isCustomSize(spec.default) && spec.custom) return { ...parseSize(spec.default) };
+    return opts[0]?.value ?? '';
+  }
   if (spec.type === 'enum') {
     const opts = optionsOf(spec, modelId, values);
     if (has(spec, 'default') && opts.some((o) => o.value === spec.default)) return spec.default;
@@ -49,6 +60,8 @@ function valid(spec, v, modelId, values) {
   if (v === undefined) return false;
   switch (spec.type) {
     case 'enum': return optionsOf(spec, modelId, values).some((o) => o.value === v);
+    // 自由宽高只查结构（打字打到一半的值也留着，合不合规则由 sizeIssues 报，提交时拦）
+    case 'size': return isCustomSize(v) ? !!spec.custom && !!parseSize(v) : optionsOf(spec, modelId, values).some((o) => o.value === v);
     case 'number': {
       if (typeof v !== 'number' || !Number.isFinite(v)) return false;
       if (spec.min != null && v < spec.min) return false;
@@ -64,10 +77,11 @@ function valid(spec, v, modelId, values) {
 /**
  * 有效取值：草稿里存的值能用就用，否则回默认。按 specs 顺序逐个结算——后面参数的 when / only 看前面已结算的值，
  * 所以「分辨率」能根据「模型 / 尺寸」的当前值收窄。
- * @returns {Record<string, any>} 每个 spec 一项（含不可见的，不可见的取默认，方便切回来时还在）
+ * ctx：素材条件 { edit, first, last, ref }——edit = 手里有要改的图（「改这张图」素材，或图像续改链），尺寸的「原图」档只在这时出现、并成为默认。
+ * @returns {Record<string, any>} 每个 spec 一项（含不可见的，不可见的取默认，方便切回来时还在）；另带 $edit / $first / $last / $ref
  */
-export function resolveValues(specs, draft = {}, modelId = '') {
-  const out = {};
+export function resolveValues(specs, draft = {}, modelId = '', ctx = {}) {
+  const out = { $edit: !!ctx.edit, $first: !!ctx.first, $last: !!ctx.last, $ref: !!ctx.ref };
   for (const spec of specs || []) {
     const v = draft[spec.key];
     out[spec.key] = valid(spec, v, modelId, out) ? v : defaultOf(spec, modelId, out);
@@ -81,13 +95,25 @@ export function payloadParams(specs, values) {
   for (const spec of specs || []) {
     if (!visibleSpec(spec, values)) continue;
     let v = values[spec.key];
-    if (spec.type === 'enum' && v === '') continue;   // 后端约定：value '' 的选项＝「默认，不传」
+    if ((spec.type === 'enum' || spec.type === 'size') && v === '') continue;   // 后端约定：value '' 的选项＝「默认，不传」
+    if (spec.type === 'size' && isCustomSize(v)) v = { width: v.width, height: v.height };
     if (spec.type === 'json') {
       if (typeof v !== 'string' || !v.trim()) continue;
       try { v = JSON.parse(v); } catch { continue; }
     }
     if (spec.type === 'text' && typeof v === 'string' && !v.trim()) continue;
     out[spec.key] = v;
+  }
+  return out;
+}
+
+/** 此刻可见的参数里有哪些取值不合规（自定义尺寸违反规则）：[{ spec, issues }]。提交前拦、界面在那一行报 */
+export function paramIssues(specs, values) {
+  const out = [];
+  for (const spec of specs || []) {
+    if (spec.type !== 'size' || !visibleSpec(spec, values)) continue;
+    const issues = sizeIssues(spec, values[spec.key]);
+    if (issues.length) out.push({ spec, issues });
   }
   return out;
 }

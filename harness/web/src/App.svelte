@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { WIDE_MQ } from "./lib/breakpoints.ts";
   // 应用壳：侧栏 | 对话 | 工作区 三栏（≥700px），手机单栏 + 抽屉 + 底部工作区；浮层路由、灯箱、提示、返回键链。
   //
   // 布局门槛：700 = 分栏（折叠屏展开约 752px 也算宽）；1100 = 真宽，侧栏与工作区可以并存。
@@ -23,6 +24,7 @@
   import { setArtifactHost } from "./lib/open-artifact.ts";
   import { setMediaHost, type MediaHost } from "./lib/open-media.ts";
   import { startWorkspaceCollab } from "./lib/workspace-collab.svelte.ts";
+  import { startBrowserMount } from "./lib/browser-mount.svelte.ts";
   import { fade, pop } from "./lib/motion.ts";
   import { edgeSwipe, haptic } from "./lib/touch.ts";
   import Icon from "./components/ui/Icon.svelte";
@@ -83,6 +85,8 @@
   $effect(() => setMediaHost(onOpenMedia));
   // 工作区协同：挂着的时候上报「用户在看什么」（agent 的 Workspace 工具读），卸载即停
   onMount(startWorkspaceCollab);
+  // 工作区浏览器按会话各开一份：前台会话换了就对一次它的浏览器（挂载状态灯只在本会话有标签时亮）
+  onMount(startBrowserMount);
   // 产物卡：有宿主文件视图就进右侧工作区读，没有（独立 8799）才回落查看器 / 新窗口
   $effect(() => {
     app.hasFilesView = !!filesView;
@@ -97,7 +101,7 @@
   });
 
   // ── 布局 ────────────────────────────────────────────────────────────────────────────
-  const mqWide = matchMedia("(min-width: 700px)");
+  const mqWide = matchMedia(WIDE_MQ);
   const mqRoomy = matchMedia("(min-width: 1100px)");
   let wide = $state(mqWide.matches);
   let roomy = $state(mqRoomy.matches);

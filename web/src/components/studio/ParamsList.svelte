@@ -4,15 +4,17 @@
   // （基本 → 更多 → 原始参数）。控件怎么挑见 modules/studio/render.js 的 controlOf：
   //   短枚举 ≤4 → 分段 · 比例 → 小形状格（前 8 个常用，其余收进「更多比例」）· 长枚举 / 选项多 → 选择钮 + 菜单（>12 带搜索）
   //   数值 → 细滑条 + mono 数值 + 单位（小范围整数 → 分段）· bool → 开关 · 种子 → mono 输入 + 骰子 · 文本 → 单行 / 多行 · json → 最末「原始参数」
+  //   尺寸（方案 §10）→ 选择钮 + 菜单（档位 / 预设 / 原图，末项「自定义」）；自定义时下面一行 宽 × 高，不合规当场标红（提交也会拦）
   // 参数说明 desc 不上正文（维护者：不写解释句），桌面悬停标签出 title、触屏长按标签出一个小气泡。
   // 同一个组件放参数坞（dock：上面多一张模型卡）、参数浮层 / Sheet（flat），以及值芯片点开的单项浮层（only）。
   import { tick } from 'svelte';
-  import { t, tr } from '../../lib/i18n.js';
+  import { t, tc, tr } from '../../lib/i18n.js';
   import { layout } from '../../lib/layout.svelte.js';
-  import { studio, setParam, valuesOf, labelForId } from '../../modules/studio/media.svelte.js';
+  import { studio, setParam, valuesOf, labelForId, originalDims } from '../../modules/studio/media.svelte.js';
   import { optionsOf, jsonError, resolveValues } from '../../modules/studio/params.js';
   import { controlOf, paramGroups, aspectSplit, fmtNumber, isRatio, formatOf, needsSearch } from '../../modules/studio/render.js';
-  import { paramLabel, optText, sourceText } from '../../modules/studio/words.js';
+  import { paramLabel, optText, sourceText, sizeIssueText } from '../../modules/studio/words.js';
+  import { isCustomSize, sizeIssues, customStart, fitSize, badSides, sizeText } from '../../modules/studio/size.js';
   import { paramSource } from '../../modules/studio/picker.js';
   import { providerLogo } from '../../lib/providerLogos.js';
   import { icon, aspectBox } from '../../modules/studio/icons.js';
@@ -47,7 +49,7 @@
   const foldable = $derived(!only && hasBasic && advSpecs.length > 0);
   let advOpen = $state({});      // { [模型 key]: true }
   const advShown = $derived(!foldable || !!advOpen[model?.key] || (!!focusKey && advSpecs.some((x) => x.key === focusKey)));
-  const defaults = $derived(resolveValues(model?.params || [], {}, model?.id || ''));
+  const defaults = $derived(resolveValues(model?.params || [], {}, model?.id || '', { edit: values.$edit, first: values.$first, last: values.$last, ref: values.$ref }));
   const changedN = $derived(advSpecs.filter((x) => JSON.stringify(values[x.key]) !== JSON.stringify(defaults[x.key])).length);
   // 标签 / 选项文字过一层翻译（words.js）：括号里的说明进悬停 / 长按；上游英文名按常见键名换成界面名；接口原值整理成人话
   const labelOf = (spec) => paramLabel(spec);
@@ -75,6 +77,34 @@
   }
   function dice(spec) { setParam(page, spec.key, Math.floor(Math.random() * 2147483647)); }
   const set = (spec) => (v) => setParam(page, spec.key, v);
+
+  // —— 尺寸 ——
+  const CUSTOM = '__studio_custom__';
+  // 菜单里的项：档位 / 预设 / 原图，有自由宽高规则的末尾加「自定义」
+  // 「原图」实际会按多大出：原图像素按规则挪进约束之后的宽高（不知道原图多大就不写）
+  const orig = $derived(originalDims(page));
+  const origOut = (spec) => (orig ? fitSize(spec.custom, orig) : null);
+  const sizeMenu = (spec) => [...optsOf(spec).map((o) => (o.value === 'original' && origOut(spec) ? { ...o, hint: sizeText(origOut(spec)) } : o)), ...(spec.custom ? [{ value: CUSTOM, label: t('自定义') }] : [])];
+  const menuOpts = (spec) => (spec.type === 'size' ? sizeMenu(spec) : optsOf(spec));
+  const menuVal = (spec) => (spec.type === 'size' && isCustomSize(values[spec.key]) ? CUSTOM : values[spec.key]);
+  function pick(spec, x) {
+    // 选「自定义」：从当前值（预设能读成宽高就沿用）或卡上的默认起步
+    setParam(page, spec.key, spec.type === 'size' && x === CUSTOM ? customStart(spec, values[spec.key]) : x);
+    menu = null;
+  }
+  // 宽 / 高输入：只在是正整数时写进草稿（打到一半清空也不回落默认）；失焦时回显草稿里的值
+  function setSide(spec, side, raw) {
+    const n = Number(String(raw).trim());
+    if (!Number.isInteger(n) || n <= 0) return;
+    const cur = values[spec.key];
+    setParam(page, spec.key, { width: cur?.width ?? n, height: cur?.height ?? n, [side]: n });
+  }
+  const sizeLabel = (spec, v) => {
+    if (isCustomSize(v)) return t('自定义');
+    if (v === 'original' && origOut(spec)) return t('原图 {size}', { size: sizeText(origOut(spec)) });
+    const o = optsOf(spec).find((x) => x.value === v);
+    return o ? optLabel(o) : String(v ?? '');
+  };
 
   // 触屏长按标签 450ms 出说明（桌面走 title 悬停）
   function hold(node, text) {
@@ -112,7 +142,7 @@
 {#snippet row(spec)}
   {@const v = values[spec.key]}
   {@const kind = ctl(spec)}
-  {@const block = kind === 'aspect' || kind === 'slider' || kind === 'textarea' || kind === 'json'}
+  {@const block = kind === 'aspect' || kind === 'slider' || kind === 'textarea' || kind === 'json' || (kind === 'size' && !optsOf(spec).length)}
   <div class="pl-r" class:blk={block} class:focus={focusKey === spec.key} data-param={spec.key} data-ctl={kind}>
     {#if block}
       <div class="pl-lh">
@@ -129,6 +159,29 @@
       <span class="pl-c"><Segmented size="sm" full label={labelOf(spec)} options={optsOf(spec).map((o) => ({ value: o.value, label: optLabel(o) }))} value={v} onchange={set(spec)} onoverflow={squeeze(spec)} /></span>
     {:else if kind === 'steps'}
       <span class="pl-c"><Segmented size="sm" full mono label={labelOf(spec)} options={steps(spec)} value={v} onchange={set(spec)} onoverflow={squeeze(spec)} /></span>
+    {:else if kind === 'size'}
+      {@const custom = isCustomSize(v)}
+      {@const issues = custom ? sizeIssues(spec, v) : []}
+      {@const bad = badSides(issues)}
+      {#if optsOf(spec).length}
+        <span class="pl-c">
+          <button class="pl-sel" class:open={menu?.spec?.key === spec.key} aria-haspopup="listbox" aria-expanded={menu?.spec?.key === spec.key}
+            onclick={(e) => (menu = menu?.spec?.key === spec.key ? null : { spec, anchor: e.currentTarget })}>
+            <span class="pl-sel-tx" class:mono={/\d/.test(sizeLabel(spec, v))}>{sizeLabel(spec, v)}</span>{@html icon('down')}
+          </button>
+        </span>
+      {/if}
+      {#if custom}
+        <div class="pl-wh">
+          <input class="pl-in mono" class:bad={bad.has('width')} inputmode="numeric" value={v.width} aria-label={tc('尺寸', '宽')} aria-invalid={bad.has('width')}
+            oninput={(e) => setSide(spec, 'width', e.currentTarget.value)} onblur={(e) => (e.currentTarget.value = String(values[spec.key]?.width ?? ''))} />
+          <span class="pl-x" aria-hidden="true">×</span>
+          <input class="pl-in mono" class:bad={bad.has('height')} inputmode="numeric" value={v.height} aria-label={tc('尺寸', '高')} aria-invalid={bad.has('height')}
+            oninput={(e) => setSide(spec, 'height', e.currentTarget.value)} onblur={(e) => (e.currentTarget.value = String(values[spec.key]?.height ?? ''))} />
+          <span class="pl-unit mono">px</span>
+        </div>
+        {#if issues.length}<p class="pl-err pl-wh-err">{[...new Set(issues.slice(0, 3).map(sizeIssueText))].join(t('；'))}</p>{/if}
+      {/if}
     {:else if kind === 'select'}
       {@const o = optsOf(spec).find((x) => x.value === v)}
       {@const vt = o ? optLabel(o) : String(v ?? '')}
@@ -229,14 +282,14 @@
 </div>
 
 {#if menu && layout.compact}
-  <Layer title={labelOf(menu.spec)} sheet tall={needsSearch(optsOf(menu.spec))} role="listbox" onclose={() => (menu = null)}>
-    <OptionList options={optsOf(menu.spec)} value={values[menu.spec.key]} labelOf={optLabel}
-      onpick={(x) => { setParam(page, menu.spec.key, x); menu = null; }} />
+  <Layer title={labelOf(menu.spec)} sheet tall={needsSearch(menuOpts(menu.spec))} role="listbox" onclose={() => (menu = null)}>
+    <OptionList options={menuOpts(menu.spec)} value={menuVal(menu.spec)} labelOf={optLabel}
+      onpick={(x) => pick(menu.spec, x)} />
   </Layer>
 {:else if menu}
   <Popover anchor={menu.anchor} align="end" role="listbox" label={labelOf(menu.spec)} minWidth={220} maxWidth={320} maxHeight={Math.min(520, Math.round(innerHeight * 0.7))} onclose={() => (menu = null)}>
-    <OptionList inListbox options={optsOf(menu.spec)} value={values[menu.spec.key]} labelOf={optLabel}
-      onpick={(x) => { setParam(page, menu.spec.key, x); menu = null; }} />
+    <OptionList inListbox options={menuOpts(menu.spec)} value={menuVal(menu.spec)} labelOf={optLabel}
+      onpick={(x) => pick(menu.spec, x)} />
   </Popover>
 {/if}
 {#if tip}

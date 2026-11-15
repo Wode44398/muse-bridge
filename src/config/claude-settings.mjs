@@ -87,6 +87,11 @@ export const CLAUDE_SETTINGS = Object.freeze([
     label: '回复语言', optionLabels: ['跟随对话', '简体中文', 'English'] },
   { key: 'compactFrac', group: 'chat', scope: 'user', type: 'frac', default: null,
     label: '自动压缩点', desc: '上下文用到多少时自动压缩；在用量弹层的计量条上拖动设置' },
+  // 11-14：缓存多久过期按模型算（订阅号 1 小时；自定义服务按厂商，模型中心里可改），见 runtime/claude-cache.mjs
+  { key: 'cacheExpiry', group: 'chat', scope: 'user', type: 'enum', options: ['off', 'hint', 'compact'], default: 'hint',
+    label: '提示缓存快过期时', optionLabels: ['不提示', '只提示', '自动压缩'],
+    desc: '缓存多久过期按模型算：订阅号 1 小时，自定义服务看模型中心',
+    optionDescs: ['', '对话空闲过了缓存寿命，用量环右上角亮一颗小点：下一条会按全价重读', '长对话在缓存过期前先压缩一次，回来接着聊只重写压完的那段'] },
 
   // —— 会话协作（维护者 10-20：Claude 发起新会话做成三档可选）——
   { key: 'newSessionPolicy', group: 'collab', scope: 'user', type: 'enum', options: ['ask', 'direct', 'onRequest'], default: 'ask', shell: true,

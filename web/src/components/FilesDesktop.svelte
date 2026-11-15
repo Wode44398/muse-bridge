@@ -2631,11 +2631,9 @@
   /* 桌面工作空间：跟随全站明暗（data-theme），Explorer 级密度；宿主有自己的明暗档时（dimensio）
      经 theme 属性强制 .th-light / .th-dark，与旁边的对话区保持同一档。
      暗色是默认（与 :root 一致：data-theme 缺省即暗）——Claude 底 #1f1f1e 上的 iOS 暗色语言；
-     浅色沿用工作空间家族的 iOS 浅色语言（#f2f2f7）。所有颜色只走下列令牌，别再就地写死。
-     强调色只有一个：Claude 珊瑚（与全局焦点环 --coral、查看器 --md-accent 同源）。令牌名沿用 --blue（几十处在用），值已是珊瑚；
-     浅色下文字用深一档（#b5532f，白底 ≥4.5:1），选中底色用珊瑚低透明度 --blue-sel。 */
+     浅色沿用工作空间家族的 iOS 浅色语言（蓝 #0071e3、#f2f2f7）。所有颜色只走下列令牌，别再就地写死。 */
   .fd-root {
-    --blue: #d97757; --blue-soft: rgba(217, 119, 87, .18); --blue-sel: rgba(217, 119, 87, .2); --blue-line: rgba(217, 119, 87, .55); --red: #ff6961;
+    --blue: #4f9dff; --blue-soft: rgba(79, 157, 255, .16); --blue-sel: rgba(79, 157, 255, .2); --blue-line: rgba(79, 157, 255, .55); --red: #ff6961;
     --bg: #1f1f1e; --panel: #262625; --bar: rgba(31, 31, 30, .94); --side-bg: rgba(35, 35, 34, .7);
     --ink: #ececea; --ink2: rgba(235, 235, 240, .62); --ink3: rgba(235, 235, 240, .4);
     --sep: rgba(255, 255, 255, .09); --hover: rgba(255, 255, 255, .07); --row-alt: rgba(255, 255, 255, .03);
@@ -2655,7 +2653,7 @@
     container-type: inline-size;
   }
   :global(html[data-theme='light']) .fd-root:not(.th-dark), .fd-root.th-light {
-    --blue: #b5532f; --blue-soft: rgba(217, 119, 87, .12); --blue-sel: rgba(217, 119, 87, .16); --blue-line: rgba(181, 83, 47, .5); --red: #ff383c;
+    --blue: #0071e3; --blue-soft: rgba(0, 113, 227, .1); --blue-sel: rgba(0, 113, 227, .16); --blue-line: rgba(0, 113, 227, .5); --red: #ff383c;
     --bg: #f2f2f7; --panel: #fff; --bar: rgba(248, 248, 250, .92); --side-bg: rgba(242, 242, 246, .8);
     --ink: #1d1d1f; --ink2: rgba(60, 60, 67, .62); --ink3: rgba(60, 60, 67, .4);
     --sep: rgba(60, 60, 67, .1); --hover: rgba(120, 120, 128, .09); --row-alt: rgba(120, 120, 128, .045);

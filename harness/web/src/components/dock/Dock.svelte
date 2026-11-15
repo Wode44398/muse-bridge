@@ -20,6 +20,7 @@
   import { fade, slide } from "../../lib/motion.ts";
   import { t, tc } from "../../lib/i18n.ts";
   import { nativeShellBrowser } from "../../lib/nativeShell.ts";
+  import { browserScope } from "../../lib/browser-mount.svelte.ts";
   import { collectTasks } from "../../lib/tasks.ts";
   import { currentJobs, jobMentions, refreshJobs } from "../../lib/jobs.svelte.ts";
   import type { IconName } from "../../lib/icons.ts";
@@ -92,7 +93,7 @@
   const tasksLive = $derived(jobsLive || collectTasks(app.chat.timeline).some((x) => x.status === "running"));
   const live = $derived<Partial<Record<DockTool, boolean>>>({
     tasks: tasksLive && app.dockTool !== "tasks",
-    browser: Boolean(app.browser) && app.dockTool !== "browser",
+    browser: Boolean(app.browser) && app.dockTool !== "browser", // 挂载状态：前台会话的浏览器里有标签才亮（lib/browser-mount.svelte.ts）
     term: collab.termLive && app.dockTool !== "term", // agent 动过共享终端、还没去看
   });
   $effect(() => {
@@ -106,7 +107,7 @@
     const was = app.browser;
     if (!was || app.dockTool === "browser") return;
     api
-      .browserState()
+      .browserState(browserScope()) // 前台会话的那份（服务端按会话各开一份）
       .then((s) => {
         if (s.alive || app.browser !== was) return;
         app.browser = null;

@@ -14,7 +14,7 @@
   import ProjectPicker from '../../components/ProjectPicker.svelte';
   import { hasNativePickDirectory, nativePickDirectory } from '../../lib/nativeDesktop.js';
   import { SI } from '../../lib/settingsIcons.js';
-  import { t } from '../../lib/i18n.js';
+  import { t, tr } from '../../lib/i18n.js';
   import { hub, hubSummaryText } from '../../lib/modelHub.svelte.js';
   import { openSettings } from '../../lib/settingsNav.svelte.js';
   import {
@@ -28,17 +28,44 @@
     prefGroups, prefItems, prefGroupLabel, prefLabel, prefDesc, prefOptions, prefChanged, setPref, parsePrefNumber,
     sessionTitle, exportDiag, versionLine, openInDimensio,
     feed, setFeedDetail, FEED_DESC,
-    curSpec, extOk, mcpLine, skillLine,
+    curSpec, extOk, mcpLine, skillLine, dimDispatchLine,
   } from '../../lib/dimensioSettings.svelte.js';
   import { me } from '../../lib/state.svelte.js';
 
   // fl：设置搜索跳转后的高亮；enabled：管理员视角下 dimensio 开着且跑得起来（成员能看到这一分区就是有权限，恒 true）；
   // openHub：「模型中心」行点了去哪——外壳传自己的换分区（带 ‹ › 历史），没传走通用的直达分区
   // openExt(type)：「连接器 / 技能」行点了去扩展页的哪一类（外壳传自己的换分区）
-  let { fl = () => false, enabled = true, openHub = () => openSettings('model-hub'), openExt = () => openSettings('extensions') } = $props();
+  // openDispatch：「子 agent 调用策略」行点了去哪——外壳传自己的就地子页（ag-dimensio#dispatch，带 ‹ › 历史），没传走通用的直达分区
+  let {
+    fl = () => false, enabled = true, openHub = () => openSettings('model-hub'), openExt = () => openSettings('extensions'),
+    openDispatch = () => openSettings('dm-dispatch'),
+  } = $props();
 
   // 进分区（或刚被打开）才拉：拉 /api/harness 会把没在跑的 harness 拉起来
   $effect(() => { if (enabled) untrack(() => loadDimensio({ quiet: true })); });
+
+  // —— 子 agent 调用策略（dimensio 那份，存在 bridge 的调用策略里、作用域 dimensio）——
+  // 入口行：标题 + 随状态变的副标题，右边一个总开关，点行其余部分进子页。dimensio 能用（读到了设置）才有这一行。
+  // 状态模块 lib/dispatchPolicy.svelte.js 懒加载（Claude 分区那一行同一个模块）：设置页首屏不带它
+  let dpm = $state.raw(null);
+  const ddp = $derived(dpm?.dimDispatch.dp || null);
+  let dpImp = null;
+  function dpLoad() {
+    dpImp ||= import('../../lib/dispatchPolicy.svelte.js');
+    dpImp.then((m) => { dpm = m; return m.dimDispatch.loadDispatch(); }).catch(() => { if (!dpm) dpImp = null; });
+  }
+  $effect(() => { if (enabled && dimReady()) untrack(dpLoad); });
+  const dpSub = $derived(ddp ? dimDispatchLine(ddp) : '');
+  let dpRowErr = $state(''), dpSwKey = $state(0), dpErrTimer = 0;
+  async function toggleDispatch(v) {
+    dpRowErr = '';
+    try { await dpm.dimDispatch.setDispatch({ enabled: v }); }
+    catch (e) {
+      dpSwKey++;
+      dpRowErr = tr(e?.message || '') || t('没保存上，请重试');   // 状态模块抛的 Error.message 就是给人看的那句话
+      clearTimeout(dpErrTimer); dpErrTimer = setTimeout(() => { dpRowErr = ''; }, 4000);
+    }
+  }
 
   const svgOf = (name, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${SI[name] || ''}</svg>`;
   const cfg = $derived(ds.config);
@@ -221,6 +248,24 @@
     </DGroup>
   {/if}
 
+  <!-- 子 agent 调用策略：同 Claude 分区「对话」组里那一行——行按钮（标题 + 状态副标题）的命中区铺满整行、点了进子页；
+       开关那一块压在它上面，四周留一圈不响应的边。关着时这一行不置灰：照样能点进去看 -->
+  <DGroup label={t('子 agent 调度')} foot={t('派子 agent 时按难度选模型与思考深度：可以跟随 Claude 的调用策略，也可以给 dimensio 单独定一套。')}>
+    <div class="drow cr dpr" class:hl={fl('ddispatch')} role="group" aria-label={t('子 agent 调用策略')}>
+      <button class="dpr-go" onclick={() => openDispatch()}>
+        <span class="cr-t">{t('子 agent 调用策略')}</span>
+        <span class="cr-s" class:bad={!!dpRowErr}>{#if dpRowErr || dpSub}{dpRowErr || dpSub}{:else}&nbsp;{/if}</span>
+      </button>
+      <!-- 策略读到了才摆开关（位置先占着）：不然它会先以「关」露面、再滑到「开」。{#key}：没存上时让开关弹回原位 -->
+      <span class="dpr-sw">
+        {#if ddp?.policy}{#key dpSwKey}<DSwitch checked={!!ddp.policy.enabled} disabled={ddp.canEdit === false} onchange={toggleDispatch} />{/key}{/if}
+      </span>
+      <svg class="dpr-chev" viewBox="0 0 6 10" width="6" height="10" aria-hidden="true">
+        <path d="M1 1l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+  </DGroup>
+
   <!-- 权限与安全：新会话的默认档位与访问范围（单个对话在输入框的档位胶囊里切） -->
   <DGroup label={t('权限与安全')} foot={t('新会话的默认；单个对话随时可在输入框的档位胶囊里切，对当前会话立刻生效。')}>
     <div class="drow cr" class:hl={fl('dm-mode')}>
@@ -316,6 +361,20 @@
     transition: background var(--dsk-t-fast) ease, color var(--dsk-t-fast) ease; }
   .cr-reset:hover { background: var(--dsk-hover); color: var(--dsk-ink); }
   .cr.hl { animation: dm-flash 1.5s var(--dsk-ease) 1; }
+  /* 子 agent 调用策略入口行（同 SettingsDesktop 里 Claude 那一行的 .dpr，那边是 scoped，这里各写一份）：行按钮用 ::after 把命中区铺满整行，
+     开关那一块是后来的定位元素、压在这层上面，四周的内边距是不响应的缓冲带 */
+  .dpr-go { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; padding: 0; text-align: left;
+    font-family: inherit; color: inherit; cursor: pointer; }
+  .dpr-go::after { content: ''; position: absolute; inset: 0; transition: background var(--dsk-t-fast) var(--dsk-ease); }
+  .dpr-go:hover::after { background: var(--dsk-hover); }
+  .dpr-go:active::after { background: var(--dsk-active); }
+  .dpr-go:focus-visible { outline: none; }
+  .dpr-go:focus-visible::after { box-shadow: inset var(--dsk-focus); }
+  .dpr-go .cr-s { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  :global(html[lang='en']) .dpr-go .cr-s { white-space: normal; }
+  .dpr-sw { position: relative; flex: none; display: inline-flex; align-items: center; box-sizing: content-box; min-width: 38px; min-height: 22px;
+    margin: -10px -4px -10px -12px; padding: 10px 4px 10px 12px; }
+  .dpr-chev { flex: none; color: var(--dsk-ink-3); }
   @keyframes dm-flash { 0%, 70% { background: var(--dsk-sel); } 100% { background: transparent; } }
   .pill { padding: 0 6px; border-radius: 5px; font-size: 10.5px; line-height: 17px; font-weight: 600; letter-spacing: .3px; color: var(--dsk-ink-2); box-shadow: inset 0 0 0 1px var(--dsk-line-strong); }
   .num { color: var(--dsk-ink-3); }

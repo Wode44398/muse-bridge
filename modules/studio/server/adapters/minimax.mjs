@@ -330,7 +330,8 @@ function videoCard(model, { label, desc, resolutions, defaultRes }) {
     inputs: { text: true, images: { max: 1, roles: ['first'] } },
     params: [
       P.enum('resolution', '分辨率', resolutions, { default: defaultRes }),
-      P.enum('durationSeconds', '时长', opts([{ value: 6, label: '6 秒' }, { value: 10, label: '10 秒', note: '1080P 不支持 10 秒' }]), { default: 6 }),
+      // 1080P 只出 6 秒（文档）：10 秒只在 512P / 768P 时成立
+      P.enum('durationSeconds', '时长', opts([{ value: 6, label: '6 秒' }, { value: 10, label: '10 秒', note: '1080P 不支持 10 秒', only: { resolution: ['512P', '768P'] } }]), { default: 6 }),
       P.bool('promptOptimizer', '提示词优化', { default: true, desc: '关掉后提示词原样使用（镜头运动词照用）' }),
       P.bool('fastPretreatment', '快速预处理', { default: false, desc: '缩短提示词优化的耗时' }),
       P.json(),
@@ -365,7 +366,7 @@ function musicCard(model, { label, desc }) {
     inputs: { text: true },
     params: [
       P.bool('instrumental', '纯音乐（无人声）', { group: 'basic', default: false }),
-      P.text('lyrics', '歌词', { group: 'basic', max: LYRICS_MAX, desc: '用 [Verse]、[Chorus] 等段落标签分段；留空时按提示词自动写词' }),
+      P.text('lyrics', '歌词', { group: 'basic', max: LYRICS_MAX, when: { instrumental: false }, desc: '用 [Verse]、[Chorus] 等段落标签分段；留空时按提示词自动写词' }),
       P.enum('format', '格式', opts(['mp3', 'wav']), { default: 'mp3' }),
       P.enum('sampleRate', '采样率', hz([16000, 24000, 32000, 44100]), { default: 44100 }),
       P.enum('bitrate', '比特率', kbps([32000, 64000, 128000, 256000]), { default: 256000, when: { format: 'mp3' } }),

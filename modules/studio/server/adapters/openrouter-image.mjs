@@ -57,19 +57,25 @@ export function imageDims(buf) {
 }
 
 /**
- * @param {{ model: string, prompt: string, refs?: {data: string, mimeType: string}[], aspectRatio?: string, imageSize?: string, quality?: string, signal?: AbortSignal,
+ * size：显式像素 'WxH'（自由尺寸卡）；null = 自动（不传）；undefined = 旧写法（按 aspectRatio + imageSize 算）。
+ * @param {{ model: string, prompt: string, refs?: {data: string, mimeType: string}[], aspectRatio?: string, imageSize?: string, size?: string|null, quality?: string, signal?: AbortSignal,
  *   apiKey: string, baseUrl?: string, headers?: object, extra?: object, timeoutMs?: number, dispatcher?: object }} o
  *   model = OpenRouter 的模型 id（如 openai/gpt-image-2.5-sunburst；旧本地 id 按 IMG_OPENROUTER 换算）
  * @returns {Promise<{ bytes: Buffer, mime: string }>}
  */
-export async function generateOpenRouterImage({ model, prompt, refs = [], aspectRatio, imageSize, quality, signal, apiKey, baseUrl = 'https://openrouter.ai/api/v1', headers = {}, extra, timeoutMs = 300_000, dispatcher }) {
+export async function generateOpenRouterImage({ model, prompt, refs = [], aspectRatio, imageSize, quality, size: sizeIn, signal, apiKey, baseUrl = 'https://openrouter.ai/api/v1', headers = {}, extra, timeoutMs = 300_000, dispatcher }) {
   if (!apiKey) throw new Error('这个 OpenRouter 服务还没填 API Key');
   const body = { model: IMG_OPENROUTER[model] || model, prompt: prompt || '生成一张图片', n: 1, quality: IMG_QUALITIES.has(quality) ? quality : 'high', ...(extra || {}) };
+  // size 显式给了（自由尺寸卡）：字符串原样发、null = 自动（不传）；没给走旧写法——
   // 比例：显式比例照算；「自动」有参考图就跟参考图，没图就不传 size（模型自选，约 1.5K）
-  let ratio = aspectRatio && aspectRatio !== 'auto' ? aspectRatio : null;
-  if (!ratio && refs.length) ratio = imageDims(Buffer.from(refs[refs.length - 1].data, 'base64'));
-  const size = ratio ? sizeFor(imageSize || '2K', ratio) : undefined;
-  if (size) body.size = size;
+  if (sizeIn !== undefined) {
+    if (sizeIn) body.size = sizeIn;
+  } else {
+    let ratio = aspectRatio && aspectRatio !== 'auto' ? aspectRatio : null;
+    if (!ratio && refs.length) ratio = imageDims(Buffer.from(refs[refs.length - 1].data, 'base64'));
+    const size = ratio ? sizeFor(imageSize || '2K', ratio) : undefined;
+    if (size) body.size = size;
+  }
   if (refs.length) body.input_references = refs.slice(-16).map((r) => ({ type: 'image_url', image_url: { url: `data:${r.mimeType || 'image/png'};base64,${r.data}` } }));
 
   const ac = new AbortController();
