@@ -8,7 +8,7 @@
 //   · 没有个人信息
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -85,9 +85,13 @@ test('bootstrap.sh 的子命令、key 名都写进了 MUSE.md', () => {
 
 test('设置的每个分区，设置那一章都讲到了', () => {
   // 分区 = 设置根页（手机 / 网页那套 iOS 风外壳）上的分组标题 ghead(t('…')) 与每一行的行标题（class="r-tx"）
-  const settings = read(path.join(ROOT, 'web', 'src', 'components', 'Settings.svelte'));
+  // 根页后来从 Settings.svelte 拆进了 settings/ios/RootPages.svelte：两处都找，认含根页的那个
+  const settings = [
+    path.join(ROOT, 'web', 'src', 'components', 'settings', 'ios', 'RootPages.svelte'),
+    path.join(ROOT, 'web', 'src', 'components', 'Settings.svelte'),
+  ].map((f) => (existsSync(f) ? read(f) : '')).find((s) => s.includes('{#snippet pRoot()}')) || '';
   const from = settings.indexOf('{#snippet pRoot()}');
-  assert.ok(from >= 0, 'Settings.svelte 里没找到根页（{#snippet pRoot()}）');
+  assert.ok(from >= 0, '设置页里没找到根页（{#snippet pRoot()}）');
   const block = settings.slice(from, settings.indexOf('{/snippet}', from));
   const labels = [...new Set([
     ...[...block.matchAll(/ghead\((?:t|tc)\((?:'[^']*',\s*)?'([^']+)'\)\)/g)].map((m) => m[1]),

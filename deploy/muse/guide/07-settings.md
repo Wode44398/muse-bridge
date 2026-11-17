@@ -53,14 +53,14 @@
 |---|---|
 | 页头 | 「启用 Claude」 开关（只有管理员能改）；还没配认证时提示「在下面『订阅号池』里添加账号」 |
 | **「订阅号池」**（Subscription Pool）——只有管理员 | 服务器上的 Claude 订阅账号，每个号的 5 小时 / 每周（和 Fable）用量、套餐标签（Pro / Max / Ultra），没有 5 小时限额的号那一栏写「无限制」；**「添加账号」**（Add Account）；点一个号进去能切换、编辑（含手动标套餐）、调顺序、删除。见 06-users-admin.md「Claude 账号」 |
-| **「撞上限额时」**（When you hit a usage limit） | **「限额重置后自动继续」**（Auto-continue when limits reset）：撞上 5 小时限额后，额度恢复时自动接着跑完这一轮，默认开；管理员还有 **「额度用尽自动换号」**（Switch accounts when a limit is reached） |
+| **「撞上限额时」**（When you hit a usage limit） | **「限额重置后自动继续」**（Auto-continue when limits reset）：撞上 5 小时限额后，额度恢复时自动接着跑完这一轮，默认开；管理员还有 **「额度用尽自动换号」**（Switch accounts when a limit is reached），打开后选 **「分派方式」**（Routing mode）——用满再换（默认）/ 回到首选号 / **「智能分派」**（Smart dispatch），以及「会话中无缝换号」，见 06-users-admin.md「Claude 账号」 |
 | **「服务意外重启时」**（If the service restarts unexpectedly） | **「自动继续被中断的对话」**（Resume interrupted conversations）：服务中途崩溃、被结束或 VM 重启打断了正在跑的对话时，服务恢复后约 15 秒自动让 Claude 从中断的地方接着做，默认开，按账号各自设置。同一件事最多连着续 3 次；中断超过 12 小时、或你已经先发了消息就不续。关掉后只留一句「这一轮没跑完」，要你自己说「继续」（见 02-claude-code.md「Claude 在干活的时候」） |
 | **「新会话默认」**（New session defaults） | **「权限模式」**（Permission mode）（管理员默认「自动」，其他人默认「接受编辑」）、**「输出风格」**（Output style）；能跑命令的身份还有 **「用工作树」**（Use a worktree）（只管这台设备） |
 | **「对话」**（Chat） | **「输入建议」**（Prompt suggestions）、**「对话内交互图表」**（Inline visualizations）、**「动态工作流」**（Dynamic workflows）（关了用不了 Ultracode）、**「子 agent 调用策略」**（Subagent dispatch policy）（行尾是总开关，点进去管生效范围、几套策略、四档用哪个模型、「调用非 Claude 模型」和口述备注，见 02-claude-code.md）、**「思考动画」**（Thinking animation）（这台设备：**「新版 Claude Code」**（Claude Code (new)）、**「新版聊天页」**（Chat (new)）、**「经典星标」**（Classic spark）三选一）、**「消息被拦时自动换模型」**（Switch models when a message is flagged）、**「批准计划时可清空上下文」**（Offer to clear context when approving a plan）、**「Claude 提问无人回答时」**（When Claude’s question goes unanswered）（一直等 / 5 / 10（默认）/ 30 分钟后继续）、**「回复语言」**（Response language）（跟随对话 / 简体中文 / English）、**「提示缓存快过期时」**（When the prompt cache is about to expire）（不提示 / 只提示（默认）/ 自动压缩，见 02-claude-code.md「用量环」）；在用量弹层里拖过自动压缩点的，这里多一行 **「自动压缩点」**（Auto-compact point）可以恢复默认 |
 | **「会话协作」**（Session collaboration） | **「Claude 发起新会话」**（New sessions started by Claude）：先问我（默认）/ 直接开始 / 只在我要求时（能跑命令的身份才有）；管理员还有 **「其它会话发来的消息」**（Messages from other sessions） |
 | **「项目对话」**（Project conversation）——管理员和完全信任账号 | **「开讨论串前先问我」**（Ask before starting a thread），默认关；**「同时在跑的讨论串」**（Threads running at once），默认 4 条；**「每天最多新开讨论串」**（New threads per day），默认 100 条（所有项目合计）；**「讨论串模型」**、**「讨论串推理强度」**——默认跟协调者同一个模型、强度「高」；单个项目可以在项目概览里另选。项目对话怎么用见 02-claude-code.md「项目对话」 |
 | **「Git 与拉取请求」**（Git and pull requests）——能跑命令的身份 | **「分支前缀」**（Branch prefix）（默认 claude）、**「工作树起点」**（Worktree base）（当前分支 / 远端默认分支）、**「自动修复拉取请求」**（Auto-fix pull requests）、**「拉取请求合并或关闭后自动归档」**（Auto-archive after PR merge or close）、**「提交与拉取请求署名」**（Commit and PR attribution）。需要 VM 上 gh 已登录，见 02-claude-code.md「拉取请求」 |
-| **「会话管理」**（Session management） | **「归档不活跃的会话」**（Archive inactive sessions）：从不（默认）/ 1 / 2 / 7 / 14 / 30 天 |
+| **「会话管理」**（Session management） | **「归档不活跃的会话」**（Archive inactive sessions）：从不（默认）/ 1 / 2 / 7 / 14 / 30 天；**「清理临时对话」**（Clean up temporary chats）：**「30 天没动的」**（After 30 days untouched）（默认）/ 只留最近 10、20、50、100 条 / **「从不清理」**（Never clean up），见 02-claude-code.md「临时对话」 |
 | **「通知」**（Notifications）（这台设备） | **「权限请求」**（Permission requests）、**「提问」**（Questions）、**「任务完成」**（Task complete）、**「任务出错」**（Task errors）四项，默认都开，**只管这台设备**；总开关、提醒哪几类、横幅、声音在「通用 → 通知」里（见下面「通用」） |
 | **「扩展与记忆」**（Extensions and memory） | 管理员：**「技能」**、**「连接器」**、**「插件」**——打开「扩展」页的对应标签，见 05-customize.md——、**「定时任务」**（Routines）；注册账号只有 **「技能」**——他自己的技能，见 05-customize.md「成员自己的技能」——和 **「定时任务」** |
 | **「安全」**（Security）——只有管理员 | **「允许绕过权限模式」**（Allow bypass permissions mode）（默认关）、**「允许自动模式」**（Allow auto mode）（默认开），对这台服务器上所有人生效。打开绕过权限前会再确认一次 |
@@ -83,7 +83,8 @@
 ## dimensio
 
 - **「设置 → dimensio」**——「Agent」分组里的 dimensio 一行；dimensio 页侧栏最底下的「设置」打开的也是这一页。管理员看到全部（页头有「启用 dimensio」开关）；被授权用 dimensio 的成员也有这一页，只出他自己能改的。
-- 里面按分组排：模型（新对话默认的型号和思考深度）、模型服务（管理员这里只有一行「模型中心」）/ API Key（成员自己的 key）、权限与安全、工作空间、记忆、对话、子 agent 调度、会话协作、工作区协同、Git 与拉取请求、会话管理、通知、调试、诊断。逐项见 03-dimensio.md「dimensio 的设置」。
+- 里面按分组排：子 agent 调度（dimensio 自己的「子 agent 调用策略」，默认单独一套，也可以跟随 Claude 的）、权限与安全、工作空间、记忆、连接器与技能、对话、上下文与成本、会话协作、工作区协同、Git 与拉取请求、会话管理、通知、调试、诊断。逐项见 03-dimensio.md「dimensio 的设置」。
+- **这一页不管模型**：以前的「模型」「API Key」「本机模型」三组去掉了。新对话的默认型号、思考深度、Fast mode 就是 dimensio 输入框型号菜单里最后选的；模型服务和 key 在「设置 → 模型中心」。成员现在网页上没有地方给 dimensio 填自己的 key（见 03-dimensio.md「配 key」）。
 
 ## Media Studio
 

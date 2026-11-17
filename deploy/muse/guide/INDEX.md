@@ -22,7 +22,7 @@
 | [onboarding.md](onboarding.md) | 入门讲解：几档讲解各自怎么带（5 分钟快速上手、Claude Code 深入、dimensio 深入、管理员、手机），以及更新后怎么演示新功能 |
 | [01-access.md](01-access.md) | 打开与登录：公网地址、管理员令牌、账号密码、注册、扫码登录、换了地址要重新登录、切换账号（一台设备留着几个账号的登录、添加账号）与退出、主页、安卓 App（下载、第一次连接、换地址、几台服务器来回切（账户卡里的「切换服务器」）、更新、旧版迁移）、iPhone、Windows 桌面客户端、语言和明暗 |
 | [02-claude-code.md](02-claude-code.md) | Claude Code 页：对话、项目（改名、归档全部）、临时对话、历史对话（搜索、归档）、模型和思考深度、权限模式（输入框左下角的圆环，和用量环合在一起）与批准卡、排队发消息、附件与图片预览、斜杠命令、会话消息通知、限额卡、会话协作（含和 dimensio 互相派活）、项目对话（协调者拆活、讨论串并行做、项目概览）、拉取请求（PR）、子 agent 调用策略（按难度档选模型）、交互图表、工作台（终端 / 文件 / 任务 / 审阅）、worktree、引用对话、定时任务、调试模式 |
-| [03-dimensio.md](03-dimensio.md) | dimensio 页：设置（都在「设置 → dimensio」）、选模型和厂商、配 key（管理员在模型中心、成员在自己的设置里）、Fast mode、联网搜索、项目和访问范围、权限规则、记忆（含空闲时整理）、子 agent 和任务、和 Claude 互开子会话、工作区协同、拉取请求、后台任务通知、空闲压缩、产物文件 |
+| [03-dimensio.md](03-dimensio.md) | dimensio 页：设置（都在「设置 → dimensio」）、选模型和厂商、配 key（都在模型中心；成员现在网页上填不了自己的 key）、型号菜单（思考深度滑块、原地换服务）、附件（拖进输入框、小图预览）、卡片式工作区、Fast mode、联网搜索、项目和访问范围、权限规则、记忆（含空闲时整理）、子 agent 和任务、和 Claude 互开子会话、工作区协同、拉取请求、后台任务通知、空闲压缩、产物文件 |
 | [04-files.md](04-files.md) | 文件：工作空间在哪、上传下载、新建 Markdown、压缩、隐藏项、显示方式与排序（列表 / 图标、电脑上的预览窗格与快速查看）、预览（统一查看器：前后翻、⋮ 菜单、各类文件能看到什么、Office 文件与 LibreOffice）、Markdown 编辑、把文件发给 AI、分享链接（文件 / 文件夹；对话快照没有入口） |
 | [05-customize.md](05-customize.md) | 扩展（设置 › 扩展）：技能、连接器、插件（装、配置、按 agent 启用、我自用 / 全服统一）、远程连接器授权（OAuth）与控制面板（连接 / 断开连接 / 工具权限）、自备 OAuth 应用（Gmail、Zoom）、Muse 上不能 OAuth 登录的几家（Figma 个人访问令牌、refresh_rejected）、官方市场、功能扩展（内置功能开关，别动 Muse 关掉的几项；插件详情里的能力、用量、定时任务、插件日志） |
 | [06-users-admin.md](06-users-admin.md) | 多人使用与服务端控制台：邀请码、普通账号和完全信任账号的区别、单人 / 多人（控制台里只读，在 Muse 里说）、额度、管理员可见性（隐私）、给谁开 dimensio、Claude 账号（订阅号池）、服务控制、日志 |
@@ -45,7 +45,7 @@
 | 子 agent 用哪个模型、子 agent 调用策略（原「子 agent 调度偏好」）、不想派给别家模型 | 02-claude-code.md「后台任务和「本轮挂起」」里的子 agent 几段；逐项：07-settings.md「Claude」 |
 | 收不到通知、通知太多、每个会话一条通知、横幅、提示音、浏览器通知权限 | 02-claude-code.md「Claude 在干活的时候」里的「会话消息通知」；开关：07-settings.md「通用」 |
 | 插件能做什么（拦命令、自动批准、改写消息、加工具 / 模型 / 通知渠道 / 外部登录、主页卡片和菜单项） | 05-customize.md「功能扩展」 |
-| 临时对话（原「快照」）、30 天清理、存为工作空间、回收站 | 02-claude-code.md「临时对话」 |
+| 临时对话（原「快照」）、30 天清理与「清理临时对话」（只留最近 N 条 / 从不清理）、存为工作空间、回收站 | 02-claude-code.md「临时对话」 |
 | 搜索对话、归档 / 取消归档 / 自动归档、收藏、重命名（跨设备同步） | 02-claude-code.md「历史对话」；自动归档设置：07-settings.md「Claude」 |
 | Claude 每一步问不问我、权限模式（找不到权限模式芯片了）、批准卡、计划卡 | 02-claude-code.md「权限模式和批准」；默认模式：07-settings.md「Claude」 |
 | Claude 回复时能不能继续发消息（插话 / 稍后发送队列）、草稿 | 02-claude-code.md「Claude 在干活的时候」 |
@@ -54,12 +54,12 @@
 | Claude 另开子会话、会话之间发消息、相关会话、建议的任务 | 02-claude-code.md「会话协作」 |
 | 拉取请求（PR）、合并、自动修复、gh 没登录 | 02-claude-code.md「拉取请求」 |
 | 对话里的交互图表、新对话落地页的用量统计 | 02-claude-code.md |
-| 接 DeepSeek / Kimi / OpenRouter 等别家模型、「自定义 API」去哪了、一个服务给 Claude 和 dimensio 一起用、多把 Key 轮换、管理员把服务共享给成员、成员菜单里的「管理员共享」、升级后某个模型不见了 | 10-model-hub.md；Muse 要做的：先 `allow-sites <接口地址>`（`../MUSE.md` 4.5） |
+| 接 DeepSeek / Kimi / OpenRouter 等别家模型、Qwen4 Max、手动添加的新模型自动「探测能力」、「自定义 API」去哪了、一个服务给 Claude 和 dimensio 一起用、多把 Key 轮换、管理员把服务共享给成员、成员菜单里的「管理员共享」、升级后某个模型不见了 | 10-model-hub.md；Muse 要做的：先 `allow-sites <接口地址>`（`../MUSE.md` 4.5） |
 | Agent 密钥、让别的 agent / Muse 经 HTTP 操作 Muse Bridge、`/agent` | 07-settings.md「Agent 接入」；Muse 自己怎么用：`../MUSE.md` 4.8 |
 | 管理员能不能看我的对话、管理员可见性、访问记录 | 07-settings.md「账户」；06-users-admin.md |
-| Claude 显示没配认证、用量 / 额度、订阅号池（套餐、没有 5 小时限额的号、自动换号） | 02-claude-code.md；号池：06-users-admin.md「Claude 账号」；配令牌：`../MUSE.md` 4.4 |
-| dimensio 怎么换模型、加 key、换了 key 不生效、加自定义服务（OpenAI 兼容）、把服务共享给成员、联网搜索、记忆、权限、子 agent、和 Claude 互开子会话、dimensio 的设置在哪 | 03-dimensio.md；加 key：10-model-hub.md 与 `../MUSE.md` 4.5；key 不生效：08-faq.md |
-| 文件在哪、上传下载、大小限制、预览、新建 / 编辑 Markdown、压缩文件夹、隐藏文件、分享链接、密码、过期 | 04-files.md |
+| Claude 显示没配认证、用量 / 额度、订阅号池（套餐、没有 5 小时限额的号、自动换号、分派方式与「智能分派」） | 02-claude-code.md；号池：06-users-admin.md「Claude 账号」；配令牌：`../MUSE.md` 4.4 |
+| dimensio 怎么换模型、加 key、换了 key 不生效、加自定义服务（OpenAI 兼容）、设置里的「模型」「API Key」去哪了、成员怎么加自己的 key、子 agent 调用策略单独一套 / 跟随 Claude、把服务共享给成员、联网搜索、记忆、权限、子 agent、和 Claude 互开子会话、dimensio 的设置在哪 | 03-dimensio.md；加 key：10-model-hub.md 与 `../MUSE.md` 4.5；key 不生效：08-faq.md |
+| 文件在哪、上传下载、大小限制、预览、视频快退快进与「当前网络较慢」提示、手机上拖文件进文件夹、新建 / 编辑 Markdown、压缩文件夹、隐藏文件、分享链接、密码、过期 | 04-files.md |
 | 技能、连接器、插件、MCP、连接器要登录 / 授权（OAuth）、断开连接、工具权限（总是允许 / 需要批准 / 禁止）、Gmail / Zoom 要配 OAuth 应用（回调地址）、Figma 连不上 / Figma 个人访问令牌 / refresh_rejected / 「平台不允许在这里登录这个服务」、Stripe / Zapier 等被拦的连接器、给所有成员统一装（全服统一）、成员自己添加技能、功能扩展、插件市场（有更新只提示）跟官方插件目录的区别、插件日志 / 定时任务 / 用量 | 05-customize.md |
 | 给朋友开账号、邀请码（作废、7 天）、改登录名、删除并归档、完全信任（原 Pro）、额度、成员高消耗功能、单人 / 多人、谁能用什么、服务端控制台、重启服务、看日志 | 06-users-admin.md |
 | 某个设置项是干什么的、语言、明暗外观、壁纸、通知、设备和端口转发、调试模式 | 07-settings.md |

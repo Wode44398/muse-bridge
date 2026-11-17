@@ -156,6 +156,19 @@
       "fixed_in": null,
       "notify": false,
       "issue": null
+    },
+    {
+      "id": "dimensio-member-own-keys-removed",
+      "title": "从 v0.11.0 起，多人模式下的成员在网页上没有地方给 dimensio 填自己的 key、加自己的模型服务",
+      "title_en": "From v0.11.0, members on a multi-user server have no place in the web app to enter their own dimensio keys or add their own model providers",
+      "symptom": "成员在 dimensio 新对话页看到「先在设置里填 … 的 API Key」，但「设置 → dimensio」里已经没有「API Key」一组；dimensio 的模型服务面板里也没有「添加自定义服务」，只能在已有的几家之间切换。",
+      "workaround": "请管理员在「设置 → 模型中心」里加好这家服务、把模型勾给 dimensio，并打开「共享给成员」——成员那边立刻能选，用的是管理员的 key、计入成员在本站的额度。成员以前自己填过的 key、加过的服务照常能用。成员给 Claude 页接自己的服务不受影响（模型中心里的「我的服务」）。",
+      "workaround_en": "Ask the admin to add the provider in Settings → Model Hub, make its models available to dimensio and turn on Share with members — the member can pick it right away; it uses the admin’s key and counts toward the member’s quota on this server. Keys and providers a member added before keep working. Members’ own providers for the Claude page (My providers in the Model Hub) are not affected.",
+      "cause": "bridge 把 dimensio 的模型配置统一收进模型中心：「设置 → dimensio」去掉了「模型」「API Key」「本机模型」三组，dimensio 模型服务面板里的老表单也删了；而模型中心里成员的「我的服务」目前只给 Claude 页用，成员给 dimensio 填自己 key 的入口暂时没有替代。",
+      "since": "v0.11.0",
+      "fixed_in": null,
+      "notify": false,
+      "issue": null
     }
   ]
 }
