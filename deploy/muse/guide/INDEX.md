@@ -54,7 +54,7 @@
 | Claude 另开子会话、会话之间发消息、相关会话、建议的任务 | 02-claude-code.md「会话协作」 |
 | 拉取请求（PR）、合并、自动修复、gh 没登录 | 02-claude-code.md「拉取请求」 |
 | 对话里的交互图表、新对话落地页的用量统计 | 02-claude-code.md |
-| 接 DeepSeek / Kimi / OpenRouter 等别家模型、Qwen4 Max、手动添加的新模型自动「探测能力」、「自定义 API」去哪了、一个服务给 Claude 和 dimensio 一起用、多把 Key 轮换、管理员把服务共享给成员、成员菜单里的「管理员共享」、升级后某个模型不见了 | 10-model-hub.md；Muse 要做的：先 `allow-sites <接口地址>`（`../MUSE.md` 4.5） |
+| 接 DeepSeek / Kimi / OpenRouter 等别家模型、Qwen4 Max、GPT-6.2、保存后列表没刷新、手动添加的新模型自动「探测能力」、「自定义 API」去哪了、一个服务给 Claude 和 dimensio 一起用、多把 Key 轮换、管理员把服务共享给成员、成员菜单里的「管理员共享」、升级后某个模型不见了 | 10-model-hub.md；Muse 要做的：先 `allow-sites <接口地址>`（`../MUSE.md` 4.5） |
 | Agent 密钥、让别的 agent / Muse 经 HTTP 操作 Muse Bridge、`/agent` | 07-settings.md「Agent 接入」；Muse 自己怎么用：`../MUSE.md` 4.8 |
 | 管理员能不能看我的对话、管理员可见性、访问记录 | 07-settings.md「账户」；06-users-admin.md |
 | Claude 显示没配认证、用量 / 额度、订阅号池（套餐、没有 5 小时限额的号、自动换号、分派方式与「智能分派」） | 02-claude-code.md；号池：06-users-admin.md「Claude 账号」；配令牌：`../MUSE.md` 4.4 |
@@ -65,7 +65,7 @@
 | 某个设置项是干什么的、语言、明暗外观、壁纸、通知、设备和端口转发、调试模式 | 07-settings.md |
 | 一直转圈 / 等待模型回复、审核卡片、地址变了、费用、隐私、数据放在哪、备份 | 08-faq.md |
 | 让 agent 打开网页、截图、操作浏览器（这台 VM 没有浏览器） | 08-faq.md |
-| 生成图片 / 视频 / 配音 / 音乐、Media Studio、Gemini 分页 / Gemini 对话去哪了、Vertex、Nano Banana、Veo、Google 云凭据、服务账号、「保存并测试」报错、gcloud、fal / Replicate / ElevenLabs 等媒体服务 | 09-media-studio.md；Muse 要做的：`../MUSE.md` 4.9 |
+| 生成图片 / 视频 / 配音 / 音乐、Media Studio、Gemini 分页 / Gemini 对话去哪了、Vertex、Nano Banana、Veo、Google 云凭据、服务账号、「保存并测试」报错（找不到项目、测试模型调不通）、gcloud、fal / Replicate / ElevenLabs 等媒体服务 | 09-media-studio.md；Muse 要做的：`../MUSE.md` 4.9 |
 | 图片尺寸 / 分辨率 / 宽高怎么设、自定义尺寸、没有比例选项、尺寸标红发不出去、改图保持原图大小、视频时长选不了（1080P、参考图） | 09-media-studio.md「用起来」 |
 | Media Studio 参数在哪调、输入框下面的小标签、恢复默认、参数刷新后还在不在、一次出多张、GIF 动图、种子、配音语言 / 双人对白、发送键是灰的（要先给首帧）、「这个服务不收…」、选项上有删除线 | 09-media-studio.md「用起来」 |
 | Vertex 有新 Gemini 型号怎么加、「检测」按钮、型号标「新」/「调不通」 | 10-model-hub.md「Vertex AI」 |
