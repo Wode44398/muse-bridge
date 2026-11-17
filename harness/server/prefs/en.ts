@@ -21,6 +21,11 @@ export const PREFS_EN: Record<string, NonNullable<PrefSpec["en"]>> = {
     desc: "Sessions that are running, waiting for you, or have queued messages are never archived; a session you unarchived is not archived automatically again",
     options: { "0": "Never", "1": "1 day", "2": "2 days", "7": "7 days", "14": "14 days", "30": "30 days" },
   },
+  quickRetention: {
+    label: "Clean up snapshot chats",
+    desc: "How earlier snapshot chats get cleaned up. Cleaned-up chats move to the recycle bin first and are deleted for good after 30 days; chats saved as a workspace are never affected",
+    options: { ttl30: "After 30 days untouched", max10: "Keep the latest 10", max20: "Keep the latest 20", max50: "Keep the latest 50", max100: "Keep the latest 100", never: "Never clean up" },
+  },
   notifyPermission: { label: "Permission requests", desc: "When dimensio needs you to approve an action or review a plan" },
   notifyQuestion: { label: "Questions", desc: "When dimensio is waiting for your answer" },
   notifyTaskComplete: { label: "Task complete", desc: "When a turn finishes or stops on an error (not when you stopped it yourself)" },

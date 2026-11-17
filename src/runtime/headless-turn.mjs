@@ -90,7 +90,7 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
   const notes = [];   // model_* 系统帧（安全栅门切换等）的官方文案——无人值守没有 UI，记进结果
   const engineAcct = activeAccountId();
   const engineEnv = claudeEngineEnv(ctx);
-  const servedAcct = () => (isUpstreamEnv(engineEnv) && lastServedAccount()) || engineAcct;
+  const servedAcct = () => (isUpstreamEnv(engineEnv) && lastServedAccount(sessionId)) || engineAcct;
   // 插件给 Claude 的工具与提示段（kind 由调用方给：插件可据此决定无人值守的轮次里给不给）
   const plug = pluginClaudeTurn(tbase, o.runTools || null);
   // 插件订阅的 tool.end：无头轮也发（与主聊天同一形状）
@@ -255,6 +255,7 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
       type: rejection ? rejection.rateLimitType : '',
       resetsAt: rejection && rejection.resetsAt ? (rejection.resetsAt < 1e12 ? rejection.resetsAt * 1000 : rejection.resetsAt) : 0,
       model: runModelBase,
+      sid: sessionId || '',
     });
     if (sw && !produced && attempt < 2) {
       console.log(`[${label}] hit ${limitKind} on ${sw.fromLabel} — rerunning on ${sw.toLabel}`);

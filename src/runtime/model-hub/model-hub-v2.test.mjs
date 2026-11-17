@@ -61,6 +61,21 @@ const upstream = http.createServer((req, res) => {
     if (mod === 'audio') return send(200, { data: [{ id: 'openai/gpt-4o-mini-tts' }] });
     return send(500, {});
   }
+  // 「探测能力」的假对话接口：probe-* 型号，像 DashScope 那样答（会自己想、输出上限不校验、能看图、乱填档位报出可选值）
+  if (u.pathname === '/v1/chat/completions' && req.method === 'POST') {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      const b = JSON.parse(raw || '{}');
+      if (!String(b.model || '').startsWith('probe-')) return send(404, { error: { message: 'model_not_found' } });
+      if (b.reasoning_effort === 'zzz-bridge-probe') return send(400, { error: { message: "'reasoning_effort' must be one of: 'none', 'low', 'medium', 'high'" } });
+      if (b.model === 'probe-limit' && b.max_tokens > 65536) return send(400, { error: { message: 'Range of max_tokens should be [1, 65536]' } });
+      const img = Array.isArray(b.messages?.[0]?.content);
+      if (img && b.model === 'probe-blind') return send(400, { error: { message: 'image input not supported' } });
+      send(200, { choices: [{ message: { role: 'assistant', reasoning_content: '想一想', content: img ? '红色' : '2' } }] });
+    });
+    return;
+  }
   send(404, {});
 });
 await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
@@ -499,6 +514,42 @@ test('assign：移除 = []；文本全移除就撤掉发布；移除的模型留
   R.assignHubModels(old.id, [{ id: 'deepseek-v4-pro', agents: [] }]);
   assert.deepEqual(C.readCatalog(old.id).models.map((m) => [m.id, m.source]), [['deepseek-v4-pro', 'manual']]);
   R.deleteHubV2(old.id);
+});
+
+test('探测能力：型号表不认识的手动模型加进来就探测，结论写进目录、添加后进自动值', async () => {
+  const r = await R.catalogAddAndProbe(X.id, { id: 'probe-new-1', kind: 'text' });
+  noKey(r, '添加并探测');
+  assert.equal(r.probeError, undefined);
+  assert.equal(r.probe.thinks, true);
+  assert.equal(r.probe.vision, true);
+  assert.deepEqual(r.probe.effortIds, ['low', 'medium', 'high']);
+  assert.ok(r.probe.notes.includes('能看图'));
+  assert.equal(r.model.vision, true);
+  assert.deepEqual(r.model.probe.effortIds, ['low', 'medium', 'high']);
+  assert.equal(r.model.probe.effortOff, true);
+  // 添加给 agent：探测结论跟着带过去，思考写法按探测出的档位拼（关闭 = none）
+  const v = R.assignHubModels(X.id, [{ id: 'probe-new-1', agents: ['dimensio'] }]).service;
+  const m = v.models.find((x) => x.id === 'probe-new-1');
+  assert.equal(m.auto.vision, true);
+  assert.equal(m.auto.thinking, 'effort');
+  assert.deepEqual(m.auto.efforts.map((e) => [e.id, e.value]), [['off', 'none'], ['low', 'low'], ['medium', 'medium'], ['high', 'high']]);
+  // 已添加的再探一次：输出上限从报错里读出来，写进已添加的模型
+  const lim = await R.catalogAddAndProbe(X.id, { id: 'probe-limit', kind: 'text' });
+  assert.equal(lim.model.maxOutput, 65536);
+  const blind = await R.catalogAddAndProbe(X.id, { id: 'probe-blind', kind: 'text' });
+  assert.equal(blind.model.vision, false);
+  const again = await R.probeHubModel(X.id, 'probe-new-1');
+  assert.equal(again.service.models.find((x) => x.id === 'probe-new-1').probe.thinks, true);
+  // 上游不认这个型号：照样加进目录，原因放在 probeError
+  const miss = await R.catalogAddAndProbe(X.id, { id: 'nope-model', kind: 'text' });
+  assert.equal(miss.model.id, 'nope-model');
+  assert.match(miss.probeError, /404/);
+  // 型号表认识的不探
+  const known = await R.catalogAddAndProbe(X.id, { id: 'glm-5.3', kind: 'text' });
+  assert.equal(known.probe, undefined);
+  await assert.rejects(R.probeHubModel(X.id, 'not-in-catalog'), /没有这个模型/);
+  R.assignHubModels(X.id, [{ id: 'probe-new-1', agents: [] }]);
+  for (const id of ['probe-new-1', 'probe-limit', 'probe-blind', 'nope-model', 'glm-5.3']) R.catalogRemoveModel(X.id, id);
 });
 
 test('目录：手动加模型 ID；重识别时手动项留着、记 detectedAt', async () => {

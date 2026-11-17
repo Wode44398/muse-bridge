@@ -95,6 +95,7 @@
   <div
     bind:this={panel}
     class="panel sz-{size}"
+    class:hx-glass={true}
     class:tall
     role="dialog"
     aria-modal="true"
@@ -158,13 +159,18 @@
   .panel.tall {
     height: calc(100dvh - 40px - var(--sat, 0px));
   }
+  /* 电脑：居中的玻璃对话框（与弹层同一种材质，透得少一些：内容多、要读） */
   .wide .panel {
     width: min(560px, 100%);
     max-height: min(760px, 100%);
-    border-radius: 20px;
+    border-radius: 24px;
+    background: var(--glass-strong);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
     box-shadow:
-      0 0 0 1px var(--border),
-      var(--shadow-3);
+      inset 0 0 0 0.5px var(--glass-rim),
+      inset 0 1px 0 var(--glass-rim),
+      var(--glass-shadow);
     transition: none;
     touch-action: auto;
   }
@@ -266,5 +272,37 @@
   }
   .wide .foot {
     padding: 14px 20px;
+  }
+
+  /* 触屏的底部面板 = iOS 的浮起玻璃面板：四周内缩 6、大圆角、半透明的纸 + 背后磨砂 + 边缘受光细线；
+     底部安全区由外边距让出（面板本身浮在手势条上方）。里面的分组列表换成玻璃上的白卡（ui/Group）。 */
+  @media (pointer: coarse) {
+    .overlay:not(.wide) {
+      padding: 0 6px calc(6px + var(--sab, 0px));
+    }
+    .overlay:not(.wide) .panel {
+      max-height: calc(100dvh - 46px - var(--sat, 0px) - var(--sab, 0px));
+      border-radius: 34px;
+      background: var(--glass-strong);
+      -webkit-backdrop-filter: var(--glass-blur);
+      backdrop-filter: var(--glass-blur);
+      box-shadow:
+        inset 0 0 0 0.5px var(--glass-rim),
+        inset 0 1px 0 var(--glass-rim),
+        var(--glass-shadow);
+    }
+    .overlay:not(.wide) .panel.tall {
+      height: calc(100dvh - 46px - var(--sat, 0px) - var(--sab, 0px));
+    }
+    .overlay:not(.wide) .content {
+      padding-bottom: 22px;
+    }
+    .overlay:not(.wide) .foot {
+      padding-bottom: 14px;
+      border-top-color: color-mix(in srgb, var(--text) 8%, transparent);
+    }
+    .overlay:not(.wide) .head {
+      padding-top: 20px;
+    }
   }
 </style>

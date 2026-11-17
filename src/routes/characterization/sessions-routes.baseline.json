@@ -1,0 +1,1532 @@
+{
+ "SR01-routes": [
+  {
+   "name": "sessions-none",
+   "status": 401,
+   "type": "text/plain",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": "unauthorized"
+  },
+  {
+   "name": "sessions",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "sessions": [
+     {
+      "id": "<id:1>",
+      "mtime": "<num>",
+      "size": 2335,
+      "projectId": "<id:2>",
+      "title": "第一问",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     },
+     {
+      "id": "<id:3>",
+      "mtime": "<num>",
+      "size": 2551,
+      "projectId": "<id:2>",
+      "title": "整理笔记的计划",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     },
+     {
+      "id": "<id:4>",
+      "mtime": "<num>",
+      "size": 6448,
+      "projectId": "<id:2>",
+      "title": "帮我看一下 notes.md 并写个报告",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     }
+    ],
+    "active": null,
+    "actives": [],
+    "pending": [],
+    "prefsLast": null,
+    "library": {
+     "rev": "<num>",
+     "stars": [],
+     "titles": {}
+    },
+    "cutoff": 0,
+    "quickExpires": {},
+    "quickPolicy": {
+     "ttlDays": 30,
+     "warnDays": 3,
+     "trashDays": 30,
+     "mode": "ttl"
+    },
+    "quickRecycled": 0,
+    "archivedCount": 0,
+    "projectCounts": {
+     "<id:2>": 3
+    },
+    "archiveRev": 0,
+    "more": false
+   }
+  },
+  {
+   "name": "sessions-quick2",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "sessions": [
+     {
+      "id": "<id:1>",
+      "mtime": "<num>",
+      "size": 2335,
+      "projectId": "<id:2>",
+      "title": "第一问",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     },
+     {
+      "id": "<id:3>",
+      "mtime": "<num>",
+      "size": 2551,
+      "projectId": "<id:2>",
+      "title": "整理笔记的计划",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     },
+     {
+      "id": "<id:4>",
+      "mtime": "<num>",
+      "size": 6448,
+      "projectId": "<id:2>",
+      "title": "帮我看一下 notes.md 并写个报告",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     }
+    ],
+    "active": null,
+    "actives": [],
+    "pending": [],
+    "prefsLast": null,
+    "library": {
+     "rev": "<num>",
+     "stars": [],
+     "titles": {}
+    },
+    "quickCount": 0,
+    "quickMore": false,
+    "quickCursor": 0,
+    "quickOrphans": [],
+    "cutoff": 0,
+    "quickExpires": {},
+    "quickPolicy": {
+     "ttlDays": 30,
+     "warnDays": 3,
+     "trashDays": 30,
+     "mode": "ttl"
+    },
+    "quickRecycled": 0,
+    "archivedCount": 0,
+    "projectCounts": {
+     "<id:2>": 3
+    },
+    "archiveRev": 0,
+    "more": false
+   }
+  },
+  {
+   "name": "sessions-archived",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "sessions": [],
+    "active": null,
+    "actives": [],
+    "pending": [],
+    "prefsLast": null,
+    "library": {
+     "rev": "<num>",
+     "stars": [],
+     "titles": {}
+    },
+    "total": 0,
+    "archive": {
+     "rev": "<num>",
+     "archived": {},
+     "unarchived": {}
+    },
+    "more": false
+   }
+  },
+  {
+   "name": "sessions-page",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "sessions": [
+     {
+      "id": "<id:1>",
+      "mtime": "<num>",
+      "size": 2335,
+      "projectId": "<id:2>",
+      "title": "第一问",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     }
+    ],
+    "active": null,
+    "actives": [],
+    "pending": [],
+    "prefsLast": null,
+    "library": {
+     "rev": "<num>",
+     "stars": [],
+     "titles": {}
+    },
+    "cutoff": 1767427200000,
+    "quickExpires": {},
+    "quickPolicy": {
+     "ttlDays": 30,
+     "warnDays": 3,
+     "trashDays": 30,
+     "mode": "ttl"
+    },
+    "quickRecycled": 0,
+    "archivedCount": 0,
+    "projectCounts": {
+     "<id:2>": 3
+    },
+    "archiveRev": 0,
+    "more": true
+   }
+  },
+  {
+   "name": "sessions-keep",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "sessions": [
+     {
+      "id": "<id:1>",
+      "mtime": "<num>",
+      "size": 2335,
+      "projectId": "<id:2>",
+      "title": "第一问",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     },
+     {
+      "id": "<id:3>",
+      "mtime": "<num>",
+      "size": 2551,
+      "projectId": "<id:2>",
+      "title": "整理笔记的计划",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     },
+     {
+      "id": "<id:4>",
+      "mtime": "<num>",
+      "size": 6448,
+      "projectId": "<id:2>",
+      "title": "帮我看一下 notes.md 并写个报告",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     }
+    ],
+    "active": null,
+    "actives": [],
+    "pending": [],
+    "prefsLast": null,
+    "library": {
+     "rev": "<num>",
+     "stars": [],
+     "titles": {}
+    },
+    "cutoff": 0,
+    "quickExpires": {},
+    "quickPolicy": {
+     "ttlDays": 30,
+     "warnDays": 3,
+     "trashDays": 30,
+     "mode": "ttl"
+    },
+    "quickRecycled": 0,
+    "archivedCount": 0,
+    "projectCounts": {
+     "<id:2>": 3
+    },
+    "archiveRev": 0,
+    "gone": [
+     "<id:5>"
+    ],
+    "more": false
+   }
+  },
+  {
+   "name": "locations",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "locations": [
+     {
+      "id": "ws",
+      "name": "工作空间",
+      "path": "<TMP:dimensio-char-bridge->\\vault"
+     },
+     {
+      "id": "home",
+      "name": "主目录",
+      "path": "<TMP:dimensio-char-bridge->\\home"
+     },
+     {
+      "id": "drive-C",
+      "name": "C:",
+      "path": "C:\\"
+     },
+     {
+      "id": "drive-D",
+      "name": "D:",
+      "path": "D:\\"
+     },
+     {
+      "id": "drive-E",
+      "name": "E:",
+      "path": "E:\\"
+     },
+     {
+      "id": "drive-G",
+      "name": "G:",
+      "path": "G:\\"
+     }
+    ]
+   }
+  },
+  {
+   "name": "projects",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "projects": [
+     {
+      "id": "<id:2>",
+      "name": "vault",
+      "path": "<TMP:dimensio-char-bridge->\\vault",
+      "created": "<num>",
+      "updated": "<num>",
+      "def": true
+     },
+     {
+      "id": "<id:6>",
+      "name": "临时对话",
+      "path": "<TMP:dimensio-char-bridge->\\home\\.bridge-quickchat\\i-<hash>\\<id:6>",
+      "created": "<num>",
+      "updated": "<num>",
+      "quick": true,
+      "current": true
+     }
+    ],
+    "order": []
+   }
+  },
+  {
+   "name": "projects-quick2",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "projects": [
+     {
+      "id": "<id:2>",
+      "name": "vault",
+      "path": "<TMP:dimensio-char-bridge->\\vault",
+      "created": "<num>",
+      "updated": "<num>",
+      "def": true
+     },
+     {
+      "id": "<id:6>",
+      "name": "临时对话",
+      "path": "<TMP:dimensio-char-bridge->\\home\\.bridge-quickchat\\i-<hash>\\<id:6>",
+      "created": "<num>",
+      "updated": "<num>",
+      "quick": true,
+      "current": true
+     }
+    ],
+    "order": []
+   }
+  },
+  {
+   "name": "project-create",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true,
+    "project": {
+     "id": "<id:2>",
+     "name": "工作空间",
+     "path": "<TMP:dimensio-char-bridge->\\vault",
+     "created": "<num>",
+     "updated": "<num>"
+    }
+   }
+  },
+  {
+   "name": "project-rename",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true,
+    "project": {
+     "id": "<id:2>",
+     "name": "char-proj-2",
+     "path": "<TMP:dimensio-char-bridge->\\vault",
+     "created": "<num>",
+     "updated": "<num>",
+     "label": "char-proj-2",
+     "def": true
+    }
+   }
+  },
+  {
+   "name": "project-order",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true,
+    "order": [
+     "<id:2>"
+    ]
+   }
+  },
+  {
+   "name": "project-delete",
+   "status": 400,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "error": "工作空间项目不可删除"
+   }
+  },
+  {
+   "name": "project-bad-json",
+   "status": 400,
+   "type": "",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": "bad json"
+  },
+  {
+   "name": "quick-new",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true,
+    "project": {
+     "id": "<id:6>",
+     "name": "临时对话",
+     "path": "<TMP:dimensio-char-bridge->\\home\\.bridge-quickchat\\i-<hash>\\<id:6>",
+     "created": "<num>",
+     "updated": "<num>",
+     "quick": true,
+     "current": true
+    }
+   }
+  },
+  {
+   "name": "quick-save-bad",
+   "status": 409,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "error": "这个临时对话已经不在了，请刷新后再试"
+   }
+  },
+  {
+   "name": "quick-keep-bad",
+   "status": 404,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "error": "这个临时对话已经不在了，请刷新后再试"
+   }
+  },
+  {
+   "name": "quick-recycled",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "items": []
+   }
+  },
+  {
+   "name": "quick-restore-bad",
+   "status": 400,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "error": "参数不对"
+   }
+  },
+  {
+   "name": "library-star",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true,
+    "library": {
+     "rev": "<num>",
+     "stars": [
+      "<id:4>"
+     ],
+     "titles": {}
+    }
+   }
+  },
+  {
+   "name": "library-title",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true,
+    "library": {
+     "rev": "<num>",
+     "stars": [
+      "<id:4>"
+     ],
+     "titles": {
+      "<id:4>": "改过的标题"
+     }
+    }
+   }
+  },
+  {
+   "name": "library-bad",
+   "status": 400,
+   "type": "",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": "bad json"
+  },
+  {
+   "name": "settings",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true,
+    "settings": {
+     "rev": "<num>",
+     "values": {
+      "autoContinueOnLimit": true,
+      "autoResumeOnRestart": true,
+      "permissionMode": "auto",
+      "outputStyle": "default",
+      "newChatLanding": "auto",
+      "promptSuggestions": true,
+      "inlineVisualizations": true,
+      "enableWorkflows": true,
+      "switchModelsOnFlag": false,
+      "planClearContext": false,
+      "questionTimeout": "10m",
+      "replyLanguage": "auto",
+      "compactFrac": null,
+      "cacheExpiry": "hint",
+      "newSessionPolicy": "ask",
+      "crossSessionInbound": "default",
+      "projectAskFirst": false,
+      "projectMaxLive": 4,
+      "projectDailyThreads": 100,
+      "projectThreadModel": "inherit",
+      "projectThreadEffort": "high",
+      "branchPrefix": "claude",
+      "worktreeBaseRef": "head",
+      "autoFixPullRequests": false,
+      "autoArchiveOnPrClose": false,
+      "attribution": "default",
+      "autoArchiveDays": 0,
+      "quickRetention": "ttl30",
+      "followDesktopArchive": true,
+      "keepAwake": true,
+      "keepAwakeOnBattery": true,
+      "allowBypass": false,
+      "allowAutoMode": true,
+      "debugMode": false
+     },
+     "admin": true,
+     "shell": true,
+     "permissionModes": [
+      "default",
+      "acceptEdits",
+      "plan",
+      "auto"
+     ],
+     "outputStyles": [
+      "default",
+      "Proactive",
+      "Concise",
+      "Explanatory",
+      "Learning"
+     ],
+     "unsupported": [
+      "keepAwake",
+      "keepAwakeOnBattery",
+      "followDesktopArchive"
+     ]
+    }
+   }
+  },
+  {
+   "name": "settings-post-bad",
+   "status": 400,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "error": "unknown setting: noSuchKey"
+   }
+  },
+  {
+   "name": "output-style",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true,
+    "style": null,
+    "def": "default",
+    "styles": [
+     "default",
+     "Proactive",
+     "Concise",
+     "Explanatory",
+     "Learning"
+    ]
+   }
+  },
+  {
+   "name": "output-style-post",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true,
+    "style": "Explanatory"
+   }
+  },
+  {
+   "name": "output-style-post-bad",
+   "status": 400,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "error": "没有这个输出风格"
+   }
+  },
+  {
+   "name": "rail",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "outputs": [],
+    "mcp": null,
+    "family": null
+   }
+  },
+  {
+   "name": "rail-missing",
+   "status": 404,
+   "type": "text/plain",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": "not found"
+  },
+  {
+   "name": "session-1",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "id": "<id:4>",
+    "projectId": "<id:2>",
+    "messages": [
+     {
+      "role": "user",
+      "text": "帮我看一下 notes.md 并写个报告",
+      "ts": "<num>",
+      "uuid": "a1"
+     },
+     {
+      "role": "assistant",
+      "segments": [
+       {
+        "kind": "text",
+        "md": "我先读一下。"
+       },
+       {
+        "kind": "tools",
+        "tools": [
+         {
+          "id": "t1",
+          "name": "Read",
+          "summary": "<TMP:dimensio-char-bridge->\\vault\\notes.md",
+          "input": {
+           "file_path": "<TMP:dimensio-char-bridge->\\vault\\notes.md"
+          },
+          "status": "done",
+          "ms": "<num>",
+          "task": null
+         },
+         {
+          "id": "t2",
+          "name": "Bash",
+          "summary": "ls",
+          "input": {
+           "command": "ls",
+           "description": "List files"
+          },
+          "status": "done",
+          "ms": "<num>",
+          "task": null
+         },
+         {
+          "id": "t3",
+          "name": "Write",
+          "summary": "<TMP:dimensio-char-bridge->\\vault\\report.html",
+          "input": {
+           "file_path": "<TMP:dimensio-char-bridge->\\vault\\report.html"
+          },
+          "status": "done",
+          "ms": "<num>",
+          "task": null
+         }
+        ],
+        "open": false
+       },
+       {
+        "kind": "ask",
+        "qid": "t4",
+        "answered": true,
+        "cancelled": false,
+        "items": [
+         {
+          "header": "发送",
+          "question": "要不要发出去？",
+          "options": [
+           {
+            "label": "要",
+            "description": ""
+           },
+           {
+            "label": "不要",
+            "description": ""
+           }
+          ],
+          "multi": false,
+          "selected": [],
+          "custom": ""
+         }
+        ]
+       },
+       {
+        "kind": "text",
+        "md": "报告写好了：report.html。"
+       }
+      ],
+      "ts": "<num>",
+      "text": "我先读一下。\n\n报告写好了：report.html。"
+     },
+     {
+      "role": "user",
+      "text": "/compact",
+      "ts": "<num>",
+      "uuid": "a11"
+     },
+     {
+      "role": "user",
+      "text": "再改一下标题",
+      "ts": "<num>",
+      "uuid": "a12"
+     },
+     {
+      "role": "assistant",
+      "segments": [
+       {
+        "kind": "tools",
+        "tools": [
+         {
+          "id": "t5",
+          "name": "Edit",
+          "summary": "<TMP:dimensio-char-bridge->\\vault\\notes.md",
+          "input": {
+           "file_path": "<TMP:dimensio-char-bridge->\\vault\\notes.md"
+          },
+          "status": "error",
+          "ms": "<num>",
+          "task": null
+         }
+        ],
+        "open": false
+       },
+       {
+        "kind": "text",
+        "md": "没改成，等你决定。"
+       }
+      ],
+      "ts": "<num>",
+      "text": "没改成，等你决定。"
+     }
+    ],
+    "truncated": false,
+    "prefs": {
+     "model": null,
+     "effort": null,
+     "fast": false,
+     "at": "<num>",
+     "outputStyle": "Explanatory"
+    },
+    "fp": "21f32c14e9716c61",
+    "archived": false
+   }
+  },
+  {
+   "name": "session-1-fp",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "id": "<id:4>",
+    "unchanged": true,
+    "fp": "21f32c14e9716c61"
+   }
+  },
+  {
+   "name": "session-2",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "id": "<id:3>",
+    "projectId": "<id:2>",
+    "messages": [
+     {
+      "role": "user",
+      "text": "计划一下怎么整理笔记",
+      "ts": "<num>",
+      "uuid": "b1"
+     },
+     {
+      "role": "assistant",
+      "segments": [
+       {
+        "kind": "plan",
+        "qid": "p1",
+        "plan": "1. 归类\n2. 合并重复",
+        "planFile": "",
+        "answered": true,
+        "decision": "accept",
+        "mode": "",
+        "feedback": ""
+       },
+       {
+        "kind": "tools",
+        "tools": [
+         {
+          "id": "k1",
+          "name": "Task",
+          "summary": "查重复",
+          "input": {
+           "description": "查重复",
+           "subagent_type": "general-purpose",
+           "prompt": "找出重复的笔记"
+          },
+          "status": "done",
+          "ms": "<num>",
+          "task": {
+           "taskId": "",
+           "taskType": "local_agent",
+           "description": "查重复",
+           "subagentType": "general-purpose",
+           "workflowName": "",
+           "name": "",
+           "prompt": "找出重复的笔记",
+           "backgrounded": false,
+           "depth": 0,
+           "status": "completed",
+           "startedAt": "<num>",
+           "endedAt": "<num>",
+           "usage": null,
+           "lastTool": "",
+           "summary": "",
+           "error": "",
+           "result": "有两篇重复",
+           "outputFile": "",
+           "runId": "",
+           "progress": [],
+           "phasesMeta": [],
+           "entries": [],
+           "toolCount": 0,
+           "latestToolName": "",
+           "model": ""
+          }
+         }
+        ],
+        "open": false
+       },
+       {
+        "kind": "text",
+        "md": "整理完了。"
+       }
+      ],
+      "ts": "<num>",
+      "text": "整理完了。"
+     }
+    ],
+    "truncated": false,
+    "prefs": null,
+    "fp": "07fd7cf58fdcb514",
+    "archived": false
+   }
+  },
+  {
+   "name": "session-3",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "id": "<id:1>",
+    "projectId": "<id:2>",
+    "messages": [
+     {
+      "role": "user",
+      "text": "第一问",
+      "ts": "<num>",
+      "uuid": "c1"
+     },
+     {
+      "role": "assistant",
+      "segments": [
+       {
+        "kind": "text",
+        "md": "答一"
+       },
+       {
+        "kind": "tools",
+        "tools": [
+         {
+          "id": "cB",
+          "name": "__compact",
+          "summary": "",
+          "input": {},
+          "status": "done",
+          "ms": "<num>",
+          "task": null,
+          "compact": {
+           "trigger": "auto",
+           "preTokens": 900000,
+           "postTokens": 20000,
+           "summary": "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. 第一问"
+          }
+         }
+        ],
+        "open": false
+       }
+      ],
+      "ts": "<num>",
+      "text": "答一"
+     },
+     {
+      "role": "user",
+      "text": "第二问",
+      "ts": "<num>",
+      "uuid": "c3"
+     },
+     {
+      "role": "assistant",
+      "segments": [
+       {
+        "kind": "text",
+        "md": "答二"
+       }
+      ],
+      "ts": "<num>",
+      "text": "答二"
+     }
+    ],
+    "truncated": false,
+    "prefs": null,
+    "fp": "fb345cf88d3df27d",
+    "archived": false
+   }
+  },
+  {
+   "name": "session-missing",
+   "status": 404,
+   "type": "text/plain",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": "not found"
+  },
+  {
+   "name": "session-bad-id",
+   "status": 400,
+   "type": "text/plain",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": "bad id"
+  },
+  {
+   "name": "sessions-after-title",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "sessions": [
+     {
+      "id": "<id:1>",
+      "mtime": "<num>",
+      "size": 2335,
+      "projectId": "<id:2>",
+      "title": "第一问",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     },
+     {
+      "id": "<id:3>",
+      "mtime": "<num>",
+      "size": 2551,
+      "projectId": "<id:2>",
+      "title": "整理笔记的计划",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     },
+     {
+      "id": "<id:4>",
+      "mtime": "<num>",
+      "size": 6448,
+      "projectId": "<id:2>",
+      "title": "帮我看一下 notes.md 并写个报告",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     }
+    ],
+    "active": null,
+    "actives": [],
+    "pending": [],
+    "prefsLast": null,
+    "library": {
+     "rev": "<num>",
+     "stars": [
+      "<id:4>"
+     ],
+     "titles": {
+      "<id:4>": "改过的标题"
+     }
+    },
+    "cutoff": 0,
+    "quickExpires": {},
+    "quickPolicy": {
+     "ttlDays": 30,
+     "warnDays": 3,
+     "trashDays": 30,
+     "mode": "ttl"
+    },
+    "quickRecycled": 0,
+    "archivedCount": 0,
+    "projectCounts": {
+     "<id:2>": 3
+    },
+    "archiveRev": 0,
+    "more": false
+   }
+  },
+  {
+   "name": "artifact",
+   "status": 200,
+   "type": "text/plain",
+   "head": {
+    "disposition": "inline; filename*=UTF-8''report.html",
+    "cache": "private, max-age=3600"
+   },
+   "body": "<title>report</title><h1>report</h1>"
+  },
+  {
+   "name": "artifact-dl",
+   "status": 200,
+   "type": "text/plain",
+   "head": {
+    "disposition": "attachment; filename*=UTF-8''report.html",
+    "cache": "private, max-age=3600"
+   },
+   "body": "<title>report</title><h1>report</h1>"
+  },
+  {
+   "name": "artifact-missing",
+   "status": 404,
+   "type": "text/plain",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": "not found"
+  },
+  {
+   "name": "artifact-locate",
+   "status": 400,
+   "type": "text/plain",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": "missing path"
+  },
+  {
+   "name": "quote",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true,
+    "path": "<TMP:dimensio-char-bridge->\\data\\uploads\\<epoch>-chatref-<id:3>-整理笔记的计划.md",
+    "name": "整理笔记的计划",
+    "file": "<epoch>-chatref-<id:3>-整理笔记的计划.md",
+    "count": 2
+   }
+  },
+  {
+   "name": "quote-bad",
+   "status": 404,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "error": "找不到这个对话"
+   }
+  },
+  {
+   "name": "export",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true,
+    "path": "<TMP:dimensio-char-bridge->\\vault\\Remote Space\\conversations\\<DATE>_第一问_33333333.md",
+    "count": 4
+   }
+  },
+  {
+   "name": "export-bad",
+   "status": 400,
+   "type": "",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": "bad json"
+  },
+  {
+   "name": "rewind-bad",
+   "status": 400,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "error": "参数不合法"
+   }
+  },
+  {
+   "name": "rewind",
+   "status": 400,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "error": "参数不合法"
+   }
+  },
+  {
+   "name": "session-1-after-rewind",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "id": "<id:4>",
+    "projectId": "<id:2>",
+    "messages": [
+     {
+      "role": "user",
+      "text": "帮我看一下 notes.md 并写个报告",
+      "ts": "<num>",
+      "uuid": "a1"
+     },
+     {
+      "role": "assistant",
+      "segments": [
+       {
+        "kind": "text",
+        "md": "我先读一下。"
+       },
+       {
+        "kind": "tools",
+        "tools": [
+         {
+          "id": "t1",
+          "name": "Read",
+          "summary": "<TMP:dimensio-char-bridge->\\vault\\notes.md",
+          "input": {
+           "file_path": "<TMP:dimensio-char-bridge->\\vault\\notes.md"
+          },
+          "status": "done",
+          "ms": "<num>",
+          "task": null
+         },
+         {
+          "id": "t2",
+          "name": "Bash",
+          "summary": "ls",
+          "input": {
+           "command": "ls",
+           "description": "List files"
+          },
+          "status": "done",
+          "ms": "<num>",
+          "task": null
+         },
+         {
+          "id": "t3",
+          "name": "Write",
+          "summary": "<TMP:dimensio-char-bridge->\\vault\\report.html",
+          "input": {
+           "file_path": "<TMP:dimensio-char-bridge->\\vault\\report.html"
+          },
+          "status": "done",
+          "ms": "<num>",
+          "task": null
+         }
+        ],
+        "open": false
+       },
+       {
+        "kind": "ask",
+        "qid": "t4",
+        "answered": true,
+        "cancelled": false,
+        "items": [
+         {
+          "header": "发送",
+          "question": "要不要发出去？",
+          "options": [
+           {
+            "label": "要",
+            "description": ""
+           },
+           {
+            "label": "不要",
+            "description": ""
+           }
+          ],
+          "multi": false,
+          "selected": [],
+          "custom": ""
+         }
+        ]
+       },
+       {
+        "kind": "text",
+        "md": "报告写好了：report.html。"
+       }
+      ],
+      "ts": "<num>",
+      "text": "我先读一下。\n\n报告写好了：report.html。"
+     },
+     {
+      "role": "user",
+      "text": "/compact",
+      "ts": "<num>",
+      "uuid": "a11"
+     },
+     {
+      "role": "user",
+      "text": "再改一下标题",
+      "ts": "<num>",
+      "uuid": "a12"
+     },
+     {
+      "role": "assistant",
+      "segments": [
+       {
+        "kind": "tools",
+        "tools": [
+         {
+          "id": "t5",
+          "name": "Edit",
+          "summary": "<TMP:dimensio-char-bridge->\\vault\\notes.md",
+          "input": {
+           "file_path": "<TMP:dimensio-char-bridge->\\vault\\notes.md"
+          },
+          "status": "error",
+          "ms": "<num>",
+          "task": null
+         }
+        ],
+        "open": false
+       },
+       {
+        "kind": "text",
+        "md": "没改成，等你决定。"
+       }
+      ],
+      "ts": "<num>",
+      "text": "没改成，等你决定。"
+     }
+    ],
+    "truncated": false,
+    "prefs": {
+     "model": null,
+     "effort": null,
+     "fast": false,
+     "at": "<num>",
+     "outputStyle": "Explanatory"
+    },
+    "fp": "21f32c14e9716c61",
+    "archived": false
+   }
+  },
+  {
+   "name": "delete",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "ok": true
+   }
+  },
+  {
+   "name": "delete-again",
+   "status": 400,
+   "type": "text/plain",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": "bad id"
+  },
+  {
+   "name": "sessions-after-delete",
+   "status": 200,
+   "type": "application/json",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": {
+    "sessions": [
+     {
+      "id": "<id:3>",
+      "mtime": "<num>",
+      "size": 2551,
+      "projectId": "<id:2>",
+      "title": "整理笔记的计划",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     },
+     {
+      "id": "<id:4>",
+      "mtime": "<num>",
+      "size": 6448,
+      "projectId": "<id:2>",
+      "title": "帮我看一下 notes.md 并写个报告",
+      "thinking": false,
+      "pending": false,
+      "origin": "desktop"
+     }
+    ],
+    "active": null,
+    "actives": [],
+    "pending": [],
+    "prefsLast": null,
+    "library": {
+     "rev": "<num>",
+     "stars": [
+      "<id:4>"
+     ],
+     "titles": {
+      "<id:4>": "改过的标题"
+     }
+    },
+    "cutoff": 0,
+    "quickExpires": {},
+    "quickPolicy": {
+     "ttlDays": 30,
+     "warnDays": 3,
+     "trashDays": 30,
+     "mode": "ttl"
+    },
+    "quickRecycled": 0,
+    "archivedCount": 0,
+    "projectCounts": {
+     "<id:2>": 2
+    },
+    "archiveRev": 0,
+    "more": false
+   }
+  },
+  {
+   "name": "unknown",
+   "status": 404,
+   "type": "text/plain",
+   "head": {
+    "disposition": null,
+    "cache": null
+   },
+   "body": "not found"
+  }
+ ]
+}

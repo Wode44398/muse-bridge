@@ -4,7 +4,7 @@
 // （带去向），这里存的是可供勾选的全集，单独一份文件，免得 services.json 动辄几百 KB、每次改个名字都整份重写。
 //   <数据根>/model-hub/catalog/<服务 id>.json = { at, models:[CatalogModel], media? }
 //   CatalogModel = { id, label, kind（text|image|video|voice|music|other）, vendor（模型厂键或 ''）, contextWindow?, maxOutput?, vision?,
-//                    source:'api'|'catalog'|'name'|'manual' }
+//                    source:'api'|'catalog'|'name'|'manual', probe?: { at, thinks?, effortIds?, effortOff? }（「探测能力」的结论，见 cleanProbe）}
 //   media = { dialect, kinds:[模型中心种类] }：识别时 Studio 说这个地址的媒体接口是什么方言、能做哪几类（只在服务端用，算 ServiceView.media）。
 // 写盘一律原子（jsonfile.writeJson：tmp + rename）；内存里按服务缓存一份，总览每次 GET 不用重读文件。
 import { rmSync } from 'node:fs';
@@ -49,8 +49,26 @@ export function cleanCatalogModel(m, dfltSource = 'api') {
     ...(ctx ? { contextWindow: ctx } : {}), ...(out ? { maxOutput: out } : {}),
     ...(typeof o.vision === 'boolean' ? { vision: o.vision } : {}),
     source: SOURCES.includes(o.source) ? o.source : dfltSource,
+    ...(cleanProbe(o.probe) ? { probe: cleanProbe(o.probe) } : {}),
   };
 }
+
+const PROBE_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+/**
+ * 「探测能力」的结论里要记下来的部分（probe.mjs 的 probeLineModel）：{ at, thinks?, effortIds?, effortOff? }；不合法回 undefined。
+ * 输出上限 / 识图直接写进条目本身的 maxOutput / vision；这里只留型号表没有时拿来拼思考写法的那几项（registry.autoSpec）。
+ */
+export function cleanProbe(v) {
+  if (!v || typeof v !== 'object' || !Number.isFinite(v.at)) return undefined;
+  const ids = Array.isArray(v.effortIds) ? PROBE_EFFORTS.filter((x) => v.effortIds.includes(x)) : [];
+  return {
+    at: Math.round(v.at),
+    ...(typeof v.thinks === 'boolean' ? { thinks: v.thinks } : {}),
+    ...(ids.length ? { effortIds: ids, ...(v.effortOff === true ? { effortOff: true } : {}) } : {}),
+  };
+}
+/** 探测结论里能直接当能力用的：{ maxOutput?, vision? } */
+export const probeCaps = (r) => ({ ...(r?.maxOutput ? { maxOutput: r.maxOutput } : {}), ...(typeof r?.vision === 'boolean' ? { vision: r.vision } : {}) });
 
 function cleanMedia(v) {
   if (!v || typeof v !== 'object' || !DIALECT_RE.test(String(v.dialect || ''))) return null;
@@ -132,6 +150,16 @@ export function addCatalogModel(sid, model, { protocol = 'openai' } = {}) {
   const rest = cur.models.filter((m) => m.id !== id);
   if (rest.length >= CATALOG_MAX) throw bad(`目录最多 ${CATALOG_MAX} 个模型`);
   writeCatalog(sid, { at: cur.at || Date.now(), models: [...rest, entry], media: cur.media });
+  return entry;
+}
+
+/** 探测结论写回目录里的一条（maxOutput / vision 有才覆盖，probe 整块换）→ 新条目；目录里没有这条 = null。 */
+export function patchCatalogProbe(sid, id, result) {
+  const cur = readCatalog(sid);
+  const old = cur.models.find((m) => m.id === id);
+  if (!old) return null;
+  const entry = cleanCatalogModel({ ...old, ...probeCaps(result), probe: { ...result, at: Date.now() } }, old.source);
+  writeCatalog(sid, { at: cur.at || Date.now(), models: cur.models.map((m) => (m.id === id ? entry : m)), media: cur.media });
   return entry;
 }
 

@@ -132,3 +132,14 @@ test('逐字前缀扫描：修补后可见文字单调增长（对照：不修�
     assert.ok(!t.includes('h1') && !t.includes('h3'), '不应闪出别级标题 @' + i);
   }
 });
+
+test('可选口径（给语法更少的渲染器，如 dimensio）：不认的定界符 / 围栏 / 公式不补不扣，写头链接替身可换', () => {
+  const lite = { emph: '*', fences: '`', math: false, link: (t, u) => (u.startsWith('h') ? '[[' + t + ']]' : null) };
+  assert.equal(repairTail('a **b _c ~~d'), 'a **b _c ~~d~~_**');          // 默认口径不变
+  assert.equal(repairTail('a **b _c ~~d', lite), 'a **b _c ~~d**');
+  assert.equal(repairTail('x\n~~~\ncode', lite), 'x\n~~~\ncode');         // ~~~ 不是围栏
+  assert.equal(repairTail('x\n$$\na', lite), 'x\n$$\na');                // 没有公式块
+  assert.equal(repairTail('见 [文档](htt'), '见 <a>文档</a>');
+  assert.equal(repairTail('见 [文档](htt', lite), '见 [[文档]]');
+  assert.equal(repairTail('见 [文档](./a', lite), '见 [文档](./a');      // 替身返回 null：按原文留着
+});

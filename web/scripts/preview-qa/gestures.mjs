@@ -22,6 +22,7 @@ const desk = { touch: false, mobile: false, sat: 0, sab: 0, lang: 'zh', theme: '
 /** 视口档。加档就往这里加一行（id 唯一）。 */
 export const PROFILES = {
   p393: { id: 'p393', w: 393, h: 873, dpr: 2.75, ...phone },                         // 维护者的手机（1080×2520 / 2.75）
+  'p393-dark': { id: 'p393-dark', w: 393, h: 873, dpr: 2.75, ...phone, theme: 'dark' },
   p360: { id: 'p360', w: 360, h: 780, dpr: 3, ...phone, sat: 32, sab: 18 },          // 窄屏安卓
   fold720: { id: 'fold720', w: 720, h: 900, dpr: 2.5, ...phone, sat: 32, sab: 16 },  // 折叠屏展开
   d1440: { id: 'd1440', w: 1440, h: 900, dpr: 1, ...desk },

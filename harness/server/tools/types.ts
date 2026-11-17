@@ -49,6 +49,11 @@ export interface GoalVerdict {
   verification?: ToolRunResult["verification"];
 }
 
+export interface ToolPolicy {
+  verifyContract: "strict" | "lenient"; // lenient：verify:true 写法不合格时不打回，按没带 verify 执行、不记证据
+  readBeforeEdit: "strict" | "off"; // off：Edit 不要求先 Read
+}
+
 export interface ToolContext {
   sandbox: Sandbox;
   readFileState: Map<string, FileState>;
@@ -69,6 +74,8 @@ export interface ToolContext {
   ownerId?: string;
   // Config knobs surfaced from the session (timeouts, limits, ...).
   limits: { bashTimeoutMs: number; bashMaxTimeoutMs: number };
+  // 按模型家族放松的工具契约（取自模型档案，逐次调用挂上）；没有 = 全按 strict
+  toolPolicy?: ToolPolicy;
   // Whether the MAIN agent model can see images. Lets a tool decide to feed a
   // screenshot back to the agent itself (multimodal) vs. route it to a separate
   // vision model (text-only agent like DeepSeek).
@@ -442,4 +449,16 @@ export function ok(summary: string, body: string): ToolRunResult {
 }
 export function fail(summary: string, body: string): ToolRunResult {
   return { ok: false, summary, content: [{ t: "text", text: body }] };
+}
+
+// 档案放松了 verify:true 的写法契约（verifyContract=lenient）：写法不合格的不打回，按没带 verify 跑，结果里说清楚没记证据
+export const lenientVerify = (ctx: Pick<ToolContext, "toolPolicy">): boolean => ctx.toolPolicy?.verifyContract === "lenient";
+
+export function verifyIgnored(res: ToolRunResult, why: string): ToolRunResult {
+  const note = `[verify:true ignored — ran as an ordinary command and NOT recorded as verification evidence: ${why}]`;
+  const content = [...res.content];
+  const last = content.at(-1);
+  if (last?.t === "text") content[content.length - 1] = { ...last, text: `${last.text}\n${note}` };
+  else content.push({ t: "text", text: note });
+  return { ...res, content };
 }

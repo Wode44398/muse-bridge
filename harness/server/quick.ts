@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync } from "./atomic-write.ts";
 import { quickFile as storeFile, quickRoot } from "./paths.ts";
@@ -180,6 +180,23 @@ export function adoptCurrentQuick(saved: { path: string; seq: number }): QuickPr
   return asProject(next);
 }
 
+// ---- 给清理（quick-prune.ts）用的 ----
+// 桶目录名是 UUID；回收站 .recycled 等别的名字不是桶。
+export const QUICK_BUCKET_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// 某个快照路径所在的那只桶（桶根下第一层目录）；不在桶根下 → null
+export function quickBucketOf(p: string | undefined): string | null {
+  if (!p?.trim() || !underRoot(p)) return null;
+  const rel = path.relative(path.resolve(quickRoot()), path.resolve(p));
+  const first = rel.split(/[\\/]/)[0];
+  return first ? path.join(path.resolve(quickRoot()), first) : null;
+}
+// 当前桶与已存走的桶（fold 过的绝对路径），清理一律跳过它们。指针读不了就抛——清理宁可这轮不跑。
+export function quickKeepSet(): { current: string; adopted: Set<string> } {
+  const { adopted } = readPointer();
+  return { current: fold(currentBucket().path), adopted: new Set(adopted.map((a) => fold(path.resolve(a)))) };
+}
+export const foldQuickPath = (p: string): string => fold(path.resolve(p));
+
 export function isCurrentQuickPath(p: string | undefined): boolean {
   if (!isQuickPath(p)) return false;
   try {
@@ -199,12 +216,22 @@ export const QUICK_LINGER_MS = 30 * 60_000;
 //   ④ 最近 QUICK_LINGER_MS 内动过的。
 // 其余（旧桶的老会话、当前桶更旧的会话）隐藏，文件留盘不删。
 // 以前只认①：别处一点「新建快照」，正在跑的那条快照对话当场从所有侧栏消失（2026-10-13 维护者截图）。
+// 桶已经被清理进回收站（目录不在了）的会话一律不列，也不占②的位置（quick-prune.ts）。
 export function quickSessionFilter(opts: { busy?: (id: string) => boolean; now?: number } = {}): (m: SessionMeta) => boolean {
   let seenCurrent = false;
   let seenAny = false;
   const now = opts.now ?? Date.now();
+  const alive = new Map<string, boolean>();
+  const bucketAlive = (ws: string): boolean => {
+    const b = quickBucketOf(ws);
+    if (!b) return true;
+    let v = alive.get(b);
+    if (v === undefined) alive.set(b, (v = existsSync(b)));
+    return v;
+  };
   return (m) => {
     if (!isQuickPath(m.workspace)) return true;
+    if (!bucketAlive(m.workspace!) && !opts.busy?.(m.id)) return false;
     let keep = !seenAny;
     seenAny = true;
     if (!seenCurrent && isCurrentQuickPath(m.workspace)) {

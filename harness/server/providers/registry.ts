@@ -1,4 +1,4 @@
-import type { AdapterConfig, CustomWire, ProviderAdapter } from "./types.ts";
+import type { AdapterConfig, CustomWire, HostWire, ProviderAdapter } from "./types.ts";
 import { createAnthropicAdapter } from "./anthropic.ts";
 import { createOpenAIAdapter } from "./openai.ts";
 import { createGeminiAdapter } from "./gemini.ts";
@@ -54,6 +54,21 @@ function applyCacheTtl(adapter: ProviderAdapter, cfg: AdapterConfig): void {
   else delete caps.cacheTtlMs;
 }
 
+// 宿主模型中心接管了这家：把服务的兼容项与这个型号的档位表、调用参数交给适配器（没接管 / 老 bridge = 原样）
+function withHost(cfg: AdapterConfig): AdapterConfig {
+  const b = hostBuiltin(cfg.provider);
+  if (!b) return cfg;
+  const m = b.models.find((x) => x.id === cfg.model);
+  const host: HostWire = {
+    ...(b.replayReasoning !== undefined ? { replayReasoning: b.replayReasoning } : {}),
+    ...(b.maxTokensField ? { maxTokensField: b.maxTokensField } : {}),
+    ...(b.upstream ? { upstreamHost: b.upstream } : {}),
+    ...(m?.tiers ? { model: m.tiers } : {}),
+    ...(m?.params ? { params: m.params } : {}),
+  };
+  return { ...cfg, host };
+}
+
 function createProviderAdapter(cfg: AdapterConfig): ProviderAdapter {
   if (isCustomProviderId(cfg.provider)) {
     // 自定义服务：地址、协议、鉴权、型号能力都现读注册表（会话快照里的旧地址不算——改了地址，旧会话接着聊也走新地址）。
@@ -103,7 +118,7 @@ function createProviderAdapter(cfg: AdapterConfig): ProviderAdapter {
       // on cfg.provider for the few provider-specific bits (Qwen's enable_thinking,
       // Zhipu's thinking:{type} + reasoning_effort, Kimi's permanent thinking +
       // reasoning_content replay, local llama.cpp's chat_template_kwargs).
-      return createOpenAIAdapter(cfg);
+      return createOpenAIAdapter(cfg.provider === "local" ? cfg : withHost(cfg));
     default:
       throw new Error(`Unknown provider: ${(cfg as AdapterConfig).provider}`);
   }

@@ -8,12 +8,16 @@
   // 几何全靠 Feed 列上的变量：--gutter 节点列宽、--rail-x 节点中心、--row-h 头行高、--rail-gap 相邻两行的间距（上接线
   // 要跨过这段间距，所以间距必须正好是它）。clear = 线在节点上下留的空（圆点小、标志大）。nodeY = 节点中心离行顶的距离
   //（默认头行正中；卡片按卡片第一行定）。
+  //
+  // bare = 精简模式（默认）：不画量线与节点，头行是对齐 bridge Claude 分页（= 官方 /code 页）的纯文字折叠头——次级字色、
+  // 悬停提亮、箭头紧跟在文字后面（收着朝右、展开转下）；trail = 推到行尾的计时 / 计数（在按钮外面，不跟着变色）。
   import type { Snippet } from "svelte";
   import Icon from "../ui/Icon.svelte";
 
   let {
     up = false,
     down = false,
+    bare = false,
     clear = 6,
     nodeY,
     node,
@@ -23,25 +27,46 @@
     onclick,
     expanded,
     title,
+    trail,
     children,
   }: {
     up?: boolean;
     down?: boolean;
+    bare?: boolean;
     clear?: number;
     nodeY?: string;
-    node: Snippet;
+    node?: Snippet;
     head?: Snippet;
     chev?: "down" | "right" | null;
     open?: boolean;
     onclick?: (e: MouseEvent) => void;
     expanded?: boolean;
     title?: string;
+    trail?: Snippet;
     children?: Snippet;
   } = $props();
 </script>
 
+{#if bare}
+  <div class="rr bare">
+    {#if head}
+      <div class="bline">
+        {#if onclick}
+          <button class="bhead btn" {onclick} aria-expanded={expanded} {title}>
+            {@render head()}
+            {#if chev}<span class="caret" class:open><Icon name="chevronR" size={13} stroke={1.9} /></span>{/if}
+          </button>
+        {:else}
+          <div class="bhead">{@render head()}</div>
+        {/if}
+        {#if trail}<span class="trail">{@render trail()}</span>{/if}
+      </div>
+    {/if}
+    {#if children}{@render children()}{/if}
+  </div>
+{:else}
 <div class="rr" class:up class:down style:--clear="{clear}px" style:--node-y={nodeY}>
-  <span class="rnode" aria-hidden="true">{@render node()}</span>
+  <span class="rnode" aria-hidden="true">{#if node}{@render node()}{/if}</span>
   {#if head}
     {#if onclick}
       <button class="rhead btn" {onclick} aria-expanded={expanded} {title}>
@@ -54,6 +79,7 @@
   {/if}
   {#if children}{@render children()}{/if}
 </div>
+{/if}
 
 <style>
   .rr {
@@ -141,8 +167,76 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .chev {
+    .chev,
+    .caret {
       transition: opacity var(--t-fast) var(--ease);
+    }
+  }
+
+  /* ── 精简模式：纯文字折叠头 ── */
+  .rr.bare {
+    padding-left: 0;
+  }
+  .bline {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    min-height: var(--row-h);
+  }
+  /* 整行宽都能点（触屏好点），箭头紧跟文字；悬停只提亮字色、不浮底 */
+  .bhead {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    min-height: var(--row-h);
+    padding: 0;
+    border-radius: var(--r-xs);
+    text-align: left;
+    color: var(--text2);
+    font-size: var(--fs-base);
+    line-height: 20px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .bhead.btn {
+    transition: color var(--t-fast) var(--ease);
+  }
+  .bhead.btn:active {
+    color: var(--text);
+  }
+  .caret {
+    display: inline-flex;
+    flex: none;
+    margin-left: -2px;
+    color: currentColor;
+    opacity: 0.6;
+    transition:
+      transform var(--t-med) var(--ease-out),
+      opacity var(--t-fast) var(--ease);
+  }
+  .caret.open {
+    transform: rotate(90deg);
+  }
+  .trail {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    font-variant-numeric: tabular-nums;
+    color: var(--text3);
+    white-space: nowrap;
+  }
+  @media (hover: hover) {
+    .bhead.btn:hover {
+      color: var(--text);
+    }
+    .bhead.btn:hover .caret {
+      opacity: 1;
     }
   }
 </style>

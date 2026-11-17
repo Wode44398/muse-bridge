@@ -189,8 +189,8 @@ export default {
   // —— dimensio 那份调用策略（设置 › dimensio › 子 agent 调用策略；入口行在 DimensioSection.svelte / Settings.svelte 的 dimensio 页，
   //     子页同一份 DispatchPolicy.svelte，副标题在 lib/dimensioSettings.svelte.js）——
   '子 agent 调度': 'Subagent dispatch',
-  '派子 agent 时按难度选模型与思考深度：可以跟随 Claude 的调用策略，也可以给 dimensio 单独定一套。':
-    'Pick the model and thinking depth for each subagent by difficulty: follow Claude’s dispatch policy, or give dimensio its own.',
+  '派子 agent 时按难度选模型与思考深度：默认 dimensio 单独一套，也可以改成跟随 Claude 的调用策略。':
+    'Pick the model and thinking depth for each subagent by difficulty: dimensio has its own policy by default, or it can follow Claude’s.',
   '已关闭 · 子 agent 沿用本会话的模型': 'Off · subagents use this session’s model',
   '跟随 Claude · {name}': 'Following Claude · {name}',
   '跟随 Claude 的策略': 'Follow Claude’s policy',

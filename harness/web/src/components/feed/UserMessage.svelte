@@ -8,6 +8,8 @@
   import { openSession, rewindAvailable, toast, type AttachmentItem, type Item } from "../../lib/state.svelte.ts";
   import * as api from "../../lib/api.ts";
   import { openChatMedia } from "../../lib/open-media.ts";
+  import { attachLocal } from "../../lib/attach.svelte.ts";
+  import { previewable } from "../../lib/attach-kind.ts";
   import type { IconName } from "../../lib/icons.ts";
   import { fade, press } from "../../lib/motion.ts";
   import Icon from "../ui/Icon.svelte";
@@ -39,14 +41,17 @@
   function copy() {
     navigator.clipboard?.writeText(item.text).then(() => toast(t("已复制")));
   }
-  const attIcon = (k: string): IconName => (k === "audio" ? "audio" : k === "image" ? "camera" : k === "folder" ? "folder" : "file");
+  const attIcon = (k: string): IconName => (k === "audio" ? "audio" : k === "video" ? "play" : k === "image" ? "camera" : k === "folder" ? "folder" : "file");
   const attName = (p: string) => p.replace(/\/$/, "").split("/").pop() ?? p;
   // 附件：图片画成小缩略图、点开进本会话画廊；其它文件（pdf / 文档 / 音视频）点开进查看器；文件夹只是标注。
   // 读法同工作区文件（dock 接口按本会话的工作区解析 .dimensio/uploads/… 路径）。缩略图加载失败就退回文件芯片。
-  const imgAtts = $derived((item.attachments ?? []).filter((a) => a.kind === "image"));
-  const fileAtts = $derived((item.attachments ?? []).filter((a) => a.kind !== "image"));
+  // 视频（浏览器画得出的 mp4 / mov / webm）同样画成小图（取第 0.1 秒那一帧 + ▶），点开进查看器
+  const isThumb = (a: AttachmentItem) => a.kind === "image" || (a.kind === "video" && previewable(a.path) === "video");
+  const imgAtts = $derived((item.attachments ?? []).filter(isThumb));
+  const fileAtts = $derived((item.attachments ?? []).filter((a) => !isThumb(a)));
   let broken = $state<string[]>([]);
-  const thumbSrc = (a: AttachmentItem) => api.dockFileUrl(pane.chat.id ? { chatId: pane.chat.id } : {}, a.path);
+  // 这台设备刚传的先用本机那份（不等服务端），没有再走 dock 文件接口
+  const thumbSrc = (a: AttachmentItem) => attachLocal[a.path]?.url ?? api.dockFileUrl(pane.chat.id ? { chatId: pane.chat.id } : {}, a.path);
   function onThumbError(a: AttachmentItem) {
     if (!broken.includes(a.path)) broken = [...broken, a.path];
   }
@@ -74,11 +79,16 @@
           {#each imgAtts as a (a.path)}
             {#if broken.includes(a.path)}
               <button class="att open" title={t("预览 {name}", { name: attName(a.path) })} onclick={(e) => openAtt(e, a)}>
-                <Icon name="camera" size={13} /><span class="an">{attName(a.path)}</span>
+                <Icon name={a.kind === "video" ? "play" : "camera"} size={13} /><span class="an">{attName(a.path)}</span>
               </button>
             {:else}
               <button class="thumb" class:solo={imgAtts.length === 1} aria-label={t("预览 {name}", { name: attName(a.path) })} title={attName(a.path)} onclick={(e) => openAtt(e, a, e.currentTarget.querySelector("img"))}>
-                <img src={thumbSrc(a)} alt="" loading="lazy" decoding="async" draggable="false" onerror={() => onThumbError(a)} />
+                {#if a.kind === "video"}
+                  <video src={`${thumbSrc(a)}#t=0.1`} muted playsinline preload="metadata" onerror={() => onThumbError(a)}></video>
+                  <span class="vplay" aria-hidden="true"><Icon name="play" size={10} stroke={0} /></span>
+                {:else}
+                  <img src={thumbSrc(a)} alt="" loading="lazy" decoding="async" draggable="false" onerror={() => onThumbError(a)} />
+                {/if}
               </button>
             {/if}
           {/each}
@@ -240,6 +250,35 @@
     min-width: 64px;
     max-width: 200px;
     height: 120px;
+  }
+  .thumb {
+    position: relative;
+  }
+  .thumb video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+  }
+  .thumb.solo video {
+    width: auto;
+    max-width: 200px;
+  }
+  .vplay {
+    position: absolute;
+    left: 6px;
+    bottom: 6px;
+    display: inline-grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: rgba(18, 16, 14, 0.58);
+    color: #fff;
+  }
+  .vplay :global(svg) {
+    fill: currentColor;
   }
   .thumb img {
     display: block;

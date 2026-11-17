@@ -1,0 +1,2983 @@
+{
+ "CR01-routes": {
+  "results": [
+   {
+    "name": "unauthorized",
+    "status": 401,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "unauthorized harness API request"
+    }
+   },
+   {
+    "name": "preflight",
+    "status": 204,
+    "type": "",
+    "head": {
+     "total": null,
+     "cors": "http://127.0.0.1:<port>",
+     "guard": "1"
+    },
+    "body": ""
+   },
+   {
+    "name": "info",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "catalog": [
+      {
+       "defaultModel": "string",
+       "id": "string",
+       "models": [
+        {
+         "ctx": "number",
+         "efforts": [
+          "string"
+         ],
+         "fast": "boolean",
+         "id": "string",
+         "image": "boolean",
+         "label": "string",
+         "maxOut": "number",
+         "note": "string"
+        }
+       ],
+       "name": "string"
+      }
+     ],
+     "hostBuiltins": "boolean",
+     "platform": "string",
+     "projectsRoot": "string",
+     "protocol": {
+      "capabilities": [
+       "string"
+      ],
+      "minClient": "number",
+      "version": "number"
+     },
+     "providers": {
+      "anthropic": "boolean",
+      "gemini": "boolean",
+      "kimi": "boolean",
+      "local": "boolean",
+      "mimo": "boolean",
+      "openai": "boolean",
+      "qwen": "boolean",
+      "zhipu": "boolean"
+     },
+     "shell": "string",
+     "tenant": {
+      "accessLocked": "null",
+      "shareProviders": "boolean",
+      "shell": "boolean",
+      "tenant": "boolean"
+     },
+     "tools": [
+      "string"
+     ],
+     "workspace": "string"
+    }
+   },
+   {
+    "name": "busy",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "running": false,
+     "runs": [],
+     "retiring": false
+    }
+   },
+   {
+    "name": "config-get",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "provider": "anthropic",
+     "model": "claude-opus-5-5",
+     "permissionMode": "auto",
+     "permissionRules": {
+      "allow": [],
+      "deny": [],
+      "ask": []
+     },
+     "thinking": "low",
+     "access": "full",
+     "fast": false,
+     "hasKey": false,
+     "accessLocked": null,
+     "awayDecision": "deny",
+     "cacheExpiry": "hint"
+    }
+   },
+   {
+    "name": "config-post-bad-rule",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "权限规则有误：「NoSuchTool(x)」里的工具 NoSuchTool 不存在"
+    }
+   },
+   {
+    "name": "config-post",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "provider": "local",
+     "model": "qwen3.8-27b",
+     "permissionMode": "auto",
+     "permissionRules": {
+      "allow": [],
+      "deny": [],
+      "ask": []
+     },
+     "thinking": "low",
+     "workspace": "<TMP:dimensio-char-routes-ws->",
+     "access": "full",
+     "fast": false,
+     "hasKey": true
+    }
+   },
+   {
+    "name": "devices",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "available": false,
+     "enabled": false,
+     "devices": [],
+     "link": ""
+    }
+   },
+   {
+    "name": "devices-link-off",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "device channel not connected"
+    }
+   },
+   {
+    "name": "commands",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "skills": [],
+     "packages": []
+    }
+   },
+   {
+    "name": "mcp",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "connectors": []
+    }
+   },
+   {
+    "name": "net",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "outbound": {
+      "checkedAt": "number",
+      "mode": "string",
+      "proxy": "string",
+      "reason": "string"
+     },
+     "websearch": {
+      "byBackend": {},
+      "cacheHits": "number",
+      "calls": "number",
+      "chain": [
+       "string"
+      ],
+      "failed": "number"
+     }
+    }
+   },
+   {
+    "name": "prefs",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "groups": [
+      {
+       "en": "string",
+       "id": "string",
+       "label": "string"
+      }
+     ],
+     "items": [
+      {
+       "default": "boolean",
+       "desc": "string",
+       "en": {
+        "desc": "string",
+        "label": "string"
+       },
+       "group": "string",
+       "key": "string",
+       "label": "string",
+       "type": "string",
+       "value": "boolean"
+      }
+     ]
+    }
+   },
+   {
+    "name": "prefs-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "prefs: 不认识的设置项 noSuchPref"
+    }
+   },
+   {
+    "name": "provider-keys-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "unknown provider: no-such"
+    }
+   },
+   {
+    "name": "custom-guess",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "models": [
+      {
+       "id": "gpt-4o",
+       "label": "gpt-4o",
+       "enabled": true,
+       "kind": "chat",
+       "contextWindow": 128000,
+       "maxOutput": 16384,
+       "vision": true,
+       "video": false,
+       "audio": false,
+       "thinking": "none",
+       "efforts": [],
+       "effortField": "",
+       "effortDefault": "",
+       "alwaysThinks": false,
+       "source": {
+        "contextWindow": "default",
+        "maxOutput": "default",
+        "vision": "guess",
+        "thinking": "default"
+       }
+      },
+      {
+       "id": "qwen-max",
+       "label": "qwen-max",
+       "enabled": true,
+       "kind": "chat",
+       "contextWindow": 128000,
+       "maxOutput": 16384,
+       "vision": false,
+       "video": false,
+       "audio": false,
+       "thinking": "none",
+       "efforts": [],
+       "effortField": "",
+       "effortDefault": "",
+       "alwaysThinks": false,
+       "source": {
+        "contextWindow": "default",
+        "maxOutput": "default",
+        "vision": "default",
+        "thinking": "default"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "custom-models-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "请填写接口地址"
+    }
+   },
+   {
+    "name": "custom-get-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "这个自定义服务不存在（可能已被删除）"
+    }
+   },
+   {
+    "name": "custom-delete-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "not found"
+    }
+   },
+   {
+    "name": "custom-add-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "请填写接口地址"
+    }
+   },
+   {
+    "name": "admin-retire-cancel-bad",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": false
+    }
+   },
+   {
+    "name": "localai-tenant-pass",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "no such endpoint: GET /api/no-such-endpoint"
+    }
+   },
+   {
+    "name": "memory-list",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": []
+   },
+   {
+    "name": "memory-save",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "string"
+    }
+   },
+   {
+    "name": "memory-list-2",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": []
+   },
+   {
+    "name": "memory-get",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "string"
+    }
+   },
+   {
+    "name": "memory-get-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "unknown memory id"
+    }
+   },
+   {
+    "name": "memory-overview",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "at": "string",
+     "buckets": [],
+     "budget": "number",
+     "emptyProjects": "number"
+    }
+   },
+   {
+    "name": "memory-dream",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "backlog": "number",
+     "enabled": "boolean",
+     "running": "boolean",
+     "state": {}
+    }
+   },
+   {
+    "name": "memory-dream-global",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "enabled": false,
+     "running": false,
+     "backlog": 0,
+     "state": {}
+    }
+   },
+   {
+    "name": "memory-search-empty",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "query is required"
+    }
+   },
+   {
+    "name": "memory-search",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "eligibleDocuments": "number",
+     "latencyMs": "number",
+     "query": "string",
+     "results": [],
+     "semantic": "string",
+     "skippedQuarantined": "number",
+     "totalDocuments": "number"
+    }
+   },
+   {
+    "name": "memory-reject",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "unknown memory id"
+    }
+   },
+   {
+    "name": "memory-restore",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "not a rejected memory"
+    }
+   },
+   {
+    "name": "memory-promote-missing",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "no memory \"nope\""
+    }
+   },
+   {
+    "name": "memory-delete",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "deleted": false
+    }
+   },
+   {
+    "name": "memory-bad-ws",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "workspace must be an absolute path"
+    }
+   },
+   {
+    "name": "knowledge-status",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "boundaries": [],
+     "contractCounts": {
+      "ci": "number",
+      "configKeys": "number",
+      "configReferences": "number",
+      "data": "number",
+      "deploy": "number",
+      "guides": "number",
+      "routes": "number"
+     },
+     "health": {
+      "analyzedSourceFiles": "number",
+      "ciCount": "number",
+      "configCount": "number",
+      "dataCount": "number",
+      "deployCount": "number",
+      "generatedAt": "string",
+      "guideCount": "number",
+      "mappedSources": "number",
+      "routeCount": "number",
+      "schema": "number",
+      "sourceFiles": "number",
+      "sourceFingerprint": "string",
+      "testFiles": "number",
+      "uniqueConfigKeys": "number",
+      "unmappedSources": "number",
+      "verifications": [],
+      "workspace": "string"
+     },
+     "profile": {
+      "commands": {},
+      "entrypoints": [],
+      "frameworks": [],
+      "generatedAt": "string",
+      "git": {
+       "branch": "null",
+       "head": "null"
+      },
+      "languages": {},
+      "manifests": [],
+      "packageManager": "null",
+      "scannedFiles": "number",
+      "schema": "number",
+      "scripts": {},
+      "sourceFingerprint": "string",
+      "subProjects": [],
+      "truncated": "boolean",
+      "workspace": "string"
+     },
+     "rebuilt": "boolean",
+     "summary": "string"
+    }
+   },
+   {
+    "name": "knowledge-modules",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "modules": [],
+     "total": "number"
+    }
+   },
+   {
+    "name": "knowledge-contracts",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ci": [],
+     "config": [],
+     "data": [],
+     "deploy": [],
+     "guides": [],
+     "routes": []
+    }
+   },
+   {
+    "name": "knowledge-search-empty",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "query is required"
+    }
+   },
+   {
+    "name": "knowledge-search",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "eligibleDocuments": "number",
+     "latencyMs": "number",
+     "query": "string",
+     "results": [],
+     "semantic": "string",
+     "skippedQuarantined": "number",
+     "totalDocuments": "number"
+    }
+   },
+   {
+    "name": "knowledge-refresh",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "generatedAt": "string",
+     "health": {
+      "analyzedSourceFiles": "number",
+      "ciCount": "number",
+      "configCount": "number",
+      "dataCount": "number",
+      "deployCount": "number",
+      "generatedAt": "string",
+      "guideCount": "number",
+      "mappedSources": "number",
+      "routeCount": "number",
+      "schema": "number",
+      "sourceFiles": "number",
+      "sourceFingerprint": "string",
+      "testFiles": "number",
+      "uniqueConfigKeys": "number",
+      "unmappedSources": "number",
+      "verifications": [],
+      "workspace": "string"
+     },
+     "rebuilt": "boolean"
+    }
+   },
+   {
+    "name": "knowledge-metrics",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "averageLatencyMs": "number",
+     "lastQueryAt": "string",
+     "queries": "number",
+     "recent": [
+      {
+       "at": "string",
+       "latencyMs": "number",
+       "queryHash": "string",
+       "resultCount": "number",
+       "semantic": "string",
+       "topIds": []
+      }
+     ],
+     "resultsByKind": {},
+     "schema": "number",
+     "semanticFailures": "number",
+     "semanticQueries": "number",
+     "semanticUsed": "number",
+     "zeroResults": "number"
+    }
+   },
+   {
+    "name": "run-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "message or attachments are required"
+    }
+   },
+   {
+    "name": "run-bad-attachments",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "attachments must be an array of workspace paths"
+    }
+   },
+   {
+    "name": "run-unknown-session",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "unknown sessionId",
+     "code": "session_not_found"
+    }
+   },
+   {
+    "name": "run",
+    "status": 200,
+    "type": "text/event-stream",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": [
+     {
+      "e": "session",
+      "sessionId": "<id:1>",
+      "runId": "char-run-000001"
+     },
+     {
+      "e": "run_clock",
+      "startedAt": "<num>",
+      "pausedMs": "<num>",
+      "pausedSince": null,
+      "serverNow": "<num>"
+     },
+     {
+      "e": "run_clock",
+      "startedAt": "<num>",
+      "pausedMs": "<num>",
+      "pausedSince": null,
+      "serverNow": "<num>"
+     },
+     {
+      "e": "context",
+      "usedTokens": 2573,
+      "limitTokens": 131072,
+      "compacted": false,
+      "cacheTtlMs": 0
+     },
+     {
+      "e": "turn_start",
+      "index": 0
+     },
+     {
+      "e": "text_delta",
+      "text": "已经看过了：工作区里只有 a.txt，内容是 alpha。\n\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\n"
+     },
+     {
+      "e": "usage",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "totalInputTokens": 10,
+      "totalOutputTokens": 5,
+      "durationMs": "<num>",
+      "attempts": 1
+     },
+     {
+      "e": "done",
+      "stopReason": "end",
+      "durationMs": "<num>",
+      "waitedMs": "<num>"
+     },
+     {
+      "e": "closed"
+     }
+    ]
+   },
+   {
+    "name": "run-duplicate",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "duplicate_run",
+     "sessionId": "<id:1>",
+     "runId": "char-run-000001",
+     "running": false
+    }
+   },
+   {
+    "name": "runs-known",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "known": true,
+     "sessionId": "<id:1>",
+     "runId": "char-run-000001",
+     "running": false
+    }
+   },
+   {
+    "name": "runs-unknown",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "known": false
+    }
+   },
+   {
+    "name": "run-2",
+    "status": 200,
+    "type": "text/event-stream",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": [
+     {
+      "e": "session",
+      "sessionId": "<id:1>",
+      "runId": "<id:2>"
+     },
+     {
+      "e": "run_clock",
+      "startedAt": "<num>",
+      "pausedMs": "<num>",
+      "pausedSince": null,
+      "serverNow": "<num>"
+     },
+     {
+      "e": "run_clock",
+      "startedAt": "<num>",
+      "pausedMs": "<num>",
+      "pausedSince": null,
+      "serverNow": "<num>"
+     },
+     {
+      "e": "context",
+      "usedTokens": 2681,
+      "limitTokens": 131072,
+      "compacted": false,
+      "cacheTtlMs": 0
+     },
+     {
+      "e": "turn_start",
+      "index": 0
+     },
+     {
+      "e": "text_delta",
+      "text": "已经看过了：工作区里只有 a.txt，内容是 alpha。\n\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\n"
+     },
+     {
+      "e": "usage",
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "totalInputTokens": 20,
+      "totalOutputTokens": 10,
+      "durationMs": "<num>",
+      "attempts": 1
+     },
+     {
+      "e": "done",
+      "stopReason": "end",
+      "durationMs": "<num>",
+      "waitedMs": "<num>"
+     },
+     {
+      "e": "closed"
+     }
+    ]
+   },
+   {
+    "name": "sessions",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": "1",
+     "cors": null,
+     "guard": "1"
+    },
+    "body": [
+     {
+      "id": "<id:1>",
+      "title": "已经看过了：工作区里只有 a.txt，内容是 alpha",
+      "createdAt": "<num>",
+      "updatedAt": "<num>",
+      "messageCount": 3,
+      "provider": "local",
+      "model": "qwen3.8-27b",
+      "workspace": "<TMP:dimensio-char-routes-ws->",
+      "running": false,
+      "waiting": null
+     }
+    ]
+   },
+   {
+    "name": "sessions-page",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": "1",
+     "cors": null,
+     "guard": "1"
+    },
+    "body": [
+     {
+      "id": "<id:1>",
+      "title": "已经看过了：工作区里只有 a.txt，内容是 alpha",
+      "createdAt": "<num>",
+      "updatedAt": "<num>",
+      "messageCount": 4,
+      "provider": "local",
+      "model": "qwen3.8-27b",
+      "workspace": "<TMP:dimensio-char-routes-ws->",
+      "running": false,
+      "waiting": null
+     }
+    ]
+   },
+   {
+    "name": "sessions-search",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "items": [
+      {
+       "id": "<id:1>",
+       "title": "已经看过了：工作区里只有 a.txt，内容是 alpha",
+       "workspace": "<TMP:dimensio-char-routes-ws->",
+       "provider": "local",
+       "updatedAt": "<num>",
+       "hits": 2,
+       "snippet": {
+        "before": "已经看过了：工作区里只有 a.txt，内容是 ",
+        "match": "alpha",
+        "after": "。 Progress so far: the work recorded above was carried out…"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "pending",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "serverTime": "<num>",
+     "sessions": [],
+     "notify": {
+      "permission": true,
+      "question": true,
+      "done": true
+     }
+    }
+   },
+   {
+    "name": "session-status",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "exists": true,
+     "running": false,
+     "fp": "4.1.10"
+    }
+   },
+   {
+    "name": "session-status-missing",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "exists": false,
+     "running": false
+    }
+   },
+   {
+    "name": "session-get",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "v": 1,
+     "id": "<id:1>",
+     "createdAt": "<num>",
+     "updatedAt": "<num>",
+     "title": "已经看过了：工作区里只有 a.txt，内容是 alpha",
+     "config": {
+      "provider": "local",
+      "model": "qwen3.8-27b",
+      "baseUrl": "<provider>",
+      "thinking": "low",
+      "permissionMode": "auto",
+      "permissionRules": {
+       "allow": [],
+       "deny": [],
+       "ask": []
+      },
+      "workspace": "<TMP:dimensio-char-routes-ws->",
+      "access": "full"
+     },
+     "messages": [
+      {
+       "role": "user",
+       "content": [
+        {
+         "t": "text",
+         "text": "看看 a.txt"
+        }
+       ],
+       "displayText": "看看 a.txt"
+      },
+      {
+       "role": "assistant",
+       "content": [
+        {
+         "t": "text",
+         "text": "已经看过了：工作区里只有 a.txt，内容是 alpha。\n\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\n"
+        }
+       ],
+       "run": {
+        "durationMs": "<num>",
+        "waitedMs": "<num>"
+       }
+      },
+      {
+       "role": "user",
+       "content": [
+        {
+         "t": "text",
+         "text": "再说一遍"
+        }
+       ],
+       "displayText": "再说一遍"
+      },
+      {
+       "role": "assistant",
+       "content": [
+        {
+         "t": "text",
+         "text": "已经看过了：工作区里只有 a.txt，内容是 alpha。\n\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\nProgress so far: the work recorded above was carried out step by step; continue from the most recent messages.\n"
+        }
+       ],
+       "run": {
+        "durationMs": "<num>",
+        "waitedMs": "<num>"
+       }
+      }
+     ],
+     "origins": 1,
+     "world": {
+      "mode": "auto",
+      "access": "full",
+      "guide": "",
+      "projectDocs": "",
+      "skills": "",
+      "jobs": "",
+      "debug": "",
+      "date": "<DATE>",
+      "knowledge": "",
+      "memory": ""
+     },
+     "todos": [],
+     "totals": {
+      "inputTokens": 20,
+      "outputTokens": 10,
+      "lastContextTokens": 10,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "prefix": {
+       "requests": 2,
+       "breaks": {},
+       "resentChars": 0
+      }
+     },
+     "gates": {
+      "dirtySinceVerify": false,
+      "editedFiles": [],
+      "ranCommands": [],
+      "mutationEpoch": 0,
+      "verifiedEpoch": 0,
+      "lastVerification": ""
+     },
+     "counters": {
+      "compactionFailures": 0,
+      "turnsSinceTodoSeen": 0
+     },
+     "usage": {
+      "local|qwen3.8-27b|main": {
+       "provider": "local",
+       "model": "qwen3.8-27b",
+       "task": "main",
+       "input": 20,
+       "output": 10,
+       "cacheRead": 0,
+       "cacheWrite": 0,
+       "calls": 2
+      }
+     },
+     "running": false,
+     "fp": "4.1.10"
+    }
+   },
+   {
+    "name": "session-get-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "unknown session",
+     "code": "session_not_found"
+    }
+   },
+   {
+    "name": "session-requests",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "live": true,
+     "totals": {
+      "requests": 2,
+      "breaks": {},
+      "resentChars": 0
+     },
+     "usage": {
+      "input": 20,
+      "output": 10,
+      "cacheRead": 0,
+      "cacheWrite": 0
+     },
+     "requests": [
+      {
+       "seq": 1,
+       "at": "<DATE>",
+       "attempt": 0,
+       "shape": "openai",
+       "verdict": "first",
+       "resentChars": 0,
+       "items": 1,
+       "shared": 0,
+       "hashes": {
+        "system": "<hash>",
+        "tools": "302caf26e975",
+        "params": "1ffb7b8ee3cd"
+       },
+       "injected": {},
+       "usage": {
+        "input": 10,
+        "output": 5
+       }
+      },
+      {
+       "seq": 2,
+       "at": "<DATE>",
+       "attempt": 0,
+       "shape": "openai",
+       "verdict": "append",
+       "resentChars": 0,
+       "items": 3,
+       "shared": 1,
+       "hashes": {
+        "system": "<hash>",
+        "tools": "302caf26e975",
+        "params": "1ffb7b8ee3cd"
+       },
+       "injected": {},
+       "usage": {
+        "input": 10,
+        "output": 5
+       }
+      }
+     ]
+    }
+   },
+   {
+    "name": "session-health",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "id": "<id:1>",
+     "load": "ok",
+     "issues": [],
+     "stats": {
+      "observed": {
+       "runs": 2,
+       "assistantTurns": 2,
+       "toolCalls": {},
+       "denied": 0,
+       "notExecuted": 0,
+       "identicalStreaks": {},
+       "maxIdenticalStreak": 0,
+       "injections": {},
+       "verifyGateExhaustedRuns": 0,
+       "auditGateExhaustedRuns": 0,
+       "errorEndedTurns": 0,
+       "tokens": {
+        "input": 20,
+        "output": 10,
+        "cacheRead": 0,
+        "cacheWrite": 0
+       },
+       "prefix": {
+        "requests": 2,
+        "breaks": {},
+        "resentChars": 0
+       }
+      },
+      "modeled": {
+       "transcriptChars": 846,
+       "estimatedTokens": 212,
+       "writesToKnownPaths": 0
+      }
+     },
+     "meta": {
+      "provider": "local",
+      "model": "qwen3.8-27b",
+      "updatedAt": "<num>",
+      "messages": 4
+     }
+    }
+   },
+   {
+    "name": "session-artifact-nopath",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "path query parameter is required"
+    }
+   },
+   {
+    "name": "session-artifact-unattached",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "artifact was not attached to this session"
+    }
+   },
+   {
+    "name": "session-asset-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "unknown asset"
+    }
+   },
+   {
+    "name": "session-workflow-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "no detail for this workflow run"
+    }
+   },
+   {
+    "name": "session-stream-idle",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "session is not running"
+    }
+   },
+   {
+    "name": "session-diagnostics",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "kind": "string",
+     "name": "string",
+     "path": "string",
+     "size": "number"
+    }
+   },
+   {
+    "name": "session-usage",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "rows": [
+      {
+       "provider": "local",
+       "model": "qwen3.8-27b",
+       "task": "main",
+       "input": 20,
+       "output": 10,
+       "cacheRead": 0,
+       "cacheWrite": 0,
+       "calls": 2
+      }
+     ]
+    }
+   },
+   {
+    "name": "session-jobs",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "jobs": []
+    }
+   },
+   {
+    "name": "session-job-kill",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "killed": false
+    }
+   },
+   {
+    "name": "session-tool-bg",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "moved": false
+    }
+   },
+   {
+    "name": "mode-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "invalid mode"
+    }
+   },
+   {
+    "name": "mode",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": true
+    }
+   },
+   {
+    "name": "mode-back",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": true
+    }
+   },
+   {
+    "name": "mode-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "unknown session",
+     "code": "session_not_found"
+    }
+   },
+   {
+    "name": "away",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": true,
+     "away": true
+    }
+   },
+   {
+    "name": "away-off",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": true,
+     "away": false
+    }
+   },
+   {
+    "name": "access",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": true
+    }
+   },
+   {
+    "name": "access-back",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": true
+    }
+   },
+   {
+    "name": "model-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "invalid thinking level"
+    }
+   },
+   {
+    "name": "read-roots-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "remove: the directory to stop reading"
+    }
+   },
+   {
+    "name": "read-roots",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": true,
+     "roots": []
+    }
+   },
+   {
+    "name": "answer",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": false
+    }
+   },
+   {
+    "name": "answer-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "unknown or inactive session"
+    }
+   },
+   {
+    "name": "permission",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": false
+    }
+   },
+   {
+    "name": "plan",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": false
+    }
+   },
+   {
+    "name": "steer-idle",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "session is not running"
+    }
+   },
+   {
+    "name": "steer-withdraw-noid",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "id: the steer to withdraw"
+    }
+   },
+   {
+    "name": "steer-withdraw",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": false,
+     "reason": "not_running"
+    }
+   },
+   {
+    "name": "steer-interrupt",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": false,
+     "reason": "not_running"
+    }
+   },
+   {
+    "name": "stop",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "stopped": false,
+     "turnAborted": false,
+     "jobsKilled": 0,
+     "servicesStopped": 0
+    }
+   },
+   {
+    "name": "stop-mismatch-idle",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "stopped": false,
+     "turnAborted": false,
+     "jobsKilled": 0,
+     "servicesStopped": 0
+    }
+   },
+   {
+    "name": "checkpoints",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": [
+     {
+      "n": 1,
+      "hash": "<sha>",
+      "tree": "<sha>",
+      "at": "<num>",
+      "label": "看看 a.txt",
+      "msgs": 0,
+      "endTree": "<sha>"
+     },
+     {
+      "n": 2,
+      "hash": "<sha>",
+      "tree": "<sha>",
+      "at": "<num>",
+      "label": "再说一遍",
+      "msgs": 2
+     }
+    ]
+   },
+   {
+    "name": "checkpoint-diff",
+    "status": 200,
+    "type": "text/plain",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": "\n\n"
+   },
+   {
+    "name": "checkpoint-diff-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "unknown checkpoint 99 for session <id:1>"
+    }
+   },
+   {
+    "name": "rollback-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "n (checkpoint number) is required"
+    }
+   },
+   {
+    "name": "goal-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "action must be \"pause\", \"resume\" or \"clear\""
+    }
+   },
+   {
+    "name": "goal-none",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "this conversation has no goal",
+     "code": "no_goal"
+    }
+   },
+   {
+    "name": "files-restore-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "paths (1–500 workspace-relative files) is required"
+    }
+   },
+   {
+    "name": "files-restore-stale",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "not a change made in this conversation (any more): zzz.txt — refresh the list",
+     "code": "stale"
+    }
+   },
+   {
+    "name": "rewind-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "ordinal (which user message, 0-based) is required"
+    }
+   },
+   {
+    "name": "rewind-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "that message is no longer in the conversation (it may have been compacted into a summary)",
+     "code": "not_found"
+    }
+   },
+   {
+    "name": "rewind-undo-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "n (checkpoint) and length (message count after the rewrite) are required"
+    }
+   },
+   {
+    "name": "handoff-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "kind must be \"summary\" or \"plan\""
+    }
+   },
+   {
+    "name": "handoff-plan-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": false,
+     "code": "not_found",
+     "error": "that plan is no longer waiting for a decision"
+    }
+   },
+   {
+    "name": "compact",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": false,
+     "code": "empty",
+     "error": "nothing to compact yet"
+    }
+   },
+   {
+    "name": "handoff-summary",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": true,
+     "sessionId": "<id:3>"
+    }
+   },
+   {
+    "name": "projects",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": [
+     {
+      "createdAt": "number",
+      "exists": "boolean",
+      "hidden": "boolean",
+      "id": "string",
+      "name": "string",
+      "path": "string",
+      "pinned": "boolean",
+      "pinnedAt": "number"
+     }
+    ]
+   },
+   {
+    "name": "projects-bad-mode",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "mode must be blank or existing"
+    }
+   },
+   {
+    "name": "projects-blank",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "createdAt": "number",
+     "exists": "boolean",
+     "hidden": "boolean",
+     "id": "string",
+     "name": "string",
+     "path": "string",
+     "pinned": "boolean",
+     "pinnedAt": "number"
+    }
+   },
+   {
+    "name": "projects-rename",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "createdAt": "number",
+     "exists": "boolean",
+     "hidden": "boolean",
+     "id": "string",
+     "name": "string",
+     "path": "string",
+     "pinned": "boolean",
+     "pinnedAt": "number"
+    }
+   },
+   {
+    "name": "projects-flags",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "createdAt": "number",
+     "exists": "boolean",
+     "hidden": "boolean",
+     "id": "string",
+     "name": "string",
+     "path": "string",
+     "pinned": "boolean",
+     "pinnedAt": "number"
+    }
+   },
+   {
+    "name": "projects-order",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": true
+    }
+   },
+   {
+    "name": "quick-new",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "createdAt": "number",
+     "exists": "boolean",
+     "hidden": "boolean",
+     "id": "string",
+     "name": "string",
+     "path": "string",
+     "pinned": "boolean",
+     "pinnedAt": "number",
+     "quick": "boolean"
+    }
+   },
+   {
+    "name": "quick-save-bad",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "快照已经换过了，请刷新后再试"
+    }
+   },
+   {
+    "name": "files",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "path": ".",
+     "entries": [
+      {
+       "name": ".dimensio",
+       "dir": true,
+       "size": 0,
+       "mtimeMs": "<num>"
+      },
+      {
+       "name": "sub",
+       "dir": true,
+       "size": 0,
+       "mtimeMs": "<num>"
+      },
+      {
+       "name": "a.txt",
+       "dir": false,
+       "size": 6,
+       "mtimeMs": "<num>"
+      }
+     ],
+     "truncated": false
+    }
+   },
+   {
+    "name": "files-upload-nopath",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "path query parameter is required"
+    }
+   },
+   {
+    "name": "files-upload",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "path": "up/b.txt",
+     "size": 9
+    }
+   },
+   {
+    "name": "dock-review",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "git": "boolean"
+    }
+   },
+   {
+    "name": "dock-review-session-noid",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "chatId is required for scope=session"
+    }
+   },
+   {
+    "name": "dock-review-session",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "scope": "session",
+     "available": true,
+     "since": "<num>",
+     "files": [],
+     "total": {
+      "add": 0,
+      "del": 0
+     },
+     "truncated": false,
+     "others": 1,
+     "busy": false
+    }
+   },
+   {
+    "name": "dock-review-diff-session-bad",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "chatId and a workspace-relative file are required"
+    }
+   },
+   {
+    "name": "dock-review-diff",
+    "status": 500,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "git diff 失败"
+    }
+   },
+   {
+    "name": "dock-files",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "path": ".",
+     "entries": [
+      {
+       "name": ".dimensio",
+       "dir": true,
+       "size": 0,
+       "mtimeMs": "<num>"
+      },
+      {
+       "name": "sub",
+       "dir": true,
+       "size": 0,
+       "mtimeMs": "<num>"
+      },
+      {
+       "name": "up",
+       "dir": true,
+       "size": 0,
+       "mtimeMs": "<num>"
+      },
+      {
+       "name": "a.txt",
+       "dir": false,
+       "size": 6,
+       "mtimeMs": "<num>"
+      }
+     ],
+     "truncated": false
+    }
+   },
+   {
+    "name": "dock-file",
+    "status": 200,
+    "type": "text/plain",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": "alpha\n"
+   },
+   {
+    "name": "dock-file-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "not found: nope.txt"
+    }
+   },
+   {
+    "name": "dock-file-nopath",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "path query parameter is required"
+    }
+   },
+   {
+    "name": "dock-file-secret",
+    "status": 403,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "Blocked by secret guard: .env"
+    }
+   },
+   {
+    "name": "dock-ws-missing",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "workspace not found: C:\\no-such-dir-char"
+    }
+   },
+   {
+    "name": "dock-term-input",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": false
+    }
+   },
+   {
+    "name": "dock-term-resize",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "terminal not running"
+    }
+   },
+   {
+    "name": "dock-term-kill",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": false
+    }
+   },
+   {
+    "name": "fs-dirs",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "path": "<TMP:dimensio-char-routes-dirs->",
+     "parent": "C:\\Users\\you\\AppData\\Local\\Temp",
+     "dirs": [],
+     "drives": [
+      "C:\\",
+      "D:\\",
+      "E:\\",
+      "G:\\"
+     ]
+    }
+   },
+   {
+    "name": "fs-mkdir",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "path": "<TMP:dimensio-char-routes-dirs->\\made"
+    }
+   },
+   {
+    "name": "fs-dirs-2",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "path": "<TMP:dimensio-char-routes-dirs->",
+     "parent": "C:\\Users\\you\\AppData\\Local\\Temp",
+     "dirs": [
+      "made"
+     ],
+     "drives": [
+      "C:\\",
+      "D:\\",
+      "E:\\",
+      "G:\\"
+     ]
+    }
+   },
+   {
+    "name": "browser-state",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "alive": false,
+     "tabs": [],
+     "mode": null,
+     "mounted": false,
+     "isolated": false
+    }
+   },
+   {
+    "name": "browser-stream-off",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "browser not running"
+    }
+   },
+   {
+    "name": "browser-input-off",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "browser not running"
+    }
+   },
+   {
+    "name": "browser-resize-off",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "browser not running"
+    }
+   },
+   {
+    "name": "browser-tab-activate-off",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "browser not running"
+    }
+   },
+   {
+    "name": "browser-tab-close-off",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "browser not running"
+    }
+   },
+   {
+    "name": "browser-navigate-back-off",
+    "status": 409,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "browser not running"
+    }
+   },
+   {
+    "name": "browser-navigate-nourl",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "url is required"
+    }
+   },
+   {
+    "name": "browser-navigate-path-noservice",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "path given but no preview server is running"
+    }
+   },
+   {
+    "name": "browser-isolate-noid",
+    "status": 400,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "sessionId is required — isolated storage is per conversation"
+    }
+   },
+   {
+    "name": "preview-services",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": []
+   },
+   {
+    "name": "preview-stop-session",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "stopped": false,
+     "scope": "session"
+    }
+   },
+   {
+    "name": "preview-stop-id",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "stopped": false
+    }
+   },
+   {
+    "name": "preview-stop-all",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "stopped": true,
+     "scope": "all"
+    }
+   },
+   {
+    "name": "session-delete-post",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "deleted": true
+    }
+   },
+   {
+    "name": "session-delete",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "deleted": true
+    }
+   },
+   {
+    "name": "session-get-deleted",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "unknown session",
+     "code": "session_not_found"
+    }
+   },
+   {
+    "name": "api-404",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "no such endpoint: GET /api/definitely/not/here"
+    }
+   },
+   {
+    "name": "api-404-post",
+    "status": 404,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "no such endpoint: POST /api/definitely/not/here"
+    }
+   },
+   {
+    "name": "spa-root",
+    "status": 404,
+    "type": "text/html",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": null
+    },
+    "body": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /</pre>\n</body>\n</html>\n"
+   },
+   {
+    "name": "admin-retire-prepare",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "expiresAt": "number",
+     "runs": [],
+     "since": "number",
+     "token": "string"
+    }
+   },
+   {
+    "name": "run-while-retiring",
+    "status": 503,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "error": "服务正在重启（部署中），这一条没有发出；稍后再发",
+     "code": "retiring"
+    }
+   },
+   {
+    "name": "busy-retiring",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "running": false,
+     "runs": [],
+     "retiring": true
+    }
+   },
+   {
+    "name": "admin-retire-cancel",
+    "status": 200,
+    "type": "application/json",
+    "head": {
+     "total": null,
+     "cors": null,
+     "guard": "1"
+    },
+    "body": {
+     "ok": true
+    }
+   }
+  ],
+  "global": [
+   {
+    "e": "snapshot",
+    "serverTime": "<num>",
+    "sessions": []
+   },
+   {
+    "e": "session_status",
+    "id": "<id:1>",
+    "title": "看看 a.txt",
+    "running": true,
+    "waiting": null,
+    "at": "<num>"
+   },
+   {
+    "e": "session_status",
+    "id": "<id:1>",
+    "title": "看看 a.txt",
+    "running": false,
+    "waiting": null,
+    "at": "<num>"
+   },
+   {
+    "e": "session_status",
+    "id": "<id:1>",
+    "title": "已经看过了：工作区里只有 a.txt，内容是 alpha",
+    "running": true,
+    "waiting": null,
+    "at": "<num>"
+   },
+   {
+    "e": "session_title",
+    "id": "<id:1>",
+    "title": "已经看过了：工作区里只有 a.txt，内容是 alpha",
+    "at": "<num>"
+   },
+   {
+    "e": "list_changed",
+    "what": "sessions",
+    "at": "<num>"
+   },
+   {
+    "e": "session_status",
+    "id": "<id:1>",
+    "title": "已经看过了：工作区里只有 a.txt，内容是 alpha",
+    "running": false,
+    "waiting": null,
+    "at": "<num>"
+   },
+   {
+    "e": "list_changed",
+    "what": "sessions",
+    "at": "<num>"
+   },
+   {
+    "e": "list_changed",
+    "what": "projects",
+    "at": "<num>"
+   },
+   {
+    "e": "list_changed",
+    "what": "projects",
+    "at": "<num>"
+   },
+   {
+    "e": "list_changed",
+    "what": "projects",
+    "at": "<num>"
+   },
+   {
+    "e": "list_changed",
+    "what": "projects",
+    "at": "<num>"
+   },
+   {
+    "e": "list_changed",
+    "what": "both",
+    "at": "<num>"
+   },
+   {
+    "e": "list_changed",
+    "what": "sessions",
+    "at": "<num>"
+   },
+   {
+    "e": "list_changed",
+    "what": "sessions",
+    "at": "<num>"
+   }
+  ]
+ }
+}

@@ -29,6 +29,7 @@ import {
   MAX_PARALLEL_TOOLS,
   RETRY_ATTEMPTS,
 } from "./agent/loop.ts";
+import { TODO_REMIND_TURNS } from "./agent/loop/limits.ts";
 import { GUARD_DEFAULTS, LoopGuard } from "./agent/loop-guard.ts";
 import { isRunawayRepetition, REPETITION_DEFAULTS } from "./agent/repetition.ts";
 import { SUBMIT_ATTEMPTS, SUBMIT_NUDGES } from "./agent/subagent.ts";
@@ -72,6 +73,10 @@ test("档案 loop 默认值逐项等于各模块原来的常量（也等于接�
     submitNudges: SUBMIT_NUDGES,
     noopBashResample: false,
     stopWhenAttended: false,
+    verifyGate: "on",
+    todoReminderEvery: TODO_REMIND_TURNS,
+    todoReminderOnlyIncomplete: true,
+    thinkingOnly: "nudge",
   });
   // 字面值：常量本身被人改了也要红（那是行为变化，得有意为之）
   assert.deepEqual(loop, {
@@ -88,6 +93,10 @@ test("档案 loop 默认值逐项等于各模块原来的常量（也等于接�
     submitNudges: 2,
     noopBashResample: false,
     stopWhenAttended: false,
+    verifyGate: "on",
+    todoReminderEvery: 5,
+    todoReminderOnlyIncomplete: true,
+    thinkingOnly: "nudge",
   });
 });
 
@@ -98,6 +107,8 @@ test("现状档案的其余各块：提示词 default、工具不裁、不发采
   assert.equal(p.tools.deferredFamilies, DEFERRED_FAMILIES);
   assert.equal(p.tools.subset, null);
   assert.deepEqual(p.tools.pathAliases, {});
+  assert.equal(p.tools.verifyContract, "strict");
+  assert.equal(p.tools.readBeforeEdit, "strict");
   assert.deepEqual(p.sampling, {});
   assert.deepEqual(p.providerExtras, {});
   assert.equal(profileProviderExtras(p), undefined);

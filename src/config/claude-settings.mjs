@@ -139,6 +139,11 @@ export const CLAUDE_SETTINGS = Object.freeze([
   { key: 'autoArchiveDays', group: 'sessions', scope: 'user', type: 'int', options: [0, 1, 2, 7, 14, 30], default: 0,
     label: '归档不活跃的会话', desc: '运行中或有后台任务的会话不会被归档',
     optionLabels: ['从不', '1 天', '2 天', '7 天', '14 天', '30 天'] },
+  // 临时对话清理（claude-quick.mjs 的 quickRetention）：按时间 / 只留最近 N 条 / 不清理。清理的都先进回收站，回收站照旧放 30 天
+  { key: 'quickRetention', group: 'sessions', scope: 'user', type: 'enum', options: ['ttl30', 'max10', 'max20', 'max50', 'max100', 'never'], default: 'ttl30',
+    label: '清理临时对话', desc: '不归任何项目的临时对话怎么清理。清理的先进回收站，30 天内可以恢复；存为工作空间的不受影响',
+    optionLabels: ['30 天没动的', '只留最近 10 条', '只留最近 20 条', '只留最近 50 条', '只留最近 100 条', '从不清理'],
+    optionDescs: ['最后一次活动超过 30 天的移进回收站', '超出的按最久没动的先移进回收站', '超出的按最久没动的先移进回收站', '超出的按最久没动的先移进回收站', '超出的按最久没动的先移进回收站', '一直留着，直到你自己删除或存为工作空间'] },
   { key: 'followDesktopArchive', group: 'sessions', scope: 'user', type: 'bool', default: true, admin: true,
     label: '跟随 Claude Desktop 的归档', desc: '在官方桌面端归档过的会话，这里也算已归档' },
 

@@ -151,25 +151,48 @@
     const rect = shell.getBoundingClientRect();
     bar.setPointerCapture(e.pointerId);
     splitting = true;
+    const two = dockTwo;
     const move = (ev: PointerEvent) => {
       const px = Math.max(340, rect.right - ev.clientX);
-      paneRatio = clampRatio(px / rect.width);
+      if (two) paneRatio2 = Math.min(0.8, Math.max(0.3, px / rect.width));
+      else paneRatio = clampRatio(px / rect.width);
     };
     const up = () => {
       splitting = false;
       bar.removeEventListener("pointermove", move);
       bar.removeEventListener("pointerup", up);
       bar.removeEventListener("pointercancel", up);
-      localStorage.setItem("harness.paneRatio", String(paneRatio));
+      if (two) localStorage.setItem("harness.paneRatio2", String(paneRatio2));
+      else localStorage.setItem("harness.paneRatio", String(paneRatio));
     };
     bar.addEventListener("pointermove", move);
     bar.addEventListener("pointerup", up);
     bar.addEventListener("pointercancel", up);
   }
   function splitReset() {
+    if (dockTwo) {
+      paneRatio2 = RATIO2_DEFAULT;
+      localStorage.removeItem("harness.paneRatio2");
+      return;
+    }
     paneRatio = 0.44;
     localStorage.removeItem("harness.paneRatio");
   }
+  // 工作区摆成两列时另记一份占比（两列默认更宽，拖出来的宽度也不该回灌给一列）。
+  // 两列的下限 680（每列 ≥ 336）、上限给对话留 380；够不够摆两列按「去掉侧栏后还剩多宽」判。
+  const RATIO2_DEFAULT = 0.58;
+  const TWO_COL_MIN = 1100;
+  let paneRatio2 = $state(Math.min(0.8, Math.max(0.3, Number(localStorage.getItem("harness.paneRatio2")) || RATIO2_DEFAULT)));
+  let shellW = $state(0);
+  let dockTwo = $state(false);
+  $effect(() => {
+    if (!dockCol) dockTwo = false;
+  });
+  const railW = $derived(railShown ? 272 : 0);
+  const twoOk = $derived(dockCol && shellW - railW >= TWO_COL_MIN);
+  const dockW = $derived(
+    dockTwo ? `width:clamp(680px, ${paneRatio2 * 100}%, calc(100% - ${railW + 380}px))` : `width:${paneRatio * 100}%`,
+  );
 
   // ── 抽屉：一个显式的位置状态机（x = 抽屉的 translateX，-宽 = 收起，0 = 摊开）──────────────
   // 左缘右滑跟手拉出、抽屉里左滑跟手收回；松手（或点遮罩 / 返回键）都从【当前位置】用弹簧走到终点，
@@ -456,7 +479,7 @@
 <!-- hxroot：主题根（令牌 / data-mode 挂这里；display:contents 不产生盒子，但照常参与继承——
      渲染在 .shell 之外的浮层从这里拿字色与字体）。 -->
 <div class="hxroot" bind:this={rootEl}>
-  <div class="shell" class:wide class:embedded class:docked={dockCol} class:splitting>
+  <div class="shell" class:wide class:embedded class:docked={dockCol} class:splitting bind:clientWidth={shellW}>
     {#if wide}
       <aside class="rail" class:shown={railShown} aria-hidden={!railShown}>
         <div class="rail-in">
@@ -531,8 +554,8 @@
         onpointerdown={splitDown}
         ondblclick={splitReset}
       ></div>
-      <div class="pv-col" style="width:{paneRatio * 100}%">
-        <Dock docked {filesView} />
+      <div class="pv-col" style={dockW}>
+        <Dock docked {filesView} {twoOk} bind:two={dockTwo} />
       </div>
     {/if}
   </div>

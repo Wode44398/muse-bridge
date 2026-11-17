@@ -93,6 +93,13 @@ interface Tokens {
   shadow3: string; // 模态（sheet、对话框）
   sheen: string; // 浮起的面上沿一道极淡的高光（纸的厚度；深色档几乎看不见）
   selection: string;
+  // 浮层的玻璃（菜单、弹层、面板、对话框；电脑与触屏一致）：半透明的纸 + 背后磨砂（--glass-blur）。
+  // 底下的纸（侧栏、画布、输入框、工作区卡片）不上玻璃。
+  glass: string; // 菜单、弹层
+  glassStrong: string; // 底部面板（内容多、要读，透得少一些）
+  glassCard: string; // 玻璃上的分组卡片（iOS inset grouped 的白卡）
+  glassRim: string; // 玻璃边缘一圈受光的细线
+  glassShadow: string; // 玻璃浮层的投影（比纸的更散、更柔）
 }
 
 const LIGHT: Tokens = {
@@ -127,6 +134,11 @@ const LIGHT: Tokens = {
   shadow3: "0 2px 6px rgba(23,22,20,.06), 0 30px 70px -18px rgba(23,22,20,.34)",
   sheen: "rgba(255,255,255,.75)",
   selection: "#EBCFC2",
+  glass: "rgba(250,248,243,.74)",
+  glassStrong: "rgba(248,246,240,.88)",
+  glassCard: "rgba(255,255,255,.78)",
+  glassRim: "rgba(255,255,255,.7)",
+  glassShadow: "0 0 0 .5px rgba(23,22,20,.08), 0 2px 8px rgba(23,22,20,.05), 0 24px 60px -16px rgba(23,22,20,.3)",
 };
 
 const DARK: Tokens = {
@@ -160,6 +172,11 @@ const DARK: Tokens = {
   shadow3: "0 4px 10px rgba(0,0,0,.34), 0 32px 80px -20px rgba(0,0,0,.66)",
   sheen: "rgba(255,255,255,.045)",
   selection: "rgba(228,85,58,.3)",
+  glass: "rgba(36,34,30,.7)",
+  glassStrong: "rgba(30,28,25,.86)",
+  glassCard: "rgba(238,234,226,.07)",
+  glassRim: "rgba(255,255,255,.09)",
+  glassShadow: "0 0 0 .5px rgba(0,0,0,.5), 0 2px 10px rgba(0,0,0,.25), 0 28px 70px -16px rgba(0,0,0,.65)",
 };
 
 // 宿主（bridge 桌面壳）拿页面底色去刷窗口 backgroundColor / 窗控条：必须是真实的页面底色。
@@ -208,6 +225,8 @@ const SHARED: Record<string, string> = {
   "--t-fast": "140ms",
   "--t-med": "240ms",
   "--t-slow": "420ms",
+  // 玻璃背后的磨砂：模糊 + 提一点饱和（底下的纸色、墨色透上来不发灰）
+  "--glass-blur": "blur(28px) saturate(1.6)",
 };
 
 // ── 应用到 DOM ────────────────────────────────────────────────────────────────────────
@@ -260,6 +279,11 @@ export function tokenVars(mode: Mode): Record<string, string> {
     "--shadow-3": tk.shadow3,
     "--sheen": tk.sheen,
     "--selection": tk.selection,
+    "--glass": tk.glass,
+    "--glass-strong": tk.glassStrong,
+    "--glass-card": tk.glassCard,
+    "--glass-rim": tk.glassRim,
+    "--glass-shadow": tk.glassShadow,
     ...SHARED,
     ...motionVars(),
   };

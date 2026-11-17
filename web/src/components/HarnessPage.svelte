@@ -199,7 +199,7 @@
   }
   setModelHubHost({
     available: () => hub.ok && hub.v2,
-    open: (target) => {
+    open: (target, opts) => {
       if (target && typeof target === 'object') {
         if (typeof target.service === 'string' && target.service) {
           return openHubSheet(target.service.startsWith('vertex') ? { type: 'vertex' } : { type: 'service', id: target.service }) === true;
@@ -207,7 +207,8 @@
         if (typeof target.legacy === 'string' && target.legacy) { void moveLegacy(target); return true; }
         return false;
       }
-      return openModelHub(target === 'add' ? 'add' : null) === true;
+      // opts.from：型号菜单那块面板的矩形——添加窗口从它原地长出来（HubService 的容器变形入场）
+      return openModelHub(target === 'add' ? 'add' : null, opts) === true;
     },
   });
   // 模型中心改完回到这一页就重拉目录，新加 / 改过的服务马上进菜单。两种「改完」：全局浮层（添加 / 服务详情）关掉——

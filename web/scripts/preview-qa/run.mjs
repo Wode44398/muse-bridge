@@ -2,6 +2,7 @@
 // 文件预览场景运行器（用法见同目录 README.md）：
 //   node web/scripts/preview-qa/run.mjs --name head [--profiles p393,d1440] [--scenarios open-,swipe-] [--tags baseline] [--out <目录>]
 //        [--url http://127.0.0.1:8841/]（不给 --name 时用）[--no-shots] [--local-delay 0] [--timeout 40] [--list] [--resume]
+//   [--exact]：截图改 PNG、连拍到两帧相同、另存结构快照 .dom.json（拆分 / 搬家前后逐张比对用）；[--extra <目录>]：再加载该目录的场景文件
 //   --timeout：整体超时（分钟），到点收掉 Edge 退出；--resume：--out 目录里已有 report.json 时，跑完过的档直接沿用、只补没跑的档（长跑中途断了接着跑）。
 // 每个视口档起一个全新的无头 Edge（临时 profile，缓存是冷的）；逐个场景：复位 → 跑 → 断言 / 指标 → 截图（JPEG）+ 通用检测。
 // 输出：<out>/report.json（全部断言、指标、问题、代码状态）、<out>/summary.md、<out>/<档>/<场景>[-<名>].jpg。
@@ -38,6 +39,19 @@ const URL0 = String(a.url || inst?.url || '');
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const OUT = path.resolve(String(a.out || path.join(QA_ROOT, 'runs', stamp)));
 const SHOTS = !a['no-shots'];
+// --exact：截图改 PNG + 稳定帧 + 结构快照（见 exactShot），并关掉动画与输入光标闪烁（同 studio-qa 的做法）
+const EXACT = !!a.exact;
+// 关动画 / 过渡、输入光标透明；「现在」冻结在固定时刻（计时器照常走），相对时间、日期类文案才不随跑的时刻变
+const EXACT_SRC = `(() => {
+  const RealDate = Date, FIX = ${new Date(2026, 10, 15, 12, 0, 0).getTime()}, t0 = performance.now();
+  const nowMs = () => FIX + Math.floor(performance.now() - t0);
+  function FDate(...x) { if (!new.target) return new RealDate(nowMs()).toString(); return x.length ? new RealDate(...x) : new RealDate(nowMs()); }
+  FDate.prototype = RealDate.prototype; FDate.now = nowMs; FDate.parse = RealDate.parse; FDate.UTC = RealDate.UTC; Object.setPrototypeOf(FDate, RealDate);
+  window.Date = FDate;
+  const css = '*,*::before,*::after{animation-duration:0s!important;animation-delay:0s!important;transition-duration:0s!important;transition-delay:0s!important;caret-color:transparent!important}';
+  const add = () => { if (!document.head) return false; const st = document.createElement('style'); st.id = '__pvqa_exact'; st.textContent = css; document.head.appendChild(st); return true; };
+  if (!add()) new MutationObserver((_, ob) => { if (add()) ob.disconnect(); }).observe(document, { childList: true, subtree: true });
+})();`;
 const PROFILE_IDS = a.profiles ? String(a.profiles).split(',') : DEFAULT_PROFILES;
 const PREFIX = a.scenarios ? String(a.scenarios).split(',') : null;
 const TAGS = a.tags ? String(a.tags).split(',') : null;
@@ -45,12 +59,14 @@ const LOCAL_DELAY = Number(a['local-delay'] || 0);
 const TIMEOUT_MIN = Number(a.timeout || 40);
 
 // —— 场景加载：scenarios/*.mjs（_ 开头的是模板，不加载），每个文件 export default 一个场景或数组 ——
+// --extra <目录>：另外加载该目录下的场景文件（一次性比对用的场景放在仓库外，不进 scenarios/）
 async function loadScenarios() {
-  const dir = path.join(HERE, 'scenarios');
   const list = [];
-  for (const f of readdirSync(dir).filter((f) => f.endsWith('.mjs') && !f.startsWith('_')).sort()) {
-    const m = await import(pathToFileURL(path.join(dir, f)).href);
-    for (const s of [].concat(m.default || [])) list.push({ mode: 'web', tags: [], timeout: 90000, ...s, file: f });
+  for (const dir of [path.join(HERE, 'scenarios'), ...(a.extra ? [path.resolve(String(a.extra))] : [])]) {
+    for (const f of readdirSync(dir).filter((f) => f.endsWith('.mjs') && !f.startsWith('_')).sort()) {
+      const m = await import(pathToFileURL(path.join(dir, f)).href);
+      for (const s of [].concat(m.default || [])) list.push({ mode: 'web', tags: [], timeout: 90000, ...s, file: f });
+    }
   }
   const ids = new Set();
   for (const s of list) { if (ids.has(s.id)) throw new Error('场景 id 重复：' + s.id); ids.add(s.id); }
@@ -133,6 +149,25 @@ async function healthyShot(pg) {
   return { buf, check, retries: 2, history };
 }
 
+/** --exact：拆分 / 搬家前后逐张比对用。PNG 无损；连拍到前后两帧逐字节相同才算（模糊玻璃采样、JS 弹簧收尾时会截到中间帧，
+ *  最多 8 张，没稳下来记 stable:false）；同名 .dom.json 存结构快照（__pvqa.structure），像素不稳定时靠它判定。 */
+async function exactShot(pg, outDir, tag, rec) {
+  const grab = async () => (await pg.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 45000)).data;
+  let prev = await grab(), stableAt = 0;
+  for (let k = 0; k < 7; k++) {
+    await sleep(400);
+    const cur = await grab();
+    if (cur === prev) { stableAt = k + 1; break; }
+    prev = cur;
+  }
+  const file = path.join(outDir, tag + '.png');
+  writeFileSync(file, Buffer.from(prev, 'base64'));
+  const dom = await pg.eval(`JSON.stringify(__pvqa.structure())`).catch((e) => JSON.stringify({ error: String(e.message || e) }));
+  writeFileSync(path.join(outDir, tag + '.dom.json'), dom);
+  rec.shots.push({ file: path.relative(OUT, file), stable: !!stableAt, stableAt });
+  return file;
+}
+
 // 通用检测（studio-qa/detect.mjs）对查看器的已知误报：
 // - PDF / 演示文稿（pdf.js 渲染）的文字层：透明 span 按字形盒子叠放，本来就压在画布上，选字用，看不见
 // - 表格网格 .sg-scroll：宽表自己横向滚动是设计如此
@@ -195,6 +230,7 @@ function makeCtx({ pg, cfg, sc, rec, outDir, local }) {
       const tag = sc.id + (name ? '-' + name : '');
       for (const it of issues) rec.issues.push({ at: tag, ...it });
       if (!SHOTS) return null;
+      if (EXACT) return exactShot(pg, outDir, tag, rec);
       const hs = await healthyShot(pg);
       const file = path.join(outDir, tag + '.jpg');
       writeFileSync(file, hs.buf);
@@ -228,6 +264,7 @@ async function runProfile(pid, results = [], onRec = () => {}) {
     live.add(sess);
     pg = sess.pg;
     await pg.send('Page.addScriptToEvaluateOnNewDocument', { source: DETECT_SRC + '\n' + PROBE_SRC + '\n' + PVQA_SRC });
+    if (EXACT) await pg.send('Page.addScriptToEvaluateOnNewDocument', { source: EXACT_SRC });
     mode = null;
   };
   const dropSess = async () => {

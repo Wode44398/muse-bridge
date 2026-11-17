@@ -1,487 +1,42 @@
-import type { AgentEvent, StopReason, TodoItem } from "./events.ts";
-import type { Block, Msg, Turn } from "./turn.ts";
+// agent 主循环 runAgent。阈值与提示语、结局措辞、改动与验证证据、权限问询与审计、各类检查的辅助函数在 loop/ 下；对外的名字仍从这里引。
+import type { AgentEvent, StopReason } from "./events.ts";
+import type { Block, Msg } from "./turn.ts";
 import { toolResult } from "./turn.ts";
 import { mayHaveSideEffects, type AgentState } from "./state.ts";
 import { RunInvariants } from "./turn-invariants.ts";
 import { compactNow, contextNeedsTrim, contextTokens, effectiveWindow, ensureContextFits } from "./context.ts";
 import { downsampleForModel, parseImageByteLimit } from "./media-budget.ts";
-import { messageKind } from "./injections.ts";
+import "./injections.ts";
 import { deferredLoaded, notLoadedResult } from "./deferred-tools.ts";
-import { PLAYBOOK_KIND, playbookLoadedIn, playbookMessage, playbooksForCalls, playbooksForRequest, type Playbook } from "./playbooks.ts";
+import { playbooksForCalls, playbooksForRequest } from "./playbooks.ts";
 import { loopStopText } from "./loop-guard.ts";
-import { cutAtLoop, isRunawayRepetition, LOOP_CUT_NOTICE, type RepetitionLimits } from "./repetition.ts";
+import { isRunawayRepetition, LOOP_CUT_NOTICE } from "./repetition.ts";
 import { connectErrorLabel, isConnectFailure, isLocalLoadingError, planWait, type NetWait, type WaitPlan } from "./netwait.ts";
-import { REPEAT_DENIAL_RULE, callSubject, decide, sessionRuleChoices, type Decision } from "./permissions.ts";
+import { callSubject, decide, REPEAT_DENIAL_RULE, sessionRuleChoices } from "./permissions.ts";
 import { normalizeToolArgs } from "./tool-input.ts";
 import { approvalPreview } from "./approval-preview.ts";
 import { permissionReceipt, type PermissionReceipt } from "./card-receipts.ts";
 import { outsideReadOf, readRootFor, type Sandbox } from "../sandbox.ts";
 import { traceEvent } from "../trace-log.ts";
-import { uncoveredReferencingTests } from "./revdeps.ts";
-import { fail, type PreparedCall, type ToolContext, type ToolRunResult } from "../tools/types.ts";
+import "./revdeps.ts";
+import { fail, type PreparedCall, type ToolRunResult } from "../tools/types.ts";
 import { commandCanVerify } from "../tools/bash.ts";
 import { noteKnowledgeEdit, noteKnowledgeVerification } from "../knowledge-service.ts";
 import { nudgeOutboundProxy } from "../net-proxy.ts";
-import { RESTART_REASON } from "../retire.ts";
+import "../retire.ts";
 import { childSpan, runInTrace, traceIterable } from "../trace.ts";
-
-// Re-show the todo list after this many tool turns without the model seeing it
-// (a TodoWrite call or an earlier reminder); compaction forces an immediate one.
-const TODO_REMIND_TURNS = 5;
-
-const RAN_COMMANDS_CAP = 300;
-const REVDEP_REPORT_MAX = 6;
-
-// Tools whose per-call chrome (tool_start / tool_permission / tool_end) is never
-// forwarded to the frontend. MemoryAudit is an internal lifecycle checkpoint;
-// AskUserQuestion drives its own dedicated ask/ask_answer event + card, so the
-// generic tool row would be a confusing duplicate. The tool still runs and its
-// result still lands in the transcript — only the visible events are hidden.
-const SILENT_TOOLS = new Set(["MemoryAudit", "AskUserQuestion"]);
-const isSilentTool = (name: string): boolean => SILENT_TOOLS.has(name);
-
-// Memory bookkeeping the model can legitimately batch onto its final answer:
-// nothing here produces a result the answer still depends on. A turn made up
-// only of these, next to real answer text, is already a finished reply.
-const AUDIT_CLOSURE_TOOLS = new Set(["MemoryAudit", "Remember"]);
-
-// Text that merely ANNOUNCES the call it rides with ("执行强制审计收尾：",
-// "Saving the checkpoint:") is a preamble, not an answer — a turn that ends on
-// a colon is promising more output, so it must never be mistaken for a
-// finished reply (see the audit-closure early finish below).
-const announcesMore = (text: string): boolean => /[:：]\s*$/.test(text.trim());
-
-// 10-10 实测：MiMo 正文停在「……重来一遍，逐」、工具调用没发出来，provider 却报正常结束（finish_reason=stop，
-// usage 也到了），这一轮就当答完收了尾——待办还挂着 in_progress，用户看到的是「干一半断了」。正式服另有 Strata、
-// OpenAI 各一例同样断在半个字上。偏保守：只在待办还有没做完时判（那是模型自己说过活没干完），且最后一行是普通段落
-// （不是列表 / 标题 / 表格 / 代码）：结尾是逗号顿号冒号；或结尾是汉字 / 字母、而这一行前面已经有过标点（写到一半的
-// 长句）——「好的」「做完了」这种不带句号的短答是常事，不算。
-export function looksCutOff(text: string, openTodos: boolean): boolean {
-  const body = text.trimEnd();
-  if (!openTodos || !body || /```\s*$/.test(body)) return false;
-  const last = body.slice(body.lastIndexOf("\n") + 1).trim();
-  if (!last || /^([-*+>|#]|\d+[.)]\s)/.test(last)) return false;
-  if (/[，、,:：]$/.test(last)) return true;
-  return /[\u4e00-\u9fffA-Za-z]$/.test(last) && /[。，、；！？,.;!?]/.test(last);
-}
-
-// Marks a mid-run insertion so the model can tell it apart from the original
-// task ("the user is talking to me right now"), and knows a correction here
-// overrides earlier instructions rather than adding a second task.
-const STEER_PREFIX =
-  "[用户在运行中插话] 以下是用户刚刚发来的消息。它优先于此前的指示：如果与你正在做的事冲突，" +
-  "按这条来（必要时放弃/回滚正在进行的做法），然后继续。\n\n";
-
-// plan 模式实测（deepseek-v4-pro）：模型会直接用散文答「我的计划是…」而不调
-// ExitPlanMode，于是用户永远等不到那张批准卡。像其他门禁一样提醒一次；只提醒一次，
-// 因为「这个目录里有什么文件」这类纯问句在 plan 模式下直接回答本来就是对的。
-// Q14（K54）：harness 自己的提示语都是导出的常量——测试比对常量或消息的 origin / kind，不照抄措辞（措辞随时可改）。
-export const PLAN_SUBMIT_NUDGE =
-  "[Plan mode] You are in plan mode and have not called ExitPlanMode. If the user asked you to CHANGE " +
-  "anything, do not answer in prose: call ExitPlanMode now with the concrete plan (files/functions you " +
-  "will touch, how you will verify, what you are not doing) — that is the only way the user can approve " +
-  "and let you execute. If this was purely a question and you have fully answered it, say so plainly and stop.";
-
-export const VERIFY_NUDGE =
-  "[Automated check] You have edited files without sufficient passing verification evidence. " +
-  "Do not declare the task done yet: run the relevant tests, build, or program with an explicit verification " +
-  "operation, read the output, and fix what fails. If no meaningful executable check exists or the environment " +
-  "blocks it, call VerificationAudit with a concrete reason and disclose that limitation in the final answer.";
-
-// A turn cut off by the output-token limit is NOT a finished answer. Auto-ask
-// the model to pick up where it stopped, bounded so a non-converging model
-// can't ping-pong forever.
-// Same gate, honest wording: the model DID run something meaningful, it just
-// never marked it as evidence, so the harness cannot count it.
-export const VERIFY_UNDECLARED_NUDGE =
-  "[Automated check] You edited files and then ran something that looks like a real check, but never marked " +
-  "it as verification, so this run still counts as unverified. If that command WAS the check, re-run it with " +
-  "verify:true (or Bash(poll:\"<id>\", verify:true)) and read the output. If it was not, run the real test or " +
-  "build now. If no meaningful executable check exists or the environment blocks it, call VerificationAudit " +
-  "with a concrete reason.";
-
-export const MAX_LENGTH_CONTINUES = 3;
-export const LENGTH_CONTINUE_NUDGE =
-  "[Automated check] Your previous reply was cut off by the output-token limit mid-response. " +
-  "Continue exactly where you stopped — do not repeat what you already wrote. " +
-  "If you were about to call tools, issue those tool calls now.";
-// R19（hermes N23 的 reasoning-only 分流）：这一轮只写了思考、一个字的答复都没有就要收尾——用户那头只看得见一段思考。
-// 正式服 1825 次模型回合里出现过 2 次，其中一次就这样收了尾（用户看到八千多字的思考、没有答复）。追问这么多次，还是没有就照旧收尾。
-export const MAX_ANSWER_NUDGES = 1;
-export const ANSWER_NUDGE =
-  "[Automated check] Your last turn contained only reasoning — nothing reached the user. " +
-  "Write your reply to the user now (do not repeat the reasoning). " +
-  "If you meant to call tools, issue those tool calls now.";
-// 正文断在半句、却报了正常结束（见 looksCutOff）——追一句接着干。每条用户消息最多两次，追问不进聊天记录。
-export const MAX_CUTOFF_NUDGES = 2;
-export const CUTOFF_NUDGE =
-  "[Automated check] Your previous reply stopped mid-sentence and no tool call came through. " +
-  "Continue exactly where you stopped — do not repeat what you already wrote. " +
-  "If you were about to call tools, issue those tool calls now.";
-
-export const MEMORY_AUDIT_NUDGE =
-  "[Memory audit required] Before finishing, inspect the memory index and decide whether this run " +
-  "produced durable knowledge that is not recoverable from the files. Use Remember first for any " +
-  "lasting decision/reason, gotcha, user preference, or project context, then call " +
-  "MemoryAudit(decision:'updated', reason:'...'). If nothing warrants storage, call " +
-  "MemoryAudit(decision:'none', reason:'<concrete reason>'). Do not give the final answer until the checkpoint succeeds.";
-
-export const PRECOMPACT_AUDIT_NUDGE =
-  "[Pre-compaction memory audit] The context is about to be lossily summarized. Before that happens, " +
-  "save any durable fact that a future session should retain with Remember, then call MemoryAudit as " +
-  "updated. If the files/transcript already contain everything durable, call MemoryAudit as none with " +
-  "a concrete reason. Continue the task after the checkpoint.";
-
-const UNDECLARED_EVIDENCE_CAP = 3;
-const MAX_MEMORY_AUDIT_NUDGES = 3;
-const MAX_VERIFICATION_AUDIT_NUDGES = 3;
-
-// R8：重试加厚。最多 10 次（以前 4 次，一次几十秒的限流窗口或一阵 5xx 就能把整轮打死）。等多久：provider 给了
-// Retry-After 就照办（sse.ts 解析时夹在 5 分钟内）；否则通用退避按 0.5s 起指数增长，限流按 15s 一档递增（真实的
-// 429 窗口是几十秒，远超通用退避），两者都封顶 60s，并在 [一半, 全额] 之间随机抖动——多个会话同时撞上限流时错开，
-// 不在同一刻一起再撞一次。等下去会越过这一轮的截止时间就不等了，带着上一次的错收场。
-export const RETRY_ATTEMPTS = 10;
-// R17（B7）：什么都没回来——没正文、没思考、没工具调用，provider 也没报任何用量（真实的一次调用输入 token 不会是 0）——
-// 是流悄悄断了，不是模型选择沉默。重发这么多次；还是这样就以 EMPTY_RESPONSE_KIND 收场。以前它一路走进验证 / 记忆审计门禁，
-// 被当成「该审计没审计」追问到用尽，最后报一句不相干的「没交 MemoryAudit」。
-export const EMPTY_RESPONSE_RETRIES = 1;
-export const EMPTY_RESPONSE_KIND = "empty_model_response";
-// #98：审计落定之后，连着只交审计生命周期工具、一个字不说的轮数上限（交成审计的那一轮也算在内），超过就以这句收场
-const AUDIT_LIFECYCLE_TOOLS = new Set(["MemoryAudit", "Remember", "Recall"]);
-export const REDUNDANT_AUDIT_TURNS = 4;
-export const REDUNDANT_AUDIT_MESSAGE =
-  "redundant_audit_loop: the memory audit was already completed, but the model kept re-submitting audit calls without answering — the run was stopped";
-// R17（B8）：一批并行的只读调用最多这么多个——模型一轮发几十个 Read / Grep 时不再同时起几十个（Grep 各占一个 worker 线程）
-export const MAX_PARALLEL_TOOLS = 8;
-const OUTPUT_ROOM_MARGIN = 1_000; // R9：夹输出上限时给估算误差留的余量
-const MIN_OUTPUT_TOKENS = 1_024;
-const BACKOFF_BASE_MS = 500;
-const RATE_LIMIT_WAIT_MS = 15_000;
-const RETRY_WAIT_CAP_MS = 60_000;
-
-export interface RetryWhy {
-  retryAfterMs?: number; // provider 自己说的等多久
-  rateLimited?: boolean;
-}
-
-// 测试把节奏整体调快（逻辑不变），与 netwait 的 DIMENSIO_NET_WAIT_BASE_MS 同一个做法。
-const retryScale = (): number => {
-  const s = Number(process.env.DIMENSIO_RETRY_SCALE);
-  return Number.isFinite(s) && s > 0 ? s : 1;
-};
-
-// retry = 这是第几次重试（从 1 起）
-export function retryDelayMs(retry: number, why: RetryWhy, random: () => number = Math.random): number {
-  if (why.retryAfterMs !== undefined) return why.retryAfterMs;
-  const full = Math.min(why.rateLimited ? RATE_LIMIT_WAIT_MS * retry : BACKOFF_BASE_MS * 2 ** (retry - 1), RETRY_WAIT_CAP_MS);
-  return Math.round(full / 2 + random() * (full / 2));
-}
-
-// Bash commands that only LOOK at state don't verify anything — they must not
-// clear the done-gate's dirty flag, and (for the revdep scan) merely `cat`ing a
-// test file must not count as having run it. Conservative: a match requires the
-// whole command to be a single plain invocation (no pipes/chains/redirects).
-// Run-budget guardrails (opt-in per run via /api/run {deadlineMs, maxTurns}):
-// nudge convergence at 80%, and once exhausted give the model exactly ONE final
-// turn — whose tool calls are not executed — so a run never dies mid-sentence
-// against an external wall-clock (the xarray-3364 timeout loss).
-const BUDGET_SOFT_FRACTION = 0.8;
-
-interface BudgetStatus {
-  soft: boolean;
-  exhausted: boolean;
-  detail: string;
-}
-
-function budgetStatus(state: AgentState): BudgetStatus {
-  const now = Date.now();
-  const parts: string[] = [];
-  let frac = 0;
-  let exhausted = false;
-  if (state.deadlineAt !== null) {
-    const total = Math.max(1, state.deadlineAt - state.runStartedAt);
-    const elapsed = now - state.runStartedAt;
-    frac = Math.max(frac, elapsed / total);
-    if (now >= state.deadlineAt) exhausted = true;
-    parts.push(`${Math.round(elapsed / 1000)}s of ${Math.round(total / 1000)}s`);
-  }
-  if (state.maxTurns !== null) {
-    frac = Math.max(frac, state.runTurns / state.maxTurns);
-    if (state.runTurns >= state.maxTurns) exhausted = true;
-    parts.push(`turn ${state.runTurns} of ${state.maxTurns}`);
-  }
-  return { soft: frac >= BUDGET_SOFT_FRACTION, exhausted, detail: parts.join(", ") };
-}
-
-const budgetNudgeText = (b: BudgetStatus) =>
-  `[Budget] Most of this run's budget is used (${b.detail}). Converge now: finish the essential ` +
-  "change, run the final verification, and wrap up. Do not start new explorations or side quests.";
-
-const budgetExhaustedText = (b: BudgetStatus) =>
-  `[Budget exhausted] This run's budget is used up (${b.detail}). Stop working NOW. Reply with a ` +
-  "concise final summary of what you did, what is verified, and what (if anything) remains. " +
-  "Further tool calls will NOT be executed.";
-
-// ── P6（N16）：同意结局表 ─────────────────────────────────────────────────────
-// 没被批准的调用回给模型的话，按结局只在这一处写。以前无人值守那句的注释是「so the model can route around it」，
-// 拒绝文案也从不说「别换条路」——拒了 Edit，下一步换 Bash 照写（#49）。
-//   denied     用户点了拒绝（可能带一句附言）
-//   withdrawn  没等到答复（run 先结束了、离开模式没人能批）——不是拒绝
-//   unattended 这次调用没有人能批（子 agent、无头运行）
-//   denied_stop 用户点了「拒绝并停止」：这一轮随即停下
-//   timeout    P7：倒计时到了没人批，按拒绝处理（fail-closed）——不是用户拒绝，但也别换条路绕过去
-type ConsentOutcome = "denied" | "denied_stop" | "withdrawn" | "unattended" | "timeout";
-const NO_BYPASS = "Do not try to achieve the same effect with another tool or command";
-function consentText(outcome: ConsentOutcome, detail?: string): string {
-  const d = detail?.trim();
-  switch (outcome) {
-    case "denied":
-      return `${d ? `user declined: ${d}` : "user declined this call"}. ${NO_BYPASS} — continue with other work, or ask the user`;
-    case "denied_stop":
-      return `${d ? `user declined: ${d}` : "user declined this call"} and stopped the run. ${NO_BYPASS}; wait for the user's next message`;
-    case "withdrawn":
-      return `not approved: ${d || "no answer"} (this is not a refusal — ask again if still needed)`;
-    case "timeout":
-      return `not approved: ${d || "nobody answered in time"} (this is not a refusal). ${NO_BYPASS}; skip this step and mention it in your final answer`;
-    case "unattended":
-      return `${d}, but no user is attached to approve it, so it was not approved. ${NO_BYPASS}; skip this step and mention it in your final answer`;
-  }
-}
-
-// 同一个 run 里连续这么多次没被批准（用户拒绝 / 没人在场），就不再试了：收尾轮交代清楚，由人决定
-// （次数随模型档案 loop.denialsBeforeStop，默认就是这个常量）
-export const DENIALS_BEFORE_STOP = 3;
-const denialsStopText = (n: number): string =>
-  `[Permissions] ${n} actions in a row were not approved. Stop here — do not retry them and do not try to ` +
-  "get the same effect another way. Write your final answer now: what you were trying to do, what was not done because " +
-  "it was not approved, and what the user needs to decide. Further tool calls will NOT be executed.";
-
-// ── R6（#32）：中断与失败说真话 ───────────────────────────────────────────────
-// 用户停下时，已经跑完的批次照实入转录，没轮到的明说没执行、别自动重试（以前直接 return，下次
-// 恢复时连已经带副作用跑完的调用也被说成「没执行、需要就重发」）；流到一半被停，已经显示给用户的
-// 文字也进转录；失败轮补一条 assistant 边界，写明出了什么错、这一轮已经跑过哪些工具。
-const NOT_STARTED_USER_STOP =
-  "Not executed: the user stopped the run before this call started. Do not retry it automatically — " +
-  "wait for the user's next instruction.";
-// M8：部署 / 重启时的排空也是中止，但不是用户叫停的——照实写，续聊时模型才知道该接着干。
-const NOT_STARTED_RESTART =
-  "Not executed: the server restarted (deploy) before this call started. The task was interrupted, " +
-  "not cancelled — when the user resumes, check what already happened and continue.";
-const byRestart = (signal: AbortSignal) => signal.reason === RESTART_REASON;
-// U6（hermes N41）：中断带上是谁停的——前端显示成灰色的「已停止」，不再是一张红色的 aborted 报错卡
-const abortedEvent = (signal: AbortSignal): AgentEvent => ({
-  e: "error",
-  message: "aborted",
-  retriable: false,
-  stopped: byRestart(signal) ? "restart" : "user",
-});
-// U6：失败的描述符——一句人话（分类器给的，或这里写的中文），这一轮已经执行过几次工具（重发之前先核对它们的结果）
-function failureEvent(message: string, retriable: boolean, ran: Map<string, number>, extra: { class?: string; summary?: string } = {}): AgentEvent {
-  const count = [...ran.values()].reduce((a, b) => a + b, 0);
-  return {
-    e: "error",
-    message,
-    retriable,
-    ...(extra.class ? { class: extra.class } : {}),
-    ...(extra.summary ? { summary: extra.summary } : {}),
-    ...(count ? { ran: count } : {}),
-  };
-}
-const cutReason = (signal: AbortSignal) =>
-  byRestart(signal) ? "interrupted: the server restarted (deploy) before this turn finished" : "interrupted by the user";
-
-function ranSummary(ran: Map<string, number>): string {
-  if (!ran.size) return "No tools ran in this run.";
-  return `Tools that ran in this run: ${[...ran].map(([name, n]) => (n > 1 ? `${name}×${n}` : name)).join(", ")}.`;
-}
-
-// 被中断或失败的这一轮在转录里要有个结尾：已流出的文字照留（丢掉没签名的 thinking 与没收完的调用）
-// 并注明原因；什么都没流出来时补一条只给模型看的边界。
-function closeCutTurn(state: AgentState, text: string, reason: string, internal: boolean): void {
-  // R16：被打断时留下的半截已经是循环（严格档）——循环的部分不进转录，免得下一轮重放又把模型带回循环
-  if (isRunawayRepetition(text, true, state.profile.loop.repetition)) text = withLoopCut(text, state.profile.loop.repetition);
-  if (text.trim()) {
-    state.appendAssistant({ text: `${text}\n\n[${reason}]`, thinkingText: "", calls: [] }, internal);
-  } else {
-    state.appendAssistant({ text: `[${reason}]`, thinkingText: "", calls: [] }, true);
-  }
-}
-
-// R16：截到循环开始处，再补一句标记
-function withLoopCut(text: string, lim: RepetitionLimits): string {
-  const kept = cutAtLoop(text, lim);
-  return `${kept}${kept ? "\n\n" : ""}${LOOP_CUT_NOTICE}`;
-}
-
-// ── V1（#19）：最终答复下的服务端验证回执 ─────────────────────────────────────
-// 模型写的「测试全绿」旁边，摆着这一轮真正交出的证据：通过的检查、最后一次没通过的检查、
-// VerificationAudit 的豁免理由。只在这一轮出了问题时出现（全部通过不附，10-07）；写进最终
-// 那条 assistant 消息（刷新后还在），并在 done 之前补一个 text_delta（在线的客户端当场看到）。
-const clipDetail = (d: string): string => {
-  const one = d.replace(/`/g, "'").replace(/\s+/g, " ").trim();
-  return one.length > 140 ? one.slice(0, 140) + "…" : one;
-};
-
-// V2（#21）：只改了文档类文件（.md、.txt、图片…）不进验证门禁——没有可执行的东西可验。
-const DOC_EXT_RE = /\.(?:md|markdown|mdx|txt|rst|adoc|asciidoc|org|csv|tsv|log|png|jpe?g|gif|webp|ico|bmp)$/i;
-export const touchesCode = (files: Iterable<string>): boolean => [...files].some((f) => !DOC_EXT_RE.test(f));
-
-// ── V5（#20）：门禁的「改过没有」不只认 Edit/Write ───────────────────────────────
-// 以前派 coder 子 agent 改完、或者用 Bash 写了文件就收尾，门禁一次都不问（probe delegated-edit-gate、bash-write-gate）。
-// 两路信号：① 调用自己报的——coder / Workflow 的 editedFiles、Bash 命令里明确写的路径（按调用的时刻记，与验证的
-// 先后关系是准的）；② 影子 git：这一轮开跑时的快照到现在，工作区改了哪些文件（有会话、开着检查点时才有；
-// 兜住 npm run format、脚本生成这类看不出写了什么的）。
-function noteToolEdits(state: AgentState, call: { name: string; args: Record<string, unknown> }, res: ToolRunResult): void {
-  const paths = [...(res.editedFiles ?? []), ...(state.toolMap.get(call.name)?.permissionView?.(call.args)?.edits ?? [])];
-  if (!paths.length) return;
-  const fresh: string[] = [];
-  for (const raw of paths) {
-    try {
-      const abs = state.ctx.sandbox.resolve(raw);
-      state.editedFiles.add(abs);
-      fresh.push(abs);
-    } catch {
-      /* 工作区外 / 解析不了的路径：门禁管不到它 */
-    }
-  }
-  // 只有改到代码才把「验过了」作废——写个日志、改个 README 不该让门禁重新追问
-  if (touchesCode(fresh)) {
-    state.recordMutation();
-    noteKnowledgeEdit(state.ctx.sandbox.root);
-  }
-}
-
-// 影子 git 看到的改动：这些改动发生在这一轮的某个时刻，和验证谁先谁后说不清——这一轮有过通过的验证，就当它
-// 覆盖到了；一次都没有，才算「改了还没验」。
-async function noteUnseenChanges(state: AgentState): Promise<void> {
-  if (!state.changedSinceRunStart) return;
-  let changed: string[] = [];
-  try {
-    changed = await state.changedSinceRunStart();
-  } catch {
-    return;
-  }
-  const fresh: string[] = [];
-  for (const rel of changed) {
-    try {
-      const abs = state.ctx.sandbox.resolve(rel);
-      if (!state.editedFiles.has(abs)) {
-        state.editedFiles.add(abs);
-        fresh.push(abs);
-      }
-    } catch {
-      /* 凭据路径等解析会拒的：不进账 */
-    }
-  }
-  if (touchesCode(fresh) && !state.runEvidence.some((e) => e.passed)) state.recordMutation();
-}
-
-// N26（HT3）：这次调用可能写过工作区——不是只读的；只删不写的破坏性命令不算（它毁掉的内容在它之前那张快照里）。
-function mayHaveWritten(state: AgentState, call: { name: string; args: Record<string, unknown> }): boolean {
-  const tool = state.toolMap.get(call.name);
-  if (!tool || tool.effect === "read") return false;
-  const view = tool.permissionView?.(call.args);
-  return view?.effect !== "read" && !view?.onlyDestroys;
-}
-
-// 轮内快照在回滚面板上的名字：「执行 rm -rf src 之前」（命令只取第一行、截短）
-function destructiveLabel(args: Record<string, unknown>): string {
-  const line = String(args.command ?? "").trim().split(/\r?\n/)[0];
-  return `执行 ${line.length > 40 ? line.slice(0, 40) + "…" : line} 之前`;
-}
-
-const RETRACT_REASON = "答复先撤回：改了代码，但还没有通过的验证，正在让它补跑检查";
-// 撤回的那版答复模型自己的上下文里还在，它会以为用户看过了，收尾只写一句「验证通过」——用户那边正文就没了
-// （2026-10-05 本机 Qwen 分析 Strata：六千字分析被撤回，最后只剩「分析已完成。补充验证结果：……」）。追问里明说。
-const RETRACTED_NOTICE =
-  " Note: the reply you just wrote has been withdrawn from the user's view — they will NOT see it. When you finish, " +
-  "your final reply must be complete and self-contained: restate the full answer, then add the verification results.";
-
-export function verificationFootnote(state: AgentState): string | null {
-  if (!state.finalFootnotes) return null;
-  const lines: string[] = [];
-  // V3（#33）：本轮到最后也没落地的编辑，服务端点名列出。
-  if (state.failedEdits.size) {
-    const items = [...state.failedEdits.values()].slice(0, 5).map((f) => `\`${clipDetail(f.display)}\`（${clipDetail(f.reason)}）`);
-    const more = state.failedEdits.size > 5 ? ` 等 ${state.failedEdits.size} 处` : "";
-    lines.push(`⚠️ 这些编辑没有落地：${items.join("、")}${more}`);
-  }
-  // V2：追问用尽放行、或预算用完收场时，代码改动仍没有通过的验证——服务端写明，模型去不掉。
-  if (touchesCode(state.editedFiles) && state.dirtySinceVerify && !state.verificationAuditCompleted) {
-    lines.push(
-      `⚠️ 未验证：这一轮改了 ${state.editedFiles.size} 个文件，但没有通过的验证证据` +
-        (state.verificationGateGaveUp ? `（门禁追问 ${MAX_VERIFICATION_AUDIT_NUDGES} 次后放行）` : "") +
-        "，以上结论请自行核对。",
-    );
-  }
-  const last = state.runEvidence.at(-1);
-  if (last && !last.passed) lines.push(`最后一次检查没通过：❌ \`${clipDetail(last.detail)}\``);
-  if (state.runAudit) lines.push(`没有可跑的验证（${state.runAudit.decision}）：${state.runAudit.reason}`);
-  // K6（G4）：记忆审计门禁追问用尽放行——服务端写明，模型去不掉
-  if (state.memoryAuditGaveUp) lines.push(`⚠️ 记忆审计：追问 ${MAX_MEMORY_AUDIT_NUDGES} 次仍没交，已放行——这一轮值得记住的事可能没记下来`);
-  // 10-07（维护者）：验收顺利就不打扰——通过的回执只在上面有问题时作为对照一起给，全绿不附尾注
-  if (!lines.length) return null;
-  const passed = [...new Set(state.runEvidence.filter((e) => e.passed).map((e) => clipDetail(e.detail)))].slice(-3);
-  if (passed.length) lines.push(`通过的检查：${passed.map((d) => `✅ \`${d}\``).join(" · ")}`);
-  return `\n\n> ${lines.join("\n>\n> ")}`;
-}
-
-// Q3：请求不变量在生产上只计数、首次告警一次，绝不抛（检查本身出错也只记一笔）。测试里违反即失败：
-// 脚本化 provider 验每次输入，loopState 收尾核对这里的计数。
-const INVARIANT_SAMPLES = 5;
-function noteInvariants(state: AgentState, invariants: RunInvariants, turn: Turn): void {
-  let problems: string[];
-  try {
-    problems = invariants.check(turn, state.systemRewrites);
-  } catch (err) {
-    problems = [`request invariant check crashed: ${(err as Error).message}`];
-  }
-  if (!problems.length) return;
-  if (!state.invariantViolations) {
-    const more = problems.length > 1 ? ` (+${problems.length - 1} more)` : "";
-    console.warn(`[agent] request invariant violated before sending: ${problems[0]}${more}`);
-  }
-  state.invariantViolations += problems.length;
-  for (const p of problems) {
-    if (state.invariantSamples.length >= INVARIANT_SAMPLES) break;
-    if (!state.invariantSamples.includes(p)) state.invariantSamples.push(p);
-  }
-}
-
-// 瘦身 P0-3：专章（playbook）按需注入——用户点名或工作碰到那块时追加一条 harness 消息，同一章在转录里还在就不重复。
-// D5：这台机器没有浏览器（state.browser = false，见 headless.ts browserAvailable）时，网页章给 curl 版、桌面 / 安卓两章不给
-// （与 prompt.ts 的 browser 开关一致）。
-function attachPlaybooks(state: AgentState, picks: Playbook[], why: "request" | "work"): void {
-  for (const p of picks) {
-    if (p.needsBrowser && !state.browser) continue;
-    if (playbookLoadedIn(state.messages, p)) continue;
-    state.appendUserBlocks([{ t: "text", text: playbookMessage(p, why, state.browser) }], false, { origin: "harness", kind: PLAYBOOK_KIND });
-  }
-}
-
-// 这一轮用户本人说的话（最后一条不带来源的用户文本消息；续跑 / 目标续跑的轮里是更早那条，重复注入由去重挡住）
-function ownRequestText(messages: readonly Msg[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role !== "user" || messageKind(m) !== null || m.content.some((b) => b.t === "tool_result")) continue;
-    return m.content.flatMap((b) => (b.t === "text" ? [b.text] : [])).join("\n");
-  }
-  return "";
-}
-
-// 尾注接在最终答复最后一段正文后面；这一轮没有正文时单独成一条 assistant 消息。
-function attachFootnote(state: AgentState, target: Msg | null, note: string): void {
-  if (target?.role === "assistant") {
-    for (let i = target.content.length - 1; i >= 0; i--) {
-      const block = target.content[i];
-      if (block.t === "text") {
-        target.content[i] = { t: "text", text: block.text + note };
-        return;
-      }
-    }
-  }
-  state.appendAssistant({ text: note.trimStart(), thinkingText: "", calls: [] });
-}
+import { bringsExternalContent, buildVerifyNudge, renderRaw, renderTodoReminder, sleep, thinkingOnlyReply, todoReminderDue } from "./loop/checks.ts";
+import { profileToolPolicy } from "./profile.ts";
+import { attachFootnote, attachPlaybooks, destructiveLabel, mayHaveWritten, noteInvariants, noteToolEdits, noteUnseenChanges, ownRequestText, RETRACT_REASON, RETRACTED_NOTICE, touchesCode, verificationFootnote } from "./loop/evidence.ts";
+import { announcesMore, ANSWER_NUDGE, AUDIT_CLOSURE_TOOLS, AUDIT_LIFECYCLE_TOOLS, budgetExhaustedText, budgetNudgeText, budgetStatus, CUTOFF_NUDGE, EMPTY_RESPONSE_KIND, isSilentTool, LENGTH_CONTINUE_NUDGE, looksCutOff, MAX_MEMORY_AUDIT_NUDGES, MAX_VERIFICATION_AUDIT_NUDGES, MEMORY_AUDIT_NUDGE, MIN_OUTPUT_TOKENS, OUTPUT_ROOM_MARGIN, PLAN_SUBMIT_NUDGE, PRECOMPACT_AUDIT_NUDGE, RAN_COMMANDS_CAP, REDUNDANT_AUDIT_MESSAGE, REDUNDANT_AUDIT_TURNS, retryDelayMs, retryScale, type RetryWhy, STEER_PREFIX, UNDECLARED_EVIDENCE_CAP } from "./loop/limits.ts";
+import { abortedEvent, byRestart, closeCutTurn, consentText, cutReason, denialsStopText, failureEvent, NOT_STARTED_RESTART, NOT_STARTED_USER_STOP, ranSummary, withLoopCut } from "./loop/outcomes.ts";
+import { askOutsideRead, auditPermission, callContext, type PermissionAuditBy } from "./loop/permission-flow.ts";
+export { looksCutOff, PLAN_SUBMIT_NUDGE, VERIFY_NUDGE, VERIFY_UNDECLARED_NUDGE, MAX_LENGTH_CONTINUES, LENGTH_CONTINUE_NUDGE, MAX_ANSWER_NUDGES, ANSWER_NUDGE, MAX_CUTOFF_NUDGES, CUTOFF_NUDGE, MEMORY_AUDIT_NUDGE, PRECOMPACT_AUDIT_NUDGE, RETRY_ATTEMPTS, EMPTY_RESPONSE_RETRIES, EMPTY_RESPONSE_KIND, REDUNDANT_AUDIT_TURNS, REDUNDANT_AUDIT_MESSAGE, MAX_PARALLEL_TOOLS, retryDelayMs } from "./loop/limits.ts";
+export type { RetryWhy } from "./loop/limits.ts";
+export { DENIALS_BEFORE_STOP } from "./loop/outcomes.ts";
+export { touchesCode, verificationFootnote } from "./loop/evidence.ts";
+export { OUTSIDE_READ_RULE } from "./loop/permission-flow.ts";
+export { bringsExternalContent, transcriptReadExternal } from "./loop/checks.ts";
 
 // The agent loop: a while(true) state machine. Streams the model, collects any
 // tool calls, executes them (permission-gated), appends results, and repeats
@@ -756,6 +311,21 @@ export async function* runAgent(
           errRetriable = emptyRetries < state.profile.loop.emptyResponseRetries;
           if (errRetriable) emptyRetries++;
         }
+        // 档案 thinkingOnly=retry：只有思考、没有答复也没有工具调用就要收尾——不追问，把这次调用原样重发（与空响应同一份次数）；
+        // 次数用完就按这一次的结果往下走
+        if (
+          !errored &&
+          state.profile.loop.thinkingOnly === "retry" &&
+          !auditContinuationCandidate &&
+          !state.budgetExhausted &&
+          thinkingOnlyReply(stop, text, thinkingText, calls.length) &&
+          emptyRetries < state.profile.loop.emptyResponseRetries &&
+          attempt < MAX_ATTEMPTS - 1
+        ) {
+          emptyRetries++;
+          if (state.ctx.ownerId) traceEvent(state.ctx.ownerId, { e: "thinking_only_retry", thinkingChars: thinkingText.length });
+          continue;
+        }
         // 本机 llama-server 加载期回 503：等它加载完，不算一次失败。
         // R7：provider 说超窗 / 请求体过大——先压一次再发（每轮最多一次）；上一轮刚为这个压过、这一轮又超，是
         // rapid refill：停下来报错，不在循环里反复压。
@@ -934,6 +504,7 @@ export async function* runAgent(
       }
       // R19：只有思考、没有答复就要收尾——追一句把答复写出来（追问不进聊天记录）。放在各道门禁之前：门禁审的应当是真正的答复
       if (
+        state.profile.loop.thinkingOnly === "nudge" &&
         stop === "end" &&
         !text.trim() &&
         thinkingText.trim() &&
@@ -965,7 +536,7 @@ export async function* runAgent(
       // test_combine" regression trap). Skipped once the budget is exhausted.
       // V5：要收尾了——先把影子 git 看到、调用自己没报的改动补进账
       if (stop === "end" && !state.budgetExhausted && !state.verificationGateGaveUp) await noteUnseenChanges(state);
-      if (stop === "end" && !state.budgetExhausted && !state.verificationGateGaveUp && touchesCode(state.editedFiles)) {
+      if (stop === "end" && state.profile.loop.verifyGate === "on" && !state.budgetExhausted && !state.verificationGateGaveUp && touchesCode(state.editedFiles)) {
         const nudge = await buildVerifyNudge(state);
         if (nudge && state.verificationAuditNudges >= MAX_VERIFICATION_AUDIT_NUDGES) {
           // V2（#21）：追问用尽不再报错——以前每一版答复都被撤回，最后只剩一行英文 error，用户在时间线
@@ -1170,7 +741,7 @@ export async function* runAgent(
           const prepare = state.toolMap.get(call.name)?.prepare;
           if (prepare) {
             try {
-              prepared = await prepare(call.args, callContext(state.ctx, call.id));
+              prepared = await prepare(call.args, callContext(state.ctx, call.id, profileToolPolicy(state.profile)));
             } catch {
               prepared = null;
             }
@@ -1272,7 +843,7 @@ export async function* runAgent(
             // P13：sandbox 给了就用这个视图跑（「允许这一次」多放行的只读目录只对这一次调用有效）
             const runWith = async (sandbox?: Sandbox): Promise<ToolRunResult> => {
               // callContext 以会话的上下文为原型（readFileState 这些在原型上）——换沙箱也只加一层自有属性，不能展开
-              const ctx = callContext(state.ctx, call.id);
+              const ctx = callContext(state.ctx, call.id, profileToolPolicy(state.profile));
               if (sandbox) ctx.sandbox = sandbox;
               try {
                 return await runInTrace(span, () => tool.run(call.args, ctx));
@@ -1491,7 +1062,7 @@ export async function* runAgent(
       calls.some((call) => call.name === "MemoryAudit") &&
       calls.every((call) => AUDIT_CLOSURE_TOOLS.has(call.name)) &&
       results.every((block) => block.t === "tool_result" && block.ok) &&
-      !(!state.verificationGateGaveUp && touchesCode(state.editedFiles) && (await buildVerifyNudge(state)))
+      !(state.profile.loop.verifyGate === "on" && !state.verificationGateGaveUp && touchesCode(state.editedFiles) && (await buildVerifyNudge(state)))
     ) {
       // Why the run stopped is otherwise invisible from both sides of the wire
       // (the agent cannot tell "controller finished me" from "stream died").
@@ -1547,218 +1118,9 @@ export async function* runAgent(
     // a compaction). Periodically re-show the current todo list — on the next
     // request only (瘦身 P0-2: not persisted, so stale copies never pile up).
     state.turnsSinceTodoSeen++;
-    const openTodos = state.todos.some((t) => t.status !== "completed");
-    if (openTodos && state.turnsSinceTodoSeen >= TODO_REMIND_TURNS) {
+    if (todoReminderDue(state)) {
       state.turnsSinceTodoSeen = 0;
       state.ephemeralTail = renderTodoReminder(state.todos);
     }
-  }
-}
-
-// P14（ZCode C5）：权限判定审计。每次不是「默认放行」的判定记一行进会话的 trace JSONL（e: permission_decision）：工具、
-// 判定对象（trace-log 会截断、脱敏）、档位、第一判与最终结果、结构化来源与规则、最后是谁定的（规则 / 用户 / 没人在场 /
-// 超时 / 离开模式 / 撤回）、批准的范围。诊断永不影响主链路：traceEvent 自己吞错。
-type PermissionAuditBy = "rule" | "user" | "unattended" | "timeout" | "away" | "withdrawn";
-// P13（X18，Codex「被沙箱拒了 → 问要不要放行 → 重跑」）：越界只读的审批卡。选项同一张权限卡：允许这一次（这次调用
-// 带着放行重跑）/ 本会话都允许（这些目录记成本会话的只读目录，随会话落盘，之后同目录的读不再问）/ 拒绝（原失败照旧，附一句）。
-// 离开模式、超时没人批，按没批准处理（registerPermission 自己会这样落定）。
-export const OUTSIDE_READ_RULE = "outside-read";
-async function askOutsideRead(
-  state: AgentState,
-  call: { id: string; name: string; args: Record<string, unknown> },
-  res: ToolRunResult,
-  runWith: (sandbox?: Sandbox) => Promise<ToolRunResult>,
-  receipts: PermissionReceipt[],
-): Promise<ToolRunResult> {
-  const dirs = res.outsideRead!.dirs;
-  const req = {
-    tool: call.name,
-    subject: dirs.join("; "),
-    rule: OUTSIDE_READ_RULE,
-    sessionRules: dirs.map((d) => `ReadOnly(${d})`),
-    why: `要读工作区外的${dirs.length > 1 ? ` ${dirs.length} 个目录` : "目录"}「${dirs.join("」「")}」（只读，不会写）`,
-    preview: approvalPreview(call.name, call.args) ?? { kind: "text" as const, text: `${call.name} ${JSON.stringify(call.args).slice(0, 400)}` },
-  };
-  const verdict = await state.ctx.requestPermission!(req);
-  const receipt = permissionReceipt(req, verdict); // #103
-  if (receipt) receipts.push(receipt);
-  const initial: Decision = { effect: "ask", reason: `read outside the workspace: ${dirs.join(", ")}`, rule: OUTSIDE_READ_RULE, source: "outside-read" };
-  if (verdict.decision === "deny") {
-    const by: PermissionAuditBy = verdict.timedOut ? "timeout" : verdict.away ? "away" : verdict.unanswered ? "withdrawn" : "user";
-    auditPermission(state, call, initial, { effect: "deny", reason: "reading outside the workspace was not allowed" }, by, undefined);
-    const why = verdict.timedOut
-      ? "nobody answered in time"
-      : verdict.away
-        ? "the user is away"
-        : verdict.unanswered
-          ? "no answer"
-          : `the user declined${verdict.note ? `: ${verdict.note}` : ""}`;
-    const text = res.content.map((b) => (b.t === "text" ? b.text : "")).join("");
-    return {
-      ...res,
-      outsideRead: undefined,
-      content: [{ t: "text", text: `${text}\n\nAsked the user to allow reading ${dirs.join(", ")} (read-only): not allowed — ${why}. Do without it, or ask the user to switch the project to full access.` }],
-    };
-  }
-  auditPermission(state, call, initial, { effect: "allow", reason: "" }, verdict.away ? "away" : "user", verdict.decision === "session" ? "session" : "once");
-  if (verdict.decision === "session") state.grantReadRoots(dirs);
-  try {
-    return await runWith(verdict.decision === "session" ? undefined : state.ctx.sandbox.withReadRoots(dirs));
-  } catch (e) {
-    return fail("tool error", `${call.name} threw: ${(e as Error).message}`);
-  }
-}
-
-function auditPermission(
-  state: AgentState,
-  call: { name: string; args: Record<string, unknown> },
-  initial: Decision,
-  final: Decision,
-  by: PermissionAuditBy,
-  scope: string | undefined,
-): void {
-  if (initial.source === "default" && final.effect === "allow") return;
-  const owner = state.ctx.ownerId;
-  if (!owner) return;
-  traceEvent(owner, {
-    e: "permission_decision",
-    tool: call.name,
-    subject: callSubject(call.name, call.args),
-    mode: state.effectiveMode(),
-    initial: initial.effect,
-    effect: final.effect,
-    source: initial.source ?? "unknown",
-    ...(initial.rule ? { rule: initial.rule } : {}),
-    by,
-    ...(scope ? { scope } : {}),
-    ...(final.effect === "deny" ? { reason: final.reason } : {}),
-  });
-}
-
-// Per-call view of the shared ToolContext: prototype-chained so every read
-// (signal, askUser, emit, …) still sees the live session values, while the
-// call id rides on top without racing the parallel read batch (a plain
-// `ctx.callId = …` would be clobbered by the next call in the same batch).
-function callContext(ctx: ToolContext, callId: string): ToolContext {
-  return Object.assign(Object.create(ctx) as ToolContext, { callId });
-}
-
-// K9（X55）：会把外部内容（网页、搜索结果、浏览器里的页面、别的程序的界面）带进会话的工具。本会话真调过其中之一
-// ——成没成都算，WebFetch 遇到 4xx / 5xx 照样带回页面正文——之后 Remember 想存成 active 的，一律先存成 proposed 等用户确认：
-// 网页里写着的错误事实或注入，不能被模型自己写成以后每个会话都信的记忆。子 agent / Workflow 读过的，由它们的结果带上来。
-// 设备工具都算：DeviceAct 的结果里也有别的程序的界面（落点控件名、窗口标题、输入回读、操作后截图），设备浏览器 / 命令 / 文件同理。
-// LocalPCInspect / LocalPCAct 是它们的旧名：老会话的转录里还是旧名（transcriptReadExternal 从转录推）。
-const EXTERNAL_CONTENT_TOOLS = new Set([
-  "WebFetch", "WebSearch", "Browser", "ReadPage", "Eval", "Network", "DeviceInspect", "DeviceAct", "DeviceBrowser", "DeviceShell", "DeviceFiles", "LocalPCInspect", "LocalPCAct",
-]);
-// Bash 里直接抓网页同理：curl / wget、PowerShell 的 Invoke-WebRequest / Invoke-RestMethod 与别名 iwr / irm。只认命令位置
-// （开头、管道 / 分隔符 / 子命令 / 赋值之后），`grep -r wget docs/` 这种当参数的不算。
-const FETCH_COMMAND_RE = /(?:^|[;&|(\n`=]|\$\()\s*(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)(?:\.exe)?(?=[\s;&|)]|$)/im;
-
-function readsExternal(call: { name: string; args: Record<string, unknown> }): boolean {
-  if (EXTERNAL_CONTENT_TOOLS.has(call.name)) return true;
-  // E1：MCP 连接器是别人的程序 / 服务，回来的都算外部内容
-  if (call.name.startsWith("mcp__") || call.name === "McpCall" || call.name === "McpDescribe") return true;
-  return call.name === "Bash" && FETCH_COMMAND_RE.test(String(call.args.command ?? ""));
-}
-
-export function bringsExternalContent(call: { name: string; args: Record<string, unknown> }, res: ToolRunResult, invoked: boolean): boolean {
-  return res.externalContent === true || (invoked && readsExternal(call));
-}
-
-// 恢复 K9 之前写的会话：转录里出现过这类调用就算（被拒的也算——转录里分不清，宁可多标；压缩掉的推不出来）
-export function transcriptReadExternal(messages: readonly Msg[]): boolean {
-  return messages.some((m) => m.content.some((b) => b.t === "tool_call" && readsExternal(b)));
-}
-
-// Cache for the reverse-dependency scan below, which walks the whole workspace.
-// Both done-gate paths (the no-tool stop and the audit-closure early finish) call
-// buildVerifyNudge, so a single run used to pay for two full scans of a large
-// repo. The scan is a pure function of (root, editedFiles, ranCommands) — key on
-// those and reuse while they are unchanged.
-let revdepCache: { key: string; files: string[] } | null = null;
-
-async function scanUncovered(state: AgentState): Promise<string[]> {
-  // 键用 JSON.stringify：无需自造分隔符（早先版本用不可见控制字符当分隔符，
-  // 结果 git 把整个文件当二进制，diff/grep 全失效）。
-  const key = JSON.stringify([
-    state.ctx.sandbox.root,
-    [...state.editedFiles].sort(),
-    [...state.ranCommands].sort(),
-  ]);
-  if (revdepCache?.key === key) return revdepCache.files;
-  const files = await uncoveredReferencingTests(
-    state.ctx.sandbox.root,
-    state.editedFiles,
-    state.ranCommands,
-  );
-  revdepCache = { key, files };
-  return files;
-}
-
-// Decide what (if anything) to nudge with when the model stops after editing.
-// Never throws — the scan is a best-effort heuristic.
-async function buildVerifyNudge(state: AgentState): Promise<string | null> {
-  if (state.verificationAuditCompleted) return null;
-  let uncovered: string[] = [];
-  try {
-    uncovered = await scanUncovered(state);
-  } catch {
-    // fall through — the dirty check below still applies
-  }
-  const list = uncovered.slice(0, REVDEP_REPORT_MAX).join(", ");
-  const more = uncovered.length > REVDEP_REPORT_MAX ? ` (+${uncovered.length - REVDEP_REPORT_MAX} more)` : "";
-
-  if (state.dirtySinceVerify) {
-    // Same gate either way — only the accusation changes. Telling a model that
-    // just ran a passing build "you have no verification evidence" reads as a
-    // false report and teaches it to distrust the gate.
-    const undeclared = state.undeclaredEvidence.slice(-2).join(" | ");
-    const head = undeclared
-      ? `${VERIFY_UNDECLARED_NUDGE} Commands that ran clean but were never declared: ${undeclared}.`
-      : VERIFY_NUDGE + (state.lastVerification ? ` Last requested verification: ${state.lastVerification}.` : "");
-    return head + (uncovered.length ? ` Start with the test files that reference what you changed: ${list}${more}.` : "");
-  }
-  if (uncovered.length) {
-    return (
-      `[Automated check] These test files reference modules you edited but were never run: ${list}${more}. ` +
-      "Callers often depend on exact behavior, so your change may break them. Run them now and fix any failures before finishing."
-    );
-  }
-  return null;
-}
-
-function renderTodoReminder(todos: TodoItem[]): string {
-  const lines = todos.map(
-    (t) => `${t.status === "completed" ? "[x]" : t.status === "in_progress" ? "[~]" : "[ ]"} ${t.content}`,
-  );
-  return (
-    `[Reminder — your current todo list]\n${lines.join("\n")}\n` +
-    "Continue the in_progress item. Keep the list up to date with TodoWrite; mark items completed as soon as they are done."
-  );
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
-    const t = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(t);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-function renderRaw(raw: unknown): string {
-  if (raw == null) return "";
-  if (typeof raw === "string") return raw.slice(0, 800);
-  try {
-    return JSON.stringify(raw).slice(0, 800);
-  } catch {
-    return String(raw);
   }
 }

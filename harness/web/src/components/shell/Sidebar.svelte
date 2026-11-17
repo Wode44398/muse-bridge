@@ -11,10 +11,8 @@
     app,
     openSettings,
     canRefSessions,
-    canRenameProject,
     canReorderProjects,
     canSaveQuick,
-    chatRunning,
     hostPickWorkspace,
     importProject,
     loadMoreSessions,
@@ -31,25 +29,28 @@
     type ProjectMeta,
     type SessionMeta,
   } from "../../lib/state.svelte.ts";
-  import { dnd, dragScrollGuard, dragSource, dropTarget, isDragging, type DragPayload } from "../../lib/dnd.svelte.ts";
+  import { dnd, dragScrollGuard, dragSource, dropTarget, type DragPayload } from "../../lib/dnd.svelte.ts";
   import { insertionIndex, reorderZone } from "../../lib/reorder.ts";
   import { haptic } from "../../lib/touch.ts";
-  import { collapse, rise } from "../../lib/motion.ts";
+  import { collapse } from "../../lib/motion.ts";
   import { searchSessions, type SessionSearchHit } from "../../lib/api.ts";
   import Icon from "../ui/Icon.svelte";
   import IconButton from "../ui/IconButton.svelte";
-  import Popover from "../ui/Popover.svelte";
-  import MenuItem from "../ui/MenuItem.svelte";
-  import MenuSep from "../ui/MenuSep.svelte";
   import Mark from "../brand/Mark.svelte";
   import Wordmark from "../brand/Wordmark.svelte";
   import ThemeMark from "../brand/ThemeMark.svelte";
-  import VendorLogo from "../brand/VendorLogo.svelte";
   import FamilyList from "./FamilyList.svelte"; // 会话协作：子会话挂在父会话下
-  import { isEn, locale, t, tc, tr } from "../../lib/i18n.ts";
+  import { t, tc, tr } from "../../lib/i18n.ts";
   // ── 会话管理（lib/sessmgmt.svelte.ts）：会话行的菜单（重命名 / 归档）与底部的「已归档」。本文件里的改动只有这几处，都标了「会话管理」──
   import SessionMenu from "./SessionMenu.svelte";
   import ArchivedSection from "./ArchivedSection.svelte";
+  // 按区域拆出去的子组件与模块（sidebar/）
+  import SessionRow from "./sidebar/SessionRow.svelte";
+  import BodyHits from "./sidebar/BodyHits.svelte";
+  import HiddenProjects from "./sidebar/HiddenProjects.svelte";
+  import ProjectMenu from "./sidebar/ProjectMenu.svelte";
+  import QuickMenu from "./sidebar/QuickMenu.svelte";
+  import type { SessionRows } from "./sidebar/rows.ts";
   import { canArchive, canRename } from "../../lib/sessmgmt.svelte.ts";
 
   let {
@@ -102,25 +103,6 @@
     } catch {
       return [];
     }
-  }
-
-  // ── 时间：今天 = 时刻；昨天；今年 = 月/日；更早 = 年/月/日 ──────────────────────────────
-  function fmtTime(ts: number): string {
-    if (!ts) return "";
-    const d = new Date(ts);
-    const now = new Date();
-    const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-    const diff = Math.round((day(now) - day(d)) / 86_400_000);
-    // 英文：3:04 PM · Yesterday · Sep 28 · Sep 28, 2025（中文照旧手拼数字）
-    if (isEn() && diff !== 1) {
-      if (diff <= 0) return d.toLocaleTimeString(locale(), { hour: "numeric", minute: "2-digit" });
-      const sameYear = d.getFullYear() === now.getFullYear();
-      return d.toLocaleDateString(locale(), sameYear ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
-    }
-    if (diff <= 0) return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-    if (diff === 1) return t("昨天");
-    if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}/${d.getDate()}`;
-    return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
   }
 
   // ── 项目模型 ─────────────────────────────────────────────────────────────────────────
@@ -467,10 +449,6 @@
     app.sheet = "memory";
     leave();
   }
-  async function restoreProject(project: ProjectMeta) {
-    haptic("light");
-    await setProjectFlags(project, { hidden: false });
-  }
   // 新建项目 = 选一个文件夹当工作空间（唯一的路）。bridge 在场由宿主接管选择器，独立运行用自带的目录对话框。
   async function addProject() {
     haptic("light");
@@ -494,79 +472,27 @@
     }
   }
 
-  // ── 手机左滑露出「删除」：同一时刻只开一条；点别处 / 滚动就收 ─────────────────────────
-  function swipe(node: HTMLElement, id: string) {
-    let cur = id;
-    let pid = -1;
-    let x0 = 0;
-    let y0 = 0;
-    let decided = false;
-    let active = false;
-    let base = 0;
-    let dx = 0;
-    const W = sessMenuOk ? 144 : 72; // 会话管理：左滑露出「更多」+「删除」
-    const down = (e: PointerEvent) => {
-      if (e.pointerType === "mouse") return;
-      pid = e.pointerId;
-      x0 = e.clientX;
-      y0 = e.clientY;
-      decided = false;
-      active = true;
-      base = swiped === cur ? -W : 0;
-      dx = base;
-    };
-    const move = (e: PointerEvent) => {
-      if (!active || e.pointerId !== pid) return;
-      // 长按已经把这一行拎起来了：左滑让路（拖拽接管这根手指）
-      if (isDragging()) {
-        active = false;
-        return;
-      }
-      const mx = e.clientX - x0;
-      const my = e.clientY - y0;
-      if (!decided) {
-        if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
-        if (Math.abs(my) > Math.abs(mx)) {
-          active = false;
-          return;
-        }
-        decided = true;
-        node.setPointerCapture?.(pid);
-        node.parentElement?.classList.add("revealing");
-      }
-      let x = base + mx;
-      if (x > 0) x = Math.pow(x, 0.6);
-      if (x < -W) x = -W - Math.pow(-x - W, 0.6);
-      dx = x;
-      node.style.transition = "none";
-      node.style.transform = `translateX(${x}px)`;
-      e.preventDefault();
-    };
-    const up = (e: PointerEvent) => {
-      if (!active || e.pointerId !== pid) return;
-      active = false;
-      if (!decided) return;
-      node.style.transition = "";
-      node.style.transform = "";
-      swiped = dx < -W * 0.45 ? cur : swiped === cur ? null : swiped;
-      if (swiped !== cur) node.parentElement?.classList.remove("revealing");
-    };
-    node.addEventListener("pointerdown", down);
-    node.addEventListener("pointermove", move);
-    node.addEventListener("pointerup", up);
-    node.addEventListener("pointercancel", up);
-    return {
-      update(next: string) {
-        cur = next;
-      },
-      destroy() {
-        node.removeEventListener("pointerdown", down);
-        node.removeEventListener("pointermove", move);
-        node.removeEventListener("pointerup", up);
-        node.removeEventListener("pointercancel", up);
-      },
-    };
-  }
+  // ── 会话行与正文命中读写的东西：左滑开着的那条、两步删除等着的那条，以及行上的动作 ──────────────
+  const rows: SessionRows = {
+    get swiped() {
+      return swiped;
+    },
+    set swiped(v) {
+      swiped = v;
+    },
+    get armed() {
+      return armed;
+    },
+    get sessMenuOk() {
+      return sessMenuOk;
+    },
+    pick,
+    arm,
+    del,
+    openSessMenu,
+    sessionDrag,
+    titleOf,
+  };
 
   onMount(() => {
     const onDown = (e: PointerEvent) => {
@@ -584,38 +510,7 @@
 </script>
 
 {#snippet sessionRow(s: SessionMeta)}
-  {@const running = chatRunning(s.id) || (s.running && !app.chats.some((c) => c.id === s.id))}
-  <div class="srow-wrap" class:revealing={swiped === s.id} class:lifting={dnd.on && dnd.sourceKey === `s:${s.id}`} data-row={s.id}>
-    <button class="srow-del" tabindex="-1" aria-label={t("删除会话")} onclick={(e) => del(s.id, e)}>{t("删除")}</button>
-    {#if sessMenuOk}<button class="srow-more" tabindex="-1" aria-label={t("更多操作")} onclick={(e) => openSessMenu(s, e, false)}>{t("更多")}</button>{/if}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      oncontextmenu={(e) => openSessMenu(s, e, true)}
-      class="srow"
-      class:active={s.id === app.chat.id}
-      class:inpane={s.id !== app.chat.id && app.panes.some((c) => c.id === s.id)}
-      class:open={swiped === s.id}
-      use:swipe={s.id}
-      use:dragSource={sessionDrag(s)}
-    >
-      <button class="srow-main" onclick={() => pick(s.id)} title={titleOf(s)}>
-        <span class="srow-v"><VendorLogo skin={s.provider} size={12} mono /></span>
-        <span class="srow-title">{titleOf(s)}</span>
-        <span class="srow-meta">
-          {#if s.waiting}
-            <span class="waiting"><span class="wdot"></span>{tc("dimensio", "等你")}</span>
-          {:else if running}
-            <span class="running" title={t("运行中")}><Mark size={14} live /></span>
-          {:else}
-            <span class="time">{fmtTime(s.updatedAt)}</span>
-          {/if}
-        </span>
-      </button>
-      <button class="srow-x" class:armed={armed === s.id} tabindex="-1" data-no-drag aria-label={armed === s.id ? t("确认删除会话") : t("删除会话")} onclick={(e) => arm(s.id, e)}>
-        {#if armed === s.id}<span>{t("删除")}</span>{:else}<Icon name="trash" size={14} />{/if}
-      </button>
-    </div>
-  </div>
+  <SessionRow {s} {rows} />
 {/snippet}
 
 <nav class="sb" class:docked class:drawer={!docked} aria-label={t("项目与会话")}>
@@ -778,29 +673,7 @@
 
       <!-- K10（D5）：正文命中（标题里没有、正文里提到过的对话），带一段前后文 -->
       {#if canSearchBody && q.length >= 2}
-        <div class="sec">
-          <span>{t("正文里提到")}</span>
-          {#if bodyBusy && !bodyHits.length}<span class="sec-live"><Mark size={12} live /></span>{/if}
-        </div>
-        {#each bodyOnly as h (h.id)}
-          <div in:rise={{ y: 4 }} class:lifting={dnd.on && dnd.sourceKey === `s:${h.id}`} use:dragSource={sessionDrag(h)}>
-            <button class="hit" class:active={h.id === app.chat.id} onclick={() => pick(h.id)} title={titleOf(h)}>
-              <span class="hit-head">
-                <span class="srow-v"><VendorLogo skin={h.provider} size={12} mono /></span>
-                <span class="hit-title">{titleOf(h)}</span>
-                <span class="hit-time">{fmtTime(h.updatedAt)}</span>
-              </span>
-              <span class="hit-snip">{h.snippet.before}<mark>{h.snippet.match}</mark>{h.snippet.after}</span>
-              {#if hitProject(h.workspace)}
-                <span class="hit-proj"><Icon name="folder" size={11} />{hitProject(h.workspace)}</span>
-              {/if}
-            </button>
-          </div>
-        {:else}
-          {#if !bodyBusy}
-            <p class="pempty">{bodyHits.length ? t("正文命中的对话都已经在上面了") : t("正文里也没有")}</p>
-          {/if}
-        {/each}
+        <BodyHits {bodyHits} {bodyOnly} {bodyBusy} {hitProject} {rows} />
       {/if}
 
       {#if app.sessionsMore}
@@ -817,24 +690,7 @@
       <ArchivedSection {q} onpick={pick} />
 
       {#if hiddenProjects.length > 0}
-        <div class="hidden">
-          <button class="hidden-head" onclick={() => (showHidden = !showHidden)} aria-expanded={showHidden}>
-            <Icon name="eyeOff" size={15} />
-            <span>{t("已隐藏的项目")}</span>
-            <span class="pcount">{hiddenProjects.length}</span>
-            <span class="chev" class:open={showHidden}><Icon name="chevronD" size={13} /></span>
-          </button>
-          {#if showHidden}
-            <div transition:collapse>
-              {#each hiddenProjects as project (project.id)}
-                <div class="hidden-row">
-                  <span class="hidden-name" title={project.path}>{project.name}</span>
-                  <button class="restore" onclick={() => restoreProject(project)}>{tc("dimensio", "恢复")}</button>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
+        <HiddenProjects projects={hiddenProjects} bind:open={showHidden} />
       {/if}
     {/if}
   </div>
@@ -853,18 +709,16 @@
 
 {#if rowMenu}
   {@const target = rowMenu.project}
-  <Popover anchor={rowMenu.anchor} onclose={() => (rowMenu = null)} prefer="down" align="end" minWidth={216}>
-    <MenuItem icon="edit" label={t("在这个项目里新建对话")} disabled={!target.exists} onclick={() => { rowMenu = null; void freshFor(target); }} />
-    {#if canRenameProject()}
-      <MenuItem icon="rename" label={t("重命名")} onclick={() => startRename(target)} />
-    {/if}
-    <MenuItem icon={target.pinned ? "pinOff" : "pin"} label={target.pinned ? t("取消置顶") : t("置顶项目")} onclick={() => togglePin(target)} />
-    {#if app.compat?.caps?.includes("memory")}
-      <MenuItem icon="memory" label={t("项目记忆")} onclick={() => openMemory(target)} />
-    {/if}
-    <MenuSep />
-    <MenuItem icon="eyeOff" label={t("隐藏项目")} description={t("只是不在侧栏显示，文件夹和历史对话都不会删除")} onclick={() => hideProject(target)} />
-  </Popover>
+  <ProjectMenu
+    anchor={rowMenu.anchor}
+    {target}
+    onclose={() => (rowMenu = null)}
+    onnew={() => { rowMenu = null; void freshFor(target); }}
+    onrename={() => startRename(target)}
+    ontogglepin={() => togglePin(target)}
+    onmemory={() => openMemory(target)}
+    onhide={() => hideProject(target)}
+  />
 {/if}
 
 {#if sessMenu}
@@ -872,17 +726,7 @@
 {/if}
 
 {#if quickMenu}
-  <Popover anchor={quickMenu} onclose={() => (quickMenu = null)} prefer="down" align="end" minWidth={232}>
-    <MenuItem
-      icon="folderPlus"
-      label={t("存为工作空间")}
-      description={quickSession ? t("变成普通项目，不再被新快照替换") : t("先在快照里聊几句再存")}
-      disabled={!quickSession || quickBusy}
-      onclick={saveQuick}
-    />
-    <MenuSep />
-    <MenuItem icon="plus" label={t("新建快照")} disabled={quickBusy} onclick={() => { quickMenu = null; void newQuickSnap(); }} />
-  </Popover>
+  <QuickMenu anchor={quickMenu} {quickSession} {quickBusy} onclose={() => (quickMenu = null)} onsave={saveQuick} onnew={() => { quickMenu = null; void newQuickSnap(); }} />
 {/if}
 
 <style>
@@ -1047,9 +891,7 @@
     transition: opacity var(--t-fast) var(--ease);
   }
   /* 被拎起来的那一块留在原位淡着（幽灵跟着手走）；插入线是墨色细线，画在上下沿、不占位 */
-  .proj.lifting,
-  .srow-wrap.lifting,
-  .lifting > .hit {
+  .proj.lifting {
     opacity: 0.35;
   }
   .proj.drop-before::before,
@@ -1167,9 +1009,6 @@
       display: none;
     }
   }
-  .hidden-head .pcount {
-    margin-left: auto;
-  }
   .pact {
     flex: none;
     display: inline-flex;
@@ -1205,226 +1044,6 @@
     color: var(--text3);
   }
 
-  /* 会话行 */
-  .srow-wrap {
-    position: relative;
-    border-radius: 10px;
-    overflow: hidden;
-  }
-  .srow-del {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 72px;
-    border-radius: 0 10px 10px 0;
-    background: var(--err);
-    color: var(--on-accent);
-    font-size: var(--fs-md);
-    font-weight: 600;
-    visibility: hidden;
-  }
-  .srow-wrap.revealing .srow-del {
-    visibility: visible;
-  }
-  /* 会话管理：左滑露出的「更多」（在「删除」左边） */
-  .srow-more {
-    position: absolute;
-    top: 0;
-    right: 72px;
-    bottom: 0;
-    width: 72px;
-    background: var(--surface3);
-    color: var(--text);
-    font-size: var(--fs-md);
-    font-weight: 600;
-    visibility: hidden;
-  }
-  .srow-wrap.revealing .srow-more {
-    visibility: visible;
-  }
-  .srow {
-    position: relative;
-    display: flex;
-    align-items: center;
-    height: 34px;
-    border-radius: 10px;
-    background: var(--rail);
-    transition:
-      transform 300ms var(--ease-out),
-      background-color var(--t-fast) var(--ease),
-      box-shadow var(--t-fast) var(--ease);
-    touch-action: pan-y;
-  }
-  .srow.open {
-    transform: translateX(-72px);
-  }
-  .srow.active {
-    background: var(--surface);
-    box-shadow:
-      0 0 0 1px var(--border),
-      0 1px 2px color-mix(in srgb, var(--text) 5%, transparent);
-  }
-  .srow-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    height: 100%;
-    padding: 0 8px 0 12px;
-    text-align: left;
-    color: var(--text2);
-  }
-  .srow.active .srow-main {
-    color: var(--text);
-  }
-  /* 分屏里另一格正开着的会话：只描一圈细线（有焦点的那格才是整块纸色） */
-  .srow.inpane {
-    box-shadow: inset 0 0 0 1px var(--border);
-  }
-  .srow-v {
-    display: inline-flex;
-    color: var(--text3);
-    opacity: 0.8;
-  }
-  .srow.active .srow-v {
-    color: var(--accent);
-    opacity: 1;
-  }
-  .srow-title {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: var(--fs-md);
-  }
-  .srow-meta {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    font-size: var(--fs-xs);
-    color: var(--text3);
-    font-variant-numeric: tabular-nums;
-  }
-  .running {
-    display: inline-flex;
-    color: var(--text2);
-  }
-  .waiting {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    color: var(--warn);
-    font-weight: 500;
-  }
-  .wdot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--warn);
-    animation: hx-breathe 1.8s var(--ease-in-out) infinite;
-  }
-  .srow-x {
-    flex: none;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    min-width: 28px;
-    height: 26px;
-    margin-right: 4px;
-    padding: 0 6px;
-    border-radius: 7px;
-    color: var(--text3);
-    font-size: var(--fs-sm);
-    font-weight: 600;
-    transition:
-      background-color var(--t-fast) var(--ease),
-      color var(--t-fast) var(--ease);
-  }
-  .srow-x.armed {
-    display: inline-flex;
-    background: var(--err);
-    color: var(--on-accent);
-  }
-
-  /* K10：正文命中——两行：标题一行，前后文一行（命中处墨色淡底，不用朱：朱只给正在发生的东西） */
-  .sec-live {
-    display: inline-flex;
-    margin-right: 5px;
-  }
-  .hit {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    width: 100%;
-    padding: 7px 10px 8px 12px;
-    border-radius: 10px;
-    text-align: left;
-    transition: background-color var(--t-fast) var(--ease);
-  }
-  .hit.active {
-    background: var(--surface);
-    box-shadow: 0 0 0 1px var(--border);
-  }
-  .hit:active {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
-  }
-  .hit-head {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    min-width: 0;
-  }
-  .hit-title {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: var(--fs-md);
-    color: var(--text2);
-  }
-  .hit.active .hit-title {
-    color: var(--text);
-  }
-  .hit-time {
-    flex: none;
-    font-size: var(--fs-xs);
-    color: var(--text3);
-    font-variant-numeric: tabular-nums;
-  }
-  /* 前后文与标题的字对齐（厂商标 12 + 间距 9） */
-  .hit-snip,
-  .hit-proj {
-    padding-left: 21px;
-  }
-  .hit-snip {
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    font-size: var(--fs-sm);
-    line-height: var(--lh-ui);
-    color: var(--text3);
-    overflow-wrap: anywhere;
-  }
-  .hit-snip mark {
-    padding: 0 1px;
-    border-radius: 3px;
-    background: var(--accent-soft);
-    color: var(--text);
-  }
-  .hit-proj {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: var(--fs-xs);
-    color: var(--text3);
-  }
-
   .more {
     width: 100%;
     margin-top: 8px;
@@ -1436,52 +1055,6 @@
     transition:
       background-color var(--t-fast) var(--ease),
       color var(--t-fast) var(--ease);
-  }
-  .hidden {
-    margin-top: 14px;
-  }
-  .hidden-head {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    width: 100%;
-    height: 32px;
-    padding: 0 10px;
-    border-radius: 10px;
-    font-size: var(--fs-sm);
-    color: var(--text3);
-  }
-  .chev {
-    display: inline-flex;
-    transform: rotate(-90deg);
-    transition: transform var(--t-med) var(--ease-out);
-  }
-  .chev.open {
-    transform: none;
-  }
-  .hidden-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 32px;
-    padding: 0 6px 0 35px;
-  }
-  .hidden-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: var(--fs-md);
-    color: var(--text2);
-  }
-  .restore {
-    flex: none;
-    padding: 4px 10px;
-    border-radius: var(--r-pill);
-    font-size: var(--fs-sm);
-    color: var(--accent);
-    background: var(--accent-soft);
   }
 
   .foot {
@@ -1508,8 +1081,6 @@
   @media (hover: hover) and (pointer: fine) {
     .nav:hover,
     .prow:hover,
-    .hit:not(.active):hover,
-    .hidden-head:hover,
     .more:hover:not(:disabled) {
       background: color-mix(in srgb, var(--text) 5%, transparent);
     }
@@ -1517,9 +1088,6 @@
     .pact:hover:not(:disabled) {
       background: color-mix(in srgb, var(--text) 8%, transparent);
       color: var(--text);
-    }
-    .srow:not(.active):hover {
-      background: color-mix(in srgb, var(--text) 5%, var(--rail));
     }
     .pacts {
       opacity: 0;
@@ -1533,25 +1101,6 @@
     .prow:focus-within .pcount,
     .prow:has(.pacts.on) .pcount {
       opacity: 0;
-    }
-    .srow:hover .srow-x,
-    .srow:focus-within .srow-x {
-      display: inline-flex;
-    }
-    .srow:hover .srow-meta,
-    .srow:focus-within .srow-meta {
-      display: none;
-    }
-    .srow-x:hover {
-      background: color-mix(in srgb, var(--err) 12%, transparent);
-      color: var(--err);
-    }
-    .srow-x.armed:hover {
-      background: var(--err);
-      color: var(--on-accent);
-    }
-    .restore:hover {
-      background: color-mix(in srgb, var(--accent) 18%, transparent);
     }
   }
 </style>

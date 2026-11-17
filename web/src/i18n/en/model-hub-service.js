@@ -215,8 +215,10 @@ export default {
   '不发思考参数（型号表里没有它的思考写法）': 'No thinking parameters are sent (the model table has no thinking style for it)',
   '输入框里的推理强度就列这些档位；每档发什么由你定': 'The composer’s effort menu lists these tiers; you decide what each one sends',
   '这个模型还没添加给任何 agent，改了也要添加之后才生效。': 'This model isn’t added to any agent yet. Changes take effect once you add it.',
-  'dimensio 用自带适配直连这家：这里只有上下文窗口、输出上限、识图和提示缓存对 dimensio 生效，其余只对 Claude 生效。':
-    'dimensio connects to this provider through its built-in adapter: only the context window, output limit, image input and prompt caching apply to dimensio here; the rest only apply to Claude.',
+  'dimensio 用自带适配直连这家：思考写法按它自己的适配，只对 Claude 生效；其余两边都生效。':
+    'dimensio connects to this provider through its built-in adapter: the thinking style follows that adapter and only applies to Claude; everything else applies to both.',
+  'dimensio 直连这家，这个别家型号的思考写法也按这里的发。':
+    'dimensio connects to this provider directly; for this model from another vendor it also sends the thinking style set here.',
   '输入加输出最多多少 token；超过了 agent 会先压缩上下文': 'Maximum tokens for input plus output; past this the agent compacts the context first',
   '（给 Claude 的至少 4096）': '(at least 4096 for Claude)',
   '型号单次回复最多能生成多少 token；请求要的更多也会夹到这里': 'The most tokens one reply can generate; larger requests are capped here',
@@ -287,4 +289,13 @@ export default {
   '档位「{id}」的发送值太长（上限 2000 字符）': 'The value for tier “{id}” is too long (up to 2000 characters)',
   '档位「{id}」的发送值要是文字、数字、true / false 或 JSON 对象': 'The value for tier “{id}” must be text, a number, true / false or a JSON object',
   '输出上限字段只能是 max_tokens / max_completion_tokens': 'The output limit field must be max_tokens or max_completion_tokens',
+  // —— 探测能力（HsModelAdv、手动添加；probe.mjs 的结论措辞，与 claude-providers 同句同译的不在这里重复）——
+  '探测中…': 'Probing…',
+  '探测完成': 'Probe finished',
+  '真打几次一两句话的请求，读出输出上限、能否看图和思考档位（上下文窗口探不出）': 'Sends a few one-line requests to read the max output, image support and thinking tiers (the context window can’t be probed)',
+  '自动值里含探测结果（{d}）': 'Auto values include probe results ({d})',
+  '已探测能力：{notes}': 'Capabilities probed: {notes}',
+  '已添加，探测能力没成：{e}': 'Added, but probing failed: {e}',
+  '输出上限没读出来': 'Couldn’t read the max output',
+  '只有文本模型能探测能力': 'Only text models can be probed',
 };

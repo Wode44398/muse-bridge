@@ -11,7 +11,7 @@ import { untrack } from "svelte";
 import * as api from "./api.ts";
 import { clientId } from "./client-id.ts";
 import { t } from "./i18n.ts";
-import { app, openDock, openDockFiles, toast, type Chat } from "./state.svelte.ts";
+import { app, dockShowing, openDock, openDockFiles, toast, type Chat } from "./state.svelte.ts";
 
 // ── 宿主（bridge）注入 ─────────────────────────────────────────────────────────
 export interface WorkspaceHost {
@@ -56,8 +56,8 @@ function snapshot(): Record<string, unknown> {
     chatId: app.chat.id ?? "",
     ws: app.config?.workspace ?? "",
     dock: { open: app.dockOpen, tool },
-    ...(app.dockOpen && tool === "review" && local.review.length ? { review: { file: local.review.join(", ") } } : {}),
-    ...(app.dockOpen && tool === "browser" && app.browser?.url ? { browser: { url: app.browser.url } } : {}),
+    ...(dockShowing("review") && local.review.length ? { review: { file: local.review.join(", ") } } : {}),
+    ...(dockShowing("browser") && app.browser?.url ? { browser: { url: app.browser.url } } : {}),
   };
 }
 function send(force = false): void {
@@ -174,7 +174,7 @@ export function onCollabEvent(chat: Chat, ev: any): boolean {
     const wide = typeof matchMedia === "function" && matchMedia(WIDE_MQ).matches;
     // 工作区关着、宽屏：直接展开终端；开着别的工具：不抢，只亮小点
     if (wide && !app.dockOpen && mounted) openDock("term");
-    else if (!(app.dockOpen && app.dockTool === "term")) collab.termLive = true;
+    else if (!dockShowing("term")) collab.termLive = true;
     return true;
   }
   if (ev?.e === "workspace") {

@@ -2,6 +2,8 @@
 // 覆盖 agent 回复的常用面：标题 / 粗斜体 / 行内码 / 围栏代码(带语言标签+复制钮) /
 // 无序有序列表 / 链接(仅 http(s)) / 表格 / 引用 / 分隔线。
 import { t } from "./i18n.ts";
+// @ts-ignore —— 纯 JS 模块、没有类型声明（与 bridge Claude 分页共用的流式写头修补，无依赖）
+import { repairTail } from "../../../../web/src/lib/mdStream.js";
 
 function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -183,35 +185,26 @@ export function streamParts(src: string): StreamParts {
   return { chunks, tail: src.slice(prev) };
 }
 
-const TABLE_SEP = /^\s*\|?[\s:|-]+\|[\s:|-]*$/;
+// 尾块（流式期间唯一重渲的部分）先过写头修补再渲染：用 bridge Claude 分页那份 repairTail，吐字引擎（claudeFade）
+// 按「可见字」逐字显形的前提是前缀稳定——已经露出来的字，下一批到了不能变没、变样或挪位。它的做法：写头处结构没定的
+// 先扣住（只有表头的表格、半截数据行、只有 # / 列表标记的行、只有开头的 ** 与反引号），能定的提前补齐（未闭合的
+// ** / * / 反引号补闭合、进行中的代码块补闭合围栏），所以正在写的粗体与代码从第一个字起就是最终样式。
+// 口径按这里的渲染器收窄：只认 ** 与 * 强调、只认 ``` 围栏、没有公式块；只放行 http(s) 链接——URL 还在打时文字先按
+// 链接样式显示（无 href、点不动），像别的地址就按原文留着（最终也是原文）。
+const WIP_A = "\u0001";
+const WIP_B = "\u0002";
+const LINKISH = /^(?:h(?:t(?:t(?:p(?:s?(?::(?:\/(?:\/\S*)?)?)?)?)?)?)?)?$/;
+const TAIL_DIALECT = {
+  emph: "*",
+  fences: "`",
+  math: false,
+  link: (text: string, url: string) => (text && !text.includes("]") && LINKISH.test(url) ? WIP_A + text + WIP_B : null),
+};
+const WIP_LINK = /\u0001([^\u0001\u0002]*)\u0002/g;
 
-// 尾块：没收尾的结构先压住，不先渲成别的样子再翻过来——
-//   · 表格只到了表头（分隔行还没来）：这一行按原文等宽显示，分隔行到了再成表
-//   · 最后一段里落单的 `**`、行内反引号：先把标记本身藏起来（字照常显示），配上对了再加粗 / 成行内码
-// 在围栏代码里（尾块里「```」是奇数个）不压：未闭合的代码块本来就按代码显示。
 export function renderTail(tail: string): string {
-  if ((tail.split("```").length - 1) % 2 === 1) return renderMarkdown(tail, { highlight: false });
-  const lines = tail.split("\n");
-  const last = lines[lines.length - 1];
-  let held = "";
-  if (last.includes("|") && !TABLE_SEP.test(last) && !lines.some((l) => TABLE_SEP.test(l))) {
-    held = `<pre class="md-hold">${esc(last)}</pre>`;
-    lines.pop();
-  }
-  let body = lines.join("\n");
-  const lastPara = body.slice(body.lastIndexOf("\n\n") + 1);
-  const cut = body.length - lastPara.length;
-  let para = lastPara;
-  if ((para.match(/\*\*/g)?.length ?? 0) % 2 === 1) {
-    const k = para.lastIndexOf("**");
-    para = para.slice(0, k) + para.slice(k + 2);
-  }
-  if ((para.replace(/\*\*/g, "").match(/`/g)?.length ?? 0) % 2 === 1) {
-    const k = para.lastIndexOf("`");
-    para = para.slice(0, k) + para.slice(k + 1);
-  }
-  body = body.slice(0, cut) + para;
-  return renderMarkdown(body, { highlight: false }) + held;
+  const src = repairTail(tail.replace(/[\u0001\u0002]/g, ""), TAIL_DIALECT) as string;
+  return renderMarkdown(src, { highlight: false }).replace(WIP_LINK, "<a>$1</a>");
 }
 
 // ── 代码上色（零依赖）：先按语言切词，每一段都先转义再包 span——模型给的任何字符都到不了标记里 ─────────────

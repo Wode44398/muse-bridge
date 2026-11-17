@@ -37,18 +37,80 @@ test("U7 逐字符流式：各稳定块分别渲染再拼上尾块，与整段�
   for (const cut of stableCuts(code)) assert.equal((code.slice(0, cut).split("```").length - 1) % 2, 0, "切点前的围栏成对");
 });
 
-test("U7 尾块先压住没收尾的结构：只到表头的表格按原文等宽显示；落单的 ** 与行内反引号不露出来；未闭合的代码块照常显示成代码", () => {
-  const header = renderTail("| 列 | 值 |");
-  assert.match(header, /class="md-hold"/);
-  assert.doesNotMatch(header, /<table>|<p>/, "不先渲成一段文字");
-  assert.match(renderTail("| 列 | 值 |\n|---|---|"), /<table>/, "分隔行到了就成表");
-  const bold = renderTail("这一步很 **重");
-  assert.doesNotMatch(bold, /\*\*/);
-  assert.match(bold, /这一步很 重/, "字照常显示");
+test("U7 尾块过写头修补（bridge 的 repairTail）：表格表头 + 首行到齐才出表、数据行整行到齐；未闭合的 ** 与反引号提前补齐；进行中的代码块照常显示成代码", () => {
+  assert.equal(renderTail("前文\n| 列 | 值 |"), "<p>前文</p>", "表头还在打：整行扣住");
+  assert.equal(renderTail("前文\n| 列 | 值 |\n|---|---|\n"), "<p>前文</p>", "首行没来：整张表先扣住");
+  const row = renderTail("| 列 | 值 |\n|---|---|\n| a | 1 |\n| b |");
+  assert.match(row, /<td>a<\/td><td>1<\/td>/);
+  assert.doesNotMatch(row, /<td>b<\/td>/, "半截数据行不放");
+  assert.match(renderTail("这一步很 **重"), /这一步很 <strong>重<\/strong>/, "正在写的粗体从第一个字起就是粗体");
   assert.match(renderTail("这一步很 **重要**，"), /<strong>重要<\/strong>/);
-  assert.doesNotMatch(renderTail("跑一下 `npm"), /`/);
+  assert.match(renderTail("跑一下 `npm"), /<code class="ic">npm<\/code>/);
+  assert.equal(renderTail("列表\n- "), "<p>列表</p>", "只有列表标记的行扣住");
   const fence = renderTail("看代码：\n\n```js\nconst x = **1");
   assert.match(fence, /<pre><code>const x = \*\*1<\/code><\/pre>/, "围栏里原样、不上色");
+  // 只放行 http(s) 链接：URL 还在打时文字按链接样式（无 href），别的地址按原文
+  assert.match(renderTail("见 [文档](https://exa"), /见 <a>文档<\/a>/);
+  assert.match(renderTail("见 [文档](./a.md"), /\[文档\]\(\.\/a\.md/);
+  assert.doesNotMatch(renderTail("a _b"), /_b_/, "不认 _ 强调：不补闭合");
+});
+
+// 吐字引擎（bridge 的 claudeFade）眼里的可见文字：标签之间的文本段，去掉纯空白段与代码卡标题栏（界面零件，不计数），解实体
+function visible(html: string): string {
+  const out: string[] = [];
+  for (const seg of html.replace(/<div class="cb-bar">.*?<\/button><\/div>/g, "").split(/<[^>]*>/)) {
+    if (!/\S/.test(seg)) continue;
+    out.push(seg.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&"));
+  }
+  return out.join("");
+}
+const streamed = (prefix: string) => {
+  const parts = streamParts(prefix);
+  return parts.chunks.map((c) => renderMarkdown(c.src)).join("") + renderTail(parts.tail);
+};
+
+test("U7 逐字前缀扫描：流式渲染每个前缀的可见文字都是下一个前缀的前缀（已显形的字不回跳），收轮按原文渲染也接得上", () => {
+  const sample = [
+    "先说结论：**改动已完成**，下面是 `npm test` 的结果与细节，见 [说明](https://example.com/a)。",
+    "",
+    "这是一段很长的中文正文，用来测试逐字淡入的匀速程度，里面有 *强调* 与 **粗体**，还有行内代码 `repairTail()` 与普通的标点符号。",
+    "",
+    "1. 第一步：读文件",
+    "2. 第二步：改 **核心** 逻辑",
+    "",
+    "- 无序一",
+    "- 无序二，带 `code`",
+    "",
+    "> 引用一行",
+    "> 引用第二行",
+    "",
+    "```ts",
+    "const a = 1;",
+    "",
+    "function f(x: number) { return x * 2; }",
+    "```",
+    "",
+    "| 名称 | 数量 | 说明 |",
+    "|---|---:|---|",
+    "| 苹果 | 3 | 红的 |",
+    "| 香蕉 | 12 | **黄的** |",
+    "",
+    "---",
+    "",
+    "### 小标题",
+    "",
+    "收尾一句。",
+  ].join("\n");
+  const bad: string[] = [];
+  let prev = "";
+  for (let k = 0; k <= sample.length; k++) {
+    const v = visible(streamed(sample.slice(0, k)));
+    if (!v.startsWith(prev)) bad.push(`${k}: ${JSON.stringify(prev.slice(-12))} → ${JSON.stringify(v.slice(-12))}`);
+    prev = v;
+  }
+  const final = visible(renderMarkdown(sample));
+  if (!final.startsWith(prev)) bad.push(`收轮: ${JSON.stringify(prev.slice(-12))} → ${JSON.stringify(final.slice(-12))}`);
+  assert.deepEqual(bad, [], `回跳 ${bad.length} 处`);
 });
 
 const stripSpans = (html: string) => html.replace(/<span class="hl-[kcsn]">/g, "").replace(/<\/span>/g, "");

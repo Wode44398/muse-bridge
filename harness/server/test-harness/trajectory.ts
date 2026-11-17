@@ -14,6 +14,7 @@ import type { TestContext } from "node:test";
 import type { AgentEvent } from "../agent/events.ts";
 import { runAgent } from "../agent/loop.ts";
 import type { PermissionMode, PermissionRules } from "../agent/permissions.ts";
+import type { ModelProfile } from "../agent/profile.ts";
 import { AgentState, type CompactionArchive } from "../agent/state.ts";
 import type { Block, Msg, Turn } from "../agent/turn.ts";
 import type { ProviderAdapter } from "../providers/types.ts";
@@ -214,6 +215,7 @@ export interface LoopStateOptions {
   ctx?: Partial<ToolContext>;
   compactionArchive?: CompactionArchive; // R10（二）：压缩归档（测试给内存版）
   browser?: boolean; // D5：这台机器有没有浏览器（false = playbook 走无浏览器版）；不给 = 有
+  profile?: ModelProfile; // 模型档案；不给 = 现状档案
 }
 
 // P11：把工作区里的这些文件记成「已经 Read 过」——Edit / Write 的规划阶段会在弹卡之前否决没读过的改动。拿 Edit 当
@@ -253,6 +255,7 @@ export function loopState(t: TestContext, adapter: ProviderAdapter, opts: LoopSt
     finalFootnotes: opts.finalFootnotes,
     compactionArchive: opts.compactionArchive,
     browser: opts.browser,
+    ...(opts.profile ? { profile: opts.profile } : {}),
   });
   if (opts.user) state.addUserMessage(opts.user);
   // Q3：loop 在生产上对请求不变量只计数；测试里收尾核对，违反即失败（含「同一次 run 内 system / tools 被悄悄改了」

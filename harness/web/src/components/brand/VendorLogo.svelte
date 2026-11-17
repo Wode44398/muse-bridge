@@ -6,7 +6,7 @@
   import Mark from "./Mark.svelte";
   import Icon from "../ui/Icon.svelte";
   import { isCustomVendor, vendorInfo } from "../../lib/state.svelte.ts";
-  import { brandSvg } from "../../lib/brand-logos.svelte.ts";
+  import { brandLibReady, brandMask, brandSvg } from "../../lib/brand-logos.svelte.ts";
   // Official favicon, vendored from https://mimo.mi.com/favicon.png (2026-09-21).
   import mimoLogo from "../../assets/mimo.png";
   import { t } from "../../lib/i18n.ts";
@@ -21,8 +21,10 @@
   // 「已删除」是 vendorInfo 给的占位公司名（这里只拿来比较）；vendorInfo 用 t() 出这个值，英文界面下比较的是译文
   const deleted = (c: string) => c === "已删除" || c === t("已删除"); // i18n-ignore
   const initial = $derived(custom && !deleted(custom.company) ? (Array.from(custom.name.trim())[0] ?? "").toUpperCase() : "");
-  // 收录过的提供商画它的品牌标（和 bridge 模型中心同一份图）；单色场合、图库还没到、没收录的照旧画首字
-  const brand = $derived(custom && !mono && !deleted(custom.company) ? brandSvg(custom.logo) : "");
+  // 收录过的提供商画它的品牌标（和 bridge 模型中心同一份图）；单色场合（会话列表小标）用同一枚标当遮罩、填 currentColor，
+  // 形状与模型中心一致、颜色跟着周围的字走。图库还没到时先空着（不先画首字再跳），没收录的才画首字
+  const brand = $derived(custom && !deleted(custom.company) ? brandSvg(custom.logo) : "");
+  const waiting = $derived(Boolean(custom?.logo) && !brand && !brandLibReady());
 </script>
 
 <span class="vlogo" style="width:{size}px;height:{size}px" aria-hidden="true">
@@ -95,9 +97,13 @@
       {/if}
     </svg>
   {:else if custom}
-    {#if brand}
+    {#if brand && mono}
+      <span class="brand-mask" style:mask-image={brandMask(brand)} style:-webkit-mask-image={brandMask(brand)}></span>
+    {:else if brand}
       <!-- 图库里的静态 SVG（生成物），不含任何外来内容 -->
       <span class="brand">{@html brand}</span>
+    {:else if waiting}
+      <span class="brand"></span>
     {:else if initial}
       <svg viewBox="0 0 24 24" width={size} height={size} class="mono-glyph" class:mono>
         {#if mono}
@@ -144,6 +150,18 @@
     display: block;
     width: 100%;
     height: 100%;
+  }
+  .brand-mask {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: currentColor;
+    mask-size: contain;
+    mask-repeat: no-repeat;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-position: center;
   }
   .mono-glyph text {
     font-family: var(--font-ui);

@@ -1,0 +1,9 @@
+[["百炼","qwen3.8-max",{"enable_thinking":true,"reasoning_effort":"medium"}],
+ ["百炼","qwen3.8-flash",{"enable_thinking":true,"reasoning_effort":"medium"}],
+ ["百炼","qwen3.7-plus",{"enable_thinking":true,"thinking_budget":4096}],
+ ["百炼","qwen4-max",{"enable_thinking":true,"reasoning_effort":"medium"}],
+ ["百炼","kimi-k3.1-pro",{}],
+ ["百炼","glm-5.3",{}],
+ ["百炼","deepseek-v4.1-flash-1017",{"enable_thinking":true}],
+ ["OpenRouter","anthropic/claude-opus-5.5",{"reasoning":{"max_tokens":2048}}],
+ ["OpenRouter","anthropic/claude-opus-5.5",{"reasoning_effort":"high"}]]

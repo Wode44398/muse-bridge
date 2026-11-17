@@ -23,7 +23,8 @@
 
   const pane = usePane(); // 分屏：这一格的会话（没分屏 = app.chat）
 
-  let { items, up = false, down = false }: { items: ToolItem[]; up?: boolean; down?: boolean } = $props();
+  // compact = 精简模式（默认）：不上量线（没有左侧节点），卡片本身不变
+  let { items, compact = false, up = false, down = false }: { items: ToolItem[]; compact?: boolean; up?: boolean; down?: boolean } = $props();
 
   // 秒级时钟：只在这一批还有在跑的、页面可见时走
   let now = $state(Date.now());
@@ -61,7 +62,7 @@
   const open = (it: ToolItem) => openTaskDetail(it.id, it.agent?.id);
 </script>
 
-<RailRow {up} {down} nodeY="22px">
+<RailRow bare={compact} {up} {down} nodeY="22px">
   {#snippet node()}<ToolNode {tone} />{/snippet}
   <div class="wrap">
     {#if items.length === 1}

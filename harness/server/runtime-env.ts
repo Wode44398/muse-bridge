@@ -116,6 +116,7 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
       "不设或别的值 = 正式服行为，全局层只有 <记忆目录>/global 一份、所有工作区共用。开着时设置页记忆面板的「全局」只看当前工作空间那份",
     default: "不设（共用一份）",
   },
+  { name: "DIMENSIO_PROFILE_OVERRIDES", area: "测试", description: "评测臂的模型档案覆盖：{ \"<家族>\" | \"*\": 档案片段 } 的 JSON，叠在家族覆盖之上（evals/ab/matrix.ts 的变体文件写进来）；正式服不设" },
   { name: "DIMENSIO_MEMORY_DREAM_MODEL", area: "知识与记忆", description: "离线记忆整理用的模型，写成 <厂商>/<型号>；不给就用该工作区最近一个会话的（评测用）" },
 
   // ── 联网搜索 ──

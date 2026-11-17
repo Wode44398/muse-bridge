@@ -365,8 +365,9 @@ test("OpenAI-compatible vendors without a replay rule still drop thinking blocks
     return response([{ choices: [{ delta: {}, finish_reason: "stop" }] }, "[DONE]"]);
   }) as typeof fetch;
   try {
+    // Qwen 系现在按实测回传（工具续轮只认 reasoning_content）；GLM-5.2 没有回传规则
     await drain(createOpenAIAdapter({
-      provider: "qwen", apiKey: "test", model: "qwen3.8-max", baseUrl: "https://qwen.test/v1",
+      provider: "zhipu", apiKey: "test", model: "glm-5.2", baseUrl: "https://zhipu.test/v4",
     }), turn);
   } finally {
     globalThis.fetch = originalFetch;

@@ -6,6 +6,7 @@
 // 页面自绘菜单（FilesDesktop、CM6 编辑器等）自己 preventDefault——检测 defaultPrevented
 // 即让位，永不与自绘菜单叠出两个。网页/Android 无此桥，模块为空操作。
 const D = typeof window !== 'undefined' ? window.BridgeDesktop : null;
+const UI_CHROME = 'button, [role="button"], [role="toolbar"], [role="tab"], [role="menuitem"], [role="option"], [role="switch"], nav, label, [data-no-img-menu]';
 
 if (D?.app?.contextMenu) {
   document.addEventListener('contextmenu', (e) => {
@@ -22,7 +23,10 @@ if (D?.app?.contextMenu) {
       const raw = a.getAttribute('href') || '';
       if (/^https?:\/\//i.test(raw)) link = raw;        // 只有真外链才有「在浏览器打开」语义
     }
-    const image = Boolean(t.closest('img'));
+    // 只有内容图才给「复制图片」：嵌在按钮 / 工具栏 / 页签等控件里的 img 是界面图标
+    // （主页 Dock、侧栏、设置 hero 标），右键冒出复制图片是 web 味（11-17）。
+    const img = t.closest('img');
+    const image = Boolean(img && !img.closest(UI_CHROME));
     if (!editable && !selection && !link && !image) return;   // 无可操作对象：保持无菜单
     e.preventDefault();
     D.app.contextMenu({

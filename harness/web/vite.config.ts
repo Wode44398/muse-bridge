@@ -20,8 +20,25 @@ export default defineConfig({
     // 不能放开到仓库根：维护者那台数据根=程序根，config.json / connector-secrets.key 会被 /@fs/ 当静态文件发出去（pv- 预览链接绕过鉴权）。
     // allow 相对 vite root 解析，必须带 "."；deny 会整个替换 vite 默认值，所以默认那四条照抄再加凭据文件。
     fs: {
-      // 内嵌图表的渲染壳与 bridge 的 Claude 图表共用（src/lib/widget-shell.ts 相对引用），连同它的 DOMPurify
-      allow: [".", "../../src/model-knowledge", "../../web/src/lib/widgetShell.js", "../../web/src/lib/brandLogos.js", "../../web/node_modules/dompurify"],
+      // 内嵌图表的渲染壳与 bridge 的 Claude 图表共用（src/lib/widget-shell.ts 相对引用），连同它的 DOMPurify；
+      // 流式吐字引擎与写头修补也与 Claude 分页共用（MdStream.svelte、lib/markdown.ts 相对引用）；
+      // 从按钮长出来的面板（ui/MorphPanel）借 bridge 的 ios27/MorphMenu 与液态玻璃内核，连同它们引到的几个模块
+      allow: [
+        ".",
+        "../../src/model-knowledge",
+        "../../web/src/lib/widgetShell.js",
+        "../../web/src/lib/brandLogos.js",
+        "../../web/src/lib/claudeFade.js",
+        "../../web/src/lib/mdStream.js",
+        "../../web/node_modules/dompurify",
+        "../../web/src/components/ios27",
+        "../../web/src/lib/liquid",
+        "../../web/src/lib/motion.js",
+        "../../web/src/lib/liquidGlass.js",
+        "../../web/src/lib/dragdrop.svelte.js",
+        "../../web/src/lib/symbolTable.svelte.js",
+        "../../web/src/visuals/modules",
+      ],
       deny: [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/config.json*", "**/connector-secrets.*", "**/public-access.json"],
     },
     proxy: {

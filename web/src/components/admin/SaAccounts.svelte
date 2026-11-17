@@ -4,7 +4,7 @@
   import { api } from '../../lib/api.js';
   import { sa, loadAccounts, saToast, saConfirm } from '../../lib/serverAdmin.svelte.js';
   import { t, tr } from '../../lib/i18n.js';
-  import { ags, loadResets, resetsLeft } from '../../lib/agentSettings.svelte.js';
+  import { ags, loadResets, resetsLeft, routeLogSub, routeLogTitle, routeStrategies } from '../../lib/agentSettings.svelte.js';
   import ClaudeResets from '../ClaudeResets.svelte';   // 重置卡面板（与两套设置页共用）
 
   $effect(() => { sa.tick; loadAccounts(); });
@@ -32,8 +32,12 @@
   const tone = (b) => (b.status === 'rejected' || b.pct >= 100 ? 'red' : b.pct >= 80 ? 'amber' : 'ok');
 
   // 智能路由（可选，默认关）：某号额度用尽时自动换到号池里的可用号（src/runtime/account-router.mjs）。
-  let rt = $state(null);   // { settings:{enabled,returnToPrimary}, blocks:{[id]:{until,type}}, log:[…] }
+  let rt = $state(null);   // { settings:{enabled,strategy,returnToPrimary,seamless}, blocks:{[id]:{until,type}}, log:[…], dispatch? }
   let rtBusy = $state(false);
+  const strategy = $derived(rt?.settings?.strategy || (rt?.settings?.returnToPrimary ? 'primary' : 'fill'));
+  // 智能分派在生效：各号各跑各的任务，没有「当前号」，行首改标这个号上在跑几个任务
+  const smart = $derived(!!rt?.settings?.enabled && strategy === 'smart');
+  const runningOn = (id) => rt?.dispatch?.accounts?.[id]?.tasks || 0;
   async function loadRouter() { try { rt = await api.get('/api/admin/claude-accounts/router'); } catch {} }
   $effect(() => { sa.tick; loadRouter(); });
   async function setRouter(patch) {
@@ -109,7 +113,8 @@
         {@const u = usage[a.id]}
         <div class="sa-row acct">
           <span style="width:74px;flex:none">
-            {#if a.active}<span class="sa-badge green">{t('当前')}</span>{:else}<span class="sa-badge gray">{t('待用')}</span>{/if}
+            {#if smart}{#if runningOn(a.id)}<span class="sa-badge green">{t('在跑 {n}', { n: runningOn(a.id) })}</span>{:else}<span class="sa-badge gray">{t('空闲')}</span>{/if}
+            {:else if a.active}<span class="sa-badge green">{t('当前')}</span>{:else}<span class="sa-badge gray">{t('待用')}</span>{/if}
           </span>
           <span class="sa-row-tx">
             <span style="font-weight:650">{accLabel(a.label)}
@@ -123,7 +128,7 @@
               <button class="sa-btn sm" disabled={ai === sa.accounts.length - 1} onclick={() => move(a, 1)} aria-label={t('下移')}>↓</button>
             </span>
           {/if}
-          {#if !a.active}<button class="sa-btn sm pri" onclick={() => activate(a)}>{t('切到此号')}</button>{/if}
+          {#if !a.active && !smart}<button class="sa-btn sm pri" onclick={() => activate(a)}>{t('切到此号')}</button>{/if}
           {#if ags.resetsOk}
             {@const n = resetsLeft(ags.resets[a.id])}
             <button class="sa-btn sm" class:on={resetsOpen === a.id} onclick={() => { resetsOpen = resetsOpen === a.id ? '' : a.id; }}>{n > 0 ? t('重置卡 {n}', { n }) : t('重置卡')}</button>
@@ -181,23 +186,31 @@
     {#if rt?.settings?.enabled}
       <div class="sa-row">
         <span class="sa-row-tx">
-          <span>{t('额度恢复后回到首选号')}</span>
-          <small>{rt.settings.returnToPrimary ? t('每轮都用列表里最靠前的可用号：主号一恢复就切回，备用号只在主号用满时顶上') : t('用满再换：当前号能用就一直用它，用满才换到余量最多的号')}</small>
+          <span>{t('分派方式')}</span>
+          <small>{routeStrategies().find((o) => o.value === strategy)?.desc}</small>
         </span>
-        <button class="sa-sw" class:on={rt.settings.returnToPrimary} disabled={rtBusy} onclick={() => setRouter({ returnToPrimary: !rt.settings.returnToPrimary })} role="switch" aria-checked={rt.settings.returnToPrimary} aria-label={t('额度恢复后回到首选号')}><span class="sa-sw-knob"></span></button>
+        <span class="sa-chips">
+          {#each routeStrategies() as o (o.value)}
+            <button class="sa-chip-btn" class:on={strategy === o.value} disabled={rtBusy} onclick={() => { if (strategy !== o.value) setRouter({ strategy: o.value }); }}>{o.label}</button>
+          {/each}
+        </span>
       </div>
       <div class="sa-row">
         <span class="sa-row-tx">
           <span>{t('会话中无缝换号')}</span>
-          <small>{rt.settings.seamless ? t('模型请求经本机代理逐个选号：当前号快用满（98%）或撞墙时，在两步之间换到下一个号接着跑，对话不中断、不用重发') : t('已关闭：撞墙后这一轮先停下，再换号重发或接着做')}</small>
+          <small>{!rt.settings.seamless ? t('已关闭：撞墙后这一轮先停下，再换号重发或接着做') : smart ? t('任务跑到一半、所在的号快用满（98%）或撞墙时，在两步之间把这个任务换到别的号接着跑，对话不中断、不用重发；别的任务不受影响') : t('模型请求经本机代理逐个选号：当前号快用满（98%）或撞墙时，在两步之间换到下一个号接着跑，对话不中断、不用重发')}</small>
         </span>
         <button class="sa-sw" class:on={rt.settings.seamless} disabled={rtBusy} onclick={() => setRouter({ seamless: !rt.settings.seamless })} role="switch" aria-checked={!!rt.settings.seamless} aria-label={t('会话中无缝换号')}><span class="sa-sw-knob"></span></button>
       </div>
       {#if rt.log?.length}
         <div class="rt-log">
-          <div class="rt-log-h">{t('最近的自动切换')}</div>
-          {#each rt.log as l (l.at)}
-            <div class="rt-log-r"><span class="sa-mono">{hhmm(l.at)}</span> {labelById(l.from, l.fromLabel)} → {labelById(l.to, l.toLabel)} <small>{whyText(l.reason)}</small></div>
+          <div class="rt-log-h">{smart ? t('最近的分派') : t('最近的自动切换')}</div>
+          {#each rt.log as l, i (l.at + ':' + i)}
+            {#if l.kind}
+              <div class="rt-log-r"><span class="sa-mono">{hhmm(l.at)}</span> {routeLogTitle(l)} <small>{routeLogSub(l, labelById)}</small></div>
+            {:else}
+              <div class="rt-log-r"><span class="sa-mono">{hhmm(l.at)}</span> {labelById(l.from, l.fromLabel)} → {labelById(l.to, l.toLabel)} <small>{whyText(l.reason)}</small></div>
+            {/if}
           {/each}
         </div>
       {/if}
@@ -206,7 +219,8 @@
 </div>
 <div class="sa-foot" style="line-height:1.7">
   {@render richLine(t('开跑前先看当前号：已知用满就**现探**其余各号此刻的余量，换到能用的号再开跑；跑到一半撞墙，则给该号记冷却到重置时刻并立刻换号——新版 App 会**自动用新号重发**这条消息（已经干了一半的就让它接着做），不用你动手。'))}<br />
-  {@render richLine(t('额度按本轮模型判断：Opus 用满不影响 Fable 余量的判断，反之亦然；Pro 号没有 Fable 额度，Fable 对话不会切到 Pro 号。列表顺序就是「回到首选号」的优先级，用 ↑↓ 调整。'))}
+  {@render richLine(t('额度按本轮模型判断：Opus 用满不影响 Fable 余量的判断，反之亦然；Pro 号没有 Fable 额度，Fable 对话不会切到 Pro 号。列表顺序就是「回到首选号」的优先级，用 ↑↓ 调整。'))}<br />
+  {@render richLine(t('**智能分派**：每个对话（以及它的子 agent）各用一个号，开跑前按这一段预计要用多少挑**装得下的号**，一段活不拆到两个号上跑；并行的对话分到不同的号。Opus 任务优先放到 Fable 已用完（或没有 Fable）的号上，把共用额度留给 Fable 任务；Fable 任务放到 Fable 剩得最多的号上；快重置的额度先用掉。'))}
 </div>
 
 {#if editModal}

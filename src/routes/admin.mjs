@@ -547,6 +547,7 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
   });
   router.on('POST', '/api/admin/claude-account/router', settingsAction((b) => accountRouter.setRouterSettings({
     ...(typeof b.enabled === 'boolean' ? { enabled: b.enabled } : {}),
+    ...(typeof b.strategy === 'string' ? { strategy: b.strategy } : {}),
     ...(typeof b.returnToPrimary === 'boolean' ? { returnToPrimary: b.returnToPrimary } : {}),
     ...(typeof b.seamless === 'boolean' ? { seamless: b.seamless } : {}),
   })));

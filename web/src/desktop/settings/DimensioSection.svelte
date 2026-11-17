@@ -1,8 +1,9 @@
 <script>
-  // 设置 › dimensio（桌面壳）：照 Claude 分区的版式分组——模型 / 模型服务 / 本机模型 / 权限与安全 / 规则 / 工作空间 /
+  // 设置 › dimensio（桌面壳）：照 Claude 分区的版式分组——子 agent 调度 / 权限与安全 / 规则 / 工作空间 /
   // 记忆 / 偏好注册表各组 / 诊断，最底下一行安静的版本。数据面 lib/dimensioSettings.svelte.js（手机 Settings 共用）。
-  // 自定义模型服务、记忆、本机模型的启动参数不在这里另做编辑器：点进去关掉设置、在 dimensio 页里打开它自己的面板。
-  // dimensio 关着 / 起不来时只出一行原因与「重试」；成员身份只出他能改的（本机模型只给管理员，访问范围被锁时只读）。
+  // 模型（服务 / 型号 / 思考深度 / Fast）、各厂商 Key、本机模型 11-15 起不在这里：dimensio 输入框的型号胶囊写的就是同一份新对话默认，
+  // Key 归模型中心，本机模型的启停与启动参数在 dimensio 自己的本机面板。记忆不在这里另做编辑器：点进去关掉设置、在 dimensio 页里打开它的面板。
+  // dimensio 关着 / 起不来时只出一行原因与「重试」；成员身份只出他能改的（访问范围被锁时只读）。
   import { untrack } from 'svelte';
   import DGroup from '../kit/DGroup.svelte';
   import DRow from '../kit/DRow.svelte';
@@ -15,29 +16,24 @@
   import { hasNativePickDirectory, nativePickDirectory } from '../../lib/nativeDesktop.js';
   import { SI } from '../../lib/settingsIcons.js';
   import { t, tr } from '../../lib/i18n.js';
-  import { hub, hubSummaryText } from '../../lib/modelHub.svelte.js';
   import { openSettings } from '../../lib/settingsNav.svelte.js';
   import {
     ds, loadDimensio, dimReady, errOf, setErr, hasCap,
-    providerOptions, modelOptions, effortOptions, fastOk, setProvider, setModel, setThinking, setFast,
-    keyVendors, canSetKey, setVendorKey, customSummary,
-    LOCAL_ENGINES, localOk, localLine,
     MODES, ACCESS, accessLocked, setMode, setAccess, rulesOf, addRules, removeRule,
     setWorkspace,
     memoryOk, memLine,
     prefGroups, prefItems, prefGroupLabel, prefLabel, prefDesc, prefOptions, prefChanged, setPref, parsePrefNumber,
     sessionTitle, exportDiag, versionLine, openInDimensio,
     feed, setFeedDetail, FEED_DESC,
-    curSpec, extOk, mcpLine, skillLine, dimDispatchLine,
+    extOk, mcpLine, skillLine, dimDispatchLine,
   } from '../../lib/dimensioSettings.svelte.js';
   import { me } from '../../lib/state.svelte.js';
 
   // fl：设置搜索跳转后的高亮；enabled：管理员视角下 dimensio 开着且跑得起来（成员能看到这一分区就是有权限，恒 true）；
-  // openHub：「模型中心」行点了去哪——外壳传自己的换分区（带 ‹ › 历史），没传走通用的直达分区
   // openExt(type)：「连接器 / 技能」行点了去扩展页的哪一类（外壳传自己的换分区）
   // openDispatch：「子 agent 调用策略」行点了去哪——外壳传自己的就地子页（ag-dimensio#dispatch，带 ‹ › 历史），没传走通用的直达分区
   let {
-    fl = () => false, enabled = true, openHub = () => openSettings('model-hub'), openExt = () => openSettings('extensions'),
+    fl = () => false, enabled = true, openExt = () => openSettings('extensions'),
     openDispatch = () => openSettings('dm-dispatch'),
   } = $props();
 
@@ -69,20 +65,8 @@
 
   const svgOf = (name, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${SI[name] || ''}</svg>`;
   const cfg = $derived(ds.config);
-  const vendorOpts = $derived(providerOptions().map((o) => ({ value: o.value, label: o.desc ? o.label + ' · ' + o.desc : o.label })));
-  const efforts = $derived(effortOptions());
   const modeDesc = $derived(MODES().find((m) => m.value === cfg?.permissionMode)?.desc || '');
   const accessDesc = $derived(ACCESS().find((m) => m.value === cfg?.access)?.desc || '');
-
-  // —— API Key：一次只开一家的输入框；保存成功收起 ——
-  let keyFor = $state('');
-  let keyDraft = $state('');
-  function openKey(id) { keyFor = id; keyDraft = ''; setErr('', ''); }
-  async function saveKey(e) {
-    e?.preventDefault?.();
-    if (!keyFor || !keyDraft.trim()) return;
-    if (await setVendorKey(keyFor, keyDraft)) { keyFor = ''; keyDraft = ''; }
-  }
 
   // —— 规则：每组一个添加框 ——
   let ruleDraft = $state({ allow: '', ask: '', deny: '' });
@@ -181,76 +165,9 @@
 {:else if !dimReady()}
   <p class="note">{t('读取中…')}</p>
 {:else}
-  <!-- 模型：新会话的默认（对话里随时可在输入框的型号胶囊改） -->
-  <DGroup label={t('模型')} foot={keyVendors().length ? t('新对话默认用这里的模型；对话里随时可以在输入框的型号胶囊改。') : t('新对话默认用这里的模型；对话里随时可以在输入框的型号胶囊改。能用的模型都在模型中心里添加和修改。')}>
-    <div class="drow cr" class:hl={fl('dm-provider')}>
-      <span class="cr-tx"><span class="cr-t">{t('模型服务')}</span>{#if errOf('provider')}{@render bad('provider')}{:else if !curSpec()}<span class="cr-s bad">{t('选着的服务现在用不了（没有 Key 或已被删除），请重新选一个')}</span>{/if}</span>
-      <span class="cr-tr"><DSelect options={vendorOpts} value={cfg.provider} disabled={ds.busy === 'provider'} onchange={setProvider} width="220px" /></span>
-    </div>
-    {#if modelOptions().length}
-      <div class="drow cr" class:hl={fl('dm-model')}>
-        <span class="cr-tx"><span class="cr-t">{t('型号')}</span>{@render bad('model')}</span>
-        <span class="cr-tr"><DSelect options={modelOptions()} value={cfg.model} disabled={ds.busy === 'model'} onchange={setModel} width="220px" /></span>
-      </div>
-    {/if}
-    {#if efforts.length > 1}
-      <div class="drow cr" class:hl={fl('dm-effort')}>
-        <span class="cr-tx"><span class="cr-t">{t('思考深度')}</span>{@render bad('thinking')}</span>
-        <span class="cr-tr"><DSelect options={efforts} value={cfg.thinking} disabled={ds.busy === 'thinking'} onchange={setThinking} width="140px" /></span>
-      </div>
-    {/if}
-    {#if fastOk()}
-      <div class="drow cr" class:hl={fl('dm-fast')}>
-        <span class="cr-tx"><span class="cr-t">Fast mode</span><span class="cr-s">{t('输出更快，按更高单价计费')}</span>{@render bad('fast')}</span>
-        <span class="cr-tr"><DSwitch checked={cfg.fast === true} disabled={ds.busy === 'fast'} onchange={setFast} /></span>
-      </div>
-    {/if}
-    {#if !keyVendors().length}{@render hubRow()}{/if}
-  </DGroup>
-
-  {#snippet hubRow()}
-    <!-- 管理员有模型中心总览：自定义服务都在 设置 › 模型中心 管（就在本设置页里换分区）；成员 / 老服务端照旧去 dimensio 自己的面板 -->
-    <DRow title={hub.ok ? t('模型中心') : t('自定义模型服务')} sub={hub.ok ? hubSummaryText() : customSummary()} highlight={fl('dm-custom')} onclick={() => { if (hub.ok) openHub(); else openInDimensio('vendors'); }} />
-  {/snippet}
-
-  <!-- 各厂商 API Key + 自定义服务入口（老服务端：自带厂商的 Key 还在 dimensio 自己手里时才有这一组） -->
-  {#if keyVendors().length}
-  <DGroup label={t('API Key')} foot={t('Key 加密存在服务端，重启不丢，不回传浏览器。')}>
-    {#each keyVendors() as v, i (v.id)}
-      <div class="drow cr" class:hl={i === 0 && fl('dm-keys')}>
-        <span class="cr-tx">
-          <span class="cr-t">{v.name}{#if v.current}<span class="pill">{t('默认')}</span>{/if}</span>
-          {@render bad('key:' + v.id)}
-        </span>
-        <span class="cr-tr">
-          {#if keyFor === v.id}
-            <form class="kform" onsubmit={saveKey}>
-              <DField type="password" bind:value={keyDraft} placeholder={t('粘贴 {name} API Key', { name: v.name })} width="230px" />
-              <DButton type="submit" size="sm" variant="primary" disabled={!keyDraft.trim() || ds.busy === 'key:' + v.id}>{ds.busy === 'key:' + v.id ? t('保存中…') : t('保存')}</DButton>
-              <DButton size="sm" variant="ghost" onclick={() => { keyFor = ''; }}>{t('取消')}</DButton>
-            </form>
-          {:else}
-            <span class="kst" class:warn={!v.hasKey}>{v.hasKey ? t('已配 Key') : t('缺 Key')}</span>
-            {#if canSetKey(v.id)}<DButton size="sm" onclick={() => openKey(v.id)}>{v.hasKey ? t('更换') : t('填写')}</DButton>{/if}
-          {/if}
-        </span>
-      </div>
-    {/each}
-    {@render hubRow()}
-  </DGroup>
-  {/if}
-
-  {#if localOk()}
-    <DGroup label={t('本机模型')} foot={t('启动参数（上下文、缓存精度、识图……）与启停在 dimensio 的本机模型面板里改。')}>
-      {#each LOCAL_ENGINES as e, i (e.id)}
-        <DRow title={e.name} sub={localLine(e.id)} highlight={i === 0 && fl('dm-local')} onclick={() => openInDimensio('local:' + e.id)} />
-      {/each}
-    </DGroup>
-  {/if}
-
   <!-- 子 agent 调用策略：同 Claude 分区「对话」组里那一行——行按钮（标题 + 状态副标题）的命中区铺满整行、点了进子页；
        开关那一块压在它上面，四周留一圈不响应的边。关着时这一行不置灰：照样能点进去看 -->
-  <DGroup label={t('子 agent 调度')} foot={t('派子 agent 时按难度选模型与思考深度：可以跟随 Claude 的调用策略，也可以给 dimensio 单独定一套。')}>
+  <DGroup label={t('子 agent 调度')} foot={t('派子 agent 时按难度选模型与思考深度：默认 dimensio 单独一套，也可以改成跟随 Claude 的调用策略。')}>
     <div class="drow cr dpr" class:hl={fl('ddispatch')} role="group" aria-label={t('子 agent 调用策略')}>
       <button class="dpr-go" onclick={() => openDispatch()}>
         <span class="cr-t">{t('子 agent 调用策略')}</span>
@@ -378,9 +295,6 @@
   @keyframes dm-flash { 0%, 70% { background: var(--dsk-sel); } 100% { background: transparent; } }
   .pill { padding: 0 6px; border-radius: 5px; font-size: 10.5px; line-height: 17px; font-weight: 600; letter-spacing: .3px; color: var(--dsk-ink-2); box-shadow: inset 0 0 0 1px var(--dsk-line-strong); }
   .num { color: var(--dsk-ink-3); }
-  .kst { font-size: var(--dsk-fs-sm); color: var(--dsk-ink-3); }
-  .kst.warn { color: var(--dsk-warn); }
-  .kform { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
   .dsp-box { position: relative; flex: 1 0 100%; }
   .dsp-box textarea { display: block; width: 100%; box-sizing: border-box; min-height: 72px; max-height: 260px; resize: vertical;
     padding: 8px 10px; border: none; border-radius: var(--dsk-r-sm); background: var(--dsk-panel); box-shadow: 0 0 0 1px var(--dsk-line);

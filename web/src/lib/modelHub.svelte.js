@@ -83,10 +83,12 @@ export const canOpenModelHub = () => me.kind === 'admin' || me.kind === 'user';
  *   sheet 对象   → 原样交给 openHubSheet
  *   其余 / null  → 打开设置的「模型中心」分区（分屏格里托宿主页开；独立窗口没有设置页 → 返回 false）
  */
-export function openModelHub(start = null) {
+export function openModelHub(start = null, opts = null) {
   if (!canOpenModelHub()) return false;
   if (start && typeof start === 'object') return openHubSheet(start);
-  if (start === 'add') return openHubSheet(me.kind === 'admin' ? { type: 'service', add: true } : { type: 'claude', presets: true });
+  // opts.from（{ x, y, w, h, r }）：发起它的那块小面板，服务浮层从它原地长出来（只有服务浮层认，别的浮层照旧）
+  const from = opts && opts.from && typeof opts.from === 'object' ? { ...opts.from } : null;
+  if (start === 'add') return openHubSheet(me.kind === 'admin' ? { type: 'service', add: true, ...(from ? { from } : {}) } : { type: 'claude', presets: true });
   return openSettingsFromChat('model-hub');
 }
 

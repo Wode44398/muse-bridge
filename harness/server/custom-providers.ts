@@ -397,15 +397,33 @@ type PluginRec = { provider: CustomProvider; plugin: PluginInfo; key: string };
 // 自带专门适配的厂商（anthropic、openai、kimi……）由宿主的模型中心接管（2026-11-11）：同一个文件里的 builtins { 厂商 id → 绑定 }。
 // 有 builtins 这一项 = 宿主接管了——管理员实例上只有列在里面的厂商能用（Key、地址取这里的，菜单只列这里给的型号），
 // 这一家在 dimensio 里的厂商 id 与适配都不变。没有这一项（老 bridge、独立运行）= 照老样子，各厂商用自己存的 Key。
+// 型号的思考写法（模型中心按型号 × 线路算好的档位表）：同一个服务托管的别家型号（百炼上的 Kimi、GLM……）靠它按自己家的写法发
+export type HostTiers = Pick<CustomModel, "thinking" | "efforts" | "effortField" | "effortDefault" | "alwaysThinks">;
+export interface HostBuiltinModel {
+  id: string;
+  label: string;
+  contextWindow?: number;
+  maxOutput?: number;
+  vision?: boolean;
+  cacheTtl?: number;
+  tiers?: HostTiers;
+  params?: CustomParams; // 模型中心的高级调用配置
+}
 export interface HostBuiltin {
   key: string;
   baseUrl?: string;
   name: string;
   defaultModel?: string;
   plugin: PluginInfo;
-  models: { id: string; label: string; contextWindow?: number; maxOutput?: number; vision?: boolean; cacheTtl?: number }[];
+  models: HostBuiltinModel[];
   shared?: boolean;
+  upstream?: string; // 直连的上游主机（认线路：百炼、OpenRouter……）
+  // 模型中心高级设置里改过的兼容项（没改 = 没有这一项，按型号表）
+  replayReasoning?: boolean;
+  maxTokensField?: "max_tokens" | "max_completion_tokens";
 }
+// 自带厂商走哪种协议（档位表按它规范化）
+const builtinProtocol = (id: string): CustomProtocol => (id === "anthropic" ? "anthropic" : id === "gemini" ? "gemini" : "openai");
 function cleanBuiltins(raw: unknown): Map<string, HostBuiltin> | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const out = new Map<string, HostBuiltin>();
@@ -420,6 +438,7 @@ function cleanBuiltins(raw: unknown): Map<string, HostBuiltin> | null {
       const mid = typeof m?.id === "string" ? m.id.trim() : "";
       if (!mid || mid.length > 200 || seen.has(mid)) continue;
       seen.add(mid);
+      const params = cleanCustomParams(m.params);
       models.push({
         id: mid,
         label: str(m.label, 80) || mid,
@@ -427,6 +446,8 @@ function cleanBuiltins(raw: unknown): Map<string, HostBuiltin> | null {
         ...(Number.isFinite(m.maxOutput) && m.maxOutput > 0 ? { maxOutput: Math.round(m.maxOutput) } : {}),
         ...(typeof m.vision === "boolean" ? { vision: m.vision } : {}),
         ...(MK.normalizeCacheTtl(m.cacheTtl) !== undefined ? { cacheTtl: MK.normalizeCacheTtl(m.cacheTtl) } : {}),
+        ...hostTiers(m, models.length, builtinProtocol(id)),
+        ...(params ? { params } : {}),
       });
       if (models.length >= MAX_MODELS) break;
     }
@@ -443,9 +464,24 @@ function cleanBuiltins(raw: unknown): Map<string, HostBuiltin> | null {
       },
       models,
       ...(v.shared === true ? { shared: true } : {}),
+      ...(typeof v.upstream === "string" && /^[a-z0-9.-]{1,253}$/.test(v.upstream) ? { upstream: v.upstream } : {}),
+      ...(typeof v.replayReasoning === "boolean" ? { replayReasoning: v.replayReasoning } : {}),
+      ...(v.maxTokensField === "max_tokens" || v.maxTokensField === "max_completion_tokens" ? { maxTokensField: v.maxTokensField } : {}),
     });
   }
   return out;
+}
+// 宿主给了档位表才有（老 bridge 不给：照这家厂商自己的适配）；规范化同自定义服务的型号
+function hostTiers(m: unknown, i: number, protocol: CustomProtocol): { tiers?: HostTiers } {
+  const r = m as { efforts?: unknown; thinking?: unknown } | null;
+  if (!r || (!Array.isArray(r.efforts) && typeof r.thinking !== "string")) return {};
+  let one: CustomModel | null = null;
+  try {
+    one = normalizeModel(m, i, protocol, false);
+  } catch {
+    return {};
+  }
+  return one ? { tiers: { thinking: one.thinking, efforts: one.efforts, effortField: one.effortField, effortDefault: one.effortDefault, alwaysThinks: one.alwaysThinks } } : {};
 }
 let pluginCache: { file: string; mtimeMs: number; size: number; list: PluginRec[]; builtins: Map<string, HostBuiltin> | null } | null = null;
 /** 宿主接管了自带厂商（只看管理员实例：成员实例照旧用自己 / 环境里的 Key，共享过来的绑定只是多一个 Key 来源）。 */

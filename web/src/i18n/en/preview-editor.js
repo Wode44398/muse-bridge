@@ -66,7 +66,8 @@ export default {
   '流畅': 'Smooth',
   '完整分辨率与码率': 'Full resolution and bitrate',
   '转码 ≤1080p · 更抗弱网省流量': 'Up to 1080p · Handles slow networks, saves data',
-  '网络吃紧 · 切换流畅播放': 'Slow network · Switch to Smooth',
+  '当前网络较慢': 'Slow connection',
+  '切换到流畅画质': 'Switch to Smooth',
   '视频加载失败': 'Couldn’t load video',
   '{n} 秒': '{n} sec',
 

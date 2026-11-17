@@ -43,6 +43,23 @@ export interface AdapterConfig {
   cacheTtl?: "1h";
   // 自定义服务（registry 现读注册表填）：鉴权与自定义头、型号的档位表等。有它时适配器不走按内置厂商 id / 型号名的分支。
   custom?: CustomWire;
+  // 宿主模型中心接管的自带厂商（registry 从 plugin-providers.json 的 builtins 填）：服务的兼容项、这个型号的档位表与调用参数。
+  // 适配器照旧按厂商 id 走；同一个服务托管的别家型号与手动设置靠它
+  host?: HostWire;
+}
+
+export interface HostWire {
+  replayReasoning?: boolean;
+  maxTokensField?: "max_tokens" | "max_completion_tokens";
+  upstreamHost?: string;
+  model?: {
+    thinking: string;
+    efforts: Tier[];
+    effortField: string;
+    effortDefault: string;
+    alwaysThinks: boolean;
+  };
+  params?: CustomParams; // 模型中心的高级调用配置
 }
 
 // 自定义服务发请求要的东西（custom-providers.ts 的记录摘出来的，适配器不直接依赖注册表）

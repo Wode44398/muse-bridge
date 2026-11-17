@@ -51,6 +51,9 @@ dimensio 的标志**就是月桥**：小尺寸（< 40px）与 bridge 逐数相�
 - 状态：`--ok` · `--warn` · `--err`（成功默认不上色；`--ok` 只给 diff 新增行、勾选完成这类）
 - 其他：`--code-bg` · `--code-k`（代码关键字的石青：代码是内容不是界面）· `--scrim` 遮罩 · `--selection`（朱调）· `--user-bubble` / `--on-user-bubble`
 - 阴影（暖墨）：`--shadow-1` 浮起 · `--shadow-2` 悬浮（菜单、弹层）· `--shadow-3` 模态（sheet、对话框）；浮起的面配 `0 0 0 1px var(--border)` 与 `inset 0 1px 0 var(--sheen)`。
+- 浮层玻璃（浮起来、点外面会关的层：菜单、弹层、底部面板、对话框，电脑与触屏一致；底下的纸——侧栏、画布、输入框、工作区卡片——不上玻璃）：
+  `--glass` 菜单 / 弹层 · `--glass-strong` 面板 / 对话框 · `--glass-card` 玻璃上的分组白卡 · `--glass-rim` 边缘受光细线 · `--glass-shadow` 玻璃投影 ·
+  `--glass-blur` 背后磨砂（`backdrop-filter`）。从按钮长出来的面板用 iOS 27 液态玻璃（实时折射），见 §3 `MorphPanel`。
 
 **字**：`--font-ui`（Inter 拉丁子集 + 系统中文字体）· `--font-mono`（JetBrains Mono 子集）· `--font-serif`（思源宋体 600 的展示子集，
 只给固定的展示文字：首屏问候、连接页标题；子集由 `web/brand/serif-font.py` 按这些字生成，改了文字要重跑）。数字、路径、代码、命令用 mono；中文正文不用等宽。
@@ -81,6 +84,7 @@ dimensio 的标志**就是月桥**：小尺寸（< 40px）与 bridge 逐数相�
 | `Button` | 胶囊按钮：`primary` 墨（一屏最多一个）· `secondary` · `ghost` · `outline` · `accent`（也是墨：批准 / 开启）· `danger` 柔红 · `danger-solid`；`sm/md/lg`；`loading` 时换成在动的标志 |
 | `IconButton` | 图标按钮，`label` 必填；`ghost/soft/solid`；`active` 开关态；`badge` 小点或数字 |
 | `Chip` | 输入框底行、状态条上的胶囊：`plain/soft/accent/warn`，`chevron` 下拉 |
+| `MorphPanel` | 从锚点按钮里「长」出来的面板（iOS 26 下拉按钮的展开 / 收起：按钮融进液滴、沿 J 形路径长成面板、收起缩回按钮并「撞」一下），动作与材质复用 bridge `web/src/components/ios27/MorphMenu.svelte`（液态玻璃；圆角触屏 34、电脑 24）。一直挂着只切 `open`（收起动画要放得完），第一次打开时再挂。现用于输入框的型号菜单 |
 | `Popover` + `MenuItem` / `MenuLabel` / `MenuSep` | 一切菜单与弹出面板。fixed 定位 + 视口钳制 + 内容变高重新定位；挂到 `.hxroot`（#94）；登记浮层栈（返回键 / Esc 先关它）；从锚点方向弹出 |
 | `Sheet` | 面板：手机底部抽屉（把手可拖关），桌面居中对话框；`size` sm/md/lg/xl，`footer` / `actions` 片段；`onback` = 面板里有层级（标题左边「‹」，Esc / 返回键先退一级，× 与遮罩照旧整个关） |
 | `Segmented` | 二三选一的视图切换（滑动的选中块） |
@@ -99,6 +103,9 @@ dimensio 的标志**就是月桥**：小尺寸（< 40px）与 bridge 逐数相�
 
 - **三栏**（≥700px）：侧栏 272（`--rail` 底）| 对话 | 工作区（可拖宽，比例 0.26–0.72，双击复位）。1100 以下开着工作区时侧栏临时收起，
   侧栏钮改为以抽屉拉出（不改用户偏好）。手机单栏：侧栏是左侧抽屉（边缘右滑跟手拉出、左滑跟手收回），工作区是整屏底部层。
+- **工作区卡片**（宽屏）：一栏里是一叠圆角 14 的浮起面，外沿与卡间缝 8；标题行 38 是拖拽把手（指针捕获，别的卡 FLIP 让位），
+  够宽且两列都有卡才摆两列。卡片绝对定位、平铺一个 keyed each，换位换列不重挂（终端、浏览器连接留着）；拖动期间原生浏览器视图让位
+  （`web/src/components/dock/Dock.svelte`，排布纯函数在 `web/src/lib/dock-cards.ts`）。手机仍是一次一张。
 - **对话列**：正文最宽 760（含左右 20 内边距，手机 16），输入框与它同宽同中线。用户消息靠右、`--user-bubble` 底、圆角 18；
   助手正文不加底、不加框，直接排在画布上。
 - **顶栏**不放返回 / 新对话 / 侧栏键（维护者定过，2026-07-20）：返回在侧栏「主页」，新对话在侧栏；只有桌面侧栏收起时左上角才有展开钮。
@@ -115,8 +122,14 @@ dimensio 的标志**就是月桥**：小尺寸（< 40px）与 bridge 逐数相�
   `collapse`（高度 0 ↔ 自然高：行内展开区、详情）；动作 `smoothHeight`（容器随内容平滑生长）· `press`（按下缩、松开弹回）。
   组件根上的过渡要写 `|global`，否则父级 `{#if}` 卸载它时不播。
   用 `element.animate()`（WAAPI）时 easing 传 `springEasing()` 的返回值——WAAPI 不解析 CSS 变量，写 `var(--spring)` 会直接报错。
-- 流式文字：新到的字 0.42s 淡入（`web/src/lib/fade.ts`），只动尾巴，稳定的块不重渲。
+- 流式正文：与 bridge Claude 分页同一个吐字引擎（仓库根 `web/src/lib/claudeFade.js`，「先排版后显形」）——到达的字立刻排进 DOM、
+  没轮到的隐形占位，按重建的生成时间线逐字 0.4s 匀速淡入；盒子（列表项、单元格、引用、代码卡、分隔线）随它包住的第一个字一起出。
+  尾块先过同一份写头修补（仓库根 `web/src/lib/mdStream.js` 的 `repairTail`，按 `web/src/lib/markdown.ts` 的语法收窄）：已经显形的字下一批不许
+  变没、变样或挪位。表格用分离边框（collapse 的格线由表格统一绘制，单元格隐形了线还在）。跟底是缓动的（`web/src/components/feed/Feed.svelte`）。
+  思考行仍用 `web/src/lib/fade.ts`（纯文本、只淡入新到的字）。
 - 「在做」的文字用 `.hx-shimmer` 微光（全局类，`web/src/app.css`）；「在跑」的图形用 `Mark live`。
+- 一行字换内容（工具组头从「正在执行…」换成汇总句、思考行换档）用 `web/src/lib/morph-text.ts` 的 `morphText`：新字从下方浮上来，第一次挂载不动；
+  首次展开后保持挂载、只切 `hidden` 的区块（工具组展开卡、工具行详情）用同文件的 `reveal` 补进场。
 - 品牌级的表演（标志出场、`Mark live`）要「润」：动作交叠不排队，弹簧带过冲与回摆，快的时候形变（挤压拉伸、惯性甩尾），静止时回到逐数原样。
 - `prefers-reduced-motion`：只留透明度，时长压到最短（标志出场只淡入，`Mark live` 只做明暗呼吸）。
 
@@ -137,7 +150,9 @@ dimensio 的标志**就是月桥**：小尺寸（< 40px）与 bridge 逐数相�
   子 agent 卡（`web/src/components/feed/AgentCard.svelte`）与工作流卡（`web/src/components/feed/WorkflowCard.svelte`）从派出去起就在、
   跑完不收成一行：停在终态，只是微光停下、「此刻一行」换成结果。
 - 流式正文只让尾块变：稳定块渲一次、按起点缓存（`web/src/lib/markdown.ts`，U7）。
-- 时间线的显示分组（工具组只收只读探索、做完的轮收成一行、一批并行的子 agent 合成一张卡）都在纯函数 `web/src/lib/feed-units.ts`；最近这一轮不折（U8）。
+- 时间线的显示分组（工具组：精简模式收连续的工具、同一文件连续读写并成一行，「显示全部工作过程」时只收只读探索；做完的轮收成一行；
+  一批并行的子 agent 合成一张卡）都在纯函数 `web/src/lib/feed-units.ts`；最近这一轮不折（U8）。
+- 同屏同一件事只说一次：此刻在跑哪一步由工具组头 / 工具行说，底部活动行只说大类（思考中… / 运行工具中… / 需要你的输入）。
 
 ## 8. 文案
 

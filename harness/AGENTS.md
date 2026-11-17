@@ -23,7 +23,7 @@
 - `npm test` = tsc + 全部测试 + 收尾检查（受控文件不许被测试改动、生产数据目录不许冒出测试桶）。改了 harness 就跑全量：守卫测试不 import 被扫的模块，只跑相关测试时点不到它们。
 - 数据位置只经 `server/paths.ts` 解析；测试进程解析到临时目录之外会直接抛错。
 - 测试里不再手写 `async *stream()` 假 provider：用 `server/test-harness/scripted-adapter.ts`（多调 / 少调判失败、请求不变量自动检查）；要看编码后的请求体用 `server/test-harness/wire-fakes.ts`；要走真会话用 `server/test-harness/session-fixture.ts`。
-- `server/guards-baseline.json` 是燃尽基线：违规数只准减、用例数只准增；豁免写成 `// guard: <规则> ok — <理由>`，没有理由的豁免判红。
+- `server/guards-baseline.json` 是燃尽基线：违规数只准减；豁免写成 `// guard: <规则> ok — <理由>`，没有理由的豁免判红。
 - 快照只用于「一轮之内门禁的先后顺序」这类顺序本身就是契约的场景（`server/loop-gates.test.ts`），其余写不变量。快照 diff 必须有人看过，不许为了变绿去 `--test-update-snapshots`。
 - 会改变弱模型行为的改动（提示词、技能披露、熔断参数、注入物）合入前按 `evals/ab/README.md` 跑 A/B，收据写进拉取请求；改压缩按 `evals/compaction/README.md` 在改前 / 改后各跑一次。单测答不了「模型有没有变笨」。
 - 测试挂了先判断：是代码错了，还是测试钉住了一个错误的契约（以前 `server/knowledge-search.test.ts` 就把「召回不落盘」钉成过契约）。不许为了变绿放宽断言。

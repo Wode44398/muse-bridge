@@ -16,6 +16,7 @@ import type { Express, Request, Response } from "express";
 import { onTurnEvent } from "../bridge-events.ts";
 import { getOrLoadSession, getSession, noteListChanged, watchGlobal, emitGlobal, type WaitingInfo } from "../session.ts";
 import { isQuickPath } from "../quick.ts";
+import { startQuickPrune } from "../quick-prune.ts";
 import { prefValue } from "../prefs.ts";
 import { archiveFilter, archiveViewOf, isArchived, setArchived, startAutoArchive, unarchiveOnTurn, type ArchiveView } from "./archive.ts";
 import { notePresence, maybePush, notifyPrefs } from "./notify.ts";
@@ -73,6 +74,7 @@ export function mountSessionMgmt(app: Express): void {
     onTurnEvent(onTurn);
     watchGlobal(onGlobal);
     startAutoArchive();
+    startQuickPrune(); // 快照对话按设置清理（默认不清理）
     drainLeftoversLater();
   }
 

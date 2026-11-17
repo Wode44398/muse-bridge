@@ -27,9 +27,10 @@
   import { activeRequest } from '../../lib/dialogState.svelte.js';
   import { showToast } from '../../lib/toast.svelte.js';
   import { DUR, bezier, reduced } from '../../lib/motion.js';
+  import { morphFrom } from '../../lib/morphFrom.js';
   import { t, tr } from '../../lib/i18n.js';
 
-  // sheet: { type:'service', add:true } | { type:'service', id }
+  // sheet: { type:'service', add:true, from? } | { type:'service', id }（from：起点矩形，入场从它长出来）
   let { sheet, onClose } = $props();
 
   const mq = new MediaQuery('(max-width: 699px)', false);   // 断点与 HubOverlays 一致
@@ -569,8 +570,11 @@
     let m;
     if (sid) {
       try {
+        // 型号表不认识的文本模型，服务端顺手探测一次能力（几秒；失败不影响添加）
         const r = await hubAsk('catalog/add', { id: sid, model: { id, kind: k } });
         m = r.model;
+        if (r.probe && g === gen) showToast(t('已探测能力：{notes}', { notes: (r.probe.notes || []).map((n) => tr(n)).join(' · ') }), 'ok');
+        else if (r.probeError && g === gen) showToast(t('已添加，探测能力没成：{e}', { e: tr(r.probeError) }), 'warn');
       } catch (e) {
         return g === gen ? tr(e.message) : '';
       }
@@ -857,7 +861,8 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 <div class="hs" class:narrow class:ov-scrim={!narrow} class:closing role="presentation" onpointerdown={scrimDown} onclick={scrimClick}>
-  <div class="panel" class:ov-panel={!narrow} class:push={narrow} class:closing bind:this={panel}
+  <!-- sheet.from：从发起它的那块小面板（dimensio 型号菜单）原地长出来，见 lib/morphFrom.js -->
+  <div class="panel" class:ov-panel={!narrow} class:push={narrow} class:closing bind:this={panel} use:morphFrom={sheet?.from}
     role="dialog" aria-modal="true" aria-label={title || t('模型中心')} tabindex="-1">
     {#if narrow}
       <header class="top">

@@ -69,7 +69,16 @@ const OFFICIAL: Record<string, Record<string, Official>> = {
   // 3.8：reasoning_effort 真档位 low/medium/xhigh（默认 xhigh），high/max→xhigh、minimal→low；非法值 400（实测回包列出
   // none/minimal/low/medium/high/xhigh/max）。和 thinking_budget 不能同时给（实测 400）。关法 enable_thinking=false。
   // 3.7：没有 reasoning_effort，只有 enable_thinking + thinking_budget（token 预算，dimensio 自定三档）。
+  // 4：DashScope 实测（2026-11-17，文档未上线）：非法值回包列出 none/off/minimal/low/medium/high/xhigh/max，五档推理量逐级变多（真档位）。
   qwen: {
+    "qwen4-max": {
+      field: "reasoning_effort",
+      accepts: ["none", "off", "minimal", "low", "medium", "high", "xhigh", "max"],
+      tiers: ["low", "medium", "high", "xhigh", "max"],
+      aliases: { minimal: "low" },
+      off: { enable_thinking: false, reasoning_effort: undefined },
+      onExtras: { enable_thinking: true, thinking_budget: undefined },
+    } satisfies Official,
     ...Object.fromEntries(["qwen3.8-max", "qwen3.8-flash"].map((id) => [id, {
       field: "reasoning_effort",
       accepts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],

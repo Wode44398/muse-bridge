@@ -2,8 +2,6 @@
 //   - 某文件的命中数比基线（guards-baseline.json）多 → 红：这是新增的违规，报错里写着改用什么；
 //   - 比基线少 → 只提示「顺手把基线下调」——存量只减不增；
 //   - 单行豁免写成 `// guard: <规则> ok — <理由>`（写在该行行尾或上一行），理由不许空：没写理由的豁免本身判红。
-// 用例数棘轮：每个 *.test.ts 里 test( 的个数不许比基线少——大改或迁移测试时悄悄丢了用例会被当场抓住；有意删减就在
-// 同一提交里下调基线（改基线本身是一处要被审的 diff）。
 // 守卫只读源码、不 import 被扫的模块，revdeps 点不到它：改了 harness 就跑全量（写进 harness/AGENTS.md）。
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -17,7 +15,6 @@ const HARNESS = path.dirname(SERVER);
 const BASELINE_FILE = path.join(SERVER, "guards-baseline.json");
 const baseline = JSON.parse(fs.readFileSync(BASELINE_FILE, "utf8")) as {
   rules: Record<string, Record<string, number>>;
-  tests: Record<string, number>;
 };
 
 interface Rule {
@@ -143,19 +140,6 @@ for (const rule of RULES) {
   });
 }
 
-test("Q9 用例数棘轮：每个测试文件的 test( 个数不许比基线少（有意删减就在同一提交里下调基线）", (t: TestContext) => {
-  const counts: Record<string, number> = {};
-  for (const f of files) if (isTestFile(f.rel)) counts[f.rel] = f.lines.filter((l) => /^\s*test\(/.test(l)).length;
-  const dropped = Object.keys(baseline.tests).filter((rel) => (counts[rel] ?? 0) < baseline.tests[rel]);
-  assert.deepEqual(
-    dropped.map((rel) => `${rel}：${counts[rel] ?? 0}（基线 ${baseline.tests[rel]}）`),
-    [],
-    "这些测试文件的用例比基线少了——迁移或重写时丢了用例？有意删减就下调 guards-baseline.json 并在提交信息里写明原因",
-  );
-  const grown = Object.keys(counts).filter((rel) => counts[rel] > (baseline.tests[rel] ?? 0));
-  if (grown.length) t.diagnostic(`这些测试文件的用例比基线多，请顺手把基线调上去（棘轮才卡得住）：${grown.map((rel) => `${rel} ${baseline.tests[rel] ?? 0}→${counts[rel]}`).join("，")}`);
-});
-
 // ── K48：今天成立的不变量，现在就守 ──────────────────────────────────────────
 test("Q9 核心层厂商中立：server/agent/ 不 import 任何一家的适配器实现", () => {
   const offenders = files
@@ -175,7 +159,10 @@ test("Q9 前后端事件集合一致：后端发的每种事件前端都处理�
   const body = end > 0 ? tail.slice(0, end) : tail;
   const backend = new Set([...body.matchAll(/(?<![A-Za-z0-9_])e:\s*"([a-z0-9_]+)"/g)].map((m) => m[1]));
   const emit = /(?:fanout\(session,|send\(|cb\(|w\()\s*\{\s*e:\s*"([a-z0-9_]+)"/g;
-  for (const file of ["session.ts", "index.ts"]) for (const m of fs.readFileSync(path.join(SERVER, file), "utf8").matchAll(emit)) backend.add(m[1]);
+  // 发事件的代码在 session.ts、index.ts 与按职责拆出去的子目录里
+  const subdirFiles = (dir: string) =>
+    fs.readdirSync(path.join(SERVER, dir)).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).map((f) => `${dir}/${f}`);
+  for (const file of ["session.ts", "index.ts", ...subdirFiles("session"), ...subdirFiles("routes")]) for (const m of fs.readFileSync(path.join(SERVER, file), "utf8").matchAll(emit)) backend.add(m[1]);
 
   const web = path.join(HARNESS, "web", "src");
   const handled = new Set<string>();

@@ -85,10 +85,14 @@ export const VI = {
   loop: '<path d="M17 3.75 19.75 6.5 17 9.25"/><path d="M4.25 11.5V10a3.5 3.5 0 0 1 3.5-3.5h12"/><path d="M7 20.25 4.25 17.5 7 14.75"/><path d="M19.75 12.5V14a3.5 3.5 0 0 1-3.5 3.5h-12"/>',
   subtitles: '<rect x="3.5" y="5.25" width="17" height="13.5" rx="2.8"/><path d="M7.25 12.25h3M12.75 12.25h4M7.25 15.25h5.5M15.25 15.25h1.5"/>',
   pip: '<rect x="3.5" y="5.25" width="17" height="13.5" rx="2.8"/><rect fill="currentColor" stroke-width="1" x="11.6" y="11.4" width="6.2" height="4.6" rx="1"/>',
-  skipBack10: '<path d="M12 5.5a7.4 7.4 0 1 1-6.06 3.16"/><path fill="currentColor" stroke-width="1.2" d="M12.3 2.9v5.2L8.7 5.5z"/><path stroke-width="1.5" d="M9.2 11.3l1.45-.95v5.3"/><rect stroke-width="1.5" x="12.25" y="10.35" width="3.3" height="5.3" rx="1.65"/>',
-  skipFwd10: '<path d="M12 5.5a7.4 7.4 0 1 0 6.06 3.16"/><path fill="currentColor" stroke-width="1.2" d="M11.7 2.9v5.2l3.6-2.6z"/><path stroke-width="1.5" d="M9.2 11.3l1.45-.95v5.3"/><rect stroke-width="1.5" x="12.25" y="10.35" width="3.3" height="5.3" rx="1.65"/>',
-  skipBack15: '<path d="M12 5.5a7.4 7.4 0 1 1-6.06 3.16"/><path fill="currentColor" stroke-width="1.2" d="M12.3 2.9v5.2L8.7 5.5z"/><path stroke-width="1.5" d="M8.9 11.3l1.45-.95v5.3"/><path stroke-width="1.5" d="M15.6 10.35h-2.75l-.3 2.2a1.9 1.9 0 0 1 1.1-.3 1.7 1.7 0 0 1 0 3.4c-.6 0-1.1-.25-1.4-.65"/>',
-  skipFwd15: '<path d="M12 5.5a7.4 7.4 0 1 0 6.06 3.16"/><path fill="currentColor" stroke-width="1.2" d="M11.7 2.9v5.2l3.6-2.6z"/><path stroke-width="1.5" d="M8.9 11.3l1.45-.95v5.3"/><path stroke-width="1.5" d="M15.6 10.35h-2.75l-.3 2.2a1.9 1.9 0 0 1 1.1-.3 1.7 1.7 0 0 1 0 3.4c-.6 0-1.1-.25-1.4-.65"/>',
+  // 快退 / 快进：一圈开口圆环 + 顺着走向的实心箭头，圆心 (12, 12.9)。圆环和箭头包在 .vi-spin 里——跳转时播放器让它绕圆心转一圈，
+  // 里面的数字不跟着转。skipBack / skipFwd 是不带数字的圆环本体（跳转胶囊用：秒数在旁边另报）；replay 就是 skipBack
+  skipBack: '<g class="vi-spin"><path d="M12 5a7.9 7.9 0 1 1-5.87 2.61"/><path fill="currentColor" stroke-width="1" d="M12.3 2.85v4.3L9 5z"/></g>',
+  skipFwd: '<g class="vi-spin"><path d="M12 5a7.9 7.9 0 1 0 5.87 2.61"/><path fill="currentColor" stroke-width="1" d="M11.7 2.85v4.3L15 5z"/></g>',
+  skipBack10: '<g class="vi-spin"><path d="M12 5a7.9 7.9 0 1 1-5.87 2.61"/><path fill="currentColor" stroke-width="1" d="M12.3 2.85v4.3L9 5z"/></g><path stroke-width="1.5" d="M8.45 11.1 9.9 9.8v6.2"/><rect stroke-width="1.5" x="12" y="9.8" width="3.7" height="6.2" rx="1.85" ry="2.5"/>',
+  skipFwd10: '<g class="vi-spin"><path d="M12 5a7.9 7.9 0 1 0 5.87 2.61"/><path fill="currentColor" stroke-width="1" d="M11.7 2.85v4.3L15 5z"/></g><path stroke-width="1.5" d="M8.45 11.1 9.9 9.8v6.2"/><rect stroke-width="1.5" x="12" y="9.8" width="3.7" height="6.2" rx="1.85" ry="2.5"/>',
+  skipBack15: '<g class="vi-spin"><path d="M12 5a7.9 7.9 0 1 1-5.87 2.61"/><path fill="currentColor" stroke-width="1" d="M12.3 2.85v4.3L9 5z"/></g><path stroke-width="1.5" d="M8.1 11.1 9.55 9.8v6.2"/><path stroke-width="1.5" d="M15.5 9.8h-2.75l-.3 2.7a1.95 1.95 0 1 1-.35 2.5"/>',
+  skipFwd15: '<g class="vi-spin"><path d="M12 5a7.9 7.9 0 1 0 5.87 2.61"/><path fill="currentColor" stroke-width="1" d="M11.7 2.85v4.3L15 5z"/></g><path stroke-width="1.5" d="M8.1 11.1 9.55 9.8v6.2"/><path stroke-width="1.5" d="M15.5 9.8h-2.75l-.3 2.7a1.95 1.95 0 1 1-.35 2.5"/>',
   brightness: '<circle cx="12" cy="12" r="3.6"/><path d="M12 3.5v1.8M12 18.7v1.8M3.5 12h1.8M18.7 12h1.8M5.99 5.99l1.27 1.27M16.74 16.74l1.27 1.27M5.99 18.01l1.27-1.27M16.74 7.26l1.27-1.27"/>',
   unlock: '<rect x="5" y="10.5" width="14" height="9.75" rx="2.4"/><path d="M8.25 10.5V8a3.75 3.75 0 0 1 7.3-1.2"/>',
   prevTrack: '<path stroke-width="2.2" d="M6.4 6.2v11.6"/><path fill="currentColor" stroke-width="1.2" d="M17.8 6.6v10.8L9.9 12z"/>',
@@ -96,7 +100,7 @@ export const VI = {
   fastForward: '<path d="M4.5 6.6v10.8a.6.6 0 0 0 .95.5l6.3-5.4a.6.6 0 0 0 0-1l-6.3-5.4a.6.6 0 0 0-.95.5Z"/><path d="M12.5 6.6v10.8a.6.6 0 0 0 .95.5l6.3-5.4a.6.6 0 0 0 0-1l-6.3-5.4a.6.6 0 0 0-.95.5Z"/>',
   play: '<path d="M8 5.6v12.8a1 1 0 0 0 1.52.85l10.2-6.4a1 1 0 0 0 0-1.7L9.52 4.75A1 1 0 0 0 8 5.6Z"/>',
   pause: '<rect x="6.5" y="5" width="3.8" height="14" rx="1.3"/><rect x="13.7" y="5" width="3.8" height="14" rx="1.3"/>',
-  replay: '<path d="M12 5.5a7.4 7.4 0 1 1-6.06 3.16"/><path fill="currentColor" stroke-width="1.2" d="M12.3 2.9v5.2L8.7 5.5z"/>',
+  replay: '<g class="vi-spin"><path d="M12 5a7.9 7.9 0 1 1-5.87 2.61"/><path fill="currentColor" stroke-width="1" d="M12.3 2.85v4.3L9 5z"/></g>',
 
   // —— 状态 / 类型 ——
   error: '<circle cx="12" cy="12" r="8.25"/><path d="M12 7.75v5"/><path d="M12 16.1h.01" stroke-width="2.3"/>',

@@ -1,63 +1,42 @@
 <script lang="ts">
-  // 模型服务：八家平铺，后面跟着用户自己加的自定义服务，最后一张是虚线的「＋」空卡。当前那家带一枚小勾。
+  // 模型服务：各家平铺，后面跟着模型中心里添加的服务，最后一张是虚线的「＋」空卡。当前那家带一枚小勾。
   // 点一家 = 切过去（会话绑定创建时的厂商：切家就是开新对话，旧的留在历史里，在跑的转入后台继续）；同一家就是收起。
   // 切换只换厂商与身份标识，界面不换装；成功后空态标志重演一遍入场（dimensio-pulse）。
   //
-  // 「＋」卡 = 自定义服务：面板里下钻一层表单（‹ 回到网格）。服务端有能力位 custom-providers-v2 时是「智能识别」编辑器
-  // （vendor/ProviderEditor.svelte：协议、检测连接、拉型号附能力猜测、★ 默认、档位、探测、测试——和 bridge 的 Claude 外接同一种样式）；
-  // 老服务端照旧是备注 + 接口地址 + API Key 的简表单（保存时服务端打 GET {地址}/models，列不出型号时多出一栏手填模型 ID）。
-  // 自定义卡右下角的铅笔进同一张表单（编辑 / 删除，删除两步确认）。内置几家的 API Key 仍在设置里填。
-  // 多用户服务端：管理员在编辑器里把服务「共享给成员」，卡上型号数后面标「已共享」；成员那边这张卡副标题是「管理员共享」、
-  // 没有铅笔（只能用，地址和 Key 都看不到）。成员也有「＋」卡，自己加的服务只能连公网地址。
-  import { onMount, tick } from "svelte";
-  import * as api from "../../lib/api.ts";
+  // 服务只在宿主（bridge）的模型中心里添加和改：「＋」卡开它的添加页，卡片上的铅笔开它对应的服务；
+  // dimensio 自己早年加的老服务，铅笔交给模型中心搬过去（宿主那边先确认）。这张面板只管切换、不出表单。
+  // 宿主没有模型中心可开（独立运行、多用户服务端的成员）时，「＋」卡和铅笔都不出现，已有的服务照常能切。
+  // 多用户服务端：管理员共享给成员的服务，成员那边副标题是「管理员共享」，只能用。
+  import { onMount } from "svelte";
   import {
     app,
-    canAddCustomVendor,
-    hostBuiltins,
-    customVendorV2,
-    customVendors,
+    vendorChoices,
     modelsOf,
     hasHostModelHub,
-    newChat,
     openHostModelHub,
-    reloadMeta,
     switchVendor,
-    toast,
     vendorId,
     vendorInfo,
     vendorSwitchNote,
     type VendorView,
   } from "../../lib/state.svelte.ts";
-  import { VENDOR_ORDER, VENDORS } from "../../lib/theme.ts";
-  import { collapse, press, rise } from "../../lib/motion.ts";
-  import { haptic } from "../../lib/touch.ts";
+  import { press, rise } from "../../lib/motion.ts";
   import Sheet from "../ui/Sheet.svelte";
   import Icon from "../ui/Icon.svelte";
   import IconButton from "../ui/IconButton.svelte";
-  import Button from "../ui/Button.svelte";
-  import TextField from "../ui/TextField.svelte";
   import Mark from "../brand/Mark.svelte";
   import VendorLogo from "../brand/VendorLogo.svelte";
-  import Section from "../sheets/Section.svelte";
-  import ProviderEditor, { newCtl } from "./vendor/ProviderEditor.svelte";
-  import { t, tc, tr } from "../../lib/i18n.ts";
+  import { t } from "../../lib/i18n.ts";
 
   let { onclose }: { onclose: () => void } = $props();
 
   const cur = $derived(vendorId());
   let pending = $state<string | null>(null); // 正在切过去的那一家（服务端写配置那一下）
 
-  // 自带适配的厂商：宿主的模型中心接管以后只摆它给了 Key 的那几家（服务端目录里有的）和本机；否则照旧八家全摆
-  const builtins = $derived(
-    VENDOR_ORDER.filter((id) => !hostBuiltins() || ((app.info?.catalog as any[] | undefined) ?? []).some((p) => p.id === id)).map((id) => ({
-      id,
-      name: VENDORS[id].name,
-      company: VENDORS[id].company,
-    })),
-  );
-  const customs = $derived(customVendors());
-  const canAdd = $derived(canAddCustomVendor());
+  // 自带适配的几家（宿主模型中心接管时只列它给了 Key 的）+ 模型中心 / 自定义服务：与型号菜单的服务页同一份
+  const all = $derived(vendorChoices());
+  const builtins = $derived(all.filter((v) => !v.custom));
+  const customs = $derived(all.filter((v) => v.custom));
 
   async function pick(id: string) {
     if (pending) return;
@@ -69,302 +48,54 @@
     }
   }
 
-  // ── 表单（新增 / 编辑） ──────────────────────────────────────────────────
-  let editing = $state<VendorView | null>(null);
-  let formOpen = $state(false);
-  let name = $state("");
-  let baseUrl = $state("");
-  let apiKey = $state("");
-  let model = $state("");
-  let needsModel = $state(false); // 接口没列出型号：多出一栏手填模型 ID
-  let error = $state("");
-  let saving = $state(false);
-  let confirmDelete = $state(false);
-  let deleting = $state(false);
-  let nameEl: HTMLInputElement | undefined = $state();
-  let urlEl: HTMLInputElement | undefined = $state();
-  let keyEl: HTMLInputElement | undefined = $state();
-
-  // ── 新编辑器（v2）──
-  const v2 = $derived(customVendorV2());
-  let ctl = $state(newCtl());
-  let editorRef: ReturnType<typeof ProviderEditor> | undefined = $state();
-  let record = $state<api.CustomProviderRecord | null>(null);
-  let recordLoading = $state(false);
-  let editorKey = $state(0);
-
-  async function openForm(v: VendorView | null) {
-    if (customVendorV2()) {
-      editing = v;
-      error = "";
-      ctl = newCtl();
-      record = null;
-      formOpen = true;
-      haptic("light");
-      if (v) {
-        recordLoading = true;
-        try {
-          record = await api.getCustomProvider(v.id);
-        } catch (e: any) {
-          error = e?.message ?? String(e);
-        } finally {
-          recordLoading = false;
-        }
-      }
-      editorKey++;
-      return;
-    }
-    editing = v;
-    const spec = v ? (app.info?.catalog as any[] | undefined)?.find((p) => p.id === v.id) : null;
-    name = v?.name ?? "";
-    baseUrl = spec?.baseUrl ?? "";
-    apiKey = "";
-    model = "";
-    needsModel = false;
-    error = "";
-    confirmDelete = false;
-    formOpen = true;
-    haptic("light");
-    void tick().then(() => {
-      if (!v) nameEl?.focus({ preventScroll: true });
-    });
-  }
-  // 嵌在 bridge 里且当前是管理员时，模型服务只在宿主的模型中心里配：「＋」卡开它的添加页，卡片上的铅笔开它对应的服务，
-  // 这张面板只管切换、不出表单。宿主没接住（独立运行、成员、老 bridge）才用这张面板自己的表单。
-  function addService() {
-    if (openHostModelHub("add")) onclose();
-    else void openForm(null);
-  }
-  // 铅笔：模型中心提供的卡 → 它在模型中心里的那个服务；dimensio 自己的老服务 → 交给模型中心（宿主那边先确认）
-  function editCard(v: VendorView) {
-    if (hubLink) {
-      const proto = String((app.info?.catalog as any[] | undefined)?.find((p) => p.id === v.id)?.custom?.protocol ?? "");
-      if (openHostModelHub(v.hub ? { service: v.hub } : { legacy: v.id, name: v.name, proto })) onclose();
-      return;
-    }
-    void openForm(v);
-  }
   let hubLink = $state(false);
   onMount(() => {
     hubLink = hasHostModelHub();
-    // 老入口：宿主要直接打开某个 dimensio 自己的服务。模型中心接管以后不再从这里改，请求作废
-    const req = app.vendorEditReq;
-    if (req) {
-      app.vendorEditReq = null;
-      const v = customVendors().find((x) => x.id === req);
-      if (v && !v.managed && !hubLink) void openForm(v);
-    }
+    // 宿主早年用来「直接打开某个 dimensio 自己的服务」的请求：服务改在模型中心里配之后作废，收到就清掉
+    app.vendorEditReq = null;
   });
+  function addService() {
+    if (openHostModelHub("add")) onclose();
+  }
+  // 铅笔：模型中心提供的卡 → 它在模型中心里的那个服务；dimensio 自己的老服务 → 交给模型中心（宿主那边先确认）
+  function editCard(v: VendorView) {
+    const proto = String((app.info?.catalog as any[] | undefined)?.find((p) => p.id === v.id)?.custom?.protocol ?? "");
+    if (openHostModelHub(v.hub ? { service: v.hub } : { legacy: v.id, name: v.name, proto })) onclose();
+  }
   function openHub() {
     if (openHostModelHub()) onclose();
   }
-  function back() {
-    if (saving || deleting || ctl.saving || ctl.deleting) return;
-    formOpen = false;
-  }
-  // 编辑器落盘了（随后的自动测试过没过都算）：刷新目录；新建的换成「编辑这条」——页脚出「删除」、按钮写「保存」，
-  // 测试失败留在表单里改的时候，再点保存走的是更新，不会再加一条重复的
-  async function onEditorPersisted(r: { record: api.CustomProviderRecord; isNew: boolean }) {
-    await reloadMeta();
-    if (r.isNew) {
-      record = r.record;
-      editing = vendorInfo(r.record.id);
-    }
-  }
-  async function onEditorSaved(r: { name: string; models: number; warning?: string; isNew: boolean }) {
-    haptic("medium");
-    toast(r.warning ? tr(r.warning) : r.isNew ? t("已添加「{name}」· {n} 个模型", { name: r.name, n: r.models }) : t("已保存「{name}」", { name: r.name }));
-    formOpen = false;
-  }
-  async function onEditorDeleted(name: string) {
-    const wasCur = editing?.id === cur;
-    await reloadMeta();
-    if (wasCur) newChat(); // 正在用的那家被删了：服务端已退回默认厂商，这边开一个新对话跟上
-    haptic("medium");
-    toast(t("已删除「{name}」", { name }));
-    formOpen = false;
-  }
-
-  const canSave = $derived(Boolean(baseUrl.trim()) && (Boolean(editing) || Boolean(apiKey.trim())) && (!needsModel || Boolean(model.trim())));
-
-  async function save() {
-    if (!canSave || saving) return;
-    saving = true;
-    error = "";
-    const form: api.CustomProviderForm = { name: name.trim(), baseUrl: baseUrl.trim(), apiKey: apiKey.trim() || undefined, model: model.trim() || undefined };
-    try {
-      const r = editing ? await api.updateCustomProvider(editing.id, form) : await api.addCustomProvider(form);
-      await reloadMeta();
-      haptic("medium");
-      const label = name.trim() || t("自定义服务");
-      // r.warning = 模型清单没探到、用的是手填的模型 ID（错误原文刚才已经显示过，不再复述）
-      toast(
-        r.warning
-          ? editing
-            ? t("已保存「{name}」· 用手填的模型 {model}", { name: label, model: model.trim() })
-            : t("已添加「{name}」· 用手填的模型 {model}", { name: label, model: model.trim() })
-          : editing
-            ? t("已保存「{name}」", { name: label })
-            : t("已添加「{name}」· {n} 个模型", { name: label, n: r.models }),
-      );
-      formOpen = false;
-    } catch (e: any) {
-      error = e?.message ?? String(e);
-      if (e?.body?.needsModel) needsModel = true;
-    } finally {
-      saving = false;
-    }
-  }
-
-  async function remove() {
-    if (!editing || deleting) return;
-    if (!confirmDelete) {
-      confirmDelete = true;
-      haptic("light");
-      return;
-    }
-    deleting = true;
-    const wasCur = editing.id === cur;
-    const label = editing.name;
-    try {
-      await api.deleteCustomProvider(editing.id);
-      await reloadMeta();
-      if (wasCur) newChat(); // 正在用的那家被删了：服务端已退回默认厂商，这边开一个新对话跟上
-      haptic("medium");
-      toast(t("已删除「{name}」", { name: label }));
-      formOpen = false;
-    } catch (e: any) {
-      error = e?.message ?? String(e);
-    } finally {
-      deleting = false;
-      confirmDelete = false;
-    }
-  }
-
-  // 回车：前两栏跳到下一栏，最后一栏提交（输入法组字中的回车不算）
-  const onKey = (next?: () => HTMLInputElement | undefined) => (e: KeyboardEvent) => {
-    if (e.key !== "Enter" || e.isComposing) return;
-    e.preventDefault();
-    const el = next?.();
-    if (el) el.focus();
-    else void save();
-  };
 </script>
 
-<Sheet
-  title={formOpen ? (editing ? t("编辑自定义服务") : t("添加自定义服务")) : t("模型服务")}
-  {onclose}
-  onback={formOpen ? back : undefined}
-  backLabel={t("回到模型服务")}
-  footer={formOpen ? (v2 ? editorFooter : formFooter) : undefined}
-  size={formOpen && v2 ? "lg" : "md"}
->
-  {#if formOpen && v2}
-    {#if recordLoading}
-      <p class="loading">{t("正在读取…")}</p>
-    {:else if editing && !record}
-      <p class="err" role="alert">{tr(error || t("这个自定义服务不存在（可能已被删除）"))}</p>
-    {:else}
-      {#key editorKey}
-        <ProviderEditor bind:this={editorRef} bind:ctl source={record} onpersisted={onEditorPersisted} onsaved={onEditorSaved} ondeleted={onEditorDeleted} />
-      {/key}
-    {/if}
-  {:else if formOpen}
-    <div class="form" in:rise={{ y: 8 }}>
-      <p class="lede">{t("兼容 OpenAI Chat Completions 的接口都能接：中转站、OpenRouter、自己部署的 vLLM / Ollama……")}</p>
-
-      <Section title={tc("dimensio", "备注")}>
-        <TextField bind:value={name} bind:el={nameEl} label={tc("dimensio", "备注")} placeholder={t("比如：公司网关")} maxlength={40} enterkeyhint="next" onkeydown={onKey(() => urlEl)} />
-      </Section>
-
-      <Section title={t("接口地址")} footnote={t("填到 /v1 这一级；贴完整的 …/chat/completions 也行，会自动收好。")}>
-        <TextField bind:value={baseUrl} bind:el={urlEl} type="url" mono label={t("接口地址")} placeholder="https://api.example.com/v1" enterkeyhint="next" onkeydown={onKey(() => keyEl)} />
-      </Section>
-
-      <Section title={t("API Key")} footnote={t("加密存在服务端，不回传浏览器。")}>
-        <TextField
-          bind:value={apiKey}
-          bind:el={keyEl}
-          type="password"
-          mono
-          label={t("API Key")}
-          placeholder={editing ? t("••••••••（留空保持不变）") : "sk-…"}
-          enterkeyhint="done"
-          onkeydown={onKey()}
-        />
-      </Section>
-
-      {#if needsModel}
-        <div transition:collapse>
-          <Section title={t("模型 ID")} footnote={t("这个接口没列出模型清单，手填一个模型 ID 也能用。")}>
-            <TextField bind:value={model} mono label={t("模型 ID")} placeholder={t("比如 gpt-4o-mini")} autofocus enterkeyhint="done" onkeydown={onKey()} />
-          </Section>
-        </div>
-      {/if}
-
-      {#if error}
-        <p class="err" role="alert" transition:collapse>{tr(error)}</p>
-      {/if}
-    </div>
-  {:else}
-    <div class="tiles">
-      {#each builtins as v, i (v.id)}
-        {@render tile(v.id, v.name, v.company, i, false)}
-      {/each}
-      {#each customs as v, j (v.id)}
-        {@render tile(v.id, v.name, v.company, builtins.length + j, true)}
-      {/each}
-      {#if canAdd}
-        <button
-          class="tile add"
-          disabled={Boolean(pending)}
-          use:press={{ scale: 0.97 }}
-          in:rise|global={{ y: 8, delay: 40 + (builtins.length + customs.length) * 35 }}
-          onclick={addService}
-        >
-          <span class="plus" aria-hidden="true"><Icon name="plus" size={20} stroke={1.8} /></span>
-          <span class="add-t">{hubLink ? t("添加服务") : t("添加自定义服务")}</span>
-          <span class="add-s">{hubLink ? t("模型中心") : v2 ? t("OpenAI / Anthropic / Gemini 接口") : t("OpenAI 兼容接口")}</span>
-        </button>
-      {/if}
-    </div>
-    <p class="note">
-      {vendorSwitchNote(app.chat)}
-    </p>
+<Sheet title={t("模型服务")} {onclose} size="md">
+  <div class="tiles">
+    {#each builtins as v, i (v.id)}
+      {@render tile(v.id, v.name, v.company, i, false)}
+    {/each}
+    {#each customs as v, j (v.id)}
+      {@render tile(v.id, v.name, v.company, builtins.length + j, true)}
+    {/each}
     {#if hubLink}
-      <p class="hub"><button type="button" class="hublink" onclick={openHub}>{t("在模型中心管理全部模型服务")}</button></p>
+      <button
+        class="tile add"
+        disabled={Boolean(pending)}
+        use:press={{ scale: 0.97 }}
+        in:rise|global={{ y: 8, delay: 40 + (builtins.length + customs.length) * 35 }}
+        onclick={addService}
+      >
+        <span class="plus" aria-hidden="true"><Icon name="plus" size={20} stroke={1.8} /></span>
+        <span class="add-t">{t("添加服务")}</span>
+        <span class="add-s">{t("模型中心")}</span>
+      </button>
     {/if}
+  </div>
+  <p class="note">
+    {vendorSwitchNote(app.chat)}
+  </p>
+  {#if hubLink}
+    <p class="hub"><button type="button" class="hublink" onclick={openHub}>{t("在模型中心管理全部模型服务")}</button></p>
   {/if}
 </Sheet>
-
-{#snippet editorFooter()}
-  {#if editing && record}
-    <span class="del">
-      <Button variant={ctl.confirmDelete ? "danger-solid" : "danger"} icon="trash" loading={ctl.deleting} onclick={() => void editorRef?.remove()}>
-        {ctl.confirmDelete ? tc("dimensio", "确认删除") : t("删除")}
-      </Button>
-    </span>
-  {/if}
-  {#if ctl.msg}<span class="fmsg" class:bad={ctl.err} title={ctl.msg}>{ctl.msg}</span>{/if}
-  <Button variant="ghost" onclick={back} disabled={ctl.saving || ctl.deleting}>{t("取消")}</Button>
-  <Button variant="primary" loading={ctl.saving} disabled={!ctl.canSave || ctl.deleting || recordLoading} onclick={() => void editorRef?.save()}>
-    {ctl.saving ? t("正在连接…") : editing ? t("保存") : t("连接并添加")}
-  </Button>
-{/snippet}
-
-{#snippet formFooter()}
-  {#if editing}
-    <span class="del">
-      <Button variant={confirmDelete ? "danger-solid" : "danger"} icon="trash" loading={deleting} onclick={remove}>
-        {confirmDelete ? tc("dimensio", "确认删除") : t("删除")}
-      </Button>
-    </span>
-  {/if}
-  <Button variant="ghost" onclick={back} disabled={saving || deleting}>{t("取消")}</Button>
-  <Button variant="primary" loading={saving} disabled={!canSave || deleting} onclick={save}>
-    {saving ? t("正在连接…") : editing ? t("保存") : t("连接并添加")}
-  </Button>
-{/snippet}
 
 {#snippet tile(id: string, title: string, sub: string, i: number, custom: boolean)}
   {@const n = modelsOf(id).length}
@@ -392,10 +123,10 @@
         <span class="hx-sr">{t("当前")}</span>
       {/if}
     </button>
-    <!-- 铅笔：自己加的服务；有宿主的模型中心时，它提供的卡也有（跳回模型中心改）。别的插件给的、管理员共享的只能用 -->
-    {#if view && (hubLink ? Boolean(view.hub) || (view.custom && !view.managed) : view.custom && !view.managed)}
+    <!-- 铅笔：模型中心提供的卡、dimensio 早年自己加的服务都跳模型中心去改；别的插件给的、管理员共享的只能用 -->
+    {#if hubLink && view && (Boolean(view.hub) || (view.custom && !view.managed))}
       <span class="edit">
-        <IconButton icon="edit" label={hubLink ? t("在模型中心里改「{name}」", { name: title }) : t("编辑「{name}」", { name: title })} size={30} iconSize={15} onclick={() => editCard(view)} />
+        <IconButton icon="edit" label={t("在模型中心里改「{name}」", { name: title })} size={30} iconSize={15} onclick={() => editCard(view)} />
       </span>
     {/if}
   </div>
@@ -575,57 +306,10 @@
     text-underline-offset: 3px;
     cursor: pointer;
   }
-  .hublink:hover {
-    background: var(--accent-soft);
-    color: var(--text);
-  }
-
-  /* ── 表单 ── */
-  .form {
-    padding-top: 2px;
-  }
-  .form .lede {
-    margin: 0 4px 18px;
-    font-size: var(--fs-md);
-    line-height: 1.6;
-    color: var(--text2);
-  }
-  /* Section 的脚注同样被 .hxroot .md p 清了外边距，这里补回它自己的 8px / 4px */
-  .form :global(p.foot) {
-    margin: 8px 4px 0;
-  }
-  .form .err {
-    margin: -8px 4px 4px;
-    font-size: var(--fs-sm);
-    line-height: 1.55;
-    color: var(--err);
-    overflow-wrap: anywhere;
-  }
-  .del {
-    margin-right: auto;
-  }
-  /* 新编辑器的页脚那句话（有改动没保存 / 保存后测试失败……） */
-  .fmsg {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: var(--fs-sm);
-    color: var(--text3);
-  }
-  .fmsg.bad {
-    color: var(--err);
-  }
-  .loading,
-  .err {
-    margin: 8px 4px;
-    font-size: var(--fs-sm);
-  }
-  .loading {
-    color: var(--text3);
-  }
-  p.err {
-    color: var(--err);
+  @media (hover: hover) {
+    .hublink:hover {
+      background: var(--accent-soft);
+      color: var(--text);
+    }
   }
 </style>

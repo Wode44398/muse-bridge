@@ -355,6 +355,11 @@ export async function listSessionsPage(
   return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
 }
 
+// 全部会话（不分页、不过滤，newest first）：快照对话清理按桶统计最后活动用（quick-prune.ts）。
+export function listAllSessions(): Promise<SessionMeta[]> {
+  return listAllSessionMetas();
+}
+
 // Back-compat: the first page as a bare array (existing callers/tests).
 export async function listSessions(): Promise<SessionMeta[]> {
   return (await listSessionsPage()).items;

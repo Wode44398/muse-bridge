@@ -63,7 +63,7 @@ defineOp({
     'scope=host（主机级：对整台服务器生效，只有服务器主机看得到改得了）、confirm（打开前设置页会先确认，改它要带 confirm=true）、noUi（设置页上没有入口，只能经接口改）。',
     '只列这个身份看得到、这台服务端做得到的项；「通知」三项和「思考动画」「用工作树」只存在各台设备上，不在这里。',
     '用户问「某个开关开着没 / 默认是什么」就看它；常用项：autoResumeOnRestart（服务意外重启时自动继续被中断的对话）、autoContinueOnLimit（限额重置后自动继续）、',
-    'permissionMode（新会话默认权限模式）、questionTimeout（Claude 提问无人回答时）、replyLanguage、autoArchiveDays。',
+    'permissionMode（新会话默认权限模式）、questionTimeout（Claude 提问无人回答时）、replyLanguage、autoArchiveDays、quickRetention（临时对话按时间清理 / 只留最近 N 条 / 从不清理）。',
   ].join(''),
   need: ['agent:claude'],
   handler: async (ctx, args, env) => {

@@ -1,6 +1,4 @@
 <script>
-  import { uiConfirm } from '../lib/dialogs.js';
-  import { canDragOut, startDragOut } from '../lib/dragOut.js';
   // 工作空间（文件管理）。视觉＝iOS 27（token/配方实测自官方 UI Kit，见设计稿
   // 《工作空间页面demo.html》）；数据＝真实接 /api/files*（admin=vault，user=沙箱）。
   // admin 在根目录还有一行「位置」：主目录与各盘符，整台电脑都够得着（见 cloudLocs）。
@@ -11,58 +9,41 @@
   // 本地(SAF 多根)：浏览/预览/发送给 AI/分享/打开方式，长按菜单写操作(重命名/移动/复制/
   //       删除/多选)走新 apk 原生 localRename/localMove/localCopy/localDelete——逐个
   //       feature-detect，旧 apk 对应菜单项隐藏；「位置」主页(atHome)不出长按菜单。
-  import { onMount, setContext, untrack, tick } from 'svelte';
+  import { uiConfirm } from '../lib/dialogs.js';
+  import { joinAbs } from '../lib/dragOut.js';
+  import { onMount, setContext, untrack } from 'svelte';
   import GlassButton from './ios27/GlassButton.svelte';
   import Sym from './ios27/Sym.svelte';
   import MorphMenu from './ios27/MorphMenu.svelte';
   import { LiquidTabs } from '../lib/liquid/tabs.js';
   import { liquidPress } from '../lib/liquid/press.js';
-  import Sheet from './ios27/Sheet.svelte';
-  import Alert from './ios27/Alert.svelte';
-  import TextField from './ios27/TextField.svelte';
-  import Toggle from './ios27/Toggle.svelte';
-  import Segmented from './ios27/Segmented.svelte';
   // 平滑圆角遮罩、文件夹图标：原版资源
   import sq26 from '../visuals/ios27/squircle26.svg';
   import wsIcon from '../visuals/assets/icons/workspace.png';
-  import { t, tc, tr, locale, isEn } from '../lib/i18n.js';
-  import { ui, compose, studioInbox, me, caps, session, agentOn, screenOn, rootScreen, pluginOn } from '../lib/state.svelte.js';
-  import { api, authHeaders, getToken } from '../lib/api.js';
-  import { apiUrl, isOffline, mediaFallbackUrl } from '../lib/server.js';
-  import { downloads, hasNativeDownload, startDownload, cancelDownload, openDownload, retryDownload, clearFinishedDownloads } from '../lib/downloads.svelte.js';
-  import { uploads, startUpload, startTreeUpload, hasNativeUpload, pickNativeUpload, cancelUpload as cancelUp, retryUpload, clearFinishedUploads, onUploaded } from '../lib/uploads.svelte.js';
+  import { isEn, locale, t, tc, tr } from '../lib/i18n.js';
+  import { me, rootScreen, ui } from '../lib/state.svelte.js';
+  import { api } from '../lib/api.js';
+  import { downloads } from '../lib/downloads.svelte.js';
+  import { uploads } from '../lib/uploads.svelte.js';
   import { registerCloser } from '../lib/nav.js';
-  import { openPreview as openPreviewRaw, cloudFileUrl, preview as pv, closePreview, previewRemove, previewReplace } from '../lib/preview.svelte.js';
-  import { kindOf as fkKind, iconKindOf, canPreview, extOf } from '../lib/fileKinds.js';
-  import { fmtDur, loadViewPrefs, saveViewPrefs, viewFor, withView, loadSortPref, saveSortPref, isAlbumDir, watchMeta, buildSequence, rectOf, typeIconSvg, uiIconSvg, extBadge, nameHtml, GRID_THUMB_EXT } from '../lib/fileGrid.js';
-  import { askRename } from '../lib/renamePrompt.js';
-  import { openSession, newConversation } from '../lib/chat.svelte.js';
-  import { getCachedSessions } from '../lib/cache.js';
-  import { titleFor } from '../lib/library.svelte.js';
-  import { relTime } from '../lib/format.js';
-  import { entriesFromDrop, walkEntries, groupByRoot, skipNote } from '../lib/dirDrop.js';
-  import { hasLocalFs, hasLocalRoot, localRootName, pickLocalRoot, localList, localReadText, localReadB64, localImgDataUrl, localFileUrl, canAllFiles, requestAllFiles, hasOpenWith, openWith, hasShare, shareFile, hasMultiRoot, localRoots, removeLocalRoot, hasLocalDelete, hasLocalRename, hasLocalMove, hasLocalCopy, localDelete, localRename, localMove, localCopy, hasLocalThumb, localThumbUrl } from '../lib/localfs.js';
-  import {
-    isNativeDesktop, hasNativeWorkspaceOps, nativeWorkspaceList, nativeWorkspaceRelease, onNativeWorkspaceChanged,
-    nativeWorkspaceLocations, nativeWorkspaceAddLocation, nativeWorkspaceRemoveLocation,
-    nativeWorkspaceMkdir, nativeWorkspaceRename, nativeWorkspaceTrash,
-    nativeWorkspaceMove, nativeWorkspaceCopy, nativeWorkspaceOpen, nativeWorkspaceOpenWith,
-    nativeWorkspaceReveal, nativeWorkspaceInspect, nativeWorkspaceThumbnail,
-    nativeWorkspaceSearch, nativeWorkspaceImportFiles, nativeWorkspaceImportDirectory,
-    nativeWorkspaceSaveAs, nativeWorkspaceCreateFile, hasNativeCompressWizard, nativeCompressWizard,
-    hasPcLocalFs, nativeLocLocalOnly,
-  } from '../lib/nativeDesktop.js';
-  import { pcLocalMaterial, pcLocalText } from '../lib/pcLocal.js';
-  import { reportUi, onAgentFs, onAgentGoto } from '../lib/uiReport.js';
-  import { drag, dropZone, beginDrag, addToDrag, isDragging, dragScrollGuard, HOLD_MS, MOVE_TOL } from '../lib/dragdrop.svelte.js';
-  import { folderDropZone, wsFilePayload } from '../lib/fileDrag.js';
-  import {
-    AI_NAMES, SHARE_TTLS, fileAiCapabilities, filterAiSessions, filterFilesByName,
-    formatShareExpiry, loadAiSessions, normalizeFileQuery, sendFileToAi,
-    shareClipboardText, shareRequest, shareResult,
-    untitledMdName, withMdExt, COMPRESS_FORMATS, COMPRESS_LEVELS, loadCompressFormats, compressDefaultName, runCompress,
-    makeFileComparator, nextSort,
-  } from '../lib/files-business.js';
+  import { openPreview as openPreviewRaw } from '../lib/preview.svelte.js';
+  import { extOf, iconKindOf } from '../lib/fileKinds.js';
+  import { isAlbumDir, loadSortPref, loadViewPrefs, saveSortPref, saveViewPrefs, typeIconSvg, viewFor, watchMeta, withView } from '../lib/fileGrid.js';
+  import { hasLocalCopy, hasLocalDelete, hasLocalFs, hasLocalMove, hasLocalRename, hasLocalRoot, hasMultiRoot, hasOpenWith, hasShare, localList, localRootName, localRoots, pickLocalRoot, removeLocalRoot, requestAllFiles } from '../lib/localfs.js';
+  import { hasNativeWorkspaceOps, hasPcLocalFs, isNativeDesktop, nativeLocLocalOnly, nativeWorkspaceAddLocation, nativeWorkspaceInspect, nativeWorkspaceList, nativeWorkspaceLocations, nativeWorkspaceRelease, nativeWorkspaceRemoveLocation, nativeWorkspaceReveal, nativeWorkspaceSearch, nativeWorkspaceThumbnail, onNativeWorkspaceChanged } from '../lib/nativeDesktop.js';
+  import { onAgentFs, onAgentGoto, reportUi } from '../lib/uiReport.js';
+  import { drag, dragScrollGuard, dropZone } from '../lib/dragdrop.svelte.js';
+  import { filterFilesByName, makeFileComparator, nextSort, normalizeFileQuery } from '../lib/files-business.js';
+  import { fmtSize, kindOf } from '../lib/files/common.js';
+  import { AiSend } from '../lib/files/aiSend.svelte.js';
+  import { G, fmtTime, locGlyph, locLabel, resolveStart, winAbs } from './files/panel/panelLook.js';
+  import { createPanelDrag } from './files/panel/panelDrag.svelte.js';
+  import { createPanelOps } from './files/panel/panelOps.svelte.js';
+  import { createPanelView } from './files/panel/panelView.svelte.js';
+  import { createPanelMenus } from './files/panel/panelMenus.svelte.js';
+  import PanelBody from './files/panel/PanelBody.svelte';
+  import PanelSheets from './files/panel/PanelSheets.svelte';
+  import PanelTransfers from './files/panel/PanelTransfers.svelte';
 
   const BASE = import.meta.env.BASE_URL;
 
@@ -88,6 +69,124 @@
     // 「上一级」，到了最上层就不出；不再兼任「收起工作台」，与旁边几张卡同一套上手方式。
     hostChrome = false,
   } = $props();
+  // P：本页状态与动作的视图（getter / setter 直通上面的 $state），交给拆出去的逻辑模块（files/panel/*.svelte.js）
+  // 与子组件（files/panel/*.svelte）；模块各自的状态与动作建好后也挂到 P 上（expose），彼此都经 P 互相够得着。
+  const P = {
+    get BASE() { return BASE; },
+    get addDesktopLocation() { return addDesktopLocation; },
+    get addLocAnchor() { return addLocAnchor; }, set addLocAnchor(v) { addLocAnchor = v; },
+    get addOpen() { return addOpen; }, set addOpen(v) { addOpen = v; },
+    get addSheet() { return addSheet; }, set addSheet(v) { addSheet = v; },
+    get ai() { return ai; },
+    get atHome() { return atHome; },
+    get atPcLoc() { return atPcLoc; },
+    get canOpenWith() { return canOpenWith; },
+    get canShare() { return canShare; },
+    get cloudLoc() { return cloudLoc; },
+    get cloudLocId() { return cloudLocId; }, set cloudLocId(v) { cloudLocId = v; },
+    get cloudLocs() { return cloudLocs; }, set cloudLocs(v) { cloudLocs = v; },
+    get cloudRoot() { return cloudRoot; },
+    get convAbs() { return convAbs; },
+    get convName() { return convName; },
+    get crumbHidden() { return crumbHidden; },
+    get crumbMenu() { return crumbMenu; }, set crumbMenu(v) { crumbMenu = v; },
+    get desktopExtra() { return desktopExtra; },
+    get desktopLocationId() { return desktopLocationId; }, set desktopLocationId(v) { desktopLocationId = v; },
+    get desktopLocations() { return desktopLocations; }, set desktopLocations(v) { desktopLocations = v; },
+    get desktopNative() { return desktopNative; },
+    get doPickAll() { return doPickAll; },
+    get doPickLocal() { return doPickLocal; },
+    get doRemove() { return doRemove; },
+    get doReselect() { return doReselect; },
+    get enterDir() { return enterDir; },
+    get enterSelect() { return enterSelect; },
+    get exitSelect() { return exitSelect; },
+    get fileInput() { return fileInput; }, set fileInput(v) { fileInput = v; },
+    get goConv() { return goConv; },
+    get goRoot() { return goRoot; },
+    get goSeg() { return goSeg; },
+    get guest() { return guest; },
+    get hidSwitch() { return hidSwitch; },
+    get hidTotal() { return hidTotal; },
+    get infoItem() { return infoItem; }, set infoItem(v) { infoItem = v; },
+    get infoLocation() { return infoLocation; },
+    get isEmpty() { return isEmpty; },
+    get isLocal() { return isLocal; },
+    get itemRel() { return itemRel; },
+    get items() { return items; }, set items(v) { items = v; },
+    get listMeta() { return listMeta; }, set listMeta(v) { listMeta = v; },
+    get load() { return load; },
+    get loadErr() { return loadErr; }, set loadErr(v) { loadErr = v; },
+    get locMenu() { return locMenu; }, set locMenu(v) { locMenu = v; },
+    get locPill() { return locPill; },
+    get localAvail() { return localAvail; },
+    get localOps() { return localOps; },
+    get localPicked() { return localPicked; }, set localPicked(v) { localPicked = v; },
+    get localPicking() { return localPicking; }, set localPicking(v) { localPicking = v; },
+    get mdOpen() { return mdOpen; }, set mdOpen(v) { mdOpen = v; },
+    get menu() { return menu; }, set menu(v) { menu = v; },
+    get meta() { return meta; }, set meta(v) { meta = v; },
+    get mkOpen() { return mkOpen; }, set mkOpen(v) { mkOpen = v; },
+    get multiRoot() { return multiRoot; },
+    get onPickLocation() { return onPickLocation; },
+    get onPickWs() { return onPickWs; },
+    get openDots() { return openDots; },
+    get openMenu() { return openMenu; },
+    get openPreview() { return openPreview; },
+    get openSearch() { return openSearch; },
+    get path() { return path; }, set path(v) { path = v; },
+    get pcHome() { return pcHome; }, set pcHome(v) { pcHome = v; },
+    get pcLocAbs() { return pcLocAbs; }, set pcLocAbs(v) { pcLocAbs = v; },
+    get pcLocMenu() { return pcLocMenu; }, set pcLocMenu(v) { pcLocMenu = v; },
+    get pcLocal() { return pcLocal; },
+    get pickerLocationId() { return pickerLocationId; },
+    get pickerLocations() { return pickerLocations; },
+    get pkAbs() { return pkAbs; },
+    get pkDockEl() { return pkDockEl; }, set pkDockEl(v) { pkDockEl = v; },
+    get pkDrag() { return pkDrag; }, set pkDrag(v) { pkDrag = v; },
+    get preview() { return preview; }, set preview(v) { preview = v; },
+    get q() { return q; },
+    get query() { return query; }, set query(v) { query = v; },
+    get readonly() { return readonly; },
+    get recents() { return recents; },
+    get removeDesktopLocation() { return removeDesktopLocation; },
+    get removePcLoc() { return removePcLoc; },
+    get renameTarget() { return renameTarget; }, set renameTarget(v) { renameTarget = v; },
+    get revealPcLoc() { return revealPcLoc; },
+    get rootEl() { return rootEl; }, set rootEl(v) { rootEl = v; },
+    get rootLabel() { return rootLabel; },
+    get rootMap() { return rootMap; },
+    get rootMenu() { return rootMenu; }, set rootMenu(v) { rootMenu = v; },
+    get roots() { return roots; }, set roots(v) { roots = v; },
+    get scoped() { return scoped; },
+    get scroller() { return scroller; }, set scroller(v) { scroller = v; },
+    get segLabel() { return segLabel; },
+    get segs() { return segs; },
+    get selectCloudLoc() { return selectCloudLoc; },
+    get selectDesktopLocation() { return selectDesktopLocation; },
+    get selected() { return selected; }, set selected(v) { selected = v; },
+    get selecting() { return selecting; }, set selecting(v) { selecting = v; },
+    get setSort() { return setSort; },
+    get setView() { return setView; },
+    get shareDlg() { return shareDlg; }, set shareDlg(v) { shareDlg = v; },
+    get showCloudLocs() { return showCloudLocs; },
+    get showFiles() { return showFiles; },
+    get showFolders() { return showFolders; },
+    get showHidden() { return showHidden; }, set showHidden(v) { showHidden = v; },
+    get sortPref() { return sortPref; }, set sortPref(v) { sortPref = v; },
+    get tasks() { return tasks; }, set tasks(v) { tasks = v; },
+    get title() { return title; },
+    get toast() { return toast; },
+    get toggleHidden() { return toggleHidden; },
+    get toggleSel() { return toggleSel; },
+    get viaViewer() { return viaViewer; },
+    get viewMenu() { return viewMenu; }, set viewMenu(v) { viewMenu = v; },
+    get viewMode() { return viewMode; },
+    get wsPick() { return wsPick; },
+    get xfers() { return xfers; },
+    get zipDlg() { return zipDlg; }, set zipDlg(v) { zipDlg = v; },
+  };
+  const expose = (o) => Object.defineProperties(P, Object.getOwnPropertyDescriptors(o));
   // 内嵌态的文件预览/编辑也留在侧栏（host:'dock' → 侧栏内嵌 MediaViewer 实例接管，
   // 不再全屏）；独立分页维持全屏。影子包装：本文件所有 openPreview 调用点零改动。
   const openPreview = (items, idx, opts = {}) => openPreviewRaw(items, idx, { host: previewHost || (onExit ? 'dock' : 'app'), ...opts });
@@ -109,32 +208,6 @@
   const TBG = untrack(() => hostChrome) ? 4 : 12;
   const barBottom = () => satPx() + (embeddedUi ? TBG : 0) + 44;      // 内容滚到顶栏底下 → 滚动边缘效果显形（kit Scroll Edge Effect - Soft）
   // 没有对应 SF 字形的几处（文件夹、复制、云、压缩包…）沿用线稿，笔画粗细对齐 SF Regular
-  const G = {
-    folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z"/></svg>',
-    folderAdd: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z"/><path d="M12 11v5M9.5 13.5h5"/></svg>',
-    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/></svg>',
-    zip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M7 7V5.5A1.5 1.5 0 0 1 8.5 4h7A1.5 1.5 0 0 1 17 5.5V7"/><path d="M12 11v5M12 16l-2.2-2.2M12 16l2.2-2.2"/></svg>',
-    reveal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7h7l2 2h8v10h-17z"/><path d="M12 12v4M10 14h4"/></svg>',
-    select: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5 11 15.5 16.5 9.5"/></svg>',
-    cloud: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.8 19a4.6 4.6 0 0 1-.6-9.16 5.8 5.8 0 0 1 11.2-1.32A4.9 4.9 0 0 1 16.6 19H6.8Z"/></svg>',
-    pcAdd: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 6h16v13H4z"/><path d="M8 3v3M16 3v3M12 10v5M9.5 12.5h5"/></svg>',
-    remove: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>',
-  };
-  // 「发送给 AI」各目标的小图标（白字形，垫在 kit 彩色圆角方块上，同设置页 IconTile）
-  // Media Studio 用自己的 App 瓦片：暖墨方块 + 象牙标（同 assets/icons/studio.svg，scripts/brand/studio-mark.cjs）
-  const STUDIO_TILE = 'linear-gradient(#282521, #0f0e0c)';
-  const AI_IC = {
-    claude: '<svg viewBox="0 0 24 24" fill="#fff"><path d="M12 2.5l2 6.1 6.1 1.9-6.1 2L12 18.5l-2-6 -6.1-2 6.1-1.9z"/></svg>',
-    video: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.2l4.6 2.8L10 14.8z" fill="#fff" stroke="none"/></svg>',
-    image: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.5" cy="10" r="1.5" fill="#fff" stroke="none"/><path d="M4 16.5l5-4 4 3 3-2 4 3"/></svg>',
-    audio: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round"><path d="M5 10v4M9 7.5v9M13 9v6M17 6v12M21 10v4"/></svg>',
-    music: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12"/><circle cx="6" cy="18" r="2.6" fill="#fff" stroke="none"/><circle cx="17" cy="16" r="2.6" fill="#fff" stroke="none"/></svg>',
-    first: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7.5 5.5v13" stroke-width="2.6"/></svg>',
-    last: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M16.5 5.5v13" stroke-width="2.6"/></svg>',
-    ref: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8.5v7M8.5 12h7"/></svg>',
-    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M12 5.5v13M5.5 12h13"/></svg>',
-  };
-
   // —— 电脑位置（admin 的整机访问）——
   // 桌面版左侧有「位置」（主进程授权的任意目录），手机版以前锁在身份工作空间根（admin=vault），
   // 库外的文件整个够不着。/api/project/locations 给出 工作空间 + 主目录 + 各盘符（与新建项目
@@ -159,35 +232,6 @@
   let fenced = $state(!!startRoot);  // true＝以 startRoot 为根的老形态（起点尚未/无法落进某个位置）
   const cloudRoot = $derived(fenced ? startRoot : (cloudLoc && cloudLoc.id !== 'ws' ? cloudLoc.path : ''));
   const atPcLoc = $derived(!fenced && !!cloudRoot && !desktopNative);   // 此刻在「电脑位置」里，而不是身份工作空间（原生通道/这台电脑不算：那是另一套位置）
-  // target 在 root 之内 → root 相对路径（'/' 分隔，''＝就是根）；不在 → null。Windows 路径不分大小写
-  function relUnderAbs(root, target) {
-    const win = /^([a-z]:|\\\\)/i.test(String(root || ''));
-    const norm = (p) => { const s = String(p || ''); return (win ? s.replace(/\//g, '\\') : s).replace(/[\\/]+$/, ''); };
-    const cmp = (s) => (win ? s.toLowerCase() : s);
-    const r = norm(root), tg = norm(target);
-    if (cmp(tg) === cmp(r)) return '';
-    if (!cmp(tg).startsWith(cmp(r) + (win ? '\\' : '/'))) return null;
-    return tg.slice(r.length + 1).split(/[\\/]+/).filter(Boolean).join('/');
-  }
-  // 绝对路径落进哪个位置：取最深的那个（D:\Notes\x 落「工作空间」，不落 E:\）
-  function resolveStart(list, abs) {
-    let best = null;
-    for (const loc of list || []) {
-      const rel = relUnderAbs(loc.path, abs);
-      if (rel != null && (!best || String(loc.path).length > String(best.loc.path).length)) best = { loc, rel };
-    }
-    return best;
-  }
-  const locLabel = (l) => (/^drive-/.test(l?.id || '') ? t('{d} 盘', { d: String(l.name || '').replace(/:$/, '') }) : tr(l?.name || ''));
-  const LOC_GLYPH = {
-    ws: '<path d="M4 11.2 12 4l8 7.2"/><path d="M6 10v9h12v-9"/>',
-    home: '<circle cx="12" cy="8.4" r="3.4"/><path d="M5.2 19.5c.9-3.4 3.5-5.2 6.8-5.2s5.9 1.8 6.8 5.2"/>',
-    drive: '<rect x="3.5" y="6.5" width="17" height="11" rx="2.6"/><path d="M7.2 13.6h.01M10.6 13.6h6.2"/>',
-    dir: '<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z"/>',
-  };
-  const locGlyph = (l) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${LOC_GLYPH[l?.id === 'ws' ? 'ws' : l?.id === 'home' ? 'home' : /^drive-/.test(l?.id || '') ? 'drive' : 'dir']}</svg>`;
-  // Windows 形态的完整路径（简介里给人看的），盘根 'C:\' 拼子路径不能先剥尾分隔符
-  const winAbs = (root, rel) => (rel ? (/[\\/]$/.test(root) ? root : root + '\\') + rel : root).replace(/\//g, '\\');
   const scoped = (url) => cloudRoot ? url + (url.includes('?') ? '&' : '?') + 'ws=' + encodeURIComponent(cloudRoot) : url;
 
   let path = $state('');           // 当前相对路径（'' = 根）
@@ -219,14 +263,6 @@
   // 同一个坐标系：本页内嵌时外层带 transform，fixed 的包含块不是视口）。
   let pkDrag = $state(null);
   let pkDockEl = $state();         // 底栏元素（松手命中判定按它的 rect）
-  let pkTimer = null, pkFrom = null, pkPid = -1;
-  // 盘根 'E:\' 直接去掉尾分隔符会变成 'E:'——那在 Windows 上是「E 盘的当前目录」而不是根，
-  // path.resolve('E:','x') 能拼出完全不相干的路径。所以只在没有尾分隔符时才补一个。
-  const joinAbs = (base, rel) => {
-    const b = String(base || '');
-    if (!rel) return b;
-    return /[\\/]$/.test(b) ? b + rel : b + '/' + rel;
-  };
   const pkAbs = (rel) => joinAbs(workspaceRoot, rel);
 
   let ws = $state('cloud');        // cloud=PC 文件系统 / local=手机本地（SAF）；桌面客户端连远端服务端时 local=这台电脑
@@ -242,9 +278,9 @@
   const canShare = hasShare();       // 原生「分享」可用（同上）
   // 本地写操作能力（新 apk 原生接口）：旧 apk 缺哪个就隐藏哪个菜单项/禁用哪个多选钮。
   const localOps = { del: hasLocalDelete(), rename: hasLocalRename(), move: hasLocalMove(), copy: hasLocalCopy() };
-  let aiPick = $state(null);         // 「发送给 AI」选目标的 item
-  let aiView = $state('root');       // 菜单层级：root（Claude / Media Studio）/ studio（创作页）/ video（这张图用作）/ chat（选择对话）
-  let aiChat = $state(null);         // 「选择对话」层：{ target, from, sessions, loading, q }
+  // 「发送给 AI」选目标的状态与流程（lib/files/aiSend.svelte.js，与电脑版共用）；素材怎么备见 aiMaterial / aiTextContent。
+  // 文案出自 files-business.js（别的模块）：toast 显示点兜一层 tr()
+  const ai = new AiSend({ kindOf, material: (it, direct) => P.aiMaterial(it, direct), readText: (it) => P.aiTextContent(it), toast: (m) => toast(tr(m)) });
   let localPicked = $state(false); // 本地工作空间已有 ≥1 个位置
   let localPicking = $state(false);
   const isLocal = $derived(ws === 'local' && !pcLocal);   // 手机本地 SAF
@@ -309,13 +345,7 @@
     const hit = resolveStart(cloudLocs, convAbs);
     if (hit) selectCloudLoc(hit.loc.id, hit.rel);
   }
-  const locItems = $derived([
-    ...cloudLocs.map((l) => ({
-      label: l.id === 'ws' ? t('工作空间') : locLabel(l), icon: locGlyph(l), checked: l.id === cloudLocId,
-      onclick: () => { locMenu = null; selectCloudLoc(l.id); },
-    })),
-    ...(convAbs ? [{ sep: true }, { label: t('对话文件夹'), detail: convName, icon: G.folder, onclick: () => { locMenu = null; goConv(); } }] : []),
-  ]);
+  expose(createPanelMenus(P));
   // 菜单锚在触发它的那枚按钮下方：按 .ws-root 局部坐标算（内嵌时外层有 transform，fixed 的包含块是容器）
   function anchorBelow(e) {
     const r = e.currentTarget.getBoundingClientRect(), o = rootEl?.getBoundingClientRect() || { left: 0, top: 0 };
@@ -334,9 +364,6 @@
   const CRUMB_TAIL = 2;
   const crumbHidden = $derived(segs.length > CRUMB_TAIL ? segs.length - CRUMB_TAIL : 0);
   let crumbMenu = $state(null);    // 「…」展开的祖先菜单 { x, y }
-  const crumbItems = $derived(Array.from({ length: crumbHidden }, (_, k) => crumbHidden - 1 - k).map((i) => ({
-    label: segLabel(segs[i], i), icon: G.folder, onclick: () => { crumbMenu = null; goSeg(i); },
-  })).concat([{ sep: true }, { label: rootLabel, icon: locPill ? locGlyph(cloudLoc) : G.folder, onclick: () => { crumbMenu = null; goRoot(); } }]));
   // —— 隐藏项（. 开头）——主目录、盘根、仓库根里大半是 .android/.cache/.git 这类，默认收起，
   // 分组标题右侧一个开关放出来；搜索时不收（找的就是它）。整个目录全是隐藏项时照常列出，不摆一屏空白。
   const HID_KEY = 'bridge.files.showHidden';
@@ -515,12 +542,12 @@
 
   // 系统返回键 / 侧滑：有搜索/多选/面包屑就逐级退，到根再回主页
   function back() {
-    if (aiPick) { if (aiView === 'chat') { chatBack(); return; } if (aiView === 'video') { aiView = 'studio'; return; } if (aiView === 'studio') { aiView = 'root'; return; } aiPick = null; return; }
+    if (ai.item) { if (ai.view === 'chat') { ai.chatBack(); return; } if (ai.view === 'video') { ai.view = 'studio'; return; } if (ai.view === 'studio') { ai.view = 'root'; return; } ai.item = null; return; }
     if (rootMenu) { rootMenu = null; return; }
     if (pcLocMenu) { pcLocMenu = null; return; }
     if (addSheet) { addSheet = false; return; }
     if (infoItem) { infoItem = null; return; }
-    if (picker) { picker = null; return; }
+    if (P.picker) { P.picker = null; return; }
     if (preview) { preview = null; return; }
     if (menu) { menu = null; return; }
     if (viewMenu) { viewMenu = false; return; }
@@ -595,7 +622,7 @@
     p ||= load(p0);
     if (initialOpen) Promise.resolve(p).then(() => {
       const it = items.find((f) => !f.isDir && f.name === initialOpen);
-      if (it) openFile(it);
+      if (it) P.openFile(it);
     }).catch(() => {});
     // 「这台电脑」分页是挂载后才切进去的：壳能列本机文件就先订上，事件来了再看此刻是不是原生通道
     if (!desktopNative && !(isNativeDesktop() && hasPcLocalFs())) return;
@@ -757,29 +784,6 @@
     catch (e) { toast(t('定位失败：{reason}', { reason: tr(e.message || '') })); }
   }
   function removePcLoc(loc) { pcLocMenu = null; removeDesktopLocation(loc); }
-  // 位置管理 / 添加本地位置：原来是居中的警告框，现在是从按钮长出来的菜单（kit Menu），条目与显隐条件不变；
-  // 移除位置那一步 doRemove 自己还会再确认一次
-  const pcLocItems = $derived.by(() => {
-    const loc = pcLocMenu?.loc;
-    if (!loc) return [];
-    return [
-      { label: t('在文件资源管理器中显示'), icon: G.reveal, onclick: () => revealPcLoc(loc) },
-      ...(loc.removable ? [{ sep: true }, { label: t('移除此位置'), icon: G.remove, destructive: true, onclick: () => removePcLoc(loc) }] : []),
-    ];
-  });
-  const rootMenuItems = $derived.by(() => {
-    const r = rootMenu?.root;
-    if (!r) return [];
-    return [
-      ...(r.mode !== 'all' ? [{ label: t('重新选择文件夹'), icon: G.folder, onclick: () => doReselect(r) }, { sep: true }] : []),
-      { label: t('移除此位置'), icon: G.remove, destructive: true, onclick: () => doRemove(r) },
-    ];
-  });
-  const addLocItems = $derived([
-    { label: t('选择手机文件夹'), icon: G.folderAdd, disabled: localPicking, onclick: doPickLocal },
-    ...(canAllFiles() ? [{ label: t('整个手机存储'), symbol: 'iphone', disabled: localPicking, onclick: doPickAll }] : []),
-  ]);
-  function openAddLoc(el) { addLocAnchor = el; rootMenu = null; addSheet = true; }
 
   // —— 多选 ——
   function enterSelect(seedName) { selecting = true; selected = new Set(seedName ? [seedName] : []); }
@@ -790,258 +794,13 @@
     selected = s;
   }
 
-  // —— 长按 ——（picker 形态下同一个长按改成「起拖」，见 pkDown）
-  //
-  // 触屏语义（2026-08-30 起）：按住＝把这一份【拿起来】，不再当场弹菜单；
-  //   · 原地按住再松手 → 补出长按菜单（onStay 回调，与从前一样的入口）
-  //   · 按住后挪动     → 就是拖拽，落在哪儿由那个落点决定（本页文件夹＝移动、对话页＝挂进输入栏）
-  // 鼠标不改：长按恒出菜单（PC 上还有右键，硬套「按住＝拿起」只会挡住既有习惯）。
-  let pressTimer = null, pressXY = null;
-  const holdMouse = 450;
-  // 这一次按压是不是手指——决定要不要吞掉浏览器自己那发长按 contextmenu（见 onCtxMenu）。
-  let pressTouch = false;
-  // 正被按住、还没到起拖门槛的那一份：像 iOS 一样先轻轻「压」下去，让人知道再按一会儿就拿起来了
-  let armRel = $state('');
-  function pressDown(e, item) {
-    pressTouch = false;
-    if (wsPick) { pkDown(e, item.name, itemRel(item), item.isDir); return; }
-    if (selecting || atHome) return;   // 「本地位置」主页是根列表（有专属管理菜单），不出长按菜单
-    if (isDragging()) return;          // 已经拎着一份了：这根手指是来翻页/加叠的，别再拿起第二份
-    pressTouch = e.pointerType !== 'mouse';
-    pressXY = { x: e.clientX, y: e.clientY, pointerId: e.pointerId, pointerType: e.pointerType, el: e.currentTarget };
-    const lift = pressTouch && canLift;
-    if (lift) armRel = itemRel(item);
-    pressTimer = setTimeout(() => { pressTimer = null; armRel = ''; if (lift) liftItem(item); else openMenu({ clientX: pressXY.x, clientY: pressXY.y }, item); }, lift ? HOLD_MS : holdMouse);
-  }
-  function pressMove(e) {
-    if (wsPick) { pkMoveArm(e); return; }
-    if (!pressTimer || !pressXY || e.pointerId !== pressXY.pointerId) return;
-    // 起拖前挪超过 MOVE_TOL＝在滚列表，作罢。门槛必须低于浏览器自己的 touch slop（8px）：
-    // 一过 slop 它就把这根手指判给滚动，再拎起来也拦不住列表跟着跑。
-    if (Math.hypot(e.clientX - pressXY.x, e.clientY - pressXY.y) > MOVE_TOL) { clearTimeout(pressTimer); pressTimer = null; armRel = ''; }
-  }
-  function pressUp() {
-    pressTouch = false;
-    if (wsPick) { pkCancelArm(); return; }
-    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-    armRel = '';
-  }
-
-  // —— 桌面壳：鼠标拖行/卡/文件夹＝Windows 原生文件拖拽（可拖进 Explorer/微信输入框/聊天输入栏）——
-  // 手机端仍是「按住＝拿起」那套；这里只在壳里、非手机本地盘、非选择器形态时挂 draggable。
-  // 多选态拖其中一个已选项＝整组一起拖。拖回本页文件夹＝内部移动（nativeDragRels 在场时
-  // dragover/drop 不走上传分支）。Windows DoDragDrop 是模态——promise resolve 即这场拖拽结束，
-  // 在此清态并对账刷新（外部 Shift 移动会把源文件搬走）。
-  const dragOutOn = $derived(canDragOut() && !isLocal && !wsPick && !readonly && !guest);
-  let nativeDragRels = null;
-  function dragOutSrc(rels) {
-    if (desktopNative) return { rels, locationId: desktopLocationId };
-    if (cloudRoot) return { paths: rels.map((r) => joinAbs(cloudRoot, r)) };
-    return { rels, locationId: 'primary' };   // 身份文件根＝桌面壳 primary 位置（server 形态同一处 vaultPath）
-  }
-  function rowDragStart(e, item) {
-    if (!dragOutOn) return;
-    e.preventDefault(); e.stopPropagation();
-    pressUp();
-    const rels = selecting && selected.has(item.name) ? [...selected].map((n) => joinPath(path, n)) : [itemRel(item)];
-    nativeDragRels = rels;
-    startDragOut(dragOutSrc(rels)).catch(() => {}).finally(() => {
-      if (nativeDragRels === rels) { nativeDragRels = null; dropOn = null; if (alive) load(path); }
-    });
-  }
-  async function moveNativeDragged(rels, destRel) {
-    const root = cloudRoot || '', nativeLoc = desktopNative ? desktopLocationId : '';
-    let ok = 0, fail = 0;
-    for (const rel of rels) {
-      if (rel === destRel || destRel.startsWith(rel + '/')) continue;
-      const r = await moveSnapInto({ rel, local: false, root, nativeLoc }, destRel);
-      if (r.ok) ok++; else fail++;
-    }
-    if (fail) toast(t('移动失败 {n} 项', { n: fail })); else if (ok) toast(ok > 1 ? t('已移动 {n} 项', { n: ok }) : t('已移动'));
-    if (selecting) exitSelect();
-    if (alive) await load(path);
-  }
-
-  // 长按到 ~500ms 时，安卓/iOS 浏览器会自己补一发 contextmenu。手指这条路我们已经有自己的
-  // 语义（按住＝拿起、原地松手＝出菜单），所以必须吞掉它——否则菜单会盖在刚拎起来的那一份
-  // 上面，连背景都点不动（v4.65 上机后的现象）。preventDefault 照旧无条件调：那是拦系统
-  // 自带的长按菜单/取词，本来就该拦。鼠标右键（pressTouch=false）仍照常出菜单。
-  function onCtxMenu(e, item) {
-    e.preventDefault();
-    if (pressTouch || isDragging()) return;
-    openMenu(e, item);
-  }
-
-  // —— 全域拖拽：拖源侧 ——
-  // 只读分享空间不给拖（那儿本来就没有写操作），多选态也不给（多选有自己的批量工具条）。
-  const canLift = $derived(!readonly && !wsPick && !selecting && !atHome);
-  // 正被拎着的那一叠（原位淡出，像 iOS 那样"被拿走了"）；幽灵落地/飞回后 drag.on 归零才恢复
-  let liftRels = $state(new Set());
-  $effect(() => { if (!drag.on && liftRels.size) liftRels = new Set(); });
-
-  // 作用域指纹：云端(可带 ws 根) / 手机本地 SAF / 桌面原生位置——只有同作用域才谈得上「移动」
-  const dragCtx = $derived({ origin: isLocal ? 'local' : desktopNative ? 'native' : 'cloud', ws: desktopNative ? '' : cloudRoot || '', locationId: desktopNative ? desktopLocationId : '' });
-
-  // 本页的三类落点：当前目录（列表空白处）/ 某个文件夹格子 / 面包屑上的某一级。
-  // 只读分享空间与选择器形态整体关掉（那儿没有写操作）。
-  // 文件夹格子与面包屑都带 spring：拎着东西在上面悬停一会儿就自动进去/退到那一级（iOS 的
-  // spring-loaded folders），单指也能一路钻到目标目录再松手。
-  // onDone：本页是【目标】时搬完刷新——跨作用域拖放的源面板在别处（工作台里那个），它的 afterMove 刷不到这里。
-  const zoneDone = () => { if (alive) load(path); };
-  const hereZone = $derived(folderDropZone({ key: 'ws-here', name: title, ctx: dragCtx, rel: path, disabled: readonly || wsPick, onDone: zoneDone }));
-  const folderZone = (f) => folderDropZone({ key: 'ws-dir:' + itemRel(f), name: f.name, ctx: dragCtx, rel: itemRel(f), disabled: readonly || wsPick, spring: () => enterDir(f), onDone: zoneDone });
-  const crumbZone = (i) => folderDropZone({ key: 'ws-crumb:' + i, name: i < 0 ? rootLabel : segLabel(segs[i], i), ctx: dragCtx, rel: i < 0 ? '' : segs.slice(0, i + 1).join('/'), disabled: readonly || wsPick, spring: () => (i < 0 ? goRoot() : goSeg(i)), onDone: zoneDone });
-
-  // 拖拽会【活过本页的卸载】——另一根手指收起工作台、切走分页，源面板就没了。所以起拖那一刻
-  // 必须把「这一份是谁、在哪个作用域」整个拍成快照：
-  //   · rel 用当时的目录算（拖到一半用户已翻去别的目录，再 itemRel 会拼出不存在的路径 → 404）；
-  //   · 作用域字段更要命——workspaceRoot 是 props，卸载后它的 getter 会一路读到宿主已清空的
-  //     filesMount，直接抛 "Cannot read properties of null (reading 'ws')"（实测）。
-  //     root 取的是 cloudRoot（含电脑位置），拎着它切到别的位置再放下＝跨根搬运。
-  // 快照之后，落地这两件事只吃纯数据，与组件生死无关。
-  const liftSnap = (item) => ({
-    rel: itemRel(item), name: item.name, isDir: !!item.isDir,
-    local: isLocal, root: desktopNative ? '' : cloudRoot || '', nativeLoc: desktopNative ? desktopLocationId : '',
-  });
-  let alive = true;
-  $effect(() => () => { alive = false; });
-
-  // destCtx 非空＝跨作用域（云端 ↔ 云端，两个根都在服务端）：源按快照里的 root、目标按落点的 ws，
-  // /api/files/move 带 fromWs 一次搬完（跨卷服务端自己回落 copy+rm）。
-  async function moveSnapInto(snap, destRel, destCtx = null) {
-    try {
-      if (snap.local) { const r = localMove(snap.rel, destRel); if (r?.error) return { ok: false, error: r.error }; }
-      else if (snap.nativeLoc) await nativeWorkspaceMove(snap.rel, destRel, snap.nativeLoc);
-      else if (destCtx && destCtx.origin === 'cloud' && (destCtx.ws || '') !== (snap.root || '')) await api.moveFile(snap.rel, destRel, destCtx.ws || '', snap.root || '');
-      else await api.moveFile(snap.rel, destRel, snap.root);
-    } catch (e) { return { ok: false, error: e.body?.error || e.message || '' }; }
-    return { ok: true };
-  }
-  // 整叠搬完统一对账：面板还在才刷新（不在就没人看了）
-  async function afterMove() { if (alive) await load(path); }
-  // 与 aiMaterial 同一条服务端链路，但只吃快照——源面板卸载后照样能把素材备出来。
-  async function materialOf(snap, direct = false) {
-    const kind = snap.isDir ? 'folder' : (kindOf(snap.name) === 'img' ? 'image' : 'file');
-    try {
-      if (nativeLocLocalOnly(snap.nativeLoc)) return await pcLocalMaterial({ rel: snap.rel, name: snap.name, isDir: snap.isDir, locationId: snap.nativeLoc, forClaude: direct });
-      if (snap.local) {
-        if (snap.isDir) return null;      // 手机本地文件夹没有可发送的形态
-        let up;
-        try {
-          const resp = await fetch(localFileUrl(snap.rel));
-          if (!resp.ok) throw new Error('本地流不可用');   // i18n-ignore 内部信号：下面 catch 吞掉，不上屏
-          up = await api.uploadBlob(snap.name, await resp.blob(), { timeout: 600000 });
-        } catch {
-          const b64 = localReadB64(snap.rel);
-          if (!b64) throw new Error('读取失败');   // i18n-ignore 外层 catch 只回 null，不上屏
-          up = await api.upload(snap.name, b64);
-        }
-        return { path: up.path, name: up.name, kind, url: kind === 'image' ? localImgDataUrl(snap.rel, snap.name) : null };
-      }
-      const up = await api.fileToUpload(snap.rel, !direct, snap.root);
-      return { path: up.path, name: up.name, kind, url: kind === 'image' ? cloudFileUrl(snap.rel, { ws: snap.root }) : null };
-    } catch { return null; }
-  }
-
-  const ghostOf = (item) => ({ name: item.name, isDir: !!item.isDir, iconHtml: item.isDir ? '' : fileIcon(item.name), thumb: thumbable(item) ? thumbSrc(item) : '' });
-  function liftItem(item) {
-    const el = pressXY?.el || null;
-    const pid = pressXY?.pointerId ?? -1;
-    const x = pressXY?.x ?? 0, y = pressXY?.y ?? 0;
-    const snap = liftSnap(item);
-    liftRels = new Set([snap.rel]);
-    const payload = wsFilePayload({
-      items: [snap], ctx: dragCtx,
-      moveOne: (s, destRel, destCtx) => moveSnapInto(s, destRel, destCtx),
-      materialOne: (s, direct) => materialOf(s, direct),
-      afterMove,
-    });
-    const ok = beginDrag(payload, {
-      x, y, pointerId: pid, pointerType: pressXY?.pointerType || 'touch', sourceEl: el,
-      ghost: ghostOf(item),
-      onStay: () => openMenu({ clientX: x, clientY: y }, item),
-    });
-    if (!ok) liftRels = new Set();
-  }
-  // 拎着一份时另一根手指点到别的文件＝加进这一叠（iOS 同款），而不是把它点开。
-  // 文件夹不加叠：点文件夹恒等于「进去」——那是另一根手指认路的方式（场景：一手拎着、一手翻目录）。
-  function stackToDrag(item) {
-    const snap = liftSnap(item);
-    if (addToDrag(snap, ghostOf(item))) liftRels = new Set([...liftRels, snap.rel]);
-  }
-
-  // —— picker 形态：长按起拖 → 拖进底栏 → 松手即选定 ——
-  // 只有文件夹能拖（文件不是工作空间）。鼠标走的是同一套 Pointer Events，所以按住拖同样成立。
-  function pkDown(e, name, rel, isDir) {
-    if (!isDir || pkDrag) return;
-    pkCancelArm();
-    pkPid = e.pointerId;
-    pkFrom = { x: e.clientX, y: e.clientY, name, rel };
-    pkTimer = setTimeout(() => pkStart(), 420);
-  }
-  function pkMoveArm(e) {
-    if (!pkTimer || !pkFrom) return;
-    // 起拖前手指挪超过 9px＝用户在滚列表，取消这次长按（与长按菜单同一阈值）
-    if (Math.hypot(e.clientX - pkFrom.x, e.clientY - pkFrom.y) > 9) pkCancelArm();
-  }
-  function pkCancelArm() { if (pkTimer) { clearTimeout(pkTimer); pkTimer = null; } pkFrom = null; }
-  // 拖起来之后列表不能再跟着滚：touchmove 必须 passive:false + preventDefault 才拦得住
-  // WebView 的滚动。监听器在 picker 挂载期间【常驻】而不是起拖时才挂：合成器在 touchstart
-  // 那一刻就定下这根手指的 touchmove 能否被拦——手势中途才挂的阻塞监听收到的是
-  // cancelable=false 的事件。常驻之后文件夹格子就不必 touch-action:none（那会让铺满
-  // 格子的列表在手机/折叠屏上几乎滑不动，只剩格缝能滑）。
-  const pkBlockTouch = (e) => { if (pkDrag && e.cancelable) e.preventDefault(); };
-  $effect(() => {
-    if (!wsPick) return;
-    window.addEventListener('touchmove', pkBlockTouch, { passive: false });
-    return () => window.removeEventListener('touchmove', pkBlockTouch);
-  });
-  function pkStart() {
-    if (!pkFrom) return;
-    const { name, rel, x, y } = pkFrom;
-    pkTimer = null;
-    try { navigator.vibrate?.(12); } catch {}
-    pkDrag = { name, abs: pkAbs(rel), ...pkLocal(x, y), over: false };
-    window.addEventListener('pointermove', pkMove, { passive: false });
-    window.addEventListener('pointerup', pkUp);
-    window.addEventListener('pointercancel', pkUp);
-  }
-  function pkLocal(cx, cy) {
-    const box = rootEl?.getBoundingClientRect();
-    return { x: cx - (box?.left || 0), y: cy - (box?.top || 0) };
-  }
-  function pkOverDock(cx, cy) {
-    const r = pkDockEl?.getBoundingClientRect();
-    return !!r && cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom;
-  }
-  function pkMove(e) {
-    if (!pkDrag || (pkPid >= 0 && e.pointerId !== pkPid)) return;   // 多指：只认起拖的那根
-    if (e.cancelable) e.preventDefault();
-    pkDrag = { ...pkDrag, ...pkLocal(e.clientX, e.clientY), over: pkOverDock(e.clientX, e.clientY) };
-  }
-  function pkUp(e) {
-    if (pkPid >= 0 && e.pointerId !== pkPid) return;
-    const drag = pkDrag;
-    pkEnd();
-    if (!drag) return;
-    if (pkOverDock(e.clientX, e.clientY)) {
-      try { navigator.vibrate?.(18); } catch {}
-      onPickWs?.(drag.abs);
-    }
-  }
-  function pkEnd() {
-    pkDrag = null; pkPid = -1;
-    pkCancelArm();
-    window.removeEventListener('pointermove', pkMove);
-    window.removeEventListener('pointerup', pkUp);
-    window.removeEventListener('pointercancel', pkUp);
-  }
+  expose(createPanelDrag(P));
   // 长按 / 右键：菜单从按压点弹出（MorphMenu 长按形态，视口坐标；它自己换算到所在容器、夹进容器边界——
   // 本页内嵌进 Claude 工作台时外面那层 .dk-embed 带 transform，容器不是整块视口）。
   // 长按抬起后浏览器补发的那下 click 由 MorphMenu 当场就挡上的压暗层接住，不会秒关、也不会点穿到底下的行。
   function openMenu(e, item) {
     if (wsPick) return;                // 选择器形态没有长按菜单（长按＝起拖）
-    pressTimer = null;
+    P.pressTimer = null;
     try { navigator.vibrate?.(8); } catch {}
     menuHead = item;
     menu = { item, point: { x: e.clientX, y: e.clientY } };
@@ -1054,821 +813,8 @@
   }
   // 菜单头部（缩略图 + 名字 + 大小 · 日期）：菜单收起动画期间 menu 已清空，头部还得在，所以单记一份不清
   let menuHead = $state(null);
-  function menuAct(act, it) {
-    menu = null;
-    if (act === 'preview') openFile(it);
-    else if (act === 'info') showInfo(it);
-    else if (act === 'rename') renameTarget = { item: it, value: it.name };
-    else if (act === 'delete') doDelete(it);
-    else if (act === 'select') enterSelect(it.name);
-    else if (act === 'ai') { aiPick = it; aiView = 'root'; }
-    else if (act === 'share') doShare(it);
-    else if (act === 'sharelink') shareDlg = { item: it, pwOn: false, password: '', ttl: 24, busy: false, result: null };
-    else if (act === 'move') openMovePicker([it.name], 'move', it.parent ?? path);
-    else if (act === 'copy') openMovePicker([it.name], 'copy', it.parent ?? path);
-    else if (act === 'download') download(itemRel(it));
-    else if (act === 'openwith') doOpenWith(it);
-    else if (act === 'open') doDesktopOpen(it);
-    else if (act === 'reveal') doDesktopReveal(it);
-    else if (act === 'extract') doExtract(it);
-    else if (act === 'compress') doCompress(it);
-  }
-  // 长按菜单的条目（kit Menu）：显隐条件与原菜单逐条一致；分组之间用 kit 的分隔线
-  const menuItems = $derived.by(() => {
-    if (!menu) return [];
-    const it = menu.item, L = [];
-    const add = (cond, label, act, more = {}) => { if (cond) L.push({ label, onclick: () => menuAct(act, it), ...more }); };
-    const sep = () => { if (L.length && !L[L.length - 1].sep) L.push({ sep: true }); };
-    if (!it.isDir && canPreview(it.name)) { add(true, t('预览'), 'preview', { icon: uiIconSvg('preview') }); sep(); }
-    if (desktopNative) {
-      add(true, t('用默认应用打开'), 'open', { symbol: 'arrow.up.forward.app' });
-      add(true, t('在文件资源管理器中显示'), 'reveal', { icon: G.reveal });
-      sep();
-    }
-    // 这台电脑的文件服务端看不到，发给 AI＝现读现传（文件夹给 Claude 走设备引用），同手机本地
-    if (!readonly && !guest && (!desktopExtra || pcLocal)) {
-      add(true, t('发送给 AI'), 'ai', { symbol: 'sparkles', tint: '#cb30e0' });
-      sep();
-      add(!desktopNative, t('分享'), 'share', { symbol: 'square.and.arrow.up' });
-      // 分享链接由 bridge 服务端铸造，只认 vault 根下的 rel；桌面额外授权位置服务端不认识，必须隐藏
-      add(!isLocal && !desktopExtra && pluginOn('share'), tc('files', '分享链接'), 'sharelink', { symbol: 'link' });
-    }
-    add(!it.isDir && !isLocal, desktopNative ? t('另存为…') : t('下载到本地'), 'download', { symbol: 'arrow.down.circle' });
-    add(!it.isDir && (canOpenWith || desktopNative), t('打开方式'), 'openwith', { symbol: 'arrow.up.forward.app' });
-    add(!it.isDir && !isLocal && !desktopExtra && kindOf(it.name) === 'zip' && !readonly, t('解压'), 'extract', { icon: G.zip });
-    add(canZip, t('压缩…'), 'compress', { icon: G.zip });
-    add((!isLocal || localOps.move) && !readonly, t('移动到'), 'move', { icon: G.folder });
-    add((!isLocal || localOps.copy) && !readonly, tc('files', '复制'), 'copy', { icon: G.copy });
-    add((!isLocal || localOps.rename) && !readonly, tc('files', '重命名'), 'rename', { symbol: 'square.and.pencil' });
-    add(true, t('显示简介'), 'info', { symbol: 'info.circle' });
-    add(!readonly && !(desktopNative && query), t('多选'), 'select', { icon: G.select });
-    if ((!isLocal || localOps.del) && !readonly) {
-      sep();
-      add(true, trashing ? t('移到回收站') : t('删除'), 'delete', { symbol: 'trash', destructive: true });
-    }
-    return L;
-  });
-  // 右上「＋」菜单的条目
-  const addItems = $derived([
-    { label: desktopNative ? t('导入文件…') : t('上传文件'), symbol: 'square.and.arrow.up', onclick: pickUpload },
-    ...(desktopNative ? [{ label: t('导入文件夹…'), icon: G.folderAdd, onclick: pickDirectoryImport }] : []),
-    { label: t('新建文件夹'), icon: G.folderAdd, onclick: () => { addOpen = false; mkOpen = { value: '' }; } },
-    { label: t('新建 Markdown 文件'), symbol: 'square.and.pencil', onclick: () => { addOpen = false; mdOpen = { value: untitledMdName(items.map((x) => x.name)) }; } },
-    ...(desktopNative ? [{ label: t('添加电脑位置…'), icon: G.pcAdd, onclick: addDesktopLocation }] : []),
-  ]);
-
-  // 「解压」：服务端用电脑上的解压工具（WinRAR UnRAR / bsdtar）解到同目录同名文件夹。
-  // 请求同步等解压完成（大包可能要等一会儿），完成后刷新列表定位到新文件夹。
-  let extracting = $state(false);
-  async function doExtract(item) {
-    if (extracting) return;
-    extracting = true;
-    toast(t('解压中…'));
-    try { const r = await api.extractFile(itemRel(item), cloudRoot); toast(t('已解压到「{name}」', { name: r.name })); await load(path); }
-    catch (e) { toast(t('解压失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); }
-    finally { extracting = false; }
-  }
-  // 「打开方式」：用其他安卓应用打开。云端=拼带鉴权绝对 URL 交原生 HTTP 拉取（admin ?token / user 靠 cookie，原生侧附）；本地=传 rel 原生直取。
-  function doOpenWith(item) {
-    const r = itemRel(item);
-    if (desktopNative) { nativeWorkspaceOpenWith(r, desktopLocationId).catch((e) => toast(t('打开方式失败：{reason}', { reason: tr(e.message || '') }))); return; }
-    if (isLocal) { openWith('', r, item.name, true); return; }
-    const tok = getToken();
-    const url = apiUrl(scoped('/api/file?path=' + encodeURIComponent(r)) + (tok ? '&token=' + encodeURIComponent(tok) : ''));
-    openWith(url, r, item.name, false);
-  }
-  async function doDesktopOpen(item) {
-    try { await nativeWorkspaceOpen(itemRel(item), desktopLocationId); }
-    catch (e) { toast(t('打开失败：{reason}', { reason: tr(e.message || '') })); }
-  }
-  async function doDesktopReveal(item) {
-    try { await nativeWorkspaceReveal(itemRel(item), desktopLocationId); }
-    catch (e) { toast(t('定位失败：{reason}', { reason: tr(e.message || '') })); }
-  }
-  async function showInfo(item) {
-    infoItem = { name: item.name, isDir: item.isDir, size: item.size, mtime: item.mtime, dir: item.parent ?? path, rel: itemRel(item), loading: desktopNative };
-    if (!desktopNative) return;
-    try {
-      const detail = await nativeWorkspaceInspect(itemRel(item), desktopLocationId);
-      if (infoItem?.rel === itemRel(item)) infoItem = { ...infoItem, ...detail, loading: false };
-    } catch (e) {
-      if (infoItem?.rel === itemRel(item)) infoItem = { ...infoItem, loading: false, inspectError: tr(e.message || '') || t('读取失败') };
-    }
-  }
-
-  // 「分享链接」：学 qq-bot 铸公开链接（可选密码 + 过期时间）。文件和文件夹一律走
-  // /api/share-space 拷成只读分享空间出 /w/<token>——单文件就是「只有一个文件的空间」，
-  // 访客点开预览（md 渲染而非源码）、右键/长按下载，与文件夹分享同一套页面。/s/ 直链
-  // （/api/share）只留给要裸下载地址的 API 调用方。仅云端，本地手机文件不出此项。
-  async function doShareLink() {
-    const d = shareDlg;
-    if (!d || d.busy) return;
-    const request = shareRequest(d);
-    if (request.error) { toast(tr(request.error)); return; }
-    d.busy = true;
-    const r0 = itemRel(d.item);
-    try {
-      const r = await api.shareSpaceMint([r0], request.options, cloudRoot);
-      // 未配公网域名时后端 url 为空 → 用当前源拼（同源可用；隧道/局域网访客按访问源）。
-      d.result = shareResult(r, request.password);
-    } catch (e) { toast(t('创建分享失败：{reason}', { reason: tr(e.body?.error || e.body || e.message || '') })); }
-    d.busy = false;
-  }
-  async function copyShare() {
-    const d = shareDlg; if (!d?.result) return;
-    // 带密码时连密码一起拷，方便直接转发给对方。
-    const text = shareClipboardText(d.result);
-    try { await navigator.clipboard.writeText(text); toast(t('已复制链接')); }
-    catch {
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-        document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
-        toast(t('已复制链接'));
-      } catch { toast(t('复制失败，请长按链接手动复制')); }
-    }
-  }
-  const fmtExpire = formatShareExpiry;
-
-  // 「分享」：走系统 ACTION_SEND 转发文件（同 openWith 取文件，意图改分享）。
-  function doShare(item) {
-    if (item.isDir) { toast(t('暂不支持分享文件夹')); return; }
-    if (!canShare) { toast(t('分享需在手机 App 内使用')); return; }
-    const r = itemRel(item);
-    if (isLocal) { shareFile('', r, item.name, true); return; }
-    const tok = getToken();
-    const url = apiUrl(scoped('/api/file?path=' + encodeURIComponent(r)) + (tok ? '&token=' + encodeURIComponent(tok) : ''));
-    shareFile(url, r, item.name, false);
-  }
-
-  // —— 「发送给 AI」：菜单两层（Claude / Media Studio→创作页），按素材类型决定 Studio 子项是否出现 ——
-  // 能力判定：item 类型 → 哪些创作页能吃它当输入素材（图片当改图素材 / 视频帧，文本当提示词）。
-  // 文件类型决定能投给哪些页，再与这个身份能不能进 Media Studio 取交集（服务端下发的 me.agents）。
-  const aiCaps = $derived.by(() => {
-    const c = fileAiCapabilities(aiPick, kindOf);
-    const g = screenOn('studio');
-    return { ...c, claude: agentOn('claude'), studio: g && (c.video || c.image || c.audio || c.music), video: c.video && g, image: c.image && g, audio: c.audio && g, music: c.music && g };
-  });
-  // 弄成可投递素材：云端 fileToUpload（Claude direct=零拷贝直给源绝对路径，agent 本机直读；
-  // Media Studio 默认拷 uploads——媒体任务要读内容上传且有 ownUpload 守卫）；本地 SAF base64→upload。
-  async function aiMaterial(item, direct = false) {
-    const r = itemRel(item);
-    const kind = item.isDir ? 'folder' : (kindOf(item.name) === 'img' ? 'image' : 'file');
-    try {
-      if (pcLocal) return await pcLocalMaterial({ rel: r, name: item.name, isDir: item.isDir, locationId: desktopLocationId, forClaude: direct });
-      if (isLocal) {
-        if (item.isDir) { toast(t('本地文件夹暂不支持发送')); return null; }
-        // 优先原生流式（/__localfile → uploadBlob，大文件不受 20MB base64 限制、blob 走磁盘
-        // 后备不爆内存）；原生流不可用（在线壳/dev）或失败 → 退回 base64 单发。
-        let up;
-        try {
-          const resp = await fetch(localFileUrl(r));
-          if (!resp.ok) throw new Error('本地流不可用');   // i18n-ignore 内部信号：下面 catch 吞掉，不上屏
-          up = await api.uploadBlob(item.name, await resp.blob(), { timeout: 600000 });
-        } catch {
-          const b64 = localReadB64(r); if (!b64) throw new Error(t('读取失败'));
-          up = await api.upload(item.name, b64);
-        }
-        return { path: up.path, name: up.name, kind, url: kind === 'image' ? localImgDataUrl(r, item.name) : null };
-      }
-      const up = await api.fileToUpload(r, !direct, cloudRoot);
-      return { path: up.path, name: up.name, kind, url: kind === 'image' ? cloudFileUrl(r, { ws: cloudRoot }) : null };
-    } catch (e) { toast(t('准备失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); return null; }
-  }
-  // 读文本素材内容（注入媒体面板提示词栏用），封顶 30000 字。
-  async function aiTextContent(item) {
-    const r = itemRel(item);
-    try {
-      if (pcLocal) return await pcLocalText(r, desktopLocationId);
-      if (isLocal) { const txt = localReadText(r); return txt == null ? null : String(txt).slice(0, 30000); }
-      const res = await fetch(apiUrl(scoped('/api/file?path=' + encodeURIComponent(r))), { headers: authHeaders(), credentials: 'same-origin' });
-      if (!res.ok) return null;
-      return (await res.text()).slice(0, 30000);
-    } catch { return null; }
-  }
-  function pickAI(target) {
-    if (target === 'claude') { openChatPick(target); return; }   // 对话类：先选会话再投递
-    const it = aiPick; aiPick = null; aiView = 'root';
-    if (it) sendToAI(it, target);
-  }
-  function pickVideoSlot(slot) { const it = aiPick; aiPick = null; aiView = 'root'; if (it) sendToAI(it, 'video', slot); }
-
-  // —— 「选择对话」层（微信「选择聊天」式）：新对话 / 历史会话列表 + 搜索 ——
-  // 列表本地缓存先出（Claude 有 IndexedDB 快照秒开），网络刷新殿后。
-  async function openChatPick(target) {
-    aiChat = { target, from: aiView, sessions: [], loading: true, q: '' };
-    aiView = 'chat';
-    const st = aiChat;   // 代理引用：用户退出/重进后 aiChat 换了对象，旧请求返回即作废
-    await loadAiSessions(target, {
-      cached: () => getCachedSessions(),
-      remote: () => api.sessions(),
-      current: () => aiChat === st,
-      onCached: (sessions) => { st.sessions = sessions; },
-      onDone: (sessions) => { if (sessions) st.sessions = sessions; st.loading = false; },
-    });
-  }
-  function chatBack() { aiView = aiChat?.from || 'root'; aiChat = null; }
-  function pickChat(sel) {   // sel: 'new' | 会话 id
-    const it = aiPick, tg = aiChat?.target;
-    aiPick = null; aiView = 'root'; aiChat = null;
-    if (it && tg) sendToAI(it, tg, undefined, sel);
-  }
-  const chatTitle = (s) => tr(aiChat?.target === 'claude' ? titleFor(s.id, s.title) : s.title) || t('（无标题）');   // 服务端占位标题（「（进行中…）」「(无标题)」）走 tr
-  const aiChatCur = $derived(aiChat?.target === 'claude' ? session.id : null);
-  const aiChatFiltered = $derived.by(() => {
-    if (!aiChat) return [];
-    return filterAiSessions(aiChat.sessions, aiChat.q, chatTitle);
-  });
-  async function sendToAI(item, target, slot, sess) {
-    await sendFileToAi(item, target, slot, sess, {
-      kindOf,
-      material: aiMaterial,
-      readText: aiTextContent,
-      toast: (m) => toast(tr(m)),   // 文案出自 files-business.js（别的模块）：显示点兜一层 tr()
-      chats: {
-        claude: {
-          current: () => session.id,
-          newChat: newConversation,
-          load: openSession,
-          attach: (attachment) => compose.attachments.push(attachment),
-        },
-      },
-      studio: { push: (it) => studioInbox.items.push(it) },
-      navigate: (screen) => { ui.screen = screen; },
-    });
-  }
-
-  // —— 文件操作 ——
-  async function doRename() {
-    const { item, value } = renameTarget;
-    renameTarget = null;
-    await renameTo(item, value.trim());
-  }
-  // 返回是否改成了（失败已回滚并提示）
-  async function renameTo(item, name) {
-    if (!name || name === item.name) return false;
-    const prev = items;
-    items = items.map((x) => (x.name === item.name ? { ...x, name } : x));   // 乐观改名（即时），失败回滚
-    if (isLocal) {
-      const r = localRename(rel(item.name), name);
-      if (r.error) { items = prev; toast(t('重命名失败：{reason}', { reason: tr(r.error) })); return false; }
-      return true;
-    }
-    if (desktopNative) {
-      try { await nativeWorkspaceRename(itemRel(item), name, desktopLocationId); return true; }
-      catch (e) { items = prev; toast(t('重命名失败：{reason}', { reason: tr(e.message || '') })); return false; }
-    }
-    try { await api.renameFile(rel(item.name), name, cloudRoot); return true; }
-    catch (e) { items = prev; toast(t('重命名失败：{reason}', { reason: tr(e.body?.error || '') })); return false; }
-  }
-  // 电脑位置（整机任意目录）里的删除＝送进电脑的回收站，可在电脑上还原（桌面版同款）；
-  // 身份工作空间里维持原来的永久删除。确认框把完整路径摆出来——整机范围里同名的东西太多。
-  const trashing = $derived(desktopNative || (atPcLoc && !isLocal));
-  async function doDelete(item) {
-    // 中文与原先逐字相同（动词 +「名」？+ 文件夹附注）；英文按整句各出一条。
-    const ask = trashing ? t('移到回收站「{name}」？', { name: item.name })
-      : item.isDir ? t('删除「{name}」？（含其中全部内容）', { name: item.name })
-      : t('删除「{name}」？', { name: item.name });
-    const detail = atPcLoc && !isLocal ? winAbs(cloudRoot, itemRel(item)) + '\n' + t('可以在电脑的回收站里还原。') : '';
-    // 确认钮：英文复述动词（§1.6）；中文不传，仍是默认「确定」。danger：确认钮红色、默认焦点给「取消」
-    const okLabel = isEn() ? (trashing ? t('移到回收站') : t('删除')) : undefined;
-    if (!(await uiConfirm(ask, { detail, okLabel, danger: true }))) return false;
-    const prev = items;
-    items = items.filter((x) => x.name !== item.name);   // 乐观移除（即时），失败回滚
-    if (isLocal) {
-      const r = localDelete(rel(item.name));
-      if (r.error) { items = prev; toast(t('删除失败：{reason}', { reason: tr(r.error) })); return false; }
-      return true;
-    }
-    if (desktopNative) {
-      try { await nativeWorkspaceTrash(itemRel(item), desktopLocationId); toast(t('已移到回收站')); return true; }
-      catch (e) { items = prev; toast(t('删除失败：{reason}', { reason: tr(e.message || '') })); return false; }
-    }
-    if (atPcLoc) {
-      try { await api.trashFiles([itemRel(item)], cloudRoot); toast(t('已移到回收站')); return true; }
-      catch (e) { items = prev; toast(t('删除失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); return false; }
-    }
-    try { await api.deleteFile(rel(item.name), cloudRoot); return true; }
-    catch (e) { items = prev; toast(t('删除失败：{reason}', { reason: tr(e.body?.error || '') })); return false; }
-  }
-  async function multiDelete() {
-    const names = [...selected];
-    const ask = trashing ? t('把选中的 {n} 项移到回收站？', { n: names.length }) : t('删除选中的 {n} 项？', { n: names.length });
-    const okLabel = isEn() ? (trashing ? t('移到回收站') : t('删除')) : undefined;   // 同上：只英文复述动词
-    if (!names.length || !(await uiConfirm(ask, { detail: atPcLoc && !isLocal ? t('可以在电脑的回收站里还原。') : '', okLabel, danger: true }))) return;
-    const sel = new Set(names), prev = items;
-    items = items.filter((x) => !sel.has(x.name));   // 乐观移除（即时）
-    exitSelect();
-    let fail = 0, why = '';
-    if (atPcLoc && !isLocal) {
-      // 一次送完：每次回收都要在电脑上起一个 PowerShell，逐项发请求会慢到按秒数
-      try {
-        const r = await api.trashFiles(names.map((n) => rel(n)), cloudRoot);
-        const bad = (r?.results || []).filter((x) => !x.ok);
-        fail = bad.length; why = bad[0]?.error || '';
-      } catch (e) { fail = names.length; why = e.body?.error || e.message || ''; }
-      if (fail) { await load(path); toast(why ? t('{n} 项没能移到回收站：{reason}', { n: fail, reason: tr(why) }) : t('{n} 项没能移到回收站', { n: fail })); }
-      else toast(t('已把 {n} 项移到回收站', { n: names.length }));
-      return;
-    }
-    for (const n of names) {
-      if (isLocal) { if (localDelete(rel(n)).error) fail++; }
-      else if (desktopNative) { try { await nativeWorkspaceTrash(rel(n), desktopLocationId); } catch { fail++; } }
-      else { try { await api.deleteFile(rel(n), cloudRoot); } catch { fail++; } }
-    }
-    if (fail) { await load(path); toast(t('{n} 项删除失败', { n: fail })); }   // 有失败才重拉准确状态
-  }
-  async function doMkdir() {
-    const name = (mkOpen.value || '').trim();
-    mkOpen = null;
-    if (!name) return;
-    try {
-      if (desktopNative) await nativeWorkspaceMkdir(path, name, desktopLocationId);
-      else await api.mkdir(path, name, cloudRoot);
-      toast(t('已新建文件夹')); await load(path);
-    }
-    catch (e) { toast(t('新建失败：{reason}', { reason: tr(e.body?.error || '') })); }
-  }
-  const rel = (name) => (path ? path + '/' + name : name);
-
-  // 新建 Markdown：起名（默认「未命名.md」，没写扩展名自动补 .md）→ 建空文件 → 直接打开编辑器开写
-  async function doNewMd() {
-    const raw = (mdOpen?.value || '').trim();
-    mdOpen = null;
-    if (!raw) return;
-    const name = withMdExt(raw);
-    try {
-      if (desktopNative) await nativeWorkspaceCreateFile(path, name, '', desktopLocationId);
-      else await api.newFile(path, name, cloudRoot);
-    } catch (e) {
-      const why = e.body?.error || e.body || e.message || '';
-      toast(why === 'exists' || e.status === 409 ? t('已有同名文件「{name}」', { name }) : t('新建失败：{reason}', { reason: tr(why) }));
-      return;
-    }
-    await load(path);
-    openDocPreview({ name, rel: rel(name) }, 'md', { startMode: 'live' });
-  }
-
-  // —— 压缩 ——
-  // 桌面壳（Windows，本机路径可得）：直接弹系统自带的「创建存档」向导，格式/级别/进度都是系统的；
-  // 手机、网页、旧壳：内置选项 sheet → bridge 服务端压缩（/api/files/compress，后台任务 + 轮询）。
-  const zipWizard = $derived(hasNativeCompressWizard() && (desktopNative || /^([A-Za-z]:|\\\\)/.test(cloudRoot)));
-  const zipServer = $derived(!desktopNative || !desktopExtra);
-  const canZip = $derived(!isLocal && !readonly && !guest && !wsPick && (zipWizard || zipServer));
-  let wizardOpen = false;
-  async function doCompress(item) {
-    const r0 = itemRel(item);
-    if (zipWizard) {
-      if (wizardOpen) { toast(t('系统压缩窗口已经开着')); return; }
-      wizardOpen = true;
-      toast(t('正在打开系统压缩窗口…'));
-      let r;
-      try { r = await nativeCompressWizard(desktopNative ? { rels: [r0], locationId: desktopLocationId } : { root: cloudRoot, rels: [r0] }); }
-      catch (e) { r = { ok: false, error: e?.message }; }
-      finally { wizardOpen = false; }
-      if (r?.busy) { toast(t('系统压缩窗口已经开着')); return; }
-      if (r?.ok) {
-        if (r.archive) { toast(t('已压缩为「{name}」', { name: r.archive.split(/[\\/]/).pop() })); await load(path); }
-        return;
-      }
-      if (!zipServer) { toast(t('压缩失败：{reason}', { reason: tr(r?.error || '') })); return; }
-    }
-    const dirName = path.split('/').filter(Boolean).pop() || rootLabel;
-    zipDlg = {
-      rels: [r0], sub: item.name, isDir: item.isDir,
-      name: compressDefaultName([item], dirName), format: 'zip', level: 'normal',
-      formats: ['zip', '7z', 'tar.gz'], busy: false, note: '', gone: null,
-    };
-    loadCompressFormats(api).then((formats) => { if (zipDlg) zipDlg.formats = formats; });
-  }
-  async function runZipDlg() {
-    const d = zipDlg;
-    if (!d || d.busy || !d.name.trim()) return;
-    d.busy = true; d.note = t('正在压缩…');
-    const gone = { aborted: false };
-    d.gone = gone;
-    const dir = path;
-    try {
-      const r = await runCompress(api, d.rels, { format: d.format, level: d.level, name: d.name.trim() }, desktopNative ? '' : cloudRoot, {
-        signal: gone,
-        onTick: (st) => { if (zipDlg === d) d.note = st.bytes ? t('正在压缩… 已写入 {size}', { size: fmtSize(st.bytes) }) : t('正在压缩…'); },
-      });
-      if (r.state === 'detached') return;   // 中途关了 sheet：服务端照常压完，存档稍后出现在原文件夹
-      if (zipDlg === d) zipDlg = null;
-      toast(t('已压缩为「{name}」', { name: r.name }));
-      if (path === dir) await load(path);
-    } catch (e) {
-      if (zipDlg === d) { d.busy = false; d.note = ''; }
-      toast(t('压缩失败：{reason}', { reason: tr(e.body?.error || e.message || '') }));
-    }
-  }
-  function closeZipDlg() {
-    const d = zipDlg;
-    if (!d) return;
-    if (d.busy && d.gone) { d.gone.aborted = true; toast(t('压缩在后台继续，完成后出现在原文件夹')); }
-    zipDlg = null;
-  }
-
-  // —— 移动到 / 复制到：目录选择器 sheet（浏览文件夹树选目标）。云端走 /api/files，
-  //    本地走 localList（''=位置列表，进入某位置后才能确认投放；跨位置=原生复制+删源）——
-  // root/rootLabel＝目标所在的根（云端才有意义）：缺省是当前位置；admin 在选择器根目录还能切到别的
-  // 电脑位置——「把 D 盘下载里的东西挪进工作空间」就是在这儿选的，服务端按 fromWs 跨根搬（跨盘自动拷+删）。
-  let picker = $state(null);   // { mode:'move'|'copy', names:[源名], srcDir, path, items, loading, root, rootLabel }
-  async function openMovePicker(names, mode, sourceDir = path) {
-    if (!names.length) return;
-    picker = { mode, names: [...names], srcDir: sourceDir, path: '', items: [], loading: true, root: cloudRoot, rootLabel };
-    await pickerLoad('');
-  }
-  async function pickerLoad(p) {
-    if (!picker) return;
-    picker.path = p; picker.loading = true; picker = { ...picker };
-    const want = picker;
-    let dirs = [];
-    if (isLocal) { try { dirs = localList(p).filter((i) => i.isDir); } catch {} }
-    else {
-      try {
-        const r = desktopNative ? await nativeWorkspaceList(p, desktopLocationId) : await api.files(p, want.root);
-        dirs = (r.items || []).filter((i) => i.isDir && i.linkType !== 'external-link');
-      } catch {}
-    }
-    if (!picker || picker.root !== want.root || picker.path !== p) return;   // 期间又换了位置/目录：旧结果作废
-    picker.items = dirs; picker.loading = false; picker = { ...picker };
-  }
-  function pickerEnter(name) { pickerLoad(picker.path ? picker.path + '/' + name : name); }
-  function pickerCrumb(i) { pickerLoad(picker.path.split('/').filter(Boolean).slice(0, i + 1).join('/')); }
-  const locRoot = (l) => (l.id === 'ws' ? '' : l.path);
-  function pickerSetLoc(l) {
-    if (!picker || locRoot(l) === picker.root) return;
-    picker = { ...picker, root: locRoot(l), rootLabel: l.id === 'ws' ? t('工作空间') : locLabel(l), items: [] };
-    pickerLoad('');
-  }
-  async function pickerConfirm() {
-    const { mode, names, srcDir, path: dest, root: destRoot } = picker;
-    if (isLocal) {
-      if (multiRoot && !dest) { toast(t('请先进入一个位置')); return; }   // 位置列表页不能当目标
-      picker = null;
-      toast(mode === 'move' ? t('移动中…') : t('复制中…'));
-      await new Promise((r) => setTimeout(r, 30));   // 让 toast 先上屏——原生 move/copy 是同步桥调用会阻塞 JS
-      let okN = 0, err = '';
-      for (const n of names) {
-        const r = (mode === 'move' ? localMove : localCopy)(srcDir ? srcDir + '/' + n : n, dest);
-        if (r.error) err = r.error; else okN++;
-      }
-      if (selecting) exitSelect();
-      toast(okN ? (mode === 'move' ? t('已移动 {n} 项', { n: okN }) : t('已复制 {n} 项', { n: okN })) : (tr(err) || t('操作失败')));
-      await load(path);
-      return;
-    }
-    picker = null;
-    // 目标在另一个电脑位置：源按当前根、目标按它的根，服务端一次搬完（跨盘时自动拷贝+删源）
-    const cross = !desktopNative && (destRoot ?? cloudRoot) !== cloudRoot;
-    if (cross) toast(mode === 'move' ? t('移动中…') : t('复制中…'));
-    let okN = 0, err = '';
-    for (const n of names) {
-      try {
-        const source = srcDir ? srcDir + '/' + n : n;
-        if (desktopNative) await (mode === 'move' ? nativeWorkspaceMove : nativeWorkspaceCopy)(source, dest, desktopLocationId);
-        else if (cross) await (mode === 'move' ? api.moveFile : api.copyFile)(source, dest, destRoot, cloudRoot);
-        else await (mode === 'move' ? api.moveFile : api.copyFile)(source, dest, cloudRoot);
-        okN++;
-      }
-      catch (e) { err = e.body?.error || (typeof e.body === 'string' ? e.body : '') || err; }
-    }
-    if (selecting) exitSelect();
-    toast(okN ? (mode === 'move' ? t('已移动 {n} 项', { n: okN }) : t('已复制 {n} 项', { n: okN })) : (tr(err) || t('操作失败')));
-    await load(path);
-  }
-  const pickerDestName = $derived.by(() => {
-    if (!picker) return '';
-    const ps = picker.path.split('/').filter(Boolean);
-    if (!ps.length) return isLocal ? t('本地') : (picker.rootLabel || t('工作空间'));
-    const last = ps[ps.length - 1];
-    return isLocal && multiRoot && ps.length === 1 ? (rootMap[last] || last) : last;   // 首段=根 id → 显示名
-  });
-  const pickerBtnLabel = $derived(!picker ? '' : isLocal && multiRoot && !picker.path ? t('请先进入一个位置')
-    : picker.mode === 'move' ? t('移动到「{name}」', { name: pickerDestName }) : t('复制到「{name}」', { name: pickerDestName }));
-
-  // —— 上传（进度入传输面板；执行在 lib/uploads.svelte.js：手机 App 走原生服务、其余走 XHR 分块）——
-  async function pickUpload() {
-    addOpen = false;
-    if (!desktopNative) {
-      // 手机 App：原生选文件 + 原生上传（退后台/锁屏照传）；没有原生桥才走网页 <input type=file>
-      if (hasNativeUpload() && pickNativeUpload({ dir: path, ws: cloudRoot })) return;
-      fileInput?.click();
-      return;
-    }
-    try {
-      const result = await nativeWorkspaceImportFiles(path, desktopLocationId);
-      if (!result?.canceled) { toast(t('已导入 {n} 个文件', { n: result.items?.length || 0 })); await load(path); }
-    } catch (e) { toast(t('导入失败：{reason}', { reason: tr(e.message || '') })); }
-  }
-  // 有文件传进了当前看着的目录 → 刷新列表（上传可能是在别的页面/别的目录时发起、现在才完成）
-  $effect(() => onUploaded(({ ws: w, dirs }) => {
-    if (!isLocal && (w || '') === (cloudRoot || '') && dirs.includes(path)) load(path);
-  }));
-  async function pickDirectoryImport() {
-    addOpen = false;
-    try {
-      const result = await nativeWorkspaceImportDirectory(path, desktopLocationId);
-      if (!result?.canceled) { toast(t('文件夹已导入')); await load(path); }
-    } catch (e) { toast(t('导入失败：{reason}', { reason: tr(e.message || '') })); }
-  }
-  async function onPick(e) {
-    const list = [...(e.target.files || [])];
-    e.target.value = '';
-    for (const f of list) uploadOne(f);
-  }
-  let uid = 0;
-  function uploadOne(file, intoDir) {
-    startUpload(file, { dir: intoDir ?? path, ws: cloudRoot });   // 拖到某个文件夹上时传进那个文件夹，否则当前目录
-  }
-  // —— 桌面拖拽上传（网盘式：拖在某个文件夹上就传进那个文件夹，拖在空白处传进当前目录）——
-  // 只在云端工作空间生效：手机本地(SAF)那侧没有这条通路，只读分享空间更不该能写。
-  // dropOn：null=没在拖 / ''=当前目录 / '<文件夹名>'=某个文件夹（用来点亮目标）。
-  let dropOn = $state(null);
-  const canDrop = $derived(!readonly && !isLocal && !desktopNative);
-  const dtHasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
-  const joinPath = (a, b) => [a, b].filter(Boolean).join('/');
-
-  function dragOverRoot(e) {
-    if (nativeDragRels) return;   // 自己拖出去的项悬在空白处＝原地，不算落点
-    if (!canDrop || !dtHasFiles(e)) return;
-    e.preventDefault();
-    try { e.dataTransfer.dropEffect = 'copy'; } catch {}
-    dropOn = '';
-  }
-  function dragLeaveRoot(e) { if (!e.currentTarget.contains(e.relatedTarget)) dropOn = null; }
-  // 文件夹格子自己拦下 dragover（stopPropagation），根的处理器就不会把目标又抹回当前目录。
-  function dragOverFolder(e, name) {
-    if (nativeDragRels) {   // 自己拖出去的项拖回文件夹＝内部移动（不能进自己/自己的子目录）
-      const dest = joinPath(path, name);
-      if (nativeDragRels.some((r) => r === dest || dest.startsWith(r + '/'))) return;
-      e.preventDefault(); e.stopPropagation();
-      try { e.dataTransfer.dropEffect = 'move'; } catch {}
-      dropOn = name;
-      return;
-    }
-    if (!canDrop || !dtHasFiles(e)) return;
-    e.preventDefault(); e.stopPropagation();
-    try { e.dataTransfer.dropEffect = 'copy'; } catch {}
-    dropOn = name;
-  }
-
-  async function onDropUpload(e) {
-    if (nativeDragRels) {
-      e.preventDefault(); e.stopPropagation();
-      const target = dropOn, rels = nativeDragRels;
-      dropOn = null; nativeDragRels = null;
-      if (target) await moveNativeDragged(rels, joinPath(path, target));
-      return;
-    }
-    if (!canDrop || !dtHasFiles(e)) { dropOn = null; return; }
-    e.preventDefault(); e.stopPropagation();
-    const target = dropOn;                       // 先取：dropOn 马上要清
-    dropOn = null;
-    const baseDir = target ? joinPath(path, target) : path;
-    const entries = entriesFromDrop(e);          // 同步取，await 之后 dataTransfer 就废了
-    const loose = [...(e.dataTransfer.files || [])];
-    if (!entries.length) { for (const f of loose) uploadOne(f, baseDir); return; }  // 老浏览器兜底
-    // 整树上传不设 Composer 那种小上限——这是网盘，用户拖多少传多少。
-    const { items, stat } = await walkEntries(entries, { maxFiles: 5000, maxBytes: 8e9, maxFileBytes: 2e9 });
-    if (!items.length) return;
-    const note = skipNote(stat);
-    if (note) toast(tr(note));   // 文案出自 dirDrop.js（别的模块）：显示点兜一层 tr()
-    for (const g of groupByRoot(items)) {
-      if (g.isDir) await uploadTree(g.name, g.items, baseDir);
-      else for (const it of g.items) await uploadOne(it.file, baseDir);
-    }
-  }
-
-  // 整个文件夹作为【一条】传输任务（几百个文件铺成几百行没法看）：进度按累计字节算。
-  function uploadTree(rootName, items, baseDir) {
-    const list = items.map((it) => ({ file: it.file, dir: joinPath(baseDir, it.rel.split('/').slice(0, -1).join('/')) }));   // rel 含顶层文件夹名
-    startTreeUpload(rootName, list, { ws: cloudRoot, baseDir });
-  }
-
-  // 取消在途任务：上传交给引擎（掐断在途请求 + 让服务端删半截文件）；下载按来源各自取消。
-  function cancelTask(task) {
-    if (task.status !== 'up') return;
-    if (task.up) { cancelUp(task.id); toast(t('已取消上传 {name}', { name: task.name })); return; }
-    if (task.native) { cancelDownload(task.id); toast(t('已取消下载 {name}', { name: task.name })); return; }
-    task.status = 'cancelled';
-    try { task.ctrl.abort(); } catch {}
-    tasks = [...tasks];
-    toast(t('已取消下载 {name}', { name: task.name }));
-  }
-
-  // —— 预览 ——
-  // 统一构造查看器条目：云端走 /api（origin cloud），本地走 SAF 原生流式（origin local，url=/__localfile，带 Range）。
-  // mt=mtime：让查看器衍生图 URL 与列表图标完全一致（命中浏览器缓存秒出 blur 底）+ 文件替换后自动 bust。
-  // 原生位置（含这台电脑）不带 ws：带了 cloudFileUrl 就当成服务器上的路径去 /api/file 取了
-  const srcItem = (it, kind) => ({ origin: isLocal ? 'local' : 'cloud', rel: itemRel(it), name: it.name, kind, mt: it.mtime, ws: desktopNative ? '' : cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '' });
-  // 格子 / 行缩略图元素（data-rel）：一次扫一遍建表，画廊几百项也只读一次布局
-  function cellEls() {
-    const m = new Map();
-    for (const el of scroller?.querySelectorAll('[data-rel]') || []) {
-      const r = el.dataset.rel;
-      if (!m.has(r)) m.set(r, []);
-      m.get(r).push(el);
-    }
-    return m;
-  }
-  // 这一项此刻在视口里的矩形（「最近」与正文里可能各有一格，取看得见的那个）；看不见给 null，查看器就地淡入
-  function cellRect(r, els) {
-    for (const el of els?.get(r) || []) { const box = rectOf(el, scroller); if (box) return box; }
-    return null;
-  }
-  // 查看器描述符：在 srcItem 之上补列表已知的大小、补充元数据里的宽高 / 时长、格子矩形（从它放大进入、关闭缩回），
-  // 大图标视图把格子正显示的 640 档当 blur 底与视频海报（gif 例外：查看器里放原图动画）
-  function descOf(f, els) {
-    const kind = fkKind(f.name);
-    const d = { ...srcItem(f, kind) };
-    if (Number.isFinite(f.size)) d.size = f.size;
-    const m = meta[f.name];
-    if (m) { d.width = m.w; d.height = m.h; d.duration = m.dur; }
-    if (kind === 'image' || kind === 'video') {
-      d.originRect = cellRect(itemRel(f), els);
-      if (viewMode === 'large' && !isLocal && !desktopNative && extOf(f.name) !== 'gif') d.thumbUrl = cloudFileUrl(itemRel(f), { grid: true, mt: f.mtime, ws: cloudRoot });
-    }
-    // 手机本地的文本类：在线壳里 /__localfile 不一定通，经原生桥整份读出来交给查看器
-    if (isLocal && (kind === 'markdown' || kind === 'text' || kind === 'html')) d.text = localReadText(itemRel(f));
-    return d;
-  }
-  // 打开文件：同一文件夹里的图片与视频按列表当前顺序组成一个混合画廊；文档（PDF / Markdown / Office / 文本 / 网页）组成
-  // 前后翻页序列；音频自成一组。手机本地的文本类要整份读出来，只放点开的那一份、不拉进序列（几百个源码文件挨个读太重）。
-  function openFile(item) {
-    if (wsPick) return;                // 选择器形态只挑文件夹：文件列出来是给你认路的，不点开
-    if (selecting) { toggleSel(item.name); return; }
-    const kind = fkKind(item.name);
-    if (kind === 'other') { preview = { name: item.name, rel: itemRel(item), kind: 'other', local: isLocal }; return; }   // 其余（压缩包等）
-    const r0 = itemRel(item);
-    const localDoc = (f) => isLocal && ['markdown', 'text', 'html'].includes(fkKind(f.name));
-    const { seq, index } = buildSequence(showFiles, item, { accept: (f) => !localDoc(f), same: (f) => itemRel(f) === r0 });
-    const els = cellEls();
-    openPreview(seq.map((f) => descOf(f, els)), index, { actions: viewerActs() });
-    openMap = new Map(pv.items.map((it, i) => [it.key, seq[i]]));
-    lastRel = r0;
-  }
-
-  // md/文本 → 沉浸式文档查看/编辑器（云端 fetch；本地 SAF 已读文本）。新建 Markdown 后直接进编辑也走这里
-  function openDocPreview(item, k, extra = {}) {
-    const r = itemRel(item);
-    const kind = k === 'md' ? 'markdown' : 'text';
-    if (isLocal) openPreview([{ origin: 'local', rel: r, name: item.name, kind, text: localReadText(r), ...extra }], 0);
-    else openPreview([{ origin: 'cloud', rel: r, name: item.name, kind, ws: desktopNative ? '' : cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '', ...extra }], 0);
-  }
-
-  // —— 查看器里的动作（kit/actions.js：「发送给 AI…」「重命名…」F2、「删除」Del）——
-  // openMap：本页这一轮打开时建的「查看器条目 key → 列表项」；关掉查看器即作废。lastRel：最后看的那一项（关闭后滚回去）
-  let openMap = null;
-  let lastRel = '';
-  // 「换一种方式看」（svg ↔ 源码）会在 key 后面挂 #view:…，按原 key 找回列表项
-  const baseKey = (k) => String(k || '').replace(/#view:[^#]*$/, '');
-  const srcOf = (it) => (it?.key && (openMap?.get(it.key) || openMap?.get(baseKey(it.key)))) || null;
-  function viewerActs() {
-    const a = {};
-    // 发送给 AI：先关查看器，再弹本页那张选目标的菜单（同长按菜单里的「发送给 AI」）
-    if (!readonly && !guest && (!desktopExtra || pcLocal)) a.sendAi = (it) => {
-      const f = srcOf(it);
-      if (!f) return;
-      closePreview();
-      aiPick = f; aiView = 'root';
-    };
-    // 重命名：查看器 z-index 300，本页自己的改名框在 .ws-root 的层叠上下文里压不过它——用挂在 body 上的应用级改名框
-    // 明暗：媒体查看器恒暗，文档类跟随本页（与删除确认框一致）；失败提示改出在查看器里（本页的 toast 在查看器下层，看不见）
-    if ((!isLocal || localOps.rename) && !readonly) a.rename = async (it, vctx) => {
-      const f = srcOf(it);
-      if (!f) return;
-      const name = await askRename(f.name, { dark: ['image', 'video', 'audio'].includes(it?.kind) ? true : undefined });
-      if (!name || name === f.name || !(await viaViewer(vctx, () => renameTo(f, name)))) return;
-      const nf = { ...f, name, ...(f.rel ? { rel: f.rel.replace(/[^/]*$/, name) } : {}) };
-      const i = pv.items.findIndex((x) => x.key === it.key);
-      if (i < 0 || !openMap) return;
-      openMap.delete(baseKey(it.key));
-      previewReplace(i, descOf(nf, null));
-      openMap.set(pv.items[i].key, nf);
-      lastRel = itemRel(nf);
-    };
-    // 删除：同长按菜单（确认框在查看器之上；电脑位置里是移到回收站），删掉后画廊停在下一张，删空了就关
-    if ((!isLocal || localOps.del) && !readonly) a.trash = async (it, vctx) => {
-      const f = srcOf(it);
-      if (!f || !(await viaViewer(vctx, () => doDelete(f)))) return;
-      const i = pv.items.findIndex((x) => x.key === it.key);
-      openMap?.delete(baseKey(it.key));
-      if (i >= 0) previewRemove(i);
-    };
-    return a;
-  }
-  // 关掉查看器：最后看的那一项不在可视区就滚过去（只滚本页列表，不牵动外层），再短暂高亮一下——人知道自己刚才看到哪儿了
-  let flashRel = $state('');
-  let flashTimer = 0;
-  $effect(() => {
-    const open = pv.open, cur = pv.items[pv.index];
-    untrack(() => {
-      if (!openMap) return;
-      if (open) { const f = srcOf(cur); if (f) lastRel = itemRel(f); return; }
-      const r = lastRel;
-      openMap = null; lastRel = '';
-      if (r) revealAfterClose(r);
-    });
-  });
-  async function revealAfterClose(r) {
-    await tick();
-    const el = cellEls().get(r)?.at(-1);   // 「最近」在前、正文在后：回到正文那一格
-    if (!el || !scroller) return;
-    const box = el.getBoundingClientRect(), sr = scroller.getBoundingClientRect(), cs = getComputedStyle(scroller);
-    const top = sr.top + (parseFloat(cs.paddingTop) || 0), bottom = sr.bottom - (parseFloat(cs.paddingBottom) || 0);
-    if (box.top < top || box.bottom > bottom) scroller.scrollTop += (box.top + box.bottom) / 2 - (top + bottom) / 2;
-    flashRel = r;
-    clearTimeout(flashTimer);
-    flashTimer = setTimeout(() => (flashRel = ''), 1400);
-  }
-  function nativeDownload(r) {
-    const name = r.split('/').pop() || 'download';
-    // &name=：APK 原生 DownloadListener 用它做精确文件名（含中文）；网页端浏览器按 Content-Disposition。
-    let href = apiUrl(scoped('/api/file?path=' + encodeURIComponent(r)) + '&dl=1&name=' + encodeURIComponent(name));
-    // 离线壳里下载走原生 DownloadManager（另一条 HTTP 请求，带不上 JS 的 Bearer 头）——admin 把
-    // token 拼进 URL（/api/file 在 ?token 白名单内）；普通用户靠 WebView cookie（原生侧已附）兜底。
-    const tok = getToken();
-    if (isOffline() && tok) href += '&token=' + encodeURIComponent(tok);
-    const a = document.createElement('a');
-    a.href = href; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-  }
-  function download(r) {
-    if (desktopNative) {
-      nativeWorkspaceSaveAs(r, desktopLocationId).then((result) => { if (!result?.canceled) toast(t('已保存到电脑')); }).catch((e) => toast(t('保存失败：{reason}', { reason: tr(e.message || '') })));
-      return;
-    }
-    if (hasNativeDownload()) { appDownload(r); return; }
-    if (readonly) { downloadTracked(r); return; }
-    nativeDownload(r);
-  }
-  // 手机 App：app 自己下到手机「下载」文件夹（原生下载器，带 Bearer 头），进度进本页「传输」面板；
-  // 不再跳系统浏览器。原生桥拒收（极旧壳）才退回 <a download>。
-  function appDownload(r) {
-    const name = r.split('/').pop() || 'download';
-    const url = apiUrl(scoped('/api/file?path=' + encodeURIComponent(r)) + '&dl=1&name=' + encodeURIComponent(name));
-    if (startDownload({ url, name, quiet: true })) toast(t('开始下载 {name}', { name }));
-    else nativeDownload(r);
-  }
-  // 分享页下载：fetch 流式读进度 → 顶栏环 + 传输面板有真实状态（访客在这页的核心动作就是
-  // 下载，不能毫无反馈）。数据攒成 Blob 后触发保存；大文件 Blob 内存风险大，超阈值掐掉这条
-  // 流退回浏览器原生下载（自带下载管理）；流式中途失败同样退回原生兜底。
-  const TRACK_MAX = 300 * 1024 * 1024;
-  async function downloadTracked(r) {
-    const name = r.split('/').pop() || 'download';
-    const id = 'd' + Date.now() + (uid++);
-    tasks = [{ id, name, total: 0, sent: 0, status: 'up', kind: kindOf(name), bps: 0, lastT: 0, ctrl: new AbortController(), dl: true, at: Date.now() }, ...tasks];
-    // 【Svelte5 深代理坑】必须拿数组元素的代理来改——push 进 $state 后改裸字面量，
-    // 代理 signal 不更新，UI 永远 0%（同 webview 上传 0% 卡死的老病，先例判法照抄）。
-    const tk = tasks[0];
-    try {
-      const res = await fetch(apiUrl(scoped('/api/file?path=' + encodeURIComponent(r))), { headers: authHeaders(), credentials: 'same-origin', signal: tk.ctrl.signal });
-      if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
-      tk.total = Number(res.headers.get('content-length')) || 0;
-      if (tk.total > TRACK_MAX) {
-        try { tk.ctrl.abort(); } catch {}
-        tasks = tasks.filter((x) => x.id !== id);
-        nativeDownload(r);
-        toast(t('文件较大，已交给浏览器下载'));
-        return;
-      }
-      const reader = res.body.getReader();
-      const chunks = [];
-      tk.lastT = performance.now();
-      let uiSent = 0, lastUi = 0, sent = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        sent += value.byteLength;
-        const now = performance.now();
-        if (now - lastUi > 150) {   // 节流：chunk 很密，逐个驱动响应式会拖死列表
-          const dt = (now - tk.lastT) / 1000;
-          if (dt > 0) { const inst = (sent - uiSent) / dt; tk.bps = tk.bps ? tk.bps * 0.6 + inst * 0.4 : inst; }
-          tk.lastT = now; uiSent = sent; lastUi = now;
-          tk.sent = sent;
-        }
-      }
-      tk.sent = sent;
-      tk.total = Math.max(tk.total, sent) || 1;
-      const blob = new Blob(chunks);
-      const u = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(u), 60000);
-      tk.sent = tk.total; tk.status = 'done';
-      toast(t('已下载 {name}', { name }));
-      setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 4000);
-    } catch (e) {
-      if (tk.status === 'cancelled' || e?.name === 'AbortError') {   // 用户取消：短暂显示后清行
-        setTimeout(() => { tasks = tasks.filter((x) => x.id !== id); }, 2500);
-        return;
-      }
-      tasks = tasks.filter((x) => x.id !== id);
-      nativeDownload(r);   // 流式失败退回原生下载，至少能下到
-    }
-  }
+  expose(createPanelOps(P));
+  expose(createPanelView(P));
 
   // —— toast ——
   let toastTimer = null;
@@ -1959,187 +905,11 @@
     if (!roots.length) { localPicked = false; items = []; path = ''; }
     else load('');
   }
-  const rootIcon = (mode) => (mode === 'all' ? PHONE_GLYPH : FOLDER_GLYPH);
-
-  // —— helpers ——
-  // 列表里沿用的短类型码（图标配色 / 简介里的种类 / 传输行字形 / 发送给 AI 的能力判断）：判定全部来自 lib/fileKinds.js 单一词表
-  const KIND_CODE = { image: 'img', video: 'mov', audio: 'audio', pdf: 'pdf', markdown: 'md', html: 'html', text: 'text' };
-  function kindOf(name) {
-    const k = KIND_CODE[fkKind(name)];
-    if (k) return k;
-    const ik = iconKindOf(name);
-    return ik === 'zip' ? 'zip' : extOf(name) === 'apk' ? 'apk' : 'doc';
-  }
-  const FICON = {
-    apk: '#34c759', md: '#8e8e93', text: '#8e8e93', doc: '#8e8e93', pdf: '#ff383c',
-    zip: '#ff8d28', mov: '#6d7cff', img: '#0088ff', audio: '#ff2d55',
-  };
-  const iconColor = (name) => FICON[kindOf(name)] || '#8e8e93';
-  function fmtSize(n) {
-    if (n == null) return '';
-    if (n < 1024) return n + ' B';
-    if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
-    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
-    return (n / 1073741824).toFixed(2) + ' GB';
-  }
-  // 格式器按需建一次复用（fmtTime 每行文件都调；切语言会整页重载，locale 运行期不变）
-  const DTF = {};
-  const dtf = (k, o) => (DTF[k] ??= new Intl.DateTimeFormat(locale(), o));
-  function fmtTime(ms) {
-    if (!ms) return '';
-    const d = new Date(ms), now = new Date();
-    const sameDay = d.toDateString() === now.toDateString();
-    // 中文输出与原先一致：「09:05」「9月28日」；英文「9:05 AM」「Sep 28」
-    if (sameDay) return dtf('hm', { timeStyle: 'short' }).format(d);
-    const yd = new Date(now); yd.setDate(now.getDate() - 1);
-    if (d.toDateString() === yd.toDateString()) return t('昨天');
-    return dtf('md', { month: 'short', day: 'numeric' }).format(d);
-  }
-  // 简介用：完整日期时间（中文「2026年9月28日 09:05」，英文「Sep 28, 2026, 9:05 AM」）
-  function fmtFull(ms) {
-    if (!ms) return '—';
-    return dtf('full', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(ms));
-  }
-  // 简介用：文件种类描述（按扩展名/类型）
-  const KIND_LABEL = { img: t('图片'), mov: t('视频'), audio: t('音频'), pdf: t('PDF 文稿'), zip: t('压缩归档'), md: t('Markdown 文稿'), text: t('文本文稿'), doc: t('文稿'), apk: t('安卓安装包') };
-  function typeLabel(item) {
-    if (item.isDir) return t('文件夹');
-    const ext = (item.name.split('.').pop() || '').toUpperCase();
-    const base = KIND_LABEL[kindOf(item.name)] || t('文件');
-    return item.name.includes('.') ? t('{kind}（.{ext}）', { kind: base, ext: ext.toLowerCase() }) : base;
-  }
   // 电脑位置里直接给 Windows 完整路径（整机范围里「C 盘 / Users / …」不如一眼能复制的路径有用）
   const infoLocation = $derived(infoItem ? (atPcLoc && !isLocal ? winAbs(cloudRoot, infoItem.dir || '')
     : rootLabel + (infoItem.dir ? ' / ' + infoItem.dir.split('/').join(' / ') : '')) : '');
-  // 传输行：第一行右侧＝百分比或终态；第二行＝「已传 / 总大小 · 实时速度」（排队/重连时换成说明，失败给原因）。
-  // 总大小未知（下载响应缺 content-length）时只显示已传字节，别出 NaN%。
-  const pctOf = (tk) => (tk.total > 0 ? Math.min(100, Math.floor((tk.sent / tk.total) * 100)) : 0);
-  const xferState = (tk) => tk.status === 'done' ? t('完成') : tk.status === 'error' ? t('失败') : tk.status === 'cancelled' ? t('已取消')
-    : tk.total > 0 ? pctOf(tk) + '%' : '';
-  function xferDetail(tk) {
-    if (tk.status === 'error') return tk.error || '';
-    if (tk.status === 'done') return tk.total > 0 ? fmtSize(tk.total) : '';
-    if (tk.status === 'cancelled') return tk.total > 0 ? fmtSize(tk.total) : '';
-    if (tk.note === 'queued') return t('排队中…');
-    const amount = tk.total > 0 ? fmtSize(tk.sent) + ' / ' + fmtSize(tk.total) : fmtSize(tk.sent);
-    if (tk.note === 'retry') return amount + ' · ' + t('网络不稳，重连中…');
-    return amount + (tk.bps > 0 ? ' · ' + fmtSize(tk.bps) + '/s' : '');
-  }
-
-  // 「本地位置」行图标：文件夹（蓝）/ 整机存储（绿手机）
-  const FOLDER_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="#0088ff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.4h7.4A2.5 2.5 0 0 1 21 9.9v6.6a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z"/></svg>';
-  const PHONE_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.8" width="10" height="18.4" rx="2.6"/><path d="M10.5 18.6h3"/></svg>';
-  const PC_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M9 20.5h6M12 16.5v4"/></svg>';
-  const GLYPH = {
-    img: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.4"/><circle cx="9" cy="9.6" r="1.7"/><path d="m6 17 4.2-4.4 3 3 2.4-2.5 2.9 3.1"/>',
-    mov: '<rect x="3.5" y="5.5" width="17" height="13" rx="2.6"/><path d="m10.3 9.5 4.4 2.5-4.4 2.5v-5Z" fill="#fff" stroke="none"/>',
-    audio: '<path d="M9 17.5V6.8l9-2v10.7"/><circle cx="6.8" cy="17.5" r="2.3"/><circle cx="15.8" cy="15.5" r="2.3"/>',
-    pdf: '<path d="M6 3.5h8l4 4V20.5h-12V3.5Z"/><path d="M14 3.5v4h4"/>',
-    zip: '<rect x="4.5" y="6" width="15" height="13" rx="2.4"/><path d="M12 6v13" stroke-dasharray="2.4 2"/>',
-    apk: '<rect x="7" y="3" width="10" height="18" rx="2.4"/><path d="M10.5 18h3"/>',
-    md: '<path d="M6 3.5h8l4 4V20.5h-12V3.5Z"/><path d="M14 3.5v4h4"/><path d="M9 12h6M9 15.5h6"/>',
-    text: '<path d="M6 3.5h8l4 4V20.5h-12V3.5Z"/><path d="M14 3.5v4h4"/><path d="M9 12h6M9 15.5h4"/>',
-    doc: '<path d="M6 3.5h8l4 4V20.5h-12V3.5Z"/><path d="M14 3.5v4h4"/>',
-    dir: '<path d="M3.5 7.2c0-1.5 1.2-2.7 2.7-2.7h3.4l2 2.3h6.2c1.5 0 2.7 1.2 2.7 2.7v8.3c0 1.5-1.2 2.7-2.7 2.7H6.2c-1.5 0-2.7-1.2-2.7-2.7z"/>',
-  };
-  const fileGlyph = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${GLYPH[k] || GLYPH.doc}</svg>`;
-
-  // iOS 文件 app 原版风文件图标：白色文档纸 + 右上折角 + 底部彩色类型标签条
-  const TYPE_COLOR = { pdf: '#ff3b30', img: '#32ade6', mov: '#5856d6', audio: '#ff2d55', zip: '#ff9500', md: '#8e8e93', text: '#8e8e93', apk: '#34c759', doc: '#007aff' };
-  function fileIcon(name) {
-    const k = kindOf(name);
-    const c = TYPE_COLOR[k] || '#007aff';
-    const label = name.includes('.') ? (name.split('.').pop() || '').toUpperCase().slice(0, 4) : '';
-    return `<svg viewBox="0 0 28 34" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M3 4a3 3 0 0 1 3-3h11.5L25 8.5V30a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V4Z" fill="#fff" stroke="#d6d6da" stroke-width="1"/>
-      <path d="M17.5 1 25 8.5h-5.5A2 2 0 0 1 17.5 6.5V1Z" fill="#e6e6ea"/>
-      <rect x="3" y="20.5" width="22" height="9.5" rx="2.6" fill="${c}"/>
-      ${label ? `<text x="14" y="27.4" font-size="6" font-weight="700" letter-spacing="-.2" fill="#fff" text-anchor="middle" font-family="-apple-system,'SF Pro Text',sans-serif">${label}</text>` : ''}
-    </svg>`;
-  }
-
-  // —— 媒体缩略图：图片/视频行叠真实预览图，加载完成才淡入——加载前类型图标就是占位缓冲。
-  // 云端走 /api/file?thumb=1（图片 sharp 320 webp / 视频 ffmpeg 抽帧，失败 404 不喂原字节）；
-  // 本地 tab（离线壳内）：新 apk 走 /__localfile&thumb=1 原生缩略（图片+视频，SAF 系统缩略
-  // 优先+兜底自解/抽帧）；旧 apk 退回图片全尺寸流式、视频保持类型图标。
-  const canLocalThumb = hasLocalThumb() && isOffline();
-  const thumbable = (it) => {
-    if (it.isDir) return false;
-    if (it.nativeThumb) return true;
-    const k = kindOf(it.name);
-    if (!isLocal) return k === 'img' || k === 'mov';
-    if (canLocalThumb) return k === 'img' || k === 'mov';
-    return k === 'img' && isOffline();
-  };
-  // 拿到的是「系统类型图标」而不是真缩略图：小且正方（Windows 回落的 32×32）。
-  // 按尺寸判而不是按扩展名判——PDF/Office 这类真有缩略图提供程序的，回来的是大图或非
-  // 正方的整页预览，那种仍该按缩略图铺满。
-  const iconThumb = (it) => !!it.nativeThumb && it.nativeThumbW > 0
-    && it.nativeThumbW === it.nativeThumbH && it.nativeThumbW <= 48;
-  const thumbSrc = (it) => (it.nativeThumb || (isLocal
-    ? (canLocalThumb ? localThumbUrl(rel(it.name)) : localFileUrl(rel(it.name)))
-    : cloudFileUrl(itemRel(it), { thumb: true, mt: it.mtime, ws: desktopNative ? '' : cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '' })));
-  const thumbOk = (e) => e.currentTarget.classList.add('ok');
-  // 失败：云端先按 mediaFallbackUrl 做一次 LAN→隧道自愈重试（媒体 <img> 没有 fetch 那套
-  // noteNetFail 自愈，见 server.js）；仍失败/本地失败 → 保持透明，底下类型图标继续兜底。
-  function thumbErr(e) {
-    const img = e.currentTarget;
-    if (img.dataset.cloud && !img.dataset.retried) {
-      img.dataset.retried = '1';
-      const next = mediaFallbackUrl(img.src);
-      if (next !== img.src) { img.src = next; return; }
-    }
-    img.classList.remove('ok');
-  }
-
-  // —— 图标 / 大图标视图的格子 ——
-  // 服务端列表档在图片、视频之外还能出的：PDF 与 Office 首页、音频内嵌封面、TIFF。只在图标视图要——
-  // 列表行 34px 小图标犯不上为每个文稿起一次转换。失败一律 404，格子退回类型线稿图标（扩展名表见 lib/fileGrid.js GRID_THUMB_EXT）。
-  const cellThumbable = (it) => thumbable(it) || (!isLocal && !desktopNative && !it.isDir && GRID_THUMB_EXT.has(extOf(it.name)));
-  // 图片 / 视频：缩略图没到时只铺底色（不先闪一下类型图标）；其余先摆线稿图标，封面 / 首页到了再盖上
-  const isMedia = (it) => { const k = fkKind(it.name); return k === 'image' || k === 'video'; };
-  // 大图标两列，一格在手机上 170 多 px、三倍屏要五百多像素：走 640 的 grid 档；图标视图三列用列表同一张 320
-  const cellSrc = (it) => it.nativeThumb || (isLocal ? thumbSrc(it)
-    : cloudFileUrl(itemRel(it), { thumb: viewMode !== 'large', grid: viewMode === 'large', mt: it.mtime, ws: desktopNative ? '' : cloudRoot, nativeLocation: desktopNative ? desktopLocationId : '' }));
-  function cellErr(e) {
-    const img = e.currentTarget, before = img.src;
-    thumbErr(e);
-    if (img.src !== before) return;    // 换了条线路重试
-    img.parentElement?.classList.add('bad');
-  }
-  // 副行：文件夹＝项目数；大图标＝日期 · 大小；图标＝按修改日期排序时给日期，否则给大小
-  const cellSub = (f) => f.isDir ? (meta[f.name]?.n != null ? t('{n} 项', { n: meta[f.name].n }) : '')
-    : viewMode === 'large' ? [fmtTime(f.mtime), fmtSize(f.size)].filter(Boolean).join(' · ')
-    : sortPref.key === 'mtime' ? fmtTime(f.mtime) : fmtSize(f.size);
-  const durOf = (f) => (kindOf(f.name) === 'mov' && meta[f.name]?.dur > 0 ? fmtDur(meta[f.name].dur) : '');
-
-  // 顶栏「…」：显示方式 / 排序 / 隐藏项 / 多选（iOS 文件 app 同款）。同一个排序键再点一下＝反向
-  const viewItems = $derived.by(() => {
-    if (!viewMenu) return [];
-    const L = [
-      { label: t('列表'), icon: uiIconSvg('list'), checked: viewMode === 'list', onclick: () => setView('list') },
-      { label: t('图标'), icon: uiIconSvg('grid'), checked: viewMode === 'grid', onclick: () => setView('grid') },
-      { label: t('大图标'), icon: uiIconSvg('large'), checked: viewMode === 'large', onclick: () => setView('large') },
-      { sep: true },
-    ];
-    for (const [k, label] of [['name', t('名称')], ['mtime', t('修改日期')], ['size', t('大小')], ['type', t('种类')]]) {
-      const on = sortPref.key === k;
-      L.push({
-        label, checked: on, icon: on ? uiIconSvg(sortPref.dir === 1 ? 'sortUp' : 'sortDown') : '',
-        detail: on ? (sortPref.dir === 1 ? t('升序') : t('降序')) : '', onclick: () => setSort(k),
-      });
-    }
-    if (hidSwitch) {
-      L.push({ sep: true });
-      L.push({ label: showHidden ? t('收起隐藏项') : t('显示隐藏项'), icon: uiIconSvg(showHidden ? 'eyeOff' : 'eye'), detail: t('{n} 项', { n: hidTotal }), onclick: toggleHidden });
-    }
-    if (!readonly && !(desktopNative && query) && (showFolders.length || showFiles.length)) {
-      if (!hidSwitch) L.push({ sep: true });
-      L.push({ label: t('多选'), icon: G.select, onclick: () => enterSelect() });
-    }
-    return L;
-  });
 </script>
+
 
 {#snippet mhead()}
   {#if menuHead}
@@ -2148,32 +918,29 @@
       <span class="mh-th" class:dir={it.isDir}>
         {#if it.isDir}
           <img class="mh-fold" src={wsIcon} alt="" draggable="false" />
-        {:else if iconThumb(it)}
+        {:else if P.iconThumb(it)}
           <img class="mh-ricon" src={it.nativeThumb} alt="" draggable="false" />
         {:else}
           <span class="mh-ic">{@html typeIconSvg(it.name)}</span>
-          {#if cellThumbable(it)}<img class="mh-img" src={thumbSrc(it)} alt="" decoding="async" draggable="false" data-cloud={isLocal ? undefined : '1'} onload={thumbOk} onerror={thumbErr} />{/if}
+          {#if P.cellThumbable(it)}<img class="mh-img" src={P.thumbSrc(it)} alt="" decoding="async" draggable="false" data-cloud={isLocal ? undefined : '1'} onload={P.thumbOk} onerror={P.thumbErr} />{/if}
         {/if}
       </span>
       <span class="mh-tx">
         <span class="mh-nm">{it.name}</span>
-        <span class="mh-sub">{[it.isDir ? cellSub(it) : fmtSize(it.size), fmtTime(it.mtime)].filter(Boolean).join(' · ')}</span>
+        <span class="mh-sub">{[it.isDir ? P.cellSub(it) : fmtSize(it.size), fmtTime(it.mtime)].filter(Boolean).join(' · ')}</span>
       </span>
     </div>
   {/if}
 {/snippet}
 
-{#snippet hidToggle()}
-  <button class="hid-tg" onclick={toggleHidden}>{showHidden ? t('收起隐藏项') : t('显示隐藏项')}<small>{hidTotal}</small></button>
-{/snippet}
 
-<div class="ws-root" class:narrow={rootW < 388} class:wpick={wsPick} class:embedded={embeddedUi} class:chrome={hostChrome} class:th-light={theme === 'light'} class:th-dark={theme === 'dark'} class:ios-dark={iosDark} class:modal={!!(menu || addOpen || locMenu || crumbMenu || transferOpen || renameTarget || mkOpen || mdOpen || zipDlg || shareDlg || rootMenu || pcLocMenu || addSheet || aiPick || picker || infoItem || preview || viewMenu)} style:--sq={`url("${sq26}")`} bind:this={rootEl} bind:clientWidth={rootW} ondragover={dragOverRoot} ondragleave={dragLeaveRoot} ondrop={onDropUpload} role="presentation">
+<div class="ws-root" class:narrow={rootW < 388} class:wpick={wsPick} class:embedded={embeddedUi} class:chrome={hostChrome} class:th-light={theme === 'light'} class:th-dark={theme === 'dark'} class:ios-dark={iosDark} class:modal={!!(menu || addOpen || locMenu || crumbMenu || transferOpen || renameTarget || mkOpen || mdOpen || zipDlg || shareDlg || rootMenu || pcLocMenu || addSheet || ai.item || P.picker || infoItem || preview || viewMenu)} style:--sq={`url("${sq26}")`} bind:this={rootEl} bind:clientWidth={rootW} ondragover={P.dragOverRoot} ondragleave={P.dragLeaveRoot} ondrop={P.onDropUpload} role="presentation">
   <!-- 从桌面拖文件/文件夹进来：整块提示；拖在某个文件夹格子上时改说传进那个文件夹 -->
-  {#if dropOn !== null}
+  {#if P.dropOn !== null}
     <div class="dropveil">
       <div class="dropveil-in">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M8 8l4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-        <span>{dropOn ? t('上传到「{name}」', { name: dropOn }) : t('上传到当前文件夹')}</span>
+        <span>{P.dropOn ? t('上传到「{name}」', { name: P.dropOn }) : t('上传到当前文件夹')}</span>
       </div>
     </div>
   {/if}
@@ -2218,7 +985,7 @@
         </span>
       </GlassButton>
     {:else if multiRoot && localPicked}
-      <GlassButton bind:el={addLocBtn} symbol="plus" weight={500} aria={t('添加本地位置')} onclick={() => openAddLoc(addLocBtn)} />
+      <GlassButton bind:el={addLocBtn} symbol="plus" weight={500} aria={t('添加本地位置')} onclick={() => P.openAddLoc(addLocBtn)} />
     {/if}
     {#if gridOn}
       <GlassButton bind:el={viewBtn} symbol="ellipsis" weight={500} aria={t('显示方式')} onclick={() => (viewMenu = !viewMenu)} />
@@ -2227,26 +994,26 @@
 
   <!-- 顶栏与路径条的下拉菜单：点一下就从按钮本身长出来（iOS 26 下拉按钮的液滴形变，kit Menu 材质）。
        菜单一直挂着、open 只管展开 / 收起，收起动画才放得完；平铺在 .ws-root 里（玻璃要采得到底下的列表）。 -->
-  <MorphMenu open={addOpen} anchor={addBtn} neighbors={topBtns()} onfuse={onTopFuse} width={250} items={addItems} onclose={() => (addOpen = false)} />
-  <MorphMenu open={!!locMenu} anchor={locBtn} neighbors={topBtns()} onfuse={onTopFuse} width={250} title={tc('files', '位置')} items={locItems} onclose={() => (locMenu = null)} />
-  <MorphMenu open={!!crumbMenu} anchor={crumbBtn} width={250} items={crumbItems} onclose={() => (crumbMenu = null)} />
-  <MorphMenu open={addSheet} anchor={addLocAnchor} neighbors={topBtns()} onfuse={onTopFuse} width={250} title={t('添加本地位置')} items={addLocItems} onclose={() => (addSheet = false)} />
-  <MorphMenu open={!!rootMenu} anchor={rootMenu?.anchor || null} width={250} title={rootMenu?.root.name || ''} items={rootMenuItems} onclose={() => (rootMenu = null)} />
+  <MorphMenu open={addOpen} anchor={addBtn} neighbors={topBtns()} onfuse={onTopFuse} width={250} items={P.addItems} onclose={() => (addOpen = false)} />
+  <MorphMenu open={!!locMenu} anchor={locBtn} neighbors={topBtns()} onfuse={onTopFuse} width={250} title={tc('files', '位置')} items={P.locItems} onclose={() => (locMenu = null)} />
+  <MorphMenu open={!!crumbMenu} anchor={crumbBtn} width={250} items={P.crumbItems} onclose={() => (crumbMenu = null)} />
+  <MorphMenu open={addSheet} anchor={addLocAnchor} neighbors={topBtns()} onfuse={onTopFuse} width={250} title={t('添加本地位置')} items={P.addLocItems} onclose={() => (addSheet = false)} />
+  <MorphMenu open={!!rootMenu} anchor={rootMenu?.anchor || null} width={250} title={rootMenu?.root.name || ''} items={P.rootMenuItems} onclose={() => (rootMenu = null)} />
   <MorphMenu open={!!pcLocMenu} anchor={pcLocMenu?.anchor || null} width={250} title={pcLocMenu ? pcLocAbs[pcLocMenu.loc.id] || tr(pcLocMenu.loc.name) : ''}
-    items={pcLocItems} onclose={() => (pcLocMenu = null)} />
-  <MorphMenu open={viewMenu} anchor={viewBtn} neighbors={topBtns()} onfuse={onTopFuse} width={250} items={viewItems} onclose={() => (viewMenu = false)} />
+    items={P.pcLocItems} onclose={() => (pcLocMenu = null)} />
+  <MorphMenu open={viewMenu} anchor={viewBtn} neighbors={topBtns()} onfuse={onTopFuse} width={250} items={P.viewItems} onclose={() => (viewMenu = false)} />
 
   <!-- 滚动内容 -->
-  <div class="scroll" bind:this={scroller} onscroll={onScroll} use:dragScrollGuard use:dropZone={hereZone} class:dnd-here={drag.overKey === 'ws-here'}>
+  <div class="scroll" bind:this={scroller} onscroll={onScroll} use:dragScrollGuard use:dropZone={P.hereZone} class:dnd-here={drag.overKey === 'ws-here'}>
     <!-- 紧凑面包屑条（取代 34pt 大标题，省垂直空间）：父段蓝色可点、当前段黑色加粗 -->
     <!-- 有位置胶囊时，位置根上不摆路径条（名字就在顶栏上），直接是内容 -->
     {#if !(locPill && !segs.length && !selecting)}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="pathbar" class:wp-path={wsPick} class:wp-lift={wsPick && pkDrag?.abs === pkAbs(path)}
-      onpointerdown={wsPick ? (e) => pkDown(e, title, path, true) : undefined}
-      onpointermove={wsPick ? pressMove : undefined}
-      onpointerup={wsPick ? pressUp : undefined}
-      onpointercancel={wsPick ? pressUp : undefined}>
+      onpointerdown={wsPick ? (e) => P.pkDown(e, title, path, true) : undefined}
+      onpointermove={wsPick ? P.pressMove : undefined}
+      onpointerup={wsPick ? P.pressUp : undefined}
+      onpointercancel={wsPick ? P.pressUp : undefined}>
       {#if wsPick}
         <!-- 路径条自己也是拖源：已经走进这个文件夹了、想选它本身，不必退回上一级去拖它 -->
         <span class="wp-grip" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span>
@@ -2256,237 +1023,17 @@
       {:else}
         {#if pcLocal && !pcHome}<button class="pb-seg" onclick={showPcHome}>{t('这台电脑')}</button><span class="pb-sep">›</span>{/if}
         {#if locPill}
-          <button class="pb-root" class:dnd-on={drag.overKey === 'ws-crumb:-1'} use:dropZone={crumbZone(-1)} aria-label={rootLabel} onclick={goRoot}>{@html locGlyph(cloudLoc)}</button>
+          <button class="pb-root" class:dnd-on={drag.overKey === 'ws-crumb:-1'} use:dropZone={P.crumbZone(-1)} aria-label={rootLabel} onclick={goRoot}>{@html locGlyph(cloudLoc)}</button>
         {:else}
-          <button class="pb-seg" class:cur={!segs.length} class:dnd-on={drag.overKey === 'ws-crumb:-1'} use:dropZone={crumbZone(-1)} onclick={goRoot}>{#if readonly}<svg class="pb-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 13.7a4.2 4.2 0 0 0 6.1.3l2.4-2.4a4.2 4.2 0 0 0-5.9-5.9l-1.3 1.3" /><path d="M13.7 10.3a4.2 4.2 0 0 0-6.1-.3l-2.4 2.4a4.2 4.2 0 0 0 5.9 5.9l1.3-1.3" /></svg>{/if}{rootLabel}</button>
+          <button class="pb-seg" class:cur={!segs.length} class:dnd-on={drag.overKey === 'ws-crumb:-1'} use:dropZone={P.crumbZone(-1)} onclick={goRoot}>{#if readonly}<svg class="pb-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 13.7a4.2 4.2 0 0 0 6.1.3l2.4-2.4a4.2 4.2 0 0 0-5.9-5.9l-1.3 1.3" /><path d="M13.7 10.3a4.2 4.2 0 0 0-6.1-.3l-2.4 2.4a4.2 4.2 0 0 0 5.9 5.9l1.3-1.3" /></svg>{/if}{rootLabel}</button>
         {/if}
         {#if crumbHidden}<span class="pb-sep">›</span><button class="pb-more" bind:this={crumbBtn} aria-label={t('上级文件夹')} onclick={(e) => (crumbMenu = crumbMenu ? null : anchorBelow(e))}>…</button>{/if}
-        {#each segs as s, i}{#if i >= crumbHidden}<span class="pb-sep">›</span>{#if i < segs.length - 1}<button class="pb-seg" class:dnd-on={drag.overKey === 'ws-crumb:' + i} use:dropZone={crumbZone(i)} onclick={() => goSeg(i)}>{segLabel(s, i)}</button>{:else}<span class="pb-seg cur" title={segLabel(s, i)}>{segLabel(s, i)}</span>{/if}{/if}{/each}
+        {#each segs as s, i}{#if i >= crumbHidden}<span class="pb-sep">›</span>{#if i < segs.length - 1}<button class="pb-seg" class:dnd-on={drag.overKey === 'ws-crumb:' + i} use:dropZone={P.crumbZone(i)} onclick={() => goSeg(i)}>{segLabel(s, i)}</button>{:else}<span class="pb-seg cur" title={segLabel(s, i)}>{segLabel(s, i)}</span>{/if}{/if}{/each}
       {/if}
     </div>
     {/if}
 
-    {#if isLocal && !localPicked}
-      <!-- 本地工作空间未授权：引导用户用系统选择器选一个手机文件夹 -->
-      <div class="local-intro">
-        <img class="li-icon" src={wsIcon} alt="" />
-        <h3>{t('本地工作空间')}</h3>
-        {#if localAvail}
-          <p>{t('选择手机里的一个文件夹设为本地工作空间，')}<br />{t('在这里浏览预览它的文件。')}</p>
-          <button class="li-pick" disabled={localPicking} onclick={doPickLocal}>{localPicking ? t('请在系统选择器中选择…') : t('选择手机文件夹')}</button>
-          {#if canAllFiles()}
-            <button class="li-pick alt" disabled={localPicking} onclick={doPickAll}>{t('授权整个手机存储')}</button>
-            <p class="li-hint">{t('「整个手机」一次授权后可访问全部用户文件（除各 App 私有数据区，那是系统保护的）。需在系统设置里打开「所有文件访问」开关。')}</p>
-          {/if}
-        {:else}
-          <p>{t('本地工作空间用于浏览手机本地文件，')}<br />{t('需要在手机 App 内使用。')}</p>
-        {/if}
-      </div>
-    {:else if atHome}
-      <!-- 本地位置主页：每个已授权文件夹一行（可进入/管理），底部「添加文件夹」 -->
-      <div class="sechead"><h2>{t('本地位置')}</h2></div>
-      <div class="filecard loc-list">
-        {#each roots as r (r.id)}
-          <div class="frow" role="button" tabindex="0" onclick={() => load(r.id)}
-            onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && load(r.id)}>
-            <span class="loc-ic">{@html rootIcon(r.mode)}</span>
-            <span class="meta"><span class="nm">{r.name}</span><span class="fsub">{r.mode === 'all' ? t('整机存储') : t('手机文件夹')}</span></span>
-            <button class="dots" aria-label={t('管理')} onclick={(e) => { e.stopPropagation(); rootMenu = rootMenu ? null : { root: r, anchor: e.currentTarget }; }}><Sym name="ellipsis.circle" weight={400} size={20} /></button>
-          </div>
-        {/each}
-      </div>
-      <div class="filecard">
-        <button class="frow loc-add" disabled={localPicking} onclick={(e) => openAddLoc(e.currentTarget.querySelector('.loc-ic'))}>
-          <span class="loc-ic"><Sym name="plus.circle.fill" weight={400} size={24} /></span>
-          <span class="meta"><span class="nm">{t('添加文件夹')}</span></span>
-        </button>
-      </div>
-      <p class="loc-note">{t('这些是你授权 The Bridge 访问的手机文件夹，可随时增删。Claude 的手机文件工具也在这些位置内活动。')}</p>
-    {:else if pcLocal && pcHome}
-      <!-- 这台电脑的位置主页（同上面手机「本地位置」）：服务器在别处，这里列的是本机授权过的文件夹，
-           点进去在本机浏览、预览，字节不经过服务器 -->
-      <div class="sechead"><h2>{tc('files', '位置')}</h2></div>
-      {#if desktopLocations.length}
-        <div class="filecard loc-list">
-          {#each desktopLocations as loc (loc.id)}
-            <div class="frow" role="button" tabindex="0" onclick={() => selectDesktopLocation(loc.id)}
-              onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && selectDesktopLocation(loc.id)}>
-              <span class="loc-ic">{@html loc.id === 'primary' ? PC_GLYPH : FOLDER_GLYPH}</span>
-              <span class="meta"><span class="nm">{tr(loc.name)}</span><span class="fsub">{pcLocAbs[loc.id] || (loc.id === 'primary' ? t('默认文件夹') : t('电脑文件夹'))}</span></span>
-              <button class="dots" aria-label={t('管理')} onclick={(e) => { e.stopPropagation(); pcLocMenu = pcLocMenu ? null : { loc, anchor: e.currentTarget }; }}><Sym name="ellipsis.circle" weight={400} size={20} /></button>
-            </div>
-          {/each}
-        </div>
-      {/if}
-      <div class="filecard">
-        <button class="frow loc-add" onclick={addDesktopLocation}>
-          <span class="loc-ic"><Sym name="plus.circle.fill" weight={400} size={24} /></span>
-          <span class="meta"><span class="nm">{t('添加文件夹')}</span></span>
-        </button>
-      </div>
-      <p class="loc-note">{t('这些是这台电脑上你授权 The Bridge 访问的文件夹：在本机直接浏览、预览，文件不经过服务器。可随时增删。')}</p>
-    {:else}
-
-    {#if wsPick && pickerLocations.length > 1}
-      <!-- 位置栏：文件管理器本身锁在身份工作空间根（admin=vault），可真实项目一大半在库外
-           （claude-bridge / agent trading / Dimensio Projects…）。这一条把可达范围补回整机，
-           授权边界仍由服务端 authorizeProjectPath 判——Pro 只会拿到自己那一条，这行不出现。 -->
-      <div class="sechead"><h2>{tc('files', '位置')}</h2></div>
-      <div class="desktop-locations">
-        {#each pickerLocations as loc (loc.id)}
-          <button class="desktop-location" class:on={loc.id === pickerLocationId} onclick={() => onPickLocation?.(loc)}>
-            <span class="dl-icon">📁</span><span>{tr(loc.name)}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-
-
-    {#if desktopNative && !pcLocal && !path && !query && desktopLocations.length}
-      <div class="sechead"><h2>{tc('files', '位置')}</h2></div>
-      <div class="desktop-locations">
-        {#each desktopLocations as loc (loc.id)}
-          <div class="desktop-location" class:on={loc.id === desktopLocationId} role="button" tabindex="0"
-            onclick={() => selectDesktopLocation(loc.id)}
-            onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && selectDesktopLocation(loc.id)}>
-            <span class="dl-icon">📁</span><span>{tr(loc.name)}</span>
-            {#if loc.removable}<button class="dl-remove" aria-label={t('移除位置')} onclick={(e) => { e.stopPropagation(); removeDesktopLocation(loc); }}>×</button>{/if}
-          </div>
-        {/each}
-        <button class="desktop-location add" onclick={addDesktopLocation}><span class="dl-icon">＋</span><span>{t('添加位置')}</span></button>
-      </div>
-    {/if}
-
-    {#if listMeta.truncated && !q && !isLocal && !desktopNative && items.length}
-      <!-- 上千项的目录服务端只给前 1500 项（文件夹排在前面）：放在顶上明说——放底部要先划过 1500 项才看得见——
-           并把人引到能找全的搜索上（截断时搜索改问服务端，见 srvMatches） -->
-      <div class="trunc-note">{t('这里一共 {total} 项，只列出了前 {shown} 项（文件夹排在前面），其余的可以', { total: listMeta.total, shown: items.length })}<button onclick={openSearch}>{t('按名字搜索')}</button>{t('。')}</div>
-    {/if}
-
-    {#if recents.length}
-      <div class="sechead"><h2>{t('最近')}</h2></div>
-      <div class="recents">
-        {#each recents as it (it.name)}
-          <button class="rcard" class:dnd-lift={liftRels.has(itemRel(it))} class:dnd-arm={armRel === itemRel(it)} draggable={dragOutOn ? 'true' : undefined} ondragstart={(e) => rowDragStart(e, it)}
-            onpointerdown={(e) => pressDown(e, it)} onpointermove={pressMove} onpointerup={pressUp} onpointercancel={pressUp}
-            onclick={() => (isDragging() ? stackToDrag(it) : openFile(it))} oncontextmenu={(e) => onCtxMenu(e, it)}>
-            <!-- 彩色渐变底只属于「真要铺一张图」的格子：图片文件万一取不到缩略图、
-                 回落成 32×32 系统图标时，别在渐变底上摆一个小灰纸片。 -->
-            <span class="thumb" data-rel={itemRel(it)} class:img={kindOf(it.name) === 'img' && !iconThumb(it)} style={kindOf(it.name) === 'img' && !iconThumb(it) ? 'background:linear-gradient(135deg,#ffd29d,#ff8db1)' : ''}>
-              {#if kindOf(it.name) !== 'img' && !iconThumb(it)}<span class="ic">{@html fileIcon(it.name)}</span>{/if}
-              {#if iconThumb(it)}
-                <!-- 系统类型图标：占位 SVG 直接让位（图标底是透明的，叠着会露出下面那张纸），
-                     dataUrl 本就在内存里，不用 .ok 淡入那套。 -->
-                <img class="ricon" src={it.nativeThumb} alt="" draggable="false" />
-              {:else if thumbable(it)}
-                <img class="rthumb" src={thumbSrc(it)} alt="" loading="lazy" decoding="async" draggable="false"
-                  data-cloud={isLocal ? undefined : '1'} onload={thumbOk} onerror={thumbErr} />
-                {#if kindOf(it.name) === 'mov'}<span class="rplay"><svg viewBox="0 0 24 24"><path d="M8.4 5.8v12.4L19 12z" /></svg></span>{/if}
-              {/if}
-            </span>
-            <span class="nm">{it.name}</span>
-            <span class="mt">{fmtTime(it.mtime)}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-
-    {#if showFolders.length}
-      <div class="sechead" class:has-act={hidSwitch}><h2>{tc('files', '文件夹')}</h2>{#if hidSwitch}{@render hidToggle()}{/if}</div>
-      {#if viewMode !== 'list'}
-      <div class="cgrid" class:big={viewMode === 'large'}>
-        {#each showFolders as f (f.rel || f.name)}
-          <button class="cell dir" class:sel={selected.has(f.name)} class:dropin={dropOn === f.name || drag.overKey === 'ws-dir:' + itemRel(f)} draggable={dragOutOn ? 'true' : undefined} ondragstart={(e) => rowDragStart(e, f)}
-            class:dnd-lift={liftRels.has(itemRel(f))} class:dnd-arm={armRel === itemRel(f)} class:dnd-spring={drag.springKey === 'ws-dir:' + itemRel(f)}
-            use:dropZone={folderZone(f)}
-            ondragover={(e) => dragOverFolder(e, f.name)} ondrop={onDropUpload}
-            onpointerdown={(e) => pressDown(e, f)} onpointermove={pressMove} onpointerup={pressUp} onpointercancel={pressUp}
-            onclick={() => enterDir(f)} oncontextmenu={(e) => onCtxMenu(e, f)}>
-            <span class="tile">
-              <img class="fold" src={wsIcon} alt="" draggable="false" />
-              {#if selecting}<span class="selc" class:on={selected.has(f.name)}>{#if selected.has(f.name)}<Sym name="checkmark.circle.fill" weight={400} size={22} />{/if}</span>{/if}
-            </span>
-            <span class="nm">{@html nameHtml(f.name)}</span>
-            <span class="sub">{cellSub(f)}</span>
-          </button>
-        {/each}
-      </div>
-      {:else}
-      <div class="foldergrid">
-        {#each showFolders as f (f.rel || f.name)}
-          <button class="folder" class:sel={selected.has(f.name)} class:dropin={dropOn === f.name || drag.overKey === 'ws-dir:' + itemRel(f)} draggable={dragOutOn ? 'true' : undefined} ondragstart={(e) => rowDragStart(e, f)}
-            class:wp-lift={wsPick && pkDrag?.abs === pkAbs(itemRel(f))} class:dnd-lift={liftRels.has(itemRel(f))} class:dnd-arm={armRel === itemRel(f)}
-            class:dnd-spring={drag.springKey === 'ws-dir:' + itemRel(f)}
-            use:dropZone={folderZone(f)}
-            ondragover={(e) => dragOverFolder(e, f.name)} ondrop={onDropUpload}
-            onpointerdown={(e) => pressDown(e, f)} onpointermove={pressMove} onpointerup={pressUp} onpointercancel={pressUp}
-            onclick={() => enterDir(f)} oncontextmenu={(e) => onCtxMenu(e, f)}>
-            {#if selecting}<span class="selc" class:on={selected.has(f.name)}>{#if selected.has(f.name)}<Sym name="checkmark.circle.fill" weight={400} size={22} />{/if}</span>{/if}
-            <img class="ficon" src={wsIcon} alt="" draggable="false" />
-            <span class="nm">{f.name}</span>
-          </button>
-        {/each}
-      </div>
-      {/if}
-    {/if}
-
-    {#if showFiles.length}
-      <div class="sechead" class:has-act={hidSwitch && !showFolders.length}><h2>{tc('files', '文件')}</h2>{#if hidSwitch && !showFolders.length}{@render hidToggle()}{/if}</div>
-      {#if viewMode !== 'list'}
-      <div class="cgrid" class:big={viewMode === 'large'}>
-        {#each showFiles as f (f.rel || f.name)}
-          <div class="cell" class:sel={selected.has(f.name)} class:flash={flashRel === itemRel(f)} class:dnd-lift={liftRels.has(itemRel(f))} class:dnd-arm={armRel === itemRel(f)} role="button" tabindex="0" draggable={dragOutOn ? 'true' : undefined} ondragstart={(e) => rowDragStart(e, f)}
-            onpointerdown={(e) => pressDown(e, f)} onpointermove={pressMove} onpointerup={pressUp} onpointercancel={pressUp}
-            onclick={() => (isDragging() ? stackToDrag(f) : openFile(f))} oncontextmenu={(e) => onCtxMenu(e, f)}
-            onkeydown={(e) => { if (e.key === 'Enter') openFile(f); }}>
-            <span class="tile" class:th={isMedia(f) && !iconThumb(f)} data-rel={itemRel(f)}>
-              {#if iconThumb(f)}
-                <img class="ricon" src={f.nativeThumb} alt="" draggable="false" />
-              {:else}
-                <span class="ti">{@html typeIconSvg(f.name)}{#if extBadge(f.name)}<b>{extBadge(f.name)}</b>{/if}</span>
-                {#if cellThumbable(f)}
-                  <img class="cthumb" class:doc={!isMedia(f)} src={cellSrc(f)} alt="" loading="lazy" decoding="async" draggable="false"
-                    data-cloud={isLocal ? undefined : '1'} onload={thumbOk} onerror={cellErr} />
-                {/if}
-              {/if}
-              {#if durOf(f)}<span class="dur">{durOf(f)}</span>{:else if kindOf(f.name) === 'mov'}<span class="cplay"><svg viewBox="0 0 24 24"><path d="M8.4 5.8v12.4L19 12z" /></svg></span>{/if}
-              {#if selecting}<span class="selc" class:on={selected.has(f.name)}>{#if selected.has(f.name)}<Sym name="checkmark.circle.fill" weight={400} size={22} />{/if}</span>{/if}
-            </span>
-            <span class="nm">{@html nameHtml(f.name)}</span>
-            <span class="sub">{cellSub(f)}</span>
-          </div>
-        {/each}
-      </div>
-      {:else}
-      <div class="filecard">
-        {#each showFiles as f (f.rel || f.name)}
-          <div class="frow" class:sel={selected.has(f.name)} class:flash={flashRel === itemRel(f)} class:wp-flat={wsPick} class:dnd-lift={liftRels.has(itemRel(f))} class:dnd-arm={armRel === itemRel(f)} role="button" tabindex="0" draggable={dragOutOn ? 'true' : undefined} ondragstart={(e) => rowDragStart(e, f)}
-            onpointerdown={(e) => pressDown(e, f)} onpointermove={pressMove} onpointerup={pressUp} onpointercancel={pressUp}
-            onclick={() => (isDragging() ? stackToDrag(f) : openFile(f))} oncontextmenu={(e) => onCtxMenu(e, f)}>
-            {#if selecting}<span class="selc" class:on={selected.has(f.name)}>{#if selected.has(f.name)}<Sym name="checkmark.circle.fill" weight={400} size={22} />{/if}</span>{/if}
-            <span class="ficon-sm" data-rel={itemRel(f)}>
-              {@html fileIcon(f.name)}
-              {#if thumbable(f)}
-                <img class="fthumb" src={thumbSrc(f)} alt="" loading="lazy" decoding="async" draggable="false"
-                  data-cloud={isLocal ? undefined : '1'} onload={thumbOk} onerror={thumbErr} />
-                {#if kindOf(f.name) === 'mov'}<span class="fplay"><svg viewBox="0 0 24 24"><path d="M8.4 5.8v12.4L19 12z" /></svg></span>{/if}
-              {/if}
-            </span>
-            <span class="meta"><span class="nm">{f.name}</span><span class="fsub">{f.parent ? `${f.parent} · ` : ''}{fmtTime(f.mtime)} · {fmtSize(f.size)}{durOf(f) ? ` · ${durOf(f)}` : ''}{f.linkType ? ` · ${f.linkType === 'external-link' ? t('外部链接（只读）') : t('链接')}` : ''}</span></span>
-            {#if !wsPick}
-              <button class="dots" aria-label={t('更多')} onclick={(e) => { e.stopPropagation(); openDots(e, f); }}><Sym name="ellipsis.circle" weight={400} size={20} /></button>
-            {/if}
-          </div>
-        {/each}
-      </div>
-      {/if}
-    {/if}
-
-    {#if isEmpty}
-      <!-- 打不开（没权限/不存在/断网）与「真的是空的」分开说：整机浏览时前者很常见 -->
-      <div class="empty"><div class="big">{query ? '🔍' : loadErr ? (/权限|permission/i.test(loadErr) ? '🔒' : '⚠️') : '📂'}</div>{query ? t('未找到相关文件') : loadErr || t('这个文件夹是空的')}</div>
-    {/if}
-    {/if}
+    <PanelBody {P} />
   </div>
 
   <!-- 选择器底栏：唯一的「选定」落点。长按文件夹（或顶部路径条）拖到这条上松手＝创建。
@@ -2555,8 +1102,8 @@
     <!-- 多选工具栏：同一张 62 高玻璃胶囊，按钮排法同 kit「Toolbar - Bottom - iPhone / Buttons」 -->
     <div class="selbar lg62">
       <button class="selact" onclick={() => toast(t('分享开发中'))}><Sym name="square.and.arrow.up" weight={400} size={19} /><span>{t('分享')}</span></button>
-      <button class="selact" disabled={!selected.size || (isLocal && !localOps.move)} onclick={() => openMovePicker([...selected], 'move')}><span class="sa-ic">{@html G.folder}</span><span>{t('移动到')}</span></button>
-      <button class="selact danger" disabled={!selected.size || (isLocal && !localOps.del)} onclick={multiDelete}><Sym name="trash" weight={400} size={19} /><span>{t('删除')}</span></button>
+      <button class="selact" disabled={!selected.size || (isLocal && !localOps.move)} onclick={() => P.openMovePicker([...selected], 'move')}><span class="sa-ic">{@html G.folder}</span><span>{t('移动到')}</span></button>
+      <button class="selact danger" disabled={!selected.size || (isLocal && !localOps.del)} onclick={P.multiDelete}><Sym name="trash" weight={400} size={19} /><span>{t('删除')}</span></button>
       <button class="selact done" onclick={exitSelect}><Sym name="checkmark" weight={600} size={18} /><span>{t('完成')}</span></button>
     </div>
   </div>
@@ -2564,255 +1111,19 @@
 
   <!-- 文件菜单：长按 / 右键从按压点弹出，行尾「…」从按钮长出来（同一份条目、同一套 kit Menu 材质） -->
   <MorphMenu open={!!menu} anchor={menu?.anchor || null} point={menu?.point || null} width={250} header={mhead}
-    items={menuItems} onclose={() => (menu = null)} />
+    items={P.menuItems} onclose={() => (menu = null)} />
 
   <!-- 传输面板：从传输环长出来的玻璃面板（与菜单同一套液滴形变、同材质） -->
   <MorphMenu open={transferOpen} anchor={xferBtn} neighbors={topBtns()} onfuse={onTopFuse} width={Math.min(354, rootW - 28)} title={t('传输')} onclose={() => (transferOpen = false)}>
-      <div class="tp-head"><h3>{t('传输')}</h3>{#if xfers.some((x) => x.status !== 'up')}<button onclick={() => { tasks = tasks.filter((x) => x.status === 'up'); clearFinishedUploads(); clearFinishedDownloads(); }}>{t('清除已完成')}</button>{/if}</div>
-      {#if !xfers.length}
-        <div class="tp-empty">{t('暂无传输任务')}</div>
-      {:else}
-        <div class="tp-list">
-          {#each xfers as task (task.id)}
-            <div class="task">
-              <span class="ticon" style="background:{task.status === 'error' ? 'var(--red)' : task.status === 'done' ? 'var(--green)' : task.status === 'cancelled' ? '#aeaeb2' : iconColor(task.name)}">{@html fileGlyph(task.kind || kindOf(task.name))}</span>
-              <span class="tmeta">
-                <span class="r1"><span class="nm">{task.name}</span><span class="spd" class:err={task.status === 'error'}>{xferState(task)}</span></span>
-                <span class="track"><span class="fillb" class:up={task.status !== 'error' && task.status !== 'cancelled'} class:off={task.status === 'cancelled'} style="width:{task.status === 'done' ? 100 : pctOf(task)}%"></span></span>
-                <span class="r2" class:err={task.status === 'error'}>{xferDetail(task) || ' '}</span>
-              </span>
-              {#if task.status === 'up'}
-                <button class="tp-x" aria-label={task.up ? t('取消上传') : t('取消下载')} onclick={() => cancelTask(task)}><Sym name="xmark.circle.fill" weight={400} size={22} /></button>
-              {:else if task.dl && task.native && task.status === 'done'}
-                <!-- 下好的文件在手机「下载」文件夹里：点「打开」交给系统选 app 打开 -->
-                <button class="tp-open" onclick={() => { if (!openDownload(task.id)) toast(t('无法打开这个文件')); }}>{t('打开')}</button>
-              {:else if task.status === 'error' && task.retry}
-                <button class="tp-open" onclick={() => (task.up ? retryUpload(task.id) : retryDownload(task.id))}>{t('重试')}</button>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      {/if}
+      <PanelTransfers {P} />
   </MorphMenu>
 
-  <!-- 文件预览（只给接不住的类型兜底：压缩包等）：kit 表单页 -->
-  {#if preview}
-    <Sheet title={preview.name} closeLabel={t('关闭')} onclose={() => (preview = null)}>
-      <div class="pv-body">
-        {#if preview.loading}<div class="pv-loading">{t('加载中…')}</div>
-        {:else if preview.kind === 'img'}<img src={preview.url} alt={preview.name} />
-        {:else if preview.kind === 'text'}<pre>{preview.text}</pre>
-        {:else}
-          <div class="pv-other">
-            <div class="big">{@html fileIcon(preview.name)}</div>
-            <p>{t('该类型暂不支持内嵌预览')}</p>
-            {#if !isLocal && !desktopExtra && kindOf(preview.name) === 'zip' && !readonly}<button class="k-btn prom" disabled={extracting} onclick={() => { const n = preview.name; preview = null; doExtract({ name: n }); }}>{extracting ? t('解压中…') : t('解压到当前文件夹')}</button>{/if}
-            {#if desktopNative}<button class="k-btn prom" onclick={() => { const it = { name: preview.name, rel: preview.rel }; preview = null; doDesktopOpen(it); }}>{t('用默认应用打开')}</button>{/if}
-            {#if !isLocal}<button class="k-btn" onclick={() => download(preview.rel)}>{desktopNative ? t('另存为…') : t('下载文件')}</button>{/if}
-          </div>
-        {/if}
-      </div>
-    </Sheet>
-  {/if}
-
-  <!-- 重命名 / 新建文件夹：kit 警告框 + 文本框（同设置页「服务器地址」） -->
-  {#if renameTarget}
-    <Alert title={t('重命名')} onclose={() => (renameTarget = null)}
-      actions={[{ label: t('确定'), role: 'default', onclick: doRename }, { label: t('取消'), role: 'cancel', onclick: () => (renameTarget = null) }]}>
-      <TextField bind:value={renameTarget.value} onkeydown={(e) => e.key === 'Enter' && doRename()} autocapitalize="off" autocorrect="off" spellcheck="false" autofocus />
-    </Alert>
-  {/if}
-  {#if mdOpen}
-    <Alert title={t('新建 Markdown 文件')} onclose={() => (mdOpen = null)}
-      actions={[{ label: t('创建'), role: 'default', onclick: doNewMd }, { label: t('取消'), role: 'cancel', onclick: () => (mdOpen = null) }]}>
-      <TextField bind:value={mdOpen.value} placeholder={t('文件名')} onkeydown={(e) => e.key === 'Enter' && doNewMd()} autocapitalize="off" autocorrect="off" spellcheck="false" autofocus />
-    </Alert>
-  {/if}
-  {#if mkOpen}
-    <Alert title={t('新建文件夹')} onclose={() => (mkOpen = null)}
-      actions={[{ label: t('创建'), role: 'default', onclick: doMkdir }, { label: t('取消'), role: 'cancel', onclick: () => (mkOpen = null) }]}>
-      <TextField bind:value={mkOpen.value} placeholder={t('文件夹名称')} onkeydown={(e) => e.key === 'Enter' && doMkdir()} autocapitalize="off" autocorrect="off" spellcheck="false" autofocus />
-    </Alert>
-  {/if}
-
-  <!-- 分享链接：设置（密码开关 + 过期时间）→ 结果（链接 + 复制）。kit 表单页 + 分组卡 + 开关 + 分段 -->
-  {#if shareDlg}
-    {#if !shareDlg.result}
-      <Sheet title={tc('files', '分享链接')} closeLabel={t('取消')} confirmLabel={shareDlg.busy ? t('创建中…') : t('创建链接')}
-        confirmDisabled={shareDlg.busy} onclose={() => { if (!shareDlg?.busy) shareDlg = null; }} onconfirm={doShareLink}>
-        <p class="k-cap">{#if shareDlg.item.isDir}<span class="k-cap-ic">{@html G.folder}</span>{/if}{shareDlg.item.name}</p>
-        <div class="k-card">
-          <div class="k-row">
-            <span class="k-tx">{t('启用分享密码')}</span>
-            <Toggle checked={shareDlg.pwOn} onchange={() => (shareDlg.pwOn = !shareDlg.pwOn)} label={t('启用分享密码')} />
-          </div>
-        </div>
-        {#if shareDlg.pwOn}
-          <div class="k-gap"><TextField bind:value={shareDlg.password} placeholder={t('设置分享密码')} maxlength="64" onkeydown={(e) => e.key === 'Enter' && doShareLink()} autocapitalize="off" autocorrect="off" spellcheck="false" /></div>
-        {/if}
-        <h4 class="k-head">{t('过期时间')}</h4>
-        <Segmented options={SHARE_TTLS.map((x) => ({ value: x.h, label: tr(x.lb) }))} value={shareDlg.ttl} onchange={(v) => (shareDlg.ttl = v)} label={t('过期时间')} />
-        <div class="pk-foot">
-          <button class="k-btn prom wide" disabled={shareDlg.busy} onclick={doShareLink}>{shareDlg.busy ? t('创建中…') : t('创建链接')}</button>
-        </div>
-      </Sheet>
-    {:else}
-      <Sheet title={t('链接已创建')} closeLabel={t('完成')} confirmLabel={t('复制链接')} onclose={() => (shareDlg = null)} onconfirm={copyShare}>
-        <p class="k-cap">{#if shareDlg.item.isDir}<span class="k-cap-ic">{@html G.folder}</span>{/if}{shareDlg.item.name}</p>
-        <button class="k-card k-url" onclick={copyShare}>{shareDlg.result.url}</button>
-        <p class="k-foot">
-          {t('{time} 过期', { time: fmtExpire(shareDlg.result.expiresAt) })}
-          {#if shareDlg.result.pw}<br />{t('访问密码')} <b class="sel-text">{shareDlg.result.pw}</b>{t('（复制时一并带上）')}{/if}
-        </p>
-        <div class="pk-foot">
-          <button class="k-btn prom wide" onclick={copyShare}>{t('复制链接')}</button>
-        </div>
-      </Sheet>
-    {/if}
-  {/if}
-
-  <!-- 压缩选项：名称 + 格式 + 级别（kit 表单页）。压缩期间可直接关掉，服务端照常压完 -->
-  {#if zipDlg}
-    <Sheet title={t('压缩')} closeLabel={zipDlg.busy ? t('后台继续') : t('取消')} confirmLabel={zipDlg.busy ? t('正在压缩…') : t('压缩')}
-      confirmDisabled={zipDlg.busy || !zipDlg.name.trim()} onclose={closeZipDlg} onconfirm={runZipDlg}>
-      <p class="k-cap">{#if zipDlg.isDir}<span class="k-cap-ic">{@html G.folder}</span>{/if}{zipDlg.sub}</p>
-      <h4 class="k-head">{t('存档名称')}</h4>
-      <div class="k-gap zp-name">
-        <TextField bind:value={zipDlg.name} placeholder={t('存档名称')} disabled={zipDlg.busy} onkeydown={(e) => e.key === 'Enter' && runZipDlg()} autocapitalize="off" autocorrect="off" spellcheck="false" />
-        <span class="zp-ext">{COMPRESS_FORMATS.find((f) => f.value === zipDlg.format)?.ext}</span>
-      </div>
-      <h4 class="k-head">{t('格式')}</h4>
-      <Segmented options={COMPRESS_FORMATS.filter((f) => zipDlg.formats.includes(f.value)).map((f) => ({ value: f.value, label: f.label }))}
-        value={zipDlg.format} disabled={zipDlg.busy} onchange={(v) => (zipDlg.format = v)} label={t('格式')} />
-      <h4 class="k-head zp-gap">{t('压缩级别')}</h4>
-      <Segmented options={COMPRESS_LEVELS.map((x) => ({ value: x.value, label: tr(x.lb) }))}
-        value={zipDlg.level} disabled={zipDlg.busy} onchange={(v) => (zipDlg.level = v)} label={t('压缩级别')} />
-      <p class="k-foot">{zipDlg.note || t('存档放在同一个文件夹里，重名自动编号')}</p>
-    </Sheet>
-  {/if}
-
-
-  <!-- 「发送给 AI」目标选择：kit 表单页 + 分组列表；子层（Media Studio / 视频素材位 / 选择对话）左钮换成返回 -->
-  {#snippet aiOpt(onclick, bg, icon, img, label, sub, chev)}
-    <button class="k-row k-btnrow" {onclick}>
-      <span class="k-tile" style:background={bg || null}>{#if img}<img src={img} alt="" />{:else}{@html icon}{/if}</span>
-      <span class="k-tx">{label}<small>{sub}</small></span>
-      {#if chev}<Sym name="chevron.right" weight={600} size={15} class="k-chev" />{/if}
-    </button>
-  {/snippet}
-  {#if aiPick}
-    <Sheet closeLabel={t('取消')} backLabel={t('返回')}
-      title={aiView === 'root' ? t('发送「{name}」给', { name: aiPick.name })
-        : aiView === 'studio' ? t('发送「{name}」到 Media Studio', { name: aiPick.name })
-        : aiView === 'video' ? t('视频 · 这张图用作')
-        : t('发送到 {name} · 选择对话', { name: AI_NAMES[aiChat?.target] || '' })}
-      onback={aiView === 'root' ? null : aiView === 'chat' ? chatBack : aiView === 'video' ? () => (aiView = 'studio') : () => (aiView = 'root')}
-      onclose={() => { aiPick = null; aiView = 'root'; }}>
-      {#if aiView === 'root'}
-        <div class="k-card">
-          {#if aiCaps.claude}{@render aiOpt(() => pickAI('claude'), '#d97757', AI_IC.claude, '', 'Claude', t('当附件向 Claude 提问'), true)}{/if}
-          {#if aiCaps.studio}{@render aiOpt(() => (aiView = 'studio'), STUDIO_TILE, '', BASE + 'assets/icons/studio-light.svg', 'Media Studio', t('生成图像 / 视频 / 配音 / 音乐'), true)}{/if}
-        </div>
-      {:else if aiView === 'studio'}
-        {#if aiCaps.video || aiCaps.image || aiCaps.audio || aiCaps.music}
-          <div class="k-card">
-            {#if aiCaps.video}{@render aiOpt(() => (aiCaps.mode === 'image' ? (aiView = 'video') : pickAI('video')), 'var(--i-indigo)', AI_IC.video, '', t('视频'), aiCaps.mode === 'image' ? t('选首帧 / 尾帧 / 参考图') : t('作为提示词'), aiCaps.mode === 'image')}{/if}
-            {#if aiCaps.image}{@render aiOpt(() => pickAI('image'), 'var(--i-blue)', AI_IC.image, '', t('图像'), aiCaps.mode === 'image' ? t('作为改图素材') : t('作为提示词'), false)}{/if}
-            {#if aiCaps.audio}{@render aiOpt(() => pickAI('audio'), 'var(--i-pink)', AI_IC.audio, '', t('配音'), t('作为朗读文本'), false)}{/if}
-            {#if aiCaps.music}{@render aiOpt(() => pickAI('music'), 'var(--i-orange)', AI_IC.music, '', t('音乐'), t('作为描述'), false)}{/if}
-          </div>
-        {/if}
-      {:else if aiView === 'video'}
-        <div class="k-card">
-          {@render aiOpt(() => pickVideoSlot('first'), 'var(--i-indigo)', AI_IC.first, '', t('首帧素材'), t('视频从这张图开始'), false)}
-          {@render aiOpt(() => pickVideoSlot('last'), 'var(--i-indigo)', AI_IC.last, '', t('尾帧素材'), t('视频结束于这张图'), false)}
-          {@render aiOpt(() => pickVideoSlot('ref'), 'var(--i-indigo)', AI_IC.ref, '', t('参考图'), t('带入主体 / 风格'), false)}
-        </div>
-      {:else if aiView === 'chat' && aiChat}
-        <label class="k-search"><Sym name="magnifyingglass" weight={500} size={17} /><input type="search" placeholder={t('搜索对话')} bind:value={aiChat.q} /></label>
-        <div class="k-card">
-          {@render aiOpt(() => pickChat('new'), 'var(--i-green)', AI_IC.plus, '', t('新对话'), t('开一个新对话，附件挂进输入栏'), false)}
-        </div>
-        <div class="k-card">
-          {#each aiChatFiltered as s (s.id)}
-            <button class="k-row k-btnrow k-chat" onclick={() => pickChat(s.id)}>
-              {#if aiChat.target === 'claude'}<span class="ai-chat-dot {s.thinking ? 'work' : s.pending ? 'ask' : ''}"></span>{/if}
-              <span class="k-tx k-one">{chatTitle(s)}</span>
-              {#if s.id === aiChatCur}<span class="ai-chat-cur">{t('当前')}</span>{/if}
-              {#if s.mtime}<span class="k-val">{relTime(s.mtime)}</span>{/if}
-            </button>
-          {:else}
-            <div class="k-row k-empty">{aiChat.loading ? t('加载中…') : aiChat.q ? t('没有匹配的对话') : t('还没有历史对话')}</div>
-          {/each}
-        </div>
-      {/if}
-    </Sheet>
-  {/if}
-
-  <!-- 移动到 / 复制到 目录选择器：kit 表单页；✓ 与底部大按钮是同一件事——放到当前浏览的这一层 -->
-  {#if picker}
-    <Sheet title={picker.mode === 'move' ? t('移动 {n} 项到…', { n: picker.names.length }) : t('复制 {n} 项到…', { n: picker.names.length })}
-      closeLabel={t('取消')} confirmLabel={pickerBtnLabel} confirmDisabled={isLocal && multiRoot && !picker.path}
-      onclose={() => (picker = null)} onconfirm={pickerConfirm}>
-      <div class="pk-crumb">
-        <button class:cur={!picker.path} onclick={() => pickerLoad('')}>{isLocal ? t('本地') : (picker.rootLabel || t('工作空间'))}</button>
-        {#each picker.path.split('/').filter(Boolean) as s, i}<span class="pb-sep">›</span><button class:cur={i === picker.path.split('/').filter(Boolean).length - 1} onclick={() => pickerCrumb(i)}>{segLabel(s, i)}</button>{/each}
-      </div>
-      {#if showCloudLocs && !picker.path}
-        <!-- 目标也可以在别的电脑位置：跨根的移动/复制由服务端一次做完 -->
-        <div class="desktop-locations cloud-locs pk-locs">
-          {#each cloudLocs as loc (loc.id)}
-            <button class="desktop-location" class:on={locRoot(loc) === picker.root} onclick={() => pickerSetLoc(loc)}>
-              <span class="dl-svg">{@html locGlyph(loc)}</span><span>{loc.id === 'ws' ? t('工作空间') : locLabel(loc)}</span>
-            </button>
-          {/each}
-        </div>
-      {/if}
-      {#if picker.loading}<div class="pk-empty">{t('加载中…')}</div>
-      {:else if !picker.items.length}<div class="pk-empty">{t('这里没有子文件夹')}<br /><small>{isLocal && multiRoot && !picker.path ? t('还没有已授权的本地位置') : t('可直接放到当前位置')}</small></div>
-      {:else}
-        <div class="k-card">
-          {#each picker.items as f (f.name)}
-            <button class="k-row k-btnrow" onclick={() => pickerEnter(f.name)}>
-              <img class="pk-fico" src={wsIcon} alt="" />
-              <span class="k-tx k-one">{f.label || f.name}</span>
-              <Sym name="chevron.right" weight={600} size={15} class="k-chev" />
-            </button>
-          {/each}
-        </div>
-      {/if}
-      <div class="pk-foot">
-        <button class="k-btn prom wide" disabled={isLocal && multiRoot && !picker.path} onclick={pickerConfirm}>{pickerBtnLabel}</button>
-      </div>
-    </Sheet>
-  {/if}
-
-  <!-- 显示简介：kit 表单页 + 分组卡（左标签右值） -->
-  {#if infoItem}
-    <Sheet title={t('显示简介')} closeLabel={t('完成')} onclose={() => (infoItem = null)}>
-      <div class="info-top">
-        {#if infoItem.isDir}<img class="info-ico" src={wsIcon} alt="" />{:else}<span class="info-ico file">{@html fileIcon(infoItem.name)}</span>{/if}
-        <div class="info-name">{infoItem.name}</div>
-      </div>
-      <div class="k-card">
-        <div class="k-row"><span class="k-tx">{t('种类')}</span><span class="k-val">{typeLabel(infoItem)}</span></div>
-        <div class="k-row"><span class="k-tx">{t('大小')}</span><span class="k-val">{infoItem.isDir ? t('文件夹') : fmtSize(infoItem.size)}</span></div>
-        <div class="k-row"><span class="k-tx">{t('修改时间')}</span><span class="k-val">{fmtFull(infoItem.mtime)}</span></div>
-        <div class="k-row top"><span class="k-tx">{t('位置')}</span><span class="k-val wrap selectable">{infoLocation}</span></div>
-        {#if infoItem.loading}<div class="k-row"><span class="k-tx">{t('Windows 属性')}</span><span class="k-val">{t('读取中…')}</span></div>{/if}
-        {#if infoItem.absolutePath}<div class="k-row top"><span class="k-tx">{t('完整路径')}</span><span class="k-val wrap selectable">{infoItem.absolutePath}</span></div>{/if}
-        {#if infoItem.linkType}<div class="k-row top"><span class="k-tx">{t('链接')}</span><span class="k-val wrap selectable">{infoItem.linkType}{infoItem.linkTarget ? ` → ${infoItem.linkTarget}` : ''}</span></div>{/if}
-        {#if infoItem.absolutePath}<div class="k-row"><span class="k-tx">{t('访问')}</span><span class="k-val">{infoItem.readable ? t('可读') : t('不可读')} · {infoItem.writable ? t('可写') : t('只读')}{infoItem.longPath ? ' · ' + t('长路径') : ''}</span></div>{/if}
-        {#if infoItem.inspectError}<div class="k-row top"><span class="k-tx">{t('Windows 属性')}</span><span class="k-val wrap">{infoItem.inspectError}</span></div>{/if}
-      </div>
-      {#if infoItem.acl}<h4 class="k-head">ACL</h4><pre class="k-acl">{infoItem.acl}</pre>{/if}
-    </Sheet>
-  {/if}
+  <PanelSheets {P} />
 
   <!-- 提示条：kit 44 高玻璃胶囊（与顶栏按钮同一张烘焙玻璃），挂在顶栏中间 -->
   {#if toastMsg}<div class="toast" class:warn={toastWarn}>{#if toastWarn}<Sym name="exclamationmark.triangle.fill" weight={400} size={15} />{:else if !toastBusy}<Sym name="checkmark.circle.fill" weight={400} size={16} />{/if}<span>{toastMsg}</span></div>{/if}
 
-  <input bind:this={fileInput} type="file" multiple onchange={onPick} style="display:none" />
+  <input bind:this={fileInput} type="file" multiple onchange={P.onPick} style="display:none" />
 </div>
 
 <style>
@@ -2858,17 +1169,8 @@
     background: var(--paper); box-shadow: 0 6px 24px rgba(0,0,0,.16); color: var(--blue); font-size: 15px; font-weight: 600;
     max-width: 82%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .dropveil-in svg { width: 20px; height: 20px; flex: none; }
-  .folder.dropin { background: var(--blue-soft); box-shadow: inset 0 0 0 2px var(--blue); border-radius: 18px; }
-
   /* —— 全域拖拽的三处视觉：被拎走的原位 / 悬停在某一级面包屑 / 悬停在当前目录空白处 ——
      幽灵卡片由 DragLayer 画（全局唯一一层），这里只负责「源」和「落点」的状态。 */
-  .dnd-lift { opacity: .34; transition: opacity .12s ease; }
-  /* 按住还没到门槛：整个长按期间慢慢压下去，松手/挪开即弹回（iOS 拿起前的那一下「压」） */
-  .dnd-arm, .folder.dnd-arm:active { transform: scale(.955); transition: transform .42s cubic-bezier(.25, .7, .3, 1); }
-  .frow.dnd-arm { background: var(--fill3); }
-  /* 弹簧倒计时：格子轻轻起伏两下，配合幽灵上的进度环，说明「再停一会儿就进去了」 */
-  .folder.dnd-spring { animation: dndSpringPulse .65s ease-in-out; }
-  @keyframes dndSpringPulse { 35% { transform: scale(1.07); } 70% { transform: scale(1.02); } 100% { transform: scale(1.07); } }
   .pb-seg.dnd-on { background: var(--blue-soft); box-shadow: inset 0 0 0 1.5px var(--blue); border-radius: 8px; color: var(--blue); }
   .scroll.dnd-here { box-shadow: inset 0 0 0 2px rgba(0,136,255,.45); border-radius: 12px; }
 
@@ -2961,30 +1263,6 @@
   /* 再窄（320 档）收字形也不够：胶囊本身让出宽度，位置名省略（GlassButton 默认 flex:none） */
   .ws-root.narrow .topbtns > :global(.gb.cap) { flex: 0 1 auto; min-width: 0; }
 
-  /* 分组标题右侧的「隐藏项」开关：15pt 蓝字 + 次级色计数 */
-  .sechead.has-act { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-  .hid-tg { flex: none; border: 0; padding: 0; background: none; font: inherit; font-size: 15px; line-height: 20px; letter-spacing: -.23px; color: var(--blue); cursor: pointer; }
-  .hid-tg:active { opacity: .55; }
-  .hid-tg small { margin-left: 4px; font-size: 13px; color: var(--label2); font-variant-numeric: tabular-nums; }
-
-  .desktop-location { flex: none; min-height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 14px; border: 0; border-radius: 999px;
-    font: inherit; font-size: 15px; line-height: 20px; font-weight: 500; letter-spacing: -.23px; color: var(--blue); background: var(--fill3); cursor: pointer;
-    -webkit-tap-highlight-color: transparent; transition: transform .16s cubic-bezier(.2,0,0,1); }
-  .desktop-location:active { transform: scale(.96); }
-  .desktop-location.on { background: var(--blue); color: #fff; }
-  .desktop-locations { display: flex; gap: 8px; overflow-x: auto; padding: 0 20px 4px; scrollbar-width: none; }
-  .desktop-locations::-webkit-scrollbar { display: none; }
-  .desktop-location { max-width: 220px; white-space: nowrap; }
-  .desktop-location > span:last-child { overflow: hidden; text-overflow: ellipsis; }
-  .dl-icon { font-size: 15px; }
-  .cloud-locs { padding-bottom: 6px; }
-  .dl-svg { display: inline-flex; width: 17px; height: 17px; flex: none; }
-  .dl-svg :global(svg) { width: 17px; height: 17px; }
-  .dl-remove { display: grid; place-items: center; width: 18px; height: 18px; margin-left: 2px; padding: 0; border: 0; border-radius: 50%; background: rgba(255,255,255,.28); color: inherit; font-size: 15px; line-height: 1; }
-  .desktop-location:not(.on) .dl-remove { background: var(--fill); color: var(--label2); }
-  .pk-locs { flex: none; padding: 0 0 12px; }
-  .trunc-note { margin: 6px 20px 0; padding: 10px 14px; border-radius: 18px; background: var(--fill3); font-size: 13px; line-height: 18px; color: var(--label2); }
-  .trunc-note button { background: none; border: none; padding: 0 2px; font: inherit; font-weight: 600; color: var(--blue); }
 
   /* —— picker（新建项目选择器）形态 —— */
   /* 路径条＝「当前这个文件夹」本身的拖源：给它一块可按的底 + 左侧抓握点，让「这条也能拖」一眼看得出来。
@@ -2995,9 +1273,6 @@
   .wp-grip svg { width: 100%; height: 100%; }
   /* 正在被拖走的那一份：原位淡下去，注意力跟着幽灵走 */
   .wp-lift { opacity: .34; }
-  /* 选择器里的文件只是「认路用」的参照物，不可点开——去掉一切可交互暗示 */
-  .wp-flat { opacity: .55; cursor: default; }
-  .wp-flat:active { background: none; }
   .wpdock { position: absolute; left: 0; right: 0; bottom: 0; z-index: 34;
     padding: 12px 16px calc(var(--sab,0px) + 14px);
     background: linear-gradient(to top, var(--bg) 62%, transparent); }
@@ -3019,98 +1294,6 @@
   .wpg-ic { width: 26px; height: 26px; object-fit: contain; flex: none; }
   .wpg-nm { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  /* 分组标题：kit「Header / Type=Prominent」20/25 Semibold、字距 −0.45，左内距 16（卡片左缘 + 正文对齐） */
-  .sechead { padding: 18px 20px 8px; }
-  .sechead h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 600; letter-spacing: -.45px; }
-
-  /* 最近：图标与文字都左对齐（同左缘），卡片收窄、间距收紧 */
-  .recents { display: flex; gap: 12px; overflow-x: auto; padding: 4px 20px 8px; scrollbar-width: none; }
-  .recents::-webkit-scrollbar { display: none; }
-  .rcard { flex: 0 0 78px; min-width: 0; background: none; border: none; padding: 0; text-align: left; cursor: pointer; color: inherit; }
-  .rcard .thumb { position: relative; width: 78px; height: 66px; border-radius: 14px; overflow: hidden; display: flex; align-items: center; justify-content: flex-start; }
-  .rcard .thumb.img { box-shadow: 0 0 0 .5px rgba(60,60,67,.12), 0 2px 8px rgba(0,0,0,.06); background-size: cover; background-position: center; }
-  .rcard .thumb .ic { display: flex; }
-  .rcard .thumb .ic :global(svg) { width: 54px; height: 64px; filter: drop-shadow(0 2px 6px rgba(0,0,0,.14)); }
-  /* 系统类型图标：占位 SVG 的同一个左对齐槽位里 contain，最多放大到 48px。
-     绝不能像媒体缩略图那样 absolute+cover 铺满整块 78×66——Windows 只给得出 32×32，
-     铺满＝放大 2.44 倍再纵向裁掉 12px（纸的上下沿和折角全被切没，还糊）。 */
-  .rcard .thumb .ricon { width: 54px; height: 100%; padding: 9px 3px; box-sizing: border-box; object-fit: contain; }
-  /* 最近卡片缩略图：叠在渐变底/类型图标上层，加载完成才淡入（加载前它们就是占位缓冲）。
-     .ok 由 onload 运行时挂上，必须 :global 否则被 Svelte 当未使用选择器剪掉。 */
-  .rthumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .3s ease; }
-  .rthumb:global(.ok) { opacity: 1; }
-  .rcard .nm { display: block; max-width: 78px; margin-top: 6px; font-size: 13px; line-height: 16px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .rcard .mt { display: block; font-size: 12px; line-height: 15px; color: var(--label2); }
-
-  /* 文件夹格子按【容器】宽度分列（容器＝上面的 .scroll）：侧栏 300px 仍是 3 列，整页跑在折叠屏展开态才铺到 4–5 列。 */
-  .foldergrid { display: grid; grid-template-columns: repeat(3, 1fr); row-gap: 14px; padding: 6px 14px 0; }
-  @container (min-width: 620px) { .foldergrid { grid-template-columns: repeat(4, 1fr); } }
-  @container (min-width: 900px) { .foldergrid { grid-template-columns: repeat(5, 1fr); } }
-  .folder { position: relative; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 4px 6px; border-radius: 18px; background: none; border: none; cursor: pointer; color: inherit;
-    transition: transform .22s cubic-bezier(.32,.72,0,1), background .2s; }
-  .folder:active { transform: scale(.94); }
-  .folder.sel { background: var(--blue-soft); }
-  .folder .ficon { width: 84px; height: 74px; flex: none; object-fit: contain; filter: drop-shadow(0 4px 7px rgba(40,120,200,.26)); }
-  .folder .nm { width: 100%; font-size: 13px; line-height: 18px; font-weight: 500; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-  /* 图标 / 大图标视图：方格以缩略图为主（cover 裁切、圆角、发丝描边），名称最多两行居中，副行小字。
-     按容器分列：手机 3 / 2 列，折叠屏展开、平板逐档加列。content-visibility 让几千项的相册滚动时只排可见的那几屏。 */
-  .cgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 10px; padding: 6px 16px 0; }
-  .cgrid.big { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 12px; }   /* 大图标别叫 .lg：全局 .lg 是液态玻璃（淡底 + 边光 + 高光），撞名会在网格后面铺一块白板 */
-  @container (min-width: 560px) { .cgrid { grid-template-columns: repeat(4, minmax(0, 1fr)); } .cgrid.big { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  @container (min-width: 760px) { .cgrid { grid-template-columns: repeat(5, minmax(0, 1fr)); } .cgrid.big { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-  @container (min-width: 980px) { .cgrid { grid-template-columns: repeat(6, minmax(0, 1fr)); } .cgrid.big { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
-  .cell { position: relative; min-width: 0; display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: center; cursor: pointer;
-    -webkit-tap-highlight-color: transparent; content-visibility: auto; contain-intrinsic-size: auto 150px; }
-  .cgrid.big .cell { contain-intrinsic-size: auto 214px; }
-  .tile { position: relative; display: block; aspect-ratio: 1; border-radius: 12px; overflow: hidden; background: var(--fill3);
-    transition: transform var(--mo-tap) var(--ea-accel), box-shadow var(--mo-micro) var(--ea-std); }
-  .cgrid.big .tile { border-radius: 14px; }
-  .tile::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.1); pointer-events: none; }
-  .ws-root.ios-dark .tile::after { box-shadow: inset 0 0 0 .5px rgba(255,255,255,.12); }
-  .cell:active .tile { transform: scale(.96); }
-  .cell.dir .tile { background: none; }
-  .cell.dir .tile::after { content: none; }
-  .tile .fold { position: absolute; inset: 0; margin: auto; width: 78%; height: 78%; object-fit: contain; filter: drop-shadow(0 4px 7px rgba(40,120,200,.22)); }
-  .ti { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--label2); }
-  .ti :global(svg) { width: 34px; height: 34px; }
-  .cgrid.big .ti :global(svg) { width: 46px; height: 46px; }
-  .ti b { font-size: 10px; line-height: 12px; font-weight: 600; letter-spacing: .4px; color: var(--label3); }
-  .tile.th .ti { visibility: hidden; }
-  .tile.th:global(.bad) .ti { visibility: visible; }
-  .cthumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--mo-quick) var(--ea-fade); }
-  .cthumb.doc { object-position: top; background: #fff; }
-  .cthumb:global(.ok) { opacity: 1; }
-  .tile .ricon { position: absolute; inset: 0; margin: auto; width: 40%; height: 40%; object-fit: contain; }
-  /* 视频：右下角时长胶囊（实色半透明，不在画面上叠毛玻璃）；时长还没算出来时先给居中播放角标 */
-  .dur { position: absolute; right: 5px; bottom: 5px; padding: 1px 5px; border-radius: 6px; background: rgba(0,0,0,.5); color: #fff;
-    font-size: 11px; line-height: 15px; font-weight: 600; font-variant-numeric: tabular-nums; pointer-events: none; }
-  .cplay { position: absolute; right: 6px; bottom: 6px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: rgba(0,0,0,.45); pointer-events: none; }
-  .cplay svg { width: 60%; height: 60%; fill: #fff; margin-left: 6%; }
-  .cell .nm { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; margin-top: 6px; padding: 0 2px;
-    font-size: 13px; line-height: 16px; font-weight: 500; overflow-wrap: anywhere; }
-  .cell .sub { display: block; min-height: 15px; font-size: 12px; line-height: 15px; color: var(--label2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-  .cell .selc { position: absolute; top: 6px; left: 6px; width: 22px; height: 22px; background: rgba(0,0,0,.18); }
-  .cell .selc:not(.on) { box-shadow: inset 0 0 0 1.5px #fff, 0 1px 3px rgba(0,0,0,.25); }
-  .cell .selc.on { background: #fff; }
-  /* 选中 / 回位高亮的描边画在格子里面（::after 盖在缩略图上）：.cell 带 content-visibility，隐含 paint containment，
-     画在格子外面的 box-shadow 会被裁得只剩底边一截蓝条 */
-  .cell.sel .tile::after, .cell.flash .tile::after { content: ''; }
-  .cell.sel .tile::after { box-shadow: inset 0 0 0 2.5px var(--blue); }
-  .cell.dir.sel .tile { background: var(--blue-soft); }
-  .cell.dropin .tile { background: var(--blue-soft); box-shadow: inset 0 0 0 2px var(--blue); }
-  .cell.dnd-spring .tile { animation: dndSpringPulse .65s ease-in-out; }
-  /* 关掉查看器后：刚才看的那一格 / 那一行短暂亮一下（只动 opacity 与 box-shadow） */
-  .cell.flash .tile::after { animation: cellFlash 1.3s var(--ea-fade) both; }
-  .frow.flash { animation: rowFlash 1.3s var(--ea-fade) both; }
-  @keyframes cellFlash { 0%, 55% { box-shadow: inset 0 0 0 3px var(--blue); } 100% { box-shadow: inset 0 0 0 3px transparent; } }
-  @keyframes rowFlash { 0%, 55% { background: var(--blue-soft); } 100% { background: transparent; } }
-  @media (prefers-reduced-motion: reduce) {
-    .cell.flash .tile::after { animation: none; box-shadow: inset 0 0 0 3px var(--blue); }
-    .frow.flash { animation: none; background: var(--blue-soft); }
-    .cell:active .tile { transform: none; }
-  }
-
   /* 长按菜单的预览头 */
   .mhead { display: flex; align-items: center; gap: 12px; padding: 10px 14px 10px 12px; }
   .mh-th { position: relative; flex: 0 0 56px; width: 56px; height: 56px; border-radius: 10px; overflow: hidden; background: rgba(120,120,128,.16); display: flex; align-items: center; justify-content: center; color: inherit; }
@@ -3125,64 +1308,6 @@
   .mh-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
   .mh-nm { font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -.23px; color: inherit; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; word-break: break-word; }
   .mh-sub { font-size: 13px; line-height: 17px; color: inherit; opacity: .6; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-  /* 多选圈：kit 列表的选择标记——未选 Labels/Tertiary 空心圈，选中 checkmark.circle.fill 蓝 */
-  .selc { display: flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--blue); }
-  .selc:not(.on) { box-shadow: inset 0 0 0 1.5px var(--label3); }
-  .folder .selc { position: absolute; top: 6px; left: 14px; width: 22px; height: 22px; background: var(--paper); box-shadow: 0 0 0 2px var(--paper); }
-  .folder .selc:not(.on) { box-shadow: inset 0 0 0 1.5px var(--label3), 0 0 0 2px var(--paper); }
-  .frow .selc { flex: 0 0 22px; width: 22px; height: 22px; }
-
-  /* 文件 / 位置列表：kit 分组卡（Grouped Table View：圆角 26、Figma 平滑 60%——9 宫遮罩还原；左右内缩 20）。
-     行＝kit「Row」带副标题：正文 17/22、副文 15/20 Labels/Secondary，分隔线 1pt 从正文起到右内边距止 */
-  .filecard { margin: 6px 20px 0; background: var(--card); border-radius: 26px; -webkit-mask-box-image: var(--sq) 42 / 42px; overflow: hidden; }
-  .frow { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; padding: 0 6px 0 14px; cursor: pointer; transition: background .15s;
-    border: 0; background: none; font: inherit; color: inherit; text-align: left; }
-  .frow:active { background: var(--press); }
-  .frow.sel { background: var(--blue-soft); }
-  .frow + .frow::before { content: ''; position: absolute; top: 0; left: 60px; right: 16px; height: 1px; background: var(--sep); }
-  .ficon-sm { position: relative; flex: 0 0 34px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; }
-  .ficon-sm :global(svg) { width: 28px; height: 35px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.06)); }
-  /* 文件行缩略图：盖在类型图标上层，加载完成才淡入；失败保持透明露出图标 */
-  .fthumb { position: absolute; inset: 0; width: 34px; height: 34px; object-fit: cover; border-radius: 7px;
-    box-shadow: 0 0 0 .5px var(--sep); background: var(--paper); opacity: 0; transition: opacity .25s ease; }
-  .fthumb:global(.ok) { opacity: 1; }
-  /* 视频播放角标：跟随各自缩略图淡入（缩略没出来时不遮类型图标） */
-  .fplay, .rplay { position: absolute; inset: 0; margin: auto; display: flex; align-items: center; justify-content: center;
-    background: rgba(20,20,24,.45); border-radius: 50%; opacity: 0; transition: opacity .25s ease; pointer-events: none; }
-  .fplay { width: 16px; height: 16px; }
-  .rplay { width: 24px; height: 24px; }
-  .fplay svg, .rplay svg { width: 60%; height: 60%; fill: #fff; filter: none; margin-left: 6%; }
-  .fthumb:global(.ok) + .fplay, .rthumb:global(.ok) + .rplay { opacity: 1; }
-  .frow .meta { flex: 1; min-width: 0; padding: 9px 0; }
-  .frow .meta .nm { display: block; font-size: 17px; line-height: 22px; letter-spacing: -.43px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .frow .meta .fsub { display: block; font-size: 15px; line-height: 20px; letter-spacing: -.23px; color: var(--label2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .frow .dots { flex: 0 0 44px; height: 44px; border: none; background: none; display: flex; align-items: center; justify-content: center; color: var(--blue); border-radius: 50%; padding: 0; }
-  .frow .dots:active { background: var(--fill); }
-
-  .empty { padding: 60px 20px; text-align: center; color: var(--label2); font-size: 17px; line-height: 22px; }
-  .empty .big { font-size: 44px; margin-bottom: 12px; opacity: .6; }
-
-  /* 本地工作空间未授权引导：kit 大按钮（Button - Liquid Glass - Text / Large：50 高胶囊、17 Semibold；Prominent 蓝底白字） */
-  .local-intro { padding: 56px 28px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
-  .li-icon { width: 88px; height: 74px; object-fit: contain; filter: drop-shadow(0 6px 11px rgba(40,120,200,.3)); }
-  .local-intro h3 { margin: 4px 0 0; font-size: 22px; line-height: 28px; font-weight: 700; letter-spacing: -.26px; }
-  .local-intro p { margin: 0; font-size: 17px; line-height: 22px; color: var(--label2); }
-  .li-pick { margin-top: 10px; min-width: 220px; height: 50px; padding: 0 28px; border: none; border-radius: 25px; background: var(--blue); color: #fff; font: inherit; font-size: 17px; font-weight: 600; letter-spacing: -.43px; }
-  .li-pick:active:not(:disabled) { transform: scale(.97); }
-  .li-pick:disabled { opacity: .55; }
-  .li-pick.alt { margin-top: 0; background: var(--field); color: var(--blue); }
-  .li-hint { font-size: 13px; line-height: 18px; color: var(--label2); max-width: 300px; }
-
-  /* —— 本地位置主页 —— */
-  .loc-list { margin-top: 2px; }
-  .loc-ic { flex: 0 0 34px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; color: var(--green); }
-  .loc-ic :global(svg) { width: 30px; height: 30px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.06)); }
-  .loc-ic :global(svg.sym) { width: auto; height: auto; filter: none; }
-  .frow.loc-add { margin: 0; min-height: 52px; }
-  .frow.loc-add .nm { color: var(--blue); }
-  .frow.loc-add:disabled { opacity: .55; }
-  .loc-note { margin: 0; padding: 8px 36px 22px; font-size: 13px; line-height: 18px; color: var(--label2); }
 
   /* —— 底栏：kit Tab Bar（62 高胶囊）+ 搜索圆钮 + 搜索行 + 多选工具栏 ——
      玻璃＝构建期烘焙的「与底色无关」图层（Figma 原版管线跑 kit 的 Liquid Glass - Regular - Small，
@@ -3258,102 +1383,6 @@
   .selact .sa-ic :global(svg) { width: 22px; height: 22px; }
   .selact > span:last-child { font-size: 10px; line-height: 12px; font-weight: 600; letter-spacing: -.1px; }
 
-  /* —— 传输面板（kit Popover 里的内容）—— */
-  .tp-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px 8px; }
-  .tp-head h3 { margin: 0; font-size: 17px; line-height: 22px; font-weight: 600; letter-spacing: -.43px; }
-  .tp-head button { border: none; background: none; color: var(--blue); font: inherit; font-size: 15px; padding: 4px 2px; cursor: pointer; }
-  .tp-empty { padding: 14px 22px 24px; color: var(--label2); font-size: 15px; text-align: center; }
-  .tp-list { max-height: 50vh; overflow-y: auto; padding-bottom: 10px; }
-  .task { display: flex; align-items: center; gap: 12px; padding: 9px 18px 9px 22px; }
-  .task .ticon { flex: 0 0 30px; height: 30px; border-radius: 7.5px; display: flex; align-items: center; justify-content: center; }
-  .task .ticon :global(svg) { width: 18px; height: 18px; }
-  .task .tmeta { flex: 1; min-width: 0; }
-  .task .r1 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .task .nm { font-size: 15px; line-height: 20px; font-weight: 500; letter-spacing: -.23px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .task .spd { font-size: 13px; color: var(--label2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .task .spd.err, .task .r2.err { color: var(--red); }
-  .task .r2 { display: block; margin-top: 5px; font-size: 12px; line-height: 16px; color: var(--label2); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .task .track { display: block; margin-top: 6px; height: 4px; border-radius: 2px; background: var(--fill); overflow: hidden; }
-  .task .fillb { display: block; height: 100%; border-radius: 2px; background: var(--blue); transition: width .3s linear; }
-  .task .fillb.up { background: var(--green); }
-  .task .fillb.off { background: var(--label3); }
-  .task .tp-x { flex: none; border: none; background: none; color: var(--label3); display: flex; align-items: center; justify-content: center; padding: 2px; cursor: pointer; }
-  /* 下好的「打开」、失败的「重试」：iOS 列表里那种浅底胶囊小按钮 */
-  .task .tp-open { flex: none; border: none; background: var(--fill); color: var(--blue); font: inherit; font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -.23px; padding: 4px 13px; border-radius: 999px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  .task .tp-open:active { background: var(--press); }
-
-  /* —— kit 表单页里的内容件（Sheet 正文）：分组卡、行、标题、脚注、按钮 —— */
-  .k-card { display: block; width: 100%; margin: 0 0 16px; background: var(--card); border-radius: 26px; -webkit-mask-box-image: var(--sq) 42 / 42px; overflow: hidden; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; }
-  .k-row { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 11px 16px; border: 0; background: none; font: inherit; color: inherit; text-align: left; }
-  .k-row.top { align-items: flex-start; }
-  .k-row + .k-row::before { content: ''; position: absolute; left: 16px; right: 16px; top: 0; height: 1px; background: var(--sep); }
-  .k-btnrow { cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  .k-btnrow:active { background: var(--press); }
-  .k-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 17px; line-height: 22px; letter-spacing: -.43px; }
-  .k-tx small { font-size: 15px; line-height: 20px; letter-spacing: -.23px; color: var(--label2); }
-  .k-tx small:lang(en) { white-space: normal; }
-  .k-one { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .k-val { flex: none; max-width: 60%; font-size: 17px; line-height: 22px; letter-spacing: -.43px; color: var(--label2); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .k-val.wrap { flex: 1; max-width: none; white-space: normal; word-break: break-all; }
-  .k-val.selectable { user-select: text; }
-  .k-row :global(.k-chev) { color: var(--label3); flex: none; }
-  /* 彩色圆角方块（同设置页 IconTile：30×30、圆角 7.5） */
-  .k-tile { flex: none; width: 30px; height: 30px; border-radius: 7.5px; display: flex; align-items: center; justify-content: center; background: var(--fill3); overflow: hidden; }
-  .k-tile img { width: 22px; height: 22px; object-fit: contain; }
-  .k-tile :global(svg) { width: 19px; height: 19px; }
-  .k-head { margin: 4px 0 8px; padding: 0 16px; font-size: 17px; line-height: 22px; font-weight: 600; color: var(--label2); }
-  .k-cap { margin: 0 0 14px; padding: 0 16px; display: flex; align-items: center; gap: 6px; justify-content: center; font-size: 15px; line-height: 20px; color: var(--label2); word-break: break-all; text-align: center; }
-  .k-cap-ic { display: inline-flex; width: 17px; height: 17px; flex: none; }
-  .k-cap-ic :global(svg) { width: 17px; height: 17px; }
-  .k-foot { margin: 0 0 16px; padding: 8px 16px 0; font-size: 13px; line-height: 18px; color: var(--label2); text-align: center; }
-  .k-foot b { color: var(--label); }
-  .k-gap { margin: -6px 0 16px; }
-  .zp-name { display: flex; align-items: center; gap: 8px; }
-  .zp-name > :global(:first-child) { flex: 1; min-width: 0; }
-  .zp-ext { flex: none; font-size: 15px; color: var(--label2); }
-  .zp-gap { margin-top: 18px; }
-  .k-url { padding: 14px 16px; font-size: 15px; line-height: 20px; color: var(--blue); word-break: break-all; cursor: pointer; }
-  .k-acl { margin: 0 0 16px; padding: 12px 14px; max-height: 140px; overflow: auto; border-radius: 18px; background: var(--card); color: var(--label2); user-select: text; white-space: pre-wrap; word-break: break-all; font: 12px/1.4 ui-monospace, Consolas, monospace; }
-  .k-empty { justify-content: center; color: var(--label2); font-size: 15px; }
-  .k-chat { gap: 10px; }
-  /* 搜索框：kit「_Search」——Fills 底、圆角 胶囊、放大镜 + 17pt 占位字 */
-  .k-search { display: flex; align-items: center; gap: 6px; height: 44px; margin: 0 0 14px; padding: 0 14px; border-radius: 22px; background: var(--field); color: var(--label2); }
-  .k-search input { flex: 1; min-width: 0; border: none; background: none; outline: none; font: inherit; font-size: 17px; letter-spacing: -.43px; color: var(--label); }
-  .k-search input::placeholder { color: var(--label3); }
-  /* kit 大按钮（Button - Liquid Glass - Text / Large）：50 高胶囊、17 Semibold；Prominent＝蓝底白字，否则 Fills 底蓝字 */
-  .k-btn { height: 50px; padding: 0 26px; border: none; border-radius: 25px; background: var(--field); color: var(--blue); font: inherit; font-size: 17px; font-weight: 600; letter-spacing: -.43px; cursor: pointer;
-    -webkit-tap-highlight-color: transparent; transition: transform 160ms cubic-bezier(.2,0,0,1), filter 160ms linear; }
-  .k-btn.prom { background: var(--blue); color: #fff; }
-  .k-btn.wide { width: 100%; }
-  .k-btn:active:not(:disabled) { transform: scale(.97); filter: brightness(.94); }
-  .k-btn:disabled { opacity: .45; cursor: default; }
-
-  /* 文件预览（Sheet 正文） */
-  .pv-body { display: flex; min-height: 0; }
-  .pv-body img { width: 100%; height: auto; object-fit: contain; border-radius: 18px; }
-  .pv-body pre { flex: 1; margin: 0; padding: 14px 16px; border-radius: 18px; background: var(--card); font: 13px/1.6 ui-monospace, 'SF Mono', Menlo, monospace; white-space: pre-wrap; word-break: break-word; color: var(--ink); user-select: text; }
-  .pv-loading { flex: 1; display: flex; align-items: center; justify-content: center; padding: 60px; color: var(--label2); }
-  .pv-other { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 30px 8px 16px; }
-  .pv-other .big { display: flex; }
-  .pv-other .big :global(svg) { width: 62px; height: 76px; filter: drop-shadow(0 2px 6px rgba(0,0,0,.1)); }
-  .pv-other p { margin: 0; color: var(--label2); font-size: 15px; }
-
-  /* 移动到 / 复制到（Sheet 正文） */
-  .pk-crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 0 16px 12px; }
-  .pk-crumb button { background: none; border: none; padding: 0; font: inherit; font-size: 15px; line-height: 20px; color: var(--blue); cursor: pointer; }
-  .pk-crumb button.cur { color: var(--label); font-weight: 600; }
-  .pk-fico { width: 30px; height: 26px; object-fit: contain; flex: none; }
-  .pk-empty { padding: 36px 16px 30px; text-align: center; color: var(--label2); font-size: 15px; line-height: 22px; }
-  .pk-empty small { color: var(--label3); font-size: 13px; }
-  /* 底部的大按钮钉在表单页正文底：目录再长也不用划到底才点得到 */
-  .pk-foot { position: sticky; bottom: 0; margin: 0 -16px; padding: 10px 16px 2px; background: linear-gradient(to top, color-mix(in srgb, var(--bg) 70%, transparent) 60%, transparent); }
-
-  /* 显示简介（Sheet 正文） */
-  .info-top { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 0 0 18px; }
-  .info-ico { width: 64px; height: 56px; object-fit: contain; }
-  .info-ico.file :global(svg) { width: 50px; height: 62px; }
-  .info-name { font-size: 17px; line-height: 22px; font-weight: 600; text-align: center; word-break: break-all; padding: 0 12px; }
-
   /* 提示条：kit 44 高玻璃胶囊（cap44 三段切片，同顶栏按钮的烘焙玻璃），挂在顶栏下方正中（不压顶栏按钮） */
   .toast { position: fixed; top: calc(var(--sat,0px) + var(--tbg) + 52px); left: 50%; transform: translateX(-50%); z-index: 96; isolation: isolate;
     display: flex; align-items: center; gap: 7px; min-height: 44px; padding: 0 18px; border-radius: 22px; color: var(--glass-ink);
@@ -3368,10 +1397,4 @@
   .toast.warn :global(.sym) { color: var(--orange); }
   @keyframes toastin { from { opacity: 0; transform: translate(-50%, -10px) scale(.92); } }
 
-  /* 「选择对话」里的状态点与「当前」徽标 */
-  .ai-chat-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--label3); }
-  .ai-chat-dot.work { background: #d97757; animation: aidot 1.2s ease-in-out infinite; }
-  .ai-chat-dot.ask { background: var(--orange); animation: aidot 1.2s ease-in-out infinite; }
-  @keyframes aidot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-  .ai-chat-cur { font-size: 12px; line-height: 16px; color: var(--label2); background: var(--fill3); border-radius: 6px; padding: 2px 7px; flex: none; }
 </style>

@@ -4,12 +4,15 @@ import { fail } from "./types.ts";
 import { diagnose } from "./diagnostics.ts";
 import { introducesRedactionMark, REDACTED_WRITE_HINT, REDACTION_MARK } from "../redact.ts";
 import { writeUserFile } from "../atomic-write.ts";
+import { eolOf, spliceMixed } from "./line-endings.ts";
 
 // Edit's determinism is the #1 reason agent coding derails; these three
 // guarantees come straight from the plan (§7.1):
 //   1. unique-match enforcement (or replace_all)
 //   2. normalization retry (smart quotes / EOL) with original-style preserved
 //   3. read-before-edit gate + concurrent-modification detection
+
+const readRequired = (ctx: ToolContext): boolean => ctx.toolPolicy?.readBeforeEdit !== "off";
 
 export const editTool: Tool = {
   effect: "write",
@@ -49,7 +52,7 @@ export const editTool: Tool = {
     if (oldStr === newStr) return veto("no-op edit", "old_string and new_string are identical.");
     if (!oldStr) return veto("empty match", "old_string is empty. Use Write to create a file.");
     if (introducesRedactionMark(oldStr, newStr)) return veto("redacted text", REDACTED_WRITE_HINT);
-    if (!ctx.readFileState.get(abs)) return veto("not read", `You must Read ${ctx.sandbox.rel(abs)} before editing it.`);
+    if (!ctx.readFileState.get(abs) && readRequired(ctx)) return veto("not read", `You must Read ${ctx.sandbox.rel(abs)} before editing it.`);
     return null;
   },
   async run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
@@ -63,9 +66,9 @@ export const editTool: Tool = {
     // S4：工具输出是脱敏过的。把 [REDACTED…] 标记当原文写回，就等于用标记覆盖掉真密钥。
     if (introducesRedactionMark(oldStr, newStr)) return fail("redacted text", REDACTED_WRITE_HINT);
 
-    // (3) read-before-edit gate.
+    // (3) read-before-edit gate. 档案关掉它时（readBeforeEdit=off）没读过也照改：下面照样现读文件、要求 old_string 唯一命中
     const state = ctx.readFileState.get(abs);
-    if (!state) {
+    if (!state && readRequired(ctx)) {
       return fail("not read", `You must Read ${ctx.sandbox.rel(abs)} before editing it.`);
     }
 
@@ -87,7 +90,7 @@ export const editTool: Tool = {
     // uniquely in the CURRENT bytes — so refresh our view and let the match
     // rules below decide. Ambiguous or vanished matches still fail, and now say
     // that the file moved under them.
-    const changedOnDisk = current !== state.content;
+    const changedOnDisk = state !== undefined && current !== state.content;
     if (changedOnDisk) {
       ctx.readFileState.set(abs, { mtimeMs, content: current, readRanges: [], complete: false });
     }
@@ -156,7 +159,13 @@ export const editTool: Tool = {
         contentLF.slice(0, matchIndex) + newLF + contentLF.slice(matchIndex + matchLen);
     }
 
-    const result = eol === "\r\n" ? resultLF.replace(/\n/g, "\r\n") : resultLF;
+    // 混合换行的文件只换命中的那一段（replace_all 仍按整份处理）；统一风格的文件照旧整份换回原来的换行
+    const result =
+      !replaceAll && eolOf(current) === "mixed"
+        ? spliceMixed(current, matchIndex, matchLen, newLF)
+        : eol === "\r\n"
+          ? resultLF.replace(/\n/g, "\r\n")
+          : resultLF;
 
     try {
       await ctx.beforeFileWrite?.(abs).catch(() => {}); // 大工作区：改之前先备份这个文件（检查点只存改过的文件）
@@ -165,13 +174,16 @@ export const editTool: Tool = {
       const totalLines = result.split(/\r?\n/).length;
       // An externally changed file is no longer fully read, whatever the stale
       // state claimed — Write's overwrite gate must not inherit that coverage.
-      const complete = changedOnDisk ? false : state.complete;
-      ctx.readFileState.set(abs, {
-        mtimeMs: stat.mtimeMs,
-        content: result,
-        readRanges: complete ? [[1, totalLines]] : [],
-        complete,
-      });
+      // 没 Read 过就改的（readBeforeEdit=off）不记：模型没看过这个文件，Write 覆盖它仍得先 Read
+      if (state) {
+        const complete = changedOnDisk ? false : state.complete;
+        ctx.readFileState.set(abs, {
+          mtimeMs: stat.mtimeMs,
+          content: result,
+          readRanges: complete ? [[1, totalLines]] : [],
+          complete,
+        });
+      }
     } catch (e) {
       return fail("write failed", `Could not write ${args.path}: ${(e as Error).message}`);
     }

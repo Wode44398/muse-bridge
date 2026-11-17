@@ -1,5 +1,5 @@
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
-import { ok, fail } from "./types.ts";
+import { ok, fail, lenientVerify, verifyIgnored } from "./types.ts";
 import { existingBrowser, noBrowserMessage } from "../cdp.ts";
 import { browserAvailable } from "../headless.ts";
 
@@ -70,6 +70,10 @@ export const networkTool: Tool = {
     if (action === "list") {
       let entries = page.networkEntries();
       const filter = typeof args.filter === "string" ? args.filter.trim() : "";
+      // 档案放松了写法契约（verifyContract=lenient）：缺 filter / expectedStatus 的 verify 不打回，当普通列表交回、不记证据
+      if (args.verify === true && (!filter || !Number.isInteger(Number(args.expectedStatus))) && lenientVerify(ctx)) {
+        return verifyIgnored(await networkTool.run({ ...args, verify: false }, ctx), "verification needs both filter and an integer expectedStatus");
+      }
       if (filter) entries = entries.filter((e) => e.url.includes(filter));
       const n = Math.max(1, Math.min(400, Number(args.lines ?? 60)));
       const total = entries.length;

@@ -12,7 +12,10 @@ test('daysLeft / expiryWarn：向上取整、过期算 0、只在最后 warnDays
   assert.equal(expiryWarn(now + 3 * DAY + 1, null, now), false, '还剩 3 天多一点 = 4 天');
   assert.equal(expiryWarn(now + 5 * DAY, { warnDays: 7 }, now), true, '服务端给的提示天数为准');
   assert.equal(expiryWarn(undefined, null, now), false);
-  assert.deepEqual(quickPolicy({ ttlDays: 14 }), { ttlDays: 14, warnDays: 3, trashDays: 30 });
+  assert.deepEqual(quickPolicy({ ttlDays: 14 }), { ttlDays: 14, warnDays: 3, trashDays: 30, mode: 'ttl', max: 0 });
+  assert.deepEqual(quickPolicy({ mode: 'count', max: 20 }), { ttlDays: 30, warnDays: 3, trashDays: 30, mode: 'count', max: 20 });
+  assert.equal(quickPolicy({ mode: 'count' }).mode, 'ttl', '按条数却没给条数：当按时间');
+  assert.equal(quickPolicy({ mode: 'never', max: 5 }).max, 0);
 });
 
 test('newChatTarget：真实项目里留在原地；临时对话里落到最近用过的真实项目；都没有落默认工作空间', () => {

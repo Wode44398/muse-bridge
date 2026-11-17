@@ -87,7 +87,7 @@ export function cleanDispatchPolicy(v: unknown): DimPolicy | null {
   const sc = isObj(v.scope) ? v.scope : {};
   return {
     enabled: v.enabled !== false,
-    follow: v.follow !== false,
+    follow: v.follow === true,
     scope: { workflow: sc.workflow !== false, subagent: sc.subagent !== false, session: sc.session === true },
     allowThirdParty: v.allowThirdParty !== false,
     strategy: cleanStrategy(v.strategy),

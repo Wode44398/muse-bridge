@@ -66,20 +66,20 @@ const dim = () => (testDim !== undefined ? testDim : getModule('dimensio'));
 export function _setDimensioHooksForTests(h) { testDim = h; }
 const TITLE = Object.fromEntries(TIERS.map((t) => [t.key, { title: t.title, use: t.use }]));
 /**
- * dimensio 口径的预览 → { preview, previewError? }。strategy / allowThirdParty 不给 = 按这个身份生效的那套。
+ * dimensio 口径的预览 → { preview, previewError? }。strategy 不给 = 按这个身份生效的那套（dimensio 没有 allowThirdParty，候选恒为全部）。
  * 草稿策略按当前模式认写法：跟随时是 Claude 写法（档位自定义 opus / custom:…），单独时是 dimensio 写法（厂商:型号）。
  */
-async function dimensioPreview(ctx, { strategy, allowThirdParty } = {}) {
+async function dimensioPreview(ctx, { strategy } = {}) {
   const fn = dim()?.dispatchPreview;
   if (typeof fn !== 'function') return { preview: null, previewError: 'dimensio 没有加载' };
   // 候选是这个身份自己的 dimensio 实例能用的型号：快照访客、没有 dimensio 的成员不给（别落到管理员实例上去算）
   if (ctx.snap || !(ctx.kind === 'admin' || (ctx.kind === 'user' && ctx.allowDimensio))) return { preview: null, previewError: '这个身份用不了 dimensio' };
-  const follow = policyFor(ctx, { scope: 'dimensio' }).follow !== false;
+  const follow = policyFor(ctx, { scope: 'dimensio' }).follow === true;
   const draft = strategy !== undefined && strategy !== null ? sanitizeStrategy(strategy, { scope: follow ? 'claude' : 'dimensio' }) : undefined;
   const eff = dimensioEffective(ctx, { strategy: draft });
   let pv;
   try {
-    pv = await fn(ctx, { strategy: eff.strategy, allowThirdParty: typeof allowThirdParty === 'boolean' ? allowThirdParty : eff.allowThirdParty });
+    pv = await fn(ctx, { strategy: eff.strategy, allowThirdParty: true });   // dimensio 没有「调用非 Claude 模型」开关：候选恒为全部
   } catch (e) {
     return { preview: null, previewError: String(e?.message || e).slice(0, 200) };
   }
@@ -174,7 +174,7 @@ export function registerDispatchRoutes(router, { identify }) {
   });
 
   post('/api/claude/dispatch/update', async (ctx, b, scope) => {
-    if (b.patch === undefined) throw fail(scope === 'dimensio' ? '要给 patch：{ enabled?, follow?, scope?, allowThirdParty?, activeId? }' : '要给 patch：{ enabled?, scope?, allowThirdParty?, activeId? }');
+    if (b.patch === undefined) throw fail(scope === 'dimensio' ? '要给 patch：{ enabled?, follow?, scope?, activeId? }' : '要给 patch：{ enabled?, scope?, allowThirdParty?, activeId? }');
     const policy = updatePolicy(ctx, b.patch, { scope });
     return { policy, ...(await preview(ctx, b, scope)) };
   });
@@ -191,7 +191,7 @@ export function registerDispatchRoutes(router, { identify }) {
   post('/api/claude/dispatch/preview', async (ctx, b, scope) => {
     if (b.strategy != null && (typeof b.strategy !== 'object' || Array.isArray(b.strategy))) throw fail('strategy 要是对象');
     if (b.allowThirdParty !== undefined && typeof b.allowThirdParty !== 'boolean') throw fail('allowThirdParty 要是 true / false');
-    if (scope === 'dimensio') return dimensioPreview(ctx, { strategy: b.strategy ?? undefined, allowThirdParty: b.allowThirdParty });
+    if (scope === 'dimensio') return dimensioPreview(ctx, { strategy: b.strategy ?? undefined });
     return { preview: ladderPreview(ctx, { basis: basisOf(b.basis), strategy: b.strategy ?? undefined, allowThirdParty: b.allowThirdParty }) };
   }, { write: false });
 

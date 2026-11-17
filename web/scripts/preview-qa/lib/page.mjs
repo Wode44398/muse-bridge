@@ -139,6 +139,35 @@ window.__pvqa = {
     }
     return out;
   },
+  // 结构快照（run.mjs --exact）：查看器根（没有就整页）里看得见的元素，逐个记 标签 / 类名（去掉 svelte 作用域类）/ 位置尺寸 /
+  // 关键计算样式 / 自己的文字 / 几个语义属性。像素不稳定（模糊玻璃、抗锯齿、播放中）时靠它判定前后是否一致。
+  // 「当时环境碰巧是什么」的值抹掉：端口、临时目录、地址里的修改时间与随机参数。
+  structure() {
+    const root = this.root() || document.body;
+    const norm = (s) => String(s || '').replace(/https?:\/\/127\.0\.0\.1:\d+/g, 'HOST').replace(/[A-Za-z]:[\\/][^"'\s)]*?[\\/]Temp[\\/][^"'\s)]*/g, 'TMP')
+      .replace(/([?&](?:mt|t|v|_|ts)=)[^&#"')\s]*/g, '$1#').replace(/blob:[^"')\s]+/g, 'blob:#').replace(/\s+/g, ' ').trim();
+    const STY = ['display', 'position', 'opacity', 'visibility', 'color', 'backgroundColor', 'fontSize', 'fontWeight', 'lineHeight', 'borderRadius', 'transform', 'zIndex', 'overflow', 'textAlign', 'cursor'];
+    const r0 = (v) => Math.round(v * 2) / 2;
+    const out = [];
+    const walk = (el, depth) => {
+      if (out.length > 4000) return;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none') return;
+      const b = el.getBoundingClientRect();
+      const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(' ');
+      const cls = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '');
+      const rec = { d: depth, tag: el.tagName.toLowerCase(), cls: cls.split(/\s+/).filter((c) => c && !/^svelte-/.test(c)).sort().join(' '),
+        r: [r0(b.left), r0(b.top), r0(b.width), r0(b.height)], s: STY.map((k) => cs[k]).join('|') };
+      const t = norm(own); if (t) rec.t = t.slice(0, 200);
+      for (const k of ['aria-label', 'role', 'title', 'aria-pressed', 'aria-checked', 'aria-valuenow', 'disabled', 'contenteditable', 'href', 'src', 'data-mode']) { const v = el.getAttribute(k); if (v != null) (rec.a ||= {})[k] = norm(v).slice(0, 160); }
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') rec.v = norm(el.value).slice(0, 200);
+      if (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') rec.m = { paused: el.paused, t: Math.round(el.currentTime * 10) / 10, muted: el.muted, rate: el.playbackRate, loop: el.loop };
+      out.push(rec);
+      for (const c of el.children) walk(c, depth + 1);
+    };
+    walk(root, 0);
+    return { root: root === document.body ? 'body' : 'viewer', vw: innerWidth, vh: innerHeight, n: out.length, els: out };
+  },
   canvasDrawn(cv) {
     try {
       const w = Math.min(64, cv.width), h = Math.min(64, cv.height); if (!w || !h) return false;

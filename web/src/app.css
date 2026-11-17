@@ -291,6 +291,7 @@ html[data-theme="light"] .cc-tone{
   --bg:#ffffff; --side-bg:#fafafa; --card:#ffffff;
   --text:#1a1a1a; --serif:#383838; --muted:#797979;
   --userbubble:#efefef; --avatar-bg:#d9d9d9; --q-rowsel:#f4f4f4;
+  --q-card:rgba(255,255,255,.98); /* 暗色 .cc-tone 改过 --q-card，亮色必须同步改回，否则浮层在亮色里变黑 */
 }
 
 /* Anthropicons 动态图标（claude.ai 同款）：字体自带 ANIM/ANM2 变体轴（0–100 字形形变，

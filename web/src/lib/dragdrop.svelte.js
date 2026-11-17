@@ -190,6 +190,8 @@ export function beginDrag(payload, { x, y, pointerId = -1, pointerType = 'touch'
   const touchId = pointerType === 'mouse' ? null : nearestTouch(x, y);
   rec = {
     payload, pointerId, touchId, sourceEl, onStay,
+    // 手机端（触屏/触控笔）不做「悬停自动打开文件夹」：维护者 11-15 嫌误入，只保留鼠标拖拽的弹簧
+    springOk: pointerType === 'mouse',
     x0: x, y0: y, x, y, moved: false, done: false,
     mode: 'pointer',                 // pointer | touch（拖拽指针被 pointercancel 之后改听触摸事件）
     hover: { key: '', since: 0, fired: false },
@@ -344,19 +346,20 @@ function updateHit(x, y) {
   const now = performance.now();
   const hit = zoneAt(x, y);
   const key = hit ? (hit.opts.key || '') : '';
+  const canSpring = !!(rec.springOk && hit?.opts.spring);
   if (key !== rec.hover.key) {
     rec.hover = { key, since: now, fired: false };
     drag.overKey = key;
     drag.overLabel = hit ? labelOf(hit.opts) : '';
     drag.effect = hit ? (hit.opts.effect || 'move') : '';
-    drag.springKey = hit?.opts.spring && rec.moved ? key : '';
+    drag.springKey = canSpring && rec.moved ? key : '';
     if (key && now - lastZoneHaptic > 140) { lastZoneHaptic = now; haptic('tick'); }
     return;
   }
   // key 没变不等于落点没变：「当前目录」那个落点在手指底下换了目录（另一根手指翻页/弹簧打开了
   // 文件夹），key 仍是 ws-here，提示语却该跟着换
   if (hit) { const lb = labelOf(hit.opts); if (lb !== drag.overLabel) drag.overLabel = lb; }
-  if (!hit?.opts.spring || rec.hover.fired || !rec.moved) return;
+  if (!canSpring || rec.hover.fired || !rec.moved) return;
   if (!drag.springKey) drag.springKey = key;   // 起拖后第一次挪动才开始计时（原地按住不算悬停）
   if (now - rec.hover.since < SPRING_MS) return;
   rec.hover.fired = true;

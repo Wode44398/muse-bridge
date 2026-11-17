@@ -1,7 +1,7 @@
 // 各家模型的调用参数适配（2026-11 逐厂商审计后补的）：每条都对应一次真打确认过的行为，见各测试的注释。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { guessModel, tableEntry, replaysThinking, routeOf, fromApi } from './model-knowledge/knowledge.mjs';
+import { guessModel, tableEntry, replaysThinking, replayOf, routeOf, fromApi } from './model-knowledge/knowledge.mjs';
 import { vendorText, looksBilling } from './model-knowledge/diagnose.mjs';
 import { upstreamError } from './runtime/claude-providers-proxy.mjs';
 import { applyParams, toOpenAI, usageOf, padThinkingBlocks, OpenAIStream, estimateInputTokens } from './runtime/claude-providers-transform.mjs';
@@ -43,7 +43,7 @@ test('DeepSeek 的 /anthropic 端点：三档写 output_config.effort，不再�
 test('DeepSeek（OpenAI 协议）：带工具调用的历史轮一律带 reasoning_content，没有原文带空串', () => {
   assert.equal(replaysThinking('deepseek-flash'), true);
   assert.equal(replaysThinking('deepseek/deepseek-v4.1-flash'), true);
-  assert.equal(replaysThinking('qwen3.8-max'), false);
+  assert.equal(replaysThinking('gpt-6.1-sol'), false);
   const m = model('deepseek-flash', 'openai');
   const out = toOpenAI({ model: m.id, max_tokens: 100, messages: TOOL_TURN }, provider('openai', [m]), m);
   const a = out.messages.find((x) => x.role === 'assistant');
@@ -51,8 +51,8 @@ test('DeepSeek（OpenAI 协议）：带工具调用的历史轮一律带 reasoni
   const withThinking = [TOOL_TURN[0], { role: 'assistant', content: [{ type: 'thinking', thinking: '要查天气', signature: '' }, ...TOOL_TURN[1].content] }, TOOL_TURN[2]];
   const out2 = toOpenAI({ model: m.id, max_tokens: 100, messages: withThinking }, provider('openai', [m]), m);
   assert.equal(out2.messages.find((x) => x.role === 'assistant').reasoning_content, '要查天气');
-  // 没有回传规则的家族照旧不带
-  const q = model('qwen3.8-max', 'openai');
+  // 没有回传规则的家族照旧不带（GPT-6 只认加密的 reasoning_details，reasoning_content 会被丢掉）
+  const q = model('gpt-6.1-sol', 'openai');
   const out3 = toOpenAI({ model: q.id, max_tokens: 100, messages: withThinking }, provider('openai', [q]), q);
   assert.equal('reasoning_content' in out3.messages.find((x) => x.role === 'assistant'), false);
 });
@@ -326,4 +326,66 @@ test('GPT-6 必须思考的型号：横线写法（gpt-6-1-sol）也不给关闭
   for (const id of ['gpt-6-1-sol', 'gpt-6-1-sol-pro', 'gpt-6-1-terra-pro']) {
     assert.deepEqual(guessModel(id, { protocol: 'openai' }).efforts.map((x) => x.id), ['low', 'medium', 'high', 'xhigh', 'max'], id);
   }
+});
+
+// —— 思考回传与参数按型号 × 线路（工具循环里逐线路实测：百炼只认 reasoning_content；OpenRouter 上 GPT-6 / Gemini / Muse / Grok
+// 只认加密的 reasoning_details，文字推理家族三种写法都认）——
+test('routeOf：认出百炼（含国际站），别的阿里云主机不算', () => {
+  assert.equal(routeOf('https://dashscope.aliyuncs.com/compatible-mode/v1'), 'dashscope');
+  assert.equal(routeOf('dashscope-intl.aliyuncs.com'), 'dashscope');
+  assert.equal(routeOf('oss-cn-hangzhou.aliyuncs.com'), '');
+  assert.equal(routeOf('https://openrouter.ai/api/v1'), 'openrouter');
+});
+
+test('replayOf：按线路回传；百炼上的 Qwen 另带 preserve_thinking，别的线路、别的家族不带', () => {
+  for (const id of ['qwen4-max', 'qwen3.8-max', 'qwen3.7-plus', 'kimi-k3.1-pro', 'glm-5.3', 'deepseek-v4.1-flash-1017']) {
+    assert.ok(replayOf(id, { route: 'dashscope' }), id);
+  }
+  assert.deepEqual(replayOf('qwen4-max', { route: 'dashscope' }).body, { preserve_thinking: true });
+  assert.equal(replayOf('qwen4-max').body, null);
+  assert.equal(replayOf('kimi-k3.1-pro', { route: 'dashscope' }).body, null);
+  assert.equal(replayOf('deepseek-v4.1-flash-1017', { route: 'dashscope' }).empty, true);
+  assert.equal(replayOf('glm-5.3', { route: 'dashscope' }).empty, false);
+  // 只在实测过的线路上回传
+  assert.ok(replayOf('tencent/hy4', { route: 'openrouter' }));
+  assert.equal(replayOf('tencent/hy4'), null);
+  // 只认加密推理的家族、认不出的型号：不回传
+  for (const id of ['openai/gpt-6.1-sol', 'google/gemini-4-argon', 'x-ai/grok-4.7', 'meta/muse-spark-1.3', 'MiniMax/MiniMax-M3.1-Flash']) {
+    assert.equal(replayOf(id, { route: 'openrouter' }), null, id);
+  }
+});
+
+test('百炼上的 Kimi：关得掉（enable_thinking:false），档位 reasoning_effort，不是恒思考；直连 Kimi 照旧恒思考', () => {
+  const ds = guessModel('kimi-k3.1-pro', { protocol: 'openai', route: 'dashscope' });
+  assert.deepEqual(ds.efforts.map((t) => [t.id, t.value]), [['off', { enable_thinking: false }], ['low', { reasoning_effort: 'low' }], ['high', { reasoning_effort: 'high' }], ['max', { reasoning_effort: 'max' }]]);
+  assert.equal(ds.alwaysThinks, false);
+  const direct = guessModel('k3.1-pro', { protocol: 'openai' });
+  assert.equal(direct.alwaysThinks, true);
+  assert.deepEqual(direct.efforts.map((t) => t.id), ['low', 'high', 'max']);
+});
+
+test('Claude 外接经网关打百炼：Qwen4 回传思考并带 preserve_thinking；同一个型号换成直连地址不带 preserve_thinking', () => {
+  const withThinking = [TOOL_TURN[0], { role: 'assistant', content: [{ type: 'thinking', thinking: '先查天气', signature: '' }, ...TOOL_TURN[1].content] }, TOOL_TURN[2]];
+  const m = { id: 'qwen4-max', enabled: true, ...guessModel('qwen4-max', { protocol: 'openai', route: 'dashscope' }) };
+  const hub = { ...provider('openai', [m]), baseUrl: 'http://127.0.0.1:5000/k/h-1/openai', upstream: 'dashscope.aliyuncs.com' };
+  const out = toOpenAI({ model: m.id, max_tokens: 100, messages: withThinking }, hub, m);
+  assert.equal(out.messages.find((x) => x.role === 'assistant').reasoning_content, '先查天气');
+  assert.equal(out.preserve_thinking, true);
+  const plain = toOpenAI({ model: m.id, max_tokens: 100, messages: withThinking }, provider('openai', [m]), m);
+  assert.equal(plain.messages.find((x) => x.role === 'assistant').reasoning_content, '先查天气');
+  assert.equal('preserve_thinking' in plain, false);
+  // 百炼上的 Kimi 不再是恒思考，照样按线路回传
+  const k = { id: 'kimi-k3.1-pro', enabled: true, ...guessModel('kimi-k3.1-pro', { protocol: 'openai', route: 'dashscope' }) };
+  const kb = toOpenAI({ model: k.id, max_tokens: 100, messages: withThinking }, { ...hub, models: [k] }, k);
+  assert.equal(kb.messages.find((x) => x.role === 'assistant').reasoning_content, '先查天气');
+  assert.equal('preserve_thinking' in kb, false);
+});
+
+test('hostedForeign：自带适配的服务里托管的别家型号按型号名认家族；这家自己的、认不出家族的不算', async () => {
+  const { hostedForeign } = await import('./model-knowledge/dimensio-native.mjs');
+  for (const id of ['kimi-k3.1-pro', 'glm-5.3', 'deepseek-v4.1-flash-1017', 'MiniMax/MiniMax-M3.1-Flash']) assert.equal(hostedForeign('qwen', id), true, id);
+  for (const id of ['qwen4-max', 'qwen3.8-flash', 'some-unknown-x']) assert.equal(hostedForeign('qwen', id), false, id);
+  assert.equal(hostedForeign('kimi', 'k3.1-pro'), false);
+  assert.equal(hostedForeign('openai', 'deepseek-flash'), false);   // dimensio 的 openai 这家接的是 DeepSeek
+  assert.equal(hostedForeign('nope', 'kimi-k3.1-pro'), false);
 });

@@ -134,7 +134,7 @@
 <div
   bind:this={el}
   use:portal
-  class="pop"
+  class="pop hx-glass"
   class:flush
   class:tall
   class:placed={pos.placed}
@@ -157,21 +157,30 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: 6px;
-    border-radius: 14px;
-    background: var(--surface);
+    /* 玻璃：半透明的纸 + 背后磨砂 + 边缘一圈受光细线 + 散开的柔影 */
+    border-radius: 16px;
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
     color: var(--text);
     font-size: var(--fs-base);
     line-height: var(--lh-ui);
     box-shadow:
-      0 0 0 1px var(--border),
-      var(--shadow-2);
+      inset 0 0 0 0.5px var(--glass-rim),
+      inset 0 1px 0 var(--glass-rim),
+      var(--glass-shadow);
     visibility: hidden;
   }
   /* 触屏：菜单行 40px、说明折两行，同一份菜单比桌面高出一截——460 的封顶会把档位菜单拦腰截断（还有大半屏空着）；
-     只要视口放得下就给到 640（仍不超出视口） */
+     只要视口放得下就给到 640（仍不超出视口）。圆角放大到 iOS 菜单的手感 */
   @media (pointer: coarse) {
     .pop {
       max-height: min(640px, calc(100dvh - 24px));
+      padding: 8px;
+      border-radius: 22px;
+    }
+    .pop.flush {
+      padding: 0;
     }
   }
 

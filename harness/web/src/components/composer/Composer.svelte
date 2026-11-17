@@ -6,7 +6,9 @@
   //    现在住在顶栏右上角那颗按钮点开的上下文面板里（shell/RunButton + sheets/RunSettings）
   //  · 卡的高度随内容平滑生长（smoothHeight；内容贴底——长高时从上沿露出来，底行和发送键原地不动）
   //  · 型号菜单渲染在卡外（G3）；斜杠面板从卡的上沿浮出、与卡同宽
-  //  · 粘贴 / 拖放挂在 window 上（不用先点输入框），只在目标位于本应用 .hxroot 内时接管（嵌入 bridge 时不截胡宿主的输入框）
+  //  · 粘贴挂在 window 上（不用先点输入框），只在目标位于本应用 .hxroot 内时接管（嵌入 bridge 时不截胡宿主的输入框）
+  //  · 拖文件：与 Claude 分页一样，必须拖进输入框这张卡才接（卡上描墨 + 一层「松开，添加为附件」）；页面上有文件在拖、
+  //    还没到卡上时，卡的细线深一档指个位置；在卡外松手什么都不做（也不让浏览器把文件当网页打开）
   //
   // 草稿跟着会话走（chat.draft，N42 / U4；分屏时两格各是各的）。停着一张卡时，草稿【开始写的那一刻】它就停着，发送就回应它
   //（权限卡 = 拒绝并附上这段话、提问 = 作答、计划 = 退回并附意见，N43）；之后才停进来的卡不算。敲键盘的时刻记给停靠区
@@ -27,7 +29,7 @@
   } from "../../lib/state.svelte.ts";
   import { completion, paletteItems, parseBuiltin, slashQuery, type Builtin, type PaletteItem } from "../../lib/slash.ts";
   import { pendingCards, replyHint, replyPlaceholder, replyTarget } from "../../lib/card-dock.ts";
-  import { attachUp, dropEntries, pasteEntries, uploadEntries } from "../../lib/attach.svelte.ts";
+  import { attachUp, chatKey, dropEntries, pasteEntries, uploadEntries } from "../../lib/attach.svelte.ts";
   import type { IconName } from "../../lib/icons.ts";
   import { haptic } from "../../lib/touch.ts";
   import { fade, smoothHeight } from "../../lib/motion.ts";
@@ -43,7 +45,6 @@
   import GoalOptions from "./GoalOptions.svelte";
   import SendButton from "./SendButton.svelte";
   import SlashPalette from "./SlashPalette.svelte";
-  import DropOverlay from "./DropOverlay.svelte";
   import ModelMenu from "./ModelMenu.svelte";
   // 会话管理：稍后发送（Ctrl / ⌘ + 回车）、Tab 输入建议（空输入框的灰字）
   import ComposerExtras from "./ComposerExtras.svelte";
@@ -169,10 +170,13 @@
   const vid = $derived(shownCfg?.provider ?? "anthropic");
 
   // ── 型号菜单（锚点 = 型号胶囊；再点一次收起）──────────────────────────────────────────────
+  // 菜单第一次打开才挂、之后一直挂着只切 open：它从胶囊里长出来、收起时缩回胶囊，收起动画要放得完
   let modelAnchor = $state<HTMLElement | null>(null);
+  let modelOpen = $state(false);
   function toggleModel(e: MouseEvent) {
     haptic("light");
-    modelAnchor = modelAnchor ? null : (e.currentTarget as HTMLElement);
+    modelAnchor = e.currentTarget as HTMLElement;
+    modelOpen = !modelOpen;
   }
   function openAttach() {
     haptic("light");
@@ -303,39 +307,85 @@
     e.preventDefault(); // 有文件时不往输入框里贴路径文字
     void uploadEntries(entries);
   }
-  let dragOver = $state(false);
+  // 拖文件进卡：只认操作系统拖来的文件（宿主工作空间里拖出来的那种带 application/x-bridge-ws，由宿主自己的落点接）
+  let dragOver = $state(false); // 文件正悬在卡上
+  let fileDrag = $state(false); // 页面上有文件在拖（还没到卡上也算）——卡的细线深一档
   let dragDepth = 0;
-  const hasFiles = (e: DragEvent) => Boolean(e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files"));
-  function onDragEnter(e: DragEvent) {
-    if (!pane.focused || !app.features.files || !hasFiles(e) || !visible() || !inScope(e.target)) return;
-    e.preventDefault();
-    dragDepth++;
-    dragOver = true;
-  }
-  function onDragOver(e: DragEvent) {
-    if (!dragOver) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-  }
-  function onDragLeave(e: DragEvent) {
-    if (!dragOver || !inScope(e.target)) return; // 进出成对：进来时没算的那个元素，出去时也不减
-    if (--dragDepth <= 0) {
+  let fileDragTimer = 0;
+  const hasFiles = (e: DragEvent) => {
+    const types = Array.from(e.dataTransfer?.types ?? []);
+    return types.includes("Files") && !types.includes("application/x-bridge-ws");
+  };
+  const canDrop = () => app.features.files && visible();
+  function cardDrop(node: HTMLElement) {
+    const enter = (e: DragEvent) => {
+      if (!hasFiles(e) || !canDrop()) return;
+      e.preventDefault();
+      dragDepth++;
+      dragOver = true;
+    };
+    const over = (e: DragEvent) => {
+      if (!hasFiles(e) || !canDrop()) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      dragOver = true;
+    };
+    // 进出成对计数：在卡里的子元素之间移动不算离开（子元素的 dragenter 先于上一个的 dragleave 到）
+    const leave = () => {
+      if (!dragOver) return;
+      if (--dragDepth <= 0) {
+        dragDepth = 0;
+        dragOver = false;
+      }
+    };
+    const drop = async (e: DragEvent) => {
+      const ok = hasFiles(e) && canDrop() && e.dataTransfer;
       dragDepth = 0;
       dragOver = false;
-    }
+      fileDrag = false;
+      if (!ok) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const chat = pane.chat; // 拖到哪一格的卡上就进哪一格的会话
+      // dropEntries 必须在 drop 的同步阶段调用（它先一口气取完 entry，再异步遍历；文件夹最多收 300 个）
+      const entries = await dropEntries(e.dataTransfer!);
+      void uploadEntries(entries, chat);
+      ta?.focus({ preventScroll: true });
+    };
+    node.addEventListener("dragenter", enter);
+    node.addEventListener("dragover", over);
+    node.addEventListener("dragleave", leave);
+    node.addEventListener("drop", drop);
+    return {
+      destroy() {
+        node.removeEventListener("dragenter", enter);
+        node.removeEventListener("dragover", over);
+        node.removeEventListener("dragleave", leave);
+        node.removeEventListener("drop", drop);
+      },
+    };
+  }
+  // window 兜底：卡外不接（光标显示不可放），在卡外松手也不让浏览器把文件当网页打开；dragover 持续触发，停了 150ms 就当拖走了
+  function onWinDragOver(e: DragEvent) {
+    if (!hasFiles(e) || !canDrop() || !inScope(e.target)) return;
+    clearTimeout(fileDragTimer);
+    fileDragTimer = window.setTimeout(() => (fileDrag = dragOver = false), 150);
+    fileDrag = true;
+    if (e.defaultPrevented) return; // 卡（或宿主的落点）已经接了
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+  }
+  function onWinDrop(e: DragEvent) {
+    clearTimeout(fileDragTimer);
+    fileDrag = false;
+    dragOver = false;
+    dragDepth = 0;
+    if (!e.defaultPrevented && hasFiles(e) && inScope(e.target)) e.preventDefault();
   }
   function onDragEnd() {
+    clearTimeout(fileDragTimer);
+    fileDrag = dragOver = false;
     dragDepth = 0;
-    dragOver = false;
-  }
-  async function onDrop(e: DragEvent) {
-    const eligible = dragOver || (pane.focused && app.features.files && hasFiles(e) && visible() && inScope(e.target));
-    onDragEnd();
-    if (!eligible || !e.dataTransfer) return;
-    e.preventDefault(); // 不然浏览器直接导航去打开这个文件
-    // dropEntries 必须在 drop 的同步阶段调用（它先一口气取完 entry，再异步遍历；文件夹最多收 300 个）
-    const entries = await dropEntries(e.dataTransfer);
-    void uploadEntries(entries);
   }
 
   // ── 把侧栏的会话块拖进来 = 引用那个对话（服务端能力位 "session-refs"；自己不能引用自己）───────────────
@@ -387,7 +437,7 @@
   }
 </script>
 
-<svelte:window onpaste={onPaste} ondragenter={onDragEnter} ondragover={onDragOver} ondragleave={onDragLeave} ondragend={onDragEnd} ondrop={onDrop} />
+<svelte:window onpaste={onPaste} ondragover={onWinDragOver} ondragend={onDragEnd} ondrop={onWinDrop} />
 
 {#snippet vendorMark()}<VendorLogo skin={vid} size={15} />{/snippet}
 {#snippet modelText()}
@@ -409,8 +459,11 @@
       class:focus={focused}
       class:refable={refCandidate}
       class:refover={refOver}
+      class:fileable={fileDrag && !dragOver}
+      class:fileover={dragOver}
       bind:this={card}
       use:smoothHeight
+      use:cardDrop
       use:dropTarget={{ key: refDropKey, accept: refDropOk, label: t("引用这个对话"), drop: onRefDrop }}
     >
       <div class="inner" use:padFocus>
@@ -425,7 +478,7 @@
           <div in:fade={{ duration: 160 }} out:fade={{ duration: 120 }}><GoalOptions /></div>
         {/if}
 
-        {#if pane.chat.attachments.length || pane.chat.refs.length || (pane.focused && attachUp.active)}
+        {#if pane.chat.attachments.length || pane.chat.refs.length || attachUp.items.some((x) => x.chat === chatKey(pane.chat))}
           <div in:fade={{ duration: 160 }} out:fade={{ duration: 120 }}><AttachChips /></div>
         {/if}
 
@@ -460,7 +513,7 @@
                   leading={vendorMark}
                   children={modelText}
                   chevron
-                  open={Boolean(modelAnchor)}
+                  open={modelOpen}
                   label={modelAria}
                   title={t("模型与思考深度")}
                   onclick={toggleModel}
@@ -478,17 +531,20 @@
           </div>
         </div>
       </div>
+      {#if dragOver}
+        <!-- 文件悬在卡上：一层提示（不接指针，拖放事件穿到卡上） -->
+        <div class="dropveil" aria-hidden="true" in:fade={{ duration: 120 }} out:fade={{ duration: 140 }}>
+          <span class="dv-ic"><Icon name="upload" size={18} stroke={1.8} /></span>
+          <span class="dv-t">{t("松开，添加为附件")}</span>
+        </div>
+      {/if}
     </div>
   </div>
 </div>
 
-{#if dragOver}
-  <DropOverlay />
-{/if}
-
-<!-- G3：菜单不渲染在卡片里（Popover 自己也会挪到 .hxroot 下） -->
+<!-- G3：菜单不渲染在卡片里（MorphPanel 自己挪到 .hxroot 下） -->
 {#if modelAnchor}
-  <ModelMenu anchor={modelAnchor} onclose={() => (modelAnchor = null)} />
+  <ModelMenu open={modelOpen} anchor={modelAnchor} onclose={() => (modelOpen = false)} />
 {/if}
 
 <style>
@@ -541,6 +597,40 @@
       inset 0 1px 0 var(--sheen),
       0 0 0 1.5px var(--accent),
       var(--shadow-2);
+  }
+  /* 页面上有文件在拖：卡的细线深一档、投影提一档（指个位置：拖到这里）；悬在卡上：墨色描边 + 一层淡墨与提示 */
+  .card.fileable {
+    box-shadow:
+      inset 0 1px 0 var(--sheen),
+      0 0 0 1px var(--border2),
+      var(--shadow-2);
+  }
+  .card.fileover {
+    box-shadow:
+      inset 0 1px 0 var(--sheen),
+      0 0 0 1.5px var(--accent),
+      var(--shadow-2);
+  }
+  .card {
+    position: relative;
+  }
+  .dropveil {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: inherit;
+    background: linear-gradient(var(--accent-soft), var(--accent-soft)), color-mix(in srgb, var(--surface) 90%, transparent);
+    color: var(--accent);
+    font-size: var(--fs-base);
+    font-weight: 500;
+    pointer-events: none;
+  }
+  .dv-ic {
+    display: inline-flex;
   }
   .inner {
     flex: none;

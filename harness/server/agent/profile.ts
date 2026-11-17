@@ -10,6 +10,8 @@
 //
 // 默认值的来源仍是各模块的常量（loop.ts / loop-guard.ts / repetition.ts / subagent.ts / context.ts），这里只在函数里读
 // 它们（不在模块顶层读）：loop.ts → state.ts → profile.ts → loop.ts 是个环，顶层取值会撞上未初始化的绑定。
+import { unknownPatches } from "./prompt-patches.ts";
+import { PROMPT_VARIANTS, type PromptVariant } from "./prompt-variants.ts";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { coreModule, coreUrl } from "../core-link.ts";
@@ -17,6 +19,7 @@ import { MK } from "../model-knowledge.ts";
 import { CATALOG } from "../catalog.ts";
 import { getCustomModel, isCustomProviderId } from "../custom-providers.ts";
 import type { ThinkingLevel } from "./turn.ts";
+import type { ToolPolicy } from "../tools/types.ts";
 import {
   DENIALS_BEFORE_STOP,
   EMPTY_RESPONSE_RETRIES,
@@ -26,6 +29,7 @@ import {
   MAX_PARALLEL_TOOLS,
   RETRY_ATTEMPTS,
 } from "./loop.ts";
+import { TODO_REMIND_TURNS } from "./loop/limits.ts";
 import { GUARD_DEFAULTS, type GuardLimits } from "./loop-guard.ts";
 import { REPETITION_DEFAULTS, type RepetitionLimits } from "./repetition.ts";
 import { SUBMIT_ATTEMPTS, SUBMIT_NUDGES } from "./subagent.ts";
@@ -65,19 +69,35 @@ export interface LoopProfile {
   submitNudges: number; // 子 agent 没交 SubmitResult 就收尾时的追问次数（SUBMIT_NUDGES）
   noopBashResample: boolean; // 空操作 Bash（echo 之类）重采样：P0 只占位，loop 不读
   stopWhenAttended: boolean; // 熔断在有人在场时也真停（现状：只在无人值守时停）
+  // 完成门禁：改了代码却没有通过的验证（或有没跑过的反向依赖测试）就想收尾时，撤回答复、追问补验证（verify-nudge）。
+  // off = 不追问也不撤回，模型不带工具调用就照常收尾。答复下的「未验证」尾注不归这里管；只思考 / 半句停下的追问各有字段
+  verifyGate: "on" | "off";
+  // 待办提醒：连着这么多个工具回合没看到待办清单，就在下一次请求末尾带一份（压缩后立刻带一次）；0 = 不提醒
+  todoReminderEvery: number;
+  todoReminderOnlyIncomplete: boolean; // 只在清单里还有没做完的项时提醒；false = 清单非空就提醒
+  // 只有思考、没有答复就要收尾时：nudge = 追加一句追问（次数见 maxAnswerNudges）；retry = 不追加消息，把这次调用当空响应
+  // 原样重发（与空响应共用每次调用 emptyResponseRetries 的次数），重发用完仍只有思考就照常收尾
+  thinkingOnly: "nudge" | "retry";
 }
 
 export interface ModelProfile {
   family: ModelFamily;
   familySource: FamilySource;
   tier: ProfileTier;
-  // 提示词变体与补丁：P0 只有 default、补丁为空（prompt.ts / subagent.ts 收到档案但不改任何输出）
-  prompt: { variant: "default"; patches: string[] };
+  // 提示词变体与补丁：补丁 id 见 prompt-patches.ts，只加进主会话的系统提示词（子 agent 不加）
+  prompt: { variant: PromptVariant; patches: string[] };
   tools: {
     editFormat: "str_replace"; // Edit 的编辑格式（现状 old_string/new_string 精确替换）
     deferredFamilies: readonly (readonly string[])[]; // 延迟加载的工具族（deferred-tools.ts DEFERRED_FAMILIES）
     subset: string[] | null; // 只下发这些工具；null = 不裁
     pathAliases: Record<string, string>; // 参数名别名（如 file_path → path）；P0 为空、不读
+    // verify:true 的写法契约（Bash 的只读 / 无关命令与吞退出码的 ||、&、开头 !；Eval 返回非布尔；Network 缺 filter / expectedStatus）：
+    // strict = 打回（不执行，或判为畸形）；lenient = 不打回，按没带 verify 照常执行，结果末尾注明不记作验证证据——
+    // 证据账只收归属得清的检查，放松写法不会多出假绿
+    verifyContract: "strict" | "lenient";
+    // Edit 要不要先 Read：strict = 没读过就否决；off = 不要求（仍现读文件匹配，old_string 须唯一命中照旧）。
+    // Write 覆盖已有文件的先读要求不归这里管：那是防止盖掉没看过的内容
+    readBeforeEdit: "strict" | "off";
   };
   sampling: Record<string, number>; // 采样参数；空 = 不发任何采样参数（现状）。P0 不下发
   providerExtras: Record<string, unknown>; // 原样并进请求体（Turn.hints.providerExtras，三个适配器都会合并）；空 = 不挂
@@ -89,6 +109,50 @@ export interface ModelProfile {
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? DeepPartial<T[K]> : T[K] };
 export type ProfilePatch = DeepPartial<Omit<ModelProfile, "family" | "familySource" | "tier">>;
 export const FAMILY_OVERRIDES: Partial<Record<ModelFamily, ProfilePatch>> = {};
+
+// 评测臂的档案覆盖（evals/ab/matrix.ts 的变体文件原样写进这个环境变量）：{ "<家族>" | "*": ProfilePatch }，叠在家族覆盖之上。
+// 正式服不设。写坏了直接抛：评测臂起不来，比按错的档案跑完一整轮再发现强。
+let envOverrides: { raw: string; map: Partial<Record<ModelFamily | "*", ProfilePatch>> } | null = null;
+
+// 门禁类开关的合法取值：拼错了（"of"）读的地方会按默认走，评测臂看着开了其实没开，所以在这里就挡住
+const SWITCHES: [group: "loop" | "tools", key: string, ok: (v: unknown) => boolean, want: string][] = [
+  ["loop", "verifyGate", (v) => v === "on" || v === "off", "on | off"],
+  ["loop", "thinkingOnly", (v) => v === "nudge" || v === "retry", "nudge | retry"],
+  ["loop", "todoReminderEvery", (v) => Number.isInteger(v) && (v as number) >= 0, "非负整数"],
+  ["loop", "todoReminderOnlyIncomplete", (v) => typeof v === "boolean", "true | false"],
+  ["tools", "verifyContract", (v) => v === "strict" || v === "lenient", "strict | lenient"],
+  ["tools", "readBeforeEdit", (v) => v === "strict" || v === "off", "strict | off"],
+];
+function badSwitches(patch: ProfilePatch | undefined): string[] {
+  const out: string[] = [];
+  for (const [group, key, ok, want] of SWITCHES) {
+    const block = patch?.[group] as Record<string, unknown> | undefined;
+    if (block && typeof block === "object" && key in block && !ok(block[key])) out.push(`${group}.${key}=${JSON.stringify(block[key])}（应为 ${want}）`);
+  }
+  return out;
+}
+function overridesFromEnv(): Partial<Record<ModelFamily | "*", ProfilePatch>> {
+  const raw = process.env.DIMENSIO_PROFILE_OVERRIDES?.trim() ?? "";
+  if (envOverrides?.raw === raw) return envOverrides.map;
+  let map: Partial<Record<ModelFamily | "*", ProfilePatch>> = {};
+  if (raw) {
+    const j = JSON.parse(raw) as unknown;
+    if (!j || typeof j !== "object" || Array.isArray(j)) throw new Error("DIMENSIO_PROFILE_OVERRIDES 要是 { 家族: 覆盖 } 形状的 JSON 对象");
+    for (const [k, v] of Object.entries(j as Record<string, unknown>)) {
+      if (k !== "*" && !(MODEL_FAMILIES as readonly string[]).includes(k)) throw new Error(`DIMENSIO_PROFILE_OVERRIDES 里不认识的家族：${k}`);
+      const patches = (v as ProfilePatch)?.prompt?.patches;
+      const bad = Array.isArray(patches) ? unknownPatches(patches) : [];
+      if (bad.length) throw new Error(`DIMENSIO_PROFILE_OVERRIDES 里不认识的提示词补丁：${bad.join(", ")}`);
+      const variant = (v as ProfilePatch)?.prompt?.variant;
+      if (variant !== undefined && !(PROMPT_VARIANTS as readonly string[]).includes(variant)) throw new Error(`DIMENSIO_PROFILE_OVERRIDES 里不认识的提示词变体：${String(variant)}`);
+      const wrong = badSwitches(v as ProfilePatch);
+      if (wrong.length) throw new Error(`DIMENSIO_PROFILE_OVERRIDES 里取值不对的开关：${wrong.join(", ")}`);
+    }
+    map = j as typeof map;
+  }
+  envOverrides = { raw, map };
+  return map;
+}
 
 // ── 默认档案（= 现状）──────────────────────────────────────────────────────────
 export function defaultLoopProfile(): LoopProfile {
@@ -106,6 +170,10 @@ export function defaultLoopProfile(): LoopProfile {
     submitNudges: SUBMIT_NUDGES,
     noopBashResample: false,
     stopWhenAttended: false,
+    verifyGate: "on",
+    todoReminderEvery: TODO_REMIND_TURNS,
+    todoReminderOnlyIncomplete: true,
+    thinkingOnly: "nudge",
   };
 }
 
@@ -118,7 +186,7 @@ export function defaultProfile(): ModelProfile {
     familySource: "none",
     tier: { ...NO_TIER, subs: {} },
     prompt: { variant: "default", patches: [] },
-    tools: { editFormat: "str_replace", deferredFamilies: DEFERRED_FAMILIES, subset: null, pathAliases: {} },
+    tools: { editFormat: "str_replace", deferredFamilies: DEFERRED_FAMILIES, subset: null, pathAliases: {}, verifyContract: "strict", readBeforeEdit: "strict" },
     sampling: {},
     providerExtras: {},
     loop: defaultLoopProfile(),
@@ -370,13 +438,19 @@ export function resolveProfile(provider: string, model: string, opts: ResolveOpt
   const label = opts.label ?? customLabel(provider, model);
   const { family, familySource } = resolveFamily(provider, model, label ? { label } : undefined);
   const base = defaultProfile();
-  const merged = deepMerge(base, FAMILY_OVERRIDES[family]);
+  const env = overridesFromEnv();
+  const merged = deepMerge(deepMerge(deepMerge(base, FAMILY_OVERRIDES[family]), env["*"]), env[family]);
   return {
     ...merged,
     family,
     familySource,
     tier: resolveTier(provider, model, family, { ...(opts.effort ? { effort: String(opts.effort) } : {}), ...(label ? { label } : {}) }),
   };
+}
+
+/** 档案里管工具契约的两项，交给工具的那一份。 */
+export function profileToolPolicy(p: ModelProfile): ToolPolicy {
+  return { verifyContract: p.tools.verifyContract, readBeforeEdit: p.tools.readBeforeEdit };
 }
 
 /** 档案要并进请求体的字段（Turn.hints.providerExtras）；空 = 不挂 hints（与接入前的请求完全一样）。 */

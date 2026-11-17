@@ -7,6 +7,7 @@ import { toolMeta } from "./icons.ts";
 import { t, tr } from "./i18n.ts";
 import { TASK_NOTIFICATION_KIND, taskNoticeText } from "./task-notice.ts";
 import { discardStreamTurn, findSteerItem, resetStreamTurn, startStreamTurn } from "./stream-turn.ts";
+import { markEnd, markStart } from "./live-clock.ts";
 import type { AgentRun, AskItem, DecidedBy, GoalView, Item, PermissionItem, PlanItem, RecallRef, ToolItem, WorkflowRun } from "./timeline-types.ts";
 
 // U2（X36 第二步）：待送达托盘里的一条插话
@@ -232,13 +233,19 @@ export function dropStream(m: TimelineModel, fx: FlushControl) {
 export function settleCursors(m: TimelineModel, fx: FlushControl) {
   flushStream(m, fx); // 缓冲里的尾巴必须先落地，再掐灭游标——否则最后一批字丢了
   if (m.curThinking) {
-    m.curThinking.live = false;
+    endThinking(m.curThinking);
     m.curThinking = null;
   }
   if (m.curText) {
     m.curText.live = false;
     m.curText = null;
   }
+}
+
+// 先记用时再掐灭旗子：界面在 live 变 false 时去读用时
+function endThinking(it: { live: boolean }) {
+  markEnd(it);
+  it.live = false;
 }
 
 export const extractText = (content: any[]): string =>
@@ -420,6 +427,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
           m.curText = null;
         }
         m.curThinking = pushItem(m, { kind: "thinking", text: "", open: false, live: true });
+        markStart(m.curThinking);
         m.activity = t("思考中");
       }
       m.pendingThinking += ev.text;
@@ -430,7 +438,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
         flushStream(m, fx);
         // 正文开场 = 这段思考已结束
         if (m.curThinking) {
-          m.curThinking.live = false;
+          endThinking(m.curThinking);
           m.curThinking = null;
         }
         m.curText = pushItem(m, { kind: "text", text: "", live: true });
@@ -451,6 +459,7 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
         output: "",
         open: false,
       }) as ToolItem;
+      markStart(tool);
       m.toolRefs.set(ev.id, tool);
       m.activity = tr(toolMeta(ev.name).verb);
       break;

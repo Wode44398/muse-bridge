@@ -168,3 +168,34 @@ function dur(ms: number): string {
   const h = Math.floor(m / 60);
   return m % 60 ? t("{h} 小时 {m} 分", { h, m: m % 60 }) : tc("dimensio", "{n} 小时", { n: h });
 }
+
+// ── 精简模式工具组的内部：同一文件连续的读 / 写 / 改并成一个 run（官方 /code 页 hF 同款）────────────────
+// 「连续」只看紧挨着的工具：中间夹着一段思考就断开（思考在组里是自己的一行）。组里只剩 1 个 run 时不套组头，
+// 直接摆那一行（ToolGroup 判）——分段读同一个文件三次就是一行「读取了 a.ts (1–200, 201–400, 401–600)」。
+export type GroupEntry = { run: false; key: string; item: Item } | { run: true; key: string; tools: ToolItem[] };
+
+const RUN_TOOLS = new Set(["Read", "Write", "Edit"]);
+function runKey(it: Item): string | null {
+  if (it.kind !== "tool" || !RUN_TOOLS.has(it.name)) return null;
+  const a = it.args && typeof it.args === "object" ? it.args : {};
+  const p = a.file_path || a.path;
+  return p ? `${it.name} ${p}` : null;
+}
+
+export function groupEntries(items: Item[]): GroupEntry[] {
+  const out: GroupEntry[] = [];
+  let prev: string | null = null;
+  items.forEach((it, i) => {
+    if (it.kind !== "tool") {
+      out.push({ run: false, key: `k:${i}`, item: it });
+      prev = null;
+      return;
+    }
+    const k = runKey(it);
+    const last = out[out.length - 1];
+    if (k && k === prev && last?.run) last.tools.push(it);
+    else out.push({ run: true, key: `r:${it.id || i}`, tools: [it] });
+    prev = k;
+  });
+  return out;
+}

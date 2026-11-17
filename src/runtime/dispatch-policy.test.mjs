@@ -345,17 +345,18 @@ test('sanitizeStrategy / activeStrategy：预览用的宽松规范化不抛；�
 // —— 作用域（2026-11-14）：dimensio 那份 ——
 const dimFile = (ctx) => path.join(ctx.dataDir, 'dispatch-policy.dimensio.json');
 
-test('作用域：dimensio 那份单独一个文件、带 follow（默认 true），与 Claude 那份互不影响；不认识的作用域 400', () => {
+test('作用域：dimensio 那份单独一个文件、带 follow（默认 false = 单独一套）、没有 allowThirdParty，与 Claude 那份互不影响；不认识的作用域 400', () => {
   D._resetPolicyForTests();
   const ctx = admin();
   const p = D.policyFor(ctx, { scope: 'dimensio' });
-  assert.deepEqual([p.enabled, p.follow, p.allowThirdParty, p.rev, p.activeId], [true, true, true, 0, 's-00000000']);
+  assert.deepEqual([p.enabled, p.follow, p.allowThirdParty, p.rev, p.activeId], [true, false, undefined, 0, 's-00000000']);
+  assert.equal(D.policyFor(ctx).allowThirdParty, true, 'Claude 那份照旧有');
   assert.equal(D.policyFor(ctx).follow, undefined, 'Claude 那份没有 follow');
   const seen = [];
   const off = D.onPolicyChange((c, q, scope) => seen.push([scope, q.rev]));
   try {
-    const q = D.updatePolicy(ctx, { follow: false, scope: { session: true }, enabled: false }, { scope: 'dimensio' });
-    assert.deepEqual([q.follow, q.scope.session, q.enabled, q.rev], [false, true, false, 1]);
+    const q = D.updatePolicy(ctx, { follow: true, scope: { session: true }, enabled: false }, { scope: 'dimensio' });
+    assert.deepEqual([q.follow, q.scope.session, q.enabled, q.rev], [true, true, false, 1]);
     assert.ok(existsSync(dimFile(ctx)));
     assert.equal(existsSync(fileOf(ctx)), false, 'Claude 那份没落盘');
     assert.deepEqual([D.policyFor(ctx).enabled, D.policyFor(ctx).rev], [true, 0]);
@@ -364,10 +365,20 @@ test('作用域：dimensio 那份单独一个文件、带 follow（默认 true�
   // Claude 那份不认 follow；作用域写错 400
   assert.throws(() => D.updatePolicy(ctx, { follow: true }), status(400, /只能改 enabled \/ scope \/ allowThirdParty \/ activeId/));
   assert.throws(() => D.updatePolicy(ctx, { follow: 'yes' }, { scope: 'dimensio' }), status(400, /follow 要是 true \/ false/));
+  assert.throws(() => D.updatePolicy(ctx, { allowThirdParty: false }, { scope: 'dimensio' }), status(400, /只能改 enabled \/ follow \/ scope \/ activeId/));
   assert.throws(() => D.policyFor(ctx, { scope: 'codex' }), status(400, /作用域/));
   assert.equal(D.policyScope(undefined), 'claude');
-  // 按 mtime 重读一样认 follow
+  // 按 mtime 重读一样认 follow；旧文件里留着的 allowThirdParty 读的时候丢掉
+  const disk = JSON.parse(readFileSync(dimFile(ctx), 'utf8'));
+  assert.equal(disk.allowThirdParty, undefined, '落盘也没有');
+  writeFileSync(dimFile(ctx), JSON.stringify({ ...disk, allowThirdParty: false }));
   D._resetPolicyForTests();
+  const back = D.policyFor(ctx, { scope: 'dimensio' });
+  assert.deepEqual([back.follow, back.allowThirdParty], [true, undefined]);
+  // 缺 follow 的文件 = 单独一套
+  const { follow: _f, ...noFollow } = disk;
+  writeFileSync(dimFile(ctx), JSON.stringify(noFollow));
+  utimesSync(dimFile(ctx), new Date(), new Date(Date.now() + 5000));
   assert.equal(D.policyFor(ctx, { scope: 'dimensio' }).follow, false);
 });
 
@@ -392,11 +403,11 @@ test('作用域：dimensio 那份的档位自定义写「厂商:型号」，Clau
   assert.equal(p.strategies.length, 1);
 });
 
-test('作用域：没权限的身份读到的 dimensio 只读默认是开着、跟随 Claude（改造前 dimensio 的默认），写 403', () => {
+test('作用域：没权限的身份读到的 dimensio 只读默认是开着、单独一套的默认线（改造前 dimensio 的默认），写 403', () => {
   D._resetPolicyForTests();
   const m = member(dir(), false);
   const p = D.policyFor(m, { scope: 'dimensio' });
-  assert.deepEqual([p.enabled, p.follow], [true, true]);
+  assert.deepEqual([p.enabled, p.follow], [true, false]);
   assert.equal(D.policyFor(m).enabled, false, 'Claude 那份照旧关着');
   assert.throws(() => D.updatePolicy(m, { follow: false }, { scope: 'dimensio' }), status(403));
 });
@@ -412,10 +423,10 @@ test('旧 dimensio 偏好迁移：文件不存在时才迁；备注非空 → �
   // 已经有文件了：再来不动
   assert.equal(D.migrateDimensioLegacy(a, { ladder: true, note: '新的' }), false);
   assert.equal(D.policyFor(a, { scope: 'dimensio' }).strategies[0].note, '简单检索用 MiMo');
-  // 只有阶梯关：总开关关、仍跟随
+  // 只有阶梯关：总开关关、仍是单独一套（默认）
   const b = admin();
   assert.equal(D.migrateDimensioLegacy(b, { ladder: false, note: '' }), true);
-  assert.deepEqual([D.policyFor(b, { scope: 'dimensio' }).enabled, D.policyFor(b, { scope: 'dimensio' }).follow], [false, true]);
+  assert.deepEqual([D.policyFor(b, { scope: 'dimensio' }).enabled, D.policyFor(b, { scope: 'dimensio' }).follow], [false, false]);
   // 没权限的身份不迁
   assert.equal(D.migrateDimensioLegacy(member(dir(), false), { ladder: false, note: 'x' }), false);
 });

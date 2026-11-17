@@ -53,6 +53,7 @@ import type { ProviderId } from "./providers/types.ts";
 import { customProviderPlugin, getCustomProvider, hostBuiltin, hostManagesBuiltins, hostOf, isCustomProviderId, isSharedProvider, listCustomProviders, type CustomModel, type CustomProvider, type HostBuiltin } from "./custom-providers.ts";
 import { autoThinkSlots, slotView } from "./custom-tiers.ts";
 import { MK } from "./model-knowledge.ts";
+import { coreModule } from "./core-link.ts";
 import { DEFAULT_MEDIA_BUDGET } from "./agent/media-budget.ts";
 import { LEGACY_STRATA_MODEL, LOCAL_MODEL_ALIASES, localAiSettings, strataSettings, strataVariantOf } from "./localai.ts";
 import type { ThinkingLevel } from "./agent/turn.ts";
@@ -177,6 +178,9 @@ export const CATALOG: ProviderSpec[] = [
       // 3.8 全系原生多模态（图 + 视频，实测），1M ctx / 128K max out；没有 plus 档。
       // 思考档用官方 reasoning_effort low / medium / xhigh（官方默认 xhigh，思维链最长 262144 token）。dimensio 默认 medium：
       // 以前的默认 high 是 thinking_budget 32k 的成本闸，xhigh 不封顶，换档不能悄悄放大账单。
+      // Qwen4 Max（2026-11-17 起能调，/models 还没列出）：reasoning_effort 五档 + enable_thinking 关；看图实测可以（视频没测，先不报）；
+      // 输入上限 991808（超长输入的报文），输出上限端点不校验，先按 3.8 的 131072
+      { id: "qwen4-max", label: "Qwen4 Max", efforts: ["off", "low", "medium", "high", "xhigh", "max"], defaultEffort: "medium", image: true, ctx: 1_000_000, maxOut: 131_072, note: "Qwen4 旗舰 · 看图 · 1M ctx" },
       { id: "qwen3.8-max", label: "Qwen3.8 Max", efforts: ["off", "low", "medium", "xhigh"], defaultEffort: "medium", image: true, video: true, ctx: 1_000_000, maxOut: 131_072, note: "旗舰 2.4T · 图/视频 · 1M ctx" },
       { id: "qwen3.8-flash", label: "Qwen3.8 Flash", efforts: ["off", "low", "medium", "xhigh"], defaultEffort: "medium", image: true, video: true, ctx: 1_000_000, maxOut: 131_072, note: "多模态快模 · 1M ctx" },
       // R1：3.7 三个型号取自百炼官方模型页（help.aliyun.com/zh/model-studio/qwen3-7-*，2026-09-23）：
@@ -303,7 +307,16 @@ export const CATALOG: ProviderSpec[] = [
 
 // 自定义服务（custom-providers.ts）按同一形状并进目录：只列启用的对话型号（asr / tts 这类不进菜单）；上下文、输出、视觉 /
 // 视频 / 音频取型号记录（识别出来的或用户改过的）；档位表经 custom-tiers.ts 映射成七级思考档，档名不同的进 effortLabels。
-function customModelSpec(m: CustomModel, protocol: CustomProvider["protocol"]): ModelSpec {
+// fast mode 只有官方 Anthropic 认（speed:"fast" + beta 头）：自定义服务（含模型中心接进来的「Anthropic API」）的上游就是
+// api.anthropic.com、走 Anthropic 协议时，型号支不支持照官方目录的 fast 表——以前这里不带 fast，模型中心接的 Opus 5.5 菜单里
+// 永远没有 Fast 开关、适配器也不发。上游看 upstream（模型中心的卡地址是本机网关），没有就看地址的主机名。
+function officialAnthropic(c: CustomProvider): boolean {
+  return c.protocol === "anthropic" && (c.upstream || hostOf(c.baseUrl)) === "api.anthropic.com";
+}
+function anthropicFast(modelId: string): boolean {
+  return CATALOG.find((s) => s.id === "anthropic")?.models.find((m) => m.id === modelId)?.fast === true;
+}
+function customModelSpec(m: CustomModel, protocol: CustomProvider["protocol"], official = false): ModelSpec {
   const v = slotView(m);
   const group = m.id.includes("/") ? m.id.split("/")[0].slice(0, 40) : "";
   return {
@@ -319,6 +332,7 @@ function customModelSpec(m: CustomModel, protocol: CustomProvider["protocol"]): 
     maxOut: m.maxOutput,
     ...(m.alwaysThinks ? { alwaysThinks: true, autoThinkAt: autoThinkSlots(m, protocol) } : {}),
     ...(group ? { group } : {}),
+    ...(official && anthropicFast(m.id) ? { fast: true } : {}),
   };
 }
 function customSpec(c: CustomProvider): ProviderSpec {
@@ -342,7 +356,7 @@ function customSpec(c: CustomProvider): ProviderSpec {
       // 已经并进模型中心：目录里留着（老会话的型号名、档位照常查得到），面板与子 agent 候选不列
       ...(c.hubRef && !managed ? { hidden: true } : {}),
     },
-    models: shown.map((m) => customModelSpec(m, c.protocol)),
+    models: shown.map((m) => customModelSpec(m, c.protocol, officialAnthropic(c))),
   };
 }
 
@@ -365,8 +379,27 @@ function withLocalSettings(s: ProviderSpec): ProviderSpec {
   };
 }
 
+// 自带厂商的服务里托管的别家型号（百炼上的 Kimi、GLM、DeepSeek……）：这家厂商的适配分支只懂自己家的参数（Qwen 的 thinking_budget、
+// enable_search 发给它们是 400），这类型号改按档位表发——模型中心按型号 × 线路算好的那份，老 bridge 没给就按共用型号表现算。
+// 认家族看型号名（model-knowledge/dimensio-native.mjs hostedForeign，模型中心的界面用同一条）；认不出家族的照旧当这家自己的型号。
+const NATIVE = coreModule<{ hostedForeign(vendorId: string, modelId: string): boolean }>("model-knowledge/dimensio-native.mjs");
+export interface HostedTiers {
+  thinking: string;
+  efforts: CustomModel["efforts"];
+  effortField: string;
+  effortDefault: string;
+  alwaysThinks: boolean;
+}
+export function hostedTiers(provider: string, model: string, given: HostedTiers | undefined, routeHost: string | undefined): HostedTiers | undefined {
+  if (provider === "local" || !NATIVE.hostedForeign(provider, model)) return undefined;
+  if (given) return given;
+  const g = MK.guessModel(model, { protocol: "openai", route: MK.routeOf(routeHost) });
+  return { thinking: g.thinking, efforts: g.efforts, effortField: g.effortField, effortDefault: g.effortDefault, alwaysThinks: g.alwaysThinks };
+}
+
 // 宿主的模型中心接管了这家自带厂商（custom-providers.ts hostBuiltin）：型号表照旧是这里逐个核对过的那份，
-// 模型中心里另勾的、表里没有的型号接在后面——档位阶梯照这家默认型号的（同一家的适配器按厂商发参数），上下文 / 输出 / 识图取模型中心给的。
+// 模型中心里另勾的、表里没有的型号接在后面——档位阶梯照这家默认型号的（同一家的适配器按厂商发参数），上下文 / 输出 / 识图取模型中心给的；
+// 别家的型号档位照它自己的档位表（hostedTiers）。
 // menu = 给菜单看的：只列模型中心里勾给 dimensio 的那几个；否则是全表 + 另加的（旧会话里记着、后来取消勾选的型号仍查得到规格）。
 function withHostBinding(s: ProviderSpec, b: HostBuiltin | undefined, menu: boolean): ProviderSpec {
   if (!b) return s;
@@ -374,16 +407,29 @@ function withHostBinding(s: ProviderSpec, b: HostBuiltin | undefined, menu: bool
   const known = new Set(s.models.flatMap((m) => [m.id, ...(m.aliases ?? [])]));
   const extras: ModelSpec[] = b.models
     .filter((m) => !known.has(m.id))
-    .map((m) => ({
-      id: m.id,
-      label: m.label || m.id,
-      efforts: base.efforts,
-      ...(base.defaultEffort ? { defaultEffort: base.defaultEffort } : {}),
-      ...(base.effortLabels ? { effortLabels: base.effortLabels } : {}),
-      image: typeof m.vision === "boolean" ? m.vision : guessImages(m.id),
-      ...(m.contextWindow ? { ctx: m.contextWindow } : {}),
-      ...(m.maxOutput ? { maxOut: m.maxOutput } : {}),
-    }));
+    .map((m) => {
+      const t = hostedTiers(s.id, m.id, m.tiers, b.upstream || s.baseUrl);
+      const v = t ? slotView(t) : null;
+      return {
+        id: m.id,
+        label: m.label || m.id,
+        ...(v
+          ? {
+              efforts: v.efforts,
+              ...(v.defaultEffort ? { defaultEffort: v.defaultEffort } : {}),
+              ...(Object.keys(v.labels).length ? { effortLabels: v.labels } : {}),
+              ...(t!.alwaysThinks ? { alwaysThinks: true, autoThinkAt: autoThinkSlots(t!, "openai") } : {}),
+            }
+          : {
+              efforts: base.efforts,
+              ...(base.defaultEffort ? { defaultEffort: base.defaultEffort } : {}),
+              ...(base.effortLabels ? { effortLabels: base.effortLabels } : {}),
+            }),
+        image: typeof m.vision === "boolean" ? m.vision : guessImages(m.id),
+        ...(m.contextWindow ? { ctx: m.contextWindow } : {}),
+        ...(m.maxOutput ? { maxOut: m.maxOutput } : {}),
+      };
+    });
   const picked = new Set(b.models.map((m) => m.id));
   const shown = menu ? s.models.filter((m) => picked.has(m.id) || (m.aliases ?? []).some((a) => picked.has(a))) : s.models;
   // 一个表里的都没勾、也没另加：别让这家变成空的，列全表

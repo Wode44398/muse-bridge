@@ -23,6 +23,16 @@ export function brandSvg(key: string | undefined | null): string {
   return lib?.[key] ?? "";
 }
 
+/** 图库到了没有（没到时调用方先空着，别先画首字再跳成品牌标）。 */
+export function brandLibReady(): boolean {
+  return lib !== null;
+}
+
+/** 单色场合用的遮罩：把品牌标（彩色的也一样）当成 mask 图，填色交给 currentColor——形状与模型中心那枚一致。 */
+export function brandMask(svg: string): string {
+  return svg ? `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")` : "";
+}
+
 /** 接口地址 / 主机名 → 品牌标的键（没收录 = 空串）。 */
 export function brandLogoOf(hostOrUrl: string | undefined | null): string {
   if (!hostOrUrl) return "";

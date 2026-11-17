@@ -123,5 +123,5 @@ export function endpointHint(protocol, baseUrl) {
   return '';
 }
 
-// 8×8 纯红 PNG（探测视觉用）
-export const RED_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFWEXHbQSACj/P8Fu7N9hAAAAAElFTkSuQmCC';
+// 32×32 纯红 PNG（探测视觉用；DashScope 拒收边长不到 10 像素的图，原来的 8×8 会被误判成「不收图片」，2026-11-17）
+export const RED_PNG = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAJ0lEQVR42u3NsQkAAAjAsP7/tF7hIASyp6lTCQQCgUAgEAgEgi/BAjLD/C5w/SM9AAAAAElFTkSuQmCC';

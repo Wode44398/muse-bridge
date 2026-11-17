@@ -9,6 +9,12 @@ export default {
   "工作区": "Side panel",
   "收起工作区": "Hide side panel",
   "工作区工具": "Side panel tools",
+  // 宽屏的卡片：标题行的放大 / 关闭、卡间缝
+  "放大": "Expand",
+  "还原": "Restore",
+  "放大铺满工作区": "Fill the side panel",
+  "关闭{name}": "Close {name}",
+  "拖拽调整上下两张的高度（双击等分）": "Drag to resize the cards above and below (double-click to even them out)",
   "{label}（{kbd}）": "{label} ({kbd})",
   "工作空间加载中…": "Loading workspace…",
   "文件视图由 bridge 宿主提供；独立运行模式请直接用系统文件管理器打开工作空间":

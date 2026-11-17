@@ -1,5 +1,5 @@
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
-import { ok, fail } from "./types.ts";
+import { ok, fail, lenientVerify, verifyIgnored } from "./types.ts";
 import { existingBrowser, noBrowserMessage } from "../cdp.ts";
 import { fileUrlBlock } from "../sandbox.ts";
 import { redactOutput } from "../redact.ts";
@@ -80,7 +80,9 @@ export const evalTool: Tool = {
       }
       // S4 出口脱敏：页面里的令牌（localStorage、接口响应…）不原样交给模型。
       rendered = redactOutput(rendered);
-      if (args.verify === true && value !== true) {
+      // 档案放松了写法契约（verifyContract=lenient）：返回的不是布尔就当普通求值交回，不打回、不记证据
+      const ignored = args.verify === true && typeof value !== "boolean" && lenientVerify(ctx) ? "the expression did not evaluate to a boolean" : "";
+      if (args.verify === true && value !== true && !ignored) {
         const shown = rendered.length > MAX_RESULT ? rendered.slice(0, MAX_RESULT) + "\n… (truncated)" : rendered;
         // V4（#56）：形态不对（不是布尔）是写法问题，不是「检查没通过」——不记成失败证据。
         if (typeof value !== "boolean") {
@@ -104,6 +106,7 @@ export const evalTool: Tool = {
         note = `\n… (result truncated at ${MAX_RESULT} chars — narrow what you return)`;
       }
       const result = ok("eval ok", `Result (at ${page.url}):\n${rendered}${note}`);
+      if (ignored) return withDialog(page, verifyIgnored(result, ignored));
       if (args.verify === true) {
         result.verification = { passed: true, detail: `Eval assertion passed at ${page.url}` };
       }

@@ -30,6 +30,7 @@ node web/scripts/preview-qa/dev.mjs stop --name new
 
 - `--ref <提交>`：前端 `git archive` 到 `%TEMP%\bridge-preview-qa\snap-<sha>\`（导出一次复用；`node_modules` 用 junction 指回主树；老提交缺 dev 用的 isOffline 开关时自动补这一行测试设施，补了什么会记进 pid.json 与报告）。后端始终用当前树。
 - `--web <目录>`：前端用任意一份 `web/` 源码树（比如另一个 worktree）。
+- `--exact`（run.mjs）：逐张比对用。截图改 PNG（无损）、连拍到前后两帧逐字节相同才落盘，另存同名 `.dom.json` 结构快照（元素位置尺寸、关键计算样式、文字，去掉作用域类名，端口 / 临时路径 / 地址里的时间参数抹掉）；并关动画与光标闪烁、把「现在」冻结在固定时刻。`--extra <目录>`：再加载仓库外的场景文件。手机暗色档 `p393-dark`（不在缺省档里）。
 - `--fresh`：起之前清掉该实例的数据根（服务端 Office 转 PDF 缓存、缩略图缓存都在里面），第一档的 docx / pptx 打开耗时才是「冷」的。
 - 长跑中途断了：同一个 `--out` 加 `--resume` 重跑，跑完过的档直接沿用，只补没跑完的档（前端来源或场景筛选对不上会拒绝拼接）。
 - 多实例并存：`--name` 各起各的（数据根各自独立、共用样张 vault），端口自动错开；`stop --name x` 只收 x，`stop --all` 会收全部实例（别人在用时不要用）。

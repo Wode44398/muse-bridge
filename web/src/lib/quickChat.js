@@ -5,15 +5,22 @@
 // 老服务端没回这些字段时兜底，数值与服务端 QUICK_* 常量一致。
 
 export const DAY = 24 * 3600 * 1000;
-export const DEFAULT_POLICY = Object.freeze({ ttlDays: 30, warnDays: 3, trashDays: 30 });
+export const DEFAULT_POLICY = Object.freeze({ ttlDays: 30, warnDays: 3, trashDays: 30, mode: 'ttl', max: 0 });
 
-/** 服务端回的策略 → 补齐缺项 */
+/**
+ * 服务端回的策略 → 补齐缺项。mode = 设置「清理临时对话」：'ttl' 按天数 / 'count' 只留最近 max 条 / 'never' 不清理
+ *（老服务端不回 mode = 按天数）。
+ */
 export function quickPolicy(p) {
   const ok = (v, d) => (Number.isFinite(v) && v >= 0 ? v : d);
+  const max = Number.isInteger(p?.max) && p.max > 0 ? p.max : 0;
+  const mode = p?.mode === 'never' ? 'never' : p?.mode === 'count' && max ? 'count' : 'ttl';
   return {
     ttlDays: ok(p?.ttlDays, DEFAULT_POLICY.ttlDays),
     warnDays: ok(p?.warnDays, DEFAULT_POLICY.warnDays),
     trashDays: ok(p?.trashDays, DEFAULT_POLICY.trashDays),
+    mode,
+    max: mode === 'count' ? max : 0,
   };
 }
 

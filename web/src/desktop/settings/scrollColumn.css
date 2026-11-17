@@ -1,0 +1,16 @@
+/* 桌面设置右侧内容列（.scroll）里所有分区共用的几条：居中 600 的内容列、分组卡与行的尺寸。
+   它们作用在各分区组件（本目录的 *Section.svelte）的元素上，而那些组件的样式在打包里排在外壳 SettingsDesktop.svelte 之前——
+   留在外壳的 <style> 里就会排到分区自己的规则后面、同权重时反过来盖掉分区的（例如 .note / .err 的左右边距、依赖项缩进 .cr.ind）。
+   所以单独成一份普通样式，由外壳在「原来就在外壳之前的那些组件」之后、新拆出的分区组件之前 import，次序和拆分前一致。
+   .det > .scroll 顶替原来加在 .scroll 上的作用域类：权重与原来相同（多的那个类是 .det），而且只认外壳自己那一栏——
+   Media Studio 的服务管理器、目录选择这些嵌在里面的面板也有叫 .scroll 的滚动区，不能让它们的子元素也套上 600 的列宽。 */
+.det > .scroll > * { max-width: 600px; margin-left: auto; margin-right: auto; }
+.det > .scroll section.grp { margin-bottom: 26px; }
+.det > .scroll .gcard { border-radius: 12px; box-shadow: inset 0 0 0 1px var(--dsk-line); }
+.det > .scroll .glabel { font-weight: 500; color: var(--dsk-ink-3); }
+.det > .scroll .drow { min-height: 42px; padding: 8px 14px; }
+.det > .scroll .drow .t { font-size: var(--dsk-fs-body); }
+.det > .scroll .gcard .drow + .drow::before { left: 14px; right: 14px; }
+/* 英文副标题只在英文界面放开换行 */
+html[lang='en'] .det > .scroll .drow .s { white-space: normal; }
+.det > .scroll .gcard .drow.cr.ind::before { left: 34px; }

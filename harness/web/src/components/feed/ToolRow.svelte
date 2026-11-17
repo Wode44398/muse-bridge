@@ -2,8 +2,10 @@
   // 工具行：量线上一个节点 + 动词 + 参数摘要（mono，单行省略）；第二行只说结果；运行中的前台 Bash 在下面摆实时尾行；
   // 点开 = 用 collapse 长出详情面板（参数 / 执行事实 / 输出）。
   //
-  // compact = 精简模式（默认，设置里「显示全部工作过程」关着）下单独成行的工具：只留头行，第二行结果与运行中的实时尾行
-  // 点开再看（组里展开的各步不传，照旧带结果行——点开组就是要看细节）。
+  // compact = 精简模式（默认，设置里「显示全部工作过程」关着）：不上量线，对齐 bridge Claude 分页（= 官方 /code 页）的工具行——
+  // 一行「动词 + 目标」：跑着用进行时 + 微光（650ms 防抖，快工具不闪）、做完用完成时、失败换失败句标红、被拒 / 被打断在尾巴上说；
+  // 单独一行跑满 2 秒在行尾走秒（组里的各步不走，组头走）。点开是参数表 + 结果（单独一行时套一圈细线小卡；组里的直接摆），
+  // 首次展开后保持挂载、只切显隐。run = 同一文件连续几次读写并成的一行（第一次是 item），行尾带行号范围，展开逐次列出。
   //
   // Agent / Workflow 行对齐 bridge Claude 分页（= 官方 /code 页）：不做行内展开，点开进右侧工作区的「任务」视图
   //（工作流 → 详细卡；Agent → 直接压上那个子 agent 的面板）。工作流不在工具组里时整行换成紧凑卡（agent 点阵），跑完也留着
@@ -16,7 +18,11 @@
   import * as api from "../../lib/api.ts";
   import { toolMeta } from "../../lib/icons.ts";
   import { toolPreview } from "../../lib/tool-preview.ts";
-  import { argPreview } from "../../lib/tool-summary.ts";
+  import { argPreview, readRanges, toolLine, toolParams } from "../../lib/tool-summary.ts";
+  import { elapsedLabel } from "../../lib/timeline-reducer.ts";
+  import { liveClock } from "../../lib/live-clock.ts";
+  import { morphText, reveal } from "../../lib/morph-text.ts";
+  import { untrack } from "svelte";
   import { STATUS_LABEL, fmtDur, fmtTokens, modelShort, toolTaskKind, toolTaskStatus, toolTaskTitle, type TaskStatus } from "../../lib/tasks.ts";
   import { collapse } from "../../lib/motion.ts";
   import Button from "../ui/Button.svelte";
@@ -34,11 +40,12 @@
 
   let {
     item,
+    run,
     inGroup = false,
     compact = false,
     up = false,
     down = false,
-  }: { item: ToolItem; inGroup?: boolean; compact?: boolean; up?: boolean; down?: boolean } = $props();
+  }: { item: ToolItem; run?: ToolItem[]; inGroup?: boolean; compact?: boolean; up?: boolean; down?: boolean } = $props();
 
   const meta = $derived(toolMeta(item.name));
   // 会话协作：StartSession 开出来的会话、SendMessage / ReadSession 的对象——结果行下面给一个能点的会话名
@@ -112,14 +119,6 @@
   // R14（K37）：运行中的前台 Bash 跑满 10 秒后可以「转后台」——不杀，这次调用立刻交回已有输出，之后 agent 自己 poll
   let bgBusy = $state(false);
   const canBackground = $derived(!kind && live && Boolean(item.progress?.canBackground) && (item.progress?.elapsedMs ?? 0) >= 10_000);
-  // 精简模式下跑了几秒还没完的命令（前台长命令、Bash(wait) 等后台 job）：头行下面给一行「已运行多久 · 最新一行输出」，
-  // 不点开也看得出它在动（2026-10-09：打安装包压缩两分多钟，用户这边一片静止，只能问「怎么这么慢」）
-  const pulse = $derived.by(() => {
-    if (kind || !live || !compact || item.open || !item.progress || item.progress.elapsedMs < 3_000) return "";
-    const last = (item.progress.tail ?? "").split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
-    const dur = t("已运行 {dur}", { dur: fmtDur(item.progress.elapsedMs) });
-    return last ? `${dur} · ${last}` : dur;
-  });
   async function toBackground(e: MouseEvent) {
     e.stopPropagation();
     if (!pane.chat.id || bgBusy) return;
@@ -130,13 +129,141 @@
     if (!moved) toast(t("没转成后台——这条命令可能刚好结束了，或者后台任务已经满了"));
   }
 
+  // ── 精简模式 ──
+  const tools = $derived(run && run.length ? run : [item]);
+  const line = $derived(toolLine(item.name, item.args, tr(meta.verb)));
+  const anyRunning = $derived(tools.some((x) => x.status === "running"));
+  const runLive = $derived(anyRunning && pane.chat.running);
+  // 官方 Wh(…, 650)：进行时 ↔ 完成时稳定 650ms 才换（20ms 的读文件不闪成一帧）；首帧取当前值
+  let shownLive = $state(untrack(() => runLive));
+  $effect(() => {
+    const v = runLive;
+    if (v === shownLive) return;
+    // 这一轮停了：立刻落定，不在停下的轮上多闪 650ms 微光
+    if (!pane.chat.running) {
+      shownLive = v;
+      return;
+    }
+    const timer = setTimeout(() => (shownLive = v), 650);
+    return () => clearTimeout(timer);
+  });
+  const anyFail = $derived(tools.some((x) => x.status === "fail"));
+  const anyDenied = $derived(tools.some((x) => x.status === "denied"));
+  const stopped = $derived(anyRunning && !pane.chat.running);
+  // 被拒 / 被打断不是「做了」也不是「失败」：用工具本来的动词，状态在尾巴上说
+  const verbText = $derived(shownLive ? line.running : stopped || anyDenied ? tr(meta.verb) : anyFail ? line.failed : line.done);
+  const failed = $derived(!shownLive && !stopped && !anyDenied && anyFail);
+  const tailWord = $derived(shownLive ? "" : stopped ? t("已停止") : anyDenied ? t("被拒绝") : "");
+  const ranges = $derived(item.name === "Read" ? readRanges(tools) : "");
+  // 行尾走秒：单独一行、跑满 2 秒才出现（前台 Bash 的进度更准：重连重放时本机看到的起点偏晚）
+  let now = $state(Date.now());
+  $effect(() => {
+    if (!compact || inGroup || !runLive) return;
+    now = Date.now();
+    const id = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(id);
+  });
+  const runMs = $derived.by(() => {
+    if (!compact || inGroup || !runLive) return 0;
+    const cur = tools.find((x) => x.status === "running") ?? item;
+    const t0 = liveClock(cur)?.t0;
+    return Math.max(t0 ? now - t0 : 0, cur.progress?.elapsedMs ?? 0);
+  });
+  // 首次展开后保持挂载、只切显隐：展开里的状态（diff 的「看全部」、滚动位置）收起再开还在
+  let mounted = $state(untrack(() => item.open));
+  $effect(() => {
+    if (item.open) mounted = true;
+  });
+  // Bash 的结果开头会把命令回显一遍：上面已经摆了命令，结果里不重复
+  function outputOf(tl: ToolItem, command: string | null): string {
+    const out = tl.output ?? "";
+    if (command === null) return out;
+    const echo = `$ ${command.trim()}\n`;
+    return out.startsWith(echo) ? out.slice(echo.length) : out;
+  }
+
   function onHead() {
     if (kind) openTaskDetail(item.id, kind === "agent" ? item.agent?.id : undefined);
     else item.open = !item.open;
   }
 </script>
 
-{#if card}
+{#snippet detailOf(tl: ToolItem)}
+  {@const pv = toolPreview(tl.name, tl.args)}
+  {@const params = pv ? [] : toolParams(tl.args)}
+  {#if pv}
+    <ApprovalPreview preview={pv} open />
+  {:else if params.length}
+    <div class="params">
+      {#each params as p (p.key)}
+        <div class="param">
+          <span class="pkey">{p.key}:</span>
+          {#if p.chip}<code class="pchip">{p.value}</code>
+          {:else if p.code}<span class="pcode">{#if p.prefix}<span class="ppfx">{p.prefix}</span>{/if}{p.value}</span>
+          {:else}<span class="pval">{p.value}</span>{/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
+  {#if tl.output}
+    <div class="sec" class:after={Boolean(pv) || params.length > 0}>{t("结果")}</div>
+    <pre class="bout sel-text">{outputOf(tl, pv?.kind === "command" ? pv.command : null)}</pre>
+  {:else if tl.status === "running" && pane.chat.running}
+    <div class="sec dim" class:after={Boolean(pv) || params.length > 0}>{t("运行中…")}</div>
+  {/if}
+{/snippet}
+
+{#if compact && card}
+  <!-- 精简模式的工作流卡：不上量线，卡片本身照旧 -->
+  <div class="bcard">{#if tstatus}<WorkflowCard {item} status={tstatus} />{/if}</div>
+{:else if compact}
+  <RailRow
+    bare
+    onclick={onHead}
+    expanded={kind ? undefined : item.open}
+    title={kind ? t("在任务面板中查看") : line.full}
+    chev="right"
+    open={!kind && item.open}
+  >
+    {#snippet head()}
+      <span class="bverb" class:hx-shimmer={kind ? tstatus === "running" : shownLive} class:bad={failed} use:morphText={verbText}>{verbText}</span>
+      {#if kind}
+        <span class="bmeta">{toolTaskTitle(item)}</span>
+        {#if taskSummary}<span class="btail" class:bad={tstatus === "failed"}>{taskSummary}</span>{/if}
+      {:else}
+        {#if line.meta}<span class="bmeta" class:mono={line.mono}>{line.meta}</span>{/if}
+        {#if ranges}<span class="btail">{ranges}</span>{/if}
+        {#if tailWord}<span class="btail" class:warn={anyDenied && !stopped}>{tailWord}</span>{/if}
+      {/if}
+      {#if SR[tone]}<span class="hx-sr">{t("（{code}）", { code: SR[tone] })}</span>{/if}
+    {/snippet}
+    {#snippet trail()}{#if runMs >= 2000}<span>{elapsedLabel(runMs)}</span>{/if}{/snippet}
+
+    {#if famRef}
+      <button class="famref" title={t("打开这个会话")} onclick={() => void openFamilySession(famRef.id, famRef.agent)}>
+        <Icon name="link" size={12} />
+        <span class="famref-t">{famRef.title || famRef.id.slice(0, 8)}</span>
+        {#if famRef.agent === "claude"}<span class="famref-tag">Claude</span>{/if}
+      </button>
+    {/if}
+
+    {#if !kind && mounted}
+      <div class="bdetail" class:solo={!inGroup} hidden={!item.open} use:reveal={item.open}>
+        {#each tools as tl, i (tl.id || i)}
+          <div class="bstep" class:sep={i > 0}>{@render detailOf(tl)}</div>
+        {/each}
+        {#if live && item.progress}
+          <div class="live blive">
+            {#if item.progress.tail}<div class="tailbox"><pre class="tail sel-text">{item.progress.tail}</pre></div>{/if}
+            {#if canBackground}
+              <Button variant="ghost" size="sm" loading={bgBusy} onclick={toBackground}>{t("转后台")}</Button>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </RailRow>
+{:else if card}
   <RailRow {up} {down} nodeY="22px">
     {#snippet node()}<ToolNode {tone} />{/snippet}
     <div class="cardwrap">
@@ -170,13 +297,8 @@
     {/snippet}
 
     <!-- U8（kimi K36）：第二行只说结果（「退出码 0 · 12 行输出」「改了 1 处（+3 −1 行）」）——以前挤在第一行最右边，手机上被参数挤没 -->
-    <!-- 精简模式（默认）：单独成行的工具只留头行一行，结果与实时尾行点开再看 -->
-    {#if !kind && !compact && !item.open && item.status !== "running" && outcomeText}
+    {#if !kind && !item.open && item.status !== "running" && outcomeText}
       <div class="outcome" class:bad={item.status === "fail"} class:warn={item.status === "denied"}>{outcomeText}</div>
-    {/if}
-
-    {#if pulse}
-      <div class="outcome pulse">{pulse}</div>
     {/if}
 
     {#if famRef}
@@ -187,7 +309,7 @@
       </button>
     {/if}
 
-    {#if !kind && live && item.progress && (!compact || item.open)}
+    {#if !kind && live && item.progress}
       <div class="livewrap" transition:collapse>
         <div class="live">
           {#if item.progress.tail}<div class="tailbox"><pre class="tail sel-text">{item.progress.tail}</pre></div>{/if}
@@ -326,10 +448,6 @@
   .outcome.warn {
     color: color-mix(in srgb, var(--warn) 85%, var(--text3));
   }
-  .outcome.pulse {
-    font-family: var(--font-mono);
-    font-size: var(--fs-sm);
-  }
 
   /* R14：运行中的实时尾行（贴底：新行在下，旧行从上沿淡出）+「转后台」 */
   .livewrap {
@@ -416,5 +534,122 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     color: var(--text);
+  }
+
+  /* ── 精简模式：Claude 式单行 ── */
+  .bcard {
+    padding: 2px 0 6px;
+  }
+  /* 字色继承头行（--text2，悬停提亮）：不写 color，免得压掉 .hx-shimmer 的透明字 */
+  .bverb {
+    flex: none;
+    white-space: nowrap;
+  }
+  .bverb.bad {
+    color: var(--err);
+  }
+  /* 目标：路径 / 命令 / 搜索式用等宽、墨色（扫一眼认得出碰了哪个文件）；别的跟随行色 */
+  .bmeta {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .bmeta.mono {
+    font-family: var(--font-mono);
+    font-size: var(--fs-md);
+    color: var(--text);
+  }
+  .btail {
+    flex: none;
+    white-space: nowrap;
+    color: var(--text3);
+  }
+  .btail.bad {
+    color: var(--err);
+  }
+  .btail.warn {
+    color: color-mix(in srgb, var(--warn) 85%, var(--text3));
+  }
+  .bdetail[hidden] {
+    display: none;
+  }
+  .bdetail {
+    min-width: 0;
+    padding: 2px 0 6px;
+  }
+  /* 单独一行时套一圈细线小卡（组里的步已经在组的卡里，不再套） */
+  .bdetail.solo {
+    margin: 2px 0 6px;
+    padding: 10px 12px;
+    border-radius: var(--r-sm);
+    box-shadow: 0 0 0 1px var(--border);
+  }
+  .bstep.sep {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .params {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    font-size: var(--fs-md);
+    line-height: 18px;
+    color: var(--text2);
+  }
+  .param {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .pkey {
+    margin-right: 4px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    color: var(--text3);
+  }
+  .pchip {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--surface2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    color: var(--text);
+    word-break: break-all;
+  }
+  .pcode {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    line-height: 17px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text);
+  }
+  .ppfx {
+    user-select: none;
+    color: var(--text3);
+  }
+  .pval {
+    white-space: pre-wrap;
+  }
+  .bout {
+    margin: 0;
+    max-height: 300px;
+    padding: 8px 10px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    border-radius: var(--r-xs);
+    background: var(--code-bg);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text);
+  }
+  .blive {
+    margin-top: 8px;
   }
 </style>

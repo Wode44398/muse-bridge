@@ -20,12 +20,13 @@
 // 作用域（2026-11-14）：同一套读写与校验按作用域各存一份，导出的函数都多一个 { scope }（缺省 'claude'，行为与之前完全一样）：
 //   claude    <dataDir>/dispatch-policy.json            Claude 的子 agent（上面说的那份）
 //   dimensio  <dataDir>/dispatch-policy.dimensio.json   dimensio 的子 agent（设置 › dimensio › 子 agent 调用策略）。多一个 follow：
-//             true（默认）= 生效的那一套策略（判定线 / 档位自定义 / 口述备注）跟随 Claude 那份的 activeId 那套；false = 用自己 strategies 里的。
-//             总开关、生效范围、要不要非 Claude 模型永远是 dimensio 自己的。生效范围的三项对 dimensio：workflow = Workflow 工具脚本里的
+//             false（默认，11-15 起；之前默认 true）= 用自己 strategies 里的；true = 生效的那一套策略（判定线 / 档位自定义 / 口述备注）
+//             跟随 Claude 那份的 activeId 那套。总开关、生效范围永远是 dimensio 自己的。没有 allowThirdParty（11-15 去掉：dimensio 本来就是
+//             多厂商，候选恒为它能用的全部模型；patch 带它 400，旧文件里留着的读的时候丢掉）。生效范围的三项对 dimensio：workflow = Workflow 工具脚本里的
 //             agent()，subagent = Agent 工具，session = StartSession 的 model 写 auto:<档>。档位自定义的 model 写 dimensio 的
-//             「厂商 id:型号」（zhipu:glm-5.3-flash、custom-1a2b3c4d:qwen3:32b）。没权限的身份读到的只读默认是 enabled:true、follow:true
-//             （= 改造前 dimensio 的默认：按默认阶梯派）。旧的 dimensio 偏好（按难度选型阶梯开关、子 agent 调度偏好文本）经
-//             migrateDimensioLegacy 迁进来：文件还不存在、而旧偏好不是默认值时落盘一份（备注非空 → follow:false，原样保住改造前的行为）。
+//             「厂商 id:型号」（zhipu:glm-5.3-flash、custom-1a2b3c4d:qwen3:32b）。没权限的身份读到的只读默认是 enabled:true、follow:false
+//             （默认那一套 = 默认线，即改造前 dimensio 的默认：按默认阶梯派）。旧的 dimensio 偏好（按难度选型阶梯开关、子 agent 调度偏好文本）经
+//             migrateDimensioLegacy 迁进来：文件还不存在、而旧偏好不是默认值时落盘一份（备注进自己那套，follow:false，原样保住改造前的行为）。
 //   dimensio 实际用哪一套由 runtime/dispatch-dimensio.mjs 解析（Claude 写法的档位自定义映射成 dimensio 认得的写法）。
 
 import { statSync } from 'node:fs';
@@ -54,7 +55,7 @@ const CUSTOM_MODEL_RE = /^custom:p-[0-9a-f]{6,12}:\S.*$/;
 const DIM_MODEL_RE = /^(?:[a-z]{2,20}|custom-[a-f0-9]{8}):[^\s\u0000-\u001f]+$/;
 const MODEL_MAX = 300;
 const POLICY_KEYS = ['enabled', 'scope', 'allowThirdParty', 'activeId'];
-const DIM_POLICY_KEYS = [...POLICY_KEYS, 'follow'];
+const DIM_POLICY_KEYS = ['enabled', 'follow', 'scope', 'activeId'];   // dimensio 那份没有 allowThirdParty
 
 /** 作用域参数 → 'claude' | 'dimensio'；不给 = claude，给了别的抛 400。 */
 export function policyScope(v) {
@@ -84,16 +85,17 @@ function blankStrategy(id, name, note, now) {
   return { id, name, floors: nullTiers(), overrides: nullTiers(), note, createdAt: now, updatedAt: now };
 }
 
-// dimensio 那份多一个 follow（放在 enabled 后面，给人看的时候和总开关挨着）
+// dimensio 那份多一个 follow（放在 enabled 后面，给人看的时候和总开关挨着）、没有 allowThirdParty
 function defaultPolicy(note = '', now = Date.now(), scope = 'claude') {
   return {
-    v: 1, enabled: true, ...(scope === 'dimensio' ? { follow: true } : {}), scope: { ...DEFAULT_SCOPE }, allowThirdParty: true, activeId: DEFAULT_ID,
+    v: 1, enabled: true, ...(scope === 'dimensio' ? { follow: false } : {}), scope: { ...DEFAULT_SCOPE },
+    ...(scope === 'dimensio' ? {} : { allowThirdParty: true }), activeId: DEFAULT_ID,
     strategies: [blankStrategy(DEFAULT_ID, DEFAULT_NAME, note, now)], rev: 0,
   };
 }
 
 // 没权限的身份拿到的只读默认：Claude 那份总开关关着（调度完全走 Claude Code 原生）；
-// dimensio 那份开着、跟随 Claude（= 改造前 dimensio 的默认：按默认阶梯派，这些身份本来就改不了它）
+// dimensio 那份开着、用自己默认那一套（= 改造前 dimensio 的默认：按默认阶梯派，这些身份本来就改不了它）
 function readOnlyPolicy(scope = 'claude') {
   return scope === 'dimensio' ? defaultPolicy('', 0, 'dimensio') : { ...defaultPolicy('', 0), enabled: false };
 }
@@ -149,8 +151,8 @@ function normalizePolicy(j, scope = 'claude') {
   const sc2 = {};
   for (const k of Object.keys(DEFAULT_SCOPE)) sc2[k] = typeof sc[k] === 'boolean' ? sc[k] : DEFAULT_SCOPE[k];
   return {
-    v: 1, enabled: j.enabled !== false, ...(scope === 'dimensio' ? { follow: j.follow !== false } : {}), scope: sc2,
-    allowThirdParty: j.allowThirdParty !== false,
+    v: 1, enabled: j.enabled !== false, ...(scope === 'dimensio' ? { follow: j.follow === true } : {}), scope: sc2,
+    ...(scope === 'dimensio' ? {} : { allowThirdParty: j.allowThirdParty !== false }),
     activeId: strategies.some((s) => s.id === j.activeId) ? j.activeId : strategies[0].id,
     strategies, rev: Number.isInteger(j.rev) && j.rev >= 0 ? j.rev : 0,
   };
@@ -206,7 +208,7 @@ export function dimensioPolicyStored(ctx) {
 /**
  * 把 harness 送来的旧 dimensio 偏好迁进 dimensio 那份（只在文件还不存在、这个身份能改策略时做一次）：
  *   legacy = { ladder: 按难度选型阶梯开关, note: 子 agent 调度偏好文本 }
- *   ladder:false → enabled:false；note 非空 → 默认那套的备注 + follow:false（改造前 dimensio 用的就是默认线 + 自己这段话）。
+ *   ladder:false → enabled:false；note 非空 → 默认那套的备注（follow 本来就是 false：改造前 dimensio 用的就是默认线 + 自己这段话）。
  * 两样都是默认值就什么都不写（现造的默认就是它）。回 true = 落了盘。写盘失败只记日志（下次再迁）。
  */
 export function migrateDimensioLegacy(ctx, legacy) {
@@ -216,7 +218,6 @@ export function migrateDimensioLegacy(ctx, legacy) {
   if (!note && !off) return false;
   const p = defaultPolicy(note, Date.now(), 'dimensio');
   if (off) p.enabled = false;
-  if (note) p.follow = false;
   p.rev = 1;
   try { persist(fileOf(ctx, 'dimensio'), p); }
   catch (e) { console.error('[dispatch-policy] 旧的 dimensio 调度偏好迁不进策略文件：', e?.message || e); return false; }

@@ -12,7 +12,7 @@
 // 默认档也没有 = 什么都不发（厂商默认）。档位值在协议翻译之后才写：OpenAI 协议写进翻译后的请求（openAIReasoning）。
 
 // 档位怎么写进请求（budget / adaptive / effort）、深合并、点分路径写值都在共用的型号知识模块里（dimensio 的自定义服务同一份）。
-import { deepMerge, setPath, tierOf, writeTier, applyTier, OFF_TIER_IDS, tableEntry, replaysThinking, routeOf, bareModelId } from '../model-knowledge/knowledge.mjs';
+import { deepMerge, setPath, tierOf, writeTier, applyTier, OFF_TIER_IDS, tableEntry, replayOf, routeOf, bareModelId } from '../model-knowledge/knowledge.mjs';
 // Gemini 原生协议的翻译在 claude-providers-gemini.mjs；这里只认它装思维签名的思考块
 import { SIG_PREFIX as GEMINI_SIG } from './claude-providers-gemini.mjs';
 export { deepMerge, setPath };
@@ -266,7 +266,9 @@ function toolResultText(content) {
 }
 
 export function toOpenAI(body, provider, model) {
-  const out = { model: body.model, stream: !!body.stream };
+  let out = { model: body.model, stream: !!body.stream };
+  // 回传写法按型号 × 线路查（同一个型号在百炼、OpenRouter、直连上要的不一样，见 replayOf）
+  const replay = replayOf(model.id, { route: routeOf(provider.upstream || provider.baseUrl) });
   const msgs = [];
   const sys = typeof body.system === 'string' ? body.system : textOf(body.system);
   if (sys) msgs.push({ role: 'system', content: sys });
@@ -278,8 +280,9 @@ export function toOpenAI(body, provider, model) {
       const msg = { role: 'assistant', content: text || (calls.length ? null : '') };
       if (calls.length) msg.tool_calls = calls;
       // 回传上一轮思考：兼容里开了，或模型标了「不发参数也会思考」（小米 / Kimi 一类，思考模式下多轮工具调用不带回去会 400）
-      // 型号表标了 replay 的家族同理（DeepSeek：思考模式下带工具调用的历史轮缺思考就 400，没有原文也要带空串；开源权重 Qwen3.8）
-      if (provider.compat?.replayReasoning || model.alwaysThinks || replaysThinking(model.id)) {
+      // 型号表在这条线路上标了 replay 的家族同理（DeepSeek：思考模式下带工具调用的历史轮缺思考就 400，没有原文也要带空串；
+      // 百炼上的 Qwen4 / Kimi / GLM：不回传就接不上工具调用前想好的东西）
+      if (provider.compat?.replayReasoning || model.alwaysThinks || replay) {
         const r = blocks.filter((b) => b && b.type === 'thinking').map((b) => b.thinking).join('');
         if (r || calls.length) msg.reasoning_content = r;
       }
@@ -317,6 +320,8 @@ export function toOpenAI(body, provider, model) {
   // OpenRouter 上的 Claude：Anthropic 的缓存要显式标记才生效，OpenAI 协议这边 system 已经拍平成字符串、断点全没了——
   // 顶层放一个 cache_control，OpenRouter 自动把断点推进到最后（实测第二发整段命中；不带则每轮全价、首字也慢）。
   if (routeOf(provider.upstream || provider.baseUrl) === 'openrouter' && isClaudeId(model.id)) out.cache_control = { type: 'ephemeral' };
+  // 这条线路回传时要多带的参数（DashScope 上 Qwen 的 preserve_thinking）
+  if (replay && replay.body) out = deepMerge(out, replay.body);
   return out;
 }
 // Bedrock 写法（us.anthropic.claude-…-v1:0）、中转站自己加前缀的（cc-claude-opus-4-5）也算

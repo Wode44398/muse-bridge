@@ -57,6 +57,7 @@ const MAP = {
   '../../lib/dialogState.svelte.js': href(dir, 'misc.js'),
   '../../lib/toast.svelte.js': href(dir, 'misc.js'),
   '../../lib/motion.js': href(webRoot, 'src', 'lib', 'motion.js'),
+  '../../lib/morphFrom.js': href(webRoot, 'src', 'lib', 'morphFrom.js'),
   '../../lib/i18n.js': href(webRoot, 'src', 'lib', 'i18n.js'),
 };
 const fixImports = (code) => code.replace(/from\s+['"]([^'"]+)['"]/g, (m, s) => {

@@ -1,0 +1,2207 @@
+{
+ "CB01-headless": [
+  {
+   "label": "launch",
+   "ok": true,
+   "value": {
+    "alive": true,
+    "url": "<base>/",
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    }
+   }
+  },
+  {
+   "label": "settle",
+   "ok": true,
+   "value": "settled"
+  },
+  {
+   "label": "title",
+   "ok": true,
+   "value": "target"
+  },
+  {
+   "label": "eval",
+   "ok": true,
+   "value": "target / 3"
+  },
+  {
+   "label": "eval-throw",
+   "ok": false,
+   "error": "Error: char boom\n    at <anonymous>:1:7"
+  },
+  {
+   "label": "measure",
+   "ok": true,
+   "value": {
+    "w": 1280,
+    "h": 900,
+    "dpr": 1,
+    "touch": 0,
+    "coarse": false,
+    "dark": "<os-theme>",
+    "meta": true,
+    "mobileUa": false,
+    "at": "<num>"
+   }
+  },
+  {
+   "label": "viewportReport",
+   "ok": true,
+   "value": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "dprAuto": false,
+    "dprWant": 1,
+    "measured": null,
+    "applied": {
+     "ok": true,
+     "via": "emulation"
+    },
+    "preset": "desktop"
+   }
+  },
+  {
+   "label": "ax",
+   "ok": true,
+   "value": {
+    "keys": [
+     "lineCount",
+     "refCount",
+     "text",
+     "truncated"
+    ],
+    "text": "- rootwebarea \"target\" (focused)\n  - heading \"Char page\" (level=1)\n  - button \"Menu\" [ref1] (invalid=false)\n  - checkbox \"Agree\" [ref2] (invalid=false, checked=false)\n  - textbox \"Search\" [ref3] (invalid=false, editable=plaintext)\n  - combobox [ref4] value=\"One\" (invalid=false)\n    - menulistpopup\n      - option \"One\" [ref5] (selected)\n      - option \"Two\" [ref6]\n  - button \"Alert me\" [ref7] (invalid=false)\n  - button \"Log\" [ref8] (invalid=false)\n  - link \"Next page\" [ref9] → /page2\n  - button \"选择文件\" [ref10] value=\"未选择任何文件\" (invalid=false)"
+   }
+  },
+  {
+   "label": "refInfo-1",
+   "ok": true,
+   "value": {
+    "backendId": 13,
+    "role": "button",
+    "name": "Menu"
+   }
+  },
+  {
+   "label": "findTextPoint",
+   "ok": true,
+   "value": {
+    "x": 117.9765625,
+    "y": 127.875
+   }
+  },
+  {
+   "label": "clickText",
+   "ok": true
+  },
+  {
+   "label": "msg-after-click",
+   "ok": true,
+   "value": "menu clicked"
+  },
+  {
+   "label": "clickCoord",
+   "ok": true
+  },
+  {
+   "label": "hoverCoord",
+   "ok": true
+  },
+  {
+   "label": "setValue-q",
+   "ok": true,
+   "value": {
+    "ok": true,
+    "kind": "text",
+    "desc": "input#q",
+    "now": "hello",
+    "why": ""
+   }
+  },
+  {
+   "label": "setValue-sel",
+   "ok": true,
+   "value": {
+    "ok": true,
+    "kind": "select",
+    "desc": "select#sel",
+    "now": "Two"
+   }
+  },
+  {
+   "label": "setValue-bad",
+   "ok": false,
+   "error": "no element matching selector #nope"
+  },
+  {
+   "label": "focus-and-type",
+   "ok": true,
+   "value": "hello!"
+  },
+  {
+   "label": "pressKey",
+   "ok": true
+  },
+  {
+   "label": "upload",
+   "ok": true,
+   "value": {
+    "names": [
+     "up.txt"
+    ],
+    "target": "#fi",
+    "multiple": false,
+    "dropped": false
+   }
+  },
+  {
+   "label": "dialog",
+   "ok": true,
+   "value": [
+    {
+     "seq": 1,
+     "type": "alert",
+     "message": "hello from alert",
+     "accepted": true
+    }
+   ]
+  },
+  {
+   "label": "log-and-fetch",
+   "ok": true,
+   "value": {
+    "console": [
+     {
+      "type": "dialog.alert",
+      "msg": "hello from alert（已自动点确定）",
+      "doc": "<num>",
+      "url": "<base>/"
+     },
+     {
+      "type": "console.log",
+      "msg": "char-console-line",
+      "doc": "<num>",
+      "url": "<base>/"
+     }
+    ],
+    "net": [
+     {
+      "url": "<base>/api/x",
+      "method": "GET",
+      "status": 200
+     }
+    ]
+   }
+  },
+  {
+   "label": "scrollBy",
+   "ok": true,
+   "value": 300
+  },
+  {
+   "label": "wheel",
+   "ok": true,
+   "value": 0
+  },
+  {
+   "label": "pageText",
+   "ok": true,
+   "value": {
+    "from": "body",
+    "title": "target",
+    "text": "Char page\nMenu  Agree  \nOne\nTwo\n Alert me Log Next page\nafter alert",
+    "total": 67,
+    "truncated": false,
+    "more": false,
+    "shadow": 0,
+    "lazy": [],
+    "links": null
+   }
+  },
+  {
+   "label": "screenshot",
+   "ok": true,
+   "value": {
+    "keys": [
+     "buf",
+     "frame"
+    ],
+    "frame": {
+     "imgW": 1280,
+     "imgH": 900,
+     "k": 1,
+     "vpW": 1280,
+     "vpH": 900,
+     "targetId": "<target>",
+     "t": "<num>"
+    }
+   }
+  },
+  {
+   "label": "setViewport-mobile",
+   "ok": true,
+   "value": {
+    "viewport": {
+     "width": 390,
+     "height": 844
+    },
+    "emu": {
+     "mobile": true,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "dprAuto": false,
+    "dprWant": 1,
+    "measured": {
+     "w": 390,
+     "h": 844,
+     "dpr": 1,
+     "touch": 5,
+     "coarse": true,
+     "dark": true,
+     "meta": true,
+     "mobileUa": true,
+     "at": "<num>"
+    },
+    "applied": {
+     "ok": true,
+     "via": "emulation"
+    },
+    "preset": ""
+   }
+  },
+  {
+   "label": "measure-mobile",
+   "ok": true,
+   "value": {
+    "w": 390,
+    "h": 844,
+    "dpr": 1,
+    "touch": 5,
+    "coarse": true,
+    "dark": "<os-theme>",
+    "meta": true,
+    "mobileUa": true,
+    "at": "<num>"
+   }
+  },
+  {
+   "label": "setViewport-desktop",
+   "ok": true,
+   "value": {
+    "viewport": {
+     "width": 1280,
+     "height": 800
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "dark",
+     "dpr": 1
+    },
+    "dprAuto": false,
+    "dprWant": 1,
+    "measured": {
+     "w": 1280,
+     "h": 800,
+     "dpr": 1,
+     "touch": 0,
+     "coarse": false,
+     "dark": true,
+     "meta": true,
+     "mobileUa": false,
+     "at": "<num>"
+    },
+    "applied": {
+     "ok": true,
+     "via": "emulation"
+    },
+    "preset": ""
+   }
+  },
+  {
+   "label": "setColorScheme",
+   "ok": true
+  },
+  {
+   "label": "newTab",
+   "ok": true,
+   "value": [
+    {
+     "url": "<base>/",
+     "active": false
+    },
+    {
+     "url": "<base>/page2",
+     "active": true
+    }
+   ]
+  },
+  {
+   "label": "activateTab",
+   "ok": true,
+   "value": [
+    {
+     "url": "<base>/",
+     "active": true
+    },
+    {
+     "url": "<base>/page2",
+     "active": false
+    }
+   ]
+  },
+  {
+   "label": "closeTab",
+   "ok": true,
+   "value": [
+    {
+     "url": "<base>/",
+     "active": true
+    }
+   ]
+  },
+  {
+   "label": "navigate-next",
+   "ok": true,
+   "value": {
+    "settled": true,
+    "errorText": ""
+   }
+  },
+  {
+   "label": "history-back",
+   "ok": true,
+   "value": "<base>/"
+  },
+  {
+   "label": "history-forward",
+   "ok": true,
+   "value": "<base>/page2"
+  },
+  {
+   "label": "reload",
+   "ok": true,
+   "value": "<base>/page2"
+  },
+  {
+   "label": "viewers",
+   "ok": true,
+   "value": {
+    "list": [
+     {
+      "kind": "stream",
+      "where": "char",
+      "since": "<num>"
+     }
+    ],
+    "after": 0
+   }
+  },
+  {
+   "label": "close",
+   "ok": true,
+   "value": {
+    "alive": false
+   }
+  }
+ ],
+ "CB02-stubbed": [
+  {
+   "label": "headless-mobile",
+   "value": {
+    "viewport": {
+     "width": 375,
+     "height": 812
+    },
+    "emu": {
+     "mobile": true,
+     "scheme": "dark",
+     "dpr": 1
+    },
+    "dprAuto": false,
+    "dprWant": 1,
+    "measured": {
+     "w": 375,
+     "h": 812,
+     "dpr": 1,
+     "touch": 5,
+     "coarse": true,
+     "dark": false,
+     "meta": true
+    },
+    "applied": {
+     "ok": true,
+     "via": "emulation"
+    },
+    "preset": "mobile"
+   },
+   "error": null,
+   "sent": [
+    [
+     "Emulation.setDeviceMetricsOverride",
+     {
+      "width": 375,
+      "height": 812,
+      "deviceScaleFactor": 1,
+      "mobile": true
+     }
+    ],
+    [
+     "Emulation.setTouchEmulationEnabled",
+     {
+      "enabled": true,
+      "maxTouchPoints": 5
+     }
+    ],
+    [
+     "Emulation.setEmitTouchEventsForMouse",
+     {
+      "enabled": true,
+      "configuration": "mobile"
+     }
+    ],
+    [
+     "Runtime.evaluate",
+     {
+      "expression": "delete navigator.maxTouchPoints"
+     }
+    ],
+    [
+     "Browser.getVersion",
+     {}
+    ],
+    [
+     "Emulation.setUserAgentOverride",
+     {
+      "userAgent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36",
+      "platform": "Linux armv8l",
+      "userAgentMetadata": {
+       "brands": [
+        {
+         "brand": "Chromium",
+         "version": "140"
+        },
+        {
+         "brand": "Google Chrome",
+         "version": "140"
+        },
+        {
+         "brand": "Not/A)Brand",
+         "version": "99"
+        }
+       ],
+       "fullVersion": "140.0.0.0",
+       "platform": "Android",
+       "platformVersion": "14",
+       "architecture": "",
+       "model": "Pixel 8",
+       "mobile": true
+      }
+     }
+    ],
+    [
+     "Emulation.setEmulatedMedia",
+     {
+      "features": [
+       {
+        "name": "prefers-color-scheme",
+        "value": "dark"
+       }
+      ]
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [
+    {
+     "viewport": {
+      "width": 375,
+      "height": 812
+     },
+     "emu": {
+      "mobile": true,
+      "scheme": "dark",
+      "dpr": 1
+     },
+     "dprAuto": false,
+     "dprWant": 1,
+     "measured": {
+      "w": 375,
+      "h": 812,
+      "dpr": 1,
+      "touch": 5,
+      "coarse": true,
+      "dark": false,
+      "meta": true
+     },
+     "applied": {
+      "ok": true,
+      "via": "emulation"
+     },
+     "preset": "mobile"
+    }
+   ],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 375,
+     "height": 812
+    },
+    "emu": {
+     "mobile": true,
+     "scheme": "dark",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "emulation"
+    }
+   }
+  },
+  {
+   "label": "headless-mobile-then-desktop",
+   "value": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "dprAuto": false,
+    "dprWant": 1,
+    "measured": {
+     "w": 1280,
+     "h": 900,
+     "dpr": 1,
+     "touch": 0,
+     "coarse": false,
+     "dark": false,
+     "meta": true
+    },
+    "applied": {
+     "ok": true,
+     "via": "emulation"
+    },
+    "preset": "desktop"
+   },
+   "error": null,
+   "sent": [
+    [
+     "Emulation.setDeviceMetricsOverride",
+     {
+      "width": 375,
+      "height": 812,
+      "deviceScaleFactor": 1,
+      "mobile": true
+     }
+    ],
+    [
+     "Emulation.setTouchEmulationEnabled",
+     {
+      "enabled": true,
+      "maxTouchPoints": 5
+     }
+    ],
+    [
+     "Emulation.setEmitTouchEventsForMouse",
+     {
+      "enabled": true,
+      "configuration": "mobile"
+     }
+    ],
+    [
+     "Runtime.evaluate",
+     {
+      "expression": "delete navigator.maxTouchPoints"
+     }
+    ],
+    [
+     "Browser.getVersion",
+     {}
+    ],
+    [
+     "Emulation.setUserAgentOverride",
+     {
+      "userAgent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36",
+      "platform": "Linux armv8l",
+      "userAgentMetadata": {
+       "brands": [
+        {
+         "brand": "Chromium",
+         "version": "140"
+        },
+        {
+         "brand": "Google Chrome",
+         "version": "140"
+        },
+        {
+         "brand": "Not/A)Brand",
+         "version": "99"
+        }
+       ],
+       "fullVersion": "140.0.0.0",
+       "platform": "Android",
+       "platformVersion": "14",
+       "architecture": "",
+       "model": "Pixel 8",
+       "mobile": true
+      }
+     }
+    ],
+    [
+     "Emulation.setEmulatedMedia",
+     {
+      "features": [
+       {
+        "name": "prefers-color-scheme",
+        "value": ""
+       }
+      ]
+     }
+    ],
+    [
+     "Emulation.setDeviceMetricsOverride",
+     {
+      "width": 1280,
+      "height": 900,
+      "deviceScaleFactor": 1,
+      "mobile": false
+     }
+    ],
+    [
+     "Emulation.setTouchEmulationEnabled",
+     {
+      "enabled": false,
+      "maxTouchPoints": 5
+     }
+    ],
+    [
+     "Emulation.setEmitTouchEventsForMouse",
+     {
+      "enabled": false,
+      "configuration": "mobile"
+     }
+    ],
+    [
+     "Page.addScriptToEvaluateOnNewDocument",
+     {
+      "source": "try{Object.defineProperty(navigator,'maxTouchPoints',{get:()=>0,configurable:true})}catch(e){}"
+     }
+    ],
+    [
+     "Runtime.evaluate",
+     {
+      "expression": "try{Object.defineProperty(navigator,'maxTouchPoints',{get:()=>0,configurable:true})}catch(e){}"
+     }
+    ],
+    [
+     "Emulation.setUserAgentOverride",
+     {
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+      "platform": "Win32",
+      "userAgentMetadata": {
+       "brands": [
+        {
+         "brand": "Chromium",
+         "version": "140"
+        },
+        {
+         "brand": "Google Chrome",
+         "version": "140"
+        },
+        {
+         "brand": "Not/A)Brand",
+         "version": "99"
+        }
+       ],
+       "fullVersion": "140.0.0.0",
+       "platform": "Windows",
+       "platformVersion": "10.0.0",
+       "architecture": "x86",
+       "model": "",
+       "mobile": false
+      }
+     }
+    ],
+    [
+     "Emulation.setEmulatedMedia",
+     {
+      "features": [
+       {
+        "name": "prefers-color-scheme",
+        "value": ""
+       }
+      ]
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [
+    {
+     "viewport": {
+      "width": 375,
+      "height": 812
+     },
+     "emu": {
+      "mobile": true,
+      "scheme": "auto",
+      "dpr": 1
+     },
+     "dprAuto": false,
+     "dprWant": 1,
+     "measured": {
+      "w": 1280,
+      "h": 900,
+      "dpr": 1,
+      "touch": 0,
+      "coarse": false,
+      "dark": false,
+      "meta": true
+     },
+     "applied": {
+      "ok": true,
+      "via": "emulation"
+     },
+     "preset": "mobile"
+    },
+    {
+     "viewport": {
+      "width": 1280,
+      "height": 900
+     },
+     "emu": {
+      "mobile": false,
+      "scheme": "auto",
+      "dpr": 1
+     },
+     "dprAuto": false,
+     "dprWant": 1,
+     "measured": {
+      "w": 1280,
+      "h": 900,
+      "dpr": 1,
+      "touch": 0,
+      "coarse": false,
+      "dark": false,
+      "meta": true
+     },
+     "applied": {
+      "ok": true,
+      "via": "emulation"
+     },
+     "preset": "desktop"
+    }
+   ],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "emulation"
+    }
+   }
+  },
+  {
+   "label": "headless-dpr",
+   "value": {
+    "viewport": {
+     "width": 800,
+     "height": 600
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 2
+    },
+    "dprAuto": false,
+    "dprWant": 2,
+    "measured": {
+     "w": 800,
+     "h": 600,
+     "dpr": 2,
+     "touch": 5,
+     "coarse": true,
+     "dark": false,
+     "meta": true
+    },
+    "applied": {
+     "ok": true,
+     "via": "emulation"
+    },
+    "preset": ""
+   },
+   "error": null,
+   "sent": [
+    [
+     "Emulation.setDeviceMetricsOverride",
+     {
+      "width": 800,
+      "height": 600,
+      "deviceScaleFactor": 2,
+      "mobile": false
+     }
+    ],
+    [
+     "Emulation.setTouchEmulationEnabled",
+     {
+      "enabled": false,
+      "maxTouchPoints": 5
+     }
+    ],
+    [
+     "Emulation.setEmitTouchEventsForMouse",
+     {
+      "enabled": false,
+      "configuration": "mobile"
+     }
+    ],
+    [
+     "Page.addScriptToEvaluateOnNewDocument",
+     {
+      "source": "try{Object.defineProperty(navigator,'maxTouchPoints',{get:()=>0,configurable:true})}catch(e){}"
+     }
+    ],
+    [
+     "Runtime.evaluate",
+     {
+      "expression": "try{Object.defineProperty(navigator,'maxTouchPoints',{get:()=>0,configurable:true})}catch(e){}"
+     }
+    ],
+    [
+     "Browser.getVersion",
+     {}
+    ],
+    [
+     "Emulation.setUserAgentOverride",
+     {
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+      "platform": "Win32",
+      "userAgentMetadata": {
+       "brands": [
+        {
+         "brand": "Chromium",
+         "version": "140"
+        },
+        {
+         "brand": "Google Chrome",
+         "version": "140"
+        },
+        {
+         "brand": "Not/A)Brand",
+         "version": "99"
+        }
+       ],
+       "fullVersion": "140.0.0.0",
+       "platform": "Windows",
+       "platformVersion": "10.0.0",
+       "architecture": "x86",
+       "model": "",
+       "mobile": false
+      }
+     }
+    ],
+    [
+     "Emulation.setEmulatedMedia",
+     {
+      "features": [
+       {
+        "name": "prefers-color-scheme",
+        "value": ""
+       }
+      ]
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [
+    {
+     "viewport": {
+      "width": 800,
+      "height": 600
+     },
+     "emu": {
+      "mobile": false,
+      "scheme": "auto",
+      "dpr": 2
+     },
+     "dprAuto": false,
+     "dprWant": 2,
+     "measured": {
+      "w": 800,
+      "h": 600,
+      "dpr": 2,
+      "touch": 5,
+      "coarse": true,
+      "dark": false,
+      "meta": true
+     },
+     "applied": {
+      "ok": true,
+      "via": "emulation"
+     },
+     "preset": ""
+    }
+   ],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 800,
+     "height": 600
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 2
+    },
+    "applied": {
+     "ok": true,
+     "via": "emulation"
+    }
+   }
+  },
+  {
+   "label": "headless-bad-size",
+   "value": {
+    "viewport": {
+     "width": 200,
+     "height": 200
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "dprAuto": false,
+    "dprWant": 1,
+    "measured": {
+     "w": 375,
+     "h": 812,
+     "dpr": 1,
+     "touch": 5,
+     "coarse": true,
+     "dark": false,
+     "meta": true
+    },
+    "applied": {
+     "ok": true,
+     "via": "emulation"
+    },
+    "preset": ""
+   },
+   "error": null,
+   "sent": [
+    [
+     "Emulation.setDeviceMetricsOverride",
+     {
+      "width": 200,
+      "height": 200,
+      "deviceScaleFactor": 1,
+      "mobile": false
+     }
+    ],
+    [
+     "Emulation.setTouchEmulationEnabled",
+     {
+      "enabled": false,
+      "maxTouchPoints": 5
+     }
+    ],
+    [
+     "Emulation.setEmitTouchEventsForMouse",
+     {
+      "enabled": false,
+      "configuration": "mobile"
+     }
+    ],
+    [
+     "Page.addScriptToEvaluateOnNewDocument",
+     {
+      "source": "try{Object.defineProperty(navigator,'maxTouchPoints',{get:()=>0,configurable:true})}catch(e){}"
+     }
+    ],
+    [
+     "Runtime.evaluate",
+     {
+      "expression": "try{Object.defineProperty(navigator,'maxTouchPoints',{get:()=>0,configurable:true})}catch(e){}"
+     }
+    ],
+    [
+     "Browser.getVersion",
+     {}
+    ],
+    [
+     "Emulation.setUserAgentOverride",
+     {
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+      "platform": "Win32",
+      "userAgentMetadata": {
+       "brands": [
+        {
+         "brand": "Chromium",
+         "version": "140"
+        },
+        {
+         "brand": "Google Chrome",
+         "version": "140"
+        },
+        {
+         "brand": "Not/A)Brand",
+         "version": "99"
+        }
+       ],
+       "fullVersion": "140.0.0.0",
+       "platform": "Windows",
+       "platformVersion": "10.0.0",
+       "architecture": "x86",
+       "model": "",
+       "mobile": false
+      }
+     }
+    ],
+    [
+     "Emulation.setEmulatedMedia",
+     {
+      "features": [
+       {
+        "name": "prefers-color-scheme",
+        "value": ""
+       }
+      ]
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [
+    {
+     "viewport": {
+      "width": 200,
+      "height": 200
+     },
+     "emu": {
+      "mobile": false,
+      "scheme": "auto",
+      "dpr": 1
+     },
+     "dprAuto": false,
+     "dprWant": 1,
+     "measured": {
+      "w": 375,
+      "h": 812,
+      "dpr": 1,
+      "touch": 5,
+      "coarse": true,
+      "dark": false,
+      "meta": true
+     },
+     "applied": {
+      "ok": true,
+      "via": "emulation"
+     },
+     "preset": ""
+    }
+   ],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 200,
+     "height": 200
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "emulation"
+    }
+   }
+  },
+  {
+   "label": "desktop-shell",
+   "value": {
+    "viewport": {
+     "width": 1024,
+     "height": 768
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "dprAuto": true,
+    "dprWant": 0,
+    "measured": {
+     "w": 1024,
+     "h": 768,
+     "dpr": 1,
+     "touch": 0,
+     "coarse": false,
+     "dark": false,
+     "meta": true
+    },
+    "applied": {
+     "ok": true,
+     "via": "shell",
+     "mounted": false,
+     "zoom": 1
+    },
+    "preset": "tablet"
+   },
+   "error": null,
+   "sent": [
+    [
+     "Emulation.setDeviceMetricsOverride",
+     {
+      "width": 0,
+      "height": 0,
+      "deviceScaleFactor": 1,
+      "mobile": false
+     }
+    ],
+    [
+     "Runtime.evaluate",
+     {
+      "expression": "devicePixelRatio",
+      "objectGroup": "bridge-eval",
+      "returnByValue": false,
+      "awaitPromise": true,
+      "replMode": true
+     }
+    ],
+    [
+     "Emulation.clearDeviceMetricsOverride",
+     {}
+    ],
+    [
+     "Emulation.setTouchEmulationEnabled",
+     {
+      "enabled": false,
+      "maxTouchPoints": 5
+     }
+    ],
+    [
+     "Emulation.setEmitTouchEventsForMouse",
+     {
+      "enabled": false,
+      "configuration": "mobile"
+     }
+    ],
+    [
+     "Page.addScriptToEvaluateOnNewDocument",
+     {
+      "source": "try{Object.defineProperty(navigator,'maxTouchPoints',{get:()=>0,configurable:true})}catch(e){}"
+     }
+    ],
+    [
+     "Runtime.evaluate",
+     {
+      "expression": "try{Object.defineProperty(navigator,'maxTouchPoints',{get:()=>0,configurable:true})}catch(e){}"
+     }
+    ],
+    [
+     "Emulation.setEmulatedMedia",
+     {
+      "features": [
+       {
+        "name": "prefers-color-scheme",
+        "value": ""
+       }
+      ]
+     }
+    ]
+   ],
+   "shell": [
+    [
+     1024,
+     768
+    ]
+   ],
+   "views": [
+    {
+     "viewport": {
+      "width": 1024,
+      "height": 768
+     },
+     "emu": {
+      "mobile": false,
+      "scheme": "auto",
+      "dpr": 1
+     },
+     "dprAuto": true,
+     "dprWant": 0,
+     "measured": {
+      "w": 1024,
+      "h": 768,
+      "dpr": 1,
+      "touch": 0,
+      "coarse": false,
+      "dark": false,
+      "meta": true
+     },
+     "applied": {
+      "ok": true,
+      "via": "shell",
+      "mounted": false,
+      "zoom": 1
+     },
+     "preset": "tablet"
+    }
+   ],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1024,
+     "height": 768
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "shell",
+     "mounted": false,
+     "zoom": 1
+    }
+   }
+  },
+  {
+   "label": "desktop-shell-mobile",
+   "value": {
+    "viewport": {
+     "width": 375,
+     "height": 812
+    },
+    "emu": {
+     "mobile": true,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "dprAuto": true,
+    "dprWant": 0,
+    "measured": {
+     "w": 375,
+     "h": 812,
+     "dpr": 1,
+     "touch": 5,
+     "coarse": true,
+     "dark": false,
+     "meta": true
+    },
+    "applied": {
+     "ok": true,
+     "via": "shell",
+     "mounted": false,
+     "zoom": 1
+    },
+    "preset": "mobile"
+   },
+   "error": null,
+   "sent": [
+    [
+     "Emulation.setDeviceMetricsOverride",
+     {
+      "width": 0,
+      "height": 0,
+      "deviceScaleFactor": 1,
+      "mobile": false
+     }
+    ],
+    [
+     "Runtime.evaluate",
+     {
+      "expression": "devicePixelRatio",
+      "objectGroup": "bridge-eval",
+      "returnByValue": false,
+      "awaitPromise": true,
+      "replMode": true
+     }
+    ],
+    [
+     "Emulation.clearDeviceMetricsOverride",
+     {}
+    ],
+    [
+     "Emulation.setTouchEmulationEnabled",
+     {
+      "enabled": true,
+      "maxTouchPoints": 5
+     }
+    ],
+    [
+     "Emulation.setEmitTouchEventsForMouse",
+     {
+      "enabled": true,
+      "configuration": "mobile"
+     }
+    ],
+    [
+     "Runtime.evaluate",
+     {
+      "expression": "delete navigator.maxTouchPoints"
+     }
+    ],
+    [
+     "Browser.getVersion",
+     {}
+    ],
+    [
+     "Emulation.setUserAgentOverride",
+     {
+      "userAgent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36",
+      "platform": "Linux armv8l",
+      "userAgentMetadata": {
+       "brands": [
+        {
+         "brand": "Chromium",
+         "version": "140"
+        },
+        {
+         "brand": "Google Chrome",
+         "version": "140"
+        },
+        {
+         "brand": "Not/A)Brand",
+         "version": "99"
+        }
+       ],
+       "fullVersion": "140.0.0.0",
+       "platform": "Android",
+       "platformVersion": "14",
+       "architecture": "",
+       "model": "Pixel 8",
+       "mobile": true
+      }
+     }
+    ],
+    [
+     "Emulation.setEmulatedMedia",
+     {
+      "features": [
+       {
+        "name": "prefers-color-scheme",
+        "value": ""
+       }
+      ]
+     }
+    ]
+   ],
+   "shell": [
+    [
+     375,
+     812
+    ]
+   ],
+   "views": [
+    {
+     "viewport": {
+      "width": 375,
+      "height": 812
+     },
+     "emu": {
+      "mobile": true,
+      "scheme": "auto",
+      "dpr": 1
+     },
+     "dprAuto": true,
+     "dprWant": 0,
+     "measured": {
+      "w": 375,
+      "h": 812,
+      "dpr": 1,
+      "touch": 5,
+      "coarse": true,
+      "dark": false,
+      "meta": true
+     },
+     "applied": {
+      "ok": true,
+      "via": "shell",
+      "mounted": false,
+      "zoom": 1
+     },
+     "preset": "mobile"
+    }
+   ],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 375,
+     "height": 812
+    },
+    "emu": {
+     "mobile": true,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "shell",
+     "mounted": false,
+     "zoom": 1
+    }
+   }
+  },
+  {
+   "label": "color-scheme",
+   "value": null,
+   "error": null,
+   "sent": [
+    [
+     "Emulation.setEmulatedMedia",
+     {
+      "features": [
+       {
+        "name": "prefers-color-scheme",
+        "value": "dark"
+       }
+      ]
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "keys",
+   "value": "ok",
+   "error": null,
+   "sent": [
+    [
+     "Input.dispatchKeyEvent",
+     {
+      "type": "rawKeyDown",
+      "key": "K",
+      "code": "KeyK",
+      "windowsVirtualKeyCode": 75,
+      "nativeVirtualKeyCode": 75,
+      "modifiers": 10
+     }
+    ],
+    [
+     "Input.dispatchKeyEvent",
+     {
+      "type": "keyUp",
+      "key": "K",
+      "code": "KeyK",
+      "windowsVirtualKeyCode": 75,
+      "nativeVirtualKeyCode": 75,
+      "modifiers": 10
+     }
+    ],
+    [
+     "Input.dispatchKeyEvent",
+     {
+      "type": "keyDown",
+      "key": "Enter",
+      "code": "Enter",
+      "windowsVirtualKeyCode": 13,
+      "nativeVirtualKeyCode": 13,
+      "modifiers": 0,
+      "text": "\r",
+      "unmodifiedText": "\r"
+     }
+    ],
+    [
+     "Input.dispatchKeyEvent",
+     {
+      "type": "keyUp",
+      "key": "Enter",
+      "code": "Enter",
+      "windowsVirtualKeyCode": 13,
+      "nativeVirtualKeyCode": 13,
+      "modifiers": 0
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "type",
+   "value": null,
+   "error": null,
+   "sent": [
+    [
+     "Input.insertText",
+     {
+      "text": "hi"
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "click-coord",
+   "value": null,
+   "error": null,
+   "sent": [
+    [
+     "Input.dispatchMouseEvent",
+     {
+      "type": "mouseMoved",
+      "x": 10,
+      "y": 20,
+      "modifiers": 0
+     }
+    ],
+    [
+     "Input.dispatchMouseEvent",
+     {
+      "type": "mousePressed",
+      "x": 10,
+      "y": 20,
+      "button": "right",
+      "clickCount": 1,
+      "modifiers": 0
+     }
+    ],
+    [
+     "Input.dispatchMouseEvent",
+     {
+      "type": "mouseReleased",
+      "x": 10,
+      "y": 20,
+      "button": "right",
+      "clickCount": 1,
+      "modifiers": 0
+     }
+    ],
+    [
+     "Input.dispatchMouseEvent",
+     {
+      "type": "mousePressed",
+      "x": 10,
+      "y": 20,
+      "button": "right",
+      "clickCount": 2,
+      "modifiers": 0
+     }
+    ],
+    [
+     "Input.dispatchMouseEvent",
+     {
+      "type": "mouseReleased",
+      "x": 10,
+      "y": 20,
+      "button": "right",
+      "clickCount": 2,
+      "modifiers": 0
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [],
+   "ptrs": [
+    {
+     "kind": "click",
+     "x": 10,
+     "y": 20,
+     "source": "user"
+    }
+   ],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "hover-coord",
+   "value": null,
+   "error": null,
+   "sent": [
+    [
+     "Input.dispatchMouseEvent",
+     {
+      "type": "mouseMoved",
+      "x": 5,
+      "y": 6
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [],
+   "ptrs": [
+    {
+     "kind": "move",
+     "x": 5,
+     "y": 6,
+     "source": "agent"
+    }
+   ],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "wheel",
+   "value": null,
+   "error": null,
+   "sent": [
+    [
+     "Input.dispatchMouseEvent",
+     {
+      "type": "mouseWheel",
+      "x": 1,
+      "y": 2,
+      "deltaX": 4,
+      "deltaY": 30
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "scroll",
+   "value": null,
+   "error": null,
+   "sent": [
+    [
+     "Runtime.evaluate",
+     {
+      "expression": "window.scrollBy(0, 50)",
+      "objectGroup": "bridge-eval",
+      "returnByValue": false,
+      "awaitPromise": true,
+      "replMode": true
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "dialog",
+   "value": [
+    {
+     "seq": 1,
+     "type": "confirm",
+     "message": "really?",
+     "accepted": false
+    },
+    {
+     "seq": 2,
+     "type": "alert",
+     "message": "hi",
+     "accepted": true
+    }
+   ],
+   "error": null,
+   "sent": [
+    [
+     "Page.handleJavaScriptDialog",
+     {
+      "accept": false
+     }
+    ],
+    [
+     "Page.handleJavaScriptDialog",
+     {
+      "accept": true
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "console",
+   "value": {
+    "a": [
+     {
+      "type": "log",
+      "msg": "one",
+      "doc": "<num>",
+      "url": ""
+     },
+     {
+      "type": "error",
+      "msg": "two",
+      "doc": "<num>",
+      "url": ""
+     }
+    ],
+    "after": 0
+   },
+   "error": null,
+   "sent": [],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "messages",
+   "value": {
+    "console": [],
+    "net": [
+     {
+      "id": "1.1",
+      "method": "GET",
+      "url": "http://x/a",
+      "resourceType": "Fetch",
+      "size": 12,
+      "state": "done",
+      "status": 200,
+      "mime": "application/json"
+     }
+    ],
+    "url": "http://x/next",
+    "dialogs": [
+     {
+      "seq": 1,
+      "type": "alert",
+      "message": "popup",
+      "accepted": true
+     }
+    ]
+   },
+   "error": null,
+   "sent": [
+    [
+     "Page.handleJavaScriptDialog",
+     {
+      "accept": true
+     }
+    ]
+   ],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "cast",
+   "value": {
+    "frames": 1
+   },
+   "error": null,
+   "sent": [
+    [
+     "Page.startScreencast",
+     {
+      "format": "jpeg",
+      "quality": 60,
+      "maxWidth": 1600,
+      "maxHeight": 1600,
+      "everyNthFrame": 1
+     }
+    ],
+    [
+     "Page.screencastFrameAck",
+     {
+      "sessionId": 7
+     }
+    ],
+    [
+     "Page.stopScreencast",
+     {}
+    ]
+   ],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "viewers",
+   "value": {
+    "list": [
+     {
+      "kind": "native",
+      "where": "pc",
+      "since": "<num>"
+     },
+     {
+      "kind": "stream",
+      "where": "phone",
+      "since": "<num>"
+     }
+    ],
+    "after": [
+     {
+      "kind": "stream",
+      "where": "phone",
+      "since": "<num>"
+     }
+    ]
+   },
+   "error": null,
+   "sent": [],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "frame-to-css",
+   "value": [
+    {
+     "x": 10,
+     "y": 20,
+     "k": 1
+    },
+    {
+     "x": 110,
+     "y": 70,
+     "k": 1
+    }
+   ],
+   "error": null,
+   "sent": [],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "pending-requests",
+   "value": [],
+   "error": null,
+   "sent": [],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "require-target",
+   "value": null,
+   "error": "该浏览器不支持标签页管理",
+   "sent": [],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  },
+  {
+   "label": "tabs",
+   "value": {
+    "seen": [
+     [],
+     [
+      {
+       "id": "T1",
+       "url": "http://x/1",
+       "title": "one",
+       "active": false
+      },
+      {
+       "id": "T2",
+       "url": "http://x/2",
+       "title": "two",
+       "active": false
+      }
+     ],
+     [
+      {
+       "id": "T1",
+       "url": "http://x/1",
+       "title": "one",
+       "active": false
+      },
+      {
+       "id": "T2",
+       "url": "http://x/2",
+       "title": "two",
+       "active": false
+      },
+      {
+       "id": "T3",
+       "url": "http://x/3",
+       "title": "three"
+      }
+     ],
+     [
+      {
+       "id": "T1",
+       "url": "http://x/1",
+       "title": "one",
+       "active": false
+      },
+      {
+       "id": "T3",
+       "url": "http://x/3",
+       "title": "three"
+      }
+     ]
+    ],
+    "tabs": [
+     {
+      "id": "T1",
+      "url": "http://x/1",
+      "title": "one",
+      "active": false
+     },
+     {
+      "id": "T3",
+      "url": "http://x/3",
+      "title": "three"
+     }
+    ]
+   },
+   "error": null,
+   "sent": [],
+   "shell": [],
+   "views": [],
+   "ptrs": [],
+   "state": {
+    "viewport": {
+     "width": 1280,
+     "height": 900
+    },
+    "emu": {
+     "mobile": false,
+     "scheme": "auto",
+     "dpr": 1
+    },
+    "applied": {
+     "ok": true,
+     "via": "none"
+    }
+   }
+  }
+ ]
+}

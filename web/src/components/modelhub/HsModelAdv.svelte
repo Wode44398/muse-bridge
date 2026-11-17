@@ -62,8 +62,8 @@
   // 这一节对哪边生效（行内小标签）
   const both = $derived([toClaude && 'claude', toDim && 'dimensio'].filter(Boolean));
   const claudeOnly = $derived(toClaude ? ['claude'] : []);
-  // dimensio 走自带适配直连这家时：只有能力那几项对它生效
-  const thinkWho = $derived(dimNative ? claudeOnly : both);
+  // dimensio 走自带适配直连这家时：思考写法按它自己的适配（托管在这家服务里的别家型号除外，那些照这里的档位表发）
+  const thinkWho = $derived(dimNative && !model?.hostedForeign ? claudeOnly : both);
 
   const num = (s) => { const x = String(s ?? '').trim(); if (!x) return ''; const n = Number(x); return Number.isFinite(n) ? Math.round(n) : x; };
 
@@ -81,6 +81,22 @@
     } catch (e) {
       err = tr(e.message);
     } finally { saving = false; }
+  }
+  // 探测能力（POST /model/probe）：真打几次一两句话的请求，输出上限 / 识图 / 思考档位写进自动值（覆盖照旧压在上面）
+  let probing = $state(false);
+  let probeNotes = $state(/** @type {string[]} */ ([]));
+  const probedAt = $derived(model?.probe?.at || 0);
+  async function probe() {
+    if (probing) return;
+    probing = true; err = '';
+    try {
+      const r = await hubPost('model/probe', { id: svc.id, model: model.id });
+      onsaved?.(r.service || null);
+      probeNotes = (r.probe?.notes || []).map((n) => tr(n));
+      showToast(t('探测完成'), 'ok');
+    } catch (e) {
+      err = tr(e.message);
+    } finally { probing = false; }
   }
   async function onclose() {
     if (!dirty || saving) return !saving;
@@ -105,11 +121,20 @@
   {#if !agents.length}
     <p class="note">{t('这个模型还没添加给任何 agent，改了也要添加之后才生效。')}</p>
   {:else if dimNative}
-    <p class="note">{t('dimensio 用自带适配直连这家：这里只有上下文窗口、输出上限、识图和提示缓存对 dimensio 生效，其余只对 Claude 生效。')}</p>
+    <p class="note">{model?.hostedForeign
+      ? t('dimensio 直连这家，这个别家型号的思考写法也按这里的发。')
+      : t('dimensio 用自带适配直连这家：思考写法按它自己的适配，只对 Claude 生效；其余两边都生效。')}</p>
   {/if}
 
   <section class="sec">
-    <div class="sh"><h4>{t('能力')}</h4>{@render who(both)}</div>
+    <div class="sh"><h4>{t('能力')}</h4>{@render who(both)}<span class="spx"></span>
+      <button type="button" class="lnk sm" class:busy={probing} disabled={probing || saving} onclick={probe}
+        title={t('真打几次一两句话的请求，读出输出上限、能否看图和思考档位（上下文窗口探不出）')}>{probing ? t('探测中…') : t('探测能力')}</button></div>
+    {#if probeNotes.length}
+      <p class="pnote">{probeNotes.join(' · ')}</p>
+    {:else if probedAt}
+      <p class="pnote">{t('自动值里含探测结果（{d}）', { d: new Date(probedAt).toLocaleDateString() })}</p>
+    {/if}
     <div class="row">
       <div class="lab"><div class="nm">{t('上下文窗口')}</div><div class="hint">{t('输入加输出最多多少 token；超过了 agent 会先压缩上下文')}{#if toClaude}{' ' + t('（给 Claude 的至少 4096）')}{/if}</div></div>
       <div class="ctl"><div class="numf"><input type="number" min="1024" step="1024" placeholder={t('自动 · {v}', { v: fmtCtx(auto.contextWindow) || '?' })}
@@ -145,7 +170,7 @@
   </section>
 
   <section class="sec">
-    <div class="sh"><h4>{t('调用参数')}</h4>{@render who(thinkWho)}</div>
+    <div class="sh"><h4>{t('调用参数')}</h4>{@render who(both)}</div>
     <p class="hint top">{t('留空 = 跟随默认（agent 自己的请求怎么发就怎么发）。思考策略与思考预算只对 Claude 生效。')}</p>
     <ParamsEditor bind:params={draft.params} {protocol} thinkingKind={thinkKind} />
   </section>
@@ -180,6 +205,9 @@
   .sec :global(.pe .row:first-child) { border-top: 1px solid var(--st-hair); padding-top: 14px; }
 
   .spx { flex: 1; }
+  .lnk.sm { height: 26px; margin: 0 -8px 0 0; font-size: 12.5px; }
+  .lnk.busy { opacity: .7; }
+  .pnote { margin: 2px 0 4px; font-size: 12.5px; line-height: 1.5; color: var(--st-muted); }
   .ferr { min-width: 0; max-width: 46%; font-size: 12.5px; color: var(--pm-red); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .lnk { height: 32px; padding: 0 8px; margin-left: -8px; border: 0; border-radius: 8px; background: transparent; color: var(--st-muted); font: inherit; font-size: 13px; cursor: pointer; }
   @media (hover: hover) { .lnk:hover:not(:disabled) { background: var(--st-hover); color: var(--text); } }

@@ -4,7 +4,10 @@
 //        studio：null = 没开 Media Studio；读不出来时 [] + studioErr（人话）
 //   POST /api/model-hub/detect   {id} | {draft}  → { ok, conn, models, media|null, warnings }   识别协议、地址、模型目录
 //   GET  /api/model-hub/catalog?id=             → { ok, at, models }   一个服务的模型目录（已添加但目录里没有的补在后面）
-//   POST /api/model-hub/catalog/add {id, model:{id, kind, label?}} → { ok, model }   手动加一个模型 ID 进目录
+//   POST /api/model-hub/catalog/add {id, model:{id, kind, label?}} → { ok, model, probe?, probeError? }   手动加一个模型 ID 进目录
+//        型号表不认识的文本模型顺手「探测能力」一次（失败不影响添加，原因在 probeError）
+//   POST /api/model-hub/model/probe {id, model, lineId?} → { ok, probe, model（目录条目）|null, service }   探测一个文本模型的能力
+//        真打几次一两句话的请求：是否对话模型、会不会自己想、输出上限、识图、reasoning_effort 档位（上下文窗口不探）
 //   POST /api/model-hub/create   {name?, baseUrl, kind, authStyle?, headers?, useProxy?, key, catalog, assign, media?} → { ok, service, warnings }
 //        （老形状 {…服务, lines, models, agents} 也收：老前端、脚本照常能用）
 //   POST /api/model-hub/assign   {id, changes:[{id, agents}]} → { ok, service, warnings }   agents = 这个模型去向的全集，[] = 移除
@@ -28,7 +31,7 @@
 import { readBody } from '../runtime/body.mjs';
 import {
   createHubService, createHubFromDetect, assignHubModels, setHubModelCache, updateHubV2, deleteHubV2, updateVertex, resetHubLine, lineContext,
-  detectHub, catalogView, catalogAddModel, catalogRemoveModel, setHubModelAdvanced, markMigrated, detectVertex, vertexView,
+  detectHub, catalogView, catalogAddAndProbe, probeHubModel, catalogRemoveModel, setHubModelAdvanced, markMigrated, detectVertex, vertexView,
 } from '../runtime/model-hub/registry.mjs';
 import { adoptClaudeProvider, adoptTextService, adoptStudioProvider, migrateLegacyConfigs } from '../runtime/model-hub/legacy-migrate.mjs';
 import { getModule } from '../modules/registry.mjs';
@@ -86,7 +89,8 @@ export function registerModelHubRoutes(router, { identify }) {
   });
 
   post('/api/model-hub/detect', (b) => detectHub(b));
-  post('/api/model-hub/catalog/add', (b) => catalogAddModel(id(b), b.model));
+  post('/api/model-hub/catalog/add', (b) => catalogAddAndProbe(id(b), b.model));
+  post('/api/model-hub/model/probe', (b) => probeHubModel(id(b), String(b.model || ''), String(b.lineId || '')));
   post('/api/model-hub/create', (b) => {
     // v2 的形状带 catalog / assign（识别 → 勾选 → 建）；都没带 = 老形状（服务级 agents + 型号清单）
     if (Array.isArray(b.catalog) || Array.isArray(b.assign)) return createHubFromDetect(b);

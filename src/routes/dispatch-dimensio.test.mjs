@@ -120,6 +120,8 @@ test('写：带 scope 的改动落进 dimensio 那份；推 { rev, scope:dimensi
     await POST(ADMIN, '/api/claude/dispatch/update', { patch: { enabled: true } });
   } finally { bus.off(); }
   assert.equal((await POST(ADMIN, '/api/claude/dispatch/update', { scope: 'dimensio', patch: { follow: 'x' } })).status, 400);
+  // dimensio 那份没有「调用非 Claude 模型」（11-15 去掉）
+  assert.equal((await POST(ADMIN, '/api/claude/dispatch/update', { scope: 'dimensio', patch: { allowThirdParty: false } })).status, 400);
   assert.equal((await POST(ADMIN, '/api/claude/dispatch/update', { scope: 'codex', patch: {} })).status, 400);
 });
 
@@ -164,12 +166,12 @@ test('单独一套：预览与给实例的都是 dimensio 自己那套（「厂�
   const pv = await POST(ADMIN, '/api/claude/dispatch/preview', { scope: 'dimensio', strategy: { floors: { hard: 33.3 }, overrides: { top: { model: 'kimi:k3', effort: 'max' }, light: { model: 'opus', effort: '' } } }, allowThirdParty: false });
   assert.equal(pv.status, 200);
   const sent = calls.preview.at(-1);
-  assert.equal(sent.allowThirdParty, false);
+  assert.equal(sent.allowThirdParty, true, 'dimensio 没有「调用非 Claude 模型」开关：请求里带了也恒为 true');
   assert.deepEqual([sent.strategy.floors.hard, sent.strategy.overrides.top.provider, sent.strategy.overrides.light], [33.3, 'kimi', null]);
   assert.equal((await GET(ADMIN, '/api/claude/dispatch?scope=dimensio')).json.policy.strategies.find((x) => x.id === s.json.strategy.id).floors.hard, null);
 });
 
-test('同机接口：只认本机直连的实例凭据、只给 dimensio；成员令牌 = 他自己那份（没命令行 = 只读默认：开着、跟随）；带旧偏好迁一次；图谱版本键', async () => {
+test('同机接口：只认本机直连的实例凭据、只给 dimensio；成员令牌 = 他自己那份（没命令行 = 只读默认：开着、单独一套）；带旧偏好迁一次；图谱版本键', async () => {
   assert.equal((await internal('')).status, 404);
   assert.equal((await internal('not-a-secret-at-all-xxxxxxxx')).status, 404);
   assert.equal((await internal(ensureHostSecret(), {}, { 'x-bridge-agent': 'codex' })).status, 403);
@@ -185,7 +187,7 @@ test('同机接口：只认本机直连的实例凭据、只给 dimensio；成�
   const tok = mintAgentDeviceToken(m.id, 'dimensio');
   const r = await internal(tok, { legacy: { ladder: false, note: 'x' } });
   assert.equal(r.status, 200, JSON.stringify(r.json));
-  assert.deepEqual([r.json.policy.enabled, r.json.policy.follow, r.json.policy.readOnly], [true, true, true], '没权限的不迁、读到只读默认');
+  assert.deepEqual([r.json.policy.enabled, r.json.policy.follow, r.json.policy.readOnly], [true, false, true], '没权限的不迁、读到只读默认');
   const ctx = contextFor(userIdentity(m.id));
   assert.equal(existsSync(path.join(ctx.dataDir || tmp, 'dispatch-policy.dimensio.json')), false);
 
@@ -194,7 +196,7 @@ test('同机接口：只认本机直连的实例凭据、只给 dimensio；成�
   assert.ok(p.ok, p.error);
   users.setAgents('dimpro', ['claude', 'dimensio']);
   const r2 = await internal(mintAgentDeviceToken(p.id, 'dimensio'), { legacy: { ladder: false, note: '' } });
-  assert.deepEqual([r2.json.policy.enabled, r2.json.policy.follow, r2.json.policy.readOnly], [false, true, false]);
+  assert.deepEqual([r2.json.policy.enabled, r2.json.policy.follow, r2.json.policy.readOnly], [false, false, false]);
 });
 
 test('快照访客：dimensio 那份只读、不去实例上算落点（别借管理员的实例看到它能用的型号），写 403', async () => {
@@ -203,7 +205,7 @@ test('快照访客：dimensio 那份只读、不去实例上算落点（别借�
   const n = calls.preview.length;
   const r = await GET(SNAP, '/api/claude/dispatch?scope=dimensio');
   assert.equal(r.status, 200, JSON.stringify(r.json));
-  assert.deepEqual([r.json.canEdit, r.json.preview, r.json.policy.follow], [false, null, true]);
+  assert.deepEqual([r.json.canEdit, r.json.preview, r.json.policy.follow], [false, null, false]);
   assert.equal(calls.preview.length, n, '没有去问实例');
   assert.equal((await POST(SNAP, '/api/claude/dispatch/update', { scope: 'dimensio', patch: { follow: false } })).status, 403);
 });

@@ -101,6 +101,13 @@ export function allPrefs(opts: { tenant?: boolean } = {}): { groups: typeof PREF
   return { groups: PREF_GROUPS.filter((g) => items.some((i) => i.group === g.id)), items };
 }
 
+// 改了哪些键（值真变了的）：要「改完当场生效」的功能订阅它，如快照对话清理（quick-prune.ts）
+const listeners = new Set<(keys: string[]) => void>();
+export function onPrefsChange(fn: (keys: string[]) => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
 let queue: Promise<void> = Promise.resolve();
 // patch 里值为 null = 恢复默认。整批校验通过才写（一项错全批拒）。
 export function setPrefs(patch: unknown, opts: { tenant?: boolean } = {}): Promise<void> {
@@ -113,9 +120,20 @@ export function setPrefs(patch: unknown, opts: { tenant?: boolean } = {}): Promi
     else if (!valid(spec, v)) throw new Error(`prefs: ${k} 的值不合法`);
     else next[k] = v;
   }
+  const before = values;
   values = next;
+  const changed = [...new Set([...Object.keys(before), ...Object.keys(next)])].filter((k) => JSON.stringify(before[k]) !== JSON.stringify(next[k]));
   const data = JSON.stringify(values, null, 2) + "\n";
   queue = queue.then(() => atomicWriteFile(prefsFile(), data)).catch((e) => console.warn(`[prefs] 写盘失败：${(e as Error).message}`));
+  if (changed.length) {
+    for (const fn of listeners) {
+      try {
+        fn(changed);
+      } catch (e) {
+        console.warn(`[prefs] 变更回调出错：${(e as Error).message}`);
+      }
+    }
+  }
   return queue;
 }
 

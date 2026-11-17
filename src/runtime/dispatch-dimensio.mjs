@@ -1,8 +1,8 @@
 // dimensio 的子 agent 调用策略（2026-11-14）：设置 › dimensio › 子 agent 调用策略 的「生效策略」与给 dimensio 的取法。
 //
 // 存储在 runtime/dispatch-policy.mjs 的 dimensio 作用域（<dataDir>/dispatch-policy.dimensio.json），这里只做解析：
-//   · follow:true  → 生效的那一套 = Claude 那份 activeId 那套（判定线 / 档位自定义 / 口述备注）；follow:false → dimensio 自己 activeId 那套。
-//     总开关、生效范围、要不要非 Claude 模型永远取 dimensio 自己的。
+//   · follow:false（默认）→ dimensio 自己 activeId 那套；follow:true → 生效的那一套 = Claude 那份 activeId 那套（判定线 / 档位自定义 / 口述备注）。
+//     总开关、生效范围永远取 dimensio 自己的。allowThirdParty 恒为 true（dimensio 本来就是多厂商，11-15 去掉了这个开关；字段照给，harness 认它）。
 //   · 档位自定义换成 dimensio 认得的「可携」写法 { model, effort, provider?, ref }：
 //       dimensio 自己那套写的是「厂商 id:型号」→ provider + model 原样拆开；
 //       Claude 那套的别名 opus / sonnet / haiku / fable → 别名此刻指向的型号 id（model-ratings.mjs 的 CLAUDE_SUBS），不指定厂商；
@@ -74,12 +74,12 @@ export function claudeSummary(ctx) {
  */
 export function dimensioEffective(ctx, { strategy } = {}) {
   const dim = policyFor(ctx, { scope: 'dimensio' });
-  const follow = dim.follow !== false;
+  const follow = dim.follow === true;
   const claude = follow ? policyFor(ctx) : null;
   const from = follow ? 'claude' : 'dimensio';
   const st = strategy !== undefined && strategy !== null ? strategy : follow ? activeStrategy(claude) : activeStrategy(dim);
   return {
-    enabled: dim.enabled !== false, follow, scope: { ...dim.scope }, allowThirdParty: dim.allowThirdParty !== false,
+    enabled: dim.enabled !== false, follow, scope: { ...dim.scope }, allowThirdParty: true,
     strategy: portableStrategy(st, from), rev: dim.rev, claudeRev: claude ? claude.rev : undefined, readOnly: !canEditPolicy(ctx),
   };
 }

@@ -98,6 +98,8 @@ html[data-hx-standalone] body {
   font-family: var(--font-ui);
   text-rendering: optimizeLegibility;
   overscroll-behavior: none;
+  /* 页面本身从不滚（各栏自己滚）：从按钮长出来的面板，玻璃外包框会伸出视口一截，不能把整页撑出滚动条（与 bridge 的 body 同） */
+  overflow: hidden;
 }
 
 html[data-hx-standalone] #app {
@@ -288,13 +290,11 @@ html.hx-dnd-live {
 .hxroot .md .mdblk > p:last-child {
   margin-bottom: 0.78em;
 }
-/* U7：表格只到了表头、分隔行还没来——先按原文等宽显示 */
-.hxroot .md .md-hold {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  white-space: pre-wrap;
-  color: var(--text2);
+/* 流式吐字（bridge 的 claudeFade，MdStream 挂）：先排版后显形。还没轮到的字与盒子（列表项、单元格、引用、代码卡、
+   行内代码、分隔线）挂 .c-wait 隐形占位；淡入中的字由引擎逐帧直接写 inline opacity，这里不需要动画。
+   减弱动态效果在引擎里判，直接实体显示。 */
+.hxroot .md .c-wait {
+  opacity: 0;
 }
 .hxroot .md .md-h {
   font-weight: 600;
@@ -376,8 +376,11 @@ html.hx-dnd-live {
   margin: 0.8em 0 1em;
   border-radius: var(--r-sm);
 }
+/* 分离边框（border-spacing 0，观感同原来的一根根横线）：每条线归属到一个单元格——吐字时还没轮到的单元格隐形，
+   它的线也跟着隐形、随第一个字淡入。collapse 模型的格线由表格统一绘制，单元格透明了线还在，会先冒出整行空格子。 */
 .hxroot .md table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.93em;
   min-width: 100%;
   line-height: 1.55;

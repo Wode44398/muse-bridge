@@ -7,7 +7,7 @@ import path from 'node:path';
 import {
   newQuickProject, quickProject, quickProjects, pruneQuick, keepQuick, quickExpiries,
   listRecycledQuick, recycledQuickCount, restoreQuick, legacyQuickSlot, schedulePruneQuick, quickOrphans,
-  QUICK_NAME, QUICK_TTL_DAYS,
+  QUICK_NAME, QUICK_TTL_DAYS, quickRetention,
 } from './claude-quick.mjs';
 import { sessionsDir } from './runtime/paths.mjs';
 
@@ -208,5 +208,60 @@ test('quickExpiries 与回收同一算法：对话记录与桶目录取最晚', 
     const exp2 = await quickExpiries(ctx, [{ projectId: a.id, mtime: now - 10 * DAY }]);
     assert.ok(Math.abs(exp2[a.id] - (now + 30 * DAY)) < 2000);
     assert.deepEqual(await quickExpiries(ctx, [{ projectId: 'not-a-bucket', mtime: now }]), {});
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('quickRetention：设置值 → 清理方式；认不出的一律按时间', () => {
+  assert.deepEqual(quickRetention('ttl30'), { mode: 'ttl' });
+  assert.deepEqual(quickRetention(undefined), { mode: 'ttl' });
+  assert.deepEqual(quickRetention('max20'), { mode: 'count', max: 20 });
+  assert.deepEqual(quickRetention('max0'), { mode: 'ttl' });
+  assert.deepEqual(quickRetention('never'), { mode: 'never' });
+});
+
+test('只留最近 N 条：超出的按最后活动从旧到新进回收站，不看天数；在跑的占名额但不动；没到期时刻', async () => {
+  const { root, ctx } = fixture();
+  try {
+    const now = Date.now();
+    const buckets = [];
+    for (let i = 1; i <= 5; i++) {   // 第 i 只最后活动在 i 小时前：1 最新、5 最老
+      const b = quickProject(ctx);
+      record(ctx, b.path, sid(i), i * HOUR, now);
+      age(b.path, i * HOUR, now);
+      buckets.push(b);
+    }
+    const busy = new Set([sid(5)]);   // 最老那只正在跑
+    const r = await pruneQuick(ctx, { now, retention: 'max2', busy });
+    assert.equal(r.recycled, 2, '留最新 2 只；第 3、4 只进回收站；第 5 只在跑不动');
+    const left = new Set(quickProjects(ctx).map((p) => p.id));
+    assert.ok(left.has(buckets[0].id) && left.has(buckets[1].id) && left.has(buckets[4].id));
+    assert.ok(!left.has(buckets[2].id) && !left.has(buckets[3].id));
+    assert.deepEqual((await listRecycledQuick(ctx)).map((x) => x.id).sort(), [buckets[2].id, buckets[3].id].sort());
+    assert.deepEqual(await quickExpiries(ctx, [{ projectId: buckets[0].id, mtime: now }], { retention: 'max2' }), {}, '按条数时没有到期时刻');
+    assert.equal(keepQuick(ctx, buckets[0].id, { now, retention: 'max2' }).expiresAt, null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('从不清理：放了一年的也留着；回收站里已有的照旧到期删除；空桶照旧删', async () => {
+  const { root, ctx } = fixture();
+  try {
+    const now = Date.now();
+    const old = quickProject(ctx);
+    record(ctx, old.path, sid(1), 365 * DAY, now);
+    age(old.path, 365 * DAY, now);
+    const trashed = quickProject(ctx);
+    record(ctx, trashed.path, sid(2), 40 * DAY, now);
+    age(trashed.path, 40 * DAY, now);
+    assert.equal((await pruneQuick(ctx, { now, retention: 'max1' })).recycled, 1, '先按「只留 1 条」收走一只进回收站');
+    assert.equal(recycledQuickCount(ctx), 1);
+    const empty = quickProject(ctx);   // 当前空桶
+    mkdirSync(path.join(root, 'quickchat', sid(9).replace(/0{12}$/, '999999999999')), { recursive: true });
+    const r = await pruneQuick(ctx, { now: now + 31 * DAY, retention: 'never' });
+    assert.equal(r.recycled, 0, '从不清理：不再往回收站挪');
+    assert.equal(r.purged, 1, '回收站里放满 30 天的照旧永久删除');
+    assert.equal(r.empty, 1, '没对话也没文件的空桶照旧删');
+    assert.ok(quickProjects(ctx).some((p) => p.id === empty.id), '当前空桶不动');
+    assert.equal(quickProjects(ctx).filter((p) => !p.current).length, 1, '剩下那只老的还在列表里');
+    assert.deepEqual(await quickExpiries(ctx, [{ projectId: old.id, mtime: now - 365 * DAY }], { retention: 'never' }), {});
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

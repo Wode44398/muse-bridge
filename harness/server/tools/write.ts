@@ -5,6 +5,7 @@ import { fail } from "./types.ts";
 import { diagnose } from "./diagnostics.ts";
 import { introducesRedactionMark, REDACTED_WRITE_HINT } from "../redact.ts";
 import { writeUserFile } from "../atomic-write.ts";
+import { matchFileStyle } from "./line-endings.ts";
 
 export const writeTool: Tool = {
   effect: "write",
@@ -55,7 +56,8 @@ export const writeTool: Tool = {
   },
   async run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
     const abs = ctx.sandbox.resolve(String(args.path), { forWrite: true });
-    const content = String(args.content ?? "");
+    let content = String(args.content ?? "");
+    let styleNotes: string[] = [];
 
     // Overwrite gate — same contract as Edit: creating a new file is free, but
     // replacing an existing one requires having Read it, so the model can never
@@ -102,6 +104,7 @@ export const writeTool: Tool = {
       if (current !== null && introducesRedactionMark(current, content)) {
         return fail("redacted text", REDACTED_WRITE_HINT);
       }
+      if (current !== null) ({ text: content, notes: styleNotes } = matchFileStyle(current, content));
     }
 
     try {
@@ -116,7 +119,7 @@ export const writeTool: Tool = {
       return fail("write failed", `Could not write ${args.path}: ${(e as Error).message}`);
     }
     const lines = content.split("\n").length;
-    const wrote = `Wrote ${ctx.sandbox.rel(abs)} (${content.length} bytes).`;
+    const wrote = `Wrote ${ctx.sandbox.rel(abs)} (${content.length} bytes${styleNotes.length ? `; ${styleNotes.join(", ")} of the existing file` : ""}).`;
     const diag = await diagnose(abs, content);
     return {
       ok: true,

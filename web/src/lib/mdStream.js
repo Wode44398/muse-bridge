@@ -15,6 +15,15 @@
 //      闭合围栏，让正在写的粗体 / 代码从第一个字起就是最终样式。
 // 只看末块（且主要只看最后一行），O(行长)；流式结束（live=false）后 Thread 直接渲染原文，
 // 模型真忘了闭合的，最终仍按原文显示。
+//
+// 可选参数 opts（给语法更少的渲染器用，默认就是 marked / GFM 的口径，Claude 分页不传）：
+//   emph   认哪些强调定界符（默认 '*_~'）——渲染器不认的定界符补了闭合会原样露出来、下一批又挪位
+//   fences 认哪些围栏字符（默认 '`~'）
+//   math   认不认 $$ 公式块（默认 true）
+//   link   (文字, 已到的 URL) => 写头链接的替身；返回 null = 不当链接、按原文留着（默认：无 href 的 <a>）
+const DEFAULTS = { emph: '*_~', fences: '`~', math: true, link: null };
+const optsOf = (o) => (o ? { ...DEFAULTS, ...o } : DEFAULTS);
+const tailRe = (emph) => new RegExp('[' + emph.replace(/[\]\\^-]/g, '\\$&') + ']+[ \\t]*$');
 
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
@@ -80,12 +89,12 @@ const isSpace = (c) => !c || /\s/.test(c);
 const isWord = (c) => !!c && /[\p{L}\p{N}]/u.test(c);
 
 // 未闭合强调（** / * / _ / ~~）——栈式近似 CommonMark 的左右侧规则，够流式写头用。
-function openEmphasis(t) {
+function openEmphasis(t, emph) {
   const stack = [];
   for (let i = 0; i < t.length;) {
     const ch = t[i];
     if (ch === '\\') { i += 2; continue; }
-    if (ch !== '*' && ch !== '_' && ch !== '~') { i++; continue; }
+    if (!emph.includes(ch)) { i++; continue; }
     let j = i;
     while (t[j] === ch) j++;
     const n = j - i, before = t[i - 1], after = t[j];
@@ -102,7 +111,8 @@ function openEmphasis(t) {
   return stack;
 }
 
-export function repairInline(src) {
+export function repairInline(src, opts) {
+  const o = optsOf(opts);
   let s = src;
   // 结尾单个反斜杠（下一个字会被它转义掉）、半截实体（&amp → &）——扣住
   const bs = /\\+$/.exec(s);
@@ -121,17 +131,21 @@ export function repairInline(src) {
     if ((x = /!\[[^[\]]{0,200}(?:\](?:\([^()]*)?)?$/.exec(t))) {                  // 图片没写完：整个扣住
       s = s.slice(0, x.index); t = t.slice(0, x.index);
     } else if ((x = /\[([^[\]]*)\]\(([^()]*)$/.exec(t))) {                          // 链接文字已定、URL 还在打
-      link = { at: x.index, end: x.index + 1 + x[1].length };
-      t = t.slice(0, link.end) + 'x'.repeat(t.length - link.end);
+      const at = x.index, end = x.index + 1 + x[1].length;
+      const rep = o.link ? o.link(s.slice(at + 1, end), s.slice(end + 2)) : undefined;
+      if (rep !== null) {
+        link = { at, end, rep };
+        t = t.slice(0, end) + 'x'.repeat(t.length - end);
+      }
     } else if ((x = /\[[^[\]]{0,120}\]?$/.exec(t))) {                                // [文字 / [文字]：可能是链接，扣住
       s = s.slice(0, x.index); t = t.slice(0, x.index);
     }
   }
   // 结尾的一串 * _ ~ 分不清是开是合还是半个闭合——扣住（下一批到了自然见分晓）
-  const tail = /[*_~]+[ \t]*$/.exec(t);
+  const tail = tailRe(o.emph).exec(t);
   if (tail && !(open || link)) { s = s.slice(0, tail.index); t = t.slice(0, tail.index); }
 
-  const stack = openEmphasis(t);
+  const stack = openEmphasis(t, o.emph);
   let closers = '';
   for (let k = stack.length - 1; k >= 0; k--) {
     const o = stack[k];
@@ -143,15 +157,16 @@ export function repairInline(src) {
     }
     closers += o.ch.repeat(o.n);
   }
-  if (link) s = s.slice(0, link.at) + '<a>' + s.slice(link.at + 1, link.end) + '</a>';   // 无 href：点不动、样式同链接
+  if (link) s = s.slice(0, link.at) + (link.rep ?? '<a>' + s.slice(link.at + 1, link.end) + '</a>');   // 无 href：点不动、样式同链接
   if (open) s += '`'.repeat(open.n);
   else s = s.replace(/[ \t]+$/, '');                              // 闭合符要贴着正文，否则不算右侧定界
   return s + closers;
 }
 
 // 主入口：修补末块。src 是 streamBlocks 的最后一块（流式中、还在增长）。
-export function repairTail(src) {
+export function repairTail(src, opts) {
   if (!src) return src;
+  const o = optsOf(opts);
   const nl = src.lastIndexOf('\n');
   const head = nl < 0 ? '' : src.slice(0, nl + 1);       // 已完整的行（含结尾换行）
   let last = nl < 0 ? src : src.slice(nl + 1);            // 正在打的末行（可能为空）
@@ -169,9 +184,9 @@ export function repairTail(src) {
     }
     if (math < 0) {
       const m = FENCE_OPEN.exec(ln);
-      if (m && !(m[1][0] === '`' && m[2].includes('`'))) { fence = { ch: m[1][0], n: m[1].length }; continue; }
+      if (m && o.fences.includes(m[1][0]) && !(m[1][0] === '`' && m[2].includes('`'))) { fence = { ch: m[1][0], n: m[1].length }; continue; }
     }
-    if (((ln.match(/\$\$/g) || []).length) % 2 === 1) math = math < 0 ? start : -1;
+    if (o.math && ((ln.match(/\$\$/g) || []).length) % 2 === 1) math = math < 0 ? start : -1;
   }
   if (fence) {
     const closer = fence.ch.repeat(fence.n);
@@ -209,7 +224,7 @@ export function repairTail(src) {
   if (holdLine(last)) return head;
   const pm = BLOCK_PREFIX.exec(last);
   const prefix = pm ? pm[0] : '';
-  const fixed = prefix + repairInline(last.slice(prefix.length));
+  const fixed = prefix + repairInline(last.slice(prefix.length), o);
   if (holdLine(fixed)) return head;                           // 修完只剩块标记（「- **」→「- 」）：扣住
   return head + fixed;
 }

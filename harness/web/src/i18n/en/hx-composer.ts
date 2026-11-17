@@ -63,6 +63,7 @@ export default {
   "切换模型服务…": "Switch provider…",
   "当前任务转入后台继续跑；切换后开启新对话": "The current task keeps running in the background. Switching starts a new chat.",
   "切换后开启新对话，历史会话保留各自的服务归属": "Switching starts a new chat. Past sessions keep their own provider.",
+  "这条新对话就从它开始": "This new chat will start with it",
 
   // ── LocalAiMenu：本机模型 ──
   "本机模型服务状态（点开展开控制面板）": "Local model status (open for controls)",
@@ -77,7 +78,7 @@ export default {
   "正在启动…": "Starting…",
   "启动本地 AI": "Start local AI",
 
-  // ── AttachSheet / AttachChips / DropOverlay：附件 ──
+  // ── AttachSheet / AttachChips / 输入框拖放：附件 ──
   "从设备上传": "Upload from device",
   "工作空间": "Workspace",
   "{n} 个文件上传失败": { one: "Couldn’t upload {n} file", other: "Couldn’t upload {n} files" },
@@ -103,7 +104,10 @@ export default {
   "移除引用": "Remove reference",
   "上传中 {n} 个…": { one: "Uploading {n} file…", other: "Uploading {n} files…" },
   "松开，添加为附件": "Drop to attach",
-  "存进这个对话的附件目录（不进项目仓库）· 图片原生发给多模态模型": "Saved to this chat’s attachment folder (not the project repository) · Images are sent natively to multimodal models",
+  "文件夹": "Folder",
+  "引用对话": "Referenced chat",
+  "上传中 {done}/{total}": "Uploading {done}/{total}",
+  "上传中…": "Uploading…",
 
   // ── ColdHint：缓存变冷提示 ──
   "距上次请求 {min} 分钟，缓存大概已经冷了：这段对话约 {tokens} token，下一条会按全价重读。": {
@@ -233,4 +237,5 @@ export default {
   "只有一台在线时就用它": "Uses the one that’s online, if only one is",
   "{name}（就是服务器）": "{name} (the server itself)",
   "这个会话不操作任何电脑": "This chat won’t operate any computer",
+  "回到型号": "Back to models",
 };

@@ -48,8 +48,14 @@ export interface TableEntry {
   think?: string;
   dflt?: string;
   media?: Readonly<MediaBudget>;
-  // OpenAI 协议下把历史思考回传为 reasoning_content（chat template 默认保留思考的家族，如开源权重的 Qwen3.8-Flash-Next）
-  replay?: boolean;
+  // OpenAI 协议下把历史思考回传为 reasoning_content：true = 所有线路，线路名数组 = 只在这些线路上（routeOf 的结果）
+  replay?: boolean | readonly string[];
+}
+
+export interface ReplayPolicy {
+  field: "reasoning_content";
+  empty: boolean;
+  body: Record<string, unknown> | null;
 }
 
 export interface ApiCaps {
@@ -81,8 +87,9 @@ export function bareModelId(id: unknown): string;
 export function guessKind(id: unknown, apiType?: unknown): "chat" | "other";
 export function thinkingTemplate(key: string, protocol: Protocol | string, opts?: { dflt?: string; route?: string; id?: string }): ThinkingShape | null;
 export function tableEntry(id: unknown): TableEntry | null;
-export function replaysThinking(id: unknown): boolean;
-/** 服务地址（或主机名）→ 线路（目前只有 "openrouter"；其余回 ""）。 */
+export function replayOf(id: unknown, opts?: { route?: string }): ReplayPolicy | null;
+export function replaysThinking(id: unknown, opts?: { route?: string }): boolean;
+/** 服务地址（或主机名）→ 线路（"openrouter"、"dashscope"；其余回 ""）。 */
 export function routeOf(baseUrlOrHost: unknown): string;
 export function fromApi(x: unknown): ApiCaps;
 export function parseModelList(j: unknown): unknown[] | null;

@@ -32,6 +32,12 @@
 //
 // live=false（历史消息）一律实体显示、零开销（不挂 MutationObserver）；同一段从流式转收尾时把剩下的
 // 吐完再转静态。key 变了（Svelte 按下标复用 div 去显示别的段）立即重置。系统「减弱动态效果」直接实体。
+//
+// —— 给别的渲染器用（可选参数，Claude 分页一个都不传，行为不变）——
+// boxes：额外按盒子处理的类名（自家代码卡的外壳之类，内置只认 md-codewrap）；chrome：界面零件的类名（代码卡
+// 标题栏里的语言标、复制钮），子树里的字不计数、不逐字显形，随包住它的盒子一起出现。
+// 顶层节点若是常驻的包裹层（{@html} 是它唯一的子节点 → 受控 innerHTML，内容原地整块换），按变更记录把它的
+// 可见字数缓存作废——Svelte 整块替换顶层节点时这一步什么也不做。
 
 const CLS = 'c-in';          // 自家 span（淡入中 / 隐形）
 const WAIT = 'c-wait';       // 隐形（CSS: opacity 0）
@@ -77,7 +83,8 @@ function walk(root, st) {
   }
 }
 function visit(el, st) {
-  if (isBox(el)) {
+  if (st.chrome && st.chrome(el)) return;
+  if (isBox(el) || (st.box && st.box(el))) {
     const rec = { el, a: st.i, b: 0 };
     if (!isKatex(el)) descend(el, st);
     rec.b = st.i;
@@ -102,22 +109,37 @@ function safeCut(v, o) {
   return o;
 }
 
+const classTest = (list) => (Array.isArray(list) && list.length ? (el) => list.some((c) => el.classList.contains(c)) : null);
+
 export function claudeFade(node, opts = {}) {
   let key, live = false, mode = 'static';
+  // 可选：额外的盒子类名 / 界面零件类名（见文件头）。只在挂载时读一次——可见字数按节点缓存，口径不能中途变。
+  const xbox = classTest(opts && opts.boxes), chrome = classTest(opts && opts.chrome);
   let Rf = 0, shown = 0, solid = 0;     // 显形边界（浮点 / 整数）；solid 之前全实体
   let marks = [];                       // 淡入中的段 [{a,b,t}]（可见字序号区间 + 显形时刻）
   let plan = [], planBase = 0;          // 待播段 [{a,b,t0,t1}]：可见字 [a,b) 在 t0..t1 内匀速显形；planBase = 已播完的边界
   let gaps = [], lastArr = 0, lastT = 0, lastTotal = 0;
   let raf = 0, touched = new Set();
   const lens = new WeakMap();           // 顶层节点 → 可见字数（Svelte 只整块替换顶层节点，按节点缓存即可）
-  const mo = typeof MutationObserver === 'function' ? new MutationObserver(() => run()) : null;
+  const mo = typeof MutationObserver === 'function' ? new MutationObserver((recs) => { stale(recs); run(); }) : null;
+
+  // 变更落在某个顶层节点内部（常驻包裹层的内容被整块换掉）：它的可见字数缓存作废。
+  function stale(recs) {
+    for (const r of recs) {
+      let n = r.target;
+      if (n === node) continue;
+      while (n && n.parentNode !== node) n = n.parentNode;
+      if (n) lens.delete(n);
+    }
+  }
 
   function lenOf(n) {
     if (n.nodeType === 3) { const t = n.nodeValue; return t && /\S/.test(t) ? t.length : 0; }
     let L = lens.get(n);
     if (L === undefined) {
       if (isKatex(n)) L = 0;
-      else { const st = { i: 0, pre: false }; descend(n, st); L = st.i; }
+      else if (chrome && chrome(n)) L = 0;
+      else { const st = { i: 0, pre: false, chrome }; descend(n, st); L = st.i; }
       lens.set(n, L);
     }
     return L;
@@ -248,7 +270,7 @@ export function claudeFade(node, opts = {}) {
       if (!active) continue;
       next.add(n);
       if (touched.has(n)) clean(n);
-      const st = { i: a, pre: false, boxes: [], onText: (tn, i0) => paintText(tn, i0, t) };
+      const st = { i: a, pre: false, boxes: [], box: xbox, chrome, onText: (tn, i0) => paintText(tn, i0, t) };
       visit(n, st);
       for (const r of st.boxes) {
         const born = r.b === r.a ? bornAt(r.a) : bornChar(r.a);
@@ -297,6 +319,7 @@ export function claudeFade(node, opts = {}) {
 
   function run() {
     if (mode === 'static') return;
+    if (mo) stale(mo.takeRecords());                     // 同步调用（update）时还没投递的变更先认领，免得按旧缓存量
     if (!live && typeof document !== 'undefined' && document.hidden) { toStatic(); return; }   // 后台没人看：收尾不必等 rAF（后台根本不跑）
     let busy = false;
     try { busy = frame(now()); }

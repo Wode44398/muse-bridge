@@ -7,7 +7,7 @@ import { httpErrorEvent, streamErrorEvent } from "./classify.ts";
 import { observeWire } from "./wire-fingerprint.ts";
 import { fetchReconnect } from "../net-proxy.ts";
 import { TOOL_PROGRESS_EVERY_MS } from "./anthropic.ts";
-import { modelLimits, modelSpec, modelSupportsImages, modelSupportsVideo, modelSupportsAudio, providerMediaBudget } from "../catalog.ts";
+import { hostedTiers, modelLimits, modelSpec, modelSupportsImages, modelSupportsVideo, modelSupportsAudio, providerMediaBudget } from "../catalog.ts";
 import { localModelBaseUrl, strataVariantMismatch, strataVariantOf } from "../localai.ts";
 import { applyCustomThinking, floorTierWhenNoOff } from "../custom-tiers.ts";
 import { MK } from "../model-knowledge.ts";
@@ -46,21 +46,27 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
   // 本机两台引擎同属 local 这一家、端口不同：Strata 那个型号去 8081（localai.ts），其余照会话里的地址
   const baseUrl = ((cfg.provider === "local" ? localModelBaseUrl(cfg.model) : undefined) ?? cfg.baseUrl ?? DEFAULTS.baseUrl).replace(/\/$/, "");
   const custom = cfg.custom;
-  // Kimi and MiMo require the original reasoning trace on subsequent tool
-  // turns; keep it in the neutral transcript and replay as reasoning_content.
-  // 自定义服务：标了「不发参数也会思考」的型号（小米、Kimi、GLM-5.3 经第三方接进来）或服务上打开了「回传思考」时同样回传。
-  // 共用型号表标了 replay 的家族也回传：开源权重的 Qwen3.8-Flash-Next（vLLM / SGLang 之类）的 chat template 默认
-  // preserve_thinking，历史里每条 assistant 都按 <think>reasoning_content</think> 渲染——不回传就渲染成空思考，和模型当时
-  // 生成的前缀对不上，服务端前缀缓存从上一条回复起作废，也不是模型训练时见到的样子。
-  // DeepSeek（内置厂商 id 是 openai）同样在表里标了 replay：思考模式下带工具调用的历史轮缺 reasoning_content 就 400
-  //（它只恢复得了自己在思考模式下发出的调用；会话中途开思考、从别家换过来的都恢复不了），关思考时带着也无害——实测。
+  const host = cfg.host;
+  // 线路：自定义服务看实际上游主机（地址是本机网关），自带厂商看直连地址。同一个型号在百炼、OpenRouter、直连上
+  // 要的思考参数与回传写法不一样（model-knowledge 的 routeOf / replayOf，工具循环里逐线路实测）
+  const route = MK.routeOf(custom ? custom.upstreamHost : host?.upstreamHost || baseUrl);
+  const replay = MK.replayOf(cfg.model, { route });
+  // 自带厂商的服务里托管的别家型号（百炼上的 Kimi、GLM、DeepSeek……）：不走这家厂商的分支，按它自己的档位表发
+  const hosted = custom ? undefined : hostedTiers(cfg.provider, cfg.model, host?.model, host?.upstreamHost || baseUrl);
+  // 历史思考回传为 reasoning_content：型号表在这条线路上标了的为主（Kimi、MiMo、DeepSeek、GLM-5.3、Qwen……：工具续轮不带回去，
+  // 有的 400，有的接不上调工具前想好的东西）；按档位表发的「不发参数也会思考」的型号、服务上打开了「回传思考」的同样回传。
+  // 厂商 id 只兜底型号表不认识的型号（Kimi / MiMo 直连的新型号先照官方要求回传）。
+  // 开源权重的 Qwen3.8-Flash-Next：chat template 默认 preserve_thinking，不回传就渲染成空思考，服务端前缀缓存从上一条回复起作废。
   const replayReasoning =
-    cfg.provider === "kimi" ||
-    cfg.provider === "mimo" ||
-    MK.tableEntry(cfg.model)?.replay === true ||
-    Boolean(custom && (custom.replayReasoning || custom.model?.alwaysThinks));
-  // 没有思考原文的工具轮也带空串：只给 DeepSeek（缺了就 400）；别家不带也照收，不去动它们的请求体
+    Boolean(replay) ||
+    Boolean((custom ? custom.model : hosted)?.alwaysThinks) ||
+    Boolean(custom ? custom.replayReasoning : host?.replayReasoning) ||
+    (!MK.tableEntry(cfg.model) && (cfg.provider === "kimi" || cfg.provider === "mimo"));
+  // 没有思考原文的工具轮也带空串：只给 DeepSeek（思考模式下带工具调用的历史轮缺 reasoning_content 就 400，会话中途开思考、
+  // 从别家换过来的都恢复不了；关思考时带着也无害——实测）；别家不带也照收，不去动它们的请求体
   const replayEmpty = replayReasoning && MK.tableEntry(cfg.model)?.think === "deepseek";
+  // 按档位表发的型号：自定义服务的，或托管在自带厂商服务里的别家型号
+  const tiered = custom ? custom.model : hosted;
 
   return {
     id: cfg.provider,
@@ -81,30 +87,24 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
       const on = level !== "off";
       // Each OpenAI-compatible vendor gates reasoning differently — these mirror
       // the per-model effort ladders declared in catalog.ts.
-      if (custom) {
-        // 自定义服务：不看厂商 id，按型号的档位表发（会话档 → 槽 → 档位，custom-tiers.ts；写法同 Claude 外接，共用 applyTier）。
-        // 「默认」档 / 没登记的型号什么都不发。输出上限字段按服务设置（OpenAI 自家推理模型要 max_completion_tokens）。
+      if (custom || hosted) {
+        // 自定义服务、自带厂商服务里的别家型号：不看厂商 id，按型号的档位表发（会话档 → 槽 → 档位，custom-tiers.ts；写法同 Claude 外接，
+        // 共用 applyTier）。「默认」档 / 没登记的型号什么都不发。
         // 旁路请求（不带工具、思考 off：压缩摘要、记忆提取、辅助模型）遇到关不掉思考的型号：发它最低的一档并留出推理余量，
         // 不然上游按默认档想、把小小的输出上限整段吃光，正文为空（custom-tiers.ts floorTierWhenNoOff）。主循环不走这里：
         // 它总带工具，用户选的「默认」档就是什么都不发。
-        const floor = turn.tools.length ? "" : floorTierWhenNoOff(custom.model, level);
-        if (floor && custom.model) {
-          body = MK.applyTier(body, custom.model, floor, { protocol: "openai" });
+        const floor = turn.tools.length ? "" : floorTierWhenNoOff(tiered, level);
+        if (floor && tiered) {
+          body = MK.applyTier(body, tiered, floor, { protocol: "openai" });
           if (typeof body.max_tokens === "number") {
             body.max_tokens = Math.max(body.max_tokens, Math.min(body.max_tokens + SIDE_REASONING_HEADROOM, capabilities.maxOutputTokens));
           }
-        } else body = applyCustomThinking(body, custom.model, level, { protocol: "openai" });
+        } else body = applyCustomThinking(body, tiered, level, { protocol: "openai" });
         if (MK.tableEntry(cfg.model)?.think === "qwen38-open") body = openQwenKwargs(body);
         // OpenRouter 上的 Claude：Anthropic 的缓存要显式标记才生效——顶层放一个 cache_control，OpenRouter 自动把断点推进到最后
         //（实测第二发整段命中；不带则每轮全价、首字也慢）。别家在 OpenRouter 上是自动缓存，不用管。
-        if (MK.routeOf(custom.upstreamHost) === "openrouter" && /^(?:claude-|opus-|sonnet-|haiku-|fable-)/.test(MK.bareModelId(cfg.model))) {
+        if (route === "openrouter" && /^(?:claude-|opus-|sonnet-|haiku-|fable-)/.test(MK.bareModelId(cfg.model))) {
           body.cache_control = { type: "ephemeral" };
-        }
-        // 模型中心里给这个型号设的调用参数（温度、停止序列、额外请求体里的 "openai": {…}）：改输出上限字段名之前写
-        body = applyCustomParams(body, custom.model?.params, "openai", capabilities.maxOutputTokens);
-        if (custom.maxTokensField === "max_completion_tokens" && body.max_tokens !== undefined) {
-          body.max_completion_tokens = body.max_tokens;
-          delete body.max_tokens;
         }
       } else if (cfg.provider === "openai") {
         // DeepSeek: thinking:{type} + reasoning_effort. 自 V4.1-Flash
@@ -118,7 +118,10 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
         }
       } else if (cfg.provider === "qwen") {
         body.enable_thinking = on;
-        if (on && /qwen3\.8/i.test(cfg.model)) {
+        if (on && /^qwen-?4(?![.\d])/i.test(cfg.model)) {
+          // Qwen4：reasoning_effort 五档都是真档位（low / medium / high / xhigh / max，推理量逐级变多；minimal 归 low，2026-11-17 实测）
+          body.reasoning_effort = level === "minimal" ? "low" : ["low", "medium", "high", "xhigh", "max"].includes(level) ? level : "medium";
+        } else if (on && /qwen3\.8/i.test(cfg.model)) {
           // Qwen3.8：官方档位是 reasoning_effort low / medium / xhigh（默认 xhigh；high、max 是 xhigh 的别名，
           // minimal 是 low 的别名，其余值 400——实测回包列出了全部可选值）。与 thinking_budget 互斥（同时给实测 400）。
           // 以前走 thinking_budget 8k/16k/32k，把官方的三档硬截成了自定预算。旧会话里存的 high/max 照官方别名落到 xhigh。
@@ -192,6 +195,15 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
           level === "off"
             ? { ...extras, enable_thinking: false }
             : { ...extras, reasoning_effort: level === "low" || level === "minimal" ? "low" : level === "medium" ? "medium" : "xhigh" };
+      }
+      // 这条线路回传历史思考时要多带的参数（DashScope 上 Qwen 的 preserve_thinking）
+      if (replayReasoning && replay?.body) body = MK.deepMerge(body, replay.body);
+      // 模型中心里给这个型号设的调用参数（温度、停止序列、额外请求体里的 "openai": {…}）与服务的输出上限字段名
+      //（OpenAI 自家推理模型要 max_completion_tokens）：自带厂商同样认。调用参数要在改字段名之前写
+      body = applyCustomParams(body, custom ? custom.model?.params : host?.params, "openai", capabilities.maxOutputTokens);
+      if ((custom ? custom.maxTokensField : host?.maxTokensField) === "max_completion_tokens" && body.max_tokens !== undefined) {
+        body.max_completion_tokens = body.max_tokens;
+        delete body.max_tokens;
       }
       observeWire(turn, "openai", body);
       const url = `${baseUrl}/chat/completions`;

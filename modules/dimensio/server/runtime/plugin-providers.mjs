@@ -11,20 +11,28 @@ import { hubFlag, onHubChange } from '@bridge/core/runtime/model-hub/registry.mj
 export const PLUGIN_PROVIDERS_FILE = 'plugin-providers.json';
 
 /** 一条插件服务 → harness 自定义服务的落盘形状（同 providers.json v2：models 是 ID 列表，完整能力在 modelSpecs）。 */
+// 一个型号的能力与调用配置（普通服务的卡和自带厂商的绑定共用）
+function modelFields(m) {
+  return {
+    ...(Number.isFinite(m.contextWindow) ? { contextWindow: m.contextWindow } : {}),
+    ...(Number.isFinite(m.maxOutput) ? { maxOutput: m.maxOutput } : {}),
+    ...(typeof m.vision === 'boolean' ? { vision: m.vision } : {}),
+    ...(Number.isFinite(m.cacheTtl) ? { cacheTtl: m.cacheTtl } : {}),   // 用户在模型中心填的提示缓存时长（分钟）
+    ...(m.params && typeof m.params === 'object' ? { params: m.params } : {}),   // 模型中心的高级调用配置：温度、停止序列、额外请求体…
+    // 思考写法（模型中心按型号 × 线路算好的档位表，或用户整块改过的）
+    ...(Array.isArray(m.efforts) && m.efforts.length
+      ? { thinking: m.thinking || 'effort', efforts: m.efforts, effortField: m.effortField || '', effortDefault: m.effortDefault || '', alwaysThinks: m.alwaysThinks === true }
+      : typeof m.thinking === 'string' ? { thinking: m.thinking } : {}),
+  };
+}
+
 export function toHarnessProvider(s) {
   const modelSpecs = s.models.map((m) => ({
     id: m.id,
     label: m.label || m.id,
     enabled: true,
     kind: 'chat',
-    ...(Number.isFinite(m.contextWindow) ? { contextWindow: m.contextWindow } : {}),
-    ...(Number.isFinite(m.maxOutput) ? { maxOutput: m.maxOutput } : {}),
-    ...(typeof m.vision === 'boolean' ? { vision: m.vision } : {}),
-    ...(Number.isFinite(m.cacheTtl) ? { cacheTtl: m.cacheTtl } : {}),   // 用户在模型中心填的提示缓存时长（分钟）
-    ...(m.params && typeof m.params === 'object' ? { params: m.params } : {}),   // 模型中心的高级调用配置：温度、停止序列、额外请求体…
-    ...(Array.isArray(m.efforts) && m.efforts.length
-      ? { thinking: m.thinking || 'effort', efforts: m.efforts, effortField: m.effortField || '', effortDefault: m.effortDefault || '', alwaysThinks: m.alwaysThinks === true }
-      : typeof m.thinking === 'string' ? { thinking: m.thinking } : {}),
+    ...modelFields(m),
     source: { contextWindow: 'user', maxOutput: 'user', vision: 'user', thinking: 'user' },
   }));
   return {
@@ -73,14 +81,13 @@ export function splitNative(services) {
       key: n.key, ...(n.baseUrl ? { baseUrl: n.baseUrl } : {}),
       name: s.name, defaultModel: s.defaultModel,
       plugin: { id: s.plugin, name: s.pluginName, sid: s.sid, ...(s.logo ? { logo: s.logo } : {}) },
-      models: s.models.map((m) => ({
-        id: m.id, label: m.label || m.id,
-        ...(Number.isFinite(m.contextWindow) ? { contextWindow: m.contextWindow } : {}),
-        ...(Number.isFinite(m.maxOutput) ? { maxOutput: m.maxOutput } : {}),
-        ...(typeof m.vision === 'boolean' ? { vision: m.vision } : {}),
-        ...(Number.isFinite(m.cacheTtl) ? { cacheTtl: m.cacheTtl } : {}),
-      })),
+      // 档位表与调用参数也带上：同一个服务里托管的别家型号（百炼上的 Kimi、GLM……）按它自己的写法发，
+      // 模型中心里改过的调用配置对 dimensio 同样生效
+      models: s.models.map((m) => ({ id: m.id, label: m.label || m.id, ...modelFields(m) })),
       ...(s.members ? { shared: true } : {}),
+      // 直连的上游主机（认线路用）与高级设置里改过的兼容项
+      ...(s.upstream ? { upstream: s.upstream } : {}),
+      ...harnessCompat(s.compat),
     };
   }
   return { providers, builtins };

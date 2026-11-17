@@ -1,56 +1,40 @@
 <script>
-  import { uiConfirm } from '../lib/dialogs.js';
-  import { joinAbs } from '../lib/dragOut.js';
-  import { createFlip } from '../lib/flipLayout.js';
   // 工作空间 · 桌面版（Electron 壳独占，isNativeDesktop && hasNativeWorkspaceOps 时替换
   // FilesPanel 整页）。形态 = Finder/Explorer 杂交：左侧位置栏 + 工具栏 + 高密度列表/图标
   // 双视图 + 右键菜单 + 全键盘 + 剪贴板（剪切/复制/粘贴）+ 内部拖拽移动 + OS 拖入原生导入。
   // 数据全走桌面主进程 IPC（见 client/desktop/main.cjs workspace 段），不碰 /api/files；
   // 仍走 bridge 服务端的只有三件需要服务端身份的事：发送给 AI、分享链接、解压（都仅 primary）。
   // 视觉沿用工作空间的 iOS 浅色 grouped 语言（蓝 #0088ff / bg #f2f2f7），密度按 PC 标准。
+  import { createFlip } from '../lib/flipLayout.js';
   import { onMount, tick, untrack } from 'svelte';
-  import { ui, compose, studioInbox, me, caps, session, agentOn, screenOn, pluginOn } from '../lib/state.svelte.js';
+  import { me, ui } from '../lib/state.svelte.js';
   import { closePage } from '../lib/pageMorph.js';
-  import { api, authHeaders } from '../lib/api.js';
-  import { apiUrl } from '../lib/server.js';
-  import { sendFile } from '../lib/uploads.svelte.js';
-  import { openPreview as openPreviewRaw, cloudFileUrl, preview, closePreview, previewRemove, previewReplace, previewNext, previewPrev } from '../lib/preview.svelte.js';
-  import { openSession, newConversation } from '../lib/chat.svelte.js';
-  import { getCachedSessions } from '../lib/cache.js';
-  import { titleFor } from '../lib/library.svelte.js';
-  import { relTime } from '../lib/format.js';
-  import {
-    AI_NAMES, SHARE_TTLS, fileAiCapabilities, filterAiSessions, filterFilesByName, formatShareExpiry,
-    loadAiSessions, normalizeFileQuery, sendFileToAi, shareClipboardText,
-    shareRequest, shareResult,
-    untitledMdName, COMPRESS_FORMATS, COMPRESS_LEVELS, loadCompressFormats, compressDefaultName, runCompress,
-    makeFileComparator,
-  } from '../lib/files-business.js';
-  import {
-    nativeWorkspaceList, nativeWorkspaceRelease, onNativeWorkspaceChanged, nativeWorkspaceLocations, nativeWorkspaceAddLocation,
-    nativeWorkspaceRemoveLocation, nativeWorkspaceMkdir, nativeWorkspaceRename, nativeWorkspaceTrash,
-    nativeWorkspaceCreateFile, hasNativeCompressWizard, nativeCompressWizard,
-    nativeWorkspaceMove, nativeWorkspaceCopy, nativeWorkspaceOpen, nativeWorkspaceOpenWith,
-    nativeWorkspaceReveal, nativeWorkspaceInspect, nativeWorkspaceThumbnail, nativeWorkspaceSearch,
-    nativeWorkspaceImportFiles, nativeWorkspaceImportDirectory, nativeWorkspaceSaveAs,
-    hasNativeWorkspaceDropImport, nativeWorkspaceImportPaths, hasNativeWorkspaceRecent, nativeWorkspaceRecent,
-    nativePathForFile, hasNativeDragOut, nativeDragWorkspace, nativeDragPaths,
-    isNativeDesktop, hasNativeWorkspaceOps, serverOnThisMachine, hasPcLocalFs, hasPcDropImport, pcPathForFile,
-    hasNativeDirSizes, nativeWorkspaceDirSizes, onNativeDirSize,
-    hasNativeFileClipboard, nativeClipboardWriteFiles, nativeClipboardPasteWorkspace, nativeClipboardClearOwn,
-  } from '../lib/nativeDesktop.js';
-  import { reportUi, onAgentFs, onAgentGoto } from '../lib/uiReport.js';
-  import { WS_DT } from '../lib/fileDrag.js';
-  import { pcLocalMaterial, pcLocalText } from '../lib/pcLocal.js';
-  import { t, tc, tr, locale, isEn } from '../lib/i18n.js';
-  import { kindOf as fkKind, iconKindOf, extOf, officeCat } from '../lib/fileKinds.js';
-  import { fmtDur, loadSortPref, saveSortPref, buildSequence, rectOf, typeIconSvg, uiIconSvg, extBadge, nameHtml, watchMeta, cloudThumbable } from '../lib/fileGrid.js';
-  import { askRename } from '../lib/renamePrompt.js';
+  import { api } from '../lib/api.js';
+  import { cloudFileUrl, openPreview as openPreviewRaw } from '../lib/preview.svelte.js';
+  import { filterFilesByName, makeFileComparator, normalizeFileQuery } from '../lib/files-business.js';
+  import { hasNativeWorkspaceDropImport, hasNativeWorkspaceOps, hasNativeWorkspaceRecent, hasPcDropImport, hasPcLocalFs, isNativeDesktop, nativeWorkspaceCopy, nativeWorkspaceCreateFile, nativeWorkspaceInspect, nativeWorkspaceList, nativeWorkspaceLocations, nativeWorkspaceMkdir, nativeWorkspaceMove, nativeWorkspaceRecent, nativeWorkspaceRelease, nativeWorkspaceRename, nativeWorkspaceSearch, nativeWorkspaceThumbnail, nativeWorkspaceTrash, onNativeWorkspaceChanged, serverOnThisMachine } from '../lib/nativeDesktop.js';
+  import { onAgentFs, onAgentGoto, reportUi } from '../lib/uiReport.js';
+  import { locale, t, tc, tr } from '../lib/i18n.js';
+  import { extOf, iconKindOf } from '../lib/fileKinds.js';
+  import { cloudThumbable, extBadge, fmtDur, loadSortPref, nameHtml, saveSortPref, uiIconSvg, watchMeta } from '../lib/fileGrid.js';
   import { tip } from './preview/kit/tooltip.js';
-
-  const BASE = import.meta.env.BASE_URL;
   // 文件夹图标：原版资源
   import wsIcon from '../visuals/assets/icons/workspace.png';
+  import { fmtSize, kindOf } from '../lib/files/common.js';
+  import { AiSend } from '../lib/files/aiSend.svelte.js';
+  import { addrFocus, baseName, fileIcon, fmtTime, foldAbs, joinPath, normAbs, relUnder, renameInput, splitAbs, typeLabel } from './files/desktop/fdLook.js';
+  import { createFdCrumbs } from './files/desktop/fdCrumbs.svelte.js';
+  import { createFdDirSizes } from './files/desktop/fdDirSizes.svelte.js';
+  import { createFdView } from './files/desktop/fdView.svelte.js';
+  import { createFdOps } from './files/desktop/fdOps.svelte.js';
+  import { createFdMenus } from './files/desktop/fdMenus.svelte.js';
+  import { createFdDrag } from './files/desktop/fdDrag.svelte.js';
+  import { createFdKeys } from './files/desktop/fdKeys.svelte.js';
+  import FdPeek from './files/desktop/FdPeek.svelte';
+  import FdContextMenu from './files/desktop/FdContextMenu.svelte';
+  import FdDialogs from './files/desktop/FdDialogs.svelte';
+
+  const BASE = import.meta.env.BASE_URL;
 
   // —— 形态与数据通道 ——
   // 本组件原本是「桌面壳独占 + 原生 IPC」的整页工作空间。为了让【工作台侧栏】在电脑上也用上
@@ -73,6 +57,99 @@
     // 与工作台里其它卡片同一套手势；↑ 只管上一级。
     hostChrome = false,
   } = $props();
+  // P：本页状态与动作的视图（getter / setter 直通这里的 $state），交给拆出去的逻辑模块（files/desktop/*.svelte.js）
+  // 与子组件（files/desktop/*.svelte）；模块各自的状态与动作建好后也挂到 P 上（expose），彼此都经 P 互相够得着。
+  const P = {
+    get BASE() { return BASE; },
+    get ICON_SIZES() { return ICON_SIZES; },
+    get absOk() { return absOk; },
+    get addOpen() { return addOpen; }, set addOpen(v) { addOpen = v; },
+    get ai() { return ai; },
+    get anchorRel() { return anchorRel; }, set anchorRel(v) { anchorRel = v; },
+    get anyDialog() { return anyDialog; },
+    get busyLabel() { return busyLabel; }, set busyLabel(v) { busyLabel = v; },
+    get canDropImport() { return canDropImport; },
+    get canFloat() { return canFloat; },
+    get canPaste() { return canPaste; },
+    get canUp() { return canUp; },
+    get clipboard() { return clipboard; }, set clipboard(v) { clipboard = v; },
+    get curAbs() { return curAbs; },
+    get curLoc() { return curLoc; },
+    get dropOn() { return dropOn; }, set dropOn(v) { dropOn = v; },
+    get durOf() { return durOf; },
+    get embedded() { return embedded; },
+    get enterDir() { return enterDir; },
+    get focusRel() { return focusRel; },
+    get fsCopy() { return fsCopy; },
+    get fsMkdir() { return fsMkdir; },
+    get fsMove() { return fsMove; },
+    get fsNewFile() { return fsNewFile; },
+    get fsRemove() { return fsRemove; },
+    get fsRename() { return fsRename; },
+    get goAbs() { return goAbs; },
+    get goBack() { return goBack; },
+    get goFwd() { return goFwd; },
+    get goRoot() { return goRoot; },
+    get goUp() { return goUp; },
+    get iconSize() { return iconSize; }, set iconSize(v) { iconSize = v; },
+    get inBrowse() { return inBrowse; },
+    get infoDlg() { return infoDlg; }, set infoDlg(v) { infoDlg = v; },
+    get items() { return items; }, set items(v) { items = v; },
+    get load() { return load; },
+    get locationId() { return locationId; }, set locationId(v) { locationId = v; },
+    get locations() { return locations; }, set locations(v) { locations = v; },
+    get marquee() { return marquee; }, set marquee(v) { marquee = v; },
+    get menu() { return menu; }, set menu(v) { menu = v; },
+    get metaOf() { return metaOf; },
+    get mode() { return mode; }, set mode(v) { mode = v; },
+    get nativeFs() { return nativeFs; },
+    get nativeOk() { return nativeOk; },
+    get navTo() { return navTo; },
+    get openPreview() { return openPreview; },
+    get parentOf() { return parentOf; },
+    get path() { return path; }, set path(v) { path = v; },
+    get pcFs() { return pcFs; },
+    get pcOk() { return pcOk; },
+    get peekOn() { return peekOn; }, set peekOn(v) { peekOn = v; },
+    get query() { return query; }, set query(v) { query = v; },
+    get recentItems() { return recentItems; }, set recentItems(v) { recentItems = v; },
+    get recentSort() { return recentSort; }, set recentSort(v) { recentSort = v; },
+    get refresh() { return refresh; },
+    get refreshLocations() { return refreshLocations; },
+    get renaming() { return renaming; }, set renaming(v) { renaming = v; },
+    get resolveAbs() { return resolveAbs; },
+    get rootEl() { return rootEl; }, set rootEl(v) { rootEl = v; },
+    get rootLabel() { return rootLabel; },
+    get rows() { return rows; },
+    get rowsEl() { return rowsEl; }, set rowsEl(v) { rowsEl = v; },
+    get savePrefs() { return savePrefs; },
+    get scopedTo() { return scopedTo; },
+    get searchEl() { return searchEl; }, set searchEl(v) { searchEl = v; },
+    get searchItems() { return searchItems; }, set searchItems(v) { searchItems = v; },
+    get searching() { return searching; },
+    get segs() { return segs; },
+    get selectAll() { return selectAll; },
+    get selectLocation() { return selectLocation; },
+    get selected() { return selected; }, set selected(v) { selected = v; },
+    get selectedRows() { return selectedRows; },
+    get serverOps() { return serverOps; },
+    get shareDlg() { return shareDlg; }, set shareDlg(v) { shareDlg = v; },
+    get showParentCol() { return showParentCol; },
+    get sortDir() { return sortDir; }, set sortDir(v) { sortDir = v; },
+    get sortKey() { return sortKey; }, set sortKey(v) { sortKey = v; },
+    get sortOpen() { return sortOpen; }, set sortOpen(v) { sortOpen = v; },
+    get srvRoot() { return srvRoot; },
+    get tbW() { return tbW; }, set tbW(v) { tbW = v; },
+    get thumbKey() { return thumbKey; },
+    get thumbs() { return thumbs; }, set thumbs(v) { thumbs = v; },
+    get toast() { return toast; },
+    get userRefresh() { return userRefresh; },
+    get view() { return view; }, set view(v) { view = v; },
+    get wsRoot() { return wsRoot; },
+    get wsRootLocal() { return wsRootLocal; },
+    get zipDlg() { return zipDlg; }, set zipDlg(v) { zipDlg = v; },
+  };
+  const expose = (o) => Object.defineProperties(P, Object.getOwnPropertyDescriptors(o));
 
   // —— 位置与数据通道 ——
   const nativeOk = isNativeDesktop() && hasNativeWorkspaceOps();
@@ -141,7 +218,8 @@
   let infoDlg = $state(null);
   let shareDlg = $state(null);
   let zipDlg = $state(null);            // 内置压缩选项 { rels, sub, name, format, level, formats, busy, note }
-  let aiDlg = $state(null);             // { item, view:'root'|'studio'|'video'|'chat', chat }
+  // 「发送给 AI」的状态与流程（lib/files/aiSend.svelte.js，与手机版共用）；素材怎么备见 aiMaterial / aiTextContent
+  const ai = new AiSend({ kindOf, material: (it, direct) => P.aiMaterial(it, direct), readText: (it) => P.aiTextContent(it), toast: (m) => toast(m) });
   let busyLabel = $state('');
   let toastMsg = $state('');
   let dropOn = $state(null);            // null=没在拖 / ''=当前目录 / rel=某个文件夹
@@ -200,40 +278,6 @@
   const q = $derived(normalizeFileQuery(query));
   const inBrowse = $derived(mode === 'browse' && !searching);
 
-  // —— 绝对路径（Windows 盘符 / UNC / POSIX 三种形态）——
-  const isWinAbs = (p) => /^[A-Za-z]:|^\\\\/.test(String(p || ''));
-  const sepOf = (p) => (isWinAbs(p) ? '\\' : '/');
-  // 统一分隔符、去掉尾分隔符（'E:\' → 'E:'，'/' → ''）；比较用 foldAbs（Windows 不分大小写）
-  const normAbs = (p) => { const s = String(p || ''); return (isWinAbs(s) ? s.replace(/\//g, '\\') : s).replace(/[\\/]+$/, ''); };
-  const foldAbs = (p) => { const s = normAbs(p); return isWinAbs(s) ? s.toLowerCase() : s; };
-  // 盘根 'E:\' 直接去掉尾分隔符会变成 'E:'（Windows 上那是「E 盘当前目录」），所以只在没有尾分隔符时才补
-  function joinPath(base, rel) {
-    const b = String(base || ''), sep = sepOf(b);
-    const r = String(rel || '').split(/[\\/]+/).filter(Boolean).join(sep);
-    if (!r) return b;
-    return /[\\/]$/.test(b) ? b + r : b + sep + r;
-  }
-  // target 在 root 之内 → root 相对路径（'/' 分隔，''=就是根）；不在 → null
-  function relUnder(root, target) {
-    const r = foldAbs(root), tg = foldAbs(target), sep = sepOf(target);
-    if (tg === r) return '';
-    if (!tg.startsWith(r + sep)) return null;
-    return normAbs(target).slice(normAbs(root).length + 1).split(/[\\/]+/).filter(Boolean).join('/');
-  }
-  // 绝对路径拆成地址栏各段：[{ label, abs }]，首段是盘符 / UNC 共享 / '/'
-  function splitAbs(abs) {
-    const a = String(abs || '');
-    if (!isWinAbs(a)) {
-      const parts = a.split('/').filter(Boolean);
-      return [{ label: '/', abs: '/' }, ...parts.map((p, i) => ({ label: p, abs: '/' + parts.slice(0, i + 1).join('/') }))];
-    }
-    const norm = normAbs(a);
-    const unc = norm.match(/^\\\\[^\\]+\\[^\\]+/);
-    const head = unc ? unc[0] : norm.slice(0, 2).toUpperCase();
-    const parts = norm.slice(head.length).split('\\').filter(Boolean);
-    return [{ label: head, abs: unc ? head : head + '\\' }, ...parts.map((p, i) => ({ label: p, abs: head + '\\' + parts.slice(0, i + 1).join('\\') }))];
-  }
-  const baseName = (p) => normAbs(p).split(/[\\/]/).filter(Boolean).pop() || String(p || '');
   // 绝对路径落进哪个位置：取【最深】的那个（D:\Notes\x 落 Claude，不落 E:\）
   // kind：只在服务器（'cloud'）或这台电脑（'native'）那一边找；''＝不限（只有一边的形态）
   function resolveAbs(abs, kind = absKind) {
@@ -277,213 +321,24 @@
     tbW = el.clientWidth || tbW;
     return () => ro.disconnect();
   });
-  const toggleView = () => setView(view === 'list' ? 'grid' : 'list');
+  const toggleView = () => P.setView(view === 'list' ? 'grid' : 'list');
   // 搜索框聚焦态也进 Svelte 状态：它的宽度变化（mini 32px ↔ 展开 150/260px）和分档一样走 FLIP，
   // 不再靠 CSS transition——两套动画叠在一起会互相拆台（transition 起步时布局还是旧宽，FLIP 量到的是假新位）。
   let searchFocus = $state(false);
 
   const SORTS = [['name', t('名称')], ['mtime', t('修改时间')], ['size', t('大小')], ['type', t('类型')]];
 
-  // 面包屑头部折叠：放不下就从根开始一段段收进「…」（点开是被收起的层级），尾巴＝当前目录永远露着。
-  // 首版靠 overflow:hidden 从右边裁，窄列里每一段都缩成两个字、当前目录反而看不见。
-  let crumbsEl = $state();
-  let crumbHide = $state(0);
-  let crumbPop = $state(false);
-  let crumbSqueeze = $state(false);   // 头部已全部折叠仍溢出 → 允许当前段省略号
-  let locPop = $state(false);         // 窄列里的「位置」下拉（位置栏收起时的入口）
-  let addrEdit = $state(null);        // 地址栏编辑态：输入框里的路径文本（null＝显示面包屑）
-  const addrOn = $derived(addrEdit !== null);
-  // 地址栏各段：{ label, rel }＝当前位置内（rel 相对位置根，''=根）；{ label, abs }＝位置根之上的
-  // 上级目录（E: › Vault 在 Claude 位置之上），点它按绝对路径换到含它的位置（E:\ 那个），
-  // 没有位置含它就只显示不可点（ok=false）。
-  const crumbList = $derived.by(() => {
-    const inner = segs.map((s, i) => ({ label: s, rel: segs.slice(0, i + 1).join('/') }));
-    if (!absOk) return [{ label: rootLabel, rel: '' }, ...inner];
-    const parts = splitAbs(curLoc.abs);
-    const head = parts.map((p, i) => (i === parts.length - 1 ? { label: p.label, rel: '' } : { label: p.label, abs: p.abs, ok: canFloat || Boolean(resolveAbs(p.abs)) }));
-    return [...head, ...inner];
-  });
-  const crumbItems = $derived(crumbList.map((c) => c.label));
-  const crumbRel = (i) => crumbList[i]?.rel ?? null;   // null＝位置根之上（不收拖放：跨位置移动不在这条路上）
-  const crumbOk = (i) => crumbList[i]?.rel != null || Boolean(crumbList[i]?.ok);
-  function gotoCrumb(i) {
-    crumbPop = false;
-    const c = crumbList[i];
-    if (!c) return;
-    if (c.rel == null) { if (c.ok) goAbs(c.abs, { float: canFloat }); return; }
-    if (c.rel === '') goRoot(); else navTo({ mode: 'browse', path: c.rel });
-  }
-
-  // —— 地址栏编辑（Explorer 式：点空白处 / Ctrl+L / Alt+D 换成完整路径文本，可复制、可输入跳转）——
-  const canAddr = $derived(absOk && inBrowse);
-  function startAddr() { if (!canAddr) return; crumbPop = false; locPop = false; addrEdit = curAbs; }
-  function addrClick(e) { if (addrEdit === null && !e.target.closest?.('button, input')) startAddr(); }
-  function addrFocus(node) { node.focus(); node.select(); }
-  function addrKey(e) {
-    e.stopPropagation();   // Esc/Backspace 这些是全局快捷键（清选择 / 上一级），输入框里的键别漏出去
-    if (e.key === 'Escape') { e.preventDefault(); addrEdit = null; rowsEl?.focus({ preventScroll: true }); }
-    else if (e.key === 'Enter') { e.preventDefault(); commitAddr(); }
-  }
-  // 输入的路径：绝对路径照用；相对路径按当前目录拼；. 与 .. 就地化简
-  function typedAbs(v) {
-    const parts = splitAbs(isWinAbs(v) || v.startsWith('/') ? v : joinPath(curAbs, v));
-    const out = [];
-    for (const p of parts.slice(1)) { if (p.label === '..') out.pop(); else if (p.label !== '.') out.push(p.label); }
-    return joinPath(parts[0].abs, out.join('/'));
-  }
-  async function commitAddr() {
-    const v = String(addrEdit ?? '').trim().replace(/^"(.*)"$/, '$1');
-    addrEdit = null;
-    rowsEl?.focus({ preventScroll: true });
-    if (!v) return;
-    const abs = typedAbs(v);
-    if (foldAbs(abs) !== foldAbs(curAbs)) await goAbs(abs);
-  }
-  function addrMenu(e) {
-    if (!absOk) return;
-    popupMenu(e, [
-      { label: t('复制地址'), act: () => copyText(curAbs, t('已复制路径')) },
-      { label: t('编辑地址'), hint: 'Ctrl+L', act: startAddr, disabled: !canAddr },
-    ]);
-  }
-  // 折叠档位按【缓存的自然宽度】算，不在 DOM 上反复试：
-  //   · 路径 / 搜索 / 模式变了（离散事件）：先全展开一帧，量出每段左缘到末尾的距离存起来；
-  //   · 列宽变了（拖侧栏，每帧都来）：只拿缓存和当前可用宽度算出 crumbHide，一步到位。
-  // 首版每个像素都「归零→逐段 tick 折回去」，每一步都触发一次工具栏 FLIP、幽灵叠幽灵，拖侧栏时顶栏抽搐。
-  const CMORE_W = 30;          // 「…」钮 26px + margin-left 4px（见 .crumb-more / .tb-btn.ell）
-  let crumbTail = null;        // tail[i] = 从第 i 段左缘到内容末尾的宽度（第 i 段前的分隔符不计——它随头部一起收走）
-  let crumbFit = 0;
-  function fitCrumbs() {
-    const el = crumbsEl;
-    if (!el || !crumbTail) return;
-    const cs = getComputedStyle(el);
-    // 可用宽＝不带「…」钮时框内的内容宽；当前带着钮就把钮占的宽度加回来，结果与当前档位无关、不会自激振荡
-    const avail = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) + (crumbHide > 0 ? CMORE_W : 0);
-    let h = 0, sq = false;
-    if (crumbTail[0] > avail + 1) {
-      h = crumbTail.findIndex((w, i) => i > 0 && w <= avail - CMORE_W + 1);
-      if (h < 0) { h = crumbTail.length - 1; sq = true; }
-    }
-    if (h !== crumbHide) crumbHide = h;
-    if (sq !== crumbSqueeze) crumbSqueeze = sq;
-  }
-  $effect(() => {
-    crumbItems; searching; mode;   // 内容变了才重量
-    crumbHide = 0; crumbSqueeze = false; crumbTail = null;
-    const my = ++crumbFit;
-    tick().then(() => {
-      const inner = crumbsEl?.firstElementChild;
-      if (my !== crumbFit || !inner) return;
-      const kids = [...inner.children];
-      const segEls = kids.filter((k) => k.classList.contains('crumb'));
-      const end = kids.length ? kids[kids.length - 1].offsetLeft + kids[kids.length - 1].offsetWidth : 0;
-      // offsetLeft 不含 transform（FLIP 途中也量得准）；recent 模式只有一段，tail 长度 1 → 永不折叠
-      crumbTail = segEls.map((k) => end - k.offsetLeft);
-      fitCrumbs();
-    });
-  });
-  // 框宽变化（拖列宽 / 分档 / 搜索框展开 / 「…」钮出没）一律走这里；crumbsEl 在第一行与第二行之间换挂时重新盯
-  $effect(() => {
-    const el = crumbsEl;
-    if (!el) return;
-    const ro = new ResizeObserver(() => fitCrumbs());
-    ro.observe(el);
-    untrack(fitCrumbs);
-    return () => ro.disconnect();
-  });
+  expose(createFdCrumbs(P));
 
   // —— 工具栏 FLIP（须放在 crumbHide/crumbSqueeze 声明之后：$effect.pre 在初始化时就同步跑一次）：分档 / 面包屑折叠 / 搜索展开 / 视图切换引起的重排，同一个图形从旧位平移形变过去，
   // 消失的淡出、新出的淡入（lib/flipLayout.js）。pre 在 DOM 变之前拍旧位，post 在 DOM 变之后量新位。 ——
   let toolbarEl = $state();
   const tbFlip = createFlip(() => toolbarEl);
-  $effect.pre(() => { tbTier; crumbHide; crumbSqueeze; view; searchFocus; searching; mode; addrOn; untrack(() => tbFlip.snapshot()); });
-  $effect(() => { tbTier; crumbHide; crumbSqueeze; view; searchFocus; searching; mode; addrOn; untrack(() => tbFlip.play()); });
+  $effect.pre(() => { tbTier; P.crumbHide; P.crumbSqueeze; view; searchFocus; searching; mode; P.addrOn; untrack(() => tbFlip.snapshot()); });
+  $effect(() => { tbTier; P.crumbHide; P.crumbSqueeze; view; searchFocus; searching; mode; P.addrOn; untrack(() => tbFlip.play()); });
   $effect(() => () => tbFlip.destroy());
 
-  // —— 文件夹大小（壳主进程后台递归统计，算完一个推一个；老壳/网页没有这座桥 → 保持「—」）——
-  // 键 = scope|rel：scope 区分授权位置与云端根，切位置时旧作业的尾包记在它自己名下、不串台。
-  // 重算期间旧值继续显示（文件一变整列闪「…」太吵），新的最终值到了直接覆盖。
-  const canDirSize = $derived(hasNativeDirSizes() && (nativeFs || wsRootLocal));
-  const dsScope = $derived(nativeFs ? 'loc:' + locationId : 'ws:' + wsRoot);
-  const dsClient = 'fd-' + Math.random().toString(36).slice(2, 10);   // 同一窗口里可能同时挂着好几个工作空间面板
-  let dirSizes = $state({});
-  const dirSizeOf = (it) => (it?.isDir && !it.linkType ? dirSizes[dsScope + '|' + it.rel] : undefined);
-  let dsBump = $state(0);
-  let dsSent = '';
-  let dsFresh = false;                  // 下一轮全部重算（F5）
-  let dsStale = { items: new Set(), dirs: new Set() };
-  function requestDirSizes({ fresh = false } = {}) {
-    if (fresh) dsFresh = true;
-    dsBump++;
-  }
-  // 云端作用域没有文件 watcher，面板自己动过什么自己报：items＝被移走/删掉的项本身（连子树带上级
-  // 作废），dirs＝收进了东西的目标文件夹（只作废它和上级，里面没动的子树继续用缓存）。
-  function sizesTouched(items = [], dirs = []) {
-    if (nativeFs || !canDirSize) return;
-    for (const rel of items) dsStale.items.add(rel);
-    for (const rel of dirs) dsStale.dirs.add(rel);
-    dsBump++;
-  }
-  let dsSoonTimer = 0, dsSoonFirst = 0;
-  // 文件变化后稍等再重问：主进程已按变化路径把祖先的缓存作废，未变的子树秒回。持续写入时
-  // 尾随防抖会一直推迟，最多憋 4 秒也发一次。
-  function requestDirSizesSoon() {
-    const now = Date.now();
-    if (!dsSoonTimer) dsSoonFirst = now;
-    clearTimeout(dsSoonTimer);
-    dsSoonTimer = setTimeout(() => { dsSoonTimer = 0; requestDirSizes(); }, now - dsSoonFirst > 4000 ? 0 : 800);
-  }
-  $effect(() => {
-    if (!canDirSize) return;
-    const bump = dsBump, scope = dsScope;
-    const list = searching ? searchItems : mode === 'recent' ? recentItems : items;
-    const rels = list.filter((it) => it.isDir && !it.linkType).slice(0, 1000).map((it) => it.rel);
-    const sig = scope + '#' + bump + '#' + [...rels].sort().join('\n');
-    if (sig === dsSent) return;
-    dsSent = sig;
-    const payload = { client: dsClient, scope, rels, fresh: dsFresh, staleItems: [...dsStale.items], staleDirs: [...dsStale.dirs] };
-    dsFresh = false; dsStale = { items: new Set(), dirs: new Set() };
-    if (nativeFs) payload.locationId = locationId; else payload.root = wsRoot;
-    untrack(() => nativeWorkspaceDirSizes(payload).then((r) => {
-      for (const [rel, v] of Object.entries(r?.results || {})) dirSizes[scope + '|' + rel] = { ...v, done: true };
-    }).catch(() => {}));
-  });
-  onMount(() => {
-    if (!hasNativeDirSizes()) return;
-    const off = onNativeDirSize((e) => {
-      if (e?.client !== dsClient) return;
-      const k = e.scope + '|' + e.key;
-      if (e.error) { if (!dirSizes[k]) dirSizes[k] = { error: true, done: true }; return; }
-      if (!e.done && dirSizes[k]?.done) return;   // 重算途中的半截数不盖掉上一次的最终值
-      dirSizes[k] = { size: e.size, files: e.files, partial: e.partial, done: e.done };
-    });
-    return () => {
-      off?.(); clearTimeout(dsSoonTimer);
-      nativeWorkspaceDirSizes({ client: dsClient, rels: [] }).catch(() => {});   // 空清单＝取消本面板的作业
-    };
-  });
-  function dirSizeLabel(it) {
-    if (it.linkType || !canDirSize) return '—';
-    const d = dirSizeOf(it);
-    if (!d) return '…';
-    if (d.error) return '—';
-    return (d.partial && d.done ? '≥ ' : '') + fmtSize(d.size);
-  }
-  function dirInfoLabel(it) {
-    const d = dirSizeOf(it);
-    if (it.linkType || !canDirSize || d?.error) return t('文件夹');
-    if (!d) return t('计算中…');
-    const size = (d.partial && d.done ? '≥ ' : '') + fmtSize(d.size), n = (d.files || 0).toLocaleString(locale());
-    return d.done ? t('{size}（{n} 个文件）', { size, n }) : t('{size}（{n} 个文件，统计中…）', { size, n });
-  }
-  function dirSizeTitle(it) {
-    const d = dirSizeOf(it);
-    if (!d || d.error) return undefined;
-    const n = (d.files || 0).toLocaleString(locale());
-    if (!d.done) return t('{n} 个文件（统计中…）', { n });
-    return d.partial ? t('{n} 个文件（项目过多，只统计了一部分）', { n }) : t('{n} 个文件', { n });
-  }
-
+  expose(createFdDirSizes(P));
   // —— 行数据（排序：文件夹恒在前，组内按列排）——
   // 「最近」视图有独立排序态（天然 mtime 倒序），不吃浏览视图的持久化列排序。
   let recentSort = $state({ key: 'mtime', dir: -1 });
@@ -494,13 +349,13 @@
   const rows = $derived.by(() => [...listSource].sort(makeFileComparator({
     key: effSort.key, dir: effSort.dir, locale: locale(),
     typeOf: (it) => iconKindOf(it.name) + '.' + extOf(it.name),
-    dirSize: (it) => dirSizeOf(it)?.size ?? null,
+    dirSize: (it) => P.dirSizeOf(it)?.size ?? null,
   })));
   const showParentCol = $derived(searching || mode === 'recent');
   const cutSet = $derived(clipboard?.mode === 'cut' && clipboard.locationId === locationId ? new Set(clipboard.rels) : new Set());
   const canPaste = $derived(Boolean(clipboard && clipboard.locationId === locationId && inBrowse));
   const listBusy = $derived(searching ? searchBusy : mode === 'recent' ? recentLoading : loading);
-  const anyDialog = $derived(Boolean(menu || infoDlg || shareDlg || zipDlg || aiDlg || sortOpen || addOpen || crumbPop || locPop || renaming));
+  const anyDialog = $derived(Boolean(menu || infoDlg || shareDlg || zipDlg || ai.item || sortOpen || addOpen || P.crumbPop || P.locPop || renaming));
 
   // —— 导航（含历史）——
   const snapshot = () => ({ locationId, mode, path });
@@ -613,7 +468,7 @@
   }
   const refresh = (fresh = false) => (mode === 'recent' && !searching ? loadRecent() : load(path, { keepSel: true, fresh: fresh === true }));
   // 用户主动刷新（F5 / 右键「刷新」）：文件夹大小丢缓存重算，列表也跳过主进程缓存现读盘。
-  const userRefresh = () => { requestDirSizes({ fresh: true }); return refresh(true); };
+  const userRefresh = () => { P.requestDirSizes({ fresh: true }); return refresh(true); };
 
   // 各原生位置根的绝对路径：位置列表故意不带 path（renderer 只拿不透明 id 做写操作），
   // 地址栏要显示完整路径、起点要按路径落位，就向主进程 inspect 一次根目录（与「简介」同一个口子），按 id 缓存。
@@ -684,7 +539,7 @@
     // initialOpen：列表就位后自动打开指定文件的预览（产物卡「在工作区里打开」走它）。
     if (initialOpen) Promise.resolve(first).then(() => {
       const it = rows.find((f) => !f.isDir && f.name === initialOpen);
-      if (it) openItem(it);
+      if (it) P.openItem(it);
     }).catch(() => {});
     if (!nativeAny) return;
     let browseTimer = 0, recentTimer = 0, searchTimer = 0;
@@ -703,7 +558,7 @@
       }
       if (searching) { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(q), 300); return; }
       // 文件夹大小：当前目录或它下面任意一层变了，列表里某个文件夹的大小才可能变
-      if (canDirSize && under(dir, path)) requestDirSizesSoon();
+      if (P.canDirSize && under(dir, path)) P.requestDirSizesSoon();
       // 列表本身：当前目录里增删改，或直接子目录里有变化（那一行的修改时间跟着变）；resync 无条件重列
       if (!resync && dir !== path && !(dir && parentOf(dir) === path)) return;
       clearTimeout(browseTimer);
@@ -850,1087 +705,11 @@
   }
 
   // —— 打开 ——
-  // 双击不直接运行的可执行类型（右键仍可显式「用默认应用打开」）——这是安全名单，不是类型词表
-  const EXEC_EXTS = ['exe', 'msi', 'bat', 'cmd', 'com', 'scr', 'lnk'];
-  // 列表里沿用的短类型码（类型列文案 / 发送给 AI 的能力判断 / 解压入口）：判定全部来自 lib/fileKinds.js 单一词表，与 FilesPanel 同一份映射
-  const KIND_CODE = { image: 'img', video: 'mov', audio: 'audio', pdf: 'pdf', markdown: 'md', html: 'html', text: 'text' };
-  function kindOf(name) {
-    const k = KIND_CODE[fkKind(name)];
-    if (k) return k;
-    const ik = iconKindOf(name);
-    return ik === 'zip' ? 'zip' : extOf(name) === 'apk' ? 'apk' : 'doc';
-  }
-  // 额外位置（loc-* / 各盘）里打开的文件，绝对路径要是落在 primary（库）根内，就换算成 primary 的 rel：
-  // md 双链 / 出链 / 反链 / 插图、服务端转 PDF、视频流都只认 primary（＝服务端的身份文件根），
-  // 不换的话同一篇笔记从「E 盘」点进去链接全断、图裂（M10/T10）。不在库里的照旧按原位置走。
-  function primaryRelOf(rel) {
-    if (!nativeOk || !nativeFs || locationId === 'primary' || !curLoc?.abs) return null;   // 连远端时没有「库」可换算
-    const rootAbs = locations.find((l) => l.id === 'primary')?.abs;
-    if (!rootAbs) return null;
-    const r = relUnder(rootAbs, joinPath(curLoc.abs, rel));
-    return r ? r : null;
-  }
-  const srcItem = (it, kind) => {
-    const pr = primaryRelOf(it.rel);
-    return { origin: 'cloud', rel: pr ?? it.rel, name: it.name, kind, mt: it.mtime, ws: wsRoot, nativeLocation: nativeFs ? (pr != null ? 'primary' : locationId) : '' };
-  };
-  // —— 打开：同文件夹的图片与视频按列表顺序组成一个画廊，文档组成前后翻页序列，音频自成一组（lib/fileGrid.js buildSequence）——
-  // 描述带上大小 / 修改时间 / 宽高 / 时长（查看器先按比例占好位、信息面板直接有数），图片视频再带格子在屏上的矩形（从它放大进入、关时缩回）。
-  let openMap = null;          // 查看器里每一项的 key → 列表里的那一项（查看器里改名 / 删除、关闭后定位都靠它）
-  let lastRel = '';            // 查看器里最后看的那一项
-  let quickLook = false;       // 空格打开的快速查看：空格 / Esc 关，四个方向键都切换
-  const baseKey = (k) => String(k || '').replace(/#view:[^#]*$/, '');
-  const srcOf = (it) => (it?.key && (openMap?.get(it.key) || openMap?.get(baseKey(it.key)))) || null;
-  function cellEls() {
-    const m = new Map();
-    for (const el of rowsEl?.querySelectorAll('[data-rel]') || []) m.set(el.dataset.rel, el);
-    return m;
-  }
-  function descOf(f, els) {
-    const k = fkKind(f.name);
-    const d = { ...srcItem(f, k), size: f.size, mt: f.mtime };
-    const m = metaOf(f);
-    if (m?.w > 0 && m?.h > 0) { d.width = m.w; d.height = m.h; }
-    if (m?.dur > 0) d.duration = m.dur;
-    if (k === 'image' || k === 'video') {
-      const el = els?.get(f.rel);
-      const r = rectOf(el?.querySelector('.ric-img, .tic-img') || el?.querySelector('.ric, .tic'), rowsEl);
-      if (r) d.originRect = r;
-      const th = thumbs[thumbKey(f.rel)];
-      if (th) d.thumbUrl = th;
-    }
-    return d;
-  }
-  function startPreview(seq, index, quick = false) {
-    openPreview(seq.map((f) => descOf(f, cellEls())), index, { actions: viewerActs() });
-    if (!preview.open) return;
-    openMap = new Map(preview.items.map((x, i) => [x.key, seq[i]]));
-    lastRel = seq[index]?.rel || '';
-    quickLook = quick;
-  }
-  // 空格快速查看（Finder 式）：选了多个就在选中的里面翻，只选一个就在整个文件夹的文件里翻（含没有内嵌查看器的，给信息卡）
-  function quickLookSel() {
-    const sel = selectedRows().filter((f) => !f.isDir);
-    const cur = sel.find((f) => f.rel === anchorRel) || sel[0];
-    if (!cur) return;
-    const { seq, index } = buildSequence(sel.length > 1 ? sel : rows, cur, { groupOf: () => 'all', same: (a, b) => a.rel === b.rel });
-    startPreview(seq, index, true);
-  }
-  // 应用级弹窗（改名框 / 确认框，挂在 body 上）结算后焦点可能掉到 BODY（打开它的元素在等待期间被重绘掉了）：
-  // 还给打开前的元素；它不在了就给查看器根，查看器没开就给当前行 / 列表。弹窗退场动画约 220ms，前后各补一次。
-  function refocusAfterDialog(ret) {
-    const fix = () => {
-      const a = document.activeElement;
-      if (a && a !== document.body && a !== document.documentElement) return;
-      const vw = preview.open ? document.querySelector('.vw-root') : null;
-      const el = ret?.isConnected && ret !== document.body ? ret : vw || (anchorRel ? cellEls().get(anchorRel) : null) || rowsEl;
-      try { el?.focus({ preventScroll: true }); } catch {}
-    };
-    setTimeout(fix, 0);
-    setTimeout(fix, 280);
-  }
-  // 查看器里的提示出在查看器自己的 toast 层（本页的 toast 在 z 300 的查看器下面，看不见）
-  const sayIn = (vctx, m, kind = 'err') => (vctx?.toast ? vctx.toast(m, { kind, ms: 3200 }) : toast(m));
-  // 改名框的明暗跟着所在的查看器走：媒体（图 / 视频 / 音频）恒暗，文档类跟随本页明暗（与删除确认框一致）
-  const renameDark = (it) => (['image', 'video', 'audio'].includes(it?.kind) ? true : undefined);
-  // 查看器顶栏 / 菜单里的动作（kit/actions.js）：发送给 AI 先关查看器再弹本页的对话框；改名用挂在 body 上的应用级改名框
-  // （本页的弹层在 .fd-root 的层叠上下文里，压不过 z-index 300 的查看器）；删除先确认，删掉后停在下一项、删空就关。
-  // 第二个参数是查看器给的 { toast }（失败提示出在查看器里）。
-  function viewerActs() {
-    const a = {};
-    if (serverOps || pcFs) a.sendAi = (it) => {
-      const f = srcOf(it);
-      if (!f) return;
-      closePreview();
-      openAi(f);
-    };
-    a.rename = async (it, vctx) => {
-      const f = srcOf(it);
-      if (!f) return;
-      const ret = document.activeElement;
-      const name = (await askRename(f.name, { touch: false, dark: renameDark(it) }))?.trim();
-      refocusAfterDialog(ret);
-      if (!name || name === f.name) return;
-      try { await fsRename(f.rel, name); } catch (e) { sayIn(vctx, t('重命名失败：{reason}', { reason: tr(e.message || '') })); return; }
-      const parent = parentOf(f.rel);
-      const nf = { ...f, name, rel: (parent ? parent + '/' : '') + name };
-      const i = preview.items.findIndex((x) => x.key === it.key);
-      if (i >= 0 && openMap) {
-        openMap.delete(baseKey(it.key));
-        previewReplace(i, descOf(nf, null));
-        openMap.set(preview.items[i].key, nf);
-      }
-      lastRel = nf.rel;
-      refresh();
-    };
-    a.trash = async (it, vctx) => {
-      const f = srcOf(it);
-      if (!f) return;
-      const ask = nativeFs ? t('移到回收站「{name}」？', { name: f.name }) : t('删除「{name}」？', { name: f.name });
-      const okLabel = isEn() ? (nativeFs ? t('移到回收站') : t('删除')) : undefined;
-      const ret = document.activeElement;
-      const ok = await uiConfirm(ask, { detail: nativeFs ? '' : t('云端工作空间的删除不可撤销。'), okLabel, danger: true });
-      refocusAfterDialog(ret);
-      if (!ok) return;
-      try { await fsRemove(f.rel); } catch (e) { sayIn(vctx, t('删除失败：{reason}', { reason: tr(e.message || '') })); return; }
-      sizesTouched([f.rel]);
-      const i = preview.items.findIndex((x) => x.key === it.key);
-      openMap?.delete(baseKey(it.key));
-      if (i >= 0) previewRemove(i);
-      refresh();
-    };
-    return a;
-  }
-  // 关掉查看器：选中最后看的那一项，不在可视区就把列表滚过去（只滚本页列表，不牵动外层宿主），再短暂描一圈蓝——人知道刚才看到哪儿了
-  let flashRel = $state('');
-  let flashTimer = 0;
-  $effect(() => {
-    const open = preview.open, cur = preview.items[preview.index];
-    untrack(() => {
-      if (!openMap) return;
-      if (open) { const f = srcOf(cur); if (f) lastRel = f.rel; return; }
-      openMap = null; quickLook = false;
-      if (lastRel) revealAfterClose(lastRel);
-    });
-  });
-  async function revealAfterClose(rel) {
-    if (!rows.some((r) => r.rel === rel)) return;
-    selected = new Set([rel]); anchorRel = rel;
-    await tick();
-    const el = cellEls().get(rel);
-    if (el && rowsEl) {
-      const box = rowsEl.getBoundingClientRect(), r = el.getBoundingClientRect();
-      if (r.top < box.top + 4) rowsEl.scrollTop -= box.top + 8 - r.top;
-      else if (r.bottom > box.bottom - 4) rowsEl.scrollTop += r.bottom - box.bottom + 8;
-    }
-    flashRel = rel;
-    clearTimeout(flashTimer);
-    flashTimer = setTimeout(() => (flashRel = ''), 1400);
-  }
-  // 快速查看的键：挂 window 捕获阶段，先于查看器自己的键盘处理（它在冒泡阶段）。空格＝Esc（走查看器的关闭动画）；
-  // 四个方向键都切换上一项 / 下一项（视频里左右不再是快进快退——快速查看是翻看，不是播放）。
-  onMount(() => {
-    const onQuickKey = (e) => {
-      if (!quickLook || !preview.open || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
-      // 只读的代码视图（CodeView 的 cm-content：电脑上为了能放光标选字仍是 contenteditable，但带 aria-readonly）不算输入框——
-      // 速览打开时焦点会落进去，不放行的话空格关不掉、方向键也换不了项（Quick Look 无论预览什么，空格都能关）
-      const fld = e.target?.closest?.('input, textarea, select, [contenteditable]');
-      if (fld && !(fld.closest('.cm-editor') && (fld.getAttribute('contenteditable') === 'false' || fld.getAttribute('aria-readonly') === 'true'))) return;
-      if (e.key === ' ') {
-        e.preventDefault(); e.stopImmediatePropagation();
-        if (!e.repeat) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-        return;
-      }
-      const d = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
-      if (!d || preview.items.length < 2) return;
-      e.preventDefault(); e.stopImmediatePropagation();
-      if (d > 0) previewNext(); else previewPrev();
-    };
-    window.addEventListener('keydown', onQuickKey, true);
-    return () => { window.removeEventListener('keydown', onQuickKey, true); clearTimeout(flashTimer); };
-  });
-
-  function openItem(it) {
-    if (it.isDir) { enterDir(it.rel); return; }
-    const ext = extOf(it.name);
-    if (fkKind(it.name) !== 'other') {
-      const { seq, index } = buildSequence(rows, it, { same: (a, b) => a.rel === b.rel });
-      startPreview(seq, index);
-      return;
-    }
-    // 可执行文件不因双击直接运行（右键仍可显式「用默认应用打开」）；其余类型交系统关联。
-    if (EXEC_EXTS.includes(ext)) {
-      if (!nativeFs) { doDownload(it); return; }
-      doReveal(it); toast(t('可执行文件已在资源管理器中定位（右键可选择打开）')); return;
-    }
-    if (!nativeFs) { doDownload(it); return; }   // 云端没有「交给系统关联程序」这回事，落到下载
-    doOpen(it);
-  }
-  const doOpen = (it) => nativeWorkspaceOpen(it.rel, locationId).catch((e) => toast(t('打开失败：{reason}', { reason: tr(e.message || '') })));
-  const doOpenWith = (it) => nativeWorkspaceOpenWith(it.rel, locationId).catch((e) => toast(t('打开方式失败：{reason}', { reason: tr(e.message || '') })));
-  const doReveal = (it) => nativeWorkspaceReveal(it.rel, locationId).catch((e) => toast(t('定位失败：{reason}', { reason: tr(e.message || '') })));
-  function doSaveAs(it) {
-    nativeWorkspaceSaveAs(it.rel, locationId)
-      .then((r) => { if (!r?.canceled) toast(t('已保存到「{path}」', { path: r.path })); })
-      .catch((e) => toast(t('保存失败：{reason}', { reason: tr(e.message || '') })));
-  }
-  // 云端通道的「另存为」＝浏览器下载（&dl=1 让服务端带上 Content-Disposition）。
-  function doDownload(it) {
-    const href = cloudFileUrl(it.rel, { dl: true, ws: wsRoot });
-    const a = document.createElement('a');
-    a.href = href; a.download = it.name; document.body.appendChild(a); a.click(); a.remove();
-  }
-
-  // —— 文件操作 ——
-  async function doTrash() {
-    const list = [...selected];
-    if (!list.length) return;
-    // 原生通道走系统回收站（可撤销），云端通道是真删——所以措辞与确认都不一样。
-    // 英文按 GLOSSARY §1.6 让确认钮复述动词（Delete）；中文不传 okLabel，仍是原来的「确定」
-    if (!nativeFs) {
-      const ret = document.activeElement;
-      const ok = await uiConfirm(t('删除选中的 {n} 项？', { n: list.length }), { detail: t('云端工作空间的删除不可撤销。'), okLabel: isEn() ? t('删除') : undefined, danger: true });
-      refocusAfterDialog(ret);
-      if (!ok) return;
-    }
-    busyLabel = nativeFs ? t('移到回收站…') : t('删除中…');
-    let fail = 0;
-    for (const rel of list) { try { await fsRemove(rel); } catch { fail++; } }
-    busyLabel = '';
-    sizesTouched(list);
-    selected = new Set(); anchorRel = '';
-    toast(fail ? t('{n} 项删除失败', { n: fail }) : (nativeFs ? t('已把 {n} 项移到回收站', { n: list.length }) : t('已删除 {n} 项', { n: list.length })));
-    await refresh();
-    // 删掉的行连同焦点一起没了：焦点留在列表上，方向键 / 快捷键接着能用（内嵌态靠焦点判作用域）
-    if (!document.activeElement || document.activeElement === document.body) try { rowsEl?.focus({ preventScroll: true }); } catch {}
-  }
-  function startRename(it) {
-    selected = new Set([it.rel]); anchorRel = it.rel;
-    renaming = { rel: it.rel, value: it.name };
-  }
-  async function commitRename() {
-    const r = renaming; renaming = null;
-    if (!r) return;
-    const name = r.value.trim();
-    const oldName = r.rel.split('/').pop();
-    if (!name || name === oldName) return;
-    try {
-      await fsRename(r.rel, name);
-      const parent = parentOf(r.rel);
-      const newRel = (parent ? parent + '/' : '') + name;
-      selected = new Set([newRel]); anchorRel = newRel;
-      await refresh();
-    } catch (e) { toast(t('重命名失败：{reason}', { reason: tr(e.message || '') })); }
-  }
-  // 重命名输入框：自动聚焦并选中主文件名（不含扩展名），键盘事件不外泄给全局快捷键。
-  // 选区要等一拍：use: 先于 bind:value 执行，此刻 value 还是空串，当场 setSelectionRange 等于什么都没选，
-  // 随后填值光标落到末尾——F2 改名 / 新建后键入就成了在旧名后面追加（「未命名.md周报」）。
-  function renameInput(node) {
-    node.focus();
-    queueMicrotask(() => {
-      if (document.activeElement !== node) return;
-      const dot = node.value.lastIndexOf('.');
-      node.setSelectionRange(0, dot > 0 ? dot : node.value.length);
-    });
-  }
-  async function newFolder() {
-    if (!inBrowse) return;
-    const names = new Set(items.map((x) => x.name));
-    // 新文件夹的默认名跟界面语言走（英文 Windows 同款「New folder (2)」）
-    let name = t('新建文件夹'), i = 2;
-    while (names.has(name)) name = t('新建文件夹 {n}', { n: i++ });
-    try {
-      await fsMkdir(path, name);
-      await load(path);
-      const rel = (path ? path + '/' : '') + name;
-      focusRel(rel);
-      renaming = { rel, value: name };
-    } catch (e) { toast(t('新建失败：{reason}', { reason: tr(e.message || '') })); }
-  }
-  // 新建 Markdown：同资源管理器「新建文本文档」——先按默认名（未命名.md）建好，再原地进入重命名
-  //（只选中主文件名，回车即定；不改名直接回车也行）。
-  async function newMarkdown() {
-    if (!inBrowse) return;
-    const name = untitledMdName(items.map((x) => x.name));
-    try {
-      await fsNewFile(path, name);
-      await load(path);
-      const rel = (path ? path + '/' : '') + name;
-      focusRel(rel);
-      renaming = { rel, value: name };
-    } catch (e) { toast(t('新建失败：{reason}', { reason: tr(e.body?.error || e.body || e.message || '') })); }
-  }
-  // 剪贴板两层：面板内部记一份 rel 清单（同位置粘贴直接按 rel 复制/移动，快且保留剪切语义），
-  // 同时把真实文件写进 Windows 剪贴板（CF_HDROP）——资源管理器/微信/Word 里 Ctrl+V 都能粘。
-  // 云端作用域同样可写：壳与 bridge 服务端在同一台机器，工作空间根 + rel 就是本机路径（与拖出同口径）。
-  const canSysClipboard = $derived(hasNativeFileClipboard() && (nativeFs || wsRootLocal));
-  let clipSeq = 0;
-  function setClipboard(mode2) {
-    if (!selected.size) return;
-    const rels = [...selected], id = ++clipSeq, cut = mode2 === 'cut', n = rels.length;
-    clipboard = { mode: mode2, locationId, rels, id, sys: false };
-    toast(cut ? t('已剪切 {n} 项', { n }) : t('已复制 {n} 项', { n }));
-    if (!canSysClipboard) return;
-    const payload = nativeFs ? { rels, locationId, cut } : { root: wsRoot, rels, cut };
-    const fail = (msg) => {
-      if (clipboard?.id !== id) return;
-      const reason = msg ? tr(msg) : t('未知错误');
-      toast(cut ? t('已剪切 {n} 项，但没能写进系统剪贴板：{reason}', { n, reason }) : t('已复制 {n} 项，但没能写进系统剪贴板：{reason}', { n, reason }));
-    };
-    nativeClipboardWriteFiles(payload).then((r) => {
-      if (r?.ok) { if (clipboard?.id === id) clipboard.sys = true; }
-      else if (!r?.superseded) fail(r?.error);
-    }).catch((e) => fail(e?.message));
-  }
-  // 「已移动 / 已复制 n 项（，f 项失败）」——粘贴与拖放共用；英文语序不同，整句一个键
-  const doneMsg = (moved, n, f = 0) => (f
-    ? (moved ? t('已移动 {n} 项，{f} 项失败', { n, f }) : t('已复制 {n} 项，{f} 项失败', { n, f }))
-    : (moved ? t('已移动 {n} 项', { n }) : t('已复制 {n} 项', { n })));
-  async function doPaste() {
-    if (!inBrowse) return;
-    // 先看系统剪贴板：资源管理器里复制/剪切的文件、别的面板或别的位置复制的文件都从这里进来。
-    // 剪贴板仍是本面板刚写的那份、且内部清单能直接处理（同位置）时，主进程只回报 ours，交给下面。
-    if (nativeFs && hasNativeFileClipboard()) {
-      busyLabel = t('粘贴中…');
-      let r;
-      try { r = await nativeClipboardPasteWorkspace({ rel: path, locationId, skipOurs: canPaste }); }
-      catch (e) { r = { handled: false, reason: 'error', error: e?.message }; }
-      busyLabel = '';
-      if (r?.handled) {
-        if (r.cut) clipboard = null;
-        const n = r.items?.length || 0;
-        toast(n ? doneMsg(r.cut, n, r.errors?.length || 0) : (r.errors?.[0] ? tr(r.errors[0]) : t('粘贴失败')));
-        await refresh();
-        return;
-      }
-      if (r?.reason === 'empty') {
-        // 内部清单同步进过系统剪贴板、如今那里已经没有文件：被别处的复制顶掉了，或剪切已在资源管理器里粘走。
-        if (clipboard?.sys) clipboard = null;
-        if (!canPaste) { toast(t('剪贴板里没有文件')); return; }
-      }
-    }
-    if (!canPaste) return;
-    const { mode: m, rels } = clipboard;
-    busyLabel = m === 'cut' ? t('移动中…') : t('复制中…');
-    let ok = 0, err = '';
-    for (const rel of rels) {
-      if (m === 'cut' && parentOf(rel) === path) { ok++; continue; }   // 原地剪切=无操作
-      if (path === rel || path.startsWith(rel + '/')) { err = t('不能把文件夹放进它自身'); continue; }
-      try { await (m === 'cut' ? fsMove : fsCopy)(rel, path); ok++; }
-      catch (e) { err = e.body?.error || e.message || err; }
-    }
-    busyLabel = '';
-    if (m === 'cut') {
-      const wasSys = clipboard?.sys;
-      clipboard = null;
-      if (wasSys) nativeClipboardClearOwn().catch(() => {});   // 源文件已搬走，别让资源管理器再粘一次
-    }
-    sizesTouched(m === 'cut' ? rels : [], [path]);
-    toast(ok ? doneMsg(m === 'cut', ok) : (err ? tr(err) : t('操作失败')));
-    await refresh();
-  }
-  async function doTransferInto(destRel, rels, copy) {
-    const list = rels.filter((rel) => copy || parentOf(rel) !== destRel);
-    if (!list.length) return;
-    busyLabel = copy ? t('复制中…') : t('移动中…');
-    let ok = 0, err = '';
-    for (const rel of list) {
-      if (destRel === rel || destRel.startsWith(rel + '/')) { err = t('不能把文件夹放进它自身'); continue; }
-      try { await (copy ? fsCopy : fsMove)(rel, destRel); ok++; }
-      catch (e) { err = e.body?.error || e.message || err; }
-    }
-    busyLabel = '';
-    sizesTouched(copy ? [] : list, [destRel]);
-    toast(ok ? doneMsg(!copy, ok) : (err ? tr(err) : t('操作失败')));
-    await refresh();
-  }
-
-  let extracting = false;
-  async function doExtract(it) {
-    if (extracting) return;
-    extracting = true;
-    toast(t('解压中…'));
-    try { const r = await api.extractFile(it.rel, srvRoot); toast(t('已解压到「{name}」', { name: r.name })); await refresh(); }
-    catch (e) { toast(t('解压失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); }
-    finally { extracting = false; }
-  }
-
-  // —— 压缩 ——
-  // 桌面壳（Windows）：直接弹系统自带的「创建存档」向导（资源管理器 压缩为 → 其他选项 同一个窗口），
-  // 格式/方法/级别都在那里选，压缩进度也是系统的。壳与 bridge 服务端同机，云端作用域的根就是本机路径。
-  // 其余情形（浏览器里的电脑版、旧壳）：内置选项对话框 → bridge 服务端压缩（/api/files/compress）。
-  const wizardOk = $derived(hasNativeCompressWizard() && (nativeFs || wsRootLocal));
-  const canCompress = $derived(wizardOk || serverOps);
-  let wizardOpen = false;
-  async function doCompress() {
-    const rels = [...selected];
-    if (!rels.length) return;
-    if (wizardOk) {
-      if (wizardOpen) { toast(t('系统压缩窗口已经开着')); return; }
-      wizardOpen = true;
-      toast(t('正在打开系统压缩窗口…'));
-      let r;
-      try { r = await nativeCompressWizard(nativeFs ? { rels, locationId } : { root: wsRoot, rels }); }
-      catch (e) { r = { ok: false, error: e?.message }; }
-      finally { wizardOpen = false; }
-      if (r?.busy) { toast(t('系统压缩窗口已经开着')); return; }
-      if (r?.ok) {
-        if (!r.archive) return;   // 用户点了取消
-        const name = baseName(r.archive);
-        toast(t('已压缩为「{name}」', { name }));
-        await refresh();
-        // 存档落在当前目录（默认如此）就选中它；用户在向导里另选了位置则只提示
-        if (curAbs && foldAbs(joinPath(curAbs, name)) === foldAbs(r.archive) && inBrowse) focusRel((path ? path + '/' : '') + name);
-        return;
-      }
-      // 向导起不来（系统太旧没有这个窗口等）：有服务端通道就退回内置选项
-      if (!serverOps) { toast(t('压缩失败：{reason}', { reason: tr(r?.error || '') })); return; }
-    }
-    if (!serverOps) return;
-    const picked = rels.map((rel) => items.find((x) => x.rel === rel) || searchItems.find((x) => x.rel === rel) || { name: rel.split('/').pop(), isDir: false });
-    const dirName = segs.length ? segs[segs.length - 1] : rootLabel;
-    zipDlg = {
-      rels, sub: rels.length === 1 ? picked[0].name : t('{n} 项', { n: rels.length }),
-      name: compressDefaultName(picked, dirName), format: 'zip', level: 'normal',
-      formats: ['zip', '7z', 'tar.gz'], busy: false, note: '',
-    };
-    loadCompressFormats(api).then((formats) => { if (zipDlg) zipDlg.formats = formats; });
-  }
-  async function runZipDlg() {
-    const d = zipDlg;
-    if (!d || d.busy || !d.name.trim()) return;
-    d.busy = true; d.note = t('正在压缩…');
-    const dir = path;
-    try {
-      const r = await runCompress(api, d.rels, { format: d.format, level: d.level, name: d.name.trim() }, srvRoot, {
-        onTick: (st) => { if (zipDlg === d) d.note = st.bytes ? t('正在压缩… 已写入 {size}', { size: fmtSize(st.bytes) }) : t('正在压缩…'); },
-      });
-      if (zipDlg === d) zipDlg = null;
-      toast(t('已压缩为「{name}」', { name: r.name }));
-      await refresh();
-      if (path === dir && inBrowse) focusRel((dir ? dir + '/' : '') + r.name);
-    } catch (e) {
-      if (zipDlg === d) { d.busy = false; d.note = ''; }
-      toast(t('压缩失败：{reason}', { reason: tr(e.body?.error || e.message || '') }));
-    }
-  }
-
-  async function importFiles(directory = false) {
-    addOpen = false;
-    if (!inBrowse) return;
-    // 云端通道没有「系统文件对话框直接导入」这条路，改成浏览器选文件 → 分块上传。
-    if (!nativeFs) { (directory ? dirUploadInput : fileUploadInput)?.click(); return; }
-    try {
-      const r = await (directory ? nativeWorkspaceImportDirectory(path, locationId) : nativeWorkspaceImportFiles(path, locationId));
-      if (!r?.canceled) { toast(t('已导入 {n} 项', { n: r.items?.length || 0 })); await load(path, { keepSel: true }); }
-    } catch (e) { toast(t('导入失败：{reason}', { reason: tr(e.message || '') })); }
-  }
-  // —— 云端上传（与手机版工作空间同一个上传引擎 lib/uploads.svelte.js：分块并行、卡住/断线自动重发）——
-  // webkitRelativePath 存在＝选的是整个文件夹，按相对路径原样铺进目标目录（mk=1 让服务端建子目录）。
-  let fileUploadInput = $state(), dirUploadInput = $state();
-  async function onUploadPick(e) {
-    const list = [...(e.target.files || [])];
-    e.target.value = '';
-    await uploadFiles(list, path);
-  }
-  async function uploadFiles(list, destDir) {
-    if (!list.length) return;
-    let ok = 0;
-    for (const f of list) {
-      const rel = (f.webkitRelativePath || '').split('/').slice(0, -1).join('/');
-      const dir = [destDir, rel].filter(Boolean).join('/');
-      busyLabel = t('上传 {name}…', { name: f.name });
-      try {
-        await sendFile(f, {
-          dir, ws: wsRoot, mk: !!rel,
-          onProgress: (sent, total) => { busyLabel = t('上传 {name}…', { name: f.name }) + (total > 0 ? ' ' + Math.floor((sent / total) * 100) + '%' : ''); },
-        });
-        ok++;
-      } catch (err) {
-        const m = typeof err.body === 'string' ? err.body : err.body?.error;
-        toast(t('上传失败：{reason}', { reason: m ? tr(m) : f.name }));
-      }
-    }
-    busyLabel = '';
-    sizesTouched([], [destDir]);
-    if (ok) toast(t('已上传 {n} 项', { n: ok }));
-    await refresh();
-  }
-  async function addLocation() {
-    addOpen = false;
-    try {
-      const r = await nativeWorkspaceAddLocation();
-      await refreshLocations();
-      if (!r?.canceled && r?.location?.id) selectLocation(r.location.id);
-    } catch (e) { toast(t('添加位置失败：{reason}', { reason: tr(e.message || '') })); }
-  }
-  async function removeLocation(loc) {
-    if (!loc?.removable) return;
-    if (!(await uiConfirm(t('从 The Bridge 移除「{name}」？', { name: tr(loc.name) }), { detail: t('不会删除电脑上的文件。'), okLabel: isEn() ? t('移除') : undefined }))) return;
-    try {
-      await nativeWorkspaceRemoveLocation(loc.id);
-      if (locationId === loc.id) { locationId = 'primary'; await load(''); }
-      await refreshLocations();
-    } catch (e) { toast(t('移除位置失败：{reason}', { reason: tr(e.message || '') })); }
-  }
-
-  // —— 简介 ——
-  async function showInfo(it) {
-    infoDlg = { name: it.name, isDir: it.isDir, size: it.size, mtime: it.mtime, rel: it.rel, dir: it.parent ?? parentOf(it.rel), loading: nativeFs };
-    if (!nativeFs) return;   // 云端没有 inspect（磁盘占用/属主之类是本机概念），列表里那几项就是全部
-    try {
-      const d = await nativeWorkspaceInspect(it.rel, locationId);
-      if (infoDlg?.rel === it.rel) infoDlg = { ...infoDlg, ...d, loading: false };
-    } catch (e) {
-      if (infoDlg?.rel === it.rel) infoDlg = { ...infoDlg, loading: false, inspectError: e.message || t('读取失败') };
-    }
-  }
-  async function copyText(text, note = t('已复制')) {
-    try { await navigator.clipboard.writeText(text); toast(note); } catch { toast(t('复制失败')); }
-  }
-
-  // —— 分享链接（仅 primary：由 bridge 服务端铸造）。文件也铸成只含它的分享空间（/w/），同 FilesPanel ——
-  function openShare(it) { shareDlg = { item: it, pwOn: false, password: '', ttl: 24, busy: false, result: null }; }
-  async function doShareLink() {
-    const d = shareDlg;
-    if (!d || d.busy) return;
-    const request = shareRequest(d);
-    if (request.error) { toast(tr(request.error)); return; }
-    d.busy = true;
-    try {
-      const r = await api.shareSpaceMint([d.item.rel], request.options, srvRoot);
-      d.result = shareResult(r, request.password);
-    } catch (e) { toast(t('创建分享失败：{reason}', { reason: tr(e.body?.error || e.body || e.message || '') })); }
-    d.busy = false;
-  }
-  const fmtExpire = formatShareExpiry;
-
-  // —— 发送给 AI（仅 primary：服务端要能摸到源文件）——
-  function openAi(it) { aiDlg = { item: it, view: 'root', chat: null }; }
-  // 文件类型决定能投给哪些模块，再与这个身份开着的 agent 取交集（服务端下发的 me.agents）。
-  const aiCaps = $derived.by(() => {
-    const c = fileAiCapabilities(aiDlg?.item, kindOf);
-    const g = screenOn('studio');
-    return { ...c, claude: agentOn('claude'), studio: g && (c.video || c.image || c.audio || c.music), video: c.video && g, image: c.image && g, audio: c.audio && g, music: c.music && g };
-  });
-  async function aiMaterial(it, direct = false) {
-    const kind = it.isDir ? 'folder' : (kindOf(it.name) === 'img' ? 'image' : 'file');
-    try {
-      // 这台电脑的文件：服务端摸不到，现读现传（文件夹给 Claude 走设备引用）
-      if (pcFs) return await pcLocalMaterial({ rel: it.rel, name: it.name, isDir: it.isDir, locationId, forClaude: direct });
-      const up = await api.fileToUpload(it.rel, !direct, srvRoot);
-      return { path: up.path, name: up.name, kind, url: kind === 'image' ? cloudFileUrl(it.rel, { ws: srvRoot }) : null };
-    } catch (e) { toast(t('准备失败：{reason}', { reason: tr(e.body?.error || e.message || '') })); return null; }
-  }
-  async function aiTextContent(it) {
-    if (pcFs) return pcLocalText(it.rel, locationId);
-    try {
-      const res = await fetch(apiUrl(scopedTo('/api/file?path=' + encodeURIComponent(it.rel), srvRoot)), { headers: authHeaders(), credentials: 'same-origin' });
-      if (!res.ok) return null;
-      return (await res.text()).slice(0, 30000);
-    } catch { return null; }
-  }
-  function pickAI(target) {
-    if (target === 'claude') { openChatPick(target); return; }
-    const it = aiDlg?.item; aiDlg = null;
-    if (it) sendToAI(it, target);
-  }
-  function pickVideoSlot(slot) { const it = aiDlg?.item; aiDlg = null; if (it) sendToAI(it, 'video', slot); }
-  async function openChatPick(target) {
-    aiDlg = { ...aiDlg, view: 'chat', chat: { target, sessions: [], loading: true, q: '' } };
-    const st = aiDlg.chat;
-    await loadAiSessions(target, {
-      cached: () => getCachedSessions(),
-      remote: () => api.sessions(),
-      current: () => aiDlg?.chat === st,
-      onCached: (sessions) => { st.sessions = sessions; },
-      onDone: (sessions) => { if (sessions) st.sessions = sessions; st.loading = false; },
-    });
-  }
-  function pickChat(sel) {
-    const it = aiDlg?.item, tg = aiDlg?.chat?.target;
-    aiDlg = null;
-    if (it && tg) sendToAI(it, tg, undefined, sel);
-  }
-  const chatTitle = (s) => tr(aiDlg?.chat?.target === 'claude' ? titleFor(s.id, s.title) : s.title) || t('（无标题）');   // 服务端占位标题（「（进行中…）」「(无标题)」）走 tr
-  const aiChatCur = $derived(aiDlg?.chat?.target === 'claude' ? session.id : null);
-  const aiChatFiltered = $derived.by(() => {
-    const c = aiDlg?.chat;
-    if (!c) return [];
-    return filterAiSessions(c.sessions, c.q, chatTitle);
-  });
-  async function sendToAI(it, target, slot, sess) {
-    await sendFileToAi(it, target, slot, sess, {
-      kindOf,
-      material: aiMaterial,
-      readText: aiTextContent,
-      toast,
-      chats: {
-        claude: {
-          current: () => session.id,
-          newChat: newConversation,
-          load: openSession,
-          attach: (attachment) => compose.attachments.push(attachment),
-        },
-      },
-      studio: { push: (x) => studioInbox.items.push(x) },
-      navigate: (screen) => { ui.screen = screen; },
-    });
-  }
-
-  // —— 右键菜单 ——
-  function popupMenu(e, entries) {
-    e.preventDefault(); e.stopPropagation();
-    // 坐标必须换算到【定位坐标系】而不是视口：内嵌进工作台侧栏时外面那层 .dk-embed 带
-    // transform，会把 fixed 的包含块从视口变成该容器——直接用 clientX/innerWidth 算出来的
-    // 点落在容器外，被 overflow:hidden 裁掉，屏上就只剩一层空遮罩。整页时 rect = 视口，
-    // 行为与从前完全一致。
-    const box = rootEl?.getBoundingClientRect();
-    const ox = box?.left || 0, oy = box?.top || 0;
-    const vw = box?.width || window.innerWidth, vh = box?.height || window.innerHeight;
-    const cx = e.clientX - ox, cy = e.clientY - oy;
-    // 英文菜单项更长（“Move 3 items to Recycle Bin  Del”），贴右缘夹取按更宽的估值算，免得菜单右侧被裁
-    const W = isEn() ? 264 : 236, H = entries.filter((x) => !x.sep).length * 32 + entries.filter((x) => x.sep).length * 9 + 10;
-    const x = Math.min(Math.max(8, cx), Math.max(8, vw - W - 8));
-    const y = cy + H > vh - 10 ? Math.max(8, cy - H) : cy;
-    // 记下打开前的焦点（通常是右键的那一行），关菜单时还回去
-    const a = document.activeElement;
-    const ret = a?.closest?.('.ctx') ? menu?.ret : a;
-    menu = { x, y, entries, ret };
-    // 焦点移到第一个可用项：↑↓ 直接能选（鼠标打开时 :focus-visible 不亮，看不出焦点在哪）
-    tick().then(() => { try { rootEl?.querySelector('.ctx .ctx-mi:not(:disabled)')?.focus({ preventScroll: true }); } catch {} });
-  }
-  function closeMenu(restore = false) {
-    const ret = menu?.ret;
-    menu = null;
-    if (!restore) return;
-    const el = ret?.isConnected && ret !== document.body ? ret : (anchorRel ? cellEls().get(anchorRel) : null) || rowsEl;
-    try { el?.focus({ preventScroll: true }); } catch {}
-  }
-  function menuRun(entry) {
-    closeMenu(true);
-    if (!entry.disabled) entry.act?.();
-  }
-  // 菜单开着时在别处再右键：关掉旧菜单，在落点下面的元素上重放一次 contextmenu——落在行上就在那一行弹、
-  // 落在空白处弹空白菜单、落在地址栏弹地址菜单（资源管理器同款）；落点没有菜单就只关掉并还焦点
-  async function reMenu(e) {
-    e.preventDefault();
-    const x = e.clientX, y = e.clientY;
-    const ret = menu?.ret;
-    menu = null;
-    await tick();
-    const hit = document.elementFromPoint(x, y);
-    if (hit && rootEl?.contains(hit)) hit.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2 }));
-    if (!menu) try { (ret?.isConnected && ret !== document.body ? ret : rowsEl)?.focus({ preventScroll: true }); } catch {}
-  }
-  // 右键菜单的键盘：↑↓ / Home / End 在可用项间移动（跳过分隔线与禁用项）、首字母跳转，Enter / 空格由按钮自己执行，
-  // Esc / Tab 关闭并把焦点还给打开前的行。挂原生监听并截住冒泡：window 上的列表快捷键（方向键换选中、Delete、空格速览）别跟着动
-  function ctxNav(node) {
-    const onKey = (e) => {
-      e.stopPropagation();
-      const items = [...node.querySelectorAll('.ctx-mi:not(:disabled)')];
-      const i = items.indexOf(document.activeElement);
-      const k = e.key;
-      if (k === 'ArrowDown' || k === 'ArrowUp' || k === 'Home' || k === 'End') {
-        e.preventDefault();
-        if (!items.length) return;
-        const n = k === 'Home' ? 0 : k === 'End' ? items.length - 1
-          : k === 'ArrowDown' ? (i + 1) % items.length : (i <= 0 ? items.length - 1 : i - 1);
-        items[n].focus({ preventScroll: true });
-      } else if (k === 'Escape' || k === 'Tab') {
-        e.preventDefault();
-        closeMenu(true);
-      } else if (k === 'Enter' || k === ' ') {
-        if (i < 0) e.preventDefault();
-      } else if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        const ch = k.toLocaleLowerCase();
-        const order = [...items.slice(i + 1), ...items.slice(0, i + 1)];
-        order.find((b) => (b.querySelector('.ctx-lb')?.textContent || '').trim().toLocaleLowerCase().startsWith(ch))?.focus({ preventScroll: true });
-      } else if (k === 'ContextMenu' || (k === 'F10' && e.shiftKey)) e.preventDefault();
-    };
-    node.addEventListener('keydown', onKey);
-    return { destroy() { node.removeEventListener('keydown', onKey); } };
-  }
-  // 鼠标划过即把焦点给那一项（同系统菜单：之后按 ↑↓ 从这一项接着走）
-  function ctxHover(e) {
-    const b = e.currentTarget;
-    if (e.pointerType === 'mouse' && !b.disabled && document.activeElement !== b) try { b.focus({ preventScroll: true }); } catch {}
-  }
-  function openItemMenu(e, it) {
-    if (renaming) commitRename();
-    if (!selected.has(it.rel)) { selected = new Set([it.rel]); anchorRel = it.rel; }
-    const multi = selected.size > 1;
-    const k = kindOf(it.name);
-    const previewable = it.isDir || fkKind(it.name) !== 'other';
-    const entries = [];
-    if (!multi) {
-      // 不可预览类型（zip/exe/未知）不出「预览」——它们的打开动作就是下面的默认应用/定位。
-      if (previewable) entries.push({ label: it.isDir ? t('打开') : t('预览'), act: () => openItem(it), bold: true });
-      if (nativeFs && !it.isDir) {
-        entries.push({ label: t('用默认应用打开'), act: () => doOpen(it) });
-        entries.push({ label: t('打开方式…'), act: () => doOpenWith(it) });
-      }
-      if (nativeFs) entries.push({ label: t('在文件资源管理器中显示'), act: () => doReveal(it) });
-      entries.push({ sep: true });
-      if (serverOps || pcFs) {
-        entries.push({ label: t('发送给 AI…'), act: () => openAi(it), accent: true });
-        if (serverOps && pluginOn('share')) entries.push({ label: t('分享链接…'), act: () => openShare(it) });
-        if (serverOps && !it.isDir && k === 'zip') entries.push({ label: t('解压到当前文件夹'), act: () => doExtract(it) });
-        entries.push({ sep: true });
-      }
-      if (!it.isDir) entries.push(nativeFs ? { label: t('另存为…'), act: () => doSaveAs(it) } : { label: t('下载到本地'), act: () => doDownload(it) });
-    }
-    // 多选同样能压（一起打进一个存档）；搜索结果跨目录，服务端只收同一文件夹里的项，搜索态不出
-    if (canCompress && inBrowse) entries.push({ label: multi ? t('压缩 {n} 项…', { n: selected.size }) : t('压缩…'), act: doCompress });
-    entries.push({ label: t('剪切'), hint: 'Ctrl+X', act: () => setClipboard('cut') });
-    entries.push({ label: t('复制'), hint: 'Ctrl+C', act: () => setClipboard('copy') });
-    if (!multi) {
-      entries.push({ label: t('重命名'), hint: 'F2', act: () => startRename(it) });
-      entries.push({ label: tc('explorer', '简介'), act: () => showInfo(it) });
-    }
-    entries.push({ sep: true });
-    const n = selected.size;
-    const delLabel = nativeFs
-      ? (multi ? t('移到回收站（{n} 项）', { n }) : t('移到回收站'))
-      : (multi ? t('删除（{n} 项）', { n }) : t('删除'));
-    entries.push({ label: delLabel, hint: 'Del', act: () => doTrash(), danger: true });
-    popupMenu(e, entries);
-  }
-  function openBlankMenu(e) {
-    if (e.target.closest('[data-rel]')) return;
-    const entries = [];
-    if (inBrowse) {
-      entries.push({ label: t('新建文件夹'), act: newFolder });
-      entries.push({ label: t('新建 Markdown 文件'), act: newMarkdown });
-      entries.push({ label: nativeFs ? t('导入文件…') : t('上传文件…'), act: () => importFiles(false) });
-      entries.push({ label: nativeFs ? t('导入文件夹…') : t('上传文件夹…'), act: () => importFiles(true) });
-      entries.push({ label: t('粘贴'), hint: 'Ctrl+V', act: doPaste, disabled: !canPaste && !(nativeFs && hasNativeFileClipboard()) });
-      entries.push({ sep: true });
-    }
-    entries.push({ label: t('全选'), hint: 'Ctrl+A', act: selectAll });
-    entries.push({ label: t('刷新'), hint: 'F5', act: userRefresh });
-    popupMenu(e, entries);
-  }
-  function openLocMenu(e, loc) {
-    const entries = [];
-    if (loc.kind === 'native') entries.push({ label: t('在文件资源管理器中显示'), act: () => nativeWorkspaceReveal('', loc.id).catch(() => {}) });
-    if (loc.abs && (nativeOk || loc.pc || me.kind === 'admin')) entries.push({ label: t('复制地址'), act: () => copyText(loc.abs, t('已复制路径')) });
-    if (loc.removable) entries.push({ label: t('移除位置'), act: () => removeLocation(loc), danger: true });
-    if (!entries.length) { e.preventDefault(); return; }
-    popupMenu(e, entries);
-  }
-
-  // —— 内部拖拽（同位置移动 / Ctrl=复制）+ OS 拖入导入 ——
-  let dragRels = null;
-  function rowDragStart(e, it) {
-    if (renaming) { e.preventDefault(); return; }
-    if (!selected.has(it.rel)) { selected = new Set([it.rel]); anchorRel = it.rel; }
-    dragRels = [...selected];
-    // 桌面壳（#8）：换成原生 OS 拖拽——可拖进 Explorer/微信/Word，也可拖进聊天输入栏
-    // （Composer 零拷贝直接引用）。拖回本页时 dragRels 仍在，内部移动分支照旧接管
-    //（原生拖在自己窗口上同样触发 HTML5 dragover/drop）。Windows DoDragDrop 是模态——
-    // promise resolve＝拖拽结束，在此清态并兜底刷新（外部 Shift 移动会把源文件搬走）。
-    // 云端作用域（项目目录不在 primary 位置内）同样原生拖出：bridge 三形态都跑在本机，
-    // 服务端绝对路径就是本机路径，拼位置根+rel 走 drag:start（主进程只做存在性校验）。
-    if (hasNativeDragOut() && (nativeFs || wsRootLocal)) {
-      e.preventDefault();
-      const rels = dragRels;
-      const run = nativeFs ? nativeDragWorkspace(rels, locationId) : nativeDragPaths(rels.map((r) => joinAbs(wsRoot, r)));
-      run.catch(() => {}).finally(() => {
-        if (dragRels === rels) { dragRels = null; dropOn = null; }
-        refresh();
-      });
-      return;
-    }
-    // 描述符随拖拽一起走：拖回本页＝内部移动（认 dragRels），拖进对话＝按 rel 现场备素材
-    // 挂进那个会话的输入栏（见 lib/fileDrag.js 的 attachDescriptorToAgent）。
-    try {
-      e.dataTransfer.effectAllowed = 'copyMove';
-      // dirs 与 rels 一一对应：落点（如 dimensio 跨工作空间那条）要据此把文件夹挑出来说清楚
-      const dirs = dragRels.map((rel) => Boolean(rows.find((x) => x.rel === rel)?.isDir));
-      e.dataTransfer.setData(WS_DT, JSON.stringify({ rels: dragRels, dirs, ws: wsRoot, locationId: nativeFs ? locationId : '' }));
-    } catch {}
-  }
-  function rowDragEnd() { dragRels = null; dropOn = null; }
-  const dtHasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
-  function dirDropOk(destRel) {
-    if (!dragRels) return false;
-    return dragRels.every((rel) => rel !== destRel && !destRel.startsWith(rel + '/'));
-  }
-  function dragOverDir(e, it) {
-    if (!it.isDir || it.linkType === 'external-link') return;
-    if (dragRels) {
-      if (!dirDropOk(it.rel)) return;
-      e.preventDefault(); e.stopPropagation();
-      try { e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'; } catch {}
-      dropOn = it.rel;
-    } else if (dtHasFiles(e) && canDropImport && inBrowse) {
-      e.preventDefault(); e.stopPropagation();
-      try { e.dataTransfer.dropEffect = 'copy'; } catch {}
-      dropOn = it.rel;
-    }
-  }
-  function dragOverPane(e) {
-    if (dragRels) {
-      if (!inBrowse) return;
-      if (!dragRels.some((rel) => parentOf(rel) !== path) && !e.ctrlKey) return;   // 拖回原地无意义
-      e.preventDefault();
-      try { e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'; } catch {}
-      dropOn = '';
-    } else if (dtHasFiles(e) && canDropImport && inBrowse) {
-      e.preventDefault();
-      try { e.dataTransfer.dropEffect = 'copy'; } catch {}
-      dropOn = '';
-    }
-  }
-  function dragLeavePane(e) { if (!e.currentTarget.contains(e.relatedTarget)) dropOn = null; }
-  function dragOverCrumb(e, destRel) {
-    if (!dragRels || destRel == null) return;   // 位置根之上的段属于别的位置，不收拖放
-    if (destRel === path || !dirDropOk(destRel)) return;
-    e.preventDefault();
-    try { e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'; } catch {}
-    dropOn = 'crumb:' + destRel;
-  }
-  async function onDrop(e) {
-    const target = dropOn; dropOn = null;
-    if (target === null) return;
-    e.preventDefault(); e.stopPropagation();
-    const destRel = target.startsWith('crumb:') ? target.slice(6) : (target ? target : path);
-    if (dragRels) {
-      const rels = dragRels; dragRels = null;
-      await doTransferInto(destRel, rels, e.ctrlKey);
-      return;
-    }
-    const files = [...(e.dataTransfer?.files || [])];
-    if (!files.length) return;
-    if (!nativeFs) { await uploadFiles(files, destRel); return; }
-    const paths = files.map(pcOk ? pcPathForFile : nativePathForFile).filter(Boolean);
-    if (!paths.length) { toast(t('无法读取拖入的文件路径')); return; }
-    busyLabel = t('导入中…');
-    try {
-      const r = await nativeWorkspaceImportPaths(destRel, paths, locationId);
-      const n = r.items?.length || 0, f = r.errors?.length || 0;
-      toast(n ? (f ? t('已导入 {n} 项，{f} 项失败', { n, f }) : t('已导入 {n} 项', { n })) : (r.errors?.[0] ? tr(r.errors[0]) : t('导入失败')));
-    } catch (err) { toast(t('导入失败：{reason}', { reason: tr(err.message || '') })); }
-    busyLabel = '';
-    await refresh();
-  }
-
-  // —— 框选（空白处按下拖出选择矩形）——
-  function paneDown(e) {
-    if (e.button !== 0 || renaming) return;
-    try { rowsEl?.focus({ preventScroll: true }); } catch {}
-    if (e.target.closest('[data-rel]') || e.target.closest('.fd-colhead')) return;
-    const keep = e.ctrlKey || e.metaKey ? new Set(selected) : new Set();
-    const x0 = e.clientX, y0 = e.clientY;
-    let active = false;
-    const move = (ev) => {
-      if (!active && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
-      active = true;
-      const l = Math.min(x0, ev.clientX), tp = Math.min(y0, ev.clientY);
-      const r = Math.max(x0, ev.clientX), b = Math.max(y0, ev.clientY);
-      const box = rootEl?.getBoundingClientRect();
-      marquee = { l: l - (box?.left || 0), t: tp - (box?.top || 0), w: r - l, h: b - tp };
-      const next = new Set(keep);
-      for (const el of rowsEl?.querySelectorAll('[data-rel]') || []) {
-        const bb = el.getBoundingClientRect();
-        if (bb.left < r && bb.right > l && bb.top < b && bb.bottom > tp) next.add(el.dataset.rel);
-      }
-      selected = next;
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      if (!active) { selected = keep; anchorRel = ''; }
-      marquee = null;
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  }
-
-  // —— 全局键盘 ——
-  let typeBuf = '', typeAt = 0;
-  // 内嵌态不能吃整窗的键盘：工作台侧栏旁边就是 Claude 会话，用户在那儿按 Delete/F2
-  // 不该动文件。所以只有焦点真的落在本面板内时才接管（点一下列表即获得焦点）。
-  const kbdMine = () => (embedded ? !!rootEl && rootEl.contains(document.activeElement) : ui.screen === 'files');
-  function onKey(e) {
-    if (preview.open) return;                       // 沉浸查看器优先
-    if (!kbdMine()) return;
-    const inField = e.target.closest?.('input, textarea, [contenteditable]');
-    if (e.key === 'Escape') {
-      if (menu) { closeMenu(true); return; }
-      if (sortOpen || addOpen || crumbPop || locPop) { sortOpen = false; addOpen = false; crumbPop = false; locPop = false; return; }
-      if (aiDlg) { aiDlg = null; return; }
-      if (shareDlg) { if (!shareDlg.busy) shareDlg = null; return; }
-      if (zipDlg) { if (!zipDlg.busy) zipDlg = null; return; }
-      if (infoDlg) { infoDlg = null; return; }
-      if (renaming) { renaming = null; return; }
-      if (inField && inField === searchEl) { query = ''; searchEl.blur(); return; }
-      if (query) { query = ''; return; }
-      if (selected.size) { selected = new Set(); anchorRel = ''; }
-      return;
-    }
-    // 菜单开着、焦点却不在菜单里（极少见：被别的脚本挪走）：方向键把焦点送回菜单，其余键不动列表
-    if (menu) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        e.preventDefault();
-        const its = rootEl?.querySelectorAll('.ctx .ctx-mi:not(:disabled)') || [];
-        try { its[e.key === 'ArrowDown' ? 0 : its.length - 1]?.focus({ preventScroll: true }); } catch {}
-      }
-      return;
-    }
-    if (inField || anyDialog) return;
-    const ctrl = e.ctrlKey || e.metaKey;
-    // 图标大小：焦点在列表区时 Ctrl+= / Ctrl+− 逐档换（与 Ctrl+滚轮同一条路：列表 ⇄ 64 ⇄ … ⇄ 240），拦掉浏览器缩放
-    if (ctrl && !e.altKey && rowsEl?.contains(document.activeElement)
-      && (e.key === '=' || e.key === '+' || e.key === '-' || e.key === '_' || e.code === 'NumpadAdd' || e.code === 'NumpadSubtract')) {
-      e.preventDefault();
-      stepIconSize(e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract' ? -1 : 1);
-      return;
-    }
-    if (ctrl && e.key.toLowerCase() === 'a') { e.preventDefault(); selectAll(); return; }
-    if (ctrl && e.key.toLowerCase() === 'c') { e.preventDefault(); setClipboard('copy'); return; }
-    if (ctrl && e.key.toLowerCase() === 'x') { e.preventDefault(); setClipboard('cut'); return; }
-    if (ctrl && e.key.toLowerCase() === 'v') { e.preventDefault(); doPaste(); return; }
-    if (ctrl && e.key.toLowerCase() === 'f') { e.preventDefault(); searchEl?.focus(); return; }
-    if ((ctrl && e.key.toLowerCase() === 'l') || (e.altKey && e.key.toLowerCase() === 'd')) { e.preventDefault(); startAddr(); return; }
-    if (e.key === 'F5') { e.preventDefault(); userRefresh(); return; }
-    if (e.key === 'F2') { e.preventDefault(); const it = selectedRows()[0]; if (it && selected.size === 1) startRename(it); return; }
-    if (e.key === 'Delete') { e.preventDefault(); doTrash(); return; }
-    if (e.key === 'Backspace' || (e.altKey && e.key === 'ArrowUp')) { e.preventDefault(); if (canUp) goUp(); return; }
-    if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack(); return; }
-    if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goFwd(); return; }
-    if (e.key === 'Enter') { e.preventDefault(); const it = selectedRows()[0]; if (it) openItem(it); return; }
-    // 空格：快速查看（键入定位途中的空格仍算名字的一部分）
-    if (e.key === ' ' && !ctrl && !e.altKey && !(typeBuf && Date.now() - typeAt < 700)) { e.preventDefault(); if (!e.repeat) quickLookSel(); return; }
-    if (e.altKey && !ctrl && e.code === 'KeyP') { e.preventDefault(); if (peekFits) togglePeek(); return; }
-    if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-      if (!rows.length) return;
-      e.preventDefault();
-      let step = 1;
-      if (view === 'grid') {
-        // 列数按实际排出来的网格算（图标档变了列宽就变）
-        const cols = Math.max(1, (getComputedStyle(rowsEl).gridTemplateColumns || '').split(' ').filter(Boolean).length);
-        step = (e.key === 'ArrowDown' || e.key === 'ArrowUp') ? cols : 1;
-      }
-      const dir2 = (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? step : -step;
-      const cur = rows.findIndex((r) => r.rel === anchorRel);
-      const next = Math.max(0, Math.min(rows.length - 1, cur < 0 ? 0 : cur + dir2));
-      if (e.shiftKey && cur >= 0) {
-        const [lo, hi] = cur < next ? [cur, next] : [next, cur];
-        const s = new Set(selected);
-        for (let i = lo; i <= hi; i++) s.add(rows[i].rel);
-        selected = s; anchorRel = rows[next].rel;
-        tick().then(() => { try { rowsEl?.querySelector(`[data-rel="${CSS.escape(rows[next].rel)}"]`)?.scrollIntoView({ block: 'nearest' }); } catch {} });
-      } else focusRel(rows[next].rel);
-      return;
-    }
-    // 键入定位（Explorer 式首字母跳转）
-    if (e.key.length === 1 && !ctrl && !e.altKey) {
-      const now = Date.now();
-      typeBuf = (now - typeAt < 700 ? typeBuf : '') + e.key.toLowerCase();
-      typeAt = now;
-      const hit = rows.find((r) => r.name.toLowerCase().startsWith(typeBuf));
-      if (hit) focusRel(hit.rel);
-    }
-  }
-
-  function setSort(key) {
-    if (mode === 'recent' && !searching) {
-      recentSort = recentSort.key === key ? { key, dir: -recentSort.dir } : { key, dir: key === 'mtime' ? -1 : 1 };
-      sortOpen = false;
-      return;
-    }
-    if (sortKey === key) sortDir = -sortDir;
-    else { sortKey = key; sortDir = key === 'mtime' ? -1 : 1; }
-    sortOpen = false;
-    savePrefs();
-  }
-  // 列表 ⇄ 图标是两套 {#each}：切换会把拿着焦点的那一行连同焦点一起销毁（焦点掉到 BODY，方向键、
-  // 接着按的 Ctrl+= 都失去作用域，后者还会变成整页缩放）。焦点原本在列表区里的，切完还给同一项在新视图里的格子，
-  // 找不到就给列表本身
-  function setView(v) {
-    const a = document.activeElement;
-    const rel = rowsEl?.contains(a) ? (a?.dataset?.rel || anchorRel || '') : null;
-    view = v; savePrefs();
-    if (rel == null) return;
-    tick().then(() => {
-      const cur = document.activeElement;
-      if (cur && cur !== document.body && cur !== document.documentElement && cur.isConnected) return;
-      try { ((rel ? cellEls().get(rel) : null) || rowsEl)?.focus({ preventScroll: true }); } catch {}
-    });
-  }
-  function setIconSize(px) { if (ICON_SIZES.includes(px) && px !== iconSize) { iconSize = px; savePrefs(); } }
-  // 逐档：列表 ⇄ 最小图标 ⇄ … ⇄ 最大图标（Explorer 的 Ctrl+滚轮同一条路）
-  function stepIconSize(d) {
-    if (view !== 'grid') { if (d > 0) { iconSize = ICON_SIZES[0]; setView('grid'); } return; }
-    const i = ICON_SIZES.indexOf(iconSize) + d;
-    if (i < 0) { setView('list'); return; }
-    if (i < ICON_SIZES.length) setIconSize(ICON_SIZES[i]);
-  }
-  // Ctrl+滚轮（触控板捏合也是 ctrl+wheel）：攒够一格再换档，免得一次捏合连跳好几档；顺手拦掉页面缩放
-  $effect(() => {
-    const el = rowsEl;
-    if (!el) return;
-    let acc = 0, accT = 0;
-    const onWheel = (e) => {
-      if (!(e.ctrlKey || e.metaKey) || preview.open) return;
-      e.preventDefault();
-      clearTimeout(accT); accT = setTimeout(() => (acc = 0), 220);
-      acc += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
-      if (Math.abs(acc) < 60) return;
-      const d = acc < 0 ? 1 : -1;
-      acc = 0;
-      untrack(() => stepIconSize(d));
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => { el.removeEventListener('wheel', onWheel); clearTimeout(accT); };
-  });
-  function togglePeek() { peekOn = !peekOn; savePrefs(); }
-  // 预览窗格只在宽处出（侧栏 + 列表 + 300 的窗格放得下），窄了自动让位、开关也收起
-  const peekFits = $derived(tbW > 900);
-  const peekShown = $derived(peekOn && peekFits);
-
-  // —— 展示 helpers ——
-  function fmtSize(n) {
-    if (n == null) return '';
-    if (n < 1024) return n + ' B';
-    if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
-    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
-    return (n / 1073741824).toFixed(2) + ' GB';
-  }
-  // 日期交给 Intl（按界面语言）：中文仍是「9月28日 15:04 / 2025/09/28 15:04 / 2025年9月28日 15:04」，
-  // 英文按 GLOSSARY §1.9 出 12 小时制「Sep 28, 3:04 PM / Sep 28, 2025, 3:04 PM」。
-  const dtf = (d, o) => new Intl.DateTimeFormat(locale(), o).format(d);
-  function fmtTime(ms) {
-    if (!ms) return '';
-    const d = new Date(ms), now = new Date(), en = isEn();
-    const p = (n) => String(n).padStart(2, '0');
-    const hm = en ? dtf(d, { hour: 'numeric', minute: '2-digit' }) : `${p(d.getHours())}:${p(d.getMinutes())}`;
-    if (d.toDateString() === now.toDateString()) return t('今天 {time}', { time: hm });
-    const yd = new Date(now); yd.setDate(now.getDate() - 1);
-    if (d.toDateString() === yd.toDateString()) return t('昨天 {time}', { time: hm });
-    const sameYear = d.getFullYear() === now.getFullYear();
-    if (en) return dtf(d, { ...(sameYear ? {} : { year: 'numeric' }), month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-    return dtf(d, sameYear ? { month: 'long', day: 'numeric' } : { year: 'numeric', month: '2-digit', day: '2-digit' }) + ' ' + hm;
-  }
-  function fmtFull(ms) {
-    if (!ms) return '—';
-    const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
-    if (isEn()) return dtf(d, { dateStyle: 'medium', timeStyle: 'short' });
-    return dtf(d, { year: 'numeric', month: 'long', day: 'numeric' }) + ` ${p(d.getHours())}:${p(d.getMinutes())}`;
-  }
-  // 「类型」列：扩展名 + 类别（PNG 图片 / PNG image）；英文语序与中文一致但要小写名词，故每类一个带 {ext} 的键
-  const KIND_LABEL = {
-    img: (ext) => t('{ext} 图片', { ext }),
-    mov: (ext) => t('{ext} 视频', { ext }),
-    audio: (ext) => t('{ext} 音频', { ext }),
-    pdf: () => t('PDF 文稿'),
-    zip: (ext) => t('{ext} 压缩归档', { ext }),
-    md: (ext) => (isEn() ? t('Markdown 文件') : `${ext} Markdown`),   // 中文仍是「MD Markdown」；英文「MD Markdown」读着像重复，改用 Windows 口吻的类型名（110px 类型列放得下）
-    text: (ext) => t('{ext} 文本', { ext }),
-    html: (ext) => t('{ext} 网页', { ext }),
-    apk: (ext) => t('{ext} 安装包', { ext }),
-  };
-  // Office 三类按 Windows / Finder 的口吻叫「Word 文稿」「Excel 表格」「PPT 演示文稿」；OpenDocument / RTF 不是微软格式，前面挂扩展名
-  const MS_OFFICE = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx']);
-  const OFFICE_LABEL = {
-    word: (ms, ext) => (ms ? t('Word 文稿') : t('{ext} 文稿', { ext })),
-    sheet: (ms, ext) => (ms ? t('Excel 表格') : t('{ext} 表格', { ext })),
-    slides: (ms, ext) => (ms ? t('PPT 演示文稿') : t('{ext} 演示文稿', { ext })),
-  };
-  function typeLabel(it) {
-    if (it.isDir) return t('文件夹');
-    const ext = extOf(it.name);
-    if (!ext) return t('文件');
-    const oc = officeCat(it.name);
-    if (oc && OFFICE_LABEL[oc]) return OFFICE_LABEL[oc](MS_OFFICE.has(ext), ext.toUpperCase());
-    const lb = KIND_LABEL[kindOf(it.name)];
-    return lb ? lb(ext.toUpperCase()) : t('{ext} 文件', { ext: ext.toUpperCase() });
-  }
-  // 类型图标（缩略图 / 系统图标到位前的占位）：与查看器同一家线稿（lib/fileGrid.js），颜色跟文字走，不按类型上色
-  const fileIcon = (name) => typeIconSvg(name);
+  expose(createFdView(P));
+  expose(createFdOps(P));
+  expose(createFdMenus(P));
+  expose(createFdDrag(P));
+  expose(createFdKeys(P));
   // 补充元数据（/api/files/meta：图片宽高、视频时长、文件夹项目数）——服务端摸得到这个目录时才有（srvRoot）；换目录清空
   let meta = $state({});
   let metaKey = '';
@@ -1953,32 +732,6 @@
     if (m?.w > 0 && m?.h > 0) return `${m.w} × ${m.h}`;
     return fmtSize(it.size);
   }
-  // —— 预览窗格：选中一项给大图 + 信息，选多项给件数与总大小，没选给当前文件夹 ——
-  const peekRel = $derived(peekShown && selected.size === 1 ? [...selected][0] : '');
-  const peekItem = $derived(peekRel ? rows.find((r) => r.rel === peekRel) || null : null);
-  let peekThumb = $state({ rel: '', url: '' });
-  let peekSeq = 0;
-  $effect(() => {
-    const rel = peekRel;
-    untrack(() => {
-      const my = ++peekSeq;
-      const it = rel ? rows.find((r) => r.rel === rel) : null;
-      if (!it || it.isDir) { if (peekThumb.rel || peekThumb.url) peekThumb = { rel: '', url: '' }; return; }
-      peekThumb = { rel, url: '' };
-      if (!nativeFs) {
-        if (cloudThumbable(it.name, true)) peekThumb = { rel, url: cloudFileUrl(rel, { grid: true, mt: it.mtime, ws: wsRoot }) };
-        return;
-      }
-      nativeWorkspaceThumbnail(rel, 512, locationId).then((r) => { if (my === peekSeq && r?.dataUrl) peekThumb = { rel, url: r.dataUrl }; }).catch(() => {});
-    });
-  });
-  // 系统给的是类型图标而不是真缩略图（Windows 对没有缩略图的类型回落成 32/48 的小方块）：不放大成一团糊，退回线稿图标
-  function peekLoaded(e) {
-    const im = e.currentTarget;
-    if (im.naturalWidth <= 64 && im.naturalHeight <= 64) peekThumb = { rel: peekThumb.rel, url: '' };
-  }
-  const peekSel = $derived(peekShown && selected.size > 1 ? rows.filter((r) => selected.has(r.rel)) : null);
-  const peekSelSize = $derived(peekSel ? peekSel.reduce((s, r) => s + (r.isDir ? 0 : r.size || 0), 0) : 0);
   const statusText = $derived.by(() => {
     const parts = [t('{n} 项', { n: rows.length })];
     if (selected.size) parts.push(t('已选 {n} 项', { n: selected.size }));
@@ -1991,7 +744,8 @@
   function toast(m) { toastMsg = m; clearTimeout(toastTimer); toastTimer = setTimeout(() => (toastMsg = ''), 2400); }
 </script>
 
-<svelte:window onkeydown={onKey} />
+
+<svelte:window onkeydown={P.onKey} />
 
 <div class="fd-root" class:embedded class:th-light={theme === 'light'} class:th-dark={theme === 'dark'} bind:this={rootEl} role="presentation" oncontextmenu={(e) => e.preventDefault()}>
   <!-- 工具栏：外层 .fd-toolbar 吃右上避让（--fd-avoid-r＝窗控，内嵌时宿主可另给），
@@ -2016,51 +770,51 @@
 
   {#snippet crumbs()}
     <!-- 位置下拉：只在位置栏因窄列收起时露出（见样式表 .tb-drop.locs），窄侧栏里一样能换盘 -->
-    {#if showSide && addrEdit === null}
+    {#if showSide && P.addrEdit === null}
       <div class="tb-drop locs">
-        <button class="tb-btn" aria-label={tc('explorer', '位置')} use:tip={tc('explorer', '位置')} onclick={() => { locPop = !locPop; crumbPop = false; sortOpen = false; addOpen = false; }}>
+        <button class="tb-btn" aria-label={tc('explorer', '位置')} use:tip={tc('explorer', '位置')} onclick={() => { P.locPop = !P.locPop; P.crumbPop = false; sortOpen = false; addOpen = false; }}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="6.5" width="17" height="11" rx="2.6"/><path d="M7.2 13.6h.01M10.6 13.6h6.2"/></svg>
         </button>
-        {#if locPop}
-          <button class="pop-scrim" aria-label={t('关闭')} onclick={() => (locPop = false)}></button>
+        {#if P.locPop}
+          <button class="pop-scrim" aria-label={t('关闭')} onclick={() => (P.locPop = false)}></button>
           <div class="pop left locs-pop">
             {#if homeAbs}
-              <button class="pop-mi" class:on={atHome} title={homeAbs} onclick={() => { locPop = false; goHomeDir(); }}>{@render homeIcon()}<span class="pm-nm">{homeLabel}</span></button>
+              <button class="pop-mi" class:on={atHome} title={homeAbs} onclick={() => { P.locPop = false; goHomeDir(); }}>{@render homeIcon()}<span class="pm-nm">{homeLabel}</span></button>
             {/if}
             {#if canRecent}
-              <button class="pop-mi" class:on={mode === 'recent' && !searching} onclick={() => { locPop = false; openRecent(); }}>
+              <button class="pop-mi" class:on={mode === 'recent' && !searching} onclick={() => { P.locPop = false; openRecent(); }}>
                 <svg class="side-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.5V12l3 2"/></svg><span class="pm-nm">{t('最近')}</span>
               </button>
             {/if}
             {#if homeAbs || canRecent}<div class="pop-sep"></div>{/if}
             {#each srvSide as loc (loc.id)}
-              <button class="pop-mi" class:on={locOn(loc)} title={loc.abs || undefined} onclick={() => { locPop = false; selectLocation(loc.id); }}>{@render locIcon(loc)}<span class="pm-nm">{locName(loc)}</span></button>
+              <button class="pop-mi" class:on={locOn(loc)} title={loc.abs || undefined} onclick={() => { P.locPop = false; selectLocation(loc.id); }}>{@render locIcon(loc)}<span class="pm-nm">{locName(loc)}</span></button>
             {/each}
             {#if pcOk}
               <div class="pop-sep"></div>
               <div class="pop-cap">{t('这台电脑')}</div>
               {#each pcSide as loc (loc.id)}
-                <button class="pop-mi" class:on={locOn(loc)} title={loc.abs || undefined} onclick={() => { locPop = false; selectLocation(loc.id); }}>{@render locIcon(loc)}<span class="pm-nm">{locName(loc)}</span></button>
+                <button class="pop-mi" class:on={locOn(loc)} title={loc.abs || undefined} onclick={() => { P.locPop = false; selectLocation(loc.id); }}>{@render locIcon(loc)}<span class="pm-nm">{locName(loc)}</span></button>
               {/each}
             {/if}
             {#if nativeAny}
               <div class="pop-sep"></div>
-              <button class="pop-mi" onclick={() => { locPop = false; addLocation(); }}>{pcOk ? t('添加这台电脑上的文件夹…') : t('添加位置…')}</button>
+              <button class="pop-mi" onclick={() => { P.locPop = false; P.addLocation(); }}>{pcOk ? t('添加这台电脑上的文件夹…') : t('添加位置…')}</button>
             {/if}
           </div>
         {/if}
       </div>
     {/if}
-    {#if crumbHide > 0 && addrEdit === null && !(mode === 'recent' && !searching)}
+    {#if P.crumbHide > 0 && P.addrEdit === null && !(mode === 'recent' && !searching)}
       <div class="tb-drop crumb-more" data-flip="cmore">
-        <button class="tb-btn ell" aria-label={t('展开上级目录')} use:tip={t('展开上级目录')} onclick={() => { crumbPop = !crumbPop; locPop = false; sortOpen = false; addOpen = false; }}>
+        <button class="tb-btn ell" aria-label={t('展开上级目录')} use:tip={t('展开上级目录')} onclick={() => { P.crumbPop = !P.crumbPop; P.locPop = false; sortOpen = false; addOpen = false; }}>
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.5" cy="12" r="1.9"/></svg>
         </button>
-        {#if crumbPop}
-          <button class="pop-scrim" aria-label={t('关闭')} onclick={() => (crumbPop = false)}></button>
+        {#if P.crumbPop}
+          <button class="pop-scrim" aria-label={t('关闭')} onclick={() => (P.crumbPop = false)}></button>
           <div class="pop left">
-            {#each crumbItems.slice(0, crumbHide) as it, i (i)}
-              <button class="pop-mi" style:padding-left="{9 + i * 10}px" disabled={!crumbOk(i)} onclick={() => gotoCrumb(i)}>
+            {#each P.crumbItems.slice(0, P.crumbHide) as it, i (i)}
+              <button class="pop-mi" style:padding-left="{9 + i * 10}px" disabled={!P.crumbOk(i)} onclick={() => P.gotoCrumb(i)}>
                 <svg class="pm-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.2c0-1.5 1.2-2.7 2.7-2.7h3.4l2 2.3h6.2c1.5 0 2.7 1.2 2.7 2.7v8.3c0 1.5-1.2 2.7-2.7 2.7H6.2c-1.5 0-2.7-1.2-2.7-2.7z"/></svg>{it}
               </button>
             {/each}
@@ -2069,26 +823,26 @@
       </div>
     {/if}
     <!-- 地址栏：点段跳转；点空白处 / Ctrl+L 换成可编辑的完整路径（Enter 跳转、Esc 放弃），右键复制路径 -->
-    <div class="fd-crumbs" class:squeeze={crumbSqueeze} class:editing={addrEdit !== null} class:addr={canAddr}
-      role="presentation" bind:this={crumbsEl} data-flip="crumbs" data-flip-morph="x"
-      title={canAddr && addrEdit === null ? curAbs : undefined} onclick={addrClick} oncontextmenu={addrMenu}>
+    <div class="fd-crumbs" class:squeeze={P.crumbSqueeze} class:editing={P.addrEdit !== null} class:addr={P.canAddr}
+      role="presentation" bind:this={P.crumbsEl} data-flip="crumbs" data-flip-morph="x"
+      title={P.canAddr && P.addrEdit === null ? curAbs : undefined} onclick={P.addrClick} oncontextmenu={P.addrMenu}>
       <div class="fd-crumbs-in" data-flip-inner>
-        {#if addrEdit !== null}
-          <input class="addr-in" bind:value={addrEdit} use:addrFocus onkeydown={addrKey} onblur={() => (addrEdit = null)}
+        {#if P.addrEdit !== null}
+          <input class="addr-in" bind:value={P.addrEdit} use:addrFocus onkeydown={P.addrKey} onblur={() => (P.addrEdit = null)}
             spellcheck="false" autocomplete="off" aria-label={t('地址')} />
         {:else if mode === 'recent' && !searching}
           <span class="crumb cur" data-flip="crumb-recent" data-flip-anchor="left">{t('最近')}</span>
         {:else}
-          {#each crumbItems as it, i (i)}
-            {#if i >= crumbHide}
-              {#if i > crumbHide}<svg class="crumb-sep" data-flip="csep-{i}" data-flip-anchor="left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 6 6 6-6 6"/></svg>{/if}
-              {#if i === crumbItems.length - 1}
+          {#each P.crumbItems as it, i (i)}
+            {#if i >= P.crumbHide}
+              {#if i > P.crumbHide}<svg class="crumb-sep" data-flip="csep-{i}" data-flip-anchor="left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 6 6 6-6 6"/></svg>{/if}
+              {#if i === P.crumbItems.length - 1}
                 <span class="crumb cur" data-flip="crumb-{i}" data-flip-anchor="left">{it}</span>
-              {:else if !crumbOk(i)}
+              {:else if !P.crumbOk(i)}
                 <span class="crumb off" data-flip="crumb-{i}" data-flip-anchor="left">{it}</span>
               {:else}
-                <button class="crumb" data-flip="crumb-{i}" data-flip-anchor="left" class:dropin={dropOn === 'crumb:' + crumbRel(i)}
-                  onclick={() => gotoCrumb(i)} ondragover={(e) => dragOverCrumb(e, crumbRel(i))} ondrop={onDrop}>{it}</button>
+                <button class="crumb" data-flip="crumb-{i}" data-flip-anchor="left" class:dropin={dropOn === 'crumb:' + P.crumbRel(i)}
+                  onclick={() => P.gotoCrumb(i)} ondragover={(e) => P.dragOverCrumb(e, P.crumbRel(i))} ondrop={P.onDrop}>{it}</button>
               {/if}
             {/if}
           {/each}
@@ -2100,7 +854,7 @@
 
   {#snippet sortItems()}
     {#each SORTS as [k2, lb] (k2)}
-      <button class="pop-mi" onclick={() => setSort(k2)}>
+      <button class="pop-mi" onclick={() => P.setSort(k2)}>
         <span class="pm-check">{#if effSort.key === k2}✓{/if}</span>{lb}
         {#if effSort.key === k2}<span class="pm-dir">{effSort.dir === 1 ? t('升序') : t('降序')}</span>{/if}
       </button>
@@ -2146,15 +900,15 @@
 
       {#if tbTier < 2}
         <div class="tb-seg" data-flip="seg" role="group" aria-label={t('视图')}>
-          <button class="seg" data-flip="view-list" class:on={view === 'list'} aria-pressed={view === 'list'} aria-label={tc('explorer', '列表视图')} use:tip={tc('explorer', '列表视图')} onclick={() => setView('list')}>
+          <button class="seg" data-flip="view-list" class:on={view === 'list'} aria-pressed={view === 'list'} aria-label={tc('explorer', '列表视图')} use:tip={tc('explorer', '列表视图')} onclick={() => P.setView('list')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M8.5 6.5H20M8.5 12H20M8.5 17.5H20"/><path d="M4.2 6.5h.01M4.2 12h.01M4.2 17.5h.01" stroke-width="2.6"/></svg>
           </button>
-          <button class="seg" data-flip="view-grid" class:on={view === 'grid'} aria-pressed={view === 'grid'} aria-label={tc('explorer', '图标视图')} use:tip={tc('explorer', '图标视图')} onclick={() => setView('grid')}>
+          <button class="seg" data-flip="view-grid" class:on={view === 'grid'} aria-pressed={view === 'grid'} aria-label={tc('explorer', '图标视图')} use:tip={tc('explorer', '图标视图')} onclick={() => P.setView('grid')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.6"/></svg>
           </button>
         </div>
-        {#if peekFits}
-          <button class="tb-btn peek" data-flip="peek" class:on={peekOn} aria-pressed={peekOn} use:tip={{ label: t('预览窗格'), kbd: 'Alt+P' }} onclick={togglePeek}>{@html uiIconSvg('pane', 1.8)}</button>
+        {#if P.peekFits}
+          <button class="tb-btn peek" data-flip="peek" class:on={peekOn} aria-pressed={peekOn} use:tip={{ label: t('预览窗格'), kbd: 'Alt+P' }} onclick={P.togglePeek}>{@html uiIconSvg('pane', 1.8)}</button>
         {/if}
       {:else}
         <button class="tb-btn" data-flip={view === 'list' ? 'view-list' : 'view-grid'} use:tip={view === 'list' ? tc('explorer', '切换为图标视图') : tc('explorer', '切换为列表视图')} onclick={toggleView}>
@@ -2168,7 +922,7 @@
 
       {#if tbTier < 3}
         <div class="tb-drop sort" data-flip="sort">
-          <button class="tb-btn" aria-label={t('排序')} use:tip={t('排序')} onclick={() => { sortOpen = !sortOpen; addOpen = false; crumbPop = false; }}>
+          <button class="tb-btn" aria-label={t('排序')} use:tip={t('排序')} onclick={() => { sortOpen = !sortOpen; addOpen = false; P.crumbPop = false; }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5v14M7 19l-3-3M7 19l3-3"/><path d="M17 19V5M17 5l-3 3M17 5l3 3"/></svg>
           </button>
           {#if sortOpen}
@@ -2179,19 +933,19 @@
       {/if}
 
       <div class="tb-drop add" data-flip="add">
-        <button class="tb-btn" aria-label={t('新建或导入')} use:tip={t('新建 / 导入')} onclick={() => { addOpen = !addOpen; sortOpen = false; crumbPop = false; }}>
+        <button class="tb-btn" aria-label={t('新建或导入')} use:tip={t('新建 / 导入')} onclick={() => { addOpen = !addOpen; sortOpen = false; P.crumbPop = false; }}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button>
         {#if addOpen}
           <button class="pop-scrim" aria-label={t('关闭')} onclick={() => (addOpen = false)}></button>
           <div class="pop">
-            <button class="pop-mi" disabled={!inBrowse} onclick={() => { addOpen = false; newFolder(); }}>{t('新建文件夹')}</button>
-            <button class="pop-mi" disabled={!inBrowse} onclick={() => { addOpen = false; newMarkdown(); }}>{t('新建 Markdown 文件')}</button>
-            <button class="pop-mi" disabled={!inBrowse} onclick={() => importFiles(false)}>{nativeFs ? t('导入文件…') : t('上传文件…')}</button>
-            <button class="pop-mi" disabled={!inBrowse} onclick={() => importFiles(true)}>{nativeFs ? t('导入文件夹…') : t('上传文件夹…')}</button>
+            <button class="pop-mi" disabled={!inBrowse} onclick={() => { addOpen = false; P.newFolder(); }}>{t('新建文件夹')}</button>
+            <button class="pop-mi" disabled={!inBrowse} onclick={() => { addOpen = false; P.newMarkdown(); }}>{t('新建 Markdown 文件')}</button>
+            <button class="pop-mi" disabled={!inBrowse} onclick={() => P.importFiles(false)}>{nativeFs ? t('导入文件…') : t('上传文件…')}</button>
+            <button class="pop-mi" disabled={!inBrowse} onclick={() => P.importFiles(true)}>{nativeFs ? t('导入文件夹…') : t('上传文件夹…')}</button>
             {#if nativeFs}
               <div class="pop-sep"></div>
-              <button class="pop-mi" onclick={addLocation}>{t('添加电脑位置…')}</button>
+              <button class="pop-mi" onclick={P.addLocation}>{t('添加电脑位置…')}</button>
             {/if}
             {#if tbTier >= 3}
               <div class="pop-sep"></div>
@@ -2235,7 +989,7 @@
         <div class="side-sec">{pcOk ? t('服务器') : tc('explorer', '位置')}</div>
         {#each srvSide as loc (loc.id)}
           <button class="side-row" class:on={locOn(loc)} title={nativeOk || me.kind === 'admin' ? loc.abs || undefined : undefined}
-            onclick={() => selectLocation(loc.id)} oncontextmenu={(e) => openLocMenu(e, loc)}>
+            onclick={() => selectLocation(loc.id)} oncontextmenu={(e) => P.openLocMenu(e, loc)}>
             {@render locIcon(loc)}
             <span class="side-nm">{locName(loc)}</span>
           </button>
@@ -2244,14 +998,14 @@
           <div class="side-sec">{t('这台电脑')}</div>
           {#each pcSide as loc (loc.id)}
             <button class="side-row" class:on={locOn(loc)} title={loc.abs || undefined}
-              onclick={() => selectLocation(loc.id)} oncontextmenu={(e) => openLocMenu(e, loc)}>
+              onclick={() => selectLocation(loc.id)} oncontextmenu={(e) => P.openLocMenu(e, loc)}>
               {@render locIcon(loc)}
               <span class="side-nm">{locName(loc)}</span>
             </button>
           {/each}
         {/if}
         {#if nativeAny}
-          <button class="side-row add" onclick={addLocation}>
+          <button class="side-row add" onclick={P.addLocation}>
             <svg class="side-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>
             <span class="side-nm">{t('添加位置…')}</span>
           </button>
@@ -2264,15 +1018,15 @@
     <div class="fd-main">
       {#if view === 'list'}
         <div class="fd-colhead">
-          <button class="ch name" onclick={() => setSort('name')}>{t('名称')}{#if effSort.key === 'name'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
+          <button class="ch name" onclick={() => P.setSort('name')}>{t('名称')}{#if effSort.key === 'name'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
           {#if showParentCol}
             <span class="ch parent">{t('位置')}</span>
           {/if}
-          <button class="ch mtime" onclick={() => setSort('mtime')}>{t('修改时间')}{#if effSort.key === 'mtime'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
+          <button class="ch mtime" onclick={() => P.setSort('mtime')}>{t('修改时间')}{#if effSort.key === 'mtime'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
           {#if !showParentCol}
-            <button class="ch type" onclick={() => setSort('type')}>{t('类型')}{#if effSort.key === 'type'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
+            <button class="ch type" onclick={() => P.setSort('type')}>{t('类型')}{#if effSort.key === 'type'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
           {/if}
-          <button class="ch size" onclick={() => setSort('size')}>{t('大小')}{#if effSort.key === 'size'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
+          <button class="ch size" onclick={() => P.setSort('size')}>{t('大小')}{#if effSort.key === 'size'}<span class="ch-dir">{effSort.dir === 1 ? '▲' : '▼'}</span>{/if}</button>
         </div>
       {/if}
 
@@ -2281,8 +1035,8 @@
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <div class="fd-rows" class:grid={view === 'grid'} class:dropin={dropOn === ''} style:--tile={view === 'grid' ? iconSize + 'px' : null}
         bind:this={rowsEl} role="presentation" tabindex="0"
-        onpointerdown={paneDown} oncontextmenu={openBlankMenu}
-        ondragover={dragOverPane} ondragleave={dragLeavePane} ondrop={onDrop}>
+        onpointerdown={P.paneDown} oncontextmenu={P.openBlankMenu}
+        ondragover={P.dragOverPane} ondragleave={P.dragLeavePane} ondrop={P.onDrop}>
         {#if listBusy && !rows.length}
           <div class="fd-empty"><span class="spin"></span>{searching ? t('正在搜索…') : t('正在读取…')}</div>
         {:else if !rows.length}
@@ -2294,12 +1048,12 @@
         {:else if view === 'list'}
           {#each rows as it (it.rel)}
             <div class="row" data-rel={it.rel} data-anchor={it.rel === anchorRel || undefined} role="button" tabindex="-1"
-              class:sel={selected.has(it.rel)} class:cut={cutSet.has(it.rel)} class:dropin={dropOn === it.rel} class:flash={flashRel === it.rel}
+              class:sel={selected.has(it.rel)} class:cut={cutSet.has(it.rel)} class:dropin={dropOn === it.rel} class:flash={P.flashRel === it.rel}
               draggable="true"
-              ondragstart={(e) => rowDragStart(e, it)} ondragend={rowDragEnd}
-              ondragover={(e) => dragOverDir(e, it)} ondrop={onDrop}
-              onclick={(e) => clickRow(e, it)} ondblclick={() => { if (!renaming) openItem(it); }}
-              oncontextmenu={(e) => openItemMenu(e, it)}>
+              ondragstart={(e) => P.rowDragStart(e, it)} ondragend={P.rowDragEnd}
+              ondragover={(e) => P.dragOverDir(e, it)} ondrop={P.onDrop}
+              onclick={(e) => clickRow(e, it)} ondblclick={() => { if (!renaming) P.openItem(it); }}
+              oncontextmenu={(e) => P.openItemMenu(e, it)}>
               <span class="cell name">
                 <span class="ric" use:thumbWatch={{ rel: it.rel, name: it.name, mtime: it.mtime, isDir: it.isDir, locationId }}>
                   {#if it.isDir}
@@ -2313,8 +1067,8 @@
                 {#if renaming?.rel === it.rel}
                   <!-- svelte-ignore a11y_no_static_element_interactions -->
                   <input class="rn-input" use:renameInput bind:value={renaming.value}
-                    onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') commitRename(); else if (e.key === 'Escape') renaming = null; }}
-                    onblur={commitRename} onclick={(e) => e.stopPropagation()} ondblclick={(e) => e.stopPropagation()} />
+                    onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') P.commitRename(); else if (e.key === 'Escape') renaming = null; }}
+                    onblur={P.commitRename} onclick={(e) => e.stopPropagation()} ondblclick={(e) => e.stopPropagation()} />
                 {:else}
                   <span class="nm" title={it.name}>{it.name}</span>
                   {#if it.linkType}<span class="lk">{it.linkType === 'external-link' ? t('外部链接') : t('链接')}</span>{/if}
@@ -2327,18 +1081,18 @@
               {#if !showParentCol}
                 <span class="cell type">{typeLabel(it)}</span>
               {/if}
-              <span class="cell size" class:pend={it.isDir && canDirSize && !it.linkType && !dirSizeOf(it)?.done} title={it.isDir ? dirSizeTitle(it) : undefined}>{it.isDir ? dirSizeLabel(it) : fmtSize(it.size)}</span>
+              <span class="cell size" class:pend={it.isDir && P.canDirSize && !it.linkType && !P.dirSizeOf(it)?.done} title={it.isDir ? P.dirSizeTitle(it) : undefined}>{it.isDir ? P.dirSizeLabel(it) : fmtSize(it.size)}</span>
             </div>
           {/each}
         {:else}
           {#each rows as it (it.rel)}
             <div class="tile" data-rel={it.rel} data-anchor={it.rel === anchorRel || undefined} role="button" tabindex="-1"
-              class:sel={selected.has(it.rel)} class:cut={cutSet.has(it.rel)} class:dropin={dropOn === it.rel} class:flash={flashRel === it.rel}
+              class:sel={selected.has(it.rel)} class:cut={cutSet.has(it.rel)} class:dropin={dropOn === it.rel} class:flash={P.flashRel === it.rel}
               draggable="true"
-              ondragstart={(e) => rowDragStart(e, it)} ondragend={rowDragEnd}
-              ondragover={(e) => dragOverDir(e, it)} ondrop={onDrop}
-              onclick={(e) => clickRow(e, it)} ondblclick={() => { if (!renaming) openItem(it); }}
-              oncontextmenu={(e) => openItemMenu(e, it)}>
+              ondragstart={(e) => P.rowDragStart(e, it)} ondragend={P.rowDragEnd}
+              ondragover={(e) => P.dragOverDir(e, it)} ondrop={P.onDrop}
+              onclick={(e) => clickRow(e, it)} ondblclick={() => { if (!renaming) P.openItem(it); }}
+              oncontextmenu={(e) => P.openItemMenu(e, it)}>
               <span class="tic" use:thumbWatch={{ rel: it.rel, name: it.name, mtime: it.mtime, isDir: it.isDir, locationId }}>
                 {#if it.isDir}
                   <img class="tic-dir" src={wsIcon} alt="" draggable="false" />
@@ -2354,8 +1108,8 @@
               {#if renaming?.rel === it.rel}
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <input class="rn-input tile-rn" use:renameInput bind:value={renaming.value}
-                  onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') commitRename(); else if (e.key === 'Escape') renaming = null; }}
-                  onblur={commitRename} onclick={(e) => e.stopPropagation()} ondblclick={(e) => e.stopPropagation()} />
+                  onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') P.commitRename(); else if (e.key === 'Escape') renaming = null; }}
+                  onblur={P.commitRename} onclick={(e) => e.stopPropagation()} ondblclick={(e) => e.stopPropagation()} />
               {:else}
                 <span class="tnm" title={it.name}>{@html nameHtml(it.name)}</span>
                 {#if tileSub(it)}<span class="tsub">{tileSub(it)}</span>{/if}
@@ -2372,258 +1126,28 @@
         {#if listBusy && rows.length}<span class="st-busy"><span class="spin sm"></span></span>{/if}
         {#if view === 'grid'}
           <input class="st-zoom" type="range" min="0" max={ICON_SIZES.length - 1} step="1" value={ICON_SIZES.indexOf(iconSize)}
-            oninput={(e) => setIconSize(ICON_SIZES[Number(e.currentTarget.value)])} use:tip={{ label: t('图标大小'), kbd: t('Ctrl+= / Ctrl+− / Ctrl+滚轮') }} />
+            oninput={(e) => P.setIconSize(ICON_SIZES[Number(e.currentTarget.value)])} use:tip={{ label: t('图标大小'), kbd: t('Ctrl+= / Ctrl+− / Ctrl+滚轮') }} />
         {/if}
       </div>
     </div>
 
-    {#if peekShown}
-      <aside class="fd-peek" aria-label={t('预览窗格')}>
-        {#if peekItem}
-          <div class="pk-hero" data-rel-peek={peekItem.rel}>
-            {#if peekItem.isDir}
-              <img class="pk-dir" src={wsIcon} alt="" draggable="false" />
-            {:else if peekThumb.rel === peekItem.rel && peekThumb.url}
-              <img class="pk-img" src={peekThumb.url} alt="" draggable="false" decoding="async" onload={peekLoaded} onerror={() => (peekThumb = { rel: peekItem.rel, url: '' })} />
-              {#if durOf(peekItem)}<b class="tic-dur">{durOf(peekItem)}</b>{/if}
-            {:else}
-              <span class="pk-ic">{@html fileIcon(peekItem.name)}</span>
-            {/if}
-          </div>
-          <div class="pk-name" title={peekItem.name}>{peekItem.name}</div>
-          <dl class="pk-rows">
-            <dt>{t('种类')}</dt><dd>{typeLabel(peekItem)}</dd>
-            <dt>{t('大小')}</dt><dd>{peekItem.isDir ? dirSizeLabel(peekItem) : fmtSize(peekItem.size)}</dd>
-            {#if metaOf(peekItem)?.w > 0}<dt>{t('分辨率')}</dt><dd>{metaOf(peekItem).w} × {metaOf(peekItem).h}</dd>{/if}
-            {#if durOf(peekItem)}<dt>{t('时长')}</dt><dd>{durOf(peekItem)}</dd>{/if}
-            {#if peekItem.isDir && metaOf(peekItem)?.n != null}<dt>{t('内容')}</dt><dd>{t('{n} 项', { n: metaOf(peekItem).n })}</dd>{/if}
-            <dt>{t('修改时间')}</dt><dd>{fmtFull(peekItem.mtime)}</dd>
-            {#if showParentCol}<dt>{t('位置')}</dt><dd>{peekItem.parent || rootLabel}</dd>{/if}
-          </dl>
-          <div class="pk-acts">
-            {#if peekItem.isDir}
-              <button class="pk-btn" onclick={() => openItem(peekItem)}>{t('打开')}</button>
-            {:else}
-              <button class="pk-btn" use:tip={{ label: t('快速查看'), kbd: t('空格') }} onclick={() => { const it = peekItem; selected = new Set([it.rel]); anchorRel = it.rel; quickLookSel(); }}>{t('预览')}</button>
-            {/if}
-          </div>
-        {:else if peekSel}
-          <div class="pk-hero"><span class="pk-ic">{@html typeIconSvg('', { isDir: false })}</span></div>
-          <div class="pk-name">{t('已选 {n} 项', { n: peekSel.length })}</div>
-          <dl class="pk-rows"><dt>{t('大小')}</dt><dd>{fmtSize(peekSelSize)}</dd></dl>
-        {:else}
-          <div class="pk-empty">{t('选中一个文件即可在这里预览')}</div>
-        {/if}
-      </aside>
-    {/if}
+    <FdPeek {P} />
   </div>
 
-  <!-- 右键菜单 -->
-  {#if menu}
-    <button class="menu-scrim" aria-label={t('关闭')} tabindex="-1" onclick={() => closeMenu(true)} oncontextmenu={reMenu}></button>
-    <div class="ctx" role="menu" tabindex="-1" style="left:{menu.x}px; top:{menu.y}px" use:ctxNav>
-      {#each menu.entries as en, i (i)}
-        {#if en.sep}
-          <div class="ctx-sep" role="separator"></div>
-        {:else}
-          <button class="ctx-mi" role="menuitem" tabindex="-1" class:danger={en.danger} class:accent={en.accent} class:bold={en.bold} disabled={en.disabled} onpointermove={ctxHover} onclick={() => menuRun(en)}>
-            <span class="ctx-lb">{en.label}</span>
-            {#if en.hint}<span class="ctx-hint">{en.hint}</span>{/if}
-          </button>
-        {/if}
-      {/each}
-    </div>
-  {/if}
+  <FdContextMenu {P} />
 
   <!-- 框选矩形 -->
   {#if marquee}
     <div class="marquee" style="left:{marquee.l}px; top:{marquee.t}px; width:{marquee.w}px; height:{marquee.h}px"></div>
   {/if}
 
-  <!-- 简介 -->
-  {#if infoDlg}
-    <div class="dlg-mask" onclick={() => (infoDlg = null)} role="presentation">
-      <div class="dlg info" onclick={(e) => e.stopPropagation()} role="presentation">
-        <div class="info-top">
-          {#if infoDlg.isDir}<img class="info-ico" src={wsIcon} alt="" />{:else}<span class="info-ico file">{@html fileIcon(infoDlg.name)}</span>{/if}
-          <div class="info-name">{infoDlg.name}</div>
-        </div>
-        <div class="info-rows">
-          <div class="ir"><span>{t('种类')}</span><b>{typeLabel(infoDlg)}</b></div>
-          <div class="ir"><span>{t('大小')}</span><b>{infoDlg.isDir ? dirInfoLabel(infoDlg) : fmtSize(infoDlg.size)}</b></div>
-          <div class="ir"><span>{t('修改时间')}</span><b>{fmtFull(infoDlg.mtime)}</b></div>
-          <div class="ir"><span>{t('位置')}</span><b class="loc sel-text">{absOk ? joinPath(curLoc.abs, infoDlg.dir || '') : rootLabel + (infoDlg.dir ? ' / ' + infoDlg.dir.split('/').join(' / ') : '')}</b></div>
-          {#if infoDlg.loading}<div class="ir"><span>{t('Windows 属性')}</span><b>{t('读取中…')}</b></div>{/if}
-          {#if infoDlg.absolutePath}
-            <div class="ir"><span>{t('完整路径')}</span><b class="loc selectable" title={t('点击复制')} role="button" tabindex="0" onclick={() => copyText(infoDlg.absolutePath, t('已复制路径'))} onkeydown={(e) => e.key === 'Enter' && copyText(infoDlg.absolutePath, t('已复制路径'))}>{infoDlg.absolutePath}</b></div>
-            <div class="ir"><span>{t('访问')}</span><b>{infoDlg.readable ? t('可读') : t('不可读')} · {infoDlg.writable ? t('可写') : t('只读')}{infoDlg.longPath ? ' · ' + t('长路径') : ''}</b></div>
-          {/if}
-          {#if infoDlg.linkType}<div class="ir"><span>{t('链接')}</span><b class="loc sel-text">{infoDlg.linkType}{infoDlg.linkTarget ? ` → ${infoDlg.linkTarget}` : ''}</b></div>{/if}
-          {#if infoDlg.acl}<div class="ir acl"><span>ACL</span><pre>{infoDlg.acl}</pre></div>{/if}
-          {#if infoDlg.inspectError}<div class="ir"><span>{t('Windows 属性')}</span><b class="sel-text">{tr(infoDlg.inspectError)}</b></div>{/if}
-        </div>
-        <div class="dlg-btns">
-          <button class="btn" onclick={() => { nativeWorkspaceReveal(infoDlg.rel, locationId).catch(() => {}); }}>{t('在资源管理器中显示')}</button>
-          <button class="btn go" onclick={() => (infoDlg = null)}>{t('完成')}</button>
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- 分享链接 -->
-  {#if shareDlg}
-    <div class="dlg-mask" onclick={() => { if (!shareDlg.busy) shareDlg = null; }} role="presentation">
-      <div class="dlg" onclick={(e) => e.stopPropagation()} role="presentation">
-        {#if !shareDlg.result}
-          <h3>{t('分享链接')}</h3>
-          <p class="dlg-sub">{shareDlg.item.isDir ? '📁 ' : ''}{shareDlg.item.name}</p>
-          <div class="sh-row">
-            <span>{t('启用分享密码')}</span>
-            <button class="sw" class:on={shareDlg.pwOn} role="switch" aria-checked={shareDlg.pwOn} aria-label={t('启用分享密码')} onclick={() => (shareDlg.pwOn = !shareDlg.pwOn)}><span class="knob"></span></button>
-          </div>
-          {#if shareDlg.pwOn}
-            <input class="dlg-input" bind:value={shareDlg.password} placeholder={t('设置分享密码')} maxlength="64" onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') doShareLink(); }} />
-          {/if}
-          <div class="sh-ttl">
-            {#each SHARE_TTLS as ttl (ttl.h)}
-              <button class:on={shareDlg.ttl === ttl.h} onclick={() => (shareDlg.ttl = ttl.h)}>{ttl.lb}</button>
-            {/each}
-          </div>
-          <div class="dlg-btns">
-            <button class="btn" onclick={() => (shareDlg = null)}>{t('取消')}</button>
-            <button class="btn go" disabled={shareDlg.busy} onclick={doShareLink}>{shareDlg.busy ? t('创建中…') : t('创建链接')}</button>
-          </div>
-        {:else}
-          <h3>{t('链接已创建')}</h3>
-          <p class="dlg-sub">{shareDlg.item.isDir ? '📁 ' : ''}{shareDlg.item.name}</p>
-          <button class="sh-url" onclick={() => copyText(shareClipboardText(shareDlg.result), t('已复制链接'))}>{shareDlg.result.url}</button>
-          <p class="sh-meta">{t('{time} 过期', { time: fmtExpire(shareDlg.result.expiresAt) })}{#if shareDlg.result.pw} · {t('密码')} <b class="sel-text">{shareDlg.result.pw}</b>{/if}</p>
-          <div class="dlg-btns">
-            <button class="btn" onclick={() => (shareDlg = null)}>{t('完成')}</button>
-            <button class="btn go" onclick={() => copyText(shareClipboardText(shareDlg.result), t('已复制链接'))}>{t('复制链接')}</button>
-          </div>
-        {/if}
-      </div>
-    </div>
-  {/if}
-
-  <!-- 压缩（内置选项：桌面壳以外；桌面壳弹的是系统「创建存档」窗口） -->
-  {#if zipDlg}
-    <div class="dlg-mask" onclick={() => { if (!zipDlg.busy) zipDlg = null; }} role="presentation">
-      <div class="dlg" onclick={(e) => e.stopPropagation()} role="presentation">
-        <h3>{t('压缩')}</h3>
-        <p class="dlg-sub">{zipDlg.sub}</p>
-        <div class="zp-lb">{t('存档名称')}</div>
-        <div class="zp-name">
-          <input class="dlg-input" bind:value={zipDlg.name} disabled={zipDlg.busy} spellcheck="false"
-            onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') runZipDlg(); }} />
-          <span class="zp-ext">{COMPRESS_FORMATS.find((f) => f.value === zipDlg.format)?.ext}</span>
-        </div>
-        <div class="zp-lb">{t('格式')}</div>
-        <div class="sh-ttl">
-          {#each COMPRESS_FORMATS.filter((f) => zipDlg.formats.includes(f.value)) as f (f.value)}
-            <button class:on={zipDlg.format === f.value} disabled={zipDlg.busy} onclick={() => (zipDlg.format = f.value)}>{f.label}</button>
-          {/each}
-        </div>
-        <div class="zp-lb">{t('压缩级别')}</div>
-        <div class="sh-ttl">
-          {#each COMPRESS_LEVELS as lv (lv.value)}
-            <button class:on={zipDlg.level === lv.value} disabled={zipDlg.busy} onclick={() => (zipDlg.level = lv.value)}>{tr(lv.lb)}</button>
-          {/each}
-        </div>
-        {#if zipDlg.note}<p class="sh-meta zp-note">{zipDlg.note}</p>{/if}
-        <div class="dlg-btns">
-          <button class="btn" disabled={zipDlg.busy} onclick={() => (zipDlg = null)}>{t('取消')}</button>
-          <button class="btn go" disabled={zipDlg.busy || !zipDlg.name.trim()} onclick={runZipDlg}>{zipDlg.busy ? t('正在压缩…') : t('压缩')}</button>
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- 发送给 AI -->
-  {#if aiDlg}
-    <div class="dlg-mask" onclick={() => (aiDlg = null)} role="presentation">
-      <div class="dlg ai" onclick={(e) => e.stopPropagation()} role="presentation">
-        {#if aiDlg.view === 'root'}
-          <h3>{t('发送「{name}」给', { name: aiDlg.item.name })}</h3>
-          {#if aiCaps.claude}
-            <button class="ai-opt" onclick={() => pickAI('claude')}>
-              <span class="ai-ic" style="background:#d97757"><svg viewBox="0 0 24 24" fill="#fff"><path d="M12 2.5l2 6.1 6.1 1.9-6.1 2L12 18.5l-2-6-6.1-2 6.1-1.9z"/></svg></span>
-              <span class="ai-lb">Claude<small>{t('当附件向 Claude 提问')}</small></span>
-              <svg class="ai-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
-            </button>
-          {/if}
-          {#if aiCaps.studio}
-            <button class="ai-opt" onclick={() => (aiDlg = { ...aiDlg, view: 'studio' })}>
-              <span class="ai-ic"><img src="{BASE}assets/icons/studio.svg" alt="" /></span>
-              <span class="ai-lb">Media Studio<small>{t('生成图像 / 视频 / 配音 / 音乐')}</small></span>
-              <svg class="ai-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
-            </button>
-          {/if}
-        {:else if aiDlg.view === 'studio'}
-          <h3><button class="ai-back" aria-label={t('返回')} onclick={() => (aiDlg = { ...aiDlg, view: 'root' })}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>{t('发到 Media Studio')}</h3>
-          {#if aiCaps.video}
-            <button class="ai-opt" onclick={() => (aiCaps.mode === 'image' ? (aiDlg = { ...aiDlg, view: 'video' }) : pickAI('video'))}>
-              <span class="ai-ic" style="background:#6d7cff"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.2l4.6 2.8L10 14.8z" fill="#fff" stroke="none"/></svg></span>
-              <span class="ai-lb">{t('视频')}<small>{aiCaps.mode === 'image' ? t('作为首帧 / 尾帧 / 参考图') : t('作为提示词')}</small></span>
-            </button>
-          {/if}
-          {#if aiCaps.image}
-            <button class="ai-opt" onclick={() => pickAI('image')}>
-              <span class="ai-ic" style="background:#0088ff"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.5" cy="10" r="1.5" fill="#fff" stroke="none"/><path d="M4 16.5l5-4 4 3 3-2 4 3"/></svg></span>
-              <span class="ai-lb">{t('图像')}<small>{aiCaps.mode === 'image' ? t('作为改图素材') : t('作为提示词')}</small></span>
-            </button>
-          {/if}
-          {#if aiCaps.audio}
-            <button class="ai-opt" onclick={() => pickAI('audio')}>
-              <span class="ai-ic" style="background:#ff2d55"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round"><path d="M5 10v4M9 7.5v9M13 9v6M17 6v12M21 10v4"/></svg></span>
-              <span class="ai-lb">{t('配音')}<small>{t('作为朗读文本')}</small></span>
-            </button>
-          {/if}
-          {#if aiCaps.music}
-            <button class="ai-opt" onclick={() => pickAI('music')}>
-              <span class="ai-ic" style="background:#ff8d28"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12"/><circle cx="6" cy="18" r="2.6" fill="#fff" stroke="none"/><circle cx="17" cy="16" r="2.6" fill="#fff" stroke="none"/></svg></span>
-              <span class="ai-lb">{t('音乐')}<small>{t('作为描述')}</small></span>
-            </button>
-          {/if}
-        {:else if aiDlg.view === 'video'}
-          <h3><button class="ai-back" aria-label={t('返回')} onclick={() => (aiDlg = { ...aiDlg, view: 'studio' })}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>{t('这张图用作')}</h3>
-          <button class="ai-opt" onclick={() => pickVideoSlot('first')}><span class="ai-ic" style="background:#6d7cff"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7.5 5.5v13" stroke-width="2.6"/></svg></span><span class="ai-lb">{t('首帧素材')}<small>{t('视频从这张图开始')}</small></span></button>
-          <button class="ai-opt" onclick={() => pickVideoSlot('last')}><span class="ai-ic" style="background:#6d7cff"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M16.5 5.5v13" stroke-width="2.6"/></svg></span><span class="ai-lb">{t('尾帧素材')}<small>{t('视频结束于这张图')}</small></span></button>
-          <button class="ai-opt" onclick={() => pickVideoSlot('ref')}><span class="ai-ic" style="background:#6d7cff"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8.5v7M8.5 12h7"/></svg></span><span class="ai-lb">{t('参考图')}<small>{t('带入主体 / 风格')}</small></span></button>
-        {:else if aiDlg.view === 'chat' && aiDlg.chat}
-          <h3><button class="ai-back" aria-label={t('返回')} onclick={() => (aiDlg = { ...aiDlg, view: 'root', chat: null })}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>{t('发送到 {name} · 选择对话', { name: AI_NAMES[aiDlg.chat.target] })}</h3>
-          <div class="ai-search">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-            <input type="search" placeholder={t('搜索对话')} bind:value={aiDlg.chat.q} onkeydown={(e) => e.stopPropagation()} />
-          </div>
-          <button class="ai-opt" onclick={() => pickChat('new')}>
-            <span class="ai-ic" style="background:#34c759"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M12 5.5v13M5.5 12h13"/></svg></span>
-            <span class="ai-lb">{t('新对话')}<small>{t('开一个新对话，附件挂进输入栏')}</small></span>
-          </button>
-          <div class="ai-list">
-            {#each aiChatFiltered as s (s.id)}
-              <button class="ai-row" onclick={() => pickChat(s.id)}>
-                {#if aiDlg.chat.target === 'claude'}<span class="ai-dot" class:work={s.thinking} class:ask={!s.thinking && s.pending}></span>{/if}
-                <span class="ai-title">{chatTitle(s)}</span>
-                {#if s.id === aiChatCur}<span class="ai-cur">{t('当前')}</span>{/if}
-                {#if s.mtime}<span class="ai-time">{relTime(s.mtime)}</span>{/if}
-              </button>
-            {:else}
-              <div class="ai-empty">{aiDlg.chat.loading ? t('加载中…') : aiDlg.chat.q ? t('没有匹配的对话') : t('还没有历史对话')}</div>
-            {/each}
-          </div>
-        {/if}
-        <div class="dlg-btns"><button class="btn" onclick={() => (aiDlg = null)}>{t('取消')}</button></div>
-      </div>
-    </div>
-  {/if}
+  <FdDialogs {P} />
 
   {#if toastMsg}<div class="toast">{toastMsg}</div>{/if}
 
   {#if !nativeFs}
-    <input class="hidden-input" bind:this={fileUploadInput} type="file" multiple onchange={onUploadPick} />
-    <input class="hidden-input" bind:this={dirUploadInput} type="file" webkitdirectory multiple onchange={onUploadPick} />
+    <input class="hidden-input" bind:this={P.fileUploadInput} type="file" multiple onchange={P.onUploadPick} />
+    <input class="hidden-input" bind:this={P.dirUploadInput} type="file" webkitdirectory multiple onchange={P.onUploadPick} />
   {/if}
 </div>
 
@@ -2842,26 +1366,9 @@
   .tb-btn.on { background: var(--seg-bg); color: var(--blue); }
   .tb-btn.peek :global(svg) { width: 17px; height: 17px; display: block; }
 
-  /* 预览窗格（Explorer 的 Alt+P）：固定 300 宽，出现时淡入 + 轻推，不做宽度动画 */
-  .fd-peek { flex: 0 0 300px; min-width: 0; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; padding: 16px; border-left: 1px solid var(--sep); background: var(--panel); overflow-y: auto; animation: fd-peek-in var(--mo-base) var(--ea-std); }
-  @keyframes fd-peek-in { from { opacity: 0; transform: translateX(10px); } }
-  .pk-hero { position: relative; aspect-ratio: 4 / 3; border-radius: 10px; background: var(--row-alt); box-shadow: inset 0 0 0 1px var(--sep); display: grid; place-items: center; overflow: hidden; }
-  .pk-img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
-  .pk-dir { width: 46%; height: 46%; object-fit: contain; }
-  .pk-ic { color: var(--ink2); }
-  .pk-ic :global(svg) { width: 64px; height: 64px; display: block; }
-  .pk-name { font-size: 14px; font-weight: 600; line-height: 1.35; word-break: break-all; }
-  .pk-rows { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 12px; line-height: 1.4; }
-  .pk-rows dt { color: var(--ink2); }
-  .pk-rows dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-  .pk-acts { display: flex; gap: 8px; }
-  .pk-btn { height: 32px; padding: 0 16px; border: 1px solid var(--sep); border-radius: 8px; background: var(--seg-bg); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
-  .pk-btn:hover { background: var(--hover); }
-  .pk-empty { margin: auto 0; text-align: center; font-size: 12.5px; color: var(--ink3); }
   /* 按钮提示（kit/tooltip.js）在查看器外挂到 body：要压过本页（z 40）与内嵌宿主 */
   :global(body > .vw-tip) { z-index: 3600; }
   @media (prefers-reduced-motion: reduce) {
-    .fd-peek { animation: none; }
     .row.flash, .tile.flash { animation: none; box-shadow: inset 0 0 0 2px var(--blue); }
   }
   .spin { width: 14px; height: 14px; border: 2px solid var(--blue-soft); border-top-color: var(--blue); border-radius: 50%; animation: fd-spin .8s linear infinite; }
@@ -2874,107 +1381,15 @@
   .fd-empty .big { font-size: 40px; }
   .fd-empty small { font-size: 12px; color: var(--ink3); }
 
-  /* 右键菜单 */
-  .menu-scrim { position: fixed; inset: 0; z-index: 80; border: 0; background: transparent; cursor: default; padding: 0; }
-  .ctx { position: fixed; z-index: 81; min-width: 236px; padding: 4px; background: var(--pop-bg); border: 1px solid var(--sep); border-radius: 12px; box-shadow: var(--ctx-shadow); animation: fd-pop var(--mo-quick, .2s) var(--ea-decel, ease-out) both; outline: none; }
-  @keyframes fd-pop { from { opacity: 0; transform: scale(.96); } }
-  .ctx-mi { display: flex; align-items: center; width: 100%; height: 32px; padding: 0 10px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 14px; color: var(--ink); cursor: pointer; outline: none; white-space: nowrap; }
-  /* 键盘焦点 = 高亮行（菜单里不画外圈）；鼠标划过同一种浅底 */
-  .ctx-mi:focus-visible, .ctx-mi:hover:not(:disabled) { background: var(--pop-hover); }
-  .ctx-mi:disabled { color: var(--ink3); cursor: default; }
-  .ctx-mi.danger { color: var(--red); }
-  .ctx-mi.accent { color: var(--blue); font-weight: 600; }
-  .ctx-mi.bold { font-weight: 600; }
-  .ctx-lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .ctx-hint { margin-left: 18px; font-size: 12px; color: var(--ink2); }
-  .ctx-sep { height: 1px; margin: 4px 6px; background: var(--sep); }
-
   /* 框选 */
   .marquee { position: fixed; z-index: 70; border: 1px solid var(--blue-line); background: var(--blue-soft); pointer-events: none; }
 
-  /* 弹窗 */
-  .dlg-mask { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: var(--mask); animation: fd-fade .14s ease; }
-  @keyframes fd-fade { from { opacity: 0; } }
-  .dlg { width: 400px; max-width: calc(100% - 32px); max-height: calc(100% - 56px); overflow-y: auto; padding: 18px; background: var(--dlg-bg); border-radius: 15px; box-shadow: 0 22px 70px rgba(0, 0, 0, .3); animation: fd-rise .16s cubic-bezier(.2, .8, .3, 1); }
   @keyframes fd-rise { from { opacity: 0; transform: translateY(8px) scale(.98); } }
-  .dlg h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 15px; font-weight: 700; }
-  .dlg-sub { margin: -4px 0 12px; font-size: 12.5px; color: var(--ink2); word-break: break-all; }
-  .dlg-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-  .btn { padding: 7px 16px; border: 0; border-radius: 9px; background: rgba(120, 120, 128, .13); font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer; }
-  .btn:hover { background: rgba(120, 120, 128, .2); }
-  .btn.go { background: var(--blue); color: #fff; }
-  .btn.go:hover { filter: brightness(1.08); }
-  .btn.go:disabled { opacity: .55; cursor: default; }
-  .dlg-input { width: 100%; margin: 8px 0 2px; padding: 8px 10px; border: 1px solid var(--sep); border-radius: 9px; background: var(--field-bg); color: var(--ink); font: inherit; font-size: 13px; outline: none; user-select: text; }
-  .dlg-input:focus { border-color: var(--blue); }
-
-  /* 简介 */
-  .dlg.info { width: 440px; }
-  .info-top { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 4px 0 12px; }
-  .info-ico { width: 52px; height: 52px; object-fit: contain; }
-  .info-ico.file { width: 44px; height: 52px; display: block; }
-  .info-ico.file :global(svg) { width: 100%; height: 100%; }
-  .info-name { font-size: 15px; font-weight: 600; text-align: center; word-break: break-all; }
-  .info-rows { border-top: 1px solid var(--sep); }
-  .ir { display: flex; align-items: baseline; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--sep); }
-  .ir span { flex: 0 0 70px; font-size: 12.5px; color: var(--ink2); }
-  .ir b { flex: 1; font-size: 12.5px; font-weight: 500; text-align: right; word-break: break-all; }
-  .ir b.loc { text-align: right; }
-  .ir b.selectable { user-select: text; cursor: pointer; color: var(--blue); }
-  .ir.acl { display: block; }
-  .ir.acl pre { margin: 6px 0 0; padding: 8px; max-height: 110px; overflow: auto; border-radius: 8px; background: rgba(120, 120, 128, .1); user-select: text; white-space: pre-wrap; word-break: break-all; font: 11px/1.35 Consolas, monospace; }
-
-  /* 分享 */
-  .sh-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; font-size: 13px; }
-  .sw { position: relative; width: 44px; height: 26px; border: 0; border-radius: 20px; background: rgba(120, 120, 128, .22); cursor: pointer; transition: background .18s; padding: 0; }
-  .sw.on { background: #34c759; }
-  .sw .knob { position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); transition: transform .18s; }
-  .sw.on .knob { transform: translateX(18px); }
-  .sh-ttl { display: flex; gap: 6px; margin-top: 8px; }
-  .sh-ttl button { flex: 1; padding: 7px 0; border: 1px solid var(--sep); border-radius: 8px; background: var(--field-bg); font-size: 12.5px; color: var(--ink); cursor: pointer; }
-  .sh-ttl button.on { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); font-weight: 600; }
-  .sh-url { display: block; width: 100%; margin: 6px 0 4px; padding: 10px; border: 1px dashed var(--blue-line); border-radius: 9px; background: var(--blue-soft); font-size: 12.5px; color: var(--blue); word-break: break-all; text-align: left; cursor: pointer; user-select: text; }
-  .sh-meta { margin: 2px 0 0; font-size: 12px; color: var(--ink2); }
-  .zp-lb { margin: 12px 0 0; font-size: 12px; font-weight: 600; color: var(--ink2); }
-  .zp-name { display: flex; align-items: center; gap: 6px; }
-  .zp-name .dlg-input { flex: 1; min-width: 0; margin-top: 6px; }
-  .zp-ext { margin-top: 4px; font-size: 13px; color: var(--ink2); white-space: nowrap; }
-  .sh-ttl button:disabled { opacity: .55; cursor: default; }
-  .zp-note { margin-top: 12px; }
-
-  /* 发送给 AI */
-  .dlg.ai { width: 420px; }
-  .ai-back { display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 7px; background: none; color: var(--ink2); cursor: pointer; padding: 0; }
-  .ai-back:hover { background: var(--hover); }
-  .ai-back svg { width: 15px; height: 15px; }
-  .ai-opt { display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px; border: 0; border-radius: 11px; background: none; text-align: left; cursor: pointer; }
-  .ai-opt:hover { background: var(--hover); }
-  .ai-ic { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; flex: 0 0 auto; overflow: hidden; }
-  .ai-ic svg { width: 19px; height: 19px; }
-  .ai-ic img { width: 100%; height: 100%; object-fit: cover; }
-  .ai-lb { flex: 1; display: flex; flex-direction: column; gap: 1px; font-size: 13.5px; font-weight: 600; }
-  .ai-lb small { font-size: 11.5px; font-weight: 400; color: var(--ink2); }
-  .ai-chev { width: 15px; height: 15px; color: var(--ink3); }
-  .ai-search { display: flex; align-items: center; gap: 7px; margin: 2px 0 8px; padding: 7px 10px; border: 1px solid var(--sep); border-radius: 9px; background: var(--field-bg); }
-  .ai-search svg { width: 14px; height: 14px; color: var(--ink3); }
-  .ai-search input { flex: 1; border: 0; background: none; outline: none; font-size: 13px; color: var(--ink); user-select: text; }
-  .ai-list { max-height: 300px; overflow-y: auto; }
-  .ai-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 0; border-radius: 9px; background: none; text-align: left; cursor: pointer; }
-  .ai-row:hover { background: var(--hover); }
-  .ai-dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(120, 120, 128, .35); flex: 0 0 auto; }
-  .ai-dot.work { background: #34c759; }
-  .ai-dot.ask { background: #ff9500; }
-  .ai-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-  .ai-cur { flex: 0 0 auto; padding: 1px 7px; border-radius: 20px; background: var(--blue-soft); font-size: 10.5px; color: var(--blue); }
-  .ai-time { flex: 0 0 auto; font-size: 11px; color: var(--ink3); }
-  .ai-empty { padding: 20px 0; text-align: center; font-size: 12.5px; color: var(--ink3); }
-
   /* toast */
   .toast { position: fixed; left: 50%; bottom: 44px; z-index: 120; transform: translateX(-50%); padding: 9px 18px; border-radius: 22px; background: rgba(28, 28, 32, .92); color: #fff; font-size: 13px; box-shadow: 0 8px 26px rgba(0, 0, 0, .3); animation: fd-rise .18s ease; white-space: nowrap; max-width: 86%; overflow: hidden; text-overflow: ellipsis; }
 
   /* 英文界面（html[lang=en]，lib/i18n.js 设置）：英文比中文长，只在英文下放宽/加省略号，中文外观不动 */
   :global(html[lang='en']) .cell.mtime { text-overflow: ellipsis; }                 /* “Sep 28, 2025, 3:04 PM” 在窄列档会被硬裁 */
-  :global(html[lang='en']) .ir span { flex-basis: 112px; }                           /* 简介标签列：Date modified / Windows properties 不折行（440px 对话框，值列仍够宽） */
   :global(html[lang='en']) .fd-status > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* 状态栏一行放不下时省略，不撑出第二行 */
   /* 排序 / 新建下拉挂在 30px 宽的 .tb-drop 里，宽度按 min-content 算：英文「Date modified … Descending」
      会在单词间折成两行。不折行后弹层按最宽一项撑开（right:0，向左长）；面包屑弹层（.left）装的是文件夹名，不动 */

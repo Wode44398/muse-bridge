@@ -8,6 +8,7 @@
 //     才回收；剩 QUICK_WARN_DAYS 天时界面提示，可「存为工作空间」或「继续保留」（keepQuick 记一次活动）；
 //   · 回收不直接删：整只桶挪进回收站（<桶根>/.recycled/<id>），对话记录留在原处——恢复 = 挪回来，
 //     对话与产物原样接上；回收站里再放 QUICK_TRASH_DAYS 天才永久删除。
+//   · 2026-11-16 起可在设置里改成「只留最近 N 条」或「从不清理」（quickRetention），默认仍按时间。
 //
 // 为什么另起一个模块而不是复用 claude-projects 的普通项目：普通项目 = 用户自己选的本地目录（有 CLAUDE.md、
 // 有历史、有自动记忆），临时对话要的正好相反——
@@ -47,6 +48,18 @@ export const QUICK_TTL_DAYS = 30;     // 最后一次活动超过这么多天才
 export const QUICK_WARN_DAYS = 3;     // 剩这么多天时界面开始提示
 export const QUICK_TRASH_DAYS = 30;   // 回收站里再放这么多天才永久删除
 const DAY = 24 * 3600 * 1000;
+// 清理方式（Claude 设置 quickRetention，注册表 config/claude-settings.mjs）：
+//   ttl   最后活动超过 QUICK_TTL_DAYS 天的进回收站（默认）；
+//   count 只留最近 max 只用过的桶，超出的按最后活动从旧到新进回收站，不看天数；
+//   never 不自动清理。
+// 三种都只管「列表 → 回收站」这一步；回收站照旧放 QUICK_TRASH_DAYS 天——那是已经被清理过的，界面上写着哪天永久删除。
+// 没对话也没文件的空桶不算一条临时对话，三种方式下都照旧过了宽限就删。
+export function quickRetention(v) {
+  const m = /^max(\d{1,4})$/.exec(String(v || ''));
+  if (m && Number(m[1]) > 0) return { mode: 'count', max: Number(m[1]) };
+  if (v === 'never') return { mode: 'never' };
+  return { mode: 'ttl' };
+}
 const QUICK_GRACE_MS = 10 * 60 * 1000;   // 铸了没用的空桶多久之后才删（刚铸的、别的设备正开着的都靠它兜住）
 const BUCKET_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TRASH = '.recycled';
@@ -261,13 +274,14 @@ function liveBucket(ctx, id) {
 
 // 「继续保留」：给这只桶记一次活动（桶目录的修改时间改成现在），回收时钟从头算。
 // 不碰对话记录本身——改 transcript 的时间会把它在会话列表里顶到最前面。
-export function keepQuick(ctx, id, { now = Date.now() } = {}) {
+// 只按条数留 / 不清理时没有到期时刻（expiresAt: null）；按条数留时记一次活动也就是把它排到最前。
+export function keepQuick(ctx, id, { now = Date.now(), retention } = {}) {
   if (!quickAllowed(ctx)) throw err('该身份不支持临时对话', 403);
   const dir = liveBucket(ctx, id);
   if (!dir) throw err('这个临时对话已经不在了，请刷新后再试', 404);
   const t = new Date(now);
   utimesSync(dir, t, t);
-  return { id: String(id), expiresAt: now + QUICK_TTL_DAYS * DAY };
+  return { id: String(id), expiresAt: quickRetention(retention).mode === 'ttl' ? now + QUICK_TTL_DAYS * DAY : null };
 }
 
 // ---- 按时间回收 ----
@@ -347,9 +361,11 @@ async function purgeTrash(ctx, { trashMs, now, onDrop }) {
 // 返回值另带 orphans：只有文件、没有对话记录的桶（[{ id, last, items, expiresAt }]）——在里面删光了对话、
 // 或老版本留下的。它们按会话行列不出来，schedulePruneQuick 记下这份名单，会话列表接口转给侧栏单独列出来
 //（quickOrphans），不让它们不声不响地走完两轮 30 天。
-export async function pruneQuick(ctx, { ttlMs = QUICK_TTL_DAYS * DAY, trashMs = QUICK_TRASH_DAYS * DAY, busy = new Set(), onDrop, now = Date.now() } = {}) {
+// retention = 设置 quickRetention 的原值（见 quickRetention）；不给 = 按时间。
+export async function pruneQuick(ctx, { ttlMs = QUICK_TTL_DAYS * DAY, trashMs = QUICK_TRASH_DAYS * DAY, retention, busy = new Set(), onDrop, now = Date.now() } = {}) {
   const out = { recycled: 0, purged: 0, empty: 0, orphans: [] };
   if (!quickAllowed(ctx)) return out;
+  const pol = quickRetention(retention);
   let cur;
   try { cur = currentBucket(ctx, { fresh: true }); } catch { return out; }   // 用过的当前桶先换掉：它和别的桶一样按时间回收
   const root = bucketRoot(ctx);
@@ -357,23 +373,36 @@ export async function pruneQuick(ctx, { ttlMs = QUICK_TTL_DAYS * DAY, trashMs = 
   const adopted = adoptedDirs(ctx);
   let names = [];
   try { names = await readdir(root, { withFileTypes: true }); } catch {}
+  const kept = [];   // 用过的桶：{ name, a, busy }
   for (const d of names) {
     if (!d.isDirectory() || !BUCKET_ID.test(d.name)) continue;
     const dir = path.join(root, d.name);
     const k = keyOf(dir);
     if (k === curKey || adopted.has(k)) continue;
     const a = await activity(ctx, dir);
-    if (!a || a.ids.some((id) => busy.has(id))) continue;
-    if (!a.ids.length && !a.content) {
+    if (!a) continue;
+    const running = a.ids.some((id) => busy.has(id));
+    if (!running && !a.ids.length && !a.content) {
       if (now - a.last < QUICK_GRACE_MS) continue;
       try { await rm(dir, { recursive: true, force: true }); await rm(a.tdir, { recursive: true, force: true }); out.empty++; } catch {}
       continue;
     }
-    if (now - a.last < ttlMs) {
-      if (!a.ids.length) out.orphans.push({ id: d.name, last: a.last, items: a.items, expiresAt: a.last + ttlMs });
+    kept.push({ name: d.name, a, running });
+  }
+  // 按条数留：在跑的也占名额（它本来就是最新的那几条之一），只是轮到它也不动
+  const over = new Set();
+  if (pol.mode === 'count') {
+    kept.sort((x, y) => y.a.last - x.a.last);
+    for (const x of kept.slice(pol.max)) over.add(x.name);
+  }
+  for (const { name, a, running } of kept) {
+    if (running) continue;
+    const due = pol.mode === 'ttl' ? now - a.last >= ttlMs : over.has(name);
+    if (!due) {
+      if (!a.ids.length) out.orphans.push({ id: name, last: a.last, items: a.items, expiresAt: pol.mode === 'ttl' ? a.last + ttlMs : null });
       continue;
     }
-    if (recycle(ctx, d.name, a, now)) out.recycled++;
+    if (recycle(ctx, name, a, now)) out.recycled++;
   }
   out.purged = await purgeTrash(ctx, { trashMs, now, onDrop });
   return out;
@@ -381,19 +410,28 @@ export async function pruneQuick(ctx, { ttlMs = QUICK_TTL_DAYS * DAY, trashMs = 
 
 // 节流版：/api/sessions 每次列表都会叫，按身份 5 分钟最多扫一遍。不 await——回收在后台跑，不拖慢列表。
 const pruneState = new Map();   // ctx.key -> { at, running }
-export function schedulePruneQuick(ctx, opts = {}, { force = false } = {}) {
+// onDone(结果)：跑完了（会话列表据此推总线让侧栏重拉）。正在跑时 force 也只是跳过——设置刚改完就撞上一轮，
+// 那一轮用的是旧值，所以 force 时记一笔 again，跑完按新值再来一轮。
+export function schedulePruneQuick(ctx, opts = {}, { force = false, onDone } = {}) {
   if (!quickAllowed(ctx)) return;
   const key = ctx.key || ctx.kind;
   const st = pruneState.get(key) || { at: 0, running: false };
-  if (st.running || (!force && Date.now() - st.at < 5 * 60 * 1000)) return;
+  if (st.running) { if (force) st.again = { opts, onDone }; return; }
+  if (!force && Date.now() - st.at < 5 * 60 * 1000) return;
   st.running = true; st.at = Date.now(); pruneState.set(key, st);
   pruneQuick(ctx, opts)
     .then((r) => {
       st.orphans = r.orphans;
       if (r.recycled || r.purged || r.empty) console.log(`[quick] 临时对话回收：${r.recycled} 只进回收站、${r.purged} 只永久删除、${r.empty} 只空桶`);
+      try { onDone?.(r); } catch {}
     })
     .catch((e) => console.warn('[quick] prune failed:', e?.message || e))
-    .finally(() => { st.running = false; });
+    .finally(() => {
+      st.running = false;
+      const again = st.again;
+      st.again = null;
+      if (again) schedulePruneQuick(ctx, again.opts, { force: true, onDone: again.onDone });
+    });
 }
 
 // 只有文件、没有对话记录的临时对话桶（最近一轮回收扫出来的，最多晚 5 分钟）：侧栏单独列一行，点开 = 在那只桶里
@@ -412,14 +450,16 @@ export function quickOrphans(ctx) {
     try { m = statSync(dir).mtimeMs; } catch { return []; }
     // 「继续保留」/ 往里放了东西会动桶目录：到期时刻按现在的修改时间重算，别拿扫描时的旧值盖掉
     const last = Math.max(o.last, m);
-    return [{ ...o, last, expiresAt: last + (o.expiresAt - o.last) }];
+    return [{ ...o, last, expiresAt: o.expiresAt == null ? null : last + (o.expiresAt - o.last) }];
   });
 }
 
 // 每只（用过的）临时对话桶什么时候到期：{ 桶 id: 到期时刻 ms }。rows = 会话列表里的临时对话行
 //（{ projectId, mtime }，见 runtime/session-list.mjs 的 quickFiles），再补上桶目录本身的修改时间。
 // 算法与 pruneQuick 一致（对话记录与桶目录取最晚）——界面上写的天数就是真实回收的时候，不会提前删。
-export async function quickExpiries(ctx, rows, { ttlMs = QUICK_TTL_DAYS * DAY } = {}) {
+// 只按条数留 / 不清理时没有到期时刻，回空表（界面上就不出「n 天后清理」）。
+export async function quickExpiries(ctx, rows, { ttlMs = QUICK_TTL_DAYS * DAY, retention } = {}) {
+  if (quickRetention(retention).mode !== 'ttl') return {};
   const last = new Map();
   for (const r of rows || []) {
     if (!r || !BUCKET_ID.test(String(r.projectId || ''))) continue;

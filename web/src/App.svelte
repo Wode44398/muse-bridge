@@ -26,7 +26,7 @@
   import ComingSoon from './components/ComingSoon.svelte';
   import FilesPanel from './components/FilesPanel.svelte';
   import FilesDesktop from './components/FilesDesktop.svelte';
-  import { isNativeDesktop, hasNativeWorkspaceOps } from './lib/nativeDesktop.js';
+  import { isNativeDesktop, hasNativeWorkspaceOps, pushNativeOverlay } from './lib/nativeDesktop.js';
   import { pointer, layout } from './lib/layout.svelte.js';
   // Gemini / Codex / dimensio 的页面属于功能扩展：一律懒加载（modules/pages.js），基础版主包里没有它们。
   import { loadPage } from './modules/pages.js';
@@ -78,6 +78,11 @@
     const r = root;
     untrack(() => { if (r !== 'home' && ui.screen === 'home') ui.screen = r; });
   });
+  // 设置页是整窗浮层：桌面壳的原生浏览器视图恒在 DOM 之上，开着时必须让位（关掉后各面板经 onNativeOverlayChange 自行挂回）
+  // 模型中心浮层（hubUi.sheet）同理：可以从 dimensio 页的型号菜单直接打开，不经设置页
+  // 先归成一个布尔：两者交替开合时 effect 不重跑，免得中途松开一帧让面板把网页挂回来又收走
+  const coverNative = $derived(Boolean(ui.settingsOpen || hubUi.sheet));
+  $effect(() => { if (coverNative) return pushNativeOverlay(); });
   // 红字报错提示的「问 Claude」：Claude 分页对这个人开着才出按钮（lib/toast.svelte.js）
   $effect(() => { setErrorToastAction((me.kind === 'admin' || me.kind === 'user') && screenOn('claude') ? askClaudeAboutError : null); });
   // 切换服务器重载来的：没有预载接手封面时（单页模式、首屏连接页）启动完由这里收场；预载接手过的这里是空操作

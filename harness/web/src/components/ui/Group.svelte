@@ -63,6 +63,16 @@
   .plain .body > :global(* + *) {
     box-shadow: none;
   }
+  /* 玻璃浮层（面板 / 弹层）里：分组面换成玻璃上的白卡（iOS inset grouped），行间细线更淡 */
+  :global(.hx-glass) .body {
+    background: var(--glass-card);
+  }
+  :global(.hx-glass) .body > :global(* + *) {
+    box-shadow: 0 -0.5px 0 color-mix(in srgb, var(--text) 9%, transparent);
+  }
+  :global(.hx-glass) .plain .body {
+    background: none;
+  }
   .foot {
     margin: 8px 4px 0;
     font-size: var(--fs-sm);

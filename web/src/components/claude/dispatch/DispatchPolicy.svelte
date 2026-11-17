@@ -19,7 +19,8 @@
   // 浮层（模型菜单、推理强度面板、小菜单）都挪到 body 上（手机设置页的面板带 transform，fixed 浮层出不来）；
   // 开着时经 onModal 告诉外壳。
   //
-  // 作用域（store）：同一份正文也是 设置 › dimensio › 子 agent 调用策略。dimensio 那份多一个「策略来源」：跟随 Claude 的策略（缺省）时
+  // 作用域（store）：同一份正文也是 设置 › dimensio › 子 agent 调用策略。dimensio 那份多一个「策略来源」：单独一套（缺省，11-15 起）
+  //   时和 Claude 一样整套可改；没有「调用非 Claude 模型」开关（dimensio 本来就是多厂商，候选恒为全部）。跟随 Claude 的策略时
   //   只读地摆出 Claude 生效的那一套在 dimensio 候选上的落点（备注也是那一套的），给一个去 Claude 子页的入口；单独一套时和 Claude 一样整套可改。
   //   dimensio 没有「主对话」口径分段；档位自定义的型号写法是 <厂商>:<型号>，落点表里用小菜单选（TierTable 的 dimensio 分支）。
   //
@@ -69,10 +70,10 @@
   const strategies = $derived(policy?.strategies || []);
   const activeId = $derived(policy?.activeId || '');
   const enabled = $derived(policy?.enabled !== false);
-  const allowTP = $derived(policy?.allowThirdParty !== false);
+  const allowTP = $derived(dim || policy?.allowThirdParty !== false);   // dimensio 恒为全部候选
   const canEdit = $derived(!!dp.canEdit);
-  // dimensio：跟随 Claude 的策略（缺省就是跟随）。这时下面的落点 / 图 / 备注只读，「调用非 Claude 模型」仍是 dimensio 自己的、照样能拨
-  const follow = $derived(dim && policy?.follow !== false);
+  // dimensio：跟随 Claude 的策略（缺省是单独一套，要显式选跟随）。跟随时下面的落点 / 图 / 备注只读
+  const follow = $derived(dim && policy?.follow === true);
   const canEditBody = $derived(canEdit && !follow);
   const claudeSide = $derived(dim ? dp.claude || null : null);   // Claude 那边生效的那一套 { activeId, name, … }
   const primary = $derived(splitClaudeModels(caps.data).primary);   // 四个有别名的 Claude 模型（opus / sonnet / haiku / fable）
@@ -130,7 +131,7 @@
     const tp = untrack(() => allowTP);
     let dead = false;
     Promise.resolve()
-      .then(() => previewStrategy(payload, { allowThirdParty: tp }))
+      .then(() => previewStrategy(payload, dim ? {} : { allowThirdParty: tp }))
       .then((data) => { if (!dead && data && Array.isArray(data.tiers)) pvLocal = { sig, data }; })
       .catch(() => {});
     return () => { dead = true; };
@@ -346,7 +347,7 @@
 
   // —— dimensio：跟随 Claude 的策略 / 单独一套（即点即存） ——
   // 从「单独」切到「跟随」之前，当前这一套没保存的改动先有个说法（保存 / 放弃），不然它们在跟随的这段时间里看不见、切回来又冒出来
-  const SOURCE = [{ value: 'follow', label: t('跟随 Claude 的策略') }, { value: 'own', label: t('dimensio 单独一套') }];
+  const SOURCE = [{ value: 'own', label: t('dimensio 单独一套') }, { value: 'follow', label: t('跟随 Claude 的策略') }];
   let sourceBusy = $state(false);
   async function pickSource(v) {
     const want = v === 'follow';
@@ -443,7 +444,7 @@
           <DpSwitch {shell} checked={enabled} disabled={!canEdit} label={t('按策略调用')} onchange={(v) => patch({ enabled: v })} />
         </div>
         {#if dim}
-          <!-- dimensio：生效的那一套从哪来。跟随 = 取 Claude 那边生效的那套（这里只读），单独 = 下面 dimensio 自己的几套 -->
+          <!-- dimensio：生效的那一套从哪来。单独（缺省）= 下面 dimensio 自己的几套，跟随 = 取 Claude 那边生效的那套（这里只读） -->
           <div class="dp-src">
             <span class="dp-src-t">{t('策略来源')}</span>
             <span class="dp-src-seg">
@@ -512,7 +513,7 @@
         <!-- ⑤ 性价比图 -->
         <section class="dp-sec">
           <h3 class="dp-label">{t('性价比图')}</h3>
-          <ChartCard {shell} {candidates} tiers={chartTiers} canEdit={canEditBody} tpEditable={canEdit} {allowTP} chart={pvAny?.chart || dp.preview?.chart || null}
+          <ChartCard {shell} {candidates} tiers={chartTiers} canEdit={canEditBody} tpEditable={canEdit} showTP={!dim} {allowTP} chart={pvAny?.chart || dp.preview?.chart || null}
             floorsEdited={!follow && hasFloorEdits(draft)} store={S} emptyHint={noPreview}
             onfloor={onFloor} onreset={onReset} onresetall={resetFloors} onassign={(key, c) => setOverride(key, { model: c.model, effort: c.effort || '' })}
             ontp={(v) => patch({ allowThirdParty: v })} onModal={(v) => { modals.chart = v; }} />

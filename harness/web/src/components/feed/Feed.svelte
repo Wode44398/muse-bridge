@@ -5,10 +5,12 @@
   //
   // 滚动：贴底（离底 < 72px）时内容长高就继续贴底——跟的是内容列本身的尺寸（ResizeObserver），所以工具行状态 / 结果行、
   // Bash 尾行增长、行展开、非末条长出产物卡都跟得上（spec-A ⚠4）；翻上去时自己发了一条消息也回到底（⚠4）。
+  // 内容长高时的跟底是缓动的（与 bridge Claude 分页同一套）：正文逐字淡入，视口每批「咔」地跳一行很出戏，改成每帧把视口
+  // 往底部缓动（τ≈90ms；落差特别大或减弱动态效果直接到底）。切会话、自己发消息、键盘 / 容器尺寸变化照旧立刻到底。
   // 离底 > 320px 浮出「回到底部」。换会话无条件回到底部。键盘弹出 / 收起（视口变化）与时间线容器尺寸变化保持贴底。
   import { tick } from "svelte";
   import { app, rewindFrom, type ArtifactItem, type Item } from "../../lib/state.svelte.ts";
-  import { feedUnits, type FeedUnit } from "../../lib/feed-units.ts";
+  import { feedUnits, groupEntries, type FeedUnit } from "../../lib/feed-units.ts";
   import { isPendingCard } from "../../lib/card-dock.ts";
   import { handleCopyClick } from "../../lib/copy-click.ts";
   import { fade, pop, reducedMotion, rise } from "../../lib/motion.ts";
@@ -55,21 +57,60 @@
       endGlide();
     }
     if (!stick || gliding) return;
+    stopFollow();
     scroller.scrollTo({ top: scroller.scrollHeight });
     // 内容不够一屏时 scrollTo 不出滚动事件：到底了就顺手收起「回到底部」（切会话不带着上一个的按钮）
     showJump = false;
   }
 
+  // 缓动跟底：用户一往上滚（scrollTop 变小、且不是内容变短被夹的）立刻放手；跟底途中自己造成的滚动事件不重算 stick——
+  // 大段内容一次到达时落差可能瞬间超过贴底容差，重算会把跟底误判成「用户离开了底部」。
+  let followRaf = 0;
+  let followT = 0;
+  let lastTop = 0;
+  function follow() {
+    if (followRaf || !scroller || !stick || gliding) return;
+    followT = performance.now();
+    followRaf = requestAnimationFrame(stepFollow);
+  }
+  function stopFollow() {
+    if (followRaf) cancelAnimationFrame(followRaf);
+    followRaf = 0;
+  }
+  function stepFollow(now: number) {
+    followRaf = 0;
+    const el = scroller;
+    if (!el || !stick || gliding || !el.clientHeight) return;
+    const gap = el.scrollHeight - el.clientHeight - el.scrollTop;
+    if (gap <= 1) {
+      showJump = false;
+      return;
+    }
+    const dt = Math.min(64, Math.max(1, now - followT));
+    followT = now;
+    let d = gap > 1600 || reducedMotion() ? gap : gap * (1 - Math.exp(-dt / 90));
+    if (d < 1) d = Math.min(gap, 1);
+    el.scrollTop += d;
+    lastTop = el.scrollTop;
+    followRaf = requestAnimationFrame(stepFollow);
+  }
+
   function onScroll() {
     if (!scroller) return;
-    const gap = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    const top = scroller.scrollTop;
+    const gap = scroller.scrollHeight - top - scroller.clientHeight;
     if (gliding) {
       stick = true;
+      lastTop = top;
       if (gap < 2) endGlide();
       return;
     }
-    stick = gap < 72;
-    showJump = gap > 320;
+    if (top < lastTop - 2 && gap > 2) {
+      stick = false; // 用户往上滚：立刻放手
+      stopFollow();
+    } else if (!followRaf || gap < 72) stick = gap < 72;
+    showJump = gap > 320 && !followRaf;
+    lastTop = top;
   }
 
   function endGlide() {
@@ -100,6 +141,7 @@
     if (e.deltaY < 0) {
       stick = false;
       endGlide();
+      stopFollow();
     }
   }
   function onTouchStart(e: TouchEvent) {
@@ -107,7 +149,10 @@
     endGlide();
   }
   function onTouchMove(e: TouchEvent) {
-    if ((e.touches[0]?.clientY ?? 0) - touchY > 6) stick = false;
+    if ((e.touches[0]?.clientY ?? 0) - touchY > 6) {
+      stick = false;
+      stopFollow();
+    }
   }
 
   // 1. 跟内容：条数变了、末条的字变了（每 90ms 一批的流式落地）
@@ -116,7 +161,7 @@
     void tl.length;
     const last = tl[tl.length - 1] as { text?: string } | undefined;
     if (last) void last.text;
-    tick().then(() => scrollToEnd());
+    tick().then(() => follow());
   });
 
   // 2. 切换会话（pane.chat 引用变化）：无条件回到底部 —— 旧会话的翻阅位置不该把 stick=false 带进新会话
@@ -163,18 +208,20 @@
     };
   });
 
-  // 6. 内容列本身长高 / 变矮（状态行、尾行输出、展开、产物卡……）：贴着底就继续贴着。RO 回调在布局之后、绘制之前，
-  //    这一帧就画在底部，不闪。
+  // 6. 内容列本身长高 / 变矮（状态行、尾行输出、展开、产物卡……）：贴着底就继续贴着（缓动跟上，见上面 follow）。
   function followContent(node: HTMLElement) {
     if (typeof ResizeObserver === "undefined") return {};
     const ro = new ResizeObserver(() => {
-      if (stick) scrollToEnd();
+      if (stick) follow();
     });
     ro.observe(node);
     return { destroy: () => ro.disconnect() };
   }
 
-  $effect(() => () => clearTimeout(glideTimer));
+  $effect(() => () => {
+    clearTimeout(glideTimer);
+    stopFollow();
+  });
 
   // ── 显示单元 ───────────────────────────────────────────────────────────────────────
   // 工具组 / 轮次折叠的开合按 key 记（换会话时 key 不重复，不必清）
@@ -204,6 +251,16 @@
   // 量线：思考 / 工具 / 工具组 / 折叠行是线上的节点，相邻的两行接起来（活动行接在最后）
   const onRail = (u: FeedUnit) => u.f || u.g || u.a || (u.item.kind === "tool" && !isWidgetItem(u.item)) || u.item.kind === "thinking";
   const rails = $derived(units.map(onRail));
+
+  // 正在流的思考行此刻露在屏上（单独一行，或在展开着的 / 不套组头的工具组里）：它自己在说「思考中…」，活动行就不重复
+  const thinkShown = $derived.by(() => {
+    const u = units[units.length - 1];
+    if (!u || !pane.chat.running || u.f || u.a) return false;
+    const live = (it: Item | undefined) => it?.kind === "thinking" && it.live;
+    if (!u.g) return live(u.item);
+    if (!live(u.items[u.items.length - 1])) return false;
+    return !compact || groupOpen[u.key] === true || groupEntries(u.items).filter((e) => e.run).length <= 1;
+  });
 
   // U6：「接着做」只挂在时间线最后一条的失败上
   const lastItem = $derived(pane.chat.timeline[pane.chat.timeline.length - 1] ?? null);
@@ -266,11 +323,11 @@
           <!-- 新一轮 = 用户自己发的消息（运行中插话不算，不另起一段呼吸） -->
           <div class="u" class:rail class:user={!u.f && !u.g && !u.a && u.item.kind === "user" && !u.item.steer} in:rise={riseIn()}>
             {#if u.f}
-              <TurnFold tools={u.tools} run={u.run} open={u.open} {up} {down} ontoggle={() => toggleFold(u.key)} />
+              <TurnFold tools={u.tools} run={u.run} open={u.open} {compact} {up} {down} ontoggle={() => toggleFold(u.key)} />
             {:else if u.g}
               <ToolGroup items={u.items} live={u.live} {compact} open={groupOpen[u.key] ?? false} {up} {down} ontoggle={() => (groupOpen[u.key] = !groupOpen[u.key])} />
             {:else if u.a}
-              <AgentCard items={u.items} {up} {down} />
+              <AgentCard items={u.items} {compact} {up} {down} />
             {:else}
               {@const item = u.item}
               {#if item.kind === "user"}
@@ -318,7 +375,7 @@
 
         {#if pane.chat.running}
           <div class="u rail" in:rise={{ y: 6 }} out:fade={{ duration: 140 }}>
-            <ActivityLine up={rails[rails.length - 1] ?? false} />
+            <ActivityLine up={rails[rails.length - 1] ?? false} {compact} {thinkShown} />
           </div>
         {/if}
       </div>

@@ -4,14 +4,17 @@
 // 服务上记着 native = 厂商 id，勾给 dimensio 的模型就落在 dimensio 原来那个厂商 id 上（专门的思考参数写法、逐个核对过的
 // 型号表、个别厂商的特殊处理都照旧），Key 取这个服务的第一条可用线路。旧会话、默认模型里记着的厂商 id 不变。
 //
+// family = 这家自己的型号在 brands.mjs vendorOf 里认成的家族（判断「同一个服务里托管的别家型号」用）。
 // 这里只放模型中心要用的：怎么按地址认出是哪一家、迁移时建服务用的地址 / 协议 / 型号清单、harness/.env 里哪几个变量是它的 Key。
 // 型号清单与 catalog.ts 对齐由 harness/server/native-vendors-contract.test.ts 守着（改 CATALOG 时这里跟着改）。
+import { vendorOf } from './brands.mjs';
+
 const host = (s) => new RegExp(`^${s.replace(/\./g, '\\.')}$`);
 const M = (id, label, contextWindow, maxOutput, vision) => Object.freeze({ id, label, contextWindow, maxOutput, vision });
 
 export const NATIVE_VENDORS = Object.freeze([
   {
-    id: 'anthropic', name: 'Anthropic', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com',
+    id: 'anthropic', family: 'anthropic', name: 'Anthropic', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com',
     hosts: [host('api.anthropic.com')], envKey: ['ANTHROPIC_API_KEY'], envBase: [],
     models: [
       M('claude-fable-5-2', 'Fable 5.2', 1_000_000, 128_000, true),
@@ -27,7 +30,7 @@ export const NATIVE_VENDORS = Object.freeze([
   },
   {
     // dimensio 里这家的厂商 id 叫 openai（历史原因），接的是 DeepSeek
-    id: 'openai', name: 'DeepSeek', protocol: 'openai', baseUrl: 'https://api.deepseek.com',
+    id: 'openai', family: 'deepseek', name: 'DeepSeek', protocol: 'openai', baseUrl: 'https://api.deepseek.com',
     hosts: [host('api.deepseek.com')], envKey: ['OPENAI_API_KEY'], envBase: ['OPENAI_BASE_URL'],
     models: [
       M('deepseek-flash', 'V4.1 Flash', 1_000_000, 393_216, true),
@@ -35,11 +38,12 @@ export const NATIVE_VENDORS = Object.freeze([
     ],
   },
   {
-    id: 'qwen', name: 'Qwen', protocol: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    id: 'qwen', family: 'qwen', name: 'Qwen', protocol: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     hosts: [host('dashscope.aliyuncs.com'), host('dashscope-intl.aliyuncs.com'), host('dashscope-us.aliyuncs.com')],
     envKey: ['QWEN_API_KEY', 'VISION_API_KEY'], envBase: ['QWEN_BASE_URL', 'VISION_BASE_URL'],
     derive: (h) => `https://${h}/compatible-mode/v1`,
     models: [
+      M('qwen4-max', 'Qwen4 Max', 1_000_000, 131_072, true),
       M('qwen3.8-max', 'Qwen3.8 Max', 1_000_000, 131_072, true),
       M('qwen3.8-flash', 'Qwen3.8 Flash', 1_000_000, 131_072, true),
       M('qwen3.7-max', 'Qwen3.7 Max', 1_000_000, 131_072, false),
@@ -48,7 +52,7 @@ export const NATIVE_VENDORS = Object.freeze([
     ],
   },
   {
-    id: 'zhipu', name: 'Zhipu GLM', protocol: 'openai', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    id: 'zhipu', family: 'zhipu', name: 'Zhipu GLM', protocol: 'openai', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     hosts: [host('open.bigmodel.cn')], envKey: ['ZHIPU_API_KEY'], envBase: ['ZHIPU_BASE_URL'],
     models: [
       M('glm-5.3', 'GLM-5.3', 1_000_000, 131_072, false),
@@ -59,7 +63,7 @@ export const NATIVE_VENDORS = Object.freeze([
   },
   {
     // Kimi for Coding（订阅端点）；开放平台 api.moonshot.cn 的 Key 与它不通用，不算这一家
-    id: 'kimi', name: 'Kimi', protocol: 'openai', baseUrl: 'https://api.kimi.com/coding/v1',
+    id: 'kimi', family: 'moonshot', name: 'Kimi', protocol: 'openai', baseUrl: 'https://api.kimi.com/coding/v1',
     hosts: [host('api.kimi.com')], envKey: ['KIMI_API_KEY', 'MOONSHOT_API_KEY'], envBase: ['KIMI_BASE_URL'],
     models: [
       M('k3.1-pro', 'K3.1 Pro', 1_048_576, 65_536, true),
@@ -71,7 +75,7 @@ export const NATIVE_VENDORS = Object.freeze([
     ],
   },
   {
-    id: 'mimo', name: 'Xiaomi MiMo', protocol: 'openai', baseUrl: 'https://api.xiaomimimo.com/v1',
+    id: 'mimo', family: 'xiaomi', name: 'Xiaomi MiMo', protocol: 'openai', baseUrl: 'https://api.xiaomimimo.com/v1',
     hosts: [host('api.xiaomimimo.com'), /^token-plan-[a-z0-9-]+\.xiaomimimo\.com$/],
     envKey: ['MIMO_API_KEY'], envBase: ['MIMO_BASE_URL'],
     derive: (h) => `https://${h}/v1`,
@@ -84,7 +88,7 @@ export const NATIVE_VENDORS = Object.freeze([
     ],
   },
   {
-    id: 'gemini', name: 'Gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    id: 'gemini', family: 'google', name: 'Gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     hosts: [host('generativelanguage.googleapis.com')], envKey: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'], envBase: ['GEMINI_BASE_URL'],
     models: [
       M('gemini-4-argon', 'Gemini 4 Argon', 1_048_576, 32_768, true),
@@ -120,4 +124,14 @@ export function nativeEndpoint(vendorId, { kind, baseUrl } = {}) {
   if (kind === 'openai') return clean;
   const h = hostnameOf(clean);
   return v.derive && h && v.hosts.some((re) => re.test(h)) ? v.derive(h) : '';
+}
+
+/**
+ * 这个型号是不是托管在这家服务里的别家型号（百炼上的 Kimi、GLM、DeepSeek……）：dimensio 这家的适配分支只懂自己家的参数
+ * （Qwen 的 thinking_budget、enable_search 发给它们是 400），这类型号改按模型中心给的档位表发。认不出家族的当这家自己的。
+ */
+export function hostedForeign(vendorId, modelId) {
+  const v = nativeVendor(vendorId);
+  const f = v ? vendorOf(modelId) : '';
+  return !!f && f !== v.family;
 }

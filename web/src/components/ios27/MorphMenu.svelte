@@ -20,6 +20,9 @@
   //       长按 <MorphMenu {open} point={{ x: e.clientX, y: e.clientY }} ... />（anchor 为空就按 point）。
   //   菜单一直挂着（open 只管展开 / 收起，收起动画才放得完）；按钮 / 按压点在展开那一刻取定，收起途中照旧显示收起前那一份
   //   items / title（调用方关菜单时把状态清空也没关系）。items：{ label, symbol?, icon?, tint?, destructive?, disabled?, detail?, checked?, onclick } 或 { sep: true }。
+  //   refit()（自定义内容用）：内容换了（面板里切到另一页），按新的自然高度用弹簧改尺寸——贴着按钮的那条边不动，
+  //   菜单原地长高 / 缩短，不重开。
+  //   按住滑选 / LiquidStretch 只给菜单本身：按在里面的控件上（滑块、开关、输入框、data-no-stretch）不拉伸整块。
   //   header（可选 snippet）：条目上方的一块自定义头（如长按文件菜单顶上的缩略图 + 名称），不参与按住滑选；
   //   同 items 一样在收起途中保留展开时那一份，调用方让它读一份关菜单时不清空的状态即可。
   // 挂的位置：放在一个本身有不透明底色、包住页面内容的容器里（如 .ws-root），中间别隔会建层叠上下文的父级——
@@ -31,11 +34,16 @@
   import { LIQUID, MorphGlass, sdfOf, cssShadow } from '../../lib/liquid/glass.js';
   import { haptic } from '../../lib/dragdrop.svelte.js';
 
-  let { open = false, anchor = null, point = null, neighbors = [], onfuse, items = [], title = '', header = null, width = 250, onclose, children } = $props();
+  // flat：只要这套展开 / 收起的动作、不要玻璃材质（电脑端的纸面菜单）——不建折射滤镜，玻璃层只是个跟着形状走的空壳，
+  //       底色、描边、投影由调用方经 class 给（:global(.xx .mm-glass) / .mm-shadow）。
+  // radius：终态圆角（缺省 = kit 菜单的 34；纸面菜单按自己设计语言给小一些的）。
+  // drift：J 形路径的漂移钳（缺省 = 样稿的 ±8）。内容多的自定义面板给 0：内容已经显形后整块再回位 8px，看着像抖了一下。
+  let { open = false, anchor = null, point = null, neighbors = [], onfuse, items = [], title = '', header = null, width = 250, flat = false, radius = 0, drift = 8, class: cls = '', onclose, children } = $props();
   const ios = getContext('ios27');
   const dark = $derived(!!ios?.dark);
 
   const M = KIT.menu;
+  const MR = () => radius || M.r;
   let root = $state(), glassEl, shadowEl, clipEl, bodyEl, barrierEl;
   let rowEls = $state([]);
   let shown = $state(false);   // 挂着（展开、停着、收起中）
@@ -56,6 +64,7 @@
     W: 250, H: 100, tw: 44, th: 44, align: { x: -1, y: -1 }, fdx: 0, fdy: 0, ext: null,
     L: 0, T: 0, ox: 0, oy: 0,
     morph: null, lastKey: '', clipKey: '', shQ: '', clipX: 0, clipY: 0,
+    hs: null, B: null, acy: 0,   // 展开后改尺寸（refit）：高度弹簧、展开时的可用范围与按钮中线
     nb: [],   // 融进液滴的邻近按钮 { el, geo（容器坐标）, mode: 'rest' | 'fused', s（大小弹簧，1 = 原大）}
     step(dt) {
       if (!shown) return;
@@ -67,6 +76,12 @@
       }
       const v = this.v;
       v.step(dt); this.iscale.step(dt); this.stX.step(dt); this.stY.step(dt);
+      if (this.hs) {
+        this.hs.step(dt);
+        if (this.hs.idle) this.hs.x = this.hs.t;
+        placeV(this.hs.x);
+        if (this.hs.idle) this.hs = null;
+      }
       if (Math.abs(v.x - v.t) < .001 && Math.abs(v.v) < .05) { v.x = v.t; v.v = 0; }   // Tolerance(0.001, 0.05)，snapToEnd
       if (this.closing && !this.handedOff && v.x <= 0) this.handedOff = true;
       if (this.closing && v.x <= .001 && Math.abs(v.v) < .5 && this.nb.every((n) => n.mode === 'rest' && n.s.idle)) finish();
@@ -74,7 +89,7 @@
     isIdle() {
       if (!shown) return true;
       if (this.ctx) return !this.closing && this.ct >= 1;
-      return !this.closing && this.v.x === 1 && !this.dragging && this.iscale.idle && this.stX.idle && this.stY.idle && this.nb.every((n) => n.s.idle);
+      return !this.closing && this.v.x === 1 && !this.dragging && !this.hs && this.iscale.idle && this.stX.idle && this.stY.idle && this.nb.every((n) => n.s.idle);
     },
     render() { if (shown) (this.ctx ? frameCtx() : frame()); },
   };
@@ -82,7 +97,7 @@
   // —— 材质（触屏 Chromium：实时折射；其余：CSS 毛玻璃）。头一次展开才建（一页挂着好几个菜单，没开过的不占滤镜）——
   function buildMorph() {
     ctl.morph?.destroy(); ctl.morph = null;
-    if (!LIQUID || !root) return;
+    if (!LIQUID || flat || !root) return;
     ctl.morph = new MorphGlass({ layers: KIT.medium(dark, 238, 300), dark, fastDpr: .5 });
     ctl.morph.mount(root, clipEl);
     for (const d of ctl.morph.decor) d.el.style.zIndex = '96';
@@ -131,10 +146,15 @@
   }
 
   // 按钮的位置：收起途中按钮被移出页面（选了一项、列表跟着刷新）就停在它最后的位置，照样收回那儿
-  function anchorRect() {
+  // 展开着的时候按展开那一刻的位置摆（ctl.held）：菜单里的操作常让按钮自己变宽变窄（开 Fast 后型号胶囊多出「· Fast」），
+  // 跟着按钮走的话整块菜单会横着挪、挪出屏幕。收起那一刻再换回按钮的实时位置（closeNow 里把偏移折进 fdx / fdy，不跳）。
+  function liveRect() {
     const a = ctl.anchor;
     if (a?.isConnected) { const r = a.getBoundingClientRect(); if (r.width || r.height) ctl.ar = r; }
     return ctl.ar;
+  }
+  function anchorRect() {
+    return !ctl.closing && ctl.held ? ctl.held : liveRect();
   }
   // 可用范围：菜单所在容器（内嵌在工作台里时不是整块视口）与视口的交集，再让开状态栏和手势条
   function bounds() {
@@ -151,8 +171,8 @@
     // 收起途中换了触发源（「…」那份还没收完又长按了别的行）：先把上一个按钮还原
     if (shown && ctl.anchor && ctl.anchor !== a) { const t0 = trig(ctl.anchor); t0?.fade(1); t0?.impact(''); }
     releaseNb();
-    if (LIQUID && !ctl.morph) buildMorph();
-    ctl.anchor = a; ctl.ar = null; ctl.ctx = !a;
+    if (LIQUID && !flat && !ctl.morph) buildMorph();
+    ctl.anchor = a; ctl.ar = null; ctl.held = null; ctl.ctx = !a;
     const B = bounds();
     // 尺寸：至少调用方给的宽、内容更宽就撑开，不出容器；高度量排版后的真高，放不下就截短、停稳后自身滚动
     // （根节点收起时只是 visibility:hidden，照常排版，量得到）
@@ -179,13 +199,15 @@
       // 压暗层当场就挡：长按松手后浏览器补发的那下 click 落在它上面，不会落回底下的行
       barrierEl.style.pointerEvents = 'auto';
     } else {
-      const r = anchorRect() || a.getBoundingClientRect();
+      const r = liveRect() || a.getBoundingClientRect();
+      ctl.held = r;
       ctl.tw = a.offsetWidth || r.width; ctl.th = a.offsetHeight || r.height;
       const acx = r.left + r.width / 2, acy = r.top + r.height / 2;
       ctl.align.x = acx > (B.l + B.r) / 2 ? 1 : -1;
       const below = B.b - 12 - (acy - ctl.th / 2), above = acy + ctl.th / 2 - B.t - 12;
       ctl.align.y = below < natural && above > below ? 1 : -1;
       ctl.H = Math.max(ctl.th, Math.min(natural, B.b - B.t - 24));
+      ctl.B = B; ctl.acy = acy; ctl.hs = null;
       ctl.tall = ctl.H < natural - .5;
       ctl.fdx = -ctl.align.x * (ctl.W - ctl.tw) / 2;
       // 竖向：贴着按钮的那条边展开（向下＝上缘对齐按钮上缘，向上＝下缘对齐按钮下缘）；两边都放不下（按钮在屏幕中段、
@@ -207,7 +229,7 @@
       let x0 = Math.min(tx, fx), y0 = Math.min(ty, fy), x1 = Math.max(tx + ctl.tw, fx + ctl.W), y1 = Math.max(ty + ctl.th, fy + ctl.H);
       // 终态菜单盖到的邻近按钮才融（隔着缝的不动）；外包范围把它们也包进去
       if (ctl.morph && !reduceMotion()) {
-        const fF = sdfOf({ x: fx, y: fy, w: ctl.W, h: ctl.H, r: M.r });
+        const fF = sdfOf({ x: fx, y: fy, w: ctl.W, h: ctl.H, r: MR() });
         for (const el of neighbors || []) {
           if (!el || el === a || !el.isConnected) continue;
           const nr = el.getBoundingClientRect();
@@ -229,11 +251,42 @@
     glide(true);
     wake(ctl);
   }
+  // 竖向摆放（按钮菜单）：贴着按钮的那条边展开（向下＝上缘对齐按钮上缘，向上＝下缘对齐按钮下缘），放不下就整块挪进可用范围
+  function placeV(H) {
+    const B = ctl.B; if (!B) return;
+    ctl.H = H;
+    const top = clamp(ctl.align.y < 0 ? ctl.acy - ctl.th / 2 : ctl.acy + ctl.th / 2 - H, B.t + 12, Math.max(B.t + 12, B.b - 12 - H));
+    ctl.fdy = top + H / 2 - ctl.acy;
+  }
+  export function refit() {
+    if (!shown || ctl.closing || ctl.ctx || !ctl.B || !bodyEl) return;
+    const h0 = bodyEl.style.height;
+    bodyEl.style.height = '';
+    const natural = bodyEl.scrollHeight;
+    bodyEl.style.height = h0;
+    const B = ctl.B, H = Math.max(ctl.th, Math.min(natural, B.b - B.t - 24));
+    ctl.tall = H < natural - .5;
+    if (Math.abs(H - ctl.H) < .5) return;
+    // 临界阻尼略带一点回弹的弹簧：长高 / 缩短像同一块玻璃在变形，不是换了一块
+    if (!ctl.hs) ctl.hs = new Spring(ctl.H, .82, 260);
+    ctl.hs.t = H;
+    if (reduceMotion()) { ctl.hs.snap(H); }
+    wake(ctl);
+  }
   function closeNow() {
     if (!shown || ctl.closing) return;
     ctl.closing = true; ctl.handedOff = false; ctl.dragging = false;
     sel = -1;
+    if (ctl.hs) { placeV(ctl.hs.t); ctl.hs = null; }   // 改尺寸途中收起：直接按目标尺寸收
     if (ctl.ctx) { ctl.ct = 0; wake(ctl); return; }
+    // 展开期间按钮挪过 / 变过尺寸：把差值折进路径偏移，菜单从原地开始收、收到按钮现在的位置和大小
+    const h = ctl.held, r = liveRect();
+    ctl.held = null;
+    if (h && r && ctl.anchor?.isConnected) {
+      ctl.fdx += h.left + h.width / 2 - (r.left + r.width / 2);
+      ctl.fdy += h.top + h.height / 2 - (r.top + r.height / 2);
+      ctl.tw = ctl.anchor.offsetWidth || r.width; ctl.th = ctl.anchor.offsetHeight || r.height;
+    }
     const v = ctl.v, [k, c] = reduceMotion() ? [500, 32.4] : [200, 21];
     v.k = k; v.z = c / (2 * Math.sqrt(k)); v.t = 0; v.v = -3.2;
     wake(ctl);
@@ -296,10 +349,10 @@
     const W = sizeT < 0 ? Math.max(1, tw * (1 + sizeT * .25)) : Math.max(0, lerp(tw, ctl.W, sizeT));
     const H = sizeT < 0 ? Math.max(1, th * (1 + sizeT * .25)) : Math.max(0, lerp(th, ctl.H, sizeT));
     const maxR = Math.min(W, H) / 2;
-    const R = closing ? maxR : lerp(maxR, M.r, easeInExpo(clamp(sizeT, 0, 1)));
+    const R = closing ? maxR : lerp(maxR, MR(), easeInExpo(clamp(sizeT, 0, 1)));
     let dx, dy;
     if (closing) { dx = fdx * pathT; dy = fdy * pathT; }
-    else { dx = fdx * sizeT + clamp(fdx * (pathT - sizeT), -8, 8); dy = fdy * sizeT + clamp(fdy * (pathT - sizeT), -8, 8); }
+    else { dx = fdx * sizeT + clamp(fdx * (pathT - sizeT), -drift, drift); dy = fdy * sizeT + clamp(fdy * (pathT - sizeT), -drift, drift); }
     const bL = trigX + tw / 2 + dx - W / 2, bT = trigY + th / 2 + dy - H / 2;
     // 形状：本体 ∪ 按钮幽灵（Blob A），SDF 二次平滑并集
     const sB = sdfOf({ x: bL, y: bT, w: W, h: H, r: R });
@@ -383,7 +436,8 @@
     const sc0 = lerp(.7, 1, flutterEaseOut(clamp((c - .25) / .75, 0, 1)));
     placeClip(bL, bT, W, H, R, stretchAt);
     const bs = bodyEl.style;
-    bs.left = (cx0 - ctl.clipX).toFixed(2) + 'px'; bs.top = (cy0 - ctl.clipY).toFixed(2) + 'px'; bs.height = ctl.H + 'px';
+    // 取整：裁切框按整像素摆，内容若带小数偏移，每帧落在不同的亚像素上、字形重新栅格化——看着在抖
+    bs.left = Math.round(cx0 - ctl.clipX) + 'px'; bs.top = Math.round(cy0 - ctl.clipY) + 'px'; bs.height = ctl.H + 'px';
     bs.visibility = mounted ? '' : 'hidden';
     bs.opacity = op.toFixed(4);
     bs.overflowY = ctl.tall && c > .98 && !closing ? 'auto' : 'hidden';
@@ -417,7 +471,7 @@
       a = 1 - q; s = 1 - .12 * q; dim = 1 - t;
     }
     if (reduceMotion()) s = 1;
-    const W = ctl.W, H = ctl.H, R = M.r, bL = ctl.L - o.left, bT = ctl.T - o.top, Ox = bL + ctl.ox, Oy = bT + ctl.oy;
+    const W = ctl.W, H = ctl.H, R = MR(), bL = ctl.L - o.left, bT = ctl.T - o.top, Ox = bL + ctl.ox, Oy = bT + ctl.oy;
     const at = (ex, ey) => `translate(${(Ox - ex).toFixed(3)}px, ${(Oy - ey).toFixed(3)}px) scale(${s.toFixed(5)}) translate(${(ex - Ox).toFixed(3)}px, ${(ey - Oy).toFixed(3)}px)`;
     const place = (n, x, y, w, h) => { const st = n.style; st.left = x + 'px'; st.top = y + 'px'; st.width = w + 'px'; st.height = h + 'px'; st.transform = at(x, y); };
     root.style.visibility = '';
@@ -459,8 +513,11 @@
     return -1;
   };
   function setSel(i) { if (i === sel) return; if (i >= 0) haptic('tick'); sel = i; wake(ctl); }
+  const CONTROL = 'input, textarea, select, [role="slider"], [role="switch"], [data-no-stretch]';
   function pdown(e) {
     if (!shown || ctl.closing || (!ctl.ctx && ctl.v.x < .8) || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    // 按在面板里的控件上：交给控件自己（滑块拖动、开关），整块菜单不跟着放大拉伸
+    if (children && e.target?.closest?.(CONTROL)) return;
     press = { id: e.pointerId, x: e.clientX, y: e.clientY, scroll: bodyEl.scrollTop };
     // 自定义内容里有自己的按钮：不抓指针（抓了 click 就落到容器上），只做 LiquidStretch
     if (!children && (e.pointerType !== 'touch' || !ctl.tall)) { try { clipEl.setPointerCapture(e.pointerId); } catch {} }
@@ -522,10 +579,10 @@
   }
 </script>
 
-<div class="mm" class:dark class:liquid={LIQUID} bind:this={root} style="visibility:hidden">
+<div class="mm {cls}" class:dark class:liquid={LIQUID && !flat} class:flat bind:this={root} style="visibility:hidden">
   <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
   <div class="mm-barrier" bind:this={barrierEl} onpointerdown={(e) => { e.preventDefault(); if (!ctl.closing) requestClose(); }} oncontextmenu={(e) => e.preventDefault()}></div>
-  <div class="mm-shadow" bind:this={shadowEl} style:box-shadow={kitShadow ? cssShadow(kitShadow) : null}></div>
+  <div class="mm-shadow" bind:this={shadowEl} style:box-shadow={kitShadow && !flat ? cssShadow(kitShadow) : null}></div>
   <div class="mm-glass" bind:this={glassEl}></div>
   <div class="mm-clip" bind:this={clipEl} role="presentation" onpointerdown={pdown} onpointermove={pmove} onpointerup={pup} onpointercancel={pup}>
     <div class="mm-body" class:custom={!!children} bind:this={bodyEl} role={children ? 'dialog' : 'menu'} aria-label={view.title}>
@@ -559,8 +616,8 @@
   .mm-shadow { z-index: 94; }
   .mm-glass { z-index: 95; }
   /* 退路（WebKit / Firefox）：CSS 毛玻璃，跟着本体的圆角矩形走 */
-  .mm:not(.liquid) .mm-glass { background: rgba(250, 250, 250, .8); -webkit-backdrop-filter: blur(20px) saturate(1.7); backdrop-filter: blur(20px) saturate(1.7); }
-  .mm.dark:not(.liquid) .mm-glass { background: rgba(32, 32, 32, .74); }
+  .mm:not(.liquid):not(.flat) .mm-glass { background: rgba(250, 250, 250, .8); -webkit-backdrop-filter: blur(20px) saturate(1.7); backdrop-filter: blur(20px) saturate(1.7); }
+  .mm.dark:not(.liquid):not(.flat) .mm-glass { background: rgba(32, 32, 32, .74); }
   .mm-clip { z-index: 97; overflow: hidden; touch-action: pan-y; }
   .mm-body { position: absolute; left: 0; top: 0; padding: 10px 0; box-sizing: border-box; color: #0c0c0e; overscroll-behavior: contain; scrollbar-width: none; user-select: none; -webkit-user-select: none; }
   .mm.dark .mm-body { color: #fff; }

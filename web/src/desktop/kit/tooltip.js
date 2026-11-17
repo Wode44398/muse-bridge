@@ -18,7 +18,7 @@ function ensureEl() {
 
 export function tooltip(node, text) {
   let cur = text;
-  let timer = 0;
+  let timer = 0, raf = 0;
   let shown = false;
 
   function show() {
@@ -34,12 +34,16 @@ export function tooltip(node, text) {
     let top = Math.round(r.top - tr.height - 7);
     if (top < 6) top = Math.round(r.bottom + 7);
     el.style.left = left + 'px'; el.style.top = top + 'px';
-    requestAnimationFrame(() => el.classList.add('show'));
+    // 淡入延一帧（先落位再过渡）。这一帧里若已 hide（悬停 380ms 刚到点就按下 / 移开——点 Dock 进分页
+    // 的常见节奏），回调不能再把提示点亮：那时全局监听已撤，提示会永远钉在新页面上（11-17）。
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => { raf = 0; if (shown) el.classList.add('show'); });
     if (!shown) watch(true);
     shown = true;
   }
   function hide() {
     clearTimeout(timer);
+    cancelAnimationFrame(raf); raf = 0;
     if (shown && tipEl) tipEl.classList.remove('show');
     if (shown) watch(false);
     shown = false;

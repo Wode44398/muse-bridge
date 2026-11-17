@@ -33,6 +33,7 @@ import { makePoolHandler, lineState, forgetService, clearCooldown, defaultAuthSt
 import { handleVertex, vertexConfigured, detectVertexChat, VERTEX_KNOWN_MODELS, VERTEX_DEFAULT_MODELS } from './vertex.mjs';
 import {
   setCatalogRoot, readCatalog, writeCatalog, mergeCatalog, addCatalogModel, removeCatalogModel, removeCatalog, catalogMeta, cleanCatalogModel, CATALOG_MAX,
+  cleanProbe, probeCaps, patchCatalogProbe,
   _resetCatalogCacheForTests,
 } from './catalog.mjs';
 import {
@@ -40,8 +41,9 @@ import {
   primeStudioKey,
 } from './studio-link.mjs';
 import { detectModels } from './detect.mjs';
-import { NATIVE_VENDOR_IDS, nativeVendor, nativeVendorOf, nativeEndpoint } from '../../model-knowledge/dimensio-native.mjs';
+import { NATIVE_VENDOR_IDS, nativeVendor, nativeVendorOf, nativeEndpoint, hostedForeign } from '../../model-knowledge/dimensio-native.mjs';
 import { cleanOver, cleanParams, cleanCompat, autoCompat, isCustomized } from './advanced.mjs';
+import { probeLineModel } from './probe.mjs';
 
 export const HUB_PLUGIN = 'model-hub';
 export const HUB_NAME = '模型中心';
@@ -339,6 +341,7 @@ function normalizeModels(v, protocol, { strict = false, dflt = TEXT_AGENTS } = {
     // 高级调用配置（只有文本模型有）：读盘时坏值静默丢掉
     const over = media ? undefined : cleanOver(o.over);
     const params = media ? undefined : cleanParams(o.params);
+    const probe = media ? undefined : cleanProbe(o.probe);
     const agents = cleanAgents(id, kind, explicit ? o.agents : dflt, protocol, { strict: strict && explicit, ctx: over?.contextWindow || c.contextWindow });
     if (!agents.length) continue;
     if (media ? nMedia >= MAX_MEDIA : nText >= MAX_TEXT) { if (strict) throw bad(media ? `媒体模型最多 ${MAX_MEDIA} 个` : `文本模型最多 ${MAX_TEXT} 个`); continue; }
@@ -348,7 +351,7 @@ function normalizeModels(v, protocol, { strict = false, dflt = TEXT_AGENTS } = {
     // 提示缓存时长（分钟，用户在模型中心填的；0 = 不缓存 / 不提示；没有 = 按知识层自动）。不放进 caps：caps 也用来读目录条目
     const ttl = media ? undefined : normalizeCacheTtl(o.cacheTtl);
     out.push({ id, ...(label && label !== id ? { label } : {}), kind, agents, ...c, ...(ttl !== undefined ? { cacheTtl: ttl } : {}),
-      ...(over ? { over } : {}), ...(params ? { params } : {}) });
+      ...(over ? { over } : {}), ...(params ? { params } : {}), ...(probe ? { probe } : {}) });
   }
   return out;
 }
@@ -440,7 +443,9 @@ function normalizeService(input, prev, { lenient = false, strictModels = true, i
 // auto：不看覆盖的那一份（界面在「自动」后面写出来）
 function autoSpec(m, protocol, route = '') {
   const known = VERTEX_KNOWN_MODELS.find((k) => k.id === m.id);
-  const g = guessModel(m.id, { protocol, route });
+  // 探测出来的 reasoning_effort 档位（型号表没有这个型号的思考写法时才用得上：guessModel 里型号表优先）
+  const p = m.probe?.effortIds?.length ? { reasoning: { supported_efforts: [...m.probe.effortIds, ...(m.probe.effortOff ? ['none'] : [])] } } : null;
+  const g = guessModel(m.id, { protocol, route, api: p });
   const thinks = g.thinking && g.thinking !== 'none' && g.efforts?.length;
   return {
     contextWindow: m.contextWindow || known?.contextWindow || g.contextWindow,
@@ -630,8 +635,9 @@ function applyAssign(s, changes, catOf, catMedia) {
     // 上下文窗口：已添加的按它自己记的，新加的按目录（Claude 至少要 4096）
     const ctx = kind === 'text' ? (old ? ctxOf(old) : caps(cat).contextWindow) : undefined;
     const agents = cleanAgents(id, kind, c.agents.map(String), s.kind, { strict: true, mediaKinds, ctx });
-    const base = old ? { ...old } : { id, ...(cat.label && cat.label !== id ? { label: cat.label } : {}), ...(kind === 'text' ? caps(cat) : {}) };
-    if (kind !== 'text') { delete base.contextWindow; delete base.maxOutput; delete base.vision; delete base.over; delete base.params; delete base.cacheTtl; }
+    const base = old ? { ...old } : { id, ...(cat.label && cat.label !== id ? { label: cat.label } : {}), ...(kind === 'text' ? caps(cat) : {}),
+      ...(kind === 'text' && cat.probe ? { probe: cat.probe } : {}) };
+    if (kind !== 'text') { delete base.contextWindow; delete base.maxOutput; delete base.vision; delete base.over; delete base.params; delete base.cacheTtl; delete base.probe; }
     cur.set(id, { ...base, kind, agents });
   }
   const out = [...cur.values()];
@@ -847,13 +853,15 @@ function serviceView(s, sec = secrets()) {
     brand: brand ? { key: brand.key, name: brand.name, logo: brand.logo } : null,
     authStyle: s.authStyle, headers: s.headers, enabled: s.enabled, members: s.members, strategy: s.strategy, useProxy: s.useProxy, timeoutSec: s.timeoutSec,
     lines: s.lines.map((l) => { const key = k(s.id, l.id); return { ...l, hasKey: !!key, keyTail: tail(key), state: lineState(s.id, l.id) }; }),
-    models: s.models.map((m) => ({ ...m, agents: [...m.agents], vendor: vendorOf(m.id) || '', ...(m.kind === 'text' ? textExtras(s, m, route) : {}) })),
+    // hostedForeign：自带适配的服务里托管的别家型号——dimensio 那边按这里的档位表发，思考写法对它也生效
+    models: s.models.map((m) => ({ ...m, agents: [...m.agents], vendor: vendorOf(m.id) || '', ...(m.kind === 'text' ? textExtras(s, m, route) : {}),
+      ...(s.native && hostedForeign(s.native, m.id) ? { hostedForeign: true } : {}) })),
     counts,
     agents: ALL_AGENTS.filter((a) => s.models.some((m) => m.agents.includes(a))),
     defaultModel: s.defaultModel, createdAt: s.createdAt,
     detectedAt: s.detectedAt || 0, catalogSize: meta.size, media,
     native: s.native || '',
-    // dimensio 那边走自带适配直连这家（不登记成卡）：高级设置里只有上下文 / 输出上限 / 识图 / 缓存对 dimensio 生效
+    // dimensio 那边走自带适配直连这家（不登记成卡）：思考写法只对托管的别家型号生效，其余高级设置（能力、缓存、调用参数、兼容项）两边都生效
     dimNative: !!s.native && hubFlag('dimensioNative') && load().services.find((x) => x.native === s.native && x.enabled)?.id === s.id,
     published: handles.has(s.id),
   };
@@ -1316,12 +1324,61 @@ export function catalogView(id) {
   const extra = s.models.filter((m) => !have.has(m.id)).map((m) => cleanCatalogModel({ ...m, source: 'manual' }, 'manual')).filter(Boolean);
   return { at: c.at, models: [...c.models, ...extra] };
 }
-/** 手动加一个模型 ID 进目录（契约 POST /catalog/add）→ { model }。只进目录，要用还得 assign。 */
+/** 手动加一个模型 ID 进目录（契约 POST /catalog/add 的前一半）→ { model }。只进目录，要用还得 assign。 */
 export function catalogAddModel(id, model) {
   const s = findService(id);
   const m = addCatalogModel(s.id, model, { protocol: s.kind });
   notify();
   return { model: m };
+}
+/**
+ * 契约 POST /catalog/add：加进目录，型号表不认识的文本模型顺手探测一次能力（probeHubModel）→ { model, probe?, probeError? }。
+ * 探测失败不影响添加，原因放在 probeError。
+ */
+export async function catalogAddAndProbe(id, model) {
+  const s = findService(id);
+  const { model: m } = catalogAddModel(id, model);
+  if (m.kind !== 'text' || knownToTable(m.id, s.kind)) return { model: m };
+  try {
+    const r = await probeHubModel(s.id, m.id);
+    return { model: r.model || m, probe: r.probe };
+  } catch (e) {
+    return { model: m, probeError: String(e?.message || e).slice(0, 240) };
+  }
+}
+// 型号表认得它（有表里的上下文窗口或思考写法）= 不用探测
+function knownToTable(modelId, protocol) {
+  const g = guessModel(modelId, { protocol });
+  return g.source.contextWindow === 'table' || g.source.thinking === 'table';
+}
+
+/**
+ * 探测一个文本模型的能力（契约 POST /model/probe）→ { probe, model（目录条目）, service }。
+ * 用 lineId 那条线路（不给 = 第一条启用的）真打几次；输出上限 / 识图写进目录条目与已添加的模型（用户在高级设置里的覆盖照旧压在上面），
+ * reasoning_effort 档位记在 probe 里，型号表没有它的思考写法时拿来拼（autoSpec）。上下文窗口探不出，不动。
+ */
+export async function probeHubModel(id, modelId, lineId = '') {
+  const mid = str(modelId, 200);
+  const s0 = findService(id);
+  const inCat = readCatalog(s0.id).models.some((m) => m.id === mid);
+  const added = s0.models.find((m) => m.id === mid);
+  if (!inCat && !added) throw Object.assign(new Error('这个服务里没有这个模型'), { status: 404 });
+  if ((added?.kind || readCatalog(s0.id).models.find((m) => m.id === mid)?.kind) !== 'text') throw bad('只有文本模型能探测能力');
+  const { service, line, key } = lineContext({ id: s0.id, lineId });
+  const result = await probeLineModel(service, line, key, mid);
+  if (result.error) throw Object.assign(new Error('探测失败：' + result.error), { status: 502 });
+  const at = Date.now();
+  const model = inCat ? patchCatalogProbe(s0.id, mid, result) : null;
+  const s = findService(id);   // 探测期间服务可能被改过：按最新的写
+  const m = s.models.find((x) => x.id === mid);
+  if (m && m.kind === 'text') {
+    Object.assign(m, probeCaps(result));
+    const p = cleanProbe({ ...result, at });
+    if (p) m.probe = p; else delete m.probe;
+    save(); publish();
+  }
+  notify();
+  return { probe: result, model, service: serviceView(s) };
 }
 
 /**

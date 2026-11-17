@@ -93,6 +93,24 @@ test("管理员实例：插件服务并进列表，托管、带插件名，Key �
   assert.equal(customProviderKey("custom-0a0a0a0a"), undefined);
 });
 
+test("模型中心接的官方 Anthropic：支持 fast 的型号照官方目录标 fast，别的上游 / 别的协议不标", () => {
+  const anth = (id: string, extra: Record<string, unknown> = {}) =>
+    entry(id, {
+      name: "Anthropic API",
+      models: ["claude-opus-5-5", "claude-sonnet-5-5"],
+      modelSpecs: ["claude-opus-5-5", "claude-sonnet-5-5"].map((m) => ({ id: m, label: m, enabled: true, kind: "chat", contextWindow: 1_000_000, maxOutput: 128_000, vision: true })),
+      defaultModel: "claude-opus-5-5",
+      upstream: "api.anthropic.com",
+      ...extra,
+    });
+  write(ownDir, [anth("custom-0e0e0e0e"), anth("custom-0f0f0f0f", { upstream: "openrouter.ai" }), anth("custom-1a1a1a1a", { protocol: "openai" })]);
+  const fast = (id: string) => (providerSpec(id as never).models as { id: string; fast?: boolean }[]).map((m) => [m.id, m.fast === true]);
+  assert.deepEqual(fast("custom-0e0e0e0e"), [["claude-opus-5-5", true], ["claude-sonnet-5-5", false]], "Sonnet 5.5 官方不支持 fast（发了 400）");
+  assert.deepEqual(fast("custom-0f0f0f0f"), [["claude-opus-5-5", false], ["claude-sonnet-5-5", false]], "中转站不认 speed");
+  assert.deepEqual(fast("custom-1a1a1a1a"), [["claude-opus-5-5", false], ["claude-sonnet-5-5", false]], "OpenAI 协议没有 fast");
+  write(ownDir, []);
+});
+
 test("成员实例：只认管理员那份里标了 shared 的插件服务", () => {
   write(adminDir, [entry("custom-0c0c0c0c", { shared: true }), entry("custom-0d0d0d0d")]);
   process.env.DIMENSIO_TENANT = "1";

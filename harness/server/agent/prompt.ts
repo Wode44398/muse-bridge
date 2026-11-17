@@ -6,6 +6,8 @@ import { projectDocsSection } from "../project-docs.ts";
 import { readOnlyRoots } from "../sandbox.ts";
 import type { WorldSection } from "./world-state.ts";
 import type { ModelProfile } from "./profile.ts";
+import { applyPromptPatches } from "./prompt-patches.ts";
+import { variantCore } from "./prompt-variants.ts";
 import { tenantShell } from "../tenant.ts";
 
 export interface PromptEnv {
@@ -58,7 +60,7 @@ export interface PromptEnv {
   coordinator?: string;
   project?: string;
   // 模型档案（agent/profile.ts）：按家族选提示词变体（profile.prompt.variant）与补丁（profile.prompt.patches）的挂点。
-  // P0 只收不用——任何档案下输出都与不给时逐字节相同（model-profile-golden.test.ts 锁着）。
+  // 没点名补丁时输出与不给档案时逐字节相同（model-profile-golden.test.ts 锁着）。
   profile?: ModelProfile;
   // 调试模式（prefs/debug.ts）："bridge" = 经 BridgeCall feedback.harness 记反馈；"file" = 没有 bridge 工具，直接写文件夹；空 = 关
   debug?: string;
@@ -290,7 +292,8 @@ export function systemPrompt(env: PromptEnv): string {
     : "";
   const planSection = env.permissionMode === "plan" ? planModeSection(env.webSearch === true) : "";
   const browser = env.browser !== false;
-  const base = `You are an autonomous software engineering agent. You complete coding tasks end-to-end by using tools — reading, writing, and running real code inside a sandboxed workspace. You are decisive and keep working until the task is genuinely finished.
+  const replaced = variantCore(env.profile?.prompt.variant, { model: env.model, provider: env.provider, root: env.root, shell: env.shell, platform: env.platform, date: env.date, full, reach, readOnlyLine, lanLine, browser });
+  const base = replaced ?? `You are an autonomous software engineering agent. You complete coding tasks end-to-end by using tools — reading, writing, and running real code inside a sandboxed workspace. You are decisive and keep working until the task is genuinely finished.
 
 ## Identity
 You are running as the "${env.model}" model, served via the ${env.provider} provider, inside a custom agent harness (not the vendor's own product). If the user asks what model you are, answer honestly with this. Do not claim to be a different model or assistant; if you are genuinely unsure about details beyond this, say so rather than guessing.
@@ -380,7 +383,7 @@ ${skills}`);
 
   // plan 段紧跟核心契约（不被 guide/knowledge/memory 隔开）：它是本轮的硬约束，
   // 位置越靠前越不容易在长上下文里被稀释。
-  const core = base + planSection;
+  const core = applyPromptPatches(base, env.profile?.prompt.patches) + planSection;
   return sections.length ? `${core}\n\n${sections.join("\n\n")}` : core;
 }
 

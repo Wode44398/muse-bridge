@@ -687,7 +687,7 @@ export async function detectProtocol(draft) {
 }
 
 // —— 探测一个模型的能力（真打几次，只给管理员；花费很小：都是一两句话的请求）——
-// 8×8 红图、输出上限 / 可选档位的报文解读在共用模块（RED_PNG、parseLimit、parseEffortList、looksNotChat）
+// 32×32 红图、输出上限 / 可选档位的报文解读在共用模块（RED_PNG、parseLimit、parseEffortList、looksNotChat）
 
 export async function probeModel(draft, model) {
   const key = keyOf(draft);

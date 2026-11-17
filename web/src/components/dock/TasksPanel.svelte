@@ -34,6 +34,11 @@
     // 挂起清单里点名的任务就是还在跑：挂起接力后它们挂在前几轮的工具行上，刷新后历史重建会把
     //「上一轮留下的 running」收成 stopped（normSeg），以服务端这份电平为准纠回来。
     const holdIds = new Set((bgHoldNow()?.tasks || []).map((x) => x.taskId).filter(Boolean));
+    // 同一个 tool_use id 只留一条，取后出现的那条（直播重建的，任务状态比历史那份全），排在原来的位置。
+    // 正常不会重复；但这一轮中途插进过别的会话发来的消息时，重挂直播剪不掉历史尾部已有的这一轮，
+    // 同一行就在历史气泡和直播气泡里各有一份。下面两个列表按 key 渲染，key 重复会让整个工作台渲染失败
+    //（卡片出不来、工具开关也跟着没了）。
+    const at = new Map();
     for (const m of chat.messages) {
       if (!m || m.role !== 'assistant') continue;
       for (const s of (m.segments || [])) {
@@ -43,7 +48,11 @@
           if (!kind) continue;
           const task = tl.task;
           const status = task && task.taskId && holdIds.has(task.taskId) ? 'running' : toolTaskStatus(tl);
-          out.push({ tool: tl, kind, status, running: status === 'running', startedAt: (task && task.startedAt) || 0, endedAt: (task && task.endedAt) || 0, key: tl.id || ('i' + i), index: i });
+          const rec = { tool: tl, kind, status, running: status === 'running', startedAt: (task && task.startedAt) || 0, endedAt: (task && task.endedAt) || 0, key: tl.id || ('i' + i), index: i };
+          const dup = tl.id ? at.get(tl.id) : undefined;
+          if (dup !== undefined) { rec.index = out[dup].index; out[dup] = rec; continue; }
+          if (tl.id) at.set(tl.id, out.length);
+          out.push(rec);
           i++;
         }
       }
@@ -116,7 +125,12 @@
   // —— 定位（官方 openTasksPaneAtTask）：点了对话里的卡 → 那张卡滚到可见 + 描边一闪 ——
   let listEl = $state();
   const focusTool = $derived(dock.tasksFocus ? dock.tasksFocus.tool : null);
-  const focusKey = $derived.by(() => { const it = focusTool ? items.find((x) => x.tool === focusTool) : null; return it ? it.key : ''; });
+  // 点的那一行可能是被上面去重掉的那一份（同 id 的另一条留在列表里）：按对象找不到就按 id 找
+  const focusKey = $derived.by(() => {
+    if (!focusTool) return '';
+    const it = items.find((x) => x.tool === focusTool) || (focusTool.id ? items.find((x) => x.tool.id === focusTool.id) : null);
+    return it ? it.key : '';
+  });
   let flashKey = $state('');
   $effect(() => {
     const f = dock.tasksFocus;

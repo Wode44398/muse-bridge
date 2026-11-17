@@ -236,7 +236,7 @@ export function dimDispatchLine(d) {
   if (!p) return d?.err ? t('调用策略没读出来，点进去重试') : '';
   if (!p.enabled) return t('已关闭 · 子 agent 沿用本会话的模型');
   let head;
-  if (p.follow !== false) head = d.claude ? t('跟随 Claude · {name}', { name: strategyName(d.claude.name) }) : t('跟随 Claude 的策略');
+  if (p.follow === true) head = d.claude ? t('跟随 Claude · {name}', { name: strategyName(d.claude.name) }) : t('跟随 Claude 的策略');
   else {
     const s = (p.strategies || []).find((x) => x.id === p.activeId) || p.strategies?.[0];
     head = t('单独一套 · {name}', { name: strategyName(s?.name) });

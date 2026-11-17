@@ -198,3 +198,33 @@ test('logo：提供方给的品牌标的键原样带给 dimensio；不合法的�
   assert.equal(S.modelServices('dimensio')[0].logo, '');
   h.dispose();
 });
+
+test('自带厂商的绑定（splitNative）：型号的档位表、调用参数与服务的兼容项、上游主机一起带给 dimensio', () => {
+  S._resetModelServicesForTests();
+  const efforts = [{ id: 'off', name: '关闭', value: { enable_thinking: false } }, { id: 'high', name: 'High', value: { reasoning_effort: 'high' } }];
+  const h = S.provideModelService('model-hub', '模型中心', {
+    id: 'h-0d5c0de1', name: '阿里云百炼', protocol: 'openai', baseUrl: 'http://127.0.0.1:1/k/h-0d5c0de1/openai', agents: ['dimensio'],
+    upstream: 'dashscope.aliyuncs.com', native: { vendor: 'qwen', key: 'sk-FAKE-DUMMY-DS', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+    compat: { replayReasoning: true, maxTokensField: 'max_completion_tokens', stripBetas: true },
+    models: [
+      { id: 'kimi-k3.1-pro', thinking: 'effort', efforts, effortDefault: 'high', params: { temperature: 0.3 } },
+      { id: 'qwen4-max', contextWindow: 1_000_000 },
+    ],
+  });
+  const { providers, builtins } = D.splitNative(S.modelServices('dimensio'));
+  assert.equal(providers.length, 0);
+  const b = builtins.qwen;
+  assert.equal(b.upstream, 'dashscope.aliyuncs.com');
+  assert.equal(b.replayReasoning, true);
+  assert.equal(b.maxTokensField, 'max_completion_tokens');
+  assert.equal('stripBetas' in b, false);   // dimensio 只认 promptCaching / replayReasoning / maxTokensField
+  const k = b.models.find((m) => m.id === 'kimi-k3.1-pro');
+  assert.deepEqual(k.efforts, efforts);
+  assert.equal(k.effortDefault, 'high');
+  assert.deepEqual(k.params, { temperature: 0.3 });
+  // 没给档位表的型号不带思考字段（dimensio 照这家厂商自己的适配）
+  const q = b.models.find((m) => m.id === 'qwen4-max');
+  assert.equal('efforts' in q, false);
+  assert.equal(q.contextWindow, 1_000_000);
+  h.dispose();
+});

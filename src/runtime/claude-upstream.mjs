@@ -12,6 +12,11 @@
 //   · 每个响应头里的 anthropic-ratelimit-unified-* 按【实际服务的号】记进 status.mjs 分槽，
 //     不用另发探针就有逐请求的实时余量。
 //
+// 智能分派（号池策略 'smart'，account-router/）也走这个代理，而且不再看全局激活号：CLI 每个请求都带
+// X-Claude-Code-Session-Id（子 agent 另带 x-claude-code-agent-id），代理按「会话 / 子 agent / 模型家族」认出是哪个任务，
+// 问 account-router.dispatchPick 这个任务该用哪个号。响应流顺路读出 usage（message_start / message_delta 里的 token 数），
+// 记到任务这一段的用量和计量里——分派靠它估「一段多大」和「这个号 1% 是多少」。
+//
 // CLI 侧怎么接（claude-account.claudeEngineEnv 经 engineUpstream() 注入）：
 //   ANTHROPIC_BASE_URL=http://127.0.0.1:<端口>/<随机键>
 //   _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1 —— CLI 自带的开关（2.1.299 实测）：把这个地址当官方 API，
@@ -43,7 +48,8 @@ import { activeAccountId, accountIdForToken, listAccountsWithTokens, setEngineUp
 import { isCustomModelId, resolveSubagentModel } from './claude-providers.mjs';
 import { isAutoModel, resolveAuto, applyAutoTarget } from './model-ratings.mjs';
 import { providersProxyBase, ownerOfRouteToken } from './claude-providers-proxy.mjs';
-import { seamlessActive, leaveIfBlocked, noteLimitHit, onRouterSettings } from './account-router.mjs';
+import { Transform } from 'node:stream';
+import { seamlessActive, proxyRouting, leaveIfBlocked, noteLimitHit, onRouterSettings, dispatchPick, dispatchBound, dispatchBegin, dispatchEnd, dispatchUsage, dispatchReadings, dispatchLimitHit } from './account-router.mjs';
 import { loginToken, bucket } from './account-usage.mjs';
 import { applyProbedLimits, noteFiveHourPresence, noteUpgradePaths } from './status.mjs';
 
@@ -67,6 +73,14 @@ let server = null;
 let baseUrl = '';
 let starting = null;
 let lastServed = '';   // 最近一个请求实际用的号（CLI 的 rate_limit_event 据此记账）
+const servedBySid = new Map();   // 会话 -> 它最近一个请求实际用的号（智能分派下各会话各用各的号）
+function noteServed(sid, acct) {
+  lastServed = acct;
+  if (!sid) return;
+  servedBySid.delete(sid);
+  servedBySid.set(sid, acct);
+  if (servedBySid.size > 500) servedBySid.delete(servedBySid.keys().next().value);
+}
 
 const tokenOf = (id) => { const a = listAccountsWithTokens().find((x) => x.id === id); return a ? (a.token || loginToken()) : ''; };
 
@@ -75,7 +89,7 @@ function noteHeaders(headers, acct) {
   const h = (k) => headers.get('anthropic-ratelimit-unified-' + k);
   const out = {};
   for (const [abbr, name] of Object.entries(BUCKETS)) { const b = bucket(h, abbr); if (b) out[name] = b; }
-  if (Object.keys(out).length) applyProbedLimits(out, acct);
+  if (Object.keys(out).length) { applyProbedLimits(out, acct); dispatchReadings(acct, out); }
   noteFiveHourPresence(acct, !!out.five_hour, !!out.seven_day);   // 只有周桶 = 没有 5 小时限额（部分 Ultra）
   noteUpgradePaths(acct, h('upgrade-paths'));   // 额度吃紧时才带：不含 upgrade_plan = 已是最高档（Ultra）
 }
@@ -88,6 +102,48 @@ function quotaRejected(headers, text) {
 function resetMs(headers) {
   const s = parseInt(headers.get('anthropic-ratelimit-unified-reset') || '', 10);
   return Number.isFinite(s) ? s * 1000 : 0;
+}
+
+// 请求体里给分派看的几样：思考档位高 / 这一轮带着 Workflow 工具（开了动态工作流或 Ultracode）——新任务没历史时按它估一段多大。
+function hintOf(j) {
+  if (!j || typeof j !== 'object') return '';
+  if (Array.isArray(j.tools) && j.tools.some((t) => t && t.name === 'Workflow')) return 'wf';
+  const e = String((j.output_config && j.output_config.effort) || '').toLowerCase();
+  return e === 'high' || e === 'xhigh' || e === 'max' ? 'hi' : 'lo';
+}
+
+// 响应原样转给 CLI，顺路读出 usage：流式看 message_start（输入、缓存）与 message_delta（输出）两种事件行；非流式整段解析。
+// 只认这两种事件行，正文增量一律跳过（不解析、不留存）。
+function usageTap(contentType, done) {
+  const sse = /event-stream/i.test(contentType || '');
+  const dec = new TextDecoder();
+  let buf = '', usage = null, size = 0;
+  const merge = (u) => { if (u && typeof u === 'object') usage = { ...(usage || {}), ...Object.fromEntries(Object.entries(u).filter(([, v]) => v != null)) }; };
+  const line = (l) => {
+    if (!l.startsWith('data:') || !/"type":\s*"message_(start|delta)"/.test(l)) return;
+    try { const j = JSON.parse(l.slice(5)); merge(j.type === 'message_start' ? j.message && j.message.usage : j.usage); } catch {}
+  };
+  return new Transform({
+    transform(chunk, _enc, cb) {
+      try {
+        if (sse) {
+          buf += dec.decode(chunk, { stream: true });
+          let i;
+          while ((i = buf.indexOf('\n')) >= 0) { line(buf.slice(0, i).trimEnd()); buf = buf.slice(i + 1); }
+          if (buf.length > 1 << 20) buf = '';   // 一行超过 1MB 的只会是正文增量，不要
+        } else if ((size += chunk.length) <= 4 << 20) buf += dec.decode(chunk, { stream: true });
+      } catch {}
+      cb(null, chunk);
+    },
+    flush(cb) {
+      try {
+        if (sse) line(buf.trimEnd());
+        else { const j = JSON.parse(buf); merge(j && j.usage); }
+      } catch {}
+      try { done(usage); } catch {}
+      cb();
+    },
+  });
 }
 
 function writeHead(res, up) {
@@ -154,8 +210,10 @@ async function handle(req, res, key) {
   let body = Buffer.concat(chunks);
   const isMessages = req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(path);
   const isCount = req.method === 'POST' && /^\/v1\/messages\/count_tokens(\?|$)/.test(path);
-  let model = '';
-  if (isMessages || isCount) { try { model = String(JSON.parse(body.toString('utf8')).model || ''); } catch {} }
+  let model = '', hint = '';
+  if (isMessages || isCount) { try { const j = JSON.parse(body.toString('utf8')); model = String(j.model || ''); if (isMessages) hint = hintOf(j); } catch {} }
+  const sid = String(req.headers['x-claude-code-session-id'] || '');
+  const agent = String(req.headers['x-claude-code-agent-id'] || '');
   // 工作流 agent({ model:'auto:hard' })：按性价比阶梯换成这一档首选（model-ratings.mjs）——订阅的 Claude 就改写型号与档位照旧去 Anthropic，
   // 第三方就写成 custom:<服务>:<型号> 交给下面的 routedModel 转出去。只认带 /r/<令牌> 的 CLI（这一轮系统提示里才教了 auto 写法）。
   if (owner && (isMessages || isCount) && isAutoModel(model)) {
@@ -176,34 +234,56 @@ async function handle(req, res, key) {
   const hit = owner && (isMessages || isCount) ? routedModel(model, owner) : null;
   if (hit) { await toProvider(req, res, hit, owner, path, body, ac.signal); return; }
 
-  // 无缝换号没开（只为第三方子 agent 走这里）：不选号、不换号，沿用 CLI 自己的凭证
-  const seam = seamlessActive();
+  // 号池不经代理选号时（只为第三方子 agent 走这里）：不选号、不换号，沿用 CLI 自己的凭证
+  const seam = proxyRouting();
   if (isMessages && seam) {
-    const sw = await leaveIfBlocked(model);
+    const sw = await leaveIfBlocked(model);   // 智能分派开着时它什么都不做（按任务选号在下面）
     if (sw) upstreamEvents.emit('switch', sw);
   }
 
   for (let switches = 0; ; ) {
     const cliTok = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    const acct = seam ? activeAccountId() : (accountIdForToken(cliTok) || activeAccountId());
+    // 智能分派：这个请求归哪个任务、该用哪个号；count_tokens 这类旁路跟会话主线程同号
+    const picked = seam && isMessages ? dispatchPick({ sid, agent, model, hint }) : null;
+    if (picked && picked.entry && picked.entry.kind !== 'place' && picked.entry.kind !== 'sub') upstreamEvents.emit('switch', { ...picked.entry, model, sid });
+    const task = picked ? picked.task : null;
+    const acct = !seam ? (accountIdForToken(cliTok) || activeAccountId())
+      : picked ? picked.acct : (dispatchBound(sid) || activeAccountId());
     const token = seam ? tokenOf(acct) : '';
     const headers = {};
     for (const [k, v] of Object.entries(req.headers)) if (!DROP_REQ.has(k) && v != null) headers[k] = Array.isArray(v) ? v.join(', ') : v;
     if (token) headers.authorization = 'Bearer ' + token;
     else if (req.headers.authorization) headers.authorization = req.headers.authorization;   // 没登记 token：沿用 CLI 自己的凭证
     let up;
+    dispatchBegin(task);
     try {
       // 走不带保温的那一层出口：这个代理只转发 CLI 自己发出的请求，bridge 不另发（保温心跳是 bridge 自己发的请求，不能挂在这条路上）；
       // 连接池的空闲保留照常生效。失败照旧回 502 让 CLI 自己重试。
       const plain = plainDispatcher();
       up = await fetch(UPSTREAM + path, { method: req.method, headers, body: body.length ? body : undefined, signal: ac.signal, redirect: 'manual', ...(plain ? { dispatcher: plain } : {}) });
     } catch (e) {
+      dispatchEnd(task);
       if (!ac.signal.aborted) fail(res, 502, 'bridge 上游代理连不上 Anthropic：' + ((e && e.cause && e.cause.code) || (e && e.message) || e));
       return;
     }
-    if (seam) lastServed = acct;
+    if (seam) noteServed(sid, acct);
     noteHeaders(up.headers, acct);
     if (DEBUG) console.log(`[claude-upstream] ${req.method} ${path.split('?')[0]} ${model || '-'} via ${acct} → ${up.status}`);
+    // 智能分派：被拒的号记冷却、这个任务的这一段算结束——开着无缝换号就当场换号重发（下一圈 dispatchPick 会给它换号），
+    // 没开就把 429 交回 CLI，这一轮停下，由轮级重试重发 / 续跑
+    if (task && isMessages && (up.status === 429 || up.status === 401) && seam) {
+      const text = await up.text().catch(() => '');
+      dispatchEnd(task);
+      const kind = up.status === 401 ? 'auth' : quotaRejected(up.headers, text) ? 'rate_limit' : '';
+      if (kind) {
+        await noteLimitHit(acct, { kind, model, resetsAt: resetMs(up.headers), type: kind === 'auth' ? '' : (up.headers.get('anthropic-ratelimit-unified-representative-claim') || '') });
+        dispatchLimitHit(task);
+        if (seamlessActive() && switches < MAX_SWITCHES) { switches++; console.log(`[claude-upstream] ${up.status} on ${acct} → re-pick for ${sid.slice(0, 8)}`); continue; }
+      }
+      writeHead(res, up);
+      res.end(text);
+      return;
+    }
     if (isMessages && (up.status === 429 || up.status === 401) && seamlessActive() && switches < MAX_SWITCHES) {
       const text = await up.text().catch(() => '');
       const kind = up.status === 401 ? 'auth' : quotaRejected(up.headers, text) ? 'rate_limit' : '';
@@ -225,8 +305,12 @@ async function handle(req, res, key) {
       return;
     }
     writeHead(res, up);
-    if (!up.body) { res.end(); return; }
-    try { await pipeline(Readable.fromWeb(up.body), res); } catch {}   // CLI 断开 / 上游断流：两头各自收尾
+    if (!up.body) { dispatchEnd(task); res.end(); return; }
+    try {
+      if (seam && isMessages && up.ok) await pipeline(Readable.fromWeb(up.body), usageTap(up.headers.get('content-type'), (u) => dispatchUsage(task, acct, model, u)), res);
+      else await pipeline(Readable.fromWeb(up.body), res);
+    } catch {}   // CLI 断开 / 上游断流：两头各自收尾
+    dispatchEnd(task);
     return;
   }
 }
@@ -254,15 +338,15 @@ function ensure() {
 // 启动时调一次：开关开着就把代理起好；之后开关一开就起（起了就不关，见文件头）。
 export function initClaudeUpstream() {
   setEngineUpstream(engineUpstream);
-  if (seamlessActive()) ensure();
-  onRouterSettings(() => { if (seamlessActive()) ensure(); });
+  if (proxyRouting()) ensure();
+  onRouterSettings(() => { if (proxyRouting()) ensure(); });
 }
 
 // claude-account.claudeEngineEnv 用：无缝换号生效、或这一轮要派第三方子 agent（route = providerRouteToken(owner)），
 // 且代理已就绪 → { baseUrl, token? }，否则 null（直连，行为同以前）。只为第三方子 agent 走代理时不带 token
 //（CLI 照旧用激活号，代理原样转发）。刚打开开关、代理还在起的那一轮照旧直连——要派第三方的轮先 await ensureClaudeUpstream()。
 export function engineUpstream({ route } = {}) {
-  const seam = seamlessActive();
+  const seam = proxyRouting();
   if (!seam && !route) return null;
   if (!baseUrl) { ensure(); return null; }
   const url = route ? `${baseUrl}/r/${route}` : baseUrl;
@@ -274,8 +358,9 @@ export function engineUpstream({ route } = {}) {
 /** 起好代理再返回（要派第三方子 agent 的轮在取 env 之前调，免得第一轮直连）。 */
 export async function ensureClaudeUpstream() { await ensure(); return !!baseUrl; }
 
-// 这个 env 是不是「无缝换号」的走法（一轮可能横跨几个号，额度事件记到实际服务的号名下）。只为第三方子 agent 走代理的不算。
-export function isUpstreamEnv(env) { return !!(env && baseUrl && seamlessActive() && String(env.ANTHROPIC_BASE_URL || '').startsWith(baseUrl)); }
+// 这个 env 是不是「代理逐请求选号」的走法（无缝换号 / 智能分派：一轮可能横跨几个号，额度事件记到实际服务的号名下）。
+// 只为第三方子 agent 走代理的不算。
+export function isUpstreamEnv(env) { return !!(env && baseUrl && proxyRouting() && String(env.ANTHROPIC_BASE_URL || '').startsWith(baseUrl)); }
 
-// 最近一个推理请求实际用的号（无缝模式下一轮可能横跨几个号，额度事件记到它名下）。
-export function lastServedAccount() { return lastServed; }
+// 最近一个推理请求实际用的号（一轮可能横跨几个号，额度事件记到它名下）。给了会话就按这个会话算——智能分派下各会话各用各的号。
+export function lastServedAccount(sid) { return (sid && servedBySid.get(sid)) || lastServed; }

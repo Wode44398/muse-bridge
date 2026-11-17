@@ -18,7 +18,7 @@ export const ags = $state({
   apiKeyMode: '',        // 'env' | 'desktop' | 'config' | 'config-unused' | ''：服务端是不是在用按量 API Key（见 adoptPool）
   usage: {},             // { [id]: { plan, five_hour, seven_day, fable, error } }
   usageBusy: false,
-  router: null,          // { settings:{enabled,returnToPrimary}, blocks:{[id]:{until,type}}, log:[…] }
+  router: null,          // { settings:{enabled,strategy,returnToPrimary,seamless}, blocks:{[id]:{until,type}}, log:[…], dispatch?:{accounts:{[id]:{tasks,subs}}, running:[…]} }
   resetsOk: false,       // 服务端有没有「重置卡」能力（overlay 钩子）；没有就不出现入口
   resets: {},            // { [id]: { login:{email,source}|null, needLogin, error, at, atLimit, grants:[…] } }（见服务端 limit-resets.mjs）
   resetsBusy: false,
@@ -178,8 +178,38 @@ export function accLabel(l) {
 }
 const BLOCK_WHY = { five_hour: () => t('5 小时额度已满'), seven_day: () => t('本周额度已满'), seven_day_opus: () => t('Opus 周额度已满'), seven_day_sonnet: () => t('Sonnet 周额度已满'), seven_day_overage_included: () => t('Fable 周额度已满'), auth: () => t('token 失效'), primary_back: () => t('首选号额度已恢复'),
     // 会话中无缝换号：还没真用满、提前让位（account-router 的 near:<桶>）
-    'near:five_hour': () => t('5 小时额度快满了'), 'near:seven_day': () => t('本周额度快满了'), 'near:seven_day_opus': () => t('Opus 周额度快满了'), 'near:seven_day_sonnet': () => t('Sonnet 周额度快满了'), 'near:seven_day_overage_included': () => t('Fable 周额度快满了') };
+    'near:five_hour': () => t('5 小时额度快满了'), 'near:seven_day': () => t('本周额度快满了'), 'near:seven_day_opus': () => t('Opus 周额度快满了'), 'near:seven_day_sonnet': () => t('Sonnet 周额度快满了'), 'near:seven_day_overage_included': () => t('Fable 周额度快满了'),
+    // 智能分派的落位理由（account-router/placement.mjs reasonFor）
+    fit_only: () => t('只有这个号剩的额度装得下这段任务'), refit: () => t('原来的号剩的额度不够跑完这一段，开跑前先换'), room: () => t('这个号剩的额度最多'),
+    fable_room: () => t('这个号的 Fable 额度剩得最多'), keep_fable: () => t('放在这个号上不占 Fable 额度，留给 Fable 任务'), keep_opus: () => t('放在这个号上不占 Opus 额度'),
+    keep_sonnet: () => t('放在这个号上不占 Sonnet 额度'), expiring: () => t('这个号的额度快重置了，先用掉'), spread: () => t('和在跑的任务分开，各用各的号'),
+    with_parent: () => t('跟主任务在同一个号上'), fallback: () => t('各号都快满了，挑了最空的'), only: () => t('只有这个号能用'), limit: () => t('额度已满') };
 export const whyText = (k) => (BLOCK_WHY[k] || (() => t('额度已满')))();
+
+// —— 号池智能路由的分派方式（account-router.mjs 的 strategy）——
+export const routeStrategies = () => [
+  { value: 'smart', label: t('智能分派'), desc: t('每个任务各用一个号：按预计用量、剩余额度、Fable 余量和重置时间挑，并行的任务分到不同的号，一段活不拆到两个号上跑') },
+  { value: 'fill', label: t('用满再换'), desc: t('所有对话共用当前号，用满才一起换到余量最多的号') },
+  { value: 'primary', label: t('回到首选号'), desc: t('所有对话共用列表里最靠前的可用号：主号一恢复就切回，备用号只在主号用满时顶上') },
+];
+export const routerStrategy = () => ags.router?.settings?.strategy || (ags.router?.settings?.returnToPrimary ? 'primary' : 'fill');
+/** 智能分派在生效：号池行不再标「使用中」，改标这个号上在跑几个任务。 */
+export const smartRouting = () => !!ags.router?.settings?.enabled && routerStrategy() === 'smart';
+export const runningOn = (id) => ags.router?.dispatch?.accounts?.[id]?.tasks || 0;
+const FAMILY_NAME = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+/** 分派记录一行的标题：哪个对话（子 agent 另说一句）；老策略的切换记录回空串，照旧显示「A → B」。 */
+export function routeLogTitle(l) {
+  if (!l?.kind) return '';
+  const name = l.label || t('对话 {id}', { id: String(l.sid || '').slice(0, 8) });
+  return l.agent ? t('{name}的子 agent', { name }) : name;
+}
+/** 分派记录一行的说明：模型 · 去了哪个号（换号的带上原号）· 理由。labelOf(id, 兜底名) 由调用方给（各皮肤认号名的办法不同）。 */
+export function routeLogSub(l, labelOf) {
+  const fam = FAMILY_NAME[l.family] || '';
+  const to = labelOf(l.to, l.toLabel);
+  const where = l.from ? `${labelOf(l.from, l.fromLabel)} → ${to}` : `→ ${to}`;
+  return [fam, where, whyText(l.reason)].filter(Boolean).join(' · ');
+}
 export const hhmm = (ms) => { const d = new Date(ms); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
 export function poolResetIn(ms) {
   const d = (ms || 0) - Date.now();

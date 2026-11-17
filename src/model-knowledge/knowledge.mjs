@@ -82,6 +82,12 @@ export function thinkingTemplate(key, protocol, opts = {}) {
         return think('effort', levels(['low', 'medium', 'high', 'max']), { field: 'reasoning_effort', dflt: d('high') });
     }
   }
+  // 线路 = 百炼（DashScope）托管的别家型号：开关统一是 enable_thinking，档位照各家的 reasoning_effort。
+  // Kimi 在这条线上关得掉（enable_thinking:false 推理为 0），thinking_budget 是 400；直连 Kimi 那套「恒思考」不适用。
+  // GLM-5.3 照下面的模板（enable_thinking:false 与 thinking.type disabled 都是 400，只能调档）；DeepSeek 的 thinking.type 这里也认。
+  if (oai && opts.route === 'dashscope' && key === 'kimi') {
+    return think('effort', [T('off', '关闭', { enable_thinking: false }), ...levels(['low', 'high', 'max'], (id) => ({ reasoning_effort: id }))], { dflt: d() });
+  }
   switch (key) {
     case 'claude-adaptive':   // 官方 Messages：thinking adaptive + output_config.effort，五档、默认 high（Opus / Haiku 5.5 默认 medium）
       return anth ? think('adaptive', levels(['low', 'medium', 'high', 'xhigh', 'max']), { dflt: d('high') }) : generic();
@@ -98,6 +104,9 @@ export function thinkingTemplate(key, protocol, opts = {}) {
       // OpenAI 端点档位写 reasoning_effort；官方 /anthropic 端点写 output_config.effort（2026-11-13 实测三档都收，乱写的值 422）
       if (oai) return think('effort', [OFF(), ...levels(['low', 'high', 'max'], (id) => ({ thinking: { type: 'enabled' }, reasoning_effort: id }))], { dflt: d() });
       return anth ? think('effort', [OFF(), ...levels(['low', 'high', 'max'], (id) => ({ thinking: { type: 'enabled' }, output_config: { effort: id } }))], { dflt: d() }) : null;
+    case 'qwen4':             // Qwen4：不发参数也会思考；enable_thinking:false 真关；reasoning_effort 收 low / medium / high / xhigh / max
+      // （乱填的报错列出 none / off / minimal / low / medium / high / xhigh / max，五档推理量逐级变多，2026-11-17 DashScope 实测）
+      return oai ? think('effort', [T('off', '关闭', { enable_thinking: false }), ...levels(['low', 'medium', 'high', 'xhigh', 'max'], (id) => ({ enable_thinking: true, reasoning_effort: id }))], { dflt: d() }) : null;
     case 'qwen38':            // Qwen3.8：enable_thinking + reasoning_effort low / medium / xhigh（high / max 是 xhigh 的别名）
       return oai ? think('effort', [T('off', '关闭', { enable_thinking: false }), ...levels(['low', 'medium', 'xhigh'], (id) => ({ enable_thinking: true, reasoning_effort: id }))], { dflt: d() }) : null;
     case 'qwen38-open':       // 开源权重的 Qwen3.8（vLLM / SGLang / llama.cpp 这类 OpenAI 兼容服务）：开关与档位都是 chat template 的变量，
@@ -154,7 +163,8 @@ export function thinkingTemplate(key, protocol, opts = {}) {
 
 // —— 已知型号表（按裸型号匹配，先具体后笼统）——
 // ctx / out：上下文 / 输出上限；vision / video / audio：能不能直接收图 / 视频 / 音频；think：思考模板；dflt：首次选中时的默认档；
-// media：一次请求里历史图片的额度（dimensio agent/media-budget.ts）；replay：OpenAI 协议下把历史思考回传为 reasoning_content（模板要求的家族）。值以 dimensio catalog.ts（多数实测）为准，另补了中转常见的
+// media：一次请求里历史图片的额度（dimensio agent/media-budget.ts）；replay：OpenAI 协议下把历史思考回传为 reasoning_content——
+// true = 所有线路，线路名数组 = 只在这些线路上（工具循环里实测吃进去的才标，见 replayOf）。值以 dimensio catalog.ts（多数实测）为准，另补了中转常见的
 // 去掉 claude- 前缀的别名（opus-5-5）。只写厂商公开信息：公开版导出会做泄漏扫描。
 const MIMO_MEDIA = Object.freeze({ maxImages: 2, keepRecent: 2 });   // 多图认不准最新那张：只让最近 2 张工具图入模
 const GEMINI_MEDIA = Object.freeze({ maxBytes: 14_000_000 });        // 内联数据连同文字整个请求不能超过 20 MB
@@ -168,8 +178,9 @@ const TABLE = [
   { re: /^(?:claude-)?(?:opus|sonnet|haiku|fable)-(?:[5-9]|4-[7-9])/, ctx: 1_000_000, out: 128_000, vision: true, think: 'claude-adaptive' },
   { re: /^claude-/, ctx: 200_000, out: 64_000, vision: true, think: 'claude-budget' },
   // 小米 MiMo V2.6（官方文档 1M 上下文、图 / 视频 / 音频输入；输出上限 131072 是 400 报错里读出来的；默认会思考）
-  { re: /^mimo-v2\.6/, ctx: 1_000_000, out: 131_072, vision: true, video: true, audio: true, think: 'mimo', media: MIMO_MEDIA },
-  { re: /^mimo-/, think: 'mimo', media: MIMO_MEDIA },
+  // replay：思考模式下的工具续轮要带回 reasoning_content（官方文档要求）
+  { re: /^mimo-v2\.6/, ctx: 1_000_000, out: 131_072, vision: true, video: true, audio: true, think: 'mimo', media: MIMO_MEDIA, replay: true },
+  { re: /^mimo-/, think: 'mimo', media: MIMO_MEDIA, replay: true },
   // DeepSeek V4.1 Flash（1M / 393216，原生看图但不收视频）；v4-flash 是它的临时别名；聚合站写成 deepseek-v4.1-flash（可带日期后缀）。
   // V4 Pro 是现役型号、不看图。replay：思考模式下带工具调用的历史轮必须带回思考（没有就带空的），否则 400——
   // 服务端只恢复得了它自己在思考模式下发出的工具调用，会话中途开思考、从别家换过来的都恢复不了（2026-11-13 实测）。
@@ -184,23 +195,30 @@ const TABLE = [
   // 不带 DashScope 专属参数（enable_search 等）——自定义服务的适配器只发档位表里的东西。
   { re: /^(?:qwen3\.8-)?flash-next(?:$|[-_.])/, ctx: 262_144, out: 81_920, vision: false, think: 'qwen38-open', dflt: 'medium', replay: true },
   // Qwen：3.8 全系原生多模态（图 + 视频），默认 medium（xhigh 不封顶，换档不能悄悄放大账单）
-  { re: /^qwen3\.8/, ctx: 1_000_000, out: 131_072, vision: true, video: true, think: 'qwen38', dflt: 'medium' },
-  { re: /^qwen3\.7-plus/, ctx: 1_000_000, out: 131_072, vision: true, think: 'qwen37' },
-  { re: /^qwen3\.7/, ctx: 1_000_000, out: 131_072, vision: false, think: 'qwen37' },
+  // Qwen4（DashScope 的 qwen4-max，/models 里还没列出，要手动添加）：输入上限 991808（超长输入的 400 报文），按 1M 窗口记；
+  // 输出上限端点不校验，先按 3.8 的 131072；看图实测能认出 32×32 红图（小于 10 像素的图会被拒）。默认 medium，理由同 3.8
+  // replay：工具续轮只认 reasoning_content（reasoning / reasoning_details 都被丢掉），回传后实测能接着上一步的思考；DashScope 上另带 preserve_thinking（见 replayOf）
+  { re: /^qwen-?4(?![.\d])/, ctx: 1_000_000, out: 131_072, vision: true, think: 'qwen4', dflt: 'medium', replay: true },
+  // 3.8 / 3.7 同 Qwen4：工具续轮只认 reasoning_content（百炼实测；OpenRouter 上的 3.8 Max 三种写法都认）
+  { re: /^qwen3\.8/, ctx: 1_000_000, out: 131_072, vision: true, video: true, think: 'qwen38', dflt: 'medium', replay: true },
+  { re: /^qwen3\.7-plus/, ctx: 1_000_000, out: 131_072, vision: true, think: 'qwen37', replay: true },
+  { re: /^qwen3\.7/, ctx: 1_000_000, out: 131_072, vision: false, think: 'qwen37', replay: true },
   { re: /^qwen3/, think: 'qwen-toggle' },
   // 智谱 GLM
-  { re: /^glm-5\.3-flash/, ctx: 1_000_000, out: 131_072, vision: true, think: 'glm53' },
-  { re: /^glm-5\.3/, ctx: 1_000_000, out: 131_072, vision: false, think: 'glm53' },
+  // GLM-5.3 恒思考，工具续轮带回的思考在百炼与 OpenRouter 上都实测被用上（不回传就忘了上一步想的）；智谱直连没 Key 实测，按官方「保留式思考」同样回传
+  { re: /^glm-5\.3-flash/, ctx: 1_000_000, out: 131_072, vision: true, think: 'glm53', replay: true },
+  { re: /^glm-5\.3/, ctx: 1_000_000, out: 131_072, vision: false, think: 'glm53', replay: true },
   { re: /^glm-5\.2/, ctx: 1_000_000, out: 131_072, vision: false, think: 'glm52' },
   { re: /^glm-5(?!\.)/, ctx: 200_000, out: 131_072, vision: false, think: 'toggle' },
   // Kimi（Kimi for Coding；/models 实测）：k3-256k 不吃视频
   // K3.1 Pro（2026-11-07 /models）：k3.1-pro 与 k3.1-pro-highspeed 都是 1M、图 + 视频、low / high / max——highspeed 有档位，
   // 不能落到下面 K2.7 highspeed 的「没有档位」
   // 聚合站写成 kimi-k3.1-pro（moonshotai/kimi-k3.1-pro）：同一个型号，认不出会被当成不思考、历史思考还会被剥掉
-  { re: /^(?:kimi-)?k3\.1-pro/, ctx: 1_048_576, out: 65_536, vision: true, video: true, think: 'kimi' },
-  { re: /^(?:kimi-)?k3-256k/, ctx: 262_144, out: 65_536, vision: true, think: 'kimi' },
-  { re: /^(?:(?:kimi-)?k3|kimi-for-coding)(?!-highspeed)/, ctx: 1_048_576, out: 65_536, vision: true, video: true, think: 'kimi' },
-  { re: /^kimi-for-coding-highspeed/, ctx: 262_144, out: 65_536, vision: true, video: true, think: 'always' },
+  // replay：Kimi 的思考模型在工具续轮里要带回 reasoning_content（官方要求；百炼托管的那份同样实测吃进去）
+  { re: /^(?:kimi-)?k3\.1-pro/, ctx: 1_048_576, out: 65_536, vision: true, video: true, think: 'kimi', replay: true },
+  { re: /^(?:kimi-)?k3-256k/, ctx: 262_144, out: 65_536, vision: true, think: 'kimi', replay: true },
+  { re: /^(?:(?:kimi-)?k3|kimi-for-coding)(?!-highspeed)/, ctx: 1_048_576, out: 65_536, vision: true, video: true, think: 'kimi', replay: true },
+  { re: /^kimi-for-coding-highspeed/, ctx: 262_144, out: 65_536, vision: true, video: true, think: 'always', replay: true },
   // Gemini（1,048,576 / 65,536；Gemini 4 Argon 输出 32,768）
   { re: /^gemini-4/, ctx: 1_048_576, out: 32_768, vision: true, think: 'gemini3', media: GEMINI_MEDIA },
   { re: /^gemini-3\.5-flash/, ctx: 1_048_576, out: 65_536, vision: true, think: 'gemini35f', dflt: 'medium', media: GEMINI_MEDIA },
@@ -220,22 +238,28 @@ const TABLE = [
   { re: /^grok-4[.-][67]/, think: 'grok4' },
   { re: /^grok-4[.-]5/, think: 'effort3', dflt: 'high' },
   // Mistral Large 4：low / medium / high（OpenRouter 元数据写的 [high, none] 是错的，发 none 实测 400）
-  { re: /^mistral-large-4/, think: 'effort3' },
+  // 经 OpenRouter 回传的思考实测被用上（三种写法都认），别的线路没测
+  { re: /^mistral-large-4/, think: 'effort3', replay: ['openrouter'] },
   // Meta Muse（dev.meta.ai 文档 + OpenRouter 实测）。默认档跟上游默认一致（Ember max、Wonder / Spark medium），不改变现有行为。
   { re: /^muse-glimmer/, ctx: 131_072, out: 16_384, vision: true, think: 'muse-open' },
   { re: /^muse-spark-open/, vision: true, think: 'muse-open' },
   { re: /^muse-ember/, ctx: 1_048_576, out: 524_288, vision: true, think: 'muse', dflt: 'max' },
   { re: /^muse-(?:wonder|spark)/, ctx: 1_048_576, vision: true, think: 'muse', dflt: 'medium' },
   // 腾讯混元
-  { re: /^(?:tencent-)?hy-?4/, ctx: 1_048_576, out: 65_536, vision: true, think: 'hy4' },
+  { re: /^(?:tencent-)?hy-?4/, ctx: 1_048_576, out: 65_536, vision: true, think: 'hy4', replay: ['openrouter'] },
   { re: /^(?:tencent-)?hy-?3/, ctx: 262_144, out: 128_000, vision: false },
 ];
 
-/** 服务地址（或主机名）→ 线路。目前只分出 OpenRouter：它对所有家族用自己的统一推理写法。 */
+/**
+ * 服务地址（或主机名）→ 线路：'openrouter'（对所有家族用自己的统一推理写法）、'dashscope'（阿里云百炼，托管的别家型号也按它的
+ * 参数约定：enable_thinking、不认 thinking_budget 的家族……）、''（厂商直连或认不出的中转）。
+ */
 export function routeOf(baseUrlOrHost) {
   let h = String(baseUrlOrHost || '').toLowerCase();
   try { if (/^[a-z]+:\/\//.test(h)) h = new URL(h).hostname; } catch { return ''; }
-  return h === 'openrouter.ai' || h.endsWith('.openrouter.ai') ? 'openrouter' : '';
+  if (h === 'openrouter.ai' || h.endsWith('.openrouter.ai')) return 'openrouter';
+  if (/^dashscope(?:-[a-z]+)?\.aliyuncs\.com$/.test(h)) return 'dashscope';
+  return '';
 }
 
 /** 已知型号表里这一条（不认识回 null）。 */
@@ -245,8 +269,28 @@ export function tableEntry(id) {
   return TABLE.find((e) => e.re.test(bare)) || null;
 }
 
+// 回传时这条线路要多带的请求体。DashScope 的 Qwen：preserve_thinking 让上一条用户消息之前的思考也留在上下文里——Qwen3.7 不带
+// 就被服务端丢掉（跨轮问前面想过的东西 0/3，带上 3/3）；Qwen4 / 3.8 现在不带也留着，但有测法下 Qwen4 不带只有 1/4。它是 Qwen
+// 给 agent 场景的开法，历史前缀也因此稳定、缓存不断。工具续轮（同一条用户请求下）带不带都一样
+const PRESERVE = Object.freeze({ preserve_thinking: true });
+const REPLAY_BODY = { dashscope: { qwen4: PRESERVE, qwen38: PRESERVE, qwen37: PRESERVE } };
+
+/**
+ * 这个型号在这条线路上怎么回传历史思考（OpenAI 协议）→ { field, empty, body }；不回传回 null。
+ *   field：写进 assistant 消息的字段（目前各线路都是 reasoning_content：百炼只认它，OpenRouter 上的文字推理家族三种写法都认）
+ *   empty：没有思考原文的工具轮也带空串（DeepSeek：缺了就 400）
+ *   body：要并进请求体根的参数（只在这条线路上发）
+ * opts.route：routeOf 的结果；不给 = 厂商直连。
+ */
+export function replayOf(id, { route = '' } = {}) {
+  const e = tableEntry(id);
+  if (!e || !e.replay) return null;
+  if (Array.isArray(e.replay) && !e.replay.includes(route)) return null;
+  return { field: 'reasoning_content', empty: e.think === 'deepseek', body: (REPLAY_BODY[route] && REPLAY_BODY[route][e.think]) || null };
+}
+
 /** 这个型号的历史思考要不要带回上游（OpenAI 协议写 reasoning_content，Anthropic 协议留着 thinking 块）。 */
-export const replaysThinking = (id) => tableEntry(id)?.replay === true;
+export const replaysThinking = (id, opts = {}) => replayOf(id, opts) !== null;
 
 const posInt = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n) : null; };
 const EFFORT_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];

@@ -1,0 +1,35 @@
+// 只有一串裸 import：按拆分前 chat.svelte.js 的 import 顺序先把这些模块求值一遍，保住它们（及其顶层副作用）的先后。
+// 拆出的各模块之间的 import 顺序因此不会影响原有模块的求值顺序。
+import '../sse.js';
+import '../api.js';
+import '../server.js';
+import '../preview.svelte.js';
+import '../state.svelte.js';
+import '../dock.svelte.js';
+import '../toolVerbs.js';
+import '../caps.js';
+import '../retract.js';
+import '../cache.js';
+import '../notify.js';
+import '../claudeSettings.svelte.js';
+import '../outputStyle.svelte.js';
+import '../uiReport.js';
+import '../fsSync.svelte.js';
+import '../store.js';
+import '../phonecmd.js';
+import '../csnap.js';
+import '../solo.js';
+import '../chatPrefs.js';
+import '../composerBridge.svelte.js';
+import '../composerDrafts.svelte.js';
+import '../taskModel.js';
+import '../permissions.svelte.js';
+import '../i18n.js';
+import '../sessionFamily.svelte.js';
+import '../sessionArchive.svelte.js';
+import '../widgetSeg.js';
+import '../devices.svelte.js';
+import '../deviceRefs.js';
+import '../claudeProviders.svelte.js';
+import '../toast.svelte.js';
+import '../toolCard.js';

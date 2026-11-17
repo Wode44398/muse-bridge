@@ -49,6 +49,24 @@ export const CHAT_PREFS: PrefSpec[] = [
       { value: "30", label: "30 天" },
     ],
   },
+  // 快照对话清理（quick-prune.ts）：与 bridge Claude 分页的「清理临时对话」同一套选项，各管各的。
+  // 默认从不清理——快照以前一直是只藏不删，升级不该替用户删东西
+  {
+    key: "quickRetention",
+    type: "enum",
+    default: "never",
+    group: "sessions",
+    label: "清理快照对话",
+    desc: "以前的快照对话怎么清理。清理的先移进回收站，30 天后才永久删除；存为工作空间的不受影响",
+    options: [
+      { value: "ttl30", label: "30 天没动的" },
+      { value: "max10", label: "只留最近 10 条" },
+      { value: "max20", label: "只留最近 20 条" },
+      { value: "max50", label: "只留最近 50 条" },
+      { value: "max100", label: "只留最近 100 条" },
+      { value: "never", label: "从不清理" },
+    ],
+  },
   // —— 通知 ——
   { key: "notifyPermission", type: "bool", default: true, group: "notify", label: "权限请求", desc: "dimensio 要你批准一个操作或审一份计划时" },
   { key: "notifyQuestion", type: "bool", default: true, group: "notify", label: "提问", desc: "dimensio 在等你回答问题时" },

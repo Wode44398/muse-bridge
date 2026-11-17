@@ -1,5 +1,5 @@
 // 音视频播放器（VideoPlayer / AudioPlayer）：控件自动隐藏与唤出、单击 / 双击、每个快捷键的效果值、
-// 触屏双击跳转 / 长按 2× / 横向拖动 seek、设置菜单、续播与偏好记忆、播完（重播 / 下一个倒计时）、
+// 触屏双击跳转（跳转胶囊）/ 长按 2× / 横向拖动 seek、设置菜单、卡顿提示、续播与偏好记忆、播完（重播 / 下一个倒计时）、
 // 音频流式（首帧前下载的字节必须远小于文件）。标签 av（不进 baseline：基线上没有这些能力）。
 // 取数只看 <video>/<audio> 元素本身（currentTime / volume / playbackRate / paused）、document.fullscreenElement、
 // 进度滑块（role=slider）的实际不透明度、aria-label 与可见文字；不绑播放器内部类名（只有 info 级的佐证除外）。
@@ -93,6 +93,10 @@ const GLASS_LIVE = `(() => { const r = __pvqa.root(); if (!r) return null;
   const btns = [...r.querySelectorAll('.vp-cbtn')].map((b) => b.getBoundingClientRect());
   const under = btns.filter((b) => live.some((g) => { const q = g.getBoundingClientRect(); return Math.abs(q.left - b.left) < 2 && Math.abs(q.top - b.top) < 2 && Math.abs(q.width - b.width) < 2; })).length;
   return { live: live.length, btns: btns.length, under, svg: live.some((el) => (getComputedStyle(el).backdropFilter || '').includes('url(')) }; })()`;
+
+// 跳转胶囊（data-skip = 'l' | 'r'）：露着的那一枚在哪一侧、报的累计秒数
+const CHIP = `(() => { const r = __pvqa.root(); const c = r && [...r.querySelectorAll('[data-skip]')].find((e) => __pvqa.effOpacity(e) > 0.9);
+  return c ? { side: c.dataset.skip, text: c.textContent.replace(/\\s+/g, '') } : null; })()`;
 
 // 原始触摸（场景里要在手势中途取值：长按中读倍速、拖动中看气泡）
 const tp = (x, y) => [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }];
@@ -325,26 +329,52 @@ export default [
       s = await st(ctx);
       ctx.assert('再轻点收起控件', s.chrome < 0.05, s.chrome);
 
-      // 双击右侧三分之一：+10；跳转指示存活期内同侧再点一下：再 +10；双击左侧：−10
+      // 双击右侧三分之一：+10，那一侧出跳转胶囊报「10 秒」；胶囊露着时同侧再点一下：再 +10、胶囊累计成 20 秒；
+      // 最后一跳 800ms 后胶囊收起；双击左侧：−10
       await pauseAt(ctx, 5);
       const xr = w * 0.88, xl = w * 0.12, y = h * 0.4;
       await ctx.g.doubleTap(xr, y, { gap: 110 });
-      await ctx.sleep(120);
-      const ripple = await ctx.eval(`(() => { const r = __pvqa.root(); return [...r.querySelectorAll('span')].map((e) => e.textContent.trim()).find((x) => /^\\d+ 秒$/.test(x)) || null; })()`).catch(() => null);
-      await ctx.sleep(200);
+      await ctx.sleep(320);
+      let chip = await ctx.eval(CHIP).catch(() => null);
+      await hoverShot(ctx, 'skip-chip');
       s = await st(ctx);
       ctx.assert('双击右侧 → +10s', near(s.t, 15), s.t);
-      ctx.assert('双击出跳转指示（累计秒数）', ripple === '10 秒', ripple, { level: 'info' });
+      ctx.assert('双击出跳转胶囊（右侧、报 10 秒）', chip?.side === 'r' && chip.text === '10秒', chip);
       await ctx.g.tap(xr, y, { hold: 40 });
       await ctx.sleep(300);
+      chip = await ctx.eval(CHIP).catch(() => null);
       s = await st(ctx);
       ctx.assert('同侧连点累计 → 再 +10s', near(s.t, 25), s.t);
-      await ctx.sleep(900);   // 等指示消失
+      ctx.assert('胶囊累计成 20 秒', chip?.text === '20秒', chip);
+      await ctx.sleep(1300);
+      chip = await ctx.eval(CHIP).catch(() => null);
+      ctx.assert('最后一跳 800ms 后胶囊收起', !chip, chip);
       await ctx.g.doubleTap(xl, y, { gap: 110 });
       await ctx.sleep(350);
+      chip = await ctx.eval(CHIP).catch(() => null);
       s = await st(ctx);
       ctx.assert('双击左侧 → −10s', near(s.t, 15), s.t);
-      await ctx.sleep(900);
+      ctx.assert('左侧出跳转胶囊', chip?.side === 'l' && chip.text === '10秒', chip);
+      await ctx.sleep(1300);
+
+      // 播放中双击：控件本来收着，跳完也不被叫出来（只露一枚胶囊，垫一块玻璃）；胶囊收起后一块滤镜都不留
+      await pauseAt(ctx, 3);
+      await gesturePlay(ctx);
+      await ctx.waitFor(`!__pvqa.root().querySelector('video').paused`, 5000, '继续播放').catch(() => {});
+      await ctx.sleep(3700);
+      const t0 = (await st(ctx)).t;
+      await ctx.g.doubleTap(xr, y, { gap: 110 });
+      await ctx.sleep(450);
+      s = await st(ctx);
+      chip = await ctx.eval(CHIP).catch(() => null);
+      const gSkip = await ctx.eval(GLASS_LIVE);
+      ctx.metric('skipSolo', { t0, t: s.t, chrome: s.chrome, chip, glass: gSkip });
+      ctx.assert('播放中双击右侧 → +10s', near(s.t, t0 + 10.5, 1.2), { t0, t: s.t });
+      ctx.assert('跳完控件仍收着、只露跳转胶囊', s.chrome < 0.05 && chip?.side === 'r', { chrome: s.chrome, chip });
+      ctx.assert('跳转胶囊垫一块玻璃', gSkip && gSkip.live === 1, gSkip, { level: 'goal' });
+      await ctx.sleep(1500);
+      const gGone = await ctx.eval(GLASS_LIVE);
+      ctx.assert('胶囊收起后不留玻璃滤镜', gGone && gGone.live === 0, gGone);
 
       // 长按：2× 快进，松手复原
       await pauseAt(ctx, 2);
@@ -416,6 +446,67 @@ export default [
       ctx.assert('播放中控件收起后不留玻璃滤镜', g2 && g2.live === 0, g2);
       const bd = await ctx.eval(BD_OVER_VIDEO);
       ctx.assert('视频上方没有别的 backdrop-filter', !bd.length, bd);
+    },
+    async cleanup(ctx) { await clearAv(ctx); },
+  },
+
+  // —— 卡顿提示：只认真卡顿（自己跳出来的、一闪而过的不算），一分钟内三次才提示；不理它 10 秒自己收、不接着催；点了切到流畅画质 ——
+  {
+    id: 'av-video-stall-hint',
+    title: '视频：卡顿提示——跳转带出的等待不算、一分钟内三次卡顿才提示、自己会收、点了切到流畅画质',
+    tags: ['av'], timeout: 150000,
+    async run(ctx) {
+      await clearAv(ctx);
+      const HINT = `(__pvqa.root()?.innerText || '').includes('当前网络较慢')`;
+      const hint = () => ctx.eval(HINT).catch(() => false);
+      // 造一次「播着播着停下来等数据」：waiting → 等 ms → playing
+      const stall = async (ms) => {
+        await ctx.eval(`(() => { __pvqa.root().querySelector('video').dispatchEvent(new Event('waiting')); return true; })()`);
+        await ctx.sleep(ms);
+        await ctx.eval(`(() => { __pvqa.root().querySelector('video').dispatchEvent(new Event('playing')); return true; })()`);
+        await ctx.sleep(200);
+      };
+      if (!(await openMedia(ctx, [ctx.item(VLONG, { kind: 'video' })], 0, { want: 'playing' }))) return;
+      await ctx.sleep(4500);
+      // 连跳三次，每次跳完紧跟一次等待：都是自己跳出来的，不记
+      for (let i = 0; i < 3; i++) {
+        await ctx.eval(`(() => { const v = __pvqa.root().querySelector('video'); v.currentTime = v.currentTime + 20; return true; })()`);
+        await ctx.sleep(500);
+        await stall(800);
+      }
+      ctx.assert('跳转带出的等待不算卡顿（连跳三次不提示）', !(await hint()));
+      await ctx.sleep(4500);   // 过了跳转后的宽限
+      for (let i = 0; i < 3; i++) await stall(250);
+      ctx.assert('一闪而过的等待（0.25 秒）不算', !(await hint()));
+      await stall(800); await stall(800);
+      ctx.assert('两次卡顿还不提示', !(await hint()));
+      await stall(800);
+      await ctx.sleep(400);
+      const txt = await ctx.eval(`(() => { const b = [...__pvqa.root().querySelectorAll('button')].find((e) => (e.textContent || '').includes('当前网络较慢')); return b ? b.innerText.replace(/\\s+/g, ' ') : null; })()`);
+      ctx.assert('一分钟内第三次卡顿 → 提示「当前网络较慢 · 切换到流畅画质」', !!txt && txt.includes('切换到流畅画质'), txt);
+      await ctx.shot('stall-hint');
+      if (ctx.touch) {
+        const gl = await ctx.eval(GLASS_LIVE);
+        ctx.assert('提示垫一块玻璃（触屏）', gl && gl.live >= 1, gl, { level: 'goal' });
+      }
+      await ctx.sleep(10300);
+      ctx.assert('不理它，10 秒后自己收', !(await hint()));
+      for (let i = 0; i < 3; i++) await stall(800);
+      ctx.assert('刚提示过不接着催（再卡三次也不提示）', !(await hint()));
+
+      // 重新打开同一个视频（新的一次播放）：卡三次出提示，点它 → 换成流畅画质的流
+      await ctx.close();
+      await ctx.sleep(500);
+      if (!(await openMedia(ctx, [ctx.item(VLONG, { kind: 'video' })], 0, { want: 'playing' }))) return;
+      await ctx.sleep(4500);
+      for (let i = 0; i < 3; i++) await stall(800);
+      await ctx.sleep(400);
+      ctx.assert('重新打开后照常提示', await hint());
+      const src0 = await ctx.eval(`__pvqa.root().querySelector('video').currentSrc`);
+      await ctx.g.tapSel('button', { text: '切换到流畅画质', within: ctx.ROOT_SEL });
+      const gone = await ctx.waitFor(`(${HINT}) ? null : true`, 3000, '提示收起').catch(() => false);
+      const swapped = await ctx.waitFor(`(() => { const v = __pvqa.root().querySelector('video'); return v.currentSrc && v.currentSrc !== ${JSON.stringify(src0)} && v.readyState >= 2 ? true : null; })()`, 15000, '换流').catch(() => false);
+      ctx.assert('点提示 → 提示收起、换成流畅画质的流', !!gone && !!swapped, { gone, swapped });
     },
     async cleanup(ctx) { await clearAv(ctx); },
   },
