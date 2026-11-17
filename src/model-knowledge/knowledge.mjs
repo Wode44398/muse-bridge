@@ -145,7 +145,7 @@ export function thinkingTemplate(key, protocol, opts = {}) {
       return generic();
     // 下面几族「必须思考」用「不提供关闭档」表达，不标 alwaysThinks：那个标记会让历史思考以 reasoning_content 回传，
     // 这几家都不认（OpenRouter 静默丢弃，官方直连可能拒）。
-    case 'gpt6':              // GPT-6 Astra / 6.1 Sol / 各 Pro：low 到 max，必须思考（none 是 400），上游默认 medium
+    case 'gpt6':              // GPT-6 Astra / 6.1 Sol / 6.2 全系 / 各 Pro：low 到 max，必须思考（none 是 400），上游默认 medium
       return effort(['low', 'medium', 'high', 'xhigh', 'max'], { dflt: d('medium') });
     case 'gpt6-off':          // GPT-6.1 Terra / 6 Luna / 6 Sol / 5.6：多一个 none（真关，推理 token 为 0）
       return oai ? think('effort', [NONE_OFF, ...levels(['low', 'medium', 'high', 'xhigh', 'max'])], { field: 'reasoning_effort', dflt: d('medium') }) : null;
@@ -229,8 +229,9 @@ const TABLE = [
   // OpenAI。gpt-oss 是开放权重（131K、纯文本、三档），排在前面别被 GPT 的规则吞掉。
   // GPT-6（官方型号页 + OpenRouter 元数据，2026-11-13 逐个真打）：1,050,000 窗口、128K 输出、识图；
   // 必须思考的：6.1 Sol、6.1 Sol Pro、6 Astra、6 Astra Pro、6.1 Terra Pro；其余（6.1 Terra、6 Luna、6 Sol 及其 Pro、5.6 系）可以关。
+  // GPT-6.2（2026-11-17 上 OpenRouter）：Astra、Astra Pro、Sol、Sol Pro 四个都是必须思考（reasoning.mandatory）、low 到 max、默认 medium，窗口 / 输出同上。
   { re: /^gpt-oss/, ctx: 131_072, vision: false, think: 'effort3' },
-  { re: /^gpt-6[.-]1-sol|^gpt-6-astra|^gpt-astra-latest|^gpt-6[.-]1-terra-pro/, ctx: 1_050_000, out: 128_000, vision: true, think: 'gpt6', media: GPT6_MEDIA },
+  { re: /^gpt-6[.-]2-|^gpt-6[.-]1-sol|^gpt-6-astra|^gpt-astra-latest|^gpt-6[.-]1-terra-pro/, ctx: 1_050_000, out: 128_000, vision: true, think: 'gpt6', media: GPT6_MEDIA },
   { re: /^gpt-6/, ctx: 1_050_000, out: 128_000, vision: true, think: 'gpt6-off', media: GPT6_MEDIA },
   { re: /^gpt-5\.6/, vision: true, think: 'gpt6-off' },
   { re: /^(?:gpt-5|o\d)/, vision: true, think: 'openai' },

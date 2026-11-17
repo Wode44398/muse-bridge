@@ -74,3 +74,12 @@ test('直连模式（主机）：不设中继变量时地址照旧', () => {
   assert.deepEqual(r.relay, { vertex: false, gemini: false });
   assert.equal(r.file, 'https://generativelanguage.googleapis.com/v1beta/files/abc');
 });
+
+test('测试连接：模型 404 与项目 / 权限错误分得开（issue #9）', async () => {
+  const { isModelMissing } = await import('./google-clients.mjs');
+  const model404 = new Error('{"error":{"code":404,"message":"Publisher model `projects/p1/locations/global/publishers/google/models/gemini-2.5-flash` was not found or your project does not have access to it."}}');
+  const proj403 = new Error('{"error":{"code":403,"message":"Permission denied on resource project no-such-proj.","status":"PERMISSION_DENIED"}}');
+  assert.equal(isModelMissing(model404), true);
+  assert.equal(isModelMissing(proj403), false);
+  assert.equal(isModelMissing(new Error('fetch failed')), false);
+});

@@ -11,7 +11,7 @@
 import { VERTEX_PROJECT, VERTEX_LOCATION, VERTEX_MEDIA_LOCATION } from '@bridge/core/config/index.mjs';
 import { CAPABILITIES, veoTaskOk, ttsMetaStyle } from '@bridge/core/config/capabilities.mjs';
 import { GOOGLE_MODELS, GOOGLE_VOICES } from '../cards/google.mjs';
-import { vertexGenAI, geminiGenAI, vertexAccessToken } from '@bridge/core/runtime/google-clients.mjs';
+import { geminiGenAI, vertexAccessToken, vertexPing } from '@bridge/core/runtime/google-clients.mjs';
 import { AdapterError } from './http.mjs';
 
 
@@ -77,7 +77,11 @@ export function googleAdapter(dialect) {
       }
       const t = vertexTarget(provider, secret);
       await vertexAccessToken(t.credentials);
-      await vertexGenAI({ project: t.project, location: t.location, credentials: t.credentials }).models.countTokens({ model: 'gemini-2.5-flash', contents: 'ping' });
+      try { await vertexPing({ project: t.project, location: t.location, credentials: t.credentials }); }
+      catch (e) {
+        if (e && e.modelMissing) throw new AdapterError('鉴权通过了，但测试用的几个模型在这个项目 / 区域都调不通：可能已被 Google 下线，或项目还没有这些模型的访问权；换个区域试试，或更新 bridge');
+        throw e;
+      }
       return { detail: `项目 ${t.project} · ${t.location} / ${t.mediaLocation}` };
     },
 

@@ -412,14 +412,14 @@ test('识别途中保存了连接：在途的那次（旧连接）作废，按�
   } finally { stop(); }
 });
 
-test('已添加的置顶：打开时拍快照，保存后不重排，换栏回来再排', async () => {
+test('已添加的置顶：打开时拍快照，保存后重排，取消的落回原位', async () => {
   const calls = fresh();
   const added = [{ id: E.id, kind: 'text', agents: ['claude'], vendor: 'deepseek' }];
   const { api, stop } = await openService(calls, added, [A, B, E]);
   try {
     assert.deepEqual(api.rowsKind.map((r) => r.id), [E.id, A.id, B.id], '已添加的 E 排到最前');
     assert.equal(api.pinN, 1);
-    // 再添加排在最后的 B：保存后顺序不变（行不跳）
+    // 再添加排在最后的 B：保存后挪进置顶段（置顶段内按目录原序）
     api.pick([B.id], true);
     api.toggleDest('dimensio');
     HS.post = async (p, b) => {
@@ -432,14 +432,26 @@ test('已添加的置顶：打开时拍快照，保存后不重排，换栏回�
     const [, p, body] = calls.find((c) => c[0] === 'post');
     assert.equal(p, 'assign');
     assert.deepEqual(body, { id: SID, changes: [{ id: B.id, agents: ['dimensio'] }] });
-    assert.deepEqual(api.rowsKind.map((r) => r.id), [E.id, A.id, B.id]);
-    assert.equal(api.pinN, 1);
-    assert.deepEqual(api.rowsKind.find((r) => r.id === B.id).agents, ['dimensio']);
-    // 换到别的栏再回来：重拍快照，B 也排到前面（置顶段内按目录原序）
-    api.pickKind('image');
-    api.pickKind('text');
     assert.deepEqual(api.rowsKind.map((r) => r.id), [B.id, E.id, A.id]);
     assert.equal(api.pinN, 2);
+    assert.deepEqual(api.rowsKind.find((r) => r.id === B.id).agents, ['dimensio']);
+    // 再把 B 取消：保存后落回下面
+    api.pick([B.id], true);
+    api.toggleDest('dimensio');
+    HS.post = async (p, b) => {
+      calls.push(['post', p, b]);
+      const svc = service(added);
+      Hub.hub.services = [svc];
+      return { service: svc };
+    };
+    await api.save(); await settle();
+    assert.deepEqual(calls.filter((c) => c[0] === 'post').at(-1)[2], { id: SID, changes: [{ id: B.id, agents: [] }] });
+    assert.deepEqual(api.rowsKind.map((r) => r.id), [E.id, A.id, B.id]);
+    assert.equal(api.pinN, 1);
+    // 换到别的栏再回来：同样重拍
+    api.pickKind('image');
+    api.pickKind('text');
+    assert.deepEqual(api.rowsKind.map((r) => r.id), [E.id, A.id, B.id]);
     // 重新识别成功也重拍
     Hub.hub.services = [service(added)];
     await api.detect(); await settle();

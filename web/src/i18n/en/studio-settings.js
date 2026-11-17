@@ -244,6 +244,7 @@ export default {
   'API Key 无效或没权限（Replicate 拒绝了这个 Key）': 'The API key is invalid or lacks permission (Replicate rejected this key)',
   '服务账号 JSON 坏了，重新上传一份': 'The service account JSON is broken; upload it again',
   '本机还没装模型（设置里的「本机部署」先安装）': 'No local model installed yet (install it under Local deployment in settings first)',
+  '鉴权通过了，但测试用的几个模型在这个项目 / 区域都调不通：可能已被 Google 下线，或项目还没有这些模型的访问权；换个区域试试，或更新 bridge': 'Authentication works, but none of the test models can be reached in this project / region. They may have been retired by Google, or the project lacks access to them. Try another region, or update Bridge.',
   '还没填 API Key': 'No API key entered yet',
   '还没填接口地址': 'No endpoint entered yet',
   '这个 Gemini API 服务还没填 API Key': 'This Gemini API provider has no API key yet',

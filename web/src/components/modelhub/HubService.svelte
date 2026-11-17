@@ -624,6 +624,8 @@
       }
       // 清掉勾选：操作条收下，行尾的 agent 图标落位（AgentStack 的弹簧）
       picked.clear();
+      // 重拍置顶快照：刚添加的挪进上面的已添加段、刚取消的落回下面（不用退出重进才重排）
+      snapPins();
       const w = (Array.isArray(r.warnings) ? r.warnings : []).map((x) => tr(String(x)));
       if (w.length) { notes = w; showToast(w[0], 'err'); }
       else showToast(t('已保存'));

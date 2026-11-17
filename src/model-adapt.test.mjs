@@ -148,13 +148,16 @@ test('OpenRouter 线路：关闭档是 reasoning_effort:none（厂商直连的 t
 test('新登记的家族：GPT-6、Grok、Muse、混元、Mistral、聚合站写法的 Kimi', () => {
   const ids = (id) => guessModel(id, { protocol: 'openai' }).efforts.map((x) => x.id);
   // GPT-6：必须思考的没有关闭档；能关的多一个 none；都不标 alwaysThinks（那会让历史思考以 reasoning_content 回传）
-  for (const id of ['gpt-6.1-sol', 'openai/gpt-6.1-sol-pro', 'gpt-6-astra', 'openai/gpt-6-astra-pro', '~openai/gpt-astra-latest', 'gpt-6.1-terra-pro']) {
+  for (const id of ['gpt-6.1-sol', 'openai/gpt-6.1-sol-pro', 'gpt-6-astra', 'openai/gpt-6-astra-pro', '~openai/gpt-astra-latest', 'gpt-6.1-terra-pro',
+    'openai/gpt-6.2-astra', 'openai/gpt-6.2-astra-pro', 'openai/gpt-6.2-sol', 'gpt-6.2-sol-pro', 'gpt-6-2-sol']) {
     assert.deepEqual(ids(id), ['low', 'medium', 'high', 'xhigh', 'max'], id);
   }
   for (const id of ['gpt-6.1-terra', 'openai/gpt-6-luna', 'gpt-6-luna-pro', 'gpt-6-sol', 'gpt-6-sol-pro', 'gpt-5.6-codex']) {
     assert.deepEqual(ids(id), ['off', 'low', 'medium', 'high', 'xhigh', 'max'], id);
     assert.equal(guessModel(id, { protocol: 'openai' }).efforts[0].value, 'none');
   }
+  const s62 = guessModel('openai/gpt-6.2-astra-pro', { protocol: 'openai' });
+  assert.deepEqual([s62.contextWindow, s62.maxOutput, s62.vision, s62.alwaysThinks, s62.effortDefault], [1_050_000, 128_000, true, false, 'medium']);
   const sol = guessModel('openai/gpt-6.1-sol', { protocol: 'openai' });
   assert.deepEqual([sol.contextWindow, sol.maxOutput, sol.vision, sol.alwaysThinks, sol.effortDefault], [1_050_000, 128_000, true, false, 'medium']);
   // 老的 GPT-5 / o 系不变；gpt-oss 是开放权重，别被 GPT 的规则吞掉

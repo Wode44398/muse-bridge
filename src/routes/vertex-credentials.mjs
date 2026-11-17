@@ -20,9 +20,7 @@ import {
 import { refreshAgentStatus } from '../runtime/agent-status.mjs';
 import { refreshHub } from '../runtime/model-hub/registry.mjs';
 import { getModule } from '../modules/registry.mjs';
-// 测试连接用的模型（countTokens 不生成、不计费）
-const PING_MODEL = 'gemini-2.5-flash';
-import { vertexGenAI, geminiGenAI, vertexAccessToken, viaRelay } from '../runtime/google-clients.mjs';
+import { geminiGenAI, vertexAccessToken, vertexPing, isModelMissing, viaRelay } from '../runtime/google-clients.mjs';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -67,8 +65,11 @@ function explain(e) {
   if (/invalid_grant|invalid jwt|account not found|invalid_client|decoder|private key|pem|asn1/.test(low)) return '凭据无效：密钥可能已被删除或吊销，重新下载一份再上传';
   if (/service_disabled|has not been used in project|is disabled/.test(low)) return '这个项目还没开通 Vertex AI API：在 Google Cloud 控制台「API 和服务」里启用 Vertex AI API';
   if (/billing/.test(low)) return '这个项目没有关联结算账号：Vertex AI 需要先开通结算';
+  // 模型 404 的原文里也带 projects/<项目>/…，得排在「找不到项目」前面，否则会把人引去查项目 ID（issue #9）
+  if ((e && e.modelMissing) || /ping_models_missing/.test(low)) return '鉴权通过了，但测试用的几个模型在这个项目 / 区域都调不通：可能已被 Google 下线，或项目还没有这些模型的访问权；换个区域试试，或更新 bridge';
+  if (isModelMissing(e)) return '这个模型在该项目 / 区域不可用（可能已下线或没有访问权），不是项目 ID 的问题';
   if (/permission_denied|permission denied|403/.test(low)) return '没有权限：给这个账号授予「Vertex AI 用户」(roles/aiplatform.user) 角色，并确认项目 ID 填对了';
-  if (/not found|404/.test(low) && /project/.test(low)) return '找不到这个项目：检查项目 ID';
+  if (/not found|404/.test(low) && /project/.test(low) && !/publisher model|\/models\//.test(low)) return '找不到这个项目：检查项目 ID';
   if (/could not load the default credentials|unable to detect a project id/.test(low)) return '还没有凭据：上传一份凭据 JSON';
   if (/enotfound|etimedout|econnreset|econnrefused|fetch failed|socket hang up/.test(low)) return '连不上 Google：检查这台服务器的网络或出站代理';
   return '';
@@ -93,8 +94,8 @@ async function runTest() {
     try {
       await capped((async () => {
         await vertexAccessToken();
-        // countTokens：走同一条鉴权 + 项目 + 权限链路，但不生成、不计费
-        await vertexGenAI({ project: VERTEX_PROJECT, location: VERTEX_LOCATION }).models.countTokens({ model: PING_MODEL, contents: 'ping' });
+        // countTokens：走同一条鉴权 + 项目 + 权限链路，但不生成、不计费；探测模型按候选依次回退
+        await vertexPing({ project: VERTEX_PROJECT, location: VERTEX_LOCATION });
       })());
       out.vertex = { ok: true, ms: Date.now() - t0 };
     } catch (e) {

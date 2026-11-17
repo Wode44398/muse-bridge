@@ -29,8 +29,10 @@
     position: fixed; left: 50%; bottom: calc(var(--sab, 0px) + 96px); transform: translateX(-50%);
     z-index: 340; pointer-events: none; max-width: min(88vw, 420px);
     padding: 9px 16px; border-radius: 999px; font-size: 13.5px; line-height: 1.35; text-align: center;
-    background: var(--surface, #2b2a27); color: var(--text, #f4f2ec);
-    box-shadow: 0 6px 24px rgba(0, 0, 0, .28), inset 0 0 0 .5px var(--divider, rgba(255, 255, 255, .08));
+    /* 固定深底浅字，不跟主题变量：--surface 全局没有定义过，原先背景总落到深色兜底、字却跟 --text 变成近黑 */
+    --toast-fg: #f4f2ec;
+    background: #2b2a27; color: var(--toast-fg);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .28), inset 0 0 0 .5px rgba(255, 255, 255, .08);
     animation: toast-in var(--mo-quick) var(--ea-decel) both;
   }
   .toast.leaving { animation: toast-out 160ms var(--ea-accel) forwards; }
@@ -39,8 +41,8 @@
   .toast.err { color: #f0a494; }
   .ask {
     pointer-events: auto; margin-left: 10px; padding: 2px 10px; border: 0; border-radius: 999px;
-    font: inherit; font-size: 12.5px; color: var(--text, #f4f2ec); cursor: pointer;
-    background: color-mix(in srgb, var(--text, #f4f2ec) 12%, transparent);
+    font: inherit; font-size: 12.5px; color: var(--toast-fg); cursor: pointer;
+    background: color-mix(in srgb, var(--toast-fg) 12%, transparent);
   }
-  .ask:hover { background: color-mix(in srgb, var(--text, #f4f2ec) 20%, transparent); }
+  .ask:hover { background: color-mix(in srgb, var(--toast-fg) 20%, transparent); }
 </style>

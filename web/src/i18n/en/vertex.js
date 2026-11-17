@@ -182,6 +182,8 @@ export default {
   '这个项目还没开通 Vertex AI API：在 Google Cloud 控制台「API 和服务」里启用 Vertex AI API': 'The Vertex AI API isn’t enabled for this project. Enable it under APIs & Services in the Google Cloud console.',
   '这个项目没有关联结算账号：Vertex AI 需要先开通结算': 'This project has no billing account. Vertex AI requires billing.',
   '没有权限：给这个账号授予「Vertex AI 用户」(roles/aiplatform.user) 角色，并确认项目 ID 填对了': 'Permission denied: grant this account the Vertex AI User role (roles/aiplatform.user) and check the project ID.',
+  '鉴权通过了，但测试用的几个模型在这个项目 / 区域都调不通：可能已被 Google 下线，或项目还没有这些模型的访问权；换个区域试试，或更新 bridge': 'Authentication works, but none of the test models can be reached in this project / region. They may have been retired by Google, or the project lacks access to them. Try another region, or update Bridge.',
+  '这个模型在该项目 / 区域不可用（可能已下线或没有访问权），不是项目 ID 的问题': 'This model is not available in this project / region (it may be retired or not granted). The project ID is fine.',
   '找不到这个项目：检查项目 ID': 'Project not found. Check the project ID.',
   '还没有凭据：上传一份凭据 JSON': 'No credentials yet. Upload a credentials JSON.',
   '连不上 Google：检查这台服务器的网络或出站代理': 'Can’t reach Google. Check this server’s network or outbound proxy.',

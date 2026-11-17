@@ -417,7 +417,7 @@
     const { x, y } = mapCoords(e);
     userRipple(x, y);
     fire({ type: 'click', x, y });
-    stageEl?.focus();
+    focusKeys(e);
   }
   function onContext(e) {
     if (dead || !frameW) return;
@@ -522,12 +522,33 @@
     if (!imeEl || readonly || nativeBrowser) return;
     // 后端给的是「input[text]「搜索」 #q」这种工具用描述，给人看只留名字
     imeField = /「(.+?)」/.exec(field)?.[1] || '';
+    imePos = null;
     imeEl.value = IME_SENT;
     imeEl.focus({ preventScroll: true });
     try { imeEl.setSelectionRange(1, 1); } catch {}
     imeOn = true;
   }
   function closeIme() { imeEl?.blur(); }
+  // 桌面（鼠标）：点完画面把键盘焦点交给同一个隐藏输入框，而不是舞台 div（issue #10）。
+  // div 不可编辑，中文输入法在上面组不了词；Ctrl+V 也只会变成「在服务器上按 Ctrl+V」，
+  // 粘的是服务器自己的剪贴板。输入框收到的成字 / 粘贴整段走 Input.insertText 转发。
+  // 输入框挪到点击处，输入法候选窗才会出现在光标附近；不弹「键盘已连到页面」提示条。
+  let imePos = $state(null);
+  function focusKeys(e) {
+    if (!imeEl || readonly || nativeBrowser) { stageEl?.focus(); return; }
+    const r = imeEl.parentElement.getBoundingClientRect();
+    imePos = { x: Math.round(e.clientX - r.left), y: Math.round(e.clientY - r.top) };
+    imeEl.value = IME_SENT;
+    imeEl.focus({ preventScroll: true });
+    try { imeEl.setSelectionRange(1, 1); } catch {}
+  }
+  function imePaste(e) {
+    if (dead || !frameW || readonly) return;
+    const txt = e.clipboardData?.getData('text');
+    if (!txt) return;
+    e.preventDefault();
+    fire({ type: 'text', text: txt.replace(/\r\n?/g, '\n') });
+  }
   function imeFlush() {
     if (!imeEl || composing) return;
     const v = imeEl.value;
@@ -550,10 +571,18 @@
   }
   function imeKey(e) {
     // 键盘上的「前往/发送」键和真键盘的方向/退格（哨兵还在、浏览器不会给 input 事件时）
-    if (e.isComposing || composing) return;
-    if (e.key === 'Enter') { e.preventDefault(); fire({ type: 'key', key: 'enter' }); }
-    else if (e.key === 'Backspace' && imeEl.value === IME_SENT) { e.preventDefault(); fire({ type: 'key', key: 'backspace' }); }
-    else if (e.key === 'Tab') { e.preventDefault(); fire({ type: 'key', key: e.shiftKey ? 'shift+tab' : 'tab' }); }
+    // keyCode 229 = 输入法正在接管这个键（含组词开始前的第一下），交给输入法
+    if (e.isComposing || composing || e.keyCode === 229) return;
+    const mod = e.ctrlKey || e.altKey || e.metaKey;
+    if (e.key === 'Enter' && !mod) { e.preventDefault(); fire({ type: 'key', key: e.shiftKey ? 'shift+enter' : 'enter' }); }
+    else if (e.key === 'Backspace' && !mod && imeEl.value === IME_SENT) { e.preventDefault(); fire({ type: 'key', key: 'backspace' }); }
+    else if (e.key === 'Tab' && !mod) { e.preventDefault(); fire({ type: 'key', key: e.shiftKey ? 'shift+tab' : 'tab' }); }
+    // 粘贴走 paste 事件拿本机剪贴板（imePaste）；普通字符和死键让它落进输入框，由 input / 组词结束转发
+    else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'v') return;
+    else if (e.shiftKey && e.key === 'Insert') return;
+    else if (e.key === 'Dead' || (e.key.length === 1 && !mod)) return;
+    // 其余（方向键、Esc、Delete、Ctrl+A/C/Z 等组合键）照旧当按键转发
+    else onKey(e);
   }
   // 键盘开着时在画布上点：默认会先让隐藏输入框失焦、键盘收起，点完若还是输入框再弹出来——一闪
   // 一闪。拦掉 touchstart 的默认行为保住焦点（指针事件照常发，轻点/拖动不受影响）；
@@ -569,6 +598,8 @@
   function onKey(e) {
     if (dead || !frameW || readonly) return;
     if (e.target === urlEl) return;
+    // Ctrl+V 不拦：拦了 paste 事件就不来了，变成在服务器上按 Ctrl+V（粘服务器的剪贴板）
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'v') return;
     e.preventDefault();
     const mods = [e.ctrlKey && 'ctrl', e.altKey && 'alt', e.metaKey && 'meta', e.shiftKey && 'shift'].filter(Boolean);
     if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) { fire({ type: 'text', text: e.key }); return; }
@@ -762,7 +793,8 @@
   {/snippet}
   {#if !readonly && !nativeBrowser}
     <textarea bind:this={imeEl} class="ime" aria-hidden="true" tabindex="-1" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="enter"
-      oninput={imeFlush} onkeydown={imeKey}
+      style={imePos ? `left:${imePos.x}px;top:${imePos.y}px;bottom:auto` : undefined}
+      oninput={imeFlush} onkeydown={imeKey} onpaste={imePaste}
       oncompositionstart={() => (composing = true)} oncompositionend={() => { composing = false; imeFlush(); }}
       onblur={() => (imeOn = false)}></textarea>
   {/if}

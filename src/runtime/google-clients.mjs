@@ -78,6 +78,26 @@ export async function vertexAccessToken(own) {
   return t && t.token;
 }
 
+// 测试连接：countTokens 走同一条鉴权 + 项目 + 权限链路，但不生成、不计费。
+// 探测模型会被 Google 下线（2026-11 gemini-2.5-flash 在 Vertex 上 404，误报成「找不到项目」，issue #9），
+// 所以按候选依次试：某个模型 404 只说明它没了，换下一个；鉴权 / 权限 / 项目类错误第一次就原样抛出。
+const PING_MODELS = ['gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-pro-preview', 'gemini-2.5-flash'];
+export const isModelMissing = (e) => {
+  const m = String((e && (e.message || e)) || '');
+  return /publisher model|models\/[\w.-]+`? (was )?not found/i.test(m) && /not found|404/i.test(m);
+};
+export async function vertexPing({ project, location, credentials }) {
+  const ai = vertexGenAI({ project, location, credentials });
+  let last;
+  for (const model of PING_MODELS) {
+    try { await ai.models.countTokens({ model, contents: 'ping' }); return model; }
+    catch (e) { if (!isModelMissing(e)) throw e; last = e; }
+  }
+  const err = new Error('PING_MODELS_MISSING: ' + String((last && last.message) || last));
+  err.modelMissing = true;
+  throw err;
+}
+
 // Gemini Developer API 返回的文件下载地址（Omni 视频）：客户端改走中继。
 export function geminiFileUrl(uri) {
   if (!GEMINI_RELAY) return uri;
