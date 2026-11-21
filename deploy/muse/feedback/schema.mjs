@@ -8,7 +8,7 @@ export const KINDS = ['bug', 'crash', 'update_failed', 'idea', 'security', 'docs
 // web = 网页「提交反馈」；claude = 网页里的 Claude 诊断后、经用户同意上报（这两种都经 bridge 反馈通道 /v1/cb/report 转来）
 export const SOURCES = ['web', 'muse', 'auto', 'claude'];
 export const SERVICE_NAMES = ['bridge', 'cf-relay-api', 'cf-relay-edge', 'muse-tunnel', 'local_health', 'public_health'];
-const AGENTS = ['claude', 'dimensio'];
+const AGENTS = ['claude', 'dimensio', 'agy'];
 const WHERE = ['server', 'client', 'harness'];
 
 const str = (v, max) => clip(scrub(typeof v === 'string' ? v : ''), max).trim();

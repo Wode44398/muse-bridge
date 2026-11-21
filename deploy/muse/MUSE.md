@@ -39,6 +39,8 @@
    - C. **两个都要**
 
    只选一个时，打开网址直接就是那个 agent，没有主页；两个都要时有一个主页，上面两个入口。
+
+   另有一个可选的 **Antigravity**（Google 的 agent，用他自己的 Google 账号额度）。它是实验性的：要另装 Google 的 CLI、在网页终端里登录 Google，**还没在真 Muse VM 上端到端验证过**，所以不放进这一问、默认不装。用户主动问起或明确想要时，按 4.10 说明后再加。
 2. **你有自己的域名吗？（域名托管在 Cloudflare 上）**
    - 没有 → 用免费的临时地址（`https://xxxx.trycloudflare.com`），零配置；缺点是这台 VM 每隔几个小时会被平台重启一次，**地址会跟着变**，变了我会主动告诉你新地址。
    - 有 → 可以换成**固定地址**（比如 `bridge.你的域名.com`），要在 Cloudflare 后台建一条隧道，我一步步带你（第 5 节）。
@@ -77,6 +79,8 @@ Muse Bridge 会访问的网站和用途（`allow-sites` 不带参数时按当前
 | 各家模型的接口网站（如 `api.deepseek.com`） | 模型中心里加了哪家的服务才有，以前写进 dimensio 的 key 对应的也算（4.5） |
 | 自定义模型服务的地址 | 用户自己加的才有（第 6 节） |
 | Google 的接口（`oauth2.googleapis.com`、`aiplatform.googleapis.com` 等 4 个） | 打开了 Media Studio，或上传了 Google 云凭据才有（4.9） |
+| `antigravity.google`、`antigravity-cli-auto-updater-974169037036.us-central1.run.app`、`storage.googleapis.com` | 下载、安装 Google 的 Antigravity CLI，CLI 之后也从这里自动更新（选了 Antigravity 才有，4.10） |
+| `daily-cloudcode-pa.googleapis.com`、`cloudcode-pa.googleapis.com`、`oauth2.googleapis.com`、`www.googleapis.com` | Antigravity 的对话、Google 登录令牌续期和账号信息（选了 Antigravity 才有，4.10）。CLI 还可能访问别的 Google 网站（比如用量统计），那些会在用到时弹卡 |
 
 ### 2.1 下载并解压
 
@@ -101,6 +105,7 @@ cd /tmp && curl -fLO --retry 3 https://github.com/Wode44398/muse-bridge/releases
 | 只要 Claude Code | `--agents claude` |
 | 只要 dimensio | `--agents dimensio` |
 | 两个都要 | `--agents claude,dimensio` |
+| 另外要 Antigravity（实验性；用户明确要了、听过 4.10 的说明才加） | 在名单末尾加 `,agy`，比如 `--agents claude,agy`。不能只装 Antigravity |
 | 只自己用 / 多人用 | `--solo` / `--multi` |
 | 用户跟你说的不是中文 | 加 `--lang en`（结果块整块用英文打印；以后也可以用 `set-lang en` 改） |
 | 自动上报：要 / 不要 | `--auto-report on` / `--auto-report off` |
@@ -238,6 +243,15 @@ Media Studio 接替了以前的 Gemini · Vertex 扩展（Gemini 对话已经下
 4. **「设置 → Media Studio」** 里能管别的 agent：用户嫌 Claude 自己配图配乐费钱，请他关掉「需要素材时主动生成」；想让 dimensio 也能生成，打开「dimensio」；还能只许生成某几种、限视频分辨率、调内容安全过滤。这些是管理员在网页里改的开关，你别经命令行去改 config.json。
 5. 从旧版升上来的：原来的 Google 云凭据、项目和区域照旧生效；旧的 Gemini 对话不再显示（记录留在磁盘上，没删）。
 
+### 4.10 Antigravity（可选、实验性）
+Antigravity 是 Google 的 agent，在 Muse Bridge 里是第三个对话页，用用户自己的 Google 账号（免费、Pro 或 Ultra 都行）的额度。默认不装。**这条路还没在真 Muse VM 上端到端验证过**：装 CLI、登录、对话任何一步都可能不通；不通就照实告诉用户，先跑 `known-issues` 看是不是已知问题，再问他要不要报告（第 8 节）。界面怎么用在 `guide/11-antigravity.md`。
+
+1. **先说明再装**：会以服务账号 `bridge` 的身份运行 Google 官方的安装脚本（`https://antigravity.google/cli/install.sh`），把约 270 MB 的 Antigravity CLI 装到 `/home/hatch/bridge-srv/home/.local/bin/agy`（在数据目录里，VM 重启后还在），CLI 之后会自己在后台更新；会弹 2.0 表里 Antigravity 那几个网站的审核卡（选项由他定）。还要知道：CPU 要支持 AES 指令，不支持时 CLI 起不来（安装输出会提示）；每个在用的人一个 Antigravity 进程，内存占用不小，8G 的 VM 上几个人同时用会吃紧。
+2. 他同意后：`set-agents <现在的名单>,agy`（比如现在是两个都装，就 `set-agents claude,dimensio,agy`；现在的名单看结果块的 agent 一行）。跟 `install` 一样自己转后台，没等完就 `wait`；完了等没人在聊时切换。装 CLI 失败不影响 Claude / dimensio，Antigravity 页会提示没找到 CLI，修好网络或批了网站后再跑一次同样的 `set-agents` 就会补装。
+3. **登录 Google 由用户自己在网页里做**，你别替他登录，也别让他把授权码、令牌贴进聊天：请管理员在网页里打开终端，输入 `~/.local/bin/agy` 回车；终端会给出一个授权网址，他在**自己的浏览器**里打开、登录 Google 并同意，页面上给出授权码，把授权码贴回终端（大约 30 秒内要贴，超时就重跑一次）。凭据存在服务账号的家目录里（`/home/hatch/bridge-srv/home/.gemini/`），只在这台 VM 上。这一步在 Muse 上也还没实测过，详细步骤和可能的现象见 `guide/11-antigravity.md`「登录」。「设置 → Antigravity」里号池的「添加 Google 账号」在 Muse 上默认不可用（要部署方自己配 Google OAuth 客户端，Muse Bridge 不内置），点了提示没有配置是预期的；登录一律用网页终端里的 `agy`。
+4. 成员：Antigravity 只能开给「完全信任」档的成员（它会执行工作目录里的钩子脚本，相当于命令行权限），管理员在服务端控制台按人勾选（`guide/06-users-admin.md`）。
+5. 不要了：`set-agents claude,dimensio`（或原来的名单去掉 `,agy`）。Antigravity 页和扩展中心里的入口随之消失；CLI 和登录凭据留在数据目录里不删，他想清掉，问过他再删 `/home/hatch/bridge-srv/home/.local/bin/agy` 和 `/home/hatch/bridge-srv/home/.gemini/`。
+
 ## 5. 用自己的域名（固定地址）
 
 用户在第 1 节说有域名、或者后来嫌临时地址老变时，带他做下面几步。前提：域名已经托管在 Cloudflare（在 Cloudflare 后台「网站」列表里能看到它）。
@@ -269,6 +283,8 @@ Media Studio 接替了以前的 Gemini · Vertex 扩展（Gemini 对话已经下
 | 「让几个 Claude 一起做一件大事」「项目对话」 | 网页里的功能，不用跑命令：新对话里点输入框左下角的圆环勾「项目」再发（`guide/02-claude-code.md`「项目对话」）。提醒他几条讨论串同时跑，订阅额度消耗快，这台 VM 每人同时最多 3 个对话在跑 |
 | 「对话一直在等待模型回复」「模型没反应」 | 多半是有网站的审核卡没人批：让他看 Muse 里有没有待审核的卡片（输入框上方或右侧面板）；或者用户在场时跑 `allow-sites`（按现在的配置把要用的网站挨个访问一遍，卡片会再弹出来，选项见 2.0） |
 | 「我也想用 dimensio」「不要 dimensio 了」等 | `set-agents claude` / `set-agents dimensio` / `set-agents claude,dimensio`（要重新装依赖、构建，几分钟；跟 `install` 一样自己转后台，没等完就 `wait`；完了等没人在聊时自动切换） |
+| 「我想用 Antigravity / agy」「不要 Antigravity 了」 | 按 4.10：先说明它是实验性的、会装什么、访问哪些网站、要他自己在网页终端里登录 Google，他同意后在现在的名单末尾加 `,agy` 跑 `set-agents`；不要了就去掉 `,agy` 再跑一次 |
+| 「Antigravity 页说没找到 CLI」「Antigravity 说没登录」 | 没找到 CLI：多半是安装时那几个网站没放行或下载失败——用户在场时跑 `allow-sites`，再跑一次同样的 `set-agents …,agy` 补装；没登录：请他在网页终端里跑 `~/.local/bin/agy` 登录（4.10 第 3 步），登录完回到 Antigravity 页点刷新；登录后横幅还在，先发一句话试试（`guide/11-antigravity.md`「登录」） |
 | 「Figma（或别的远程连接器）连不上」「连接器要授权」「Claude 说没法完成授权」 | 先问清报错是什么。**报「平台（Muse）不允许在这里登录这个服务」/ `refresh_rejected`**（Figma、Stripe、Zapier 这几家）：是这台 VM 的出口代理拦了它们的换令牌请求，**别再让他反复点「授权」、批卡也没用**。Figma 走个人访问令牌：让他在扩展页连接器标签的「添加」菜单点「添加 Figma（个人访问令牌）」；令牌交给平台保管——经他同意后，你用 `credentials.request_api_access` 建一个 API Key 型自定义连接器（provider 填 `figma_pat`，登记名就是 `custom.figma_pat`；类型 api_key，网站 `api.figma.com`，placement `custom_header:X-Figma-Token`），卡片里的令牌让他自己填（在 Figma 的 Settings › Security › Personal access tokens 生成），别让他把令牌贴进聊天。这条路还没在真 Muse 上端到端验证过，用不了就请他报告问题（第 8 节）。Stripe、Zapier 等其它被拦的：不做现成的，让他直接跟 Muse Bridge 里的 Claude 说，按「API Key 或个人令牌 + 平台 `custom.*` 自定义连接器」的思路现写一个，`custom.*` 的登记同样由你经他同意后建。这两条走的都是平台自己的凭据机制（令牌由平台保管、程序只拿替身），**不要尝试绕过出口代理、换别的出口或让令牌进 VM**。**其它报错**（「需要登录」、跳回后一直转圈）：在 Muse Bridge 扩展页这个连接器的控制面板点「连接」，或对话里输入框上方提示的「授权」，登录同意后自动跳回；第一次可能弹对方网站的审核卡（选项见 2.0），也可以在他在场时先跑 `allow-sites <网站>`。显示「需要配置 OAuth 应用」（Gmail、Zoom）的：照面板里的步骤由管理员配，回调地址要是这台 Muse 的公网地址（`guide/05-customize.md`）。**任何情况都不要在 VM 上跑 `claude mcp login` 或 `claude setup-token`**（令牌端点对这台 VM 的出口 IP 会限流） |
 | 「让朋友也能用」「只给我自己用」 | `set-users multi` / `set-users solo` |
 | 结果块要换语言 | `set-lang en` / `set-lang zh` |

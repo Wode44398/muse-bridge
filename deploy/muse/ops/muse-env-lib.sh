@@ -66,3 +66,30 @@ restore_cloudflared() { # $1 = CLOUDFLARED  $2 = 副本路径；$1 还能执行 
   rm -f "$1"   # 可能是指向已被清掉的文件的断链
   install -D -m 0755 "$2" "$1" && printf '已从 %s 补回 %s\n' "$2" "$1"
 }
+
+# —— 选了哪些 agent（AGENTS）——
+# claude、dimensio 两个是主 agent，至少要有一个；agy（Antigravity）是可选的附加 agent、默认不开：
+# 它要另装 Google 的 Antigravity CLI、登录 Google 账号，在 Muse 上还没实测过，所以不能单独选它。
+# 规范写法：按 claude,dimensio,agy 的固定顺序、去重、只认这三个名字（antigravity 当 agy）。不合法时不输出、返回 1。
+norm_agents() { # $1 = 用户给的名单（逗号或空格分隔）
+  local raw="${1:-}" a c=0 d=0 g=0 out=""
+  raw="${raw//,/ }"
+  for a in $raw; do
+    case "$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')" in
+      claude) c=1 ;; dimensio) d=1 ;; agy|antigravity) g=1 ;;
+      *) return 1 ;;
+    esac
+  done
+  [ "$c$d" != 00 ] || return 1
+  [ "$c" = 1 ] && out=claude
+  [ "$d" = 1 ] && out="${out:+$out,}dimensio"
+  [ "$g" = 1 ] && out="$out,agy"
+  printf '%s\n' "$out"
+}
+# 名单里有没有某个 agent
+agents_has() { case ",${1:-}," in *",$2,"*) return 0 ;; *) return 1 ;; esac; }
+# 服务端的 BRIDGE_MODULES_HIDE：Codex 一律不列；没选 agy 时也不列 Antigravity（配合 install.sh 写的 BRIDGE_MODULES_SKIP，
+# 扩展中心、主页、Agent 页都不会出现一个点了才发现没装 CLI 的入口）
+modules_hide_for() { # $1 = AGENTS
+  if agents_has "${1:-}" agy; then echo codex; else echo codex,agy; fi
+}

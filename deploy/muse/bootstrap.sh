@@ -2,7 +2,7 @@
 # Muse Bridge · Muse VM 一键部署与运维。给 Muse 的 agent 用，说明书见同目录 MUSE.md。
 #
 # 安装 / 修复（可以重复跑；不给的选项沿用上次的选择）：
-#   bash deploy/muse/bootstrap.sh install [--agents claude|dimensio|claude,dimensio] [--solo|--multi]
+#   bash deploy/muse/bootstrap.sh install [--agents claude|dimensio|claude,dimensio[,agy]] [--solo|--multi]
 #                                         [--domain 主机名 --tunnel-token 令牌] [--claude-token 令牌] [--lang en|zh]
 #                                         [--auto-report on|off]
 #   --lang：结果块用哪种语言打印（用户不说中文就给 en）；不给沿用上次，默认 zh
@@ -14,7 +14,7 @@
 #   set-claude-token T              写入 Claude 订阅令牌（claude setup-token 生成）并重启 bridge
 #   set-api-key 变量名 值            往 dimensio 的 .env 写一家厂商的 key，顺带放行这家的接口网站（模型中心接管后只有 MIMO_SEARCH_API_KEY 还起作用，其余照实提示去网页模型中心填）
 #   allow-sites [网站或地址…]         趁用户在场把要用到的网站访问一遍、让审核卡弹出来（不给参数 = 按现在的配置算）
-#   set-agents LIST                 改启用的 agent（claude / dimensio / claude,dimensio）
+#   set-agents LIST                 改启用的 agent（claude / dimensio / claude,dimensio，可再加 ,agy = Antigravity，实验性、默认不开）
 #   set-users solo|multi            只自己用（关注册）/ 多人用（开注册与邀请码）
 #   set-domain 主机名 隧道令牌       换成自己域名的固定地址（Cloudflare 命名隧道）
 #   use-quick-tunnel                换回 trycloudflare 临时地址
@@ -122,7 +122,13 @@ running_dir() {
   [ -z "$d" ] || echo "$d"
 }
 agents_label() {
-  if [ "$UI_LANG" = en ]; then case "$1" in claude) echo 'Claude Code only' ;; dimensio) echo 'dimensio only' ;; *) echo 'Claude Code + dimensio' ;; esac; return; fi
+  local base="${1%,agy}" g=""
+  [ "$base" = "$1" ] || g=1
+  if [ "$UI_LANG" = en ]; then
+    if [ -n "$g" ]; then case "$base" in claude) echo 'Claude Code + Antigravity (experimental)' ;; dimensio) echo 'dimensio + Antigravity (experimental)' ;; *) echo 'Claude Code + dimensio + Antigravity (experimental)' ;; esac; return; fi
+    case "$1" in claude) echo 'Claude Code only' ;; dimensio) echo 'dimensio only' ;; *) echo 'Claude Code + dimensio' ;; esac; return
+  fi
+  if [ -n "$g" ]; then case "$base" in claude) echo 'Claude Code + Antigravity（实验性）' ;; dimensio) echo 'dimensio + Antigravity（实验性）' ;; *) echo 'Claude Code + dimensio + Antigravity（实验性）' ;; esac; return; fi
   case "$1" in claude) echo '只有 Claude Code' ;; dimensio) echo '只有 dimensio' ;; *) echo 'Claude Code + dimensio' ;; esac
 }
 # 服务端自己报告的 agent 名单（验收用：跟用户选的对得上才算装对）
@@ -335,8 +341,10 @@ apply_bridge_declarations() {
   set_bridge_env BRIDGE_HEAP_SNAPSHOT 0
   # Chromium 在 VM 上没有沙箱、起不来：dimensio 不给浏览器工具
   set_bridge_env DIMENSIO_BROWSER off
-  # 不带 Codex 扩展（公开版本来就没有）：扩展中心与 Agent 页都不列
-  set_bridge_env BRIDGE_MODULES_HIDE codex
+  # 不带 Codex 扩展（公开版本来就没有）：扩展中心与 Agent 页都不列。
+  # Antigravity（agy）是可选的、默认不开：没选它时也不列（install.sh 同时写 BRIDGE_MODULES_SKIP 让服务端当它没装），
+  # 免得扩展中心里出现一个打开了才发现没装 CLI 的入口。选了它（--agents …,agy / set-agents …,agy）才列
+  set_bridge_env BRIDGE_MODULES_HIDE "$(modules_hide_for "$AGENTS")"
   # Media Studio（接替了以前的 Gemini · Vertex 扩展）随代码带着，但模型和 Key 要用户自己接：第一次带上它时先关着
   # （主页、成员那里都不出现），管理员在 设置 → 扩展 → 功能扩展 打开、在 设置 → 模型中心 接模型。之后尊重用户的开关，不再写。
   # 早期写的 agents.gemini 由服务端读的时候换成 studio（src/config/agents.mjs 的 RETIRED_AGENTS），已经写过的不用动
@@ -557,7 +565,8 @@ cmd_install() {
       *) die "install 不认识的选项：$1" ;;
     esac
   done
-  AGENTS="${AGENTS:-claude,dimensio}"
+  # 规范成 claude,dimensio,agy 的顺序；老 muse.env 里只有 claude / dimensio 的照旧（agy 默认不开）
+  AGENTS="$(norm_agents "${AGENTS:-claude,dimensio}")"     || die "--agents 只认 claude / dimensio，可再加 agy（Antigravity，实验性）；claude、dimensio 至少选一个，agy 不能单独选"
   USERS_MODE="${USERS_MODE:-multi}"
   if [ -n "$domain" ] || [ -n "$tunnel_token" ]; then
     [ -n "$domain" ] && [ -n "$tunnel_token" ] || die "--domain 和 --tunnel-token 要一起给"
@@ -733,11 +742,11 @@ reinstall_current() {
 }
 
 cmd_set_agents() {
-  case "${1:-}" in claude|dimensio|claude,dimensio|dimensio,claude) ;; *) die "用法：set-agents claude | dimensio | claude,dimensio" ;; esac
-  if [ "${MB_DETACHED:-}" != 1 ]; then run_detached set-agents "$@"; return; fi
+  local want; want="$(norm_agents "${1:-}")"     || die "用法：set-agents claude | dimensio | claude,dimensio（可再加 ,agy = Antigravity，实验性；agy 不能单独选）"
+  if [ "${MB_DETACHED:-}" != 1 ]; then run_detached set-agents "$want"; return; fi
   detached_start
-  say "改装 agent：$(agents_label "$1")"
-  reinstall_current --agents "$1"
+  say "改装 agent：$(agents_label "$want")"
+  reinstall_current --agents "$want"
 }
 
 cmd_set_users() {
@@ -777,6 +786,7 @@ configured_sites() {
   local env="$DATA/dimensio/.env" line name val cp="$DATA/dimensio/custom-providers/providers.json" hub="$DATA/model-hub/services.json"
   case ",${AGENTS:-claude,dimensio}," in *,claude,*) echo api.anthropic.com ;; esac
   case ",${AGENTS:-claude,dimensio}," in *,dimensio,*) echo html.duckduckgo.com ;; esac   # dimensio 的联网搜索兜底
+  if agents_has "${AGENTS:-}" agy; then agy_sites; fi
   # 问题反馈的提交通道：装的时候就放行，用户报问题时才不用再批一张卡
   [ -z "$FEEDBACK_HOST_DEFAULT" ] || echo "$FEEDBACK_HOST_DEFAULT"
   # GitHub：看门狗查新版本（latest.json）、bridge 的插件市场（签名索引与插件包）都在 GitHub Release 上，后台定时去拉，
@@ -798,6 +808,17 @@ configured_sites() {
   # 用到 Vertex 时（Media Studio 开着，或上传了 Google 云凭据）：换令牌、对话（global 或所选区域）、媒体（默认 us-central1）、Gemini API Key 各一个站点
   vertex_sites
   return 0
+}
+# 选了 Antigravity（agy）时要访问的 Google 网站：装 CLI（官方安装脚本、版本清单、安装包；CLI 之后也从后两处自动更新）、
+# 对话（bridge 本机的上游转发再发往 Cloud Code 接口）、登录令牌续期与账号信息。登录时打开的 Google 授权页在用户自己的浏览器里，不经这台 VM
+agy_sites() {
+  echo antigravity.google
+  echo antigravity-cli-auto-updater-974169037036.us-central1.run.app
+  echo storage.googleapis.com
+  echo daily-cloudcode-pa.googleapis.com
+  echo cloudcode-pa.googleapis.com
+  echo oauth2.googleapis.com
+  echo www.googleapis.com
 }
 # Vertex 要访问的 Google 接口（Media Studio 关着、也没上传 Google 云凭据时什么都不输出）。区域跟 config.json 的 vertexLocation / vertexMediaLocation 走
 vertex_sites() {

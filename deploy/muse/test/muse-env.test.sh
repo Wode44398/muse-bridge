@@ -130,5 +130,89 @@ has "bootstrap 下载前先试副本" "$(cat "$BOOT")" 'restore_cloudflared "$(p
 has "heal.sh 补回" "$(cat "$MUSE/ops/heal.sh")" 'restore_cloudflared "$CLOUDFLARED" "$OPS/cloudflared"'
 has "cf-wrap.sh 启动前补回" "$(cat "$MUSE/ops/cf-wrap.sh")" 'restore_cloudflared "$CLOUDFLARED" "$OPS/cloudflared"'
 
+# —— 选了哪些 agent：Antigravity（agy）可选、默认不开 ——
+eq "norm：只有 claude" "$(norm_agents claude)" "claude"
+eq "norm：顺序规范" "$(norm_agents dimensio,claude)" "claude,dimensio"
+eq "norm：三个都要" "$(norm_agents claude,dimensio,agy)" "claude,dimensio,agy"
+eq "norm：agy 排在最后" "$(norm_agents agy,claude)" "claude,agy"
+eq "norm：antigravity 当 agy、大小写不敏感" "$(norm_agents Antigravity,DIMENSIO)" "dimensio,agy"
+eq "norm：空格分隔也认、去重" "$(norm_agents 'claude agy claude')" "claude,agy"
+eq "norm：agy 不能单独选" "$(norm_agents agy; echo "rc=$?")" "rc=1"
+eq "norm：空的不行" "$(norm_agents ''; echo "rc=$?")" "rc=1"
+eq "norm：codex 不认" "$(norm_agents claude,codex; echo "rc=$?")" "rc=1"
+eq "norm：怪字符不认" "$(norm_agents 'claude;touch'; echo "rc=$?")" "rc=1"
+agents_has claude,dimensio,agy agy && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL agents_has 认不出 agy"; }
+agents_has claude,dimensio agy && { fail=$((fail + 1)); echo "FAIL agents_has 误认 agy"; } || pass=$((pass + 1))
+agents_has claude,agy2 agy && { fail=$((fail + 1)); echo "FAIL agents_has 按前缀误认"; } || pass=$((pass + 1))
+eq "hide：老部署（没选 agy）也藏起 Antigravity" "$(modules_hide_for claude,dimensio)" "codex,agy"
+eq "hide：选了 agy 才列出来" "$(modules_hide_for claude,dimensio,agy)" "codex"
+eq "hide：没装过（空）按没选" "$(modules_hide_for '')" "codex,agy"
+
+# 结果块里的 agent 名称（bootstrap.sh 的 agents_label 原样抠出来）
+eval "$(fn agents_label)"
+eq "label：老三样不变（中）" "$(UI_LANG=zh agents_label claude,dimensio)" "Claude Code + dimensio"
+eq "label：只有 claude（中）" "$(UI_LANG=zh agents_label claude)" "只有 Claude Code"
+eq "label：加 agy（中）" "$(UI_LANG=zh agents_label claude,dimensio,agy)" "Claude Code + dimensio + Antigravity（实验性）"
+eq "label：claude + agy（中）" "$(UI_LANG=zh agents_label claude,agy)" "Claude Code + Antigravity（实验性）"
+eq "label：dimensio + agy（英）" "$(UI_LANG=en agents_label dimensio,agy)" "dimensio + Antigravity (experimental)"
+eq "label：老三样不变（英）" "$(UI_LANG=en agents_label dimensio)" "dimensio only"
+
+# set-agents：先规范再交给后台；agy 单独选、写错名字当场报错（bootstrap.sh 的 cmd_set_agents 原样抠出来）
+sa() { # $@ = set-agents 的参数；输出它会做什么
+  ( eval "$(fn cmd_set_agents)"; UI_LANG=zh
+    die() { echo "DIE $*"; exit 1; }
+    run_detached() { echo "DETACH $*"; }
+    detached_start() { :; }; say() { :; }
+    reinstall_current() { echo "REINSTALL $*"; }
+    cmd_set_agents "$@" )
+}
+eq "set-agents：前台转后台时已规范" "$(sa agy,claude)" "DETACH set-agents claude,agy"
+eq "set-agents：后台里重装带上 agy" "$(MB_DETACHED=1 sa claude,dimensio,agy)" "REINSTALL --agents claude,dimensio,agy"
+eq "set-agents：去掉 agy" "$(MB_DETACHED=1 sa claude,dimensio)" "REINSTALL --agents claude,dimensio"
+has "set-agents：只选 agy 报错" "$(sa agy)" "DIE 用法：set-agents"
+has "set-agents：没给参数报错" "$(sa)" "DIE 用法：set-agents"
+
+# update：老 muse.env 的 AGENTS 没有 agy → 沿用、不自动加，Antigravity 照旧藏着
+out="$( OPS="$TMP/ops-up"; mkdir -p "$OPS"; printf 'AGENTS=claude,dimensio\n' > "$OPS/muse.env"
+  eval "$prev_def"; a="$(norm_agents "$(prev AGENTS)")"; echo "$a $(modules_hide_for "$a")" )"
+eq "update：老名单原样沿用" "$out" "claude,dimensio codex,agy"
+out="$( OPS="$TMP/ops-none"; eval "$prev_def"; a="$(prev AGENTS)"; norm_agents "${a:-claude,dimensio}" )"
+eq "新装：默认两个、不带 agy" "$out" "claude,dimensio"
+
+# 放行网站：选了 agy 才带上 Antigravity 的站点（bootstrap.sh 的 configured_sites / agy_sites 原样抠出来）
+cs() { # $1 = AGENTS
+  ( eval "$(fn configured_sites)"; eval "$(fn agy_sites)"
+    vertex_sites() { :; }; key_site() { :; }; site_of() { :; }
+    DATA="$TMP/no-data" FEEDBACK_HOST_DEFAULT="" AGENTS="$1" configured_sites )
+}
+has "sites：选了 agy 放行 Cloud Code 接口" "$(cs claude,agy)" "daily-cloudcode-pa.googleapis.com"
+has "sites：选了 agy 放行 CLI 安装源" "$(cs claude,agy)" "antigravity.google"
+has "sites：选了 agy 放行令牌续期" "$(cs claude,agy)" "oauth2.googleapis.com"
+eq "sites：没选 agy 不带它的站点" "$(cs claude,dimensio | grep -c 'antigravity\|cloudcode')" "0"
+
+# install.sh：agy 的解析、默认关、没选就当没装（BRIDGE_MODULES_SKIP）
+INST="$MUSE/install.sh"
+afc() { # $1 = config.json 内容；输出 install.sh 的 agents_from_config 读出来的名单
+  ( DATA="$TMP/afc"; mkdir -p "$DATA"; printf '%s' "$1" > "$DATA/config.json"
+    eval "$(sed -n '/^agents_from_config() {/,/^}/p' "$INST")"; agents_from_config )
+}
+if command -v node >/dev/null; then
+  eq "install：老配置（没有 agy 键）不带 agy" "$(afc '{"agents":{"claude":true,"dimensio":true}}')" "claude,dimensio"
+  eq "install：agy 写明开着才算" "$(afc '{"agents":{"claude":true,"dimensio":false,"agy":true}}')" "claude,agy"
+  eq "install：agy=false 不算" "$(afc '{"agents":{"agy":false}}')" "claude,dimensio"
+fi
+skip_of() { # $1 = WANT_DIMENSIO  $2 = WANT_AGY；输出 install.sh 写进单元的那一行
+  ( WANT_DIMENSIO="$1" WANT_AGY="$2"
+    eval "$(sed -n '/^SKIP_LIST=""/,/^\[ -z "\$SKIP_LIST" \]/p' "$INST")"; echo "$MODULES_SKIP_LINE" )
+}
+eq "install：两个都选、不选 agy" "$(skip_of 1 0)" "Environment=BRIDGE_MODULES_SKIP=agy"
+eq "install：没选 dimensio、也没选 agy" "$(skip_of 0 0)" "Environment=BRIDGE_MODULES_SKIP=dimensio,agy"
+eq "install：都选了" "$(skip_of 1 1)" ""
+eq "install：没选 dimensio、选了 agy" "$(skip_of 0 1)" "Environment=BRIDGE_MODULES_SKIP=dimensio"
+has "install：--agents 认 agy" "$(cat "$INST")" 'agy|antigravity) WANT_AGY=1'
+has "install：config.json 写 agents.agy" "$(cat "$INST")" 'agy: agy === "1"'
+has "install：CLI 装在服务用户家目录（随数据目录持久）" "$(cat "$INST")" '[ -x "$DATA/home/.local/bin/agy" ]'
+has "bootstrap：HIDE 按选择算" "$(cat "$BOOT")" 'set_bridge_env BRIDGE_MODULES_HIDE "$(modules_hide_for "$AGENTS")"'
+
 printf '%d 通过，%d 失败\n' "$pass" "$fail"
 [ "$fail" = 0 ]

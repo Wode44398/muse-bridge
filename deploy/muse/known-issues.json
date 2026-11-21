@@ -169,6 +169,19 @@
       "fixed_in": null,
       "notify": false,
       "issue": null
+    },
+    {
+      "id": "agy-unverified-on-muse",
+      "title": "Antigravity（可选的第三个 agent）还没在真 Muse VM 上端到端验证过：装 CLI、登录 Google、对话都可能不通",
+      "title_en": "Antigravity (the optional third agent) has not been verified end to end on a real Muse VM: installing the CLI, signing in to Google, or chatting may fail",
+      "symptom": "选了 Antigravity（set-agents …,agy）后可能遇到：① Antigravity 页说没找到 CLI——安装那几个网站（antigravity.google、antigravity-cli-auto-updater-….run.app、storage.googleapis.com）没放行或下载失败，或 CPU 不支持 AES 指令；② 在网页终端里跑 ~/.local/bin/agy 没有给出授权网址、或贴回授权码后仍提示没登录；③ 登录完回到 Antigravity 页，「尚未登录 Antigravity 账号」的横幅还在（Linux 上的登录凭据文件名和网页的检测不一定对得上，发第一条消息成功后横幅才消失）；④ 对话停在等待回复——Cloud Code 接口等网站的审核卡没人批；⑤ 几个人同时用时 VM 内存吃紧。默认不装，没选它的不受影响。 另外，「设置 → Antigravity」号池里的「添加 Google 账号」在 Muse 上默认不可用（提示没有配置 Antigravity 号池用的 Google OAuth 客户端）：Muse Bridge 不内置这组客户端凭据，这是预期的，登录用网页终端里的 agy。",
+      "workaround": "先确认要用的网站都已放行（用户在场时跑 allow-sites），再跑一次同样的 set-agents …,agy 补装 CLI；登录后横幅还在就先发一句话试试。还是不通就用 Claude / dimensio，并请用户报告问题（附上 Antigravity 页的报错原文），帮开发者补上在 Muse 上的适配。不想要了：set-agents 去掉 ,agy。",
+      "workaround_en": "Make sure the sites it needs are approved (run allow-sites while the user is present), then run the same set-agents …,agy again to install the CLI. If the sign-in banner is still there after signing in, try sending a message. If it still does not work, use Claude / dimensio and ask the user to report it (with the exact error from the Antigravity page). To remove it: run set-agents without ,agy.",
+      "cause": "Antigravity 分页 v0.12.0 第一次随 Muse Bridge 带上。部署脚本按 Google 官方的 Linux 安装方式装 CLI、按 Google 的无图形界面登录方式（终端里给授权网址、贴回授权码）引导，代理与站点按 CLI 和 bridge 代码静态分析得出；这些都还没在真 Muse VM 上实跑过。",
+      "since": "v0.12.0",
+      "fixed_in": null,
+      "notify": false,
+      "issue": null
     }
   ]
 }

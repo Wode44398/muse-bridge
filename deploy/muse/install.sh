@@ -14,7 +14,10 @@
 #
 # 选项：
 #   --agents LIST       要启用的 agent：claude / dimensio / claude,dimensio（默认 claude,dimensio）。
-#                       没选 dimensio 就不装它的运行依赖（省时间和磁盘；以后可以重跑本脚本加上）
+#                       没选 dimensio 就不装它的运行依赖（省时间和磁盘；以后可以重跑本脚本加上）。
+#                       可以再加 agy（Antigravity，实验性、默认不开）：以服务用户身份运行 Google 官方的安装脚本
+#                       （https://antigravity.google/cli/install.sh），把 Antigravity CLI 装到服务用户的 ~/.local/bin/agy；
+#                       Google 账号要之后在网页终端里跑一次 agy 登录。不能只选 agy
 #   --solo              只自己用：关掉注册和邀请码（只有管理员令牌能登录）
 #   --multi             多人用：打开注册和邀请码（默认）
 #   --port N            监听端口（默认 8787）
@@ -71,15 +74,16 @@ ARCH="$(dpkg --print-architecture)"
 # agent 选择：没给就沿用上次装的（config.json 的 agents 键），第一次装默认两个都要
 agents_from_config() {
   [ -f "$DATA/config.json" ] || return 0
-  node -e 'const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const a=c.agents||{};const on=["claude","dimensio"].filter(id=>a[id]!==false);process.stdout.write(on.join(","))' "$DATA/config.json" 2>/dev/null || true
+  # claude / dimensio 没写明关掉就算开；agy 是可选的，写明开着（true）才算
+  node -e 'const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const a=c.agents||{};const on=["claude","dimensio"].filter(id=>a[id]!==false);if(a.agy===true)on.push("agy");process.stdout.write(on.join(","))' "$DATA/config.json" 2>/dev/null || true
 }
 if [ -z "$AGENTS" ] && command -v node >/dev/null; then AGENTS="$(agents_from_config)"; fi
 AGENTS="${AGENTS:-claude,dimensio}"
-WANT_CLAUDE=0; WANT_DIMENSIO=0
+WANT_CLAUDE=0; WANT_DIMENSIO=0; WANT_AGY=0
 for a in ${AGENTS//,/ }; do
-  case "$a" in claude) WANT_CLAUDE=1 ;; dimensio) WANT_DIMENSIO=1 ;; *) die "--agents 只认 claude / dimensio，收到：$a" ;; esac
+  case "$a" in claude) WANT_CLAUDE=1 ;; dimensio) WANT_DIMENSIO=1 ;; agy|antigravity) WANT_AGY=1 ;; *) die "--agents 只认 claude / dimensio / agy，收到：$a" ;; esac
 done
-[ "$WANT_CLAUDE$WANT_DIMENSIO" != 00 ] || die "--agents 至少要选一个"
+[ "$WANT_CLAUDE$WANT_DIMENSIO" != 00 ] || die "--agents 里 claude、dimensio 至少要选一个（agy 不能单独选）"
 
 # 代理：安装时的代理原样带进服务环境（net-proxy 读 HTTPS_PROXY）
 PROXY_LINES=""
@@ -152,10 +156,31 @@ if [ "$WANT_DIMENSIO" = 1 ]; then
 else
   rm -rf "$REPO/harness/node_modules"   # 没选就别留着
 fi
-# 没选 dimensio：bridge 把这个扩展当没装（它的「能跑」判定不看 node_modules）
+# 没选的扩展 bridge 当它没装：dimensio（它的「能跑」判定不看 node_modules）、agy（Antigravity，可选、默认不开）
+SKIP_LIST=""
+[ "$WANT_DIMENSIO" = 1 ] || SKIP_LIST=dimensio
+[ "$WANT_AGY" = 1 ] || SKIP_LIST="${SKIP_LIST:+$SKIP_LIST,}agy"
 MODULES_SKIP_LINE=""
-[ "$WANT_DIMENSIO" = 1 ] || MODULES_SKIP_LINE="Environment=BRIDGE_MODULES_SKIP=dimensio"
+[ -z "$SKIP_LIST" ] || MODULES_SKIP_LINE="Environment=BRIDGE_MODULES_SKIP=$SKIP_LIST"
 as_svc npm --prefix web run build
+
+# 选了 agy：装 Antigravity CLI（Google 官方安装脚本，以服务用户身份装到 $DATA/home/.local/bin/agy，跟数据目录一起持久；
+# 已经装过就不重装——CLI 自己会在后台自动更新）。装不上只警告：Claude / dimensio 照常可用，Antigravity 页会提示没装 CLI
+if [ "$WANT_AGY" = 1 ]; then
+  if [ -x "$DATA/home/.local/bin/agy" ]; then
+    echo "Antigravity CLI 已装：$DATA/home/.local/bin/agy"
+  else
+    say "装 Antigravity CLI（Google 官方安装脚本 antigravity.google/cli/install.sh，约 270 MB）"
+    grep -qw aes /proc/cpuinfo 2>/dev/null || warn "这台机器的 CPU 没报告 AES 指令：Antigravity CLI 可能起不来（Illegal instruction）"
+    agy_tmp="$(as_svc mktemp)"
+    if as_svc curl -fsSL --max-time 60 -o "$agy_tmp" https://antigravity.google/cli/install.sh        && as_svc bash "$agy_tmp" && [ -x "$DATA/home/.local/bin/agy" ]; then
+      echo "Antigravity CLI 装好了：$DATA/home/.local/bin/agy"
+    else
+      warn "Antigravity CLI 没装上（网络、站点没放行或平台不支持）。Claude / dimensio 不受影响；之后可以重跑本脚本再装"
+    fi
+    rm -f "$agy_tmp"
+  fi
+fi
 
 # ── 4. 配置与访问令牌 ──────────────────────────────────────────────────────────
 TOKEN_OUT=""
@@ -165,12 +190,12 @@ if [ ! -f "$DATA/config.json" ]; then
 fi
 # agent 开关与多用户开关写进 config.json（只改这两个键）
 as_svc "$NODE_BIN" -e '
-const fs = require("fs"); const [file, claude, dimensio, mode] = process.argv.slice(1);
+const fs = require("fs"); const [file, claude, dimensio, mode, agy] = process.argv.slice(1);
 const c = JSON.parse(fs.readFileSync(file, "utf8"));
-c.agents = { ...(c.agents || {}), claude: claude === "1", dimensio: dimensio === "1" };
+c.agents = { ...(c.agents || {}), claude: claude === "1", dimensio: dimensio === "1", agy: agy === "1" };
 if (mode) c.features = { ...(c.features || {}), multiUser: mode === "multi" };
 fs.writeFileSync(file, JSON.stringify(c, null, 2));
-' "$DATA/config.json" "$WANT_CLAUDE" "$WANT_DIMENSIO" "$USERS_MODE"
+' "$DATA/config.json" "$WANT_CLAUDE" "$WANT_DIMENSIO" "$USERS_MODE" "$WANT_AGY"
 
 install -d -m 0750 /etc/bridge
 if [ ! -f /etc/bridge/bridge.env ] || [ -n "$CLAUDE_TOKEN" ] || [ -n "$PROXY_LINES" ]; then
@@ -293,6 +318,13 @@ cat <<DONE
  下一步
    · Claude 认证：/etc/bridge/bridge.env 写 CLAUDE_CODE_OAUTH_TOKEN，或登录后在控制台「Claude 账号」里添加
    · dimensio 的模型 key：写进 $DATA/dimensio/.env（如 ANTHROPIC_API_KEY=…），再 systemctl restart bridge
+DONE
+if [ "$WANT_AGY" = 1 ]; then
+cat <<DONE
+   · Antigravity：管理员登录网页后在终端里跑一次 agy，按提示在自己的浏览器里完成 Google 授权、把授权码贴回终端
+DONE
+fi
+cat <<DONE
    · 给朋友开账号：控制台「用户」页发邀请码 / 直接建号；额度在「额度与注册」
 ────────────────────────────────────────────────────────────────────
 DONE

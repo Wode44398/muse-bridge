@@ -8,7 +8,7 @@
 
 | 要做的事 | 子命令 |
 |---|---|
-| 换 agent（只要 Claude / 只要 dimensio / 都要） | `set-agents claude,dimensio` |
+| 换 agent（只要 Claude / 只要 dimensio / 都要；可再加实验性的 Antigravity） | `set-agents claude,dimensio`（加 Antigravity：末尾加 `,agy`） |
 | 只自己用 / 多人用（开关注册和邀请码） | `set-users solo` / `set-users multi` |
 | 绑自己的域名（固定地址） | `set-domain <主机名> <Cloudflare 隧道令牌>` |
 | 退回临时地址 | `use-quick-tunnel` |
